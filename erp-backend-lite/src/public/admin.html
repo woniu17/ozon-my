@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ERP 配置后台 · 店铺与仓库</title>
+  <link rel="stylesheet" href="/admin.css" />
+</head>
+<body>
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <h1>ERP 配置后台</h1>
+      <span class="subtitle">店铺与仓库管理</span>
+    </div>
+    <div class="topbar-right">
+      <span id="userBadge" class="user-badge" hidden></span>
+      <button id="logoutBtn" class="btn btn-ghost" hidden>退出登录</button>
+    </div>
+  </header>
+
+  <!-- 登录视图 -->
+  <section id="loginView" class="card center-card">
+    <h2>登录</h2>
+    <p class="muted">个人版单用户登录,账号由 .env 中 USER_PHONE / USER_PASSWORD 配置。</p>
+    <form id="loginForm" class="form">
+      <label>
+        <span>手机号</span>
+        <input type="text" id="loginPhone" placeholder="13800138000" autocomplete="username" required />
+      </label>
+      <label>
+        <span>密码</span>
+        <input type="password" id="loginPassword" placeholder="请输入密码" autocomplete="current-password" required />
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">登录</button>
+      </div>
+      <p id="loginError" class="error-text" hidden></p>
+    </form>
+  </section>
+
+  <!-- 主视图 -->
+  <section id="mainView" hidden>
+    <div class="toolbar">
+      <h2>店铺列表</h2>
+      <button id="addStoreBtn" class="btn btn-primary">+ 新增店铺</button>
+    </div>
+
+    <div id="storeList" class="store-list">
+      <p class="muted">加载中...</p>
+    </div>
+
+    <div id="globalMsg" class="toast" hidden></div>
+  </section>
+
+  <!-- 店铺编辑弹窗 -->
+  <div id="storeModal" class="modal" hidden>
+    <div class="modal-mask"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modalTitle">新增店铺</h3>
+        <button class="modal-close" data-close>×</button>
+      </div>
+      <form id="storeForm" class="form">
+        <input type="hidden" id="storeId" />
+        <label>
+          <span>店铺名称 <em>*</em></span>
+          <input type="text" id="storeName" required placeholder="例如:我的店铺" />
+        </label>
+        <label>
+          <span>公司 ID (company_id)</span>
+          <input type="text" id="storeCompanyId" placeholder="Ozon 公司 ID,例如 3891653" />
+        </label>
+        <label>
+          <span>默认仓库 ID (warehouse_id)</span>
+          <input type="text" id="storeWarehouseId" placeholder="可留空,测试连接后从列表选择" />
+        </label>
+        <div class="divider">Ozon API 凭据 (sync_credentials)</div>
+        <label>
+          <span>Client-Id</span>
+          <input type="text" id="storeClientId" placeholder="Ozon 卖家后台 Client-Id" autocomplete="off" />
+        </label>
+        <label>
+          <span>Api-Key</span>
+          <input type="text" id="storeApiKey" placeholder="Ozon 卖家后台 Api-Key" autocomplete="off" />
+        </label>
+        <p class="muted small">凭据明文存储于 stores.json,仅本机访问。</p>
+
+        <p id="formError" class="error-text" hidden></p>
+
+        <div class="form-actions">
+          <button type="button" id="testConnBtn" class="btn btn-ghost">测试连接</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-ghost" data-close>取消</button>
+          <button type="submit" class="btn btn-primary">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 仓库列表弹窗 -->
+  <div id="warehouseModal" class="modal" hidden>
+    <div class="modal-mask"></div>
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <h3>仓库列表 <span id="whStoreName" class="muted"></span></h3>
+        <button class="modal-close" data-close>×</button>
+      </div>
+      <div class="modal-body">
+        <div class="toolbar">
+          <span id="whStatus" class="muted"></span>
+          <button id="refreshWhBtn" class="btn btn-ghost">刷新</button>
+        </div>
+        <div id="warehouseList" class="warehouse-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/admin.js"></script>
+</body>
+</html>

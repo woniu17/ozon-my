@@ -15,8 +15,8 @@
 (function () {
   'use strict';
 
-  async function importViaPortal(message, token, targetStoreId) {
-    console.log('[importViaPortal] start: items=', message?.items?.length);
+  async function importViaPortal(message, token, targetStoreId, preferTabId = null) {
+    console.log('[importViaPortal] start: items=', message?.items?.length, 'preferTabId=', preferTabId);
 
     // ── 6a. ERP prepare-bundle-items(🔴 必经) ──────────────────────
     const prep = await self.ErpClient.prepareBundleItems(message, token, targetStoreId);
@@ -43,25 +43,44 @@
       );
     }
 
-    // ── 6b/6c/6d:逐 bundle 三步建品(🟢 seller portal,绕官方限流) ──
+    // ── 6b/6c/6d:逐 bundle 三步建品(seller portal,绕官方限流) ──
+    // mock 开关:self.MOCK_SELLER_CONFIG.enabled=true 用 mock(离线测试);false 真实建品
+    const useMock = self.MOCK_SELLER_CONFIG?.enabled === true;
     const taskIds = [];
     const bundleIds = [];
     const bundleErrors = [];
 
     for (const b of bundles) {
       try {
-        // 6b. 建空草稿
-        const bundleId = await self.MockSellerPortal.createBundle(companyId);
-        // 6c. 写入商品数据
-        await self.MockSellerPortal.updateBundleItems(
-          bundleId,
-          companyId,
-          b.items,
-          b.source,
-          b.description_category_lvl3_name
-        );
-        // 6d. 提交发布 → upload_task_id
-        const taskId = await self.MockSellerPortal.uploadBundle(bundleId, companyId);
+        let bundleId, taskId;
+        if (useMock) {
+          // 6b. 建空草稿(mock)
+          bundleId = await self.MockSellerPortal.createBundle(companyId);
+          // 6c. 写入商品数据(mock)
+          await self.MockSellerPortal.updateBundleItems(
+            bundleId,
+            companyId,
+            b.items,
+            b.source,
+            b.description_category_lvl3_name
+          );
+          // 6d. 提交发布 → upload_task_id(mock)
+          taskId = await self.MockSellerPortal.uploadBundle(bundleId, companyId);
+        } else {
+          // 6b. 建空草稿(真实 seller.ozon.ru/seller-prototype/create-bundle)
+          bundleId = await self.SellerPortalClient.createBundle(companyId, preferTabId);
+          // 6c. 写入商品数据(真实 seller.ozon.ru/seller-prototype/update-bundle-items)
+          await self.SellerPortalClient.updateBundleItems(
+            bundleId,
+            companyId,
+            b.items,
+            b.source,
+            b.description_category_lvl3_name,
+            preferTabId
+          );
+          // 6d. 提交发布 → upload_task_id(真实 seller.ozon.ru/seller-prototype/upload-bundle,strict:true)
+          taskId = await self.SellerPortalClient.uploadBundle(bundleId, companyId, preferTabId);
+        }
         bundleIds.push(bundleId);
         taskIds.push(taskId);
         console.log(`[importViaPortal] bundle ${bundleId} → task ${taskId}`);

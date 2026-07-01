@@ -16,18 +16,115 @@
 
   // ────────────────────────────────────────────────────────────
   // state JSON 解析(Ozon 把页面数据塞进 <script data-state> 的 JSON)
-  // 对齐原项目 extractStateData / findStateDataByKeys
+  // 对齐 0.13 shared-utils.js:180-211 extractStateData
+  //
+  // 关键:Ozon 2026 SSR DOM 剥离场景下,[data-state] DOM 可能没有 aspects 数据。
+  // ensurePdpState() 预热 composer-api page json 后,这里从缓存 fallback 读取。
   // ────────────────────────────────────────────────────────────
+  const STATE_CACHE = {};
+  let _jzPdpStateCache = null; // { url, expiresAt, widgetStates }
+  let _jzPdpStateFetchPromise = null;
+
+  function _statePrefixOf(stateName) {
+    // state-webAspects → webAspects
+    return stateName.replace(/^state-/, '');
+  }
+
   function extractStateData(key) {
+    if (STATE_CACHE[key]) return STATE_CACHE[key];
     try {
-      const el = document.getElementById(key);
-      if (!el) return null;
-      const txt = el.textContent || el.innerText || '';
-      if (!txt.trim()) return null;
-      return JSON.parse(txt);
-    } catch {
-      return null;
+      // 旧格式:<div data-state="state-webPrice">{"price":"44 ¥"}</div>
+      // 新格式:<script id="state-webPrice" type="application/json">...</script>
+      const el = document.getElementById(key) || document.querySelector(`[data-state="${key}"]`);
+      if (el) {
+        const txt = el.textContent || el.innerText || '';
+        if (txt.trim()) {
+          const parsed = JSON.parse(txt);
+          if (parsed != null) {
+            STATE_CACHE[key] = parsed;
+            return parsed;
+          }
+        }
+      }
+    } catch {}
+    // Fallback: 命中 composer-api 缓存(Ozon 2026 SSR DOM 剥离场景)
+    if (_jzPdpStateCache && _jzPdpStateCache.url === window.location.href && _jzPdpStateCache.expiresAt > Date.now()) {
+      const prefix = _statePrefixOf(key);
+      const wsKey = Object.keys(_jzPdpStateCache.widgetStates).find((k) => k.startsWith(prefix));
+      if (wsKey) {
+        const raw = _jzPdpStateCache.widgetStates[wsKey];
+        try {
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          if (parsed != null) {
+            STATE_CACHE[key] = parsed;
+            return parsed;
+          }
+        } catch {}
+      }
     }
+    return null;
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // ensurePdpState —— 异步预热 composer-api page json,populate 缓存
+  // 对齐 0.13 shared-utils.js:221-267
+  //
+  // Ozon 2026 SSR DOM 剥离场景下,页面 [data-state] 没有 aspects 数据,
+  // 必须先调 composer-api 拿到完整 widgetStates 缓存,
+  // 之后 extractStateData('state-webAspects') 才能从缓存读到 aspects。
+  //
+  // content script 同源直接 fetch ozon.ru/api/...,带 cookie,不走 SW。
+  // ────────────────────────────────────────────────────────────
+  function ensurePdpState(opts = {}) {
+    const url = window.location.href;
+    const now = Date.now();
+    if (!/\/product\//.test(url)) return Promise.resolve(null);
+    if (!opts.force && _jzPdpStateCache && _jzPdpStateCache.url === url && _jzPdpStateCache.expiresAt > now) {
+      return Promise.resolve(_jzPdpStateCache.widgetStates);
+    }
+    if (_jzPdpStateFetchPromise && _jzPdpStateFetchPromise._url === url) {
+      return _jzPdpStateFetchPromise;
+    }
+
+    const fetchPromise = (async () => {
+      try {
+        let productPath = url;
+        try {
+          const u = new URL(url);
+          productPath = u.pathname;
+        } catch {}
+        const endpoints = [
+          `/api/entrypoint-api.bx/page/json/v2?url=${encodeURIComponent(productPath)}`,
+          `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(productPath)}`,
+        ];
+        for (const apiUrl of endpoints) {
+          try {
+            const resp = await fetch(apiUrl, {
+              credentials: 'include',
+              headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
+            });
+            if (!resp.ok) continue;
+            const data = await resp.json();
+            const ws = data?.widgetStates || {};
+            if (Object.keys(ws).length > 0) {
+              _jzPdpStateCache = { url, expiresAt: Date.now() + 60_000, widgetStates: ws };
+              for (const k of Object.keys(STATE_CACHE)) delete STATE_CACHE[k];
+              console.log('[FollowSell] ensurePdpState 成功,widgetStates keys:', Object.keys(ws).length);
+              return ws;
+            }
+          } catch {}
+        }
+        console.warn('[FollowSell] ensurePdpState:所有 endpoint 失败');
+        return null;
+      } catch {
+        return null;
+      } finally {
+        if (_jzPdpStateFetchPromise === fetchPromise) _jzPdpStateFetchPromise = null;
+      }
+    })();
+    fetchPromise._url = url;
+    _jzPdpStateFetchPromise = fetchPromise;
+    return fetchPromise;
   }
 
   // 在所有 state JSON 里按键名查找(对齐 findStateDataByKeys)
@@ -480,16 +577,133 @@
   }
 
   // ────────────────────────────────────────────────────────────
-  // extractVariantSkus —— 从商品页提取所有变体 SKU 列表
-  // Ozon 商品页 URL 形如 /product/{slug}-{sku}/,每个变体有独立 SKU。
-  // 提取策略(按可靠性排序):
-  //   A. DOM:变体选择器区域的 /product/ 链接(最可靠)
-  //   B. state JSON:widgetStates 里的 skus/variants 数组
-  //   C. JSON-LD:Product 模型的 offers 数组
-  //   D. 兜底:仅当前 URL SKU
-  // 返回:[{ sku, title?, price?, coverImage?, url? }, ...] 去重,首个为当前变体
+  // extractRawAspects —— 从页面 [data-state] 提取原始 aspects 结构
+  // 对齐 0.13 ozon-product.js:624-644
+  // 返回:[{ aspectName, variants:[{sku,data,link,availability,active}], aspectModalInfo }, ...]
+  // 返回 [] 表示无 aspects(单 SKU 商品 / SSR 剥离 / 异常页)
+  //
+  // 注意:ensurePdpState() 预热后,extractStateData('state-webAspects') 能从
+  // composer-api 缓存读到 aspects(SSR DOM 剥离场景的关键 fallback)。
+  // ────────────────────────────────────────────────────────────
+  function extractRawAspects() {
+    // 主路径:遍历所有 [data-state],找含 aspects 数组的
+    const allStateElements = document.querySelectorAll('[data-state]');
+    for (const el of allStateElements) {
+      try {
+        const raw = el.getAttribute('data-state');
+        if (!raw || raw.length < 20) continue;
+        const data = JSON.parse(raw);
+        if (data && Array.isArray(data.aspects) && data.aspects.length > 0) return data.aspects;
+      } catch {}
+    }
+    // Fallback 1:data-widget="webAspects"
+    const widget = document.querySelector('[data-widget="webAspects"], [data-widget="aspects"]');
+    if (widget) {
+      try {
+        const data = JSON.parse(widget.getAttribute('data-state') || '');
+        if (Array.isArray(data?.aspects) && data.aspects.length > 0) return data.aspects;
+      } catch {}
+    }
+    // Fallback 2:extractStateData('state-webAspects') —— 命中 composer-api 缓存
+    // (Ozon 2026 SSR DOM 剥离场景,ensurePdpState 预热后这里能读到)
+    const ws = extractStateData('state-webAspects');
+    if (Array.isArray(ws?.aspects) && ws.aspects.length > 0) return ws.aspects;
+    return [];
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // extractAspectVariants —— 从 webAspects 提取所有变体(权威源)
+  // 对齐 0.13 ozon-product.js:651-736
+  //
+  // 流程:
+  //   1. 遍历 [data-state] 找第一个含 aspects 的(主变体 widget)
+  //   2. Fallback: data-widget="webAspects"
+  //   3. Fallback: extractStateData('state-webAspects') ← composer-api 缓存
+  //   4. 锚点校验:结果必须含当前页 SKU,否则返回 [](防推荐位误判)
+  //
+  // 返回:[{ sku, title, price, coverImage, link, availability, active, aspectValues }, ...]
+  // ────────────────────────────────────────────────────────────
+  function extractAspectVariants() {
+    const currentSku = extractSkuFromUrl();
+
+    let aspectsData = null;
+    // 主路径:遍历 [data-state],找第一个含 aspects 的
+    const allStateElements = document.querySelectorAll('[data-state]');
+    for (const el of allStateElements) {
+      try {
+        const raw = el.getAttribute('data-state');
+        if (!raw || raw.length < 20) continue;
+        const data = JSON.parse(raw);
+        if (data && Array.isArray(data.aspects) && data.aspects.length > 0) {
+          aspectsData = data.aspects;
+          break;
+        }
+      } catch {}
+    }
+    // Fallback 1: data-widget="webAspects"
+    if (!aspectsData) {
+      const widget = document.querySelector('[data-widget="webAspects"], [data-widget="aspects"]');
+      if (widget) {
+        try {
+          const data = JSON.parse(widget.getAttribute('data-state') || '');
+          if (Array.isArray(data?.aspects) && data.aspects.length > 0) aspectsData = data.aspects;
+        } catch {}
+      }
+    }
+    // Fallback 2: extractStateData('state-webAspects') ← composer-api 缓存
+    if (!aspectsData) {
+      const ws = extractStateData('state-webAspects');
+      if (Array.isArray(ws?.aspects) && ws.aspects.length > 0) aspectsData = ws.aspects;
+    }
+
+    if (!aspectsData || aspectsData.length === 0) return [];
+
+    // 构建 variantMap
+    const variantMap = new Map();
+    for (const aspect of aspectsData) {
+      const aspectName = aspect.aspectName || '';
+      const variants = aspect.variants || [];
+      for (const v of variants) {
+        const sku = String(v.sku || '');
+        if (!sku) continue;
+        if (!variantMap.has(sku)) {
+          const d = v.data || {};
+          variantMap.set(sku, {
+            sku,
+            title: d.title || '',
+            price: d.price || '',
+            coverImage: (d.coverImage || '').replace(/\/wc\d+\//, '/wc1000/'),
+            link: v.link || '',
+            availability: v.availability || 'unknown',
+            active: v.active === true,
+            aspectValues: {},
+          });
+        }
+        const existing = variantMap.get(sku);
+        const text = v.data?.searchableText || (v.data?.textRs || []).map((t) => t.content).join('') || '';
+        if (aspectName && text) existing.aspectValues[aspectName] = text;
+      }
+    }
+
+    // 锚点校验:结果必须含当前页 SKU(防推荐位误判)
+    if (currentSku && !variantMap.has(currentSku)) {
+      console.warn('[FollowSell] extractAspectVariants:aspects 不含当前 SKU', currentSku, '→ 返回 []');
+      return [];
+    }
+    console.log('[FollowSell] extractAspectVariants:从 aspects 读到', variantMap.size, '个变体');
+    return Array.from(variantMap.values());
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // extractVariantSkus —— 兼容包装:优先 aspects,失败走 DOM/state/JSON-LD fallback
+  // 返回 shape 与 extractAspectVariants 一致,保证下游消费方无感知
   // ────────────────────────────────────────────────────────────
   function extractVariantSkus() {
+    // 主路径:从 aspects 结构化数据提取(权威,对齐 0.13)
+    const aspectVariants = extractAspectVariants();
+    if (aspectVariants.length > 0) return aspectVariants;
+
+    // Fallback:旧 DOM/state/JSON-LD 启发式(aspects 缺失时兜底)
     const currentSku = extractSkuFromUrl();
     const seen = new Set();
     const result = [];
@@ -502,12 +716,9 @@
       result.push(v);
     }
 
-    // 确保当前 SKU 排首位
     if (currentSku) pushVariant({ sku: currentSku });
 
-    // Strategy A:DOM 变体选择器区域的 /product/ 链接
-    // Ozon 变体按钮通常在 [data-widget="webSKU"] 或 SKU 选择器区域,
-    // 每个变体是一个指向 /product/xxx-{sku}/ 的链接
+    // Fallback A:DOM 变体选择器区域的 /product/ 链接
     try {
       const skuLinks = document.querySelectorAll(
         '[data-widget="webSKU"] a[href*="/product/"], ' +
@@ -522,34 +733,31 @@
         if (m) {
           pushVariant({
             sku: m[1],
-            url: a.href,
+            link: a.href,
             title: safeText(a.textContent) || undefined,
           });
         }
       });
     } catch {}
 
-    // Strategy A2:更宽泛 —— 页面所有指向 /product/ 的链接(含同款其他变体)
+    // Fallback A2:页面所有指向 /product/ 的短文本链接
     if (result.length < 2) {
       try {
         const allProductLinks = document.querySelectorAll('a[href*="/product/"]');
         allProductLinks.forEach((a) => {
           const href = a.getAttribute('href') || '';
-          // 排除面包屑、推荐位等(只取变体选择器附近的)
-          // 启发式:链接文本短(变体标签通常短)或在 SKU widget 内
           const m = href.match(/-(\d{4,})(?:\/|$|\?)/);
           if (m && m[1] !== currentSku) {
             const text = safeText(a.textContent);
-            // 变体链接通常文本较短(颜色/尺码),排除长标题链接
             if (text && text.length < 60) {
-              pushVariant({ sku: m[1], url: a.href, title: text });
+              pushVariant({ sku: m[1], link: a.href, title: text });
             }
           }
         });
       } catch {}
     }
 
-    // Strategy B:state JSON 里的 skus/variants 数组
+    // Fallback B:state JSON 里的 skus/variants 数组
     if (result.length < 2) {
       try {
         const skuData = findStateDataByKeys(['skus', 'variantSkus', 'skuList', 'variants']);
@@ -573,7 +781,7 @@
       } catch {}
     }
 
-    // Strategy C:JSON-LD Product 模型的 offers 数组
+    // Fallback C:JSON-LD Product 模型的 offers 数组
     if (result.length < 2) {
       try {
         document.querySelectorAll('script[type="application/ld+json"]').forEach((el) => {
@@ -589,7 +797,7 @@
                     sku: String(sku),
                     title: o.name || undefined,
                     price: o.price || undefined,
-                    url: o.url || undefined,
+                    link: o.url || undefined,
                   });
                 }
               }
@@ -629,5 +837,8 @@
     jzExtractRichContentFromStates,
     upgradeImageUrl,
     extractVariantSkus,
+    extractRawAspects,
+    extractAspectVariants,
+    ensurePdpState,
   };
 })();

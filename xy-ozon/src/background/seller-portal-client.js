@@ -508,9 +508,51 @@
   }
 
   // ────────────────────────────────────────────────────────────
-  // fetchBundleByVariantId —— 补完整 attributes(对齐原项目,简化:去掉 cache)
+  // bundle cache —— chrome.storage.local 24h 缓存(对齐 0.13 service-worker.js:464-516)
+  // cache key 含 companyId + variantId,防同一 Chrome profile 多店串数据
+  // ────────────────────────────────────────────────────────────
+  const _BUNDLE_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+  // v2 cache key 含 companyId + variantId:v1(只含 sku)会让 B 店复用 A 店的 bundle
+  // item,串店导致重量/尺寸/属性串数据。variant_id 在 Ozon 内是 store-scoped,加
+  // companyId 双保险。
+  const _BUNDLE_CACHE_PREFIX = 'jz-sw-bundle-v2:';
+  const _bundleCacheKey = (companyId, variantId) =>
+    `${_BUNDLE_CACHE_PREFIX}${companyId || 'unknown'}:${variantId}`;
+
+  // SW 启动时清理 v1 旧缓存 —— 它的 key 只含 sku,可能跨店污染过用户数据。
+  // 一次性清理,跑完后用户的 v2 缓存重建即可。
+  (async () => {
+    try {
+      const all = await new Promise((r) => chrome.storage.local.get(null, r));
+      const stale = Object.keys(all || {}).filter((k) => k.startsWith('jz-sw-bundle-v1:'));
+      if (stale.length) {
+        await new Promise((r) => chrome.storage.local.remove(stale, r));
+        console.log(`[SW] cleared ${stale.length} v1 bundle cache entries (cross-store risk)`);
+      }
+    } catch {}
+  })();
+
+  // ────────────────────────────────────────────────────────────
+  // fetchBundleByVariantId —— 补完整 attributes(对齐原项目,带 24h 缓存)
+  // chrome.storage.local 24h 缓存;forceRefresh=true 跳过缓存直拉
+  // companyId 为 null(未登录)时不缓存,直接请求
   // ────────────────────────────────────────────────────────────
   async function fetchBundleByVariantId(sku, variantId, companyId, opts = {}) {
+    // companyId 存在时才走缓存;null(未登录)直接请求,不读不写
+    const cacheKey = companyId ? _bundleCacheKey(companyId, variantId) : null;
+
+    // 命中缓存且未过期且非 forceRefresh → 直接返回,不请求 seller.ozon.ru
+    if (cacheKey && !opts.forceRefresh) {
+      try {
+        const cached = await new Promise((resolve) => {
+          chrome.storage.local.get([cacheKey], (data) => resolve(data?.[cacheKey] || null));
+        });
+        if (cached && Date.now() - (cached.at || 0) < _BUNDLE_CACHE_TTL_MS && cached.item) {
+          return cached.item;
+        }
+      } catch {}
+    }
+
     const resp = await fetchSellerPortal(
       '/seller-prototype/create-bundle-by-variant-id',
       {
@@ -526,7 +568,19 @@
         preferTabId: opts.preferTabId,
       }
     );
-    return resp?.item || null;
+    const item = resp?.item || null;
+    if (!item) return null;
+
+    // 写缓存(仅 companyId 存在时;含 sku + bundle_id 便于 debug,item 才是数据本体)
+    if (cacheKey) {
+      try {
+        chrome.storage.local.set({
+          [cacheKey]: { at: Date.now(), item, sku, bundleId: resp.bundle_id || null },
+        });
+      } catch {}
+    }
+
+    return item;
   }
 
   // ────────────────────────────────────────────────────────────
@@ -780,6 +834,133 @@
   }
 
   // ────────────────────────────────────────────────────────────
+  // 门户建品写操作(对齐 0.13 service-worker.js:567-627)
+  // 6b/6c/6d 三步建品,复用 fetchSellerPortal(自动走 200ms 闸门 + 跨域快路 + 403 细分)
+  // ────────────────────────────────────────────────────────────
+  const _bundlePortalOpts = (preferTabId, timeoutMs = 30000) => ({
+    urlPrefix: '/api/site',
+    pageType: 'products',
+    timeoutMs,
+    allowOzonTab: true,
+    preferTabId,
+  });
+
+  // 6b. 建空草稿 → bundle_id
+  async function createBundle(companyId, preferTabId = null) {
+    const resp = await fetchSellerPortal(
+      '/seller-prototype/create-bundle',
+      { company_id: String(companyId) },
+      _bundlePortalOpts(preferTabId)
+    );
+    const bundleId = resp?.bundle_id;
+    if (!bundleId) throw new Error('create-bundle 未返回 bundle_id');
+    return String(bundleId);
+  }
+
+  // 6c. 写入商品数据(可反复调)
+  async function updateBundleItems(bundleId, companyId, items, source, catName, preferTabId = null) {
+    return fetchSellerPortal(
+      '/seller-prototype/update-bundle-items',
+      {
+        bundle_id: String(bundleId),
+        company_id: String(companyId),
+        source: source || 'SOURCE_MERGED',
+        description_category_lvl3_name: catName || '',
+        items,
+      },
+      _bundlePortalOpts(preferTabId)
+    );
+  }
+
+  // 6d. 提交发布 → upload_task_id(strict:true 对齐 0.13)
+  async function uploadBundle(bundleId, companyId, preferTabId = null) {
+    const resp = await fetchSellerPortal(
+      '/seller-prototype/upload-bundle',
+      { bundle_id: String(bundleId), company_id: String(companyId), strict: true },
+      _bundlePortalOpts(preferTabId)
+    );
+    const taskId = resp?.upload_task_id;
+    if (!taskId) throw new Error('upload-bundle 未返回 upload_task_id');
+    return String(taskId);
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // transferVideoToOzon —— 视频转存:mp4 → ir.ozone.ru/s3
+  // 对齐 0.13 service-worker.js:863-931
+  // 走独立 executeScript 路径(multipart,不经 fetchSellerPortal JSON 通道)
+  // ────────────────────────────────────────────────────────────
+  async function transferVideoToOzon(srcUrl) {
+    if (!srcUrl || typeof srcUrl !== 'string') return { ok: false, error: 'srcUrl required' };
+    const targetTab = await ensureSellerTab();
+    const companyId = await resolveSellerCompanyId();
+    if (!companyId) {
+      return { ok: false, error: 'AUTH_REQUIRED', message: 'sc_company_id cookie 未找到,请先登录 seller.ozon.ru' };
+    }
+
+    // 在 seller.ozon.ru tab MAIN world 跑:跨源拉源 .mp4 → multipart 同源 POST(带 cookie)
+    const doUpload = async (src, xCompanyId, timeout) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      try {
+        const dl = await fetch(src, { signal: controller.signal });
+        if (!dl.ok) {
+          clearTimeout(timer);
+          return { ok: false, error: '源视频下载失败 ' + dl.status };
+        }
+        const blob = await dl.blob();
+        if (!blob || blob.size === 0) {
+          clearTimeout(timer);
+          return { ok: false, error: '源视频为空' };
+        }
+        const fname = (src.split('/').pop() || 'video.mp4').split('?')[0].split('#')[0] || 'video.mp4';
+        const fd = new FormData();
+        fd.append('file_name', fname);
+        fd.append('tmp', 'true');
+        fd.append('body', new File([blob], fname, { type: blob.type || 'video/mp4' }));
+        const resp = await fetch('https://seller.ozon.ru/api/media-storage/upload-file', {
+          method: 'POST',
+          signal: controller.signal,
+          credentials: 'include',
+          headers: {
+            accept: 'application/json, text/plain, */*',
+            'x-o3-company-id': xCompanyId,
+            'x-o3-language': 'zh-Hans',
+          },
+          body: fd,
+        });
+        clearTimeout(timer);
+        if (resp.redirected && (resp.url.includes('/signin') || resp.url.includes('/login'))) {
+          return { ok: false, status: 401, error: 'Seller portal cookie已过期，请重新登录' };
+        }
+        if (!resp.ok) {
+          const t = await resp.text().catch(() => '');
+          return { ok: false, status: resp.status, error: 'upload-file ' + resp.status + ': ' + t.slice(0, 200) };
+        }
+        const j = await resp.json().catch(() => null);
+        return { ok: true, url: (j && j.url) || null, size: blob.size };
+      } catch (e) {
+        clearTimeout(timer);
+        return { ok: false, error: e.name === 'AbortError' ? '上传超时' : e.message || String(e) };
+      }
+    };
+
+    const results = await Promise.race([
+      chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: doUpload,
+        args: [srcUrl, companyId, 90000],
+        world: 'MAIN',
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('executeScript 超时')), 95000)),
+    ]);
+    const r = results && results[0] && results[0].result;
+    if (!r) return { ok: false, error: 'executeScript 未返回结果' };
+    if (!r.ok || !r.url) return { ok: false, error: r.error || '上传未返回 url' };
+    console.log(`[transferVideoToOzon] ${srcUrl} → ${r.url} (${r.size}B)`);
+    return { ok: true, url: r.url };
+  }
+
+  // ────────────────────────────────────────────────────────────
   // 公开 API
   // ────────────────────────────────────────────────────────────
   self.SellerPortalClient = {
@@ -794,5 +975,9 @@
     syncSellerCookies,
     getUploadTaskList,
     getUploadTaskErrors,
+    createBundle,
+    updateBundleItems,
+    uploadBundle,
+    transferVideoToOzon,
   };
 })();

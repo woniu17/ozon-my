@@ -73,7 +73,9 @@
       "matches": ["https://www.ozon.ru/*", "https://ozon.ru/*", "https://ozon.kz/*", "https://*.ozon.kz/*"],
       "js": [
         "src/lib/content-copy.js",
+        "src/lib/title-quality.js",
         "src/content/product-extractor.js",
+        "src/content/variant-expander.js",
         "src/content/follow-sell-panel.js",
         "src/content/action-bar.js",
         "src/content/sidebar-card.js",

@@ -1,5 +1,7 @@
 // ERP 后端服务(轻量级个人版)入口
 import express from 'express';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import config from './config/index.js';
 import { initSchema } from './db/index.js';
 import { authMiddleware, tokenRefreshInjector } from './middleware/auth.js';
@@ -15,6 +17,10 @@ import productsRoutes from './modules/products.js';
 import collectBoxRoutes from './modules/collect-box.js';
 import productDataRoutes from './modules/product-data.js';
 import miscRoutes from './modules/misc.js';
+import adminRoutes from './modules/admin.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PUBLIC_DIR = join(__dirname, 'public');
 
 // 初始化数据库 schema
 initSchema();
@@ -26,6 +32,11 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cdnBuster);
 app.use(requestLog);
+
+// 静态资源(管理后台页面 HTML/JS/CSS,无需鉴权即可访问;敏感数据由 API 鉴权保护)
+app.use(express.static(PUBLIC_DIR));
+// /admin 便捷入口 → admin.html
+app.get('/admin', (_req, res) => res.sendFile(join(PUBLIC_DIR, 'admin.html')));
 
 // 鉴权(放行 /health、/auth/login-password 等)
 app.use(authMiddleware);
@@ -39,6 +50,13 @@ app.use(productsRoutes);
 app.use(collectBoxRoutes);
 app.use(productDataRoutes);
 app.use(miscRoutes);
+app.use(adminRoutes);
+
+// 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
+if (config.featureFlags?.proxy_collect) {
+  app.use(agentsRoutes);
+  logger.info('代采端点已挂载(proxy_collect=true)');
+}
 
 // 404 + 错误处理
 app.use(notFound);

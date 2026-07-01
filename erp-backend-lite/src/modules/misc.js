@@ -18,7 +18,8 @@ router.get('/ozon/warehouses', storeGuard, async (req, res, next) => {
     // 先尝试从 OPI 实时拉
     try {
       const r = await opi.warehouseList(req.store);
-      const items = r?.result || [];
+      // OPI /v2/warehouse/list 顶层字段是 warehouses(非 result)
+      const items = Array.isArray(r?.warehouses) ? r.warehouses : [];
       if (items.length > 0) {
         return res.json(items);
       }

@@ -19,6 +19,10 @@
     "pino": "^9.1.0",
     "undici": "^6.19.0"
   },
+  "optionalDependencies": {
+    "openai": "^4.67.0",
+    "sharp": "^0.33.0"
+  },
   "engines": {
     "node": ">=22.5.0"
   }

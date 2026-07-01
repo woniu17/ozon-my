@@ -164,6 +164,81 @@ textarea.xy-fs-input {
   color: #f5222d;
 }
 
+/* 上架结果固定展示区(Phase 7.5) */
+.xy-fs-result-panel {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  background: #fafafa;
+  font-size: 12px;
+}
+.xy-fs-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #eee;
+}
+.xy-fs-result-title {
+  font-weight: 700;
+  color: #0b1730;
+}
+.xy-fs-result-summary {
+  font-weight: 600;
+}
+.xy-fs-result-summary.is-success {
+  color: #52c41a;
+}
+.xy-fs-result-summary.is-failed {
+  color: #f5222d;
+}
+.xy-fs-result-summary.is-pending {
+  color: #faad14;
+}
+.xy-fs-result-body {
+  max-height: 180px;
+  overflow-y: auto;
+}
+.xy-fs-result-row {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #f0f0f0;
+  align-items: flex-start;
+}
+.xy-fs-result-row:last-child {
+  border-bottom: none;
+}
+.xy-fs-result-row-offer {
+  flex: 0 0 140px;
+  color: #595959;
+  word-break: break-all;
+  font-family: monospace;
+}
+.xy-fs-result-row-status {
+  flex: 0 0 80px;
+  font-weight: 600;
+}
+.xy-fs-result-row-status.imported {
+  color: #52c41a;
+}
+.xy-fs-result-row-status.failed {
+  color: #f5222d;
+}
+.xy-fs-result-row-status.pending {
+  color: #faad14;
+}
+.xy-fs-result-row-status.skipped {
+  color: #8c8c8c;
+}
+.xy-fs-result-row-err {
+  flex: 1;
+  color: #595959;
+  word-break: break-all;
+}
+
 /* 触发按钮 */
 #xy-follow-sell-trigger {
   position: fixed;
@@ -445,6 +520,92 @@ textarea.xy-fs-input {
 .xy-fs-header-right {
   display: flex;
   align-items: center;
+  gap: 12px;
+}
+
+/* 「显示所有 SKU」切换开关(对齐 0.13 .ozon-helper-mv-toggle) */
+.xy-fs-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #cbd5e1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.xy-fs-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 44px;
+  height: 22px;
+}
+
+.xy-fs-toggle input[type='checkbox'] {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.xy-fs-toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: #475569;
+  border-radius: 11px;
+  transition: background 0.2s;
+}
+
+.xy-fs-toggle-slider::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 18px;
+  height: 18px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.xy-fs-toggle input:checked + .xy-fs-toggle-slider {
+  background: #2563eb;
+}
+
+.xy-fs-toggle input:checked + .xy-fs-toggle-slider::before {
+  transform: translateX(22px);
+}
+
+.xy-fs-toggle-text-yes,
+.xy-fs-toggle-text-no {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  font-weight: 600;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+
+.xy-fs-toggle-text-yes {
+  left: 6px;
+  color: #fff;
+  opacity: 1;
+}
+
+.xy-fs-toggle-text-no {
+  right: 6px;
+  color: #cbd5e1;
+  opacity: 0;
+}
+
+.xy-fs-toggle input:not(:checked) ~ .xy-fs-toggle-text-yes {
+  opacity: 0;
+}
+
+.xy-fs-toggle input:not(:checked) ~ .xy-fs-toggle-text-no {
+  opacity: 1;
 }
 
 .xy-fs-panel .xy-fs-close {

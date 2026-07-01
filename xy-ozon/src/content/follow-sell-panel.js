@@ -6,6 +6,8 @@
 (function () {
   'use strict';
 
+  console.log('[FollowSell] 脚本加载 v2026-07-01-fix6 (import/info 固定结果区)');
+
   const contentCopy = self.JZFollowSellContentCopy;
 
   // ────────────────────────────────────────────────────────────
@@ -13,6 +15,11 @@
   // ────────────────────────────────────────────────────────────
   function sendMessage(type, data = {}) {
     return new Promise((resolve, reject) => {
+      // chrome.runtime 可能在扩展重载/页面导航时序中短暂 undefined
+      if (!chrome?.runtime?.sendMessage) {
+        reject(new Error('chrome.runtime 不可用(扩展可能正在重载)'));
+        return;
+      }
       chrome.runtime.sendMessage({ type, ...data }, (resp) => {
         if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
         resolve(resp);
@@ -249,7 +256,9 @@
         const sku = v.sku || '';
         const title = v.title || productData.title || 'Demo 商品';
         const cover = v.coverImage || productData.coverImage || '';
-        const price = v.price || productData.price || '999';
+        const rawPrice = v.price || productData.price || '999';
+        // 价格原值展示(含币种符号,如 "170 ₽");输入框只用数字
+        const priceNum = _extractPriceNumber(rawPrice);
         const offerId = `SKU${sku}-${String(now).slice(-4)}${i > 0 ? '-' + i : ''}`;
         return `
                   <tr data-sku="${esc(sku)}" data-idx="${i}">
@@ -258,14 +267,38 @@
                     <td class="xy-fs-variant-cell">${esc(title)}</td>
                     <td><span class="xy-fs-sku">${esc(sku) || '—'}</span></td>
                     <td><input type="text" class="xy-fs-input xy-fs-offerid" data-idx="${i}" value="${esc(offerId)}" size="12"></td>
-                    <td><span class="xy-fs-price-original">${esc(price)}</span></td>
-                    <td><input type="number" class="xy-fs-input xy-fs-price" data-idx="${i}" value="${esc(price)}" min="0" step="0.01" size="8"></td>
+                    <td><span class="xy-fs-price-original">${esc(rawPrice)}</span></td>
+                    <td><input type="number" class="xy-fs-input xy-fs-price" data-idx="${i}" value="${esc(priceNum)}" min="0" step="0.01" size="8"></td>
                     <td><input type="number" class="xy-fs-input xy-fs-oldprice" data-idx="${i}" value="" placeholder="自动" min="0" step="0.01" size="8"></td>
                     <td><input type="number" class="xy-fs-input xy-fs-stock" data-idx="${i}" value="10" min="0" size="5"></td>
                     <td><button class="xy-fs-delete-btn" data-idx="${i}">删除</button></td>
                   </tr>`;
       })
       .join('');
+  }
+
+  // 从价格字符串提取纯数字(支持 "170 ₽" / "1 234,56 ₽" / "999" / 1234.56)
+  // 0.13 ozon-product.js 用 normalizePrice,这里简化:剥币种符号 + 空格 + 千分位,逗号转小数点
+  function _extractPriceNumber(price) {
+    if (price == null) return '';
+    if (typeof price === 'number') return Number.isFinite(price) ? price : '';
+    const s = String(price);
+    // 剥所有非数字/非逗号/非点字符,再规范千分位
+    // "1 234,56 ₽" → "1234.56"  /  "170 ₽" → "170"  /  "999" → "999"
+    const cleaned = s
+      .replace(/[^\d.,]/g, '') // 去币种符号和空格
+      .replace(/\s+/g, ''); // 双保险
+    if (!cleaned) return '';
+    // 处理 "1,234.56"(千分位.) 和 "1234,56"(欧式小数,)
+    // 规则:如果同时有 ,和.,且 ,在 . 前 → 去掉 ,;否则 , → .
+    let normalized = cleaned;
+    if (cleaned.includes(',') && cleaned.includes('.')) {
+      normalized = cleaned.replace(/,/g, ''); // 千分位
+    } else if (cleaned.includes(',')) {
+      normalized = cleaned.replace(',', '.'); // 欧式小数
+    }
+    const num = parseFloat(normalized);
+    return Number.isFinite(num) ? num : '';
   }
 
   // ────────────────────────────────────────────────────────────
@@ -293,6 +326,15 @@
             </div>
           </div>
           <div class="xy-fs-header-right">
+            <label class="xy-fs-toggle-label" data-field="show-all-sku-label">
+              <span>显示所有 SKU</span>
+              <div class="xy-fs-toggle" data-field="show-all-sku">
+                <input type="checkbox" />
+                <span class="xy-fs-toggle-slider"></span>
+                <span class="xy-fs-toggle-text-yes">是</span>
+                <span class="xy-fs-toggle-text-no">否</span>
+              </div>
+            </label>
             <button class="xy-fs-close" data-action="close" title="关闭">×</button>
           </div>
         </div>
@@ -510,14 +552,24 @@
         <!-- 状态显示区 -->
         <div class="xy-fs-status" data-field="mv-status" style="display:none;"></div>
 
+        <!-- 上架结果固定展示区(Phase 7.5 查询 /v1/product/import/info 后填充,不被覆盖) -->
+        <div class="xy-fs-result-panel" data-field="result-panel" style="display:none;">
+          <div class="xy-fs-result-header">
+            <span class="xy-fs-result-title">上架结果</span>
+            <span class="xy-fs-result-summary" data-field="result-summary"></span>
+          </div>
+          <div class="xy-fs-result-body" data-field="result-body"></div>
+        </div>
+
         <!-- 上架方式 radio(flag 开启才显示) -->
+        <!-- 默认 portal(模拟手动上架):灰度开关 ON 时优先走 seller.ozon.ru 门户,绕 OPI 限流 -->
         <div class="xy-fs-upload-mode" data-field="upload-mode-row" style="display:none;">
           <span class="xy-fs-upload-mode-label">上架方式</span>
           <label class="xy-fs-radio-label">
-            <input type="radio" name="jz-upload-mode" value="api" checked> API 上架
+            <input type="radio" name="jz-upload-mode" value="api"> API 上架
           </label>
           <label class="xy-fs-radio-label">
-            <input type="radio" name="jz-upload-mode" value="portal"> 模拟手动上架
+            <input type="radio" name="jz-upload-mode" value="portal" checked> 模拟手动上架
           </label>
           <span class="xy-fs-upload-mode-hint">模拟手动上架仅支持单店,需已登录 seller.ozon.ru</span>
         </div>
@@ -628,12 +680,15 @@
   // 绑定面板事件(替换旧版 bindTabs)
   // ────────────────────────────────────────────────────────────
   function updateVariantCount(panel) {
-    const rows = panel.querySelectorAll('[data-field="variant-tbody"] tr');
-    const count = rows.length;
+    // badge:商品总变体数(数据本身,不随勾选/显示变化)
+    const totalRows = panel.querySelectorAll('[data-field="variant-tbody"] tr[data-sku]');
     const badge = panel.querySelector('[data-field="variant-badge"]');
-    if (badge) badge.textContent = `${count} 个变体`;
+    if (badge) badge.textContent = `${totalRows.length} 个变体`;
+    // footer-publish-count:勾选行数(对齐 0.13 ozon-product.js:6920-6931 updateFooterCount)
+    // xy-ozon 为单店流程,storeCount=1,故 total = sel
+    const checkedCount = panel.querySelectorAll('.xy-fs-check[data-idx]:checked').length;
     const footerCount = panel.querySelector('[data-field="footer-publish-count"]');
-    if (footerCount) footerCount.textContent = String(count);
+    if (footerCount) footerCount.textContent = String(checkedCount);
   }
 
   function bindEvents(panel, productData) {
@@ -670,15 +725,26 @@
       submitBtn.addEventListener('click', () => handleSubmit(panel, productData));
     }
 
-    // 5. 全选
+    // 5. 全选 + 勾选变化刷新计数(对齐 0.13 panel change 监听 + updateFooterCount)
     const selectAll = panel.querySelector('[data-action="select-all"]');
     if (selectAll) {
       selectAll.addEventListener('change', () => {
         panel.querySelectorAll('.xy-fs-check').forEach((cb) => {
           cb.checked = selectAll.checked;
         });
+        updateVariantCount(panel);
       });
     }
+    // 勾选/取消勾选时刷新 footer 计数 + 同步全选 checkbox
+    panel.addEventListener('change', (e) => {
+      if (!(e.target instanceof HTMLInputElement) || !e.target.classList.contains('xy-fs-check')) return;
+      updateVariantCount(panel);
+      if (selectAll) {
+        const checks = panel.querySelectorAll('.xy-fs-check[data-idx]');
+        const checkedCount = Array.from(checks).filter((c) => c.checked).length;
+        selectAll.checked = checks.length > 0 && checkedCount === checks.length;
+      }
+    });
 
     // 6. 删除行
     panel.querySelectorAll('.xy-fs-delete-btn').forEach((btn) => {
@@ -689,12 +755,115 @@
       });
     });
 
-    // 7. 灰度 flag 开启时显示上架方式 radio
+    // 7. 「显示所有 SKU / 仅当前变体」切换(对齐 0.13 ozon-product.js:7022-7091)
+    //    默认显示开关;单变体(<2)时隐藏
+    //    - 是:显示全部变体行
+    //    - 否(默认):仅显示当前 URL SKU 对应行,其余隐藏;无匹配时 fallback 第一行
+    //    状态持久化到 chrome.storage.local['mv-show-all-sku']
+    const showAllLabel = panel.querySelector('[data-field="show-all-sku-label"]');
+    const showAllToggle = panel.querySelector('[data-field="show-all-sku"] input[type="checkbox"]');
+    const variantRows = panel.querySelectorAll('[data-field="variant-tbody"] tr[data-sku]');
+    console.log('[FollowSell] 开关初始化:', {
+      labelFound: !!showAllLabel,
+      toggleFound: !!showAllToggle,
+      variantRowCount: variantRows.length,
+    });
+    if (showAllLabel && showAllToggle) {
+      if (variantRows.length < 2) {
+        // 单变体:隐藏开关
+        showAllLabel.style.display = 'none';
+      } else {
+        // 多变体:确保显示(CSS 默认 flex,这里强制兜底)
+        showAllLabel.style.display = 'flex';
+        const currentSku = String(productData?.sku || '');
+        const STORAGE_KEY = 'mv-show-all-sku';
+
+        const applyShowAll = () => {
+          const showAll = showAllToggle.checked;
+          let matched = false;
+          let firstFallbackRow = null;
+          variantRows.forEach((row) => {
+            const cb = row.querySelector('.xy-fs-check');
+            if (showAll) {
+              row.style.display = '';
+              if (cb) cb.checked = true; // 显示时恢复勾选
+              return;
+            }
+            const rowSku = row.getAttribute('data-sku');
+            if (currentSku && rowSku === currentSku) {
+              row.style.display = '';
+              if (cb) cb.checked = true;
+              matched = true;
+            } else {
+              row.style.display = 'none';
+              if (cb) cb.checked = false;
+              if (!firstFallbackRow) firstFallbackRow = row;
+            }
+          });
+          // 无匹配时 fallback 显示第一行
+          if (!showAll && !matched && firstFallbackRow) {
+            firstFallbackRow.style.display = '';
+            const cb = firstFallbackRow.querySelector('.xy-fs-check');
+            if (cb) cb.checked = true;
+          }
+          // 同步全选 checkbox
+          const selectAll = panel.querySelector('[data-action="select-all"]');
+          if (selectAll) {
+            const checks = panel.querySelectorAll('.xy-fs-check[data-idx]');
+            const checkedCount = Array.from(checks).filter((c) => c.checked).length;
+            selectAll.checked = checks.length > 0 && checkedCount === checks.length;
+          }
+          updateVariantCount(panel);
+        };
+
+        // 恢复持久化偏好(默认 false = 不显示所有,即仅当前变体)
+        try {
+          chrome.storage.local.get([STORAGE_KEY], (res) => {
+            const saved = res?.[STORAGE_KEY];
+            // 只有显式存过 true 才显示所有;否则默认 false(仅当前变体)
+            showAllToggle.checked = saved === true;
+            applyShowAll();
+          });
+        } catch {
+          applyShowAll();
+        }
+
+        // 切换时应用 + 持久化
+        showAllToggle.addEventListener('change', () => {
+          applyShowAll();
+          try {
+            chrome.storage.local.set({ [STORAGE_KEY]: showAllToggle.checked });
+          } catch {}
+        });
+      }
+    }
+
+    // 8. 灰度 flag 开启时显示上架方式 radio + 恢复持久化偏好
     isPortalImportEnabled()
       .then((on) => {
         if (on) {
           const row = panel.querySelector('[data-field="upload-mode-row"]');
           if (row) row.style.display = '';
+          // 恢复持久化的上架方式(对齐 0.13 ozon-product.js:6898-6906)
+          try {
+            chrome.storage.local.get(['jz-upload-mode'], (res) => {
+              const saved = res?.['jz-upload-mode'];
+              if (saved === 'api' || saved === 'portal') {
+                const el = panel.querySelector(`input[name="jz-upload-mode"][value="${saved}"]`);
+                if (el) el.checked = true;
+              }
+            });
+          } catch {}
+          // 切换时持久化
+          panel.querySelectorAll('input[name="jz-upload-mode"]').forEach((el) => {
+            el.addEventListener('change', () => {
+              if (el.checked) {
+                try {
+                  chrome.storage.local.set({ 'jz-upload-mode': el.value });
+                } catch {}
+              }
+            });
+          });
         }
       })
       .catch(() => {});
@@ -710,14 +879,63 @@
 
   // ────────────────────────────────────────────────────────────
   // toggle —— 切换面板显示/隐藏(action-bar / sidebar-card 入口)
+  // 集成多变体展开(Phase 0 弹窗补全 + Phase A SSR 多轴展开)
   // ────────────────────────────────────────────────────────────
-  function toggle() {
+  async function toggle() {
     const existing = document.getElementById('xy-follow-sell-panel');
     if (existing) {
       existing.remove();
       return;
     }
+
+    // 关键:先预热 composer-api page json 缓存
+    // Ozon 2026 SSR DOM 剥离场景下,页面 [data-state] 没有 aspects 数据,
+    // 必须先调 composer-api 拿到完整 widgetStates 缓存,
+    // 之后 extractAspectVariants → extractStateData('state-webAspects') 才能从缓存读到。
+    // 对齐 0.13 ozon-product.js:10181-10189 toggleFollowSellPanel
+    if (self.JZProductExtractor?.ensurePdpState) {
+      try {
+        console.log('[FollowSell] 预热 composer-api 缓存...');
+        await self.JZProductExtractor.ensurePdpState();
+        console.log('[FollowSell] 预热完成');
+      } catch (e) {
+        console.warn('[FollowSell] ensurePdpState 失败(不阻断):', e?.message);
+      }
+    }
+
     const pd = self.JZProductExtractor.extractProductData();
+    console.log('[FollowSell] extractProductData:', {
+      sku: pd.sku,
+      title: pd.title?.slice(0, 40),
+      variantSkusCount: pd.variantSkus?.length,
+      variantSkusSource: pd.variantSkus?.length > 1 ? 'aspects or fallback' : 'single',
+    });
+
+    // 多变体展开:Phase 0 弹窗补全 + Phase A SSR 多轴展开
+    // 真多轴商品才阻塞展开;单轴/单变体直接开面板(秒开)
+    if (self.JZVariantExpander && Array.isArray(pd.variantSkus) && pd.variantSkus.length > 0) {
+      const rawAspects = self.JZVariantExpander.extractRawAspects();
+      console.log('[FollowSell] rawAspects:', rawAspects?.length, 'axes');
+      const needExpand = rawAspects.length >= 1; // 有 aspects 就尝试弹窗补全
+      if (needExpand) {
+        try {
+          // 最多等 10s,超时则用原 variants 开面板
+          const expanded = await Promise.race([
+            self.JZVariantExpander.expandVariants(pd.variantSkus, pd),
+            new Promise((resolve) => setTimeout(() => resolve(pd.variantSkus), 10000)),
+          ]);
+          if (Array.isArray(expanded) && expanded.length > (pd.variantSkus?.length || 0)) {
+            console.log(`[FollowSell] 变体展开:${pd.variantSkus.length} → ${expanded.length}`);
+            pd.variantSkus = expanded;
+          } else {
+            console.log('[FollowSell] 变体展开未增加(可能已完整或 fetch 失败),用原', pd.variantSkus.length, '个');
+          }
+        } catch (e) {
+          console.warn('[FollowSell] 变体展开失败,用原变体开面板:', e?.message);
+        }
+      }
+    }
+
     createPanel(pd);
   }
 
@@ -847,17 +1065,27 @@
     return matched[0];
   }
 
-  // 错误文案人性化(对齐原项目 humanizeError)
+  // 错误文案人性化(对齐 0.13 ozon-product.js:9205-9233)
   function humanizeError(msg) {
     const s = String(msg || '');
-    if (/IMPORT_RATE_LIMIT|429/.test(s)) return '上架请求过于频繁,每分钟最多 30 次';
+    // 限流/配额
+    if (/IMPORT_RATE_LIMIT|429|RATE_LIMITED/.test(s)) return 'Ozon 限流,请稍后重试(每分钟最多 30 次)';
     if (/IMPORT_ACTIVE_TASK_LIMIT/.test(s)) return '已有上架任务在处理中,请稍候';
-    if (/AUTH_EXPIRED|401|登录已过期/.test(s)) return '登录已过期,请重新登录';
-    if (/items.length must be <= 200/.test(s)) return '单次最多 200 个商品';
-    if (/seller portal|sc_company_id/.test(s)) return '请确认已登录 seller.ozon.ru';
-    if (/NOT_FOUND/.test(s)) return 'SKU 未在平台找到';
-    if (/AUTH_REQUIRED/.test(s)) return 'seller.ozon.ru 登录态失效,请刷新后重试';
-    if (/ANTIBOT_BLOCKED/.test(s)) return 'seller.ozon.ru 反爬拦截,请稍后重试';
+    if (/QUOTA_EXCEEDED|配额|额度/.test(s)) return '会员配额已用尽,请升级套餐或稍后重试';
+    // 鉴权/反爬
+    if (/AUTH_EXPIRED|AUTH_TOKEN_EXPIRED|401|登录已过期/.test(s)) return '登录已过期,请重新登录';
+    if (/AUTH_REQUIRED|sc_company_id/.test(s)) return 'seller.ozon.ru 登录态失效,请刷新页面后重试';
+    if (/ANTIBOT_BLOCKED|反爬|challenge|captcha/.test(s)) return '触发反爬挑战,请稍后重试或更换网络';
+    if (/PERMISSION_DENIED|NO_SELLER_TAB|未打开 seller/.test(s)) return '请先访问 seller.ozon.ru 并登录店铺';
+    // 公司一致性护栏
+    if (/公司.*不一致|store_company_id|店铺.*登录/.test(s)) return '所选店铺与浏览器登录店铺不一致,请切换浏览器登录该店铺后重试';
+    // 网络/超时
+    if (/TIMEOUT|超时/.test(s)) return '请求超时,请检查网络后重试';
+    if (/NETWORK_ERROR|网络/.test(s)) return '网络错误,请检查网络连接后重试';
+    // 业务校验
+    if (/items.length must be <= 200|单次最多/.test(s)) return '单次最多 200 个商品,请分批提交';
+    if (/NOT_FOUND|未.*找到|未在平台/.test(s)) return 'SKU 未在平台找到,请确认 SKU 正确';
+    if (/invalid.*image|无效图片|图片.*失败/.test(s)) return '部分图片无效已自动剔除';
     return s.slice(0, 200);
   }
 
@@ -929,6 +1157,61 @@
   }
 
   // ────────────────────────────────────────────────────────────
+  // 渲染上架结果固定展示区(Phase 7.5 调 /v1/product/import/info 后填充)
+  // items[]: { offer_id, product_id, status: 'imported'|'failed'|'pending'|'skipped', errors[] }
+  // ────────────────────────────────────────────────────────────
+  function renderResultPanel(panel, items) {
+    const resultPanel = panel.querySelector('[data-field="result-panel"]');
+    const summaryEl = panel.querySelector('[data-field="result-summary"]');
+    const bodyEl = panel.querySelector('[data-field="result-body"]');
+    if (!resultPanel || !summaryEl || !bodyEl) return;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      resultPanel.style.display = 'none';
+      return;
+    }
+
+    const imported = items.filter((x) => x.status === 'imported').length;
+    const failed = items.filter((x) => x.status === 'failed').length;
+    const pending = items.filter((x) => x.status === 'pending' || x.status === 'skipped').length;
+
+    // 摘要
+    let summaryClass = 'is-success';
+    let summaryText = `成功 ${imported}/${items.length}`;
+    if (failed > 0 && imported === 0) {
+      summaryClass = 'is-failed';
+      summaryText = `失败 ${failed}/${items.length}`;
+    } else if (failed > 0 || pending > 0) {
+      summaryClass = 'is-pending';
+      summaryText = `成功 ${imported} / 失败 ${failed} / 处理中 ${pending} (共 ${items.length})`;
+    }
+    summaryEl.className = `xy-fs-result-summary ${summaryClass}`;
+    summaryEl.textContent = summaryText;
+
+    // 明细行
+    const statusLabel = { imported: '已创建', failed: '失败', pending: '处理中', skipped: '跳过' };
+    bodyEl.innerHTML = items
+      .map((it) => {
+        const st = String(it.status || 'pending');
+        const label = statusLabel[st] || st;
+        const errText = (it.errors || [])
+          .map((e) => `${e.message || e.description || e.code || ''}${e.field ? ` [${e.field}]` : ''}${e.attribute_name ? ` (${e.attribute_name})` : ''}`)
+          .filter(Boolean)
+          .join('; ');
+        const productId = it.product_id ? ` (product_id: ${it.product_id})` : '';
+        return `
+          <div class="xy-fs-result-row">
+            <span class="xy-fs-result-row-offer" title="${esc(it.offer_id || '')}">${esc(it.offer_id || '—')}${productId}</span>
+            <span class="xy-fs-result-row-status ${esc(st)}">${esc(label)}</span>
+            <span class="xy-fs-result-row-err">${errText ? esc(errText) : '<span style="color:#52c41a">无错误</span>'}</span>
+          </div>`;
+      })
+      .join('');
+
+    resultPanel.style.display = 'block';
+  }
+
+  // ────────────────────────────────────────────────────────────
   // 提交主流程(对齐原项目 handleMultiVariantFollowSell,7 阶段完整复刻)
   // ────────────────────────────────────────────────────────────
   async function handleSubmit(panel, productData) {
@@ -952,6 +1235,12 @@
       const portalFlagOn = await isPortalImportEnabled();
       const uploadModeEl = panel.querySelector('input[name="jz-upload-mode"]:checked');
       const viaPortal = portalFlagOn && uploadModeEl?.value === 'portal';
+      console.log('[FollowSell] Phase 1 viaPortal 判定:', {
+        portalFlagOn,
+        uploadModeValue: uploadModeEl?.value,
+        uploadModeExists: !!uploadModeEl,
+        viaPortal,
+      });
 
       // viaPortal 仅支持单店(Demo 单店,跳过多店校验)
       if (viaPortal) {
@@ -1068,10 +1357,13 @@
 
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       // Phase 4:视频转存(对齐原项目 8789-8806 + captureAndTransferPageVideoMedia)
+      // ⚠️ 视频转存太耗时(mp4 下载 + multipart 上传,单视频 30-90s),
+      //    默认关闭以加速上架。需要时把 ENABLE_VIDEO_TRANSFER 改为 true 即可。
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      const ENABLE_VIDEO_TRANSFER = false;
       let sharedVideo = null;
-      const srcMp4 = extractor.extractVideoUrl();
-      const videoCover = extractor.extractVideoCover();
+      const srcMp4 = ENABLE_VIDEO_TRANSFER ? extractor.extractVideoUrl() : '';
+      const videoCover = ENABLE_VIDEO_TRANSFER ? extractor.extractVideoCover() : null;
       if (srcMp4) {
         showStatus('info', 'Phase 4: 转存视频...');
         try {
@@ -1086,12 +1378,15 @@
         } finally {
           btn.textContent = '上架中...';
         }
+      } else if (!ENABLE_VIDEO_TRANSFER) {
+        console.log('[FollowSell] Phase 4 视频转存已关闭(ENABLE_VIDEO_TRANSFER=false),跳过');
       }
 
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       // Phase 5:多变体 items[] 组装(对齐原项目 8821-9045,loop 所有匹配变体)
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       showStatus('info', `Phase 5: 组装 ${matched.length} 个变体数据...`);
+      console.log(`[FollowSell] Phase 5 开始: 组装 ${matched.length} 个变体`);
       const currencyCode = 'RUB';
       const imageOrder = panel.querySelector('[data-field="image-order"]')?.value || 'keep';
 
@@ -1231,6 +1526,7 @@
       // Phase 6:提交(对齐原项目 9098-9200)
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       showStatus('info', `Phase 6: ${viaPortal ? '模拟手动上架' : '官方 API'}提交...`);
+      console.log(`[FollowSell] Phase 5 完成: items=${items.length} 个,进入 Phase 6 提交 (viaPortal=${viaPortal})`);
 
       // 仓库解析(对齐原项目 9122-9160,Demo 单店简化)
       // 多变体:从 items[] 聚合 stocks,每个变体一个 stock 项
@@ -1273,6 +1569,7 @@
 
       const importResult = fsRes.data;
       const taskId = importResult?.result?.task_id;
+      console.log('[FollowSell] Phase 6 完成: 收到后台响应', { taskId, viaPortal: importResult?.result?.viaPortal, bundleIds: importResult?.result?.bundle_ids });
       if (!taskId) {
         showStatus('error', '未收到任务ID');
         return _unlockUI();
@@ -1285,6 +1582,7 @@
         // 门户上架:内联轮询 16s
         showStatus('info', 'Phase 7: 已提交卖家中心,正在确认上架结果...');
         const taskIds = Array.isArray(importResult.result.task_ids) ? importResult.result.task_ids : [taskId];
+        console.log(`[FollowSell] Phase 7 开始: 门户轮询 16s, taskIds=${JSON.stringify(taskIds)}`);
         const companyId = importResult.result.company_id;
         const deadline = Date.now() + 16000;
         let totalCreated = 0;
@@ -1293,8 +1591,21 @@
 
         for (const tid of taskIds) {
           let st = null;
+          let pollCount = 0;
           while (Date.now() < deadline) {
+            pollCount++;
             const stRes = await sendMessage('portalImportStatus', { taskId: String(tid), companyId }).catch(() => null);
+            console.log(`[FollowSell] Phase 7 轮询 #${pollCount} task=${tid}:`, {
+              ok: stRes?.ok,
+              found: stRes?.data?.found,
+              status: stRes?.data?.status,
+              size: stRes?.data?.size,
+              processed: stRes?.data?.processed,
+              failed: stRes?.data?.failed,
+              warned: stRes?.data?.warned,
+              done: stRes?.data?.done,
+              error: stRes?.error,
+            });
             if (stRes?.ok && stRes.data?.done) {
               st = stRes.data;
               break;
@@ -1306,12 +1617,50 @@
             totalCreated += Math.max(0, Number(st.processed || 0) - Number(st.failed || 0));
             totalFailed += Number(st.failed || 0);
             if (Array.isArray(st.errors)) allErrors.push(...st.errors);
+          } else {
+            console.warn(`[FollowSell] Phase 7 轮询超时(16s) task=${tid},任务可能仍在 seller 后台异步处理中`);
           }
         }
 
         // 结果展示(对齐原项目三种结果)
         if (totalFailed === 0 && totalCreated > 0) {
           showStatus('success', `门户上架完成！已通过卖家中心创建 ${totalCreated} 个商品`);
+          // ── Phase 7.5: 调 OPI /v1/product/import/info 查询商品创建情况 ──
+          // 用 task_id 查询每个 offer_id 的 status(imported/failed/pending/skipped)
+          // 结果固定展示在 result-panel 区域(不被后续 showStatus 覆盖)
+          try {
+            console.log(`[FollowSell] Phase 7.5 开始: 查询 OPI /v1/product/import/info, taskIds=${JSON.stringify(taskIds)}`);
+            showStatus('info', `正在查询商品创建情况 (OPI /v1/product/import/info)...`);
+            const allItems = [];
+            for (const tid of taskIds) {
+              const infoRes = await sendMessage('productImportInfo', { taskId: String(tid) }).catch(() => null);
+              console.log(`[FollowSell] Phase 7.5 productImportInfo task=${tid}:`, infoRes);
+              if (infoRes?.ok && Array.isArray(infoRes.data?.items)) {
+                allItems.push(...infoRes.data.items);
+              } else {
+                console.warn(`[FollowSell] Phase 7.5 task=${tid} 查询失败:`, infoRes?.error || infoRes);
+              }
+            }
+            renderResultPanel(panel, allItems);
+            // 同步状态条摘要
+            const imported = allItems.filter((x) => x.status === 'imported').length;
+            const failed = allItems.filter((x) => x.status === 'failed').length;
+            const pending = allItems.filter((x) => x.status === 'pending' || x.status === 'skipped').length;
+            if (allItems.length === 0) {
+              showStatus('warn', `门户上架完成,但 OPI 查询未返回商品状态(task_id 可能不匹配)`);
+            } else if (failed === 0 && pending === 0) {
+              showStatus('success', `✓ 全部创建成功: ${imported}/${allItems.length} (imported)`);
+            } else if (imported > 0) {
+              showStatus('warn', `部分创建成功: imported=${imported} failed=${failed} pending=${pending} (共 ${allItems.length})`);
+            } else if (pending > 0 && failed === 0) {
+              showStatus('info', `商品仍在处理中: pending=${pending}/${allItems.length},请稍后在卖家中心查看`);
+            } else {
+              showStatus('error', `创建失败: failed=${failed}/${allItems.length}`);
+            }
+          } catch (e) {
+            console.warn('[FollowSell] Phase 7.5 异常(不影响上架结果):', e?.message || e);
+            showStatus('warn', `门户上架完成,但查询创建详情失败: ${e?.message || e}`);
+          }
         } else if (totalCreated > 0) {
           const errMsg =
             allErrors.length > 0
@@ -1336,6 +1685,22 @@
         const matchInfo = `变体匹配: ${matched.length}/${matched.length + skipped.length}`;
         const skippedInfo = skipped.length > 0 ? ` (SKU ${skipped.join(', ')} 使用类目回退)` : '';
         showStatus('success', `已提交到后台！${items.length} 个商品正在后台上架 (${matchInfo}${skippedInfo})`);
+      }
+
+      // ── 严格模式跳过项 + 无效图片展示(对齐 0.13 strictSkipped/invalidImage 回传) ──
+      const strictSkipped = importResult?.result?.strictSkipped || [];
+      const invalidImage = importResult?.result?.invalidImage || [];
+      if (strictSkipped.length > 0 || invalidImage.length > 0) {
+        const parts = [];
+        if (strictSkipped.length > 0) {
+          parts.push(`严格模式跳过 ${strictSkipped.length} 个: ${strictSkipped.slice(0, 5).map((s) => s.offer_id || s.sku || s).join(', ')}${strictSkipped.length > 5 ? '...' : ''}`);
+        }
+        if (invalidImage.length > 0) {
+          parts.push(`无效图片剔除 ${invalidImage.length} 个: ${invalidImage.slice(0, 5).map((s) => s.offer_id || s.sku || s).join(', ')}${invalidImage.length > 5 ? '...' : ''}`);
+        }
+        console.warn('[FollowSell] 严格模式/无效图片:', { strictSkipped, invalidImage });
+        showStatus('warn', parts.join(' | '));
+        await new Promise((r) => setTimeout(r, 2000));
       }
     } catch (err) {
       console.error('[FollowSell] 上架流程未捕获异常:', err);

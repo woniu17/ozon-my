@@ -206,4 +206,85 @@ router.post('/ozon/products/import-by-sku', storeGuard, async (req, res, next) =
   }
 });
 
+// POST /ozon/products/info —— 按 offer_id 查询商品最终状态(创建/审核/可售)
+// 用于上架后确认商品是否真正创建成功
+// 请求体: { offer_ids: ["SKU123", "SKU456"] }
+// 响应: { items: [{offer_id, product_id, name, is_created, status, moderate_status,
+//                  validation_status, errors[], availabilities[]}] }
+router.post('/ozon/products/info', storeGuard, async (req, res, next) => {
+  try {
+    const offerIds = Array.isArray(req.body?.offer_ids) ? req.body.offer_ids : [];
+    if (offerIds.length === 0) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'offer_ids 必填(数组)'));
+    }
+
+    const r = await opi.productInfoList(req.store, offerIds);
+    const items = (r?.result?.items || []).map((it) => ({
+      offer_id: it.offer_id,
+      product_id: it.id,
+      name: it.name,
+      sku: it.sku,
+      is_created: it.statuses?.is_created === true,
+      status: it.statuses?.status,
+      status_name: it.statuses?.status_name,
+      moderate_status: it.statuses?.moderate_status,
+      validation_status: it.statuses?.validation_status,
+      errors: (it.errors || []).map((e) => ({
+        code: e.code,
+        message: e.texts?.message || e.message,
+        description: e.texts?.description,
+        field: e.field,
+        attribute_name: e.texts?.attribute_name,
+        level: e.level,
+      })),
+      availabilities: (it.availabilities || []).map((a) => ({
+        availability: a.availability,
+        reasons: a.reasons || [],
+      })),
+      price: it.price,
+      old_price: it.old_price,
+      currency_code: it.currency_code,
+      created_at: it.created_at,
+      updated_at: it.updated_at,
+    }));
+
+    res.json({ items, total: items.length });
+  } catch (e) {
+    logger.warn({ err: e.message }, 'productInfoList failed');
+    next(e);
+  }
+});
+
+// POST /ozon/products/import-info —— 直接调 OPI /v1/product/import/info 查询任务进度
+// 不查本地 follow_sell_tasks 表(viaPortal 路径的 task_id 是 seller.ozon.ru 的,未写本地表)
+// 请求体: { task_id: 4969404493 }
+// 响应: { items: [{offer_id, product_id, status, errors[]}], total }
+router.post('/ozon/products/import-info', storeGuard, async (req, res, next) => {
+  try {
+    const { task_id } = req.body || {};
+    if (!task_id) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'task_id 必填'));
+    }
+    const r = await opi.productImportInfo(req.store, task_id);
+    const items = (r?.result?.items || []).map((it) => ({
+      offer_id: it.offer_id,
+      product_id: it.product_id,
+      status: it.status, // pending / imported / failed / skipped
+      errors: (it.errors || []).map((e) => ({
+        code: e.code,
+        message: e.message,
+        field: e.field,
+        level: e.level,
+        description: e.description,
+        attribute_id: e.attribute_id,
+        attribute_name: e.attribute_name,
+      })),
+    }));
+    res.json({ items, total: items.length, task_id: Number(task_id) });
+  } catch (e) {
+    logger.warn({ err: e.message, task_id: req.body?.task_id }, 'productImportInfo failed');
+    next(e);
+  }
+});
+
 export default router;

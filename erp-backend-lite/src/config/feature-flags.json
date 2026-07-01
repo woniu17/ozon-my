@@ -1,3 +1,8 @@
 {
-  "ozon_portal_import": true
+  "ozon_portal_import": true,
+  "ai_rewrite": false,
+  "ai_poster": false,
+  "watermark": false,
+  "copy_ban_solution": false,
+  "proxy_collect": false
 }

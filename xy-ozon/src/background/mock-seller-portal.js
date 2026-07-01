@@ -20,6 +20,7 @@
   // ────────────────────────────────────────────────────────────
   const SELLER_PORTAL_MIN_INTERVAL_MS = 200; // 全局节流闸门(对齐原项目)
   const DEFAULTS = {
+    enabled: false, // ⬅️ mock 总开关:false=走真实 seller.ozon.ru;true=用 mock(离线测试/故障注入)
     antibotRate: 0, // 0~1,create/update/upload 命中 403 反爬概率
     authFailRate: 0, // 0~1,权限错( AUTH_REQUIRED ) 概率
     networkFailRate: 0, // 0~1,网络错概率

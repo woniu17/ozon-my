@@ -61,7 +61,7 @@ router.post('/ozon/product-data/batch', storeGuard, async (req, res, next) => {
     // 3. 未命中 → 调 OPI /v2/product/info/list
     if (missing.length > 0) {
       try {
-        const r = await opi.productInfoList(req.store, missing);
+        const r = await opi.productInfoListBySku(req.store, missing);
         const items = r?.result?.items || [];
         const insertStmt = db.prepare(
           `INSERT OR REPLACE INTO product_data_cache (sku, data, fetched_at) VALUES (?, ?, datetime('now'))`

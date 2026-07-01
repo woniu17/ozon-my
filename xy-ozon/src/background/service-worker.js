@@ -122,10 +122,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return sendResponse({ ok: true, data: { synced: r } });
         }
 
-        // ── Phase 4:视频转存(mock upload-file) ───────────────
+        // ── Phase 4:视频转存(mock 开关:false=真实 media-storage/upload-file;true=mock) ─
         case 'uploadFollowSellVideo': {
-          const r = await self.MockSellerPortal.uploadVideo(message.srcUrl);
-          return sendResponse(r);
+          const useMock = self.MOCK_SELLER_CONFIG?.enabled === true;
+          try {
+            const r = useMock
+              ? await self.MockSellerPortal.uploadVideo(message.srcUrl)
+              : await self.SellerPortalClient.transferVideoToOzon(message.srcUrl);
+            if (!r.ok) return sendResponse({ ok: false, error: r.error, message: r.message });
+            return sendResponse({ ok: true, data: { url: r.url } });
+          } catch (e) {
+            return sendResponse({ ok: false, error: e?.message || String(e) });
+          }
         }
 
         // ── Phase 6:提交(viaPortal=true → importViaPortal) ───
@@ -133,7 +141,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const targetStoreId = message.storeId || storeId;
           if (message.viaPortal) {
             console.log('[followSell] viaPortal: items=', message.items?.length);
-            const portalResult = await self.importViaPortal(message, token, targetStoreId);
+            const preferTabId = sender?.tab?.id || null; // 透传给建品三步走跨域快路
+            const portalResult = await self.importViaPortal(message, token, targetStoreId, preferTabId);
             console.log('[followSell] portal response:', JSON.stringify(portalResult).slice(0, 200));
             return sendResponse({ ok: true, data: portalResult });
           }
@@ -192,6 +201,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               errors,
             },
           });
+        }
+
+        // 查询商品最终状态(创建/审核/可售) —— 走 OPI /v3/product/info/list
+        // 上架后调用,确认商品是否真正创建成功
+        case 'productInfo': {
+          const offerIds = Array.isArray(message.offerIds) ? message.offerIds : [];
+          if (offerIds.length === 0) return sendResponse({ ok: false, error: '缺少 offerIds' });
+          const resp = await self.ErpClient.post('/ozon/products/info', { offer_ids: offerIds });
+          return sendResponse({ ok: true, data: resp });
+        }
+
+        // 查询上架任务进度 —— 走 OPI /v1/product/import/info
+        // 直接调 ERP /ozon/products/import-info 端点(不查本地表,viaPortal task_id 也能查)
+        case 'productImportInfo': {
+          const taskId = message.taskId;
+          if (!taskId) return sendResponse({ ok: false, error: '缺少 taskId' });
+          const resp = await self.ErpClient.post('/ozon/products/import-info', { task_id: String(taskId) });
+          return sendResponse({ ok: true, data: resp });
         }
 
         default:
