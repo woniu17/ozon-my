@@ -1,0 +1,12 @@
+[
+  {
+    "id": "store-001",
+    "name": "我的店铺",
+    "company_id": "3891653",
+    "warehouse_id": "wh-001",
+    "sync_credentials": {
+      "clientId": "your-client-id",
+      "apiKey": "your-api-key"
+    }
+  }
+]

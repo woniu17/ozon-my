@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>批量上架 - MY ERP</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <!-- Sticky 顶栏 -->
+    <header class="toolbar">
+      <div class="tb-l">
+        <span class="tb-icon">M</span>
+        <div class="tb-title-block">
+          <div class="tb-title">批量上架</div>
+          <div class="tb-sub">按 SKU 批采 → V3 跟卖</div>
+        </div>
+      </div>
+      <span class="tb-divider"></span>
+      <span class="tb-conn"><span class="dot"></span>seller.ozon.ru 已连接</span>
+      <div class="tb-r">
+        <button class="tb-btn" id="btn-help">使用说明</button>
+        <button class="tb-btn" id="btn-history">历史记录</button>
+        <button class="tb-btn-primary" id="btn-submit" disabled>开始批采 + 上架</button>
+        <button class="tb-btn-warn" id="btn-cancel" style="display: none">取消</button>
+      </div>
+    </header>
+
+    <!-- 鉴权提示 -->
+    <div class="notice notice-ok" id="auth-notice">
+      <span id="auth-notice-text">已连接 seller.ozon.ru</span>
+    </div>
+
+    <!-- Body 主区 -->
+    <main class="body">
+      <!-- 左列 -->
+      <div class="col-main">
+        <!-- 1. 粘贴卡 -->
+        <section class="card">
+          <div class="card-head">
+            <div class="card-title">粘贴批量数据 <span class="chip chip-info" id="parse-stat">0 行</span></div>
+            <button class="link-btn" id="btn-clear">清空</button>
+          </div>
+          <div class="card-body is-flush">
+            <div class="paste-wrap">
+              <div class="paste-area">
+                <textarea
+                  id="textarea"
+                  spellcheck="false"
+                  placeholder="每行一条,格式: SKU,售价&#10;如: 1234567890,99.9"
+                ></textarea>
+              </div>
+              <div class="paste-formats">
+                <div class="formats-h">10 种格式</div>
+                <ol class="formats-list">
+                  <li><span class="n">1</span><span class="req">sku · 售价</span></li>
+                  <li><span class="n">2</span><span class="req">sku · 售价</span><span class="opt">· 货号</span></li>
+                  <li><span class="n">3</span><span class="req">sku · 售价</span><span class="opt">· 重量g</span></li>
+                  <li><span class="n">4</span><span class="req">sku · 售价</span><span class="opt">· 长mm</span></li>
+                  <li><span class="n">5</span><span class="req">sku · 售价</span><span class="opt">· 长 · 宽</span></li>
+                  <li>
+                    <span class="n">6</span><span class="req">sku · 售价</span><span class="opt">· 长 · 宽 · 高</span>
+                  </li>
+                  <li>
+                    <span class="n">7</span><span class="req">sku · 售价</span><span class="opt">· 重 · L · W · H</span>
+                  </li>
+                  <li>
+                    <span class="n">8</span><span class="req">sku · 售价</span><span class="opt">· 货号 · 重</span>
+                  </li>
+                  <li>
+                    <span class="n">9</span><span class="req">sku · 售价</span
+                    ><span class="opt">· 货 · 重 · L W H</span>
+                  </li>
+                  <li>
+                    <span class="n">10</span><span class="req">sku · 售价</span><span class="opt">· ~最低价</span>
+                  </li>
+                </ol>
+                <div class="formats-foot">
+                  分隔符 <code>,</code> <code>Tab</code> <code>2空格</code> · <code>~</code> 前缀 = 最低价
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 2. 解析预览卡 -->
+        <section class="card preview-card" id="preview-card" style="display: none">
+          <div class="card-head">
+            <div class="card-title">解析预览</div>
+            <span class="chip chip-success" id="preview-stat"></span>
+          </div>
+          <div class="card-body is-flush">
+            <div class="preview-wrap">
+              <table class="preview-table" id="preview-table">
+                <thead>
+                  <tr>
+                    <th class="c-idx">#</th>
+                    <th class="c-sku">SKU</th>
+                    <th class="c-price">售价</th>
+                    <th class="c-offer">货号</th>
+                    <th class="c-w">重量</th>
+                    <th class="c-dim">三维</th>
+                    <th class="c-fmt">格式</th>
+                    <th class="c-msg">问题</th>
+                  </tr>
+                </thead>
+                <tbody id="preview-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 3. 执行进度卡 -->
+        <section class="card progress-card" id="progress-card" style="display: none">
+          <div class="card-head"><div class="card-title">执行进度</div></div>
+          <div class="card-body">
+            <div class="progress-log" id="progress-log"></div>
+          </div>
+        </section>
+
+        <!-- 4. 提交结果卡 -->
+        <section class="card result-card" id="result-card" style="display: none">
+          <div class="card-head"><div class="card-title">提交结果</div></div>
+          <div class="card-body">
+            <div id="result-list"></div>
+          </div>
+        </section>
+
+        <p class="hint-foot">请先打开并登录 <code>seller.ozon.ru</code> 任一标签页,再点开始</p>
+      </div>
+
+      <!-- 右列配置栏 -->
+      <aside class="rail">
+        <!-- 卡 A: 店铺与基础 -->
+        <section class="card">
+          <div class="card-head">
+            <div class="card-title">店铺与基础</div>
+            <span class="card-head-hint">支持多店扇出</span>
+          </div>
+          <div class="card-body is-flush">
+            <div class="seg">
+              <div class="seg-row">
+                <div class="seg-label"><span class="seg-req">*</span>目标店铺</div>
+                <div class="seg-control">
+                  <select id="cfg-store" class="fld">
+                    <option value="store-001">Demo 店铺 001</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="seg">
+              <div class="seg-row">
+                <div class="seg-label"><span class="seg-req">*</span>品牌</div>
+                <div class="seg-control">
+                  <select id="cfg-brand" class="fld">
+                    <option value="no_brand">无品牌</option>
+                    <option value="copy">复制当前品牌</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="seg">
+              <div class="seg-row">
+                <div class="seg-label"><span class="seg-req">*</span>图片顺序</div>
+                <div class="seg-control">
+                  <select id="cfg-image-order" class="fld">
+                    <option value="keep">不处理</option>
+                    <option value="shuffle">随机打乱</option>
+                    <option value="shuffle_keep_first">主图不变,其余打乱</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="seg">
+              <div class="seg-row">
+                <div class="seg-label">货币</div>
+                <div class="seg-control">
+                  <select id="cfg-currency" class="fld">
+                    <option value="CNY">¥ CNY</option>
+                    <option value="RUB">₽ RUB</option>
+                    <option value="USD">$ USD</option>
+                    <option value="EUR">€ EUR</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="seg">
+              <div class="seg-row">
+                <div class="seg-label">变体合并</div>
+                <div class="seg-control">
+                  <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #475569"
+                    ><input type="checkbox" id="cfg-merge-card" /><span>合并成一张卡</span></label
+                  >
+                  <input
+                    type="text"
+                    id="cfg-merge-model"
+                    class="fld"
+                    placeholder="留空=不合并"
+                    style="margin-top: 6px"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 卡 B: 物流仓库 -->
+        <section class="card">
+          <div class="card-head">
+            <div class="card-title">物流仓库</div>
+            <span class="card-head-hint">每店独立选择</span>
+          </div>
+          <div class="card-body is-flush">
+            <div class="seg">
+              <div class="seg-row">
+                <div class="seg-label">仓库</div>
+                <div class="seg-control">
+                  <select id="cfg-warehouse" class="fld">
+                    <option value="">加载中...</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="seg">
+              <div class="seg-row">
+                <div class="seg-label">默认库存</div>
+                <div class="seg-control">
+                  <input
+                    type="number"
+                    id="cfg-default-stock"
+                    min="0"
+                    max="99999"
+                    value="10"
+                    class="fld"
+                    style="width: 80px; text-align: center"
+                  />
+                </div>
+                <div class="seg-aside">0 = 不挂库存</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 卡 C: AI 增强(折叠) -->
+        <section class="card">
+          <div class="card-head card-head-clickable" id="ai-head">
+            <div class="card-title">
+              AI 增强 <span class="chip chip-accent" id="ai-enabled-count" style="display: none">已启用 0</span>
+            </div>
+            <div class="card-title-meta">
+              <span class="card-head-hint">未启用都可发布</span><span class="ai-chevron">▼</span>
+            </div>
+          </div>
+          <div class="card-body" id="ai-section">
+            <div class="ai-row">
+              <div class="ai-row-l">
+                <div class="ai-row-title-line">
+                  <span class="ai-row-title">水印</span><span class="ai-row-cost">免费</span>
+                </div>
+                <select id="cfg-watermark-template" class="fld" style="margin-top: 6px">
+                  <option value="">不使用</option>
+                  <option value="tpl-1">默认模板</option>
+                </select>
+              </div>
+              <label class="toggle-wrap"
+                ><input type="checkbox" id="cfg-watermark" /><span class="toggle"></span
+              ></label>
+            </div>
+            <div class="ai-row">
+              <div class="ai-row-l">
+                <div class="ai-row-title-line">
+                  <span class="ai-row-title">AI 大模型改图</span><span class="ai-gemini-badge">Gemini</span>
+                </div>
+                <div class="ai-row-desc">Gemini 大模型改图 · 100 套模板自动选场景</div>
+              </div>
+              <label class="toggle-wrap"
+                ><input type="checkbox" id="cfg-ai-poster" /><span class="toggle accent"></span
+              ></label>
+            </div>
+            <div class="ai-row">
+              <div class="ai-row-l">
+                <div class="ai-row-title-line"><span class="ai-row-title">AI 重写</span></div>
+                <div class="ai-row-desc">翻译 + SEO 优化标题 / 描述</div>
+              </div>
+              <label class="toggle-wrap"
+                ><input type="checkbox" id="cfg-ai-rewrite" /><span class="toggle"></span
+              ></label>
+            </div>
+            <div class="ai-row">
+              <div class="ai-row-l">
+                <div class="ai-row-title-line"><span class="ai-row-title">转存视频</span></div>
+                <div class="ai-row-desc">逐 SKU 抓竞品视频转存为自有 Ozon 视频</div>
+              </div>
+              <label class="toggle-wrap"
+                ><input type="checkbox" id="cfg-capture-video" /><span class="toggle"></span
+              ></label>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <!-- 使用说明抽屉 -->
+    <div class="help-backdrop" id="help-backdrop" style="display: none"></div>
+    <aside class="help-drawer" id="help-drawer" style="display: none">
+      <div class="help-drawer-head">
+        <span class="help-drawer-title">批量上架 · 使用说明</span>
+        <button class="help-drawer-close" id="btn-help-close">×</button>
+      </div>
+      <div class="help-drawer-body">
+        <section class="help-step">
+          <div class="help-step-no">1</div>
+          <div class="help-step-content">
+            <div class="help-step-title">登录 Ozon 卖家中心</div>
+            <p>在浏览器里打开 <code>seller.ozon.ru</code> 任意页面并保持登录。</p>
+          </div>
+        </section>
+        <section class="help-step">
+          <div class="help-step-no">2</div>
+          <div class="help-step-content">
+            <div class="help-step-title">粘贴 SKU + 价格</div>
+            <pre class="help-code">
+1234567890,99.9
+1234567890,99.9,JZ-001
+1234567890,99.9,150,200,180,80</pre>
+          </div>
+        </section>
+        <section class="help-step">
+          <div class="help-step-no">3</div>
+          <div class="help-step-content">
+            <div class="help-step-title">选店铺 → 一键提交</div>
+            <p>在右侧选择目标店铺,点击「开始批采 + 上架」。</p>
+          </div>
+        </section>
+      </div>
+    </aside>
+
+    <script src="index.js"></script>
+  </body>
+</html>

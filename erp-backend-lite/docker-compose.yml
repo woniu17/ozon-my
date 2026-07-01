@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  erp-lite:
+    build: .
+    container_name: erp-lite
+    ports:
+      - '3001:3001'
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    environment:
+      - JWT_SECRET=change-this-to-a-random-long-string
+      - USER_PHONE=13800138000
+      - USER_PASSWORD=$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy
+      - PORT=3001
+      - LOG_LEVEL=info
+    restart: unless-stopped

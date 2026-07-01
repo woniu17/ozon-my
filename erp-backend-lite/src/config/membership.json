@@ -1,0 +1,12 @@
+{
+  "tier": "pro",
+  "planName": "个人版",
+  "daysLeft": 365,
+  "caps": { "listing": 1000 },
+  "usage": { "listing": 12 },
+  "canUse": { "AI_EDIT": true },
+  "jidianBalance": 500,
+  "jidianPricing": {
+    "AI_IMAGE": { "price": 50 }
+  }
+}

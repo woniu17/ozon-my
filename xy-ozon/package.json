@@ -1,0 +1,14 @@
+{
+  "name": "xy-ozon-follow-sell-demo",
+  "version": "0.13.31.1",
+  "private": true,
+  "description": "从原项目抽离的模拟手动上架(viaPortal=true)流程 Demo,ERP 与 seller portal 建品全部 mock。",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\"",
+    "format": "prettier --write \"src/**/*.{js,css,html,json}\" \"tests/**/*.js\" \"docs/**/*.md\" \"*.md\" \"*.json\"",
+    "format:check": "prettier --check \"src/**/*.{js,css,html,json}\" \"tests/**/*.js\""
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3"
+  }
+}

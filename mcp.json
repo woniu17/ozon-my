@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "Chrome DevTools MCP": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--chromeArg=--disable-infobars",
+        "--chromeArg=--no-first-run",
+        "--chromeArg=--no-default-browser-check",
+        "--chromeArg=--disable-blink-features=AutomationControlled",
+        "--chromeArg=--remote-debugging-port=9222"
+      ],
+      "env": {}
+    }
+  }
+}

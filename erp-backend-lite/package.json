@@ -1,0 +1,25 @@
+{
+  "name": "erp-backend-lite",
+  "version": "1.0.0",
+  "description": "ERP 后端服务(轻量级个人版)— 对齐 0.13.31.1 插件接口契约",
+  "type": "module",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node --experimental-sqlite src/app.js",
+    "dev": "node --experimental-sqlite --watch src/app.js",
+    "pm2": "pm2 start src/app.js --name erp-lite --node-args=\"--experimental-sqlite\"",
+    "init-db": "node --experimental-sqlite src/db/index.js",
+    "seed": "node --experimental-sqlite src/db/seed.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "node-cache": "^5.1.2",
+    "pino": "^9.1.0",
+    "undici": "^6.19.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
