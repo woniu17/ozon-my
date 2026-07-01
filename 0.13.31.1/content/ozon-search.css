@@ -200,9 +200,15 @@
   height: 14px;
 }
 /* 按 section accent 染色图标（仅搜索页 data panel；product 页保持统一蓝） */
-.ozon-helper-data-panel .ozon-helper-sidebar-section.is-accent-blue   .oh-section-icon { color: #1d6bff; }
-.ozon-helper-data-panel .ozon-helper-sidebar-section.is-accent-green  .oh-section-icon { color: #16a34a; }
-.ozon-helper-data-panel .ozon-helper-sidebar-section.is-accent-purple .oh-section-icon { color: #8b5cf6; }
+.ozon-helper-data-panel .ozon-helper-sidebar-section.is-accent-blue .oh-section-icon {
+  color: #1d6bff;
+}
+.ozon-helper-data-panel .ozon-helper-sidebar-section.is-accent-green .oh-section-icon {
+  color: #16a34a;
+}
+.ozon-helper-data-panel .ozon-helper-sidebar-section.is-accent-purple .oh-section-icon {
+  color: #8b5cf6;
+}
 
 .ozon-helper-data-panel .ozon-helper-sidebar-section-body {
   grid-template-columns: 1fr;

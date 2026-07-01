@@ -158,24 +158,52 @@
     { key: 'price', label: '价格范围：', minPlaceholder: '最小价格', maxPlaceholder: '最大价格', prefix: '¥' },
     { key: 'weight', label: '重量范围：', minPlaceholder: '最小重量', maxPlaceholder: '最大重量', suffix: 'g' },
     { key: 'listedDays', label: '上架时间：', minPlaceholder: '最小天数', maxPlaceholder: '最大天数', suffix: '天' },
-    { key: 'monthlyTurnoverDynamic', label: '月周转动态：', minPlaceholder: '最小', maxPlaceholder: '最大', suffix: '%' },
+    {
+      key: 'monthlyTurnoverDynamic',
+      label: '月周转动态：',
+      minPlaceholder: '最小',
+      maxPlaceholder: '最大',
+      suffix: '%',
+    },
     { key: 'adCostRatio', label: '广告费占比：', minPlaceholder: '最小', maxPlaceholder: '最大', suffix: '%' },
     { key: 'promoDays', label: '参与促销天数：', minPlaceholder: '最小天数', maxPlaceholder: '最大天数', suffix: '天' },
     { key: 'promoDiscount', label: '参与促销的折扣：', minPlaceholder: '最小', maxPlaceholder: '最大', suffix: '%' },
-    { key: 'promoConversionRate', label: '促销活动的转化率：', minPlaceholder: '最小', maxPlaceholder: '最大', suffix: '%' },
-    { key: 'paidPromotionDays', label: '付费推广天数：', minPlaceholder: '最小天数', maxPlaceholder: '最大天数', suffix: '天' },
+    {
+      key: 'promoConversionRate',
+      label: '促销活动的转化率：',
+      minPlaceholder: '最小',
+      maxPlaceholder: '最大',
+      suffix: '%',
+    },
+    {
+      key: 'paidPromotionDays',
+      label: '付费推广天数：',
+      minPlaceholder: '最小天数',
+      maxPlaceholder: '最大天数',
+      suffix: '天',
+    },
     { key: 'views', label: '商品卡浏览量：', minPlaceholder: '最小值', maxPlaceholder: '最大值' },
     { key: 'cardAddToCartRate', label: '商品卡加购率：', minPlaceholder: '最小', maxPlaceholder: '最大', suffix: '%' },
     { key: 'searchCatalogViews', label: '搜索目录浏览量：', minPlaceholder: '最小值', maxPlaceholder: '最大值' },
-    { key: 'searchCatalogAddToCartRate', label: '搜索目录加购率：', minPlaceholder: '最小', maxPlaceholder: '最大', suffix: '%' },
-    { key: 'displayConversionRate', label: '展示转化率：', minPlaceholder: '最小', maxPlaceholder: '最大', suffix: '%' },
+    {
+      key: 'searchCatalogAddToCartRate',
+      label: '搜索目录加购率：',
+      minPlaceholder: '最小',
+      maxPlaceholder: '最大',
+      suffix: '%',
+    },
+    {
+      key: 'displayConversionRate',
+      label: '展示转化率：',
+      minPlaceholder: '最小',
+      maxPlaceholder: '最大',
+      suffix: '%',
+    },
     { key: 'returnCancelRate', label: '退货取消率：', minPlaceholder: '最小', maxPlaceholder: '最大', suffix: '%' },
     { key: 'followerCount', label: '跟卖人数：', minPlaceholder: '最小值', maxPlaceholder: '最大值', suffix: '人' },
     { key: 'lowestFollowerPrice', label: '跟卖最低价：', minPlaceholder: '最小值', maxPlaceholder: '最大值' },
   ];
-  const SMART_FILTER_SELECT_KEYS = [
-    { key: 'shippingMode', label: '发货模式：', options: ['FBS', 'FBO', '不限'] },
-  ];
+  const SMART_FILTER_SELECT_KEYS = [{ key: 'shippingMode', label: '发货模式：', options: ['FBS', 'FBO', '不限'] }];
   const SMART_FILTER_BRAND_OPTIONS = [
     { value: 'branded', label: '有品牌' },
     { value: 'noBrand', label: '无品牌' },
@@ -236,13 +264,21 @@
     let smartFilterState = null;
     let filterMaskEl = null;
 
-    function _q(sel) { return panelEl.querySelector(`[data-el="${sel}"]`); }
-    function _qm(sel) { return filterMaskEl?.querySelector(`[data-el="${sel}"]`); }
-    function _qmf(sel) { return filterMaskEl?.querySelector(`[data-field="${sel}"]`); }
+    function _q(sel) {
+      return panelEl.querySelector(`[data-el="${sel}"]`);
+    }
+    function _qm(sel) {
+      return filterMaskEl?.querySelector(`[data-el="${sel}"]`);
+    }
+    function _qmf(sel) {
+      return filterMaskEl?.querySelector(`[data-field="${sel}"]`);
+    }
     function _toNumber(value) {
       if (value === null || value === undefined || value === '') return null;
       if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-      const normalized = String(value).replace(/\u00a0/g, ' ').trim();
+      const normalized = String(value)
+        .replace(/\u00a0/g, ' ')
+        .trim();
       const match = normalized.replace(/\s+/g, '').match(/[-+]?\d+(?:[,.]\d+)?/);
       if (!match) return null;
       const parsed = Number(match[0].replace(',', '.'));
@@ -261,32 +297,32 @@
       return null;
     }
 
-  function _smartDefaultTemplate() {
-    return {
-      id: SMART_FILTER_DEFAULT_ID,
-      name: '默认模板',
-      brandOption: 'any',
-      shippingMode: '不限',
-      conditions: {
-        soldCount: { min: null, max: null },
-        gmvSum: { min: null, max: null },
-        price: { min: null, max: null },
-        weight: { min: null, max: null },
-        listedDays: { min: null, max: null },
-        monthlyTurnoverDynamic: { min: null, max: null },
-        adCostRatio: { min: null, max: null },
-        promoDays: { min: null, max: null },
-        promoDiscount: { min: null, max: null },
-        promoConversionRate: { min: null, max: null },
-        paidPromotionDays: { min: null, max: null },
-        views: { min: null, max: null },
-        cardAddToCartRate: { min: null, max: null },
-        searchCatalogViews: { min: null, max: null },
-        searchCatalogAddToCartRate: { min: null, max: null },
-        displayConversionRate: { min: null, max: null },
-        returnCancelRate: { min: null, max: null },
-        followerCount: { min: null, max: null },
-        lowestFollowerPrice: { min: null, max: null },
+    function _smartDefaultTemplate() {
+      return {
+        id: SMART_FILTER_DEFAULT_ID,
+        name: '默认模板',
+        brandOption: 'any',
+        shippingMode: '不限',
+        conditions: {
+          soldCount: { min: null, max: null },
+          gmvSum: { min: null, max: null },
+          price: { min: null, max: null },
+          weight: { min: null, max: null },
+          listedDays: { min: null, max: null },
+          monthlyTurnoverDynamic: { min: null, max: null },
+          adCostRatio: { min: null, max: null },
+          promoDays: { min: null, max: null },
+          promoDiscount: { min: null, max: null },
+          promoConversionRate: { min: null, max: null },
+          paidPromotionDays: { min: null, max: null },
+          views: { min: null, max: null },
+          cardAddToCartRate: { min: null, max: null },
+          searchCatalogViews: { min: null, max: null },
+          searchCatalogAddToCartRate: { min: null, max: null },
+          displayConversionRate: { min: null, max: null },
+          returnCancelRate: { min: null, max: null },
+          followerCount: { min: null, max: null },
+          lowestFollowerPrice: { min: null, max: null },
         },
       };
     }
@@ -295,21 +331,20 @@
       return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     }
 
-  function _smartNormTemplate(template) {
-    const src = template || {};
-    const norm = {
-      id: String(src.id || _genTemplateId()),
-      name: String(src.name || '未命名模板')
-        .trim()
-        .slice(0, SMART_TEMPLATE_MAX_NAME_LENGTH) || '未命名模板',
-      brandOption: SMART_FILTER_BRAND_OPTIONS.some((item) => item.value === src.brandOption)
-        ? src.brandOption
-        : 'any',
-      shippingMode: SMART_FILTER_SELECT_KEYS[0].options.includes(src.shippingMode)
-        ? src.shippingMode
-        : '不限',
-      conditions: {},
-    };
+    function _smartNormTemplate(template) {
+      const src = template || {};
+      const norm = {
+        id: String(src.id || _genTemplateId()),
+        name:
+          String(src.name || '未命名模板')
+            .trim()
+            .slice(0, SMART_TEMPLATE_MAX_NAME_LENGTH) || '未命名模板',
+        brandOption: SMART_FILTER_BRAND_OPTIONS.some((item) => item.value === src.brandOption)
+          ? src.brandOption
+          : 'any',
+        shippingMode: SMART_FILTER_SELECT_KEYS[0].options.includes(src.shippingMode) ? src.shippingMode : '不限',
+        conditions: {},
+      };
       SMART_FILTER_FIELD_KEYS.forEach((field) => {
         const raw = src.conditions?.[field.key] || {};
         norm.conditions[field.key] = {
@@ -332,14 +367,12 @@
         const parsed = JSON.parse(raw);
         const seenIds = new Set();
         const templates = Array.isArray(parsed?.templates)
-          ? parsed.templates
-              .map(_smartNormTemplate)
-              .filter((item) => {
-                if (!item || !item.id) return false;
-                if (seenIds.has(item.id)) return false;
-                seenIds.add(item.id);
-                return true;
-              })
+          ? parsed.templates.map(_smartNormTemplate).filter((item) => {
+              if (!item || !item.id) return false;
+              if (seenIds.has(item.id)) return false;
+              seenIds.add(item.id);
+              return true;
+            })
           : [_smartDefaultTemplate()];
         if (!templates.length) templates.push(_smartDefaultTemplate());
         if (!templates.some((item) => item.id === SMART_FILTER_DEFAULT_ID)) {
@@ -412,7 +445,9 @@
 
     function _smartMakeTemplateName(baseName, existing) {
       const existingSet = new Set((existing || []).map((name) => String(name || '').trim()));
-      const trimmedBase = String(baseName || '').trim().slice(0, SMART_TEMPLATE_MAX_NAME_LENGTH);
+      const trimmedBase = String(baseName || '')
+        .trim()
+        .slice(0, SMART_TEMPLATE_MAX_NAME_LENGTH);
       const base = trimmedBase || '模板';
       if (!existingSet.has(base) && base.length > 0) return base;
       for (let i = 1; i <= 99; i += 1) {
@@ -434,15 +469,18 @@
       return next;
     }
 
-  function _addTemplate() {
-    const source = smartCurrentTemplate();
-    const newTemplate = {
-      id: _genTemplateId(),
-      name: _smartMakeTemplateName('新模板', smartFilterState.templates.map((item) => item.name)),
-      brandOption: source?.brandOption || 'any',
-      shippingMode: source?.shippingMode || '不限',
-      conditions: _smartCloneConditions(source?.conditions),
-    };
+    function _addTemplate() {
+      const source = smartCurrentTemplate();
+      const newTemplate = {
+        id: _genTemplateId(),
+        name: _smartMakeTemplateName(
+          '新模板',
+          smartFilterState.templates.map((item) => item.name)
+        ),
+        brandOption: source?.brandOption || 'any',
+        shippingMode: source?.shippingMode || '不限',
+        conditions: _smartCloneConditions(source?.conditions),
+      };
       smartFilterState.templates.push(newTemplate);
       smartFilterState.currentTemplateId = newTemplate.id;
       _smartSaveState(smartFilterState);
@@ -459,9 +497,7 @@
       if (template.id === SMART_FILTER_DEFAULT_ID) return;
       const normalized = _smartMakeTemplateName(
         String(nextName || '').trim(),
-        smartFilterState.templates
-          .filter((item) => item.id !== templateId)
-          .map((item) => item.name)
+        smartFilterState.templates.filter((item) => item.id !== templateId).map((item) => item.name)
       );
       template.name = normalized;
       _smartSaveState(smartFilterState);
@@ -515,7 +551,10 @@
     }
 
     function smartCurrentTemplate() {
-      return smartFilterState.templates.find((item) => item.id === smartFilterState.currentTemplateId) || smartFilterState.templates[0];
+      return (
+        smartFilterState.templates.find((item) => item.id === smartFilterState.currentTemplateId) ||
+        smartFilterState.templates[0]
+      );
     }
 
     function smartMatchesFieldValue(value, cfg) {
@@ -552,7 +591,9 @@
           if (Number.isFinite(value)) return value;
           continue;
         }
-        const text = String(value).replace(/\u00a0/g, ' ').trim();
+        const text = String(value)
+          .replace(/\u00a0/g, ' ')
+          .trim();
         if (!text || text === '-' || text === '—') continue;
         const dayMatch = text.match(/(\d+)\s*(?:天|days?|дн)/i);
         if (dayMatch) return Number(dayMatch[1]);
@@ -571,7 +612,9 @@
     function _moneyTextToCny(value) {
       if (value === null || value === undefined || value === '') return null;
       if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-      const text = String(value).replace(/\u00a0/g, ' ').trim();
+      const text = String(value)
+        .replace(/\u00a0/g, ' ')
+        .trim();
       const cnyMatch = text.replace(/\s+/g, '').match(/[\u00A5\uFFE5]\s*([-+]?\d+(?:[,.]\d+)?)/);
       if (cnyMatch) {
         const cny = Number(cnyMatch[1].replace(',', '.'));
@@ -603,25 +646,40 @@
 
     function smartGetDataField(data, key, info) {
       if (!data && !info) return null;
-      if (key === 'price') return _firstValue(
-        Number(data?.price) > 0 ? data.price : null,
-        Number(info?.price) > 0 ? info.price : null,
-        Number(data?.avgPrice) > 0 ? data.avgPrice : null
-      );
+      if (key === 'price')
+        return _firstValue(
+          Number(data?.price) > 0 ? data.price : null,
+          Number(info?.price) > 0 ? info.price : null,
+          Number(data?.avgPrice) > 0 ? data.avgPrice : null
+        );
       if (key === 'soldCount') return data?.soldCount;
-      if (key === 'gmvSum') return _firstValue(data?.gmvSumCny, data?.revenue30dCny, _moneyTextToCny(data?.revenue30d), _rubToCny(data?.gmvSum), _rubToCny(data?.revenue30dRub));
+      if (key === 'gmvSum')
+        return _firstValue(
+          data?.gmvSumCny,
+          data?.revenue30dCny,
+          _moneyTextToCny(data?.revenue30d),
+          _rubToCny(data?.gmvSum),
+          _rubToCny(data?.revenue30dRub)
+        );
       if (key === 'views') return _firstValue(data?.views, data?.qtyViewPdp, data?.sessionCount, data?.pdpViews);
       if (key === 'weight') return _firstValue(data?.weight, data?.weightG, data?.weightGrams);
-      if (key === 'listedDays') return _daysFieldValue(data?.listedDays, data?.daysOnline, data?.createDate, data?.nullableCreateDate);
-      if (key === 'monthlyTurnoverDynamic') return _percentFieldValue(data?.monthlyTurnoverDynamic, data?.turnoverDynamic, data?.salesDynamics);
+      if (key === 'listedDays')
+        return _daysFieldValue(data?.listedDays, data?.daysOnline, data?.createDate, data?.nullableCreateDate);
+      if (key === 'monthlyTurnoverDynamic')
+        return _percentFieldValue(data?.monthlyTurnoverDynamic, data?.turnoverDynamic, data?.salesDynamics);
       if (key === 'adCostRatio') return _firstValue(data?.adCostRatio, data?.adCostPercent, data?.drr);
       if (key === 'promoDays') return _firstValue(data?.promoDays, data?.daysInPromo);
       if (key === 'promoDiscount') return _firstValue(data?.promoDiscount, data?.discount);
-      if (key === 'promoConversionRate') return _firstValue(data?.promoConversionRate, data?.promoRevenueShare, data?.promoConvRate);
-      if (key === 'paidPromotionDays') return _firstValue(data?.paidPromotionDays, data?.daysWithTrafarets, data?.daysWithAds);
-      if (key === 'cardAddToCartRate') return _firstValue(data?.cardAddToCartRate, data?.pdpToCartConversion, data?.convToCartPdp, data?.pdpCartRate);
-      if (key === 'searchCatalogViews') return _firstValue(data?.searchCatalogViews, data?.sessionCountSearch, data?.searchViews);
-      if (key === 'searchCatalogAddToCartRate') return _firstValue(data?.searchCatalogAddToCartRate, data?.convToCartSearch, data?.searchCartRate);
+      if (key === 'promoConversionRate')
+        return _firstValue(data?.promoConversionRate, data?.promoRevenueShare, data?.promoConvRate);
+      if (key === 'paidPromotionDays')
+        return _firstValue(data?.paidPromotionDays, data?.daysWithTrafarets, data?.daysWithAds);
+      if (key === 'cardAddToCartRate')
+        return _firstValue(data?.cardAddToCartRate, data?.pdpToCartConversion, data?.convToCartPdp, data?.pdpCartRate);
+      if (key === 'searchCatalogViews')
+        return _firstValue(data?.searchCatalogViews, data?.sessionCountSearch, data?.searchViews);
+      if (key === 'searchCatalogAddToCartRate')
+        return _firstValue(data?.searchCatalogAddToCartRate, data?.convToCartSearch, data?.searchCartRate);
       if (key === 'displayConversionRate') return _firstValue(data?.displayConversionRate, data?.convViewToOrder);
       if (key === 'returnCancelRate') {
         const direct = _firstValue(data?.returnCancelRate, data?.returnRate);
@@ -630,7 +688,8 @@
         return redemption === null ? null : 100 - redemption;
       }
       if (key === 'followerCount') return _firstValue(data?.followerCount, data?.followSellCount, data?.heroFollow);
-      if (key === 'lowestFollowerPrice') return _firstValue(data?.lowestFollowerPrice, data?.followSellMinPrice, data?.followMinPrice);
+      if (key === 'lowestFollowerPrice')
+        return _firstValue(data?.lowestFollowerPrice, data?.followSellMinPrice, data?.followMinPrice);
       return null;
     }
 
@@ -649,53 +708,58 @@
       return missing;
     }
 
-  function smartHasBrand(data) {
-    const rawBrand = [
-      data?.brandName,
-      data?.brand,
-      data?.brand_name,
-      data?.raw?.brandName,
-      data?.raw?.brand,
-    ].find((value) => value !== undefined && value !== null && String(value).trim() !== '');
-    const text = String(rawBrand || '').trim();
-    if (!text) return false;
-    const normalized = text.toLowerCase();
-    return ![
-      '-',
-      '--',
-      '—',
-      '无',
-      '无品牌',
-      '没有品牌',
-      '未设置品牌',
-      'no brand',
-      'no_brand',
-      'nobrand',
-      'none',
-      'null',
-      'undefined',
-      'без бренда',
-      'нет бренда',
-    ].includes(normalized);
-  }
+    function smartHasBrand(data) {
+      const rawBrand = [data?.brandName, data?.brand, data?.brand_name, data?.raw?.brandName, data?.raw?.brand].find(
+        (value) => value !== undefined && value !== null && String(value).trim() !== ''
+      );
+      const text = String(rawBrand || '').trim();
+      if (!text) return false;
+      const normalized = text.toLowerCase();
+      return ![
+        '-',
+        '--',
+        '—',
+        '无',
+        '无品牌',
+        '没有品牌',
+        '未设置品牌',
+        'no brand',
+        'no_brand',
+        'nobrand',
+        'none',
+        'null',
+        'undefined',
+        'без бренда',
+        'нет бренда',
+      ].includes(normalized);
+    }
 
-  function smartMatches(data, info) {
-    if (!smartFilterState.enabled) return true;
-    const template = smartCurrentTemplate();
-    if (template.brandOption && template.brandOption !== 'any') {
-      const hasBrand = smartHasBrand(data);
-      if (template.brandOption === 'branded' && !hasBrand) return false;
-      if (template.brandOption === 'noBrand' && hasBrand) return false;
+    function smartMatches(data, info) {
+      if (!smartFilterState.enabled) return true;
+      const template = smartCurrentTemplate();
+      if (template.brandOption && template.brandOption !== 'any') {
+        const hasBrand = smartHasBrand(data);
+        if (template.brandOption === 'branded' && !hasBrand) return false;
+        if (template.brandOption === 'noBrand' && hasBrand) return false;
+      }
+      if (template.shippingMode && template.shippingMode !== '不限') {
+        const shippingMode = String(
+          data?.shippingMode ||
+            data?.deliverySchema ||
+            data?.deliveryType ||
+            data?.salesSchema ||
+            (Array.isArray(data?.sources) ? data.sources.join('/') : '') ||
+            ''
+        )
+          .trim()
+          .toUpperCase();
+        if (!shippingMode || shippingMode !== template.shippingMode) return false;
+      }
+      return Object.entries(template.conditions || {}).every(([key, cfg]) => {
+        const matched = smartMatchesFieldValue(smartGetDataField(data, key, info), cfg);
+        return matched;
+      });
     }
-    if (template.shippingMode && template.shippingMode !== '不限') {
-      const shippingMode = String(data?.shippingMode || data?.deliverySchema || data?.deliveryType || data?.salesSchema || (Array.isArray(data?.sources) ? data.sources.join('/') : '') || '').trim().toUpperCase();
-      if (!shippingMode || shippingMode !== template.shippingMode) return false;
-    }
-    return Object.entries(template.conditions || {}).every(([key, cfg]) => {
-      const matched = smartMatchesFieldValue(smartGetDataField(data, key, info), cfg);
-      return matched;
-    });
-  }
 
     function _build() {
       panelEl = document.createElement('div');
@@ -752,12 +816,20 @@
         const t = e.target;
         if (t.dataset.act === 'auto-scroll-toggle') {
           if (typeof opts.onAutoScrollToggle === 'function') {
-            try { opts.onAutoScrollToggle(t.checked); } catch (err) { toast(err.message || '操作失败', 'error'); }
+            try {
+              opts.onAutoScrollToggle(t.checked);
+            } catch (err) {
+              toast(err.message || '操作失败', 'error');
+            }
           }
         } else if (t.dataset.act === 'sales-filter') {
           localStorage.setItem(SALES_FILTER_KEY, t.checked ? '1' : '0');
           if (typeof opts.onSalesFilterChange === 'function') {
-            try { opts.onSalesFilterChange(t.checked); } catch (err) { toast(err.message || '操作失败', 'error'); }
+            try {
+              opts.onSalesFilterChange(t.checked);
+            } catch (err) {
+              toast(err.message || '操作失败', 'error');
+            }
           }
         }
       });
@@ -840,12 +912,14 @@
       return `
         <div class="jz-c-filter-row is-brand">
           <span>品牌选项：</span>
-          ${SMART_FILTER_BRAND_OPTIONS.map((item) => `
+          ${SMART_FILTER_BRAND_OPTIONS.map(
+            (item) => `
             <label>
               <input type="radio" name="jz-c-brand-option" data-field="brandOption" value="${item.value}" ${item.value === value ? 'checked' : ''} />
               ${item.label}
             </label>
-          `).join('')}
+          `
+          ).join('')}
         </div>
       `;
     }
@@ -862,43 +936,44 @@
       `;
     }
 
-  function _renderFilterForm() {
-    const template = smartCurrentTemplate();
-    const table = _qm('filter-table');
-    if (!table) return;
-    const rows = [_renderBrandRow(template)];
-    SMART_FILTER_FIELD_KEYS.forEach((f) => {
-      rows.push(_renderFilterRow(f.key, template?.conditions?.[f.key]));
-      if (f.key === 'displayConversionRate') {
-        SMART_FILTER_SELECT_KEYS.forEach((selectField) => rows.push(_renderSelectRow(selectField, template)));
-      }
-    });
-    table.innerHTML = rows.join('');
-    const enabled = smartFilterState.enabled;
-    const enabledEl = _qmf('enabled');
-    if (enabledEl) enabledEl.checked = !!enabled;
-  }
+    function _renderFilterForm() {
+      const template = smartCurrentTemplate();
+      const table = _qm('filter-table');
+      if (!table) return;
+      const rows = [_renderBrandRow(template)];
+      SMART_FILTER_FIELD_KEYS.forEach((f) => {
+        rows.push(_renderFilterRow(f.key, template?.conditions?.[f.key]));
+        if (f.key === 'displayConversionRate') {
+          SMART_FILTER_SELECT_KEYS.forEach((selectField) => rows.push(_renderSelectRow(selectField, template)));
+        }
+      });
+      table.innerHTML = rows.join('');
+      const enabled = smartFilterState.enabled;
+      const enabledEl = _qmf('enabled');
+      if (enabledEl) enabledEl.checked = !!enabled;
+    }
 
-  function _collectTemplatePayload() {
-    const template = smartCurrentTemplate();
-    const conditions = {};
-    SMART_FILTER_FIELD_KEYS.forEach((field) => {
-      const minInput = _qmf(`${field.key}-min`);
-      const maxInput = _qmf(`${field.key}-max`);
+    function _collectTemplatePayload() {
+      const template = smartCurrentTemplate();
+      const conditions = {};
+      SMART_FILTER_FIELD_KEYS.forEach((field) => {
+        const minInput = _qmf(`${field.key}-min`);
+        const maxInput = _qmf(`${field.key}-max`);
         conditions[field.key] = {
           min: _toNumber(minInput?.value),
           max: _toNumber(maxInput?.value),
         };
       });
 
-    return {
-      id: template?.id || smartFilterState.currentTemplateId,
-      name: template?.name || '未命名模板',
-      brandOption: filterMaskEl?.querySelector('[data-field="brandOption"]:checked')?.value || template?.brandOption || 'any',
-      shippingMode: _qmf('shippingMode')?.value || template?.shippingMode || '不限',
-      conditions,
-    };
-  }
+      return {
+        id: template?.id || smartFilterState.currentTemplateId,
+        name: template?.name || '未命名模板',
+        brandOption:
+          filterMaskEl?.querySelector('[data-field="brandOption"]:checked')?.value || template?.brandOption || 'any',
+        shippingMode: _qmf('shippingMode')?.value || template?.shippingMode || '不限',
+        conditions,
+      };
+    }
 
     function _syncFilterToGlobal() {
       window.JZCollectorFilter = {
@@ -929,21 +1004,21 @@
       _renderFilterForm();
     }
 
-  function _saveFilterForm() {
-    const payload = _collectTemplatePayload();
-    const nextTemplates = smartFilterState.templates.map((item) => {
-      if (item.id !== payload.id) return item;
-      return {
-        ...item,
-        brandOption: payload.brandOption,
-        shippingMode: payload.shippingMode,
-        conditions: payload.conditions,
-      };
-    });
-    smartFilterState.templates = nextTemplates;
-    smartFilterState.enabled = !!_qmf('enabled')?.checked;
-    const current = _getTemplateById(payload.id);
-    smartFilterState.currentTemplateId = current?.id || smartFilterState.currentTemplateId;
+    function _saveFilterForm() {
+      const payload = _collectTemplatePayload();
+      const nextTemplates = smartFilterState.templates.map((item) => {
+        if (item.id !== payload.id) return item;
+        return {
+          ...item,
+          brandOption: payload.brandOption,
+          shippingMode: payload.shippingMode,
+          conditions: payload.conditions,
+        };
+      });
+      smartFilterState.templates = nextTemplates;
+      smartFilterState.enabled = !!_qmf('enabled')?.checked;
+      const current = _getTemplateById(payload.id);
+      smartFilterState.currentTemplateId = current?.id || smartFilterState.currentTemplateId;
       _smartSaveState(smartFilterState);
       _syncFilterToGlobal();
       _refreshFilterSummary();
@@ -957,14 +1032,14 @@
       _renderFilterForm();
     }
 
-  function _renderFilterSummary() {
-    const summary = _q('filter-summary');
-    const template = smartCurrentTemplate();
-    if (!summary) return;
-    if (!smartFilterState.enabled) {
-      summary.textContent = '未开启';
-      summary.classList.remove('is-on');
-      return;
+    function _renderFilterSummary() {
+      const summary = _q('filter-summary');
+      const template = smartCurrentTemplate();
+      if (!summary) return;
+      if (!smartFilterState.enabled) {
+        summary.textContent = '未开启';
+        summary.classList.remove('is-on');
+        return;
       }
       const hasRangeLimits = SMART_FILTER_FIELD_KEYS.some((field) => {
         const cfg = template.conditions?.[field.key] || {};
@@ -1043,9 +1118,7 @@
 
     async function _onExportClick() {
       try {
-        const res = (typeof opts.onExportClick === 'function')
-          ? await opts.onExportClick()
-          : await db.exportCsv();
+        const res = typeof opts.onExportClick === 'function' ? await opts.onExportClick() : await db.exportCsv();
         if (res && res.cancelled) {
           toast('已取消', 'info', 1200);
         } else if (res && res.ok) {
@@ -1063,7 +1136,10 @@
     async function _onKeywordsStart() {
       const ta = _q('kw-textarea');
       const maxInput = _q('kw-max');
-      const texts = ta.value.split('\n').map((s) => s.trim()).filter(Boolean);
+      const texts = ta.value
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
       const max = parseInt(maxInput.value, 10) || 0;
       localStorage.setItem(KW_MAX_KEY, String(max));
       if (texts.length === 0) {
@@ -1206,7 +1282,9 @@
         } else {
           badge.classList.add('jz-c-hidden');
         }
-      } catch (e) { /* swallow */ }
+      } catch (e) {
+        /* swallow */
+      }
     }
 
     function toast(message, type = 'info', durationMs = 2000) {
@@ -1215,7 +1293,10 @@
       el.className = 'jz-c-toast' + (type === 'error' ? ' is-error' : type === 'success' ? ' is-success' : '');
       if (toastTimer) clearTimeout(toastTimer);
       if (durationMs > 0) {
-        toastTimer = setTimeout(() => { el.textContent = ''; el.className = 'jz-c-toast'; }, durationMs);
+        toastTimer = setTimeout(() => {
+          el.textContent = '';
+          el.className = 'jz-c-toast';
+        }, durationMs);
       }
     }
 
@@ -1257,10 +1338,12 @@
       _renderAutoScroller();
       _renderPilot();
       _refreshBucket();
-      unsubscribers.push(queue.on('stateChange', () => {
-        _renderQueueStats();
-        _renderStatus();
-      }));
+      unsubscribers.push(
+        queue.on('stateChange', () => {
+          _renderQueueStats();
+          _renderStatus();
+        })
+      );
       if (db) {
         unsubscribers.push(db.onChange(() => _refreshBucket()));
       }
@@ -1268,7 +1351,10 @@
 
     function unmount() {
       if (!mounted) return;
-      for (const fn of unsubscribers) try { fn(); } catch {}
+      for (const fn of unsubscribers)
+        try {
+          fn();
+        } catch {}
       unsubscribers = [];
       panelEl?.remove();
       bubbleEl?.remove();
@@ -1280,8 +1366,12 @@
     }
 
     return {
-      mount, unmount, toast,
-      setRunning, setAutoScrollerState, setKeywordPilotState,
+      mount,
+      unmount,
+      toast,
+      setRunning,
+      setAutoScrollerState,
+      setKeywordPilotState,
       refreshBucket: _refreshBucket,
       getInitialSalesFilter,
     };

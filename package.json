@@ -1,0 +1,13 @@
+{
+  "name": "ozon-my",
+  "version": "0.13.31.1",
+  "private": true,
+  "description": "MY - Chrome extension",
+  "scripts": {
+    "format": "prettier --write \"0.13.31.1/**/*.{js,css,html,json}\"",
+    "format:check": "prettier --check \"0.13.31.1/**/*.{js,css,html,json}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3"
+  }
+}

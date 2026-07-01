@@ -8,7 +8,7 @@
  */
 
 (() => {
-  const BASE_URL = "https://api-seller.ozon.ru";
+  const BASE_URL = 'https://api-seller.ozon.ru';
   const DEFAULT_TIMEOUT_MS = 60_000;
 
   /**
@@ -19,20 +19,17 @@
    */
   async function call(path, body, creds, opts = {}) {
     if (!creds?.clientId || !creds?.apiKey) {
-      throw new Error("OPI credentials missing");
+      throw new Error('OPI credentials missing');
     }
     const ctrl = new AbortController();
-    const timer = setTimeout(
-      () => ctrl.abort(),
-      opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    );
+    const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     try {
       const res = await fetch(`${BASE_URL}${path}`, {
-        method: "POST",
+        method: 'POST',
         headers: {
-          "Client-Id": String(creds.clientId),
-          "Api-Key": String(creds.apiKey),
-          "Content-Type": "application/json",
+          'Client-Id': String(creds.clientId),
+          'Api-Key': String(creds.apiKey),
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify(body ?? {}),
         signal: ctrl.signal,
@@ -43,9 +40,7 @@
         parsed = text ? JSON.parse(text) : null;
       } catch {}
       if (!res.ok) {
-        const err = new Error(
-          `OPI ${res.status} ${path}: ${text.slice(0, 200)}`,
-        );
+        const err = new Error(`OPI ${res.status} ${path}: ${text.slice(0, 200)}`);
         err.status = res.status;
         err.bodyText = text;
         throw err;

@@ -15,7 +15,7 @@
  *  10: sku, 售价, ~最低价   ← 以 ~ 前缀标记最低价,可放任意位置(可与 1-9 任意组合)
  */
 (function (root) {
-  "use strict";
+  'use strict';
 
   // Ozon SKU 长度近年从 8-10 位逐步扩展到 13+ 位；宽松到 6-16
   const SKU_RE = /^\d{6,16}$/;
@@ -40,44 +40,44 @@
 
   function asNumber(s) {
     if (!s) return null;
-    const n = Number(String(s).replace(/[^0-9.\-]/g, ""));
+    const n = Number(String(s).replace(/[^0-9.\-]/g, ''));
     return Number.isFinite(n) ? n : null;
   }
 
   // 把一列解析成「带单位的数值」:返回 {num, unit:'weight'|'length'|null};
   // 不是纯数值(含单位以外的字母/结构)→ 返回 null,视为货号/文本。
   function parseValueToken(s) {
-    const t = String(s == null ? "" : s).trim();
+    const t = String(s == null ? '' : s).trim();
     let m;
-    if ((m = WEIGHT_TOKEN_RE.exec(t))) return { num: parseFloat(m[1]), unit: "weight" };
-    if ((m = LENGTH_TOKEN_RE.exec(t))) return { num: parseFloat(m[1]), unit: "length" };
+    if ((m = WEIGHT_TOKEN_RE.exec(t))) return { num: parseFloat(m[1]), unit: 'weight' };
+    if ((m = LENGTH_TOKEN_RE.exec(t))) return { num: parseFloat(m[1]), unit: 'length' };
     if (BARE_NUM_RE.test(t)) return { num: parseFloat(t), unit: null };
     return null;
   }
 
   function classifyNumeric(nums, units) {
     units = units || [];
-    if (nums.length === 0) return { kind: "unknown" };
+    if (nums.length === 0) return { kind: 'unknown' };
     if (nums.length === 1) {
       // 显式单位优先:g→重量,mm→长度。无单位才按 ≤3000→长度 / >3000→重量 猜测。
-      if (units[0] === "weight") return { kind: "weight", weight: nums[0] };
-      if (units[0] === "length") return { kind: "dim1", l: nums[0] };
-      if (nums[0] <= 3000) return { kind: "dim1", l: nums[0] };
-      return { kind: "weight", weight: nums[0] };
+      if (units[0] === 'weight') return { kind: 'weight', weight: nums[0] };
+      if (units[0] === 'length') return { kind: 'dim1', l: nums[0] };
+      if (nums[0] <= 3000) return { kind: 'dim1', l: nums[0] };
+      return { kind: 'weight', weight: nums[0] };
     }
-    if (nums.length === 2) return { kind: "dim2", l: nums[0], w: nums[1] };
-    if (nums.length === 3) return { kind: "dim3", l: nums[0], w: nums[1], h: nums[2] };
+    if (nums.length === 2) return { kind: 'dim2', l: nums[0], w: nums[1] };
+    if (nums.length === 3) return { kind: 'dim3', l: nums[0], w: nums[1], h: nums[2] };
     if (nums.length === 4) {
-      return { kind: "w-dim3", weight: nums[0], l: nums[1], w: nums[2], h: nums[3] };
+      return { kind: 'w-dim3', weight: nums[0], l: nums[1], w: nums[2], h: nums[3] };
     }
-    return { kind: "unknown" };
+    return { kind: 'unknown' };
   }
 
   function emptyRow(index, raw) {
     return {
       index,
-      raw: raw || "",
-      sku: "",
+      raw: raw || '',
+      sku: '',
       price: null,
       minPrice: null,
       offerId: null,
@@ -93,14 +93,14 @@
 
   function parseLine(line, index) {
     if (index == null) index = 0;
-    const trimmed = String(line || "").trim();
-    if (!trimmed) return Object.assign(emptyRow(index, line), { reason: "空行" });
+    const trimmed = String(line || '').trim();
+    if (!trimmed) return Object.assign(emptyRow(index, line), { reason: '空行' });
 
     const cols = splitCols(trimmed);
     if (cols.length < 2) {
       return Object.assign(emptyRow(index, trimmed), {
-        sku: cols[0] || "",
-        reason: "至少 2 列：sku, 售价",
+        sku: cols[0] || '',
+        reason: '至少 2 列：sku, 售价',
       });
     }
 
@@ -108,7 +108,7 @@
     if (!SKU_RE.test(sku)) {
       return Object.assign(emptyRow(index, trimmed), {
         sku,
-        reason: "SKU 格式不合法（应是 6-16 位纯数字）",
+        reason: 'SKU 格式不合法（应是 6-16 位纯数字）',
       });
     }
 
@@ -116,7 +116,7 @@
     if (!price || price <= 0) {
       return Object.assign(emptyRow(index, trimmed), {
         sku,
-        reason: "售价必须大于 0",
+        reason: '售价必须大于 0',
       });
     }
 
@@ -140,7 +140,7 @@
         if (minPrice != null) {
           return Object.assign(row, {
             valid: false,
-            reason: "最低价(~)只能出现一次",
+            reason: '最低价(~)只能出现一次',
           });
         }
         // 严格正则:挡掉 `~~75` / `~abc75` / `~75руб` 等 asNumber 会静默吞掉的非法形态
@@ -205,37 +205,37 @@
     const cls = classifyNumeric(nums, units);
     const hasOffer = offerId != null;
 
-    if (cls.kind === "unknown") {
+    if (cls.kind === 'unknown') {
       if (hasOffer && nums.length === 0) {
         return Object.assign(row, { offerId, formatHint: 2 });
       }
-      return Object.assign(row, { offerId, valid: false, reason: "列数过多或无法识别" });
+      return Object.assign(row, { offerId, valid: false, reason: '列数过多或无法识别' });
     }
 
-    if (cls.kind === "dim1") {
+    if (cls.kind === 'dim1') {
       // 含货号时单个数字只可能是重量(格式 8)—— 不存在"货号 + 长度"格式;
       // ≤3000→长度 的猜测只在无货号(格式 4 vs 3 消歧)时才适用。
       if (hasOffer) return Object.assign(row, { offerId, weightG: cls.l, formatHint: 8 });
       return Object.assign(row, { lengthMm: cls.l, formatHint: 4 });
     }
-    if (cls.kind === "weight") {
+    if (cls.kind === 'weight') {
       return Object.assign(row, {
         offerId,
         weightG: cls.weight,
         formatHint: hasOffer ? 8 : 3,
       });
     }
-    if (cls.kind === "dim2") {
+    if (cls.kind === 'dim2') {
       if (!hasOffer) {
         return Object.assign(row, { lengthMm: cls.l, widthMm: cls.w, formatHint: 5 });
       }
       return Object.assign(row, {
         offerId,
         valid: false,
-        reason: "含货号时第二段数字应为 重量+长×宽×高 (4 个)",
+        reason: '含货号时第二段数字应为 重量+长×宽×高 (4 个)',
       });
     }
-    if (cls.kind === "dim3") {
+    if (cls.kind === 'dim3') {
       if (!hasOffer) {
         return Object.assign(row, {
           lengthMm: cls.l,
@@ -247,10 +247,10 @@
       return Object.assign(row, {
         offerId,
         valid: false,
-        reason: "含货号时尺寸前应有重量列（共 4 列数字）",
+        reason: '含货号时尺寸前应有重量列（共 4 列数字）',
       });
     }
-    if (cls.kind === "w-dim3") {
+    if (cls.kind === 'w-dim3') {
       if (!hasOffer) {
         return Object.assign(row, {
           weightG: cls.weight,
@@ -269,27 +269,27 @@
         formatHint: 9,
       });
     }
-    return Object.assign(row, { offerId, valid: false, reason: "未知格式" });
+    return Object.assign(row, { offerId, valid: false, reason: '未知格式' });
   }
 
   function parseQuickListText(text) {
-    return String(text || "")
+    return String(text || '')
       .split(/\r?\n/)
       .map((line, i) => parseLine(line, i + 1))
       .filter((r) => r.raw.length > 0);
   }
 
   const FORMAT_LABELS = {
-    1: "sku, 售价",
-    2: "sku, 售价, 自定义货号",
-    3: "sku, 售价, 重量g",
-    4: "sku, 售价, 长度mm",
-    5: "sku, 售价, 长度mm, 宽度mm",
-    6: "sku, 售价, 长度mm, 宽度mm, 高度mm",
-    7: "sku, 售价, 重量g, 长度mm, 宽度mm, 高度mm",
-    8: "sku, 售价, 自定义货号, 重量g",
-    9: "sku, 售价, 自定义货号, 重量g, 长度mm, 宽度mm, 高度mm",
-    10: "sku, 售价, ~最低价",
+    1: 'sku, 售价',
+    2: 'sku, 售价, 自定义货号',
+    3: 'sku, 售价, 重量g',
+    4: 'sku, 售价, 长度mm',
+    5: 'sku, 售价, 长度mm, 宽度mm',
+    6: 'sku, 售价, 长度mm, 宽度mm, 高度mm',
+    7: 'sku, 售价, 重量g, 长度mm, 宽度mm, 高度mm',
+    8: 'sku, 售价, 自定义货号, 重量g',
+    9: 'sku, 售价, 自定义货号, 重量g, 长度mm, 宽度mm, 高度mm',
+    10: 'sku, 售价, ~最低价',
   };
 
   function genSalt() {
@@ -302,4 +302,4 @@
     FORMAT_LABELS,
     genSalt,
   };
-})(typeof self !== "undefined" ? self : window);
+})(typeof self !== 'undefined' ? self : window);

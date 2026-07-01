@@ -1,4 +1,4 @@
-(function() {
+(function () {
   'use strict';
 
   // 标记：ozon-search.js 已经在本页注入。
@@ -33,7 +33,7 @@
   // --- Collector: TaskQueue + IndexedDB + 浮动面板 ---
   // queue 由 collector/task-queue.js 提供（content_scripts 注入顺序保证）
   const taskQueue = new window.JZTaskQueue({
-    concurrency: 6,         // 数据面板请求并发上限(backend 走的 market/product stats)
+    concurrency: 6, // 数据面板请求并发上限(backend 走的 market/product stats)
     timeoutMs: 60000,
     autoPauseHigh: 12,
     autoPauseLow: 6,
@@ -61,23 +61,39 @@
           let timer = setTimeout(() => {
             if (timer == null) return;
             timer = null;
-            next.reject(new Error("queue task timeout"));
-            inFlight--; pump();
+            next.reject(new Error('queue task timeout'));
+            inFlight--;
+            pump();
           }, taskTimeoutMs);
           Promise.resolve()
             .then(next.task)
             .then(
-              (v) => { if (timer == null) return; clearTimeout(timer); timer = null; next.resolve(v); inFlight--; pump(); },
-              (e) => { if (timer == null) return; clearTimeout(timer); timer = null; next.reject(e); inFlight--; pump(); },
+              (v) => {
+                if (timer == null) return;
+                clearTimeout(timer);
+                timer = null;
+                next.resolve(v);
+                inFlight--;
+                pump();
+              },
+              (e) => {
+                if (timer == null) return;
+                clearTimeout(timer);
+                timer = null;
+                next.reject(e);
+                inFlight--;
+                pump();
+              }
             );
         }, wait);
       }
     };
     return {
-      add: (task) => new Promise((resolve, reject) => {
-        waiting.push({ task, resolve, reject });
-        pump();
-      }),
+      add: (task) =>
+        new Promise((resolve, reject) => {
+          waiting.push({ task, resolve, reject });
+          pump();
+        }),
     };
   }
 
@@ -127,19 +143,18 @@
     const translated = window.jzIsTranslated?.();
     const textTitle = translated
       ? ''
-      : (
-        link?.textContent?.trim() ||
+      : link?.textContent?.trim() ||
         card.querySelector('[data-widget="searchResultsV2"]')?.textContent?.trim() ||
         card.textContent?.trim().slice(0, 120) ||
-        ''
-      );
+        '';
     // 角标(Новинка / 0% до N дней 分期等)会被 textContent 抓进名字,剥掉它们;
     // 整串都是角标时留空,让后端 attr 4180 兜底拿原始俄文名。
     const title = window.jzStripPromo
       ? window.jzStripPromo(ariaLabel || imgAlt || textTitle)
-      : (ariaLabel || imgAlt || textTitle);
+      : ariaLabel || imgAlt || textTitle;
 
-    const priceNode = card.querySelector('[data-widget="searchResultsPrice"]') ||
+    const priceNode =
+      card.querySelector('[data-widget="searchResultsPrice"]') ||
       card.querySelector('[data-widget="searchResultsV2"] [data-widget="webPrice"]') ||
       card.querySelector('[data-widget="webPrice"]');
     const priceText = extractVisiblePriceText(card, priceNode);
@@ -189,18 +204,15 @@
     badge = document.createElement('div');
     badge.className = 'ozon-helper-card-badge';
 
-    const priceNode = card.querySelector('[data-widget="searchResultsPrice"]') ||
-      card.querySelector('[data-widget="webPrice"]');
+    const priceNode =
+      card.querySelector('[data-widget="searchResultsPrice"]') || card.querySelector('[data-widget="webPrice"]');
     const priceText = extractVisiblePriceText(card, priceNode);
     const price = window.normalizePrice(priceText);
-    const oldPriceNode = card.querySelector('[data-widget="searchResultsOldPrice"]') ||
-      card.querySelector('[data-widget="oldPrice"]');
+    const oldPriceNode =
+      card.querySelector('[data-widget="searchResultsOldPrice"]') || card.querySelector('[data-widget="oldPrice"]');
     const oldPriceText = oldPriceNode?.textContent || '';
     const oldPrice = window.normalizePrice(oldPriceText);
-    const discount =
-      oldPrice > price && oldPrice > 0
-        ? Math.round(((oldPrice - price) / oldPrice) * 100)
-        : 0;
+    const discount = oldPrice > price && oldPrice > 0 ? Math.round(((oldPrice - price) / oldPrice) * 100) : 0;
 
     const salesNode = card.querySelector('[data-widget="searchResultsSales"]');
     const salesText = salesNode?.textContent?.trim();
@@ -269,12 +281,11 @@
     };
   }
 
-
   async function collectSaleIfMatched(productId, card, info, data, panel) {
     if (!collectorRunning) return false;
     const sourceData = window.jzExtractPanelFilterData
       ? window.jzExtractPanelFilterData(panel, info, data || {})
-      : (data || {});
+      : data || {};
     const readyInfo = await waitForCollectorFilterData(card, sourceData, info, panel);
     if (readyInfo && passCollectorFilters(sourceData, readyInfo)) {
       try {
@@ -303,7 +314,9 @@
       // V2 优先(对齐详情页 5-section)— 用 cached.preFetched 复用之前 fetch 结果
       if (typeof window.jzRenderProductPanelV2 === 'function' && cached?.preFetched) {
         window.jzRenderProductPanelV2(panel, { sku: productId, initial: cached });
-        try { await window.jzPopulatePanelV2(panel, productId, { preFetched: cached.preFetched }); } catch {}
+        try {
+          await window.jzPopulatePanelV2(panel, productId, { preFetched: cached.preFetched });
+        } catch {}
       } else {
         window.jzRenderProductCardPanel(panel, cached);
       }
@@ -315,11 +328,16 @@
 
     const showError = () => {
       if (panel) panel.dataset.jzLoadStatus = 'error';
-      panel.innerHTML = '<div class="ozon-helper-panel-error" style="cursor:pointer;color:var(--oh-red,#ff4d4f);font-size:12px;padding:8px 12px;">数据加载失败，点击重试</div>';
-      panel.querySelector('.ozon-helper-panel-error')?.addEventListener('click', () => {
-        window.jzRenderPanelSkeleton(panel);
-        loadPanelData(card, panel);
-      }, { once: true });
+      panel.innerHTML =
+        '<div class="ozon-helper-panel-error" style="cursor:pointer;color:var(--oh-red,#ff4d4f);font-size:12px;padding:8px 12px;">数据加载失败，点击重试</div>';
+      panel.querySelector('.ozon-helper-panel-error')?.addEventListener(
+        'click',
+        () => {
+          window.jzRenderPanelSkeleton(panel);
+          loadPanelData(card, panel);
+        },
+        { once: true }
+      );
     };
 
     try {
@@ -331,14 +349,17 @@
       //     数据卡片重量·尺寸直接从 sv items[0].attributes 拿到,无需 /features/ 兜底)
       //   - followSellQueue(1 并发,500ms):composer-api 跟卖数
       // 公共 fetch 内部都有 sessionStorage cache,首屏后命中即返不打网。
-      const fetchTask = () => Promise.allSettled([
-        window.sendMessage('getMarketStats', { sku: productId, period: window.jzGetSalesPeriod?.() || 'monthly' }),
-        window.sendMessage('getProductStats', { url: info.url, period: window.jzGetSalesPeriod?.() || 'monthly' }),
-        variantsQueue.add(() => window.sendMessage('searchVariants', { sku: productId })),
-        followSellQueue.add(() => window.jzFetchPublicFollowSell(productId)),
-      ]);
-      const [marketResult, productResult, variantResult, followSellResult] =
-        await taskQueue.add(`stats-${productId}`, fetchTask);
+      const fetchTask = () =>
+        Promise.allSettled([
+          window.sendMessage('getMarketStats', { sku: productId, period: window.jzGetSalesPeriod?.() || 'monthly' }),
+          window.sendMessage('getProductStats', { url: info.url, period: window.jzGetSalesPeriod?.() || 'monthly' }),
+          variantsQueue.add(() => window.sendMessage('searchVariants', { sku: productId })),
+          followSellQueue.add(() => window.jzFetchPublicFollowSell(productId)),
+        ]);
+      const [marketResult, productResult, variantResult, followSellResult] = await taskQueue.add(
+        `stats-${productId}`,
+        fetchTask
+      );
 
       if (marketResult.status === 'rejected' && productResult.status === 'rejected') {
         showError();
@@ -347,9 +368,10 @@
 
       // sv 失败/auth issue 兜底:从 chrome.storage.local 读详情页采集的 cache
       // (用户曾访问该 SKU 详情页时 jzc-calc/ozon-product 抓的真实数据)
-      const cachedWeightDims = (variantResult.status !== 'fulfilled' || !variantResult.value?.items?.[0])
-        ? await (window.jzReadCachedWeightDims?.(productId).catch(() => null) ?? null)
-        : null;
+      const cachedWeightDims =
+        variantResult.status !== 'fulfilled' || !variantResult.value?.items?.[0]
+          ? await (window.jzReadCachedWeightDims?.(productId).catch(() => null) ?? null)
+          : null;
 
       const data = window.jzMergeCardPanelData(
         marketResult.status === 'fulfilled' ? marketResult.value : null,
@@ -362,7 +384,7 @@
             }
           : null,
         productId,
-        cachedWeightDims,
+        cachedWeightDims
       );
       // 挂 preFetched 让后续 cache 命中时 V2 复用,避免再次往 backend / SW 发请求
       data.preFetched = {
@@ -375,7 +397,9 @@
       // V2 完整对齐详情页 5-section 布局(类目/品牌/佣金/促销/流量等)
       if (typeof window.jzRenderProductPanelV2 === 'function') {
         window.jzRenderProductPanelV2(panel, { sku: productId, initial: data });
-        try { await window.jzPopulatePanelV2(panel, productId, { preFetched: data.preFetched }); } catch {}
+        try {
+          await window.jzPopulatePanelV2(panel, productId, { preFetched: data.preFetched });
+        } catch {}
       } else {
         window.jzRenderProductCardPanel(panel, data);
       }
@@ -465,14 +489,9 @@
       const data = panelDataCache.get(productId) || null;
 
       // 1. searchVariants 补 sv 富字段(品牌/类目/属性),失败兜底空
-      const variantResp = await window
-        .sendMessage('searchVariants', { sku: productId })
-        .catch(() => null);
+      const variantResp = await window.sendMessage('searchVariants', { sku: productId }).catch(() => null);
       const variantItems = variantResp?.items || variantResp?.data?.items || [];
-      const variantMatch =
-        variantItems.find((it) => String(it.variant_id) === productId) ||
-        variantItems[0] ||
-        null;
+      const variantMatch = variantItems.find((it) => String(it.variant_id) === productId) || variantItems[0] || null;
 
       // 2. 写 backend 采集箱(主路径)
       // 跟卖式 catalog:name/images 切 sv(search+bundle)优先,DOM(info)兜底;
@@ -480,10 +499,8 @@
       const svCat = window.jzExtractCatalogFromSv ? window.jzExtractCatalogFromSv(variantMatch) : null;
       const collectName = window.jzPreferSourceName
         ? window.jzPreferSourceName(svCat?.name, info.name)
-        : (info.name || svCat?.name || '');
-      const collectImages = svCat?.images?.length
-        ? svCat.images
-        : (info.image ? [info.image] : []);
+        : info.name || svCat?.name || '';
+      const collectImages = svCat?.images?.length ? svCat.images : info.image ? [info.image] : [];
       const collectPayload = {
         sku: String(productId),
         url: info.url,
@@ -495,8 +512,7 @@
         soldCount: data?.soldCount ?? undefined,
         soldSum: data?.gmvSum != null ? String(data.gmvSum) : undefined,
         views: data?.views ?? undefined,
-        convViewToOrder:
-          data?.convViewToOrder != null ? String(data.convViewToOrder) : undefined,
+        convViewToOrder: data?.convViewToOrder != null ? String(data.convViewToOrder) : undefined,
         discount: data?.discount != null ? String(data.discount) : undefined,
         gmvSum: data?.gmvSum != null ? String(data.gmvSum) : undefined,
       };
@@ -567,14 +583,14 @@
       const svCat = window.jzExtractCatalogFromSv ? window.jzExtractCatalogFromSv(variantMatch) : null;
       const collectName = window.jzPreferSourceName
         ? window.jzPreferSourceName(svCat?.name, info.name)
-        : (info.name || svCat?.name || '');
-      const collectImages = svCat?.images?.length
-        ? svCat.images
-        : (info.image ? [info.image] : []);
+        : info.name || svCat?.name || '';
+      const collectImages = svCat?.images?.length ? svCat.images : info.image ? [info.image] : [];
       const resp = await window.sendMessage('pushSourceCollect', {
         sourceId: 'ozon',
         raw: {
-          sku, url: info.url, name: collectName || info.name,
+          sku,
+          url: info.url,
+          name: collectName || info.name,
           price: info.price != null ? String(info.price) : undefined,
           image: svCat?.mainImage || info.image || undefined,
           images: collectImages.length ? collectImages : undefined,
@@ -587,16 +603,16 @@
         ? 'http://localhost:3000'
         : `https://${globalThis.__JZ_BRAND__.webHost}`;
       window.open(
-        itemId
-          ? `${frontendUrl}/ozon/products/collect/edit?id=${itemId}`
-          : `${frontendUrl}/ozon/products/collect`,
-        '_blank',
+        itemId ? `${frontendUrl}/ozon/products/collect/edit?id=${itemId}` : `${frontendUrl}/ozon/products/collect`,
+        '_blank'
       );
       btn.innerHTML = resp.dedupeHit ? '近期已采集' : original;
       btn.disabled = false;
       btn.dataset.busy = '0';
       if (resp.dedupeHit) {
-        setTimeout(() => { btn.innerHTML = original; }, 2500);
+        setTimeout(() => {
+          btn.innerHTML = original;
+        }, 2500);
       }
     } catch (err) {
       console.error('[ozon-helper] search edit-list failed:', err);
@@ -634,14 +650,17 @@
     });
 
     // Use IntersectionObserver for lazy loading
-    const observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting) {
-          observer.disconnect();
-          loadPanelData(card, panel);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            observer.disconnect();
+            loadPanelData(card, panel);
+          }
         }
-      }
-    }, { rootMargin: '200px' });
+      },
+      { rootMargin: '200px' }
+    );
     observer.observe(panel);
   }
 
@@ -714,16 +733,13 @@
       // rec.raw = 浏览时 jzMergeCardPanelData 的 data,preFetched.variant 是
       // searchVariants 的 settled 结果 { status, value:{items} }。
       const vres = rec.raw?.preFetched?.variant;
-      const vitems = vres?.status === 'fulfilled'
-        ? (vres.value?.items || vres.value?.data?.items || [])
-        : [];
-      const variantMatch =
-        vitems.find((it) => String(it.variant_id) === String(rec.sku)) || vitems[0] || null;
+      const vitems = vres?.status === 'fulfilled' ? vres.value?.items || vres.value?.data?.items || [] : [];
+      const variantMatch = vitems.find((it) => String(it.variant_id) === String(rec.sku)) || vitems[0] || null;
       const svCat = window.jzExtractCatalogFromSv ? window.jzExtractCatalogFromSv(variantMatch) : null;
       const name = window.jzPreferSourceName
         ? window.jzPreferSourceName(svCat?.name, rec.name)
-        : (rec.name || svCat?.name || '');
-      const images = svCat?.images?.length ? svCat.images : (rec.image ? [rec.image] : []);
+        : rec.name || svCat?.name || '';
+      const images = svCat?.images?.length ? svCat.images : rec.image ? [rec.image] : [];
       return {
         sku: rec.sku,
         url: rec.url || undefined,
@@ -742,7 +758,9 @@
 
     // 切片 100 条/批(新端点上限 200;带完整 variantData 时 100 条 body ~10MB,
     // 在后端 50mb 限制内留足余量,且每批顺序 upsert 不会太久)
-    let created = 0, updated = 0, failed = 0;
+    let created = 0,
+      updated = 0,
+      failed = 0;
     for (let i = 0; i < items.length; i += 100) {
       const chunk = items.slice(i, i + 100);
       const resp = await new Promise((resolve) => {
@@ -801,14 +819,18 @@
         if (!changes[COLLECTOR_RUNNING_STORAGE_KEY]) return;
         collectorRunning = changes[COLLECTOR_RUNNING_STORAGE_KEY].newValue === true;
         // 如果采集器面板正显示,同步按钮状态
-        try { collectorPanel?.setRunning(collectorRunning); } catch {}
+        try {
+          collectorPanel?.setRunning(collectorRunning);
+        } catch {}
       });
     } catch {}
   }
 
   function unmountCollectorPanel() {
     if (collectorPanel) {
-      try { collectorPanel.unmount(); } catch {}
+      try {
+        collectorPanel.unmount();
+      } catch {}
       collectorPanel = null;
     }
   }
@@ -860,7 +882,9 @@
         // 关键词采集就没意义)。panel 自动加载和 taskQueue 永远开,不需动。
         if (!collectorRunning) {
           collectorRunning = true;
-          try { chrome.storage.local.set({ [COLLECTOR_RUNNING_STORAGE_KEY]: true }); } catch {}
+          try {
+            chrome.storage.local.set({ [COLLECTOR_RUNNING_STORAGE_KEY]: true });
+          } catch {}
           collectorPanel.setRunning(true);
         }
         await keywordPilot.addKeywords(texts);
@@ -944,7 +968,8 @@
           collectorPanel.setKeywordPilotState({
             mode: 'COLLECTING',
             currentKeyword: kw,
-            pendingCount: 0, doneCount: 0,
+            pendingCount: 0,
+            doneCount: 0,
           });
           collectorPanel.toast(`开始采集 "${kw.text}"`, 'info', 2000);
         }
@@ -1020,7 +1045,11 @@
     }
 
     // 初始化 IndexedDB
-    try { await window.JZCollectorDB?.init(); } catch (e) { console.warn('[ozon-search] IndexedDB init failed:', e); }
+    try {
+      await window.JZCollectorDB?.init();
+    } catch (e) {
+      console.warn('[ozon-search] IndexedDB init failed:', e);
+    }
 
     await loadPanelEnabled();
     listenStorageToggle();
@@ -1045,7 +1074,9 @@
       const stats = taskQueue.stats();
       const pilotState = keywordPilot?.getState() || { mode: 'IDLE', currentKeyword: null };
       let bucketCount = null;
-      try { bucketCount = await window.JZCollectorDB?.countSales(); } catch {}
+      try {
+        bucketCount = await window.JZCollectorDB?.countSales();
+      } catch {}
       chrome.runtime.sendMessage({
         action: 'collectorHeartbeat',
         stats,
@@ -1057,7 +1088,9 @@
         url: window.location.href,
         title: document.title,
       });
-    } catch { /* 关闭中或权限问题，忽略 */ }
+    } catch {
+      /* 关闭中或权限问题，忽略 */
+    }
   }
   function debouncedHeartbeat() {
     if (_heartbeatPending) return;
@@ -1068,7 +1101,7 @@
   }
   function startHeartbeat() {
     if (_heartbeatTimer) return;
-    sendHeartbeatNow();                                    // 启动立即发一次
+    sendHeartbeatNow(); // 启动立即发一次
     _heartbeatTimer = setInterval(sendHeartbeatNow, 30000); // 30s 兜底
     taskQueue.on('stateChange', debouncedHeartbeat);
   }

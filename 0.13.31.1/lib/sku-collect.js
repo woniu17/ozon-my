@@ -21,7 +21,7 @@
  * 挂在 window.JZSkuCollect。依赖 chrome.runtime.sendMessage 可用（在扩展页面 / popup / content 都可以）。
  */
 (function (root) {
-  "use strict";
+  'use strict';
 
   const BATCH_SIZE = 3;
   // service-worker 的 searchVariants 内部已经对 TIMEOUT / NETWORK 重试 2 次（间隔 2s），
@@ -65,14 +65,13 @@
     const matching = items.filter((it) =>
       (it.attributes || []).some(
         (a) =>
-          String(a.key) === "9024" &&
-          (String(a.value || "").startsWith(sku + "-") || String(a.value || "") === sku),
-      ),
+          String(a.key) === '9024' && (String(a.value || '').startsWith(sku + '-') || String(a.value || '') === sku)
+      )
     );
     if (matching.length === 0) return null;
     const score = (it) => {
       let s = 0;
-      for (const key of ["10096", "22814", "8219"]) {
+      for (const key of ['10096', '22814', '8219']) {
         const a = (it.attributes || []).find((x) => String(x.key) === key);
         if (Array.isArray(a?.collection)) s += a.collection.length;
         else if (a?.value) s += 1;
@@ -94,7 +93,7 @@
   /** 从 sourceVariant 抽出字符串值（去除多余空白） */
   function readSourceText(sv, key) {
     const a = (sv?.attributes || []).find((x) => String(x.key) === String(key));
-    return a?.value ? String(a.value).replace(/\s+/g, " ").trim() : null;
+    return a?.value ? String(a.value).replace(/\s+/g, ' ').trim() : null;
   }
 
   /** 从 sourceVariant 抽出图册：attr 4194 主图 + attr 4195 collection */
@@ -103,14 +102,14 @@
     const out = [];
     const seen = new Set();
     const push = (u) => {
-      if (!u || typeof u !== "string") return;
-      const norm = u.split("?")[0].split("#")[0].toLowerCase();
+      if (!u || typeof u !== 'string') return;
+      const norm = u.split('?')[0].split('#')[0].toLowerCase();
       if (seen.has(norm)) return;
       seen.add(norm);
       out.push(u);
     };
-    const primary = sv.attributes.find((a) => String(a.key) === "4194");
-    const addl = sv.attributes.find((a) => String(a.key) === "4195");
+    const primary = sv.attributes.find((a) => String(a.key) === '4194');
+    const addl = sv.attributes.find((a) => String(a.key) === '4195');
     if (primary?.value) push(primary.value);
     if (Array.isArray(addl?.collection)) {
       for (const u of addl.collection) push(u);
@@ -133,17 +132,17 @@
       // bundle(Ozon 复制 API)的视频/PDF complex 属性,SW searchVariants 已注入到 sv 上。
       // 顶层透出(与原始 sv 同 key),让批量 buildV3Item 能直接带上,跟卖原 SKU 视频。
       _bundleComplexAttrs: sv._bundleComplexAttrs || undefined,
-      name: readSourceText(sv, "4180"),
-      description: readSourceText(sv, "4191"),
-      richContent: readSourceText(sv, "11254"),
+      name: readSourceText(sv, '4180'),
+      description: readSourceText(sv, '4191'),
+      richContent: readSourceText(sv, '11254'),
       images: readSourceImages(sv),
       breadcrumbs: [], // sv 单源下不需要,backend 严格模式不走面包屑
       brand: null,
-      barcode: readSourceText(sv, "7822"),
-      weight: readSourceInt(sv, "4497"),
-      depth: readSourceInt(sv, "9454"),
-      width: readSourceInt(sv, "9455"),
-      height: readSourceInt(sv, "9456"),
+      barcode: readSourceText(sv, '7822'),
+      weight: readSourceInt(sv, '4497'),
+      depth: readSourceInt(sv, '9454'),
+      width: readSourceInt(sv, '9455'),
+      height: readSourceInt(sv, '9456'),
       categories: sv.categories || [],
       descriptionCategoryId: sv.description_category_id,
     };
@@ -167,7 +166,7 @@
    *    error 时降级用,物理 attr 会缺失。
    */
   async function fetchOneSku(sku) {
-    const variantResp = await sendMsg({ action: "searchVariants", sku });
+    const variantResp = await sendMsg({ action: 'searchVariants', sku });
 
     let sourceVariant = null;
     let lastNetworkErr = null;
@@ -183,18 +182,18 @@
     // searchVariants 命中反爬/认证/无 tab/权限等"基础设施性"错误时直接返回,不再 fallback 调
     // searchProductBySku 多打一枪门户请求 —— 反爬已触发,继续打只会加重风险分,且让 collectBySkus
     // 尽快据 ANTIBOT_BLOCKED 熔断进冷却。仅"业务性未命中"(空 items / NOT_IN_OWN_CATALOG)才降级。
-    const INFRA_ERRORS = ["ANTIBOT_BLOCKED", "AUTH_REQUIRED", "NO_SELLER_TAB", "PERMISSION_DENIED", "NO_COMPANY_ID"];
+    const INFRA_ERRORS = ['ANTIBOT_BLOCKED', 'AUTH_REQUIRED', 'NO_SELLER_TAB', 'PERMISSION_DENIED', 'NO_COMPANY_ID'];
     if (!sourceVariant && lastNetworkErr && INFRA_ERRORS.includes(lastNetworkErr.code)) {
       return {
         ok: false,
         errorCode: lastNetworkErr.code,
-        message: lastNetworkErr.msg || lastNetworkErr.code || "卖家中心接口失败",
+        message: lastNetworkErr.msg || lastNetworkErr.code || '卖家中心接口失败',
       };
     }
 
     // searchVariants error 或返空 items → 降级 /api/v1/search(无 bundle 注入,物理 attr 会缺失)
     if (!sourceVariant) {
-      const searchResp = await sendMsg({ action: "searchProductBySku", sku });
+      const searchResp = await sendMsg({ action: 'searchProductBySku', sku });
       if (searchResp?.ok) {
         const globalItems = searchResp.data?.items || [];
         if (globalItems.length > 0) {
@@ -209,10 +208,10 @@
       // 区分两类失败：接口错（cookie/网络）vs 真没匹配（SKU 在 ozon 找不到）
       return {
         ok: false,
-        errorCode: lastNetworkErr ? lastNetworkErr.code : "NO_VARIANT_MATCH",
+        errorCode: lastNetworkErr ? lastNetworkErr.code : 'NO_VARIANT_MATCH',
         message: lastNetworkErr
-          ? lastNetworkErr.msg || lastNetworkErr.code || "卖家中心接口失败"
-          : "在 ozon 找不到同款源商品（无法跟卖）",
+          ? lastNetworkErr.msg || lastNetworkErr.code || '卖家中心接口失败'
+          : '在 ozon 找不到同款源商品（无法跟卖）',
       };
     }
 
@@ -233,7 +232,7 @@
     if (cd > 0) {
       return {
         ok: false,
-        errorCode: "ANTIBOT_BLOCKED",
+        errorCode: 'ANTIBOT_BLOCKED',
         message: `seller.ozon.ru 触发反爬保护,冷却中,请约 ${Math.ceil(cd / 60000)} 分钟后再试`,
       };
     }
@@ -241,7 +240,7 @@
       const r = await fetchOneSku(firstSku);
       if (!r.ok) {
         // gate 阶段就命中反爬 → 立即进入冷却,后续 collectBySkus 入口会据此直接拒绝。
-        if (r.errorCode === "ANTIBOT_BLOCKED") {
+        if (r.errorCode === 'ANTIBOT_BLOCKED') {
           antibotCooldownUntil = Date.now() + ANTIBOT_COOLDOWN_MS;
         }
         return {
@@ -259,7 +258,7 @@
     } catch (e) {
       return {
         ok: false,
-        errorCode: "UNKNOWN_ERROR",
+        errorCode: 'UNKNOWN_ERROR',
         message: e.message || String(e),
       };
     }
@@ -302,7 +301,7 @@
     }
 
     const tryOneSku = async (sku) => {
-      if (aborted()) return { ok: false, error: "已取消" };
+      if (aborted()) return { ok: false, error: '已取消' };
       try {
         const r = await fetchOneSku(sku);
         if (r.ok) return { ok: true, distilled: r.distilled };
@@ -337,15 +336,15 @@
           done++;
           onProgress(done, total, sku, r.ok, r.error);
           return { sku, r };
-        }),
+        })
       );
       for (const settled of results) {
-        if (settled.status !== "fulfilled") continue;
+        if (settled.status !== 'fulfilled') continue;
         const { sku, r } = settled.value;
         if (r.ok) sourceMap.set(sku, r.distilled);
         else {
           failed.push({ sku, error: r.error });
-          if (r.errorCode === "ANTIBOT_BLOCKED") antibotTripped = true;
+          if (r.errorCode === 'ANTIBOT_BLOCKED') antibotTripped = true;
         }
       }
       // 命中反爬:进入冷却并中止剩余批次,避免继续猛打把"限速"升级成"限制登录"。
@@ -363,17 +362,17 @@
       if (!richContent || !distilled) return;
       distilled.richContent = richContent;
       const sv = distilled._sourceVariant;
-      if (!sv || typeof sv !== "object") return;
+      if (!sv || typeof sv !== 'object') return;
       const attrs = Array.isArray(sv.attributes) ? sv.attributes : [];
-      const existing = attrs.find((a) => String(a?.key) === "11254");
+      const existing = attrs.find((a) => String(a?.key) === '11254');
       if (existing) {
-        if (!readSourceText({ attributes: [existing] }, "11254")) existing.value = richContent;
+        if (!readSourceText({ attributes: [existing] }, '11254')) existing.value = richContent;
         return;
       }
-      sv.attributes = [...attrs, { key: "11254", value: richContent }];
+      sv.attributes = [...attrs, { key: '11254', value: richContent }];
     };
     const hasRichContent = (distilled) =>
-      Boolean(distilled?.richContent || readSourceText(distilled?._sourceVariant, "11254"));
+      Boolean(distilled?.richContent || readSourceText(distilled?._sourceVariant, '11254'));
 
     // 源描述(4191)+ 主题标签(23171)注入 —— 与富内容(11254)同源同次抓取(SW page json)。
     // /search 不返这三样,只活在 PDP widget;批量经买家 tab 抓回后在此落地,让上架继承源店铺内容。
@@ -383,20 +382,20 @@
     //   源标签裸下发会触发 Ozon BR_hashtag_brand 拒卡,见 product.service.ts filterBrandHashtags)。
     const contentCopy =
       (root && root.JZFollowSellContentCopy) ||
-      (typeof window !== "undefined" && window.JZFollowSellContentCopy) ||
+      (typeof window !== 'undefined' && window.JZFollowSellContentCopy) ||
       null;
     const injectSourceText = (distilled, description, hashtags) => {
       if (!distilled) return;
       const sv = distilled._sourceVariant;
-      const desc = typeof description === "string" ? description.trim() : "";
+      const desc = typeof description === 'string' ? description.trim() : '';
       if (desc) {
         if (!distilled.description) distilled.description = desc;
-        if (sv && typeof sv === "object" && contentCopy?.mergeSourceDescriptionIntoVariant) {
+        if (sv && typeof sv === 'object' && contentCopy?.mergeSourceDescriptionIntoVariant) {
           contentCopy.mergeSourceDescriptionIntoVariant(sv, desc);
         }
       }
       const tags = Array.isArray(hashtags) ? hashtags : [];
-      if (tags.length && sv && typeof sv === "object" && contentCopy?.mergeSourceHashtagsIntoVariant) {
+      if (tags.length && sv && typeof sv === 'object' && contentCopy?.mergeSourceHashtagsIntoVariant) {
         contentCopy.mergeSourceHashtagsIntoVariant(sv, tags);
       }
     };
@@ -416,12 +415,12 @@
         if (vi > 0) await sleep(VIDEO_INTERVAL_MS);
         const [sku, distilled] = entries[vi];
         try {
-          const resp = await sendMsg({ action: "transferVariantVideo", url: `https://www.ozon.ru/product/${sku}` });
+          const resp = await sendMsg({ action: 'transferVariantVideo', url: `https://www.ozon.ru/product/${sku}` });
           // SW 统一返回 { ok:true, data:{ url, richContent } };url 为 null 表示无视频/失败(已降级)。
           const url = resp?.ok ? resp.data?.url : (resp?.data?.url ?? null);
           if (url && distilled) distilled.videoUrl = url;
-          injectRichContent(distilled, resp?.data?.richContent || "");
-          injectSourceText(distilled, resp?.data?.description || "", resp?.data?.hashtags || []);
+          injectRichContent(distilled, resp?.data?.richContent || '');
+          injectSourceText(distilled, resp?.data?.description || '', resp?.data?.hashtags || []);
           onVideoProgress(++vDone, entries.length, sku, !!url);
         } catch (e) {
           onVideoProgress(++vDone, entries.length, sku, false);
@@ -440,9 +439,9 @@
         if (!first) await sleep(VIDEO_INTERVAL_MS);
         first = false;
         try {
-          const resp = await sendMsg({ action: "fetchVariantRichContent", url: `https://www.ozon.ru/product/${sku}` });
-          injectRichContent(distilled, resp?.data?.richContent || "");
-          injectSourceText(distilled, resp?.data?.description || "", resp?.data?.hashtags || []);
+          const resp = await sendMsg({ action: 'fetchVariantRichContent', url: `https://www.ozon.ru/product/${sku}` });
+          injectRichContent(distilled, resp?.data?.richContent || '');
+          injectSourceText(distilled, resp?.data?.description || '', resp?.data?.hashtags || []);
         } catch (e) {
           // best-effort:富内容是增强项,失败静默。
         }
@@ -461,4 +460,4 @@
     BATCH_SIZE,
     PER_SKU_RETRIES,
   };
-})(typeof self !== "undefined" ? self : window);
+})(typeof self !== 'undefined' ? self : window);

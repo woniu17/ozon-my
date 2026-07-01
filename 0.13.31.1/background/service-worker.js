@@ -1,4 +1,13 @@
-globalThis.__JZ_BRAND__ = {"code":"my","displayName":"MY","productName":"MY","primaryColor":"rgb(232,77,146)","apiHost":"api.jizhangerp.com","webHost":"my.jizhangerp.com","logoUrl":"https://jz-item-image-bucket.oss-cn-beijing.aliyuncs.com/images/2026-05-21/1779387908462_11498a0f1bc945b4.png"};
+globalThis.__JZ_BRAND__ = {
+  code: 'my',
+  displayName: 'MY',
+  productName: 'MY',
+  primaryColor: 'rgb(232,77,146)',
+  apiHost: 'api.jizhangerp.com',
+  webHost: 'my.jizhangerp.com',
+  logoUrl:
+    'https://jz-item-image-bucket.oss-cn-beijing.aliyuncs.com/images/2026-05-21/1779387908462_11498a0f1bc945b4.png',
+};
 // Electron host compatibility shim — Electron 36+ extension system 不实现
 // chrome.contextMenus / chrome.cookies / chrome.notifications,SW 顶层调到
 // chrome.contextMenus.onClicked.addListener 会抛 TypeError 导致整个 SW 注册失败。
@@ -8,15 +17,27 @@ globalThis.__JZ_BRAND__ = {"code":"my","displayName":"MY","productName":"MY","pr
 if (typeof chrome !== 'undefined') {
   if (typeof chrome.contextMenus === 'undefined') {
     chrome.contextMenus = {
-      removeAll: (cb) => { try { cb && cb(); } catch (_) {} },
+      removeAll: (cb) => {
+        try {
+          cb && cb();
+        } catch (_) {}
+      },
       create: () => {},
       onClicked: { addListener: () => {}, removeListener: () => {} },
     };
   }
   if (typeof chrome.notifications === 'undefined') {
     chrome.notifications = {
-      create: (id, opts, cb) => { try { cb && cb(typeof id === 'string' ? id : ''); } catch (_) {} },
-      clear: (id, cb) => { try { cb && cb(true); } catch (_) {} },
+      create: (id, opts, cb) => {
+        try {
+          cb && cb(typeof id === 'string' ? id : '');
+        } catch (_) {}
+      },
+      clear: (id, cb) => {
+        try {
+          cb && cb(true);
+        } catch (_) {}
+      },
       onClicked: { addListener: () => {}, removeListener: () => {} },
     };
   }
@@ -24,7 +45,12 @@ if (typeof chrome !== 'undefined') {
     chrome.cookies = {
       getAll: (_query, cb) => {
         const empty = [];
-        if (typeof cb === 'function') { try { cb(empty); } catch (_) {} return; }
+        if (typeof cb === 'function') {
+          try {
+            cb(empty);
+          } catch (_) {}
+          return;
+        }
         return Promise.resolve(empty);
       },
     };
@@ -48,7 +74,7 @@ try {
     'agent/actions.js',
     'agent/collect-actions.js',
     'agent/listing-actions.js',
-    'agent/agent-runtime.js',
+    'agent/agent-runtime.js'
   );
 } catch (e) {
   // 不要阻断 SW 启动 — 老功能仍需可用。client-sync 失败时 alarm 不会触发。
@@ -58,7 +84,9 @@ try {
 (() => {
   // 启动版本标识：用户跟卖前看 chrome://extensions 极掌 → service worker → console
   // 必须能看到下面这行才说明新代码已加载（否则说明 sw 没 reload）
-  console.log('[SW] booted: searchVariants = /api/v1/search + /api/site/seller-prototype/create-bundle-by-variant-id (sv endpoint 2026-05 下线) + ensureSellerTab + client-sync');
+  console.log(
+    '[SW] booted: searchVariants = /api/v1/search + /api/site/seller-prototype/create-bundle-by-variant-id (sv endpoint 2026-05 下线) + ensureSellerTab + client-sync'
+  );
 
   // Backend 路由策略:
   //   - dev (直接加载 extension/ 源码,不跑 build.js) → globalThis.__JZ_PROD_BUILD__
@@ -78,9 +106,7 @@ try {
   // 影响:tryWebSync 抓 store.jizhangerp.com 标签页登录态、openFrontend 跳转域名。
   // 用 /__BRAND/ 探测(不写全占位符),避免 build textual replace 把探测逻辑也换掉
   // 而导致分销商 build 被误兜底成平台默认。
-  const BRAND_WEB_HOST = /__BRAND/.test('my.jizhangerp.com')
-    ? 'store.jizhangerp.com'
-    : 'my.jizhangerp.com';
+  const BRAND_WEB_HOST = /__BRAND/.test('my.jizhangerp.com') ? 'store.jizhangerp.com' : 'my.jizhangerp.com';
 
   // 插件更新检查配置: 走后端 GET /extension/latest?client=extension
   // (URL 在 checkForUpdate 中通过 getBackendUrl() 动态拼接)
@@ -191,10 +217,7 @@ try {
       await setStorage({ [STORAGE_KEYS.deviceFingerprintV3]: preferredFingerprint });
       return preferredFingerprint;
     }
-    const stored = await getStorage([
-      STORAGE_KEYS.deviceFingerprintV3,
-      STORAGE_KEYS.deviceFingerprintV2,
-    ]);
+    const stored = await getStorage([STORAGE_KEYS.deviceFingerprintV3, STORAGE_KEYS.deviceFingerprintV2]);
     // v3 优先;不存在但有 v2 → migrate 一次(同 raw 输入算 v3 hash 不同,直接重算)。
     if (stored[STORAGE_KEYS.deviceFingerprintV3]) return stored[STORAGE_KEYS.deviceFingerprintV3];
     const fp = buildWorkerMachineFingerprint();
@@ -239,17 +262,20 @@ try {
     return `${(h1 >>> 0).toString(36)}-${(h2 >>> 0).toString(36)}`;
   }
 
-  const getStorage = (keys) => new Promise((resolve) => {
-    chrome.storage.local.get(keys, resolve);
-  });
+  const getStorage = (keys) =>
+    new Promise((resolve) => {
+      chrome.storage.local.get(keys, resolve);
+    });
 
-  const setStorage = (values) => new Promise((resolve) => {
-    chrome.storage.local.set(values, resolve);
-  });
+  const setStorage = (values) =>
+    new Promise((resolve) => {
+      chrome.storage.local.set(values, resolve);
+    });
 
-  const removeStorage = (keys) => new Promise((resolve) => {
-    chrome.storage.local.remove(keys, resolve);
-  });
+  const removeStorage = (keys) =>
+    new Promise((resolve) => {
+      chrome.storage.local.remove(keys, resolve);
+    });
 
   // Debounced ozon tab reload — prevents rapid reload storms on auth state changes
   let _reloadTimer = null;
@@ -392,7 +418,7 @@ try {
       // variant_id 优先 /search 真返的 variant_id，barcode 兜底
       variant_id: v.variant_id || (v.barcodes && v.barcodes[0]) || '',
       description_category_id: Number(v.description_type_dict_value) || 0,
-      categories: (v.categories || []).map(c => ({
+      categories: (v.categories || []).map((c) => ({
         id: Number(c.id),
         level: Number(c.level),
         name: c.name || '',
@@ -441,8 +467,7 @@ try {
   // variant_id 在 Ozon 内是 store-scoped(create-bundle-by-variant-id 副作用产物),
   // 加 companyId 是双保险:即使将来 variant_id 复用同 namespace,companyId 也能隔离。
   const _BUNDLE_CACHE_PREFIX = 'jz-sw-bundle-v2:';
-  const _bundleCacheKey = (companyId, variantId) =>
-    `${_BUNDLE_CACHE_PREFIX}${companyId || 'unknown'}:${variantId}`;
+  const _bundleCacheKey = (companyId, variantId) => `${_BUNDLE_CACHE_PREFIX}${companyId || 'unknown'}:${variantId}`;
 
   // SW 启动时清理 v1 缓存 — 它的 key 只用 sku,可能跨店污染过用户数据。
   // 一次性清理,跑完后用户的 v2 缓存重建即可。
@@ -467,10 +492,12 @@ try {
   const _COLLECT_CLEANUP_INTERVAL_MS = 12 * 60 * 60 * 1000;
   (async () => {
     try {
-      const stamp = await new Promise((r) => chrome.storage.local.get([_COLLECT_CLEANUP_KEY], (d) => r(d?.[_COLLECT_CLEANUP_KEY])));
+      const stamp = await new Promise((r) =>
+        chrome.storage.local.get([_COLLECT_CLEANUP_KEY], (d) => r(d?.[_COLLECT_CLEANUP_KEY]))
+      );
       const now = Date.now();
       // 防御未来时间(时钟回滚 / 数据损坏):只信任 typeof number && <= now 的 stamp
-      const stampAt = (stamp && typeof stamp.at === 'number' && stamp.at <= now) ? stamp.at : 0;
+      const stampAt = stamp && typeof stamp.at === 'number' && stamp.at <= now ? stamp.at : 0;
       if (stampAt > 0 && now - stampAt < _COLLECT_CLEANUP_INTERVAL_MS) {
         return; // 上次清理还在 12h 内,跳过
       }
@@ -513,7 +540,13 @@ try {
         variant_id: String(variantId),
         source: 'SOURCE_UI_COPY_APPAREL',
       },
-      { urlPrefix: '/api/site', pageType: 'products', timeoutMs: 30000, allowOzonTab: true, preferTabId: opts.preferTabId },
+      {
+        urlPrefix: '/api/site',
+        pageType: 'products',
+        timeoutMs: 30000,
+        allowOzonTab: true,
+        preferTabId: opts.preferTabId,
+      }
     );
     const item = resp?.item || null;
     if (!item) return null;
@@ -532,7 +565,11 @@ try {
   // 全部复用 fetchSellerPortal(urlPrefix=/api/site, pageType=products, allowOzonTab)
   // 在浏览器里跑,带用户真实 cookie/UA/fingerprint 绕反爬。详见门户接口契约。
   const _bundlePortalOpts = (preferTabId, timeoutMs = 30000) => ({
-    urlPrefix: '/api/site', pageType: 'products', timeoutMs, allowOzonTab: true, preferTabId,
+    urlPrefix: '/api/site',
+    pageType: 'products',
+    timeoutMs,
+    allowOzonTab: true,
+    preferTabId,
   });
 
   // 建空草稿 → { bundle_id }
@@ -540,7 +577,7 @@ try {
     const resp = await fetchSellerPortal(
       '/seller-prototype/create-bundle',
       { company_id: String(companyId) },
-      _bundlePortalOpts(preferTabId),
+      _bundlePortalOpts(preferTabId)
     );
     const bundleId = resp?.bundle_id;
     if (!bundleId) throw new Error('create-bundle 未返回 bundle_id');
@@ -558,7 +595,7 @@ try {
         description_category_lvl3_name: catName || '',
         items,
       },
-      _bundlePortalOpts(preferTabId),
+      _bundlePortalOpts(preferTabId)
     );
 
   // 提交发布:草稿 → 真实商品 → { upload_task_id }
@@ -566,7 +603,7 @@ try {
     const resp = await fetchSellerPortal(
       '/seller-prototype/upload-bundle',
       { bundle_id: String(bundleId), company_id: String(companyId), strict: true },
-      _bundlePortalOpts(preferTabId),
+      _bundlePortalOpts(preferTabId)
     );
     const taskId = resp?.upload_task_id;
     if (!taskId) throw new Error('upload-bundle 未返回 upload_task_id');
@@ -578,7 +615,7 @@ try {
     fetchSellerPortal(
       '/async-upload/v1/task/get-list',
       { company_id: String(companyId), limit, page },
-      _bundlePortalOpts(preferTabId),
+      _bundlePortalOpts(preferTabId)
     );
 
   // 拉每个 SKU 的失败原因(task_id 必须是数字)
@@ -586,7 +623,7 @@ try {
     fetchSellerPortal(
       '/async-upload/v1/task/get-errors',
       { company_id: String(companyId), task_id: Number(taskId), page, page_size },
-      _bundlePortalOpts(preferTabId),
+      _bundlePortalOpts(preferTabId)
     );
 
   // 解析当前登录店铺的 sc_company_id(门户接口都要它)
@@ -606,7 +643,12 @@ try {
    */
   const importViaPortal = async (message, token, targetStoreId, backendUrl, preferTabId) => {
     const prep = await apiRequest(
-      'POST', `${backendUrl}/ozon/products/prepare-bundle-items`, message, token, targetStoreId, 120_000,
+      'POST',
+      `${backendUrl}/ozon/products/prepare-bundle-items`,
+      message,
+      token,
+      targetStoreId,
+      120_000
     );
     const result = prep?.result || {};
     const bundles = Array.isArray(result.bundles) ? result.bundles : [];
@@ -618,7 +660,9 @@ try {
     // 后端给了目标店铺的 company_id 且与当前登录不一致 → 会建到错误店铺,立即中止并提示切换。
     const storeCompanyId = result.store_company_id ? String(result.store_company_id) : '';
     if (storeCompanyId && storeCompanyId !== String(companyId)) {
-      throw new Error(`所选店铺与当前 seller.ozon.ru 登录店铺不一致(目标 ${storeCompanyId} / 当前 ${companyId}),门户上架请先在浏览器切换到该店铺登录`);
+      throw new Error(
+        `所选店铺与当前 seller.ozon.ru 登录店铺不一致(目标 ${storeCompanyId} / 当前 ${companyId}),门户上架请先在浏览器切换到该店铺登录`
+      );
     }
     const taskIds = [];
     const bundleIds = [];
@@ -671,11 +715,11 @@ try {
     //  getMarketStats 的 tab 选择口径统一。)
     const isAuthUrl = (u) => /\/(registration|signin|auth|login)/i.test(u || '');
     const pickReadyTab = (list) =>
-      list.find(t => t.status === 'complete' && t.url?.includes('/app/') && !isAuthUrl(t.url))
-      || list.find(t => t.status === 'complete' && !isAuthUrl(t.url))
-      || list.find(t => t.status === 'complete' && t.url?.includes('/app/'))
-      || list.find(t => t.status === 'complete')
-      || null;
+      list.find((t) => t.status === 'complete' && t.url?.includes('/app/') && !isAuthUrl(t.url)) ||
+      list.find((t) => t.status === 'complete' && !isAuthUrl(t.url)) ||
+      list.find((t) => t.status === 'complete' && t.url?.includes('/app/')) ||
+      list.find((t) => t.status === 'complete') ||
+      null;
 
     let tabs = await queryTabs();
     let ready = pickReadyTab(tabs);
@@ -686,7 +730,7 @@ try {
       console.log('[ensureSellerTab] 已有 tab 但都在加载中，等待 complete...');
       const waitDeadline = Date.now() + timeoutMs;
       while (Date.now() < waitDeadline) {
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 500));
         tabs = await queryTabs();
         ready = pickReadyTab(tabs);
         if (ready) return ready;
@@ -705,7 +749,7 @@ try {
 
     const createDeadline = Date.now() + timeoutMs;
     while (Date.now() < createDeadline) {
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500));
       try {
         const t = await chrome.tabs.get(created.id);
         if (t.status === 'complete') {
@@ -782,16 +826,16 @@ try {
   const ensureBuyerTab = async (timeoutMs = 20000) => {
     const queryTabs = () => chrome.tabs.query({ url: ['https://www.ozon.ru/*', 'https://ozon.ru/*'] });
     const pickReady = (list) =>
-      list.find(t => t.status === 'complete' && /\/(product|category|search)\b/i.test(t.url || ''))
-      || list.find(t => t.status === 'complete')
-      || null;
+      list.find((t) => t.status === 'complete' && /\/(product|category|search)\b/i.test(t.url || '')) ||
+      list.find((t) => t.status === 'complete') ||
+      null;
     let tabs = await queryTabs();
     let ready = pickReady(tabs);
     if (ready) return ready;
     if (tabs.length) {
       const waitDeadline = Date.now() + timeoutMs;
       while (Date.now() < waitDeadline) {
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 500));
         tabs = await queryTabs();
         ready = pickReady(tabs);
         if (ready) return ready;
@@ -802,7 +846,7 @@ try {
     const created = await chrome.tabs.create({ url: 'https://www.ozon.ru/', active: false, pinned: true });
     const createDeadline = Date.now() + timeoutMs;
     while (Date.now() < createDeadline) {
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500));
       try {
         const t = await chrome.tabs.get(created.id);
         if (t.status === 'complete') return t;
@@ -830,10 +874,16 @@ try {
       const timer = setTimeout(() => controller.abort(), timeout);
       try {
         const dl = await fetch(src, { signal: controller.signal });
-        if (!dl.ok) { clearTimeout(timer); return { ok: false, error: '源视频下载失败 ' + dl.status }; }
+        if (!dl.ok) {
+          clearTimeout(timer);
+          return { ok: false, error: '源视频下载失败 ' + dl.status };
+        }
         const blob = await dl.blob();
-        if (!blob || blob.size === 0) { clearTimeout(timer); return { ok: false, error: '源视频为空' }; }
-        const fname = ((src.split('/').pop() || 'video.mp4').split('?')[0].split('#')[0]) || 'video.mp4';
+        if (!blob || blob.size === 0) {
+          clearTimeout(timer);
+          return { ok: false, error: '源视频为空' };
+        }
+        const fname = (src.split('/').pop() || 'video.mp4').split('?')[0].split('#')[0] || 'video.mp4';
         const fd = new FormData();
         fd.append('file_name', fname);
         fd.append('tmp', 'true');
@@ -842,23 +892,35 @@ try {
           method: 'POST',
           signal: controller.signal,
           credentials: 'include',
-          headers: { 'accept': 'application/json, text/plain, */*', 'x-o3-company-id': xCompanyId, 'x-o3-language': 'zh-Hans' },
+          headers: {
+            accept: 'application/json, text/plain, */*',
+            'x-o3-company-id': xCompanyId,
+            'x-o3-language': 'zh-Hans',
+          },
           body: fd,
         });
         clearTimeout(timer);
         if (resp.redirected && (resp.url.includes('/signin') || resp.url.includes('/login'))) {
           return { ok: false, status: 401, error: 'Seller portal cookie已过期，请重新登录' };
         }
-        if (!resp.ok) { const t = await resp.text().catch(() => ''); return { ok: false, status: resp.status, error: 'upload-file ' + resp.status + ': ' + t.slice(0, 200) }; }
+        if (!resp.ok) {
+          const t = await resp.text().catch(() => '');
+          return { ok: false, status: resp.status, error: 'upload-file ' + resp.status + ': ' + t.slice(0, 200) };
+        }
         const j = await resp.json().catch(() => null);
         return { ok: true, url: (j && j.url) || null, size: blob.size };
       } catch (e) {
         clearTimeout(timer);
-        return { ok: false, error: e.name === 'AbortError' ? '上传超时' : (e.message || String(e)) };
+        return { ok: false, error: e.name === 'AbortError' ? '上传超时' : e.message || String(e) };
       }
     };
     const results = await Promise.race([
-      chrome.scripting.executeScript({ target: { tabId: targetTab.id }, func: doUpload, args: [srcUrl, companyId, 90000], world: 'MAIN' }),
+      chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: doUpload,
+        args: [srcUrl, companyId, 90000],
+        world: 'MAIN',
+      }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('executeScript 超时')), 95000)),
     ]);
     const r = results && results[0] && results[0].result;
@@ -885,7 +947,12 @@ try {
     } catch {}
     if (!path.startsWith('/')) path = '/' + path;
     let tab;
-    try { tab = await ensureBuyerTab(); } catch (e) { console.warn('[fetchVariantMedia] ensureBuyerTab 失败:', e?.message || e); return EMPTY; }
+    try {
+      tab = await ensureBuyerTab();
+    } catch (e) {
+      console.warn('[fetchVariantMedia] ensureBuyerTab 失败:', e?.message || e);
+      return EMPTY;
+    }
     // MAIN world:相对路径同源命中(www.ozon.ru / ozon.kz),依次试 entrypoint→composer
     // (与 fetchOzonPublicProduct 同口径)。executeScript 序列化注入,不能引用 SW 闭包 ——
     // 富内容抽取逻辑须内联(与 content/ozon-product.js 的 jzExtractRichContentFromStates
@@ -896,15 +963,26 @@ try {
         `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(relPath)}`,
       ];
       const isRichDoc = (o) =>
-        o && typeof o === 'object' && Array.isArray(o.content) && o.content.length > 0 &&
+        o &&
+        typeof o === 'object' &&
+        Array.isArray(o.content) &&
+        o.content.length > 0 &&
         o.content.some((b) => b && typeof b === 'object' && typeof b.widgetName === 'string');
       const extractRich = (states) => {
         for (const k of Object.keys(states)) {
           let v = states[k];
-          if (typeof v === 'string') { try { v = JSON.parse(v); } catch { continue; } }
+          if (typeof v === 'string') {
+            try {
+              v = JSON.parse(v);
+            } catch {
+              continue;
+            }
+          }
           if (!v || typeof v !== 'object') continue;
           if (typeof v.richAnnotationJson === 'string' && v.richAnnotationJson.trim()) {
-            try { if (isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim(); } catch {}
+            try {
+              if (isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim();
+            } catch {}
           }
           if (isRichDoc(v)) return JSON.stringify({ content: v.content, version: v.version || 0.3 });
         }
@@ -919,10 +997,16 @@ try {
         for (const k of Object.keys(states || {})) {
           if (!/gallery/i.test(k)) continue;
           let v = states[k];
-          if (typeof v === 'string') { try { v = JSON.parse(v); } catch { continue; } }
+          if (typeof v === 'string') {
+            try {
+              v = JSON.parse(v);
+            } catch {
+              continue;
+            }
+          }
           const vids = v && Array.isArray(v.videos) ? v.videos : [];
           for (const it of vids) {
-            const raw = typeof it === 'string' ? it : (it && (it.url || it.src) || '');
+            const raw = typeof it === 'string' ? it : (it && (it.url || it.src)) || '';
             if (raw && /\.mp4(\?|#|$)/i.test(raw)) return raw;
           }
         }
@@ -937,7 +1021,13 @@ try {
         const descKeys = keys.filter((k) => /description/i.test(k));
         for (const k of descKeys) {
           let v = states[k];
-          if (typeof v === 'string') { try { v = JSON.parse(v); } catch { /* 当字符串直接抽 */ } }
+          if (typeof v === 'string') {
+            try {
+              v = JSON.parse(v);
+            } catch {
+              /* 当字符串直接抽 */
+            }
+          }
           const text = helper.extractDescriptionText(v, 4096);
           if (text) return text;
         }
@@ -958,14 +1048,28 @@ try {
         };
         const walk = (node, depth) => {
           if (out.length >= 30 || depth > 32 || node == null) return;
-          if (typeof node === 'string') { push(node); return; }
-          if (Array.isArray(node)) { for (const it of node) walk(it, depth + 1); return; }
-          if (typeof node === 'object') { for (const k of Object.keys(node)) walk(node[k], depth + 1); }
+          if (typeof node === 'string') {
+            push(node);
+            return;
+          }
+          if (Array.isArray(node)) {
+            for (const it of node) walk(it, depth + 1);
+            return;
+          }
+          if (typeof node === 'object') {
+            for (const k of Object.keys(node)) walk(node[k], depth + 1);
+          }
         };
         for (const k of Object.keys(states || {})) {
           if (!/hashtag|taglist/i.test(k)) continue;
           let v = states[k];
-          if (typeof v === 'string') { try { v = JSON.parse(v); } catch { continue; } }
+          if (typeof v === 'string') {
+            try {
+              v = JSON.parse(v);
+            } catch {
+              continue;
+            }
+          }
           walk(v, 0);
         }
         return out;
@@ -979,7 +1083,11 @@ try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeout);
         try {
-          const resp = await fetch(url, { credentials: 'include', headers: { 'x-o3-app-name': 'dweb_client', 'accept': 'application/json' }, signal: controller.signal });
+          const resp = await fetch(url, {
+            credentials: 'include',
+            headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
+            signal: controller.signal,
+          });
           clearTimeout(timer);
           if (!resp.ok) continue;
           anyOk = true;
@@ -998,28 +1106,51 @@ try {
         }
       }
       // 有 200 过则按真实抽取结果返回;全失败则 ok:false。
-      return anyOk ? { ok: true, mp4, richContent, description, hashtags } : { ok: false, error: 'all endpoints failed' };
+      return anyOk
+        ? { ok: true, mp4, richContent, description, hashtags }
+        : { ok: false, error: 'all endpoints failed' };
     };
     try {
       try {
-        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['lib/ozon-video-extract.js'], world: 'MAIN' });
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['lib/ozon-video-extract.js'],
+          world: 'MAIN',
+        });
       } catch (e) {
         console.warn('[fetchVariantMedia] video helper inject failed:', e?.message || e);
       }
       try {
         // doFetch 的 extractDescription 复用 JZFollowSellContentCopy.extractDescriptionText;
         // 注入失败仅降级描述抽取(返回空),不影响视频/富内容/标签。
-        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['lib/follow-sell-content-copy.js'], world: 'MAIN' });
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['lib/follow-sell-content-copy.js'],
+          world: 'MAIN',
+        });
       } catch (e) {
         console.warn('[fetchVariantMedia] content-copy helper inject failed:', e?.message || e);
       }
       const results = await Promise.race([
-        chrome.scripting.executeScript({ target: { tabId: tab.id }, func: doFetch, args: [path, 15000], world: 'MAIN' }),
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: doFetch,
+          args: [path, 15000],
+          world: 'MAIN',
+        }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('executeScript 超时')), 40000)),
       ]);
       const r = results && results[0] && results[0].result;
-      if (!r || !r.ok) { console.warn('[fetchVariantMedia] 抓取失败:', r && r.error); return EMPTY; }
-      return { mp4: r.mp4 || null, richContent: r.richContent || '', description: r.description || '', hashtags: Array.isArray(r.hashtags) ? r.hashtags : [] };
+      if (!r || !r.ok) {
+        console.warn('[fetchVariantMedia] 抓取失败:', r && r.error);
+        return EMPTY;
+      }
+      return {
+        mp4: r.mp4 || null,
+        richContent: r.richContent || '',
+        description: r.description || '',
+        hashtags: Array.isArray(r.hashtags) ? r.hashtags : [],
+      };
     } catch (e) {
       console.warn('[fetchVariantMedia] executeScript 异常:', e?.message || e);
       return EMPTY;
@@ -1076,9 +1207,8 @@ try {
     }
     if (!target) {
       const tabs = await chrome.tabs.query({ url: ['*://*.ozon.ru/*'] });
-      target = tabs.find((t) => t.status === 'complete' && t.active)
-        || tabs.find((t) => t.status === 'complete')
-        || null;
+      target =
+        tabs.find((t) => t.status === 'complete' && t.active) || tabs.find((t) => t.status === 'complete') || null;
     }
     if (!target) {
       const e = new Error('无可用 ozon.ru 标签(跨域快路)');
@@ -1106,8 +1236,16 @@ try {
         if (!resp.ok) {
           const text = await resp.text().catch(() => '');
           let parsedCode = '';
-          try { const j = JSON.parse(text); parsedCode = (j && (j.code || (j.error && j.error.code))) || ''; } catch {}
-          return { ok: false, status: resp.status, code: parsedCode, error: `Seller portal 请求失败 (${resp.status}): ${text.slice(0, 200)}` };
+          try {
+            const j = JSON.parse(text);
+            parsedCode = (j && (j.code || (j.error && j.error.code))) || '';
+          } catch {}
+          return {
+            ok: false,
+            status: resp.status,
+            code: parsedCode,
+            error: `Seller portal 请求失败 (${resp.status}): ${text.slice(0, 200)}`,
+          };
         }
         return { ok: true, data: await resp.json() };
       } catch (e) {
@@ -1135,7 +1273,11 @@ try {
       throw err;
     }
     const r = results?.[0]?.result;
-    if (!r) { const e = new Error('ozon-tab executeScript 未返回结果'); e.tabUnavailable = true; throw e; }
+    if (!r) {
+      const e = new Error('ozon-tab executeScript 未返回结果');
+      e.tabUnavailable = true;
+      throw e;
+    }
     if (!r.ok) {
       const err = new Error(r.error || 'unknown');
       if (typeof r.status === 'number') err.status = r.status;
@@ -1150,12 +1292,10 @@ try {
     await _sellerPortalGate(); // 全局节奏闸门(见上)——所有门户调用共用,摊平请求密度防反爬
     // 兼容旧调用：第三个参数可以是数字（timeoutMs，默认 page-type=products-other + url=/api/v1+path），
     // 也可以是 opts 对象 { timeoutMs, urlPrefix, pageType }
-    const opts = typeof timeoutMsOrOpts === "number"
-      ? { timeoutMs: timeoutMsOrOpts }
-      : (timeoutMsOrOpts || {});
+    const opts = typeof timeoutMsOrOpts === 'number' ? { timeoutMs: timeoutMsOrOpts } : timeoutMsOrOpts || {};
     const timeoutMs = opts.timeoutMs || 30000;
-    const urlPrefix = opts.urlPrefix !== undefined ? opts.urlPrefix : "/api/v1";
-    const pageType = opts.pageType || "products-other";
+    const urlPrefix = opts.urlPrefix !== undefined ? opts.urlPrefix : '/api/v1';
+    const pageType = opts.pageType || 'products-other';
 
     // 0. 跨域快路:opts.allowOzonTab 的调用(/search、create-bundle —— company_id 在 body、
     // 无需 x-o3-* 自定义头)优先在「当前 ozon.ru 标签页」内直发,免依赖 seller 专用标签。
@@ -1193,7 +1333,7 @@ try {
           signal: controller.signal,
           credentials: 'include',
           headers: {
-            'accept': 'application/json, text/plain, */*',
+            accept: 'application/json, text/plain, */*',
             'content-type': 'application/json',
             'x-o3-app-name': 'seller-ui',
             'x-o3-company-id': xCompanyId,
@@ -1232,33 +1372,42 @@ try {
     };
 
     // Wrap executeScript with a hard timeout to prevent hang
-    const tryExecuteScript = () => Promise.race([
-      chrome.scripting.executeScript({
-        target: { tabId: targetTab.id },
-        func: doFetch,
-        args: [path, body, companyId, timeoutMs, urlPrefix, pageType],
-        world: 'MAIN',
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('executeScript 超时')), timeoutMs + 5000)),
-    ]);
+    const tryExecuteScript = () =>
+      Promise.race([
+        chrome.scripting.executeScript({
+          target: { tabId: targetTab.id },
+          func: doFetch,
+          args: [path, body, companyId, timeoutMs, urlPrefix, pageType],
+          world: 'MAIN',
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('executeScript 超时')), timeoutMs + 5000)),
+      ]);
 
     // Bridge fallback (tabs.sendMessage to ozon-seller-bridge.js)
-    const tryBridge = () => new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('bridge 超时')), timeoutMs + 5000);
-      chrome.tabs.sendMessage(targetTab.id, {
-        type: 'sellerPortalFetch',
-        apiPath: path,
-        reqBody: body,
-        fallbackCompanyId: companyId,
-        timeoutMs,
-        urlPrefix,
-        pageType,
-      }, (resp) => {
-        clearTimeout(timer);
-        if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
-        resolve(resp);
+    const tryBridge = () =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('bridge 超时')), timeoutMs + 5000);
+        chrome.tabs.sendMessage(
+          targetTab.id,
+          {
+            type: 'sellerPortalFetch',
+            apiPath: path,
+            reqBody: body,
+            fallbackCompanyId: companyId,
+            timeoutMs,
+            urlPrefix,
+            pageType,
+          },
+          (resp) => {
+            clearTimeout(timer);
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            resolve(resp);
+          }
+        );
       });
-    });
 
     // codex review HIGH#7:把 doFetch 返回的 status / code 透传到 Error 对象上,
     // 让上游 classifyError 直接看 status === 404 && code === 'ResourceNotFound',
@@ -1273,19 +1422,25 @@ try {
 
     // Strategy: try executeScript → if fail, try bridge → if fail, throw
     const methods = [
-      { name: 'executeScript', fn: async () => {
-        const results = await tryExecuteScript();
-        const r = results?.[0]?.result;
-        if (!r) throw new Error('executeScript 未返回结果');
-        if (!r.ok) throw makeStructuredError(r);
-        return r.data;
-      }},
-      { name: 'bridge', fn: async () => {
-        const r = await tryBridge();
-        if (!r) throw new Error('bridge 返回错误');
-        if (!r.ok) throw makeStructuredError(r);
-        return r.data;
-      }},
+      {
+        name: 'executeScript',
+        fn: async () => {
+          const results = await tryExecuteScript();
+          const r = results?.[0]?.result;
+          if (!r) throw new Error('executeScript 未返回结果');
+          if (!r.ok) throw makeStructuredError(r);
+          return r.data;
+        },
+      },
+      {
+        name: 'bridge',
+        fn: async () => {
+          const r = await tryBridge();
+          if (!r) throw new Error('bridge 返回错误');
+          if (!r.ok) throw makeStructuredError(r);
+          return r.data;
+        },
+      },
     ];
 
     // 收集每个策略的真实错误，最终 throw 时拼进 message —— 保留 "过期/登录/超时/403"
@@ -1310,7 +1465,7 @@ try {
         lastErrors.push({ name: m.name, msg, status: e.status, code: e.code });
       }
     }
-    const detail = lastErrors.map(x => `${x.name}: ${x.msg}`).join(' | ');
+    const detail = lastErrors.map((x) => `${x.name}: ${x.msg}`).join(' | ');
     const err = new Error(`Seller portal 请求失败 — ${detail}`);
     // 多个 strategy 都失败,挑第一个非空 status 透传(通常 executeScript 已经拿到
     // 后端的 4xx 状态,bridge 失败可能是 chrome runtime 错)。
@@ -1391,9 +1546,7 @@ try {
           args: [apiUrl, timeoutMs],
           world: 'MAIN',
         }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('executeScript 超时')), timeoutMs + 5000),
-        ),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('executeScript 超时')), timeoutMs + 5000)),
       ]);
       const r = results?.[0]?.result;
       if (!r) return { ok: false, error: 'executeScript 未返回结果' };
@@ -1410,7 +1563,10 @@ try {
 
     const controller = new AbortController();
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
 
     try {
       const response = await fetch(url, {
@@ -1453,7 +1609,9 @@ try {
       // (同 jti、无感),让活跃用户永不掉登录、少弹「请重新登录」。
       const refreshed = response.headers.get('X-Refreshed-Token');
       if (refreshed) {
-        try { await setStorage({ [STORAGE_KEYS.token]: refreshed }); } catch {}
+        try {
+          await setStorage({ [STORAGE_KEYS.token]: refreshed });
+        } catch {}
       }
       return response.json();
     } catch (e) {
@@ -1493,7 +1651,7 @@ try {
         { sku: String(sku), ...(storeId ? { storeId } : {}) },
         token,
         storeId,
-        20_000,
+        20_000
       );
       const jobId = job?.id;
       if (!jobId) return null;
@@ -1512,7 +1670,7 @@ try {
             null,
             token,
             storeId,
-            20_000,
+            20_000
           );
         } catch (e) {
           // 轮询单次失败不致命,继续重试到 deadline。
@@ -1548,7 +1706,7 @@ try {
         { sku: String(sku), ...(storeId ? { storeId } : {}), ...(period ? { period } : {}) },
         token,
         storeId,
-        20_000,
+        20_000
       );
       const jobId = job?.id;
       if (!jobId) return null;
@@ -1566,7 +1724,7 @@ try {
             null,
             token,
             storeId,
-            20_000,
+            20_000
           );
         } catch (e) {
           continue; // 轮询单次失败不致命
@@ -1619,7 +1777,7 @@ try {
         `${ctx.backendUrl}/ozon/product-data/batch`,
         { skus },
         ctx.token,
-        ctx.storeId,
+        ctx.storeId
       );
       Object.assign(dataBySku, res?.data || {});
     } catch {
@@ -1632,13 +1790,13 @@ try {
               `${ctx.backendUrl}/ozon/product-data/${sku}?skipMarket=1`,
               null,
               ctx.token,
-              ctx.storeId,
+              ctx.storeId
             );
             dataBySku[sku] = r?.data || null;
           } catch {
             dataBySku[sku] = null;
           }
-        }),
+        })
       );
     }
     for (const [sku, resolvers] of pending) {
@@ -1650,10 +1808,7 @@ try {
     new Promise((resolve) => {
       const cur = productStatsBatch.ctx;
       // 换号/换店/换后端时先冲掉旧批,严禁跨上下文混批
-      if (
-        cur &&
-        (cur.token !== ctx.token || cur.storeId !== ctx.storeId || cur.backendUrl !== ctx.backendUrl)
-      ) {
+      if (cur && (cur.token !== ctx.token || cur.storeId !== ctx.storeId || cur.backendUrl !== ctx.backendUrl)) {
         flushProductStatsBatch();
       }
       productStatsBatch.ctx = ctx;
@@ -1728,9 +1883,7 @@ try {
       const computed = await sha256Hex(buf);
       const match = computed.toLowerCase() === expectedHex.toLowerCase();
       if (!match) {
-        console.error(
-          `[checkForUpdate] SHA-256 mismatch: expected=${expectedHex} computed=${computed}`
-        );
+        console.error(`[checkForUpdate] SHA-256 mismatch: expected=${expectedHex} computed=${computed}`);
       }
       return match;
     } catch (e) {
@@ -1751,10 +1904,7 @@ try {
           typeof globalThis.__JZ_BRAND__.code === 'string' &&
           globalThis.__JZ_BRAND__.code) ||
         '';
-      const brandQuery =
-        brandCode && brandCode !== 'platform'
-          ? `&brand=${encodeURIComponent(brandCode)}`
-          : '';
+      const brandQuery = brandCode && brandCode !== 'platform' ? `&brand=${encodeURIComponent(brandCode)}` : '';
       const updateUrl = `${backendUrl}/extension/latest?client=extension${brandQuery}`;
       const resp = await fetch(updateUrl, {
         method: 'GET',
@@ -1792,10 +1942,7 @@ try {
       if (expectedHash) {
         // 同版本号已通过校验则跳过重复下载
         const cached = await getStorage([STORAGE_KEYS.latestVersion, STORAGE_KEYS.latestSha256]);
-        if (
-          cached[STORAGE_KEYS.latestVersion] === data.version &&
-          cached[STORAGE_KEYS.latestSha256] === expectedHash
-        ) {
+        if (cached[STORAGE_KEYS.latestVersion] === data.version && cached[STORAGE_KEYS.latestSha256] === expectedHash) {
           verified = true;
         } else {
           verified = await verifyExtensionHash(downloadUrl, expectedHash);
@@ -1869,14 +2016,16 @@ try {
         null,
         token,
         storeId,
-        15_000,
+        15_000
       );
       const items = resp?.items || [];
       if (!Array.isArray(items) || items.length === 0) return;
 
-      const notified = new Set(Array.isArray(data[STORAGE_KEYS.followSellNotifiedIds]) ? data[STORAGE_KEYS.followSellNotifiedIds] : []);
+      const notified = new Set(
+        Array.isArray(data[STORAGE_KEYS.followSellNotifiedIds]) ? data[STORAGE_KEYS.followSellNotifiedIds] : []
+      );
       const cutoff = Date.now() - FOLLOW_SELL_RECENT_WINDOW_MS;
-      const newlyFailed = items.filter(t => {
+      const newlyFailed = items.filter((t) => {
         if (t.status !== 'FAILED') return false;
         if (!t.localTaskId) return false;
         if (notified.has(t.localTaskId)) return false;
@@ -1885,11 +2034,13 @@ try {
       });
 
       for (const task of newlyFailed) {
-        const firstItem = Array.isArray(task.itemsPreview) && task.itemsPreview.length > 0 ? task.itemsPreview[0] : null;
+        const firstItem =
+          Array.isArray(task.itemsPreview) && task.itemsPreview.length > 0 ? task.itemsPreview[0] : null;
         const itemCount = Array.isArray(task.itemsPreview) ? task.itemsPreview.length : 0;
-        const title = itemCount > 1
-          ? `跟卖失败 (${itemCount} 个商品)`
-          : `跟卖失败${firstItem?.name ? `：${String(firstItem.name).slice(0, 30)}` : ''}`;
+        const title =
+          itemCount > 1
+            ? `跟卖失败 (${itemCount} 个商品)`
+            : `跟卖失败${firstItem?.name ? `：${String(firstItem.name).slice(0, 30)}` : ''}`;
         const message = task.errorMessage
           ? String(task.errorMessage).slice(0, 180)
           : '跟卖任务后台执行失败，请在插件弹窗「上架记录」中查看。';
@@ -2021,10 +2172,7 @@ try {
       }
     } catch (e) {
       // 未登录 / 后端不通 — 静默用 default(灰度期间 OPI 一旦不可用,扩展端也跑不动)
-      console.log(
-        '[client-sync] interval fetch failed, using defaults:',
-        e?.message || e,
-      );
+      console.log('[client-sync] interval fetch failed, using defaults:', e?.message || e);
     }
     for (const type of CLIENT_SYNC_TYPES) {
       chrome.alarms.create(`${CLIENT_SYNC_ALARM_PREFIX}${type}`, {
@@ -2101,7 +2249,13 @@ try {
       if (!token) return;
       const backendUrl = await getBackendUrl();
       const fp = await getExtensionFingerprint();
-      await apiRequest('PUT', `${backendUrl}/auth/device/heartbeat`, { deviceFingerprint: fp, platform: 'extension' }, token, null);
+      await apiRequest(
+        'PUT',
+        `${backendUrl}/auth/device/heartbeat`,
+        { deviceFingerprint: fp, platform: 'extension' },
+        token,
+        null
+      );
     } catch (e) {
       // 心跳失败不上报
     }
@@ -2247,7 +2401,11 @@ try {
             if (!key) return null;
             const raw = ws[key];
             if (typeof raw === 'object' && raw !== null) return raw;
-            try { return JSON.parse(raw); } catch { return null; }
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return null;
+            }
           };
           const gallery = parse(find('webGallery'));
           const heading = parse(find('webProductHeading'));
@@ -2259,17 +2417,11 @@ try {
           const brand = parse(find('webBrand'));
           // sku 优先 gallery.sku,fallback detailSku
           const sku = String(
-            gallery?.sku ||
-            detailSku?.sku ||
-            detailSku?.itemId ||
-            (productPath.match(/-(\d+)\/?$/)?.[1]) ||
-            ''
+            gallery?.sku || detailSku?.sku || detailSku?.itemId || productPath.match(/-(\d+)\/?$/)?.[1] || ''
           );
           // images: gallery 通常 {images:[{url,...}, ...], coverImage:{url,...}}
           const images = Array.isArray(gallery?.images)
-            ? gallery.images
-                .map((it) => (typeof it === 'string' ? it : it?.url || it?.link || it?.src))
-                .filter(Boolean)
+            ? gallery.images.map((it) => (typeof it === 'string' ? it : it?.url || it?.link || it?.src)).filter(Boolean)
             : [];
           const coverImage =
             typeof gallery?.coverImage === 'string'
@@ -2298,8 +2450,7 @@ try {
             brandName = brand?.title || brand?.name || '';
           } catch {}
           // price
-          const priceStr =
-            price?.cardPrice || price?.price || price?.originalPrice || '';
+          const priceStr = price?.cardPrice || price?.price || price?.originalPrice || '';
           const fields = {
             title: heading?.title || '',
             sku,
@@ -2317,12 +2468,25 @@ try {
           // 老逻辑透明命中 composer-api 数据,不需要逐个改 caller。
           // 体积控制:不传 webPdpGrid / 容器类(布局 meta),只传业务 widget。
           const usefulPrefixes = [
-            'webGallery', 'webProductHeading', 'webAspects', 'webPrice',
-            'webAddToCart', 'webCurrentSeller', 'webBrand', 'webDetailSKU',
-            'webShortCharacteristics', 'webCharacteristics', 'webDescription',
-            'webMarketingLabels', 'webSale', 'webReviewProductScore',
-            'webSingleProductScore', 'webModelParams', 'webHashtags',
-            'webBestSeller', 'webProductMainWidget',
+            'webGallery',
+            'webProductHeading',
+            'webAspects',
+            'webPrice',
+            'webAddToCart',
+            'webCurrentSeller',
+            'webBrand',
+            'webDetailSKU',
+            'webShortCharacteristics',
+            'webCharacteristics',
+            'webDescription',
+            'webMarketingLabels',
+            'webSale',
+            'webReviewProductScore',
+            'webSingleProductScore',
+            'webModelParams',
+            'webHashtags',
+            'webBestSeller',
+            'webProductMainWidget',
           ];
           const widgetStates = {};
           for (const k of keys) {
@@ -2359,11 +2523,7 @@ try {
       sendResponse({ ok: true, batchSize: samples.length });
       (async () => {
         try {
-          const stored = await getStorage([
-            STORAGE_KEYS.l1ReportEnabled,
-            STORAGE_KEYS.token,
-            STORAGE_KEYS.storeId,
-          ]);
+          const stored = await getStorage([STORAGE_KEYS.l1ReportEnabled, STORAGE_KEYS.token, STORAGE_KEYS.storeId]);
           if (!stored[STORAGE_KEYS.l1ReportEnabled]) {
             l1SwStats.droppedDisabled += samples.length;
             return;
@@ -2382,7 +2542,7 @@ try {
             { samples, sentAt: Date.now() },
             token,
             storeId,
-            15_000,
+            15_000
           );
           l1SwStats.sentSamples += samples.length;
           l1SwStats.lastSentAt = Date.now();
@@ -2449,8 +2609,7 @@ try {
           // fire-and-forget,通过 runManualSyncBounded 限流(P1 #2)。runOneType 落地
           // 后照旧根据 lease-busy / crash 上报 FAILED 终态。
           runManualSyncBounded(() =>
-            globalThis.JzSyncEngine
-              .runOneType({ id: storeId }, syncType, deviceId, jobId)
+            globalThis.JzSyncEngine.runOneType({ id: storeId }, syncType, deviceId, jobId)
               .then(async (res) => {
                 if (res?.skipped === 'lease-busy') {
                   await globalThis.JzBackendClient.clientReport({
@@ -2473,7 +2632,7 @@ try {
                   status: 'FAILED',
                   error: String(e?.message || e).slice(0, 500),
                 }).catch(() => {});
-              }),
+              })
           );
         } catch (e) {
           try {
@@ -2486,31 +2645,27 @@ try {
 
     if (message?.type === 'JZC_L1_REPORT_STATUS') {
       (async () => {
-        const stored = await getStorage([
-          STORAGE_KEYS.l1ReportEnabled,
-          STORAGE_KEYS.token,
-        ]);
+        const stored = await getStorage([STORAGE_KEYS.l1ReportEnabled, STORAGE_KEYS.token]);
         sendResponse({
           enabled: !!stored[STORAGE_KEYS.l1ReportEnabled],
           authed: !!stored[STORAGE_KEYS.token],
           stats: { ...l1SwStats },
           hint: stored[STORAGE_KEYS.l1ReportEnabled]
             ? 'L1 上报已启用'
-            : "dry-run: 本地影子表写入正常,后端上报关闭。启用: chrome.storage.local.set({ l1ReportEnabled: true })",
+            : 'dry-run: 本地影子表写入正常,后端上报关闭。启用: chrome.storage.local.set({ l1ReportEnabled: true })',
         });
       })();
       return true;
     }
 
-
-  const getSellerPortalCompanyId = async () => {
-    const scCookies = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
-    const companyId = scCookies[0]?.value || '';
-    if (!companyId) {
-      throw new Error('sc_company_id not found, please login seller.ozon.ru first');
-    }
-    return companyId;
-  };
+    const getSellerPortalCompanyId = async () => {
+      const scCookies = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
+      const companyId = scCookies[0]?.value || '';
+      if (!companyId) {
+        throw new Error('sc_company_id not found, please login seller.ozon.ru first');
+      }
+      return companyId;
+    };
 
     const handle = async () => {
       const data = await getStorage([STORAGE_KEYS.token, STORAGE_KEYS.storeId]);
@@ -2558,7 +2713,7 @@ try {
               { featureKey, client, version },
               token,
               storeId,
-              5000,
+              5000
             );
             return { ok: true };
           } catch (e) {
@@ -2653,12 +2808,9 @@ try {
           // tab's localStorage before React hydrates, so the user lands on
           // the target page already authenticated — no /login flash, no
           // reload round-trip.
-          const frontendBase = backendUrl && backendUrl.includes('localhost')
-            ? 'http://localhost:3000'
-            : `https://${BRAND_WEB_HOST}`;
-          const path = typeof message.path === 'string' && message.path.startsWith('/')
-            ? message.path
-            : '/';
+          const frontendBase =
+            backendUrl && backendUrl.includes('localhost') ? 'http://localhost:3000' : `https://${BRAND_WEB_HOST}`;
+          const path = typeof message.path === 'string' && message.path.startsWith('/') ? message.path : '/';
           const url = `${frontendBase}${path}`;
 
           const tab = await chrome.tabs.create({ url, active: true });
@@ -2711,7 +2863,9 @@ try {
             if (existing.length && existing[0].id) {
               await chrome.tabs.update(existing[0].id, { active: true });
               if (existing[0].windowId != null) {
-                try { await chrome.windows.update(existing[0].windowId, { focused: true }); } catch {}
+                try {
+                  await chrome.windows.update(existing[0].windowId, { focused: true });
+                } catch {}
               }
               return { ok: true, data: { reused: true } };
             }
@@ -2727,13 +2881,25 @@ try {
           return { ok: true, backendUrl: url };
         }
         case 'collectProduct': {
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/collect-box`, message.product, token, storeId) };
+          return {
+            ok: true,
+            data: await apiRequest('POST', `${backendUrl}/ozon/collect-box`, message.product, token, storeId),
+          };
         }
         case 'updateCollectBoxItem': {
           // AI 采集向导回写采集箱条目(标题/属性等)。PATCH 与前端 updateCollectBoxItem 同端点。
           const cbId = String(message.id || '').trim();
           if (!cbId) return { ok: false, error: 'id required' };
-          return { ok: true, data: await apiRequest('PATCH', `${backendUrl}/ozon/collect-box/${cbId}`, message.body || {}, token, message.storeId || storeId) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'PATCH',
+              `${backendUrl}/ozon/collect-box/${cbId}`,
+              message.body || {},
+              token,
+              message.storeId || storeId
+            ),
+          };
         }
         case 'pushSourceCollect': {
           // Multi-source unified ingest. message.sourceId in
@@ -2789,9 +2955,7 @@ try {
               const resp = await pendingCollects.get(cacheKey);
               // 给后到的并发请求标 dedupeHit,UI 区分"刚刚已采集"。
               // resp.data 形如 { dedupeHit, lastAt, result } — 仅覆盖 dedupeHit
-              return resp?.ok
-                ? { ok: true, data: { ...resp.data, dedupeHit: true } }
-                : resp;
+              return resp?.ok ? { ok: true, data: { ...resp.data, dedupeHit: true } } : resp;
             } catch (e) {
               return { ok: false, error: e?.message || 'pending request failed' };
             }
@@ -2803,14 +2967,14 @@ try {
             for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
               try {
                 const body = { raw: message.raw || {} };
-                if (effStoreId) body.storeId = effStoreId;   // 后端 body.storeId 优先于 header
+                if (effStoreId) body.storeId = effStoreId; // 后端 body.storeId 优先于 header
                 if (message.resetDraft === true) body.resetDraft = true;
                 const data = await apiRequest(
                   'POST',
                   `${backendUrl}/sources/${encodeURIComponent(sourceId)}/collect`,
                   body,
                   token,
-                  effStoreId,
+                  effStoreId
                 );
                 if (cacheKey) {
                   try {
@@ -2852,7 +3016,13 @@ try {
           const products = message.products || [];
           if (products.length === 0) return { ok: true, data: { results: [], total: 0 } };
           try {
-            const data = await apiRequest('POST', `${backendUrl}/ozon/collect-box/batch`, { items: products, mode: 'update' }, token, storeId);
+            const data = await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/collect-box/batch`,
+              { items: products, mode: 'update' },
+              token,
+              storeId
+            );
             return { ok: true, data };
           } catch (error) {
             return { ok: false, error: error.message };
@@ -2863,7 +3033,13 @@ try {
           const mode = message.mode === 'skip' ? 'skip' : 'update';
           if (items.length === 0) return { ok: true, data: { created: 0, updated: 0, skipped: 0, items: [] } };
           try {
-            const data = await apiRequest('POST', `${backendUrl}/ozon/collect-box/batch`, { items, mode }, token, storeId);
+            const data = await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/collect-box/batch`,
+              { items, mode },
+              token,
+              storeId
+            );
             return { ok: true, data };
           } catch (error) {
             return { ok: false, error: error.message };
@@ -2879,7 +3055,13 @@ try {
           if (rawItems.length === 0) return { ok: true, data: { results: [], errors: [] } };
           try {
             const body = { items: rawItems.map((raw) => ({ raw })) };
-            const data = await apiRequest('POST', `${backendUrl}/sources/${encodeURIComponent(sourceId)}/collect/batch`, body, token, storeId);
+            const data = await apiRequest(
+              'POST',
+              `${backendUrl}/sources/${encodeURIComponent(sourceId)}/collect/batch`,
+              body,
+              token,
+              storeId
+            );
             return { ok: true, data };
           } catch (error) {
             return { ok: false, error: error.message };
@@ -2933,7 +3115,10 @@ try {
           return await globalThis.JzBrowserAgentRuntime.requestCancel(message.jobId || null);
         }
         case 'addFavorite': {
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/favorites`, message.product, token, storeId) };
+          return {
+            ok: true,
+            data: await apiRequest('POST', `${backendUrl}/ozon/favorites`, message.product, token, storeId),
+          };
         }
         case 'getProductStats': {
           let sku = message.sku;
@@ -2946,9 +3131,7 @@ try {
           // 让佣金按类目 ID 精确分档解析(竞品无类目 id 时后端才退回俄文名兜底)。
           // 合批 body 只带 sku、且单卡无需合批,故带 catIds 时不进合批器;
           // 搜索页卡不带 catIds,照走合批(POST /product-data/batch)。
-          const catIds = Array.isArray(message.catIds)
-            ? message.catIds.filter((n) => Number.isFinite(n) && n > 0)
-            : [];
+          const catIds = Array.isArray(message.catIds) ? message.catIds.filter((n) => Number.isFinite(n) && n > 0) : [];
           if (catIds.length) {
             try {
               const r = await apiRequest(
@@ -2956,7 +3139,7 @@ try {
                 `${backendUrl}/ozon/product-data/${sku}?skipMarket=1&catIds=${catIds.join(',')}`,
                 null,
                 token,
-                storeId,
+                storeId
               );
               return { ok: true, data: r?.data ?? null };
             } catch {
@@ -2995,7 +3178,11 @@ try {
             if (!sellerTabs.length) {
               const _sc = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
               if (_sc[0]?.value) {
-                try { await ensureSellerTab(); } catch (e) { console.log('[getMarketStats] ensureSellerTab 失败:', e?.message || e); }
+                try {
+                  await ensureSellerTab();
+                } catch (e) {
+                  console.log('[getMarketStats] ensureSellerTab 失败:', e?.message || e);
+                }
                 sellerTabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
               }
             }
@@ -3022,9 +3209,7 @@ try {
             // 排序:把含 signin/registration/auth/login 的 tab 排到最后,优先试业务页,
             // 减少无谓注入(纯优化,不影响正确性 —— 反正都会遍历到能用的那个)。
             const isAuthUrl = (u) => /\/(registration|signin|auth|login)/i.test(u || '');
-            const orderedTabs = [...sellerTabs].sort(
-              (a, b) => (isAuthUrl(a.url) ? 1 : 0) - (isAuthUrl(b.url) ? 1 : 0),
-            );
+            const orderedTabs = [...sellerTabs].sort((a, b) => (isAuthUrl(a.url) ? 1 : 0) - (isAuthUrl(b.url) ? 1 : 0));
 
             const injectFetch = async (sku, period) => {
               try {
@@ -3036,7 +3221,7 @@ try {
                   method: 'POST',
                   credentials: 'include',
                   headers: {
-                    'accept': 'application/json',
+                    accept: 'application/json',
                     'content-type': 'application/json',
                     'x-o3-app-name': 'seller-ui',
                     'x-o3-company-id': companyId,
@@ -3045,7 +3230,8 @@ try {
                   body: JSON.stringify({
                     filter: { stock: 'any_stock', period: period || 'monthly', sku: String(sku) },
                     sort: { key: 'sum_gmv_desc' },
-                    limit: '1', offset: '0',
+                    limit: '1',
+                    offset: '0',
                   }),
                 });
                 if (!resp.ok) return { ok: false, reason: `http_${resp.status}` };
@@ -3092,9 +3278,7 @@ try {
             // 401/signin 重定向都归为"需登录";其它(权限/限流/网络抖动)不强提示,
             // 避免把临时性 fetch 失败误报成"需登录"骚扰用户。
             console.log('[getMarketStats] no usable seller tab:', reasons.join(', '));
-            const sessionLike = reasons.every((r) =>
-              /no_company_id|http_401|signin|login|redirect/i.test(r),
-            );
+            const sessionLike = reasons.every((r) => /no_company_id|http_401|signin|login|redirect/i.test(r));
             if (sessionLike) {
               return { ok: true, data: { __needSellerLogin: true, __reason: 'AUTH_REQUIRED' } };
             }
@@ -3124,13 +3308,11 @@ try {
               apiRequest('GET', `${backendUrl}/jidian/pricing`, null, token, storeId).catch(() => null),
             ]);
             const balance = balanceRes?.balance ?? 0;
-            const PRICE_IMAGE = typeof pricingRes?.AI_IMAGE === 'number' && pricingRes.AI_IMAGE > 0
-              ? pricingRes.AI_IMAGE
-              : 50;
+            const PRICE_IMAGE =
+              typeof pricingRes?.AI_IMAGE === 'number' && pricingRes.AI_IMAGE > 0 ? pricingRes.AI_IMAGE : 50;
             const pointAliasRaw = pricingRes?._meta?.pointAlias;
-            const pointLabel = typeof pointAliasRaw === 'string' && pointAliasRaw.trim()
-              ? pointAliasRaw.trim()
-              : '极点';
+            const pointLabel =
+              typeof pointAliasRaw === 'string' && pointAliasRaw.trim() ? pointAliasRaw.trim() : '极点';
             // 用 tier 判会员,不用 level。V1.1 新模板(Mini/Pro/Max)plan.level=null,
             // /membership/me 把它兜底成 "free",旧的 `level !== 'free'` 会把这三档付费会员
             // 误判为非会员致 AI 重写被禁用。tier 永远返回真实档位(兜底 FREE)。
@@ -3169,7 +3351,9 @@ try {
           // create/update/upload 三步在浏览器里跑。preferTabId 用发起页(www.ozon.ru)
           // 标签,走 fetchSellerPortal 的跨域快路免依赖 seller 专用标签。
           if (message.viaPortal) {
-            console.log(`[followSell] viaPortal: items=${message.items?.length}, url=${backendUrl}/ozon/products/prepare-bundle-items`);
+            console.log(
+              `[followSell] viaPortal: items=${message.items?.length}, url=${backendUrl}/ozon/products/prepare-bundle-items`
+            );
             const portalResult = await importViaPortal(message, token, targetStoreId, backendUrl, sender?.tab?.id);
             console.log('[followSell] portal response:', JSON.stringify(portalResult).slice(0, 200));
             return { ok: true, data: portalResult };
@@ -3177,8 +3361,17 @@ try {
           const bodySize = JSON.stringify(message).length;
           // Backend now enqueues and returns within ~1s; AI/watermark run in the worker.
           const importTimeout = 120_000;
-          console.log(`[followSell] Enqueueing import: items=${message.items?.length}, bodySize=${bodySize}, aiImage=${message.applyAiImage}, watermark=${message.applyWatermark}, url=${backendUrl}/ozon/products/import`);
-          const followSellResult = await apiRequest('POST', `${backendUrl}/ozon/products/import`, message, token, targetStoreId, importTimeout);
+          console.log(
+            `[followSell] Enqueueing import: items=${message.items?.length}, bodySize=${bodySize}, aiImage=${message.applyAiImage}, watermark=${message.applyWatermark}, url=${backendUrl}/ozon/products/import`
+          );
+          const followSellResult = await apiRequest(
+            'POST',
+            `${backendUrl}/ozon/products/import`,
+            message,
+            token,
+            targetStoreId,
+            importTimeout
+          );
           console.log('[followSell] Enqueue response:', JSON.stringify(followSellResult).slice(0, 200));
           return { ok: true, data: followSellResult };
         }
@@ -3201,7 +3394,9 @@ try {
                 errors = (errResp?.task_item_errors || []).map((e) => ({
                   offer_id: e.offer_id,
                   errors: (e.errors || []).map((x) => ({
-                    code: x.code, field: x.field, level: x.level,
+                    code: x.code,
+                    field: x.field,
+                    level: x.level,
                     message: (x.texts && x.texts.description) || x.code,
                   })),
                 }));
@@ -3216,7 +3411,17 @@ try {
             const done = !!task && size > 0 && processed >= size;
             return {
               ok: true,
-              data: { taskId: String(taskId), found: !!task, status: task?.status || null, size, processed, failed, warned, done, errors },
+              data: {
+                taskId: String(taskId),
+                found: !!task,
+                status: task?.status || null,
+                size,
+                processed,
+                failed,
+                warned,
+                done,
+                errors,
+              },
             };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
@@ -3239,7 +3444,16 @@ try {
         }
         case 'importBySku': {
           // items: [{ sku, offer_id, price, vat, currency_code }]
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/products/import-by-sku`, { items: message.items }, token, storeId) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/products/import-by-sku`,
+              { items: message.items },
+              token,
+              storeId
+            ),
+          };
         }
         case 'getWarehouses': {
           // backend `/ozon/warehouses` 已统一做 shape 归一化 + cache fallback
@@ -3249,38 +3463,98 @@ try {
         }
         case 'getCategoryTree': {
           const lang = message.language || 'DEFAULT';
-          return { ok: true, data: await apiRequest('GET', `${backendUrl}/ozon/categories/tree?language=${lang}`, null, token, storeId) };
+          return {
+            ok: true,
+            data: await apiRequest('GET', `${backendUrl}/ozon/categories/tree?language=${lang}`, null, token, storeId),
+          };
         }
         case 'getCategoryAttributes': {
           // 拉某 type(叶子类目)的属性 schema(含 is_required/dictionary_id)。
           // 只要 typeId,后端内部反查 description_category_id。
           const catStoreId = message.storeId || storeId;
           const tid = encodeURIComponent(message.typeId);
-          return { ok: true, data: await apiRequest('GET', `${backendUrl}/ozon/description-category/${tid}/attributes`, null, token, catStoreId) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'GET',
+              `${backendUrl}/ozon/description-category/${tid}/attributes`,
+              null,
+              token,
+              catStoreId
+            ),
+          };
         }
         case 'aiOptimizeForRating': {
           // AI 满分体检/属性填充。1688 向导用 modules:["attrs"](或含 title/description)
           // + currentAttrs:[] 让 AI 填必填属性。后端跑 LLM 候选 + 字典匹配。
           const aiStoreId = message.storeId || storeId;
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/ai/optimize-for-rating`, message.body || {}, token, aiStoreId, 120_000) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/ai/optimize-for-rating`,
+              message.body || {},
+              token,
+              aiStoreId,
+              120_000
+            ),
+          };
         }
         case 'suggestCategory': {
           // AI 类目建议：把 1688 标题+属性交给 LLM，输出末级类目中文名（向导本地 fuzzyMatch 落叶子）。
           const aiStoreId = message.storeId || storeId;
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/ai/suggest-category`, message.body || {}, token, aiStoreId, 60_000) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/ai/suggest-category`,
+              message.body || {},
+              token,
+              aiStoreId,
+              60_000
+            ),
+          };
         }
         case 'verifyCategory': {
           // 叶子复核：descent 选到叶子后,让 LLM 确认是否真适合该商品;不适合返回正确一级大类(向导据此重下钻)。
           const aiStoreId = message.storeId || storeId;
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/ai/verify-category`, message.body || {}, token, aiStoreId, 60_000) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/ai/verify-category`,
+              message.body || {},
+              token,
+              aiStoreId,
+              60_000
+            ),
+          };
         }
         case 'importStock': {
           // stocks: [{ offer_id, stock, warehouse_id }]
           const stockStoreId = message.storeId || storeId;
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/stocks/import`, { items: message.stocks }, token, stockStoreId) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/stocks/import`,
+              { items: message.stocks },
+              token,
+              stockStoreId
+            ),
+          };
         }
         case 'getImportStatus': {
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/products/import/status`, { task_id: message.taskId }, token, storeId) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/products/import/status`,
+              { task_id: message.taskId },
+              token,
+              storeId
+            ),
+          };
         }
         // ── 1688 AI 采集向导：采集箱条目的 AI 上架草稿（重写+类目智选+改图+定价）──
         // 三段式对应后端 collect-box/:id/ai-listing-draft 的 create→confirm→publish。
@@ -3290,17 +3564,46 @@ try {
           const aiStoreId = message.storeId || storeId;
           const id = encodeURIComponent(message.itemId);
           // AI 重写+改图在后端跑，给 120s 余量
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/collect-box/${id}/ai-listing-draft`, message.body || {}, token, aiStoreId, 120_000) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/collect-box/${id}/ai-listing-draft`,
+              message.body || {},
+              token,
+              aiStoreId,
+              120_000
+            ),
+          };
         }
         case 'aiListingDraftConfirm': {
           const aiStoreId = message.storeId || storeId;
           const id = encodeURIComponent(message.itemId);
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/collect-box/${id}/ai-listing-draft/confirm`, message.body || {}, token, aiStoreId) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/collect-box/${id}/ai-listing-draft/confirm`,
+              message.body || {},
+              token,
+              aiStoreId
+            ),
+          };
         }
         case 'aiListingDraftPublish': {
           const aiStoreId = message.storeId || storeId;
           const id = encodeURIComponent(message.itemId);
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/collect-box/${id}/ai-listing-draft/publish`, message.body || {}, token, aiStoreId, 120_000) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/collect-box/${id}/ai-listing-draft/publish`,
+              message.body || {},
+              token,
+              aiStoreId,
+              120_000
+            ),
+          };
         }
         case 'getFxRate': {
           // CNY→RUB 实时汇率（复用「极掌算价」的 FX 缓存 jz_calc_fx_rate_v1）。
@@ -3308,9 +3611,10 @@ try {
           // 缓存缺失/过期则即时刷新一次。
           try {
             const cached = await new Promise((r) =>
-              chrome.storage.local.get([FX_STORAGE_KEY], (d) => r(d?.[FX_STORAGE_KEY])));
+              chrome.storage.local.get([FX_STORAGE_KEY], (d) => r(d?.[FX_STORAGE_KEY]))
+            );
             let rate = cached?.rate;
-            const stale = !cached || (Date.now() - (cached.ts || 0) > FX_REFRESH_INTERVAL_MINUTES * 60 * 1000);
+            const stale = !cached || Date.now() - (cached.ts || 0) > FX_REFRESH_INTERVAL_MINUTES * 60 * 1000;
             if (!rate || stale) {
               const fresh = await refreshExchangeRate();
               if (fresh) rate = fresh;
@@ -3338,7 +3642,11 @@ try {
             const scCookies = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
             const companyId = scCookies[0]?.value || '';
             if (!companyId) {
-              return { ok: false, error: 'NO_COMPANY_ID', message: 'sc_company_id cookie 未找到，请先登录 seller.ozon.ru' };
+              return {
+                ok: false,
+                error: 'NO_COMPANY_ID',
+                message: 'sc_company_id cookie 未找到，请先登录 seller.ozon.ru',
+              };
             }
             const resp = await fetchSellerPortal(
               '/search',
@@ -3347,25 +3655,36 @@ try {
                 need_total: true,
                 filter: {
                   children_nodes: {
-                    children_nodes: [
-                      { input_leaf: { sku: { values: [String(sku)] } } },
-                    ],
+                    children_nodes: [{ input_leaf: { sku: { values: [String(sku)] } } }],
                     operator: 'AND',
                   },
                 },
                 pagination: { limit: '50' },
                 is_copy_allowed: false,
               },
-              { urlPrefix: '/api/v1', pageType: 'products', timeoutMs: 30000, allowOzonTab: true, preferTabId: senderTabId },
+              {
+                urlPrefix: '/api/v1',
+                pageType: 'products',
+                timeoutMs: 30000,
+                allowOzonTab: true,
+                preferTabId: senderTabId,
+              }
             );
             // /api/v1/search 返回字段是 `variants`，且 shape 跟 sv 不同
             // 必须 normalize 成 sv 兼容（含 attributes 数组）才能让下游 distillSource / resolveViaSearchVariantModel 直接用
-            const rawVariants = Array.isArray(resp?.variants) ? resp.variants
-              : Array.isArray(resp?.items) ? resp.items
-              : Array.isArray(resp?.products) ? resp.products
-              : Array.isArray(resp) ? resp : [];
+            const rawVariants = Array.isArray(resp?.variants)
+              ? resp.variants
+              : Array.isArray(resp?.items)
+                ? resp.items
+                : Array.isArray(resp?.products)
+                  ? resp.products
+                  : Array.isArray(resp)
+                    ? resp
+                    : [];
             const items = rawVariants.map(normalizeSearchVariantToSv);
-            console.log(`[searchProductBySku] sku=${sku} normalized ${items.length} variants, first.attrs=${items[0]?.attributes?.length || 0}, desc_cat=${items[0]?.description_category_id}`);
+            console.log(
+              `[searchProductBySku] sku=${sku} normalized ${items.length} variants, first.attrs=${items[0]?.attributes?.length || 0}, desc_cat=${items[0]?.description_category_id}`
+            );
             if (items.length === 0) {
               console.log(`[searchProductBySku] raw resp:`, JSON.stringify(resp).slice(0, 600));
             }
@@ -3411,7 +3730,14 @@ try {
           // 抓不到 / 失败 → ok:true + 空值(best-effort,不阻断上架)。
           try {
             const media = await fetchVariantMediaViaBuyerTab(message.url);
-            return { ok: true, data: { richContent: media.richContent || '', description: media.description || '', hashtags: Array.isArray(media.hashtags) ? media.hashtags : [] } };
+            return {
+              ok: true,
+              data: {
+                richContent: media.richContent || '',
+                description: media.description || '',
+                hashtags: Array.isArray(media.hashtags) ? media.hashtags : [],
+              },
+            };
           } catch (e) {
             return { ok: true, data: { richContent: '', description: '', hashtags: [] } };
           }
@@ -3452,7 +3778,15 @@ try {
               errorCode = 'NO_SELLER_TAB';
             } else if (msg.includes('Cannot access contents') || msg.includes('permission to access')) {
               errorCode = 'PERMISSION_DENIED';
-            } else if (status === 401 || code === 'AUTH_REDIRECT' || msg.includes('sc_company_id') || msg.includes('过期') || msg.includes('登录') || msg.includes('signin') || msg.includes('login')) {
+            } else if (
+              status === 401 ||
+              code === 'AUTH_REDIRECT' ||
+              msg.includes('sc_company_id') ||
+              msg.includes('过期') ||
+              msg.includes('登录') ||
+              msg.includes('signin') ||
+              msg.includes('login')
+            ) {
               errorCode = 'AUTH_REQUIRED';
             } else if (status === 403 || msg.includes('403')) {
               // 403 细分:Ozon 反爬挑战是 HTML 页;而 company_id 失效 / 会话过期 / 账号无权限的
@@ -3460,10 +3794,21 @@ try {
               // (实际该重登 / 重选店)。按 body 形状分流:仅当明确是结构化 JSON 权限/会话错时改判
               // AUTH_REQUIRED;HTML 挑战页 / 裸 403 无线索仍按反爬(保留熔断保护,宁可多冷却不要猛打)。
               const blob = `${code || ''} ${msg}`.toLowerCase();
-              const looksHtmlChallenge = /<html|<!doctype|just a moment|attention required|enable javascript|are you a robot|вы не робот|captcha|challenge|too many requests/.test(blob);
-              const looksStructuredApiError = /"code"|"message"|permission_?denied|company_?id|sc_company|unauthenticated|invalid.?token|session/.test(blob);
-              errorCode = (looksStructuredApiError && !looksHtmlChallenge) ? 'AUTH_REQUIRED' : 'ANTIBOT_BLOCKED';
-            } else if (msg.includes('超时') || msg.includes('timeout') || msg.includes('AbortError') || msg.includes('Timeout')) {
+              const looksHtmlChallenge =
+                /<html|<!doctype|just a moment|attention required|enable javascript|are you a robot|вы не робот|captcha|challenge|too many requests/.test(
+                  blob
+                );
+              const looksStructuredApiError =
+                /"code"|"message"|permission_?denied|company_?id|sc_company|unauthenticated|invalid.?token|session/.test(
+                  blob
+                );
+              errorCode = looksStructuredApiError && !looksHtmlChallenge ? 'AUTH_REQUIRED' : 'ANTIBOT_BLOCKED';
+            } else if (
+              msg.includes('超时') ||
+              msg.includes('timeout') ||
+              msg.includes('AbortError') ||
+              msg.includes('Timeout')
+            ) {
               errorCode = 'TIMEOUT';
             } else if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('network')) {
               errorCode = 'NETWORK_ERROR';
@@ -3481,7 +3826,11 @@ try {
               const proxied = await proxyCollectVariant(backendUrl, token, storeId, sku);
               if (proxied) return proxied;
             }
-            return { ok: false, error: 'AUTH_REQUIRED', message: 'sc_company_id cookie 未找到，请先登录 seller.ozon.ru' };
+            return {
+              ok: false,
+              error: 'AUTH_REQUIRED',
+              message: 'sc_company_id cookie 未找到，请先登录 seller.ozon.ru',
+            };
           }
 
           const MAX_RETRIES = 2;
@@ -3494,25 +3843,37 @@ try {
                   need_total: true,
                   filter: {
                     children_nodes: {
-                      children_nodes: [
-                        { input_leaf: { sku: { values: [String(sku)] } } },
-                      ],
+                      children_nodes: [{ input_leaf: { sku: { values: [String(sku)] } } }],
                       operator: 'AND',
                     },
                   },
                   pagination: { limit: '50' },
                   is_copy_allowed: false,
                 },
-                { urlPrefix: '/api/v1', pageType: 'products', timeoutMs: 30000, allowOzonTab: true, preferTabId: senderTabId },
+                {
+                  urlPrefix: '/api/v1',
+                  pageType: 'products',
+                  timeoutMs: 30000,
+                  allowOzonTab: true,
+                  preferTabId: senderTabId,
+                }
               );
-              const rawVariants = Array.isArray(resp?.variants) ? resp.variants
-                : Array.isArray(resp?.items) ? resp.items
-                : Array.isArray(resp?.products) ? resp.products
-                : Array.isArray(resp) ? resp : [];
+              const rawVariants = Array.isArray(resp?.variants)
+                ? resp.variants
+                : Array.isArray(resp?.items)
+                  ? resp.items
+                  : Array.isArray(resp?.products)
+                    ? resp.products
+                    : Array.isArray(resp)
+                      ? resp
+                      : [];
               const items = rawVariants.map(normalizeSearchVariantToSv).filter(Boolean);
               if (items.length === 0) {
                 if (attempt === 1) {
-                  console.log(`[searchVariants] sku=${sku} no variants from /search, raw:`, JSON.stringify(resp).slice(0, 400));
+                  console.log(
+                    `[searchVariants] sku=${sku} no variants from /search, raw:`,
+                    JSON.stringify(resp).slice(0, 400)
+                  );
                 }
                 return { ok: true, data: { items: [] } };
               }
@@ -3523,7 +3884,10 @@ try {
               try {
                 const variantId = items[0].variant_id;
                 if (variantId) {
-                  const bundleItem = await fetchBundleByVariantId(sku, variantId, companyId, { forceRefresh, preferTabId: senderTabId });
+                  const bundleItem = await fetchBundleByVariantId(sku, variantId, companyId, {
+                    forceRefresh,
+                    preferTabId: senderTabId,
+                  });
                   if (bundleItem) {
                     const existingKeys = new Set(items[0].attributes.map((a) => String(a.key)));
                     const physicalAttrs = [];
@@ -3557,10 +3921,12 @@ try {
                         }
                         const key = String(ba.attribute_id || '');
                         if (!key || existingKeys.has(key)) continue;
-                        const vals = Array.isArray(ba.values) ? ba.values.filter(v => v && v.value != null && v.value !== '') : [];
+                        const vals = Array.isArray(ba.values)
+                          ? ba.values.filter((v) => v && v.value != null && v.value !== '')
+                          : [];
                         if (vals.length === 0) continue;
                         if (vals.length > 1) {
-                          physicalAttrs.push({ key, collection: vals.map(v => String(v.value)) });
+                          physicalAttrs.push({ key, collection: vals.map((v) => String(v.value)) });
                         } else {
                           physicalAttrs.push({ key, value: String(vals[0].value) });
                         }
@@ -3572,7 +3938,9 @@ try {
                     }
                     if (bundleComplexAttrs.length > 0) {
                       items[0]._bundleComplexAttrs = bundleComplexAttrs;
-                      console.log(`[searchVariants] bundle complex attrs (视频/PDF): ${bundleComplexAttrs.length} for sku=${sku}`);
+                      console.log(
+                        `[searchVariants] bundle complex attrs (视频/PDF): ${bundleComplexAttrs.length} for sku=${sku}`
+                      );
                     }
                     // 完整 bundle item 也挂上(供高级 caller — 如 follow-sell 拿全 40-63 个 attr)
                     items[0]._bundleItem = bundleItem;
@@ -3595,7 +3963,7 @@ try {
               if (attempt >= MAX_RETRIES || !isRetryable) {
                 return { ok: false, error: errorCode, message: msg };
               }
-              await new Promise(r => setTimeout(r, 2000));
+              await new Promise((r) => setTimeout(r, 2000));
             }
           }
         }
@@ -3615,7 +3983,7 @@ try {
                 filter: { stock: 'any_stock', period, categories },
                 sort: { key: sortKey },
               },
-              { urlPrefix: '/api', pageType: 'analytics_platform', timeoutMs: 30000 },
+              { urlPrefix: '/api', pageType: 'analytics_platform', timeoutMs: 30000 }
             );
             const items = Array.isArray(data?.items) ? data.items : [];
             // 同步到后端按日存档（前端日常查后端快照）
@@ -3626,7 +3994,7 @@ try {
                   `${backendUrl}/ozon/selection/bestsellers/snapshot`,
                   { period, items },
                   token,
-                  storeId,
+                  storeId
                 );
               } catch (e) {
                 console.warn('[fetchBestsellers] backend ingest failed:', e?.message || e);
@@ -3663,14 +4031,12 @@ try {
                 `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(path)}`,
               ];
               const upgrade = (u) =>
-                typeof u === 'string' && u.includes('ir.ozone.ru')
-                  ? u.replace(/\/wc\d+\//, '/wc1000/')
-                  : u;
+                typeof u === 'string' && u.includes('ir.ozone.ru') ? u.replace(/\/wc\d+\//, '/wc1000/') : u;
               for (const url of endpoints) {
                 try {
                   const resp = await fetch(url, {
                     credentials: 'include',
-                    headers: { 'x-o3-app-name': 'dweb_client', 'accept': 'application/json' },
+                    headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
                   });
                   if (!resp.ok) continue;
                   const data = await resp.json();
@@ -3699,10 +4065,21 @@ try {
 
                   for (const k of Object.keys(states)) {
                     let v = states[k];
-                    if (typeof v === 'string') { try { v = JSON.parse(v); } catch { continue; } }
+                    if (typeof v === 'string') {
+                      try {
+                        v = JSON.parse(v);
+                      } catch {
+                        continue;
+                      }
+                    }
                     if (!v || typeof v !== 'object') continue;
                     const kLower = k.toLowerCase();
-                    if (!titleFromHeading && kLower.indexOf('heading') !== -1 && typeof v.title === 'string' && v.title.length > 3) {
+                    if (
+                      !titleFromHeading &&
+                      kLower.indexOf('heading') !== -1 &&
+                      typeof v.title === 'string' &&
+                      v.title.length > 3
+                    ) {
                       titleFromHeading = v.title.trim();
                     }
                     if (!name && typeof v.title === 'string' && v.title.length > 3) name = v.title.trim();
@@ -3710,12 +4087,14 @@ try {
                     if (!coverImage && typeof v.coverImage === 'string') coverImage = v.coverImage;
                     if (Array.isArray(v.images)) {
                       for (const img of v.images) {
-                        const u = typeof img === 'string' ? img : (img && (img.src || img.url || img.image));
+                        const u = typeof img === 'string' ? img : img && (img.src || img.url || img.image);
                         if (u) pushImg(u);
                       }
                     }
                     if (Array.isArray(v.breadcrumbs) && v.breadcrumbs.length > breadcrumbs.length) {
-                      breadcrumbs = v.breadcrumbs.map((b) => (b && (b.text || b.title || b.name)) || '').filter(Boolean);
+                      breadcrumbs = v.breadcrumbs
+                        .map((b) => (b && (b.text || b.title || b.name)) || '')
+                        .filter(Boolean);
                     }
                     if (!brand && typeof v.brand === 'string') brand = v.brand;
                     if (Array.isArray(v.characteristics)) {
@@ -3726,16 +4105,24 @@ try {
                         const num = m ? parseFloat(m[0]) : null;
                         if (!num) continue;
                         if (cName.indexOf('вес') !== -1 || cName.indexOf('weight') !== -1) {
-                          const isKg = cValRaw.toLowerCase().indexOf('кг') !== -1 || cValRaw.toLowerCase().indexOf('kg') !== -1;
+                          const isKg =
+                            cValRaw.toLowerCase().indexOf('кг') !== -1 || cValRaw.toLowerCase().indexOf('kg') !== -1;
                           weight = weight || (isKg ? Math.round(num * 1000) : Math.round(num));
-                        } else if (cName.indexOf('длина') !== -1 || cName.indexOf('length') !== -1 || cName.indexOf('depth') !== -1) {
-                          const isCm = cValRaw.toLowerCase().indexOf('см') !== -1 || cValRaw.toLowerCase().indexOf('cm') !== -1;
+                        } else if (
+                          cName.indexOf('длина') !== -1 ||
+                          cName.indexOf('length') !== -1 ||
+                          cName.indexOf('depth') !== -1
+                        ) {
+                          const isCm =
+                            cValRaw.toLowerCase().indexOf('см') !== -1 || cValRaw.toLowerCase().indexOf('cm') !== -1;
                           dims.depth = dims.depth || (isCm ? Math.round(num * 10) : Math.round(num));
                         } else if (cName.indexOf('ширина') !== -1 || cName.indexOf('width') !== -1) {
-                          const isCm = cValRaw.toLowerCase().indexOf('см') !== -1 || cValRaw.toLowerCase().indexOf('cm') !== -1;
+                          const isCm =
+                            cValRaw.toLowerCase().indexOf('см') !== -1 || cValRaw.toLowerCase().indexOf('cm') !== -1;
                           dims.width = dims.width || (isCm ? Math.round(num * 10) : Math.round(num));
                         } else if (cName.indexOf('высота') !== -1 || cName.indexOf('height') !== -1) {
-                          const isCm = cValRaw.toLowerCase().indexOf('см') !== -1 || cValRaw.toLowerCase().indexOf('cm') !== -1;
+                          const isCm =
+                            cValRaw.toLowerCase().indexOf('см') !== -1 || cValRaw.toLowerCase().indexOf('cm') !== -1;
                           dims.height = dims.height || (isCm ? Math.round(num * 10) : Math.round(num));
                         }
                       }
@@ -3775,16 +4162,11 @@ try {
 
             // 1) 优先：在已打开的 ozon.ru / ozon.kz tab 内 page-context 跑 fetch
             const ozonTabs = await chrome.tabs.query({
-              url: [
-                'https://www.ozon.ru/*',
-                'https://*.ozon.ru/*',
-                'https://ozon.kz/*',
-                'https://*.ozon.kz/*',
-              ],
+              url: ['https://www.ozon.ru/*', 'https://*.ozon.ru/*', 'https://ozon.kz/*', 'https://*.ozon.kz/*'],
             });
             // 排除 seller.* (反爬信任域不是这个;且 seller portal 走另一条路径)
             const target = ozonTabs.find(
-              (t) => t.url && /^https:\/\/(www\.ozon\.ru|ozon\.kz|www\.ozon\.kz)\//.test(t.url),
+              (t) => t.url && /^https:\/\/(www\.ozon\.ru|ozon\.kz|www\.ozon\.kz)\//.test(t.url)
             );
             if (target?.id) {
               try {
@@ -3806,7 +4188,8 @@ try {
               return {
                 ok: false,
                 error: 'NO_OZON_TAB',
-                message: '请先在浏览器打开任意 ozon.ru 或 ozon.kz 页面（保持后台打开即可），让扩展能借用页面上下文抓数据',
+                message:
+                  '请先在浏览器打开任意 ozon.ru 或 ozon.kz 页面（保持后台打开即可），让扩展能借用页面上下文抓数据',
               };
             }
 
@@ -3856,7 +4239,7 @@ try {
               `${backendUrl}/ozon/selection/category-mapping`,
               { name, leafIds, source: source || null },
               token,
-              storeId,
+              storeId
             );
             return { ok: true };
           } catch (e) {
@@ -3867,16 +4250,19 @@ try {
         case 'syncSellerCookies': {
           // Three-way query to cover all possible cookie storage locations
           const [byName, byUrl, byDomain] = await Promise.all([
-            chrome.cookies.getAll({ name: "sc_company_id" }),
-            chrome.cookies.getAll({ url: "https://seller.ozon.ru/app/dashboard/main" }),
-            chrome.cookies.getAll({ domain: ".ozon.ru" }),
+            chrome.cookies.getAll({ name: 'sc_company_id' }),
+            chrome.cookies.getAll({ url: 'https://seller.ozon.ru/app/dashboard/main' }),
+            chrome.cookies.getAll({ domain: '.ozon.ru' }),
           ]);
           // Deduplicate by name+domain
           const seen = new Set();
           const sellerCookies = [];
           for (const c of [...byUrl, ...byDomain]) {
             const key = `${c.name}@${c.domain}`;
-            if (!seen.has(key)) { seen.add(key); sellerCookies.push(c); }
+            if (!seen.has(key)) {
+              seen.add(key);
+              sellerCookies.push(c);
+            }
           }
 
           if (!sellerCookies.length && !byName.length) {
@@ -3886,16 +4272,19 @@ try {
           // Include byName results in cookie string if not already present
           for (const c of byName) {
             const key = `${c.name}@${c.domain}`;
-            if (!seen.has(key)) { seen.add(key); sellerCookies.push(c); }
+            if (!seen.has(key)) {
+              seen.add(key);
+              sellerCookies.push(c);
+            }
           }
 
-          const cookieStr = sellerCookies.map(c => `${c.name}=${c.value}`).join('; ');
+          const cookieStr = sellerCookies.map((c) => `${c.name}=${c.value}`).join('; ');
           // SECURITY: never log cookie *values* — they're bearer credentials for
           // seller.ozon.ru. Names + counts are enough to debug sync issues.
-          console.log('[syncSellerCookies] cookie names:', sellerCookies.map(c => c.name).join(', '));
+          console.log('[syncSellerCookies] cookie names:', sellerCookies.map((c) => c.name).join(', '));
           console.log('[syncSellerCookies] cookie count:', sellerCookies.length);
           // Prefer name-based query (most reliable), fallback to merged list
-          const companyIdCookie = byName[0] || sellerCookies.find(c => c.name === 'sc_company_id');
+          const companyIdCookie = byName[0] || sellerCookies.find((c) => c.name === 'sc_company_id');
           const scCompanyId = companyIdCookie?.value || null;
 
           if (!scCompanyId) {
@@ -3906,20 +4295,26 @@ try {
             return { ok: false, error: '请先选择店铺' };
           }
 
-          await apiRequest('PATCH', `${backendUrl}/auth/ozon-stores/${storeId}`, {
-            cookieAuth: { cookies: cookieStr, sc_company_id: scCompanyId, userAgent: navigator.userAgent },
-          }, token, storeId);
+          await apiRequest(
+            'PATCH',
+            `${backendUrl}/auth/ozon-stores/${storeId}`,
+            {
+              cookieAuth: { cookies: cookieStr, sc_company_id: scCompanyId, userAgent: navigator.userAgent },
+            },
+            token,
+            storeId
+          );
 
           return { ok: true, data: { sc_company_id: scCompanyId, cookie_count: sellerCookies.length } };
         }
         case 'checkSellerCookies': {
           const [byName, byUrl, byDomain] = await Promise.all([
-            chrome.cookies.getAll({ name: "sc_company_id" }),
-            chrome.cookies.getAll({ url: "https://seller.ozon.ru/app/dashboard/main" }),
-            chrome.cookies.getAll({ domain: ".ozon.ru" }),
+            chrome.cookies.getAll({ name: 'sc_company_id' }),
+            chrome.cookies.getAll({ url: 'https://seller.ozon.ru/app/dashboard/main' }),
+            chrome.cookies.getAll({ domain: '.ozon.ru' }),
           ]);
           const allCookies = [...byUrl, ...byDomain];
-          const companyId = byName[0] || allCookies.find(c => c.name === 'sc_company_id');
+          const companyId = byName[0] || allCookies.find((c) => c.name === 'sc_company_id');
           return {
             ok: true,
             data: {
@@ -3931,25 +4326,75 @@ try {
           };
         }
         case 'translateKeywords': {
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/extension/translate`, { texts: message.texts, from: message.from || 'ru', to: message.to || 'zh' }, token, storeId) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/extension/translate`,
+              { texts: message.texts, from: message.from || 'ru', to: message.to || 'zh' },
+              token,
+              storeId
+            ),
+          };
         }
         case 'aiOptimize': {
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/ozon/extension/ai-optimize`, { title: message.title, description: message.description, category: message.category, keywords: message.keywords }, token, storeId) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/extension/ai-optimize`,
+              {
+                title: message.title,
+                description: message.description,
+                category: message.category,
+                keywords: message.keywords,
+              },
+              token,
+              storeId
+            ),
+          };
         }
         case 'getRecommendations': {
           const type = message.type || 'hot';
           let sortBy = type === 'blue' ? 'views' : 'sold_count';
-          const resp = await apiRequest('GET', `${backendUrl}/ozon/products/cache?currentPage=1&pageSize=20&sortBy=${sortBy}&sortOrder=desc`, null, token, storeId);
+          const resp = await apiRequest(
+            'GET',
+            `${backendUrl}/ozon/products/cache?currentPage=1&pageSize=20&sortBy=${sortBy}&sortOrder=desc`,
+            null,
+            token,
+            storeId
+          );
           return { ok: true, data: { products: resp.data || [] } };
         }
         case 'getCollectCount': {
-          return { ok: true, data: await apiRequest('GET', `${backendUrl}/ozon/collect-box?currentPage=1&pageSize=1`, null, token, storeId) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'GET',
+              `${backendUrl}/ozon/collect-box?currentPage=1&pageSize=1`,
+              null,
+              token,
+              storeId
+            ),
+          };
         }
         case 'getProductStatusCounts': {
-          return { ok: true, data: await apiRequest('GET', `${backendUrl}/ozon/products/cache/status-counts`, null, token, storeId) };
+          return {
+            ok: true,
+            data: await apiRequest('GET', `${backendUrl}/ozon/products/cache/status-counts`, null, token, storeId),
+          };
         }
         case 'getFavCount': {
-          return { ok: true, data: await apiRequest('GET', `${backendUrl}/ozon/favorites?currentPage=1&pageSize=1`, null, token, storeId) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'GET',
+              `${backendUrl}/ozon/favorites?currentPage=1&pageSize=1`,
+              null,
+              token,
+              storeId
+            ),
+          };
         }
         case 'getStores': {
           return { ok: true, data: await apiRequest('GET', `${backendUrl}/auth/ozon-stores`, null, token, storeId) };
@@ -3958,7 +4403,16 @@ try {
           return { ok: true, data: await apiRequest('GET', `${backendUrl}/auth/captcha`, null, null, null) };
         }
         case 'sendSmsCode': {
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/auth/send-code`, { phoneNumber: message.phoneNumber, captchaId: message.captchaId, captchaCode: message.captchaCode }, null, null) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/auth/send-code`,
+              { phoneNumber: message.phoneNumber, captchaId: message.captchaId, captchaCode: message.captchaCode },
+              null,
+              null
+            ),
+          };
         }
         case 'setMachineFingerprint': {
           // content script / popup / sync-auth 启动时主动推 v3 fingerprint 给 SW,
@@ -3993,15 +4447,62 @@ try {
           // store.jizhangerp.com)随 body 显式声明登录门户,后端优先用它解析
           // distributorId。dev 源码加载无 brand 注入 → undefined → 后端走原 host
           // 链路,行为不变。
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/auth/sms/verify`, { phoneNumber: message.phoneNumber, code: message.code, deviceFingerprint: fp, platform: 'extension', portalHost: jzBrandPortalHost() }, null, null) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/auth/sms/verify`,
+              {
+                phoneNumber: message.phoneNumber,
+                code: message.code,
+                deviceFingerprint: fp,
+                platform: 'extension',
+                portalHost: jzBrandPortalHost(),
+              },
+              null,
+              null
+            ),
+          };
         }
         case 'loginPassword': {
           const fp = await getExtensionFingerprint(message.deviceFingerprint);
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/auth/login-password`, { phoneNumber: message.phoneNumber, password: message.password, captchaId: message.captchaId, captchaCode: message.captchaCode, deviceFingerprint: fp, platform: 'extension', portalHost: jzBrandPortalHost() }, null, null) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/auth/login-password`,
+              {
+                phoneNumber: message.phoneNumber,
+                password: message.password,
+                captchaId: message.captchaId,
+                captchaCode: message.captchaCode,
+                deviceFingerprint: fp,
+                platform: 'extension',
+                portalHost: jzBrandPortalHost(),
+              },
+              null,
+              null
+            ),
+          };
         }
         case 'login': {
           const fp = await getExtensionFingerprint(message.deviceFingerprint);
-          return { ok: true, data: await apiRequest('POST', `${backendUrl}/auth/login-password`, { phoneNumber: message.phone, password: message.password, deviceFingerprint: fp, platform: 'extension', portalHost: jzBrandPortalHost() }, null, null) };
+          return {
+            ok: true,
+            data: await apiRequest(
+              'POST',
+              `${backendUrl}/auth/login-password`,
+              {
+                phoneNumber: message.phone,
+                password: message.password,
+                deviceFingerprint: fp,
+                platform: 'extension',
+                portalHost: jzBrandPortalHost(),
+              },
+              null,
+              null
+            ),
+          };
         }
         case 'getUpdateInfo': {
           const stored = await getStorage([
@@ -4013,7 +4514,8 @@ try {
           const downloadUrl = stored[STORAGE_KEYS.latestDownloadUrl];
           const dismissedVersion = stored[STORAGE_KEYS.updateDismissedVersion];
           const currentVersion = getCurrentVersion();
-          const hasUpdate = latestVersion && compareVersions(latestVersion, currentVersion) > 0 && latestVersion !== dismissedVersion;
+          const hasUpdate =
+            latestVersion && compareVersions(latestVersion, currentVersion) > 0 && latestVersion !== dismissedVersion;
           return { ok: true, data: { hasUpdate, currentVersion, latestVersion, downloadUrl } };
         }
         case 'checkUpdate': {
@@ -4023,7 +4525,10 @@ try {
           const newVer = info[STORAGE_KEYS.latestVersion];
           const dlUrl = info[STORAGE_KEYS.latestDownloadUrl];
           const isNew = newVer && compareVersions(newVer, curVer) > 0;
-          return { ok: true, data: { hasUpdate: isNew, currentVersion: curVer, latestVersion: newVer, downloadUrl: dlUrl } };
+          return {
+            ok: true,
+            data: { hasUpdate: isNew, currentVersion: curVer, latestVersion: newVer, downloadUrl: dlUrl },
+          };
         }
         case 'dismissUpdate': {
           const verToDismiss = message.version;
@@ -4080,8 +4585,8 @@ try {
       new Promise((_, reject) =>
         setTimeout(
           () => reject(new Error(`SW handler ${message?.action} 总超时 (${HANDLER_TOTAL_TIMEOUT_MS / 1000}s)`)),
-          HANDLER_TOTAL_TIMEOUT_MS,
-        ),
+          HANDLER_TOTAL_TIMEOUT_MS
+        )
       ),
     ]);
 

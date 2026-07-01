@@ -104,9 +104,7 @@
 
     let registered;
     try {
-      registered = await globalThis.JzBackendClient.registerBrowserAgent(
-        await devicePayload(),
-      );
+      registered = await globalThis.JzBackendClient.registerBrowserAgent(await devicePayload());
     } catch (e) {
       // 4xx(典型:无 settings.write 权限 403 / 登录态失效 401)→ 落冷却标记,
       // tick 在冷却期内完全静默,杜绝每分钟重试的热循环。5xx/网络错不冷却,
@@ -191,11 +189,7 @@
       const manifestVersion = String(chrome.runtime.getManifest()?.version || '');
       const cached = (await getStorage([STORAGE_KEY]))[STORAGE_KEY] || {};
       // 注册曾被 401/403 拒(无权限/登录态失效)→ 冷却期内零请求静默退出
-      if (
-        !cached.deviceId &&
-        cached.registerBlockedUntil &&
-        Date.now() < cached.registerBlockedUntil
-      ) {
+      if (!cached.deviceId && cached.registerBlockedUntil && Date.now() < cached.registerBlockedUntil) {
         return;
       }
       // 能力指纹漂移(典型:用户刚登入/登出 seller.ozon.ru)→ 必须先把新能力位
@@ -203,11 +197,7 @@
       const capsKey = capsKeyOf(await currentCapabilities());
       let deviceId;
       let next;
-      if (
-        cached.deviceId &&
-        cached.heartbeatVersion === manifestVersion &&
-        cached.capsKey === capsKey
-      ) {
+      if (cached.deviceId && cached.heartbeatVersion === manifestVersion && cached.capsKey === capsKey) {
         deviceId = cached.deviceId;
         activeDeviceId = deviceId;
         try {

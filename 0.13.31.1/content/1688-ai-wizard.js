@@ -27,30 +27,30 @@
 
   // ─────────────────────────────────────────────────────────── state ──
   const W = {
-    raw: null,                 // buildPayload() 产出的 1688 商品
-    items: [],                 // 商品列表行
+    raw: null, // buildPayload() 产出的 1688 商品
+    items: [], // 商品列表行
     stores: [],
     warehouses: [],
     opts: {
-      directListing: true,     // 是否直上
-      imageTranslate: false,   // 图片翻译(映射后端 applyPoster 改图)
+      directListing: true, // 是否直上
+      imageTranslate: false, // 图片翻译(映射后端 applyPoster 改图)
       offerPrefix: 'DPWL-I',
       storeId: '',
-      storeCurrency: 'RUB',    // 选中店铺的绑定货币(companyCurrency)
+      storeCurrency: 'RUB', // 选中店铺的绑定货币(companyCurrency)
       warehouseId: '',
-      targetMargin: 30,        // 目标毛利率%
+      targetMargin: 30, // 目标毛利率%
     },
-    fxRate: null,              // CNY→RUB 实时汇率(getFxRate)
-    catTree: null,             // Ozon 类目树(getCategoryTree)
-    catPath: [],               // 已逐级选中的类目节点链
-    category: null,            // 选定叶子类目 {typeId, descCatId, name}
-    catAuto: '',               // AI 自动匹配状态：''/matching/done:<名>/失败提示
-    attrsSchema: [],           // 该类目的属性 schema(getCategoryAttributes)
-    reqAttrs: [],              // 必填属性(tier1) [{id,name,dict,value,dictValue,dictValueId,aiFilled}]
-    ratingAttrs: [],           // 内容评级加分属性(tier2，AI 填充后动态出现)
-    attrFilling: false,        // AI 填充中
-    step: 2,                   // 1获取 2选择 3AI 4完成
-    view: 'workbench',         // workbench | images | settings
+    fxRate: null, // CNY→RUB 实时汇率(getFxRate)
+    catTree: null, // Ozon 类目树(getCategoryTree)
+    catPath: [], // 已逐级选中的类目节点链
+    category: null, // 选定叶子类目 {typeId, descCatId, name}
+    catAuto: '', // AI 自动匹配状态：''/matching/done:<名>/失败提示
+    attrsSchema: [], // 该类目的属性 schema(getCategoryAttributes)
+    reqAttrs: [], // 必填属性(tier1) [{id,name,dict,value,dictValue,dictValueId,aiFilled}]
+    ratingAttrs: [], // 内容评级加分属性(tier2，AI 填充后动态出现)
+    attrFilling: false, // AI 填充中
+    step: 2, // 1获取 2选择 3AI 4完成
+    view: 'workbench', // workbench | images | settings
     aiLog: [],
     running: false,
     aiEngine: 'AI 智能体',
@@ -68,7 +68,9 @@
     const rate = W.fxRate || 0;
     return { price: round2(cost * rate * (1 + m / 100)), currency: 'RUB', costCny: cost, rate };
   }
-  function round2(n) { return Math.round(n * 100) / 100; }
+  function round2(n) {
+    return Math.round(n * 100) / 100;
+  }
 
   // ───────────────────────────────────────────────────────── helpers ──
   function bg(message) {
@@ -88,9 +90,17 @@
   }
 
   function esc(s) {
-    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]));
+    return String(s ?? '').replace(
+      /[&<>"']/g,
+      (c) =>
+        ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;',
+        })[c]
+    );
   }
 
   function toast(text, kind = 'info') {
@@ -203,9 +213,11 @@
   // ─────────────────────────────────────────────────────── icons ──
   const ICONS = {
     home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8M5 10v10h14V10"/></svg>',
-    image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.6"/><path d="M21 15l-5-5L5 21"/></svg>',
+    image:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.6"/><path d="M21 15l-5-5L5 21"/></svg>',
     gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.4-2.6H10l-.4 2.6a7 7 0 0 0-1.7 1l-2.3-1-2 3.4L3.6 11a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.4 2.6h4l.4-2.6a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5a7 7 0 0 0 .1-1Z"/></svg>',
-    launch: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.2c-.4.5 0 1.3.7 1.3H10l-1.1 7.1c-.1.8.9 1.2 1.4.6L20 11c.4-.5 0-1.3-.7-1.3H14l1.1-7.1c.1-.8-.9-1.2-1.4-.6z"/></svg>',
+    launch:
+      '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.5 13.2c-.4.5 0 1.3.7 1.3H10l-1.1 7.1c-.1.8.9 1.2 1.4.6L20 11c.4-.5 0-1.3-.7-1.3H14l1.1-7.1c.1-.8-.9-1.2-1.4-.6z"/></svg>',
   };
 
   // ───────────────────────────────────────────────────── render ──
@@ -225,21 +237,31 @@
     // 商品列表：一个 1688 offer = 一个 Ozon 商品(多变体)。MVP 先作为一行，
     // 采购价取采集到的价格，售价默认同采购价(AI 会给建议)。
     const price = fmtMoney(W.raw.price) || fmtMoney((W.raw.priceRange || '').split('~')[0]) || '';
-    W.items = [{
-      checked: true,
-      image: (W.raw.mainImages || [])[0] || '',
-      skuName: W.raw.title || '采集商品',
-      buyPrice: price,
-      salePrice: price,
-    }];
+    W.items = [
+      {
+        checked: true,
+        image: (W.raw.mainImages || [])[0] || '',
+        skuName: W.raw.title || '采集商品',
+        buyPrice: price,
+        salePrice: price,
+      },
+    ];
     W.opts.storeId = '';
     W.opts.warehouseId = '';
-    W.catPath = []; W.category = null; W.attrsSchema = []; W.reqAttrs = []; W.ratingAttrs = []; W.attrFilling = false; W.catAuto = '';
+    W.catPath = [];
+    W.category = null;
+    W.attrsSchema = [];
+    W.reqAttrs = [];
+    W.ratingAttrs = [];
+    W.attrFilling = false;
+    W.catAuto = '';
 
     let mask = document.getElementById('jzc-aiw-mask');
     if (!mask) {
       mask = el(`<div id="jzc-aiw-mask"><div id="jzc-aiw"></div></div>`);
-      mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+      mask.addEventListener('click', (e) => {
+        if (e.target === mask) close();
+      });
       document.body.appendChild(mask);
     }
     mask.style.display = 'flex';
@@ -271,14 +293,20 @@
             <div class="aiw-h1">${W.view === 'images' ? '商品图片中心' : W.view === 'settings' ? '系统设置' : 'AI 智能工作台'}</div>
             <div class="aiw-sub">${W.view === 'settings' ? '查看 AI 引擎与处理参数' : W.view === 'images' ? '采集到的图片按 主图/轮播/详情 归类' : '采集商品 → AI 智能体输出 → 一键上架'}</div>
           </div>
-          ${W.view === 'workbench'
-            ? `<button class="aiw-btn primary lg" id="aiw-launch" ${W.running ? 'disabled' : ''}>${ICONS.launch} ${W.running ? '处理中…' : '点击启动'}</button>`
-            : `<button class="aiw-x" id="aiw-close2">×</button>`}
+          ${
+            W.view === 'workbench'
+              ? `<button class="aiw-btn primary lg" id="aiw-launch" ${W.running ? 'disabled' : ''}>${ICONS.launch} ${W.running ? '处理中…' : '点击启动'}</button>`
+              : `<button class="aiw-x" id="aiw-close2">×</button>`
+          }
         </div>
         <div class="aiw-body" id="aiw-body"></div>
       </div>`;
     root.querySelectorAll('.aiw-nav').forEach((n) =>
-      n.addEventListener('click', () => { W.view = n.dataset.view; render(); }));
+      n.addEventListener('click', () => {
+        W.view = n.dataset.view;
+        render();
+      })
+    );
     const launch = root.querySelector('#aiw-launch');
     if (launch) launch.addEventListener('click', runPipeline);
     const c2 = root.querySelector('#aiw-close2');
@@ -343,20 +371,27 @@
 
       ${ratingCardHtml()}
 
-      ${W.aiLog.length || W.running ? `
+      ${
+        W.aiLog.length || W.running
+          ? `
       <div class="aiw-card">
         <div class="aiw-card-h"><div class="aiw-card-t">AI 输出日志</div><span class="aiw-chip">${esc(W.aiEngine)}</span></div>
         <div class="aiw-log" id="aiw-log">${W.aiLog.map(esc).join('\n') || '等待启动…'}</div>
-      </div>` : ''}
+      </div>`
+          : ''
+      }
     `;
     bindWorkbench(body);
   }
 
   function catAutoBadge() {
     if (!W.catAuto) return '';
-    if (W.catAuto === 'matching') return ' <span style="color:#2168ff;font-weight:700;font-size:12px">· AI 匹配中…</span>';
-    if (W.catAuto.indexOf('done:') === 0) return ` <span style="color:#16a34a;font-weight:700;font-size:12px">· AI 已选「${esc(W.catAuto.slice(5))}」✓</span>`;
-    if (W.catAuto.indexOf('local:') === 0) return ` <span style="color:#d97706;font-weight:700;font-size:12px">· 本地预选「${esc(W.catAuto.slice(6))}」(后端 AI 未启用，请核对)</span>`;
+    if (W.catAuto === 'matching')
+      return ' <span style="color:#2168ff;font-weight:700;font-size:12px">· AI 匹配中…</span>';
+    if (W.catAuto.indexOf('done:') === 0)
+      return ` <span style="color:#16a34a;font-weight:700;font-size:12px">· AI 已选「${esc(W.catAuto.slice(5))}」✓</span>`;
+    if (W.catAuto.indexOf('local:') === 0)
+      return ` <span style="color:#d97706;font-weight:700;font-size:12px">· 本地预选「${esc(W.catAuto.slice(6))}」(后端 AI 未启用，请核对)</span>`;
     return ` <span style="color:#e5484d;font-weight:700;font-size:12px">· ${esc(W.catAuto)}</span>`;
   }
 
@@ -366,24 +401,28 @@
       return `<div class="aiw-card"><div class="aiw-card-t">必填属性</div>
         <div class="aiw-note" style="margin-top:8px">请先在上方选择产品类目，选到末级后自动拉取该类目的必填属性。</div></div>`;
     }
-    const rows = W.reqAttrs.map((a, i) => {
-      const valCell = a.dict
-        ? `<input type="text" class="aiw-attr-val" data-i="${i}" value="${esc(a.dictValue || a.value || '')}" placeholder="AI 填充或手填">`
-        : `<input type="text" class="aiw-attr-val" data-i="${i}" value="${esc(a.value || '')}" placeholder="AI 填充或手填">`;
-      const badge = a.aiFilled ? `<span class="aiw-chip" style="background:#e7f6ec;color:#16a34a">AI</span>` : '';
-      return `<tr>
+    const rows = W.reqAttrs
+      .map((a, i) => {
+        const valCell = a.dict
+          ? `<input type="text" class="aiw-attr-val" data-i="${i}" value="${esc(a.dictValue || a.value || '')}" placeholder="AI 填充或手填">`
+          : `<input type="text" class="aiw-attr-val" data-i="${i}" value="${esc(a.value || '')}" placeholder="AI 填充或手填">`;
+        const badge = a.aiFilled ? `<span class="aiw-chip" style="background:#e7f6ec;color:#16a34a">AI</span>` : '';
+        return `<tr>
         <td style="text-align:left;padding-left:14px">${esc(a.name)}${a.dict ? ' <span style="color:#7686a3;font-size:12px">[字典]</span>' : ''}</td>
         <td style="width:280px">${valCell}</td>
         <td style="width:60px">${badge}</td></tr>`;
-    }).join('');
+      })
+      .join('');
     return `<div class="aiw-card">
       <div class="aiw-card-h">
         <div class="aiw-card-t">必填属性 <span style="color:#7686a3;font-size:13px;font-weight:400">${esc(W.category.name)}（${W.reqAttrs.length} 项）</span></div>
         <button class="aiw-btn primary" id="aiw-fill-attrs" ${W.attrFilling ? 'disabled' : ''}>${W.attrFilling ? 'AI 填充中…' : 'AI 填充必填属性'}</button>
       </div>
-      ${W.reqAttrs.length
-        ? `<table><thead><tr><th style="text-align:left;padding-left:14px">属性名</th><th>值</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-        : `<div class="aiw-note">该类目没有必填属性，或正在加载…</div>`}
+      ${
+        W.reqAttrs.length
+          ? `<table><thead><tr><th style="text-align:left;padding-left:14px">属性名</th><th>值</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+          : `<div class="aiw-note">该类目没有必填属性，或正在加载…</div>`
+      }
       <div class="aiw-note">字典型属性需匹配到 Ozon 字典值才能上架；AI 填充会自动匹配，匹配不到的请手动改。</div>
     </div>`;
   }
@@ -392,32 +431,38 @@
   // 和必填属性共用一次 aiFillAttrs 调用（AI 一次返回 tier1+tier2）。
   function ratingCardHtml() {
     if (!W.category) return '';
-    const rows = W.ratingAttrs.map((a, i) => {
-      const v = a.dict ? (a.dictValue || '') : (a.value || '');
-      return `<tr>
+    const rows = W.ratingAttrs
+      .map((a, i) => {
+        const v = a.dict ? a.dictValue || '' : a.value || '';
+        return `<tr>
         <td style="text-align:left;padding-left:14px">${esc(a.name)}${a.dict ? ' <span style="color:#7686a3;font-size:12px">[字典]</span>' : ''}</td>
         <td style="width:280px"><input type="text" class="aiw-rating-val" data-i="${i}" value="${esc(v)}" placeholder="可编辑或删空"></td>
         <td style="width:78px"><span class="aiw-chip" style="background:#fef3e7;color:#d97706">评分</span></td></tr>`;
-    }).join('');
+      })
+      .join('');
     return `<div class="aiw-card">
       <div class="aiw-card-h">
         <div class="aiw-card-t">内容评级属性 <span style="color:#7686a3;font-size:13px;font-weight:400">非必填，填了提升 Ozon 内容评分${W.ratingAttrs.length ? `（${W.ratingAttrs.length} 项）` : ''}</span></div>
         <button class="aiw-btn ghost" id="aiw-fill-rating" ${W.attrFilling ? 'disabled' : ''}>${W.attrFilling ? 'AI 填充中…' : 'AI 填充内容评级属性'}</button>
       </div>
-      ${W.ratingAttrs.length
-        ? `<table><thead><tr><th style="text-align:left;padding-left:14px">属性名</th><th>值</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-        : `<div class="aiw-note">点「AI 填充内容评级属性」：AI 会挑出当前类目下非必填、但能拉高内容评分的属性并填好（与必填属性一次填完）。</div>`}
+      ${
+        W.ratingAttrs.length
+          ? `<table><thead><tr><th style="text-align:left;padding-left:14px">属性名</th><th>值</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+          : `<div class="aiw-note">点「AI 填充内容评级属性」：AI 会挑出当前类目下非必填、但能拉高内容评分的属性并填好（与必填属性一次填完）。</div>`
+      }
     </div>`;
   }
 
   function stepsHtml() {
     const steps = ['获取数据', '等待选择数据', 'AI智能体输出', '完成'];
-    return `<div class="aiw-steps">${steps.map((t, i) => {
-      const n = i + 1;
-      const cls = n < W.step ? 'done' : n === W.step ? 'on' : '';
-      const dot = n < W.step ? '✓' : n;
-      return `<div class="aiw-step ${cls}"><span class="aiw-dot">${dot}</span><span>${t}</span></div>${i < 3 ? '<span class="aiw-line"></span>' : ''}`;
-    }).join('')}</div>`;
+    return `<div class="aiw-steps">${steps
+      .map((t, i) => {
+        const n = i + 1;
+        const cls = n < W.step ? 'done' : n === W.step ? 'on' : '';
+        const dot = n < W.step ? '✓' : n;
+        return `<div class="aiw-step ${cls}"><span class="aiw-dot">${dot}</span><span>${t}</span></div>${i < 3 ? '<span class="aiw-line"></span>' : ''}`;
+      })
+      .join('')}</div>`;
   }
 
   function rowHtml(it, i) {
@@ -437,60 +482,85 @@
         const k = sw.dataset.opt;
         W.opts[k] = !W.opts[k];
         sw.classList.toggle('on', W.opts[k]);
-      }));
+      })
+    );
     const prefix = body.querySelector('#aiw-prefix');
-    if (prefix) prefix.addEventListener('input', () => {
-      // 货号只允许 Ozon 接受的字符集（A-Za-z0-9_-./），过滤掉中文/空格/西里尔，
-      // 否则整批 import 被后端 422 拒（offer_id 正则不通过）。
-      const cleaned = prefix.value.replace(/[^A-Za-z0-9_\-./]/g, '');
-      if (cleaned !== prefix.value) prefix.value = cleaned;
-      W.opts.offerPrefix = cleaned.trim();
-    });
-    renderCatCascade();                                   // 类目逐级下拉
+    if (prefix)
+      prefix.addEventListener('input', () => {
+        // 货号只允许 Ozon 接受的字符集（A-Za-z0-9_-./），过滤掉中文/空格/西里尔，
+        // 否则整批 import 被后端 422 拒（offer_id 正则不通过）。
+        const cleaned = prefix.value.replace(/[^A-Za-z0-9_\-./]/g, '');
+        if (cleaned !== prefix.value) prefix.value = cleaned;
+        W.opts.offerPrefix = cleaned.trim();
+      });
+    renderCatCascade(); // 类目逐级下拉
     body.querySelectorAll('.aiw-attr-val').forEach((inp) =>
       inp.addEventListener('input', () => {
-        const a = W.reqAttrs[+inp.dataset.i]; if (!a) return;
-        if (a.dict) { a.dictValue = inp.value; a.dictValueId = ''; a.aiFilled = false; }  // 手改字典值清掉 id，提交时后端兜底匹配
+        const a = W.reqAttrs[+inp.dataset.i];
+        if (!a) return;
+        if (a.dict) {
+          a.dictValue = inp.value;
+          a.dictValueId = '';
+          a.aiFilled = false;
+        } // 手改字典值清掉 id，提交时后端兜底匹配
         else a.value = inp.value;
-      }));
+      })
+    );
     const fillBtn = body.querySelector('#aiw-fill-attrs');
     if (fillBtn) fillBtn.addEventListener('click', aiFillAttrs);
     body.querySelectorAll('.aiw-rating-val').forEach((inp) =>
       inp.addEventListener('input', () => {
-        const a = W.ratingAttrs[+inp.dataset.i]; if (!a) return;
-        if (a.dict) { a.dictValue = inp.value; a.dictValueId = ''; }  // 手改字典值清 id，提交后端兜底匹配
+        const a = W.ratingAttrs[+inp.dataset.i];
+        if (!a) return;
+        if (a.dict) {
+          a.dictValue = inp.value;
+          a.dictValueId = '';
+        } // 手改字典值清 id，提交后端兜底匹配
         else a.value = inp.value;
-      }));
+      })
+    );
     const fillRating = body.querySelector('#aiw-fill-rating');
     if (fillRating) fillRating.addEventListener('click', aiFillAttrs);
     const store = body.querySelector('#aiw-store');
-    if (store) store.addEventListener('change', () => {
-      W.opts.storeId = store.value;
-      const sel = W.stores.find((s) => String(s.id) === String(store.value));
-      W.opts.storeCurrency = (sel && sel.currency) || 'RUB';   // 按店铺绑定货币定价
-      loadWarehouses();
-    });
+    if (store)
+      store.addEventListener('change', () => {
+        W.opts.storeId = store.value;
+        const sel = W.stores.find((s) => String(s.id) === String(store.value));
+        W.opts.storeCurrency = (sel && sel.currency) || 'RUB'; // 按店铺绑定货币定价
+        loadWarehouses();
+      });
     const wh = body.querySelector('#aiw-wh');
     if (wh) wh.addEventListener('change', () => (W.opts.warehouseId = wh.value));
     fillStoreSelect();
     fillWarehouseSelect();
 
     const ckAll = body.querySelector('#aiw-ck-all');
-    if (ckAll) ckAll.addEventListener('change', () => { W.items.forEach((it) => (it.checked = ckAll.checked)); renderBody(); });
-    body.querySelectorAll('.aiw-ck-row').forEach((ck) =>
-      ck.addEventListener('change', () => (W.items[+ck.dataset.i].checked = ck.checked)));
-    body.querySelectorAll('.aiw-price').forEach((inp) =>
-      inp.addEventListener('input', () => (W.items[+inp.dataset.i].salePrice = inp.value)));
+    if (ckAll)
+      ckAll.addEventListener('change', () => {
+        W.items.forEach((it) => (it.checked = ckAll.checked));
+        renderBody();
+      });
+    body
+      .querySelectorAll('.aiw-ck-row')
+      .forEach((ck) => ck.addEventListener('change', () => (W.items[+ck.dataset.i].checked = ck.checked)));
+    body
+      .querySelectorAll('.aiw-price')
+      .forEach((inp) => inp.addEventListener('input', () => (W.items[+inp.dataset.i].salePrice = inp.value)));
     body.querySelectorAll('.aiw-del').forEach((d) =>
-      d.addEventListener('click', () => { W.items.splice(+d.dataset.i, 1); renderBody(); }));
+      d.addEventListener('click', () => {
+        W.items.splice(+d.dataset.i, 1);
+        renderBody();
+      })
+    );
     const bp = body.querySelector('#aiw-batch-price');
-    if (bp) bp.addEventListener('click', () => {
-      const v = prompt('批量设置售价（¥）：', W.items[0]?.salePrice || '');
-      if (v == null) return;
-      const m = fmtMoney(v);
-      W.items.forEach((it) => (it.salePrice = m));
-      renderBody();
-    });
+    if (bp)
+      bp.addEventListener('click', () => {
+        const v = prompt('批量设置售价（¥）：', W.items[0]?.salePrice || '');
+        if (v == null) return;
+        const m = fmtMoney(v);
+        W.items.forEach((it) => (it.salePrice = m));
+        renderBody();
+      });
   }
 
   // ───────────────────────────────── 类目级联 + 必填属性 ──
@@ -506,7 +576,10 @@
   function renderCatCascade() {
     const box = document.getElementById('aiw-cat-cascade');
     if (!box) return;
-    if (!W.catTree) { box.innerHTML = '<span style="color:#7686a3;font-size:13px">类目树加载中…</span>'; return; }
+    if (!W.catTree) {
+      box.innerHTML = '<span style="color:#7686a3;font-size:13px">类目树加载中…</span>';
+      return;
+    }
     box.innerHTML = '';
     // 已选每级 + 下一级待选下拉
     const levels = W.catPath.length + 1;
@@ -516,17 +589,25 @@
       const chosen = W.catPath[lv];
       const sel = document.createElement('select');
       sel.style.cssText = 'min-width:150px;flex:0 0 auto';
-      sel.innerHTML = `<option value="">请选择</option>` + opts.map((n, i) =>
-        `<option value="${i}" ${chosen && chosen.title === n.title ? 'selected' : ''}>${esc(n.title)}</option>`).join('');
+      sel.innerHTML =
+        `<option value="">请选择</option>` +
+        opts
+          .map(
+            (n, i) =>
+              `<option value="${i}" ${chosen && chosen.title === n.title ? 'selected' : ''}>${esc(n.title)}</option>`
+          )
+          .join('');
       sel.addEventListener('change', () => onPickCat(lv, sel.value === '' ? null : opts[+sel.value]));
       box.appendChild(sel);
     }
   }
   function onPickCat(level, node) {
-    W.catAuto = '';                                 // 手动选 → 清掉 AI 自动匹配标记
-    W.catPath = W.catPath.slice(0, level);          // 截断到本级
+    W.catAuto = ''; // 手动选 → 清掉 AI 自动匹配标记
+    W.catPath = W.catPath.slice(0, level); // 截断到本级
     if (node) W.catPath.push(node);
-    W.category = null; W.attrsSchema = []; W.reqAttrs = [];
+    W.category = null;
+    W.attrsSchema = [];
+    W.reqAttrs = [];
     const leaf = W.catPath[W.catPath.length - 1];
     if (isLeaf(leaf)) {
       // 末级类目：descCatId 取父节点(倒二)的 description_category_id，typeId 取叶子
@@ -538,7 +619,7 @@
       };
       loadCategoryAttrs();
     }
-    renderBody();   // 重渲染（级联 + 属性卡片）
+    renderBody(); // 重渲染（级联 + 属性卡片）
   }
   async function loadCategoryTree() {
     const resp = await bg({ action: 'getCategoryTree', language: 'ZH_HANS' });
@@ -547,13 +628,18 @@
       W.catTree = d?.result || d?.data || d || [];
       if (Array.isArray(W.catTree)) W.catTree = { children: W.catTree };
       renderCatCascade();
-      if (!W.category) autoMatchCategory();   // 树就绪 → AI 自动匹配类目
-    } else { log('getCategoryTree failed', resp.error); }
+      if (!W.category) autoMatchCategory(); // 树就绪 → AI 自动匹配类目
+    } else {
+      log('getCategoryTree failed', resp.error);
+    }
   }
   // 把采集的 1688 商品属性拼成一段「商品画像」文本，喂给 AI 判类目 / 填属性。
   function specsText() {
     const s = W.raw.specs || {};
-    return Object.entries(s).map(([k, v]) => `${k}:${v}`).join('; ').slice(0, 1200);
+    return Object.entries(s)
+      .map(([k, v]) => `${k}:${v}`)
+      .join('; ')
+      .slice(0, 1200);
   }
   // 收集所有叶子类目（带完整路径），供粗筛/候选用
   function collectLeaves() {
@@ -572,14 +658,23 @@
     let s = 0;
     const leaf = name.split('/').pop();
     if (leaf && leaf.length >= 2 && query.includes(leaf)) s += 50;
-    const grams = (str) => { const g = new Set(); for (let i = 0; i < str.length - 1; i++) g.add(str.slice(i, i + 2)); return g; };
-    const ng = grams(name), qg = grams(query);
-    let hit = 0; ng.forEach((g) => { if (qg.has(g)) hit++; });
+    const grams = (str) => {
+      const g = new Set();
+      for (let i = 0; i < str.length - 1; i++) g.add(str.slice(i, i + 2));
+      return g;
+    };
+    const ng = grams(name),
+      qg = grams(query);
+    let hit = 0;
+    ng.forEach((g) => {
+      if (qg.has(g)) hit++;
+    });
     return s + hit * 6;
   }
   function setAutoCategory(path, kind) {
     W.catPath = path;
-    const leaf = path[path.length - 1], parent = path[path.length - 2];
+    const leaf = path[path.length - 1],
+      parent = path[path.length - 2];
     W.category = {
       typeId: Number(leaf.type_id),
       descCatId: Number(leaf.description_category_id) || Number(parent && parent.description_category_id) || 0,
@@ -594,16 +689,27 @@
   // 本地粗筛取最高分叶子兜底，不至于完全失败（badge 会标"本地预选"提示去核对）。
   async function autoMatchCategory() {
     if (!W.catTree || W.category) return;
-    W.catAuto = 'matching'; renderCatCascade();
-    const title = W.raw.title || '', attributes = specsText();
+    W.catAuto = 'matching';
+    renderCatCascade();
+    const title = W.raw.title || '',
+      attributes = specsText();
 
     // 从给定一层节点分层贪心下钻到叶子。返回 { path, llmOk, leaf }。
     async function descend(startNodes) {
-      let nodes = startNodes || [], path = [], llmOk = true;
+      let nodes = startNodes || [],
+        path = [],
+        llmOk = true;
       for (let depth = 0; depth < 8 && nodes.length; depth++) {
-        const resp = await bg({ action: 'suggestCategory', storeId: W.opts.storeId, body: { title, attributes, candidates: nodes.map((n) => n.title) } });
-        const idx = (resp.ok && typeof resp.data?.index === 'number') ? resp.data.index : -2;
-        if (idx < 0 || idx >= nodes.length) { llmOk = idx === -1; break; }  // -1=LLM 选不出；其它=后端不通
+        const resp = await bg({
+          action: 'suggestCategory',
+          storeId: W.opts.storeId,
+          body: { title, attributes, candidates: nodes.map((n) => n.title) },
+        });
+        const idx = resp.ok && typeof resp.data?.index === 'number' ? resp.data.index : -2;
+        if (idx < 0 || idx >= nodes.length) {
+          llmOk = idx === -1;
+          break;
+        } // -1=LLM 选不出；其它=后端不通
         const chosen = nodes[idx];
         path.push(chosen);
         if (isLeaf(chosen)) return { path, llmOk, leaf: true };
@@ -612,7 +718,7 @@
       return { path, llmOk, leaf: false };
     }
 
-    const roots = (W.catTree.children) || [];
+    const roots = W.catTree.children || [];
     const r = await descend(roots);
 
     if (r.leaf) {
@@ -624,55 +730,83 @@
         // 主图一并喂给复核 —— 后端有 VLM 就走视觉复核(图片一眼定品类,比纯文字强),
         // 没有就退纯文本复核。取第一张主图即可。
         const imageUrl = (W.raw.mainImages && W.raw.mainImages[0]) || '';
-        const vr = await bg({ action: 'verifyCategory', storeId: W.opts.storeId, body: { title, attributes, chosenPath: pathStr, imageUrl } });
+        const vr = await bg({
+          action: 'verifyCategory',
+          storeId: W.opts.storeId,
+          body: { title, attributes, chosenPath: pathStr, imageUrl },
+        });
         const want = vr.ok && vr.data && vr.data.ok === false ? String(vr.data.correctTopLevel || '').trim() : '';
         if (want) {
           // 把 LLM 给的"正确一级大类"模糊匹配到真实 L1 节点,从它重下钻
           const l1 = roots.map((n) => ({ n, sc: overlapScore(n.title, want) })).sort((a, b) => b.sc - a.sc)[0];
           if (l1 && l1.sc > 0 && l1.n !== r.path[0]) {
             const r2 = await descend(l1.n.children || []);
-            if (r2.leaf) { r2.path.unshift(l1.n); return setAutoCategory(r2.path, 'done'); }
+            if (r2.leaf) {
+              r2.path.unshift(l1.n);
+              return setAutoCategory(r2.path, 'done');
+            }
           }
         }
-      } catch (e) { /* 复核失败不阻断,用原结果 */ }
+      } catch (e) {
+        /* 复核失败不阻断,用原结果 */
+      }
       return setAutoCategory(r.path, 'done');
     }
 
     // 分层没走到叶子 → 本地粗筛兜底
     const query = title + ' ' + attributes;
-    const best = collectLeaves().map((l) => ({ ...l, sc: overlapScore(l.fullName, query) })).sort((a, b) => b.sc - a.sc).find((x) => x.sc > 0);
+    const best = collectLeaves()
+      .map((l) => ({ ...l, sc: overlapScore(l.fullName, query) }))
+      .sort((a, b) => b.sc - a.sc)
+      .find((x) => x.sc > 0);
     if (best) return setAutoCategory(best.path, r.llmOk ? 'done' : 'local');
-    W.catAuto = 'AI 未能判断类目，请手选'; renderBody();
+    W.catAuto = 'AI 未能判断类目，请手选';
+    renderBody();
   }
   async function loadCategoryAttrs() {
     if (!W.category) return;
     const resp = await bg({ action: 'getCategoryAttributes', typeId: W.category.typeId, storeId: W.opts.storeId });
-    const schema = resp.ok ? (resp.data?.result || resp.data || []) : [];
+    const schema = resp.ok ? resp.data?.result || resp.data || [] : [];
     W.attrsSchema = Array.isArray(schema) ? schema : [];
     // 筛必填，建可编辑行；换类目清掉上一个类目的内容评级属性
-    W.reqAttrs = W.attrsSchema.filter((a) => a.is_required).map((a) => ({
-      id: Number(a.id), name: a.name || ('属性' + a.id),
-      dict: Number(a.dictionary_id) > 0, collection: !!a.is_collection,
-      value: '', dictValue: '', dictValueId: '', aiFilled: false,
-    }));
+    W.reqAttrs = W.attrsSchema
+      .filter((a) => a.is_required)
+      .map((a) => ({
+        id: Number(a.id),
+        name: a.name || '属性' + a.id,
+        dict: Number(a.dictionary_id) > 0,
+        collection: !!a.is_collection,
+        value: '',
+        dictValue: '',
+        dictValueId: '',
+        aiFilled: false,
+      }));
     W.ratingAttrs = [];
     renderBody();
   }
   // 一次 optimize-for-rating(modules:["attrs"]) 同时拿 tier1(必填) + tier2(内容评级加分)：
   // tier1 回填「必填属性」区，tier2 进「内容评级属性」区（提升 Ozon 内容评分）。
   async function aiFillAttrs() {
-    if (!W.opts.storeId) { toast('请先选择上架店铺（AI 填充需带店铺）', 'error'); return; }
-    if (!W.category) { toast('请先选择类目', 'error'); return; }
-    W.attrFilling = true; renderBody();
+    if (!W.opts.storeId) {
+      toast('请先选择上架店铺（AI 填充需带店铺）', 'error');
+      return;
+    }
+    if (!W.category) {
+      toast('请先选择类目', 'error');
+      return;
+    }
+    W.attrFilling = true;
+    renderBody();
     try {
       const it = W.items.find((x) => x.checked) || W.items[0];
       const specs = specsText();
       const resp = await bg({
-        action: 'aiOptimizeForRating', storeId: W.opts.storeId,
+        action: 'aiOptimizeForRating',
+        storeId: W.opts.storeId,
         body: {
           title: it?.skuName || W.raw.title || '',
           // 把 1688 商品属性当「商品画像」喂给 AI，填属性时信息更全、更准
-          description: specs ? `${W.raw.title || ''}\n商品属性：${specs}` : (W.raw.title || ''),
+          description: specs ? `${W.raw.title || ''}\n商品属性：${specs}` : W.raw.title || '',
           category: { typeId: W.category.typeId, descriptionCategoryId: W.category.descCatId || undefined },
           categoryName: W.category.name,
           currentAttrs: [],
@@ -681,44 +815,64 @@
       });
       if (!resp.ok) throw new Error(resp.error);
       const filled = resp.data?.modules?.attrs?.filled || [];
-      let nReq = 0; const rating = [];
+      let nReq = 0;
+      const rating = [];
       filled.forEach((f) => {
         const fid = Number(f.id);
         const isDict = f.source === 'dict-match';
         const okVal = isDict ? !!f.resolvedDictValueId : !!f.resolvedDictValue;
         if (!okVal) return;
         const req = W.reqAttrs.find((x) => x.id === fid);
-        if (req) {                                   // tier1 必填 → 回填必填区
-          if (req.dict) { req.dictValueId = String(f.resolvedDictValueId); req.dictValue = f.resolvedDictValue || ''; }
-          else req.value = f.resolvedDictValue || '';
-          req.aiFilled = true; nReq++;
-        } else {                                     // tier2 非必填 → 内容评级加分区
+        if (req) {
+          // tier1 必填 → 回填必填区
+          if (req.dict) {
+            req.dictValueId = String(f.resolvedDictValueId);
+            req.dictValue = f.resolvedDictValue || '';
+          } else req.value = f.resolvedDictValue || '';
+          req.aiFilled = true;
+          nReq++;
+        } else {
+          // tier2 非必填 → 内容评级加分区
           rating.push({
-            id: fid, name: f.name || f.suggestedLabel || ('属性' + fid), dict: isDict,
+            id: fid,
+            name: f.name || f.suggestedLabel || '属性' + fid,
+            dict: isDict,
             dictValueId: isDict ? String(f.resolvedDictValueId) : '',
-            dictValue: isDict ? (f.resolvedDictValue || '') : '',
-            value: isDict ? '' : (f.resolvedDictValue || ''), aiFilled: true,
+            dictValue: isDict ? f.resolvedDictValue || '' : '',
+            value: isDict ? '' : f.resolvedDictValue || '',
+            aiFilled: true,
           });
         }
       });
       W.ratingAttrs = rating;
-      toast(`AI 填充：必填 ${nReq}/${W.reqAttrs.length}、内容评级 ${rating.length} 项`, (nReq || rating.length) ? 'ok' : 'error');
+      toast(
+        `AI 填充：必填 ${nReq}/${W.reqAttrs.length}、内容评级 ${rating.length} 项`,
+        nReq || rating.length ? 'ok' : 'error'
+      );
     } catch (e) {
       toast('AI 填充失败：' + (e?.message || e), 'error');
     } finally {
-      W.attrFilling = false; renderBody();
+      W.attrFilling = false;
+      renderBody();
     }
   }
 
   // ───────────────────────────────── 图片中心 ──
   function renderImages(body) {
     const imgs = W.raw.mainImages || [];
-    if (!imgs.length) { body.innerHTML = `<div class="aiw-card" style="text-align:center;color:#7686a3;padding:50px">未采集到图片</div>`; return; }
-    body.innerHTML = `<div class="aiw-card"><div class="aiw-grid">${imgs.map((src, i) => {
-      const kind = i === 0 ? 'main' : 'slide';     // MVP：首图=主图，其余=轮播；详情图采集端暂未单独区分
-      const label = i === 0 ? '主图' : '轮播';
-      return `<div class="aiw-imgcard"><span class="aiw-tag ${kind}">${label}</span><img src="${esc(src)}" loading="lazy"></div>`;
-    }).join('')}</div><div class="aiw-note">主图/轮播由采集顺序推断；AI 改图（图片翻译开启时）在后端 poster 任务里完成，结果以采集箱草稿为准。</div></div>`;
+    if (!imgs.length) {
+      body.innerHTML = `<div class="aiw-card" style="text-align:center;color:#7686a3;padding:50px">未采集到图片</div>`;
+      return;
+    }
+    body.innerHTML = `<div class="aiw-card"><div class="aiw-grid">${imgs
+      .map((src, i) => {
+        const kind = i === 0 ? 'main' : 'slide'; // MVP：首图=主图，其余=轮播；详情图采集端暂未单独区分
+        const label = i === 0 ? '主图' : '轮播';
+        return `<div class="aiw-imgcard"><span class="aiw-tag ${kind}">${label}</span><img src="${esc(src)}" loading="lazy"></div>`;
+      })
+      .join(
+        ''
+      )}</div><div class="aiw-note">主图/轮播由采集顺序推断；AI 改图（图片翻译开启时）在后端 poster 任务里完成，结果以采集箱草稿为准。</div></div>`;
   }
 
   // ───────────────────────────────── 系统设置 ──
@@ -739,7 +893,11 @@
         <div class="aiw-note">定价：1688 人民币成本 × CNY→RUB 汇率 ×（1+目标毛利），按店铺绑定货币输出。</div>
       </div>`;
     const m = body.querySelector('#aiw-margin');
-    if (m) m.addEventListener('input', () => { const n = parseInt(m.value, 10); if (Number.isFinite(n)) W.opts.targetMargin = n; });
+    if (m)
+      m.addEventListener('input', () => {
+        const n = parseInt(m.value, 10);
+        if (Number.isFinite(n)) W.opts.targetMargin = n;
+      });
     loadQuota();
   }
 
@@ -748,11 +906,13 @@
     const resp = await bg({ action: 'getStores' });
     if (resp.ok) {
       const raw = resp.data?.data || resp.data || [];
-      W.stores = (Array.isArray(raw) ? raw : []).map((s) => ({
-        id: s.id || s.storeId || s.store_id,
-        label: s.label || s.companyName || s.legalName || s.name || s.id,
-        currency: s.companyCurrency || s.currency || 'RUB',   // 店铺绑定货币
-      })).filter((s) => s.id);
+      W.stores = (Array.isArray(raw) ? raw : [])
+        .map((s) => ({
+          id: s.id || s.storeId || s.store_id,
+          label: s.label || s.companyName || s.legalName || s.name || s.id,
+          currency: s.companyCurrency || s.currency || 'RUB', // 店铺绑定货币
+        }))
+        .filter((s) => s.id);
       fillStoreSelect();
     } else {
       log('getStores failed', resp.error);
@@ -762,8 +922,13 @@
   function fillStoreSelect() {
     const sel = document.getElementById('aiw-store');
     if (!sel) return;
-    sel.innerHTML = `<option value="">请选择</option>` +
-      W.stores.map((s) => `<option value="${esc(s.id)}" ${s.id === W.opts.storeId ? 'selected' : ''}>${esc(s.label)}</option>`).join('');
+    sel.innerHTML =
+      `<option value="">请选择</option>` +
+      W.stores
+        .map(
+          (s) => `<option value="${esc(s.id)}" ${s.id === W.opts.storeId ? 'selected' : ''}>${esc(s.label)}</option>`
+        )
+        .join('');
   }
 
   async function loadWarehouses() {
@@ -773,10 +938,12 @@
     const resp = await bg({ action: 'getWarehouses', storeId: W.opts.storeId });
     if (resp.ok) {
       const raw = resp.data?.data || resp.data || [];
-      W.warehouses = (Array.isArray(raw) ? raw : []).map((w) => ({
-        id: w.warehouse_id || w.id || w.value,
-        label: w.name || w.label || w.warehouse_id || w.id,
-      })).filter((w) => w.id);
+      W.warehouses = (Array.isArray(raw) ? raw : [])
+        .map((w) => ({
+          id: w.warehouse_id || w.id || w.value,
+          label: w.name || w.label || w.warehouse_id || w.id,
+        }))
+        .filter((w) => w.id);
       fillWarehouseSelect();
     }
   }
@@ -784,8 +951,14 @@
   function fillWarehouseSelect() {
     const sel = document.getElementById('aiw-wh');
     if (!sel) return;
-    sel.innerHTML = `<option value="">请选择</option>` +
-      W.warehouses.map((w) => `<option value="${esc(w.id)}" ${String(w.id) === String(W.opts.warehouseId) ? 'selected' : ''}>${esc(w.label)}</option>`).join('');
+    sel.innerHTML =
+      `<option value="">请选择</option>` +
+      W.warehouses
+        .map(
+          (w) =>
+            `<option value="${esc(w.id)}" ${String(w.id) === String(W.opts.warehouseId) ? 'selected' : ''}>${esc(w.label)}</option>`
+        )
+        .join('');
   }
 
   async function loadAiEngine() {
@@ -817,17 +990,35 @@
   function pushLog(line) {
     W.aiLog.push(line);
     const box = document.getElementById('aiw-log');
-    if (box) { box.textContent = W.aiLog.join('\n'); box.scrollTop = box.scrollHeight; }
+    if (box) {
+      box.textContent = W.aiLog.join('\n');
+      box.scrollTop = box.scrollHeight;
+    }
   }
 
-  function setStep(n) { W.step = n; }
+  function setStep(n) {
+    W.step = n;
+  }
 
   async function runPipeline() {
     if (W.running) return;
     const selected = W.items.filter((it) => it.checked);
-    if (!selected.length) { toast('请至少勾选一个商品', 'error'); return; }
-    if (!W.opts.storeId) { toast('请先选择上架店铺', 'error'); W.view = 'workbench'; render(); return; }
-    if (!W.category) { toast('请先把产品类目选到末级', 'error'); W.view = 'workbench'; render(); return; }
+    if (!selected.length) {
+      toast('请至少勾选一个商品', 'error');
+      return;
+    }
+    if (!W.opts.storeId) {
+      toast('请先选择上架店铺', 'error');
+      W.view = 'workbench';
+      render();
+      return;
+    }
+    if (!W.category) {
+      toast('请先把产品类目选到末级', 'error');
+      W.view = 'workbench';
+      render();
+      return;
+    }
 
     W.running = true;
     setStep(3);
@@ -835,36 +1026,56 @@
     render();
     pushLog(`▶ 开始：店铺=${storeLabel()}  类目=${W.category.name}  直上=${W.opts.directListing ? '是' : '否'}`);
 
-    let okCount = 0, failCount = 0;
+    let okCount = 0,
+      failCount = 0;
     try {
-      const it = selected[0];   // MVP：一次处理勾选的第一个
+      const it = selected[0]; // MVP：一次处理勾选的第一个
 
       // 1) 采集入箱（留采集记录；import 上架不依赖它）
       pushLog(`\n— 采集入箱 —`);
       const collectResp = await bg({
-        action: 'pushSourceCollect', sourceId: '1688', raw: W.raw,
-        forceResubmit: true, resetDraft: true, storeId: W.opts.storeId,
+        action: 'pushSourceCollect',
+        sourceId: '1688',
+        raw: W.raw,
+        forceResubmit: true,
+        resetDraft: true,
+        storeId: W.opts.storeId,
       });
       if (collectResp.ok) pushLog(`✓ 已入采集箱 id=${String(collectResp.data?.result?.id || '').slice(0, 8)}…`);
       else pushLog(`⚠ 入采集箱失败：${collectResp.error}（不影响上架）`);
 
       // 2) AI 重写文案（与跟卖同一套 rewrite prompt）
       pushLog(`\n— AI 重写标题/描述/标签 —`);
-      let title = it.skuName || W.raw.title || '', description = '', hashtags = [];
+      let title = it.skuName || W.raw.title || '',
+        description = '',
+        hashtags = [];
       const specsForRw = specsText();
       const rwResp = await bg({
-        action: 'aiOptimizeForRating', storeId: W.opts.storeId,
+        action: 'aiOptimizeForRating',
+        storeId: W.opts.storeId,
         body: {
-          title, description: specsForRw ? `${W.raw.title || ''}\n商品属性：${specsForRw}` : (W.raw.title || ''),
+          title,
+          description: specsForRw ? `${W.raw.title || ''}\n商品属性：${specsForRw}` : W.raw.title || '',
           category: { typeId: W.category.typeId, descriptionCategoryId: W.category.descCatId || undefined },
-          categoryName: W.category.name, currentAttrs: [], modules: ['title', 'description', 'hashtags'],
+          categoryName: W.category.name,
+          currentAttrs: [],
+          modules: ['title', 'description', 'hashtags'],
         },
       });
       if (rwResp.ok) {
         const mod = rwResp.data?.modules || {};
-        if (mod.title?.value) { title = mod.title.value; pushLog(`· 标题：${title}`); }
-        if (mod.description?.value) { description = mod.description.value; pushLog(`· 描述：${String(description).slice(0, 90)}…`); }
-        if (mod.hashtags?.value?.length) { hashtags = mod.hashtags.value; pushLog(`· 标签：${hashtags.slice(0, 8).join(' ')}`); }
+        if (mod.title?.value) {
+          title = mod.title.value;
+          pushLog(`· 标题：${title}`);
+        }
+        if (mod.description?.value) {
+          description = mod.description.value;
+          pushLog(`· 描述：${String(description).slice(0, 90)}…`);
+        }
+        if (mod.hashtags?.value?.length) {
+          hashtags = mod.hashtags.value;
+          pushLog(`· 标签：${hashtags.slice(0, 8).join(' ')}`);
+        }
       } else pushLog(`⚠ 重写失败：${rwResp.error}（用原标题）`);
       pushLog(`· 类目：${W.category.name}`);
 
@@ -877,26 +1088,30 @@
       // 3.5) 属性没动过则自动 AI 填充（必填 tier1 + 内容评级 tier2 一次填完），
       //      免去手动点两个「AI 填充」按钮。用户已手填/点过则尊重现状、不覆盖。
       const attrTouched =
-        W.reqAttrs.some((a) => a.aiFilled || (a.dict ? a.dictValueId : a.value)) ||
-        W.ratingAttrs.length > 0;
+        W.reqAttrs.some((a) => a.aiFilled || (a.dict ? a.dictValueId : a.value)) || W.ratingAttrs.length > 0;
       if (W.reqAttrs.length && !attrTouched) {
         pushLog(`\n— AI 填充属性（必填 + 内容评级）—`);
         await aiFillAttrs();
       }
 
       // 4) 属性：必填(tier1) + 内容评级(tier2)，AI 填充/手填的，一起带上架
-      const filledOf = (arr) => arr.filter((a) => a.dict ? a.dictValueId : (a.value && String(a.value).trim()));
+      const filledOf = (arr) => arr.filter((a) => (a.dict ? a.dictValueId : a.value && String(a.value).trim()));
       const okReq = filledOf(W.reqAttrs);
       const okRating = filledOf(W.ratingAttrs);
       const okAttrs = [...okReq, ...okRating];
       const miss = W.reqAttrs.length - okReq.length;
-      pushLog(`· 必填属性：${okReq.length}/${W.reqAttrs.length} 已填` + (miss ? `（缺 ${miss} 项，Ozon 可能驳回）` : ''));
-      if (W.ratingAttrs.length) pushLog(`· 内容评级属性：${okRating.length}/${W.ratingAttrs.length} 已填（提升内容评分）`);
+      pushLog(
+        `· 必填属性：${okReq.length}/${W.reqAttrs.length} 已填` + (miss ? `（缺 ${miss} 项，Ozon 可能驳回）` : '')
+      );
+      if (W.ratingAttrs.length)
+        pushLog(`· 内容评级属性：${okRating.length}/${W.ratingAttrs.length} 已填（提升内容评分）`);
 
       // 5) 包装尺寸/重量（采集自 1688 装箱表，cm→mm、g）
       const pkg = W.raw.packaging || {};
       if (pkg.weightG || pkg.lengthCm) {
-        pushLog(`· 包装(采集)：${pkg.lengthCm || '?'}×${pkg.widthCm || '?'}×${pkg.heightCm || '?'}cm  ${pkg.weightG || '?'}g`);
+        pushLog(
+          `· 包装(采集)：${pkg.lengthCm || '?'}×${pkg.widthCm || '?'}×${pkg.heightCm || '?'}cm  ${pkg.weightG || '?'}g`
+        );
       } else {
         pushLog(`· 包装：未采到，用默认 20×20×10cm/100g（可上架后改）`);
       }
@@ -905,13 +1120,15 @@
         // 把 AI 生成的标题 + 已填属性回写采集箱条目 —— 否则采集箱里只剩 pushSourceCollect 的源数据,
         // 编辑页(读 item.name + item.variantData.attributes)看不到生成的标题/属性(用户反馈点)。
         // 属性映射成编辑页读的 {key,value};dict 取 dictValue(与向导显示一致,后端按 value 兜底匹配)。
-        const cbId = collectResp.ok ? (collectResp.data?.result?.id || '') : '';
+        const cbId = collectResp.ok ? collectResp.data?.result?.id || '' : '';
         if (cbId) {
           const vdAttrs = okAttrs
-            .map((a) => ({ key: String(a.id), value: String(a.dict ? (a.dictValue || a.value || '') : (a.value || '')) }))
+            .map((a) => ({ key: String(a.id), value: String(a.dict ? a.dictValue || a.value || '' : a.value || '') }))
             .filter((a) => a.value);
           const upd = await bg({
-            action: 'updateCollectBoxItem', id: cbId, storeId: W.opts.storeId,
+            action: 'updateCollectBoxItem',
+            id: cbId,
+            storeId: W.opts.storeId,
             body: { name: title, variantData: { attributes: vdAttrs } },
           });
           if (upd.ok) pushLog(`✓ 已回写采集箱:标题 + ${vdAttrs.length} 条属性`);
@@ -925,17 +1142,21 @@
         pushLog(`\n— 直上：拼装并提交 import —`);
         const offerId = `${W.opts.offerPrefix}-${W.raw.offerId || Date.now()}`;
         const attributes = okAttrs.map((a) => ({
-          complex_id: 0, id: a.id,
+          complex_id: 0,
+          id: a.id,
           values: a.dict
             ? [{ dictionary_value_id: Number(a.dictValueId), value: '' }]
             : [{ dictionary_value_id: 0, value: String(a.value) }],
         }));
         const item = {
-          name: title, offer_id: offerId,
-          price: String(sp.price), old_price: String(round2(sp.price * 1.25)),
-          vat: '0', currency_code: sp.currency,
-          weight: pkg.weightG || 100,                          // 采集到的装箱重量(g)，否则默认
-          depth: pkg.lengthCm ? Math.round(pkg.lengthCm * 10) : 200,   // 长 cm→mm
+          name: title,
+          offer_id: offerId,
+          price: String(sp.price),
+          old_price: String(round2(sp.price * 1.25)),
+          vat: '0',
+          currency_code: sp.currency,
+          weight: pkg.weightG || 100, // 采集到的装箱重量(g)，否则默认
+          depth: pkg.lengthCm ? Math.round(pkg.lengthCm * 10) : 200, // 长 cm→mm
           width: pkg.widthCm ? Math.round(pkg.widthCm * 10) : 200,
           height: pkg.heightCm ? Math.round(pkg.heightCm * 10) : 100,
           images: W.raw.mainImages || [],
@@ -947,18 +1168,25 @@
           attributes,
         };
         const pubResp = await bg({
-          action: 'followSell', storeId: W.opts.storeId, items: [item],
+          action: 'followSell',
+          storeId: W.opts.storeId,
+          items: [item],
           // 「图片翻译」走后端海报/改图：正确字段是 applyPoster（applyAiImage 已下线、import 不读）
-          applyPoster: W.opts.imageTranslate, posterPrimaryOnly: true, applyWatermark: false,
-          applyAiRewrite: false, strictTypeMatch: false,
+          applyPoster: W.opts.imageTranslate,
+          posterPrimaryOnly: true,
+          applyWatermark: false,
+          applyAiRewrite: false,
+          strictTypeMatch: false,
           stocks: W.opts.warehouseId ? [{ offer_id: offerId, stock: 10, warehouse_id: W.opts.warehouseId }] : undefined,
         });
         if (!pubResp.ok) throw new Error('提交上架失败：' + pubResp.error);
         const r = pubResp.data || {};
         const taskId = r.result?.task_id || r.task_id || '';
-        pushLog(taskId
-          ? `✓ 已提交上架（货号 ${offerId}，task=${taskId}）`
-          : `⚠ 已提交但未拿到 task_id：${JSON.stringify(r).slice(0, 140)}`);
+        pushLog(
+          taskId
+            ? `✓ 已提交上架（货号 ${offerId}，task=${taskId}）`
+            : `⚠ 已提交但未拿到 task_id：${JSON.stringify(r).slice(0, 140)}`
+        );
         okCount++;
       }
     } catch (e) {

@@ -3,15 +3,7 @@
   "name": "MY",
   "version": "0.13.31.1",
   "description": "MY",
-  "permissions": [
-    "storage",
-    "contextMenus",
-    "alarms",
-    "cookies",
-    "scripting",
-    "notifications",
-    "unlimitedStorage"
-  ],
+  "permissions": ["storage", "contextMenus", "alarms", "cookies", "scripting", "notifications", "unlimitedStorage"],
   "host_permissions": [
     "*://*.ozon.ru/*",
     "https://www.ozon.ru/*",
@@ -104,19 +96,12 @@
         "https://*.ozon.kz/search/*",
         "https://*.ozon.kz/search-by-image*"
       ],
-      "js": [
-        "content/ozon-bff-interceptor.js"
-      ],
+      "js": ["content/ozon-bff-interceptor.js"],
       "world": "MAIN",
       "run_at": "document_start"
     },
     {
-      "matches": [
-        "https://www.ozon.ru/*",
-        "https://ozon.ru/*",
-        "https://ozon.kz/*",
-        "https://*.ozon.kz/*"
-      ],
+      "matches": ["https://www.ozon.ru/*", "https://ozon.ru/*", "https://ozon.kz/*", "https://*.ozon.kz/*"],
       "js": [
         "content/shared-utils.js",
         "content/jzc-calc.js",
@@ -132,10 +117,7 @@
         "lib/title-quality.js",
         "content/ozon-product.js"
       ],
-      "css": [
-        "content/jzc-calc.css",
-        "content/ozon-product.css"
-      ],
+      "css": ["content/jzc-calc.css", "content/ozon-product.css"],
       "run_at": "document_idle"
     },
     {
@@ -164,19 +146,11 @@
         "lib/sidebar-section-toggle.js",
         "content/ozon-search.js"
       ],
-      "css": [
-        "content/ozon-product.css",
-        "content/ozon-search.css",
-        "content/collector/panel.css"
-      ],
+      "css": ["content/ozon-product.css", "content/ozon-search.css", "content/collector/panel.css"],
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://www.ozon.ru/*",
-        "https://ozon.kz/*",
-        "https://*.ozon.kz/*"
-      ],
+      "matches": ["https://www.ozon.ru/*", "https://ozon.kz/*", "https://*.ozon.kz/*"],
       "exclude_matches": [
         "https://www.ozon.ru/category/*",
         "https://www.ozon.ru/search/*",
@@ -199,52 +173,30 @@
         "lib/sidebar-section-toggle.js",
         "content/ozon-data-panel.js"
       ],
-      "css": [
-        "content/ozon-product.css",
-        "content/ozon-search.css",
-        "content/collector/panel.css"
-      ],
+      "css": ["content/ozon-product.css", "content/ozon-search.css", "content/collector/panel.css"],
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://seller.ozon.ru/*"
-      ],
-      "js": [
-        "content/ozon-seller-bridge.js"
-      ],
+      "matches": ["https://seller.ozon.ru/*"],
+      "js": ["content/ozon-seller-bridge.js"],
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://seller.ozon.ru/app/analytics/competitors/ozon-bestsellers*"
-      ],
-      "js": [
-        "content/ozon-bestsellers-hook.js"
-      ],
+      "matches": ["https://seller.ozon.ru/app/analytics/competitors/ozon-bestsellers*"],
+      "js": ["content/ozon-bestsellers-hook.js"],
       "world": "MAIN",
       "run_at": "document_start"
     },
     {
-      "matches": [
-        "https://seller.ozon.ru/app/analytics*"
-      ],
-      "js": [
-        "content/ozon-premium-hook.js"
-      ],
+      "matches": ["https://seller.ozon.ru/app/analytics*"],
+      "js": ["content/ozon-premium-hook.js"],
       "world": "MAIN",
       "run_at": "document_start",
       "all_frames": true
     },
     {
-      "matches": [
-        "*://my.jizhangerp.com/*",
-        "http://localhost:3000/*",
-        "http://store.localhost:3000/*"
-      ],
-      "js": [
-        "content/sync-auth.js"
-      ],
+      "matches": ["*://my.jizhangerp.com/*", "http://localhost:3000/*", "http://store.localhost:3000/*"],
+      "js": ["content/sync-auth.js"],
       "run_at": "document_start"
     },
     {
@@ -254,44 +206,25 @@
         "http://localhost:3000/*",
         "http://store.localhost:3000/*"
       ],
-      "exclude_matches": [
-        "*://admin.my.jizhangerp.com/*"
-      ],
-      "js": [
-        "lib/sku-collect.js",
-        "content/jizhangerp-bridge.js"
-      ],
+      "exclude_matches": ["*://admin.my.jizhangerp.com/*"],
+      "js": ["lib/sku-collect.js", "content/jizhangerp-bridge.js"],
       "run_at": "document_start",
       "all_frames": false
     },
     {
-      "matches": [
-        "https://s.1688.com/*",
-        "https://www.1688.com/*"
-      ],
-      "js": [
-        "content/1688-image-search.js"
-      ],
+      "matches": ["https://s.1688.com/*", "https://www.1688.com/*"],
+      "js": ["content/1688-image-search.js"],
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://detail.1688.com/offer/*"
-      ],
-      "js": [
-        "content/1688-page-data-hook.js"
-      ],
+      "matches": ["https://detail.1688.com/offer/*"],
+      "js": ["content/1688-page-data-hook.js"],
       "world": "MAIN",
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://detail.1688.com/offer/*"
-      ],
-      "js": [
-        "content/alibaba-1688.js",
-        "content/1688-ai-wizard.js"
-      ],
+      "matches": ["https://detail.1688.com/offer/*"],
+      "js": ["content/alibaba-1688.js", "content/1688-ai-wizard.js"],
       "run_at": "document_idle"
     },
     {
@@ -368,11 +301,7 @@
         "https://shein.com.mx/*",
         "https://*.shein.com.mx/*"
       ],
-      "js": [
-        "lib/cn-source-scraper.js",
-        "lib/cn-source-panel.js",
-        "content/cn-source-product.js"
-      ],
+      "js": ["lib/cn-source-scraper.js", "lib/cn-source-panel.js", "content/cn-source-product.js"],
       "run_at": "document_idle"
     }
   ],
@@ -383,14 +312,8 @@
   },
   "web_accessible_resources": [
     {
-      "resources": [
-        "batch-upload/*",
-        "lib/*",
-        "icons/*"
-      ],
-      "matches": [
-        "<all_urls>"
-      ]
+      "resources": ["batch-upload/*", "lib/*", "icons/*"],
+      "matches": ["<all_urls>"]
     }
   ],
   "update_url": "https://api.jizhangerp.com/extension/updates/my/manifest.xml",

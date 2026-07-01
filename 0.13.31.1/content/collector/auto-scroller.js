@@ -43,8 +43,8 @@
       this.onCongestionPause = opts.onCongestionPause || (() => {});
 
       this._timer = null;
-      this._userActive = false;       // 用户意图：true=想跑
-      this._autoPaused = false;       // 是否被节流自动暂停
+      this._userActive = false; // 用户意图：true=想跑
+      this._autoPaused = false; // 是否被节流自动暂停
       this._emptyStreak = 0;
       this._lastCardCount = 0;
       this._waitingReadySince = 0;
@@ -67,8 +67,14 @@
       this._autoPaused = false;
       this._emptyStreak = 0;
       this._waitingReadySince = 0;
-      if (this._timer) { clearTimeout(this._timer); this._timer = null; }
-      if (this._unsubCongestion) { this._unsubCongestion(); this._unsubCongestion = null; }
+      if (this._timer) {
+        clearTimeout(this._timer);
+        this._timer = null;
+      }
+      if (this._unsubCongestion) {
+        this._unsubCongestion();
+        this._unsubCongestion = null;
+      }
     }
 
     isRunning() {
@@ -87,11 +93,18 @@
       if (!this._userActive) return;
       if (level === 'high' && !this._autoPaused) {
         this._autoPaused = true;
-        if (this._timer) { clearTimeout(this._timer); this._timer = null; }
-        try { this.onCongestionPause('paused'); } catch {}
+        if (this._timer) {
+          clearTimeout(this._timer);
+          this._timer = null;
+        }
+        try {
+          this.onCongestionPause('paused');
+        } catch {}
       } else if (level === 'low' && this._autoPaused) {
         this._autoPaused = false;
-        try { this.onCongestionPause('resumed'); } catch {}
+        try {
+          this.onCongestionPause('resumed');
+        } catch {}
         this._scheduleNext(this.intervalMs);
       }
     }
@@ -145,7 +158,7 @@
       if (!this._userActive || this._autoPaused) return;
 
       const nowCount = this.getCardCount();
-      const nearBottom = (scroller.scrollTop + window.innerHeight) >= (scroller.scrollHeight - 800);
+      const nearBottom = scroller.scrollTop + window.innerHeight >= scroller.scrollHeight - 800;
       if (nowCount > beforeCount) {
         this._emptyStreak = 0;
         this._lastCardCount = nowCount;
@@ -155,7 +168,11 @@
           // 触发 onEmpty 然后停止
           const cb = this.onEmpty;
           this.stop();
-          try { await cb(); } catch (e) { console.error('[JZAutoScroller] onEmpty error:', e); }
+          try {
+            await cb();
+          } catch (e) {
+            console.error('[JZAutoScroller] onEmpty error:', e);
+          }
           return;
         }
       } else {

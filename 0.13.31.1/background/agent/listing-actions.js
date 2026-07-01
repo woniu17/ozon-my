@@ -54,78 +54,72 @@
     return out;
   }
 
-  globalThis.JzBrowserAgentActions.register(
-    'listing.create_draft',
-    async (job, context) => {
-      const params = job?.params || {};
-      const candidateId = String(params.candidateId || '').trim();
-      if (!candidateId) throw new Error('candidateId is required');
+  globalThis.JzBrowserAgentActions.register('listing.create_draft', async (job, context) => {
+    const params = job?.params || {};
+    const candidateId = String(params.candidateId || '').trim();
+    if (!candidateId) throw new Error('candidateId is required');
 
-      await context.reportProgress?.({
-        stage: 'creating_ai_draft',
-        message: 'Generating AI listing draft',
-        percent: 20,
-        payload: { candidateId },
-      });
-      context.throwIfCancelled?.();
+    await context.reportProgress?.({
+      stage: 'creating_ai_draft',
+      message: 'Generating AI listing draft',
+      percent: 20,
+      payload: { candidateId },
+    });
+    context.throwIfCancelled?.();
 
-      const draft = await globalThis.JzBackendClient.createAiListingDraft({
-        candidateId,
-        draft: draftPayload(params),
-        storeId: job.storeId || undefined,
-      });
+    const draft = await globalThis.JzBackendClient.createAiListingDraft({
+      candidateId,
+      draft: draftPayload(params),
+      storeId: job.storeId || undefined,
+    });
 
-      await context.reportProgress?.({
-        stage: 'draft_ready',
-        message: 'AI listing draft is ready for price confirmation',
-        percent: 100,
-        payload: { candidateId },
-      });
+    await context.reportProgress?.({
+      stage: 'draft_ready',
+      message: 'AI listing draft is ready for price confirmation',
+      percent: 100,
+      payload: { candidateId },
+    });
 
-      return {
-        candidateId,
-        draftId: candidateId,
-        draft,
-      };
-    },
-  );
+    return {
+      candidateId,
+      draftId: candidateId,
+      draft,
+    };
+  });
 
-  globalThis.JzBrowserAgentActions.register(
-    'listing.publish_draft',
-    async (job, context) => {
-      const params = job?.params || {};
-      const draftId = String(params.draftId || params.candidateId || '').trim();
-      if (!draftId) throw new Error('draftId is required');
+  globalThis.JzBrowserAgentActions.register('listing.publish_draft', async (job, context) => {
+    const params = job?.params || {};
+    const draftId = String(params.draftId || params.candidateId || '').trim();
+    if (!draftId) throw new Error('draftId is required');
 
-      await context.reportProgress?.({
-        stage: 'publishing_draft',
-        message: 'Submitting confirmed listing draft',
-        percent: 20,
-        payload: { draftId },
-      });
-      context.throwIfCancelled?.();
+    await context.reportProgress?.({
+      stage: 'publishing_draft',
+      message: 'Submitting confirmed listing draft',
+      percent: 20,
+      payload: { draftId },
+    });
+    context.throwIfCancelled?.();
 
-      const published = await globalThis.JzBackendClient.publishAiListingDraft({
+    const published = await globalThis.JzBackendClient.publishAiListingDraft({
+      draftId,
+      publish: publishPayload(params),
+      storeId: job.storeId || undefined,
+    });
+
+    await context.reportProgress?.({
+      stage: 'publish_queued',
+      message: 'Listing publish task has been queued',
+      percent: 100,
+      payload: {
         draftId,
-        publish: publishPayload(params),
-        storeId: job.storeId || undefined,
-      });
+        localTaskId: published?.ozonTaskId || published?.draft?.publish?.localTaskId,
+      },
+    });
 
-      await context.reportProgress?.({
-        stage: 'publish_queued',
-        message: 'Listing publish task has been queued',
-        percent: 100,
-        payload: {
-          draftId,
-          localTaskId: published?.ozonTaskId || published?.draft?.publish?.localTaskId,
-        },
-      });
-
-      return {
-        draftId,
-        localTaskId: published?.ozonTaskId || published?.draft?.publish?.localTaskId || null,
-        publish: published?.draft?.publish || null,
-      };
-    },
-  );
+    return {
+      draftId,
+      localTaskId: published?.ozonTaskId || published?.draft?.publish?.localTaskId || null,
+      publish: published?.draft?.publish || null,
+    };
+  });
 })();

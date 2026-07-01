@@ -70,7 +70,11 @@
           _channel.addEventListener('message', (ev) => {
             if (!ev.data || !ev.data.type) return;
             for (const cb of _changeListeners) {
-              try { cb(ev.data); } catch (e) { console.error('[JZCollectorDB] listener error:', e); }
+              try {
+                cb(ev.data);
+              } catch (e) {
+                console.error('[JZCollectorDB] listener error:', e);
+              }
             }
           });
         } catch (e) {
@@ -84,10 +88,18 @@
 
   function _broadcast(payload) {
     for (const cb of _changeListeners) {
-      try { cb(payload); } catch (e) { console.error('[JZCollectorDB] listener error:', e); }
+      try {
+        cb(payload);
+      } catch (e) {
+        console.error('[JZCollectorDB] listener error:', e);
+      }
     }
     if (_channel) {
-      try { _channel.postMessage(payload); } catch (e) { /* swallow */ }
+      try {
+        _channel.postMessage(payload);
+      } catch (e) {
+        /* swallow */
+      }
     }
   }
 
@@ -281,7 +293,9 @@
   function _toNumber(value) {
     if (value === null || value === undefined || value === '') return null;
     if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-    const text = String(value).replace(/\u00a0/g, ' ').trim();
+    const text = String(value)
+      .replace(/\u00a0/g, ' ')
+      .trim();
     if (!text || text === '-' || text === '\u2014') return null;
     const compact = text.replace(/\s+/g, '');
     const match = compact.match(/[-+]?\d+(?:[,.]\d+)?/);
@@ -304,7 +318,9 @@
         if (Number.isFinite(value)) return value;
         continue;
       }
-      const text = String(value).replace(/\u00a0/g, ' ').trim();
+      const text = String(value)
+        .replace(/\u00a0/g, ' ')
+        .trim();
       if (!text || text === '-' || text === '\u2014') continue;
       const dayMatch = text.match(/(\d+)\s*(?:天|days?|дн)/i);
       if (dayMatch) return Number(dayMatch[1]);
@@ -322,7 +338,9 @@
 
   function _extractCny(value) {
     if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-    const text = String(value || '').replace(/\u00a0/g, ' ').trim();
+    const text = String(value || '')
+      .replace(/\u00a0/g, ' ')
+      .trim();
     if (!text || text === '-' || text === '\u2014') return null;
     const match = text.replace(/\s+/g, '').match(/[\u00A5\uFFE5]\s*([-+]?\d+(?:[,.]\d+)?)/);
     if (!match) return null;
@@ -338,24 +356,37 @@
         raw.revenue30dCny,
         _extractCny(raw.revenue30d),
         _toNumber(raw.gmvSum) != null ? _toNumber(raw.gmvSum) * 0.084 : null,
-        _toNumber(rec.gmvSum) != null ? _toNumber(rec.gmvSum) * 0.084 : null,
+        _toNumber(rec.gmvSum) != null ? _toNumber(rec.gmvSum) * 0.084 : null
       );
     }
     if (key === 'brandName') return _firstValue(raw.brandName, raw.brand);
-    if (key === 'shippingMode') return _firstValue(raw.shippingMode, raw.salesSchema, raw.marketSalesSchema, raw.deliverySchema, raw.deliveryType);
+    if (key === 'shippingMode')
+      return _firstValue(
+        raw.shippingMode,
+        raw.salesSchema,
+        raw.marketSalesSchema,
+        raw.deliverySchema,
+        raw.deliveryType
+      );
     if (key === 'weight') return _firstValue(raw.weight, raw.weightG, raw.weightGrams);
     if (key === 'listedDays') return _daysValue(raw.listedDays, raw.daysOnline, raw.createDate, raw.nullableCreateDate);
-    if (key === 'monthlyTurnoverDynamic') return _firstValue(raw.monthlyTurnoverDynamic, raw.turnoverDynamic, raw.salesDynamics);
+    if (key === 'monthlyTurnoverDynamic')
+      return _firstValue(raw.monthlyTurnoverDynamic, raw.turnoverDynamic, raw.salesDynamics);
     if (key === 'adCostRatio') return _firstValue(raw.adCostRatio, raw.adCostPercent, raw.drr);
     if (key === 'promoDays') return _firstValue(raw.promoDays, raw.daysInPromo);
     if (key === 'promoDiscount') return _firstValue(raw.promoDiscount, raw.discount);
-    if (key === 'promoConversionRate') return _firstValue(raw.promoConversionRate, raw.promoRevenueShare, raw.promoConvRate);
+    if (key === 'promoConversionRate')
+      return _firstValue(raw.promoConversionRate, raw.promoRevenueShare, raw.promoConvRate);
     if (key === 'paidPromotionDays') return _firstValue(raw.paidPromotionDays, raw.daysWithTrafarets, raw.daysWithAds);
     if (key === 'views') return _firstValue(rec.views, raw.views, raw.qtyViewPdp, raw.sessionCount, raw.pdpViews);
-    if (key === 'cardAddToCartRate') return _firstValue(raw.cardAddToCartRate, raw.pdpToCartConversion, raw.convToCartPdp, raw.pdpCartRate);
-    if (key === 'searchCatalogViews') return _firstValue(raw.searchCatalogViews, raw.sessionCountSearch, raw.searchViews);
-    if (key === 'searchCatalogAddToCartRate') return _firstValue(raw.searchCatalogAddToCartRate, raw.convToCartSearch, raw.searchCartRate);
-    if (key === 'displayConversionRate') return _firstValue(raw.displayConversionRate, raw.convViewToOrder, rec.convViewToOrder);
+    if (key === 'cardAddToCartRate')
+      return _firstValue(raw.cardAddToCartRate, raw.pdpToCartConversion, raw.convToCartPdp, raw.pdpCartRate);
+    if (key === 'searchCatalogViews')
+      return _firstValue(raw.searchCatalogViews, raw.sessionCountSearch, raw.searchViews);
+    if (key === 'searchCatalogAddToCartRate')
+      return _firstValue(raw.searchCatalogAddToCartRate, raw.convToCartSearch, raw.searchCartRate);
+    if (key === 'displayConversionRate')
+      return _firstValue(raw.displayConversionRate, raw.convViewToOrder, rec.convViewToOrder);
     if (key === 'returnCancelRate') {
       const direct = _firstValue(raw.returnCancelRate, raw.returnRate);
       if (direct !== null) return direct;
@@ -363,16 +394,19 @@
       return redemption === null ? null : 100 - redemption;
     }
     if (key === 'followerCount') return _firstValue(raw.followerCount, raw.followSellCount, raw.heroFollow);
-    if (key === 'lowestFollowerPrice') return _firstValue(raw.lowestFollowerPrice, raw.followSellMinPrice, raw.followMinPrice);
+    if (key === 'lowestFollowerPrice')
+      return _firstValue(raw.lowestFollowerPrice, raw.followSellMinPrice, raw.followMinPrice);
     return rec[key];
   }
 
   function _formatRow(rec) {
-    return CSV_FIELDS.map((f) => {
-      let v = _resolveCsvValue(rec, f.key);
-      if (f.key === 'collectedAt' && v) v = new Date(v).toISOString();
-      return _csvEscape(v);
-    }).join(',') + '\n';
+    return (
+      CSV_FIELDS.map((f) => {
+        let v = _resolveCsvValue(rec, f.key);
+        if (f.key === 'collectedAt' && v) v = new Date(v).toISOString();
+        return _csvEscape(v);
+      }).join(',') + '\n'
+    );
   }
 
   const CSV_HEADER = '﻿' + CSV_FIELDS.map((f) => f.label).join(',') + '\n'; // BOM for Excel CN
@@ -383,9 +417,7 @@
     return new Promise((resolve, reject) => {
       const tx = _db.transaction([STORE_SALES], 'readonly');
       const store = tx.objectStore(STORE_SALES);
-      const req = opts.status
-        ? store.index('status').openCursor(IDBKeyRange.only(opts.status))
-        : store.openCursor();
+      const req = opts.status ? store.index('status').openCursor(IDBKeyRange.only(opts.status)) : store.openCursor();
       let count = 0;
       req.onsuccess = (e) => {
         const cursor = e.target.result;
@@ -411,7 +443,8 @@
     const total = await countSales(opts);
     if (total === 0) throw new Error('没有可导出的数据');
 
-    const filenameBase = opts.filename || `${globalThis.__JZ_BRAND__.displayName}采集_${new Date().toISOString().slice(0, 10)}`;
+    const filenameBase =
+      opts.filename || `${globalThis.__JZ_BRAND__.displayName}采集_${new Date().toISOString().slice(0, 10)}`;
 
     // Path A: showSaveFilePicker 流式写
     if (typeof window.showSaveFilePicker === 'function') {
@@ -595,14 +628,32 @@
     _v2: true,
     init,
     // sales
-    putSale, putSaleBatch, getSale, getAllSales, getSalesSince, countSales, markPushed, deleteSale, clearSales,
+    putSale,
+    putSaleBatch,
+    getSale,
+    getAllSales,
+    getSalesSince,
+    countSales,
+    markPushed,
+    deleteSale,
+    clearSales,
     exportCsv,
     // keywords
-    addKeywords, getKeywords, getNextPendingKeyword, updateKeyword, removeKeyword, clearKeywords,
+    addKeywords,
+    getKeywords,
+    getNextPendingKeyword,
+    updateKeyword,
+    removeKeyword,
+    clearKeywords,
     // sessions
-    setSession, getSession, clearSession,
+    setSession,
+    getSession,
+    clearSession,
     // failures
-    addFailure, getFailures, removeFailure, clearFailures,
+    addFailure,
+    getFailures,
+    removeFailure,
+    clearFailures,
     // util
     onChange,
   };

@@ -3,13 +3,13 @@
   // 用 /__BRAND/ 探测而不写全占位符:build 的 textual replace 会把出现的全占位符全换掉,
   // 若把探测串也写全,分销商 build 会被错误兜底成平台默认(store.jizhangerp.com / 极掌)。
   const _brandFallback = (val, fb) => (/__BRAND/.test(val) ? fb : val);
-  const BRAND_WEB_HOST = _brandFallback("my.jizhangerp.com", "store.jizhangerp.com");
-  const BRAND_DISPLAY_NAME = _brandFallback("MY", "极掌");
+  const BRAND_WEB_HOST = _brandFallback('my.jizhangerp.com', 'store.jizhangerp.com');
+  const BRAND_DISPLAY_NAME = _brandFallback('MY', '极掌');
 
   // popup.html 里的 MY 静态占位符(标题/logo/按钮文案)在 dev 源码
   // 加载时不会被 build 替换 → 运行时扫一遍文本节点 + title + img[alt] 兜底替换。
   const applyBrandToDom = () => {
-    const PH = "__BRAND" + "_DISPLAY_NAME__"; // 拆写,避免被 build textual replace 命中
+    const PH = '__BRAND' + '_DISPLAY_NAME__'; // 拆写,避免被 build textual replace 命中
     if (document.title.includes(PH)) {
       document.title = document.title.split(PH).join(BRAND_DISPLAY_NAME);
     }
@@ -21,7 +21,7 @@
         n.nodeValue = n.nodeValue.split(PH).join(BRAND_DISPLAY_NAME);
       }
     });
-    document.querySelectorAll("img[alt]").forEach((img) => {
+    document.querySelectorAll('img[alt]').forEach((img) => {
       if (img.alt.includes(PH)) img.alt = img.alt.split(PH).join(BRAND_DISPLAY_NAME);
     });
   };
@@ -29,74 +29,72 @@
 
   // Dynamically resolved after backend detection; default to production
   // V2.0: brand.webHost 注入占位符,build 时根据 distributor 替换。
-  let FRONTEND_BASE_URL = "https://" + BRAND_WEB_HOST;
+  let FRONTEND_BASE_URL = 'https://' + BRAND_WEB_HOST;
 
   // ─── DOM refs ───
-  const loginView = document.getElementById("login-view");
-  const mainView = document.getElementById("main-view");
-  const loginTip = document.getElementById("login-tip");
-  const logoutBtn = document.getElementById("logout-btn");
-  const serverStatus = document.getElementById("server-status");
+  const loginView = document.getElementById('login-view');
+  const mainView = document.getElementById('main-view');
+  const loginTip = document.getElementById('login-tip');
+  const logoutBtn = document.getElementById('logout-btn');
+  const serverStatus = document.getElementById('server-status');
 
   // store card
-  const storeCard = document.getElementById("store-card");
-  const storeName = document.getElementById("store-name");
-  const storeAuth = document.getElementById("store-auth");
-  const storeAuthDot = storeAuth.querySelector(".auth-dot");
-  const storeAuthText = storeAuth.querySelector(".auth-text");
-  const storeR = document.getElementById("store-r");
-  const storeSelect = document.getElementById("store-select");
-  const syncCookieBtn = document.getElementById("sync-cookie-btn");
-  const sellerPortalBtn = document.getElementById("seller-portal-btn");
-  const sellerPortalLabel = document.getElementById("seller-portal-label");
+  const storeCard = document.getElementById('store-card');
+  const storeName = document.getElementById('store-name');
+  const storeAuth = document.getElementById('store-auth');
+  const storeAuthDot = storeAuth.querySelector('.auth-dot');
+  const storeAuthText = storeAuth.querySelector('.auth-text');
+  const storeR = document.getElementById('store-r');
+  const storeSelect = document.getElementById('store-select');
+  const syncCookieBtn = document.getElementById('sync-cookie-btn');
+  const sellerPortalBtn = document.getElementById('seller-portal-btn');
+  const sellerPortalLabel = document.getElementById('seller-portal-label');
 
   // today + signals
-  const todayCountEl = document.getElementById("today-count");
-  const signalsContainer = document.getElementById("signals");
+  const todayCountEl = document.getElementById('today-count');
+  const signalsContainer = document.getElementById('signals');
 
   // nav badges
-  const navBadgeProducts = document.getElementById("nav-badge-products");
-  const navBadgeCollect = document.getElementById("nav-badge-collect");
+  const navBadgeProducts = document.getElementById('nav-badge-products');
+  const navBadgeCollect = document.getElementById('nav-badge-collect');
 
   // 采集器实时大屏
-  const collectorMonSection = document.getElementById("collector-mon-section");
-  const collectorMonList = document.getElementById("collector-mon-list");
+  const collectorMonSection = document.getElementById('collector-mon-section');
+  const collectorMonList = document.getElementById('collector-mon-list');
   let _collectorMonTimer = null;
 
   // Local Browser Agent task monitor
-  const browserAgentSection = document.getElementById("browser-agent-section");
-  const browserAgentTitle = document.getElementById("browser-agent-title");
-  const browserAgentMeta = document.getElementById("browser-agent-meta");
-  const browserAgentProgressBar = document.getElementById(
-    "browser-agent-progress-bar",
-  );
-  const browserAgentStopBtn = document.getElementById("browser-agent-stop-btn");
+  const browserAgentSection = document.getElementById('browser-agent-section');
+  const browserAgentTitle = document.getElementById('browser-agent-title');
+  const browserAgentMeta = document.getElementById('browser-agent-meta');
+  const browserAgentProgressBar = document.getElementById('browser-agent-progress-bar');
+  const browserAgentStopBtn = document.getElementById('browser-agent-stop-btn');
   let _browserAgentTimer = null;
   let _browserAgentJobId = null;
 
   // update banner (kept)
-  const updateBanner = document.getElementById("update-banner");
-  const updateVersion = document.getElementById("update-version");
-  const currentVersionEl = document.getElementById("current-version");
-  const dismissUpdateBtn = document.getElementById("dismiss-update-btn");
-  const downloadUpdateBtn = document.getElementById("download-update-btn");
-  const headerVersion = document.getElementById("header-version");
+  const updateBanner = document.getElementById('update-banner');
+  const updateVersion = document.getElementById('update-version');
+  const currentVersionEl = document.getElementById('current-version');
+  const dismissUpdateBtn = document.getElementById('dismiss-update-btn');
+  const downloadUpdateBtn = document.getElementById('download-update-btn');
+  const headerVersion = document.getElementById('header-version');
 
   // login form (unchanged)
-  const smsPhone = document.getElementById("sms-phone");
-  const smsCaptchaCode = document.getElementById("sms-captcha-code");
-  const smsCaptchaImg = document.getElementById("sms-captcha-img");
-  const smsCode = document.getElementById("sms-code");
-  const sendCodeBtn = document.getElementById("send-code-btn");
-  const smsLoginBtn = document.getElementById("sms-login-btn");
-  const loginPhone = document.getElementById("login-phone");
-  const pwdCaptchaCode = document.getElementById("pwd-captcha-code");
-  const pwdCaptchaImg = document.getElementById("pwd-captcha-img");
-  const loginPassword = document.getElementById("login-password");
-  const loginBtn = document.getElementById("login-btn");
+  const smsPhone = document.getElementById('sms-phone');
+  const smsCaptchaCode = document.getElementById('sms-captcha-code');
+  const smsCaptchaImg = document.getElementById('sms-captcha-img');
+  const smsCode = document.getElementById('sms-code');
+  const sendCodeBtn = document.getElementById('send-code-btn');
+  const smsLoginBtn = document.getElementById('sms-login-btn');
+  const loginPhone = document.getElementById('login-phone');
+  const pwdCaptchaCode = document.getElementById('pwd-captcha-code');
+  const pwdCaptchaImg = document.getElementById('pwd-captcha-img');
+  const loginPassword = document.getElementById('login-password');
+  const loginBtn = document.getElementById('login-btn');
 
-  let smsCaptchaId = "";
-  let pwdCaptchaId = "";
+  let smsCaptchaId = '';
+  let pwdCaptchaId = '';
   let smsCountdown = 0;
   let smsTimer = null;
 
@@ -112,11 +110,7 @@
   // v3 移除这两个不稳维度,保留 OS + 屏分辨率 + 色深 + 时区 + 主语言 + CPU 核数。
   const getMachineFingerprint = () => {
     const screenInfo = window.screen
-      ? [
-          window.screen.width,
-          window.screen.height,
-          window.screen.colorDepth,
-        ].join('x')
+      ? [window.screen.width, window.screen.height, window.screen.colorDepth].join('x')
       : 'unknown-screen';
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown-tz';
     const language = navigator.language || 'unknown-lang';
@@ -155,75 +149,71 @@
 
   const setLoginState = (loggedIn) => {
     if (loggedIn) {
-      loginView.style.display = "none";
-      mainView.classList.add("active");
+      loginView.style.display = 'none';
+      mainView.classList.add('active');
     } else {
-      loginView.style.display = "flex";
-      mainView.classList.remove("active");
+      loginView.style.display = 'flex';
+      mainView.classList.remove('active');
     }
   };
 
   const showTip = (msg, isError = true) => {
-    loginTip.textContent = msg || "";
-    loginTip.style.color = isError ? "var(--orange)" : "var(--green)";
+    loginTip.textContent = msg || '';
+    loginTip.style.color = isError ? 'var(--orange)' : 'var(--green)';
   };
 
   const updateServerStatus = (connected) => {
-    const text = serverStatus.querySelector(".status-text");
+    const text = serverStatus.querySelector('.status-text');
     if (connected) {
-      serverStatus.className = "server-status connected";
-      text.textContent = "服务器已连接";
+      serverStatus.className = 'server-status connected';
+      text.textContent = '服务器已连接';
     } else {
-      serverStatus.className = "server-status error";
-      text.textContent = "服务器连接失败";
+      serverStatus.className = 'server-status error';
+      text.textContent = '服务器连接失败';
     }
   };
 
   const fetchAuth = async () => {
-    const response = await sendMessage({ action: "getAuth" });
+    const response = await sendMessage({ action: 'getAuth' });
     return response?.data || response || {};
   };
 
   const saveAuth = async (token, storeId) => {
-    await sendMessage({ action: "saveAuth", token, storeId });
+    await sendMessage({ action: 'saveAuth', token, storeId });
   };
 
   // ─── Login (unchanged behaviour) ───
   const loadCaptcha = async (target) => {
     try {
-      const resp = await sendMessage({ action: "getCaptcha" });
-      if (!resp?.ok) throw new Error(resp?.error || "Failed");
+      const resp = await sendMessage({ action: 'getCaptcha' });
+      if (!resp?.ok) throw new Error(resp?.error || 'Failed');
       const data = resp.data?.data || resp.data;
-      if (target === "sms") {
+      if (target === 'sms') {
         smsCaptchaId = data.captchaId;
         smsCaptchaImg.src = data.imageBase64;
-        smsCaptchaCode.value = "";
+        smsCaptchaCode.value = '';
       } else {
         pwdCaptchaId = data.captchaId;
         pwdCaptchaImg.src = data.imageBase64;
-        pwdCaptchaCode.value = "";
+        pwdCaptchaCode.value = '';
       }
       updateServerStatus(true);
     } catch {
-      showTip("获取验证码失败");
+      showTip('获取验证码失败');
       updateServerStatus(false);
     }
   };
 
-  smsCaptchaImg.addEventListener("click", () => loadCaptcha("sms"));
-  pwdCaptchaImg.addEventListener("click", () => loadCaptcha("pwd"));
+  smsCaptchaImg.addEventListener('click', () => loadCaptcha('sms'));
+  pwdCaptchaImg.addEventListener('click', () => loadCaptcha('pwd'));
 
-  document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document
-        .querySelectorAll(".tab-btn")
-        .forEach((b) => b.classList.remove("active"));
-      document
-        .querySelectorAll(".tab-panel")
-        .forEach((p) => p.classList.remove("active"));
-      btn.classList.add("active");
-      document.getElementById(`tab-${btn.dataset.tab}`).classList.add("active");
-      showTip("");
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+      showTip('');
     });
   });
 
@@ -232,7 +222,7 @@
       sendCodeBtn.textContent = `${smsCountdown}s`;
       sendCodeBtn.disabled = true;
     } else {
-      sendCodeBtn.textContent = "获取验证码";
+      sendCodeBtn.textContent = '获取验证码';
       sendCodeBtn.disabled = false;
       if (smsTimer) {
         clearInterval(smsTimer);
@@ -241,36 +231,36 @@
     }
   };
 
-  sendCodeBtn.addEventListener("click", async () => {
+  sendCodeBtn.addEventListener('click', async () => {
     if (smsTimer || sendCodeBtn.disabled) return;
     const phone = smsPhone.value.trim();
     const captchaCode = smsCaptchaCode.value.trim();
     if (!phone) {
-      showTip("请输入手机号");
+      showTip('请输入手机号');
       return;
     }
     if (!captchaCode || !smsCaptchaId) {
-      showTip("请输入图形验证码");
+      showTip('请输入图形验证码');
       return;
     }
 
     sendCodeBtn.disabled = true;
-    showTip("发送中...", false);
+    showTip('发送中...', false);
     const resp = await sendMessage({
-      action: "sendSmsCode",
+      action: 'sendSmsCode',
       phoneNumber: phone,
       captchaId: smsCaptchaId,
       captchaCode,
     });
 
     if (!resp?.ok) {
-      showTip(resp?.error || "发送验证码失败");
+      showTip(resp?.error || '发送验证码失败');
       sendCodeBtn.disabled = false;
-      await loadCaptcha("sms");
+      await loadCaptcha('sms');
       return;
     }
 
-    showTip("验证码已发送", false);
+    showTip('验证码已发送', false);
     smsCountdown = 60;
     updateCountdownUI();
     smsTimer = setInterval(() => {
@@ -279,27 +269,27 @@
     }, 1000);
   });
 
-  smsLoginBtn.addEventListener("click", async () => {
+  smsLoginBtn.addEventListener('click', async () => {
     const phone = smsPhone.value.trim();
     const code = smsCode.value.trim();
     if (!phone) {
-      showTip("请输入手机号");
+      showTip('请输入手机号');
       return;
     }
     if (!code) {
-      showTip("请输入短信验证码");
+      showTip('请输入短信验证码');
       return;
     }
 
-    showTip("登录中...", false);
+    showTip('登录中...', false);
     const resp = await sendMessage({
-      action: "loginSms",
+      action: 'loginSms',
       phoneNumber: phone,
       code,
       deviceFingerprint: getMachineFingerprint(),
     });
     if (!resp?.ok) {
-      showTip(resp?.error || "登录失败");
+      showTip(resp?.error || '登录失败');
       return;
     }
 
@@ -307,43 +297,43 @@
     // P9 多身份场景:backend 返 { sessionToken, identities } — popup 没有身份选择 UI,
     // 引导用户走网页端登录。
     if (data?.sessionToken && Array.isArray(data?.identities)) {
-      showTip("此账号绑定多个身份,请用网页端登录后回扩展自动同步");
+      showTip('此账号绑定多个身份,请用网页端登录后回扩展自动同步');
       return;
     }
     // P9 把字段从 access_token 改成了 accessToken (camelCase),老路径仍返 access_token。
     // 三个都兜底,避免 backend shape 漂移又把扩展登录挂了。
     const token = data?.accessToken || data?.access_token || data?.token;
     if (!token) {
-      showTip("登录失败：未获取到Token");
+      showTip('登录失败：未获取到Token');
       return;
     }
 
     await saveAuth(token, null);
-    showTip("登录成功", false);
+    showTip('登录成功', false);
     await initMainView();
     setLoginState(true);
   });
 
-  loginBtn.addEventListener("click", async () => {
+  loginBtn.addEventListener('click', async () => {
     const phone = loginPhone.value.trim();
     const password = loginPassword.value.trim();
     const captchaCode = pwdCaptchaCode.value.trim();
     if (!phone) {
-      showTip("请输入手机号");
+      showTip('请输入手机号');
       return;
     }
     if (!password) {
-      showTip("请输入密码");
+      showTip('请输入密码');
       return;
     }
     if (!captchaCode || !pwdCaptchaId) {
-      showTip("请输入图形验证码");
+      showTip('请输入图形验证码');
       return;
     }
 
-    showTip("登录中...", false);
+    showTip('登录中...', false);
     const resp = await sendMessage({
-      action: "loginPassword",
+      action: 'loginPassword',
       phoneNumber: phone,
       password,
       captchaId: pwdCaptchaId,
@@ -352,24 +342,24 @@
     });
 
     if (!resp?.ok) {
-      showTip(resp?.error || "登录失败");
-      await loadCaptcha("pwd");
+      showTip(resp?.error || '登录失败');
+      await loadCaptcha('pwd');
       return;
     }
 
     const data = resp.data?.data || resp.data;
     if (data?.sessionToken && Array.isArray(data?.identities)) {
-      showTip("此账号绑定多个身份,请用网页端登录后回扩展自动同步");
+      showTip('此账号绑定多个身份,请用网页端登录后回扩展自动同步');
       return;
     }
     const token = data?.accessToken || data?.access_token || data?.token;
     if (!token) {
-      showTip("登录失败：未获取到Token");
+      showTip('登录失败：未获取到Token');
       return;
     }
 
     await saveAuth(token, null);
-    showTip("登录成功", false);
+    showTip('登录成功', false);
     await initMainView();
     setLoginState(true);
   });
@@ -377,55 +367,51 @@
   // ─── Main view: data fetchers ───
   const loadStores = async () => {
     storeSelect.innerHTML = '<option value="">加载中...</option>';
-    storeName.textContent = "加载中...";
+    storeName.textContent = '加载中...';
 
     let response;
     try {
-      response = await sendMessage({ action: "getStores" });
+      response = await sendMessage({ action: 'getStores' });
     } catch (e) {
-      console.error("[popup] loadStores exception:", e);
+      console.error('[popup] loadStores exception:', e);
       storeSelect.innerHTML = '<option value="">加载失败</option>';
-      storeName.textContent = "加载失败";
+      storeName.textContent = '加载失败';
       return [];
     }
     if (!response?.ok) {
-      const err = response?.error || "";
-      console.error("[popup] loadStores failed:", err || response);
+      const err = response?.error || '';
+      console.error('[popup] loadStores failed:', err || response);
       if (
-        err.includes("[401]") ||
-        err.includes("Unauthorized") ||
-        err.includes("未授权") ||
-        err.includes("jwt expired") ||
-        err.includes("invalid token")
+        err.includes('[401]') ||
+        err.includes('Unauthorized') ||
+        err.includes('未授权') ||
+        err.includes('jwt expired') ||
+        err.includes('invalid token')
       ) {
-        console.warn("[popup] Token likely expired, forcing logout");
-        await sendMessage({ action: "logout" });
+        console.warn('[popup] Token likely expired, forcing logout');
+        await sendMessage({ action: 'logout' });
         setLoginState(false);
-        await Promise.all([loadCaptcha("sms"), loadCaptcha("pwd")]);
-        showTip("登录已过期，请重新登录");
+        await Promise.all([loadCaptcha('sms'), loadCaptcha('pwd')]);
+        showTip('登录已过期，请重新登录');
         return [];
       }
-      storeSelect.innerHTML = `<option value="">加载失败${err ? ": " + err.slice(0, 30) : ""}</option>`;
-      storeName.textContent = "加载失败";
+      storeSelect.innerHTML = `<option value="">加载失败${err ? ': ' + err.slice(0, 30) : ''}</option>`;
+      storeName.textContent = '加载失败';
       return [];
     }
 
     const stores = response.data?.data || response.data || [];
-    storeSelect.innerHTML = "";
+    storeSelect.innerHTML = '';
     if (!stores.length) {
       storeSelect.innerHTML = '<option value="">暂无店铺</option>';
-      storeName.textContent = "暂无店铺";
+      storeName.textContent = '暂无店铺';
       return [];
     }
 
     stores.forEach((store) => {
-      const option = document.createElement("option");
-      option.value = store.id || store.storeId || "";
-      option.textContent =
-        store.label ||
-        store.companyName ||
-        store.legalName ||
-        `店铺 ${option.value}`;
+      const option = document.createElement('option');
+      option.value = store.id || store.storeId || '';
+      option.textContent = store.label || store.companyName || store.legalName || `店铺 ${option.value}`;
       storeSelect.appendChild(option);
     });
 
@@ -435,72 +421,65 @@
       activeId = String(auth.storeId);
       storeSelect.value = activeId;
     } else {
-      activeId = String(stores[0].id || stores[0].storeId || "");
+      activeId = String(stores[0].id || stores[0].storeId || '');
       if (activeId) {
         storeSelect.value = activeId;
         await saveAuth(auth.token, activeId);
       }
     }
 
-    const active =
-      stores.find((s) => String(s.id || s.storeId) === activeId) || stores[0];
-    storeName.textContent =
-      active?.label ||
-      active?.companyName ||
-      active?.legalName ||
-      `店铺 ${activeId}`;
+    const active = stores.find((s) => String(s.id || s.storeId) === activeId) || stores[0];
+    storeName.textContent = active?.label || active?.companyName || active?.legalName || `店铺 ${activeId}`;
     return stores;
   };
 
   // ─── Cookie status ───
   const checkCookieStatus = async () => {
     try {
-      const resp = await sendMessage({ action: "checkSellerCookies" });
+      const resp = await sendMessage({ action: 'checkSellerCookies' });
       if (resp?.ok && resp.data?.sc_company_id) {
-        return { status: "ok", companyId: resp.data.sc_company_id };
+        return { status: 'ok', companyId: resp.data.sc_company_id };
       }
       if (resp?.ok && resp.data?.has_cookies) {
-        return { status: "warn", message: "Ozon Cookie 存在，但未找到店铺 ID" };
+        return { status: 'warn', message: 'Ozon Cookie 存在，但未找到店铺 ID' };
       }
-      return { status: "err", message: "Seller 登录已失效" };
+      return { status: 'err', message: 'Seller 登录已失效' };
     } catch {
-      return { status: "unknown" };
+      return { status: 'unknown' };
     }
   };
 
   const renderStoreAuth = (cookie) => {
-    storeAuth.classList.remove("ok", "err", "warn");
-    storeCard.classList.remove("is-error");
-    syncCookieBtn.style.display = "none";
-    storeR.style.display = "";
+    storeAuth.classList.remove('ok', 'err', 'warn');
+    storeCard.classList.remove('is-error');
+    syncCookieBtn.style.display = 'none';
+    storeR.style.display = '';
 
-    if (cookie.status === "ok") {
-      storeAuth.classList.add("ok");
+    if (cookie.status === 'ok') {
+      storeAuth.classList.add('ok');
       storeAuthText.textContent = `Seller 已登录 · ${cookie.companyId}`;
-    } else if (cookie.status === "warn") {
-      storeAuth.classList.add("err");
+    } else if (cookie.status === 'warn') {
+      storeAuth.classList.add('err');
       storeAuthText.textContent = cookie.message;
-      storeCard.classList.add("is-error");
-      storeR.style.display = "none";
-      syncCookieBtn.style.display = "";
-    } else if (cookie.status === "err") {
-      storeAuth.classList.add("err");
+      storeCard.classList.add('is-error');
+      storeR.style.display = 'none';
+      syncCookieBtn.style.display = '';
+    } else if (cookie.status === 'err') {
+      storeAuth.classList.add('err');
       storeAuthText.textContent = cookie.message;
-      storeCard.classList.add("is-error");
-      storeR.style.display = "none";
-      syncCookieBtn.style.display = "";
+      storeCard.classList.add('is-error');
+      storeR.style.display = 'none';
+      syncCookieBtn.style.display = '';
     } else {
-      storeAuthText.textContent = "检测失败";
+      storeAuthText.textContent = '检测失败';
     }
 
     // seller 跳转/登录按钮:已登录→「查看」(幽灵态),否则→「登录」(醒目态引导登录)。
     if (sellerPortalBtn && sellerPortalLabel) {
-      const loggedIn = cookie.status === "ok";
-      sellerPortalBtn.classList.toggle("is-login", !loggedIn);
-      sellerPortalLabel.textContent = loggedIn ? "查看" : "登录";
-      sellerPortalBtn.title = loggedIn
-        ? "打开 seller.ozon.ru 卖家后台"
-        : "登录 seller.ozon.ru 卖家后台";
+      const loggedIn = cookie.status === 'ok';
+      sellerPortalBtn.classList.toggle('is-login', !loggedIn);
+      sellerPortalLabel.textContent = loggedIn ? '查看' : '登录';
+      sellerPortalBtn.title = loggedIn ? '打开 seller.ozon.ru 卖家后台' : '登录 seller.ozon.ru 卖家后台';
     }
   };
 
@@ -508,20 +487,14 @@
   const loadCounts = async () => {
     const counts = { collect: 0, products: 0 };
     const [c, p] = await Promise.all([
-      sendMessage({ action: "getCollectCount" }).catch(() => null),
-      sendMessage({ action: "getProductStatusCounts" }).catch(() => null),
+      sendMessage({ action: 'getCollectCount' }).catch(() => null),
+      sendMessage({ action: 'getProductStatusCounts' }).catch(() => null),
     ]);
     if (c?.ok) counts.collect = c.data?.total ?? c.data?.data?.total ?? 0;
     if (p?.ok && p.data) {
       const v = p.data;
       counts.products =
-        v.ALL ||
-        v.total ||
-        Object.values(v).reduce(
-          (a, b) => a + (typeof b === "number" ? b : 0),
-          0,
-        ) ||
-        0;
+        v.ALL || v.total || Object.values(v).reduce((a, b) => a + (typeof b === 'number' ? b : 0), 0) || 0;
     }
     return counts;
   };
@@ -529,15 +502,15 @@
   const renderNavBadges = (counts) => {
     if (counts.products > 0) {
       navBadgeProducts.textContent = String(counts.products);
-      navBadgeProducts.style.display = "";
+      navBadgeProducts.style.display = '';
     } else {
-      navBadgeProducts.style.display = "none";
+      navBadgeProducts.style.display = 'none';
     }
     if (counts.collect > 0) {
       navBadgeCollect.textContent = String(counts.collect);
-      navBadgeCollect.style.display = "";
+      navBadgeCollect.style.display = '';
     } else {
-      navBadgeCollect.style.display = "none";
+      navBadgeCollect.style.display = 'none';
     }
   };
 
@@ -545,7 +518,7 @@
   const loadFollowSellSignal = async () => {
     try {
       const resp = await sendMessage({
-        action: "listFollowSellTasks",
+        action: 'listFollowSellTasks',
         current: 1,
         pageSize: 20,
       });
@@ -554,22 +527,16 @@
       const now = Date.now();
       const RECENT_MS = 60 * 60 * 1000;
       const recentFailed = items.filter(
-        (t) =>
-          t.status === "FAILED" &&
-          t.createdAt &&
-          now - new Date(t.createdAt).getTime() < RECENT_MS,
+        (t) => t.status === 'FAILED' && t.createdAt && now - new Date(t.createdAt).getTime() < RECENT_MS
       );
-      const inflight = items.filter(
-        (t) => t.status === "QUEUED" || t.status === "PROCESSING",
-      );
+      const inflight = items.filter((t) => t.status === 'QUEUED' || t.status === 'PROCESSING');
       if (recentFailed.length > 0)
         return {
-          kind: "follow-failed",
+          kind: 'follow-failed',
           count: recentFailed.length,
           sample: recentFailed[0],
         };
-      if (inflight.length > 0)
-        return { kind: "follow-inflight", count: inflight.length };
+      if (inflight.length > 0) return { kind: 'follow-inflight', count: inflight.length };
       return null;
     } catch {
       return null;
@@ -594,14 +561,14 @@
   // ─── Collected-URL session memory ─────────────────────────────────
   // 用户采集成功后，30 分钟内不再展示「采集当前商品」signal，避免空点。
   // 用 chrome.storage.local 而不是 sessionStorage：popup 关闭后状态消失会让人困惑。
-  const COLLECTED_URL_KEY = "collectedOzonUrlsV1";
+  const COLLECTED_URL_KEY = 'collectedOzonUrlsV1';
   const COLLECTED_URL_TTL_MS = 30 * 60 * 1000;
   const normalizeProductUrl = (url) => {
     try {
       const u = new URL(url);
-      return "https://" + u.host + u.pathname;
+      return 'https://' + u.host + u.pathname;
     } catch {
-      return String(url || "");
+      return String(url || '');
     }
   };
   const loadCollectedUrls = async () => {
@@ -611,8 +578,7 @@
       const now = Date.now();
       const fresh = {};
       for (const [k, ts] of Object.entries(m)) {
-        if (typeof ts === "number" && now - ts < COLLECTED_URL_TTL_MS)
-          fresh[k] = ts;
+        if (typeof ts === 'number' && now - ts < COLLECTED_URL_TTL_MS) fresh[k] = ts;
       }
       // 顺手把过期项清掉
       if (Object.keys(fresh).length !== Object.keys(m).length) {
@@ -643,8 +609,7 @@
       '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
     archive:
       '<rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
-    clock:
-      '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
     alert:
       '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
     check: '<polyline points="20 6 9 17 4 12"/>',
@@ -653,28 +618,28 @@
     `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round">${ICON_SVG[key]}</svg>`;
 
   const renderSignals = (signals) => {
-    signalsContainer.innerHTML = "";
+    signalsContainer.innerHTML = '';
     if (signals.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "sig-empty";
-      empty.innerHTML = `${svgEl("check", 14, 2.5)}没有待处理任务`;
+      const empty = document.createElement('div');
+      empty.className = 'sig-empty';
+      empty.innerHTML = `${svgEl('check', 14, 2.5)}没有待处理任务`;
       signalsContainer.appendChild(empty);
       return;
     }
     signals.forEach((sig) => {
-      const card = document.createElement("div");
+      const card = document.createElement('div');
       card.className = `sig is-${sig.variant}`;
       card.innerHTML = `
         <div class="sig-icon">${svgEl(sig.icon, 16)}</div>
         <div class="sig-body">
           <div class="sig-title">${sig.title}</div>
-          ${sig.sub ? `<div class="sig-sub">${sig.sub}</div>` : ""}
+          ${sig.sub ? `<div class="sig-sub">${sig.sub}</div>` : ''}
         </div>
       `;
-      const btn = document.createElement("button");
-      btn.className = sig.btnGhost ? "sig-btn-ghost" : "sig-btn";
+      const btn = document.createElement('button');
+      btn.className = sig.btnGhost ? 'sig-btn-ghost' : 'sig-btn';
       btn.textContent = sig.btnLabel;
-      btn.addEventListener("click", () => sig.onAction(btn));
+      btn.addEventListener('click', () => sig.onAction(btn));
       card.appendChild(btn);
       signalsContainer.appendChild(card);
     });
@@ -682,15 +647,13 @@
 
   const renderToday = (signals) => {
     if (signals.length === 0) {
-      todayCountEl.textContent = "一切正常";
-      todayCountEl.classList.remove("is-bad");
+      todayCountEl.textContent = '一切正常';
+      todayCountEl.classList.remove('is-bad');
       return;
     }
-    const hasBad = signals.some((s) => s.variant === "bad");
-    todayCountEl.textContent = hasBad
-      ? `${signals.length} 项需要处理`
-      : `${signals.length} 项待处理`;
-    todayCountEl.classList.toggle("is-bad", hasBad);
+    const hasBad = signals.some((s) => s.variant === 'bad');
+    todayCountEl.textContent = hasBad ? `${signals.length} 项需要处理` : `${signals.length} 项待处理`;
+    todayCountEl.classList.toggle('is-bad', hasBad);
   };
 
   // ─── Build signals (priority-ordered) ───
@@ -707,28 +670,26 @@
     const signals = [];
 
     // 1. bad: cookie 失效
-    if (cookie.status === "err" || cookie.status === "warn") {
+    if (cookie.status === 'err' || cookie.status === 'warn') {
       signals.push({
-        variant: "bad",
-        icon: "alert",
-        title: "登录已掉线，先同步 Cookie",
-        sub: "同步前其它操作可能失败",
-        btnLabel: "立即同步",
+        variant: 'bad',
+        icon: 'alert',
+        title: '登录已掉线，先同步 Cookie',
+        sub: '同步前其它操作可能失败',
+        btnLabel: '立即同步',
         onAction: () => doSyncCookie(),
       });
     }
 
     // 2. context: 当前 ozon 商品页（30 分钟内已采集过的不再重复显示）
     if (ctxTab && !(await isUrlCollected(ctxTab.url))) {
-      const previewUrl =
-        ctxTab.url.replace(/^https?:\/\//, "").slice(0, 38) +
-        (ctxTab.url.length > 45 ? "..." : "");
+      const previewUrl = ctxTab.url.replace(/^https?:\/\//, '').slice(0, 38) + (ctxTab.url.length > 45 ? '...' : '');
       signals.push({
-        variant: "context",
-        icon: "camera",
-        title: "采集当前商品",
+        variant: 'context',
+        icon: 'camera',
+        title: '采集当前商品',
         sub: previewUrl,
-        btnLabel: "采集",
+        btnLabel: '采集',
         onAction: (btn) => triggerCollectFromTab(ctxTab.tabId, ctxTab.url, btn),
       });
     }
@@ -736,52 +697,50 @@
     // 3. neutral: 采集箱待上架
     if (counts.collect > 0) {
       signals.push({
-        variant: "neutral",
-        icon: "archive",
+        variant: 'neutral',
+        icon: 'archive',
         title: `采集箱待上架 ${counts.collect} 个`,
-        sub: "",
-        btnLabel: "去上架",
+        sub: '',
+        btnLabel: '去上架',
         btnGhost: true,
         onAction: () =>
           sendMessage({
-            action: "openFrontend",
-            path: "/ozon/products/collect",
+            action: 'openFrontend',
+            path: '/ozon/products/collect',
           }),
       });
     }
 
     // 4. bad: 跟卖任务失败
-    if (followSig?.kind === "follow-failed") {
-      const errPreview = (followSig.sample?.errorMessage || "后台处理失败")
-        .toString()
-        .slice(0, 50);
+    if (followSig?.kind === 'follow-failed') {
+      const errPreview = (followSig.sample?.errorMessage || '后台处理失败').toString().slice(0, 50);
       signals.push({
-        variant: "bad",
-        icon: "alert",
+        variant: 'bad',
+        icon: 'alert',
         title: `${followSig.count} 个跟卖任务失败`,
         sub: errPreview,
-        btnLabel: "查看",
+        btnLabel: '查看',
         onAction: () =>
           sendMessage({
-            action: "openFrontend",
-            path: "/ozon/products/import-history",
+            action: 'openFrontend',
+            path: '/ozon/products/import-history',
           }),
       });
     }
 
     // 5. warn: 跟卖任务进行中
-    if (followSig?.kind === "follow-inflight") {
+    if (followSig?.kind === 'follow-inflight') {
       signals.push({
-        variant: "warn",
-        icon: "clock",
+        variant: 'warn',
+        icon: 'clock',
         title: `${followSig.count} 个跟卖任务排队中`,
         sub: '点击"查看"进入上架记录',
-        btnLabel: "查看",
+        btnLabel: '查看',
         btnGhost: true,
         onAction: () =>
           sendMessage({
-            action: "openFrontend",
-            path: "/ozon/products/import-history",
+            action: 'openFrontend',
+            path: '/ozon/products/import-history',
           }),
       });
     }
@@ -796,73 +755,67 @@
 
   // ─── 采集器实时大屏 ───────────────────────────────────
   const escapeHtml = (s) =>
-    String(s == null ? "" : s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+    String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
 
   const tabTitleShort = (title, url) => {
-    const t = (title || "").trim();
+    const t = (title || '').trim();
     if (t && !/^https?:/i.test(t)) return t.slice(0, 32);
     try {
-      const u = new URL(url || "");
-      return decodeURIComponent(
-        u.pathname.split("/").filter(Boolean)[1] || u.pathname,
-      ).slice(0, 32);
+      const u = new URL(url || '');
+      return decodeURIComponent(u.pathname.split('/').filter(Boolean)[1] || u.pathname).slice(0, 32);
     } catch {
-      return "OZON 页面";
+      return 'OZON 页面';
     }
   };
 
   const renderCollectorMon = (tabs) => {
     if (!tabs || tabs.length === 0) {
-      collectorMonSection.style.display = "none";
+      collectorMonSection.style.display = 'none';
       return;
     }
-    collectorMonSection.style.display = "";
-    collectorMonList.innerHTML = "";
+    collectorMonSection.style.display = '';
+    collectorMonList.innerHTML = '';
     for (const t of tabs) {
-      const isIdle =
-        !t.running ||
-        (t.stats && t.stats.running === 0 && !t.autoScrollerRunning);
-      const row = document.createElement("div");
-      row.className = "collector-mon-row" + (isIdle ? " is-idle" : "");
+      const isIdle = !t.running || (t.stats && t.stats.running === 0 && !t.autoScrollerRunning);
+      const row = document.createElement('div');
+      row.className = 'collector-mon-row' + (isIdle ? ' is-idle' : '');
       row.innerHTML = `
         <span class="collector-mon-dot"></span>
         <div class="collector-mon-body">
           <div class="collector-mon-title">${escapeHtml(tabTitleShort(t.title, t.url))}</div>
           <div class="collector-mon-meta">
-            ${t.currentKeyword ? `<span class="collector-mon-keyword">${escapeHtml(t.currentKeyword)}</span>` : ""}
+            ${t.currentKeyword ? `<span class="collector-mon-keyword">${escapeHtml(t.currentKeyword)}</span>` : ''}
             <span class="collector-mon-bucket">桶 ${escapeHtml(t.bucketCount ?? 0)}</span>
-            ${t.stats ? `<span>· 进行 ${escapeHtml(t.stats.running)} / 失 ${escapeHtml(t.stats.failed)}</span>` : ""}
+            ${t.stats ? `<span>· 进行 ${escapeHtml(t.stats.running)} / 失 ${escapeHtml(t.stats.failed)}</span>` : ''}
           </div>
         </div>
         <button class="collector-mon-focus-btn" data-tab-id="${escapeHtml(t.tabId)}">聚焦</button>
       `;
-      row
-        .querySelector(".collector-mon-focus-btn")
-        .addEventListener("click", async () => {
-          try {
-            const tabId = Number(t.tabId);
-            if (!Number.isFinite(tabId)) return;
-            const tab = await chrome.tabs.get(tabId).catch(() => null);
-            if (tab && tab.windowId) {
-              await chrome.windows.update(tab.windowId, { focused: true });
-            }
-            await chrome.tabs.update(tabId, { active: true });
-            window.close();
-          } catch {
-            /* swallow */
+      row.querySelector('.collector-mon-focus-btn').addEventListener('click', async () => {
+        try {
+          const tabId = Number(t.tabId);
+          if (!Number.isFinite(tabId)) return;
+          const tab = await chrome.tabs.get(tabId).catch(() => null);
+          if (tab && tab.windowId) {
+            await chrome.windows.update(tab.windowId, { focused: true });
           }
-        });
+          await chrome.tabs.update(tabId, { active: true });
+          window.close();
+        } catch {
+          /* swallow */
+        }
+      });
       collectorMonList.appendChild(row);
     }
   };
 
   const refreshCollectorMon = async () => {
     try {
-      const resp = await sendMessage({ action: "collectorGetState" });
+      const resp = await sendMessage({ action: 'collectorGetState' });
       const tabs = resp?.data?.tabs || [];
       renderCollectorMon(tabs);
     } catch {
@@ -879,43 +832,41 @@
   // ─── Local Browser Agent 任务状态 ─────────────────────────
   const browserAgentActionLabel = (type) =>
     ({
-      "agent.ping": "连接检测",
-      "collect.hot_products": "热卖商品采集",
-      "collect.product_detail": "商品详情采集",
-      "listing.create_draft": "生成上架草稿",
-      "listing.publish_draft": "发布商品",
+      'agent.ping': '连接检测',
+      'collect.hot_products': '热卖商品采集',
+      'collect.product_detail': '商品详情采集',
+      'listing.create_draft': '生成上架草稿',
+      'listing.publish_draft': '发布商品',
     })[type] ||
     type ||
-    "AI Agent 任务";
+    'AI Agent 任务';
 
   const renderBrowserAgentState = (state) => {
     if (!state?.running) {
-      browserAgentSection.style.display = "none";
+      browserAgentSection.style.display = 'none';
       _browserAgentJobId = null;
       return;
     }
 
     _browserAgentJobId = state.jobId || null;
     const rawPercent = Number(state.percent ?? 0);
-    const percent = Number.isFinite(rawPercent)
-      ? Math.max(0, Math.min(100, rawPercent))
-      : 0;
+    const percent = Number.isFinite(rawPercent) ? Math.max(0, Math.min(100, rawPercent)) : 0;
     const label = browserAgentActionLabel(state.type);
-    const stage = state.stage ? ` · ${state.stage}` : "";
-    const cancelText = state.cancelRequested ? "正在停止" : "";
-    const message = state.message || cancelText || "正在执行";
+    const stage = state.stage ? ` · ${state.stage}` : '';
+    const cancelText = state.cancelRequested ? '正在停止' : '';
+    const message = state.message || cancelText || '正在执行';
 
-    browserAgentSection.style.display = "";
+    browserAgentSection.style.display = '';
     browserAgentTitle.textContent = label;
     browserAgentMeta.textContent = `${message}${stage}`;
     browserAgentProgressBar.style.width = `${percent}%`;
     browserAgentStopBtn.disabled = !!state.cancelRequested;
-    browserAgentStopBtn.textContent = state.cancelRequested ? "停止中" : "停止";
+    browserAgentStopBtn.textContent = state.cancelRequested ? '停止中' : '停止';
   };
 
   const refreshBrowserAgentState = async () => {
     try {
-      const resp = await sendMessage({ action: "browserAgentGetState" });
+      const resp = await sendMessage({ action: 'browserAgentGetState' });
       if (!resp?.ok) {
         renderBrowserAgentState(null);
         return;
@@ -936,12 +887,12 @@
   // 已加但 HTML 漏了一版),getElementById 返回 null,这里若不判空,顶层
   // .addEventListener 抛 TypeError 会中断整个 IIFE → init() 永不执行 →
   // 验证码不加载、状态卡在「检测服务器…」、登录彻底失效。判空让其优雅降级。
-  browserAgentStopBtn?.addEventListener("click", async () => {
+  browserAgentStopBtn?.addEventListener('click', async () => {
     if (!_browserAgentJobId) return;
     browserAgentStopBtn.disabled = true;
-    browserAgentStopBtn.textContent = "停止中";
+    browserAgentStopBtn.textContent = '停止中';
     await sendMessage({
-      action: "browserAgentCancelCurrent",
+      action: 'browserAgentCancelCurrent',
       jobId: _browserAgentJobId,
     }).catch(() => null);
     await refreshBrowserAgentState();
@@ -950,21 +901,21 @@
   // ─── Actions: cookie sync, context-tab collect ───
   const doSyncCookie = async () => {
     syncCookieBtn.disabled = true;
-    const originalLabel = syncCookieBtn.querySelector("span").textContent;
-    syncCookieBtn.querySelector("span").textContent = "同步中...";
+    const originalLabel = syncCookieBtn.querySelector('span').textContent;
+    syncCookieBtn.querySelector('span').textContent = '同步中...';
     try {
-      const resp = await sendMessage({ action: "syncSellerCookies" });
+      const resp = await sendMessage({ action: 'syncSellerCookies' });
       if (resp?.ok) {
         await buildSignals(); // 重新拉所有信号
       } else {
-        storeAuth.classList.add("err");
-        storeAuthText.textContent = resp?.error || "同步失败";
+        storeAuth.classList.add('err');
+        storeAuthText.textContent = resp?.error || '同步失败';
       }
     } catch (e) {
-      storeAuthText.textContent = e.message || "同步失败";
+      storeAuthText.textContent = e.message || '同步失败';
     } finally {
       syncCookieBtn.disabled = false;
-      syncCookieBtn.querySelector("span").textContent = originalLabel;
+      syncCookieBtn.querySelector('span').textContent = originalLabel;
     }
   };
 
@@ -973,23 +924,23 @@
     const restoreBtn = () => {
       if (!btn) return;
       btn.disabled = false;
-      btn.dataset.state = "";
-      btn.textContent = "采集";
+      btn.dataset.state = '';
+      btn.textContent = '采集';
     };
     if (btn) {
       btn.disabled = true;
-      btn.dataset.state = "loading";
-      btn.textContent = "采集中…";
+      btn.dataset.state = 'loading';
+      btn.textContent = '采集中…';
     }
     try {
       const resp = await chrome.tabs.sendMessage(tabId, {
-        action: "triggerCollectFromPopup",
+        action: 'triggerCollectFromPopup',
       });
       if (resp?.ok) {
         if (url) await markUrlCollected(url);
         if (btn) {
-          btn.dataset.state = "done";
-          btn.textContent = "已采集";
+          btn.dataset.state = 'done';
+          btn.textContent = '已采集';
         }
         // 短暂展示成功状态后，重建 signals —— 已采集的当前商品 signal 会被过滤掉
         setTimeout(() => {
@@ -997,38 +948,38 @@
         }, 700);
       } else {
         if (btn) {
-          btn.dataset.state = "error";
-          btn.textContent = "采集失败";
+          btn.dataset.state = 'error';
+          btn.textContent = '采集失败';
           setTimeout(restoreBtn, 2000);
         } else {
-          alert(resp?.error || "采集失败，请刷新页面重试");
+          alert(resp?.error || '采集失败，请刷新页面重试');
         }
-        console.warn("[popup] collect failed:", resp?.error);
+        console.warn('[popup] collect failed:', resp?.error);
       }
     } catch (e) {
       if (btn) {
-        btn.dataset.state = "error";
-        btn.textContent = "采集失败";
+        btn.dataset.state = 'error';
+        btn.textContent = '采集失败';
         setTimeout(restoreBtn, 2000);
       } else {
-        alert("采集失败，请刷新页面重试");
+        alert('采集失败，请刷新页面重试');
       }
-      console.warn("[popup] collect error:", e?.message);
+      console.warn('[popup] collect error:', e?.message);
     }
   };
 
-  syncCookieBtn.addEventListener("click", doSyncCookie);
+  syncCookieBtn.addEventListener('click', doSyncCookie);
 
   // seller.ozon.ru 跳转/登录:复用 service-worker 的 openSellerPortal(复用现有
   // seller tab 或新开 /app/products;未登录时 Ozon 自动转登录页)。点完弹窗通常因
   // 焦点切到新标签而关闭,disabled 只是防连点兜底。
-  sellerPortalBtn?.addEventListener("click", async () => {
+  sellerPortalBtn?.addEventListener('click', async () => {
     if (sellerPortalBtn.disabled) return;
     sellerPortalBtn.disabled = true;
     try {
-      await sendMessage({ action: "openSellerPortal" });
+      await sendMessage({ action: 'openSellerPortal' });
     } catch (e) {
-      console.warn("[popup] openSellerPortal error:", e?.message);
+      console.warn('[popup] openSellerPortal error:', e?.message);
     } finally {
       setTimeout(() => {
         sellerPortalBtn.disabled = false;
@@ -1039,19 +990,18 @@
   // ─── Update banner ───
   const checkUpdateBanner = async () => {
     try {
-      const resp = await sendMessage({ action: "getUpdateInfo" });
+      const resp = await sendMessage({ action: 'getUpdateInfo' });
       if (resp?.ok && resp.data) {
-        const { hasUpdate, currentVersion, latestVersion, downloadUrl } =
-          resp.data;
+        const { hasUpdate, currentVersion, latestVersion, downloadUrl } = resp.data;
         if (headerVersion) headerVersion.textContent = `v${currentVersion}`;
         if (hasUpdate && latestVersion) {
           updateVersion.textContent = `v${latestVersion}`;
           currentVersionEl.textContent = `v${currentVersion}`;
-          updateBanner.style.display = "flex";
-          downloadUpdateBtn.dataset.url = downloadUrl || "";
+          updateBanner.style.display = 'flex';
+          downloadUpdateBtn.dataset.url = downloadUrl || '';
           downloadUpdateBtn.dataset.version = latestVersion;
         } else {
-          updateBanner.style.display = "none";
+          updateBanner.style.display = 'none';
         }
       }
     } catch {
@@ -1059,38 +1009,36 @@
     }
   };
 
-  downloadUpdateBtn.addEventListener("click", () => {
+  downloadUpdateBtn.addEventListener('click', () => {
     const url = downloadUpdateBtn.dataset.url;
     chrome.tabs.create({ url: url || `${FRONTEND_BASE_URL}/extension` });
   });
 
-  dismissUpdateBtn.addEventListener("click", async () => {
+  dismissUpdateBtn.addEventListener('click', async () => {
     const version = downloadUpdateBtn.dataset.version;
-    if (version) await sendMessage({ action: "dismissUpdate", version });
-    updateBanner.style.display = "none";
+    if (version) await sendMessage({ action: 'dismissUpdate', version });
+    updateBanner.style.display = 'none';
   });
 
   // ─── Init / lifecycle ───
   const initMainView = async () => {
     const auth = await fetchAuth();
     FRONTEND_BASE_URL =
-      auth.backendUrl && auth.backendUrl.includes("localhost")
-        ? "http://localhost:3000"
-        : "https://" + BRAND_WEB_HOST;
+      auth.backendUrl && auth.backendUrl.includes('localhost') ? 'http://localhost:3000' : 'https://' + BRAND_WEB_HOST;
     await loadStores();
     await Promise.all([buildSignals(), checkUpdateBanner()]);
     startCollectorMonPolling();
     startBrowserAgentPolling();
   };
 
-  logoutBtn.addEventListener("click", async () => {
-    await sendMessage({ action: "logout" });
+  logoutBtn.addEventListener('click', async () => {
+    await sendMessage({ action: 'logout' });
     setLoginState(false);
-    await Promise.all([loadCaptcha("sms"), loadCaptcha("pwd")]);
+    await Promise.all([loadCaptcha('sms'), loadCaptcha('pwd')]);
   });
 
   let _storeSaving = false;
-  storeSelect.addEventListener("change", async () => {
+  storeSelect.addEventListener('change', async () => {
     if (_storeSaving) return;
     _storeSaving = true;
     try {
@@ -1107,78 +1055,77 @@
 
   // ─── Nav / CTA routing ───
   const ACTION_PATHS = {
-    dashboard: "/ozon/dashboard",
-    products: "/ozon/products/list",
-    "collect-box": "/ozon/products/collect",
-    favorites: "/ozon/products/favorites",
-    "import-history": "/ozon/products/import-history",
-    reshelf: "/ozon/products/reshelf",
+    dashboard: '/ozon/dashboard',
+    products: '/ozon/products/list',
+    'collect-box': '/ozon/products/collect',
+    favorites: '/ozon/products/favorites',
+    'import-history': '/ozon/products/import-history',
+    reshelf: '/ozon/products/reshelf',
     // 'pricing' 不走通用 openFrontend，单独处理（见 openJzcCalc）
-    watermark: "/ozon/tools/watermark",
-    stores: "/ozon/settings/stores",
+    watermark: '/ozon/tools/watermark',
+    stores: '/ozon/settings/stores',
   };
 
-  document.querySelectorAll("[data-action]").forEach((button) => {
-    button.addEventListener("click", async () => {
+  document.querySelectorAll('[data-action]').forEach((button) => {
+    button.addEventListener('click', async () => {
       const action = button.dataset.action;
       // 批量上架走独立扩展页（chrome.windows.create），不走 openFrontend
-      if (action === "batch-upload") {
+      if (action === 'batch-upload') {
         try {
           await chrome.windows.create({
-            url: chrome.runtime.getURL("batch-upload/index.html"),
-            type: "popup",
+            url: chrome.runtime.getURL('batch-upload/index.html'),
+            type: 'popup',
             width: 1100,
             height: 760,
           });
           window.close();
         } catch (e) {
-          console.error("[popup] open batch-upload failed:", e);
+          console.error('[popup] open batch-upload failed:', e);
         }
         return;
       }
       // 数据透视眼：toggle 而非跳转。首次启用弹 confirm 警告 TOS 风险。
-      if (action === "premium-pivot") {
+      if (action === 'premium-pivot') {
         await togglePremiumPivot();
         return;
       }
       // 数据面板：toggle ozon.ru 商品卡下方的极掌 ERP 数据卡。
-      if (action === "data-panel") {
+      if (action === 'data-panel') {
         await toggleDataPanel();
         return;
       }
       // 极掌采集器：toggle search/category 页面右下角浮动采集器面板。
-      if (action === "collector") {
+      if (action === 'collector') {
         await toggleCollector();
         return;
       }
       // 极掌算价：jzc-calc.js 浮动面板只在 ozon.ru 商品页激活，
       // 这里直接切到已打开的商品页，没有则提示用户打开商品页
-      if (action === "pricing") {
+      if (action === 'pricing') {
         await openJzcCalc();
         return;
       }
       const path = ACTION_PATHS[action];
       if (!path) return;
-      await sendMessage({ action: "openFrontend", path });
+      await sendMessage({ action: 'openFrontend', path });
     });
   });
 
   // ─── 数据透视眼 toggle ─────────────────────────
   async function togglePremiumPivot() {
-    const { ozon_premium_enabled, ozon_premium_acknowledged } =
-      await chrome.storage.local.get([
-        "ozon_premium_enabled",
-        "ozon_premium_acknowledged",
-      ]);
+    const { ozon_premium_enabled, ozon_premium_acknowledged } = await chrome.storage.local.get([
+      'ozon_premium_enabled',
+      'ozon_premium_acknowledged',
+    ]);
     const wantOn = !ozon_premium_enabled;
 
     if (wantOn && !ozon_premium_acknowledged) {
       const ok = window.confirm(
-        "⚠ 数据透视眼会客户端伪造 Ozon Premium 会员状态\n\n" +
-          "• 该功能可能违反 Ozon TOS 导致店铺封禁\n" +
-          "• 伪造的图表数据是随机数，无业务参考价值\n" +
-          "• 一切风险由您自行承担\n\n" +
-          "确认开启？",
+        '⚠ 数据透视眼会客户端伪造 Ozon Premium 会员状态\n\n' +
+          '• 该功能可能违反 Ozon TOS 导致店铺封禁\n' +
+          '• 伪造的图表数据是随机数，无业务参考价值\n' +
+          '• 一切风险由您自行承担\n\n' +
+          '确认开启？'
       );
       if (!ok) return;
       await chrome.storage.local.set({ ozon_premium_acknowledged: true });
@@ -1189,21 +1136,17 @@
   }
 
   async function syncPremiumBadge() {
-    const badge = document.getElementById("nav-badge-premium");
+    const badge = document.getElementById('nav-badge-premium');
     if (!badge) return;
-    const { ozon_premium_enabled } = await chrome.storage.local.get(
-      "ozon_premium_enabled",
-    );
+    const { ozon_premium_enabled } = await chrome.storage.local.get('ozon_premium_enabled');
     const on = !!ozon_premium_enabled;
-    badge.textContent = on ? "开" : "关";
-    badge.classList.toggle("is-on", on);
+    badge.textContent = on ? '开' : '关';
+    badge.classList.toggle('is-on', on);
   }
 
   // ─── 数据面板 toggle（默认开） ────────────────────
   async function toggleDataPanel() {
-    const { ozon_data_panel_enabled } = await chrome.storage.local.get(
-      "ozon_data_panel_enabled",
-    );
+    const { ozon_data_panel_enabled } = await chrome.storage.local.get('ozon_data_panel_enabled');
     // 首次安装（undefined）按"默认开"处理：点击切到关
     const currentlyOn = ozon_data_panel_enabled !== false;
     await chrome.storage.local.set({ ozon_data_panel_enabled: !currentlyOn });
@@ -1211,14 +1154,12 @@
   }
 
   async function syncDataPanelBadge() {
-    const badge = document.getElementById("nav-badge-data-panel");
+    const badge = document.getElementById('nav-badge-data-panel');
     if (!badge) return;
-    const { ozon_data_panel_enabled } = await chrome.storage.local.get(
-      "ozon_data_panel_enabled",
-    );
+    const { ozon_data_panel_enabled } = await chrome.storage.local.get('ozon_data_panel_enabled');
     const on = ozon_data_panel_enabled !== false; // 默认 true
-    badge.textContent = on ? "开" : "关";
-    badge.classList.toggle("is-on", on);
+    badge.textContent = on ? '开' : '关';
+    badge.classList.toggle('is-on', on);
   }
 
   // ─── 极掌算价：跳到 ozon.ru 商品页激活 jzc-calc 浮动面板 ──
@@ -1226,43 +1167,37 @@
     try {
       // 优先级 1：已打开的商品页（jzc-calc 浮窗就在那）
       const productTabs = await chrome.tabs.query({
-        url: ["https://www.ozon.ru/product/*", "https://ozon.kz/product/*"],
+        url: ['https://www.ozon.ru/product/*', 'https://ozon.kz/product/*'],
       });
       if (productTabs.length > 0) {
         const t = productTabs[0];
         await chrome.tabs.update(t.id, { active: true });
-        if (t.windowId)
-          await chrome.windows.update(t.windowId, { focused: true });
+        if (t.windowId) await chrome.windows.update(t.windowId, { focused: true });
         window.close();
         return;
       }
       // 优先级 2：已打开的 ozon.ru 任意页（让用户接下来去找商品）
       const ozonTabs = await chrome.tabs.query({
-        url: ["https://www.ozon.ru/*", "https://*.ozon.ru/*"],
+        url: ['https://www.ozon.ru/*', 'https://*.ozon.ru/*'],
       });
-      const target = ozonTabs.find(
-        (t) => t.url && /^https:\/\/www\.ozon\.ru\//.test(t.url),
-      );
+      const target = ozonTabs.find((t) => t.url && /^https:\/\/www\.ozon\.ru\//.test(t.url));
       if (target) {
         await chrome.tabs.update(target.id, { active: true });
-        if (target.windowId)
-          await chrome.windows.update(target.windowId, { focused: true });
+        if (target.windowId) await chrome.windows.update(target.windowId, { focused: true });
         window.close();
         return;
       }
       // 兜底：新开 ozon 首页
-      chrome.tabs.create({ url: "https://www.ozon.ru/" });
+      chrome.tabs.create({ url: 'https://www.ozon.ru/' });
       window.close();
     } catch (e) {
-      console.error("[popup] openJzcCalc failed:", e);
+      console.error('[popup] openJzcCalc failed:', e);
     }
   }
 
   // ─── 极掌采集器 toggle(默认关 — 用户主动开才显示采集器浮窗) ───────
   async function toggleCollector() {
-    const { ozon_collector_enabled } = await chrome.storage.local.get(
-      "ozon_collector_enabled",
-    );
+    const { ozon_collector_enabled } = await chrome.storage.local.get('ozon_collector_enabled');
     // 默认关:undefined → currentlyOn=false → 点击切到 true
     const currentlyOn = ozon_collector_enabled === true;
     await chrome.storage.local.set({ ozon_collector_enabled: !currentlyOn });
@@ -1270,14 +1205,12 @@
   }
 
   async function syncCollectorBadge() {
-    const badge = document.getElementById("nav-badge-collector");
+    const badge = document.getElementById('nav-badge-collector');
     if (!badge) return;
-    const { ozon_collector_enabled } = await chrome.storage.local.get(
-      "ozon_collector_enabled",
-    );
+    const { ozon_collector_enabled } = await chrome.storage.local.get('ozon_collector_enabled');
     const on = ozon_collector_enabled === true; // 默认关
-    badge.textContent = on ? "开" : "关";
-    badge.classList.toggle("is-on", on);
+    badge.textContent = on ? '开' : '关';
+    badge.classList.toggle('is-on', on);
   }
 
   // 启动时初次刷新
@@ -1288,14 +1221,14 @@
   // 监听 storage 变化（浮动面板上 toggle 也能反传到 popup）
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local") return;
+      if (area !== 'local') return;
       if (changes.ozon_premium_enabled) syncPremiumBadge();
       if (changes.ozon_data_panel_enabled) syncDataPanelBadge();
       if (changes.ozon_collector_enabled) syncCollectorBadge();
     });
   } catch {}
 
-  document.getElementById("web-login-btn").addEventListener("click", () => {
+  document.getElementById('web-login-btn').addEventListener('click', () => {
     chrome.tabs.create({ url: `${FRONTEND_BASE_URL}/login` });
   });
 
@@ -1306,14 +1239,14 @@
       setLoginState(true);
       await initMainView();
     } else {
-      const syncResp = await sendMessage({ action: "tryWebSync" });
+      const syncResp = await sendMessage({ action: 'tryWebSync' });
       if (syncResp?.ok && syncResp.data?.synced) {
-        showTip("已从网页端同步登录", false);
+        showTip('已从网页端同步登录', false);
         setLoginState(true);
         await initMainView();
       } else {
         setLoginState(false);
-        await Promise.all([loadCaptcha("sms"), loadCaptcha("pwd")]);
+        await Promise.all([loadCaptcha('sms'), loadCaptcha('pwd')]);
       }
     }
   };

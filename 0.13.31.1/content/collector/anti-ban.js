@@ -39,7 +39,10 @@
     }
 
     stop() {
-      if (this._unsub) { this._unsub(); this._unsub = null; }
+      if (this._unsub) {
+        this._unsub();
+        this._unsub = null;
+      }
       this._window = [];
     }
 
@@ -69,22 +72,30 @@
           // 不要默认 referer 改写
         });
         if (res.status === 403) {
-          try { this.onTrigger('页面被 ozon 风控（403），1 秒后用新窗口重试…'); } catch {}
+          try {
+            this.onTrigger('页面被 ozon 风控（403），1 秒后用新窗口重试…');
+          } catch {}
           // 清窗口避免立刻再次触发
           this._window = [];
           setTimeout(() => {
             try {
               const w = window.open(window.location.href, '_blank');
-              try { this.onWindowOpen(w); } catch {}
+              try {
+                this.onWindowOpen(w);
+              } catch {}
             } catch (e) {
               console.warn('[JZAntiBanGuard] window.open failed:', e);
             }
           }, 1000);
         } else {
-          try { this.onProbeOk(res.status); } catch {}
+          try {
+            this.onProbeOk(res.status);
+          } catch {}
         }
       } catch (err) {
-        try { this.onProbeOk(-1); } catch {}
+        try {
+          this.onProbeOk(-1);
+        } catch {}
       } finally {
         this._probing = false;
       }

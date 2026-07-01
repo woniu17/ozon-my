@@ -23,7 +23,7 @@
   const POSTINGS_PAGE_LIMIT = 100;
   const POSTINGS_MAX_PAGES = 50;
   const POSTINGS_SINCE_DAYS = 7;
-  const POSTINGS_LIST_PATH = "/v4/posting/fbs/list";
+  const POSTINGS_LIST_PATH = '/v4/posting/fbs/list';
 
   // ─── 公共工具 ─────────────────────────────────────────────────
 
@@ -37,7 +37,7 @@
     if (cached) return cached;
     const fresh = await JzBackendClient.getSyncCredentials(storeId, deviceId);
     if (!fresh?.clientId || !fresh?.apiKey) {
-      throw new Error("Backend returned empty credentials");
+      throw new Error('Backend returned empty credentials');
     }
     JzSyncState.setCachedCred(storeId, fresh);
     return { clientId: fresh.clientId, apiKey: fresh.apiKey };
@@ -121,18 +121,14 @@
     let totalFetched = 0;
 
     // 跑两轮 visibility=ALL + visibility=ARCHIVED,各自独立 cursor。
-    for (const visibility of ["ALL", "ARCHIVED"]) {
-      let lastId = "";
+    for (const visibility of ['ALL', 'ARCHIVED']) {
+      let lastId = '';
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const payload = { limit: PRODUCT_LIST_PAGE_LIMIT, filter: { visibility } };
         if (lastId) payload.last_id = lastId;
 
-        const listRes = await JzOpiClient.call(
-          "/v3/product/list",
-          payload,
-          creds,
-        );
+        const listRes = await JzOpiClient.call('/v3/product/list', payload, creds);
         const items = listRes?.result?.items ?? [];
         const newLastId = listRes?.result?.last_id;
         if (!items.length) break;
@@ -143,33 +139,28 @@
           .map(String);
 
         for (const chunk of chunked(productIds, PRODUCT_INFO_CHUNK)) {
-          const infoRes = await JzOpiClient.call(
-            "/v3/product/info/list",
-            { product_id: chunk },
-            creds,
-          );
-          const details =
-            infoRes?.result?.items ?? infoRes?.items ?? [];
+          const infoRes = await JzOpiClient.call('/v3/product/info/list', { product_id: chunk }, creds);
+          const details = infoRes?.result?.items ?? infoRes?.items ?? [];
 
           if (!details.length) continue;
 
           // 算每行 contentHash
           const hashed = await Promise.all(
             details.map(async (d) => {
-              const productId = String(d?.id ?? d?.product_id ?? "");
+              const productId = String(d?.id ?? d?.product_id ?? '');
               return {
                 productId,
                 contentHash: await JzDiffIndex.computeHash(d),
                 raw: d,
               };
-            }),
+            })
           );
 
           // 跟本地索引比对,决定每行带不带 raw
           const localHashes = await JzDiffIndex.getHashes(
             storeId,
-            "PRODUCTS",
-            hashed.map((h) => h.productId),
+            'PRODUCTS',
+            hashed.map((h) => h.productId)
           );
 
           const payloadItems = hashed.map((h) => {
@@ -215,29 +206,29 @@
           // 写本地 hash 索引(成功上传后才写,避免回滚不一致)
           await JzDiffIndex.setHashes(
             storeId,
-            "PRODUCTS",
+            'PRODUCTS',
             hashed.map((h) => ({
               productId: h.productId,
               hash: h.contentHash,
-            })),
+            }))
           );
 
           totalFetched += details.length;
         }
 
         // 每页结束 heartbeat(节流)+ 进度上报(cron 跳过 / 手动节流)
-        await heartbeatLeaseSafe(leaseId, deviceId, "PRODUCTS", storeId);
+        await heartbeatLeaseSafe(leaseId, deviceId, 'PRODUCTS', storeId);
         await reportProgress(
           {
             storeId,
-            type: "PRODUCTS",
+            type: 'PRODUCTS',
             clientJobId: jobId,
             deviceId,
-            status: "RUNNING",
+            status: 'RUNNING',
             fetchedCount: totalFetched,
             lastId,
           },
-          silentProgress,
+          silentProgress
         );
 
         // cursor 推进
@@ -257,11 +248,9 @@
     const creds = await fetchCredentialsCached(storeId, deviceId);
 
     const to = new Date();
-    const since = new Date(
-      to.getTime() - POSTINGS_SINCE_DAYS * 24 * 60 * 60 * 1000,
-    );
+    const since = new Date(to.getTime() - POSTINGS_SINCE_DAYS * 24 * 60 * 60 * 1000);
     const filter = { since: since.toISOString(), to: to.toISOString() };
-    let cursor = "";
+    let cursor = '';
     let totalFetched = 0;
 
     for (let page = 0; page < POSTINGS_MAX_PAGES; page++) {
@@ -292,18 +281,18 @@
       });
       totalFetched += imp?.imported || 0;
 
-      await heartbeatLeaseSafe(leaseId, deviceId, "POSTINGS", storeId);
+      await heartbeatLeaseSafe(leaseId, deviceId, 'POSTINGS', storeId);
       await reportProgress(
         {
           storeId,
-          type: "POSTINGS",
+          type: 'POSTINGS',
           clientJobId: jobId,
           deviceId,
-          status: "RUNNING",
+          status: 'RUNNING',
           fetchedCount: totalFetched,
           lastId: cursor,
         },
-        silentProgress,
+        silentProgress
       );
 
       if (hasNext === false) break;
@@ -319,7 +308,7 @@
     const storeId = store.id;
     const creds = await fetchCredentialsCached(storeId, deviceId);
 
-    const listRes = await JzOpiClient.call("/v2/warehouse/list", {}, creds);
+    const listRes = await JzOpiClient.call('/v2/warehouse/list', {}, creds);
     // 复刻 backend extractWarehouseList 的 6-shape fallback
     const candidate =
       listRes?.result?.warehouses ??
@@ -335,17 +324,17 @@
       items: warehouses,
     });
 
-    await heartbeatLeaseSafe(leaseId, deviceId, "WAREHOUSES", storeId);
+    await heartbeatLeaseSafe(leaseId, deviceId, 'WAREHOUSES', storeId);
     await reportProgress(
       {
         storeId,
-        type: "WAREHOUSES",
+        type: 'WAREHOUSES',
         clientJobId: jobId,
         deviceId,
-        status: "RUNNING",
+        status: 'RUNNING',
         fetchedCount: imp?.imported || 0,
       },
-      silentProgress,
+      silentProgress
     );
 
     return imp?.imported || 0;
@@ -362,7 +351,7 @@
     const lease = await acquireLease(store.id, type, deviceId);
     if (!lease) {
       // 别的设备/账号正在跑;静默跳过(手动触发时 SW handler 会显式 FAILED 上报)
-      return { skipped: "lease-busy", jobId };
+      return { skipped: 'lease-busy', jobId };
     }
     // 新 lease 重置节流计时,保证本轮首页 heartbeat/进度立即发一次
     _lastBeatAt.delete(`${store.id}:${type}`);
@@ -372,16 +361,16 @@
       type,
       clientJobId: jobId,
       deviceId,
-      status: "PENDING",
+      status: 'PENDING',
     });
 
     try {
       let fetched = 0;
-      if (type === "PRODUCTS") {
+      if (type === 'PRODUCTS') {
         fetched = await syncProducts(store, deviceId, lease.leaseId, jobId, silentProgress);
-      } else if (type === "POSTINGS") {
+      } else if (type === 'POSTINGS') {
         fetched = await syncPostings(store, deviceId, lease.leaseId, jobId, silentProgress);
-      } else if (type === "WAREHOUSES") {
+      } else if (type === 'WAREHOUSES') {
         fetched = await syncWarehouses(store, deviceId, lease.leaseId, jobId, silentProgress);
       }
 
@@ -390,16 +379,13 @@
         type,
         clientJobId: jobId,
         deviceId,
-        status: "SUCCESS",
+        status: 'SUCCESS',
         fetchedCount: fetched,
       });
       return { ok: true, fetched, jobId };
     } catch (e) {
       const msg = String(e?.message || e);
-      console.warn(
-        `[JzSyncEngine] ${type} sync failed store=${store.id}:`,
-        msg,
-      );
+      console.warn(`[JzSyncEngine] ${type} sync failed store=${store.id}:`, msg);
       // 凭据无效 → 清缓存让下轮重 GET
       if (e?.status === 401 || e?.status === 403) {
         JzSyncState.invalidateCred(store.id);
@@ -409,7 +395,7 @@
         type,
         clientJobId: jobId,
         deviceId,
-        status: "FAILED",
+        status: 'FAILED',
         error: msg.slice(0, 500),
       });
       return { ok: false, error: msg, jobId };

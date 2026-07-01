@@ -1,39 +1,65 @@
 (function (root) {
-  "use strict";
+  'use strict';
 
   function safeText(value, max) {
-    if (value == null) return "";
-    const text = String(value).replace(/\s+/g, " ").trim();
+    if (value == null) return '';
+    const text = String(value).replace(/\s+/g, ' ').trim();
     return max && text.length > max ? text.slice(0, max) : text;
   }
 
   function htmlToText(value) {
-    return String(value || "")
-      .replace(/<br\s*\/?>/gi, " ")
-      .replace(/<\/p\s*>/gi, " ")
-      .replace(/<[^>]*>/g, " ");
+    return String(value || '')
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<\/p\s*>/gi, ' ')
+      .replace(/<[^>]*>/g, ' ');
   }
 
   function extractRichContentText(value, max) {
     const maxChars = max || 2000;
     let doc = value;
-    if (typeof value === "string") {
+    if (typeof value === 'string') {
       try {
         doc = JSON.parse(value);
       } catch {
-        return "";
+        return '';
       }
     }
-    if (!doc || typeof doc !== "object") return "";
+    if (!doc || typeof doc !== 'object') return '';
 
     const skipKeys = new Set([
-      "widgetName", "align", "size", "color", "type", "src", "img", "imgLink",
-      "url", "link", "gifUrl", "videoUrl", "previewUrl", "backgroundColor",
-      "theme", "padding", "margin", "id", "reff", "fontColor", "borderColor",
+      'widgetName',
+      'align',
+      'size',
+      'color',
+      'type',
+      'src',
+      'img',
+      'imgLink',
+      'url',
+      'link',
+      'gifUrl',
+      'videoUrl',
+      'previewUrl',
+      'backgroundColor',
+      'theme',
+      'padding',
+      'margin',
+      'id',
+      'reff',
+      'fontColor',
+      'borderColor',
       // 语义噪声容器:走对象兜底(页面 state blob)时别把规格/评论/问答/标签拼进描述。
       // 只跳明确的容器键,不跳 name/value(后者是合法描述字段,见 directKeys)。
-      "characteristics", "specifications", "reviews", "questions", "comments",
-      "aspects", "params", "feedbacks", "hashtags", "tags",
+      'characteristics',
+      'specifications',
+      'reviews',
+      'questions',
+      'comments',
+      'aspects',
+      'params',
+      'feedbacks',
+      'hashtags',
+      'tags',
     ]);
     const out = [];
     let total = 0;
@@ -48,7 +74,7 @@
     };
     const walk = (node, key, depth) => {
       if (total >= maxChars || depth > 64) return;
-      if (typeof node === "string") {
+      if (typeof node === 'string') {
         if (!key || !skipKeys.has(key)) pushText(node);
         return;
       }
@@ -56,7 +82,7 @@
         for (const item of node) walk(item, key, depth + 1);
         return;
       }
-      if (node && typeof node === "object") {
+      if (node && typeof node === 'object') {
         for (const k of Object.keys(node)) {
           if (skipKeys.has(k)) continue;
           walk(node[k], k, depth + 1);
@@ -72,34 +98,34 @@
       seen.add(key);
       return true;
     });
-    return deduped.join(" ").slice(0, maxChars).trim();
+    return deduped.join(' ').slice(0, maxChars).trim();
   }
 
   function extractDescriptionText(value, max) {
     const maxChars = max || 4096;
-    if (value == null) return "";
-    if (typeof value === "string") {
+    if (value == null) return '';
+    if (typeof value === 'string') {
       const richText = extractRichContentText(value, maxChars);
       if (richText) return richText;
       // 看起来是富内容/结构化 JSON(如纯图 11254)但抽不出文字 → 返回空,让上层用
       // 下一候选(页面描述/标题),绝不把原始 JSON 串当描述发上 Ozon。
-      if (/^\s*[[{]/.test(value)) return "";
+      if (/^\s*[[{]/.test(value)) return '';
       return safeText(htmlToText(value), maxChars);
     }
-    if (typeof value !== "object") return safeText(value, maxChars);
+    if (typeof value !== 'object') return safeText(value, maxChars);
 
-    const richKeys = ["richAnnotationJson", "richContent", "richContentJson", "richJson"];
+    const richKeys = ['richAnnotationJson', 'richContent', 'richContentJson', 'richJson'];
     for (const key of richKeys) {
       const text = extractRichContentText(value[key], maxChars);
       if (text) return text;
     }
 
-    const directKeys = ["description", "text", "content", "html", "value"];
+    const directKeys = ['description', 'text', 'content', 'html', 'value'];
     for (const key of directKeys) {
       const raw = value[key];
       const richText = extractRichContentText(raw, maxChars);
       if (richText) return richText;
-      if (typeof raw === "string") {
+      if (typeof raw === 'string') {
         const text = safeText(htmlToText(raw), maxChars);
         if (text) return text;
       }
@@ -109,10 +135,10 @@
   }
 
   function visibleTextToLines(value) {
-    return String(value || "")
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/(p|div|li|h[1-6]|section|article|tr)\s*>/gi, "\n")
-      .replace(/<[^>]*>/g, " ")
+    return String(value || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|li|h[1-6]|section|article|tr)\s*>/gi, '\n')
+      .replace(/<[^>]*>/g, ' ')
       .split(/\r?\n/)
       .map((line) => safeText(line))
       .filter(Boolean);
@@ -120,7 +146,7 @@
 
   function normalizeHeading(value) {
     return safeText(value)
-      .replace(/[:：]+$/g, "")
+      .replace(/[:：]+$/g, '')
       .trim()
       .toLowerCase();
   }
@@ -128,18 +154,18 @@
   function isDescriptionHeading(line) {
     const text = normalizeHeading(line);
     return [
-      "description",
-      "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435".toLowerCase(),
-      "\u63cf\u8ff0",
-      "\u5546\u54c1\u63cf\u8ff0",
+      'description',
+      '\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435'.toLowerCase(),
+      '\u63cf\u8ff0',
+      '\u5546\u54c1\u63cf\u8ff0',
     ].includes(text);
   }
 
   function isDescriptionSectionHeading(line) {
     const text = normalizeHeading(line);
     return [
-      "\u0421\u043e\u0441\u0442\u0430\u0432".toLowerCase(),
-      "\u0421\u043f\u043e\u0441\u043e\u0431 \u043f\u0440\u0438\u043c\u0435\u043d\u0435\u043d\u0438\u044f".toLowerCase(),
+      '\u0421\u043e\u0441\u0442\u0430\u0432'.toLowerCase(),
+      '\u0421\u043f\u043e\u0441\u043e\u0431 \u043f\u0440\u0438\u043c\u0435\u043d\u0435\u043d\u0438\u044f'.toLowerCase(),
     ].includes(text);
   }
 
@@ -148,46 +174,46 @@
     if (!text) return false;
     if (/^#[\p{L}\p{N}_-]+/u.test(text)) return true;
     return [
-      "hashtags",
-      "tags",
-      "characteristics",
-      "specifications",
-      "reviews",
-      "questions",
-      "color",
-      "\u0445\u0430\u0440\u0430\u043a\u0442\u0435\u0440\u0438\u0441\u0442\u0438\u043a\u0438",
-      "\u043e\u0442\u0437\u044b\u0432\u044b",
-      "\u0432\u043e\u043f\u0440\u043e\u0441\u044b",
-      "\u0442\u0435\u0433\u0438",
-      "\u4e3b\u9898\u6807\u7b7e",
-      "\u6807\u7b7e",
-      "\u7279\u5f81",
-      "\u89c4\u683c",
-      "\u53c2\u6570",
-      "\u8bc4\u8bba",
-      "\u95ee\u9898",
-      "\u989c\u8272",
+      'hashtags',
+      'tags',
+      'characteristics',
+      'specifications',
+      'reviews',
+      'questions',
+      'color',
+      '\u0445\u0430\u0440\u0430\u043a\u0442\u0435\u0440\u0438\u0441\u0442\u0438\u043a\u0438',
+      '\u043e\u0442\u0437\u044b\u0432\u044b',
+      '\u0432\u043e\u043f\u0440\u043e\u0441\u044b',
+      '\u0442\u0435\u0433\u0438',
+      '\u4e3b\u9898\u6807\u7b7e',
+      '\u6807\u7b7e',
+      '\u7279\u5f81',
+      '\u89c4\u683c',
+      '\u53c2\u6570',
+      '\u8bc4\u8bba',
+      '\u95ee\u9898',
+      '\u989c\u8272',
     ].includes(normalizeHeading(text));
   }
 
   function isDescriptionUiNoiseText(value) {
     const text = normalizeHeading(value);
     return [
-      "show more",
-      "show full",
-      "read more",
-      "\u043f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u043f\u043e\u043b\u043d\u043e\u0441\u0442\u044c",
-      "\u0440\u0430\u0437\u0432\u0435\u0440\u043d\u0443\u0442\u044c",
-      "\u5c55\u5f00",
-      "\u663e\u793a\u5168\u90e8",
-      "\u67e5\u770b\u5168\u90e8",
+      'show more',
+      'show full',
+      'read more',
+      '\u043f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u043f\u043e\u043b\u043d\u043e\u0441\u0442\u044c',
+      '\u0440\u0430\u0437\u0432\u0435\u0440\u043d\u0443\u0442\u044c',
+      '\u5c55\u5f00',
+      '\u663e\u793a\u5168\u90e8',
+      '\u67e5\u770b\u5168\u90e8',
     ].includes(text);
   }
 
   function extractVisibleDescriptionText(value, max) {
     const maxChars = max || 4096;
     const lines = visibleTextToLines(value);
-    if (lines.length === 0) return "";
+    if (lines.length === 0) return '';
 
     let start = -1;
     for (let i = 0; i < lines.length; i += 1) {
@@ -208,16 +234,11 @@
       if (isDescriptionHeading(line)) continue;
       const tagStart = line.search(/\s#[\p{L}\p{N}_-]{2,}/u);
       bodyLines.push(tagStart > 0 ? line.slice(0, tagStart).trim() : line);
-      if (bodyLines.join(" ").length >= maxChars) break;
+      if (bodyLines.join(' ').length >= maxChars) break;
     }
 
-    const text = safeText(bodyLines.join(" "), maxChars);
-    if (
-      !text ||
-      isDescriptionHeading(text) ||
-      isDescriptionStopLine(text) ||
-      isDescriptionUiNoiseText(text)
-    ) return "";
+    const text = safeText(bodyLines.join(' '), maxChars);
+    if (!text || isDescriptionHeading(text) || isDescriptionStopLine(text) || isDescriptionUiNoiseText(text)) return '';
     return text;
   }
 
@@ -233,14 +254,14 @@
     if (textLines.some(isDescriptionSectionHeading)) score += 250;
     if (/\d+\./.test(text)) score += 60;
     if (text.length < 30) score -= 300;
-    if (isDescriptionStopLine(textLines[0] || "")) score -= 500;
+    if (isDescriptionStopLine(textLines[0] || '')) score -= 500;
     return score;
   }
 
   function pickBestVisibleDescriptionText(values, max) {
     const maxChars = max || 4096;
     const candidates = Array.isArray(values) ? values : [values];
-    let best = "";
+    let best = '';
     let bestScore = Number.NEGATIVE_INFINITY;
     for (const raw of candidates) {
       const text = extractVisibleDescriptionText(raw, maxChars);
@@ -256,17 +277,22 @@
   function readSourceAttrText(sourceVariant, key) {
     const attrs = Array.isArray(sourceVariant?.attributes) ? sourceVariant.attributes : [];
     const hit = attrs.find((attr) => String(attr?.key ?? attr?.id) === String(key));
-    if (!hit) return "";
+    if (!hit) return '';
     const candidates = [
       hit.value,
-      Array.isArray(hit.collection) ? hit.collection.join(" ") : "",
-      Array.isArray(hit.values) ? hit.values.map((v) => v?.value).filter(Boolean).join(" ") : "",
+      Array.isArray(hit.collection) ? hit.collection.join(' ') : '',
+      Array.isArray(hit.values)
+        ? hit.values
+            .map((v) => v?.value)
+            .filter(Boolean)
+            .join(' ')
+        : '',
     ];
     for (const value of candidates) {
       const text = safeText(value);
       if (text) return text;
     }
-    return "";
+    return '';
   }
 
   function pickFollowSellDescription(input) {
@@ -278,7 +304,7 @@
     // 富内容继续作为独立富内容块下发(pickSourceRichContent / jzInjectRichContentAttr),正文不回填普通描述。
     return (
       safeText(input?.customDescription, max) ||
-      safeText(extractDescriptionText(readSourceAttrText(input?.sourceVariant, "4191"), max), max) ||
+      safeText(extractDescriptionText(readSourceAttrText(input?.sourceVariant, '4191'), max), max) ||
       safeText(input?.fallbackName, max)
     );
   }
@@ -286,21 +312,21 @@
   function mergeSourceDescriptionIntoVariant(sourceVariant, rawDescription) {
     const text = safeText(extractDescriptionText(rawDescription, 4096) || rawDescription, 4096);
     if (!text) return sourceVariant;
-    const target = sourceVariant && typeof sourceVariant === "object" ? sourceVariant : {};
+    const target = sourceVariant && typeof sourceVariant === 'object' ? sourceVariant : {};
     const attrs = Array.isArray(target.attributes) ? target.attributes : [];
-    const existing = attrs.find((attr) => String(attr?.key ?? attr?.id) === "4191");
+    const existing = attrs.find((attr) => String(attr?.key ?? attr?.id) === '4191');
     if (existing) {
-      if (existing.key == null) existing.key = String(existing.id ?? "4191");
-      if (readSourceAttrText({ attributes: [existing] }, "4191")) return target;
+      if (existing.key == null) existing.key = String(existing.id ?? '4191');
+      if (readSourceAttrText({ attributes: [existing] }, '4191')) return target;
       existing.value = text;
       return target;
     }
-    target.attributes = [...attrs, { key: "4191", value: text }];
+    target.attributes = [...attrs, { key: '4191', value: text }];
     return target;
   }
 
   function normalizeSourceHashtags(raw) {
-    const values = Array.isArray(raw) ? raw : String(raw || "").split(/[\s,\uFF0C]+/);
+    const values = Array.isArray(raw) ? raw : String(raw || '').split(/[\s,\uFF0C]+/);
     const out = [];
     const seen = new Set();
     for (const item of values) {
@@ -310,11 +336,11 @@
       // \u76F4\u63A5\u62D2(BR_hashtags_symbols_validation / BR_hashtag_validation)\u3002\u65E7\u5B9E\u73B0\u53EA\u8865 #
       // \u622A\u65AD,\u65E2\u4E0D\u8F6C\u7A7A\u683C\u4E5F\u4E0D\u8F6C\u8FDE\u5B57\u7B26 \u2192 \u591A\u8BCD\u5173\u952E\u8BCD\u77ED\u8BED\u4F1A\u5E26\u7A7A\u683C\u548C\u8FDE\u5B57\u7B26\u6CC4\u6F0F\u3002
       let body = safeText(item)
-        .replace(/^#+/, "") // \u5148\u5265\u5DF2\u6709 #,\u7EDF\u4E00\u7531\u672C\u51FD\u6570\u8865
-        .replace(/[\s-]+/g, "_") // \u7A7A\u767D\u548C\u8FDE\u5B57\u7B26 \u2192 \u4E0B\u5212\u7EBF
-        .replace(/[^A-Za-z\u0410-\u042F\u0430-\u044F\u0401\u04510-9_\u4E00-\u9FFF]/g, "") // \u5220\u975E\u6CD5\u5B57\u7B26(\u70B9/\u9017\u53F7/\u659C\u6760/emoji \u7B49),\u4FDD\u7559 CJK
-        .replace(/_+/g, "_")
-        .replace(/^_|_$/g, "");
+        .replace(/^#+/, '') // \u5148\u5265\u5DF2\u6709 #,\u7EDF\u4E00\u7531\u672C\u51FD\u6570\u8865
+        .replace(/[\s-]+/g, '_') // \u7A7A\u767D\u548C\u8FDE\u5B57\u7B26 \u2192 \u4E0B\u5212\u7EBF
+        .replace(/[^A-Za-z\u0410-\u042F\u0430-\u044F\u0401\u04510-9_\u4E00-\u9FFF]/g, '') // \u5220\u975E\u6CD5\u5B57\u7B26(\u70B9/\u9017\u53F7/\u659C\u6760/emoji \u7B49),\u4FDD\u7559 CJK
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '');
       if (!body) continue;
       if (body.length > 29) body = body.slice(0, 29); // #+body \u2264 30
       const tag = `#${body}`;
@@ -329,21 +355,21 @@
 
   function mergeSourceHashtagsIntoVariant(sourceVariant, rawHashtags) {
     const tags = normalizeSourceHashtags(rawHashtags);
-    if (tags.length === 0 || !sourceVariant || typeof sourceVariant !== "object") return sourceVariant;
+    if (tags.length === 0 || !sourceVariant || typeof sourceVariant !== 'object') return sourceVariant;
     const attrs = Array.isArray(sourceVariant.attributes) ? sourceVariant.attributes : [];
-    const existing = attrs.find((attr) => String(attr?.key ?? attr?.id) === "23171");
+    const existing = attrs.find((attr) => String(attr?.key ?? attr?.id) === '23171');
     if (existing) {
-      if (existing.key == null) existing.key = String(existing.id ?? "23171");
-      if (readSourceAttrText({ attributes: [existing] }, "23171")) return sourceVariant;
-      existing.value = tags.join(" ");
+      if (existing.key == null) existing.key = String(existing.id ?? '23171');
+      if (readSourceAttrText({ attributes: [existing] }, '23171')) return sourceVariant;
+      existing.value = tags.join(' ');
       return sourceVariant;
     }
-    sourceVariant.attributes = [...attrs, { key: "23171", value: tags.join(" ") }];
+    sourceVariant.attributes = [...attrs, { key: '23171', value: tags.join(' ') }];
     return sourceVariant;
   }
 
   function shouldForceCollectRefresh(input) {
-    if (!input || typeof input !== "object") return false;
+    if (!input || typeof input !== 'object') return false;
     if (safeText(input.videoUrl)) return true;
     if (safeText(input.description)) return true;
     if (safeText(input.richContent)) return true;
@@ -365,5 +391,5 @@
   };
 
   root.JZFollowSellContentCopy = api;
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
-})(typeof self !== "undefined" ? self : globalThis);
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof self !== 'undefined' ? self : globalThis);

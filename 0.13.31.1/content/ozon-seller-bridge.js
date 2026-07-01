@@ -50,10 +50,7 @@
         chrome.storage.local.get(
           ['ozon_premium_enabled', 'ozon_premium_panel_pos'],
           ({ ozon_premium_enabled, ozon_premium_panel_pos }) => {
-            window.postMessage(
-              { __jzcReport: 1, type: 'JZC_PREMIUM_TOGGLE', enabled: !!ozon_premium_enabled },
-              '*',
-            );
+            window.postMessage({ __jzcReport: 1, type: 'JZC_PREMIUM_TOGGLE', enabled: !!ozon_premium_enabled }, '*');
             if (ozon_premium_panel_pos) {
               window.postMessage(
                 {
@@ -61,10 +58,10 @@
                   type: 'JZC_PREMIUM_PANEL_POS_RESTORE',
                   pos: ozon_premium_panel_pos,
                 },
-                '*',
+                '*'
               );
             }
-          },
+          }
         );
       } catch {}
       return;
@@ -93,10 +90,7 @@
     chrome.storage.local.get(
       ['ozon_premium_enabled', 'ozon_premium_panel_pos'],
       ({ ozon_premium_enabled, ozon_premium_panel_pos }) => {
-        window.postMessage(
-          { __jzcReport: 1, type: 'JZC_PREMIUM_TOGGLE', enabled: !!ozon_premium_enabled },
-          '*',
-        );
+        window.postMessage({ __jzcReport: 1, type: 'JZC_PREMIUM_TOGGLE', enabled: !!ozon_premium_enabled }, '*');
         if (ozon_premium_panel_pos) {
           window.postMessage(
             {
@@ -104,10 +98,10 @@
               type: 'JZC_PREMIUM_PANEL_POS_RESTORE',
               pos: ozon_premium_panel_pos,
             },
-            '*',
+            '*'
           );
         }
-      },
+      }
     );
   } catch {}
 
@@ -122,7 +116,7 @@
             type: 'JZC_PREMIUM_TOGGLE',
             enabled: !!changes.ozon_premium_enabled.newValue,
           },
-          '*',
+          '*'
         );
       }
       if (changes.ozon_premium_panel_pos) {
@@ -132,7 +126,7 @@
             type: 'JZC_PREMIUM_PANEL_POS_RESTORE',
             pos: changes.ozon_premium_panel_pos.newValue,
           },
-          '*',
+          '*'
         );
       }
     });
@@ -149,10 +143,14 @@
     (async () => {
       try {
         // Read sc_company_id from document.cookie, fall back to service worker value
-        const companyId = document.cookie.split(';')
-          .map(c => c.trim())
-          .find(c => c.startsWith('sc_company_id='))
-          ?.split('=')[1] || fallbackCompanyId || '';
+        const companyId =
+          document.cookie
+            .split(';')
+            .map((c) => c.trim())
+            .find((c) => c.startsWith('sc_company_id='))
+            ?.split('=')[1] ||
+          fallbackCompanyId ||
+          '';
 
         if (!companyId) {
           sendResponse({ ok: false, error: 'sc_company_id cookie 未找到，请确保已登录 seller.ozon.ru' });
@@ -168,7 +166,7 @@
             signal: controller.signal,
             credentials: 'include',
             headers: {
-              'accept': 'application/json, text/plain, */*',
+              accept: 'application/json, text/plain, */*',
               'content-type': 'application/json',
               'x-o3-app-name': 'seller-ui',
               'x-o3-company-id': companyId,
@@ -181,7 +179,12 @@
 
           // Handle redirects (login expired)
           if (resp.redirected && (resp.url.includes('/signin') || resp.url.includes('/login'))) {
-            sendResponse({ ok: false, status: 401, code: 'AUTH_REDIRECT', error: 'Seller portal cookie已过期，请重新登录' });
+            sendResponse({
+              ok: false,
+              status: 401,
+              code: 'AUTH_REDIRECT',
+              error: 'Seller portal cookie已过期，请重新登录',
+            });
             return;
           }
 

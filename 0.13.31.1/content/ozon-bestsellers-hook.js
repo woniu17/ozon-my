@@ -30,8 +30,7 @@
   // 这里用启发式：当 popover 中**已勾选 input 的祖先 row 文本**只有一个独立中文名
   // 且该名字短（≤30 字）时，认为它就是用户勾的那个一级类目。
   const findCheckedRootCategoryName = () => {
-    const popover = Array.from(document.querySelectorAll('div.s1c80-a'))
-      .find((el) => el.offsetParent !== null);
+    const popover = Array.from(document.querySelectorAll('div.s1c80-a')).find((el) => el.offsetParent !== null);
     if (!popover) return null;
     const cbs = Array.from(popover.querySelectorAll('input[type="checkbox"]'));
     const checkedNames = new Set();
@@ -80,10 +79,7 @@
               const name = findCheckedRootCategoryName();
               if (name) {
                 const leafIds = cats.map(String);
-                window.postMessage(
-                  { __jzcReport: 1, type: POST, name, leafIds, source: 'hook-fetch' },
-                  '*',
-                );
+                window.postMessage({ __jzcReport: 1, type: POST, name, leafIds, source: 'hook-fetch' }, '*');
               }
             }
           } catch {

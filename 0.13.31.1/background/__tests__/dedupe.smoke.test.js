@@ -32,7 +32,9 @@ function makeStorage() {
     get: (keys, cb) => {
       const result = {};
       const list = Array.isArray(keys) ? keys : [keys];
-      list.forEach((k) => { if (k in data) result[k] = data[k]; });
+      list.forEach((k) => {
+        if (k in data) result[k] = data[k];
+      });
       cb(result);
     },
     set: (kv, cb) => {
@@ -76,9 +78,7 @@ async function pushSourceCollectRef({ sourceId, raw, forceResubmit }, ctx) {
   if (cacheKey && !forceResubmit && pendingCollects && pendingCollects.has(cacheKey)) {
     try {
       const resp = await pendingCollects.get(cacheKey);
-      return resp?.ok
-        ? { ok: true, data: { ...resp.data, dedupeHit: true } }
-        : resp;
+      return resp?.ok ? { ok: true, data: { ...resp.data, dedupeHit: true } } : resp;
     } catch (e) {
       return { ok: false, error: e?.message || 'pending request failed' };
     }
@@ -93,7 +93,7 @@ async function pushSourceCollectRef({ sourceId, raw, forceResubmit }, ctx) {
           `${backendUrl}/sources/${encodeURIComponent(sourceId)}/collect`,
           { raw: raw || {} },
           token,
-          storeId,
+          storeId
         );
         if (cacheKey) {
           await new Promise((r) => storage.set({ [cacheKey]: { at: now() } }, r));
@@ -130,8 +130,15 @@ function test(name, fn) {
   testNum++;
   return Promise.resolve()
     .then(fn)
-    .then(() => { passed++; console.log(`  ✓ ${name}`); })
-    .catch((e) => { failed++; console.error(`  ✗ ${name}`); console.error(`    ${e.message}`); });
+    .then(() => {
+      passed++;
+      console.log(`  ✓ ${name}`);
+    })
+    .catch((e) => {
+      failed++;
+      console.error(`  ✗ ${name}`);
+      console.error(`    ${e.message}`);
+    });
 }
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed');
@@ -145,10 +152,21 @@ async function run() {
   await test('case 1: 1 秒内同 SKU 5 次只 1 次 fetch', async () => {
     const storage = makeStorage();
     let fetchCount = 0;
-    const apiRequest = async () => { fetchCount++; return { id: 'abc' }; };
+    const apiRequest = async () => {
+      fetchCount++;
+      return { id: 'abc' };
+    };
     const t0 = 1000;
     let now = t0;
-    const ctx = { backendUrl: 'https://api.example.com', storeId: 's1', token: 't', storage, apiRequest, now: () => now, pendingCollects: new Map() };
+    const ctx = {
+      backendUrl: 'https://api.example.com',
+      storeId: 's1',
+      token: 't',
+      storage,
+      apiRequest,
+      now: () => now,
+      pendingCollects: new Map(),
+    };
 
     for (let i = 0; i < 5; i++) {
       now = t0 + i * 100; // 1s 内 5 次
@@ -164,8 +182,19 @@ async function run() {
   await test('case 2: forceResubmit 跳 cache 强制重发', async () => {
     const storage = makeStorage();
     let fetchCount = 0;
-    const apiRequest = async () => { fetchCount++; return { id: 'abc' }; };
-    const ctx = { backendUrl: 'https://api.example.com', storeId: 's1', token: 't', storage, apiRequest, now: () => 1000, pendingCollects: new Map() };
+    const apiRequest = async () => {
+      fetchCount++;
+      return { id: 'abc' };
+    };
+    const ctx = {
+      backendUrl: 'https://api.example.com',
+      storeId: 's1',
+      token: 't',
+      storage,
+      apiRequest,
+      now: () => 1000,
+      pendingCollects: new Map(),
+    };
 
     await pushSourceCollectRef({ sourceId: 'ozon', raw: { sku: '123' } }, ctx);
     await pushSourceCollectRef({ sourceId: 'ozon', raw: { sku: '123' }, forceResubmit: true }, ctx);
@@ -182,7 +211,15 @@ async function run() {
       err.status = 500;
       throw err;
     };
-    const ctx = { backendUrl: 'https://api.example.com', storeId: 's1', token: 't', storage, apiRequest, now: () => 1000, pendingCollects: new Map() };
+    const ctx = {
+      backendUrl: 'https://api.example.com',
+      storeId: 's1',
+      token: 't',
+      storage,
+      apiRequest,
+      now: () => 1000,
+      pendingCollects: new Map(),
+    };
 
     const resp = await pushSourceCollectRef({ sourceId: 'ozon', raw: { sku: '999' } }, ctx);
     assert(!resp.ok, 'should fail after retries');
@@ -195,11 +232,30 @@ async function run() {
   await test('case 4: 不同 backendHost 各自隔离', async () => {
     const storage = makeStorage();
     let fetchCount = 0;
-    const apiRequest = async () => { fetchCount++; return { id: 'abc' }; };
+    const apiRequest = async () => {
+      fetchCount++;
+      return { id: 'abc' };
+    };
 
     const pendingCollects = new Map();
-    const ctxA = { backendUrl: 'https://api.prod.com', storeId: 's1', token: 't', storage, apiRequest, now: () => 1000, pendingCollects };
-    const ctxB = { backendUrl: 'http://localhost:3001', storeId: 's1', token: 't', storage, apiRequest, now: () => 1001, pendingCollects };
+    const ctxA = {
+      backendUrl: 'https://api.prod.com',
+      storeId: 's1',
+      token: 't',
+      storage,
+      apiRequest,
+      now: () => 1000,
+      pendingCollects,
+    };
+    const ctxB = {
+      backendUrl: 'http://localhost:3001',
+      storeId: 's1',
+      token: 't',
+      storage,
+      apiRequest,
+      now: () => 1001,
+      pendingCollects,
+    };
 
     await pushSourceCollectRef({ sourceId: 'ozon', raw: { sku: '111' } }, ctxA);
     await pushSourceCollectRef({ sourceId: 'ozon', raw: { sku: '111' } }, ctxB);
@@ -222,7 +278,15 @@ async function run() {
         err.status = status;
         throw err;
       };
-      const ctx = { backendUrl: 'https://api.example.com', storeId: 's1', token: 't', storage, apiRequest, now: () => 1000, pendingCollects: new Map() };
+      const ctx = {
+        backendUrl: 'https://api.example.com',
+        storeId: 's1',
+        token: 't',
+        storage,
+        apiRequest,
+        now: () => 1000,
+        pendingCollects: new Map(),
+      };
 
       const resp = await pushSourceCollectRef({ sourceId: 'ozon', raw: { sku: '777' } }, ctx);
       assert(!resp.ok, `status ${status} should fail`);
@@ -242,7 +306,15 @@ async function run() {
         err.status = status;
         throw err;
       };
-      const ctx = { backendUrl: 'https://api.example.com', storeId: 's1', token: 't', storage, apiRequest, now: () => 1000, pendingCollects: new Map() };
+      const ctx = {
+        backendUrl: 'https://api.example.com',
+        storeId: 's1',
+        token: 't',
+        storage,
+        apiRequest,
+        now: () => 1000,
+        pendingCollects: new Map(),
+      };
       await pushSourceCollectRef({ sourceId: 'ozon', raw: { sku: 's' } }, ctx);
       assert(fetchCount === 3, `status ${status} should retry 3 times, got ${fetchCount}`);
     }
@@ -254,13 +326,23 @@ async function run() {
     const storage = makeStorage();
     let fetchCount = 0;
     let releaseFetch;
-    const fetchPromise = new Promise((r) => { releaseFetch = r; });
+    const fetchPromise = new Promise((r) => {
+      releaseFetch = r;
+    });
     const apiRequest = async () => {
       fetchCount++;
       await fetchPromise; // 阻塞所有 fetch 直到我们 release
       return { id: 'concurrent-1' };
     };
-    const ctx = { backendUrl: 'https://api.example.com', storeId: 's1', token: 't', storage, apiRequest, now: () => 1000, pendingCollects: new Map() };
+    const ctx = {
+      backendUrl: 'https://api.example.com',
+      storeId: 's1',
+      token: 't',
+      storage,
+      apiRequest,
+      now: () => 1000,
+      pendingCollects: new Map(),
+    };
 
     // 并发发起 5 个 — 第一个会真发 fetch,后 4 个 await 同一个 Promise
     const promises = Array.from({ length: 5 }, () =>
@@ -271,7 +353,10 @@ async function run() {
     const results = await Promise.all(promises);
 
     assert(fetchCount === 1, `concurrent 5 should fetch once, got ${fetchCount}`);
-    assert(results.every((r) => r.ok), 'all 5 should ok');
+    assert(
+      results.every((r) => r.ok),
+      'all 5 should ok'
+    );
     // 第 1 个 dedupeHit=false(真发),其他 4 个 dedupeHit=true(合并到同一 promise)
     const hitCount = results.filter((r) => r.data?.dedupeHit).length;
     assert(hitCount === 4, `expected 4 dedupe hits, got ${hitCount}`);
@@ -281,8 +366,19 @@ async function run() {
   await test('case 8: 缺 sku 仍能正常 fetch,不写 cache', async () => {
     const storage = makeStorage();
     let fetchCount = 0;
-    const apiRequest = async () => { fetchCount++; return { id: 'x' }; };
-    const ctx = { backendUrl: 'https://api.example.com', storeId: 's1', token: 't', storage, apiRequest, now: () => 1000, pendingCollects: new Map() };
+    const apiRequest = async () => {
+      fetchCount++;
+      return { id: 'x' };
+    };
+    const ctx = {
+      backendUrl: 'https://api.example.com',
+      storeId: 's1',
+      token: 't',
+      storage,
+      apiRequest,
+      now: () => 1000,
+      pendingCollects: new Map(),
+    };
 
     const resp = await pushSourceCollectRef({ sourceId: 'ozon', raw: {} }, ctx);
     assert(resp.ok, 'should ok');
@@ -298,28 +394,46 @@ async function run() {
     const storage = makeStorage();
     let fetchCount = 0;
     let releaseA, releaseB;
-    const fetchAPromise = new Promise((r) => { releaseA = r; });
-    const fetchBPromise = new Promise((r) => { releaseB = r; });
+    const fetchAPromise = new Promise((r) => {
+      releaseA = r;
+    });
+    const fetchBPromise = new Promise((r) => {
+      releaseB = r;
+    });
     const apiRequest = async () => {
       fetchCount++;
-      if (fetchCount === 1) { await fetchAPromise; return { id: 'A-1' }; }
-      if (fetchCount === 2) { await fetchBPromise; return { id: 'B-2' }; }
+      if (fetchCount === 1) {
+        await fetchAPromise;
+        return { id: 'A-1' };
+      }
+      if (fetchCount === 2) {
+        await fetchBPromise;
+        return { id: 'B-2' };
+      }
       return { id: `extra-${fetchCount}` };
     };
     const pendingCollects = new Map();
-    const ctx = { backendUrl: 'https://api.example.com', storeId: 's1', token: 't', storage, apiRequest, now: () => 1000, pendingCollects };
+    const ctx = {
+      backendUrl: 'https://api.example.com',
+      storeId: 's1',
+      token: 't',
+      storage,
+      apiRequest,
+      now: () => 1000,
+      pendingCollects,
+    };
 
     // 1. 普通请求 A 先到 — set pending,在等 fetchA
     const promiseA = pushSourceCollectRef({ sourceId: 'ozon', raw: { sku: 'same' } }, ctx);
-    await new Promise(r => setTimeout(r, 0)); // 让 A 走到 set pending
+    await new Promise((r) => setTimeout(r, 0)); // 让 A 走到 set pending
 
     // 2. forceResubmit 请求 B 到达 — 不应该覆盖 A 的 pending
     const promiseB = pushSourceCollectRef({ sourceId: 'ozon', raw: { sku: 'same' }, forceResubmit: true }, ctx);
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     // 3. 后到的普通请求 C — 应该 await A(不是 B)
     const promiseC = pushSourceCollectRef({ sourceId: 'ozon', raw: { sku: 'same' } }, ctx);
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     // 让 A 和 B 都完成
     releaseA();
@@ -340,4 +454,7 @@ async function run() {
   process.exit(failed > 0 ? 1 : 0);
 }
 
-run().catch((e) => { console.error(e); process.exit(1); });
+run().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

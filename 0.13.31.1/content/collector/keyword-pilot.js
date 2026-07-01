@@ -51,7 +51,7 @@
       this.defaultMaxCollectNumber = opts.defaultMaxCollectNumber ?? 200;
 
       this.mode = 'IDLE';
-      this.currentKeyword = null;       // { id, text, maxCollectNumber }
+      this.currentKeyword = null; // { id, text, maxCollectNumber }
       this.startSalesCount = 0;
       this._monitorTimer = null;
       this._listeners = new Map();
@@ -65,7 +65,12 @@
     _emit(event, payload) {
       const set = this._listeners.get(event);
       if (!set) return;
-      for (const cb of set) try { cb(payload); } catch (e) { console.error('[JZKeywordPilot]', event, e); }
+      for (const cb of set)
+        try {
+          cb(payload);
+        } catch (e) {
+          console.error('[JZKeywordPilot]', event, e);
+        }
     }
 
     async init() {
@@ -91,12 +96,15 @@
       }
       // 命中：进入 COLLECTING
       this.currentKeyword = kw;
-      this.startSalesCount = (typeof session.startSalesCount === 'number')
-        ? session.startSalesCount
-        : await this.db.countSales();
+      this.startSalesCount =
+        typeof session.startSalesCount === 'number' ? session.startSalesCount : await this.db.countSales();
       this.mode = 'COLLECTING';
       this._startMonitor();
-      try { this.onStartCollecting(kw); } catch (e) { console.error('[JZKeywordPilot] onStartCollecting:', e); }
+      try {
+        this.onStartCollecting(kw);
+      } catch (e) {
+        console.error('[JZKeywordPilot] onStartCollecting:', e);
+      }
       this._emit('stateChange', this.getState());
     }
 
@@ -120,7 +128,11 @@
       const kw = await this.db.getNextPendingKeyword();
       if (!kw) {
         this.mode = 'DONE';
-        try { this.onAllDone(); } catch (e) { console.error('[JZKeywordPilot] onAllDone:', e); }
+        try {
+          this.onAllDone();
+        } catch (e) {
+          console.error('[JZKeywordPilot] onAllDone:', e);
+        }
         this._emit('stateChange', this.getState());
         return;
       }
@@ -161,7 +173,11 @@
       this.mode = 'IDLE';
       const oldKw = this.currentKeyword;
       this.currentKeyword = null;
-      try { this.onStopCollecting(oldKw); } catch (e) { console.error('[JZKeywordPilot] onStopCollecting:', e); }
+      try {
+        this.onStopCollecting(oldKw);
+      } catch (e) {
+        console.error('[JZKeywordPilot] onStopCollecting:', e);
+      }
       this._emit('stateChange', this.getState());
     }
 
@@ -185,7 +201,10 @@
       }, 5000);
     }
     _stopMonitor() {
-      if (this._monitorTimer) { clearInterval(this._monitorTimer); this._monitorTimer = null; }
+      if (this._monitorTimer) {
+        clearInterval(this._monitorTimer);
+        this._monitorTimer = null;
+      }
     }
 
     async _completeCurrentAndAdvance() {
@@ -195,7 +214,11 @@
         const collected = (await this.db.countSales()) - this.startSalesCount;
         await this.db.updateKeyword(kw.id, { status: 'done', collectedCount: Math.max(0, collected) });
       }
-      try { this.onStopCollecting(kw); } catch (e) { console.error('[JZKeywordPilot] onStopCollecting:', e); }
+      try {
+        this.onStopCollecting(kw);
+      } catch (e) {
+        console.error('[JZKeywordPilot] onStopCollecting:', e);
+      }
       await this.db.clearSession();
       this.currentKeyword = null;
       this.mode = 'IDLE';

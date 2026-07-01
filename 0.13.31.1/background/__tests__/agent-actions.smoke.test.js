@@ -38,11 +38,10 @@ assert.deepStrictEqual(
     'ozon.market_data',
     'listing.create_draft',
     'listing.publish_draft',
-  ].sort(),
+  ].sort()
 );
 
-globalThis.JzBrowserAgentActions
-  .run({ type: 'agent.ping', params: { ok: true } })
+globalThis.JzBrowserAgentActions.run({ type: 'agent.ping', params: { ok: true } })
   .then((result) => {
     assert.strictEqual(result.pong, true);
     assert.deepStrictEqual(result.params, { ok: true });
@@ -57,10 +56,7 @@ globalThis.JzBrowserAgentActions
 (async () => {
   globalThis.chrome = { cookies: { getAll: async () => [] } };
   const loggedOut = await globalThis.JzBrowserAgentActions.capabilitiesAsync();
-  assert.ok(
-    !loggedOut.includes('ozon.seller_collect'),
-    'seller_collect must not be advertised when logged out',
-  );
+  assert.ok(!loggedOut.includes('ozon.seller_collect'), 'seller_collect must not be advertised when logged out');
 
   globalThis.chrome = {
     cookies: { getAll: async () => [{ name: 'sc_company_id', value: '123' }] },
@@ -68,7 +64,7 @@ globalThis.JzBrowserAgentActions
   const loggedIn = await globalThis.JzBrowserAgentActions.capabilitiesAsync();
   assert.ok(
     loggedIn.includes('ozon.seller_collect'),
-    'seller_collect must be advertised when logged into seller.ozon.ru',
+    'seller_collect must be advertised when logged into seller.ozon.ru'
   );
   console.log('dynamic capability smoke passed');
 })().catch((error) => {

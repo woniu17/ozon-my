@@ -30,11 +30,11 @@
       this.pauseLowPending = opts.pauseLowPending ?? 10;
       this.hysteresisMs = opts.hysteresisMs ?? 2000;
 
-      this.tasks = new Map();        // taskId → { id, fn, state, result, error, attempts, createdAt, startedAt, finishedAt, _resolveOuter, _rejectOuter, _outerPromise }
-      this.failures = new Map();     // taskId → task (only failed/timeout)
+      this.tasks = new Map(); // taskId → { id, fn, state, result, error, attempts, createdAt, startedAt, finishedAt, _resolveOuter, _rejectOuter, _outerPromise }
+      this.failures = new Map(); // taskId → task (only failed/timeout)
       this.paused = false;
 
-      this._listeners = new Map();   // event → Set<cb>
+      this._listeners = new Map(); // event → Set<cb>
       this._pumping = false;
       this._congestionLevel = 'low';
       this._lastCongestionAt = 0;
@@ -54,7 +54,11 @@
       const set = this._listeners.get(event);
       if (!set) return;
       for (const cb of set) {
-        try { cb(payload); } catch (e) { console.error('[JZTaskQueue]', event, 'listener error:', e); }
+        try {
+          cb(payload);
+        } catch (e) {
+          console.error('[JZTaskQueue]', event, 'listener error:', e);
+        }
       }
     }
 
@@ -102,8 +106,15 @@
       for (const id of Array.from(this.failures.keys())) this.retry(id);
     }
 
-    pause() { this.paused = true; this._scheduleEmit(); }
-    resume() { this.paused = false; this._pump(); this._scheduleEmit(); }
+    pause() {
+      this.paused = true;
+      this._scheduleEmit();
+    }
+    resume() {
+      this.paused = false;
+      this._pump();
+      this._scheduleEmit();
+    }
 
     clear() {
       // 清空全部（包括运行中的：抛弃 outer promise 的等待者会一直挂着——调用方自负）
@@ -113,14 +124,25 @@
     }
 
     stats() {
-      let pending = 0, running = 0, success = 0, failed = 0;
+      let pending = 0,
+        running = 0,
+        success = 0,
+        failed = 0;
       for (const t of this.tasks.values()) {
         switch (t.state) {
-          case STATES.PENDING: pending++; break;
-          case STATES.RUNNING: running++; break;
-          case STATES.SUCCESS: success++; break;
+          case STATES.PENDING:
+            pending++;
+            break;
+          case STATES.RUNNING:
+            running++;
+            break;
+          case STATES.SUCCESS:
+            success++;
+            break;
           case STATES.TIMEOUT:
-          case STATES.ERROR: failed++; break;
+          case STATES.ERROR:
+            failed++;
+            break;
         }
       }
       return { pending, running, success, failed, total: this.tasks.size, paused: this.paused };
@@ -142,7 +164,8 @@
     _maybeEmitCongestion(stats) {
       const now = Date.now();
       if (now - this._lastCongestionAt < this.hysteresisMs) return;
-      const isHigh = stats.running >= this.concurrency || stats.pending > this.pauseLowPending || stats.running > this.autoPauseHigh;
+      const isHigh =
+        stats.running >= this.concurrency || stats.pending > this.pauseLowPending || stats.running > this.autoPauseHigh;
       const isLow = stats.running <= this.autoPauseLow && stats.pending <= this.pauseLowPending;
       if (isHigh && this._congestionLevel !== 'high') {
         this._congestionLevel = 'high';
@@ -165,7 +188,10 @@
           // 找一个 pending
           let next = null;
           for (const t of this.tasks.values()) {
-            if (t.state === STATES.PENDING) { next = t; break; }
+            if (t.state === STATES.PENDING) {
+              next = t;
+              break;
+            }
           }
           if (!next) break;
           this._runTask(next); // 不 await，让多个并发跑起来
@@ -183,7 +209,10 @@
 
       let timer;
       const timeoutPromise = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Task ${task.id} timeout after ${this.timeoutMs}ms`)), this.timeoutMs);
+        timer = setTimeout(
+          () => reject(new Error(`Task ${task.id} timeout after ${this.timeoutMs}ms`)),
+          this.timeoutMs
+        );
       });
 
       Promise.race([Promise.resolve().then(() => task.fn(task)), timeoutPromise])

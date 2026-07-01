@@ -25,19 +25,20 @@
   };
 
   /** 用 background fetch 拉 ozon 图（绕过页面 CORS），返回 base64 dataURL */
-  const proxyFetch = (url) => new Promise((resolve) => {
-    try {
-      chrome.runtime.sendMessage({ action: 'proxyImageFetch', url }, (resp) => {
-        if (chrome.runtime.lastError) {
-          resolve({ ok: false, error: chrome.runtime.lastError.message });
-          return;
-        }
-        resolve(resp || { ok: false, error: 'no response' });
-      });
-    } catch (e) {
-      resolve({ ok: false, error: e.message || String(e) });
-    }
-  });
+  const proxyFetch = (url) =>
+    new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ action: 'proxyImageFetch', url }, (resp) => {
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          resolve(resp || { ok: false, error: 'no response' });
+        });
+      } catch (e) {
+        resolve({ ok: false, error: e.message || String(e) });
+      }
+    });
 
   const dataUrlToFile = (dataUrl, name) => {
     const [meta, b64] = dataUrl.split(',');
@@ -49,55 +50,63 @@
     return new File([buf], `${name}.${ext}`, { type: mime });
   };
 
-  const waitForFileInput = () => new Promise((resolve) => {
-    const found = document.querySelector(FILE_INPUT_SELECTOR);
-    if (found) return resolve(found);
-    const obs = new MutationObserver(() => {
-      const el = document.querySelector(FILE_INPUT_SELECTOR);
-      if (el) {
+  const waitForFileInput = () =>
+    new Promise((resolve) => {
+      const found = document.querySelector(FILE_INPUT_SELECTOR);
+      if (found) return resolve(found);
+      const obs = new MutationObserver(() => {
+        const el = document.querySelector(FILE_INPUT_SELECTOR);
+        if (el) {
+          obs.disconnect();
+          resolve(el);
+        }
+      });
+      obs.observe(document.documentElement, { childList: true, subtree: true });
+      // 兜底：15 秒超时
+      setTimeout(() => {
         obs.disconnect();
-        resolve(el);
-      }
+        resolve(document.querySelector(FILE_INPUT_SELECTOR));
+      }, 15000);
     });
-    obs.observe(document.documentElement, { childList: true, subtree: true });
-    // 兜底：15 秒超时
-    setTimeout(() => { obs.disconnect(); resolve(document.querySelector(FILE_INPUT_SELECTOR)); }, 15000);
-  });
 
   /**
    * 上传成功后 1688 会弹出"帮你找同款"小卡片，里面有橙色的"搜索图片"按钮。
    * 必须再点一下才会真正跳到结果页。等到该按钮出现就自动 click。
    */
-  const waitAndClickSearchButton = () => new Promise((resolve) => {
-    const findBtn = () => {
-      const all = document.querySelectorAll('button, a, div, span');
-      for (const el of all) {
-        const t = (el.textContent || '').trim();
-        if (t === '搜索图片' && el.offsetParent !== null && el.children.length < 5) {
-          return el;
+  const waitAndClickSearchButton = () =>
+    new Promise((resolve) => {
+      const findBtn = () => {
+        const all = document.querySelectorAll('button, a, div, span');
+        for (const el of all) {
+          const t = (el.textContent || '').trim();
+          if (t === '搜索图片' && el.offsetParent !== null && el.children.length < 5) {
+            return el;
+          }
         }
-      }
-      return null;
-    };
-    const tryClick = () => {
-      const btn = findBtn();
-      if (!btn) return false;
-      // 派发完整 mouse 事件序列，部分按钮只监听 mousedown / pointerdown
-      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((ev) => {
-        btn.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true, view: window, button: 0 }));
+        return null;
+      };
+      const tryClick = () => {
+        const btn = findBtn();
+        if (!btn) return false;
+        // 派发完整 mouse 事件序列，部分按钮只监听 mousedown / pointerdown
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((ev) => {
+          btn.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true, view: window, button: 0 }));
+        });
+        return true;
+      };
+      if (tryClick()) return resolve(true);
+      const obs = new MutationObserver(() => {
+        if (tryClick()) {
+          obs.disconnect();
+          resolve(true);
+        }
       });
-      return true;
-    };
-    if (tryClick()) return resolve(true);
-    const obs = new MutationObserver(() => {
-      if (tryClick()) {
+      obs.observe(document.documentElement, { childList: true, subtree: true });
+      setTimeout(() => {
         obs.disconnect();
-        resolve(true);
-      }
+        resolve(false);
+      }, 8000);
     });
-    obs.observe(document.documentElement, { childList: true, subtree: true });
-    setTimeout(() => { obs.disconnect(); resolve(false); }, 8000);
-  });
 
   const inject = async (ozonUrl) => {
     // 防重复执行（同 SPA 路由切换不再触发）

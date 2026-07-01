@@ -1,4 +1,4 @@
-(function() {
+(function () {
   'use strict';
 
   // 预热 composer-api page json 缓存(Ozon 2026 SSR DOM 剥离修复):
@@ -57,24 +57,46 @@
   }
 
   function _svgIcon(paths) {
-    return '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"'
-      + ' fill="none" stroke="currentColor" stroke-width="2"'
-      + ' stroke-linecap="round" stroke-linejoin="round">' + paths + '</svg>';
+    return (
+      '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"' +
+      ' fill="none" stroke="currentColor" stroke-width="2"' +
+      ' stroke-linecap="round" stroke-linejoin="round">' +
+      paths +
+      '</svg>'
+    );
   }
 
   const _ICONS = {
-    collect:    _svgIcon('<path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/>'),
-    profit:     _svgIcon('<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'),
-    source:     _svgIcon('<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'),
-    favorite:   _svgIcon('<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>'),
-    dataPanel:  _svgIcon('<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>'),
-    followSell: _svgIcon('<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>'),
-    batchUpload: _svgIcon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'),
-    keyword:    _svgIcon('<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>'),
-    recommend:  _svgIcon('<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'),
-    variantSearch: _svgIcon('<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>'),
-    erp:        _svgIcon('<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'),
-    imageSearch: _svgIcon('<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>'),
+    collect: _svgIcon('<path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/>'),
+    profit: _svgIcon(
+      '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'
+    ),
+    source: _svgIcon('<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'),
+    favorite: _svgIcon('<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>'),
+    dataPanel: _svgIcon(
+      '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>'
+    ),
+    followSell: _svgIcon(
+      '<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>'
+    ),
+    batchUpload: _svgIcon(
+      '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'
+    ),
+    keyword: _svgIcon(
+      '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>'
+    ),
+    recommend: _svgIcon(
+      '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'
+    ),
+    variantSearch: _svgIcon(
+      '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>'
+    ),
+    erp: _svgIcon(
+      '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'
+    ),
+    imageSearch: _svgIcon(
+      '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>'
+    ),
   };
 
   // 页面类型判定:
@@ -85,9 +107,7 @@
   const _JZ_IS_PRODUCT_PAGE = window.location.pathname.includes('/product/');
   const _JZ_IS_LISTING_PAGE =
     !_JZ_IS_PRODUCT_PAGE &&
-    /\/(category|search|search-by-image|seller|brand|highlight)\b/.test(
-      window.location.pathname,
-    );
+    /\/(category|search|search-by-image|seller|brand|highlight)\b/.test(window.location.pathname);
   if (!_JZ_IS_PRODUCT_PAGE && !_JZ_IS_LISTING_PAGE) {
     return;
   }
@@ -148,7 +168,12 @@
 
   // 跟卖面板每个 currency 对应的展示符号 —— 跟 line 4471 CURRENCY_SYMBOLS 对齐
   const _JZ_CURRENCY_SYMBOLS = {
-    RUB: '₽', CNY: '¥', KZT: '₸', BYN: 'Br', USD: '$', EUR: '€',
+    RUB: '₽',
+    CNY: '¥',
+    KZT: '₸',
+    BYN: 'Br',
+    USD: '$',
+    EUR: '€',
   };
 
   // 检测页面整体币种 —— 给单变体 fallback 路径用。
@@ -163,7 +188,11 @@
         const raw = el.getAttribute('data-state');
         if (!raw || raw.length < 10) continue;
         let p;
-        try { p = JSON.parse(raw); } catch { continue; }
+        try {
+          p = JSON.parse(raw);
+        } catch {
+          continue;
+        }
         if (!p || typeof p !== 'object') continue;
         const cur = _detectCurrencyFromPriceStr(p.price || p.cardPrice || p.originalPrice);
         if (cur) {
@@ -193,7 +222,7 @@
         const data = JSON.parse(script.textContent);
         if (data['@type'] === 'Product') return data;
         if (Array.isArray(data['@graph'])) {
-          const product = data['@graph'].find(item => item['@type'] === 'Product');
+          const product = data['@graph'].find((item) => item['@type'] === 'Product');
           if (product) return product;
         }
       }
@@ -209,13 +238,7 @@
     if (!raw) return '';
     if (typeof raw === 'string') return raw.trim();
     if (typeof raw !== 'object') return String(raw).trim();
-    const candidates = [
-      raw.title,
-      raw.name,
-      raw.brand?.title,
-      raw.brand?.name,
-      raw.text,
-    ];
+    const candidates = [raw.title, raw.name, raw.brand?.title, raw.brand?.name, raw.text];
     for (const item of candidates) {
       const text = item == null ? '' : String(item).trim();
       if (text) return text;
@@ -234,14 +257,17 @@
     const detailInfo = paginator?.detail_info || {};
 
     // New key-based extraction for updated Ozon DOM structure
-    const priceData = window.findStateDataByKeys(['price', 'isAvailable'])
-      || window.findStateDataByKeys(['cardPrice']);
-    const galleryData = window.findStateDataByKeys(['images', 'coverImage'])
-      || window.findStateDataByKeys(['coverImage', 'sku']);
-    console.log(`[extractProductData] webGallery=${!!webGallery}, galleryData=${!!galleryData}, galleryData.images=${galleryData?.images?.length ?? 'N/A'}, galleryData.videos=${galleryData?.videos?.length ?? 'N/A'}`);
+    const priceData = window.findStateDataByKeys(['price', 'isAvailable']) || window.findStateDataByKeys(['cardPrice']);
+    const galleryData =
+      window.findStateDataByKeys(['images', 'coverImage']) || window.findStateDataByKeys(['coverImage', 'sku']);
+    console.log(
+      `[extractProductData] webGallery=${!!webGallery}, galleryData=${!!galleryData}, galleryData.images=${galleryData?.images?.length ?? 'N/A'}, galleryData.videos=${galleryData?.videos?.length ?? 'N/A'}`
+    );
     if (galleryData?.images?.length > 0) {
       const first = galleryData.images[0];
-      console.log(`[extractProductData] First image type=${typeof first}, keys=${typeof first === 'object' ? Object.keys(first).join(',') : 'N/A'}`);
+      console.log(
+        `[extractProductData] First image type=${typeof first}, keys=${typeof first === 'object' ? Object.keys(first).join(',') : 'N/A'}`
+      );
     }
     const sellerWidget = window.findStateDataByKeys(['sellerCell']);
     const productWidget = window.findStateDataByKeys(['name', 'sku', 'coverImageUrl']);
@@ -254,21 +280,12 @@
     // h1 兜底是从 DOM 文本抓 → 翻译态下是中文版本（污染上架 name）。
     // 翻译开了就跳过 h1 兜底；前 4 个来源（state-paginator / webState / json-ld /
     // og:title）都是 attribute / script 内 JSON，不被浏览器翻译影响。
-    const _h1Text = window.jzIsTranslated?.()
-      ? ''
-      : (titleElement?.textContent?.trim() || '');
+    const _h1Text = window.jzIsTranslated?.() ? '' : titleElement?.textContent?.trim() || '';
     const _rawTitle =
-      detailInfo.name ||
-      productWidget?.name ||
-      jsonLd?.name ||
-      extractOgMeta('og:title') ||
-      _h1Text ||
-      '';
+      detailInfo.name || productWidget?.name || jsonLd?.name || extractOgMeta('og:title') || _h1Text || '';
     // 剥掉混进名字的 Ozon 角标(Новинка / 0% до N дней 分期等),否则上架被审核
     // 打回「属性包含广告表达或营销促销名称」。剥光后为空则保留原串(无更好兜底)。
-    const title = window.jzStripPromo
-      ? (window.jzStripPromo(_rawTitle) || _rawTitle)
-      : _rawTitle;
+    const title = window.jzStripPromo ? window.jzStripPromo(_rawTitle) || _rawTitle : _rawTitle;
 
     // Ozon 价格语义（与字段名直觉相反，参考 jzc-calc.js 已 work 的提取逻辑）：
     //   p.price       = 黑标基础价（"С другими банками"，460 ₽）
@@ -285,7 +302,11 @@
         const raw = el.getAttribute('data-state');
         if (!raw || raw.length < 10) continue;
         let p;
-        try { p = JSON.parse(raw); } catch { continue; }
+        try {
+          p = JSON.parse(raw);
+        } catch {
+          continue;
+        }
         if (!p || typeof p !== 'object') continue;
         if (p.price && price == null) {
           const n = window.normalizePrice(p.price);
@@ -322,11 +343,8 @@
         detailInfo.old_price
     );
     if (!originalPrice) {
-      originalPrice = window.normalizePrice(
-        webPrice?.crossedPrice ||
-        webPrice?.strikethroughPrice ||
-        webPrice?.basePrice
-      ) || 0;
+      originalPrice =
+        window.normalizePrice(webPrice?.crossedPrice || webPrice?.strikethroughPrice || webPrice?.basePrice) || 0;
     }
 
     // walletPrice (绿底优惠价) 已在上面 stateEls 循环里提取过
@@ -346,7 +364,10 @@
     }
     if (images.length === 0 && (galleryData?.coverImage || productWidget?.coverImageUrl)) {
       const cover = galleryData?.coverImage || productWidget?.coverImageUrl;
-      if (cover) { images = [cover]; console.log(`[extractProductData] Images from coverImage: 1`); }
+      if (cover) {
+        images = [cover];
+        console.log(`[extractProductData] Images from coverImage: 1`);
+      }
     }
     if (images.length === 0 && jsonLd?.image) {
       const ldImages = Array.isArray(jsonLd.image) ? jsonLd.image : [jsonLd.image];
@@ -355,7 +376,10 @@
     }
     if (images.length === 0) {
       const ogImage = extractOgMeta('og:image');
-      if (ogImage) { images = [ogImage]; console.log(`[extractProductData] Images from og:image: 1`); }
+      if (ogImage) {
+        images = [ogImage];
+        console.log(`[extractProductData] Images from og:image: 1`);
+      }
     }
     // DOM fallback: gallery widget images
     if (images.length === 0) {
@@ -377,7 +401,7 @@
     if (images.length === 0) {
       const srcsetImgs = document.querySelectorAll('picture source[srcset*="ir.ozone.ru"]');
       const srcsetUrls = [];
-      srcsetImgs.forEach(src => {
+      srcsetImgs.forEach((src) => {
         const srcset = src.getAttribute('srcset') || '';
         const match = srcset.match(/(https?:\/\/ir\.ozone\.ru[^\s,]+)/);
         if (match) srcsetUrls.push(match[1]);
@@ -391,10 +415,10 @@
     if (images.length === 0) {
       const stateEls = document.querySelectorAll('[data-state]');
       const allUrls = new Set();
-      stateEls.forEach(el => {
+      stateEls.forEach((el) => {
         const state = el.getAttribute('data-state') || '';
         const matches = state.match(/https?:\/\/ir\.ozone\.ru\/s3\/multimedia-[^"'\s]+/g);
-        if (matches) matches.forEach(u => allUrls.add(u));
+        if (matches) matches.forEach((u) => allUrls.add(u));
       });
       if (allUrls.size > 0) {
         images = [...allUrls];
@@ -402,11 +426,13 @@
       }
     }
     if (images.length === 0) {
-      console.warn(`[extractProductData] No images found by any strategy! webGallery=${!!webGallery}, galleryData=${!!galleryData}, jsonLd.image=${!!jsonLd?.image}`);
+      console.warn(
+        `[extractProductData] No images found by any strategy! webGallery=${!!webGallery}, galleryData=${!!galleryData}, jsonLd.image=${!!jsonLd?.image}`
+      );
     }
 
     // Upgrade Ozon CDN thumbnails to large images (Ozon requires >= 200x200)
-    images = images.map(url => {
+    images = images.map((url) => {
       if (typeof url === 'string' && url.includes('ir.ozone.ru')) {
         // Replace /wc50/, /wc140/, /wc250/ etc. with /wc1000/ for high-res
         return url.replace(/\/wc\d+\//, '/wc1000/');
@@ -417,10 +443,8 @@
     const urlMatch = window.location.pathname.match(/\/product\/.*-(\d+)/);
     // SKU 兜底链:URL 正则 → webAddToCart.id → productWidget.sku → jsonLd.sku
     // 前两个已存,后两个 2026-05 加(Ozon SSR DOM 进一步剥离时 webAddToCart 也可能空)
-    const sku = urlMatch?.[1]
-      || String(webAddToCart?.id || '')
-      || String(productWidget?.sku || '')
-      || String(jsonLd?.sku || '');
+    const sku =
+      urlMatch?.[1] || String(webAddToCart?.id || '') || String(productWidget?.sku || '') || String(jsonLd?.sku || '');
     const productId = sku || String(webAddToCart?.id || '') || String(productWidget?.sku || '');
 
     // Ozon 2026 webCurrentSeller widget shape:
@@ -437,16 +461,8 @@
       // `{ textRich: [...] }` 之类对象时 `String(obj)` 退化成 "[object Object]"
       // 让 seller name 数据腐败 (Codex round 13 P2 #8)。
       const strOr = (v) => (typeof v === 'string' && v ? v : '');
-      const name =
-        strOr(sc.centerBlock?.title?.text) ||
-        strOr(sc.centerBlock?.title) ||
-        strOr(sc.name) ||
-        '';
-      const link =
-        strOr(sc.common?.action?.link) ||
-        strOr(sc.centerBlock?.title?.link) ||
-        strOr(sc.link) ||
-        '';
+      const name = strOr(sc.centerBlock?.title?.text) || strOr(sc.centerBlock?.title) || strOr(sc.name) || '';
+      const link = strOr(sc.common?.action?.link) || strOr(sc.centerBlock?.title?.link) || strOr(sc.link) || '';
       if (name || link) {
         seller = { name, link };
       }
@@ -460,19 +476,18 @@
     }
     if (!seller?.name && sellerWidget?.sellerCell) {
       // 历史 sellerWidget 路径(别处可能定义),兼容
-      const sellerName = sellerWidget.sellerCell?.centerBlock?.title?.text
-        || sellerWidget.sellerCell?.name || '';
-      const sellerLink = sellerWidget.sellerCell?.common?.action?.link
-        || sellerWidget.sellerCell?.centerBlock?.title?.link
-        || sellerWidget.sellerCell?.link || '';
+      const sellerName = sellerWidget.sellerCell?.centerBlock?.title?.text || sellerWidget.sellerCell?.name || '';
+      const sellerLink =
+        sellerWidget.sellerCell?.common?.action?.link ||
+        sellerWidget.sellerCell?.centerBlock?.title?.link ||
+        sellerWidget.sellerCell?.link ||
+        '';
       if (sellerName) {
         seller = { name: sellerName, link: sellerLink };
       }
     }
     if (!seller?.name) {
-      const sellerEl = document.querySelector(
-        '[data-widget="webCurrentSeller"] a, [data-widget="sellerInfo"] a'
-      );
+      const sellerEl = document.querySelector('[data-widget="webCurrentSeller"] a, [data-widget="sellerInfo"] a');
       if (sellerEl) {
         seller = { name: sellerEl.textContent?.trim() || '', link: sellerEl.href || '' };
       }
@@ -497,11 +512,11 @@
     const videoSource = galleryData || webGallery;
     if (Array.isArray(videoSource?.videos) && videoSource.videos.length > 0) {
       videos = videoSource.videos
-        .map(v => {
+        .map((v) => {
           if (typeof v === 'string') return v;
           return v?.url || v?.src || null;
         })
-        .filter(url => typeof url === 'string' && url.length > 0);
+        .filter((url) => typeof url === 'string' && url.length > 0);
       if (videos.length > 0) console.log(`[extractProductData] Videos: ${videos.length}`);
     }
 
@@ -514,18 +529,19 @@
     // Filter out brand links (last breadcrumb is often the brand, not a category)
     const categoryLinks = document.querySelectorAll('a[href*="/category/"]');
     const categoryArr = Array.from(categoryLinks)
-      .map(a => a.textContent.trim())
-      .filter(t => t.length > 0 && t.length < 80);
+      .map((a) => a.textContent.trim())
+      .filter((t) => t.length > 0 && t.length < 80);
     const uniqueCategories = categoryArr.filter((c, i) => categoryArr.indexOf(c) === i);
     // Remove brand name from categories (last item may be brand)
     const brandName = brand;
     const filteredCategories = brandName
-      ? uniqueCategories.filter(c => c.toLowerCase() !== brandName.toLowerCase())
+      ? uniqueCategories.filter((c) => c.toLowerCase() !== brandName.toLowerCase())
       : uniqueCategories;
     // Show L1/L3 format (first and last category)
-    const category = filteredCategories.length >= 2
-      ? `${filteredCategories[0]}/${filteredCategories[filteredCategories.length - 1]}`
-      : filteredCategories[0] || '';
+    const category =
+      filteredCategories.length >= 2
+        ? `${filteredCategories[0]}/${filteredCategories[filteredCategories.length - 1]}`
+        : filteredCategories[0] || '';
 
     // Rating + review count — from JSON-LD aggregateRating
     const rating = jsonLd?.aggregateRating?.ratingValue || null;
@@ -535,7 +551,7 @@
     const charsData = window.findStateDataByKeys(['characteristics', 'titleRs']);
     const characteristics = {};
     if (charsData?.characteristics) {
-      charsData.characteristics.forEach(c => {
+      charsData.characteristics.forEach((c) => {
         const charTitle = c.title?.textRs?.[0]?.content || '';
         const charValue = c.values?.[0]?.text || '';
         if (/длина|length/i.test(charTitle)) characteristics.lengthCm = charValue;
@@ -554,7 +570,7 @@
     const followSellCount = otherSellersData?.count || null;
     const followSellMinPrice = (() => {
       const texts = otherSellersData?.textRs || [];
-      const pricePart = texts.find(t => t.content && /[\d,.]/.test(t.content));
+      const pricePart = texts.find((t) => t.content && /[\d,.]/.test(t.content));
       return pricePart ? window.normalizePrice(pricePart.content) : null;
     })();
 
@@ -562,7 +578,7 @@
     const deliveryMode = (() => {
       const stateEls = document.querySelectorAll('[data-state]');
       let allText = '';
-      stateEls.forEach(el => {
+      stateEls.forEach((el) => {
         const attr = el.getAttribute('data-state') || '';
         if (attr.length > 100 && attr.length < 20000) allText += attr;
       });
@@ -695,7 +711,7 @@
             sku,
             title: d.title || '',
             price: isRub ? _rubToCny(rawPriceNum) : rawPriceNum,
-            priceCurrency: isRub ? 'CNY' : (srcCurrency || 'CNY'),
+            priceCurrency: isRub ? 'CNY' : srcCurrency || 'CNY',
             priceRub: isRub ? rawPriceNum : 0,
             coverImage: (d.coverImage || '').replace(/\/wc\d+\//, '/wc1000/'),
             link: v.link || '',
@@ -705,7 +721,7 @@
           });
         }
         const existing = variantMap.get(sku);
-        const text = v.data?.searchableText || v.data?.textRs?.map(t => t.content).join('') || '';
+        const text = v.data?.searchableText || v.data?.textRs?.map((t) => t.content).join('') || '';
         if (aspectName && text) existing.aspectValues[aspectName] = text;
       }
     }
@@ -753,7 +769,13 @@
         const rows = [];
         for (const k of Object.keys(states)) {
           let v = states[k];
-          if (typeof v === 'string') { try { v = JSON.parse(v); } catch { continue; } }
+          if (typeof v === 'string') {
+            try {
+              v = JSON.parse(v);
+            } catch {
+              continue;
+            }
+          }
           if (!v || !Array.isArray(v.aspects)) continue;
           for (const aspect of v.aspects) {
             const aspectName = aspect.aspectName || '';
@@ -765,13 +787,12 @@
               const srcCurrency = _detectCurrencyFromPriceStr(d.price);
               const rawPriceNum = window.normalizePrice(d.price) || 0;
               const isRub = srcCurrency === 'RUB';
-              const text =
-                d.searchableText || d.textRs?.map((t) => t.content).join('') || '';
+              const text = d.searchableText || d.textRs?.map((t) => t.content).join('') || '';
               rows.push({
                 sku,
                 title: d.title || '',
                 price: isRub ? _rubToCny(rawPriceNum) : rawPriceNum,
-                priceCurrency: isRub ? 'CNY' : (srcCurrency || 'CNY'),
+                priceCurrency: isRub ? 'CNY' : srcCurrency || 'CNY',
                 priceRub: isRub ? rawPriceNum : 0,
                 coverImage: (d.coverImage || '').replace(/\/wc\d+\//, '/wc1000/'),
                 link: av.link || '',
@@ -810,16 +831,14 @@
       if (setBtn) setBtn(`展开全部 ${best.total} 个变体…`);
       const modalRows = await jzFetchAspectsModalVariants(best.link);
       if (modalRows.length === 0) {
-        console.warn(
-          `[ozon-helper] aspect modal 拉取为空,保留内联 ${variants.length} 个变体(目标 ${best.total})`,
-        );
+        console.warn(`[ozon-helper] aspect modal 拉取为空,保留内联 ${variants.length} 个变体(目标 ${best.total})`);
         return variants;
       }
       const map = new Map(variants.map((v) => [String(v.sku), v]));
       for (const r of modalRows) if (!map.has(r.sku)) map.set(r.sku, r);
       const merged = Array.from(map.values());
       console.log(
-        `[ozon-helper] aspect modal 展开:内联 ${variants.length} → ${merged.length}(弹窗 ${modalRows.length},目标 ${best.total})`,
+        `[ozon-helper] aspect modal 展开:内联 ${variants.length} → ${merged.length}(弹窗 ${modalRows.length},目标 ${best.total})`
       );
       return merged;
     } catch (e) {
@@ -831,9 +850,7 @@
   function extractBreadcrumbs() {
     // 优先 1：从 webState script JSON 抓（attribute / script 内 JSON 不被浏览器翻译污染）
     try {
-      const bcState =
-        window.findStateDataByKeys?.(['breadcrumbs']) ||
-        window.findStateDataByKeys?.(['breadCrumbs']);
+      const bcState = window.findStateDataByKeys?.(['breadcrumbs']) || window.findStateDataByKeys?.(['breadCrumbs']);
       const arr = bcState?.breadcrumbs || bcState?.breadCrumbs;
       if (Array.isArray(arr) && arr.length) {
         const items = arr
@@ -851,16 +868,16 @@
     if (breadcrumbWidget) {
       const links = breadcrumbWidget.querySelectorAll('a');
       const crumbs = Array.from(links)
-        .map(el => el.textContent?.trim())
-        .filter(t => t && t !== 'Ozon' && t !== 'Главная');
+        .map((el) => el.textContent?.trim())
+        .filter((t) => t && t !== 'Ozon' && t !== 'Главная');
       if (crumbs.length > 0) return crumbs;
     }
     const nav = document.querySelector('nav[aria-label]');
     if (nav) {
       const items = nav.querySelectorAll('li a, li span');
       return Array.from(items)
-        .map(el => el.textContent?.trim())
-        .filter(t => t && t !== 'Ozon' && t !== 'Главная');
+        .map((el) => el.textContent?.trim())
+        .filter((t) => t && t !== 'Ozon' && t !== 'Главная');
     }
     return [];
   }
@@ -885,20 +902,23 @@
     const characteristics = [];
 
     // Strategy A: Search data-state for objects with characteristic-related keys
-    const charState = window.findStateDataByKeys?.(['characteristics'])
-      || window.findStateDataByKeys?.(['shortCharacteristics'])
-      || window.findStateDataByKeys?.(['specs']);
+    const charState =
+      window.findStateDataByKeys?.(['characteristics']) ||
+      window.findStateDataByKeys?.(['shortCharacteristics']) ||
+      window.findStateDataByKeys?.(['specs']);
 
     if (charState) {
       const items = charState.characteristics || charState.shortCharacteristics || charState.specs;
       if (Array.isArray(items)) {
         for (const group of items) {
           const entries = group.short || group.items || group.characteristics || [];
-          for (const entry of (Array.isArray(entries) ? entries : [])) {
+          for (const entry of Array.isArray(entries) ? entries : []) {
             const name = entry.key || entry.name || entry.title || '';
             const val = entry.values
-              ? (Array.isArray(entry.values) ? entry.values.map(v => v.text || v.value || v).join(', ') : String(entry.values))
-              : (entry.value || entry.text || '');
+              ? Array.isArray(entry.values)
+                ? entry.values.map((v) => v.text || v.value || v).join(', ')
+                : String(entry.values)
+              : entry.value || entry.text || '';
             if (name && val) characteristics.push({ name: name.trim(), value: val.trim() });
           }
         }
@@ -1005,9 +1025,15 @@
       const charWidgetNames = [];
       for (const w of allWidgets) {
         const name = w.getAttribute('data-widget');
-        if (name && (name.toLowerCase().includes('character') || name.toLowerCase().includes('detail')
-          || name.toLowerCase().includes('description') || name.toLowerCase().includes('spec')
-          || name.toLowerCase().includes('param') || name.toLowerCase().includes('propert'))) {
+        if (
+          name &&
+          (name.toLowerCase().includes('character') ||
+            name.toLowerCase().includes('detail') ||
+            name.toLowerCase().includes('description') ||
+            name.toLowerCase().includes('spec') ||
+            name.toLowerCase().includes('param') ||
+            name.toLowerCase().includes('propert'))
+        ) {
           charWidgetNames.push(name);
           const stateAttr = w.getAttribute('data-state');
           if (stateAttr) {
@@ -1035,7 +1061,9 @@
           }
         }
       }
-      console.log(`[JiZhang] Strategy E (broad widget scan): widgets=[${charWidgetNames.join(',')}], found ${characteristics.length}`);
+      console.log(
+        `[JiZhang] Strategy E (broad widget scan): widgets=[${charWidgetNames.join(',')}], found ${characteristics.length}`
+      );
     }
 
     // Strategy F: Scan ALL data-state elements for arrays with key/value objects (last resort)
@@ -1051,16 +1079,24 @@
             if (!obj || typeof obj !== 'object' || depth > 5) return;
             if (Array.isArray(obj)) {
               // Check if this array contains objects with key-value or name-value pairs
-              const kvCount = obj.filter(item =>
-                item && typeof item === 'object' && !Array.isArray(item) &&
-                ((item.key && item.value) || (item.name && item.value))
+              const kvCount = obj.filter(
+                (item) =>
+                  item &&
+                  typeof item === 'object' &&
+                  !Array.isArray(item) &&
+                  ((item.key && item.value) || (item.name && item.value))
               ).length;
               if (kvCount >= 3 && kvCount === obj.length) {
                 for (const item of obj) {
                   const n = item.key || item.name;
-                  const v = typeof item.value === 'string' ? item.value
-                    : (item.values ? (Array.isArray(item.values) ? item.values.map(x => x.text || x.value || x).join(', ') : String(item.values))
-                    : String(item.value));
+                  const v =
+                    typeof item.value === 'string'
+                      ? item.value
+                      : item.values
+                        ? Array.isArray(item.values)
+                          ? item.values.map((x) => x.text || x.value || x).join(', ')
+                          : String(item.values)
+                        : String(item.value);
                   if (n && v) characteristics.push({ name: String(n).trim(), value: v.trim() });
                 }
                 return;
@@ -1155,7 +1191,9 @@
     // 防御性:如果分隔符后面紧跟"数字+单位"或纯数字(像 "Размер: 5L" / "Size: 20 cm"),
     // 说明这是 DOM 兜底 paired-divs 没拆好的"label: value"结构 — 不要砍掉,跳过整条。
     const normalizeLabel = (raw) => {
-      let s = String(raw || '').trim().toLowerCase();
+      let s = String(raw || '')
+        .trim()
+        .toLowerCase();
       // 抽出标签里出现的单位(只看尾部修饰段防止误吞品名)
       const unitInLabel = (() => {
         const m = s.match(/[,\(\[\-–:]\s*(кг|kg|г|g|см|cm|мм|mm|м\b|m\b)\s*[\)\]]?\s*$/iu);
@@ -1177,7 +1215,8 @@
     };
     // 字段名识别:全词匹配 normalized label,长 pattern 优先(避免"вес"先吃掉"вес товара с упаковкой")。
     const patterns = {
-      weight: /^(вес\s*товара\s*с\s*упаковкой|вес\s*с\s*упаковкой|вес\s*товара|вес\s*брутто|вес\s*нетто|масса\s*брутто|масса\s*нетто|вес|масса|gross\s*weight|net\s*weight|weight)$/i,
+      weight:
+        /^(вес\s*товара\s*с\s*упаковкой|вес\s*с\s*упаковкой|вес\s*товара|вес\s*брутто|вес\s*нетто|масса\s*брутто|масса\s*нетто|вес|масса|gross\s*weight|net\s*weight|weight)$/i,
       depth: /^(глубина\s*упаковки|глубина|длина\s*упаковки|длина\s*товара|длина|depth|length)$/i,
       width: /^(ширина\s*упаковки|ширина|width)$/i,
       height: /^(высота\s*упаковки|высота|height)$/i,
@@ -1187,22 +1226,26 @@
     // 关键设计:**无单位且无 unitHint 时拒绝解析**,而不是用"<100 = kg" 启发式 ——
     // codex review 指出 99 g 会被误判为 99 kg(放大 1000 倍),太危险,直接放弃比错更好。
     const toGrams = (raw, unitHint) => {
-      const m = String(raw || '').replace(',', '.').match(/(-?\d+(?:\.\d+)?)\s*(кг|kg|г|g)?/i);
+      const m = String(raw || '')
+        .replace(',', '.')
+        .match(/(-?\d+(?:\.\d+)?)\s*(кг|kg|г|g)?/i);
       if (!m) return null;
       const n = Number(m[1]);
       if (!Number.isFinite(n) || n <= 0) return null;
-      const unit = ((m[2] || unitHint || '').toLowerCase());
+      const unit = (m[2] || unitHint || '').toLowerCase();
       if (unit === 'кг' || unit === 'kg') return Math.round(n * 1000);
       if (unit === 'г' || unit === 'g') return Math.round(n);
       // 没单位且无 hint:跳过(prefer 没数据 over 错数据)
       return null;
     };
     const toMm = (raw, unitHint) => {
-      const m = String(raw || '').replace(',', '.').match(/(-?\d+(?:\.\d+)?)\s*(см|cm|мм|mm|м\b|m\b)?/i);
+      const m = String(raw || '')
+        .replace(',', '.')
+        .match(/(-?\d+(?:\.\d+)?)\s*(см|cm|мм|mm|м\b|m\b)?/i);
       if (!m) return null;
       const n = Number(m[1]);
       if (!Number.isFinite(n) || n <= 0) return null;
-      const unit = ((m[2] || unitHint || '').toLowerCase());
+      const unit = (m[2] || unitHint || '').toLowerCase();
       if (unit === 'см' || unit === 'cm') return Math.round(n * 10);
       if (unit === 'м' || unit === 'm') return Math.round(n * 1000);
       if (unit === 'мм' || unit === 'mm') return Math.round(n);
@@ -1236,7 +1279,11 @@
       }
       // 组合 "10 x 20 x 30 см" / "10×20×30 мм" / "10 х 20 х 30" — 分隔符支持半/全角 x×*хХ + 周围空格 + 中文逗号/分号
       if (patterns.sizeAll.test(label)) {
-        const parts = v.replace(',', '.').split(/\s*[x×*хХ;,，;]\s*/u).map(s => s.trim()).filter(Boolean);
+        const parts = v
+          .replace(',', '.')
+          .split(/\s*[x×*хХ;,，;]\s*/u)
+          .map((s) => s.trim())
+          .filter(Boolean);
         if (parts.length === 3) {
           const unitMatch = v.match(/(см|cm|мм|mm|м\b|m\b)/i);
           const unit = (unitMatch?.[1] || unitInLabel || '').toLowerCase();
@@ -1295,7 +1342,7 @@
       }
     }
     const desc = description || '';
-    lines.push(`描述: ${desc.length > 80 ? desc.slice(0, 80) + '...' : (desc || '-')}`);
+    lines.push(`描述: ${desc.length > 80 ? desc.slice(0, 80) + '...' : desc || '-'}`);
     lines.push(sep);
 
     console.log('[JiZhang]\n' + lines.join('\n'));
@@ -1325,7 +1372,9 @@
 
     // composer-api 缓存预热(限 3s),让后续 sync 提取走 cache fallback
     if (window.ensurePdpState) {
-      try { await Promise.race([window.ensurePdpState(), new Promise((r) => setTimeout(r, 3000))]); } catch {}
+      try {
+        await Promise.race([window.ensurePdpState(), new Promise((r) => setTimeout(r, 3000))]);
+      } catch {}
     }
 
     let variants = extractAspectVariants();
@@ -1342,9 +1391,7 @@
       const needPhaseA = rawAspects.length >= 2 && variants.length > 1 && currentSku;
       if (needPhaseA) {
         const variantMap = new Map(variants.map((v) => [String(v.sku), v]));
-        const sortedAxes = [...rawAspects].sort(
-          (a, b) => (a.variants?.length || 0) - (b.variants?.length || 0),
-        );
+        const sortedAxes = [...rawAspects].sort((a, b) => (a.variants?.length || 0) - (b.variants?.length || 0));
         const linksToFetch = (sortedAxes[0]?.variants || [])
           .filter((v) => v && String(v.sku) !== currentSku && v.link)
           .slice(0, 8)
@@ -1362,7 +1409,10 @@
             for (const el of doc.querySelectorAll('[data-state]')) {
               try {
                 const data = JSON.parse(el.getAttribute('data-state') || '');
-                if (Array.isArray(data?.aspects) && data.aspects.length > 0) { fetchedAspects = data.aspects; break; }
+                if (Array.isArray(data?.aspects) && data.aspects.length > 0) {
+                  fetchedAspects = data.aspects;
+                  break;
+                }
               } catch {}
             }
             if (!fetchedAspects) continue;
@@ -1380,7 +1430,7 @@
                     sku,
                     title: d.title || '',
                     price: isRub ? _rubToCny(rawPriceNum) : rawPriceNum,
-                    priceCurrency: isRub ? 'CNY' : (srcCurrency || 'CNY'),
+                    priceCurrency: isRub ? 'CNY' : srcCurrency || 'CNY',
                     priceRub: isRub ? rawPriceNum : 0,
                     coverImage: (d.coverImage || '').replace(/\/wc\d+\//, '/wc1000/'),
                     link: v.link || '',
@@ -1421,24 +1471,39 @@
           if (d && Array.isArray(d.aspects) && d.aspects.length > 0) withAspects++;
         } catch {}
       }
-      const rawAspects = (() => { try { return extractRawAspects(); } catch { return []; } })();
-      const rawAspectVariantTotal = rawAspects.reduce((n, a) => n + ((a?.variants || []).length), 0);
-      const aspectVariants = (() => { try { return extractAspectVariants(); } catch { return []; } })();
+      const rawAspects = (() => {
+        try {
+          return extractRawAspects();
+        } catch {
+          return [];
+        }
+      })();
+      const rawAspectVariantTotal = rawAspects.reduce((n, a) => n + (a?.variants || []).length, 0);
+      const aspectVariants = (() => {
+        try {
+          return extractAspectVariants();
+        } catch {
+          return [];
+        }
+      })();
       const widgetKeys = Array.from(document.querySelectorAll('[data-widget]'))
         .map((el) => el.getAttribute('data-widget'))
         .filter(Boolean);
-      console.error('[JZ#160] 变体检测诊断', JSON.stringify({
-        currentSku: String(extractProductData()?.sku || ''),
-        dataStateEls: stateEls.length,
-        dataStateWithAspects: withAspects,
-        rawAspects: rawAspects.length,
-        rawAspectVariantTotal,
-        aspectVariants: aspectVariants.length,
-        variantsAfterExpand: variants.length,
-        willFallbackToSingle: variants.length <= 1,
-        stateKeys: Array.from(new Set(stateKeys)).slice(0, 50),
-        widgetKeys: Array.from(new Set(widgetKeys)).slice(0, 50),
-      }));
+      console.error(
+        '[JZ#160] 变体检测诊断',
+        JSON.stringify({
+          currentSku: String(extractProductData()?.sku || ''),
+          dataStateEls: stateEls.length,
+          dataStateWithAspects: withAspects,
+          rawAspects: rawAspects.length,
+          rawAspectVariantTotal,
+          aspectVariants: aspectVariants.length,
+          variantsAfterExpand: variants.length,
+          willFallbackToSingle: variants.length <= 1,
+          stateKeys: Array.from(new Set(stateKeys)).slice(0, 50),
+          widgetKeys: Array.from(new Set(widgetKeys)).slice(0, 50),
+        })
+      );
     } catch (e) {
       console.error('[JZ#160] 诊断块异常:', e?.message || e);
     }
@@ -1472,7 +1537,13 @@
     //
     // 母体顶层(name/image/统计/卖家/划线价 + variantData 的类目/描述/物理尺寸/完整
     // attributes)取当前页 anchor;每个变体行只存编辑页 VariantRow 用到的轻量字段。
-    const anchorProduct = (() => { try { return extractProductData(); } catch { return null; } })();
+    const anchorProduct = (() => {
+      try {
+        return extractProductData();
+      } catch {
+        return null;
+      }
+    })();
     const anchorSku = String(anchorProduct?.sku || anchorProduct?.productId || '');
 
     // 把一个 aspect 变体裁成编辑页变体行 + catalog(sv 优先,DOM/aspect 兜底)。
@@ -1483,12 +1554,18 @@
       const svCat = window.jzExtractCatalogFromSv ? window.jzExtractCatalogFromSv(sv) : null;
       const name = window.jzPreferSourceName
         ? window.jzPreferSourceName(svCat?.name || distilled?.name, v.title)
-        : (v.title || distilled?.name || '');
+        : v.title || distilled?.name || '';
       const images = svCat?.images?.length
         ? svCat.images
-        : (distilled?.images?.length ? distilled.images : (v.coverImage ? [v.coverImage] : []));
+        : distilled?.images?.length
+          ? distilled.images
+          : v.coverImage
+            ? [v.coverImage]
+            : [];
       let link = '';
-      try { if (v.link) link = new URL(v.link, 'https://www.ozon.ru').href; } catch {}
+      try {
+        if (v.link) link = new URL(v.link, 'https://www.ozon.ru').href;
+      } catch {}
       return {
         sku,
         sv,
@@ -1497,12 +1574,8 @@
         images: images.length ? images : undefined,
         // 价格口径同单采/后端:RUB 源送原卢布 + 'RUB'(后端 ×汇率);
         //   CNY 源(含 Ozon 跨境页默认人民币)送原人民币 + 'CNY'(后端原值保留);其它外币留空不猜。
-        price: v.priceRub
-          ? String(v.priceRub)
-          : (v.priceCurrency === 'CNY' && v.price ? String(v.price) : undefined),
-        priceCurrency: v.priceRub
-          ? 'RUB'
-          : (v.priceCurrency === 'CNY' && v.price ? 'CNY' : undefined),
+        price: v.priceRub ? String(v.priceRub) : v.priceCurrency === 'CNY' && v.price ? String(v.price) : undefined,
+        priceCurrency: v.priceRub ? 'RUB' : v.priceCurrency === 'CNY' && v.price ? 'CNY' : undefined,
         // is_aspect 规格维度值(颜色/尺码 → 文本),编辑页可据此预填区分 SKU 的属性。
         aspectValues: v.aspectValues && Object.keys(v.aspectValues).length ? v.aspectValues : undefined,
         link: link || undefined,
@@ -1576,12 +1649,19 @@
 
     // ── 单次推送(母体一行,dedup 按母体 SKU)──
     setBtn('推送中…');
-    let created = 0, updated = 0, failed = 0, dedupeHit = false;
+    let created = 0,
+      updated = 0,
+      failed = 0,
+      dedupeHit = false;
     try {
       // forceResubmit:跳过 SW 的 24h SKU dedup。这是用户主动「采集全部变体」,即便母体
       // SKU 此前已被单品采集过(命中 dedup 会早返 result:null、不调后端 upsert),也必须
       // 强制重推,否则 variantData.variants 永远落不进库,合并采集静默失败(P1)。
-      const resp = await window.sendMessage('pushSourceCollect', { sourceId: 'ozon', raw: payload, forceResubmit: true });
+      const resp = await window.sendMessage('pushSourceCollect', {
+        sourceId: 'ozon',
+        raw: payload,
+        forceResubmit: true,
+      });
       dedupeHit = !!resp?.dedupeHit;
       // SW envelope 现不返 created/updated 区分,统一记一次成功。
       created = 1;
@@ -1630,12 +1710,17 @@
       }
       if (!srcMp4) {
         for (const v of vids) {
-          const raw = typeof v === 'string' ? v : (v?.url || v?.src || '');
-          if (raw && typeof raw === 'string' && /\.mp4(\?|#|$)/i.test(raw)) { srcMp4 = raw; break; } // 跳 m3u8
+          const raw = typeof v === 'string' ? v : v?.url || v?.src || '';
+          if (raw && typeof raw === 'string' && /\.mp4(\?|#|$)/i.test(raw)) {
+            srcMp4 = raw;
+            break;
+          } // 跳 m3u8
         }
       }
       if (!srcMp4) return null;
-      try { if (typeof onLabel === 'function') onLabel('转存视频…'); } catch (_) {}
+      try {
+        if (typeof onLabel === 'function') onLabel('转存视频…');
+      } catch (_) {}
       // window.sendMessage 成功时 resolve 的是 SW 的 response.data(失败则 throw),故 up = { url }。
       let up = null;
       try {
@@ -1682,11 +1767,10 @@
     // DOM 数据不全才等 SW 缓存预热兜底
     if ((!hasTitle || !hasImages || !hasSku) && window.ensurePdpState) {
       try {
-        await Promise.race([
-          window.ensurePdpState(),
-          new Promise((resolve) => setTimeout(resolve, 3000)),
-        ]);
-      } catch { /* noop */ }
+        await Promise.race([window.ensurePdpState(), new Promise((resolve) => setTimeout(resolve, 3000))]);
+      } catch {
+        /* noop */
+      }
       product = extractProductData();
       hasTitle = !!(product?.title && product.title.trim());
       hasImages = Array.isArray(product?.images) && product.images.length > 0;
@@ -1697,11 +1781,9 @@
     // 抛清晰错误,避免下游送给 backend 一个 sku/name 都空的 payload(backend 收
     // 到这种 payload 也会 reject,但报"采集请求失败"对用户没意义)。
     if (!hasTitle || !hasImages || !hasSku) {
-      const missing = [
-        !hasTitle ? '标题' : null,
-        !hasImages ? '图片' : null,
-        !hasSku ? 'SKU' : null,
-      ].filter(Boolean).join(' / ');
+      const missing = [!hasTitle ? '标题' : null, !hasImages ? '图片' : null, !hasSku ? 'SKU' : null]
+        .filter(Boolean)
+        .join(' / ');
       // 详细诊断:打出 product 对象关键字段,便于 devtools console 看根因。
       // 用 warn 在 production build.js 里会被 DCE,只有 dev 模式才打。
       console.warn('[ozon-helper] 采集 validation 失败 — product 字段诊断:', {
@@ -1728,11 +1810,12 @@
 
     const variantResp = await variantPromise;
     const variantItems = variantResp?.items || variantResp?.data?.items || [];
-    const variantMatch = variantItems.find(it => String(it.variant_id) === product.sku)
-      || variantItems[0] || null;
+    const variantMatch = variantItems.find((it) => String(it.variant_id) === product.sku) || variantItems[0] || null;
 
     if (variantMatch) {
-      console.log(`[ozon-helper] collectProduct: searchVariants found variant_id=${variantMatch.variant_id}, images=${variantMatch.images?.length || 0}, attrs=${variantMatch.attributes?.length || 0}`);
+      console.log(
+        `[ozon-helper] collectProduct: searchVariants found variant_id=${variantMatch.variant_id}, images=${variantMatch.images?.length || 0}, attrs=${variantMatch.attributes?.length || 0}`
+      );
     }
 
     // 跟卖式 catalog 抽取:name/images 切成 sv(search+bundle)优先,DOM 兜底。
@@ -1740,7 +1823,7 @@
     const svCat = window.jzExtractCatalogFromSv ? window.jzExtractCatalogFromSv(variantMatch) : null;
     const collectName = window.jzPreferSourceName
       ? window.jzPreferSourceName(svCat?.name, product.title)
-      : (product.title || svCat?.name || '');
+      : product.title || svCat?.name || '';
     const collectImages = (svCat?.images?.length ? svCat.images : product.images) || [];
     const collectMainImage = svCat?.mainImage || product.images?.[0] || getMainImageUrl(product) || undefined;
 
@@ -1752,10 +1835,7 @@
     // 源富内容(11254):composer 缓存抽取注入 variantData(searchVariants 失败也会
     // 新建 {attributes} 兜底),编辑页预填 + 上架经 _sourceVariant 下发。
     const collectRichContent = await jzCollectPageRichContent();
-    let collectVariantData = jzInjectRichContentAttr(
-      variantMatch,
-      collectRichContent,
-    );
+    let collectVariantData = jzInjectRichContentAttr(variantMatch, collectRichContent);
     const contentCopy = window.JZFollowSellContentCopy;
     const collectDescription = contentCopy?.pickFollowSellDescription
       ? contentCopy.pickFollowSellDescription({
@@ -1767,10 +1847,7 @@
         })
       : '';
     collectVariantData = contentCopy?.mergeSourceDescriptionIntoVariant
-      ? contentCopy.mergeSourceDescriptionIntoVariant(
-          collectVariantData || variantMatch || {},
-          collectDescription,
-        )
+      ? contentCopy.mergeSourceDescriptionIntoVariant(collectVariantData || variantMatch || {}, collectDescription)
       : collectVariantData;
     const collectHashtags = extractKeywords();
     contentCopy?.mergeSourceHashtagsIntoVariant?.(collectVariantData, collectHashtags);
@@ -1803,7 +1880,8 @@
       soldCount: product.statistics?.sold_count != null ? product.statistics.sold_count : undefined,
       soldSum: product.statistics?.sold_sum != null ? String(product.statistics.sold_sum) : undefined,
       views: product.statistics?.views != null ? product.statistics.views : undefined,
-      convViewToOrder: product.statistics?.conv_view_to_order != null ? String(product.statistics.conv_view_to_order) : undefined,
+      convViewToOrder:
+        product.statistics?.conv_view_to_order != null ? String(product.statistics.conv_view_to_order) : undefined,
       discount: product.statistics?.discount != null ? String(product.statistics.discount) : undefined,
       gmvSum: product.statistics?.gmv_sum != null ? String(product.statistics.gmv_sum) : undefined,
     };
@@ -1814,7 +1892,11 @@
     // 不要再检查 resp.ok — 那是 envelope fix 之前 SW 平铺返回的残留,resp 现在不再有 ok。
     // forceResubmit:视频/简介/富内容/标签任一存在时强制重推 —— 否则 24h dedupe
     // 命中会早返不调后端 upsert,旧采集记录里的空简介不会被新提取结果覆盖。
-    const resp = await window.sendMessage('pushSourceCollect', { sourceId: 'ozon', raw: collectPayload, forceResubmit: collectForceResubmit });
+    const resp = await window.sendMessage('pushSourceCollect', {
+      sourceId: 'ozon',
+      raw: collectPayload,
+      forceResubmit: collectForceResubmit,
+    });
     return { ok: true, dedupeHit: !!resp?.dedupeHit, lastAt: resp?.lastAt || null };
   }
 
@@ -1880,7 +1962,9 @@
       }
     });
 
-    const followSellBtn = createActionButton(_ICONS.followSell, '模拟手动跟卖', () => toggleFollowSellPanel(followSellBtn));
+    const followSellBtn = createActionButton(_ICONS.followSell, '模拟手动跟卖', () =>
+      toggleFollowSellPanel(followSellBtn)
+    );
     const batchUploadBtn = createActionButton(_ICONS.batchUpload, '批量上架', () => {
       try {
         const url = chrome.runtime.getURL('batch-upload/index.html');
@@ -1891,7 +1975,9 @@
     });
     batchUploadBtn.dataset.color = 'coral';
 
-    const profitBtn = createActionButton(_ICONS.profit, `${globalThis.__JZ_BRAND__.displayName} 算价`, () => toggleProfitPanel(profitBtn));
+    const profitBtn = createActionButton(_ICONS.profit, `${globalThis.__JZ_BRAND__.displayName} 算价`, () =>
+      toggleProfitPanel(profitBtn)
+    );
 
     const sourceBtn = createActionButton(_ICONS.source, '1688找货源', () => {
       const product = extractProductData();
@@ -1902,9 +1988,7 @@
       // 1688 的 imageUrl 参数已不工作（被 OCR 转关键词），改成跳到以图搜款页 +
       // 极掌注入的 __jzcOzonImg 参数；1688-image-search.js content script 会拦截
       // 并自动 fetch 该图 → 注入 file input → 触发 1688 原生以图搜款。
-      const url = `https://s.1688.com/youyuan/index.htm?tab=imageSearch&__jzcOzonImg=${encodeURIComponent(
-        mainImage
-      )}`;
+      const url = `https://s.1688.com/youyuan/index.htm?tab=imageSearch&__jzcOzonImg=${encodeURIComponent(mainImage)}`;
       window.open(url, '_blank');
     });
 
@@ -1922,8 +2006,8 @@
       const findCameraBtn = () => {
         // Strategy 1: known hashed class names (multi-version compat)
         const knownClasses = [
-          'search_a7d',   // 2026-04 verified
-          'search_l5',    // legacy
+          'search_a7d', // 2026-04 verified
+          'search_l5', // legacy
           'searchByImage',
           'search-by-image',
           'byImage',
@@ -1966,7 +2050,7 @@
         cameraBtn.click();
         // Wait for file input to mount (some Ozon variants lazy-mount it)
         for (let i = 0; i < 12 && !fileInput; i++) {
-          await new Promise(r => setTimeout(r, 200));
+          await new Promise((r) => setTimeout(r, 200));
           fileInput = findFileInput();
         }
       }
@@ -1999,7 +2083,7 @@
         // Step 3: Wait for crop UI to appear, then auto-click "Найти"
         const waitForFind = async (attempts = 20) => {
           for (let i = 0; i < attempts; i++) {
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise((r) => setTimeout(r, 500));
             const btns = document.querySelectorAll('button');
             for (const b of btns) {
               if (b.textContent.trim() === 'Найти') {
@@ -2048,11 +2132,22 @@
     const divider2 = document.createElement('div');
     divider2.className = 'ozon-helper-bar-divider';
 
-    bar.append(divider1, collectBtn, followSellBtn, batchUploadBtn, profitBtn, sourceBtn, imageSearchBtn, keywordBtn, divider2, erpBtn);
+    bar.append(
+      divider1,
+      collectBtn,
+      followSellBtn,
+      batchUploadBtn,
+      profitBtn,
+      sourceBtn,
+      imageSearchBtn,
+      keywordBtn,
+      divider2,
+      erpBtn
+    );
     document.body.appendChild(bar);
     initBarDrag(bar);
-    loadBarPosition().then(pos => applyBarPosition(bar, pos));
-    loadBarCollapsed().then(c => {
+    loadBarPosition().then((pos) => applyBarPosition(bar, pos));
+    loadBarCollapsed().then((c) => {
       if (c) bar.classList.add('is-collapsed');
     });
 
@@ -2112,12 +2207,12 @@
     // 每个卡片 = 变体定价与规格表里的一行;面板自动背景拉各 SKU 源数据(图/三维/重量/属性),
     // 用户填价后点「一键上架至OZON」一次性发布到当前店铺(默认不合并,各自独立成卡)。
     const followSellBtn = createActionButton(_ICONS.followSell, '跟卖本页商品卡', () =>
-      followSellCurrentPageCards(followSellBtn),
+      followSellCurrentPageCards(followSellBtn)
     );
     followSellBtn.dataset.color = 'purple';
 
     const profitBtn = createActionButton(_ICONS.profit, `${globalThis.__JZ_BRAND__.displayName} 算价`, () =>
-      toggleProfitPanel(profitBtn),
+      toggleProfitPanel(profitBtn)
     );
     profitBtn.dataset.color = 'indigo';
 
@@ -2134,8 +2229,8 @@
     bar.append(divider1, followSellBtn, profitBtn, divider2, erpBtn);
     document.body.appendChild(bar);
     initBarDrag(bar);
-    loadBarPosition().then(pos => applyBarPosition(bar, pos));
-    loadBarCollapsed().then(c => {
+    loadBarPosition().then((pos) => applyBarPosition(bar, pos));
+    loadBarCollapsed().then((c) => {
       if (c) bar.classList.add('is-collapsed');
     });
   }
@@ -2151,7 +2246,7 @@
     const nodes = document.querySelectorAll(SELECTORS.join(','));
     const seen = new Set();
     const cards = [];
-    nodes.forEach(card => {
+    nodes.forEach((card) => {
       const link = card.querySelector('a[href*="/product/"]');
       if (!link) return;
       const href = link.getAttribute('href') || '';
@@ -2169,7 +2264,7 @@
       // 取第一个含币种符号(₽/¥/₸)且带数字的叶子 span 作为售价。
       let price = '';
       const priceEl = Array.from(card.querySelectorAll('span')).find(
-        el => el.children.length === 0 && /\d/.test(el.textContent || '') && /[₽¥₸]/.test(el.textContent || ''),
+        (el) => el.children.length === 0 && /\d/.test(el.textContent || '') && /[₽¥₸]/.test(el.textContent || '')
       );
       if (priceEl) price = (priceEl.textContent || '').replace(/\s+/g, ' ').trim();
       // 跟卖面板「原售价」按 CNY 计价(跨境店),与单品跟卖口径一致:RUB→CNY 换算,
@@ -2182,7 +2277,7 @@
         const num = (window.normalizePrice && window.normalizePrice(price)) || 0;
         const isRub = cur === 'RUB';
         priceCny = isRub ? _rubToCny(num) : num;
-        priceCurrency = isRub ? 'CNY' : (cur || 'CNY');
+        priceCurrency = isRub ? 'CNY' : cur || 'CNY';
         priceRub = isRub ? num : 0;
       }
       const url = href.startsWith('http') ? href : 'https://' + location.host + href;
@@ -2201,7 +2296,7 @@
       return;
     }
     // variant 形状与 toggleFollowSellPanel 单变体兜底分支一致(createMultiVariantFollowSellPanel 消费)。
-    const variants = cards.map(c => ({
+    const variants = cards.map((c) => ({
       sku: c.sku,
       title: c.name || `SKU ${c.sku}`,
       price: c.priceCny || 0,
@@ -2222,23 +2317,25 @@
   }
 
   function showButtonFeedback(btn, status, label, durationMs = 2500) {
-    const iconSpan  = btn.querySelector('.ozon-helper-action-icon');
+    const iconSpan = btn.querySelector('.ozon-helper-action-icon');
     const labelSpan = btn.querySelector('.ozon-helper-action-label');
-    const prevIcon  = iconSpan.innerHTML;
+    const prevIcon = iconSpan.innerHTML;
     const prevLabel = labelSpan.textContent;
     btn.disabled = true;
 
     const icons = {
       loading: _svgIcon('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>'),
       success: _svgIcon('<polyline points="20 6 9 17 4 12"/>'),
-      error:   _svgIcon('<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>'),
+      error: _svgIcon(
+        '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>'
+      ),
     };
 
-    iconSpan.innerHTML    = icons[status] || icons.success;
+    iconSpan.innerHTML = icons[status] || icons.success;
     labelSpan.textContent = label;
 
     const restore = () => {
-      iconSpan.innerHTML    = prevIcon;
+      iconSpan.innerHTML = prevIcon;
       labelSpan.textContent = prevLabel;
       btn.disabled = false;
     };
@@ -2252,8 +2349,7 @@
 
   /** 高亮激活的操作栏按钮，传 null 时取消所有高亮 */
   function setActiveButton(activeBtn) {
-    document.querySelectorAll('.ozon-helper-action-button')
-      .forEach(b => b.classList.remove('is-active'));
+    document.querySelectorAll('.ozon-helper-action-button').forEach((b) => b.classList.remove('is-active'));
     if (activeBtn) activeBtn.classList.add('is-active');
   }
 
@@ -2275,7 +2371,7 @@
       '.ozon-helper-followsell-panel',
       '.ozon-helper-keyword-panel',
       '.ozon-helper-recommendation-panel',
-    ].forEach(sel => {
+    ].forEach((sel) => {
       const p = document.querySelector(sel);
       if (p && p !== exceptPanel && p.classList.contains('is-open')) {
         closePanel(p);
@@ -2298,7 +2394,8 @@
 
     const header = document.createElement('div');
     header.className = 'ozon-helper-panel-header';
-    header.innerHTML = '<span>数据面板</span><button class="ozon-helper-close-btn" data-action="close">&times;</button>';
+    header.innerHTML =
+      '<span>数据面板</span><button class="ozon-helper-close-btn" data-action="close">&times;</button>';
 
     const content = document.createElement('div');
     content.className = 'ozon-helper-panel-content';
@@ -2333,12 +2430,7 @@
 
     const createDate = product.statistics?.create_date || '';
     const daysSinceListing = createDate
-      ? Math.max(
-          0,
-          Math.floor(
-            (Date.now() - new Date(createDate).getTime()) / (1000 * 60 * 60 * 24)
-          )
-        )
+      ? Math.max(0, Math.floor((Date.now() - new Date(createDate).getTime()) / (1000 * 60 * 60 * 24)))
       : null;
 
     content.innerHTML = `
@@ -2406,10 +2498,14 @@
           <span class="ozon-helper-label">当前价格</span>
           <span class="ozon-helper-value">${window.formatNumber(currentPrice)} ₽</span>
         </div>
-        ${originalPrice ? `<div class="ozon-helper-panel-row">
+        ${
+          originalPrice
+            ? `<div class="ozon-helper-panel-row">
           <span class="ozon-helper-label">原价</span>
           <span class="ozon-helper-value">${window.formatNumber(originalPrice)} ₽ <span class="ozon-helper-discount">(-${discountPercent}%)</span></span>
-        </div>` : ''}
+        </div>`
+            : ''
+        }
         <div class="ozon-helper-panel-row">
           <span class="ozon-helper-label">均价对比</span>
           <span class="ozon-helper-value ${avgPrice ? (currentPrice <= avgPrice ? 'is-good' : 'is-bad') : 'is-muted'}">${avgPrice ? (currentPrice <= avgPrice ? `${window.lucideIcon('check', 12)} 低于均价` : `${window.lucideIcon('trending-up', 12)} 高于均价`) : '均价未知'}</span>
@@ -2459,17 +2555,24 @@
   // Inline lucide icon SVG (no font dependency, stroke uses currentColor)
   const _lucideSvg = (name) => {
     const paths = {
-      'zap': '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
-      'package': '<line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
-      'target': '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
-      'bar-chart': '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
-      'truck': '<rect x="1" y="3" width="15" height="13" rx="1"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
-      'link': '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
-      'pencil': '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
-      'users': '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
-      'inbox': '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
-      'alert-triangle': '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
-      'check': '<polyline points="20 6 9 17 4 12"/>',
+      zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+      package:
+        '<line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+      target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+      'bar-chart':
+        '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+      truck:
+        '<rect x="1" y="3" width="15" height="13" rx="1"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
+      link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+      pencil:
+        '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
+      users:
+        '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+      inbox:
+        '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+      'alert-triangle':
+        '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+      check: '<polyline points="20 6 9 17 4 12"/>',
       'trending-up': '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>',
     };
     const p = paths[name] || paths['package'];
@@ -2566,7 +2669,9 @@
     };
     const formatDimsCm = (l, w, h) => {
       if (l == null || w == null || h == null) return null;
-      const sL = String(l).trim(), sW = String(w).trim(), sH = String(h).trim();
+      const sL = String(l).trim(),
+        sW = String(w).trim(),
+        sH = String(h).trim();
       if (!sL || !sW || !sH) return null;
       const anyUnit = /\p{L}/u.test(sL + sW + sH);
       return anyUnit ? `${sL}×${sW}×${sH}` : `${sL}×${sW}×${sH}cm`;
@@ -2578,32 +2683,48 @@
     const heroSizeSub = formatDimsCm(
       product.characteristics?.lengthCm,
       product.characteristics?.widthCm,
-      product.characteristics?.heightCm,
+      product.characteristics?.heightCm
     );
     // 体积(升)初值:PDP 特征是 cm(可能带单位后缀如 "10 см"),解析成数值后
     // cm³→L(/1000)。解析不出就 '-',由 fetchBackendProductData 的 mm 数据异步补。
     const _pdpInitialVolume = (() => {
-      const pf = (v) => { const n = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : 0; };
+      const pf = (v) => {
+        const n = parseFloat(String(v ?? '').replace(',', '.'));
+        return Number.isFinite(n) ? n : 0;
+      };
       const l = pf(product.characteristics?.lengthCm);
       const w = pf(product.characteristics?.widthCm);
       const h = pf(product.characteristics?.heightCm);
-      return (l && w && h) ? +(l * w * h / 1000).toFixed(2) + ' L' : '-';
+      return l && w && h ? +((l * w * h) / 1000).toFixed(2) + ' L' : '-';
     })();
     const sections = [
       {
-        id: 'hero', type: 'hero', rows: [
-          { field: 'sales30d', label: `${window.jzSalesPeriodCnShort?.() || '月'}销量`, value: '-', accent: 'blue', tip: `商品${window.jzSalesPeriodCnLong?.() || '近 30 天'}销售数量(Ozon 选品分析 what_to_sell)` },
+        id: 'hero',
+        type: 'hero',
+        rows: [
+          {
+            field: 'sales30d',
+            label: `${window.jzSalesPeriodCnShort?.() || '月'}销量`,
+            value: '-',
+            accent: 'blue',
+            tip: `商品${window.jzSalesPeriodCnLong?.() || '近 30 天'}销售数量(Ozon 选品分析 what_to_sell)`,
+          },
           { field: 'createDate', label: '上架时间', value: '-', accent: 'green', tip: '商品首次上架的日期' },
           {
-            field: 'heroFollow', label: '跟卖',
+            field: 'heroFollow',
+            label: '跟卖',
             value: heroFollowVal || '-',
             sub: heroFollowSub,
             accent: 'orange',
             clickAction: 'show-followsell-modal',
-            tip: heroFollowVal === '0' ? '商品当前无跟卖者' : '\u70b9\u51fb\u67e5\u770b\u8ddf\u5356\u5546\u5bb6\u5217\u8868',
+            tip:
+              heroFollowVal === '0'
+                ? '商品当前无跟卖者'
+                : '\u70b9\u51fb\u67e5\u770b\u8ddf\u5356\u5546\u5bb6\u5217\u8868',
           },
           {
-            field: 'heroSize', label: '重量·尺寸',
+            field: 'heroSize',
+            label: '重量·尺寸',
             value: heroSizeMain || '-',
             sub: heroSizeSub,
             accent: 'purple',
@@ -2612,51 +2733,159 @@
         ],
       },
       {
-        id: 'info', icon: _lucideSvg('package'), title: '商品信息', accent: 'blue', rows: [
+        id: 'info',
+        icon: _lucideSvg('package'),
+        title: '商品信息',
+        accent: 'blue',
+        rows: [
           { field: 'category', label: '一级类目', value: '-', tip: '商品一级类目', full: true },
-          { field: 'categoryL3', label: '三级类目', value: product.category || '-', tip: '商品三级(末级)类目', full: true },
+          {
+            field: 'categoryL3',
+            label: '三级类目',
+            value: product.category || '-',
+            tip: '商品三级(末级)类目',
+            full: true,
+          },
           { field: 'sku', label: 'SKU', value: product.sku || '-', copyable: true, tip: '商品SKU', full: true },
           { field: 'brand', label: '品牌', value: product.brand || '-', color: 'orange', tip: '商品品牌' },
           { field: 'salesSchema', label: '发货模式', value: '-', tip: '商品发货模式' },
-          { field: 'commRfbs', label: 'rFBS佣金', value: '-', color: 'orange', tip: '按商品售价档位收取的佣金比例', full: true },
-          { field: 'commFbp', label: 'FBP佣金', value: '-', color: 'orange', tip: '按商品售价档位收取的佣金比例', full: true },
-          { field: 'revenue30d', label: `${window.jzSalesPeriodCnShort?.() || '月'}销售额`, value: '-', color: 'blue', tip: `商品${window.jzSalesPeriodCnLong?.() || '近 30 天'}销售额(Ozon 选品分析 what_to_sell)` },
-          { field: 'salesDynamics', label: `${window.jzSalesPeriodCnShort?.() || '月'}周转动态`, value: '-', tip: `与${window.jzSalesPeriodCnPrev?.() || '上一个月'}相比订单金额总和发生了怎样的变化` },
-          { field: 'dailySales', label: '日销量', value: '-', color: 'blue', tip: `${window.jzSalesPeriodCnUnit?.() || '近一个月'}销售件数，除以商品有现货的天数，退货和取消不纳入计算` },
-          { field: 'dailyRevenue', label: '日销售额', value: '-', color: 'blue', tip: `${window.jzSalesPeriodCnUnit?.() || '近一个月'}销售金额除以商品有现货的天数，退货和取消不纳入计算` },
+          {
+            field: 'commRfbs',
+            label: 'rFBS佣金',
+            value: '-',
+            color: 'orange',
+            tip: '按商品售价档位收取的佣金比例',
+            full: true,
+          },
+          {
+            field: 'commFbp',
+            label: 'FBP佣金',
+            value: '-',
+            color: 'orange',
+            tip: '按商品售价档位收取的佣金比例',
+            full: true,
+          },
+          {
+            field: 'revenue30d',
+            label: `${window.jzSalesPeriodCnShort?.() || '月'}销售额`,
+            value: '-',
+            color: 'blue',
+            tip: `商品${window.jzSalesPeriodCnLong?.() || '近 30 天'}销售额(Ozon 选品分析 what_to_sell)`,
+          },
+          {
+            field: 'salesDynamics',
+            label: `${window.jzSalesPeriodCnShort?.() || '月'}周转动态`,
+            value: '-',
+            tip: `与${window.jzSalesPeriodCnPrev?.() || '上一个月'}相比订单金额总和发生了怎样的变化`,
+          },
+          {
+            field: 'dailySales',
+            label: '日销量',
+            value: '-',
+            color: 'blue',
+            tip: `${window.jzSalesPeriodCnUnit?.() || '近一个月'}销售件数，除以商品有现货的天数，退货和取消不纳入计算`,
+          },
+          {
+            field: 'dailyRevenue',
+            label: '日销售额',
+            value: '-',
+            color: 'blue',
+            tip: `${window.jzSalesPeriodCnUnit?.() || '近一个月'}销售金额除以商品有现货的天数，退货和取消不纳入计算`,
+          },
           { field: 'drr', label: '广告费占比', value: '-', tip: '商品推广费用占所有订单金额的百分比', full: true },
         ],
       },
       {
-        id: 'promo', icon: _lucideSvg('target'), title: '促销推广', accent: 'orange', rows: [
+        id: 'promo',
+        icon: _lucideSvg('target'),
+        title: '促销推广',
+        accent: 'orange',
+        rows: [
           { field: 'daysInPromo', label: '促销天数', value: '-', tip: '商品近一个月参与促销的天数' },
           { field: 'promoDiscount', label: '促销折扣', value: '-', tip: '近一个月参与促销的平均折扣' },
-          { field: 'promoConvRate', label: '促销转化率', value: '-', color: 'green', tip: '促销期间订购的金额，在总订购金额的占比' },
+          {
+            field: 'promoConvRate',
+            label: '促销转化率',
+            value: '-',
+            color: 'green',
+            tip: '促销期间订购的金额，在总订购金额的占比',
+          },
           { field: 'daysWithAds', label: '推广天数', value: '-', tip: '近一个月参与模版付费推广的天数' },
         ],
       },
       {
-        id: 'traffic', icon: _lucideSvg('bar-chart'), title: '流量转化', accent: 'green', rows: [
+        id: 'traffic',
+        icon: _lucideSvg('bar-chart'),
+        title: '流量转化',
+        accent: 'green',
+        rows: [
           { field: 'pdpViews', label: '卡片浏览', value: '-', tip: '买家打开商品卡片的次数' },
-          { field: 'pdpCartRate', label: '卡片加购率', value: '-', tip: '商品卡片浏览次数与浏览后将商品添加到购物车的数量之间的比例' },
+          {
+            field: 'pdpCartRate',
+            label: '卡片加购率',
+            value: '-',
+            tip: '商品卡片浏览次数与浏览后将商品添加到购物车的数量之间的比例',
+          },
           { field: 'searchViews', label: '搜索浏览', value: '-', tip: '买家在搜索结果中和类目中查看商品的次数' },
-          { field: 'searchCartRate', label: '搜索加购率', value: '-', tip: '商品添加到购物车的次数与在目录和搜索结果中浏览次数之间的比例' },
-          { field: 'convViewToOrder', label: '展示转化率', value: '-', tip: '商品在网站所有页面上的展示次数与订单数量的比例' },
-          { field: 'clickRate', label: '点击率', value: '-', color: 'orange', tip: '买家点击商品的次数与商品在网站所有页面上的展示次数之间的比例' },
+          {
+            field: 'searchCartRate',
+            label: '搜索加购率',
+            value: '-',
+            tip: '商品添加到购物车的次数与在目录和搜索结果中浏览次数之间的比例',
+          },
+          {
+            field: 'convViewToOrder',
+            label: '展示转化率',
+            value: '-',
+            tip: '商品在网站所有页面上的展示次数与订单数量的比例',
+          },
+          {
+            field: 'clickRate',
+            label: '点击率',
+            value: '-',
+            color: 'orange',
+            tip: '买家点击商品的次数与商品在网站所有页面上的展示次数之间的比例',
+          },
         ],
       },
       {
-        id: 'logistics', icon: _lucideSvg('truck'), title: '物流详情', accent: 'purple', rows: [
+        id: 'logistics',
+        icon: _lucideSvg('truck'),
+        title: '物流详情',
+        accent: 'purple',
+        rows: [
           { field: 'returnRate', label: '退货率', value: '-', color: 'red', tip: '商品退货取消率' },
-          { field: 'rating', label: '评分', value: formatRating(product.rating, product.reviewCount), color: product.rating ? 'gold' : '', tip: '商品评分及评论数量' },
+          {
+            field: 'rating',
+            label: '评分',
+            value: formatRating(product.rating, product.reviewCount),
+            color: product.rating ? 'gold' : '',
+            tip: '商品评分及评论数量',
+          },
           { field: 'dimensions', label: '长宽高', value: '-', tip: '商品长宽高(毫米)', full: true },
           { field: 'volume', label: '体积', value: _pdpInitialVolume, tip: '按长×宽×高估算的体积(升)', full: true },
-          { field: 'weight', label: '重量', value: formatWeightG(product.characteristics?.weightG) || '-', tip: '商品重量(克)', full: true },
+          {
+            field: 'weight',
+            label: '重量',
+            value: formatWeightG(product.characteristics?.weightG) || '-',
+            tip: '商品重量(克)',
+            full: true,
+          },
         ],
       },
       {
-        id: 'follow', icon: _lucideSvg('link'), title: '跟卖信息', accent: 'pink', rows: [
-          { field: 'followMinPrice', label: '最低价', value: product.followSellMinPrice ? `¥${window.formatNumber(product.followSellMinPrice, 2)}` : '-', color: 'green', tip: '商品的跟卖最低价' },
+        id: 'follow',
+        icon: _lucideSvg('link'),
+        title: '跟卖信息',
+        accent: 'pink',
+        rows: [
+          {
+            field: 'followMinPrice',
+            label: '最低价',
+            value: product.followSellMinPrice ? `¥${window.formatNumber(product.followSellMinPrice, 2)}` : '-',
+            color: 'green',
+            tip: '商品的跟卖最低价',
+          },
           { field: 'canFollow', label: '能否跟卖', value: '-', tip: '该商品是否支持跟卖', full: true },
         ],
       },
@@ -2794,7 +3023,9 @@
         // title/images/sku 全空,后端 reject 用户看到"采集失败"。
         // (Codex round 13 P1 #3:之前 ac94cd0 只修了主路径,这个侧栏按钮漏了)
         if (window.ensurePdpState) {
-          try { await window.ensurePdpState(); } catch {}
+          try {
+            await window.ensurePdpState();
+          } catch {}
         }
         const product = extractProductData();
         // 字段校验:title / images / sku 缺一不可,缺了就别白白调后端。
@@ -2806,14 +3037,17 @@
           editBtn.textContent = `× 缺 ${missing.join('、')}`;
           editBtn.disabled = false;
           editListInFlight = false;
-          setTimeout(() => { editBtn.textContent = originalText; }, 2500);
+          setTimeout(() => {
+            editBtn.textContent = originalText;
+          }, 2500);
           return;
         }
         const variantResp = product.sku
           ? await window.sendMessage('searchVariants', { sku: product.sku }).catch(() => null)
           : null;
         const variantItems = variantResp?.items || variantResp?.data?.items || [];
-        const variantMatch = variantItems.find(it => String(it.variant_id) === product.sku) || variantItems[0] || null;
+        const variantMatch =
+          variantItems.find((it) => String(it.variant_id) === product.sku) || variantItems[0] || null;
 
         // 跟卖视频:抓当前 PDP 视频转存成自有 Ozon 视频,随采集存进采集箱 → 编辑页预填、上架带视频。
         editBtn.textContent = '⏳ 转存视频...';
@@ -2824,10 +3058,7 @@
 
         // 源富内容(11254):同主采集路径,注入 variantData → 编辑页预填 + 上架下发。
         const editCollectRichContent = await jzCollectPageRichContent();
-        let editCollectVariantData = jzInjectRichContentAttr(
-          variantMatch,
-          editCollectRichContent,
-        );
+        let editCollectVariantData = jzInjectRichContentAttr(variantMatch, editCollectRichContent);
         const contentCopy = window.JZFollowSellContentCopy;
         const editCollectDescription = contentCopy?.pickFollowSellDescription
           ? contentCopy.pickFollowSellDescription({
@@ -2841,7 +3072,7 @@
         editCollectVariantData = contentCopy?.mergeSourceDescriptionIntoVariant
           ? contentCopy.mergeSourceDescriptionIntoVariant(
               editCollectVariantData || variantMatch || {},
-              editCollectDescription,
+              editCollectDescription
             )
           : editCollectVariantData;
         const editCollectHashtags = extractKeywords();
@@ -2877,7 +3108,11 @@
         // 而不是直接打开刚采集那条。
         // forceResubmit:视频/简介/富内容/标签任一存在时强制重推,否则 24h dedupe
         // 命中会打开旧采集记录,看起来像简介仍然没有抓到。
-        const resp = await window.sendMessage('pushSourceCollect', { sourceId: 'ozon', raw: collectPayload, forceResubmit: editCollectForceResubmit });
+        const resp = await window.sendMessage('pushSourceCollect', {
+          sourceId: 'ozon',
+          raw: collectPayload,
+          forceResubmit: editCollectForceResubmit,
+        });
         const itemId = resp?.result?.id;
         const auth = await window.sendMessage('getAuth');
         // 从 brand webHost 直接构造,不要从 backendUrl 反推 — 旧 `.replace('/api','')`
@@ -2924,7 +3159,9 @@
         try {
           const product = extractProductData();
           if (product?.sku) {
-            try { await window.JZCollectorDB?.init(); } catch {}
+            try {
+              await window.JZCollectorDB?.init();
+            } catch {}
             await window.JZCollectorDB?.putSale({
               sku: String(product.sku),
               url: product.url || window.location.href,
@@ -2940,22 +3177,25 @@
         }
         btn.classList.add('is-collected');
         const label = result?.multiVariant
-          ? (result.failed
-              ? '采集失败'
-              : `已采集 ${result.total} 变体`)
-          : (result?.dedupeHit ? '近期已采集' : '已采集');
+          ? result.failed
+            ? '采集失败'
+            : `已采集 ${result.total} 变体`
+          : result?.dedupeHit
+            ? '近期已采集'
+            : '已采集';
         btn.innerHTML = `<span class="oh-btn-icon">✓</span>${label}`;
-        setTimeout(() => {
-          btn.classList.remove('is-collected');
-          btn.innerHTML = originalHtml;
-          collectInFlight = false;
-        }, result?.multiVariant ? 2800 : 1800);
+        setTimeout(
+          () => {
+            btn.classList.remove('is-collected');
+            btn.innerHTML = originalHtml;
+            collectInFlight = false;
+          },
+          result?.multiVariant ? 2800 : 1800
+        );
       } catch (err) {
         console.warn('[ozon-helper] sidebar collect-one failed:', err);
         const msg = err?.message || '';
-        const friendly = /NETWORK_ERROR|超时|timeout|网络/i.test(msg)
-          ? '网络错误'
-          : '失败';
+        const friendly = /NETWORK_ERROR|超时|timeout|网络/i.test(msg) ? '网络错误' : '失败';
         btn.innerHTML = `<span class="oh-btn-icon">${_lucideSvg('alert-triangle')}</span>${friendly}`;
         setTimeout(() => {
           btn.innerHTML = originalHtml;
@@ -2967,7 +3207,7 @@
     if (window.jzBindDataCardCopyButtons) {
       window.jzBindDataCardCopyButtons(card);
     } else {
-      card.querySelectorAll('.ozon-helper-copy-btn').forEach(btn => {
+      card.querySelectorAll('.ozon-helper-copy-btn').forEach((btn) => {
         btn.addEventListener('click', async (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -2976,7 +3216,9 @@
           btn.dataset.copyIcon = original;
           const ok = await _safeCopy(btn.dataset.copy);
           btn.textContent = ok ? '\u2713' : '\u2716';
-          setTimeout(() => { btn.innerHTML = btn.dataset.copyIcon || window.lucideIcon('copy', 12); }, 1200);
+          setTimeout(() => {
+            btn.innerHTML = btn.dataset.copyIcon || window.lucideIcon('copy', 12);
+          }, 1200);
         });
       });
     }
@@ -2997,7 +3239,7 @@
     });
 
     // Section collapse/expand toggle
-    card.querySelectorAll('[data-action="toggle-section"]').forEach(header => {
+    card.querySelectorAll('[data-action="toggle-section"]').forEach((header) => {
       header.addEventListener('click', () => {
         const section = header.closest('.ozon-helper-sidebar-section');
         const body = section.querySelector('.ozon-helper-sidebar-section-body');
@@ -3033,7 +3275,7 @@
       // 残留卡(否则顶层 createSidebarDataCard 的去重守卫又会挡掉重建),再重新注入
       // 一张监听器齐全的新卡。
       cardObserver.disconnect();
-      document.querySelectorAll('.ozon-helper-sidebar-card').forEach(el => el.remove());
+      document.querySelectorAll('.ozon-helper-sidebar-card').forEach((el) => el.remove());
       _sidebarCardRetries = 0;
       setTimeout(createSidebarDataCard, 500);
     });
@@ -3048,13 +3290,13 @@
    */
   function autoCollapseEmptySections(card) {
     if (!card || !document.contains(card)) return;
-    card.querySelectorAll('.ozon-helper-sidebar-section').forEach(section => {
+    card.querySelectorAll('.ozon-helper-sidebar-section').forEach((section) => {
       const sectionId = section.dataset.section;
       // Skip if user has manually toggled this section (stored in sessionStorage)
       if (sessionStorage.getItem(`oh-sidebar-collapsed-${sectionId}`) != null) return;
       const body = section.querySelector('.ozon-helper-sidebar-section-body');
       const values = body.querySelectorAll('.ozon-helper-sidebar-card-value');
-      const allEmpty = Array.from(values).every(v => v.classList.contains('is-dim'));
+      const allEmpty = Array.from(values).every((v) => v.classList.contains('is-dim'));
       if (allEmpty && values.length > 0) {
         body.classList.add('is-collapsed');
         section.classList.add('is-collapsed');
@@ -3087,7 +3329,9 @@
         // textContent 会擦掉。这里只重写 small 之前的主文本节点。
         const small = el.querySelector(':scope > small');
         if (small) {
-          Array.from(el.childNodes).forEach(n => { if (n !== small) n.remove(); });
+          Array.from(el.childNodes).forEach((n) => {
+            if (n !== small) n.remove();
+          });
           el.insertBefore(document.createTextNode(value), small);
         } else {
           el.textContent = value;
@@ -3121,225 +3365,348 @@
     // 并在后端数据晚到时移除可能已先弹出的横幅(兼顾两种到达顺序)。
     let _backendHasMarket = false;
     // 把 PDP 面包屑里的买家类目 id 一并传后端,佣金按类目 ID 精确分档(无 id 才退回俄文名兜底)。
-    const _bcCatIds = (() => { try { return extractBreadcrumbCategoryIds(); } catch { return []; } })();
-    const backendPromise = window.sendMessage('getProductStats', { sku, catIds: _bcCatIds, period: window.jzGetSalesPeriod?.() || 'monthly' }).then(data => {
-      if (!data || !document.contains(card)) return;
+    const _bcCatIds = (() => {
+      try {
+        return extractBreadcrumbCategoryIds();
+      } catch {
+        return [];
+      }
+    })();
+    const backendPromise = window
+      .sendMessage('getProductStats', { sku, catIds: _bcCatIds, period: window.jzGetSalesPeriod?.() || 'monthly' })
+      .then((data) => {
+        if (!data || !document.contains(card)) return;
 
-      // --- SelectionProduct fields ---
-      if (data.categoryL1 || data.categoryL1Id) updateField('category', window.jzTranslateCategoryL1(data.categoryL1, data.categoryL1Id));
-      if (data.categoryL3) updateField('categoryL3', data.categoryL3);
-      if (data.brand) updateField('brand', data.brand, 'blue');
-      if (data.rating != null) {
-        const ratingStr = `${Number(data.rating).toFixed(1)}<span class="ozon-helper-rating-star">${window.lucideIcon('star', 12)}</span>` + (data.reviewCount ? ` (${window.formatNumber(data.reviewCount)})` : '');
-        updateField('rating', ratingStr, 'gold');
-      }
-      if (data.sales30d != null) updateField('sales30d', window.formatNumber(data.sales30d), 'blue');
-
-      // 月销售额 (卢布)
-      if (data.revenue30dRub != null) {
-        const rev = Number(data.revenue30dRub);
-        updateField('revenue30d', `₽${rev >= 10000 ? (rev / 10000).toFixed(1) + '万' : window.formatNumber(rev)}`, 'blue');
-      }
-      // 命中选品库 → 标记已有市场数据,并移除(若 getMarketStats needLogin 先到而弹出的)「需登录」横幅
-      if (data.sales30d != null || data.revenue30dRub != null) {
-        _backendHasMarket = true;
-        card.querySelector('.ozon-helper-seller-login-hint')?.remove();
-      }
-      // 自有商品用 analyticsRevenue 覆盖
-      if (data.analyticsRevenue != null) {
-        const rev = Number(data.analyticsRevenue);
-        updateField('revenue30d', `₽${rev >= 10000 ? (rev / 10000).toFixed(1) + '万' : window.formatNumber(rev)}`, 'blue', true);
-      }
-
-      // 回退: 如果 revenue30dRub 为空，用 CNY/USD 显示
-      if (data.revenue30dRub == null && data.analyticsRevenue == null) {
-        if (data.revenue30dCny != null) {
-          const cny = Number(data.revenue30dCny);
-          updateField('revenue30d', `¥${cny >= 10000 ? (cny / 10000).toFixed(1) + '万' : window.formatNumber(cny)}`, 'blue');
-        } else if (data.revenue30dUsd != null) {
-          const usd = Number(data.revenue30dUsd);
-          updateField('revenue30d', `$${usd >= 10000 ? (usd / 10000).toFixed(1) + '万' : window.formatNumber(usd)}`, 'blue');
+        // --- SelectionProduct fields ---
+        if (data.categoryL1 || data.categoryL1Id)
+          updateField('category', window.jzTranslateCategoryL1(data.categoryL1, data.categoryL1Id));
+        if (data.categoryL3) updateField('categoryL3', data.categoryL3);
+        if (data.brand) updateField('brand', data.brand, 'blue');
+        if (data.rating != null) {
+          const ratingStr =
+            `${Number(data.rating).toFixed(1)}<span class="ozon-helper-rating-star">${window.lucideIcon('star', 12)}</span>` +
+            (data.reviewCount ? ` (${window.formatNumber(data.reviewCount)})` : '');
+          updateField('rating', ratingStr, 'gold');
         }
-      }
+        if (data.sales30d != null) updateField('sales30d', window.formatNumber(data.sales30d), 'blue');
 
-      // 每日数据
-      if (data.dailyRevenue != null) {
-        updateField('dailyRevenue', `₽${window.formatNumber(data.dailyRevenue)}`, 'blue');
-      } else if (data.revenue30dCny != null) {
-        updateField('dailyRevenue', `¥${window.formatNumber(Number(data.revenue30dCny) / 30)}`, 'blue');
-      } else if (data.revenue30dUsd != null) {
-        updateField('dailyRevenue', `$${window.formatNumber(Number(data.revenue30dUsd) / 30)}`, 'blue');
-      }
-      if (data.dailySales != null) updateField('dailySales', Number(data.dailySales).toFixed(2), 'blue');
+        // 月销售额 (卢布)
+        if (data.revenue30dRub != null) {
+          const rev = Number(data.revenue30dRub);
+          updateField(
+            'revenue30d',
+            `₽${rev >= 10000 ? (rev / 10000).toFixed(1) + '万' : window.formatNumber(rev)}`,
+            'blue'
+          );
+        }
+        // 命中选品库 → 标记已有市场数据,并移除(若 getMarketStats needLogin 先到而弹出的)「需登录」横幅
+        if (data.sales30d != null || data.revenue30dRub != null) {
+          _backendHasMarket = true;
+          card.querySelector('.ozon-helper-seller-login-hint')?.remove();
+        }
+        // 自有商品用 analyticsRevenue 覆盖
+        if (data.analyticsRevenue != null) {
+          const rev = Number(data.analyticsRevenue);
+          updateField(
+            'revenue30d',
+            `₽${rev >= 10000 ? (rev / 10000).toFixed(1) + '万' : window.formatNumber(rev)}`,
+            'blue',
+            true
+          );
+        }
 
-      // 佣金 — 按当前售价只显示命中那一档(不再三档全列)。价格档基准收敛到
-      // jzResolveCommPriceRub:后端 priceRub > 页面 RUB 单价 > 月均价(月销额/月销量)兜底。
-      // 页面单价:币种**明确**是 CNY/USD(跨境视图、单价非卢布)才不用;RUB 或检测不到(null)
-      // 都按卢布用 —— 卡片本就把该价显示成 ₽,口径一致。修复 _detectPageCurrency 返回 null 时
-      // 退回三档、看不到命中档的问题。
-      const _pageCur = _detectPageCurrency();
-      const _pageRub =
-        _pageCur !== 'CNY' && _pageCur !== 'USD' && product
-          ? (window.normalizePrice ? window.normalizePrice(product.price) : Number(product.price)) || 0
-          : 0;
-      const _commPriceRub = window.jzResolveCommPriceRub(data, _pageRub);
-      // 渲染逻辑收敛到 shared-utils 的 jzRenderCommissionTier(PDP/列表卡共用,口径一致):
-      // 售价已知→单档;售价未知(-1)→退回三档全显。
-      if (data.commissionRfbsBelow1500 != null && data.commissionRfbs1500to5000 != null && data.commissionRfbsAbove5000 != null) {
-        updateField('commRfbs', window.jzRenderCommissionTier(data.commissionRfbsBelow1500, data.commissionRfbs1500to5000, data.commissionRfbsAbove5000, _commPriceRub), '', false, { raw: true });
-      }
-      if (data.commissionFbpBelow1500 != null && data.commissionFbp1500to5000 != null && data.commissionFbpAbove5000 != null) {
-        updateField('commFbp', window.jzRenderCommissionTier(data.commissionFbpBelow1500, data.commissionFbp1500to5000, data.commissionFbpAbove5000, _commPriceRub), '', false, { raw: true });
-      }
+        // 回退: 如果 revenue30dRub 为空，用 CNY/USD 显示
+        if (data.revenue30dRub == null && data.analyticsRevenue == null) {
+          if (data.revenue30dCny != null) {
+            const cny = Number(data.revenue30dCny);
+            updateField(
+              'revenue30d',
+              `¥${cny >= 10000 ? (cny / 10000).toFixed(1) + '万' : window.formatNumber(cny)}`,
+              'blue'
+            );
+          } else if (data.revenue30dUsd != null) {
+            const usd = Number(data.revenue30dUsd);
+            updateField(
+              'revenue30d',
+              `$${usd >= 10000 ? (usd / 10000).toFixed(1) + '万' : window.formatNumber(usd)}`,
+              'blue'
+            );
+          }
+        }
 
-      // 重量 & 尺寸 — logistics 行 + hero 卡同步
-      if (data.weightG != null) {
-        updateField('weight', `${data.weightG}g`);
-        updateField('heroSize', `${data.weightG}g`);
-      }
-      if (data.lengthMm != null && data.widthMm != null && data.heightMm != null) {
-        const dimsMm = `${data.lengthMm} x ${data.widthMm} x ${data.heightMm}mm`;
-        updateField('dimensions', dimsMm);
-        updateHeroSub('heroSize', `${data.lengthMm}×${data.widthMm}×${data.heightMm}mm`);
-        const vol = window.jzVolumeLiters(data.lengthMm, data.widthMm, data.heightMm);
-        if (vol != null) updateField('volume', `${vol} L`);
-      }
+        // 每日数据
+        if (data.dailyRevenue != null) {
+          updateField('dailyRevenue', `₽${window.formatNumber(data.dailyRevenue)}`, 'blue');
+        } else if (data.revenue30dCny != null) {
+          updateField('dailyRevenue', `¥${window.formatNumber(Number(data.revenue30dCny) / 30)}`, 'blue');
+        } else if (data.revenue30dUsd != null) {
+          updateField('dailyRevenue', `$${window.formatNumber(Number(data.revenue30dUsd) / 30)}`, 'blue');
+        }
+        if (data.dailySales != null) updateField('dailySales', Number(data.dailySales).toFixed(2), 'blue');
 
-      // 跟卖 — hero 卡(sync 抽取失败时由 backend 兜底,sub "卖家" 由 updateHeroSub 保活)
-      // 不加 force:页面 sync 值是当前最新值,只在 hero 仍 dim 时让 backend 兜底
-      if (data.followCount != null) {
-        updateField('heroFollow', String(data.followCount));
-        updateHeroSub('heroFollow', '卖家');
-      }
-      if (data.lowestPriceUsd != null) {
-        updateField('followMinPrice', `¥${(Number(data.lowestPriceUsd) * 7.2).toFixed(2)}`, 'green');
-      }
-      if (data.canFollow != null) updateField('canFollow', data.canFollow ? '能' : '不能', data.canFollow ? 'green' : 'red');
-    }).catch((err) => {
-      console.warn('[ozon-helper] getProductStats failed:', err);
-      if (document.contains(card)) {
-        card.querySelectorAll('.oh-sidebar-value[data-source="backend"]').forEach(el => {
-          el.textContent = '加载失败';
-          el.style.color = 'var(--oh-red, #ff4d4f)';
-          el.style.fontSize = '11px';
-        });
-      }
-    });
+        // 佣金 — 按当前售价只显示命中那一档(不再三档全列)。价格档基准收敛到
+        // jzResolveCommPriceRub:后端 priceRub > 页面 RUB 单价 > 月均价(月销额/月销量)兜底。
+        // 页面单价:币种**明确**是 CNY/USD(跨境视图、单价非卢布)才不用;RUB 或检测不到(null)
+        // 都按卢布用 —— 卡片本就把该价显示成 ₽,口径一致。修复 _detectPageCurrency 返回 null 时
+        // 退回三档、看不到命中档的问题。
+        const _pageCur = _detectPageCurrency();
+        const _pageRub =
+          _pageCur !== 'CNY' && _pageCur !== 'USD' && product
+            ? (window.normalizePrice ? window.normalizePrice(product.price) : Number(product.price)) || 0
+            : 0;
+        const _commPriceRub = window.jzResolveCommPriceRub(data, _pageRub);
+        // 渲染逻辑收敛到 shared-utils 的 jzRenderCommissionTier(PDP/列表卡共用,口径一致):
+        // 售价已知→单档;售价未知(-1)→退回三档全显。
+        if (
+          data.commissionRfbsBelow1500 != null &&
+          data.commissionRfbs1500to5000 != null &&
+          data.commissionRfbsAbove5000 != null
+        ) {
+          updateField(
+            'commRfbs',
+            window.jzRenderCommissionTier(
+              data.commissionRfbsBelow1500,
+              data.commissionRfbs1500to5000,
+              data.commissionRfbsAbove5000,
+              _commPriceRub
+            ),
+            '',
+            false,
+            { raw: true }
+          );
+        }
+        if (
+          data.commissionFbpBelow1500 != null &&
+          data.commissionFbp1500to5000 != null &&
+          data.commissionFbpAbove5000 != null
+        ) {
+          updateField(
+            'commFbp',
+            window.jzRenderCommissionTier(
+              data.commissionFbpBelow1500,
+              data.commissionFbp1500to5000,
+              data.commissionFbpAbove5000,
+              _commPriceRub
+            ),
+            '',
+            false,
+            { raw: true }
+          );
+        }
+
+        // 重量 & 尺寸 — logistics 行 + hero 卡同步
+        if (data.weightG != null) {
+          updateField('weight', `${data.weightG}g`);
+          updateField('heroSize', `${data.weightG}g`);
+        }
+        if (data.lengthMm != null && data.widthMm != null && data.heightMm != null) {
+          const dimsMm = `${data.lengthMm} x ${data.widthMm} x ${data.heightMm}mm`;
+          updateField('dimensions', dimsMm);
+          updateHeroSub('heroSize', `${data.lengthMm}×${data.widthMm}×${data.heightMm}mm`);
+          const vol = window.jzVolumeLiters(data.lengthMm, data.widthMm, data.heightMm);
+          if (vol != null) updateField('volume', `${vol} L`);
+        }
+
+        // 跟卖 — hero 卡(sync 抽取失败时由 backend 兜底,sub "卖家" 由 updateHeroSub 保活)
+        // 不加 force:页面 sync 值是当前最新值,只在 hero 仍 dim 时让 backend 兜底
+        if (data.followCount != null) {
+          updateField('heroFollow', String(data.followCount));
+          updateHeroSub('heroFollow', '卖家');
+        }
+        if (data.lowestPriceUsd != null) {
+          updateField('followMinPrice', `¥${(Number(data.lowestPriceUsd) * 7.2).toFixed(2)}`, 'green');
+        }
+        if (data.canFollow != null)
+          updateField('canFollow', data.canFollow ? '能' : '不能', data.canFollow ? 'green' : 'red');
+      })
+      .catch((err) => {
+        console.warn('[ozon-helper] getProductStats failed:', err);
+        if (document.contains(card)) {
+          card.querySelectorAll('.oh-sidebar-value[data-source="backend"]').forEach((el) => {
+            el.textContent = '加载失败';
+            el.style.color = 'var(--oh-red, #ff4d4f)';
+            el.style.fontSize = '11px';
+          });
+        }
+      });
 
     // Source 2: Seller Portal search-variant-model (weight, dimensions, etc.)
     // Requires seller.ozon.ru tab open & logged in; silently fails if unavailable.
-    const variantPromise = window.sendMessage('searchVariants', { sku }).then(resp => {
-      if (!document.contains(card)) return;
-      const items = resp?.items || resp?.data?.items || [];
-      const item = items.find(it => String(it.variant_id) === sku) || items[0];
-      if (!item?.attributes) return;
+    const variantPromise = window
+      .sendMessage('searchVariants', { sku })
+      .then((resp) => {
+        if (!document.contains(card)) return;
+        const items = resp?.items || resp?.data?.items || [];
+        const item = items.find((it) => String(it.variant_id) === sku) || items[0];
+        if (!item?.attributes) return;
 
-      const attrMap = new Map(item.attributes.map(a => [String(a.key), a]));
+        const attrMap = new Map(item.attributes.map((a) => [String(a.key), a]));
 
-      // 重量: key 4383 (重量g), 回退 4497 (带包装重量g — bundle endpoint 注入)
-      // force=true: bundle 是 seller 后台真值 (mm 精度),必须覆盖 Source 1 (Backend)
-      // 兜底的 SelectionProduct snapshot —— 后者按天 snapshot,卖家改包装尺寸后会过期。
-      const weightVal = Number(attrMap.get('4383')?.value) || Number(attrMap.get('4497')?.value) || 0;
-      if (weightVal > 0) {
-        updateField('weight', `${weightVal}克`, '', true);
-        updateField('heroSize', `${weightVal}g`, '', true);
-      }
+        // 重量: key 4383 (重量g), 回退 4497 (带包装重量g — bundle endpoint 注入)
+        // force=true: bundle 是 seller 后台真值 (mm 精度),必须覆盖 Source 1 (Backend)
+        // 兜底的 SelectionProduct snapshot —— 后者按天 snapshot,卖家改包装尺寸后会过期。
+        const weightVal = Number(attrMap.get('4383')?.value) || Number(attrMap.get('4497')?.value) || 0;
+        if (weightVal > 0) {
+          updateField('weight', `${weightVal}克`, '', true);
+          updateField('heroSize', `${weightVal}g`, '', true);
+        }
 
-      // 尺寸: 9454=depth→length, 9455=width, 9456=height (单位mm),同样强制覆盖。
-      const depth = Number(attrMap.get('9454')?.value) || 0;
-      const width = Number(attrMap.get('9455')?.value) || 0;
-      const height = Number(attrMap.get('9456')?.value) || 0;
-      if (depth > 0 && width > 0 && height > 0) {
-        updateField('dimensions', `${depth} x ${width} x ${height}mm`, '', true);
-        updateHeroSub('heroSize', `${depth}×${width}×${height}mm`, true);
-        // 体积同样强制覆盖(bundle 是 seller 后台真值,mm 精度)。
-        const vol = window.jzVolumeLiters(depth, width, height);
-        if (vol != null) updateField('volume', `${vol} L`, '', true);
-      }
+        // 尺寸: 9454=depth→length, 9455=width, 9456=height (单位mm),同样强制覆盖。
+        const depth = Number(attrMap.get('9454')?.value) || 0;
+        const width = Number(attrMap.get('9455')?.value) || 0;
+        const height = Number(attrMap.get('9456')?.value) || 0;
+        if (depth > 0 && width > 0 && height > 0) {
+          updateField('dimensions', `${depth} x ${width} x ${height}mm`, '', true);
+          updateHeroSub('heroSize', `${depth}×${width}×${height}mm`, true);
+          // 体积同样强制覆盖(bundle 是 seller 后台真值,mm 精度)。
+          const vol = window.jzVolumeLiters(depth, width, height);
+          if (vol != null) updateField('volume', `${vol} L`, '', true);
+        }
 
-      // 持久化到 chrome.storage.local — 让搜索页/列表页/其他 tab 数据卡片
-      // 直接命中(用户浏览过的 SKU,下次在任何位置看到都有完整重量·尺寸)。
-      // bundle endpoint (4497/9454-9456) 是 seller 后台真值,优先级高于
-      // SelectionProduct snapshot,所以这条 persist 是数据流的 ground truth。
-      window.jzPersistWeightDims?.(sku, { weightG: weightVal, lengthMm: depth, widthMm: width, heightMm: height }, 'sv-attrs');
+        // 持久化到 chrome.storage.local — 让搜索页/列表页/其他 tab 数据卡片
+        // 直接命中(用户浏览过的 SKU,下次在任何位置看到都有完整重量·尺寸)。
+        // bundle endpoint (4497/9454-9456) 是 seller 后台真值,优先级高于
+        // SelectionProduct snapshot,所以这条 persist 是数据流的 ground truth。
+        window.jzPersistWeightDims?.(
+          sku,
+          { weightG: weightVal, lengthMm: depth, widthMm: width, heightMm: height },
+          'sv-attrs'
+        );
 
-      // 能否跟卖: search-variant-model 返回了匹配结果 → 可以跟卖
-      updateField('canFollow', '能', 'green');
+        // 能否跟卖: search-variant-model 返回了匹配结果 → 可以跟卖
+        updateField('canFollow', '能', 'green');
 
-      console.log(`[ozon-helper] searchVariants data: weight=${weightVal}g, depth=${depth}mm, width=${width}mm, height=${height}mm`);
-    }).catch(() => {
-      // seller.ozon.ru tab not open or not logged in — silent fallback
-    });
+        console.log(
+          `[ozon-helper] searchVariants data: weight=${weightVal}g, depth=${depth}mm, width=${width}mm, height=${height}mm`
+        );
+      })
+      .catch(() => {
+        // seller.ozon.ru tab not open or not logged in — silent fallback
+      });
 
     // Source 3: Ozon Seller data/v3 via service-worker (seller.ozon.ru context)
     const RUB_TO_CNY = 0.084;
-    const ozonDirectPromise = window.sendMessage('getMarketStats', { sku, period: window.jzGetSalesPeriod?.() || 'monthly' }).then(d => {
-      if (!document.contains(card)) return;
-      // 会话过期/未登录信号:SW 区分了"该 SKU 无市场数据"(data=null)和"需登录
-      // 卖家中心"(data.__needSellerLogin)。后者显式提示用户去登录,而非静默"-"。
-      if (d?.__needSellerLogin) {
-        // 命中选品库时不弹「需登录」横幅(市场数据已由后端 product-data 填好)
-        if (!_backendHasMarket) showSellerLoginHint(card);
-        return;
-      }
-      if (!d) return;
-      console.log('[ozon-helper] Ozon data/v3 via SW:', d);
+    const ozonDirectPromise = window
+      .sendMessage('getMarketStats', { sku, period: window.jzGetSalesPeriod?.() || 'monthly' })
+      .then((d) => {
+        if (!document.contains(card)) return;
+        // 会话过期/未登录信号:SW 区分了"该 SKU 无市场数据"(data=null)和"需登录
+        // 卖家中心"(data.__needSellerLogin)。后者显式提示用户去登录,而非静默"-"。
+        if (d?.__needSellerLogin) {
+          // 命中选品库时不弹「需登录」横幅(市场数据已由后端 product-data 填好)
+          if (!_backendHasMarket) showSellerLoginHint(card);
+          return;
+        }
+        if (!d) return;
+        console.log('[ozon-helper] Ozon data/v3 via SW:', d);
 
-      // ── 商品信息 ──
-      // 类目/品牌：不强制覆盖（force=false），后端 getProductStats 的中文/英文值优先；
-      // data/v3 的俄文值只在后端完全没数据时作为兜底填充。
-      if (d.category1 || d.category1Id) updateField('category', window.jzTranslateCategoryL1(d.category1, d.category1Id));
-      if (d.category3) updateField('categoryL3', d.category3);
-      if (d.brand) updateField('brand', d.brand, 'orange');
-      if (d.soldCount != null) updateField('sales30d', window.formatNumber(Number(d.soldCount)), 'blue', true);
-      if (d.gmvSum != null) {
-        const rev = Number(d.gmvSum);
-        const cny = (rev * RUB_TO_CNY).toFixed(2);
-        updateField('revenue30d', `₽${window.formatNumber(rev)} ≈ ¥${cny}`, 'blue', true);
-      }
-      const sd = d.salesDynamics != null ? Number(d.salesDynamics) : null;
-      updateField('salesDynamics', sd != null ? `${sd}%` : '0%', sd > 0 ? 'green' : sd < 0 ? 'red' : '', true);
-      updateField('drr', d.drr != null ? `${Number(d.drr).toFixed(2)}%` : '0.00%', '', true);
-      if (d.avgOrdersOnAccDays != null) updateField('dailySales', Number(d.avgOrdersOnAccDays).toFixed(2), 'blue', true);
-      if (d.avgGmvOnAccDays != null) updateField('dailyRevenue', `${Number(d.avgGmvOnAccDays).toFixed(2)}₽`, 'blue', true);
+        // ── 商品信息 ──
+        // 类目/品牌：不强制覆盖（force=false），后端 getProductStats 的中文/英文值优先；
+        // data/v3 的俄文值只在后端完全没数据时作为兜底填充。
+        if (d.category1 || d.category1Id)
+          updateField('category', window.jzTranslateCategoryL1(d.category1, d.category1Id));
+        if (d.category3) updateField('categoryL3', d.category3);
+        if (d.brand) updateField('brand', d.brand, 'orange');
+        if (d.soldCount != null) updateField('sales30d', window.formatNumber(Number(d.soldCount)), 'blue', true);
+        if (d.gmvSum != null) {
+          const rev = Number(d.gmvSum);
+          const cny = (rev * RUB_TO_CNY).toFixed(2);
+          updateField('revenue30d', `₽${window.formatNumber(rev)} ≈ ¥${cny}`, 'blue', true);
+        }
+        const sd = d.salesDynamics != null ? Number(d.salesDynamics) : null;
+        updateField('salesDynamics', sd != null ? `${sd}%` : '0%', sd > 0 ? 'green' : sd < 0 ? 'red' : '', true);
+        updateField('drr', d.drr != null ? `${Number(d.drr).toFixed(2)}%` : '0.00%', '', true);
+        if (d.avgOrdersOnAccDays != null)
+          updateField('dailySales', Number(d.avgOrdersOnAccDays).toFixed(2), 'blue', true);
+        if (d.avgGmvOnAccDays != null)
+          updateField('dailyRevenue', `${Number(d.avgGmvOnAccDays).toFixed(2)}₽`, 'blue', true);
 
-      // ── 促销与推广 ──
-      updateField('daysInPromo', d.daysInPromo != null ? String(d.daysInPromo) : '0', '', true);
-      updateField('promoDiscount', d.discount != null ? `${Number(d.discount).toFixed(2)}%` : '0%', '', true);
-      updateField('promoConvRate', d.promoRevenueShare != null ? `${Number(d.promoRevenueShare).toFixed(2)}%` : '-', 'green', true);
-      updateField('daysWithAds', d.daysWithTrafarets != null ? String(d.daysWithTrafarets) : '0', '', true);
+        // ── 促销与推广 ──
+        updateField('daysInPromo', d.daysInPromo != null ? String(d.daysInPromo) : '0', '', true);
+        updateField('promoDiscount', d.discount != null ? `${Number(d.discount).toFixed(2)}%` : '0%', '', true);
+        updateField(
+          'promoConvRate',
+          d.promoRevenueShare != null ? `${Number(d.promoRevenueShare).toFixed(2)}%` : '-',
+          'green',
+          true
+        );
+        updateField('daysWithAds', d.daysWithTrafarets != null ? String(d.daysWithTrafarets) : '0', '', true);
 
-      // ── 流量与转化 ──
-      updateField('pdpViews', d.qtyViewPdp != null ? window.formatNumber(Number(d.qtyViewPdp)) : (d.sessionCount != null ? window.formatNumber(Number(d.sessionCount)) : '-'), '', true);
-      updateField('pdpCartRate', d.pdpToCartConversion != null ? `${Number(d.pdpToCartConversion).toFixed(2)}%` : (d.convToCartPdp != null ? `${Number(d.convToCartPdp).toFixed(2)}%` : '-'), '', true);
-      updateField('searchViews', d.sessionCountSearch != null ? window.formatNumber(Number(d.sessionCountSearch)) : '-', '', true);
-      updateField('searchCartRate', d.convToCartSearch != null ? `${Number(d.convToCartSearch).toFixed(2)}%` : '0.00%', '', true);
-      updateField('convViewToOrder', d.convViewToOrder != null ? `${Number(d.convViewToOrder).toFixed(2)}%` : '-', '', true);
-      // 商品点击率 = sessionCount / views
-      const views = Number(d.views) || 0;
-      const sessions = Number(d.sessionCount || d.qtyViewPdp) || 0;
-      const ctr = views > 0 ? ((sessions / views) * 100).toFixed(2) : '0.00';
-      updateField('clickRate', `${ctr}%`, Number(ctr) > 5 ? 'orange' : '', true);
+        // ── 流量与转化 ──
+        updateField(
+          'pdpViews',
+          d.qtyViewPdp != null
+            ? window.formatNumber(Number(d.qtyViewPdp))
+            : d.sessionCount != null
+              ? window.formatNumber(Number(d.sessionCount))
+              : '-',
+          '',
+          true
+        );
+        updateField(
+          'pdpCartRate',
+          d.pdpToCartConversion != null
+            ? `${Number(d.pdpToCartConversion).toFixed(2)}%`
+            : d.convToCartPdp != null
+              ? `${Number(d.convToCartPdp).toFixed(2)}%`
+              : '-',
+          '',
+          true
+        );
+        updateField(
+          'searchViews',
+          d.sessionCountSearch != null ? window.formatNumber(Number(d.sessionCountSearch)) : '-',
+          '',
+          true
+        );
+        updateField(
+          'searchCartRate',
+          d.convToCartSearch != null ? `${Number(d.convToCartSearch).toFixed(2)}%` : '0.00%',
+          '',
+          true
+        );
+        updateField(
+          'convViewToOrder',
+          d.convViewToOrder != null ? `${Number(d.convViewToOrder).toFixed(2)}%` : '-',
+          '',
+          true
+        );
+        // 商品点击率 = sessionCount / views
+        const views = Number(d.views) || 0;
+        const sessions = Number(d.sessionCount || d.qtyViewPdp) || 0;
+        const ctr = views > 0 ? ((sessions / views) * 100).toFixed(2) : '0.00';
+        updateField('clickRate', `${ctr}%`, Number(ctr) > 5 ? 'orange' : '', true);
 
-      // ── 物流与商品 ──
-      updateField('salesSchema', d.salesSchema || (d.sources?.length ? d.sources.join('/').toUpperCase() : '-'), '', true);
-      const redemption = d.nullableRedemptionRate != null ? Number(d.nullableRedemptionRate) : null;
-      updateField('returnRate', redemption != null ? `${(100 - redemption).toFixed(0)}%` : '-', redemption != null && redemption < 100 ? 'red' : 'green', true);
-      if (d.nullableCreateDate) {
-        const createDate = new Date(d.nullableCreateDate);
-        const daysSince = Math.floor((Date.now() - createDate.getTime()) / 86400000);
-        updateField('createDate', `${createDate.toISOString().slice(0, 10)}(${daysSince}天)`, '', true);
-      }
-    }).catch(err => {
-      console.log('[ozon-helper] getMarketStats failed:', err?.message);
-      if (document.contains(card)) {
-        card.querySelectorAll('.oh-sidebar-value[data-source="ozon"]').forEach(el => {
-          el.textContent = '加载失败';
-          el.style.color = 'var(--oh-red, #ff4d4f)';
-          el.style.fontSize = '11px';
-        });
-      }
-    });
+        // ── 物流与商品 ──
+        updateField(
+          'salesSchema',
+          d.salesSchema || (d.sources?.length ? d.sources.join('/').toUpperCase() : '-'),
+          '',
+          true
+        );
+        const redemption = d.nullableRedemptionRate != null ? Number(d.nullableRedemptionRate) : null;
+        updateField(
+          'returnRate',
+          redemption != null ? `${(100 - redemption).toFixed(0)}%` : '-',
+          redemption != null && redemption < 100 ? 'red' : 'green',
+          true
+        );
+        if (d.nullableCreateDate) {
+          const createDate = new Date(d.nullableCreateDate);
+          const daysSince = Math.floor((Date.now() - createDate.getTime()) / 86400000);
+          updateField('createDate', `${createDate.toISOString().slice(0, 10)}(${daysSince}天)`, '', true);
+        }
+      })
+      .catch((err) => {
+        console.log('[ozon-helper] getMarketStats failed:', err?.message);
+        if (document.contains(card)) {
+          card.querySelectorAll('.oh-sidebar-value[data-source="ozon"]').forEach((el) => {
+            el.textContent = '加载失败';
+            el.style.color = 'var(--oh-red, #ff4d4f)';
+            el.style.fontSize = '11px';
+          });
+        }
+      });
 
     // Auto-collapse empty sections after all data sources complete
     Promise.allSettled([backendPromise, variantPromise, ozonDirectPromise]).then(() => {
@@ -3355,86 +3722,86 @@
   // 跨境店无小单保护(≤100/≤300 那套属俄罗斯本土店),已移除。
   const _CALC_DEFAULT_RATES = [12, 14, 18];
   const _CALC_COMMISSIONS = [
-    { value: "药店", label: "药店 — 12/14/18%", rates: [12, 14, 18] },
-    { value: "矫形用品", label: "矫形用品 — 12/17/17%", rates: [12, 17, 17] },
-    { value: "成人用品", label: "成人用品 — 12/14/21%", rates: [12, 14, 21] },
-    { value: "辅助药品", label: "辅助药品 — 12/15/15%", rates: [12, 15, 15] },
-    { value: "电子烟及加热系统配件", label: "电子烟及加热系统配件 — 12/24/24%", rates: [12, 24, 24] },
-    { value: "维生素和膳食补充剂", label: "维生素和膳食补充剂 — 12/18/18%", rates: [12, 18, 18] },
-    { value: "装饰、清洁与储物", label: "装饰、清洁与储物 — 12/14/18%", rates: [12, 14, 18] },
-    { value: "住宅和花园", label: "住宅和花园 — 12/14/20%", rates: [12, 14, 20] },
-    { value: "汽车用品", label: "汽车用品 — 12/17/17%", rates: [12, 17, 17] },
-    { value: "手动工具和测量仪器", label: "手动工具和测量仪器 — 12/17/17%", rates: [12, 17, 17] },
-    { value: "建筑和装修", label: "建筑和装修 — 12/18/18%", rates: [12, 18, 18] },
-    { value: "康复设备", label: "康复设备 — 12/14/17%", rates: [12, 14, 17] },
-    { value: "重型建筑", label: "重型建筑 — 11/11/11%", rates: [11, 11, 11] },
-    { value: "儿童餐具", label: "儿童餐具 — 12/14/18%", rates: [12, 14, 18] },
-    { value: "家具", label: "家具 — 10/10/10%", rates: [10, 10, 10] },
-    { value: "轮胎", label: "轮胎 — 10/10/10%", rates: [10, 10, 10] },
-    { value: "装饰材料", label: "装饰材料 — 12/14/14%", rates: [12, 14, 14] },
-    { value: "卫浴设备", label: "卫浴设备 — 12/14/14%", rates: [12, 14, 14] },
-    { value: "日化", label: "日化 — 12/18/18%", rates: [12, 18, 18] },
-    { value: "建筑、装修和园艺设备", label: "建筑、装修和园艺设备 — 12/16/16%", rates: [12, 16, 16] },
-    { value: "新年装饰用品", label: "新年装饰用品 — 12/14/20%", rates: [12, 14, 20] },
-    { value: "电动滑板车", label: "电动滑板车 — 12/17/17%", rates: [12, 17, 17] },
-    { value: "船只、马达和充气艇", label: "船只、马达和充气艇 — 12/15/15%", rates: [12, 15, 15] },
-    { value: "自行车", label: "自行车 — 12/15/15%", rates: [12, 15, 15] },
-    { value: "水过滤器", label: "水过滤器 — 12/17/17%", rates: [12, 17, 17] },
-    { value: "运动手表", label: "运动手表 — 12/12/12%", rates: [12, 12, 12] },
-    { value: "成品房", label: "成品房 — 12/14.5/14.5%", rates: [12, 14.5, 14.5] },
-    { value: "汽车、汽车房和特种设备", label: "汽车、汽车房和特种设备 — 10/10/10%", rates: [10, 10, 10] },
-    { value: "服装和配饰", label: "服装和配饰 — 12/14/20.5%", rates: [12, 14, 20.5] },
-    { value: "鞋类", label: "鞋类 — 12/12/12%", rates: [12, 12, 12] },
-    { value: "美容与健康", label: "美容与健康 — 12/14/18%", rates: [12, 14, 18] },
-    { value: "专业口腔护理", label: "专业口腔护理 — 12/17/17%", rates: [12, 17, 17] },
-    { value: "外衣", label: "外衣 — 10/10/10%", rates: [10, 10, 10] },
-    { value: "专业医疗设备", label: "专业医疗设备 — 12/17/17%", rates: [12, 17, 17] },
-    { value: "包装袋", label: "包装袋 — 10/10/10%", rates: [10, 10, 10] },
-    { value: "儿童纺织品", label: "儿童纺织品 — 12/19/19%", rates: [12, 19, 19] },
-    { value: "儿童运动用品", label: "儿童运动用品 — 12/14/14%", rates: [12, 14, 14] },
-    { value: "儿童电子产品、家具、配件", label: "儿童电子产品、家具、配件 — 12/14/20%", rates: [12, 14, 20] },
-    { value: "玩具", label: "玩具 — 12/14/17.5%", rates: [12, 14, 17.5] },
-    { value: "儿童卫生用品", label: "儿童卫生用品 — 12/18/18%", rates: [12, 18, 18] },
-    { value: "婴儿推车和汽车安全座椅", label: "婴儿推车和汽车安全座椅 — 12/14/20%", rates: [12, 14, 20] },
-    { value: "宠物饲料与农场用品", label: "宠物饲料与农场用品 — 12/13/13%", rates: [12, 13, 13] },
-    { value: "宠物用品", label: "宠物用品 — 12/14/15%", rates: [12, 14, 15] },
-    { value: "宠物卫生与护理", label: "宠物卫生与护理 — 12/13/13%", rates: [12, 13, 13] },
-    { value: "食品", label: "食品 — 11/11/11%", rates: [11, 11, 11] },
-    { value: "新鲜食品", label: "新鲜食品 — 11/11/11%", rates: [11, 11, 11] },
-    { value: "个人卫生用品", label: "个人卫生用品 — 12/18/18%", rates: [12, 18, 18] },
-    { value: "隐形眼镜", label: "隐形眼镜 — 12/18/18%", rates: [12, 18, 18] },
-    { value: "运动和休闲用品", label: "运动和休闲用品 — 12/19/19%", rates: [12, 19, 19] },
-    { value: "兴趣、创意与文具", label: "兴趣、创意与文具 — 12/14/16%", rates: [12, 14, 16] },
-    { value: "书籍", label: "书籍 — 12/22/22%", rates: [12, 22, 22] },
-    { value: "蹦床、游泳池和立式桨板", label: "蹦床、游泳池和立式桨板 — 12/16/16%", rates: [12, 16, 16] },
-    { value: "运动营养", label: "运动营养 — 12/15/15%", rates: [12, 15, 15] },
-    { value: "运动员营养补充剂", label: "运动员营养补充剂 — 12/18/18%", rates: [12, 18, 18] },
-    { value: "电子产品配饰", label: "电子产品配饰 — 12/20/20%", rates: [12, 20, 20] },
-    { value: "音频和视频设备配件", label: "音频和视频设备配件 — 12/14.5/14.5%", rates: [12, 14.5, 14.5] },
-    { value: "家用电器", label: "家用电器 — 10/10/10%", rates: [10, 10, 10] },
-    { value: "电视机", label: "电视机 — 9/9/9%", rates: [9, 9, 9] },
-    { value: "美容设备", label: "美容设备 — 12/14/16%", rates: [12, 14, 16] },
-    { value: "办公电脑设备、收银及仓储设备", label: "办公电脑设备、收银及仓储设备 — 12/16/16%", rates: [12, 16, 16] },
-    { value: "游戏主机及配件、摄影器材", label: "游戏主机及配件、摄影器材 — 12/12.5/12.5%", rates: [12, 12.5, 12.5] },
-    { value: "电脑外设设备及耗材", label: "电脑外设设备及耗材 — 12/14.5/14.5%", rates: [12, 14.5, 14.5] },
-    { value: "非内置式大型家用电器", label: "非内置式大型家用电器 — 9/9/9%", rates: [9, 9, 9] },
-    { value: "智能手机和平板电脑", label: "智能手机和平板电脑 — 11.5/11.5/11.5%", rates: [11.5, 11.5, 11.5] },
-    { value: "电脑及笔记本配件", label: "电脑及笔记本配件 — 12/12.5/12.5%", rates: [12, 12.5, 12.5] },
-    { value: "Yandex 智能音箱", label: "Yandex 智能音箱 — 12/14.5/14.5%", rates: [12, 14.5, 14.5] },
-    { value: "嵌入式大型家用电器", label: "嵌入式大型家用电器 — 9/9/9%", rates: [9, 9, 9] },
-    { value: "显示器", label: "显示器 — 12/12.5/12.5%", rates: [12, 12.5, 12.5] },
-    { value: "智能手表与健身手环", label: "智能手表与健身手环 — 11.5/11.5/11.5%", rates: [11.5, 11.5, 11.5] },
-    { value: "电子游戏", label: "电子游戏 — 12/14.5/14.5%", rates: [12, 14.5, 14.5] },
-    { value: "台式电脑", label: "台式电脑 — 9/9/9%", rates: [9, 9, 9] },
-    { value: "电脑设备配件", label: "电脑设备配件 — 12/13.5/13.5%", rates: [12, 13.5, 13.5] },
-    { value: "笔记本电脑", label: "笔记本电脑 — 8/8/8%", rates: [8, 8, 8] },
-    { value: "戴森配件", label: "戴森配件 — 6/6/6%", rates: [6, 6, 6] },
-    { value: "索尼耳机", label: "索尼耳机 — 8/8/8%", rates: [8, 8, 8] },
-    { value: "三星 TWS 耳机", label: "三星 TWS 耳机 — 8/8/8%", rates: [8, 8, 8] },
-    { value: "三星智能手表与健身手环", label: "三星智能手表与健身手环 — 8/8/8%", rates: [8, 8, 8] },
-    { value: "三星智能手机和平板电脑", label: "三星智能手机和平板电脑 — 8/8/8%", rates: [8, 8, 8] },
-    { value: "苹果设备", label: "苹果设备 — 7/7/7%", rates: [7, 7, 7] },
-    { value: "戴森设备", label: "戴森设备 — 8/8/8%", rates: [8, 8, 8] },
+    { value: '药店', label: '药店 — 12/14/18%', rates: [12, 14, 18] },
+    { value: '矫形用品', label: '矫形用品 — 12/17/17%', rates: [12, 17, 17] },
+    { value: '成人用品', label: '成人用品 — 12/14/21%', rates: [12, 14, 21] },
+    { value: '辅助药品', label: '辅助药品 — 12/15/15%', rates: [12, 15, 15] },
+    { value: '电子烟及加热系统配件', label: '电子烟及加热系统配件 — 12/24/24%', rates: [12, 24, 24] },
+    { value: '维生素和膳食补充剂', label: '维生素和膳食补充剂 — 12/18/18%', rates: [12, 18, 18] },
+    { value: '装饰、清洁与储物', label: '装饰、清洁与储物 — 12/14/18%', rates: [12, 14, 18] },
+    { value: '住宅和花园', label: '住宅和花园 — 12/14/20%', rates: [12, 14, 20] },
+    { value: '汽车用品', label: '汽车用品 — 12/17/17%', rates: [12, 17, 17] },
+    { value: '手动工具和测量仪器', label: '手动工具和测量仪器 — 12/17/17%', rates: [12, 17, 17] },
+    { value: '建筑和装修', label: '建筑和装修 — 12/18/18%', rates: [12, 18, 18] },
+    { value: '康复设备', label: '康复设备 — 12/14/17%', rates: [12, 14, 17] },
+    { value: '重型建筑', label: '重型建筑 — 11/11/11%', rates: [11, 11, 11] },
+    { value: '儿童餐具', label: '儿童餐具 — 12/14/18%', rates: [12, 14, 18] },
+    { value: '家具', label: '家具 — 10/10/10%', rates: [10, 10, 10] },
+    { value: '轮胎', label: '轮胎 — 10/10/10%', rates: [10, 10, 10] },
+    { value: '装饰材料', label: '装饰材料 — 12/14/14%', rates: [12, 14, 14] },
+    { value: '卫浴设备', label: '卫浴设备 — 12/14/14%', rates: [12, 14, 14] },
+    { value: '日化', label: '日化 — 12/18/18%', rates: [12, 18, 18] },
+    { value: '建筑、装修和园艺设备', label: '建筑、装修和园艺设备 — 12/16/16%', rates: [12, 16, 16] },
+    { value: '新年装饰用品', label: '新年装饰用品 — 12/14/20%', rates: [12, 14, 20] },
+    { value: '电动滑板车', label: '电动滑板车 — 12/17/17%', rates: [12, 17, 17] },
+    { value: '船只、马达和充气艇', label: '船只、马达和充气艇 — 12/15/15%', rates: [12, 15, 15] },
+    { value: '自行车', label: '自行车 — 12/15/15%', rates: [12, 15, 15] },
+    { value: '水过滤器', label: '水过滤器 — 12/17/17%', rates: [12, 17, 17] },
+    { value: '运动手表', label: '运动手表 — 12/12/12%', rates: [12, 12, 12] },
+    { value: '成品房', label: '成品房 — 12/14.5/14.5%', rates: [12, 14.5, 14.5] },
+    { value: '汽车、汽车房和特种设备', label: '汽车、汽车房和特种设备 — 10/10/10%', rates: [10, 10, 10] },
+    { value: '服装和配饰', label: '服装和配饰 — 12/14/20.5%', rates: [12, 14, 20.5] },
+    { value: '鞋类', label: '鞋类 — 12/12/12%', rates: [12, 12, 12] },
+    { value: '美容与健康', label: '美容与健康 — 12/14/18%', rates: [12, 14, 18] },
+    { value: '专业口腔护理', label: '专业口腔护理 — 12/17/17%', rates: [12, 17, 17] },
+    { value: '外衣', label: '外衣 — 10/10/10%', rates: [10, 10, 10] },
+    { value: '专业医疗设备', label: '专业医疗设备 — 12/17/17%', rates: [12, 17, 17] },
+    { value: '包装袋', label: '包装袋 — 10/10/10%', rates: [10, 10, 10] },
+    { value: '儿童纺织品', label: '儿童纺织品 — 12/19/19%', rates: [12, 19, 19] },
+    { value: '儿童运动用品', label: '儿童运动用品 — 12/14/14%', rates: [12, 14, 14] },
+    { value: '儿童电子产品、家具、配件', label: '儿童电子产品、家具、配件 — 12/14/20%', rates: [12, 14, 20] },
+    { value: '玩具', label: '玩具 — 12/14/17.5%', rates: [12, 14, 17.5] },
+    { value: '儿童卫生用品', label: '儿童卫生用品 — 12/18/18%', rates: [12, 18, 18] },
+    { value: '婴儿推车和汽车安全座椅', label: '婴儿推车和汽车安全座椅 — 12/14/20%', rates: [12, 14, 20] },
+    { value: '宠物饲料与农场用品', label: '宠物饲料与农场用品 — 12/13/13%', rates: [12, 13, 13] },
+    { value: '宠物用品', label: '宠物用品 — 12/14/15%', rates: [12, 14, 15] },
+    { value: '宠物卫生与护理', label: '宠物卫生与护理 — 12/13/13%', rates: [12, 13, 13] },
+    { value: '食品', label: '食品 — 11/11/11%', rates: [11, 11, 11] },
+    { value: '新鲜食品', label: '新鲜食品 — 11/11/11%', rates: [11, 11, 11] },
+    { value: '个人卫生用品', label: '个人卫生用品 — 12/18/18%', rates: [12, 18, 18] },
+    { value: '隐形眼镜', label: '隐形眼镜 — 12/18/18%', rates: [12, 18, 18] },
+    { value: '运动和休闲用品', label: '运动和休闲用品 — 12/19/19%', rates: [12, 19, 19] },
+    { value: '兴趣、创意与文具', label: '兴趣、创意与文具 — 12/14/16%', rates: [12, 14, 16] },
+    { value: '书籍', label: '书籍 — 12/22/22%', rates: [12, 22, 22] },
+    { value: '蹦床、游泳池和立式桨板', label: '蹦床、游泳池和立式桨板 — 12/16/16%', rates: [12, 16, 16] },
+    { value: '运动营养', label: '运动营养 — 12/15/15%', rates: [12, 15, 15] },
+    { value: '运动员营养补充剂', label: '运动员营养补充剂 — 12/18/18%', rates: [12, 18, 18] },
+    { value: '电子产品配饰', label: '电子产品配饰 — 12/20/20%', rates: [12, 20, 20] },
+    { value: '音频和视频设备配件', label: '音频和视频设备配件 — 12/14.5/14.5%', rates: [12, 14.5, 14.5] },
+    { value: '家用电器', label: '家用电器 — 10/10/10%', rates: [10, 10, 10] },
+    { value: '电视机', label: '电视机 — 9/9/9%', rates: [9, 9, 9] },
+    { value: '美容设备', label: '美容设备 — 12/14/16%', rates: [12, 14, 16] },
+    { value: '办公电脑设备、收银及仓储设备', label: '办公电脑设备、收银及仓储设备 — 12/16/16%', rates: [12, 16, 16] },
+    { value: '游戏主机及配件、摄影器材', label: '游戏主机及配件、摄影器材 — 12/12.5/12.5%', rates: [12, 12.5, 12.5] },
+    { value: '电脑外设设备及耗材', label: '电脑外设设备及耗材 — 12/14.5/14.5%', rates: [12, 14.5, 14.5] },
+    { value: '非内置式大型家用电器', label: '非内置式大型家用电器 — 9/9/9%', rates: [9, 9, 9] },
+    { value: '智能手机和平板电脑', label: '智能手机和平板电脑 — 11.5/11.5/11.5%', rates: [11.5, 11.5, 11.5] },
+    { value: '电脑及笔记本配件', label: '电脑及笔记本配件 — 12/12.5/12.5%', rates: [12, 12.5, 12.5] },
+    { value: 'Yandex 智能音箱', label: 'Yandex 智能音箱 — 12/14.5/14.5%', rates: [12, 14.5, 14.5] },
+    { value: '嵌入式大型家用电器', label: '嵌入式大型家用电器 — 9/9/9%', rates: [9, 9, 9] },
+    { value: '显示器', label: '显示器 — 12/12.5/12.5%', rates: [12, 12.5, 12.5] },
+    { value: '智能手表与健身手环', label: '智能手表与健身手环 — 11.5/11.5/11.5%', rates: [11.5, 11.5, 11.5] },
+    { value: '电子游戏', label: '电子游戏 — 12/14.5/14.5%', rates: [12, 14.5, 14.5] },
+    { value: '台式电脑', label: '台式电脑 — 9/9/9%', rates: [9, 9, 9] },
+    { value: '电脑设备配件', label: '电脑设备配件 — 12/13.5/13.5%', rates: [12, 13.5, 13.5] },
+    { value: '笔记本电脑', label: '笔记本电脑 — 8/8/8%', rates: [8, 8, 8] },
+    { value: '戴森配件', label: '戴森配件 — 6/6/6%', rates: [6, 6, 6] },
+    { value: '索尼耳机', label: '索尼耳机 — 8/8/8%', rates: [8, 8, 8] },
+    { value: '三星 TWS 耳机', label: '三星 TWS 耳机 — 8/8/8%', rates: [8, 8, 8] },
+    { value: '三星智能手表与健身手环', label: '三星智能手表与健身手环 — 8/8/8%', rates: [8, 8, 8] },
+    { value: '三星智能手机和平板电脑', label: '三星智能手机和平板电脑 — 8/8/8%', rates: [8, 8, 8] },
+    { value: '苹果设备', label: '苹果设备 — 7/7/7%', rates: [7, 7, 7] },
+    { value: '戴森设备', label: '戴森设备 — 8/8/8%', rates: [8, 8, 8] },
   ];
 
   /**
@@ -3442,8 +3809,8 @@
    * rates = [t0,t1,t2](百分数);priceRub<=0(未知)按档0。无小单保护。
    */
   function _commissionRateForRub(rates, priceRub) {
-    const t = (rates && rates.length) ? rates : _CALC_DEFAULT_RATES;
-    const i = !(priceRub > 0) ? 0 : (priceRub <= 1500 ? 0 : (priceRub <= 5000 ? 1 : 2));
+    const t = rates && rates.length ? rates : _CALC_DEFAULT_RATES;
+    const i = !(priceRub > 0) ? 0 : priceRub <= 1500 ? 0 : priceRub <= 5000 ? 1 : 2;
     return t[Math.min(i, t.length - 1)] || t[0] || 0;
   }
 
@@ -3454,14 +3821,14 @@
    * otherDeductPct = 广告+提现+退货率之和(%);marginPct = 毛利(%);totalCostCny = 固定成本合计。
    */
   function _pricingCommissionRate(rates, otherDeductPct, marginPct, totalCostCny, rubPerCny) {
-    const t = (rates && rates.length) ? rates : _CALC_DEFAULT_RATES;
+    const t = rates && rates.length ? rates : _CALC_DEFAULT_RATES;
     const rub = rubPerCny > 0 ? rubPerCny : 11.08;
     for (let i = 0; i < 3; i++) {
       const r = t[Math.min(i, t.length - 1)];
       const den = 1 - (r + otherDeductPct) / 100 - marginPct / 100;
       if (!(den > 0.01)) continue;
       const priceRub = (totalCostCny / den) * rub;
-      const inBand = i === 0 ? priceRub <= 1500 : (i === 1 ? (priceRub > 1500 && priceRub <= 5000) : priceRub > 5000);
+      const inBand = i === 0 ? priceRub <= 1500 : i === 1 ? priceRub > 1500 && priceRub <= 5000 : priceRub > 5000;
       if (inBand) return r;
     }
     // 兜底:用基础档估出售价再定档
@@ -3481,11 +3848,18 @@
 
   const _CALC_PROFIT_LOGISTICS = [
     { label: 'GUOO', value: 'guoo', type: 'per_kg', ratePerKg: 55 },
-    { label: 'OZON XY Standard', value: 'ozon_xy', type: 'tier', tiers: [
-      { maxWeight: 500, cost: 3 }, { maxWeight: 1000, cost: 6 },
-      { maxWeight: 2000, cost: 12 }, { maxWeight: 5000, cost: 30 },
-      { maxWeight: 10000, cost: 60 },
-    ]},
+    {
+      label: 'OZON XY Standard',
+      value: 'ozon_xy',
+      type: 'tier',
+      tiers: [
+        { maxWeight: 500, cost: 3 },
+        { maxWeight: 1000, cost: 6 },
+        { maxWeight: 2000, cost: 12 },
+        { maxWeight: 5000, cost: 30 },
+        { maxWeight: 10000, cost: 60 },
+      ],
+    },
     { label: 'CAINIAO 菜鸟', value: 'cainiao', type: 'per_kg', ratePerKg: 48 },
     { label: '自定义费率', value: 'custom', type: 'per_kg', ratePerKg: 0 },
   ];
@@ -3495,18 +3869,20 @@
   function _calcProfitLogisticsCost(provider, weightG) {
     if (!provider || weightG <= 0) return 0;
     if (provider.type === 'tier' && provider.tiers) {
-      const tier = provider.tiers.find(t => weightG <= t.maxWeight);
+      const tier = provider.tiers.find((t) => weightG <= t.maxWeight);
       return tier ? tier.cost : provider.tiers[provider.tiers.length - 1].cost;
     }
     return (weightG / 1000) * (provider.ratePerKg || 0);
   }
 
-  function _fmtCny(v) { return '¥ ' + v.toFixed(2); }
+  function _fmtCny(v) {
+    return '¥ ' + v.toFixed(2);
+  }
 
   function _buildCommissionOptions(selected) {
-    return _CALC_COMMISSIONS.map(c =>
-      `<option value="${c.value}" ${c.value === selected ? 'selected' : ''}>${_escHtml(c.label)}</option>`
-    ).join('');
+    return _CALC_COMMISSIONS
+      .map((c) => `<option value="${c.value}" ${c.value === selected ? 'selected' : ''}>${_escHtml(c.label)}</option>`)
+      .join('');
   }
 
   // ─── Create Tabbed Panel ───────────────────────────────
@@ -3523,7 +3899,11 @@
       for (const c of chars) {
         const n = (c.name || '').toLowerCase();
         if (n.includes('вес') || n.includes('weight') || n.includes('масса')) {
-          const v = parseFloat(String(c.value).replace(/[^\d.,]/g, '').replace(',', '.'));
+          const v = parseFloat(
+            String(c.value)
+              .replace(/[^\d.,]/g, '')
+              .replace(',', '.')
+          );
           if (v > 0) {
             // If unit is "кг" or "kg", convert to grams
             const isKg = n.includes('кг') || n.includes('kg') || (c.value || '').toLowerCase().includes('кг');
@@ -3612,7 +3992,7 @@
               <label>物流方式</label>
               <div class="ozon-helper-calc-field">
                 <select data-pf="p-logistics">
-                  ${_CALC_XY_LOGISTICS.map(l => `<option value="${l.value}" ${l.value === (settings.pLogistics || 'xs') ? 'selected' : ''}>${_escHtml(l.label)}</option>`).join('')}
+                  ${_CALC_XY_LOGISTICS.map((l) => `<option value="${l.value}" ${l.value === (settings.pLogistics || 'xs') ? 'selected' : ''}>${_escHtml(l.label)}</option>`).join('')}
                 </select>
               </div>
             </div>
@@ -3732,7 +4112,7 @@
             <label>跨境物流商</label>
             <div class="ozon-helper-calc-field">
               <select data-pf="lp-logistics">
-                ${_CALC_PROFIT_LOGISTICS.map(p => `<option value="${p.value}" ${p.value === (settings.lpLogistics || 'guoo') ? 'selected' : ''}>${_escHtml(p.label)}</option>`).join('')}
+                ${_CALC_PROFIT_LOGISTICS.map((p) => `<option value="${p.value}" ${p.value === (settings.lpLogistics || 'guoo') ? 'selected' : ''}>${_escHtml(p.label)}</option>`).join('')}
               </select>
             </div>
           </div>
@@ -3807,10 +4187,10 @@
     document.body.appendChild(panel);
 
     // ── Tab switching ──
-    panel.querySelectorAll('.ozon-helper-calc-tab').forEach(tab => {
+    panel.querySelectorAll('.ozon-helper-calc-tab').forEach((tab) => {
       tab.addEventListener('click', () => {
-        panel.querySelectorAll('.ozon-helper-calc-tab').forEach(t => t.classList.remove('is-active'));
-        panel.querySelectorAll('.ozon-helper-calc-page').forEach(p => p.classList.remove('is-active'));
+        panel.querySelectorAll('.ozon-helper-calc-tab').forEach((t) => t.classList.remove('is-active'));
+        panel.querySelectorAll('.ozon-helper-calc-page').forEach((p) => p.classList.remove('is-active'));
         tab.classList.add('is-active');
         const page = panel.querySelector(`[data-page="${tab.dataset.tab}"]`);
         if (page) page.classList.add('is-active');
@@ -3825,7 +4205,7 @@
     panel.querySelector('[data-action="close"]').addEventListener('click', () => closePanel(panel));
 
     // ── Toggle sections ──
-    panel.querySelectorAll('.ozon-helper-calc-toggle').forEach(toggle => {
+    panel.querySelectorAll('.ozon-helper-calc-toggle').forEach((toggle) => {
       toggle.addEventListener('click', () => {
         const action = toggle.dataset.action;
         let sectionName = '';
@@ -3871,13 +4251,13 @@
     const _el = (sel) => panel.querySelector(`[data-pf="${sel}"]`);
 
     const industryVal = panel.querySelector('[data-pf="p-industry"]')?.value || '';
-    const commissionRates = _CALC_COMMISSIONS.find(c => c.value === industryVal)?.rates || _CALC_DEFAULT_RATES;
+    const commissionRates = _CALC_COMMISSIONS.find((c) => c.value === industryVal)?.rates || _CALC_DEFAULT_RATES;
     const purchaseCost = _v('p-purchase');
     const grossMargin = _v('p-margin');
     const frontEndDiscount = _v('p-discount') || 50;
     const domesticShipping = _v('p-domestic');
     const logisticsVal = panel.querySelector('[data-pf="p-logistics"]')?.value || 'xs';
-    const logisticsCostCny = _CALC_XY_LOGISTICS.find(l => l.value === logisticsVal)?.costCny || 3;
+    const logisticsCostCny = _CALC_XY_LOGISTICS.find((l) => l.value === logisticsVal)?.costCny || 3;
     const adFeeRate = _v('p-ad');
     const withdrawFeeRate = _v('p-withdraw');
     const returnRate = _v('p-return');
@@ -3892,7 +4272,7 @@
       adFeeRate + withdrawFeeRate + returnRate,
       grossMargin,
       _fixedCostCny,
-      _PRICING_RATE_RUB,
+      _PRICING_RATE_RUB
     );
 
     const totalCostCny = purchaseCost + domesticShipping + otherFees + logisticsCostCny;
@@ -3965,7 +4345,7 @@
     const sellingPrice = _v('lp-price');
     const purchaseCost = _v('lp-purchase');
     const commissionVal = panel.querySelector('[data-pf="lp-commission"]')?.value || '';
-    const commissionRates = _CALC_COMMISSIONS.find(c => c.value === commissionVal)?.rates || _CALC_DEFAULT_RATES;
+    const commissionRates = _CALC_COMMISSIONS.find((c) => c.value === commissionVal)?.rates || _CALC_DEFAULT_RATES;
     const packageWeight = _v('lp-weight');
     const logisticsVal = panel.querySelector('[data-pf="lp-logistics"]')?.value || 'guoo';
     const customRate = _v('lp-custom-rate');
@@ -3975,11 +4355,14 @@
     const exchangeRate = _v('lp-exchange') || _CALC_DEFAULT_EXCHANGE;
     // 售价(CNY)折算 RUB 决定价格档:≤1500→档0,1501-5000→档1,>5000→档2。
     // 官方 2025-12-01 跨境表,无小单保护。
-    const commissionRate = _commissionRateForRub(commissionRates, sellingPrice * (exchangeRate > 0 ? exchangeRate : 11.97));
+    const commissionRate = _commissionRateForRub(
+      commissionRates,
+      sellingPrice * (exchangeRate > 0 ? exchangeRate : 11.97)
+    );
 
     // Logistics cost
     let logisticsCost = 0;
-    const provider = _CALC_PROFIT_LOGISTICS.find(p => p.value === logisticsVal);
+    const provider = _CALC_PROFIT_LOGISTICS.find((p) => p.value === logisticsVal);
     if (provider) {
       if (provider.value === 'custom') {
         logisticsCost = (packageWeight / 1000) * customRate;
@@ -4016,9 +4399,10 @@
     }
     const rubRefEl = _el('lr-rub-ref');
     if (rubRefEl) {
-      rubRefEl.textContent = hasInput && exchangeRate > 0
-        ? `售价约 ₽${(sellingPrice * exchangeRate).toFixed(2)} | 利润约 ₽${(profit * exchangeRate).toFixed(2)}`
-        : '';
+      rubRefEl.textContent =
+        hasInput && exchangeRate > 0
+          ? `售价约 ₽${(sellingPrice * exchangeRate).toFixed(2)} | 利润约 ₽${(profit * exchangeRate).toFixed(2)}`
+          : '';
     }
 
     // Detail items
@@ -4048,8 +4432,8 @@
 
   // ─── Settings persistence ──────────────────────────────
   async function _loadCalcSettings() {
-    return new Promise(resolve => {
-      chrome.storage.local.get(['calcSettings'], r => resolve(r.calcSettings || {}));
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['calcSettings'], (r) => resolve(r.calcSettings || {}));
     });
   }
 
@@ -4074,8 +4458,8 @@
   }
 
   async function loadBarPosition() {
-    return new Promise(resolve =>
-      chrome.storage.local.get(['actionBarPosition'], r => resolve(r.actionBarPosition || null))
+    return new Promise((resolve) =>
+      chrome.storage.local.get(['actionBarPosition'], (r) => resolve(r.actionBarPosition || null))
     );
   }
 
@@ -4084,8 +4468,8 @@
   }
 
   async function loadBarCollapsed() {
-    return new Promise(resolve =>
-      chrome.storage.local.get(['actionBarCollapsed'], r => resolve(!!r.actionBarCollapsed))
+    return new Promise((resolve) =>
+      chrome.storage.local.get(['actionBarCollapsed'], (r) => resolve(!!r.actionBarCollapsed))
     );
   }
 
@@ -4101,7 +4485,7 @@
     if (bar.style.left) {
       requestAnimationFrame(() => {
         const left = parseInt(bar.style.left);
-        const top  = parseInt(bar.style.top);
+        const top = parseInt(bar.style.top);
         applyBarPosition(bar, { left, top });
       });
     }
@@ -4111,13 +4495,14 @@
 
   function applyBarPosition(bar, pos) {
     if (!pos) return;
-    const W = window.innerWidth, H = window.innerHeight;
+    const W = window.innerWidth,
+      H = window.innerHeight;
     const left = Math.max(4, Math.min(pos.left, W - bar.offsetWidth - 4));
-    const top  = Math.max(4, Math.min(pos.top,  H - bar.offsetHeight - 4));
+    const top = Math.max(4, Math.min(pos.top, H - bar.offsetHeight - 4));
     bar.style.right = 'auto';
     bar.style.transform = 'none';
     bar.style.left = `${left}px`;
-    bar.style.top  = `${top}px`;
+    bar.style.top = `${top}px`;
     document.documentElement.style.setProperty('--oh-bar-right', `${W - left - bar.offsetWidth}px`);
   }
 
@@ -4126,7 +4511,7 @@
     if (!panel) return;
     const br = bar.getBoundingClientRect();
     const gap = 12;
-    const onRight = (br.left + br.width / 2) > window.innerWidth / 2;
+    const onRight = br.left + br.width / 2 > window.innerWidth / 2;
 
     if (onRight) {
       panel.style.left = '';
@@ -4143,9 +4528,13 @@
     // drag-threshold:超过 TAP_THRESHOLD 像素才算 drag,否则当 click 处理
     // —— 让 brand 行 / 收起态胶囊条可点击 toggle 收起/展开
     const TAP_THRESHOLD = 4;
-    let ox = 0, oy = 0, sx = 0, sy = 0, dragging = false;
+    let ox = 0,
+      oy = 0,
+      sx = 0,
+      sy = 0,
+      dragging = false;
 
-    bar.addEventListener('mousedown', e => {
+    bar.addEventListener('mousedown', (e) => {
       if (e.target.closest('.ozon-helper-action-button')) return;
       e.preventDefault();
       const r = bar.getBoundingClientRect();
@@ -4155,24 +4544,24 @@
       sy = e.clientY;
       dragging = false;
 
-      const onMove = e => {
+      const onMove = (e) => {
         if (!dragging) {
-          if (Math.abs(e.clientX - sx) < TAP_THRESHOLD &&
-              Math.abs(e.clientY - sy) < TAP_THRESHOLD) return;
+          if (Math.abs(e.clientX - sx) < TAP_THRESHOLD && Math.abs(e.clientY - sy) < TAP_THRESHOLD) return;
           dragging = true;
           bar.classList.add('is-dragging');
         }
-        const W = window.innerWidth, H = window.innerHeight;
+        const W = window.innerWidth,
+          H = window.innerHeight;
         const left = Math.max(4, Math.min(e.clientX - ox, W - bar.offsetWidth - 4));
-        const top  = Math.max(4, Math.min(e.clientY - oy, H - bar.offsetHeight - 4));
+        const top = Math.max(4, Math.min(e.clientY - oy, H - bar.offsetHeight - 4));
         bar.style.right = 'auto';
         bar.style.transform = 'none';
         bar.style.left = `${left}px`;
-        bar.style.top  = `${top}px`;
+        bar.style.top = `${top}px`;
         document.documentElement.style.setProperty('--oh-bar-right', `${W - left - bar.offsetWidth}px`);
       };
 
-      const onUp = upEvent => {
+      const onUp = (upEvent) => {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         if (dragging) {
@@ -4238,10 +4627,7 @@
       const storeDropdown = panel.querySelector('[data-field="store-dropdown"]');
 
       try {
-        const [storesRes, auth] = await Promise.all([
-          window.sendMessage('getStores'),
-          window.sendMessage('getAuth'),
-        ]);
+        const [storesRes, auth] = await Promise.all([window.sendMessage('getStores'), window.sendMessage('getAuth')]);
         const storeList = storesRes?.data || storesRes || [];
         panel._followSellStoreList = storeList;
 
@@ -4252,7 +4638,7 @@
             storeSelect.innerHTML = '<option value="">\u6682\u65e0\u5e97\u94fa</option>';
             return;
           }
-          storeList.forEach(s => {
+          storeList.forEach((s) => {
             const opt = document.createElement('option');
             opt.value = s.id || s.storeId || '';
             opt.textContent = s.label || s.companyName || s.legalName || `\u5e97\u94fa ${opt.value}`;
@@ -4278,7 +4664,7 @@
         selectAllLabel.innerHTML = `<input type="checkbox" class="ozon-helper-mv-store-select-all" /> <strong>\u5168\u9009</strong>`;
         storeDropdown.appendChild(selectAllLabel);
 
-        storeList.forEach(s => {
+        storeList.forEach((s) => {
           const id = s.id || s.storeId || '';
           const name = s.label || s.companyName || s.legalName || `\u5e97\u94fa ${id}`;
           const isDefault = auth.storeId && String(auth.storeId) === String(id);
@@ -4300,7 +4686,7 @@
         selectAllCb.addEventListener('change', () => {
           const allCbs = storeDropdown.querySelectorAll('.ozon-helper-mv-store-cb');
           let firstCheckedId = '';
-          allCbs.forEach(cb => {
+          allCbs.forEach((cb) => {
             cb.checked = selectAllCb.checked;
             if (selectAllCb.checked && !firstCheckedId) firstCheckedId = cb.value;
           });
@@ -4343,7 +4729,9 @@
             if (cbs.length && checked.length !== 1) {
               const cur = String(panel._followSellStoreId || '');
               const keep = checked.find((c) => String(c.value) === cur) || checked[0] || cbs[0];
-              cbs.forEach((c) => { c.checked = (c === keep); });
+              cbs.forEach((c) => {
+                c.checked = c === keep;
+              });
               if (keep) rememberFollowSellWarehouseStore(panel, keep.value);
             }
           } else if (selectAllRow) {
@@ -4416,7 +4804,9 @@
       const m = r && r.followSellWarehouseByStore;
       if (m && typeof m === 'object') _persistedFollowSellWh = m;
     });
-  } catch (e) { /* storage 不可用 → 退化为不记忆 */ }
+  } catch (e) {
+    /* storage 不可用 → 退化为不记忆 */
+  }
 
   // 记住某店选的仓库(无变化不写,避免渲染自动落选时频繁写盘)。
   function persistFollowSellWarehouse(storeId, warehouseId) {
@@ -4426,26 +4816,36 @@
     _persistedFollowSellWh[sid] = wid;
     try {
       chrome.storage.local.set({ followSellWarehouseByStore: _persistedFollowSellWh });
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      /* ignore */
+    }
   }
 
   function parseWarehouseListResponse(whRes) {
     const data = whRes?.data ?? whRes;
-    const list = Array.isArray(data) ? data
-      : Array.isArray(data?.result) ? data.result
-      : Array.isArray(data?.result?.warehouses) ? data.result.warehouses
-      : Array.isArray(data?.warehouses) ? data.warehouses
-      : Array.isArray(data?.items) ? data.items
-      : Array.isArray(data?.data?.result) ? data.data.result
-      : Array.isArray(data?.data?.warehouses) ? data.data.warehouses
-      : Array.isArray(data?.data) ? data.data
-      : [];
+    const list = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.result)
+        ? data.result
+        : Array.isArray(data?.result?.warehouses)
+          ? data.result.warehouses
+          : Array.isArray(data?.warehouses)
+            ? data.warehouses
+            : Array.isArray(data?.items)
+              ? data.items
+              : Array.isArray(data?.data?.result)
+                ? data.data.result
+                : Array.isArray(data?.data?.warehouses)
+                  ? data.data.warehouses
+                  : Array.isArray(data?.data)
+                    ? data.data
+                    : [];
     return list.filter(Boolean);
   }
 
   function getSelectedFollowSellStoreIds(panel) {
     return Array.from(panel.querySelectorAll('.ozon-helper-mv-store-cb:checked'))
-      .map(cb => String(cb.value || '').trim())
+      .map((cb) => String(cb.value || '').trim())
       .filter(Boolean);
   }
 
@@ -4473,8 +4873,7 @@
     // 多店 sync 早就加了 seq guard,单店这里同样需要(Codex round-2 抓出)。
     const loadSeq = (panel._warehouseSingleLoadSeq = (panel._warehouseSingleLoadSeq || 0) + 1);
     const isCurrentLoad = () =>
-      panel._warehouseSingleLoadSeq === loadSeq &&
-      String(panel._followSellStoreId || '') === sid;
+      panel._warehouseSingleLoadSeq === loadSeq && String(panel._followSellStoreId || '') === sid;
 
     if (!sid) {
       whSelect.innerHTML = '<option value="">未选择店铺</option>';
@@ -4522,12 +4921,14 @@
     const templateWarehouseId = panel._templateSettings?.warehouseId;
     // 优先级:本面板内已选 → 上次跨会话记忆 → 模板默认仓 → 无
     const preferred = saved || _persistedFollowSellWh[sid] || templateWarehouseId || '';
-    whSelect.innerHTML = list.map((w) => {
-      const wid = w.warehouse_id ?? w.warehouseId ?? w.id;
-      const name = w.name || w.warehouse_name || `仓库 ${wid}`;
-      const selected = preferred && String(preferred) === String(wid) ? ' selected' : '';
-      return `<option value="${_escHtml(wid)}"${selected}>${_escHtml(name)} (${_escHtml(wid)})</option>`;
-    }).join('');
+    whSelect.innerHTML = list
+      .map((w) => {
+        const wid = w.warehouse_id ?? w.warehouseId ?? w.id;
+        const name = w.name || w.warehouse_name || `仓库 ${wid}`;
+        const selected = preferred && String(preferred) === String(wid) ? ' selected' : '';
+        return `<option value="${_escHtml(wid)}"${selected}>${_escHtml(name)} (${_escHtml(wid)})</option>`;
+      })
+      .join('');
 
     if (!whSelect.value && whSelect.options.length > 0) {
       whSelect.selectedIndex = 0;
@@ -4556,7 +4957,7 @@
         } catch (e) {
           panel._warehousesByStore.set(sid, { options: [], error: e?.message || String(e) });
         }
-      }),
+      })
     );
   }
 
@@ -4587,33 +4988,37 @@
     };
 
     const ts = panel._templateSettings || {};
-    const rowsHtml = storeIds.map((sid) => {
-      const cache = panel._warehousesByStore?.get(sid);
-      const list = cache?.options || [];
-      const error = cache?.error;
-      const saved = panel._selectedWarehouseByStore?.get(sid);
-      // 本面板内已选 → 上次跨会话记忆 → 模板默认仓
-      const preferred = saved || _persistedFollowSellWh[sid] || ts.warehouseId || '';
-      let selectInner;
-      if (error) {
-        selectInner = `<option value="">加载失败：${_escHtml(String(error).slice(0, 50))}</option>`;
-      } else if (list.length === 0) {
-        selectInner = '<option value="">无可用仓库</option>';
-      } else {
-        selectInner = list.map((w) => {
-          const wid = w.warehouse_id ?? w.warehouseId ?? w.id;
-          const name = w.name || w.warehouse_name || `仓库 ${wid}`;
-          const selected = preferred && String(preferred) === String(wid) ? ' selected' : '';
-          return `<option value="${_escHtml(wid)}"${selected}>${_escHtml(name)} (${_escHtml(wid)})</option>`;
-        }).join('');
-      }
-      return `<div style="display:flex;align-items:center;gap:8px;">
+    const rowsHtml = storeIds
+      .map((sid) => {
+        const cache = panel._warehousesByStore?.get(sid);
+        const list = cache?.options || [];
+        const error = cache?.error;
+        const saved = panel._selectedWarehouseByStore?.get(sid);
+        // 本面板内已选 → 上次跨会话记忆 → 模板默认仓
+        const preferred = saved || _persistedFollowSellWh[sid] || ts.warehouseId || '';
+        let selectInner;
+        if (error) {
+          selectInner = `<option value="">加载失败：${_escHtml(String(error).slice(0, 50))}</option>`;
+        } else if (list.length === 0) {
+          selectInner = '<option value="">无可用仓库</option>';
+        } else {
+          selectInner = list
+            .map((w) => {
+              const wid = w.warehouse_id ?? w.warehouseId ?? w.id;
+              const name = w.name || w.warehouse_name || `仓库 ${wid}`;
+              const selected = preferred && String(preferred) === String(wid) ? ' selected' : '';
+              return `<option value="${_escHtml(wid)}"${selected}>${_escHtml(name)} (${_escHtml(wid)})</option>`;
+            })
+            .join('');
+        }
+        return `<div style="display:flex;align-items:center;gap:8px;">
         <span style="flex:0 0 140px;font-size:12px;color:#0f172a;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${_escHtml(nameOf(sid))}">${_escHtml(nameOf(sid))}</span>
         <select data-warehouse-store-id="${_escHtml(sid)}" style="flex:1;min-width:160px;height:28px;padding:0 8px;border:1px solid #e5e7eb;border-radius:6px;background:#fff;font-size:13px;">
           ${selectInner}
         </select>
       </div>`;
-    }).join('');
+      })
+      .join('');
     multiList.innerHTML = rowsHtml;
 
     // Wire onChange — 写 _selectedWarehouseByStore map(提交时 line 6156+ 优先读这里)
@@ -4708,24 +5113,42 @@
     const id = s.id || s.storeId || '';
     const name = s.label || s.companyName || s.legalName || `\u5e97\u94fa ${id}`;
     const country = (s.companyCountry || '').toUpperCase();
-    const flag = country === 'RU' ? '\ud83c\uddf7\ud83c\uddfa'
-               : country === 'BY' ? '\ud83c\udde7\ud83c\uddfe'
-               : country === 'KZ' ? '\ud83c\uddf0\ud83c\uddff'
-               : '';
-    const group = country === 'RU' ? '\u4fc4\u7f57\u65af'
-                : country === 'BY' ? '\u767d\u4fc4\u7f57\u65af'
-                : country === 'KZ' ? '\u54c8\u8428\u514b\u65af\u5766'
-                : '\u5176\u5b83';
-    const color = country === 'RU' ? '#1d6bff'
-                : country === 'BY' ? '#0ea5e9'
-                : country === 'KZ' ? '#0891b2'
-                : '#6b7a93';
+    const flag =
+      country === 'RU'
+        ? '\ud83c\uddf7\ud83c\uddfa'
+        : country === 'BY'
+          ? '\ud83c\udde7\ud83c\uddfe'
+          : country === 'KZ'
+            ? '\ud83c\uddf0\ud83c\uddff'
+            : '';
+    const group =
+      country === 'RU'
+        ? '\u4fc4\u7f57\u65af'
+        : country === 'BY'
+          ? '\u767d\u4fc4\u7f57\u65af'
+          : country === 'KZ'
+            ? '\u54c8\u8428\u514b\u65af\u5766'
+            : '\u5176\u5b83';
+    const color =
+      country === 'RU' ? '#1d6bff' : country === 'BY' ? '#0ea5e9' : country === 'KZ' ? '#0891b2' : '#6b7a93';
     const tier = s.isPremium ? 'Premium' : 'Standard';
     const bound = !!s.watermarkTemplateId;
     const cleanName = name.replace(/[#\u00b7\s].*$/, '').trim();
     const initials = (cleanName.slice(0, 2) || '##').toUpperCase();
-    const code = s.shopId != null ? String(s.shopId).padStart(5, '0') : (id ? String(id).slice(-5) : '-----');
-    return { id: String(id), name, country, flag, group, color, tier, bound, initials, code, isActive: s.isActive !== false };
+    const code = s.shopId != null ? String(s.shopId).padStart(5, '0') : id ? String(id).slice(-5) : '-----';
+    return {
+      id: String(id),
+      name,
+      country,
+      flag,
+      group,
+      color,
+      tier,
+      bound,
+      initials,
+      code,
+      isActive: s.isActive !== false,
+    };
   }
 
   function _cssEscape(id) {
@@ -4733,12 +5156,14 @@
   }
 
   function _getRecentStoreIds() {
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       try {
-        chrome.storage.local.get(['mv-store-recent'], r => {
+        chrome.storage.local.get(['mv-store-recent'], (r) => {
           resolve(Array.isArray(r['mv-store-recent']) ? r['mv-store-recent'].map(String) : []);
         });
-      } catch { resolve([]); }
+      } catch {
+        resolve([]);
+      }
     });
   }
 
@@ -4746,9 +5171,9 @@
     if (!ids || !ids.length) return;
     const newIds = ids.map(String);
     try {
-      chrome.storage.local.get(['mv-store-recent'], r => {
+      chrome.storage.local.get(['mv-store-recent'], (r) => {
         const existing = Array.isArray(r['mv-store-recent']) ? r['mv-store-recent'].map(String) : [];
-        const merged = [...newIds, ...existing.filter(x => !newIds.includes(x))].slice(0, 12);
+        const merged = [...newIds, ...existing.filter((x) => !newIds.includes(x))].slice(0, 12);
         chrome.storage.local.set({ 'mv-store-recent': merged });
       });
     } catch {}
@@ -4758,19 +5183,21 @@
   // 单 key 存一个 config 对象;按字段 partial 合并,避免某次只改一个字段时把别的清掉。
   const MV_LISTING_CFG_KEY = 'mv-listing-config';
   function _getListingConfig() {
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       try {
-        chrome.storage.local.get([MV_LISTING_CFG_KEY], r => {
+        chrome.storage.local.get([MV_LISTING_CFG_KEY], (r) => {
           const c = r && r[MV_LISTING_CFG_KEY];
           resolve(c && typeof c === 'object' ? c : null);
         });
-      } catch { resolve(null); }
+      } catch {
+        resolve(null);
+      }
     });
   }
   function _saveListingConfig(partial) {
     if (!partial || typeof partial !== 'object') return;
     try {
-      chrome.storage.local.get([MV_LISTING_CFG_KEY], r => {
+      chrome.storage.local.get([MV_LISTING_CFG_KEY], (r) => {
         const prev = (r && typeof r[MV_LISTING_CFG_KEY] === 'object' && r[MV_LISTING_CFG_KEY]) || {};
         chrome.storage.local.set({ [MV_LISTING_CFG_KEY]: { ...prev, ...partial } });
       });
@@ -4786,7 +5213,9 @@
   function formatManualListingMultiplier(value) {
     const n = normalizeManualListingMultiplier(value);
     if (!n) return '';
-    return String(n).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+    return String(n)
+      .replace(/(\.\d*?)0+$/, '$1')
+      .replace(/\.$/, '');
   }
 
   function getManualListingVariantRows(panel) {
@@ -4809,7 +5238,7 @@
   function showInheritedMultiplierToast(ratio) {
     const label = formatManualListingMultiplier(ratio);
     if (!label) return;
-    document.querySelectorAll('.ozon-helper-mv-toast.ohm-inherited-multiplier-toast').forEach(t => t.remove());
+    document.querySelectorAll('.ozon-helper-mv-toast.ohm-inherited-multiplier-toast').forEach((t) => t.remove());
     const toast = document.createElement('div');
     toast.className = 'ozon-helper-mv-toast ohm-inherited-multiplier-toast';
 
@@ -4845,7 +5274,7 @@
     const stock = Number(cfg.defaultStock);
     if (Number.isFinite(stock) && stock >= 0) {
       panel._rememberedDefaultStock = stock;
-      panel.querySelectorAll('.ozon-helper-mv-stock').forEach(input => {
+      panel.querySelectorAll('.ozon-helper-mv-stock').forEach((input) => {
         input.value = String(stock);
       });
     }
@@ -4853,44 +5282,42 @@
     const appliedSalePrice = applyManualSalePriceStrategy(panel, cfg, opts);
     const appliedMinPrice = applyManualMinPriceStrategy(panel, cfg, opts);
 
-    const batchStrategy = cfg.lastBatchOldPriceStrategy?.type === 'multiplier'
-      ? cfg.lastBatchOldPriceStrategy
-      : null;
+    const batchStrategy = cfg.lastBatchOldPriceStrategy?.type === 'multiplier' ? cfg.lastBatchOldPriceStrategy : null;
     const strategy = batchStrategy || cfg.oldPriceStrategy;
-    const ratio = strategy?.type === 'multiplier'
-      ? normalizeManualListingMultiplier(strategy.value)
-      : null;
+    const ratio = strategy?.type === 'multiplier' ? normalizeManualListingMultiplier(strategy.value) : null;
     if (!ratio) return;
 
     panel._rememberedOldPriceMultiplier = ratio;
     const isBatchMultiplier = !!batchStrategy || cfg.oldPriceStrategy?.source === 'batch';
     panel._rememberedOldPriceSource = isBatchMultiplier ? 'batch' : 'remembered';
-    getManualListingVariantRows(panel).forEach(row => {
+    getManualListingVariantRows(panel).forEach((row) => {
       const oldInput = row.querySelector('.ozon-helper-mv-oldprice');
       if (!oldInput) return;
       const anchor = getManualListingOldPriceAnchor(row);
       if (anchor > 0) oldInput.value = (anchor * ratio).toFixed(2);
     });
-    if (!appliedSalePrice && !appliedMinPrice && opts.notifyPrice && isBatchMultiplier && !panel._inheritedMultiplierToastShown) {
+    if (
+      !appliedSalePrice &&
+      !appliedMinPrice &&
+      opts.notifyPrice &&
+      isBatchMultiplier &&
+      !panel._inheritedMultiplierToastShown
+    ) {
       panel._inheritedMultiplierToastShown = true;
       showInheritedMultiplierToast(ratio);
     }
   }
 
   function applyManualSalePriceStrategy(panel, cfg, opts = {}) {
-    const batchStrategy = cfg.lastBatchSalePriceStrategy?.type === 'multiplier'
-      ? cfg.lastBatchSalePriceStrategy
-      : null;
+    const batchStrategy = cfg.lastBatchSalePriceStrategy?.type === 'multiplier' ? cfg.lastBatchSalePriceStrategy : null;
     const strategy = batchStrategy || cfg.salePriceStrategy;
-    const ratio = strategy?.type === 'multiplier'
-      ? normalizeManualListingMultiplier(strategy.value)
-      : null;
+    const ratio = strategy?.type === 'multiplier' ? normalizeManualListingMultiplier(strategy.value) : null;
     if (!ratio) return false;
 
     panel._rememberedSalePriceMultiplier = ratio;
     const isBatchMultiplier = !!batchStrategy || cfg.salePriceStrategy?.source === 'batch';
     panel._rememberedSalePriceSource = isBatchMultiplier ? 'batch' : 'remembered';
-    getManualListingVariantRows(panel).forEach(row => {
+    getManualListingVariantRows(panel).forEach((row) => {
       const priceInput = row.querySelector('.ozon-helper-mv-price');
       if (!priceInput) return;
       const basePrice = getManualListingBasePrice(row);
@@ -4904,19 +5331,15 @@
   }
 
   function applyManualMinPriceStrategy(panel, cfg, opts = {}) {
-    const batchStrategy = cfg.lastBatchMinPriceStrategy?.type === 'multiplier'
-      ? cfg.lastBatchMinPriceStrategy
-      : null;
+    const batchStrategy = cfg.lastBatchMinPriceStrategy?.type === 'multiplier' ? cfg.lastBatchMinPriceStrategy : null;
     const strategy = batchStrategy || cfg.minPriceStrategy;
-    const ratio = strategy?.type === 'multiplier'
-      ? normalizeManualListingMultiplier(strategy.value)
-      : null;
+    const ratio = strategy?.type === 'multiplier' ? normalizeManualListingMultiplier(strategy.value) : null;
     if (!ratio) return false;
 
     panel._rememberedMinPriceMultiplier = ratio;
     const isBatchMultiplier = !!batchStrategy || cfg.minPriceStrategy?.source === 'batch';
     panel._rememberedMinPriceSource = isBatchMultiplier ? 'batch' : 'remembered';
-    getManualListingVariantRows(panel).forEach(row => {
+    getManualListingVariantRows(panel).forEach((row) => {
       const minInput = row.querySelector('.ozon-helper-mv-minprice');
       if (!minInput) return;
       const basePrice = getManualListingBasePrice(row);
@@ -4978,9 +5401,7 @@
   function captureManualListingConfig(panel) {
     const selectedStoreIds = getSelectedFollowSellStoreIds(panel);
     const selectedWarehouseByStore = {};
-    const whMap = panel._selectedWarehouseByStore instanceof Map
-      ? panel._selectedWarehouseByStore
-      : new Map();
+    const whMap = panel._selectedWarehouseByStore instanceof Map ? panel._selectedWarehouseByStore : new Map();
     whMap.forEach((warehouseId, storeId) => {
       if (storeId && warehouseId) selectedWarehouseByStore[String(storeId)] = String(warehouseId);
     });
@@ -4991,23 +5412,24 @@
     }
 
     const variantRows = getManualListingVariantRows(panel);
-    const checkedRows = variantRows
-      .filter(row => row.querySelector('.ozon-helper-mv-check')?.checked);
+    const checkedRows = variantRows.filter((row) => row.querySelector('.ozon-helper-mv-check')?.checked);
     const readUniformStock = (rows) => {
       const values = rows
-        .map(row => Number(row.querySelector('.ozon-helper-mv-stock')?.value))
-        .filter(n => Number.isFinite(n) && n >= 0);
-      return values.length > 0 && values.every(n => n === values[0]) ? values[0] : null;
+        .map((row) => Number(row.querySelector('.ozon-helper-mv-stock')?.value))
+        .filter((n) => Number.isFinite(n) && n >= 0);
+      return values.length > 0 && values.every((n) => n === values[0]) ? values[0] : null;
     };
     const rememberedBatchStock = Number(panel._lastBatchDefaultStock);
-    const defaultStock = Number.isFinite(rememberedBatchStock) && rememberedBatchStock >= 0
-      ? rememberedBatchStock
-      : (readUniformStock(checkedRows) ?? readUniformStock(variantRows));
+    const defaultStock =
+      Number.isFinite(rememberedBatchStock) && rememberedBatchStock >= 0
+        ? rememberedBatchStock
+        : (readUniformStock(checkedRows) ?? readUniformStock(variantRows));
     let salePriceStrategy = null;
     const batchSalePriceStrategy = panel._lastBatchSalePriceStrategy;
-    const batchSaleRatio = batchSalePriceStrategy?.type === 'multiplier'
-      ? normalizeManualListingMultiplier(batchSalePriceStrategy.value)
-      : null;
+    const batchSaleRatio =
+      batchSalePriceStrategy?.type === 'multiplier'
+        ? normalizeManualListingMultiplier(batchSalePriceStrategy.value)
+        : null;
     const rememberedSaleRatio = normalizeManualListingMultiplier(panel._rememberedSalePriceMultiplier);
     let lastBatchSalePriceStrategy = null;
     if (batchSaleRatio) {
@@ -5025,9 +5447,10 @@
 
     let minPriceStrategy = null;
     const batchMinPriceStrategy = panel._lastBatchMinPriceStrategy;
-    const batchMinRatio = batchMinPriceStrategy?.type === 'multiplier'
-      ? normalizeManualListingMultiplier(batchMinPriceStrategy.value)
-      : null;
+    const batchMinRatio =
+      batchMinPriceStrategy?.type === 'multiplier'
+        ? normalizeManualListingMultiplier(batchMinPriceStrategy.value)
+        : null;
     const rememberedMinRatio = normalizeManualListingMultiplier(panel._rememberedMinPriceMultiplier);
     let lastBatchMinPriceStrategy = null;
     if (batchMinRatio) {
@@ -5045,9 +5468,10 @@
 
     let oldPriceStrategy = null;
     const batchOldPriceStrategy = panel._lastBatchOldPriceStrategy;
-    const batchRatio = batchOldPriceStrategy?.type === 'multiplier'
-      ? normalizeManualListingMultiplier(batchOldPriceStrategy.value)
-      : null;
+    const batchRatio =
+      batchOldPriceStrategy?.type === 'multiplier'
+        ? normalizeManualListingMultiplier(batchOldPriceStrategy.value)
+        : null;
     const rememberedRatio = normalizeManualListingMultiplier(panel._rememberedOldPriceMultiplier);
     let lastBatchOldPriceStrategy = null;
     if (batchRatio) {
@@ -5107,12 +5531,14 @@
   function restoreManualSelectedStores(panel, cfg, storeList) {
     const savedStoreIds = Array.isArray(cfg?.selectedStoreIds)
       ? cfg.selectedStoreIds.map(String)
-      : (Array.isArray(cfg?.storeIds) ? cfg.storeIds.map(String) : null);
+      : Array.isArray(cfg?.storeIds)
+        ? cfg.storeIds.map(String)
+        : null;
     if (!savedStoreIds || !savedStoreIds.length) return;
-    const validSet = new Set((storeList || []).map(s => String(s.id || s.storeId || '')));
-    const toCheck = new Set(savedStoreIds.filter(id => validSet.has(id)));
+    const validSet = new Set((storeList || []).map((s) => String(s.id || s.storeId || '')));
+    const toCheck = new Set(savedStoreIds.filter((id) => validSet.has(id)));
     if (!toCheck.size) return;
-    panel.querySelectorAll('.ozon-helper-mv-store-cb').forEach(cb => {
+    panel.querySelectorAll('.ozon-helper-mv-store-cb').forEach((cb) => {
       cb.checked = toCheck.has(String(cb.value));
     });
     if (toCheck.size === 1) {
@@ -5155,8 +5581,11 @@
     if (typeof cfg.applyAiRewrite === 'boolean') panel._aiRewriteUserTouched = true;
 
     const wmSelect = panel.querySelector('[data-field="watermark-template-id"]');
-    if (wmSelect && typeof cfg.watermarkTemplateId === 'string' &&
-      [...wmSelect.options].some((o) => o.value === cfg.watermarkTemplateId)) {
+    if (
+      wmSelect &&
+      typeof cfg.watermarkTemplateId === 'string' &&
+      [...wmSelect.options].some((o) => o.value === cfg.watermarkTemplateId)
+    ) {
       wmSelect.value = cfg.watermarkTemplateId;
     }
     if (cfg.uploadMode === 'api' || cfg.uploadMode === 'portal') {
@@ -5173,7 +5602,11 @@
       const currentStoreId = panel._followSellStoreId ? String(panel._followSellStoreId) : '';
       const whSelect = panel.querySelector('[data-field="warehouse-id"]');
       const currentWarehouseId = currentStoreId ? panel._selectedWarehouseByStore.get(currentStoreId) : '';
-      if (whSelect && currentWarehouseId && [...whSelect.options].some((o) => String(o.value) === String(currentWarehouseId))) {
+      if (
+        whSelect &&
+        currentWarehouseId &&
+        [...whSelect.options].some((o) => String(o.value) === String(currentWarehouseId))
+      ) {
         whSelect.value = String(currentWarehouseId);
       }
     }
@@ -5221,26 +5654,28 @@
         scopeRow.innerHTML = '';
         return;
       }
-      const samples = Array.from(checked).slice(0, 4).map(cb => {
-        const id = cb.value;
-        const s = storeList.find(x => String(x.id || x.storeId) === String(id));
-        return s ? _buildStoreView(s) : { id, name: id, color: '#94a3b8', initials: '##', flag: '' };
-      });
+      const samples = Array.from(checked)
+        .slice(0, 4)
+        .map((cb) => {
+          const id = cb.value;
+          const s = storeList.find((x) => String(x.id || x.storeId) === String(id));
+          return s ? _buildStoreView(s) : { id, name: id, color: '#94a3b8', initials: '##', flag: '' };
+        });
       const overflow = Math.max(0, sel - 4);
       pill.innerHTML = `
         <div class="ohm-pill-count"><strong>${sel}</strong><em>/ ${total} \u5e97</em></div>
         <span class="ohm-pill-divider"></span>
         <div class="ohm-pill-stack">
-          ${samples.map(s => `<span class="ohm-pill-avatar" style="background:${s.color}" title="${_escHtml(s.name)}">${_escHtml(s.initials)}</span>`).join('')}
+          ${samples.map((s) => `<span class="ohm-pill-avatar" style="background:${s.color}" title="${_escHtml(s.name)}">${_escHtml(s.initials)}</span>`).join('')}
         </div>
-        <span class="ohm-pill-names">${samples.map(s => _escHtml(s.name)).join(' \u00b7 ')}${overflow ? ` <em>+${overflow} \u4e2a</em>` : ''}</span>
+        <span class="ohm-pill-names">${samples.map((s) => _escHtml(s.name)).join(' \u00b7 ')}${overflow ? ` <em>+${overflow} \u4e2a</em>` : ''}</span>
         <span class="ohm-pill-arrow">\u70b9\u51fb\u4fee\u6539 \u25be</span>`;
 
       // Detect if selection matches "\u6700\u8fd1\u7528\u8fc7" rule
-      _getRecentStoreIds().then(recentIds => {
+      _getRecentStoreIds().then((recentIds) => {
         const recentSet = new Set(recentIds);
-        const checkedIds = Array.from(checked).map(cb => String(cb.value));
-        const allRecent = checkedIds.length > 0 && checkedIds.every(id => recentSet.has(id));
+        const checkedIds = Array.from(checked).map((cb) => String(cb.value));
+        const allRecent = checkedIds.length > 0 && checkedIds.every((id) => recentSet.has(id));
         const ruleLabel = allRecent ? `\u6700\u8fd1\u7528\u8fc7 (${sel})` : `\u5df2\u9009 ${sel} \u5bb6`;
         scopeRow.style.display = '';
         scopeRow.innerHTML = `
@@ -5259,7 +5694,7 @@
     // Clear all stores when \u00d7 clicked on scope chip
     scopeRow.addEventListener('click', (e) => {
       if (e.target.closest('[data-action="clear-stores"]')) {
-        dropdown.querySelectorAll('.ozon-helper-mv-store-cb:checked').forEach(cb => {
+        dropdown.querySelectorAll('.ozon-helper-mv-store-cb:checked').forEach((cb) => {
           cb.checked = false;
           cb.dispatchEvent(new Event('change', { bubbles: true }));
         });
@@ -5273,13 +5708,13 @@
   }
 
   function _openStorePickerPopover(panel, storeList, hiddenDropdown, pill) {
-    document.querySelectorAll('.ozon-helper-mv-storepick-pop').forEach(p => p.remove());
+    document.querySelectorAll('.ozon-helper-mv-storepick-pop').forEach((p) => p.remove());
 
     const views = storeList.map(_buildStoreView);
 
-    _getRecentStoreIds().then(recentIds => {
+    _getRecentStoreIds().then((recentIds) => {
       const recentSet = new Set(recentIds);
-      views.forEach(v => v.lastUsed = recentSet.has(v.id));
+      views.forEach((v) => (v.lastUsed = recentSet.has(v.id)));
 
       let query = '';
       let activeTab = '\u5168\u90e8'; // \u5168\u90e8 / \u5df2\u9009 / \u6700\u8fd1 / Premium / \u672a\u7ed1\u6c34\u5370
@@ -5288,7 +5723,8 @@
       pop.className = 'ozon-helper-mv-storepick-pop';
       document.body.appendChild(pop);
 
-      const isChecked = (id) => !!hiddenDropdown.querySelector(`.ozon-helper-mv-store-cb[value="${_cssEscape(id)}"]`)?.checked;
+      const isChecked = (id) =>
+        !!hiddenDropdown.querySelector(`.ozon-helper-mv-store-cb[value="${_cssEscape(id)}"]`)?.checked;
       const setChecked = (id, val) => {
         const cb = hiddenDropdown.querySelector(`.ozon-helper-mv-store-cb[value="${_cssEscape(id)}"]`);
         if (cb && cb.checked !== val) {
@@ -5299,16 +5735,14 @@
 
       const filteredList = () => {
         let list = views.slice();
-        if (activeTab === '\u5df2\u9009') list = list.filter(v => isChecked(v.id));
-        else if (activeTab === '\u6700\u8fd1') list = list.filter(v => v.lastUsed);
-        else if (activeTab === 'Premium') list = list.filter(v => v.tier === 'Premium');
-        else if (activeTab === '\u672a\u7ed1\u6c34\u5370') list = list.filter(v => !v.bound);
+        if (activeTab === '\u5df2\u9009') list = list.filter((v) => isChecked(v.id));
+        else if (activeTab === '\u6700\u8fd1') list = list.filter((v) => v.lastUsed);
+        else if (activeTab === 'Premium') list = list.filter((v) => v.tier === 'Premium');
+        else if (activeTab === '\u672a\u7ed1\u6c34\u5370') list = list.filter((v) => !v.bound);
         if (query) {
           const q = query.toLowerCase();
-          list = list.filter(v =>
-            v.name.toLowerCase().includes(q) ||
-            v.code.includes(query) ||
-            v.id.toLowerCase().includes(q)
+          list = list.filter(
+            (v) => v.name.toLowerCase().includes(q) || v.code.includes(query) || v.id.toLowerCase().includes(q)
           );
         }
         return list;
@@ -5316,19 +5750,26 @@
 
       const renderPop = () => {
         const list = filteredList();
-        const groupOrder = ['\u4fc4\u7f57\u65af', '\u767d\u4fc4\u7f57\u65af', '\u54c8\u8428\u514b\u65af\u5766', '\u5176\u5b83'];
-        const grouped = groupOrder.map(g => ({ name: g, rows: list.filter(v => v.group === g) })).filter(g => g.rows.length);
+        const groupOrder = [
+          '\u4fc4\u7f57\u65af',
+          '\u767d\u4fc4\u7f57\u65af',
+          '\u54c8\u8428\u514b\u65af\u5766',
+          '\u5176\u5b83',
+        ];
+        const grouped = groupOrder
+          .map((g) => ({ name: g, rows: list.filter((v) => v.group === g) }))
+          .filter((g) => g.rows.length);
         const counts = {
           '\u5168\u90e8': views.length,
           '\u5df2\u9009': hiddenDropdown.querySelectorAll('.ozon-helper-mv-store-cb:checked').length,
-          '\u6700\u8fd1': views.filter(v => v.lastUsed).length,
-          'Premium': views.filter(v => v.tier === 'Premium').length,
-          '\u672a\u7ed1\u6c34\u5370': views.filter(v => !v.bound).length,
+          '\u6700\u8fd1': views.filter((v) => v.lastUsed).length,
+          Premium: views.filter((v) => v.tier === 'Premium').length,
+          '\u672a\u7ed1\u6c34\u5370': views.filter((v) => !v.bound).length,
         };
         const tabs = ['\u5168\u90e8', '\u5df2\u9009', '\u6700\u8fd1', 'Premium', '\u672a\u7ed1\u6c34\u5370'];
-        const allInListChecked = list.length > 0 && list.every(v => isChecked(v.id));
+        const allInListChecked = list.length > 0 && list.every((v) => isChecked(v.id));
         const totalSelected = counts['\u5df2\u9009'];
-        const boundCount = views.filter(v => v.bound).length;
+        const boundCount = views.filter((v) => v.bound).length;
 
         pop.innerHTML = `
           <div class="ohm-sp-search">
@@ -5345,41 +5786,50 @@
             <span class="ohm-sp-chip is-danger" data-quick="clear">\u6e05\u7a7a</span>
           </div>
           <div class="ohm-sp-tabs">
-            ${tabs.map(t => `<span class="ohm-sp-tab ${t===activeTab?'is-active':''}" data-tab="${t}">${t}<em>${counts[t]}</em></span>`).join('')}
+            ${tabs.map((t) => `<span class="ohm-sp-tab ${t === activeTab ? 'is-active' : ''}" data-tab="${t}">${t}<em>${counts[t]}</em></span>`).join('')}
           </div>
           <div class="ohm-sp-list-head">
             <label class="ohm-sp-allinscope">
-              <input type="checkbox" data-action="select-in-scope" ${allInListChecked?'checked':''}/>
+              <input type="checkbox" data-action="select-in-scope" ${allInListChecked ? 'checked' : ''}/>
               \u5168\u9009\u5f53\u524d\u5217\u8868\uff08<b>${list.length}</b> \u5bb6\uff09
             </label>
           </div>
           <div class="ohm-sp-list">
-            ${grouped.length === 0 ? '<div class="ohm-sp-empty">\u6ca1\u6709\u5339\u914d\u7684\u5e97\u94fa</div>' :
-              grouped.map(g => `
+            ${
+              grouped.length === 0
+                ? '<div class="ohm-sp-empty">\u6ca1\u6709\u5339\u914d\u7684\u5e97\u94fa</div>'
+                : grouped
+                    .map(
+                      (g) => `
                 <div class="ohm-sp-group">
                   <div class="ohm-sp-group-head">
                     <span class="ohm-sp-group-dot"></span>
                     <span class="ohm-sp-group-name">${g.name}</span>
-                    <span class="ohm-sp-group-count">${g.rows.filter(v => isChecked(v.id)).length} / ${g.rows.length}</span>
+                    <span class="ohm-sp-group-count">${g.rows.filter((v) => isChecked(v.id)).length} / ${g.rows.length}</span>
                     <span class="ohm-sp-group-action" data-group-all="${g.name}">\u672c\u7ec4\u5168\u9009</span>
                   </div>
-                  ${g.rows.map(v => {
-                    const checked = isChecked(v.id);
-                    return `
-                      <label class="ohm-sp-row ${checked?'is-checked':''}">
-                        <input type="checkbox" class="ohm-sp-row-cb" data-id="${_escHtml(v.id)}" ${checked?'checked':''}/>
+                  ${g.rows
+                    .map((v) => {
+                      const checked = isChecked(v.id);
+                      return `
+                      <label class="ohm-sp-row ${checked ? 'is-checked' : ''}">
+                        <input type="checkbox" class="ohm-sp-row-cb" data-id="${_escHtml(v.id)}" ${checked ? 'checked' : ''}/>
                         <span class="ohm-sp-avatar" style="background:${v.color}">${_escHtml(v.initials)}</span>
                         <span class="ohm-sp-info">
                           <span class="ohm-sp-name">${_escHtml(v.name)}${v.lastUsed ? ' <em class="ohm-sp-tag">\u6700\u8fd1</em>' : ''}</span>
                           <span class="ohm-sp-meta">${v.code}${v.flag ? ' \u00b7 ' + v.flag : ''}${v.tier === 'Premium' ? ' \u00b7 <b>Premium</b>' : ''}</span>
                         </span>
-                        <span class="ohm-sp-status ${v.bound?'is-ok':''}">${v.bound?'\ud83d\udca7 \u5df2\u7ed1':'\u2014 \u672a\u7ed1'}</span>
+                        <span class="ohm-sp-status ${v.bound ? 'is-ok' : ''}">${v.bound ? '\ud83d\udca7 \u5df2\u7ed1' : '\u2014 \u672a\u7ed1'}</span>
                         <span class="ohm-sp-only" data-only="${_escHtml(v.id)}">\u4ec5\u6b64\u5e97</span>
                       </label>
                     `;
-                  }).join('')}
+                    })
+                    .join('')}
                 </div>
-              `).join('')}
+              `
+                    )
+                    .join('')
+            }
           </div>
           <div class="ohm-sp-footer">
             <span class="ohm-sp-footer-count">\u5df2\u9009 <b>${totalSelected}</b> \u5bb6</span>
@@ -5399,45 +5849,57 @@
           const cursor = e.target.selectionStart;
           renderPop();
           const ip = pop.querySelector('.ohm-sp-input');
-          if (ip) { ip.focus(); ip.setSelectionRange(cursor, cursor); }
+          if (ip) {
+            ip.focus();
+            ip.setSelectionRange(cursor, cursor);
+          }
         }
       });
 
       pop.addEventListener('click', (e) => {
         const tab = e.target.closest('[data-tab]');
-        if (tab) { activeTab = tab.getAttribute('data-tab'); renderPop(); return; }
+        if (tab) {
+          activeTab = tab.getAttribute('data-tab');
+          renderPop();
+          return;
+        }
         const quick = e.target.closest('[data-quick]');
         if (quick) {
           const t = quick.getAttribute('data-quick');
-          if (t === 'all') views.forEach(v => setChecked(v.id, true));
-          else if (t === 'premium') views.forEach(v => setChecked(v.id, v.tier === 'Premium'));
-          else if (t === 'recent') views.forEach(v => setChecked(v.id, v.lastUsed));
-          else if (t === 'bound') views.forEach(v => setChecked(v.id, v.bound));
-          else if (t === 'invert') views.forEach(v => setChecked(v.id, !isChecked(v.id)));
-          else if (t === 'clear') views.forEach(v => setChecked(v.id, false));
+          if (t === 'all') views.forEach((v) => setChecked(v.id, true));
+          else if (t === 'premium') views.forEach((v) => setChecked(v.id, v.tier === 'Premium'));
+          else if (t === 'recent') views.forEach((v) => setChecked(v.id, v.lastUsed));
+          else if (t === 'bound') views.forEach((v) => setChecked(v.id, v.bound));
+          else if (t === 'invert') views.forEach((v) => setChecked(v.id, !isChecked(v.id)));
+          else if (t === 'clear') views.forEach((v) => setChecked(v.id, false));
           renderPop();
           return;
         }
         const grpAll = e.target.closest('[data-group-all]');
         if (grpAll) {
           const g = grpAll.getAttribute('data-group-all');
-          const allOn = views.filter(v => v.group === g).every(v => isChecked(v.id));
-          views.filter(v => v.group === g).forEach(v => setChecked(v.id, !allOn));
+          const allOn = views.filter((v) => v.group === g).every((v) => isChecked(v.id));
+          views.filter((v) => v.group === g).forEach((v) => setChecked(v.id, !allOn));
           renderPop();
           return;
         }
         const onlyBtn = e.target.closest('[data-only]');
         if (onlyBtn) {
           const id = onlyBtn.getAttribute('data-only');
-          views.forEach(v => setChecked(v.id, v.id === id));
+          views.forEach((v) => setChecked(v.id, v.id === id));
           renderPop();
           return;
         }
         const close = e.target.closest('[data-action="close"]');
-        if (close) { pop.remove(); return; }
+        if (close) {
+          pop.remove();
+          return;
+        }
         const apply = e.target.closest('[data-action="apply"]');
         if (apply) {
-          const ids = Array.from(hiddenDropdown.querySelectorAll('.ozon-helper-mv-store-cb:checked')).map(cb => cb.value);
+          const ids = Array.from(hiddenDropdown.querySelectorAll('.ozon-helper-mv-store-cb:checked')).map(
+            (cb) => cb.value
+          );
           _saveRecentStoreIds(ids);
           pop.remove();
           return;
@@ -5451,7 +5913,7 @@
           return;
         }
         if (e.target.matches?.('[data-action="select-in-scope"]')) {
-          filteredList().forEach(v => setChecked(v.id, e.target.checked));
+          filteredList().forEach((v) => setChecked(v.id, e.target.checked));
           renderPop();
           return;
         }
@@ -5507,11 +5969,7 @@
     try {
       const raw = window.localStorage?.getItem(JZ_MV_SORT_STORAGE_KEY);
       const parsed = raw ? JSON.parse(raw) : null;
-      if (
-        parsed &&
-        JZ_MV_SORTABLE_FIELDS.has(parsed.field) &&
-        (parsed.order === 'asc' || parsed.order === 'desc')
-      ) {
+      if (parsed && JZ_MV_SORTABLE_FIELDS.has(parsed.field) && (parsed.order === 'asc' || parsed.order === 'desc')) {
         return { field: parsed.field, order: parsed.order };
       }
     } catch {}
@@ -5522,7 +5980,7 @@
     try {
       window.localStorage?.setItem(
         JZ_MV_SORT_STORAGE_KEY,
-        JSON.stringify({ field: sortState.field, order: sortState.order }),
+        JSON.stringify({ field: sortState.field, order: sortState.order })
       );
     } catch {}
   }
@@ -5547,9 +6005,7 @@
       s = s.replace(/,/g, '');
     } else if (hasComma) {
       const parts = s.split(',');
-      s = parts.length === 2 && parts[1].length <= 2
-        ? `${parts[0]}.${parts[1]}`
-        : s.replace(/,/g, '');
+      s = parts.length === 2 && parts[1].length <= 2 ? `${parts[0]}.${parts[1]}` : s.replace(/,/g, '');
     }
     const n = Number(s);
     return Number.isFinite(n) ? n : null;
@@ -5641,21 +6097,22 @@
     }
 
     // Build variant rows
-    const variantRowsHtml = variants.map((v, i) => {
-      const checked = v.availability === 'inStock' || v.active ? 'checked' : '';
-      const imgHtml = v.coverImage
-        ? `<img src="${_escHtml(v.coverImage)}" referrerpolicy="no-referrer" class="ozon-helper-mv-thumb" data-oh-zoom="${_escHtml(v.coverImage)}" onerror="this.style.display='none'" />`
-        : '<span style="color:#ccc;">-</span>';
-      // Merge aspect values into variant cell (like competitor)
-      const aspectText = aspectKeys
-        .map(k => v.aspectValues[k] || '')
-        .filter(Boolean)
-        .join(' / ');
-      const defaultSellPrice = '';
-      const defaultOldPrice = v.price ? (v.price * 2).toFixed(2) : '';
-      const isActive = v.availability === 'inStock' || v.active;
-      const variantTitle = [v.title, aspectText].filter(Boolean).join(' / ');
-      return `<tr data-sku="${_escHtml(v.sku)}" data-active="${isActive ? '1' : '0'}">
+    const variantRowsHtml = variants
+      .map((v, i) => {
+        const checked = v.availability === 'inStock' || v.active ? 'checked' : '';
+        const imgHtml = v.coverImage
+          ? `<img src="${_escHtml(v.coverImage)}" referrerpolicy="no-referrer" class="ozon-helper-mv-thumb" data-oh-zoom="${_escHtml(v.coverImage)}" onerror="this.style.display='none'" />`
+          : '<span style="color:#ccc;">-</span>';
+        // Merge aspect values into variant cell (like competitor)
+        const aspectText = aspectKeys
+          .map((k) => v.aspectValues[k] || '')
+          .filter(Boolean)
+          .join(' / ');
+        const defaultSellPrice = '';
+        const defaultOldPrice = v.price ? (v.price * 2).toFixed(2) : '';
+        const isActive = v.availability === 'inStock' || v.active;
+        const variantTitle = [v.title, aspectText].filter(Boolean).join(' / ');
+        return `<tr data-sku="${_escHtml(v.sku)}" data-active="${isActive ? '1' : '0'}">
         <td><input type="checkbox" class="ozon-helper-mv-check" data-idx="${i}" ${checked} /></td>
         <td>${imgHtml}</td>
         <td class="ozon-helper-mv-variant-cell" title="${_escHtml(variantTitle)}">
@@ -5663,7 +6120,7 @@
         </td>
         <td><span class="ozon-helper-mv-sku">${_escHtml(v.sku)}</span></td>
         <td><input type="text" class="ozon-helper-mv-offerid" data-idx="${i}" placeholder="\u81ea\u52a8" style="width:140px;" /></td>
-        <td class="ozon-helper-mv-price-original" data-base-price="${v.price || 0}" data-source-currency="${v.priceCurrency || 'CNY'}" title="${v.priceRub ? `Ozon \u539f\u4ef7 \u20bd${window.formatNumber(v.priceRub)} \u00b7 \u4f30\u7b97 1CNY\u2248${_jzFxCnyToRub.toFixed(2)}RUB` : (v.priceCurrency && v.priceCurrency !== 'CNY' ? `Ozon \u539f\u5e01\u79cd ${v.priceCurrency},\u672a\u6362\u7b97` : '')}">${_JZ_CURRENCY_SYMBOLS[v.priceCurrency] || '\u00a5'}${v.price ? window.formatNumber(v.price, v.price % 1 === 0 ? 0 : 2) : '-'}<div class="ozon-helper-mv-price-converted" style="display:none;"></div></td>
+        <td class="ozon-helper-mv-price-original" data-base-price="${v.price || 0}" data-source-currency="${v.priceCurrency || 'CNY'}" title="${v.priceRub ? `Ozon \u539f\u4ef7 \u20bd${window.formatNumber(v.priceRub)} \u00b7 \u4f30\u7b97 1CNY\u2248${_jzFxCnyToRub.toFixed(2)}RUB` : v.priceCurrency && v.priceCurrency !== 'CNY' ? `Ozon \u539f\u5e01\u79cd ${v.priceCurrency},\u672a\u6362\u7b97` : ''}">${_JZ_CURRENCY_SYMBOLS[v.priceCurrency] || '\u00a5'}${v.price ? window.formatNumber(v.price, v.price % 1 === 0 ? 0 : 2) : '-'}<div class="ozon-helper-mv-price-converted" style="display:none;"></div></td>
         <td class="ozon-helper-mv-sales-cell"><span class="ozon-helper-mv-sales" data-idx="${i}" data-sku="${_escHtml(v.sku)}" style="color:#94a3b8;" title="近30天销量">…</span></td>
         <td class="ozon-helper-mv-follow-cell"><span class="ozon-helper-mv-follow" data-idx="${i}" data-sku="${_escHtml(v.sku)}" style="color:#94a3b8;" title="跟卖卖家数">…</span></td>
         <td><input type="number" min="0" step="0.01" class="ozon-helper-mv-price" data-idx="${i}" value="${defaultSellPrice}" style="width:80px;" /></td>
@@ -5688,7 +6145,8 @@
         </td>
         <td><button class="ozon-helper-mv-delete-btn" data-idx="${i}" title="\u5220\u9664">\u5220\u9664</button></td>
       </tr>`;
-    }).join('');
+      })
+      .join('');
 
     panel.innerHTML = `
       <div class="ozon-helper-mv-dialog ozon-helper-mv-dialog-v2">
@@ -5946,8 +6404,8 @@
             <div class="ozon-helper-mv-footer-stat">
               <span class="ozon-helper-mv-footer-meta">\u63d0\u4ea4\u540e\u5c06\u521b\u5efa</span>
               <span class="ozon-helper-mv-footer-count">
-                <strong data-field="footer-publish-count">${variants.filter(v => v.availability === 'inStock' || v.active).length}</strong>
-                <span class="ozon-helper-mv-footer-breakdown">\u6761\u4e0a\u67b6 \u00b7 <strong data-field="footer-selected-count">${variants.filter(v => v.availability === 'inStock' || v.active).length}</strong> \u53d8\u4f53 \u00d7 <strong data-field="footer-store-count">1</strong> \u5e97\u94fa</span>
+                <strong data-field="footer-publish-count">${variants.filter((v) => v.availability === 'inStock' || v.active).length}</strong>
+                <span class="ozon-helper-mv-footer-breakdown">\u6761\u4e0a\u67b6 \u00b7 <strong data-field="footer-selected-count">${variants.filter((v) => v.availability === 'inStock' || v.active).length}</strong> \u53d8\u4f53 \u00d7 <strong data-field="footer-store-count">1</strong> \u5e97\u94fa</span>
               </span>
               <span class="ozon-helper-mv-footer-hint">\u63d0\u4ea4\u540e\u5c06\u81ea\u52a8\u540c\u6b65\u56fe\u7247\u3001\u5c5e\u6027\u548c\u5e93\u5b58</span>
             </div>
@@ -5998,7 +6456,11 @@
           if (c.dataset.jzFilled !== '1') {
             c.dataset.sortValue = '';
             // \u7ea2\u8272\u300c\u9700\u767b\u5f55\u300d\u4e0e\u5361\u7247\u7ea2\u8272\u63d0\u793a\u6761\u7edf\u4e00\u53e3\u5f84(\u8bf7\u767b\u5f55\u5356\u5bb6\u4e2d\u5fc3\u540e\u67e5\u770b\u9500\u91cf)
-            setCell(c, '\u9700\u767b\u5f55', '\u8bf7\u767b\u5f55 Ozon \u5356\u5bb6\u540e\u53f0\u540e\u67e5\u770b\u9500\u91cf');
+            setCell(
+              c,
+              '\u9700\u767b\u5f55',
+              '\u8bf7\u767b\u5f55 Ozon \u5356\u5bb6\u540e\u53f0\u540e\u67e5\u770b\u9500\u91cf'
+            );
             c.style.color = '#cf1322';
           }
         });
@@ -6008,15 +6470,26 @@
         while (!aborted && cursor < cells.length) {
           const cell = cells[cursor++];
           const sku = cell.getAttribute('data-sku');
-          if (!sku) { cell.dataset.sortValue = ''; setCell(cell, '\u2014', '\u6682\u65e0\u9500\u91cf\u6570\u636e'); cell.dataset.jzFilled = '1'; continue; }
+          if (!sku) {
+            cell.dataset.sortValue = '';
+            setCell(cell, '\u2014', '\u6682\u65e0\u9500\u91cf\u6570\u636e');
+            cell.dataset.jzFilled = '1';
+            continue;
+          }
           let data = null;
           try {
-            data = await window.sendMessage('getMarketStats', { sku, period: window.jzGetSalesPeriod?.() || 'monthly' });
+            data = await window.sendMessage('getMarketStats', {
+              sku,
+              period: window.jzGetSalesPeriod?.() || 'monthly',
+            });
           } catch (e) {
             data = null;
           }
           if (aborted) return;
-          if (data && data.__needSellerLogin) { markAllNeedLogin(); return; }
+          if (data && data.__needSellerLogin) {
+            markAllNeedLogin();
+            return;
+          }
           if (data && data.soldCount != null) {
             cell.dataset.sortValue = String(Number(data.soldCount));
             setCell(cell, window.formatNumber(Number(data.soldCount)), `\u8fd130\u5929\u9500\u91cf ${data.soldCount}`);
@@ -6029,9 +6502,7 @@
         }
       };
       const CONCURRENCY = 4;
-      await Promise.all(
-        Array.from({ length: Math.min(CONCURRENCY, cells.length) }, () => worker()),
-      );
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, cells.length) }, () => worker()));
       jzRefreshMultiVariantSort(panel);
     })();
 
@@ -6042,7 +6513,10 @@
       const cells = Array.from(panel.querySelectorAll('.ozon-helper-mv-follow'));
       if (!cells.length) return;
       if (typeof window.jzFetchPublicFollowSellCount !== 'function') {
-        cells.forEach((c) => { c.dataset.sortValue = ''; c.textContent = '—'; });
+        cells.forEach((c) => {
+          c.dataset.sortValue = '';
+          c.textContent = '—';
+        });
         return;
       }
       let cursor = 0;
@@ -6050,7 +6524,11 @@
         while (cursor < cells.length) {
           const cell = cells[cursor++];
           const sku = cell.getAttribute('data-sku');
-          if (!sku) { cell.dataset.sortValue = ''; cell.textContent = '—'; continue; }
+          if (!sku) {
+            cell.dataset.sortValue = '';
+            cell.textContent = '—';
+            continue;
+          }
           let count = null;
           try {
             count = await window.jzFetchPublicFollowSellCount(sku);
@@ -6070,9 +6548,7 @@
         }
       };
       const FOLLOW_CONCURRENCY = 3;
-      await Promise.all(
-        Array.from({ length: Math.min(FOLLOW_CONCURRENCY, cells.length) }, () => worker()),
-      );
+      await Promise.all(Array.from({ length: Math.min(FOLLOW_CONCURRENCY, cells.length) }, () => worker()));
       jzRefreshMultiVariantSort(panel);
     })();
 
@@ -6090,8 +6566,10 @@
       try {
         const cfg = await _getListingConfig();
         if (cfg) {
-          if (typeof cfg.watermarkTemplateId === 'string' &&
-            [...wmSelect.options].some((o) => o.value === cfg.watermarkTemplateId)) {
+          if (
+            typeof cfg.watermarkTemplateId === 'string' &&
+            [...wmSelect.options].some((o) => o.value === cfg.watermarkTemplateId)
+          ) {
             wmSelect.value = cfg.watermarkTemplateId;
           }
           if (typeof cfg.applyWatermark === 'boolean' && wmCb) {
@@ -6153,52 +6631,54 @@
         el[prop] = next;
         return (el[prop] || 0) - before;
       };
-      mvBody.addEventListener('wheel', (e) => {
-        const tableWrap = panel.querySelector('.ozon-helper-mv-card-table .ozon-helper-mv-table-wrap');
-        const fromTable = tableWrap && tableWrap.contains(e.target);
-        let deltaY = normalizeWheelDelta(e.deltaY, e.deltaMode, mvBody.clientHeight);
-        let deltaX = normalizeWheelDelta(e.deltaX, e.deltaMode, tableWrap?.clientWidth || mvBody.clientWidth);
+      mvBody.addEventListener(
+        'wheel',
+        (e) => {
+          const tableWrap = panel.querySelector('.ozon-helper-mv-card-table .ozon-helper-mv-table-wrap');
+          const fromTable = tableWrap && tableWrap.contains(e.target);
+          let deltaY = normalizeWheelDelta(e.deltaY, e.deltaMode, mvBody.clientHeight);
+          let deltaX = normalizeWheelDelta(e.deltaX, e.deltaMode, tableWrap?.clientWidth || mvBody.clientWidth);
 
-        if (fromTable) {
-          let handled = false;
+          if (fromTable) {
+            let handled = false;
 
-          // Shift + wheel is the standard horizontal-scroll gesture for many
-          // non-precision mouse wheels. Treat it as horizontal table scrolling
-          // when the device does not already provide deltaX.
-          if (e.shiftKey && Math.abs(deltaX) <= WHEEL_EPS && Math.abs(deltaY) > WHEEL_EPS) {
-            deltaX = deltaY;
-            deltaY = 0;
-          }
-
-          if (Math.abs(deltaX) > WHEEL_EPS) {
-            scrollElementBy(tableWrap, deltaX, 'x');
-            handled = true;
-          }
-
-          if (Math.abs(deltaY) > WHEEL_EPS) {
-            const consumedByTable = scrollElementBy(tableWrap, deltaY, 'y');
-            const remainingY = deltaY - consumedByTable;
-            if (Math.abs(remainingY) > WHEEL_EPS) {
-              scrollElementBy(mvBody, remainingY, 'y');
+            // Shift + wheel is the standard horizontal-scroll gesture for many
+            // non-precision mouse wheels. Treat it as horizontal table scrolling
+            // when the device does not already provide deltaX.
+            if (e.shiftKey && Math.abs(deltaX) <= WHEEL_EPS && Math.abs(deltaY) > WHEEL_EPS) {
+              deltaX = deltaY;
+              deltaY = 0;
             }
-            handled = true;
-          }
 
-          if (handled) {
-            e.preventDefault();
+            if (Math.abs(deltaX) > WHEEL_EPS) {
+              scrollElementBy(tableWrap, deltaX, 'x');
+              handled = true;
+            }
+
+            if (Math.abs(deltaY) > WHEEL_EPS) {
+              const consumedByTable = scrollElementBy(tableWrap, deltaY, 'y');
+              const remainingY = deltaY - consumedByTable;
+              if (Math.abs(remainingY) > WHEEL_EPS) {
+                scrollElementBy(mvBody, remainingY, 'y');
+              }
+              handled = true;
+            }
+
+            if (handled) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
             e.stopPropagation();
+            return;
           }
-          e.stopPropagation();
-          return;
-        }
 
-        const atTop = mvBody.scrollTop <= WHEEL_EPS && deltaY < 0;
-        const atBottom =
-          mvBody.scrollTop + mvBody.clientHeight >= mvBody.scrollHeight - WHEEL_EPS &&
-          deltaY > 0;
-        if (atTop || atBottom) e.preventDefault();
-        e.stopPropagation();
-      }, { passive: false });
+          const atTop = mvBody.scrollTop <= WHEEL_EPS && deltaY < 0;
+          const atBottom = mvBody.scrollTop + mvBody.clientHeight >= mvBody.scrollHeight - WHEEL_EPS && deltaY > 0;
+          if (atTop || atBottom) e.preventDefault();
+          e.stopPropagation();
+        },
+        { passive: false }
+      );
     }
 
     // Close/cancel
@@ -6214,7 +6694,11 @@
       const genMergeModel = () => 'JZ-' + Date.now().toString(36).toUpperCase();
       // 只缓存「是否合并」偏好,不缓存型号名:每次开面板重新生成新型号名,
       // 避免不同竞品复用同一型号名(attr 9048)被 Ozon 错误并到一张卡。
-      const persistMerge = (on) => { try { chrome.storage.local.set({ followSellMergeEnabled: !!on }); } catch (e) {} };
+      const persistMerge = (on) => {
+        try {
+          chrome.storage.local.set({ followSellMergeEnabled: !!on });
+        } catch (e) {}
+      };
       mergeCb.checked = !!mergeInput.value.trim(); // 复用上次填的型号时回显勾选
       mergeCb.addEventListener('change', () => {
         if (mergeCb.checked) {
@@ -6227,7 +6711,10 @@
       });
       mergeInput.addEventListener('input', () => {
         const on = !!mergeInput.value.trim();
-        if (on !== mergeCb.checked) { mergeCb.checked = on; persistMerge(on); } // 勾选 ⟺ 有型号名
+        if (on !== mergeCb.checked) {
+          mergeCb.checked = on;
+          persistMerge(on);
+        } // 勾选 ⟺ 有型号名
       });
       // 恢复上次的「合并」偏好:之前勾过则自动勾上并生成新型号名(仅在留空时生成)。
       try {
@@ -6253,8 +6740,9 @@
     }
     // 有任一 AI 选项启用时展开 AI 卡 —— 恢复设置/水印异步加载后都复用它。
     panel._maybeExpandAiCard = () => {
-      const anyEnabled = ['apply-watermark', 'apply-poster', 'apply-ai-rewrite']
-        .some((f) => panel.querySelector(`[data-field="${f}"]`)?.checked);
+      const anyEnabled = ['apply-watermark', 'apply-poster', 'apply-ai-rewrite'].some(
+        (f) => panel.querySelector(`[data-field="${f}"]`)?.checked
+      );
       if (anyEnabled && aiSectionBody) {
         aiSectionBody.classList.remove('ozon-helper-mv-card-body-collapsed');
         if (aiChevron) aiChevron.style.transform = 'rotate(0)';
@@ -6322,9 +6810,10 @@
       // 多店扇出不再乘 store 数 —— 后端按 (tenantId, offerId, image-hash) cache，
       // 第一个店跑出来后，其余店都是 cache 命中、不重复扣点。
       const totalImages = variantCount * imagesPerVariant;
-      const pricePerImage = typeof panel._aiImagePrice === 'number' && panel._aiImagePrice > 0
-        ? panel._aiImagePrice
-        : POSTER_COST_PER_IMAGE_V2_DEFAULT;
+      const pricePerImage =
+        typeof panel._aiImagePrice === 'number' && panel._aiImagePrice > 0
+          ? panel._aiImagePrice
+          : POSTER_COST_PER_IMAGE_V2_DEFAULT;
       const totalCost = totalImages * pricePerImage;
       const pointLabel = panel._pointLabel || '极点';
 
@@ -6358,9 +6847,7 @@
       balanceRow.style.display = '';
       balanceRow.classList.toggle('insufficient', !sufficient);
       balanceIcon.textContent = sufficient ? '✓' : '⚠';
-      balanceText.textContent = `余额：${balance.toLocaleString()} ${pointLabel} · ${
-        sufficient ? '充足' : '不足'
-      }`;
+      balanceText.textContent = `余额：${balance.toLocaleString()} ${pointLabel} · ${sufficient ? '充足' : '不足'}`;
       if (sufficient) {
         rechargeLink.style.display = 'none';
       } else {
@@ -6445,11 +6932,12 @@
     // 暴露给 loadStoresForPanel:恢复多店选择是程序化勾选(不触发 change),需手动刷新页脚计数。
     panel._updateFooterCount = updateFooterCount;
     panel.addEventListener('change', (e) => {
-      if (e.target instanceof HTMLInputElement && (
-        e.target.classList?.contains('ozon-helper-mv-check') ||
-        e.target.classList?.contains('ozon-helper-mv-store-cb') ||
-        e.target.classList?.contains('ozon-helper-mv-store-select-all')
-      )) {
+      if (
+        e.target instanceof HTMLInputElement &&
+        (e.target.classList?.contains('ozon-helper-mv-check') ||
+          e.target.classList?.contains('ozon-helper-mv-store-cb') ||
+          e.target.classList?.contains('ozon-helper-mv-store-select-all'))
+      ) {
         updateFooterCount();
       }
     });
@@ -6459,14 +6947,16 @@
     // Confirm → validate prices then batch submit
     panel.querySelector('[data-action="confirm"]').addEventListener('click', () => {
       // Clear previous validation states
-      panel.querySelectorAll('.ozon-helper-mv-price-error').forEach(el => el.classList.remove('ozon-helper-mv-price-error'));
+      panel
+        .querySelectorAll('.ozon-helper-mv-price-error')
+        .forEach((el) => el.classList.remove('ozon-helper-mv-price-error'));
       const oldError = panel.querySelector('.ozon-helper-mv-error-notice');
       if (oldError) oldError.remove();
 
       // Validate: checked rows must have sell price and old price
       const checkedRows = panel.querySelectorAll('.ozon-helper-mv-check[data-idx]:checked');
       let hasError = false;
-      checkedRows.forEach(cb => {
+      checkedRows.forEach((cb) => {
         const idx = cb.dataset.idx;
         const sellInput = panel.querySelector(`.ozon-helper-mv-price[data-idx="${idx}"]`);
         const oldInput = panel.querySelector(`.ozon-helper-mv-oldprice[data-idx="${idx}"]`);
@@ -6485,7 +6975,8 @@
       if (hasError) {
         const notice = document.createElement('div');
         notice.className = 'ozon-helper-mv-error-notice';
-        notice.innerHTML = '<span class="ozon-helper-mv-error-icon">!</span><span>\u8bf7\u4e3a\u5df2\u52fe\u9009\u7684\u53d8\u4f53\u8bbe\u7f6e\u552e\u4ef7\u548c\u5212\u7ebf\u4ef7\uff0c\u672a\u586b\u5199\u7684\u5df2\u6807\u7ea2\u663e\u793a\u3002</span>';
+        notice.innerHTML =
+          '<span class="ozon-helper-mv-error-icon">!</span><span>\u8bf7\u4e3a\u5df2\u52fe\u9009\u7684\u53d8\u4f53\u8bbe\u7f6e\u552e\u4ef7\u548c\u5212\u7ebf\u4ef7\uff0c\u672a\u586b\u5199\u7684\u5df2\u6807\u7ea2\u663e\u793a\u3002</span>';
         const body = panel.querySelector('.ozon-helper-mv-body');
         const wrap = body?.querySelector('.ozon-helper-mv-table-wrap');
         if (wrap) wrap.insertAdjacentElement('beforebegin', notice);
@@ -6572,7 +7063,7 @@
           const selectAll = panel.querySelector('[data-action="select-all"]');
           if (selectAll) {
             const checks = panel.querySelectorAll('.ozon-helper-mv-check[data-idx]');
-            const checkedCount = Array.from(checks).filter(c => c.checked).length;
+            const checkedCount = Array.from(checks).filter((c) => c.checked).length;
             selectAll.checked = checks.length > 0 && checkedCount === checks.length;
           }
         }
@@ -6593,7 +7084,9 @@
       // Persist on change
       showAllToggle.addEventListener('change', () => {
         applyShowAll();
-        try { chrome.storage.local.set({ [STORAGE_KEY]: showAllToggle.checked }); } catch {}
+        try {
+          chrome.storage.local.set({ [STORAGE_KEY]: showAllToggle.checked });
+        } catch {}
       });
     }
 
@@ -6628,12 +7121,14 @@
 
     // Select-all checkbox
     panel.querySelector('[data-action="select-all"]').addEventListener('change', (e) => {
-      panel.querySelectorAll('.ozon-helper-mv-check[data-idx]').forEach(cb => { cb.checked = e.target.checked; });
+      panel.querySelectorAll('.ozon-helper-mv-check[data-idx]').forEach((cb) => {
+        cb.checked = e.target.checked;
+      });
     });
 
     // ===== Stage C: enhanced batch popover (scope chips + presets + preview + toast) =====
     function showAppliedToast(title, sub, undoFn) {
-      document.querySelectorAll('.ozon-helper-mv-toast').forEach(t => t.remove());
+      document.querySelectorAll('.ozon-helper-mv-toast').forEach((t) => t.remove());
       const toast = document.createElement('div');
       toast.className = 'ozon-helper-mv-toast';
       toast.innerHTML = `
@@ -6647,7 +7142,12 @@
       `;
       document.body.appendChild(toast);
       const closeT = () => toast.remove();
-      toast.querySelector('[data-action="undo"]').addEventListener('click', () => { try { undoFn(); } catch {} closeT(); });
+      toast.querySelector('[data-action="undo"]').addEventListener('click', () => {
+        try {
+          undoFn();
+        } catch {}
+        closeT();
+      });
       toast.querySelector('[data-action="close"]').addEventListener('click', closeT);
       const timer = setTimeout(closeT, 6000);
       toast.addEventListener('mouseenter', () => clearTimeout(timer));
@@ -6660,20 +7160,18 @@
       //   baseField?, columnLabel, decimals=2, presetMultipliers,
       //   currencyAware?, unitLabel?
       // }
-      document.querySelectorAll('.ozon-helper-mv-popover').forEach(p => p.remove());
+      document.querySelectorAll('.ozon-helper-mv-popover').forEach((p) => p.remove());
 
-      const inputs = (opts.inputs && opts.inputs.length) ? opts.inputs : [{ field: opts.targetField }];
+      const inputs = opts.inputs && opts.inputs.length ? opts.inputs : [{ field: opts.targetField }];
       const isMulti = inputs.length > 1;
 
       const SYMBOLS = { CNY: '¥', USD: '$', EUR: '€', RUB: '₽' };
-      const sym = opts.currencyAware
-        ? (SYMBOLS[panel.querySelector('[data-field="currency"]')?.value] || '¥')
-        : '';
+      const sym = opts.currencyAware ? SYMBOLS[panel.querySelector('[data-field="currency"]')?.value] || '¥' : '';
       const decimals = opts.decimals != null ? opts.decimals : 2;
       const unitLabel = opts.unitLabel || '';
 
       let scope = 'all';
-      let mode = (opts.baseField && !isMulti) ? 'multiplier' : 'fixed';
+      let mode = opts.baseField && !isMulti ? 'multiplier' : 'fixed';
       let vals = inputs.map(() => '');
 
       const totalRows = () => panel.querySelectorAll('.ozon-helper-mv-check[data-idx]').length;
@@ -6681,18 +7179,20 @@
 
       const targetIndices = () => {
         const cbs = Array.from(panel.querySelectorAll('.ozon-helper-mv-check[data-idx]'));
-        return cbs.map((cb) => {
-          const idx = parseInt(cb.dataset.idx, 10);
-          if (scope === 'checked' && !cb.checked) return -1;
-          if (scope === 'empty') {
-            const allEmpty = inputs.every(inp => {
-              const e = panel.querySelector(`.ozon-helper-${inp.field}[data-idx="${idx}"]`);
-              return !e || e.value === '';
-            });
-            if (!allEmpty) return -1;
-          }
-          return idx;
-        }).filter(i => i >= 0);
+        return cbs
+          .map((cb) => {
+            const idx = parseInt(cb.dataset.idx, 10);
+            if (scope === 'checked' && !cb.checked) return -1;
+            if (scope === 'empty') {
+              const allEmpty = inputs.every((inp) => {
+                const e = panel.querySelector(`.ozon-helper-${inp.field}[data-idx="${idx}"]`);
+                return !e || e.value === '';
+              });
+              if (!allEmpty) return -1;
+            }
+            return idx;
+          })
+          .filter((i) => i >= 0);
       };
 
       const popover = document.createElement('div');
@@ -6700,16 +7200,16 @@
       document.body.appendChild(popover);
 
       const previewRows = () => {
-        const parsed = vals.map(v => parseFloat(v));
-        const anyValid = parsed.some(v => !isNaN(v) && v > 0);
+        const parsed = vals.map((v) => parseFloat(v));
+        const anyValid = parsed.some((v) => !isNaN(v) && v > 0);
         if (!anyValid) return [];
         const idxs = targetIndices().slice(0, 3);
         if (!isMulti) {
           const val = parsed[0];
           if (isNaN(val) || val <= 0) return [];
-          return idxs.map(i => {
+          return idxs.map((i) => {
             const v = variants[i];
-            const baseVal = opts.baseField ? (parseFloat(v?.[opts.baseField]) || 0) : 0;
+            const baseVal = opts.baseField ? parseFloat(v?.[opts.baseField]) || 0 : 0;
             const newVal = mode === 'multiplier' ? baseVal * val : val;
             const fromTxt = baseVal ? `${sym}${baseVal.toFixed(decimals)}` : '—';
             const toTxt = !isNaN(newVal) ? `${sym}${newVal.toFixed(decimals)}${unitLabel ? ' ' + unitLabel : ''}` : '?';
@@ -6717,9 +7217,9 @@
           });
         }
         // multi (dim) preview
-        return idxs.map(i => {
+        return idxs.map((i) => {
           const v = variants[i];
-          const fromVals = inputs.map(inp => {
+          const fromVals = inputs.map((inp) => {
             const e = panel.querySelector(`.ozon-helper-${inp.field}[data-idx="${i}"]`);
             return e?.value || '—';
           });
@@ -6741,46 +7241,59 @@
       const renderPop = () => {
         const targets = targetIndices();
         const preview = previewRows();
-        const presetsHtml = (mode === 'multiplier' && opts.presetMultipliers?.length)
-          ? `<div class="ohm-bp-presets">${opts.presetMultipliers.map(p => `<span class="ohm-bp-preset ${vals[0] === String(p) ? 'is-active' : ''}" data-preset="${p}">×${p}</span>`).join('')}</div>`
-          : '';
-        const tabsHtml = (opts.baseField && !isMulti) ? `
+        const presetsHtml =
+          mode === 'multiplier' && opts.presetMultipliers?.length
+            ? `<div class="ohm-bp-presets">${opts.presetMultipliers.map((p) => `<span class="ohm-bp-preset ${vals[0] === String(p) ? 'is-active' : ''}" data-preset="${p}">×${p}</span>`).join('')}</div>`
+            : '';
+        const tabsHtml =
+          opts.baseField && !isMulti
+            ? `
           <div class="ohm-bp-tabs">
             <span class="ohm-bp-tab ${mode === 'fixed' ? 'is-active' : ''}" data-mode="fixed">同值</span>
             <span class="ohm-bp-tab ${mode === 'multiplier' ? 'is-active' : ''}" data-mode="multiplier">按 ${opts.baseField === 'price' ? '原售价' : '基价'} 倍数</span>
-          </div>` : '';
-        const previewHtml = preview.length ? `
+          </div>`
+            : '';
+        const previewHtml = preview.length
+          ? `
           <div class="ohm-bp-preview">
             <div class="ohm-bp-preview-head">预览（前 ${preview.length} 行）</div>
-            ${preview.map(p => `
+            ${preview
+              .map(
+                (p) => `
               <div class="ohm-bp-preview-row">
                 <span class="ohm-bp-preview-dot" style="background:${p.color}"></span>
                 <span class="ohm-bp-preview-name">${_escHtml(p.name)}</span>
                 <span class="ohm-bp-preview-from">${p.from}</span>
                 <span class="ohm-bp-preview-arrow">→</span>
                 <span class="ohm-bp-preview-to">${p.to}</span>
-              </div>`).join('')}
-          </div>` : '';
+              </div>`
+              )
+              .join('')}
+          </div>`
+          : '';
 
         // Input row
         let inputRowHtml;
         if (isMulti) {
           const placeholders = ['长', '宽', '高', '深'];
-          const innerInputs = inputs.map((inp, k) => `
+          const innerInputs = inputs.map(
+            (inp, k) => `
             <input type="text" inputmode="${decimals === 0 ? 'numeric' : 'decimal'}" pattern="[0-9]*\\.?[0-9]*" class="ozon-helper-mv-popover-input ohm-bp-input" data-i="${k}" placeholder="${inp.placeholder || placeholders[k] || ''}" value="${_escHtml(vals[k])}" />
-          `);
+          `
+          );
           inputRowHtml = `
             <div class="ohm-bp-input-row ohm-bp-input-row-multi">
-              ${innerInputs.map((html, k) => k === 0 ? html : `<span class="ohm-bp-multi-sep">×</span>${html}`).join('')}
+              ${innerInputs.map((html, k) => (k === 0 ? html : `<span class="ohm-bp-multi-sep">×</span>${html}`)).join('')}
               ${unitLabel ? `<span class="ohm-bp-suffix">${unitLabel}</span>` : ''}
             </div>`;
         } else {
-          const placeholder = mode === 'multiplier'
-            ? '例如 1.5'
-            : (decimals === 0 ? '例如 10' : '例如 9.50');
-          const fixedSuffix = mode === 'multiplier'
-            ? '<span class="ohm-bp-suffix">倍</span>'
-            : (unitLabel ? `<span class="ohm-bp-suffix">${unitLabel}</span>` : '');
+          const placeholder = mode === 'multiplier' ? '例如 1.5' : decimals === 0 ? '例如 10' : '例如 9.50';
+          const fixedSuffix =
+            mode === 'multiplier'
+              ? '<span class="ohm-bp-suffix">倍</span>'
+              : unitLabel
+                ? `<span class="ohm-bp-suffix">${unitLabel}</span>`
+                : '';
           inputRowHtml = `
             <div class="ohm-bp-input-row">
               ${mode === 'fixed' && sym ? `<span class="ohm-bp-prefix">${sym}</span>` : ''}
@@ -6824,36 +7337,55 @@
           const cursor = e.target.selectionStart;
           renderPop();
           const ip = popover.querySelector(`.ohm-bp-input[data-i="${i}"]`);
-          if (ip) { ip.focus(); ip.setSelectionRange(cursor, cursor); }
+          if (ip) {
+            ip.focus();
+            ip.setSelectionRange(cursor, cursor);
+          }
         }
       });
 
       popover.addEventListener('click', (e) => {
         const tab = e.target.closest('[data-mode]');
-        if (tab) { mode = tab.getAttribute('data-mode'); vals = inputs.map(() => ''); renderPop(); return; }
+        if (tab) {
+          mode = tab.getAttribute('data-mode');
+          vals = inputs.map(() => '');
+          renderPop();
+          return;
+        }
         const sc = e.target.closest('[data-scope]');
-        if (sc) { scope = sc.getAttribute('data-scope'); renderPop(); return; }
+        if (sc) {
+          scope = sc.getAttribute('data-scope');
+          renderPop();
+          return;
+        }
         const preset = e.target.closest('[data-preset]');
-        if (preset) { vals[0] = preset.getAttribute('data-preset'); renderPop(); return; }
+        if (preset) {
+          vals[0] = preset.getAttribute('data-preset');
+          renderPop();
+          return;
+        }
         if (e.target.closest('[data-action="close"]') || e.target.closest('[data-action="cancel"]')) {
           popover.remove();
           return;
         }
         if (e.target.closest('[data-action="apply"]')) {
-          const parsed = vals.map(v => parseFloat(v));
-          if (parsed.every(v => isNaN(v) || v <= 0)) return;
+          const parsed = vals.map((v) => parseFloat(v));
+          if (parsed.every((v) => isNaN(v) || v <= 0)) return;
           const targets = targetIndices();
-          if (!targets.length) { popover.remove(); return; }
+          if (!targets.length) {
+            popover.remove();
+            return;
+          }
           // capture previous values for undo (per-input × per-row)
           const prev = [];
-          targets.forEach(i => {
-            inputs.forEach(inp => {
+          targets.forEach((i) => {
+            inputs.forEach((inp) => {
               const el = panel.querySelector(`.ozon-helper-${inp.field}[data-idx="${i}"]`);
               if (el) prev.push({ idx: i, field: inp.field, value: el.value });
             });
           });
           // apply
-          targets.forEach(i => {
+          targets.forEach((i) => {
             inputs.forEach((inp, k) => {
               const v = parsed[k];
               if (isNaN(v) || v <= 0) return;
@@ -6874,14 +7406,14 @@
           rememberManualBatchListingDefaults(panel, opts, mode, parsed);
           popover.remove();
           // toast
-          const fmtMulti = parsed.map(v => isNaN(v) ? '—' : v.toFixed(decimals)).join(' × ');
+          const fmtMulti = parsed.map((v) => (isNaN(v) ? '—' : v.toFixed(decimals))).join(' × ');
           const sub = isMulti
             ? `${targets.length} 个变体 · ${fmtMulti}${unitLabel ? ' ' + unitLabel : ''}`
-            : (mode === 'multiplier'
+            : mode === 'multiplier'
               ? `${targets.length} 个变体 · × ${parsed[0]}`
-              : `${targets.length} 个变体 · ${sym}${parsed[0].toFixed(decimals)}${unitLabel ? ' ' + unitLabel : ''}`);
+              : `${targets.length} 个变体 · ${sym}${parsed[0].toFixed(decimals)}${unitLabel ? ' ' + unitLabel : ''}`;
           showAppliedToast(`已批量更新「${opts.columnLabel}」`, sub, () => {
-            prev.forEach(p => {
+            prev.forEach((p) => {
               const el = panel.querySelector(`.ozon-helper-${p.field}[data-idx="${p.idx}"]`);
               if (el) el.value = p.value;
             });
@@ -6905,7 +7437,7 @@
     // Helper: create batch-setting Popover (shared by sell price and old price)
     function createBatchPopover(targetTh, onApply, defaultMultiplier) {
       // Close any existing popovers
-      document.querySelectorAll('.ozon-helper-mv-popover').forEach(p => p.remove());
+      document.querySelectorAll('.ozon-helper-mv-popover').forEach((p) => p.remove());
 
       const popover = document.createElement('div');
       popover.className = 'ozon-helper-mv-popover';
@@ -6939,26 +7471,30 @@
       if (curSelect) {
         const SYMBOLS = { CNY: '\u00a5', USD: '$', EUR: '\u20ac', RUB: '\u20bd' };
         const sym = SYMBOLS[curSelect.value] || '\u00a5';
-        popover.querySelectorAll('.ozon-helper-mv-currency-symbol').forEach(el => { el.textContent = sym; });
+        popover.querySelectorAll('.ozon-helper-mv-currency-symbol').forEach((el) => {
+          el.textContent = sym;
+        });
       }
 
       // Set default multiplier value if provided
       if (defaultMultiplier) {
-        const multInput = popover.querySelector('.ozon-helper-mv-popover-input-row[data-mode="multiplier"] .ozon-helper-mv-popover-input');
+        const multInput = popover.querySelector(
+          '.ozon-helper-mv-popover-input-row[data-mode="multiplier"] .ozon-helper-mv-popover-input'
+        );
         if (multInput) multInput.value = defaultMultiplier;
       }
 
       // Position fixed relative to the trigger element
       document.body.appendChild(popover);
       const rect = targetTh.getBoundingClientRect();
-      popover.style.top = (rect.bottom + 4) + 'px';
-      popover.style.left = (rect.left + rect.width / 2 - popover.offsetWidth / 2) + 'px';
+      popover.style.top = rect.bottom + 4 + 'px';
+      popover.style.left = rect.left + rect.width / 2 - popover.offsetWidth / 2 + 'px';
 
       // Radio toggle
-      popover.querySelectorAll('input[name="batch-mode"]').forEach(radio => {
+      popover.querySelectorAll('input[name="batch-mode"]').forEach((radio) => {
         radio.addEventListener('change', () => {
           const mode = radio.value;
-          popover.querySelectorAll('.ozon-helper-mv-popover-input-row').forEach(row => {
+          popover.querySelectorAll('.ozon-helper-mv-popover-input-row').forEach((row) => {
             row.style.display = row.dataset.mode === mode ? '' : 'none';
           });
         });
@@ -7114,12 +7650,12 @@
         const prevRate = CNY_RATES[prevCurrency] || 1;
 
         // Update sell price prefix symbols
-        panel.querySelectorAll('.ozon-helper-mv-price-prefix').forEach(el => {
+        panel.querySelectorAll('.ozon-helper-mv-price-prefix').forEach((el) => {
           el.textContent = symbol;
         });
 
         // Update original price: always show ¥ base price, add conversion line if non-CNY
-        panel.querySelectorAll('.ozon-helper-mv-price-original').forEach(cell => {
+        panel.querySelectorAll('.ozon-helper-mv-price-original').forEach((cell) => {
           const basePrice = parseFloat(cell.dataset.basePrice) || 0;
           const convertedDiv = cell.querySelector('.ozon-helper-mv-price-converted');
           if (cur === 'CNY') {
@@ -7134,11 +7670,11 @@
         // Convert sell price and old price input values
         if (prevCurrency !== cur) {
           const conversionFactor = rate / prevRate;
-          panel.querySelectorAll('.ozon-helper-mv-price').forEach(input => {
+          panel.querySelectorAll('.ozon-helper-mv-price').forEach((input) => {
             const val = parseFloat(input.value);
             if (val > 0) input.value = (val * conversionFactor).toFixed(2);
           });
-          panel.querySelectorAll('.ozon-helper-mv-oldprice').forEach(input => {
+          panel.querySelectorAll('.ozon-helper-mv-oldprice').forEach((input) => {
             const val = parseFloat(input.value);
             if (val > 0) input.value = (val * conversionFactor).toFixed(2);
           });
@@ -7178,7 +7714,9 @@
       // input 失焦或回车时存储新前缀
       const savePrefix = () => {
         const v = (prefixInput.value || '').trim();
-        try { chrome.storage.local.set({ [OFFER_ID_PREFIX_KEY]: v || 'jz-' }); } catch {}
+        try {
+          chrome.storage.local.set({ [OFFER_ID_PREFIX_KEY]: v || 'jz-' });
+        } catch {}
       };
       prefixInput.addEventListener('blur', savePrefix);
       prefixInput.addEventListener('keydown', (e) => {
@@ -7275,9 +7813,10 @@
           });
           const filled = _applySourcePlaceholders(sourceMap);
           if (badge) {
-            badge.textContent = filled > 0
-              ? `${variants.length} 个变体 · ${filled} 含源属性`
-              : (origBadgeText || `${variants.length} 个变体`);
+            badge.textContent =
+              filled > 0
+                ? `${variants.length} 个变体 · ${filled} 含源属性`
+                : origBadgeText || `${variants.length} 个变体`;
           }
         } catch (e) {
           console.warn('[panel] collectBySkus 拉源属性失败:', e?.message || e);
@@ -7353,7 +7892,9 @@
       // AI 试用提示
       const aiTrialHint = s.usage.aiEditTrialExpired
         ? `<span class="ozon-helper-mv-membership-item full"><span class="label">AI 大模型改图</span><span class="value">试用已过期</span></span>`
-        : (s.caps.aiEditTrialOnly ? `<span class="ozon-helper-mv-membership-item warn"><span class="label">AI 大模型改图</span><span class="value">24h 试用中</span></span>` : '');
+        : s.caps.aiEditTrialOnly
+          ? `<span class="ozon-helper-mv-membership-item warn"><span class="label">AI 大模型改图</span><span class="value">24h 试用中</span></span>`
+          : '';
 
       const showUpgrade = s.level === 'free' || s.daysLeft <= 7;
       const upgradeBtn = showUpgrade
@@ -7456,10 +7997,10 @@
       const response = await fetch(`${auth.backendUrl || window.API_BASE_URL}/ozon/templates?pageSize=100`, {
         signal: AbortSignal.timeout(15000),
         headers: {
-          'Authorization': `Bearer ${auth.token}`,
+          Authorization: `Bearer ${auth.token}`,
           'Content-Type': 'application/json',
           ...(auth.storeId ? { 'x-ozon-store-id': auth.storeId } : {}),
-        }
+        },
       });
 
       if (!response.ok) throw new Error(`\u52a0\u8f7d\u6a21\u677f\u5217\u8868\u5931\u8d25 (${response.status})`);
@@ -7488,12 +8029,15 @@
       }
 
       // Build template selection modal (reuse same UI pattern as single-product)
-      const templateHtml = templates.map(t =>
-        `<div class="ozon-helper-template-item" data-template-id="${t.id}">
+      const templateHtml = templates
+        .map(
+          (t) =>
+            `<div class="ozon-helper-template-item" data-template-id="${t.id}">
           <div class="ozon-helper-template-name">${_escHtml(t.name)}</div>
           <div class="ozon-helper-template-desc">${_escHtml(t.description || '')}</div>
         </div>`
-      ).join('');
+        )
+        .join('');
 
       const modal = document.createElement('div');
       modal.className = 'ozon-helper-modal';
@@ -7518,14 +8062,14 @@
       const searchInput = modal.querySelector('.ozon-helper-template-search');
       searchInput.addEventListener('input', () => {
         const q = searchInput.value.trim().toLowerCase();
-        modal.querySelectorAll('.ozon-helper-template-item').forEach(item => {
+        modal.querySelectorAll('.ozon-helper-template-item').forEach((item) => {
           const name = item.querySelector('.ozon-helper-template-name')?.textContent.toLowerCase() || '';
           const desc = item.querySelector('.ozon-helper-template-desc')?.textContent.toLowerCase() || '';
-          item.style.display = (name.includes(q) || desc.includes(q)) ? '' : 'none';
+          item.style.display = name.includes(q) || desc.includes(q) ? '' : 'none';
         });
       });
 
-      modal.querySelectorAll('.ozon-helper-template-item').forEach(item => {
+      modal.querySelectorAll('.ozon-helper-template-item').forEach((item) => {
         item.addEventListener('click', async () => {
           const templateId = item.dataset.templateId;
           const templateName = item.querySelector('.ozon-helper-template-name')?.textContent || '';
@@ -7533,10 +8077,11 @@
           await applyTemplateToMVPanel(panel, variants, templateId, templateName, auth);
         });
       });
-
     } catch (error) {
       const isTimeout = error?.name === 'TimeoutError' || error?.name === 'AbortError';
-      const msg = isTimeout ? '\u8bf7\u6c42\u8d85\u65f6\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5' : (error?.message || '\u672a\u77e5\u9519\u8bef');
+      const msg = isTimeout
+        ? '\u8bf7\u6c42\u8d85\u65f6\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5'
+        : error?.message || '\u672a\u77e5\u9519\u8bef';
       showMvStatus(statusDiv, 'error', `\u52a0\u8f7d\u6a21\u677f\u5931\u8d25: ${msg}`);
     } finally {
       if (loadBtn) {
@@ -7561,11 +8106,11 @@
         method: 'POST',
         signal: AbortSignal.timeout(15000),
         headers: {
-          'Authorization': `Bearer ${auth.token}`,
+          Authorization: `Bearer ${auth.token}`,
           'Content-Type': 'application/json',
           ...(auth.storeId ? { 'x-ozon-store-id': auth.storeId } : {}),
         },
-        body: JSON.stringify({ productData: product, variables })
+        body: JSON.stringify({ productData: product, variables }),
       });
 
       if (!response.ok) throw new Error(`\u5e94\u7528\u6a21\u677f\u5931\u8d25 (${response.status})`);
@@ -7586,7 +8131,7 @@
 
       // Stock → batch fill all variant stock inputs
       if (ts.stock !== undefined && ts.stock !== null) {
-        panel.querySelectorAll('.ozon-helper-mv-stock').forEach(input => {
+        panel.querySelectorAll('.ozon-helper-mv-stock').forEach((input) => {
           input.value = ts.stock;
         });
       }
@@ -7596,7 +8141,7 @@
         const whSelect = panel.querySelector('[data-field="warehouse-id"]');
         if (whSelect) {
           // 若选项里有该 id 直接选中；否则 leave 用户当前选择不变（避免静默失效）
-          if (Array.from(whSelect.options).some(o => o.value === String(ts.warehouseId))) {
+          if (Array.from(whSelect.options).some((o) => o.value === String(ts.warehouseId))) {
             whSelect.value = String(ts.warehouseId);
           }
         }
@@ -7625,9 +8170,9 @@
       // Image arrangement → map template values to MV panel values
       if (ts.imageArrangement) {
         const imageOrderMap = {
-          'keep': 'keep',
-          'main_fixed': 'shuffle_keep_first',
-          'all_random': 'shuffle',
+          keep: 'keep',
+          main_fixed: 'shuffle_keep_first',
+          all_random: 'shuffle',
         };
         const mapped = imageOrderMap[ts.imageArrangement] || ts.imageArrangement;
         const imgSelect = panel.querySelector('[data-field="image-order"]');
@@ -7642,8 +8187,9 @@
 
       // Remove keywords from variant names
       if (ts.removeKeywords && ts.removeKeywords.length > 0) {
-        panel.querySelectorAll('[data-field="variant-tbody"] tr[data-sku]').forEach(row => {
-          const nameEl = row.querySelector('.ozon-helper-mv-variant-title-text') ||
+        panel.querySelectorAll('[data-field="variant-tbody"] tr[data-sku]').forEach((row) => {
+          const nameEl =
+            row.querySelector('.ozon-helper-mv-variant-title-text') ||
             row.querySelector('.ozon-helper-mv-variant-name');
           if (nameEl) {
             let text = nameEl.textContent || '';
@@ -7659,8 +8205,9 @@
 
       // Title suffix → append to each variant name
       if (ts.titleSuffix) {
-        panel.querySelectorAll('[data-field="variant-tbody"] tr[data-sku]').forEach(row => {
-          const nameEl = row.querySelector('.ozon-helper-mv-variant-title-text') ||
+        panel.querySelectorAll('[data-field="variant-tbody"] tr[data-sku]').forEach((row) => {
+          const nameEl =
+            row.querySelector('.ozon-helper-mv-variant-title-text') ||
             row.querySelector('.ozon-helper-mv-variant-name');
           if (nameEl) {
             const current = nameEl.textContent || '';
@@ -7685,11 +8232,14 @@
       if (clearEl) clearEl.style.display = '';
 
       showMvStatus(statusDiv, 'success', `\u6a21\u677f\u300c${templateName}\u300d\u5df2\u5e94\u7528`);
-      setTimeout(() => { statusDiv.style.display = 'none'; }, 2000);
-
+      setTimeout(() => {
+        statusDiv.style.display = 'none';
+      }, 2000);
     } catch (error) {
       const isTimeout = error?.name === 'TimeoutError' || error?.name === 'AbortError';
-      const msg = isTimeout ? '\u8bf7\u6c42\u8d85\u65f6\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5' : (error?.message || '\u672a\u77e5\u9519\u8bef');
+      const msg = isTimeout
+        ? '\u8bf7\u6c42\u8d85\u65f6\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5'
+        : error?.message || '\u672a\u77e5\u9519\u8bef';
       showMvStatus(statusDiv, 'error', `\u5e94\u7528\u6a21\u677f\u5931\u8d25: ${msg}`);
     }
   }
@@ -7701,7 +8251,10 @@
     // Hide template name and clear button
     const nameEl = panel.querySelector('[data-field="mv-template-name"]');
     const clearEl = panel.querySelector('[data-action="mv-clear-template"]');
-    if (nameEl) { nameEl.textContent = ''; nameEl.style.display = 'none'; }
+    if (nameEl) {
+      nameEl.textContent = '';
+      nameEl.style.display = 'none';
+    }
     if (clearEl) clearEl.style.display = 'none';
 
     // Reset UI to defaults
@@ -7718,7 +8271,9 @@
     if (wmCheckbox) wmCheckbox.checked = false;
 
     // Reset stocks to 10
-    panel.querySelectorAll('.ozon-helper-mv-stock').forEach(input => { input.value = '10'; });
+    panel.querySelectorAll('.ozon-helper-mv-stock').forEach((input) => {
+      input.value = '10';
+    });
 
     // Regenerate default offer IDs (same logic as auto-offerid)
     const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
@@ -7731,7 +8286,9 @@
 
     const statusDiv = panel.querySelector('[data-field="mv-status"]');
     showMvStatus(statusDiv, 'success', '\u6a21\u677f\u5df2\u6e05\u9664');
-    setTimeout(() => { statusDiv.style.display = 'none'; }, 1500);
+    setTimeout(() => {
+      statusDiv.style.display = 'none';
+    }, 1500);
   }
 
   // Helper: escape string for use in RegExp
@@ -7748,17 +8305,23 @@
       // next to the spinner so long-running batches (variant prefetch,
       // gallery fetch) can be aborted by the user instead of forcing a
       // page reload.
-      const cancelHtml = opts && typeof opts.onCancel === 'function'
-        ? '<button type="button" class="ozon-helper-mv-cancel-btn" data-action="mv-cancel">取消</button>'
-        : '';
-      statusDiv.innerHTML =
-        `<span class="ozon-helper-mv-spinner"></span><span>${_escHtml(message)}</span>${cancelHtml}`;
+      const cancelHtml =
+        opts && typeof opts.onCancel === 'function'
+          ? '<button type="button" class="ozon-helper-mv-cancel-btn" data-action="mv-cancel">取消</button>'
+          : '';
+      statusDiv.innerHTML = `<span class="ozon-helper-mv-spinner"></span><span>${_escHtml(message)}</span>${cancelHtml}`;
       if (opts && typeof opts.onCancel === 'function') {
         const btn = statusDiv.querySelector('[data-action="mv-cancel"]');
         if (btn) {
-          btn.addEventListener('click', () => {
-            try { opts.onCancel(); } catch {}
-          }, { once: true });
+          btn.addEventListener(
+            'click',
+            () => {
+              try {
+                opts.onCancel();
+              } catch {}
+            },
+            { once: true }
+          );
         }
       }
     } else {
@@ -7838,878 +8401,944 @@
     // 面板 DOM 导致的 insertBefore NotFoundError)都不再静默卡死 UI,而是给出
     // 错误提示并解锁确认按钮供重试。
     try {
-    // Collect selected stores (multi-select checkboxes)
-    const selectedStoreIds = [];
-    panel.querySelectorAll('.ozon-helper-mv-store-cb:checked').forEach(cb => {
-      if (cb.value) selectedStoreIds.push(cb.value);
-    });
-    if (selectedStoreIds.length === 0) {
-      showMvStatus(statusDiv, 'error', '\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u4e2a\u5e97\u94fa');
-      return;
-    }
-    const brandChoice = panel.querySelector('[data-field="brand"]')?.value || 'no_brand';
-    const imageOrder = panel.querySelector('[data-field="image-order"]')?.value || 'keep';
-    const mergeModel = (panel.querySelector('[data-field="merge-model"]')?.value || '').trim();
-    const currencyCode = panel.querySelector('[data-field="currency"]')?.value || 'CNY';
-    const applyWatermark = panel.querySelector('[data-field="apply-watermark"]')?.checked || false;
-    const watermarkSelectValue = panel.querySelector('[data-field="watermark-template-id"]')?.value || '';
-    const watermarkTemplateId =
-      watermarkSelectValue === window.JZWatermarkTemplates?.STORE_BOUND_VALUE
-        ? ''
-        : watermarkSelectValue;
-    if (applyWatermark && watermarkSelectValue === window.JZWatermarkTemplates?.STORE_BOUND_VALUE) {
-      const storeList = Array.isArray(panel._followSellStoreList) ? panel._followSellStoreList : [];
-      const storeById = new Map(
-        storeList.map(s => [String(s.id || s.storeId || ''), s])
-      );
-      const missing = selectedStoreIds.filter(id => !storeById.get(String(id))?.watermarkTemplateId);
-      if (missing.length > 0) {
-        const names = missing.map(id => {
-          const s = storeById.get(String(id));
-          return s?.label || s?.companyName || s?.legalName || `\u5e97\u94fa ${id}`;
-        }).join('\u3001');
-        showMvStatus(statusDiv, 'error', `\u5e97\u94fa\u300c${names}\u300d\u672a\u7ed1\u5b9a\u6c34\u5370\u6a21\u677f\u3002\u8bf7\u6539\u9009\u5177\u4f53\u6a21\u677f\uff0c\u6216\u5148\u53bb\u5e97\u94fa\u7ba1\u7406\u7ed1\u5b9a\u6c34\u5370\u3002`);
-        return;
-      }
-    }
-    const applyPoster = panel.querySelector('[data-field="apply-poster"]')?.checked || false;
-    // 只改主图:仅在 applyPoster 启用时有意义,关闭海报时这个标志透传也不影响 backend
-    // (product-import.worker.ts:316 primaryOnly = Boolean(payload.posterPrimaryOnly),
-    // applyPoster=false 时 ai-poster 子任务不会跑)。
-    const posterPrimaryOnly = panel.querySelector('[data-field="poster-primary-only"]')?.checked || false;
-    const applyAiRewrite = panel.querySelector('[data-field="apply-ai-rewrite"]')?.checked || false;
-    const ts = panel._templateSettings || {};
-    // V1 \u65e7\u7248 ai-image (applyAiImage / aiImageScene / aiImagePrompt) \u5df2\u4e0b\u7ebf\uff0c\u4ec5 V2 \u6d77\u62a5
-
-    // Gather checked variants from remaining DOM rows (some may have been deleted)
-    const checkedRows = [];
-    panel.querySelectorAll('[data-field="variant-tbody"] tr').forEach(row => {
-      const cb = row.querySelector('.ozon-helper-mv-check');
-      if (cb && cb.checked) {
-        const idx = parseInt(cb.dataset.idx);
-        checkedRows.push({ row, idx, variant: variants[idx] });
-      }
-    });
-    // Also build checkedIndices for backward compatibility with prefetch logic
-    const checkedIndices = checkedRows.map(r => r.idx);
-    if (checkedRows.length === 0) {
-      showMvStatus(statusDiv, 'error', '\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u4e2a\u53d8\u4f53');
-      return;
-    }
-
-    // Validate prices and stock. Ozon caps price at ~9 digits; reject NaN /
-    // negative / unreasonably large values up front instead of letting them
-    // round-trip and fail mid-import after the rate-limit slot is consumed.
-    const PRICE_MAX = 9_999_999;
-    const STOCK_MAX = 1_000_000;
-    for (const { row, idx, variant } of checkedRows) {
-      const priceInput = row.querySelector('.ozon-helper-mv-price');
-      const price = window.normalizePrice(priceInput?.value);
-      if (!Number.isFinite(price) || price <= 0 || price > PRICE_MAX) {
-        showMvStatus(statusDiv, 'error', `\u53d8\u4f53 ${idx + 1} (SKU: ${variant.sku}) \u4ef7\u683c\u65e0\u6548\uff08\u5e94\u4e3a\u6b63\u6570\u4e14\u4e0d\u8d85\u8fc7 ${PRICE_MAX}\uff09`);
-        return;
-      }
-      const oldRaw = row.querySelector('.ozon-helper-mv-oldprice')?.value;
-      if (oldRaw && oldRaw.trim() !== '') {
-        const oldPrice = parseFloat(oldRaw);
-        if (!Number.isFinite(oldPrice) || oldPrice < 0 || oldPrice > PRICE_MAX) {
-          showMvStatus(statusDiv, 'error', `\u53d8\u4f53 ${idx + 1} \u5212\u7ebf\u4ef7\u65e0\u6548`);
-          return;
-        }
-      }
-      const stockRaw = row.querySelector('.ozon-helper-mv-stock')?.value;
-      if (stockRaw !== undefined && stockRaw !== '') {
-        const stockNum = Number(stockRaw);
-        if (!Number.isInteger(stockNum) || stockNum < 0 || stockNum > STOCK_MAX) {
-          showMvStatus(statusDiv, 'error', `\u53d8\u4f53 ${idx + 1} \u5e93\u5b58\u65e0\u6548\uff08\u5fc5\u987b\u4e3a 0~${STOCK_MAX} \u7684\u6574\u6570\uff09`);
-          return;
-        }
-      }
-    }
-
-    // 会员上品配额预校验:达上限直接拦截 + 引导升级,不打后端(不消耗限流槽/不留 FAILED 记录)。
-    // 拉取失败(网络/未登录)时静默放行,让后端兜底,避免误拦。
-    try {
-      const memRes = await window.sendMessage('getMembershipSummary', {});
-      if (memRes && memRes.ok && memRes.data) {
-        const quota = evaluateListingQuota(memRes.data, checkedRows.length);
-        if (quota.blocked) {
-          showMvUpgradeBlock(statusDiv, quota.message);
-          return;
-        }
-      }
-    } catch (_) { /* 静默放行 */ }
-
-    // Lock UI to prevent duplicate submissions
-    const _confirmBtn = panel.querySelector('[data-action="confirm"]');
-    const _dialog = panel.querySelector('.ozon-helper-mv-dialog');
-    if (_confirmBtn) { _confirmBtn.disabled = true; _confirmBtn.textContent = '上架中...'; }
-    if (_dialog) _dialog.classList.add('is-submitting');
-    const _unlockUI = () => {
-      if (_confirmBtn) { _confirmBtn.disabled = false; _confirmBtn.textContent = '一键上架至OZON'; }
-      if (_dialog) _dialog.classList.remove('is-submitting');
-    };
-
-    // 提前抓页面数据(给 galleryMap 用),原 const breadcrumbs/pageProduct 后面会再用一次,删除重复声明
-    const breadcrumbs = extractBreadcrumbs();
-    const pageProduct = extractProductData();
-
-    // Pre-fetch _sourceVariant for all checked variants.
-    // search-variant-model 的 name 是模糊搜索, 返回卖家自己目录里 attr 9024(Артикул) 含输入 SKU 的产品。
-    // 注意: items[].variant_id 是卖家内部 id, ≠ 输入 SKU。必须按输入 SKU 作 key, 用 9024 前缀做精确匹配。
-    const sourceMap = new Map();
-    const galleryMap = new Map(); // sku → 完整图册(从 entrypoint-api 抓)
-    const richContentMap = new Map(); // sku → 源富内容 11254 JSON(从 composer widgetStates 抽,跟卖卡保留富内容)
-    const matched = [];
-    const skipped = [];
-
-    // 当前页变体的图册直接复用 pageProduct.images (已经是完整的页面图册)
-    if (pageProduct.sku && (pageProduct.images || []).length > 0) {
-      galleryMap.set(String(pageProduct.sku), [...pageProduct.images]);
-    }
-    // 锚点(当前页)图册复用了 pageProduct.images、不走下面的 fetchVariantGallery 预取循环,
-    // 故单独补抓一次它的 composer 富内容(其余被选变体在预取循环里顺带抽,同一次 fetch)。
-    if (pageProduct.sku) {
-      try {
-        const anchorSrc = await fetchVariantGallery(window.location.pathname);
-        if (anchorSrc && anchorSrc.richContent) {
-          richContentMap.set(String(pageProduct.sku), anchorSrc.richContent);
-        }
-      } catch {}
-    }
-
-    // 在 items 里挑出 attr 9024 以输入 SKU 为前缀的那个
-    // 多个匹配时, 优先选 "可变特性 collection 最少" 的 (单色变体, 不是多色 umbrella);
-    // 避免历史 follow-sell 留下的 multi-variant 整合 item 把多色一并塞进单一变体。
-    const pickItemForSku = (items, sku) => {
-      if (!Array.isArray(items) || items.length === 0) return null;
-      const matching = items.filter(it =>
-        (it.attributes || []).some(a =>
-          String(a.key) === '9024' &&
-          (String(a.value || '').startsWith(sku + '-') || String(a.value || '') === sku)
-        )
-      );
-      if (matching.length === 0) return items[0] || null;
-      // 评分: 把可变特性 (颜色 10096 / 颜色变体 22814 / 材料 8219) collection 大小相加,数字越小越「纯净」
-      const score = (it) => {
-        let s = 0;
-        for (const key of ['10096','22814','8219']) {
-          const a = (it.attributes || []).find(x => String(x.key) === key);
-          if (Array.isArray(a?.collection)) s += a.collection.length;
-          else if (a?.value) s += 1;
-        }
-        return s;
-      };
-      matching.sort((a, b) => score(a) - score(b));
-      return matching[0];
-    };
-
-    // Gate check: prefetch first variant to validate Seller Portal access
-    const firstSku = String(variants[checkedIndices[0]].sku);
-    const firstResp = await prefetchSourceVariantWithItems(firstSku, statusDiv, showMvStatus);
-    if (firstResp === false) {
-      _unlockUI();
-      return;
-    }
-    const firstPicked = pickItemForSku(firstResp.items, firstSku);
-    if (firstPicked) {
-      sourceMap.set(firstSku, firstPicked);
-      matched.push(firstSku);
-    } else {
-      skipped.push(firstSku);
-      console.log(`[MultiFollowSell] First variant ${firstSku} not found in Seller Portal, proceeding with category fallback`);
-    }
-
-    // 剩余变体: 每个 SKU 单独发一次 API
-    // AbortController scoped to the prefetch + gallery loop so the user can
-    // bail out via the "取消" button when matching dozens of variants is
-    // taking long (or when seller portal is being slow). When aborted we
-    // unwind to the calling form intact — sourceMap/matched/skipped reflect
-    // whatever we finished before cancellation.
-    const prefetchAbort = new AbortController();
-    let prefetchCancelled = false;
-    const onCancelPrefetch = () => {
-      prefetchCancelled = true;
-      try { prefetchAbort.abort(); } catch {}
-    };
-
-    const BATCH_SIZE = 3;
-    const remainingIndices = checkedIndices.slice(1);
-
-    for (let b = 0; b < remainingIndices.length; b += BATCH_SIZE) {
-      if (prefetchCancelled) break;
-      const batch = remainingIndices.slice(b, b + BATCH_SIZE);
-      const completed = matched.length + skipped.length;
-      showMvStatus(
-        statusDiv,
-        'loading',
-        `正在匹配变体 (${completed}/${checkedIndices.length})...`,
-        { onCancel: onCancelPrefetch }
-      );
-
-      const promises = batch.map(async (idx) => {
-        if (prefetchCancelled) return;
-        const sku = String(variants[idx].sku);
-        try {
-          const resp = await window.sendMessage('searchVariants', { sku });
-          let items = resp?.items || resp?.data?.items || [];
-          let picked = pickItemForSku(items, sku);
-          // sv 没命中 → 降级 /api/v1/search 全平台 API（陌生 SKU 跟卖必走）
-          if (!picked) {
-            try {
-              const searchResp = await window.sendMessage('searchProductBySku', { sku });
-              const globalItems = searchResp?.items || searchResp?.data?.items || [];
-              if (globalItems.length > 0) {
-                items = globalItems;
-                picked = pickItemForSku(items, sku) || globalItems[0];
-              }
-            } catch (e2) {
-              console.warn(`[MultiFollowSell] /search fallback failed for SKU ${sku}:`, e2?.message);
-            }
-          }
-          if (picked) {
-            sourceMap.set(sku, picked);
-            matched.push(sku);
-          } else {
-            skipped.push(sku);
-          }
-        } catch (e) {
-          console.warn(`[MultiFollowSell] Pre-fetch failed for SKU ${sku}:`, e.message);
-          skipped.push(sku);
-        }
+      // Collect selected stores (multi-select checkboxes)
+      const selectedStoreIds = [];
+      panel.querySelectorAll('.ozon-helper-mv-store-cb:checked').forEach((cb) => {
+        if (cb.value) selectedStoreIds.push(cb.value);
       });
-      await Promise.allSettled(promises);
-    }
-
-    if (prefetchCancelled) {
-      showMvStatus(statusDiv, 'error', '已取消变体匹配，可调整选择后重试');
-      _unlockUI();
-      return;
-    }
-
-    console.log(`[MultiFollowSell] Variant match: ${matched.length}/${checkedIndices.length}`, { matched, skipped });
-    for (const [sku, sv] of sourceMap.entries()) {
-      const cat = (sv.categories || []).map(c => c.name || c.title).join(' → ');
-      const t = (sv.attributes || []).find(a => String(a.key) === '8229')?.value;
-      console.log(`[MultiFollowSell]   ${sku} → desc_cat_id=${sv.description_category_id}, type=${t || 'N/A'}, cat=${cat}`);
-    }
-
-    // 并行抓取每个变体的完整图册 (除了已用 pageProduct.images 的当前页变体)
-    // 这是为了让每个变体跟卖时图片和原先 Ozon 上发布的一致
-    const galleryFetchTargets = checkedRows
-      .filter(({ variant: v }) => v.link && !galleryMap.has(String(v.sku)))
-      .map(({ variant: v }) => v);
-    if (galleryFetchTargets.length > 0) {
-      let galleryDone = 0;
-      let galleryCancelled = false;
-      const onCancelGallery = () => { galleryCancelled = true; };
-      showMvStatus(
-        statusDiv,
-        'loading',
-        `正在拉取变体图册 (0/${galleryFetchTargets.length})...`,
-        { onCancel: onCancelGallery }
-      );
-      const GALLERY_BATCH = 4;
-      for (let g = 0; g < galleryFetchTargets.length; g += GALLERY_BATCH) {
-        if (galleryCancelled) break;
-        const sub = galleryFetchTargets.slice(g, g + GALLERY_BATCH);
-        await Promise.allSettled(sub.map(async (v) => {
-          if (galleryCancelled) return;
-          const { images: imgs, richContent } = await fetchVariantGallery(v.link);
-          if (imgs.length > 0) {
-            galleryMap.set(String(v.sku), imgs);
-          }
-          if (richContent) {
-            richContentMap.set(String(v.sku), richContent);
-          }
-          galleryDone += 1;
-        }));
-        if (!galleryCancelled) {
+      if (selectedStoreIds.length === 0) {
+        showMvStatus(statusDiv, 'error', '\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u4e2a\u5e97\u94fa');
+        return;
+      }
+      const brandChoice = panel.querySelector('[data-field="brand"]')?.value || 'no_brand';
+      const imageOrder = panel.querySelector('[data-field="image-order"]')?.value || 'keep';
+      const mergeModel = (panel.querySelector('[data-field="merge-model"]')?.value || '').trim();
+      const currencyCode = panel.querySelector('[data-field="currency"]')?.value || 'CNY';
+      const applyWatermark = panel.querySelector('[data-field="apply-watermark"]')?.checked || false;
+      const watermarkSelectValue = panel.querySelector('[data-field="watermark-template-id"]')?.value || '';
+      const watermarkTemplateId =
+        watermarkSelectValue === window.JZWatermarkTemplates?.STORE_BOUND_VALUE ? '' : watermarkSelectValue;
+      if (applyWatermark && watermarkSelectValue === window.JZWatermarkTemplates?.STORE_BOUND_VALUE) {
+        const storeList = Array.isArray(panel._followSellStoreList) ? panel._followSellStoreList : [];
+        const storeById = new Map(storeList.map((s) => [String(s.id || s.storeId || ''), s]));
+        const missing = selectedStoreIds.filter((id) => !storeById.get(String(id))?.watermarkTemplateId);
+        if (missing.length > 0) {
+          const names = missing
+            .map((id) => {
+              const s = storeById.get(String(id));
+              return s?.label || s?.companyName || s?.legalName || `\u5e97\u94fa ${id}`;
+            })
+            .join('\u3001');
           showMvStatus(
             statusDiv,
-            'loading',
-            `正在拉取变体图册 (${Math.min(galleryDone, galleryFetchTargets.length)}/${galleryFetchTargets.length})...`,
-            { onCancel: onCancelGallery }
+            'error',
+            `\u5e97\u94fa\u300c${names}\u300d\u672a\u7ed1\u5b9a\u6c34\u5370\u6a21\u677f\u3002\u8bf7\u6539\u9009\u5177\u4f53\u6a21\u677f\uff0c\u6216\u5148\u53bb\u5e97\u94fa\u7ba1\u7406\u7ed1\u5b9a\u6c34\u5370\u3002`
           );
+          return;
         }
       }
-      const fetched = Array.from(galleryMap.keys()).filter(sku => sku !== String(pageProduct.sku || '')).length;
-      console.log(`[MultiFollowSell] Gallery fetched for ${fetched}/${galleryFetchTargets.length} variants${galleryCancelled ? ' (cancelled)' : ''}`);
-      if (galleryCancelled) {
-        showMvStatus(statusDiv, 'error', `已取消图册抓取（已抓 ${fetched} 个），将继续提交。如要重试请关闭面板`);
-        // Continue to submit — user may still want partial gallery data.
-      }
-    }
+      const applyPoster = panel.querySelector('[data-field="apply-poster"]')?.checked || false;
+      // 只改主图:仅在 applyPoster 启用时有意义,关闭海报时这个标志透传也不影响 backend
+      // (product-import.worker.ts:316 primaryOnly = Boolean(payload.posterPrimaryOnly),
+      // applyPoster=false 时 ai-poster 子任务不会跑)。
+      const posterPrimaryOnly = panel.querySelector('[data-field="poster-primary-only"]')?.checked || false;
+      const applyAiRewrite = panel.querySelector('[data-field="apply-ai-rewrite"]')?.checked || false;
+      const ts = panel._templateSettings || {};
+      // V1 \u65e7\u7248 ai-image (applyAiImage / aiImageScene / aiImagePrompt) \u5df2\u4e0b\u7ebf\uff0c\u4ec5 V2 \u6d77\u62a5
 
-    // 类目一致性: 强制所有变体跟"锚点变体"(优先当前页变体, 否则首个匹配到 _sourceVariant 的变体) 用同一个类目
-    // 解决问题: Ozon 源商品在不同变体上可能被打到不同的细分类目 (例: 按摩垫 vs 澡巾),
-    // 用户通常希望批量跟卖的所有变体进入同一个类目卡片
-    //
-    // ⚠️ 仅适用于「同一 listing 的兄弟变体」。「跟卖本页商品卡」(independentProducts) 下,
-    // 每个卡片是彼此无关的独立商品(收纳盒 / 发箍 / 首饰盒…),强制对齐会把全部错打成首个
-    // 商品的类目(线上表现:全部显示同一个"保养套件"等类目)。此模式下跳过,各 SKU 用自己的源类目。
-    const independentProducts = panel?.dataset?.independentProducts === '1';
-    const anchorSku = (pageProduct.sku && sourceMap.has(String(pageProduct.sku)))
-      ? String(pageProduct.sku)
-      : matched[0];
-    const anchorSv = anchorSku ? sourceMap.get(anchorSku) : null;
-    if (anchorSv && !independentProducts) {
-      const anchorDescCatId = anchorSv.description_category_id;
-      const anchorCategories = anchorSv.categories;
-      const anchorTypeAttr = (anchorSv.attributes || []).find(a => String(a.key) === '8229');
-      console.log(`[MultiFollowSell] 类目锚点: SKU ${anchorSku} → desc_cat_id=${anchorDescCatId}, type=${anchorTypeAttr?.value || 'N/A'}`);
-      for (const [sku, sv] of sourceMap.entries()) {
-        if (sku === anchorSku || !sv) continue;
-        // 浅克隆后覆盖类目字段, 不污染原对象 (sourceMap 可能被其他逻辑引用)
-        const cloned = { ...sv };
-        cloned.description_category_id = anchorDescCatId;
-        cloned.categories = anchorCategories;
-        if (anchorTypeAttr) {
-          // 覆盖该变体的 Тип 属性, 让 type_id 解析也对齐到锚点
-          const newAttrs = (sv.attributes || []).filter(a => String(a.key) !== '8229');
-          newAttrs.push({ ...anchorTypeAttr });
-          cloned.attributes = newAttrs;
+      // Gather checked variants from remaining DOM rows (some may have been deleted)
+      const checkedRows = [];
+      panel.querySelectorAll('[data-field="variant-tbody"] tr').forEach((row) => {
+        const cb = row.querySelector('.ozon-helper-mv-check');
+        if (cb && cb.checked) {
+          const idx = parseInt(cb.dataset.idx);
+          checkedRows.push({ row, idx, variant: variants[idx] });
         }
-        sourceMap.set(sku, cloned);
-      }
-    } else if (independentProducts) {
-      console.log('[MultiFollowSell] 跟卖本页商品卡:独立商品模式,跳过类目对齐,各 SKU 保留自身源类目');
-    }
-
-    // 视频/PDF complex 属性是商品级的(整个 listing 共用)。bundle(Ozon 复制 API)只对
-    // 每次 searchVariants 的 items[0] 拉取,挂在 picked sv 上的 _bundleComplexAttrs 可能缺失
-    // (pickItemForSku 选了非 items[0] 的兄弟变体)。这里从锚点 sv 取一次作商品级兜底,
-    // 任一变体没有自己的 bundle complex 时回退到它。
-    // 独立商品模式(跟卖本页商品卡):不共享视频/PDF —— 各卡片是无关商品,共享会把首品的
-    // 视频/PDF 串到其它商品。仅用各 SKU 自己的 _bundleComplexAttrs(下方 per-variant 处理)。
-    const sharedBundleComplex = independentProducts ? null : (() => {
-      if (Array.isArray(anchorSv?._bundleComplexAttrs) && anchorSv._bundleComplexAttrs.length > 0) {
-        return anchorSv._bundleComplexAttrs;
-      }
-      for (const s of sourceMap.values()) {
-        if (Array.isArray(s?._bundleComplexAttrs) && s._bundleComplexAttrs.length > 0) return s._bundleComplexAttrs;
-      }
-      return null;
-    })();
-    if (sharedBundleComplex) {
-      console.log(`[MultiFollowSell] bundle complex attrs (视频/PDF) available: ${sharedBundleComplex.length}`);
-    }
-
-    // 视频(listing 级,整个商品共用):跟卖竞品时 Ozon 不接受任意直链 .mp4 —— 把当前 PDP 的
-    // .mp4 经 captureAndTransferPageVideo(SW uploadFollowSellVideo 走 seller-tab 会话)转存成
-    // 卖家自有 Ozon 视频(ir.ozone.ru/s3),后端 injectUserVideoComplexAttribute 注入主视频槽。
-    // 与单采/纯采集共用同一 helper(此前为各自内联,逻辑已统一)。
-    // 独立商品模式跳过:页面视频(若有)只属于当前 PDP,不该串到本页其它无关商品卡。
-    let sharedVideo = null;
-    if (!independentProducts) {
-      // 进度提示:用本函数作用域里的提交按钮(_confirmBtn)。
-      const onLabel = (t) => { try { if (typeof _confirmBtn !== 'undefined' && _confirmBtn) _confirmBtn.textContent = t; } catch (_) {} };
-      const media = await captureAndTransferPageVideoMedia(onLabel);
-      if (media?.videoUrl || media?.videoCover) {
-        sharedVideo = { url: media.videoUrl || null, cover: media.videoCover || null };
-      }
-    }
-
-    // Page-level dimension scrape — used as last-resort fallback when a variant's
-    // source-variant (seller-portal sv) has no 4383/4497/9454-9456 attrs (common for
-    // cross-platform foreign SKUs). Same characteristics for the listing apply to
-    // every variant on the same page.
-    // 独立商品模式不取页面级三维:列表页 extractCharacteristics 不对应任何单一商品,
-    // 串给全部变体会污染尺寸/重量。各 SKU 走自身 source attrs / 后端兜底链即可。
-    const pageScrapedDims = independentProducts
-      ? {}
-      : parseScrapedDimensionsFromCharacteristics(extractCharacteristics() || []);
-    if (pageScrapedDims.weight || pageScrapedDims.depth || pageScrapedDims.width || pageScrapedDims.height) {
-      console.log('[MultiFollowSell] Page-scraped dimensions:', pageScrapedDims);
-    }
-
-    // Build items array (breadcrumbs/pageProduct 已在前面声明)
-    const items = [];
-    // 「复制当前品牌」用:源商品品牌取自页面 state-webBrand(JSON-LD 兜底),商品级整组共享。
-    // 后端只从 _sourceVariant(变体模型)找品牌属性时,那里可能恒无品牌(品牌非变体级)。
-    // 因此这里把源品牌真名显式透传给后端,避免复制落空后静默退「无品牌」。
-    const _sourceBrand = (pageProduct && pageProduct.brand) ? String(pageProduct.brand).trim() : '';
-    const contentCopy = window.JZFollowSellContentCopy;
-
-    // #146:主题标签(webHashtags 控件)是商品级的,整组变体共用。跟卖时复制到每个变体卡,
-    // 后端 buildHashtagValues 会规范化 + 按类目 is_collection 写主题标签属性(开 AI 重写时由 AI 标签覆盖)。
-    const sharedHashtags = extractKeywords();
-    if (sharedHashtags.length > 0) {
-      console.log(`[MultiFollowSell] 复制源主题标签 ${sharedHashtags.length} 个`);
-    }
-
-    for (const { row, idx, variant: v } of checkedRows) {
-      const price = window.normalizePrice(row.querySelector('.ozon-helper-mv-price')?.value);
-      const oldPrice = parseFloat(row.querySelector('.ozon-helper-mv-oldprice')?.value) || (price * 1.25);
-      // 最低价(Ozon 自动调价下限,选填):用户留空 → 不传 min_price 字段,Ozon 默认不参与自动调价
-      const minPriceRaw = row.querySelector('.ozon-helper-mv-minprice')?.value;
-      const minPriceNum = minPriceRaw != null && minPriceRaw !== '' ? Number(minPriceRaw) : NaN;
-      const minPrice = Number.isFinite(minPriceNum) && minPriceNum > 0 ? minPriceNum : null;
-      const stock = parseInt(row.querySelector('.ozon-helper-mv-stock')?.value) || 0;
-      const offerId = row.querySelector('.ozon-helper-mv-offerid')?.value || `SKU${v.sku}-${Date.now().toString().slice(-4)}`;
-      // Per-variant image extraction
-      // 优先用 galleryMap (从 entrypoint-api 抓到的该变体页面完整图册,跟原 Ozon 发布一致)
-      // 兜底链: sourceVariant.attributes[4194]+[4195] → coverImage
-      const sv = sourceMap.get(String(v.sku));
-      // 该变体自己的 bundle 视频/PDF complex,缺失时回退商品级兜底(视频整 listing 共用)
-      const bundleComplex = (Array.isArray(sv?._bundleComplexAttrs) && sv._bundleComplexAttrs.length > 0)
-        ? sv._bundleComplexAttrs
-        : sharedBundleComplex;
-
-      // 物理参数解析优先级:用户实际输入 > 源 sourceVariant attrs > 留空让后端兜底
-      // readSourceInt 直接读 g/mm 整数;readSourceWeightKg 读 4383 kg 浮点(如 "0.05")并 *1000 转 g
-      // 兜底前(无 user / 无 source)发 undefined,让后端的 resolveViaSearchVariantModel
-      // 和 prepareImport 沿 scraped_* → source attr 链路接续尝试,不再被 100 占位 shadow。
-      //
-      // parseStrictNumber:**严格只接受纯数字字符串**(允许俄式逗号 "0,05" 转点)。带单位的
-      // "1.2kg" / "10 cm" 一律返回 NaN,让 backend 走 _sourceVariant.attributes 路径自己
-      // 用 parseWeightToGrams/parseDimToMm 做单位识别。
-      // (codex review round 3 指出:旧版只提数字部分会让前端送 weight=1 给 "1.2kg"
-      // 这种值,被 backend 当成 user-set 1g 直接采纳,完全跳过 sourceAttrMap 解析。)
-      const parseStrictNumber = (raw) => {
-        if (raw == null) return NaN;
-        const s = String(raw).replace(',', '.').trim();
-        if (!/^-?\d+(?:\.\d+)?$/.test(s)) return NaN;
-        return Number(s);
-      };
-      const readSourceInt = (key) => {
-        const a = (sv?.attributes || []).find(x => String(x.key) === String(key));
-        const n = parseStrictNumber(a?.value);
-        return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
-      };
-      const readSourceWeightKgAsG = () => {
-        const a = (sv?.attributes || []).find(x => String(x.key) === '4383');
-        const n = parseStrictNumber(a?.value);
-        if (!Number.isFinite(n) || n <= 0) return null;
-        // 4383 通常是 kg 浮点("0.05" / "1.2" / "0,05");>100 时可能本来就是 g,跟后端 product.service.ts:2195 启发式对齐
-        return n < 100 ? Math.round(n * 1000) : Math.round(n);
-      };
-      // 用户实际输入:只有当 form 是有限正数才算真填了。NaN/0/空都视为未填。
-      // 与 source attr 路径一致用 parseStrictNumber:用户粘贴 "1.2 kg" / "10 cm" 这种
-      // 带单位字符串(虽然 <input type="number"> 会拦截输入,但粘贴/JS 设值可绕过)
-      // 一律视为未填,让后端从 _sourceVariant.attributes 解析,避免 1g/10mm 误写。
-      const parseUserInt = (sel) => {
-        const n = parseStrictNumber(row.querySelector(sel)?.value);
-        return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
-      };
-      const userWeight = parseUserInt('.ozon-helper-mv-weight');
-      const userDepth  = parseUserInt('.ozon-helper-mv-depth');
-      const userWidth  = parseUserInt('.ozon-helper-mv-width');
-      const userHeight = parseUserInt('.ozon-helper-mv-height');
-      // weight: user > source 4497(packaged g) > source 4383(kg→g) > undefined
-      const weight = userWeight || readSourceInt('4497') || readSourceWeightKgAsG() || undefined;
-      const depth  = userDepth  || readSourceInt('9454') || undefined;
-      const width  = userWidth  || readSourceInt('9455') || undefined;
-      const height = userHeight || readSourceInt('9456') || undefined;
-      const variantGallery = galleryMap.get(String(v.sku)) || [];
-      // 源富内容(11254):从该变体 composer 抽到则注入 _sourceVariant.attributes,让后端
-      // pickSourceRichContent 命中 follow_source(否则跟卖卡不带富内容)。幂等:已有则不重复加。
-      const variantRichContent = richContentMap.get(String(v.sku)) || '';
-      if (variantRichContent && sv && typeof sv === 'object') {
-        if (!Array.isArray(sv.attributes)) sv.attributes = [];
-        if (!sv.attributes.some((a) => String(a.key) === '11254')) {
-          sv.attributes.push({ key: '11254', value: variantRichContent });
-        }
-      }
-      let allImages = [];
-      const seenUrls = new Set();
-      const pushUrl = (u) => {
-        if (!u || typeof u !== 'string') return;
-        const norm = u.split('?')[0].split('#')[0].toLowerCase();
-        if (seenUrls.has(norm)) return;
-        seenUrls.add(norm);
-        allImages.push(u);
-      };
-
-      let imageSource = 'none';
-      if (variantGallery.length > 0) {
-        // 主路径: 该变体页面的完整图册 (与原 Ozon 一致)
-        for (const url of variantGallery) pushUrl(url);
-        imageSource = 'pageState';
-      } else if (sv?.attributes) {
-        // 兜底 1: sourceVariant attrs (search-variant-model 返回)
-        const primaryImgAttr = sv.attributes.find(a => String(a.key) === '4194');
-        const addlImgAttr = sv.attributes.find(a => String(a.key) === '4195');
-        if (primaryImgAttr?.value) pushUrl(primaryImgAttr.value);
-        if (addlImgAttr?.collection?.length > 0) {
-          for (const url of addlImgAttr.collection) pushUrl(url);
-        }
-        if (allImages.length > 0) imageSource = 'sourceVariant';
-      }
-      if (allImages.length === 0 && v.coverImage) {
-        pushUrl(v.coverImage);
-        imageSource = 'coverImage';
-      }
-      // Apply image order setting
-      if (imageOrder === 'shuffle' && allImages.length > 1) {
-        for (let k = allImages.length - 1; k > 0; k--) {
-          const j = Math.floor(Math.random() * (k + 1));
-          [allImages[k], allImages[j]] = [allImages[j], allImages[k]];
-        }
-      } else if (imageOrder === 'shuffle_keep_first' && allImages.length > 2) {
-        const first = allImages[0];
-        const rest = allImages.slice(1);
-        for (let k = rest.length - 1; k > 0; k--) {
-          const j = Math.floor(Math.random() * (k + 1));
-          [rest[k], rest[j]] = [rest[j], rest[k]];
-        }
-        allImages = [first, ...rest];
-      }
-      const productImages = allImages.map((url, i) => ({ file_name: url, default: i === 0 }));
-      console.log(`[MultiFollowSell] Variant ${v.sku}: ${allImages.length} images (source: ${imageSource})`);
-
-      // Use DOM variant name (may have been modified by template: removeKeywords, titleSuffix).
-      // Trim + cap to Ozon limits (name ≤200, description ≤4096) — sending raw
-      // user-edited strings has caused mid-import failures and confused error
-      // messages. Backend will still validate, this is the friendly first stop.
-      const NAME_MAX = 200;
-      const DESC_MAX = 4096;
-      const safeText = (s, max) => {
-        if (s == null) return '';
-        const trimmed = String(s).replace(/\s+/g, ' ').trim();
-        return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
-      };
-      // 名称取值优先级（重点：避开浏览器翻译污染）
-      // 1. sv.attributes[4180]（search-variant-model 返回的"商品名称"原值）
-      //    —— 是 seller portal API JSON，**不被 Chrome 翻译影响**
-      // 2. DOM 表单里的变体名（用户可能手动编辑过）
-      // 3. v.title（pageProduct webState script JSON，理论上也 safe）
-      // 翻译检测：DOM 含中文 && sv 不含中文 → 用 DOM 是被翻译的中文版
-      // → 强制走 sv 4180 拿俄/英文原始名，避免上架到俄罗斯店出现中文名
-      const _name4180 = (sv?.attributes || []).find((a) => String(a.key) === '4180');
-      const sourceName = _name4180?.value
-        ? String(_name4180.value).replace(/\s+/g, ' ').trim()
-        : '';
-      const domName = (
-        row.querySelector('.ozon-helper-mv-variant-title-text')?.textContent ||
-        row.querySelector('.ozon-helper-mv-variant-name')?.textContent ||
-        ''
-      ).trim();
-      const _isCN = (s) => /[一-龥]/.test(s);
-      const looksTranslated = sourceName && _isCN(domName) && !_isCN(sourceName);
-      const rawName = looksTranslated
-        ? sourceName
-        : (domName || sourceName || v.title || '');
-      const variantName = safeText(rawName, NAME_MAX);
-      // 简介只取源真实描述(自定义→源 4191),空则退标题；不再用页面描述兜底(会抓回富内容)。
-      const description = contentCopy?.pickFollowSellDescription
-        ? contentCopy.pickFollowSellDescription({
-            customDescription: ts.customDescription,
-            sourceVariant: sv,
-            richContent: variantRichContent,
-            fallbackName: variantName,
-            max: DESC_MAX,
-          })
-        : safeText(ts.customDescription || variantName, DESC_MAX);
-      contentCopy?.mergeSourceHashtagsIntoVariant?.(sv, sharedHashtags);
-      items.push({
-        offer_id: offerId,
-        name: variantName,
-        price: price.toFixed(2),
-        old_price: oldPrice.toFixed(2),
-        // 用户填了正数最低价才发 min_price(Ozon 自动调价下限,选填字段);
-        // 留空 / 0 时不发,避免 Ozon 校验 / 误启用自动调价
-        ...(minPrice != null ? { min_price: minPrice.toFixed(2) } : {}),
-        vat: '0',
-        currency_code: currencyCode,
-        images: productImages,
-        // 视频:两条互补路径。
-        // (1) bundleComplexAttrs:bundle(Ozon 复制 API)返回的视频/PDF complex —— 仅自有商品复制时有,
-        //     跟卖竞品恒空(Ozon 不复制原卖家视频)。
-        // (2) videoUrl:PDP gallery 抓的公开 .mp4 —— 跟卖竞品时唯一能拿到视频的来源。后端
-        //     injectUserVideoComplexAttribute 据此建视频 complex,且对 (1) 已建的视频幂等跳过。
-        bundleComplexAttrs: bundleComplex || undefined,
-        ...(sharedVideo?.url ? { videoUrl: sharedVideo.url } : {}),
-        ...(sharedVideo?.cover ? { videoCover: sharedVideo.cover } : {}),
-        scraped_breadcrumbs: breadcrumbs,
-        scraped_description: description,
-        // #146:把源商品主题标签随跟卖卡带上(后端写主题标签属性;开 AI 重写时被 AI 标签覆盖)
-        ...(sharedHashtags.length > 0 ? { _aiHashtags: sharedHashtags } : {}),
-        scraped_sku: String(v.sku),
-        scraped_brand: brandChoice,
-        // 选「复制当前品牌」时透传源品牌真名,后端据此匹配目标类目品牌字典(空=源本无品牌→无品牌)
-        scraped_brand_value: (brandChoice === 'copy' && _sourceBrand) ? _sourceBrand : undefined,
-        scraped_model_name: mergeModel ? safeText(mergeModel, NAME_MAX) : undefined,
-        _sourceVariant: sv || undefined,
-        // 物理参数若为 undefined,JSON.stringify 会跳过该 key,
-        // 后端 prepareImport / resolveViaSearchVariantModel 将沿 source attr → scraped_* 兜底链补齐。
-        // weight_unit / dimension_unit 也跟着只在有值时才送。
-        weight: weight,
-        weight_unit: weight != null ? 'g' : undefined,
-        depth: depth, width: width, height: height,
-        dimension_unit: (depth != null || width != null || height != null) ? 'mm' : undefined,
-        // scraped_* 是页面 DOM 兜底:source variant attrs 缺失时(常见于陌生跨平台 SKU)
-        // 后端可以接续兜底,而不是直接落到 100×100×100mm/100g。
-        // 这些字段独立于 weight/depth/.../user input,即便 weight 已经填了也带上 — 不浪费一份信息。
-        scraped_weight: pageScrapedDims.weight,
-        scraped_depth: pageScrapedDims.depth,
-        scraped_width: pageScrapedDims.width,
-        scraped_height: pageScrapedDims.height,
-        _stock: stock,
       });
-    }
-
-    // 提交前预检(标题质量 / 物流参数):只「建议」,不阻塞、不弹 confirm 逼用户二选一。
-    // 命中只在面板内挂一条非阻塞提示条引导优化,提交照常进行(对齐批量上架的进度日志提示)。
-    const advisories = [];
-
-    // 标题质量(免费纯规则):没开 AI 重写时,源标题(attr 4180)原样上架易被 Ozon 判
-    // 「无意义/语法错误/看不出是什么商品」。用最终拼好的 items[].name(含翻译回退/模板编辑)。
-    if (!applyAiRewrite && window.JZTitleQuality) {
-      const badTitles = items.filter(it => !window.JZTitleQuality.checkTitleQuality(it.name).ok);
-      if (badTitles.length > 0) {
-        advisories.push(`${badTitles.length} 个商品标题偏短/疑似无意义,Ozon 可能拒(从源 SKU 原样复制)。建议开启「AI 重写」自动优化,或手改标题。`);
-        console.warn(`[MultiFollowSell] ${badTitles.length} low-quality titles (advisory only, not blocking)`);
+      // Also build checkedIndices for backward compatibility with prefetch logic
+      const checkedIndices = checkedRows.map((r) => r.idx);
+      if (checkedRows.length === 0) {
+        showMvStatus(statusDiv, 'error', '\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u4e2a\u53d8\u4f53');
+        return;
       }
-    }
 
-    // 物流参数缺失:SKU 既无用户输入、也无源 sv attrs(4497/4383/9454-9456)、也无页面 DOM 兜底
-    // → 后端落 100×100×100mm/100g,Ozon 按最大体积费率算物流费,可能压缩利润。
-    const missingDimsItems = items.filter(it => {
-      const noPhys = !it.weight && !it.depth && !it.width && !it.height;
-      const noScraped = !it.scraped_weight && !it.scraped_depth && !it.scraped_width && !it.scraped_height;
-      return noPhys && noScraped;
-    });
-    if (missingDimsItems.length > 0) {
-      advisories.push(`${missingDimsItems.length} 个 SKU 无物流参数,将按默认 100×100×100mm/100g(Ozon 用最大体积费率,可能压缩利润)。建议手填重量/尺寸。`);
-      console.warn(`[MultiFollowSell] ${missingDimsItems.length} items missing dim data (advisory only, not blocking)`);
-    }
-
-    // 非阻塞提示条:列出建议项,但本次仍照常提交(不取消、不要求用户先做选择)。
-    if (advisories.length > 0) {
-      const body = panel.querySelector('.ozon-helper-mv-body');
-      const wrap = body?.querySelector('.ozon-helper-mv-table-wrap');
-      if (body && wrap) {
-        panel.querySelectorAll('.ozon-helper-mv-precheck-advisory').forEach(el => el.remove());
-        const notice = document.createElement('div');
-        notice.className = 'ozon-helper-mv-error-notice ozon-helper-mv-precheck-advisory';
-        notice.style.background = '#FFFBEB';
-        notice.style.borderColor = '#F59E0B';
-        notice.style.color = '#92400E';
-        notice.innerHTML = `<span class="ozon-helper-mv-error-icon" style="background:#F59E0B;">!</span><span>${advisories.join('<br>')}<br><b>本次仍按当前内容照常提交。</b></span>`;
-        // 用 insertAdjacentElement 而非 body.insertBefore:Ozon 页面 Vue 重渲染
-        // 可能打乱面板 DOM 层级,wrap 不再是 body 直接子节点会让 insertBefore 抛
-        // NotFoundError 卡死整个上架流程(see handleMultiVariantFollowSell try-catch)。
-        wrap.insertAdjacentElement('beforebegin', notice);
-      }
-    }
-
-    // Submit to each selected store IN PARALLEL
-    const totalStores = selectedStoreIds.length;
-    showMvStatus(statusDiv, 'loading',
-      totalStores > 1
-        ? `正在提交 ${totalStores} 个店铺 (${items.length} 个商品)...`
-        : `正在提交 ${items.length} 个商品...`
-    );
-
-    // 门户上架灰度:flag ozon_portal_import 开 **且** 用户在「上架方式」选了「模拟手动上架」
-    // 才走 seller.ozon.ru bundle 接口(绕官方 import 限流)。flag 关 → 选择器不显示、永远 API。
-    // flag 读取 5min 缓存,任何失败默认关 → 回退官方 API,零风险。
-    const portalFlagOn = await isPortalImportEnabled();
-    const uploadModeEl = panel.querySelector('input[name="jz-upload-mode"]:checked');
-    const viaPortal = portalFlagOn && uploadModeEl?.value === 'portal';
-
-    // 兜底:门户只认浏览器当前登录的单店,UI 已收紧成单选;万一漏到多店直接拦下不发请求。
-    if (viaPortal && selectedStoreIds.length > 1) {
-      showMvStatus(statusDiv, 'error', '模拟手动上架仅支持单店,请只选择一个已登录 seller.ozon.ru 的店铺');
-      _unlockUI();
-      return;
-    }
-
-    const settledResults = await Promise.allSettled(
-      selectedStoreIds.map(async (storeId) => {
-        const storeName = panel.querySelector(`.ozon-helper-mv-store-cb[value="${storeId}"]`)
-          ?.parentElement?.textContent?.trim() || storeId;
-
-        // Resolve warehouse_id first so stocks can be sent with the followSell payload
-        // (backend worker imports stocks after product import succeeds — correct ordering).
-        // 优先级：该店铺已选仓库 > 当前 UI 选择（仅当前 store）> 模板 ts.warehouseId
-        // > 该 store 仓库列表第一个。仓库 ID 不跨店通用,禁止把前一个店铺的 UI 值
-        // 直接套到另一个店铺。
-        let stocks;
-        try {
-          const stockEntries = items.filter(item => parseInt(item._stock) > 0);
-          if (stockEntries.length > 0) {
-            const isCurrentStore = String(storeId) === String(panel._followSellStoreId);
-            const savedWarehouseId = panel._selectedWarehouseByStore?.get(String(storeId)) || '';
-            const uiWarehouseId = isCurrentStore
-              ? (panel.querySelector('[data-field="warehouse-id"]')?.value || '')
-              : '';
-            let warehouseId = savedWarehouseId || uiWarehouseId || ts.warehouseId || null;
-            if (!warehouseId) {
-              const whRes = await window.sendMessage('getWarehouses', { storeId });
-              const warehouses = parseWarehouseListResponse(whRes);
-              warehouseId = warehouses && warehouses.length > 0
-                ? (warehouses[0].warehouse_id ?? warehouses[0].warehouseId ?? warehouses[0].id)
-                : null;
-            }
-            if (warehouseId) {
-              stocks = stockEntries.map(item => ({
-                offer_id: item.offer_id,
-                stock: parseInt(item._stock),
-                warehouse_id: warehouseId,
-              }));
-            }
-          }
-        } catch (whErr) {
-          console.warn(`[MultiFollowSell] Warehouse lookup failed for store ${storeName}:`, whErr.message);
+      // Validate prices and stock. Ozon caps price at ~9 digits; reject NaN /
+      // negative / unreasonably large values up front instead of letting them
+      // round-trip and fail mid-import after the rate-limit slot is consumed.
+      const PRICE_MAX = 9_999_999;
+      const STOCK_MAX = 1_000_000;
+      for (const { row, idx, variant } of checkedRows) {
+        const priceInput = row.querySelector('.ozon-helper-mv-price');
+        const price = window.normalizePrice(priceInput?.value);
+        if (!Number.isFinite(price) || price <= 0 || price > PRICE_MAX) {
+          showMvStatus(
+            statusDiv,
+            'error',
+            `\u53d8\u4f53 ${idx + 1} (SKU: ${variant.sku}) \u4ef7\u683c\u65e0\u6548\uff08\u5e94\u4e3a\u6b63\u6570\u4e14\u4e0d\u8d85\u8fc7 ${PRICE_MAX}\uff09`
+          );
+          return;
         }
+        const oldRaw = row.querySelector('.ozon-helper-mv-oldprice')?.value;
+        if (oldRaw && oldRaw.trim() !== '') {
+          const oldPrice = parseFloat(oldRaw);
+          if (!Number.isFinite(oldPrice) || oldPrice < 0 || oldPrice > PRICE_MAX) {
+            showMvStatus(statusDiv, 'error', `\u53d8\u4f53 ${idx + 1} \u5212\u7ebf\u4ef7\u65e0\u6548`);
+            return;
+          }
+        }
+        const stockRaw = row.querySelector('.ozon-helper-mv-stock')?.value;
+        if (stockRaw !== undefined && stockRaw !== '') {
+          const stockNum = Number(stockRaw);
+          if (!Number.isInteger(stockNum) || stockNum < 0 || stockNum > STOCK_MAX) {
+            showMvStatus(
+              statusDiv,
+              'error',
+              `\u53d8\u4f53 ${idx + 1} \u5e93\u5b58\u65e0\u6548\uff08\u5fc5\u987b\u4e3a 0~${STOCK_MAX} \u7684\u6574\u6570\uff09`
+            );
+            return;
+          }
+        }
+      }
 
-        // 埋点（当天去重在 sw 层做,失败静默；多店扇出时去重也能保证只发一次）
-        window.sendMessage('usageTrack', { featureKey: 'follow-sell:submit' }).catch(() => {});
+      // 会员上品配额预校验:达上限直接拦截 + 引导升级,不打后端(不消耗限流槽/不留 FAILED 记录)。
+      // 拉取失败(网络/未登录)时静默放行,让后端兜底,避免误拦。
+      try {
+        const memRes = await window.sendMessage('getMembershipSummary', {});
+        if (memRes && memRes.ok && memRes.data) {
+          const quota = evaluateListingQuota(memRes.data, checkedRows.length);
+          if (quota.blocked) {
+            showMvUpgradeBlock(statusDiv, quota.message);
+            return;
+          }
+        }
+      } catch (_) {
+        /* 静默放行 */
+      }
 
-        const importResult = await window.sendMessage('followSell', {
-          storeId,
-          items,
-          ...(stocks && stocks.length > 0 ? { stocks } : {}),
-          applyWatermark,
-          watermarkTemplateId: watermarkTemplateId || undefined,
-          applyPoster,
-          ...(applyPoster && posterPrimaryOnly ? { posterPrimaryOnly: true } : {}),
-          applyAiRewrite,
-          ...(viaPortal ? { viaPortal: true } : {}),
-          ...(ts.randomColor !== undefined ? { randomColor: ts.randomColor } : {}),
-          ...(ts.enableCopyBanSolution !== undefined ? { enableCopyBanSolution: ts.enableCopyBanSolution } : {}),
-          ...(ts.randomAttributesCount !== undefined ? { randomAttributesCount: ts.randomAttributesCount } : {}),
-          ...(ts.customDescription ? { customDescription: ts.customDescription } : {}),
-          ...(ts.listingType ? { listingType: ts.listingType } : {}),
+      // Lock UI to prevent duplicate submissions
+      const _confirmBtn = panel.querySelector('[data-action="confirm"]');
+      const _dialog = panel.querySelector('.ozon-helper-mv-dialog');
+      if (_confirmBtn) {
+        _confirmBtn.disabled = true;
+        _confirmBtn.textContent = '上架中...';
+      }
+      if (_dialog) _dialog.classList.add('is-submitting');
+      const _unlockUI = () => {
+        if (_confirmBtn) {
+          _confirmBtn.disabled = false;
+          _confirmBtn.textContent = '一键上架至OZON';
+        }
+        if (_dialog) _dialog.classList.remove('is-submitting');
+      };
+
+      // 提前抓页面数据(给 galleryMap 用),原 const breadcrumbs/pageProduct 后面会再用一次,删除重复声明
+      const breadcrumbs = extractBreadcrumbs();
+      const pageProduct = extractProductData();
+
+      // Pre-fetch _sourceVariant for all checked variants.
+      // search-variant-model 的 name 是模糊搜索, 返回卖家自己目录里 attr 9024(Артикул) 含输入 SKU 的产品。
+      // 注意: items[].variant_id 是卖家内部 id, ≠ 输入 SKU。必须按输入 SKU 作 key, 用 9024 前缀做精确匹配。
+      const sourceMap = new Map();
+      const galleryMap = new Map(); // sku → 完整图册(从 entrypoint-api 抓)
+      const richContentMap = new Map(); // sku → 源富内容 11254 JSON(从 composer widgetStates 抽,跟卖卡保留富内容)
+      const matched = [];
+      const skipped = [];
+
+      // 当前页变体的图册直接复用 pageProduct.images (已经是完整的页面图册)
+      if (pageProduct.sku && (pageProduct.images || []).length > 0) {
+        galleryMap.set(String(pageProduct.sku), [...pageProduct.images]);
+      }
+      // 锚点(当前页)图册复用了 pageProduct.images、不走下面的 fetchVariantGallery 预取循环,
+      // 故单独补抓一次它的 composer 富内容(其余被选变体在预取循环里顺带抽,同一次 fetch)。
+      if (pageProduct.sku) {
+        try {
+          const anchorSrc = await fetchVariantGallery(window.location.pathname);
+          if (anchorSrc && anchorSrc.richContent) {
+            richContentMap.set(String(pageProduct.sku), anchorSrc.richContent);
+          }
+        } catch {}
+      }
+
+      // 在 items 里挑出 attr 9024 以输入 SKU 为前缀的那个
+      // 多个匹配时, 优先选 "可变特性 collection 最少" 的 (单色变体, 不是多色 umbrella);
+      // 避免历史 follow-sell 留下的 multi-variant 整合 item 把多色一并塞进单一变体。
+      const pickItemForSku = (items, sku) => {
+        if (!Array.isArray(items) || items.length === 0) return null;
+        const matching = items.filter((it) =>
+          (it.attributes || []).some(
+            (a) =>
+              String(a.key) === '9024' && (String(a.value || '').startsWith(sku + '-') || String(a.value || '') === sku)
+          )
+        );
+        if (matching.length === 0) return items[0] || null;
+        // 评分: 把可变特性 (颜色 10096 / 颜色变体 22814 / 材料 8219) collection 大小相加,数字越小越「纯净」
+        const score = (it) => {
+          let s = 0;
+          for (const key of ['10096', '22814', '8219']) {
+            const a = (it.attributes || []).find((x) => String(x.key) === key);
+            if (Array.isArray(a?.collection)) s += a.collection.length;
+            else if (a?.value) s += 1;
+          }
+          return s;
+        };
+        matching.sort((a, b) => score(a) - score(b));
+        return matching[0];
+      };
+
+      // Gate check: prefetch first variant to validate Seller Portal access
+      const firstSku = String(variants[checkedIndices[0]].sku);
+      const firstResp = await prefetchSourceVariantWithItems(firstSku, statusDiv, showMvStatus);
+      if (firstResp === false) {
+        _unlockUI();
+        return;
+      }
+      const firstPicked = pickItemForSku(firstResp.items, firstSku);
+      if (firstPicked) {
+        sourceMap.set(firstSku, firstPicked);
+        matched.push(firstSku);
+      } else {
+        skipped.push(firstSku);
+        console.log(
+          `[MultiFollowSell] First variant ${firstSku} not found in Seller Portal, proceeding with category fallback`
+        );
+      }
+
+      // 剩余变体: 每个 SKU 单独发一次 API
+      // AbortController scoped to the prefetch + gallery loop so the user can
+      // bail out via the "取消" button when matching dozens of variants is
+      // taking long (or when seller portal is being slow). When aborted we
+      // unwind to the calling form intact — sourceMap/matched/skipped reflect
+      // whatever we finished before cancellation.
+      const prefetchAbort = new AbortController();
+      let prefetchCancelled = false;
+      const onCancelPrefetch = () => {
+        prefetchCancelled = true;
+        try {
+          prefetchAbort.abort();
+        } catch {}
+      };
+
+      const BATCH_SIZE = 3;
+      const remainingIndices = checkedIndices.slice(1);
+
+      for (let b = 0; b < remainingIndices.length; b += BATCH_SIZE) {
+        if (prefetchCancelled) break;
+        const batch = remainingIndices.slice(b, b + BATCH_SIZE);
+        const completed = matched.length + skipped.length;
+        showMvStatus(statusDiv, 'loading', `正在匹配变体 (${completed}/${checkedIndices.length})...`, {
+          onCancel: onCancelPrefetch,
         });
 
-        const taskId = importResult?.result?.task_id;
-        if (!taskId) throw new Error('未收到任务ID');
-
-        // 门户上架:upload_task_id 走 seller.ozon.ru 任务系统(get-list/get-errors)轮询,
-        // 与官方 task_id 来源不同,回显时按 _viaPortal 分流。companyId 留给状态查询。
-        const isPortalTask = !!importResult?.result?.viaPortal;
-        // Backend 已入队（QUEUED），worker 异步执行 AI/水印/Ozon 调用与库存导入。
-        return {
-          storeName, ok: true, taskId, warnings: [],
-          _viaPortal: isPortalTask,
-          _companyId: importResult?.result?.company_id || null,
-          _taskIds: Array.isArray(importResult?.result?.task_ids) ? importResult.result.task_ids : [taskId],
-        };
-      })
-    );
-
-    // Translate raw backend error fragments into something a non-engineer
-    // user can act on. Anything not matched falls through to the original
-    // message — no information loss, just nicer phrasing for common cases.
-    const humanizeError = (raw) => {
-      if (!raw) return '未知错误';
-      const msg = String(raw);
-      const TABLE = [
-        [/IMPORT_RATE_LIMIT|429/i, '上架请求过于频繁，请稍后再试（每分钟最多 30 次）'],
-        [/IMPORT_ACTIVE_TASK_LIMIT|已有上架任务|已有.*上架任务.*处理中/i, '当前账号已有上架任务在处理中；已提交的店铺会继续处理，失败店铺请稍后重试'],
-        [/AUTH_EXPIRED|401|TOKEN_REVOKED|jwt expired/i, '登录已过期，请重新登录后重试'],
-        [/Tenant context missing/i, '租户信息缺失，请重新登录'],
-        [/items\.length must be <= 200/i, '单次最多 200 个商品，请分批上架'],
-        [/未收到任务ID|task_id/i, '后端未返回任务编号，可能是网络中断，请稍后重试'],
-        [/executeScript 未返回结果|bridge 返回错误|seller portal/i, 'seller.ozon.ru 页面通讯失败，请刷新该页签后重试'],
-        [/sc_company_id|cookie已过期|请先登录|seller\.ozon\.ru/i, '请确认已登录 seller.ozon.ru'],
-        [/NetworkError|Failed to fetch|TimeoutError|超时/i, '网络异常或请求超时，请检查网络后重试'],
-        [/Pre-import lookup failed/i, 'Ozon 商品列表查询失败，已中止避免重复，请稍后重试'],
-        [/offer_id already exists/i, '商品 offer_id 已存在，请检查是否重复上架'],
-        [/Store not found/i, '店铺不存在或无权访问'],
-        [/Missing x-ozon-store-id/i, '请先选择一个店铺'],
-      ];
-      for (const [re, label] of TABLE) {
-        if (re.test(msg)) return label;
-      }
-      return msg.length > 200 ? msg.slice(0, 200) + '…' : msg;
-    };
-
-    // Flatten Promise.allSettled results
-    const storeResults = settledResults.map((r, i) => {
-      const storeName = panel.querySelector(`.ozon-helper-mv-store-cb[value="${selectedStoreIds[i]}"]`)
-        ?.parentElement?.textContent?.trim() || selectedStoreIds[i];
-      if (r.status === 'fulfilled') return r.value;
-      return { storeName, ok: false, error: humanizeError(r.reason?.message || r.reason) };
-    });
-
-    // ── 门户上架(viaPortal):create→update→upload 已同步完成,这里内联轮询 Ozon 侧
-    // 校验结果(数秒内出 processed/failed),给出真实「成功 X/失败 Y」回显。官方 API 路径
-    // 不受影响(只入队即返回,进度在 popup「上架记录」看)。
-    if (viaPortal) {
-      const okStores = storeResults.filter((r) => r.ok);
-      const submitFailed = storeResults.filter((r) => !r.ok);
-      if (okStores.length > 0) {
-        showMvStatus(statusDiv, 'loading', '已提交卖家中心,正在确认上架结果...');
-      }
-      const deadline = Date.now() + 16000;
-      for (const pr of okStores) {
-        pr._created = 0; pr._failed = 0; pr._errs = [];
-        const taskIds = Array.isArray(pr._taskIds) && pr._taskIds.length ? pr._taskIds : [pr.taskId];
-        for (const tid of taskIds) {
-          let st = null;
-          while (Date.now() < deadline) {
-            st = await window.sendMessage('portalImportStatus', { taskId: String(tid), companyId: pr._companyId || undefined }).catch(() => null);
-            if (st && st.done) break;
-            await new Promise((res) => setTimeout(res, 2000));
+        const promises = batch.map(async (idx) => {
+          if (prefetchCancelled) return;
+          const sku = String(variants[idx].sku);
+          try {
+            const resp = await window.sendMessage('searchVariants', { sku });
+            let items = resp?.items || resp?.data?.items || [];
+            let picked = pickItemForSku(items, sku);
+            // sv 没命中 → 降级 /api/v1/search 全平台 API（陌生 SKU 跟卖必走）
+            if (!picked) {
+              try {
+                const searchResp = await window.sendMessage('searchProductBySku', { sku });
+                const globalItems = searchResp?.items || searchResp?.data?.items || [];
+                if (globalItems.length > 0) {
+                  items = globalItems;
+                  picked = pickItemForSku(items, sku) || globalItems[0];
+                }
+              } catch (e2) {
+                console.warn(`[MultiFollowSell] /search fallback failed for SKU ${sku}:`, e2?.message);
+              }
+            }
+            if (picked) {
+              sourceMap.set(sku, picked);
+              matched.push(sku);
+            } else {
+              skipped.push(sku);
+            }
+          } catch (e) {
+            console.warn(`[MultiFollowSell] Pre-fetch failed for SKU ${sku}:`, e.message);
+            skipped.push(sku);
           }
-          if (st) {
-            pr._created += Math.max(0, Number(st.processed || 0) - Number(st.failed || 0));
-            pr._failed += Number(st.failed || 0);
-            if (Array.isArray(st.errors)) pr._errs.push(...st.errors);
+        });
+        await Promise.allSettled(promises);
+      }
+
+      if (prefetchCancelled) {
+        showMvStatus(statusDiv, 'error', '已取消变体匹配，可调整选择后重试');
+        _unlockUI();
+        return;
+      }
+
+      console.log(`[MultiFollowSell] Variant match: ${matched.length}/${checkedIndices.length}`, { matched, skipped });
+      for (const [sku, sv] of sourceMap.entries()) {
+        const cat = (sv.categories || []).map((c) => c.name || c.title).join(' → ');
+        const t = (sv.attributes || []).find((a) => String(a.key) === '8229')?.value;
+        console.log(
+          `[MultiFollowSell]   ${sku} → desc_cat_id=${sv.description_category_id}, type=${t || 'N/A'}, cat=${cat}`
+        );
+      }
+
+      // 并行抓取每个变体的完整图册 (除了已用 pageProduct.images 的当前页变体)
+      // 这是为了让每个变体跟卖时图片和原先 Ozon 上发布的一致
+      const galleryFetchTargets = checkedRows
+        .filter(({ variant: v }) => v.link && !galleryMap.has(String(v.sku)))
+        .map(({ variant: v }) => v);
+      if (galleryFetchTargets.length > 0) {
+        let galleryDone = 0;
+        let galleryCancelled = false;
+        const onCancelGallery = () => {
+          galleryCancelled = true;
+        };
+        showMvStatus(statusDiv, 'loading', `正在拉取变体图册 (0/${galleryFetchTargets.length})...`, {
+          onCancel: onCancelGallery,
+        });
+        const GALLERY_BATCH = 4;
+        for (let g = 0; g < galleryFetchTargets.length; g += GALLERY_BATCH) {
+          if (galleryCancelled) break;
+          const sub = galleryFetchTargets.slice(g, g + GALLERY_BATCH);
+          await Promise.allSettled(
+            sub.map(async (v) => {
+              if (galleryCancelled) return;
+              const { images: imgs, richContent } = await fetchVariantGallery(v.link);
+              if (imgs.length > 0) {
+                galleryMap.set(String(v.sku), imgs);
+              }
+              if (richContent) {
+                richContentMap.set(String(v.sku), richContent);
+              }
+              galleryDone += 1;
+            })
+          );
+          if (!galleryCancelled) {
+            showMvStatus(
+              statusDiv,
+              'loading',
+              `正在拉取变体图册 (${Math.min(galleryDone, galleryFetchTargets.length)}/${galleryFetchTargets.length})...`,
+              { onCancel: onCancelGallery }
+            );
           }
         }
+        const fetched = Array.from(galleryMap.keys()).filter((sku) => sku !== String(pageProduct.sku || '')).length;
+        console.log(
+          `[MultiFollowSell] Gallery fetched for ${fetched}/${galleryFetchTargets.length} variants${galleryCancelled ? ' (cancelled)' : ''}`
+        );
+        if (galleryCancelled) {
+          showMvStatus(statusDiv, 'error', `已取消图册抓取（已抓 ${fetched} 个），将继续提交。如要重试请关闭面板`);
+          // Continue to submit — user may still want partial gallery data.
+        }
       }
-      const totalCreated = okStores.reduce((s, r) => s + (r._created || 0), 0);
-      const totalFailed = okStores.reduce((s, r) => s + (r._failed || 0), 0);
-      const firstErr = okStores.flatMap((r) => r._errs || [])[0]?.errors?.[0]?.message;
-      const submitFailDetail = submitFailed.map((r) => `${r.storeName}: ${r.error || '未知错误'}`).join('\n');
-      if (submitFailed.length === 0 && totalFailed === 0 && totalCreated > 0) {
-        saveManualListingConfigAfterSuccess(panel, { lastResult: { viaPortal: true, totalCreated, totalFailed } });
-        showMvStatus(statusDiv, 'success',
-          `门户上架完成！已通过卖家中心创建 ${totalCreated} 个商品 → ${okStores.length} 个店铺。可在 seller.ozon.ru 商品列表查看。`);
-        setTimeout(() => closePanel(panel), 2500);
-      } else if (totalCreated > 0) {
-        saveManualListingConfigAfterSuccess(panel, { lastResult: { viaPortal: true, totalCreated, totalFailed } });
-        const parts = [`门户上架部分成功：创建 ${totalCreated} 个，失败 ${totalFailed} 个。`];
-        if (firstErr) parts.push(`失败原因示例: ${firstErr}`);
-        if (submitFailDetail) parts.push(`提交失败店铺:\n${submitFailDetail}`);
-        showMvStatus(statusDiv, 'error', parts.join('\n'));
+
+      // 类目一致性: 强制所有变体跟"锚点变体"(优先当前页变体, 否则首个匹配到 _sourceVariant 的变体) 用同一个类目
+      // 解决问题: Ozon 源商品在不同变体上可能被打到不同的细分类目 (例: 按摩垫 vs 澡巾),
+      // 用户通常希望批量跟卖的所有变体进入同一个类目卡片
+      //
+      // ⚠️ 仅适用于「同一 listing 的兄弟变体」。「跟卖本页商品卡」(independentProducts) 下,
+      // 每个卡片是彼此无关的独立商品(收纳盒 / 发箍 / 首饰盒…),强制对齐会把全部错打成首个
+      // 商品的类目(线上表现:全部显示同一个"保养套件"等类目)。此模式下跳过,各 SKU 用自己的源类目。
+      const independentProducts = panel?.dataset?.independentProducts === '1';
+      const anchorSku =
+        pageProduct.sku && sourceMap.has(String(pageProduct.sku)) ? String(pageProduct.sku) : matched[0];
+      const anchorSv = anchorSku ? sourceMap.get(anchorSku) : null;
+      if (anchorSv && !independentProducts) {
+        const anchorDescCatId = anchorSv.description_category_id;
+        const anchorCategories = anchorSv.categories;
+        const anchorTypeAttr = (anchorSv.attributes || []).find((a) => String(a.key) === '8229');
+        console.log(
+          `[MultiFollowSell] 类目锚点: SKU ${anchorSku} → desc_cat_id=${anchorDescCatId}, type=${anchorTypeAttr?.value || 'N/A'}`
+        );
+        for (const [sku, sv] of sourceMap.entries()) {
+          if (sku === anchorSku || !sv) continue;
+          // 浅克隆后覆盖类目字段, 不污染原对象 (sourceMap 可能被其他逻辑引用)
+          const cloned = { ...sv };
+          cloned.description_category_id = anchorDescCatId;
+          cloned.categories = anchorCategories;
+          if (anchorTypeAttr) {
+            // 覆盖该变体的 Тип 属性, 让 type_id 解析也对齐到锚点
+            const newAttrs = (sv.attributes || []).filter((a) => String(a.key) !== '8229');
+            newAttrs.push({ ...anchorTypeAttr });
+            cloned.attributes = newAttrs;
+          }
+          sourceMap.set(sku, cloned);
+        }
+      } else if (independentProducts) {
+        console.log('[MultiFollowSell] 跟卖本页商品卡:独立商品模式,跳过类目对齐,各 SKU 保留自身源类目');
+      }
+
+      // 视频/PDF complex 属性是商品级的(整个 listing 共用)。bundle(Ozon 复制 API)只对
+      // 每次 searchVariants 的 items[0] 拉取,挂在 picked sv 上的 _bundleComplexAttrs 可能缺失
+      // (pickItemForSku 选了非 items[0] 的兄弟变体)。这里从锚点 sv 取一次作商品级兜底,
+      // 任一变体没有自己的 bundle complex 时回退到它。
+      // 独立商品模式(跟卖本页商品卡):不共享视频/PDF —— 各卡片是无关商品,共享会把首品的
+      // 视频/PDF 串到其它商品。仅用各 SKU 自己的 _bundleComplexAttrs(下方 per-variant 处理)。
+      const sharedBundleComplex = independentProducts
+        ? null
+        : (() => {
+            if (Array.isArray(anchorSv?._bundleComplexAttrs) && anchorSv._bundleComplexAttrs.length > 0) {
+              return anchorSv._bundleComplexAttrs;
+            }
+            for (const s of sourceMap.values()) {
+              if (Array.isArray(s?._bundleComplexAttrs) && s._bundleComplexAttrs.length > 0)
+                return s._bundleComplexAttrs;
+            }
+            return null;
+          })();
+      if (sharedBundleComplex) {
+        console.log(`[MultiFollowSell] bundle complex attrs (视频/PDF) available: ${sharedBundleComplex.length}`);
+      }
+
+      // 视频(listing 级,整个商品共用):跟卖竞品时 Ozon 不接受任意直链 .mp4 —— 把当前 PDP 的
+      // .mp4 经 captureAndTransferPageVideo(SW uploadFollowSellVideo 走 seller-tab 会话)转存成
+      // 卖家自有 Ozon 视频(ir.ozone.ru/s3),后端 injectUserVideoComplexAttribute 注入主视频槽。
+      // 与单采/纯采集共用同一 helper(此前为各自内联,逻辑已统一)。
+      // 独立商品模式跳过:页面视频(若有)只属于当前 PDP,不该串到本页其它无关商品卡。
+      let sharedVideo = null;
+      if (!independentProducts) {
+        // 进度提示:用本函数作用域里的提交按钮(_confirmBtn)。
+        const onLabel = (t) => {
+          try {
+            if (typeof _confirmBtn !== 'undefined' && _confirmBtn) _confirmBtn.textContent = t;
+          } catch (_) {}
+        };
+        const media = await captureAndTransferPageVideoMedia(onLabel);
+        if (media?.videoUrl || media?.videoCover) {
+          sharedVideo = { url: media.videoUrl || null, cover: media.videoCover || null };
+        }
+      }
+
+      // Page-level dimension scrape — used as last-resort fallback when a variant's
+      // source-variant (seller-portal sv) has no 4383/4497/9454-9456 attrs (common for
+      // cross-platform foreign SKUs). Same characteristics for the listing apply to
+      // every variant on the same page.
+      // 独立商品模式不取页面级三维:列表页 extractCharacteristics 不对应任何单一商品,
+      // 串给全部变体会污染尺寸/重量。各 SKU 走自身 source attrs / 后端兜底链即可。
+      const pageScrapedDims = independentProducts
+        ? {}
+        : parseScrapedDimensionsFromCharacteristics(extractCharacteristics() || []);
+      if (pageScrapedDims.weight || pageScrapedDims.depth || pageScrapedDims.width || pageScrapedDims.height) {
+        console.log('[MultiFollowSell] Page-scraped dimensions:', pageScrapedDims);
+      }
+
+      // Build items array (breadcrumbs/pageProduct 已在前面声明)
+      const items = [];
+      // 「复制当前品牌」用:源商品品牌取自页面 state-webBrand(JSON-LD 兜底),商品级整组共享。
+      // 后端只从 _sourceVariant(变体模型)找品牌属性时,那里可能恒无品牌(品牌非变体级)。
+      // 因此这里把源品牌真名显式透传给后端,避免复制落空后静默退「无品牌」。
+      const _sourceBrand = pageProduct && pageProduct.brand ? String(pageProduct.brand).trim() : '';
+      const contentCopy = window.JZFollowSellContentCopy;
+
+      // #146:主题标签(webHashtags 控件)是商品级的,整组变体共用。跟卖时复制到每个变体卡,
+      // 后端 buildHashtagValues 会规范化 + 按类目 is_collection 写主题标签属性(开 AI 重写时由 AI 标签覆盖)。
+      const sharedHashtags = extractKeywords();
+      if (sharedHashtags.length > 0) {
+        console.log(`[MultiFollowSell] 复制源主题标签 ${sharedHashtags.length} 个`);
+      }
+
+      for (const { row, idx, variant: v } of checkedRows) {
+        const price = window.normalizePrice(row.querySelector('.ozon-helper-mv-price')?.value);
+        const oldPrice = parseFloat(row.querySelector('.ozon-helper-mv-oldprice')?.value) || price * 1.25;
+        // 最低价(Ozon 自动调价下限,选填):用户留空 → 不传 min_price 字段,Ozon 默认不参与自动调价
+        const minPriceRaw = row.querySelector('.ozon-helper-mv-minprice')?.value;
+        const minPriceNum = minPriceRaw != null && minPriceRaw !== '' ? Number(minPriceRaw) : NaN;
+        const minPrice = Number.isFinite(minPriceNum) && minPriceNum > 0 ? minPriceNum : null;
+        const stock = parseInt(row.querySelector('.ozon-helper-mv-stock')?.value) || 0;
+        const offerId =
+          row.querySelector('.ozon-helper-mv-offerid')?.value || `SKU${v.sku}-${Date.now().toString().slice(-4)}`;
+        // Per-variant image extraction
+        // 优先用 galleryMap (从 entrypoint-api 抓到的该变体页面完整图册,跟原 Ozon 发布一致)
+        // 兜底链: sourceVariant.attributes[4194]+[4195] → coverImage
+        const sv = sourceMap.get(String(v.sku));
+        // 该变体自己的 bundle 视频/PDF complex,缺失时回退商品级兜底(视频整 listing 共用)
+        const bundleComplex =
+          Array.isArray(sv?._bundleComplexAttrs) && sv._bundleComplexAttrs.length > 0
+            ? sv._bundleComplexAttrs
+            : sharedBundleComplex;
+
+        // 物理参数解析优先级:用户实际输入 > 源 sourceVariant attrs > 留空让后端兜底
+        // readSourceInt 直接读 g/mm 整数;readSourceWeightKg 读 4383 kg 浮点(如 "0.05")并 *1000 转 g
+        // 兜底前(无 user / 无 source)发 undefined,让后端的 resolveViaSearchVariantModel
+        // 和 prepareImport 沿 scraped_* → source attr 链路接续尝试,不再被 100 占位 shadow。
+        //
+        // parseStrictNumber:**严格只接受纯数字字符串**(允许俄式逗号 "0,05" 转点)。带单位的
+        // "1.2kg" / "10 cm" 一律返回 NaN,让 backend 走 _sourceVariant.attributes 路径自己
+        // 用 parseWeightToGrams/parseDimToMm 做单位识别。
+        // (codex review round 3 指出:旧版只提数字部分会让前端送 weight=1 给 "1.2kg"
+        // 这种值,被 backend 当成 user-set 1g 直接采纳,完全跳过 sourceAttrMap 解析。)
+        const parseStrictNumber = (raw) => {
+          if (raw == null) return NaN;
+          const s = String(raw).replace(',', '.').trim();
+          if (!/^-?\d+(?:\.\d+)?$/.test(s)) return NaN;
+          return Number(s);
+        };
+        const readSourceInt = (key) => {
+          const a = (sv?.attributes || []).find((x) => String(x.key) === String(key));
+          const n = parseStrictNumber(a?.value);
+          return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+        };
+        const readSourceWeightKgAsG = () => {
+          const a = (sv?.attributes || []).find((x) => String(x.key) === '4383');
+          const n = parseStrictNumber(a?.value);
+          if (!Number.isFinite(n) || n <= 0) return null;
+          // 4383 通常是 kg 浮点("0.05" / "1.2" / "0,05");>100 时可能本来就是 g,跟后端 product.service.ts:2195 启发式对齐
+          return n < 100 ? Math.round(n * 1000) : Math.round(n);
+        };
+        // 用户实际输入:只有当 form 是有限正数才算真填了。NaN/0/空都视为未填。
+        // 与 source attr 路径一致用 parseStrictNumber:用户粘贴 "1.2 kg" / "10 cm" 这种
+        // 带单位字符串(虽然 <input type="number"> 会拦截输入,但粘贴/JS 设值可绕过)
+        // 一律视为未填,让后端从 _sourceVariant.attributes 解析,避免 1g/10mm 误写。
+        const parseUserInt = (sel) => {
+          const n = parseStrictNumber(row.querySelector(sel)?.value);
+          return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+        };
+        const userWeight = parseUserInt('.ozon-helper-mv-weight');
+        const userDepth = parseUserInt('.ozon-helper-mv-depth');
+        const userWidth = parseUserInt('.ozon-helper-mv-width');
+        const userHeight = parseUserInt('.ozon-helper-mv-height');
+        // weight: user > source 4497(packaged g) > source 4383(kg→g) > undefined
+        const weight = userWeight || readSourceInt('4497') || readSourceWeightKgAsG() || undefined;
+        const depth = userDepth || readSourceInt('9454') || undefined;
+        const width = userWidth || readSourceInt('9455') || undefined;
+        const height = userHeight || readSourceInt('9456') || undefined;
+        const variantGallery = galleryMap.get(String(v.sku)) || [];
+        // 源富内容(11254):从该变体 composer 抽到则注入 _sourceVariant.attributes,让后端
+        // pickSourceRichContent 命中 follow_source(否则跟卖卡不带富内容)。幂等:已有则不重复加。
+        const variantRichContent = richContentMap.get(String(v.sku)) || '';
+        if (variantRichContent && sv && typeof sv === 'object') {
+          if (!Array.isArray(sv.attributes)) sv.attributes = [];
+          if (!sv.attributes.some((a) => String(a.key) === '11254')) {
+            sv.attributes.push({ key: '11254', value: variantRichContent });
+          }
+        }
+        let allImages = [];
+        const seenUrls = new Set();
+        const pushUrl = (u) => {
+          if (!u || typeof u !== 'string') return;
+          const norm = u.split('?')[0].split('#')[0].toLowerCase();
+          if (seenUrls.has(norm)) return;
+          seenUrls.add(norm);
+          allImages.push(u);
+        };
+
+        let imageSource = 'none';
+        if (variantGallery.length > 0) {
+          // 主路径: 该变体页面的完整图册 (与原 Ozon 一致)
+          for (const url of variantGallery) pushUrl(url);
+          imageSource = 'pageState';
+        } else if (sv?.attributes) {
+          // 兜底 1: sourceVariant attrs (search-variant-model 返回)
+          const primaryImgAttr = sv.attributes.find((a) => String(a.key) === '4194');
+          const addlImgAttr = sv.attributes.find((a) => String(a.key) === '4195');
+          if (primaryImgAttr?.value) pushUrl(primaryImgAttr.value);
+          if (addlImgAttr?.collection?.length > 0) {
+            for (const url of addlImgAttr.collection) pushUrl(url);
+          }
+          if (allImages.length > 0) imageSource = 'sourceVariant';
+        }
+        if (allImages.length === 0 && v.coverImage) {
+          pushUrl(v.coverImage);
+          imageSource = 'coverImage';
+        }
+        // Apply image order setting
+        if (imageOrder === 'shuffle' && allImages.length > 1) {
+          for (let k = allImages.length - 1; k > 0; k--) {
+            const j = Math.floor(Math.random() * (k + 1));
+            [allImages[k], allImages[j]] = [allImages[j], allImages[k]];
+          }
+        } else if (imageOrder === 'shuffle_keep_first' && allImages.length > 2) {
+          const first = allImages[0];
+          const rest = allImages.slice(1);
+          for (let k = rest.length - 1; k > 0; k--) {
+            const j = Math.floor(Math.random() * (k + 1));
+            [rest[k], rest[j]] = [rest[j], rest[k]];
+          }
+          allImages = [first, ...rest];
+        }
+        const productImages = allImages.map((url, i) => ({ file_name: url, default: i === 0 }));
+        console.log(`[MultiFollowSell] Variant ${v.sku}: ${allImages.length} images (source: ${imageSource})`);
+
+        // Use DOM variant name (may have been modified by template: removeKeywords, titleSuffix).
+        // Trim + cap to Ozon limits (name ≤200, description ≤4096) — sending raw
+        // user-edited strings has caused mid-import failures and confused error
+        // messages. Backend will still validate, this is the friendly first stop.
+        const NAME_MAX = 200;
+        const DESC_MAX = 4096;
+        const safeText = (s, max) => {
+          if (s == null) return '';
+          const trimmed = String(s).replace(/\s+/g, ' ').trim();
+          return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+        };
+        // 名称取值优先级（重点：避开浏览器翻译污染）
+        // 1. sv.attributes[4180]（search-variant-model 返回的"商品名称"原值）
+        //    —— 是 seller portal API JSON，**不被 Chrome 翻译影响**
+        // 2. DOM 表单里的变体名（用户可能手动编辑过）
+        // 3. v.title（pageProduct webState script JSON，理论上也 safe）
+        // 翻译检测：DOM 含中文 && sv 不含中文 → 用 DOM 是被翻译的中文版
+        // → 强制走 sv 4180 拿俄/英文原始名，避免上架到俄罗斯店出现中文名
+        const _name4180 = (sv?.attributes || []).find((a) => String(a.key) === '4180');
+        const sourceName = _name4180?.value ? String(_name4180.value).replace(/\s+/g, ' ').trim() : '';
+        const domName = (
+          row.querySelector('.ozon-helper-mv-variant-title-text')?.textContent ||
+          row.querySelector('.ozon-helper-mv-variant-name')?.textContent ||
+          ''
+        ).trim();
+        const _isCN = (s) => /[一-龥]/.test(s);
+        const looksTranslated = sourceName && _isCN(domName) && !_isCN(sourceName);
+        const rawName = looksTranslated ? sourceName : domName || sourceName || v.title || '';
+        const variantName = safeText(rawName, NAME_MAX);
+        // 简介只取源真实描述(自定义→源 4191),空则退标题；不再用页面描述兜底(会抓回富内容)。
+        const description = contentCopy?.pickFollowSellDescription
+          ? contentCopy.pickFollowSellDescription({
+              customDescription: ts.customDescription,
+              sourceVariant: sv,
+              richContent: variantRichContent,
+              fallbackName: variantName,
+              max: DESC_MAX,
+            })
+          : safeText(ts.customDescription || variantName, DESC_MAX);
+        contentCopy?.mergeSourceHashtagsIntoVariant?.(sv, sharedHashtags);
+        items.push({
+          offer_id: offerId,
+          name: variantName,
+          price: price.toFixed(2),
+          old_price: oldPrice.toFixed(2),
+          // 用户填了正数最低价才发 min_price(Ozon 自动调价下限,选填字段);
+          // 留空 / 0 时不发,避免 Ozon 校验 / 误启用自动调价
+          ...(minPrice != null ? { min_price: minPrice.toFixed(2) } : {}),
+          vat: '0',
+          currency_code: currencyCode,
+          images: productImages,
+          // 视频:两条互补路径。
+          // (1) bundleComplexAttrs:bundle(Ozon 复制 API)返回的视频/PDF complex —— 仅自有商品复制时有,
+          //     跟卖竞品恒空(Ozon 不复制原卖家视频)。
+          // (2) videoUrl:PDP gallery 抓的公开 .mp4 —— 跟卖竞品时唯一能拿到视频的来源。后端
+          //     injectUserVideoComplexAttribute 据此建视频 complex,且对 (1) 已建的视频幂等跳过。
+          bundleComplexAttrs: bundleComplex || undefined,
+          ...(sharedVideo?.url ? { videoUrl: sharedVideo.url } : {}),
+          ...(sharedVideo?.cover ? { videoCover: sharedVideo.cover } : {}),
+          scraped_breadcrumbs: breadcrumbs,
+          scraped_description: description,
+          // #146:把源商品主题标签随跟卖卡带上(后端写主题标签属性;开 AI 重写时被 AI 标签覆盖)
+          ...(sharedHashtags.length > 0 ? { _aiHashtags: sharedHashtags } : {}),
+          scraped_sku: String(v.sku),
+          scraped_brand: brandChoice,
+          // 选「复制当前品牌」时透传源品牌真名,后端据此匹配目标类目品牌字典(空=源本无品牌→无品牌)
+          scraped_brand_value: brandChoice === 'copy' && _sourceBrand ? _sourceBrand : undefined,
+          scraped_model_name: mergeModel ? safeText(mergeModel, NAME_MAX) : undefined,
+          _sourceVariant: sv || undefined,
+          // 物理参数若为 undefined,JSON.stringify 会跳过该 key,
+          // 后端 prepareImport / resolveViaSearchVariantModel 将沿 source attr → scraped_* 兜底链补齐。
+          // weight_unit / dimension_unit 也跟着只在有值时才送。
+          weight: weight,
+          weight_unit: weight != null ? 'g' : undefined,
+          depth: depth,
+          width: width,
+          height: height,
+          dimension_unit: depth != null || width != null || height != null ? 'mm' : undefined,
+          // scraped_* 是页面 DOM 兜底:source variant attrs 缺失时(常见于陌生跨平台 SKU)
+          // 后端可以接续兜底,而不是直接落到 100×100×100mm/100g。
+          // 这些字段独立于 weight/depth/.../user input,即便 weight 已经填了也带上 — 不浪费一份信息。
+          scraped_weight: pageScrapedDims.weight,
+          scraped_depth: pageScrapedDims.depth,
+          scraped_width: pageScrapedDims.width,
+          scraped_height: pageScrapedDims.height,
+          _stock: stock,
+        });
+      }
+
+      // 提交前预检(标题质量 / 物流参数):只「建议」,不阻塞、不弹 confirm 逼用户二选一。
+      // 命中只在面板内挂一条非阻塞提示条引导优化,提交照常进行(对齐批量上架的进度日志提示)。
+      const advisories = [];
+
+      // 标题质量(免费纯规则):没开 AI 重写时,源标题(attr 4180)原样上架易被 Ozon 判
+      // 「无意义/语法错误/看不出是什么商品」。用最终拼好的 items[].name(含翻译回退/模板编辑)。
+      if (!applyAiRewrite && window.JZTitleQuality) {
+        const badTitles = items.filter((it) => !window.JZTitleQuality.checkTitleQuality(it.name).ok);
+        if (badTitles.length > 0) {
+          advisories.push(
+            `${badTitles.length} 个商品标题偏短/疑似无意义,Ozon 可能拒(从源 SKU 原样复制)。建议开启「AI 重写」自动优化,或手改标题。`
+          );
+          console.warn(`[MultiFollowSell] ${badTitles.length} low-quality titles (advisory only, not blocking)`);
+        }
+      }
+
+      // 物流参数缺失:SKU 既无用户输入、也无源 sv attrs(4497/4383/9454-9456)、也无页面 DOM 兜底
+      // → 后端落 100×100×100mm/100g,Ozon 按最大体积费率算物流费,可能压缩利润。
+      const missingDimsItems = items.filter((it) => {
+        const noPhys = !it.weight && !it.depth && !it.width && !it.height;
+        const noScraped = !it.scraped_weight && !it.scraped_depth && !it.scraped_width && !it.scraped_height;
+        return noPhys && noScraped;
+      });
+      if (missingDimsItems.length > 0) {
+        advisories.push(
+          `${missingDimsItems.length} 个 SKU 无物流参数,将按默认 100×100×100mm/100g(Ozon 用最大体积费率,可能压缩利润)。建议手填重量/尺寸。`
+        );
+        console.warn(
+          `[MultiFollowSell] ${missingDimsItems.length} items missing dim data (advisory only, not blocking)`
+        );
+      }
+
+      // 非阻塞提示条:列出建议项,但本次仍照常提交(不取消、不要求用户先做选择)。
+      if (advisories.length > 0) {
+        const body = panel.querySelector('.ozon-helper-mv-body');
+        const wrap = body?.querySelector('.ozon-helper-mv-table-wrap');
+        if (body && wrap) {
+          panel.querySelectorAll('.ozon-helper-mv-precheck-advisory').forEach((el) => el.remove());
+          const notice = document.createElement('div');
+          notice.className = 'ozon-helper-mv-error-notice ozon-helper-mv-precheck-advisory';
+          notice.style.background = '#FFFBEB';
+          notice.style.borderColor = '#F59E0B';
+          notice.style.color = '#92400E';
+          notice.innerHTML = `<span class="ozon-helper-mv-error-icon" style="background:#F59E0B;">!</span><span>${advisories.join('<br>')}<br><b>本次仍按当前内容照常提交。</b></span>`;
+          // 用 insertAdjacentElement 而非 body.insertBefore:Ozon 页面 Vue 重渲染
+          // 可能打乱面板 DOM 层级,wrap 不再是 body 直接子节点会让 insertBefore 抛
+          // NotFoundError 卡死整个上架流程(see handleMultiVariantFollowSell try-catch)。
+          wrap.insertAdjacentElement('beforebegin', notice);
+        }
+      }
+
+      // Submit to each selected store IN PARALLEL
+      const totalStores = selectedStoreIds.length;
+      showMvStatus(
+        statusDiv,
+        'loading',
+        totalStores > 1
+          ? `正在提交 ${totalStores} 个店铺 (${items.length} 个商品)...`
+          : `正在提交 ${items.length} 个商品...`
+      );
+
+      // 门户上架灰度:flag ozon_portal_import 开 **且** 用户在「上架方式」选了「模拟手动上架」
+      // 才走 seller.ozon.ru bundle 接口(绕官方 import 限流)。flag 关 → 选择器不显示、永远 API。
+      // flag 读取 5min 缓存,任何失败默认关 → 回退官方 API,零风险。
+      const portalFlagOn = await isPortalImportEnabled();
+      const uploadModeEl = panel.querySelector('input[name="jz-upload-mode"]:checked');
+      const viaPortal = portalFlagOn && uploadModeEl?.value === 'portal';
+
+      // 兜底:门户只认浏览器当前登录的单店,UI 已收紧成单选;万一漏到多店直接拦下不发请求。
+      if (viaPortal && selectedStoreIds.length > 1) {
+        showMvStatus(statusDiv, 'error', '模拟手动上架仅支持单店,请只选择一个已登录 seller.ozon.ru 的店铺');
+        _unlockUI();
+        return;
+      }
+
+      const settledResults = await Promise.allSettled(
+        selectedStoreIds.map(async (storeId) => {
+          const storeName =
+            panel.querySelector(`.ozon-helper-mv-store-cb[value="${storeId}"]`)?.parentElement?.textContent?.trim() ||
+            storeId;
+
+          // Resolve warehouse_id first so stocks can be sent with the followSell payload
+          // (backend worker imports stocks after product import succeeds — correct ordering).
+          // 优先级：该店铺已选仓库 > 当前 UI 选择（仅当前 store）> 模板 ts.warehouseId
+          // > 该 store 仓库列表第一个。仓库 ID 不跨店通用,禁止把前一个店铺的 UI 值
+          // 直接套到另一个店铺。
+          let stocks;
+          try {
+            const stockEntries = items.filter((item) => parseInt(item._stock) > 0);
+            if (stockEntries.length > 0) {
+              const isCurrentStore = String(storeId) === String(panel._followSellStoreId);
+              const savedWarehouseId = panel._selectedWarehouseByStore?.get(String(storeId)) || '';
+              const uiWarehouseId = isCurrentStore
+                ? panel.querySelector('[data-field="warehouse-id"]')?.value || ''
+                : '';
+              let warehouseId = savedWarehouseId || uiWarehouseId || ts.warehouseId || null;
+              if (!warehouseId) {
+                const whRes = await window.sendMessage('getWarehouses', { storeId });
+                const warehouses = parseWarehouseListResponse(whRes);
+                warehouseId =
+                  warehouses && warehouses.length > 0
+                    ? (warehouses[0].warehouse_id ?? warehouses[0].warehouseId ?? warehouses[0].id)
+                    : null;
+              }
+              if (warehouseId) {
+                stocks = stockEntries.map((item) => ({
+                  offer_id: item.offer_id,
+                  stock: parseInt(item._stock),
+                  warehouse_id: warehouseId,
+                }));
+              }
+            }
+          } catch (whErr) {
+            console.warn(`[MultiFollowSell] Warehouse lookup failed for store ${storeName}:`, whErr.message);
+          }
+
+          // 埋点（当天去重在 sw 层做,失败静默；多店扇出时去重也能保证只发一次）
+          window.sendMessage('usageTrack', { featureKey: 'follow-sell:submit' }).catch(() => {});
+
+          const importResult = await window.sendMessage('followSell', {
+            storeId,
+            items,
+            ...(stocks && stocks.length > 0 ? { stocks } : {}),
+            applyWatermark,
+            watermarkTemplateId: watermarkTemplateId || undefined,
+            applyPoster,
+            ...(applyPoster && posterPrimaryOnly ? { posterPrimaryOnly: true } : {}),
+            applyAiRewrite,
+            ...(viaPortal ? { viaPortal: true } : {}),
+            ...(ts.randomColor !== undefined ? { randomColor: ts.randomColor } : {}),
+            ...(ts.enableCopyBanSolution !== undefined ? { enableCopyBanSolution: ts.enableCopyBanSolution } : {}),
+            ...(ts.randomAttributesCount !== undefined ? { randomAttributesCount: ts.randomAttributesCount } : {}),
+            ...(ts.customDescription ? { customDescription: ts.customDescription } : {}),
+            ...(ts.listingType ? { listingType: ts.listingType } : {}),
+          });
+
+          const taskId = importResult?.result?.task_id;
+          if (!taskId) throw new Error('未收到任务ID');
+
+          // 门户上架:upload_task_id 走 seller.ozon.ru 任务系统(get-list/get-errors)轮询,
+          // 与官方 task_id 来源不同,回显时按 _viaPortal 分流。companyId 留给状态查询。
+          const isPortalTask = !!importResult?.result?.viaPortal;
+          // Backend 已入队（QUEUED），worker 异步执行 AI/水印/Ozon 调用与库存导入。
+          return {
+            storeName,
+            ok: true,
+            taskId,
+            warnings: [],
+            _viaPortal: isPortalTask,
+            _companyId: importResult?.result?.company_id || null,
+            _taskIds: Array.isArray(importResult?.result?.task_ids) ? importResult.result.task_ids : [taskId],
+          };
+        })
+      );
+
+      // Translate raw backend error fragments into something a non-engineer
+      // user can act on. Anything not matched falls through to the original
+      // message — no information loss, just nicer phrasing for common cases.
+      const humanizeError = (raw) => {
+        if (!raw) return '未知错误';
+        const msg = String(raw);
+        const TABLE = [
+          [/IMPORT_RATE_LIMIT|429/i, '上架请求过于频繁，请稍后再试（每分钟最多 30 次）'],
+          [
+            /IMPORT_ACTIVE_TASK_LIMIT|已有上架任务|已有.*上架任务.*处理中/i,
+            '当前账号已有上架任务在处理中；已提交的店铺会继续处理，失败店铺请稍后重试',
+          ],
+          [/AUTH_EXPIRED|401|TOKEN_REVOKED|jwt expired/i, '登录已过期，请重新登录后重试'],
+          [/Tenant context missing/i, '租户信息缺失，请重新登录'],
+          [/items\.length must be <= 200/i, '单次最多 200 个商品，请分批上架'],
+          [/未收到任务ID|task_id/i, '后端未返回任务编号，可能是网络中断，请稍后重试'],
+          [
+            /executeScript 未返回结果|bridge 返回错误|seller portal/i,
+            'seller.ozon.ru 页面通讯失败，请刷新该页签后重试',
+          ],
+          [/sc_company_id|cookie已过期|请先登录|seller\.ozon\.ru/i, '请确认已登录 seller.ozon.ru'],
+          [/NetworkError|Failed to fetch|TimeoutError|超时/i, '网络异常或请求超时，请检查网络后重试'],
+          [/Pre-import lookup failed/i, 'Ozon 商品列表查询失败，已中止避免重复，请稍后重试'],
+          [/offer_id already exists/i, '商品 offer_id 已存在，请检查是否重复上架'],
+          [/Store not found/i, '店铺不存在或无权访问'],
+          [/Missing x-ozon-store-id/i, '请先选择一个店铺'],
+        ];
+        for (const [re, label] of TABLE) {
+          if (re.test(msg)) return label;
+        }
+        return msg.length > 200 ? msg.slice(0, 200) + '…' : msg;
+      };
+
+      // Flatten Promise.allSettled results
+      const storeResults = settledResults.map((r, i) => {
+        const storeName =
+          panel
+            .querySelector(`.ozon-helper-mv-store-cb[value="${selectedStoreIds[i]}"]`)
+            ?.parentElement?.textContent?.trim() || selectedStoreIds[i];
+        if (r.status === 'fulfilled') return r.value;
+        return { storeName, ok: false, error: humanizeError(r.reason?.message || r.reason) };
+      });
+
+      // ── 门户上架(viaPortal):create→update→upload 已同步完成,这里内联轮询 Ozon 侧
+      // 校验结果(数秒内出 processed/failed),给出真实「成功 X/失败 Y」回显。官方 API 路径
+      // 不受影响(只入队即返回,进度在 popup「上架记录」看)。
+      if (viaPortal) {
+        const okStores = storeResults.filter((r) => r.ok);
+        const submitFailed = storeResults.filter((r) => !r.ok);
+        if (okStores.length > 0) {
+          showMvStatus(statusDiv, 'loading', '已提交卖家中心,正在确认上架结果...');
+        }
+        const deadline = Date.now() + 16000;
+        for (const pr of okStores) {
+          pr._created = 0;
+          pr._failed = 0;
+          pr._errs = [];
+          const taskIds = Array.isArray(pr._taskIds) && pr._taskIds.length ? pr._taskIds : [pr.taskId];
+          for (const tid of taskIds) {
+            let st = null;
+            while (Date.now() < deadline) {
+              st = await window
+                .sendMessage('portalImportStatus', { taskId: String(tid), companyId: pr._companyId || undefined })
+                .catch(() => null);
+              if (st && st.done) break;
+              await new Promise((res) => setTimeout(res, 2000));
+            }
+            if (st) {
+              pr._created += Math.max(0, Number(st.processed || 0) - Number(st.failed || 0));
+              pr._failed += Number(st.failed || 0);
+              if (Array.isArray(st.errors)) pr._errs.push(...st.errors);
+            }
+          }
+        }
+        const totalCreated = okStores.reduce((s, r) => s + (r._created || 0), 0);
+        const totalFailed = okStores.reduce((s, r) => s + (r._failed || 0), 0);
+        const firstErr = okStores.flatMap((r) => r._errs || [])[0]?.errors?.[0]?.message;
+        const submitFailDetail = submitFailed.map((r) => `${r.storeName}: ${r.error || '未知错误'}`).join('\n');
+        if (submitFailed.length === 0 && totalFailed === 0 && totalCreated > 0) {
+          saveManualListingConfigAfterSuccess(panel, { lastResult: { viaPortal: true, totalCreated, totalFailed } });
+          showMvStatus(
+            statusDiv,
+            'success',
+            `门户上架完成！已通过卖家中心创建 ${totalCreated} 个商品 → ${okStores.length} 个店铺。可在 seller.ozon.ru 商品列表查看。`
+          );
+          setTimeout(() => closePanel(panel), 2500);
+        } else if (totalCreated > 0) {
+          saveManualListingConfigAfterSuccess(panel, { lastResult: { viaPortal: true, totalCreated, totalFailed } });
+          const parts = [`门户上架部分成功：创建 ${totalCreated} 个，失败 ${totalFailed} 个。`];
+          if (firstErr) parts.push(`失败原因示例: ${firstErr}`);
+          if (submitFailDetail) parts.push(`提交失败店铺:\n${submitFailDetail}`);
+          showMvStatus(statusDiv, 'error', parts.join('\n'));
+        } else {
+          const detail =
+            submitFailDetail || (firstErr ? `卖家中心拒绝: ${firstErr}` : '未创建任何商品,请稍后在卖家中心确认');
+          showMvStatus(statusDiv, 'error', `门户上架失败:\n${detail}`);
+        }
+        _unlockUI();
+        return;
+      }
+
+      // Show final summary
+      const matchInfo = `\u53d8\u4f53\u5339\u914d: ${matched.length}/${checkedIndices.length}`;
+      const skippedInfo = skipped.length > 0 ? ` (SKU ${skipped.join(', ')} \u4f7f\u7528\u7c7b\u76ee\u56de\u9000)` : '';
+      const successCount = storeResults.filter((r) => r.ok).length;
+      const failedStores = storeResults.filter((r) => !r.ok);
+
+      if (failedStores.length === 0) {
+        saveManualListingConfigAfterSuccess(panel, { lastResult: { viaPortal: false, successCount, totalStores } });
+        const allWarnings = storeResults.flatMap((r) => r.warnings || []);
+        const warnText = allWarnings.length > 0 ? `\n提醒: ${allWarnings[0]}` : '';
+        showMvStatus(
+          statusDiv,
+          'success',
+          `已提交到后台！${items.length} 个商品正在后台上架到 ${successCount} 个店铺，可在插件弹窗「上架记录」查看进度 (${matchInfo}${skippedInfo})${warnText}`
+        );
+        setTimeout(() => closePanel(panel), allWarnings.length > 0 ? 5000 : 2000);
+      } else if (successCount > 0) {
+        saveManualListingConfigAfterSuccess(panel, { lastResult: { viaPortal: false, successCount, totalStores } });
+        const failDetail = failedStores.map((r) => `${r.storeName}: ${r.error || '未知错误'}`).join('\n');
+        showMvStatus(
+          statusDiv,
+          'error',
+          `部分入队成功: ${successCount}/${totalStores} 个店铺已提交。\n失败明细:\n${failDetail}`
+        );
       } else {
-        const detail = submitFailDetail || (firstErr ? `卖家中心拒绝: ${firstErr}` : '未创建任何商品,请稍后在卖家中心确认');
-        showMvStatus(statusDiv, 'error', `门户上架失败:\n${detail}`);
+        const failDetail = failedStores.map((r) => `${r.storeName}: ${r.error || '未知错误'}`).join('\n');
+        showMvStatus(statusDiv, 'error', `提交失败:\n${failDetail}`);
       }
+      // Always re-enable confirm button so user can retry on error
       _unlockUI();
-      return;
-    }
-
-    // Show final summary
-    const matchInfo = `\u53d8\u4f53\u5339\u914d: ${matched.length}/${checkedIndices.length}`;
-    const skippedInfo = skipped.length > 0
-      ? ` (SKU ${skipped.join(', ')} \u4f7f\u7528\u7c7b\u76ee\u56de\u9000)` : '';
-    const successCount = storeResults.filter(r => r.ok).length;
-    const failedStores = storeResults.filter(r => !r.ok);
-
-    if (failedStores.length === 0) {
-      saveManualListingConfigAfterSuccess(panel, { lastResult: { viaPortal: false, successCount, totalStores } });
-      const allWarnings = storeResults.flatMap(r => r.warnings || []);
-      const warnText = allWarnings.length > 0
-        ? `\n提醒: ${allWarnings[0]}`
-        : '';
-      showMvStatus(statusDiv, 'success',
-        `已提交到后台！${items.length} 个商品正在后台上架到 ${successCount} 个店铺，可在插件弹窗「上架记录」查看进度 (${matchInfo}${skippedInfo})${warnText}`);
-      setTimeout(() => closePanel(panel), allWarnings.length > 0 ? 5000 : 2000);
-    } else if (successCount > 0) {
-      saveManualListingConfigAfterSuccess(panel, { lastResult: { viaPortal: false, successCount, totalStores } });
-      const failDetail = failedStores
-        .map(r => `${r.storeName}: ${r.error || '未知错误'}`)
-        .join('\n');
-      showMvStatus(statusDiv, 'error',
-        `部分入队成功: ${successCount}/${totalStores} 个店铺已提交。\n失败明细:\n${failDetail}`);
-    } else {
-      const failDetail = failedStores.map(r => `${r.storeName}: ${r.error || '未知错误'}`).join('\n');
-      showMvStatus(statusDiv, 'error', `提交失败:\n${failDetail}`);
-    }
-    // Always re-enable confirm button so user can retry on error
-    _unlockUI();
     } catch (err) {
       // 同步 DOM 异常(如 insertBefore)或 await 链抛错统一在此兜底,绝不再静默卡死。
       console.error('[MultiFollowSell] 上架流程未捕获异常,已解锁 UI 供重试:', err);
-      try { showMvStatus(statusDiv, 'error', '上架出错:' + (err?.message || err) + '，请刷新页面后重试'); } catch (_) {}
-      try { _unlockUI(); } catch (_) {}
+      try {
+        showMvStatus(statusDiv, 'error', '上架出错:' + (err?.message || err) + '，请刷新页面后重试');
+      } catch (_) {}
+      try {
+        _unlockUI();
+      } catch (_) {}
     }
   }
 
@@ -8722,14 +9351,25 @@
   function jzExtractRichContentFromStates(states) {
     if (!states || typeof states !== 'object') return '';
     const isRichDoc = (o) =>
-      o && typeof o === 'object' && Array.isArray(o.content) && o.content.length > 0 &&
+      o &&
+      typeof o === 'object' &&
+      Array.isArray(o.content) &&
+      o.content.length > 0 &&
       o.content.some((b) => b && typeof b === 'object' && typeof b.widgetName === 'string');
     for (const k of Object.keys(states)) {
       let v = states[k];
-      if (typeof v === 'string') { try { v = JSON.parse(v); } catch { continue; } }
+      if (typeof v === 'string') {
+        try {
+          v = JSON.parse(v);
+        } catch {
+          continue;
+        }
+      }
       if (!v || typeof v !== 'object') continue;
       if (typeof v.richAnnotationJson === 'string' && v.richAnnotationJson.trim()) {
-        try { if (isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim(); } catch {}
+        try {
+          if (isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim();
+        } catch {}
       }
       if (isRichDoc(v)) return JSON.stringify({ content: v.content, version: v.version || 0.3 });
     }
@@ -8800,17 +9440,19 @@
       `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(path)}`,
     ];
     const upgrade = (u) =>
-      typeof u === 'string' && u.includes('ir.ozone.ru')
-        ? u.replace(/\/wc\d+\//, '/wc1000/')
-        : u;
-    const norm = (u) => String(u || '').split('?')[0].split('#')[0].toLowerCase();
+      typeof u === 'string' && u.includes('ir.ozone.ru') ? u.replace(/\/wc\d+\//, '/wc1000/') : u;
+    const norm = (u) =>
+      String(u || '')
+        .split('?')[0]
+        .split('#')[0]
+        .toLowerCase();
 
     let richContent = '';
     for (const url of endpoints) {
       try {
         const resp = await fetch(url, {
           credentials: 'include',
-          headers: { 'x-o3-app-name': 'dweb_client', 'accept': 'application/json' },
+          headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
         });
         if (!resp.ok) continue;
         const data = await resp.json();
@@ -8823,7 +9465,13 @@
         let bestCover = null;
         for (const k of Object.keys(states)) {
           let v = states[k];
-          if (typeof v === 'string') { try { v = JSON.parse(v); } catch { continue; } }
+          if (typeof v === 'string') {
+            try {
+              v = JSON.parse(v);
+            } catch {
+              continue;
+            }
+          }
           if (!v || typeof v !== 'object') continue;
           if (!Array.isArray(v.images)) continue;
           if (v.images.length > bestImages.length) {
@@ -8832,7 +9480,12 @@
           }
         }
         if (bestImages.length === 0) {
-          console.warn('[fetchVariantGallery] No images in widgetStates', path, 'totalKeys=', Object.keys(states).length);
+          console.warn(
+            '[fetchVariantGallery] No images in widgetStates',
+            path,
+            'totalKeys=',
+            Object.keys(states).length
+          );
           continue;
         }
         const seen = new Set();
@@ -8847,7 +9500,7 @@
         };
         if (bestCover) push(bestCover);
         for (const img of bestImages) {
-          const u = typeof img === 'string' ? img : (img?.src || img?.url || img?.image);
+          const u = typeof img === 'string' ? img : img?.src || img?.url || img?.image;
           if (u) push(u);
         }
         if (out.length > 0) return { images: out, richContent };
@@ -8880,11 +9533,14 @@
           // 与 SW classifyError 同口径细分 403:HTML 挑战页 = 真反爬;结构化 JSON 权限/会话错
           // (company_id 失效等)= AUTH_REQUIRED(引导重登/重选店,不当反爬冷却)。裸 403 仍按反爬。
           const blob = msg.toLowerCase();
-          const looksHtmlChallenge = /<html|<!doctype|just a moment|attention required|captcha|challenge|вы не робот|too many requests/.test(blob);
-          const looksStructuredApiError = /"code"|"message"|permission_?denied|company_?id|sc_company|unauthenticated|session/.test(blob);
-          errorCode = (looksStructuredApiError && !looksHtmlChallenge) ? 'AUTH_REQUIRED' : 'ANTIBOT_BLOCKED';
-        }
-        else if (msg.includes('超时') || msg.includes('timeout')) errorCode = 'TIMEOUT';
+          const looksHtmlChallenge =
+            /<html|<!doctype|just a moment|attention required|captcha|challenge|вы не робот|too many requests/.test(
+              blob
+            );
+          const looksStructuredApiError =
+            /"code"|"message"|permission_?denied|company_?id|sc_company|unauthenticated|session/.test(blob);
+          errorCode = looksStructuredApiError && !looksHtmlChallenge ? 'AUTH_REQUIRED' : 'ANTIBOT_BLOCKED';
+        } else if (msg.includes('超时') || msg.includes('timeout')) errorCode = 'TIMEOUT';
         return { items: [], error: errorCode, message: msg };
       }
     };
@@ -8907,7 +9563,8 @@
       if (result.items.length === 0 && result.error) {
         const hints = {
           NO_SELLER_TAB: '请先打开 seller.ozon.ru 并登录,然后重试',
-          PERMISSION_DENIED: '浏览器未授予插件访问 seller.ozon.ru 的权限。请在扩展管理页面点击本插件的"详细信息",将"网站访问权限"设为"在所有网站上",然后刷新页面重试',
+          PERMISSION_DENIED:
+            '浏览器未授予插件访问 seller.ozon.ru 的权限。请在扩展管理页面点击本插件的"详细信息",将"网站访问权限"设为"在所有网站上",然后刷新页面重试',
           AUTH_REQUIRED: '卖家中心登录已过期,请重新登录 seller.ozon.ru 后重试',
           ANTIBOT_BLOCKED: '卖家中心触发反爬验证,请在 seller.ozon.ru 页面刷新后重试',
           TIMEOUT: '卖家中心请求超时,请检查网络或刷新 seller.ozon.ru 页面',
@@ -8965,11 +9622,14 @@
           // 与 SW classifyError 同口径细分 403:HTML 挑战页 = 真反爬;结构化 JSON 权限/会话错
           // (company_id 失效等)= AUTH_REQUIRED(引导重登/重选店,不当反爬冷却)。裸 403 仍按反爬。
           const blob = msg.toLowerCase();
-          const looksHtmlChallenge = /<html|<!doctype|just a moment|attention required|captcha|challenge|вы не робот|too many requests/.test(blob);
-          const looksStructuredApiError = /"code"|"message"|permission_?denied|company_?id|sc_company|unauthenticated|session/.test(blob);
-          errorCode = (looksStructuredApiError && !looksHtmlChallenge) ? 'AUTH_REQUIRED' : 'ANTIBOT_BLOCKED';
-        }
-        else if (msg.includes('超时') || msg.includes('timeout')) errorCode = 'TIMEOUT';
+          const looksHtmlChallenge =
+            /<html|<!doctype|just a moment|attention required|captcha|challenge|вы не робот|too many requests/.test(
+              blob
+            );
+          const looksStructuredApiError =
+            /"code"|"message"|permission_?denied|company_?id|sc_company|unauthenticated|session/.test(blob);
+          errorCode = looksStructuredApiError && !looksHtmlChallenge ? 'AUTH_REQUIRED' : 'ANTIBOT_BLOCKED';
+        } else if (msg.includes('超时') || msg.includes('timeout')) errorCode = 'TIMEOUT';
         return { items: [], error: errorCode, message: msg };
       }
     };
@@ -8996,7 +9656,8 @@
       if (result.items.length === 0 && result.error) {
         const hints = {
           NO_SELLER_TAB: '请先打开 seller.ozon.ru 并登录，然后重试',
-          PERMISSION_DENIED: '浏览器未授予插件访问 seller.ozon.ru 的权限。请在扩展管理页面点击本插件的"详细信息"，将"网站访问权限"设为"在所有网站上"，然后刷新页面重试',
+          PERMISSION_DENIED:
+            '浏览器未授予插件访问 seller.ozon.ru 的权限。请在扩展管理页面点击本插件的"详细信息"，将"网站访问权限"设为"在所有网站上"，然后刷新页面重试',
           AUTH_REQUIRED: '卖家中心登录已过期，请重新登录 seller.ozon.ru 后重试',
           ANTIBOT_BLOCKED: '卖家中心触发反爬验证，请在 seller.ozon.ru 页面刷新后重试',
           TIMEOUT: '卖家中心请求超时，请检查网络或刷新 seller.ozon.ru 页面',
@@ -9011,7 +9672,7 @@
     if (result.items.length > 0) {
       // Auto-sync cookies to backend (fire-and-forget)
       window.sendMessage('syncSellerCookies').catch(() => {});
-      const exact = result.items.find(it => String(it.variant_id) === sku);
+      const exact = result.items.find((it) => String(it.variant_id) === sku);
       return exact || result.items[0];
     }
 
@@ -9027,7 +9688,7 @@
    */
   async function pollImportTaskStatus(taskId, statusDiv, showStatusFn, maxAttempts = 10, intervalMs = 3000) {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      await new Promise(r => setTimeout(r, intervalMs));
+      await new Promise((r) => setTimeout(r, intervalMs));
       try {
         const statusRes = await window.sendMessage('getImportStatus', { taskId: String(taskId) });
         const result = statusRes?.result;
@@ -9042,26 +9703,28 @@
         }
 
         // Check statuses: "imported", "failed", "pending"
-        const failed = items.filter(it => it.status === 'failed');
-        const pending = items.filter(it => it.status === 'pending');
-        const imported = items.filter(it => it.status === 'imported');
+        const failed = items.filter((it) => it.status === 'failed');
+        const pending = items.filter((it) => it.status === 'pending');
+        const imported = items.filter((it) => it.status === 'imported');
 
         if (pending.length > 0 && attempt < maxAttempts) {
-          showStatusFn(statusDiv, 'loading',
-            `Ozon处理中: ${imported.length} 成功, ${pending.length} 待处理... (${attempt}/${maxAttempts})`);
+          showStatusFn(
+            statusDiv,
+            'loading',
+            `Ozon处理中: ${imported.length} 成功, ${pending.length} 待处理... (${attempt}/${maxAttempts})`
+          );
           continue;
         }
 
         if (failed.length > 0) {
           // Show detailed error from Ozon with code + message
-          const errors = failed.map(it => {
+          const errors = failed.map((it) => {
             const errs = (it.errors || [])
-              .map(e => e.code ? `[${e.code}] ${e.message || e.code}` : (e.message || JSON.stringify(e)))
+              .map((e) => (e.code ? `[${e.code}] ${e.message || e.code}` : e.message || JSON.stringify(e)))
               .join('\n  ');
             return `• ${it.offer_id}:\n  ${errs || '未知错误'}`;
           });
-          showStatusFn(statusDiv, 'error',
-            `上架失败 (${failed.length}/${items.length}):\n${errors.join('\n')}`);
+          showStatusFn(statusDiv, 'error', `上架失败 (${failed.length}/${items.length}):\n${errors.join('\n')}`);
           console.error('[ImportStatus] Failed items:', JSON.stringify(failed, null, 2));
           return { status: 'error', warnings: [] };
         }
@@ -9069,38 +9732,43 @@
         // Check imported items for errors (Ozon may return status="imported" with validation errors)
         // Non-fatal error codes: product is imported but needs seller action (e.g. brand certification)
         const NON_FATAL_CODES = new Set(['BR_wrong_name', 'BR_missing_docs']);
-        const importedWithErrors = imported.filter(it =>
-          it.errors && it.errors.some(e => e.level === 'error' && !NON_FATAL_CODES.has(e.code))
+        const importedWithErrors = imported.filter(
+          (it) => it.errors && it.errors.some((e) => e.level === 'error' && !NON_FATAL_CODES.has(e.code))
         );
 
         // Show non-fatal warnings separately
-        const importedWithWarnings = imported.filter(it =>
-          it.errors && it.errors.some(e => e.level === 'error' && NON_FATAL_CODES.has(e.code))
+        const importedWithWarnings = imported.filter(
+          (it) => it.errors && it.errors.some((e) => e.level === 'error' && NON_FATAL_CODES.has(e.code))
         );
         if (importedWithWarnings.length > 0) {
-          const warns = importedWithWarnings.flatMap(it =>
-            (it.errors || []).filter(e => NON_FATAL_CODES.has(e.code)).map(e => `[${e.code}] ${e.message || e.code}`)
+          const warns = importedWithWarnings.flatMap((it) =>
+            (it.errors || [])
+              .filter((e) => NON_FATAL_CODES.has(e.code))
+              .map((e) => `[${e.code}] ${e.message || e.code}`)
           );
           console.warn('[ImportStatus] Non-fatal warnings:', warns.join('; '));
         }
 
         if (importedWithErrors.length > 0) {
-          const errors = importedWithErrors.map(it => {
+          const errors = importedWithErrors.map((it) => {
             const errs = (it.errors || [])
-              .filter(e => e.level === 'error' && !NON_FATAL_CODES.has(e.code))
-              .map(e => e.code ? `[${e.code}] ${e.message || e.code}` : (e.message || JSON.stringify(e)))
+              .filter((e) => e.level === 'error' && !NON_FATAL_CODES.has(e.code))
+              .map((e) => (e.code ? `[${e.code}] ${e.message || e.code}` : e.message || JSON.stringify(e)))
               .join('\n  ');
             return `• ${it.offer_id}:\n  ${errs || '未知错误'}`;
           });
-          showStatusFn(statusDiv, 'error',
-            `上架验证失败 (${importedWithErrors.length}/${items.length}):\n${errors.join('\n')}`);
+          showStatusFn(
+            statusDiv,
+            'error',
+            `上架验证失败 (${importedWithErrors.length}/${items.length}):\n${errors.join('\n')}`
+          );
           console.error('[ImportStatus] Imported items with errors:', JSON.stringify(importedWithErrors, null, 2));
           return { status: 'error', warnings: [] };
         }
 
         if (imported.length === items.length) {
-          const warnings = importedWithWarnings.flatMap(it =>
-            (it.errors || []).filter(e => NON_FATAL_CODES.has(e.code)).map(e => e.message || e.code)
+          const warnings = importedWithWarnings.flatMap((it) =>
+            (it.errors || []).filter((e) => NON_FATAL_CODES.has(e.code)).map((e) => e.message || e.code)
           );
           if (warnings.length > 0) {
             return { status: 'success', warnings };
@@ -9110,32 +9778,29 @@
 
         // Timeout with pending items
         if (attempt >= maxAttempts && pending.length > 0) {
-          showStatusFn(statusDiv, 'loading',
-            `任务仍在处理中 (Task: ${taskId})，请稍后在商品列表中查看结果`);
+          showStatusFn(statusDiv, 'loading', `任务仍在处理中 (Task: ${taskId})，请稍后在商品列表中查看结果`);
           return { status: 'pending', warnings: [] };
         }
       } catch (err) {
         console.warn(`[ImportStatus] Poll attempt ${attempt} failed:`, err.message);
       }
     }
-    showStatusFn(statusDiv, 'loading',
-      `任务提交成功 (Task: ${taskId})，Ozon正在处理中，请稍后查看商品列表`);
+    showStatusFn(statusDiv, 'loading', `任务提交成功 (Task: ${taskId})，Ozon正在处理中，请稍后查看商品列表`);
     return { status: 'timeout', warnings: [] };
   }
 
-
   // 卖家初始化字符(头像 fallback)
   function _sellerInitial(name) {
-    if (!name) return "?";
+    if (!name) return '?';
     const trimmed = String(name).trim();
-    if (!trimmed) return "?";
+    if (!trimmed) return '?';
     return trimmed.slice(0, 1).toUpperCase();
   }
 
   // hash → HSL 色相,稳定但分布均匀(同名卖家颜色一致)
   function _sellerColor(name) {
     let h = 0;
-    const s = String(name || "");
+    const s = String(name || '');
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `hsl(${h % 360}, 60%, 55%)`;
   }
@@ -9192,7 +9857,9 @@
 
   function _renderSellerRow(seller, flags = {}) {
     const sellerUrl = seller.link
-      ? (seller.link.startsWith('http') ? seller.link : 'https://www.ozon.ru' + seller.link)
+      ? seller.link.startsWith('http')
+        ? seller.link
+        : 'https://www.ozon.ru' + seller.link
       : '';
     const avatarHtml = seller.avatar
       ? `<img class="oh-seller-avatar" src="${_escHtml(seller.avatar)}" alt="" loading="lazy" />`
@@ -9200,28 +9867,19 @@
     const nameHtml = sellerUrl
       ? `<a class="oh-seller-name oh-seller-link" href="${_escHtml(sellerUrl)}" target="_blank" rel="noopener">${_escHtml(seller.name || '未知卖家')}</a>`
       : `<span class="oh-seller-name">${_escHtml(seller.name || '未知卖家')}</span>`;
-    const ratingHtml = typeof seller.rating === "number"
-      ? `<span class="oh-seller-rating">★ ${seller.rating.toFixed(1)}</span>`
-      : '';
+    const ratingHtml =
+      typeof seller.rating === 'number' ? `<span class="oh-seller-rating">★ ${seller.rating.toFixed(1)}</span>` : '';
     const reviewsText = _formatSellerReviews(seller.reviewsCount);
-    const reviewsHtml = reviewsText
-      ? `<span class="oh-seller-reviews">${_escHtml(reviewsText)}</span>`
-      : '';
-    const regionHtml = seller.region
-      ? `<span class="oh-seller-region">${_escHtml(seller.region)}</span>`
-      : '';
-    const skuHtml = seller.sku
-      ? `<span class="oh-seller-sku">SKU ${_escHtml(seller.sku)}</span>`
-      : '';
+    const reviewsHtml = reviewsText ? `<span class="oh-seller-reviews">${_escHtml(reviewsText)}</span>` : '';
+    const regionHtml = seller.region ? `<span class="oh-seller-region">${_escHtml(seller.region)}</span>` : '';
+    const skuHtml = seller.sku ? `<span class="oh-seller-sku">SKU ${_escHtml(seller.sku)}</span>` : '';
     const priceHtml = seller.price
       ? `<span class="oh-seller-price${flags.isMinPrice ? ' is-min' : ''}">${_escHtml(seller.price)}${flags.isMinPrice ? ' <span class="oh-seller-tag is-price">\u6700\u4f4e</span>' : ''}</span>`
       : `<span class="oh-seller-price oh-seller-price-empty">—</span>`;
     const deliveryHtml = seller.deliveryText
       ? `<span class="oh-seller-delivery-main">${_escHtml(seller.deliveryText)}</span>`
       : `<span class="oh-seller-delivery-main is-muted">\u914d\u9001\u4fe1\u606f\u672a\u8fd4\u56de</span>`;
-    const fastestTag = flags.isFastest
-      ? `<span class="oh-seller-tag is-delivery">\u6700\u5feb</span>`
-      : '';
+    const fastestTag = flags.isFastest ? `<span class="oh-seller-tag is-delivery">\u6700\u5feb</span>` : '';
     return `
       <div class="oh-seller-row${flags.isMinPrice ? ' is-min' : ''}${flags.isFastest ? ' is-fastest' : ''}">
         <div class="oh-seller-cell oh-seller-avatar-cell">${avatarHtml}</div>
@@ -9243,18 +9901,22 @@
     const sorted = _sortSellersForMode(sellers, mode);
     return `
       <div class="oh-seller-list">
-        ${sorted.map((seller) => {
-          const price = _parsePriceNum(seller.price);
-          const rank = _sellerDeliveryRank(seller);
-          return _renderSellerRow(seller, {
-            isMinPrice: stats.minPrice != null && price != null && price === stats.minPrice,
-            isFastest: stats.fastestRank != null && rank != null && rank === stats.fastestRank,
-          });
-        }).join('')}
+        ${sorted
+          .map((seller) => {
+            const price = _parsePriceNum(seller.price);
+            const rank = _sellerDeliveryRank(seller);
+            return _renderSellerRow(seller, {
+              isMinPrice: stats.minPrice != null && price != null && price === stats.minPrice,
+              isFastest: stats.fastestRank != null && rank != null && rank === stats.fastestRank,
+            });
+          })
+          .join('')}
       </div>
-      ${sellers.length < totalCount
-        ? `<div class="oh-modal-partial">已显示 ${sellers.length} / ${totalCount},完整列表点击下方按钮查看</div>`
-        : ''}
+      ${
+        sellers.length < totalCount
+          ? `<div class="oh-modal-partial">已显示 ${sellers.length} / ${totalCount},完整列表点击下方按钮查看</div>`
+          : ''
+      }
     `;
   }
 
@@ -9278,7 +9940,10 @@
   // 解析价格字符串为数字,用于「最低价」标记。Ozon 价格典型形式 "₽ 1 234,56" / "1234.56".
   function _parsePriceNum(priceStr) {
     if (!priceStr) return null;
-    const m = String(priceStr).replace(/[^\d.,-]/g, "").replace(/\s/g, "").replace(",", ".");
+    const m = String(priceStr)
+      .replace(/[^\d.,-]/g, '')
+      .replace(/\s/g, '')
+      .replace(',', '.');
     const n = parseFloat(m);
     return Number.isFinite(n) ? n : null;
   }
@@ -9287,7 +9952,7 @@
     document.querySelector('.ozon-helper-follow-modal')?.remove();
 
     const totalCount = product.followSellCount || 0;
-    const sku = product.sku || product.productId || "";
+    const sku = product.sku || product.productId || '';
     const ozonModalUrl = sku ? `https://www.ozon.ru/product/${sku}/?prefer_sellers=true` : null;
     let activeSellerMode = 'price';
     let loadedSellers = [];
@@ -9315,9 +9980,11 @@
         <div class="oh-seller-list">${_renderSkeletonRows(5)}</div>
       </div>
       <div class="oh-modal-footer">
-        ${ozonModalUrl
-          ? `<a class="oh-modal-cta" href="${_escHtml(ozonModalUrl)}" target="_blank" rel="noopener">在 Ozon 查看完整列表 →</a>`
-          : ''}
+        ${
+          ozonModalUrl
+            ? `<a class="oh-modal-cta" href="${_escHtml(ozonModalUrl)}" target="_blank" rel="noopener">在 Ozon 查看完整列表 →</a>`
+            : ''
+        }
       </div>
     `;
 
@@ -9385,7 +10052,7 @@
     // modal 可能在 await 期间被关闭
     if (!modal.isConnected) return;
 
-    const sellers = (result && Array.isArray(result.sellers)) ? result.sellers : [];
+    const sellers = result && Array.isArray(result.sellers) ? result.sellers : [];
     loadedTotalCount = Math.max(totalCount, Number(result?.count) || 0, sellers.length);
     const countEl = modal.querySelector('.oh-modal-title-count');
     if (countEl) countEl.textContent = String(loadedTotalCount);
@@ -9407,9 +10074,11 @@
         <div class="oh-modal-empty-icon">${_lucideSvg('users')}</div>
         <div class="oh-modal-empty-title">${totalCount > 0 ? `${totalCount} 个跟卖商家` : '暂无跟卖商家'}</div>
         <div class="oh-modal-empty-hint">${totalCount > 0 ? '完整卖家列表(含价格、配送、评分)请在 Ozon 查看' : '该商品当前没有其他商家跟卖'}</div>
-        ${ozonModalUrl && totalCount > 0
-          ? `<a class="oh-modal-empty-btn" href="${_escHtml(ozonModalUrl)}" target="_blank" rel="noopener">在 Ozon 查看 →</a>`
-          : ''}
+        ${
+          ozonModalUrl && totalCount > 0
+            ? `<a class="oh-modal-empty-btn" href="${_escHtml(ozonModalUrl)}" target="_blank" rel="noopener">在 Ozon 查看 →</a>`
+            : ''
+        }
       </div>
     `;
   }
@@ -9433,10 +10102,17 @@
     const dialog = document.createElement('div');
     dialog.className = 'ozon-helper-pipeline-loading';
     dialog.style.cssText = [
-      'position:fixed', 'top:50%', 'left:50%', 'transform:translate(-50%,-50%)',
-      'z-index:2147483646', 'width:360px', 'background:#fff',
-      'border-radius:12px', 'box-shadow:0 10px 40px rgba(0,0,0,0.2)',
-      'padding:20px 24px', 'font-family:inherit',
+      'position:fixed',
+      'top:50%',
+      'left:50%',
+      'transform:translate(-50%,-50%)',
+      'z-index:2147483646',
+      'width:360px',
+      'background:#fff',
+      'border-radius:12px',
+      'box-shadow:0 10px 40px rgba(0,0,0,0.2)',
+      'padding:20px 24px',
+      'font-family:inherit',
     ].join(';');
     dialog.innerHTML = `
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
@@ -9481,7 +10157,9 @@
     };
 
     const close = () => {
-      try { dialog.remove(); } catch {}
+      try {
+        dialog.remove();
+      } catch {}
     };
 
     return { dialog, update, close };
@@ -9546,8 +10224,7 @@
       const currentSku = String(extractProductData()?.sku || '');
 
       // 是否需要 Phase A(只有真多轴 + 多变体才展开)
-      const needPhaseA =
-        rawAspects.length >= 2 && variants.length > 1 && currentSku;
+      const needPhaseA = rawAspects.length >= 2 && variants.length > 1 && currentSku;
 
       // 是否能跑 Phase B(JZSkuCollect 由 manifest 注入 lib/sku-collect.js,
       // 单独门控 — 没有也不阻断面板打开,只是 placeholder 留空)
@@ -9559,9 +10236,7 @@
         // ── 提前算出 Phase A 要 fetch 几个链接(让初始 progress 文本正确显示 N/M) ──
         let linksToFetch = [];
         if (needPhaseA) {
-          const sortedAxes = [...rawAspects].sort(
-            (a, b) => (a.variants?.length || 0) - (b.variants?.length || 0),
-          );
+          const sortedAxes = [...rawAspects].sort((a, b) => (a.variants?.length || 0) - (b.variants?.length || 0));
           const pivotAxis = sortedAxes[0];
           linksToFetch = (pivotAxis?.variants || [])
             .filter((v) => v && String(v.sku) !== currentSku && v.link)
@@ -9647,7 +10322,7 @@
                       sku,
                       title: d.title || '',
                       price: isRub ? _rubToCny(rawPriceNum) : rawPriceNum,
-                      priceCurrency: isRub ? 'CNY' : (srcCurrency || 'CNY'),
+                      priceCurrency: isRub ? 'CNY' : srcCurrency || 'CNY',
                       priceRub: isRub ? rawPriceNum : 0,
                       coverImage: (d.coverImage || '').replace(/\/wc\d+\//, '/wc1000/'),
                       link: v.link || '',
@@ -9661,10 +10336,7 @@
                     }
                   }
                   const existing = variantMap.get(sku);
-                  const text =
-                    v.data?.searchableText ||
-                    v.data?.textRs?.map((t) => t.content).join('') ||
-                    '';
+                  const text = v.data?.searchableText || v.data?.textRs?.map((t) => t.content).join('') || '';
                   if (aspectName && text) existing.aspectValues[aspectName] = text;
                 }
               }
@@ -9675,14 +10347,16 @@
             updateBtn();
           }
           console.log(
-            `[ozon-helper] phaseA SSR expand: ${variants.length} → ${variantMap.size} (fetched ${fetchedPages}/${linksToFetch.length})`,
+            `[ozon-helper] phaseA SSR expand: ${variants.length} → ${variantMap.size} (fetched ${fetchedPages}/${linksToFetch.length})`
           );
         };
 
         // 面板立即开 + 源属性后台渐进填:开面板前只跑 Phase A(多轴变体发现 —— 渲染
         // 变体表格行需要全量变体);源属性(Phase B)不再预拉阻塞,移到面板内渐进填。
         try {
-          await phaseA().finally(() => { phaseADone = true; });
+          await phaseA().finally(() => {
+            phaseADone = true;
+          });
         } catch (e) {
           console.warn('[ozon-helper] pipeline await failed:', e?.message || e);
         } finally {
@@ -9707,11 +10381,9 @@
       const hasImages = Array.isArray(product?.images) && product.images.length > 0;
       const hasSku = !!(product?.sku || product?.productId);
       if (!hasTitle || !hasImages || !hasSku) {
-        const missing = [
-          !hasTitle ? '标题' : null,
-          !hasImages ? '图片' : null,
-          !hasSku ? 'SKU' : null,
-        ].filter(Boolean).join(' / ');
+        const missing = [!hasTitle ? '标题' : null, !hasImages ? '图片' : null, !hasSku ? 'SKU' : null]
+          .filter(Boolean)
+          .join(' / ');
         const original = btn ? btn.innerHTML : null;
         if (btn) {
           btn.disabled = true;
@@ -9721,7 +10393,12 @@
             btn.disabled = false;
           }, 3500);
         }
-        console.warn('[ozon-helper] extractProductData missing fields after fallback:', { hasTitle, hasImages, hasSku, product });
+        console.warn('[ozon-helper] extractProductData missing fields after fallback:', {
+          hasTitle,
+          hasImages,
+          hasSku,
+          product,
+        });
         return;
       }
       // product.price 已经是 normalized number,币种从 _detectPageCurrency() 拿
@@ -9729,18 +10406,20 @@
       const rawPrice = product.price || 0;
       const srcCurrency = _detectPageCurrency();
       const isRub = srcCurrency === 'RUB';
-      variants = [{
-        sku: product.sku || product.productId || '',
-        title: product.title || '',
-        price: isRub ? _rubToCny(rawPrice) : rawPrice,
-        priceCurrency: isRub ? 'CNY' : (srcCurrency || 'CNY'),
-        priceRub: isRub ? rawPrice : 0,
-        coverImage: product.images?.[0] || '',
-        link: window.location.href,
-        availability: true,
-        active: true,
-        aspectValues: {},
-      }];
+      variants = [
+        {
+          sku: product.sku || product.productId || '',
+          title: product.title || '',
+          price: isRub ? _rubToCny(rawPrice) : rawPrice,
+          priceCurrency: isRub ? 'CNY' : srcCurrency || 'CNY',
+          priceRub: isRub ? rawPrice : 0,
+          coverImage: product.images?.[0] || '',
+          link: window.location.href,
+          availability: true,
+          active: true,
+          aspectValues: {},
+        },
+      ];
     }
 
     // Remove stale panel node before creating new one (guaranteed single node)
@@ -9750,7 +10429,7 @@
     // 内部检测到 preCollectedSourceMap 有数据就 apply placeholders 跳过自己的 fetch。
     const panel = createMultiVariantFollowSellPanel(
       variants,
-      _expandSourceMap && _expandSourceMap.size > 0 ? _expandSourceMap : null,
+      _expandSourceMap && _expandSourceMap.size > 0 ? _expandSourceMap : null
     );
 
     closeAllPanels(panel);
@@ -9764,8 +10443,8 @@
     if (hashtagWidget) {
       const tagEls = hashtagWidget.querySelectorAll('[title]');
       const tags = Array.from(tagEls)
-        .map(el => el.getAttribute('title')?.trim())
-        .filter(t => t && t.startsWith('#'));
+        .map((el) => el.getAttribute('title')?.trim())
+        .filter((t) => t && t.startsWith('#'));
       if (tags.length > 0) return tags;
     }
     // Fallback: extract from tagList widget — but ONLY genuine hashtags (#-prefixed).
@@ -9778,8 +10457,8 @@
     if (tagList) {
       const links = tagList.querySelectorAll('a');
       const tags = Array.from(links)
-        .map(a => a.textContent?.trim())
-        .filter(t => t && t.startsWith('#'));
+        .map((a) => a.textContent?.trim())
+        .filter((t) => t && t.startsWith('#'));
       if (tags.length > 0) return tags.slice(0, 20);
     }
     return [];
@@ -9791,8 +10470,7 @@
     const isExtensionNode = (node) => Boolean(node?.closest?.('[class*="ozon-helper"]'));
     // 富内容(RichContent widget)继续作为独立富内容块(11254)下发,描述不再兜底抓它回来:
     // 凡落在富内容 widget 内的节点一律跳过 —— 同时挡住 directSelectors 与下方「Описание 标题启发式」两条口子。
-    const isRichContentNode = (node) =>
-      Boolean(node?.closest?.('[data-widget*="richcontent" i]'));
+    const isRichContentNode = (node) => Boolean(node?.closest?.('[data-widget*="richcontent" i]'));
     const candidates = [];
     const addCandidateText = (text) => {
       const raw = String(text || '').trim();
@@ -9807,10 +10485,7 @@
     const state = window.extractStateData?.('state-webDescription');
     const fromState = contentCopy?.extractDescriptionText
       ? contentCopy.extractDescriptionText(state, 4096)
-      : contentCopy?.safeText(
-          state?.description || state?.text || state?.content || state?.html || '',
-          4096,
-        );
+      : contentCopy?.safeText(state?.description || state?.text || state?.content || state?.html || '', 4096);
     addCandidateText(fromState);
 
     const directSelectors = [
@@ -9841,17 +10516,19 @@
       '\u63cf\u8ff0',
       '\u5546\u54c1\u63cf\u8ff0',
     ]);
-    const normalizeHeading = (value) => String(value || '')
-      .replace(/\s+/g, ' ')
-      .replace(/[:：]+$/g, '')
-      .trim()
-      .toLowerCase();
-    const headingNodes = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"],div,span,p'))
-      .filter((node) => {
+    const normalizeHeading = (value) =>
+      String(value || '')
+        .replace(/\s+/g, ' ')
+        .replace(/[:：]+$/g, '')
+        .trim()
+        .toLowerCase();
+    const headingNodes = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"],div,span,p')).filter(
+      (node) => {
         if (isExtensionNode(node)) return false;
         const text = normalizeHeading(readNodeText(node));
         return text.length > 0 && text.length <= 30 && headingTexts.has(text);
-      });
+      }
+    );
     for (const heading of headingNodes) {
       let current = heading.parentElement;
       let depth = 0;
@@ -9904,7 +10581,9 @@
     panel.querySelector('[data-action="copy-all"]').addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       const tags = extractKeywords();
-      const reset = () => { btn.innerHTML = `${window.lucideIcon('copy', 13)} 复制全部`; };
+      const reset = () => {
+        btn.innerHTML = `${window.lucideIcon('copy', 13)} 复制全部`;
+      };
       if (!tags.length) {
         btn.textContent = '无标签';
         setTimeout(reset, 1200);
@@ -9925,15 +10604,16 @@
     if (!listContainer) return;
 
     const keywords = extractKeywords();
-    
+
     if (keywords.length === 0) {
       listContainer.innerHTML = '<div class="ozon-helper-panel-empty">未找到主题标签</div>';
       return;
     }
 
-    listContainer.innerHTML = keywords.map(keyword => {
-      const safe = _escHtml(keyword);
-      return `
+    listContainer.innerHTML = keywords
+      .map((keyword) => {
+        const safe = _escHtml(keyword);
+        return `
       <div class="ozon-helper-keyword-item">
         <span class="ozon-helper-keyword-text">${safe}</span>
         <div class="ozon-helper-keyword-actions">
@@ -9943,7 +10623,8 @@
         <span class="ozon-helper-keyword-translation" data-keyword="${safe}" style="display: none;"></span>
       </div>
     `;
-    }).join('');
+      })
+      .join('');
 
     listContainer.addEventListener('click', async (e) => {
       const btn = e.target.closest('.ozon-helper-keyword-btn');
@@ -9955,9 +10636,13 @@
       if (action === 'copy') {
         const ok = await _safeCopy(keyword);
         btn.innerHTML = ok ? window.lucideIcon('check', 13) : window.lucideIcon('x', 13);
-        setTimeout(() => { btn.innerHTML = window.lucideIcon('copy', 13); }, 1000);
+        setTimeout(() => {
+          btn.innerHTML = window.lucideIcon('copy', 13);
+        }, 1000);
       } else if (action === 'translate') {
-        const translationSpan = listContainer.querySelector(`.ozon-helper-keyword-translation[data-keyword="${keyword}"]`);
+        const translationSpan = listContainer.querySelector(
+          `.ozon-helper-keyword-translation[data-keyword="${keyword}"]`
+        );
         if (!translationSpan) return;
 
         if (translationSpan.style.display === 'none') {
@@ -9972,13 +10657,17 @@
               translationSpan.textContent = '翻译失败';
               translationSpan.style.display = 'block';
               btn.innerHTML = window.lucideIcon('x', 13);
-              setTimeout(() => { btn.innerHTML = window.lucideIcon('globe', 13); }, 2000);
+              setTimeout(() => {
+                btn.innerHTML = window.lucideIcon('globe', 13);
+              }, 2000);
             }
           } catch (error) {
             translationSpan.textContent = `错误: ${error.message}`;
             translationSpan.style.display = 'block';
             btn.innerHTML = window.lucideIcon('x', 13);
-            setTimeout(() => { btn.innerHTML = window.lucideIcon('globe', 13); }, 2000);
+            setTimeout(() => {
+              btn.innerHTML = window.lucideIcon('globe', 13);
+            }, 2000);
           }
         } else {
           translationSpan.style.display = 'none';
@@ -10028,11 +10717,7 @@
         ? Math.round(((originalPrice - currentPrice) / originalPrice) * 100)
         : 0;
 
-    const priceStatus = avgPrice
-      ? currentPrice <= avgPrice
-        ? '低于均价'
-        : '高于均价'
-      : '均价未知';
+    const priceStatus = avgPrice ? (currentPrice <= avgPrice ? '低于均价' : '高于均价') : '均价未知';
 
     badge.innerHTML = `
       ${discountPercent ? `<span class="ozon-helper-badge-discount">-${discountPercent}%</span>` : ''}
@@ -10073,9 +10758,9 @@
     closeBtn.addEventListener('click', () => closePanel(panel));
 
     const tabs = panel.querySelectorAll('.ozon-helper-tab');
-    tabs.forEach(tab => {
+    tabs.forEach((tab) => {
       tab.addEventListener('click', () => {
-        tabs.forEach(t => t.classList.remove('active'));
+        tabs.forEach((t) => t.classList.remove('active'));
         tab.classList.add('active');
         loadRecommendations(tab.dataset.tab);
       });
@@ -10087,12 +10772,12 @@
   async function loadRecommendations(type) {
     const panel = document.querySelector('.ozon-helper-recommendation-panel');
     const content = panel.querySelector('.ozon-helper-recommendation-content');
-    
+
     content.innerHTML = '<div class="ozon-helper-recommendation-loading">加载中...</div>';
 
     try {
       const response = await window.sendMessage('getRecommendations', { type });
-      
+
       if (!response.ok || !response.data?.products || response.data.products.length === 0) {
         content.innerHTML = '<div class="ozon-helper-panel-empty">暂无推荐商品</div>';
         return;
@@ -10102,13 +10787,14 @@
       // All backend strings escaped — title/url/image are user-derived data
       // and must not be inlined raw into innerHTML, even from a "trusted" backend.
       const isHttpUrl = (u) => typeof u === 'string' && /^https?:\/\//i.test(u);
-      content.innerHTML = products.map(product => {
-        const imgRaw = product.image || product.images?.[0] || '';
-        const urlRaw = product.url || product.link || '';
-        const img = isHttpUrl(imgRaw) ? _escHtml(imgRaw) : '';
-        const url = isHttpUrl(urlRaw) ? _escHtml(urlRaw) : '';
-        const title = _escHtml(product.title || product.name || '未知商品');
-        return `
+      content.innerHTML = products
+        .map((product) => {
+          const imgRaw = product.image || product.images?.[0] || '';
+          const urlRaw = product.url || product.link || '';
+          const img = isHttpUrl(imgRaw) ? _escHtml(imgRaw) : '';
+          const url = isHttpUrl(urlRaw) ? _escHtml(urlRaw) : '';
+          const title = _escHtml(product.title || product.name || '未知商品');
+          return `
         <div class="ozon-helper-recommendation-card">
           <img src="${img}" alt="${title}" class="ozon-helper-recommendation-thumb" data-oh-zoom="${img}" referrerpolicy="no-referrer" />
           <div class="ozon-helper-recommendation-info">
@@ -10121,9 +10807,10 @@
           <button class="ozon-helper-btn ozon-helper-btn-sm ozon-helper-btn-primary" data-action="follow-sell" data-url="${url}">跟卖</button>
         </div>
       `;
-      }).join('');
+        })
+        .join('');
 
-      content.querySelectorAll('[data-action="follow-sell"]').forEach(btn => {
+      content.querySelectorAll('[data-action="follow-sell"]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const url = btn.dataset.url;
           if (url) {
@@ -10135,7 +10822,6 @@
       content.innerHTML = `<div class="ozon-helper-panel-empty">加载失败: ${_escHtml(error?.message || '未知错误')}</div>`;
     }
   }
-
 
   function toggleRecommendationPanel(btn) {
     const panel = createRecommendationPanel();
@@ -10179,8 +10865,8 @@
         // 只看 resp.ok,ok=true 时会把该 URL 标记为已采集并移出列表)。母体单次 push 失败
         // (failed>0)必须返回 ok:false,否则失败被隐藏、URL 被永久移出待采列表。
         collectAllVariants()
-          .then(r => {
-            const ok = r?.multiVariant ? (r.total > 0 && !r.failed) : true;
+          .then((r) => {
+            const ok = r?.multiVariant ? r.total > 0 && !r.failed : true;
             sendResponse({
               ok,
               multiVariant: !!r?.multiVariant,
@@ -10191,7 +10877,7 @@
               error: ok ? undefined : '全部变体采集失败',
             });
           })
-          .catch(err => sendResponse({ ok: false, error: err?.message || String(err) }));
+          .catch((err) => sendResponse({ ok: false, error: err?.message || String(err) }));
         return true; // 异步 sendResponse
       }
       return true;
@@ -10205,7 +10891,7 @@
       const bar = document.querySelector('.ozon-helper-action-bar');
       if (bar && bar.style.left) {
         const left = parseInt(bar.style.left);
-        const top  = parseInt(bar.style.top);
+        const top = parseInt(bar.style.top);
         if (!isNaN(left) && !isNaN(top)) {
           applyBarPosition(bar, { left, top });
         }

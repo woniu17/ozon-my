@@ -15,8 +15,8 @@
     });
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mountWhenReady, { once: true });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mountWhenReady, { once: true });
   } else {
     mountWhenReady();
   }

@@ -1,30 +1,30 @@
-const assert = require("assert");
-const fs = require("fs");
-const path = require("path");
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 
 function loadPlaywright() {
   try {
-    return require("playwright");
+    return require('playwright');
   } catch {}
 
-  return require(path.join(__dirname, "..", "..", "backend", "node_modules", "playwright"));
+  return require(path.join(__dirname, '..', '..', 'backend', 'node_modules', 'playwright'));
 }
 
 const { chromium } = loadPlaywright();
 
-const scraperPath = path.join(__dirname, "..", "content", "alibaba-1688.js");
-const pageDataHookPath = path.join(__dirname, "..", "content", "1688-page-data-hook.js");
-const manifestPath = path.join(__dirname, "..", "manifest.json");
+const scraperPath = path.join(__dirname, '..', 'content', 'alibaba-1688.js');
+const pageDataHookPath = path.join(__dirname, '..', 'content', '1688-page-data-hook.js');
+const manifestPath = path.join(__dirname, '..', 'manifest.json');
 
 async function with1688Page(fn) {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  await page.route("https://detail.1688.com/offer/663133463590.html", async (route) => {
+  await page.route('https://detail.1688.com/offer/663133463590.html', async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: "text/html; charset=utf-8",
+      contentType: 'text/html; charset=utf-8',
       body: `
         <!doctype html>
         <html>
@@ -104,16 +104,16 @@ async function with1688Page(fn) {
     });
   });
 
-  await page.exposeFunction("__capture1688Message", (message) => {
+  await page.exposeFunction('__capture1688Message', (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: "collect-id", action: "created" } } };
+    return { ok: true, data: { result: { id: 'collect-id', action: 'created' } } };
   });
 
-  await page.goto("https://detail.1688.com/offer/663133463590.html");
+  await page.goto('https://detail.1688.com/offer/663133463590.html');
   await page.evaluate(() => {
-    window.addEventListener("message", (event) => {
+    window.addEventListener('message', (event) => {
       const data = event.data || {};
-      if (data.source !== "jzc-test-1688-capture") return;
+      if (data.source !== 'jzc-test-1688-capture') return;
       window.__capture1688Message(data.message);
     });
   });
@@ -122,15 +122,15 @@ async function with1688Page(fn) {
   }
 
   const client = await page.context().newCDPSession(page);
-  const { frameTree } = await client.send("Page.getFrameTree");
+  const { frameTree } = await client.send('Page.getFrameTree');
   const frameId = frameTree.frame.id;
-  const { executionContextId } = await client.send("Page.createIsolatedWorld", {
+  const { executionContextId } = await client.send('Page.createIsolatedWorld', {
     frameId,
-    worldName: "jzc-1688-test-isolated",
+    worldName: 'jzc-1688-test-isolated',
     grantUniveralAccess: true,
   });
 
-  await client.send("Runtime.evaluate", {
+  await client.send('Runtime.evaluate', {
     contextId: executionContextId,
     expression: `
     window.chrome = {
@@ -144,8 +144,8 @@ async function with1688Page(fn) {
     };
     `,
   });
-  const scraperSource = fs.readFileSync(scraperPath, "utf8");
-  await client.send("Runtime.evaluate", {
+  const scraperSource = fs.readFileSync(scraperPath, 'utf8');
+  await client.send('Runtime.evaluate', {
     contextId: executionContextId,
     expression: `${scraperSource}\n//# sourceURL=alibaba-1688-isolated.js`,
   });
@@ -163,43 +163,43 @@ async function testStructuredSkuMapIsCollectedAsCombinations() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === "pushSourceCollect");
-    assert(message, "expected pushSourceCollect message");
+    const message = captured.find((m) => m.action === 'pushSourceCollect');
+    assert(message, 'expected pushSourceCollect message');
     const raw = message.raw;
 
     assert.strictEqual(raw.variants.length, 6);
     assert.deepStrictEqual(
       raw.variants.map((v) => v.sku),
-      ["sku-red-s", "sku-red-m", "sku-red-l", "sku-blue-s", "sku-blue-m", "sku-blue-l"],
+      ['sku-red-s', 'sku-red-m', 'sku-red-l', 'sku-blue-s', 'sku-blue-m', 'sku-blue-l']
     );
-    assert.deepStrictEqual(raw.variants[0].aspectValues, { 颜色: "红色", 尺码: "S" });
-    assert.strictEqual(raw.variants[5].price, "16.60");
+    assert.deepStrictEqual(raw.variants[0].aspectValues, { 颜色: '红色', 尺码: 'S' });
+    assert.strictEqual(raw.variants[5].price, '16.60');
     assert.strictEqual(raw.variants[5].stock, 7);
-    assert.ok(raw.variants[3].image.includes("blue.jpg"));
+    assert.ok(raw.variants[3].image.includes('blue.jpg'));
 
     assert.strictEqual(raw.mainImages.length, 6);
-    assert.ok(raw.mainImages.some((url) => url.includes("detail-02.jpg")));
-    assert.strictEqual(raw.videoUrl, "https://cloud.video.taobao.com/play/u/1/p/1/e/6/t/1/abc.mp4");
-    assert.ok(raw.videoCover.includes("video-cover.jpg"));
+    assert.ok(raw.mainImages.some((url) => url.includes('detail-02.jpg')));
+    assert.strictEqual(raw.videoUrl, 'https://cloud.video.taobao.com/play/u/1/p/1/e/6/t/1/abc.mp4');
+    assert.ok(raw.videoCover.includes('video-cover.jpg'));
   });
 }
 
 function testManifestInjectsPageDataHookInMainWorld() {
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   const scripts = manifest.content_scripts || [];
-  const hookIndex = scripts.findIndex((entry) => (entry.js || []).includes("content/1688-page-data-hook.js"));
-  const scraperIndex = scripts.findIndex((entry) => (entry.js || []).includes("content/alibaba-1688.js"));
+  const hookIndex = scripts.findIndex((entry) => (entry.js || []).includes('content/1688-page-data-hook.js'));
+  const scraperIndex = scripts.findIndex((entry) => (entry.js || []).includes('content/alibaba-1688.js'));
 
-  assert(hookIndex >= 0, "expected manifest to inject 1688 page data hook");
-  assert(scraperIndex >= 0, "expected manifest to inject 1688 scraper");
-  assert.strictEqual(scripts[hookIndex].world, "MAIN");
-  assert(hookIndex < scraperIndex, "page data hook should be declared before isolated scraper");
+  assert(hookIndex >= 0, 'expected manifest to inject 1688 page data hook');
+  assert(scraperIndex >= 0, 'expected manifest to inject 1688 scraper');
+  assert.strictEqual(scripts[hookIndex].world, 'MAIN');
+  assert(hookIndex < scraperIndex, 'page data hook should be declared before isolated scraper');
 }
 
 (async () => {
   testManifestInjectsPageDataHookInMainWorld();
   await testStructuredSkuMapIsCollectedAsCombinations();
-  console.log("alibaba-1688 scraper tests passed");
+  console.log('alibaba-1688 scraper tests passed');
 })().catch((err) => {
   console.error(err);
   process.exit(1);
