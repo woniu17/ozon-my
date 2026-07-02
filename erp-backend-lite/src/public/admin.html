@@ -422,28 +422,43 @@
         </div>
         <div class="modal-body">
           <div id="listingDetailMeta" class="listing-detail-meta"></div>
-          <div class="toolbar" style="margin-top: 16px; padding: 0">
-            <h4>商品明细</h4>
+          <div class="sub-tabs" style="margin-top: 16px">
+            <button class="sub-tab active" data-lsubtab="items">商品明细</button>
+            <button class="sub-tab" data-lsubtab="payloads">请求体备份</button>
           </div>
-          <div class="listings-table-wrap">
-            <table class="listings-table">
-              <thead>
-                <tr>
-                  <th>offer_id</th>
-                  <th>商品名</th>
-                  <th>价格</th>
-                  <th>product_id</th>
-                  <th>状态</th>
-                  <th>错误</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="listingDetailItems">
-                <tr>
-                  <td colspan="7" class="muted" style="padding: 16px; text-align: center">加载中...</td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="sub-panel active" id="lsubItems">
+            <div class="listings-table-wrap">
+              <table class="listings-table">
+                <thead>
+                  <tr>
+                    <th>offer_id</th>
+                    <th>商品名</th>
+                    <th>价格</th>
+                    <th>product_id</th>
+                    <th>状态</th>
+                    <th>错误</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="listingDetailItems">
+                  <tr>
+                    <td colspan="7" class="muted" style="padding: 16px; text-align: center">加载中...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="sub-panel" id="lsubPayloads">
+            <div class="filter-bar" style="margin-bottom: 8px">
+              <label class="filter-label">阶段:</label>
+              <select id="payloadStageSelect" class="filter-input" style="max-width: 200px">
+                <option value="">未加载</option>
+              </select>
+              <span class="muted small" style="margin-left: 8px"
+                >raw=插件原始请求体,transformed=prepareBundleItems 转换后提交给 OPI 的 items</span
+              >
+            </div>
+            <pre id="payloadJsonPre" class="json-pre">点击上方"请求体备份"加载...</pre>
           </div>
         </div>
       </div>

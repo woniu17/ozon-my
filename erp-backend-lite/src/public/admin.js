@@ -1023,6 +1023,17 @@ async function openListingDetail(localTaskId) {
   $('#listingDetailMeta').innerHTML = '<p class="muted">加载中...</p>';
   $('#listingDetailItems').innerHTML =
     '<tr><td colspan="7" class="muted" style="padding:16px;text-align:center">加载中...</td></tr>';
+  // 重置 payloads 子 tab 状态(每次打开都按需重新加载)
+  listingDetailState.payloadsLoaded = false;
+  listingDetailState.payloads = null;
+  $('#payloadJsonPre').textContent = '点击上方"请求体备份"加载...';
+  $('#payloadStageSelect').innerHTML = '<option value="">未加载</option>';
+  // 默认激活"商品明细"子 tab
+  document.querySelectorAll('#listingDetailModal .sub-tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.lsubtab === 'items');
+  });
+  $('#lsubItems').classList.add('active');
+  $('#lsubPayloads').classList.remove('active');
   try {
     const r = await api('/admin/api/listing-records/' + encodeURIComponent(localTaskId));
     const data = r?.data || {};
@@ -1057,7 +1068,75 @@ async function openListingDetail(localTaskId) {
 }
 
 // 上架详情当前任务/明细缓存(供重试按钮读取 storeId/原数据)
-const listingDetailState = { task: null, items: [] };
+// payloadsLoaded: 请求体备份是否已加载(切 tab 时按需加载,避免无谓请求)
+// payloads: { stages: [{stage, createdAt, payload}], byStage: {raw, transformed} }
+const listingDetailState = { task: null, items: [], payloadsLoaded: false, payloads: null };
+
+// 切换上架详情弹窗的子 tab (items / payloads)
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest?.('[data-lsubtab]');
+  if (!btn) return;
+  const name = btn.dataset.lsubtab;
+  document.querySelectorAll('#listingDetailModal .sub-tab').forEach((t) => {
+    t.classList.toggle('active', t === btn);
+  });
+  $('#lsubItems').classList.toggle('active', name === 'items');
+  $('#lsubPayloads').classList.toggle('active', name === 'payloads');
+  // 切到 payloads 时按需加载
+  if (name === 'payloads' && !listingDetailState.payloadsLoaded && listingDetailState.task?.localTaskId) {
+    loadListingPayloads(listingDetailState.task.localTaskId);
+  }
+});
+
+// 加载请求体备份(raw + transformed)
+async function loadListingPayloads(localTaskId) {
+  const pre = $('#payloadJsonPre');
+  const sel = $('#payloadStageSelect');
+  pre.textContent = '加载中...';
+  sel.innerHTML = '<option value="">加载中...</option>';
+  try {
+    const r = await api('/admin/api/listing-records/' + encodeURIComponent(localTaskId) + '/payloads');
+    const data = r?.data || {};
+    const stages = data.stages || [];
+    listingDetailState.payloadsLoaded = true;
+    listingDetailState.payloads = stages;
+    if (stages.length === 0) {
+      pre.textContent = '无请求体备份\n(仅 API 上架会备份;模拟手动 (viaPortal) 不备份;旧任务可能在备份功能上线前创建)';
+      sel.innerHTML = '<option value="">无</option>';
+      return;
+    }
+    // 默认显示 transformed (转换后),它更能反映实际提交给 Ozon 的内容
+    const byStage = {};
+    stages.forEach((s) => {
+      byStage[s.stage] = s;
+    });
+    const defaultStage = byStage.transformed ? 'transformed' : stages[0].stage;
+    sel.innerHTML = stages
+      .map(
+        (s) =>
+          `<option value="${escapeHtml(s.stage)}">${escapeHtml(s.stage)}${
+            s.payload && Array.isArray(s.payload) ? ` (${s.payload.length} items)` : ''
+          }</option>`
+      )
+      .join('');
+    sel.value = defaultStage;
+    renderPayloadJson(byStage[defaultStage]);
+    sel.onchange = () => renderPayloadJson(byStage[sel.value]);
+  } catch (err) {
+    pre.textContent = '加载失败: ' + err.message;
+    sel.innerHTML = '<option value="">加载失败</option>';
+  }
+}
+
+function renderPayloadJson(stage) {
+  const pre = $('#payloadJsonPre');
+  if (!stage) {
+    pre.textContent = '无数据';
+    return;
+  }
+  const header = `// stage: ${stage.stage}  |  created_at: ${stage.createdAt || '—'}\n\n`;
+  pre.textContent = header + JSON.stringify(stage.payload, null, 2);
+}
 
 function renderListingDetailItems(items) {
   const body = $('#listingDetailItems');

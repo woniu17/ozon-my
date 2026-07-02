@@ -361,6 +361,37 @@ router.get('/admin/api/listing-records/:localTaskId', (req, res, next) => {
   }
 });
 
+// GET /admin/api/listing-records/:localTaskId/payloads —— 查询某次上架请求体备份
+// 返回 raw(插件原始 items) + transformed(prepareBundleItems 转换后提交给 OPI 的 items)
+// 仅 API 上架(via_portal=0)会写 payload 备份;模拟手动 (viaPortal) 无此数据。
+router.get('/admin/api/listing-records/:localTaskId/payloads', (req, res, next) => {
+  try {
+    const localTaskId = String(req.params.localTaskId);
+    const task = db.prepare(`SELECT local_task_id FROM follow_sell_tasks WHERE local_task_id=?`).get(localTaskId);
+    if (!task) {
+      return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '上架记录不存在: ' + localTaskId));
+    }
+    const rows = db
+      .prepare(
+        `SELECT stage, payload, created_at FROM follow_sell_task_payloads
+         WHERE local_task_id=? ORDER BY id ASC`
+      )
+      .all(localTaskId);
+    res.json(
+      ok({
+        localTaskId,
+        stages: rows.map((r) => ({
+          stage: r.stage,
+          createdAt: r.created_at,
+          payload: r.payload ? JSON.parse(r.payload) : null,
+        })),
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
 // DELETE /admin/api/listing-records/:localTaskId —— 删除单条上架记录(含明细)
 router.delete('/admin/api/listing-records/:localTaskId', (req, res, next) => {
   try {
