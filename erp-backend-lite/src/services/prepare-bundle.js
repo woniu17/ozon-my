@@ -177,6 +177,10 @@ export async function prepareBundleItems(message, storeId, store) {
     const usedKeys = new Set();
 
     // 5.2a 优先从 bundleItem.attributes 提取(complex_id==0 的简单 attr)
+    // ⚠️ Ozon 字典类型属性(如 8229 "类型")的 values 可能只有 dictionary_value_id
+    // 而 value 为空字符串。只按 value 非空过滤会丢掉这种必填属性,导致 Ozon 报错
+    // "Вы не указали тип. Атрибут является обязательным для заполнения"。
+    // 修复:同时保留有 dictionary_value_id 的条目。
     if (bundleItem && Array.isArray(bundleItem.attributes)) {
       for (const ba of bundleItem.attributes) {
         // 跳过 complex attr(由 5.3 complex_attributes 处理)
@@ -185,13 +189,20 @@ export async function prepareBundleItems(message, storeId, store) {
         if (!attrId) continue;
         const key = String(attrId);
         if (usedKeys.has(key)) continue;
-        const vals = Array.isArray(ba.values) ? ba.values.filter((v) => v && v.value != null && v.value !== '') : [];
+        const vals = Array.isArray(ba.values)
+          ? ba.values.filter(
+              (v) =>
+                v &&
+                ((v.value != null && v.value !== '') ||
+                  (v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0))
+            )
+          : [];
         if (vals.length === 0) continue;
         attributes.push({
           complex_id: 0,
           id: attrId,
           values: vals.map((v) => ({
-            value: String(v.value),
+            value: String(v.value ?? ''),
             ...(v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0
               ? { dictionary_value_id: Number(v.dictionary_value_id) }
               : {}),
@@ -244,15 +255,21 @@ export async function prepareBundleItems(message, storeId, store) {
           .map((ba) => {
             const attrId = Number(ba.attribute_id || ba.id || 0);
             if (!attrId) return null;
+            // 同 5.2a:字典类型属性可能只有 dictionary_value_id 而 value 为空
             const vals = Array.isArray(ba.values)
-              ? ba.values.filter((v) => v && v.value != null && v.value !== '')
+              ? ba.values.filter(
+                  (v) =>
+                    v &&
+                    ((v.value != null && v.value !== '') ||
+                      (v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0))
+                )
               : [];
             if (vals.length === 0) return null;
             return {
               complex_id: Number(ba.complex_id) || 0,
               id: attrId,
               values: vals.map((v) => ({
-                value: String(v.value),
+                value: String(v.value ?? ''),
                 ...(v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0
                   ? { dictionary_value_id: Number(v.dictionary_value_id) }
                   : {}),

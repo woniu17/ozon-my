@@ -1,8 +1,12 @@
 {
   "ozon_portal_import": true,
+  "client_sync": false,
+  "proxy_collect": false,
   "ai_rewrite": false,
+  "bestsellers_snapshot": false,
+  "l1_samples": false,
+  "usage_track": false,
   "ai_poster": false,
   "watermark": false,
-  "copy_ban_solution": false,
-  "proxy_collect": false
+  "copy_ban_solution": false
 }
