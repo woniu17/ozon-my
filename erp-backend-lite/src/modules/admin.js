@@ -1,10 +1,11 @@
-// 管理后台路由:店铺 CRUD + 仓库实时拉取 + OPI 凭据连通性测试
+// 管理后台路由:店铺 CRUD + 仓库实时拉取 + OPI 凭据连通性测试 + 上架记录查看
 // 所有 /admin/api/* 走 JWT 鉴权(由全局 authMiddleware 拦截)
 import { Router } from 'express';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { db } from '../db/index.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { ok } from '../utils/response.js';
 import * as opi from '../services/ozon-opi.js';
@@ -30,11 +31,13 @@ function writeStores(stores) {
 
 // 由名称生成 slug,用作 id 的一部分
 function slugify(name) {
-  return String(name || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'store';
+  return (
+    String(name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'store'
+  );
 }
 
 // 校验并规范化店铺对象
@@ -47,10 +50,18 @@ function normalizeStore(input) {
   const clientId = String(creds.clientId || '').trim();
   const apiKey = String(creds.apiKey || '').trim();
 
+  // 货币代码:Ozon 店铺合同货币(RUB/KZT/USD/EUR/...),默认 RUB
+  // 必须与店铺在 Ozon 后台合同约定的货币一致,否则 /v3/product/import 会报:
+  //   "Неверно указана валюта..." (货币不正确)
+  const currencyCode = String(body.currency_code || 'RUB')
+    .trim()
+    .toUpperCase();
+
   return {
     name,
     company_id: String(body.company_id || '').trim(),
     warehouse_id: String(body.warehouse_id || '').trim(),
+    currency_code: currencyCode,
     sync_credentials: { clientId, apiKey },
   };
 }
@@ -149,10 +160,7 @@ router.get('/admin/api/stores/:id/warehouses', async (req, res, next) => {
     if (!store) {
       return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, `店铺不存在: ${id}`));
     }
-    const result = await testOpiCredentials(
-      store.sync_credentials?.clientId,
-      store.sync_credentials?.apiKey
-    );
+    const result = await testOpiCredentials(store.sync_credentials?.clientId, store.sync_credentials?.apiKey);
     res.json(ok(result));
   } catch (e) {
     next(e);
@@ -168,10 +176,7 @@ router.post('/admin/api/stores/:id/test-connection', async (req, res, next) => {
     if (!store) {
       return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, `店铺不存在: ${id}`));
     }
-    const result = await testOpiCredentials(
-      store.sync_credentials?.clientId,
-      store.sync_credentials?.apiKey
-    );
+    const result = await testOpiCredentials(store.sync_credentials?.clientId, store.sync_credentials?.apiKey);
     res.json(ok(result));
   } catch (e) {
     next(e);
@@ -184,6 +189,476 @@ router.post('/admin/api/test-connection', async (req, res, next) => {
     const creds = req.body?.sync_credentials || req.body || {};
     const result = await testOpiCredentials(creds.clientId, creds.apiKey);
     res.json(ok(result));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 上架记录 ───────────────────────────────────────────────
+
+// 解析 items_preview JSON(容错)
+function safeParseItems(s) {
+  if (!s) return [];
+  try {
+    const v = JSON.parse(s);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+// 解析 errors JSON(容错)
+function safeParseErrors(s) {
+  if (!s) return [];
+  try {
+    const v = JSON.parse(s);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+// 解析任意 JSON(容错:解析失败返回 null)
+function safeParseJson(s) {
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+// GET /admin/api/listing-records —— 上架记录列表(跨店铺,支持筛选 + 分页)
+// query: ?currentPage=1&pageSize=20&storeId=&status=&viaPortal=&keyword=
+router.get('/admin/api/listing-records', (req, res, next) => {
+  try {
+    const current = Math.max(1, Number(req.query.currentPage) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
+    const offset = (current - 1) * pageSize;
+
+    const where = [];
+    const params = [];
+    if (req.query.storeId) {
+      where.push('store_id = ?');
+      params.push(String(req.query.storeId));
+    }
+    if (req.query.status) {
+      where.push('status = ?');
+      params.push(String(req.query.status));
+    }
+    if (req.query.viaPortal === '1' || req.query.viaPortal === 'true') {
+      where.push('via_portal = 1');
+    } else if (req.query.viaPortal === '0' || req.query.viaPortal === 'false') {
+      where.push('via_portal = 0');
+    }
+    if (req.query.keyword) {
+      where.push('(local_task_id LIKE ? OR ozon_task_id LIKE ? OR items_preview LIKE ?)');
+      const kw = '%' + String(req.query.keyword) + '%';
+      params.push(kw, kw, kw);
+    }
+    const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
+
+    const rows = db
+      .prepare(`SELECT * FROM follow_sell_tasks ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .all(...params, pageSize, offset);
+
+    // 按 local_task_id 批量汇总 items 状态计数
+    const localIds = rows.map((r) => r.local_task_id);
+    let countMap = {};
+    if (localIds.length > 0) {
+      const placeholders = localIds.map(() => '?').join(',');
+      const cntRows = db
+        .prepare(
+          `SELECT local_task_id, status, COUNT(*) as n FROM follow_sell_task_items
+           WHERE local_task_id IN (${placeholders}) GROUP BY local_task_id, status`
+        )
+        .all(...localIds);
+      for (const r of cntRows) {
+        if (!countMap[r.local_task_id]) {
+          countMap[r.local_task_id] = { imported: 0, failed: 0, pending: 0, skipped: 0 };
+        }
+        const bucket = countMap[r.local_task_id];
+        if (r.status === 'imported') bucket.imported = r.n;
+        else if (r.status === 'failed') bucket.failed = r.n;
+        else if (r.status === 'skipped') bucket.skipped = r.n;
+        else bucket.pending = r.n;
+      }
+    }
+
+    const total = db.prepare(`SELECT COUNT(*) as n FROM follow_sell_tasks ${whereSql}`).get(...params).n;
+
+    res.json(
+      ok({
+        items: rows.map((r) => ({
+          localTaskId: r.local_task_id,
+          viaPortal: !!r.via_portal,
+          storeId: r.store_id,
+          status: r.status,
+          itemsCount: r.items_count,
+          itemsPreview: safeParseItems(r.items_preview),
+          ozonTaskId: r.ozon_task_id,
+          bundleIds: r.bundle_ids ? safeParseErrors(r.bundle_ids) : null,
+          errorMessage: r.error_message,
+          createdAt: r.created_at,
+          completedAt: r.completed_at,
+          summary: countMap[r.local_task_id] || null,
+        })),
+        total,
+        current,
+        pageSize,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /admin/api/listing-records/:localTaskId —— 单任务详情(含每个 offer_id 明细)
+router.get('/admin/api/listing-records/:localTaskId', (req, res, next) => {
+  try {
+    const localTaskId = String(req.params.localTaskId);
+    const task = db.prepare(`SELECT * FROM follow_sell_tasks WHERE local_task_id=?`).get(localTaskId);
+    if (!task) {
+      return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '上架记录不存在: ' + localTaskId));
+    }
+    const itemRows = db
+      .prepare(`SELECT * FROM follow_sell_task_items WHERE local_task_id=? ORDER BY id ASC`)
+      .all(localTaskId);
+
+    res.json(
+      ok({
+        task: {
+          localTaskId: task.local_task_id,
+          viaPortal: !!task.via_portal,
+          storeId: task.store_id,
+          status: task.status,
+          itemsCount: task.items_count,
+          itemsPreview: safeParseItems(task.items_preview),
+          ozonTaskId: task.ozon_task_id,
+          bundleIds: task.bundle_ids ? safeParseErrors(task.bundle_ids) : null,
+          errorMessage: task.error_message,
+          strictSkipped: task.strict_skipped ? safeParseErrors(task.strict_skipped) : [],
+          invalidImage: task.invalid_image ? safeParseErrors(task.invalid_image) : [],
+          createdAt: task.created_at,
+          completedAt: task.completed_at,
+        },
+        items: itemRows.map((r) => ({
+          offerId: r.offer_id,
+          name: r.name,
+          price: r.price,
+          productId: r.product_id,
+          status: r.status,
+          errors: safeParseErrors(r.errors),
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        })),
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// DELETE /admin/api/listing-records/:localTaskId —— 删除单条上架记录(含明细)
+router.delete('/admin/api/listing-records/:localTaskId', (req, res, next) => {
+  try {
+    const localTaskId = String(req.params.localTaskId);
+    const task = db.prepare(`SELECT id FROM follow_sell_tasks WHERE local_task_id=?`).get(localTaskId);
+    if (!task) {
+      return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '上架记录不存在: ' + localTaskId));
+    }
+    db.exec('BEGIN');
+    try {
+      db.prepare(`DELETE FROM follow_sell_task_items WHERE local_task_id=?`).run(localTaskId);
+      db.prepare(`DELETE FROM follow_sell_tasks WHERE local_task_id=?`).run(localTaskId);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+    res.json(ok({ deleted: true, localTaskId }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 采集箱(跨店铺,admin 用,不带 storeGuard) ───────────────
+
+// GET /admin/api/collect-box —— 采集箱列表(支持 storeId/published/keyword 筛选 + 分页)
+// query: ?currentPage=1&pageSize=20&storeId=&published=0|1&keyword=
+router.get('/admin/api/collect-box', (req, res, next) => {
+  try {
+    const current = Math.max(1, Number(req.query.currentPage) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
+    const offset = (current - 1) * pageSize;
+
+    const where = [];
+    const params = [];
+    if (req.query.storeId) {
+      where.push('store_id = ?');
+      params.push(String(req.query.storeId));
+    }
+    if (req.query.published === '1' || req.query.published === 'true') {
+      where.push('published = 1');
+    } else if (req.query.published === '0' || req.query.published === 'false') {
+      where.push('published = 0');
+    }
+    if (req.query.keyword) {
+      where.push('product LIKE ?');
+      params.push('%' + String(req.query.keyword) + '%');
+    }
+    const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
+
+    const rows = db
+      .prepare(`SELECT * FROM collect_box ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .all(...params, pageSize, offset);
+    const total = db.prepare(`SELECT COUNT(*) as n FROM collect_box ${whereSql}`).get(...params).n;
+
+    res.json(
+      ok({
+        items: rows.map((r) => ({
+          id: r.id,
+          storeId: r.store_id,
+          product: safeParseJson(r.product),
+          aiDraft: r.ai_draft ? safeParseJson(r.ai_draft) : null,
+          published: !!r.published,
+          source: r.source,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        })),
+        total,
+        current,
+        pageSize,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// DELETE /admin/api/collect-box/:id —— 删除单条采集箱条目
+router.delete('/admin/api/collect-box/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'id 无效'));
+    const info = db.prepare(`DELETE FROM collect_box WHERE id=?`).run(id);
+    if (info.changes === 0) {
+      return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '采集箱条目不存在: ' + id));
+    }
+    res.json(ok({ deleted: true, id }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// PATCH /admin/api/collect-box/:id —— 更新 published 状态(admin 用,仅切发布标记)
+router.patch('/admin/api/collect-box/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'id 无效'));
+    const row = db.prepare(`SELECT * FROM collect_box WHERE id=?`).get(id);
+    if (!row) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '采集箱条目不存在: ' + id));
+    const body = req.body || {};
+    if (typeof body.published === 'boolean') {
+      db.prepare(`UPDATE collect_box SET published=?, updated_at=datetime('now') WHERE id=?`).run(
+        body.published ? 1 : 0,
+        id
+      );
+    }
+    const updated = db.prepare(`SELECT * FROM collect_box WHERE id=?`).get(id);
+    res.json(
+      ok({
+        id: updated.id,
+        published: !!updated.published,
+        updatedAt: updated.updated_at,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 商品列表(查 product_data_cache,跨店铺) ───────────────
+
+// GET /admin/api/products —— 商品数据缓存列表(支持 keyword 模糊搜 sku / data)
+// query: ?currentPage=1&pageSize=20&keyword=
+router.get('/admin/api/products', (req, res, next) => {
+  try {
+    const current = Math.max(1, Number(req.query.currentPage) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
+    const offset = (current - 1) * pageSize;
+
+    const where = [];
+    const params = [];
+    if (req.query.keyword) {
+      where.push('(sku LIKE ? OR data LIKE ?)');
+      const kw = '%' + String(req.query.keyword) + '%';
+      params.push(kw, kw);
+    }
+    const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
+
+    const rows = db
+      .prepare(
+        `SELECT sku, data, fetched_at FROM product_data_cache ${whereSql} ORDER BY fetched_at DESC LIMIT ? OFFSET ?`
+      )
+      .all(...params, pageSize, offset);
+    const total = db.prepare(`SELECT COUNT(*) as n FROM product_data_cache ${whereSql}`).get(...params).n;
+
+    res.json(
+      ok({
+        items: rows.map((r) => {
+          const data = safeParseJson(r.data) || {};
+          return {
+            sku: r.sku,
+            fetchedAt: r.fetched_at,
+            // 提取常用展示字段(容错:不同 OPI 版本字段名可能不同)
+            name: data.name || data.title || '',
+            productId: data.product_id || data.id || '',
+            offerId: data.offer_id || data.sku || r.sku,
+            price: data.price || data.marketing_price || '',
+            currency: data.currency || data.marketing_currency || '',
+            image: data.primary_image || data.image || (Array.isArray(data.images) ? data.images[0] : '') || '',
+            _raw: data,
+          };
+        }),
+        total,
+        current,
+        pageSize,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /admin/api/products/:sku —— 单条商品完整数据(JSON)
+router.get('/admin/api/products/:sku', (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const row = db.prepare(`SELECT sku, data, fetched_at FROM product_data_cache WHERE sku=?`).get(sku);
+    if (!row) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '商品不存在: ' + sku));
+    res.json(
+      ok({
+        sku: row.sku,
+        fetchedAt: row.fetched_at,
+        data: safeParseJson(row.data) || {},
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// 首页统计(P1-3:聚合现有表,无需新表)
+// ────────────────────────────────────────────────────────────
+router.get('/admin/api/dashboard-stats', (_req, res, next) => {
+  try {
+    // 今日上架任务按 status 分组
+    const todayRows = db
+      .prepare(
+        `SELECT status, COUNT(*) AS n FROM follow_sell_tasks
+         WHERE date(created_at) = date('now') GROUP BY status`
+      )
+      .all();
+    let todayTotal = 0;
+    let todaySuccess = 0;
+    let todayFailed = 0;
+    for (const r of todayRows) {
+      todayTotal += r.n;
+      if (r.status === 'SUCCESS') todaySuccess += r.n;
+      else if (r.status === 'FAILED') todayFailed += r.n;
+    }
+    const todayRate = todayTotal > 0 ? Math.round((todaySuccess / todayTotal) * 1000) / 10 : 0;
+
+    // 采集箱待发布数
+    const collectPending = db.prepare(`SELECT COUNT(*) AS n FROM collect_box WHERE published = 0`).get().n;
+
+    // 商品缓存数
+    const productCount = db.prepare(`SELECT COUNT(*) AS n FROM product_data_cache`).get().n;
+
+    // 店铺数(店铺数据存在 stores.json,不在数据库里)
+    const storeCount = readStores().length;
+
+    // 近 7 天上架趋势(按天聚合)
+    const trend = db
+      .prepare(
+        `SELECT date(created_at) AS d, COUNT(*) AS n, SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) AS ok
+         FROM follow_sell_tasks
+         WHERE created_at > datetime('now', '-7 days')
+         GROUP BY d ORDER BY d ASC`
+      )
+      .all();
+
+    res.json(
+      ok({
+        today: { total: todayTotal, success: todaySuccess, failed: todayFailed, successRate: todayRate },
+        collectPending,
+        productCount,
+        storeCount,
+        trend: trend.map((t) => ({ date: t.d, total: t.n, success: t.ok || 0 })),
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// 操作日志(P2-3:audit_logs 列表查询)
+// ────────────────────────────────────────────────────────────
+router.get('/admin/api/audit-logs', (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.currentPage, 10) || 1);
+    const size = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+    const offset = (page - 1) * size;
+    const where = [];
+    const params = [];
+    if (req.query.action) {
+      where.push('action = ?');
+      params.push(req.query.action);
+    }
+    if (req.query.storeId) {
+      where.push('store_id = ?');
+      params.push(req.query.storeId);
+    }
+    if (req.query.operator) {
+      where.push('operator LIKE ?');
+      params.push('%' + req.query.operator + '%');
+    }
+    if (req.query.startDate) {
+      where.push('created_at >= ?');
+      params.push(req.query.startDate);
+    }
+    if (req.query.endDate) {
+      where.push('created_at <= ?');
+      params.push(req.query.endDate + ' 23:59:59');
+    }
+    const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM audit_logs ${whereSql}`).get(...params).n;
+    const rows = db
+      .prepare(
+        `SELECT id, action, target, store_id, operator, detail, ip, created_at
+         FROM audit_logs ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      )
+      .all(...params, size, offset);
+    res.json(
+      ok({
+        items: rows.map((r) => ({
+          id: r.id,
+          action: r.action,
+          target: r.target,
+          storeId: r.store_id,
+          operator: r.operator,
+          detail: safeParseJson(r.detail),
+          ip: r.ip,
+          createdAt: r.created_at,
+        })),
+        total,
+        currentPage: page,
+        pageSize: size,
+      })
+    );
   } catch (e) {
     next(e);
   }

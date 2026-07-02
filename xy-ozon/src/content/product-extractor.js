@@ -740,22 +740,10 @@
       });
     } catch {}
 
-    // Fallback A2:页面所有指向 /product/ 的短文本链接
-    if (result.length < 2) {
-      try {
-        const allProductLinks = document.querySelectorAll('a[href*="/product/"]');
-        allProductLinks.forEach((a) => {
-          const href = a.getAttribute('href') || '';
-          const m = href.match(/-(\d{4,})(?:\/|$|\?)/);
-          if (m && m[1] !== currentSku) {
-            const text = safeText(a.textContent);
-            if (text && text.length < 60) {
-              pushVariant({ sku: m[1], link: a.href, title: text });
-            }
-          }
-        });
-      } catch {}
-    }
+    // 注:Fallback A2(扫描全页 /product/ 链接)已移除 ——
+    // Ozon 商品页底部含大量推荐位 / 关联商品 / 促销徽章链接,
+    // 会被误判为变体(实测单 SKU 商品被识别成 34 个变体)。
+    // 真变体只可能来自 aspects / webSKU widget / state JSON / JSON-LD。
 
     // Fallback B:state JSON 里的 skus/variants 数组
     if (result.length < 2) {

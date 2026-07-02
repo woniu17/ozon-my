@@ -288,9 +288,12 @@
     console.log('[ActionBar] 主题标签');
     toast('主题标签功能开发中');
   }
-  function onErp() {
+  async function onErp() {
     console.log('[ActionBar] 进入ERP');
-    window.open('https://my.jizhangerp.com', '_blank');
+    // 通过 SW 获取本 ERP baseUrl,避免硬编码 jizhangerp
+    const resp = await chrome.runtime.sendMessage({ type: 'getErpBaseUrl' });
+    const baseUrl = resp?.baseUrl || 'http://localhost:3001';
+    window.open(baseUrl + '/admin', '_blank');
   }
 
   // ────────────────────────────────────────────────────────────

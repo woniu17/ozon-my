@@ -237,6 +237,39 @@
     async healthCheck() {
       return request('GET', '/health', { timeoutMs: 5000 });
     },
+
+    // ── 获取 ERP Base URL(供 popup/action-bar 跳转 admin 用)
+    async getBaseUrl() {
+      return getBaseUrl();
+    },
+
+    // ── 通用 store-guarded POST(用于尚未封装专用方法的端点)
+    // 用法: ErpClient.post('/ozon/products/import-info', { task_id: 'xxx' })
+    // 自动注入 token + 当前选中店铺的 storeId
+    async post(path, body) {
+      const t = await getStoredToken();
+      let storeId = null;
+      try {
+        const r = await chrome.storage.local.get(STORAGE_KEYS.storeId);
+        storeId = r[STORAGE_KEYS.storeId] || null;
+      } catch {
+        storeId = null;
+      }
+      return request('POST', path, { token: t, storeId, body });
+    },
+
+    // ── 通用 store-guarded GET(对称 post,便于扩展)
+    async get(path, query) {
+      const t = await getStoredToken();
+      let storeId = null;
+      try {
+        const r = await chrome.storage.local.get(STORAGE_KEYS.storeId);
+        storeId = r[STORAGE_KEYS.storeId] || null;
+      } catch {
+        storeId = null;
+      }
+      return request('GET', path, { token: t, storeId, query });
+    },
   };
 
   self.ErpClient = ErpClient;

@@ -73,6 +73,8 @@
       return [];
     }
     const stores = resp.data || [];
+    // 缓存 stores 列表(含 currency_code 等),供 content script 读取
+    await chrome.storage.local.set({ ozonStores: stores });
     const stored = await chrome.storage.local.get(STORAGE_KEYS.storeId);
     const selectedId = stored[STORAGE_KEYS.storeId] || (stores[0] && stores[0].id) || '';
     renderStores(stores, selectedId);
@@ -115,8 +117,10 @@
 
   document.getElementById('sms-login-btn')?.addEventListener('click', doSmsLogin);
   document.getElementById('login-btn')?.addEventListener('click', doPasswordLogin);
-  document.getElementById('web-login-btn')?.addEventListener('click', () => {
-    chrome.tabs.create({ url: 'https://my.jizhangerp.com/login' });
+  document.getElementById('web-login-btn')?.addEventListener('click', async () => {
+    // 跳转本 ERP 的 admin 页面(由 SW 提供 baseUrl,避免硬编码 jizhangerp)
+    const { baseUrl } = await sendMessage({ type: 'getErpBaseUrl' });
+    chrome.tabs.create({ url: (baseUrl || 'http://localhost:3001') + '/admin' });
   });
 
   // 店铺切换
@@ -141,19 +145,20 @@
     chrome.tabs.create({ url: 'https://seller.ozon.ru/' });
   });
 
-  // 导航按钮跳转路径表
-  const ACTION_PATHS = {
-    dashboard: '/ozon/dashboard',
-    products: '/ozon/products/list',
-    'collect-box': '/ozon/products/collect',
-    'import-history': '/ozon/products/import-history',
-    reshelf: '/ozon/products/reshelf',
-    watermark: '/ozon/tools/watermark',
-    stores: '/ozon/settings/stores',
+  // 导航按钮跳转 hash 表(对应本 ERP admin 页面的 tab hash 路由)
+  // 用 hash 而非 path 是因为 admin 是单页应用,所有 tab 通过 #xxx 切换
+  const ACTION_HASHES = {
+    dashboard: '#dashboard',
+    products: '#products',
+    'collect-box': '#collect-box',
+    'import-history': '#listings',
+    reshelf: '#listings',
+    watermark: '#config',
+    stores: '#stores',
   };
 
   document.querySelectorAll('[data-action]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const action = btn.dataset.action;
       if (action === 'batch-upload') {
         chrome.windows.create({
@@ -162,8 +167,9 @@
           width: 1100,
           height: 760,
         });
-      } else if (ACTION_PATHS[action]) {
-        chrome.tabs.create({ url: 'https://my.jizhangerp.com' + ACTION_PATHS[action] });
+      } else if (ACTION_HASHES[action]) {
+        const { baseUrl } = await sendMessage({ type: 'getErpBaseUrl' });
+        chrome.tabs.create({ url: (baseUrl || 'http://localhost:3001') + '/admin' + ACTION_HASHES[action] });
       } else if (action === 'pricing' || action === 'data-panel') {
         // 这些功能在商品页激活,popup 里只提示
         const tip = document.getElementById('login-tip');

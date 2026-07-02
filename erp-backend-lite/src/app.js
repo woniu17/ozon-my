@@ -18,6 +18,9 @@ import collectBoxRoutes from './modules/collect-box.js';
 import productDataRoutes from './modules/product-data.js';
 import miscRoutes from './modules/misc.js';
 import adminRoutes from './modules/admin.js';
+import configRoutes from './modules/config.js';
+import batchRoutes from './modules/batch.js';
+import { auditLog } from './middleware/audit.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -41,6 +44,8 @@ app.get('/admin', (_req, res) => res.sendFile(join(PUBLIC_DIR, 'admin.html')));
 // 鉴权(放行 /health、/auth/login-password 等)
 app.use(authMiddleware);
 app.use(tokenRefreshInjector);
+// 审计日志(记录关键写操作,需在鉴权之后以获取 operator)
+app.use(auditLog);
 
 // 业务路由
 app.use(authRoutes);
@@ -51,6 +56,8 @@ app.use(collectBoxRoutes);
 app.use(productDataRoutes);
 app.use(miscRoutes);
 app.use(adminRoutes);
+app.use(configRoutes);
+app.use(batchRoutes);
 
 // 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
 if (config.featureFlags?.proxy_collect) {

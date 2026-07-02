@@ -1,9 +1,10 @@
 [
   {
     "id": "store-001",
-    "name": "我的店铺",
+    "name": "YQL001",
     "company_id": "3891653",
     "warehouse_id": "1020005004829630",
+    "currency_code": "CNY",
     "sync_credentials": {
       "clientId": "3891653",
       "apiKey": "109b580e-c486-4fd8-89b3-bce3b669796e"

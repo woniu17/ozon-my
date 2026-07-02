@@ -5,6 +5,8 @@
 //   - /ozon/products/import/status
 //   - /ozon/products/import-by-sku/tasks
 //   - /ozon/products/import-by-sku
+//   - /ozon/products/import-info (调 OPI 查进度,持久化到 follow_sell_task_items)
+//   - /ozon/products/listing-records/report (插件上报 viaPortal 结果)
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
@@ -15,6 +17,53 @@ import * as opi from '../services/ozon-opi.js';
 import logger from '../middleware/log.js';
 
 const router = Router();
+
+// ── 内部工具:写入/更新上架记录明细 ───────────────────────
+// upsert:已存在则更新 status/product_id/errors,不存在则插入
+function upsertTaskItems(localTaskId, items) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const stmt = db.prepare(`
+    INSERT INTO follow_sell_task_items (local_task_id, offer_id, name, price, product_id, status, errors)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(local_task_id, offer_id) DO UPDATE SET
+      product_id = excluded.product_id,
+      status = excluded.status,
+      errors = excluded.errors,
+      updated_at = datetime('now')
+  `);
+  for (const it of items) {
+    const offerId = String(it.offer_id || '');
+    if (!offerId) continue;
+    stmt.run(
+      localTaskId,
+      offerId,
+      it.name || null,
+      it.price || null,
+      it.product_id ? String(it.product_id) : null,
+      it.status || 'pending',
+      Array.isArray(it.errors) && it.errors.length > 0 ? JSON.stringify(it.errors) : null
+    );
+  }
+}
+
+// 按 items 状态汇总任务状态
+function summarizeTaskStatus(localTaskId) {
+  const rows = db.prepare(`SELECT status FROM follow_sell_task_items WHERE local_task_id=?`).all(localTaskId);
+  if (rows.length === 0) return null;
+  const imported = rows.filter((r) => r.status === 'imported').length;
+  const failed = rows.filter((r) => r.status === 'failed').length;
+  const pending = rows.filter((r) => r.status === 'pending' || r.status === 'skipped').length;
+  let status;
+  if (pending > 0) status = 'PROCESSING';
+  else if (imported === 0 && failed > 0) status = 'FAILED';
+  else if (failed > 0)
+    status = 'SUCCESS'; // 部分成功
+  else status = 'SUCCESS';
+  db.prepare(
+    `UPDATE follow_sell_tasks SET status=?, completed_at=datetime('now') WHERE local_task_id=? AND status NOT IN ('SUCCESS','FAILED')`
+  ).run(status, localTaskId);
+  return { status, imported, failed, pending, total: rows.length };
+}
 
 // ⭐ POST /ozon/products/prepare-bundle-items (viaPortal=true 第 1 步)
 router.post('/ozon/products/prepare-bundle-items', storeGuard, async (req, res, next) => {
@@ -39,11 +88,17 @@ router.post('/ozon/products/import', storeGuard, async (req, res, next) => {
       `INSERT INTO follow_sell_tasks
         (local_task_id, via_portal, store_id, status, items_count, items_preview)
        VALUES (?, 0, ?, 'PENDING', ?, ?)`
-    ).run(
+    ).run(localTaskId, req.storeId, items.length, JSON.stringify(items.slice(0, 5)));
+
+    // 写入上架记录明细(pending 状态,待 import-info 查询后更新)
+    upsertTaskItems(
       localTaskId,
-      req.storeId,
-      items.length,
-      JSON.stringify(items.slice(0, 5))
+      items.map((it) => ({
+        offer_id: it.offer_id,
+        name: it.name,
+        price: it.price,
+        status: 'pending',
+      }))
     );
 
     // 调 OPI /v3/product/import
@@ -57,13 +112,25 @@ router.post('/ozon/products/import', storeGuard, async (req, res, next) => {
       db.prepare(
         `UPDATE follow_sell_tasks SET status='FAILED', error_message=?, completed_at=datetime('now') WHERE local_task_id=?`
       ).run(errorMessage, localTaskId);
+      // 失败:更新 items 为 failed
+      upsertTaskItems(
+        localTaskId,
+        items.map((it) => ({
+          offer_id: it.offer_id,
+          name: it.name,
+          price: it.price,
+          status: 'failed',
+          errors: [{ code: 'IMPORT_ERROR', message: errorMessage }],
+        }))
+      );
       logger.warn({ localTaskId, err: errorMessage }, 'import failed');
       return res.json({ result: { task_id: null, localTaskId, error: errorMessage } });
     }
 
-    db.prepare(
-      `UPDATE follow_sell_tasks SET status='PROCESSING', ozon_task_id=? WHERE local_task_id=?`
-    ).run(ozonTaskId, localTaskId);
+    db.prepare(`UPDATE follow_sell_tasks SET status='PROCESSING', ozon_task_id=? WHERE local_task_id=?`).run(
+      ozonTaskId,
+      localTaskId
+    );
 
     res.json({ result: { task_id: ozonTaskId, local_task_id: localTaskId } });
   } catch (e) {
@@ -92,9 +159,10 @@ router.post('/ozon/products/import/status', storeGuard, async (req, res, next) =
         const size = items.length;
         const done = processed + failed >= size && size > 0;
         if (done) {
-          db.prepare(
-            `UPDATE follow_sell_tasks SET status=?, completed_at=datetime('now') WHERE id=?`
-          ).run(failed > 0 && processed === 0 ? 'FAILED' : 'SUCCESS', row.id);
+          db.prepare(`UPDATE follow_sell_tasks SET status=?, completed_at=datetime('now') WHERE id=?`).run(
+            failed > 0 && processed === 0 ? 'FAILED' : 'SUCCESS',
+            row.id
+          );
         }
         return res.json({
           status: done ? 'success' : 'processing',
@@ -183,18 +251,17 @@ router.post('/ozon/products/import-by-sku', storeGuard, async (req, res, next) =
         }))
       );
       ozonTaskId = r?.result?.task_id ? String(r.result.task_id) : null;
-      db.prepare(
-        `UPDATE follow_sell_tasks SET status='PROCESSING', ozon_task_id=? WHERE local_task_id=?`
-      ).run(ozonTaskId, localTaskId);
+      db.prepare(`UPDATE follow_sell_tasks SET status='PROCESSING', ozon_task_id=? WHERE local_task_id=?`).run(
+        ozonTaskId,
+        localTaskId
+      );
     } catch (e) {
       db.prepare(
         `UPDATE follow_sell_tasks SET status='FAILED', error_message=?, completed_at=datetime('now') WHERE local_task_id=?`
       ).run(e.message, localTaskId);
     }
 
-    const row = db
-      .prepare(`SELECT * FROM follow_sell_tasks WHERE local_task_id=?`)
-      .get(localTaskId);
+    const row = db.prepare(`SELECT * FROM follow_sell_tasks WHERE local_task_id=?`).get(localTaskId);
     res.json({
       localTaskId,
       status: row.status,
@@ -256,12 +323,12 @@ router.post('/ozon/products/info', storeGuard, async (req, res, next) => {
 });
 
 // POST /ozon/products/import-info —— 直接调 OPI /v1/product/import/info 查询任务进度
-// 不查本地 follow_sell_tasks 表(viaPortal 路径的 task_id 是 seller.ozon.ru 的,未写本地表)
-// 请求体: { task_id: 4969404493 }
+// 调 OPI 后持久化 items 状态到 follow_sell_task_items(若本地任务存在)
+// 请求体: { task_id: 4969404493, local_task_id?: "local-xxx" }
 // 响应: { items: [{offer_id, product_id, status, errors[]}], total }
 router.post('/ozon/products/import-info', storeGuard, async (req, res, next) => {
   try {
-    const { task_id } = req.body || {};
+    const { task_id, local_task_id } = req.body || {};
     if (!task_id) {
       return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'task_id 必填'));
     }
@@ -280,9 +347,88 @@ router.post('/ozon/products/import-info', storeGuard, async (req, res, next) => 
         attribute_name: e.attribute_name,
       })),
     }));
+
+    // 持久化:若传入 local_task_id 则 upsert items 并汇总任务状态
+    // (viaPortal=false 路径在 import 时已创建 local_task_id;viaPortal 路径由 report 接口写入)
+    if (local_task_id) {
+      try {
+        upsertTaskItems(local_task_id, items);
+        summarizeTaskStatus(local_task_id);
+      } catch (e) {
+        logger.warn({ local_task_id, err: e.message }, 'persist task items failed');
+      }
+    }
+
     res.json({ items, total: items.length, task_id: Number(task_id) });
   } catch (e) {
     logger.warn({ err: e.message, task_id: req.body?.task_id }, 'productImportInfo failed');
+    next(e);
+  }
+});
+
+// POST /ozon/products/listing-records/report —— 插件上报上架结果(主要用于 viaPortal=true)
+// viaPortal 路径的 6b-6d 由插件直连 seller.ozon.ru 完成,ERP 后端不知结果;
+// 插件在上架完成后调此接口上报,使 admin 后台「上架记录」能展示完整数据。
+// 请求体:
+//   { localTaskId?, viaPortal, storeId, ozonTaskId?, bundleIds?,
+//     status: 'SUCCESS'|'FAILED'|'PROCESSING',
+//     errorMessage?, items: [{offer_id, name?, price?, product_id?, status, errors?}] }
+// 响应: { localTaskId, itemsCount }
+router.post('/ozon/products/listing-records/report', storeGuard, async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const items = Array.isArray(body.items) ? body.items : [];
+    if (items.length === 0) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'items 不能为空'));
+    }
+
+    // 复用已有 localTaskId 或新建
+    let localTaskId = body.localTaskId || `report-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const existing = db.prepare(`SELECT id FROM follow_sell_tasks WHERE local_task_id=?`).get(localTaskId);
+
+    if (existing) {
+      // 更新已有任务
+      db.prepare(
+        `UPDATE follow_sell_tasks SET status=?, ozon_task_id=COALESCE(?, ozon_task_id),
+         bundle_ids=COALESCE(?, bundle_ids), error_message=?, completed_at=datetime('now')
+         WHERE local_task_id=?`
+      ).run(
+        body.status || 'SUCCESS',
+        body.ozonTaskId || null,
+        body.bundleIds ? JSON.stringify(body.bundleIds) : null,
+        body.errorMessage || null,
+        localTaskId
+      );
+    } else {
+      // 新建任务
+      db.prepare(
+        `INSERT INTO follow_sell_tasks
+          (local_task_id, via_portal, store_id, status, items_count, items_preview,
+           ozon_task_id, bundle_ids, error_message, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      ).run(
+        localTaskId,
+        body.viaPortal ? 1 : 0,
+        req.storeId,
+        body.status || 'SUCCESS',
+        items.length,
+        JSON.stringify(items.slice(0, 5)),
+        body.ozonTaskId || null,
+        body.bundleIds ? JSON.stringify(body.bundleIds) : null,
+        body.errorMessage || null
+      );
+    }
+
+    // 写入/更新 items
+    upsertTaskItems(localTaskId, items);
+    const summary = summarizeTaskStatus(localTaskId);
+
+    logger.info(
+      { localTaskId, viaPortal: body.viaPortal, itemsCount: items.length, summary },
+      'listing-records reported'
+    );
+    res.json({ localTaskId, itemsCount: items.length, summary });
+  } catch (e) {
     next(e);
   }
 });

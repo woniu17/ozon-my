@@ -469,9 +469,18 @@
 
   // ────────────────────────────────────────────────────────────
   // normalizeSearchVariantToSv —— /search 返回归一化为 sv shape(对齐原项目)
+  //
+  // ⚠️ 字段命名历史包袱(对齐 0.13 service-worker.js:420):
+  //   sv.description_category_id = Number(v.description_type_dict_value) || 0
+  // 这是个混淆命名 —— v.description_type_dict_value 实际是 type_id(类型字典值),
+  // 不是 description_category_id(类目 ID)。下游 prepare-bundle.js 据此解析 type_id。
+  //
+  // /search 响应有时也会带真正的 v.description_category_id 字段(叶子类目 ID),
+  // 这里额外保留为 sv.search_description_category_id,供 prepare-bundle.js 优先使用。
   // ────────────────────────────────────────────────────────────
   function normalizeSearchVariantToSv(v) {
     if (!v) return null;
+    // 已是 sv shape(含 attributes 数组)→ 原样返回
     if (Array.isArray(v.attributes) && v.attributes.length > 0) return v;
     const attributes = [];
     if (v.description_type_name) attributes.push({ key: '8229', value: v.description_type_name });
@@ -486,9 +495,15 @@
       const gtin = String(v.barcodes[0] || '').trim();
       if (gtin) attributes.push({ key: '7822', value: gtin });
     }
-    return {
+
+    // description_type_dict_value 实际是 type_id;若 /search 同时返回了真正的
+    // description_category_id 字段(叶子类目 ID),额外保留以免后端解析时丢失。
+    const svTypeId = Number(v.description_type_dict_value) || 0;
+    const searchDescCatId = Number(v.description_category_id) || 0;
+    const out = {
       variant_id: v.variant_id || (v.barcodes && v.barcodes[0]) || '',
-      description_category_id: Number(v.description_type_dict_value) || 0,
+      // ⚠️ 混淆命名:实际是 type_id(来自 description_type_dict_value),对齐 0.13
+      description_category_id: svTypeId,
       categories: (v.categories || []).map((c) => ({
         id: Number(c.id),
         level: Number(c.level),
@@ -505,6 +520,12 @@
       },
       attributes,
     };
+    // 仅当 /search 真返回了 description_category_id 且与 type_id 不同时才补,
+    // 避免与混淆命名的 sv.description_category_id 冲突。
+    if (searchDescCatId && searchDescCatId !== svTypeId) {
+      out.search_description_category_id = searchDescCatId;
+    }
+    return out;
   }
 
   // ────────────────────────────────────────────────────────────
@@ -516,8 +537,7 @@
   // item,串店导致重量/尺寸/属性串数据。variant_id 在 Ozon 内是 store-scoped,加
   // companyId 双保险。
   const _BUNDLE_CACHE_PREFIX = 'jz-sw-bundle-v2:';
-  const _bundleCacheKey = (companyId, variantId) =>
-    `${_BUNDLE_CACHE_PREFIX}${companyId || 'unknown'}:${variantId}`;
+  const _bundleCacheKey = (companyId, variantId) => `${_BUNDLE_CACHE_PREFIX}${companyId || 'unknown'}:${variantId}`;
 
   // SW 启动时清理 v1 旧缓存 —— 它的 key 只含 sku,可能跨店污染过用户数据。
   // 一次性清理,跑完后用户的 v2 缓存重建即可。
@@ -699,6 +719,40 @@
               }
               // 完整 bundle item 也挂上(供高级 caller 用)
               items[0]._bundleItem = bundleItem;
+
+              // DEBUG: dump bundle item 的分类/类型字段,排查 description_type_is_empty
+              try {
+                const biKeys = bundleItem ? Object.keys(bundleItem) : [];
+                console.log(`[searchVariants] bundleItem keys for sku=${sku}:`, biKeys.slice(0, 40));
+                console.log(
+                  `[searchVariants] bundleItem description_category_id=${bundleItem?.description_category_id}, type_id=${bundleItem?.type_id}`
+                );
+                // 检查 bundle item 内可能嵌套的字段
+                if (bundleItem?.category) {
+                  console.log(
+                    `[searchVariants] bundleItem.category=`,
+                    JSON.stringify(bundleItem.category).slice(0, 200)
+                  );
+                }
+                if (bundleItem?.description_category) {
+                  console.log(
+                    `[searchVariants] bundleItem.description_category=`,
+                    JSON.stringify(bundleItem.description_category).slice(0, 200)
+                  );
+                }
+                // /search 原始字段
+                console.log(
+                  `[searchVariants] /search description_type_dict_value=${items[0]?.description_category_id}, categories count=${(items[0]?.categories || []).length}`
+                );
+                if (Array.isArray(items[0]?.categories) && items[0].categories.length > 0) {
+                  console.log(
+                    `[searchVariants] /search categories=`,
+                    items[0].categories.map((c) => ({ id: c.id, level: c.level, name: c.name }))
+                  );
+                }
+              } catch (_) {
+                // ignore logging errors
+              }
             }
           }
         } catch (e) {
@@ -846,39 +900,198 @@
   });
 
   // 6b. 建空草稿 → bundle_id
-  async function createBundle(companyId, preferTabId = null) {
-    const resp = await fetchSellerPortal(
-      '/seller-prototype/create-bundle',
-      { company_id: String(companyId) },
-      _bundlePortalOpts(preferTabId)
-    );
+  //
+  // 对齐官方 seller-ui app.js (pos 748579):
+  //   Request:  { company_id, description_category_lvl3_name, source_item_id }
+  //   Response: { bundle_id }
+  //
+  // - description_category_lvl3_name: 三级类目名(按名匹配,避免跨店类目 ID 错位)
+  // - source_item_id: 复制流程的源商品 ID(新建流程不传)
+  //
+  // 两个新参数均为可选,缺省时与官方新建流程行为一致(source_item_id=undefined)。
+  async function createBundle(companyId, preferTabId = null, opts = {}) {
+    const body = {
+      company_id: String(companyId),
+    };
+    // 类目名(按名匹配):ERP prepare-bundle-items 返回的 bundle.description_category_lvl3_name
+    if (opts.catName) {
+      body.description_category_lvl3_name = String(opts.catName);
+    }
+    // 复制流程源商品 ID(可选):用于服务端关联源商品数据
+    if (opts.sourceItemId) {
+      body.source_item_id = String(opts.sourceItemId);
+    }
+    const resp = await fetchSellerPortal('/seller-prototype/create-bundle', body, _bundlePortalOpts(preferTabId));
     const bundleId = resp?.bundle_id;
     if (!bundleId) throw new Error('create-bundle 未返回 bundle_id');
     return String(bundleId);
   }
 
   // 6c. 写入商品数据(可反复调)
-  async function updateBundleItems(bundleId, companyId, items, source, catName, preferTabId = null) {
+  //
+  // 对齐官方 seller-ui app.js (pos 752644, 755277):
+  //   Request:  { bundle_id, company_id, items, source }
+  //   Response: {} (fire-and-forget 草稿同步)
+  //
+  // ⚠️ 不含 description_category_lvl3_name —— 类目信息已在 create-bundle 时固化到 bundle,
+  //    每个 item 自身的类目通过 description_category_id / new_description_category_id 携带。
+  //
+  // 参考 /v3/product/import 官方 API schema(v3ImportProductsRequestItem)必填字段:
+  //   required: attributes, description_category_id, depth, dimension_unit, height,
+  //             images, name, offer_id, price, vat, weight, weight_unit, width, type_id
+  //
+  // 门户 update-bundle-items proto 与 v3 基本一致,差异:
+  //   - type_id / description_category_id 为 0 时不传(让 Ozon 走 create-bundle 时的 lvl3_name 按名匹配)
+  //
+  // 此函数对每个 item 做字段归一化 + 必填校验,确保提交数据满足 v3 schema。
+  async function updateBundleItems(bundleId, companyId, items, source, preferTabId = null) {
+    const normalizedItems = (Array.isArray(items) ? items : []).map((item, idx) => {
+      if (!item || typeof item !== 'object') {
+        throw new Error(`update-bundle-items: items[${idx}] 不是对象`);
+      }
+
+      // ── 归一化:确保字段类型对齐 v3 schema ──
+      const out = {
+        // 字符串字段
+        offer_id: String(item.offer_id || ''),
+        name: String(item.name || ''),
+        price: String(item.price || '0'),
+        old_price: String(item.old_price || item.price || '0'),
+        vat: String(item.vat || '0'),
+        currency_code: String(item.currency_code || 'RUB'),
+        // 物理参数(数字,缺省 100 兜底,对齐 v3 示例)
+        weight: Number(item.weight) > 0 ? Math.round(Number(item.weight)) : 100,
+        weight_unit: item.weight_unit || 'g',
+        depth: Number(item.depth) > 0 ? Math.round(Number(item.depth)) : 100,
+        width: Number(item.width) > 0 ? Math.round(Number(item.width)) : 100,
+        height: Number(item.height) > 0 ? Math.round(Number(item.height)) : 100,
+        dimension_unit: item.dimension_unit || 'mm',
+        // 数组字段
+        images: Array.isArray(item.images) ? item.images.map((u) => String(u)).filter(Boolean) : [],
+        attributes: _normalizeV3Attributes(item.attributes),
+        complex_attributes: _normalizeV3ComplexAttributes(item.complex_attributes),
+        // v3 非必填字段(传默认值,对齐 v3 示例)
+        primary_image: String(item.primary_image || ''),
+        color_image: String(item.color_image || ''),
+        images360: Array.isArray(item.images360) ? item.images360.map((u) => String(u)).filter(Boolean) : [],
+        pdf_list: Array.isArray(item.pdf_list) ? item.pdf_list : [],
+        new_description_category_id: Number(item.new_description_category_id) || 0,
+      };
+
+      // type_id / description_category_id: 有值才传,为 0 不传(让 Ozon 走按名匹配)
+      if (Number(item.type_id) > 0) out.type_id = Number(item.type_id);
+      if (Number(item.description_category_id) > 0) {
+        out.description_category_id = Number(item.description_category_id);
+      }
+
+      // barcode(可选)
+      if (item.barcode) out.barcode = String(item.barcode);
+
+      // ── 必填字段校验(v3 required) ──
+      const missing = [];
+      if (!out.offer_id) missing.push('offer_id');
+      if (!out.name) missing.push('name');
+      if (!out.price || out.price === '0') missing.push('price');
+      if (out.images.length === 0) missing.push('images');
+      if (out.attributes.length === 0) missing.push('attributes');
+      // 物理参数不能为 0(v3 文档:"请勿在请求中跳过这些参数,也不要指定0")
+      if (out.weight <= 0) missing.push('weight');
+      if (out.depth <= 0) missing.push('depth');
+      if (out.width <= 0) missing.push('width');
+      if (out.height <= 0) missing.push('height');
+      if (!out.weight_unit) missing.push('weight_unit');
+      if (!out.dimension_unit) missing.push('dimension_unit');
+      if (out.vat === '') missing.push('vat');
+
+      if (missing.length > 0) {
+        throw new Error(
+          `update-bundle-items: items[${idx}] (offer_id=${out.offer_id}) 缺少必填字段: ${missing.join(', ')}`
+        );
+      }
+
+      return out;
+    });
+
+    if (normalizedItems.length === 0) {
+      throw new Error('update-bundle-items: items 为空');
+    }
+
+    console.log(`[updateBundleItems] bundle=${bundleId}, items=${normalizedItems.length}, source=${source || ''}`);
+
     return fetchSellerPortal(
       '/seller-prototype/update-bundle-items',
       {
         bundle_id: String(bundleId),
         company_id: String(companyId),
         source: source || 'SOURCE_MERGED',
-        description_category_lvl3_name: catName || '',
-        items,
+        items: normalizedItems,
       },
       _bundlePortalOpts(preferTabId)
     );
   }
 
-  // 6d. 提交发布 → upload_task_id(strict:true 对齐 0.13)
-  async function uploadBundle(bundleId, companyId, preferTabId = null) {
-    const resp = await fetchSellerPortal(
-      '/seller-prototype/upload-bundle',
-      { bundle_id: String(bundleId), company_id: String(companyId), strict: true },
-      _bundlePortalOpts(preferTabId)
-    );
+  // ── v3 attributes 归一化:{complex_id:int, id:int, values:[{value, dictionary_value_id?}]} ──
+  function _normalizeV3Attributes(attrs) {
+    if (!Array.isArray(attrs)) return [];
+    return attrs
+      .map((a) => {
+        if (!a || typeof a !== 'object') return null;
+        // 兼容多种输入字段名:attribute_id / id / key
+        const id = Number(a.id || a.attribute_id || a.key || 0);
+        if (!id) return null;
+        const complexId = Number(a.complex_id) || 0;
+        const rawVals = Array.isArray(a.values) ? a.values : [];
+        const values = rawVals
+          .filter((v) => v && v.value != null && v.value !== '')
+          .map((v) => {
+            const val = typeof v === 'object' ? v : { value: String(v) };
+            const o = { value: String(val.value) };
+            if (val.dictionary_value_id != null && Number(val.dictionary_value_id) > 0) {
+              o.dictionary_value_id = Number(val.dictionary_value_id);
+            }
+            return o;
+          });
+        if (values.length === 0) return null;
+        return { complex_id: complexId, id, values };
+      })
+      .filter(Boolean);
+  }
+
+  // ── v3 complex_attributes 归一化:[{attributes:[{complex_id, id, values}]}] ──
+  function _normalizeV3ComplexAttributes(cas) {
+    if (!Array.isArray(cas)) return [];
+    return cas
+      .map((ca) => {
+        if (!ca || typeof ca !== 'object') return null;
+        const innerAttrs = _normalizeV3Attributes(ca.attributes || ca.complex_attributes);
+        if (innerAttrs.length === 0) return null;
+        return { attributes: innerAttrs };
+      })
+      .filter(Boolean);
+  }
+
+  // 6d. 提交发布 → upload_task_id
+  //
+  // 对齐官方 seller-ui app.js (pos 755997):
+  //   Request:  { bundle_id, company_id, name }
+  //   Response: { upload_task_id }
+  //
+  // - name: 类目名(与 create-bundle 时的 description_category_lvl3_name 同源,再次确认)
+  //
+  // xy-ozon 扩展:额外传 strict:true 启用严格模式(无效图片/字段直接报错而非静默跳过)。
+  // 与官方 proto 不冲突(strict 字段服务端已支持,官方 UI 默认 false 不传)。
+  async function uploadBundle(bundleId, companyId, preferTabId = null, opts = {}) {
+    const body = {
+      bundle_id: String(bundleId),
+      company_id: String(companyId),
+      // xy-ozon 扩展:严格模式(默认开启)
+      strict: opts.strict !== undefined ? Boolean(opts.strict) : true,
+    };
+    // 类目名(对齐官方):与 create-bundle 时的 description_category_lvl3_name 同源
+    if (opts.name) {
+      body.name = String(opts.name);
+    }
+    const resp = await fetchSellerPortal('/seller-prototype/upload-bundle', body, _bundlePortalOpts(preferTabId));
     const taskId = resp?.upload_task_id;
     if (!taskId) throw new Error('upload-bundle 未返回 upload_task_id');
     return String(taskId);

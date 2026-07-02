@@ -1,16 +1,31 @@
 /**
- * 批量上架独立窗口页编排(mock 简化版):
+ * 批量上架独立窗口页编排(P2-2:接入 ERP):
  *   1. textarea 输入 → parseLine 解析每行 → 渲染解析预览表
  *   2. AI 卡片折叠/展开
  *   3. 使用说明抽屉开关
- *   4. 点击「开始批采 + 上架」→ 逐行写进度日志 → 渲染结果列表
+ *   4. 点击「开始批采 + 上架」→ 创建批量任务 → 逐条 followSell 上架 → 实时进度日志
  *   5. 清空 / 取消 按钮
+ *   6. 历史记录 → 跳转 ERP admin 批量任务 tab
  */
 (function () {
   'use strict';
 
   // 工具:按 id 取元素
   const $ = (id) => document.getElementById(id);
+
+  // ─── 消息发送(封装 chrome.runtime.sendMessage) ───
+  function sendMessage(type, data = {}) {
+    return new Promise((resolve, reject) => {
+      if (!chrome?.runtime?.sendMessage) {
+        reject(new Error('chrome.runtime 不可用'));
+        return;
+      }
+      chrome.runtime.sendMessage({ type, ...data }, (resp) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        resolve(resp);
+      });
+    });
+  }
 
   // ─── State ──────────────────────────────────────
   const state = {
@@ -274,10 +289,26 @@
     });
   }
 
-  // ─── mock 提交 ─────────────────────────────────
-  // 逐 SKU 写日志: 批采 → 批采成功 → 提交 → 提交成功 task_id
-  // 完成后渲染结果列表
-  async function submitMock() {
+  // ─── 店铺下拉填充(P2-2:从 ERP 拉取) ───────────
+  async function initStores() {
+    const sel = $('cfg-store');
+    if (!sel) return;
+    try {
+      const resp = await sendMessage('getStores');
+      const stores = resp?.data || [];
+      if (Array.isArray(stores) && stores.length) {
+        sel.innerHTML = stores
+          .map((s) => `<option value="${s.id}">${s.name} (${s.currency_code || 'RUB'})</option>`)
+          .join('');
+      }
+    } catch (e) {
+      console.warn('[BatchUpload] 拉取店铺失败,保留默认:', e?.message || e);
+    }
+  }
+
+  // ─── 真实提交(P2-2:接入 ERP) ───────────────────
+  // 流程:创建批量任务 → 逐条 followSell 上架 → 实时日志
+  async function submitReal() {
     if (state.submitting) return;
     const validRows = state.rows.filter((r) => r.valid);
     if (validRows.length === 0) return;
@@ -295,35 +326,84 @@
     resultCard.style.display = 'none';
     $('result-list').innerHTML = '';
 
-    logLine('开始批采 + 上架,共 ' + validRows.length + ' 个 SKU', 'warn');
-    const results = [];
-    const storeLabel = $('cfg-store').options[$('cfg-store').selectedIndex].text;
+    const storeSel = $('cfg-store');
+    const storeId = storeSel.value;
+    const storeLabel = storeSel.options[storeSel.selectedIndex]?.text || storeId;
 
+    // 收集 AI/水印等配置快照
+    const configSnapshot = {
+      watermark: $('cfg-watermark')?.checked || false,
+      aiPoster: $('cfg-ai-poster')?.checked || false,
+      aiRewrite: $('cfg-ai-rewrite')?.checked || false,
+      captureVideo: $('cfg-capture-video')?.checked || false,
+    };
+
+    logLine('开始批采 + 上架,共 ' + validRows.length + ' 个 SKU', 'warn');
+
+    // 1. 创建批量任务记录
+    let batchLocalTaskId = null;
+    try {
+      const createResp = await sendMessage('createBatchTask', {
+        payload: {
+          storeId,
+          items: validRows.map((r) => ({ sourceSku: r.sku, sourceUrl: '' })),
+          config: configSnapshot,
+        },
+      });
+      const created = createResp?.data?.data || createResp?.data || {};
+      batchLocalTaskId = created.localTaskId || null;
+      if (batchLocalTaskId) {
+        logLine('已创建批量任务 ' + batchLocalTaskId, 'ok');
+      }
+    } catch (e) {
+      logLine('创建批量任务记录失败(继续逐条上架): ' + (e?.message || e), 'err');
+    }
+
+    // 2. 逐条 followSell 上架
+    const results = [];
+    let okCount = 0;
+    let failCount = 0;
     for (const row of validRows) {
       if (state.aborted) break;
-      // 1. 批采
-      logLine('正在批采 SKU ' + row.sku + ' ...');
-      await sleep(400 + Math.random() * 300);
-      if (state.aborted) break;
-      logLine('批采成功 SKU ' + row.sku, 'ok');
-      // 2. 提交
       logLine('正在提交 SKU ' + row.sku + ' ...');
-      await sleep(300 + Math.random() * 300);
-      if (state.aborted) break;
-      const taskId = 'task-' + Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 4);
-      logLine('提交成功 SKU ' + row.sku + ' task_id=' + taskId, 'ok');
-      results.push({
-        ok: true,
-        store: storeLabel,
-        sku: row.sku,
-        taskId,
-      });
+      try {
+        const resp = await sendMessage('followSell', {
+          storeId,
+          viaPortal: false,
+          items: [
+            {
+              sku: row.sku,
+              price: row.price,
+              offerId: row.offerId || '',
+              weightG: row.weightG,
+              lengthMm: row.lengthMm,
+              widthMm: row.widthMm,
+              heightMm: row.heightMm,
+            },
+          ],
+        });
+        if (resp?.ok) {
+          const taskId = resp?.data?.localTaskId || resp?.data?.taskId || 'ok';
+          logLine('提交成功 SKU ' + row.sku + ' task_id=' + taskId, 'ok');
+          results.push({ ok: true, store: storeLabel, sku: row.sku, taskId });
+          okCount++;
+        } else {
+          const errMsg = resp?.error || resp?.message || '未知错误';
+          logLine('提交失败 SKU ' + row.sku + ': ' + errMsg, 'err');
+          results.push({ ok: false, store: storeLabel, sku: row.sku, taskId: errMsg });
+          failCount++;
+        }
+      } catch (e) {
+        logLine('提交异常 SKU ' + row.sku + ': ' + (e?.message || e), 'err');
+        results.push({ ok: false, store: storeLabel, sku: row.sku, taskId: String(e?.message || e) });
+        failCount++;
+      }
     }
 
     if (state.aborted) {
       logLine('已取消(剩余 SKU 未提交)', 'err');
     } else {
-      logLine('全部完成,成功 ' + results.length + ' 条', 'ok');
+      logLine('全部完成,成功 ' + okCount + ' 条' + (failCount ? ' · 失败 ' + failCount + ' 条' : ''), 'ok');
     }
 
     // 渲染结果列表
@@ -375,16 +455,26 @@
     });
   }
 
-  // ─── 绑定提交 ──────────────────────────────────
-  function bindSubmit() {
-    $('btn-submit').addEventListener('click', submitMock);
+  // ─── 历史记录(P2-2:跳转 ERP admin 批量任务 tab) ───
+  function bindHistory() {
+    $('btn-history').addEventListener('click', async () => {
+      try {
+        const resp = await sendMessage('getErpBaseUrl');
+        const baseUrl = resp?.baseUrl || '';
+        if (baseUrl) {
+          window.open(baseUrl + '/admin#batch', '_blank');
+        } else {
+          alert('未获取到 ERP 地址');
+        }
+      } catch (e) {
+        alert('打开历史记录失败: ' + (e?.message || e));
+      }
+    });
   }
 
-  // ─── 历史记录(mock 占位) ───────────────────────
-  function bindHistory() {
-    $('btn-history').addEventListener('click', () => {
-      alert('历史记录功能(mock):暂未实现');
-    });
+  // ─── 绑定提交 ──────────────────────────────────
+  function bindSubmit() {
+    $('btn-submit').addEventListener('click', submitReal);
   }
 
   // ─── 启动 ──────────────────────────────────────
@@ -397,6 +487,7 @@
     bindSubmit();
     bindCancel();
     bindHistory();
+    initStores();
     // 初始渲染
     state.rows = parseAll($('textarea').value);
     renderPreview();

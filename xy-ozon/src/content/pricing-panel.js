@@ -1,24 +1,57 @@
 // MY 算价面板 —— 复刻原项目 ozon-helper 算价精灵 + 利润计算(0.13.31.1)。
 // 固定定位侧边面板,2 个 tab:定价精灵(反算售价)+ 利润计算(正算利润)。
-// 后端用 mock(固定汇率 11.08,固定物流费率),UI 完整复刻原项目视觉与交互。
+// 汇率/佣金/物流费从 ERP 配置中心拉取(pricing scope),UI 完整复刻原项目视觉与交互。
 // 所有 class 用 `xy-pp-` 前缀,替代原 `ozon-helper-calc-*` / `ozon-helper-profit-*`。
 
 (function () {
   'use strict';
 
   // ────────────────────────────────────────────────────────────
-  // 常量(mock 数据)
+  // 消息发送(封装 chrome.runtime.sendMessage)
   // ────────────────────────────────────────────────────────────
-  const RATE_RUB = 11.08; // 固定汇率 ¥1 = ₽11.08
-  const COMMISSION_RATES = {
+  function sendMessage(type, data = {}) {
+    return new Promise((resolve, reject) => {
+      if (!chrome?.runtime?.sendMessage) {
+        reject(new Error('chrome.runtime 不可用(扩展可能正在重载)'));
+        return;
+      }
+      chrome.runtime.sendMessage({ type, ...data }, (resp) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        resolve(resp);
+      });
+    });
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // 常量(默认值;P1-2:面板挂载时从 ERP 配置中心拉取 pricing scope 覆盖)
+  // ────────────────────────────────────────────────────────────
+  let RATE_RUB = 11.08; // 固定汇率 ¥1 = ₽11.08
+  let COMMISSION_RATES = {
     beauty_mid: 0.15,
     beauty_high: 0.17,
     electronics: 0.13,
     apparel: 0.14,
     home: 0.12,
   };
-  const LOGISTICS_COST = { xs: 8, budget: 12, small: 18, big: 35 }; // 定价精灵:固定 ¥
-  const PROFIT_LOGISTICS = { guoo: 0.06, cel: 0.055, xy: 0.05, zto: 0.065 }; // 利润计算:¥/g
+  let LOGISTICS_COST = { xs: 8, budget: 12, small: 18, big: 35 }; // 定价精灵:固定 ¥
+  let PROFIT_LOGISTICS = { guoo: 0.06, cel: 0.055, xy: 0.05, zto: 0.065 }; // 利润计算:¥/g
+
+  // 配置是否已拉取(避免重复请求)
+  let __pricingConfigLoaded = false;
+  async function loadPricingConfig() {
+    if (__pricingConfigLoaded) return;
+    try {
+      const resp = await sendMessage('getConfig', { query: { scope: 'pricing' } });
+      const cfg = resp?.data?.data || {};
+      if (typeof cfg.rate_rub === 'number') RATE_RUB = cfg.rate_rub;
+      if (cfg.commission_rates && typeof cfg.commission_rates === 'object') COMMISSION_RATES = cfg.commission_rates;
+      if (cfg.logistics_cost && typeof cfg.logistics_cost === 'object') LOGISTICS_COST = cfg.logistics_cost;
+      if (cfg.profit_logistics && typeof cfg.profit_logistics === 'object') PROFIT_LOGISTICS = cfg.profit_logistics;
+    } catch (e) {
+      console.warn('[Pricing] 拉取配置中心失败,使用内置默认值:', e?.message || e);
+    }
+    __pricingConfigLoaded = true;
+  }
 
   const PANEL_ID = 'xy-pricing-panel';
 
@@ -418,12 +451,14 @@
   // ────────────────────────────────────────────────────────────
   // mount / unmount / toggle
   // ────────────────────────────────────────────────────────────
-  function mount() {
+  async function mount() {
     if (panelEl) {
       // 已挂载则 toggle 显示
       show();
       return;
     }
+    // 首次挂载:从 ERP 配置中心拉取 pricing scope 覆盖默认常量
+    await loadPricingConfig();
     panelEl = buildPanel();
     document.body.appendChild(panelEl);
     panelEl.classList.add('is-anim');

@@ -30,7 +30,11 @@ function filterStrictMode(items, strict) {
     if (hasWeight && hasDims) {
       valid.push(item);
     } else {
-      strictSkipped.push({ offer_id: item.offer_id, sku: item.scraped_sku, reason: '缺少物理参数(weight/depth/width/height)' });
+      strictSkipped.push({
+        offer_id: item.offer_id,
+        sku: item.scraped_sku,
+        reason: '缺少物理参数(weight/depth/width/height)',
+      });
     }
   }
   return { valid, strictSkipped };
@@ -142,66 +146,233 @@ export async function prepareBundleItems(message, storeId, store) {
   }
 
   // ── 5. 分组打包 + item 格式转换(面板格式 → seller.ozon.ru proto 格式) ──
-  // seller.ozon.ru update-bundle-items 的 proto 要求:
-  //   - images: repeated string(URL 数组),不是 [{file_name, default}] 对象数组
+  // 参考 /v3/product/import 官方 API schema(v3ImportProductsRequestItem):
+  //   - attributes: [{id, values:[{value, dictionary_value_id}], complex_id}] (complex_id 是数字)
+  //   - images: string[](URL 数组,不是 [{file_name, default}] 对象数组)
+  //   - primary_image: string(主图 URL,单独于 images)
   //   - 不能带内部字段(_sourceVariant / _stock / _imageSource / scraped_* / bundleComplexAttrs 等)
-  //   - attributes: seller 格式 {attribute_id, values:[{value}], complex_id}
-  // 生产 ERP 后端做完整转换;erp-backend-lite 需在此对齐。
+  //
+  // 数据源优先级:
+  //   1) sv._bundleItem.attributes —— bundle 接口返回的完整后台数据,含 dictionary_value_id(最权威)
+  //   2) sv.attributes —— /search 归一化数据,{key, value/collection} shape(可能缺 dictionary_value_id)
   const transformItemForPortal = (item) => {
     const sv = item._sourceVariant || null;
+    const bundleItem = sv?._bundleItem || null;
 
     // 5.1 images: [{file_name, default}] → ["url1", "url2", ...]
-    const images = Array.isArray(item.images)
+    // v3 schema: images 是 string[](URL 数组),primary_image 单独传
+    const rawImages = Array.isArray(item.images)
       ? item.images.map((img) => (typeof img === 'string' ? img : img?.file_name || '')).filter(Boolean)
       : [];
+    // primary_image: 标记 default:true 的图,否则取 images[0]
+    const primaryImg =
+      Array.isArray(item.images) && item.images.length > 0
+        ? item.images.find((img) => img?.default === true)?.file_name || item.images[0]?.file_name || ''
+        : '';
+    const images = rawImages;
 
-    // 5.2 attributes: sv 格式 {key, value/collection} → seller 格式 {attribute_id, values:[{value}], complex_id:"0"}
+    // 5.2 attributes: 优先从 bundleItem 提取 v3 标准格式(含 dictionary_value_id)
+    // v3 schema: {complex_id: int, id: int, values: [{dictionary_value_id: int, value: string}]}
     const attributes = [];
+    const usedKeys = new Set();
+
+    // 5.2a 优先从 bundleItem.attributes 提取(complex_id==0 的简单 attr)
+    if (bundleItem && Array.isArray(bundleItem.attributes)) {
+      for (const ba of bundleItem.attributes) {
+        // 跳过 complex attr(由 5.3 complex_attributes 处理)
+        if (ba.complex_id && Number(ba.complex_id) !== 0) continue;
+        const attrId = Number(ba.attribute_id || ba.id || 0);
+        if (!attrId) continue;
+        const key = String(attrId);
+        if (usedKeys.has(key)) continue;
+        const vals = Array.isArray(ba.values) ? ba.values.filter((v) => v && v.value != null && v.value !== '') : [];
+        if (vals.length === 0) continue;
+        attributes.push({
+          complex_id: 0,
+          id: attrId,
+          values: vals.map((v) => ({
+            value: String(v.value),
+            ...(v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0
+              ? { dictionary_value_id: Number(v.dictionary_value_id) }
+              : {}),
+          })),
+        });
+        usedKeys.add(key);
+      }
+    }
+
+    // 5.2b 兜底:从 sv.attributes 转换(可能缺 dictionary_value_id)
     if (sv && Array.isArray(sv.attributes)) {
       for (const a of sv.attributes) {
         const key = String(a.key || a.attribute_id || '');
-        if (!key) continue;
-        const vals = Array.isArray(a.collection)
-          ? a.collection.filter((v) => v != null && v !== '').map((v) => String(v))
+        if (!key || usedKeys.has(key)) continue;
+        // sv shape: {key, value} 或 {key, collection:[...]}
+        // 可能带 dictionary_value_id(/search 部分字段有)
+        const rawVals = Array.isArray(a.collection)
+          ? a.collection.filter((v) => v != null && v !== '')
           : a.value != null && a.value !== ''
-            ? [String(a.value)]
+            ? [a.value]
             : [];
-        if (vals.length === 0) continue;
+        if (rawVals.length === 0) continue;
+        const attrId = Number(key) || 0;
+        if (!attrId) continue;
         attributes.push({
-          attribute_id: key,
-          values: vals.map((v) => ({ value: v })),
-          complex_id: '0',
+          complex_id: 0,
+          id: attrId,
+          values: rawVals.map((v) => {
+            const val = typeof v === 'object' ? v : { value: String(v) };
+            return {
+              value: String(val.value != null ? val.value : v),
+              ...(val.dictionary_value_id != null && Number(val.dictionary_value_id) > 0
+                ? { dictionary_value_id: Number(val.dictionary_value_id) }
+                : {}),
+            };
+          }),
         });
+        usedKeys.add(key);
       }
     }
 
     // 5.3 complex_attributes(视频/PDF 等):bundleComplexAttrs 透传
-    const complex_attributes = Array.isArray(item.bundleComplexAttrs) ? item.bundleComplexAttrs : [];
+    // v3 schema: [{attributes: [{complex_id, id, values:[{value, dictionary_value_id}]}]}]
+    // bundle 接口返回的格式已接近 v3,只需字段名对齐(attribute_id → id)
+    const complex_attributes = [];
+    if (Array.isArray(item.bundleComplexAttrs)) {
+      for (const ca of item.bundleComplexAttrs) {
+        if (!ca || !Array.isArray(ca.attributes)) continue;
+        const innerAttrs = ca.attributes
+          .map((ba) => {
+            const attrId = Number(ba.attribute_id || ba.id || 0);
+            if (!attrId) return null;
+            const vals = Array.isArray(ba.values)
+              ? ba.values.filter((v) => v && v.value != null && v.value !== '')
+              : [];
+            if (vals.length === 0) return null;
+            return {
+              complex_id: Number(ba.complex_id) || 0,
+              id: attrId,
+              values: vals.map((v) => ({
+                value: String(v.value),
+                ...(v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0
+                  ? { dictionary_value_id: Number(v.dictionary_value_id) }
+                  : {}),
+              })),
+            };
+          })
+          .filter(Boolean);
+        if (innerAttrs.length > 0) {
+          complex_attributes.push({ attributes: innerAttrs });
+        }
+      }
+    }
 
     // 5.4 type_id + description_category_id(门户 bundle 接口也期望这两个字段)
-    //    - type_id: 从 sv.description_category_id(实际是 description_type_dict_value)取
-    //    - description_category_id: 从 sv.categories[] 最深一级 id 取
-    const typeId = Number(sv?.description_category_id) || 0;
+    //
+    // 字段语义(Ozon API):
+    //   - description_category_id: 叶子类目 ID(必填,缺失→错误 description_type_is_empty)
+    //   - type_id: 类目下的类型 ID(必填,可由 attribute 8229 替代)
+    //
+    // /search 响应字段(实测):
+    //   - description_type_dict_value → 映射到 sv.description_category_id(命名混淆)
+    //     字面意"描述类型字典值",实际是 type_id(因为 description_type_name → attr 8229 类型名)
+    //   - categories[{id, level}] → 类目路径,deepest level 的 id 可能是 description_category_id
+    //
+    // bundle item(create-bundle-by-variant-id 返回)是最权威源,应包含这两个字段。
+    //
+    // ⚠️ 错误 description_type_is_empty 的 field=description_category_id,
+    //    表示 description_category_id 为 0,而非 type_id 为 0。
+    // bundleItem 已在 5.2 声明(优先从 bundle item 提取 attributes),这里复用
     const cats = Array.isArray(sv?.categories) ? sv.categories : [];
-    const deepestCat = cats
-      .filter((c) => c.id)
-      .sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
-    const descriptionCategoryId = Number(deepestCat?.id) || 0;
+    const deepestCat = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
 
-    // 5.5 构造 seller.ozon.ru 期望的 item(仅保留 proto 认识的字段)
+    // type_id: sv.description_category_id 实际是 description_type_dict_value = type_id
+    // bundle item 如有 type_id 则优先用
+    const typeId = Number(bundleItem?.type_id) || Number(sv?.description_category_id) || 0;
+
+    // description_category_id: 从多个源尝试
+    // 1) bundle item 顶层 description_category_id
+    // 2) bundle item 嵌套 category.description_category_id / description_category.id
+    // 3) sv.search_description_category_id(/search 真字段,若有)
+    // 4) sv.categories[] 最深一级 id
+    const descriptionCategoryId =
+      Number(bundleItem?.description_category_id) ||
+      Number(bundleItem?.category?.description_category_id) ||
+      Number(bundleItem?.description_category?.id) ||
+      Number(sv?.search_description_category_id) ||
+      Number(deepestCat?.id) ||
+      0;
+
+    // DEBUG: 完整记录解析过程,定位 description_category_id=0 的根因
+    logger.info(
+      {
+        offer_id: item.offer_id,
+        typeId,
+        descriptionCategoryId,
+        hasBundleItem: !!bundleItem,
+        bundleItemKeys: bundleItem ? Object.keys(bundleItem).slice(0, 30) : null,
+        bundleTypeId: bundleItem?.type_id,
+        bundleDescCatId: bundleItem?.description_category_id,
+        bundleCategoryObj: bundleItem?.category ? JSON.stringify(bundleItem.category).slice(0, 200) : null,
+        bundleDescCatObj: bundleItem?.description_category
+          ? JSON.stringify(bundleItem.description_category).slice(0, 200)
+          : null,
+        svDescCatId: sv?.description_category_id,
+        searchDescCatId: sv?.search_description_category_id,
+        deepestCatId: deepestCat?.id,
+        deepestCatLevel: deepestCat?.level,
+        catCount: cats.length,
+        cats: cats.map((c) => ({ id: c.id, level: c.level, name: c.name })),
+      },
+      'prepare-bundle: type_id/description_category_id 解析详情'
+    );
+
+    if (!descriptionCategoryId) {
+      logger.error(
+        {
+          offer_id: item.offer_id,
+          descriptionCategoryId,
+          hasBundleItem: !!bundleItem,
+          bundleDescCatId: bundleItem?.description_category_id,
+          svDescCatId: sv?.description_category_id,
+          deepestCatId: deepestCat?.id,
+          catCount: cats.length,
+        },
+        'prepare-bundle: description_category_id=0,将触发 Ozon 错误 description_type_is_empty'
+      );
+    }
+    if (!typeId) {
+      logger.warn(
+        {
+          offer_id: item.offer_id,
+          typeId,
+          svDescCatId: sv?.description_category_id,
+          bundleTypeId: bundleItem?.type_id,
+        },
+        'prepare-bundle: type_id=0,可能触发 Ozon 拒绝(除非 attribute 8229 已填)'
+      );
+    }
+
+    // 5.5 构造 seller.ozon.ru 期望的 item(对齐 /v3/product/import 官方 API schema)
+    //
+    // v3ImportProductsRequestItem 必填字段(required):
+    //   attributes, description_category_id, depth, dimension_unit, height,
+    //   images, name, offer_id, price, vat, weight, weight_unit, width, type_id
+    //
+    // ⚠️ type_id / description_category_id 处理策略(对齐 0.13 门户"按名匹配"机制):
+    //   - 0.13 v3-payload.js 构造的 item **不含** type_id / description_category_id
+    //   - 门户 update-bundle-items 接口通过 bundle 级的 description_category_lvl3_name
+    //     (类目名,如 "Водолазки") 走"按名匹配",由 Ozon 自动填充这两个 ID
+    //   - 如果 item 里显式传 type_id:0 / description_category_id:0,Ozon 会认为
+    //     "用户显式设为 0"而非"未设置",不触发按名匹配 → 报错 description_type_is_empty
+    //   - 因此:有值时透传(更精确),为 0 时**不传**(让 Ozon 走按名匹配)
     const portalItem = {
+      // ── v3 必填字段 ──
       offer_id: String(item.offer_id || ''),
       name: String(item.name || ''),
       price: String(item.price || '0'),
-      old_price: String(item.old_price || item.price || '0'),
       vat: String(item.vat || '0'),
-      currency_code: String(item.currency_code || 'RUB'),
       images,
       attributes,
-      complex_attributes,
-      // 必填分类字段
-      type_id: typeId,
-      description_category_id: descriptionCategoryId,
       // 必填物理参数(缺省 100 兜底,对齐 0.13 v3-payload.js:52-55)
       weight: Number(item.weight) > 0 ? Math.round(Number(item.weight)) : 100,
       weight_unit: item.weight_unit || 'g',
@@ -209,7 +380,25 @@ export async function prepareBundleItems(message, storeId, store) {
       width: Number(item.width) > 0 ? Math.round(Number(item.width)) : 100,
       height: Number(item.height) > 0 ? Math.round(Number(item.height)) : 100,
       dimension_unit: item.dimension_unit || 'mm',
+      // ── v3 非必填字段(传默认值,对齐 v3 示例) ──
+      old_price: String(item.old_price || item.price || '0'),
+      currency_code: String(item.currency_code || 'RUB'),
+      complex_attributes,
+      // 主图(v3 schema:primary_image 单独于 images,空字符串表示用 images[0])
+      primary_image: primaryImg || '',
+      // 营销色彩图(默认空)
+      color_image: '',
+      // 360 图组(默认空数组)
+      images360: [],
+      // PDF 文件清单(默认空数组)
+      pdf_list: [],
+      // 新类目标识符(0 表示不更改类目)
+      new_description_category_id: 0,
     };
+
+    // 分类字段:有值才传,为 0 不传(让 Ozon 走 description_category_lvl3_name 按名匹配)
+    if (typeId > 0) portalItem.type_id = typeId;
+    if (descriptionCategoryId > 0) portalItem.description_category_id = descriptionCategoryId;
 
     // barcode(从 sv._searchMeta.barcodes 或 item.barcode)
     const barcode = sv?._searchMeta?.barcodes?.[0] || item.barcode || '';
@@ -224,15 +413,39 @@ export async function prepareBundleItems(message, storeId, store) {
 
   const bundles = [];
   for (const [catName, groupItems] of groups) {
+    const transformedItems = groupItems.map(transformItemForPortal);
+    // DEBUG: 记录每个 bundle 的类目名和首个 item 的分类字段,排查按名匹配是否生效
+    logger.info(
+      {
+        catName,
+        itemCount: transformedItems.length,
+        firstOfferId: transformedItems[0]?.offer_id,
+        firstItemHasTypeId: transformedItems[0]?.type_id != null,
+        firstItemHasDescCatId: transformedItems[0]?.description_category_id != null,
+        firstItemTypeId: transformedItems[0]?.type_id,
+        firstItemDescCatId: transformedItems[0]?.description_category_id,
+      },
+      'prepare-bundle: bundle 分组(类目名将用于 Ozon 按名匹配)'
+    );
     bundles.push({
-      items: groupItems.map(transformItemForPortal),
+      items: transformedItems,
       source: 'SOURCE_MERGED',
       description_category_lvl3_name: catName,
     });
   }
 
   logger.info(
-    { storeId, inCount: items.length, validCount: valid.length, bundleCount: bundles.length, strictSkipped: strictSkipped.length, invalidImage: invalidImage.length, flags: Object.entries(flags).filter(([, v]) => v).map(([k]) => k) },
+    {
+      storeId,
+      inCount: items.length,
+      validCount: valid.length,
+      bundleCount: bundles.length,
+      strictSkipped: strictSkipped.length,
+      invalidImage: invalidImage.length,
+      flags: Object.entries(flags)
+        .filter(([, v]) => v)
+        .map(([k]) => k),
+    },
     'prepare-bundle-items done'
   );
 

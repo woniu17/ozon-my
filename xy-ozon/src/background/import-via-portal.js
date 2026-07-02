@@ -53,33 +53,29 @@
     for (const b of bundles) {
       try {
         let bundleId, taskId;
+        // 类目名(对齐官方 create-bundle / upload-bundle 的 description_category_lvl3_name / name)
+        // ERP prepare-bundle-items 返回 bundle.description_category_lvl3_name
+        const catName = b.description_category_lvl3_name || '';
         if (useMock) {
-          // 6b. 建空草稿(mock)
-          bundleId = await self.MockSellerPortal.createBundle(companyId);
-          // 6c. 写入商品数据(mock)
-          await self.MockSellerPortal.updateBundleItems(
-            bundleId,
-            companyId,
-            b.items,
-            b.source,
-            b.description_category_lvl3_name
-          );
-          // 6d. 提交发布 → upload_task_id(mock)
-          taskId = await self.MockSellerPortal.uploadBundle(bundleId, companyId);
+          // 6b. 建空草稿(mock) —— 传 catName 让 mock 也记录类目信息
+          bundleId = await self.MockSellerPortal.createBundle(companyId, preferTabId, { catName });
+          // 6c. 写入商品数据(mock) —— 不再传 catName(已固化到 create-bundle)
+          await self.MockSellerPortal.updateBundleItems(bundleId, companyId, b.items, b.source, preferTabId);
+          // 6d. 提交发布 → upload_task_id(mock) —— 传 name(对齐官方)
+          taskId = await self.MockSellerPortal.uploadBundle(bundleId, companyId, preferTabId, { name: catName });
         } else {
           // 6b. 建空草稿(真实 seller.ozon.ru/seller-prototype/create-bundle)
-          bundleId = await self.SellerPortalClient.createBundle(companyId, preferTabId);
+          //     对齐官方:传 description_category_lvl3_name + source_item_id(可选)
+          bundleId = await self.SellerPortalClient.createBundle(companyId, preferTabId, {
+            catName,
+            sourceItemId: b.source_item_id || null,
+          });
           // 6c. 写入商品数据(真实 seller.ozon.ru/seller-prototype/update-bundle-items)
-          await self.SellerPortalClient.updateBundleItems(
-            bundleId,
-            companyId,
-            b.items,
-            b.source,
-            b.description_category_lvl3_name,
-            preferTabId
-          );
-          // 6d. 提交发布 → upload_task_id(真实 seller.ozon.ru/seller-prototype/upload-bundle,strict:true)
-          taskId = await self.SellerPortalClient.uploadBundle(bundleId, companyId, preferTabId);
+          //     对齐官方:不再传 catName(类目已在 create-bundle 时固化)
+          await self.SellerPortalClient.updateBundleItems(bundleId, companyId, b.items, b.source, preferTabId);
+          // 6d. 提交发布 → upload_task_id(真实 seller.ozon.ru/seller-prototype/upload-bundle)
+          //     对齐官方:传 name(与 create-bundle 时的 catName 同源)+ strict:true(xy-ozon 扩展)
+          taskId = await self.SellerPortalClient.uploadBundle(bundleId, companyId, preferTabId, { name: catName });
         }
         bundleIds.push(bundleId);
         taskIds.push(taskId);

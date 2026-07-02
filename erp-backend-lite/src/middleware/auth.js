@@ -9,6 +9,7 @@ const PUBLIC_PATHS = new Set([
   '/auth/send-code',
   '/auth/captcha',
   '/auth/sms/verify',
+  '/favicon.ico',
 ]);
 
 function isPublic(path) {

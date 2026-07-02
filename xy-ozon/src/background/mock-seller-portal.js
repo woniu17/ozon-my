@@ -166,7 +166,8 @@
     },
 
     // Phase 6b:建空草稿 —— /seller-prototype/create-bundle
-    async createBundle(companyId) {
+    // 对齐官方 Request: { company_id, description_category_lvl3_name, source_item_id }
+    async createBundle(companyId, preferTabId = null, opts = {}) {
       await _sellerPortalGate('create-bundle');
       _maybeThrowError('create-bundle');
       const bundleId = _newId('bdl', _bundleSeq);
@@ -174,34 +175,41 @@
         bundleId,
         items: [],
         companyId: String(companyId),
+        catName: opts.catName || '',
+        sourceItemId: opts.sourceItemId || '',
         uploaded: false,
         uploadTaskId: null,
         createdAt: Date.now(),
       });
-      console.log(`[mock-seller] createBundle → ${bundleId}`);
+      console.log(
+        `[mock-seller] createBundle → ${bundleId}, catName="${opts.catName || ''}", sourceItemId="${opts.sourceItemId || ''}"`
+      );
       return bundleId;
     },
 
     // Phase 6c:写入商品数据 —— /seller-prototype/update-bundle-items
-    async updateBundleItems(bundleId, companyId, items, source, catName) {
+    // 对齐官方 Request: { bundle_id, company_id, items, source }
+    async updateBundleItems(bundleId, companyId, items, source, preferTabId = null) {
       await _sellerPortalGate('update-bundle-items');
       _maybeThrowError('update-bundle-items');
       const b = _bundles.get(String(bundleId));
       if (!b) throw Object.assign(new Error('bundle 不存在'), { code: 'UNKNOWN_ERROR' });
       b.items = items;
       b.source = source || 'SOURCE_MERGED';
-      b.catName = catName || '';
-      console.log(`[mock-seller] updateBundleItems → ${bundleId}, items=${items?.length}`);
+      console.log(`[mock-seller] updateBundleItems → ${bundleId}, items=${items?.length}, source=${b.source}`);
       return {};
     },
 
     // Phase 6d:提交发布 —— /seller-prototype/upload-bundle
-    async uploadBundle(bundleId, companyId) {
+    // 对齐官方 Request: { bundle_id, company_id, name } + xy-ozon 扩展 strict
+    async uploadBundle(bundleId, companyId, preferTabId = null, opts = {}) {
       await _sellerPortalGate('upload-bundle');
       _maybeThrowError('upload-bundle');
       const b = _bundles.get(String(bundleId));
       if (!b) throw Object.assign(new Error('bundle 不存在'), { code: 'UNKNOWN_ERROR' });
       b.uploaded = true;
+      b.uploadName = opts.name || '';
+      b.uploadStrict = opts.strict !== undefined ? Boolean(opts.strict) : true;
       // 创建 async-upload 任务
       const taskId = _newId('task', _taskSeq);
       const size = Array.isArray(b.items) ? b.items.length : 1;
@@ -218,7 +226,7 @@
       });
       b.uploadTaskId = taskId;
       _advanceTask(taskId);
-      console.log(`[mock-seller] uploadBundle → ${bundleId}, taskId=${taskId}`);
+      console.log(`[mock-seller] uploadBundle → ${bundleId}, taskId=${taskId}, name="${opts.name || ''}"`);
       return taskId;
     },
 

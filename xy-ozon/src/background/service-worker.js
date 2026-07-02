@@ -214,11 +214,65 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         // 查询上架任务进度 —— 走 OPI /v1/product/import/info
         // 直接调 ERP /ozon/products/import-info 端点(不查本地表,viaPortal task_id 也能查)
+        // 可选 localTaskId:若传入则 ERP 会 upsert 上架记录明细(follow_sell_task_items)
         case 'productImportInfo': {
           const taskId = message.taskId;
           if (!taskId) return sendResponse({ ok: false, error: '缺少 taskId' });
-          const resp = await self.ErpClient.post('/ozon/products/import-info', { task_id: String(taskId) });
+          const payload = { task_id: String(taskId) };
+          if (message.localTaskId) payload.local_task_id = String(message.localTaskId);
+          const resp = await self.ErpClient.post('/ozon/products/import-info', payload);
           return sendResponse({ ok: true, data: resp });
+        }
+
+        // 获取 ERP Base URL(供 popup/action-bar 跳转 admin 用)
+        case 'getErpBaseUrl': {
+          const baseUrl = await self.ErpClient.getBaseUrl();
+          return sendResponse({ ok: true, baseUrl });
+        }
+
+        // 获取配置中心(启动时拉取,替换硬编码默认值)
+        // query: { scope?: 'extension'|'pricing'|'watermark' }
+        case 'getConfig': {
+          const query = message.query || {};
+          const data = await self.ErpClient.get('/app-config', query);
+          return sendResponse({ ok: true, data });
+        }
+
+        // 创建批量上架任务(P2-2:batch-upload 页提交时调用)
+        // payload: { storeId, items: [{ sourceSku, sourceUrl }], config? }
+        case 'createBatchTask': {
+          const data = await self.ErpClient.post('/ozon/products/batch-import', message.payload || {});
+          return sendResponse({ ok: true, data });
+        }
+
+        // 查询批量任务列表(P2-2:batch-upload 历史记录用)
+        // query: { currentPage?, pageSize?, storeId?, status? }
+        case 'getBatchTasks': {
+          const data = await self.ErpClient.get('/admin/api/batch-tasks', message.query || {});
+          return sendResponse({ ok: true, data });
+        }
+
+        // 水印模板列表(P3:插件端 Canvas 渲染前拉取模板配置)
+        case 'getWatermarkTemplates': {
+          const data = await self.ErpClient.get('/watermark-templates', message.query || {});
+          return sendResponse({ ok: true, data });
+        }
+
+        // 跨域图片抓取为 data URL(P3:Canvas 渲染水印需要,绕过 content script CORS)
+        // payload: { url }
+        case 'fetchImageAsDataUrl': {
+          const url = message.url;
+          if (!url) return sendResponse({ ok: false, error: '缺少 url' });
+          const resp = await fetch(url, { credentials: 'omit' });
+          if (!resp.ok) throw new Error(`fetchImage ${resp.status}`);
+          const blob = await resp.blob();
+          const b64 = await new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(fr.result);
+            fr.onerror = reject;
+            fr.readAsDataURL(blob);
+          });
+          return sendResponse({ ok: true, dataUrl: b64, contentType: blob.type });
         }
 
         default:
