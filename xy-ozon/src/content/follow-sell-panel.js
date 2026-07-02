@@ -358,7 +358,9 @@
   }
 
   // ────────────────────────────────────────────────────────────
-  // 渲染变体表格行(多变体:从 productData.variantSkus 生成,每行一个变体)
+  // 渲染变体表格行(对齐 0.13.31.1 createMultiVariantFollowSellPanel:全字段)
+  // 每行包含:复选框/主图/变体/SKU/货号/原售价/月销量/跟卖数/
+  //          实际售价/最低价/划线价/库存/长宽高/重量/操作
   // ────────────────────────────────────────────────────────────
   function renderVariantRows(productData, now) {
     const variants =
@@ -373,19 +375,39 @@
         const rawPrice = v.price || productData.price || '999';
         // 价格原值展示(含币种符号,如 "170 ₽");输入框只用数字
         const priceNum = _extractPriceNumber(rawPrice);
+        const defaultOldPrice = priceNum ? (priceNum * 2).toFixed(2) : '';
         const offerId = `SKU${sku}-${String(now).slice(-4)}${i > 0 ? '-' + i : ''}`;
         return `
                   <tr data-sku="${esc(sku)}" data-idx="${i}">
-                    <td><input type="checkbox" class="xy-fs-check" data-idx="${i}" checked></td>
+                    <td><input type="checkbox" class="xy-fs-check xy-fs-mv-check" data-idx="${i}" checked></td>
                     <td><img src="${esc(cover)}" class="xy-fs-thumb" onerror="this.style.display='none'"></td>
-                    <td class="xy-fs-variant-cell">${esc(title)}</td>
+                    <td class="xy-fs-variant-cell" title="${esc(title)}">${esc(title)}</td>
                     <td><span class="xy-fs-sku">${esc(sku) || '—'}</span></td>
-                    <td><input type="text" class="xy-fs-input xy-fs-offerid" data-idx="${i}" value="${esc(offerId)}" size="12"></td>
-                    <td><span class="xy-fs-price-original">${esc(rawPrice)}</span></td>
-                    <td><input type="number" class="xy-fs-input xy-fs-price" data-idx="${i}" value="${esc(priceNum)}" min="0" step="0.01" size="8"></td>
-                    <td><input type="number" class="xy-fs-input xy-fs-oldprice" data-idx="${i}" value="" placeholder="自动" min="0" step="0.01" size="8"></td>
-                    <td><input type="number" class="xy-fs-input xy-fs-stock" data-idx="${i}" value="10" min="0" size="5"></td>
-                    <td><button class="xy-fs-delete-btn" data-idx="${i}">删除</button></td>
+                    <td><input type="text" class="xy-fs-input xy-fs-offerid" data-idx="${i}" value="${esc(offerId)}" placeholder="自动" style="width:140px;"></td>
+                    <td><span class="xy-fs-price-original" data-base-price="${esc(priceNum)}" data-source-currency="${esc(v.priceCurrency || productData.currency || 'RUB')}">${esc(rawPrice)}</span></td>
+                    <td><span class="xy-fs-mv-sales" data-idx="${i}" data-sku="${esc(sku)}" style="color:#94a3b8;" title="近30天销量">…</span></td>
+                    <td><span class="xy-fs-mv-follow" data-idx="${i}" data-sku="${esc(sku)}" style="color:#94a3b8;" title="跟卖卖家数">…</span></td>
+                    <td><input type="number" class="xy-fs-input xy-fs-price" data-idx="${i}" value="${esc(priceNum)}" min="0" step="0.01" style="width:80px;"></td>
+                    <td><input type="number" class="xy-fs-input xy-fs-minprice" data-idx="${i}" value="${esc(priceNum)}" placeholder="可不填" min="0" step="0.01" title="Ozon 自动调价的下限,默认等于实际售价" style="width:80px;background:#fafafa;"></td>
+                    <td><input type="number" class="xy-fs-input xy-fs-oldprice" data-idx="${i}" value="${esc(defaultOldPrice)}" min="0" step="0.01" style="width:80px;"></td>
+                    <td><input type="number" class="xy-fs-input xy-fs-stock" data-idx="${i}" value="10" min="0" step="1" style="width:60px;"></td>
+                    <td>
+                      <div class="xy-fs-mv-lwh-cell" style="display:flex;align-items:center;gap:3px;">
+                        <input type="number" class="xy-fs-input xy-fs-depth" data-idx="${i}" placeholder="0" min="0" step="1" title="留空或填写 0 时,沿用跟卖商品原有长宽高" style="width:48px;padding:4px;">
+                        <span style="color:#94a3b8;">×</span>
+                        <input type="number" class="xy-fs-input xy-fs-width" data-idx="${i}" placeholder="0" min="0" step="1" title="留空或填写 0 时,沿用跟卖商品原有长宽高" style="width:48px;padding:4px;">
+                        <span style="color:#94a3b8;">×</span>
+                        <input type="number" class="xy-fs-input xy-fs-height" data-idx="${i}" placeholder="0" min="0" step="1" title="留空或填写 0 时,沿用跟卖商品原有长宽高" style="width:48px;padding:4px;">
+                        <span style="font-size:10px;color:#94a3b8;">mm</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="xy-fs-mv-unit-cell" style="display:flex;align-items:center;gap:3px;">
+                        <input type="number" class="xy-fs-input xy-fs-weight" data-idx="${i}" placeholder="0" min="0" step="1" title="留空或填写 0 时,沿用跟卖商品原有重量" style="width:60px;padding:4px;">
+                        <span style="font-size:10px;color:#94a3b8;">g</span>
+                      </div>
+                    </td>
+                    <td><button class="xy-fs-delete-btn" data-idx="${i}" title="删除">删除</button></td>
                   </tr>`;
       })
       .join('');
@@ -417,6 +439,7 @@
 
   // ────────────────────────────────────────────────────────────
   // 店铺基础数据(对齐后端 /auth/ozon-stores,popup 已缓存到 chrome.storage)
+  // 目标店铺支持多选(对齐 0.13.31.1 createMultiVariantFollowSellPanel)
   // ────────────────────────────────────────────────────────────
   // 返回当前选中店铺对象 {id, name, company_id, warehouse_id, currency_code, ...}
   // 读不到时回退到第一个店铺,再回退到 {id:'store-001', currency_code:'RUB'}
@@ -437,84 +460,359 @@
     return { id: 'store-001', currency_code: 'RUB' };
   }
 
-  // 填充面板的 store 下拉框,并按当前选中店铺设默认值
-  // 缓存为空时主动从后端拉取(不依赖 popup 是否打开过)
-  // 监听 change 事件:同步到 chrome.storage + 联动货币下拉框
-  async function populateStoreSelect(panel) {
-    const select = panel.querySelector('[data-field="store"]');
-    const currencySelect = panel.querySelector('[data-field="currency"]');
-    if (!select) return;
-
-    let { ozonStores, ozonStoreId } = await chrome.storage.local.get(['ozonStores', 'ozonStoreId']);
-    let stores = Array.isArray(ozonStores) ? ozonStores : [];
-
-    // 缓存为空:主动从后端拉取(service-worker getStores → /auth/ozon-stores)
-    if (stores.length === 0) {
-      try {
-        const resp = await sendMessage({ type: 'getStores' });
-        if (resp?.ok && Array.isArray(resp.data)) {
-          stores = resp.data;
-          await chrome.storage.local.set({ ozonStores: stores });
-          console.log('[FollowSell] 主动拉取店铺列表:', stores.length, '个');
-        }
-      } catch (e) {
-        console.warn('[FollowSell] 拉取店铺列表失败:', e?.message);
-      }
-    }
-
-    if (stores.length === 0) return;
-
-    const current = ozonStoreId || stores[0]?.id || '';
-    select.innerHTML = stores
-      .map((s) => {
-        const cur = s.currency_code ? ` (${s.currency_code})` : '';
-        const sel = s.id === current ? ' selected' : '';
-        return `<option value="${esc(s.id)}"${sel}>${esc(s.name || s.id)}${esc(cur)}</option>`;
-      })
-      .join('');
-
-    // 初始联动货币下拉框
-    syncCurrencySelect(stores, current, currencySelect);
-
-    // 面板内切换 store:同步存储 + 联动货币 + 重新拉取仓库列表
-    select.addEventListener('change', () => {
-      const val = select.value;
-      if (val) {
-        chrome.storage.local.set({ ozonStoreId: val });
-        syncCurrencySelect(stores, val, currencySelect);
-        populateWarehouseSelect(panel, val);
-        console.log('[FollowSell] 面板切换店铺:', val);
-      }
-    });
-
-    // 面板打开时同步拉取当前店铺的仓库列表
-    populateWarehouseSelect(panel, current);
+  // 读取面板已选中的店铺 ID 列表(对齐 0.13.31.1 getSelectedFollowSellStoreIds)
+  function getSelectedStoreIds(panel) {
+    return Array.from(panel.querySelectorAll('.xy-fs-store-cb:checked'))
+      .map((cb) => String(cb.value || '').trim())
+      .filter(Boolean);
   }
 
-  // 填充物流仓库下拉框:从后端 /ozon/warehouses 拉取该店铺的仓库列表
+  // 填充目标店铺多选下拉框(对齐 0.13.31.1 panel._followSellStoreList + store-picker)
+  // - 触发器按钮显示「已选 N 家店」或占位文本
+  // - 下拉面板含搜索框 + 店铺复选框列表
+  // - 选中变化时同步货币 + 物流仓库 picker
+  async function populateStoreSelect(panel) {
+    const trigger = panel.querySelector('[data-action="toggle-stores"]');
+    const dropdown = panel.querySelector('[data-field="store-dropdown"]');
+    const currencySelect = panel.querySelector('[data-field="currency"]');
+    if (!trigger || !dropdown) return;
+
+    const { ozonStoreId } = await chrome.storage.local.get(['ozonStoreId']);
+    const cachedStores = await chrome.storage.local.get(['ozonStores']).then((r) => r.ozonStores);
+    let stores = Array.isArray(cachedStores) ? cachedStores : [];
+
+    // 始终从后端拉取最新店铺列表(避免缓存陈旧导致新店铺不显示)
+    // 失败时 fallback 到缓存
+    try {
+      const resp = await sendMessage('getStores');
+      if (resp?.ok && Array.isArray(resp.data) && resp.data.length > 0) {
+        stores = resp.data;
+        await chrome.storage.local.set({ ozonStores: stores });
+        console.log('[FollowSell] 拉取最新店铺列表:', stores.length, '个');
+      } else {
+        console.warn('[FollowSell] getStores 返回异常,使用缓存:', stores.length, '个', resp?.error || '');
+      }
+    } catch (e) {
+      console.warn('[FollowSell] 拉取店铺列表失败,使用缓存:', stores.length, '个,', e?.message);
+    }
+
+    panel._followSellStoreList = stores;
+
+    if (stores.length === 0) {
+      trigger.textContent = '无可用店铺,请先在 ERP 添加';
+      trigger.style.color = '#dc2626';
+      return;
+    }
+
+    // 默认勾选 popup 选中的店铺(单选默认)
+    const defaultChecked = new Set([String(ozonStoreId || stores[0]?.id || '')]);
+    panel._defaultCheckedStoreIds = defaultChecked;
+
+    // 渲染下拉面板(搜索框 + 复选框列表)
+    // 注意:renderDropdown 会把 defaultChecked 的复选框写入 DOM,从而让 getSelectedStoreIds 能读到
+    const renderDropdown = (filter = '') => {
+      const f = String(filter || '').toLowerCase();
+      const list = stores.filter((s) => {
+        if (!f) return true;
+        const name = String(s.name || s.label || s.companyName || s.id || '').toLowerCase();
+        return name.includes(f);
+      });
+      dropdown.innerHTML = `
+        <div class="xy-fs-store-search-wrap">
+          <input type="text" class="xy-fs-store-search" placeholder="搜索店铺..." value="${esc(filter)}">
+        </div>
+        <div class="xy-fs-store-list">
+          ${
+            list.length === 0
+              ? '<div style="padding:12px;text-align:center;color:#94a3b8;font-size:12px;">无匹配店铺</div>'
+              : list
+                  .map((s) => {
+                    const id = String(s.id || s.storeId || '');
+                    const name = s.name || s.label || s.companyName || `店铺 ${id}`;
+                    const cur = s.currency_code ? ` (${s.currency_code})` : '';
+                    const checked = defaultChecked.has(id) ? 'checked' : '';
+                    return `<label class="xy-fs-store-option">
+                      <input type="checkbox" class="xy-fs-store-cb" value="${esc(id)}" ${checked}>
+                      <span title="${esc(name)}">${esc(name)}${esc(cur)}</span>
+                    </label>`;
+                  })
+                  .join('')
+          }
+        </div>
+      `;
+      // 搜索框 input
+      const searchInput = dropdown.querySelector('.xy-fs-store-search');
+      if (searchInput) {
+        searchInput.addEventListener('input', () => renderDropdown(searchInput.value));
+        searchInput.focus();
+      }
+      // 复选框变化
+      dropdown.querySelectorAll('.xy-fs-store-cb').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          // 用户手动改动后,从 defaultChecked 同步实际勾选状态
+          defaultChecked.clear();
+          dropdown.querySelectorAll('.xy-fs-store-cb:checked').forEach((c) => defaultChecked.add(c.value));
+          updateTrigger();
+          syncCurrencyFromStores(panel, stores);
+          syncWarehouseWithStores(panel);
+          updateFooterCount(panel);
+        });
+      });
+    };
+
+    // 更新触发器文案 + 已选店铺 chip 列表(直观看到已勾选的店铺)
+    const updateTrigger = () => {
+      const ids = getSelectedStoreIds(panel);
+      const selectedStores = ids
+        .map((id) => stores.find((x) => String(x.id || x.storeId) === String(id)))
+        .filter(Boolean);
+      if (ids.length === 0) {
+        trigger.innerHTML = `<span style="color:#94a3b8;">请选择店铺(可多选)</span>`;
+      } else if (ids.length === 1) {
+        const s = selectedStores[0];
+        const name = s?.name || s?.label || s?.companyName || ids[0];
+        trigger.innerHTML = `<span style="color:#0f172a;font-weight:500;">✓ ${esc(name)}</span>`;
+      } else {
+        // 多店:显示前 2 个店铺名 + 剩余数量
+        const names = selectedStores.map((s) => s?.name || s?.label || s?.companyName || s?.id || '');
+        const preview = names
+          .slice(0, 2)
+          .map((n) => `✓ ${esc(n)}`)
+          .join(' · ');
+        const more = names.length > 2 ? ` <em style="color:#6366f1;font-style:normal;">+${names.length - 2}</em>` : '';
+        trigger.innerHTML = `<span style="color:#0f172a;font-weight:500;">${preview}${more}</span>`;
+      }
+    };
+
+    // 触发器点击 → 切换下拉显示
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = dropdown.style.display !== 'none';
+      if (isOpen) {
+        dropdown.style.display = 'none';
+        trigger.classList.remove('is-open');
+      } else {
+        renderDropdown('');
+        dropdown.style.display = 'block';
+        trigger.classList.add('is-open');
+      }
+    });
+    // 点击外部关闭下拉
+    document.addEventListener(
+      'click',
+      (ev) => {
+        if (!dropdown.contains(ev.target) && ev.target !== trigger && !trigger.contains(ev.target)) {
+          dropdown.style.display = 'none';
+          trigger.classList.remove('is-open');
+        }
+      },
+      { capture: true }
+    );
+
+    // 初始触发器文案 + 默认勾选触发同步
+    // 关键:先 renderDropdown('') 把默认勾选的 checkbox 写入 DOM(即使下拉框隐藏),
+    // 这样 getSelectedStoreIds 才能读到已勾选的店铺 ID,从而让 syncWarehouseWithStores 能正确加载仓库
+    renderDropdown('');
+    dropdown.style.display = 'none';
+    trigger.classList.remove('is-open');
+    updateTrigger();
+    syncCurrencyFromStores(panel, stores);
+    syncWarehouseWithStores(panel);
+    updateFooterCount(panel);
+  }
+
+  // 根据已选店铺同步货币下拉框(取首个选中店铺的 currency_code)
+  function syncCurrencyFromStores(panel, stores) {
+    const currencySelect = panel.querySelector('[data-field="currency"]');
+    if (!currencySelect) return;
+    const ids = getSelectedStoreIds(panel);
+    if (ids.length === 0) return;
+    const first = stores.find((s) => String(s.id) === ids[0]);
+    const cur = first?.currency_code ? String(first.currency_code).toUpperCase() : 'RUB';
+    let opt = currencySelect.querySelector(`option[value="${cur}"]`);
+    if (!opt) {
+      opt = document.createElement('option');
+      opt.value = cur;
+      opt.textContent = cur;
+      currencySelect.appendChild(opt);
+    }
+    currencySelect.value = cur;
+    console.log('[FollowSell] 货币联动(多店取首个):', cur);
+  }
+
+  // 同步物流仓库 picker:0 店/1 店 → 单选;多店 → per-store list
+  function syncWarehouseWithStores(panel) {
+    const ids = getSelectedStoreIds(panel);
+    const multiList = panel.querySelector('[data-field="warehouse-multi-list"]');
+    const singleRow = panel.querySelector('[data-field="warehouse-single-row"]');
+    const hint = panel.querySelector('[data-field="warehouse-picker-hint"]');
+    panel._selectedWarehouseByStore = panel._selectedWarehouseByStore || new Map();
+    panel._warehousesByStore = panel._warehousesByStore || new Map();
+
+    if (ids.length === 0) {
+      panel._followSellPreferredWarehouseStoreId = '';
+      if (multiList) multiList.style.display = 'none';
+      if (singleRow) singleRow.style.display = 'flex';
+      if (hint) hint.textContent = '请先选择店铺';
+      populateWarehouseSelect(panel, '');
+      return;
+    }
+
+    if (ids.length === 1) {
+      // 单店:沿用原 single-select 路径
+      if (multiList) multiList.style.display = 'none';
+      if (singleRow) singleRow.style.display = 'flex';
+      if (hint) hint.textContent = '库存将写入此仓库(变体表格设置库存后生效)';
+      populateWarehouseSelect(panel, ids[0]);
+      return;
+    }
+
+    // 多店:并行 ensure 各店 warehouses 已加载 → 渲染 N 行 per-store 选择
+    if (multiList) {
+      multiList.style.display = 'flex';
+      multiList.innerHTML = `<div style="font-size:12px;color:#64748b;">加载 ${ids.length} 家店仓库中…</div>`;
+    }
+    if (singleRow) singleRow.style.display = 'none';
+    if (hint) hint.textContent = `库存将写入各店仓库(${ids.length} 家店,每家独立选择)`;
+    (async () => {
+      await ensureWarehousesForStores(panel, ids);
+      renderMultiStoreWarehousePicker(panel, ids);
+    })();
+  }
+
+  // 并行 ensure 所有 selected store 的 warehouses 已 fetched + cached
+  async function ensureWarehousesForStores(panel, storeIds) {
+    panel._warehousesByStore = panel._warehousesByStore || new Map();
+    const toFetch = storeIds.filter((sid) => sid && !panel._warehousesByStore.has(sid));
+    if (toFetch.length === 0) return;
+    await Promise.all(
+      toFetch.map(async (sid) => {
+        try {
+          const resp = await sendMessage('getWarehouses', { storeId: sid });
+          const list = resp?.data?.warehouses || resp?.data?.result?.warehouses || resp?.data || [];
+          panel._warehousesByStore.set(sid, { options: Array.isArray(list) ? list : [] });
+        } catch (e) {
+          panel._warehousesByStore.set(sid, { options: [], error: e?.message || String(e) });
+        }
+      })
+    );
+  }
+
+  // 多店模式:渲染 N 行 per-store 仓库选择
+  function renderMultiStoreWarehousePicker(panel, storeIds) {
+    const multiList = panel.querySelector('[data-field="warehouse-multi-list"]');
+    if (!multiList) return;
+    panel._selectedWarehouseByStore = panel._selectedWarehouseByStore || new Map();
+    const storeList = Array.isArray(panel._followSellStoreList) ? panel._followSellStoreList : [];
+    const nameOf = (sid) => {
+      const s = storeList.find((x) => String(x.id || x.storeId) === String(sid));
+      return s?.name || s?.label || s?.companyName || `店铺 ${String(sid).slice(0, 8)}`;
+    };
+    // 读取该店铺配置的默认 warehouse_id(用作 select 默认选中)
+    const defaultWhOf = (sid) => {
+      const s = storeList.find((x) => String(x.id || x.storeId) === String(sid));
+      return s?.warehouse_id ? String(s.warehouse_id) : '';
+    };
+
+    const rowsHtml = storeIds
+      .map((sid) => {
+        const cache = panel._warehousesByStore?.get(sid);
+        const list = cache?.options || [];
+        const error = cache?.error;
+        const saved = panel._selectedWarehouseByStore?.get(sid);
+        // 优先级:用户已选 > 店铺配置的默认 warehouse_id > 空字符串(回退到列表第一项)
+        const preferred = saved || defaultWhOf(sid) || '';
+        let selectInner;
+        if (error) {
+          selectInner = `<option value="">加载失败:${esc(String(error).slice(0, 50))}</option>`;
+        } else if (list.length === 0) {
+          selectInner = '<option value="">无可用仓库</option>';
+        } else {
+          // 检查 preferred 是否在列表中;不在则默认选第一项
+          const inList = preferred && list.some((w) => String(w.warehouse_id ?? w.id ?? '') === String(preferred));
+          const finalPreferred = inList ? preferred : String(list[0]?.warehouse_id ?? list[0]?.id ?? '');
+          selectInner = list
+            .map((w) => {
+              const wid = w.warehouse_id ?? w.id ?? '';
+              const name = w.name || `仓库 ${wid}`;
+              const selected = String(finalPreferred) === String(wid) ? ' selected' : '';
+              return `<option value="${esc(String(wid))}"${selected}>${esc(name)} (${esc(String(wid))})</option>`;
+            })
+            .join('');
+        }
+        return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+          <span style="flex:0 0 160px;font-size:12.5px;color:#0f172a;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(nameOf(sid))}">${esc(nameOf(sid))}</span>
+          <select data-warehouse-store-id="${esc(sid)}" class="xy-fs-select" style="flex:1;min-width:200px;">
+            ${selectInner}
+          </select>
+        </div>`;
+      })
+      .join('');
+    multiList.innerHTML = rowsHtml;
+
+    // Wire onChange — 写 _selectedWarehouseByStore map
+    multiList.querySelectorAll('select[data-warehouse-store-id]').forEach((sel) => {
+      const sid = sel.getAttribute('data-warehouse-store-id');
+      // Seed map with default selected option(用户没改动也要落到 map,确保提交时能取到)
+      if (sid && sel.value) {
+        panel._selectedWarehouseByStore.set(String(sid), String(sel.value));
+      }
+      sel.addEventListener('change', () => {
+        if (sid && sel.value) {
+          panel._selectedWarehouseByStore.set(String(sid), String(sel.value));
+        }
+      });
+    });
+  }
+
+  // 填充物流仓库下拉框(单店模式):从后端 /ozon/warehouses 拉取该店铺的仓库列表
   // 默认选中店铺配置的 warehouse_id;列表为空或拉取失败时显示占位
   async function populateWarehouseSelect(panel, storeId) {
     const select = panel.querySelector('[data-field="warehouse-id"]');
     if (!select) return;
 
-    select.innerHTML = '<option value="">加载中...</option>';
+    const sid = String(storeId || '');
+    panel._followSellStoreId = sid || null;
+    panel._warehousesByStore = panel._warehousesByStore || new Map();
+    panel._selectedWarehouseByStore = panel._selectedWarehouseByStore || new Map();
 
-    if (!storeId) {
+    if (!sid) {
       select.innerHTML = '<option value="">请先选择店铺</option>';
       return;
     }
 
+    // 优先用 cache
+    const cached = panel._warehousesByStore.get(sid);
+    if (cached && Array.isArray(cached.options)) {
+      renderWarehouseOptions(panel, sid, cached.options);
+      return;
+    }
+
+    select.innerHTML = '<option value="">加载中...</option>';
     let warehouses = [];
     try {
-      const resp = await sendMessage('getWarehouses', { storeId });
+      const resp = await sendMessage('getWarehouses', { storeId: sid });
       // resp.data 可能是数组(OPI raw [{warehouse_id,...}] 或 fallback [{id,...}])
       warehouses = resp?.data?.warehouses || resp?.data?.result?.warehouses || resp?.data || [];
       if (!Array.isArray(warehouses)) warehouses = [];
+      panel._warehousesByStore.set(sid, { options: warehouses });
     } catch (e) {
       console.warn('[FollowSell] 拉取仓库列表失败:', e?.message);
+      panel._warehousesByStore.set(sid, { options: [], error: e?.message || String(e) });
+      select.innerHTML = `<option value="">加载失败:${esc(String(e?.message || e).slice(0, 60))}</option>`;
+      return;
     }
 
-    if (warehouses.length === 0) {
+    renderWarehouseOptions(panel, sid, warehouses);
+  }
+
+  // 渲染单店仓库 option 列表 + 选中默认值 + 写入 _selectedWarehouseByStore
+  function renderWarehouseOptions(panel, storeId, warehouses) {
+    const select = panel.querySelector('[data-field="warehouse-id"]');
+    if (!select) return;
+    const sid = String(storeId || '');
+
+    if (!Array.isArray(warehouses) || warehouses.length === 0) {
       select.innerHTML = '<option value="">无可用仓库</option>';
       return;
     }
@@ -522,23 +820,32 @@
     // 读取当前店铺的默认 warehouse_id 用于默认选中
     let defaultWhId = '';
     try {
-      const { ozonStores } = await chrome.storage.local.get(['ozonStores']);
-      const stores = Array.isArray(ozonStores) ? ozonStores : [];
-      const store = stores.find((s) => s.id === storeId);
+      const storeList = Array.isArray(panel._followSellStoreList) ? panel._followSellStoreList : [];
+      const store = storeList.find((s) => String(s.id) === sid);
       defaultWhId = store?.warehouse_id ? String(store.warehouse_id) : '';
     } catch {}
 
+    const saved = panel._selectedWarehouseByStore?.get(sid);
+    const preferred = saved || defaultWhId || '';
     select.innerHTML = warehouses
       .map((w) => {
         const wid = w.warehouse_id ?? w.id ?? '';
         const name = w.name || `仓库 ${wid}`;
-        return `<option value="${esc(String(wid))}">${esc(name)}</option>`;
+        const selected = preferred && String(preferred) === String(wid) ? ' selected' : '';
+        return `<option value="${esc(String(wid))}"${selected}>${esc(name)} (${esc(String(wid))})</option>`;
       })
       .join('');
 
-    // 选中默认仓库:店铺配置优先,否则第一个
-    const matchId = defaultWhId && warehouses.some((w) => String(w.warehouse_id ?? w.id) === defaultWhId);
-    select.value = matchId ? defaultWhId : String(warehouses[0]?.warehouse_id ?? warehouses[0]?.id ?? '');
+    if (!select.value && select.options.length > 0) select.selectedIndex = 0;
+    if (select.value) {
+      panel._selectedWarehouseByStore.set(sid, String(select.value));
+    }
+    // 单店模式下切换仓库 → 写入 map
+    select.addEventListener('change', () => {
+      if (sid && select.value) {
+        panel._selectedWarehouseByStore.set(sid, String(select.value));
+      }
+    });
     console.log('[FollowSell] 仓库列表已加载:', warehouses.length, '个,选中:', select.value);
   }
 
@@ -554,32 +861,9 @@
     UZS: "so'm",
   };
 
-  // 根据店铺的 currency_code 同步货币下拉框 + 价格 label 符号(店铺 → 货币 联动)
-  function syncCurrencySelect(stores, storeId, currencySelect) {
-    if (!currencySelect) return;
-    const store = stores.find((s) => s.id === storeId);
-    const cur = store?.currency_code ? String(store.currency_code).toUpperCase() : 'RUB';
-    // 下拉框已有该选项则选中,否则新建一个并选中
-    let opt = currencySelect.querySelector(`option[value="${cur}"]`);
-    if (!opt) {
-      opt = document.createElement('option');
-      opt.value = cur;
-      opt.textContent = cur;
-      currencySelect.appendChild(opt);
-    }
-    currencySelect.value = cur;
-
-    // 同步更新价格 label 的货币符号(避免选 CNY 却显示 ₽)
-    const symbol = CURRENCY_SYMBOL[cur] || cur;
-    const priceLabel = document.querySelector('[data-field="price-label"]');
-    const oldPriceLabel = document.querySelector('[data-field="old-price-label"]');
-    if (priceLabel) {
-      priceLabel.innerHTML = `<span class="xy-fs-required">*</span> 实际售价 (${symbol})`;
-    }
-    if (oldPriceLabel) {
-      oldPriceLabel.textContent = `划线价 (${symbol},选填)`;
-    }
-    console.log('[FollowSell] 货币联动:', cur, '符号:', symbol);
+  // 根据 currency_code 返回符号(用于价格展示)
+  function currencySymbol(code) {
+    return CURRENCY_SYMBOL[String(code || '').toUpperCase()] || code || '';
   }
 
   // ────────────────────────────────────────────────────────────
@@ -628,7 +912,7 @@
         <div class="xy-fs-membership" data-field="membership-bar" style="display:none;"></div>
 
         <div class="xy-fs-body">
-          <!-- 01 店铺基础卡 -->
+          <!-- 01 店铺基础卡(对齐 0.13.31.1:仅 目标店铺/品牌/图片顺序/上架货币/合并变体型号) -->
           <div class="xy-fs-card xy-fs-card-shop">
             <div class="xy-fs-card-header">
               <span class="xy-fs-card-bar" style="background:#16A34A"></span>
@@ -638,15 +922,19 @@
             </div>
             <div class="xy-fs-card-body">
               <div class="xy-fs-field-grid">
-                <!-- 目标店铺 -->
-                <div class="xy-fs-field">
-                  <label class="xy-fs-label"><span class="xy-fs-required">*</span> 目标店铺</label>
-                  <select data-field="store" class="xy-fs-select">
-                    <option value="store-001">Demo 店铺 001</option>
-                  </select>
+                <!-- 目标店铺(多选下拉,支持一个或多个;下拉框 absolute 定位不撑开面板) -->
+                <div class="xy-fs-field xy-fs-field-vertical">
+                  <label class="xy-fs-label">
+                    <span class="xy-fs-required">*</span> 目标店铺
+                    <em class="xy-fs-label-hint">支持多店铺 · 搜索 / 多选</em>
+                  </label>
+                  <div class="xy-fs-store-select" data-field="store-wrapper">
+                    <div class="xy-fs-store-trigger" data-action="toggle-stores">加载中...</div>
+                    <div class="xy-fs-store-dropdown" style="display:none;" data-field="store-dropdown"></div>
+                  </div>
                 </div>
                 <!-- 品牌 -->
-                <div class="xy-fs-field">
+                <div class="xy-fs-field xy-fs-field-vertical">
                   <label class="xy-fs-label"><span class="xy-fs-required">*</span> 品牌</label>
                   <select data-field="brand" class="xy-fs-select">
                     <option value="no_brand" selected>无品牌</option>
@@ -654,65 +942,31 @@
                   </select>
                 </div>
                 <!-- 图片顺序 -->
-                <div class="xy-fs-field">
+                <div class="xy-fs-field xy-fs-field-vertical">
                   <label class="xy-fs-label"><span class="xy-fs-required">*</span> 图片顺序</label>
                   <select data-field="image-order" class="xy-fs-select">
                     <option value="keep">不处理</option>
                     <option value="shuffle">随机打乱</option>
-                    <option value="shuffle_keep_first" selected>主图不变,其余打乱</option>
+                    <option value="shuffle_keep_first">主图不变,其余打乱</option>
                   </select>
                 </div>
                 <!-- 上架货币 -->
-                <div class="xy-fs-field">
+                <div class="xy-fs-field xy-fs-field-vertical">
                   <label class="xy-fs-label">上架货币</label>
                   <select data-field="currency" class="xy-fs-select">
                     <option value="CNY">[¥] 人民币</option>
                     <option value="USD">[$] 美元</option>
                     <option value="EUR">[€] 欧元</option>
-                    <option value="RUB" selected>[₽] 卢布</option>
+                    <option value="RUB">[₽] 卢布</option>
                   </select>
                 </div>
-                <!-- 价格 -->
-                <div class="xy-fs-field">
-                  <label class="xy-fs-label" data-field="price-label"><span class="xy-fs-required">*</span> 实际售价 (₽)</label>
-                  <input type="number" class="xy-fs-input" data-field="price" value="${productData.price || '999'}" min="0" step="0.01">
-                </div>
-                <!-- 划线价 -->
-                <div class="xy-fs-field">
-                  <label class="xy-fs-label" data-field="old-price-label">划线价 (₽,选填)</label>
-                  <input type="number" class="xy-fs-input" data-field="old-price" value="" placeholder="自动=售价×1.25" min="0" step="0.01">
-                </div>
-                <!-- 库存 -->
-                <div class="xy-fs-field">
-                  <label class="xy-fs-label">库存</label>
-                  <input type="number" class="xy-fs-input" data-field="stock" value="10" min="0">
-                </div>
-                <!-- offer_id -->
-                <div class="xy-fs-field">
-                  <label class="xy-fs-label">offer_id</label>
-                  <input type="text" class="xy-fs-input" data-field="offer-id" value="demo-${now}">
-                </div>
-                <!-- 合并模型名 -->
-                <div class="xy-fs-field xy-fs-field-full">
-                  <label class="xy-fs-label">
-                    <input type="checkbox" data-field="merge-enabled"> 合并成一张卡
+                <!-- 合并变体型号 -->
+                <div class="xy-fs-field xy-fs-field-vertical">
+                  <label class="xy-fs-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" data-field="merge-enabled" style="margin:0;width:14px;height:14px;cursor:pointer;flex:0 0 auto;">合并成一张卡
                   </label>
-                  <input type="text" class="xy-fs-input" data-field="merge-model" placeholder="勾选后自动生成型号名,可改;留空=不合并">
-                </div>
-                <!-- 自定义描述 -->
-                <div class="xy-fs-field xy-fs-field-full">
-                  <label class="xy-fs-label">自定义描述 (选填,留空取源 4191)</label>
-                  <textarea class="xy-fs-input" data-field="custom-description" rows="2" placeholder="留空则取源商品描述"></textarea>
-                </div>
-                <!-- 物理参数 -->
-                <div class="xy-fs-field xy-fs-field-full">
-                  <label class="xy-fs-label">物理参数 (选填,留空取源变体)</label>
-                  <div class="xy-fs-dims">
-                    <input type="text" class="xy-fs-input xy-fs-dim" data-field="weight" placeholder="重量(g)">
-                    <input type="text" class="xy-fs-input xy-fs-dim" data-field="depth" placeholder="长(mm)">
-                    <input type="text" class="xy-fs-input xy-fs-dim" data-field="width" placeholder="宽(mm)">
-                    <input type="text" class="xy-fs-input xy-fs-dim" data-field="height" placeholder="高(mm)">
-                  </div>
+                  <input type="text" class="xy-fs-input" data-field="merge-model" placeholder="勾选后自动生成型号名,可改;留空=不合并" title="勾选「合并成一张卡」后整组变体共享同一型号名(attr 9048)→ Ozon 合并为同一张商品卡;留空=每个变体各自独立成卡。" style="margin-top:6px;">
+                  <div class="xy-fs-merge-hint" style="font-size:10px;color:#94a3b8;line-height:1.35;margin-top:4px;">⏳ 合并在 Ozon 端最多 24h 才生效;需同品牌·同类目(个别类目不支持)</div>
                 </div>
               </div>
             </div>
@@ -771,27 +1025,33 @@
             </div>
           </div>
 
-          <!-- 物流仓库卡 -->
-          <div class="xy-fs-card xy-fs-card-logistics">
-            <div class="xy-fs-card-header">
-              <span class="xy-fs-card-bar" style="background:#8B5CF6"></span>
-              <span class="xy-fs-card-title">物流仓库</span>
-              <span class="xy-fs-card-hint">库存将写入各店仓库</span>
+          <!-- 物流仓库卡(单店:单选;多店:per-store 列表,对齐 0.13.31.1) -->
+          <div class="xy-fs-card xy-fs-card-logistics" style="padding:10px 14px;">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+              <span style="font-weight:600;color:#0f172a;font-size:13px;flex-shrink:0;">物流仓库</span>
+              <span style="font-size:12px;color:#64748b;flex:1;" data-field="warehouse-picker-hint">库存将写入各店仓库(变体表格设置库存后生效)</span>
             </div>
-            <div class="xy-fs-card-body">
-              <select data-field="warehouse-id" class="xy-fs-select">
+            <!-- 单店 picker:1 选中店时显示;多选时隐藏,改用下面的 per-store list -->
+            <div data-field="warehouse-single-row" style="display:flex;align-items:center;gap:8px;">
+              <select data-field="warehouse-id" class="xy-fs-select" style="flex:1;min-width:160px;">
                 <option value="">加载中...</option>
               </select>
             </div>
+            <!-- 多店 picker:N 行 per-store 仓库选择 -->
+            <div data-field="warehouse-multi-list" style="display:none;flex-direction:column;gap:6px;"></div>
           </div>
 
-          <!-- 03 变体表格卡 -->
+          <!-- 03 变体定价与规格卡(对齐 0.13.31.1:全字段 + 批量设置按钮) -->
           <div class="xy-fs-card xy-fs-card-table">
             <div class="xy-fs-card-header">
               <span class="xy-fs-card-bar" style="background:#3B82F6"></span>
               <span class="xy-fs-card-no">03</span>
               <span class="xy-fs-card-title">变体定价与规格</span>
-              <span class="xy-fs-card-hint">留空或 0 = 沿用源商品属性</span>
+              <span class="xy-fs-card-hint">勾选要上架的变体,填入售价/划线价/库存;长宽高/重量留空或 0 = 沿用源商品属性</span>
+            </div>
+            <div class="xy-fs-phys-hint" style="padding:6px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;margin:6px 0;font-size:11.5px;color:#92400e;display:flex;gap:6px;align-items:center;">
+              <span style="background:#f59e0b;color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;flex-shrink:0;">提示</span>
+              <span>长宽高、重量 <strong>留空或填写 0</strong> 时,不会覆盖原商品规格;只有输入大于 0 的值才会改写。</span>
             </div>
             <div class="xy-fs-table-wrap">
               <table class="xy-fs-table">
@@ -801,11 +1061,29 @@
                     <th>主图</th>
                     <th>变体</th>
                     <th>SKU</th>
-                    <th>货号</th>
+                    <th style="min-width:160px;">
+                      <div>货号</div>
+                      <div style="display:flex;align-items:center;gap:4px;margin-top:2px;font-weight:400;font-size:11px;color:#64748b;">
+                        <span>前缀</span>
+                        <input type="text" data-field="offerid-prefix" placeholder="jz-" maxlength="20" style="width:64px;height:20px;padding:0 4px;border:1px solid #e5e7eb;border-radius:3px;font-size:11px;font-family:inherit;background:#fff;">
+                        <span class="xy-fs-th-action" data-action="auto-offerid" style="margin-left:auto;color:#3b82f6;cursor:pointer;">一键生成</span>
+                      </div>
+                    </th>
                     <th>原售价</th>
-                    <th>售价</th>
-                    <th>划线价</th>
-                    <th>库存</th>
+                    <th>月销量</th>
+                    <th>跟卖数</th>
+                    <th>实际售价 <span class="xy-fs-th-action" data-action="batch-price" style="color:#3b82f6;cursor:pointer;">批量设置</span></th>
+                    <th title="Ozon 自动调价的下限 — 平台促销时不会低于此价。选填,留空 = 不参与自动调价">最低价 <span style="font-weight:400;font-size:11px;color:#94a3b8;">选填</span> <span class="xy-fs-th-action" data-action="batch-minprice" style="color:#3b82f6;cursor:pointer;">批量设置</span></th>
+                    <th>划线价 <span class="xy-fs-th-action" data-action="batch-oldprice" style="color:#3b82f6;cursor:pointer;">批量设置</span></th>
+                    <th>库存 <span class="xy-fs-th-action" data-action="batch-stock" style="color:#3b82f6;cursor:pointer;">批量设置</span></th>
+                    <th>
+                      <span>长 × 宽 × 高</span>
+                      <span class="xy-fs-th-action" data-action="batch-dims" style="color:#3b82f6;cursor:pointer;">批量设置</span>
+                    </th>
+                    <th>
+                      <span>重量</span>
+                      <span class="xy-fs-th-action" data-action="batch-weight" style="color:#3b82f6;cursor:pointer;">批量设置</span>
+                    </th>
                     <th>操作</th>
                   </tr>
                 </thead>
@@ -865,7 +1143,7 @@
             <div class="xy-fs-footer-stat">
               <span class="xy-fs-footer-meta">提交后将创建</span>
               <span class="xy-fs-footer-count">
-                <strong data-field="footer-publish-count">1</strong> 条上架
+                <strong data-field="footer-publish-count">1</strong> 条上架 · <strong data-field="footer-selected-count">1</strong> 变体 × <strong data-field="footer-store-count">1</strong> 店铺
               </span>
             </div>
           </div>
@@ -880,100 +1158,110 @@
     document.body.appendChild(panel);
     bindEvents(panel, productData);
     initPageDataPreview(panel, productData);
-    // 预填物理参数:页面规格表即时填 + 异步预取 sv 覆盖(源变体优先)
-    prefillDimensionsFromPage(panel);
-    prefillDimensionsFromSvAsync(panel, productData);
+    // 异步预取首个变体 sv,刷新变体数据预览区(物理参数已移至变体表格每行,不再面板级预填)
+    prefetchFirstVariantPreview(panel, productData);
+    // 异步预取每个变体的长宽高/重量并回填到对应行 input
+    prefetchVariantRowDims(panel, productData);
     return panel;
   }
 
   // ────────────────────────────────────────────────────────────
-  // 预填物理参数 —— 页面规格表(即时,无需网络)
-  // 从 characteristics 解析 weight/depth/width/height 填入输入框(仅当输入框为空时)
+  // 异步预取首个变体 sv,刷新变体数据预览区(对齐原项目 prefillDimensionsFromSvAsync 的预览部分)
   // ────────────────────────────────────────────────────────────
-  function prefillDimensionsFromPage(panel) {
-    try {
-      const extractor = self.JZProductExtractor;
-      const chars = extractor.extractCharacteristics();
-      const dims = extractor.parseScrapedDimensionsFromCharacteristics(chars);
-      const setVal = (field, val) => {
-        if (val == null || !isFinite(val)) return;
-        const input = panel.querySelector(`[data-field="${field}"]`);
-        if (input && !input.value) input.value = String(val);
-      };
-      setVal('weight', dims.weight);
-      setVal('depth', dims.depth);
-      setVal('width', dims.width);
-      setVal('height', dims.height);
-      if (dims.weight != null || dims.depth != null || dims.width != null || dims.height != null) {
-        console.log('[FollowSell] 页面规格表预填尺寸:', dims);
-      }
-    } catch (e) {
-      console.warn('[FollowSell] 页面规格表预填失败:', e?.message || e);
-    }
-  }
-
-  // ────────────────────────────────────────────────────────────
-  // 预填物理参数 —— 异步预取首个变体 sv,用 sv 的 4497/9454-9456 覆盖(源变体优先)
-  // 仅当输入框值仍为空或仍等于页面预填值时覆盖(不覆盖用户手输)
-  // ────────────────────────────────────────────────────────────
-  async function prefillDimensionsFromSvAsync(panel, productData) {
+  async function prefetchFirstVariantPreview(panel, productData) {
     try {
       const sku = productData.sku;
       if (!sku) return;
       const resp = await sendMessage('searchVariants', { sku });
       if (!resp?.ok || !resp.data) return;
       const sv = resp.data;
-      const readSvInt = (key) => {
-        const a = (sv?.attributes || []).find((x) => String(x?.key) === String(key));
-        if (!a) return NaN;
-        const v = a.value ?? (Array.isArray(a.collection) ? a.collection[0] : '');
-        const n = parseStrictNumber(v);
-        return isFinite(n) && n > 0 ? Math.round(n) : NaN;
-      };
-      const readSvWeightKgAsG = () => {
-        const n = readSvInt('4383');
-        return isFinite(n) ? (n < 100 ? Math.round(n * 1000) : n) : NaN;
-      };
-      const applySvDim = (field, svVal, pageVal) => {
-        if (!isFinite(svVal) || svVal <= 0) return;
-        const input = panel.querySelector(`[data-field="${field}"]`);
-        if (!input) return;
-        const cur = input.value;
-        // 空或等于页面预填值 → 用 sv 覆盖(源变体优先)
-        if (!cur || String(cur) === String(pageVal)) {
-          input.value = String(svVal);
-        }
-      };
-      // 页面预填值(用于判断是否可覆盖)
-      const extractor = self.JZProductExtractor;
-      const chars = extractor.extractCharacteristics();
-      const pageDims = extractor.parseScrapedDimensionsFromCharacteristics(chars);
-      applySvDim('weight', readSvInt('4497') || readSvWeightKgAsG(), pageDims.weight);
-      applySvDim('depth', readSvInt('9454'), pageDims.depth);
-      applySvDim('width', readSvInt('9455'), pageDims.width);
-      applySvDim('height', readSvInt('9456'), pageDims.height);
-      // 同时刷新变体数据预览区
       const variantContainer = panel.querySelector('[data-field="variant-data-preview"]');
       if (variantContainer && sv) variantContainer.innerHTML = renderVariantData(sv);
-      console.log('[FollowSell] sv 预填尺寸完成');
+      console.log('[FollowSell] 首个变体 sv 预览完成');
     } catch (e) {
-      console.warn('[FollowSell] sv 预填尺寸失败(不影响提交):', e?.message || e);
+      console.warn('[FollowSell] 首个变体 sv 预览失败(不影响提交):', e?.message || e);
     }
   }
 
   // ────────────────────────────────────────────────────────────
-  // 绑定面板事件(替换旧版 bindTabs)
+  // 预取每个变体的 sourceVariant,把长宽高/重量预填到对应行 input
+  // 用户可在面板上直接看到源商品规格,无需等提交时才从 sv 兜底
   // ────────────────────────────────────────────────────────────
-  function updateVariantCount(panel) {
+  async function prefetchVariantRowDims(panel, productData) {
+    const rows = panel.querySelectorAll('tr[data-sku][data-idx]');
+    if (!rows.length) return;
+    const skus = Array.from(rows)
+      .map((tr) => String(tr.getAttribute('data-sku') || ''))
+      .filter(Boolean);
+    if (!skus.length) return;
+
+    console.log(`[FollowSell] 预取 ${skus.length} 个变体的长宽高/重量...`);
+    // 并行预取(并发限制:5 个)
+    const CONCURRENCY = 5;
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(CONCURRENCY, skus.length) }, async () => {
+      while (cursor < skus.length) {
+        const i = cursor++;
+        const sku = skus[i];
+        const tr = rows[i];
+        const idx = tr.getAttribute('data-idx') || String(i);
+        try {
+          const resp = await sendMessage('searchVariants', { sku });
+          if (!resp?.ok || !resp.data) continue;
+          const sv = resp.data;
+          // 物理参数优先级:sv[4497 重量 g] > sv[4383 kg→g] > undefined
+          const weight = readSourceInt(sv, '4497') || readSourceWeightKgAsG(sv);
+          const depth = readSourceInt(sv, '9454');
+          const width = readSourceInt(sv, '9455');
+          const height = readSourceInt(sv, '9456');
+          if (isFinite(weight) && weight > 0) {
+            const el = tr.querySelector(`.xy-fs-weight[data-idx="${idx}"]`);
+            if (el && !el.value) el.value = String(weight);
+          }
+          if (isFinite(depth) && depth > 0) {
+            const el = tr.querySelector(`.xy-fs-depth[data-idx="${idx}"]`);
+            if (el && !el.value) el.value = String(depth);
+          }
+          if (isFinite(width) && width > 0) {
+            const el = tr.querySelector(`.xy-fs-width[data-idx="${idx}"]`);
+            if (el && !el.value) el.value = String(width);
+          }
+          if (isFinite(height) && height > 0) {
+            const el = tr.querySelector(`.xy-fs-height[data-idx="${idx}"]`);
+            if (el && !el.value) el.value = String(height);
+          }
+        } catch (e) {
+          console.warn(`[FollowSell] 预取 sv 失败 sku=${sku}:`, e?.message);
+        }
+      }
+    });
+    await Promise.all(workers);
+    console.log('[FollowSell] 变体长宽高/重量预填完成');
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // 更新 footer 计数:勾选变体数 × 已选店铺数 = 上架条数(对齐 0.13.31.1 updateFooterCount)
+  // ────────────────────────────────────────────────────────────
+  function updateFooterCount(panel) {
     // badge:商品总变体数(数据本身,不随勾选/显示变化)
     const totalRows = panel.querySelectorAll('[data-field="variant-tbody"] tr[data-sku]');
     const badge = panel.querySelector('[data-field="variant-badge"]');
     if (badge) badge.textContent = `${totalRows.length} 个变体`;
-    // footer-publish-count:勾选行数(对齐 0.13 ozon-product.js:6920-6931 updateFooterCount)
-    // xy-ozon 为单店流程,storeCount=1,故 total = sel
+    // footer 计数:勾选变体 × 已选店铺
     const checkedCount = panel.querySelectorAll('.xy-fs-check[data-idx]:checked').length;
-    const footerCount = panel.querySelector('[data-field="footer-publish-count"]');
-    if (footerCount) footerCount.textContent = String(checkedCount);
+    const storeIds = getSelectedStoreIds(panel);
+    const storeCount = storeIds.length || 1;
+    const footerPublish = panel.querySelector('[data-field="footer-publish-count"]');
+    const footerSelected = panel.querySelector('[data-field="footer-selected-count"]');
+    const footerStore = panel.querySelector('[data-field="footer-store-count"]');
+    if (footerSelected) footerSelected.textContent = String(checkedCount);
+    if (footerStore) footerStore.textContent = String(storeCount);
+    if (footerPublish) footerPublish.textContent = String(checkedCount * storeCount);
+  }
+
+  // 旧函数名兼容(内部调用 updateFooterCount)
+  function updateVariantCount(panel) {
+    updateFooterCount(panel);
   }
 
   function bindEvents(panel, productData) {
@@ -1123,7 +1411,100 @@
       }
     }
 
-    // 8. 灰度 flag 开启时显示上架方式 radio + 恢复持久化偏好
+    // 8. 批量设置按钮 + 一键生成货号(对齐 0.13.31.1 batchRoutes)
+    //    点击表头「批量设置」→ 弹输入框 → 应用到所有勾选行
+    const batchApply = (selector, value) => {
+      panel.querySelectorAll('.xy-fs-check[data-idx]:checked').forEach((cb) => {
+        const tr = cb.closest('tr');
+        if (!tr) return;
+        const input = tr.querySelector(selector);
+        if (input) input.value = value;
+      });
+    };
+    const batchHandler = (action, fn) => {
+      const el = panel.querySelector(`[data-action="${action}"]`);
+      if (el)
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          fn();
+        });
+    };
+    batchHandler('batch-price', () => {
+      const v = window.prompt('输入实际售价(应用到所有勾选变体):', '');
+      if (v == null) return;
+      const n = parseFloat(String(v).replace(',', '.'));
+      if (!isFinite(n) || n < 0) return alert('价格无效');
+      batchApply('.xy-fs-price', n.toFixed(2));
+    });
+    batchHandler('batch-minprice', () => {
+      const v = window.prompt('输入最低价(留空 = 不参与自动调价,应用到所有勾选变体):', '');
+      if (v == null) return;
+      if (v.trim() === '') {
+        batchApply('.xy-fs-minprice', '');
+        return;
+      }
+      const n = parseFloat(String(v).replace(',', '.'));
+      if (!isFinite(n) || n < 0) return alert('价格无效');
+      batchApply('.xy-fs-minprice', n.toFixed(2));
+    });
+    batchHandler('batch-oldprice', () => {
+      const v = window.prompt('输入划线价(应用到所有勾选变体):', '');
+      if (v == null) return;
+      const n = parseFloat(String(v).replace(',', '.'));
+      if (!isFinite(n) || n < 0) return alert('价格无效');
+      batchApply('.xy-fs-oldprice', n.toFixed(2));
+    });
+    batchHandler('batch-stock', () => {
+      const v = window.prompt('输入库存(应用到所有勾选变体):', '10');
+      if (v == null) return;
+      const n = parseInt(String(v), 10);
+      if (!isFinite(n) || n < 0) return alert('库存无效');
+      batchApply('.xy-fs-stock', String(n));
+    });
+    batchHandler('batch-dims', () => {
+      const v = window.prompt('输入长×宽×高(mm,用空格或 × 分隔,留空 = 沿用原值):', '');
+      if (v == null) return;
+      const parts = String(v)
+        .split(/[\s×x*]+/)
+        .filter(Boolean);
+      if (parts.length === 0) {
+        ['.xy-fs-depth', '.xy-fs-width', '.xy-fs-height'].forEach((s) => batchApply(s, ''));
+        return;
+      }
+      if (parts.length !== 3) return alert('请输入 3 个数字,如 "100 50 30"');
+      const [d, w, h] = parts.map((p) => parseInt(String(p).replace(',', ''), 10));
+      if (![d, w, h].every((n) => isFinite(n) && n >= 0)) return alert('数值无效');
+      batchApply('.xy-fs-depth', String(d));
+      batchApply('.xy-fs-width', String(w));
+      batchApply('.xy-fs-height', String(h));
+    });
+    batchHandler('batch-weight', () => {
+      const v = window.prompt('输入重量(g,留空 = 沿用原值):', '');
+      if (v == null) return;
+      if (v.trim() === '') {
+        batchApply('.xy-fs-weight', '');
+        return;
+      }
+      const n = parseInt(String(v).replace(',', ''), 10);
+      if (!isFinite(n) || n < 0) return alert('重量无效');
+      batchApply('.xy-fs-weight', String(n));
+    });
+    batchHandler('auto-offerid', () => {
+      const prefixInput = panel.querySelector('[data-field="offerid-prefix"]');
+      const prefix = (prefixInput?.value || '').trim();
+      const ts = String(Date.now()).slice(-6);
+      let i = 0;
+      panel.querySelectorAll('.xy-fs-check[data-idx]:checked').forEach((cb) => {
+        const tr = cb.closest('tr');
+        if (!tr) return;
+        const sku = tr.getAttribute('data-sku') || '';
+        const input = tr.querySelector('.xy-fs-offerid');
+        if (input) input.value = `${prefix}${sku ? sku + '-' : ''}${ts}${i > 0 ? '-' + i : ''}`;
+        i++;
+      });
+    });
+
+    // 9. 灰度 flag 开启时显示上架方式 radio + 恢复持久化偏好
     isPortalImportEnabled()
       .then((on) => {
         if (on) {
@@ -1173,55 +1554,87 @@
       return;
     }
 
-    // 关键:先预热 composer-api page json 缓存
-    // Ozon 2026 SSR DOM 剥离场景下,页面 [data-state] 没有 aspects 数据,
-    // 必须先调 composer-api 拿到完整 widgetStates 缓存,
-    // 之后 extractAspectVariants → extractStateData('state-webAspects') 才能从缓存读到。
-    // 对齐 0.13 ozon-product.js:10181-10189 toggleFollowSellPanel
-    if (self.JZProductExtractor?.ensurePdpState) {
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 流水线 loading 弹窗(对齐 0.13.31.1 toggleFollowSellPanel line 10258)
+    // 在数据采集 + 变体展开期间显示,完成后关闭再打开面板
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const loadingDialog = createPipelineLoadingDialog();
+    const closeLoading = () => {
       try {
-        console.log('[FollowSell] 预热 composer-api 缓存...');
-        await self.JZProductExtractor.ensurePdpState();
-        console.log('[FollowSell] 预热完成');
+        loadingDialog.close();
       } catch (e) {
-        console.warn('[FollowSell] ensurePdpState 失败(不阻断):', e?.message);
+        console.warn('[FollowSell] loadingDialog.close 异常:', e?.message);
       }
-    }
+    };
 
-    const pd = self.JZProductExtractor.extractProductData();
-    console.log('[FollowSell] extractProductData:', {
-      sku: pd.sku,
-      title: pd.title?.slice(0, 40),
-      variantSkusCount: pd.variantSkus?.length,
-      variantSkusSource: pd.variantSkus?.length > 1 ? 'aspects or fallback' : 'single',
-    });
-
-    // 多变体展开:Phase 0 弹窗补全 + Phase A SSR 多轴展开
-    // 真多轴商品才阻塞展开;单轴/单变体直接开面板(秒开)
-    if (self.JZVariantExpander && Array.isArray(pd.variantSkus) && pd.variantSkus.length > 0) {
-      const rawAspects = self.JZVariantExpander.extractRawAspects();
-      console.log('[FollowSell] rawAspects:', rawAspects?.length, 'axes');
-      const needExpand = rawAspects.length >= 1; // 有 aspects 就尝试弹窗补全
-      if (needExpand) {
+    try {
+      // 关键:先预热 composer-api page json 缓存
+      // Ozon 2026 SSR DOM 剥离场景下,页面 [data-state] 没有 aspects 数据,
+      // 必须先调 composer-api 拿到完整 widgetStates 缓存,
+      // 之后 extractAspectVariants → extractStateData('state-webAspects') 才能从缓存读到。
+      // 对齐 0.13 ozon-product.js:10181-10189 toggleFollowSellPanel
+      if (self.JZProductExtractor?.ensurePdpState) {
         try {
-          // 最多等 10s,超时则用原 variants 开面板
-          const expanded = await Promise.race([
-            self.JZVariantExpander.expandVariants(pd.variantSkus, pd),
-            new Promise((resolve) => setTimeout(() => resolve(pd.variantSkus), 10000)),
-          ]);
-          if (Array.isArray(expanded) && expanded.length > (pd.variantSkus?.length || 0)) {
-            console.log(`[FollowSell] 变体展开:${pd.variantSkus.length} → ${expanded.length}`);
-            pd.variantSkus = expanded;
-          } else {
-            console.log('[FollowSell] 变体展开未增加(可能已完整或 fetch 失败),用原', pd.variantSkus.length, '个');
-          }
+          console.log('[FollowSell] 预热 composer-api 缓存...');
+          await self.JZProductExtractor.ensurePdpState();
+          console.log('[FollowSell] 预热完成');
         } catch (e) {
-          console.warn('[FollowSell] 变体展开失败,用原变体开面板:', e?.message);
+          console.warn('[FollowSell] ensurePdpState 失败(不阻断):', e?.message);
         }
       }
-    }
 
-    createPanel(pd);
+      const pd = self.JZProductExtractor.extractProductData();
+      console.log('[FollowSell] extractProductData:', {
+        sku: pd.sku,
+        title: pd.title?.slice(0, 40),
+        variantSkusCount: pd.variantSkus?.length,
+        variantSkusSource: pd.variantSkus?.length > 1 ? 'aspects or fallback' : 'single',
+      });
+
+      // 多变体展开:Phase 0 弹窗补全 + Phase A SSR 多轴展开
+      // 真多轴商品才阻塞展开;单轴/单变体直接开面板(秒开)
+      // 对齐 0.13.31.1:Phase A SSR fetch 期间用 loadingDialog.update 报进度
+      if (self.JZVariantExpander && Array.isArray(pd.variantSkus) && pd.variantSkus.length > 0) {
+        const rawAspects = self.JZVariantExpander.extractRawAspects();
+        console.log('[FollowSell] rawAspects:', rawAspects?.length, 'axes');
+        const needExpand = rawAspects.length >= 1; // 有 aspects 就尝试弹窗补全
+        if (needExpand) {
+          try {
+            // 进度回调:更新 Phase A 弹窗的 done/total
+            const onProgress = (done, total) => {
+              if (total > 0) loadingDialog.update(total, done);
+            };
+            // 最多等 15s,超时则用原 variants 开面板(给 SSR 多页 fetch 留足时间)
+            const expanded = await Promise.race([
+              self.JZVariantExpander.expandVariants(pd.variantSkus, pd, onProgress),
+              new Promise((resolve) => setTimeout(() => resolve(pd.variantSkus), 15000)),
+            ]);
+            if (Array.isArray(expanded) && expanded.length > (pd.variantSkus?.length || 0)) {
+              console.log(`[FollowSell] 变体展开:${pd.variantSkus.length} → ${expanded.length}`);
+              pd.variantSkus = expanded;
+            } else {
+              console.log('[FollowSell] 变体展开未增加(可能已完整或 fetch 失败),用原', pd.variantSkus.length, '个');
+            }
+          } catch (e) {
+            console.warn('[FollowSell] 变体展开失败,用原变体开面板:', e?.message);
+          }
+        }
+      }
+
+      // 关闭 loading 弹窗,打开主面板
+      closeLoading();
+      createPanel(pd);
+    } catch (err) {
+      console.error('[FollowSell] toggle 流程异常:', err);
+      closeLoading();
+      // 异常时也尝试打开面板(用已有数据),避免用户卡死
+      try {
+        const pd = self.JZProductExtractor.extractProductData();
+        createPanel(pd);
+      } catch (e2) {
+        console.error('[FollowSell] 异常恢复开面板失败:', e2?.message);
+      }
+    }
   }
 
   // ────────────────────────────────────────────────────────────
@@ -1474,7 +1887,7 @@
     summaryEl.className = `xy-fs-result-summary ${summaryClass}`;
     summaryEl.textContent = summaryText;
 
-    // 明细行
+    // 明细行(多店模式下每行带店铺名前缀)
     const statusLabel = { imported: '已创建', failed: '失败', pending: '处理中', skipped: '跳过' };
     bodyEl.innerHTML = items
       .map((it) => {
@@ -1488,9 +1901,12 @@
           .filter(Boolean)
           .join('; ');
         const productId = it.product_id ? ` (product_id: ${it.product_id})` : '';
+        const storeTag = it._storeName
+          ? `<span style="color:#64748b;font-size:11px;">[${esc(it._storeName)}] </span>`
+          : '';
         return `
           <div class="xy-fs-result-row">
-            <span class="xy-fs-result-row-offer" title="${esc(it.offer_id || '')}">${esc(it.offer_id || '—')}${productId}</span>
+            <span class="xy-fs-result-row-offer" title="${esc(it.offer_id || '')}">${storeTag}${esc(it.offer_id || '—')}${productId}</span>
             <span class="xy-fs-result-row-status ${esc(st)}">${esc(label)}</span>
             <span class="xy-fs-result-row-err">${errText ? esc(errText) : '<span style="color:#52c41a">无错误</span>'}</span>
           </div>`;
@@ -1538,7 +1954,8 @@
         showStatus('info', '走官方 API 路径...');
       }
 
-      // 收集勾选的变体行(多变体:从表格读取每行的 sku/price/stock/offerId)
+      // 收集勾选的变体行(对齐 0.13.31.1 createMultiVariantFollowSellPanel 全字段)
+      // 每行读取:sku/price/minprice/oldprice/stock/depth/width/height/weight/offerId
       const cfg = await fetchExtensionConfig();
       const PRICE_MAX = cfg.price_max ?? 9_999_999;
       const STOCK_MAX = cfg.stock_max ?? 1_000_000;
@@ -1554,27 +1971,61 @@
         const priceVal = parseFloat(
           String(tr.querySelector(`.xy-fs-price[data-idx="${idx}"]`)?.value || '').replace(',', '.')
         );
+        const minPriceVal = parseFloat(
+          String(tr.querySelector(`.xy-fs-minprice[data-idx="${idx}"]`)?.value || '').replace(',', '.')
+        );
         const oldPriceVal = parseFloat(
           String(tr.querySelector(`.xy-fs-oldprice[data-idx="${idx}"]`)?.value || '').replace(',', '.')
         );
         const stockVal = parseInt(tr.querySelector(`.xy-fs-stock[data-idx="${idx}"]`)?.value || '0', 10) || 0;
         const offerIdVal = tr.querySelector(`.xy-fs-offerid[data-idx="${idx}"]`)?.value || '';
+        // 物理参数:每行独立读取(留空/0 → 提交时回退到 sourceVariant 原值)
+        const depthVal = parseStrictNumber(tr.querySelector(`.xy-fs-depth[data-idx="${idx}"]`)?.value);
+        const widthVal = parseStrictNumber(tr.querySelector(`.xy-fs-width[data-idx="${idx}"]`)?.value);
+        const heightVal = parseStrictNumber(tr.querySelector(`.xy-fs-height[data-idx="${idx}"]`)?.value);
+        const weightVal = parseStrictNumber(tr.querySelector(`.xy-fs-weight[data-idx="${idx}"]`)?.value);
         if (!rowSku || !isFinite(priceVal) || priceVal <= 0 || priceVal > PRICE_MAX) return;
         // Ozon 折扣约束:缺省 old_price = price * OLD_PRICE_RATIO,折扣 < 90%
         let oldPrice = isFinite(oldPriceVal) && oldPriceVal > 0 ? oldPriceVal : priceVal * OLD_PRICE_RATIO;
         if (oldPrice <= priceVal) oldPrice = priceVal * OLD_PRICE_RATIO;
         if (oldPrice > 0 && (oldPrice - priceVal) / oldPrice >= 0.9) oldPrice = priceVal / DISCOUNT_THRESHOLD;
-        checkedRows.push({ sku: rowSku, price: priceVal, oldPrice, stock: stockVal, offerId: offerIdVal, idx });
+        checkedRows.push({
+          sku: rowSku,
+          price: priceVal,
+          minPrice: isFinite(minPriceVal) && minPriceVal > 0 ? minPriceVal : undefined,
+          oldPrice,
+          stock: stockVal,
+          offerId: offerIdVal,
+          depth: isFinite(depthVal) && depthVal > 0 ? depthVal : undefined,
+          width: isFinite(widthVal) && widthVal > 0 ? widthVal : undefined,
+          height: isFinite(heightVal) && heightVal > 0 ? heightVal : undefined,
+          weight: isFinite(weightVal) && weightVal > 0 ? weightVal : undefined,
+          idx,
+        });
       });
       if (checkedRows.length === 0) {
         showStatus('error', '请至少勾选一个有效变体(售价需为正数)');
         return _unlockUI();
       }
 
-      // 会员配额校验(按勾选变体数)
+      // 目标店铺校验(对齐 0.13.31.1:必须至少选中 1 家店,viaPortal 限制单店)
+      const selectedStoreIds = getSelectedStoreIds(panel);
+      if (selectedStoreIds.length === 0) {
+        showStatus('error', '请选择至少一个目标店铺');
+        return _unlockUI();
+      }
+      if (viaPortal && selectedStoreIds.length > 1) {
+        showStatus('error', '模拟手动上架仅支持单店,请只选择一个已登录 seller.ozon.ru 的店铺');
+        return _unlockUI();
+      }
+      const totalStores = selectedStoreIds.length;
+      console.log(`[FollowSell] 目标店铺 ${totalStores} 家:`, selectedStoreIds);
+
+      // 会员配额校验(按 勾选变体数 × 店铺数 = 实际上架条数)
+      const totalListingCount = checkedRows.length * totalStores;
       const memRes = await sendMessage('getMembershipSummary', {});
       if (memRes?.ok && memRes.data) {
-        const quota = evaluateListingQuota(memRes.data, checkedRows.length);
+        const quota = evaluateListingQuota(memRes.data, totalListingCount);
         if (quota.blocked) {
           showStatus('error', quota.message);
           return _unlockUI();
@@ -1680,13 +2131,12 @@
       showStatus('info', `Phase 5: 组装 ${matched.length} 个变体数据...`);
       console.log(`[FollowSell] Phase 5 开始: 组装 ${matched.length} 个变体`);
 
-      // 货币代码:优先读面板"上架货币"下拉框(已与店铺联动),
-      // 回退到 currentStore.currency_code,再回退 RUB
+      // 货币代码:多店扇出时按 per-store currency 覆盖(见 Phase 6),
+      // 这里先用面板"上架货币"下拉框的值作为默认(已与店铺联动)。
       const currentStore = await getCurrentStore();
       const currencySelect = panel.querySelector('[data-field="currency"]');
-      let currencyCode = currencySelect?.value || currentStore.currency_code || 'RUB';
-      currencyCode = String(currencyCode).toUpperCase();
-      console.log(`[FollowSell] 当前店铺: ${currentStore.id} (${currentStore.name || ''}), 货币: ${currencyCode}`);
+      const defaultCurrencyCode = String(currencySelect?.value || currentStore.currency_code || 'RUB').toUpperCase();
+      console.log(`[FollowSell] 默认货币: ${defaultCurrencyCode}(多店扇出时按 per-store 覆盖)`);
 
       const imageOrder = panel.querySelector('[data-field="image-order"]')?.value || 'keep';
 
@@ -1701,12 +2151,6 @@
       }
       const applyWatermarkEnabled = applyWatermarkToggle && !!watermarkTplConfig;
 
-      // 物理参数:面板级共享(所有变体用同一组 weight/depth/width/height)
-      const userWeight = parseStrictNumber(panel.querySelector('[data-field="weight"]')?.value);
-      const userDepth = parseStrictNumber(panel.querySelector('[data-field="depth"]')?.value);
-      const userWidth = parseStrictNumber(panel.querySelector('[data-field="width"]')?.value);
-      const userHeight = parseStrictNumber(panel.querySelector('[data-field="height"]')?.value);
-
       const customDescription = panel.querySelector('[data-field="custom-description"]')?.value || '';
       const items = [];
 
@@ -1715,13 +2159,15 @@
         const sv = sourceMap.get(vSku) || null;
         if (!sv) continue; // 预取失败的跳过
 
-        // 5.1 物理参数优先级:user > sv[4497] > sv[4383 kg→g] > undefined
-        const weight = isFinite(userWeight)
-          ? userWeight
-          : readSourceInt(sv, '4497') || readSourceWeightKgAsG(sv) || undefined;
-        const depth = isFinite(userDepth) ? userDepth : readSourceInt(sv, '9454') || undefined;
-        const width = isFinite(userWidth) ? userWidth : readSourceInt(sv, '9455') || undefined;
-        const height = isFinite(userHeight) ? userHeight : readSourceInt(sv, '9456') || undefined;
+        // 5.1 物理参数优先级:row(每行 input) > sv[4497] > sv[4383 kg→g] > undefined
+        // (对齐 0.13.31.1:物理参数从变体表格每行读取,不再用面板级共享)
+        const weight =
+          isFinite(row.weight) && row.weight > 0
+            ? row.weight
+            : readSourceInt(sv, '4497') || readSourceWeightKgAsG(sv) || undefined;
+        const depth = isFinite(row.depth) && row.depth > 0 ? row.depth : readSourceInt(sv, '9454') || undefined;
+        const width = isFinite(row.width) && row.width > 0 ? row.width : readSourceInt(sv, '9455') || undefined;
+        const height = isFinite(row.height) && row.height > 0 ? row.height : readSourceInt(sv, '9456') || undefined;
 
         // 5.2 富内容注入 sv
         const variantRichContent = richContentMap.get(vSku) || richContentMap.get(sku) || '';
@@ -1815,14 +2261,15 @@
         // 5.7 bundleComplex(商品级兜底)
         const bundleComplex = sv?._bundleComplexAttrs || sharedBundleComplex || undefined;
 
-        // 5.8 组装 item
+        // 5.8 组装 item(对齐 0.13.31.1:含 min_price 字段;currency_code 多店扇出时按 per-store 覆盖)
         items.push({
           offer_id: row.offerId || `SKU${vSku}-${Date.now().toString().slice(-4)}`,
           name: variantName,
           price: row.price.toFixed(2),
           old_price: row.oldPrice.toFixed(2),
+          ...(row.minPrice != null ? { min_price: row.minPrice.toFixed(2) } : {}),
           vat: '0',
-          currency_code: currencyCode,
+          currency_code: defaultCurrencyCode,
           images: productImages,
           bundleComplexAttrs: bundleComplex,
           ...(sharedVideo?.url ? { videoUrl: sharedVideo.url } : {}),
@@ -1849,264 +2296,278 @@
       }
 
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      // Phase 6:提交(对齐原项目 9098-9200)
+      // Phase 6:多店扇出提交(对齐原项目 9098-9200 Promise.allSettled fan-out)
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      showStatus('info', `Phase 6: ${viaPortal ? '模拟手动上架' : '官方 API'}提交...`);
-      console.log(`[FollowSell] Phase 5 完成: items=${items.length} 个,进入 Phase 6 提交 (viaPortal=${viaPortal})`);
+      showStatus(
+        'info',
+        totalStores > 1
+          ? `Phase 6: 正在向 ${totalStores} 个店铺并行提交 ${items.length} 个商品...`
+          : `Phase 6: ${viaPortal ? '模拟手动上架' : '官方 API'}提交...`
+      );
+      console.log(
+        `[FollowSell] Phase 5 完成: items=${items.length} 个,进入 Phase 6 多店扇出 (stores=${totalStores}, viaPortal=${viaPortal})`
+      );
 
-      // 仓库解析(对齐原项目 9122-9160)
-      // 多变体:从 items[] 聚合 stocks,每个变体一个 stock 项
-      // 优先用面板下拉框选中的仓库,回退到店铺配置,再回退到 getWarehouses 首个
-      let stocks = undefined;
-      const stockableItems = items.filter((it) => Number(it._stock) > 0);
-      if (stockableItems.length > 0) {
-        const whSelect = panel.querySelector('[data-field="warehouse-id"]');
-        let warehouseId = whSelect?.value || currentStore.warehouse_id || null;
-        if (!warehouseId) {
-          try {
-            const whRes = await sendMessage('getWarehouses', { storeId: currentStore.id });
-            const warehouses = whRes?.data?.warehouses || whRes?.data?.result?.warehouses || whRes?.data || [];
-            warehouseId = Array.isArray(warehouses) ? warehouses[0]?.warehouse_id || warehouses[0]?.id : null;
-          } catch {}
-        }
-        if (warehouseId) {
-          stocks = stockableItems.map((it) => ({
-            offer_id: it.offer_id,
-            stock: Number(it._stock),
-            warehouse_id: warehouseId,
-          }));
-        }
-      }
+      // 店铺元数据查询(per-store currency / name)
+      const storeList = Array.isArray(panel._followSellStoreList) ? panel._followSellStoreList : [];
+      const storeNameOf = (sid) => {
+        const s = storeList.find((x) => String(x.id || x.storeId) === String(sid));
+        return s?.name || s?.label || s?.companyName || `店铺 ${String(sid).slice(0, 8)}`;
+      };
+      const storeCurrencyOf = (sid) => {
+        const s = storeList.find((x) => String(x.id || x.storeId) === String(sid));
+        return String(s?.currency_code || defaultCurrencyCode).toUpperCase();
+      };
 
-      // 埋点(对齐原项目 usageTrack)
+      // 埋点(对齐原项目 usageTrack,sw 层去重,失败静默)
       sendMessage('usageTrack', { featureKey: 'follow-sell:submit' }).catch(() => {});
 
-      // followSell message(对齐原项目 9162-9185)
-      const fsRes = await sendMessage('followSell', {
-        storeId: currentStore.id,
-        items,
-        ...(stocks?.length > 0 ? { stocks } : {}),
-        viaPortal,
-        applyWatermark: applyWatermarkEnabled,
-        watermarkTemplateId: applyWatermarkEnabled ? watermarkTemplateId : undefined,
-        applyAiRewrite: false,
-        imageOrder,
-      });
+      // 并行扇出:每个店铺独立 followSell 调用,per-store 覆盖 currency/warehouse
+      const settledResults = await Promise.allSettled(
+        selectedStoreIds.map(async (storeId) => {
+          const storeName = storeNameOf(storeId);
+          const storeCurrency = storeCurrencyOf(storeId);
 
-      if (!fsRes?.ok) {
-        showStatus('error', `提交失败: ${humanizeError(fsRes?.error)}`);
-        return _unlockUI();
-      }
+          // Per-store items:覆盖 currency_code(各店币种可能不同)
+          const perStoreItems = items.map((it) => ({ ...it, currency_code: storeCurrency }));
 
-      const importResult = fsRes.data;
-      const taskId = importResult?.result?.task_id;
-      console.log('[FollowSell] Phase 6 完成: 收到后台响应', {
-        taskId,
-        viaPortal: importResult?.result?.viaPortal,
-        bundleIds: importResult?.result?.bundle_ids,
-      });
-      if (!taskId) {
-        showStatus('error', '未收到任务ID');
-        return _unlockUI();
-      }
-
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      // Phase 7:结果轮询(对齐原项目 9248-9332)
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      if (viaPortal && importResult?.result?.viaPortal) {
-        // 门户上架:内联轮询 16s
-        showStatus('info', 'Phase 7: 已提交卖家中心,正在确认上架结果...');
-        const taskIds = Array.isArray(importResult.result.task_ids) ? importResult.result.task_ids : [taskId];
-        console.log(`[FollowSell] Phase 7 开始: 门户轮询 16s, taskIds=${JSON.stringify(taskIds)}`);
-        const companyId = importResult.result.company_id;
-        const deadline = Date.now() + 16000;
-        let totalCreated = 0;
-        let totalFailed = 0;
-        const allErrors = [];
-
-        for (const tid of taskIds) {
-          let st = null;
-          let pollCount = 0;
-          while (Date.now() < deadline) {
-            pollCount++;
-            const stRes = await sendMessage('portalImportStatus', { taskId: String(tid), companyId }).catch(() => null);
-            console.log(`[FollowSell] Phase 7 轮询 #${pollCount} task=${tid}:`, {
-              ok: stRes?.ok,
-              found: stRes?.data?.found,
-              status: stRes?.data?.status,
-              size: stRes?.data?.size,
-              processed: stRes?.data?.processed,
-              failed: stRes?.data?.failed,
-              warned: stRes?.data?.warned,
-              done: stRes?.data?.done,
-              error: stRes?.error,
-            });
-            if (stRes?.ok && stRes.data?.done) {
-              st = stRes.data;
-              break;
-            }
-            await new Promise((r) => setTimeout(r, 2000)); // 2s 间隔
-          }
-          if (st) {
-            // _created = processed - failed(processed 含 failed 计数)
-            totalCreated += Math.max(0, Number(st.processed || 0) - Number(st.failed || 0));
-            totalFailed += Number(st.failed || 0);
-            if (Array.isArray(st.errors)) allErrors.push(...st.errors);
-          } else {
-            console.warn(`[FollowSell] Phase 7 轮询超时(16s) task=${tid},任务可能仍在 seller 后台异步处理中`);
-          }
-        }
-
-        // 结果展示(对齐原项目三种结果)
-        if (totalFailed === 0 && totalCreated > 0) {
-          showStatus('success', `门户上架完成！已通过卖家中心创建 ${totalCreated} 个商品`);
-          // ── Phase 7.5: 调 OPI /v1/product/import/info 查询商品创建情况 ──
-          // 用 task_id 查询每个 offer_id 的 status(imported/failed/pending/skipped)
-          // 结果固定展示在 result-panel 区域(不被后续 showStatus 覆盖)
+          // Per-store stocks:从 _selectedWarehouseByStore map 读取该店已选仓库
+          // 优先级:map > 单店 UI select(仅当前 store) > 店铺配置 warehouse_id > 仓库列表第一个
+          let stocks;
           try {
-            console.log(
-              `[FollowSell] Phase 7.5 开始: 查询 OPI /v1/product/import/info, taskIds=${JSON.stringify(taskIds)}`
-            );
-            showStatus('info', `正在查询商品创建情况 (OPI /v1/product/import/info)...`);
-            const allItems = [];
-            for (const tid of taskIds) {
-              const infoRes = await sendMessage('productImportInfo', { taskId: String(tid) }).catch(() => null);
-              console.log(`[FollowSell] Phase 7.5 productImportInfo task=${tid}:`, infoRes);
-              if (infoRes?.ok && Array.isArray(infoRes.data?.items)) {
-                allItems.push(...infoRes.data.items);
-              } else {
-                console.warn(`[FollowSell] Phase 7.5 task=${tid} 查询失败:`, infoRes?.error || infoRes);
+            const stockEntries = perStoreItems.filter((it) => Number(it._stock) > 0);
+            if (stockEntries.length > 0) {
+              let warehouseId = panel._selectedWarehouseByStore?.get(String(storeId)) || '';
+              if (!warehouseId && String(storeId) === String(panel._followSellStoreId)) {
+                warehouseId = panel.querySelector('[data-field="warehouse-id"]')?.value || '';
+              }
+              if (!warehouseId) {
+                const s = storeList.find((x) => String(x.id || x.storeId) === String(storeId));
+                warehouseId = s?.warehouse_id ? String(s.warehouse_id) : '';
+              }
+              if (!warehouseId) {
+                const whRes = await sendMessage('getWarehouses', { storeId });
+                const warehouses = whRes?.data?.warehouses || whRes?.data?.result?.warehouses || whRes?.data || [];
+                warehouseId = Array.isArray(warehouses) ? warehouses[0]?.warehouse_id || warehouses[0]?.id || '' : '';
+              }
+              if (warehouseId) {
+                stocks = stockEntries.map((it) => ({
+                  offer_id: it.offer_id,
+                  stock: Number(it._stock),
+                  warehouse_id: warehouseId,
+                }));
               }
             }
-            renderResultPanel(panel, allItems);
-            // 同步状态条摘要
-            const imported = allItems.filter((x) => x.status === 'imported').length;
-            const failed = allItems.filter((x) => x.status === 'failed').length;
-            const pending = allItems.filter((x) => x.status === 'pending' || x.status === 'skipped').length;
-            if (allItems.length === 0) {
-              showStatus('warn', `门户上架完成,但 OPI 查询未返回商品状态(task_id 可能不匹配)`);
-            } else if (failed === 0 && pending === 0) {
-              showStatus('success', `✓ 全部创建成功: ${imported}/${allItems.length} (imported)`);
-            } else if (imported > 0) {
-              showStatus(
-                'warn',
-                `部分创建成功: imported=${imported} failed=${failed} pending=${pending} (共 ${allItems.length})`
-              );
-            } else if (pending > 0 && failed === 0) {
-              showStatus('info', `商品仍在处理中: pending=${pending}/${allItems.length},请稍后在卖家中心查看`);
-            } else {
-              showStatus('error', `创建失败: failed=${failed}/${allItems.length}`);
-            }
-          } catch (e) {
-            console.warn('[FollowSell] Phase 7.5 异常(不影响上架结果):', e?.message || e);
-            showStatus('warn', `门户上架完成,但查询创建详情失败: ${e?.message || e}`);
+          } catch (whErr) {
+            console.warn(`[FollowSell] 仓库查找失败 store=${storeName}:`, whErr?.message);
           }
-        } else if (totalCreated > 0) {
-          const errMsg =
-            allErrors.length > 0
-              ? `\n失败明细: ${allErrors
-                  .slice(0, 3)
-                  .map((e) => e.offer_id + ': ' + (e.errors?.[0]?.message || ''))
-                  .join('; ')}`
-              : '';
-          showStatus('warn', `门户上架部分成功: 成功 ${totalCreated} / 失败 ${totalFailed}${errMsg}`);
-        } else {
-          const errMsg =
-            allErrors.length > 0
-              ? `\n失败明细: ${allErrors
-                  .slice(0, 3)
-                  .map((e) => e.offer_id + ': ' + (e.errors?.[0]?.message || ''))
-                  .join('; ')}`
-              : '';
-          showStatus('error', `门户上架全部失败${errMsg}`);
-        }
-      } else {
-        // 官方 API 路径:提交后轮询 OPI /v1/product/import/info 查询商品创建情况
-        // task_id 是 OPI /v3/product/import 返回的,可直接查 /v1/product/import/info
-        const matchInfo = `变体匹配: ${matched.length}/${matched.length + skipped.length}`;
-        const skippedInfo = skipped.length > 0 ? ` (SKU ${skipped.join(', ')} 使用类目回退)` : '';
-        const opiTaskId = importResult?.result?.task_id;
-        const localTaskId = importResult?.result?.local_task_id; // ERP 用于持久化上架记录
-        if (!opiTaskId) {
-          showStatus('warn', `已提交但未返回 task_id,无法查询创建情况 (${matchInfo}${skippedInfo})`);
-          return;
-        }
 
-        console.log(`[FollowSell] 官方 API 路径:轮询 OPI import/info, task_id=${opiTaskId}, local=${localTaskId}`);
-        showStatus('info', `已提交到后台！${items.length} 个商品正在上架 (${matchInfo}${skippedInfo}),查询创建情况...`);
-        const deadline = Date.now() + 30000; // 30s(OPI 队列处理比门户慢)
-        let allItems = [];
-        let pollCount = 0;
-        while (Date.now() < deadline) {
-          pollCount++;
-          const infoRes = await sendMessage('productImportInfo', {
-            taskId: String(opiTaskId),
-            localTaskId,
-          }).catch(() => null);
-          console.log(`[FollowSell] 官方 API 轮询 #${pollCount} task=${opiTaskId}:`, {
-            ok: infoRes?.ok,
-            total: infoRes?.data?.total,
-            itemsLen: infoRes?.data?.items?.length,
-            error: infoRes?.error,
+          const fsRes = await sendMessage('followSell', {
+            storeId,
+            items: perStoreItems,
+            ...(stocks?.length > 0 ? { stocks } : {}),
+            viaPortal,
+            applyWatermark: applyWatermarkEnabled,
+            watermarkTemplateId: applyWatermarkEnabled ? watermarkTemplateId : undefined,
+            applyAiRewrite: false,
+            imageOrder,
           });
-          if (infoRes?.ok && Array.isArray(infoRes.data?.items) && infoRes.data.items.length > 0) {
-            allItems = infoRes.data.items;
-            const pending = allItems.filter((x) => x.status === 'pending').length;
-            if (pending === 0) break; // 全部处理完毕(imported/failed/skipped 都是终态)
-          }
-          await new Promise((r) => setTimeout(r, 3000)); // 3s 间隔
-        }
 
-        if (allItems.length === 0) {
-          showStatus('warn', `已提交到后台,但 OPI 查询未返回商品状态(task_id=${opiTaskId}),请稍后在卖家中心查看`);
-        } else {
-          renderResultPanel(panel, allItems);
-          const imported = allItems.filter((x) => x.status === 'imported').length;
-          const failed = allItems.filter((x) => x.status === 'failed').length;
-          const pending = allItems.filter((x) => x.status === 'pending' || x.status === 'skipped').length;
-          if (failed === 0 && pending === 0) {
-            showStatus('success', `✓ 全部创建成功: ${imported}/${allItems.length} (imported)`);
-          } else if (imported > 0) {
-            showStatus(
-              'warn',
-              `部分创建成功: imported=${imported} failed=${failed} pending=${pending} (共 ${allItems.length})`
-            );
-          } else if (pending > 0 && failed === 0) {
-            showStatus('info', `商品仍在处理中: pending=${pending}/${allItems.length},请稍后在卖家中心查看`);
-          } else {
-            const errMsg = allItems
-              .filter((x) => x.status === 'failed')
-              .slice(0, 3)
-              .map((x) => x.offer_id + ': ' + (x.errors?.[0]?.message || x.errors?.[0]?.code || ''))
-              .filter(Boolean)
-              .join('; ');
-            showStatus('error', `创建失败: failed=${failed}/${allItems.length}${errMsg ? ' - ' + errMsg : ''}`);
-          }
-        }
+          if (!fsRes?.ok) throw new Error(humanizeError(fsRes?.error));
+          const importResult = fsRes.data;
+          const taskId = importResult?.result?.task_id;
+          if (!taskId) throw new Error('未收到任务ID');
+
+          return {
+            storeId,
+            storeName,
+            ok: true,
+            taskId,
+            importResult,
+            _viaPortal: !!importResult?.result?.viaPortal,
+            _companyId: importResult?.result?.company_id || null,
+            _taskIds: Array.isArray(importResult?.result?.task_ids) ? importResult.result.task_ids : [taskId],
+          };
+        })
+      );
+
+      // 扁平化结果(对齐原项目 9236-9243)
+      const storeResults = settledResults.map((r, i) => {
+        const storeName = storeNameOf(selectedStoreIds[i]);
+        if (r.status === 'fulfilled') return r.value;
+        return {
+          storeId: selectedStoreIds[i],
+          storeName,
+          ok: false,
+          error: humanizeError(r.reason?.message || r.reason),
+        };
+      });
+      const okStores = storeResults.filter((r) => r.ok);
+      const failedStores = storeResults.filter((r) => !r.ok);
+      console.log(
+        `[FollowSell] Phase 6 完成: 成功 ${okStores.length}/${totalStores} 店,失败 ${failedStores.length} 店`
+      );
+
+      if (okStores.length === 0) {
+        const errs = failedStores.map((s) => `${s.storeName}: ${s.error}`).join('; ');
+        showStatus('error', `所有店铺提交失败: ${errs}`);
+        return _unlockUI();
       }
 
-      // ── 严格模式跳过项 + 无效图片展示(对齐 0.13 strictSkipped/invalidImage 回传) ──
-      const strictSkipped = importResult?.result?.strictSkipped || [];
-      const invalidImage = importResult?.result?.invalidImage || [];
-      if (strictSkipped.length > 0 || invalidImage.length > 0) {
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // Phase 7:并行轮询各店上架结果 + 聚合展示(对齐原项目 9248-9332)
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      showStatus(
+        'info',
+        totalStores > 1
+          ? `Phase 7: 正在并行确认 ${okStores.length} 个店铺的上架结果...`
+          : 'Phase 7: 正在确认上架结果...'
+      );
+
+      const aggregateItems = []; // 所有店铺的 import/info items,带 _storeName 标记
+      const aggregateStrictSkipped = [];
+      const aggregateInvalidImage = [];
+
+      // 并行轮询每个成功店铺
+      await Promise.all(
+        okStores.map(async (sres) => {
+          const { storeName, importResult, _viaPortal, _companyId, _taskIds } = sres;
+
+          // 聚合 strictSkipped / invalidImage(各店独立)
+          const ss = importResult?.result?.strictSkipped || [];
+          const ii = importResult?.result?.invalidImage || [];
+          if (ss.length > 0) aggregateStrictSkipped.push(...ss.map((x) => ({ ...x, _storeName: storeName })));
+          if (ii.length > 0) aggregateInvalidImage.push(...ii.map((x) => ({ ...x, _storeName: storeName })));
+
+          if (_viaPortal) {
+            // 门户路径:portalImportStatus 内联轮询 16s
+            const deadline = Date.now() + 16000;
+            for (const tid of _taskIds) {
+              let st = null;
+              let pollCount = 0;
+              while (Date.now() < deadline) {
+                pollCount++;
+                const stRes = await sendMessage('portalImportStatus', {
+                  taskId: String(tid),
+                  companyId: _companyId,
+                }).catch(() => null);
+                console.log(`[FollowSell] Phase 7 门户轮询 #${pollCount} store=${storeName} task=${tid}:`, {
+                  ok: stRes?.ok,
+                  done: stRes?.data?.done,
+                  processed: stRes?.data?.processed,
+                  failed: stRes?.data?.failed,
+                });
+                if (stRes?.ok && stRes.data?.done) {
+                  st = stRes.data;
+                  break;
+                }
+                await new Promise((r) => setTimeout(r, 2000));
+              }
+              // Phase 7.5:OPI /v1/product/import/info 查每个 offer 状态
+              const infoRes = await sendMessage('productImportInfo', { taskId: String(tid) }).catch(() => null);
+              if (infoRes?.ok && Array.isArray(infoRes.data?.items)) {
+                infoRes.data.items.forEach((it) => aggregateItems.push({ ...it, _storeName: storeName }));
+              }
+            }
+          } else {
+            // 官方 API 路径:OPI /v1/product/import/info 轮询 30s
+            const opiTaskId = importResult?.result?.task_id;
+            const localTaskId = importResult?.result?.local_task_id;
+            if (!opiTaskId) return;
+            const deadline = Date.now() + 30000;
+            let storeItems = [];
+            let pollCount = 0;
+            while (Date.now() < deadline) {
+              pollCount++;
+              const infoRes = await sendMessage('productImportInfo', {
+                taskId: String(opiTaskId),
+                localTaskId,
+              }).catch(() => null);
+              console.log(`[FollowSell] Phase 7 API 轮询 #${pollCount} store=${storeName} task=${opiTaskId}:`, {
+                ok: infoRes?.ok,
+                itemsLen: infoRes?.data?.items?.length,
+              });
+              if (infoRes?.ok && Array.isArray(infoRes.data?.items) && infoRes.data.items.length > 0) {
+                storeItems = infoRes.data.items;
+                const pending = storeItems.filter((x) => x.status === 'pending').length;
+                if (pending === 0) break;
+              }
+              await new Promise((r) => setTimeout(r, 3000));
+            }
+            storeItems.forEach((it) => aggregateItems.push({ ...it, _storeName: storeName }));
+          }
+        })
+      );
+
+      // 失败店铺也加入展示(以虚拟行形式)
+      failedStores.forEach((s) => {
+        aggregateItems.push({
+          offer_id: `(店铺:${s.storeName})`,
+          status: 'failed',
+          errors: [{ message: s.error }],
+          _storeName: s.storeName,
+        });
+      });
+
+      // 结果展示
+      renderResultPanel(panel, aggregateItems);
+      const imported = aggregateItems.filter((x) => x.status === 'imported').length;
+      const failed = aggregateItems.filter((x) => x.status === 'failed').length;
+      const pending = aggregateItems.filter((x) => x.status === 'pending' || x.status === 'skipped').length;
+      const okStoreCount = okStores.length;
+      const failStoreCount = failedStores.length;
+      const matchInfo = `变体匹配: ${matched.length}/${matched.length + skipped.length}`;
+      const skippedInfo = skipped.length > 0 ? ` (SKU ${skipped.join(', ')} 使用类目回退)` : '';
+      const storeInfo = failStoreCount > 0 ? ` 店铺失败 ${failStoreCount}/${totalStores}` : '';
+
+      if (aggregateItems.length === 0) {
+        showStatus('warn', `已提交 ${okStoreCount} 店,但 OPI 查询未返回商品状态,请稍后在卖家中心查看`);
+      } else if (failStoreCount === 0 && failed === 0 && pending === 0) {
+        showStatus(
+          'success',
+          `✓ 全部创建成功: ${imported}/${aggregateItems.length} (${okStoreCount} 店,${matchInfo}${skippedInfo})`
+        );
+      } else if (imported > 0) {
+        showStatus(
+          'warn',
+          `部分创建成功: imported=${imported} failed=${failed} pending=${pending} (共 ${aggregateItems.length}, ${okStoreCount} 店${storeInfo})`
+        );
+      } else if (pending > 0 && failed === 0) {
+        showStatus('info', `商品仍在处理中: pending=${pending}/${aggregateItems.length},请稍后在卖家中心查看`);
+      } else {
+        const errSummary = failedStores
+          .map((s) => `${s.storeName}: ${s.error}`)
+          .slice(0, 3)
+          .join('; ');
+        showStatus(
+          'error',
+          `创建失败: failed=${failed}/${aggregateItems.length}${storeInfo}${errSummary ? ' - ' + errSummary : ''}`
+        );
+      }
+
+      // ── 严格模式跳过项 + 无效图片展示(聚合所有店铺) ──
+      if (aggregateStrictSkipped.length > 0 || aggregateInvalidImage.length > 0) {
         const parts = [];
-        if (strictSkipped.length > 0) {
+        if (aggregateStrictSkipped.length > 0) {
           parts.push(
-            `严格模式跳过 ${strictSkipped.length} 个: ${strictSkipped
+            `严格模式跳过 ${aggregateStrictSkipped.length} 个: ${aggregateStrictSkipped
               .slice(0, 5)
               .map((s) => s.offer_id || s.sku || s)
-              .join(', ')}${strictSkipped.length > 5 ? '...' : ''}`
+              .join(', ')}${aggregateStrictSkipped.length > 5 ? '...' : ''}`
           );
         }
-        if (invalidImage.length > 0) {
+        if (aggregateInvalidImage.length > 0) {
           parts.push(
-            `无效图片剔除 ${invalidImage.length} 个: ${invalidImage
+            `无效图片剔除 ${aggregateInvalidImage.length} 个: ${aggregateInvalidImage
               .slice(0, 5)
               .map((s) => s.offer_id || s.sku || s)
-              .join(', ')}${invalidImage.length > 5 ? '...' : ''}`
+              .join(', ')}${aggregateInvalidImage.length > 5 ? '...' : ''}`
           );
         }
-        console.warn('[FollowSell] 严格模式/无效图片:', { strictSkipped, invalidImage });
+        console.warn('[FollowSell] 严格模式/无效图片(聚合):', {
+          aggregateStrictSkipped,
+          aggregateInvalidImage,
+        });
         showStatus('warn', parts.join(' | '));
         await new Promise((r) => setTimeout(r, 2000));
       }

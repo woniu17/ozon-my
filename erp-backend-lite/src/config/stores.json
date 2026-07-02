@@ -1,13 +1,24 @@
 [
   {
     "id": "store-001",
-    "name": "YQL001",
+    "name": "YQL01",
     "company_id": "3891653",
     "warehouse_id": "1020005004829630",
     "currency_code": "CNY",
     "sync_credentials": {
       "clientId": "3891653",
       "apiKey": "109b580e-c486-4fd8-89b3-bce3b669796e"
+    }
+  },
+  {
+    "id": "store-yql02-e2d170",
+    "name": "YQL02",
+    "company_id": "3905796",
+    "warehouse_id": "1020005008197150",
+    "currency_code": "CNY",
+    "sync_credentials": {
+      "clientId": "3905796",
+      "apiKey": "23e99795-902c-499d-a736-e39de7f9ebf6"
     }
   }
 ]

@@ -110,7 +110,9 @@
       const map = new Map(variants.map((v) => [String(v.sku), v]));
       for (const r of modalRows) if (!map.has(r.sku)) map.set(r.sku, r);
       const merged = Array.from(map.values());
-      console.log(`[variant-expander] Phase 0 弹窗补全:内联 ${variants.length} → ${merged.length}(弹窗 ${modalRows.length},目标 ${best.total})`);
+      console.log(
+        `[variant-expander] Phase 0 弹窗补全:内联 ${variants.length} → ${merged.length}(弹窗 ${modalRows.length},目标 ${best.total})`
+      );
       return merged;
     } catch (e) {
       console.warn('[variant-expander] expandVariantsViaModal err', e?.message);
@@ -129,7 +131,7 @@
   //
   // 为什么走 SSR HTML 而非 composer-api:2026-05-26 验证 composer-api 全 403,Ozon 已 deprecate。
   // ────────────────────────────────────────────────────────────
-  async function expandVariantsViaSSR(rawAspects, currentSku, variants) {
+  async function expandVariantsViaSSR(rawAspects, currentSku, variants, onProgress) {
     // 门挡:只有真多轴(≥2 轴)+ 多变体才展开
     if (!Array.isArray(rawAspects) || rawAspects.length < 2) return variants;
     if (!Array.isArray(variants) || variants.length <= 1) return variants;
@@ -148,6 +150,9 @@
 
       const variantMap = new Map(variants.map((v) => [String(v.sku), v]));
 
+      // 通知调用方:Phase A 开始,共需 fetch N 页
+      if (typeof onProgress === 'function') onProgress(0, linksToFetch.length);
+
       for (let i = 0; i < linksToFetch.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, 1200)); // 1.2s 间隔,避免反爬
         const target = linksToFetch[i];
@@ -156,7 +161,10 @@
             credentials: 'include',
             headers: { accept: 'text/html,application/xhtml+xml' },
           });
-          if (!resp.ok) continue;
+          if (!resp.ok) {
+            if (typeof onProgress === 'function') onProgress(i + 1, linksToFetch.length);
+            continue;
+          }
           const html = await resp.text();
           const doc = new DOMParser().parseFromString(html, 'text/html');
 
@@ -189,11 +197,15 @@
         } catch (e) {
           console.warn(`[variant-expander] SSR fetch 失败 ${target.sku}:`, e?.message);
         }
+        // 每页完成都报进度(含失败页)
+        if (typeof onProgress === 'function') onProgress(i + 1, linksToFetch.length);
       }
 
       const expanded = Array.from(variantMap.values());
       if (expanded.length > variants.length) {
-        console.log(`[variant-expander] Phase A SSR 展开:${variants.length} → ${expanded.length}(fetch ${linksToFetch.length} 页)`);
+        console.log(
+          `[variant-expander] Phase A SSR 展开:${variants.length} → ${expanded.length}(fetch ${linksToFetch.length} 页)`
+        );
       }
       return expanded;
     } catch (e) {
@@ -206,8 +218,9 @@
   // expandVariants —— 统一入口
   // 先用已有 variants(来自 extractVariantSkus),再 Phase 0 弹窗补全,再 Phase A SSR 展开
   // 返回展开后的 variants 数组(失败时原样返回,不阻断)
+  // onProgress?(done, total) —— Phase A SSR 展开进度回调,用于流水线 loading 弹窗
   // ────────────────────────────────────────────────────────────
-  async function expandVariants(variants, productData) {
+  async function expandVariants(variants, productData, onProgress) {
     let result = Array.isArray(variants) ? variants : [];
     const currentSku = String(productData?.sku || '');
     const rawAspects = extractRawAspects();
@@ -217,9 +230,9 @@
       result = await expandVariantsViaModal(result, rawAspects);
     }
 
-    // Phase A:多轴 SSR 展开(≥2 轴才触发)
+    // Phase A:多轴 SSR 展开(≥2 轴才触发),传入 onProgress 回调
     if (rawAspects.length >= 2 && result.length > 1 && currentSku) {
-      result = await expandVariantsViaSSR(rawAspects, currentSku, result);
+      result = await expandVariantsViaSSR(rawAspects, currentSku, result, onProgress);
     }
 
     return result;
