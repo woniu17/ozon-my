@@ -1,0 +1,12 @@
+- [x] ozon-opi.js 新增 `productList(store, { filter, lastId, limit })` 调用 `/v3/product/list`
+- [x] ozon-opi.js 新增 `productInfoListV3(store, { offerIds, productIds, skus })` 调用 `/v3/product/info/list`
+- [x] admin.js 新增 `POST /admin/api/products/sync?storeId=xxx` 端点
+- [x] 端点循环调用 `/v3/product/list` 游标翻页直到拉取全部商品标识符
+- [x] 端点每批调用 `/v3/product/info/list` 拉详情并写入 `product_data_cache`
+- [x] 端点返回 `{ synced, total, durationMs }`
+- [x] admin.html 商品列表 toolbar 新增店铺下拉 + 同步按钮
+- [x] admin.js `syncProducts()` 函数调用同步端点并刷新列表
+- [x] admin.js 同步中按钮禁用显示"同步中..."，完成后 toast 提示
+- [x] admin.js `#prodFilterStore` 下拉在店铺列表加载后填充
+- [x] 所有修改的 JS 文件 `node --check` 语法校验通过
+- [x] `npm run format:check` 通过

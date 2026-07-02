@@ -161,14 +161,25 @@ export async function prepareBundleItems(message, storeId, store) {
 
     // 5.1 images: [{file_name, default}] → ["url1", "url2", ...]
     // v3 schema: images 是 string[](URL 数组),primary_image 单独传
-    const rawImages = Array.isArray(item.images)
-      ? item.images.map((img) => (typeof img === 'string' ? img : img?.file_name || '')).filter(Boolean)
-      : [];
-    // primary_image: 标记 default:true 的图,否则取 images[0]
-    const primaryImg =
-      Array.isArray(item.images) && item.images.length > 0
-        ? item.images.find((img) => img?.default === true)?.file_name || item.images[0]?.file_name || ''
-        : '';
+    // ⚠️ OPI v3 要求 primary_image 不能与 images 数组中的任一图片重复,
+    // 否则报错:"图片 - 该字段重复的。请检查 API 中的商品描述:所有字段只应指定一次,不得重复"
+    // 修复策略:
+    //   - 仅当某张图显式标记 default:true 时,才把它作为 primary_image,并从 images 数组中移除
+    //   - 否则不传 primary_image(留空),OPI 会自动用 images[0] 作主图
+    const rawImgObjs = Array.isArray(item.images) ? item.images : [];
+    let primaryImg = '';
+    const rawImages = [];
+    for (const img of rawImgObjs) {
+      const url = typeof img === 'string' ? img : img?.file_name || '';
+      if (!url) continue;
+      if (!primaryImg && img && typeof img === 'object' && img.default === true) {
+        primaryImg = url; // 显式标记的主图,单独取出
+      } else {
+        rawImages.push(url);
+      }
+    }
+    // 若所有图都被 push 进 rawImages(无显式 default),则 primaryImg 留空 '',
+    // OPI 会用 images[0] 作主图,避免重复
     const images = rawImages;
 
     // 5.2 attributes: 优先从 bundleItem 提取 v3 标准格式(含 dictionary_value_id)
@@ -243,6 +254,43 @@ export async function prepareBundleItems(message, storeId, store) {
         usedKeys.add(key);
       }
     }
+
+    // 5.2c 描述(4191):插件端把描述放在 item.scraped_description 顶层字段,
+    // 但 /search 不返 4191,sv.attributes 可能没有。OPI v3 schema 无顶层 description,
+    // 描述必须作为 attribute 4191 传递。这里补注入。
+    const descText = String(item.scraped_description || item.description || '').trim();
+    if (descText && !usedKeys.has('4191')) {
+      attributes.push({
+        complex_id: 0,
+        id: 4191,
+        values: [{ value: descText }],
+      });
+      usedKeys.add('4191');
+    }
+
+    // DEBUG: 记录 11254(富内容) 和 4191(描述) 和 85(品牌) 的提取情况,排查丢失
+    const richAttr = attributes.find((a) => Number(a.id) === 11254);
+    const descAttr = attributes.find((a) => Number(a.id) === 4191);
+    const brandAttr = attributes.find((a) => Number(a.id) === 85);
+    const svAttrKeys = Array.isArray(sv?.attributes) ? sv.attributes.map((a) => String(a.key)).join(',') : '';
+    logger.info(
+      {
+        offer_id: item.offer_id,
+        hasRichContent_11254: !!richAttr,
+        richContentLen: richAttr?.values?.[0]?.value?.length || 0,
+        hasDesc_4191: !!descAttr,
+        descLen: descAttr?.values?.[0]?.value?.length || 0,
+        hasBrand_85: !!brandAttr,
+        brandValue: brandAttr?.values?.[0]?.value || '',
+        brandDictId: brandAttr?.values?.[0]?.dictionary_value_id || '',
+        svAttrKeys: svAttrKeys.slice(0, 200),
+        usedKeys: Array.from(usedKeys).join(','),
+        hasBundleItem: !!bundleItem,
+        bundleAttrCount: bundleItem?.attributes?.length || 0,
+        scrapedDescriptionLen: String(item.scraped_description || '').length,
+      },
+      'prepare-bundle: 11254/4191/85 提取详情'
+    );
 
     // 5.3 complex_attributes(视频/PDF 等):bundleComplexAttrs 透传
     // v3 schema: [{attributes: [{complex_id, id, values:[{value, dictionary_value_id}]}]}]

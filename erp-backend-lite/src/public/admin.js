@@ -177,6 +177,14 @@ function syncStoreFilter() {
       storesCache.map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
     if (cur) btSel.value = cur;
   }
+  const prodSel = $('#prodFilterStore');
+  if (prodSel) {
+    const cur = prodSel.value;
+    prodSel.innerHTML =
+      '<option value="">全部店铺</option>' +
+      storesCache.map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
+    if (cur) prodSel.value = cur;
+  }
 }
 
 function renderStores(stores) {
@@ -1299,6 +1307,8 @@ async function loadProducts() {
   params.set('pageSize', productsState.pageSize);
   const keyword = $('#prodFilterKeyword')?.value.trim();
   if (keyword) params.set('keyword', keyword);
+  const storeId = $('#prodFilterStore')?.value;
+  if (storeId) params.set('storeId', storeId);
   try {
     const r = await api('/admin/api/products?' + params.toString());
     const data = r?.data || {};
@@ -1358,13 +1368,39 @@ function renderProdPager() {
 }
 
 async function openProductDetail(sku) {
-  $('#productDetailModal').hidden = false;
+  const modal = $('#productDetailModal');
+  modal.hidden = false;
   $('#prodDetailSku').textContent = '· ' + sku;
   $('#prodDetailMeta').innerHTML = '<p class="muted">加载中...</p>';
   $('#prodDetailJson').textContent = '加载中...';
+  // 重置子 Tab 状态:默认 basic active,attributes/description panel 隐藏并标记未加载
+  modal.dataset.sku = sku;
+  modal.dataset.attrLoaded = '0';
+  modal.dataset.descLoaded = '0';
+  modal.querySelectorAll('.sub-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.subtab === 'basic');
+  });
+  $('#prodDetailBasic').classList.add('active');
+  $('#prodDetailAttr').classList.remove('active');
+  $('#prodDetailDesc').classList.remove('active');
+  $('#prodDetailAttrJson').textContent = '点击上方"商品特征描述"加载...';
+  $('#prodDetailDescJson').textContent = '点击上方"商品详情信息"加载...';
+  // 填充店铺下拉:优先选商品所属店铺,无则选第一个
+  const detailStoreSel = $('#prodDetailStore');
+  if (detailStoreSel) {
+    detailStoreSel.innerHTML = storesCache
+      .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`)
+      .join('');
+  }
   try {
     const r = await api('/admin/api/products/' + encodeURIComponent(sku));
     const data = r?.data || {};
+    // 缓存商品所属店铺,子 Tab 拉特征/描述时优先用此 storeId
+    modal.dataset.storeId = data.storeId || '';
+    if (detailStoreSel) {
+      const preferred = data.storeId || storesCache[0]?.id || '';
+      if (preferred) detailStoreSel.value = preferred;
+    }
     const metaRows = [
       ['SKU', data.sku],
       ['采集时间', (data.fetchedAt || '').replace('T', ' ').slice(0, 19)],
@@ -1381,6 +1417,87 @@ async function openProductDetail(sku) {
     $('#prodDetailJson').textContent = '';
   }
 }
+
+// 商品详情弹窗:子 Tab 按需加载(全局事件委托,只绑一次;状态通过 modal.dataset 持有)
+$('#productDetailModal')?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.sub-tab');
+  if (!btn || !btn.dataset.subtab) return;
+  const modal = $('#productDetailModal');
+  const subtab = btn.dataset.subtab;
+  // 切换 active 类
+  modal.querySelectorAll('.sub-tab').forEach((b) => {
+    b.classList.toggle('active', b === btn);
+  });
+  // 切换 panel 显隐(用 active 类,与 CSS .sub-panel.active { display: block } 配合)
+  $('#prodDetailBasic').classList.toggle('active', subtab === 'basic');
+  $('#prodDetailAttr').classList.toggle('active', subtab === 'attributes');
+  $('#prodDetailDesc').classList.toggle('active', subtab === 'description');
+  // basic 数据已在 openProductDetail 中渲染,无需远程拉取
+  if (subtab === 'basic') return;
+  const sku = modal.dataset.sku;
+  if (!sku) return;
+  const isAttr = subtab === 'attributes';
+  const loadedFlag = isAttr ? 'attrLoaded' : 'descLoaded';
+  const targetEl = isAttr ? $('#prodDetailAttrJson') : $('#prodDetailDescJson');
+  // 已加载过则跳过(避免重复请求)
+  if (modal.dataset[loadedFlag] === '1') return;
+  // storeId 优先级:弹窗内店铺下拉 > 商品所属店铺(DB) > storesCache[0]
+  const storeId =
+    $('#prodDetailStore')?.value || modal.dataset.storeId || $('#prodFilterStore')?.value || storesCache[0]?.id;
+  if (!storeId) {
+    targetEl.textContent = '需要先配置店铺才能拉取特征描述/详情信息';
+    return;
+  }
+  targetEl.textContent = '加载中...';
+  try {
+    const r = await api(
+      '/admin/api/products/' + encodeURIComponent(sku) + '/attributes?storeId=' + encodeURIComponent(storeId)
+    );
+    const payload = r?.data || {};
+    const content = isAttr ? payload.attributes : payload.description;
+    targetEl.textContent = JSON.stringify(content ?? {}, null, 2);
+    modal.dataset[loadedFlag] = '1';
+  } catch (err) {
+    targetEl.textContent = '加载失败:' + err.message;
+  }
+});
+
+// 弹窗内切换店铺时,重置已加载状态(下次切子 Tab 会用新 storeId 重拉)
+$('#prodDetailStore')?.addEventListener('change', () => {
+  const modal = $('#productDetailModal');
+  if (!modal) return;
+  modal.dataset.attrLoaded = '0';
+  modal.dataset.descLoaded = '0';
+  $('#prodDetailAttrJson').textContent = '点击上方"商品特征描述"加载...';
+  $('#prodDetailDescJson').textContent = '点击上方"商品详情信息"加载...';
+});
+
+async function syncProducts() {
+  const btn = $('#prodSyncBtn');
+  if (!btn) return;
+  let storeId = $('#prodFilterStore')?.value;
+  if (!storeId) storeId = storesCache[0]?.id;
+  if (!storeId) {
+    toast('请先在店铺管理中添加店铺', 'error');
+    return;
+  }
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '同步中...';
+  try {
+    const r = await api('/admin/api/products/sync?storeId=' + encodeURIComponent(storeId), { method: 'POST' });
+    const d = r?.data || {};
+    toast(`同步完成: ${d.synced || 0} 个商品(总计 ${d.total || 0}),耗时 ${(d.durationMs || 0) / 1000}s`, 'success');
+    productsState.currentPage = 1;
+    await loadProducts();
+  } catch (err) {
+    toast('同步失败: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+$('#prodSyncBtn')?.addEventListener('click', syncProducts);
 
 $('#prodSearchBtn')?.addEventListener('click', () => {
   productsState.currentPage = 1;

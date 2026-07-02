@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import NodeCache from 'node-cache';
 import { db } from '../db/index.js';
+import config from '../config/index.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { ok } from '../utils/response.js';
 import * as opi from '../services/ozon-opi.js';
@@ -495,11 +497,15 @@ router.get('/admin/api/products', (req, res, next) => {
       const kw = '%' + String(req.query.keyword) + '%';
       params.push(kw, kw);
     }
+    if (req.query.storeId) {
+      where.push('store_id = ?');
+      params.push(String(req.query.storeId));
+    }
     const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
 
     const rows = db
       .prepare(
-        `SELECT sku, data, fetched_at FROM product_data_cache ${whereSql} ORDER BY fetched_at DESC LIMIT ? OFFSET ?`
+        `SELECT sku, data, store_id, fetched_at FROM product_data_cache ${whereSql} ORDER BY fetched_at DESC LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, offset);
     const total = db.prepare(`SELECT COUNT(*) as n FROM product_data_cache ${whereSql}`).get(...params).n;
@@ -510,6 +516,7 @@ router.get('/admin/api/products', (req, res, next) => {
           const data = safeParseJson(r.data) || {};
           return {
             sku: r.sku,
+            storeId: r.store_id || '',
             fetchedAt: r.fetched_at,
             // 提取常用展示字段(容错:不同 OPI 版本字段名可能不同)
             name: data.name || data.title || '',
@@ -531,19 +538,192 @@ router.get('/admin/api/products', (req, res, next) => {
   }
 });
 
+// POST /admin/api/products/sync —— 从 Ozon 拉取店铺全部商品并写入 product_data_cache
+// query: ?storeId=xxx(必填,OPI 凭据所属店铺)
+// 响应: { synced, total, durationMs }
+router.post('/admin/api/products/sync', async (req, res) => {
+  try {
+    const storeId = req.query.storeId ? String(req.query.storeId) : '';
+    if (!storeId) {
+      return res.status(400).json({ code: 1, message: '需要 storeId 参数' });
+    }
+    const stores = readStores();
+    const store = stores.find((s) => s.id === storeId);
+    if (!store) {
+      return res.status(404).json({ code: 1, message: `店铺不存在: ${storeId}` });
+    }
+
+    const startedAt = Date.now();
+    let lastId = '';
+    let total = 0;
+    let synced = 0;
+    const limit = 1000;
+
+    // 循环拉取商品列表(游标分页),批量拉详情后写入 product_data_cache
+    while (true) {
+      const listResp = await opi.productList(store, { lastId, limit });
+      const items = listResp?.result?.items || listResp?.items || [];
+      total = listResp?.result?.total || listResp?.total || total;
+      if (items.length === 0) break;
+
+      const productIds = items.map((it) => it.product_id).filter(Boolean);
+      if (productIds.length > 0) {
+        const infoResp = await opi.productInfoListV3(store, { productIds });
+        const infoItems = infoResp?.result?.items || infoResp?.items || [];
+        const stmt = db.prepare(
+          `INSERT OR REPLACE INTO product_data_cache (sku, data, store_id, fetched_at) VALUES (?, ?, ?, datetime('now'))`
+        );
+        for (const item of infoItems) {
+          const sku = String(item.sku || item.id || '');
+          if (!sku) continue;
+          stmt.run(sku, JSON.stringify(item), storeId);
+          synced++;
+        }
+      }
+
+      lastId = listResp?.result?.last_id || listResp?.last_id || '';
+      if (items.length < limit) break; // 最后一页
+    }
+
+    const durationMs = Date.now() - startedAt;
+    res.json(ok({ synced, total, durationMs }));
+  } catch (err) {
+    res.status(500).json({ code: 1, message: err.message });
+  }
+});
+
 // GET /admin/api/products/:sku —— 单条商品完整数据(JSON)
 router.get('/admin/api/products/:sku', (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const row = db.prepare(`SELECT sku, data, fetched_at FROM product_data_cache WHERE sku=?`).get(sku);
+    const row = db.prepare(`SELECT sku, data, store_id, fetched_at FROM product_data_cache WHERE sku=?`).get(sku);
     if (!row) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '商品不存在: ' + sku));
     res.json(
       ok({
         sku: row.sku,
+        storeId: row.store_id || '',
         fetchedAt: row.fetched_at,
         data: safeParseJson(row.data) || {},
       })
     );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 商品特征描述 & 详情(三级缓存:内存 + DB + OPI 实时) ─────
+
+// L1 内存缓存:1 小时(与 DB 缓存互补,key 为 attr_${sku})
+const attrMemCache = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
+
+// GET /admin/api/products/:sku/attributes —— 拉取商品特征描述 + 详情(三级缓存)
+// query: ?storeId=xxx(必填,OPI 凭据所属店铺)
+// 响应: { attributes, description, fetchedAt, source }
+//   source: 'mem' / 'db' / 'opi' / 'db-stale'(OPI 失败时降级返回过期 DB 缓存)
+router.get('/admin/api/products/:sku/attributes', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const storeId = req.query.storeId ? String(req.query.storeId) : '';
+    if (!storeId) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, '需要 storeId 参数'));
+    }
+
+    const memKey = `attr_${sku}`;
+
+    // L1: 内存缓存
+    const memCached = attrMemCache.get(memKey);
+    if (memCached) {
+      return res.json(
+        ok({
+          attributes: memCached.attributes,
+          description: memCached.description,
+          fetchedAt: memCached.fetchedAt,
+          source: 'mem',
+        })
+      );
+    }
+
+    // L2: DB 缓存
+    const row = db
+      .prepare(`SELECT attributes_data, description_data, fetched_at FROM product_attributes_cache WHERE sku=?`)
+      .get(sku);
+    if (row) {
+      const age = Date.now() - new Date(row.fetched_at).getTime();
+      if (age < config.productDataCacheTtlMs) {
+        const attributes = safeParseJson(row.attributes_data) || {};
+        const description = safeParseJson(row.description_data) || {};
+        const payload = { attributes, description, fetchedAt: row.fetched_at };
+        attrMemCache.set(memKey, payload);
+        return res.json(ok({ ...payload, source: 'db' }));
+      }
+    }
+
+    // L3: OPI 实时拉取
+    const stores = readStores();
+
+    // 从 product_data_cache 取 offer_id / product_id 作为 OPI filter,同时取 store_id
+    const baseRow = db.prepare(`SELECT data, store_id FROM product_data_cache WHERE sku=?`).get(sku);
+    const baseData = baseRow ? safeParseJson(baseRow.data) : null;
+    // storeId 优先级:query 参数 > DB 中商品的 store_id > storesCache[0]
+    const effectiveStoreId = storeId || baseRow?.store_id || '';
+    const store = stores.find((s) => s.id === effectiveStoreId);
+    if (!store) {
+      return next(
+        new ApiError(
+          ErrorCode.RESOURCE_NOT_FOUND,
+          `店铺不存在: ${effectiveStoreId || '(空)'},请先同步商品或指定 storeId`
+        )
+      );
+    }
+
+    let filter;
+    let descBody;
+    // /v3/product/info/list 返回字段:id(Ozon product_id)、sku(变体 SKU)、offer_id(货号)
+    // /v4/product/info/attributes filter 接受 offer_id / product_id / sku(三选一)
+    // /v1/product/info/description 接受 offer_id 或 product_id(不支持 sku)
+    // 实测:部分商品用 sku 过滤 attributes 会 404 "item not found",
+    //   用父级 product_id 最可靠(attributes 和 description 均支持)
+    const pid = baseData?.product_id || baseData?.id;
+    if (pid != null && Number(pid) > 0) {
+      const pidNum = Number(pid);
+      // attributes filter.product_id 类型为 array<string,int64>;description.product_id 类型为 integer
+      filter = { product_id: [String(pidNum)] };
+      descBody = { product_id: pidNum };
+    } else {
+      // 兜底:无 product_id 时用 offer_id
+      const offerId = String(baseData?.offer_id || '');
+      filter = { offer_id: [offerId] };
+      descBody = { offer_id: offerId };
+    }
+
+    try {
+      const [attributesRes, descriptionRes] = await Promise.all([
+        opi.productInfoAttributes(store, filter),
+        opi.productInfoDescription(store, descBody),
+      ]);
+
+      const fetchedAt = new Date().toISOString();
+      db.prepare(
+        `INSERT OR REPLACE INTO product_attributes_cache (sku, attributes_data, description_data, fetched_at) VALUES (?, ?, ?, ?)`
+      ).run(sku, JSON.stringify(attributesRes || {}), JSON.stringify(descriptionRes || {}), fetchedAt);
+
+      const payload = {
+        attributes: attributesRes || {},
+        description: descriptionRes || {},
+        fetchedAt,
+      };
+      attrMemCache.set(memKey, payload);
+      return res.json(ok({ ...payload, source: 'opi' }));
+    } catch (e) {
+      logger.warn({ sku, storeId, err: e.message }, 'productInfoAttributes/Description failed');
+      // 降级:若 DB 有过期缓存,返回过期缓存
+      if (row) {
+        const attributes = safeParseJson(row.attributes_data) || {};
+        const description = safeParseJson(row.description_data) || {};
+        return res.json(ok({ attributes, description, fetchedAt: row.fetched_at, source: 'db-stale' }));
+      }
+      throw e;
+    }
   } catch (e) {
     next(e);
   }

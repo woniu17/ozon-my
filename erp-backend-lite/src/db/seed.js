@@ -13,6 +13,7 @@ for (const t of [
   'collect_box',
   'favorites',
   'product_data_cache',
+  'product_attributes_cache',
   'async_jobs',
   'app_config',
   'watermark_templates',
@@ -377,6 +378,62 @@ const caches = [
 const stmtCache = db.prepare(`INSERT INTO product_data_cache (sku, data) VALUES (?, ?)`);
 for (const c of caches) {
   stmtCache.run(c.sku, c.data);
+}
+
+// ────────────────────────────────────────────────────────────
+// 4b. 商品属性缓存(product_attributes_cache)
+// ────────────────────────────────────────────────────────────
+console.log('[seed] 插入 product_attributes_cache...');
+const attrCaches = [
+  {
+    sku: 'demo-001',
+    attributes_data: JSON.stringify({
+      attributes: [
+        {
+          id: 12345,
+          complex_id: 0,
+          values: [{ dictionary_value_id: 'brand-001', value: 'OEM' }],
+        },
+        {
+          id: 67890,
+          complex_id: 0,
+          values: [{ dictionary_value_id: 'color-black', value: '黑色' }],
+        },
+      ],
+      complex_attributes: [
+        {
+          attributes: [
+            {
+              id: 11223,
+              complex_id: 1,
+              values: [{ dictionary_value_id: 'size-std', value: '标准版' }],
+            },
+          ],
+        },
+      ],
+      description_category_id: 9876543,
+      type_id: 1234567,
+      name: '无线蓝牙耳机 降噪 入耳式',
+      offer_id: 'demo-001',
+      sku: 100001,
+      barcode: '2000000000017',
+    }),
+    description_data: JSON.stringify({
+      description:
+        '无线蓝牙耳机,主动降噪,入耳式设计,长效续航。内置高保真发声单元,低频浑厚、高频通透,适合通勤与运动场景。',
+      id: 100001,
+      name: '无线蓝牙耳机 降噪 入耳式',
+      offer_id: 'demo-001',
+    }),
+  },
+];
+
+const stmtAttrCache = db.prepare(`
+  INSERT OR REPLACE INTO product_attributes_cache (sku, attributes_data, description_data)
+  VALUES (?, ?, ?)
+`);
+for (const c of attrCaches) {
+  stmtAttrCache.run(c.sku, c.attributes_data, c.description_data);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -746,6 +803,7 @@ for (const [name, sql] of Object.entries({
   collect_box: 'SELECT COUNT(*) AS n FROM collect_box',
   favorites: 'SELECT COUNT(*) AS n FROM favorites',
   product_data_cache: 'SELECT COUNT(*) AS n FROM product_data_cache',
+  product_attributes_cache: 'SELECT COUNT(*) AS n FROM product_attributes_cache',
   async_jobs: 'SELECT COUNT(*) AS n FROM async_jobs',
   app_config: 'SELECT COUNT(*) AS n FROM app_config',
   watermark_templates: 'SELECT COUNT(*) AS n FROM watermark_templates',

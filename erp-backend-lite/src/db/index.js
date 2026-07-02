@@ -22,6 +22,17 @@ db.exec('PRAGMA foreign_keys = ON;');
 export function initSchema() {
   const sql = readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(sql);
+  ensureMigrations();
+}
+
+// 轻量迁移:为已存在的表补列(CREATE TABLE IF NOT EXISTS 不会更新旧表结构)
+function ensureMigrations() {
+  // product_data_cache.store_id(用于关联店铺,拉特征/描述时需用对应店铺凭据)
+  const cols = db.prepare(`PRAGMA table_info(product_data_cache)`).all();
+  if (!cols.some((c) => c.name === 'store_id')) {
+    db.exec(`ALTER TABLE product_data_cache ADD COLUMN store_id TEXT`);
+    console.log('[db] migration: added column product_data_cache.store_id');
+  }
 }
 
 // 直接运行时初始化(node src/db/index.js)

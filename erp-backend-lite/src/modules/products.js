@@ -83,6 +83,15 @@ router.post('/ozon/products/import', storeGuard, async (req, res, next) => {
     const items = Array.isArray(message.items) ? message.items : [];
     const localTaskId = `local-${Date.now()}-${randomUUID().slice(0, 8)}`;
 
+    // 备份插件原始请求体(raw),便于排查
+    try {
+      db.prepare(
+        `INSERT INTO follow_sell_task_payloads (local_task_id, store_id, stage, payload) VALUES (?, ?, 'raw', ?)`
+      ).run(localTaskId, req.storeId, JSON.stringify(items));
+    } catch (e) {
+      logger.warn({ localTaskId, err: e.message }, 'backup raw payload failed');
+    }
+
     // 入库 PENDING
     db.prepare(
       `INSERT INTO follow_sell_tasks
@@ -102,10 +111,28 @@ router.post('/ozon/products/import', storeGuard, async (req, res, next) => {
     );
 
     // 调 OPI /v3/product/import
+    // ⚠️ 关键:先走 prepareBundleItems 做完整转换(含 dictionary_value_id、complex_attributes、
+    // 描述 4191 注入等),再把转换好的 OPI v3 格式 items 提交给 Ozon。
+    // 之前直接透传 message.items 会导致品牌(85)丢 dictionary_value_id、描述(4191)放顶层
+    // (OPI 不识别)、complex_attributes 恒空等问题。
     let ozonTaskId = null;
     let errorMessage = null;
     try {
-      const r = await opi.productImport(req.store, items);
+      const bundleResult = await prepareBundleItems(message, req.storeId, req.store);
+      // 把所有 bundle 的 items 合并成扁平数组(transformItemForPortal 已转为 OPI v3 格式)
+      const transformedItems = (bundleResult.bundles || []).flatMap((b) => b.items || []);
+      if (transformedItems.length === 0) {
+        throw new Error('prepareBundleItems 转换后无有效 items(可能全部被严格模式/无效图片过滤)');
+      }
+      // 备份转换后的请求体(transformed),便于排查
+      try {
+        db.prepare(
+          `INSERT INTO follow_sell_task_payloads (local_task_id, store_id, stage, payload) VALUES (?, ?, 'transformed', ?)`
+        ).run(localTaskId, req.storeId, JSON.stringify(transformedItems));
+      } catch (e) {
+        logger.warn({ localTaskId, err: e.message }, 'backup transformed payload failed');
+      }
+      const r = await opi.productImport(req.store, transformedItems);
       ozonTaskId = r?.result?.task_id ? String(r.result.task_id) : null;
     } catch (e) {
       errorMessage = e.message;
@@ -428,6 +455,29 @@ router.post('/ozon/products/listing-records/report', storeGuard, async (req, res
       'listing-records reported'
     );
     res.json({ localTaskId, itemsCount: items.length, summary });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /ozon/products/payloads/:localTaskId —— 查询某次上架请求的 payload 备份(raw/transformed)
+// 用于排查 OPI /v3/product/import 提交的完整数据
+router.get('/ozon/products/payloads/:localTaskId', storeGuard, (req, res, next) => {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT stage, payload, created_at FROM follow_sell_task_payloads
+         WHERE local_task_id=? ORDER BY id ASC`
+      )
+      .all(req.params.localTaskId);
+    res.json({
+      localTaskId: req.params.localTaskId,
+      stages: rows.map((r) => ({
+        stage: r.stage,
+        createdAt: r.created_at,
+        payload: r.payload ? JSON.parse(r.payload) : null,
+      })),
+    });
   } catch (e) {
     next(e);
   }

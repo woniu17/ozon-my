@@ -10,10 +10,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 
 async function call(store, path, body, { method = 'POST', timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   if (!store?.sync_credentials?.clientId || !store?.sync_credentials?.apiKey) {
-    throw new ApiError(
-      ErrorCode.AUTH_REQUIRED,
-      `店铺 ${store?.id} 未配置 sync_credentials.clientId/apiKey`
-    );
+    throw new ApiError(ErrorCode.AUTH_REQUIRED, `店铺 ${store?.id} 未配置 sync_credentials.clientId/apiKey`);
   }
   const url = `${BASE}${path}`;
   try {
@@ -37,10 +34,7 @@ async function call(store, path, body, { method = 'POST', timeoutMs = DEFAULT_TI
     }
     if (res.statusCode >= 400) {
       logger.warn({ url, status: res.statusCode, body: parsed }, 'OPI non-2xx');
-      throw new ApiError(
-        ErrorCode.NETWORK_ERROR,
-        `OPI ${path} 返回 ${res.statusCode}: ${parsed?.message || text}`
-      );
+      throw new ApiError(ErrorCode.NETWORK_ERROR, `OPI ${path} 返回 ${res.statusCode}: ${parsed?.message || text}`);
     }
     return parsed;
   } catch (e) {
@@ -70,14 +64,54 @@ export function productImport(store, items) {
   return call(store, '/v3/product/import', {
     items: items.map((it) => {
       const sv = it._sourceVariant || null;
+      // 判断是否为 transformItemForPortal 已转换好的 OPI v3 格式:
+      // 已转换的 item 含 complex_attributes 字段(即使为空数组)和 primary_image 字段
+      const isPreTransformed =
+        it.complex_attributes !== undefined ||
+        it.primary_image !== undefined ||
+        it.new_description_category_id !== undefined;
 
-      // 1) images: [{file_name, default}] → ["url1", ...]
+      // 已转换好的 OPI v3 格式(来自 transformItemForPortal):直接透传
+      if (isPreTransformed) {
+        const opiItem = {
+          name: String(it.name || ''),
+          offer_id: String(it.offer_id || ''),
+          price: it.price ? String(it.price) : '0',
+          old_price: it.old_price ? String(it.old_price) : String(it.price || '0'),
+          currency_code: it.currency_code || 'RUB',
+          vat: it.vat || '0',
+          images: Array.isArray(it.images) ? it.images : [],
+          attributes: it.attributes || [],
+          weight: Number(it.weight) > 0 ? Math.round(Number(it.weight)) : 100,
+          weight_unit: it.weight_unit || 'g',
+          depth: Number(it.depth) > 0 ? Math.round(Number(it.depth)) : 100,
+          width: Number(it.width) > 0 ? Math.round(Number(it.width)) : 100,
+          height: Number(it.height) > 0 ? Math.round(Number(it.height)) : 100,
+          dimension_unit: it.dimension_unit || 'mm',
+        };
+        if (it.complex_attributes != null) opiItem.complex_attributes = it.complex_attributes;
+        if (it.primary_image) opiItem.primary_image = String(it.primary_image);
+        if (it.color_image) opiItem.color_image = String(it.color_image);
+        if (Array.isArray(it.images360)) opiItem.images360 = it.images360;
+        if (Array.isArray(it.pdf_list)) opiItem.pdf_list = it.pdf_list;
+        if (it.type_id != null && Number(it.type_id) > 0) opiItem.type_id = Number(it.type_id);
+        if (it.description_category_id != null && Number(it.description_category_id) > 0)
+          opiItem.description_category_id = Number(it.description_category_id);
+        if (it.new_description_category_id != null)
+          opiItem.new_description_category_id = Number(it.new_description_category_id) || 0;
+        if (it.barcode) opiItem.barcode = String(it.barcode);
+        if (it.video_url) opiItem.video_url = String(it.video_url);
+        if (it.video_cover) opiItem.video_cover = String(it.video_cover);
+        return opiItem;
+      }
+
+      // 兜底:原 message.items 格式(未经过 transformItemForPortal)—— 保留旧逻辑兼容
+      // images: [{file_name, default}] → ["url1", ...]
       const images = Array.isArray(it.images)
         ? it.images.map((img) => (typeof img === 'string' ? img : img?.file_name || '')).filter(Boolean)
         : [];
 
-      // 2) attributes: sv {key, value/collection} → OPI {complex_id, id, values:[{value}]}
-      //    注意:OPI v3 字段名是 `id`(不是 attribute_id),参考文档第 67 行
+      // attributes: sv {key, value/collection} → OPI {complex_id, id, values:[{value}]}
       const attributes = [];
       const svAttrs = sv?.attributes || it.attributes || [];
       if (Array.isArray(svAttrs)) {
@@ -98,19 +132,18 @@ export function productImport(store, items) {
         }
       }
 
-      // 3) type_id:从 sv.description_category_id(实际是 description_type_dict_value)取
-      //    这是 ozon /search 返回的描述类型字典值,对应 OPI 的 type_id
-      const typeId = Number(sv?.description_category_id) || 0;
+      // 描述(4191):OPI v3 无顶层 description,必须作为 attribute 传递
+      const descText = String(it.scraped_description || it.description || '').trim();
+      if (descText && !attributes.some((a) => Number(a.id) === 4191)) {
+        attributes.push({ complex_id: 0, id: 4191, values: [{ value: descText }] });
+      }
 
-      // 4) description_category_id:从 sv.categories[] 最深一级 id 取
-      //    categories[].id 是真实类目 ID,最深一级是叶子类目
+      // type_id + description_category_id
+      const typeId = Number(sv?.description_category_id) || 0;
       const cats = Array.isArray(sv?.categories) ? sv.categories : [];
-      const deepestCat = cats
-        .filter((c) => c.id)
-        .sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
+      const deepestCat = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
       const descriptionCategoryId = Number(deepestCat?.id) || 0;
 
-      // 5) 物理参数(必填,缺省用 100 兜底,对齐 0.13 v3-payload.js:52-55)
       const weight = Number(it.weight) > 0 ? Math.round(Number(it.weight)) : 100;
       const depth = Number(it.depth) > 0 ? Math.round(Number(it.depth)) : 100;
       const width = Number(it.width) > 0 ? Math.round(Number(it.width)) : 100;
@@ -124,12 +157,7 @@ export function productImport(store, items) {
         currency_code: it.currency_code || 'RUB',
         vat: it.vat || '0',
         images,
-        description: it.description || it.scraped_description || '',
         attributes,
-        // 必填字段:type_id + description_category_id
-        type_id: typeId,
-        description_category_id: descriptionCategoryId,
-        // 必填物理参数
         weight,
         weight_unit: it.weight_unit || 'g',
         depth,
@@ -137,8 +165,9 @@ export function productImport(store, items) {
         height,
         dimension_unit: it.dimension_unit || 'mm',
       };
+      if (typeId > 0) opiItem.type_id = typeId;
+      if (descriptionCategoryId > 0) opiItem.description_category_id = descriptionCategoryId;
 
-      // barcode(可选)
       const barcode = sv?._searchMeta?.barcodes?.[0] || it.barcode || '';
       if (barcode) opiItem.barcode = String(barcode);
 
@@ -184,5 +213,49 @@ export function warehouseList(store) {
 
 // /v3/category/tree —— 不需要 Api-Key 但需走 OPI 域名
 export function categoryTree(store, language = 'DEFAULT') {
-  return call(store, '/v3/category/tree', { language, }, { method: 'POST' });
+  return call(store, '/v3/category/tree', { language }, { method: 'POST' });
+}
+
+// /v4/product/info/attributes —— 批量查询商品属性值
+// filter 可为 { offer_id: [string] } 或 { product_id: [number] } 或 { sku: [number] }
+// 响应: { items: [{product_id, offer_id, attributes:[{attribute_id, complex_id, values:[{value}]}]}] }
+export function productInfoAttributes(store, filter) {
+  return call(store, '/v4/product/info/attributes', { filter, limit: 100 });
+}
+
+// /v1/product/info/description —— 查询单个商品的描述(富文本)
+// body 可为 { offer_id: string } 或 { product_id: number },直接透传
+// 响应: { description: string }
+export function productInfoDescription(store, body) {
+  return call(store, '/v1/product/info/description', body);
+}
+
+// /v3/product/list —— 获取商品列表(游标分页)
+// 用途: 拉取店铺全部商品标识符,通过 last_id 翻页直到返回 last_id 为空字符串
+// 请求体: { filter, last_id, limit }
+//   - filter: 可选,缺省 { visibility: 'ALL' }
+//     · { visibility: 'ALL'|'VISIBLE'|'INVISIBLE'|'EMPTY_STOCK'|'NOT_MODERATED'|'MODERATED'|'DISABLED' }
+//     · { offer_id: [string], product_id: [number] } —— 按标识符精确筛选
+//   - last_id: 游标,首次传 ''(空字符串),后续取上次响应的 last_id
+//   - limit: 每页条数,缺省 1000(最大 1000)
+// 响应: { items: [{ product_id, offer_id }], last_id: string, total: number }
+export function productList(store, { filter, lastId, limit } = {}) {
+  return call(store, '/v3/product/list', {
+    filter: filter || { visibility: 'ALL' },
+    last_id: lastId || '',
+    limit: limit || 1000,
+  });
+}
+
+// /v3/product/info/list —— 根据标识符批量获取商品完整信息(v3 升级版,支持 sku 过滤)
+// 用途: 相比 v2 版本,新增 sku 维度过滤,可按 offer_id / product_id / sku 任意组合查询
+// 请求体: 从 offerIds / productIds / skus 中取非 undefined 的字段构造
+//   { offer_id: [string], product_id: [number], sku: [number] }(仅写入已提供的字段)
+// 响应: { items: [<完整商品信息>], total: number }
+export function productInfoListV3(store, { offerIds, productIds, skus } = {}) {
+  const body = {};
+  if (offerIds) body.offer_id = offerIds;
+  if (productIds) body.product_id = productIds;
+  if (skus) body.sku = skus;
+  return call(store, '/v3/product/info/list', body);
 }

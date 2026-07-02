@@ -1,0 +1,14 @@
+- [x] ozon-opi.js 新增 `productInfoAttributes(store, filter)` 调用 `/v4/product/info/attributes`
+- [x] ozon-opi.js 新增 `productInfoDescription(store, body)` 调用 `/v1/product/info/description`
+- [x] schema.sql 新增 `product_attributes_cache` 表(sku 主键 + attributes_data + description_data + fetched_at)
+- [x] seed.js 为 `product_attributes_cache` 表插入示例数据
+- [x] admin.js 新增 `GET /admin/api/products/:sku/attributes` 端点
+- [x] 端点实现三级缓存(内存 → DB → OPI 实时拉取)
+- [x] 端点并行拉取 attributes 和 description,合并返回 `{ attributes, description }`
+- [x] admin.html 商品详情弹窗改造为 3 个子 Tab(基础信息/商品特征描述/商品详情信息)
+- [x] admin.js `openProductDetail` 默认展示基础信息,无需额外请求
+- [x] admin.js 子 Tab 切换时按需调用 `/admin/api/products/:sku/attributes`
+- [x] admin.js 加载中显示"加载中..."占位,完成后渲染 `JSON.stringify(data, null, 2)`
+- [x] admin.css 新增 `.sub-tabs` 和 `.sub-panel` 样式
+- [x] 所有修改的 JS 文件 `node --check` 语法校验通过
+- [x] `npm run format:check` 通过

@@ -1058,3 +1058,39 @@ h3 {
 .listing-detail-meta .error-text {
   margin: 0;
 }
+
+/* ── 商品详情弹窗:二级 Sub Tab ── */
+.sub-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.sub-tab {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+}
+.sub-tab:hover {
+  background: #f3f4f6;
+}
+.sub-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 500;
+}
+/* active 由 .active 控制 display;hidden 由全局 [hidden] 规则控制 */
+.sub-panel {
+  display: none;
+}
+.sub-panel.active {
+  display: block;
+}

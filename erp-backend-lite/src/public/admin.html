@@ -183,6 +183,10 @@
       <div id="tabProducts" class="tab-panel" hidden>
         <div class="toolbar">
           <div class="filter-bar">
+            <select id="prodFilterStore" class="filter-input">
+              <option value="">全部店铺</option>
+            </select>
+            <button id="prodSyncBtn" class="btn btn-primary">同步商品</button>
             <input type="text" id="prodFilterKeyword" class="filter-input" placeholder="搜索 SKU / 标题" />
             <button id="prodSearchBtn" class="btn btn-ghost btn-sm">搜索</button>
             <button id="prodRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
@@ -455,7 +459,24 @@
         </div>
         <div class="modal-body">
           <div id="prodDetailMeta" class="listing-detail-meta"></div>
-          <pre id="prodDetailJson" class="json-pre">加载中...</pre>
+          <div class="filter-bar" style="margin-bottom: 8px">
+            <label class="filter-label">拉取特征/描述所用店铺:</label>
+            <select id="prodDetailStore" class="filter-input" style="max-width: 200px"></select>
+          </div>
+          <div class="sub-tabs">
+            <button class="sub-tab active" data-subtab="basic">基础信息</button>
+            <button class="sub-tab" data-subtab="attributes">商品特征描述</button>
+            <button class="sub-tab" data-subtab="description">商品详情信息</button>
+          </div>
+          <div class="sub-panel active" id="prodDetailBasic">
+            <pre id="prodDetailJson" class="json-pre"></pre>
+          </div>
+          <div class="sub-panel" id="prodDetailAttr">
+            <pre id="prodDetailAttrJson" class="json-pre">点击上方"商品特征描述"加载...</pre>
+          </div>
+          <div class="sub-panel" id="prodDetailDesc">
+            <pre id="prodDetailDescJson" class="json-pre">点击上方"商品详情信息"加载...</pre>
+          </div>
         </div>
       </div>
     </div>

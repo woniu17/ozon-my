@@ -8476,8 +8476,7 @@
       // (product-import.worker.ts:316 primaryOnly = Boolean(payload.posterPrimaryOnly),
       // applyPoster=false 时 ai-poster 子任务不会跑)。
       const posterPrimaryOnly = panel.querySelector('[data-field="poster-primary-only"]')?.checked || false;
-      const _aiRewriteEnabled =
-        panel._erpConfig?.enable_ai_rewrite !== false && panel._erpConfig?.ai_rewrite !== false;
+      const _aiRewriteEnabled = panel._erpConfig?.enable_ai_rewrite !== false && panel._erpConfig?.ai_rewrite !== false;
       const applyAiRewrite =
         _aiRewriteEnabled && (panel.querySelector('[data-field="apply-ai-rewrite"]')?.checked || false);
       const ts = panel._templateSettings || {};
@@ -9405,6 +9404,17 @@
         }
       }
       if (!v || typeof v !== 'object') continue;
+      // webDescription widget 的 richAnnotationJson 有两种形态:
+      //  ① 字符串(整份 {content,version} JSON 文本)
+      //  ② 对象(已解析的 {content,version} —— 2026-07 实测 pdpPage2column layout 直接返回对象)
+      if (v.richAnnotationJson && typeof v.richAnnotationJson === 'object') {
+        if (isRichDoc(v.richAnnotationJson)) {
+          return JSON.stringify({
+            content: v.richAnnotationJson.content,
+            version: v.richAnnotationJson.version || 0.3,
+          });
+        }
+      }
       if (typeof v.richAnnotationJson === 'string' && v.richAnnotationJson.trim()) {
         try {
           if (isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim();
@@ -9487,6 +9497,7 @@
         .toLowerCase();
 
     let richContent = '';
+    let collectedImages = null;
     for (const url of endpoints) {
       try {
         const resp = await fetch(url, {
@@ -9542,11 +9553,56 @@
           const u = typeof img === 'string' ? img : img?.src || img?.url || img?.image;
           if (u) push(u);
         }
-        if (out.length > 0) return { images: out, richContent };
+        if (out.length > 0) {
+          collectedImages = out;
+          break;
+        }
       } catch (e) {
         console.warn('[fetchVariantGallery] fetch failed', url, e?.message);
       }
     }
+
+    // 富内容兜底:bare URL 的 widgetStates 不含 webDescription widget
+    // (Ozon 只在带 layout_container=pdpPage2column&layout_page_index=2 + sh/start_page_id
+    //  反爬参数的请求里才返回富内容 widget)。从 __NUXT__ 提取当前页的 sh/start_page_id,
+    //  补拉一次 page_index=2 的 widgetStates 抽 richAnnotationJson。
+    //  ⚠ sh/start_page_id 是当前页(锚点商品)的会话参数,仅对锚点商品有效;
+    //  其他变体需各自页面的参数,此处 best-effort 不报错。
+    //  ⚠ layout_container 的值是 pdpPage2column (大写 P),全小写 pdppage2column 无效。
+    //  ⚠ 需要带上当前页的查询参数 (__rr, abt_att, origin_referer),否则返回 82 widget
+    //  而非 32 widget(无 webDescription)。
+    if (!richContent) {
+      try {
+        const s = window.__NUXT__?.state;
+        if (s) {
+          const pageUrl = s.pageInfo?.url || '';
+          const shMatch = pageUrl.match(/[?&]sh=([^&]+)/);
+          const sh = shMatch?.[1];
+          const startPageId = s.requestID || s.o3Params?.['x-o3-requestid'];
+          if (sh && startPageId) {
+            // 用当前页的 search (__rr, abt_att, origin_referer 等)做 base,
+            // 再追加 layout 参数。path 参数只有 pathname 无 search,需补齐。
+            const baseSearch = window.location.search || '';
+            const sep = baseSearch ? '&' : '?';
+            const innerUrl = `${path}${baseSearch}${sep}layout_container=pdpPage2column&layout_page_index=2&sh=${sh}&start_page_id=${startPageId}`;
+            const richApiUrl = `/api/entrypoint-api.bx/page/json/v2?url=${encodeURIComponent(innerUrl)}`;
+            const richResp = await fetch(richApiUrl, {
+              credentials: 'include',
+              headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
+            });
+            if (richResp.ok) {
+              const richData = await richResp.json();
+              const richStates = richData?.widgetStates || {};
+              richContent = jzExtractRichContentFromStates(richStates);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[fetchVariantGallery] rich content fallback failed', e?.message);
+      }
+    }
+
+    if (collectedImages && collectedImages.length > 0) return { images: collectedImages, richContent };
     return { images: [], richContent };
   }
 

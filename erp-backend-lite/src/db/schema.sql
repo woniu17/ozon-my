@@ -62,7 +62,16 @@ CREATE TABLE IF NOT EXISTS favorites (
 CREATE TABLE IF NOT EXISTS product_data_cache (
   sku        TEXT PRIMARY KEY,
   data       TEXT NOT NULL,
+  store_id   TEXT,
   fetched_at TEXT DEFAULT (datetime('now'))
+);
+
+-- 商品属性缓存(/v4/product/info/attributes 与 /v1/product/info/description 原始 JSON)
+CREATE TABLE IF NOT EXISTS product_attributes_cache (
+  sku              TEXT PRIMARY KEY,
+  attributes_data  TEXT NOT NULL,   -- /v4/product/info/attributes 返回的原始 JSON
+  description_data TEXT,            -- /v1/product/info/description 返回的原始 JSON
+  fetched_at       TEXT DEFAULT (datetime('now'))
 );
 
 -- 异步任务状态
@@ -142,3 +151,16 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action);
+
+-- 上架请求体备份:用于排查 OPI /v3/product/import 提交的完整数据
+-- 记录转换前(插件原始 message.items)和转换后(transformItemForPortal 输出的 OPI v3 格式)
+CREATE TABLE IF NOT EXISTS follow_sell_task_payloads (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  local_task_id  TEXT NOT NULL,
+  store_id       TEXT,
+  stage          TEXT NOT NULL,    -- raw(插件原始) / transformed(转换后) / opi_request(最终提交OPI)
+  payload        TEXT NOT NULL,    -- JSON 字符串
+  created_at     TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_fstp_task ON follow_sell_task_payloads(local_task_id DESC);
+CREATE INDEX IF NOT EXISTS idx_fstp_created ON follow_sell_task_payloads(created_at DESC);
