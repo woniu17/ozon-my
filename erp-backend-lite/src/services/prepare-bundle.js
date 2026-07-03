@@ -114,18 +114,27 @@ export async function prepareBundleItems(message, storeId, store) {
   const { valid, strictSkipped } = filterStrictMode(processed, strict);
 
   // ── 4. 类目分组(按 description_category_lvl3_name) ──
-  // ⚠️ seller.ozon.ru update-bundle-items 的 description_category_lvl3_name 是 string 字段,
-  // 必须传类目名(如 "Водолазки"),不能传数字 ID(如 96091),否则 proto 校验报:
-  //   invalid value for string field description_category_lvl3_name: 96091
-  // 正确取值链:
+  // ⚠️ seller.ozon.ru create-bundle 的 description_category_lvl3_name 是 string 字段,
+  // 必须传**叶子类目名**(descriptionCategoryName,如 "Набор для подвижных игр" = 户外游戏套装),
+  // 不能传类型名(如 "Дартс детский"),不能传数字 ID,也不能传"默认类目"
+  // (Ozon 无法按名匹配 → 报错"您没有指定类型。属性是必填项")。
+  //
+  // 正确取值链(按可靠性排序):
   //   1) item.description_category_lvl3_name(上游显式传入)
-  //   2) sv.description_category_lvl3_name(归一化时透传)
-  //   3) sv.categories 中 level===3 的 name(sv.categories[].name/title)
-  //   4) '默认类目'(兜底,seller 会用类目预测)
+  //   2) sv.description_category_lvl3_name(qx-ozon searchVariants 已通过 seller-tree
+  //      反查 bundleItem.description_category_id → descriptionCategoryName,权威来源)
+  //   3) sv.categories 里 level=3 的 name(/search 通常不返 name,留作兜底)
+  //   4) '默认类目'(兜底,但会触发 Ozon 报错,仅作最后手段)
+  //
+  // ❌ 不再用 attribute 8229 的 value —— 那是 descriptionTypeName(类型名,如"Дартс детский"),
+  //   不是叶子类目名。同一叶子类目(如"Набор для подвижных игр")下可有多个 type
+  //   (Вертушка/Дартс детский/Нейроскакалка/...),传类型名会导致 Ozon 报
+  //   "Вы не указали тип. Атрибут является обязательным для заполнения"
   const resolveCatLvl3Name = (item) => {
     if (item.description_category_lvl3_name) return item.description_category_lvl3_name;
     const sv = item._sourceVariant;
     if (!sv) return '默认类目';
+    // qx-ozon searchVariants 注入的叶子类目名(权威来源 —— 来自 seller-tree 反查)
     if (sv.description_category_lvl3_name) return sv.description_category_lvl3_name;
     const cats = Array.isArray(sv.categories) ? sv.categories : [];
     const lvl3 = cats.find((c) => Number(c.level) === 3 && (c.name || c.title));

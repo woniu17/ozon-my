@@ -585,6 +585,78 @@ try {
     return item;
   };
 
+  // ── seller-tree/get-by-company-id —— 完整类目树(以 descriptionCategoryId 为 key 的 map)
+  // 用于按 bundleItem.description_category_id 反查 descriptionCategoryName(叶子类目名)。
+  //
+  // ⚠️ 这是 create-bundle 的 description_category_lvl3_name 的**唯一正确取值来源**:
+  //   - description_category_lvl3_name 期望叶子类目名(如 "Набор для подвижных игр" = 户外游戏套装)
+  //   - 不能用 attribute 8229 的 value —— 那是 descriptionTypeName(类型名,如 "Дартс детский"),
+  //     传类型名会导致 Ozon 报错"您没有指定类型。属性是必填项"
+  //   - bundleItem 只有 description_category_id(数字),没有 name 字段,必须查树反查
+  //
+  // 响应结构:{ result: { "15621031": { descriptionCategoryId, descriptionCategoryName,
+  //   descriptionTypeId, descriptionTypeName, nodes: { ... } }, ... } }
+  // 叶子节点: descriptionTypeId != "0" 且 nodes 为空;同一叶子类目下可有多个 type。
+  const _SELLER_TREE_CACHE_PREFIX = 'jz-seller-tree:';
+  const _SELLER_TREE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 天,类目树不常变
+  const _sellerTreeCacheKey = (companyId) => `${_SELLER_TREE_CACHE_PREFIX}${companyId || 'unknown'}`;
+
+  const fetchSellerTree = async (companyId, opts = {}) => {
+    if (!companyId) return null;
+    const cacheKey = _sellerTreeCacheKey(companyId);
+    if (!opts.forceRefresh) {
+      try {
+        const cached = await new Promise((r) => {
+          chrome.storage.local.get([cacheKey], (d) => r(d?.[cacheKey] || null));
+        });
+        if (cached && Date.now() - (cached.at || 0) < _SELLER_TREE_TTL_MS && cached.tree) {
+          return cached.tree;
+        }
+      } catch {}
+    }
+    const resp = await fetchSellerPortal(
+      '/seller-tree/get-by-company-id',
+      { company_id: String(companyId) },
+      {
+        urlPrefix: '/api/v1',
+        pageType: 'products-other',
+        timeoutMs: 30000,
+        allowOzonTab: true,
+        preferTabId: opts.preferTabId,
+      }
+    );
+    // resp 可能是 { result: {catId: node, ...} } 或直接 {catId: node, ...}
+    const tree = resp?.result || resp || null;
+    if (!tree || typeof tree !== 'object') return null;
+    try {
+      chrome.storage.local.set({ [cacheKey]: { at: Date.now(), tree } });
+    } catch {}
+    return tree;
+  };
+
+  // 在类目树中按 descriptionCategoryId 递归 DFS 查找 descriptionCategoryName
+  const findCatNameInTree = (tree, catId) => {
+    if (!tree || !catId) return null;
+    const target = String(catId);
+    const walk = (node) => {
+      if (!node) return null;
+      if (String(node.descriptionCategoryId) === target) {
+        return node.descriptionCategoryName || null;
+      }
+      const nodes = node.nodes || {};
+      for (const k of Object.keys(nodes)) {
+        const found = walk(nodes[k]);
+        if (found) return found;
+      }
+      return null;
+    };
+    for (const k of Object.keys(tree)) {
+      const found = walk(tree[k]);
+      if (found) return found;
+    }
+    return null;
+  };
+
   // ── 门户上架(seller-prototype bundle 合并卡)── 绕官方 /v3/product/import 限流。
   // 全部复用 fetchSellerPortal(urlPrefix=/api/site, pageType=products, allowOzonTab)
   // 在浏览器里跑,带用户真实 cookie/UA/fingerprint 绕反爬。详见门户接口契约。
@@ -597,10 +669,21 @@ try {
   });
 
   // 建空草稿 → { bundle_id }
-  const createBundle = async (companyId, preferTabId) => {
+  // 对齐官方 seller-ui app.js:create-bundle 的 body 应含
+  //   { company_id, description_category_lvl3_name, source_item_id }
+  // - description_category_lvl3_name: 三级类目名(按名匹配,避免跨店类目 ID 错位)
+  // - source_item_id: 复制流程的源商品 ID(新建流程不传)
+  const createBundle = async (companyId, preferTabId, opts = {}) => {
+    const body = { company_id: String(companyId) };
+    if (opts.catName) {
+      body.description_category_lvl3_name = String(opts.catName);
+    }
+    if (opts.sourceItemId) {
+      body.source_item_id = String(opts.sourceItemId);
+    }
     const resp = await fetchSellerPortal(
       '/seller-prototype/create-bundle',
-      { company_id: String(companyId) },
+      body,
       _bundlePortalOpts(preferTabId)
     );
     const bundleId = resp?.bundle_id;
@@ -609,24 +692,163 @@ try {
   };
 
   // 写入/保存草稿全部商品数据(可反复调)→ {}
-  const updateBundleItems = async (bundleId, companyId, items, source, catName, preferTabId) =>
-    fetchSellerPortal(
+  // 对齐官方 seller-ui app.js:update-bundle-items 的 body 为
+  //   { bundle_id, company_id, items, source }
+  // ⚠️ 不含 description_category_lvl3_name —— 类目信息已在 create-bundle 时固化到 bundle,
+  //    每个 item 自身的类目通过 description_category_id / new_description_category_id 携带。
+  // 此函数对每个 item 做字段归一化 + 必填校验,确保提交数据满足 v3 schema。
+  const updateBundleItems = async (bundleId, companyId, items, source, preferTabId) => {
+    const normalizedItems = (Array.isArray(items) ? items : []).map((item, idx) => {
+      if (!item || typeof item !== 'object') {
+        throw new Error(`update-bundle-items: items[${idx}] 不是对象`);
+      }
+
+      // ── 归一化:确保字段类型对齐 v3 schema ──
+      const out = {
+        offer_id: String(item.offer_id || ''),
+        name: String(item.name || ''),
+        price: String(item.price || '0'),
+        old_price: String(item.old_price || item.price || '0'),
+        vat: String(item.vat || '0'),
+        currency_code: String(item.currency_code || 'RUB'),
+        weight: Number(item.weight) > 0 ? Math.round(Number(item.weight)) : 100,
+        weight_unit: item.weight_unit || 'g',
+        depth: Number(item.depth) > 0 ? Math.round(Number(item.depth)) : 100,
+        width: Number(item.width) > 0 ? Math.round(Number(item.width)) : 100,
+        height: Number(item.height) > 0 ? Math.round(Number(item.height)) : 100,
+        dimension_unit: item.dimension_unit || 'mm',
+        images: Array.isArray(item.images) ? item.images.map((u) => String(u)).filter(Boolean) : [],
+        attributes: _normalizeV3Attributes(item.attributes),
+        complex_attributes: _normalizeV3ComplexAttributes(item.complex_attributes),
+        primary_image: String(item.primary_image || ''),
+        color_image: String(item.color_image || ''),
+        images360: Array.isArray(item.images360) ? item.images360.map((u) => String(u)).filter(Boolean) : [],
+        pdf_list: Array.isArray(item.pdf_list) ? item.pdf_list : [],
+        new_description_category_id: Number(item.new_description_category_id) || 0,
+      };
+
+      // type_id / description_category_id: 有值才传,为 0 不传(让 Ozon 走 create-bundle 时的 lvl3_name 按名匹配)
+      if (Number(item.type_id) > 0) out.type_id = Number(item.type_id);
+      if (Number(item.description_category_id) > 0) {
+        out.description_category_id = Number(item.description_category_id);
+      }
+      if (item.barcode) out.barcode = String(item.barcode);
+
+      // ── 必填字段校验(v3 required) ──
+      const missing = [];
+      if (!out.offer_id) missing.push('offer_id');
+      if (!out.name) missing.push('name');
+      if (!out.price || out.price === '0') missing.push('price');
+      if (out.images.length === 0) missing.push('images');
+      if (out.attributes.length === 0) missing.push('attributes');
+      if (out.weight <= 0) missing.push('weight');
+      if (out.depth <= 0) missing.push('depth');
+      if (out.width <= 0) missing.push('width');
+      if (out.height <= 0) missing.push('height');
+      if (!out.weight_unit) missing.push('weight_unit');
+      if (!out.dimension_unit) missing.push('dimension_unit');
+      if (out.vat === '') missing.push('vat');
+
+      if (missing.length > 0) {
+        throw new Error(
+          `update-bundle-items: items[${idx}] (offer_id=${out.offer_id}) 缺少必填字段: ${missing.join(', ')}`
+        );
+      }
+      return out;
+    });
+
+    if (normalizedItems.length === 0) {
+      throw new Error('update-bundle-items: items 为空');
+    }
+
+    return fetchSellerPortal(
       '/seller-prototype/update-bundle-items',
       {
         bundle_id: String(bundleId),
         company_id: String(companyId),
         source: source || 'SOURCE_MERGED',
-        description_category_lvl3_name: catName || '',
-        items,
+        items: normalizedItems,
       },
       _bundlePortalOpts(preferTabId)
     );
+  };
+
+  // ── seller-prototype attributes 归一化 ──
+  // ⚠️ seller-prototype/update-bundle-items 期望的 attribute 字段名是 `attribute_id`(字符串),
+  // 不是 OPI v3 官方 API 的 `id`。传 `id` 会导致 Ozon 后台不识别,所有 attributes 被丢弃,
+  // 进而触发"Вы не указали тип. Атрибут является обязательным для заполнения"报错。
+  //
+  // 官方 create-bundle-by-variant-id 返回的 attribute shape(权威参考):
+  //   { attribute_id: "8229", complex_id: "0", values: [{ value, dictionary_value_id, sequence, complex_sequence, is_default }] }
+  //
+  // 我们输出的 shape(对齐 seller-prototype):
+  //   { attribute_id: Number, complex_id: Number, values: [{ value, dictionary_value_id? }] }
+  //
+  // ⚠️ Ozon 字典类型属性(如 8229 "类型")的 values 可能只有 dictionary_value_id 而 value 为
+  // 空字符串。只按 value 非空过滤会丢掉这种必填属性,导致 Ozon 报错:
+  //   "Вы не указали тип. Атрибут является обязательным для заполнения"
+  //   (您没有指定类型。属性是必填项)
+  // 因此 filter 必须同时保留:value 非空 **或** dictionary_value_id>0 的条目。
+  const _normalizeV3Attributes = (attrs) => {
+    if (!Array.isArray(attrs)) return [];
+    return attrs
+      .map((a) => {
+        if (!a || typeof a !== 'object') return null;
+        const id = Number(a.id || a.attribute_id || a.key || 0);
+        if (!id) return null;
+        const complexId = Number(a.complex_id) || 0;
+        const rawVals = Array.isArray(a.values) ? a.values : [];
+        const values = rawVals
+          .filter(
+            (v) =>
+              v &&
+              ((v.value != null && v.value !== '') ||
+                (v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0))
+          )
+          .map((v) => {
+            const val = typeof v === 'object' ? v : { value: String(v) };
+            const o = { value: String(val.value ?? '') };
+            if (val.dictionary_value_id != null && Number(val.dictionary_value_id) > 0) {
+              o.dictionary_value_id = Number(val.dictionary_value_id);
+            }
+            return o;
+          });
+        if (values.length === 0) return null;
+        return { attribute_id: id, complex_id: complexId, values };
+      })
+      .filter(Boolean);
+  };
+
+  // ── v3 complex_attributes 归一化:[{attributes:[{complex_id, id, values}]}] ──
+  const _normalizeV3ComplexAttributes = (cas) => {
+    if (!Array.isArray(cas)) return [];
+    return cas
+      .map((ca) => {
+        if (!ca || typeof ca !== 'object') return null;
+        const innerAttrs = _normalizeV3Attributes(ca.attributes || ca.complex_attributes);
+        if (innerAttrs.length === 0) return null;
+        return { attributes: innerAttrs };
+      })
+      .filter(Boolean);
+  };
 
   // 提交发布:草稿 → 真实商品 → { upload_task_id }
-  const uploadBundle = async (bundleId, companyId, preferTabId) => {
+  // 对齐官方 seller-ui app.js:upload-bundle 的 body 为
+  //   { bundle_id, company_id, name }
+  // - name: 类目名(与 create-bundle 时的 description_category_lvl3_name 同源,再次确认)
+  // xy-ozon 扩展:额外传 strict:true 启用严格模式(无效图片/字段直接报错而非静默跳过)。
+  const uploadBundle = async (bundleId, companyId, preferTabId, opts = {}) => {
+    const body = {
+      bundle_id: String(bundleId),
+      company_id: String(companyId),
+      strict: opts.strict !== undefined ? Boolean(opts.strict) : true,
+    };
+    if (opts.name) {
+      body.name = String(opts.name);
+    }
     const resp = await fetchSellerPortal(
       '/seller-prototype/upload-bundle',
-      { bundle_id: String(bundleId), company_id: String(companyId), strict: true },
+      body,
       _bundlePortalOpts(preferTabId)
     );
     const taskId = resp?.upload_task_id;
@@ -693,9 +915,16 @@ try {
     const bundleErrors = [];
     for (const b of bundles) {
       try {
-        const bundleId = await createBundle(companyId, preferTabId);
-        await updateBundleItems(bundleId, companyId, b.items, b.source, b.description_category_lvl3_name, preferTabId);
-        const taskId = await uploadBundle(bundleId, companyId, preferTabId);
+        // 对齐官方:create-bundle 传类目名(按名匹配)+ 复制流程源商品 ID(可选)
+        const catName = b.description_category_lvl3_name || '';
+        const bundleId = await createBundle(companyId, preferTabId, {
+          catName,
+          sourceItemId: b.source_item_id || null,
+        });
+        // 类目已在 create-bundle 时固化到 bundle,update 不再传 description_category_lvl3_name
+        await updateBundleItems(bundleId, companyId, b.items, b.source, preferTabId);
+        // upload 传 name(与 create-bundle 时的 catName 同源)+ strict:true(xy-ozon 扩展)
+        const taskId = await uploadBundle(bundleId, companyId, preferTabId, { name: catName });
         bundleIds.push(bundleId);
         taskIds.push(taskId);
       } catch (e) {
@@ -4065,6 +4294,35 @@ try {
                     }
                     // 完整 bundle item 也挂上(供高级 caller — 如 follow-sell 拿全 40-63 个 attr)
                     items[0]._bundleItem = bundleItem;
+
+                    // 用 bundleItem.description_category_id 查 seller-tree 反查叶子类目名,
+                    // 作为 description_category_lvl3_name 的权威来源。
+                    // ⚠️ 不能用 attribute 8229 的 value —— 那是 descriptionTypeName(类型名,如"Дартс детский"),
+                    // 而 create-bundle 的 description_category_lvl3_name 期望叶子类目名
+                    // (如"Набор для подвижных игр" = 户外游戏套装)。传错会导致 Ozon 报
+                    // "您没有指定类型。属性是必填项"。
+                    const catId = Number(bundleItem.description_category_id);
+                    if (catId > 0) {
+                      try {
+                        const tree = await fetchSellerTree(companyId, { preferTabId: senderTabId });
+                        const leafName = findCatNameInTree(tree, catId);
+                        if (leafName) {
+                          items[0].description_category_lvl3_name = leafName;
+                          console.log(
+                            `[searchVariants] catId=${catId} → leafName="${leafName}" for sku=${sku}`
+                          );
+                        } else {
+                          console.warn(
+                            `[searchVariants] catId=${catId} not found in seller-tree for sku=${sku}`
+                          );
+                        }
+                      } catch (e) {
+                        console.warn(
+                          `[searchVariants] seller-tree lookup failed for sku=${sku}:`,
+                          e.message || e
+                        );
+                      }
+                    }
                   }
                 }
               } catch (e) {
