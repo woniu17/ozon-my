@@ -184,6 +184,15 @@ export async function prepareBundleItems(message, storeId, store) {
 
     // 5.2 attributes: 优先从 bundleItem 提取 v3 标准格式(含 dictionary_value_id)
     // v3 schema: {complex_id: int, id: int, values: [{dictionary_value_id: int, value: string}]}
+    //
+    // ⚠️ 以下属性在 v3 schema 里由顶层字段单独传递,不能再放进 attributes 数组,否则 Ozon 报错:
+    //   "图片 - 该字段重复的。请检查 API 中的商品描述:所有字段只应指定一次,不得重复"
+    // bundleItem.attributes 和 sv.attributes 是旧版 seller portal 风格,会带这些字段,必须过滤掉:
+    //   - 4194 主图 / 4195 图册 → 顶层 primary_image / images
+    //   - 4497 重量 / 9454 深度 / 9455 宽度 / 9456 高度 → 顶层 weight+weight_unit / depth+width+height+dimension_unit
+    //   注:8229(类型) 与 type_id 通过 dictionary_value_id 关联但非同一字段,保留 8229
+    //       (type_id 是类目定位字段,8229 是商品属性展示,Ozon 期望两者共存)
+    const SKIP_ATTR_IDS = new Set([4194, 4195, 4497, 9454, 9455, 9456]);
     const attributes = [];
     const usedKeys = new Set();
 
@@ -198,6 +207,7 @@ export async function prepareBundleItems(message, storeId, store) {
         if (ba.complex_id && Number(ba.complex_id) !== 0) continue;
         const attrId = Number(ba.attribute_id || ba.id || 0);
         if (!attrId) continue;
+        if (SKIP_ATTR_IDS.has(attrId)) continue; // 图片属性走顶层 images/primary_image
         const key = String(attrId);
         if (usedKeys.has(key)) continue;
         const vals = Array.isArray(ba.values)
@@ -228,6 +238,8 @@ export async function prepareBundleItems(message, storeId, store) {
       for (const a of sv.attributes) {
         const key = String(a.key || a.attribute_id || '');
         if (!key || usedKeys.has(key)) continue;
+        // 跳过图片属性(4194 主图 / 4195 图册):v3 用顶层 primary_image / images 字段
+        if (SKIP_ATTR_IDS.has(Number(key))) continue;
         // sv shape: {key, value} 或 {key, collection:[...]}
         // 可能带 dictionary_value_id(/search 部分字段有)
         const rawVals = Array.isArray(a.collection)

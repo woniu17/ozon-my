@@ -375,7 +375,13 @@ try {
       const url = await getBackendUrl();
       const stored = await getStorage([STORAGE_KEYS.token, STORAGE_KEYS.storeId]);
       cachedFeatureFlags =
-        (await apiRequest('GET', `${url}/feature-flags/me`, null, stored[STORAGE_KEYS.token], stored[STORAGE_KEYS.storeId])) || {};
+        (await apiRequest(
+          'GET',
+          `${url}/feature-flags/me`,
+          null,
+          stored[STORAGE_KEYS.token],
+          stored[STORAGE_KEYS.storeId]
+        )) || {};
     } catch {
       cachedFeatureFlags = {};
     }
@@ -2379,6 +2385,57 @@ try {
       return true;
     }
 
+    // 读取 www.ozon.ru 买家页的 window.__NUXT__.state(用于富内容 11254 抽取的反爬参数
+    // sh / start_page_id)。content_script 跑在隔离世界,看不到页面 MAIN world 的
+    // __NUXT__ 全局变量,故走 executeScript MAIN world 注入。
+    // 协议:request  { action:'getNuxtState' }
+    //       response { ok, state?: { pageInfoUrl, requestID, sh, startPageId }, error? }
+    if (message?.action === 'getNuxtState') {
+      (async () => {
+        try {
+          const tabId = sender?.tab?.id;
+          if (!tabId) {
+            sendResponse({ ok: false, error: 'no tab context' });
+            return;
+          }
+          const readNuxt = () => {
+            try {
+              const s = window.__NUXT__?.state;
+              if (!s) return { hasNuxt: false };
+              const pageUrl = s.pageInfo?.url || '';
+              const shMatch = pageUrl.match(/[?&]sh=([^&]+)/);
+              const sh = shMatch?.[1] || '';
+              const requestID = s.requestID || '';
+              const startPageId = requestID || s.o3Params?.['x-o3-requestid'] || '';
+              return {
+                hasNuxt: true,
+                pageInfoUrl: pageUrl,
+                requestID,
+                sh,
+                startPageId,
+              };
+            } catch (e) {
+              return { hasNuxt: false, error: e?.message || String(e) };
+            }
+          };
+          const results = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: readNuxt,
+            world: 'MAIN',
+          });
+          const r = results?.[0]?.result;
+          if (!r) {
+            sendResponse({ ok: false, error: 'executeScript 未返回结果' });
+            return;
+          }
+          sendResponse({ ok: true, data: r });
+        } catch (e) {
+          sendResponse({ ok: false, error: `executeScript: ${e?.message || e}` });
+        }
+      })();
+      return true;
+    }
+
     // 商品页采集 fallback:Ozon 2026 起逐步把 PDP state 从 SSR DOM 剥离到纯
     // 客户端 hydrate(web* widget 元素只剩 shell,data-state 全空)。
     // content_script extractProductData 读 DOM 拿不到 title/images/sku/aspects
@@ -2850,7 +2907,7 @@ try {
           // 迁移至 erp-backend-lite:Web 前端 = erp-lite /admin(hash 路由)。
           // 预注入 token 到 localStorage,避免 admin 登录视图闪屏。
           const path = typeof message.path === 'string' ? message.path : '';
-          const hash = path.startsWith('#') ? path : (ACTION_HASHES[path] || '');
+          const hash = path.startsWith('#') ? path : ACTION_HASHES[path] || '';
           const url = `${backendUrl}/admin${hash}`;
 
           const tab = await chrome.tabs.create({ url, active: true });

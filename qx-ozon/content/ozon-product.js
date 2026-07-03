@@ -1605,6 +1605,7 @@
     // 从 composer 缓存抽(通常零额外请求)注入母体 variantData.attributes —— 编辑页
     // textarea 自动预填,批量导入经 _sourceVariant 由后端统一下发。
     const collectAllRichContent = await jzCollectPageRichContent();
+    console.log('[jz-rc][call-batch] collectAll rcLen=', collectAllRichContent.length);
     jzInjectRichContentAttr(variantData, collectAllRichContent);
     const contentCopy = window.JZFollowSellContentCopy;
     const collectAllDescription = contentCopy?.pickFollowSellDescription
@@ -1835,6 +1836,7 @@
     // 源富内容(11254):composer 缓存抽取注入 variantData(searchVariants 失败也会
     // 新建 {attributes} 兜底),编辑页预填 + 上架经 _sourceVariant 下发。
     const collectRichContent = await jzCollectPageRichContent();
+    console.log('[jz-rc][call-single] collect rcLen=', collectRichContent.length);
     let collectVariantData = jzInjectRichContentAttr(variantMatch, collectRichContent);
     const contentCopy = window.JZFollowSellContentCopy;
     const collectDescription = contentCopy?.pickFollowSellDescription
@@ -3064,6 +3066,7 @@
 
         // 源富内容(11254):同主采集路径,注入 variantData → 编辑页预填 + 上架下发。
         const editCollectRichContent = await jzCollectPageRichContent();
+        console.log('[jz-rc][call-edit] collect rcLen=', editCollectRichContent.length);
         let editCollectVariantData = jzInjectRichContentAttr(variantMatch, editCollectRichContent);
         const contentCopy = window.JZFollowSellContentCopy;
         const editCollectDescription = contentCopy?.pickFollowSellDescription
@@ -8589,10 +8592,20 @@
       if (pageProduct.sku) {
         try {
           const anchorSrc = await fetchVariantGallery(window.location.pathname);
+          console.log(
+            '[jz-rc][call-prefetch-anchor] anchor sku=',
+            pageProduct.sku,
+            'rcLen=',
+            anchorSrc?.richContent?.length || 0,
+            'images=',
+            anchorSrc?.images?.length || 0
+          );
           if (anchorSrc && anchorSrc.richContent) {
             richContentMap.set(String(pageProduct.sku), anchorSrc.richContent);
           }
-        } catch {}
+        } catch (e) {
+          console.log('[jz-rc][call-prefetch-anchor] error:', e?.message);
+        }
       }
 
       // 在 items 里挑出 attr 9024 以输入 SKU 为前缀的那个
@@ -9387,14 +9400,32 @@
    * 用 content[].widgetName 作判别,避免误命中普通 list/gallery widget。返回 JSON 字符串或 ''。
    */
   function jzExtractRichContentFromStates(states) {
-    if (!states || typeof states !== 'object') return '';
+    const TAG = '[jz-rc][extract]';
+    if (!states || typeof states !== 'object') {
+      console.log(TAG, 'no states');
+      return '';
+    }
+    const stateKeys = Object.keys(states);
+    // 列出所有含 richAnnotationJson 或 content 的 widget key,方便定位
+    const richKeys = stateKeys.filter((k) => {
+      let v = states[k];
+      if (typeof v === 'string') {
+        try {
+          v = JSON.parse(v);
+        } catch {
+          return false;
+        }
+      }
+      return v && typeof v === 'object' && (v.richAnnotationJson || Array.isArray(v.content));
+    });
+    console.log(TAG, 'totalWidgets=', stateKeys.length, 'richCandidateKeys=', richKeys);
     const isRichDoc = (o) =>
       o &&
       typeof o === 'object' &&
       Array.isArray(o.content) &&
       o.content.length > 0 &&
       o.content.some((b) => b && typeof b === 'object' && typeof b.widgetName === 'string');
-    for (const k of Object.keys(states)) {
+    for (const k of stateKeys) {
       let v = states[k];
       if (typeof v === 'string') {
         try {
@@ -9409,19 +9440,30 @@
       //  ② 对象(已解析的 {content,version} —— 2026-07 实测 pdpPage2column layout 直接返回对象)
       if (v.richAnnotationJson && typeof v.richAnnotationJson === 'object') {
         if (isRichDoc(v.richAnnotationJson)) {
+          console.log(TAG, 'HIT richAnnotationJson(object) from widget=', k);
           return JSON.stringify({
             content: v.richAnnotationJson.content,
             version: v.richAnnotationJson.version || 0.3,
           });
         }
+        console.log(TAG, 'widget', k, 'has richAnnotationJson(object) but isRichDoc=false');
       }
       if (typeof v.richAnnotationJson === 'string' && v.richAnnotationJson.trim()) {
         try {
-          if (isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim();
-        } catch {}
+          if (isRichDoc(JSON.parse(v.richAnnotationJson))) {
+            console.log(TAG, 'HIT richAnnotationJson(string) from widget=', k);
+            return v.richAnnotationJson.trim();
+          }
+        } catch {
+          console.log(TAG, 'widget', k, 'richAnnotationJson(string) JSON.parse failed');
+        }
       }
-      if (isRichDoc(v)) return JSON.stringify({ content: v.content, version: v.version || 0.3 });
+      if (isRichDoc(v)) {
+        console.log(TAG, 'HIT top-level richDoc from widget=', k);
+        return JSON.stringify({ content: v.content, version: v.version || 0.3 });
+      }
     }
+    console.log(TAG, 'no richContent found in', stateKeys.length, 'widgets');
     return '';
   }
 
@@ -9433,18 +9475,36 @@
    * 失败一律返回 ''(富内容是增强项,绝不阻塞采集主流程)。
    */
   async function jzCollectPageRichContent() {
+    const TAG = '[jz-rc][collect]';
+    console.log(TAG, 'START path=', window.location.pathname);
     try {
       let rc = '';
+      let source = '';
       if (window.ensurePdpState) {
-        const states = await window.ensurePdpState().catch(() => null);
-        if (states) rc = jzExtractRichContentFromStates(states);
+        console.log(TAG, 'phase1 ensurePdpState fetching...');
+        const states = await window.ensurePdpState().catch((e) => {
+          console.log(TAG, 'phase1 ensurePdpState failed:', e?.message);
+          return null;
+        });
+        if (states) {
+          rc = jzExtractRichContentFromStates(states);
+          source = 'ensurePdpState';
+          console.log(TAG, 'phase1 ensurePdpState result len=', rc.length, source);
+        }
+      } else {
+        console.log(TAG, 'phase1 ensurePdpState not available');
       }
       if (!rc) {
+        console.log(TAG, 'phase2 fallback to fetchVariantGallery');
         const r = await fetchVariantGallery(window.location.pathname);
         rc = r?.richContent || '';
+        source = 'fetchVariantGallery';
+        console.log(TAG, 'phase2 fetchVariantGallery result len=', rc.length);
       }
+      console.log(TAG, 'END source=', source, 'len=', rc.length);
       return rc;
-    } catch {
+    } catch (e) {
+      console.log(TAG, 'ERROR:', e?.message);
       return '';
     }
   }
@@ -9460,11 +9520,19 @@
    * importProducts 的 pickSourceRichContent 统一下发。
    */
   function jzInjectRichContentAttr(sv, richContent) {
-    if (!richContent) return sv || undefined;
+    const TAG = '[jz-rc][inject]';
+    if (!richContent) {
+      console.log(TAG, 'SKIP: richContent empty');
+      return sv || undefined;
+    }
     const base = sv && typeof sv === 'object' ? sv : {};
     const attrs = Array.isArray(base.attributes) ? base.attributes : [];
-    if (attrs.some((a) => String(a?.key) === '11254')) return base;
+    if (attrs.some((a) => String(a?.key) === '11254')) {
+      console.log(TAG, 'SKIP: 11254 already present');
+      return base;
+    }
     base.attributes = [...attrs, { key: '11254', value: richContent }];
+    console.log(TAG, 'INJECTED 11254 into sv, rcLen=', richContent.length, 'attrCount=', base.attributes.length);
     return base;
   }
 
@@ -9498,17 +9566,25 @@
 
     let richContent = '';
     let collectedImages = null;
+    const TAG = '[jz-rc][gallery]';
+    console.log(TAG, 'START variantLink=', variantLink, 'path=', path);
     for (const url of endpoints) {
       try {
+        console.log(TAG, 'phase1 fetching bare url=', url);
         const resp = await fetch(url, {
           credentials: 'include',
           headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
         });
+        console.log(TAG, 'phase1 resp.status=', resp.status, 'for url=', url);
         if (!resp.ok) continue;
         const data = await resp.json();
         const states = data?.widgetStates || {};
+        console.log(TAG, 'phase1 widgetCount=', Object.keys(states).length, 'for url=', url);
         // 顺手从同一份 widgetStates 抽源富内容(零额外 fetch / 反爬开销)。
-        if (!richContent) richContent = jzExtractRichContentFromStates(states);
+        if (!richContent) {
+          richContent = jzExtractRichContentFromStates(states);
+          console.log(TAG, 'phase1 richContent extracted len=', richContent.length);
+        }
         // 扫所有 widgetStates → 选 images 数组最长的一个作为图册主源
         // (绝大多数情况下命中 webGallery,但偶有变体走其它命名,扫全确保兜底)
         let bestImages = [];
@@ -9555,6 +9631,7 @@
         }
         if (out.length > 0) {
           collectedImages = out;
+          console.log(TAG, 'phase1 collected images=', out.length);
           break;
         }
       } catch (e) {
@@ -9572,13 +9649,54 @@
     //  ⚠ 需要带上当前页的查询参数 (__rr, abt_att, origin_referer),否则返回 82 widget
     //  而非 32 widget(无 webDescription)。
     if (!richContent) {
+      console.log(TAG, 'phase2 richContent empty, trying layout params fallback');
       try {
-        const s = window.__NUXT__?.state;
-        if (s) {
-          const pageUrl = s.pageInfo?.url || '';
-          const shMatch = pageUrl.match(/[?&]sh=([^&]+)/);
-          const sh = shMatch?.[1];
-          const startPageId = s.requestID || s.o3Params?.['x-o3-requestid'];
+        // content_script 跑在隔离世界,看不到页面 MAIN world 的 window.__NUXT__,
+        // 故走 SW executeScript MAIN world 注入读取(SW action: getNuxtState)。
+        // 失败时回退尝试直接读 window.__NUXT__(兼容旧版本/非隔离场景)。
+        let nuxtState = null;
+        if (typeof window.sendMessage === 'function') {
+          console.log(TAG, 'phase2 fetching __NUXT__ via SW getNuxtState');
+          const data = await window.sendMessage('getNuxtState').catch((e) => {
+            console.log(TAG, 'phase2 getNuxtState sendMessage failed:', e?.message);
+            return null;
+          });
+          if (data) {
+            nuxtState = data;
+            console.log(TAG, 'phase2 getNuxtState ok, hasNuxt=', nuxtState.hasNuxt);
+          } else {
+            console.log(TAG, 'phase2 getNuxtState returned empty data');
+          }
+        }
+        // 兜底:直读 window.__NUXT__(兼容非隔离环境或 SW 不可达场景)
+        if (!nuxtState || !nuxtState.hasNuxt) {
+          const s = window.__NUXT__?.state;
+          if (s) {
+            const pageUrl = s.pageInfo?.url || '';
+            const shMatch = pageUrl.match(/[?&]sh=([^&]+)/);
+            nuxtState = {
+              hasNuxt: true,
+              pageInfoUrl: pageUrl,
+              sh: shMatch?.[1] || '',
+              startPageId: s.requestID || s.o3Params?.['x-o3-requestid'] || '',
+            };
+            console.log(TAG, 'phase2 fallback direct __NUXT__ read, hasNuxt=true');
+          }
+        }
+        if (!nuxtState || !nuxtState.hasNuxt) {
+          console.log(TAG, 'phase2 __NUXT__ unavailable, skip');
+        } else {
+          const sh = nuxtState.sh;
+          const startPageId = nuxtState.startPageId;
+          console.log(
+            TAG,
+            'phase2 nuxt.state: pageInfoUrl=',
+            nuxtState.pageInfoUrl,
+            'sh=',
+            sh,
+            'startPageId=',
+            startPageId
+          );
           if (sh && startPageId) {
             // 用当前页的 search (__rr, abt_att, origin_referer 等)做 base,
             // 再追加 layout 参数。path 参数只有 pathname 无 search,需补齐。
@@ -9586,22 +9704,37 @@
             const sep = baseSearch ? '&' : '?';
             const innerUrl = `${path}${baseSearch}${sep}layout_container=pdpPage2column&layout_page_index=2&sh=${sh}&start_page_id=${startPageId}`;
             const richApiUrl = `/api/entrypoint-api.bx/page/json/v2?url=${encodeURIComponent(innerUrl)}`;
+            console.log(TAG, 'phase2 fetching layout url=', richApiUrl);
             const richResp = await fetch(richApiUrl, {
               credentials: 'include',
               headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
             });
+            console.log(TAG, 'phase2 resp.status=', richResp.status);
             if (richResp.ok) {
               const richData = await richResp.json();
               const richStates = richData?.widgetStates || {};
+              console.log(
+                TAG,
+                'phase2 widgetCount=',
+                Object.keys(richStates).length,
+                'sampleKeys=',
+                Object.keys(richStates).slice(0, 5)
+              );
               richContent = jzExtractRichContentFromStates(richStates);
+              console.log(TAG, 'phase2 richContent extracted len=', richContent.length);
             }
+          } else {
+            console.log(TAG, 'phase2 missing sh or startPageId, skip');
           }
         }
       } catch (e) {
         console.warn('[fetchVariantGallery] rich content fallback failed', e?.message);
       }
+    } else {
+      console.log(TAG, 'phase2 skipped, richContent already len=', richContent.length);
     }
 
+    console.log(TAG, 'END images=', collectedImages?.length || 0, 'richContentLen=', richContent.length);
     if (collectedImages && collectedImages.length > 0) return { images: collectedImages, richContent };
     return { images: [], richContent };
   }

@@ -36,6 +36,22 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cdnBuster);
 app.use(requestLog);
 
+// CORS + Private Network Access (PNA)
+// 插件 content script 运行在 https://www.ozon.ru 页面里,直接 fetch http://localhost:3001
+// 会被 Chrome 的 PNA 策略拦截 ("Permission was denied for this request to access the
+// loopback address space")。这里下发 PNA 头让浏览器放行。
+// 必须放在 authMiddleware 之前,否则 OPTIONS 预检会被 401 拦截。
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-ozon-store-id, x-o3-app-name');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
+
 // 静态资源(管理后台页面 HTML/JS/CSS,无需鉴权即可访问;敏感数据由 API 鉴权保护)
 app.use(express.static(PUBLIC_DIR));
 // /admin 便捷入口 → admin.html
