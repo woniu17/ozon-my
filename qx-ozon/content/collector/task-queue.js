@@ -107,10 +107,12 @@
     }
 
     pause() {
+      console.log('[JZTaskQueue] pause() called (用户手动暂停)', 'wasPaused=', this.paused);
       this.paused = true;
       this._scheduleEmit();
     }
     resume() {
+      console.log('[JZTaskQueue] resume() called (用户手动恢复)', 'wasPaused=', this.paused);
       this.paused = false;
       this._pump();
       this._scheduleEmit();
@@ -163,17 +165,35 @@
 
     _maybeEmitCongestion(stats) {
       const now = Date.now();
-      if (now - this._lastCongestionAt < this.hysteresisMs) return;
+      if (now - this._lastCongestionAt < this.hysteresisMs) {
+        console.log(
+          '[JZTaskQueue] congestion skip(hysteresis)',
+          'elapsed=', now - this._lastCongestionAt,
+          'hysteresisMs=', this.hysteresisMs,
+          'stats=', stats
+        );
+        return;
+      }
       const isHigh =
         stats.running >= this.concurrency || stats.pending > this.pauseLowPending || stats.running > this.autoPauseHigh;
       const isLow = stats.running <= this.autoPauseLow && stats.pending <= this.pauseLowPending;
+      console.log(
+        '[JZTaskQueue] congestion eval',
+        'running=', stats.running, 'pending=', stats.pending,
+        'concurrency=', this.concurrency,
+        'autoPauseHigh=', this.autoPauseHigh, 'autoPauseLow=', this.autoPauseLow,
+        'pauseLowPending=', this.pauseLowPending,
+        'isHigh=', isHigh, 'isLow=', isLow, 'curLevel=', this._congestionLevel
+      );
       if (isHigh && this._congestionLevel !== 'high') {
         this._congestionLevel = 'high';
         this._lastCongestionAt = now;
+        console.log('[JZTaskQueue] congestion → high (将暂停翻页)', stats);
         this._emit('congestion', { level: 'high', stats });
       } else if (isLow && this._congestionLevel !== 'low') {
         this._congestionLevel = 'low';
         this._lastCongestionAt = now;
+        console.log('[JZTaskQueue] congestion → low (将恢复翻页)', stats);
         this._emit('congestion', { level: 'low', stats });
       }
     }

@@ -863,6 +863,16 @@
         try {
           chrome.storage.local.set({ [COLLECTOR_RUNNING_STORAGE_KEY]: collectorRunning });
         } catch {}
+        if (next) {
+          // 恢复采集: 若"自动翻页"开关仍勾选(用户偏好), 重新启动 AutoScroller
+          if (autoScroller) {
+            const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
+            if (cb && cb.checked) autoScroller.start();
+          }
+        } else {
+          // 停止采集时停 AutoScroller, 但不改"自动翻页"开关状态(保留用户偏好)
+          if (autoScroller) autoScroller.stop();
+        }
       },
       onAutoScrollToggle: (next) => {
         if (!autoScroller) return;
@@ -917,10 +927,17 @@
 
   function isCurrentViewportDataReady() {
     if (!panelState.enabled) return true;
+    // 注意: 必须用 panel 的 rect 而非 card 的 rect 判定视口范围, 且 margin 对齐
+    // ensureDataPanel 里 IntersectionObserver 的 rootMargin('200px').
+    // 否则当 card 很高时, card 顶部进入 +80px 范围但 panel(在 card 底部)还在
+    // IO 触发范围之外 → isCurrentViewportDataReady 永远等 panel ready, 而 IO
+    // 永远不触发加载 → 死锁, AutoScroller 卡在 "采集中".
     const cards = getCards().filter((card) => {
       if (!card.querySelector('a[href*="/product/"]')) return false;
-      const rect = card.getBoundingClientRect();
-      return rect.bottom > -80 && rect.top < window.innerHeight + 80;
+      const panel = card.querySelector('.ozon-helper-data-panel');
+      if (!panel) return false;
+      const rect = panel.getBoundingClientRect();
+      return rect.bottom > -200 && rect.top < window.innerHeight + 200;
     });
     if (!cards.length) return true;
     return cards.every((card) => isDataPanelSettled(card.querySelector('.ozon-helper-data-panel')));
@@ -983,6 +1000,10 @@
       },
       onStopCollecting: async () => {
         if (autoScroller) autoScroller.stop();
+        // 必须同时停 KeywordPilot: 否则其 _monitorTimer(每 5s)仍会触发
+        // _completeCurrentAndAdvance → start() → onStartCollecting → autoScroller.start(),
+        // 导致用户点停止后翻页被关键词自动续上.
+        if (keywordPilot) await keywordPilot.stop();
         if (collectorPanel) {
           collectorPanel.setAutoScrollerState({ running: false, autoPaused: false });
           await refreshKeywordPanelState();

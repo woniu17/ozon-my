@@ -52,17 +52,22 @@
     }
 
     start() {
-      if (this._userActive) return;
+      if (this._userActive) {
+        console.log('[JZAutoScroller] start() skipped (already active)');
+        return;
+      }
       this._userActive = true;
       this._autoPaused = false;
       this._emptyStreak = 0;
       this._waitingReadySince = 0;
       this._lastCardCount = this.getCardCount();
       this._unsubCongestion = this.queue.on('congestion', (e) => this._onCongestion(e));
+      console.log('[JZAutoScroller] start() ok, lastCardCount=', this._lastCardCount);
       this._scheduleNext(0); // 立即滚一次
     }
 
     stop() {
+      console.log('[JZAutoScroller] stop() called', 'wasUserActive=', this._userActive, 'wasAutoPaused=', this._autoPaused);
       this._userActive = false;
       this._autoPaused = false;
       this._emptyStreak = 0;
@@ -89,23 +94,37 @@
       return this._autoPaused;
     }
 
-    _onCongestion({ level }) {
-      if (!this._userActive) return;
+    _onCongestion({ level, stats }) {
+      console.log(
+        '[JZAutoScroller] _onCongestion',
+        'level=', level,
+        'userActive=', this._userActive,
+        'autoPaused=', this._autoPaused,
+        'stats=', stats
+      );
+      if (!this._userActive) {
+        console.log('[JZAutoScroller] _onCongestion skip (user not active)');
+        return;
+      }
       if (level === 'high' && !this._autoPaused) {
         this._autoPaused = true;
         if (this._timer) {
           clearTimeout(this._timer);
           this._timer = null;
         }
+        console.log('[JZAutoScroller] → autoPaused=true (翻页已暂停)', stats);
         try {
           this.onCongestionPause('paused');
         } catch {}
       } else if (level === 'low' && this._autoPaused) {
         this._autoPaused = false;
+        console.log('[JZAutoScroller] → autoPaused=false (翻页将恢复)', stats);
         try {
           this.onCongestionPause('resumed');
         } catch {}
         this._scheduleNext(this.intervalMs);
+      } else {
+        console.log('[JZAutoScroller] _onCongestion no-op');
       }
     }
 
@@ -116,21 +135,32 @@
 
     async _tick() {
       this._timer = null;
-      if (!this._userActive || this._autoPaused) return;
+      if (!this._userActive || this._autoPaused) {
+        console.log(
+          '[JZAutoScroller] _tick early-return',
+          'userActive=', this._userActive,
+          'autoPaused=', this._autoPaused
+        );
+        return;
+      }
 
       let readyToScroll = true;
       try {
         readyToScroll = this.isReadyToScroll();
-      } catch {
+      } catch (e) {
+        console.log('[JZAutoScroller] isReadyToScroll throw:', e);
         readyToScroll = false;
       }
       if (!readyToScroll) {
         const now = Date.now();
         if (!this._waitingReadySince) this._waitingReadySince = now;
-        if (!this.maxReadinessWaitMs || now - this._waitingReadySince < this.maxReadinessWaitMs) {
+        const waited = now - this._waitingReadySince;
+        if (!this.maxReadinessWaitMs || waited < this.maxReadinessWaitMs) {
+          console.log('[JZAutoScroller] _tick wait (not ready)', 'waitedMs=', waited, 'maxWaitMs=', this.maxReadinessWaitMs);
           this._scheduleNext(this.readinessPollMs);
           return;
         }
+        console.log('[JZAutoScroller] _tick readiness timeout, force proceed');
         this._waitingReadySince = 0;
       } else {
         this._waitingReadySince = 0;
@@ -138,6 +168,10 @@
 
       const stats = typeof this.queue.stats === 'function' ? this.queue.stats() : null;
       if (stats && (stats.running > 0 || stats.pending > 0)) {
+        console.log(
+          '[JZAutoScroller] _tick wait (queue busy)',
+          'running=', stats.running, 'pending=', stats.pending
+        );
         this._scheduleNext(this.readinessPollMs);
         return;
       }
@@ -146,19 +180,42 @@
       // 滚到底部触发懒加载
       const scroller = document.scrollingElement || document.documentElement || document.body;
       const scrollStep = Math.max(this.minScrollStepPx, Math.floor((window.innerHeight || 800) * this.scrollStepRatio));
+      // 二次校验: 上面 isReadyToScroll / queue.stats 检查后到此处之间, 用户可能已点 stop.
+      // 不校验会导致 stop 后仍触发一次 scrollBy, 用户看到"停止后还翻页".
+      if (!this._userActive || this._autoPaused) {
+        console.log(
+          '[JZAutoScroller] _tick pre-scroll return',
+          'userActive=', this._userActive,
+          'autoPaused=', this._autoPaused
+        );
+        return;
+      }
       try {
         window.scrollBy({ top: scrollStep, behavior: 'smooth' });
       } catch (e) {
         // some pages override scrollTo, fall back
         scroller.scrollTop += scrollStep;
       }
+      console.log('[JZAutoScroller] scrolled', 'step=', scrollStep, 'beforeCount=', beforeCount);
 
       // 等卡片渲染（1.5s）后再检查
       await new Promise((r) => setTimeout(r, this.settleMs));
-      if (!this._userActive || this._autoPaused) return;
+      if (!this._userActive || this._autoPaused) {
+        console.log(
+          '[JZAutoScroller] _tick post-settle return',
+          'userActive=', this._userActive,
+          'autoPaused=', this._autoPaused
+        );
+        return;
+      }
 
       const nowCount = this.getCardCount();
       const nearBottom = scroller.scrollTop + window.innerHeight >= scroller.scrollHeight - 800;
+      console.log(
+        '[JZAutoScroller] settle check',
+        'nowCount=', nowCount, 'beforeCount=', beforeCount,
+        'nearBottom=', nearBottom, 'emptyStreak=', this._emptyStreak
+      );
       if (nowCount > beforeCount) {
         this._emptyStreak = 0;
         this._lastCardCount = nowCount;
@@ -166,6 +223,7 @@
         this._emptyStreak++;
         if (this._emptyStreak >= this.emptyThreshold) {
           // 触发 onEmpty 然后停止
+          console.log('[JZAutoScroller] → onEmpty triggered, emptyStreak=', this._emptyStreak);
           const cb = this.onEmpty;
           this.stop();
           try {
