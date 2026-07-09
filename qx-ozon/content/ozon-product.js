@@ -2183,11 +2183,20 @@
           _bundleMeta: null,
         });
       }
+      // 单 SKU 兜底:补全 price/priceRub/priceCurrency(对齐 toggleFollowSellPanel
+      // 单变体兜底分支 line 11246-11255 的币种处理),避免 aspectVariants 为空时
+      // pushCollectBoxV2FromCollected 内 line 1814 取不到 price 导致 price=0。
+      const _rawPrice = product.price || 0;
+      const _srcCurrency = _detectPageCurrency();
+      const _isRub = _srcCurrency === 'RUB';
       await pushCollectBoxV2FromCollected({
         variants: [
           {
             sku: _anchorSku,
             title: collectName || product.title || '',
+            price: _isRub ? _rubToCny(_rawPrice) : _rawPrice,
+            priceRub: _isRub ? _rawPrice : 0,
+            priceCurrency: _isRub ? 'CNY' : _srcCurrency || 'CNY',
             coverImage: collectMainImage,
             link: product.url || window.location.href,
             aspectValues: {},

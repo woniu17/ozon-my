@@ -16,7 +16,7 @@ const subtabs = [
   { key: 'dom', label: 'DOM 数据源' },
   { key: 'seller-portal', label: 'Seller Portal' },
   { key: 'page-json', label: 'Page-JSON' },
-  { key: 'synthesized', label: '合成请求预览' },
+  { key: 'synthesized', label: 'OPI 请求预览' },
 ];
 
 // 富内容(11254)是 JSON 字符串,尝试解析为对象供 JsonTree 渲染;解析失败返回 null(降级为纯文本)
@@ -30,7 +30,7 @@ function parseRichContent(val) {
   }
 }
 
-// ── 合成请求预览(OPI v3):调用后端 preview-opi 把 synthesizedItems 转成 OPI v3 schema ──
+// ── OPI 请求预览:调用后端 preview-opi 把 synthesizedItems 转成 OPI v3 schema ──
 const opiItems = ref([]);      // 转换后的 OPI v3 items
 const opiLoading = ref(false);
 const opiError = ref('');
@@ -72,6 +72,105 @@ watch(activeSubtab, (v) => {
   if (v === 'synthesized') loadOpiPreview();
 });
 
+// ── OPI 字段来源追溯 ──
+// OPI 字段 → synthesizedItems 字段名映射(用于追溯值的来源)
+const OPI_SOURCE_MAP = {
+  name: 'name',
+  offer_id: 'offer_id',
+  price: 'price',
+  old_price: 'old_price',
+  currency_code: 'currency_code',
+  vat: 'vat',
+  weight: 'weight',
+  weight_unit: 'weight_unit',
+  depth: 'depth',
+  width: 'width',
+  height: 'height',
+  dimension_unit: 'dimension_unit',
+  images: 'images',
+  images360: 'images360',
+  pdf_list: 'pdf_list',
+  attributes: 'attributes',
+  complex_attributes: 'bundleComplexAttrs',
+  primary_image: 'images',
+  color_image: null,
+  type_id: 'description_category_id',
+  description_category_id: 'description_category_id',
+  new_description_category_id: null,
+  barcode: 'barcode',
+  video_url: 'videoUrl',
+  video_cover: 'videoCover',
+};
+
+// 从 synthesizedItem 提取指定 OPI 字段的来源
+function getFieldSource(synItem, opiField) {
+  if (!synItem) return 'computed';
+  const synField = OPI_SOURCE_MAP[opiField];
+  if (!synField) return 'computed';
+
+  // 1) 直接字段查找
+  const v = synItem[synField];
+  if (v && typeof v === 'object' && 'source' in v) return v.source || 'computed';
+
+  // 2) 从 _sourceVariant 派生的字段(barcode/attributes/type_id/description_category_id)
+  //    _sourceVariant 来自 Seller Portal API,其 source 通常为 'seller-portal'
+  const svDerivedFields = ['barcode', 'attributes', 'type_id', 'description_category_id'];
+  if (svDerivedFields.includes(opiField)) {
+    const sv = synItem._sourceVariant;
+    if (sv && typeof sv === 'object' && 'source' in sv) return sv.source || 'seller-portal';
+    return 'seller-portal';
+  }
+
+  // 3) primary_image 从 images 派生
+  if (opiField === 'primary_image') {
+    const imgs = synItem.images;
+    if (imgs && typeof imgs === 'object' && 'source' in imgs) return imgs.source || 'computed';
+  }
+
+  // 4) complex_attributes 从 bundleComplexAttrs 派生
+  if (opiField === 'complex_attributes') {
+    const bca = synItem.bundleComplexAttrs;
+    if (bca && typeof bca === 'object' && 'source' in bca) return bca.source || 'seller-portal';
+    return 'seller-portal';
+  }
+
+  return 'computed';
+}
+
+function getFieldSourceDetail(synItem, opiField) {
+  if (!synItem) return '';
+  const synField = OPI_SOURCE_MAP[opiField];
+  if (!synField) return '';
+  const v = synItem[synField];
+  if (v && typeof v === 'object' && 'sourceDetail' in v) return v.sourceDetail || '';
+  // 派生字段补充 sourceDetail
+  if (['barcode', 'attributes'].includes(opiField)) return 'sv._searchMeta / sv.attributes';
+  if (opiField === 'complex_attributes') return 'bundleComplexAttrs';
+  if (opiField === 'primary_image') return 'images[default]';
+  return '';
+}
+
+// OPI 字段显示顺序:基础字段在前,images/images360/pdf_list/attributes/complex_attributes 在后
+const OPI_FIELD_ORDER = [
+  'name', 'offer_id', 'price', 'old_price', 'currency_code', 'vat',
+  'weight', 'weight_unit', 'depth', 'width', 'height', 'dimension_unit',
+  'primary_image', 'color_image', 'type_id', 'description_category_id',
+  'new_description_category_id', 'barcode', 'video_url', 'video_cover',
+  'images', 'images360', 'pdf_list', 'attributes', 'complex_attributes',
+];
+
+// 为每个 OPI item 构建带来源的字段列表
+function buildSourcedFields(opiItem, synItem) {
+  return OPI_FIELD_ORDER.filter((k) => opiItem[k] !== undefined).map((k) => ({
+    label: k,
+    field: {
+      value: opiItem[k],
+      source: getFieldSource(synItem, k),
+      sourceDetail: getFieldSourceDetail(synItem, k),
+    },
+  }));
+}
+
 function fmtTime(t) {
   if (!t) return '—';
   return String(t).replace('T', ' ').slice(0, 19);
@@ -112,7 +211,7 @@ function attrCount(sv) {
     <!-- ── 概览 ── -->
     <div v-show="activeSubtab === 'overview'">
       <div v-if="isLegacy" class="cbv2-legacy-banner">
-        <strong>⚠ 旧版采集记录</strong> — 此记录由旧版采集通道推送，无字段级来源标记（source 全部显示为 <code>legacy</code>），也无 5 类数据源原始响应与合成请求预览。<br>如需查看完整来源信息，请在 Ozon 商品详情页重新点「一键采集」（确保已重新加载扩展）。
+        <strong>⚠ 旧版采集记录</strong> — 此记录由旧版采集通道推送，无字段级来源标记（source 全部显示为 <code>legacy</code>），也无 5 类数据源原始响应与 OPI 请求预览。<br>如需查看完整来源信息，请在 Ozon 商品详情页重新点「一键采集」（确保已重新加载扩展）。
       </div>
       <AppAccordion title="采集元信息" :default-open="true">
         <SourcedField label="anchor_sku" :field="{ value: data.anchorSku, source: metaSource }" />
@@ -236,9 +335,9 @@ function attrCount(sv) {
       </AppAccordion>
     </div>
 
-    <!-- ── 合成请求预览 (OPI v3) ── -->
+    <!-- ── OPI 请求预览 (OPI v3) ── -->
     <div v-show="activeSubtab === 'synthesized'">
-      <p v-if="!synthesizedItems.length" class="muted">无合成请求数据</p>
+      <p v-if="!synthesizedItems.length" class="muted">无 OPI 请求数据</p>
       <template v-else>
         <p v-if="opiLoading" class="muted">正在转换 OPI v3 格式...</p>
         <p v-else-if="opiError" class="error-text">转换失败:{{ opiError }}</p>
@@ -250,7 +349,18 @@ function attrCount(sv) {
           :badge="(item.attributes?.length || 0) + ' 属性'"
           :default-open="false"
         >
-          <JsonTree :data="item" :root-key="'变体 ' + (i + 1)" />
+          <!-- 每个字段带来源标签 -->
+          <SourcedField
+            v-for="f in buildSourcedFields(item, synthesizedItems[i])"
+            :key="f.label"
+            :label="f.label"
+            :field="f.field"
+          />
+          <!-- 可折叠的原始 OPI JSON -->
+          <details class="opi-raw-json">
+            <summary>原始 OPI JSON</summary>
+            <JsonTree :data="item" :root-key="'变体 ' + (i + 1)" />
+          </details>
         </AppAccordion>
       </template>
     </div>
@@ -260,5 +370,20 @@ function attrCount(sv) {
 <style scoped>
 .cbv2-detail {
   min-height: 120px;
+}
+/* 原始 OPI JSON 折叠区 */
+.opi-raw-json {
+  margin-top: 12px;
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 8px;
+}
+.opi-raw-json summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #6b7280;
+  user-select: none;
+}
+.opi-raw-json summary:hover {
+  color: #374151;
 }
 </style>

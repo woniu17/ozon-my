@@ -88,8 +88,6 @@ export function toOpiItem(it) {
       old_price: it.old_price ? String(it.old_price) : String(it.price || '0'),
       currency_code: it.currency_code || 'RUB',
       vat: it.vat || '0',
-      images: Array.isArray(it.images) ? it.images : [],
-      attributes: it.attributes || [],
       weight: Number(it.weight) > 0 ? Math.round(Number(it.weight)) : 100,
       weight_unit: it.weight_unit || 'g',
       depth: Number(it.depth) > 0 ? Math.round(Number(it.depth)) : 100,
@@ -97,11 +95,8 @@ export function toOpiItem(it) {
       height: Number(it.height) > 0 ? Math.round(Number(it.height)) : 100,
       dimension_unit: it.dimension_unit || 'mm',
     };
-    if (it.complex_attributes != null) opiItem.complex_attributes = it.complex_attributes;
     if (it.primary_image) opiItem.primary_image = String(it.primary_image);
     if (it.color_image) opiItem.color_image = String(it.color_image);
-    if (Array.isArray(it.images360)) opiItem.images360 = it.images360;
-    if (Array.isArray(it.pdf_list)) opiItem.pdf_list = it.pdf_list;
     if (it.type_id != null && Number(it.type_id) > 0) opiItem.type_id = Number(it.type_id);
     if (it.description_category_id != null && Number(it.description_category_id) > 0)
       opiItem.description_category_id = Number(it.description_category_id);
@@ -110,6 +105,12 @@ export function toOpiItem(it) {
     if (it.barcode) opiItem.barcode = String(it.barcode);
     if (it.video_url) opiItem.video_url = String(it.video_url);
     if (it.video_cover) opiItem.video_cover = String(it.video_cover);
+    // 末尾按约定顺序追加:images → images360 → pdf_list → attributes → complex_attributes
+    opiItem.images = Array.isArray(it.images) ? it.images : [];
+    if (Array.isArray(it.images360)) opiItem.images360 = it.images360;
+    if (Array.isArray(it.pdf_list)) opiItem.pdf_list = it.pdf_list;
+    opiItem.attributes = it.attributes || [];
+    if (it.complex_attributes != null) opiItem.complex_attributes = it.complex_attributes;
     return opiItem;
   }
 
@@ -155,8 +156,6 @@ export function toOpiItem(it) {
     old_price: it.old_price ? String(it.old_price) : String(it.price || '0'),
     currency_code: it.currency_code || 'RUB',
     vat: it.vat || '0',
-    images,
-    attributes,
     weight: Number(it.weight) > 0 ? Math.round(Number(it.weight)) : 100,
     weight_unit: it.weight_unit || 'g',
     depth: Number(it.depth) > 0 ? Math.round(Number(it.depth)) : 100,
@@ -169,6 +168,10 @@ export function toOpiItem(it) {
 
   const barcode = sv?._searchMeta?.barcodes?.[0] || it.barcode || '';
   if (barcode) opiItem.barcode = String(barcode);
+
+  // 末尾按约定顺序追加:images → images360 → pdf_list → attributes → complex_attributes
+  opiItem.images = images;
+  opiItem.attributes = attributes;
 
   return opiItem;
 }
