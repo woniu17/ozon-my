@@ -141,6 +141,155 @@ router.post('/ozon/collect-box/batch', storeGuard, (req, res, next) => {
   }
 });
 
+// POST /ozon/collect-box/v2 —— 全数据源采集推送(字段级来源标记)
+// body: { anchorSku, sourcePageUrl, variants[], rawBySource, synthesizedItems, collectedAt }
+router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
+  try {
+    const body = req.body || {};
+    if (!body.anchorSku) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'anchorSku 必填'));
+    }
+    if (!Array.isArray(body.variants) || body.variants.length === 0) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'variants 必填且非空'));
+    }
+
+    // 大体积保护:raw_by_source 超 5MB 只存 metadata,避免 SQLite 单行过大
+    let rawBySourceJson;
+    const rawStr = JSON.stringify(body.rawBySource || {});
+    if (rawStr.length > 5 * 1024 * 1024) {
+      const meta = {
+        _truncated: true,
+        _originalSize: rawStr.length,
+        _reason: 'raw_by_source 超 5MB,只存 metadata',
+        sources: Object.keys(body.rawBySource || {}),
+      };
+      rawBySourceJson = JSON.stringify(meta);
+    } else {
+      rawBySourceJson = rawStr;
+    }
+
+    const info = db
+      .prepare(
+        `INSERT INTO collect_box_v2
+          (store_id, anchor_sku, source_page_url, variant_count,
+           variants_json, raw_by_source_json, synthesized_items_json, collected_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        req.storeId,
+        String(body.anchorSku),
+        String(body.sourcePageUrl || ''),
+        body.variants.length,
+        JSON.stringify(body.variants),
+        rawBySourceJson,
+        JSON.stringify(body.synthesizedItems || []),
+        Number(body.collectedAt) || Date.now()
+      );
+
+    res.json({
+      id: info.lastInsertRowid,
+      anchorSku: body.anchorSku,
+      variantCount: body.variants.length,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /sources/:sourceId/collect —— 多源统一采集(单条 upsert)
+// 插件 pushSourceCollect 调用,body: { raw, storeId?, resetDraft? }
+// raw 是平台原始采集 payload(含 sku 字段),按 store_id + sku upsert 到 collect_box。
+// 返回 { id, action: 'created'|'updated', source } — 上层(content script)用 id 跳转采集箱。
+router.post('/sources/:sourceId/collect', storeGuard, (req, res, next) => {
+  try {
+    const sourceId = req.params.sourceId || 'ozon';
+    const raw = req.body?.raw;
+    if (!raw) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'raw 必填'));
+    const sku = String(raw.sku || raw.id || '');
+    if (!sku) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'raw.sku 必填'));
+
+    const product = { ...raw, sourceId };
+    const existing = db
+      .prepare(
+        `SELECT id FROM collect_box WHERE store_id=? AND json_extract(product, '$.sku')=?`
+      )
+      .get(req.storeId, sku);
+
+    let id;
+    let action;
+    if (existing) {
+      db.prepare(`UPDATE collect_box SET product=?, updated_at=datetime('now') WHERE id=?`).run(
+        JSON.stringify(product),
+        existing.id
+      );
+      id = existing.id;
+      action = 'updated';
+    } else {
+      const info = db
+        .prepare(`INSERT INTO collect_box (store_id, product, source) VALUES (?, ?, ?)`)
+        .run(req.storeId, JSON.stringify(product), sourceId);
+      id = info.lastInsertRowid;
+      action = 'created';
+    }
+    res.json({ id, action, source: sourceId });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /sources/:sourceId/collect/batch —— 多源统一采集(批量 upsert)
+// 插件 pushSourceCollectBatch 调用,body: { items: [{ raw }] }
+// 返回 { results: [{ index, id, action }], errors: [{ index, reason }] }
+router.post('/sources/:sourceId/collect/batch', storeGuard, (req, res, next) => {
+  try {
+    const sourceId = req.params.sourceId || 'ozon';
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const results = [];
+    const errors = [];
+
+    db.exec('BEGIN');
+    try {
+      items.forEach((it, idx) => {
+        const raw = it?.raw || it;
+        if (!raw) {
+          errors.push({ index: idx, reason: 'raw 必填' });
+          return;
+        }
+        const sku = String(raw.sku || raw.id || '');
+        if (!sku) {
+          errors.push({ index: idx, reason: 'raw.sku 必填' });
+          return;
+        }
+        const product = { ...raw, sourceId };
+        const existing = db
+          .prepare(
+            `SELECT id FROM collect_box WHERE store_id=? AND json_extract(product, '$.sku')=?`
+          )
+          .get(req.storeId, sku);
+        if (existing) {
+          db.prepare(`UPDATE collect_box SET product=?, updated_at=datetime('now') WHERE id=?`).run(
+            JSON.stringify(product),
+            existing.id
+          );
+          results.push({ index: idx, id: existing.id, action: 'updated' });
+        } else {
+          const info = db
+            .prepare(`INSERT INTO collect_box (store_id, product, source) VALUES (?, ?, ?)`)
+            .run(req.storeId, JSON.stringify(product), sourceId);
+          results.push({ index: idx, id: info.lastInsertRowid, action: 'created' });
+        }
+      });
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+    res.json({ results, errors });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // POST /ozon/favorites
 router.post('/ozon/favorites', storeGuard, (req, res, next) => {
   try {

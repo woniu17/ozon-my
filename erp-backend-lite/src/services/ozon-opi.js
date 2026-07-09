@@ -62,118 +62,115 @@ async function call(store, path, body, { method = 'POST', timeoutMs = DEFAULT_TI
 //   - 真正的 description_category_id 从 sv.categories[] 最深一级 id 取
 export function productImport(store, items) {
   return call(store, '/v3/product/import', {
-    items: items.map((it) => {
-      const sv = it._sourceVariant || null;
-      // 判断是否为 transformItemForPortal 已转换好的 OPI v3 格式:
-      // 已转换的 item 含 complex_attributes 字段(即使为空数组)和 primary_image 字段
-      const isPreTransformed =
-        it.complex_attributes !== undefined ||
-        it.primary_image !== undefined ||
-        it.new_description_category_id !== undefined;
-
-      // 已转换好的 OPI v3 格式(来自 transformItemForPortal):直接透传
-      if (isPreTransformed) {
-        const opiItem = {
-          name: String(it.name || ''),
-          offer_id: String(it.offer_id || ''),
-          price: it.price ? String(it.price) : '0',
-          old_price: it.old_price ? String(it.old_price) : String(it.price || '0'),
-          currency_code: it.currency_code || 'RUB',
-          vat: it.vat || '0',
-          images: Array.isArray(it.images) ? it.images : [],
-          attributes: it.attributes || [],
-          weight: Number(it.weight) > 0 ? Math.round(Number(it.weight)) : 100,
-          weight_unit: it.weight_unit || 'g',
-          depth: Number(it.depth) > 0 ? Math.round(Number(it.depth)) : 100,
-          width: Number(it.width) > 0 ? Math.round(Number(it.width)) : 100,
-          height: Number(it.height) > 0 ? Math.round(Number(it.height)) : 100,
-          dimension_unit: it.dimension_unit || 'mm',
-        };
-        if (it.complex_attributes != null) opiItem.complex_attributes = it.complex_attributes;
-        if (it.primary_image) opiItem.primary_image = String(it.primary_image);
-        if (it.color_image) opiItem.color_image = String(it.color_image);
-        if (Array.isArray(it.images360)) opiItem.images360 = it.images360;
-        if (Array.isArray(it.pdf_list)) opiItem.pdf_list = it.pdf_list;
-        if (it.type_id != null && Number(it.type_id) > 0) opiItem.type_id = Number(it.type_id);
-        if (it.description_category_id != null && Number(it.description_category_id) > 0)
-          opiItem.description_category_id = Number(it.description_category_id);
-        if (it.new_description_category_id != null)
-          opiItem.new_description_category_id = Number(it.new_description_category_id) || 0;
-        if (it.barcode) opiItem.barcode = String(it.barcode);
-        if (it.video_url) opiItem.video_url = String(it.video_url);
-        if (it.video_cover) opiItem.video_cover = String(it.video_cover);
-        return opiItem;
-      }
-
-      // 兜底:原 message.items 格式(未经过 transformItemForPortal)—— 保留旧逻辑兼容
-      // images: [{file_name, default}] → ["url1", ...]
-      const images = Array.isArray(it.images)
-        ? it.images.map((img) => (typeof img === 'string' ? img : img?.file_name || '')).filter(Boolean)
-        : [];
-
-      // attributes: sv {key, value/collection} → OPI {complex_id, id, values:[{value}]}
-      const attributes = [];
-      const svAttrs = sv?.attributes || it.attributes || [];
-      if (Array.isArray(svAttrs)) {
-        for (const a of svAttrs) {
-          const key = String(a.key || a.attribute_id || a.id || '');
-          if (!key) continue;
-          const vals = Array.isArray(a.collection)
-            ? a.collection.filter((v) => v != null && v !== '').map((v) => String(v))
-            : a.value != null && a.value !== ''
-              ? [String(a.value)]
-              : [];
-          if (vals.length === 0) continue;
-          attributes.push({
-            complex_id: Number(a.complex_id) || 0,
-            id: Number(key),
-            values: vals.map((v) => ({ value: v })),
-          });
-        }
-      }
-
-      // 描述(4191):OPI v3 无顶层 description,必须作为 attribute 传递
-      const descText = String(it.scraped_description || it.description || '').trim();
-      if (descText && !attributes.some((a) => Number(a.id) === 4191)) {
-        attributes.push({ complex_id: 0, id: 4191, values: [{ value: descText }] });
-      }
-
-      // type_id + description_category_id
-      const typeId = Number(sv?.description_category_id) || 0;
-      const cats = Array.isArray(sv?.categories) ? sv.categories : [];
-      const deepestCat = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
-      const descriptionCategoryId = Number(deepestCat?.id) || 0;
-
-      const weight = Number(it.weight) > 0 ? Math.round(Number(it.weight)) : 100;
-      const depth = Number(it.depth) > 0 ? Math.round(Number(it.depth)) : 100;
-      const width = Number(it.width) > 0 ? Math.round(Number(it.width)) : 100;
-      const height = Number(it.height) > 0 ? Math.round(Number(it.height)) : 100;
-
-      const opiItem = {
-        name: String(it.name || ''),
-        offer_id: String(it.offer_id || ''),
-        price: it.price ? String(it.price) : '0',
-        old_price: it.old_price ? String(it.old_price) : String(it.price || '0'),
-        currency_code: it.currency_code || 'RUB',
-        vat: it.vat || '0',
-        images,
-        attributes,
-        weight,
-        weight_unit: it.weight_unit || 'g',
-        depth,
-        width,
-        height,
-        dimension_unit: it.dimension_unit || 'mm',
-      };
-      if (typeId > 0) opiItem.type_id = typeId;
-      if (descriptionCategoryId > 0) opiItem.description_category_id = descriptionCategoryId;
-
-      const barcode = sv?._searchMeta?.barcodes?.[0] || it.barcode || '';
-      if (barcode) opiItem.barcode = String(barcode);
-
-      return opiItem;
-    }),
+    items: items.map(toOpiItem),
   });
+}
+
+/**
+ * toOpiItem: 把单个 item 转换为 OPI v3 schema 格式(不发送)
+ * 从 productImport 抽取,供预览接口(preview-opi)复用
+ * 支持两种输入:
+ *   1) 已经 transformItemForPortal 转换好的(isPreTransformed),直接透传
+ *   2) 原始 message.items 格式(未转换),做兜底转换
+ */
+export function toOpiItem(it) {
+  const sv = it._sourceVariant || null;
+  const isPreTransformed =
+    it.complex_attributes !== undefined ||
+    it.primary_image !== undefined ||
+    it.new_description_category_id !== undefined;
+
+  if (isPreTransformed) {
+    const opiItem = {
+      name: String(it.name || ''),
+      offer_id: String(it.offer_id || ''),
+      price: it.price ? String(it.price) : '0',
+      old_price: it.old_price ? String(it.old_price) : String(it.price || '0'),
+      currency_code: it.currency_code || 'RUB',
+      vat: it.vat || '0',
+      images: Array.isArray(it.images) ? it.images : [],
+      attributes: it.attributes || [],
+      weight: Number(it.weight) > 0 ? Math.round(Number(it.weight)) : 100,
+      weight_unit: it.weight_unit || 'g',
+      depth: Number(it.depth) > 0 ? Math.round(Number(it.depth)) : 100,
+      width: Number(it.width) > 0 ? Math.round(Number(it.width)) : 100,
+      height: Number(it.height) > 0 ? Math.round(Number(it.height)) : 100,
+      dimension_unit: it.dimension_unit || 'mm',
+    };
+    if (it.complex_attributes != null) opiItem.complex_attributes = it.complex_attributes;
+    if (it.primary_image) opiItem.primary_image = String(it.primary_image);
+    if (it.color_image) opiItem.color_image = String(it.color_image);
+    if (Array.isArray(it.images360)) opiItem.images360 = it.images360;
+    if (Array.isArray(it.pdf_list)) opiItem.pdf_list = it.pdf_list;
+    if (it.type_id != null && Number(it.type_id) > 0) opiItem.type_id = Number(it.type_id);
+    if (it.description_category_id != null && Number(it.description_category_id) > 0)
+      opiItem.description_category_id = Number(it.description_category_id);
+    if (it.new_description_category_id != null)
+      opiItem.new_description_category_id = Number(it.new_description_category_id) || 0;
+    if (it.barcode) opiItem.barcode = String(it.barcode);
+    if (it.video_url) opiItem.video_url = String(it.video_url);
+    if (it.video_cover) opiItem.video_cover = String(it.video_cover);
+    return opiItem;
+  }
+
+  // 兜底:原 message.items 格式(未经过 transformItemForPortal)
+  const images = Array.isArray(it.images)
+    ? it.images.map((img) => (typeof img === 'string' ? img : img?.file_name || '')).filter(Boolean)
+    : [];
+
+  const attributes = [];
+  const svAttrs = sv?.attributes || it.attributes || [];
+  if (Array.isArray(svAttrs)) {
+    for (const a of svAttrs) {
+      const key = String(a.key || a.attribute_id || a.id || '');
+      if (!key) continue;
+      const vals = Array.isArray(a.collection)
+        ? a.collection.filter((v) => v != null && v !== '').map((v) => String(v))
+        : a.value != null && a.value !== ''
+          ? [String(a.value)]
+          : [];
+      if (vals.length === 0) continue;
+      attributes.push({
+        complex_id: Number(a.complex_id) || 0,
+        id: Number(key),
+        values: vals.map((v) => ({ value: v })),
+      });
+    }
+  }
+
+  const descText = String(it.scraped_description || it.description || '').trim();
+  if (descText && !attributes.some((a) => Number(a.id) === 4191)) {
+    attributes.push({ complex_id: 0, id: 4191, values: [{ value: descText }] });
+  }
+
+  const typeId = Number(sv?.description_category_id) || 0;
+  const cats = Array.isArray(sv?.categories) ? sv.categories : [];
+  const deepestCat = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
+  const descriptionCategoryId = Number(deepestCat?.id) || 0;
+
+  const opiItem = {
+    name: String(it.name || ''),
+    offer_id: String(it.offer_id || ''),
+    price: it.price ? String(it.price) : '0',
+    old_price: it.old_price ? String(it.old_price) : String(it.price || '0'),
+    currency_code: it.currency_code || 'RUB',
+    vat: it.vat || '0',
+    images,
+    attributes,
+    weight: Number(it.weight) > 0 ? Math.round(Number(it.weight)) : 100,
+    weight_unit: it.weight_unit || 'g',
+    depth: Number(it.depth) > 0 ? Math.round(Number(it.depth)) : 100,
+    width: Number(it.width) > 0 ? Math.round(Number(it.width)) : 100,
+    height: Number(it.height) > 0 ? Math.round(Number(it.height)) : 100,
+    dimension_unit: it.dimension_unit || 'mm',
+  };
+  if (typeId > 0) opiItem.type_id = typeId;
+  if (descriptionCategoryId > 0) opiItem.description_category_id = descriptionCategoryId;
+
+  const barcode = sv?._searchMeta?.barcodes?.[0] || it.barcode || '';
+  if (barcode) opiItem.barcode = String(barcode);
+
+  return opiItem;
 }
 
 // /v1/product/import/info —— 查询任务进度

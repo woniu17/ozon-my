@@ -5,3 +5,6 @@ set_secret*
 tempdata
 .env
 logs
+
+# 前端构建产物(Vue 源码在 erp-backend-lite/web/,构建输出到 src/public/)
+erp-backend-lite/src/public/

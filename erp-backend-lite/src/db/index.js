@@ -33,6 +33,30 @@ function ensureMigrations() {
     db.exec(`ALTER TABLE product_data_cache ADD COLUMN store_id TEXT`);
     console.log('[db] migration: added column product_data_cache.store_id');
   }
+  // listing_templates 内置默认模板(is_builtin=1,不可删不可改)
+  const builtinCount = db.prepare(`SELECT COUNT(*) as n FROM listing_templates WHERE is_builtin = 1`).get().n;
+  if (builtinCount === 0) {
+    const defaultConfig = JSON.stringify({
+      brand: 'no_brand',
+      imageOrder: 'keep',
+      currency: 'CNY',
+      mergeEnabled: false,
+      uploadMode: 'api',
+      applyWatermark: false,
+      watermarkTemplateId: '',
+      applyPoster: false,
+      posterPrimaryOnly: false,
+      applyAiRewrite: false,
+      defaultStock: 10,
+      salePriceStrategy: { type: 'ratio', value: 1 },
+      minPriceStrategy: null,
+      oldPriceStrategy: { type: 'ratio', value: 2 },
+    });
+    db.prepare(
+      `INSERT INTO listing_templates (name, config_json, is_builtin, is_default) VALUES (?, ?, 1, 1)`
+    ).run('默认模板', defaultConfig);
+    console.log('[db] seed: inserted builtin default listing template');
+  }
 }
 
 // 直接运行时初始化(node src/db/index.js)

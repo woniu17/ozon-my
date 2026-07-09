@@ -1,0 +1,47 @@
+import { createRouter, createWebHashHistory } from 'vue-router';
+import Login from '../views/Login.vue';
+import Dashboard from '../views/Dashboard.vue';
+import Stores from '../views/Stores.vue';
+import Listings from '../views/Listings.vue';
+import CollectBox from '../views/CollectBox.vue';
+import CollectBoxV2 from '../views/CollectBoxV2.vue';
+import Products from '../views/Products.vue';
+import Batch from '../views/Batch.vue';
+import Audit from '../views/Audit.vue';
+import Config from '../views/Config.vue';
+import ListingTemplates from '../views/ListingTemplates.vue';
+import { useAuthStore } from '../stores/auth.js';
+
+// 骨架路由:真实页面组件与路由守卫在后续 Task 实现
+const router = createRouter({
+  // 后端托管静态文件,hash 路由更稳
+  history: createWebHashHistory(),
+  routes: [
+    { path: '/', redirect: '/admin' },
+    { path: '/login', component: Login, meta: { public: true } },
+    { path: '/admin', component: Dashboard },
+    { path: '/stores', name: 'stores', component: Stores },
+    { path: '/listings', name: 'listings', component: Listings },
+    { path: '/collect-box', name: 'collect-box', component: CollectBox },
+    { path: '/collect-box-v2', name: 'collect-box-v2', component: CollectBoxV2 },
+    { path: '/products', name: 'products', component: Products },
+    { path: '/batch', name: 'batch', component: Batch },
+    { path: '/audit', name: 'audit', component: Audit },
+    { path: '/config', name: 'config', component: Config },
+    { path: '/listing-templates', name: 'listing-templates', component: ListingTemplates },
+  ],
+});
+
+// 全局前置守卫:public 路由(如 /login)已登录则跳 /admin;其余路由未登录则跳 /login
+router.beforeEach((to, from, next) => {
+  const auth = useAuthStore();
+  if (to.meta.public) {
+    if (auth.isLoggedIn) next('/admin');
+    else next();
+  } else {
+    if (auth.isLoggedIn) next();
+    else next('/login');
+  }
+});
+
+export default router;

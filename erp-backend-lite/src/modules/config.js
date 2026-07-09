@@ -206,4 +206,165 @@ router.delete('/watermark-templates/:id', (req, res, next) => {
   }
 });
 
+// ── 上架模板(listing_templates)── 跟卖面板人工输入值的预设方案 ──
+
+// GET /admin/api/listing-templates —— 列表
+router.get('/admin/api/listing-templates', (req, res, next) => {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT id, name, config_json, is_builtin, is_default, created_at, updated_at
+         FROM listing_templates ORDER BY is_builtin DESC, is_default DESC, updated_at DESC`
+      )
+      .all();
+    res.json(
+      ok(
+        rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          config: JSON.parse(r.config_json),
+          isBuiltin: !!r.is_builtin,
+          isDefault: !!r.is_default,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        }))
+      )
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /admin/api/listing-templates/:id —— 详情
+router.get('/admin/api/listing-templates/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'id 无效'));
+    const r = db
+      .prepare(
+        `SELECT id, name, config_json, is_builtin, is_default, created_at, updated_at
+         FROM listing_templates WHERE id=?`
+      )
+      .get(id);
+    if (!r) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '模板不存在: ' + id));
+    res.json(
+      ok({
+        id: r.id,
+        name: r.name,
+        config: JSON.parse(r.config_json),
+        isBuiltin: !!r.is_builtin,
+        isDefault: !!r.is_default,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /admin/api/listing-templates —— 创建
+router.post('/admin/api/listing-templates', (req, res, next) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const config = req.body?.config || {};
+    if (!name) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'name 必填'));
+    const configJson = JSON.stringify(config);
+    const isDefault = req.body?.isDefault ? 1 : 0;
+    // 设为默认:先取消其他默认
+    if (isDefault) {
+      db.prepare(`UPDATE listing_templates SET is_default=0`).run();
+    }
+    const info = db
+      .prepare(`INSERT INTO listing_templates (name, config_json, is_default) VALUES (?, ?, ?)`)
+      .run(name, configJson, isDefault);
+    res.json(ok({ id: info.lastInsertRowid, name, config, isBuiltin: false, isDefault: !!isDefault }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// PUT /admin/api/listing-templates/:id —— 更新
+// 内置模板:禁止改 name/config,但允许切换 is_default(否则被取消默认后无法恢复)
+router.put('/admin/api/listing-templates/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'id 无效'));
+    const existing = db.prepare(`SELECT is_builtin FROM listing_templates WHERE id=?`).get(id);
+    if (!existing) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '模板不存在: ' + id));
+    const isBuiltin = !!existing.is_builtin;
+    const name = String(req.body?.name || '').trim();
+    const config = req.body?.config;
+    const setDefault = req.body?.isDefault;
+    // 内置模板:仅允许切换默认,不允许改 name/config
+    if (isBuiltin && (name || config != null)) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, '内置模板不可编辑(仅可切换默认)'));
+    }
+    // 非内置模板:更新 name/config
+    if (!isBuiltin && config != null) {
+      if (name) {
+        db.prepare(`UPDATE listing_templates SET name=?, config_json=?, updated_at=datetime('now') WHERE id=?`).run(
+          name,
+          JSON.stringify(config),
+          id
+        );
+      } else {
+        db.prepare(`UPDATE listing_templates SET config_json=?, updated_at=datetime('now') WHERE id=?`).run(
+          JSON.stringify(config),
+          id
+        );
+      }
+    }
+    // 切换默认:取消其他默认,再设当前(所有模板均可)
+    if (setDefault) {
+      db.prepare(`UPDATE listing_templates SET is_default=0 WHERE id != ?`).run(id);
+      db.prepare(`UPDATE listing_templates SET is_default=1 WHERE id=?`).run(id);
+    }
+    res.json(ok({ updated: true, id }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// DELETE /admin/api/listing-templates/:id —— 删除(内置模板不可删)
+router.delete('/admin/api/listing-templates/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'id 无效'));
+    const existing = db.prepare(`SELECT is_builtin FROM listing_templates WHERE id=?`).get(id);
+    if (!existing) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '模板不存在: ' + id));
+    if (existing.is_builtin) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, '内置模板不可删除'));
+    }
+    db.prepare(`DELETE FROM listing_templates WHERE id=?`).run(id);
+    res.json(ok({ deleted: true, id }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 预览接口:把 items 转换为 OPI v3 schema(不实际发送到 Ozon) ──
+import { transformItemForPortal } from '../services/prepare-bundle.js';
+import { toOpiItem } from '../services/ozon-opi.js';
+
+// POST /admin/api/preview-opi —— 预览 OPI v3 请求体
+// body: { items: [...], applyAiRewrite?, applyWatermark? } (与插件 followSell message 相同的 items)
+// 返回: { items: [opiItem, ...] } (OPI v3 schema,不发送)
+router.post('/admin/api/preview-opi', (req, res, next) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (items.length === 0) {
+      return res.json(ok({ items: [], message: '无 items' }));
+    }
+    // 转换: item → transformItemForPortal → toOpiItem
+    const opiItems = items.map((it) => {
+      const portalItem = transformItemForPortal(it);
+      return toOpiItem(portalItem);
+    });
+    res.json(ok({ items: opiItems }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 export default router;

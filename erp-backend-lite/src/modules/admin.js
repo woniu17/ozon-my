@@ -511,6 +511,184 @@ router.patch('/admin/api/collect-box/:id', (req, res, next) => {
   }
 });
 
+// ── 采集箱 v2(全数据源采集,字段级来源标记) ───────────────
+
+// GET /admin/api/collect-box-v2 —— 全源采集列表(筛选 + 分页,返摘要+主图+名称+价格)
+// query: ?currentPage=1&pageSize=20&storeId=&keyword=&hasVideo=&minVariants=
+// 仅展示 collect_box_v2(全源新表);老表 collect_box 在「采集箱」tab 单独展示。
+// 摘要从 variants_json 第一变体提取主图/名称/价格,避免列表加载全量 raw_by_source。
+router.get('/admin/api/collect-box-v2', (req, res, next) => {
+  try {
+    const current = Math.max(1, Number(req.query.currentPage) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
+    const offset = (current - 1) * pageSize;
+
+    const where = [];
+    const params = [];
+    if (req.query.storeId) {
+      where.push('store_id = ?');
+      params.push(String(req.query.storeId));
+    }
+    if (req.query.keyword) {
+      where.push('(anchor_sku LIKE ? OR variants_json LIKE ?)');
+      params.push('%' + String(req.query.keyword) + '%', '%' + String(req.query.keyword) + '%');
+    }
+    if (req.query.minVariants) {
+      const min = Number(req.query.minVariants);
+      if (Number.isFinite(min) && min > 0) {
+        where.push('variant_count >= ?');
+        params.push(min);
+      }
+    }
+    // hasVideo=1:raw_by_source_json 含 transferredVideoUrl(SQLite JSON 查询弱,用 LIKE 兜底)
+    if (req.query.hasVideo === '1' || req.query.hasVideo === 'true') {
+      where.push("raw_by_source_json LIKE '%transferredVideoUrl%'");
+    }
+    const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
+
+    const rows = db
+      .prepare(
+        `SELECT id, store_id, anchor_sku, source_page_url,
+                variant_count, collected_at, created_at, variants_json
+         FROM collect_box_v2 ${whereSql}
+         ORDER BY created_at DESC
+         LIMIT ? OFFSET ?`
+      )
+      .all(...params, pageSize, offset);
+
+    const total = db
+      .prepare(`SELECT COUNT(*) as n FROM collect_box_v2 ${whereSql}`)
+      .get(...params).n;
+
+    res.json(
+      ok({
+        items: rows.map((r) => {
+          // 从 variants_json 第一变体提取主图/名称/价格(SourcedField 结构: {value, source,...})
+          const variants = safeParseJson(r.variants_json) || [];
+          const v0 = variants[0] || {};
+          const imgVal = v0.images?.value;
+          const primaryImage = Array.isArray(imgVal) ? imgVal[0] || '' : '';
+          const name = v0.name?.value || '';
+          const price = v0.price?.value ?? '';
+          const oldPrice = v0.oldPrice?.value ?? '';
+          return {
+            id: r.id,
+            sourceTable: 'collect_box_v2',
+            storeId: r.store_id,
+            anchorSku: r.anchor_sku,
+            sourcePageUrl: r.source_page_url,
+            variantCount: r.variant_count,
+            collectedAt: r.collected_at,
+            createdAt: r.created_at,
+            primaryImage,
+            name,
+            price,
+            oldPrice,
+          };
+        }),
+        total,
+        current,
+        pageSize,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /admin/api/collect-box-v2/:id —— 全源采集详情(返全量 JSON)
+// query: ?sourceTable=collect_box — 老表分流,把 product JSON 映射成 v2 兼容结构
+router.get('/admin/api/collect-box-v2/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'id 无效'));
+    const sourceTable = req.query.sourceTable === 'collect_box' ? 'collect_box' : 'collect_box_v2';
+
+    if (sourceTable === 'collect_box') {
+      // 老表:product JSON 映射成 v2 兼容结构(单变体,字段 source 统一标 'legacy')
+      const row = db.prepare(`SELECT * FROM collect_box WHERE id=?`).get(id);
+      if (!row) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '记录不存在: ' + id));
+      const p = safeParseJson(row.product) || {};
+      const now = Date.now();
+      const sf = (value) => ({ value, source: 'legacy', collectedAt: now });
+      const variant = {
+        sequence: 1,
+        sku: sf(p.sku),
+        title: sf(p.name),
+        price: sf(p.price),
+        currency: sf(p.priceCurrency),
+        image: sf(p.image),
+        images: sf(Array.isArray(p.images) ? p.images : []),
+        videoUrl: sf(p.videoUrl || null),
+        videoCover: sf(p.videoCover || null),
+        url: sf(p.url),
+        sellerName: sf(p.sellerName || null),
+        sellerLink: sf(p.sellerLink || null),
+      };
+      res.json(
+        ok({
+          id: row.id,
+          sourceTable: 'collect_box',
+          storeId: row.store_id,
+          anchorSku: String(p.sku || ''),
+          sourcePageUrl: p.url || '',
+          variantCount: 1,
+          variants: [variant],
+          rawBySource: {
+            legacy: { product: p, note: '老表采集记录,无字段级 source 标记' },
+          },
+          synthesizedItems: [],
+          collectedAt: new Date(row.created_at + 'Z').getTime() || null,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })
+      );
+      return;
+    }
+
+    // v2 新表:原样返回
+    const row = db.prepare(`SELECT * FROM collect_box_v2 WHERE id=?`).get(id);
+    if (!row) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '记录不存在: ' + id));
+
+    res.json(
+      ok({
+        id: row.id,
+        sourceTable: 'collect_box_v2',
+        storeId: row.store_id,
+        anchorSku: row.anchor_sku,
+        sourcePageUrl: row.source_page_url,
+        variantCount: row.variant_count,
+        variants: safeParseJson(row.variants_json) || [],
+        rawBySource: safeParseJson(row.raw_by_source_json) || {},
+        synthesizedItems: safeParseJson(row.synthesized_items_json) || [],
+        collectedAt: row.collected_at,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// DELETE /admin/api/collect-box-v2/:id —— 删除全源采集记录
+// query: ?sourceTable=collect_box — 删老表
+router.delete('/admin/api/collect-box-v2/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'id 无效'));
+    const sourceTable = req.query.sourceTable === 'collect_box' ? 'collect_box' : 'collect_box_v2';
+    const table = sourceTable === 'collect_box' ? 'collect_box' : 'collect_box_v2';
+    const info = db.prepare(`DELETE FROM ${table} WHERE id=?`).run(id);
+    if (info.changes === 0) {
+      return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '记录不存在: ' + id));
+    }
+    res.json(ok({ deleted: true, id }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ── 商品列表(查 product_data_cache,跨店铺) ───────────────
 
 // GET /admin/api/products —— 商品数据缓存列表(支持 keyword 模糊搜 sku / data)

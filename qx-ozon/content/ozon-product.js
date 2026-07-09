@@ -1670,7 +1670,266 @@
       console.error('[ozon-helper] collectAll push failed:', e?.message || e);
       failed = 1;
     }
+
+    // ── 全源采集 v2 推送(字段级 source 标记 + rawBySource + synthesizedItems)──
+    // 与上面 pushSourceCollect 并存:旧通道喂采集箱编辑页,新通道喂 admin 全源展示页。
+    // 失败不阻塞返回值,只打 warn(旧通道成功就算采集成功)。
+    try {
+      setBtn('全源推送中…');
+      await pushCollectBoxV2FromCollected({
+        variants,
+        rows,
+        sourceMap,
+        anchorProduct,
+        anchorSku,
+        anchorRow,
+        collectAllRichContent,
+        collectVideoMedia,
+        variantData,
+        setBtn,
+      });
+    } catch (e) {
+      console.warn('[ozon-helper] collectAll v2 push failed:', e?.message || e);
+    }
+
     return { ok: failed === 0, multiVariant: true, total: variantRows.length, created, updated, failed, dedupeHit };
+  }
+
+  // 把已采集的全量数据组装成带字段级 source 标记的结构,推送 collect_box_v2。
+  // 入参 ctx 含 collectAllVariants 已采集的:variants(aspect)/rows(变体行)/sourceMap(sv)/
+  // anchorProduct(DOM)/collectAllRichContent(富内容)/collectVideoMedia(视频)/variantData(母体 sv)。
+  async function pushCollectBoxV2FromCollected(ctx) {
+    const {
+      variants,
+      rows,
+      sourceMap,
+      anchorProduct,
+      anchorSku,
+      anchorRow,
+      collectAllRichContent,
+      collectVideoMedia,
+      variantData,
+      setBtn,
+    } = ctx;
+    const now = Date.now();
+    // 字段包装:{ value, source, sourceDetail?, collectedAt }
+    const sf = (value, source, sourceDetail) => ({ value, source, ...(sourceDetail ? { sourceDetail } : {}), collectedAt: now });
+
+    // ── DOM 数据源(PDP 页面元素,listing 级,只采一次)──
+    const domProduct = anchorProduct || null;
+    let domBreadcrumbs = null;
+    let domHashtags = null;
+    let domCharacteristics = null;
+    let domAspects = null;
+    try {
+      domBreadcrumbs = extractBreadcrumbs();
+    } catch {}
+    try {
+      domHashtags = extractKeywords();
+    } catch {}
+    try {
+      domCharacteristics = extractCharacteristics();
+    } catch {}
+    try {
+      domAspects = extractAspectVariants();
+    } catch {}
+    const scrapedDims = parseScrapedDimensionsFromCharacteristics(domCharacteristics || []) || null;
+
+    // ── 每变体 fetchVariantGallery(图册 + 富内容,page-json)──
+    // 单变体也跑:当前页 URL 就是 PDP link,page-json 原始响应对 admin 全源展示有价值。
+    const galleryMap = new Map(); // sku → string[]
+    const richContentMap = new Map(); // sku → string
+    const pageJsonRaw = {}; // sku → { endpoint, url, response, gallery, richContent }
+    if (rows.length > 0) {
+      setBtn?.('抓取变体图册…');
+      const BATCH = 3;
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const batch = rows.slice(i, i + BATCH);
+        await Promise.all(
+          batch.map(async (r) => {
+            if (!r.link) return;
+            try {
+              const g = await fetchVariantGallery(r.link);
+              const imgs = Array.isArray(g.images) ? g.images : [];
+              if (imgs.length) galleryMap.set(r.sku, imgs);
+              if (g.richContent) richContentMap.set(r.sku, g.richContent);
+              pageJsonRaw[r.sku] = {
+                endpoint: 'entrypoint-api',
+                url: r.link,
+                gallery: imgs,
+                richContent: g.richContent || '',
+              };
+            } catch (e) {
+              console.warn('[ozon-helper] v2 gallery err for', r.sku, e?.message || e);
+            }
+          })
+        );
+      }
+    }
+
+    // ── 组装 CollectedVariant[](每变体一条,字段级 source 标记)──
+    const collectedVariants = rows.map((r) => {
+      const sku = String(r.sku);
+      const sv = r.sv || sourceMap.get(sku)?._sourceVariant || null;
+      const svCat = window.jzExtractCatalogFromSv ? window.jzExtractCatalogFromSv(sv) : null;
+      const gallery = galleryMap.get(sku) || [];
+      const richContent = richContentMap.get(sku) || '';
+      const isAnchor = sku === anchorSku;
+      const aspectVariant = variants.find((v) => String(v.sku) === sku) || {};
+
+      // 名称:sv 4180 > DOM title(翻译检测)
+      const svName = svCat?.name || '';
+      const domName = r.name || aspectVariant.title || '';
+      const nameVal = window.jzPreferSourceName ? window.jzPreferSourceName(svName, domName) : domName || svName;
+      const nameSource = svName && window.jzPreferSourceName && /[一-龥]/.test(domName) && !/[一-龥]/.test(svName) ? 'seller-portal' : 'dom';
+
+      // 图片:page-json gallery > sv 4194/4195 > DOM coverImage
+      let imagesVal = gallery;
+      let imagesSource = 'page-json';
+      let imageSource = 'pageState';
+      if (!imagesVal.length && r.images?.length) {
+        imagesVal = r.images;
+        imagesSource = 'seller-portal';
+        imageSource = 'sourceVariant';
+      }
+      if (!imagesVal.length && r.image) {
+        imagesVal = [r.image];
+        imagesSource = 'dom';
+        imageSource = 'coverImage';
+      }
+      if (!imagesVal.length) {
+        imagesVal = [];
+        imagesSource = 'dom';
+        imageSource = 'none';
+      }
+
+      const cv = {
+        sku: sf(sku, 'dom', 'URL 正则 /product/.*-(\\d{5,})'),
+        url: sf(r.link || '', 'dom'),
+        isAnchor,
+        name: sf(nameVal, nameSource, nameSource === 'seller-portal' ? 'sv.attributes[4180]' : 'aria-label/alt/textContent'),
+        brand: sf(svCat?.brand || domProduct?.brand || null, svCat?.brand ? 'seller-portal' : 'dom', svCat?.brand ? 'sv.attributes[85]' : 'extractProductData'),
+        categoryPath: sf(sv?.categories || [], 'seller-portal', 'sv.categories'),
+        descriptionCategoryId: sf(sv?.description_category_id || null, 'seller-portal'),
+        price: sf(aspectVariant.priceRub || aspectVariant.price || 0, aspectVariant.priceRub ? 'ssr-aspects' : 'dom'),
+        priceCurrency: sf(aspectVariant.priceCurrency || 'CNY', 'computed', '_detectCurrencyFromPriceStr'),
+        priceRub: sf(aspectVariant.priceRub || 0, 'computed'),
+        priceCny: sf(aspectVariant.price || 0, 'computed', '_rubToCny'),
+        oldPrice: sf(domProduct?.originalPrice || 0, 'dom'),
+        discount: sf(domProduct?.statistics?.discount || 0, 'computed'),
+        mainImage: sf(svCat?.mainImage || r.image || domProduct?.mainImage || '', svCat?.mainImage ? 'seller-portal' : 'dom', svCat?.mainImage ? 'sv.attributes[4194]' : '<img src>'),
+        images: sf(imagesVal, imagesSource, imagesSource === 'page-json' ? 'fetchVariantGallery widgetStates' : imagesSource === 'seller-portal' ? 'sv.attributes[4195]' : 'coverImage'),
+        imageSource: sf(imageSource, 'computed'),
+        videoUrl: sf(collectVideoMedia?.videoUrl || null, 'video-transcode', 'SW uploadFollowSellVideo'),
+        videoCover: sf(collectVideoMedia?.videoCover || null, 'video-transcode'),
+        weight: sf(svCat?.weightG || null, 'seller-portal', 'sv.attributes[4497]||sv[4383]'),
+        depth: sf(svCat?.depthMm || null, 'seller-portal', 'sv.attributes[9454]'),
+        width: sf(svCat?.widthMm || null, 'seller-portal', 'sv.attributes[9455]'),
+        height: sf(svCat?.heightMm || null, 'seller-portal', 'sv.attributes[9456]'),
+        gtin: sf(svCat?.gtin || null, 'seller-portal', 'sv.attributes[7822]'),
+        richContent: sf(richContent || collectAllRichContent || null, richContent ? 'page-json' : collectAllRichContent ? 'page-json' : 'computed', richContent ? 'fetchVariantGallery' : 'jzCollectPageRichContent'),
+        breadcrumbs: sf(domBreadcrumbs || null, 'dom', 'extractBreadcrumbs'),
+        hashtags: sf(domHashtags || null, 'dom', 'extractKeywords/webHashtags'),
+        scrapedDims: sf(scrapedDims, 'dom', 'extractCharacteristics'),
+        aspectValues: sf(r.aspectValues || aspectVariant.aspectValues || {}, 'ssr-aspects'),
+        sourceVariant: sf(sv || null, 'seller-portal', 'searchVariants picked'),
+        bundleComplexAttrs: sf(sv?._bundleComplexAttrs || null, 'seller-portal', 'sv._bundleComplexAttrs'),
+      };
+
+      // 母体才有的统计 + 卖家信息
+      if (isAnchor && domProduct) {
+        const st = domProduct.statistics || {};
+        cv.statistics = {
+          soldCount: sf(st.sold_count ?? null, 'dom', 'extractProductData.statistics'),
+          soldSum: sf(st.sold_sum ?? null, 'dom'),
+          views: sf(st.views ?? null, 'dom'),
+          convViewToOrder: sf(st.conv_view_to_order ?? null, 'dom'),
+          gmvSum: sf(st.gmv_sum ?? null, 'dom'),
+        };
+        cv.seller = {
+          name: sf(domProduct.seller?.name || null, 'dom'),
+          link: sf(domProduct.seller?.link || null, 'dom'),
+        };
+      }
+      return cv;
+    });
+
+    // ── 组装 synthesizedItems[](合成跟卖请求预览,每字段带 source)──
+    const synthesizedItems = collectedVariants.map((cv) => {
+      const desc = window.JZFollowSellContentCopy?.pickFollowSellDescription
+        ? window.JZFollowSellContentCopy.pickFollowSellDescription({
+            customDescription: '',
+            sourceVariant: variantData,
+            richContent: cv.richContent.value || collectAllRichContent,
+            fallbackName: cv.name.value,
+            max: 4096,
+          })
+        : cv.name.value;
+      return {
+        offer_id: sf(`SKU${cv.sku.value}`, 'computed', 'auto-generated'),
+        name: cv.name,
+        price: sf(Number(cv.price.value || 0).toFixed(2), cv.price.source),
+        old_price: sf(Number(cv.oldPrice.value || cv.price.value * 1.25 || 0).toFixed(2), cv.oldPrice.source),
+        currency_code: sf('CNY', 'computed'),
+        vat: sf('0', 'computed'),
+        images: cv.images,
+        bundleComplexAttrs: cv.bundleComplexAttrs,
+        videoUrl: cv.videoUrl,
+        videoCover: cv.videoCover,
+        scraped_breadcrumbs: cv.breadcrumbs,
+        scraped_description: sf(desc, 'computed', 'pickFollowSellDescription'),
+        _aiHashtags: cv.hashtags.value?.length ? cv.hashtags : sf(null, 'dom'),
+        scraped_sku: cv.sku,
+        scraped_brand: sf('copy', 'computed'),
+        scraped_brand_value: cv.brand,
+        _sourceVariant: cv.sourceVariant,
+        weight: cv.weight,
+        depth: cv.depth,
+        width: cv.width,
+        height: cv.height,
+        scraped_weight: cv.scrapedDims,
+        scraped_depth: cv.scrapedDims,
+        scraped_width: cv.scrapedDims,
+        scraped_height: cv.scrapedDims,
+      };
+    });
+
+    // ── 组装 rawBySource(5 类数据源原始响应)──
+    const sellerPortalRaw = {};
+    for (const [sku, distilled] of sourceMap.entries()) {
+      sellerPortalRaw[sku] = {
+        pickedSv: distilled?._sourceVariant || null,
+        searchResponse: distilled?._searchMeta || null,
+        bundleResponse: distilled?._bundleMeta || null,
+      };
+    }
+    const rawBySource = {
+      dom: {
+        productData: domProduct,
+        breadcrumbs: domBreadcrumbs,
+        hashtags: domHashtags,
+        characteristics: domCharacteristics,
+        aspectVariants: domAspects,
+      },
+      sellerPortal: sellerPortalRaw,
+      pageJson: pageJsonRaw,
+      ssrAspects: { mergedVariants: variants },
+      videoTranscode: {
+        originalMp4Url: collectVideoMedia?.videoUrl || null,
+        transferredVideoUrl: collectVideoMedia?.videoUrl || null,
+        transferredCoverUrl: collectVideoMedia?.videoCover || null,
+      },
+    };
+
+    // ── 推送后端 POST /ozon/collect-box/v2 ──
+    await window.sendMessage('pushCollectBoxV2', {
+      anchorSku: String(anchorSku || anchorRow?.sku || ''),
+      sourcePageUrl: window.location.href,
+      variants: collectedVariants,
+      rawBySource,
+      synthesizedItems,
+      collectedAt: now,
+    });
   }
 
   // 抓当前 PDP gallery 的 .mp4 并经 SW 转存成卖家自有 Ozon 视频(ir.ozone.ru/s3),返回自有 URL。
@@ -1899,6 +2158,55 @@
       raw: collectPayload,
       forceResubmit: collectForceResubmit,
     });
+
+    // ── 全源采集 v2 推送(字段级 source 标记 + rawBySource + synthesizedItems)──
+    // 单 SKU 商品也走 v2 通道,与多变体路径(collectAllVariants L1674)保持一致。
+    // 失败不阻塞返回值,只打 warn(旧通道成功就算采集成功)。
+    try {
+      // pushCollectBoxV2FromCollected 内部用 setBtn?.() 更新按钮文案,本路径无按钮引用,传 noop。
+      const setBtn = () => {};
+      const _anchorSku = String(product.sku || product.productId || '');
+      const _row = {
+        sku: _anchorSku,
+        sv: variantMatch,
+        name: collectName || product.title || '',
+        image: collectMainImage,
+        images: collectImages.length ? collectImages : undefined,
+        link: product.url || window.location.href,
+        aspectValues: undefined,
+      };
+      const _sourceMap = new Map();
+      if (_anchorSku) {
+        _sourceMap.set(_anchorSku, {
+          _sourceVariant: variantMatch || null,
+          _searchMeta: variantResp || null,
+          _bundleMeta: null,
+        });
+      }
+      await pushCollectBoxV2FromCollected({
+        variants: [
+          {
+            sku: _anchorSku,
+            title: collectName || product.title || '',
+            coverImage: collectMainImage,
+            link: product.url || window.location.href,
+            aspectValues: {},
+          },
+        ],
+        rows: [_row],
+        sourceMap: _sourceMap,
+        anchorProduct: product,
+        anchorSku: _anchorSku,
+        anchorRow: _row,
+        collectAllRichContent: collectRichContent,
+        collectVideoMedia: collectVideoMedia,
+        variantData: collectVariantData || variantMatch || {},
+        setBtn,
+      });
+    } catch (e) {
+      console.warn('[ozon-helper] performProductCollect v2 push failed:', e?.message || e);
+    }
+
     return { ok: true, dedupeHit: !!resp?.dedupeHit, lastAt: resp?.lastAt || null };
   }
 
@@ -6386,6 +6694,30 @@
           </div>
         </div>
 
+        <!-- 上架模板选择区 -->
+        <div class="ozon-helper-mv-card" style="margin-bottom:8px;padding:10px 14px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span style="font-weight:600;color:#0f172a;font-size:13px;">上架模板</span>
+            <select data-field="listing-template-select" style="flex:1;min-width:160px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;background:#fff;">
+              <option value="">加载中...</option>
+            </select>
+            <button class="ozon-helper-mv-btn-secondary" data-action="apply-template" style="padding:6px 14px;font-size:12px;">应用</button>
+            <button class="ozon-helper-mv-btn-secondary" data-action="save-template" style="padding:6px 14px;font-size:12px;">存为模板</button>
+          </div>
+        </div>
+
+        <!-- 请求预览折叠区 (OPI v3) -->
+        <div class="ozon-helper-mv-card" style="margin-bottom:8px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+          <div data-action="toggle-preview" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;background:#fff;user-select:none;">
+            <span data-field="preview-arrow" style="display:inline-block;transition:transform .2s;transform:rotate(0deg);font-size:12px;color:#64748b;">▶</span>
+            <span style="font-weight:600;color:#0f172a;font-size:13px;">请求预览 (OPI v3)</span>
+            <span data-field="preview-status" style="color:#94a3b8;font-size:11px;margin-left:auto;">展开查看</span>
+          </div>
+          <div data-field="preview-body" style="display:none;padding:0;border-top:1px solid #e2e8f0;">
+            <pre data-field="preview-content" style="height:400px;overflow:auto;margin:0;padding:10px 14px;font-family:'Courier New',monospace;font-size:12px;line-height:1.5;color:#334155;background:#fafbfc;white-space:pre;tab-size:2;">点击「应用模板」或修改变体输入后自动刷新预览</pre>
+          </div>
+        </div>
+
         <div class="ozon-helper-mv-status" data-field="mv-status" style="display:none;"></div>
 
         <div class="ozon-helper-mv-upload-mode" data-field="upload-mode-row" style="display:none;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 14px;margin-bottom:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
@@ -6979,6 +7311,286 @@
     });
     // initial sync (after stores load asynchronously)
     setTimeout(updateFooterCount, 200);
+
+    // ── 上架模板 + 请求预览 (OPI v3) ──
+    // 模板列表加载到 select
+    const tplSelect = panel.querySelector('[data-field="listing-template-select"]');
+    let _listingTemplates = [];
+    async function loadListingTemplates() {
+      try {
+        const resp = await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ action: 'erpApi', method: 'GET', path: '/admin/api/listing-templates' }, resolve);
+        });
+        // erpApi 代理返回 { ok, data: <后端响应体> },后端响应体本身是 { ok, data: [...] }
+        // 所以真正的数组在 resp.data.data
+        const list = resp?.ok ? resp.data?.data || [] : [];
+        _listingTemplates = list;
+        tplSelect.innerHTML =
+          '<option value="">不使用模板</option>' +
+          list
+            .map(
+              (t) =>
+                `<option value="${t.id}"${t.isDefault ? ' selected' : ''}>${t.name}${t.isBuiltin ? ' (内置)' : ''}</option>`
+            )
+            .join('');
+        // 自动应用默认模板
+        const def = list.find((t) => t.isDefault);
+        if (def) applyListingTemplate(def.config);
+      } catch (e) {
+        tplSelect.innerHTML = '<option value="">加载失败</option>';
+      }
+    }
+    // 应用模板配置到面板
+    function applyListingTemplate(cfg) {
+      if (!cfg) return;
+      if (cfg.brand) {
+        const el = panel.querySelector('[data-field="brand"]');
+        if (el) el.value = cfg.brand;
+      }
+      if (cfg.imageOrder) {
+        const el = panel.querySelector('[data-field="image-order"]');
+        if (el) el.value = cfg.imageOrder;
+      }
+      if (cfg.currency) {
+        const el = panel.querySelector('[data-field="currency"]');
+        if (el) el.value = cfg.currency;
+      }
+      if (cfg.mergeEnabled != null) {
+        const el = panel.querySelector('[data-field="merge-enabled"]');
+        if (el) el.checked = !!cfg.mergeEnabled;
+      }
+      if (cfg.uploadMode) {
+        const el = panel.querySelector(`[name="jz-upload-mode"][value="${cfg.uploadMode}"]`);
+        if (el) el.checked = true;
+      }
+      if (cfg.applyWatermark != null) {
+        const el = panel.querySelector('[data-field="apply-watermark"]');
+        if (el) el.checked = !!cfg.applyWatermark;
+      }
+      if (cfg.applyPoster != null) {
+        const el = panel.querySelector('[data-field="apply-poster"]');
+        if (el) el.checked = !!cfg.applyPoster;
+      }
+      if (cfg.applyAiRewrite != null) {
+        const el = panel.querySelector('[data-field="apply-ai-rewrite"]');
+        if (el) el.checked = !!cfg.applyAiRewrite;
+      }
+      if (cfg.defaultStock != null) {
+        panel.querySelectorAll('.ozon-helper-mv-stock').forEach((inp) => (inp.value = cfg.defaultStock));
+      }
+      // 价格倍率策略
+      if (cfg.salePriceStrategy && cfg.salePriceStrategy.type === 'ratio') {
+        const ratio = cfg.salePriceStrategy.value;
+        panel.querySelectorAll('.ozon-helper-mv-price').forEach((inp) => {
+          const base = Number(inp.dataset.basePrice || inp.value || 0);
+          if (base > 0) inp.value = (base * ratio).toFixed(2);
+        });
+      }
+      if (cfg.oldPriceStrategy && cfg.oldPriceStrategy.type === 'ratio') {
+        const ratio = cfg.oldPriceStrategy.value;
+        panel.querySelectorAll('.ozon-helper-mv-oldprice').forEach((inp) => {
+          const base = Number(inp.dataset.basePrice || 0);
+          const priceEl = inp.closest('tr')?.querySelector('.ozon-helper-mv-price');
+          const price = Number(priceEl?.value || base || 0);
+          if (price > 0) inp.value = (price * ratio).toFixed(2);
+        });
+      }
+      refreshPreviewDebounced();
+    }
+    // 捕获当前面板配置为模板 config 对象
+    function captureCurrentConfig() {
+      const brandEl = panel.querySelector('[data-field="brand"]');
+      const imageOrderEl = panel.querySelector('[data-field="image-order"]');
+      const currencyEl = panel.querySelector('[data-field="currency"]');
+      const mergeEl = panel.querySelector('[data-field="merge-enabled"]');
+      const applyWatermarkEl = panel.querySelector('[data-field="apply-watermark"]');
+      const applyPosterEl = panel.querySelector('[data-field="apply-poster"]');
+      const applyAiRewriteEl = panel.querySelector('[data-field="apply-ai-rewrite"]');
+      const uploadModeEl = panel.querySelector('[name="jz-upload-mode"]:checked');
+      const stockEl = panel.querySelector('.ozon-helper-mv-stock');
+      return {
+        brand: brandEl?.value || 'no_brand',
+        imageOrder: imageOrderEl?.value || 'keep',
+        currency: currencyEl?.value || 'CNY',
+        mergeEnabled: !!mergeEl?.checked,
+        uploadMode: uploadModeEl?.value || 'api',
+        applyWatermark: !!applyWatermarkEl?.checked,
+        watermarkTemplateId: panel.querySelector('[data-field="watermark-template-id"]')?.value || '',
+        applyPoster: !!applyPosterEl?.checked,
+        posterPrimaryOnly: !!panel.querySelector('[data-field="poster-primary-only"]')?.checked,
+        applyAiRewrite: !!applyAiRewriteEl?.checked,
+        defaultStock: Number(stockEl?.value) || 10,
+        salePriceStrategy: { type: 'ratio', value: 1 },
+        minPriceStrategy: null,
+        oldPriceStrategy: { type: 'ratio', value: 2 },
+      };
+    }
+    // 应用按钮
+    panel.querySelector('[data-action="apply-template"]').addEventListener('click', () => {
+      const id = Number(tplSelect.value);
+      const tpl = _listingTemplates.find((t) => t.id === id);
+      if (tpl) applyListingTemplate(tpl.config);
+    });
+    // 存为模板按钮
+    panel.querySelector('[data-action="save-template"]').addEventListener('click', async () => {
+      const name = prompt('请输入模板名称:');
+      if (!name) return;
+      const cfg = captureCurrentConfig();
+      try {
+        const resp = await new Promise((resolve) => {
+          chrome.runtime.sendMessage(
+            { action: 'erpApi', method: 'POST', path: '/admin/api/listing-templates', body: { name, config: cfg } },
+            resolve
+          );
+        });
+        if (resp?.ok) {
+          alert('模板已保存');
+          loadListingTemplates();
+        } else {
+          alert('保存失败: ' + (resp?.error || '未知错误'));
+        }
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      }
+    });
+
+    // ── 请求预览 (OPI v3) ──
+    const previewBody = panel.querySelector('[data-field="preview-body"]');
+    const previewArrow = panel.querySelector('[data-field="preview-arrow"]');
+    const previewStatus = panel.querySelector('[data-field="preview-status"]');
+    const previewContent = panel.querySelector('[data-field="preview-content"]');
+    let _previewOpen = false;
+    let _previewTimer = null;
+
+    // 折叠/展开
+    panel.querySelector('[data-action="toggle-preview"]').addEventListener('click', () => {
+      _previewOpen = !_previewOpen;
+      previewBody.style.display = _previewOpen ? 'block' : 'none';
+      previewArrow.style.transform = _previewOpen ? 'rotate(90deg)' : 'rotate(0deg)';
+      previewStatus.textContent = _previewOpen ? '刷新中...' : '展开查看';
+      if (_previewOpen) refreshPreview();
+    });
+
+    // 从面板 DOM 构造 items(与 handleMultiVariantFollowSell 的 items 构造逻辑对齐)
+    function buildItemsFromPanel() {
+      const brandChoice = panel.querySelector('[data-field="brand"]')?.value || 'no_brand';
+      const currencyCode = panel.querySelector('[data-field="currency"]')?.value || 'CNY';
+      const imageOrder = panel.querySelector('[data-field="image-order"]')?.value || 'keep';
+      const mergeModel = panel.querySelector('[data-field="merge-model"]')?.value || '';
+      const rows = panel.querySelectorAll('tbody[data-field="variant-tbody"] tr');
+      const items = [];
+      rows.forEach((tr) => {
+        const checkEl = tr.querySelector('.ozon-helper-mv-check');
+        if (checkEl && !checkEl.checked) return;
+        const sku = tr.querySelector('.ozon-helper-mv-sku')?.textContent?.trim() || '';
+        const name =
+          tr.querySelector('.ozon-helper-mv-variant-title-text')?.textContent?.trim() ||
+          tr.querySelector('.ozon-helper-mv-variant-name')?.textContent?.trim() ||
+          '';
+        const price = tr.querySelector('.ozon-helper-mv-price')?.value || '0';
+        const oldPrice = tr.querySelector('.ozon-helper-mv-oldprice')?.value || '';
+        const minPrice = tr.querySelector('.ozon-helper-mv-minprice')?.value || '';
+        const stock = tr.querySelector('.ozon-helper-mv-stock')?.value || '0';
+        const offerId = tr.querySelector('.ozon-helper-mv-offerid')?.value || `SKU${sku}`;
+        const weight = tr.querySelector('.ozon-helper-mv-weight')?.value;
+        const depth = tr.querySelector('.ozon-helper-mv-depth')?.value;
+        const width = tr.querySelector('.ozon-helper-mv-width')?.value;
+        const height = tr.querySelector('.ozon-helper-mv-height')?.value;
+        const basePrice = Number(tr.querySelector('.ozon-helper-mv-price')?.dataset.basePrice || price || 0);
+        // images: 从面板缓存或 sourceMap 取(预览阶段可能无完整图册,用缩略图 src 兜底)
+        const thumbSrc = tr.querySelector('.ozon-helper-mv-thumb img')?.src || '';
+        const images = thumbSrc ? [{ file_name: thumbSrc, default: true }] : [];
+        items.push({
+          offer_id: offerId,
+          name,
+          price: Number(price || 0).toFixed(2),
+          old_price: oldPrice ? Number(oldPrice).toFixed(2) : Number(basePrice * 1.25 || 0).toFixed(2),
+          ...(minPrice && Number(minPrice) > 0 ? { min_price: Number(minPrice).toFixed(2) } : {}),
+          vat: '0',
+          currency_code: currencyCode,
+          images,
+          scraped_sku: String(sku),
+          scraped_brand: brandChoice,
+          ...(mergeModel ? { scraped_model_name: mergeModel } : {}),
+          weight: weight && Number(weight) > 0 ? Number(weight) : undefined,
+          ...(weight && Number(weight) > 0 ? { weight_unit: 'g' } : {}),
+          depth: depth && Number(depth) > 0 ? Number(depth) : undefined,
+          width: width && Number(width) > 0 ? Number(width) : undefined,
+          height: height && Number(height) > 0 ? Number(height) : undefined,
+          ...(depth || width || height ? { dimension_unit: 'mm' } : {}),
+          _stock: Number(stock || 0),
+          _sourceVariant: null, // 预览阶段无完整 sv,后端兜底转换
+          scraped_description: '',
+        });
+      });
+      return items;
+    }
+
+    // 刷新预览(构造 items → 调后端预览接口 → 展示)
+    async function refreshPreview() {
+      if (!_previewOpen) return;
+      const items = buildItemsFromPanel();
+      if (items.length === 0) {
+        previewContent.textContent = '无可上架变体(请勾选至少一个变体)';
+        previewStatus.textContent = '无数据';
+        return;
+      }
+      previewStatus.textContent = '刷新中...';
+      try {
+        const resp = await new Promise((resolve) => {
+          chrome.runtime.sendMessage(
+            { action: 'erpApi', method: 'POST', path: '/admin/api/preview-opi', body: { items } },
+            resolve
+          );
+        });
+        if (resp?.ok && resp.data?.data?.items) {
+          previewContent.textContent = JSON.stringify(resp.data.data.items, null, 2);
+          previewStatus.textContent = `${resp.data.data.items.length} 个变体 · 已转换`;
+        } else {
+          previewContent.textContent = '预览失败: ' + JSON.stringify(resp, null, 2);
+          previewStatus.textContent = '失败';
+        }
+      } catch (e) {
+        previewContent.textContent = '预览请求失败: ' + e.message;
+        previewStatus.textContent = '失败';
+      }
+    }
+    // 防抖刷新
+    function refreshPreviewDebounced() {
+      if (!_previewOpen) return;
+      clearTimeout(_previewTimer);
+      _previewTimer = setTimeout(refreshPreview, 500);
+    }
+    // 监听面板输入变化(防抖触发预览刷新)
+    const _previewInputClasses = new Set([
+      'ozon-helper-mv-price', 'ozon-helper-mv-oldprice', 'ozon-helper-mv-minprice', 'ozon-helper-mv-stock',
+      'ozon-helper-mv-weight', 'ozon-helper-mv-depth', 'ozon-helper-mv-width', 'ozon-helper-mv-height',
+      'ozon-helper-mv-offerid',
+    ]);
+    panel.addEventListener('input', (e) => {
+      if (e.target instanceof HTMLInputElement) {
+        for (const cls of _previewInputClasses) {
+          if (e.target.classList?.contains(cls)) {
+            refreshPreviewDebounced();
+            break;
+          }
+        }
+      }
+    });
+    panel.addEventListener('change', (e) => {
+      if (
+        e.target instanceof HTMLSelectElement &&
+        ['brand', 'image-order', 'currency', 'upload-mode'].includes(e.target.dataset?.field)
+      ) {
+        refreshPreviewDebounced();
+      }
+      if (e.target instanceof HTMLInputElement && e.target.name === 'jz-upload-mode') {
+        refreshPreviewDebounced();
+      }
+    });
+
+    // 异步加载模板列表
+    loadListingTemplates();
 
     // Confirm → validate prices then batch submit
     panel.querySelector('[data-action="confirm"]').addEventListener('click', () => {

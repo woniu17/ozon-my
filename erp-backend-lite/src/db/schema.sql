@@ -49,6 +49,25 @@ CREATE TABLE IF NOT EXISTS collect_box (
 );
 CREATE INDEX IF NOT EXISTS idx_cb_created ON collect_box(created_at DESC);
 
+-- 采集箱 v2(全数据源采集,字段级来源标记)
+-- 每条记录 = 一次采集(一个母体 + N 个变体),与旧 collect_box 并存
+CREATE TABLE IF NOT EXISTS collect_box_v2 (
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id               TEXT,
+  anchor_sku             TEXT NOT NULL,            -- 母体 SKU
+  source_page_url        TEXT,                     -- 采集源 PDP URL
+  variant_count          INTEGER DEFAULT 0,        -- 变体总数
+  variants_json          TEXT NOT NULL,            -- JSON: CollectedVariant[](每变体带 source 标记)
+  raw_by_source_json     TEXT,                     -- JSON: 5 类数据源原始响应(dom/sellerPortal/pageJson/ssrAspects/videoTranscode)
+  synthesized_items_json TEXT,                     -- JSON: 合成 Ozon import 请求预览(每字段带 source)
+  collected_at           INTEGER,                  -- 采集时间戳(ms)
+  created_at             TEXT DEFAULT (datetime('now')),
+  updated_at             TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cbv2_store_created ON collect_box_v2(store_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cbv2_anchor_sku ON collect_box_v2(anchor_sku);
+CREATE INDEX IF NOT EXISTS idx_cbv2_collected ON collect_box_v2(collected_at DESC);
+
 -- 收藏
 CREATE TABLE IF NOT EXISTS favorites (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,3 +183,21 @@ CREATE TABLE IF NOT EXISTS follow_sell_task_payloads (
 );
 CREATE INDEX IF NOT EXISTS idx_fstp_task ON follow_sell_task_payloads(local_task_id DESC);
 CREATE INDEX IF NOT EXISTS idx_fstp_created ON follow_sell_task_payloads(created_at DESC);
+
+-- 上架模板(跟卖面板人工输入值的预设方案)
+-- 字段对齐 mv-listing-config(chrome.storage.local 持久化的那套)
+-- config_json 结构: {brand, imageOrder, currency, mergeEnabled, uploadMode,
+--   applyWatermark, watermarkTemplateId, applyPoster, posterPrimaryOnly, applyAiRewrite,
+--   defaultStock, salePriceStrategy, minPriceStrategy, oldPriceStrategy}
+-- 内置默认模板 is_builtin=1,不可删除不可编辑
+CREATE TABLE IF NOT EXISTS listing_templates (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL,
+  config_json TEXT NOT NULL,
+  is_builtin  INTEGER DEFAULT 0,
+  is_default  INTEGER DEFAULT 0,
+  created_at  TEXT DEFAULT (datetime('now')),
+  updated_at  TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_lt_default ON listing_templates(is_default);
+CREATE INDEX IF NOT EXISTS idx_lt_builtin ON listing_templates(is_builtin);

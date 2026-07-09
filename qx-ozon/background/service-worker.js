@@ -20,10 +20,10 @@ if (typeof chrome !== 'undefined') {
       removeAll: (cb) => {
         try {
           cb && cb();
-        } catch (_) {}
+        } catch (_) { }
       },
-      create: () => {},
-      onClicked: { addListener: () => {}, removeListener: () => {} },
+      create: () => { },
+      onClicked: { addListener: () => { }, removeListener: () => { } },
     };
   }
   if (typeof chrome.notifications === 'undefined') {
@@ -31,14 +31,14 @@ if (typeof chrome !== 'undefined') {
       create: (id, opts, cb) => {
         try {
           cb && cb(typeof id === 'string' ? id : '');
-        } catch (_) {}
+        } catch (_) { }
       },
       clear: (id, cb) => {
         try {
           cb && cb(true);
-        } catch (_) {}
+        } catch (_) { }
       },
-      onClicked: { addListener: () => {}, removeListener: () => {} },
+      onClicked: { addListener: () => { }, removeListener: () => { } },
     };
   }
   if (typeof chrome.cookies === 'undefined') {
@@ -48,7 +48,7 @@ if (typeof chrome !== 'undefined') {
         if (typeof cb === 'function') {
           try {
             cb(empty);
-          } catch (_) {}
+          } catch (_) { }
           return;
         }
         return Promise.resolve(empty);
@@ -304,10 +304,10 @@ try {
                 localStorage.removeItem('currentOzonStoreId');
                 // 刷新页面,admin.js 检测到无 token 自动显示登录视图
                 location.reload();
-              } catch {}
+              } catch { }
             },
           });
-        } catch {}
+        } catch { }
       }
     } catch (e) {
       console.warn('[ServiceWorker] clearWebAuthTabs failed:', e?.message);
@@ -337,7 +337,7 @@ try {
           resolvedBackendUrl = url;
           return url;
         }
-      } catch {}
+      } catch { }
     }
     resolvedBackendUrl = BACKEND_URLS[BACKEND_URLS.length - 1];
     return resolvedBackendUrl;
@@ -503,7 +503,7 @@ try {
         await new Promise((r) => chrome.storage.local.remove(stale, r));
         console.log(`[SW] cleared ${stale.length} v1 bundle cache entries (cross-store risk)`);
       }
-    } catch {}
+    } catch { }
   })();
 
   // SW 启动时清理 24h 过期的采集去重 cache(plan v3 子项 ②)。
@@ -536,7 +536,7 @@ try {
         console.log(`[SW] cleared ${expired.length} expired collect dedupe entries (>24h)`);
       }
       await new Promise((r) => chrome.storage.local.set({ [_COLLECT_CLEANUP_KEY]: { at: now } }, r));
-    } catch {}
+    } catch { }
   })();
 
   const fetchBundleByVariantId = async (sku, variantId, companyId, opts = {}) => {
@@ -551,9 +551,10 @@ try {
           });
         });
         if (cached && Date.now() - (cached.at || 0) < _BUNDLE_CACHE_TTL_MS && cached.item) {
+          console.log(`[searchVariants][fetchBundleByVariantId] cache hit sku=${sku} variantId=${variantId}`);
           return cached.item;
         }
-      } catch {}
+      } catch { }
     }
 
     // L2: 真调 endpoint(有副作用)
@@ -572,6 +573,7 @@ try {
         preferTabId: opts.preferTabId,
       }
     );
+    console.log(`[fetchBundleByVariantId] fetch sku=${sku} variantId=${variantId}`);
     const item = resp?.item || null;
     if (!item) return null;
 
@@ -580,7 +582,7 @@ try {
       chrome.storage.local.set({
         [cacheKey]: { at: Date.now(), item, sku, bundleId: resp.bundle_id || null },
       });
-    } catch {}
+    } catch { }
 
     return item;
   };
@@ -612,7 +614,7 @@ try {
         if (cached && Date.now() - (cached.at || 0) < _SELLER_TREE_TTL_MS && cached.tree) {
           return cached.tree;
         }
-      } catch {}
+      } catch { }
     }
     const resp = await fetchSellerPortal(
       '/seller-tree/get-by-company-id',
@@ -630,7 +632,7 @@ try {
     if (!tree || typeof tree !== 'object') return null;
     try {
       chrome.storage.local.set({ [cacheKey]: { at: Date.now(), tree } });
-    } catch {}
+    } catch { }
     return tree;
   };
 
@@ -1197,7 +1199,7 @@ try {
     try {
       const u = new URL(productUrl, 'https://www.ozon.ru');
       path = u.pathname + u.search;
-    } catch {}
+    } catch { }
     if (!path.startsWith('/')) path = '/' + path;
     let tab;
     try {
@@ -1235,7 +1237,7 @@ try {
           if (typeof v.richAnnotationJson === 'string' && v.richAnnotationJson.trim()) {
             try {
               if (isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim();
-            } catch {}
+            } catch { }
           }
           if (isRichDoc(v)) return JSON.stringify({ content: v.content, version: v.version || 0.3 });
         }
@@ -1430,7 +1432,7 @@ try {
       _sellerPortalLastAt = Date.now();
     });
     // 串行化:下一个调用排在这次放行之后;.catch 防止异常断链(wait 只 await setTimeout,不会 reject)。
-    _sellerPortalGateChain = wait.catch(() => {});
+    _sellerPortalGateChain = wait.catch(() => { });
     return wait;
   };
 
@@ -1456,7 +1458,7 @@ try {
       try {
         const t = await chrome.tabs.get(preferTabId);
         if (t && isOzonUrl(t.url)) target = t; // 来源标签是 live 的(它刚发的消息),不强求 complete
-      } catch {}
+      } catch { }
     }
     if (!target) {
       const tabs = await chrome.tabs.query({ url: ['*://*.ozon.ru/*'] });
@@ -1492,7 +1494,7 @@ try {
           try {
             const j = JSON.parse(text);
             parsedCode = (j && (j.code || (j.error && j.error.code))) || '';
-          } catch {}
+          } catch { }
           return {
             ok: false,
             status: resp.status,
@@ -1608,7 +1610,7 @@ try {
           try {
             const json = JSON.parse(text);
             parsedCode = (json && (json.code || (json.error && json.error.code))) || '';
-          } catch {}
+          } catch { }
           return {
             ok: false,
             status: resp.status,
@@ -1864,7 +1866,7 @@ try {
       if (refreshed) {
         try {
           await setStorage({ [STORAGE_KEYS.token]: refreshed });
-        } catch {}
+        } catch { }
       }
       return response.json();
     } catch (e) {
@@ -2230,7 +2232,7 @@ try {
             message: '官方下载文件 SHA-256 不匹配，已阻止本次更新提示。请检查后端配置或联系管理员。',
             priority: 2,
           });
-        } catch {}
+        } catch { }
         return;
       }
 
@@ -2541,7 +2543,7 @@ try {
 
   chrome.notifications.onClicked.addListener((notificationId) => {
     if (notificationId.startsWith('follow-sell-fail-')) {
-      chrome.action.openPopup().catch(() => {});
+      chrome.action.openPopup().catch(() => { });
       chrome.notifications.clear(notificationId);
     }
   });
@@ -2692,7 +2694,7 @@ try {
           try {
             const u = new URL(inputUrl, 'https://www.ozon.ru');
             productPath = u.pathname;
-          } catch {}
+          } catch { }
           if (!productPath.startsWith('/product/')) {
             sendResponse({ ok: false, error: 'not a product url' });
             return;
@@ -2756,12 +2758,12 @@ try {
               seller?.sellerCell?.link ||
               seller?.link ||
               '';
-          } catch {}
+          } catch { }
           // brand
           let brandName = '';
           try {
             brandName = brand?.title || brand?.name || '';
-          } catch {}
+          } catch { }
           // price
           const priceStr = price?.cardPrice || price?.price || price?.originalPrice || '';
           const fields = {
@@ -2944,7 +2946,7 @@ try {
                     deviceId,
                     status: 'FAILED',
                     error: 'lease-busy: 另一台设备正在同步该店铺同类型数据',
-                  }).catch(() => {});
+                  }).catch(() => { });
                 }
               })
               .catch(async (e) => {
@@ -2956,13 +2958,13 @@ try {
                   deviceId,
                   status: 'FAILED',
                   error: String(e?.message || e).slice(0, 500),
-                }).catch(() => {});
+                }).catch(() => { });
               })
           );
         } catch (e) {
           try {
             sendResponse({ ok: false, error: e?.message || String(e) });
-          } catch {}
+          } catch { }
         }
       })();
       return true;
@@ -3156,7 +3158,7 @@ try {
                       if (s && localStorage.getItem('currentOzonStoreId') !== s) {
                         localStorage.setItem('currentOzonStoreId', s);
                       }
-                    } catch {}
+                    } catch { }
                   },
                   args: [token, storeId || null],
                 });
@@ -3192,7 +3194,7 @@ try {
               if (existing[0].windowId != null) {
                 try {
                   await chrome.windows.update(existing[0].windowId, { focused: true });
-                } catch {}
+                } catch { }
               }
               return { ok: true, data: { reused: true } };
             }
@@ -3326,7 +3328,7 @@ try {
                 if (cacheKey) {
                   try {
                     await new Promise((r) => chrome.storage.local.set({ [cacheKey]: { at: Date.now() } }, r));
-                  } catch {}
+                  } catch { }
                 }
                 // 把 dedupeHit / lastAt / 后端 result 全塞进 data,let sendMessage 的
                 // resolve(response.data) 一次性递给 content script。
@@ -3386,6 +3388,40 @@ try {
               { items, mode },
               token,
               storeId
+            );
+            return { ok: true, data };
+          } catch (error) {
+            return { ok: false, error: error.message };
+          }
+        }
+        case 'erpApi': {
+          // 通用 ERP 后端 API 代理(供 content script 调用后端接口)
+          // message: { action:'erpApi', method:'GET'|'POST'|'PUT'|'DELETE', path:'/admin/api/...', body? }
+          const { method = 'GET', path, body } = message;
+          if (!path) return { ok: false, error: 'path required' };
+          try {
+            const data = await apiRequest(method, `${backendUrl}${path}`, body, token, storeId);
+            return { ok: true, data };
+          } catch (error) {
+            return { ok: false, error: error.message };
+          }
+        }
+        case 'pushCollectBoxV2': {
+          // 全数据源采集推送(PDP 一键采集重构):走新表 collect_box_v2,
+          // 存带字段级 source 标记的 variants + rawBySource + synthesizedItems。
+          // 与 pushSourceCollect / pushToCollectBox 并存,互不影响。
+          const body = message.body || message;
+          if (!body.anchorSku) return { ok: false, error: 'anchorSku required' };
+          if (!Array.isArray(body.variants) || body.variants.length === 0) {
+            return { ok: false, error: 'variants required' };
+          }
+          try {
+            const data = await apiRequest(
+              'POST',
+              `${backendUrl}/ozon/collect-box/v2`,
+              body,
+              token,
+              message.storeId || storeId
             );
             return { ok: true, data };
           } catch (error) {
@@ -4208,6 +4244,7 @@ try {
                   preferTabId: senderTabId,
                 }
               );
+              console.log(`[searchVariants] fetch search sku=${sku}`);
               const rawVariants = Array.isArray(resp?.variants)
                 ? resp.variants
                 : Array.isArray(resp?.items)
@@ -4950,9 +4987,9 @@ try {
       'transferVariantVideo',
     ]);
     if (KEEP_ALIVE_ACTIONS.has(message?.action)) {
-      chrome.runtime.getPlatformInfo(() => {});
+      chrome.runtime.getPlatformInfo(() => { });
       keepAliveTimer = setInterval(() => {
-        chrome.runtime.getPlatformInfo(() => {});
+        chrome.runtime.getPlatformInfo(() => { });
       }, 15_000);
     }
 

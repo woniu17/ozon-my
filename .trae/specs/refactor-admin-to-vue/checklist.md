@@ -1,0 +1,35 @@
+# Checklist
+
+- [x] `erp-backend-lite/web/` 目录存在，包含 `package.json`、`vite.config.js`、`admin.html`、`src/main.js`、`src/App.vue`、`src/router/index.js`
+- [x] `web/package.json` 依赖含 `vue`、`vue-router`、`pinia`、`vite`、`@vitejs/plugin-vue`
+- [x] `vite.config.js` 配置 dev server 代理 `/admin/api`、`/auth`、`/health` 到 `localhost:3001`
+- [x] `vite.config.js` 配置 `build.outDir` 指向 `../src/public`，`build.emptyOutDir: false`
+- [x] `npm run build` 产物输出到 `src/public/`，包含 `admin.html`、`admin-[hash].js`、`admin-[hash].css`（已验证 build exit 0，62 模块）
+- [x] 后端 `node src/app.js` 启动后访问 `/admin` 加载新版 Vue 页面（已用 MCP 浏览器验证 status 200 + Vue 挂载 + 9 Tab 渲染）
+- [x] `src/api/request.js` 实现统一 fetch 封装：token 注入、401 处理、X-Refreshed-Token 续期、`{ok, data}` 解包
+- [x] `src/stores/auth.js` 实现 useAuthStore（token/user/login/logout，localStorage 持久化）
+- [x] `src/stores/stores.js` 实现 useStoresStore（店铺列表缓存 + load action）
+- [x] `src/components/AppTopbar.vue` 渲染品牌 / 用户徽章 / 退出登录（已验证页面显示 👤 13800138000 + 退出登录按钮）
+- [x] `src/components/AppModal.vue` 用 `v-model:open` 控制显示，点击 mask 关闭（已验证采集箱详情弹窗正常打开）
+- [x] `src/components/AppTabs.vue` 用 `v-model` 双向绑定当前 tab（组件已实现；App.vue 主导航直接用 nav.tabs 渲染以兼容 global.css）
+- [x] `src/components/AppPager.vue` 用 `modelValue` 控制页码，显示总条数 + 总页数（已验证"共 94 条 / 第 2/5 页"）
+- [x] `src/components/AppAccordion.vue` 用 `v-model:open` 控制展开，点击标题切换（已验证点击 ▶→▼ 切换正常）
+- [x] `src/components/SourcedField.vue` 渲染 label + value + source 彩色角标 + sourceDetail
+- [x] `useToast.js` + `AppToast.vue` 实现全局提示，3 秒自动消失
+- [x] `views/Login.vue` 实现登录表单，调 `/auth/login-password`
+- [x] 路由守卫：未登录跳 `/login`，已登录访问 `/login` 跳 `/admin`
+- [x] 9 个路由级页面组件全部实现：Dashboard / Stores / Listings / CollectBox / CollectBoxV2 / Products / Batch / Audit / Config
+- [x] Tab 切换正常，URL hash 叇化（已验证 `#/collect-box-v2`、`#/stores`、`#/products`）
+- [x] 跨 Tab 共享店铺列表：从 Stores Tab 切到 Listings Tab 不重复请求 `/admin/api/stores`（useStoresStore 缓存）
+- [x] Stores 页面：新增/编辑/删除店铺、测试连接、查看仓库弹窗功能正常（已验证 2 张店铺卡片 + 操作按钮）
+- [x] Listings 页面：筛选 + 分页 + 详情弹窗正常
+- [x] CollectBox 页面：筛选 + 卡片网格 + 分页 + 编辑/删除正常
+- [x] CollectBoxV2 页面：UNION 新老表，角标区分「全源」/「采集」（已验证 20 张卡片 + 全源角标）
+- [x] CollectBoxV2 详情弹窗 5 个 sub-tab 全部渲染数据（已验证概览/DOM/Seller Portal 切换正常，v-show 隐藏正确）
+- [x] CollectBoxV2 详情弹窗 accordion 默认展开且可点击折叠/展开（已验证 ▶→▼ 切换 + body display 切换，原 bug 修复）
+- [x] Products 页面：筛选 + 分页 + 详情弹窗正常（已验证 20 行 + 翻页第 1→2 页）
+- [x] Batch 页面：任务列表 + 筛选 + 分页 + 详情弹窗正常
+- [x] Audit 页面：筛选 + 分页 + 详情截断显示正常
+- [x] Config 页面：feature flags 开关 + 配置项编辑正常
+- [x] 视觉风格与原 admin.css 一致（CSS 变量、按钮、弹窗、表格样式 —— global.css 原样移植）
+- [x] 后端 API 路由零改动（所有 `/admin/api/*`、`/auth/*` 契约不变）
