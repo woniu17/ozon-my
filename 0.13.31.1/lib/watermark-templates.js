@@ -7,33 +7,45 @@
 //     getAuth,                    // async () => { token, backendUrl, storeId? }
 //     selectEl,                   // <select> 节点
 //     applyCheckboxEl,            // optional <input type=checkbox> — 有绑定时勾上
-//     defaultLabel,               // optional, 默认 "店铺绑定水印"
+//     defaultLabel,               // optional, 默认 "店铺绑定水印/边框"
 //   });
 //
 // 行为:
 //   - 拉模板 + store 列表
-//   - 把「店铺绑定水印」+ 模板填进 selectEl 选项,默认选中「店铺绑定水印」
+//   - 把「店铺绑定水印/边框」+ 模板填进 selectEl 选项,默认选中「店铺绑定水印/边框」
 //   - 若提供了 applyCheckboxEl 且有绑定,勾上复选框
 //   - 异常时 select 显示"加载失败"option,函数 resolve 不抛
 (function () {
-  const STORE_BOUND_VALUE = '__store_bound__';
+  const STORE_BOUND_VALUE = "__store_bound__";
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
-      return {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;',
-      }[c];
+      return ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[c];
     });
   }
 
+  function getTemplateTypeLabel(type) {
+    if (type === "border") return "边框";
+    if (type === "image") return "图片";
+    return "文字";
+  }
+
   async function loadIntoSelect(opts) {
-    const { getAuth, selectEl, applyCheckboxEl, defaultLabel = '店铺绑定水印' } = opts || {};
-    if (typeof getAuth !== 'function') {
-      throw new Error('loadIntoSelect: getAuth function required');
+    const {
+      getAuth,
+      loadData,
+      selectEl,
+      applyCheckboxEl,
+      defaultLabel = "店铺绑定水印/边框",
+    } = opts || {};
+    if (typeof getAuth !== "function") {
+      throw new Error("loadIntoSelect: getAuth function required");
     }
     try {
       const auth = await getAuth();
@@ -44,18 +56,28 @@
         return { templates: [], boundId: null, storeBoundValue: STORE_BOUND_VALUE };
       }
       const headers = {
-        Authorization: 'Bearer ' + auth.token,
-        'Content-Type': 'application/json',
+        Authorization: "Bearer " + auth.token,
+        "Content-Type": "application/json",
       };
-      if (auth.storeId) headers['x-ozon-store-id'] = auth.storeId;
+      if (auth.storeId) headers["x-ozon-store-id"] = auth.storeId;
       // CDN 历史污染兜底:见 extension/lib/cdn-buster.js。
       const bust = globalThis.JzCdnBuster ? globalThis.JzCdnBuster.withCdnBuster : (u) => u;
-      const [wmRes, storeRes] = await Promise.all([
-        fetch(bust(auth.backendUrl + '/ozon/watermark-settings'), { headers }),
-        fetch(bust(auth.backendUrl + '/auth/ozon-stores'), { headers }),
-      ]);
-      const templates = wmRes.ok ? await wmRes.json() : [];
-      const stores = storeRes.ok ? await storeRes.json() : [];
+      let payload;
+      if (typeof loadData === "function") {
+        const loaded = await loadData({ auth, headers });
+        payload = loaded && loaded.data ? loaded.data : loaded;
+      } else {
+        const [wmRes, storeRes] = await Promise.all([
+          fetch(bust(auth.backendUrl + "/ozon/watermark-settings"), { headers }),
+          fetch(bust(auth.backendUrl + "/auth/ozon-stores"), { headers }),
+        ]);
+        payload = {
+          templates: wmRes.ok ? await wmRes.json() : [],
+          stores: storeRes.ok ? await storeRes.json() : [],
+        };
+      }
+      const templates = Array.isArray(payload && payload.templates) ? payload.templates : [];
+      const stores = Array.isArray(payload && payload.stores) ? payload.stores : [];
       const currentStore = stores.find(function (s) {
         return s.id === auth.storeId;
       });
@@ -66,17 +88,17 @@
           `<option value="${STORE_BOUND_VALUE}" selected>${escapeHtml(defaultLabel)}</option>` +
           templates
             .map(function (t) {
-              const typeLabel = t.type === 'image' ? '图片' : '文字';
+              const typeLabel = getTemplateTypeLabel(t.type);
               return `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} (${typeLabel})</option>`;
             })
-            .join('');
+            .join("");
         selectEl.value = STORE_BOUND_VALUE;
       }
       if (boundId && applyCheckboxEl) applyCheckboxEl.checked = true;
       return { templates, boundId, storeBoundValue: STORE_BOUND_VALUE };
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.warn('[watermark-templates] load failed:', e);
+      console.warn("[watermark-templates] load failed:", e);
       if (selectEl) {
         selectEl.innerHTML = '<option value="">加载失败</option>';
       }
@@ -84,7 +106,7 @@
     }
   }
 
-  if (typeof window !== 'undefined') {
+  if (typeof window !== "undefined") {
     window.JZWatermarkTemplates = { STORE_BOUND_VALUE, loadIntoSelect };
   }
 })();

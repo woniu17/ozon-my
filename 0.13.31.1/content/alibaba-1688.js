@@ -23,17 +23,7 @@
   const PAGE_DATA_REQUEST_TYPE = 'JZC_1688_REQUEST_PAGE_DATA';
   const PAGE_DATA_RESPONSE_SOURCE = 'jzc-1688-page-data-hook';
   const PAGE_DATA_REQUEST_SOURCE = 'jzc-1688-scraper';
-  const PAGE_GLOBAL_KEYS = [
-    '__INIT_DATA__',
-    'detailData',
-    'runParams',
-    '__detail_data__',
-    'offerDetail',
-    'pageData',
-    'offerInfo',
-    '__INIT__',
-    'hummerData',
-  ];
+  const PAGE_GLOBAL_KEYS = ['__INIT_DATA__', 'detailData', 'runParams', '__detail_data__', 'offerDetail', 'pageData', 'offerInfo', '__INIT__', 'hummerData'];
   const pageDataBridge = { globals: {}, jsonLd: [] };
 
   window.addEventListener('message', (event) => {
@@ -136,10 +126,7 @@
 
   function toAbsoluteUrl(src) {
     if (!src || typeof src !== 'string') return null;
-    let out = src
-      .trim()
-      .replace(/\\u002F/gi, '/')
-      .replace(/\\\//g, '/');
+    let out = src.trim().replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
     if (!out) return null;
     if (out.startsWith('//')) out = `${location.protocol}${out}`;
     if (out.startsWith('/')) out = `${location.origin}${out}`;
@@ -228,47 +215,37 @@
 
   function normalizeSkuAxes(rawProps) {
     if (!Array.isArray(rawProps)) return [];
-    return rawProps
-      .map((prop, idx) => {
-        const name =
-          asText(pick(prop, ['prop', 'name', 'propName', 'propertyName', 'attributeName'])) || `规格${idx + 1}`;
-        const rawValues = pick(prop, ['value', 'values', 'valueList', 'propValues', 'propertyValues']) || [];
-        const options = (Array.isArray(rawValues) ? rawValues : [])
-          .map((value) => {
-            if (typeof value === 'string' || typeof value === 'number') {
-              return { name: String(value), id: String(value) };
-            }
-            const optionName = asText(
-              pick(value, ['name', 'value', 'valueName', 'propValue', 'propertyValueName', 'text'])
-            );
-            if (!optionName) return null;
-            return {
-              name: optionName,
-              id: asText(pick(value, ['id', 'valueId', 'vid', 'skuPropertyValueId', 'propertyValueId'])),
-              image: normalizeProductImage(pick(value, ['image', 'imageUrl', 'imgUrl', 'picUrl', 'url'])),
-            };
-          })
-          .filter(Boolean);
-        return { name, options };
-      })
-      .filter((axis) => axis.options.length > 0);
+    return rawProps.map((prop, idx) => {
+      const name = asText(pick(prop, ['prop', 'name', 'propName', 'propertyName', 'attributeName'])) || `规格${idx + 1}`;
+      const rawValues = pick(prop, ['value', 'values', 'valueList', 'propValues', 'propertyValues']) || [];
+      const options = (Array.isArray(rawValues) ? rawValues : []).map((value) => {
+        if (typeof value === 'string' || typeof value === 'number') {
+          return { name: String(value), id: String(value) };
+        }
+        const optionName = asText(pick(value, ['name', 'value', 'valueName', 'propValue', 'propertyValueName', 'text']));
+        if (!optionName) return null;
+        return {
+          name: optionName,
+          id: asText(pick(value, ['id', 'valueId', 'vid', 'skuPropertyValueId', 'propertyValueId'])),
+          image: normalizeProductImage(pick(value, ['image', 'imageUrl', 'imgUrl', 'picUrl', 'url'])),
+        };
+      }).filter(Boolean);
+      return { name, options };
+    }).filter((axis) => axis.options.length > 0);
   }
 
   function parseSkuKey(key, axes) {
     const raw = String(key || '');
     const aspectValues = {};
     raw.split(/[;；|,，]+/).forEach((part) => {
-      const pieces = part
-        .split(/[:：=]/)
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const pieces = part.split(/[:：=]/).map((s) => s.trim()).filter(Boolean);
       if (pieces.length >= 2) aspectValues[pieces[0]] = pieces.slice(1).join(':');
     });
     if (Object.keys(aspectValues).length > 0) return aspectValues;
 
     for (const axis of axes) {
-      const matched = axis.options.find(
-        (option) => (option.id && raw.includes(String(option.id))) || raw.includes(option.name)
+      const matched = axis.options.find((option) =>
+        (option.id && raw.includes(String(option.id))) || raw.includes(option.name)
       );
       if (matched) aspectValues[axis.name] = matched.name;
     }
@@ -318,12 +295,10 @@
 
     for (const root of structuredRoots()) {
       walkObjects(root.data, (obj) => {
-        ['imageList', 'images', 'mainImages', 'detailImages', 'imageUrls', 'albumImages', 'skuImages'].forEach(
-          (key) => {
-            const value = obj[key];
-            if (Array.isArray(value)) value.forEach((item) => pushImageLike(images, item));
-          }
-        );
+        ['imageList', 'images', 'mainImages', 'detailImages', 'imageUrls', 'albumImages', 'skuImages'].forEach((key) => {
+          const value = obj[key];
+          if (Array.isArray(value)) value.forEach((item) => pushImageLike(images, item));
+        });
         ['image', 'imageUrl', 'imgUrl', 'picUrl', 'mainImage', 'coverImage'].forEach((key) => {
           if (obj[key]) pushImageLike(images, obj[key]);
         });
@@ -335,24 +310,20 @@
     if (og) pushUnique(images, og);
 
     // Gallery containers (multiple historical class names)
-    document
-      .querySelectorAll(
-        [
-          '.detail-gallery-img img',
-          '.preview-image img',
-          '.preview-list img',
-          '.tab-trigger img',
-          '.module-od-sku-selection img',
-          '.module-od-product-description img',
-          '[class*="description"] img',
-          '[class*="MainPic"] img',
-          '[class*="preview"] img',
-          '[class*="gallery"] img',
-        ].join(',')
-      )
-      .forEach((img) => {
-        pushUnique(images, img.getAttribute('data-original') || img.getAttribute('data-src') || img.src);
-      });
+    document.querySelectorAll([
+      '.detail-gallery-img img',
+      '.preview-image img',
+      '.preview-list img',
+      '.tab-trigger img',
+      '.module-od-sku-selection img',
+      '.module-od-product-description img',
+      '[class*="description"] img',
+      '[class*="MainPic"] img',
+      '[class*="preview"] img',
+      '[class*="gallery"] img',
+    ].join(',')).forEach((img) => {
+      pushUnique(images, img.getAttribute('data-original') || img.getAttribute('data-src') || img.src);
+    });
 
     // Fallback: every product-looking image on the page (already filtered inside pushUnique)
     if (images.length < 2) {
@@ -375,8 +346,7 @@
     for (const j of readJsonLd()) {
       const offers = j.offers || j.mainEntity?.offers;
       if (offers) {
-        if (offers.lowPrice && offers.highPrice)
-          return { range: `${offers.lowPrice}~${offers.highPrice}`, single: null };
+        if (offers.lowPrice && offers.highPrice) return { range: `${offers.lowPrice}~${offers.highPrice}`, single: null };
         if (offers.price) return { range: null, single: String(offers.price) };
       }
     }
@@ -396,14 +366,15 @@
       // 只认紧跟 ¥ 的价格。1688 的数量阶梯(如「¥0.72 500-1999双」)里数量不带 ¥，
       // 旧的宽松 range 正则会把 `¥0.72`+`500-1999双` 拼成 `72500-1999` 误当价格区间
       // (offer 799324601711 实测抓出 72500)。只取 ¥ 后的小数价就不会跨界。
-      const prices = [...s.matchAll(/[¥￥](\d+(?:\.\d{1,2})?)/g)].map((m) => m[1]).filter((v) => Number(v) > 0);
+      const prices = [...s.matchAll(/[¥￥](\d+(?:\.\d{1,2})?)/g)]
+        .map((m) => m[1]).filter((v) => Number(v) > 0);
       if (!prices.length) return null;
       // 单价优先取「到手单价/批发价」(用户实际采购成本)，否则页面第一个 ¥ 价。
-      const pref = s.match(/到手[^¥￥]{0,4}[¥￥](\d+(?:\.\d{1,2})?)/) || s.match(/批发[价]?[¥￥](\d+(?:\.\d{1,2})?)/);
+      const pref =
+        s.match(/到手[^¥￥]{0,4}[¥￥](\d+(?:\.\d{1,2})?)/) ||
+        s.match(/批发[价]?[¥￥](\d+(?:\.\d{1,2})?)/);
       const single = pref ? pref[1] : prices[0];
-      const nums = prices.map(Number),
-        lo = Math.min(...nums),
-        hi = Math.max(...nums);
+      const nums = prices.map(Number), lo = Math.min(...nums), hi = Math.max(...nums);
       return { range: lo !== hi ? `${lo}~${hi}` : null, single };
     };
 
@@ -435,13 +406,11 @@
   function extractWholesale() {
     const out = [];
     // Tries: a table or list under "价格" panel
-    document
-      .querySelectorAll('[class*="ladder"] li, [class*="priceList"] li, [class*="priceTable"] tr')
-      .forEach((row) => {
-        const text = row.textContent || '';
-        const m = text.match(/(\d+)\s*[件个起≥>=]?\s*[¥￥]?\s*(\d+(?:\.\d+)?)/);
-        if (m) out.push({ minQty: Number(m[1]), price: m[2] });
-      });
+    document.querySelectorAll('[class*="ladder"] li, [class*="priceList"] li, [class*="priceTable"] tr').forEach((row) => {
+      const text = row.textContent || '';
+      const m = text.match(/(\d+)\s*[件个起≥>=]?\s*[¥￥]?\s*(\d+(?:\.\d+)?)/);
+      if (m) out.push({ minQty: Number(m[1]), price: m[2] });
+    });
     return out.length ? out : null;
   }
 
@@ -499,6 +468,47 @@
     return null;
   }
 
+  function packageWeightToG(value, unit) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const u = String(unit || '').trim().toLowerCase();
+    if (/^(kg|千克|公斤)$/.test(u)) return Math.round(n * 1000);
+    return Math.round(n);
+  }
+
+  function packageLengthToCm(value, unit) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const u = String(unit || '').trim().toLowerCase();
+    if (/^(mm|毫米)$/.test(u)) return Math.round(n) / 10;
+    if (/^(m|米)$/.test(u)) return n * 100;
+    return n;
+  }
+
+  function compactPackaging(record) {
+    const out = {
+      lengthCm: record?.lengthCm ?? null,
+      widthCm: record?.widthCm ?? null,
+      heightCm: record?.heightCm ?? null,
+      weightG: record?.weightG ?? null,
+    };
+    return (out.lengthCm || out.widthCm || out.heightCm || out.weightG) ? out : null;
+  }
+
+  function extractPackagingFromText(text) {
+    const raw = String(text || '').replace(/\s+/g, ' ');
+    if (!raw) return null;
+    const weightMatch = raw.match(/(?:包装重量|包装重|装箱重量|外箱重量|毛重|净重|克重|重量)[^\d]{0,30}(\d+(?:\.\d+)?)\s*(kg|千克|公斤|g|克)?/i);
+    const dimMatch = raw.match(/(?:包装尺寸|包装规格|装箱尺寸|外箱尺寸|箱规|包装体积)[^\d]{0,60}(\d+(?:\.\d+)?)\s*(mm|毫米|cm|厘米|m|米)?\s*[×xX*✕✖]\s*(\d+(?:\.\d+)?)\s*(mm|毫米|cm|厘米|m|米)?\s*[×xX*✕✖]\s*(\d+(?:\.\d+)?)\s*(mm|毫米|cm|厘米|m|米)?/i);
+    const inferredDimUnit = dimMatch ? (dimMatch[2] || dimMatch[4] || dimMatch[6] || 'cm') : '';
+    return compactPackaging({
+      weightG: weightMatch ? packageWeightToG(weightMatch[1], weightMatch[2] || 'g') : null,
+      lengthCm: dimMatch ? packageLengthToCm(dimMatch[1], dimMatch[2] || inferredDimUnit) : null,
+      widthCm: dimMatch ? packageLengthToCm(dimMatch[3], dimMatch[4] || inferredDimUnit) : null,
+      heightCm: dimMatch ? packageLengthToCm(dimMatch[5], dimMatch[6] || inferredDimUnit) : null,
+    });
+  }
+
   /**
    * 包装重量/三维 — 1688 正规卖家常带一张"装箱信息表"：
    *   颜色 | 尺码 | 长(cm) | 宽(cm) | 高(cm) | 体积(cm³) | 重量(g)
@@ -512,28 +522,20 @@
         if (!headRow) continue;
         const heads = [...headRow.querySelectorAll('th,td')].map((c) => (c.textContent || '').trim());
         const find = (re) => heads.findIndex((h) => re.test(h));
-        const li = find(/长.*cm|长\(cm\)/i),
-          wi = find(/宽.*cm/i),
-          hi = find(/高.*cm/i),
-          gi = find(/重量|净重|毛重|克重/);
+        const li = find(/长.*cm|长\(cm\)/i), wi = find(/宽.*cm/i), hi = find(/高.*cm/i),
+              gi = find(/重量|净重|毛重|克重/);
         if (li < 0 && gi < 0) continue;
         for (const tr of [...tbl.querySelectorAll('tr')].slice(1)) {
           const cells = [...tr.querySelectorAll('td,th')].map((c) => (c.textContent || '').trim());
-          const num = (i) => {
-            if (i < 0) return null;
-            const m = (cells[i] || '').match(/[\d.]+/);
-            return m ? parseFloat(m[0]) : null;
-          };
-          const lengthCm = num(li),
-            widthCm = num(wi),
-            heightCm = num(hi),
-            weightG = num(gi);
-          if (lengthCm || weightG) return { lengthCm, widthCm, heightCm, weightG };
+          const num = (i) => { if (i < 0) return null; const m = (cells[i] || '').match(/[\d.]+/); return m ? parseFloat(m[0]) : null; };
+          const lengthCm = num(li), widthCm = num(wi), heightCm = num(hi), weightG = num(gi);
+          const parsed = compactPackaging({ lengthCm, widthCm, heightCm, weightG });
+          if (parsed) return parsed;
         }
       }
-    } catch (e) {
-      log('extractPackaging failed', e);
-    }
+      const textFallback = extractPackagingFromText(document.body?.innerText || '');
+      if (textFallback) return textFallback;
+    } catch (e) { log('extractPackaging failed', e); }
     return null;
   }
 
@@ -548,36 +550,29 @@
       let grid = document.querySelector('.decision-attributes-list');
       if (!grid) {
         // 退回：找子项较多、含典型属性词的网格容器
-        grid =
-          [...document.querySelectorAll('div,ul,dl')].find(
-            (el) => el.children.length > 5 && /(面料|材质|风格|适用|成分|功能)/.test(el.textContent || '')
-          ) || null;
+        grid = [...document.querySelectorAll('div,ul,dl')].find((el) =>
+          el.children.length > 5 && /(面料|材质|风格|适用|成分|功能)/.test(el.textContent || '')) || null;
       }
       if (grid) {
         [...grid.children].forEach((it) => {
-          const parts = (it.innerText || '')
-            .split('\n')
-            .map((s) => s.trim())
-            .filter(Boolean);
+          const parts = (it.innerText || '').split('\n').map((s) => s.trim()).filter(Boolean);
           if (parts.length >= 2) {
             const k = parts[0].replace(/[:：]\s*$/, '');
-            const v = parts
-              .slice(1)
-              .join(' ')
-              .replace(/^[:：]\s*/, '');
+            const v = parts.slice(1).join(' ').replace(/^[:：]\s*/, '');
             if (k && v && k.length < 20) specs[k] = v.slice(0, 80);
           }
         });
       }
-    } catch (e) {
-      log('extractSpecs failed', e);
-    }
+    } catch (e) { log('extractSpecs failed', e); }
     return Object.keys(specs).length ? specs : null;
   }
 
   function extractVariants({ offerId, basePrice } = {}) {
     const structured = extractStructuredVariants({ offerId });
     if (structured.length) return structured;
+
+    const industryTable = extractIndustryTableVariants({ offerId, basePrice });
+    if (industryTable.length) return industryTable;
 
     const axes = extractDomVariantAxes();
     if (!axes.length) return [];
@@ -592,31 +587,27 @@
         const axes = normalizeSkuAxes(pick(obj, ['skuProps', 'skuPropList', 'skuPropertyList', 'salePropList']));
         const skuMap = pick(obj, ['skuMap', 'skuInfoMap', 'skuMapData', 'skuIdMap']);
         if (axes.length && skuMap && typeof skuMap === 'object' && !Array.isArray(skuMap)) {
-          found = Object.entries(skuMap)
-            .map(([key, item], idx) =>
-              variantFromStructuredEntry(item || {}, {
-                key,
-                axes,
-                offerId,
-                idx,
-              })
-            )
-            .filter(Boolean);
+          found = Object.entries(skuMap).map(([key, item], idx) =>
+            variantFromStructuredEntry(item || {}, {
+              key,
+              axes,
+              offerId,
+              idx,
+            })
+          ).filter(Boolean);
           return;
         }
 
         const list = pick(obj, ['variants', 'skuList', 'skuInfos', 'skuInfoList']);
         if (Array.isArray(list) && list.length) {
-          found = list
-            .map((item, idx) =>
-              variantFromStructuredEntry(item || {}, {
-                key: item?.key || item?.specId || item?.skuKey || '',
-                axes,
-                offerId,
-                idx,
-              })
-            )
-            .filter(Boolean);
+          found = list.map((item, idx) =>
+            variantFromStructuredEntry(item || {}, {
+              key: item?.key || item?.specId || item?.skuKey || '',
+              axes,
+              offerId,
+              idx,
+            })
+          ).filter(Boolean);
         }
       });
       if (found.length) return found.slice(0, 120);
@@ -639,8 +630,7 @@
     });
     if (!Object.keys(cleanAspectValues).length && axes.length) return null;
 
-    const sku =
-      asText(pick(entry, ['sku', 'skuId', 'id', 'specId', 'skuIdStr'])) ||
+    const sku = asText(pick(entry, ['sku', 'skuId', 'id', 'specId', 'skuIdStr'])) ||
       stableSku(offerId, key || 'sku', Object.values(cleanAspectValues).join('-'), idx);
     const image =
       normalizeProductImage(pick(entry, ['image', 'imageUrl', 'imgUrl', 'picUrl', 'skuImage'])) ||
@@ -662,73 +652,172 @@
     for (const key of keys) {
       const value = obj?.[key];
       if (value == null) continue;
-      const price = moneyFromText(
-        String(value).includes('¥') || String(value).includes('￥') ? String(value) : `¥${value}`
-      );
+      const price = moneyFromText(String(value).includes('¥') || String(value).includes('￥') ? String(value) : `¥${value}`);
       if (price) return price;
     }
     return null;
+  }
+
+  function cleanCellText(el) {
+    return String(el?.innerText || el?.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function normalizeTableHeader(text) {
+    return String(text || '').replace(/\s+/g, ' ').replace(/[：:]+$/g, '').trim();
+  }
+
+  function isIndustryPriceHeader(label) {
+    return /价格|库存|price|stock|inventory/i.test(label || '');
+  }
+
+  function isIndustryQuantityHeader(label) {
+    return /进货|采购|数量|下单|quantity|amount/i.test(label || '');
+  }
+
+  function plainNumber(text) {
+    const m = String(text || '').replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+    if (!m) return null;
+    const n = Number(m[0]);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function priceAndStockFromIndustryCell(cell) {
+    if (!cell) return {};
+    const priceBox = cell.querySelector?.('.gyp-pro-table-price, [class*="pro-table-price"], [class*="table-price"]') || cell;
+    const spans = Array.from(priceBox.querySelectorAll?.('span') || [])
+      .map((span) => cleanCellText(span))
+      .filter(Boolean);
+    const price = spans.map(moneyFromText).find(Boolean) || moneyFromText(cleanCellText(priceBox));
+    let stock = stockFromText(cleanCellText(priceBox));
+    if (stock == null) {
+      const stockText = spans.find((text) => !moneyFromText(text) && /^\d+(?:\.\d+)?$/.test(text.replace(/,/g, '')));
+      const parsed = plainNumber(stockText);
+      if (parsed != null) stock = Math.round(parsed);
+    }
+    return { price, stock };
+  }
+
+  function extractIndustryTableVariants({ offerId, basePrice } = {}) {
+    const roots = Array.from(document.querySelectorAll([
+      '.module-od-industry-pro-sku-selection',
+      '.industry-pro-sku-selection',
+      '[class*="industry-pro-sku-selection"]',
+    ].join(','))).filter((root, idx, list) => root && list.indexOf(root) === idx);
+    const variants = [];
+    const seen = new Set();
+
+    for (const root of roots) {
+      const headers = Array.from(root.querySelectorAll('.ant-table-thead th, thead th'))
+        .map((th) => normalizeTableHeader(cleanCellText(th)));
+      const rows = Array.from(root.querySelectorAll('.ant-table-tbody tr, tbody tr'));
+
+      for (const row of rows) {
+        if (variants.length >= 120) break;
+        const cells = Array.from(row.querySelectorAll('td'));
+        if (!cells.length) continue;
+
+        const nameCellIndex = Math.max(0, cells.findIndex((cell) =>
+          cell.querySelector('.gyp-pro-table-title, [class*="pro-table-title"], [class*="table-title"]') ||
+          imageFromElement(cell)
+        ));
+        const nameCell = cells[nameCellIndex] || cells[0];
+        const nameBox =
+          nameCell.querySelector('.gyp-pro-table-title, [class*="pro-table-title"], [class*="table-title"]') ||
+          nameCell;
+        const name = cleanCellText(nameBox);
+        if (!name || /价格|库存|进货|采购|数量/.test(name)) continue;
+
+        const priceCellIndex = cells.findIndex((cell, idx) =>
+          isIndustryPriceHeader(headers[idx]) ||
+          cell.querySelector('.gyp-pro-table-price, [class*="pro-table-price"], [class*="table-price"]') ||
+          /[¥￥]/.test(cleanCellText(cell))
+        );
+        const { price, stock } = priceAndStockFromIndustryCell(cells[priceCellIndex]);
+        if (!price) continue;
+        const image = imageFromElement(nameCell) || imageFromElement(row);
+
+        const aspectValues = {};
+        cells.forEach((cell, idx) => {
+          const header = headers[idx] || (idx === nameCellIndex ? '产品规格' : `规格${idx + 1}`);
+          if (!header || isIndustryPriceHeader(header) || isIndustryQuantityHeader(header)) return;
+          const value = idx === nameCellIndex ? name : cleanCellText(cell);
+          if (value && value.length <= 120) aspectValues[header] = value;
+        });
+        if (!aspectValues['产品规格'] && name) aspectValues['产品规格'] = name;
+
+        const rowKey = row.getAttribute('data-row-key') || '';
+        const fingerprint = rowKey ? `row:${rowKey}` : [
+          name,
+          price,
+          Object.entries(aspectValues).map(([k, v]) => `${k}:${v}`).join('|'),
+        ].join('::');
+        if (seen.has(fingerprint)) continue;
+        seen.add(fingerprint);
+
+        variants.push({
+          sku: rowKey || stableSku(offerId, 'industry-table', name, variants.length),
+          name,
+          price,
+          ...(image ? { image, images: [image] } : {}),
+          ...(stock != null ? { stock } : {}),
+          ...(Object.keys(aspectValues).length ? { aspectValues } : {}),
+        });
+      }
+    }
+
+    return variants;
   }
 
   function extractDomVariantAxes() {
     const root = document.querySelector('.module-od-sku-selection, [class*="sku-selection"], [class*="SkuSelection"]');
     if (!root) return [];
 
-    const featureBlocks = root.querySelectorAll(
-      '.feature-item, [class*="feature-item"], [class*="sku-prop"], [class*="SkuProp"]'
-    );
+    const featureBlocks = root.querySelectorAll('.feature-item, [class*="feature-item"], [class*="sku-prop"], [class*="SkuProp"]');
     const blocks = featureBlocks.length ? Array.from(featureBlocks) : [root];
     const axes = [];
 
     blocks.forEach((feature) => {
-      const featureLines = (feature.innerText || feature.textContent || '')
-        .split('\n')
+      const featureLines = ((feature.innerText || feature.textContent || '').split('\n'))
         .map((s) => s.trim())
         .filter(Boolean);
       const axisName =
-        feature
-          .querySelector(':scope > [class*="title"], :scope > [class*="name"], :scope > [class*="label"]')
-          ?.textContent?.trim() ||
+        feature.querySelector(':scope > [class*="title"], :scope > [class*="name"], :scope > [class*="label"]')?.textContent?.trim() ||
         featureLines.find((line) => !/[¥￥]\s*\d|库存|已选|请选择/.test(line) && line.length <= 20) ||
         '规格';
 
-      const optionNodes = feature.querySelectorAll(
-        [
-          '.expand-view-item',
-          '[class*="expand-view-item"]',
-          '[class*="sku-item"]',
-          '[class*="SkuItem"]',
-          '[class*="spec-item"]',
-          '[class*="value-item"]',
-          '[class*="ValueItem"]',
-        ].join(',')
-      );
+      const optionNodes = feature.querySelectorAll([
+        '.expand-view-item',
+        '[class*="expand-view-item"]',
+        '.sku-filter-button',
+        '[class*="sku-filter-button"]',
+        'button[class*="sku-filter"]',
+        '[role="button"][class*="sku-filter"]',
+        '[class*="sku-item"]',
+        '[class*="SkuItem"]',
+        '[class*="spec-item"]',
+        '[class*="value-item"]',
+        '[class*="ValueItem"]',
+      ].join(','));
 
       const options = [];
       Array.from(optionNodes).forEach((node) => {
         const text = (node.innerText || node.textContent || '').trim();
         if (!text || /禁用|disabled/i.test(node.className || '')) return;
-        const lines = text
-          .split('\n')
-          .map((s) => s.trim())
-          .filter(Boolean);
+        const lines = text.split('\n').map((s) => s.trim()).filter(Boolean);
         const name =
           node.getAttribute('title') ||
           node.getAttribute('aria-label') ||
-          lines.find(
-            (line) => line !== axisName && !/[¥￥]\s*\d|库存|起批|已售|件$|请选择|加购/.test(line) && line.length <= 80
+          lines.find((line) =>
+            line !== axisName &&
+            !/[¥￥]\s*\d|库存|起批|已售|件$|请选择|加购/.test(line) &&
+            line.length <= 80
           );
         if (!name) return;
 
         if (options.some((item) => item.name === name)) return;
         options.push({
           name,
-          id:
-            node.getAttribute('data-sku-id') ||
-            node.getAttribute('data-sku') ||
-            node.getAttribute('data-id') ||
-            node.getAttribute('data-value-id') ||
-            null,
+          id: node.getAttribute('data-sku-id') || node.getAttribute('data-sku') || node.getAttribute('data-id') || node.getAttribute('data-value-id') || null,
           image: imageFromElement(node),
           price: moneyFromText(text),
           stock: stockFromText(text),
@@ -746,9 +835,7 @@
       if (variants.length >= 120) return;
       if (idx >= axes.length) {
         const aspectValues = {};
-        chosen.forEach(({ axis, option }) => {
-          aspectValues[axis.name] = option.name;
-        });
+        chosen.forEach(({ axis, option }) => { aspectValues[axis.name] = option.name; });
         const joined = chosen.map(({ option }) => option.name).join(' ');
         const image = chosen.map(({ option }) => option.image).find(Boolean);
         const price = chosen.map(({ option }) => option.price).find(Boolean) || basePrice || null;
@@ -786,12 +873,9 @@
         const videoObj = pick(obj, ['video', 'mainVideoInfo', 'videoInfo']);
         if (videoObj && typeof videoObj === 'object') {
           candidates.push(pick(videoObj, ['url', 'videoUrl', 'playUrl', 'mp4Url', 'src']));
-          structuredCover =
-            structuredCover ||
-            normalizeProductImage(pick(videoObj, ['cover', 'coverUrl', 'poster', 'image', 'imageUrl']));
+          structuredCover = structuredCover || normalizeProductImage(pick(videoObj, ['cover', 'coverUrl', 'poster', 'image', 'imageUrl']));
         }
-        structuredCover =
-          structuredCover || normalizeProductImage(pick(obj, ['videoCover', 'videoCoverUrl', 'poster', 'coverUrl']));
+        structuredCover = structuredCover || normalizeProductImage(pick(obj, ['videoCover', 'videoCoverUrl', 'poster', 'coverUrl']));
       });
     }
     document.querySelectorAll('video, source').forEach((el) => {
@@ -865,18 +949,18 @@
     const runtime = globalThis.__JZ_BRAND__ || {};
     // dev 源码加载时 build.js 没跑,占位符保持字面量 → 运行时兜底平台品牌。
     // /__BRAND/ 探测避免被 build textual replace 命中(否则分销商 build 被误兜底)。
-    const displayNameFallback = /__BRAND/.test('MY') ? '平台' : 'MY';
+    const displayNameFallback = /__BRAND/.test("MY")
+      ? "平台"
+      : "MY";
     const displayName = runtime.displayName || displayNameFallback;
-    const webHost =
-      runtime.webHost || (/__BRAND/.test('my.jizhangerp.com') ? 'store.jizhangerp.com' : 'my.jizhangerp.com');
+    const webHost = runtime.webHost || (/__BRAND/.test('my.jizhangerp.com') ? 'store.jizhangerp.com' : 'my.jizhangerp.com');
     const primaryColor = runtime.primaryColor || '#2168ff';
     return { displayName, webHost, primaryColor, logoUrl: runtime.logoUrl || null };
   }
 
   function iconSvg(name) {
     const paths = {
-      image:
-        '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-4.2-4.2a2 2 0 0 0-2.8 0L5 19"/>',
+      image: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-4.2-4.2a2 2 0 0 0-2.8 0L5 19"/>',
       box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/>',
       upload: '<path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/>',
     };
@@ -1047,7 +1131,7 @@
 
     const root = document.createElement('div');
     root.id = 'jzc-1688-panel';
-    const brandDisplayName = BRAND.displayName || '平台';
+    const brandDisplayName = BRAND.displayName || "平台";
     const logo = BRAND.logoUrl
       ? `<span class="jzc-1688-logo"><img src="${escapeAttr(BRAND.logoUrl)}" alt="${escapeAttr(brandDisplayName)}"></span>`
       : `<span class="jzc-1688-logo">${escapeHtml(brandDisplayName.slice(0, 1))}</span>`;
@@ -1093,13 +1177,9 @@
   const FLOAT_KEY = 'jzc_1688_float';
   function floatSave(patch) {
     let s = {};
-    try {
-      s = JSON.parse(localStorage.getItem(FLOAT_KEY) || '{}');
-    } catch (e) {}
+    try { s = JSON.parse(localStorage.getItem(FLOAT_KEY) || '{}'); } catch (e) {}
     Object.assign(s, patch);
-    try {
-      localStorage.setItem(FLOAT_KEY, JSON.stringify(s));
-    } catch (e) {}
+    try { localStorage.setItem(FLOAT_KEY, JSON.stringify(s)); } catch (e) {}
   }
   function collapsePanel(on) {
     const p = document.getElementById('jzc-1688-panel');
@@ -1112,36 +1192,28 @@
     try {
       const s = JSON.parse(localStorage.getItem(FLOAT_KEY) || '{}');
       if (typeof s.left === 'number') {
-        root.style.left = s.left + 'px';
-        root.style.top = s.top + 'px';
-        root.style.right = 'auto';
-        root.style.bottom = 'auto';
+        root.style.left = s.left + 'px'; root.style.top = s.top + 'px';
+        root.style.right = 'auto'; root.style.bottom = 'auto';
       }
       if (s.collapsed) root.classList.add('jzc-collapsed');
     } catch (e) {}
     const clamp = (x, y) => {
-      const w = root.offsetWidth,
-        h = root.offsetHeight;
-      return [
-        Math.max(6, Math.min(x, window.innerWidth - w - 6)),
-        Math.max(6, Math.min(y, window.innerHeight - h - 6)),
-      ];
+      const w = root.offsetWidth, h = root.offsetHeight;
+      return [Math.max(6, Math.min(x, window.innerWidth - w - 6)),
+              Math.max(6, Math.min(y, window.innerHeight - h - 6))];
     };
     function startDrag(e) {
       if (e.button !== 0) return;
       const r = root.getBoundingClientRect();
-      const ox = e.clientX - r.left,
-        oy = e.clientY - r.top;
+      const ox = e.clientX - r.left, oy = e.clientY - r.top;
       let moved = false;
       root.__dragMoved = false;
       root.classList.add('jzc-dragging');
       const mv = (ev) => {
         if (Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) > 4) moved = true;
         const [x, y] = clamp(ev.clientX - ox, ev.clientY - oy);
-        root.style.left = x + 'px';
-        root.style.top = y + 'px';
-        root.style.right = 'auto';
-        root.style.bottom = 'auto';
+        root.style.left = x + 'px'; root.style.top = y + 'px';
+        root.style.right = 'auto'; root.style.bottom = 'auto';
       };
       const up = () => {
         document.removeEventListener('mousemove', mv);
@@ -1162,9 +1234,7 @@
     if (ball) {
       ball.addEventListener('mousedown', startDrag);
       // 点小球展开（拖动不算点击）
-      ball.addEventListener('click', () => {
-        if (!root.__dragMoved) collapsePanel(false);
-      });
+      ball.addEventListener('click', () => { if (!root.__dragMoved) collapsePanel(false); });
     }
   }
 
@@ -1194,17 +1264,13 @@
   }
 
   function escapeHtml(s) {
-    return String(s ?? '').replace(
-      /[&<>"']/g,
-      (c) =>
-        ({
-          '&': '&amp;',
-          '<': '&lt;',
-          '>': '&gt;',
-          '"': '&quot;',
-          "'": '&#39;',
-        })[c]
-    );
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[c]));
   }
 
   function escapeAttr(s) {
@@ -1216,7 +1282,7 @@
     if (!btn) return;
     const label = btn.querySelector('.jzc-1688-action-label');
     btn.disabled = busy;
-    if (label) label.textContent = busy ? busyText : btn.dataset.label || label.textContent;
+    if (label) label.textContent = busy ? busyText : (btn.dataset.label || label.textContent);
   }
 
   function sendRuntimeMessage(message) {
@@ -1329,13 +1395,17 @@
   }
 
   async function openCollectEditor(itemId) {
-    const path = itemId ? `/ozon/products/collect/edit?id=${encodeURIComponent(itemId)}` : '/ozon/products/collect';
+    const path = itemId
+      ? `/ozon/products/collect/edit?id=${encodeURIComponent(itemId)}`
+      : '/ozon/products/collect';
     const openResp = await sendRuntimeMessage({ action: 'openFrontend', path });
     if (openResp?.ok) return;
 
     const authResp = await sendRuntimeMessage({ action: 'getAuth' });
     const backendUrl = authResp?.data?.backendUrl || '';
-    const frontendUrl = backendUrl.includes('localhost') ? 'http://localhost:3000' : `https://${BRAND.webHost}`;
+    const frontendUrl = backendUrl.includes('localhost')
+      ? 'http://store.localhost:3000'
+      : `https://${BRAND.webHost}`;
     window.open(`${frontendUrl}${path}`, '_blank');
   }
 

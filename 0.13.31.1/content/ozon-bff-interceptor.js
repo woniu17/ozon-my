@@ -24,7 +24,7 @@
  *      原请求的关键路径
  */
 (function () {
-  'use strict';
+  "use strict";
   // 全局单例:商品页和搜索页 manifest 各有一条 MAIN world 注入条目,但同一
   // 浏览上下文(同 tab 同 frame)只应装一次 hook;此 flag 防重入。
   if (window.__JZC_BFF_INTERCEPTOR_INSTALLED__) return;
@@ -35,13 +35,13 @@
   // ozon-bestsellers-hook / ozon-premium-hook ↔ ozon-seller-bridge 约定一致。
   // 不用 CustomEvent — Chrome MV3 下 CustomEvent.detail 跨 world 时部分场景会
   // 被包成 wrapper,可调试性差。postMessage 走 structured clone 一致性更好。
-  const MSG_TYPE = 'JZC_OZON_COMPOSER_RESPONSE';
-  const PATCH_FETCH = '__jzcInterceptFetchPatched__';
-  const PATCH_FETCH_ACCESSOR = '__jzcInterceptFetchAccessorInstalled__';
-  const PATCH_XHR_OPEN = '__jzcInterceptXhrOpenPatched__';
-  const PATCH_XHR_OPEN_ACCESSOR = '__jzcInterceptXhrOpenAccessorInstalled__';
-  const PATCH_XHR_SEND = '__jzcInterceptXhrSendPatched__';
-  const PATCH_XHR_SEND_ACCESSOR = '__jzcInterceptXhrSendAccessorInstalled__';
+  const MSG_TYPE = "JZC_OZON_COMPOSER_RESPONSE";
+  const PATCH_FETCH = "__jzcInterceptFetchPatched__";
+  const PATCH_FETCH_ACCESSOR = "__jzcInterceptFetchAccessorInstalled__";
+  const PATCH_XHR_OPEN = "__jzcInterceptXhrOpenPatched__";
+  const PATCH_XHR_OPEN_ACCESSOR = "__jzcInterceptXhrOpenAccessorInstalled__";
+  const PATCH_XHR_SEND = "__jzcInterceptXhrSendPatched__";
+  const PATCH_XHR_SEND_ACCESSOR = "__jzcInterceptXhrSendAccessorInstalled__";
 
   // 端点白名单 — 仅拦命中这些 path 的请求。命中后才 clone+json,其他请求 zero cost。
   // 路径选择依据(2026-05 抓包确认):
@@ -66,7 +66,7 @@
   ];
 
   function isTargetUrl(url) {
-    if (!url || typeof url !== 'string') return false;
+    if (!url || typeof url !== "string") return false;
     for (let i = 0; i < URL_PATTERNS.length; i += 1) {
       if (URL_PATTERNS[i].test(url)) return true;
     }
@@ -75,11 +75,11 @@
 
   function extractUrlFromInput(input) {
     try {
-      if (typeof input === 'string') return input;
+      if (typeof input === "string") return input;
       if (input instanceof Request) return input.url;
-      if (input && typeof input.url === 'string') return input.url;
+      if (input && typeof input.url === "string") return input.url;
     } catch (e) {}
-    return '';
+    return "";
   }
 
   // 异步派发,不阻塞原请求 — Promise.resolve().then 推到 microtask
@@ -109,13 +109,13 @@
     try {
       return Function.prototype.toString.call(window.fetch);
     } catch (e) {
-      return 'function fetch() { [native code] }';
+      return "function fetch() { [native code] }";
     }
   })();
 
   function makeNativeLooking(wrapped, nativeStr) {
     try {
-      Object.defineProperty(wrapped, 'toString', {
+      Object.defineProperty(wrapped, "toString", {
         value: function toString() {
           return nativeStr;
         },
@@ -125,8 +125,8 @@
       });
       // name 也伪装回 "fetch"
       try {
-        Object.defineProperty(wrapped, 'name', {
-          value: 'fetch',
+        Object.defineProperty(wrapped, "name", {
+          value: "fetch",
           configurable: true,
         });
       } catch (e) {}
@@ -134,20 +134,20 @@
   }
 
   function wrapFetch(orig) {
-    if (typeof orig !== 'function' || orig[PATCH_FETCH]) return orig;
+    if (typeof orig !== "function" || orig[PATCH_FETCH]) return orig;
     const wrapped = function (input, init) {
-      const url = String(extractUrlFromInput(input) || '');
+      const url = String(extractUrlFromInput(input) || "");
       const promise = orig.call(this, input, init);
       if (!isTargetUrl(url)) return promise;
       // 命中白名单:fire-and-forget 异步消费 clone
       return promise.then(
         (response) => {
           try {
-            if (response && typeof response.clone === 'function') {
+            if (response && typeof response.clone === "function") {
               const cloned = response.clone();
               cloned
                 .json()
-                .then((data) => dispatchSafe(url, data, 'fetch'))
+                .then((data) => dispatchSafe(url, data, "fetch"))
                 .catch(() => {});
             }
           } catch (e) {}
@@ -167,7 +167,7 @@
     if (!window[PATCH_FETCH_ACCESSOR]) {
       let originalFetch = window.fetch;
       let currentFetch = wrapFetch(originalFetch);
-      Object.defineProperty(window, 'fetch', {
+      Object.defineProperty(window, "fetch", {
         configurable: true,
         enumerable: true,
         get: function () {
@@ -189,22 +189,22 @@
   // ─── (2) XMLHttpRequest 拦截 ────────────────────────
   // Ozon 大部分接口走 fetch,但仍有少量 XHR(老页面/第三方 widget)
   function wrapXhrOpen(orig) {
-    if (typeof orig !== 'function' || orig[PATCH_XHR_OPEN]) return orig;
+    if (typeof orig !== "function" || orig[PATCH_XHR_OPEN]) return orig;
     const wrapped = function (method, url) {
       try {
-        this.__jzcInterceptUrl__ = String(url || '');
+        this.__jzcInterceptUrl__ = String(url || "");
       } catch (e) {}
       return orig.apply(this, arguments);
     };
     wrapped[PATCH_XHR_OPEN] = true;
-    makeNativeLooking(wrapped, 'function open() { [native code] }');
+    makeNativeLooking(wrapped, "function open() { [native code] }");
     return wrapped;
   }
 
   function wrapXhrSend(orig) {
-    if (typeof orig !== 'function' || orig[PATCH_XHR_SEND]) return orig;
+    if (typeof orig !== "function" || orig[PATCH_XHR_SEND]) return orig;
     const wrapped = function (body) {
-      const url = String(this.__jzcInterceptUrl__ || '');
+      const url = String(this.__jzcInterceptUrl__ || "");
       if (isTargetUrl(url)) {
         const xhr = this;
         const origOnLoad = xhr.onload;
@@ -212,11 +212,14 @@
         const captureBody = function () {
           try {
             if (xhr.readyState === 4 && xhr.status >= 200 && xhr.status < 300) {
-              const text = xhr.responseType === '' || xhr.responseType === 'text' ? xhr.responseText : null;
+              const text =
+                xhr.responseType === "" || xhr.responseType === "text"
+                  ? xhr.responseText
+                  : null;
               if (text) {
                 try {
                   const data = JSON.parse(text);
-                  dispatchSafe(url, data, 'xhr');
+                  dispatchSafe(url, data, "xhr");
                 } catch (e) {}
               }
             }
@@ -224,19 +227,19 @@
         };
         // 用 addEventListener 而不是覆盖 onload — 不要破坏原始监听器
         try {
-          xhr.addEventListener('load', captureBody);
+          xhr.addEventListener("load", captureBody);
         } catch (e) {
           // 兜底:某些环境 addEventListener 被改,用 chained onload
           xhr.onload = function () {
             captureBody();
-            if (typeof origOnLoad === 'function') {
+            if (typeof origOnLoad === "function") {
               try {
                 origOnLoad.apply(xhr, arguments);
               } catch (e2) {}
             }
           };
           xhr.onreadystatechange = function () {
-            if (typeof origOnReady === 'function') {
+            if (typeof origOnReady === "function") {
               try {
                 origOnReady.apply(xhr, arguments);
               } catch (e2) {}
@@ -247,7 +250,7 @@
       return orig.apply(this, [body]);
     };
     wrapped[PATCH_XHR_SEND] = true;
-    makeNativeLooking(wrapped, 'function send() { [native code] }');
+    makeNativeLooking(wrapped, "function send() { [native code] }");
     return wrapped;
   }
 
@@ -256,7 +259,7 @@
     if (!proto[PATCH_XHR_OPEN_ACCESSOR]) {
       let originalOpen = proto.open;
       let currentOpen = wrapXhrOpen(originalOpen);
-      Object.defineProperty(proto, 'open', {
+      Object.defineProperty(proto, "open", {
         configurable: true,
         enumerable: false,
         get: function () {
@@ -276,7 +279,7 @@
     if (!proto[PATCH_XHR_SEND_ACCESSOR]) {
       let originalSend = proto.send;
       let currentSend = wrapXhrSend(originalSend);
-      Object.defineProperty(proto, 'send', {
+      Object.defineProperty(proto, "send", {
         configurable: true,
         enumerable: false,
         get: function () {

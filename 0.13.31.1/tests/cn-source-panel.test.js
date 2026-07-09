@@ -1,32 +1,32 @@
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
 
 function loadPlaywright() {
   try {
-    return require('playwright');
+    return require("playwright");
   } catch {}
 
-  return require(path.join(__dirname, '..', '..', 'backend', 'node_modules', 'playwright'));
+  return require(path.join(__dirname, "..", "..", "backend", "node_modules", "playwright"));
 }
 
 const { chromium } = loadPlaywright();
 
-const scraperHelperPath = path.join(__dirname, '..', 'lib', 'cn-source-scraper.js');
-const panelPath = path.join(__dirname, '..', 'lib', 'cn-source-panel.js');
-const productPath = path.join(__dirname, '..', 'content', 'cn-source-product.js');
-const manifestPath = path.join(__dirname, '..', 'manifest.json');
-const debugBridgePagePath = path.join(__dirname, '..', 'lib', 'cn-source-debug-page.js');
+const scraperHelperPath = path.join(__dirname, "..", "lib", "cn-source-scraper.js");
+const panelPath = path.join(__dirname, "..", "lib", "cn-source-panel.js");
+const productPath = path.join(__dirname, "..", "content", "cn-source-product.js");
+const manifestPath = path.join(__dirname, "..", "manifest.json");
+const debugBridgePagePath = path.join(__dirname, "..", "lib", "cn-source-debug-page.js");
 
 async function withJdPage(fn) {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  await page.route('https://item.jd.com/100285845266.html', async (route) => {
+  await page.route("https://item.jd.com/100285845266.html", async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -82,12 +82,12 @@ async function withJdPage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'jd-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "jd-collect-id", action: "created" } } };
   });
 
-  await page.goto('https://item.jd.com/100285845266.html');
+  await page.goto("https://item.jd.com/100285845266.html");
   await page.evaluate(() => {
     window.chrome = {
       runtime: {
@@ -116,17 +116,16 @@ async function withJdRenderedNoisePage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  const title =
-    '\u666f\u7530\u767e\u5c81\u5c71\uff08ganten\uff09\u996e\u7528\u5929\u7136\u77ff\u6cc9\u6c34 348ml*24\u74f6 \u6574\u7bb1\u88c5';
-  const badTitle = '\u6700\u5c0f\u5355\u4ef7\u8ba1\u7b97\u5668';
-  const sellerName = '\u996e\u54c1\u6298\u6263\u4eac\u4e1c\u81ea\u8425\u4e13\u533a';
-  const mainImage = 'https://img10.360buyimg.com/n1/jfs/ganten-main.jpg';
-  const logoImage = 'https://img10.360buyimg.com/imgzone/jd-logo.png';
+  const title = "\u666f\u7530\u767e\u5c81\u5c71\uff08ganten\uff09\u996e\u7528\u5929\u7136\u77ff\u6cc9\u6c34 348ml*24\u74f6 \u6574\u7bb1\u88c5";
+  const badTitle = "\u6700\u5c0f\u5355\u4ef7\u8ba1\u7b97\u5668";
+  const sellerName = "\u996e\u54c1\u6298\u6263\u4eac\u4e1c\u81ea\u8425\u4e13\u533a";
+  const mainImage = "https://img10.360buyimg.com/n1/jfs/ganten-main.jpg";
+  const logoImage = "https://img10.360buyimg.com/imgzone/jd-logo.png";
 
-  await page.route('https://item.jd.com/100285845266.html', async (route) => {
+  await page.route("https://item.jd.com/100285845266.html", async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -160,12 +159,12 @@ async function withJdRenderedNoisePage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'jd-noise-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "jd-noise-collect-id", action: "created" } } };
   });
 
-  await page.goto('https://item.jd.com/100285845266.html');
+  await page.goto("https://item.jd.com/100285845266.html");
   await page.evaluate(() => {
     window.chrome = {
       runtime: {
@@ -196,18 +195,18 @@ async function withPifaPage(fn, options = {}) {
   const consoleMessages = [];
   const runtimeResponse = options.runtimeResponse || {
     ok: true,
-    data: { result: { id: 'pifa-collect-id', action: 'created' } },
+    data: { result: { id: "pifa-collect-id", action: "created" } },
   };
-  const runtimeLastErrorMessage = options.runtimeLastErrorMessage || '';
+  const runtimeLastErrorMessage = options.runtimeLastErrorMessage || "";
 
-  page.on('console', (message) => {
+  page.on("console", (message) => {
     consoleMessages.push(message.text());
   });
 
-  await page.route('https://pifa.pinduoduo.com/goods.html?goods_id=722497925613', async (route) => {
+  await page.route("https://pifa.pinduoduo.com/goods.html?goods_id=722497925613", async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -246,12 +245,12 @@ async function withPifaPage(fn, options = {}) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return typeof runtimeResponse === 'function' ? runtimeResponse(message) : runtimeResponse;
+    return typeof runtimeResponse === "function" ? runtimeResponse(message) : runtimeResponse;
   });
 
-  await page.goto('https://pifa.pinduoduo.com/goods.html?goods_id=722497925613');
+  await page.goto("https://pifa.pinduoduo.com/goods.html?goods_id=722497925613");
   await page.evaluate((lastErrorMessage) => {
     const runtime = {
       lastError: null,
@@ -285,10 +284,10 @@ async function withPifaRenderedPage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  await page.route('https://pifa.pinduoduo.com/detail/722497925613', async (route) => {
+  await page.route("https://pifa.pinduoduo.com/detail/722497925613", async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -314,12 +313,12 @@ async function withPifaRenderedPage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'pifa-rendered-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "pifa-rendered-collect-id", action: "created" } } };
   });
 
-  await page.goto('https://pifa.pinduoduo.com/detail/722497925613');
+  await page.goto("https://pifa.pinduoduo.com/detail/722497925613");
   await page.evaluate(() => {
     window.chrome = {
       runtime: {
@@ -348,12 +347,11 @@ async function withPifaGoodsDetailPage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  const url =
-    'https://pifa.pinduoduo.com/goods/detail/?gid=458592806&sn=64658.3319664.0.458592806&refer_page_id=64658_1782270720379_0c006e8eb';
+  const url = "https://pifa.pinduoduo.com/goods/detail/?gid=458592806&sn=64658.3319664.0.458592806&refer_page_id=64658_1782270720379_0c006e8eb";
   await page.route(url, async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -377,9 +375,9 @@ async function withPifaGoodsDetailPage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'pifa-goods-detail-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "pifa-goods-detail-collect-id", action: "created" } } };
   });
 
   await page.goto(url);
@@ -411,19 +409,18 @@ async function withTaobaoRenderedPage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  const title =
-    '\u5305\u90ae\u6cf0\u56fd\u559c\u51c0hygiene\u6d17\u8863\u6db2\u53bb\u6c61\u5976\u9999\u6d77\u6d0b\u9999\u5b66\u751f\u5bb6\u7528';
-  const reviewTitle = '\u7528\u6237\u8bc4\u4ef7\u00b78000+';
-  const openShopText = '\u514d\u8d39\u5f00\u5e97';
-  const shopName = '\u559c\u51c0\u6d77\u5916\u5e97';
-  const mainImage = 'https://img.alicdn.com/imgextra/i4/220123/O1CN01hygiene-main.jpg';
-  const sideImage = 'https://img.alicdn.com/imgextra/i2/220123/O1CN01hygiene-side.jpg';
-  const url = 'https://item.taobao.com/item.htm?id=980680602229';
+  const title = "\u5305\u90ae\u6cf0\u56fd\u559c\u51c0hygiene\u6d17\u8863\u6db2\u53bb\u6c61\u5976\u9999\u6d77\u6d0b\u9999\u5b66\u751f\u5bb6\u7528";
+  const reviewTitle = "\u7528\u6237\u8bc4\u4ef7\u00b78000+";
+  const openShopText = "\u514d\u8d39\u5f00\u5e97";
+  const shopName = "\u559c\u51c0\u6d77\u5916\u5e97";
+  const mainImage = "https://img.alicdn.com/imgextra/i4/220123/O1CN01hygiene-main.jpg";
+  const sideImage = "https://img.alicdn.com/imgextra/i2/220123/O1CN01hygiene-side.jpg";
+  const url = "https://item.taobao.com/item.htm?id=980680602229";
 
   await page.route(url, async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -455,9 +452,9 @@ async function withTaobaoRenderedPage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'taobao-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "taobao-collect-id", action: "created" } } };
   });
 
   await page.goto(url);
@@ -489,19 +486,18 @@ async function withTaobaoSkuNoisePage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  const title =
-    '\u6cf0\u56fd\u8fdb\u53e3hygiene\u559c\u51c0\u67d4\u987a\u5242\u8863\u7269\u62a4\u7406\u67d4\u8f6f\u9632\u9759\u7535\u6301\u4e45\u7559\u9999';
-  const badTitle = '\u6301\u4e45\u7559\u9999';
-  const badSeller = '\u5f00\u76f4\u64ad\u5e97';
-  const sellerName = '\u559c\u51c0\u6d77\u5916\u65d7\u8230\u5e97';
-  const mainImage = 'https://img.alicdn.com/imgextra/i4/220123/O1CN01hygiene-softener-main.jpg';
-  const badImage = 'https://img.alicdn.com/imgextra/i4/220123/O1CN01live-tag.jpg';
-  const url = 'https://item.taobao.com/item.htm?id=908658719203';
+  const title = "\u6cf0\u56fd\u8fdb\u53e3hygiene\u559c\u51c0\u67d4\u987a\u5242\u8863\u7269\u62a4\u7406\u67d4\u8f6f\u9632\u9759\u7535\u6301\u4e45\u7559\u9999";
+  const badTitle = "\u6301\u4e45\u7559\u9999";
+  const badSeller = "\u5f00\u76f4\u64ad\u5e97";
+  const sellerName = "\u559c\u51c0\u6d77\u5916\u65d7\u8230\u5e97";
+  const mainImage = "https://img.alicdn.com/imgextra/i4/220123/O1CN01hygiene-softener-main.jpg";
+  const badImage = "https://img.alicdn.com/imgextra/i4/220123/O1CN01live-tag.jpg";
+  const url = "https://item.taobao.com/item.htm?id=908658719203";
 
   await page.route(url, async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -543,9 +539,9 @@ async function withTaobaoSkuNoisePage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'taobao-noise-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "taobao-noise-collect-id", action: "created" } } };
   });
 
   await page.goto(url);
@@ -577,17 +573,15 @@ async function withTaobaoAliImageSuffixPage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  const title =
-    '\u5e3d\u5b50\u9632\u98ce\u7ef3\u4e13\u7528\u7ef3\u5e26\u9632\u6389\u795e\u5668\u592a\u9633\u5e3d\u56fa\u5b9a\u5e26\u5b50\u53ef\u8c03\u8282\u914d\u4ef6\u591a\u529f\u80fd';
-  const rawMainImage =
-    'https://img.alicdn.com/imgextra/i4/3505758707/O1CN019COSaE2EBrgNCeDPB_!!3505758707.jpg_760x760q30.jpg_.webp';
-  const normalizedMainImage = 'https://img.alicdn.com/imgextra/i4/3505758707/O1CN019COSaE2EBrgNCeDPB_!!3505758707.jpg';
-  const url = 'https://item.taobao.com/item.htm?id=3505758707';
+  const title = "\u5e3d\u5b50\u9632\u98ce\u7ef3\u4e13\u7528\u7ef3\u5e26\u9632\u6389\u795e\u5668\u592a\u9633\u5e3d\u56fa\u5b9a\u5e26\u5b50\u53ef\u8c03\u8282\u914d\u4ef6\u591a\u529f\u80fd";
+  const rawMainImage = "https://img.alicdn.com/imgextra/i4/3505758707/O1CN019COSaE2EBrgNCeDPB_!!3505758707.jpg_760x760q30.jpg_.webp";
+  const normalizedMainImage = "https://img.alicdn.com/imgextra/i4/3505758707/O1CN019COSaE2EBrgNCeDPB_!!3505758707.jpg";
+  const url = "https://item.taobao.com/item.htm?id=3505758707";
 
   await page.route(url, async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -607,9 +601,9 @@ async function withTaobaoAliImageSuffixPage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'taobao-image-suffix-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "taobao-image-suffix-collect-id", action: "created" } } };
   });
 
   await page.goto(url);
@@ -641,17 +635,16 @@ async function withTaobaoDomVariantPage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  const title =
-    '\u65d7\u8230\u6b3e\u84dd\u7259\u8033\u673a\u4e3b\u52a8\u964d\u566a\u957f\u7eed\u822a\u9002\u7528\u5b66\u751f\u901a\u52e4';
-  const skuLabel = '8h\uff08\u5355\u6b21\u7eed\u822a\uff09 36\uff08\u603b\u7eed\u822a\uff09';
-  const aggregateColorLabel = '\u9ed1\u8272\u5343\u4eba\u52a0\u8d2d\u767d\u8272';
-  const colorImage = 'https://img.alicdn.com/imgextra/i4/3505758707/O1CN01blue_!!3505758707.jpg_760x760q30.jpg_.webp';
-  const url = 'https://detail.tmall.com/item.htm?id=971785515390';
+  const title = "\u65d7\u8230\u6b3e\u84dd\u7259\u8033\u673a\u4e3b\u52a8\u964d\u566a\u957f\u7eed\u822a\u9002\u7528\u5b66\u751f\u901a\u52e4";
+  const skuLabel = "8h\uff08\u5355\u6b21\u7eed\u822a\uff09 36\uff08\u603b\u7eed\u822a\uff09";
+  const aggregateColorLabel = "\u9ed1\u8272\u5343\u4eba\u52a0\u8d2d\u767d\u8272";
+  const colorImage = "https://img.alicdn.com/imgextra/i4/3505758707/O1CN01blue_!!3505758707.jpg_760x760q30.jpg_.webp";
+  const url = "https://detail.tmall.com/item.htm?id=971785515390";
 
   await page.route(url, async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -690,9 +683,9 @@ async function withTaobaoDomVariantPage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'taobao-dom-variant-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "taobao-dom-variant-collect-id", action: "created" } } };
   });
 
   await page.goto(url);
@@ -724,14 +717,14 @@ async function withJdDomVariantPage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  const title = '真维斯（Jeanswest）三本针260g纯棉重磅短袖t恤男款夏季薄款宽松圆领';
-  const sellerName = '真维斯男装旗舰店';
-  const url = 'https://item.jd.com/10097174173489.html';
+  const title = "真维斯（Jeanswest）三本针260g纯棉重磅短袖t恤男款夏季薄款宽松圆领";
+  const sellerName = "真维斯男装旗舰店";
+  const url = "https://item.jd.com/10097174173489.html";
 
   await page.route(url, async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -761,9 +754,9 @@ async function withJdDomVariantPage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'jd-dom-variant-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "jd-dom-variant-collect-id", action: "created" } } };
   });
 
   await page.goto(url);
@@ -795,13 +788,13 @@ async function withPifaSpecPanelVariantPage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  const title = '注音版儿童励志成长故事书小学生6-12岁一二三四五年级课外书籍';
-  const url = 'https://pifa.pinduoduo.com/goods.html?goods_id=6930774258';
+  const title = "注音版儿童励志成长故事书小学生6-12岁一二三四五年级课外书籍";
+  const url = "https://pifa.pinduoduo.com/goods.html?goods_id=6930774258";
 
   await page.route(url, async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -831,9 +824,9 @@ async function withPifaSpecPanelVariantPage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'pifa-spec-panel-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "pifa-spec-panel-collect-id", action: "created" } } };
   });
 
   await page.goto(url);
@@ -865,13 +858,13 @@ async function withPifaSkuListVariantPage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  const title = '猫砂除臭20斤装40斤10斤结团猫沙膨润土活性炭大袋猫砂防臭清仓';
-  const url = 'https://pifa.pinduoduo.com/goods/detail/?gid=407915951684';
+  const title = "猫砂除臭20斤装40斤10斤结团猫沙膨润土活性炭大袋猫砂防臭清仓";
+  const url = "https://pifa.pinduoduo.com/goods/detail/?gid=407915951684";
 
   await page.route(url, async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -919,9 +912,9 @@ async function withPifaSkuListVariantPage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'pifa-sku-list-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "pifa-sku-list-collect-id", action: "created" } } };
   });
 
   await page.goto(url);
@@ -953,13 +946,13 @@ async function withPifaDomVariantPage(fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const captured = [];
 
-  const title = '\u62fc\u591a\u591a\u6279\u53d1\u7eb8\u76d2\u591a\u89c4\u683c\u6d4b\u8bd5\u5546\u54c1';
-  const url = 'https://pifa.pinduoduo.com/goods.html?goods_id=722497925613';
+  const title = "\u62fc\u591a\u591a\u6279\u53d1\u7eb8\u76d2\u591a\u89c4\u683c\u6d4b\u8bd5\u5546\u54c1";
+  const url = "https://pifa.pinduoduo.com/goods.html?goods_id=722497925613";
 
   await page.route(url, async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: `
         <!doctype html>
         <html>
@@ -989,9 +982,9 @@ async function withPifaDomVariantPage(fn) {
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: 'pifa-dom-variant-collect-id', action: 'created' } } };
+    return { ok: true, data: { result: { id: "pifa-dom-variant-collect-id", action: "created" } } };
   });
 
   await page.goto(url);
@@ -1026,14 +1019,14 @@ async function withGlobalSourcePage({ url, html, collectId }, fn) {
   await page.route(url, async (route) => {
     await route.fulfill({
       status: 200,
-      contentType: 'text/html; charset=utf-8',
+      contentType: "text/html; charset=utf-8",
       body: html,
     });
   });
 
-  await page.exposeFunction('__captureJzcMessage', (message) => {
+  await page.exposeFunction("__captureJzcMessage", (message) => {
     captured.push(message);
-    return { ok: true, data: { result: { id: collectId, action: 'created' } } };
+    return { ok: true, data: { result: { id: collectId, action: "created" } } };
   });
 
   await page.goto(url);
@@ -1061,13 +1054,12 @@ async function withGlobalSourcePage({ url, html, collectId }, fn) {
 }
 
 async function withAmazonPage(fn) {
-  const url = 'https://www.amazon.com/dp/B0TESTASN1';
-  const title = 'Amazon sample backpack';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'amazon-collect-id',
-      html: `
+  const url = "https://www.amazon.com/dp/B0TESTASN1";
+  const title = "Amazon sample backpack";
+  await withGlobalSourcePage({
+    url,
+    collectId: "amazon-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1102,19 +1094,16 @@ async function withAmazonPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withAmazonTwisterAggregatePage(fn) {
-  const url = 'https://www.amazon.com/Acer-Aspire-Go-Laptop/dp/B0FN9JLD28?th=1';
-  const title = 'Acer Aspire Go 15 AI Ready Laptop';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'amazon-twister-collect-id',
-      html: `
+  const url = "https://www.amazon.com/Acer-Aspire-Go-Laptop/dp/B0FN9JLD28?th=1";
+  const title = "Acer Aspire Go 15 AI Ready Laptop";
+  await withGlobalSourcePage({
+    url,
+    collectId: "amazon-twister-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1163,19 +1152,16 @@ async function withAmazonTwisterAggregatePage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withAmazonJsonTwisterPage(fn) {
-  const url = 'https://www.amazon.com/Acer-Aspire-Go-Laptop/dp/B0FN9JLD28?th=1';
-  const title = 'Acer Aspire Go 15 AI Ready Laptop';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'amazon-json-twister-collect-id',
-      html: `
+  const url = "https://www.amazon.com/Acer-Aspire-Go-Laptop/dp/B0FN9JLD28?th=1";
+  const title = "Acer Aspire Go 15 AI Ready Laptop";
+  await withGlobalSourcePage({
+    url,
+    collectId: "amazon-json-twister-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1218,19 +1204,16 @@ async function withAmazonJsonTwisterPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withAmazonBrandBylinePage(fn) {
-  const url = 'https://www.amazon.co.jp/dp/B0F99W6NQ6';
-  const title = 'Kirei Kirei medicated foam hand soap refill';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'amazon-brand-byline-collect-id',
-      html: `
+  const url = "https://www.amazon.co.jp/dp/B0F99W6NQ6";
+  const title = "Kirei Kirei medicated foam hand soap refill";
+  await withGlobalSourcePage({
+    url,
+    collectId: "amazon-brand-byline-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1247,19 +1230,16 @@ async function withAmazonBrandBylinePage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withWbPage(fn) {
-  const url = 'https://www.wildberries.ru/catalog/211234567/detail.aspx';
-  const title = 'WB sample sneakers';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'wb-collect-id',
-      html: `
+  const url = "https://www.wildberries.ru/catalog/211234567/detail.aspx";
+  const title = "WB sample sneakers";
+  await withGlobalSourcePage({
+    url,
+    collectId: "wb-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1282,19 +1262,16 @@ async function withWbPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withWbModernRenderedPage(fn) {
-  const url = 'https://www.wildberries.ru/catalog/246443845/detail.aspx';
-  const title = 'WB modern shower gel';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'wb-modern-collect-id',
-      html: `
+  const url = "https://www.wildberries.ru/catalog/246443845/detail.aspx";
+  const title = "WB modern shower gel";
+  await withGlobalSourcePage({
+    url,
+    collectId: "wb-modern-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1321,18 +1298,15 @@ async function withWbModernRenderedPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withWbGenericShellPage(fn) {
-  const url = 'https://www.wildberries.ru/catalog/142044104/detail.aspx?targetUrl=MI';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'wb-generic-shell-collect-id',
-      html: `
+  const url = "https://www.wildberries.ru/catalog/142044104/detail.aspx?targetUrl=MI";
+  await withGlobalSourcePage({
+    url,
+    collectId: "wb-generic-shell-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1355,19 +1329,16 @@ async function withWbGenericShellPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured)
-  );
+  }, async (page, captured) => fn(page, captured));
 }
 
 async function withTemuPage(fn) {
-  const url = 'https://www.temu.com/goods.html?goods_id=601099512345678';
-  const title = 'Temu sample storage box';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'temu-collect-id',
-      html: `
+  const url = "https://www.temu.com/goods.html?goods_id=601099512345678";
+  const title = "Temu sample storage box";
+  await withGlobalSourcePage({
+    url,
+    collectId: "temu-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1396,19 +1367,16 @@ async function withTemuPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withTemuNoisyJapanPage(fn) {
-  const url = 'https://www.temu.com/jp-zh-Hans/sample-mask.html?goods_id=606283956597557';
-  const title = '防晒面罩遮脸护颈一体防紫外线男女士全脸冰丝防晒口罩骑行围脖';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'temu-noisy-japan-collect-id',
-      html: `
+  const url = "https://www.temu.com/jp-zh-Hans/sample-mask.html?goods_id=606283956597557";
+  const title = "防晒面罩遮脸护颈一体防紫外线男女士全脸冰丝防晒口罩骑行围脖";
+  await withGlobalSourcePage({
+    url,
+    collectId: "temu-noisy-japan-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1425,19 +1393,16 @@ async function withTemuNoisyJapanPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withTemuRenderedChineseProductPage(fn) {
-  const url = 'https://www.temu.com/jp-zh-Hans/sample-mask-g-606283956597557.html';
-  const title = '防晒面罩遮脸护颈一体防紫外线男女士全脸冰丝防晒口罩骑行围脖';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'temu-rendered-cn-collect-id',
-      html: `
+  const url = "https://www.temu.com/jp-zh-Hans/sample-mask-g-606283956597557.html";
+  const title = "防晒面罩遮脸护颈一体防紫外线男女士全脸冰丝防晒口罩骑行围脖";
+  await withGlobalSourcePage({
+    url,
+    collectId: "temu-rendered-cn-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1465,19 +1430,16 @@ async function withTemuRenderedChineseProductPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withTemuFragmentedPriceNoSellerPage(fn) {
-  const url = 'https://www.temu.com/jp-zh-Hans/sample-chair-g-605129180831795.html';
-  const title = 'Temu folding lounge chair';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'temu-fragmented-price-collect-id',
-      html: `
+  const url = "https://www.temu.com/jp-zh-Hans/sample-chair-g-605129180831795.html";
+  const title = "Temu folding lounge chair";
+  await withGlobalSourcePage({
+    url,
+    collectId: "temu-fragmented-price-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1493,19 +1455,16 @@ async function withTemuFragmentedPriceNoSellerPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withTemuSellerProfileCardPage(fn) {
-  const url = 'https://www.temu.com/jp-zh-Hans/sample-jacket-g-601105124897749.html';
-  const title = '重磅水洗做旧连帽夹克';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'temu-seller-profile-card-collect-id',
-      html: `
+  const url = "https://www.temu.com/jp-zh-Hans/sample-jacket-g-601105124897749.html";
+  const title = "重磅水洗做旧连帽夹克";
+  await withGlobalSourcePage({
+    url,
+    collectId: "temu-seller-profile-card-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1534,19 +1493,16 @@ async function withTemuSellerProfileCardPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withTemuNoisyProductImagesJapanPage(fn) {
-  const url = 'https://www.temu.com/jp-zh-Hans/sample-mask-g-606283956597557.html';
-  const title = 'Temu JP mask';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'temu-noisy-images-collect-id',
-      html: `
+  const url = "https://www.temu.com/jp-zh-Hans/sample-mask-g-606283956597557.html";
+  const title = "Temu JP mask";
+  await withGlobalSourcePage({
+    url,
+    collectId: "temu-noisy-images-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1567,19 +1523,16 @@ async function withTemuNoisyProductImagesJapanPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withTemuLocalizedSlugPage(fn) {
-  const url = 'https://www.temu.com/jp-zh-Hans/sample-summer-mask.html';
-  const title = 'Temu localized summer mask';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'temu-localized-collect-id',
-      html: `
+  const url = "https://www.temu.com/jp-zh-Hans/sample-summer-mask.html";
+  const title = "Temu localized summer mask";
+  await withGlobalSourcePage({
+    url,
+    collectId: "temu-localized-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1616,19 +1569,16 @@ async function withTemuLocalizedSlugPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withMercadoLibrePage(fn) {
-  const url = 'https://articulo.mercadolibre.com.ar/MLA-1234567890-sample-backpack-_JM';
-  const title = 'Mercado Libre sample backpack';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'mercadolibre-collect-id',
-      html: `
+  const url = "https://articulo.mercadolibre.com.ar/MLA-1234567890-sample-backpack-_JM";
+  const title = "Mercado Libre sample backpack";
+  await withGlobalSourcePage({
+    url,
+    collectId: "mercadolibre-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1665,20 +1615,16 @@ async function withMercadoLibrePage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withMercadoLibreShippingNoisePage(fn) {
-  const url =
-    'https://www.mercadolibre.com.ar/caloventor-liliana-cemfh02-de-2000-w-vertical-y-horizontal-negro/p/MLA69364036';
-  const title = 'Caloventor Liliana CEMFH02 de 2000 W, Vertical y Horizontal, Negro';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'mercadolibre-shipping-noise-collect-id',
-      html: `
+  const url = "https://www.mercadolibre.com.ar/caloventor-liliana-cemfh02-de-2000-w-vertical-y-horizontal-negro/p/MLA69364036";
+  const title = "Caloventor Liliana CEMFH02 de 2000 W, Vertical y Horizontal, Negro";
+  await withGlobalSourcePage({
+    url,
+    collectId: "mercadolibre-shipping-noise-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1706,19 +1652,16 @@ async function withMercadoLibreShippingNoisePage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withYandexPage(fn) {
-  const url = 'https://market.yandex.ru/product--sample-speaker/987654321';
-  const title = 'Yandex sample speaker';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'yandex-collect-id',
-      html: `
+  const url = "https://market.yandex.ru/product--sample-speaker/987654321";
+  const title = "Yandex sample speaker";
+  await withGlobalSourcePage({
+    url,
+    collectId: "yandex-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1742,19 +1685,16 @@ async function withYandexPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withYandexRenderedPage(fn) {
-  const url = 'https://market.yandex.ru/product--voombox-outdoor/10865015';
-  const title = 'Портативная акустика Divoom Voombox outdoor 15 Вт';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'yandex-rendered-collect-id',
-      html: `
+  const url = "https://market.yandex.ru/product--voombox-outdoor/10865015";
+  const title = "Портативная акустика Divoom Voombox outdoor 15 Вт";
+  await withGlobalSourcePage({
+    url,
+    collectId: "yandex-rendered-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1776,20 +1716,16 @@ async function withYandexRenderedPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withYandexMerchantFilterShopPage(fn) {
-  const url =
-    'https://market.yandex.ru/card/kreslo-meshok-grusha-xl-oksford-lazurnyy/103189793773?do-waremd5=5rYKO5MX9AJIflMPfX-vCw&ogV=-12';
-  const title = 'Кресло-мешок Пуффбери «Груша», размер XXL средний, Оксфорд Лазурный';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'yandex-merchant-filter-shop-collect-id',
-      html: `
+  const url = "https://market.yandex.ru/card/kreslo-meshok-grusha-xl-oksford-lazurnyy/103189793773?do-waremd5=5rYKO5MX9AJIflMPfX-vCw&ogV=-12";
+  const title = "Кресло-мешок Пуффбери «Груша», размер XXL средний, Оксфорд Лазурный";
+  await withGlobalSourcePage({
+    url,
+    collectId: "yandex-merchant-filter-shop-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1825,19 +1761,16 @@ async function withYandexMerchantFilterShopPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinPage(fn) {
-  const url = 'https://www.shein.com/Sample-Dress-p-34567890-cat-1727.html?goods_id=34567890';
-  const title = 'SHEIN sample dress';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-collect-id',
-      html: `
+  const url = "https://www.shein.com/Sample-Dress-p-34567890-cat-1727.html?goods_id=34567890";
+  const title = "SHEIN sample dress";
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1868,19 +1801,16 @@ async function withSheinPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinJapanTitlePage(fn) {
-  const url = 'https://jp.shein.com/SHEGLAM-Lumi-Eye-Aegyo-Sal-Pen-Duo-Cookie-Dough-p-186365092.html';
-  const title = 'SHEGLAM Lumi-Eye Aegyo-Sal ペンデュオ-Cookie Dough';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-japan-title-collect-id',
-      html: `
+  const url = "https://jp.shein.com/SHEGLAM-Lumi-Eye-Aegyo-Sal-Pen-Duo-Cookie-Dough-p-186365092.html";
+  const title = "SHEGLAM Lumi-Eye Aegyo-Sal ペンデュオ-Cookie Dough";
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-japan-title-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1907,20 +1837,16 @@ async function withSheinJapanTitlePage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinMarketplaceSellerPage(fn) {
-  const url =
-    'https://jp.shein.com/Women-Blouses-Shirts-p-423724222.html?mallCode=1&detailBusinessFrom=0-2&imgRatio=1-1';
-  const title = 'Women Blouses Shirts';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-marketplace-seller-collect-id',
-      html: `
+  const url = "https://jp.shein.com/Women-Blouses-Shirts-p-423724222.html?mallCode=1&detailBusinessFrom=0-2&imgRatio=1-1";
+  const title = "Women Blouses Shirts";
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-marketplace-seller-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -1953,20 +1879,16 @@ async function withSheinMarketplaceSellerPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinBrandShopInfoPage(fn) {
-  const url =
-    'https://jp.shein.com/BizChic-Women-s-Knitted-Cardigan-V-Neck-Fitted-Open-Front-Metal-Button-Striped-Old-Money-Style-Minimalist-Office-Date-Vacation-Commute-Independence-Day-Graduation-Season-Music-Festival-Slimming-Elegant-Versatile-June-Festival-Birthday-Party-Gathering-Office-Formal-Summer-p-481621562.html?mallCode=1';
+  const url = "https://jp.shein.com/BizChic-Women-s-Knitted-Cardigan-V-Neck-Fitted-Open-Front-Metal-Button-Striped-Old-Money-Style-Minimalist-Office-Date-Vacation-Commute-Independence-Day-Graduation-Season-Music-Festival-Slimming-Elegant-Versatile-June-Festival-Birthday-Party-Gathering-Office-Formal-Summer-p-481621562.html?mallCode=1";
   const title = "BizChic Women's Knitted Cardigan";
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-brand-shop-info-collect-id',
-      html: `
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-brand-shop-info-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -2001,20 +1923,16 @@ async function withSheinBrandShopInfoPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinDataStoreShopInfoPage(fn) {
-  const url =
-    'https://jp.shein.com/Franclia-Women-s-Solid-Color-Drawstring-Short-Sleeve-New-Chinese-Style-T-Shirt-Minimalist-Fashion-p-61079413.html?mallCode=1';
-  const title = 'Franclia レディース 無地 ドローストリング 半袖 新中国風Tシャツ、ミニマルなファッション';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-data-store-shop-info-collect-id',
-      html: `
+  const url = "https://jp.shein.com/Franclia-Women-s-Solid-Color-Drawstring-Short-Sleeve-New-Chinese-Style-T-Shirt-Minimalist-Fashion-p-61079413.html?mallCode=1";
+  const title = "Franclia レディース 無地 ドローストリング 半袖 新中国風Tシャツ、ミニマルなファッション";
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-data-store-shop-info-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -2070,20 +1988,16 @@ async function withSheinDataStoreShopInfoPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinSilkySpellShopInfoPage(fn) {
-  const url =
-    'https://jp.shein.com/SilkySpell-Women-Lace-Patchwork-Solid-Color-Sleep-Dress-Pajama-Dress-With-Bowknot-Decoration-Luxeloungewear-p-33203094.html?mallCode=1';
-  const title = 'SilkySpell Women Lace Patchwork Solid Color Sleep Dress';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-silkyspell-shop-info-collect-id',
-      html: `
+  const url = "https://jp.shein.com/SilkySpell-Women-Lace-Patchwork-Solid-Color-Sleep-Dress-Pajama-Dress-With-Bowknot-Decoration-Luxeloungewear-p-33203094.html?mallCode=1";
+  const title = "SilkySpell Women Lace Patchwork Solid Color Sleep Dress";
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-silkyspell-shop-info-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -2120,20 +2034,16 @@ async function withSheinSilkySpellShopInfoPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinElaminiShopInfoPage(fn) {
-  const url =
-    'https://jp.shein.com/Elamini-Polka-Dot-Print-Lapel-Collar-Fitted-Short-Sleeve-Blouse-For-Women-p-88259809.html?mallCode=1';
-  const title = 'Elamini Polka Dot Print Lapel Collar Fitted Short Sleeve Blouse For Women';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-elamini-shop-info-collect-id',
-      html: `
+  const url = "https://jp.shein.com/Elamini-Polka-Dot-Print-Lapel-Collar-Fitted-Short-Sleeve-Blouse-For-Women-p-88259809.html?mallCode=1";
+  const title = "Elamini Polka Dot Print Lapel Collar Fitted Short Sleeve Blouse For Women";
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-elamini-shop-info-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -2170,20 +2080,16 @@ async function withSheinElaminiShopInfoPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinBreadcrumbOnlyTitlePage(fn) {
-  const url =
-    'https://jp.shein.com/FRIFUL-Women-s-Wave-Stripe-Loose-Knit-Short-Sleeve-Shirt-Summer-Casual-Top-p-3296917895459.html?mallCode=1';
-  const title = 'FRIFUL Women s Wave Stripe Loose Knit Short Sleeve Shirt Summer Casual Top';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-breadcrumb-title-collect-id',
-      html: `
+  const url = "https://jp.shein.com/FRIFUL-Women-s-Wave-Stripe-Loose-Knit-Short-Sleeve-Shirt-Summer-Casual-Top-p-3296917895459.html?mallCode=1";
+  const title = "FRIFUL Women s Wave Stripe Loose Knit Short Sleeve Shirt Summer Casual Top";
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-breadcrumb-title-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -2211,19 +2117,16 @@ async function withSheinBreadcrumbOnlyTitlePage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinJapaneseProductIntroPage(fn) {
-  const url = 'https://jp.shein.com/Women-s-Fashion-Lace-Camisole-Top-Casual-White-Summer-p-9709774.html?mallCode=1';
-  const title = 'レース キャミソール トップス カジュアル ホワイト 夏用 レディース';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-japanese-product-intro-collect-id',
-      html: `
+  const url = "https://jp.shein.com/Women-s-Fashion-Lace-Camisole-Top-Casual-White-Summer-p-9709774.html?mallCode=1";
+  const title = "レース キャミソール トップス カジュアル ホワイト 夏用 レディース";
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-japanese-product-intro-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -2276,21 +2179,16 @@ async function withSheinJapaneseProductIntroPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinLabelPrefixedProductTitlePage(fn) {
-  const url =
-    'https://jp.shein.com/Allurite-Women-s-Elegant-French-Floral-Embroidered-Fishbone-Sheer-Sexy-Bandeau-Top-p-507838584.html?mallCode=1';
-  const title =
-    'Allurite レディース エレガント フレンチ フローラル刺繍 フィッシュボーン シアー セクシー バンドゥトップ';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-label-prefixed-title-collect-id',
-      html: `
+  const url = "https://jp.shein.com/Allurite-Women-s-Elegant-French-Floral-Embroidered-Fishbone-Sheer-Sexy-Bandeau-Top-p-507838584.html?mallCode=1";
+  const title = "Allurite レディース エレガント フレンチ フローラル刺繍 フィッシュボーン シアー セクシー バンドゥトップ";
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-label-prefixed-title-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -2323,19 +2221,16 @@ async function withSheinLabelPrefixedProductTitlePage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function withSheinSkuSlugPage(fn) {
-  const url = 'https://us.shein.com/Sample-Dress-p-sw240624123456-cat-1727.html';
-  const title = 'SHEIN sku slug sample dress';
-  await withGlobalSourcePage(
-    {
-      url,
-      collectId: 'shein-sku-slug-collect-id',
-      html: `
+  const url = "https://us.shein.com/Sample-Dress-p-sw240624123456-cat-1727.html";
+  const title = "SHEIN sku slug sample dress";
+  await withGlobalSourcePage({
+    url,
+    collectId: "shein-sku-slug-collect-id",
+    html: `
       <!doctype html>
       <html>
         <head>
@@ -2366,9 +2261,7 @@ async function withSheinSkuSlugPage(fn) {
         </body>
       </html>
     `,
-    },
-    async (page, captured) => fn(page, captured, { title })
-  );
+  }, async (page, captured) => fn(page, captured, { title }));
 }
 
 async function testJdCollectsThroughSharedPanel() {
@@ -2376,16 +2269,16 @@ async function testJdCollectsThroughSharedPanel() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message');
-    assert.strictEqual(message.sourceId, 'jd');
-    assert.strictEqual(message.raw.productId, '100285845266');
-    assert.strictEqual(message.raw.title, '百岁山348ml*24瓶');
-    assert.strictEqual(message.raw.price, '34');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message");
+    assert.strictEqual(message.sourceId, "jd");
+    assert.strictEqual(message.raw.productId, "100285845266");
+    assert.strictEqual(message.raw.title, "百岁山348ml*24瓶");
+    assert.strictEqual(message.raw.price, "34");
     assert.strictEqual(message.raw.images.length, 2);
-    assert.strictEqual(message.raw.videoUrl, 'https://vod.300hu.com/jd.mp4');
-    assert.strictEqual(message.raw.seller.name, '饮品折扣京东自营专区');
-    assert.strictEqual(message.raw.variants[0].sku, '100285845266-348');
+    assert.strictEqual(message.raw.videoUrl, "https://vod.300hu.com/jd.mp4");
+    assert.strictEqual(message.raw.seller.name, "饮品折扣京东自营专区");
+    assert.strictEqual(message.raw.variants[0].sku, "100285845266-348");
   });
 }
 
@@ -2394,10 +2287,10 @@ async function testJdIgnoresCalculatorStructuredNoise() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from JD noisy rendered page');
-    assert.strictEqual(message.sourceId, 'jd');
-    assert.strictEqual(message.raw.productId, '100285845266');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from JD noisy rendered page");
+    assert.strictEqual(message.sourceId, "jd");
+    assert.strictEqual(message.raw.productId, "100285845266");
     assert.strictEqual(message.raw.title, expected.title);
     assert.strictEqual(message.raw.images[0], expected.mainImage);
     assert.strictEqual(message.raw.seller.name, expected.sellerName);
@@ -2409,14 +2302,14 @@ async function testJdExpandsDomVariants() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from JD DOM variants page');
-    assert.strictEqual(message.sourceId, 'jd');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from JD DOM variants page");
+    assert.strictEqual(message.sourceId, "jd");
     assert.strictEqual(message.raw.title, expected.title);
     assert.strictEqual(message.raw.seller.name, expected.sellerName);
     assert.strictEqual(message.raw.variants.length, 4);
-    assert.deepStrictEqual(message.raw.variants[0].aspectValues, { 颜色: '藏青', 尺码: 'M' });
-    assert.strictEqual(message.raw.variants[3].name, '白色 / L');
+    assert.deepStrictEqual(message.raw.variants[0].aspectValues, { 颜色: "藏青", 尺码: "M" });
+    assert.strictEqual(message.raw.variants[3].name, "白色 / L");
   });
 }
 
@@ -2425,15 +2318,15 @@ async function testPifaCollectsThroughSharedPanel() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message');
-    assert.strictEqual(message.sourceId, 'pdd');
-    assert.strictEqual(message.raw.goodsId, '722497925613');
-    assert.strictEqual(message.raw.title, '拼多多批发测试商品');
-    assert.strictEqual(message.raw.price, '19.9');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message");
+    assert.strictEqual(message.sourceId, "pdd");
+    assert.strictEqual(message.raw.goodsId, "722497925613");
+    assert.strictEqual(message.raw.title, "拼多多批发测试商品");
+    assert.strictEqual(message.raw.price, "19.9");
     assert.strictEqual(message.raw.images.length, 2);
-    assert.strictEqual(message.raw.seller.name, '拼多多批发店铺');
-    assert.strictEqual(message.raw.variants[0].sku, '722497925613-red');
+    assert.strictEqual(message.raw.seller.name, "拼多多批发店铺");
+    assert.strictEqual(message.raw.variants[0].sku, "722497925613-red");
   });
 }
 
@@ -2442,12 +2335,12 @@ async function testPifaExpandsDomVariants() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Pifa DOM variants page');
-    assert.strictEqual(message.sourceId, 'pdd');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Pifa DOM variants page");
+    assert.strictEqual(message.sourceId, "pdd");
     assert.strictEqual(message.raw.title, expected.title);
     assert.strictEqual(message.raw.variants.length, 4);
-    assert.deepStrictEqual(message.raw.variants[2].aspectValues, { 规格: '大号', 颜色: '白色' });
+    assert.deepStrictEqual(message.raw.variants[2].aspectValues, { 规格: "大号", 颜色: "白色" });
   });
 }
 
@@ -2456,12 +2349,12 @@ async function testPifaExpandsSpecPanelVariants() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Pifa SpecPanel variants page');
-    assert.strictEqual(message.sourceId, 'pdd');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Pifa SpecPanel variants page");
+    assert.strictEqual(message.sourceId, "pdd");
     assert.strictEqual(message.raw.title, expected.title);
     assert.strictEqual(message.raw.variants.length, 4);
-    assert.deepStrictEqual(message.raw.variants[1].aspectValues, { 版本: '注音版', 册数: '精选10册' });
+    assert.deepStrictEqual(message.raw.variants[1].aspectValues, { 版本: "注音版", 册数: "精选10册" });
   });
 }
 
@@ -2470,92 +2363,74 @@ async function testPifaExpandsSkuListRows() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Pifa sku-list-row variants page');
-    assert.strictEqual(message.sourceId, 'pdd');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Pifa sku-list-row variants page");
+    assert.strictEqual(message.sourceId, "pdd");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.seller.name, '淘到鱼宠物用品专营店');
+    assert.strictEqual(message.raw.seller.name, "淘到鱼宠物用品专营店");
     assert.strictEqual(message.raw.variants.length, 3);
-    assert.deepStrictEqual(message.raw.variants[0].aspectValues, { 重量: '40斤原味' });
-    assert.strictEqual(message.raw.variants[0].price, '31.19');
-    assert.strictEqual(message.raw.variants[2].name, '20斤活性炭');
+    assert.deepStrictEqual(message.raw.variants[0].aspectValues, { 重量: "40斤原味" });
+    assert.strictEqual(message.raw.variants[0].price, "31.19");
+    assert.strictEqual(message.raw.variants[2].name, "20斤活性炭");
   });
 }
 
 async function testPifaCollectDiagnosticsMirror1688() {
-  await withPifaPage(
-    async (page, captured, consoleMessages) => {
-      const debug = await page.evaluate(() => window.__JZC_CN_SOURCE_DEBUG__?.());
-      assert(debug, 'expected debug helper on cn source pages');
-      assert.strictEqual(debug.platform.sourceId, 'pdd');
-      assert.strictEqual(debug.raw.goodsId, '722497925613');
+  await withPifaPage(async (page, captured, consoleMessages) => {
+    const debug = await page.evaluate(() => window.__JZC_CN_SOURCE_DEBUG__?.());
+    assert(debug, "expected debug helper on cn source pages");
+    assert.strictEqual(debug.platform.sourceId, "pdd");
+    assert.strictEqual(debug.raw.goodsId, "722497925613");
 
-      await page.click('[data-action="collect-product"]');
-      await page.waitForSelector('#jzc-cn-source-toast');
-      const toastText = await page.textContent('#jzc-cn-source-toast');
+    await page.click('[data-action="collect-product"]');
+    await page.waitForSelector("#jzc-cn-source-toast");
+    const toastText = await page.textContent("#jzc-cn-source-toast");
 
-      assert(
-        captured.find((m) => m.action === 'pushSourceCollect'),
-        'expected collect message despite backend error'
-      );
-      assert(toastText.includes('source pdd is registered but not yet enabled'));
-      assert(
-        consoleMessages.some((text) => text.includes('[jzc-cn-source] payload:')),
-        'expected payload log'
-      );
-      assert(
-        consoleMessages.some((text) => text.includes('[jzc-cn-source] resp:')),
-        'expected response log'
-      );
-    },
-    {
-      runtimeResponse: { ok: false, error: 'source pdd is registered but not yet enabled' },
-    }
-  );
+    assert(captured.find((m) => m.action === "pushSourceCollect"), "expected collect message despite backend error");
+    assert(toastText.includes("source pdd is registered but not yet enabled"));
+    assert(consoleMessages.some((text) => text.includes("[jzc-cn-source] payload:")), "expected payload log");
+    assert(consoleMessages.some((text) => text.includes("[jzc-cn-source] resp:")), "expected response log");
+  }, {
+    runtimeResponse: { ok: false, error: "source pdd is registered but not yet enabled" },
+  });
 }
 
 async function testPifaManualListingMirrors1688OpenEditor() {
-  await withPifaPage(
-    async (page, captured) => {
-      await page.click('[data-action="manual-listing"]');
-      await page.waitForFunction(() => document.querySelector('[data-action="manual-listing"]')?.disabled === false);
+  await withPifaPage(async (page, captured) => {
+    await page.click('[data-action="manual-listing"]');
+    await page.waitForFunction(() => document.querySelector('[data-action="manual-listing"]')?.disabled === false);
 
-      const collectMessage = captured.find((m) => m.action === 'pushSourceCollect');
-      assert(collectMessage, 'expected manual listing to collect before opening editor');
-      assert.strictEqual(collectMessage.sourceId, 'pdd');
-      assert.strictEqual(collectMessage.forceResubmit, true);
-      assert.strictEqual(collectMessage.resetDraft, true);
+    const collectMessage = captured.find((m) => m.action === "pushSourceCollect");
+    assert(collectMessage, "expected manual listing to collect before opening editor");
+    assert.strictEqual(collectMessage.sourceId, "pdd");
+    assert.strictEqual(collectMessage.forceResubmit, true);
+    assert.strictEqual(collectMessage.resetDraft, true);
 
-      const openMessage = captured.find((m) => m.action === 'openFrontend');
-      assert(openMessage, 'expected manual listing to open collect editor');
-      assert.strictEqual(openMessage.path, '/ozon/products/collect/edit?id=pifa-collect-id');
+    const openMessage = captured.find((m) => m.action === "openFrontend");
+    assert(openMessage, "expected manual listing to open collect editor");
+    assert.strictEqual(openMessage.path, "/ozon/products/collect/edit?id=pifa-collect-id");
+  }, {
+    runtimeResponse(message) {
+      if (message.action === "openFrontend") return { ok: true, data: { opened: true } };
+      return { ok: true, data: { result: { id: "pifa-collect-id", action: "created" } } };
     },
-    {
-      runtimeResponse(message) {
-        if (message.action === 'openFrontend') return { ok: true, data: { opened: true } };
-        return { ok: true, data: { result: { id: 'pifa-collect-id', action: 'created' } } };
-      },
-    }
-  );
+  });
 }
 
 async function testManualListingRuntimeInvalidatedShowsRefreshGuidance() {
-  await withPifaPage(
-    async (page, captured) => {
-      await page.click('[data-action="manual-listing"]');
-      await page.waitForSelector('#jzc-cn-source-toast');
-      const toastText = await page.textContent('#jzc-cn-source-toast');
+  await withPifaPage(async (page, captured) => {
+    await page.click('[data-action="manual-listing"]');
+    await page.waitForSelector("#jzc-cn-source-toast");
+    const toastText = await page.textContent("#jzc-cn-source-toast");
 
-      assert.strictEqual(captured.length, 0);
-      assert(
-        toastText.includes('扩展已重新加载') || toastText.includes('刷新当前商品页'),
-        `expected refresh guidance, got: ${toastText}`
-      );
-    },
-    {
-      runtimeLastErrorMessage: 'Extension context invalidated.',
-    }
-  );
+    assert.strictEqual(captured.length, 0);
+    assert(
+      toastText.includes("扩展已重新加载") || toastText.includes("刷新当前商品页"),
+      `expected refresh guidance, got: ${toastText}`,
+    );
+  }, {
+    runtimeLastErrorMessage: "Extension context invalidated.",
+  });
 }
 
 async function testPifaRenderedDomCollectsThroughSharedPanel() {
@@ -2563,14 +2438,17 @@ async function testPifaRenderedDomCollectsThroughSharedPanel() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from rendered Pifa DOM');
-    assert.strictEqual(message.sourceId, 'pdd');
-    assert.strictEqual(message.raw.goodsId, '722497925613');
-    assert.strictEqual(message.raw.title, '长条纸箱快递箱批发定做雨伞花卉水杯鱼竿包装盒三角形打包纸盒盒子');
-    assert.strictEqual(message.raw.price, '22.28');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from rendered Pifa DOM");
+    assert.strictEqual(message.sourceId, "pdd");
+    assert.strictEqual(message.raw.goodsId, "722497925613");
+    assert.strictEqual(
+      message.raw.title,
+      "长条纸箱快递箱批发定做雨伞花卉水杯鱼竿包装盒三角形打包纸盒盒子",
+    );
+    assert.strictEqual(message.raw.price, "22.28");
     assert.strictEqual(message.raw.images.length, 2);
-    assert.ok(message.raw.images[0].includes('cardboard-main.jpeg'));
+    assert.ok(message.raw.images[0].includes("cardboard-main.jpeg"));
   });
 }
 
@@ -2579,15 +2457,15 @@ async function testPifaGoodsDetailPageCollectsRealShape() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Pifa goods/detail URL');
-    assert.strictEqual(message.sourceId, 'pdd');
-    assert.strictEqual(message.raw.goodsId, '458592806');
-    assert.strictEqual(message.raw.title, '长条纸箱快递箱批发定做雨伞花卉水杯鱼竿包装盒三角形打包纸盒子');
-    assert.strictEqual(message.raw.price, '22.28');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Pifa goods/detail URL");
+    assert.strictEqual(message.sourceId, "pdd");
+    assert.strictEqual(message.raw.goodsId, "458592806");
+    assert.strictEqual(message.raw.title, "长条纸箱快递箱批发定做雨伞花卉水杯鱼竿包装盒三角形打包纸盒子");
+    assert.strictEqual(message.raw.price, "22.28");
     assert.strictEqual(message.raw.images.length, 2);
-    assert.ok(message.raw.images[0].includes('8f9dda01'));
-    assert.strictEqual(message.raw.seller.name, '疯子包装旗舰店');
+    assert.ok(message.raw.images[0].includes("8f9dda01"));
+    assert.strictEqual(message.raw.seller.name, "疯子包装旗舰店");
   });
 }
 
@@ -2596,12 +2474,12 @@ async function testTaobaoCollectsProductInfoFromRenderedDom() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Taobao item URL');
-    assert.strictEqual(message.sourceId, 'taobao');
-    assert.strictEqual(message.raw.itemId, '980680602229');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Taobao item URL");
+    assert.strictEqual(message.sourceId, "taobao");
+    assert.strictEqual(message.raw.itemId, "980680602229");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '2.09');
+    assert.strictEqual(message.raw.price, "2.09");
     assert.strictEqual(message.raw.images[0], expected.mainImage);
     assert.strictEqual(message.raw.seller.name, expected.shopName);
   });
@@ -2612,10 +2490,10 @@ async function testTaobaoIgnoresSkuLabelStructuredNoise() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Taobao noisy rendered page');
-    assert.strictEqual(message.sourceId, 'taobao');
-    assert.strictEqual(message.raw.itemId, '908658719203');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Taobao noisy rendered page");
+    assert.strictEqual(message.sourceId, "taobao");
+    assert.strictEqual(message.raw.itemId, "908658719203");
     assert.strictEqual(message.raw.title, expected.title);
     assert.strictEqual(message.raw.images[0], expected.mainImage);
     assert.strictEqual(message.raw.seller.name, expected.sellerName);
@@ -2627,13 +2505,13 @@ async function testTaobaoKeepsAliImageSellerSuffix() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Taobao ali image suffix page');
-    assert.strictEqual(message.sourceId, 'taobao');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Taobao ali image suffix page");
+    assert.strictEqual(message.sourceId, "taobao");
     assert.strictEqual(message.raw.title, expected.title);
     assert.strictEqual(message.raw.images[0], expected.normalizedMainImage);
-    assert.ok(/\.jpg$/.test(message.raw.images[0]), 'expected normalized image URL to keep a real file extension');
-    assert(!message.raw.images[0].endsWith('_'), 'expected normalized image URL not to be truncated before _!! suffix');
+    assert.ok(/\.jpg$/.test(message.raw.images[0]), "expected normalized image URL to keep a real file extension");
+    assert(!message.raw.images[0].endsWith("_"), "expected normalized image URL not to be truncated before _!! suffix");
   });
 }
 
@@ -2642,21 +2520,21 @@ async function testTaobaoPrefersDocumentTitleAndExpandsDomVariants() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Taobao DOM variants page');
-    assert.strictEqual(message.sourceId, 'taobao');
-    assert.strictEqual(message.raw.itemId, '971785515390');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Taobao DOM variants page");
+    assert.strictEqual(message.sourceId, "taobao");
+    assert.strictEqual(message.raw.itemId, "971785515390");
     assert.strictEqual(message.raw.title, expected.title);
     assert.notStrictEqual(message.raw.title, expected.skuLabel);
     assert.strictEqual(message.raw.variants.length, 4);
     assert(!message.raw.variants.some((variant) => variant.name.includes(expected.aggregateColorLabel)));
     assert.deepStrictEqual(message.raw.variants[0].aspectValues, {
       续航版本: expected.skuLabel,
-      颜色分类: '黑色',
+      颜色分类: "黑色",
     });
     assert.strictEqual(
       message.raw.variants[0].image,
-      'https://img.alicdn.com/imgextra/i4/3505758707/O1CN01blue_!!3505758707.jpg'
+      "https://img.alicdn.com/imgextra/i4/3505758707/O1CN01blue_!!3505758707.jpg",
     );
   });
 }
@@ -2666,16 +2544,16 @@ async function testAmazonCollectsThroughSharedPanel() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Amazon page');
-    assert.strictEqual(message.sourceId, 'amazon');
-    assert.strictEqual(message.raw.asin, 'B0TESTASN1');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Amazon page");
+    assert.strictEqual(message.sourceId, "amazon");
+    assert.strictEqual(message.raw.asin, "B0TESTASN1");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '29.99');
-    assert.strictEqual(message.raw.images[0], 'https://m.media-amazon.com/images/I/71main.jpg');
-    assert.strictEqual(message.raw.seller.name, 'Amazon Sample Store');
-    assert(message.raw.variants.length >= 2, 'expected Amazon variation options');
-    assert.strictEqual(message.raw.variants[0].aspectValues.Color, 'Black');
+    assert.strictEqual(message.raw.price, "29.99");
+    assert.strictEqual(message.raw.images[0], "https://m.media-amazon.com/images/I/71main.jpg");
+    assert.strictEqual(message.raw.seller.name, "Amazon Sample Store");
+    assert(message.raw.variants.length >= 2, "expected Amazon variation options");
+    assert.strictEqual(message.raw.variants[0].aspectValues.Color, "Black");
   });
 }
 
@@ -2684,21 +2562,18 @@ async function testAmazonTwisterDoesNotExplodeAggregateGroups() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Amazon twister page');
-    assert.strictEqual(message.sourceId, 'amazon');
-    assert.strictEqual(message.raw.asin, 'B0FN9JLD28');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Amazon twister page");
+    assert.strictEqual(message.sourceId, "amazon");
+    assert.strictEqual(message.raw.asin, "B0FN9JLD28");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.seller.name, 'Acer Store');
-    assert.strictEqual(message.raw.variants.length, 8, 'expected 2 style x 2 color x 2 size variants only');
-    assert(
-      !message.raw.variants.some((variant) => /options from/i.test(variant.name)),
-      'expected Amazon option names to strip price helper text'
-    );
+    assert.strictEqual(message.raw.seller.name, "Acer Store");
+    assert.strictEqual(message.raw.variants.length, 8, "expected 2 style x 2 color x 2 size variants only");
+    assert(!message.raw.variants.some((variant) => /options from/i.test(variant.name)), "expected Amazon option names to strip price helper text");
     assert.deepStrictEqual(message.raw.variants[0].aspectValues, {
-      Style: 'R7 7730u',
-      Color: 'Pure Silver',
-      Size: '8GB RAM / 128GB SSD',
+      Style: "R7 7730u",
+      Color: "Pure Silver",
+      Size: "8GB RAM / 128GB SSD",
     });
   });
 }
@@ -2708,20 +2583,21 @@ async function testAmazonJsonTwisterExtractsStoreAndVariants() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Amazon JSON twister page');
-    assert.strictEqual(message.sourceId, 'amazon');
-    assert.strictEqual(message.raw.asin, 'B0FN9JLD28');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Amazon JSON twister page");
+    assert.strictEqual(message.sourceId, "amazon");
+    assert.strictEqual(message.raw.asin, "B0FN9JLD28");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.seller.name, 'Acer Store');
-    assert(message.raw.seller.shopUrl.includes('/stores/Acer/'), 'expected Amazon store URL from byline store link');
+    assert.strictEqual(message.raw.seller.name, "Acer Store");
+    assert(message.raw.seller.shopUrl.includes("/stores/Acer/"), "expected Amazon store URL from byline store link");
     assert.strictEqual(message.raw.variants.length, 3);
-    assert.deepStrictEqual(
-      message.raw.variants.map((variant) => variant.sku),
-      ['B0FN9JLD28', 'B0DTB4R3VP', 'B0FT3NRVL6']
-    );
-    assert.deepStrictEqual(message.raw.variants[0].aspectValues, { CPU: 'R3 7320u' });
-    assert.strictEqual(message.raw.variants[1].name, 'R7 5825U');
+    assert.deepStrictEqual(message.raw.variants.map((variant) => variant.sku), [
+      "B0FN9JLD28",
+      "B0DTB4R3VP",
+      "B0FT3NRVL6",
+    ]);
+    assert.deepStrictEqual(message.raw.variants[0].aspectValues, { CPU: "R3 7320u" });
+    assert.strictEqual(message.raw.variants[1].name, "R7 5825U");
   });
 }
 
@@ -2730,11 +2606,11 @@ async function testAmazonBrandBylineDoesNotBecomeSeller() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Amazon brand byline page');
-    assert.strictEqual(message.sourceId, 'amazon');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Amazon brand byline page");
+    assert.strictEqual(message.sourceId, "amazon");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.seller, null, 'expected Amazon brand search byline not to be stored as seller');
+    assert.strictEqual(message.raw.seller, null, "expected Amazon brand search byline not to be stored as seller");
   });
 }
 
@@ -2743,18 +2619,15 @@ async function testWbCollectsThroughSharedPanel() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from WB page');
-    assert.strictEqual(message.sourceId, 'wb');
-    assert.strictEqual(message.raw.nmId, '211234567');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from WB page");
+    assert.strictEqual(message.sourceId, "wb");
+    assert.strictEqual(message.raw.nmId, "211234567");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '2499');
-    assert.strictEqual(
-      message.raw.images[0],
-      'https://basket-12.wbbasket.ru/vol2112/part211234/211234567/images/big/1.webp'
-    );
-    assert.strictEqual(message.raw.seller.name, 'WB sample seller');
-    assert(message.raw.variants.length >= 2, 'expected WB option variants');
+    assert.strictEqual(message.raw.price, "2499");
+    assert.strictEqual(message.raw.images[0], "https://basket-12.wbbasket.ru/vol2112/part211234/211234567/images/big/1.webp");
+    assert.strictEqual(message.raw.seller.name, "WB sample seller");
+    assert(message.raw.variants.length >= 2, "expected WB option variants");
   });
 }
 
@@ -2763,31 +2636,23 @@ async function testWbModernRenderedPageKeepsProductImageAndRubCurrency() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from modern WB page');
-    assert.strictEqual(message.sourceId, 'wb');
-    assert.strictEqual(message.raw.nmId, '246443845');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from modern WB page");
+    assert.strictEqual(message.sourceId, "wb");
+    assert.strictEqual(message.raw.nmId, "246443845");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '1070');
-    assert.strictEqual(message.raw.priceCurrency, 'RUB');
-    assert.strictEqual(
-      message.raw.images[0],
-      'https://basket-16.wbbasket.ru/vol2464/part246443/246443845/images/big/1.webp'
-    );
-    assert(
-      !message.raw.images.some((src) => /wb-og-win|280088203/.test(src)),
-      'expected WB images to exclude shell and recommendation assets'
-    );
+    assert.strictEqual(message.raw.price, "1070");
+    assert.strictEqual(message.raw.priceCurrency, "RUB");
+    assert.strictEqual(message.raw.images[0], "https://basket-16.wbbasket.ru/vol2464/part246443/246443845/images/big/1.webp");
+    assert(!message.raw.images.some((src) => /wb-og-win|280088203/.test(src)), "expected WB images to exclude shell and recommendation assets");
   });
 }
 
 async function testWbGenericShellDoesNotBuildProductPayload() {
   await withWbGenericShellPage(async (page, captured) => {
-    const raw = await page.evaluate(() =>
-      window.JZCnSourceScraper.buildPayload(window.JZCnSourceScraper.detectPlatform())
-    );
-    assert.strictEqual(raw, null, 'expected generic Wildberries shell page not to build product payload');
-    assert.strictEqual(captured.length, 0, 'expected no collect request for generic shell page');
+    const raw = await page.evaluate(() => window.JZCnSourceScraper.buildPayload(window.JZCnSourceScraper.detectPlatform()));
+    assert.strictEqual(raw, null, "expected generic Wildberries shell page not to build product payload");
+    assert.strictEqual(captured.length, 0, "expected no collect request for generic shell page");
   });
 }
 
@@ -2796,15 +2661,15 @@ async function testTemuCollectsThroughSharedPanel() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Temu page');
-    assert.strictEqual(message.sourceId, 'temu');
-    assert.strictEqual(message.raw.goodsId, '601099512345678');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Temu page");
+    assert.strictEqual(message.sourceId, "temu");
+    assert.strictEqual(message.raw.goodsId, "601099512345678");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '12.48');
-    assert.strictEqual(message.raw.images[0], 'https://img.kwcdn.com/product/FancyAlgo/temu-main.jpeg');
-    assert.strictEqual(message.raw.seller.name, 'Temu shop');
-    assert(message.raw.variants.length >= 2, 'expected Temu SKU chip variants');
+    assert.strictEqual(message.raw.price, "12.48");
+    assert.strictEqual(message.raw.images[0], "https://img.kwcdn.com/product/FancyAlgo/temu-main.jpeg");
+    assert.strictEqual(message.raw.seller.name, "Temu shop");
+    assert(message.raw.variants.length >= 2, "expected Temu SKU chip variants");
   });
 }
 
@@ -2813,15 +2678,11 @@ async function testTemuNoisyJapanTitleAndPriceGuard() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Temu noisy Japan page');
-    assert.strictEqual(message.sourceId, 'temu');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Temu noisy Japan page");
+    assert.strictEqual(message.sourceId, "temu");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(
-      message.raw.price,
-      null,
-      'expected Temu not to parse product ids or recommendation ids as price'
-    );
+    assert.strictEqual(message.raw.price, null, "expected Temu not to parse product ids or recommendation ids as price");
   });
 }
 
@@ -2830,21 +2691,18 @@ async function testTemuRenderedChineseProductExtractsVisibleOffer() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from rendered Temu Chinese page');
-    assert.strictEqual(message.sourceId, 'temu');
-    assert.strictEqual(message.raw.goodsId, '606283956597557');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from rendered Temu Chinese page");
+    assert.strictEqual(message.sourceId, "temu");
+    assert.strictEqual(message.raw.goodsId, "606283956597557");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '49');
-    assert.strictEqual(
-      message.raw.images[0],
-      'https://img.kwcdn.com/product/open/0d5e64bfe73b4938b337ec1d70f4025c-goods.jpeg'
-    );
+    assert.strictEqual(message.raw.price, "49");
+    assert.strictEqual(message.raw.images[0], "https://img.kwcdn.com/product/open/0d5e64bfe73b4938b337ec1d70f4025c-goods.jpeg");
     assert.strictEqual(message.raw.variants.length, 1);
-    assert.strictEqual(message.raw.variants[0].name, '反光尺面罩 深灰色');
+    assert.strictEqual(message.raw.variants[0].name, "反光尺面罩 深灰色");
     assert.deepStrictEqual(message.raw.variants[0].aspectValues, {
-      颜色: '反光尺面罩 深灰色',
-      数量: '1个',
+      颜色: "反光尺面罩 深灰色",
+      数量: "1个",
     });
   });
 }
@@ -2854,25 +2712,16 @@ async function testTemuNoisyProductImagesPreferGoodsAssetsAndJpyCurrency() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Temu noisy image page');
-    assert.strictEqual(message.sourceId, 'temu');
-    assert.strictEqual(message.raw.goodsId, '606283956597557');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Temu noisy image page");
+    assert.strictEqual(message.sourceId, "temu");
+    assert.strictEqual(message.raw.goodsId, "606283956597557");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '49');
-    assert.strictEqual(message.raw.priceCurrency, 'JPY');
-    assert.strictEqual(
-      message.raw.images[0],
-      'https://img.kwcdn.com/product/open/0d5e64bfe73b4938b337ec1d70f4025c-goods.jpeg'
-    );
-    assert(
-      message.raw.images.some((src) => /product\/fancy/.test(src)),
-      'expected Temu product gallery image to be retained'
-    );
-    assert(
-      !message.raw.images.some((src) => /upload_aimg|upload_commimg|openingemail|frontpage/.test(src)),
-      'expected Temu UI and app assets to be filtered out'
-    );
+    assert.strictEqual(message.raw.price, "49");
+    assert.strictEqual(message.raw.priceCurrency, "JPY");
+    assert.strictEqual(message.raw.images[0], "https://img.kwcdn.com/product/open/0d5e64bfe73b4938b337ec1d70f4025c-goods.jpeg");
+    assert(message.raw.images.some((src) => /product\/fancy/.test(src)), "expected Temu product gallery image to be retained");
+    assert(!message.raw.images.some((src) => /upload_aimg|upload_commimg|openingemail|frontpage/.test(src)), "expected Temu UI and app assets to be filtered out");
   });
 }
 
@@ -2881,13 +2730,13 @@ async function testTemuFragmentedPriceAndDefaultSeller() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Temu fragmented price page');
-    assert.strictEqual(message.sourceId, 'temu');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Temu fragmented price page");
+    assert.strictEqual(message.sourceId, "temu");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '49');
-    assert.strictEqual(message.raw.priceCurrency, 'JPY');
-    assert.strictEqual(message.raw.seller.name, 'Temu');
+    assert.strictEqual(message.raw.price, "49");
+    assert.strictEqual(message.raw.priceCurrency, "JPY");
+    assert.strictEqual(message.raw.seller.name, "Temu");
   });
 }
 
@@ -2896,13 +2745,13 @@ async function testTemuSellerProfileCardExtractsMerchantName() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Temu seller profile card page');
-    assert.strictEqual(message.sourceId, 'temu');
-    assert.strictEqual(message.raw.goodsId, '601105124897749');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Temu seller profile card page");
+    assert.strictEqual(message.sourceId, "temu");
+    assert.strictEqual(message.raw.goodsId, "601105124897749");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.seller.name, 'GOGOLULU');
-    assert(message.raw.seller.shopUrl.includes('mall_id=881234'), 'expected Temu mall URL from seller profile card');
+    assert.strictEqual(message.raw.seller.name, "GOGOLULU");
+    assert(message.raw.seller.shopUrl.includes("mall_id=881234"), "expected Temu mall URL from seller profile card");
   });
 }
 
@@ -2911,12 +2760,12 @@ async function testTemuLocalizedSlugUsesStructuredProductData() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Temu localized slug page');
-    assert.strictEqual(message.sourceId, 'temu');
-    assert.strictEqual(message.raw.goodsId, '601099512345678');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Temu localized slug page");
+    assert.strictEqual(message.sourceId, "temu");
+    assert.strictEqual(message.raw.goodsId, "601099512345678");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.seller.name, 'Temu mask shop');
+    assert.strictEqual(message.raw.seller.name, "Temu mask shop");
     assert.strictEqual(message.raw.variants.length, 2);
   });
 }
@@ -2926,15 +2775,15 @@ async function testMercadoLibreCollectsThroughSharedPanel() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Mercado Libre page');
-    assert.strictEqual(message.sourceId, 'mercadolibre');
-    assert.strictEqual(message.raw.mlItemId, 'MLA-1234567890');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Mercado Libre page");
+    assert.strictEqual(message.sourceId, "mercadolibre");
+    assert.strictEqual(message.raw.mlItemId, "MLA-1234567890");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '12999');
-    assert.strictEqual(message.raw.images[0], 'https://http2.mlstatic.com/D_NQ_NP_123456-MLA-main.webp');
-    assert.strictEqual(message.raw.seller.name, 'ML sample seller');
-    assert(message.raw.variants.length >= 2, 'expected Mercado Libre option variants');
+    assert.strictEqual(message.raw.price, "12999");
+    assert.strictEqual(message.raw.images[0], "https://http2.mlstatic.com/D_NQ_NP_123456-MLA-main.webp");
+    assert.strictEqual(message.raw.seller.name, "ML sample seller");
+    assert(message.raw.variants.length >= 2, "expected Mercado Libre option variants");
   });
 }
 
@@ -2943,15 +2792,15 @@ async function testMercadoLibreStripsShippingAndButtonVariantNoise() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Mercado Libre shipping noise page');
-    assert.strictEqual(message.sourceId, 'mercadolibre');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Mercado Libre shipping noise page");
+    assert.strictEqual(message.sourceId, "mercadolibre");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '46699');
-    assert.strictEqual(message.raw.seller.name, 'PETENATTI HOGAR');
+    assert.strictEqual(message.raw.price, "46699");
+    assert.strictEqual(message.raw.seller.name, "PETENATTI HOGAR");
     assert.strictEqual(message.raw.variants.length, 1);
-    assert.strictEqual(message.raw.variants[0].name, 'Negro');
-    assert.deepStrictEqual(message.raw.variants[0].aspectValues, { Color: 'Negro' });
+    assert.strictEqual(message.raw.variants[0].name, "Negro");
+    assert.deepStrictEqual(message.raw.variants[0].aspectValues, { Color: "Negro" });
   });
 }
 
@@ -2960,15 +2809,15 @@ async function testYandexCollectsThroughSharedPanel() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Yandex Market page');
-    assert.strictEqual(message.sourceId, 'yandex');
-    assert.strictEqual(message.raw.yandexSku, '987654321');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Yandex Market page");
+    assert.strictEqual(message.sourceId, "yandex");
+    assert.strictEqual(message.raw.yandexSku, "987654321");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '4299');
-    assert.strictEqual(message.raw.images[0], 'https://avatars.mds.yandex.net/get-mpic/123456/img_id987654/orig');
-    assert.strictEqual(message.raw.seller.name, 'Yandex sample shop');
-    assert(message.raw.variants.length >= 2, 'expected Yandex option variants');
+    assert.strictEqual(message.raw.price, "4299");
+    assert.strictEqual(message.raw.images[0], "https://avatars.mds.yandex.net/get-mpic/123456/img_id987654/orig");
+    assert.strictEqual(message.raw.seller.name, "Yandex sample shop");
+    assert(message.raw.variants.length >= 2, "expected Yandex option variants");
   });
 }
 
@@ -2977,17 +2826,14 @@ async function testYandexRenderedPagePrefersProductH1OverRecommendationNoise() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from rendered Yandex Market page');
-    assert.strictEqual(message.sourceId, 'yandex');
-    assert.strictEqual(message.raw.yandexSku, '10865015');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from rendered Yandex Market page");
+    assert.strictEqual(message.sourceId, "yandex");
+    assert.strictEqual(message.raw.yandexSku, "10865015");
     assert.strictEqual(message.raw.title, expected.title);
-    assert(!message.raw.title.includes('Яндекс Маркете'), 'expected Yandex title suffix to be removed');
-    assert(!message.raw.title.includes('Defender'), 'expected recommendation title not to be used');
-    assert.strictEqual(
-      message.raw.images[0],
-      'https://avatars.mds.yandex.net/get-mpic/4489193/img_id2157349518272126176.jpeg/90x120'
-    );
+    assert(!message.raw.title.includes("Яндекс Маркете"), "expected Yandex title suffix to be removed");
+    assert(!message.raw.title.includes("Defender"), "expected recommendation title not to be used");
+    assert.strictEqual(message.raw.images[0], "https://avatars.mds.yandex.net/get-mpic/4489193/img_id2157349518272126176.jpeg/90x120");
   });
 }
 
@@ -2996,16 +2842,16 @@ async function testYandexMerchantFilterShopCardExtractsSellerAndBrand() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from Yandex merchant-filter shop page');
-    assert.strictEqual(message.sourceId, 'yandex');
-    assert.strictEqual(message.raw.yandexSku, '103189793773');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from Yandex merchant-filter shop page");
+    assert.strictEqual(message.sourceId, "yandex");
+    assert.strictEqual(message.raw.yandexSku, "103189793773");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '2913');
-    assert.strictEqual(message.raw.priceCurrency, 'RUB');
-    assert.strictEqual(message.raw.seller.name, 'Пуффбери');
-    assert(message.raw.seller.shopUrl.includes('merchant-filter=891208'), 'expected Yandex merchant-filter shop URL');
-    assert.strictEqual(message.raw.brandName, 'Пуффбери');
+    assert.strictEqual(message.raw.price, "2913");
+    assert.strictEqual(message.raw.priceCurrency, "RUB");
+    assert.strictEqual(message.raw.seller.name, "Пуффбери");
+    assert(message.raw.seller.shopUrl.includes("merchant-filter=891208"), "expected Yandex merchant-filter shop URL");
+    assert.strictEqual(message.raw.brandName, "Пуффбери");
   });
 }
 
@@ -3014,15 +2860,15 @@ async function testSheinCollectsThroughSharedPanel() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from SHEIN page');
-    assert.strictEqual(message.sourceId, 'shein');
-    assert.strictEqual(message.raw.goodsSn, '34567890');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from SHEIN page");
+    assert.strictEqual(message.sourceId, "shein");
+    assert.strictEqual(message.raw.goodsSn, "34567890");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '15.49');
-    assert.strictEqual(message.raw.images[0], 'https://img.ltwebstatic.com/images3_pi/2026/06/24/shein-main.jpg');
-    assert.strictEqual(message.raw.seller.name, 'SHEIN');
-    assert(message.raw.variants.length >= 2, 'expected SHEIN SKU option variants');
+    assert.strictEqual(message.raw.price, "15.49");
+    assert.strictEqual(message.raw.images[0], "https://img.ltwebstatic.com/images3_pi/2026/06/24/shein-main.jpg");
+    assert.strictEqual(message.raw.seller.name, "SHEIN");
+    assert(message.raw.variants.length >= 2, "expected SHEIN SKU option variants");
   });
 }
 
@@ -3031,16 +2877,16 @@ async function testSheinJapanTitleSuffixIsRemoved() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from SHEIN Japan page');
-    assert.strictEqual(message.sourceId, 'shein');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from SHEIN Japan page");
+    assert.strictEqual(message.sourceId, "shein");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '455');
-    assert.strictEqual(message.raw.priceCurrency, 'JPY');
-    assert.strictEqual(message.raw.seller.name, 'SHEIN');
-    assert.strictEqual(message.raw.seller.shopUrl, 'https://jp.shein.com');
-    assert.strictEqual(message.raw.brandName, 'SHEGLAM');
-    assert(!message.raw.title.includes('SHEIN JAPAN'), 'expected SHEIN Japan site suffix to be removed');
+    assert.strictEqual(message.raw.price, "455");
+    assert.strictEqual(message.raw.priceCurrency, "JPY");
+    assert.strictEqual(message.raw.seller.name, "SHEIN");
+    assert.strictEqual(message.raw.seller.shopUrl, "https://jp.shein.com");
+    assert.strictEqual(message.raw.brandName, "SHEGLAM");
+    assert(!message.raw.title.includes("SHEIN JAPAN"), "expected SHEIN Japan site suffix to be removed");
   });
 }
 
@@ -3049,18 +2895,15 @@ async function testSheinMarketplaceSellerCardExtractsMerchantName() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from SHEIN marketplace seller page');
-    assert.strictEqual(message.sourceId, 'shein');
-    assert.strictEqual(message.raw.goodsSn, '423724222');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from SHEIN marketplace seller page");
+    assert.strictEqual(message.sourceId, "shein");
+    assert.strictEqual(message.raw.goodsSn, "423724222");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.price, '2020');
-    assert.strictEqual(message.raw.priceCurrency, 'JPY');
-    assert.strictEqual(message.raw.seller.name, 'GarnetGI45');
-    assert(
-      message.raw.seller.shopUrl.includes('store_code=GarnetGI45'),
-      'expected SHEIN store URL from marketplace seller card'
-    );
+    assert.strictEqual(message.raw.price, "2020");
+    assert.strictEqual(message.raw.priceCurrency, "JPY");
+    assert.strictEqual(message.raw.seller.name, "GarnetGI45");
+    assert(message.raw.seller.shopUrl.includes("store_code=GarnetGI45"), "expected SHEIN store URL from marketplace seller card");
   });
 }
 
@@ -3069,13 +2912,13 @@ async function testSheinShopInfoPrefersBrandSellerOverSheinDeliverySeller() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from SHEIN brand shop info page');
-    assert.strictEqual(message.sourceId, 'shein');
-    assert.strictEqual(message.raw.goodsSn, '481621562');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from SHEIN brand shop info page");
+    assert.strictEqual(message.sourceId, "shein");
+    assert.strictEqual(message.raw.goodsSn, "481621562");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.seller.name, 'BizChic');
-    assert(message.raw.seller.shopUrl.includes('store_code=BizChic'), 'expected SHEIN shop info store URL');
+    assert.strictEqual(message.raw.seller.name, "BizChic");
+    assert(message.raw.seller.shopUrl.includes("store_code=BizChic"), "expected SHEIN shop info store URL");
   });
 }
 
@@ -3084,17 +2927,14 @@ async function testSheinDataStoreShopInfoExtractsBrandMerchant() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from SHEIN data store shop info page');
-    assert.strictEqual(message.sourceId, 'shein');
-    assert.strictEqual(message.raw.goodsSn, '61079413');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from SHEIN data store shop info page");
+    assert.strictEqual(message.sourceId, "shein");
+    assert.strictEqual(message.raw.goodsSn, "61079413");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.brandName, 'Franclia');
-    assert.strictEqual(message.raw.seller.name, 'Franclia');
-    assert(
-      message.raw.seller.shopUrl.includes('store_code=8215335601'),
-      'expected SHEIN data store URL from shop info card'
-    );
+    assert.strictEqual(message.raw.brandName, "Franclia");
+    assert.strictEqual(message.raw.seller.name, "Franclia");
+    assert(message.raw.seller.shopUrl.includes("store_code=8215335601"), "expected SHEIN data store URL from shop info card");
   });
 }
 
@@ -3103,17 +2943,17 @@ async function testSheinSilkySpellKeepsProductTitleAndShopName() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
     if (!message) {
       const debug = await page.evaluate(() => window.__JZC_CN_SOURCE_DEBUG__?.());
       assert(message, `expected pushSourceCollect message from SHEIN SilkySpell page; debug=${JSON.stringify(debug)}`);
     }
-    assert.strictEqual(message.sourceId, 'shein');
-    assert.strictEqual(message.raw.goodsSn, '33203094');
+    assert.strictEqual(message.sourceId, "shein");
+    assert.strictEqual(message.raw.goodsSn, "33203094");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.notStrictEqual(message.raw.title, 'Destination');
-    assert.strictEqual(message.raw.seller.name, 'SilkySpell');
-    assert(message.raw.seller.shopUrl.includes('store_code=SilkySpell'), 'expected SHEIN SilkySpell store URL');
+    assert.notStrictEqual(message.raw.title, "Destination");
+    assert.strictEqual(message.raw.seller.name, "SilkySpell");
+    assert(message.raw.seller.shopUrl.includes("store_code=SilkySpell"), "expected SHEIN SilkySpell store URL");
   });
 }
 
@@ -3122,16 +2962,16 @@ async function testSheinElaminiKeepsGoodsNameAndShopCardSeller() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
     if (!message) {
       const debug = await page.evaluate(() => window.__JZC_CN_SOURCE_DEBUG__?.());
       assert(message, `expected pushSourceCollect message from SHEIN Elamini page; debug=${JSON.stringify(debug)}`);
     }
-    assert.strictEqual(message.sourceId, 'shein');
-    assert.strictEqual(message.raw.goodsSn, '88259809');
+    assert.strictEqual(message.sourceId, "shein");
+    assert.strictEqual(message.raw.goodsSn, "88259809");
     assert.strictEqual(message.raw.title, expected.title);
-    assert(!/Domestic shipping|afternoon picnic/i.test(message.raw.title), 'expected promo title not to be used');
-    assert.strictEqual(message.raw.seller.name, 'Elamini');
+    assert(!/Domestic shipping|afternoon picnic/i.test(message.raw.title), "expected promo title not to be used");
+    assert.strictEqual(message.raw.seller.name, "Elamini");
   });
 }
 
@@ -3140,18 +2980,18 @@ async function testSheinBreadcrumbTitleFallsBackToUrlSlug() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
     if (!message) {
       const debug = await page.evaluate(() => window.__JZC_CN_SOURCE_DEBUG__?.());
       assert(message, `expected pushSourceCollect message from SHEIN breadcrumb page; debug=${JSON.stringify(debug)}`);
     }
-    assert.strictEqual(message.sourceId, 'shein');
-    assert.strictEqual(message.raw.goodsSn, '3296917895459');
+    assert.strictEqual(message.sourceId, "shein");
+    assert.strictEqual(message.raw.goodsSn, "3296917895459");
     assert.strictEqual(message.raw.title, expected.title);
-    assert(!message.raw.title.includes('Home /'), 'expected breadcrumb path not to be used as title');
-    assert.strictEqual(message.raw.price, '926');
-    assert.strictEqual(message.raw.priceCurrency, 'JPY');
-    assert.strictEqual(message.raw.seller.name, 'FRIFUL');
+    assert(!message.raw.title.includes("Home /"), "expected breadcrumb path not to be used as title");
+    assert.strictEqual(message.raw.price, "926");
+    assert.strictEqual(message.raw.priceCurrency, "JPY");
+    assert.strictEqual(message.raw.seller.name, "FRIFUL");
   });
 }
 
@@ -3160,24 +3000,21 @@ async function testSheinJapaneseProductIntroBeatsBreadcrumbAndShippingTitle() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
     if (!message) {
       const debug = await page.evaluate(() => window.__JZC_CN_SOURCE_DEBUG__?.());
-      assert(
-        message,
-        `expected pushSourceCollect message from SHEIN Japanese product intro page; debug=${JSON.stringify(debug)}`
-      );
+      assert(message, `expected pushSourceCollect message from SHEIN Japanese product intro page; debug=${JSON.stringify(debug)}`);
     }
-    assert.strictEqual(message.sourceId, 'shein');
-    assert.strictEqual(message.raw.goodsSn, '9709774');
+    assert.strictEqual(message.sourceId, "shein");
+    assert.strictEqual(message.raw.goodsSn, "9709774");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.notStrictEqual(message.raw.title, 'お届け先');
-    assert(!message.raw.title.includes('ホーム/'), 'expected Japanese breadcrumb path not to be used');
-    assert.strictEqual(message.raw.price, '694');
-    assert.strictEqual(message.raw.priceCurrency, 'JPY');
-    assert.strictEqual(message.raw.seller.name, 'URUW');
-    assert(message.raw.seller.shopUrl.includes('store_code=URUW'), 'expected SHEIN shop URL from Japanese shop entry');
-    assert.strictEqual(message.raw.brandName, 'SHEIN');
+    assert.notStrictEqual(message.raw.title, "お届け先");
+    assert(!message.raw.title.includes("ホーム/"), "expected Japanese breadcrumb path not to be used");
+    assert.strictEqual(message.raw.price, "694");
+    assert.strictEqual(message.raw.priceCurrency, "JPY");
+    assert.strictEqual(message.raw.seller.name, "URUW");
+    assert(message.raw.seller.shopUrl.includes("store_code=URUW"), "expected SHEIN shop URL from Japanese shop entry");
+    assert.strictEqual(message.raw.brandName, "SHEIN");
   });
 }
 
@@ -3186,20 +3023,17 @@ async function testSheinLabelPrefixedTitleUsesNestedProductNameOnly() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
     if (!message) {
       const debug = await page.evaluate(() => window.__JZC_CN_SOURCE_DEBUG__?.());
-      assert(
-        message,
-        `expected pushSourceCollect message from SHEIN label-prefixed title page; debug=${JSON.stringify(debug)}`
-      );
+      assert(message, `expected pushSourceCollect message from SHEIN label-prefixed title page; debug=${JSON.stringify(debug)}`);
     }
-    assert.strictEqual(message.sourceId, 'shein');
-    assert.strictEqual(message.raw.goodsSn, '507838584');
+    assert.strictEqual(message.sourceId, "shein");
+    assert.strictEqual(message.raw.goodsSn, "507838584");
     assert.strictEqual(message.raw.title, expected.title);
-    assert(!message.raw.title.includes('新品'), 'expected SHEIN product label not to be included in title');
-    assert(!message.raw.title.includes('トレンド'), 'expected SHEIN trend label not to be included in title');
-    assert(!message.raw.title.includes('販売数急増'), 'expected SHEIN store quality tag not to be used as title');
+    assert(!message.raw.title.includes("新品"), "expected SHEIN product label not to be included in title");
+    assert(!message.raw.title.includes("トレンド"), "expected SHEIN trend label not to be included in title");
+    assert(!message.raw.title.includes("販売数急増"), "expected SHEIN store quality tag not to be used as title");
   });
 }
 
@@ -3208,38 +3042,38 @@ async function testSheinSkuSlugUsesStructuredProductData() {
     await page.click('[data-action="collect-product"]');
     await page.waitForFunction(() => document.querySelector('[data-action="collect-product"]')?.disabled === false);
 
-    const message = captured.find((m) => m.action === 'pushSourceCollect');
-    assert(message, 'expected pushSourceCollect message from SHEIN sku slug page');
-    assert.strictEqual(message.sourceId, 'shein');
-    assert.strictEqual(message.raw.goodsSn, 'sw240624123456');
+    const message = captured.find((m) => m.action === "pushSourceCollect");
+    assert(message, "expected pushSourceCollect message from SHEIN sku slug page");
+    assert.strictEqual(message.sourceId, "shein");
+    assert.strictEqual(message.raw.goodsSn, "sw240624123456");
     assert.strictEqual(message.raw.title, expected.title);
-    assert.strictEqual(message.raw.seller.name, 'SHEIN');
+    assert.strictEqual(message.raw.seller.name, "SHEIN");
     assert.strictEqual(message.raw.variants.length, 1);
   });
 }
 
 function getCnSourceManifestEntry(manifest) {
   const scripts = manifest.content_scripts || [];
-  return scripts.find((item) => (item.js || []).includes('content/cn-source-product.js'));
+  return scripts.find((item) => (item.js || []).includes("content/cn-source-product.js"));
 }
 
 function assertValidChromePattern(pattern) {
-  if (pattern === '<all_urls>') return;
+  if (pattern === "<all_urls>") return;
   const match = pattern.match(/^(\*|http|https|file|ftp):\/\/([^/]*)(\/.*)$/);
   assert(match, `invalid Chrome match pattern shape: ${pattern}`);
   const host = match[2];
-  if (host === '*') return;
+  if (host === "*") return;
   assert(host, `Chrome match pattern host required: ${pattern}`);
-  if (host.startsWith('*.')) {
-    assert(!host.slice(2).includes('*'), `Chrome match pattern cannot wildcard TLD: ${pattern}`);
-    assert(host.slice(2).includes('.'), `Chrome match pattern wildcard host must include a real domain: ${pattern}`);
+  if (host.startsWith("*.")) {
+    assert(!host.slice(2).includes("*"), `Chrome match pattern cannot wildcard TLD: ${pattern}`);
+    assert(host.slice(2).includes("."), `Chrome match pattern wildcard host must include a real domain: ${pattern}`);
     return;
   }
-  assert(!host.includes('*'), `Chrome match pattern host wildcard must be the whole host or prefix only: ${pattern}`);
+  assert(!host.includes("*"), `Chrome match pattern host wildcard must be the whole host or prefix only: ${pattern}`);
 }
 
 function globToRegExp(glob) {
-  return new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+  return new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
 }
 
 function chromePatternMatches(pattern, targetUrl) {
@@ -3247,12 +3081,12 @@ function chromePatternMatches(pattern, targetUrl) {
   if (!match) return false;
   const [, schemePattern, hostPattern, pathPattern] = match;
   const url = new URL(targetUrl);
-  if (schemePattern !== '*' && schemePattern !== url.protocol.slice(0, -1)) return false;
-  if (schemePattern === '*' && !['http:', 'https:'].includes(url.protocol)) return false;
+  if (schemePattern !== "*" && schemePattern !== url.protocol.slice(0, -1)) return false;
+  if (schemePattern === "*" && !["http:", "https:"].includes(url.protocol)) return false;
   const host = url.hostname.toLowerCase();
   const expectedHost = hostPattern.toLowerCase();
-  if (expectedHost !== '*') {
-    if (expectedHost.startsWith('*.')) {
+  if (expectedHost !== "*") {
+    if (expectedHost.startsWith("*.")) {
       const base = expectedHost.slice(2);
       if (host !== base && !host.endsWith(`.${base}`)) return false;
     } else if (host !== expectedHost) {
@@ -3263,103 +3097,68 @@ function chromePatternMatches(pattern, targetUrl) {
 }
 
 function testManifestPatternsAreValidAndCoverRepresentativeUrls() {
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   const hostPatterns = manifest.host_permissions || [];
-  const contentPatterns = getCnSourceManifestEntry(manifest)?.matches || [];
+  const contentPatterns = (getCnSourceManifestEntry(manifest)?.matches || []);
 
   [...hostPatterns, ...contentPatterns].forEach(assertValidChromePattern);
 
   const representativeUrls = [
-    'https://www.amazon.com/Sample-Backpack/dp/B0TESTASN1?th=1',
-    'https://www.amazon.co.uk/dp/B0TESTASN1',
-    'https://www.amazon.de/gp/product/B0TESTASN1',
-    'https://wildberries.ru/catalog/211234567/detail.aspx?targetUrl=EX',
-    'https://global.wildberries.ru/catalog/211234567/detail.aspx',
-    'https://www.temu.com/goods.html?goods_id=601099512345678',
-    'https://www.temu.com/product/601099512345678.html',
-    'https://www.temu.com/jp-zh-Hans/sample-summer-mask.html',
-    'https://articulo.mercadolibre.com.ar/MLA-1234567890-sample-backpack-_JM',
-    'https://www.mercadolibre.com.mx/p/MLM12345678',
-    'https://market.yandex.ru/product--sample-speaker/987654321',
-    'https://market.yandex.ru/card/sample-speaker/987654321?sku=123',
-    'https://www.shein.com/Sample-Dress-p-34567890-cat-1727.html?goods_id=34567890',
-    'https://us.shein.com/Sample-Dress-p-34567890.html',
-    'https://us.shein.com/Sample-Dress-p-sw240624123456-cat-1727.html',
+    "https://www.amazon.com/Sample-Backpack/dp/B0TESTASN1?th=1",
+    "https://www.amazon.co.uk/dp/B0TESTASN1",
+    "https://www.amazon.de/gp/product/B0TESTASN1",
+    "https://wildberries.ru/catalog/211234567/detail.aspx?targetUrl=EX",
+    "https://global.wildberries.ru/catalog/211234567/detail.aspx",
+    "https://www.temu.com/goods.html?goods_id=601099512345678",
+    "https://www.temu.com/product/601099512345678.html",
+    "https://www.temu.com/jp-zh-Hans/sample-summer-mask.html",
+    "https://articulo.mercadolibre.com.ar/MLA-1234567890-sample-backpack-_JM",
+    "https://www.mercadolibre.com.mx/p/MLM12345678",
+    "https://market.yandex.ru/product--sample-speaker/987654321",
+    "https://market.yandex.ru/card/sample-speaker/987654321?sku=123",
+    "https://www.shein.com/Sample-Dress-p-34567890-cat-1727.html?goods_id=34567890",
+    "https://us.shein.com/Sample-Dress-p-34567890.html",
+    "https://us.shein.com/Sample-Dress-p-sw240624123456-cat-1727.html",
   ];
 
   for (const url of representativeUrls) {
     assert(
       contentPatterns.some((pattern) => chromePatternMatches(pattern, url)),
-      `expected CN source content script to match ${url}`
+      `expected CN source content script to match ${url}`,
     );
   }
 }
 
 function testManifestInjectsCnSourcePanel() {
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   const entry = getCnSourceManifestEntry(manifest);
-  assert(entry, 'expected CN source product content script');
-  assert((entry.js || []).includes('lib/cn-source-scraper.js'), 'expected scraper helper before product script');
-  assert((entry.js || []).includes('lib/cn-source-panel.js'), 'expected shared panel before product script');
-  assert(
-    entry.matches.some((match) => match.includes('item.jd.com')),
-    'expected JD match'
-  );
-  assert(
-    entry.matches.some((match) => match.includes('pifa.pinduoduo.com')),
-    'expected PDD wholesale match'
-  );
-  assert(
-    entry.matches.some((match) => match.includes('taobao.com')),
-    'expected Taobao match'
-  );
-  assert(
-    entry.matches.some((match) => match.includes('tmall.com')),
-    'expected Tmall match'
-  );
-  assert(
-    entry.matches.some((match) => match.includes('amazon.')),
-    'expected Amazon match'
-  );
-  assert(
-    entry.matches.some((match) => match.includes('wildberries.ru')),
-    'expected WB match'
-  );
-  assert(
-    entry.matches.some((match) => match.includes('temu.')),
-    'expected Temu match'
-  );
-  assert(
-    entry.matches.some((match) => match.includes('mercadolibre.')),
-    'expected Mercado Libre match'
-  );
-  assert(
-    entry.matches.some((match) => match.includes('market.yandex.')),
-    'expected Yandex Market match'
-  );
-  assert(
-    entry.matches.some((match) => match.includes('shein.')),
-    'expected SHEIN match'
-  );
+  assert(entry, "expected CN source product content script");
+  assert((entry.js || []).includes("lib/cn-source-scraper.js"), "expected scraper helper before product script");
+  assert((entry.js || []).includes("lib/cn-source-panel.js"), "expected shared panel before product script");
+  assert(entry.matches.some((match) => match.includes("item.jd.com")), "expected JD match");
+  assert(entry.matches.some((match) => match.includes("pifa.pinduoduo.com")), "expected PDD wholesale match");
+  assert(entry.matches.some((match) => match.includes("taobao.com")), "expected Taobao match");
+  assert(entry.matches.some((match) => match.includes("tmall.com")), "expected Tmall match");
+  assert(entry.matches.some((match) => match.includes("amazon.")), "expected Amazon match");
+  assert(entry.matches.some((match) => match.includes("wildberries.ru")), "expected WB match");
+  assert(entry.matches.some((match) => match.includes("temu.")), "expected Temu match");
+  assert(entry.matches.some((match) => match.includes("mercadolibre.")), "expected Mercado Libre match");
+  assert(entry.matches.some((match) => match.includes("market.yandex.")), "expected Yandex Market match");
+  assert(entry.matches.some((match) => match.includes("shein.")), "expected SHEIN match");
 }
 
 function testDebugBridgeUsesExternalWebAccessibleScript() {
-  const bridgeSource = fs.readFileSync(debugBridgePagePath, 'utf8');
-  const panelSource = fs.readFileSync(panelPath, 'utf8');
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const bridgeSource = fs.readFileSync(debugBridgePagePath, "utf8");
+  const panelSource = fs.readFileSync(panelPath, "utf8");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   const resources = manifest.web_accessible_resources || [];
 
-  assert(bridgeSource.includes('window.__JZC_CN_SOURCE_DEBUG__'), 'expected page debug helper');
+  assert(bridgeSource.includes("window.__JZC_CN_SOURCE_DEBUG__"), "expected page debug helper");
+  assert(panelSource.includes("getURL") && panelSource.includes("lib/cn-source-debug-page.js"), "expected external debug bridge script");
+  assert(!panelSource.includes("script.textContent = `"), "debug bridge must not use inline script under Taobao CSP");
   assert(
-    panelSource.includes('getURL') && panelSource.includes('lib/cn-source-debug-page.js'),
-    'expected external debug bridge script'
-  );
-  assert(!panelSource.includes('script.textContent = `'), 'debug bridge must not use inline script under Taobao CSP');
-  assert(
-    resources.some((item) =>
-      (item.resources || []).some((resource) => resource === 'lib/*' || resource === 'lib/cn-source-debug-page.js')
-    ),
-    'expected debug bridge to be web accessible'
+    resources.some((item) => (item.resources || []).some((resource) => resource === "lib/*" || resource === "lib/cn-source-debug-page.js")),
+    "expected debug bridge to be web accessible",
   );
 }
 
@@ -3413,7 +3212,7 @@ function testDebugBridgeUsesExternalWebAccessibleScript() {
   await testSheinJapaneseProductIntroBeatsBreadcrumbAndShippingTitle();
   await testSheinLabelPrefixedTitleUsesNestedProductNameOnly();
   await testSheinSkuSlugUsesStructuredProductData();
-  console.log('cn source panel tests passed');
+  console.log("cn source panel tests passed");
 })().catch((err) => {
   console.error(err);
   process.exit(1);

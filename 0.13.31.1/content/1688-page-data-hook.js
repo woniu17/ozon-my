@@ -7,24 +7,24 @@
   if (window.__JZC_1688_PAGE_DATA_HOOK__) return;
   window.__JZC_1688_PAGE_DATA_HOOK__ = true;
 
-  const SOURCE = 'jzc-1688-page-data-hook';
-  const REQUEST_SOURCE = 'jzc-1688-scraper';
-  const RESPONSE_TYPE = 'JZC_1688_PAGE_DATA';
-  const REQUEST_TYPE = 'JZC_1688_REQUEST_PAGE_DATA';
+  const SOURCE = "jzc-1688-page-data-hook";
+  const REQUEST_SOURCE = "jzc-1688-scraper";
+  const RESPONSE_TYPE = "JZC_1688_PAGE_DATA";
+  const REQUEST_TYPE = "JZC_1688_REQUEST_PAGE_DATA";
   const GLOBAL_KEYS = [
-    '__INIT_DATA__',
-    'detailData',
-    'runParams',
-    '__detail_data__',
-    'offerDetail',
-    'pageData',
-    'offerInfo',
-    '__INIT__',
-    'hummerData',
+    "__INIT_DATA__",
+    "detailData",
+    "runParams",
+    "__detail_data__",
+    "offerDetail",
+    "pageData",
+    "offerInfo",
+    "__INIT__",
+    "hummerData",
   ];
 
   function cloneJson(value) {
-    if (!value || typeof value !== 'object') return null;
+    if (!value || typeof value !== "object") return null;
     try {
       return JSON.parse(JSON.stringify(value));
     } catch {
@@ -47,7 +47,7 @@
     const out = [];
     document.querySelectorAll('script[type="application/ld+json"]').forEach((script) => {
       try {
-        const data = JSON.parse(script.textContent || '');
+        const data = JSON.parse(script.textContent || "");
         if (data) out.push(data);
       } catch {}
     });
@@ -64,11 +64,11 @@
           jsonLd: readJsonLd(),
         },
       },
-      '*'
+      "*",
     );
   }
 
-  window.addEventListener('message', (event) => {
+  window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const message = event.data || {};
     if (message.source !== REQUEST_SOURCE || message.type !== REQUEST_TYPE) return;

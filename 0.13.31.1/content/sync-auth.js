@@ -15,14 +15,13 @@
  * v3 fingerprint,保证 "同台机器 = 1 fingerprint = 1 设备名额"。
  */
 (() => {
-  const sendToExtension = (payload) =>
-    new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage(payload, (resp) => resolve(resp));
-      } catch {
-        resolve(null);
-      }
-    });
+  const sendToExtension = (payload) => new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(payload, (resp) => resolve(resp));
+    } catch {
+      resolve(null);
+    }
+  });
 
   // 跟 frontend/lib/device-fingerprint.ts + extension/popup/popup.js 严格对齐
   // (任何调整这 3 处都得一起改,否则同机算不到同一个 hash)。
@@ -37,17 +36,12 @@
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown-tz';
     const language = navigator.language || 'unknown-lang';
     const platform = `${navigator.userAgentData?.platform || navigator.platform || ''} ${navigator.userAgent || ''}`;
-    const osBucket = /mac/i.test(platform)
-      ? 'mac'
-      : /win/i.test(platform)
-        ? 'windows'
-        : /android/i.test(platform)
-          ? 'android'
-          : /iphone|ipad|ios/i.test(platform)
-            ? 'ios'
-            : /linux/i.test(platform)
-              ? 'linux'
-              : 'unknown-os';
+    const osBucket = /mac/i.test(platform) ? 'mac'
+      : /win/i.test(platform) ? 'windows'
+      : /android/i.test(platform) ? 'android'
+      : /iphone|ipad|ios/i.test(platform) ? 'ios'
+      : /linux/i.test(platform) ? 'linux'
+      : 'unknown-os';
     const raw = [
       'jizhang-machine-v3',
       osBucket,
@@ -56,8 +50,7 @@
       language,
       navigator.hardwareConcurrency || 0,
     ].join('|');
-    let h1 = 0x811c9dc5,
-      h2 = 0x1b873593;
+    let h1 = 0x811c9dc5, h2 = 0x1b873593;
     for (let i = 0; i < raw.length; i++) {
       h1 = (h1 ^ raw.charCodeAt(i)) >>> 0;
       h1 = Math.imul(h1, 0x01000193);
@@ -127,9 +120,7 @@
     if (webToken) {
       // 已登录页:清掉可能残留的登出标记(防"登出→秒重登"窗口内误触发登出),
       // 再正常把 token 转发给扩展(切店铺时同步 storeId)。
-      try {
-        localStorage.removeItem(LOGOUT_SIGNAL_KEY);
-      } catch {}
+      try { localStorage.removeItem(LOGOUT_SIGNAL_KEY); } catch {}
       pushWebToExtension();
       return;
     }
@@ -184,18 +175,21 @@
     if (event.source !== window) return;
     const data = event.data;
     if (!data || data.__jzcExt !== 1 || !data.id || !data.action) return;
-    chrome.runtime.sendMessage({ action: data.action, ...(data.payload || {}) }, (resp) => {
-      const err = chrome.runtime.lastError?.message;
-      window.postMessage(
-        {
-          __jzcExtResp: 1,
-          id: data.id,
-          ok: !err && resp?.ok !== false,
-          data: resp?.data,
-          error: err || resp?.error,
-        },
-        '*'
-      );
-    });
+    chrome.runtime.sendMessage(
+      { action: data.action, ...(data.payload || {}) },
+      (resp) => {
+        const err = chrome.runtime.lastError?.message;
+        window.postMessage(
+          {
+            __jzcExtResp: 1,
+            id: data.id,
+            ok: !err && resp?.ok !== false,
+            data: resp?.data,
+            error: err || resp?.error,
+          },
+          '*',
+        );
+      },
+    );
   });
 })();

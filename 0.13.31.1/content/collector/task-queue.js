@@ -30,11 +30,11 @@
       this.pauseLowPending = opts.pauseLowPending ?? 10;
       this.hysteresisMs = opts.hysteresisMs ?? 2000;
 
-      this.tasks = new Map(); // taskId → { id, fn, state, result, error, attempts, createdAt, startedAt, finishedAt, _resolveOuter, _rejectOuter, _outerPromise }
-      this.failures = new Map(); // taskId → task (only failed/timeout)
+      this.tasks = new Map();        // taskId → { id, fn, state, result, error, attempts, createdAt, startedAt, finishedAt, _resolveOuter, _rejectOuter, _outerPromise }
+      this.failures = new Map();     // taskId → task (only failed/timeout)
       this.paused = false;
 
-      this._listeners = new Map(); // event → Set<cb>
+      this._listeners = new Map();   // event → Set<cb>
       this._pumping = false;
       this._congestionLevel = 'low';
       this._lastCongestionAt = 0;
@@ -54,18 +54,22 @@
       const set = this._listeners.get(event);
       if (!set) return;
       for (const cb of set) {
-        try {
-          cb(payload);
-        } catch (e) {
-          console.error('[JZTaskQueue]', event, 'listener error:', e);
-        }
+        try { cb(payload); } catch (e) { console.error('[JZTaskQueue]', event, 'listener error:', e); }
       }
     }
 
     add(taskId, fn) {
-      // 去重: 已存在的 task 直接返回它的 outer promise
+      // 去重: 已存在的 task 直接返回它的 outer promise。
+      // 例外:终态失败(ERROR/TIMEOUT)不复用 —— 旧行为会把失败结果永久记忆,
+      // 数据卡「点击重试」每次都拿回同一个 rejected promise,永远无法真正重试。
+      // 删掉旧任务重建,新一轮共享新 outer promise;PENDING/RUNNING 照旧共享在途。
       const existing = this.tasks.get(taskId);
-      if (existing) return existing._outerPromise;
+      if (existing) {
+        if (existing.state !== STATES.ERROR && existing.state !== STATES.TIMEOUT) {
+          return existing._outerPromise;
+        }
+        this.tasks.delete(taskId);
+      }
 
       const task = {
         id: taskId,
@@ -106,15 +110,21 @@
       for (const id of Array.from(this.failures.keys())) this.retry(id);
     }
 
-    pause() {
-      this.paused = true;
+    // 主动淘汰一个已终结的任务,让下一次 add(同 taskId) 真正重跑。
+    // 场景:任务本身 SUCCESS 但结果内容是失败(如 allSettled 全 rejected),队列
+    // 看不出坏结果,由调用方(数据卡 showError 分支)显式 evict。在途任务不打断。
+    evict(taskId) {
+      const task = this.tasks.get(taskId);
+      if (!task) return false;
+      if (task.state === STATES.PENDING || task.state === STATES.RUNNING) return false;
+      this.tasks.delete(taskId);
+      this.failures.delete(taskId);
       this._scheduleEmit();
+      return true;
     }
-    resume() {
-      this.paused = false;
-      this._pump();
-      this._scheduleEmit();
-    }
+
+    pause() { this.paused = true; this._scheduleEmit(); }
+    resume() { this.paused = false; this._pump(); this._scheduleEmit(); }
 
     clear() {
       // 清空全部（包括运行中的：抛弃 outer promise 的等待者会一直挂着——调用方自负）
@@ -124,25 +134,14 @@
     }
 
     stats() {
-      let pending = 0,
-        running = 0,
-        success = 0,
-        failed = 0;
+      let pending = 0, running = 0, success = 0, failed = 0;
       for (const t of this.tasks.values()) {
         switch (t.state) {
-          case STATES.PENDING:
-            pending++;
-            break;
-          case STATES.RUNNING:
-            running++;
-            break;
-          case STATES.SUCCESS:
-            success++;
-            break;
+          case STATES.PENDING: pending++; break;
+          case STATES.RUNNING: running++; break;
+          case STATES.SUCCESS: success++; break;
           case STATES.TIMEOUT:
-          case STATES.ERROR:
-            failed++;
-            break;
+          case STATES.ERROR: failed++; break;
         }
       }
       return { pending, running, success, failed, total: this.tasks.size, paused: this.paused };
@@ -164,8 +163,7 @@
     _maybeEmitCongestion(stats) {
       const now = Date.now();
       if (now - this._lastCongestionAt < this.hysteresisMs) return;
-      const isHigh =
-        stats.running >= this.concurrency || stats.pending > this.pauseLowPending || stats.running > this.autoPauseHigh;
+      const isHigh = stats.running >= this.concurrency || stats.pending > this.pauseLowPending || stats.running > this.autoPauseHigh;
       const isLow = stats.running <= this.autoPauseLow && stats.pending <= this.pauseLowPending;
       if (isHigh && this._congestionLevel !== 'high') {
         this._congestionLevel = 'high';
@@ -188,10 +186,7 @@
           // 找一个 pending
           let next = null;
           for (const t of this.tasks.values()) {
-            if (t.state === STATES.PENDING) {
-              next = t;
-              break;
-            }
+            if (t.state === STATES.PENDING) { next = t; break; }
           }
           if (!next) break;
           this._runTask(next); // 不 await，让多个并发跑起来
@@ -209,10 +204,7 @@
 
       let timer;
       const timeoutPromise = new Promise((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`Task ${task.id} timeout after ${this.timeoutMs}ms`)),
-          this.timeoutMs
-        );
+        timer = setTimeout(() => reject(new Error(`Task ${task.id} timeout after ${this.timeoutMs}ms`)), this.timeoutMs);
       });
 
       Promise.race([Promise.resolve().then(() => task.fn(task)), timeoutPromise])

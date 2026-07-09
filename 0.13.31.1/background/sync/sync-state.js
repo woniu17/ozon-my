@@ -10,9 +10,10 @@
 
 (() => {
   const CRED_TTL_MS = 5 * 60_000;
-  const DEVICE_ID_KEY = 'jzClientSync:deviceId';
-  const LAST_RUN_KEY = 'jzClientSync:lastRunAt'; // { [type]: epochMs }
-  const INTERVAL_CACHE_KEY = 'jzClientSync:intervals'; // { fetchedAt, postingsMin, productsMin, warehousesMin }
+  const DEVICE_ID_KEY = "jzClientSync:deviceId";
+  const LAST_RUN_KEY = "jzClientSync:lastRunAt"; // { [type]: epochMs }
+  const INTERVAL_CACHE_KEY = "jzClientSync:intervals"; // { fetchedAt, postingsMin, productsMin, warehousesMin }
+  const POSTINGS_WATERMARK_KEY = "jzClientSync:postingsWatermark"; // { [storeId]: { lastSuccessTo, updatedAt } }
   const INTERVAL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
   // storeId -> { clientId, apiKey, fetchedAt }
@@ -87,7 +88,11 @@
   async function getIntervals() {
     const got = await chrome.storage.local.get(INTERVAL_CACHE_KEY);
     const cached = got[INTERVAL_CACHE_KEY];
-    if (cached && Date.now() - cached.fetchedAt < INTERVAL_CACHE_TTL_MS && cached.postingsMin > 0) {
+    if (
+      cached &&
+      Date.now() - cached.fetchedAt < INTERVAL_CACHE_TTL_MS &&
+      cached.postingsMin > 0
+    ) {
       return cached;
     }
     return null;
@@ -96,6 +101,42 @@
   async function setIntervals(intervals) {
     await chrome.storage.local.set({
       [INTERVAL_CACHE_KEY]: { ...intervals, fetchedAt: Date.now() },
+    });
+  }
+
+  async function getPostingsWatermark(storeId) {
+    if (!storeId) return null;
+    const got = await chrome.storage.local.get(POSTINGS_WATERMARK_KEY);
+    const watermark = got[POSTINGS_WATERMARK_KEY]?.[storeId];
+    if (!watermark?.lastSuccessTo) return null;
+    const lastSuccessTo = new Date(String(watermark.lastSuccessTo));
+    if (Number.isNaN(lastSuccessTo.getTime())) return null;
+    return {
+      lastSuccessTo: lastSuccessTo.toISOString(),
+      updatedAt: watermark.updatedAt || null,
+    };
+  }
+
+  async function setPostingsWatermark(storeId, watermark) {
+    if (!storeId || !watermark?.lastSuccessTo) return;
+    const lastSuccessTo = new Date(String(watermark.lastSuccessTo));
+    if (Number.isNaN(lastSuccessTo.getTime())) return;
+
+    const got = await chrome.storage.local.get(POSTINGS_WATERMARK_KEY);
+    const allWatermarks = got[POSTINGS_WATERMARK_KEY] || {};
+    const updatedAt =
+      watermark.updatedAt && !Number.isNaN(new Date(String(watermark.updatedAt)).getTime())
+        ? new Date(String(watermark.updatedAt)).toISOString()
+        : new Date().toISOString();
+
+    await chrome.storage.local.set({
+      [POSTINGS_WATERMARK_KEY]: {
+        ...allWatermarks,
+        [storeId]: {
+          lastSuccessTo: lastSuccessTo.toISOString(),
+          updatedAt,
+        },
+      },
     });
   }
 
@@ -111,5 +152,7 @@
     setLastRunAt,
     getIntervals,
     setIntervals,
+    getPostingsWatermark,
+    setPostingsWatermark,
   };
 })();

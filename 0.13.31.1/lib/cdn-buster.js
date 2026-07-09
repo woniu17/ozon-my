@@ -10,17 +10,17 @@
  */
 (function () {
   const CDN_BUSTER_ENABLED = true;
-  const CDN_CLEAR_VERSION = 'v1';
+  const CDN_CLEAR_VERSION = "v1";
 
   function withCdnBuster(url) {
     if (!CDN_BUSTER_ENABLED) return url;
-    return url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    return url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
   }
 
   globalThis.JzCdnBuster = {
     CDN_BUSTER_ENABLED,
     CDN_CLEAR_VERSION,
-    CLEAR_CACHE_FLAG_KEY: 'jz-cdn-cache-cleared-' + CDN_CLEAR_VERSION,
+    CLEAR_CACHE_FLAG_KEY: "jz-cdn-cache-cleared-" + CDN_CLEAR_VERSION,
     withCdnBuster,
   };
 })();

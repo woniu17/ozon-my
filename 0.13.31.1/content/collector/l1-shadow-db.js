@@ -28,10 +28,10 @@
 (() => {
   if (window.JZL1ShadowDB && window.JZL1ShadowDB._v2) return;
 
-  const DB_NAME = 'jzL1Shadow';
+  const DB_NAME = "jzL1Shadow";
   const DB_VERSION = 2;
-  const STORE_SAMPLES = 'samples';
-  const STORE_SKU_SAMPLES = 'sku_samples';
+  const STORE_SAMPLES = "samples";
+  const STORE_SKU_SAMPLES = "sku_samples";
 
   let _db = null;
   let _initPromise = null;
@@ -70,12 +70,12 @@
   // 同语义的多种 key 用 OR — 命中任一即 probe 命中。
   // 顺序对应 l1-diff.js 输出列(保持稳定便于人眼对比)。
   const FIELD_PROBES = [
-    { name: 'price', keys: ['price', 'cardPrice', 'finalPrice', 'mainPrice'] },
-    { name: 'title', keys: ['title', 'name', 'productName'] },
-    { name: 'image', keys: ['image', 'mainImage', 'images', 'imageUrl'] },
-    { name: 'seller', keys: ['sellerName', 'sellerId', 'seller'] },
-    { name: 'sales', keys: ['sales', 'salesCount', 'soldCount', 'ordersCount'] },
-    { name: 'rating', keys: ['rating', 'reviewCount', 'reviewsCount'] },
+    { name: "price", keys: ["price", "cardPrice", "finalPrice", "mainPrice"] },
+    { name: "title", keys: ["title", "name", "productName"] },
+    { name: "image", keys: ["image", "mainImage", "images", "imageUrl"] },
+    { name: "seller", keys: ["sellerName", "sellerId", "seller"] },
+    { name: "sales", keys: ["sales", "salesCount", "soldCount", "ordersCount"] },
+    { name: "rating", keys: ["rating", "reviewCount", "reviewsCount"] },
   ];
 
   function _open() {
@@ -86,21 +86,21 @@
         // v1 schema (samples store)— 老用户升级到 v2 时此 store 已存在直接复用
         if (!db.objectStoreNames.contains(STORE_SAMPLES)) {
           const store = db.createObjectStore(STORE_SAMPLES, {
-            keyPath: 'id',
+            keyPath: "id",
             autoIncrement: true,
           });
-          store.createIndex('ts', 'ts', { unique: false });
-          store.createIndex('urlPattern', 'urlPattern', { unique: false });
+          store.createIndex("ts", "ts", { unique: false });
+          store.createIndex("urlPattern", "urlPattern", { unique: false });
         }
         // v2 新增 sku_samples store(Phase 1.5 — SKU 级字段存在性)
         if (!db.objectStoreNames.contains(STORE_SKU_SAMPLES)) {
           const store = db.createObjectStore(STORE_SKU_SAMPLES, {
-            keyPath: 'id',
+            keyPath: "id",
             autoIncrement: true,
           });
-          store.createIndex('sku', 'sku', { unique: false });
-          store.createIndex('ts', 'ts', { unique: false });
-          store.createIndex('urlPattern', 'urlPattern', { unique: false });
+          store.createIndex("sku", "sku", { unique: false });
+          store.createIndex("ts", "ts", { unique: false });
+          store.createIndex("urlPattern", "urlPattern", { unique: false });
         }
       };
       req.onsuccess = (e) => resolve(e.target.result);
@@ -126,17 +126,17 @@
 
   // 把 URL 归一化成统计用的 pattern key,避免 query string 把统计粒度搞碎
   function urlToPattern(url) {
-    if (!url || typeof url !== 'string') return 'unknown';
+    if (!url || typeof url !== "string") return "unknown";
     try {
-      const u = new URL(url, 'https://www.ozon.ru/');
+      const u = new URL(url, "https://www.ozon.ru/");
       const path = u.pathname;
-      if (path.includes('/_action/getCatalog')) return 'getCatalog';
-      if (path.includes('/_action/getSimilarSearch')) return 'getSimilarSearch';
-      if (path.includes('/composer-api.bx/page/json/v2')) return 'composer-page-json';
-      if (path.includes('/entrypoint-api.bx/page/json/v2')) return 'entrypoint-page-json';
+      if (path.includes("/_action/getCatalog")) return "getCatalog";
+      if (path.includes("/_action/getSimilarSearch")) return "getSimilarSearch";
+      if (path.includes("/composer-api.bx/page/json/v2")) return "composer-page-json";
+      if (path.includes("/entrypoint-api.bx/page/json/v2")) return "entrypoint-page-json";
       return path;
     } catch (e) {
-      return 'unknown';
+      return "unknown";
     }
   }
 
@@ -147,7 +147,7 @@
   // 返回 null 表示 "skipped"(响应过大,由调用方做 byteSize 检查后传 null)。
   // Phase 1 的 estimateSkuCount 等价于 extractSkuDetails(data).length。
   function extractSkuDetails(data) {
-    if (!data || typeof data !== 'object') return [];
+    if (!data || typeof data !== "object") return [];
     const seen = new Set();
     const records = [];
     const visited = new WeakSet();
@@ -159,7 +159,7 @@
       for (const probe of FIELD_PROBES) {
         for (const k of probe.keys) {
           const v = node[k];
-          if (v != null && v !== '') {
+          if (v != null && v !== "") {
             hit.push(probe.name);
             break;
           }
@@ -170,7 +170,7 @@
 
     function walk(node, depth) {
       if (truncated) return;
-      if (!node || typeof node !== 'object' || visited.has(node)) return;
+      if (!node || typeof node !== "object" || visited.has(node)) return;
       if (depth > WALK_MAX_DEPTH) return;
       if (budget.nodes >= WALK_MAX_NODES) {
         truncated = true;
@@ -190,10 +190,10 @@
 
       // 检查当前 node 是否本身是个 SKU 记录(SKU key + 数字 value)
       let skuValue = null;
-      for (const k of ['sku', 'skuId', 'itemId', 'productSku']) {
+      for (const k of ["sku", "skuId", "itemId", "productSku"]) {
         if (k in node) {
           const v = node[k];
-          if (typeof v === 'string' || typeof v === 'number') {
+          if (typeof v === "string" || typeof v === "number") {
             const s = String(v);
             if (/^\d{6,}$/.test(s)) {
               skuValue = s;
@@ -213,13 +213,17 @@
         if (truncated) return;
         if (!Object.prototype.hasOwnProperty.call(node, k)) continue;
         const v = node[k];
-        if (typeof v === 'object') {
+        if (typeof v === "object") {
           walk(v, depth + 1);
-        } else if (typeof v === 'string') {
+        } else if (typeof v === "string") {
           // widgetStates 里 SKU 通常埋在 JSON-string-encoded payload。
           // 每个响应最多尝试 WALK_MAX_JSON_PARSE_ATTEMPTS 次 JSON.parse,
           // 防止深度嵌套 SKU 树触发 N² parse 风暴。
-          if (v.length < 4096 && v.indexOf('"sku"') > -1 && budget.jsonParses < WALK_MAX_JSON_PARSE_ATTEMPTS) {
+          if (
+            v.length < 4096 &&
+            v.indexOf('"sku"') > -1 &&
+            budget.jsonParses < WALK_MAX_JSON_PARSE_ATTEMPTS
+          ) {
             budget.jsonParses += 1;
             try {
               walk(JSON.parse(v), depth + 1);
@@ -242,7 +246,7 @@
     let topKeys = [];
     let byteSize = 0;
     try {
-      topKeys = data && typeof data === 'object' ? Object.keys(data).slice(0, 50) : [];
+      topKeys = data && typeof data === "object" ? Object.keys(data).slice(0, 50) : [];
       // JSON.stringify 是 native 实现,正常响应(50KB-500KB)在 ms 级,可接受
       byteSize = JSON.stringify(data || null).length;
     } catch (e) {}
@@ -254,13 +258,13 @@
 
     // step 1: 写 samples 表(响应级 metadata)
     const sampleId = await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_SAMPLES, 'readwrite');
+      const tx = db.transaction(STORE_SAMPLES, "readwrite");
       const store = tx.objectStore(STORE_SAMPLES);
       const req = store.add({
         url,
         urlPattern,
         ts: sampleTs,
-        source: source || 'fetch',
+        source: source || "fetch",
         skuCount,
         topKeys,
         byteSize,
@@ -273,7 +277,7 @@
     // samples 表已经成功,sku_samples 是补充字段维度信息,缺了不影响 Phase 1 主链路。
     if (skuDetails.length > 0) {
       await new Promise((resolve) => {
-        const tx = db.transaction(STORE_SKU_SAMPLES, 'readwrite');
+        const tx = db.transaction(STORE_SKU_SAMPLES, "readwrite");
         const store = tx.objectStore(STORE_SKU_SAMPLES);
         for (const r of skuDetails) {
           try {
@@ -310,8 +314,8 @@
 
     // step 1: 按 ts 索引删 < cutoffTs 的
     await new Promise((resolve) => {
-      const tx = db.transaction(storeName, 'readwrite');
-      const idx = tx.objectStore(storeName).index('ts');
+      const tx = db.transaction(storeName, "readwrite");
+      const idx = tx.objectStore(storeName).index("ts");
       const range = IDBKeyRange.upperBound(cutoffTs);
       const req = idx.openCursor(range);
       req.onsuccess = (e) => {
@@ -323,18 +327,22 @@
         }
       };
       req.onerror = (e) => {
-        errorsOut.push(`${storeName}-age: ${e.target.error && e.target.error.message}`);
+        errorsOut.push(
+          `${storeName}-age: ${e.target.error && e.target.error.message}`
+        );
       };
       tx.oncomplete = () => resolve();
       tx.onerror = (e) => {
-        errorsOut.push(`${storeName}-age-tx: ${e.target.error && e.target.error.message}`);
+        errorsOut.push(
+          `${storeName}-age-tx: ${e.target.error && e.target.error.message}`
+        );
         resolve();
       };
     });
 
     // step 2: count + 删最老差额
     const remaining = await new Promise((resolve) => {
-      const tx = db.transaction(storeName, 'readonly');
+      const tx = db.transaction(storeName, "readonly");
       const req = tx.objectStore(storeName).count();
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => resolve(0);
@@ -342,8 +350,8 @@
     if (remaining > limit) {
       const toDelete = remaining - limit;
       await new Promise((resolve) => {
-        const tx = db.transaction(storeName, 'readwrite');
-        const idx = tx.objectStore(storeName).index('ts');
+        const tx = db.transaction(storeName, "readwrite");
+        const idx = tx.objectStore(storeName).index("ts");
         const req = idx.openCursor(); // 默认升序 = 老的先来
         req.onsuccess = (e) => {
           const cur = e.target.result;
@@ -354,11 +362,15 @@
           }
         };
         req.onerror = (e) => {
-          errorsOut.push(`${storeName}-limit: ${e.target.error && e.target.error.message}`);
+          errorsOut.push(
+            `${storeName}-limit: ${e.target.error && e.target.error.message}`
+          );
         };
         tx.oncomplete = () => resolve();
         tx.onerror = (e) => {
-          errorsOut.push(`${storeName}-limit-tx: ${e.target.error && e.target.error.message}`);
+          errorsOut.push(
+            `${storeName}-limit-tx: ${e.target.error && e.target.error.message}`
+          );
           resolve();
         };
       });
@@ -367,16 +379,28 @@
   }
 
   async function pruneSamples(force) {
-    if (_prunePending) return { skipped: 'in_progress' };
+    if (_prunePending) return { skipped: "in_progress" };
     if (!force && Date.now() - _lastPruneAt < PRUNE_THROTTLE_MS) {
-      return { skipped: 'throttled' };
+      return { skipped: "throttled" };
     }
     _prunePending = true;
     const stats = { samples: null, skuSamples: null, errors: [] };
     try {
       const db = await init();
-      stats.samples = await pruneOne(db, STORE_SAMPLES, SAMPLE_LIMIT, SAMPLE_MAX_AGE_MS, stats.errors);
-      stats.skuSamples = await pruneOne(db, STORE_SKU_SAMPLES, SKU_SAMPLE_LIMIT, SKU_SAMPLE_MAX_AGE_MS, stats.errors);
+      stats.samples = await pruneOne(
+        db,
+        STORE_SAMPLES,
+        SAMPLE_LIMIT,
+        SAMPLE_MAX_AGE_MS,
+        stats.errors
+      );
+      stats.skuSamples = await pruneOne(
+        db,
+        STORE_SKU_SAMPLES,
+        SKU_SAMPLE_LIMIT,
+        SKU_SAMPLE_MAX_AGE_MS,
+        stats.errors
+      );
       _lastPruneAt = Date.now();
     } catch (e) {
       stats.errors.push(String(e && e.message ? e.message : e));
@@ -389,7 +413,7 @@
   async function countSamples() {
     const db = await init();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_SAMPLES, 'readonly');
+      const tx = db.transaction(STORE_SAMPLES, "readonly");
       const req = tx.objectStore(STORE_SAMPLES).count();
       req.onsuccess = () => resolve(req.result);
       req.onerror = (e) => reject(e.target.error);
@@ -400,11 +424,11 @@
     const db = await init();
     const lim = Math.max(1, Math.min(200, limit || 20));
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_SAMPLES, 'readonly');
+      const tx = db.transaction(STORE_SAMPLES, "readonly");
       const store = tx.objectStore(STORE_SAMPLES);
-      const idx = store.index('ts');
+      const idx = store.index("ts");
       const out = [];
-      const cur = idx.openCursor(null, 'prev');
+      const cur = idx.openCursor(null, "prev");
       cur.onsuccess = (e) => {
         const cursor = e.target.result;
         if (cursor && out.length < lim) {
@@ -423,13 +447,13 @@
     // 同时清两个 store,语义"全部重置"
     await Promise.all([
       new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_SAMPLES, 'readwrite');
+        const tx = db.transaction(STORE_SAMPLES, "readwrite");
         const req = tx.objectStore(STORE_SAMPLES).clear();
         req.onsuccess = () => resolve();
         req.onerror = (e) => reject(e.target.error);
       }),
       new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_SKU_SAMPLES, 'readwrite');
+        const tx = db.transaction(STORE_SKU_SAMPLES, "readwrite");
         const req = tx.objectStore(STORE_SKU_SAMPLES).clear();
         req.onsuccess = () => resolve();
         req.onerror = (e) => reject(e.target.error);
@@ -440,7 +464,7 @@
   async function countSkuSamples() {
     const db = await init();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_SKU_SAMPLES, 'readonly');
+      const tx = db.transaction(STORE_SKU_SAMPLES, "readonly");
       const req = tx.objectStore(STORE_SKU_SAMPLES).count();
       req.onsuccess = () => resolve(req.result);
       req.onerror = (e) => reject(e.target.error);
@@ -452,12 +476,12 @@
   // 50k 以下,200k 是安全上限)。
   async function getSkuSamples(opts) {
     const o = opts || {};
-    const sinceTs = typeof o.sinceTs === 'number' ? o.sinceTs : 0;
+    const sinceTs = typeof o.sinceTs === "number" ? o.sinceTs : 0;
     const limit = Math.max(1, Math.min(200_000, o.limit || 200_000));
     const db = await init();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_SKU_SAMPLES, 'readonly');
-      const idx = tx.objectStore(STORE_SKU_SAMPLES).index('ts');
+      const tx = db.transaction(STORE_SKU_SAMPLES, "readonly");
+      const idx = tx.objectStore(STORE_SKU_SAMPLES).index("ts");
       const range = sinceTs > 0 ? IDBKeyRange.lowerBound(sinceTs) : null;
       const req = idx.openCursor(range);
       const out = [];

@@ -13,15 +13,15 @@
  */
 
 (() => {
-  const SHARD_KEY_PREFIX = 'diff:';
+  const SHARD_KEY_PREFIX = "diff:";
   const VOLATILE_TOP_KEYS = new Set([
-    'updated_at',
-    'created_at',
-    'synced_at',
-    'stocks',
-    'prices',
-    'price_indexes',
-    'primary_image',
+    "updated_at",
+    "created_at",
+    "synced_at",
+    "stocks",
+    "prices",
+    "price_indexes",
+    "primary_image",
   ]);
 
   function shardOf(productId) {
@@ -31,7 +31,7 @@
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
     const byte = (h >>> 0) & 0xff;
-    return byte.toString(16).padStart(2, '0');
+    return byte.toString(16).padStart(2, "0");
   }
 
   function shardKey(storeId, type, shard) {
@@ -39,12 +39,12 @@
   }
 
   function stripVolatile(raw) {
-    if (!raw || typeof raw !== 'object') return raw;
+    if (!raw || typeof raw !== "object") return raw;
     const out = {};
     for (const k of Object.keys(raw)) {
       if (VOLATILE_TOP_KEYS.has(k)) continue;
       // 任何 *_at 时间戳字段
-      if (k.endsWith('_at')) continue;
+      if (k.endsWith("_at")) continue;
       out[k] = raw[k];
     }
     return out;
@@ -53,22 +53,28 @@
   // 稳定 stringify — 对象按 key 排序,数组保持原序。避免 Ozon 偶尔字段顺序漂移
   // 导致 hash 误判变更。
   function stableStringify(value) {
-    if (value === null || typeof value !== 'object') {
+    if (value === null || typeof value !== "object") {
       return JSON.stringify(value);
     }
     if (Array.isArray(value)) {
-      return '[' + value.map(stableStringify).join(',') + ']';
+      return "[" + value.map(stableStringify).join(",") + "]";
     }
     const keys = Object.keys(value).sort();
-    return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify(value[k])).join(',') + '}';
+    return (
+      "{" +
+      keys
+        .map((k) => JSON.stringify(k) + ":" + stableStringify(value[k]))
+        .join(",") +
+      "}"
+    );
   }
 
   async function sha256Hex(str) {
     const buf = new TextEncoder().encode(str);
-    const hash = await crypto.subtle.digest('SHA-256', buf);
+    const hash = await crypto.subtle.digest("SHA-256", buf);
     const bytes = new Uint8Array(hash);
-    let hex = '';
-    for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+    let hex = "";
+    for (const b of bytes) hex += b.toString(16).padStart(2, "0");
     return hex;
   }
 

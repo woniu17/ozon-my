@@ -25,13 +25,13 @@
  * 调用方见 frontend/lib/extension-bridge.ts
  */
 (function () {
-  'use strict';
+  "use strict";
 
-  const PROTO = 'v1';
+  const PROTO = "v1";
 
   if (!window.JZSkuCollect) {
     // sku-collect.js 应该在 manifest 里排在 bridge 之前; 缺失即配置错误,直接返错
-    console.warn('[jz-bridge] JZSkuCollect 未加载,manifest content_scripts 顺序有误');
+    console.warn("[jz-bridge] JZSkuCollect 未加载,manifest content_scripts 顺序有误");
   }
 
   function reply(reqId, kind, payload) {
@@ -40,28 +40,30 @@
 
   async function handlePrefetch(reqId, skus) {
     if (!Array.isArray(skus) || skus.length === 0) {
-      reply(reqId, 'prefetch.response', { ok: false, error: 'skus 不能为空' });
+      reply(reqId, "prefetch.response", { ok: false, error: "skus 不能为空" });
       return;
     }
     if (!window.JZSkuCollect?.collectBySkus) {
-      reply(reqId, 'prefetch.response', { ok: false, error: 'JZSkuCollect_not_loaded' });
+      reply(reqId, "prefetch.response", { ok: false, error: "JZSkuCollect_not_loaded" });
       return;
     }
     try {
-      const { sourceMap, failed } = await window.JZSkuCollect.collectBySkus(skus.map(String));
+      const { sourceMap, failed } = await window.JZSkuCollect.collectBySkus(
+        skus.map(String),
+      );
       const bySku = {};
       for (const [sku, distilled] of sourceMap.entries()) {
         if (distilled?._sourceVariant) {
           bySku[sku] = distilled._sourceVariant;
         }
       }
-      reply(reqId, 'prefetch.response', {
+      reply(reqId, "prefetch.response", {
         ok: true,
         bySku,
         failed: (failed || []).map((f) => ({ sku: f.sku, error: f.error })),
       });
     } catch (e) {
-      reply(reqId, 'prefetch.response', {
+      reply(reqId, "prefetch.response", {
         ok: false,
         error: e?.message || String(e),
       });
@@ -74,7 +76,7 @@
         chrome.runtime.sendMessage(message, (resp) => {
           const err = chrome.runtime.lastError;
           if (err) {
-            reject(new Error(err.message || 'chrome.runtime.sendMessage 失败'));
+            reject(new Error(err.message || "chrome.runtime.sendMessage 失败"));
             return;
           }
           resolve(resp);
@@ -85,61 +87,66 @@
     });
   }
 
-  async function handleSync(reqId, storeId, syncType) {
+  async function handleSync(reqId, storeId, syncType, postingsOptions) {
     if (!storeId || !syncType) {
-      reply(reqId, 'sync.response', {
+      reply(reqId, "sync.response", {
         ok: false,
-        error: 'storeId / syncType 必填',
+        error: "storeId / syncType 必填",
       });
       return;
     }
-    if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {
+    if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
       // bridge 不在 extension 上下文(理论上不可能,content_script 必有 chrome.runtime)
-      reply(reqId, 'sync.response', {
+      reply(reqId, "sync.response", {
         ok: false,
-        error: 'chrome_runtime_unavailable',
+        error: "chrome_runtime_unavailable",
       });
       return;
     }
     try {
       const resp = await sendToSw({
-        type: 'jzManualSync',
+        type: "jzManualSync",
         storeId: String(storeId),
         syncType: String(syncType).toUpperCase(),
+        ...(postingsOptions || {}),
       });
       if (!resp) {
-        reply(reqId, 'sync.response', { ok: false, error: 'no_response_from_sw' });
+        reply(reqId, "sync.response", { ok: false, error: "no_response_from_sw" });
         return;
       }
-      reply(reqId, 'sync.response', {
+      reply(reqId, "sync.response", {
         ok: !!resp.ok,
         jobId: resp.jobId,
         error: resp.error,
       });
     } catch (e) {
-      reply(reqId, 'sync.response', {
+      reply(reqId, "sync.response", {
         ok: false,
         error: e?.message || String(e),
       });
     }
   }
 
-  window.addEventListener('message', (ev) => {
+  window.addEventListener("message", (ev) => {
     // 同窗同源限制 — 防其他 iframe / extension 注入伪造请求
     if (ev.source !== window) return;
     if (ev.origin !== window.location.origin) return;
     const msg = ev.data;
-    if (!msg || msg.__jz !== PROTO || typeof msg.reqId !== 'string') return;
+    if (!msg || msg.__jz !== PROTO || typeof msg.reqId !== "string") return;
 
-    if (msg.kind === 'ping.request') {
-      reply(msg.reqId, 'ping.response', {
+    if (msg.kind === "ping.request") {
+      reply(msg.reqId, "ping.response", {
         ok: true,
         version: chrome.runtime.getManifest().version,
       });
-    } else if (msg.kind === 'prefetch.request') {
+    } else if (msg.kind === "prefetch.request") {
       handlePrefetch(msg.reqId, msg.skus);
-    } else if (msg.kind === 'sync.request') {
-      handleSync(msg.reqId, msg.storeId, msg.syncType);
+    } else if (msg.kind === "sync.request") {
+      handleSync(msg.reqId, msg.storeId, msg.syncType, {
+        postingsSinceDays: msg.postingsSinceDays,
+        postingsSince: msg.postingsSince,
+        postingsTo: msg.postingsTo,
+      });
     }
   });
 })();

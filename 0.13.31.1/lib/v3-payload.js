@@ -12,13 +12,13 @@
  * 移植自 frontend/hooks/useBatchImport.ts:196-230 + ozon-product.js:4940-5038。
  */
 (function (root) {
-  'use strict';
+  "use strict";
 
   const NAME_MAX = 200;
 
   function safeText(s, max) {
-    if (s == null) return '';
-    const trimmed = String(s).replace(/\s+/g, ' ').trim();
+    if (s == null) return "";
+    const trimmed = String(s).replace(/\s+/g, " ").trim();
     return max && trimmed.length > max ? trimmed.slice(0, max) : trimmed;
   }
 
@@ -29,10 +29,17 @@
    * @returns {{ ok: boolean, item?: object, error?: string }}
    */
   function buildV3Item(row, distilled, opts = {}) {
-    const { offerIdPrefix = 'jz', batchSalt = '', currencyCode = 'CNY', vat = '0', defaultStock, modelName } = opts;
+    const {
+      offerIdPrefix = "jz",
+      batchSalt = "",
+      currencyCode = "CNY",
+      vat = "0",
+      defaultStock,
+      modelName,
+    } = opts;
 
     if (!distilled) {
-      return { ok: false, error: '未采集到商品信息' };
+      return { ok: false, error: "未采集到商品信息" };
     }
 
     // 名称：distilled.name > row 没有名字 fallback 用 SKU
@@ -40,7 +47,7 @@
 
     // 图片：distilled.images（4194 主图 + 4195 collection）
     if (!distilled.images || distilled.images.length === 0) {
-      return { ok: false, error: '采集结果缺少图片（attr 4194/4195 都为空）' };
+      return { ok: false, error: "采集结果缺少图片（attr 4194/4195 都为空）" };
     }
     const images = distilled.images.map((url, i) => ({
       file_name: url,
@@ -49,19 +56,28 @@
 
     // 三维 + 重量：用户填了的优先，否则用 distilled 的 attribute 值，再否则用 fallback 100
     // 与跟卖面板（ozon-product.js:4948-4955）保持一致
-    const weight = row.weightG != null && row.weightG > 0 ? Math.round(row.weightG) : distilled.weight || 100;
-    const depth = row.lengthMm != null && row.lengthMm > 0 ? Math.round(row.lengthMm) : distilled.depth || 100;
-    const width = row.widthMm != null && row.widthMm > 0 ? Math.round(row.widthMm) : distilled.width || 100;
-    const height = row.heightMm != null && row.heightMm > 0 ? Math.round(row.heightMm) : distilled.height || 100;
+    const weight = row.weightG != null && row.weightG > 0
+      ? Math.round(row.weightG)
+      : (distilled.weight || 100);
+    const depth = row.lengthMm != null && row.lengthMm > 0
+      ? Math.round(row.lengthMm)
+      : (distilled.depth || 100);
+    const width = row.widthMm != null && row.widthMm > 0
+      ? Math.round(row.widthMm)
+      : (distilled.width || 100);
+    const height = row.heightMm != null && row.heightMm > 0
+      ? Math.round(row.heightMm)
+      : (distilled.height || 100);
 
     // offer_id：行内显式 > prefix-salt-sku
-    const offerId = row.offerId || `${offerIdPrefix}-${batchSalt || Math.random().toString(36).slice(2, 8)}-${row.sku}`;
+    const offerId = row.offerId
+      || `${offerIdPrefix}-${batchSalt || Math.random().toString(36).slice(2, 8)}-${row.sku}`;
 
     const oldPrice = (row.price * 1.25).toFixed(2);
     const description = root.JZFollowSellContentCopy?.pickFollowSellDescription
       ? root.JZFollowSellContentCopy.pickFollowSellDescription({
           sourceVariant: distilled._sourceVariant,
-          richContent: distilled.richContent || '',
+          richContent: distilled.richContent || "",
           fallbackName: name,
           max: 4096,
         })
@@ -91,17 +107,17 @@
       scraped_model_name: modelName ? safeText(modelName, NAME_MAX) : undefined,
       _sourceVariant: distilled._sourceVariant || undefined,
       weight,
-      weight_unit: 'g',
+      weight_unit: "g",
       depth,
       width,
       height,
-      dimension_unit: 'mm',
+      dimension_unit: "mm",
       // GTIN 从源 SKU 继承（distilled.barcode 来自 attr 7822 / /search barcodes[0]）。
       // 有 GTIN 是 Ozon 内容评分加分项。当前 QuickListRow 没有 barcode 输入列,
       // 全部走 distilled 兜底;若日后给行级 barcode 加入口,这里能自动尊重用户输入。
-      barcode: row.barcode || distilled.barcode || '',
+      barcode: row.barcode || distilled.barcode || "",
       complex_attributes: [],
-      service_type: 'IS_CODE_SERVICE',
+      service_type: "IS_CODE_SERVICE",
     };
 
     // 品牌策略：'no_brand' / 'copy'（=保留原品牌）；后端 product.service.ts 据此设置 attr 31
@@ -124,4 +140,4 @@
     buildV3Item,
     safeText,
   };
-})(typeof self !== 'undefined' ? self : window);
+})(typeof self !== "undefined" ? self : window);

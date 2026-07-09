@@ -19,8 +19,8 @@
   if (window.__JZC_L1_BRIDGE_INSTALLED__) return;
   window.__JZC_L1_BRIDGE_INSTALLED__ = true;
 
-  const MSG_TYPE_FROM_MAIN = 'JZC_OZON_COMPOSER_RESPONSE';
-  const MSG_TYPE_TO_SW = 'JZC_L1_SAMPLE';
+  const MSG_TYPE_FROM_MAIN = "JZC_OZON_COMPOSER_RESPONSE";
+  const MSG_TYPE_TO_SW = "JZC_L1_SAMPLE";
 
   // ─── 运行时计数器(debug 用,不持久化)─────────────────
   const counters = {
@@ -48,15 +48,18 @@
     if (pendingForward.length === 0) return;
     const batch = pendingForward.splice(0, pendingForward.length);
     try {
-      chrome.runtime.sendMessage({ type: MSG_TYPE_TO_SW, samples: batch, ts: Date.now() }, (response) => {
-        // sendMessage 在 SW 未唤醒时可能丢失,容错处理
-        if (chrome.runtime.lastError) {
-          counters.swErrors += 1;
-          counters.lastError = chrome.runtime.lastError.message;
-          return;
+      chrome.runtime.sendMessage(
+        { type: MSG_TYPE_TO_SW, samples: batch, ts: Date.now() },
+        (response) => {
+          // sendMessage 在 SW 未唤醒时可能丢失,容错处理
+          if (chrome.runtime.lastError) {
+            counters.swErrors += 1;
+            counters.lastError = chrome.runtime.lastError.message;
+            return;
+          }
+          counters.forwardedToSw += batch.length;
         }
-        counters.forwardedToSw += batch.length;
-      });
+      );
     } catch (e) {
       counters.swErrors += 1;
       counters.lastError = e && e.message ? e.message : String(e);
@@ -73,7 +76,7 @@
   }
 
   // ─── 主入口:接 MAIN world postMessage ──────────────
-  window.addEventListener('message', (event) => {
+  window.addEventListener("message", (event) => {
     if (!event || event.source !== window) return;
     const msg = event.data;
     if (!msg || msg.type !== MSG_TYPE_FROM_MAIN) return;
@@ -92,11 +95,12 @@
         })
         .catch((err) => {
           counters.persistErrors += 1;
-          counters.lastError = err && err.message ? err.message : String(err);
+          counters.lastError =
+            err && err.message ? err.message : String(err);
         });
     } else {
       counters.persistErrors += 1;
-      counters.lastError = 'JZL1ShadowDB not loaded';
+      counters.lastError = "JZL1ShadowDB not loaded";
     }
 
     // 2) SW 转发:**只传 metadata,不传原始 data**
@@ -104,7 +108,10 @@
     let topKeys = [];
     let byteSize = 0;
     try {
-      topKeys = msg.data && typeof msg.data === 'object' ? Object.keys(msg.data).slice(0, 50) : [];
+      topKeys =
+        msg.data && typeof msg.data === "object"
+          ? Object.keys(msg.data).slice(0, 50)
+          : [];
       byteSize = JSON.stringify(msg.data || null).length;
     } catch (e) {}
     enqueueForward({
@@ -118,7 +125,7 @@
   });
 
   // 页面卸载时 flush 一次,避免 batch 在路上丢
-  window.addEventListener('beforeunload', () => {
+  window.addEventListener("beforeunload", () => {
     flushForward();
   });
 
@@ -128,7 +135,9 @@
   window.__jzc.l1Stats = async function l1Stats() {
     const c = { ...counters };
     const stats = window.JZL1ShadowDB ? await window.JZL1ShadowDB.stats() : null;
-    const recent = window.JZL1ShadowDB ? await window.JZL1ShadowDB.getRecentSamples(5) : [];
+    const recent = window.JZL1ShadowDB
+      ? await window.JZL1ShadowDB.getRecentSamples(5)
+      : [];
     return { counters: c, shadowDb: stats, recent };
   };
 
@@ -141,20 +150,23 @@
     counters.persistErrors = 0;
     counters.lastError = null;
     counters.startedAt = Date.now();
-    return 'cleared';
+    return "cleared";
   };
 
   window.__jzc.l1ReportStatus = function l1ReportStatus() {
     // 查 service-worker 端的上报开关状态。开关存在 chrome.storage.local.l1ReportEnabled。
     return new Promise((resolve) => {
       try {
-        chrome.runtime.sendMessage({ type: 'JZC_L1_REPORT_STATUS' }, (response) => {
-          if (chrome.runtime.lastError) {
-            resolve({ error: chrome.runtime.lastError.message });
-            return;
+        chrome.runtime.sendMessage(
+          { type: "JZC_L1_REPORT_STATUS" },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              resolve({ error: chrome.runtime.lastError.message });
+              return;
+            }
+            resolve(response || { error: "no response from sw" });
           }
-          resolve(response || { error: 'no response from sw' });
-        });
+        );
       } catch (e) {
         resolve({ error: e && e.message ? e.message : String(e) });
       }

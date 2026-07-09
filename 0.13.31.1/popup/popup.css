@@ -4,11 +4,11 @@
   --bg-input: #ffffff;
   --bg-hover: #f0f0f0;
   --border: #d9d9d9;
-  --border-focus: rgb(232, 77, 146);
+  --border-focus: rgb(232,77,146);
   --text-primary: rgba(0, 0, 0, 0.88);
   --text-secondary: rgba(0, 0, 0, 0.65);
   --text-muted: rgba(0, 0, 0, 0.45);
-  --accent: rgb(232, 77, 146);
+  --accent: rgb(232,77,146);
   --accent-hover: #4096ff;
   --accent-glow: rgba(5, 145, 255, 0.1);
   --green: #52c41a;
@@ -46,10 +46,13 @@
   --radius-cta: 10px;
   --radius-cell: 9px;
   --transition: 200ms ease;
-  --shadow-card: 0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px 0 rgba(0, 0, 0, 0.02);
+  --shadow-card:
+    0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02),
+    0 2px 4px 0 rgba(0, 0, 0, 0.02);
   color-scheme: light;
   font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+    "Noto Sans SC", "Microsoft YaHei", sans-serif;
 }
 
 * {
@@ -310,7 +313,7 @@ select:focus {
 }
 .login-divider::before,
 .login-divider::after {
-  content: '';
+  content: "";
   flex: 1;
   height: 1px;
   background: #f0f0f0;
@@ -688,24 +691,24 @@ select:focus {
 }
 
 /* 采集按钮反馈状态：loading / done / error 由 popup.js 写入 data-state */
-.sig-btn[data-state='loading'] {
+.sig-btn[data-state="loading"] {
   opacity: 0.85;
   cursor: progress;
 }
-.sig-btn[data-state='done'] {
+.sig-btn[data-state="done"] {
   background: #16a34a; /* green-600 */
   cursor: default;
   opacity: 1;
 }
-.sig-btn[data-state='done']:hover {
+.sig-btn[data-state="done"]:hover {
   background: #16a34a;
 }
-.sig-btn[data-state='error'] {
+.sig-btn[data-state="error"] {
   background: #dc2626; /* red-600 */
   cursor: pointer;
   opacity: 1;
 }
-.sig-btn[data-state='error']:hover {
+.sig-btn[data-state="error"]:hover {
   background: #b91c1c;
 }
 
@@ -723,7 +726,11 @@ select:focus {
 
 /* Signal variants */
 .sig.is-context {
-  background: linear-gradient(135deg, var(--sig-context-bg-from) 0%, var(--sig-context-bg-to) 100%);
+  background: linear-gradient(
+    135deg,
+    var(--sig-context-bg-from) 0%,
+    var(--sig-context-bg-to) 100%
+  );
   border-color: var(--sig-context-border);
 }
 .sig.is-context .sig-icon {
@@ -1011,7 +1018,7 @@ select:focus {
   font-size: 10px;
 }
 .collector-mon-bucket {
-  font-feature-settings: 'tnum' 1;
+  font-feature-settings: "tnum" 1;
 }
 
 .collector-mon-focus-btn {
@@ -1031,84 +1038,10 @@ select:focus {
 }
 
 /* ── Local Browser Agent 任务状态 ── */
-.browser-agent-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--bg-card);
-  border: 1px solid #bfdbfe;
-  border-radius: var(--radius-card);
-  padding: 9px 10px;
-}
 
-.browser-agent-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 6px rgba(29, 107, 255, 0.35);
-  animation: jz-pulse 1.6s ease-in-out infinite;
-  flex-shrink: 0;
-}
 
-.browser-agent-body {
-  flex: 1;
-  min-width: 0;
-}
 
-.browser-agent-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-  line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.browser-agent-meta {
-  font-size: 10px;
-  color: var(--text-muted);
-  margin-top: 2px;
-  line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.browser-agent-progress {
-  height: 4px;
-  border-radius: 99px;
-  background: #e5e7eb;
-  overflow: hidden;
-  margin-top: 6px;
-}
 
-.browser-agent-progress-bar {
-  display: block;
-  width: 0%;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-  transition: width var(--transition);
-}
 
-.browser-agent-stop-btn {
-  font-size: 11px;
-  color: #b91c1c;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  border-radius: 6px;
-  padding: 4px 9px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: inherit;
-  flex-shrink: 0;
-}
-.browser-agent-stop-btn:hover {
-  background: #fee2e2;
-}
-.browser-agent-stop-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}

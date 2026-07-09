@@ -58,7 +58,7 @@
   async function heartbeat(leaseId, deviceId, ttlSeconds) {
     if (!ttlSeconds || ttlSeconds < 60) {
       console.warn(
-        `[JzLeaseClient] heartbeat called without ttlSeconds — backend will use 5min default, may drop long-running PRODUCTS lease`
+        `[JzLeaseClient] heartbeat called without ttlSeconds — backend will use 5min default, may drop long-running PRODUCTS lease`,
       );
     }
     try {
@@ -80,7 +80,13 @@
     WAREHOUSES: 10 * 60,
   };
 
-  function startAutoHeartbeat(storeId, type, deviceId, leaseId, expiresAtIso) {
+  function startAutoHeartbeat(
+    storeId,
+    type,
+    deviceId,
+    leaseId,
+    expiresAtIso,
+  ) {
     stopAutoHeartbeat(storeId, type);
     const expiresAt = new Date(expiresAtIso).getTime();
     const ttlMs = Math.max(60_000, expiresAt - Date.now());

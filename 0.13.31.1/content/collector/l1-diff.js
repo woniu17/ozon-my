@@ -24,7 +24,7 @@
 
   // L1 → L2 字段语义映射在 l1-shadow-db.js 的 FIELD_PROBES 已定义。
   // 这里只列要对比的字段名(顺序对应输出列)。
-  const PROBE_NAMES = ['price', 'title', 'image', 'seller', 'sales', 'rating'];
+  const PROBE_NAMES = ["price", "title", "image", "seller", "sales", "rating"];
 
   // 把 L2 sales 行映射成 {fields:[...]} — 跟 L1 sku_samples 行 schema 对齐,
   // 方便后续 intersection 字段比对走同一份代码路径。
@@ -33,17 +33,17 @@
   // 比对结果显式暴露给用户。
   function l2RowToFields(row) {
     const f = [];
-    if (row.price != null && row.price !== '' && row.price !== '0') f.push('price');
-    if (row.name) f.push('title');
-    if (row.image) f.push('image');
-    if (row.soldCount != null) f.push('sales');
+    if (row.price != null && row.price !== "" && row.price !== "0") f.push("price");
+    if (row.name) f.push("title");
+    if (row.image) f.push("image");
+    if (row.soldCount != null) f.push("sales");
     // L2 无 seller / rating — 留空,intersection 对比时会显式看到 0
     return f;
   }
 
   async function readL2Skus(sinceTs) {
     if (!window.JZCollectorDB || !window.JZCollectorDB.getSalesSince) {
-      return { skus: new Map(), reason: 'JZCollectorDB.getSalesSince-unavailable' };
+      return { skus: new Map(), reason: "JZCollectorDB.getSalesSince-unavailable" };
     }
     let sales;
     try {
@@ -74,7 +74,7 @@
 
   async function readL1Skus(sinceTs) {
     if (!window.JZL1ShadowDB || !window.JZL1ShadowDB.getSkuSamples) {
-      return { skus: new Map(), reason: 'JZL1ShadowDB-unavailable' };
+      return { skus: new Map(), reason: "JZL1ShadowDB-unavailable" };
     }
     let samples;
     try {
@@ -105,29 +105,34 @@
   }
 
   function judgePhase2(l1Count, l2Count, fieldStats) {
-    if (l1Count === 0) return 'NO_L1_DATA: 装上扩展浏览搜索/类目/商品页才会有 L1 样本';
-    if (l2Count === 0) return 'NO_L2_DATA: 主 collector 还没开过采集(去搜索页点采集器面板)';
+    if (l1Count === 0) return "NO_L1_DATA: 装上扩展浏览搜索/类目/商品页才会有 L1 样本";
+    if (l2Count === 0) return "NO_L2_DATA: 主 collector 还没开过采集(去搜索页点采集器面板)";
     const ratio = l1Count / l2Count;
     // L1 有但 L2 完全没有的字段(seller/rating 是典型)
-    const l1OnlyFields = PROBE_NAMES.filter((f) => (fieldStats.l1[f] || 0) > 0 && (fieldStats.l2[f] || 0) === 0);
+    const l1OnlyFields = PROBE_NAMES.filter(
+      (f) => (fieldStats.l1[f] || 0) > 0 && (fieldStats.l2[f] || 0) === 0
+    );
     if (ratio < 1.2 && l1OnlyFields.length === 0) {
       return `NOT_READY: L1 覆盖率 ${ratio.toFixed(2)}x (需要 ≥ 1.2x) 且字段无优势`;
     }
     if (ratio < 1.2) {
-      return `PARTIAL: L1 覆盖率 ${ratio.toFixed(2)}x (需要 ≥ 1.2x),但字段优势 ${l1OnlyFields.join(',')} — 看你能否容忍较低覆盖率`;
+      return `PARTIAL: L1 覆盖率 ${ratio.toFixed(2)}x (需要 ≥ 1.2x),但字段优势 ${l1OnlyFields.join(",")} — 看你能否容忍较低覆盖率`;
     }
     if (l1OnlyFields.length === 0) {
       return `PARTIAL: L1 覆盖率 ${ratio.toFixed(2)}x OK 但字段无优势 — 合并意义有限`;
     }
-    return `READY_FOR_PHASE2: L1 ${ratio.toFixed(2)}x 覆盖 + 字段优势 ${l1OnlyFields.join(',')}`;
+    return `READY_FOR_PHASE2: L1 ${ratio.toFixed(2)}x 覆盖 + 字段优势 ${l1OnlyFields.join(",")}`;
   }
 
   async function computeL1vsL2Diff(opts) {
     const o = opts || {};
-    const hours = typeof o.hours === 'number' && o.hours > 0 ? o.hours : 24;
+    const hours = typeof o.hours === "number" && o.hours > 0 ? o.hours : 24;
     const sinceTs = Date.now() - hours * 3600 * 1000;
 
-    const [l1Result, l2Result] = await Promise.all([readL1Skus(sinceTs), readL2Skus(sinceTs)]);
+    const [l1Result, l2Result] = await Promise.all([
+      readL1Skus(sinceTs),
+      readL2Skus(sinceTs),
+    ]);
 
     const l1Skus = l1Result.skus;
     const l2Skus = l2Result.skus;

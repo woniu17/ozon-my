@@ -19,7 +19,7 @@
   const P = 'jzc';
   const LS_STATE = 'jz_calc_state_v3';
   const LS_SKU_SPECS = 'jz_calc_sku_specs_v1'; // { [sku]: { price, cost, weight, dimL, dimW, dimH, ts } }
-  const SKU_SPECS_MAX = 60; // LRU 上限
+  const SKU_SPECS_MAX = 60;                    // LRU 上限
   const LS_MAIN_CHECK = 'jz_calc_main_check_v2';
   const LS_MIGRATE_DISMISS = 'jz_calc_migrate_dismiss_v1';
   const LS_FX_RATE = 'jz_calc_fx_rate_v1';
@@ -31,17 +31,21 @@
 
   // 主插件发布 >= 此版本时，算价停用
   const MAIN_EXT_STABLE_VERSION = '1.0.0';
-  const MAIN_EXT_UPDATE_URL = `https://${
-    (globalThis.__JZ_BRAND__ && globalThis.__JZ_BRAND__.apiHost) ||
-    (/__BRAND/.test('api.jizhangerp.com') ? 'api.jizhangerp.com' : 'api.jizhangerp.com')
-  }/extension/latest`;
-  const MAIN_EXT_INSTALL_URL_FALLBACK = `https://${
-    (globalThis.__JZ_BRAND__ && globalThis.__JZ_BRAND__.webHost) ||
-    (/__BRAND/.test('my.jizhangerp.com') ? 'jizhangerp.com' : 'my.jizhangerp.com')
-  }/extension`;
+  const MAIN_EXT_UPDATE_URL =
+    `https://${(globalThis.__JZ_BRAND__ && globalThis.__JZ_BRAND__.apiHost) || (/__BRAND/.test('api.jizhangerp.com')
+      ? 'api.jizhangerp.com'
+      : 'api.jizhangerp.com')}/extension/latest`;
+  const MAIN_EXT_INSTALL_URL_FALLBACK =
+    `https://${(globalThis.__JZ_BRAND__ && globalThis.__JZ_BRAND__.webHost) || (/__BRAND/.test('my.jizhangerp.com')
+      ? 'jizhangerp.com'
+      : 'my.jizhangerp.com')}/extension`;
   const MAIN_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
-  const DEFAULT_BRAND_DISPLAY_NAME = /__BRAND/.test('MY') ? '极掌' : 'MY';
-  const DEFAULT_BRAND_PRODUCT_NAME = /__BRAND/.test('MY') ? `${DEFAULT_BRAND_DISPLAY_NAME} - Ozon选品管理工具` : 'MY';
+  const DEFAULT_BRAND_DISPLAY_NAME = /__BRAND/.test('MY')
+    ? '极掌'
+    : 'MY';
+  const DEFAULT_BRAND_PRODUCT_NAME = /__BRAND/.test('MY')
+    ? `${DEFAULT_BRAND_DISPLAY_NAME} - Ozon选品管理工具`
+    : 'MY';
 
   // ── Freight tables ──────────────────────────────
   // base 单位：¥/包；rates 单位：¥/g
@@ -66,52 +70,40 @@
   //   · 兴远 XY 没有 Express；pBig 的 std/economy base 不同（64 vs 64.48）
   //   · 计抛规则按 xlsx「不计材积」标记逐档判定（GUOO budget/pSmall 计抛，CEL/XY 仅 big/pBig 计抛）
   const CEL_FREIGHT = {
-    xs: { base: 3.12, maxL: 60, maxSum: 90, vol: false, rates: { economy: 0.026, std: 0.0364, fast: 0.0468 } },
-    budget: { base: 23.92, maxL: 60, maxSum: 150, vol: false, rates: { economy: 0.01768, std: 0.026, fast: 0.03432 } },
-    small: { base: 16.64, maxL: 60, maxSum: 150, vol: false, rates: { economy: 0.026, std: 0.0364, fast: 0.0468 } },
-    big: { base: 37.44, maxL: 150, maxSum: 310, vol: true, rates: { economy: 0.01768, std: 0.026 } },
-    pSmall: { base: 22.88, maxL: 150, maxSum: 250, vol: false, rates: { economy: 0.026, std: 0.0364, fast: 0.0468 } },
-    pBig: { base: 64.48, maxL: 150, maxSum: 310, vol: true, rates: { economy: 0.02392, std: 0.02912 } },
+    xs:     { base: 3.12,  maxL: 60,  maxSum: 90,  vol: false, rates: { economy: 0.026,   std: 0.0364,  fast: 0.0468  } },
+    budget: { base: 23.92, maxL: 60,  maxSum: 150, vol: false, rates: { economy: 0.01768, std: 0.026,   fast: 0.03432 } },
+    small:  { base: 16.64, maxL: 60,  maxSum: 150, vol: false, rates: { economy: 0.026,   std: 0.0364,  fast: 0.0468  } },
+    big:    { base: 37.44, maxL: 150, maxSum: 310, vol: true,  rates: { economy: 0.01768, std: 0.026                  } },
+    pSmall: { base: 22.88, maxL: 150, maxSum: 250, vol: false, rates: { economy: 0.026,   std: 0.0364,  fast: 0.0468  } },
+    pBig:   { base: 64.48, maxL: 150, maxSum: 310, vol: true,  rates: { economy: 0.02392, std: 0.02912                } },
   };
   const GUOO_FREIGHT = {
-    xs: {
-      base: 3.12,
-      baseEconomy: 3.0,
-      maxL: 60,
-      maxSum: 90,
-      vol: false,
-      rates: { economy: 0.026, std: 0.0364, fast: 0.0468 },
-    },
-    budget: { base: 23.92, maxL: 60, maxSum: 150, vol: true, rates: { economy: 0.01768 } },
-    small: { base: 16.64, maxL: 60, maxSum: 150, vol: false, rates: { economy: 0.026, std: 0.0364, fast: 0.0468 } },
-    big: { base: 37.44, maxL: 150, maxSum: 250, vol: true, rates: { economy: 0.01768 } },
-    pSmall: { base: 22.88, maxL: 150, maxSum: 250, vol: true, rates: { economy: 0.026, fast: 0.0468 } },
-    pBig: { base: 64.48, maxL: 150, maxSum: 310, vol: true, rates: { economy: 0.02392 } },
+    xs:     { base: 3.12,  baseEconomy: 3.00, maxL: 60,  maxSum: 90,  vol: false,
+              rates: { economy: 0.026,   std: 0.0364,  fast: 0.0468  } },
+    budget: { base: 23.92, maxL: 60,  maxSum: 150, vol: true,  rates: { economy: 0.01768                              } },
+    small:  { base: 16.64, maxL: 60,  maxSum: 150, vol: false, rates: { economy: 0.026,   std: 0.0364,  fast: 0.0468  } },
+    big:    { base: 37.44, maxL: 150, maxSum: 250, vol: true,  rates: { economy: 0.01768                              } },
+    pSmall: { base: 22.88, maxL: 150, maxSum: 250, vol: true,  rates: { economy: 0.026,                  fast: 0.0468 } },
+    pBig:   { base: 64.48, maxL: 150, maxSum: 310, vol: true,  rates: { economy: 0.02392                              } },
   };
   const XY_FREIGHT = {
-    xs: { base: 3.12, maxL: 60, maxSum: 90, vol: false, rates: { economy: 0.026, std: 0.0364 } },
-    budget: { base: 23.92, maxL: 60, maxSum: 150, vol: false, rates: { economy: 0.01768, std: 0.026 } },
-    small: { base: 16.64, maxL: 60, maxSum: 150, vol: false, rates: { economy: 0.026, std: 0.0364 } },
-    big: { base: 37.44, maxL: 150, maxSum: 250, vol: true, rates: { economy: 0.01768, std: 0.026 } },
-    pSmall: { base: 22.88, maxL: 150, maxSum: 250, vol: false, rates: { economy: 0.026, std: 0.0364 } },
-    pBig: {
-      base: 64,
-      baseEconomy: 64.48,
-      maxL: 150,
-      maxSum: 310,
-      vol: true,
-      rates: { economy: 0.02392, std: 0.02912 },
-    },
+    xs:     { base: 3.12,  maxL: 60,  maxSum: 90,  vol: false, rates: { economy: 0.026,   std: 0.0364   } },
+    budget: { base: 23.92, maxL: 60,  maxSum: 150, vol: false, rates: { economy: 0.01768, std: 0.026    } },
+    small:  { base: 16.64, maxL: 60,  maxSum: 150, vol: false, rates: { economy: 0.026,   std: 0.0364   } },
+    big:    { base: 37.44, maxL: 150, maxSum: 250, vol: true,  rates: { economy: 0.01768, std: 0.026    } },
+    pSmall: { base: 22.88, maxL: 150, maxSum: 250, vol: false, rates: { economy: 0.026,   std: 0.0364   } },
+    pBig:   { base: 64,    baseEconomy: 64.48, maxL: 150, maxSum: 310, vol: true,
+             rates: { economy: 0.02392, std: 0.02912 } },
   };
   // 中通 ZTO rFBS（v6.3）：与 CEL 大体相同，除 Big 仅有 Standard
   // ZTO 不在本次 xlsx 范围，尺寸用 CEL/XY 同档位的合理值兜底
   const ZTO_FREIGHT = {
-    xs: { base: 3.12, maxL: 60, maxSum: 90, vol: false, rates: { economy: 0.026, std: 0.0364, fast: 0.0468 } },
-    budget: { base: 23.92, maxL: 60, maxSum: 150, vol: true, rates: { economy: 0.01768, std: 0.026, fast: 0.03432 } },
-    small: { base: 16.64, maxL: 60, maxSum: 150, vol: true, rates: { economy: 0.026, std: 0.0364, fast: 0.0468 } },
-    big: { base: 37.44, maxL: 150, maxSum: 310, vol: true, rates: { std: 0.026 } },
-    pSmall: { base: 22.88, maxL: 150, maxSum: 250, vol: true, rates: { economy: 0.026, std: 0.0364, fast: 0.0468 } },
-    pBig: { base: 64.48, maxL: 150, maxSum: 310, vol: true, rates: { economy: 0.02392, std: 0.02912 } },
+    xs:     { base: 3.12,  maxL: 60,  maxSum: 90,  vol: false, rates: { economy: 0.026,   std: 0.0364,  fast: 0.0468  } },
+    budget: { base: 23.92, maxL: 60,  maxSum: 150, vol: true,  rates: { economy: 0.01768, std: 0.026,   fast: 0.03432 } },
+    small:  { base: 16.64, maxL: 60,  maxSum: 150, vol: true,  rates: { economy: 0.026,   std: 0.0364,  fast: 0.0468  } },
+    big:    { base: 37.44, maxL: 150, maxSum: 310, vol: true,  rates: {                   std: 0.026                  } },
+    pSmall: { base: 22.88, maxL: 150, maxSum: 250, vol: true,  rates: { economy: 0.026,   std: 0.0364,  fast: 0.0468  } },
+    pBig:   { base: 64.48, maxL: 150, maxSum: 310, vol: true,  rates: { economy: 0.02392, std: 0.02912                } },
   };
   // 单一费率渠道：不分档、不分运输方式
   // EUB（E邮宝特惠 · 俄罗斯）：13元/票 + 32元/KG，≤5KG，单边≤60，三边和≤90，不计材积
@@ -129,8 +121,8 @@
   const EBP_FREIGHT = {
     type: 'flat',
     base: 37.5,
-    perGram: 0.03,
-    minFee: 52.5, // 首重 500g 起步价
+    perGram: 0.030,
+    minFee: 52.5,           // 首重 500g 起步价
     weightCap: 31000,
     valueCapCNY: 1000,
     maxL: 105,
@@ -139,18 +131,18 @@
   };
 
   const TIERED_TABLES = { CEL: CEL_FREIGHT, GUOO: GUOO_FREIGHT, XY: XY_FREIGHT, ZTO: ZTO_FREIGHT };
-  const FLAT_TABLES = { EUB: EUB_FREIGHT, EBP: EBP_FREIGHT };
+  const FLAT_TABLES   = { EUB: EUB_FREIGHT, EBP: EBP_FREIGHT };
   const TIERED_CHANNELS = Object.keys(TIERED_TABLES);
-  const FLAT_CHANNELS = Object.keys(FLAT_TABLES);
-  const ALL_CHANNELS = [...TIERED_CHANNELS, ...FLAT_CHANNELS];
+  const FLAT_CHANNELS   = Object.keys(FLAT_TABLES);
+  const ALL_CHANNELS    = [...TIERED_CHANNELS, ...FLAT_CHANNELS];
 
   const CHANNEL_LABELS = {
-    CEL: { short: 'CEL', full: 'CEL 物流' },
-    GUOO: { short: 'GUOO', full: 'GUOO 物流' },
-    XY: { short: '兴远', full: '兴远 XY 物流' },
-    ZTO: { short: 'ZTO', full: '中通 ZTO rFBS' },
-    EUB: { short: 'E邮宝', full: 'E邮宝特惠' },
-    EBP: { short: 'E包裹', full: 'E包裹特惠' },
+    CEL:  { short: 'CEL',   full: 'CEL 物流' },
+    GUOO: { short: 'GUOO',  full: 'GUOO 物流' },
+    XY:   { short: '兴远',  full: '兴远 XY 物流' },
+    ZTO:  { short: 'ZTO',   full: '中通 ZTO rFBS' },
+    EUB:  { short: 'E邮宝', full: 'E邮宝特惠' },
+    EBP:  { short: 'E包裹', full: 'E包裹特惠' },
   };
 
   // 体积重除数:
@@ -172,30 +164,28 @@
     const longest = Math.max(...dims);
     const sum = dims.reduce((a, b) => a + b, 0);
     if (sum <= 0) return null;
-    const breachL = rule.maxL != null && longest > rule.maxL;
-    const breachSum = rule.maxSum != null && sum > rule.maxSum;
+    const breachL   = rule.maxL   != null && longest > rule.maxL;
+    const breachSum = rule.maxSum != null && sum     > rule.maxSum;
     if (!breachL && !breachSum) return null;
     return { breachL, breachSum, longest, sum, maxL: rule.maxL, maxSum: rule.maxSum };
   }
 
-  function isFlatChannel(channelName) {
-    return channelName in FLAT_TABLES;
-  }
+  function isFlatChannel(channelName) { return channelName in FLAT_TABLES; }
   function freightTableFor(channelName) {
     return TIERED_TABLES[channelName] || null;
   }
   function channelCfgRef(channelName) {
-    if (channelName === 'CEL') return celConfig;
+    if (channelName === 'CEL')  return celConfig;
     if (channelName === 'GUOO') return guooConfig;
-    if (channelName === 'XY') return xyConfig;
-    if (channelName === 'ZTO') return ztoConfig;
+    if (channelName === 'XY')   return xyConfig;
+    if (channelName === 'ZTO')  return ztoConfig;
     return null;
   }
   function setChannelCfg(channelName, next) {
-    if (channelName === 'CEL') celConfig = next;
+    if (channelName === 'CEL')  celConfig = next;
     if (channelName === 'GUOO') guooConfig = next;
-    if (channelName === 'XY') xyConfig = next;
-    if (channelName === 'ZTO') ztoConfig = next;
+    if (channelName === 'XY')   xyConfig = next;
+    if (channelName === 'ZTO')  ztoConfig = next;
   }
 
   // 升档表：任何档尺寸超限都尝试升到该渠道更大尺寸的档（big/pBig 自带 vol:true，自然按计抛计费）
@@ -232,23 +222,17 @@
       transport = ['economy', 'std', 'fast'].find((k) => tier.rates[k] != null) || 'economy';
     }
     const ratePerGram = tier.rates[transport];
-    const base = tier.baseEconomy != null && transport === 'economy' ? tier.baseEconomy : tier.base;
+    const base = (tier.baseEconomy != null && transport === 'economy')
+      ? tier.baseEconomy
+      : tier.base;
     const usesVol = !!tier.vol;
     const divisor = getVolDivisor(channelName, tierKey, transport);
-    const volW = usesVol && dimVolume > 0 ? (dimVolume * 1000) / divisor : 0;
+    const volW = (usesVol && dimVolume > 0) ? (dimVolume * 1000 / divisor) : 0;
     const billed = Math.max(actualW || 0, volW);
     const fee = base + billed * ratePerGram;
     const sizeBreach = checkSizeBreach(tier, dimL, dimW, dimH);
     return {
-      fee,
-      base,
-      ratePerGram,
-      tierKey,
-      transport,
-      billed,
-      divisor,
-      usesVol,
-      sizeBreach,
+      fee, base, ratePerGram, tierKey, transport, billed, divisor, usesVol, sizeBreach,
       upgradedFrom: upgraded ? originalTierKey : null,
       type: 'tiered',
     };
@@ -259,18 +243,11 @@
     const w = actualW || 0;
     const fee = Math.max(t.minFee || 0, t.base + w * t.perGram);
     const overWeight = t.weightCap != null && w > t.weightCap;
-    const overValue = t.valueCapCNY != null && (priceCNY || 0) > t.valueCapCNY;
+    const overValue  = t.valueCapCNY != null && (priceCNY || 0) > t.valueCapCNY;
     const sizeBreach = checkSizeBreach(t, dimL, dimW, dimH);
     return {
-      fee,
-      base: t.base,
-      ratePerGram: t.perGram,
-      billed: w,
-      type: 'flat',
-      overWeight,
-      overValue,
-      sizeBreach,
-      note: t.note,
+      fee, base: t.base, ratePerGram: t.perGram, billed: w,
+      type: 'flat', overWeight, overValue, sizeBreach, note: t.note,
     };
   }
 
@@ -299,8 +276,7 @@
   let TIER_RATE = { ...DEFAULT_TIER_RATE };
 
   const fmt = (n, d = 2) =>
-    n == null || isNaN(n)
-      ? '—'
+    n == null || isNaN(n) ? '—'
       : Number(n).toLocaleString('zh-CN', {
           minimumFractionDigits: d,
           maximumFractionDigits: d,
@@ -309,33 +285,22 @@
   // ── Storage helpers ─────────────────────────────
   function storageGet(keys) {
     return new Promise((resolve) => {
-      try {
-        chrome.storage.local.get(keys, (v) => resolve(v || {}));
-      } catch {
-        resolve({});
-      }
+      try { chrome.storage.local.get(keys, (v) => resolve(v || {})); }
+      catch { resolve({}); }
     });
   }
   function storageSet(obj) {
     return new Promise((resolve) => {
-      try {
-        chrome.storage.local.set(obj, () => resolve());
-      } catch {
-        resolve();
-      }
+      try { chrome.storage.local.set(obj, () => resolve()); }
+      catch { resolve(); }
     });
   }
 
   function compareVersions(v1, v2) {
-    const a = String(v1 || '')
-      .split('.')
-      .map((n) => Number(n) || 0);
-    const b = String(v2 || '')
-      .split('.')
-      .map((n) => Number(n) || 0);
+    const a = String(v1 || '').split('.').map((n) => Number(n) || 0);
+    const b = String(v2 || '').split('.').map((n) => Number(n) || 0);
     for (let i = 0; i < Math.max(a.length, b.length); i++) {
-      const x = a[i] || 0,
-        y = b[i] || 0;
+      const x = a[i] || 0, y = b[i] || 0;
       if (x > y) return 1;
       if (x < y) return -1;
     }
@@ -344,7 +309,8 @@
 
   function getMainExtUpdateUrl() {
     const brandCode =
-      globalThis.__JZ_BRAND__ && typeof globalThis.__JZ_BRAND__.code === 'string'
+      globalThis.__JZ_BRAND__ &&
+      typeof globalThis.__JZ_BRAND__.code === 'string'
         ? globalThis.__JZ_BRAND__.code.trim()
         : '';
     const qs = new URLSearchParams({ client: 'extension' });
@@ -365,9 +331,7 @@
     } else {
       try {
         const resp = await fetch(getMainExtUpdateUrl(), {
-          method: 'GET',
-          cache: 'no-cache',
-          signal: AbortSignal.timeout(8000),
+          method: 'GET', cache: 'no-cache', signal: AbortSignal.timeout(8000),
         });
         if (resp.ok) {
           const data = await resp.json();
@@ -421,18 +385,12 @@
   function escapeHtml(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => {
       switch (ch) {
-        case '&':
-          return '&amp;';
-        case '<':
-          return '&lt;';
-        case '>':
-          return '&gt;';
-        case '"':
-          return '&quot;';
-        case "'":
-          return '&#39;';
-        default:
-          return ch;
+        case '&': return '&amp;';
+        case '<': return '&lt;';
+        case '>': return '&gt;';
+        case '"': return '&quot;';
+        case "'": return '&#39;';
+        default: return ch;
       }
     });
   }
@@ -476,16 +434,17 @@
   //   originalPrice    = 历史划线价，与黑/绿标无关
   function parsePriceNum(v) {
     if (v == null) return NaN;
-    const t = typeof v === 'string' ? v : (v.price ?? v.value ?? '');
-    const n = parseFloat(
-      String(t)
-        .replace(/[^\d.,]/g, '')
-        .replace(',', '.')
-    );
+    const t = typeof v === 'string' ? v : v.price ?? v.value ?? '';
+    const n = parseFloat(String(t).replace(/[^\d.,]/g, '').replace(',', '.'));
     return n;
   }
   function extractProductData() {
     const data = {};
+    try {
+      const priceTags = window.jzExtractOzonPriceTags?.(document) || null;
+      if (priceTags?.blackPrice != null) data.blackPrice = priceTags.blackPrice;
+      if (priceTags?.greenPrice != null) data.greenPrice = priceTags.greenPrice;
+    } catch (_) {}
     try {
       const els = document.querySelectorAll('[data-state]');
       for (const el of els) {
@@ -534,7 +493,7 @@
   //   4) "Размеры, мм" 形如 "1500 x 2000 x 300" 一次性给出长宽高
   function extractWeightAndDims() {
     const out = {};
-    const reW = /вес|масса|брутто|нетто|weight|net\s*weight|gross|重量|净重|毛重|质量|重\s*量/i;
+    const reW   = /вес|масса|брутто|нетто|weight|net\s*weight|gross|重量|净重|毛重|质量|重\s*量/i;
     const reLen = /длина|length|长[度]?(?!.*?宽)|глубин|глубина|depth|深/i;
     const reWid = /ширина|width|宽[度]?/i;
     const reHei = /высота|height|высоту|толщин|高[度]?|厚[度]?/i;
@@ -546,7 +505,7 @@
       if (!isFinite(n) || n <= 0) return null;
       const u = String(unit || '').toLowerCase();
       if (/кг|kg|公斤|千克/.test(u)) return Math.round(n * 1000);
-      if (/мг|mg|毫克/.test(u)) return Math.round(n / 1000);
+      if (/мг|mg|毫克/.test(u))      return Math.round(n / 1000);
       return Math.round(n); // г / g / 克 / 缺省
     };
     // 单位转换：返回厘米 (cm)
@@ -563,11 +522,9 @@
     // 注意：Ozon 用 西里尔字母 х (U+0445) 作分隔符，必须显式包含；空格也允许缺省
     const SEP = '[\\s]*[\\u0445\\u0425×x*✕✖][\\s]*';
     const triRe = new RegExp(
-      '(\\d+(?:[.,]\\d+)?)' +
-        SEP +
-        '(\\d+(?:[.,]\\d+)?)' +
-        SEP +
-        '(\\d+(?:[.,]\\d+)?)\\s*(мм|mm|см|cm|метр|m|米|毫米)?',
+      '(\\d+(?:[.,]\\d+)?)' + SEP +
+      '(\\d+(?:[.,]\\d+)?)' + SEP +
+      '(\\d+(?:[.,]\\d+)?)\\s*(мм|mm|см|cm|метр|m|米|毫米)?',
       'i'
     );
     const numUnit = /(\d+(?:[.,]\d+)?)\s*(мм|mm|см|cm|кг|kg|г|g|公斤|千克|克|毫米|米|m)?/i;
@@ -575,24 +532,17 @@
     const scan = (kRaw, vRaw) => {
       if (!kRaw) return;
       const k = String(kRaw);
-      const v =
-        vRaw == null
-          ? ''
-          : Array.isArray(vRaw)
-            ? vRaw.map((x) => (x && (x.text || x.value || x.title)) || x).join(' ')
-            : typeof vRaw === 'object'
-              ? vRaw.text || vRaw.value || vRaw.title || JSON.stringify(vRaw)
-              : String(vRaw);
+      const v = vRaw == null ? '' : (Array.isArray(vRaw)
+        ? vRaw.map((x) => (x && (x.text || x.value || x.title)) || x).join(' ')
+        : (typeof vRaw === 'object' ? (vRaw.text || vRaw.value || vRaw.title || JSON.stringify(vRaw)) : String(vRaw)));
       if (!v) return;
 
       // 一次性三维尺寸（优先级最高，因为信息最完整）
       if (reDim.test(k) || triRe.test(v)) {
         const m = v.match(triRe);
         if (m) {
-          const unit = m[4] || (/мм|mm/i.test(k) ? 'mm' : /см|cm/i.test(k) ? 'cm' : 'mm');
-          const a = toCm(m[1], unit),
-            b = toCm(m[2], unit),
-            c = toCm(m[3], unit);
+          const unit = m[4] || (/мм|mm/i.test(k) ? 'mm' : (/см|cm/i.test(k) ? 'cm' : 'mm'));
+          const a = toCm(m[1], unit), b = toCm(m[2], unit), c = toCm(m[3], unit);
           if (a && b && c) {
             // Ozon 习惯：长 × 宽 × 高
             if (out.dimL == null) out.dimL = a;
@@ -607,7 +557,7 @@
       if (out.weight == null && reW.test(k)) {
         const m = v.match(numUnit);
         if (m) {
-          const unitHint = m[2] || (/кг|kg/i.test(k) ? 'kg' : /г\b|,?\s*г$|,\s*g/i.test(k) ? 'g' : '');
+          const unitHint = m[2] || (/кг|kg/i.test(k) ? 'kg' : (/г\b|,?\s*г$|,\s*g/i.test(k) ? 'g' : ''));
           const g = toGrams(m[1], unitHint);
           if (g) out.weight = g;
         }
@@ -617,7 +567,7 @@
       // 单维度
       const single = v.match(numUnit);
       if (!single) return;
-      const unitHint = single[2] || (/мм|mm/i.test(k) ? 'mm' : /см|cm/i.test(k) ? 'cm' : '');
+      const unitHint = single[2] || (/мм|mm/i.test(k) ? 'mm' : (/см|cm/i.test(k) ? 'cm' : ''));
       const cm = toCm(single[1], unitHint);
       if (!cm) return;
       if (out.dimL == null && reLen.test(k)) out.dimL = cm;
@@ -633,9 +583,9 @@
       if (typeof x !== 'object') return String(x);
       if (x.textRs) return flatten(x.textRs);
       if (x.content != null) return flatten(x.content);
-      if (x.text != null) return flatten(x.text);
-      if (x.value != null) return flatten(x.value);
-      if (x.title != null) return flatten(x.title);
+      if (x.text != null)    return flatten(x.text);
+      if (x.value != null)   return flatten(x.value);
+      if (x.title != null)   return flatten(x.title);
       return '';
     };
 
@@ -644,10 +594,7 @@
     const walk = (node) => {
       if (!node || typeof node !== 'object' || seen.has(node)) return;
       seen.add(node);
-      if (Array.isArray(node)) {
-        node.forEach(walk);
-        return;
-      }
+      if (Array.isArray(node)) { node.forEach(walk); return; }
       const keyField = node.key ?? node.name ?? node.title;
       const valField = node.shortValue ?? node.fullValue ?? node.value ?? node.values ?? node.text;
       if (keyField != null && valField != null) {
@@ -688,7 +635,8 @@
     }
 
     // 2) DOM 兜底：dl/dt/dd 与 table tr
-    const allFilled = () => out.weight != null && out.dimL != null && out.dimW != null && out.dimH != null;
+    const allFilled = () =>
+      out.weight != null && out.dimL != null && out.dimW != null && out.dimH != null;
     if (!allFilled()) {
       document.querySelectorAll('dl').forEach((dl) => {
         const dts = dl.querySelectorAll('dt');
@@ -710,7 +658,9 @@
       const roots = widgets.length ? widgets : [document.body];
       roots.forEach((root) => {
         root.querySelectorAll('div, li').forEach((row) => {
-          const kids = Array.from(row.children).filter((c) => (c.textContent || '').trim().length);
+          const kids = Array.from(row.children).filter(
+            (c) => (c.textContent || '').trim().length
+          );
           if (kids.length !== 2) return;
           const k = (kids[0].textContent || '').trim();
           const v = (kids[1].textContent || '').trim();
@@ -722,11 +672,11 @@
 
     // 4) 文本兜底：拼接特征区可见文本，整段正则匹配
     if (!allFilled()) {
-      const widgets = document.querySelectorAll('[data-widget*="haracteristic"], [data-widget*="haracteristics"]');
+      const widgets = document.querySelectorAll(
+        '[data-widget*="haracteristic"], [data-widget*="haracteristics"]'
+      );
       let text = '';
-      widgets.forEach((w) => {
-        text += '\n' + (w.textContent || '');
-      });
+      widgets.forEach((w) => { text += '\n' + (w.textContent || ''); });
       if (!text.trim()) text = document.body?.textContent || '';
       // 重量：键词 + 数字 + 单位
       if (out.weight == null) {
@@ -744,10 +694,8 @@
           /(?:Габариты|габариты|Размер[ыа]?|размер[ыа]?|Dimensions?|尺寸|外形|包装)[^\d]{0,60}(\d+(?:[.,]\d+)?)\s*[×x*✕✖]\s*(\d+(?:[.,]\d+)?)\s*[×x*✕✖]\s*(\d+(?:[.,]\d+)?)\s*(мм|mm|см|cm)?/i
         );
         if (m) {
-          const unit = m[4] || (m[0] && /мм|mm/i.test(m[0]) ? 'mm' : m[0] && /см|cm/i.test(m[0]) ? 'cm' : 'mm');
-          const a = toCm(m[1], unit),
-            b = toCm(m[2], unit),
-            c = toCm(m[3], unit);
+          const unit = m[4] || (m[0] && /мм|mm/i.test(m[0]) ? 'mm' : (m[0] && /см|cm/i.test(m[0]) ? 'cm' : 'mm'));
+          const a = toCm(m[1], unit), b = toCm(m[2], unit), c = toCm(m[3], unit);
           if (a && b && c) {
             if (out.dimL == null) out.dimL = a;
             if (out.dimW == null) out.dimW = b;
@@ -774,23 +722,23 @@
   // 6 档 × 3 运输方式（默认全部 economy 陆运经济）
   const TIER_KEYS = ['xs', 'budget', 'small', 'big', 'pSmall', 'pBig'];
   const TIER_META = {
-    xs: { label: 'Extra Small', range: '0-500g · 货值≤1500₽' },
-    budget: { label: 'Budget', range: '>500g · 货值≤1500₽' },
-    small: { label: 'Small', range: '0-2kg · 1501-7000₽ · 不计抛' },
-    big: { label: 'Big', range: '>2kg · 1501-7000₽ · 计抛' },
+    xs:     { label: 'Extra Small',   range: '0-500g · 货值≤1500₽' },
+    budget: { label: 'Budget',        range: '>500g · 货值≤1500₽' },
+    small:  { label: 'Small',         range: '0-2kg · 1501-7000₽ · 不计抛' },
+    big:    { label: 'Big',           range: '>2kg · 1501-7000₽ · 计抛' },
     pSmall: { label: 'Premium Small', range: '0-5kg · 货值>7000₽' },
-    pBig: { label: 'Premium Big', range: '>5kg · 货值>7000₽ · 计抛' },
+    pBig:   { label: 'Premium Big',   range: '>5kg · 货值>7000₽ · 计抛' },
   };
   const TRANSPORT_TYPES = [
-    { key: 'fast', label: '陆空特快', icon: 'plane' },
-    { key: 'std', label: '陆空标准', icon: 'plane' },
-    { key: 'economy', label: '陆运经济', icon: 'truck' },
+    { key: 'fast',    label: '陆空特快',  icon: 'plane' },
+    { key: 'std',     label: '陆空标准',  icon: 'plane' },
+    { key: 'economy', label: '陆运经济',  icon: 'truck' },
   ];
   const defaultChannelCfg = () => Object.fromEntries(TIER_KEYS.map((k) => [k, 'economy']));
-  let celConfig = normalizeChannelCfg('CEL', defaultChannelCfg());
+  let celConfig  = normalizeChannelCfg('CEL',  defaultChannelCfg());
   let guooConfig = normalizeChannelCfg('GUOO', defaultChannelCfg());
-  let xyConfig = normalizeChannelCfg('XY', defaultChannelCfg());
-  let ztoConfig = normalizeChannelCfg('ZTO', defaultChannelCfg());
+  let xyConfig   = normalizeChannelCfg('XY',   defaultChannelCfg());
+  let ztoConfig  = normalizeChannelCfg('ZTO',  defaultChannelCfg());
 
   // 根据计费重 + 货值，匹配档位 key
   // 用「实重 + 货值」决定档位（货值边界 1500/7000 卢布与 Excel 一致）
@@ -1226,7 +1174,7 @@
 
     makeDraggable(panel);
     bindEvents();
-    loadSettings(); // 内部依次：恢复偏好 → 恢复 SKU specs → autoFillFromPage(true) → recalcAll
+    loadSettings();          // 内部依次：恢复偏好 → 恢复 SKU specs → autoFillFromPage(true) → recalcAll
     TIERED_CHANNELS.forEach(renderChannelCfgBody);
     trackUsage('jzc-calc:open');
   }
@@ -1250,14 +1198,12 @@
     header.addEventListener('mousedown', (e) => {
       if (e.target.closest('button')) return;
       e.preventDefault();
-      sx = e.clientX;
-      sy = e.clientY;
+      sx = e.clientX; sy = e.clientY;
       const r = panel.getBoundingClientRect();
-      ox = r.left;
-      oy = r.top;
+      ox = r.left; oy = r.top;
       const mv = (ev) => {
-        panel.style.left = ox + ev.clientX - sx + 'px';
-        panel.style.top = oy + ev.clientY - sy + 'px';
+        panel.style.left = (ox + ev.clientX - sx) + 'px';
+        panel.style.top  = (oy + ev.clientY - sy) + 'px';
         panel.style.right = 'auto';
       };
       const up = () => {
@@ -1325,9 +1271,7 @@
         if (window.__jzcEmbedded) {
           // 嵌入主插件场景: 静默 unmount,不显示 trigger
           if (typeof window.__jzcOnUnmount === 'function') {
-            try {
-              window.__jzcOnUnmount();
-            } catch {}
+            try { window.__jzcOnUnmount(); } catch {}
           }
         } else {
           showTrigger();
@@ -1407,9 +1351,7 @@
   function flashBtn(btn, msg) {
     const orig = btn.textContent;
     btn.textContent = msg;
-    setTimeout(() => {
-      btn.textContent = orig;
-    }, 1200);
+    setTimeout(() => { btn.textContent = orig; }, 1200);
   }
 
   function copyBreakdown(btn) {
@@ -1424,10 +1366,7 @@
       `运费: ${v(`[data-f="bkFreight"]`)}  佣金: ${v(`[data-f="bkComm"]`)}  平台费: ${v(`[data-f="bkPlat"]`)}  贴单: −¥2.00`,
       `总成本: ${v(`[data-f="bkTotal"]`)}`,
     ].join('\n');
-    navigator.clipboard
-      .writeText(text)
-      .then(() => flashBtn(btn, '已复制'))
-      .catch(() => flashBtn(btn, '失败'));
+    navigator.clipboard.writeText(text).then(() => flashBtn(btn, '已复制')).catch(() => flashBtn(btn, '失败'));
   }
 
   // ── Recalc ──────────────────────────────────────
@@ -1436,18 +1375,16 @@
     calcActual();
     // 定价(默认 = 实际售价,见 autofill / calcActual)是所有经济计算的统一口径:
     // 佣金档位、佣金、平台费、运费货值、利润全部走它,默认即真实上架售价,口径自洽。
-    const price = val(`[data-f="price"]`);
-    const cost = val(`[data-f="cost"]`);
-    const weight = val(`[data-f="weight"]`);
-    const tier = tierFromPrice(price);
+    const price    = val(`[data-f="price"]`);
+    const cost     = val(`[data-f="cost"]`);
+    const weight   = val(`[data-f="weight"]`);
+    const tier     = tierFromPrice(price);
     const commRate = tier ? TIER_RATE[tier] : 15;
 
     qa(`.${P}-tier-card`).forEach((c) => c.classList.toggle('active', Number(c.dataset.tier) === tier));
 
-    const dimL = val(`[data-f="dimL"]`),
-      dimW = val(`[data-f="dimW"]`),
-      dimH = val(`[data-f="dimH"]`);
-    const dimVolume = dimL > 0 && dimW > 0 && dimH > 0 ? dimL * dimW * dimH : 0; // cm³
+    const dimL = val(`[data-f="dimL"]`), dimW = val(`[data-f="dimW"]`), dimH = val(`[data-f="dimH"]`);
+    const dimVolume = (dimL > 0 && dimW > 0 && dimH > 0) ? dimL * dimW * dimH : 0;  // cm³
     const volTag = q(`[data-f="volTag"]`);
     volTag.style.display = 'none';
 
@@ -1490,24 +1427,28 @@
     const platFee = price * PLATFORM_FEE_RATE;
     const totalCost = cost + freight + comm + platFee + LABEL_FEE;
     const profit = price - totalCost;
-    const rate = totalCost > 0 ? (profit / totalCost) * 100 : 0;
+    // 利润率 = 利润 ÷ 售价（销售利润率），与 15% 安全线、banner 差额同一口径
+    const rate = (profit / price) * 100;
+    const hasCost = cost > 0;
+    // 未填采购价时利润率虚高无意义，不展示（已亏损除外——缺采购价也必亏）
+    const showRate = hasCost || profit < 0;
 
     const danger = profit < 0;
     const warn = !danger && rate < SAFETY_RATE * 100;
-    const state = danger ? 'danger' : warn ? 'warn' : 'ok';
+    const state = danger ? 'danger' : !hasCost ? 'empty' : warn ? 'warn' : 'ok';
     hero.classList.add(state);
-    chip.textContent = danger ? '亏损' : warn ? '利润偏薄' : '利润健康';
+    chip.textContent = danger ? '亏损' : !hasCost ? '未填采购价' : warn ? '利润偏薄' : '利润健康';
 
     profitEl.textContent = (profit > 0 ? '+' : '') + fmt(profit);
-    rateEl.textContent = fmt(rate, 1) + '%';
-    fill.style.width = Math.max(0, Math.min(100, rate * 2)) + '%';
+    rateEl.textContent = showRate ? fmt(rate, 1) + '%' : '—';
+    fill.style.width = showRate ? Math.max(0, Math.min(100, rate * 2)) + '%' : '0%';
 
     if (danger) {
       banner.classList.add('show', 'danger');
       banner.classList.remove('warn');
       q(`[data-f="bannerText"]`).innerHTML =
         `<b>正在亏损</b>，建议调价至 <b>¥${fmt(price + Math.abs(profit) + SAFETY_RATE * price, 0)}</b>（达 15% 安全线）`;
-    } else if (warn) {
+    } else if (hasCost && warn) {
       banner.classList.add('show', 'warn');
       banner.classList.remove('danger');
       q(`[data-f="bannerText"]`).innerHTML =
@@ -1522,11 +1463,11 @@
     if (freightInfo.type === 'flat') {
       const flags = [];
       if (freightInfo.overWeight) flags.push('超重');
-      if (freightInfo.overValue) flags.push('超额');
+      if (freightInfo.overValue)  flags.push('超额');
       if (freightInfo.sizeBreach) flags.push('尺寸超限');
       freightSub = [chLbl, freightInfo.note, ...flags].filter(Boolean).join(' · ');
     } else {
-      const tierLbl = TIER_META[freightInfo.tierKey]?.label || '';
+      const tierLbl  = TIER_META[freightInfo.tierKey]?.label || '';
       const transLbl = TRANSPORT_TYPES.find((t) => t.key === freightInfo.transport)?.label || '';
       const flags = [];
       if (freightInfo.upgradedFrom) {
@@ -1551,18 +1492,20 @@
       if (freightInfo.sizeBreach) {
         const sb = freightInfo.sizeBreach;
         const parts = [];
-        if (sb.breachL) parts.push(`最长边 ${sb.longest}cm > ${sb.maxL}cm`);
+        if (sb.breachL)   parts.push(`最长边 ${sb.longest}cm > ${sb.maxL}cm`);
         if (sb.breachSum) parts.push(`三边和 ${sb.sum}cm > ${sb.maxSum}cm`);
         banner.classList.add('show', 'danger');
         banner.classList.remove('warn');
         const head = freightInfo.upgradedFrom ? '尺寸完全超限' : `${chLbl} 尺寸超限`;
-        q(`[data-f="bannerText"]`).innerHTML = `<b>${head}</b> · ${parts.join('，')}，请换渠道或缩小包装`;
+        q(`[data-f="bannerText"]`).innerHTML =
+          `<b>${head}</b> · ${parts.join('，')}，请换渠道或缩小包装`;
       } else if (freightInfo.upgradedFrom) {
         const fromLbl = TIER_META[freightInfo.upgradedFrom]?.label || freightInfo.upgradedFrom;
-        const toLbl = TIER_META[freightInfo.tierKey]?.label || freightInfo.tierKey;
+        const toLbl   = TIER_META[freightInfo.tierKey]?.label || freightInfo.tierKey;
         banner.classList.add('show', 'warn');
         banner.classList.remove('danger');
-        q(`[data-f="bannerText"]`).innerHTML = `<b>${fromLbl} 尺寸超限</b> · 已自动升 <b>${toLbl}</b>（按计抛计费）`;
+        q(`[data-f="bannerText"]`).innerHTML =
+          `<b>${fromLbl} 尺寸超限</b> · 已自动升 <b>${toLbl}</b>（按计抛计费）`;
       }
     }
     q(`[data-f="bkCommLabel"]`).textContent = `Ozon 佣金 · T${tier} · ${commRate}%`;
@@ -1572,7 +1515,9 @@
 
     // 更新国际物流按钮副标题：tiered 渠道按当前档位实际生效的运输方式显示
     // 若 freight 计算用的是当前 channel，tierKey 已知；否则按实重重新匹配档位
-    const matchedTier = isFlatChannel(channel) ? matchTierKey(weight, price) : freightInfo.tierKey;
+    const matchedTier = isFlatChannel(channel)
+      ? matchTierKey(weight, price)
+      : freightInfo.tierKey;
     TIERED_CHANNELS.forEach((ch) => {
       const el = q(`[data-f="chSub_${ch}"]`);
       if (!el) return;
@@ -1590,8 +1535,7 @@
   // calcActual 展示用、autofill 默认定价用。**勿读 actualPrice 展示字段**:它经 fmt
   // 带千分位逗号(如 "1,234.56"),parseFloat 会截成个位 → >=1000 的价被读成 ¥1。
   function computeActual(black, green) {
-    black = Number(black);
-    green = Number(green);
+    black = Number(black); green = Number(green);
     if (!(black > 0)) return null;
     // 默认新公式 (黑−绿)×2.25 + 黑;勾「平台涨价定价」且黑标 ≤80 用旧公式 黑 ÷ 1.0715
     if (useOldFormula && black <= 80) return black / 1.0715;
@@ -1603,13 +1547,9 @@
     const apEl = q(`[data-f="actualPrice"]`);
     const fmEl = q(`[data-f="formula"]`);
     const actual = computeActual(black, val(`[data-f="greenPrice"]`));
-    if (actual == null) {
-      apEl.value = '';
-      fmEl.textContent = '—';
-      return;
-    }
+    if (actual == null) { apEl.value = ''; fmEl.textContent = '—'; return; }
     apEl.value = fmt(actual, 2);
-    fmEl.textContent = useOldFormula && black <= 80 ? '黑 ÷ 1.0715 (≤80 旧公式)' : '(黑−绿)×2.25 + 黑';
+    fmEl.textContent = (useOldFormula && black <= 80) ? '黑 ÷ 1.0715 (≤80 旧公式)' : '(黑−绿)×2.25 + 黑';
   }
 
   function autoFillFromPage(onlyEmpty = false) {
@@ -1650,9 +1590,9 @@
 
     // ── 重量/尺寸：DOM 先填占位（最低优先级），seller portal 回来会强制覆盖
     setIf('weight', d.weight);
-    setIf('dimL', d.dimL);
-    setIf('dimW', d.dimW);
-    setIf('dimH', d.dimH);
+    setIf('dimL',   d.dimL);
+    setIf('dimW',   d.dimW);
+    setIf('dimH',   d.dimH);
     recalcAll();
     saveState();
 
@@ -1669,16 +1609,12 @@
     // 看到都有完整数据)。字段映射:weight→weightG,dimL/W/H→length/width/heightMm
     const persistJzc = (src, label) => {
       if (!sku || !src || !window.jzPersistWeightDims) return;
-      window.jzPersistWeightDims(
-        sku,
-        {
-          weightG: src.weight,
-          lengthMm: src.dimL,
-          widthMm: src.dimW,
-          heightMm: src.dimH,
-        },
-        label
-      );
+      window.jzPersistWeightDims(sku, {
+        weightG: src.weight,
+        lengthMm: src.dimL,
+        widthMm: src.dimW,
+        heightMm: src.dimH,
+      }, label);
     };
     // DOM 取数:可能有部分字段,合并策略由 jzPersistWeightDims 处理(不覆盖已有非空)
     persistJzc(d, 'jzc-dom');
@@ -1688,10 +1624,7 @@
       ['weight', 'dimL', 'dimW', 'dimH'].forEach((f) => {
         if (extra[f] != null) t = setIf(f, extra[f], force) || t;
       });
-      if (t) {
-        recalcAll();
-        saveState();
-      }
+      if (t) { recalcAll(); saveState(); }
       return t;
     };
 
@@ -1748,20 +1681,16 @@
             items.find((it) => String(it.variant_id) === String(sku)) ||
             items.find((it) => String(it.product_id) === String(sku)) ||
             items[0];
-          if (!item?.attributes) {
-            finish({});
-            return;
-          }
+          if (!item?.attributes) { finish({}); return; }
           const attr = new Map(item.attributes.map((a) => [String(a.key), a]));
           const num = (k) => Number(attr.get(k)?.value) || 0;
           const out = {};
-          const w = num('4383') || num('4497');
+          // 优先 4497 带包装重量(SW 从 bundle 注入的 seller 后台真值),回退 4383 重量(/search 旧/裸重,偏轻)。
+          const w = num('4497') || num('4383');
           if (w > 0) out.weight = w;
-          const depth = num('9454'),
-            width = num('9455'),
-            height = num('9456');
-          if (depth > 0) out.dimL = +(depth / 10).toFixed(1);
-          if (width > 0) out.dimW = +(width / 10).toFixed(1);
+          const depth = num('9454'), width = num('9455'), height = num('9456');
+          if (depth > 0)  out.dimL = +(depth / 10).toFixed(1);
+          if (width > 0)  out.dimW = +(width / 10).toFixed(1);
           if (height > 0) out.dimH = +(height / 10).toFixed(1);
           finish(out);
         });
@@ -1782,7 +1711,8 @@
   //   B. MutationObserver 监听新增 [data-state]，命中即触发一次 autoFill
   let _autoFillObserver = null;
   function scheduleAutoFillRetries() {
-    const allFilled = () => ['weight', 'dimL', 'dimW', 'dimH'].every((f) => q(`[data-f="${f}"]`)?.value);
+    const allFilled = () =>
+      ['weight', 'dimL', 'dimW', 'dimH'].every((f) => q(`[data-f="${f}"]`)?.value);
 
     [600, 1500, 3500, 7000, 12000].forEach((delay) => {
       setTimeout(() => {
@@ -1799,7 +1729,9 @@
       }
       const newStateNode = muts.some((m) =>
         Array.from(m.addedNodes).some(
-          (n) => n.nodeType === 1 && (n.matches?.('[data-state]') || n.querySelector?.('[data-state]'))
+          (n) =>
+            n.nodeType === 1 &&
+            (n.matches?.('[data-state]') || n.querySelector?.('[data-state]'))
         )
       );
       if (newStateNode) {
@@ -1895,9 +1827,7 @@
               resolve(r2[LS_FX_RATE]);
             } else resolve(null);
           });
-        } catch {
-          resolve(null);
-        }
+        } catch { resolve(null); }
       });
     }
     applyFxRate(cached);
@@ -1975,17 +1905,15 @@
         const maxLeft = window.innerWidth - 60;
         const maxTop = window.innerHeight - 60;
         panelEl.style.left = Math.max(0, Math.min(maxLeft, pos.left)) + 'px';
-        panelEl.style.top = Math.max(0, Math.min(maxTop, pos.top)) + 'px';
+        panelEl.style.top  = Math.max(0, Math.min(maxTop, pos.top)) + 'px';
         panelEl.style.right = 'auto';
       }
 
-      autoFillFromPage(true); // 仅填空字段（用户已存的不会被覆盖）
-      scheduleAutoFillRetries(); // Ozon 特征 widget 常常懒加载，重试几次
+      autoFillFromPage(true);     // 仅填空字段（用户已存的不会被覆盖）
+      scheduleAutoFillRetries();  // Ozon 特征 widget 常常懒加载，重试几次
       recalcAll();
       // 拉一次实时汇率（已缓存则直接用缓存）；汇率变化由 storage.onChanged 监听触发 recalcAll
-      loadFxRate().then(() => {
-        if (panelEl) recalcAll();
-      });
+      loadFxRate().then(() => { if (panelEl) recalcAll(); });
     });
   }
 
@@ -2015,11 +1943,10 @@
       document.querySelectorAll('[data-state]').forEach((el) => {
         try {
           const o = JSON.parse(el.getAttribute('data-state') || '{}');
-          if (o && typeof o === 'object')
-            stateKeys.push({
-              widget: el.getAttribute('data-widget') || '',
-              keys: Object.keys(o).slice(0, 12),
-            });
+          if (o && typeof o === 'object') stateKeys.push({
+            widget: el.getAttribute('data-widget') || '',
+            keys: Object.keys(o).slice(0, 12),
+          });
         } catch (_) {}
       });
       console.log('④ 页面 data-state 概览:', stateKeys);
