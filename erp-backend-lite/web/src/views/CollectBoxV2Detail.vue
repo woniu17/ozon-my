@@ -173,7 +173,22 @@ function buildSourcedFields(opiItem, synItem) {
 
 function fmtTime(t) {
   if (!t) return '—';
-  return String(t).replace('T', ' ').slice(0, 19);
+  // 毫秒时间戳(collected_at 是 INTEGER ms) → 本地时间
+  const ms = typeof t === 'number' ? t : /^\d{13}$/.test(String(t)) ? Number(t) : 0;
+  if (ms > 0) {
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+  // datetime 字符串(created_at 是 SQLite datetime('now') UTC)→ 转本地时间
+  const s = String(t).replace('T', ' ').slice(0, 19);
+  const ms2 = Date.parse(s.replace(' ', 'T') + 'Z');
+  if (!Number.isNaN(ms2)) {
+    const d = new Date(ms2);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+  return s;
 }
 
 const isLegacy = computed(() => props.data?.sourceTable === 'collect_box');
