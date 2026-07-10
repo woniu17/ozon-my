@@ -7,7 +7,7 @@ import { ApiError, ErrorCode } from '../utils/error-codes.js';
 const router = Router();
 
 // POST /ozon/collect-box/v2 —— 全数据源采集推送(字段级来源标记)
-// body: { anchorSku, sourcePageUrl, variants[], rawBySource, synthesizedItems, collectedAt }
+// body: { anchorSku, sourcePageUrl, collectSource, variants[], rawBySource, synthesizedItems, collectedAt }
 router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
   try {
     const body = req.body || {};
@@ -41,22 +41,23 @@ router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
     const storeId = req.storeId;
     const anchorSku = String(body.anchorSku);
     const sourcePageUrl = String(body.sourcePageUrl || '');
+    const collectSource = String(body.collectSource || '');
 
     const selectExisting = db.prepare(
       `SELECT id FROM collect_box_v2 WHERE COALESCE(store_id, '') = COALESCE(?, '') AND sku = ?`
     );
     const updateStmt = db.prepare(
       `UPDATE collect_box_v2 SET
-         anchor_sku = ?, source_page_url = ?, variants_json = ?,
+         anchor_sku = ?, source_page_url = ?, collect_source = ?, variants_json = ?,
          raw_by_source_json = ?, synthesized_items_json = ?,
          collected_at = ?, updated_at = datetime('now')
        WHERE id = ?`
     );
     const insertStmt = db.prepare(
       `INSERT INTO collect_box_v2
-        (store_id, sku, anchor_sku, source_page_url,
+        (store_id, sku, anchor_sku, source_page_url, collect_source,
          variants_json, raw_by_source_json, synthesized_items_json, collected_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
     const results = [];
@@ -73,6 +74,7 @@ router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
         updateStmt.run(
           anchorSku,
           sourcePageUrl,
+          collectSource,
           variantsJson,
           rawBySourceJson,
           synthesizedJson,
@@ -87,6 +89,7 @@ router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
           sku,
           anchorSku,
           sourcePageUrl,
+          collectSource,
           variantsJson,
           rawBySourceJson,
           synthesizedJson,
@@ -125,6 +128,7 @@ router.post('/sources/:sourceId/collect', storeGuard, (req, res, next) => {
     const variantsJson = JSON.stringify([{ sku, ...raw }]);
     const synthesizedJson = '[]';
     const rawBySourceJson = JSON.stringify({ agent: { raw, sourceId } });
+    const collectSource = sourceId;
 
     const existing = db
       .prepare(`SELECT id FROM collect_box_v2 WHERE COALESCE(store_id, '') = COALESCE(?, '') AND sku = ?`)
@@ -135,22 +139,22 @@ router.post('/sources/:sourceId/collect', storeGuard, (req, res, next) => {
     if (existing) {
       db.prepare(
         `UPDATE collect_box_v2 SET
-           anchor_sku = ?, source_page_url = ?, variants_json = ?,
+           anchor_sku = ?, source_page_url = ?, collect_source = ?, variants_json = ?,
            raw_by_source_json = ?, synthesized_items_json = ?,
            collected_at = ?, updated_at = datetime('now')
          WHERE id = ?`
-      ).run(sku, raw.url || '', variantsJson, rawBySourceJson, synthesizedJson, now, existing.id);
+      ).run(sku, raw.url || '', collectSource, variantsJson, rawBySourceJson, synthesizedJson, now, existing.id);
       id = existing.id;
       action = 'updated';
     } else {
       const info = db
         .prepare(
           `INSERT INTO collect_box_v2
-            (store_id, sku, anchor_sku, source_page_url,
+            (store_id, sku, anchor_sku, source_page_url, collect_source,
              variants_json, raw_by_source_json, synthesized_items_json, collected_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(storeId, sku, sku, raw.url || '', variantsJson, rawBySourceJson, synthesizedJson, now);
+        .run(storeId, sku, sku, raw.url || '', collectSource, variantsJson, rawBySourceJson, synthesizedJson, now);
       id = info.lastInsertRowid;
       action = 'created';
     }

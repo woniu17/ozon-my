@@ -259,3 +259,68 @@ export function productInfoListV3(store, { offerIds, productIds, skus } = {}) {
   if (skus) body.sku = skus;
   return call(store, '/v3/product/info/list', body);
 }
+
+// ── description-category 系列:属性名/类目名/字典值查询 ──
+// 这三个端点用于把采集箱中的数字 ID(attribute_id / category_id / type_id /
+// dictionary_value_id)翻译成人类可读的名称。响应不常变,做 5 分钟内存缓存。
+
+const META_CACHE_TTL = 5 * 60 * 1000; // 5 min
+const metaCache = new Map(); // key → { data, expiresAt }
+
+function metaGet(key) {
+  const hit = metaCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.data;
+  metaCache.delete(key);
+  return null;
+}
+
+function metaSet(key, data) {
+  metaCache.set(key, { data, expiresAt: Date.now() + META_CACHE_TTL });
+}
+
+// /v1/description-category/tree —— 类目树(含 category_name + type_name)
+// language: ZH_HANS(中文) / RU(俄语) / EN(英语) / DEFAULT(默认俄语)
+// 响应: { result: [{ description_category_id, category_name, children: [..., { type_name, type_id }] }] }
+export async function descriptionCategoryTree(store, language = 'ZH_HANS') {
+  const cacheKey = `tree:${store?.id}:${language}`;
+  const cached = metaGet(cacheKey);
+  if (cached) return cached;
+  const r = await call(store, '/v1/description-category/tree', { language });
+  const result = r?.result || r || [];
+  metaSet(cacheKey, result);
+  return result;
+}
+
+// /v1/description-category/attribute —— 查类目+类型下所有属性描述(名/描述/类型/字典)
+// language: ZH_HANS(中文) / RU(俄语) / EN(英语) / DEFAULT(默认俄语)
+// 响应: { result: [{ id, name, description, type, is_required, dictionary_id, ... }] }
+export async function descriptionCategoryAttributes(store, { description_category_id, type_id, language = 'ZH_HANS' }) {
+  const cacheKey = `attrs:${store?.id}:${description_category_id}:${type_id}:${language}`;
+  const cached = metaGet(cacheKey);
+  if (cached) return cached;
+  const r = await call(store, '/v1/description-category/attribute', {
+    description_category_id,
+    type_id,
+    language,
+  });
+  const result = r?.result || r || [];
+  metaSet(cacheKey, result);
+  return result;
+}
+
+// /v1/description-category/attribute/values —— 查字典属性的可选值
+// language: ZH_HANS(中文) / RU(俄语) / EN(英语) / DEFAULT(默认俄语)
+// 响应: { result: [{ id, value, info, picture }], has_next }
+export async function descriptionCategoryAttributeValues(
+  store,
+  { attribute_id, description_category_id, type_id, language = 'ZH_HANS', limit = 5000 }
+) {
+  const r = await call(store, '/v1/description-category/attribute/values', {
+    attribute_id,
+    description_category_id,
+    type_id,
+    language,
+    limit,
+  });
+  return r?.result || r || [];
+}

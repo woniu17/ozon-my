@@ -167,7 +167,7 @@ onMounted(() => {
             @error="$event.target.style.display = 'none'"
           />
           <div v-else class="cb-no-img">无图</div>
-          <span class="cb-badge-v2">全源</span>
+          <span v-if="it.collectSource" class="cb-badge-v2">{{ it.collectSource }}</span>
         </div>
         <div class="cb-body">
           <div class="cb-title" :title="it.name || it.sku">

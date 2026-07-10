@@ -4,6 +4,7 @@ import AppAccordion from '../components/AppAccordion.vue';
 import SourcedField from '../components/SourcedField.vue';
 import JsonTree from '../components/JsonTree.vue';
 import { previewOpi } from '../api/listingTemplates.js';
+import { getAttributeDictionary, getCategoryNames, getAttributeValues } from '../api/collect-box-v2.js';
 
 const props = defineProps({
   data: { type: Object, default: () => ({}) },
@@ -227,6 +228,176 @@ function attrCount(sv) {
   return Array.isArray(sv?.attributes) ? sv.attributes.length : 0;
 }
 
+// ── 属性字典 / 类目名 / 类型名查询 ──
+// 流程:从 pickedSv 提取 typeId → 调 category-names 按 typeId 搜树,
+// 获取 descriptionCategoryId + 类目名 + 类型名 → 再用 descriptionCategoryId + typeId 查属性字典。
+const attrDict = ref([]); // [{id, name, description, type, is_required, dictionary_id, ...}]
+const attrDictLoading = ref(false);
+const attrDictError = ref('');
+const categoryNames = ref({ descriptionCategoryId: 0, categoryName: '', typeName: '' });
+
+// 从 pickedSv 提取 type_id
+// 注:sv.description_category_id 实际是 type_id(描述类型字典值),
+//     Ozon description-category API 的 type_id 和它一致。
+function extractTypeId(pickedSv) {
+  if (!pickedSv) return 0;
+  return Number(pickedSv.description_category_id) || Number(pickedSv._bundleItem?.type_id) || 0;
+}
+
+// 从第一个有 pickedSv 的 SKU 取 typeId
+const metaTypeId = computed(() => {
+  for (const sku of sellerSkus.value) {
+    const pickedSv = sellerPortal.value[sku]?.pickedSv;
+    if (pickedSv) return extractTypeId(pickedSv);
+  }
+  return 0;
+});
+
+// 属性字典 map: { id → attrDesc }
+const attrDictMap = computed(() => {
+  const m = new Map();
+  for (const a of attrDict.value) m.set(String(a.id), a);
+  return m;
+});
+
+// 把 pickedSv.attributes 归一化为统一列表(兼容 /search 和 /bundle 两种 shape)
+function normalizeAttrs(pickedSv) {
+  if (!pickedSv) return [];
+  // 优先 _bundleItem.attributes(更完整,含 dictionary_value_id)
+  const bundleAttrs = pickedSv._bundleItem?.attributes;
+  if (Array.isArray(bundleAttrs) && bundleAttrs.length > 0) {
+    return bundleAttrs.map((a) => ({
+      id: String(a.attribute_id || a.id || ''),
+      values: (a.values || []).map((v) => v?.value || '').filter(Boolean),
+      dictIds: (a.values || []).map((v) => v?.dictionary_value_id).filter(Boolean),
+      complexId: a.complex_id || 0,
+      source: 'bundle',
+    }));
+  }
+  // 兜底 pickedSv.attributes(/search 归一化)
+  const svAttrs = pickedSv.attributes;
+  if (Array.isArray(svAttrs)) {
+    return svAttrs.map((a) => {
+      const vals = [];
+      if (a.value != null) vals.push(String(a.value));
+      if (Array.isArray(a.collection)) vals.push(...a.collection.map(String));
+      return {
+        id: String(a.key || a.attribute_id || a.id || ''),
+        values: vals,
+        dictIds: [],
+        complexId: a.complex_id || 0,
+        source: 'search',
+      };
+    });
+  }
+  return [];
+}
+
+// 把 OPI v3 item.attributes 归一化为统一列表(供 OPI 预览属性含义展示)
+// OPI v3 shape: {complex_id, id, values:[{value, dictionary_value_id?}]}
+function normalizeOpiAttrs(opiItem) {
+  const attrs = opiItem?.attributes;
+  if (!Array.isArray(attrs)) return [];
+  return attrs.map((a) => ({
+    id: String(a.id ?? ''),
+    values: (a.values || []).map((v) => (v?.value != null ? String(v.value) : '')).filter(Boolean),
+    dictIds: (a.values || []).map((v) => v?.dictionary_value_id).filter((x) => x != null),
+    complexId: a.complex_id || 0,
+    source: 'opi',
+  }));
+}
+
+async function loadAttrMeta() {
+  const storeId = props.data?.storeId;
+  const typeId = metaTypeId.value;
+  if (!storeId || !typeId) return;
+  attrDictLoading.value = true;
+  attrDictError.value = '';
+  dictValueCache.value = new Map(); // 重置字典值缓存
+  try {
+    // 1. 先按 typeId 查类目树,获取 descriptionCategoryId + 类目名 + 类型名
+    const names = await getCategoryNames(storeId, typeId);
+    categoryNames.value = names || { descriptionCategoryId: 0, categoryName: '', typeName: '' };
+    // 2. 再用 descriptionCategoryId + typeId 查属性字典
+    const categoryId = Number(names?.descriptionCategoryId) || 0;
+    if (categoryId) {
+      const attrs = await getAttributeDictionary(storeId, categoryId, typeId);
+      attrDict.value = Array.isArray(attrs) ? attrs : [];
+      // 3. 对有 dictionary_id 的属性,批量查字典值并建立 id→value 映射
+      await loadDictValues(storeId, categoryId, typeId);
+    }
+  } catch (err) {
+    attrDictError.value = err.message || String(err);
+  } finally {
+    attrDictLoading.value = false;
+  }
+}
+
+// ── 字典值缓存 ──
+// dictValueCache: { dictId → readableValue }
+// 对于有 dictionary_id 的属性,调 /attribute-values 把所有可选值拉回来,
+// 再按 pickedSv 里的 dictIds 反查可读值。
+const dictValueCache = ref(new Map());
+const dictValuesLoading = ref(false);
+
+async function loadDictValues(storeId, categoryId, typeId) {
+  const dictAttrs = attrDict.value.filter((a) => a.dictionary_id);
+  if (dictAttrs.length === 0) return;
+  dictValuesLoading.value = true;
+  try {
+    const cache = new Map();
+    // 并发拉取每个字典属性的值(限制并发 5)
+    const chunks = [];
+    for (let i = 0; i < dictAttrs.length; i += 5) {
+      chunks.push(dictAttrs.slice(i, i + 5));
+    }
+    for (const chunk of chunks) {
+      const results = await Promise.all(
+        chunk.map((a) =>
+          getAttributeValues(storeId, categoryId, typeId, a.id)
+            .then((vals) => ({ attrId: a.id, vals: Array.isArray(vals) ? vals : [] }))
+            .catch(() => ({ attrId: a.id, vals: [] }))
+        )
+      );
+      for (const { vals } of results) {
+        for (const v of vals) {
+          cache.set(String(v.id), v.value || '');
+        }
+      }
+    }
+    dictValueCache.value = cache;
+  } finally {
+    dictValuesLoading.value = false;
+  }
+}
+
+// 把单个属性的值渲染成可读字符串
+// 对于字典属性,如果 dictIds[i] 能在 cache 中找到,显示可读值(附 dictId 备注)
+function formatAttrValue(a) {
+  if (!a.values || a.values.length === 0) return '—';
+  const parts = a.values.map((val, i) => {
+    const dictId = a.dictIds?.[i];
+    if (dictId) {
+      const readable = dictValueCache.value.get(String(dictId));
+      if (readable) return `${readable} (id:${dictId})`;
+      return `${val} (dict:${dictId})`;
+    }
+    return val;
+  });
+  return parts.join(', ');
+}
+
+// 数据变化时自动加载属性字典
+watch(
+  () => [props.data?.id, metaTypeId.value],
+  () => {
+    attrDict.value = [];
+    categoryNames.value = { descriptionCategoryId: 0, categoryName: '', typeName: '' };
+    loadAttrMeta();
+  },
+  { immediate: true }
+);
+
 // ── 5 类数据源采集状态(判定 rawBySource 中各源是否非空)──
 // ok=true 表示已采集到数据,miss=true 表示缺失(该源未采或降级为 null)
 // tab 字段非空时点击 chip 可跳转到对应 sub-tab 查看
@@ -331,7 +502,19 @@ const sourceStatuses = computed(() => {
       <AppAccordion title="采集元信息" :default-open="true">
         <SourcedField label="sku" :field="{ value: data.sku, source: metaSource }" />
         <SourcedField label="anchor_sku" :field="{ value: data.anchorSku, source: metaSource }" />
+        <SourcedField label="collect_source" :field="{ value: data.collectSource || '—', source: metaSource }" />
         <SourcedField label="store_id" :field="{ value: data.storeId, source: metaSource }" />
+        <SourcedField
+          label="类目名 / 类型名"
+          :field="{
+            value: categoryNames.categoryName
+              ? categoryNames.typeName
+                ? categoryNames.categoryName + ' / ' + categoryNames.typeName
+                : categoryNames.categoryName
+              : '—',
+            source: metaSource,
+          }"
+        />
         <SourcedField label="collected_at" :field="{ value: fmtTime(data.collectedAt), source: metaSource }" />
         <SourcedField label="created_at" :field="{ value: fmtTime(data.createdAt), source: metaSource }" />
       </AppAccordion>
@@ -388,6 +571,37 @@ const sourceStatuses = computed(() => {
             label="attributes 数"
             :field="{ value: attrCount(sellerPortal[sku].pickedSv), source: 'seller-portal' }"
           />
+          <!-- 属性含义:把 attribute_id 翻译成属性名/描述/类型 + 当前值(字典值可读化) -->
+          <AppAccordion title="属性含义" :default-open="true">
+            <p v-if="attrDictLoading" class="muted">加载属性字典中…</p>
+            <p v-else-if="attrDictError" class="error-text">属性字典加载失败:{{ attrDictError }}</p>
+            <p v-else-if="!attrDict.length" class="muted">无属性字典(需店铺配置 OPI 凭据 + 有 typeId)</p>
+            <template v-else>
+              <p v-if="dictValuesLoading" class="muted" style="margin-bottom: 8px">正在加载字典值(可读名称)…</p>
+              <div class="attr-dict-table">
+                <div class="attr-dict-row attr-dict-header">
+                  <span>ID</span>
+                  <span>属性名</span>
+                  <span>类型</span>
+                  <span>当前值</span>
+                </div>
+                <div
+                  v-for="a in normalizeAttrs(sellerPortal[sku].pickedSv)"
+                  :key="a.id"
+                  class="attr-dict-row"
+                  :title="attrDictMap.get(a.id)?.description || ''"
+                >
+                  <span class="attr-dict-id">{{ a.id }}</span>
+                  <span class="attr-dict-name">
+                    {{ attrDictMap.get(a.id)?.name || '(未在字典中)' }}
+                    <span v-if="attrDictMap.get(a.id)?.is_required" class="attr-required">*</span>
+                  </span>
+                  <span class="attr-dict-type">{{ attrDictMap.get(a.id)?.type || '—' }}</span>
+                  <span class="attr-dict-value">{{ formatAttrValue(a) }}</span>
+                </div>
+              </div>
+            </template>
+          </AppAccordion>
           <AppAccordion title="完整 sv 对象" :default-open="true">
             <JsonTree :data="sellerPortal[sku].pickedSv" root-key="pickedSv" />
           </AppAccordion>
@@ -453,6 +667,37 @@ const sourceStatuses = computed(() => {
             :label="f.label"
             :field="f.field"
           />
+          <!-- 属性含义:把 OPI v3 attribute id 翻译成属性名/描述/类型 + 当前值(字典值可读化) -->
+          <AppAccordion title="属性含义" :default-open="false">
+            <p v-if="attrDictLoading" class="muted">加载属性字典中…</p>
+            <p v-else-if="attrDictError" class="error-text">属性字典加载失败:{{ attrDictError }}</p>
+            <p v-else-if="!attrDict.length" class="muted">无属性字典(需店铺配置 OPI 凭据 + 有 typeId)</p>
+            <template v-else>
+              <p v-if="dictValuesLoading" class="muted" style="margin-bottom: 8px">正在加载字典值(可读名称)…</p>
+              <div class="attr-dict-table">
+                <div class="attr-dict-row attr-dict-header">
+                  <span>ID</span>
+                  <span>属性名</span>
+                  <span>类型</span>
+                  <span>当前值</span>
+                </div>
+                <div
+                  v-for="a in normalizeOpiAttrs(item)"
+                  :key="a.id"
+                  class="attr-dict-row"
+                  :title="attrDictMap.get(a.id)?.description || ''"
+                >
+                  <span class="attr-dict-id">{{ a.id }}</span>
+                  <span class="attr-dict-name">
+                    {{ attrDictMap.get(a.id)?.name || '(未在字典中)' }}
+                    <span v-if="attrDictMap.get(a.id)?.is_required" class="attr-required">*</span>
+                  </span>
+                  <span class="attr-dict-type">{{ attrDictMap.get(a.id)?.type || '—' }}</span>
+                  <span class="attr-dict-value">{{ formatAttrValue(a) }}</span>
+                </div>
+              </div>
+            </template>
+          </AppAccordion>
           <!-- 可折叠的原始 OPI JSON -->
           <details class="opi-raw-json">
             <summary>原始 OPI JSON</summary>
@@ -482,6 +727,49 @@ const sourceStatuses = computed(() => {
 }
 .opi-raw-json summary:hover {
   color: #374151;
+}
+/* 属性含义表 */
+.attr-dict-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.attr-dict-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 70px 1.5fr;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  align-items: baseline;
+}
+.attr-dict-row:nth-child(even) {
+  background: #f9fafb;
+}
+.attr-dict-header {
+  font-weight: 600;
+  color: #6b7280;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 6px;
+}
+.attr-dict-id {
+  font-family: monospace;
+  color: #6b7280;
+}
+.attr-dict-name {
+  font-weight: 500;
+  color: #1f2937;
+}
+.attr-required {
+  color: #dc2626;
+}
+.attr-dict-type {
+  color: #7c3aed;
+  font-size: 11px;
+}
+.attr-dict-value {
+  color: #374151;
+  word-break: break-all;
 }
 /* 数据源采集状态 chip */
 .source-status-grid {

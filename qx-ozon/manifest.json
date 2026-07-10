@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "MY",
+  "name": "QX",
   "version": "0.13.31.1",
-  "description": "MY",
+  "description": "QX Ozon",
   "permissions": [
     "storage",
     "contextMenus",

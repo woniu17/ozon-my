@@ -724,23 +724,18 @@
       db: window.JZCollectorDB,
       onPushClick: async () => {
         // 把本地桶 status='local' 全部全源采集到 collect_box_v2
-        // 委托给 ozon-search.js 的 pushBucketToCollectBoxV2(collectBySkus + 组装 CollectedVariant)
+        // pushBucketToCollectBoxV2 已移至 shared-utils.js,所有页面都可用
         try {
-          if (!window.JZCollectorDB) return;
-          const all = await window.JZCollectorDB.getAllSales({ status: 'local' });
-          if (!all.length) {
-            _collectorPanel?.toast('本地桶无待推送', 'info', 1500);
-            return;
-          }
+          if (!window.JZCollectorDB) return { ok: false, message: 'IndexedDB 未就绪' };
           if (typeof window.jzPushBucketToCollectBoxV2 === 'function') {
             const res = await window.jzPushBucketToCollectBoxV2();
             _collectorPanel?.toast(res?.message || '推送完成', res?.ok ? 'success' : 'error', 3000);
-          } else {
-            // ozon-search.js 未注入(非搜索页),PDP 页请用侧边栏"采集"按钮走单采全源
-            _collectorPanel?.toast('全源采集需在搜索页使用,PDP 页请用"采集"按钮', 'info', 3000);
+            return res;
           }
+          return { ok: false, message: '推送功能未就绪,请刷新页面重试' };
         } catch (e) {
           _collectorPanel?.toast(e.message || '推送失败', 'error', 2500);
+          return { ok: false, message: e.message || '推送失败' };
         }
       },
       onClearClick: () => window.JZCollectorDB?.clearSales(),
@@ -773,6 +768,8 @@
       // 不传 onKeywordsStart 让 panel 自然降级（按钮无响应）
     });
     _collectorPanel.mount();
+    // 暴露 jzCollectorToast 让 shared-utils.js 的 pushBucketToCollectBoxV2 能调 panel toast
+    window.jzCollectorToast = (msg, type, duration) => _collectorPanel?.toast?.(msg, type, duration);
     _collectorPanel.setRunning(panelState.enabled);
     onlyWithSales = _collectorPanel.getInitialSalesFilter();
   }

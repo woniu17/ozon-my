@@ -60,6 +60,8 @@ function ensureMigrations() {
   }
   // collect_box_v2:改为以 (store_id, sku) 为 key,多变体拆成多条记录
   migrateCollectBoxV2BySku(db);
+  // collect_box_v2:增加 collect_source 列(功能来源)
+  migrateCollectBoxV2CollectSource(db);
 }
 
 // collect_box_v2 迁移:从 anchor_sku 维度(一条含多变体)改为 sku 维度(一变体一条)
@@ -176,6 +178,16 @@ function migrateCollectBoxV2BySku(db) {
   // 重建 anchor_sku 普通索引(用于同组变体关联查询)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_cbv2_anchor_sku ON collect_box_v2(anchor_sku)`);
   console.log('[db] migration: ensured unique index uniq_cbv2_store_sku on collect_box_v2');
+}
+
+// collect_box_v2 迁移:增加 collect_source 列(功能来源:详情页一键采集 / MY采集器 / agent)
+function migrateCollectBoxV2CollectSource(db) {
+  const cbv2Cols = db.prepare(`PRAGMA table_info(collect_box_v2)`).all();
+  const hasCollectSourceCol = cbv2Cols.some((c) => c.name === 'collect_source');
+  if (!hasCollectSourceCol) {
+    db.exec(`ALTER TABLE collect_box_v2 ADD COLUMN collect_source TEXT`);
+    console.log('[db] migration: added column collect_box_v2.collect_source');
+  }
 }
 
 // 直接运行时初始化(node src/db/index.js)

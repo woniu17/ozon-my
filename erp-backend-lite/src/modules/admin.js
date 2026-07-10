@@ -448,7 +448,7 @@ router.get('/admin/api/collect-box-v2', (req, res, next) => {
 
     const rows = db
       .prepare(
-        `SELECT id, store_id, sku, anchor_sku, source_page_url,
+        `SELECT id, store_id, sku, anchor_sku, source_page_url, collect_source,
                 collected_at, created_at, variants_json
          FROM collect_box_v2 ${whereSql}
          ORDER BY created_at DESC
@@ -476,6 +476,7 @@ router.get('/admin/api/collect-box-v2', (req, res, next) => {
             sku: r.sku,
             anchorSku: r.anchor_sku,
             sourcePageUrl: r.source_page_url,
+            collectSource: r.collect_source || '',
             collectedAt: r.collected_at,
             createdAt: r.created_at,
             primaryImage,
@@ -489,6 +490,101 @@ router.get('/admin/api/collect-box-v2', (req, res, next) => {
         pageSize,
       })
     );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 属性字典 / 类目名 / 字典值查询(把数字 ID 翻译成可读名称)──
+// 注意:这三个路由必须放在 /:id 路由之前,否则 "category-names" 等会被当成 :id 匹配。
+
+// GET /admin/api/collect-box-v2/attribute-dictionary
+// query: ?storeId=&categoryId=&typeId=
+// 返回该类目+类型下所有属性描述:[{id, name, description, type, is_required, dictionary_id, ...}]
+router.get('/admin/api/collect-box-v2/attribute-dictionary', async (req, res, next) => {
+  try {
+    const storeId = String(req.query.storeId || '');
+    const categoryId = Number(req.query.categoryId) || 0;
+    const typeId = Number(req.query.typeId) || 0;
+    if (!storeId || !categoryId || !typeId) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'storeId/categoryId/typeId 必填'));
+    }
+    const store = readStores().find((s) => s.id === storeId);
+    if (!store) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '店铺不存在: ' + storeId));
+    const attrs = await opi.descriptionCategoryAttributes(store, {
+      description_category_id: categoryId,
+      type_id: typeId,
+    });
+    res.json(ok(attrs));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /admin/api/collect-box-v2/category-names
+// query: ?storeId=&typeId=
+// 返回 {descriptionCategoryId, categoryName, typeName} —— 按 typeId 在类目树中 DFS 查找,
+// 返回该 type 所属的 description_category_id(父节点) + 类目名 + 类型名
+router.get('/admin/api/collect-box-v2/category-names', async (req, res, next) => {
+  try {
+    const storeId = String(req.query.storeId || '');
+    const typeId = Number(req.query.typeId) || 0;
+    if (!storeId || !typeId) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'storeId/typeId 必填'));
+    }
+    const store = readStores().find((s) => s.id === storeId);
+    if (!store) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '店铺不存在: ' + storeId));
+    const tree = await opi.descriptionCategoryTree(store);
+    // DFS:在类目树中找 type_id === typeId 的节点(叶子层),取其 type_name,
+    // 并从父节点取 description_category_id + category_name
+    let descriptionCategoryId = 0;
+    let categoryName = '';
+    let typeName = '';
+    function dfs(node, parent) {
+      if (Number(node.type_id) === typeId) {
+        typeName = node.type_name || '';
+        if (parent) {
+          descriptionCategoryId = Number(parent.description_category_id) || 0;
+          categoryName = parent.category_name || '';
+        }
+        return true;
+      }
+      if (Array.isArray(node.children)) {
+        for (const child of node.children) {
+          if (dfs(child, node)) return true;
+        }
+      }
+      return false;
+    }
+    for (const root of tree) {
+      if (dfs(root, null)) break;
+    }
+    res.json(ok({ descriptionCategoryId, categoryName, typeName }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /admin/api/collect-box-v2/attribute-values
+// query: ?storeId=&categoryId=&typeId=&attributeId=
+// 返回字典属性的可选值:[{id, value, info, picture}]
+router.get('/admin/api/collect-box-v2/attribute-values', async (req, res, next) => {
+  try {
+    const storeId = String(req.query.storeId || '');
+    const categoryId = Number(req.query.categoryId) || 0;
+    const typeId = Number(req.query.typeId) || 0;
+    const attributeId = Number(req.query.attributeId) || 0;
+    if (!storeId || !categoryId || !typeId || !attributeId) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'storeId/categoryId/typeId/attributeId 必填'));
+    }
+    const store = readStores().find((s) => s.id === storeId);
+    if (!store) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '店铺不存在: ' + storeId));
+    const values = await opi.descriptionCategoryAttributeValues(store, {
+      attribute_id: attributeId,
+      description_category_id: categoryId,
+      type_id: typeId,
+    });
+    res.json(ok(values));
   } catch (e) {
     next(e);
   }
@@ -511,6 +607,7 @@ router.get('/admin/api/collect-box-v2/:id', (req, res, next) => {
         sku: row.sku,
         anchorSku: row.anchor_sku,
         sourcePageUrl: row.source_page_url,
+        collectSource: row.collect_source || '',
         variants: safeParseJson(row.variants_json) || [],
         rawBySource: safeParseJson(row.raw_by_source_json) || {},
         synthesizedItems: safeParseJson(row.synthesized_items_json) || [],

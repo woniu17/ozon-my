@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS collect_box_v2 (
   sku                    TEXT NOT NULL,            -- 本记录对应的 SKU(变体 SKU)
   anchor_sku             TEXT NOT NULL,            -- 母体 SKU(同组变体共享,用于关联查询)
   source_page_url        TEXT,                     -- 采集源 PDP URL
+  collect_source         TEXT,                     -- 功能来源(详情页一键采集 / MY采集器 / agent)
   variants_json          TEXT NOT NULL,            -- JSON: 单条 CollectedVariant(本记录对应的变体)
   raw_by_source_json     TEXT,                     -- JSON: 本变体的数据源原始响应(dom/sellerPortal[sku]/pageJson[sku]/...)
   synthesized_items_json TEXT,                     -- JSON: 单条 synthesized item(本变体的合成跟卖预览)

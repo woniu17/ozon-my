@@ -1957,6 +1957,7 @@
     await window.sendMessage('pushCollectBoxV2', {
       anchorSku: String(anchorSku || anchorRow?.sku || ''),
       sourcePageUrl: window.location.href,
+      collectSource: '详情页一键采集',
       variants: collectedVariants,
       rawBySource,
       synthesizedItems,
@@ -1969,7 +1970,10 @@
   // 或卖家自有视频),必须先经 seller 后台 /api/media-storage/upload-file 转存。转存失败或本页
   // 无视频 → 返回 null,上游优雅降级为不带视频、不阻断采集/上架。
   // onLabel(可选):进度文案回调(如把提交按钮文字改成「转存视频…」)。
+  // 一键采集默认不转存视频(转存耗时 40s+/SKU 且易触发 upload-file 404);需要时改 true。
+  const COLLECT_VIDEO_ENABLED = false;
   async function captureAndTransferPageVideoMedia(onLabel) {
+    if (!COLLECT_VIDEO_ENABLED) return null;
     try {
       const g = window.extractStateData('state-webGallery');
       const vids = Array.isArray(g?.videos) ? g.videos : [];
