@@ -100,14 +100,14 @@ export function toOpiItem(it) {
     if (it.type_id != null && Number(it.type_id) > 0) opiItem.type_id = Number(it.type_id);
     if (it.description_category_id != null && Number(it.description_category_id) > 0)
       opiItem.description_category_id = Number(it.description_category_id);
-    if (it.new_description_category_id != null)
-      opiItem.new_description_category_id = Number(it.new_description_category_id) || 0;
-    if (it.barcode) opiItem.barcode = String(it.barcode);
+    // if (it.new_description_category_id != null)
+    //   opiItem.new_description_category_id = Number(it.new_description_category_id) || 0;
+    // if (it.barcode) opiItem.barcode = String(it.barcode);
     if (it.video_url) opiItem.video_url = String(it.video_url);
     if (it.video_cover) opiItem.video_cover = String(it.video_cover);
     // 末尾按约定顺序追加:images → images360 → pdf_list → attributes → complex_attributes
     opiItem.images = Array.isArray(it.images) ? it.images : [];
-    if (Array.isArray(it.images360)) opiItem.images360 = it.images360;
+    // if (Array.isArray(it.images360)) opiItem.images360 = it.images360;
     if (Array.isArray(it.pdf_list)) opiItem.pdf_list = it.pdf_list;
     opiItem.attributes = it.attributes || [];
     if (it.complex_attributes != null) opiItem.complex_attributes = it.complex_attributes;
@@ -166,8 +166,8 @@ export function toOpiItem(it) {
   if (typeId > 0) opiItem.type_id = typeId;
   if (descriptionCategoryId > 0) opiItem.description_category_id = descriptionCategoryId;
 
-  const barcode = sv?._searchMeta?.barcodes?.[0] || it.barcode || '';
-  if (barcode) opiItem.barcode = String(barcode);
+  // const barcode = sv?._searchMeta?.barcodes?.[0] || it.barcode || '';
+  // if (barcode) opiItem.barcode = String(barcode);
 
   // 末尾按约定顺序追加:images → images360 → pdf_list → attributes → complex_attributes
   opiItem.images = images;

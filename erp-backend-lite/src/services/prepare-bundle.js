@@ -121,35 +121,48 @@ export function transformItemForPortal(item) {
   }
 
   // 5.3 complex_attributes(视频/PDF 等):bundleComplexAttrs 透传
+  // 兼容两种输入形状:
+  //   - 扁平: {attribute_id, complex_id, values}(来自 sv._bundleComplexAttrs,实际数据)
+  //   - 容器: {attributes: [{attribute_id, complex_id, values}]}(旧假设,保留兼容)
+  // 同一 complex_id 的多个属性属于同一组(如一个视频 = URL+时长+封面),按 complex_id 分组合并
   const complex_attributes = [];
   if (Array.isArray(item.bundleComplexAttrs)) {
+    const toInnerAttr = (ba) => {
+      const attrId = Number(ba.attribute_id || ba.id || 0);
+      if (!attrId) return null;
+      const vals = Array.isArray(ba.values)
+        ? ba.values.filter(
+            (v) =>
+              v &&
+              ((v.value != null && v.value !== '') ||
+                (v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0))
+          )
+        : [];
+      if (vals.length === 0) return null;
+      return {
+        complex_id: Number(ba.complex_id) || 0,
+        id: attrId,
+        values: vals.map((v) => ({
+          value: String(v.value ?? ''),
+          ...(v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0
+            ? { dictionary_value_id: Number(v.dictionary_value_id) }
+            : {}),
+        })),
+      };
+    };
+    // 归一化为单属性列表,再按 complex_id 分组
+    const groups = new Map();
     for (const ca of item.bundleComplexAttrs) {
-      if (!ca || !Array.isArray(ca.attributes)) continue;
-      const innerAttrs = ca.attributes
-        .map((ba) => {
-          const attrId = Number(ba.attribute_id || ba.id || 0);
-          if (!attrId) return null;
-          const vals = Array.isArray(ba.values)
-            ? ba.values.filter(
-                (v) =>
-                  v &&
-                  ((v.value != null && v.value !== '') ||
-                    (v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0))
-              )
-            : [];
-          if (vals.length === 0) return null;
-          return {
-            complex_id: Number(ba.complex_id) || 0,
-            id: attrId,
-            values: vals.map((v) => ({
-              value: String(v.value ?? ''),
-              ...(v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0
-                ? { dictionary_value_id: Number(v.dictionary_value_id) }
-                : {}),
-            })),
-          };
-        })
-        .filter(Boolean);
+      if (!ca) continue;
+      const list = Array.isArray(ca.attributes) ? ca.attributes : [ca];
+      for (const ba of list) {
+        const cid = Number(ba?.complex_id) || 0;
+        if (!groups.has(cid)) groups.set(cid, []);
+        groups.get(cid).push(ba);
+      }
+    }
+    for (const bas of groups.values()) {
+      const innerAttrs = bas.map(toInnerAttr).filter(Boolean);
       if (innerAttrs.length > 0) {
         complex_attributes.push({ attributes: innerAttrs });
       }
