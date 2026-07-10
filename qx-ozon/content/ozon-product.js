@@ -1713,7 +1713,12 @@
     } = ctx;
     const now = Date.now();
     // 字段包装:{ value, source, sourceDetail?, collectedAt }
-    const sf = (value, source, sourceDetail) => ({ value, source, ...(sourceDetail ? { sourceDetail } : {}), collectedAt: now });
+    const sf = (value, source, sourceDetail) => ({
+      value,
+      source,
+      ...(sourceDetail ? { sourceDetail } : {}),
+      collectedAt: now,
+    });
 
     // ── DOM 数据源(PDP 页面元素,listing 级,只采一次)──
     const domProduct = anchorProduct || null;
@@ -1781,7 +1786,10 @@
       const svName = svCat?.name || '';
       const domName = r.name || aspectVariant.title || '';
       const nameVal = window.jzPreferSourceName ? window.jzPreferSourceName(svName, domName) : domName || svName;
-      const nameSource = svName && window.jzPreferSourceName && /[一-龥]/.test(domName) && !/[一-龥]/.test(svName) ? 'seller-portal' : 'dom';
+      const nameSource =
+        svName && window.jzPreferSourceName && /[一-龥]/.test(domName) && !/[一-龥]/.test(svName)
+          ? 'seller-portal'
+          : 'dom';
 
       // 图片:page-json gallery > sv 4194/4195 > DOM coverImage
       let imagesVal = gallery;
@@ -1807,8 +1815,16 @@
         sku: sf(sku, 'dom', 'URL 正则 /product/.*-(\\d{5,})'),
         url: sf(r.link || '', 'dom'),
         isAnchor,
-        name: sf(nameVal, nameSource, nameSource === 'seller-portal' ? 'sv.attributes[4180]' : 'aria-label/alt/textContent'),
-        brand: sf(svCat?.brand || domProduct?.brand || null, svCat?.brand ? 'seller-portal' : 'dom', svCat?.brand ? 'sv.attributes[85]' : 'extractProductData'),
+        name: sf(
+          nameVal,
+          nameSource,
+          nameSource === 'seller-portal' ? 'sv.attributes[4180]' : 'aria-label/alt/textContent'
+        ),
+        brand: sf(
+          svCat?.brand || domProduct?.brand || null,
+          svCat?.brand ? 'seller-portal' : 'dom',
+          svCat?.brand ? 'sv.attributes[85]' : 'extractProductData'
+        ),
         categoryPath: sf(sv?.categories || [], 'seller-portal', 'sv.categories'),
         descriptionCategoryId: sf(sv?.description_category_id || null, 'seller-portal'),
         price: sf(aspectVariant.priceRub || aspectVariant.price || 0, aspectVariant.priceRub ? 'ssr-aspects' : 'dom'),
@@ -1817,8 +1833,20 @@
         priceCny: sf(aspectVariant.price || 0, 'computed', '_rubToCny'),
         oldPrice: sf(domProduct?.originalPrice || 0, 'dom'),
         discount: sf(domProduct?.statistics?.discount || 0, 'computed'),
-        mainImage: sf(svCat?.mainImage || r.image || domProduct?.mainImage || '', svCat?.mainImage ? 'seller-portal' : 'dom', svCat?.mainImage ? 'sv.attributes[4194]' : '<img src>'),
-        images: sf(imagesVal, imagesSource, imagesSource === 'page-json' ? 'fetchVariantGallery widgetStates' : imagesSource === 'seller-portal' ? 'sv.attributes[4195]' : 'coverImage'),
+        mainImage: sf(
+          svCat?.mainImage || r.image || domProduct?.mainImage || '',
+          svCat?.mainImage ? 'seller-portal' : 'dom',
+          svCat?.mainImage ? 'sv.attributes[4194]' : '<img src>'
+        ),
+        images: sf(
+          imagesVal,
+          imagesSource,
+          imagesSource === 'page-json'
+            ? 'fetchVariantGallery widgetStates'
+            : imagesSource === 'seller-portal'
+              ? 'sv.attributes[4195]'
+              : 'coverImage'
+        ),
         imageSource: sf(imageSource, 'computed'),
         videoUrl: sf(collectVideoMedia?.videoUrl || null, 'video-transcode', 'SW uploadFollowSellVideo'),
         videoCover: sf(collectVideoMedia?.videoCover || null, 'video-transcode'),
@@ -1827,7 +1855,11 @@
         width: sf(svCat?.widthMm || null, 'seller-portal', 'sv.attributes[9455]'),
         height: sf(svCat?.heightMm || null, 'seller-portal', 'sv.attributes[9456]'),
         gtin: sf(svCat?.gtin || null, 'seller-portal', 'sv.attributes[7822]'),
-        richContent: sf(richContent || collectAllRichContent || null, richContent ? 'page-json' : collectAllRichContent ? 'page-json' : 'computed', richContent ? 'fetchVariantGallery' : 'jzCollectPageRichContent'),
+        richContent: sf(
+          richContent || collectAllRichContent || null,
+          richContent ? 'page-json' : collectAllRichContent ? 'page-json' : 'computed',
+          richContent ? 'fetchVariantGallery' : 'jzCollectPageRichContent'
+        ),
         breadcrumbs: sf(domBreadcrumbs || null, 'dom', 'extractBreadcrumbs'),
         hashtags: sf(domHashtags || null, 'dom', 'extractKeywords/webHashtags'),
         scrapedDims: sf(scrapedDims, 'dom', 'extractCharacteristics'),
@@ -2304,9 +2336,8 @@
       if (!mainImage) {
         return;
       }
-      // 1688 的 imageUrl 参数已不工作（被 OCR 转关键词），改成跳到以图搜款页 +
-      // 极掌注入的 __jzcOzonImg 参数；1688-image-search.js content script 会拦截
-      // 并自动 fetch 该图 → 注入 file input → 触发 1688 原生以图搜款。
+      // 跳到 1688 以图搜款页(原生 imageSearch tab),用户手动上传图片。
+      // 旧版的 __jzcOzonImg 自动注入已随 1688-image-search.js content script 移除。
       const url = `https://s.1688.com/youyuan/index.htm?tab=imageSearch&__jzcOzonImg=${encodeURIComponent(mainImage)}`;
       window.open(url, '_blank');
     });
@@ -7328,7 +7359,10 @@
     async function loadListingTemplates() {
       try {
         const resp = await new Promise((resolve) => {
-          chrome.runtime.sendMessage({ action: 'erpApi', method: 'GET', path: '/admin/api/listing-templates' }, resolve);
+          chrome.runtime.sendMessage(
+            { action: 'erpApi', method: 'GET', path: '/admin/api/listing-templates' },
+            resolve
+          );
         });
         // erpApi 代理返回 { ok, data: <后端响应体> },后端响应体本身是 { ok, data: [...] }
         // 所以真正的数组在 resp.data.data
@@ -7572,8 +7606,14 @@
     }
     // 监听面板输入变化(防抖触发预览刷新)
     const _previewInputClasses = new Set([
-      'ozon-helper-mv-price', 'ozon-helper-mv-oldprice', 'ozon-helper-mv-minprice', 'ozon-helper-mv-stock',
-      'ozon-helper-mv-weight', 'ozon-helper-mv-depth', 'ozon-helper-mv-width', 'ozon-helper-mv-height',
+      'ozon-helper-mv-price',
+      'ozon-helper-mv-oldprice',
+      'ozon-helper-mv-minprice',
+      'ozon-helper-mv-stock',
+      'ozon-helper-mv-weight',
+      'ozon-helper-mv-depth',
+      'ozon-helper-mv-width',
+      'ozon-helper-mv-height',
       'ozon-helper-mv-offerid',
     ]);
     panel.addEventListener('input', (e) => {

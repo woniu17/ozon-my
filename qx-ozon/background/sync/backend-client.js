@@ -142,22 +142,6 @@
     });
   }
 
-  async function createAiListingDraft({ candidateId, draft, storeId }) {
-    return authedFetch(`/ozon/collect-box/${encodeURIComponent(candidateId)}/ai-listing-draft`, {
-      method: 'POST',
-      headers: storeId ? { 'x-ozon-store-id': storeId } : {},
-      body: JSON.stringify(draft || {}),
-    });
-  }
-
-  async function publishAiListingDraft({ draftId, publish, storeId }) {
-    return authedFetch(`/ozon/collect-box/${encodeURIComponent(draftId)}/ai-listing-draft/publish`, {
-      method: 'POST',
-      headers: storeId ? { 'x-ozon-store-id': storeId } : {},
-      body: JSON.stringify(publish || {}),
-    });
-  }
-
   async function registerBrowserAgent(payload) {
     return authedFetch('/browser-agents/register', {
       method: 'POST',
@@ -210,8 +194,6 @@
     importWarehouses,
     getVisibleStores,
     collectSource,
-    createAiListingDraft,
-    publishAiListingDraft,
     registerBrowserAgent,
     heartbeatBrowserAgent,
     claimNextBrowserAgentJob,

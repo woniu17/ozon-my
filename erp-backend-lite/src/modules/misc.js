@@ -67,11 +67,11 @@ router.get('/ozon/description-category/:typeId/attributes', storeGuard, async (r
   }
 });
 
-// GET /ozon/collect-box/status-counts(popup 状态计数)
-router.get('/ozon/collect-box/status-counts', storeGuard, (req, res, next) => {
+// GET /ozon/collect-box-v2/status-counts(popup 状态计数)
+router.get('/ozon/collect-box-v2/status-counts', storeGuard, (req, res, next) => {
   try {
     const total = db
-      .prepare(`SELECT COUNT(*) as n FROM collect_box WHERE store_id=?`)
+      .prepare(`SELECT COUNT(*) as n FROM collect_box_v2 WHERE COALESCE(store_id, '') = COALESCE(?, '')`)
       .get(req.storeId).n;
     res.json({ total });
   } catch (e) {

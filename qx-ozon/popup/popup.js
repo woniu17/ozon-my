@@ -56,7 +56,6 @@
 
   // nav badges
   const navBadgeProducts = document.getElementById('nav-badge-products');
-  const navBadgeCollect = document.getElementById('nav-badge-collect');
 
   // 采集器实时大屏
   const collectorMonSection = document.getElementById('collector-mon-section');
@@ -440,12 +439,8 @@
 
   // ─── Counts (feed nav badges only) ───
   const loadCounts = async () => {
-    const counts = { collect: 0, products: 0 };
-    const [c, p] = await Promise.all([
-      sendMessage({ action: 'getCollectCount' }).catch(() => null),
-      sendMessage({ action: 'getProductStatusCounts' }).catch(() => null),
-    ]);
-    if (c?.ok) counts.collect = c.data?.total ?? c.data?.data?.total ?? 0;
+    const counts = { products: 0 };
+    const p = await sendMessage({ action: 'getProductStatusCounts' }).catch(() => null);
     if (p?.ok && p.data) {
       const v = p.data;
       counts.products =
@@ -460,12 +455,6 @@
       navBadgeProducts.style.display = '';
     } else {
       navBadgeProducts.style.display = 'none';
-    }
-    if (counts.collect > 0) {
-      navBadgeCollect.textContent = String(counts.collect);
-      navBadgeCollect.style.display = '';
-    } else {
-      navBadgeCollect.style.display = 'none';
     }
   };
 
@@ -649,24 +638,7 @@
       });
     }
 
-    // 3. neutral: 采集箱待上架
-    if (counts.collect > 0) {
-      signals.push({
-        variant: 'neutral',
-        icon: 'archive',
-        title: `采集箱待上架 ${counts.collect} 个`,
-        sub: '',
-        btnLabel: '去上架',
-        btnGhost: true,
-        onAction: () =>
-          sendMessage({
-            action: 'openFrontend',
-            path: '#listings',
-          }),
-      });
-    }
-
-    // 4. bad: 跟卖任务失败
+    // 3. bad: 跟卖任务失败
     if (followSig?.kind === 'follow-failed') {
       const errPreview = (followSig.sample?.errorMessage || '后台处理失败').toString().slice(0, 50);
       signals.push({
@@ -790,8 +762,6 @@
       'agent.ping': '连接检测',
       'collect.hot_products': '热卖商品采集',
       'collect.product_detail': '商品详情采集',
-      'listing.create_draft': '生成上架草稿',
-      'listing.publish_draft': '发布商品',
     })[type] ||
     type ||
     'AI Agent 任务';

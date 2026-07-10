@@ -18,12 +18,10 @@ function resolveAction(method, path) {
   // 上架提交
   if (path === '/ozon/products/import' && method === 'POST') return { action: 'listing.import' };
   if (path === '/ozon/products/import-report' && method === 'POST') return { action: 'listing.importReport' };
-  // 采集箱
-  if (path === '/ozon/collect-box' && method === 'POST') return { action: 'collect.create' };
-  if (path === '/ozon/collect-box/batch' && method === 'POST') return { action: 'collect.batchCreate' };
-  m = /^\/admin\/api\/collect-box\/([^/]+)$/.exec(path);
+  // 采集箱 v2
+  if (path === '/ozon/collect-box/v2' && method === 'POST') return { action: 'collect.create' };
+  m = /^\/admin\/api\/collect-box-v2\/([^/]+)$/.exec(path);
   if (m && method === 'DELETE') return { action: 'collect.delete', target: m[1] };
-  if (m && method === 'PATCH') return { action: 'collect.update', target: m[1] };
   // 配置变更
   if (path === '/app-config' && method === 'PUT') return { action: 'config.update' };
   if (path === '/watermark-templates' && method === 'POST') return { action: 'watermark.create' };

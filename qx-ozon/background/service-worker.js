@@ -20,10 +20,10 @@ if (typeof chrome !== 'undefined') {
       removeAll: (cb) => {
         try {
           cb && cb();
-        } catch (_) { }
+        } catch (_) {}
       },
-      create: () => { },
-      onClicked: { addListener: () => { }, removeListener: () => { } },
+      create: () => {},
+      onClicked: { addListener: () => {}, removeListener: () => {} },
     };
   }
   if (typeof chrome.notifications === 'undefined') {
@@ -31,14 +31,14 @@ if (typeof chrome !== 'undefined') {
       create: (id, opts, cb) => {
         try {
           cb && cb(typeof id === 'string' ? id : '');
-        } catch (_) { }
+        } catch (_) {}
       },
       clear: (id, cb) => {
         try {
           cb && cb(true);
-        } catch (_) { }
+        } catch (_) {}
       },
-      onClicked: { addListener: () => { }, removeListener: () => { } },
+      onClicked: { addListener: () => {}, removeListener: () => {} },
     };
   }
   if (typeof chrome.cookies === 'undefined') {
@@ -48,7 +48,7 @@ if (typeof chrome !== 'undefined') {
         if (typeof cb === 'function') {
           try {
             cb(empty);
-          } catch (_) { }
+          } catch (_) {}
           return;
         }
         return Promise.resolve(empty);
@@ -73,7 +73,6 @@ try {
     'sync/sync-engine.js',
     'agent/actions.js',
     'agent/collect-actions.js',
-    'agent/listing-actions.js',
     'agent/agent-runtime.js'
   );
 } catch (e) {
@@ -151,12 +150,6 @@ try {
   // 但前台每 30s 会重发心跳，恢复也快）
   const COLLECTOR_STALE_MS = 90 * 1000;
   const collectorTabs = new Map(); // tabId → { tabId, stats, currentKeyword, autoScrollerRunning, bucketCount, url, title, ts }
-
-  // pushSourceCollect in-flight 合并(plan v3 子项 ② P1 修复):
-  // chrome.storage 的 dedupe 只在请求完成写 cache 后才命中。如果用户快速连点 5 次,
-  // 5 次都可能在第一次 fetch 返回前 miss cache,各自发请求 → backend 收到 5 次重复 upsert。
-  // 加 SW 内存级 Map:key 命中时 await 同一个 in-flight Promise,合并并发。
-  const pendingCollects = new Map(); // cacheKey → Promise<{ok, dedupeHit, data, ...}>
 
   // ── 极掌算价：CNY→RUB 实时汇率 ──
   // 每日刷新一次写入 chrome.storage.local。content/jzc-calc.js 监听 storage 变化自动重算
@@ -304,10 +297,10 @@ try {
                 localStorage.removeItem('currentOzonStoreId');
                 // 刷新页面,admin.js 检测到无 token 自动显示登录视图
                 location.reload();
-              } catch { }
+              } catch {}
             },
           });
-        } catch { }
+        } catch {}
       }
     } catch (e) {
       console.warn('[ServiceWorker] clearWebAuthTabs failed:', e?.message);
@@ -337,7 +330,7 @@ try {
           resolvedBackendUrl = url;
           return url;
         }
-      } catch { }
+      } catch {}
     }
     resolvedBackendUrl = BACKEND_URLS[BACKEND_URLS.length - 1];
     return resolvedBackendUrl;
@@ -503,7 +496,7 @@ try {
         await new Promise((r) => chrome.storage.local.remove(stale, r));
         console.log(`[SW] cleared ${stale.length} v1 bundle cache entries (cross-store risk)`);
       }
-    } catch { }
+    } catch {}
   })();
 
   // SW 启动时清理 24h 过期的采集去重 cache(plan v3 子项 ②)。
@@ -536,7 +529,7 @@ try {
         console.log(`[SW] cleared ${expired.length} expired collect dedupe entries (>24h)`);
       }
       await new Promise((r) => chrome.storage.local.set({ [_COLLECT_CLEANUP_KEY]: { at: now } }, r));
-    } catch { }
+    } catch {}
   })();
 
   const fetchBundleByVariantId = async (sku, variantId, companyId, opts = {}) => {
@@ -554,7 +547,7 @@ try {
           console.log(`[searchVariants][fetchBundleByVariantId] cache hit sku=${sku} variantId=${variantId}`);
           return cached.item;
         }
-      } catch { }
+      } catch {}
     }
 
     // L2: 真调 endpoint(有副作用)
@@ -582,7 +575,7 @@ try {
       chrome.storage.local.set({
         [cacheKey]: { at: Date.now(), item, sku, bundleId: resp.bundle_id || null },
       });
-    } catch { }
+    } catch {}
 
     return item;
   };
@@ -614,7 +607,7 @@ try {
         if (cached && Date.now() - (cached.at || 0) < _SELLER_TREE_TTL_MS && cached.tree) {
           return cached.tree;
         }
-      } catch { }
+      } catch {}
     }
     const resp = await fetchSellerPortal(
       '/seller-tree/get-by-company-id',
@@ -632,7 +625,7 @@ try {
     if (!tree || typeof tree !== 'object') return null;
     try {
       chrome.storage.local.set({ [cacheKey]: { at: Date.now(), tree } });
-    } catch { }
+    } catch {}
     return tree;
   };
 
@@ -683,11 +676,7 @@ try {
     if (opts.sourceItemId) {
       body.source_item_id = String(opts.sourceItemId);
     }
-    const resp = await fetchSellerPortal(
-      '/seller-prototype/create-bundle',
-      body,
-      _bundlePortalOpts(preferTabId)
-    );
+    const resp = await fetchSellerPortal('/seller-prototype/create-bundle', body, _bundlePortalOpts(preferTabId));
     const bundleId = resp?.bundle_id;
     if (!bundleId) throw new Error('create-bundle 未返回 bundle_id');
     return String(bundleId);
@@ -848,11 +837,7 @@ try {
     if (opts.name) {
       body.name = String(opts.name);
     }
-    const resp = await fetchSellerPortal(
-      '/seller-prototype/upload-bundle',
-      body,
-      _bundlePortalOpts(preferTabId)
-    );
+    const resp = await fetchSellerPortal('/seller-prototype/upload-bundle', body, _bundlePortalOpts(preferTabId));
     const taskId = resp?.upload_task_id;
     if (!taskId) throw new Error('upload-bundle 未返回 upload_task_id');
     return String(taskId);
@@ -1199,7 +1184,7 @@ try {
     try {
       const u = new URL(productUrl, 'https://www.ozon.ru');
       path = u.pathname + u.search;
-    } catch { }
+    } catch {}
     if (!path.startsWith('/')) path = '/' + path;
     let tab;
     try {
@@ -1237,7 +1222,7 @@ try {
           if (typeof v.richAnnotationJson === 'string' && v.richAnnotationJson.trim()) {
             try {
               if (isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim();
-            } catch { }
+            } catch {}
           }
           if (isRichDoc(v)) return JSON.stringify({ content: v.content, version: v.version || 0.3 });
         }
@@ -1432,7 +1417,7 @@ try {
       _sellerPortalLastAt = Date.now();
     });
     // 串行化:下一个调用排在这次放行之后;.catch 防止异常断链(wait 只 await setTimeout,不会 reject)。
-    _sellerPortalGateChain = wait.catch(() => { });
+    _sellerPortalGateChain = wait.catch(() => {});
     return wait;
   };
 
@@ -1458,7 +1443,7 @@ try {
       try {
         const t = await chrome.tabs.get(preferTabId);
         if (t && isOzonUrl(t.url)) target = t; // 来源标签是 live 的(它刚发的消息),不强求 complete
-      } catch { }
+      } catch {}
     }
     if (!target) {
       const tabs = await chrome.tabs.query({ url: ['*://*.ozon.ru/*'] });
@@ -1494,7 +1479,7 @@ try {
           try {
             const j = JSON.parse(text);
             parsedCode = (j && (j.code || (j.error && j.error.code))) || '';
-          } catch { }
+          } catch {}
           return {
             ok: false,
             status: resp.status,
@@ -1610,7 +1595,7 @@ try {
           try {
             const json = JSON.parse(text);
             parsedCode = (json && (json.code || (json.error && json.error.code))) || '';
-          } catch { }
+          } catch {}
           return {
             ok: false,
             status: resp.status,
@@ -1866,7 +1851,7 @@ try {
       if (refreshed) {
         try {
           await setStorage({ [STORAGE_KEYS.token]: refreshed });
-        } catch { }
+        } catch {}
       }
       return response.json();
     } catch (e) {
@@ -2083,13 +2068,7 @@ try {
     });
 
   const createContextMenus = () => {
-    chrome.contextMenus.removeAll(() => {
-      chrome.contextMenus.create({
-        id: 'ozon-image-search-1688',
-        title: '搜索1688货源',
-        contexts: ['image'],
-      });
-    });
+    chrome.contextMenus.removeAll(() => {});
   };
 
   // ── 插件更新检查 ──
@@ -2232,7 +2211,7 @@ try {
             message: '官方下载文件 SHA-256 不匹配，已阻止本次更新提示。请检查后端配置或联系管理员。',
             priority: 2,
           });
-        } catch { }
+        } catch {}
         return;
       }
 
@@ -2543,7 +2522,7 @@ try {
 
   chrome.notifications.onClicked.addListener((notificationId) => {
     if (notificationId.startsWith('follow-sell-fail-')) {
-      chrome.action.openPopup().catch(() => { });
+      chrome.action.openPopup().catch(() => {});
       chrome.notifications.clear(notificationId);
     }
   });
@@ -2594,14 +2573,6 @@ try {
   // 因为 chrome 在 SW 唤醒时不会再触发 onStartup。
   initClientSyncContext();
   initBrowserAgentContext();
-
-  chrome.contextMenus.onClicked.addListener((info) => {
-    if (info.menuItemId !== 'ozon-image-search-1688' || !info.srcUrl) return;
-    const encoded = encodeURIComponent(info.srcUrl);
-    // 走极掌的自动以图搜款流程（1688-image-search.js content script 处理 __jzcOzonImg）
-    const targetUrl = `https://s.1688.com/youyuan/index.htm?tab=imageSearch&__jzcOzonImg=${encoded}`;
-    chrome.tabs.create({ url: targetUrl });
-  });
 
   // tab 关闭时清理采集器心跳记录
   chrome.tabs.onRemoved.addListener((tabId) => {
@@ -2694,7 +2665,7 @@ try {
           try {
             const u = new URL(inputUrl, 'https://www.ozon.ru');
             productPath = u.pathname;
-          } catch { }
+          } catch {}
           if (!productPath.startsWith('/product/')) {
             sendResponse({ ok: false, error: 'not a product url' });
             return;
@@ -2758,12 +2729,12 @@ try {
               seller?.sellerCell?.link ||
               seller?.link ||
               '';
-          } catch { }
+          } catch {}
           // brand
           let brandName = '';
           try {
             brandName = brand?.title || brand?.name || '';
-          } catch { }
+          } catch {}
           // price
           const priceStr = price?.cardPrice || price?.price || price?.originalPrice || '';
           const fields = {
@@ -2946,7 +2917,7 @@ try {
                     deviceId,
                     status: 'FAILED',
                     error: 'lease-busy: 另一台设备正在同步该店铺同类型数据',
-                  }).catch(() => { });
+                  }).catch(() => {});
                 }
               })
               .catch(async (e) => {
@@ -2958,13 +2929,13 @@ try {
                   deviceId,
                   status: 'FAILED',
                   error: String(e?.message || e).slice(0, 500),
-                }).catch(() => { });
+                }).catch(() => {});
               })
           );
         } catch (e) {
           try {
             sendResponse({ ok: false, error: e?.message || String(e) });
-          } catch { }
+          } catch {}
         }
       })();
       return true;
@@ -3158,7 +3129,7 @@ try {
                       if (s && localStorage.getItem('currentOzonStoreId') !== s) {
                         localStorage.setItem('currentOzonStoreId', s);
                       }
-                    } catch { }
+                    } catch {}
                   },
                   args: [token, storeId || null],
                 });
@@ -3194,7 +3165,7 @@ try {
               if (existing[0].windowId != null) {
                 try {
                   await chrome.windows.update(existing[0].windowId, { focused: true });
-                } catch { }
+                } catch {}
               }
               return { ok: true, data: { reused: true } };
             }
@@ -3229,171 +3200,6 @@ try {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'collectProduct': {
-          return {
-            ok: true,
-            data: await apiRequest('POST', `${backendUrl}/ozon/collect-box`, message.product, token, storeId),
-          };
-        }
-        case 'updateCollectBoxItem': {
-          // AI 采集向导回写采集箱条目(标题/属性等)。PATCH 与前端 updateCollectBoxItem 同端点。
-          const cbId = String(message.id || '').trim();
-          if (!cbId) return { ok: false, error: 'id required' };
-          return {
-            ok: true,
-            data: await apiRequest(
-              'PATCH',
-              `${backendUrl}/ozon/collect-box/${cbId}`,
-              message.body || {},
-              token,
-              message.storeId || storeId
-            ),
-          };
-        }
-        case 'pushSourceCollect': {
-          // Multi-source unified ingest. message.sourceId in
-          // 'ozon'|'1688'|'pdd'|'taobao'; message.raw is the platform-specific
-          // raw scraped payload. Backend's source provider does normalization.
-          //
-          // 客户端去重 + 失败重试(plan v3 子项 ②):
-          // - dedupe key 含 backendHost(extension 无 tenantId,用 host 作环境隔离)
-          //   + storeId + sourceId + sku,24h TTL
-          // - 内存级 pendingCollects 合并 in-flight 并发(快速连点 5 次合并为 1 次 POST)
-          // - 网络层失败(5xx / 408 / 429 / network)指数退避,attempt 1 失败等 1s
-          //   再试,attempt 2 失败等 2s 再试,attempt 3 失败直接放弃。总共最多 2 次等待。
-          // - 4xx 业务错误立即返回(401/403/422 重试无意义)
-          // - 成功才写 cache,失败 3 次不写(留给下次重试)
-          // - forceResubmit:true 跳 dedupe(用户主动覆盖)
-          const sourceId = String(message.sourceId || '').trim();
-          if (!sourceId) return { ok: false, error: 'sourceId required' };
-          const sku = String(message?.raw?.sku || '').trim();
-          const forceResubmit = Boolean(message.forceResubmit);
-          // 让调用方(AI 采集向导)用 message.storeId 覆盖扩展全局当前店铺,对齐
-          // followSell 等其他 action 的 `message.storeId || storeId` 写法。否则
-          // 1688 采集会落到全局店铺或 null,前端采集箱按所选店铺过滤就看不到。
-          const effStoreId = message.storeId || storeId;
-          const DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
-
-          let cacheKey = null;
-          if (sku && backendUrl) {
-            try {
-              const host = new URL(backendUrl).host;
-              // sku / sourceId 走 encodeURIComponent,防止 1688/PDD 等 sku 含 `:` `/` 时
-              // 切坏 tuple 边界(当前 ozon sku 都是数字串,留作扩展防御)。
-              cacheKey = `jz-collect-recent-v1:${host}:${encodeURIComponent(effStoreId || 'no-store')}:${encodeURIComponent(sourceId)}:${encodeURIComponent(sku)}`;
-              if (!forceResubmit) {
-                const cached = await new Promise((resolve) => {
-                  chrome.storage.local.get([cacheKey], (d) => resolve(d?.[cacheKey]));
-                });
-                if (cached && Date.now() - (cached.at || 0) < DEDUPE_TTL_MS) {
-                  // 必须把 dedupeHit / lastAt 放进 data — shared-utils.js sendMessage
-                  // wrapper 在 resp.ok=true 时只 resolve(response.data),envelope 字段
-                  // 全丢。下面 success 和 in-flight 合并路径同。
-                  return { ok: true, data: { dedupeHit: true, lastAt: cached.at, result: null } };
-                }
-              }
-            } catch {
-              // 拿不到 host 就跳过 dedupe,保留原始 fetch 路径
-              cacheKey = null;
-            }
-          }
-
-          // in-flight 合并:并发同 cacheKey 的请求 await 同一个 Promise
-          if (cacheKey && !forceResubmit && pendingCollects.has(cacheKey)) {
-            try {
-              const resp = await pendingCollects.get(cacheKey);
-              // 给后到的并发请求标 dedupeHit,UI 区分"刚刚已采集"。
-              // resp.data 形如 { dedupeHit, lastAt, result } — 仅覆盖 dedupeHit
-              return resp?.ok ? { ok: true, data: { ...resp.data, dedupeHit: true } } : resp;
-            } catch (e) {
-              return { ok: false, error: e?.message || 'pending request failed' };
-            }
-          }
-
-          const collectPromise = (async () => {
-            const MAX_RETRIES = 3;
-            let lastErr = null;
-            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-              try {
-                const body = { raw: message.raw || {} };
-                if (effStoreId) body.storeId = effStoreId; // 后端 body.storeId 优先于 header
-                if (message.resetDraft === true) body.resetDraft = true;
-                const data = await apiRequest(
-                  'POST',
-                  `${backendUrl}/sources/${encodeURIComponent(sourceId)}/collect`,
-                  body,
-                  token,
-                  effStoreId
-                );
-                if (cacheKey) {
-                  try {
-                    await new Promise((r) => chrome.storage.local.set({ [cacheKey]: { at: Date.now() } }, r));
-                  } catch { }
-                }
-                // 把 dedupeHit / lastAt / 后端 result 全塞进 data,let sendMessage 的
-                // resolve(response.data) 一次性递给 content script。
-                return { ok: true, data: { dedupeHit: false, lastAt: null, result: data } };
-              } catch (error) {
-                lastErr = error;
-                const status = error?.status;
-                // 4xx 业务错误(非 408/429)立即失败,不重试
-                if (status && status >= 400 && status < 500 && status !== 408 && status !== 429) {
-                  return { ok: false, error: error.message, status };
-                }
-                if (attempt < MAX_RETRIES) {
-                  await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1)));
-                }
-              }
-            }
-            return { ok: false, error: lastErr?.message || 'NETWORK_ERROR' };
-          })();
-
-          // forceResubmit 不写 pendingCollects:避免强制请求覆盖同 cacheKey 的普通请求,
-          // 让后到的普通请求 await 错语义(强制语义跟普通采集不能合并)
-          if (cacheKey && !forceResubmit) {
-            pendingCollects.set(cacheKey, collectPromise);
-          }
-          try {
-            return await collectPromise;
-          } finally {
-            if (cacheKey && !forceResubmit) pendingCollects.delete(cacheKey);
-          }
-        }
-        case 'collectBatch': {
-          // Legacy action, kept for backward compatibility with older content scripts.
-          // New code should use 'pushToCollectBox'.
-          const products = message.products || [];
-          if (products.length === 0) return { ok: true, data: { results: [], total: 0 } };
-          try {
-            const data = await apiRequest(
-              'POST',
-              `${backendUrl}/ozon/collect-box/batch`,
-              { items: products, mode: 'update' },
-              token,
-              storeId
-            );
-            return { ok: true, data };
-          } catch (error) {
-            return { ok: false, error: error.message };
-          }
-        }
-        case 'pushToCollectBox': {
-          const items = message.items || [];
-          const mode = message.mode === 'skip' ? 'skip' : 'update';
-          if (items.length === 0) return { ok: true, data: { created: 0, updated: 0, skipped: 0, items: [] } };
-          try {
-            const data = await apiRequest(
-              'POST',
-              `${backendUrl}/ozon/collect-box/batch`,
-              { items, mode },
-              token,
-              storeId
-            );
-            return { ok: true, data };
-          } catch (error) {
-            return { ok: false, error: error.message };
-          }
-        }
         case 'erpApi': {
           // 通用 ERP 后端 API 代理(供 content script 调用后端接口)
           // message: { action:'erpApi', method:'GET'|'POST'|'PUT'|'DELETE', path:'/admin/api/...', body? }
@@ -3409,7 +3215,8 @@ try {
         case 'pushCollectBoxV2': {
           // 全数据源采集推送(PDP 一键采集重构):走新表 collect_box_v2,
           // 存带字段级 source 标记的 variants + rawBySource + synthesizedItems。
-          // 与 pushSourceCollect / pushToCollectBox 并存,互不影响。
+          // 与 pushSourceCollect(单条浅采集)并存:pushSourceCollect 走 /sources/:sourceId/collect
+          // 写 v2(仅 raw),pushCollectBoxV2 走 /ozon/collect-box/v2 写 v2(全源 + synthesized)。
           const body = message.body || message;
           if (!body.anchorSku) return { ok: false, error: 'anchorSku required' };
           if (!Array.isArray(body.variants) || body.variants.length === 0) {
@@ -3428,24 +3235,23 @@ try {
             return { ok: false, error: error.message };
           }
         }
-        case 'pushSourceCollectBatch': {
-          // 采集器批量推送(2026-05-30):走多源批量端点,每条 raw 经 provider
-          // validatePayload + normalize(prune variantData + RUB→CNY + sourceId='ozon'
-          // + sourceExternalId 唯一索引去重),替代旧 /ozon/collect-box/batch。
-          // 返回 { results:[{action}], errors:[{index,reason}] },上层换算新增/更新/跳过。
+        case 'pushSourceCollect': {
+          // 单条采集推送:forward 到后端 POST /sources/:sourceId/collect,
+          // 后端按 (store_id, sku) upsert 到 collect_box_v2。
+          // 旧版的 24h dedupe / in-flight 合并 / 指数退避已移除(后端 upsert 幂等,
+          // 重复推送只覆盖不报错)。content script 仍读 resp.dedupeHit,统一返 false。
           const sourceId = message.sourceId || 'ozon';
-          const rawItems = message.items || [];
-          if (rawItems.length === 0) return { ok: true, data: { results: [], errors: [] } };
+          const raw = message.raw;
+          if (!raw) return { ok: false, error: 'raw required' };
           try {
-            const body = { items: rawItems.map((raw) => ({ raw })) };
-            const data = await apiRequest(
+            const result = await apiRequest(
               'POST',
-              `${backendUrl}/sources/${encodeURIComponent(sourceId)}/collect/batch`,
-              body,
+              `${backendUrl}/sources/${encodeURIComponent(sourceId)}/collect`,
+              { raw },
               token,
-              storeId
+              message.storeId || storeId
             );
-            return { ok: true, data };
+            return { ok: true, data: { dedupeHit: false, lastAt: Date.now(), result } };
           } catch (error) {
             return { ok: false, error: error.message };
           }
@@ -3942,55 +3748,6 @@ try {
             ),
           };
         }
-        // ── 1688 AI 采集向导：采集箱条目的 AI 上架草稿（重写+类目智选+改图+定价）──
-        // 三段式对应后端 collect-box/:id/ai-listing-draft 的 create→confirm→publish。
-        // body 透传 DTO（targetMarginPercent / priceRub / applyPoster / applyWatermark
-        // / warehouseId / offerId 等），storeId 走 x-ozon-store-id 头由 apiRequest 注入。
-        case 'aiListingDraftCreate': {
-          const aiStoreId = message.storeId || storeId;
-          const id = encodeURIComponent(message.itemId);
-          // AI 重写+改图在后端跑，给 120s 余量
-          return {
-            ok: true,
-            data: await apiRequest(
-              'POST',
-              `${backendUrl}/ozon/collect-box/${id}/ai-listing-draft`,
-              message.body || {},
-              token,
-              aiStoreId,
-              120_000
-            ),
-          };
-        }
-        case 'aiListingDraftConfirm': {
-          const aiStoreId = message.storeId || storeId;
-          const id = encodeURIComponent(message.itemId);
-          return {
-            ok: true,
-            data: await apiRequest(
-              'POST',
-              `${backendUrl}/ozon/collect-box/${id}/ai-listing-draft/confirm`,
-              message.body || {},
-              token,
-              aiStoreId
-            ),
-          };
-        }
-        case 'aiListingDraftPublish': {
-          const aiStoreId = message.storeId || storeId;
-          const id = encodeURIComponent(message.itemId);
-          return {
-            ok: true,
-            data: await apiRequest(
-              'POST',
-              `${backendUrl}/ozon/collect-box/${id}/ai-listing-draft/publish`,
-              message.body || {},
-              token,
-              aiStoreId,
-              120_000
-            ),
-          };
-        }
         case 'getFxRate': {
           // CNY→RUB 实时汇率（复用「极掌算价」的 FX 缓存 jz_calc_fx_rate_v1）。
           // 给 1688 AI 采集向导按店铺货币定价用：成本是人民币，需换算成店铺货币。
@@ -4345,19 +4102,12 @@ try {
                         const leafName = findCatNameInTree(tree, catId);
                         if (leafName) {
                           items[0].description_category_lvl3_name = leafName;
-                          console.log(
-                            `[searchVariants] catId=${catId} → leafName="${leafName}" for sku=${sku}`
-                          );
+                          console.log(`[searchVariants] catId=${catId} → leafName="${leafName}" for sku=${sku}`);
                         } else {
-                          console.warn(
-                            `[searchVariants] catId=${catId} not found in seller-tree for sku=${sku}`
-                          );
+                          console.warn(`[searchVariants] catId=${catId} not found in seller-tree for sku=${sku}`);
                         }
                       } catch (e) {
-                        console.warn(
-                          `[searchVariants] seller-tree lookup failed for sku=${sku}:`,
-                          e.message || e
-                        );
+                        console.warn(`[searchVariants] seller-tree lookup failed for sku=${sku}:`, e.message || e);
                       }
                     }
                   }
@@ -4622,27 +4372,6 @@ try {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'proxyImageFetch': {
-          // 由 1688 content script 调用：在 background 代为 fetch ozon CDN 图片，
-          // 避开页面 CORS（host_permissions 已含 *.ozon.ru / *.ozonusercontent.com）。
-          // 返回 base64 dataURL，content script 转 blob/File 注入 1688 file input。
-          try {
-            const url = String(message.url || '');
-            if (!/^https?:\/\//.test(url)) return { ok: false, error: 'invalid url' };
-            const r = await fetch(url, { method: 'GET' });
-            if (!r.ok) return { ok: false, error: `${r.status}` };
-            const blob = await r.blob();
-            const dataUrl = await new Promise((resolve, reject) => {
-              const fr = new FileReader();
-              fr.onload = () => resolve(fr.result);
-              fr.onerror = () => reject(fr.error);
-              fr.readAsDataURL(blob);
-            });
-            return { ok: true, dataUrl };
-          } catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-          }
-        }
         case 'reportCategoryMapping': {
           // 由 ozon-bestsellers-hook 在 seller.ozon.ru 上学到的 (一级类目名 → leaf IDs[])
           // 转发上报到极掌后端入库。失败仅 console，不阻塞任何用户操作。
@@ -4786,18 +4515,6 @@ try {
             storeId
           );
           return { ok: true, data: { products: resp.data || [] } };
-        }
-        case 'getCollectCount': {
-          return {
-            ok: true,
-            data: await apiRequest(
-              'GET',
-              `${backendUrl}/ozon/collect-box?currentPage=1&pageSize=1`,
-              null,
-              token,
-              storeId
-            ),
-          };
         }
         case 'getProductStatusCounts': {
           return {
@@ -4968,7 +4685,7 @@ try {
     // SW idle timeout (~30s). 用 chrome.runtime.getPlatformInfo() 周期 ping 续命。
     //
     // 之前只覆盖 followSell / importBySku — 实测 fetchProductPageState /
-    // searchVariants / pushSourceCollect 也可能因为 chrome.scripting.executeScript
+    // searchVariants 也可能因为 chrome.scripting.executeScript
     // 注入 MAIN world 卡 30s+(Ozon 2026 page main world race condition),
     // SW 被 unload → handle() promise 中断 → sendResponse 永不调 →
     // content_script 等 60s 超时。把这几个 action 也加进保活列表。
@@ -4980,16 +4697,15 @@ try {
       'importBySku',
       'fetchProductPageState',
       'searchVariants',
-      'pushSourceCollect',
       // 视频转存:download(跨源 .mp4) + media-storage 上传跑在 seller/buyer tab,executeScript
       // 可达 90s+,必须保活防 SW unload 中断 sendResponse。
       'uploadFollowSellVideo',
       'transferVariantVideo',
     ]);
     if (KEEP_ALIVE_ACTIONS.has(message?.action)) {
-      chrome.runtime.getPlatformInfo(() => { });
+      chrome.runtime.getPlatformInfo(() => {});
       keepAliveTimer = setInterval(() => {
-        chrome.runtime.getPlatformInfo(() => { });
+        chrome.runtime.getPlatformInfo(() => {});
       }, 15_000);
     }
 

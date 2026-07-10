@@ -3,7 +3,6 @@ import Login from '../views/Login.vue';
 import Dashboard from '../views/Dashboard.vue';
 import Stores from '../views/Stores.vue';
 import Listings from '../views/Listings.vue';
-import CollectBox from '../views/CollectBox.vue';
 import CollectBoxV2 from '../views/CollectBoxV2.vue';
 import Products from '../views/Products.vue';
 import Batch from '../views/Batch.vue';
@@ -22,7 +21,6 @@ const router = createRouter({
     { path: '/admin', component: Dashboard },
     { path: '/stores', name: 'stores', component: Stores },
     { path: '/listings', name: 'listings', component: Listings },
-    { path: '/collect-box', name: 'collect-box', component: CollectBox },
     { path: '/collect-box-v2', name: 'collect-box-v2', component: CollectBoxV2 },
     { path: '/products', name: 'products', component: Products },
     { path: '/batch', name: 'batch', component: Batch },

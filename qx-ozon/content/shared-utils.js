@@ -980,7 +980,7 @@ if (!globalThis.__JZ_BRAND__) {
     // Default 60s timeout; long-running actions get more time
     // uploadFollowSellVideo:视频转存(download 跨源 .mp4 + media-storage 上传)executeScript
     // 内部可达 90s+,默认 60s 会让 content 侧先超时拿不到结果 → 放宽。
-    const LONG_ACTIONS = ['followSell', 'importBySku', 'pushSourceCollectBatch', 'uploadFollowSellVideo'];
+    const LONG_ACTIONS = ['followSell', 'importBySku', 'uploadFollowSellVideo'];
     const timeoutMs = LONG_ACTIONS.includes(action) ? 600000 : 60000;
     console.log(`[sendMessage] sending action=${action}`);
     return new Promise((resolve, reject) => {

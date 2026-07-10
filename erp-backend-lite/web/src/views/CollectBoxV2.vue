@@ -21,7 +21,6 @@ const state = reactive({
     storeId: '',
     keyword: '',
     hasVideo: '',
-    minVariants: '',
   },
 });
 
@@ -34,7 +33,6 @@ async function loadList() {
       storeId: state.filters.storeId,
       keyword: state.filters.keyword.trim(),
       hasVideo: state.filters.hasVideo,
-      minVariants: state.filters.minVariants,
     });
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -66,7 +64,7 @@ const detailData = ref({});
 const detailTitle = computed(() => {
   const d = detailData.value;
   if (!d || !d.id) return '采集详情';
-  return `采集详情 #${d.id} · SKU ${d.anchorSku} · ${d.variantCount} 变体`;
+  return `采集详情 #${d.id} · SKU ${d.sku || d.anchorSku}`;
 });
 
 async function openDetail(it) {
@@ -74,7 +72,7 @@ async function openDetail(it) {
   detailLoading.value = true;
   detailData.value = {};
   try {
-    const data = await getCollectBoxV2Detail(it.id, it.sourceTable);
+    const data = await getCollectBoxV2Detail(it.id);
     detailData.value = data || {};
   } catch (err) {
     show(err.message || String(err), 'error');
@@ -88,7 +86,7 @@ async function openDetail(it) {
 async function onRemove(it) {
   if (!confirm(`确认删除采集记录 #${it.id}?`)) return;
   try {
-    await deleteCollectBoxV2(it.id, it.sourceTable);
+    await deleteCollectBoxV2(it.id);
     show('已删除', 'success');
     await loadList();
   } catch (err) {
@@ -132,11 +130,9 @@ onMounted(() => {
   <div>
     <div class="toolbar">
       <h2>采集箱(全源)</h2>
-      <button
-        class="btn btn-ghost"
-        :disabled="state.loading"
-        @click="loadList"
-      >{{ state.loading ? '刷新中...' : '刷新' }}</button>
+      <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
+        {{ state.loading ? '刷新中...' : '刷新' }}
+      </button>
     </div>
 
     <div class="filter-bar">
@@ -155,24 +151,12 @@ onMounted(() => {
         <option value="">全部</option>
         <option value="1">有视频</option>
       </select>
-      <input
-        class="filter-input"
-        type="number"
-        min="0"
-        v-model="state.filters.minVariants"
-        placeholder="最少变体数"
-        @keydown.enter="search"
-      />
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
     <div class="cb-grid">
-      <div v-if="state.loading && !state.items.length" class="empty" style="grid-column:1/-1">
-        加载中...
-      </div>
-      <div v-else-if="!state.items.length" class="empty" style="grid-column:1/-1">
-        暂无采集记录
-      </div>
+      <div v-if="state.loading && !state.items.length" class="empty" style="grid-column: 1/-1">加载中...</div>
+      <div v-else-if="!state.items.length" class="empty" style="grid-column: 1/-1">暂无采集记录</div>
       <div v-for="it in state.items" :key="it.id" class="cb-card">
         <div class="cb-thumb">
           <img
@@ -186,14 +170,14 @@ onMounted(() => {
           <span class="cb-badge-v2">全源</span>
         </div>
         <div class="cb-body">
-          <div class="cb-title" :title="it.name || it.anchorSku">
+          <div class="cb-title" :title="it.name || it.sku">
             {{ it.name || '(未命名)' }}
           </div>
           <div class="cb-meta">
-            <span>SKU: {{ it.anchorSku || '—' }}</span>
+            <span>SKU: {{ it.sku || '—' }}</span>
+            <span v-if="it.anchorSku && it.anchorSku !== it.sku">母体: {{ it.anchorSku }}</span>
             <span v-if="it.price">价格: {{ it.price }}</span>
             <span>店铺: {{ storeName(it.storeId) }}</span>
-            <span>变体: {{ it.variantCount ?? 0 }} 个</span>
           </div>
           <div class="cb-foot">
             <span class="cb-time">收集: {{ fmtTime(it.collectedAt) }}</span>

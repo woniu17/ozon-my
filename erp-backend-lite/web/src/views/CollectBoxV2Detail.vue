@@ -31,10 +31,10 @@ function parseRichContent(val) {
 }
 
 // ── OPI 请求预览:调用后端 preview-opi 把 synthesizedItems 转成 OPI v3 schema ──
-const opiItems = ref([]);      // 转换后的 OPI v3 items
+const opiItems = ref([]); // 转换后的 OPI v3 items
 const opiLoading = ref(false);
 const opiError = ref('');
-const opiLoaded = ref(false);  // 是否已加载(避免重复请求)
+const opiLoaded = ref(false); // 是否已加载(避免重复请求)
 
 // 提取 synthesizedItems 的纯值数组(供 preview-opi 接口消费)
 function plainItems(items) {
@@ -152,11 +152,31 @@ function getFieldSourceDetail(synItem, opiField) {
 
 // OPI 字段显示顺序:基础字段在前,images/images360/pdf_list/attributes/complex_attributes 在后
 const OPI_FIELD_ORDER = [
-  'name', 'offer_id', 'price', 'old_price', 'currency_code', 'vat',
-  'weight', 'weight_unit', 'depth', 'width', 'height', 'dimension_unit',
-  'primary_image', 'color_image', 'type_id', 'description_category_id',
-  'new_description_category_id', 'barcode', 'video_url', 'video_cover',
-  'images', 'images360', 'pdf_list', 'attributes', 'complex_attributes',
+  'name',
+  'offer_id',
+  'price',
+  'old_price',
+  'currency_code',
+  'vat',
+  'weight',
+  'weight_unit',
+  'depth',
+  'width',
+  'height',
+  'dimension_unit',
+  'primary_image',
+  'color_image',
+  'type_id',
+  'description_category_id',
+  'new_description_category_id',
+  'barcode',
+  'video_url',
+  'video_cover',
+  'images',
+  'images360',
+  'pdf_list',
+  'attributes',
+  'complex_attributes',
 ];
 
 // 为每个 OPI item 构建带来源的字段列表
@@ -191,10 +211,8 @@ function fmtTime(t) {
   return s;
 }
 
-const isLegacy = computed(() => props.data?.sourceTable === 'collect_box');
-
-// 概览 meta source: 老表全部 legacy,新表用 dom
-const metaSource = computed(() => (isLegacy.value ? 'legacy' : 'dom'));
+// 概览 meta source
+const metaSource = 'dom';
 
 const rawBySource = computed(() => props.data?.rawBySource || {});
 const domSource = computed(() => rawBySource.value.dom || {});
@@ -208,6 +226,64 @@ const isTruncated = computed(() => !!rawBySource.value._truncated);
 function attrCount(sv) {
   return Array.isArray(sv?.attributes) ? sv.attributes.length : 0;
 }
+
+// ── 5 类数据源采集状态(判定 rawBySource 中各源是否非空)──
+// ok=true 表示已采集到数据,miss=true 表示缺失(该源未采或降级为 null)
+// tab 字段非空时点击 chip 可跳转到对应 sub-tab 查看
+const sourceStatuses = computed(() => {
+  const r = rawBySource.value;
+  const dom = r.dom;
+  const domOk = dom != null && typeof dom === 'object' && Object.keys(dom).length > 0;
+  const sp = r.sellerPortal || {};
+  const spVals = Object.values(sp);
+  const spOk = spVals.length > 0 && spVals.some((v) => v?.pickedSv);
+  const pj = r.pageJson || {};
+  const pjOk = Object.keys(pj).length > 0;
+  const ssr = r.ssrAspects;
+  const ssrOk =
+    ssr != null &&
+    typeof ssr === 'object' &&
+    (Array.isArray(ssr.mergedVariants) ? ssr.mergedVariants.length > 0 : Object.keys(ssr).length > 0);
+  const vt = r.videoTranscode || {};
+  const vtOk = !!vt.transferredVideoUrl || !!vt.originalMp4Url;
+  return [
+    {
+      key: 'dom',
+      label: 'DOM',
+      ok: domOk,
+      tab: 'dom',
+      desc: 'PDP 页面元素抽取(productData/breadcrumbs/hashtags/characteristics/aspectVariants)',
+    },
+    {
+      key: 'seller-portal',
+      label: 'Seller Portal',
+      ok: spOk,
+      tab: 'seller-portal',
+      desc: 'seller.ozon.ru /api/v1/search + /bundle(pickedSv/searchResponse/bundleResponse)',
+    },
+    {
+      key: 'page-json',
+      label: 'Page-JSON',
+      ok: pjOk,
+      tab: 'page-json',
+      desc: 'entrypoint-api fetchVariantGallery(gallery/richContent/description/hashtags)',
+    },
+    {
+      key: 'ssr-aspects',
+      label: 'SSR-Aspects',
+      ok: ssrOk,
+      tab: '',
+      desc: '页面 SSR mergedVariants(aspectValues)',
+    },
+    {
+      key: 'video-transcode',
+      label: 'Video-Transcode',
+      ok: vtOk,
+      tab: '',
+      desc: 'SW 视频转存(originalMp4Url/transferredVideoUrl/transferredCoverUrl)',
+    },
+  ];
+});
 </script>
 
 <template>
@@ -220,18 +296,42 @@ function attrCount(sv) {
         class="sub-tab"
         :class="{ active: activeSubtab === t.key }"
         @click="activeSubtab = t.key"
-      >{{ t.label }}</button>
+      >
+        {{ t.label }}
+      </button>
     </div>
 
     <!-- ── 概览 ── -->
     <div v-show="activeSubtab === 'overview'">
-      <div v-if="isLegacy" class="cbv2-legacy-banner">
-        <strong>⚠ 旧版采集记录</strong> — 此记录由旧版采集通道推送，无字段级来源标记（source 全部显示为 <code>legacy</code>），也无 5 类数据源原始响应与 OPI 请求预览。<br>如需查看完整来源信息，请在 Ozon 商品详情页重新点「一键采集」（确保已重新加载扩展）。
-      </div>
+      <!-- 数据源采集状态:5 类数据源 chip,绿✓已采集/灰✗缺失,已采集可点击跳转 -->
+      <AppAccordion title="数据源采集状态" :default-open="true">
+        <div class="source-status-grid">
+          <span
+            v-for="s in sourceStatuses"
+            :key="s.key"
+            class="source-chip"
+            :class="{
+              'source-chip--ok': s.ok,
+              'source-chip--miss': !s.ok,
+              'source-chip--clickable': s.ok && s.tab,
+            }"
+            :title="s.desc + (s.ok ? '' : ' (未采集/降级为 null)')"
+            @click="s.ok && s.tab && (activeSubtab = s.tab)"
+          >
+            <span class="source-chip-icon">{{ s.ok ? '✓' : '✗' }}</span>
+            <span class="source-chip-label">{{ s.label }}</span>
+          </span>
+        </div>
+        <p class="source-status-tip">
+          共 5 类数据源(DOM / Seller Portal / Page-JSON / SSR-Aspects /
+          Video-Transcode)。绿色✓表示已采集,灰色✗表示缺失(该源未采或降级为
+          null)。点击已采集且高亮的标签可跳转到对应数据源详情。
+        </p>
+      </AppAccordion>
       <AppAccordion title="采集元信息" :default-open="true">
+        <SourcedField label="sku" :field="{ value: data.sku, source: metaSource }" />
         <SourcedField label="anchor_sku" :field="{ value: data.anchorSku, source: metaSource }" />
         <SourcedField label="store_id" :field="{ value: data.storeId, source: metaSource }" />
-        <SourcedField label="variant_count" :field="{ value: data.variantCount, source: metaSource }" />
         <SourcedField label="collected_at" :field="{ value: fmtTime(data.collectedAt), source: metaSource }" />
         <SourcedField label="created_at" :field="{ value: fmtTime(data.createdAt), source: metaSource }" />
       </AppAccordion>
@@ -274,7 +374,11 @@ function attrCount(sv) {
         <template v-if="sellerPortal[sku]">
           <SourcedField
             label="variant_id"
-            :field="{ value: sellerPortal[sku].pickedSv?.variant_id, source: 'seller-portal', sourceDetail: '/api/v1/search' }"
+            :field="{
+              value: sellerPortal[sku].pickedSv?.variant_id,
+              source: 'seller-portal',
+              sourceDetail: '/api/v1/search',
+            }"
           />
           <SourcedField
             label="类目"
@@ -287,18 +391,10 @@ function attrCount(sv) {
           <AppAccordion title="完整 sv 对象" :default-open="true">
             <JsonTree :data="sellerPortal[sku].pickedSv" root-key="pickedSv" />
           </AppAccordion>
-          <AppAccordion
-            v-if="sellerPortal[sku].searchResponse"
-            title="/search 响应"
-            :default-open="true"
-          >
+          <AppAccordion v-if="sellerPortal[sku].searchResponse" title="/search 响应" :default-open="true">
             <JsonTree :data="sellerPortal[sku].searchResponse" root-key="searchResponse" />
           </AppAccordion>
-          <AppAccordion
-            v-if="sellerPortal[sku].bundleResponse"
-            title="/bundle 响应"
-            :default-open="true"
-          >
+          <AppAccordion v-if="sellerPortal[sku].bundleResponse" title="/bundle 响应" :default-open="true">
             <JsonTree :data="sellerPortal[sku].bundleResponse" root-key="bundleResponse" />
           </AppAccordion>
         </template>
@@ -316,22 +412,12 @@ function attrCount(sv) {
         :default-open="true"
       >
         <template v-if="pageJson[sku]">
-          <SourcedField
-            label="图册数"
-            :field="{ value: (pageJson[sku].gallery || []).length, source: 'page-json' }"
-          />
-          <SourcedField
-            label="endpoint"
-            :field="{ value: pageJson[sku].endpoint, source: 'page-json' }"
-          />
+          <SourcedField label="图册数" :field="{ value: (pageJson[sku].gallery || []).length, source: 'page-json' }" />
+          <SourcedField label="endpoint" :field="{ value: pageJson[sku].endpoint, source: 'page-json' }" />
           <AppAccordion title="图册" :default-open="true">
             <JsonTree :data="pageJson[sku].gallery" root-key="gallery" />
           </AppAccordion>
-          <AppAccordion
-            v-if="pageJson[sku].richContent"
-            title="富内容(11254)"
-            :default-open="true"
-          >
+          <AppAccordion v-if="pageJson[sku].richContent" title="富内容(11254)" :default-open="true">
             <JsonTree
               v-if="parseRichContent(pageJson[sku].richContent)"
               :data="parseRichContent(pageJson[sku].richContent)"
@@ -339,11 +425,7 @@ function attrCount(sv) {
             />
             <pre v-else class="sf-value-pre">{{ pageJson[sku].richContent }}</pre>
           </AppAccordion>
-          <AppAccordion
-            v-if="pageJson[sku].response"
-            title="完整响应"
-            :default-open="true"
-          >
+          <AppAccordion v-if="pageJson[sku].response" title="完整响应" :default-open="true">
             <JsonTree :data="pageJson[sku].response" root-key="response" />
           </AppAccordion>
         </template>
@@ -400,5 +482,51 @@ function attrCount(sv) {
 }
 .opi-raw-json summary:hover {
   color: #374151;
+}
+/* 数据源采集状态 chip */
+.source-status-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 0 4px;
+}
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: default;
+  user-select: none;
+  border: 1px solid transparent;
+  transition: opacity 0.15s;
+}
+.source-chip-icon {
+  font-weight: bold;
+  font-size: 13px;
+}
+.source-chip--ok {
+  background: #dcfce7;
+  color: #15803d;
+  border-color: #86efac;
+}
+.source-chip--miss {
+  background: #f3f4f6;
+  color: #9ca3af;
+  border-color: #e5e7eb;
+}
+.source-chip--clickable {
+  cursor: pointer;
+}
+.source-chip--clickable:hover {
+  opacity: 0.8;
+}
+.source-status-tip {
+  font-size: 11px;
+  color: #6b7280;
+  margin: 6px 0 0;
+  line-height: 1.5;
 }
 </style>

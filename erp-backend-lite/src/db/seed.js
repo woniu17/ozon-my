@@ -10,7 +10,7 @@ console.log('[seed] 清空旧数据...');
 for (const t of [
   'follow_sell_task_items',
   'follow_sell_tasks',
-  'collect_box',
+  'collect_box_v2',
   'favorites',
   'product_data_cache',
   'product_attributes_cache',
@@ -226,86 +226,7 @@ for (const it of taskItems) {
 }
 
 // ────────────────────────────────────────────────────────────
-// 2. 采集箱(collect_box)
-// ────────────────────────────────────────────────────────────
-console.log('[seed] 插入 collect_box...');
-const collectItems = [
-  {
-    store_id: 'store-001',
-    product: JSON.stringify({
-      sku: 'ozon-sku-100001',
-      title: '无线蓝牙耳机 降噪 入耳式',
-      price: '1290.00',
-      old_price: '1590.00',
-      image: 'https://cdn1.ozone.ru/s3/multimedia-1/100001.jpg',
-      source_url: 'https://www.ozon.ru/product/100001/',
-      rating: 4.8,
-      reviews: 1234,
-    }),
-    source: 'ozon',
-    ai_draft: null,
-    published: 0,
-  },
-  {
-    store_id: 'store-001',
-    product: JSON.stringify({
-      sku: 'ozon-sku-100002',
-      title: '手机壳 iPhone 15 Pro 硅胶',
-      price: '199.00',
-      old_price: '299.00',
-      image: 'https://cdn1.ozone.ru/s3/multimedia-1/100002.jpg',
-      source_url: 'https://www.ozon.ru/product/100002/',
-      rating: 4.6,
-      reviews: 567,
-    }),
-    source: 'ozon',
-    ai_draft: JSON.stringify({ rewritten_title: '高品质硅胶手机壳 iPhone 15 Pro 防摔' }),
-    published: 0,
-  },
-  {
-    store_id: 'store-001',
-    product: JSON.stringify({
-      sku: 'ozon-sku-100003',
-      title: '快充充电器 20W USB-C',
-      price: '450.00',
-      old_price: '',
-      image: 'https://cdn1.ozone.ru/s3/multimedia-1/100003.jpg',
-      source_url: 'https://www.ozon.ru/product/100003/',
-      rating: 4.9,
-      reviews: 2891,
-    }),
-    source: 'ozon',
-    ai_draft: null,
-    published: 1,
-  },
-  {
-    store_id: 'store-001',
-    product: JSON.stringify({
-      sku: 'ozon-sku-100004',
-      title: '机械键盘 87键 红轴',
-      price: '899.00',
-      old_price: '1099.00',
-      image: 'https://cdn1.ozone.ru/s3/multimedia-1/100004.jpg',
-      source_url: 'https://www.ozon.ru/product/100004/',
-      rating: 4.7,
-      reviews: 432,
-    }),
-    source: 'ozon',
-    ai_draft: null,
-    published: 0,
-  },
-];
-
-const stmtCollect = db.prepare(`
-  INSERT INTO collect_box (store_id, product, source, ai_draft, published)
-  VALUES (?, ?, ?, ?, ?)
-`);
-for (const c of collectItems) {
-  stmtCollect.run(c.store_id, c.product, c.source, c.ai_draft, c.published);
-}
-
-// ────────────────────────────────────────────────────────────
-// 3. 收藏(favorites)
+// 2. 收藏(favorites)
 // ────────────────────────────────────────────────────────────
 console.log('[seed] 插入 favorites...');
 const favs = [
@@ -800,7 +721,7 @@ console.log('\n[seed] 种子数据插入完成:');
 for (const [name, sql] of Object.entries({
   follow_sell_tasks: 'SELECT COUNT(*) AS n FROM follow_sell_tasks',
   follow_sell_task_items: 'SELECT COUNT(*) AS n FROM follow_sell_task_items',
-  collect_box: 'SELECT COUNT(*) AS n FROM collect_box',
+  collect_box_v2: 'SELECT COUNT(*) AS n FROM collect_box_v2',
   favorites: 'SELECT COUNT(*) AS n FROM favorites',
   product_data_cache: 'SELECT COUNT(*) AS n FROM product_data_cache',
   product_attributes_cache: 'SELECT COUNT(*) AS n FROM product_attributes_cache',

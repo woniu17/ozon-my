@@ -14,17 +14,10 @@ globalThis.JzBackendClient = {
   collectSource: async () => {
     throw new Error('collectSource should not be called by registry smoke');
   },
-  createAiListingDraft: async () => {
-    throw new Error('createAiListingDraft should not be called by registry smoke');
-  },
-  publishAiListingDraft: async () => {
-    throw new Error('publishAiListingDraft should not be called by registry smoke');
-  },
 };
 
 require(path.resolve(__dirname, '../agent/actions.js'));
 require(path.resolve(__dirname, '../agent/collect-actions.js'));
-require(path.resolve(__dirname, '../agent/listing-actions.js'));
 
 const capabilities = globalThis.JzBrowserAgentActions.capabilities().sort();
 
@@ -36,8 +29,6 @@ assert.deepStrictEqual(
     'collect.product_detail',
     'ozon.collect_variant',
     'ozon.market_data',
-    'listing.create_draft',
-    'listing.publish_draft',
   ].sort()
 );
 
