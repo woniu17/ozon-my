@@ -588,7 +588,7 @@
       return null;
     })();
 
-    return {
+    const _product = {
       title,
       price,
       walletPrice,
@@ -610,6 +610,31 @@
       followSellMinPrice,
       deliveryMode,
     };
+
+    // 有 sku 时异步写 pdp 缓存(仅静态字段,不阻塞返回)
+    // DOM 解析失败时由 performProductCollect 查缓存兜底
+    if (_product.sku && window.sendMessage) {
+      try {
+        window.sendMessage('pdpCacheSet', {
+          sku: String(_product.sku),
+          data: {
+            title: _product.title,
+            images: _product.images,
+            videos: _product.videos,
+            sku: _product.sku,
+            productId: _product.productId,
+            url: _product.url,
+            brand: _product.brand,
+            category: _product.category,
+            characteristics: _product.characteristics,
+          },
+        });
+      } catch {
+        /* fire-and-forget,不影响采集 */
+      }
+    }
+
+    return _product;
   }
 
   /**
@@ -2032,9 +2057,35 @@
       hasSku = !!(product?.sku || product?.productId);
     }
 
-    // 防御:Ozon DOM 改版 / composer-api 也挂时,product 关键字段全空 → 直接
-    // 抛清晰错误,避免下游送给 backend 一个 sku/name 都空的 payload(backend 收
-    // 到这种 payload 也会 reject,但报"采集请求失败"对用户没意义)。
+    // 防御:Ozon DOM 改版 / composer-api 也挂时,product 关键字段全空 →
+    // 查 pdp 缓存(IndexedDB+MongoDB)兜底,用历史静态字段救场。
+    // 缓存也 miss 时才抛清晰错误,避免下游送给 backend 一个 sku/name 都空的 payload。
+    if (!hasTitle || !hasImages || !hasSku) {
+      // 从 URL 提取 sku 作为查 cache 的 key(/product/{slug}-{sku}/)
+      const _urlSku = (window.location.pathname.match(/-(\d{5,})\/?$/) || [])[1] || product?.sku || '';
+      if (_urlSku && window.sendMessage) {
+        try {
+          const cacheResp = await window.sendMessage('pdpCacheGet', { sku: String(_urlSku) });
+          const cached = cacheResp?.ok ? cacheResp.data : null;
+          if (cached) {
+            // 用缓存的静态字段补全 product(动态字段保持当前 DOM 解析值,可能为空)
+            if (!hasTitle && cached.title) { product.title = cached.title; hasTitle = true; }
+            if (!hasImages && Array.isArray(cached.images) && cached.images.length) { product.images = cached.images; hasImages = true; }
+            if (!hasSku && cached.sku) { product.sku = cached.sku; hasSku = true; }
+            if (!product.productId && cached.productId) product.productId = cached.productId;
+            if (!product.brand && cached.brand) product.brand = cached.brand;
+            if (!product.category && cached.category) product.category = cached.category;
+            if (!product.characteristics && cached.characteristics) product.characteristics = cached.characteristics;
+            if (!product.videos && cached.videos) product.videos = cached.videos;
+            console.log('[ozon-helper] pdp 缓存兜底命中,补全静态字段 sku=' + _urlSku);
+          }
+        } catch {
+          /* 缓存查询失败,继续走原错误流程 */
+        }
+      }
+    }
+
+    // 缓存兜底后仍缺关键字段 → 抛清晰错误
     if (!hasTitle || !hasImages || !hasSku) {
       const missing = [!hasTitle ? '标题' : null, !hasImages ? '图片' : null, !hasSku ? 'SKU' : null]
         .filter(Boolean)

@@ -177,6 +177,11 @@ try {
   const BROWSER_AGENT_ALARM = 'jz:browser-agent';
   const BROWSER_AGENT_INTERVAL_MINUTES = 1;
 
+  // L1→L2 缓存补写定时任务:扫描 IndexedDB 中 l2Synced=false 的记录,补写到 ERP MongoDB。
+  // 触发场景:L3 真调后写 L1 成功但写 L2 失败(ERP 宕机/网络抖动) → 定时任务补写。
+  const CACHE_SYNC_ALARM = 'jz:cache-sync-l2';
+  const CACHE_SYNC_INTERVAL_MINUTES = 5;
+
   /**
    * 登录门户域声明(2026-06-11 串号修复):build.js 给发版包注入
    * globalThis.__JZ_BRAND__(分销商定制版 webHost = 其商户域,平台版 =
@@ -471,33 +476,278 @@ try {
    * 输入 variant_id 必须是 /api/v1/search 返回的真 variant_id(不是 URL 数字 SKU,两者
    * 不同 namespace)。
    *
-   * **副作用**: 每次调用 Ozon 端创建一个新 bundle draft,bundle_id 递增。需要 cache
-   * 控制 — 同一 SKU 默认 24 小时复用一次。源商品改类目/属性/包装时最多 1 天后刷新;
+   * **副作用**: 每次调用 Ozon 端创建一个新 bundle draft,bundle_id 递增。用三层缓存
+   * 最大化减少 draft 堆积:
+   *   L1 IndexedDB (SW 本地,毫秒级命中)
+   *   L2 MongoDB    (ERP 远程,多设备共享,永久存储)
+   *   L3 Ozon 真调  (有副作用,创建 draft)
+   *
+   * 缓存 key 都用 sku(bundle item 是源商品数据,同一 SKU 跨店数据相同)。
+   * 空属性(attributes=[])可能是瞬时降级产物,6h 重验一次(移植自 MY 项目)。
    * 需要立即刷新可在 sendMessage('searchVariants', { sku, forceRefresh: true })。
    *
    * Headers 实测带 / 不带 x-o3-app-name + x-o3-page-type 都 200 OK,沿用 fetchSellerPortal
    * 默认 headers + urlPrefix='/api/site' 即可。
    */
-  const _BUNDLE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-  // v2 cache key 必须包含 companyId + variantId — 同一 Chrome profile 多 ozon 店时,
-  // v1 (只 sku) 会让 B 店复用 A 店的 bundle item,串店导致重量/尺寸/属性串数据。
-  // variant_id 在 Ozon 内是 store-scoped(create-bundle-by-variant-id 副作用产物),
-  // 加 companyId 是双保险:即使将来 variant_id 复用同 namespace,companyId 也能隔离。
-  const _BUNDLE_CACHE_PREFIX = 'jz-sw-bundle-v2:';
-  const _bundleCacheKey = (companyId, variantId) => `${_BUNDLE_CACHE_PREFIX}${companyId || 'unknown'}:${variantId}`;
 
-  // SW 启动时清理 v1 缓存 — 它的 key 只用 sku,可能跨店污染过用户数据。
-  // 一次性清理,跑完后用户的 v2 缓存重建即可。
+  // ── 三层缓存:IndexedDB + MongoDB(ERP) + Ozon 真调 ──────────────────────────
+  // SW 启动时清理旧的 chrome.storage.local bundle cache(v1/v2),改为 IndexedDB + ERP。
+  // 加 1h 节流,避免 SW 频繁重启时反复全量读 storage 导致内存峰值。
   (async () => {
     try {
+      const throttleKey = 'jz-sw-bundle-cleanup-at';
+      const now = Date.now();
+      const { [throttleKey]: lastAt } = await new Promise((r) => chrome.storage.local.get(throttleKey, r));
+      if (lastAt && now - lastAt < 60 * 60 * 1000) return; // 1h 内已清理,跳过
+      await new Promise((r) => chrome.storage.local.set({ [throttleKey]: now }, r));
       const all = await new Promise((r) => chrome.storage.local.get(null, r));
-      const stale = Object.keys(all || {}).filter((k) => k.startsWith('jz-sw-bundle:'));
+      const stale = Object.keys(all || {}).filter((k) => k.startsWith('jz-sw-bundle'));
       if (stale.length) {
         await new Promise((r) => chrome.storage.local.remove(stale, r));
-        console.log(`[SW] cleared ${stale.length} v1 bundle cache entries (cross-store risk)`);
+        console.log(`[SW] cleared ${stale.length} legacy bundle cache entries (migrated to IndexedDB+ERP)`);
       }
     } catch {}
   })();
+
+  // ── L1: IndexedDB 封装 ─────────────────────────────────────────────────────
+  // MV3 SW 休眠后 indexedDB 连接会断,dbPromise=null 模式确保唤醒后重连。
+  // 容量充足(GB 级),无 TTL(与 L2 一致),forceRefresh 时主动删除。
+  const _IDB_NAME = 'ozon-cache';
+  const _IDB_VERSION = 2;
+  const _IDB_STORE_SEARCH = 'search_cache';
+  const _IDB_STORE_BUNDLE = 'bundle_cache';
+  const _IDB_STORE_PDP = 'pdp_cache';
+  const _ATTRS_EMPTY_REVERIFY_MS = 6 * 60 * 60 * 1000; // 空属性 6h 重验
+
+  let _idbPromise = null;
+  const _openIdb = () => {
+    if (_idbPromise) return _idbPromise;
+    _idbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(_IDB_NAME, _IDB_VERSION);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(_IDB_STORE_SEARCH)) {
+          db.createObjectStore(_IDB_STORE_SEARCH, { keyPath: 'sku' });
+        }
+        if (!db.objectStoreNames.contains(_IDB_STORE_BUNDLE)) {
+          db.createObjectStore(_IDB_STORE_BUNDLE, { keyPath: 'sku' });
+        }
+        if (!db.objectStoreNames.contains(_IDB_STORE_PDP)) {
+          db.createObjectStore(_IDB_STORE_PDP, { keyPath: 'sku' });
+        }
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        // MV3 SW 休眠后 indexedDB 连接可能被浏览器关闭。
+        // 监听 onclose/onversionchange,触发时重置缓存让下次调用重连。
+        db.onclose = () => { _idbPromise = null; };
+        db.onversionchange = () => { db.close(); _idbPromise = null; };
+        resolve(db);
+      };
+      req.onerror = () => { _idbPromise = null; reject(req.error); };
+    });
+    return _idbPromise;
+  };
+
+  const _idbGet = (store, sku) =>
+    _openIdb().then(
+      (db) =>
+        new Promise((resolve, reject) => {
+          const tx = db.transaction(store, 'readonly');
+          const req = tx.objectStore(store).get(sku);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+        })
+    );
+  const _idbPut = (store, val) =>
+    _openIdb().then(
+      (db) =>
+        new Promise((resolve, reject) => {
+          const tx = db.transaction(store, 'readwrite');
+          tx.objectStore(store).put(val);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        })
+    );
+  const _idbDelete = (store, sku) =>
+    _openIdb().then(
+      (db) =>
+        new Promise((resolve, reject) => {
+          const tx = db.transaction(store, 'readwrite');
+          tx.objectStore(store).delete(sku);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        })
+    );
+
+  // bundle 空属性判定:有 attributes → 可复用;无 attributes 且 6h 内已验证 → 可复用;否则 miss
+  const _bundleUsable = (entry) => {
+    if (!entry || !entry.data) return false;
+    const hasAttrs = Array.isArray(entry.data.attributes) && entry.data.attributes.length > 0;
+    if (hasAttrs) return true;
+    const verifiedAt = Number(entry.attrsEmptyVerifiedAt || 0);
+    return verifiedAt > 0 && Date.now() - verifiedAt < _ATTRS_EMPTY_REVERIFY_MS;
+  };
+
+  // ── L2: ERP MongoDB 缓存封装 ───────────────────────────────────────────────
+  // ERP 路由 /ozon/cache/{search,bundle}/:sku,JWT 鉴权(不走 storeGuard,按 sku 全局共享)
+  const _erpCacheGet = async (type, sku) => {
+    try {
+      const url = await getBackendUrl();
+      const stored = await getStorage([STORAGE_KEYS.token]);
+      const r = await apiRequest('GET', `${url}/ozon/cache/${type}/${encodeURIComponent(sku)}`, null, stored[STORAGE_KEYS.token]);
+      return r;
+    } catch (e) {
+      console.warn(`[cache] ERP ${type} get failed for sku=${sku}:`, e?.message || e);
+      return null;
+    }
+  };
+  const _erpCacheSet = async (type, sku, body) => {
+    try {
+      const url = await getBackendUrl();
+      const stored = await getStorage([STORAGE_KEYS.token]);
+      await apiRequest('POST', `${url}/ozon/cache/${type}/${encodeURIComponent(sku)}`, body, stored[STORAGE_KEYS.token]);
+      return true;
+    } catch (e) {
+      console.warn(`[cache] ERP ${type} set failed for sku=${sku}:`, e?.message || e);
+      return false;
+    }
+  };
+  const _erpCacheDelete = async (type, sku) => {
+    try {
+      const url = await getBackendUrl();
+      const stored = await getStorage([STORAGE_KEYS.token]);
+      await apiRequest('DELETE', `${url}/ozon/cache/${type}/${encodeURIComponent(sku)}`, null, stored[STORAGE_KEYS.token]);
+    } catch (e) {
+      console.warn(`[cache] ERP ${type} delete failed for sku=${sku}:`, e?.message || e);
+    }
+  };
+
+  // L3 真调后用此函数写 L2:异步单次写入 + 成功后回更新 L1 l2Synced=true。
+  // 失败时不重试,保持 l2Synced=false,由 CACHE_SYNC_ALARM 定时任务补写。
+  const _erpCacheSetAndSyncFlag = (store, type, sku, body) => {
+    _erpCacheSet(type, sku, body).then((ok) => {
+      if (ok) {
+        _idbGet(store, sku).then((entry) => {
+          if (entry && entry.data) _idbPut(store, { ...entry, l2Synced: true }).catch(() => {});
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+  };
+
+  // L1 命中但 L2 未同步时,用 L1 数据异步补写 L2(单次,失败留待定时任务)。
+  const _syncL2FromL1 = async (store, type, sku, l1Entry) => {
+    try {
+      const ok = await _erpCacheSet(type, sku, {
+        data: l1Entry.data,
+        bundleId: l1Entry.bundleId || null,
+      });
+      if (ok) {
+        const latest = await _idbGet(store, sku);
+        if (latest && latest.data) {
+          _idbPut(store, { ...latest, l2Synced: true }).catch(() => {});
+        }
+      }
+    } catch (e) {
+      console.warn(`[cache] L2 sync from L1 failed sku=${sku}:`, e?.message || e);
+    }
+  };
+
+  // ── pdp 缓存(DOM 解析静态字段兜底) ─────────────────────────
+  // 缓存对象:extractProductData() 返回的静态字段(title/images/videos/sku/productId/url/brand/category/characteristics)
+  // 策略:无 TTL(永久),DOM 解析失败时兜底,不阻塞采集流程
+  // L1 IndexedDB → L2 MongoDB → 失败返回 null(content script 自行兜底)
+  const _pdpCacheGet = async (sku) => {
+    try {
+      // L1
+      const l1 = await _idbGet(_IDB_STORE_PDP, sku);
+      if (l1 && l1.data) return l1.data;
+      // L2
+      const l2 = await _erpCacheGet('pdp', sku);
+      if (l2 && l2.data) {
+        // 回填 L1
+        _idbPut(_IDB_STORE_PDP, {
+          sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true,
+        }).catch(() => {});
+        return l2.data;
+      }
+    } catch (e) {
+      console.warn(`[cache] pdp get failed sku=${sku}:`, e?.message || e);
+    }
+    return null;
+  };
+
+  // 写 L1(l2Synced=false) + 异步写 L2(成功后回更新 l2Synced=true)
+  const _pdpCacheSet = (sku, staticFields) => {
+    _idbPut(_IDB_STORE_PDP, {
+      sku, data: staticFields, fetchedAt: Date.now(), l2Synced: false,
+    }).catch(() => {});
+    _erpCacheSetAndSyncFlag(_IDB_STORE_PDP, 'pdp', sku, { data: staticFields });
+  };
+
+  const _pdpCacheDelete = (sku) => {
+    _idbDelete(_IDB_STORE_PDP, sku).catch(() => {});
+    _erpCacheDelete('pdp', sku);
+  };
+
+  // ── 定时补写 L2:扫描 L1 中 l2Synced=false 的记录 ──────────────────────────
+  // 由 chrome.alarms 每 5 分钟触发,不受 SW 休眠影响。
+  // 扫描 search_cache + bundle_cache + pdp_cache 三个 store,逐条补写 L2,成功后置 l2Synced=true。
+  let _cacheSyncRunning = false; // 并发守卫:避免多个 alarm 重叠执行
+  // forceAll=true 时返回所有有 data 的记录(不论 l2Synced),用于 popup 手动全量同步;
+  // forceAll=false(默认)只返回 l2Synced=false 的记录,用于定时补写。
+  const _idbScanUnsynced = (store, forceAll = false) =>
+    _openIdb().then(
+      (db) =>
+        new Promise((resolve, reject) => {
+          const tx = db.transaction(store, 'readonly');
+          const req = tx.objectStore(store).getAll();
+          req.onsuccess = () => {
+            const all = req.result || [];
+            resolve(all.filter((e) => e && e.data && (forceAll || e.l2Synced === false)));
+          };
+          req.onerror = () => reject(req.error);
+        })
+    );
+  // forceAll=true:全量同步(忽略 l2Synced 标志),由 popup 手动按钮触发
+  // forceAll=false(默认):只补写 l2Synced=false 的记录,由定时 alarm 触发
+  const syncL2Batch = async (forceAll = false) => {
+    if (_cacheSyncRunning) return { search: 0, bundle: 0, pdp: 0 };
+    _cacheSyncRunning = true;
+    const stats = { search: 0, bundle: 0, pdp: 0 };
+    try {
+      for (const { store, type } of [
+        { store: _IDB_STORE_SEARCH, type: 'search' },
+        { store: _IDB_STORE_BUNDLE, type: 'bundle' },
+        { store: _IDB_STORE_PDP, type: 'pdp' },
+      ]) {
+        const unsynced = await _idbScanUnsynced(store, forceAll).catch(() => []);
+        for (const entry of unsynced) {
+          const ok = await _erpCacheSet(type, entry.sku, {
+            data: entry.data,
+            bundleId: entry.bundleId || null,
+          });
+          if (ok) {
+            await _idbPut(store, { ...entry, l2Synced: true }).catch(() => {});
+            stats[type]++;
+          }
+        }
+      }
+      const total = stats.search + stats.bundle + stats.pdp;
+      if (total > 0) console.log(`[cache-sync] 补写 ${total} 条 L2 缓存 (search=${stats.search}, bundle=${stats.bundle}, pdp=${stats.pdp}, forceAll=${forceAll})`);
+    } catch (e) {
+      console.warn('[cache-sync] batch failed:', e?.message || e);
+    } finally {
+      _cacheSyncRunning = false;
+    }
+    return stats;
+  };
+  const setupCacheSyncAlarm = () => {
+    chrome.alarms.create(CACHE_SYNC_ALARM, {
+      delayInMinutes: 1,
+      periodInMinutes: CACHE_SYNC_INTERVAL_MINUTES,
+    });
+  };
 
   // SW 启动时清理 24h 过期的采集去重 cache(plan v3 子项 ②)。
   // key 形如 `jz-collect-recent-v1:{host}:{storeId}:{sourceId}:{sku}`,
@@ -533,24 +783,46 @@ try {
   })();
 
   const fetchBundleByVariantId = async (sku, variantId, companyId, opts = {}) => {
-    const cacheKey = _bundleCacheKey(companyId, variantId);
-    // L1: chrome.storage.local cache(同 company+variant 24h 复用)
-    // forceRefresh=true 跳过 cache 命中,直接调 endpoint 拉新 bundle(用于源商品改了类目/属性时手动刷新)
-    if (!opts.forceRefresh) {
+    // forceRefresh → 清 L1 + L2,确保真拉
+    if (opts.forceRefresh) {
+      await Promise.all([
+        _idbDelete(_IDB_STORE_BUNDLE, sku).catch(() => {}),
+        _erpCacheDelete('bundle', sku),
+      ]);
+    } else {
+      // L1: IndexedDB(毫秒级)
       try {
-        const cached = await new Promise((resolve) => {
-          chrome.storage.local.get([cacheKey], (data) => {
-            resolve(data?.[cacheKey] || null);
-          });
-        });
-        if (cached && Date.now() - (cached.at || 0) < _BUNDLE_CACHE_TTL_MS && cached.item) {
-          console.log(`[searchVariants][fetchBundleByVariantId] cache hit sku=${sku} variantId=${variantId}`);
-          return cached.item;
+        const l1 = await _idbGet(_IDB_STORE_BUNDLE, sku);
+        if (_bundleUsable(l1)) {
+          console.log(`[fetchBundleByVariantId] L1 hit sku=${sku}`);
+          // L2 未同步(之前写入失败) → 用 L1 数据异步补写 L2,成功后置 l2Synced=true
+          if (!l1.l2Synced) _syncL2FromL1(_IDB_STORE_BUNDLE, 'bundle', sku, l1);
+          return l1.data;
         }
-      } catch {}
+      } catch (e) {
+        console.warn(`[fetchBundleByVariantId] L1 get failed sku=${sku}:`, e?.message || e);
+      }
+
+      // L2: ERP MongoDB(多设备共享)
+      const l2 = await _erpCacheGet('bundle', sku);
+      if (l2 && l2.data) {
+        // ERP 已做空属性 6h 重验判定,命中即可复用
+        console.log(`[fetchBundleByVariantId] L2 hit sku=${sku}`);
+        // 回填 L1(l2Synced=true,L2 已有数据)
+        const verifiedAt = Array.isArray(l2.data.attributes) && l2.data.attributes.length > 0
+          ? null
+          : (l2.attrsEmptyVerifiedAt ? new Date(l2.attrsEmptyVerifiedAt).getTime() : Date.now());
+        _idbPut(_IDB_STORE_BUNDLE, {
+          sku, data: l2.data, bundleId: l2.bundleId || null,
+          fetchedAt: Date.now(),
+          l2Synced: true,
+          ...(verifiedAt ? { attrsEmptyVerifiedAt: verifiedAt } : {}),
+        }).catch(() => {});
+        return l2.data;
+      }
     }
 
-    // L2: 真调 endpoint(有副作用)
+    // L3: 真调 Ozon endpoint(有副作用:每次创建新 bundle draft)
     const resp = await fetchSellerPortal(
       '/seller-prototype/create-bundle-by-variant-id',
       {
@@ -566,16 +838,23 @@ try {
         preferTabId: opts.preferTabId,
       }
     );
-    console.log(`[fetchBundleByVariantId] fetch sku=${sku} variantId=${variantId}`);
+    console.log(`[fetchBundleByVariantId] L3 fetch sku=${sku} variantId=${variantId}`);
     const item = resp?.item || null;
     if (!item) return null;
 
-    // 写 cache(包括 sku + bundle_id 便于 debug,但 item 才是数据本体)
-    try {
-      chrome.storage.local.set({
-        [cacheKey]: { at: Date.now(), item, sku, bundleId: resp.bundle_id || null },
-      });
-    } catch {}
+    // 异步写回 L1(l2Synced=false) + L2(带重试,成功后回更新 L1 l2Synced=true)
+    const hasAttrs = Array.isArray(item.attributes) && item.attributes.length > 0;
+    const verifiedAt = hasAttrs ? null : Date.now();
+    _idbPut(_IDB_STORE_BUNDLE, {
+      sku, data: item, bundleId: resp.bundle_id || null,
+      fetchedAt: Date.now(),
+      l2Synced: false, // L2 尚未同步;L2 重试成功后会回更新为 true,失败则下次查询补写(兜底)
+      ...(verifiedAt ? { attrsEmptyVerifiedAt: verifiedAt } : {}),
+    }).catch(() => {});
+    _erpCacheSetAndSyncFlag(_IDB_STORE_BUNDLE, 'bundle', sku, {
+      data: item,
+      bundleId: resp.bundle_id || null,
+    });
 
     return item;
   };
@@ -2517,6 +2796,8 @@ try {
       handleClientSyncAlarm(alarm.name);
     } else if (alarm.name === BROWSER_AGENT_ALARM) {
       handleBrowserAgentAlarm();
+    } else if (alarm.name === CACHE_SYNC_ALARM) {
+      syncL2Batch();
     }
   });
 
@@ -2530,16 +2811,18 @@ try {
   /**
    * Reload all seller.ozon.ru tabs so manifest-declared content_scripts get injected.
    * Needed when the extension loads after the tab is already open (e.g. install/update/startup).
+   * 错开 500ms 重载,避免多标签页同时重载 + content script 重新注入导致内存峰值。
    */
   const reloadSellerTabs = async () => {
     const tabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
-    for (const tab of tabs) {
-      chrome.tabs.reload(tab.id);
+    for (let i = 0; i < tabs.length; i++) {
+      setTimeout(() => chrome.tabs.reload(tabs[i].id), i * 500);
     }
-    if (tabs.length) console.log(`[reloadSellerTabs] reloaded ${tabs.length} seller tab(s)`);
+    if (tabs.length) console.log(`[reloadSellerTabs] scheduled ${tabs.length} seller tab(s) reload (staggered 500ms)`);
   };
 
   chrome.runtime.onInstalled.addListener(() => {
+    // 同步初始化:alarm 注册 + 上下文初始化(轻量,无网络请求)
     detectBackendUrl();
     createContextMenus();
     setupUpdateAlarm();
@@ -2550,10 +2833,12 @@ try {
     initBrowserAgentContext();
     setupClientSyncAlarms();
     setupBrowserAgentAlarm();
-    checkForUpdate();
-    refreshExchangeRate();
-    handleBrowserAgentAlarm();
-    reloadSellerTabs();
+    setupCacheSyncAlarm();
+    // 异步重负载:错开执行,避免重载瞬间并发风暴导致 OOM
+    setTimeout(() => checkForUpdate(), 1_000);
+    setTimeout(() => refreshExchangeRate(), 2_000);
+    setTimeout(() => handleBrowserAgentAlarm(), 3_000);
+    setTimeout(() => reloadSellerTabs(), 4_000);
   });
 
   chrome.runtime.onStartup.addListener(() => {
@@ -2564,15 +2849,23 @@ try {
     initBrowserAgentContext();
     setupClientSyncAlarms();
     setupBrowserAgentAlarm();
-    refreshExchangeRate();
-    handleBrowserAgentAlarm();
-    reloadSellerTabs();
+    setupCacheSyncAlarm();
+    setTimeout(() => refreshExchangeRate(), 1_000);
+    setTimeout(() => handleBrowserAgentAlarm(), 2_000);
+    setTimeout(() => reloadSellerTabs(), 3_000);
   });
 
   // SW 冷启动(install/startup 之外的 import 时)也要 init,
   // 因为 chrome 在 SW 唤醒时不会再触发 onStartup。
   initClientSyncContext();
   initBrowserAgentContext();
+
+  // SW 被挂起前清理资源:重置 IDB 缓存让下次唤醒重连,避免使用已关闭的连接。
+  // lease heartbeat timer 由 SW 终止时隐式清理,无需显式处理。
+  chrome.runtime.onSuspend.addListener(() => {
+    _idbPromise = null;
+    console.log('[SW] onSuspend: cleared IDB cache');
+  });
 
   // tab 关闭时清理采集器心跳记录
   chrome.tabs.onRemoved.addListener((tabId) => {
@@ -3104,6 +3397,51 @@ try {
             console.warn('[ServiceWorker] tryWebSync failed:', e.message);
           }
           return { ok: true, data: { synced: false } };
+        }
+        case 'syncAllCacheToL2': {
+          // popup 手动触发:全量同步 L1 → L2(MongoDB),忽略 l2Synced 标志。
+          // 返回 { ok, data: { search, bundle, pdp } } 供 popup 显示同步条数。
+          try {
+            const stats = await syncL2Batch(true);
+            return { ok: true, data: stats };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'pdpCacheGet': {
+          // content script 的 extractProductData() 失败时,查 pdp 缓存兜底。
+          // 入参: { sku }  返回: { ok, data: staticFields | null }
+          try {
+            const sku = String(message.sku || '');
+            if (!sku) return { ok: true, data: null };
+            const data = await _pdpCacheGet(sku);
+            return { ok: true, data };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'pdpCacheSet': {
+          // content script 的 extractProductData() 成功后,异步写 pdp 缓存(仅静态字段)。
+          // 入参: { sku, data: staticFields }  返回: { ok: true }(异步写,不等 L2)
+          try {
+            const sku = String(message.sku || '');
+            const data = message.data;
+            if (!sku || !data) return { ok: true };
+            _pdpCacheSet(sku, data);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'pdpCacheDelete': {
+          // forceRefresh 时清 pdp 缓存(目前 content script 不主动调,预留接口)。
+          try {
+            const sku = String(message.sku || '');
+            if (sku) _pdpCacheDelete(sku);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
         }
         case 'openFrontend': {
           // 迁移至 erp-backend-lite:Web 前端 = erp-lite /admin(hash 路由)。
@@ -3977,49 +4315,95 @@ try {
           }
 
           const MAX_RETRIES = 2;
+          // search 缓存查询(三层:L1 IndexedDB → L2 ERP MongoDB → L3 真调)
+          // 命中后跳过 /search 真调,直接用缓存 items 进入 Step 2(bundle 有自己的缓存)
+          let searchCacheHit = null; // { items } | null
+          if (!forceRefresh) {
+            // L1: IndexedDB
+            try {
+              const l1 = await _idbGet(_IDB_STORE_SEARCH, sku);
+              if (l1 && Array.isArray(l1.data?.items) && l1.data.items.length > 0) {
+                console.log(`[searchVariants] search L1 hit sku=${sku}`);
+                searchCacheHit = l1.data;
+                // L2 未同步 → 用 L1 数据异步补写 L2
+                if (!l1.l2Synced) _syncL2FromL1(_IDB_STORE_SEARCH, 'search', sku, l1);
+              }
+            } catch (e) {
+              console.warn(`[searchVariants] search L1 get failed:`, e?.message || e);
+            }
+            // L2: ERP MongoDB
+            if (!searchCacheHit) {
+              const l2 = await _erpCacheGet('search', sku);
+              if (l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0) {
+                console.log(`[searchVariants] search L2 hit sku=${sku}`);
+                searchCacheHit = l2.data;
+                // 回填 L1(l2Synced=true)
+                _idbPut(_IDB_STORE_SEARCH, { sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true }).catch(() => {});
+              }
+            }
+          } else {
+            // forceRefresh → 清 L1 + L2
+            await Promise.all([
+              _idbDelete(_IDB_STORE_SEARCH, sku).catch(() => {}),
+              _erpCacheDelete('search', sku),
+            ]);
+          }
+
           for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             try {
-              const resp = await fetchSellerPortal(
-                '/search',
-                {
-                  company_id: companyId,
-                  need_total: true,
-                  filter: {
-                    children_nodes: {
-                      children_nodes: [{ input_leaf: { sku: { values: [String(sku)] } } }],
-                      operator: 'AND',
+              let items;
+              if (searchCacheHit) {
+                // 缓存命中 → 跳过 /search 真调
+                items = searchCacheHit.items;
+              } else {
+                const resp = await fetchSellerPortal(
+                  '/search',
+                  {
+                    company_id: companyId,
+                    need_total: true,
+                    filter: {
+                      children_nodes: {
+                        children_nodes: [{ input_leaf: { sku: { values: [String(sku)] } } }],
+                        operator: 'AND',
+                      },
                     },
+                    pagination: { limit: '50' },
+                    is_copy_allowed: false,
                   },
-                  pagination: { limit: '50' },
-                  is_copy_allowed: false,
-                },
-                {
-                  urlPrefix: '/api/v1',
-                  pageType: 'products',
-                  timeoutMs: 30000,
-                  allowOzonTab: true,
-                  preferTabId: senderTabId,
+                  {
+                    urlPrefix: '/api/v1',
+                    pageType: 'products',
+                    timeoutMs: 30000,
+                    allowOzonTab: true,
+                    preferTabId: senderTabId,
+                  }
+                );
+                console.log(`[searchVariants] fetch search sku=${sku}`);
+                const rawVariants = Array.isArray(resp?.variants)
+                  ? resp.variants
+                  : Array.isArray(resp?.items)
+                    ? resp.items
+                    : Array.isArray(resp?.products)
+                      ? resp.products
+                      : Array.isArray(resp)
+                        ? resp
+                        : [];
+                items = rawVariants.map(normalizeSearchVariantToSv).filter(Boolean);
+                if (items.length === 0) {
+                  if (attempt === 1) {
+                    console.log(
+                      `[searchVariants] sku=${sku} no variants from /search, raw:`,
+                      JSON.stringify(resp).slice(0, 400)
+                    );
+                  }
+                  return { ok: true, data: { items: [] } };
                 }
-              );
-              console.log(`[searchVariants] fetch search sku=${sku}`);
-              const rawVariants = Array.isArray(resp?.variants)
-                ? resp.variants
-                : Array.isArray(resp?.items)
-                  ? resp.items
-                  : Array.isArray(resp?.products)
-                    ? resp.products
-                    : Array.isArray(resp)
-                      ? resp
-                      : [];
-              const items = rawVariants.map(normalizeSearchVariantToSv).filter(Boolean);
-              if (items.length === 0) {
+                // 异步写回 L1(l2Synced=false) + L2(带重试,成功后回更新 L1 l2Synced=true)
                 if (attempt === 1) {
-                  console.log(
-                    `[searchVariants] sku=${sku} no variants from /search, raw:`,
-                    JSON.stringify(resp).slice(0, 400)
-                  );
+                  const cacheData = { items };
+                  _idbPut(_IDB_STORE_SEARCH, { sku, data: cacheData, fetchedAt: Date.now(), l2Synced: false }).catch(() => {});
+                  _erpCacheSetAndSyncFlag(_IDB_STORE_SEARCH, 'search', sku, { data: cacheData });
                 }
-                return { ok: true, data: { items: [] } };
               }
 
               // Step 2: bundle 补完整 attributes(物理 + 含 40-63 个完整 attr)
@@ -4717,14 +5101,15 @@ try {
     // content LONG_ACTIONS 把这俩 action 的 content 侧超时也放宽到 600s。
     const VIDEO_ACTIONS = new Set(['uploadFollowSellVideo', 'transferVariantVideo']);
     const HANDLER_TOTAL_TIMEOUT_MS = VIDEO_ACTIONS.has(message?.action) ? 160_000 : 50_000;
+    let raceTimer = null;
     const handlerPromise = Promise.race([
       handle(),
-      new Promise((_, reject) =>
-        setTimeout(
+      new Promise((_, reject) => {
+        raceTimer = setTimeout(
           () => reject(new Error(`SW handler ${message?.action} 总超时 (${HANDLER_TOTAL_TIMEOUT_MS / 1000}s)`)),
           HANDLER_TOTAL_TIMEOUT_MS
-        )
-      ),
+        );
+      }),
     ]);
 
     handlerPromise
@@ -4738,6 +5123,7 @@ try {
       })
       .finally(() => {
         if (keepAliveTimer) clearInterval(keepAliveTimer);
+        if (raceTimer) clearTimeout(raceTimer);
       });
 
     return true;

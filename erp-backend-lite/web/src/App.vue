@@ -20,6 +20,7 @@ const tabs = [
   { key: '/audit', label: '操作日志' },
   { key: '/config', label: '配置中心' },
   { key: '/listing-templates', label: '上架模板' },
+  { key: '/cache', label: '缓存管理' },
 ];
 
 // 当前激活的 Tab(用 route.path 匹配)

@@ -78,36 +78,38 @@
   }
 
   function waitForTabComplete(tabId) {
-    return withTimeout(
-      new Promise((resolve, reject) => {
-        let settled = false;
-        const cleanup = () => chrome.tabs.onUpdated.removeListener(listener);
-        const finish = (value) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resolve(value);
-        };
-        const listener = (updatedTabId, changeInfo, tab) => {
-          if (updatedTabId !== tabId) return;
-          if (changeInfo.status === 'complete') finish(tab);
-        };
-        chrome.tabs.onUpdated.addListener(listener);
-        tabGet(tabId)
-          .then((tab) => {
-            if (tab.status === 'complete') finish(tab);
-          })
-          .catch((e) => {
-            if (!settled) {
-              settled = true;
-              cleanup();
-              reject(e);
-            }
-          });
-      }),
-      TAB_LOAD_TIMEOUT_MS,
-      'tab load'
-    );
+    let cleanupRef = null;
+    const p = new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => chrome.tabs.onUpdated.removeListener(listener);
+      cleanupRef = cleanup; // 暴露给外层,超时时也能清理
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+      const listener = (updatedTabId, changeInfo, tab) => {
+        if (updatedTabId !== tabId) return;
+        if (changeInfo.status === 'complete') finish(tab);
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+      tabGet(tabId)
+        .then((tab) => {
+          if (tab.status === 'complete') finish(tab);
+        })
+        .catch((e) => {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(e);
+          }
+        });
+    });
+    // 超时也清理监听器,避免 onUpdated 监听器泄漏导致内存累积
+    return withTimeout(p, TAB_LOAD_TIMEOUT_MS, 'tab load').finally(() => {
+      if (cleanupRef) cleanupRef();
+    });
   }
 
   async function ensureTab(url) {

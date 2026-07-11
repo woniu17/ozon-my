@@ -20,6 +20,7 @@ import miscRoutes from './modules/misc.js';
 import adminRoutes from './modules/admin.js';
 import configRoutes from './modules/config.js';
 import batchRoutes from './modules/batch.js';
+import cacheRoutes from './modules/cache.js';
 import { auditLog } from './middleware/audit.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -74,6 +75,7 @@ app.use(miscRoutes);
 app.use(adminRoutes);
 app.use(configRoutes);
 app.use(batchRoutes);
+app.use(cacheRoutes);
 
 // 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
 if (config.featureFlags?.proxy_collect) {
