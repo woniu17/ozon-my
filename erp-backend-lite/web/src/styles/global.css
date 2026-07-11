@@ -777,6 +777,13 @@ h3 {
   font-size: 11px;
   color: var(--muted);
 }
+.cb-source-link {
+  color: var(--primary, #1890ff);
+  text-decoration: none;
+}
+.cb-source-link:hover {
+  text-decoration: underline;
+}
 .cb-foot {
   display: flex;
   align-items: center;

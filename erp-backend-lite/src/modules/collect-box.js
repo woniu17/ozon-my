@@ -7,7 +7,8 @@ import { ApiError, ErrorCode } from '../utils/error-codes.js';
 const router = Router();
 
 // POST /ozon/collect-box/v2 —— 全数据源采集推送(字段级来源标记)
-// body: { anchorSku, sourcePageUrl, collectSource, variants[], rawBySource, synthesizedItems, collectedAt }
+// body: { anchorSku, sourcePageUrl, collectSource, variants[], rawBySource, collectedAt }
+// 注:synthesizedItems 已改为前端查询时从 variants 现合成,不再预存
 router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
   try {
     const body = req.body || {};
@@ -34,9 +35,7 @@ router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
     }
 
     // 拆分多变体:每个变体一条记录,以 (store_id, sku) 为 key upsert
-    // variants[] 与 synthesizedItems[] 按下标一一对应
     const variants = body.variants;
-    const synthesizedItems = Array.isArray(body.synthesizedItems) ? body.synthesizedItems : [];
     const collectedAt = Number(body.collectedAt) || Date.now();
     const storeId = req.storeId;
     const anchorSku = String(body.anchorSku);
@@ -49,15 +48,15 @@ router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
     const updateStmt = db.prepare(
       `UPDATE collect_box_v2 SET
          anchor_sku = ?, source_page_url = ?, collect_source = ?, variants_json = ?,
-         raw_by_source_json = ?, synthesized_items_json = ?,
+         raw_by_source_json = ?,
          collected_at = ?, updated_at = datetime('now')
        WHERE id = ?`
     );
     const insertStmt = db.prepare(
       `INSERT INTO collect_box_v2
         (store_id, sku, anchor_sku, source_page_url, collect_source,
-         variants_json, raw_by_source_json, synthesized_items_json, collected_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         variants_json, raw_by_source_json, collected_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
     const results = [];
@@ -65,7 +64,6 @@ router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
       const v = variants[i];
       const sku = String(v?.sku?.value || v?.sku || anchorSku);
       const variantsJson = JSON.stringify([v]); // 单条变体包装成数组(保持 variants_json 结构一致)
-      const synthesizedJson = synthesizedItems[i] ? JSON.stringify([synthesizedItems[i]]) : '[]';
 
       const existing = selectExisting.get(storeId, sku);
       let id;
@@ -77,7 +75,6 @@ router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
           collectSource,
           variantsJson,
           rawBySourceJson,
-          synthesizedJson,
           collectedAt,
           existing.id
         );
@@ -92,7 +89,6 @@ router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
           collectSource,
           variantsJson,
           rawBySourceJson,
-          synthesizedJson,
           collectedAt
         );
         id = info.lastInsertRowid;
@@ -126,7 +122,6 @@ router.post('/sources/:sourceId/collect', storeGuard, (req, res, next) => {
     const storeId = req.storeId;
     const now = Date.now();
     const variantsJson = JSON.stringify([{ sku, ...raw }]);
-    const synthesizedJson = '[]';
     const rawBySourceJson = JSON.stringify({ agent: { raw, sourceId } });
     const collectSource = sourceId;
 
@@ -140,10 +135,10 @@ router.post('/sources/:sourceId/collect', storeGuard, (req, res, next) => {
       db.prepare(
         `UPDATE collect_box_v2 SET
            anchor_sku = ?, source_page_url = ?, collect_source = ?, variants_json = ?,
-           raw_by_source_json = ?, synthesized_items_json = ?,
+           raw_by_source_json = ?,
            collected_at = ?, updated_at = datetime('now')
          WHERE id = ?`
-      ).run(sku, raw.url || '', collectSource, variantsJson, rawBySourceJson, synthesizedJson, now, existing.id);
+      ).run(sku, raw.url || '', collectSource, variantsJson, rawBySourceJson, now, existing.id);
       id = existing.id;
       action = 'updated';
     } else {
@@ -151,10 +146,10 @@ router.post('/sources/:sourceId/collect', storeGuard, (req, res, next) => {
         .prepare(
           `INSERT INTO collect_box_v2
             (store_id, sku, anchor_sku, source_page_url, collect_source,
-             variants_json, raw_by_source_json, synthesized_items_json, collected_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             variants_json, raw_by_source_json, collected_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(storeId, sku, sku, raw.url || '', collectSource, variantsJson, rawBySourceJson, synthesizedJson, now);
+        .run(storeId, sku, sku, raw.url || '', collectSource, variantsJson, rawBySourceJson, now);
       id = info.lastInsertRowid;
       action = 'created';
     }

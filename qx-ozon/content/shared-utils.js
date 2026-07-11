@@ -3933,36 +3933,6 @@ if (!globalThis.__JZ_BRAND__) {
         },
       };
 
-      // 合成 synthesizedItem(跟卖预览,字段引用 cv 的 SourcedField)
-      const desc = distilled.description || cv.name.value;
-      const synItem = {
-        offer_id: sf(`SKU${sku}`, 'computed', 'auto-generated'),
-        name: cv.name,
-        price: sf(Number(cv.price.value || 0).toFixed(2), cv.price.source),
-        old_price: sf(Number(cv.price.value || 0 * 1.25 || 0).toFixed(2), 'computed'),
-        currency_code: sf('CNY', 'computed'),
-        vat: sf('0', 'computed'),
-        images: cv.images,
-        bundleComplexAttrs: cv.bundleComplexAttrs,
-        videoUrl: cv.videoUrl,
-        videoCover: cv.videoCover,
-        scraped_breadcrumbs: cv.breadcrumbs,
-        scraped_description: sf(desc, 'page-json', 'distilled.description'),
-        _aiHashtags: cv.hashtags,
-        scraped_sku: cv.sku,
-        scraped_brand: sf('copy', 'computed'),
-        scraped_brand_value: cv.brand,
-        _sourceVariant: cv.sourceVariant,
-        weight: cv.weight,
-        depth: cv.depth,
-        width: cv.width,
-        height: cv.height,
-        scraped_weight: cv.scrapedDims,
-        scraped_depth: cv.scrapedDims,
-        scraped_width: cv.scrapedDims,
-        scraped_height: cv.scrapedDims,
-      };
-
       // rawBySource:5 类数据源(列表页 dom/ssrAspects 为空)
       // sellerPortal/pageJson 必须按 SKU 索引(与 PDP 采集 ozon-product.js 结构对齐),
       // 否则前端 CollectBoxV2Detail.vue 的 Object.keys 取不到 SKU。
@@ -4004,7 +3974,6 @@ if (!globalThis.__JZ_BRAND__) {
                 collectSource: 'MY采集器',
                 variants: [cv],
                 rawBySource,
-                synthesizedItems: [synItem],
                 collectedAt: now,
               },
             },

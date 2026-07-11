@@ -610,7 +610,7 @@ router.get('/admin/api/collect-box-v2/:id', (req, res, next) => {
         collectSource: row.collect_source || '',
         variants: safeParseJson(row.variants_json) || [],
         rawBySource: safeParseJson(row.raw_by_source_json) || {},
-        synthesizedItems: safeParseJson(row.synthesized_items_json) || [],
+        // synthesizedItems 已改为前端从 variants 现合成,不再返回
         collectedAt: row.collected_at,
         createdAt: row.created_at,
         updatedAt: row.updated_at,

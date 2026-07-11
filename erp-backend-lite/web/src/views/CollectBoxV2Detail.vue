@@ -37,6 +37,46 @@ const opiLoading = ref(false);
 const opiError = ref('');
 const opiLoaded = ref(false); // 是否已加载(避免重复请求)
 
+// 从 variants 现合成 synthesizedItems(取代后端预存的 synthesized_items_json)
+// 逻辑与插件端 buildSynthesizedItem 对齐:每字段带 source 标记
+function sf(value, source, sourceDetail = '') {
+  return { value, source, sourceDetail };
+}
+function buildSynthesizedItem(cv) {
+  const sku = cv?.sku?.value;
+  const desc = cv?.description?.value || cv?.name?.value || '';
+  const dims = cv?.scrapedDims?.value || {};
+  return {
+    offer_id: sf(`SKU${sku}`, 'computed', 'auto-generated'),
+    name: cv.name,
+    price: cv.price,
+    old_price: cv.oldPrice || sf(Number(cv.price?.value || 0 * 1.25 || 0).toFixed(2), 'computed'),
+    currency_code: sf('CNY', 'computed'),
+    vat: sf('0', 'computed'),
+    images: cv.images,
+    bundleComplexAttrs: cv.bundleComplexAttrs,
+    videoUrl: cv.videoUrl,
+    videoCover: cv.videoCover,
+    scraped_breadcrumbs: cv.breadcrumbs,
+    scraped_description: sf(desc, 'computed', 'pickFollowSellDescription'),
+    _aiHashtags: cv.hashtags?.value?.length ? cv.hashtags : sf(null, 'dom'),
+    scraped_sku: cv.sku,
+    scraped_brand: sf('copy', 'computed'),
+    scraped_brand_value: cv.brand,
+    _sourceVariant: cv.sourceVariant,
+    weight: cv.weight,
+    depth: cv.depth,
+    width: cv.width,
+    height: cv.height,
+    scraped_weight:
+      dims.weight != null ? sf(dims.weight, cv.scrapedDims?.source, 'extractCharacteristics.weight') : null,
+    scraped_depth: dims.depth != null ? sf(dims.depth, cv.scrapedDims?.source, 'extractCharacteristics.depth') : null,
+    scraped_width: dims.width != null ? sf(dims.width, cv.scrapedDims?.source, 'extractCharacteristics.width') : null,
+    scraped_height:
+      dims.height != null ? sf(dims.height, cv.scrapedDims?.source, 'extractCharacteristics.height') : null,
+  };
+}
+
 // 提取 synthesizedItems 的纯值数组(供 preview-opi 接口消费)
 function plainItems(items) {
   return (items || []).map((item) => {
@@ -221,7 +261,7 @@ const sellerPortal = computed(() => rawBySource.value.sellerPortal || {});
 const pageJson = computed(() => rawBySource.value.pageJson || {});
 const sellerSkus = computed(() => Object.keys(sellerPortal.value));
 const pageJsonSkus = computed(() => Object.keys(pageJson.value));
-const synthesizedItems = computed(() => props.data?.synthesizedItems || []);
+const synthesizedItems = computed(() => (props.data?.variants || []).map((cv) => buildSynthesizedItem(cv)));
 const isTruncated = computed(() => !!rawBySource.value._truncated);
 
 function attrCount(sv) {

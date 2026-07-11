@@ -178,6 +178,24 @@ onMounted(() => {
             <span v-if="it.anchorSku && it.anchorSku !== it.sku">母体: {{ it.anchorSku }}</span>
             <span v-if="it.price">价格: {{ it.price }}</span>
             <span>店铺: {{ storeName(it.storeId) }}</span>
+            <a
+              v-if="it.sku"
+              :href="`https://www.ozon.ru/product/${it.sku}/`"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="cb-source-link"
+              :title="`https://www.ozon.ru/product/${it.sku}/`"
+              >SKU 页</a
+            >
+            <a
+              v-if="it.sourcePageUrl"
+              :href="it.sourcePageUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="cb-source-link"
+              :title="it.sourcePageUrl"
+              >来源页</a
+            >
           </div>
           <div class="cb-foot">
             <span class="cb-time">收集: {{ fmtTime(it.collectedAt) }}</span>

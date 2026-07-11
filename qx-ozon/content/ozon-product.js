@@ -1886,46 +1886,6 @@
       return cv;
     });
 
-    // ── 组装 synthesizedItems[](合成跟卖请求预览,每字段带 source)──
-    const synthesizedItems = collectedVariants.map((cv) => {
-      const desc = window.JZFollowSellContentCopy?.pickFollowSellDescription
-        ? window.JZFollowSellContentCopy.pickFollowSellDescription({
-            customDescription: '',
-            sourceVariant: variantData,
-            richContent: cv.richContent.value || collectAllRichContent,
-            fallbackName: cv.name.value,
-            max: 4096,
-          })
-        : cv.name.value;
-      return {
-        offer_id: sf(`SKU${cv.sku.value}`, 'computed', 'auto-generated'),
-        name: cv.name,
-        price: sf(Number(cv.price.value || 0).toFixed(2), cv.price.source),
-        old_price: sf(Number(cv.oldPrice.value || cv.price.value * 1.25 || 0).toFixed(2), cv.oldPrice.source),
-        currency_code: sf('CNY', 'computed'),
-        vat: sf('0', 'computed'),
-        images: cv.images,
-        bundleComplexAttrs: cv.bundleComplexAttrs,
-        videoUrl: cv.videoUrl,
-        videoCover: cv.videoCover,
-        scraped_breadcrumbs: cv.breadcrumbs,
-        scraped_description: sf(desc, 'computed', 'pickFollowSellDescription'),
-        _aiHashtags: cv.hashtags.value?.length ? cv.hashtags : sf(null, 'dom'),
-        scraped_sku: cv.sku,
-        scraped_brand: sf('copy', 'computed'),
-        scraped_brand_value: cv.brand,
-        _sourceVariant: cv.sourceVariant,
-        weight: cv.weight,
-        depth: cv.depth,
-        width: cv.width,
-        height: cv.height,
-        scraped_weight: cv.scrapedDims,
-        scraped_depth: cv.scrapedDims,
-        scraped_width: cv.scrapedDims,
-        scraped_height: cv.scrapedDims,
-      };
-    });
-
     // ── 组装 rawBySource(5 类数据源原始响应)──
     const sellerPortalRaw = {};
     for (const [sku, distilled] of sourceMap.entries()) {
@@ -1960,7 +1920,6 @@
       collectSource: '详情页一键采集',
       variants: collectedVariants,
       rawBySource,
-      synthesizedItems,
       collectedAt: now,
     });
   }
