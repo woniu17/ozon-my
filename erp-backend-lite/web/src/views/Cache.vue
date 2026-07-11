@@ -1,6 +1,14 @@
 <script setup>
 import { reactive, ref, computed, onMounted } from 'vue';
-import { getCacheStats, getCacheList, getCacheDetail, deleteCache, clearCache } from '../api/cache.js';
+import {
+  getCacheStats,
+  getCacheList,
+  getCacheDetail,
+  deleteCache,
+  clearCache,
+  getCacheOverview,
+  getOpiPreview,
+} from '../api/cache.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
@@ -28,26 +36,36 @@ async function loadStats() {
 
 // ── 列表 ───────────────────────────────────────────────────
 const state = reactive({
-  type: 'bundle', // search | bundle | pdp | composer | entrypoint | dynamic
+  type: 'overview', // overview | search | bundle | pdp | composer | entrypoint | dynamic
   keyword: '',
   items: [],
   total: 0,
   loading: false,
   page: 1,
-  pageSize: 20,
+  pageSize: 50,
 });
 
 async function loadList() {
   state.loading = true;
   try {
-    const data = await getCacheList({
-      type: state.type,
-      keyword: state.keyword.trim(),
-      page: state.page,
-      pageSize: state.pageSize,
-    });
-    state.items = data?.items || [];
-    state.total = data?.total || 0;
+    if (state.type === 'overview') {
+      const data = await getCacheOverview({
+        keyword: state.keyword.trim(),
+        page: state.page,
+        pageSize: state.pageSize,
+      });
+      state.items = data?.items || [];
+      state.total = data?.total || 0;
+    } else {
+      const data = await getCacheList({
+        type: state.type,
+        keyword: state.keyword.trim(),
+        page: state.page,
+        pageSize: state.pageSize,
+      });
+      state.items = data?.items || [];
+      state.total = data?.total || 0;
+    }
   } catch (err) {
     show(err.message || String(err), 'error');
     state.items = [];
@@ -136,6 +154,42 @@ function isStale(it) {
   return state.type === 'bundle' && !!it.attrsStale;
 }
 
+// ── OPI 预览 ───────────────────────────────────────────────
+const opiOpen = ref(false);
+const opiLoading = ref(false);
+const opiSku = ref('');
+const opiData = ref(null);
+const opiSources = ref(null);
+const opiError = ref('');
+const opiTitle = computed(() => `OPI 预览 · ${opiSku.value}`);
+
+async function openOpiPreview(sku) {
+  opiOpen.value = true;
+  opiLoading.value = true;
+  opiSku.value = sku;
+  opiData.value = null;
+  opiSources.value = null;
+  opiError.value = '';
+  try {
+    const r = await getOpiPreview(sku);
+    opiData.value = r?.item || null;
+    opiSources.value = r?.sources || null;
+    opiError.value = r?.error || '';
+  } catch (err) {
+    opiError.value = err.message || String(err);
+  } finally {
+    opiLoading.value = false;
+  }
+}
+
+function opiSourceTag(hit) {
+  return hit ? 'tag-ok' : 'tag-mute';
+}
+
+function opiSourceLabel(hit, type) {
+  return hit ? type : '—';
+}
+
 onMounted(() => {
   loadStats();
   loadList();
@@ -206,6 +260,13 @@ onMounted(() => {
     <div class="cache-type-tabs">
       <button
         class="cache-type-tab"
+        :class="{ active: state.type === 'overview' }"
+        @click="switchType('overview')"
+      >
+        全览
+      </button>
+      <button
+        class="cache-type-tab"
         :class="{ active: state.type === 'bundle' }"
         @click="switchType('bundle')"
       >
@@ -259,11 +320,70 @@ onMounted(() => {
       />
       <button class="btn btn-primary" @click="search">查询</button>
       <span class="spacer"></span>
-      <button class="btn btn-danger" @click="onClearAll">清空 {{ state.type }} 缓存</button>
+      <button v-if="state.type !== 'overview'" class="btn btn-danger" @click="onClearAll">清空 {{ state.type }} 缓存</button>
     </div>
 
-    <!-- 列表 -->
-    <div class="table-wrap">
+    <!-- 列表:全览模式 -->
+    <div v-if="state.type === 'overview'" class="table-wrap">
+      <table class="data-table overview-table">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th title="Seller Portal /api/v1/search 源数据">search</th>
+            <th title="create-bundle-by-variant-id 完整属性">bundle</th>
+            <th title="DOM 解析静态字段">pdp</th>
+            <th title="composer-api widgetStates">composer</th>
+            <th title="entrypoint-api page-json 图册/富内容">entrypoint</th>
+            <th title="DOM 动态字段(1h TTL)">dynamic</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-if="state.loading && !state.items.length">
+            <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+          </tr>
+          <tr v-else-if="!state.items.length">
+            <td colspan="8" class="empty">暂无缓存记录</td>
+          </tr>
+          <tr v-for="it in state.items" :key="it.sku">
+            <td class="col-sku">{{ it.sku }}</td>
+            <td>
+              <span v-if="it.search" class="tag tag-ok" :title="fmtTime(it.search.fetchedAt)">✓</span>
+              <span v-else class="tag tag-mute">—</span>
+            </td>
+            <td>
+              <span v-if="!it.bundle" class="tag tag-mute">—</span>
+              <span v-else-if="!it.bundle.attrsEmpty" class="tag tag-ok" :title="fmtTime(it.bundle.fetchedAt)">有属性</span>
+              <span v-else-if="it.bundle.attrsStale" class="tag tag-err" :title="fmtTime(it.bundle.fetchedAt)">空(待重验)</span>
+              <span v-else class="tag tag-warn" :title="fmtTime(it.bundle.fetchedAt)">空(6h内)</span>
+            </td>
+            <td>
+              <span v-if="it.pdp" class="tag tag-ok" :title="fmtTime(it.pdp.fetchedAt)">✓</span>
+              <span v-else class="tag tag-mute">—</span>
+            </td>
+            <td>
+              <span v-if="it.composer" class="tag tag-ok" :title="fmtTime(it.composer.fetchedAt)">✓</span>
+              <span v-else class="tag tag-mute">—</span>
+            </td>
+            <td>
+              <span v-if="it.entrypoint" class="tag tag-ok" :title="fmtTime(it.entrypoint.fetchedAt)">✓</span>
+              <span v-else class="tag tag-mute">—</span>
+            </td>
+            <td>
+              <span v-if="!it.dynamic" class="tag tag-mute">—</span>
+              <span v-else-if="!it.dynamic.expired" class="tag tag-ok" :title="fmtTime(it.dynamic.fetchedAt)">✓</span>
+              <span v-else class="tag tag-warn" :title="fmtTime(it.dynamic.fetchedAt)">过期</span>
+            </td>
+            <td class="row-actions">
+              <button class="btn btn-sm btn-primary" @click="openOpiPreview(it.sku)">OPI 预览</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 列表:单类型模式 -->
+    <div v-else class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
@@ -321,6 +441,62 @@ onMounted(() => {
         </div>
       </div>
       <p v-else class="muted">未找到缓存记录</p>
+    </AppModal>
+
+    <!-- OPI 预览弹窗 -->
+    <AppModal :open="opiOpen" :title="opiTitle" size="lg" @update:open="opiOpen = $event">
+      <p v-if="opiLoading" class="muted">加载中...</p>
+      <div v-else-if="opiError" class="opi-error">
+        <p>⚠️ {{ opiError }}</p>
+        <div v-if="opiSources" class="opi-sources">
+          <span>缓存来源:</span>
+          <span :class="opiSourceTag(opiSources.search)">search</span>
+          <span :class="opiSourceTag(opiSources.bundle)">bundle</span>
+          <span :class="opiSourceTag(opiSources.pdp)">pdp</span>
+          <span :class="opiSourceTag(opiSources.composer)">composer</span>
+          <span :class="opiSourceTag(opiSources.entrypoint)">entrypoint</span>
+          <span :class="opiSourceTag(opiSources.dynamic)">dynamic</span>
+        </div>
+      </div>
+      <div v-else-if="opiData" class="opi-preview">
+        <div class="opi-sources-bar">
+          <span class="opi-sources-label">缓存来源:</span>
+          <span :class="opiSourceTag(opiSources?.search)" :title="opiSourceLabel(opiSources?.search, 'Seller Portal /api/v1/search')">
+            search {{ opiSourceLabel(opiSources?.search, '✓') }}
+          </span>
+          <span :class="opiSourceTag(opiSources?.bundle)" :title="opiSourceLabel(opiSources?.bundle, 'create-bundle-by-variant-id')">
+            bundle {{ opiSourceLabel(opiSources?.bundle, '✓') }}
+          </span>
+          <span :class="opiSourceTag(opiSources?.pdp)" :title="opiSourceLabel(opiSources?.pdp, 'DOM 解析')">
+            pdp {{ opiSourceLabel(opiSources?.pdp, '✓') }}
+          </span>
+          <span :class="opiSourceTag(opiSources?.composer)" :title="opiSourceLabel(opiSources?.composer, 'composer-api')">
+            composer {{ opiSourceLabel(opiSources?.composer, '✓') }}
+          </span>
+          <span :class="opiSourceTag(opiSources?.entrypoint)" :title="opiSourceLabel(opiSources?.entrypoint, 'entrypoint-api')">
+            entrypoint {{ opiSourceLabel(opiSources?.entrypoint, '✓') }}
+          </span>
+          <span :class="opiSourceTag(opiSources?.dynamic)" :title="opiSourceLabel(opiSources?.dynamic, 'DOM 动态字段')">
+            dynamic {{ opiSourceLabel(opiSources?.dynamic, '✓') }}
+          </span>
+        </div>
+        <div class="opi-field-summary">
+          <div><b>name:</b> {{ opiData.name || '—' }}</div>
+          <div><b>offer_id:</b> {{ opiData.offer_id || '—' }}</div>
+          <div><b>price:</b> {{ opiData.price || '—' }}</div>
+          <div><b>images:</b> {{ opiData.images?.length || 0 }} 张</div>
+          <div><b>attributes:</b> {{ opiData.attributes?.length || 0 }} 个</div>
+          <div><b>complex_attributes:</b> {{ opiData.complex_attributes?.length || 0 }} 组</div>
+          <div v-if="opiData.weight"><b>weight:</b> {{ opiData.weight }} {{ opiData.weight_unit }}</div>
+          <div v-if="opiData.type_id"><b>type_id:</b> {{ opiData.type_id }}</div>
+          <div v-if="opiData.description_category_id"><b>description_category_id:</b> {{ opiData.description_category_id }}</div>
+        </div>
+        <div class="opi-json-section">
+          <h3>OPI v3 JSON</h3>
+          <JsonTree :data="opiData" :default-expand-level="2" root-key="item" />
+        </div>
+      </div>
+      <p v-else class="muted">无数据</p>
     </AppModal>
   </div>
 </template>
@@ -420,5 +596,80 @@ onMounted(() => {
 }
 .cache-detail-data h3 {
   margin-bottom: 8px;
+}
+
+/* 全览表格 */
+.overview-table th,
+.overview-table td {
+  text-align: center;
+}
+.overview-table .col-sku {
+  text-align: left;
+}
+.tag-mute {
+  background: #f3f4f6;
+  color: #9ca3af;
+}
+.overview-table .row-actions {
+  text-align: center;
+}
+
+/* OPI 预览弹窗 */
+.opi-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.opi-sources-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.opi-sources-label {
+  color: var(--muted);
+  margin-right: 4px;
+}
+.opi-sources-bar > span:not(.opi-sources-label) {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.opi-field-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px;
+  padding: 12px;
+  background: #f9fafb;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.opi-field-summary b {
+  color: var(--muted);
+  font-weight: 500;
+}
+.opi-json-section h3 {
+  margin-bottom: 8px;
+}
+.opi-error {
+  padding: 12px;
+  background: #fef2f2;
+  border-radius: 6px;
+  color: #b91c1c;
+}
+.opi-error .opi-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.opi-error .opi-sources > span {
+  padding: 2px 8px;
+  border-radius: 4px;
 }
 </style>

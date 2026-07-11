@@ -24,3 +24,14 @@ export function deleteCache(type, sku) {
 export function clearCache(type) {
   return request.del(`/admin/api/cache/${type}`);
 }
+
+// 全览列表(聚合 6 类缓存的 SKU 状态矩阵)
+export function getCacheOverview(params) {
+  return request.get('/admin/api/cache/overview', params);
+}
+
+// OPI 预览(从 MongoDB 缓存合成 OPI v3)
+export function getOpiPreview(sku, storeId) {
+  const qs = storeId ? `?storeId=${encodeURIComponent(storeId)}` : '';
+  return request.get(`/admin/api/cache/opi-preview/${encodeURIComponent(sku)}${qs}`);
+}

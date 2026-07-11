@@ -10,6 +10,21 @@ import { Router } from 'express';
 import { cols } from '../db/mongo.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
+import { transformItemForPortal, extractCategoryIds } from '../services/prepare-bundle.js';
+import { toOpiItem, descriptionCategoryAttributes } from '../services/ozon-opi.js';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const STORES_FILE = join(__dirname, '../config/stores.json');
+function readStoresForPreview() {
+  try {
+    return JSON.parse(readFileSync(STORES_FILE, 'utf-8'));
+  } catch {
+    return [];
+  }
+}
 
 const router = Router();
 
@@ -464,6 +479,8 @@ router.get('/admin/api/cache/list', async (req, res, next) => {
 // GET /admin/api/cache/:type/:sku — 缓存详情(完整 data)
 router.get('/admin/api/cache/:type/:sku', async (req, res, next) => {
   try {
+    // overview / opi-preview 走专属路由,这里跳过(避免被 :type 参数捕获)
+    if (req.params.type === 'overview' || req.params.type === 'opi-preview') return next('route');
     const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'bundle';
     const sku = String(req.params.sku);
     const col = await getColByType(type);
@@ -507,6 +524,232 @@ router.delete('/admin/api/cache/:type', async (req, res, next) => {
     return res.json(ok({ deletedCount: r.deletedCount }));
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] clear all failed');
+    next(e);
+  }
+});
+
+// ── 全览接口:聚合 6 类缓存,展示每 SKU 的缓存状态矩阵 ─────────────────────────
+
+// GET /admin/api/cache/overview — 全览列表(聚合 6 类缓存的 SKU)
+// query: keyword, page, pageSize
+// 返回: { items: [{ sku, search:{fetchedAt}, bundle:{fetchedAt,attrsEmpty}, pdp:{fetchedAt},
+//                  composer:{fetchedAt}, entrypoint:{fetchedAt}, dynamic:{fetchedAt,expired} }], total }
+router.get('/admin/api/cache/overview', async (req, res, next) => {
+  try {
+    const keyword = String(req.query.keyword || '').trim();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+
+    // 6 类缓存并行查询所有 SKU(仅取 _id/sku/fetchedAt/关键字段)
+    const [sCol, bCol, pCol, cCol, eCol, dCol] = await Promise.all([
+      cols.searchCache(),
+      cols.bundleCache(),
+      cols.pdpCache(),
+      cols.composerCache(),
+      cols.entrypointCache(),
+      cols.dynamicCache(),
+    ]);
+
+    const skuFilter = keyword ? { sku: { $regex: keyword, $options: 'i' } } : {};
+
+    const [sDocs, bDocs, pDocs, cDocs, eDocs, dDocs] = await Promise.all([
+      sCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
+      bCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1, attrsEmptyVerifiedAt: 1, 'data.attributes': 1 } }).toArray(),
+      pCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
+      cCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
+      eCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
+      dCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
+    ]);
+
+    // 聚合所有 SKU(keyword 仅过滤 bundle 集合,其他集合按 SKU 合并)
+    const skuMap = new Map();
+    const ensure = (sku) => {
+      if (!skuMap.has(sku)) {
+        skuMap.set(sku, { sku, search: null, bundle: null, pdp: null, composer: null, entrypoint: null, dynamic: null });
+      }
+      return skuMap.get(sku);
+    };
+
+    for (const d of sDocs) { const sku = d.sku || d._id; ensure(sku).search = { fetchedAt: d.fetchedAt }; }
+    for (const d of bDocs) {
+      const sku = d.sku || d._id;
+      const item = ensure(sku);
+      const attrsEmpty = !hasAttrs(d.data);
+      let attrsStale = false;
+      if (attrsEmpty) {
+        const verifiedAt = d.attrsEmptyVerifiedAt ? new Date(d.attrsEmptyVerifiedAt).getTime() : 0;
+        attrsStale = !verifiedAt || Date.now() - verifiedAt >= ATTRS_EMPTY_REVERIFY_MS;
+      }
+      item.bundle = { fetchedAt: d.fetchedAt, attrsEmpty, attrsStale };
+    }
+    for (const d of pDocs) { const sku = d.sku || d._id; ensure(sku).pdp = { fetchedAt: d.fetchedAt }; }
+    for (const d of cDocs) { const sku = d.sku || d._id; ensure(sku).composer = { fetchedAt: d.fetchedAt }; }
+    for (const d of eDocs) { const sku = d.sku || d._id; ensure(sku).entrypoint = { fetchedAt: d.fetchedAt }; }
+    for (const d of dDocs) {
+      const sku = d.sku || d._id;
+      const fetchedAt = d.fetchedAt ? new Date(d.fetchedAt).getTime() : 0;
+      const expired = !fetchedAt || Date.now() - fetchedAt >= DYNAMIC_TTL_MS;
+      ensure(sku).dynamic = { fetchedAt: d.fetchedAt, expired };
+    }
+
+    // 排序:有 bundle 缓存的优先,其次按最新 fetchedAt
+    let items = Array.from(skuMap.values());
+    items.sort((a, b) => {
+      const aMax = Math.max(
+        new Date(a.search?.fetchedAt || 0).getTime(),
+        new Date(a.bundle?.fetchedAt || 0).getTime(),
+        new Date(a.pdp?.fetchedAt || 0).getTime()
+      );
+      const bMax = Math.max(
+        new Date(b.search?.fetchedAt || 0).getTime(),
+        new Date(b.bundle?.fetchedAt || 0).getTime(),
+        new Date(b.pdp?.fetchedAt || 0).getTime()
+      );
+      return bMax - aMax;
+    });
+
+    const total = items.length;
+    const pagedItems = items.slice((page - 1) * pageSize, page * pageSize);
+    return res.json(ok({ items: pagedItems, total, page, pageSize }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] overview failed');
+    next(e);
+  }
+});
+
+// GET /admin/api/cache/opi-preview/:sku — 从 MongoDB 缓存合成 OPI v3 预览
+// query: storeId(可选,用于字典白名单过滤)
+// 返回: { item: opiItem, sources: {...} }
+router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const storeId = String(req.query.storeId || '');
+
+    // 并行读取 6 类缓存(cols.xxxCache() 返回 Promise<Collection>,需先 await)
+    const [sCol, bCol, pCol, cCol, eCol, dCol] = await Promise.all([
+      cols.searchCache(),
+      cols.bundleCache(),
+      cols.pdpCache(),
+      cols.composerCache(),
+      cols.entrypointCache(),
+      cols.dynamicCache(),
+    ]);
+    const [sDoc, bDoc, pDoc, cDoc, eDoc, dDoc] = await Promise.all([
+      sCol.findOne({ _id: sku }),
+      bCol.findOne({ _id: sku }),
+      pCol.findOne({ _id: sku }),
+      cCol.findOne({ _id: sku }),
+      eCol.findOne({ _id: sku }),
+      dCol.findOne({ _id: sku }),
+    ]);
+
+    const sources = {
+      search: !!sDoc, bundle: !!bDoc, pdp: !!pDoc,
+      composer: !!cDoc, entrypoint: !!eDoc, dynamic: !!dDoc,
+    };
+
+    if (!bDoc && !sDoc) {
+      return res.json(ok({ item: null, sources, error: '缺少 bundle 和 search 缓存,无法合成 OPI' }));
+    }
+
+    const bundleData = bDoc?.data || null;
+    const searchData = sDoc?.data || null;
+    const pdpData = pDoc?.data || null;
+    const entrypointData = eDoc?.data || null;
+    const dynamicData = dDoc?.data || null;
+
+    // 从 search 缓存提取 sv(归一化后的 sourceVariant)
+    const sv = (searchData?.items && searchData.items[0]) || {};
+    // 从 bundle 缓存提取 bundleItem
+    const bundleItem = bundleData || {};
+
+    // 构造 item(对齐 transformItemForPortal 输入格式)
+    // bundle 的 complex attributes 从 bundle.attributes 拆出
+    const bundleComplexAttrs = Array.isArray(bundleItem.attributes)
+      ? bundleItem.attributes.filter((a) => Number(a.complex_id) > 0)
+      : [];
+
+    // images:优先 bundle.primary_image + bundle.images,兜底 entrypoint.gallery / pdp.images
+    let primaryImage = bundleItem.primary_image || '';
+    let images = Array.isArray(bundleItem.images) ? [...bundleItem.images] : [];
+    if (!primaryImage && entrypointData?.gallery?.length) primaryImage = entrypointData.gallery[0];
+    if (!images.length && entrypointData?.gallery?.length) images = entrypointData.gallery.slice(1);
+    if (!images.length && pdpData?.images?.length) images = [...pdpData.images];
+    if (!primaryImage && pdpData?.images?.length) primaryImage = pdpData.images[0];
+
+    // name:优先 bundle attr 4180,兜底 search attr 4180 / pdp.title
+    let name = '';
+    const bAttr4180 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4180');
+    if (bAttr4180?.values?.[0]?.value) name = bAttr4180.values[0].value;
+    if (!name) {
+      const sAttr4180 = sv.attributes?.find((a) => String(a.key) === '4180');
+      if (sAttr4180?.value) name = sAttr4180.value;
+    }
+    if (!name) name = pdpData?.title || '';
+
+    // description:优先 bundle attr 4191,兜底 entrypoint.description
+    let description = '';
+    const bAttr4191 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4191');
+    if (bAttr4191?.values?.[0]?.value) description = bAttr4191.values[0].value;
+    if (!description) description = entrypointData?.description || '';
+
+    // price:dynamic.price
+    const price = dynamicData?.price || '';
+
+    // barcode:search._searchMeta.barcodes[0] / bundle.barcode
+    const barcode = sv._searchMeta?.barcodes?.[0] || bundleItem.barcode || '';
+
+    // 构造 item
+    const item = {
+      _sourceVariant: {
+        ...sv,
+        _bundleItem: bundleItem,
+        _bundleComplexAttrs: bundleComplexAttrs,
+      },
+      images: [
+        ...(primaryImage ? [{ file_name: primaryImage, default: true }] : []),
+        ...images.map((u) => ({ file_name: u, default: false })),
+      ],
+      name,
+      price,
+      old_price: dynamicData?.originalPrice || '',
+      offer_id: 'SKU' + sku,
+      weight: bundleItem.weight || '',
+      depth: bundleItem.depth || '',
+      width: bundleItem.width || '',
+      height: bundleItem.height || '',
+      scraped_description: description,
+      barcode,
+      videoUrl: entrypointData?.mp4 || '',
+      videoCover: '',
+    };
+
+    // 字典白名单(可选)
+    const store = storeId ? readStoresForPreview().find((s) => s.id === storeId) : null;
+    let allowedAttrIds = null;
+    if (store) {
+      try {
+        const { typeId, descriptionCategoryId } = extractCategoryIds(item);
+        if (typeId && descriptionCategoryId) {
+          const attrs = await descriptionCategoryAttributes(store, {
+            description_category_id: descriptionCategoryId,
+            type_id: typeId,
+          });
+          if (Array.isArray(attrs) && attrs.length > 0) {
+            allowedAttrIds = new Set(attrs.map((a) => String(a.id)));
+          }
+        }
+      } catch {
+        // 字典查询失败,降级为不过滤
+      }
+    }
+
+    const portalItem = transformItemForPortal(item, { allowedAttrIds });
+    const opiItem = toOpiItem(portalItem);
+
+    return res.json(ok({ item: opiItem, sources, portalItem }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] opi-preview failed');
     next(e);
   }
 });
