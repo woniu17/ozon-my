@@ -344,23 +344,64 @@ router.delete('/admin/api/listing-templates/:id', (req, res, next) => {
 });
 
 // ── 预览接口:把 items 转换为 OPI v3 schema(不实际发送到 Ozon) ──
-import { transformItemForPortal } from '../services/prepare-bundle.js';
-import { toOpiItem } from '../services/ozon-opi.js';
+import { transformItemForPortal, extractCategoryIds } from '../services/prepare-bundle.js';
+import { toOpiItem, descriptionCategoryAttributes } from '../services/ozon-opi.js';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const STORES_FILE = join(__dirname, '../config/stores.json');
+function readStoresForPreview() {
+  try {
+    return JSON.parse(readFileSync(STORES_FILE, 'utf-8'));
+  } catch {
+    return [];
+  }
+}
 
 // POST /admin/api/preview-opi —— 预览 OPI v3 请求体
-// body: { items: [...], applyAiRewrite?, applyWatermark? } (与插件 followSell message 相同的 items)
+// body: { items: [...], storeId? } (storeId 可选,传入则按类目字典过滤查不到含义的属性)
 // 返回: { items: [opiItem, ...] } (OPI v3 schema,不发送)
-router.post('/admin/api/preview-opi', (req, res, next) => {
+router.post('/admin/api/preview-opi', async (req, res, next) => {
   try {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (items.length === 0) {
       return res.json(ok({ items: [], message: '无 items' }));
     }
+    // 字典白名单:按 (descriptionCategoryId, typeId) 预查,同类目只查一次
+    // storeId 未传或查询失败时 allowedAttrIds=null,降级为不过滤
+    const storeId = String(req.body?.storeId || '');
+    const store = storeId ? readStoresForPreview().find((s) => s.id === storeId) : null;
+    const allowedAttrIdsCache = new Map();
+    async function resolveAllowedAttrIds(item) {
+      if (!store) return null;
+      const { typeId, descriptionCategoryId } = extractCategoryIds(item);
+      if (!typeId || !descriptionCategoryId) return null;
+      const cacheKey = `${descriptionCategoryId}:${typeId}`;
+      if (allowedAttrIdsCache.has(cacheKey)) return allowedAttrIdsCache.get(cacheKey);
+      let result = null;
+      try {
+        const attrs = await descriptionCategoryAttributes(store, {
+          description_category_id: descriptionCategoryId,
+          type_id: typeId,
+        });
+        if (Array.isArray(attrs) && attrs.length > 0) {
+          result = new Set(attrs.map((a) => String(a.id)));
+        }
+      } catch {
+        // 字典查询失败,降级为不过滤
+      }
+      allowedAttrIdsCache.set(cacheKey, result);
+      return result;
+    }
     // 转换: item → transformItemForPortal → toOpiItem
-    const opiItems = items.map((it) => {
-      const portalItem = transformItemForPortal(it);
-      return toOpiItem(portalItem);
-    });
+    const opiItems = [];
+    for (const it of items) {
+      const allowedAttrIds = await resolveAllowedAttrIds(it);
+      const portalItem = transformItemForPortal(it, { allowedAttrIds });
+      opiItems.push(toOpiItem(portalItem));
+    }
     res.json(ok({ items: opiItems }));
   } catch (e) {
     next(e);

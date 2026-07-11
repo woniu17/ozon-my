@@ -26,6 +26,7 @@ export function deleteListingTemplate(id) {
 }
 
 // 预览 OPI v3 请求体(把 items 转换为 OPI v3 schema,不实际发送)
-export function previewOpi(items) {
-  return request.post('/admin/api/preview-opi', { items });
+// storeId 可选,传入则后端按类目字典过滤查不到含义的属性
+export function previewOpi(items, storeId) {
+  return request.post('/admin/api/preview-opi', { items, storeId });
 }

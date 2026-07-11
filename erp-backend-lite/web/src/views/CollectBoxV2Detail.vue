@@ -58,7 +58,7 @@ async function loadOpiPreview() {
   opiLoading.value = true;
   opiError.value = '';
   try {
-    const r = await previewOpi(plainItems(synthesizedItems.value));
+    const r = await previewOpi(plainItems(synthesizedItems.value), props.data?.storeId);
     opiItems.value = Array.isArray(r?.items) ? r.items : [];
     opiLoaded.value = true;
   } catch (err) {

@@ -10,6 +10,27 @@ import { apply as applyAiRewrite } from './enrichments/ai-rewrite.js';
 import { apply as applyWatermark } from './enrichments/watermark.js';
 import { apply as applyPoster } from './enrichments/poster.js';
 import { apply as applyCopyBan } from './enrichments/copy-ban.js';
+import * as opi from './ozon-opi.js';
+
+/**
+ * 从 item 提取 type_id + description_category_id(供查属性字典用)
+ * 注意:字典接口 /v1/description-category/attribute 要求的是 level_3_id,
+ * 而 transformItemForPortal 上架用的 description_category_id 是最深层 category。
+ * 这里返回字典查询用的 (descriptionCategoryId=level3, typeId)。
+ * @param {object} item
+ * @returns {{ typeId: number, descriptionCategoryId: number }}
+ */
+export function extractCategoryIds(item) {
+  const sv = item?._sourceVariant || null;
+  const bundleItem = sv?._bundleItem || null;
+  const cats = Array.isArray(sv?.categories) ? sv.categories : [];
+  // 字典接口需要 level_3_id;优先取 level===3 的类目,没有则退而取最深层(兼容部分类目无 level 3 的情况)
+  const lvl3Cat = cats.find((c) => c.id && Number(c.level) === 3);
+  const deepestCat = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
+  const typeId = Number(bundleItem?.type_id) || Number(sv?.description_category_id) || 0;
+  const descriptionCategoryId = Number(lvl3Cat?.id) || Number(deepestCat?.id) || 0;
+  return { typeId, descriptionCategoryId };
+}
 
 /**
  * transformItemForPortal: 把插件侧 item 格式转换为 OPI v3 portalItem 格式
@@ -25,9 +46,12 @@ import { apply as applyCopyBan } from './enrichments/copy-ban.js';
  *   1) sv._bundleItem.attributes —— bundle 接口返回的完整后台数据,含 dictionary_value_id(最权威)
  *   2) sv.attributes —— /search 归一化数据,{key, value/collection} shape(可能缺 dictionary_value_id)
  */
-export function transformItemForPortal(item) {
+export function transformItemForPortal(item, options = {}) {
   const sv = item._sourceVariant || null;
   const bundleItem = sv?._bundleItem || null;
+  // 字典白名单:只过滤 sv.attributes 兜底分支;bundleItem/complex_attributes 不过滤
+  // allowedAttrIds 为 Set<string> 时,仅保留字典中存在的 attribute_id;为 null/undefined 时不过滤
+  const allowedAttrIds = options.allowedAttrIds || null;
 
   // 5.1 images: [{file_name, default}] → ["url1", "url2", ...]
   // v3 schema: images 是 string[](URL 数组),primary_image 单独传
@@ -59,6 +83,8 @@ export function transformItemForPortal(item) {
       if (SKIP_ATTR_IDS.has(attrId)) continue;
       const key = String(attrId);
       if (usedKeys.has(key)) continue;
+      // 字典白名单过滤:bundleItem 属性也需在字典中存在,否则不合成
+      if (allowedAttrIds && !allowedAttrIds.has(key)) continue;
       const vals = Array.isArray(ba.values)
         ? ba.values.filter(
             (v) =>
@@ -88,6 +114,8 @@ export function transformItemForPortal(item) {
       const key = String(a.key || a.attribute_id || '');
       if (!key || usedKeys.has(key)) continue;
       if (SKIP_ATTR_IDS.has(Number(key))) continue;
+      // 字典白名单过滤:属性 id 不在该类目字典中时跳过(查不到含义的属性不合成)
+      if (allowedAttrIds && !allowedAttrIds.has(key)) continue;
       const rawVals = Array.isArray(a.collection)
         ? a.collection.filter((v) => v != null && v !== '')
         : a.value != null && a.value !== ''
@@ -169,7 +197,7 @@ export function transformItemForPortal(item) {
     }
   }
 
-  // 5.4 type_id + description_category_id
+  // 5.4 type_id + description_category_id(上架用最深层 category,与字典查询的 level_3 不同)
   const cats = Array.isArray(sv?.categories) ? sv.categories : [];
   const deepestCat = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
   const typeId = Number(bundleItem?.type_id) || Number(sv?.description_category_id) || 0;
@@ -358,10 +386,36 @@ export async function prepareBundleItems(message, storeId, store) {
 
   // ── 5. 分组打包 + item 格式转换(面板格式 → seller.ozon.ru proto 格式) ──
   // transformItemForPortal 已抽取为模块级导出函数(见文件顶部),此处直接调用
+  // 字典白名单:按 (descriptionCategoryId, typeId) 预查属性字典,同类目只查一次(opi 内部有缓存)
+  // 查询失败时 allowedAttrIds=null,降级为不过滤(保持原行为),避免字典接口故障阻断上架
+
+  const allowedAttrIdsCache = new Map(); // key: `${descriptionCategoryId}:${typeId}` → Set<string> | null
+  async function resolveAllowedAttrIds(item) {
+    const { typeId, descriptionCategoryId } = extractCategoryIds(item);
+    if (!store || !typeId || !descriptionCategoryId) return null;
+    const cacheKey = `${descriptionCategoryId}:${typeId}`;
+    if (allowedAttrIdsCache.has(cacheKey)) return allowedAttrIdsCache.get(cacheKey);
+    let result = null;
+    try {
+      const attrs = await opi.descriptionCategoryAttributes(store, {
+        description_category_id: descriptionCategoryId,
+        type_id: typeId,
+      });
+      if (Array.isArray(attrs) && attrs.length > 0) {
+        result = new Set(attrs.map((a) => String(a.id)));
+      }
+    } catch (e) {
+      logger.warn({ err: e?.message, descriptionCategoryId, typeId }, '属性字典查询失败,降级为不过滤');
+    }
+    allowedAttrIdsCache.set(cacheKey, result);
+    return result;
+  }
 
   const bundles = [];
   for (const [catName, groupItems] of groups) {
-    const transformedItems = groupItems.map(transformItemForPortal);
+    // 取该组首个 item 的类目信息预查字典(同组类目相同,查一次即可)
+    const allowedAttrIds = await resolveAllowedAttrIds(groupItems[0]);
+    const transformedItems = groupItems.map((it) => transformItemForPortal(it, { allowedAttrIds }));
     // DEBUG: 记录每个 bundle 的类目名和首个 item 的分类字段,排查按名匹配是否生效
     logger.info(
       {
@@ -372,6 +426,7 @@ export async function prepareBundleItems(message, storeId, store) {
         firstItemHasDescCatId: transformedItems[0]?.description_category_id != null,
         firstItemTypeId: transformedItems[0]?.type_id,
         firstItemDescCatId: transformedItems[0]?.description_category_id,
+        attrWhitelistSize: allowedAttrIds?.size || 0,
       },
       'prepare-bundle: bundle 分组(类目名将用于 Ozon 按名匹配)'
     );
