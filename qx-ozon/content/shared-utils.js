@@ -3947,7 +3947,7 @@ if (!globalThis.__JZ_BRAND__) {
         },
         pageJson: {
           [sku]: {
-            endpoint: 'entrypoint-api',
+            endpoint: distilled.pageJsonEndpoint || 'entrypoint-api',
             url: rec.url || '',
             gallery: distilled.images || [],
             richContent: distilled.richContent || null,

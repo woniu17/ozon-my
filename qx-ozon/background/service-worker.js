@@ -513,10 +513,14 @@ try {
   // MV3 SW 休眠后 indexedDB 连接会断,dbPromise=null 模式确保唤醒后重连。
   // 容量充足(GB 级),无 TTL(与 L2 一致),forceRefresh 时主动删除。
   const _IDB_NAME = 'ozon-cache';
-  const _IDB_VERSION = 2;
+  const _IDB_VERSION = 4;
   const _IDB_STORE_SEARCH = 'search_cache';
   const _IDB_STORE_BUNDLE = 'bundle_cache';
   const _IDB_STORE_PDP = 'pdp_cache';
+  const _IDB_STORE_COMPOSER = 'composer_cache';
+  const _IDB_STORE_ENTRYPOINT = 'entrypoint_cache';
+  const _IDB_STORE_DYNAMIC = 'dynamic_cache';
+  const DYNAMIC_TTL_MS = 60 * 60 * 1000; // 动态数据 1h TTL
   const _ATTRS_EMPTY_REVERIFY_MS = 6 * 60 * 60 * 1000; // 空属性 6h 重验
 
   let _idbPromise = null;
@@ -534,6 +538,15 @@ try {
         }
         if (!db.objectStoreNames.contains(_IDB_STORE_PDP)) {
           db.createObjectStore(_IDB_STORE_PDP, { keyPath: 'sku' });
+        }
+        if (!db.objectStoreNames.contains(_IDB_STORE_COMPOSER)) {
+          db.createObjectStore(_IDB_STORE_COMPOSER, { keyPath: 'sku' });
+        }
+        if (!db.objectStoreNames.contains(_IDB_STORE_ENTRYPOINT)) {
+          db.createObjectStore(_IDB_STORE_ENTRYPOINT, { keyPath: 'sku' });
+        }
+        if (!db.objectStoreNames.contains(_IDB_STORE_DYNAMIC)) {
+          db.createObjectStore(_IDB_STORE_DYNAMIC, { keyPath: 'sku' });
         }
       };
       req.onsuccess = () => {
@@ -690,9 +703,118 @@ try {
     _erpCacheDelete('pdp', sku);
   };
 
+  // ── composer 缓存(composer-api widgetStates,缓存优先) ─────────────────────────
+  // 缓存对象:fetchProductPageState 返回的 19 个业务 widgetStates 子集
+  // 策略:无 TTL(永久),缓存优先(命中直接返回,跳过网络请求)
+  // L1 IndexedDB → L2 MongoDB → L3 真调 composer-api
+  const _composerCacheGet = async (sku) => {
+    try {
+      // L1
+      const l1 = await _idbGet(_IDB_STORE_COMPOSER, sku);
+      if (l1 && l1.data) return l1.data;
+      // L2
+      const l2 = await _erpCacheGet('composer', sku);
+      if (l2 && l2.data) {
+        _idbPut(_IDB_STORE_COMPOSER, {
+          sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true,
+        }).catch(() => {});
+        return l2.data;
+      }
+    } catch (e) {
+      console.warn(`[cache] composer get failed sku=${sku}:`, e?.message || e);
+    }
+    return null;
+  };
+
+  const _composerCacheSet = (sku, widgetStates) => {
+    _idbPut(_IDB_STORE_COMPOSER, {
+      sku, data: widgetStates, fetchedAt: Date.now(), l2Synced: false,
+    }).catch(() => {});
+    _erpCacheSetAndSyncFlag(_IDB_STORE_COMPOSER, 'composer', sku, { data: widgetStates });
+  };
+
+  const _composerCacheDelete = (sku) => {
+    _idbDelete(_IDB_STORE_COMPOSER, sku).catch(() => {});
+    _erpCacheDelete('composer', sku);
+  };
+
+  // ── entrypoint 缓存(entrypoint-api page-json,缓存优先) ─────────────────────────
+  // 缓存对象:fetchVariantGallery / fetchVariantMediaViaBuyerTab 从 entrypoint-api.bx 蒸馏的
+  //   { gallery, richContent, description, hashtags } 等字段
+  // 策略:无 TTL(永久),缓存优先(命中直接返回,跳过 buyer tab 注入 + 网络请求)
+  // L1 IndexedDB → L2 MongoDB → L3 真调 entrypoint-api
+  const _entrypointCacheGet = async (sku) => {
+    try {
+      const l1 = await _idbGet(_IDB_STORE_ENTRYPOINT, sku);
+      if (l1 && l1.data) return l1.data;
+      const l2 = await _erpCacheGet('entrypoint', sku);
+      if (l2 && l2.data) {
+        _idbPut(_IDB_STORE_ENTRYPOINT, {
+          sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true,
+        }).catch(() => {});
+        return l2.data;
+      }
+    } catch (e) {
+      console.warn(`[cache] entrypoint get failed sku=${sku}:`, e?.message || e);
+    }
+    return null;
+  };
+
+  const _entrypointCacheSet = (sku, data) => {
+    _idbPut(_IDB_STORE_ENTRYPOINT, {
+      sku, data, fetchedAt: Date.now(), l2Synced: false,
+    }).catch(() => {});
+    _erpCacheSetAndSyncFlag(_IDB_STORE_ENTRYPOINT, 'entrypoint', sku, { data });
+  };
+
+  const _entrypointCacheDelete = (sku) => {
+    _idbDelete(_IDB_STORE_ENTRYPOINT, sku).catch(() => {});
+    _erpCacheDelete('entrypoint', sku);
+  };
+
+  // ── dynamic 缓存(DOM 动态字段,1h TTL,失败兜底) ─────────────────────────
+  // 缓存对象:extractProductData 返回的动态字段(price/seller/statistics/freeRest/followSell/deliveryMode 等)
+  // 策略:1h TTL(动态数据需定期刷新),DOM 解析失败时兜底
+  // L1 IndexedDB → L2 MongoDB → 失败返回 null
+  const _dynamicCacheGet = async (sku) => {
+    try {
+      // L1(带 TTL 检查)
+      const l1 = await _idbGet(_IDB_STORE_DYNAMIC, sku);
+      if (l1 && l1.data && l1.fetchedAt && Date.now() - l1.fetchedAt < DYNAMIC_TTL_MS) {
+        return l1.data;
+      }
+      // L2
+      const l2 = await _erpCacheGet('dynamic', sku);
+      if (l2 && l2.data) {
+        const fetchedAt = l2.fetchedAt ? new Date(l2.fetchedAt).getTime() : 0;
+        if (fetchedAt && Date.now() - fetchedAt < DYNAMIC_TTL_MS) {
+          _idbPut(_IDB_STORE_DYNAMIC, {
+            sku, data: l2.data, fetchedAt, l2Synced: true,
+          }).catch(() => {});
+          return l2.data;
+        }
+      }
+    } catch (e) {
+      console.warn(`[cache] dynamic get failed sku=${sku}:`, e?.message || e);
+    }
+    return null;
+  };
+
+  const _dynamicCacheSet = (sku, dynamicFields) => {
+    _idbPut(_IDB_STORE_DYNAMIC, {
+      sku, data: dynamicFields, fetchedAt: Date.now(), l2Synced: false,
+    }).catch(() => {});
+    _erpCacheSetAndSyncFlag(_IDB_STORE_DYNAMIC, 'dynamic', sku, { data: dynamicFields });
+  };
+
+  const _dynamicCacheDelete = (sku) => {
+    _idbDelete(_IDB_STORE_DYNAMIC, sku).catch(() => {});
+    _erpCacheDelete('dynamic', sku);
+  };
+
   // ── 定时补写 L2:扫描 L1 中 l2Synced=false 的记录 ──────────────────────────
   // 由 chrome.alarms 每 5 分钟触发,不受 SW 休眠影响。
-  // 扫描 search_cache + bundle_cache + pdp_cache 三个 store,逐条补写 L2,成功后置 l2Synced=true。
+  // 扫描 search/bundle/pdp/composer/dynamic 五个 store,逐条补写 L2,成功后置 l2Synced=true。
   let _cacheSyncRunning = false; // 并发守卫:避免多个 alarm 重叠执行
   // forceAll=true 时返回所有有 data 的记录(不论 l2Synced),用于 popup 手动全量同步;
   // forceAll=false(默认)只返回 l2Synced=false 的记录,用于定时补写。
@@ -712,14 +834,17 @@ try {
   // forceAll=true:全量同步(忽略 l2Synced 标志),由 popup 手动按钮触发
   // forceAll=false(默认):只补写 l2Synced=false 的记录,由定时 alarm 触发
   const syncL2Batch = async (forceAll = false) => {
-    if (_cacheSyncRunning) return { search: 0, bundle: 0, pdp: 0 };
+    if (_cacheSyncRunning) return { search: 0, bundle: 0, pdp: 0, composer: 0, entrypoint: 0, dynamic: 0 };
     _cacheSyncRunning = true;
-    const stats = { search: 0, bundle: 0, pdp: 0 };
+    const stats = { search: 0, bundle: 0, pdp: 0, composer: 0, entrypoint: 0, dynamic: 0 };
     try {
       for (const { store, type } of [
         { store: _IDB_STORE_SEARCH, type: 'search' },
         { store: _IDB_STORE_BUNDLE, type: 'bundle' },
         { store: _IDB_STORE_PDP, type: 'pdp' },
+        { store: _IDB_STORE_COMPOSER, type: 'composer' },
+        { store: _IDB_STORE_ENTRYPOINT, type: 'entrypoint' },
+        { store: _IDB_STORE_DYNAMIC, type: 'dynamic' },
       ]) {
         const unsynced = await _idbScanUnsynced(store, forceAll).catch(() => []);
         for (const entry of unsynced) {
@@ -1456,8 +1581,132 @@ try {
   // 让批量上架继承源店铺描述与标签(与手动跟卖 extractPageDescription/extractKeywords 同语义)。
   // 注:源标签裸下发会触发 Ozon BR_hashtag_brand,品牌清洗在 backend 注入处做(此处只负责抓回)。
   // 返回 { mp4, richContent, description, hashtags };失败返回全空(best-effort 降级)。
+  // ── page-json widgetStates 共享抽取器(供缓存复用路径 + doFetch 内联版本共用) ──
+  // 注:doFetch 在 buyer tab MAIN world 执行,其内联版可访问 globalThis.JZOzonVideoExtract
+  // 和 globalThis.JZFollowSellContentCopy;SW 顶层共享版不依赖这些 helper(仅扫结构化数据)。
+  const _isRichDoc = (o) =>
+    o &&
+    typeof o === 'object' &&
+    Array.isArray(o.content) &&
+    o.content.length > 0 &&
+    o.content.some((b) => b && typeof b === 'object' && typeof b.widgetName === 'string');
+
+  const _extractRichFromStates = (states) => {
+    for (const k of Object.keys(states)) {
+      let v = states[k];
+      if (typeof v === 'string') {
+        try { v = JSON.parse(v); } catch { continue; }
+      }
+      if (!v || typeof v !== 'object') continue;
+      if (typeof v.richAnnotationJson === 'string' && v.richAnnotationJson.trim()) {
+        try { if (_isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim(); } catch {}
+      }
+      if (_isRichDoc(v)) return JSON.stringify({ content: v.content, version: v.version || 0.3 });
+    }
+    return '';
+  };
+
+  const _extractMp4FromStates = (states) => {
+    for (const k of Object.keys(states || {})) {
+      if (!/gallery/i.test(k)) continue;
+      let v = states[k];
+      if (typeof v === 'string') {
+        try { v = JSON.parse(v); } catch { continue; }
+      }
+      const vids = v && Array.isArray(v.videos) ? v.videos : [];
+      for (const it of vids) {
+        const raw = typeof it === 'string' ? it : (it && (it.url || it.src)) || '';
+        if (raw && /\.mp4(\?|#|$)/i.test(raw)) return raw;
+      }
+    }
+    return null;
+  };
+
+  const _extractDescriptionFromStates = (states) => {
+    // SW 顶层无 JZFollowSellContentCopy helper,直接从 webDescription widget 抽 text 字段
+    const keys = Object.keys(states || {});
+    const descKeys = keys.filter((k) => /description/i.test(k));
+    for (const k of descKeys) {
+      let v = states[k];
+      if (typeof v === 'string') {
+        try { v = JSON.parse(v); } catch { continue; }
+      }
+      if (!v || typeof v !== 'object') continue;
+      // webDescription widget 通常有 text/html 字段
+      const text = v.text || v.html || v.content || '';
+      if (typeof text === 'string' && text.trim()) return text.trim().slice(0, 4096);
+    }
+    return '';
+  };
+
+  const _extractHashtagsFromStates = (states) => {
+    const out = [];
+    const seen = new Set();
+    const push = (s) => {
+      const t = String(s == null ? '' : s).trim();
+      if (!t || t.length < 2 || !t.startsWith('#')) return;
+      const key = t.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (out.length < 30) out.push(t);
+    };
+    const walk = (node, depth) => {
+      if (out.length >= 30 || depth > 32 || node == null) return;
+      if (typeof node === 'string') { push(node); return; }
+      if (Array.isArray(node)) { for (const it of node) walk(it, depth + 1); return; }
+      if (typeof node === 'object') { for (const k of Object.keys(node)) walk(node[k], depth + 1); }
+    };
+    for (const k of Object.keys(states || {})) {
+      if (!/hashtag|taglist/i.test(k)) continue;
+      let v = states[k];
+      if (typeof v === 'string') {
+        try { v = JSON.parse(v); } catch { continue; }
+      }
+      walk(v, 0);
+    }
+    return out;
+  };
+
+  // ── 从 widgetStates 提取图册(供 entrypoint 缓存写入时用) ──
+  const _extractGalleryFromStates = (states) => {
+    let bestImages = [];
+    let bestCover = null;
+    for (const k of Object.keys(states)) {
+      let v = states[k];
+      if (typeof v === 'string') {
+        try { v = JSON.parse(v); } catch { continue; }
+      }
+      if (!v || typeof v !== 'object') continue;
+      if (!Array.isArray(v.images)) continue;
+      if (v.images.length > bestImages.length) {
+        bestImages = v.images;
+        bestCover = v.coverImage || null;
+      }
+    }
+    // upgrade 到 wc1000 + 去重
+    const upgrade = (u) =>
+      typeof u === 'string' && u.includes('ir.ozone.ru') ? u.replace(/\/wc\d+\//, '/wc1000/') : u;
+    const norm = (u) => String(u || '').split('?')[0].split('#')[0].toLowerCase();
+    const seen = new Set();
+    const out = [];
+    const push = (raw) => {
+      const upgraded = upgrade(raw);
+      if (!upgraded) return;
+      const n = norm(upgraded);
+      if (seen.has(n)) return;
+      seen.add(n);
+      out.push(upgraded);
+    };
+    if (bestCover) push(bestCover);
+    for (const img of bestImages) {
+      const u = typeof img === 'string' ? img : img?.src || img?.url || img?.image;
+      if (u) push(u);
+    }
+    return out;
+  };
+
   const fetchVariantMediaViaBuyerTab = async (productUrl) => {
-    const EMPTY = { mp4: null, richContent: '', description: '', hashtags: [] };
+    const EMPTY = { mp4: null, richContent: '', description: '', hashtags: [], endpoint: null };
     if (!productUrl || typeof productUrl !== 'string') return EMPTY;
     let path = productUrl;
     try {
@@ -1465,6 +1714,42 @@ try {
       path = u.pathname + u.search;
     } catch {}
     if (!path.startsWith('/')) path = '/' + path;
+
+    // 从 path 提取 sku 用于缓存查询(/product/xxx-<sku>/)
+    const urlSku = (path.match(/-(\d+)\/?$/) || [])[1] || '';
+
+    // ── 缓存优先:entrypoint → composer ──
+    // entrypoint 缓存存蒸馏后的 { gallery, richContent, description, hashtags, mp4 }
+    // composer 缓存存原始 widgetStates,需用同名抽取器解析
+    if (urlSku) {
+      try {
+        const ep = await _entrypointCacheGet(urlSku);
+        if (ep && (ep.gallery?.length || ep.richContent || ep.description || ep.mp4)) {
+          return {
+            mp4: ep.mp4 || null,
+            richContent: ep.richContent || '',
+            description: ep.description || '',
+            hashtags: Array.isArray(ep.hashtags) ? ep.hashtags : [],
+            endpoint: 'entrypoint-cache',
+          };
+        }
+      } catch {}
+      try {
+        const cc = await _composerCacheGet(urlSku);
+        if (cc && cc.widgetStates) {
+          // 用 composer 缓存的 widgetStates 抽取(与 buyer tab 注入的 extract* 同规则)
+          const states = cc.widgetStates;
+          const richContent = _extractRichFromStates(states);
+          const mp4 = _extractMp4FromStates(states);
+          const description = _extractDescriptionFromStates(states);
+          const hashtags = _extractHashtagsFromStates(states);
+          if (richContent || mp4 || description || hashtags.length) {
+            return { mp4, richContent, description, hashtags, endpoint: 'composer-cache' };
+          }
+        }
+      } catch {}
+    }
+
     let tab;
     try {
       tab = await ensureBuyerTab();
@@ -1594,6 +1879,7 @@ try {
         return out;
       };
       let anyOk = false;
+      let hitEndpoint = null;
       let richContent = '';
       let mp4 = null;
       let description = '';
@@ -1612,6 +1898,7 @@ try {
           anyOk = true;
           const data = await resp.json();
           const states = data && data.widgetStates ? data.widgetStates : {};
+          if (!hitEndpoint) hitEndpoint = url.includes('entrypoint-api') ? 'entrypoint-api' : 'composer-api';
           if (!richContent) richContent = extractRich(states);
           if (!mp4) mp4 = extractMp4(states);
           if (!description) description = extractDescription(states);
@@ -1626,7 +1913,7 @@ try {
       }
       // 有 200 过则按真实抽取结果返回;全失败则 ok:false。
       return anyOk
-        ? { ok: true, mp4, richContent, description, hashtags }
+        ? { ok: true, mp4, richContent, description, hashtags, endpoint: hitEndpoint }
         : { ok: false, error: 'all endpoints failed' };
     };
     try {
@@ -1664,12 +1951,24 @@ try {
         console.warn('[fetchVariantMedia] 抓取失败:', r && r.error);
         return EMPTY;
       }
-      return {
+      const result = {
         mp4: r.mp4 || null,
         richContent: r.richContent || '',
         description: r.description || '',
         hashtags: Array.isArray(r.hashtags) ? r.hashtags : [],
+        endpoint: r.endpoint || null,
       };
+      // 真调成功后异步写 entrypoint 缓存(按 sku 索引,蒸馏后字段)
+      if (urlSku && result.endpoint === 'entrypoint-api') {
+        _entrypointCacheSet(urlSku, {
+          gallery: [],
+          richContent: result.richContent,
+          description: result.description,
+          hashtags: result.hashtags,
+          mp4: result.mp4,
+        });
+      }
+      return result;
     } catch (e) {
       console.warn('[fetchVariantMedia] executeScript 异常:', e?.message || e);
       return EMPTY;
@@ -2963,6 +3262,22 @@ try {
             sendResponse({ ok: false, error: 'not a product url' });
             return;
           }
+          // 从 path 提取 sku 用于缓存查询(/product/xxx-<sku>/)
+          const urlSku = (productPath.match(/-(\d+)\/?$/) || [])[1] || '';
+
+          // forceRefresh=true 时跳过缓存,清 L1+L2 后走真调
+          const forceRefresh = !!message?.forceRefresh;
+          if (!forceRefresh && urlSku) {
+            const cached = await _composerCacheGet(urlSku);
+            if (cached && cached.fields && cached.widgetStates) {
+              sendResponse({ ok: true, data: cached, cached: true });
+              return;
+            }
+          }
+          if (forceRefresh && urlSku) {
+            _composerCacheDelete(urlSku);
+          }
+
           // composer-api page endpoint。SW 直 fetch 反爬必死 403,走 fetchOzonWwwViaTab
           // 通过 sender 的 ozon.ru tab 注入 MAIN world,带用户真实 cookie + fingerprint。
           // (2026-05-26 修复:fetchProductPageState 在采集面板报 "Ozon 403"。)
@@ -2996,7 +3311,7 @@ try {
           const brand = parse(find('webBrand'));
           // sku 优先 gallery.sku,fallback detailSku
           const sku = String(
-            gallery?.sku || detailSku?.sku || detailSku?.itemId || productPath.match(/-(\d+)\/?$/)?.[1] || ''
+            gallery?.sku || detailSku?.sku || detailSku?.itemId || urlSku || ''
           );
           // images: gallery 通常 {images:[{url,...}, ...], coverImage:{url,...}}
           const images = Array.isArray(gallery?.images)
@@ -3072,6 +3387,10 @@ try {
             if (usefulPrefixes.some((p) => k.startsWith(p))) {
               widgetStates[k] = ws[k];
             }
+          }
+          // 异步写 composer 缓存(L1 + L2),不阻塞返回
+          if (sku) {
+            _composerCacheSet(sku, { fields, widgetStates });
           }
           // shared-utils.js window.sendMessage 协议:成功必须 { ok:true, data:{...} }
           // 否则 caller 只 resolve(response.data) 会拿到 undefined。
@@ -3438,6 +3757,95 @@ try {
           try {
             const sku = String(message.sku || '');
             if (sku) _pdpCacheDelete(sku);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'composerCacheGet': {
+          // 查 composer 缓存(L1→L2),用于 content 端 ensurePdpState 兜底。
+          try {
+            const sku = String(message.sku || '');
+            if (!sku) return { ok: true, data: null };
+            const data = await _composerCacheGet(sku);
+            return { ok: true, data };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'composerCacheDelete': {
+          // forceRefresh 时清 composer 缓存。
+          try {
+            const sku = String(message.sku || '');
+            if (sku) _composerCacheDelete(sku);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'entrypointCacheGet': {
+          // 查 entrypoint 缓存(L1→L2),用于 fetchVariantGallery / fetchVariantMediaViaBuyerTab 缓存优先。
+          try {
+            const sku = String(message.sku || '');
+            if (!sku) return { ok: true, data: null };
+            const data = await _entrypointCacheGet(sku);
+            return { ok: true, data };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'entrypointCacheSet': {
+          // fetchVariantGallery / fetchVariantMediaViaBuyerTab 真调成功后,异步写 entrypoint 缓存。
+          // 入参: { sku, data }  返回: { ok: true }(异步写,不等 L2)
+          try {
+            const sku = String(message.sku || '');
+            const data = message.data;
+            if (!sku || !data) return { ok: true };
+            _entrypointCacheSet(sku, data);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'entrypointCacheDelete': {
+          // forceRefresh 时清 entrypoint 缓存。
+          try {
+            const sku = String(message.sku || '');
+            if (sku) _entrypointCacheDelete(sku);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'dynamicCacheGet': {
+          // 查 dynamic 缓存(L1→L2,1h TTL),DOM 解析失败时兜底。
+          try {
+            const sku = String(message.sku || '');
+            if (!sku) return { ok: true, data: null };
+            const data = await _dynamicCacheGet(sku);
+            return { ok: true, data };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'dynamicCacheSet': {
+          // content script 的 extractProductData() 成功后,异步写 dynamic 缓存(仅动态字段)。
+          // 入参: { sku, data: dynamicFields }  返回: { ok: true }(异步写,不等 L2)
+          try {
+            const sku = String(message.sku || '');
+            const data = message.data;
+            if (!sku || !data) return { ok: true };
+            _dynamicCacheSet(sku, data);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'dynamicCacheDelete': {
+          // forceRefresh 时清 dynamic 缓存。
+          try {
+            const sku = String(message.sku || '');
+            if (sku) _dynamicCacheDelete(sku);
             return { ok: true };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
@@ -4198,11 +4606,12 @@ try {
             const richContent = media.richContent || '';
             const description = media.description || '';
             const hashtags = Array.isArray(media.hashtags) ? media.hashtags : [];
-            if (!media.mp4) return { ok: true, data: { url: null, richContent, description, hashtags } };
+            const endpoint = media.endpoint || null;
+            if (!media.mp4) return { ok: true, data: { url: null, richContent, description, hashtags, endpoint } };
             const r = await transferVideoToOzon(media.mp4);
-            return { ok: true, data: { url: r.ok ? r.url : null, richContent, description, hashtags } };
+            return { ok: true, data: { url: r.ok ? r.url : null, richContent, description, hashtags, endpoint } };
           } catch (e) {
-            return { ok: true, data: { url: null, richContent: '', description: '', hashtags: [] } };
+            return { ok: true, data: { url: null, richContent: '', description: '', hashtags: [], endpoint: null } };
           }
         }
         case 'fetchVariantRichContent': {
@@ -4217,10 +4626,11 @@ try {
                 richContent: media.richContent || '',
                 description: media.description || '',
                 hashtags: Array.isArray(media.hashtags) ? media.hashtags : [],
+                endpoint: media.endpoint || null,
               },
             };
           } catch (e) {
-            return { ok: true, data: { richContent: '', description: '', hashtags: [] } };
+            return { ok: true, data: { richContent: '', description: '', hashtags: [], endpoint: null } };
           }
         }
         case 'searchVariants': {

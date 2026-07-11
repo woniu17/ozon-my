@@ -1,4 +1,4 @@
-// MongoDB 连接(缓存集合:ozon_search_cache / ozon_bundle_cache / ozon_pdp_cache)
+// MongoDB 连接(缓存集合:ozon_search_cache / ozon_bundle_cache / ozon_pdp_cache / ozon_composer_cache / ozon_entrypoint_cache / ozon_dynamic_cache)
 // .env 配置:MONGO_HOST / MONGO_PORT / MONGO_USERNAME / MONGO_PASSWORD / MONGO_AUTH_SOURCE
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
@@ -32,4 +32,7 @@ export const cols = {
   searchCache: () => getMongo().then((d) => d.collection('ozon_search_cache')),
   bundleCache: () => getMongo().then((d) => d.collection('ozon_bundle_cache')),
   pdpCache: () => getMongo().then((d) => d.collection('ozon_pdp_cache')),
+  composerCache: () => getMongo().then((d) => d.collection('ozon_composer_cache')),
+  entrypointCache: () => getMongo().then((d) => d.collection('ozon_entrypoint_cache')),
+  dynamicCache: () => getMongo().then((d) => d.collection('ozon_dynamic_cache')),
 };

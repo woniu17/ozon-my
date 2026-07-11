@@ -384,7 +384,7 @@
       (root && root.JZFollowSellContentCopy) ||
       (typeof window !== 'undefined' && window.JZFollowSellContentCopy) ||
       null;
-    const injectSourceText = (distilled, description, hashtags) => {
+    const injectSourceText = (distilled, description, hashtags, endpoint) => {
       if (!distilled) return;
       const sv = distilled._sourceVariant;
       const desc = typeof description === 'string' ? description.trim() : '';
@@ -398,6 +398,8 @@
       if (tags.length && sv && typeof sv === 'object' && contentCopy?.mergeSourceHashtagsIntoVariant) {
         contentCopy.mergeSourceHashtagsIntoVariant(sv, tags);
       }
+      // 透传 page-json 实际命中 endpoint(供 rawBySource.pageJson.endpoint 修正硬编码 bug)
+      if (endpoint && !distilled.pageJsonEndpoint) distilled.pageJsonEndpoint = endpoint;
     };
 
     // 跟卖视频(opts.captureVideo,batch-upload 用):逐 SKU 借买家 tab 抓竞品 PDP gallery 的
@@ -420,7 +422,7 @@
           const url = resp?.ok ? resp.data?.url : (resp?.data?.url ?? null);
           if (url && distilled) distilled.videoUrl = url;
           injectRichContent(distilled, resp?.data?.richContent || '');
-          injectSourceText(distilled, resp?.data?.description || '', resp?.data?.hashtags || []);
+          injectSourceText(distilled, resp?.data?.description || '', resp?.data?.hashtags || [], resp?.data?.endpoint);
           onVideoProgress(++vDone, entries.length, sku, !!url);
         } catch (e) {
           onVideoProgress(++vDone, entries.length, sku, false);
@@ -441,7 +443,7 @@
         try {
           const resp = await sendMsg({ action: 'fetchVariantRichContent', url: `https://www.ozon.ru/product/${sku}` });
           injectRichContent(distilled, resp?.data?.richContent || '');
-          injectSourceText(distilled, resp?.data?.description || '', resp?.data?.hashtags || []);
+          injectSourceText(distilled, resp?.data?.description || '', resp?.data?.hashtags || [], resp?.data?.endpoint);
         } catch (e) {
           // best-effort:富内容是增强项,失败静默。
         }

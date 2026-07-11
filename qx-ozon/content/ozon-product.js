@@ -634,6 +634,31 @@
       }
     }
 
+    // 有 sku 时异步写 dynamic 缓存(仅动态字段,1h TTL,不阻塞返回)
+    // DOM 解析失败时由 performProductCollect 查缓存兜底
+    if (_product.sku && window.sendMessage) {
+      try {
+        window.sendMessage('dynamicCacheSet', {
+          sku: String(_product.sku),
+          data: {
+            price: _product.price,
+            walletPrice: _product.walletPrice,
+            originalPrice: _product.originalPrice,
+            seller: _product.seller,
+            statistics: _product.statistics,
+            freeRest: _product.freeRest,
+            followSellCount: _product.followSellCount,
+            followSellMinPrice: _product.followSellMinPrice,
+            deliveryMode: _product.deliveryMode,
+            rating: _product.rating,
+            reviewCount: _product.reviewCount,
+          },
+        });
+      } catch {
+        /* fire-and-forget,不影响采集 */
+      }
+    }
+
     return _product;
   }
 
@@ -1784,7 +1809,7 @@
               if (imgs.length) galleryMap.set(r.sku, imgs);
               if (g.richContent) richContentMap.set(r.sku, g.richContent);
               pageJsonRaw[r.sku] = {
-                endpoint: 'entrypoint-api',
+                endpoint: g.endpoint || 'entrypoint-api',
                 url: r.link,
                 gallery: imgs,
                 richContent: g.richContent || '',
@@ -2081,6 +2106,34 @@
           }
         } catch {
           /* 缓存查询失败,继续走原错误流程 */
+        }
+      }
+    }
+
+    // 动态字段兜底:price/seller/statistics 等动态字段为空时,查 dynamic 缓存(1h TTL)
+    // 跟 pdp 静态字段兜底独立,允许只缺动态字段的场景单独命中
+    if (product?.sku && window.sendMessage) {
+      const _needDynamicFallback = !product.price && !product.seller?.name && !product.statistics?.sold_count;
+      if (_needDynamicFallback) {
+        try {
+          const dynResp = await window.sendMessage('dynamicCacheGet', { sku: String(product.sku) });
+          const dynCached = dynResp?.ok ? dynResp.data : null;
+          if (dynCached) {
+            if (!product.price && dynCached.price) product.price = dynCached.price;
+            if (!product.walletPrice && dynCached.walletPrice) product.walletPrice = dynCached.walletPrice;
+            if (!product.originalPrice && dynCached.originalPrice) product.originalPrice = dynCached.originalPrice;
+            if (!product.seller?.name && dynCached.seller?.name) product.seller = dynCached.seller;
+            if (!product.statistics && dynCached.statistics) product.statistics = dynCached.statistics;
+            if (!product.freeRest && dynCached.freeRest) product.freeRest = dynCached.freeRest;
+            if (!product.followSellCount && dynCached.followSellCount) product.followSellCount = dynCached.followSellCount;
+            if (!product.followSellMinPrice && dynCached.followSellMinPrice) product.followSellMinPrice = dynCached.followSellMinPrice;
+            if (!product.deliveryMode && dynCached.deliveryMode) product.deliveryMode = dynCached.deliveryMode;
+            if (!product.rating && dynCached.rating) product.rating = dynCached.rating;
+            if (!product.reviewCount && dynCached.reviewCount) product.reviewCount = dynCached.reviewCount;
+            console.log('[ozon-helper] dynamic 缓存兜底命中,补全动态字段 sku=' + product.sku);
+          }
+        } catch {
+          /* 动态缓存查询失败,忽略 */
         }
       }
     }
@@ -10069,6 +10122,45 @@
   }
 
   /**
+   * 从 widgetStates 提取图册(供 composer 缓存复用路径用)。
+   * 扫所有 widget,选 images 数组最长的一个,upgrade 到 wc1000 + 去重。
+   */
+  function _extractGalleryFromWidgetStates(states, upgradeFn, normFn) {
+    const upgrade = upgradeFn || ((u) => u);
+    const norm = normFn || ((u) => String(u || '').toLowerCase());
+    let bestImages = [];
+    let bestCover = null;
+    for (const k of Object.keys(states || {})) {
+      let v = states[k];
+      if (typeof v === 'string') {
+        try { v = JSON.parse(v); } catch { continue; }
+      }
+      if (!v || typeof v !== 'object') continue;
+      if (!Array.isArray(v.images)) continue;
+      if (v.images.length > bestImages.length) {
+        bestImages = v.images;
+        bestCover = v.coverImage || null;
+      }
+    }
+    const seen = new Set();
+    const out = [];
+    const push = (raw) => {
+      const upgraded = upgrade(raw);
+      if (!upgraded) return;
+      const n = norm(upgraded);
+      if (seen.has(n)) return;
+      seen.add(n);
+      out.push(upgraded);
+    };
+    if (bestCover) push(bestCover);
+    for (const img of bestImages) {
+      const u = typeof img === 'string' ? img : img?.src || img?.url || img?.image;
+      if (u) push(u);
+    }
+    return out;
+  }
+
+  /**
    * 从 composer/entrypoint widgetStates 里抽取源商品的「富内容」(Ozon Rich Content,
    * attribute 11254)文档。两种常见形状:① 某 widget state 的 richAnnotationJson 字段是
    * 整份 {content,version} JSON 字符串;② state 顶层直接就是 {content:[...widget...],version}。
@@ -10217,7 +10309,7 @@
    * Returns { images: string[], richContent: string } —— richContent 为源富内容 11254 JSON 或 ''。
    */
   async function fetchVariantGallery(variantLink) {
-    if (!variantLink) return { images: [], richContent: '' };
+    if (!variantLink) return { images: [], richContent: '', endpoint: null };
     let path = variantLink;
     try {
       if (/^https?:\/\//i.test(path)) {
@@ -10226,11 +10318,10 @@
       }
     } catch {}
     if (!path.startsWith('/')) path = '/' + path;
-    // 相对路径让 ozon.ru / ozon.kz 都同 origin 命中自家 entrypoint API。
-    const endpoints = [
-      `/api/entrypoint-api.bx/page/json/v2?url=${encodeURIComponent(path)}`,
-      `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(path)}`,
-    ];
+
+    // 从 path 提取 sku 用于缓存查询(/product/xxx-<sku>/)
+    const urlSku = (path.match(/-(\d+)\/?$/) || [])[1] || '';
+
     const upgrade = (u) =>
       typeof u === 'string' && u.includes('ir.ozone.ru') ? u.replace(/\/wc\d+\//, '/wc1000/') : u;
     const norm = (u) =>
@@ -10241,8 +10332,48 @@
 
     let richContent = '';
     let collectedImages = null;
+    let hitEndpoint = null;
     const TAG = '[jz-rc][gallery]';
-    console.log(TAG, 'START variantLink=', variantLink, 'path=', path);
+    console.log(TAG, 'START variantLink=', variantLink, 'path=', path, 'urlSku=', urlSku);
+
+    // ── 缓存优先:entrypoint → composer ──
+    if (urlSku && typeof window.sendMessage === 'function') {
+      try {
+        const epResp = await window.sendMessage('entrypointCacheGet', { sku: urlSku });
+        const epData = epResp?.ok ? epResp.data : null;
+        if (epData && (epData.gallery?.length || epData.richContent)) {
+          console.log(TAG, 'cache HIT entrypoint, gallery=', epData.gallery?.length, 'richContentLen=', epData.richContent?.length);
+          return {
+            images: Array.isArray(epData.gallery) ? epData.gallery : [],
+            richContent: epData.richContent || '',
+            endpoint: 'entrypoint-cache',
+          };
+        }
+      } catch (e) {
+        console.log(TAG, 'entrypoint cache get failed:', e?.message);
+      }
+      try {
+        const ccResp = await window.sendMessage('composerCacheGet', { sku: urlSku });
+        const ccData = ccResp?.ok ? ccResp.data : null;
+        if (ccData && ccData.widgetStates) {
+          const states = ccData.widgetStates;
+          const imgs = _extractGalleryFromWidgetStates(states, upgrade, norm);
+          const rc = jzExtractRichContentFromStates(states);
+          if (imgs.length || rc) {
+            console.log(TAG, 'cache HIT composer, gallery=', imgs.length, 'richContentLen=', rc.length);
+            return { images: imgs, richContent: rc, endpoint: 'composer-cache' };
+          }
+        }
+      } catch (e) {
+        console.log(TAG, 'composer cache get failed:', e?.message);
+      }
+    }
+
+    // 相对路径让 ozon.ru / ozon.kz 都同 origin 命中自家 entrypoint API。
+    const endpoints = [
+      `/api/entrypoint-api.bx/page/json/v2?url=${encodeURIComponent(path)}`,
+      `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(path)}`,
+    ];
     for (const url of endpoints) {
       try {
         console.log(TAG, 'phase1 fetching bare url=', url);
@@ -10306,7 +10437,8 @@
         }
         if (out.length > 0) {
           collectedImages = out;
-          console.log(TAG, 'phase1 collected images=', out.length);
+          if (!hitEndpoint) hitEndpoint = url.includes('entrypoint-api') ? 'entrypoint-api' : 'composer-api';
+          console.log(TAG, 'phase1 collected images=', out.length, 'endpoint=', hitEndpoint);
           break;
         }
       } catch (e) {
@@ -10409,9 +10541,26 @@
       console.log(TAG, 'phase2 skipped, richContent already len=', richContent.length);
     }
 
-    console.log(TAG, 'END images=', collectedImages?.length || 0, 'richContentLen=', richContent.length);
-    if (collectedImages && collectedImages.length > 0) return { images: collectedImages, richContent };
-    return { images: [], richContent };
+    console.log(TAG, 'END images=', collectedImages?.length || 0, 'richContentLen=', richContent.length, 'endpoint=', hitEndpoint);
+
+    // 真调成功后异步写 entrypoint 缓存(按 sku 索引,蒸馏后字段)
+    if (urlSku && hitEndpoint === 'entrypoint-api' && typeof window.sendMessage === 'function') {
+      try {
+        window.sendMessage('entrypointCacheSet', {
+          sku: urlSku,
+          data: {
+            gallery: collectedImages || [],
+            richContent: richContent || '',
+            description: '',
+            hashtags: [],
+            mp4: null,
+          },
+        });
+      } catch { /* fire-and-forget */ }
+    }
+
+    if (collectedImages && collectedImages.length > 0) return { images: collectedImages, richContent, endpoint: hitEndpoint };
+    return { images: [], richContent, endpoint: hitEndpoint };
   }
 
   /**

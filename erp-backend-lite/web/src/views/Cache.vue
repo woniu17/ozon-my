@@ -9,7 +9,14 @@ import JsonTree from '../components/JsonTree.vue';
 const { show } = useToast();
 
 // ── 统计 ───────────────────────────────────────────────────
-const stats = ref({ search: { count: 0 }, bundle: { count: 0, emptyAttrs: 0, stale: 0 }, pdp: { count: 0 } });
+const stats = ref({
+  search: { count: 0 },
+  bundle: { count: 0, emptyAttrs: 0, stale: 0 },
+  pdp: { count: 0 },
+  composer: { count: 0 },
+  entrypoint: { count: 0 },
+  dynamic: { count: 0 },
+});
 
 async function loadStats() {
   try {
@@ -21,7 +28,7 @@ async function loadStats() {
 
 // ── 列表 ───────────────────────────────────────────────────
 const state = reactive({
-  type: 'bundle', // search | bundle | pdp
+  type: 'bundle', // search | bundle | pdp | composer | entrypoint | dynamic
   keyword: '',
   items: [],
   total: 0,
@@ -118,8 +125,10 @@ async function onClearAll() {
 // ── 渲染辅助 ───────────────────────────────────────────────
 function fmtTime(t) {
   if (!t) return '—';
-  const s = String(t).replace('T', ' ').slice(0, 19);
-  return s;
+  const d = new Date(t);
+  if (isNaN(d.getTime())) return '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function isStale(it) {
@@ -176,6 +185,21 @@ onMounted(() => {
         <div class="cache-stat-value">{{ stats.pdp.count }}</div>
         <div class="cache-stat-sub">条(DOM 静态字段)</div>
       </div>
+      <div class="cache-stat-card">
+        <div class="cache-stat-label">composer 缓存</div>
+        <div class="cache-stat-value">{{ stats.composer?.count || 0 }}</div>
+        <div class="cache-stat-sub">条(widgetStates)</div>
+      </div>
+      <div class="cache-stat-card">
+        <div class="cache-stat-label">entrypoint 缓存</div>
+        <div class="cache-stat-value">{{ stats.entrypoint?.count || 0 }}</div>
+        <div class="cache-stat-sub">条(page-json 图册/富内容)</div>
+      </div>
+      <div class="cache-stat-card">
+        <div class="cache-stat-label">dynamic 缓存</div>
+        <div class="cache-stat-value">{{ stats.dynamic?.count || 0 }}</div>
+        <div class="cache-stat-sub">条(DOM 动态字段,1h TTL)</div>
+      </div>
     </div>
 
     <!-- 类型切换 -->
@@ -200,6 +224,27 @@ onMounted(() => {
         @click="switchType('pdp')"
       >
         pdp 缓存
+      </button>
+      <button
+        class="cache-type-tab"
+        :class="{ active: state.type === 'composer' }"
+        @click="switchType('composer')"
+      >
+        composer 缓存
+      </button>
+      <button
+        class="cache-type-tab"
+        :class="{ active: state.type === 'entrypoint' }"
+        @click="switchType('entrypoint')"
+      >
+        entrypoint 缓存
+      </button>
+      <button
+        class="cache-type-tab"
+        :class="{ active: state.type === 'dynamic' }"
+        @click="switchType('dynamic')"
+      >
+        dynamic 缓存
       </button>
     </div>
 
