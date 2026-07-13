@@ -38,6 +38,163 @@
   // 店铺页 seller-info-main.js 提取后通过 CustomEvent 推过来;非店铺页保持 ''。
   let sellerSlug = '';
 
+  // ── 采集状态同步到商品卡(徽章+状态条) ──────────────────────────
+  // sku → { status, reason, results, duration, timestamp }
+  // status: 'success' | 'partial' | 'skipped' | 'failed' | 'antibot'
+  // reason: skipped 时为 'not-running'/'paused'/'daily-limit'/'non-chinese-store'/'unclassified-store'/'all-cached'
+  // results: [{type, hit}] 8 类缓存命中明细
+  const _collectStatusMap = new Map();
+  let _collectStatusMapReady = false;
+
+  // 初始化:从 SW 拉取最近 200 条采集记录,填充 Map
+  async function _initCollectStatusMap() {
+    if (_collectStatusMapReady) return;
+    _collectStatusMapReady = true; // 防止重复加载
+    try {
+      const recent = await window.sendMessage('autoCollectGetRecent', { limit: 200 });
+      if (!Array.isArray(recent)) return;
+      // 倒序遍历,后到的覆盖先到的(保留最近一次状态)
+      for (let i = recent.length - 1; i >= 0; i--) {
+        const e = recent[i];
+        if (!e || !e.sku) continue;
+        if (!_collectStatusMap.has(e.sku)) {
+          _collectStatusMap.set(String(e.sku), {
+            status: e.status,
+            reason: e.reason || null,
+            results: e.results || null,
+            duration: e.duration,
+            timestamp: e.timestamp,
+          });
+        }
+      }
+      console.log('[ozon-data-panel] _collectStatusMap 初始化完成, 共', _collectStatusMap.size, '条');
+      // 刷新当前页所有已渲染的商品卡
+      _refreshAllCollectStatusUi();
+    } catch (e) {
+      console.warn('[ozon-data-panel] _initCollectStatusMap 失败:', e);
+    }
+  }
+
+  // 接收 SW 推送的 collectDone 事件,实时更新
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type !== 'collectDone' || !msg.entry?.sku) return;
+    const e = msg.entry;
+    _collectStatusMap.set(String(e.sku), {
+      status: e.status,
+      reason: e.reason || null,
+      results: e.results || null,
+      duration: e.duration,
+      timestamp: e.timestamp,
+    });
+    _refreshCollectStatusUi(String(e.sku));
+  });
+
+  // 状态文案
+  const _COLLECT_STATUS_LABELS = {
+    success: { text: '已采集', icon: '✓', color: '#16a34a' },
+    partial: { text: '部分采集', icon: '◐', color: '#f59e0b' },
+    skipped: { text: '跳过', icon: '−', color: '#94a3b8' },
+    failed: { text: '失败', icon: '✗', color: '#ef4444' },
+    antibot: { text: '熔断', icon: '⚠', color: '#f97316' },
+  };
+  const _COLLECT_REASON_LABELS = {
+    'not-running': '自动采集未开启',
+    paused: '冷却期中',
+    'daily-limit': '达每日上限',
+    'non-chinese-store': '非中国店铺',
+    'unclassified-store': '店铺未分类',
+    'all-cached': '8 类缓存全命中',
+    antibot: '反爬熔断',
+  };
+  const _CACHE_TYPE_LABELS = ['card', 'detail', 'composer', 'entrypoint', 'search', 'bundle', 'marketStats', 'followSell'];
+
+  // 渲染状态条(数据面板底部)
+  function renderCollectStatusBar(panel, sku) {
+    if (!panel) return;
+    let bar = panel.querySelector('.jz-collect-status-bar');
+    const status = _collectStatusMap.get(String(sku));
+    if (!status) {
+      if (bar) bar.remove();
+      return;
+    }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'jz-collect-status-bar';
+      panel.appendChild(bar);
+    }
+    const meta = _COLLECT_STATUS_LABELS[status.status] || _COLLECT_STATUS_LABELS.failed;
+    const reasonText = status.reason ? ` · ${_COLLECT_REASON_LABELS[status.reason] || status.reason}` : '';
+    const durationText = status.duration != null ? ` · ${(status.duration / 1000).toFixed(1)}s` : '';
+    // 8 类缓存命中明细
+    let cacheDetail = '';
+    if (Array.isArray(status.results) && status.results.length > 0) {
+      const hitCount = status.results.filter((r) => r.hit).length;
+      const detailParts = status.results.map((r) => {
+        const label = r.type;
+        return `<span class="jz-cache-${r.hit ? 'hit' : 'miss'}">${label}${r.hit ? '✓' : '✗'}</span>`;
+      });
+      cacheDetail = ` · <span class="jz-cache-summary">${hitCount}/${status.results.length}</span> <span class="jz-cache-detail">${detailParts.join(' ')}</span>`;
+    }
+    bar.innerHTML =
+      `<span class="jz-collect-status-icon" style="color:${meta.color}">${meta.icon}</span>` +
+      `<span class="jz-collect-status-text" style="color:${meta.color}">${meta.text}</span>` +
+      `<span class="jz-collect-status-reason">${reasonText}${durationText}${cacheDetail}</span>`;
+    bar.dataset.status = status.status;
+  }
+
+  // 渲染角落徽章(商品卡 tile-root 右上角)
+  function updateCollectBadge(card, sku) {
+    if (!card) return;
+    let badge = card.querySelector('.jz-collect-badge');
+    const status = _collectStatusMap.get(String(sku));
+    if (!status) {
+      if (badge) badge.remove();
+      return;
+    }
+    const meta = _COLLECT_STATUS_LABELS[status.status] || _COLLECT_STATUS_LABELS.failed;
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'jz-collect-badge';
+      card.appendChild(badge);
+    }
+    badge.textContent = meta.icon;
+    badge.style.backgroundColor = meta.color;
+    badge.dataset.status = status.status;
+    badge.title = `${meta.text}${status.reason ? ' · ' + (_COLLECT_REASON_LABELS[status.reason] || status.reason) : ''}`;
+  }
+
+  // 刷新单个 SKU 对应的所有商品卡 UI(徽章+状态条)
+  function _refreshCollectStatusUi(sku) {
+    const cards = document.querySelectorAll(CARD_SELECTORS.join(','));
+    for (const card of cards) {
+      const link = card.querySelector('a[href*="/product/"]');
+      if (!link) continue;
+      const m = link.href.match(/\/product\/.*-(\d{5,})/);
+      if (!m) continue;
+      if (String(m[1]) !== String(sku)) continue;
+      updateCollectBadge(card, sku);
+      const panel = card._ohPanel;
+      if (panel) renderCollectStatusBar(panel, sku);
+    }
+  }
+
+  // 刷新当前页所有商品卡 UI
+  function _refreshAllCollectStatusUi() {
+    const cards = document.querySelectorAll(CARD_SELECTORS.join(','));
+    for (const card of cards) {
+      const link = card.querySelector('a[href*="/product/"]');
+      if (!link) continue;
+      const m = link.href.match(/\/product\/.*-(\d{5,})/);
+      if (!m) continue;
+      updateCollectBadge(card, m[1]);
+      const panel = card._ohPanel;
+      if (panel) renderCollectStatusBar(panel, m[1]);
+    }
+  }
+
+  // 启动时拉取一次
+  setTimeout(_initCollectStatusMap, 1500);
+
   // 节流并发：跟原 ozon-search 配置一致
   const taskQueue = new window.JZTaskQueue({
     concurrency: 6,
@@ -142,6 +299,9 @@
       // 触发 autoCollect(检查 onlyWithSales / smartFilter / 中国店铺 Gate 0.5);
       // fire-and-forget,不阻塞 panel 渲染。sellerSlug 来自 jz-seller-info 事件缓存。
       window.__jzCollectAutoIfMatched?.(productId, card, info, cached, panel, 'shop-page', sellerSlug);
+      // 渲染采集状态(徽章+状态条)
+      updateCollectBadge(card, productId);
+      renderCollectStatusBar(panel, productId);
       return;
     }
 
@@ -224,6 +384,9 @@
       // 触发 autoCollect(检查 onlyWithSales / smartFilter / 中国店铺 Gate 0.5);
       // fire-and-forget,不阻塞 panel 渲染。sellerSlug 来自 jz-seller-info 事件缓存。
       window.__jzCollectAutoIfMatched?.(productId, card, info, data, panel, 'shop-page', sellerSlug);
+      // 渲染采集状态(徽章+状态条)
+      updateCollectBadge(card, productId);
+      renderCollectStatusBar(panel, productId);
     } catch {
       showError();
     }

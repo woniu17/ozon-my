@@ -2302,7 +2302,8 @@ try {
         followSellData: r.followSellData || null,
       };
       // 真调成功后异步写 entrypoint 缓存(按 sku 索引,蒸馏后字段)
-      if (urlSku && result.endpoint === 'entrypoint-api') {
+      // 仅在有效内容时写入,避免 HTTP 200 但字段全空时写入空缓存导致后续误判命中
+      if (urlSku && result.endpoint === 'entrypoint-api' && (result.richContent || result.description || result.mp4)) {
         _entrypointCacheSet(urlSku, {
           gallery: [],
           richContent: result.richContent,
@@ -3404,7 +3405,8 @@ try {
   const _autoCollectRecent = []; // 环形缓冲,最近 50 条
 
   // sku + startTime 也需传入用于环形缓冲记录。
-  const _incrementAutoCollectStats = (sku, status, source, storeClassified, results, startTime) => {
+  // reason: skipped 时记录具体跳过原因(not-running/paused/daily-limit/non-chinese-store/unclassified-store/all-cached)
+  const _incrementAutoCollectStats = (sku, status, source, storeClassified, results, startTime, reason) => {
     _autoCollectStats.today.total++;
     if (status === 'success') _autoCollectStats.today.success++;
     else if (status === 'antibot') _autoCollectStats.today.antibot++;
@@ -3425,15 +3427,36 @@ try {
         }
       });
     }
-    // 环形缓冲
-    _autoCollectRecent.push({
+    // 环形缓冲(扩容到 200,供商品卡状态查询)
+    const entry = {
       sku,
       source,
       status,
+      reason: reason || null,
+      results: Array.isArray(results) ? results.map((r) => ({ type: r.type, hit: !!r.hit })) : null,
       duration: Date.now() - startTime,
       timestamp: Date.now(),
-    });
-    if (_autoCollectRecent.length > 50) _autoCollectRecent.shift();
+    };
+    _autoCollectRecent.push(entry);
+    if (_autoCollectRecent.length > 200) _autoCollectRecent.shift();
+
+    // 广播给所有 Ozon tab,让商品卡实时更新采集状态
+    _broadcastCollectDone(entry);
+  };
+
+  // 向所有 Ozon tab 推送采集完成事件(让商品卡状态条+徽章实时更新)
+  const _broadcastCollectDone = (entry) => {
+    try {
+      chrome.tabs.query({ url: ['https://www.ozon.ru/*', 'https://ozon.ru/*', 'https://ozon.kz/*', 'https://*.ozon.kz/*'] }, (tabs) => {
+        if (!Array.isArray(tabs)) return;
+        for (const t of tabs) {
+          if (!t.id) continue;
+          chrome.tabs.sendMessage(t.id, { type: 'collectDone', entry }).catch(() => {});
+        }
+      });
+    } catch (e) {
+      /* fire-and-forget */
+    }
   };
 
   // ── ANTIBOT 分支处理:暂停 10 分钟 + 通知 popup + 写日志 + 更新计数器 ────────
@@ -3458,7 +3481,7 @@ try {
     });
 
     // 更新内存计数器
-    _incrementAutoCollectStats(sku, 'antibot', source, storeClassified, results, startTime);
+    _incrementAutoCollectStats(sku, 'antibot', source, storeClassified, results, startTime, 'antibot');
 
     return { status: 'antibot', pausedUntil };
   };
@@ -3548,14 +3571,17 @@ try {
 
       // 检查 autoCollectRunning
       if (!config.autoCollectRunning) {
+        _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'not-running');
         return { status: 'skipped', reason: 'not-running' };
       }
       // 检查 paused / 冷却期
       if (config.paused && Date.now() < config.pausedUntil) {
+        _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'paused');
         return { status: 'skipped', reason: 'paused', pausedUntil: config.pausedUntil };
       }
       // 检查每日上限
       if (config.todayCount >= config.perDayLimit) {
+        _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'daily-limit');
         return { status: 'skipped', reason: 'daily-limit' };
       }
 
@@ -3577,6 +3603,7 @@ try {
           results,
           totalDuration: Date.now() - startTime,
         });
+        _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, reason);
         return { status: 'skipped', reason };
       }
 
@@ -3594,10 +3621,15 @@ try {
       ]);
 
       // 标记命中(forceRefresh 时所有缓存不计为命中)
+      // entrypoint 缓存可能存空内容(HTTP 200 但字段全空),需校验有效性,
+      // 与 fetchVariantMediaViaBuyerTab L1958 命中判断一致
       results[0].hit = !!card && !forceRefresh;
       results[1].hit = !!detail && !forceRefresh;
       results[2].hit = !!composer && !forceRefresh;
-      results[3].hit = !!entrypoint && !forceRefresh;
+      results[3].hit =
+        !!entrypoint &&
+        (entrypoint.gallery?.length || entrypoint.richContent || entrypoint.description || entrypoint.mp4) &&
+        !forceRefresh;
       // search/bundle 在 Step 5 处理
       results[6].hit = !!marketStats && !marketStats.stale && !forceRefresh;
       results[7].hit = !!followSell && !followSell.stale && !forceRefresh;
@@ -3624,6 +3656,7 @@ try {
           results,
           totalDuration: Date.now() - startTime,
         });
+        _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'all-cached');
         return { status: 'skipped', reason: 'all-cached', results, totalDuration: Date.now() - startTime };
       }
 
@@ -3638,9 +3671,15 @@ try {
           const productUrl = card?.url || `https://www.ozon.ru/product/-${sku}/`;
           const mediaResult = await fetchVariantMediaViaBuyerTab(productUrl);
           // fetchVariantMediaViaBuyerTab 内部已写 entrypoint/composer/followSell 缓存,
-          // 这里仅根据返回字段标记命中
-          if (mediaResult?.endpoint) results[3].hit = true;
-          if (mediaResult?.composerFields) results[2].hit = true;
+          // 这里仅根据返回字段标记命中。
+          // 注意:endpoint 字段可能为 'entrypoint-api'/'composer-api'/'entrypoint-cache'/'composer-cache',
+          // 但 entrypoint 缓存只在 endpoint === 'entrypoint-api' 且有有效内容时才会写入(L2306 条件),
+          // 所以 results[3].hit 必须严格匹配 'entrypoint-*' 且校验内容有效性才能反映真实缓存状态。
+          const ep = String(mediaResult?.endpoint || '');
+          const epHasContent =
+            mediaResult?.richContent || mediaResult?.description || mediaResult?.mp4;
+          if (ep.startsWith('entrypoint-') && epHasContent) results[3].hit = true;
+          if (ep.startsWith('composer-') || mediaResult?.composerFields) results[2].hit = true;
           if (mediaResult?.followSellData) results[7].hit = true;
         } catch (e) {
           if (e?.message === 'ANTIBOT_BLOCKED') {
@@ -3782,7 +3821,7 @@ try {
       const status = hasError ? 'partial' : 'success';
 
       // 更新内存计数器
-      _incrementAutoCollectStats(sku, status, source, storeClassified, results, startTime);
+      _incrementAutoCollectStats(sku, status, source, storeClassified, results, startTime, null);
 
       // todayCount++
       await _saveAutoCollectConfig({ todayCount: config.todayCount + 1 });

@@ -5927,3 +5927,94 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ===== 采集状态同步到商品卡(徽章+状态条) ===== */
+
+/* 商品卡容器需要 relative 让徽章定位到角落(Ozon 默认 tile-root 可能没有 position:relative) */
+.tile-root:has(.jz-collect-badge) {
+  position: relative;
+}
+
+/* 商品卡角落徽章 */
+.jz-collect-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 20px;
+  text-align: center;
+  z-index: 10;
+  pointer-events: auto;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: help;
+  user-select: none;
+}
+
+/* 数据面板底部状态条 */
+.jz-collect-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--oh-border, #e5e7eb);
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--oh-bg-elevated, #fafafa);
+  flex-wrap: wrap;
+}
+
+.jz-collect-status-icon {
+  font-size: 13px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.jz-collect-status-text {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.jz-collect-status-reason {
+  color: var(--oh-text-secondary, #6b7280);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.jz-cache-summary {
+  font-weight: 600;
+  color: var(--oh-text-primary, #374151);
+  margin-left: 2px;
+}
+
+.jz-cache-detail {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-left: 4px;
+}
+
+.jz-cache-hit,
+.jz-cache-miss {
+  font-size: 10px;
+  padding: 0 3px;
+  border-radius: 2px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+.jz-cache-hit {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.jz-cache-miss {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.08);
+}
