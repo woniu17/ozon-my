@@ -42,6 +42,29 @@ if (!globalThis.__JZ_BRAND__) {
 
   const STATE_CACHE = {};
   const KEY_CACHE = {};
+  const _autoCollectSeen = new Set(); // 页面级去重,避免同一 SKU 重复触发 autoCollect
+
+  // ─── autoCollectRunning:自动采集总开关 ──────────────────────────
+  // 默认开启;由 popup 通过 chrome.storage.local['jz-auto-collect-config'] 控制。
+  let autoCollectRunning = true;
+
+  // content script 启动时加载初始值
+  chrome.storage.local.get('jz-auto-collect-config', (result) => {
+    const cfg = result['jz-auto-collect-config'];
+    if (cfg && typeof cfg.autoCollectRunning === 'boolean') {
+      autoCollectRunning = cfg.autoCollectRunning;
+    }
+  });
+
+  // 监听 storage 变化,实时同步开关状态
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes['jz-auto-collect-config']) {
+      const cfg = changes['jz-auto-collect-config'].newValue;
+      if (cfg && typeof cfg.autoCollectRunning === 'boolean') {
+        autoCollectRunning = cfg.autoCollectRunning;
+      }
+    }
+  });
 
   // ─── Machine fingerprint v3 (2026-05-27 起,跟 popup.js / frontend
   //     device-fingerprint.ts 严格对齐) ─────────────────────────────
@@ -2478,6 +2501,13 @@ if (!globalThis.__JZ_BRAND__) {
       // 后能在 30min 内刷新
       const ttl = result.count > 0 ? FOLLOW_SELL_CACHE_TTL_MS : 30 * 60 * 1000;
       writeFollowSellCache(sku, result.count, result.sellers, ttl);
+      // 同步写入 SW 侧 followSell 缓存(L1,供 panel 渲染优先读取)。
+      // source 取自 fetchFollowSellFromModal 返回值:'modal' | 'no-sellers' | 'parse-fail'。
+      // no-sellers / parse-fail 也写缓存(count=0),避免 panel 重复真调。
+      sendMessage('followSellCacheSet', {
+        sku,
+        data: { count: result.count, sellers: result.sellers, source: result.source },
+      }).catch(() => {});
       return { count: result.count, sellers: result.sellers };
     } catch (e) {
       console.error(`[jz follow-sell] modal fetch failed for sku=${sku}: ${e?.message || e}`);
@@ -3797,214 +3827,88 @@ if (!globalThis.__JZ_BRAND__) {
     }
   };
 
-  // 推送本地桶到候选池(collect_box_v2):批量拉源数据 + 组装 CollectedVariant + 后端 upsert
-  // 从 ozon-search.js 移出,让搜索页/店铺页/PDP 页都能复用(shared-utils 所有页面都注入)。
-  // panel toast 通过 window.jzCollectorToast 解耦 — 各页面在创建 panel 实例后挂上去。
-  async function pushBucketToCollectBoxV2() {
-    if (!window.JZCollectorDB) return { ok: false, message: 'IndexedDB 未就绪' };
-    const all = await window.JZCollectorDB.getAllSales({ status: 'local' });
-    if (!all.length) return { ok: true, message: '本地桶无待推送' };
-
-    const skus = all.map((r) => String(r.sku)).filter(Boolean);
-    if (!skus.length) return { ok: true, message: '无有效 SKU' };
-
-    // 视频转存耗时较长(逐 SKU 经 SW 买家 tab 抓 mp4 + upload-file),
-    // 默认关(与 PDP 采集一致)。后续可接入 popup 开关按需开。
-    const captureVideo = false;
-    const captureRichContent = true;
-
-    // 批量拉源数据:sv(name/brand/images/weight/dimensions/gtin/category) + 富内容 + 描述 + 标签 + 可选视频。
-    // collectBySkus 内部 BATCH_SIZE=3,批间 400ms+jitter,反爬 10min 熔断。
-    let sourceMap = new Map();
-    let collectFailed = 0;
-    if (window.JZSkuCollect?.collectBySkus) {
-      try {
-        const result = await window.JZSkuCollect.collectBySkus(skus, {
-          captureVideo,
-          captureRichContent,
-          onProgress: (done, total) => {
-            window.jzCollectorToast?.(`全源采集 ${done}/${total}`, 'info', 1500);
-          },
-        });
-        sourceMap = result?.sourceMap || new Map();
-        collectFailed = result?.failed?.length || 0;
-        if (result?.antibotTripped) {
-          return {
-            ok: false,
-            message: `触发反爬,冷却 ${Math.ceil((result.cooldownMs || 0) / 60000)}min,已采部分已推送`,
-          };
-        }
-      } catch (e) {
-        return { ok: false, message: 'collectBySkus 失败: ' + (e?.message || e) };
-      }
-    } else {
-      return { ok: false, message: 'JZSkuCollect 未注入,无法采集源数据' };
-    }
-
-    // 逐 SKU 组装 CollectedVariant 并推送
-    const now = Date.now();
-    const sf = (value, source, sourceDetail) => ({
-      value,
+  // ─── autoCollect 统一入口(Task 12)─────────────────────────────
+  /**
+   * 自动采集统一入口:页面级去重 + fire-and-forget 发送 autoCollect 消息给 SW
+   * @param {string|number} sku - 商品 SKU
+   * @param {string} source - 来源:'shop-page' | 'pdp'
+   * @param {string} sellerSlug - 卖家 slug(从店铺页/详情页提取)
+   * @param {object} [options] - 可选参数
+   * @param {boolean} [options.forceRefresh=false] - 强制刷新:跳过页面级去重,向 SW 发 forceRefresh:true
+   */
+  function autoCollectOnSkuSeen(sku, source, sellerSlug, options = {}) {
+    const skuStr = String(sku);
+    if (!options.forceRefresh && _autoCollectSeen.has(skuStr)) return;
+    _autoCollectSeen.add(skuStr);
+    // fire-and-forget,不阻塞,不 await
+    sendMessage('autoCollect', {
+      sku: skuStr,
       source,
-      ...(sourceDetail ? { sourceDetail } : {}),
-      collectedAt: now,
+      sellerSlug,
+      depth: 'Full',
+      forceRefresh: options.forceRefresh || false,
+    }).catch((e) => {
+      console.warn('[autoCollect] 发送失败:', skuStr, e?.message || e);
     });
+  }
+  window.__jzAutoCollectOnSkuSeen = autoCollectOnSkuSeen;
 
-    let created = 0,
-      updated = 0,
-      failed = 0;
-    const pushedSkus = [];
-
-    for (const rec of all) {
-      const sku = String(rec.sku);
-      const distilled = sourceMap.get(sku);
-      if (!distilled || !distilled._sourceVariant) {
-        failed++;
-        continue;
-      }
-
-      const sv = distilled._sourceVariant;
-      const svCat = window.jzExtractCatalogFromSv ? window.jzExtractCatalogFromSv(sv) : null;
-
-      // 列表卡 DOM 抽取的字段(price/soldCount 来自采集器本地桶)
-      // 币种检测 + RUB→CNY 换算(内联实现,不依赖 ozon-product.js 的局部函数)
-      const priceStr = rec.price != null ? String(rec.price) : '';
-      const isRub = /[₽]/.test(priceStr);
-      const isCny = /[¥]/.test(priceStr);
-      const cur = isRub ? 'RUB' : isCny ? 'CNY' : 'RUB';
-      const priceNum = (window.normalizePrice && window.normalizePrice(priceStr)) || 0;
-      // RUB→CNY 换算:汇率取 shared-utils 的 _jzFxCnyToRub 反算(与 ozon-product.js 对齐)
-      const fxRate = window._jzFxCnyToRub || 12;
-      const priceCny = isRub ? Math.round((priceNum / fxRate) * 100) / 100 : priceNum;
-      const priceRub = isRub ? priceNum : 0;
-      const priceCurrency = isRub ? 'CNY' : cur;
-
-      // 组装 CollectedVariant(模仿 pushCollectBoxV2FromCollected 结构,DOM 字段降级)
-      const cv = {
-        sku: sf(sku, 'listing-dom', 'URL 正则 /product/.*-(\\d{5,})'),
-        url: sf(rec.url || '', 'listing-dom'),
-        isAnchor: true, // 列表页每个 SKU 独立成记录,自身即锚点
-        name: svCat?.name ? sf(svCat.name, 'seller-portal', 'sv.attributes[4180]') : sf(rec.name || '', 'listing-dom'),
-        brand: sf(
-          svCat?.brand || null,
-          svCat?.brand ? 'seller-portal' : 'dom',
-          svCat?.brand ? 'sv.attributes[85]' : 'listing-page-unavailable'
-        ),
-        categoryPath: sf(sv?.categories || [], 'seller-portal', 'sv.categories'),
-        descriptionCategoryId: sf(sv?.description_category_id || null, 'seller-portal'),
-        price: sf(priceRub || priceCny || 0, priceRub ? 'listing-dom' : 'computed'),
-        priceCurrency: sf(priceCurrency, 'computed', '_detectCurrencyFromPriceStr'),
-        priceRub: sf(priceRub, 'computed'),
-        priceCny: sf(priceCny, 'computed', '_rubToCny'),
-        oldPrice: sf(null, 'dom', 'listing-page-unavailable'),
-        discount: sf(rec.discount || null, 'listing-dom'),
-        mainImage: svCat?.mainImage
-          ? sf(svCat.mainImage, 'seller-portal', 'sv.attributes[4194]')
-          : sf(rec.image || '', 'listing-dom'),
-        images: svCat?.images?.length
-          ? sf(svCat.images, 'seller-portal', 'sv.attributes[4194]+[4195]')
-          : sf(rec.image ? [rec.image] : [], 'listing-dom'),
-        imageSource: sf(svCat?.mainImage ? 'seller-portal' : 'listing-dom', 'computed'),
-        videoUrl: sf(distilled.videoUrl || null, 'video-transcode', 'SW transferVariantVideo'),
-        videoCover: sf(null, 'video-transcode', 'listing-page-unavailable'),
-        weight: sf(svCat?.weightG || null, 'seller-portal', 'sv.attributes[4497]||sv[4383]'),
-        depth: sf(svCat?.depthMm || null, 'seller-portal', 'sv.attributes[9454]'),
-        width: sf(svCat?.widthMm || null, 'seller-portal', 'sv.attributes[9455]'),
-        height: sf(svCat?.heightMm || null, 'seller-portal', 'sv.attributes[9456]'),
-        gtin: sf(svCat?.gtin || null, 'seller-portal', 'sv.attributes[7822]'),
-        richContent: sf(distilled.richContent || null, 'page-json', 'SW fetchVariantMediaViaBuyerTab'),
-        breadcrumbs: sf(null, 'dom', 'listing-page-unavailable'),
-        hashtags: sf(distilled.hashtags || null, 'page-json', 'SW fetchVariantMediaViaBuyerTab extractHashtags'),
-        scrapedDims: sf(null, 'dom', 'listing-page-unavailable'),
-        aspectValues: sf({}, 'ssr-aspects', 'listing-page-unavailable'),
-        sourceVariant: sf(sv, 'seller-portal', 'searchVariants picked'),
-        bundleComplexAttrs: sf(sv._bundleComplexAttrs || null, 'seller-portal', 'sv._bundleComplexAttrs'),
-        // 列表页能拿到的统计(仅 soldCount,其余 null)
-        statistics: {
-          soldCount: sf(rec.soldCount ?? null, 'listing-dom'),
-          soldSum: sf(null, 'dom', 'listing-page-unavailable'),
-          views: sf(rec.views ?? null, 'listing-dom'),
-          convViewToOrder: sf(rec.convViewToOrder || null, 'listing-dom'),
-          gmvSum: sf(rec.gmvSum || null, 'listing-dom'),
-        },
-        seller: {
-          name: sf(null, 'dom', 'listing-page-unavailable'),
-          link: sf(null, 'dom', 'listing-page-unavailable'),
-        },
-      };
-
-      // rawBySource:5 类数据源(列表页 dom/ssrAspects 为空)
-      // sellerPortal/pageJson 必须按 SKU 索引(与 PDP 采集 ozon-product.js 结构对齐),
-      // 否则前端 CollectBoxV2Detail.vue 的 Object.keys 取不到 SKU。
-      const rawBySource = {
-        dom: null,
-        sellerPortal: {
-          [sku]: {
-            pickedSv: distilled._sourceVariant,
-            searchResponse: distilled._searchMeta || null,
-            bundleResponse: distilled._bundleMeta || null,
-          },
-        },
-        pageJson: {
-          [sku]: {
-            endpoint: distilled.pageJsonEndpoint || 'entrypoint-api',
-            url: rec.url || '',
-            gallery: distilled.images || [],
-            richContent: distilled.richContent || null,
-            description: distilled.description || null,
-            hashtags: distilled.hashtags || null,
-          },
-        },
-        ssrAspects: null,
-        videoTranscode: {
-          originalMp4Url: distilled.videoUrl || null,
-          transferredVideoUrl: distilled.videoUrl || null,
-          transferredCoverUrl: null,
-        },
-      };
-
-      try {
-        const resp = await new Promise((resolve) => {
-          chrome.runtime.sendMessage(
-            {
-              action: 'pushCollectBoxV2',
-              body: {
-                anchorSku: sku,
-                sourcePageUrl: rec.url || window.location.href,
-                collectSource: 'MY采集器',
-                variants: [cv],
-                rawBySource,
-                collectedAt: now,
-              },
-            },
-            resolve
-          );
-        });
-        if (resp?.ok) {
-          const action = resp.data?.results?.[0]?.action;
-          if (action === 'created') created++;
-          else if (action === 'updated') updated++;
-          pushedSkus.push(sku);
-        } else {
-          failed++;
-        }
-      } catch {
-        failed++;
+  /**
+   * 筛选检查:先检查 onlyWithSales,再检查 smartFilterState.enabled && smartMatches。
+   * @param {object} data - marketStats 数据(已过 jzExtractPanelFilterData 归一化)
+   * @param {object} info - 商品信息
+   * @param {object} panel - 面板实例(含 onlyWithSales / smartFilterState)
+   * @returns {boolean} - true 表示通过筛选
+   */
+  function passCollectorFilters(data, info, panel) {
+    if (panel?.onlyWithSales) {
+      const soldCount = Number(data?.soldCount) || 0;
+      if (soldCount <= 0) return false;
+    }
+    if (panel?.smartFilterState?.enabled) {
+      if (window.QXSmartFilter && !window.QXSmartFilter.smartMatches(data, info, panel.smartFilterState)) {
+        return false;
       }
     }
-
-    // 推送成功的 SKU 标记为已推送(移出 local 状态)
-    if (pushedSkus.length) {
-      try {
-        await window.JZCollectorDB.markPushed(pushedSkus);
-      } catch {}
-    }
-
-    const failTail = failed ? ` / 失败 ${failed}` : '';
-    const collectTail = collectFailed ? ` / 采集失败 ${collectFailed}` : '';
-    return { ok: true, message: `全源采集完成：新增 ${created} / 更新 ${updated}${failTail}${collectTail}` };
+    return true;
   }
 
-  // 暴露给所有页面(搜索页 ozon-search.js / 非搜索页 ozon-data-panel.js 都通过此入口推送)
-  window.jzPushBucketToCollectBoxV2 = pushBucketToCollectBoxV2;
+  /**
+   * 筛选入口:检查 autoCollectRunning → 提取筛选数据 → passCollectorFilters →
+   * 通过则调 autoCollectOnSkuSeen(fire-and-forget 发 autoCollect 消息)。
+   * @param {string|number} productId - 商品 ID
+   * @param {object} card - 商品卡数据(保留以对齐旧 collectSaleIfMatched 签名)
+   * @param {object} info - 商品信息
+   * @param {object} data - marketStats 数据(含 soldCount 等)
+   * @param {object} panel - 面板实例(含 onlyWithSales / smartFilterState)
+   * @param {string} source - 来源:'shop-page' | 'pdp'
+   * @param {string} sellerSlug - 卖家 slug
+   */
+  async function collectAutoIfMatched(productId, card, info, data, panel, source, sellerSlug, options = {}) {
+    // forceRefresh 时跳过 autoCollectRunning + 筛选检查,直接发 autoCollect
+    if (!autoCollectRunning && !options.forceRefresh) return;
+    const sku = String(productId);
+    // 提取筛选数据(参考旧 collectSaleIfMatched):jzExtractPanelFilterData 会从
+    // panel DOM + info + baseData 归一化 soldCount/price/gmvSum 等字段。
+    const sourceData = window.jzExtractPanelFilterData
+      ? window.jzExtractPanelFilterData(panel, info, data || {})
+      : data || {};
+    if (!options.forceRefresh && !passCollectorFilters(sourceData, info, panel)) return;
+    autoCollectOnSkuSeen(sku, source, sellerSlug, options);
+  }
+  window.__jzCollectAutoIfMatched = collectAutoIfMatched;
+
+  /**
+   * 清空去重集合(供面板/popup「强制刷新当前页」调用)
+   */
+  window.__jzAutoCollectResetSeen = function () {
+    _autoCollectSeen.clear();
+  };
+
+  // 监听 SW 发来的 __jzAutoCollectResetSeen 消息,清空去重集合
+  chrome.runtime.onMessage?.addListener((message) => {
+    if (message === '__jzAutoCollectResetSeen' || (message && message.type === '__jzAutoCollectResetSeen')) {
+      _autoCollectSeen.clear();
+    }
+  });
 })();

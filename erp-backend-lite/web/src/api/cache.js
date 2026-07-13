@@ -35,3 +35,45 @@ export function getOpiPreview(sku, storeId) {
   const qs = storeId ? `?storeId=${encodeURIComponent(storeId)}` : '';
   return request.get(`/admin/api/cache/opi-preview/${encodeURIComponent(sku)}${qs}`);
 }
+
+// ── 自动采集 ───────────────────────────────────────────────
+// 自动采集统计
+export function getAutoCollectStats() {
+  return request.get('/admin/api/auto-collect/stats');
+}
+
+// 自动采集日志列表
+export function getAutoCollectLogs(params) {
+  return request.get('/admin/api/auto-collect/logs', params);
+}
+
+// 单 SKU 采集历史
+export function getAutoCollectLogsBySku(sku) {
+  return request.get(`/admin/api/auto-collect/logs/${encodeURIComponent(sku)}`);
+}
+
+// ── 缓存查询(调试用) ─────────────────────────────────────
+export function getMarketStatsCache(sku) {
+  return request.get(`/ozon/cache/marketStats/${encodeURIComponent(sku)}`);
+}
+
+export function getFollowSellCache(sku) {
+  return request.get(`/ozon/cache/followSell/${encodeURIComponent(sku)}`);
+}
+
+// ── 店铺分类 ───────────────────────────────────────────────
+export function getStoreClassificationList(params) {
+  return request.get('/ozon/store-classification', params);
+}
+
+export function getStoreClassification(slug) {
+  return request.get(`/ozon/store-classification/${encodeURIComponent(slug)}`);
+}
+
+export function updateStoreClassification(slug, data) {
+  return request.post(`/ozon/store-classification/${encodeURIComponent(slug)}`, data);
+}
+
+export function deleteStoreClassification(slug) {
+  return request.del(`/ozon/store-classification/${encodeURIComponent(slug)}`);
+}

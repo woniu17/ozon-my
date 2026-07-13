@@ -895,6 +895,101 @@
 
   syncCookieBtn.addEventListener('click', doSyncCookie);
 
+  // ─── 自动采集配置(popup 简化视图)───────────────────────
+  // 仅暴露总开关 + 今日计数 + 熔断简略提示。深度/限速/自动翻页/筛选/只采集中国店铺
+  // 等详细配置在 QX 面板。配置 key 与 SW 共享:chrome.storage.local['jz-auto-collect-config']。
+  const AC_CONFIG_KEY = 'jz-auto-collect-config';
+
+  const loadAutoCollectConfig = async () => {
+    try {
+      const v = await chrome.storage.local.get([AC_CONFIG_KEY]);
+      return v?.[AC_CONFIG_KEY] || {};
+    } catch {
+      return {};
+    }
+  };
+
+  const saveAutoCollectConfig = async (cfg) => {
+    const current = await loadAutoCollectConfig();
+    const updated = { ...current, ...cfg };
+    await chrome.storage.local.set({ [AC_CONFIG_KEY]: updated });
+    // 通知 SW:配置已变更(SW 内 autoCollectSetConfig 走对应处理)
+    try {
+      chrome.runtime.sendMessage({ action: 'autoCollectSetConfig', config: cfg });
+    } catch {}
+  };
+
+  // 熔断倒计时:每秒更新 #ac-paused-countdown,到时隐藏熔断提示并重渲一次。
+  let _acCountdownTimer = null;
+  const updatePausedCountdown = (pausedUntil) => {
+    const countdownEl = document.getElementById('ac-paused-countdown');
+    const pausedDiv = document.getElementById('ac-paused');
+    if (!countdownEl || !pausedDiv) return;
+    if (_acCountdownTimer) {
+      clearInterval(_acCountdownTimer);
+      _acCountdownTimer = null;
+    }
+    const tick = () => {
+      const remaining = Math.max(0, pausedUntil - Date.now());
+      if (remaining <= 0) {
+        pausedDiv.style.display = 'none';
+        if (_acCountdownTimer) {
+          clearInterval(_acCountdownTimer);
+          _acCountdownTimer = null;
+        }
+        renderAutoCollect();
+        return;
+      }
+      const minutes = Math.floor(remaining / 60000);
+      const seconds = Math.floor((remaining % 60000) / 1000);
+      countdownEl.textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
+    };
+    tick();
+    _acCountdownTimer = setInterval(tick, 1000);
+  };
+
+  const renderAutoCollect = async () => {
+    const config = await loadAutoCollectConfig();
+    const toggle = document.getElementById('ac-toggle');
+    const todayCount = document.getElementById('ac-today-count');
+    const statusDot = document.getElementById('ac-status-dot');
+    const pausedDiv = document.getElementById('ac-paused');
+    if (!toggle) return; // HTML 缺节点时优雅降级
+
+    toggle.checked = config.autoCollectRunning !== false;
+    if (todayCount) todayCount.textContent = String(config.todayCount || 0);
+
+    if (config.paused && Date.now() < (config.pausedUntil || 0)) {
+      if (statusDot) statusDot.className = 'status-dot paused';
+      if (pausedDiv) {
+        pausedDiv.style.display = 'flex';
+        updatePausedCountdown(config.pausedUntil);
+      }
+    } else if (config.autoCollectRunning !== false) {
+      if (statusDot) statusDot.className = 'status-dot running';
+      if (pausedDiv) pausedDiv.style.display = 'none';
+    } else {
+      if (statusDot) statusDot.className = 'status-dot stopped';
+      if (pausedDiv) pausedDiv.style.display = 'none';
+    }
+  };
+
+  document.getElementById('ac-toggle')?.addEventListener('change', async (e) => {
+    await saveAutoCollectConfig({ autoCollectRunning: e.target.checked });
+    await renderAutoCollect();
+  });
+
+  // SW 推送消息:antibotDetected(熔断触发)/ configChanged(配置变化)→ 重渲。
+  try {
+    chrome.runtime.onMessage.addListener((message) => {
+      if (!message) return;
+      if (message.type === 'antibotDetected' || message.type === 'configChanged') {
+        renderAutoCollect();
+      }
+      return false;
+    });
+  } catch {}
+
   // ─── 同步 IndexedDB 缓存到 MongoDB ───────────────────────
   // 手动触发,立即扫描 L1 中所有 l2Synced=false 记录,补写到 ERP MongoDB。
   // 用于定时任务(CACHE_SYNC_ALARM 5 分钟周期)之外需要即时同步的场景。
@@ -911,18 +1006,18 @@
         const total = search + bundle;
         cacheSyncLabel.textContent = total > 0 ? `已同步 ${total}` : '已是最新';
         setTimeout(() => {
-          cacheSyncLabel.textContent = '同步缓存';
+          cacheSyncLabel.textContent = '同步缓存(8 类)';
         }, 2500);
       } else {
         cacheSyncLabel.textContent = '同步失败';
         setTimeout(() => {
-          cacheSyncLabel.textContent = '同步缓存';
+          cacheSyncLabel.textContent = '同步缓存(8 类)';
         }, 2500);
       }
     } catch (e) {
       cacheSyncLabel.textContent = '同步失败';
       setTimeout(() => {
-        cacheSyncLabel.textContent = '同步缓存';
+        cacheSyncLabel.textContent = '同步缓存(8 类)';
       }, 2500);
       console.warn('[popup] cache sync failed:', e?.message);
     } finally {
@@ -993,6 +1088,8 @@
     await Promise.all([buildSignals(), checkUpdateBanner()]);
     startCollectorMonPolling();
     startBrowserAgentPolling();
+    // 自动采集卡片初始渲染(总开关状态 + 今日计数 + 熔断简略提示)
+    renderAutoCollect();
   };
 
   logoutBtn.addEventListener('click', async () => {
@@ -1188,6 +1285,8 @@
       if (changes.ozon_premium_enabled) syncPremiumBadge();
       if (changes.ozon_data_panel_enabled) syncDataPanelBadge();
       if (changes.ozon_collector_enabled) syncCollectorBadge();
+      // 自动采集配置变化(SW 写入或 QX 面板写入)→ 跨页保持状态一致
+      if (changes[AC_CONFIG_KEY]) renderAutoCollect();
     });
   } catch {}
 

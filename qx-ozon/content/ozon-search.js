@@ -3,10 +3,8 @@
 
   // 标记：ozon-search.js 已经在本页注入。
   // ozon-data-panel.js 看到这个 flag 就跳过自己的数据面板渲染逻辑，
-  // 让搜索/类目页继续由 ozon-search.js 一手管（含选品模式 / 采集器联动）。
+  // 让搜索/类目页继续由 ozon-search.js 一手管（含选品模式）。
   window.OzonHelperSearchInjected = true;
-  // 注:L1 (composer-api 拦截) bridge 已经在 content/collector/l1-bridge.js 注入,
-  // 不在本文件耦合,见 manifest content_scripts。
 
   const SELECTORS = [
     '[data-widget="searchResultsV2"] > div > div',
@@ -19,19 +17,11 @@
   // --- Data Panel State ---
   // panelState.enabled = 数据面板自动加载开关。新用户默认开(true)— 搜索/类目页
   // 一进来卡片就自动挂面板、拉数据填充。老用户在 popup 里显式关过会读出来保持关。
-  // !! 不再耦合"采集器写入" — collectorRunning 是单独 flag,见下方。
   const panelState = { enabled: true };
   const panelDataCache = new Map();
 
-  // collectorRunning = 是否把 panel 数据写入 IndexedDB 本地桶(真正的"采集动作")。
-  // 默认 false:新用户进搜索页只看 panel 数据展示,不自动落桶。
-  // 用户点采集器面板的"采集中"按钮才开始落桶。跟 panelState.enabled 完全解耦:
-  // 采集器停了 panel 仍照常加载显示。
-  let collectorRunning = false;
-  const COLLECTOR_RUNNING_STORAGE_KEY = 'ozon_collector_running';
-
-  // --- Collector: TaskQueue + IndexedDB + 浮动面板 ---
-  // queue 由 collector/task-queue.js 提供（content_scripts 注入顺序保证）
+  // --- TaskQueue ---
+  // queue 由 content_scripts 注入顺序保证
   const taskQueue = new window.JZTaskQueue({
     concurrency: 6, // 数据面板请求并发上限(backend 走的 market/product stats)
     timeoutMs: 60000,
@@ -105,12 +95,6 @@
   // 比 variants 更保守:1 并发 + 500ms stagger,且 cache 命中(4h)时 0 网络成本,
   // 真正受限的只有首次访问的 SKU。
   const followSellQueue = makeStaggeredQueue({ concurrency: 1, staggerMs: 500 });
-  let collectorPanel = null;
-  let autoScroller = null;
-  let keywordPilot = null;
-  let antiBanGuard = null;
-  // 仅抓有销量数据 — 影响 putSale 的入桶判断
-  let onlyWithSales = false;
 
   function getCards() {
     const cards = new Set();
@@ -168,34 +152,6 @@
     };
   }
 
-  async function waitForCollectorFilterData(card, data, info, panel) {
-    let nextInfo = info;
-    while (true) {
-      const missing = window.JZCollectorFilter?.getMissingFields
-        ? window.JZCollectorFilter.getMissingFields(data, nextInfo)
-        : [];
-      if (!missing.length) return nextInfo;
-      if (!missing.some((key) => key === 'price')) return nextInfo;
-      if (!card?.isConnected) return nextInfo;
-      const panelStatus = panel?.dataset?.jzLoadStatus || '';
-      if (panelStatus === 'ready' || panelStatus === 'error' || panel?.querySelector?.('.ozon-helper-panel-error')) {
-        const refreshedInfo = extractCardInfo(card);
-        return {
-          ...nextInfo,
-          ...refreshedInfo,
-          price: Number(refreshedInfo.price) > 0 ? refreshedInfo.price : nextInfo.price,
-        };
-      }
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      const refreshedInfo = extractCardInfo(card);
-      nextInfo = {
-        ...nextInfo,
-        ...refreshedInfo,
-        price: Number(refreshedInfo.price) > 0 ? refreshedInfo.price : nextInfo.price,
-      };
-    }
-  }
-
   function ensureBadge(card) {
     let badge = card.querySelector('.ozon-helper-card-badge');
     if (badge) {
@@ -251,54 +207,8 @@
   //   window.jzRenderPanelSkeleton。
   // 注:search 页暂未调用 fetchPublicFollowSell,hero「跟卖」会显示空态。
 
-  // --- Collector: 销量过滤（"仅抓有销量数据"开启时才生效） ---
-  function passCollectorFilters(data, info) {
-    if (onlyWithSales) {
-      const sold = Number(data?.soldCount);
-      if (!Number.isFinite(sold) || sold <= 0) return false;
-    }
-    return window.JZCollectorFilter?.matches ? window.JZCollectorFilter.matches(data, info) : true;
-  }
-
-  // --- Collector: 把卡片信息 + merged 数据写到 IndexedDB sales store
-  function buildSaleRecord(productId, info, data) {
-    const keyword = new URLSearchParams(window.location.search).get('text') || '';
-    return {
-      sku: String(productId),
-      url: info.url || '',
-      name: info.name || '',
-      price: info.price != null ? String(info.price) : null,
-      image: info.image || '',
-      soldCount: data?.soldCount ?? null,
-      gmvSum: data?.gmvSum != null ? String(data.gmvSum) : null,
-      views: data?.views ?? null,
-      convViewToOrder: data?.convViewToOrder != null ? String(data.convViewToOrder) : null,
-      discount: data?.discount != null ? String(data.discount) : null,
-      keyword,
-      collectedAt: Date.now(),
-      status: 'local',
-      raw: data || null,
-    };
-  }
-
-  async function collectSaleIfMatched(productId, card, info, data, panel) {
-    if (!collectorRunning) return false;
-    const sourceData = window.jzExtractPanelFilterData
-      ? window.jzExtractPanelFilterData(panel, info, data || {})
-      : data || {};
-    const readyInfo = await waitForCollectorFilterData(card, sourceData, info, panel);
-    if (readyInfo && passCollectorFilters(sourceData, readyInfo)) {
-      try {
-        await window.JZCollectorDB?.putSale(buildSaleRecord(productId, readyInfo, sourceData));
-        return true;
-      } catch {}
-    }
-    return false;
-  }
-
-  // --- Data Panel: Load data for a card(通过 JZTaskQueue 节流 + 仅当采集器运行时落 IndexedDB) ---
-  // panel 数据展示无条件加载;落桶仅在 collectorRunning=true 时执行,跟采集器
-  // 「采集中/停止」按钮挂钩。
+  // --- Data Panel: Load data for a card(通过 JZTaskQueue 节流) ---
+  // panel 数据展示无条件加载。
   async function loadPanelData(card, panel) {
     if (panel) panel.dataset.jzLoadStatus = 'loading';
     const info = extractCardInfo(card);
@@ -307,6 +217,24 @@
       if (panel) panel.dataset.jzLoadStatus = 'error';
       panel.innerHTML = '';
       return;
+    }
+
+    // 异步写 card 缓存(商品卡 DOM 字段,fire-and-forget)
+    if (productId && window.sendMessage) {
+      try {
+        window.sendMessage('cardCacheSet', {
+          sku: String(productId),
+          data: {
+            sku: String(productId),
+            url: info.url || '',
+            name: info.name || '',
+            price: info.price != null ? Number(info.price) : null,
+            image: info.image || '',
+          },
+        });
+      } catch {
+        /* fire-and-forget */
+      }
     }
 
     if (panelDataCache.has(productId)) {
@@ -320,9 +248,7 @@
       } else {
         window.jzRenderProductCardPanel(panel, cached);
       }
-      // 缓存命中也落桶(仅采集器运行时)— 首次切换"采集中"后让已展示的卡也补落桶
       if (panel) panel.dataset.jzLoadStatus = 'ready';
-      await collectSaleIfMatched(productId, card, info, cached, panel);
       return;
     }
 
@@ -404,9 +330,7 @@
         window.jzRenderProductCardPanel(panel, data);
       }
 
-      // 写入 IndexedDB sales store(仅采集器运行时;启用销量过滤时跳过 0 销量)
       if (panel) panel.dataset.jzLoadStatus = 'ready';
-      await collectSaleIfMatched(productId, card, info, data, panel);
     } catch {
       showError();
     }
@@ -471,8 +395,7 @@
   }
 
   // 「采集」按钮:与 action bar 上的「一键采集」语义统一,写 backend 采集箱
-  // (pushSourceCollect)。同时保留本地 IndexedDB 写入,供「极掌采集器」关键词
-  // 巡航的桶视图复用 sale record。绕过 collectorRunning gate(用户主动点 = 显式同意)。
+  // (pushSourceCollect)。
   //
   // resp shape (SW ENVELOPE_FIX 2025-05):{ dedupeHit, lastAt, result }。
   // sendMessage 在 SW ok:false 时直接 reject(走外层 catch),不必检查 resp.ok。
@@ -520,24 +443,6 @@
         sourceId: 'ozon',
         raw: collectPayload,
       });
-
-      // 3. 本地桶 (失败静默,backend 写成功就算采集成功)
-      try {
-        const record = data
-          ? buildSaleRecord(productId, info, data)
-          : {
-              sku: String(productId),
-              url: info.url || '',
-              name: info.name || '',
-              price: info.price != null ? String(info.price) : null,
-              image: info.image || '',
-              keyword: new URLSearchParams(window.location.search).get('text') || '',
-              collectedAt: Date.now(),
-            };
-        await window.JZCollectorDB?.putSale(record);
-      } catch (e) {
-        console.warn('[ozon-helper] collect-one local-bucket write failed:', e);
-      }
 
       const label = resp?.dedupeHit ? '近期已采集' : '已采集';
       flashBtn(btn, label, 'is-collected', 1800);
@@ -716,265 +621,6 @@
     });
   }
 
-  // pushBucketToCollectBoxV2 已移至 shared-utils.js(让搜索页/店铺页/PDP 页都能复用)。
-  // panel toast 通过 window.jzCollectorToast 解耦:在 mountCollectorPanel 后挂上去。
-
-  // 极掌采集器面板 UI 显示开关:默认 *关* —— 新用户进搜索页不直接看到采集器
-  // 浮窗,要在 popup 里主动开。状态由 popup toggle 控制,通过
-  // chrome.storage.local.ozon_collector_enabled 同步。
-  const COLLECTOR_STORAGE_KEY = 'ozon_collector_enabled';
-  let collectorEnabled = false;
-
-  async function loadCollectorEnabled() {
-    try {
-      const r = await chrome.storage.local.get(COLLECTOR_STORAGE_KEY);
-      // === true 区别于"未设置/false" — 默认 false,只有显式 true 才显示
-      collectorEnabled = r[COLLECTOR_STORAGE_KEY] === true;
-    } catch {
-      collectorEnabled = false;
-    }
-  }
-
-  // collectorRunning 持久化:用户上次按"停止"/"采集中"的状态保留到下次进搜索页。
-  // 默认 false:首次安装/未设置 = 不写入桶。
-  async function loadCollectorRunning() {
-    try {
-      const r = await chrome.storage.local.get(COLLECTOR_RUNNING_STORAGE_KEY);
-      collectorRunning = r[COLLECTOR_RUNNING_STORAGE_KEY] === true;
-    } catch {
-      collectorRunning = false;
-    }
-  }
-
-  function listenCollectorRunningToggle() {
-    try {
-      chrome.storage.onChanged.addListener((changes, area) => {
-        if (area !== 'local') return;
-        if (!changes[COLLECTOR_RUNNING_STORAGE_KEY]) return;
-        collectorRunning = changes[COLLECTOR_RUNNING_STORAGE_KEY].newValue === true;
-        // 如果采集器面板正显示,同步按钮状态
-        try {
-          collectorPanel?.setRunning(collectorRunning);
-        } catch {}
-      });
-    } catch {}
-  }
-
-  function unmountCollectorPanel() {
-    if (collectorPanel) {
-      try {
-        collectorPanel.unmount();
-      } catch {}
-      collectorPanel = null;
-    }
-  }
-
-  function listenCollectorToggle() {
-    try {
-      chrome.storage.onChanged.addListener((changes, area) => {
-        if (area !== 'local') return;
-        if (!changes[COLLECTOR_STORAGE_KEY]) return;
-        collectorEnabled = changes[COLLECTOR_STORAGE_KEY].newValue === true;
-        if (collectorEnabled) mountCollectorPanel();
-        else unmountCollectorPanel();
-      });
-    } catch {}
-  }
-
-  function mountCollectorPanel() {
-    if (!collectorEnabled) return;
-    if (collectorPanel || !window.JZCollectorPanel) return;
-    collectorPanel = window.JZCollectorPanel.create({
-      queue: taskQueue,
-      db: window.JZCollectorDB,
-      onPushClick: () => pushBucketToCollectBoxV2(),
-      onClearClick: () => window.JZCollectorDB?.clearSales(),
-      onToggleRunning: (next) => {
-        // 「采集中/停止」按钮:只控制 IndexedDB 落桶(写入开关),不再 pause
-        // taskQueue,也不动 panelState.enabled — panel 永远照常自动加载。
-        // 持久化到 storage,下次进搜索页保持。
-        collectorRunning = !!next;
-        try {
-          chrome.storage.local.set({ [COLLECTOR_RUNNING_STORAGE_KEY]: collectorRunning });
-        } catch {}
-        if (next) {
-          // 恢复采集: 若"自动翻页"开关仍勾选(用户偏好), 重新启动 AutoScroller
-          if (autoScroller) {
-            const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
-            if (cb && cb.checked) autoScroller.start();
-          }
-        } else {
-          // 停止采集时停 AutoScroller, 但不改"自动翻页"开关状态(保留用户偏好)
-          if (autoScroller) autoScroller.stop();
-        }
-      },
-      onAutoScrollToggle: (next) => {
-        if (!autoScroller) return;
-        if (next) autoScroller.start();
-        else autoScroller.stop();
-        collectorPanel.setAutoScrollerState({
-          running: autoScroller.isUserActive(),
-          autoPaused: autoScroller.isAutoPaused(),
-        });
-      },
-      onSalesFilterChange: (next) => {
-        onlyWithSales = !!next;
-      },
-      onKeywordsStart: async (texts, maxN) => {
-        if (!keywordPilot) return;
-        // 关键词采集启动:必须确保 collectorRunning=true(否则爬到的数据不落桶,
-        // 关键词采集就没意义)。panel 自动加载和 taskQueue 永远开,不需动。
-        if (!collectorRunning) {
-          collectorRunning = true;
-          try {
-            chrome.storage.local.set({ [COLLECTOR_RUNNING_STORAGE_KEY]: true });
-          } catch {}
-          collectorPanel.setRunning(true);
-        }
-        await keywordPilot.addKeywords(texts);
-        await keywordPilot.start({ maxCollectNumber: maxN || 200 });
-      },
-      onKeywordsStop: async () => {
-        if (!keywordPilot) return;
-        await keywordPilot.stop();
-      },
-      onKeywordsClear: async () => {
-        if (!keywordPilot) return;
-        await keywordPilot.clearAllKeywords();
-      },
-    });
-    collectorPanel.mount();
-    // 初始按钮状态显示 collectorRunning(IndexedDB 写入开关),不再用 panelState.enabled
-    collectorPanel.setRunning(collectorRunning);
-    // 初始 sales filter 状态
-    onlyWithSales = collectorPanel.getInitialSalesFilter();
-  }
-
-  function isDataPanelSettled(panel) {
-    if (!panel) return false;
-    const status = panel.dataset.jzLoadStatus || '';
-    if (status === 'ready' || status === 'error') return true;
-    if (panel.querySelector('.ozon-helper-panel-error')) return true;
-    if (panel.querySelector('.is-skeleton, .is-skeleton-section, .oh-skeleton-row')) return false;
-    return status === 'ready';
-  }
-
-  function isCurrentViewportDataReady() {
-    if (!panelState.enabled) return true;
-    // 注意: 必须用 panel 的 rect 而非 card 的 rect 判定视口范围, 且 margin 对齐
-    // ensureDataPanel 里 IntersectionObserver 的 rootMargin('200px').
-    // 否则当 card 很高时, card 顶部进入 +80px 范围但 panel(在 card 底部)还在
-    // IO 触发范围之外 → isCurrentViewportDataReady 永远等 panel ready, 而 IO
-    // 永远不触发加载 → 死锁, AutoScroller 卡在 "采集中".
-    const cards = getCards().filter((card) => {
-      if (!card.querySelector('a[href*="/product/"]')) return false;
-      const panel = card.querySelector('.ozon-helper-data-panel');
-      if (!panel) return false;
-      const rect = panel.getBoundingClientRect();
-      return rect.bottom > -200 && rect.top < window.innerHeight + 200;
-    });
-    if (!cards.length) return true;
-    return cards.every((card) => isDataPanelSettled(card.querySelector('.ozon-helper-data-panel')));
-  }
-
-  function mountAutoScroller() {
-    if (autoScroller || !window.JZAutoScroller) return;
-    autoScroller = new window.JZAutoScroller({
-      queue: taskQueue,
-      intervalMs: 500,
-      settleMs: 1000,
-      scrollStepRatio: 0.95,
-      minScrollStepPx: 680,
-      readinessPollMs: 300,
-      isReadyToScroll: () => isCurrentViewportDataReady(),
-      emptyThreshold: 5,
-      getCardCount: () => getCards().length,
-      onCongestionPause: (which) => {
-        const stateMsg = which === 'paused' ? '队列拥塞，自动暂停翻页' : '队列恢复，继续翻页';
-        if (collectorPanel) {
-          collectorPanel.setAutoScrollerState({
-            running: autoScroller.isUserActive(),
-            autoPaused: autoScroller.isAutoPaused(),
-          });
-          collectorPanel.toast(stateMsg, 'info', 1800);
-        }
-      },
-      onEmpty: async () => {
-        if (collectorPanel) {
-          collectorPanel.setAutoScrollerState({ running: false, autoPaused: false });
-          collectorPanel.toast('当前页已抓取完成', 'success', 1800);
-        }
-        if (keywordPilot) await keywordPilot.notifyKeywordEmpty();
-      },
-    });
-  }
-
-  async function mountKeywordPilot() {
-    if (keywordPilot || !window.JZKeywordPilot || !window.JZCollectorDB) return;
-    keywordPilot = new window.JZKeywordPilot({
-      db: window.JZCollectorDB,
-      defaultMaxCollectNumber: 200,
-      onStartCollecting: (kw) => {
-        if (collectorPanel) {
-          collectorPanel.setKeywordPilotState({
-            mode: 'COLLECTING',
-            currentKeyword: kw,
-            pendingCount: 0,
-            doneCount: 0,
-          });
-          collectorPanel.toast(`开始采集 "${kw.text}"`, 'info', 2000);
-        }
-        if (autoScroller) {
-          autoScroller.start();
-          collectorPanel?.setAutoScrollerState({
-            running: autoScroller.isUserActive(),
-            autoPaused: autoScroller.isAutoPaused(),
-          });
-        }
-      },
-      onStopCollecting: async () => {
-        if (autoScroller) autoScroller.stop();
-        // 必须同时停 KeywordPilot: 否则其 _monitorTimer(每 5s)仍会触发
-        // _completeCurrentAndAdvance → start() → onStartCollecting → autoScroller.start(),
-        // 导致用户点停止后翻页被关键词自动续上.
-        if (keywordPilot) await keywordPilot.stop();
-        if (collectorPanel) {
-          collectorPanel.setAutoScrollerState({ running: false, autoPaused: false });
-          await refreshKeywordPanelState();
-        }
-      },
-      onAllDone: () => {
-        if (collectorPanel) collectorPanel.toast('所有关键词采集完成', 'success', 3000);
-      },
-    });
-    // 复活检查（如果是关键词跳过来的页面，会自动启动 AutoScroller）
-    await keywordPilot.init();
-    await refreshKeywordPanelState();
-  }
-
-  async function refreshKeywordPanelState() {
-    if (!collectorPanel || !keywordPilot || !window.JZCollectorDB) return;
-    const state = keywordPilot.getState();
-    const all = await window.JZCollectorDB.getKeywords();
-    const pendingCount = all.filter((k) => k.status === 'pending').length;
-    const doneCount = all.filter((k) => k.status === 'done').length;
-    collectorPanel.setKeywordPilotState({ ...state, pendingCount, doneCount });
-  }
-
-  function mountAntiBanGuard() {
-    if (antiBanGuard || !window.JZAntiBanGuard) return;
-    antiBanGuard = new window.JZAntiBanGuard({
-      queue: taskQueue,
-      windowSize: 20,
-      failureRateThreshold: 0.5,
-      cooldownMs: 60000,
-      onTrigger: (msg) => {
-        if (collectorPanel) collectorPanel.toast(msg, 'error', 5000);
-      },
-    });
-    antiBanGuard.start();
-  }
-
   function createObserver() {
     let _applyPending = false;
     const observer = new MutationObserver(() => {
@@ -999,70 +645,11 @@
       return;
     }
 
-    // 初始化 IndexedDB
-    try {
-      await window.JZCollectorDB?.init();
-    } catch (e) {
-      console.warn('[ozon-search] IndexedDB init failed:', e);
-    }
-
     await loadPanelEnabled();
     listenStorageToggle();
-    await loadCollectorEnabled();
-    listenCollectorToggle();
-    await loadCollectorRunning();
-    listenCollectorRunningToggle();
-    mountCollectorPanel();
-    mountAutoScroller();
-    await mountKeywordPilot();
-    mountAntiBanGuard();
     applyToCards();
     createObserver();
-    startHeartbeat();
   }
-
-  // ─── 心跳上报：让 popup 大屏能看到本 tab 的采集进度 ───────
-  let _heartbeatTimer = null;
-  let _heartbeatPending = null;
-  async function sendHeartbeatNow() {
-    try {
-      const stats = taskQueue.stats();
-      const pilotState = keywordPilot?.getState() || { mode: 'IDLE', currentKeyword: null };
-      let bucketCount = null;
-      try {
-        bucketCount = await window.JZCollectorDB?.countSales();
-      } catch {}
-      chrome.runtime.sendMessage({
-        action: 'collectorHeartbeat',
-        stats,
-        currentKeyword: pilotState.currentKeyword?.text || null,
-        autoScrollerRunning: !!autoScroller?.isUserActive(),
-        bucketCount,
-        // running 语义:采集器是否在写桶(IndexedDB 写入开关),不是 panel 加载开关
-        running: collectorRunning,
-        url: window.location.href,
-        title: document.title,
-      });
-    } catch {
-      /* 关闭中或权限问题，忽略 */
-    }
-  }
-  function debouncedHeartbeat() {
-    if (_heartbeatPending) return;
-    _heartbeatPending = setTimeout(() => {
-      _heartbeatPending = null;
-      sendHeartbeatNow();
-    }, 1000);
-  }
-  function startHeartbeat() {
-    if (_heartbeatTimer) return;
-    sendHeartbeatNow(); // 启动立即发一次
-    _heartbeatTimer = setInterval(sendHeartbeatNow, 30000); // 30s 兜底
-    taskQueue.on('stateChange', debouncedHeartbeat);
-  }
-
-  // 暴露 jzCollectorToast 让 shared-utils.js 的 pushBucketToCollectBoxV2 能调 panel toast
-  window.jzCollectorToast = (msg, type, duration) => collectorPanel?.toast?.(msg, type, duration);
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => init());

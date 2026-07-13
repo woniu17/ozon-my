@@ -3,15 +3,7 @@
   "name": "QX",
   "version": "0.13.31.1",
   "description": "QX Ozon",
-  "permissions": [
-    "storage",
-    "contextMenus",
-    "alarms",
-    "cookies",
-    "scripting",
-    "notifications",
-    "unlimitedStorage"
-  ],
+  "permissions": ["storage", "contextMenus", "alarms", "cookies", "scripting", "notifications", "unlimitedStorage"],
   "host_permissions": [
     "*://*.ozon.ru/*",
     "https://www.ozon.ru/*",
@@ -37,6 +29,17 @@
   "content_scripts": [
     {
       "matches": [
+        "https://www.ozon.ru/seller/*",
+        "https://www.ozon.ru/product/*",
+        "https://ozon.ru/seller/*",
+        "https://ozon.ru/product/*"
+      ],
+      "js": ["content/seller-info-main.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://www.ozon.ru/product/*",
         "https://ozon.kz/product/*",
         "https://*.ozon.kz/product/*",
@@ -50,26 +53,19 @@
         "https://*.ozon.kz/search/*",
         "https://*.ozon.kz/search-by-image*"
       ],
-      "js": [
-        "content/ozon-bff-interceptor.js"
-      ],
+      "js": ["content/ozon-bff-interceptor.js"],
       "world": "MAIN",
       "run_at": "document_start"
     },
     {
-      "matches": [
-        "https://www.ozon.ru/*",
-        "https://ozon.ru/*",
-        "https://ozon.kz/*",
-        "https://*.ozon.kz/*"
-      ],
+      "matches": ["https://www.ozon.ru/*", "https://ozon.ru/*", "https://ozon.kz/*", "https://*.ozon.kz/*"],
       "js": [
         "content/shared-utils.js",
         "content/jzc-calc.js",
-        "content/collector/db.js",
-        "content/collector/l1-shadow-db.js",
-        "content/collector/l1-bridge.js",
-        "content/collector/l1-diff.js",
+        "content/qx-collector/smart-filter.js",
+        "content/qx-collector/auto-scroller.js",
+        "content/qx-collector/store-detector.js",
+        "content/qx-collector/panel.js",
         "lib/cdn-buster.js",
         "lib/watermark-templates.js",
         "lib/follow-sell-content-copy.js",
@@ -78,10 +74,7 @@
         "lib/title-quality.js",
         "content/ozon-product.js"
       ],
-      "css": [
-        "content/jzc-calc.css",
-        "content/ozon-product.css"
-      ],
+      "css": ["content/jzc-calc.css", "content/ozon-product.css", "content/qx-collector/panel.css"],
       "run_at": "document_idle"
     },
     {
@@ -99,30 +92,14 @@
       "js": [
         "content/shared-utils.js",
         "content/collector/task-queue.js",
-        "content/collector/db.js",
-        "content/collector/l1-shadow-db.js",
-        "content/collector/l1-bridge.js",
-        "content/collector/l1-diff.js",
-        "content/collector/auto-scroller.js",
-        "content/collector/keyword-pilot.js",
-        "content/collector/anti-ban.js",
-        "content/collector/panel.js",
         "lib/sidebar-section-toggle.js",
         "content/ozon-search.js"
       ],
-      "css": [
-        "content/ozon-product.css",
-        "content/ozon-search.css",
-        "content/collector/panel.css"
-      ],
+      "css": ["content/ozon-product.css", "content/ozon-search.css"],
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://www.ozon.ru/*",
-        "https://ozon.kz/*",
-        "https://*.ozon.kz/*"
-      ],
+      "matches": ["https://www.ozon.ru/*", "https://ozon.kz/*", "https://*.ozon.kz/*"],
       "exclude_matches": [
         "https://www.ozon.ru/category/*",
         "https://www.ozon.ru/search/*",
@@ -137,58 +114,33 @@
       "js": [
         "content/shared-utils.js",
         "content/collector/task-queue.js",
-        "content/collector/db.js",
-        "content/collector/auto-scroller.js",
-        "content/collector/keyword-pilot.js",
-        "content/collector/anti-ban.js",
-        "content/collector/panel.js",
         "lib/sidebar-section-toggle.js",
         "content/ozon-data-panel.js"
       ],
-      "css": [
-        "content/ozon-product.css",
-        "content/ozon-search.css",
-        "content/collector/panel.css"
-      ],
+      "css": ["content/ozon-product.css", "content/ozon-search.css"],
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://seller.ozon.ru/*"
-      ],
-      "js": [
-        "content/ozon-seller-bridge.js"
-      ],
+      "matches": ["https://seller.ozon.ru/*"],
+      "js": ["content/ozon-seller-bridge.js"],
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://seller.ozon.ru/app/analytics/competitors/ozon-bestsellers*"
-      ],
-      "js": [
-        "content/ozon-bestsellers-hook.js"
-      ],
+      "matches": ["https://seller.ozon.ru/app/analytics/competitors/ozon-bestsellers*"],
+      "js": ["content/ozon-bestsellers-hook.js"],
       "world": "MAIN",
       "run_at": "document_start"
     },
     {
-      "matches": [
-        "https://seller.ozon.ru/app/analytics*"
-      ],
-      "js": [
-        "content/ozon-premium-hook.js"
-      ],
+      "matches": ["https://seller.ozon.ru/app/analytics*"],
+      "js": ["content/ozon-premium-hook.js"],
       "world": "MAIN",
       "run_at": "document_start",
       "all_frames": true
     },
     {
-      "matches": [
-        "http://localhost:3001/*"
-      ],
-      "js": [
-        "content/sync-auth.js"
-      ],
+      "matches": ["http://localhost:3001/*"],
+      "js": ["content/sync-auth.js"],
       "run_at": "document_start"
     }
   ],
@@ -199,14 +151,8 @@
   },
   "web_accessible_resources": [
     {
-      "resources": [
-        "batch-upload/*",
-        "lib/*",
-        "icons/*"
-      ],
-      "matches": [
-        "<all_urls>"
-      ]
+      "resources": ["batch-upload/*", "lib/*", "icons/*"],
+      "matches": ["<all_urls>"]
     }
   ],
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsixLkiLDKI0A6GnT/1beDKJIBdOjHhJ78DfWCbatGCZFKQIkxTZY6h/OaTRZUqe4LIkFTWzq7PQKzWLpgPZoTSq/mUewRU1Yhw51b6TVcZ2oVF5JaIQ1Zin+60QRbB3o2aFdXNf7IatrNk8x+cgjmPhSDKtR7w7AYBKBcHoFswcyMFu71G7X7p+O6Z8Ix19RmW2oPw8Rko3cJSZiBrHU2JlK+iTDH0O9R8OHDJYKZZLX2HnKkGWiz4m/efi0HOYaQ6dAgTRNRMS6ICvkSiT6ov6zvoMw6j45JVXCcUh/0rz2l1Vy3mURb+P4dl1/VQjR4D49JZwEi0oPCX9hS/4C8wIDAQAB"

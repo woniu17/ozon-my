@@ -611,11 +611,11 @@
       deliveryMode,
     };
 
-    // 有 sku 时异步写 pdp 缓存(仅静态字段,不阻塞返回)
+    // 有 sku 时异步写 detail 缓存(详情页全字段,不阻塞返回)
     // DOM 解析失败时由 performProductCollect 查缓存兜底
     if (_product.sku && window.sendMessage) {
       try {
-        window.sendMessage('pdpCacheSet', {
+        window.sendMessage('detailCacheSet', {
           sku: String(_product.sku),
           data: {
             title: _product.title,
@@ -627,20 +627,6 @@
             brand: _product.brand,
             category: _product.category,
             characteristics: _product.characteristics,
-          },
-        });
-      } catch {
-        /* fire-and-forget,不影响采集 */
-      }
-    }
-
-    // 有 sku 时异步写 dynamic 缓存(仅动态字段,1h TTL,不阻塞返回)
-    // DOM 解析失败时由 performProductCollect 查缓存兜底
-    if (_product.sku && window.sendMessage) {
-      try {
-        window.sendMessage('dynamicCacheSet', {
-          sku: String(_product.sku),
-          data: {
             price: _product.price,
             walletPrice: _product.walletPrice,
             originalPrice: _product.originalPrice,
@@ -657,6 +643,56 @@
       } catch {
         /* fire-and-forget,不影响采集 */
       }
+
+      // 同步写 card 缓存(商品卡 5 字段 sku/url/name/price/image,供搜索页/店铺页兜底)
+      try {
+        const firstImg = Array.isArray(_product.images) ? _product.images[0] : '';
+        window.sendMessage('cardCacheSet', {
+          sku: String(_product.sku),
+          data: {
+            sku: String(_product.sku),
+            url: _product.url || window.location.href,
+            name: _product.title || '',
+            price: _product.price != null ? Number(_product.price) : null,
+            image: typeof firstImg === 'string' ? firstImg : firstImg?.src || '',
+          },
+        });
+      } catch {
+        /* fire-and-forget */
+      }
+    }
+
+    // ─── 中国店铺检测 + autoCollect 接入(Task 17)─────────────────
+    // 从 _product.seller.link 提取 sellerSlug(/seller/<slug>/ 或绝对 URL 均可)
+    const sellerSlug = _product?.seller?.link?.match(/\/seller\/([^/]+)/)?.[1] || '';
+
+    if (sellerSlug && window.sendMessage) {
+      // 调 SW checkStoreClassification(仅 slug+name;companyInfo 由 jz-seller-info
+      // 事件监听器带 country 再调一次,SW 内部会按 slug 升级缓存)
+      window
+        .sendMessage('checkStoreClassification', {
+          slug: sellerSlug,
+          name: _product?.seller?.name,
+        })
+        .then((result) => {
+          // 更新 QX面板店铺检测区块状态(面板由 Task 21 创建,未渲染时跳过)
+          if (window.__qxCollectorPanel) {
+            window.__qxCollectorPanel.updateStoreDetection({
+              slug: sellerSlug,
+              name: _product?.seller?.name,
+              isChinese: result?.isChinese,
+              classifiedBy: result?.classifiedBy,
+            });
+          }
+        })
+        .catch(() => {});
+    }
+
+    // 详情页无 panel 数据,不经过销量/智能筛选,但仍检查中国店铺 Gate 0.5
+    // (SW 侧 autoCollect 处理器内判定;detail+card 已在上方写缓存,autoCollect
+    //  内部查这两类命中即跳过,只采剩 6 类)
+    if (_product.sku && window.__jzAutoCollectOnSkuSeen) {
+      window.__jzAutoCollectOnSkuSeen(String(_product.sku), 'pdp', sellerSlug);
     }
 
     return _product;
@@ -2083,26 +2119,35 @@
     }
 
     // 防御:Ozon DOM 改版 / composer-api 也挂时,product 关键字段全空 →
-    // 查 pdp 缓存(IndexedDB+MongoDB)兜底,用历史静态字段救场。
+    // 查 detail 缓存(IndexedDB+MongoDB)兜底,用历史静态字段救场。
     // 缓存也 miss 时才抛清晰错误,避免下游送给 backend 一个 sku/name 都空的 payload。
     if (!hasTitle || !hasImages || !hasSku) {
       // 从 URL 提取 sku 作为查 cache 的 key(/product/{slug}-{sku}/)
       const _urlSku = (window.location.pathname.match(/-(\d{5,})\/?$/) || [])[1] || product?.sku || '';
       if (_urlSku && window.sendMessage) {
         try {
-          const cacheResp = await window.sendMessage('pdpCacheGet', { sku: String(_urlSku) });
+          const cacheResp = await window.sendMessage('detailCacheGet', { sku: String(_urlSku) });
           const cached = cacheResp?.ok ? cacheResp.data : null;
           if (cached) {
             // 用缓存的静态字段补全 product(动态字段保持当前 DOM 解析值,可能为空)
-            if (!hasTitle && cached.title) { product.title = cached.title; hasTitle = true; }
-            if (!hasImages && Array.isArray(cached.images) && cached.images.length) { product.images = cached.images; hasImages = true; }
-            if (!hasSku && cached.sku) { product.sku = cached.sku; hasSku = true; }
+            if (!hasTitle && cached.title) {
+              product.title = cached.title;
+              hasTitle = true;
+            }
+            if (!hasImages && Array.isArray(cached.images) && cached.images.length) {
+              product.images = cached.images;
+              hasImages = true;
+            }
+            if (!hasSku && cached.sku) {
+              product.sku = cached.sku;
+              hasSku = true;
+            }
             if (!product.productId && cached.productId) product.productId = cached.productId;
             if (!product.brand && cached.brand) product.brand = cached.brand;
             if (!product.category && cached.category) product.category = cached.category;
             if (!product.characteristics && cached.characteristics) product.characteristics = cached.characteristics;
             if (!product.videos && cached.videos) product.videos = cached.videos;
-            console.log('[ozon-helper] pdp 缓存兜底命中,补全静态字段 sku=' + _urlSku);
+            console.log('[ozon-helper] detail 缓存兜底命中,补全静态字段 sku=' + _urlSku);
           }
         } catch {
           /* 缓存查询失败,继续走原错误流程 */
@@ -2110,13 +2155,13 @@
       }
     }
 
-    // 动态字段兜底:price/seller/statistics 等动态字段为空时,查 dynamic 缓存(1h TTL)
-    // 跟 pdp 静态字段兜底独立,允许只缺动态字段的场景单独命中
+    // 动态字段兜底:price/seller/statistics 等动态字段为空时,查 detail 缓存
+    // 跟静态字段兜底独立,允许只缺动态字段的场景单独命中
     if (product?.sku && window.sendMessage) {
       const _needDynamicFallback = !product.price && !product.seller?.name && !product.statistics?.sold_count;
       if (_needDynamicFallback) {
         try {
-          const dynResp = await window.sendMessage('dynamicCacheGet', { sku: String(product.sku) });
+          const dynResp = await window.sendMessage('detailCacheGet', { sku: String(product.sku) });
           const dynCached = dynResp?.ok ? dynResp.data : null;
           if (dynCached) {
             if (!product.price && dynCached.price) product.price = dynCached.price;
@@ -2125,12 +2170,14 @@
             if (!product.seller?.name && dynCached.seller?.name) product.seller = dynCached.seller;
             if (!product.statistics && dynCached.statistics) product.statistics = dynCached.statistics;
             if (!product.freeRest && dynCached.freeRest) product.freeRest = dynCached.freeRest;
-            if (!product.followSellCount && dynCached.followSellCount) product.followSellCount = dynCached.followSellCount;
-            if (!product.followSellMinPrice && dynCached.followSellMinPrice) product.followSellMinPrice = dynCached.followSellMinPrice;
+            if (!product.followSellCount && dynCached.followSellCount)
+              product.followSellCount = dynCached.followSellCount;
+            if (!product.followSellMinPrice && dynCached.followSellMinPrice)
+              product.followSellMinPrice = dynCached.followSellMinPrice;
             if (!product.deliveryMode && dynCached.deliveryMode) product.deliveryMode = dynCached.deliveryMode;
             if (!product.rating && dynCached.rating) product.rating = dynCached.rating;
             if (!product.reviewCount && dynCached.reviewCount) product.reviewCount = dynCached.reviewCount;
-            console.log('[ozon-helper] dynamic 缓存兜底命中,补全动态字段 sku=' + product.sku);
+            console.log('[ozon-helper] detail 缓存兜底命中,补全动态字段 sku=' + product.sku);
           }
         } catch {
           /* 动态缓存查询失败,忽略 */
@@ -3572,27 +3619,7 @@
         // PDP 侧栏数据卡片跟 action bar 上的「一键采集」在同一个 PDP 页、同一份页面
         // 状态,复用同一个 collectAllVariants() — 采当前商品的所有变体 SKU,进度写在
         // 该按钮上;单/无变体页内部自动委托单采。
-        // 顺手保留本地 IndexedDB 单品写入,给「极掌采集器」关键词巡航的桶视图复用。
         const result = await collectAllVariants(btn);
-        try {
-          const product = extractProductData();
-          if (product?.sku) {
-            try {
-              await window.JZCollectorDB?.init();
-            } catch {}
-            await window.JZCollectorDB?.putSale({
-              sku: String(product.sku),
-              url: product.url || window.location.href,
-              name: product.title || '',
-              price: product.price != null ? String(product.price) : null,
-              image: product.images?.[0] || getMainImageUrl(product) || '',
-              keyword: '',
-              collectedAt: Date.now(),
-            });
-          }
-        } catch (bucketErr) {
-          console.warn('[ozon-helper] sidebar collect-one local-bucket failed:', bucketErr);
-        }
         btn.classList.add('is-collected');
         const label = result?.multiVariant
           ? result.failed
@@ -10133,7 +10160,11 @@
     for (const k of Object.keys(states || {})) {
       let v = states[k];
       if (typeof v === 'string') {
-        try { v = JSON.parse(v); } catch { continue; }
+        try {
+          v = JSON.parse(v);
+        } catch {
+          continue;
+        }
       }
       if (!v || typeof v !== 'object') continue;
       if (!Array.isArray(v.images)) continue;
@@ -10342,7 +10373,13 @@
         const epResp = await window.sendMessage('entrypointCacheGet', { sku: urlSku });
         const epData = epResp?.ok ? epResp.data : null;
         if (epData && (epData.gallery?.length || epData.richContent)) {
-          console.log(TAG, 'cache HIT entrypoint, gallery=', epData.gallery?.length, 'richContentLen=', epData.richContent?.length);
+          console.log(
+            TAG,
+            'cache HIT entrypoint, gallery=',
+            epData.gallery?.length,
+            'richContentLen=',
+            epData.richContent?.length
+          );
           return {
             images: Array.isArray(epData.gallery) ? epData.gallery : [],
             richContent: epData.richContent || '',
@@ -10541,7 +10578,15 @@
       console.log(TAG, 'phase2 skipped, richContent already len=', richContent.length);
     }
 
-    console.log(TAG, 'END images=', collectedImages?.length || 0, 'richContentLen=', richContent.length, 'endpoint=', hitEndpoint);
+    console.log(
+      TAG,
+      'END images=',
+      collectedImages?.length || 0,
+      'richContentLen=',
+      richContent.length,
+      'endpoint=',
+      hitEndpoint
+    );
 
     // 真调成功后异步写 entrypoint 缓存(按 sku 索引,蒸馏后字段)
     if (urlSku && hitEndpoint === 'entrypoint-api' && typeof window.sendMessage === 'function') {
@@ -10556,10 +10601,13 @@
             mp4: null,
           },
         });
-      } catch { /* fire-and-forget */ }
+      } catch {
+        /* fire-and-forget */
+      }
     }
 
-    if (collectedImages && collectedImages.length > 0) return { images: collectedImages, richContent, endpoint: hitEndpoint };
+    if (collectedImages && collectedImages.length > 0)
+      return { images: collectedImages, richContent, endpoint: hitEndpoint };
     return { images: [], richContent, endpoint: hitEndpoint };
   }
 
@@ -11888,6 +11936,31 @@
     }
   }
 
+  // ─── 监听 MAIN world 的 seller-info-main.js 发来的店铺信息(详情页)─────
+  // seller-info-main.js 从 div[id^="state-webCurrentSeller-"] 的 data-state
+  // 提取 slug/name + companyInfo(含 country),通过 CustomEvent 推过来。
+  // 这里带 companyInfo 调 SW checkStoreClassification(规则引擎可用 country 判定,
+  // 比 extractProductData 内仅用 slug+name 调的一次更完整,SW 内部按 slug 升级缓存)。
+  window.addEventListener('jz-seller-info', async (e) => {
+    const detail = e.detail;
+    if (!detail || detail.pageType !== 'pdp') return;
+    const { slug, name, companyInfo } = detail;
+    if (!slug) return;
+    try {
+      const result = await window.sendMessage('checkStoreClassification', { slug, name, companyInfo });
+      if (window.__qxCollectorPanel) {
+        window.__qxCollectorPanel.updateStoreDetection({
+          slug,
+          name,
+          isChinese: result?.isChinese,
+          classifiedBy: result?.classifiedBy,
+        });
+      }
+    } catch (err) {
+      console.warn('[ozon-product] checkStoreClassification failed:', err);
+    }
+  });
+
   async function init() {
     const auth = await window.checkAuth();
     if (!auth.loggedIn) {
@@ -11949,6 +12022,28 @@
         }
       }
     });
+
+    // 挂载 QX采集器面板(详情页)
+    // 详情页面板仅展示状态/统计/熔断/强制刷新/查看ERP/店铺检测(panel.js isShopPage=false
+    // 自动隐藏自动翻页/仅抓有销量/智能筛选)
+    if (window.QXCollectorPanel) {
+      window.QXCollectorPanel.create({
+        callbacks: {
+          onForceRefresh: () => {
+            window.__jzAutoCollectResetSeen?.();
+            try {
+              const product = extractProductData();
+              if (product?.sku) {
+                const slug = product?.seller?.link?.match(/\/seller\/([^/]+)/)?.[1] || '';
+                window.__jzAutoCollectOnSkuSeen?.(String(product.sku), 'pdp', slug, { forceRefresh: true });
+              }
+            } catch (err) {
+              console.warn('[ozon-product] force refresh failed:', err);
+            }
+          },
+        },
+      });
+    }
   }
 
   if (document.readyState === 'loading') {

@@ -1112,3 +1112,88 @@ select:focus {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* ── 自动采集卡片(popup 简化视图)── */
+/* 复用 .status-dot 基础尺寸(6×6 圆点),按状态上色:
+   running(绿)/paused(红,带脉冲)/stopped(灰)。 */
+.auto-collect-card {
+  background: var(--bg-card);
+  border: 1px solid #ebebeb;
+  border-radius: var(--radius-card);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.auto-collect-card .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.auto-collect-card .card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.auto-collect-card .card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.auto-collect-card .switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.auto-collect-card .switch-label input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.auto-collect-card .ac-stats {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.auto-collect-card .ac-stats strong {
+  color: var(--text-primary);
+  font-feature-settings: 'tnum' 1;
+}
+.auto-collect-card .ac-paused {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--sig-bad-text);
+  background: var(--sig-bad-bg);
+  border: 1px solid var(--sig-bad-border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+}
+.auto-collect-card .ac-warning {
+  font-weight: 600;
+}
+.auto-collect-card #ac-paused-countdown {
+  font-feature-settings: 'tnum' 1;
+}
+
+/* 状态 dot 颜色:.status-dot 基础是 muted(灰),需在自动采集卡片里覆盖。
+   - running:绿(同 server-status.connected)
+   - paused:红 + 脉冲(同 collector-mon-dot 节奏)
+   - stopped:灰(默认) */
+.auto-collect-card .status-dot.running {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+.auto-collect-card .status-dot.paused {
+  background: var(--red);
+  box-shadow: 0 0 6px rgba(255, 77, 79, 0.4);
+  animation: jz-pulse 1.6s ease-in-out infinite;
+}
+.auto-collect-card .status-dot.stopped {
+  background: var(--text-muted);
+}

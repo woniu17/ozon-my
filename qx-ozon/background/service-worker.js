@@ -513,14 +513,16 @@ try {
   // MV3 SW 休眠后 indexedDB 连接会断,dbPromise=null 模式确保唤醒后重连。
   // 容量充足(GB 级),无 TTL(与 L2 一致),forceRefresh 时主动删除。
   const _IDB_NAME = 'ozon-cache';
-  const _IDB_VERSION = 4;
+  const _IDB_VERSION = 6;
   const _IDB_STORE_SEARCH = 'search_cache';
   const _IDB_STORE_BUNDLE = 'bundle_cache';
-  const _IDB_STORE_PDP = 'pdp_cache';
+  const _IDB_STORE_CARD = 'card_cache';
   const _IDB_STORE_COMPOSER = 'composer_cache';
   const _IDB_STORE_ENTRYPOINT = 'entrypoint_cache';
-  const _IDB_STORE_DYNAMIC = 'dynamic_cache';
-  const DYNAMIC_TTL_MS = 60 * 60 * 1000; // 动态数据 1h TTL
+  const _IDB_STORE_DETAIL = 'detail_cache';
+  // v6:新增 market_stats / follow_sell 缓存(带 stale 判定,不删旧 6 store)
+  const _IDB_STORE_MARKET_STATS = 'market_stats_cache';
+  const _IDB_STORE_FOLLOW_SELL = 'follow_sell_cache';
   const _ATTRS_EMPTY_REVERIFY_MS = 6 * 60 * 60 * 1000; // 空属性 6h 重验
 
   let _idbPromise = null;
@@ -536,8 +538,8 @@ try {
         if (!db.objectStoreNames.contains(_IDB_STORE_BUNDLE)) {
           db.createObjectStore(_IDB_STORE_BUNDLE, { keyPath: 'sku' });
         }
-        if (!db.objectStoreNames.contains(_IDB_STORE_PDP)) {
-          db.createObjectStore(_IDB_STORE_PDP, { keyPath: 'sku' });
+        if (!db.objectStoreNames.contains(_IDB_STORE_CARD)) {
+          db.createObjectStore(_IDB_STORE_CARD, { keyPath: 'sku' });
         }
         if (!db.objectStoreNames.contains(_IDB_STORE_COMPOSER)) {
           db.createObjectStore(_IDB_STORE_COMPOSER, { keyPath: 'sku' });
@@ -545,19 +547,42 @@ try {
         if (!db.objectStoreNames.contains(_IDB_STORE_ENTRYPOINT)) {
           db.createObjectStore(_IDB_STORE_ENTRYPOINT, { keyPath: 'sku' });
         }
-        if (!db.objectStoreNames.contains(_IDB_STORE_DYNAMIC)) {
-          db.createObjectStore(_IDB_STORE_DYNAMIC, { keyPath: 'sku' });
+        if (!db.objectStoreNames.contains(_IDB_STORE_DETAIL)) {
+          db.createObjectStore(_IDB_STORE_DETAIL, { keyPath: 'sku' });
+        }
+        // v6:新增 market_stats / follow_sell 缓存 store(带 stale 判定)。
+        // 用 contains 守卫保证从任意旧版本升级都幂等创建,不删旧 6 store。
+        if (!db.objectStoreNames.contains(_IDB_STORE_MARKET_STATS)) {
+          db.createObjectStore(_IDB_STORE_MARKET_STATS, { keyPath: 'sku' });
+        }
+        if (!db.objectStoreNames.contains(_IDB_STORE_FOLLOW_SELL)) {
+          db.createObjectStore(_IDB_STORE_FOLLOW_SELL, { keyPath: 'sku' });
+        }
+        // v5:删除旧 pdp_cache / dynamic_store(已合并为 detail_cache)
+        if (db.objectStoreNames.contains('pdp_cache')) {
+          db.deleteObjectStore('pdp_cache');
+        }
+        if (db.objectStoreNames.contains('dynamic_cache')) {
+          db.deleteObjectStore('dynamic_cache');
         }
       };
       req.onsuccess = () => {
         const db = req.result;
         // MV3 SW 休眠后 indexedDB 连接可能被浏览器关闭。
         // 监听 onclose/onversionchange,触发时重置缓存让下次调用重连。
-        db.onclose = () => { _idbPromise = null; };
-        db.onversionchange = () => { db.close(); _idbPromise = null; };
+        db.onclose = () => {
+          _idbPromise = null;
+        };
+        db.onversionchange = () => {
+          db.close();
+          _idbPromise = null;
+        };
         resolve(db);
       };
-      req.onerror = () => { _idbPromise = null; reject(req.error); };
+      req.onerror = () => {
+        _idbPromise = null;
+        reject(req.error);
+      };
     });
     return _idbPromise;
   };
@@ -608,7 +633,12 @@ try {
     try {
       const url = await getBackendUrl();
       const stored = await getStorage([STORAGE_KEYS.token]);
-      const r = await apiRequest('GET', `${url}/ozon/cache/${type}/${encodeURIComponent(sku)}`, null, stored[STORAGE_KEYS.token]);
+      const r = await apiRequest(
+        'GET',
+        `${url}/ozon/cache/${type}/${encodeURIComponent(sku)}`,
+        null,
+        stored[STORAGE_KEYS.token]
+      );
       return r;
     } catch (e) {
       console.warn(`[cache] ERP ${type} get failed for sku=${sku}:`, e?.message || e);
@@ -619,7 +649,12 @@ try {
     try {
       const url = await getBackendUrl();
       const stored = await getStorage([STORAGE_KEYS.token]);
-      await apiRequest('POST', `${url}/ozon/cache/${type}/${encodeURIComponent(sku)}`, body, stored[STORAGE_KEYS.token]);
+      await apiRequest(
+        'POST',
+        `${url}/ozon/cache/${type}/${encodeURIComponent(sku)}`,
+        body,
+        stored[STORAGE_KEYS.token]
+      );
       return true;
     } catch (e) {
       console.warn(`[cache] ERP ${type} set failed for sku=${sku}:`, e?.message || e);
@@ -630,7 +665,12 @@ try {
     try {
       const url = await getBackendUrl();
       const stored = await getStorage([STORAGE_KEYS.token]);
-      await apiRequest('DELETE', `${url}/ozon/cache/${type}/${encodeURIComponent(sku)}`, null, stored[STORAGE_KEYS.token]);
+      await apiRequest(
+        'DELETE',
+        `${url}/ozon/cache/${type}/${encodeURIComponent(sku)}`,
+        null,
+        stored[STORAGE_KEYS.token]
+      );
     } catch (e) {
       console.warn(`[cache] ERP ${type} delete failed for sku=${sku}:`, e?.message || e);
     }
@@ -639,13 +679,17 @@ try {
   // L3 真调后用此函数写 L2:异步单次写入 + 成功后回更新 L1 l2Synced=true。
   // 失败时不重试,保持 l2Synced=false,由 CACHE_SYNC_ALARM 定时任务补写。
   const _erpCacheSetAndSyncFlag = (store, type, sku, body) => {
-    _erpCacheSet(type, sku, body).then((ok) => {
-      if (ok) {
-        _idbGet(store, sku).then((entry) => {
-          if (entry && entry.data) _idbPut(store, { ...entry, l2Synced: true }).catch(() => {});
-        }).catch(() => {});
-      }
-    }).catch(() => {});
+    _erpCacheSet(type, sku, body)
+      .then((ok) => {
+        if (ok) {
+          _idbGet(store, sku)
+            .then((entry) => {
+              if (entry && entry.data) _idbPut(store, { ...entry, l2Synced: true }).catch(() => {});
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
   };
 
   // L1 命中但 L2 未同步时,用 L1 数据异步补写 L2(单次,失败留待定时任务)。
@@ -666,41 +710,58 @@ try {
     }
   };
 
-  // ── pdp 缓存(DOM 解析静态字段兜底) ─────────────────────────
-  // 缓存对象:extractProductData() 返回的静态字段(title/images/videos/sku/productId/url/brand/category/characteristics)
-  // 策略:无 TTL(永久),DOM 解析失败时兜底,不阻塞采集流程
-  // L1 IndexedDB → L2 MongoDB → 失败返回 null(content script 自行兜底)
-  const _pdpCacheGet = async (sku) => {
+  // ── 自动采集日志:fire-and-forget 写入 ERP(带 JWT) ─────────────────────────
+  // 由 Task 6 自动采集流程的 Step 7 / Gate 0.5 跳过分支 / ANTIBOT 分支调用。
+  // 调用方不应 await(不阻塞主流程),失败仅 warn 不影响采集结果。
+  // payload: { sku, source, sellerSlug, storeClassified, depth, status,
+  //   results, totalDuration }
+  const _writeAutoCollectLog = async (payload) => {
     try {
-      // L1
-      const l1 = await _idbGet(_IDB_STORE_PDP, sku);
+      const url = await getBackendUrl();
+      const stored = await getStorage([STORAGE_KEYS.token]);
+      await apiRequest('POST', `${url}/admin/api/auto-collect/log`, payload, stored[STORAGE_KEYS.token]);
+    } catch (e) {
+      console.warn('[auto-collect-log] write failed:', e?.message || e);
+    }
+  };
+
+  // ── card 缓存(商品卡 DOM 字段:sku/url/name/price/image) ─────────────────────────
+  // 缓存对象:搜索页/店铺页 extractCardInfo() 返回的基础 5 字段
+  // 策略:无 TTL(永久),搜索页/店铺页采集时写入,全览展示 + OPI 预览 fallback
+  // L1 IndexedDB → L2 MongoDB → 失败返回 null
+  const _cardCacheGet = async (sku) => {
+    try {
+      const l1 = await _idbGet(_IDB_STORE_CARD, sku);
       if (l1 && l1.data) return l1.data;
-      // L2
-      const l2 = await _erpCacheGet('pdp', sku);
+      const l2 = await _erpCacheGet('card', sku);
       if (l2 && l2.data) {
-        // 回填 L1
-        _idbPut(_IDB_STORE_PDP, {
-          sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true,
+        _idbPut(_IDB_STORE_CARD, {
+          sku,
+          data: l2.data,
+          fetchedAt: Date.now(),
+          l2Synced: true,
         }).catch(() => {});
         return l2.data;
       }
     } catch (e) {
-      console.warn(`[cache] pdp get failed sku=${sku}:`, e?.message || e);
+      console.warn(`[cache] card get failed sku=${sku}:`, e?.message || e);
     }
     return null;
   };
 
-  // 写 L1(l2Synced=false) + 异步写 L2(成功后回更新 l2Synced=true)
-  const _pdpCacheSet = (sku, staticFields) => {
-    _idbPut(_IDB_STORE_PDP, {
-      sku, data: staticFields, fetchedAt: Date.now(), l2Synced: false,
+  const _cardCacheSet = (sku, cardFields) => {
+    _idbPut(_IDB_STORE_CARD, {
+      sku,
+      data: cardFields,
+      fetchedAt: Date.now(),
+      l2Synced: false,
     }).catch(() => {});
-    _erpCacheSetAndSyncFlag(_IDB_STORE_PDP, 'pdp', sku, { data: staticFields });
+    _erpCacheSetAndSyncFlag(_IDB_STORE_CARD, 'card', sku, { data: cardFields });
   };
 
-  const _pdpCacheDelete = (sku) => {
-    _idbDelete(_IDB_STORE_PDP, sku).catch(() => {});
-    _erpCacheDelete('pdp', sku);
+  const _cardCacheDelete = (sku) => {
+    _idbDelete(_IDB_STORE_CARD, sku).catch(() => {});
+    _erpCacheDelete('card', sku);
   };
 
   // ── composer 缓存(composer-api widgetStates,缓存优先) ─────────────────────────
@@ -716,7 +777,10 @@ try {
       const l2 = await _erpCacheGet('composer', sku);
       if (l2 && l2.data) {
         _idbPut(_IDB_STORE_COMPOSER, {
-          sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true,
+          sku,
+          data: l2.data,
+          fetchedAt: Date.now(),
+          l2Synced: true,
         }).catch(() => {});
         return l2.data;
       }
@@ -728,7 +792,10 @@ try {
 
   const _composerCacheSet = (sku, widgetStates) => {
     _idbPut(_IDB_STORE_COMPOSER, {
-      sku, data: widgetStates, fetchedAt: Date.now(), l2Synced: false,
+      sku,
+      data: widgetStates,
+      fetchedAt: Date.now(),
+      l2Synced: false,
     }).catch(() => {});
     _erpCacheSetAndSyncFlag(_IDB_STORE_COMPOSER, 'composer', sku, { data: widgetStates });
   };
@@ -750,7 +817,10 @@ try {
       const l2 = await _erpCacheGet('entrypoint', sku);
       if (l2 && l2.data) {
         _idbPut(_IDB_STORE_ENTRYPOINT, {
-          sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true,
+          sku,
+          data: l2.data,
+          fetchedAt: Date.now(),
+          l2Synced: true,
         }).catch(() => {});
         return l2.data;
       }
@@ -762,7 +832,10 @@ try {
 
   const _entrypointCacheSet = (sku, data) => {
     _idbPut(_IDB_STORE_ENTRYPOINT, {
-      sku, data, fetchedAt: Date.now(), l2Synced: false,
+      sku,
+      data,
+      fetchedAt: Date.now(),
+      l2Synced: false,
     }).catch(() => {});
     _erpCacheSetAndSyncFlag(_IDB_STORE_ENTRYPOINT, 'entrypoint', sku, { data });
   };
@@ -772,49 +845,145 @@ try {
     _erpCacheDelete('entrypoint', sku);
   };
 
-  // ── dynamic 缓存(DOM 动态字段,1h TTL,失败兜底) ─────────────────────────
-  // 缓存对象:extractProductData 返回的动态字段(price/seller/statistics/freeRest/followSell/deliveryMode 等)
-  // 策略:1h TTL(动态数据需定期刷新),DOM 解析失败时兜底
+  // ── detail 缓存(详情页 DOM 全字段:原 pdp 静态 + dynamic 动态合并) ─────────────────────────
+  // 缓存对象:extractProductData() 返回的全字段(title/images/videos/sku/productId/url/brand/category/
+  //   characteristics + price/walletPrice/originalPrice/seller/statistics/freeRest/followSellCount/
+  //   followSellMinPrice/deliveryMode/rating/reviewCount)
+  // 策略:无 TTL(永久),DOM 解析失败时兜底,不阻塞采集流程
   // L1 IndexedDB → L2 MongoDB → 失败返回 null
-  const _dynamicCacheGet = async (sku) => {
+  const _detailCacheGet = async (sku) => {
     try {
-      // L1(带 TTL 检查)
-      const l1 = await _idbGet(_IDB_STORE_DYNAMIC, sku);
-      if (l1 && l1.data && l1.fetchedAt && Date.now() - l1.fetchedAt < DYNAMIC_TTL_MS) {
-        return l1.data;
-      }
-      // L2
-      const l2 = await _erpCacheGet('dynamic', sku);
+      const l1 = await _idbGet(_IDB_STORE_DETAIL, sku);
+      if (l1 && l1.data) return l1.data;
+      const l2 = await _erpCacheGet('detail', sku);
       if (l2 && l2.data) {
-        const fetchedAt = l2.fetchedAt ? new Date(l2.fetchedAt).getTime() : 0;
-        if (fetchedAt && Date.now() - fetchedAt < DYNAMIC_TTL_MS) {
-          _idbPut(_IDB_STORE_DYNAMIC, {
-            sku, data: l2.data, fetchedAt, l2Synced: true,
-          }).catch(() => {});
-          return l2.data;
-        }
+        _idbPut(_IDB_STORE_DETAIL, {
+          sku,
+          data: l2.data,
+          fetchedAt: Date.now(),
+          l2Synced: true,
+        }).catch(() => {});
+        return l2.data;
       }
     } catch (e) {
-      console.warn(`[cache] dynamic get failed sku=${sku}:`, e?.message || e);
+      console.warn(`[cache] detail get failed sku=${sku}:`, e?.message || e);
     }
     return null;
   };
 
-  const _dynamicCacheSet = (sku, dynamicFields) => {
-    _idbPut(_IDB_STORE_DYNAMIC, {
-      sku, data: dynamicFields, fetchedAt: Date.now(), l2Synced: false,
+  const _detailCacheSet = (sku, detailFields) => {
+    _idbPut(_IDB_STORE_DETAIL, {
+      sku,
+      data: detailFields,
+      fetchedAt: Date.now(),
+      l2Synced: false,
     }).catch(() => {});
-    _erpCacheSetAndSyncFlag(_IDB_STORE_DYNAMIC, 'dynamic', sku, { data: dynamicFields });
+    _erpCacheSetAndSyncFlag(_IDB_STORE_DETAIL, 'detail', sku, { data: detailFields });
   };
 
-  const _dynamicCacheDelete = (sku) => {
-    _idbDelete(_IDB_STORE_DYNAMIC, sku).catch(() => {});
-    _erpCacheDelete('dynamic', sku);
+  const _detailCacheDelete = (sku) => {
+    _idbDelete(_IDB_STORE_DETAIL, sku).catch(() => {});
+    _erpCacheDelete('detail', sku);
+  };
+
+  // ── marketStats 缓存(市场统计:销量/评价/排名等,24h stale) ───────────────────
+  // 缓存对象:getMarketStats 真调返回的市场统计聚合
+  // 策略:24h stale(marketStatsStaleMs 从 _loadAutoCollectConfig 读取),
+  //   stale 时仍返回记录(含 stale=true),由调用方决定是否刷新。
+  // L1 IndexedDB → L2 MongoDB → 失败返回 null
+  // 返回:{ data, fetchedAt, stale } | null
+  const _marketStatsCacheGet = async (sku) => {
+    try {
+      const l1 = await _idbGet(_IDB_STORE_MARKET_STATS, sku);
+      if (l1 && l1.data) {
+        const cfg = await _loadAutoCollectConfig();
+        const staleMs = Number(cfg.marketStatsStaleMs) || 86400000;
+        const fetchedAt = Number(l1.fetchedAt || 0);
+        return { data: l1.data, fetchedAt, stale: Date.now() - fetchedAt > staleMs };
+      }
+      const l2 = await _erpCacheGet('marketStats', sku);
+      if (l2 && l2.data) {
+        const fetchedAt = Date.now();
+        _idbPut(_IDB_STORE_MARKET_STATS, {
+          sku,
+          data: l2.data,
+          fetchedAt,
+          l2Synced: true,
+        }).catch(() => {});
+        return { data: l2.data, fetchedAt, stale: false };
+      }
+    } catch (e) {
+      console.warn(`[cache] marketStats get failed sku=${sku}:`, e?.message || e);
+    }
+    return null;
+  };
+
+  const _marketStatsCacheSet = (sku, data) => {
+    _idbPut(_IDB_STORE_MARKET_STATS, {
+      sku,
+      data,
+      fetchedAt: Date.now(),
+      l2Synced: false,
+    }).catch(() => {});
+    _erpCacheSetAndSyncFlag(_IDB_STORE_MARKET_STATS, 'marketStats', sku, { data });
+  };
+
+  const _marketStatsCacheDelete = (sku) => {
+    _idbDelete(_IDB_STORE_MARKET_STATS, sku).catch(() => {});
+    _erpCacheDelete('marketStats', sku);
+  };
+
+  // ── followSell 缓存(跟卖预取结果,4h stale) ──────────────────────────────
+  // 缓存对象:followSell 预取的跟卖可用性 / 竞品数据
+  // 策略:4h stale(followSellStaleMs 从 _loadAutoCollectConfig 读取),
+  //   stale 时仍返回记录(含 stale=true),由调用方决定是否刷新。
+  // L1 IndexedDB → L2 MongoDB → 失败返回 null
+  // 返回:{ data, fetchedAt, stale } | null
+  const _followSellCacheGet = async (sku) => {
+    try {
+      const l1 = await _idbGet(_IDB_STORE_FOLLOW_SELL, sku);
+      if (l1 && l1.data) {
+        const cfg = await _loadAutoCollectConfig();
+        const staleMs = Number(cfg.followSellStaleMs) || 14400000;
+        const fetchedAt = Number(l1.fetchedAt || 0);
+        return { data: l1.data, fetchedAt, stale: Date.now() - fetchedAt > staleMs };
+      }
+      const l2 = await _erpCacheGet('followSell', sku);
+      if (l2 && l2.data) {
+        const fetchedAt = Date.now();
+        _idbPut(_IDB_STORE_FOLLOW_SELL, {
+          sku,
+          data: l2.data,
+          fetchedAt,
+          l2Synced: true,
+        }).catch(() => {});
+        return { data: l2.data, fetchedAt, stale: false };
+      }
+    } catch (e) {
+      console.warn(`[cache] followSell get failed sku=${sku}:`, e?.message || e);
+    }
+    return null;
+  };
+
+  const _followSellCacheSet = (sku, data) => {
+    _idbPut(_IDB_STORE_FOLLOW_SELL, {
+      sku,
+      data,
+      fetchedAt: Date.now(),
+      l2Synced: false,
+    }).catch(() => {});
+    _erpCacheSetAndSyncFlag(_IDB_STORE_FOLLOW_SELL, 'followSell', sku, { data });
+  };
+
+  const _followSellCacheDelete = (sku) => {
+    _idbDelete(_IDB_STORE_FOLLOW_SELL, sku).catch(() => {});
+    _erpCacheDelete('followSell', sku);
   };
 
   // ── 定时补写 L2:扫描 L1 中 l2Synced=false 的记录 ──────────────────────────
   // 由 chrome.alarms 每 5 分钟触发,不受 SW 休眠影响。
-  // 扫描 search/bundle/pdp/composer/dynamic 五个 store,逐条补写 L2,成功后置 l2Synced=true。
+  // 扫描 search/bundle/card/composer/entrypoint/detail/marketStats/followSell 八个 store,
+  // 逐条补写 L2,成功后置 l2Synced=true。
   let _cacheSyncRunning = false; // 并发守卫:避免多个 alarm 重叠执行
   // forceAll=true 时返回所有有 data 的记录(不论 l2Synced),用于 popup 手动全量同步;
   // forceAll=false(默认)只返回 l2Synced=false 的记录,用于定时补写。
@@ -834,17 +1003,38 @@ try {
   // forceAll=true:全量同步(忽略 l2Synced 标志),由 popup 手动按钮触发
   // forceAll=false(默认):只补写 l2Synced=false 的记录,由定时 alarm 触发
   const syncL2Batch = async (forceAll = false) => {
-    if (_cacheSyncRunning) return { search: 0, bundle: 0, pdp: 0, composer: 0, entrypoint: 0, dynamic: 0 };
+    if (_cacheSyncRunning)
+      return {
+        search: 0,
+        bundle: 0,
+        card: 0,
+        composer: 0,
+        entrypoint: 0,
+        detail: 0,
+        marketStats: 0,
+        followSell: 0,
+      };
     _cacheSyncRunning = true;
-    const stats = { search: 0, bundle: 0, pdp: 0, composer: 0, entrypoint: 0, dynamic: 0 };
+    const stats = {
+      search: 0,
+      bundle: 0,
+      card: 0,
+      composer: 0,
+      entrypoint: 0,
+      detail: 0,
+      marketStats: 0,
+      followSell: 0,
+    };
     try {
       for (const { store, type } of [
         { store: _IDB_STORE_SEARCH, type: 'search' },
         { store: _IDB_STORE_BUNDLE, type: 'bundle' },
-        { store: _IDB_STORE_PDP, type: 'pdp' },
+        { store: _IDB_STORE_CARD, type: 'card' },
         { store: _IDB_STORE_COMPOSER, type: 'composer' },
         { store: _IDB_STORE_ENTRYPOINT, type: 'entrypoint' },
-        { store: _IDB_STORE_DYNAMIC, type: 'dynamic' },
+        { store: _IDB_STORE_DETAIL, type: 'detail' },
+        { store: _IDB_STORE_MARKET_STATS, type: 'marketStats' },
+        { store: _IDB_STORE_FOLLOW_SELL, type: 'followSell' },
       ]) {
         const unsynced = await _idbScanUnsynced(store, forceAll).catch(() => []);
         for (const entry of unsynced) {
@@ -858,8 +1048,11 @@ try {
           }
         }
       }
-      const total = stats.search + stats.bundle + stats.pdp;
-      if (total > 0) console.log(`[cache-sync] 补写 ${total} 条 L2 缓存 (search=${stats.search}, bundle=${stats.bundle}, pdp=${stats.pdp}, forceAll=${forceAll})`);
+      const total = stats.search + stats.bundle + stats.card + stats.marketStats + stats.followSell;
+      if (total > 0)
+        console.log(
+          `[cache-sync] 补写 ${total} 条 L2 缓存 (search=${stats.search}, bundle=${stats.bundle}, card=${stats.card}, composer=${stats.composer}, entrypoint=${stats.entrypoint}, detail=${stats.detail}, marketStats=${stats.marketStats}, followSell=${stats.followSell}, forceAll=${forceAll})`
+        );
     } catch (e) {
       console.warn('[cache-sync] batch failed:', e?.message || e);
     } finally {
@@ -910,10 +1103,7 @@ try {
   const fetchBundleByVariantId = async (sku, variantId, companyId, opts = {}) => {
     // forceRefresh → 清 L1 + L2,确保真拉
     if (opts.forceRefresh) {
-      await Promise.all([
-        _idbDelete(_IDB_STORE_BUNDLE, sku).catch(() => {}),
-        _erpCacheDelete('bundle', sku),
-      ]);
+      await Promise.all([_idbDelete(_IDB_STORE_BUNDLE, sku).catch(() => {}), _erpCacheDelete('bundle', sku)]);
     } else {
       // L1: IndexedDB(毫秒级)
       try {
@@ -934,11 +1124,16 @@ try {
         // ERP 已做空属性 6h 重验判定,命中即可复用
         console.log(`[fetchBundleByVariantId] L2 hit sku=${sku}`);
         // 回填 L1(l2Synced=true,L2 已有数据)
-        const verifiedAt = Array.isArray(l2.data.attributes) && l2.data.attributes.length > 0
-          ? null
-          : (l2.attrsEmptyVerifiedAt ? new Date(l2.attrsEmptyVerifiedAt).getTime() : Date.now());
+        const verifiedAt =
+          Array.isArray(l2.data.attributes) && l2.data.attributes.length > 0
+            ? null
+            : l2.attrsEmptyVerifiedAt
+              ? new Date(l2.attrsEmptyVerifiedAt).getTime()
+              : Date.now();
         _idbPut(_IDB_STORE_BUNDLE, {
-          sku, data: l2.data, bundleId: l2.bundleId || null,
+          sku,
+          data: l2.data,
+          bundleId: l2.bundleId || null,
           fetchedAt: Date.now(),
           l2Synced: true,
           ...(verifiedAt ? { attrsEmptyVerifiedAt: verifiedAt } : {}),
@@ -971,7 +1166,9 @@ try {
     const hasAttrs = Array.isArray(item.attributes) && item.attributes.length > 0;
     const verifiedAt = hasAttrs ? null : Date.now();
     _idbPut(_IDB_STORE_BUNDLE, {
-      sku, data: item, bundleId: resp.bundle_id || null,
+      sku,
+      data: item,
+      bundleId: resp.bundle_id || null,
       fetchedAt: Date.now(),
       l2Synced: false, // L2 尚未同步;L2 重试成功后会回更新为 true,失败则下次查询补写(兜底)
       ...(verifiedAt ? { attrsEmptyVerifiedAt: verifiedAt } : {}),
@@ -1595,11 +1792,17 @@ try {
     for (const k of Object.keys(states)) {
       let v = states[k];
       if (typeof v === 'string') {
-        try { v = JSON.parse(v); } catch { continue; }
+        try {
+          v = JSON.parse(v);
+        } catch {
+          continue;
+        }
       }
       if (!v || typeof v !== 'object') continue;
       if (typeof v.richAnnotationJson === 'string' && v.richAnnotationJson.trim()) {
-        try { if (_isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim(); } catch {}
+        try {
+          if (_isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim();
+        } catch {}
       }
       if (_isRichDoc(v)) return JSON.stringify({ content: v.content, version: v.version || 0.3 });
     }
@@ -1611,7 +1814,11 @@ try {
       if (!/gallery/i.test(k)) continue;
       let v = states[k];
       if (typeof v === 'string') {
-        try { v = JSON.parse(v); } catch { continue; }
+        try {
+          v = JSON.parse(v);
+        } catch {
+          continue;
+        }
       }
       const vids = v && Array.isArray(v.videos) ? v.videos : [];
       for (const it of vids) {
@@ -1629,7 +1836,11 @@ try {
     for (const k of descKeys) {
       let v = states[k];
       if (typeof v === 'string') {
-        try { v = JSON.parse(v); } catch { continue; }
+        try {
+          v = JSON.parse(v);
+        } catch {
+          continue;
+        }
       }
       if (!v || typeof v !== 'object') continue;
       // webDescription widget 通常有 text/html 字段
@@ -1652,15 +1863,27 @@ try {
     };
     const walk = (node, depth) => {
       if (out.length >= 30 || depth > 32 || node == null) return;
-      if (typeof node === 'string') { push(node); return; }
-      if (Array.isArray(node)) { for (const it of node) walk(it, depth + 1); return; }
-      if (typeof node === 'object') { for (const k of Object.keys(node)) walk(node[k], depth + 1); }
+      if (typeof node === 'string') {
+        push(node);
+        return;
+      }
+      if (Array.isArray(node)) {
+        for (const it of node) walk(it, depth + 1);
+        return;
+      }
+      if (typeof node === 'object') {
+        for (const k of Object.keys(node)) walk(node[k], depth + 1);
+      }
     };
     for (const k of Object.keys(states || {})) {
       if (!/hashtag|taglist/i.test(k)) continue;
       let v = states[k];
       if (typeof v === 'string') {
-        try { v = JSON.parse(v); } catch { continue; }
+        try {
+          v = JSON.parse(v);
+        } catch {
+          continue;
+        }
       }
       walk(v, 0);
     }
@@ -1674,7 +1897,11 @@ try {
     for (const k of Object.keys(states)) {
       let v = states[k];
       if (typeof v === 'string') {
-        try { v = JSON.parse(v); } catch { continue; }
+        try {
+          v = JSON.parse(v);
+        } catch {
+          continue;
+        }
       }
       if (!v || typeof v !== 'object') continue;
       if (!Array.isArray(v.images)) continue;
@@ -1686,7 +1913,11 @@ try {
     // upgrade 到 wc1000 + 去重
     const upgrade = (u) =>
       typeof u === 'string' && u.includes('ir.ozone.ru') ? u.replace(/\/wc\d+\//, '/wc1000/') : u;
-    const norm = (u) => String(u || '').split('?')[0].split('#')[0].toLowerCase();
+    const norm = (u) =>
+      String(u || '')
+        .split('?')[0]
+        .split('#')[0]
+        .toLowerCase();
     const seen = new Set();
     const out = [];
     const push = (raw) => {
@@ -1884,6 +2115,8 @@ try {
       let mp4 = null;
       let description = '';
       let hashtags = [];
+      // 合并所有成功 endpoint 的 widgetStates(SW 侧用于抽 composer fields + 写缓存)
+      const composerWidgetStates = {};
       for (const url of endpoints) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeout);
@@ -1903,6 +2136,8 @@ try {
           if (!mp4) mp4 = extractMp4(states);
           if (!description) description = extractDescription(states);
           if (!hashtags.length) hashtags = extractHashtags(states);
+          // 合并 widgetStates(后端覆盖前端,用于 SW 侧抽 composer fields)
+          for (const k of Object.keys(states)) composerWidgetStates[k] = states[k];
           // 视频 + 富内容都到手即可提前结束(描述/标签随当前 states 顺带抽,不单独多跑 endpoint);
           // 否则继续试下一个 endpoint(视频/富内容偶尔只在 composer 而不在 entrypoint)。
           if (mp4 && richContent) break;
@@ -1911,10 +2146,112 @@ try {
           // 单个 endpoint 失败 → 试下一个。
         }
       }
+
+      // ── fetch 2:跟卖 modal endpoint(三合一改造) ──
+      // /api/composer-api.bx/page/json/v2?url=/modal/otherOffersFromSellers?product_id=<sku>
+      // 解析 webSellerList widget,抽取 {count, sellers, source}。
+      // 失败 / 零跟卖 / 解析失败均返回结构化结果(SW 侧写 followSell 缓存,避免重复真调)。
+      const fsSku = (relPath.match(/-(\d+)\/?$/) || [])[1] || '';
+      let followSellData = null;
+      if (fsSku) {
+        try {
+          const inner = `/modal/otherOffersFromSellers?product_id=${fsSku}`;
+          const fsUrl = `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(inner)}`;
+          const fsController = new AbortController();
+          const fsTimer = setTimeout(() => fsController.abort(), timeout);
+          const fsResp = await fetch(fsUrl, {
+            credentials: 'include',
+            headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
+            signal: fsController.signal,
+          });
+          clearTimeout(fsTimer);
+          if (fsResp.ok) {
+            const fsData = await fsResp.json();
+            const fsStates = fsData && fsData.widgetStates ? fsData.widgetStates : {};
+            const wslKey = Object.keys(fsStates).find((k) => k.startsWith('webSellerList'));
+            if (!wslKey) {
+              // modal 正常加载但无 webSellerList widget — 零跟卖商品
+              followSellData = { count: 0, sellers: [], source: 'no-sellers' };
+            } else {
+              let wsl = fsStates[wslKey];
+              if (typeof wsl === 'string') {
+                try {
+                  wsl = JSON.parse(wsl);
+                } catch {
+                  followSellData = { count: 0, sellers: [], source: 'parse-fail' };
+                }
+              }
+              if (!followSellData) {
+                const rawSellers = Array.isArray(wsl?.sellers) ? wsl.sellers : [];
+                const normSeller = (item) => {
+                  if (!item || typeof item !== 'object') return null;
+                  const txt = (v) =>
+                    typeof v === 'string'
+                      ? v.trim()
+                      : v && typeof v === 'object' && v.text
+                        ? String(v.text).trim()
+                        : '';
+                  const name =
+                    txt(item.name) || txt(item.sellerName) || txt(item.seller?.name) || txt(item.title) || '';
+                  const priceRaw =
+                    item.price?.cardPrice?.price ?? item.price?.cardPrice ?? item.price ?? item.finalPrice ?? '';
+                  const price = txt(priceRaw);
+                  if (!name && !price) return null;
+                  const link =
+                    (typeof item.productLink === 'string' ? item.productLink : '') ||
+                    item.link?.action?.link ||
+                    item.link?.link ||
+                    item.link ||
+                    '';
+                  const avatar =
+                    (typeof item.avatar === 'string' ? item.avatar : '') || item.avatar?.url || item.logo?.url || '';
+                  const rating =
+                    item.rating?.totalScore ?? item.rating?.value ?? item.rating ?? item.sellerRating ?? null;
+                  const reviewsCount = item.rating?.reviewsCount ?? item.reviewsCount ?? item.reviewCount ?? null;
+                  return {
+                    name,
+                    price,
+                    sku: txt(item.sku) || txt(item.id) || txt(item.skuId),
+                    link: typeof link === 'string' ? link : '',
+                    avatar: typeof avatar === 'string' ? avatar : '',
+                    rating: Number.isFinite(Number(rating)) ? Number(rating) : null,
+                    reviewsCount: Number.isFinite(Number(reviewsCount)) ? Number(reviewsCount) : null,
+                    region: txt(item.region) || txt(item.location),
+                    deliveryText: txt(item.deliveryText) || txt(item.delivery?.text),
+                    deliveryRank: null,
+                  };
+                };
+                const sellers = rawSellers.map(normSeller).filter(Boolean);
+                followSellData = { count: rawSellers.length, sellers, source: 'modal' };
+              }
+            }
+          } else {
+            followSellData = { count: 0, sellers: [], source: 'no-sellers' };
+          }
+        } catch (e) {
+          // modal fetch 网络失败 / 超时 — 不写 no-sellers(允许后续重试)
+          followSellData = null;
+        }
+      }
+
       // 有 200 过则按真实抽取结果返回;全失败则 ok:false。
+      // 三合一改造:额外返回 composerWidgetStates(SW 抽 fields)+ followSellData
       return anyOk
-        ? { ok: true, mp4, richContent, description, hashtags, endpoint: hitEndpoint }
-        : { ok: false, error: 'all endpoints failed' };
+        ? {
+            ok: true,
+            mp4,
+            richContent,
+            description,
+            hashtags,
+            endpoint: hitEndpoint,
+            composerWidgetStates,
+            followSellData,
+          }
+        : {
+            ok: false,
+            error: 'all endpoints failed',
+            followSellData,
+          };
     };
     try {
       try {
@@ -1949,6 +2286,10 @@ try {
       const r = results && results[0] && results[0].result;
       if (!r || !r.ok) {
         console.warn('[fetchVariantMedia] 抓取失败:', r && r.error);
+        // 即使产品页 fetch 全失败,跟卖 modal 可能成功 — 仍写 followSell 缓存
+        if (urlSku && r && r.followSellData) {
+          _followSellCacheSet(urlSku, r.followSellData);
+        }
         return EMPTY;
       }
       const result = {
@@ -1957,6 +2298,8 @@ try {
         description: r.description || '',
         hashtags: Array.isArray(r.hashtags) ? r.hashtags : [],
         endpoint: r.endpoint || null,
+        composerFields: null,
+        followSellData: r.followSellData || null,
       };
       // 真调成功后异步写 entrypoint 缓存(按 sku 索引,蒸馏后字段)
       if (urlSku && result.endpoint === 'entrypoint-api') {
@@ -1967,6 +2310,103 @@ try {
           hashtags: result.hashtags,
           mp4: result.mp4,
         });
+      }
+      // ── 三合一改造:从 composerWidgetStates 抽 fields + 写 composer 缓存 ──
+      // 复用 fetchProductPageState 同口径的 widget 解析(gallery/heading/aspects/price/
+      // seller/brand),把蒸馏后的 fields + 过滤后 widgetStates 写入 composer 缓存(L1+L2)。
+      if (urlSku && r.composerWidgetStates && Object.keys(r.composerWidgetStates).length) {
+        try {
+          const ws = r.composerWidgetStates;
+          const keys = Object.keys(ws);
+          const find = (prefix) => keys.find((k) => k.startsWith(prefix));
+          const parse = (key) => {
+            if (!key) return null;
+            const raw = ws[key];
+            if (typeof raw === 'object' && raw !== null) return raw;
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return null;
+            }
+          };
+          const gallery = parse(find('webGallery'));
+          const heading = parse(find('webProductHeading'));
+          const aspects = parse(find('webAspects'));
+          const price = parse(find('webPrice'));
+          const seller = parse(find('webCurrentSeller'));
+          const shortChars = parse(find('webShortCharacteristics'));
+          const detailSku = parse(find('webDetailSKU'));
+          const brand = parse(find('webBrand'));
+          const images = Array.isArray(gallery?.images)
+            ? gallery.images.map((it) => (typeof it === 'string' ? it : it?.url || it?.link || it?.src)).filter(Boolean)
+            : [];
+          const coverImage =
+            typeof gallery?.coverImage === 'string'
+              ? gallery.coverImage
+              : gallery?.coverImage?.url || gallery?.coverImage?.link || images[0] || '';
+          let sellerName = '';
+          let sellerLink = '';
+          try {
+            sellerName =
+              seller?.header?.title?.text ||
+              seller?.sellerCell?.centerBlock?.title?.text ||
+              seller?.sellerCell?.name ||
+              seller?.name ||
+              '';
+            sellerLink =
+              seller?.header?.title?.link ||
+              seller?.sellerCell?.centerBlock?.title?.link ||
+              seller?.sellerCell?.link ||
+              seller?.link ||
+              '';
+          } catch {}
+          const fields = {
+            title: heading?.title || '',
+            sku: urlSku,
+            productId: String(gallery?.sku || detailSku?.sku || detailSku?.itemId || urlSku || ''),
+            price: price?.cardPrice || price?.price || price?.originalPrice || '',
+            images,
+            coverImage,
+            aspects: Array.isArray(aspects?.aspects) ? aspects.aspects : [],
+            seller: { name: sellerName, link: sellerLink },
+            brand: brand?.title || brand?.name || '',
+            shortCharacteristicsRaw: shortChars || null,
+          };
+          result.composerFields = fields;
+          // 过滤后 widgetStates(仅业务 widget,剔除布局 meta)
+          const usefulPrefixes = [
+            'webGallery',
+            'webProductHeading',
+            'webAspects',
+            'webPrice',
+            'webAddToCart',
+            'webCurrentSeller',
+            'webBrand',
+            'webDetailSKU',
+            'webShortCharacteristics',
+            'webCharacteristics',
+            'webDescription',
+            'webMarketingLabels',
+            'webSale',
+            'webReviewProductScore',
+            'webSingleProductScore',
+            'webModelParams',
+            'webHashtags',
+            'webBestSeller',
+            'webProductMainWidget',
+          ];
+          const filteredStates = {};
+          for (const k of keys) {
+            if (usefulPrefixes.some((p) => k.startsWith(p))) filteredStates[k] = ws[k];
+          }
+          _composerCacheSet(urlSku, { fields, widgetStates: filteredStates });
+        } catch (e) {
+          console.warn('[fetchVariantMedia] composer fields extract failed:', e?.message || e);
+        }
+      }
+      // ── 三合一改造:写 followSell 缓存(L1+L2) ──
+      if (urlSku && result.followSellData) {
+        _followSellCacheSet(urlSku, result.followSellData);
       }
       return result;
     } catch (e) {
@@ -1996,6 +2436,241 @@ try {
     });
     // 串行化:下一个调用排在这次放行之后;.catch 防止异常断链(wait 只 await setTimeout,不会 reject)。
     _sellerPortalGateChain = wait.catch(() => {});
+    return wait;
+  };
+
+  // ── auto-collect 配置(chrome.storage.local 'jz-auto-collect-config') ──────────
+  // 带内存缓存:首次读取后缓存到 _autoCollectConfigCache,写入时通过
+  // _invalidateAutoCollectConfigCache() 失效。SW 休眠后内存清空,下次读取重新落盘。
+  // 默认值与 popup/content 端约定一致,缺失字段用默认补齐(浅合并)。
+  const _AUTO_COLLECT_CONFIG_KEY = 'jz-auto-collect-config';
+  const _AUTO_COLLECT_CONFIG_DEFAULT = {
+    enabled: true,
+    autoCollectRunning: true,
+    depth: 'Full',
+    paused: false,
+    pausedUntil: 0,
+    buyerPageMinInterval: 500,
+    sellerPortalMinInterval: 200,
+    skuInterval: 1000,
+    perDayLimit: 2000,
+    todayCount: 0,
+    todayDate: '',
+    marketStatsStaleMs: 86400000,
+    followSellStaleMs: 14400000,
+    onlyChineseStores: true,
+    knownChineseSlugs: [],
+    knownNonChineseSlugs: [],
+  };
+  let _autoCollectConfigCache = null;
+  const _loadAutoCollectConfig = async () => {
+    if (_autoCollectConfigCache) return _autoCollectConfigCache;
+    try {
+      const stored = await getStorage([_AUTO_COLLECT_CONFIG_KEY]);
+      const raw = stored?.[_AUTO_COLLECT_CONFIG_KEY];
+      _autoCollectConfigCache =
+        raw && typeof raw === 'object'
+          ? { ..._AUTO_COLLECT_CONFIG_DEFAULT, ...raw }
+          : { ..._AUTO_COLLECT_CONFIG_DEFAULT };
+    } catch (e) {
+      console.warn('[autoCollectConfig] load failed, fallback to defaults:', e?.message || e);
+      _autoCollectConfigCache = { ..._AUTO_COLLECT_CONFIG_DEFAULT };
+    }
+    return _autoCollectConfigCache;
+  };
+  // 写入 jz-auto-collect-config 后调用,清内存缓存让下次 _loadAutoCollectConfig 重读落盘。
+  const _invalidateAutoCollectConfigCache = () => {
+    _autoCollectConfigCache = null;
+  };
+
+  // ── 店铺中国身份分类(三层:L1 chrome.storage → L2 MongoDB → 规则引擎) ──────
+  // 用于 Task 6 自动采集 Gate 0.5:onlyChineseStores=true 时跳过非中国店铺。
+  // 规则引擎覆盖 known 列表 + companyInfo.country,无匹配返回 null(等待人工确认)。
+  // 分类记录在 L2 MongoDB 持久化,L1 chrome.storage 做热缓存(key: jz-store-class-<slug>)。
+  const classifyStoreByRules = (slug, name, companyInfo, config) => {
+    if (!config) return { isChinese: null, by: null };
+    // Rule 1: knownChineseSlugs
+    if (Array.isArray(config.knownChineseSlugs) && config.knownChineseSlugs.includes(slug)) {
+      return { isChinese: true, by: 'rule:known-list' };
+    }
+    // Rule 2: knownNonChineseSlugs
+    if (Array.isArray(config.knownNonChineseSlugs) && config.knownNonChineseSlugs.includes(slug)) {
+      return { isChinese: false, by: 'rule:known-list' };
+    }
+    // Rule 3: companyInfo.country === 'CN'
+    if (companyInfo && companyInfo.country === 'CN') {
+      return { isChinese: true, by: 'rule:company-country' };
+    }
+    // Rule 4: companyInfo.country 已知且非 CN
+    if (companyInfo && companyInfo.country && companyInfo.country !== 'CN') {
+      return { isChinese: false, by: 'rule:company-country' };
+    }
+    return { isChinese: null, by: null };
+  };
+
+  // L2 MongoDB:GET /ozon/store-classification/:slug
+  // 返回分类记录或 null。参考 _erpCacheGet 模式。
+  const _erpStoreClassGet = async (slug) => {
+    try {
+      const url = await getBackendUrl();
+      const stored = await getStorage([STORAGE_KEYS.token]);
+      const r = await apiRequest(
+        'GET',
+        `${url}/ozon/store-classification/${encodeURIComponent(slug)}`,
+        null,
+        stored[STORAGE_KEYS.token]
+      );
+      return r;
+    } catch (e) {
+      console.warn(`[store-class] ERP get failed slug=${slug}:`, e?.message || e);
+      return null;
+    }
+  };
+
+  // L2 MongoDB:POST /ozon/store-classification/:slug(upsert)
+  // record: { sellerSlug, sellerName, isChinese, classifiedBy, companyInfo, lastSeenAt }
+  const _erpStoreClassSet = async (slug, record) => {
+    try {
+      const url = await getBackendUrl();
+      const stored = await getStorage([STORAGE_KEYS.token]);
+      await apiRequest(
+        'POST',
+        `${url}/ozon/store-classification/${encodeURIComponent(slug)}`,
+        record,
+        stored[STORAGE_KEYS.token]
+      );
+      return true;
+    } catch (e) {
+      console.warn(`[store-class] ERP set failed slug=${slug}:`, e?.message || e);
+      return false;
+    }
+  };
+
+  // 三层查询:L1 chrome.storage.local → L2 MongoDB → 规则引擎。
+  // 返回 { isChinese, classifiedBy } | null(未分类,等待人工确认)。
+  const checkStoreClassification = async (slug, name, companyInfo) => {
+    if (!slug) return null;
+    const config = await _loadAutoCollectConfig();
+
+    // L1: chrome.storage.local
+    const l1Key = `jz-store-class-${slug}`;
+    try {
+      const l1 = (await getStorage([l1Key]))?.[l1Key];
+      if (l1 && l1.isChinese !== null && l1.isChinese !== undefined) {
+        return { isChinese: l1.isChinese, classifiedBy: l1.classifiedBy };
+      }
+    } catch (e) {
+      console.warn(`[store-class] L1 get failed slug=${slug}:`, e?.message || e);
+    }
+
+    // L2: MongoDB
+    const l2 = await _erpStoreClassGet(slug);
+    if (l2 && l2.isChinese !== null && l2.isChinese !== undefined) {
+      try {
+        await setStorage({
+          [l1Key]: { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy },
+        });
+      } catch (e) {
+        console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
+      }
+      return { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy };
+    }
+
+    // 规则引擎
+    const ruleResult = classifyStoreByRules(slug, name, companyInfo, config);
+    if (ruleResult.isChinese !== null) {
+      const record = {
+        sellerSlug: slug,
+        sellerName: name,
+        isChinese: ruleResult.isChinese,
+        classifiedBy: ruleResult.by,
+        companyInfo: companyInfo || null,
+        lastSeenAt: new Date().toISOString(),
+      };
+      try {
+        await setStorage({
+          [l1Key]: { isChinese: ruleResult.isChinese, classifiedBy: ruleResult.by },
+        });
+      } catch (e) {
+        console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
+      }
+      _erpStoreClassSet(slug, record);
+      return { isChinese: ruleResult.isChinese, classifiedBy: ruleResult.by };
+    }
+
+    // 未分类:写 L2 记录(isChinese=null,等待人工确认)
+    _erpStoreClassSet(slug, {
+      sellerSlug: slug,
+      sellerName: name,
+      isChinese: null,
+      classifiedBy: null,
+      companyInfo: companyInfo || null,
+      lastSeenAt: new Date().toISOString(),
+    });
+    return null;
+  };
+
+  // 人工确认分类:写 L1 + L2(classifiedBy:'manual')。
+  // 入参 { slug, name, isChinese } → 返回 { ok: true }
+  const manualClassifyStore = async (slug, name, isChinese) => {
+    if (!slug) return { ok: false, error: 'missing slug' };
+    const classifiedBy = 'manual';
+    const classifiedAt = new Date().toISOString();
+    const l1Key = `jz-store-class-${slug}`;
+    try {
+      await setStorage({ [l1Key]: { isChinese, classifiedBy } });
+    } catch (e) {
+      console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
+    }
+    await _erpStoreClassSet(slug, {
+      sellerSlug: slug,
+      sellerName: name,
+      isChinese,
+      classifiedBy,
+      classifiedAt,
+      companyInfo: null,
+      lastSeenAt: classifiedAt,
+    });
+    return { ok: true };
+  };
+
+  // ── 买家页(www.ozon.ru)全局节奏闸门 ──────────────────────────────────────
+  // 覆盖 entrypoint/composer/followSell 真调:所有走 www.ozon.ru 的买家页请求共用此闸门,
+  // 保证相邻两次请求至少间隔 buyerPageMinInterval(默认 500ms,从 _loadAutoCollectConfig 读取)。
+  // 作用域与 _sellerPortalGate 互补:seller portal 走 seller.ozon.ru,买家页走 www.ozon.ru,
+  // 反爬风险评分独立,两把闸门各自串行摊平请求密度。
+  let _buyerPageGateChain = Promise.resolve();
+  let _buyerPageLastAt = 0;
+  const _buyerPageGate = () => {
+    const wait = _buyerPageGateChain.then(async () => {
+      const cfg = await _loadAutoCollectConfig();
+      const minInterval = Number(cfg.buyerPageMinInterval) || 500;
+      const delta = Date.now() - _buyerPageLastAt;
+      if (delta < minInterval) {
+        await new Promise((r) => setTimeout(r, minInterval - delta));
+      }
+      _buyerPageLastAt = Date.now();
+    });
+    _buyerPageGateChain = wait.catch(() => {});
+    return wait;
+  };
+
+  // ── autoCollect 逐 SKU 节奏闸门 ─────────────────────────────────────────────
+  // 采集流程每个 SKU 之间共用此闸门,保证相邻两次 SKU 处理至少间隔 skuInterval
+  // (默认 1000ms,从 _loadAutoCollectConfig 读取)。
+  let _autoCollectGateChain = Promise.resolve();
+  let _autoCollectLastAt = 0;
+  const _autoCollectGate = () => {
+    const wait = _autoCollectGateChain.then(async () => {
+      const cfg = await _loadAutoCollectConfig();
+      const minInterval = Number(cfg.skuInterval) || 1000;
+      const delta = Date.now() - _autoCollectLastAt;
+      if (delta < minInterval) {
+        await new Promise((r) => setTimeout(r, minInterval - delta));
+      }
+      _autoCollectLastAt = Date.now();
+    });
+    _autoCollectGateChain = wait.catch(() => {});
     return wait;
   };
 
@@ -2560,6 +3235,559 @@ try {
       return null;
     } finally {
       _mdProxyInflight--;
+    }
+  };
+
+  // ── 直调市场统计(data/v3)—— 从 getMarketStats action 抽取的核心逻辑 ──────
+  // 借 seller.ozon.ru tab 注入 fetch what_to_sell/data/v3,归一化后返回。
+  // **不写缓存**(由调用方 getMarketStats action 决定)。
+  // **不走 proxyMarketData 代采降级**(由调用方在 __needSellerLogin 时决定)。
+  // 返回类型契约:
+  //   { __needSellerLogin: true, __reason } — 需要卖家登录(无 seller tab / 会话过期)
+  //   { __antibot: true } — 反爬(http_403 / 限流,非会话类失败)
+  //   null — data/v3 无 items(登录正常但该 SKU 无市场数据)
+  //   NormalizedItem — 成功(normalizeMarketItem 归一化后的 18+ 字段)
+  const _fetchMarketStatsDirect = async (sku, period) => {
+    if (!sku) return null;
+    const mPeriod = period === 'weekly' ? 'weekly' : 'monthly';
+    try {
+      let sellerTabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
+      // 没开任何 seller tab。已登录 seller 时自己开一个(ensureSellerTab 内含 single-flight);
+      // 未登录则不开无用 signin tab,直接走「需登录」。
+      if (!sellerTabs.length) {
+        const _sc = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
+        if (_sc[0]?.value) {
+          try {
+            await ensureSellerTab();
+          } catch (e) {
+            console.log('[_fetchMarketStatsDirect] ensureSellerTab 失败:', e?.message || e);
+          }
+          sellerTabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
+        }
+      }
+      if (!sellerTabs.length) {
+        return { __needSellerLogin: true, __reason: 'NO_SELLER_TAB' };
+      }
+
+      // 排序:auth/signin 页排最后,优先试业务页
+      const isAuthUrl = (u) => /\/(registration|signin|auth|login)/i.test(u || '');
+      const orderedTabs = [...sellerTabs].sort((a, b) => (isAuthUrl(a.url) ? 1 : 0 - (isAuthUrl(b.url) ? 1 : 0)));
+
+      const injectFetch = async (sku, period) => {
+        try {
+          const cookies = document.cookie.split(';').map((c) => c.trim());
+          const scCookie = cookies.find((c) => c.startsWith('sc_company_id='));
+          const companyId = scCookie ? scCookie.split('=')[1] : '';
+          if (!companyId) return { ok: false, reason: 'no_company_id' };
+          const resp = await fetch('/api/site/seller-analytics/what_to_sell/data/v3', {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              accept: 'application/json',
+              'content-type': 'application/json',
+              'x-o3-app-name': 'seller-ui',
+              'x-o3-company-id': companyId,
+              'x-o3-language': 'zh-Hans',
+            },
+            body: JSON.stringify({
+              filter: { stock: 'any_stock', period: period || 'monthly', sku: String(sku) },
+              sort: { key: 'sum_gmv_desc' },
+              limit: '1',
+              offset: '0',
+            }),
+          });
+          if (!resp.ok) return { ok: false, reason: `http_${resp.status}` };
+          const result = await resp.json();
+          return { ok: true, data: result?.items?.[0] || result?.data?.[0] || null };
+        } catch (e) {
+          return { ok: false, reason: `exc_${(e && e.message) || 'unknown'}` };
+        }
+      };
+
+      const reasons = [];
+      for (const tab of orderedTabs) {
+        if (!tab.id) continue;
+        let injected;
+        try {
+          await _sellerPortalGate();
+          injected = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: injectFetch,
+            args: [sku, mPeriod],
+          });
+        } catch (e) {
+          reasons.push(`tab${tab.id}:inject_err`);
+          continue;
+        }
+        const r = injected?.[0]?.result;
+        if (r?.ok) {
+          return r.data ? normalizeMarketItem(r.data) : null;
+        }
+        reasons.push(`tab${tab.id}:${r?.reason || 'no_result'}`);
+      }
+
+      // 所有 seller tab 都拿不到。区分:
+      //   - 全部 no_company_id/http_401/signin/login/redirect → __needSellerLogin
+      //   - http_403/限流 → __antibot
+      //   - 其余 → null(临时性失败,不强提示)
+      console.log('[_fetchMarketStatsDirect] no usable seller tab:', reasons.join(', '));
+      const sessionLike = reasons.every((r) => /no_company_id|http_401|signin|login|redirect/i.test(r));
+      if (sessionLike) {
+        return { __needSellerLogin: true, __reason: 'AUTH_REQUIRED' };
+      }
+      const antibotLike = reasons.some((r) => /http_403|http_429|rate|limit|blocked|antibot/i.test(r));
+      if (antibotLike) {
+        return { __antibot: true };
+      }
+      return null;
+    } catch (e) {
+      console.log('[_fetchMarketStatsDirect] failed:', e?.message || e);
+      return null;
+    }
+  };
+
+  // ── autoCollect 配置保存(对应 _loadAutoCollectConfig 的写入端) ──────────────
+  // 浅合并 partial 到当前配置,写 chrome.storage.local(jz-auto-collect-config),
+  // 并调 _invalidateAutoCollectConfigCache 失效内存缓存让下次读取重落盘。
+  const _saveAutoCollectConfig = async (partial) => {
+    const current = await _loadAutoCollectConfig();
+    const updated = { ...current, ...partial };
+    await setStorage({ [_AUTO_COLLECT_CONFIG_KEY]: updated });
+    _invalidateAutoCollectConfigCache();
+    return updated;
+  };
+
+  // ── autoCollect 内存计数器(今日统计 + 环形缓冲最近 50 条) ──────────────────
+  // SW 休眠后清零(非持久化),仅用于 popup 实时面板展示。持久化统计走 _writeAutoCollectLog(ERP)。
+  const _autoCollectStats = {
+    today: { success: 0, skipped: 0, failed: 0, antibot: 0, total: 0 },
+    byType: {
+      card: 0,
+      detail: 0,
+      composer: 0,
+      entrypoint: 0,
+      search: 0,
+      bundle: 0,
+      marketStats: 0,
+      followSell: 0,
+    },
+    bySource: { 'shop-page': 0, pdp: 0 },
+    byStoreClass: { chinese: 0, 'non-chinese': 0, unclassified: 0 },
+  };
+  const _autoCollectRecent = []; // 环形缓冲,最近 50 条
+
+  // sku + startTime 也需传入用于环形缓冲记录。
+  const _incrementAutoCollectStats = (sku, status, source, storeClassified, results, startTime) => {
+    _autoCollectStats.today.total++;
+    if (status === 'success') _autoCollectStats.today.success++;
+    else if (status === 'antibot') _autoCollectStats.today.antibot++;
+    else if (status === 'failed') _autoCollectStats.today.failed++;
+    else _autoCollectStats.today.skipped++;
+
+    if (source && _autoCollectStats.bySource[source] !== undefined) {
+      _autoCollectStats.bySource[source]++;
+    }
+    if (storeClassified && _autoCollectStats.byStoreClass[storeClassified] !== undefined) {
+      _autoCollectStats.byStoreClass[storeClassified]++;
+    }
+    // byType:统计命中的类目
+    if (Array.isArray(results)) {
+      results.forEach((r) => {
+        if (r.hit && _autoCollectStats.byType[r.type] !== undefined) {
+          _autoCollectStats.byType[r.type]++;
+        }
+      });
+    }
+    // 环形缓冲
+    _autoCollectRecent.push({
+      sku,
+      source,
+      status,
+      duration: Date.now() - startTime,
+      timestamp: Date.now(),
+    });
+    if (_autoCollectRecent.length > 50) _autoCollectRecent.shift();
+  };
+
+  // ── ANTIBOT 分支处理:暂停 10 分钟 + 通知 popup + 写日志 + 更新计数器 ────────
+  // 由 Step 4/5/6 检测到反爬时调用。返回 { status:'antibot', pausedUntil } 给调用方。
+  const _handleAntibot = async (sku, source, sellerSlug, storeClassified, depth, startTime, results) => {
+    const pausedUntil = Date.now() + 10 * 60 * 1000; // 10 分钟
+    await _saveAutoCollectConfig({ paused: true, pausedUntil });
+
+    // 通知 QX面板 + popup(fire-and-forget,无监听者也不报错)
+    chrome.runtime.sendMessage({ type: 'antibotDetected', pausedUntil }).catch(() => {});
+
+    // 写日志(fire-and-forget,不阻塞)
+    _writeAutoCollectLog({
+      sku,
+      source,
+      sellerSlug,
+      storeClassified,
+      depth,
+      status: 'antibot',
+      results,
+      totalDuration: Date.now() - startTime,
+    });
+
+    // 更新内存计数器
+    _incrementAutoCollectStats(sku, 'antibot', source, storeClassified, results, startTime);
+
+    return { status: 'antibot', pausedUntil };
+  };
+
+  // ── Task 22:SW 启动时从 MongoDB 聚合初始化内存计数器 ──────────────────────
+  // SW 休眠/重启后 _autoCollectStats 清零,面板会看到 0。本函数从 ERP stats 接口
+  // 拉今日聚合,回填内存计数器,让面板重启后仍能看到今日累计。
+  // fire-and-forget:在 onInstalled/onStartup 中调用,不阻塞启动,失败仅告警。
+  const _initAutoCollectStatsFromDb = async () => {
+    try {
+      const url = await getBackendUrl();
+      if (!url) return;
+      const stored = await getStorage([STORAGE_KEYS.token]);
+      const token = stored?.[STORAGE_KEYS.token];
+      if (!token) return;
+
+      // 调 ERP stats 接口获取今日统计
+      const resp = await fetch(`${url}/admin/api/auto-collect/stats`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      // 用今日统计初始化内存计数器
+      const today = data.today || {};
+      _autoCollectStats.today.success = today.success || 0;
+      _autoCollectStats.today.skipped = today.skipped || 0;
+      _autoCollectStats.today.failed = today.failed || 0;
+      _autoCollectStats.today.antibot = today.antibot || 0;
+      _autoCollectStats.today.total = today.total || 0;
+
+      if (today.byType) {
+        for (const key of Object.keys(_autoCollectStats.byType)) {
+          _autoCollectStats.byType[key] = today.byType[key] || 0;
+        }
+      }
+      if (today.bySource) {
+        for (const key of Object.keys(_autoCollectStats.bySource)) {
+          _autoCollectStats.bySource[key] = today.bySource[key] || 0;
+        }
+      }
+      if (today.byStoreClass) {
+        for (const key of Object.keys(_autoCollectStats.byStoreClass)) {
+          _autoCollectStats.byStoreClass[key] = today.byStoreClass[key] || 0;
+        }
+      }
+
+      console.log('[autoCollect] 内存计数器已从 MongoDB 初始化:', _autoCollectStats.today);
+    } catch (e) {
+      console.warn('[autoCollect] 初始化内存计数器失败:', e?.message || e);
+    }
+  };
+
+  // ── Task 6:autoCollect 核心编排函数(8 类编排 + Gate 0.5 中国店铺检查) ──────
+  // 流程:Gate 0(基础检查) → Gate 0.5(中国店铺) → Step 1(并行查 8 类缓存)
+  //   → Step 2(计算 pending) → Step 3(autoCollectGate 逐 SKU 间隔)
+  //   → Step 4(买家页采集 composer+entrypoint+followSell)
+  //   → Step 5(seller portal search+bundle) → Step 6(seller portal marketStats)
+  //   → Step 7(写日志 + 更新计数器)
+  // ANTIBOT 分支:Step 4/5/6 任一步检测到反爬 → _handleAntibot(暂停 10 分钟 + 通知 + 写日志)。
+  // 失败不熔断:marketStats/followSell 失败返回 partial,不影响其他类目。
+  const _doAutoCollect = async (sku, source, sellerSlug, depth, forceRefresh) => {
+    const startTime = Date.now();
+    const results = [
+      { type: 'card', hit: false },
+      { type: 'detail', hit: false },
+      { type: 'composer', hit: false },
+      { type: 'entrypoint', hit: false },
+      { type: 'search', hit: false },
+      { type: 'bundle', hit: false },
+      { type: 'marketStats', hit: false },
+      { type: 'followSell', hit: false },
+    ];
+    let storeClassified = 'unclassified'; // 默认未分类
+
+    try {
+      // === Gate 0: 基础检查 ===
+      const config = await _loadAutoCollectConfig();
+
+      // 跨日重置 todayCount
+      const today = new Date().toDateString();
+      if (config.todayDate !== today) {
+        config.todayDate = today;
+        config.todayCount = 0;
+        await _saveAutoCollectConfig({ todayDate: today, todayCount: 0 });
+      }
+
+      // 检查 autoCollectRunning
+      if (!config.autoCollectRunning) {
+        return { status: 'skipped', reason: 'not-running' };
+      }
+      // 检查 paused / 冷却期
+      if (config.paused && Date.now() < config.pausedUntil) {
+        return { status: 'skipped', reason: 'paused', pausedUntil: config.pausedUntil };
+      }
+      // 检查每日上限
+      if (config.todayCount >= config.perDayLimit) {
+        return { status: 'skipped', reason: 'daily-limit' };
+      }
+
+      // === Gate 0.5: 中国店铺检查 ===
+      const cls = await checkStoreClassification(sellerSlug, null, null);
+      if (cls) {
+        storeClassified = cls.isChinese === true ? 'chinese' : cls.isChinese === false ? 'non-chinese' : 'unclassified';
+      }
+      if (config.onlyChineseStores && cls?.isChinese !== true) {
+        const reason = cls?.isChinese === false ? 'non-chinese-store' : 'unclassified-store';
+        // Gate 0.5 跳过分支也调 _writeAutoCollectLog
+        _writeAutoCollectLog({
+          sku,
+          source,
+          sellerSlug,
+          storeClassified,
+          depth,
+          status: 'skipped',
+          results,
+          totalDuration: Date.now() - startTime,
+        });
+        return { status: 'skipped', reason };
+      }
+
+      // === Step 1: 并行查 8 类缓存 ===
+      // search/bundle 通过 Step 5 内部查缓存,这里用 null 占位
+      const [card, detail, composer, entrypoint, , , marketStats, followSell] = await Promise.all([
+        _cardCacheGet(sku),
+        _detailCacheGet(sku),
+        _composerCacheGet(sku),
+        _entrypointCacheGet(sku),
+        Promise.resolve(null), // 占位,Step 5 处理
+        Promise.resolve(null), // 占位,Step 5 处理
+        _marketStatsCacheGet(sku),
+        _followSellCacheGet(sku),
+      ]);
+
+      // 标记命中(forceRefresh 时所有缓存不计为命中)
+      results[0].hit = !!card && !forceRefresh;
+      results[1].hit = !!detail && !forceRefresh;
+      results[2].hit = !!composer && !forceRefresh;
+      results[3].hit = !!entrypoint && !forceRefresh;
+      // search/bundle 在 Step 5 处理
+      results[6].hit = !!marketStats && !marketStats.stale && !forceRefresh;
+      results[7].hit = !!followSell && !followSell.stale && !forceRefresh;
+
+      // === Step 2: 计算 pending ===
+      const pending = {
+        composer: !results[2].hit,
+        entrypoint: !results[3].hit,
+        search: !forceRefresh, // 简化:Step 5 内部检查缓存
+        bundle: !forceRefresh, // 简化:Step 5 内部检查缓存
+        marketStats: !results[6].hit,
+        followSell: !results[7].hit,
+      };
+      const hasPending = Object.values(pending).some(Boolean);
+      if (!hasPending) {
+        _writeAutoCollectLog({
+          sku,
+          source,
+          sellerSlug,
+          storeClassified,
+          depth,
+          status: 'skipped',
+          reason: 'all-cached',
+          results,
+          totalDuration: Date.now() - startTime,
+        });
+        return { status: 'skipped', reason: 'all-cached', results, totalDuration: Date.now() - startTime };
+      }
+
+      // === Step 3: autoCollectGate(逐 SKU 间隔) ===
+      await _autoCollectGate();
+
+      // === Step 4: 买家页采集(composer+entrypoint+followSell) ===
+      if (pending.composer || pending.entrypoint || pending.followSell) {
+        try {
+          await _buyerPageGate();
+          // fetchVariantMediaViaBuyerTab 接收 productUrl,从 card 缓存取 url 或构造 fallback
+          const productUrl = card?.url || `https://www.ozon.ru/product/-${sku}/`;
+          const mediaResult = await fetchVariantMediaViaBuyerTab(productUrl);
+          // fetchVariantMediaViaBuyerTab 内部已写 entrypoint/composer/followSell 缓存,
+          // 这里仅根据返回字段标记命中
+          if (mediaResult?.endpoint) results[3].hit = true;
+          if (mediaResult?.composerFields) results[2].hit = true;
+          if (mediaResult?.followSellData) results[7].hit = true;
+        } catch (e) {
+          if (e?.message === 'ANTIBOT_BLOCKED') {
+            return _handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
+          }
+          console.warn('[autoCollect] Step 4 failed:', e?.message || e);
+        }
+      }
+
+      // === Step 5: seller portal 采集(search+bundle) ===
+      if (pending.search || pending.bundle) {
+        try {
+          // 检查 search 缓存(L1 IndexedDB → L2 ERP MongoDB)
+          let searchCacheHit = null;
+          try {
+            const l1 = await _idbGet(_IDB_STORE_SEARCH, sku);
+            if (l1 && Array.isArray(l1.data?.items) && l1.data.items.length > 0) {
+              searchCacheHit = l1.data;
+              if (!l1.l2Synced) _syncL2FromL1(_IDB_STORE_SEARCH, 'search', sku, l1);
+            }
+          } catch (e) {
+            console.warn('[autoCollect] search L1 get failed:', e?.message || e);
+          }
+          if (!searchCacheHit) {
+            const l2 = await _erpCacheGet('search', sku);
+            if (l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0) {
+              searchCacheHit = l2.data;
+              _idbPut(_IDB_STORE_SEARCH, { sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true }).catch(() => {});
+            }
+          }
+
+          if (searchCacheHit) {
+            results[4].hit = true; // search
+            // search 缓存命中,检查 bundle 缓存
+            try {
+              const bundleL1 = await _idbGet(_IDB_STORE_BUNDLE, sku);
+              if (_bundleUsable(bundleL1)) {
+                results[5].hit = true; // bundle
+              }
+            } catch (e) {
+              console.warn('[autoCollect] bundle L1 get failed:', e?.message || e);
+            }
+          } else {
+            // 未缓存 → 真调 /search + bundle(fetchSellerPortal 内部已调 _sellerPortalGate)
+            const scCookies = await chrome.cookies.getAll({
+              url: 'https://seller.ozon.ru/',
+              name: 'sc_company_id',
+            });
+            const companyId = scCookies[0]?.value || '';
+            if (companyId) {
+              const resp = await fetchSellerPortal(
+                '/search',
+                {
+                  company_id: companyId,
+                  need_total: true,
+                  filter: {
+                    children_nodes: {
+                      children_nodes: [{ input_leaf: { sku: { values: [String(sku)] } } }],
+                      operator: 'AND',
+                    },
+                  },
+                  pagination: { limit: '50' },
+                  is_copy_allowed: false,
+                },
+                { urlPrefix: '/api/v1', pageType: 'products', timeoutMs: 30000, allowOzonTab: true }
+              );
+              const rawVariants = Array.isArray(resp?.variants)
+                ? resp.variants
+                : Array.isArray(resp?.items)
+                  ? resp.items
+                  : Array.isArray(resp?.products)
+                    ? resp.products
+                    : [];
+              const items = rawVariants.map(normalizeSearchVariantToSv).filter(Boolean);
+              if (items.length > 0) {
+                results[4].hit = true; // search
+                // 写 search 缓存(L1 + L2)
+                const cacheData = { items };
+                _idbPut(_IDB_STORE_SEARCH, {
+                  sku,
+                  data: cacheData,
+                  fetchedAt: Date.now(),
+                  l2Synced: false,
+                }).catch(() => {});
+                _erpCacheSetAndSyncFlag(_IDB_STORE_SEARCH, 'search', sku, { data: cacheData });
+
+                // 调 bundle(fetchBundleByVariantId 内部有 L1+L2+L3 三层缓存)
+                const variantId = items[0].variant_id;
+                if (variantId) {
+                  const bundleItem = await fetchBundleByVariantId(sku, variantId, companyId, {
+                    forceRefresh: false,
+                  });
+                  if (bundleItem) results[5].hit = true; // bundle
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // ANTIBOT 检测:error message 含 HTML 挑战 / 403 / 限流关键词 → 跳 ANTIBOT 分支
+          const msg = String(e?.message || e || '').toLowerCase();
+          const looksAntibot =
+            /<html|<!doctype|just a moment|attention required|enable javascript|are you a robot|captcha|challenge|too many requests|antibot|http_403|http_429/.test(
+              msg
+            );
+          if (looksAntibot || e?.__antibot) {
+            return _handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
+          }
+          console.warn('[autoCollect] Step 5 failed:', e?.message || e);
+        }
+      }
+
+      // === Step 6: seller portal 采集 marketStats ===
+      if (pending.marketStats) {
+        try {
+          // _fetchMarketStatsDirect 内部已调 _sellerPortalGate
+          const marketData = await _fetchMarketStatsDirect(sku);
+          // null 检查顺序:先 !marketData(NO_DATA),再 __needSellerLogin(AUTH_REQUIRED),再 __antibot(跳 ANTIBOT)
+          if (!marketData) {
+            results[6].error = 'NO_DATA';
+          } else if (marketData.__needSellerLogin) {
+            results[6].error = 'AUTH_REQUIRED';
+          } else if (marketData.__antibot) {
+            return _handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
+          } else {
+            // 正常写缓存
+            _marketStatsCacheSet(sku, marketData);
+            results[6].hit = true;
+          }
+        } catch (e) {
+          console.warn('[autoCollect] Step 6 failed:', e?.message || e);
+          results[6].error = e?.message || 'UNKNOWN';
+          // 失败不熔断
+        }
+      }
+
+      // === Step 7: 写日志 + 更新计数器 ===
+      const totalDuration = Date.now() - startTime;
+      const hasError = results.some((r) => r.error);
+      const status = hasError ? 'partial' : 'success';
+
+      // 更新内存计数器
+      _incrementAutoCollectStats(sku, status, source, storeClassified, results, startTime);
+
+      // todayCount++
+      await _saveAutoCollectConfig({ todayCount: config.todayCount + 1 });
+
+      // 写日志(fire-and-forget,不阻塞返回)
+      _writeAutoCollectLog({
+        sku,
+        source,
+        sellerSlug,
+        storeClassified,
+        depth,
+        status,
+        results,
+        totalDuration,
+      });
+
+      return { status, results, totalDuration };
+    } catch (e) {
+      console.error('[autoCollect] 异常:', e);
+      const totalDuration = Date.now() - startTime;
+      _writeAutoCollectLog({
+        sku,
+        source,
+        sellerSlug,
+        storeClassified,
+        depth,
+        status: 'failed',
+        results,
+        totalDuration,
+        error: e?.message,
+      });
+      return { status: 'failed', error: e?.message, totalDuration };
     }
   };
 
@@ -3138,6 +4366,8 @@ try {
     setTimeout(() => refreshExchangeRate(), 2_000);
     setTimeout(() => handleBrowserAgentAlarm(), 3_000);
     setTimeout(() => reloadSellerTabs(), 4_000);
+    // Task 22:从 MongoDB 拉今日聚合回填内存计数器(fire-and-forget,不阻塞启动)
+    setTimeout(() => _initAutoCollectStatsFromDb(), 5_000);
   });
 
   chrome.runtime.onStartup.addListener(() => {
@@ -3152,6 +4382,8 @@ try {
     setTimeout(() => refreshExchangeRate(), 1_000);
     setTimeout(() => handleBrowserAgentAlarm(), 2_000);
     setTimeout(() => reloadSellerTabs(), 3_000);
+    // Task 22:从 MongoDB 拉今日聚合回填内存计数器(fire-and-forget,不阻塞启动)
+    setTimeout(() => _initAutoCollectStatsFromDb(), 4_000);
   });
 
   // SW 冷启动(install/startup 之外的 import 时)也要 init,
@@ -3310,9 +4542,7 @@ try {
           const detailSku = parse(find('webDetailSKU'));
           const brand = parse(find('webBrand'));
           // sku 优先 gallery.sku,fallback detailSku
-          const sku = String(
-            gallery?.sku || detailSku?.sku || detailSku?.itemId || urlSku || ''
-          );
+          const sku = String(gallery?.sku || detailSku?.sku || detailSku?.itemId || urlSku || '');
           // images: gallery 通常 {images:[{url,...}, ...], coverImage:{url,...}}
           const images = Array.isArray(gallery?.images)
             ? gallery.images.map((it) => (typeof it === 'string' ? it : it?.url || it?.link || it?.src)).filter(Boolean)
@@ -3727,36 +4957,36 @@ try {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'pdpCacheGet': {
-          // content script 的 extractProductData() 失败时,查 pdp 缓存兜底。
-          // 入参: { sku }  返回: { ok, data: staticFields | null }
+        case 'cardCacheGet': {
+          // 查 card 缓存(L1→L2),用于全览展示 / OPI 预览 fallback。
+          // 入参: { sku }  返回: { ok, data: cardFields | null }
           try {
             const sku = String(message.sku || '');
             if (!sku) return { ok: true, data: null };
-            const data = await _pdpCacheGet(sku);
+            const data = await _cardCacheGet(sku);
             return { ok: true, data };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'pdpCacheSet': {
-          // content script 的 extractProductData() 成功后,异步写 pdp 缓存(仅静态字段)。
-          // 入参: { sku, data: staticFields }  返回: { ok: true }(异步写,不等 L2)
+        case 'cardCacheSet': {
+          // content script 的 extractCardInfo() 成功后,异步写 card 缓存(商品卡 5 字段)。
+          // 入参: { sku, data: cardFields }  返回: { ok: true }(异步写,不等 L2)
           try {
             const sku = String(message.sku || '');
             const data = message.data;
             if (!sku || !data) return { ok: true };
-            _pdpCacheSet(sku, data);
+            _cardCacheSet(sku, data);
             return { ok: true };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'pdpCacheDelete': {
-          // forceRefresh 时清 pdp 缓存(目前 content script 不主动调,预留接口)。
+        case 'cardCacheDelete': {
+          // forceRefresh 时清 card 缓存。
           try {
             const sku = String(message.sku || '');
-            if (sku) _pdpCacheDelete(sku);
+            if (sku) _cardCacheDelete(sku);
             return { ok: true };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
@@ -3817,36 +5047,137 @@ try {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'dynamicCacheGet': {
-          // 查 dynamic 缓存(L1→L2,1h TTL),DOM 解析失败时兜底。
+        case 'detailCacheGet': {
+          // 查 detail 缓存(L1→L2),详情页 DOM 解析失败时兜底。
           try {
             const sku = String(message.sku || '');
             if (!sku) return { ok: true, data: null };
-            const data = await _dynamicCacheGet(sku);
+            const data = await _detailCacheGet(sku);
             return { ok: true, data };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'dynamicCacheSet': {
-          // content script 的 extractProductData() 成功后,异步写 dynamic 缓存(仅动态字段)。
-          // 入参: { sku, data: dynamicFields }  返回: { ok: true }(异步写,不等 L2)
+        case 'detailCacheSet': {
+          // content script 的 extractProductData() 成功后,异步写 detail 缓存(详情页全字段)。
+          // 入参: { sku, data: detailFields }  返回: { ok: true }(异步写,不等 L2)
           try {
             const sku = String(message.sku || '');
             const data = message.data;
             if (!sku || !data) return { ok: true };
-            _dynamicCacheSet(sku, data);
+            _detailCacheSet(sku, data);
             return { ok: true };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'dynamicCacheDelete': {
-          // forceRefresh 时清 dynamic 缓存。
+        case 'detailCacheDelete': {
+          // forceRefresh 时清 detail 缓存。
           try {
             const sku = String(message.sku || '');
-            if (sku) _dynamicCacheDelete(sku);
+            if (sku) _detailCacheDelete(sku);
             return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'marketStatsCacheGet': {
+          // 查 marketStats 缓存(L1→L2),返回 { data, fetchedAt, stale } | null。
+          // 入参: { sku }  返回: { ok, data: { data, fetchedAt, stale } | null }
+          try {
+            const sku = String(message.sku || '');
+            if (!sku) return { ok: true, data: null };
+            const data = await _marketStatsCacheGet(sku);
+            return { ok: true, data };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'marketStatsCacheSet': {
+          // getMarketStats 真调成功后,异步写 marketStats 缓存。
+          // 入参: { sku, data }  返回: { ok: true }(异步写,不等 L2)
+          try {
+            const sku = String(message.sku || '');
+            const data = message.data;
+            if (!sku || !data) return { ok: true };
+            _marketStatsCacheSet(sku, data);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'marketStatsCacheDelete': {
+          // forceRefresh 时清 marketStats 缓存。
+          try {
+            const sku = String(message.sku || '');
+            if (sku) _marketStatsCacheDelete(sku);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'followSellCacheGet': {
+          // 查 followSell 缓存(L1→L2),返回 { data, fetchedAt, stale } | null。
+          // 入参: { sku }  返回: { ok, data: { data, fetchedAt, stale } | null }
+          try {
+            const sku = String(message.sku || '');
+            if (!sku) return { ok: true, data: null };
+            const data = await _followSellCacheGet(sku);
+            return { ok: true, data };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'followSellCacheSet': {
+          // followSell 预取成功后,异步写 followSell 缓存。
+          // 入参: { sku, data }  返回: { ok: true }(异步写,不等 L2)
+          try {
+            const sku = String(message.sku || '');
+            const data = message.data;
+            if (!sku || !data) return { ok: true };
+            _followSellCacheSet(sku, data);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'followSellCacheDelete': {
+          // forceRefresh 时清 followSell 缓存。
+          try {
+            const sku = String(message.sku || '');
+            if (sku) _followSellCacheDelete(sku);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'checkStoreClassification': {
+          // 三层查询店铺中国身份(L1 chrome.storage → L2 MongoDB → 规则引擎)。
+          // 入参: { slug, name, companyInfo? }
+          // 返回: { ok, data: { isChinese, classifiedBy } | null }
+          try {
+            const slug = String(message.slug || '');
+            const name = message.name || '';
+            const companyInfo = message.companyInfo || null;
+            if (!slug) return { ok: true, data: null };
+            const data = await checkStoreClassification(slug, name, companyInfo);
+            return { ok: true, data };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'classifyStore': {
+          // 人工确认店铺分类:写 L1 + L2(classifiedBy:'manual')。
+          // 入参: { slug, name, isChinese }  返回: { ok: true }
+          try {
+            const slug = String(message.slug || '');
+            const name = message.name || '';
+            const isChinese = message.isChinese;
+            if (!slug || isChinese === undefined || isChinese === null) {
+              return { ok: false, error: 'missing slug or isChinese' };
+            }
+            const data = await manualClassifyStore(slug, name, isChinese);
+            return { ok: true, data };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
@@ -4089,140 +5420,120 @@ try {
           // 批量失败时合批器内部自动退回逐 SKU GET。
           return queueProductStats(String(sku), { backendUrl, token, storeId });
         }
+        case 'autoCollect': {
+          // Task 6:autoCollect 核心编排(8 类采集 + Gate 0.5 中国店铺检查)。
+          // 由 content script(shop-page / pdp)发现新 SKU 时触发,SW 内部编排全流程。
+          const { sku: acSku, source: acSource, sellerSlug: acSlug, depth: acDepth, forceRefresh: acForce } = message;
+          return await _doAutoCollect(acSku, acSource, acSlug, acDepth, acForce);
+        }
+        case 'autoCollectGetConfig': {
+          // Task 22:面板读取 autoCollect 配置(白名单字段)。
+          const _acCfg = await _loadAutoCollectConfig();
+          return {
+            enabled: _acCfg.enabled,
+            autoCollectRunning: _acCfg.autoCollectRunning,
+            depth: _acCfg.depth,
+            paused: _acCfg.paused,
+            pausedUntil: _acCfg.pausedUntil,
+            todayCount: _acCfg.todayCount,
+            perDayLimit: _acCfg.perDayLimit,
+            todayDate: _acCfg.todayDate,
+            marketStatsStaleMs: _acCfg.marketStatsStaleMs,
+            followSellStaleMs: _acCfg.followSellStaleMs,
+            onlyChineseStores: _acCfg.onlyChineseStores,
+            knownChineseSlugs: _acCfg.knownChineseSlugs,
+            knownNonChineseSlugs: _acCfg.knownNonChineseSlugs,
+          };
+        }
+        case 'autoCollectSetConfig': {
+          // Task 22:面板写入 autoCollect 配置(仅白名单字段,内部状态如
+          // todayCount/todayDate/pausedUntil 不允许面板直改)。
+          const _acUpdates = message.config || message;
+          const _acAllowed = [
+            'enabled',
+            'autoCollectRunning',
+            'paused',
+            'depth',
+            'marketStatsStaleMs',
+            'followSellStaleMs',
+            'onlyChineseStores',
+            'knownChineseSlugs',
+            'knownNonChineseSlugs',
+          ];
+          const _acFiltered = {};
+          for (const _k of _acAllowed) {
+            if (_acUpdates[_k] !== undefined) _acFiltered[_k] = _acUpdates[_k];
+          }
+          await _saveAutoCollectConfig(_acFiltered);
+          // 推送 configChanged 通知面板/popup(fire-and-forget,无监听者不报错)
+          chrome.runtime.sendMessage({ type: 'configChanged', config: _acFiltered }).catch(() => {});
+          return { ok: true };
+        }
+        case 'autoCollectGetStats': {
+          // Task 22:面板读取今日内存计数器(SW 休眠后清零,仅用于实时展示)。
+          return {
+            today: { ..._autoCollectStats.today },
+            byType: { ..._autoCollectStats.byType },
+            bySource: { ..._autoCollectStats.bySource },
+            byStoreClass: { ..._autoCollectStats.byStoreClass },
+            successRate:
+              _autoCollectStats.today.total > 0 ? _autoCollectStats.today.success / _autoCollectStats.today.total : 0,
+          };
+        }
+        case 'autoCollectGetRecent': {
+          // Task 22:面板读取最近 N 条采集记录(环形缓冲,默认 5 条,倒序)。
+          const _acLimit = message.limit || 5;
+          return _autoCollectRecent.slice(-_acLimit).reverse();
+        }
+        case 'autoCollectForceRefreshPage': {
+          // Task 22:面板强制刷新当前页 → 向当前 tab 发 __jzAutoCollectResetSeen
+          // 清空 shared-utils 维护的去重集合,让页面已见 SKU 重新触发采集。
+          const _acTabId = sender.tab?.id;
+          if (_acTabId) {
+            chrome.tabs.sendMessage(_acTabId, { type: '__jzAutoCollectResetSeen' }).catch(() => {});
+          }
+          return { ok: true };
+        }
         case 'getMarketStats': {
-          // Call seller.ozon.ru internal API for market data (data/v3)
-          // Must execute in seller.ozon.ru tab context (cookies + company ID)
+          // 缓存感知改造:真调前先查 marketStats 缓存(L1→L2),命中且未 stale 直接返回。
+          // 未命中 / stale → 调 _fetchMarketStatsDirect(seller tab 注入 data/v3 + 归一化)。
+          // __needSellerLogin → proxyMarketData 代采降级(保留原有降级,noProxy 防递归)。
+          // __antibot → 返回反爬信号。成功 → 写缓存后返回。null → NO_DATA。
           const mSku = message.sku;
           if (!mSku) return { ok: true, data: null };
-          // what_to_sell period:'monthly'(月,默认)/ 'weekly'(周)。2026-06 月接口已恢复,
-          // 默认回月;尊重调用方传入的 period(数据卡周期开关),非法值兜底 monthly。
           const mPeriod = message.period === 'weekly' ? 'weekly' : 'monthly';
-          // 本机没登卖家端 → 透明回退:把取数派给同租户/池子里已登录 seller 的设备代采
-          // (后端服务器 IP 直连 data/v3 会撞反爬 307 loop,只能借用户浏览器)。
-          // noProxy 防递归 —— 代采执行方本身已登录,直接跑下面的本地路径。
-          if (!message.noProxy) {
-            const _scLocal = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
-            if (!_scLocal[0]?.value) {
-              const proxied = await proxyMarketData(backendUrl, token, storeId, mSku, mPeriod);
-              if (proxied) return proxied; // 代采成功({ ok, data });失败则落到下面走「需登录」
-            }
-          }
           try {
-            let sellerTabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
-            // 没开任何 seller tab。选品库稀疏,多数商品市场数据仍依赖 seller tab 的 what_to_sell;
-            // #82 后变体查询走 www 不再顺带开 seller tab → 这里在「已登录 seller」时自己开一个
-            // (ensureSellerTab 内含 single-flight,列表页多卡并发只开一个)。未登录则不开无用
-            // signin tab,直接走下面的「需登录」提示。
-            if (!sellerTabs.length) {
-              const _sc = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
-              if (_sc[0]?.value) {
-                try {
-                  await ensureSellerTab();
-                } catch (e) {
-                  console.log('[getMarketStats] ensureSellerTab 失败:', e?.message || e);
-                }
-                sellerTabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
-              }
+            // ── L1→L2 缓存优先 ──
+            const cached = await _marketStatsCacheGet(mSku);
+            if (cached && !cached.stale && cached.data) {
+              return { ok: true, data: cached.data };
             }
-            // 仍没有(未登录 / 开 tab 失败)→ 会话信号(不是"该 SKU 无数据")。卡片据此显示
-            // 「需登录卖家中心」提示,而非静默"-"。__needSellerLogin 放 data 里 ——
-            // sendMessage wrapper 只透传 response.data,放顶层会被吞(envelope 坑)。
-            if (!sellerTabs.length) {
-              return { ok: true, data: { __needSellerLogin: true, __reason: 'NO_SELLER_TAB' } };
-            }
-
-            // 2026-05-30 修:不靠 URL 猜哪个 tab 登录了 —— 用户常同时开多个 seller tab,
-            // 其中可能混着 /app/registration/signin(未登录/会话过期被重定向)。旧逻辑
-            // `find(url.includes('/app/'))` 会选中 signin 页(它也含 /app/),注入后拿不到
-            // sc_company_id → 永远返 null → market 字段全空。
-            //
-            // 新逻辑:遍历所有 seller tab 逐个注入,注入函数自己判 cookie + fetch,
-            // 第一个真拿到 sc_company_id 且 data/v3 成功的就用。URL 会骗人(过期态也可能
-            // 停在 /app/products),cookie + fetch 成功才是硬证据。
-            //
-            // 注入函数返回三态:
-            //   { ok: true,  data }  — 成功(可能 data=null,即该 SKU 无市场数据但登录正常)
-            //   { ok: false, reason: 'no_company_id' } — 这个 tab 没登录,试下一个
-            //   { ok: false, reason: 'http_<status>' } — fetch 被拒(限流/权限),试下一个
-            // 排序:把含 signin/registration/auth/login 的 tab 排到最后,优先试业务页,
-            // 减少无谓注入(纯优化,不影响正确性 —— 反正都会遍历到能用的那个)。
-            const isAuthUrl = (u) => /\/(registration|signin|auth|login)/i.test(u || '');
-            const orderedTabs = [...sellerTabs].sort((a, b) => (isAuthUrl(a.url) ? 1 : 0) - (isAuthUrl(b.url) ? 1 : 0));
-
-            const injectFetch = async (sku, period) => {
-              try {
-                const cookies = document.cookie.split(';').map((c) => c.trim());
-                const scCookie = cookies.find((c) => c.startsWith('sc_company_id='));
-                const companyId = scCookie ? scCookie.split('=')[1] : '';
-                if (!companyId) return { ok: false, reason: 'no_company_id' };
-                const resp = await fetch('/api/site/seller-analytics/what_to_sell/data/v3', {
-                  method: 'POST',
-                  credentials: 'include',
-                  headers: {
-                    accept: 'application/json',
-                    'content-type': 'application/json',
-                    'x-o3-app-name': 'seller-ui',
-                    'x-o3-company-id': companyId,
-                    'x-o3-language': 'zh-Hans',
-                  },
-                  body: JSON.stringify({
-                    filter: { stock: 'any_stock', period: period || 'monthly', sku: String(sku) },
-                    sort: { key: 'sum_gmv_desc' },
-                    limit: '1',
-                    offset: '0',
-                  }),
-                });
-                if (!resp.ok) return { ok: false, reason: `http_${resp.status}` };
-                const result = await resp.json();
-                // items 是历史 key;data/v3 偶以 data 返回(后端 ozon-market-data 同样 items??data 兜底)。
-                // 字段大小写归一在 SW 侧做(此函数注入页面上下文,够不到 SW 的 normalizeMarketItem)。
-                return { ok: true, data: result?.items?.[0] || result?.data?.[0] || null };
-              } catch (e) {
-                return { ok: false, reason: `exc_${(e && e.message) || 'unknown'}` };
+            // ── 缓存未命中 / stale → 直调 ──
+            const result = await _fetchMarketStatsDirect(mSku, mPeriod);
+            if (result?.__needSellerLogin) {
+              // 代采降级:noProxy 防递归(代采执行方本身已登录,直接返需登录)
+              if (!message.noProxy) {
+                const proxied = await proxyMarketData(backendUrl, token, storeId, mSku, mPeriod);
+                if (proxied) return proxied; // 代采成功({ ok, data })
               }
-            };
-
-            const reasons = [];
-            for (const tab of orderedTabs) {
-              if (!tab.id) continue;
-              let injected;
-              try {
-                // 销量列会并发多个 getMarketStats,这条注入 fetch 直打 what_to_sell/data/v3,
-                // 不经 fetchSellerPortal → 必须显式过全局节奏闸门,否则绕过 P2-1 的限流摊平。
-                await _sellerPortalGate();
-                injected = await chrome.scripting.executeScript({
-                  target: { tabId: tab.id },
-                  func: injectFetch,
-                  args: [mSku, mPeriod],
-                });
-              } catch (e) {
-                // 个别 tab 注入失败(页面 crash / 权限)不致命,继续试下一个
-                reasons.push(`tab${tab.id}:inject_err`);
-                continue;
-              }
-              const r = injected?.[0]?.result;
-              if (r?.ok) {
-                // 找到能用的 tab —— 成功(data 可能 null,表示该 SKU 无市场数据但登录正常)。
-                // normalizeMarketItem:把 data/v3 item 归一成下游固定读的 camelCase,
-                // 防 Ozon 改大小写导致月销量等市场字段全空却无报错(见 normalizeMarketItem 注释)。
-                return { ok: true, data: r.data ? normalizeMarketItem(r.data) : null };
-              }
-              reasons.push(`tab${tab.id}:${r?.reason || 'no_result'}`);
+              return { ok: true, data: { __needSellerLogin: true, __reason: result.__reason || 'AUTH_REQUIRED' } };
             }
-
-            // 所有 seller tab 都拿不到。区分两种:
-            //   - 全部 no_company_id → 会话过期/未登录 → __needSellerLogin 让卡片提示去登录
-            //   - 其余(http_401/AUTH_REDIRECT 也算会话;http_403/限流/网络等 → 仍静默 null)
-            // 401/signin 重定向都归为"需登录";其它(权限/限流/网络抖动)不强提示,
-            // 避免把临时性 fetch 失败误报成"需登录"骚扰用户。
-            console.log('[getMarketStats] no usable seller tab:', reasons.join(', '));
-            const sessionLike = reasons.every((r) => /no_company_id|http_401|signin|login|redirect/i.test(r));
-            if (sessionLike) {
-              return { ok: true, data: { __needSellerLogin: true, __reason: 'AUTH_REQUIRED' } };
+            if (result?.__antibot) {
+              // 反爬:有 stale 缓存时返回 stale 数据兜底,否则返 antibot 信号
+              if (cached && cached.data) {
+                return { ok: true, data: cached.data };
+              }
+              return { ok: true, data: { __antibot: true } };
             }
+            if (result) {
+              // 成功:写缓存(L1+L2)后返回
+              _marketStatsCacheSet(mSku, result);
+              return { ok: true, data: result };
+            }
+            // null:NO_DATA(data/v3 无 items,登录正常)
             return { ok: true, data: null };
           } catch (e) {
-            console.log('[getMarketStats] failed:', e.message);
+            console.log('[getMarketStats] failed:', e?.message || e);
             return { ok: true, data: null };
           }
         }
@@ -4748,15 +6059,14 @@ try {
                 console.log(`[searchVariants] search L2 hit sku=${sku}`);
                 searchCacheHit = l2.data;
                 // 回填 L1(l2Synced=true)
-                _idbPut(_IDB_STORE_SEARCH, { sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true }).catch(() => {});
+                _idbPut(_IDB_STORE_SEARCH, { sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true }).catch(
+                  () => {}
+                );
               }
             }
           } else {
             // forceRefresh → 清 L1 + L2
-            await Promise.all([
-              _idbDelete(_IDB_STORE_SEARCH, sku).catch(() => {}),
-              _erpCacheDelete('search', sku),
-            ]);
+            await Promise.all([_idbDelete(_IDB_STORE_SEARCH, sku).catch(() => {}), _erpCacheDelete('search', sku)]);
           }
 
           for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -4811,7 +6121,9 @@ try {
                 // 异步写回 L1(l2Synced=false) + L2(带重试,成功后回更新 L1 l2Synced=true)
                 if (attempt === 1) {
                   const cacheData = { items };
-                  _idbPut(_IDB_STORE_SEARCH, { sku, data: cacheData, fetchedAt: Date.now(), l2Synced: false }).catch(() => {});
+                  _idbPut(_IDB_STORE_SEARCH, { sku, data: cacheData, fetchedAt: Date.now(), l2Synced: false }).catch(
+                    () => {}
+                  );
                   _erpCacheSetAndSyncFlag(_IDB_STORE_SEARCH, 'search', sku, { data: cacheData });
                 }
               }
@@ -5491,6 +6803,8 @@ try {
       'importBySku',
       'fetchProductPageState',
       'searchVariants',
+      // autoCollect:8 类编排(买家页 + seller portal 多步),可达 30s+,保活防 SW unload。
+      'autoCollect',
       // 视频转存:download(跨源 .mp4) + media-storage 上传跑在 seller/buyer tab,executeScript
       // 可达 90s+,必须保活防 SW unload 中断 sendResponse。
       'uploadFollowSellVideo',

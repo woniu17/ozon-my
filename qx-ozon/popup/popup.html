@@ -463,7 +463,7 @@
                     <polyline points="1 20 1 14 7 14" />
                     <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg
                 ></span>
-                <span id="cache-sync-label">同步缓存</span>
+                <span id="cache-sync-label">同步缓存(8 类)</span>
               </button>
               <!-- 批量采集器入口:暂隐藏(2026-05-30)。功能状态默认关闭(ozon_collector_enabled
                    未设置时即 false),此处仅隐藏 popup 入口,不下线功能 —— storage 里已显式开启的
@@ -489,6 +489,28 @@
                 <span>MY 采集器</span>
                 <span class="nav-cell-badge premium-badge is-on" id="nav-badge-collector">开</span>
               </button>
+            </div>
+          </div>
+
+          <!-- 自动采集卡片(popup 简化视图:仅总开关 + 今日计数 + 熔断简略提示。
+               深度/限速/自动翻页/筛选/只采集中国店铺等详细配置在 QX 面板,不在此暴露) -->
+          <div class="card auto-collect-card">
+            <div class="card-header">
+              <span class="card-title">自动采集</span>
+              <span class="status-dot" id="ac-status-dot"></span>
+            </div>
+            <div class="card-body">
+              <label class="switch-label">
+                <input type="checkbox" id="ac-toggle" />
+                <span>总开关</span>
+              </label>
+              <div class="ac-stats">
+                <span>今日已采: <strong id="ac-today-count">0</strong></span>
+              </div>
+              <div class="ac-paused" id="ac-paused" style="display: none">
+                <span class="ac-warning">⚠ 熔断中</span>
+                <span id="ac-paused-countdown"></span>
+              </div>
             </div>
           </div>
 

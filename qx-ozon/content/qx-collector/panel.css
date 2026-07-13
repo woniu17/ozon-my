@@ -1,0 +1,677 @@
+/* QX采集器 — 浮动面板样式（命名空间 qx-c-*，避免与旧 jz-c-* 冲突） */
+
+.qx-c-panel,
+.qx-c-bubble {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 999999;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.88);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* ── 折叠态：圆形机器人气泡 ── */
+.qx-c-bubble {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgb(232, 77, 146);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(232, 77, 146, 0.35);
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease;
+}
+.qx-c-bubble:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 28px rgba(232, 77, 146, 0.45);
+}
+.qx-c-bubble svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* ── 展开态：面板卡片 ── */
+.qx-c-panel {
+  width: 320px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+.qx-c-panel.qx-c-dragging {
+  opacity: 0.9;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
+}
+
+/* ── 头部（可拖动） ── */
+.qx-c-header {
+  background: rgb(232, 77, 146);
+  color: #fff;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: move;
+}
+.qx-c-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.qx-c-header-left svg {
+  width: 18px;
+  height: 18px;
+}
+.qx-c-header-actions {
+  display: flex;
+  gap: 6px;
+}
+.qx-c-icon-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.15);
+  border: none;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+  transition: background 150ms ease;
+}
+.qx-c-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+.qx-c-icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ── 面板主体 ── */
+.qx-c-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+
+/* ── 区块 ── */
+.qx-c-section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.qx-c-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0 2px;
+}
+
+/* ── 行容器 ── */
+.qx-c-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+/* ── 开关 (switch) ── */
+.qx-c-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.75);
+}
+.qx-c-switch input {
+  display: none;
+}
+.qx-c-switch-track {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  background: #d1d5db;
+  border-radius: 99px;
+  transition: background 150ms ease;
+}
+.qx-c-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 150ms ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+.qx-c-switch input:checked + .qx-c-switch-track {
+  background: rgb(232, 77, 146);
+}
+.qx-c-switch input:checked + .qx-c-switch-track .qx-c-switch-knob {
+  left: 14px;
+}
+.qx-c-switch-label {
+  font-weight: 500;
+}
+
+/* ── 复选框 ── */
+.qx-c-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.75);
+}
+.qx-c-checkbox input {
+  margin: 0;
+  cursor: pointer;
+  accent-color: rgb(232, 77, 146);
+}
+
+/* ── 智能筛选入口 ── */
+.qx-c-filter-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+.qx-c-filter-entry strong {
+  display: block;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.82);
+}
+.qx-c-filter-entry .qx-c-filter-summary {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: rgba(0, 0, 0, 0.45);
+}
+.qx-c-filter-entry .qx-c-filter-summary.is-on {
+  color: rgb(232, 77, 146);
+  font-weight: 600;
+}
+
+/* ── 统计进度行 ── */
+.qx-c-progress {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 6px;
+  padding: 10px;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px solid #f0f0f0;
+}
+.qx-c-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.qx-c-stat-num {
+  font-size: 16px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.88);
+  font-feature-settings: 'tnum' 1;
+  line-height: 1.1;
+}
+.qx-c-stat-label {
+  font-size: 10px;
+  color: rgba(0, 0, 0, 0.45);
+}
+.qx-c-stat.is-failed .qx-c-stat-num {
+  color: #b91c1c;
+}
+.qx-c-stat.is-antibot .qx-c-stat-num {
+  color: #d97706;
+}
+
+/* ── 缓存命中网格 ── */
+.qx-c-cache-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 8px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px solid #f0f0f0;
+}
+.qx-c-cache-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.qx-c-cache-label {
+  color: rgba(0, 0, 0, 0.55);
+}
+.qx-c-cache-num {
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.88);
+  font-feature-settings: 'tnum' 1;
+}
+/* stale 标橙 (marketStats / followSell) */
+.qx-c-cache-item.qx-c-stale {
+  background: rgba(245, 158, 11, 0.12);
+}
+.qx-c-cache-item.qx-c-stale .qx-c-cache-label {
+  color: #d97706;
+}
+.qx-c-cache-item.qx-c-stale .qx-c-cache-num {
+  color: #d97706;
+}
+
+/* ── 最近采集 ── */
+.qx-c-recent {
+  font-size: 11px;
+}
+.qx-c-recent-head {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 0.8fr;
+  gap: 4px;
+  padding: 4px 6px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.45);
+  border-bottom: 1px solid #f0f0f0;
+}
+.qx-c-recent-row {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 0.8fr;
+  gap: 4px;
+  padding: 3px 6px;
+  color: rgba(0, 0, 0, 0.75);
+  border-bottom: 1px solid #f7f7f7;
+}
+.qx-c-recent-row:last-child {
+  border-bottom: none;
+}
+.qx-c-recent-sku {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-feature-settings: 'tnum' 1;
+}
+.qx-c-recent-status-success {
+  color: #15803d;
+  font-weight: 600;
+}
+.qx-c-recent-status-failed {
+  color: #b91c1c;
+  font-weight: 600;
+}
+.qx-c-recent-status-skipped {
+  color: #6b7280;
+}
+.qx-c-recent-status-antibot {
+  color: #d97706;
+  font-weight: 600;
+}
+.qx-c-recent-empty {
+  text-align: center;
+  color: rgba(0, 0, 0, 0.35);
+  padding: 8px;
+}
+
+/* ── 操作按钮 ── */
+.qx-c-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.qx-c-btn {
+  background: rgb(232, 77, 146);
+  color: #fff;
+  border: none;
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition:
+    background 150ms ease,
+    box-shadow 150ms ease;
+}
+.qx-c-btn:hover {
+  background: #d6218a;
+  box-shadow: 0 2px 6px rgba(232, 77, 146, 0.25);
+}
+.qx-c-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.qx-c-btn-ghost {
+  background: #fff;
+  color: rgba(0, 0, 0, 0.65);
+  border: 1px solid #e5e7eb;
+}
+.qx-c-btn-ghost:hover {
+  background: #f9fafb;
+  color: rgba(0, 0, 0, 0.88);
+  border-color: #d1d5db;
+  box-shadow: none;
+}
+.qx-c-btn-danger-ghost {
+  background: #fff;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+.qx-c-btn-danger-ghost:hover {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  box-shadow: none;
+}
+
+/* ── 熔断倒计时 ── */
+.qx-c-circuit-breaker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  font-size: 11px;
+  color: #92400e;
+  font-weight: 600;
+}
+.qx-c-circuit-breaker-icon {
+  font-size: 14px;
+}
+
+/* ── toast ── */
+.qx-c-toast {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.45);
+  text-align: center;
+  padding-top: 4px;
+  min-height: 14px;
+}
+.qx-c-toast.is-error {
+  color: #b91c1c;
+}
+.qx-c-toast.is-success {
+  color: #15803d;
+}
+
+/* ── 隐藏 ── */
+.qx-c-hidden {
+  display: none !important;
+}
+
+/* ════════════════════════════════════════
+   智能筛选弹窗
+   ════════════════════════════════════════ */
+.qx-c-filter-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+.qx-c-filter-modal {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(860px, calc(100vh - 40px));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.22);
+  border: 1px solid #e5e7eb;
+}
+.qx-c-filter-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 28px 10px;
+  background: #fff;
+  border-bottom: none;
+}
+.qx-c-filter-head h3 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: #2f3542;
+}
+.qx-c-filter-close {
+  color: #374151;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  font-size: 18px;
+  min-width: 32px;
+}
+.qx-c-filter-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 6px 28px 12px;
+  border-bottom: 1px solid #edf0f3;
+  flex-wrap: wrap;
+}
+.qx-c-filter-template {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #475569;
+  flex-wrap: wrap;
+}
+.qx-c-filter-template select,
+.qx-c-filter-row select {
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+  font: inherit;
+}
+.qx-c-filter-template-select {
+  min-width: 170px;
+}
+.qx-c-filter-template-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.qx-c-filter-template-actions .qx-c-btn {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.qx-c-filter-table {
+  padding: 8px 34px 18px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.qx-c-filter-row {
+  display: grid;
+  grid-template-columns: 170px 1fr 34px 1fr;
+  align-items: center;
+  gap: 12px;
+  font-size: 15px;
+  color: #374151;
+}
+.qx-c-filter-row > span {
+  font-weight: 600;
+  color: #3f4652;
+  text-align: right;
+}
+.qx-c-filter-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #404854;
+}
+.qx-c-filter-input {
+  height: 34px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid #cfd5dd;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #fff;
+}
+.qx-c-filter-input input {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  padding: 0 12px;
+  font: inherit;
+  color: #374151;
+  outline: none;
+  background: #fff;
+}
+.qx-c-filter-input input::placeholder {
+  color: #a6adb7;
+}
+.qx-c-filter-addon {
+  min-width: 44px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border-left: 1px solid #cfd5dd;
+  background: #f7f9fb;
+  color: #3f4652;
+  font-weight: 600;
+}
+.qx-c-filter-input .qx-c-filter-addon:first-child {
+  border-left: 0;
+  border-right: 1px solid #cfd5dd;
+}
+.qx-c-filter-row em {
+  color: #3f4652;
+  font-style: normal;
+  text-align: center;
+  font-weight: 600;
+}
+.qx-c-filter-row.is-brand {
+  grid-template-columns: 170px repeat(3, auto);
+  justify-content: start;
+  padding: 3px 0 6px;
+}
+.qx-c-filter-row.is-brand input[type='radio'] {
+  width: 18px;
+  height: 18px;
+  accent-color: rgb(232, 77, 146);
+}
+.qx-c-filter-row.is-select {
+  grid-template-columns: 170px 210px;
+}
+.qx-c-filter-row.is-select select {
+  height: 34px;
+  border: 1px solid #cfd5dd;
+  border-radius: 5px;
+  padding: 0 12px;
+  font: inherit;
+}
+.qx-c-filter-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 28px 16px;
+  border-top: 1px solid #edf0f3;
+}
+
+/* ── 店铺检测区块 (QXStoreDetector 渲染) ── */
+.qx-c-store-detector {
+  padding: 6px 8px;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px solid #f0f0f0;
+  font-size: 11px;
+}
+.qx-c-store-detector-title {
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.6);
+  margin-bottom: 4px;
+}
+.qx-c-store-detector-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.qx-c-store-name {
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.82);
+  word-break: break-all;
+}
+.qx-c-store-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.qx-c-store-chinese {
+  background: #dcfce7;
+  color: #15803d;
+}
+.qx-c-store-non-chinese {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.qx-c-store-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+.qx-c-store-detector .qx-c-btn {
+  padding: 3px 8px;
+  font-size: 10px;
+  min-height: auto;
+}
+.qx-c-store-detector .qx-c-btn-primary {
+  background: rgb(232, 77, 146);
+  color: #fff;
+}
+.qx-c-store-detector .qx-c-btn-secondary {
+  background: #fff;
+  color: rgba(0, 0, 0, 0.65);
+  border: 1px solid #e5e7eb;
+}
