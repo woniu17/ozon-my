@@ -668,6 +668,16 @@
     window.jzCollectorToast = (msg, type, duration) => _collectorPanel?.toast?.(msg, type, duration);
     _collectorPanel.setRunning(panelState.enabled);
     onlyWithSales = _collectorPanel.getInitialSalesFilter();
+
+    // 重放早到的店铺信息(若 MAIN world 写 data-jz-seller-info 时面板还没挂好)
+    if (_pendingStoreUpdate) {
+      console.log('[ozon-data-panel] replaying pending store update:', _pendingStoreUpdate);
+      try {
+        _collectorPanel.updateStoreDetection(_pendingStoreUpdate);
+      } catch (_) {
+        /* ignore */
+      }
+    }
   }
 
   // ─── 监听 MAIN world 的 seller-info-main.js 发来的店铺信息 ────────
@@ -676,27 +686,147 @@
   //   1) 缓存 sellerSlug 供 loadPanelData → collectAutoIfMatched 用
   //   2) 调 SW checkStoreClassification 做中国店铺判定,并更新 QX面板店铺检测区块
   //      (window.__qxCollectorPanel 由 Task 21 创建,未渲染时跳过)
-  window.addEventListener('jz-seller-info', async (e) => {
-    const detail = e.detail;
-    if (!detail || detail.pageType !== 'shop') return;
+  //
+  // MV3 跨 world 通信:seller-info-main.js 在 MAIN world 执行,dispatchEvent 不会跨到
+  // ISOLATED world。MAIN world 同时写 documentElement data-jz-seller-info 属性(DOM 属性
+  // 跨 world 共享),这里用 MutationObserver 监听属性变化读取数据。
+  // 保留 addEventListener('jz-seller-info') 兼容同 world 调用(如 popup 或其他 ISOLATED 脚本)。
+  //
+  // 重试机制:MAIN world 写属性时机可能早于 QX 面板挂载(init 异步 await checkAuth)。
+  // 若 __qxCollectorPanel 未就绪,缓存最后一次 SW 查询结果,_pendingStoreUpdate 队列
+  // 在 mountCollectorHere 完成后由 replayPendingStoreUpdate 重放。
+  let _pendingStoreUpdate = null;
+
+  async function handleSellerInfo(detail) {
+    // 调试:把执行状态写到 DOM,方便从 MAIN world 检查
+    document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'handleSellerInfo-called', detail: detail ? { pageType: detail.pageType, slug: detail.slug } : null }));
+    console.log('[ozon-data-panel] ===== 收到店铺信息 =====');
+    console.log('[ozon-data-panel] 店铺完整信息:', detail);
+    if (detail) {
+      console.log('[ozon-data-panel]   pageType:', detail.pageType);
+      console.log('[ozon-data-panel]   slug:', detail.slug);
+      console.log('[ozon-data-panel]   name:', detail.name);
+      console.log('[ozon-data-panel]   sellerId:', detail.sellerId);
+      console.log('[ozon-data-panel]   method:', detail.method);
+      console.log('[ozon-data-panel]   companyInfo:', detail.companyInfo);
+      if (detail.companyInfo) {
+        console.log('[ozon-data-panel]     companyName:', detail.companyInfo.companyName);
+        console.log('[ozon-data-panel]     legalAddress:', detail.companyInfo.legalAddress);
+        console.log('[ozon-data-panel]     country:', detail.companyInfo.country);
+      }
+    }
+    console.log('[ozon-data-panel] =======================');
+    if (!detail || detail.pageType !== 'shop') {
+      console.log('[ozon-data-panel] 非 shop 页面,跳过 checkStoreClassification');
+      return;
+    }
     const { slug, name, companyInfo } = detail;
-    if (!slug) return;
+    if (!slug) {
+      console.log('[ozon-data-panel] slug 为空,跳过');
+      return;
+    }
     sellerSlug = slug; // 缓存,供 loadPanelData → collectAutoIfMatched 用
     try {
+      document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'calling-SW', slug }));
+      console.log('[ozon-data-panel] >>> 调用 SW checkStoreClassification, 参数:', { slug, name, companyInfo });
       const result = await window.sendMessage('checkStoreClassification', { slug, name, companyInfo });
+      document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'SW-returned', result: result ? { isChinese: result.isChinese, classifiedBy: result.classifiedBy } : null, hasPanel: !!window.__qxCollectorPanel }));
+      console.log('[ozon-data-panel] <<< SW checkStoreClassification 返回:', result, 'hasPanel:', !!window.__qxCollectorPanel);
       // result: { isChinese, classifiedBy } | null
+      // SW 返回 null 表示已查询但未分类(规则引擎无匹配 + ERP 无记录),
+      // 此时 isChinese 应为 null(待确认),不能是 undefined(会被 store-detector 当作"未检测")
+      const update = {
+        slug,
+        name,
+        isChinese: result ? result.isChinese : null,
+        classifiedBy: result ? result.classifiedBy : null,
+      };
+      console.log('[ozon-data-panel] 准备 updateStoreDetection:', update);
+      _pendingStoreUpdate = update; // 缓存,供 mountCollectorHere 重放
       if (window.__qxCollectorPanel) {
-        window.__qxCollectorPanel.updateStoreDetection({
-          slug,
-          name,
-          isChinese: result?.isChinese,
-          classifiedBy: result?.classifiedBy,
-        });
+        window.__qxCollectorPanel.updateStoreDetection(update);
+        document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'updateStoreDetection-called', update }));
+        console.log('[ozon-data-panel] updateStoreDetection 已调用,面板已更新');
+      } else {
+        document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'panel-not-ready', update }));
+        console.log('[ozon-data-panel] 面板未挂载,update 已缓存,等 mountCollectorHere 时重放');
       }
     } catch (err) {
-      console.warn('[ozon-data-panel] checkStoreClassification failed:', err);
+      document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'SW-error', error: err?.message || String(err) }));
+      console.warn('[ozon-data-panel] checkStoreClassification 失败:', err);
+    }
+  }
+
+  window.addEventListener('jz-seller-info', (e) => {
+    handleSellerInfo(e.detail);
+  });
+
+  // MV3 跨 world 通信监听(主路径):window message 事件
+  // MAIN world seller-info-main.js 调 window.postMessage({ type:'jz-seller-info', detail }, origin)
+  // postMessage 跨 world 可靠(MAIN/ISOLATED 都能监听 window message)
+  window.addEventListener('message', (e) => {
+    // 调试:看所有 message 来源
+    if (e.data && typeof e.data === 'object' && e.data.type && String(e.data.type).includes('jz')) {
+      console.log('[ozon-data-panel] message received, type:', e.data.type, 'origin:', e.origin, 'data:', e.data);
+    }
+    if (e.origin !== location.origin) return;
+    const data = e.data;
+    if (!data || data.type !== 'jz-seller-info') return;
+    console.log('[ozon-data-panel] postMessage received:', data.detail);
+    handleSellerInfo(data.detail);
+  });
+  console.log('[ozon-data-panel] message listener registered, origin:', location.origin);
+
+  // MV3 跨 world 通信监听(辅助):documentElement data-jz-seller-info 属性
+  // 经实测 MutationObserver 不跨 world,但保留作同 world 兼容
+  const _sellerInfoObserver = new MutationObserver((mutations) => {
+    console.log('[ozon-data-panel] MutationObserver fired:', mutations.length, 'records');
+    for (const m of mutations) {
+      if (m.attributeName !== 'data-jz-seller-info') continue;
+      const raw = document.documentElement.getAttribute('data-jz-seller-info');
+      console.log('[ozon-data-panel] attr changed, raw:', raw ? raw.slice(0, 100) + '...' : 'null');
+      if (!raw) continue;
+      try {
+        const { detail } = JSON.parse(raw);
+        handleSellerInfo(detail);
+      } catch (_) {
+        /* ignore */
+      }
     }
   });
+  _sellerInfoObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-jz-seller-info'] });
+  console.log('[ozon-data-panel] MutationObserver registered on documentElement');
+
+  // 启动时读取一次 + 轮询重试(MV3 跨 world 通信实测:MutationObserver/postMessage
+  // 都不跨 world,只能 ISOLATED world 主动轮询读 DOM 属性)
+  // MAIN world seller-info-main.js 等 __NUXT__.sellerId 最多 15s,这里轮询 30s 兜底
+  let _lastSeq = 0;
+  let _pollCount = 0;
+  const _sellerInfoPollMax = 30; // 30 次 × 1s = 30s
+  function _pollSellerInfo() {
+    _pollCount++;
+    try {
+      const raw = document.documentElement.getAttribute('data-jz-seller-info');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.seq !== _lastSeq) {
+          console.log('[ozon-data-panel] poll detected seq change:', _lastSeq, '->', parsed.seq, '(attempt ' + _pollCount + ')');
+          _lastSeq = parsed.seq;
+          handleSellerInfo(parsed.detail);
+          return; // 读到就停止轮询
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    if (_pollCount < _sellerInfoPollMax) {
+      setTimeout(_pollSellerInfo, 1000);
+    } else {
+      console.warn('[ozon-data-panel] seller info poll timeout after', _pollCount, 'attempts');
+    }
+  }
+  _pollSellerInfo();
+  console.log('[ozon-data-panel] seller info polling started (max', _sellerInfoPollMax, 'attempts)');
 
   // 监听人工标记后的通知(用户在 QX面板手动标记某店铺为中国/非中国)。
   // 标记为中国后:重置去重集合 + 重新扫描页面已挂面板的 SKU,触发 autoCollect。

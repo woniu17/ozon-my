@@ -11,8 +11,12 @@
  *
  * 通信:
  *   不调 chrome.* API、不调 sendMessage(MAIN world 限制)。
- *   通过 window.dispatchEvent(new CustomEvent('jz-seller-info', { detail }))
- *   把数据推给 ISOLATED world(ozon-data-panel.js 监听)。
+ *   三写策略(MV3 跨 world 通信,event 多重保险):
+ *   1) window.dispatchEvent(new CustomEvent('jz-seller-info', { detail })) — 同 world 兼容
+ *   2) window.postMessage({ type: 'jz-seller-info', detail }, location.origin) —
+ *      MV3 跨 world 可靠通信(MAIN/ISOLATED 都能监听 window message)
+ *   3) document.documentElement.setAttribute('data-jz-seller-info', JSON.stringify(...)) —
+ *      DOM 属性(经实测 MutationObserver 不跨 world,仅作调试/同 world 兼容)
  *
  * 数据来源:
  *   - 详情页(/product/<slug>/): 从 div[id^="state-webCurrentSeller-"] 的
@@ -62,14 +66,32 @@
   function _extractCompanyInfoFromState(state) {
     const empty = { companyName: '', legalAddress: '', country: '' };
     if (!state) return empty;
+    // Ozon 改版后 trustFactors 有多个(订单数、关于店铺等),
+    // 公司信息在 "О магазине"(关于店铺)的 tooltip.subtitle 数组里。
+    // 旧代码只看 trustFactors[0] 拿不到公司信息,改为遍历所有 trustFactors
+    // 找到含 subtitle 数组(且至少 2 个 text 项)的那个。
     const trustFactors = state.trustFactors;
-    const tf = Array.isArray(trustFactors) ? trustFactors[0] : null;
-    const subtitle = tf?.tooltip?.subtitle;
-    if (!Array.isArray(subtitle)) return empty;
+    if (!Array.isArray(trustFactors)) return empty;
 
-    const texts = subtitle
-      .filter((x) => x && x.type === 'text' && typeof x.content === 'string')
-      .map((x) => x.content.trim());
+    let texts = null;
+    for (let i = 0; i < trustFactors.length; i++) {
+      const tf = trustFactors[i];
+      const subtitle = tf?.tooltip?.subtitle;
+      if (!Array.isArray(subtitle)) continue;
+      const textItems = subtitle
+        .filter((x) => x && x.type === 'text' && typeof x.content === 'string')
+        .map((x) => x.content.trim());
+      // 公司信息块至少有 3 个 text 项(公司名、地址、国家)
+      if (textItems.length >= 3) {
+        texts = textItems;
+        console.log('[seller-info-main] 找到公司信息在 trustFactors[' + i + '], texts:', textItems);
+        break;
+      }
+    }
+    if (!texts) {
+      console.warn('[seller-info-main] trustFactors 中未找到含公司信息的 subtitle, trustFactors:', trustFactors.map((tf) => ({ title: tf?.title?.text, tooltipTitle: tf?.tooltip?.title?.text, hasSubtitle: Array.isArray(tf?.tooltip?.subtitle) })));
+      return empty;
+    }
 
     const companyName = texts[0] || '';
     const legalAddress = texts[1] || '';
@@ -299,6 +321,36 @@
   }
 
   // ─── 主流程 ────────────────────────────────────────
+  // 把结果推给 ISOLATED world(MV3 跨 world 通信):
+  //   - postMessage:跨 world 可靠(MAIN/ISOLATED 都能监听 window message)
+  //   - dispatchEvent:同 world 兼容
+  //   - setAttribute:DOM 属性(MutationObserver 不跨 world,仅作辅助)
+  let _seq = 0;
+  function publishToIsolatedWorld(detail) {
+    _seq = (_seq + 1) % 1000000;
+    console.log('[seller-info-main] publishToIsolatedWorld seq=' + _seq, detail);
+    // postMessage 不限 origin(同源页面 message 较少,放宽避免漏收)
+    try {
+      window.postMessage({ type: 'jz-seller-info', seq: _seq, detail: detail }, '*');
+      console.log('[seller-info-main] postMessage sent, seq=' + _seq);
+    } catch (e) {
+      console.error('[seller-info-main] postMessage failed:', e?.message || e);
+    }
+    try {
+      window.dispatchEvent(new CustomEvent('jz-seller-info', { detail }));
+    } catch (_) {
+      /* ignore */
+    }
+    try {
+      document.documentElement.setAttribute(
+        'data-jz-seller-info',
+        JSON.stringify({ seq: _seq, detail })
+      );
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
   (async () => {
     try {
       let result = null;
@@ -309,14 +361,14 @@
       }
       if (result) {
         console.log('[seller-info-main] 提取成功:', result);
-        window.dispatchEvent(new CustomEvent('jz-seller-info', { detail: result }));
+        publishToIsolatedWorld(result);
       } else {
         console.warn('[seller-info-main] 提取失败');
-        window.dispatchEvent(new CustomEvent('jz-seller-info', { detail: null }));
+        publishToIsolatedWorld(null);
       }
     } catch (e) {
       console.error('[seller-info-main] 异常:', e);
-      window.dispatchEvent(new CustomEvent('jz-seller-info', { detail: null, error: e?.message }));
+      publishToIsolatedWorld(null);
     }
   })();
 })();

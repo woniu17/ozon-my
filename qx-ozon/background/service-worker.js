@@ -2488,23 +2488,38 @@ try {
   // 规则引擎覆盖 known 列表 + companyInfo.country,无匹配返回 null(等待人工确认)。
   // 分类记录在 L2 MongoDB 持久化,L1 chrome.storage 做热缓存(key: jz-store-class-<slug>)。
   const classifyStoreByRules = (slug, name, companyInfo, config) => {
-    if (!config) return { isChinese: null, by: null };
+    if (!config) {
+      console.log('[store-class] classifyStoreByRules: no config, returning null', { slug });
+      return { isChinese: null, by: null };
+    }
+    console.log('[store-class] classifyStoreByRules input:', {
+      slug,
+      name,
+      companyInfo,
+      knownChineseSlugs: config.knownChineseSlugs,
+      knownNonChineseSlugs: config.knownNonChineseSlugs,
+    });
     // Rule 1: knownChineseSlugs
     if (Array.isArray(config.knownChineseSlugs) && config.knownChineseSlugs.includes(slug)) {
+      console.log('[store-class] Rule 1 hit: knownChineseSlugs → isChinese=true');
       return { isChinese: true, by: 'rule:known-list' };
     }
     // Rule 2: knownNonChineseSlugs
     if (Array.isArray(config.knownNonChineseSlugs) && config.knownNonChineseSlugs.includes(slug)) {
+      console.log('[store-class] Rule 2 hit: knownNonChineseSlugs → isChinese=false');
       return { isChinese: false, by: 'rule:known-list' };
     }
     // Rule 3: companyInfo.country === 'CN'
     if (companyInfo && companyInfo.country === 'CN') {
+      console.log('[store-class] Rule 3 hit: companyInfo.country=CN → isChinese=true');
       return { isChinese: true, by: 'rule:company-country' };
     }
     // Rule 4: companyInfo.country 已知且非 CN
     if (companyInfo && companyInfo.country && companyInfo.country !== 'CN') {
+      console.log('[store-class] Rule 4 hit: companyInfo.country=' + companyInfo.country + ' → isChinese=false');
       return { isChinese: false, by: 'rule:company-country' };
     }
+    console.log('[store-class] No rule matched → isChinese=null (need manual confirm)');
     return { isChinese: null, by: null };
   };
 
@@ -2550,13 +2565,20 @@ try {
   // 返回 { isChinese, classifiedBy } | null(未分类,等待人工确认)。
   const checkStoreClassification = async (slug, name, companyInfo) => {
     if (!slug) return null;
+    console.log('[store-class] checkStoreClassification called:', { slug, name, companyInfo });
     const config = await _loadAutoCollectConfig();
+    console.log('[store-class] config loaded:', {
+      knownChineseSlugs: config?.knownChineseSlugs,
+      knownNonChineseSlugs: config?.knownNonChineseSlugs,
+    });
 
     // L1: chrome.storage.local
     const l1Key = `jz-store-class-${slug}`;
     try {
       const l1 = (await getStorage([l1Key]))?.[l1Key];
+      console.log('[store-class] L1 chrome.storage:', l1);
       if (l1 && l1.isChinese !== null && l1.isChinese !== undefined) {
+        console.log('[store-class] L1 hit →', { isChinese: l1.isChinese, classifiedBy: l1.classifiedBy });
         return { isChinese: l1.isChinese, classifiedBy: l1.classifiedBy };
       }
     } catch (e) {
@@ -2565,7 +2587,9 @@ try {
 
     // L2: MongoDB
     const l2 = await _erpStoreClassGet(slug);
+    console.log('[store-class] L2 MongoDB:', l2);
     if (l2 && l2.isChinese !== null && l2.isChinese !== undefined) {
+      console.log('[store-class] L2 hit →', { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy });
       try {
         await setStorage({
           [l1Key]: { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy },
@@ -2578,6 +2602,7 @@ try {
 
     // 规则引擎
     const ruleResult = classifyStoreByRules(slug, name, companyInfo, config);
+    console.log('[store-class] rule engine result:', ruleResult);
     if (ruleResult.isChinese !== null) {
       const record = {
         sellerSlug: slug,
@@ -2595,10 +2620,12 @@ try {
         console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
       }
       _erpStoreClassSet(slug, record);
+      console.log('[store-class] rule result persisted to L1+L2:', record);
       return { isChinese: ruleResult.isChinese, classifiedBy: ruleResult.by };
     }
 
     // 未分类:写 L2 记录(isChinese=null,等待人工确认)
+    console.log('[store-class] unclassified, writing null record to L2 (waiting manual confirm)');
     _erpStoreClassSet(slug, {
       sellerSlug: slug,
       sellerName: name,

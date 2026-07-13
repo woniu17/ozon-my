@@ -11941,25 +11941,93 @@
   // 提取 slug/name + companyInfo(含 country),通过 CustomEvent 推过来。
   // 这里带 companyInfo 调 SW checkStoreClassification(规则引擎可用 country 判定,
   // 比 extractProductData 内仅用 slug+name 调的一次更完整,SW 内部按 slug 升级缓存)。
-  window.addEventListener('jz-seller-info', async (e) => {
-    const detail = e.detail;
+  //
+  // MV3 跨 world 通信:seller-info-main.js 在 MAIN world 执行,dispatchEvent 不会跨到
+  // ISOLATED world。MAIN world 同时写 documentElement data-jz-seller-info 属性(DOM 属性
+  // 跨 world 共享),这里用 MutationObserver 监听属性变化读取数据。
+  // 保留 addEventListener('jz-seller-info') 兼容同 world 调用。
+  //
+  // 重试机制:MAIN world 写属性时机可能早于 QX 面板挂载(init 异步 await checkAuth)。
+  // 若 __qxCollectorPanel 未就绪,缓存最后一次 SW 查询结果,待面板挂载后重放。
+  let _pendingPdpStoreUpdate = null;
+
+  async function handlePdpSellerInfo(detail) {
     if (!detail || detail.pageType !== 'pdp') return;
     const { slug, name, companyInfo } = detail;
     if (!slug) return;
     try {
       const result = await window.sendMessage('checkStoreClassification', { slug, name, companyInfo });
+      const update = {
+        slug,
+        name,
+        isChinese: result ? result.isChinese : null,
+        classifiedBy: result ? result.classifiedBy : null,
+      };
+      _pendingPdpStoreUpdate = update;
       if (window.__qxCollectorPanel) {
-        window.__qxCollectorPanel.updateStoreDetection({
-          slug,
-          name,
-          isChinese: result?.isChinese,
-          classifiedBy: result?.classifiedBy,
-        });
+        window.__qxCollectorPanel.updateStoreDetection(update);
       }
     } catch (err) {
       console.warn('[ozon-product] checkStoreClassification failed:', err);
     }
+  }
+
+  window.addEventListener('jz-seller-info', (e) => {
+    handlePdpSellerInfo(e.detail);
   });
+
+  // MV3 跨 world 通信监听(主路径):window message 事件
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin) return;
+    const data = e.data;
+    if (!data || data.type !== 'jz-seller-info') return;
+    handlePdpSellerInfo(data.detail);
+  });
+
+  // MV3 跨 world 通信监听(辅助):documentElement data-jz-seller-info 属性
+  const _pdpSellerInfoObserver = new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      if (m.attributeName !== 'data-jz-seller-info') continue;
+      const raw = document.documentElement.getAttribute('data-jz-seller-info');
+      if (!raw) continue;
+      try {
+        const { detail } = JSON.parse(raw);
+        handlePdpSellerInfo(detail);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  });
+  _pdpSellerInfoObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-jz-seller-info'],
+  });
+
+  // 启动时轮询读取(MV3 跨 world 通信实测:MutationObserver/postMessage 都不跨 world,
+  // 只能 ISOLATED world 主动轮询读 DOM 属性)
+  let _lastPdpSeq = 0;
+  let _pdpPollCount = 0;
+  const _pdpPollMax = 30;
+  function _pollPdpSellerInfo() {
+    _pdpPollCount++;
+    try {
+      const raw = document.documentElement.getAttribute('data-jz-seller-info');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.seq !== _lastPdpSeq) {
+          _lastPdpSeq = parsed.seq;
+          handlePdpSellerInfo(parsed.detail);
+          return;
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    if (_pdpPollCount < _pdpPollMax) {
+      setTimeout(_pollPdpSellerInfo, 1000);
+    }
+  }
+  _pollPdpSellerInfo();
 
   async function init() {
     const auth = await window.checkAuth();
@@ -12043,6 +12111,15 @@
           },
         },
       });
+
+      // 重放早到的店铺信息(若 MAIN world 写 data-jz-seller-info 时面板还没挂好)
+      if (_pendingPdpStoreUpdate && window.__qxCollectorPanel) {
+        try {
+          window.__qxCollectorPanel.updateStoreDetection(_pendingPdpStoreUpdate);
+        } catch (_) {
+          /* ignore */
+        }
+      }
     }
   }
 
