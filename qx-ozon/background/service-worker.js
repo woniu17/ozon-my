@@ -2575,7 +2575,7 @@ try {
     return { isChinese: null, by: null };
   };
 
-  // L2 MongoDB:GET /ozon/store-classification/:slug
+  // L2 MongoDB:GET /admin/api/store-classification/:slug
   // 返回分类记录或 null。参考 _erpCacheGet 模式。
   const _erpStoreClassGet = async (slug) => {
     try {
@@ -2583,7 +2583,7 @@ try {
       const stored = await getStorage([STORAGE_KEYS.token]);
       const r = await apiRequest(
         'GET',
-        `${url}/ozon/store-classification/${encodeURIComponent(slug)}`,
+        `${url}/admin/api/store-classification/${encodeURIComponent(slug)}`,
         null,
         stored[STORAGE_KEYS.token]
       );
@@ -2594,7 +2594,7 @@ try {
     }
   };
 
-  // L2 MongoDB:POST /ozon/store-classification/:slug(upsert)
+  // L2 MongoDB:POST /admin/api/store-classification/:slug(upsert)
   // record: { sellerSlug, sellerName, isChinese, classifiedBy, companyInfo, lastSeenAt }
   const _erpStoreClassSet = async (slug, record) => {
     try {
@@ -2602,7 +2602,7 @@ try {
       const stored = await getStorage([STORAGE_KEYS.token]);
       await apiRequest(
         'POST',
-        `${url}/ozon/store-classification/${encodeURIComponent(slug)}`,
+        `${url}/admin/api/store-classification/${encodeURIComponent(slug)}`,
         record,
         stored[STORAGE_KEYS.token]
       );
@@ -2625,13 +2625,20 @@ try {
     });
 
     // L1: chrome.storage.local
+    // 注意:classifiedBy 为空字符串的记录视为无效(历史 bug:ERP 前端 updateStoreClass
+    // 不传 classifiedBy 导致后端写空字符串),不信任 L1,继续查 L2 让规则引擎重新分类。
     const l1Key = `jz-store-class-${slug}`;
     try {
       const l1 = (await getStorage([l1Key]))?.[l1Key];
       console.log('[store-class] L1 chrome.storage:', l1);
-      if (l1 && l1.isChinese !== null && l1.isChinese !== undefined) {
+      if (l1 && l1.isChinese !== null && l1.isChinese !== undefined && l1.classifiedBy) {
         console.log('[store-class] L1 hit →', { isChinese: l1.isChinese, classifiedBy: l1.classifiedBy });
         return { isChinese: l1.isChinese, classifiedBy: l1.classifiedBy };
+      }
+      // L1 无效或 classifiedBy 为空:清除旧记录,避免下次再被读到
+      if (l1 && (!l1.classifiedBy || l1.isChinese === null || l1.isChinese === undefined)) {
+        await removeStorage([l1Key]);
+        console.log('[store-class] L1 cleared (invalid classifiedBy):', l1);
       }
     } catch (e) {
       console.warn(`[store-class] L1 get failed slug=${slug}:`, e?.message || e);

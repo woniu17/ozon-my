@@ -1126,13 +1126,13 @@ router.post('/admin/api/auto-collect/log', async (req, res, next) => {
   }
 });
 
-// ── 店铺分类(/ozon/store-classification) ───────────────────
+// ── 店铺分类(/admin/api/store-classification) ───────────────────
 // ozon_store_classification 集合的 CRUD 端点
 // 鉴权:全局 JWT;不走 storeGuard(全局共享,按 slug 查询)
 // _id = sellerSlug(便于 upsert)
 
-// GET /ozon/store-classification/:slug — 查询单条分类记录
-router.get('/ozon/store-classification/:slug', async (req, res, next) => {
+// GET /admin/api/store-classification/:slug — 查询单条分类记录
+router.get('/admin/api/store-classification/:slug', async (req, res, next) => {
   try {
     const slug = String(req.params.slug);
     const col = await cols.storeClassification();
@@ -1155,10 +1155,10 @@ router.get('/ozon/store-classification/:slug', async (req, res, next) => {
   }
 });
 
-// POST /ozon/store-classification/:slug — upsert 分类记录
+// POST /admin/api/store-classification/:slug — upsert 分类记录
 // body: { sellerName, isChinese, classifiedBy, companyInfo, lastSeenAt, lastSeenUrl }
 // 已存在时更新 isChinese/classifiedBy/classifiedAt 并刷新 lastSeenAt
-router.post('/ozon/store-classification/:slug', async (req, res, next) => {
+router.post('/admin/api/store-classification/:slug', async (req, res, next) => {
   try {
     const slug = String(req.params.slug);
     const body = req.body || {};
@@ -1185,8 +1185,8 @@ router.post('/ozon/store-classification/:slug', async (req, res, next) => {
   }
 });
 
-// DELETE /ozon/store-classification/:slug — 删除单条
-router.delete('/ozon/store-classification/:slug', async (req, res, next) => {
+// DELETE /admin/api/store-classification/:slug — 删除单条
+router.delete('/admin/api/store-classification/:slug', async (req, res, next) => {
   try {
     const slug = String(req.params.slug);
     const col = await cols.storeClassification();
@@ -1198,9 +1198,9 @@ router.delete('/ozon/store-classification/:slug', async (req, res, next) => {
   }
 });
 
-// GET /ozon/store-classification — 列表查询(分页 + 过滤)
+// GET /admin/api/store-classification — 列表查询(分页 + 过滤)
 // query: isChinese(true/false/null 不传则不过滤)/keyword(匹配 sellerName/sellerSlug)/currentPage/pageSize
-router.get('/ozon/store-classification', async (req, res, next) => {
+router.get('/admin/api/store-classification', async (req, res, next) => {
   try {
     const keyword = String(req.query.keyword || '').trim();
     const currentPage = Math.max(1, Number(req.query.currentPage) || 1);

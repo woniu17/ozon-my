@@ -37,6 +37,28 @@
   // 从 jz-seller-info 事件缓存的当前页卖家 slug,供 loadPanelData → collectAutoIfMatched 用。
   // 店铺页 seller-info-main.js 提取后通过 CustomEvent 推过来;非店铺页保持 ''。
   let sellerSlug = '';
+  let sellerName = ''; // 店铺名称,用于在商品卡上显示"店铺商品:xxx"标签
+
+  // 判断商品卡是否属于当前店铺 SKU(而非"推荐/相关商品"区域)。
+  // 方案 1(最可靠):向上查找 data-widget 属性。
+  //   店铺 SKU:父级 widget = tileGridDesktop / infiniteVirtualPaginator
+  //   非店铺 SKU:父级 widget = skuGrid
+  // 实测数据(2026-07-14 youqulin 店铺页):
+  //   tileGridDesktop: 15 张卡片,target=_blank,href 含 _bctx=
+  //   infiniteVirtualPaginator: 8 张卡片(懒加载),target=_blank,href 含 _bctx=
+  //   skuGrid: 30 张卡片(推荐区),target=_self,href 不含 _bctx=
+  function isStoreSkuCard(card) {
+    let el = card;
+    while (el && el !== document.body) {
+      el = el.parentElement;
+      if (!el) break;
+      const w = el.getAttribute('data-widget');
+      if (w === 'tileGridDesktop' || w === 'infiniteVirtualPaginator') return true;
+      if (w === 'skuGrid') return false;
+    }
+    // 未找到已知 widget 时默认视为店铺 SKU(避免漏标)
+    return true;
+  }
 
   // ── 采集状态同步到商品卡(徽章+状态条) ──────────────────────────
   // sku → { status, reason, results, duration, timestamp }
@@ -226,6 +248,31 @@
       title += ' · ' + (_COLLECT_REASON_LABELS[status.reason] || status.reason);
     }
     badge.title = title;
+  }
+
+  // 渲染店铺归属标签(商品卡顶部左上角)
+  // 店铺 SKU:显示"店铺商品:xxx"(绿色)
+  // 非店铺 SKU:显示"非店铺商品"(灰色)
+  function renderSellerTag(card) {
+    if (!card) return;
+    let tag = card.querySelector('.jz-seller-tag');
+    // 仅在店铺页(sellerSlug 非空)才显示标签
+    if (!sellerSlug) {
+      if (tag) tag.remove();
+      return;
+    }
+    const isStore = isStoreSkuCard(card);
+    const text = isStore ? `店铺商品${sellerName ? ': ' + sellerName : ''}` : '非店铺商品';
+    if (!tag) {
+      tag = document.createElement('div');
+      tag.className = 'jz-seller-tag';
+      card.appendChild(tag);
+    }
+    tag.textContent = text;
+    tag.dataset.isStore = isStore ? '1' : '0';
+    tag.title = isStore
+      ? `此商品属于当前店铺${sellerName ? '(' + sellerName + ')' : ''}`
+      : '此商品为推荐/相关商品,不属于当前店铺';
   }
 
   // 刷新单个 SKU 对应的所有商品卡 UI(徽章+状态条)
@@ -516,6 +563,9 @@
     // 商品卡高度对齐:Ozon 原生 align-self:start 导致同一行卡高度不一致,
     // 用内联样式覆盖为 stretch,让同行卡拉伸到行高(CSS !important 可能被 Ozon 覆盖)
     card.style.setProperty('align-self', 'stretch', 'important');
+
+    // 渲染店铺归属标签(店铺 SKU / 非店铺商品)
+    renderSellerTag(card);
 
     const panel = document.createElement('div');
     panel.className = 'ozon-helper-data-panel';
@@ -1014,6 +1064,18 @@
       return;
     }
     sellerSlug = slug; // 缓存,供 loadPanelData → collectAutoIfMatched 用
+    sellerName = name || ''; // 缓存店铺名称,供 renderSellerTag 显示
+    // 收到店铺信息后,立即给所有已渲染的商品卡补上店铺归属标签
+    // (ensureDataPanel 可能在 sellerName 到达前已经执行过)
+    try {
+      const cards = document.querySelectorAll(CARD_SELECTORS.join(','));
+      for (const card of cards) {
+        renderSellerTag(card);
+      }
+      console.log('[ozon-data-panel] sellerName 已缓存,已为', cards.length, '个商品卡刷新店铺标签');
+    } catch (e) {
+      console.warn('[ozon-data-panel] 刷新店铺标签失败:', e);
+    }
     try {
       document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'calling-SW', slug }));
       console.log('[ozon-data-panel] >>> 调用 SW checkStoreClassification, 参数:', { slug, name, companyInfo });

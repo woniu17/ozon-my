@@ -63,17 +63,17 @@ export function getFollowSellCache(sku) {
 
 // ── 店铺分类 ───────────────────────────────────────────────
 export function getStoreClassificationList(params) {
-  return request.get('/ozon/store-classification', params);
+  return request.get('/admin/api/store-classification', params);
 }
 
 export function getStoreClassification(slug) {
-  return request.get(`/ozon/store-classification/${encodeURIComponent(slug)}`);
+  return request.get(`/admin/api/store-classification/${encodeURIComponent(slug)}`);
 }
 
 export function updateStoreClassification(slug, data) {
-  return request.post(`/ozon/store-classification/${encodeURIComponent(slug)}`, data);
+  return request.post(`/admin/api/store-classification/${encodeURIComponent(slug)}`, data);
 }
 
 export function deleteStoreClassification(slug) {
-  return request.del(`/ozon/store-classification/${encodeURIComponent(slug)}`);
+  return request.del(`/admin/api/store-classification/${encodeURIComponent(slug)}`);
 }

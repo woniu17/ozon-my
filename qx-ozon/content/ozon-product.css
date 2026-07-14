@@ -5962,6 +5962,44 @@
   user-select: none;
 }
 
+/* 商品卡顶部店铺归属标签(左上角) */
+/* tile-root 需要 relative 让标签定位到左上角 */
+.tile-root:has(.jz-seller-tag) {
+  position: relative;
+}
+
+.jz-seller-tag {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 10;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: help;
+  user-select: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* 店铺 SKU 标签:绿色背景 */
+.jz-seller-tag[data-is-store='1'] {
+  background: rgba(22, 163, 74, 0.9);
+  color: #fff;
+}
+
+/* 非店铺 SKU 标签:灰色背景 */
+.jz-seller-tag[data-is-store='0'] {
+  background: rgba(107, 114, 128, 0.9);
+  color: #fff;
+}
+
 /* 数据面板底部状态条 */
 .jz-collect-status-bar {
   display: flex;

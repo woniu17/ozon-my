@@ -367,7 +367,9 @@ function onStoreClassPageChange(p) {
 
 async function updateStoreClass(slug, data) {
   try {
-    await updateStoreClassification(slug, data);
+    // ERP 后台手动标记视为 manual 分类,与 SW 的 manualClassifyStore 保持一致
+    // (不补 classifiedBy 时后端默认写空字符串,导致 SW L2 命中后无法识别分类来源)
+    await updateStoreClassification(slug, { ...data, classifiedBy: 'manual' });
     show('已更新', 'success');
     await loadStoreClassifications();
   } catch (err) {
