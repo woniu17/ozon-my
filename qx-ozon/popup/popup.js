@@ -972,11 +972,84 @@
       if (statusDot) statusDot.className = 'status-dot stopped';
       if (pausedDiv) pausedDiv.style.display = 'none';
     }
+
+    // 同步限速输入框(用户正在编辑的字段跳过,避免输入被打断)
+    renderRateConfig(config);
   };
 
   document.getElementById('ac-toggle')?.addEventListener('change', async (e) => {
     await saveAutoCollectConfig({ autoCollectRunning: e.target.checked });
     await renderAutoCollect();
+  });
+
+  // ─── 限速配置(可折叠,与 jz-auto-collect-config 共享) ─────────────
+  // 字段对应 SW 内 _AUTO_COLLECT_CONFIG_DEFAULT 的限速项。
+  // min/max 与 input 的 min/max 属性保持一致,超界不写入并提示。
+  const RATE_FIELDS = [
+    { id: 'ac-rate-buyer', key: 'buyerPageMinInterval', min: 1000, max: 60000, label: '买家页间隔' },
+    { id: 'ac-rate-seller', key: 'sellerPortalMinInterval', min: 100, max: 10000, label: '卖家后台间隔' },
+    { id: 'ac-rate-sku', key: 'skuInterval', min: 2000, max: 120000, label: 'SKU 间隔' },
+    { id: 'ac-rate-perday', key: 'perDayLimit', min: 0, max: 100000, label: '每日上限' },
+  ];
+
+  let _rateHintTimer = null;
+  const showRateHint = (text, kind) => {
+    const hint = document.getElementById('ac-ratecfg-hint');
+    if (!hint) return;
+    hint.textContent = text;
+    hint.className = 'ac-ratecfg-hint' + (kind ? ' is-' + kind : '');
+    if (_rateHintTimer) clearTimeout(_rateHintTimer);
+    _rateHintTimer = setTimeout(() => {
+      hint.textContent = '';
+      hint.className = 'ac-ratecfg-hint';
+      _rateHintTimer = null;
+    }, 2000);
+  };
+
+  const renderRateConfig = (config) => {
+    for (const f of RATE_FIELDS) {
+      const input = document.getElementById(f.id);
+      if (!input) continue;
+      if (document.activeElement === input) continue; // 用户正在编辑,不覆盖
+      const v = config[f.key];
+      if (typeof v === 'number') input.value = v;
+      else if (v != null) input.value = String(v);
+    }
+  };
+
+  // 折叠展开
+  const rateToggle = document.getElementById('ac-ratecfg-toggle');
+  const rateCfgEl = document.getElementById('ac-ratecfg');
+  rateToggle?.addEventListener('click', () => {
+    if (!rateCfgEl) return;
+    rateCfgEl.classList.toggle('is-open');
+    const body = document.getElementById('ac-ratecfg-body');
+    if (body) body.style.display = rateCfgEl.classList.contains('is-open') ? '' : 'none';
+  });
+
+  // 4 个输入框 change(失焦或回车触发)→ 校验 → saveAutoCollectConfig
+  RATE_FIELDS.forEach((f) => {
+    const input = document.getElementById(f.id);
+    if (!input) return;
+    input.addEventListener('change', async () => {
+      const raw = (input.value || '').trim();
+      if (raw === '') return;
+      const num = Number(raw);
+      if (!Number.isFinite(num)) {
+        showRateHint(f.label + ': 非数字', 'err');
+        return;
+      }
+      if (num < f.min || num > f.max) {
+        showRateHint(`${f.label}: 范围 [${f.min}, ${f.max}]`, 'err');
+        return;
+      }
+      try {
+        await saveAutoCollectConfig({ [f.key]: num });
+        showRateHint(f.label + ' 已保存', 'ok');
+      } catch (e) {
+        showRateHint(f.label + ' 保存失败', 'err');
+      }
+    });
   });
 
   // SW 推送消息:antibotDetected(熔断触发)/ configChanged(配置变化)→ 重渲。

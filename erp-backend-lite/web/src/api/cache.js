@@ -77,3 +77,16 @@ export function updateStoreClassification(slug, data) {
 export function deleteStoreClassification(slug) {
   return request.del(`/admin/api/store-classification/${encodeURIComponent(slug)}`);
 }
+
+// ── 店铺 SKU 关联 ─────────────────────────────────────────
+export function getStoreSkuList(params) {
+  return request.get('/admin/api/store-sku', params);
+}
+
+export function getStoreSku(sku) {
+  return request.get(`/admin/api/store-sku/${encodeURIComponent(sku)}`);
+}
+
+export function deleteStoreSku(sku) {
+  return request.del(`/admin/api/store-sku/${encodeURIComponent(sku)}`);
+}

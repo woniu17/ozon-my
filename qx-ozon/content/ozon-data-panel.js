@@ -38,6 +38,7 @@
   // 店铺页 seller-info-main.js 提取后通过 CustomEvent 推过来;非店铺页保持 ''。
   let sellerSlug = '';
   let sellerName = ''; // 店铺名称,用于在商品卡上显示"店铺商品:xxx"标签
+  let sellerId = ''; // 卖家 ID(从 __NUXT__ 获取,稳定主键,slug 可变)
 
   // 判断商品卡是否属于当前店铺 SKU(而非"推荐/相关商品"区域)。
   // 方案 1(最可靠):向上查找 data-widget 属性。
@@ -315,6 +316,47 @@
   //   导致 partial/failed 的 SKU 在不刷新页面的情况下不会重新采集。
   // 方案:每 60 秒扫描 _collectStatusMap,对 partial/failed 且距上次采集 >60s 的 SKU
   //   直接调 autoCollectOnSkuSeen(它会检查 _autoCollectSeen 去重)。
+  // 注意:店铺页的非店铺商品(推荐区)被 ensureDataPanel 跳过,不会进入 _collectStatusMap,
+  //   但 _collectStatusMap 可能包含之前在其它页面(搜索/详情)采集过的 SKU。
+  //   若这些 SKU 恰好出现在当前店铺页的非店铺商品区,不应在当前店铺页触发重扫
+  //   (会把 SKU 错误关联到当前店铺)。用 _nonStoreSkus Set 排除。
+  const _nonStoreSkus = new Set(); // 当前店铺页非店铺商品 SKU 集合
+
+  // ── store-sku 发现上报 ──────────────────────────────────────
+  // panel 加载时上报"发现"关系到后端 ozon_store_sku 集合。
+  // 触发条件:店铺页的店铺商品(SKU 属于当前店铺)、详情页当前展示的 SKU。
+  // 搜索页不上报(无店铺信息);详情页"也看了"推荐区不上报(非当前商品)。
+  // 去重策略:内存 Set 同一会话只上报一次 firstSeen;lastSeen 用 5 分钟 throttle
+  const _storeSkuReported = new Set(); // 同一会话已上报 firstSeen 的 SKU
+  const _storeSkuLastSeenTs = new Map(); // sku → 上次 lastSeen 上报时间戳
+  const _STORE_SKU_SEEN_THROTTLE_MS = 5 * 60 * 1000; // 5 分钟
+  function reportStoreSkuDiscovery(sku, options = {}) {
+    try {
+      const skuStr = String(sku);
+      if (!skuStr || !sellerId) return; // 无 sellerId 不上报
+      const now = Date.now();
+      const isFirst = !_storeSkuReported.has(skuStr);
+      const lastTs = _storeSkuLastSeenTs.get(skuStr) || 0;
+      // firstSeen 总是上报;非 firstSeen 用 5 分钟 throttle
+      if (!isFirst && now - lastTs < _STORE_SKU_SEEN_THROTTLE_MS) return;
+      _storeSkuReported.add(skuStr);
+      _storeSkuLastSeenTs.set(skuStr, now);
+      // fire-and-forget,不阻塞 panel 渲染
+      window.sendMessage('reportStoreSku', {
+        sku: skuStr,
+        sellerId,
+        sellerSlug,
+        sellerName,
+        // 采集信息(可选,采集完成时 SW 会再次上报覆盖)
+        lastCollectAt: options.lastCollectAt || null,
+        lastCollectStatus: options.lastCollectStatus || null,
+        lastCollectResults: options.lastCollectResults || null,
+      });
+    } catch (e) {
+      console.warn('[ozon-data-panel] reportStoreSkuDiscovery 失败:', e?.message || e);
+    }
+  }
+
   const _RESCAN_INTERVAL_MS = 60 * 1000;
   const _RESCAN_COOLDOWN_MS = 60 * 1000;
   setInterval(() => {
@@ -325,9 +367,11 @@
     for (const [sku, status] of _collectStatusMap) {
       if (status.status !== 'partial' && status.status !== 'failed') continue;
       if (!status.timestamp || now - status.timestamp < _RESCAN_COOLDOWN_MS) continue;
+      // 店铺页:跳过非店铺商品 SKU(避免错误关联到当前店铺)
+      if (sellerSlug && _nonStoreSkus.has(sku)) continue;
       candidates++;
       // 直接调用,autoCollectOnSkuSeen 内部会检查 _autoCollectSeen 去重
-      window.__jzAutoCollectOnSkuSeen(sku, 'shop-page', sellerSlug);
+      window.__jzAutoCollectOnSkuSeen(sku, 'shop-page', sellerSlug, { sellerId });
       triggered++;
     }
     if (candidates > 0) {
@@ -428,6 +472,18 @@
       return;
     }
 
+    // 上报"发现"关系到后端 ozon_store_sku(店铺页店铺商品 + 详情页当前 SKU)
+    // - 店铺页:仅当 isStoreSkuCard(card)=true 时上报(非店铺商品已被 ensureDataPanel 跳过)
+    // - 详情页:仅当 card 的 SKU = 当前页面 URL 的 SKU 时上报(跳过"也看了"推荐区)
+    // - 搜索页:sellerId 为空,不上报
+    if (sellerId) {
+      const pdpSku = extractProductId(window.location.pathname);
+      const isPdpMain = pdpSku && String(pdpSku) === String(productId);
+      if (isPdpMain || (sellerSlug && isStoreSkuCard(card))) {
+        reportStoreSkuDiscovery(productId);
+      }
+    }
+
     // 异步写 card 缓存(商品卡 DOM 5 字段,fire-and-forget,对齐 ozon-search.js)
     if (window.sendMessage) {
       try {
@@ -453,14 +509,14 @@
         window.jzRenderProductPanelV2(panel, { sku: productId, initial: cached });
         try {
           await window.jzPopulatePanelV2(panel, productId, { preFetched: cached.preFetched });
-        } catch {}
+        } catch { }
       } else {
         window.jzRenderProductCardPanel(panel, cached);
       }
       if (panel) panel.dataset.jzLoadStatus = 'ready';
       // 触发 autoCollect(检查 onlyWithSales / smartFilter / 中国店铺 Gate 0.5);
-      // fire-and-forget,不阻塞 panel 渲染。sellerSlug 来自 jz-seller-info 事件缓存。
-      window.__jzCollectAutoIfMatched?.(productId, card, info, cached, panel, 'shop-page', sellerSlug);
+      // fire-and-forget,不阻塞 panel 渲染。sellerSlug/sellerId 来自 jz-seller-info 事件缓存。
+      window.__jzCollectAutoIfMatched?.(productId, card, info, cached, panel, 'shop-page', sellerSlug, sellerId);
       // 渲染采集状态(徽章+状态条)
       updateCollectBadge(card, productId);
       renderCollectStatusBar(panel, productId);
@@ -514,9 +570,9 @@
         variantResult.status === 'fulfilled' ? variantResult.value : null,
         followSellResult.status === 'fulfilled' && followSellResult.value
           ? {
-              followSellCount: followSellResult.value.count,
-              sellers: followSellResult.value.sellers,
-            }
+            followSellCount: followSellResult.value.count,
+            sellers: followSellResult.value.sellers,
+          }
           : null,
         productId,
         cachedWeightDims
@@ -537,15 +593,15 @@
         window.jzRenderProductPanelV2(panel, { sku: productId, initial: data });
         try {
           await window.jzPopulatePanelV2(panel, productId, { preFetched: data.preFetched });
-        } catch {}
+        } catch { }
       } else {
         window.jzRenderProductCardPanel(panel, data);
       }
 
       if (panel) panel.dataset.jzLoadStatus = 'ready';
       // 触发 autoCollect(检查 onlyWithSales / smartFilter / 中国店铺 Gate 0.5);
-      // fire-and-forget,不阻塞 panel 渲染。sellerSlug 来自 jz-seller-info 事件缓存。
-      window.__jzCollectAutoIfMatched?.(productId, card, info, data, panel, 'shop-page', sellerSlug);
+      // fire-and-forget,不阻塞 panel 渲染。sellerSlug/sellerId 来自 jz-seller-info 事件缓存。
+      window.__jzCollectAutoIfMatched?.(productId, card, info, data, panel, 'shop-page', sellerSlug, sellerId);
       // 渲染采集状态(徽章+状态条)
       updateCollectBadge(card, productId);
       renderCollectStatusBar(panel, productId);
@@ -566,6 +622,21 @@
 
     // 渲染店铺归属标签(店铺 SKU / 非店铺商品)
     renderSellerTag(card);
+
+    // 店铺页:非店铺商品(推荐区/相关商品)只显示归属标签,不加载 panel 也不请求数据。
+    // 原因:
+    //   1. 非店铺商品与当前店铺无关,采集其数据会污染本店铺的 SKU 集合
+    //   2. 节省网络请求(每个 panel 至少 4 个 fetch:marketStats/productStats/variants/followSell)
+    //   3. 减少反爬风险(推荐区商品多达 30+,真调密度过高)
+    // 注意:仍渲染 jz-seller-tag 标签(灰色"非店铺商品"),让用户知道这些是推荐商品
+    if (sellerSlug && !isStoreSkuCard(card)) {
+      card._ohPanelSkipped = true; // 标记跳过,供 applyToAll/removeDataPanel 识别
+      // 记录非店铺商品 SKU,供定时重扫排除(避免把推荐区 SKU 错误关联到当前店铺)
+      const link = card.querySelector('a[href*="/product/"]');
+      const m = link?.href.match(/\/product\/.*-(\d{5,})/);
+      if (m) _nonStoreSkus.add(String(m[1]));
+      return;
+    }
 
     const panel = document.createElement('div');
     panel.className = 'ozon-helper-data-panel';
@@ -787,7 +858,11 @@
       card._ohPanel.remove();
       card._ohPanel = null;
     }
+    // 清理店铺归属标签(关闭面板时一并移除)
+    const tag = card.querySelector('.jz-seller-tag');
+    if (tag) tag.remove();
     card._ohPanelAttached = false;
+    card._ohPanelSkipped = false;
   }
 
   function getCards() {
@@ -832,7 +907,7 @@
         panelState.enabled = changes[STORAGE_KEY].newValue !== false;
         applyToAll();
       });
-    } catch {}
+    } catch { }
   }
 
   function createObserver() {
@@ -856,6 +931,7 @@
   let collectorEnabled = true;
   let _collectorPanel = null;
   let _autoScroller = null;
+  let _autoScrollStatusTimer = null;
 
   async function loadCollectorEnabled() {
     try {
@@ -870,13 +946,13 @@
     if (_collectorPanel) {
       try {
         _collectorPanel.destroy();
-      } catch {}
+      } catch { }
       _collectorPanel = null;
     }
     if (_autoScroller) {
       try {
         _autoScroller.stop && _autoScroller.stop();
-      } catch {}
+      } catch { }
       _autoScroller = null;
     }
   }
@@ -889,7 +965,7 @@
         if (collectorEnabled) mountCollectorHere();
         else unmountCollectorHere();
       });
-    } catch {}
+    } catch { }
   }
 
   function mountCollectorHere() {
@@ -929,7 +1005,7 @@
         _autoScroller = new window.QXAutoScroller({
           queue: taskQueue,
           intervalMs: 500,
-          settleMs: 1000,
+          settleMs: 60000,
           scrollStepRatio: 0.95,
           minScrollStepPx: 680,
           emptyThreshold: 5,
@@ -939,13 +1015,39 @@
           onCongestionPause: (which) => {
             if (!_collectorPanel) return;
             _collectorPanel.toast(which === 'paused' ? '队列拥塞，自动暂停翻页' : '队列恢复，继续翻页', 'info', 1800);
+            try {
+              _collectorPanel.setAutoScrollStatus(_autoScroller.getScrollStatus());
+            } catch { }
           },
           onEmpty: () => {
             if (!_collectorPanel) return;
             _collectorPanel.toast('当前页已抓取完成', 'success', 1800);
+            try {
+              _collectorPanel.setAutoScrollStatus(_autoScroller.getScrollStatus());
+            } catch { }
           },
         });
-      } catch {}
+      } catch { }
+      // 500ms 轮询翻页状态，更新面板展示
+      if (_autoScrollStatusTimer) clearInterval(_autoScrollStatusTimer);
+      _autoScrollStatusTimer = setInterval(() => {
+        if (!_autoScroller || !_collectorPanel) return;
+        try {
+          let status;
+          if (!_autoScroller.isUserActive()) {
+            // 自动翻页未开启: 如果有完成原因显示完成,否则显示 disabled
+            const sc = _autoScroller.getScrollStatus();
+            if (sc.status === 'completed') {
+              status = sc;
+            } else {
+              status = { status: 'disabled', reason: '自动翻页未开启', detail: '' };
+            }
+          } else {
+            status = _autoScroller.getScrollStatus();
+          }
+          _collectorPanel.setAutoScrollStatus(status);
+        } catch { }
+      }, 500);
     }
 
     // QXCollectorPanel.create 内部已调 mount(),无需单独调用
@@ -986,9 +1088,19 @@
               if (!productId) continue;
               const cached = panelDataCache.get(productId);
               const panel = card._ohPanel || card.querySelector('.ozon-helper-data-panel');
-              window.__jzCollectAutoIfMatched?.(productId, card, info, cached, panel, 'shop-page', sellerSlug, {
-                forceRefresh: true,
-              });
+              window.__jzCollectAutoIfMatched?.(
+                productId,
+                card,
+                info,
+                cached,
+                panel,
+                'shop-page',
+                sellerSlug,
+                sellerId,
+                {
+                  forceRefresh: true,
+                }
+              );
             }
           } catch (err) {
             console.warn('[ozon-data-panel] force refresh rescan failed:', err);
@@ -1000,6 +1112,17 @@
     window.jzCollectorToast = (msg, type, duration) => _collectorPanel?.toast?.(msg, type, duration);
     _collectorPanel.setRunning(panelState.enabled);
     onlyWithSales = _collectorPanel.getInitialSalesFilter();
+
+    // 页面加载恢复:若主开关已开启且自动翻页开关勾选,启动 AutoScroller
+    // (onToggleRunning 只在用户点击时触发,页面加载恢复时不会走那个分支)
+    if (panelState.enabled && _autoScroller) {
+      const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
+      if (cb && cb.checked) {
+        try {
+          _autoScroller.start();
+        } catch { }
+      }
+    }
 
     // 重放早到的店铺信息(若 MAIN world 写 data-jz-seller-info 时面板还没挂好)
     if (_pendingStoreUpdate) {
@@ -1054,8 +1177,8 @@
       }
     }
     console.log('[ozon-data-panel] =======================');
-    if (!detail || detail.pageType !== 'shop') {
-      console.log('[ozon-data-panel] 非 shop 页面,跳过 checkStoreClassification');
+    if (!detail || (detail.pageType !== 'shop' && detail.pageType !== 'pdp')) {
+      console.log('[ozon-data-panel] 非 shop/pdp 页面,跳过 checkStoreClassification');
       return;
     }
     const { slug, name, companyInfo } = detail;
@@ -1065,21 +1188,51 @@
     }
     sellerSlug = slug; // 缓存,供 loadPanelData → collectAutoIfMatched 用
     sellerName = name || ''; // 缓存店铺名称,供 renderSellerTag 显示
-    // 收到店铺信息后,立即给所有已渲染的商品卡补上店铺归属标签
-    // (ensureDataPanel 可能在 sellerName 到达前已经执行过)
-    try {
-      const cards = document.querySelectorAll(CARD_SELECTORS.join(','));
-      for (const card of cards) {
-        renderSellerTag(card);
+    sellerId = detail.sellerId || ''; // 缓存 sellerId,供上报 store-sku 用
+    // 店铺切换时清空非店铺商品 SKU 集合(页面刷新时 Set 自然重置,此处防御性处理)
+    if (detail.pageType === 'shop') _nonStoreSkus.clear();
+    // 收到店铺信息后,纠正时序问题(仅店铺页):ensureDataPanel 可能在 sellerSlug 到达前已执行,
+    // 导致非店铺商品(推荐区)也创建了 panel。这里扫描所有卡片,移除非店铺商品的 panel。
+    if (detail.pageType === 'shop') {
+      try {
+        const cards = document.querySelectorAll(CARD_SELECTORS.join(','));
+        let removedCount = 0;
+        for (const card of cards) {
+          renderSellerTag(card);
+          // 非店铺商品:移除可能已创建的 panel,记录 SKU 到 _nonStoreSkus
+          if (!isStoreSkuCard(card)) {
+            const link = card.querySelector('a[href*="/product/"]');
+            const m = link?.href.match(/\/product\/.*-(\d{5,})/);
+            if (m) _nonStoreSkus.add(String(m[1]));
+            if (card._ohPanel) {
+              card._ohPanel.remove();
+              card._ohPanel = null;
+              card._ohPanelAttached = false;
+              card._ohPanelSkipped = true;
+              removedCount++;
+            }
+          }
+        }
+        console.log(
+          '[ozon-data-panel] sellerName 已缓存,已为',
+          cards.length,
+          '个商品卡刷新店铺标签,移除',
+          removedCount,
+          '个非店铺商品 panel'
+        );
+      } catch (e) {
+        console.warn('[ozon-data-panel] 刷新店铺标签失败:', e);
       }
-      console.log('[ozon-data-panel] sellerName 已缓存,已为', cards.length, '个商品卡刷新店铺标签');
-    } catch (e) {
-      console.warn('[ozon-data-panel] 刷新店铺标签失败:', e);
     }
     try {
       document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'calling-SW', slug }));
-      console.log('[ozon-data-panel] >>> 调用 SW checkStoreClassification, 参数:', { slug, name, companyInfo });
-      const result = await window.sendMessage('checkStoreClassification', { slug, name, companyInfo });
+      console.log('[ozon-data-panel] >>> 调用 SW checkStoreClassification, 参数:', {
+        slug,
+        name,
+        companyInfo,
+        sellerId,
+      });
+      const result = await window.sendMessage('checkStoreClassification', { slug, name, companyInfo, sellerId });
       document.documentElement.setAttribute(
         'data-jz-seller-info-debug',
         JSON.stringify({
@@ -1224,7 +1377,7 @@
         const cached = panelDataCache.get(productId);
         if (!cached) continue;
         const panel = card._ohPanel || card.querySelector('.ozon-helper-data-panel');
-        window.__jzCollectAutoIfMatched?.(productId, card, info, cached, panel, 'shop-page', sellerSlug);
+        window.__jzCollectAutoIfMatched?.(productId, card, info, cached, panel, 'shop-page', sellerSlug, sellerId);
       }
     } catch (err) {
       console.warn('[ozon-data-panel] jz-store-classified rescan failed:', err);

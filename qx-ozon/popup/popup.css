@@ -1197,3 +1197,83 @@ select:focus {
 .auto-collect-card .status-dot.stopped {
   background: var(--text-muted);
 }
+
+/* ── 限速配置(可折叠)── */
+.ac-ratecfg {
+  margin-top: 4px;
+  border-top: 1px dashed #ebebeb;
+  padding-top: 6px;
+}
+.ac-ratecfg-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ac-ratecfg-toggle:hover {
+  color: var(--accent);
+}
+.ac-ratecfg-chevron {
+  transition: transform 0.15s ease;
+}
+.ac-ratecfg.is-open .ac-ratecfg-chevron {
+  transform: rotate(180deg);
+}
+.ac-ratecfg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+.ac-ratecfg-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 22px;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.ac-ratecfg-label {
+  white-space: nowrap;
+}
+.ac-ratecfg-row input[type='number'] {
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-feature-settings: 'tnum' 1;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid #ebebeb;
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.ac-ratecfg-row input[type='number']:focus {
+  border-color: var(--accent);
+}
+.ac-ratecfg-row input[type='number']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ac-ratecfg-unit {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: right;
+}
+.ac-ratecfg-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  min-height: 12px;
+}
+.ac-ratecfg-hint.is-ok {
+  color: var(--green);
+}
+.ac-ratecfg-hint.is-err {
+  color: var(--red);
+}

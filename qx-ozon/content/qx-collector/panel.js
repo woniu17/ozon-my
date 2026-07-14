@@ -120,11 +120,16 @@
       this.toastEl = null;
 
       this.pollTimer = null;
+      this.queueTimer = null; // 采集队列快速刷新定时器(500ms,只刷队列区域)
       this.countdownTimer = null;
       this.toastTimer = null;
 
       this.collapsed = localStorage.getItem(COLLAPSED_KEY) === '1';
       this.running = false;
+
+      // 自动翻页状态
+      this._autoScrollStatus = { status: 'idle', reason: '未启动', detail: '' };
+      this._autoScrollStatusShown = false;
 
       // 智能筛选 state（从 chrome.storage.local 异步加载）
       this.smartFilterState = null;
@@ -192,6 +197,7 @@
       this._renderStats();
       this._renderCacheHits();
       this._renderRecent();
+      this._renderAutoScrollStatus();
       this._renderCircuitBreaker();
       this.updateStoreDetection(this.storeDetection);
       this.startPolling();
@@ -268,6 +274,10 @@
             '        <span class="qx-c-switch-label">自动翻页</span>' +
             '      </label>' +
             '    </div>' +
+            '    <div class="qx-c-autoscroll-status qx-c-hidden" data-el="autoscroll-status">' +
+            '      <span class="qx-c-autoscroll-dot"></span>' +
+            '      <span class="qx-c-autoscroll-text" data-el="autoscroll-status-text">未启动</span>' +
+            '    </div>' +
             '    <div class="qx-c-row">' +
             '      <label class="qx-c-checkbox">' +
             '        <input type="checkbox" data-act="sales-filter" data-el="sales-filter" />' +
@@ -332,9 +342,9 @@
         '      <div class="qx-c-cache-item" data-el="cache-followSell-row"><span class="qx-c-cache-label">followSell</span><span class="qx-c-cache-num" data-el="cache-followSell">0</span></div>' +
         '    </div>' +
         '  </div>' +
-        // 最近采集
+        // 采集队列
         '  <div class="qx-c-section-block">' +
-        '    <div class="qx-c-section-title">最近采集</div>' +
+        '    <div class="qx-c-section-title">采集队列 <span class="qx-c-queue-len" data-el="queue-len">0</span></div>' +
         '    <div class="qx-c-recent" data-el="recent-list"></div>' +
         '  </div>' +
         // 操作按钮
@@ -595,6 +605,11 @@
       this.pollTimer = setInterval(function () {
         self._poll();
       }, POLL_INTERVAL_MS);
+      // 采集队列快速刷新:500ms 刷一次,实时反映"采集中→已完成"状态变化
+      // __jzCollectingSkus 是 content script 内存 Set,无需走 SW 消息,读取零开销
+      this.queueTimer = setInterval(function () {
+        self._renderRecent();
+      }, 500);
     }
 
     async _poll() {
@@ -687,15 +702,54 @@
       });
     }
 
-    // ── 渲染: 最近采集 ──
+    // ── 渲染: 采集队列(正在采集 + 最近已完成,合并去重,限 5 条) ──
     _renderRecent() {
       var container = this._q('recent-list');
       if (!container) return;
-      var list = this.recent;
+
+      // 1. 正在采集的 SKU(从 shared-utils 的 __jzCollectingSkus Set 读取)
+      var collectingSkus = [];
+      try {
+        var set = window.__jzCollectingSkus;
+        if (set && typeof set.forEach === 'function') {
+          set.forEach(function (sku) {
+            collectingSkus.push({ sku: String(sku), status: 'collecting', source: '—', duration: null });
+          });
+        }
+      } catch (_) {}
+
+      // 2. 已完成的最近记录(SW 端 _autoCollectRecent)
+      var recent = this.recent || [];
+      var collectingSet = {};
+      collectingSkus.forEach(function (c) {
+        collectingSet[c.sku] = true;
+      });
+      // 去重:已完成的 SKU 如果正在采集中,不重复显示(以 collecting 状态为准)
+      var doneList = recent.filter(function (r) {
+        return !collectingSet[r.sku];
+      });
+
+      // 3. 合并:collecting 在前,已完成在后,限 5 条
+      var list = collectingSkus.concat(doneList).slice(0, 5);
+
+      // 更新队列长度徽章:只显示正在采集的数量
+      var queueLenEl = this._q('queue-len');
+      if (queueLenEl) {
+        var inFlight = collectingSkus.length;
+        queueLenEl.textContent = String(inFlight);
+        // 有进行中任务时高亮为品牌色
+        if (inFlight > 0) {
+          queueLenEl.classList.add('is-active');
+        } else {
+          queueLenEl.classList.remove('is-active');
+        }
+      }
+
       if (!list.length) {
         container.innerHTML = '<div class="qx-c-recent-empty">暂无记录</div>';
         return;
       }
+
       var html =
         '<div class="qx-c-recent-head">' +
         '<span>SKU</span><span>来源</span><span>状态</span><span>耗时</span>' +
@@ -704,7 +758,10 @@
         .map(function (r) {
           var statusCls = 'qx-c-recent-status-' + (r.status || 'unknown');
           var statusText = r.status || '—';
-          var duration = r.duration != null ? r.duration + 'ms' : '—';
+          var duration = '—';
+          if (r.duration != null) {
+            duration = (r.duration / 1000).toFixed(1) + 's';
+          }
           var sku = r.sku || '—';
           var source = r.source || '—';
           return (
@@ -795,6 +852,31 @@
     setRunning(running) {
       this.running = !!running;
       this._renderStatus();
+    }
+
+    // ── 自动翻页状态 ──
+    setAutoScrollStatus(status) {
+      this._autoScrollStatus = status || { status: 'idle', reason: '未启动', detail: '' };
+      this._renderAutoScrollStatus();
+    }
+
+    _renderAutoScrollStatus() {
+      var row = this._q('autoscroll-status');
+      var textEl = this._q('autoscroll-status-text');
+      if (!row || !textEl) return;
+      var st = this._autoScrollStatus;
+      var status = st.status;
+      var reason = st.reason;
+      var detail = st.detail;
+      // 曾显示过非 idle 状态后,持续显示
+      if (status !== 'idle') this._autoScrollStatusShown = true;
+      if (!this._autoScrollStatusShown) {
+        row.classList.add('qx-c-hidden');
+        return;
+      }
+      row.classList.remove('qx-c-hidden');
+      row.className = 'qx-c-autoscroll-status' + (status !== 'idle' ? ' is-' + status : '');
+      textEl.textContent = detail ? reason + ' · ' + detail : reason;
     }
 
     // ── 仅抓有销量初始值 ──
@@ -1197,6 +1279,10 @@
       if (this.pollTimer) {
         clearInterval(this.pollTimer);
         this.pollTimer = null;
+      }
+      if (this.queueTimer) {
+        clearInterval(this.queueTimer);
+        this.queueTimer = null;
       }
       this._stopCountdownTimer();
       if (this.toastTimer) {

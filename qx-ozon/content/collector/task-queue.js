@@ -165,12 +165,18 @@
 
     _maybeEmitCongestion(stats) {
       const now = Date.now();
-      if (now - this._lastCongestionAt < this.hysteresisMs) {
+      // 例外:当前为 high 但队列已空(running=0 && pending=0)时,跳过滞后检查直接恢复,
+      // 否则 high 刚触发后任务快速完成,low 事件被 hysteresis 跳过,翻页永久卡在拥塞暂停。
+      const drainedFromHigh = this._congestionLevel === 'high' && stats.running === 0 && stats.pending === 0;
+      if (!drainedFromHigh && now - this._lastCongestionAt < this.hysteresisMs) {
         console.log(
           '[JZTaskQueue] congestion skip(hysteresis)',
-          'elapsed=', now - this._lastCongestionAt,
-          'hysteresisMs=', this.hysteresisMs,
-          'stats=', stats
+          'elapsed=',
+          now - this._lastCongestionAt,
+          'hysteresisMs=',
+          this.hysteresisMs,
+          'stats=',
+          stats
         );
         return;
       }
@@ -179,11 +185,24 @@
       const isLow = stats.running <= this.autoPauseLow && stats.pending <= this.pauseLowPending;
       console.log(
         '[JZTaskQueue] congestion eval',
-        'running=', stats.running, 'pending=', stats.pending,
-        'concurrency=', this.concurrency,
-        'autoPauseHigh=', this.autoPauseHigh, 'autoPauseLow=', this.autoPauseLow,
-        'pauseLowPending=', this.pauseLowPending,
-        'isHigh=', isHigh, 'isLow=', isLow, 'curLevel=', this._congestionLevel
+        'running=',
+        stats.running,
+        'pending=',
+        stats.pending,
+        'concurrency=',
+        this.concurrency,
+        'autoPauseHigh=',
+        this.autoPauseHigh,
+        'autoPauseLow=',
+        this.autoPauseLow,
+        'pauseLowPending=',
+        this.pauseLowPending,
+        'isHigh=',
+        isHigh,
+        'isLow=',
+        isLow,
+        'curLevel=',
+        this._congestionLevel
       );
       if (isHigh && this._congestionLevel !== 'high') {
         this._congestionLevel = 'high';

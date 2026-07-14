@@ -1937,8 +1937,18 @@ try {
   };
 
   const fetchVariantMediaViaBuyerTab = async (productUrl, options = {}) => {
-    const EMPTY = { mp4: null, richContent: '', description: '', hashtags: [], endpoint: null };
-    if (!productUrl || typeof productUrl !== 'string') return EMPTY;
+    const EMPTY = {
+      mp4: null,
+      richContent: '',
+      description: '',
+      hashtags: [],
+      endpoint: null,
+      errorReason: null,
+    };
+    if (!productUrl || typeof productUrl !== 'string') {
+      EMPTY.errorReason = 'NO_PRODUCT_URL';
+      return EMPTY;
+    }
     let path = productUrl;
     try {
       const u = new URL(productUrl, 'https://www.ozon.ru');
@@ -2019,6 +2029,7 @@ try {
       tab = await ensureBuyerTab();
     } catch (e) {
       console.warn('[fetchVariantMedia] ensureBuyerTab 失败:', e?.message || e);
+      EMPTY.errorReason = 'BUYER_TAB_FAILED:' + (e?.message || 'unknown');
       return EMPTY;
     }
     // MAIN world:相对路径同源命中(www.ozon.ru / ozon.kz),依次试 entrypoint→composer
@@ -2150,7 +2161,10 @@ try {
       let hashtags = [];
       // 合并所有成功 endpoint 的 widgetStates(SW 侧用于抽 composer fields + 写缓存)
       const composerWidgetStates = {};
+      // 收集每个 endpoint 的失败原因(全失败时用于细化 NO_ENDPOINT)
+      const failReasons = [];
       for (const url of endpoints) {
+        const epName = url.includes('entrypoint-api') ? 'entrypoint' : 'composer';
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeout);
         try {
@@ -2160,7 +2174,10 @@ try {
             signal: controller.signal,
           });
           clearTimeout(timer);
-          if (!resp.ok) continue;
+          if (!resp.ok) {
+            failReasons.push(`${epName}:HTTP_${resp.status}`);
+            continue;
+          }
           anyOk = true;
           const data = await resp.json();
           const states = data && data.widgetStates ? data.widgetStates : {};
@@ -2176,7 +2193,10 @@ try {
           if (mp4 && richContent) break;
         } catch (e) {
           clearTimeout(timer);
-          // 单个 endpoint 失败 → 试下一个。
+          // 单个 endpoint 失败 → 试下一个。区分超时/网络错误
+          const reason =
+            e?.name === 'AbortError' ? `${epName}:TIMEOUT` : `${epName}:NET_${(e?.message || 'error').slice(0, 60)}`;
+          failReasons.push(reason);
         }
       }
 
@@ -2269,6 +2289,7 @@ try {
 
       // 有 200 过则按真实抽取结果返回;全失败则 ok:false。
       // 三合一改造:额外返回 composerWidgetStates(SW 抽 fields)+ followSellData
+      // 全失败时返回 failReasons(细化 NO_ENDPOINT:HTTP 状态码/超时/网络错误)
       return anyOk
         ? {
             ok: true,
@@ -2283,6 +2304,7 @@ try {
         : {
             ok: false,
             error: 'all endpoints failed',
+            failReasons: failReasons.length ? failReasons.join('|') : 'NO_REQUEST_ATTEMPTED',
             followSellData,
           };
     };
@@ -2318,10 +2340,18 @@ try {
       ]);
       const r = results && results[0] && results[0].result;
       if (!r || !r.ok) {
-        console.warn('[fetchVariantMedia] 抓取失败:', r && r.error);
+        console.warn('[fetchVariantMedia] 抓取失败:', r && r.error, r && r.failReasons);
         // 即使产品页 fetch 全失败,跟卖 modal 可能成功 — 仍写 followSell 缓存
         if (urlSku && r && r.followSellData) {
           _followSellCacheSet(urlSku, r.followSellData);
+        }
+        // 细化 errorReason:doFetch 全失败时透传 failReasons
+        if (!r) {
+          EMPTY.errorReason = 'DOFETCH_NO_RESULT';
+        } else if (r.failReasons) {
+          EMPTY.errorReason = 'ALL_ENDPOINTS_FAILED:' + r.failReasons;
+        } else {
+          EMPTY.errorReason = 'DOFETCH_FAILED:' + (r.error || 'unknown');
         }
         return EMPTY;
       }
@@ -2463,6 +2493,7 @@ try {
       return result;
     } catch (e) {
       console.warn('[fetchVariantMedia] executeScript 异常:', e?.message || e);
+      EMPTY.errorReason = 'EXECUTE_SCRIPT_FAILED:' + (e?.message || 'unknown').slice(0, 80);
       return EMPTY;
     }
   };
@@ -2502,9 +2533,9 @@ try {
     depth: 'Full',
     paused: false,
     pausedUntil: 0,
-    buyerPageMinInterval: 500,
+    buyerPageMinInterval: 5000,
     sellerPortalMinInterval: 200,
-    skuInterval: 1000,
+    skuInterval: 30000,
     perDayLimit: 2000,
     todayCount: 0,
     todayDate: '',
@@ -2613,11 +2644,27 @@ try {
     }
   };
 
+  // L2 MongoDB:POST /admin/api/store-sku(upsert SKU-店铺关联)
+  // 由 content script panel 加载时(reportStoreSku 消息)和 SW autoCollect 完成时调用。
+  // payload: { sku, sellerId, sellerSlug, sellerName, lastCollectAt?, lastCollectStatus?, lastCollectResults? }
+  const _erpStoreSkuReport = async (payload) => {
+    try {
+      const url = await getBackendUrl();
+      const stored = await getStorage([STORAGE_KEYS.token]);
+      await apiRequest('POST', `${url}/admin/api/store-sku`, payload, stored[STORAGE_KEYS.token]);
+      return true;
+    } catch (e) {
+      console.warn(`[store-sku] ERP report failed sku=${payload?.sku}:`, e?.message || e);
+      return false;
+    }
+  };
+
   // 三层查询:L1 chrome.storage.local → L2 MongoDB → 规则引擎。
   // 返回 { isChinese, classifiedBy } | null(未分类,等待人工确认)。
-  const checkStoreClassification = async (slug, name, companyInfo) => {
+  // sellerId 用于写入 L2 时带上(稳定主键,slug 可变)
+  const checkStoreClassification = async (slug, name, companyInfo, sellerId) => {
     if (!slug) return null;
-    console.log('[store-class] checkStoreClassification called:', { slug, name, companyInfo });
+    console.log('[store-class] checkStoreClassification called:', { slug, name, companyInfo, sellerId });
     const config = await _loadAutoCollectConfig();
     console.log('[store-class] config loaded:', {
       knownChineseSlugs: config?.knownChineseSlugs,
@@ -2665,6 +2712,7 @@ try {
     if (ruleResult.isChinese !== null) {
       const record = {
         sellerSlug: slug,
+        sellerId: sellerId || '',
         sellerName: name,
         isChinese: ruleResult.isChinese,
         classifiedBy: ruleResult.by,
@@ -2687,6 +2735,7 @@ try {
     console.log('[store-class] unclassified, writing null record to L2 (waiting manual confirm)');
     _erpStoreClassSet(slug, {
       sellerSlug: slug,
+      sellerId: sellerId || '',
       sellerName: name,
       isChinese: null,
       classifiedBy: null,
@@ -2697,8 +2746,8 @@ try {
   };
 
   // 人工确认分类:写 L1 + L2(classifiedBy:'manual')。
-  // 入参 { slug, name, isChinese } → 返回 { ok: true }
-  const manualClassifyStore = async (slug, name, isChinese) => {
+  // 入参 { slug, name, isChinese, sellerId } → 返回 { ok: true }
+  const manualClassifyStore = async (slug, name, isChinese, sellerId) => {
     if (!slug) return { ok: false, error: 'missing slug' };
     const classifiedBy = 'manual';
     const classifiedAt = new Date().toISOString();
@@ -2710,6 +2759,7 @@ try {
     }
     await _erpStoreClassSet(slug, {
       sellerSlug: slug,
+      sellerId: sellerId || '',
       sellerName: name,
       isChinese,
       classifiedBy,
@@ -3606,7 +3656,7 @@ try {
   //   → Step 7(写日志 + 更新计数器)
   // ANTIBOT 分支:Step 4/5/6 任一步检测到反爬 → _handleAntibot(暂停 10 分钟 + 通知 + 写日志)。
   // 失败不熔断:marketStats/followSell 失败返回 partial,不影响其他类目。
-  const _doAutoCollect = async (sku, source, sellerSlug, depth, forceRefresh) => {
+  const _doAutoCollect = async (sku, source, sellerSlug, depth, forceRefresh, sellerId) => {
     const startTime = Date.now();
     const results = [
       { type: 'card', hit: false },
@@ -3653,7 +3703,7 @@ try {
       }
 
       // === Gate 0.5: 中国店铺检查 ===
-      const cls = await checkStoreClassification(sellerSlug, null, null);
+      const cls = await checkStoreClassification(sellerSlug, null, null, sellerId);
       if (cls) {
         storeClassified = cls.isChinese === true ? 'chinese' : cls.isChinese === false ? 'non-chinese' : 'unclassified';
       }
@@ -3757,7 +3807,17 @@ try {
           if (ep.startsWith('entrypoint-')) {
             results[3].hit = true;
           } else if (!ep) {
-            results[3].error = 'NO_ENDPOINT';
+            // 细化 NO_ENDPOINT:从 mediaResult.errorReason 取具体原因
+            // (BUYER_TAB_FAILED / ALL_ENDPOINTS_FAILED:entrypoint:HTTP_404|composer:HTTP_404 / TIMEOUT 等)
+            results[3].error = mediaResult?.errorReason || 'NO_ENDPOINT';
+            // 反爬检测:买家页 endpoint 全部 403/429 视为反爬挑战,抛 ANTIBOT_BLOCKED
+            // 触发 _handleAntibot 熔断(暂停 10 分钟),避免持续无效真调被 Ozon 进一步限制。
+            // (fetchVariantMediaViaBuyerTab 内部把 403 当普通 HTTP 错误记到 failReasons,
+            //  不会抛 ANTIBOT_BLOCKED,这里补上检测)
+            const reason = String(results[3].error || '');
+            if (/HTTP_403|HTTP_429/.test(reason)) {
+              throw new Error('ANTIBOT_BLOCKED');
+            }
           } else {
             results[3].error = 'FALLBACK_' + ep;
           }
@@ -3959,6 +4019,20 @@ try {
         results,
         totalDuration,
       });
+
+      // 上报 store-sku 关联(采集完成,覆盖 lastCollect*)
+      // 仅当 sellerId 非空时上报(无 sellerId 表示非店铺页采集,store-sku 由 panel 上报)
+      if (sellerId) {
+        _erpStoreSkuReport({
+          sku,
+          sellerId,
+          sellerSlug,
+          sellerName: null,
+          lastCollectAt: new Date().toISOString(),
+          lastCollectStatus: status,
+          lastCollectResults: results,
+        });
+      }
 
       return { status, results, totalDuration };
     } catch (e) {
@@ -5341,14 +5415,15 @@ try {
         }
         case 'checkStoreClassification': {
           // 三层查询店铺中国身份(L1 chrome.storage → L2 MongoDB → 规则引擎)。
-          // 入参: { slug, name, companyInfo? }
+          // 入参: { slug, name, companyInfo?, sellerId? }
           // 返回: { ok, data: { isChinese, classifiedBy } | null }
           try {
             const slug = String(message.slug || '');
             const name = message.name || '';
             const companyInfo = message.companyInfo || null;
+            const sellerId = message.sellerId || '';
             if (!slug) return { ok: true, data: null };
-            const data = await checkStoreClassification(slug, name, companyInfo);
+            const data = await checkStoreClassification(slug, name, companyInfo, sellerId);
             return { ok: true, data };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
@@ -5356,16 +5431,41 @@ try {
         }
         case 'classifyStore': {
           // 人工确认店铺分类:写 L1 + L2(classifiedBy:'manual')。
-          // 入参: { slug, name, isChinese }  返回: { ok: true }
+          // 入参: { slug, name, isChinese, sellerId? }  返回: { ok: true }
           try {
             const slug = String(message.slug || '');
             const name = message.name || '';
             const isChinese = message.isChinese;
+            const sellerId = message.sellerId || '';
             if (!slug || isChinese === undefined || isChinese === null) {
               return { ok: false, error: 'missing slug or isChinese' };
             }
-            const data = await manualClassifyStore(slug, name, isChinese);
+            const data = await manualClassifyStore(slug, name, isChinese, sellerId);
             return { ok: true, data };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'reportStoreSku': {
+          // panel 加载时上报"发现"关系到 ozon_store_sku 集合。
+          // 入参: { sku, sellerId, sellerSlug, sellerName, lastCollectAt?, lastCollectStatus?, lastCollectResults? }
+          // 返回: { ok: true }
+          try {
+            const payload = {
+              sku: String(message.sku || ''),
+              sellerId: String(message.sellerId || ''),
+              sellerSlug: String(message.sellerSlug || ''),
+              sellerName: message.sellerName || '',
+            };
+            if (message.lastCollectAt) payload.lastCollectAt = message.lastCollectAt;
+            if (message.lastCollectStatus) payload.lastCollectStatus = message.lastCollectStatus;
+            if (Array.isArray(message.lastCollectResults)) payload.lastCollectResults = message.lastCollectResults;
+            if (!payload.sku || !payload.sellerId) {
+              return { ok: false, error: 'missing sku or sellerId' };
+            }
+            // fire-and-forget,不阻塞 panel 渲染
+            _erpStoreSkuReport(payload);
+            return { ok: true };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
@@ -5613,9 +5713,16 @@ try {
           // 由 content script(shop-page / pdp)发现新 SKU 时触发,SW 内部编排全流程。
           // 注意:_doAutoCollect 返回 { status, results, ... } 没有 ok 字段,
           // 这里包装成 { ok: true, data: ... } 以符合 sendMessage 协议。
-          const { sku: acSku, source: acSource, sellerSlug: acSlug, depth: acDepth, forceRefresh: acForce } = message;
+          const {
+            sku: acSku,
+            source: acSource,
+            sellerSlug: acSlug,
+            sellerId: acSellerId,
+            depth: acDepth,
+            forceRefresh: acForce,
+          } = message;
           console.log('[SW autoCollect] 收到请求:', acSku, 'source=', acSource, 'force=', acForce);
-          const acResult = await _doAutoCollect(acSku, acSource, acSlug, acDepth, acForce);
+          const acResult = await _doAutoCollect(acSku, acSource, acSlug, acDepth, acForce, acSellerId);
           console.log(
             '[SW autoCollect] 返回:',
             acSku,
@@ -5640,6 +5747,9 @@ try {
               todayCount: _acCfg.todayCount,
               perDayLimit: _acCfg.perDayLimit,
               todayDate: _acCfg.todayDate,
+              buyerPageMinInterval: _acCfg.buyerPageMinInterval,
+              sellerPortalMinInterval: _acCfg.sellerPortalMinInterval,
+              skuInterval: _acCfg.skuInterval,
               marketStatsStaleMs: _acCfg.marketStatsStaleMs,
               followSellStaleMs: _acCfg.followSellStaleMs,
               onlyChineseStores: _acCfg.onlyChineseStores,
@@ -5650,13 +5760,18 @@ try {
         }
         case 'autoCollectSetConfig': {
           // Task 22:面板写入 autoCollect 配置(仅白名单字段,内部状态如
-          // todayCount/todayDate/pausedUntil 不允许面板直改)。
+          // todayDate/pausedUntil 不允许面板直改)。限速字段(buyerPageMinInterval/
+          // sellerPortalMinInterval/skuInterval/perDayLimit)已加入白名单,允许 popup 调整。
           const _acUpdates = message.config || message;
           const _acAllowed = [
             'enabled',
             'autoCollectRunning',
             'paused',
             'depth',
+            'buyerPageMinInterval',
+            'sellerPortalMinInterval',
+            'skuInterval',
+            'perDayLimit',
             'marketStatsStaleMs',
             'followSellStaleMs',
             'onlyChineseStores',

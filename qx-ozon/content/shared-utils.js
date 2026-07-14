@@ -3857,6 +3857,7 @@ if (!globalThis.__JZ_BRAND__) {
       sku: skuStr,
       source,
       sellerSlug,
+      sellerId: options.sellerId || '',
       depth: 'Full',
       forceRefresh: options.forceRefresh || false,
     })
@@ -3930,7 +3931,7 @@ if (!globalThis.__JZ_BRAND__) {
    * @param {string} source - 来源:'shop-page' | 'pdp'
    * @param {string} sellerSlug - 卖家 slug
    */
-  async function collectAutoIfMatched(productId, card, info, data, panel, source, sellerSlug, options = {}) {
+  async function collectAutoIfMatched(productId, card, info, data, panel, source, sellerSlug, sellerId, options = {}) {
     const sku = String(productId);
     // forceRefresh 时跳过 autoCollectRunning + 筛选检查,直接发 autoCollect
     if (!autoCollectRunning && !options.forceRefresh) {
@@ -3947,7 +3948,7 @@ if (!globalThis.__JZ_BRAND__) {
       return;
     }
     console.log('[autoCollect] 通过筛选,触发采集:', sku, 'source=', source);
-    autoCollectOnSkuSeen(sku, source, sellerSlug, options);
+    autoCollectOnSkuSeen(sku, source, sellerSlug, { ...options, sellerId });
   }
   window.__jzCollectAutoIfMatched = collectAutoIfMatched;
 

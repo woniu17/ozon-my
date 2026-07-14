@@ -13,6 +13,8 @@ import {
   getStoreClassificationList,
   updateStoreClassification,
   deleteStoreClassification,
+  getStoreSkuList,
+  deleteStoreSku,
 } from '../api/cache.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
@@ -101,6 +103,8 @@ function switchType(t) {
     loadLogs();
   } else if (t === 'store-classification') {
     loadStoreClassifications();
+  } else if (t === 'store-sku') {
+    loadStoreSkus();
   } else {
     loadList();
   }
@@ -388,6 +392,63 @@ async function deleteStoreClass(slug) {
   }
 }
 
+// ── 店铺 SKU 关联 ─────────────────────────────────────────
+const storeSkus = ref([]);
+const storeSkuFilters = reactive({
+  keyword: '',
+});
+const storeSkuPager = reactive({
+  current: 1,
+  total: 0,
+  pageSize: 50,
+});
+
+async function loadStoreSkus() {
+  try {
+    const data = await getStoreSkuList({
+      keyword: storeSkuFilters.keyword.trim(),
+      currentPage: storeSkuPager.current,
+      pageSize: storeSkuPager.pageSize,
+    });
+    storeSkus.value = data?.items || [];
+    storeSkuPager.total = data?.total || 0;
+  } catch (err) {
+    show(err.message || String(err), 'error');
+    storeSkus.value = [];
+    storeSkuPager.total = 0;
+  }
+}
+
+function searchStoreSkus() {
+  storeSkuPager.current = 1;
+  loadStoreSkus();
+}
+
+function onStoreSkuPageChange(p) {
+  storeSkuPager.current = p;
+  loadStoreSkus();
+}
+
+async function deleteStoreSkuRecord(sku) {
+  if (!confirm(`确认删除店铺 SKU 关联 ${sku}?`)) return;
+  try {
+    await deleteStoreSku(sku);
+    show('已删除', 'success');
+    await loadStoreSkus();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  }
+}
+
+// 采集状态标签 class
+function collectStatusTag(status) {
+  if (status === 'success') return 'tag tag-ok';
+  if (status === 'failed' || status === 'antibot') return 'tag tag-err';
+  if (status === 'partial') return 'tag tag-warn';
+  if (status === 'skipped') return 'tag tag-mute';
+  return 'tag tag-mute';
+}
+
 onMounted(() => {
   loadStats();
   loadList();
@@ -511,10 +572,15 @@ onMounted(() => {
       >
         店铺分类
       </button>
+      <button class="cache-type-tab" :class="{ active: state.type === 'store-sku' }" @click="switchType('store-sku')">
+        店铺 SKU
+      </button>
     </div>
 
-    <!-- 缓存列表区(非自动采集/店铺分类 tab) -->
-    <template v-if="state.type !== 'auto-collect' && state.type !== 'store-classification'">
+    <!-- 缓存列表区(非自动采集/店铺分类/店铺 SKU tab) -->
+    <template
+      v-if="state.type !== 'auto-collect' && state.type !== 'store-classification' && state.type !== 'store-sku'"
+    >
       <!-- 筛选 -->
       <div class="filter-bar">
         <input
@@ -833,6 +899,68 @@ onMounted(() => {
         :total="storeClassPager.total"
         :pageSize="storeClassPager.pageSize"
         @update:modelValue="onStoreClassPageChange"
+      />
+    </div>
+
+    <!-- 店铺 SKU 关联 tab -->
+    <div v-if="state.type === 'store-sku'" class="store-sku-tab">
+      <div class="filter-bar">
+        <input
+          class="filter-input"
+          type="text"
+          v-model.trim="storeSkuFilters.keyword"
+          placeholder="SKU / 店铺名 / Slug / SellerId"
+          @keydown.enter="searchStoreSkus"
+        />
+        <button class="btn btn-primary" @click="searchStoreSkus">查询</button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>SKU</th>
+              <th>Seller ID</th>
+              <th>Seller Slug</th>
+              <th>Seller Name</th>
+              <th>采集状态</th>
+              <th>首次发现</th>
+              <th>最后发现</th>
+              <th>最后采集</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!storeSkus.length">
+              <td colspan="9" class="empty">暂无店铺 SKU 关联记录</td>
+            </tr>
+            <tr v-for="ss in storeSkus" :key="ss._id">
+              <td class="col-sku">{{ ss.sku }}</td>
+              <td>{{ ss.sellerId || '—' }}</td>
+              <td>{{ ss.sellerSlug || '—' }}</td>
+              <td>{{ ss.sellerName || '—' }}</td>
+              <td>
+                <span v-if="ss.lastCollectStatus" :class="collectStatusTag(ss.lastCollectStatus)">
+                  {{ ss.lastCollectStatus }}
+                </span>
+                <span v-else class="muted">—</span>
+              </td>
+              <td class="col-time">{{ fmtTime(ss.firstSeenAt) }}</td>
+              <td class="col-time">{{ fmtTime(ss.lastSeenAt) }}</td>
+              <td class="col-time">{{ fmtTime(ss.lastCollectAt) }}</td>
+              <td class="row-actions">
+                <button class="btn btn-sm btn-danger" @click="deleteStoreSkuRecord(ss.sku)">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <AppPager
+        :modelValue="storeSkuPager.current"
+        :total="storeSkuPager.total"
+        :pageSize="storeSkuPager.pageSize"
+        @update:modelValue="onStoreSkuPageChange"
       />
     </div>
 

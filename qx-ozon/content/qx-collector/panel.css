@@ -192,6 +192,86 @@
   accent-color: rgb(232, 77, 146);
 }
 
+/* ── 自动翻页状态行 ── */
+.qx-c-autoscroll-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 2px 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.7);
+  background: #f9fafb;
+  border-radius: 6px;
+  border: 1px solid #f0f0f0;
+}
+.qx-c-autoscroll-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #94a3b8;
+}
+.qx-c-autoscroll-status.is-scrolling .qx-c-autoscroll-dot {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.45);
+  animation: qx-c-pulse 1.6s ease-in-out infinite;
+}
+.qx-c-autoscroll-status.is-scrolling {
+  color: #15803d;
+}
+.qx-c-autoscroll-status.is-congested .qx-c-autoscroll-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.45);
+}
+.qx-c-autoscroll-status.is-congested {
+  color: #b45309;
+}
+.qx-c-autoscroll-status.is-waiting-ready .qx-c-autoscroll-dot {
+  background: #3b82f6;
+  animation: qx-c-blink 2s ease-in-out infinite;
+}
+.qx-c-autoscroll-status.is-waiting-ready {
+  color: #1d4ed8;
+}
+.qx-c-autoscroll-status.is-waiting-queue .qx-c-autoscroll-dot {
+  background: #6366f1;
+  animation: qx-c-blink 2s ease-in-out infinite;
+}
+.qx-c-autoscroll-status.is-waiting-queue {
+  color: #4338ca;
+}
+.qx-c-autoscroll-status.is-disabled .qx-c-autoscroll-dot {
+  background: #9ca3af;
+}
+.qx-c-autoscroll-status.is-disabled {
+  color: #6b7280;
+}
+.qx-c-autoscroll-status.is-completed .qx-c-autoscroll-dot {
+  background: #84cc16;
+}
+.qx-c-autoscroll-status.is-completed {
+  color: #4d7c0f;
+}
+@keyframes qx-c-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes qx-c-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
 /* ── 智能筛选入口 ── */
 .qx-c-filter-entry {
   display: flex;
@@ -291,9 +371,30 @@
   color: #d97706;
 }
 
-/* ── 最近采集 ── */
+/* ── 采集队列(正在采集 + 最近已完成) ── */
 .qx-c-recent {
   font-size: 11px;
+}
+.qx-c-queue-len {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: 8px;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
+}
+.qx-c-queue-len.is-active {
+  background: rgb(232, 77, 146);
+  color: #fff;
 }
 .qx-c-recent-head {
   display: grid;
@@ -323,6 +424,14 @@
 }
 .qx-c-recent-status-success {
   color: #15803d;
+  font-weight: 600;
+}
+.qx-c-recent-status-collecting {
+  color: #2563eb;
+  font-weight: 600;
+}
+.qx-c-recent-status-partial {
+  color: #d97706;
   font-weight: 600;
 }
 .qx-c-recent-status-failed {

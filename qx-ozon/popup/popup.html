@@ -511,6 +511,49 @@
                 <span class="ac-warning">⚠ 熔断中</span>
                 <span id="ac-paused-countdown"></span>
               </div>
+              <!-- 限速配置(可折叠):买家页间隔/卖家后台间隔/SKU 间隔/每日上限。
+                   字段对应 jz-auto-collect-config 中 buyerPageMinInterval 等。 -->
+              <div class="ac-ratecfg" id="ac-ratecfg">
+                <button class="ac-ratecfg-toggle" id="ac-ratecfg-toggle" type="button">
+                  <span>限速配置</span>
+                  <svg
+                    class="ac-ratecfg-chevron"
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+                <div class="ac-ratecfg-body" id="ac-ratecfg-body" style="display: none">
+                  <label class="ac-ratecfg-row">
+                    <span class="ac-ratecfg-label">买家页间隔</span>
+                    <input type="number" id="ac-rate-buyer" min="1000" max="60000" step="500" data-unit="ms" />
+                    <span class="ac-ratecfg-unit">ms</span>
+                  </label>
+                  <label class="ac-ratecfg-row">
+                    <span class="ac-ratecfg-label">卖家后台间隔</span>
+                    <input type="number" id="ac-rate-seller" min="100" max="10000" step="100" data-unit="ms" />
+                    <span class="ac-ratecfg-unit">ms</span>
+                  </label>
+                  <label class="ac-ratecfg-row">
+                    <span class="ac-ratecfg-label">SKU 间隔</span>
+                    <input type="number" id="ac-rate-sku" min="2000" max="120000" step="1000" data-unit="ms" />
+                    <span class="ac-ratecfg-unit">ms</span>
+                  </label>
+                  <label class="ac-ratecfg-row">
+                    <span class="ac-ratecfg-label">每日上限</span>
+                    <input type="number" id="ac-rate-perday" min="0" max="100000" step="50" data-unit="个" />
+                    <span class="ac-ratecfg-unit">个</span>
+                  </label>
+                  <div class="ac-ratecfg-hint" id="ac-ratecfg-hint"></div>
+                </div>
+              </div>
             </div>
           </div>
 

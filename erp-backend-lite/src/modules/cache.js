@@ -1141,6 +1141,7 @@ router.get('/admin/api/store-classification/:slug', async (req, res, next) => {
     return res.json(
       ok({
         sellerSlug: doc.sellerSlug || doc._id,
+        sellerId: doc.sellerId || '',
         sellerName: doc.sellerName || '',
         isChinese: doc.isChinese === true,
         classifiedBy: doc.classifiedBy || '',
@@ -1156,8 +1157,9 @@ router.get('/admin/api/store-classification/:slug', async (req, res, next) => {
 });
 
 // POST /admin/api/store-classification/:slug — upsert 分类记录
-// body: { sellerName, isChinese, classifiedBy, companyInfo, lastSeenAt, lastSeenUrl }
+// body: { sellerId, sellerName, isChinese, classifiedBy, companyInfo, lastSeenAt, lastSeenUrl }
 // 已存在时更新 isChinese/classifiedBy/classifiedAt 并刷新 lastSeenAt
+// sellerId 用于后续以 ID 为主键查询(sparse unique index 避免历史空值冲突)
 router.post('/admin/api/store-classification/:slug', async (req, res, next) => {
   try {
     const slug = String(req.params.slug);
@@ -1175,6 +1177,10 @@ router.post('/admin/api/store-classification/:slug', async (req, res, next) => {
       lastSeenAt,
       lastSeenUrl: body.lastSeenUrl != null ? String(body.lastSeenUrl) : '',
     };
+    // sellerId 仅在非空时设置,避免空字符串违反 partialFilterExpression 唯一索引
+    if (body.sellerId != null && String(body.sellerId) !== '') {
+      update.sellerId = String(body.sellerId);
+    }
 
     const col = await cols.storeClassification();
     await col.updateOne({ _id: slug }, { $set: update }, { upsert: true });
@@ -1215,6 +1221,7 @@ router.get('/admin/api/store-classification', async (req, res, next) => {
       query.$or = [
         { sellerName: { $regex: keyword, $options: 'i' } },
         { sellerSlug: { $regex: keyword, $options: 'i' } },
+        { sellerId: { $regex: keyword, $options: 'i' } },
       ];
     }
 
@@ -1232,6 +1239,118 @@ router.get('/admin/api/store-classification', async (req, res, next) => {
     return res.json(ok({ items, total, current: currentPage, pageSize }));
   } catch (e) {
     logger.warn({ err: e.message }, '[store-classification] list failed');
+    next(e);
+  }
+});
+
+// ── 店铺 SKU 关联(/admin/api/store-sku) ───────────────────────
+// ozon_store_sku 集合的 CRUD 端点
+// 鉴权:全局 JWT;不走 storeGuard(全局共享)
+// _id = SKU(一一对应:一个 SKU 只属于一家店铺)
+// sellerId 为稳定主键(从 __NUXT__ 获取);sellerSlug 可变(店铺改名时会变)
+
+// GET /admin/api/store-sku/:sku — 查询单条 SKU 关联
+router.get('/admin/api/store-sku/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const col = await cols.storeSku();
+    const doc = await col.findOne({ _id: sku });
+    if (!doc) return res.status(404).json({ error: 'not found' });
+    return res.json(ok(doc));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[store-sku] get failed');
+    next(e);
+  }
+});
+
+// POST /admin/api/store-sku — upsert SKU 关联
+// body: { sku, sellerId, sellerSlug, sellerName, lastCollectAt, lastCollectStatus, lastCollectResults }
+// 不传 lastCollect* 时只更新 firstSeenAt/lastSeenAt(发现上报);传时同时更新采集信息
+router.post('/admin/api/store-sku', async (req, res, next) => {
+  const body = req.body || {};
+  const sku = String(body.sku || '');
+  try {
+    if (!sku) return res.status(400).json({ error: 'missing sku' });
+    if (!body.sellerId) return res.status(400).json({ error: 'missing sellerId' });
+
+    const now = new Date();
+    const col = await cols.storeSku();
+
+    // 用 $setOnInsert 写 firstSeenAt(仅首次创建时),$set 更新其它字段
+    const setOnInsert = { firstSeenAt: now };
+    const set = {
+      sellerId: String(body.sellerId),
+      sellerSlug: body.sellerSlug != null ? String(body.sellerSlug) : '',
+      lastSeenAt: now,
+    };
+    // sellerName 只在非空时更新,避免 SW 采集上报(sellerName=null)覆盖 panel 已写入的店铺名
+    if (body.sellerName != null && String(body.sellerName) !== '') {
+      set.sellerName = String(body.sellerName);
+    }
+    if (body.lastCollectAt) {
+      set.lastCollectAt = new Date(body.lastCollectAt);
+      set.lastCollectStatus = body.lastCollectStatus != null ? String(body.lastCollectStatus) : '';
+      set.lastCollectResults = Array.isArray(body.lastCollectResults) ? body.lastCollectResults : [];
+    }
+
+    await col.updateOne({ _id: sku }, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+    return res.json(ok({ upserted: true, sku }));
+  } catch (e) {
+    logger.error({ err: e, sku: body?.sku, sellerId: body?.sellerId, body }, '[store-sku] upsert failed');
+    next(e);
+  }
+});
+
+// DELETE /admin/api/store-sku/:sku — 删除单条
+router.delete('/admin/api/store-sku/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const col = await cols.storeSku();
+    const r = await col.deleteOne({ _id: sku });
+    return res.json(ok({ deletedCount: r.deletedCount }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[store-sku] delete failed');
+    next(e);
+  }
+});
+
+// GET /admin/api/store-sku — 列表查询(分页 + 关键字过滤)
+// query: keyword(匹配 sellerSlug/sellerName/sellerId/sku)/currentPage/pageSize
+router.get('/admin/api/store-sku', async (req, res, next) => {
+  try {
+    const keyword = String(req.query.keyword || '').trim();
+    const currentPage = Math.max(1, Number(req.query.currentPage) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 20));
+
+    const query = {};
+    if (keyword) {
+      query.$or = [
+        { _id: { $regex: keyword, $options: 'i' } },
+        { sellerSlug: { $regex: keyword, $options: 'i' } },
+        { sellerName: { $regex: keyword, $options: 'i' } },
+        { sellerId: { $regex: keyword, $options: 'i' } },
+      ];
+    }
+
+    const col = await cols.storeSku();
+    const [total, items] = await Promise.all([
+      col.countDocuments(query),
+      col
+        .find(query)
+        .sort({ lastSeenAt: -1 })
+        .skip((currentPage - 1) * pageSize)
+        .limit(pageSize)
+        .toArray(),
+    ]);
+
+    // _id 即 SKU,补到 sku 字段方便前端展示
+    for (const it of items) {
+      it.sku = it.sku || it._id;
+    }
+
+    return res.json(ok({ items, total, current: currentPage, pageSize }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[store-sku] list failed');
     next(e);
   }
 });

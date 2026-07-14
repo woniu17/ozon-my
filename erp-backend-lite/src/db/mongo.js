@@ -43,13 +43,36 @@ async function ensureIndexes(db) {
   // ozon_store_classification 索引(店铺分类,按 isChinese/sellerName/lastSeenAt 查询)
   try {
     const clsCol = db.collection('ozon_store_classification');
+    // 旧索引使用 sparse: true,但 sparse 只跳过 null/不存在,不跳过空字符串,
+    // 多个 sellerId='' 的文档会触发 E11000。改用 partialFilterExpression 只对非空 sellerId 建唯一索引。
+    try {
+      await clsCol.dropIndex('sellerId_1');
+    } catch (_) {
+      /* 旧索引可能不存在(首次部署),忽略 */
+    }
     await Promise.all([
       clsCol.createIndex({ isChinese: 1 }),
       clsCol.createIndex({ sellerName: 1 }),
       clsCol.createIndex({ lastSeenAt: -1 }),
+      clsCol.createIndex(
+        { sellerId: 1 },
+        { unique: true, partialFilterExpression: { sellerId: { $type: 'string', $gt: '' } } }
+      ),
     ]);
   } catch (e) {
     console.warn('[mongo] ensureIndexes store_classification failed:', e.message);
+  }
+
+  // ozon_store_sku 索引(SKU-店铺关联,以 SKU 为 _id 一一对应)
+  try {
+    const storeSkuCol = db.collection('ozon_store_sku');
+    await Promise.all([
+      storeSkuCol.createIndex({ sellerId: 1, lastSeenAt: -1 }),
+      storeSkuCol.createIndex({ sellerId: 1, lastCollectAt: -1 }),
+      storeSkuCol.createIndex({ lastCollectAt: -1 }),
+    ]);
+  } catch (e) {
+    console.warn('[mongo] ensureIndexes store_sku failed:', e.message);
   }
 }
 
@@ -65,4 +88,5 @@ export const cols = {
   followSellCache: () => getMongo().then((d) => d.collection('ozon_follow_sell_cache')),
   autoCollectLog: () => getMongo().then((d) => d.collection('ozon_auto_collect_log')),
   storeClassification: () => getMongo().then((d) => d.collection('ozon_store_classification')),
+  storeSku: () => getMongo().then((d) => d.collection('ozon_store_sku')),
 };
