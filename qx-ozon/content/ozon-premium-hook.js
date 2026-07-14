@@ -35,6 +35,13 @@ globalThis.__JZ_BRAND__ = {
   'use strict';
   if (window.__JZC_PREMIUM_HOOK_INSTALLED__) return;
   window.__JZC_PREMIUM_HOOK_INSTALLED__ = true;
+
+  // ── iframe 优化 ───────────────────────────────────────────
+  // manifest 中 all_frames: true 会让每个 iframe 都注入一份 hook。
+  // hook 本身(patchXhr/patchFetch/patchJsonParsers)需要在每个 frame 都执行,
+  // 但 1s 定时轮询(applyAll + checkUrlChange)只在 top frame 跑就够了,
+  // 避免 N 个 iframe × 1s 定时器 × N 个扩展重载场景下的 CPU 风暴。
+  const IS_TOP_FRAME = window === window.top;
   const BRAND_DISPLAY_NAME =
     (globalThis.__JZ_BRAND__ && globalThis.__JZ_BRAND__.displayName) || (/__BRAND/.test('MY') ? '平台' : 'MY');
 
@@ -622,10 +629,13 @@ globalThis.__JZ_BRAND__ = {
   applyAll();
 
   // 1s 兜底轮询：URL 变化 + 重新渲染面板
-  window.setInterval(() => {
-    applyAll();
-    checkUrlChange();
-  }, 1000);
+  // 仅 top frame 跑(避免 all_frames: true 时每个 iframe 都起一个 1s 定时器)
+  if (IS_TOP_FRAME) {
+    window.setInterval(() => {
+      applyAll();
+      checkUrlChange();
+    }, 1000);
+  }
 
   // 启动时主动询问 bridge 当前状态（异步等 storage）
   window.postMessage({ __jzcReport: 1, type: 'JZC_PREMIUM_QUERY' }, '*');

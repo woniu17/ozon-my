@@ -1,6 +1,17 @@
 (function () {
   'use strict';
 
+  // ── run-once 守卫 ──────────────────────────────────────────
+  // 防止扩展重载时 Chrome 自动重注入 content script 导致顶层初始化重复执行
+  // (ensurePdpState() 发起网络请求 × N 标签页 = 瞬态网络风暴 + 内存暴涨)。
+  // 注:Chrome 重注入时会先卸载旧 script context,但实际测试中 MV3 在某些场景下
+  // 仍可能在同一页面重复注入(尤其是 chrome.tabs.reload + onInstalled 组合)。
+  // 守卫用 window 上的标记位,确保同一页面的初始化逻辑只跑一次。
+  if (window.__JZ_PRODUCT_INSTALLED__) {
+    return;
+  }
+  window.__JZ_PRODUCT_INSTALLED__ = true;
+
   // 预热 composer-api page json 缓存(Ozon 2026 SSR DOM 剥离修复):
   // 加载时立刻发起一次 fetch,典型 200-800ms 完成。用户点任何采集按钮时
   // (通常 >1s 后),sync extractStateData 已能 hit cache 拿 widgetStates。

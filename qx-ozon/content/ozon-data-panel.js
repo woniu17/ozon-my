@@ -917,7 +917,19 @@
       pending = true;
       requestAnimationFrame(() => {
         pending = false;
-        applyToAll();
+        // 操作 DOM 期间先 disconnect,避免 applyToAll 修改 DOM 触发自身 Observer
+        // 形成反馈循环(单实例靠 RAF 节流可控,但扩展重载时所有标签页同时启动
+        // 这个循环 + Ozon SPA 自身 DOM 更新 → 累积 CPU 负载不可忽视)。
+        observer.disconnect();
+        try {
+          applyToAll();
+        } catch (e) {
+          console.error('[ozon-data-panel] applyToAll error in observer:', e);
+        }
+        // 重新观察(下一帧再接事件,避免本轮剩余 mutation 再次触发)
+        requestAnimationFrame(() => {
+          observer.observe(document.body, { childList: true, subtree: true });
+        });
       });
     });
     observer.observe(document.body, { childList: true, subtree: true });
@@ -1004,8 +1016,8 @@
       try {
         _autoScroller = new window.QXAutoScroller({
           queue: taskQueue,
-          intervalMs: 500,
-          settleMs: 60000,
+          intervalMs: 60000,
+          settleMs: 2000,
           scrollStepRatio: 0.95,
           minScrollStepPx: 680,
           emptyThreshold: 5,

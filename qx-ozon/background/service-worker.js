@@ -268,13 +268,18 @@ try {
     });
 
   // Debounced ozon tab reload — prevents rapid reload storms on auth state changes
+  // 错开 500ms 重载,避免多标签页同时重载 + content script 重新注入导致内存峰值
+  // (与 reloadSellerTabs 保持一致的错开策略)。
   let _reloadTimer = null;
   function reloadOzonTabs() {
     clearTimeout(_reloadTimer);
     _reloadTimer = setTimeout(async () => {
       const tabs = await chrome.tabs.query({ url: ['*://*.ozon.ru/*', '*://*.ozon.kz/*'] });
-      for (const tab of tabs) {
-        chrome.tabs.reload(tab.id);
+      for (let i = 0; i < tabs.length; i++) {
+        setTimeout(() => chrome.tabs.reload(tabs[i].id), i * 500);
+      }
+      if (tabs.length) {
+        console.log(`[reloadOzonTabs] scheduled ${tabs.length} ozon tab(s) reload (staggered 500ms)`);
       }
     }, 300);
   }
@@ -3656,6 +3661,44 @@ try {
   //   → Step 7(写日志 + 更新计数器)
   // ANTIBOT 分支:Step 4/5/6 任一步检测到反爬 → _handleAntibot(暂停 10 分钟 + 通知 + 写日志)。
   // 失败不熔断:marketStats/followSell 失败返回 partial,不影响其他类目。
+
+  // ── autoCollect 全局并发限流 ─────────────────────────────────
+  // 防止扩展重载时 N 标签页 × M SKU 同时涌入 SW 导致消息风暴:
+  //   - 最大并发 3(实测每个 _doAutoCollect 8 步编排含多步网络请求,3 并发已接近 SW 单线程能力上限)
+  //   - 超出排队的请求最多等 60s,超时丢弃避免无限堆积
+  //   - 计数器在 SW 内(非 storage),SW 休眠后清零(符合预期:重启=新一轮开始)
+  const _AUTO_COLLECT_MAX_CONCURRENT = 3;
+  const _AUTO_COLLECT_QUEUE_TIMEOUT_MS = 60_000;
+  let _autoCollectRunning = 0;
+  const _autoCollectQueue = []; // [{ resolve, reject, timer }]
+
+  const _acquireAutoCollectSlot = () =>
+    new Promise((resolve, reject) => {
+      if (_autoCollectRunning < _AUTO_COLLECT_MAX_CONCURRENT) {
+        _autoCollectRunning++;
+        resolve();
+        return;
+      }
+      const entry = { resolve, reject, timer: null };
+      entry.timer = setTimeout(() => {
+        const idx = _autoCollectQueue.indexOf(entry);
+        if (idx >= 0) _autoCollectQueue.splice(idx, 1);
+        reject(new Error('autoCollect 队列等待超时,丢弃请求'));
+      }, _AUTO_COLLECT_QUEUE_TIMEOUT_MS);
+      _autoCollectQueue.push(entry);
+    });
+
+  const _releaseAutoCollectSlot = () => {
+    if (_autoCollectQueue.length > 0) {
+      const next = _autoCollectQueue.shift();
+      if (next.timer) clearTimeout(next.timer);
+      // 不增减 _autoCollectRunning,直接把 slot 交给下一个
+      next.resolve();
+      return;
+    }
+    _autoCollectRunning = Math.max(0, _autoCollectRunning - 1);
+  };
+
   const _doAutoCollect = async (sku, source, sellerSlug, depth, forceRefresh, sellerId) => {
     const startTime = Date.now();
     const results = [
@@ -3669,6 +3712,21 @@ try {
       { type: 'followSell', hit: false },
     ];
     let storeClassified = 'unclassified'; // 默认未分类
+
+    // 等待并发 slot(超时直接返回 partial,不让消息风暴压垮 SW)
+    let acquiredSlot = false;
+    try {
+      await _acquireAutoCollectSlot();
+      acquiredSlot = true;
+    } catch (e) {
+      console.warn('[SW autoCollect] 排队超时,丢弃:', sku, e?.message);
+      return {
+        status: 'skipped',
+        results,
+        totalDuration: Date.now() - startTime,
+        reason: e?.message || 'queue_timeout',
+      };
+    }
 
     try {
       // === Gate 0: 基础检查 ===
@@ -4050,6 +4108,8 @@ try {
         error: e?.message,
       });
       return { status: 'failed', error: e?.message, totalDuration };
+    } finally {
+      if (acquiredSlot) _releaseAutoCollectSlot();
     }
   };
 
@@ -4601,8 +4661,21 @@ try {
    * Reload all seller.ozon.ru tabs so manifest-declared content_scripts get injected.
    * Needed when the extension loads after the tab is already open (e.g. install/update/startup).
    * 错开 500ms 重载,避免多标签页同时重载 + content script 重新注入导致内存峰值。
+   *
+   * 防重复:30 秒内不重复触发(扩展重载时 onInstalled + onStartup + syncAuthFromWeb
+   * 可能叠加调用,导致 seller 标签页在极短时间内被双重重载)。
    */
+  let _lastSellerReloadAt = 0;
+  const SELLER_RELOAD_MIN_INTERVAL_MS = 30_000;
   const reloadSellerTabs = async () => {
+    const now = Date.now();
+    if (now - _lastSellerReloadAt < SELLER_RELOAD_MIN_INTERVAL_MS) {
+      console.log(
+        `[reloadSellerTabs] skipped (too recent, ${now - _lastSellerReloadAt}ms ago, min=${SELLER_RELOAD_MIN_INTERVAL_MS}ms)`
+      );
+      return;
+    }
+    _lastSellerReloadAt = now;
     const tabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
     for (let i = 0; i < tabs.length; i++) {
       setTimeout(() => chrome.tabs.reload(tabs[i].id), i * 500);

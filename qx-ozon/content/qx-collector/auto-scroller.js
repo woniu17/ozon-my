@@ -39,8 +39,8 @@
       this.isReadyToScroll = opts.isReadyToScroll || (() => true);
       this.readinessPollMs = opts.readinessPollMs ?? 1000;
       this.maxReadinessWaitMs = opts.maxReadinessWaitMs ?? 0;
-      this.onEmpty = opts.onEmpty || (() => {});
-      this.onCongestionPause = opts.onCongestionPause || (() => {});
+      this.onEmpty = opts.onEmpty || (() => { });
+      this.onCongestionPause = opts.onCongestionPause || (() => { });
 
       this._timer = null;
       this._userActive = false; // 用户意图：true=想跑
@@ -51,6 +51,7 @@
       this._unsubCongestion = null;
       // 翻页状态追踪（供 getScrollStatus 读取）
       this._nextTickReason = null; // 'interval'|'waiting-ready'|'waiting-queue'
+      this._nextTickAt = 0; // 下次 tick 触发的时间戳(供 interval 倒计时)
       this._settleUntil = 0; // 等待卡片渲染的截止时间戳
       this._completedReason = null; // 自动完成原因: 'empty'|null
     }
@@ -86,6 +87,7 @@
       this._emptyStreak = 0;
       this._waitingReadySince = 0;
       this._nextTickReason = null;
+      this._nextTickAt = 0;
       this._settleUntil = 0;
       this._completedReason = null;
       if (this._timer) {
@@ -155,8 +157,16 @@
             detail: qStats ? qStats.running + ' 进行中 / ' + qStats.pending + ' 排队' : '',
           };
         }
-        default:
-          return { status: 'scrolling', reason: '正常翻页中', detail: '' };
+        default: {
+          // 正常翻页间隔中:显示距下次滚动的倒计时
+          var detail = '';
+          if (this._nextTickAt) {
+            var remainMs = Math.max(0, this._nextTickAt - Date.now());
+            var remainSec = Math.round(remainMs / 1000);
+            detail = remainSec + 's';
+          }
+          return { status: 'scrolling', reason: '正常翻页中，距下次滚动还有', detail: detail };
+        }
       }
     }
 
@@ -185,13 +195,13 @@
         console.log('[QXAutoScroller] → autoPaused=true (翻页已暂停)', stats);
         try {
           this.onCongestionPause('paused');
-        } catch {}
+        } catch { }
       } else if (level === 'low' && this._autoPaused) {
         this._autoPaused = false;
         console.log('[QXAutoScroller] → autoPaused=false (翻页将恢复)', stats);
         try {
           this.onCongestionPause('resumed');
-        } catch {}
+        } catch { }
         this._scheduleNext(this.intervalMs);
       } else {
         console.log('[QXAutoScroller] _onCongestion no-op');
@@ -201,6 +211,7 @@
     _scheduleNext(delay, reason) {
       if (this._timer) clearTimeout(this._timer);
       this._nextTickReason = reason || 'interval';
+      this._nextTickAt = Date.now() + delay;
       this._timer = setTimeout(() => this._tick(), delay);
     }
 

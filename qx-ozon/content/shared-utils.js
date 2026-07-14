@@ -47,6 +47,82 @@ if (!globalThis.__JZ_BRAND__) {
   // autoCollectOnSkuSeen 发送前 add,collectDone 收到后 delete
   window.__jzCollectingSkus = window.__jzCollectingSkus || new Set();
 
+  // ── 重载退避:防止扩展重载瞬间 N 标签页 × M SKU 同时涌入 SW ────────
+  // 触发条件:5 秒内调用 autoCollectOnSkuSeen 超过 20 次(典型重载场景)。
+  // 退避动作:后续请求延迟到 SW 能消化的节奏(每 500ms 发一个),而非全部 fire-and-forget。
+  // 退避自动恢复:5 秒滑动窗口内请求数降到 5 以下时恢复 fire-and-forget。
+  const _AUTO_COLLECT_BURST_WINDOW_MS = 5000;
+  const _AUTO_COLLECT_BURST_THRESHOLD = 20;
+  const _AUTO_COLLECT_BURST_INTERVAL_MS = 500;
+  const _autoCollectBurstTs = []; // 时间戳数组
+  let _autoCollectBurstActive = false;
+  let _autoCollectBurstTimer = null;
+  const _autoCollectBurstQueue = []; // [{ args, options }]
+
+  const _autoCollectFlushBurstQueue = () => {
+    if (_autoCollectBurstTimer) {
+      clearInterval(_autoCollectBurstTimer);
+      _autoCollectBurstTimer = null;
+    }
+    if (_autoCollectBurstQueue.length === 0) {
+      _autoCollectBurstActive = false;
+      return;
+    }
+    _autoCollectBurstTimer = setInterval(() => {
+      if (_autoCollectBurstQueue.length === 0) {
+        clearInterval(_autoCollectBurstTimer);
+        _autoCollectBurstTimer = null;
+        _autoCollectBurstActive = false;
+        return;
+      }
+      const { sku, source, sellerSlug, options } = _autoCollectBurstQueue.shift();
+      _autoCollectSendNow(sku, source, sellerSlug, options);
+    }, _AUTO_COLLECT_BURST_INTERVAL_MS);
+  };
+
+  // 实际发送逻辑(从 autoCollectOnSkuSeen 抽出,供 burst queue 调用)
+  const _autoCollectSendNow = (sku, source, sellerSlug, options = {}) => {
+    const skuStr = String(sku);
+    // 已在入队前 add 到 _autoCollectSeen,这里不再重复检查
+    window.__jzCollectingSkus.add(skuStr);
+    console.log('[autoCollect] 发送采集请求:', skuStr, 'source=', source, 'seller=', sellerSlug);
+    sendMessage('autoCollect', {
+      sku: skuStr,
+      source,
+      sellerSlug,
+      sellerId: options.sellerId || '',
+      depth: 'Full',
+      forceRefresh: options.forceRefresh || false,
+    })
+      .then((result) => {
+        window.__jzCollectingSkus.delete(skuStr);
+        if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
+        const status = result?.status;
+        const results = Array.isArray(result?.results) ? result.results : [];
+        const hitSummary = results.map((r) => `${r.type}:${r.hit ? '✓' : '✗'}`).join(' ');
+        console.log(
+          '[autoCollect] 采集完成:',
+          skuStr,
+          'status=',
+          status,
+          'dur=',
+          result?.totalDuration + 'ms',
+          '|',
+          hitSummary
+        );
+        if (status !== 'success') {
+          _autoCollectSeen.delete(skuStr);
+          console.log('[autoCollect] 移除去重,允许补全:', skuStr, 'status=', status);
+        }
+      })
+      .catch((e) => {
+        window.__jzCollectingSkus.delete(skuStr);
+        if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
+        _autoCollectSeen.delete(skuStr);
+        console.warn('[autoCollect] 发送失败:', skuStr, e?.message || e);
+      });
+  };
+
   // ─── autoCollectRunning:自动采集总开关 ──────────────────────────
   // 默认开启;由 popup 通过 chrome.storage.local['jz-auto-collect-config'] 控制。
   let autoCollectRunning = true;
@@ -3848,55 +3924,38 @@ if (!globalThis.__JZ_BRAND__) {
       return;
     }
     _autoCollectSeen.add(skuStr);
-    // 标记为采集中(UI 显示"采集中"状态,collectDone 收到后由 panel 清除)
-    window.__jzCollectingSkus.add(skuStr);
-    console.log('[autoCollect] 发送采集请求:', skuStr, 'source=', source, 'seller=', sellerSlug);
-    // fire-and-forget,不阻塞,不 await
-    // 成功时保留去重(避免重复采集);失败/部分采集时移除去重,允许后续浏览时补全
-    sendMessage('autoCollect', {
-      sku: skuStr,
-      source,
-      sellerSlug,
-      sellerId: options.sellerId || '',
-      depth: 'Full',
-      forceRefresh: options.forceRefresh || false,
-    })
-      .then((result) => {
-        // result 现在是 { status, results, ... }(SW 已包装为 { ok: true, data: ... })
-        // collectDone 事件会更新 _collectStatusMap,这里只需清除采集中标记
-        window.__jzCollectingSkus.delete(skuStr);
-        // 清除采集中标记后必须刷新 UI,否则 badge 会永远停在"采集中"
-        // (collectDone 广播可能在 .then() 之前到达,此时 _getEffectiveStatus
-        //  因 __jzCollectingSkus.has=true 仍返回 collecting,刷新无效;.then()
-        //  清除后若不主动刷新,每秒定时器因 success 状态不在刷新范围内不会触发)
-        if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
-        const status = result?.status;
-        const results = Array.isArray(result?.results) ? result.results : [];
-        const hitSummary = results.map((r) => `${r.type}:${r.hit ? '✓' : '✗'}`).join(' ');
-        console.log(
-          '[autoCollect] 采集完成:',
-          skuStr,
-          'status=',
-          status,
-          'dur=',
-          result?.totalDuration + 'ms',
-          '|',
-          hitSummary
-        );
-        // success 且所有非 search/bundle 类型都命中 → 保留去重
-        // partial(部分采集)/failed/antibot → 移除去重,允许补全
-        if (status !== 'success') {
-          _autoCollectSeen.delete(skuStr);
-          console.log('[autoCollect] 移除去重,允许补全:', skuStr, 'status=', status);
-        }
-      })
-      .catch((e) => {
-        // 发送失败也移除去重,允许重试
-        window.__jzCollectingSkus.delete(skuStr);
-        if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
-        _autoCollectSeen.delete(skuStr);
-        console.warn('[autoCollect] 发送失败:', skuStr, e?.message || e);
-      });
+
+    // ── 重载退避:5 秒窗口内请求数超过阈值 → 切换到错峰发送 ──────
+    // 防止扩展重载时 N 标签页 × M SKU 同时涌入 SW 导致 SW 消息队列爆炸。
+    const now = Date.now();
+    // 清理过期时间戳(5 秒外)
+    while (_autoCollectBurstTs.length > 0 && now - _autoCollectBurstTs[0] > _AUTO_COLLECT_BURST_WINDOW_MS) {
+      _autoCollectBurstTs.shift();
+    }
+    _autoCollectBurstTs.push(now);
+
+    if (!_autoCollectBurstActive && _autoCollectBurstTs.length >= _AUTO_COLLECT_BURST_THRESHOLD) {
+      _autoCollectBurstActive = true;
+      console.warn(
+        '[autoCollect] 检测到请求突发(',
+        _autoCollectBurstTs.length,
+        '次/',
+        _AUTO_COLLECT_BURST_WINDOW_MS,
+        'ms),切换到错峰发送模式(每',
+        _AUTO_COLLECT_BURST_INTERVAL_MS,
+        'ms 一个)'
+      );
+    }
+
+    if (_autoCollectBurstActive) {
+      // 入队等待错峰发送(不立即 fire-and-forget)
+      _autoCollectBurstQueue.push({ sku: skuStr, source, sellerSlug, options });
+      _autoCollectFlushBurstQueue();
+      return;
+    }
+
+    // 正常模式:直接 fire-and-forget
+    _autoCollectSendNow(skuStr, source, sellerSlug, options);
   }
   window.__jzAutoCollectOnSkuSeen = autoCollectOnSkuSeen;
 
