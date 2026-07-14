@@ -10,6 +10,7 @@ import Audit from '../views/Audit.vue';
 import Config from '../views/Config.vue';
 import ListingTemplates from '../views/ListingTemplates.vue';
 import Cache from '../views/Cache.vue';
+import CollectLogs from '../views/CollectLogs.vue';
 import { useAuthStore } from '../stores/auth.js';
 
 // 骨架路由:真实页面组件与路由守卫在后续 Task 实现
@@ -29,6 +30,7 @@ const router = createRouter({
     { path: '/config', name: 'config', component: Config },
     { path: '/listing-templates', name: 'listing-templates', component: ListingTemplates },
     { path: '/cache', name: 'cache', component: Cache },
+    { path: '/collect-logs', name: 'collect-logs', component: CollectLogs },
   ],
 });
 

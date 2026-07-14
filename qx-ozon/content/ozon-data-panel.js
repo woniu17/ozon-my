@@ -79,6 +79,8 @@
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg?.type !== 'collectDone' || !msg.entry?.sku) return;
     const e = msg.entry;
+    const hitCount = Array.isArray(e.results) ? e.results.filter((r) => r.hit).length : '?';
+    console.log('[panel] 收到 collectDone:', e.sku, 'status=', e.status, 'hit=', hitCount + '/8');
     _collectStatusMap.set(String(e.sku), {
       status: e.status,
       reason: e.reason || null,
@@ -91,11 +93,13 @@
 
   // 状态文案
   const _COLLECT_STATUS_LABELS = {
+    collecting: { text: '采集中', icon: '⟳', color: '#3b82f6' },
+    pending: { text: '等待中', icon: '⏳', color: '#6366f1' },
     success: { text: '已采集', icon: '✓', color: '#16a34a' },
     partial: { text: '部分采集', icon: '◐', color: '#f59e0b' },
     skipped: { text: '跳过', icon: '−', color: '#94a3b8' },
     failed: { text: '失败', icon: '✗', color: '#ef4444' },
-    antibot: { text: '熔断', icon: '⚠', color: '#f97316' },
+    antibot: { text: '采集中止', icon: '⚠', color: '#f97316' },
   };
   const _COLLECT_REASON_LABELS = {
     'not-running': '自动采集未开启',
@@ -106,13 +110,54 @@
     'all-cached': '8 类缓存全命中',
     antibot: '反爬熔断',
   };
-  const _CACHE_TYPE_LABELS = ['card', 'detail', 'composer', 'entrypoint', 'search', 'bundle', 'marketStats', 'followSell'];
+  const _CACHE_TYPE_LABELS = [
+    'card',
+    'detail',
+    'composer',
+    'entrypoint',
+    'search',
+    'bundle',
+    'marketStats',
+    'followSell',
+  ];
+
+  // 定时重扫冷却时间(与 setInterval 中的 _RESCAN_COOLDOWN_MS 一致)
+  const _PENDING_COOLDOWN_MS = 60 * 1000;
+
+  // 获取有效状态:
+  // 1. 终态(success/skipped/antibot)优先于采集中标记 — 因为 collectDone 广播
+  //    可能先于 sendMessage .then() 到达,此时 __jzCollectingSkus 仍有该 SKU,
+  //    若优先返回 collecting 会导致 badge 永远停在"采集中"(.then() 清除后无刷新)
+  // 2. 采集中(无终态时)优先于冷却期内的等待状态
+  // 3. partial/failed 在冷却期内 → 显示等待中(含倒计时)
+  function _getEffectiveStatus(sku) {
+    const skuStr = String(sku);
+    // 1. 先检查 _collectStatusMap 的终态
+    const status = _collectStatusMap.get(skuStr);
+    if (status && (status.status === 'success' || status.status === 'skipped' || status.status === 'antibot')) {
+      return status;
+    }
+    // 2. 检查采集中(shared-utils.js 维护的 Set)
+    if (window.__jzCollectingSkus?.has(skuStr)) {
+      return { status: 'collecting', timestamp: Date.now() };
+    }
+    // 3. 无状态
+    if (!status) return null;
+    // 4. partial/failed 且在冷却期内 → 显示等待中(含倒计时)
+    if ((status.status === 'partial' || status.status === 'failed') && status.timestamp) {
+      const elapsed = Date.now() - status.timestamp;
+      if (elapsed < _PENDING_COOLDOWN_MS) {
+        return { ...status, _waitSeconds: Math.ceil((_PENDING_COOLDOWN_MS - elapsed) / 1000) };
+      }
+    }
+    return status;
+  }
 
   // 渲染状态条(数据面板底部)
   function renderCollectStatusBar(panel, sku) {
     if (!panel) return;
     let bar = panel.querySelector('.jz-collect-status-bar');
-    const status = _collectStatusMap.get(String(sku));
+    const status = _getEffectiveStatus(sku);
     if (!status) {
       if (bar) bar.remove();
       return;
@@ -123,11 +168,25 @@
       panel.appendChild(bar);
     }
     const meta = _COLLECT_STATUS_LABELS[status.status] || _COLLECT_STATUS_LABELS.failed;
-    const reasonText = status.reason ? ` · ${_COLLECT_REASON_LABELS[status.reason] || status.reason}` : '';
-    const durationText = status.duration != null ? ` · ${(status.duration / 1000).toFixed(1)}s` : '';
-    // 8 类缓存命中明细
+    // 等待中:显示倒计时;采集中:不显示 duration(还没有);其他:显示 duration
+    let extraText = '';
+    if (status._waitSeconds != null) {
+      extraText = ` · 等待重扫 ${status._waitSeconds}s`;
+    } else if (status.status === 'collecting') {
+      extraText = ' · 采集中...';
+    } else {
+      const reasonText = status.reason ? ` · ${_COLLECT_REASON_LABELS[status.reason] || status.reason}` : '';
+      const durationText = status.duration != null ? ` · ${(status.duration / 1000).toFixed(1)}s` : '';
+      extraText = reasonText + durationText;
+    }
+    // 8 类缓存命中明细(采集中/等待中不显示)
     let cacheDetail = '';
-    if (Array.isArray(status.results) && status.results.length > 0) {
+    if (
+      status.status !== 'collecting' &&
+      status._waitSeconds == null &&
+      Array.isArray(status.results) &&
+      status.results.length > 0
+    ) {
       const hitCount = status.results.filter((r) => r.hit).length;
       const detailParts = status.results.map((r) => {
         const label = r.type;
@@ -136,9 +195,9 @@
       cacheDetail = ` · <span class="jz-cache-summary">${hitCount}/${status.results.length}</span> <span class="jz-cache-detail">${detailParts.join(' ')}</span>`;
     }
     bar.innerHTML =
-      `<span class="jz-collect-status-icon" style="color:${meta.color}">${meta.icon}</span>` +
+      `<span class="jz-collect-status-icon jz-collect-status-icon-${status.status}" style="color:${meta.color}">${meta.icon}</span>` +
       `<span class="jz-collect-status-text" style="color:${meta.color}">${meta.text}</span>` +
-      `<span class="jz-collect-status-reason">${reasonText}${durationText}${cacheDetail}</span>`;
+      `<span class="jz-collect-status-reason">${extraText}${cacheDetail}</span>`;
     bar.dataset.status = status.status;
   }
 
@@ -146,7 +205,7 @@
   function updateCollectBadge(card, sku) {
     if (!card) return;
     let badge = card.querySelector('.jz-collect-badge');
-    const status = _collectStatusMap.get(String(sku));
+    const status = _getEffectiveStatus(sku);
     if (!status) {
       if (badge) badge.remove();
       return;
@@ -160,7 +219,13 @@
     badge.textContent = meta.icon;
     badge.style.backgroundColor = meta.color;
     badge.dataset.status = status.status;
-    badge.title = `${meta.text}${status.reason ? ' · ' + (_COLLECT_REASON_LABELS[status.reason] || status.reason) : ''}`;
+    let title = meta.text;
+    if (status._waitSeconds != null) {
+      title += ` · 等待重扫 ${status._waitSeconds}s`;
+    } else if (status.reason) {
+      title += ' · ' + (_COLLECT_REASON_LABELS[status.reason] || status.reason);
+    }
+    badge.title = title;
   }
 
   // 刷新单个 SKU 对应的所有商品卡 UI(徽章+状态条)
@@ -177,6 +242,9 @@
       if (panel) renderCollectStatusBar(panel, sku);
     }
   }
+  // 暴露给 shared-utils.js 的 autoCollectOnSkuSeen .then()/.catch() 调用:
+  // 清除 __jzCollectingSkus 后需主动刷新 UI,否则 badge 永远停在"采集中"
+  window.__jzRefreshCollectStatusUi = _refreshCollectStatusUi;
 
   // 刷新当前页所有商品卡 UI
   function _refreshAllCollectStatusUi() {
@@ -194,6 +262,53 @@
 
   // 启动时拉取一次
   setTimeout(_initCollectStatusMap, 1500);
+
+  // ── 定时重扫:对 partial/failed 状态的 SKU 重新触发采集 ──────────
+  // 问题:IntersectionObserver 在首次可见后 disconnect,loadPanelData 只调一次,
+  //   导致 partial/failed 的 SKU 在不刷新页面的情况下不会重新采集。
+  // 方案:每 60 秒扫描 _collectStatusMap,对 partial/failed 且距上次采集 >60s 的 SKU
+  //   直接调 autoCollectOnSkuSeen(它会检查 _autoCollectSeen 去重)。
+  const _RESCAN_INTERVAL_MS = 60 * 1000;
+  const _RESCAN_COOLDOWN_MS = 60 * 1000;
+  setInterval(() => {
+    if (!window.__jzAutoCollectOnSkuSeen) return;
+    const now = Date.now();
+    let candidates = 0;
+    let triggered = 0;
+    for (const [sku, status] of _collectStatusMap) {
+      if (status.status !== 'partial' && status.status !== 'failed') continue;
+      if (!status.timestamp || now - status.timestamp < _RESCAN_COOLDOWN_MS) continue;
+      candidates++;
+      // 直接调用,autoCollectOnSkuSeen 内部会检查 _autoCollectSeen 去重
+      window.__jzAutoCollectOnSkuSeen(sku, 'shop-page', sellerSlug);
+      triggered++;
+    }
+    if (candidates > 0) {
+      console.log('[panel] 定时重扫: 候选', candidates, '触发', triggered, 'seller=', sellerSlug);
+    }
+  }, _RESCAN_INTERVAL_MS);
+
+  // ── 每秒刷新 UI:更新采集中动画和等待中倒计时 ──────────────────
+  // 只刷新有状态变化的 SKU(采集中或冷却期内的 partial/failed)
+  setInterval(() => {
+    const collectingSkus = window.__jzCollectingSkus;
+    // 刷新采集中的 SKU
+    if (collectingSkus && collectingSkus.size > 0) {
+      for (const sku of collectingSkus) {
+        _refreshCollectStatusUi(sku);
+      }
+    }
+    // 刷新冷却期内的 partial/failed SKU(倒计时更新)
+    const now = Date.now();
+    for (const [sku, status] of _collectStatusMap) {
+      if (status.status !== 'partial' && status.status !== 'failed') continue;
+      if (!status.timestamp) continue;
+      const elapsed = now - status.timestamp;
+      if (elapsed < _PENDING_COOLDOWN_MS) {
+        _refreshCollectStatusUi(sku);
+      }
+    }
+  }, 1000);
 
   // 节流并发：跟原 ozon-search 配置一致
   const taskQueue = new window.JZTaskQueue({
@@ -397,6 +512,10 @@
     // 跳过没商品链接的 tile（推广位 / 占位 / 类目 chip 之类）
     if (!card.querySelector('a[href*="/product/"]')) return;
     card._ohPanelAttached = true;
+
+    // 商品卡高度对齐:Ozon 原生 align-self:start 导致同一行卡高度不一致,
+    // 用内联样式覆盖为 stretch,让同行卡拉伸到行高(CSS !important 可能被 Ozon 覆盖)
+    card.style.setProperty('align-self', 'stretch', 'important');
 
     const panel = document.createElement('div');
     panel.className = 'ozon-helper-data-panel';
@@ -862,7 +981,13 @@
 
   async function handleSellerInfo(detail) {
     // 调试:把执行状态写到 DOM,方便从 MAIN world 检查
-    document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'handleSellerInfo-called', detail: detail ? { pageType: detail.pageType, slug: detail.slug } : null }));
+    document.documentElement.setAttribute(
+      'data-jz-seller-info-debug',
+      JSON.stringify({
+        step: 'handleSellerInfo-called',
+        detail: detail ? { pageType: detail.pageType, slug: detail.slug } : null,
+      })
+    );
     console.log('[ozon-data-panel] ===== 收到店铺信息 =====');
     console.log('[ozon-data-panel] 店铺完整信息:', detail);
     if (detail) {
@@ -893,8 +1018,20 @@
       document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'calling-SW', slug }));
       console.log('[ozon-data-panel] >>> 调用 SW checkStoreClassification, 参数:', { slug, name, companyInfo });
       const result = await window.sendMessage('checkStoreClassification', { slug, name, companyInfo });
-      document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'SW-returned', result: result ? { isChinese: result.isChinese, classifiedBy: result.classifiedBy } : null, hasPanel: !!window.__qxCollectorPanel }));
-      console.log('[ozon-data-panel] <<< SW checkStoreClassification 返回:', result, 'hasPanel:', !!window.__qxCollectorPanel);
+      document.documentElement.setAttribute(
+        'data-jz-seller-info-debug',
+        JSON.stringify({
+          step: 'SW-returned',
+          result: result ? { isChinese: result.isChinese, classifiedBy: result.classifiedBy } : null,
+          hasPanel: !!window.__qxCollectorPanel,
+        })
+      );
+      console.log(
+        '[ozon-data-panel] <<< SW checkStoreClassification 返回:',
+        result,
+        'hasPanel:',
+        !!window.__qxCollectorPanel
+      );
       // result: { isChinese, classifiedBy } | null
       // SW 返回 null 表示已查询但未分类(规则引擎无匹配 + ERP 无记录),
       // 此时 isChinese 应为 null(待确认),不能是 undefined(会被 store-detector 当作"未检测")
@@ -908,14 +1045,23 @@
       _pendingStoreUpdate = update; // 缓存,供 mountCollectorHere 重放
       if (window.__qxCollectorPanel) {
         window.__qxCollectorPanel.updateStoreDetection(update);
-        document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'updateStoreDetection-called', update }));
+        document.documentElement.setAttribute(
+          'data-jz-seller-info-debug',
+          JSON.stringify({ step: 'updateStoreDetection-called', update })
+        );
         console.log('[ozon-data-panel] updateStoreDetection 已调用,面板已更新');
       } else {
-        document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'panel-not-ready', update }));
+        document.documentElement.setAttribute(
+          'data-jz-seller-info-debug',
+          JSON.stringify({ step: 'panel-not-ready', update })
+        );
         console.log('[ozon-data-panel] 面板未挂载,update 已缓存,等 mountCollectorHere 时重放');
       }
     } catch (err) {
-      document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'SW-error', error: err?.message || String(err) }));
+      document.documentElement.setAttribute(
+        'data-jz-seller-info-debug',
+        JSON.stringify({ step: 'SW-error', error: err?.message || String(err) })
+      );
       console.warn('[ozon-data-panel] checkStoreClassification 失败:', err);
     }
   }
@@ -973,7 +1119,13 @@
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed.seq !== _lastSeq) {
-          console.log('[ozon-data-panel] poll detected seq change:', _lastSeq, '->', parsed.seq, '(attempt ' + _pollCount + ')');
+          console.log(
+            '[ozon-data-panel] poll detected seq change:',
+            _lastSeq,
+            '->',
+            parsed.seq,
+            '(attempt ' + _pollCount + ')'
+          );
           _lastSeq = parsed.seq;
           handleSellerInfo(parsed.detail);
           return; // 读到就停止轮询

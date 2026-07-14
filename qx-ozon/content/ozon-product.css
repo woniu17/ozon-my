@@ -1,4 +1,11 @@
 /* === OZON HELPER DESIGN TOKENS (Light Theme) === */
+
+/* 商品卡高度对齐:Ozon 原生 align-self:start 导致同一行卡高度不一致,
+   覆盖为 stretch 让同行卡拉伸到行高,底部对齐 */
+.tile-root {
+  align-self: stretch !important;
+}
+
 :root {
   /* Surfaces */
   --oh-bg-elevated: #ffffff;
@@ -6017,4 +6024,53 @@
 .jz-cache-miss {
   color: #94a3b8;
   background: rgba(148, 163, 184, 0.08);
+}
+
+/* ===== 采集中/等待中 动画效果 ===== */
+
+/* 采集中:图标旋转动画 */
+.jz-collect-status-icon-collecting {
+  animation: jz-spin 1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes jz-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 采集中:徽章脉冲动画 */
+.jz-collect-badge[data-status='collecting'] {
+  animation: jz-pulse 1s ease-in-out infinite;
+}
+
+@keyframes jz-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 1px 6px rgba(59, 130, 246, 0.5);
+  }
+}
+
+/* 等待中:徽章缓慢闪烁 */
+.jz-collect-badge[data-status='pending'] {
+  animation: jz-blink 2s ease-in-out infinite;
+}
+
+@keyframes jz-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }

@@ -43,6 +43,9 @@ if (!globalThis.__JZ_BRAND__) {
   const STATE_CACHE = {};
   const KEY_CACHE = {};
   const _autoCollectSeen = new Set(); // 页面级去重,避免同一 SKU 重复触发 autoCollect
+  // 正在采集中的 SKU 集合(用于 UI 显示"采集中"状态)
+  // autoCollectOnSkuSeen 发送前 add,collectDone 收到后 delete
+  window.__jzCollectingSkus = window.__jzCollectingSkus || new Set();
 
   // ─── autoCollectRunning:自动采集总开关 ──────────────────────────
   // 默认开启;由 popup 通过 chrome.storage.local['jz-auto-collect-config'] 控制。
@@ -1003,7 +1006,9 @@ if (!globalThis.__JZ_BRAND__) {
     // Default 60s timeout; long-running actions get more time
     // uploadFollowSellVideo:视频转存(download 跨源 .mp4 + media-storage 上传)executeScript
     // 内部可达 90s+,默认 60s 会让 content 侧先超时拿不到结果 → 放宽。
-    const LONG_ACTIONS = ['followSell', 'importBySku', 'uploadFollowSellVideo'];
+    // autoCollect:8 类缓存编排(Step1-6),含 Gate 等待 + 多次真调,常超 60s;
+    //   若 60s 超时,.catch() 会移除去重 → 定时重扫立即重新触发 → 形成无限"采集中"循环。
+    const LONG_ACTIONS = ['followSell', 'importBySku', 'uploadFollowSellVideo', 'autoCollect'];
     const timeoutMs = LONG_ACTIONS.includes(action) ? 600000 : 60000;
     console.log(`[sendMessage] sending action=${action}`);
     return new Promise((resolve, reject) => {
@@ -3838,18 +3843,59 @@ if (!globalThis.__JZ_BRAND__) {
    */
   function autoCollectOnSkuSeen(sku, source, sellerSlug, options = {}) {
     const skuStr = String(sku);
-    if (!options.forceRefresh && _autoCollectSeen.has(skuStr)) return;
+    if (!options.forceRefresh && _autoCollectSeen.has(skuStr)) {
+      console.log('[autoCollect] 去重跳过:', skuStr, 'source=', source);
+      return;
+    }
     _autoCollectSeen.add(skuStr);
+    // 标记为采集中(UI 显示"采集中"状态,collectDone 收到后由 panel 清除)
+    window.__jzCollectingSkus.add(skuStr);
+    console.log('[autoCollect] 发送采集请求:', skuStr, 'source=', source, 'seller=', sellerSlug);
     // fire-and-forget,不阻塞,不 await
+    // 成功时保留去重(避免重复采集);失败/部分采集时移除去重,允许后续浏览时补全
     sendMessage('autoCollect', {
       sku: skuStr,
       source,
       sellerSlug,
       depth: 'Full',
       forceRefresh: options.forceRefresh || false,
-    }).catch((e) => {
-      console.warn('[autoCollect] 发送失败:', skuStr, e?.message || e);
-    });
+    })
+      .then((result) => {
+        // result 现在是 { status, results, ... }(SW 已包装为 { ok: true, data: ... })
+        // collectDone 事件会更新 _collectStatusMap,这里只需清除采集中标记
+        window.__jzCollectingSkus.delete(skuStr);
+        // 清除采集中标记后必须刷新 UI,否则 badge 会永远停在"采集中"
+        // (collectDone 广播可能在 .then() 之前到达,此时 _getEffectiveStatus
+        //  因 __jzCollectingSkus.has=true 仍返回 collecting,刷新无效;.then()
+        //  清除后若不主动刷新,每秒定时器因 success 状态不在刷新范围内不会触发)
+        if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
+        const status = result?.status;
+        const results = Array.isArray(result?.results) ? result.results : [];
+        const hitSummary = results.map((r) => `${r.type}:${r.hit ? '✓' : '✗'}`).join(' ');
+        console.log(
+          '[autoCollect] 采集完成:',
+          skuStr,
+          'status=',
+          status,
+          'dur=',
+          result?.totalDuration + 'ms',
+          '|',
+          hitSummary
+        );
+        // success 且所有非 search/bundle 类型都命中 → 保留去重
+        // partial(部分采集)/failed/antibot → 移除去重,允许补全
+        if (status !== 'success') {
+          _autoCollectSeen.delete(skuStr);
+          console.log('[autoCollect] 移除去重,允许补全:', skuStr, 'status=', status);
+        }
+      })
+      .catch((e) => {
+        // 发送失败也移除去重,允许重试
+        window.__jzCollectingSkus.delete(skuStr);
+        if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
+        _autoCollectSeen.delete(skuStr);
+        console.warn('[autoCollect] 发送失败:', skuStr, e?.message || e);
+      });
   }
   window.__jzAutoCollectOnSkuSeen = autoCollectOnSkuSeen;
 
@@ -3885,15 +3931,22 @@ if (!globalThis.__JZ_BRAND__) {
    * @param {string} sellerSlug - 卖家 slug
    */
   async function collectAutoIfMatched(productId, card, info, data, panel, source, sellerSlug, options = {}) {
-    // forceRefresh 时跳过 autoCollectRunning + 筛选检查,直接发 autoCollect
-    if (!autoCollectRunning && !options.forceRefresh) return;
     const sku = String(productId);
+    // forceRefresh 时跳过 autoCollectRunning + 筛选检查,直接发 autoCollect
+    if (!autoCollectRunning && !options.forceRefresh) {
+      console.log('[autoCollect] 跳过(未开启):', sku, 'source=', source);
+      return;
+    }
     // 提取筛选数据(参考旧 collectSaleIfMatched):jzExtractPanelFilterData 会从
     // panel DOM + info + baseData 归一化 soldCount/price/gmvSum 等字段。
     const sourceData = window.jzExtractPanelFilterData
       ? window.jzExtractPanelFilterData(panel, info, data || {})
       : data || {};
-    if (!options.forceRefresh && !passCollectorFilters(sourceData, info, panel)) return;
+    if (!options.forceRefresh && !passCollectorFilters(sourceData, info, panel)) {
+      console.log('[autoCollect] 跳过(筛选未通过):', sku, 'source=', source, 'soldCount=', sourceData?.soldCount);
+      return;
+    }
+    console.log('[autoCollect] 通过筛选,触发采集:', sku, 'source=', source);
     autoCollectOnSkuSeen(sku, source, sellerSlug, options);
   }
   window.__jzCollectAutoIfMatched = collectAutoIfMatched;

@@ -1936,7 +1936,7 @@ try {
     return out;
   };
 
-  const fetchVariantMediaViaBuyerTab = async (productUrl) => {
+  const fetchVariantMediaViaBuyerTab = async (productUrl, options = {}) => {
     const EMPTY = { mp4: null, richContent: '', description: '', hashtags: [], endpoint: null };
     if (!productUrl || typeof productUrl !== 'string') return EMPTY;
     let path = productUrl;
@@ -1947,38 +1947,71 @@ try {
     if (!path.startsWith('/')) path = '/' + path;
 
     // 从 path 提取 sku 用于缓存查询(/product/xxx-<sku>/)
-    const urlSku = (path.match(/-(\d+)\/?$/) || [])[1] || '';
+    // 注意:只从 pathname 提取,不含 query string(card.url 可能带 ?_bctx=... 导致正则失配)
+    const urlSku = (() => {
+      try {
+        const u = new URL(productUrl, 'https://www.ozon.ru');
+        return (u.pathname.match(/-(\d+)\/?$/) || [])[1] || '';
+      } catch {
+        return (path.match(/-(\d+)\/?$/) || [])[1] || '';
+      }
+    })();
 
-    // ── 缓存优先:entrypoint → composer ──
+    // ── 缓存优先:entrypoint + composer 都命中才直接返回 ──
     // entrypoint 缓存存蒸馏后的 { gallery, richContent, description, hashtags, mp4 }
     // composer 缓存存原始 widgetStates,需用同名抽取器解析
-    if (urlSku) {
+    // forceEntrypoint: 当 entrypoint 缓存为空但 composer 有数据时,仍真调 entrypoint-api 补全 entrypoint 缓存
+    //
+    // 重要:entrypoint 缓存命中但 composer 缓存不存在时,不能直接返回 — 否则 composer
+    // 缓存永远不会被补全(doFetch 不执行 → 无 composerWidgetStates → 不写 composer 缓存),
+    // 导致后续每次采集 composer 都显示 "-"(有记录无命中无错误)。
+    // 修复:两个缓存都有才走缓存返回;缺一个就继续 doFetch 补全。
+    if (urlSku && !options.forceEntrypoint) {
+      let epCached = null;
+      let ccCached = null;
       try {
-        const ep = await _entrypointCacheGet(urlSku);
-        if (ep && (ep.gallery?.length || ep.richContent || ep.description || ep.mp4)) {
-          return {
-            mp4: ep.mp4 || null,
-            richContent: ep.richContent || '',
-            description: ep.description || '',
-            hashtags: Array.isArray(ep.hashtags) ? ep.hashtags : [],
-            endpoint: 'entrypoint-cache',
-          };
-        }
+        epCached = await _entrypointCacheGet(urlSku);
       } catch {}
       try {
-        const cc = await _composerCacheGet(urlSku);
-        if (cc && cc.widgetStates) {
-          // 用 composer 缓存的 widgetStates 抽取(与 buyer tab 注入的 extract* 同规则)
-          const states = cc.widgetStates;
-          const richContent = _extractRichFromStates(states);
-          const mp4 = _extractMp4FromStates(states);
-          const description = _extractDescriptionFromStates(states);
-          const hashtags = _extractHashtagsFromStates(states);
-          if (richContent || mp4 || description || hashtags.length) {
-            return { mp4, richContent, description, hashtags, endpoint: 'composer-cache' };
-          }
-        }
+        ccCached = await _composerCacheGet(urlSku);
       } catch {}
+      console.log(
+        '[fetchVariantMedia] 缓存检查:',
+        urlSku,
+        'ep=' + !!epCached,
+        'cc=' + !!ccCached,
+        'forceEntrypoint=' + !!options.forceEntrypoint
+      );
+      // 两个缓存都有 → 直接返回(entrypoint 缓存优先,HTTP 200 即缓存包括空内容)
+      if (epCached && ccCached) {
+        return {
+          mp4: epCached.mp4 || null,
+          richContent: epCached.richContent || '',
+          description: epCached.description || '',
+          hashtags: Array.isArray(epCached.hashtags) ? epCached.hashtags : [],
+          endpoint: 'entrypoint-cache',
+        };
+      }
+      // entrypoint 缓存有但 composer 没有 → 继续执行 doFetch 补全 composer 缓存
+      // composer 缓存有但 entrypoint 没有 → 继续执行 doFetch 补全 entrypoint 缓存
+      // 两个都没有 → 继续执行 doFetch
+      // (doFetch 内部会依次试 entrypoint-api + composer-api,并写两个缓存)
+
+      // composer 缓存单独命中且有内容 → 尝试用 composer 缓存返回(forceEntrypoint 时除外)
+      if (ccCached && ccCached.widgetStates) {
+        const states = ccCached.widgetStates;
+        const richContent = _extractRichFromStates(states);
+        const mp4 = _extractMp4FromStates(states);
+        const description = _extractDescriptionFromStates(states);
+        const hashtags = _extractHashtagsFromStates(states);
+        if (richContent || mp4 || description || hashtags.length) {
+          // 有内容但 entrypoint 缓存缺失 → 标记 endpoint 为 composer-cache,
+          // doFetch 仍会执行(因为 epCached 为 null)来补全 entrypoint 缓存
+          // 这里提前返回会让 doFetch 不执行,所以仅在 epCached 也存在时返回
+          // 实际上 epCached 为 null 时走到这里,我们需要继续 doFetch
+          // 所以这里不返回,继续执行 doFetch
+        }
+      }
     }
 
     let tab;
@@ -2302,20 +2335,32 @@ try {
         followSellData: r.followSellData || null,
       };
       // 真调成功后异步写 entrypoint 缓存(按 sku 索引,蒸馏后字段)
-      // 仅在有效内容时写入,避免 HTTP 200 但字段全空时写入空缓存导致后续误判命中
-      if (urlSku && result.endpoint === 'entrypoint-api' && (result.richContent || result.description || result.mp4)) {
+      // 只要 endpoint === 'entrypoint-api'(HTTP 200)就写入,包括空内容 ——
+      // 空内容是商品本身的数据特征,缓存后避免后续重复无效真调
+      if (urlSku && result.endpoint === 'entrypoint-api') {
         _entrypointCacheSet(urlSku, {
           gallery: [],
-          richContent: result.richContent,
-          description: result.description,
-          hashtags: result.hashtags,
-          mp4: result.mp4,
+          richContent: result.richContent || '',
+          description: result.description || '',
+          hashtags: Array.isArray(result.hashtags) ? result.hashtags : [],
+          mp4: result.mp4 || null,
         });
       }
       // ── 三合一改造:从 composerWidgetStates 抽 fields + 写 composer 缓存 ──
       // 复用 fetchProductPageState 同口径的 widget 解析(gallery/heading/aspects/price/
       // seller/brand),把蒸馏后的 fields + 过滤后 widgetStates 写入 composer 缓存(L1+L2)。
-      if (urlSku && r.composerWidgetStates && Object.keys(r.composerWidgetStates).length) {
+      // 与 entrypoint 缓存一致:只要 doFetch 返回 anyOk(HTTP 200)就写入,包括空内容 —
+      // 空内容是商品本身的数据特征,缓存后避免后续重复无效真调。
+      const cwsKeys = r.composerWidgetStates ? Object.keys(r.composerWidgetStates).length : 0;
+      console.log(
+        '[fetchVariantMedia] composer 写入检查:',
+        urlSku,
+        'urlSku=' + !!urlSku,
+        'r.ok=' + !!r?.ok,
+        'cwsKeys=' + cwsKeys,
+        'endpoint=' + (r?.endpoint || 'null')
+      );
+      if (urlSku && r.ok && r.composerWidgetStates) {
         try {
           const ws = r.composerWidgetStates;
           const keys = Object.keys(ws);
@@ -2401,6 +2446,12 @@ try {
             if (usefulPrefixes.some((p) => k.startsWith(p))) filteredStates[k] = ws[k];
           }
           _composerCacheSet(urlSku, { fields, widgetStates: filteredStates });
+          console.log(
+            '[fetchVariantMedia] composer 缓存已写入:',
+            urlSku,
+            'fieldsKeys=' + Object.keys(fields).length,
+            'widgetStateKeys=' + Object.keys(filteredStates).length
+          );
         } catch (e) {
           console.warn('[fetchVariantMedia] composer fields extract failed:', e?.message || e);
         }
@@ -3268,13 +3319,14 @@ try {
 
   // ── 直调市场统计(data/v3)—— 从 getMarketStats action 抽取的核心逻辑 ──────
   // 借 seller.ozon.ru tab 注入 fetch what_to_sell/data/v3,归一化后返回。
-  // **不写缓存**(由调用方 getMarketStats action 决定)。
+  // **不写缓存**(由调用方 getMarketStats action / autoCollect Step 6 决定)。
   // **不走 proxyMarketData 代采降级**(由调用方在 __needSellerLogin 时决定)。
   // 返回类型契约:
   //   { __needSellerLogin: true, __reason } — 需要卖家登录(无 seller tab / 会话过期)
   //   { __antibot: true } — 反爬(http_403 / 限流,非会话类失败)
-  //   null — data/v3 无 items(登录正常但该 SKU 无市场数据)
+  //   { __empty: true } — HTTP 200 但 data/v3 无 items(登录正常,SKU 无市场数据)
   //   NormalizedItem — 成功(normalizeMarketItem 归一化后的 18+ 字段)
+  //   null — 临时性失败(所有 seller tab 注入异常)
   const _fetchMarketStatsDirect = async (sku, period) => {
     if (!sku) return null;
     const mPeriod = period === 'weekly' ? 'weekly' : 'monthly';
@@ -3349,7 +3401,8 @@ try {
         }
         const r = injected?.[0]?.result;
         if (r?.ok) {
-          return r.data ? normalizeMarketItem(r.data) : null;
+          // HTTP 200 即采集成功:有数据 → 归一化;无数据 → 空标记(缓存后避免重复真调)
+          return r.data ? normalizeMarketItem(r.data) : { __empty: true };
         }
         reasons.push(`tab${tab.id}:${r?.reason || 'no_result'}`);
       }
@@ -3447,13 +3500,16 @@ try {
   // 向所有 Ozon tab 推送采集完成事件(让商品卡状态条+徽章实时更新)
   const _broadcastCollectDone = (entry) => {
     try {
-      chrome.tabs.query({ url: ['https://www.ozon.ru/*', 'https://ozon.ru/*', 'https://ozon.kz/*', 'https://*.ozon.kz/*'] }, (tabs) => {
-        if (!Array.isArray(tabs)) return;
-        for (const t of tabs) {
-          if (!t.id) continue;
-          chrome.tabs.sendMessage(t.id, { type: 'collectDone', entry }).catch(() => {});
+      chrome.tabs.query(
+        { url: ['https://www.ozon.ru/*', 'https://ozon.ru/*', 'https://ozon.kz/*', 'https://*.ozon.kz/*'] },
+        (tabs) => {
+          if (!Array.isArray(tabs)) return;
+          for (const t of tabs) {
+            if (!t.id) continue;
+            chrome.tabs.sendMessage(t.id, { type: 'collectDone', entry }).catch(() => {});
+          }
         }
-      });
+      );
     } catch (e) {
       /* fire-and-forget */
     }
@@ -3571,16 +3627,20 @@ try {
 
       // 检查 autoCollectRunning
       if (!config.autoCollectRunning) {
+        console.log('[SW autoCollect] Gate0 跳过(not-running):', sku);
         _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'not-running');
         return { status: 'skipped', reason: 'not-running' };
       }
       // 检查 paused / 冷却期
       if (config.paused && Date.now() < config.pausedUntil) {
+        const remainMs = config.pausedUntil - Date.now();
+        console.log('[SW autoCollect] Gate0 跳过(paused):', sku, '剩余', Math.round(remainMs / 1000) + 's');
         _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'paused');
         return { status: 'skipped', reason: 'paused', pausedUntil: config.pausedUntil };
       }
       // 检查每日上限
       if (config.todayCount >= config.perDayLimit) {
+        console.log('[SW autoCollect] Gate0 跳过(daily-limit):', sku, config.todayCount + '/' + config.perDayLimit);
         _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'daily-limit');
         return { status: 'skipped', reason: 'daily-limit' };
       }
@@ -3590,6 +3650,7 @@ try {
       if (cls) {
         storeClassified = cls.isChinese === true ? 'chinese' : cls.isChinese === false ? 'non-chinese' : 'unclassified';
       }
+      console.log('[SW autoCollect] Gate0.5 店铺分类:', sku, 'slug=', sellerSlug, 'class=', storeClassified);
       if (config.onlyChineseStores && cls?.isChinese !== true) {
         const reason = cls?.isChinese === false ? 'non-chinese-store' : 'unclassified-store';
         // Gate 0.5 跳过分支也调 _writeAutoCollectLog
@@ -3621,18 +3682,20 @@ try {
       ]);
 
       // 标记命中(forceRefresh 时所有缓存不计为命中)
-      // entrypoint 缓存可能存空内容(HTTP 200 但字段全空),需校验有效性,
-      // 与 fetchVariantMediaViaBuyerTab L1958 命中判断一致
+      // entrypoint/marketStats 只要缓存存在即命中(HTTP 200 即缓存,包括空内容/空数据)
       results[0].hit = !!card && !forceRefresh;
       results[1].hit = !!detail && !forceRefresh;
       results[2].hit = !!composer && !forceRefresh;
-      results[3].hit =
-        !!entrypoint &&
-        (entrypoint.gallery?.length || entrypoint.richContent || entrypoint.description || entrypoint.mp4) &&
-        !forceRefresh;
+      results[3].hit = !!entrypoint && !forceRefresh;
       // search/bundle 在 Step 5 处理
       results[6].hit = !!marketStats && !marketStats.stale && !forceRefresh;
       results[7].hit = !!followSell && !followSell.stale && !forceRefresh;
+
+      console.log(
+        '[SW autoCollect] Step1 缓存查询:',
+        sku,
+        results.map((r) => `${r.type}:${r.hit ? '✓' : '✗'}`).join(' ')
+      );
 
       // === Step 2: 计算 pending ===
       const pending = {
@@ -3644,6 +3707,10 @@ try {
         followSell: !results[7].hit,
       };
       const hasPending = Object.values(pending).some(Boolean);
+      const pendingList = Object.entries(pending)
+        .filter(([, v]) => v)
+        .map(([k]) => k);
+      console.log('[SW autoCollect] Step2 pending:', sku, pendingList.length ? pendingList.join(',') : '(none)');
       if (!hasPending) {
         _writeAutoCollectLog({
           sku,
@@ -3669,23 +3736,46 @@ try {
           await _buyerPageGate();
           // fetchVariantMediaViaBuyerTab 接收 productUrl,从 card 缓存取 url 或构造 fallback
           const productUrl = card?.url || `https://www.ozon.ru/product/-${sku}/`;
-          const mediaResult = await fetchVariantMediaViaBuyerTab(productUrl);
+          // forceEntrypoint: entrypoint 缓存为空时,即使 composer 缓存有数据也真调 entrypoint-api 补全
+          const mediaResult = await fetchVariantMediaViaBuyerTab(productUrl, {
+            forceEntrypoint: pending.entrypoint,
+          });
           // fetchVariantMediaViaBuyerTab 内部已写 entrypoint/composer/followSell 缓存,
           // 这里仅根据返回字段标记命中。
           // 注意:endpoint 字段可能为 'entrypoint-api'/'composer-api'/'entrypoint-cache'/'composer-cache',
-          // 但 entrypoint 缓存只在 endpoint === 'entrypoint-api' 且有有效内容时才会写入(L2306 条件),
-          // 所以 results[3].hit 必须严格匹配 'entrypoint-*' 且校验内容有效性才能反映真实缓存状态。
+          // entrypoint 缓存在 endpoint === 'entrypoint-api' 时写入(HTTP 200 即写,包括空内容),
+          // 所以 results[3].hit 只要匹配 'entrypoint-*' 即表示已采集。
           const ep = String(mediaResult?.endpoint || '');
-          const epHasContent =
-            mediaResult?.richContent || mediaResult?.description || mediaResult?.mp4;
-          if (ep.startsWith('entrypoint-') && epHasContent) results[3].hit = true;
+          // 只要走了 entrypoint-* 就标记命中(HTTP 200 即采集完成,包括空内容)
+          if (ep.startsWith('entrypoint-')) {
+            results[3].hit = true;
+          } else if (!ep) {
+            results[3].error = 'NO_ENDPOINT';
+          } else {
+            results[3].error = 'FALLBACK_' + ep;
+          }
           if (ep.startsWith('composer-') || mediaResult?.composerFields) results[2].hit = true;
           if (mediaResult?.followSellData) results[7].hit = true;
+          console.log(
+            '[SW autoCollect] Step4 买家页采集:',
+            sku,
+            'endpoint=',
+            ep || '(null)',
+            'composer:',
+            results[2].hit ? '✓' : '✗',
+            'entrypoint:',
+            results[3].hit ? '✓' : '✗',
+            'followSell:',
+            results[7].hit ? '✓' : '✗'
+          );
         } catch (e) {
           if (e?.message === 'ANTIBOT_BLOCKED') {
+            console.warn('[SW autoCollect] Step4 反爬熔断:', sku);
             return _handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
           }
-          console.warn('[autoCollect] Step 4 failed:', e?.message || e);
+          // 截断到 80 字符,避免超长 HTML 挑战页内容污染日志
+          results[3].error = e?.message ? String(e.message).slice(0, 80) : 'STEP4_FAILED';
+          console.warn('[SW autoCollect] Step4 failed:', sku, e?.message || e);
         }
       }
 
@@ -3720,8 +3810,9 @@ try {
                 results[5].hit = true; // bundle
               }
             } catch (e) {
-              console.warn('[autoCollect] bundle L1 get failed:', e?.message || e);
+              console.warn('[SW autoCollect] bundle L1 get failed:', e?.message || e);
             }
+            console.log('[SW autoCollect] Step5 search/bundle 缓存命中:', sku);
           } else {
             // 未缓存 → 真调 /search + bundle(fetchSellerPortal 内部已调 _sellerPortalGate)
             const scCookies = await chrome.cookies.getAll({
@@ -3774,7 +3865,12 @@ try {
                   });
                   if (bundleItem) results[5].hit = true; // bundle
                 }
+                console.log('[SW autoCollect] Step5 search/bundle 真调成功:', sku, 'items=', items.length);
+              } else {
+                console.log('[SW autoCollect] Step5 search 真调无数据:', sku);
               }
+            } else {
+              console.log('[SW autoCollect] Step5 跳过(无 sc_company_id cookie):', sku);
             }
           }
         } catch (e) {
@@ -3785,9 +3881,10 @@ try {
               msg
             );
           if (looksAntibot || e?.__antibot) {
+            console.warn('[SW autoCollect] Step5 反爬熔断:', sku);
             return _handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
           }
-          console.warn('[autoCollect] Step 5 failed:', e?.message || e);
+          console.warn('[SW autoCollect] Step5 failed:', sku, e?.message || e);
         }
       }
 
@@ -3796,20 +3893,25 @@ try {
         try {
           // _fetchMarketStatsDirect 内部已调 _sellerPortalGate
           const marketData = await _fetchMarketStatsDirect(sku);
-          // null 检查顺序:先 !marketData(NO_DATA),再 __needSellerLogin(AUTH_REQUIRED),再 __antibot(跳 ANTIBOT)
-          if (!marketData) {
-            results[6].error = 'NO_DATA';
-          } else if (marketData.__needSellerLogin) {
+          // 检查顺序:__needSellerLogin(AUTH_REQUIRED) → __antibot(跳 ANTIBOT) → 其余(HTTP 200)写缓存
+          if (marketData?.__needSellerLogin) {
             results[6].error = 'AUTH_REQUIRED';
-          } else if (marketData.__antibot) {
+            console.log('[SW autoCollect] Step6 marketStats: AUTH_REQUIRED:', sku);
+          } else if (marketData?.__antibot) {
+            console.warn('[SW autoCollect] Step6 marketStats 反爬熔断:', sku);
             return _handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
-          } else {
-            // 正常写缓存
+          } else if (marketData) {
+            // HTTP 200 即写缓存(包括 __empty 空数据),标记已采集
             _marketStatsCacheSet(sku, marketData);
             results[6].hit = true;
+            console.log('[SW autoCollect] Step6 marketStats 成功:', sku, marketData.__empty ? '(空数据)' : '');
+          } else {
+            // null:临时性失败(所有 tab 注入异常等),不写缓存
+            results[6].error = 'NO_DATA';
+            console.log('[SW autoCollect] Step6 marketStats: NO_DATA:', sku);
           }
         } catch (e) {
-          console.warn('[autoCollect] Step 6 failed:', e?.message || e);
+          console.warn('[SW autoCollect] Step6 failed:', sku, e?.message || e);
           results[6].error = e?.message || 'UNKNOWN';
           // 失败不熔断
         }
@@ -3819,6 +3921,19 @@ try {
       const totalDuration = Date.now() - startTime;
       const hasError = results.some((r) => r.error);
       const status = hasError ? 'partial' : 'success';
+      const hitCount = results.filter((r) => r.hit).length;
+      console.log(
+        '[SW autoCollect] Step7 完成:',
+        sku,
+        'status=',
+        status,
+        'hit=',
+        hitCount + '/8',
+        'dur=',
+        totalDuration + 'ms',
+        '|',
+        results.map((r) => `${r.type}:${r.hit ? '✓' : '✗'}${r.error ? '(' + r.error + ')' : ''}`).join(' ')
+      );
 
       // 更新内存计数器
       _incrementAutoCollectStats(sku, status, source, storeClassified, results, startTime, null);
@@ -3840,7 +3955,7 @@ try {
 
       return { status, results, totalDuration };
     } catch (e) {
-      console.error('[autoCollect] 异常:', e);
+      console.error('[SW autoCollect] 异常:', sku, e);
       const totalDuration = Date.now() - startTime;
       _writeAutoCollectLog({
         sku,
@@ -5489,26 +5604,41 @@ try {
         case 'autoCollect': {
           // Task 6:autoCollect 核心编排(8 类采集 + Gate 0.5 中国店铺检查)。
           // 由 content script(shop-page / pdp)发现新 SKU 时触发,SW 内部编排全流程。
+          // 注意:_doAutoCollect 返回 { status, results, ... } 没有 ok 字段,
+          // 这里包装成 { ok: true, data: ... } 以符合 sendMessage 协议。
           const { sku: acSku, source: acSource, sellerSlug: acSlug, depth: acDepth, forceRefresh: acForce } = message;
-          return await _doAutoCollect(acSku, acSource, acSlug, acDepth, acForce);
+          console.log('[SW autoCollect] 收到请求:', acSku, 'source=', acSource, 'force=', acForce);
+          const acResult = await _doAutoCollect(acSku, acSource, acSlug, acDepth, acForce);
+          console.log(
+            '[SW autoCollect] 返回:',
+            acSku,
+            'status=',
+            acResult?.status,
+            'dur=',
+            acResult?.totalDuration + 'ms'
+          );
+          return { ok: true, data: acResult };
         }
         case 'autoCollectGetConfig': {
           // Task 22:面板读取 autoCollect 配置(白名单字段)。
           const _acCfg = await _loadAutoCollectConfig();
           return {
-            enabled: _acCfg.enabled,
-            autoCollectRunning: _acCfg.autoCollectRunning,
-            depth: _acCfg.depth,
-            paused: _acCfg.paused,
-            pausedUntil: _acCfg.pausedUntil,
-            todayCount: _acCfg.todayCount,
-            perDayLimit: _acCfg.perDayLimit,
-            todayDate: _acCfg.todayDate,
-            marketStatsStaleMs: _acCfg.marketStatsStaleMs,
-            followSellStaleMs: _acCfg.followSellStaleMs,
-            onlyChineseStores: _acCfg.onlyChineseStores,
-            knownChineseSlugs: _acCfg.knownChineseSlugs,
-            knownNonChineseSlugs: _acCfg.knownNonChineseSlugs,
+            ok: true,
+            data: {
+              enabled: _acCfg.enabled,
+              autoCollectRunning: _acCfg.autoCollectRunning,
+              depth: _acCfg.depth,
+              paused: _acCfg.paused,
+              pausedUntil: _acCfg.pausedUntil,
+              todayCount: _acCfg.todayCount,
+              perDayLimit: _acCfg.perDayLimit,
+              todayDate: _acCfg.todayDate,
+              marketStatsStaleMs: _acCfg.marketStatsStaleMs,
+              followSellStaleMs: _acCfg.followSellStaleMs,
+              onlyChineseStores: _acCfg.onlyChineseStores,
+              knownChineseSlugs: _acCfg.knownChineseSlugs,
+              knownNonChineseSlugs: _acCfg.knownNonChineseSlugs,
+            },
           };
         }
         case 'autoCollectSetConfig': {
@@ -5538,18 +5668,62 @@ try {
         case 'autoCollectGetStats': {
           // Task 22:面板读取今日内存计数器(SW 休眠后清零,仅用于实时展示)。
           return {
-            today: { ..._autoCollectStats.today },
-            byType: { ..._autoCollectStats.byType },
-            bySource: { ..._autoCollectStats.bySource },
-            byStoreClass: { ..._autoCollectStats.byStoreClass },
-            successRate:
-              _autoCollectStats.today.total > 0 ? _autoCollectStats.today.success / _autoCollectStats.today.total : 0,
+            ok: true,
+            data: {
+              today: { ..._autoCollectStats.today },
+              byType: { ..._autoCollectStats.byType },
+              bySource: { ..._autoCollectStats.bySource },
+              byStoreClass: { ..._autoCollectStats.byStoreClass },
+              successRate:
+                _autoCollectStats.today.total > 0 ? _autoCollectStats.today.success / _autoCollectStats.today.total : 0,
+            },
           };
         }
         case 'autoCollectGetRecent': {
           // Task 22:面板读取最近 N 条采集记录(环形缓冲,默认 5 条,倒序)。
           const _acLimit = message.limit || 5;
-          return _autoCollectRecent.slice(-_acLimit).reverse();
+          return { ok: true, data: _autoCollectRecent.slice(-_acLimit).reverse() };
+        }
+        case 'debugEntrypointComposerCache': {
+          const dSku = message.sku || '';
+          if (!dSku) return { ok: false, error: 'sku required' };
+          let dEp = null,
+            dCc = null;
+          try {
+            dEp = await _entrypointCacheGet(dSku);
+          } catch (e) {
+            dEp = { error: e?.message || e };
+          }
+          try {
+            dCc = await _composerCacheGet(dSku);
+          } catch (e) {
+            dCc = { error: e?.message || e };
+          }
+          return {
+            ok: true,
+            data: {
+              entrypoint: dEp
+                ? {
+                    has: true,
+                    keys: Object.keys(dEp),
+                    richContentLen: (dEp.richContent || '').length,
+                    descriptionLen: (dEp.description || '').length,
+                    hasMp4: !!dEp.mp4,
+                    hashtagsCount: Array.isArray(dEp.hashtags) ? dEp.hashtags.length : 0,
+                  }
+                : { has: false },
+              composer: dCc
+                ? {
+                    has: true,
+                    keys: Object.keys(dCc),
+                    hasWidgetStates: !!dCc.widgetStates,
+                    widgetStateKeys: dCc.widgetStates ? Object.keys(dCc.widgetStates).slice(0, 10) : [],
+                    hasFields: !!dCc.fields,
+                  }
+                : { has: false },
+              buildVersion: '20260714-fix-composer-cache',
+            },
+          };
         }
         case 'autoCollectForceRefreshPage': {
           // Task 22:面板强制刷新当前页 → 向当前 tab 发 __jzAutoCollectResetSeen
@@ -5592,11 +5766,11 @@ try {
               return { ok: true, data: { __antibot: true } };
             }
             if (result) {
-              // 成功:写缓存(L1+L2)后返回
+              // HTTP 200 即写缓存(L1+L2)后返回(包括 __empty 空数据)
               _marketStatsCacheSet(mSku, result);
               return { ok: true, data: result };
             }
-            // null:NO_DATA(data/v3 无 items,登录正常)
+            // null:临时性失败(注入异常等)
             return { ok: true, data: null };
           } catch (e) {
             console.log('[getMarketStats] failed:', e?.message || e);
@@ -6889,8 +7063,11 @@ try {
     // media-storage 上传跑在 seller/buyer tab,executeScript 内部就排到 90s+(transferVariantVideo
     // 还叠加买家 tab 抓图册 40s),50s 会把**正常但慢**的转存误杀。给它们 160s 上限,并配合
     // content LONG_ACTIONS 把这俩 action 的 content 侧超时也放宽到 600s。
-    const VIDEO_ACTIONS = new Set(['uploadFollowSellVideo', 'transferVariantVideo']);
-    const HANDLER_TOTAL_TIMEOUT_MS = VIDEO_ACTIONS.has(message?.action) ? 160_000 : 50_000;
+    // autoCollect:8 类编排(买家页 + seller portal 多步),实测可达 60s+,50s 会误杀
+    //   → SW 返回 race timeout error → content .catch() 清 __jzCollectingSkus →
+    //   collectDone 广播后定时重扫立即重新触发 → 无限"采集中"循环。
+    const LONG_HANDLER_ACTIONS = new Set(['uploadFollowSellVideo', 'transferVariantVideo', 'autoCollect']);
+    const HANDLER_TOTAL_TIMEOUT_MS = LONG_HANDLER_ACTIONS.has(message?.action) ? 300_000 : 50_000;
     let raceTimer = null;
     const handlerPromise = Promise.race([
       handle(),

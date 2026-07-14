@@ -29,6 +29,8 @@ const stats = ref({
   composer: { count: 0 },
   entrypoint: { count: 0 },
   detail: { count: 0 },
+  marketStats: { count: 0 },
+  followSell: { count: 0 },
 });
 
 async function loadStats() {
@@ -181,7 +183,15 @@ const TYPE_LABELS = {
   composer: 'composer',
   entrypoint: 'entrypoint',
   detail: 'detail(详情页)',
+  marketStats: 'marketStats(市场统计)',
+  followSell: 'followSell(跟卖)',
 };
+
+// 单类型列表 colspan:SKU + 抓取时间 + 操作(基础3)+ bundle 专属2 / marketStats/followSell 专属2
+const singleTypeColspan = computed(() => {
+  if (state.type === 'bundle' || state.type === 'marketStats' || state.type === 'followSell') return 5;
+  return 3;
+});
 
 // 8 类缓存类型(用于自动采集统计/日志结果列)
 const EIGHT_TYPES = [
@@ -440,6 +450,16 @@ onMounted(() => {
         <div class="cache-stat-value">{{ stats.detail?.count || 0 }}</div>
         <div class="cache-stat-sub">条(详情页 DOM 全字段)</div>
       </div>
+      <div class="cache-stat-card">
+        <div class="cache-stat-label">marketStats 缓存</div>
+        <div class="cache-stat-value">{{ stats.marketStats?.count || 0 }}</div>
+        <div class="cache-stat-sub">条(市场统计,stale 24h)</div>
+      </div>
+      <div class="cache-stat-card">
+        <div class="cache-stat-label">followSell 缓存</div>
+        <div class="cache-stat-value">{{ stats.followSell?.count || 0 }}</div>
+        <div class="cache-stat-sub">条(跟卖信息,stale 4h)</div>
+      </div>
     </div>
 
     <!-- 类型切换 -->
@@ -464,6 +484,16 @@ onMounted(() => {
       </button>
       <button class="cache-type-tab" :class="{ active: state.type === 'detail' }" @click="switchType('detail')">
         详情页缓存
+      </button>
+      <button
+        class="cache-type-tab"
+        :class="{ active: state.type === 'marketStats' }"
+        @click="switchType('marketStats')"
+      >
+        marketStats 缓存
+      </button>
+      <button class="cache-type-tab" :class="{ active: state.type === 'followSell' }" @click="switchType('followSell')">
+        followSell 缓存
       </button>
       <button
         class="cache-type-tab"
@@ -580,17 +610,17 @@ onMounted(() => {
               <th>抓取时间</th>
               <th v-if="state.type === 'bundle'">bundleId</th>
               <th v-if="state.type === 'bundle'">属性状态</th>
+              <th v-if="state.type === 'marketStats' || state.type === 'followSell'">L2 同步</th>
+              <th v-if="state.type === 'marketStats' || state.type === 'followSell'">数据状态</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="state.loading && !state.items.length">
-              <td :colspan="state.type === 'bundle' ? 5 : 3" class="muted" style="padding: 24px; text-align: center">
-                加载中...
-              </td>
+              <td :colspan="singleTypeColspan" class="muted" style="padding: 24px; text-align: center">加载中...</td>
             </tr>
             <tr v-else-if="!state.items.length">
-              <td :colspan="state.type === 'bundle' ? 5 : 3" class="empty">暂无缓存记录</td>
+              <td :colspan="singleTypeColspan" class="empty">暂无缓存记录</td>
             </tr>
             <tr v-for="it in state.items" :key="it.sku">
               <td class="col-sku">{{ it.sku }}</td>
@@ -600,6 +630,14 @@ onMounted(() => {
                 <span v-if="!it.attrsEmpty" class="tag tag-ok">有属性</span>
                 <span v-else-if="isStale(it)" class="tag tag-err">空(待重验)</span>
                 <span v-else class="tag tag-warn">空(6h 内验证)</span>
+              </td>
+              <td v-if="state.type === 'marketStats' || state.type === 'followSell'">
+                <span v-if="it.l2Synced" class="tag tag-ok">已同步</span>
+                <span v-else class="tag tag-warn">待同步</span>
+              </td>
+              <td v-if="state.type === 'marketStats' || state.type === 'followSell'">
+                <span v-if="it.stale" class="tag tag-err">已过期</span>
+                <span v-else class="tag tag-ok">新鲜</span>
               </td>
               <td class="row-actions">
                 <button class="btn btn-sm btn-ghost" @click="openDetail(it)">详情</button>
@@ -806,6 +844,18 @@ onMounted(() => {
           <div v-if="detailData.bundleId"><b>bundleId:</b> {{ detailData.bundleId }}</div>
           <div v-if="detailData.attrsEmptyVerifiedAt">
             <b>空属性验证:</b> {{ fmtTime(detailData.attrsEmptyVerifiedAt) }}
+          </div>
+          <div v-if="detailData.l2Synced !== undefined">
+            <b>L2 同步:</b>
+            <span :class="detailData.l2Synced ? 'tag tag-ok' : 'tag tag-warn'">
+              {{ detailData.l2Synced ? '已同步' : '待同步' }}
+            </span>
+          </div>
+          <div v-if="detailData.stale !== undefined">
+            <b>数据状态:</b>
+            <span :class="detailData.stale ? 'tag tag-err' : 'tag tag-ok'">
+              {{ detailData.stale ? '已过期' : '新鲜' }}
+            </span>
           </div>
         </div>
         <div class="cache-detail-data">
