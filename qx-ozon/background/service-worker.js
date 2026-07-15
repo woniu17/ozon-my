@@ -81,6 +81,24 @@ try {
 }
 
 (() => {
+  // ─── IS_TEST_MODE 检测(SW 无 location,读 chrome.storage.local 标志) ─────
+  // 测试模式下 Ozon www 与 seller portal 都由本地 mock server (port 7777) 扮演。
+  // 启动时异步读取,几毫秒完成;测试前需先 set storage 再 runtime.reload()。
+  // 详见 test/e2e-auto-collect/README.md。
+  let IS_TEST_MODE = false;
+  let OZON_WWW_ORIGIN = 'https://www.ozon.ru';
+  let OZON_SELLER_ORIGIN = 'https://seller.ozon.ru';
+  const _testModeReady = chrome.storage.local.get('__IS_TEST_MODE__').then(
+    (r) => {
+      IS_TEST_MODE = !!r?.__IS_TEST_MODE__;
+      OZON_WWW_ORIGIN = IS_TEST_MODE ? 'http://localhost:7777' : 'https://www.ozon.ru';
+      OZON_SELLER_ORIGIN = IS_TEST_MODE ? 'http://localhost:7777' : 'https://seller.ozon.ru';
+    },
+    () => {
+      /* 读取失败按生产模式走 */
+    }
+  );
+
   // 启动版本标识：用户跟卖前看 chrome://extensions 极掌 → service worker → console
   // 必须能看到下面这行才说明新代码已加载（否则说明 sw 没 reload）
   console.log(
@@ -182,6 +200,16 @@ try {
   const CACHE_SYNC_ALARM = 'jz:cache-sync-l2';
   const CACHE_SYNC_INTERVAL_MINUTES = 5;
 
+  // ── 采集队列(COLLECT_QUEUE_REDESIGN Phase 1+2) ─────────────────────────────
+  // chrome.storage.local key + alarm
+  const COLLECT_QUEUE_KEY = 'jz-collect-queue';
+  const COLLECT_QUEUE_META_KEY = 'jz-collect-queue-meta';
+  const COLLECT_QUEUE_ALARM = 'collect-queue-consume';
+  const COLLECT_QUEUE_ALARM_MINUTES = 1;
+  const COLLECT_QUEUE_OPS_POLL_MS = 5000;
+  const COLLECT_QUEUE_MAX_COMPLETED = 500;
+  const COLLECT_QUEUE_STALE_RUNNING_MS = 5 * 60 * 1000;
+
   /**
    * 登录门户域声明(2026-06-11 串号修复):build.js 给发版包注入
    * globalThis.__JZ_BRAND__(分销商定制版 webHost = 其商户域,平台版 =
@@ -274,7 +302,9 @@ try {
   function reloadOzonTabs() {
     clearTimeout(_reloadTimer);
     _reloadTimer = setTimeout(async () => {
-      const tabs = await chrome.tabs.query({ url: ['*://*.ozon.ru/*', '*://*.ozon.kz/*'] });
+      const tabs = await chrome.tabs.query({
+        url: IS_TEST_MODE ? ['http://localhost:7777/*'] : ['*://*.ozon.ru/*', '*://*.ozon.kz/*'],
+      });
       for (let i = 0; i < tabs.length; i++) {
         setTimeout(() => chrome.tabs.reload(tabs[i].id), i * 500);
       }
@@ -1467,7 +1497,7 @@ try {
 
   // 解析当前登录店铺的 sc_company_id(门户接口都要它)
   const resolveSellerCompanyId = async () => {
-    const scCookies = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
+    const scCookies = await chrome.cookies.getAll({ url: OZON_SELLER_ORIGIN + '/', name: 'sc_company_id' });
     const companyId = scCookies[0]?.value || '';
     if (!companyId) throw new Error('sc_company_id cookie 未找到,请确保已登录 seller.ozon.ru');
     return companyId;
@@ -1553,7 +1583,7 @@ try {
    */
   // 内部实现;对外用下方带 single-flight 的 ensureSellerTab 包装。
   const _ensureSellerTabImpl = async (timeoutMs = 20000) => {
-    const queryTabs = () => chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
+    const queryTabs = () => chrome.tabs.query({ url: OZON_SELLER_ORIGIN + '/*' });
     // 2026-05-30:排除 signin/registration/auth/login 页 —— 它们的 URL 也含 /app/
     // (如 /app/registration/signin),旧 find(url.includes('/app/')) 会误选到登录页,
     // 注入后页面无有效会话 / SPA 拦截 fetch。优先选真业务页,auth 页排最后兜底。
@@ -1588,7 +1618,7 @@ try {
 
     console.log('[ensureSellerTab] 无可用 seller.ozon.ru tab，后台打开...');
     const created = await chrome.tabs.create({
-      url: 'https://seller.ozon.ru/app/products/copy/list',
+      url: OZON_SELLER_ORIGIN + '/app/products/copy/list',
       active: false,
       pinned: true,
     });
@@ -1670,7 +1700,10 @@ try {
   // （SW 直 fetch composer-api 反爬必死 403，必须借买家 tab 的 cookie/UA/fingerprint）。
   // 用于 batch-upload（扩展页发起、无 ozon.ru content_script sender）逐 SKU 抓竞品视频。
   const ensureBuyerTab = async (timeoutMs = 20000) => {
-    const queryTabs = () => chrome.tabs.query({ url: ['https://www.ozon.ru/*', 'https://ozon.ru/*'] });
+    const queryTabs = () =>
+      chrome.tabs.query({
+        url: IS_TEST_MODE ? ['http://localhost:7777/*'] : ['https://www.ozon.ru/*', 'https://ozon.ru/*'],
+      });
     const pickReady = (list) =>
       list.find((t) => t.status === 'complete' && /\/(product|category|search)\b/i.test(t.url || '')) ||
       list.find((t) => t.status === 'complete') ||
@@ -1689,7 +1722,7 @@ try {
       }
     }
     console.log('[ensureBuyerTab] 无可用 www.ozon.ru tab，后台打开...');
-    const created = await chrome.tabs.create({ url: 'https://www.ozon.ru/', active: false, pinned: true });
+    const created = await chrome.tabs.create({ url: OZON_WWW_ORIGIN + '/', active: false, pinned: true });
     const createDeadline = Date.now() + timeoutMs;
     while (Date.now() < createDeadline) {
       await new Promise((r) => setTimeout(r, 500));
@@ -1709,7 +1742,7 @@ try {
   const transferVideoToOzon = async (srcUrl) => {
     if (!srcUrl || typeof srcUrl !== 'string') return { ok: false, error: 'srcUrl required' };
     const targetTab = await ensureSellerTab();
-    const scCookies = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
+    const scCookies = await chrome.cookies.getAll({ url: OZON_SELLER_ORIGIN + '/', name: 'sc_company_id' });
     const companyId = scCookies[0]?.value || '';
     if (!companyId) {
       return { ok: false, error: 'AUTH_REQUIRED', message: 'sc_company_id cookie 未找到，请先登录 seller.ozon.ru' };
@@ -1734,7 +1767,7 @@ try {
         fd.append('file_name', fname);
         fd.append('tmp', 'true');
         fd.append('body', new File([blob], fname, { type: blob.type || 'video/mp4' }));
-        const resp = await fetch('https://seller.ozon.ru/api/media-storage/upload-file', {
+        const resp = await fetch('/api/media-storage/upload-file', {
           method: 'POST',
           signal: controller.signal,
           credentials: 'include',
@@ -1956,7 +1989,7 @@ try {
     }
     let path = productUrl;
     try {
-      const u = new URL(productUrl, 'https://www.ozon.ru');
+      const u = new URL(productUrl, OZON_WWW_ORIGIN);
       path = u.pathname + u.search;
     } catch {}
     if (!path.startsWith('/')) path = '/' + path;
@@ -1965,7 +1998,7 @@ try {
     // 注意:只从 pathname 提取,不含 query string(card.url 可能带 ?_bctx=... 导致正则失配)
     const urlSku = (() => {
       try {
-        const u = new URL(productUrl, 'https://www.ozon.ru');
+        const u = new URL(productUrl, OZON_WWW_ORIGIN);
         return (u.pathname.match(/-(\d+)\/?$/) || [])[1] || '';
       } catch {
         return (path.match(/-(\d+)\/?$/) || [])[1] || '';
@@ -2541,6 +2574,7 @@ try {
     buyerPageMinInterval: 5000,
     sellerPortalMinInterval: 200,
     skuInterval: 30000,
+    consumeRateSec: 15,
     perDayLimit: 2000,
     todayCount: 0,
     todayDate: '',
@@ -2556,10 +2590,20 @@ try {
     try {
       const stored = await getStorage([_AUTO_COLLECT_CONFIG_KEY]);
       const raw = stored?.[_AUTO_COLLECT_CONFIG_KEY];
-      _autoCollectConfigCache =
+      const merged =
         raw && typeof raw === 'object'
           ? { ..._AUTO_COLLECT_CONFIG_DEFAULT, ...raw }
           : { ..._AUTO_COLLECT_CONFIG_DEFAULT };
+      // v2:consumeRateSec 取代 skuInterval,旧配置迁移(秒,限制 5-120)。
+      // 注意:defaults 已含 consumeRateSec,所以需用 raw 原始字段判断是否存在旧 skuInterval。
+      const _rawSec = raw?.consumeRateSec;
+      const _rawMs = raw?.skuInterval;
+      if (_rawSec != null) {
+        merged.consumeRateSec = Math.max(5, Math.min(120, Math.round(_rawSec)));
+      } else if (_rawMs != null) {
+        merged.consumeRateSec = Math.max(5, Math.min(120, Math.round(_rawMs / 1000)));
+      }
+      _autoCollectConfigCache = merged;
     } catch (e) {
       console.warn('[autoCollectConfig] load failed, fallback to defaults:', e?.message || e);
       _autoCollectConfigCache = { ..._AUTO_COLLECT_CONFIG_DEFAULT };
@@ -2570,6 +2614,15 @@ try {
   const _invalidateAutoCollectConfigCache = () => {
     _autoCollectConfigCache = null;
   };
+
+  // 监听 chrome.storage.local 变化:外部(如测试脚本、popup 直写)修改
+  // jz-auto-collect-config 时自动 invalidate 内存缓存,避免读到过期值。
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local') return;
+    if (changes[_AUTO_COLLECT_CONFIG_KEY]) {
+      _invalidateAutoCollectConfigCache();
+    }
+  });
 
   // ── 店铺中国身份分类(三层:L1 chrome.storage → L2 MongoDB → 规则引擎) ──────
   // 用于 Task 6 自动采集 Gate 0.5:onlyChineseStores=true 时跳过非中国店铺。
@@ -2623,7 +2676,8 @@ try {
         null,
         stored[STORAGE_KEYS.token]
       );
-      return r;
+      // ERP 返回 { ok: true, data: { isChinese, classifiedBy, ... } },解包取 data
+      return r?.data || null;
     } catch (e) {
       console.warn(`[store-class] ERP get failed slug=${slug}:`, e?.message || e);
       return null;
@@ -2775,46 +2829,6 @@ try {
     return { ok: true };
   };
 
-  // ── 买家页(www.ozon.ru)全局节奏闸门 ──────────────────────────────────────
-  // 覆盖 entrypoint/composer/followSell 真调:所有走 www.ozon.ru 的买家页请求共用此闸门,
-  // 保证相邻两次请求至少间隔 buyerPageMinInterval(默认 500ms,从 _loadAutoCollectConfig 读取)。
-  // 作用域与 _sellerPortalGate 互补:seller portal 走 seller.ozon.ru,买家页走 www.ozon.ru,
-  // 反爬风险评分独立,两把闸门各自串行摊平请求密度。
-  let _buyerPageGateChain = Promise.resolve();
-  let _buyerPageLastAt = 0;
-  const _buyerPageGate = () => {
-    const wait = _buyerPageGateChain.then(async () => {
-      const cfg = await _loadAutoCollectConfig();
-      const minInterval = Number(cfg.buyerPageMinInterval) || 500;
-      const delta = Date.now() - _buyerPageLastAt;
-      if (delta < minInterval) {
-        await new Promise((r) => setTimeout(r, minInterval - delta));
-      }
-      _buyerPageLastAt = Date.now();
-    });
-    _buyerPageGateChain = wait.catch(() => {});
-    return wait;
-  };
-
-  // ── autoCollect 逐 SKU 节奏闸门 ─────────────────────────────────────────────
-  // 采集流程每个 SKU 之间共用此闸门,保证相邻两次 SKU 处理至少间隔 skuInterval
-  // (默认 1000ms,从 _loadAutoCollectConfig 读取)。
-  let _autoCollectGateChain = Promise.resolve();
-  let _autoCollectLastAt = 0;
-  const _autoCollectGate = () => {
-    const wait = _autoCollectGateChain.then(async () => {
-      const cfg = await _loadAutoCollectConfig();
-      const minInterval = Number(cfg.skuInterval) || 1000;
-      const delta = Date.now() - _autoCollectLastAt;
-      if (delta < minInterval) {
-        await new Promise((r) => setTimeout(r, minInterval - delta));
-      }
-      _autoCollectLastAt = Date.now();
-    });
-    _autoCollectGateChain = wait.catch(() => {});
-    return wait;
-  };
-
   // ── 跨域快路:在「当前/任意 ozon.ru 标签页」内直发 seller 门户请求 ──────────────
   // 实测(2026-06-14):www.ozon.ru 与 seller.ozon.ru 同属 .ozon.ru,sc_company_id /
   // 登录态 cookie 域级共享;只要满足 CORS「简单请求」(content-type:text/plain、
@@ -2831,7 +2845,8 @@ try {
 
     // 解析目标标签:优先消息来源标签(用户正所在的 www 商品页),否则任意已加载完成的
     // *.ozon.ru 标签(www 或 seller 都行 —— cookie 域级共享、且都有真实浏览器指纹)。
-    const isOzonUrl = (u) => /^https?:\/\/([^/]+\.)?ozon\.ru\//i.test(u || '');
+    const isOzonUrl = (u) =>
+      IS_TEST_MODE ? /^http:\/\/localhost:7777\//i.test(u || '') : /^https?:\/\/([^/]+\.)?ozon\.ru\//i.test(u || '');
     let target = null;
     if (preferTabId) {
       try {
@@ -2840,7 +2855,9 @@ try {
       } catch {}
     }
     if (!target) {
-      const tabs = await chrome.tabs.query({ url: ['*://*.ozon.ru/*'] });
+      const tabs = await chrome.tabs.query({
+        url: IS_TEST_MODE ? ['http://localhost:7777/*'] : ['*://*.ozon.ru/*'],
+      });
       target =
         tabs.find((t) => t.status === 'complete' && t.active) || tabs.find((t) => t.status === 'complete') || null;
     }
@@ -2852,11 +2869,11 @@ try {
 
     // 注入 MAIN world 的跨域 fetch:严格只用 CORS-safelisted 头(content-type:text/plain),
     // company_id 已在 body 内。任何自定义头都会触发预检 → seller 不放行 → Failed to fetch。
-    const doFetchXO = async (apiPath, reqBody, timeout, prefix) => {
+    const doFetchXO = async (apiPath, reqBody, timeout, prefix, sellerOrigin) => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeout);
       try {
-        const resp = await fetch('https://seller.ozon.ru' + (prefix || '/api/v1') + apiPath, {
+        const resp = await fetch(sellerOrigin + (prefix || '/api/v1') + apiPath, {
           method: 'POST',
           signal: controller.signal,
           credentials: 'include',
@@ -2895,7 +2912,7 @@ try {
         chrome.scripting.executeScript({
           target: { tabId: target.id },
           func: doFetchXO,
-          args: [path, body, timeoutMs, urlPrefix],
+          args: [path, body, timeoutMs, urlPrefix, OZON_SELLER_ORIGIN],
           world: 'MAIN',
         }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('executeScript 超时')), timeoutMs + 5000)),
@@ -2951,18 +2968,18 @@ try {
     console.log(`[fetchSellerPortal] tab=${targetTab.id} url=${targetTab.url} path=${path}`);
 
     // 2. Resolve sc_company_id from chrome.cookies
-    const scCookies = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
+    const scCookies = await chrome.cookies.getAll({ url: OZON_SELLER_ORIGIN + '/', name: 'sc_company_id' });
     const companyId = scCookies[0]?.value || '';
     if (!companyId) {
       throw new Error('sc_company_id cookie 未找到，请确保已登录 seller.ozon.ru');
     }
 
     // 3. Try executeScript first (with hard timeout), fallback to bridge
-    const doFetch = async (apiPath, reqBody, xCompanyId, timeout, prefix, pageTypeHdr) => {
+    const doFetch = async (apiPath, reqBody, xCompanyId, timeout, prefix, pageTypeHdr, sellerOrigin) => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeout);
       try {
-        const resp = await fetch('https://seller.ozon.ru' + (prefix || '/api/v1') + apiPath, {
+        const resp = await fetch(sellerOrigin + (prefix || '/api/v1') + apiPath, {
           method: 'POST',
           signal: controller.signal,
           credentials: 'include',
@@ -3011,7 +3028,7 @@ try {
         chrome.scripting.executeScript({
           target: { tabId: targetTab.id },
           func: doFetch,
-          args: [path, body, companyId, timeoutMs, urlPrefix, pageType],
+          args: [path, body, companyId, timeoutMs, urlPrefix, pageType, OZON_SELLER_ORIGIN],
           world: 'MAIN',
         }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('executeScript 超时')), timeoutMs + 5000)),
@@ -3393,18 +3410,18 @@ try {
     if (!sku) return null;
     const mPeriod = period === 'weekly' ? 'weekly' : 'monthly';
     try {
-      let sellerTabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
+      let sellerTabs = await chrome.tabs.query({ url: OZON_SELLER_ORIGIN + '/*' });
       // 没开任何 seller tab。已登录 seller 时自己开一个(ensureSellerTab 内含 single-flight);
       // 未登录则不开无用 signin tab,直接走「需登录」。
       if (!sellerTabs.length) {
-        const _sc = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
+        const _sc = await chrome.cookies.getAll({ url: OZON_SELLER_ORIGIN + '/', name: 'sc_company_id' });
         if (_sc[0]?.value) {
           try {
             await ensureSellerTab();
           } catch (e) {
             console.log('[_fetchMarketStatsDirect] ensureSellerTab 失败:', e?.message || e);
           }
-          sellerTabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
+          sellerTabs = await chrome.tabs.query({ url: OZON_SELLER_ORIGIN + '/*' });
         }
       }
       if (!sellerTabs.length) {
@@ -3554,27 +3571,6 @@ try {
     };
     _autoCollectRecent.push(entry);
     if (_autoCollectRecent.length > 200) _autoCollectRecent.shift();
-
-    // 广播给所有 Ozon tab,让商品卡实时更新采集状态
-    _broadcastCollectDone(entry);
-  };
-
-  // 向所有 Ozon tab 推送采集完成事件(让商品卡状态条+徽章实时更新)
-  const _broadcastCollectDone = (entry) => {
-    try {
-      chrome.tabs.query(
-        { url: ['https://www.ozon.ru/*', 'https://ozon.ru/*', 'https://ozon.kz/*', 'https://*.ozon.kz/*'] },
-        (tabs) => {
-          if (!Array.isArray(tabs)) return;
-          for (const t of tabs) {
-            if (!t.id) continue;
-            chrome.tabs.sendMessage(t.id, { type: 'collectDone', entry }).catch(() => {});
-          }
-        }
-      );
-    } catch (e) {
-      /* fire-and-forget */
-    }
   };
 
   // ── ANTIBOT 分支处理:暂停 10 分钟 + 通知 popup + 写日志 + 更新计数器 ────────
@@ -3700,6 +3696,7 @@ try {
   };
 
   const _doAutoCollect = async (sku, source, sellerSlug, depth, forceRefresh, sellerId) => {
+    await _testModeReady; // 确保 IS_TEST_MODE / OZON_*_ORIGIN 已初始化
     const startTime = Date.now();
     const results = [
       { type: 'card', hit: false },
@@ -3842,15 +3839,12 @@ try {
         return { status: 'skipped', reason: 'all-cached', results, totalDuration: Date.now() - startTime };
       }
 
-      // === Step 3: autoCollectGate(逐 SKU 间隔) ===
-      await _autoCollectGate();
-
       // === Step 4: 买家页采集(composer+entrypoint+followSell) ===
+      // Phase 5: 移除 _autoCollectGate / _buyerPageGate 显式调用,由队列消费者统一限速。
       if (pending.composer || pending.entrypoint || pending.followSell) {
         try {
-          await _buyerPageGate();
           // fetchVariantMediaViaBuyerTab 接收 productUrl,从 card 缓存取 url 或构造 fallback
-          const productUrl = card?.url || `https://www.ozon.ru/product/-${sku}/`;
+          const productUrl = card?.url || `${OZON_WWW_ORIGIN}/product/-${sku}/`;
           // forceEntrypoint: entrypoint 缓存为空时,即使 composer 缓存有数据也真调 entrypoint-api 补全
           const mediaResult = await fetchVariantMediaViaBuyerTab(productUrl, {
             forceEntrypoint: pending.entrypoint,
@@ -3941,7 +3935,7 @@ try {
           } else {
             // 未缓存 → 真调 /search + bundle(fetchSellerPortal 内部已调 _sellerPortalGate)
             const scCookies = await chrome.cookies.getAll({
-              url: 'https://seller.ozon.ru/',
+              url: OZON_SELLER_ORIGIN + '/',
               name: 'sc_company_id',
             });
             const companyId = scCookies[0]?.value || '';
@@ -4063,9 +4057,6 @@ try {
       // 更新内存计数器
       _incrementAutoCollectStats(sku, status, source, storeClassified, results, startTime, null);
 
-      // todayCount++
-      await _saveAutoCollectConfig({ todayCount: config.todayCount + 1 });
-
       // 写日志(fire-and-forget,不阻塞返回)
       _writeAutoCollectLog({
         sku,
@@ -4111,6 +4102,912 @@ try {
     } finally {
       if (acquiredSlot) _releaseAutoCollectSlot();
     }
+  };
+
+  // ── 采集队列 v2 (COLLECT_QUEUE_REDESIGN Phase 1+2) ──────────────────────────
+  // 前端只提交 SKU,SW 维护持久化队列并按 consumeRateSec 串行消费。
+  // chrome.storage.local 为主(low-latency),ERP collect_queue_tasks 为镜像(管理页)。
+  // result 不存 chrome.storage.local,只写 ERP。
+
+  const _COLLECT_QUEUE_META_DEFAULT = {
+    consuming: false,
+    circuitBreakerUntil: 0,
+    consumeRateSec: 15,
+    consumePaused: false,
+    lastConsumeAt: 0,
+    todayCount: 0,
+    todayDate: '',
+  };
+
+  // 内存写锁:所有队列写入(入队/更新/删除/清理)串行化,消除 get-modify-set 竞态。
+  let _queueWriteLock = Promise.resolve();
+  let _consuming = false;
+  let _opsPollTimer = null;
+  const _completedTodaySkus = new Set();
+
+  const _withQueueLock = (fn) => {
+    const prev = _queueWriteLock;
+    let release;
+    _queueWriteLock = new Promise((r) => {
+      release = r;
+    });
+    return prev.then(async () => {
+      try {
+        return await fn();
+      } finally {
+        release();
+      }
+    });
+  };
+
+  const _loadQueue = async () => {
+    try {
+      const stored = await getStorage([COLLECT_QUEUE_KEY]);
+      return Array.isArray(stored?.[COLLECT_QUEUE_KEY]) ? stored[COLLECT_QUEUE_KEY] : [];
+    } catch (e) {
+      console.warn('[Queue] load queue failed:', e?.message || e);
+      return [];
+    }
+  };
+
+  const _loadQueueMeta = async () => {
+    try {
+      const stored = await getStorage([COLLECT_QUEUE_META_KEY]);
+      const raw = stored?.[COLLECT_QUEUE_META_KEY];
+      return raw && typeof raw === 'object'
+        ? { ..._COLLECT_QUEUE_META_DEFAULT, ...raw }
+        : { ..._COLLECT_QUEUE_META_DEFAULT };
+    } catch (e) {
+      console.warn('[Queue] load meta failed:', e?.message || e);
+      return { ..._COLLECT_QUEUE_META_DEFAULT };
+    }
+  };
+
+  const _saveQueueMeta = async (partial) => {
+    return _withQueueLock(async () => {
+      const meta = await _loadQueueMeta();
+      const updated = { ...meta, ...partial };
+      await setStorage({ [COLLECT_QUEUE_META_KEY]: updated });
+      return updated;
+    });
+  };
+
+  const _syncConsumeRateFromConfig = async () => {
+    try {
+      const config = await _loadAutoCollectConfig();
+      // skuInterval 历史单位为毫秒,consumeRateSec 为秒;优先使用 consumeRateSec。
+      const rateSec = Math.max(
+        5,
+        Math.min(120, Math.round(config.consumeRateSec ?? (config.skuInterval ? config.skuInterval / 1000 : 15)))
+      );
+      const meta = await _loadQueueMeta();
+      if (meta.consumeRateSec !== rateSec) {
+        await _saveQueueMeta({ consumeRateSec: rateSec });
+      }
+    } catch (e) {
+      console.warn('[Queue] sync consume rate failed:', e?.message || e);
+    }
+  };
+
+  const _cleanupCompletedTasksLocked = (queue) => {
+    const completed = queue.filter(
+      (t) => t.status === 'success' || t.status === 'failed_final' || t.status === 'failed_partial'
+    );
+    if (completed.length > COLLECT_QUEUE_MAX_COMPLETED) {
+      completed.sort((a, b) => (a.finishedAt || 0) - (b.finishedAt || 0));
+      const toRemove = new Set(completed.slice(0, completed.length - COLLECT_QUEUE_MAX_COMPLETED).map((t) => t.sku));
+      const kept = queue.filter((t) => !toRemove.has(t.sku));
+      queue.length = 0;
+      queue.push(...kept);
+      // 同步删除 ERP 镜像(fire-and-forget,锁内不 await)
+      for (const sku of toRemove) {
+        _erpQueueDelete(sku);
+      }
+    }
+  };
+
+  const _enqueueTask = async (task) => {
+    return _withQueueLock(async () => {
+      const queue = await _loadQueue();
+      // 锁内二次去重,消除并发提交同 SKU 的 check-then-act 竞态。
+      if (queue.some((t) => t.sku === task.sku) || _completedTodaySkus.has(task.sku)) {
+        return { task: queue.find((t) => t.sku === task.sku) || task, isNew: false };
+      }
+      _cleanupCompletedTasksLocked(queue);
+      queue.push(task);
+      await setStorage({ [COLLECT_QUEUE_KEY]: queue });
+      // 广播 pending 徽章(fire-and-forget,不阻塞锁)
+      _broadcastTaskStatus(task.sku, 'pending', 0, task.maxAttempts || 3, 0);
+      return { task, isNew: true };
+    });
+  };
+
+  const _updateQueueTask = async (sku, updates) => {
+    return _withQueueLock(async () => {
+      const queue = await _loadQueue();
+      const task = queue.find((t) => t.sku === sku);
+      if (!task) return null;
+      Object.assign(task, updates);
+      await setStorage({ [COLLECT_QUEUE_KEY]: queue });
+      return task;
+    });
+  };
+
+  const _deleteQueueTask = async (sku) => {
+    return _withQueueLock(async () => {
+      const queue = await _loadQueue();
+      const idx = queue.findIndex((t) => t.sku === sku);
+      if (idx >= 0) {
+        queue.splice(idx, 1);
+        await setStorage({ [COLLECT_QUEUE_KEY]: queue });
+      }
+      return true;
+    });
+  };
+
+  // beforeTs 可选:仅清除 createdAt <= beforeTs 的 pending 任务,
+  // 防止 markOpProcessed 失败后重复执行 clear op 误清新入队任务。
+  const _clearPendingQueueTasks = async (beforeTs) => {
+    return _withQueueLock(async () => {
+      const queue = await _loadQueue();
+      const kept = queue.filter((t) => {
+        if (t.status !== 'pending') return true;
+        if (beforeTs && t.createdAt > beforeTs) return true;
+        return false;
+      });
+      await setStorage({ [COLLECT_QUEUE_KEY]: kept });
+      return kept.length;
+    });
+  };
+
+  const _getNextPending = async () => {
+    const queue = await _loadQueue();
+    const now = Date.now();
+    // pending 与 failed_retry(退避时间到)都可消费。failed_retry 是内部展示态,
+    // 实际重试时回到 pending + nextRetryAt;兼容处理防止旧任务滞留。
+    return queue.find(
+      (t) => (t.status === 'pending' || t.status === 'failed_retry') && (!t.nextRetryAt || t.nextRetryAt <= now)
+    );
+  };
+
+  const _addCompletedToday = (sku) => {
+    _completedTodaySkus.add(sku);
+  };
+
+  const _isTaskQueuedOrCompletedToday = async (sku) => {
+    const queue = await _loadQueue();
+    if (queue.some((t) => t.sku === sku)) return true;
+    return _completedTodaySkus.has(sku);
+  };
+
+  const _initCompletedTodaySet = async () => {
+    try {
+      const queue = await _loadQueue();
+      const today = new Date().toLocaleDateString('en-CA');
+      for (const t of queue) {
+        if ((t.status === 'success' || t.status === 'failed_final' || t.status === 'failed_partial') && t.finishedAt) {
+          const d = new Date(t.finishedAt).toLocaleDateString('en-CA');
+          if (d === today) _completedTodaySkus.add(t.sku);
+        }
+      }
+    } catch (e) {
+      console.warn('[Queue] init completed today set failed:', e?.message || e);
+    }
+  };
+
+  const _buildSteps = (results) => {
+    if (!Array.isArray(results)) return null;
+    const steps = {};
+    for (const r of results) {
+      if (!r || !r.type) continue;
+      steps[r.type] = r.hit ? 'ok' : r.error ? 'fail' : 'skip';
+    }
+    return steps;
+  };
+
+  const _retryBackoffMs = (attempts) => {
+    const table = [10000, 30000, 90000];
+    return table[Math.min(attempts, table.length - 1)] || 10000;
+  };
+
+  const _broadcastQueueStatus = async (sku, sellerSlug, status) => {
+    try {
+      const tabs = await chrome.tabs.query({
+        url: IS_TEST_MODE
+          ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
+          : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'],
+      });
+      for (const t of tabs) {
+        if (!t.id) continue;
+        chrome.tabs.sendMessage(t.id, { type: 'collectStatus', sku, sellerSlug, status }).catch(() => {});
+      }
+    } catch (e) {
+      /* fire-and-forget */
+    }
+  };
+
+  // 向所有 Ozon tab 广播任务中间态(pending/running/failed_retry),驱动前端徽章
+  const _broadcastTaskStatus = async (sku, status, attempts, maxAttempts, nextRetryAt) => {
+    try {
+      const tabs = await chrome.tabs.query({
+        url: IS_TEST_MODE
+          ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
+          : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'],
+      });
+      const payload = {
+        type: 'taskStatus',
+        sku,
+        status,
+        attempts: attempts || 0,
+        maxAttempts: maxAttempts || 3,
+        nextRetryAt: nextRetryAt || 0,
+      };
+      for (const t of tabs) {
+        chrome.tabs.sendMessage(t.id, payload).catch(() => {});
+      }
+    } catch (e) {
+      /* fire-and-forget */
+    }
+  };
+
+  const _broadcastCollectDoneV2 = async (sku, sellerSlug, status, data, collectedAt, duration, steps, error) => {
+    try {
+      const tabs = await chrome.tabs.query({
+        url: IS_TEST_MODE
+          ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
+          : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'],
+      });
+      const payload = {
+        type: 'collectDone',
+        sku,
+        sellerSlug,
+        status,
+        data,
+        collectedAt,
+        duration,
+        steps,
+        error,
+      };
+      for (const t of tabs) {
+        if (!t.id) continue;
+        chrome.tabs.sendMessage(t.id, payload).catch(() => {});
+      }
+    } catch (e) {
+      /* fire-and-forget */
+    }
+  };
+
+  // 队列暂停广播:当 daily-limit/not-running/paused 导致队列暂停时,
+  // 通知所有 content script 将 loading 状态的 panel 设为 ready,
+  // 避免 AutoScroller 的 isReadyToScroll 死锁。
+  const _broadcastQueuePaused = async (reason) => {
+    try {
+      const urlFilter = IS_TEST_MODE
+        ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
+        : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'];
+      const tabs = await chrome.tabs.query({ url: urlFilter });
+      const payload = { type: 'queuePaused', reason };
+      // 必须等待所有 sendMessage 完成,否则 SW 可能在消息投递前被终止(MV3 生命周期),
+      // 导致 content script 收不到广播,panel 永远卡 loading,AutoScroller 死锁。
+      const sends = tabs
+        .filter((t) => t.id)
+        .map((t) =>
+          chrome.tabs.sendMessage(t.id, payload).catch((e) => {
+            console.warn('[broadcastQueuePaused] sendMessage failed tab=%d:', t.id, e?.message);
+          })
+        );
+      await Promise.allSettled(sends);
+    } catch (e) {
+      console.warn('[broadcastQueuePaused] error:', e?.message || e);
+    }
+  };
+
+  // 队列恢复广播:跨日重置或熔断过期后恢复消费时通知 content script,
+  // 清除 __jzQueuePaused 标志,让后续新 panel 正常走采集流程。
+  const _broadcastQueueResumed = async () => {
+    try {
+      const tabs = await chrome.tabs.query({
+        url: IS_TEST_MODE
+          ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
+          : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'],
+      });
+      const payload = { type: 'queueResumed' };
+      const sends = tabs.filter((t) => t.id).map((t) => chrome.tabs.sendMessage(t.id, payload).catch(() => {}));
+      await Promise.allSettled(sends);
+    } catch {
+      /* fire-and-forget */
+    }
+  };
+
+  // 测试专用:暴露队列状态重置函数,供 E2E 测试在场景间清除内存状态
+  // (_completedTodaySkus / _consuming 无法通过 storage 重置)。
+  // IS_TEST_MODE 异步读取,故在函数内部检查;生产模式下不可用。
+  self.__jzResetQueueState = async () => {
+    if (!IS_TEST_MODE) return { ok: false, error: 'not in test mode' };
+    _completedTodaySkus.clear();
+    _consuming = false;
+    await chrome.storage.local.set({ [COLLECT_QUEUE_KEY]: [] });
+    await chrome.storage.local.set({
+      [COLLECT_QUEUE_META_KEY]: {
+        ..._COLLECT_QUEUE_META_DEFAULT,
+        todayDate: new Date().toLocaleDateString('en-CA'),
+      },
+    });
+    return { ok: true };
+  };
+
+  const _fetchProductDataStats = async (sku) => {
+    try {
+      const backendUrl = await getBackendUrl();
+      const stored = await getStorage([STORAGE_KEYS.token, STORAGE_KEYS.storeId]);
+      const token = stored[STORAGE_KEYS.token];
+      const storeId = stored[STORAGE_KEYS.storeId];
+      const r = await apiRequest(
+        'GET',
+        `${backendUrl}/ozon/product-data/${encodeURIComponent(sku)}?skipMarket=1`,
+        null,
+        token,
+        storeId
+      );
+      return r?.data ?? null;
+    } catch (e) {
+      console.warn('[Queue] fetch product data stats failed:', e?.message || e);
+      return null;
+    }
+  };
+
+  const _getSearchVariantForBroadcast = async (sku) => {
+    try {
+      const l1 = await _idbGet(_IDB_STORE_SEARCH, sku);
+      if (l1 && Array.isArray(l1.data?.items) && l1.data.items.length > 0) {
+        return l1.data.items[0];
+      }
+      const l2 = await _erpCacheGet('search', sku);
+      if (l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0) {
+        return l2.data.items[0];
+      }
+    } catch (e) {
+      console.warn('[Queue] get search variant failed:', e?.message || e);
+    }
+    return null;
+  };
+
+  const _buildCollectDoneData = async (sku, collectResult) => {
+    const [stats, market, variant, followCount] = await Promise.all([
+      _fetchProductDataStats(sku).catch(() => null),
+      _marketStatsCacheGet(sku).catch(() => null),
+      _getSearchVariantForBroadcast(sku).catch(() => null),
+      _followSellCacheGet(sku).catch(() => null),
+    ]);
+    return {
+      stats: stats ? { status: 'fulfilled', value: stats } : { status: 'fulfilled', value: null },
+      market: market?.data ? { status: 'fulfilled', value: market.data } : { status: 'fulfilled', value: null },
+      variant: variant ? { status: 'fulfilled', value: variant } : { status: 'fulfilled', value: null },
+      followCount: followCount?.data
+        ? { status: 'fulfilled', value: followCount.data }
+        : { status: 'fulfilled', value: null },
+    };
+  };
+
+  // ERP 镜像写入(fire-and-forget,失败仅 warn)
+  const _erpQueueInsert = async (task) => {
+    const url = await getBackendUrl();
+    const stored = await getStorage([STORAGE_KEYS.token]);
+    const doInsert = async () => {
+      await apiRequest('POST', `${url}/admin/api/collect-queue`, task, stored[STORAGE_KEYS.token]);
+    };
+    try {
+      await doInsert();
+    } catch (e1) {
+      try {
+        await new Promise((r) => setTimeout(r, 2000));
+        await doInsert();
+      } catch (e2) {
+        console.warn('[Queue] ERP insert failed after retry:', e2?.message || e2);
+      }
+    }
+  };
+
+  const _erpQueueUpdate = async (task) => {
+    const url = await getBackendUrl();
+    const stored = await getStorage([STORAGE_KEYS.token]);
+    const doUpdate = async () => {
+      await apiRequest('POST', `${url}/admin/api/collect-queue`, task, stored[STORAGE_KEYS.token]);
+    };
+    try {
+      await doUpdate();
+    } catch (e1) {
+      try {
+        await new Promise((r) => setTimeout(r, 2000));
+        await doUpdate();
+      } catch (e2) {
+        console.warn('[Queue] ERP update failed after retry:', e2?.message || e2);
+      }
+    }
+  };
+
+  const _erpQueueResult = async (sku, result) => {
+    const url = await getBackendUrl();
+    const stored = await getStorage([STORAGE_KEYS.token]);
+    const doResult = async () => {
+      await apiRequest(
+        'POST',
+        `${url}/admin/api/collect-queue/${encodeURIComponent(sku)}/result`,
+        result,
+        stored[STORAGE_KEYS.token]
+      );
+    };
+    try {
+      await doResult();
+    } catch (e1) {
+      try {
+        await new Promise((r) => setTimeout(r, 2000));
+        await doResult();
+      } catch (e2) {
+        console.warn('[Queue] ERP result write failed after retry:', e2?.message || e2);
+      }
+    }
+  };
+
+  const _erpQueueDelete = async (sku) => {
+    const url = await getBackendUrl();
+    const stored = await getStorage([STORAGE_KEYS.token]);
+    try {
+      await apiRequest(
+        'DELETE',
+        `${url}/admin/api/collect-queue/${encodeURIComponent(sku)}/confirm`,
+        null,
+        stored[STORAGE_KEYS.token]
+      );
+    } catch (e) {
+      console.warn('[Queue] ERP delete failed:', e?.message || e);
+    }
+  };
+
+  const _erpGetPendingOps = async () => {
+    try {
+      const url = await getBackendUrl();
+      const stored = await getStorage([STORAGE_KEYS.token]);
+      return await apiRequest('GET', `${url}/admin/api/collect-queue/ops/pending`, null, stored[STORAGE_KEYS.token]);
+    } catch (e) {
+      console.warn('[Queue] ERP ops pending failed:', e?.message || e);
+      return [];
+    }
+  };
+
+  const _erpMarkOpProcessed = async (opId) => {
+    try {
+      const url = await getBackendUrl();
+      const stored = await getStorage([STORAGE_KEYS.token]);
+      await apiRequest(
+        'POST',
+        `${url}/admin/api/collect-queue/ops/${encodeURIComponent(opId)}/processed`,
+        {},
+        stored[STORAGE_KEYS.token]
+      );
+    } catch (e) {
+      console.warn('[Queue] ERP mark op processed failed:', e?.message || e);
+    }
+  };
+
+  const _finalizeTask = async (sku, status, lastError, steps, startedAt, duration, collectResult) => {
+    const now = Date.now();
+    const task = await _updateQueueTask(sku, {
+      status,
+      steps,
+      lastError,
+      finishedAt: now,
+    });
+    if (!task) return;
+
+    if (collectResult) {
+      await _erpQueueResult(sku, {
+        status,
+        duration,
+        steps,
+        error: lastError,
+        ...(collectResult.status === 'success' || collectResult.status === 'partial' ? { data: collectResult } : {}),
+      });
+    }
+
+    await _erpQueueUpdate({ ...task, status, steps, lastError, finishedAt: now });
+
+    const data = await _buildCollectDoneData(sku, collectResult);
+    await _broadcastCollectDoneV2(sku, task.sellerSlug, status, data, now, duration, steps, lastError);
+
+    if (status === 'success' || status === 'failed_final' || status === 'failed_partial') {
+      _addCompletedToday(sku);
+    }
+  };
+
+  const _handleRetryOrFinal = async (task, result, steps, startedAt, duration, errorType, maxAttempts, backoffMs) => {
+    const attempts = (task.attempts || 0) + 1;
+    const lastError = {
+      type: errorType,
+      message: result?.error || errorType,
+      step: 'unknown',
+      ts: Date.now(),
+    };
+    if (attempts >= maxAttempts) {
+      const finalStatus = errorType === 'partial' ? 'failed_partial' : 'failed_final';
+      await _finalizeTask(task.sku, finalStatus, lastError, steps, startedAt, duration, result);
+    } else {
+      const nextRetryAt = Date.now() + backoffMs;
+      const updated = await _updateQueueTask(task.sku, {
+        status: 'failed_retry',
+        attempts,
+        maxAttempts,
+        nextRetryAt,
+        lastError,
+      });
+      if (updated) await _erpQueueUpdate(updated);
+      _broadcastTaskStatus(task.sku, 'failed_retry', attempts, maxAttempts, nextRetryAt);
+    }
+  };
+
+  const _handleSkippedTask = async (task, result, steps, startedAt, duration) => {
+    const reason = result?.reason || 'skipped';
+    if (reason === 'daily-limit') {
+      await _saveQueueMeta({ consumePaused: true });
+      await _updateQueueTask(task.sku, {
+        status: 'pending',
+        lastError: { type: 'daily-limit', message: reason, step: 'unknown', ts: Date.now() },
+        finishedAt: Date.now(),
+      });
+      // 广播 collectDone(status='skipped')让 panel 变 ready,避免 AutoScroller 死锁。
+      // 注意:任务回 pending(非终态),跨日恢复后会重新消费,但 panel 需要知道
+      // "今天不会再处理了"的信号,否则永远卡 loading(isReadyToScroll 死锁)。
+      const lastError = { type: 'daily-limit', message: reason, step: 'unknown', ts: Date.now() };
+      await _broadcastCollectDoneV2(task.sku, task.sellerSlug, 'skipped', null, Date.now(), duration, steps, lastError);
+      return;
+    }
+    const lastError = { type: 'skipped', message: reason, step: 'unknown', ts: Date.now() };
+    await _finalizeTask(task.sku, 'failed_final', lastError, steps, startedAt, duration, result);
+  };
+
+  const _processTask = async (task) => {
+    const startTime = Date.now();
+    let result = null;
+    let steps = null;
+
+    await _broadcastQueueStatus(task.sku, task.sellerSlug, 'running');
+    _broadcastTaskStatus(task.sku, 'running', task.attempts || 0, task.maxAttempts || 3, 0);
+
+    try {
+      const config = await _loadAutoCollectConfig();
+      const depth = task.depth || config.depth || 'Full';
+      result = await _doAutoCollect(task.sku, 'shop-page', task.sellerSlug, depth, false, task.sellerId);
+      const duration = Date.now() - startTime;
+      steps = _buildSteps(result?.results);
+
+      if (result?.status === 'success') {
+        await _finalizeTask(task.sku, 'success', null, steps, startTime, duration, result);
+      } else if (result?.status === 'partial') {
+        await _handleRetryOrFinal(task, result, steps, startTime, duration, 'partial', 2, 30000);
+      } else if (result?.status === 'skipped') {
+        await _handleSkippedTask(task, result, steps, startTime, duration);
+      } else if (result?.status === 'antibot') {
+        const lastError = {
+          type: 'ANTIBOT_BLOCKED',
+          message: 'antibot detected',
+          step: 'unknown',
+          ts: Date.now(),
+        };
+        await _finalizeTask(task.sku, 'failed_final', lastError, steps, startTime, duration, result);
+        await _saveQueueMeta({ circuitBreakerUntil: Date.now() + 10 * 60 * 1000 });
+      } else {
+        await _handleRetryOrFinal(
+          task,
+          result,
+          steps,
+          startTime,
+          duration,
+          'failed',
+          3,
+          _retryBackoffMs(task.attempts || 0)
+        );
+      }
+    } catch (e) {
+      const duration = Date.now() - startTime;
+      console.error('[Queue] process task error:', task.sku, e);
+      await _handleRetryOrFinal(
+        task,
+        { error: e?.message || 'internal_error' },
+        steps,
+        startTime,
+        duration,
+        'internal',
+        2,
+        5000
+      );
+    }
+  };
+
+  const _consumeOne = async () => {
+    if (_consuming) return;
+    _consuming = true;
+
+    let keepAliveTimer = null;
+    let scheduleNext = false;
+    try {
+      keepAliveTimer = setInterval(() => {
+        chrome.runtime.getPlatformInfo(() => {});
+      }, 15000);
+
+      let meta = await _loadQueueMeta();
+      const today = new Date().toLocaleDateString('en-CA');
+      if (meta.todayDate !== today) {
+        _completedTodaySkus.clear();
+        const wasPaused = meta.consumePaused;
+        meta = await _saveQueueMeta({ todayDate: today, todayCount: 0, consumePaused: false });
+        if (wasPaused) await _broadcastQueueResumed();
+      }
+
+      if (Date.now() < meta.circuitBreakerUntil) {
+        console.log('[Queue] circuit breaker active, skip');
+        return;
+      }
+      if (meta.consumePaused) {
+        console.log('[Queue] paused, skip');
+        // 队列已暂停(可能是 daily-limit/not-running/paused):
+        // 广播让新入队任务的 panel 也设 ready(之前的广播可能先于 panel 创建到达)
+        await _broadcastQueuePaused('paused');
+        return;
+      }
+
+      const config = await _loadAutoCollectConfig();
+      if (!config.autoCollectRunning || (config.paused && Date.now() < config.pausedUntil)) {
+        console.log('[Queue] autoCollect config paused/not-running, pause queue');
+        await _saveQueueMeta({ consumePaused: true });
+        await _broadcastQueuePaused(config.paused ? 'paused' : 'not-running');
+        return;
+      }
+      if (meta.todayCount >= config.perDayLimit) {
+        console.log('[Queue] daily limit reached, pause');
+        await _saveQueueMeta({ consumePaused: true });
+        await _broadcastQueuePaused('daily-limit');
+        return;
+      }
+
+      const task = await _getNextPending();
+      if (!task) {
+        console.log('[Queue] no pending task, stop loop');
+        return;
+      }
+
+      await _updateQueueTask(task.sku, { status: 'running', startedAt: Date.now() });
+      await _processTask(task);
+
+      // 只在任务到达终态(success/failed_final/failed_partial)时递增 todayCount,
+      // 重试(failed_retry)不计数。重载任务判断最终态。
+      meta = await _loadQueueMeta();
+      const queue = await _loadQueue();
+      const finalTask = queue.find((t) => t.sku === task.sku);
+      const isTerminal =
+        finalTask &&
+        (finalTask.status === 'success' ||
+          finalTask.status === 'failed_final' ||
+          finalTask.status === 'failed_partial');
+      await _saveQueueMeta({
+        lastConsumeAt: Date.now(),
+        ...(isTerminal ? { todayCount: meta.todayCount + 1 } : {}),
+      });
+
+      const rateSec = meta.consumeRateSec || 15;
+      scheduleNext = true;
+      setTimeout(() => {
+        _consuming = false;
+        _consumeOne();
+      }, rateSec * 1000);
+    } catch (e) {
+      console.error('[Queue] consume error:', e);
+    } finally {
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
+      if (!scheduleNext) {
+        _consuming = false;
+      }
+    }
+  };
+
+  const _maybeStartConsume = async () => {
+    if (_consuming) return;
+    let meta = await _loadQueueMeta();
+    if (Date.now() < meta.circuitBreakerUntil) {
+      console.log('[Queue] maybeStart: in circuit breaker, skip');
+      return;
+    }
+    // 自动恢复:跨日或熔断过期时,重置 consumePaused,避免队列永久卡死
+    // (跨日重置在 _consumeOne 内部,但 _consumeOne 不会被调用,故在此前置恢复)
+    if (meta.consumePaused) {
+      const today = new Date().toLocaleDateString('en-CA');
+      const crossedDay = meta.todayDate !== today;
+      const breakerExpired = Date.now() >= meta.circuitBreakerUntil;
+      if (crossedDay) {
+        _completedTodaySkus.clear();
+        meta = await _saveQueueMeta({ todayDate: today, todayCount: 0, consumePaused: false });
+        console.log('[Queue] maybeStart: cross-day reset, resume');
+        await _broadcastQueueResumed();
+      } else if (breakerExpired) {
+        meta = await _saveQueueMeta({ consumePaused: false });
+        console.log('[Queue] maybeStart: circuit breaker expired, resume');
+        await _broadcastQueueResumed();
+      } else {
+        console.log('[Queue] maybeStart: paused, skip');
+        // 队列暂停时,新任务入队触发的 _maybeStartConsume 会走到这里。
+        // 广播 queuePaused 让新入队任务的 panel 也设 ready(之前的广播可能先于 panel 创建到达)
+        await _broadcastQueuePaused('paused');
+        return;
+      }
+    }
+    const task = await _getNextPending();
+    if (!task) return;
+
+    // 尊重配置间隔:SW 被杀后 alarm 唤醒,若距上次消费不足 consumeRateSec,
+    // 则 setTimeout 等待剩余时间,避免实际间隔小于用户配置。
+    const elapsed = Date.now() - (meta.lastConsumeAt || 0);
+    const interval = (meta.consumeRateSec || 15) * 1000;
+    if (elapsed < interval) {
+      const wait = interval - elapsed;
+      console.log('[Queue] maybeStart: respect interval, wait', wait, 'ms');
+      setTimeout(() => {
+        _consumeOne();
+      }, wait);
+      return;
+    }
+    _consumeOne();
+  };
+
+  const _checkStaleRunningTasks = async () => {
+    await _withQueueLock(async () => {
+      const queue = await _loadQueue();
+      const now = Date.now();
+      let changed = false;
+      for (const task of queue) {
+        if (task.status === 'running' && task.startedAt && now - task.startedAt > COLLECT_QUEUE_STALE_RUNNING_MS) {
+          // 达到 maxAttempts 则置终态,避免无限重试
+          const nextAttempts = (task.attempts || 0) + 1;
+          const maxAttempts = task.maxAttempts || 3;
+          const isFinal = nextAttempts >= maxAttempts;
+          task.status = isFinal ? 'failed_final' : 'failed_retry';
+          task.attempts = nextAttempts;
+          task.nextRetryAt = isFinal ? 0 : now + 30000;
+          task.lastError = {
+            type: 'timeout',
+            message: 'SW killed, task stale',
+            step: 'unknown',
+            ts: now,
+          };
+          // 非终态(failed_retry)不应有 finishedAt,仅终态设置
+          if (isFinal) {
+            task.finishedAt = now;
+          }
+          changed = true;
+          console.warn('[Queue] stale running task reset:', task.sku, '->', task.status);
+          // 同步到 ERP(fire-and-forget,不阻塞锁)
+          _erpQueueUpdate(task);
+        }
+      }
+      if (changed) {
+        await setStorage({ [COLLECT_QUEUE_KEY]: queue });
+      }
+    });
+  };
+
+  const _processQueueOp = async (op) => {
+    try {
+      switch (op.op) {
+        case 'retry': {
+          if (!op.sku) return false;
+          const task = await _updateQueueTask(op.sku, {
+            status: 'pending',
+            attempts: 0,
+            nextRetryAt: 0,
+            lastError: null,
+            finishedAt: null,
+          });
+          if (!task) return false;
+          _maybeStartConsume();
+          return true;
+        }
+        case 'delete': {
+          if (!op.sku) return false;
+          await _deleteQueueTask(op.sku);
+          return true;
+        }
+        case 'pause': {
+          await _saveQueueMeta({ consumePaused: true });
+          return true;
+        }
+        case 'resume': {
+          await _saveQueueMeta({ consumePaused: false });
+          _maybeStartConsume();
+          return true;
+        }
+        case 'clear': {
+          // 仅清除 op 创建时已入队的 pending 任务,避免重复执行误清新任务
+          await _clearPendingQueueTasks(op.ts || 0);
+          return true;
+        }
+        default:
+          return false;
+      }
+    } catch (e) {
+      console.warn('[Queue] process op failed:', op, e?.message || e);
+      return false;
+    }
+  };
+
+  const _pollOpsPending = async () => {
+    const ops = await _erpGetPendingOps();
+    if (!Array.isArray(ops) || ops.length === 0) return;
+    for (const op of ops) {
+      const ok = await _processQueueOp(op);
+      if (ok) await _erpMarkOpProcessed(op._id);
+    }
+  };
+
+  const _startOpsPolling = () => {
+    if (_opsPollTimer) return;
+    _opsPollTimer = setInterval(() => {
+      _pollOpsPending().catch((e) => console.warn('[Queue] ops poll error:', e?.message || e));
+    }, COLLECT_QUEUE_OPS_POLL_MS);
+    _pollOpsPending().catch(() => {});
+  };
+
+  const _stopOpsPolling = () => {
+    if (_opsPollTimer) {
+      clearInterval(_opsPollTimer);
+      _opsPollTimer = null;
+    }
+  };
+
+  const _handleSubmitTask = async ({ sku, sellerSlug, sellerId, domInfo }) => {
+    if (!sku) return { ok: false, error: 'sku required' };
+    const exists = await _isTaskQueuedOrCompletedToday(sku);
+    if (exists) return { ok: true, data: { alreadyQueued: true } };
+
+    const task = {
+      sku,
+      sellerSlug: sellerSlug || '',
+      sellerId: sellerId || '',
+      domInfo: domInfo || null,
+      status: 'pending',
+      attempts: 0,
+      maxAttempts: 3,
+      nextRetryAt: 0,
+      lastError: null,
+      steps: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      finishedAt: null,
+    };
+    const { isNew } = await _enqueueTask(task);
+    if (isNew) {
+      _erpQueueInsert(task);
+    }
+    _maybeStartConsume();
+    // 队列暂停兜底:_maybeStartConsume 是 fire-and-forget,可能被 _consuming 拦截,
+    // 或 _consumeOne 设置 consumePaused 的时机晚于此处检查。
+    // 直接检查暂停条件(daily-limit/not-running/paused),如果满足则广播 queuePaused,
+    // 让新入队任务的 panel 设 ready 避免 AutoScroller 死锁。
+    const _meta = await _loadQueueMeta();
+    const _cfg = await _loadAutoCollectConfig();
+    const _shouldPause =
+      _meta.consumePaused ||
+      !_cfg.autoCollectRunning ||
+      (_cfg.paused && Date.now() < _cfg.pausedUntil) ||
+      _meta.todayCount >= _cfg.perDayLimit;
+    if (_shouldPause) {
+      await _broadcastQueuePaused('paused');
+    }
+    return { ok: true, data: { queued: isNew, alreadyQueued: !isNew } };
+  };
+
+  const setupCollectQueueAlarm = () => {
+    chrome.alarms.create(COLLECT_QUEUE_ALARM, {
+      delayInMinutes: 1,
+      periodInMinutes: COLLECT_QUEUE_ALARM_MINUTES,
+    });
   };
 
   // ── product-data 合批器 ──────────────────────────────────────
@@ -4647,6 +5544,12 @@ try {
       handleBrowserAgentAlarm();
     } else if (alarm.name === CACHE_SYNC_ALARM) {
       syncL2Batch();
+    } else if (alarm.name === COLLECT_QUEUE_ALARM) {
+      _maybeStartConsume();
+      _checkStaleRunningTasks();
+      // SW 被杀后 setInterval 会丢失,alarm 唤醒时重启 ops 轮询并兜底拉取一次。
+      _startOpsPolling();
+      _pollOpsPending().catch((e) => console.warn('[Queue] alarm ops poll error:', e?.message || e));
     }
   });
 
@@ -4676,7 +5579,7 @@ try {
       return;
     }
     _lastSellerReloadAt = now;
-    const tabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
+    const tabs = await chrome.tabs.query({ url: OZON_SELLER_ORIGIN + '/*' });
     for (let i = 0; i < tabs.length; i++) {
       setTimeout(() => chrome.tabs.reload(tabs[i].id), i * 500);
     }
@@ -4696,6 +5599,7 @@ try {
     setupClientSyncAlarms();
     setupBrowserAgentAlarm();
     setupCacheSyncAlarm();
+    setupCollectQueueAlarm();
     // 异步重负载:错开执行,避免重载瞬间并发风暴导致 OOM
     setTimeout(() => checkForUpdate(), 1_000);
     setTimeout(() => refreshExchangeRate(), 2_000);
@@ -4714,6 +5618,7 @@ try {
     setupClientSyncAlarms();
     setupBrowserAgentAlarm();
     setupCacheSyncAlarm();
+    setupCollectQueueAlarm();
     setTimeout(() => refreshExchangeRate(), 1_000);
     setTimeout(() => handleBrowserAgentAlarm(), 2_000);
     setTimeout(() => reloadSellerTabs(), 3_000);
@@ -4725,6 +5630,19 @@ try {
   // 因为 chrome 在 SW 唤醒时不会再触发 onStartup。
   initClientSyncContext();
   initBrowserAgentContext();
+
+  // 采集队列冷启动恢复:初始化今日完成集合、重置卡死任务、同步速率、启动 ops 轮询。
+  (async () => {
+    try {
+      await _initCompletedTodaySet();
+      await _checkStaleRunningTasks();
+      await _syncConsumeRateFromConfig();
+      _startOpsPolling();
+      _maybeStartConsume();
+    } catch (e) {
+      console.warn('[Queue] startup init failed:', e?.message || e);
+    }
+  })();
 
   // SW 被挂起前清理资源:重置 IDB 缓存让下次唤醒重连,避免使用已关闭的连接。
   // lease heartbeat timer 由 SW 终止时隐式清理,无需显式处理。
@@ -4822,7 +5740,7 @@ try {
           // 也可能是相对路径。
           let productPath = inputUrl;
           try {
-            const u = new URL(inputUrl, 'https://www.ozon.ru');
+            const u = new URL(inputUrl, OZON_WWW_ORIGIN);
             productPath = u.pathname;
           } catch {}
           if (!productPath.startsWith('/product/')) {
@@ -4848,7 +5766,7 @@ try {
           // composer-api page endpoint。SW 直 fetch 反爬必死 403,走 fetchOzonWwwViaTab
           // 通过 sender 的 ozon.ru tab 注入 MAIN world,带用户真实 cookie + fingerprint。
           // (2026-05-26 修复:fetchProductPageState 在采集面板报 "Ozon 403"。)
-          const apiUrl = `https://www.ozon.ru/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(productPath)}`;
+          const apiUrl = `${OZON_WWW_ORIGIN}/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(productPath)}`;
           const fetchResult = await fetchOzonWwwViaTab(sender, apiUrl, 15_000);
           if (!fetchResult.ok) {
             sendResponse({ ok: false, error: fetchResult.error || `Ozon ${fetchResult.status}` });
@@ -5486,6 +6404,7 @@ try {
             return { ok: false, error: e?.message || String(e) };
           }
         }
+        case 'checkStoreClass':
         case 'checkStoreClassification': {
           // 三层查询店铺中国身份(L1 chrome.storage → L2 MongoDB → 规则引擎)。
           // 入参: { slug, name, companyInfo?, sellerId? }
@@ -5781,30 +6700,10 @@ try {
           // 批量失败时合批器内部自动退回逐 SKU GET。
           return queueProductStats(String(sku), { backendUrl, token, storeId });
         }
-        case 'autoCollect': {
-          // Task 6:autoCollect 核心编排(8 类采集 + Gate 0.5 中国店铺检查)。
-          // 由 content script(shop-page / pdp)发现新 SKU 时触发,SW 内部编排全流程。
-          // 注意:_doAutoCollect 返回 { status, results, ... } 没有 ok 字段,
-          // 这里包装成 { ok: true, data: ... } 以符合 sendMessage 协议。
-          const {
-            sku: acSku,
-            source: acSource,
-            sellerSlug: acSlug,
-            sellerId: acSellerId,
-            depth: acDepth,
-            forceRefresh: acForce,
-          } = message;
-          console.log('[SW autoCollect] 收到请求:', acSku, 'source=', acSource, 'force=', acForce);
-          const acResult = await _doAutoCollect(acSku, acSource, acSlug, acDepth, acForce, acSellerId);
-          console.log(
-            '[SW autoCollect] 返回:',
-            acSku,
-            'status=',
-            acResult?.status,
-            'dur=',
-            acResult?.totalDuration + 'ms'
-          );
-          return { ok: true, data: acResult };
+        case 'submitTask': {
+          // Phase 1+2:前端提交 SKU 到采集队列,立即返回,SW 按 consumeRateSec 串行消费。
+          const { sku, sellerSlug, sellerId, domInfo } = message;
+          return _handleSubmitTask({ sku, sellerSlug, sellerId, domInfo });
         }
         case 'autoCollectGetConfig': {
           // Task 22:面板读取 autoCollect 配置(白名单字段)。
@@ -5823,6 +6722,7 @@ try {
               buyerPageMinInterval: _acCfg.buyerPageMinInterval,
               sellerPortalMinInterval: _acCfg.sellerPortalMinInterval,
               skuInterval: _acCfg.skuInterval,
+              consumeRateSec: _acCfg.consumeRateSec,
               marketStatsStaleMs: _acCfg.marketStatsStaleMs,
               followSellStaleMs: _acCfg.followSellStaleMs,
               onlyChineseStores: _acCfg.onlyChineseStores,
@@ -5832,9 +6732,9 @@ try {
           };
         }
         case 'autoCollectSetConfig': {
-          // Task 22:面板写入 autoCollect 配置(仅白名单字段,内部状态如
-          // todayDate/pausedUntil 不允许面板直改)。限速字段(buyerPageMinInterval/
-          // sellerPortalMinInterval/skuInterval/perDayLimit)已加入白名单,允许 popup 调整。
+          // 面板写入 autoCollect 配置(仅白名单字段,内部状态如
+          // todayDate/pausedUntil 不允许面板直改)。限速字段(consumeRateSec/
+          // perDayLimit)由 popup 调整,旧字段(buyerPageMinInterval 等)保留兼容。
           const _acUpdates = message.config || message;
           const _acAllowed = [
             'enabled',
@@ -5844,6 +6744,7 @@ try {
             'buyerPageMinInterval',
             'sellerPortalMinInterval',
             'skuInterval',
+            'consumeRateSec',
             'perDayLimit',
             'marketStatsStaleMs',
             'followSellStaleMs',
@@ -5856,6 +6757,11 @@ try {
             if (_acUpdates[_k] !== undefined) _acFiltered[_k] = _acUpdates[_k];
           }
           await _saveAutoCollectConfig(_acFiltered);
+          // consumeRateSec 变更同步到队列 meta
+          if (_acFiltered.consumeRateSec != null) {
+            const rateSec = Math.max(5, Math.min(120, Math.round(_acFiltered.consumeRateSec)));
+            await _saveQueueMeta({ consumeRateSec: rateSec });
+          }
           // 推送 configChanged 通知面板/popup(fire-and-forget,无监听者不报错)
           chrome.runtime.sendMessage({ type: 'configChanged', config: _acFiltered }).catch(() => {});
           return { ok: true };
@@ -5878,6 +6784,31 @@ try {
           // Task 22:面板读取最近 N 条采集记录(环形缓冲,默认 5 条,倒序)。
           const _acLimit = message.limit || 5;
           return { ok: true, data: _autoCollectRecent.slice(-_acLimit).reverse() };
+        }
+        case 'getQueueStatus': {
+          // content script 启动时主动查询队列状态,防止 queuePaused 广播时序竞态
+          // (SW 在 content script 注入完成前广播,onMessage listener 未注册导致错过)。
+          const _qsMeta = await _loadQueueMeta();
+          const _qsCfg = await _loadAutoCollectConfig();
+          let _qsReason = null;
+          if (_qsMeta.consumePaused) {
+            if (_qsMeta.todayCount >= _qsCfg.perDayLimit) _qsReason = 'daily-limit';
+            else if (!_qsCfg.autoCollectRunning) _qsReason = 'not-running';
+            else if (_qsCfg.paused && Date.now() < _qsCfg.pausedUntil) _qsReason = 'paused';
+            else _qsReason = 'paused';
+          }
+          return {
+            ok: true,
+            data: {
+              consumePaused: _qsMeta.consumePaused,
+              reason: _qsReason,
+              todayCount: _qsMeta.todayCount,
+              perDayLimit: _qsCfg.perDayLimit,
+              autoCollectRunning: _qsCfg.autoCollectRunning,
+              paused: _qsCfg.paused,
+              pausedUntil: _qsCfg.pausedUntil,
+            },
+          };
         }
         case 'debugEntrypointComposerCache': {
           const dSku = message.sku || '';
@@ -5969,6 +6900,25 @@ try {
             return { ok: true, data: null };
           } catch (e) {
             console.log('[getMarketStats] failed:', e?.message || e);
+            return { ok: true, data: null };
+          }
+        }
+        case 'queryErpProductData': {
+          // 队列架构:从 ERP 查询已采集的完整数据(数据卡进视口时兜底)
+          const qSku = message.sku;
+          if (!qSku) return { ok: true, data: null };
+          try {
+            const doc = await apiRequest(
+              'GET',
+              `${backendUrl}/admin/api/collect-queue/${encodeURIComponent(qSku)}`,
+              null,
+              token
+            );
+            if (doc && doc.result) {
+              return { ok: true, data: doc.result };
+            }
+            return { ok: true, data: null };
+          } catch (e) {
             return { ok: true, data: null };
           }
         }
@@ -7238,8 +8188,6 @@ try {
       'importBySku',
       'fetchProductPageState',
       'searchVariants',
-      // autoCollect:8 类编排(买家页 + seller portal 多步),可达 30s+,保活防 SW unload。
-      'autoCollect',
       // 视频转存:download(跨源 .mp4) + media-storage 上传跑在 seller/buyer tab,executeScript
       // 可达 90s+,必须保活防 SW unload 中断 sendResponse。
       'uploadFollowSellVideo',
@@ -7258,10 +8206,8 @@ try {
     // media-storage 上传跑在 seller/buyer tab,executeScript 内部就排到 90s+(transferVariantVideo
     // 还叠加买家 tab 抓图册 40s),50s 会把**正常但慢**的转存误杀。给它们 160s 上限,并配合
     // content LONG_ACTIONS 把这俩 action 的 content 侧超时也放宽到 600s。
-    // autoCollect:8 类编排(买家页 + seller portal 多步),实测可达 60s+,50s 会误杀
-    //   → SW 返回 race timeout error → content .catch() 清 __jzCollectingSkus →
-    //   collectDone 广播后定时重扫立即重新触发 → 无限"采集中"循环。
-    const LONG_HANDLER_ACTIONS = new Set(['uploadFollowSellVideo', 'transferVariantVideo', 'autoCollect']);
+    // Phase 1+2:旧 autoCollect 改为 submitTask 入队,handler 快速返回,不再需长超时。
+    const LONG_HANDLER_ACTIONS = new Set(['uploadFollowSellVideo', 'transferVariantVideo']);
     const HANDLER_TOTAL_TIMEOUT_MS = LONG_HANDLER_ACTIONS.has(message?.action) ? 300_000 : 50_000;
     let raceTimer = null;
     const handlerPromise = Promise.race([

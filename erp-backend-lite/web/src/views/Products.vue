@@ -127,7 +127,11 @@ function detailSections(d) {
     { title: '基本信息', value: basic, open: true },
     { title: 'attributes', value: raw.attributes ?? null, open: false },
     { title: '描述', value: raw.description ?? null, open: false },
-    { title: '图片', value: { primary_image: raw.primary_image || raw.image || '', images: raw.images || [] }, open: false },
+    {
+      title: '图片',
+      value: { primary_image: raw.primary_image || raw.image || '', images: raw.images || [] },
+      open: false,
+    },
     { title: '完整数据', value: raw, open: false },
   ];
 }
@@ -142,11 +146,9 @@ onMounted(() => {
   <div>
     <div class="toolbar">
       <h2>商品列表</h2>
-      <button
-        class="btn btn-ghost"
-        :disabled="state.loading"
-        @click="loadList"
-      >{{ state.loading ? '刷新中...' : '刷新' }}</button>
+      <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
+        {{ state.loading ? '刷新中...' : '刷新' }}
+      </button>
     </div>
 
     <div class="filter-bar">
@@ -196,7 +198,9 @@ onMounted(() => {
             <td :title="it.name">{{ it.name || '—' }}</td>
             <td>{{ storeName(it.storeId) }}</td>
             <td>
-              <span class="badge" :class="statusInfo(productStatus(it)).cls">{{ statusInfo(productStatus(it)).label }}</span>
+              <span class="badge" :class="statusInfo(productStatus(it)).cls">{{
+                statusInfo(productStatus(it)).label
+              }}</span>
             </td>
             <td>{{ fmtTime(it.fetchedAt) }}</td>
             <td>
@@ -215,12 +219,7 @@ onMounted(() => {
     />
 
     <!-- 详情弹窗 -->
-    <AppModal
-      :open="detailOpen"
-      title="商品详情"
-      size="lg"
-      @update:open="detailOpen = $event"
-    >
+    <AppModal :open="detailOpen" title="商品详情" size="lg" @update:open="detailOpen = $event">
       <div v-if="detailLoading" class="empty">加载中...</div>
       <template v-else-if="detail">
         <AppAccordion

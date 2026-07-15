@@ -23,13 +23,7 @@ const capabilities = globalThis.JzBrowserAgentActions.capabilities().sort();
 
 assert.deepStrictEqual(
   capabilities,
-  [
-    'agent.ping',
-    'collect.hot_products',
-    'collect.product_detail',
-    'ozon.collect_variant',
-    'ozon.market_data',
-  ].sort()
+  ['agent.ping', 'collect.hot_products', 'collect.product_detail', 'ozon.collect_variant', 'ozon.market_data'].sort()
 );
 
 globalThis.JzBrowserAgentActions.run({ type: 'agent.ping', params: { ok: true } })

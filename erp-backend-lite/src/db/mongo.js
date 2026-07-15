@@ -74,6 +74,34 @@ async function ensureIndexes(db) {
   } catch (e) {
     console.warn('[mongo] ensureIndexes store_sku failed:', e.message);
   }
+
+  // 采集队列任务镜像(collect_queue_tasks)
+  try {
+    const taskCol = db.collection('collect_queue_tasks');
+    await Promise.all([
+      taskCol.createIndex({ sku: 1 }, { unique: true }),
+      taskCol.createIndex({ status: 1, nextRetryAt: 1 }),
+      taskCol.createIndex({ createdAt: -1 }),
+      taskCol.createIndex({ updatedAt: -1 }),
+    ]);
+  } catch (e) {
+    console.warn('[mongo] ensureIndexes collect_queue_tasks failed:', e.message);
+  }
+
+  // 采集队列操作指令(collect_queue_ops)
+  try {
+    const opsCol = db.collection('collect_queue_ops');
+    await Promise.all([
+      opsCol.createIndex({ processed: 1, ts: 1 }),
+      opsCol.createIndex({ ts: -1 }),
+      // TTL:已处理 op(processedAt 非 null)7 天后自动删除
+      opsCol.createIndex({ processedAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 }),
+      // 支撑 retry/delete op 去重查询
+      opsCol.createIndex({ op: 1, sku: 1, processed: 1 }),
+    ]);
+  } catch (e) {
+    console.warn('[mongo] ensureIndexes collect_queue_ops failed:', e.message);
+  }
 }
 
 // 集合引用(懒加载,首次调用时连接)
@@ -89,4 +117,6 @@ export const cols = {
   autoCollectLog: () => getMongo().then((d) => d.collection('ozon_auto_collect_log')),
   storeClassification: () => getMongo().then((d) => d.collection('ozon_store_classification')),
   storeSku: () => getMongo().then((d) => d.collection('ozon_store_sku')),
+  collectQueueTasks: () => getMongo().then((d) => d.collection('collect_queue_tasks')),
+  collectQueueOps: () => getMongo().then((d) => d.collection('collect_queue_ops')),
 };

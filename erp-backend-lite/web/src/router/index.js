@@ -11,9 +11,10 @@ import Config from '../views/Config.vue';
 import ListingTemplates from '../views/ListingTemplates.vue';
 import Cache from '../views/Cache.vue';
 import CollectLogs from '../views/CollectLogs.vue';
+import CollectQueue from '../views/CollectQueue.vue';
 import { useAuthStore } from '../stores/auth.js';
 
-// 骨架路由:真实页面组件与路由守卫在后续 Task 实现
+// 路由配置 + JWT 守卫
 const router = createRouter({
   // 后端托管静态文件,hash 路由更稳
   history: createWebHashHistory(),
@@ -31,6 +32,7 @@ const router = createRouter({
     { path: '/listing-templates', name: 'listing-templates', component: ListingTemplates },
     { path: '/cache', name: 'cache', component: Cache },
     { path: '/collect-logs', name: 'collect-logs', component: CollectLogs },
+    { path: '/collect-queue', name: 'collect-queue', component: CollectQueue, meta: { title: '采集队列' } },
   ],
 });
 

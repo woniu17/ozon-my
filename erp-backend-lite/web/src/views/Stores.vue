@@ -189,9 +189,7 @@ async function fetchWarehouses() {
       whItems.value = items.map((w) => ({
         id: w.warehouse_id ?? w.id ?? '',
         name: w.name || '(未命名)',
-        meta: [w.warehouse_type || null, w.status || null, w.is_rfbs ? 'RFBS' : null]
-          .filter(Boolean)
-          .join(' · '),
+        meta: [w.warehouse_type || null, w.status || null, w.is_rfbs ? 'RFBS' : null].filter(Boolean).join(' · '),
       }));
       if (!items.length) {
         whError.value = 'OPI 未返回任何仓库,请确认店铺凭据与仓库已开通';
@@ -240,9 +238,7 @@ onMounted(() => {
     </div>
 
     <div v-if="!storesStore.loaded" class="empty">加载中...</div>
-    <div v-else-if="!storesStore.list.length" class="empty">
-      暂无店铺,点击右上角「+ 新增店铺」开始配置
-    </div>
+    <div v-else-if="!storesStore.list.length" class="empty">暂无店铺,点击右上角「+ 新增店铺」开始配置</div>
     <div v-else class="store-list">
       <div v-for="s in storesStore.list" :key="s.id" class="store-card">
         <div class="store-card-head">
@@ -250,11 +246,17 @@ onMounted(() => {
           <span class="store-id">{{ s.id }}</span>
         </div>
         <div class="store-fields">
-          <div class="row"><span class="k">公司ID</span><span class="v">{{ s.company_id || '—' }}</span></div>
-          <div class="row"><span class="k">默认仓库</span><span class="v">{{ s.warehouse_id || '—' }}</span></div>
+          <div class="row">
+            <span class="k">公司ID</span><span class="v">{{ s.company_id || '—' }}</span>
+          </div>
+          <div class="row">
+            <span class="k">默认仓库</span><span class="v">{{ s.warehouse_id || '—' }}</span>
+          </div>
           <div class="row">
             <span class="k">合同货币</span>
-            <span class="v"><strong>{{ s.currency_code || 'RUB' }}</strong></span>
+            <span class="v"
+              ><strong>{{ s.currency_code || 'RUB' }}</strong></span
+            >
           </div>
           <div class="row">
             <span class="k">Client-Id</span>
@@ -267,21 +269,18 @@ onMounted(() => {
           <div class="row">
             <span class="k">凭据状态</span>
             <span class="v">
-              <span
-                v-if="s.sync_credentials?.clientId && s.sync_credentials?.apiKey"
-                class="badge badge-pending"
-              >未验证</span>
+              <span v-if="s.sync_credentials?.clientId && s.sync_credentials?.apiKey" class="badge badge-pending"
+                >未验证</span
+              >
               <span v-else class="badge badge-fail">未配置</span>
             </span>
           </div>
         </div>
         <div class="store-card-actions">
           <button class="btn btn-sm btn-ghost" @click="openWarehouse(s)">查看仓库</button>
-          <button
-            class="btn btn-sm btn-ghost"
-            :disabled="testingStoreId === s.id"
-            @click="testConnForStore(s)"
-          >{{ testingStoreId === s.id ? '测试中...' : '测试连接' }}</button>
+          <button class="btn btn-sm btn-ghost" :disabled="testingStoreId === s.id" @click="testConnForStore(s)">
+            {{ testingStoreId === s.id ? '测试中...' : '测试连接' }}
+          </button>
           <button class="btn btn-sm btn-ghost" @click="openEdit(s)">编辑</button>
           <button class="btn btn-sm btn-danger" @click="removeStore(s)">删除</button>
         </div>
@@ -319,12 +318,9 @@ onMounted(() => {
           <button type="submit" class="btn btn-primary" :disabled="editSaving">
             {{ editSaving ? '保存中...' : '保存' }}
           </button>
-          <button
-            type="button"
-            class="btn btn-ghost"
-            :disabled="testingInForm"
-            @click="testConnInForm"
-          >{{ testingInForm ? '测试中...' : '测试连接' }}</button>
+          <button type="button" class="btn btn-ghost" :disabled="testingInForm" @click="testConnInForm">
+            {{ testingInForm ? '测试中...' : '测试连接' }}
+          </button>
         </div>
         <p class="error-text" v-show="editErr">{{ editErr }}</p>
       </form>
@@ -339,12 +335,9 @@ onMounted(() => {
     >
       <div class="form-actions" style="margin-bottom: 8px">
         <span class="muted">{{ whStatus }}</span>
-        <button
-          type="button"
-          class="btn btn-sm btn-ghost"
-          :disabled="whLoading || !whStore"
-          @click="fetchWarehouses"
-        >刷新</button>
+        <button type="button" class="btn btn-sm btn-ghost" :disabled="whLoading || !whStore" @click="fetchWarehouses">
+          刷新
+        </button>
       </div>
       <div v-if="whError" class="empty error-text">{{ whError }}</div>
       <div v-else-if="!whItems.length && !whLoading" class="empty">暂无仓库</div>

@@ -32,10 +32,7 @@ router.post('/auth/login-password', (req, res, next) => {
     if (config.userPassword?.startsWith('$2')) {
       // bcrypt hash 模式 —— 需 bcryptjs,未安装则提示
       return next(
-        new ApiError(
-          ErrorCode.INTERNAL_ERROR,
-          '检测到 bcrypt hash 密码,请安装 bcryptjs: npm i bcryptjs,或使用明文密码'
-        )
+        new ApiError(ErrorCode.INTERNAL_ERROR, '检测到 bcrypt hash 密码,请安装 bcryptjs: npm i bcryptjs,或使用明文密码')
       );
     }
     if (!safeEqual(password, config.userPassword)) {

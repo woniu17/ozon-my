@@ -984,11 +984,10 @@
 
   // ─── 限速配置(可折叠,与 jz-auto-collect-config 共享) ─────────────
   // 字段对应 SW 内 _AUTO_COLLECT_CONFIG_DEFAULT 的限速项。
+  // 新队列架构下只保留队列消费间隔(秒)和每日上限。
   // min/max 与 input 的 min/max 属性保持一致,超界不写入并提示。
   const RATE_FIELDS = [
-    { id: 'ac-rate-buyer', key: 'buyerPageMinInterval', min: 1000, max: 60000, label: '买家页间隔' },
-    { id: 'ac-rate-seller', key: 'sellerPortalMinInterval', min: 100, max: 10000, label: '卖家后台间隔' },
-    { id: 'ac-rate-sku', key: 'skuInterval', min: 2000, max: 120000, label: 'SKU 间隔' },
+    { id: 'ac-rate-sku', key: 'consumeRateSec', min: 5, max: 120, label: '队列间隔' },
     { id: 'ac-rate-perday', key: 'perDayLimit', min: 0, max: 100000, label: '每日上限' },
   ];
 
@@ -1027,7 +1026,7 @@
     if (body) body.style.display = rateCfgEl.classList.contains('is-open') ? '' : 'none';
   });
 
-  // 4 个输入框 change(失焦或回车触发)→ 校验 → saveAutoCollectConfig
+  // 限速输入框 change(失焦或回车触发)→ 校验 → saveAutoCollectConfig
   RATE_FIELDS.forEach((f) => {
     const input = document.getElementById(f.id);
     if (!input) return;

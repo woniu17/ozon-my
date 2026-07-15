@@ -73,9 +73,7 @@ async function openDetail(localTaskId) {
   detailTask.value = null;
   detailItems.value = [];
   try {
-    const data = await get(
-      '/admin/api/listing-records/' + encodeURIComponent(localTaskId)
-    );
+    const data = await get('/admin/api/listing-records/' + encodeURIComponent(localTaskId));
     detailTask.value = data?.task || null;
     detailItems.value = data?.items || [];
   } catch (err) {
@@ -132,8 +130,9 @@ function itemErrorText(it) {
   const errs = it.errors || [];
   if (!errs.length) return '';
   return errs
-    .map((e) =>
-      `${e.message || e.description || e.code || ''}${e.field ? ` [${e.field}]` : ''}${e.attribute_name ? ` (${e.attribute_name})` : ''}`
+    .map(
+      (e) =>
+        `${e.message || e.description || e.code || ''}${e.field ? ` [${e.field}]` : ''}${e.attribute_name ? ` (${e.attribute_name})` : ''}`
     )
     .filter(Boolean)
     .join('; ');
@@ -149,11 +148,9 @@ onMounted(() => {
   <div>
     <div class="toolbar">
       <h2>上架记录</h2>
-      <button
-        class="btn btn-ghost"
-        :disabled="state.loading"
-        @click="loadListings"
-      >{{ state.loading ? '刷新中...' : '刷新' }}</button>
+      <button class="btn btn-ghost" :disabled="state.loading" @click="loadListings">
+        {{ state.loading ? '刷新中...' : '刷新' }}
+      </button>
     </div>
 
     <div class="filter-bar">
@@ -225,28 +222,39 @@ onMounted(() => {
     />
 
     <!-- 详情弹窗 -->
-    <AppModal
-      :open="detailOpen"
-      title="上架记录详情"
-      size="lg"
-      @update:open="detailOpen = $event"
-    >
+    <AppModal :open="detailOpen" title="上架记录详情" size="lg" @update:open="detailOpen = $event">
       <div v-if="detailLoading" class="empty">加载中...</div>
       <template v-else-if="detailTask">
         <div class="listing-detail-meta">
-          <div class="meta-row"><span class="meta-k">任务 ID</span><span class="meta-v">{{ detailTask.localTaskId }}</span></div>
-          <div class="meta-row"><span class="meta-k">店铺</span><span class="meta-v">{{ storeName(detailTask.storeId) }}</span></div>
-          <div class="meta-row"><span class="meta-k">创建时间</span><span class="meta-v">{{ fmtTime(detailTask.createdAt) }}</span></div>
-          <div class="meta-row"><span class="meta-k">完成时间</span><span class="meta-v">{{ fmtTime(detailTask.completedAt) }}</span></div>
+          <div class="meta-row">
+            <span class="meta-k">任务 ID</span><span class="meta-v">{{ detailTask.localTaskId }}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-k">店铺</span><span class="meta-v">{{ storeName(detailTask.storeId) }}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-k">创建时间</span><span class="meta-v">{{ fmtTime(detailTask.createdAt) }}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-k">完成时间</span><span class="meta-v">{{ fmtTime(detailTask.completedAt) }}</span>
+          </div>
           <div class="meta-row">
             <span class="meta-k">状态</span>
             <span class="meta-v">
-              <span class="badge" :class="statusInfo(detailTask.status).cls">{{ statusInfo(detailTask.status).label }}</span>
+              <span class="badge" :class="statusInfo(detailTask.status).cls">{{
+                statusInfo(detailTask.status).label
+              }}</span>
             </span>
           </div>
-          <div class="meta-row"><span class="meta-k">总计</span><span class="meta-v">{{ detailTask.itemsCount }}</span></div>
-          <div class="meta-row"><span class="meta-k">成功</span><span class="meta-v">{{ countByStatus(detailItems, 'imported') }}</span></div>
-          <div class="meta-row"><span class="meta-k">失败</span><span class="meta-v">{{ countByStatus(detailItems, 'failed') }}</span></div>
+          <div class="meta-row">
+            <span class="meta-k">总计</span><span class="meta-v">{{ detailTask.itemsCount }}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-k">成功</span><span class="meta-v">{{ countByStatus(detailItems, 'imported') }}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-k">失败</span><span class="meta-v">{{ countByStatus(detailItems, 'failed') }}</span>
+          </div>
         </div>
 
         <h3 style="margin: 16px 0 8px">商品明细</h3>
@@ -260,7 +268,9 @@ onMounted(() => {
           </thead>
           <tbody>
             <tr v-if="!detailItems.length">
-              <td colspan="3" class="muted" style="padding: 16px; text-align: center">无明细数据(可能任务尚未完成或未上报)</td>
+              <td colspan="3" class="muted" style="padding: 16px; text-align: center">
+                无明细数据(可能任务尚未完成或未上报)
+              </td>
             </tr>
             <tr v-for="(it, idx) in detailItems" :key="idx">
               <td class="col-task">{{ it.offerId || '—' }}</td>

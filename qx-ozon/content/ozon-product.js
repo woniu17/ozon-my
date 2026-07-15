@@ -699,13 +699,8 @@
         .catch(() => {});
     }
 
-    // 详情页无 panel 数据,不经过销量/智能筛选,但仍检查中国店铺 Gate 0.5
-    // (SW 侧 autoCollect 处理器内判定;detail+card 已在上方写缓存,autoCollect
-    //  内部查这两类命中即跳过,只采剩 6 类)
-    if (_product.sku && window.__jzAutoCollectOnSkuSeen) {
-      window.__jzAutoCollectOnSkuSeen(String(_product.sku), 'pdp', sellerSlug);
-    }
-
+    // 新队列架构下,自动采集仅在店铺页发起;详情页不再提交采集任务,
+    // detail+card 数据已在上一步写缓存,由店铺页统一队列消费。
     return _product;
   }
 
@@ -12109,16 +12104,9 @@
       window.QXCollectorPanel.create({
         callbacks: {
           onForceRefresh: () => {
+            // 新队列架构下,强制刷新不再在 PDP 单独触发 autoCollect;
+            // 如需重采,请在店铺页队列管理页中操作。
             window.__jzAutoCollectResetSeen?.();
-            try {
-              const product = extractProductData();
-              if (product?.sku) {
-                const slug = product?.seller?.link?.match(/\/seller\/([^/]+)/)?.[1] || '';
-                window.__jzAutoCollectOnSkuSeen?.(String(product.sku), 'pdp', slug, { forceRefresh: true });
-              }
-            } catch (err) {
-              console.warn('[ozon-product] force refresh failed:', err);
-            }
           },
         },
       });

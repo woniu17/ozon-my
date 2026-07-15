@@ -89,7 +89,14 @@
       }
     }
     if (!texts) {
-      console.warn('[seller-info-main] trustFactors 中未找到含公司信息的 subtitle, trustFactors:', trustFactors.map((tf) => ({ title: tf?.title?.text, tooltipTitle: tf?.tooltip?.title?.text, hasSubtitle: Array.isArray(tf?.tooltip?.subtitle) })));
+      console.warn(
+        '[seller-info-main] trustFactors 中未找到含公司信息的 subtitle, trustFactors:',
+        trustFactors.map((tf) => ({
+          title: tf?.title?.text,
+          tooltipTitle: tf?.tooltip?.title?.text,
+          hasSubtitle: Array.isArray(tf?.tooltip?.subtitle),
+        }))
+      );
       return empty;
     }
 
@@ -342,10 +349,7 @@
       /* ignore */
     }
     try {
-      document.documentElement.setAttribute(
-        'data-jz-seller-info',
-        JSON.stringify({ seq: _seq, detail })
-      );
+      document.documentElement.setAttribute('data-jz-seller-info', JSON.stringify({ seq: _seq, detail }));
     } catch (_) {
       /* ignore */
     }

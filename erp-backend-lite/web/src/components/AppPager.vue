@@ -32,14 +32,7 @@ const onJump = (e) => {
     <span class="pager-info">共 {{ total }} 条 / 第 {{ modelValue }}/{{ totalPages }} 页</span>
     <button :disabled="modelValue <= 1" @click="prev">上一页</button>
     <button :disabled="modelValue >= totalPages" @click="next">下一页</button>
-    <input
-      class="pager-jump"
-      type="number"
-      min="1"
-      :max="totalPages"
-      :value="modelValue"
-      @change="onJump"
-    />
+    <input class="pager-jump" type="number" min="1" :max="totalPages" :value="modelValue" @change="onJump" />
   </div>
 </template>
 

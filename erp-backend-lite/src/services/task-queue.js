@@ -49,12 +49,15 @@ export function runAsync(id, fn) {
 
 // 清理 24h 前的已完成任务,避免内存泄漏
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, job] of jobs) {
-    if (job.status === 'done' || job.status === 'failed') {
-      const updated = new Date(job.updatedAt).getTime();
-      if (now - updated > ONE_DAY_MS) jobs.delete(id);
+setInterval(
+  () => {
+    const now = Date.now();
+    for (const [id, job] of jobs) {
+      if (job.status === 'done' || job.status === 'failed') {
+        const updated = new Date(job.updatedAt).getTime();
+        if (now - updated > ONE_DAY_MS) jobs.delete(id);
+      }
     }
-  }
-}, 60 * 60 * 1000).unref();
+  },
+  60 * 60 * 1000
+).unref();

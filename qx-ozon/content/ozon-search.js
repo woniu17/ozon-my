@@ -219,6 +219,10 @@
       return;
     }
 
+    // 用于 collectDone 广播快速定位面板
+    card.dataset.jzSku = productId;
+    if (panel) panel.dataset.jzSku = productId;
+
     // 异步写 card 缓存(商品卡 DOM 字段,fire-and-forget)
     if (productId && window.sendMessage) {
       try {
@@ -235,6 +239,11 @@
       } catch {
         /* fire-and-forget */
       }
+    }
+
+    // 新采集队列:fire-and-forget 提交任务(搜索页无 sellerSlug,传空字符串)
+    if (window.__jzSubmitCollectTask) {
+      window.__jzSubmitCollectTask(productId, card, '', '').catch(() => {});
     }
 
     if (panelDataCache.has(productId)) {
@@ -637,6 +646,20 @@
       subtree: true,
     });
   }
+
+  // 接收 SW 推送的 collectDone 事件,回填面板数据(搜索页无 ozon-data-panel.js)
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type !== 'collectDone' || !msg.sku || !msg.data) return;
+    const skuStr = String(msg.sku);
+    const panel = document.querySelector(`[data-jz-sku="${skuStr}"] .ozon-helper-data-panel`);
+    if (panel && typeof window.jzPopulatePanelV2 === 'function') {
+      try {
+        window.jzPopulatePanelV2(panel, skuStr, { preFetched: msg.data });
+      } catch (e) {
+        console.warn('[ozon-search] collectDone 回填面板失败:', skuStr, e);
+      }
+    }
+  });
 
   async function init() {
     const auth = await window.checkAuth();

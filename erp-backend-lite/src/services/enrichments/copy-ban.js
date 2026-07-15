@@ -16,7 +16,8 @@ export async function apply(items, message) {
       // 防搬运:在描述末尾追加版权声明 + 在 attributes 标记
       const copyrightNotice = '\n\n⚠️ Данный товар защищен от копирования. Все права защищены.';
       if (item.scraped_description && !item.scraped_description.includes('защищен от копирования')) {
-        item.scraped_description = String(item.scraped_description).slice(0, 4096 - copyrightNotice.length) + copyrightNotice;
+        item.scraped_description =
+          String(item.scraped_description).slice(0, 4096 - copyrightNotice.length) + copyrightNotice;
       }
 
       // 标记防搬运属性(供后续 seller portal 写入时识别)

@@ -34,7 +34,7 @@
   const panelState = { enabled: true };
   const panelDataCache = new Map();
   let onlyWithSales = false;
-  // 从 jz-seller-info 事件缓存的当前页卖家 slug,供 loadPanelData → collectAutoIfMatched 用。
+  // 从 jz-seller-info 事件缓存的当前页卖家 slug,供 loadPanelData → __jzSubmitCollectTask 用。
   // 店铺页 seller-info-main.js 提取后通过 CustomEvent 推过来;非店铺页保持 ''。
   let sellerSlug = '';
   let sellerName = ''; // 店铺名称,用于在商品卡上显示"店铺商品:xxx"标签
@@ -81,6 +81,7 @@
         const e = recent[i];
         if (!e || !e.sku) continue;
         if (!_collectStatusMap.has(e.sku)) {
+          if (_collectStatusMap.size > 2000) _collectStatusMap.clear();
           _collectStatusMap.set(String(e.sku), {
             status: e.status,
             reason: e.reason || null,
@@ -98,26 +99,143 @@
     }
   }
 
-  // 接收 SW 推送的 collectDone 事件,实时更新
+  // 新队列状态 → UI 状态映射(collectDone 和 taskStatus 共用)
+  const _STATUS_MAP = {
+    success: 'success',
+    failed_partial: 'partial',
+    failed_final: 'failed',
+    failed_retry: 'retrying',
+    pending: 'pending',
+    running: 'collecting',
+  };
+
+  // 应用队列暂停状态:设置全局标志 + 将所有 loading panel 设为 ready,避免
+  // AutoScroller isReadyToScroll 死锁。任务仍保持 pending,跨日/恢复后重新消费。
+  // 用于:(1) queuePaused 消息 handler,(2) 启动时主动查询 SW 队列状态(防时序竞态)。
+  function _applyQueuePaused(reason) {
+    reason = reason || 'unknown';
+    console.log('[panel] 队列暂停:', reason, '所有 loading panel 设 ready');
+    window.__jzQueuePaused = { reason, ts: Date.now() };
+    const panels = document.querySelectorAll('.ozon-helper-data-panel[data-jz-load-status="loading"]');
+    for (const panel of panels) {
+      const sku = panel.dataset.jzSku;
+      if (sku) {
+        if (_collectStatusMap.size > 2000) _collectStatusMap.clear();
+        _collectStatusMap.set(String(sku), {
+          status: 'skipped',
+          reason: reason,
+          results: null,
+          duration: null,
+          timestamp: Date.now(),
+        });
+        _refreshCollectStatusUi(String(sku));
+      }
+      panel.dataset.jzLoadStatus = 'ready';
+    }
+  }
+
+  // 接收 SW 推送的 collectDone / taskStatus / antibotDetected 事件,实时更新
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg?.type !== 'collectDone' || !msg.entry?.sku) return;
-    const e = msg.entry;
-    const hitCount = Array.isArray(e.results) ? e.results.filter((r) => r.hit).length : '?';
-    console.log('[panel] 收到 collectDone:', e.sku, 'status=', e.status, 'hit=', hitCount + '/8');
-    _collectStatusMap.set(String(e.sku), {
-      status: e.status,
-      reason: e.reason || null,
-      results: e.results || null,
-      duration: e.duration,
-      timestamp: e.timestamp,
+    if (!msg) return;
+
+    // 熔断检测:SW 检测到反爬时广播 antibotDetected
+    if (msg.type === 'antibotDetected' && msg.pausedUntil) {
+      window.__jzCircuitBreakerUntil = msg.pausedUntil;
+      _refreshAllCollectStatusUi();
+      return;
+    }
+
+    // 队列暂停:SW 因 daily-limit/not-running/paused 暂停队列时广播。
+    // 详见 _applyQueuePaused(同时用于启动时主动查询,防时序竞态)。
+    if (msg.type === 'queuePaused') {
+      _applyQueuePaused(msg.reason);
+      return;
+    }
+
+    // 队列恢复:SW 跨日重置或熔断过期后恢复消费时广播。
+    // 清除全局标志,让后续新 panel 正常走采集流程。
+    if (msg.type === 'queueResumed') {
+      console.log('[panel] 队列恢复,清除 __jzQueuePaused 标志');
+      window.__jzQueuePaused = false;
+      return;
+    }
+
+    // taskStatus:SW 在入队/开始处理/重试时广播,更新 _collectStatusMap
+    if (msg.type === 'taskStatus' && msg.sku) {
+      const skuStr = String(msg.sku);
+      const uiStatus = _STATUS_MAP[msg.status];
+      if (uiStatus) {
+        if (_collectStatusMap.size > 2000) _collectStatusMap.clear();
+        _collectStatusMap.set(skuStr, {
+          status: uiStatus,
+          reason: null,
+          results: null,
+          duration: null,
+          timestamp: Date.now(),
+        });
+        _refreshCollectStatusUi(skuStr);
+      }
+      return;
+    }
+
+    if (msg.type !== 'collectDone' || !msg.sku) return;
+    const skuStr = String(msg.sku);
+
+    const uiStatus = _STATUS_MAP[msg.status] || msg.status;
+
+    // steps { card:'ok', detail:'ok', ... } → results [{ type, hit }]
+    let results = null;
+    if (msg.steps && typeof msg.steps === 'object') {
+      results = _CACHE_TYPE_LABELS.map((type) => ({ type, hit: msg.steps[type] === 'ok' }));
+    }
+
+    const hitCount = results ? results.filter((r) => r.hit).length + '/' + results.length : '?';
+    console.log('[panel] 收到 collectDone:', skuStr, 'status=', uiStatus, 'hit=', hitCount);
+    // collectDone 携带实际采集结果(success/partial/failed)说明队列已恢复消费,
+    // 清除 __jzQueuePaused 标志,让后续新 panel 正常走采集流程。
+    // skipped 状态不清除(可能是 daily-limit/not-running 导致的跳过,队列仍暂停)。
+    if (window.__jzQueuePaused && uiStatus !== 'skipped') {
+      window.__jzQueuePaused = false;
+      console.log('[panel] collectDone 非 skip 状态,清除 __jzQueuePaused 标志');
+    }
+    if (_collectStatusMap.size > 2000) _collectStatusMap.clear();
+    _collectStatusMap.set(skuStr, {
+      status: uiStatus,
+      reason: msg.error?.type || msg.reason || null,
+      results: results || msg.results || null,
+      duration: msg.duration != null ? msg.duration : null,
+      timestamp: msg.collectedAt || Date.now(),
     });
-    _refreshCollectStatusUi(String(e.sku));
+
+    // 广播携带完整数据时即时回填面板
+    // 注意:无论 status 是 success/partial/skipped/failed_final,collectDone 都表示
+    // 该 SKU 的处理已结束,panel 应标记为 ready,否则 AutoScroller 的 isReadyToScroll
+    // 会永远等待(尤其 skipped 时 data 全 null,panel 停在 'loading' 导致死锁)。
+    const panel = document.querySelector(`[data-jz-sku="${skuStr}"] .ozon-helper-data-panel`);
+    if (panel) {
+      if (msg.data && typeof window.jzPopulatePanelV2 === 'function') {
+        try {
+          // 必须先调 jzRenderProductPanelV2 创建带 [data-field] 的 HTML 结构,
+          // 否则 jzPopulatePanelV2 的 updateField 找不到字段节点,数据无法回填。
+          if (typeof window.jzRenderProductPanelV2 === 'function') {
+            window.jzRenderProductPanelV2(panel, { sku: skuStr, initial: { preFetched: msg.data } });
+          }
+          window.jzPopulatePanelV2(panel, skuStr, { preFetched: msg.data });
+        } catch (e) {
+          console.warn('[panel] collectDone 回填面板失败:', skuStr, e);
+        }
+      }
+      panel.dataset.jzLoadStatus = 'ready';
+    }
+
+    _refreshCollectStatusUi(skuStr);
   });
 
   // 状态文案
   const _COLLECT_STATUS_LABELS = {
     collecting: { text: '采集中', icon: '⟳', color: '#3b82f6' },
     pending: { text: '等待中', icon: '⏳', color: '#6366f1' },
+    retrying: { text: '重试中', icon: '↻', color: '#f59e0b' },
     success: { text: '已采集', icon: '✓', color: '#16a34a' },
     partial: { text: '部分采集', icon: '◐', color: '#f59e0b' },
     skipped: { text: '跳过', icon: '−', color: '#94a3b8' },
@@ -144,15 +262,16 @@
     'followSell',
   ];
 
-  // 定时重扫冷却时间(与 setInterval 中的 _RESCAN_COOLDOWN_MS 一致)
+  // partial/failed 状态在 UI 上显示"等待重试中"的冷却时长(单位:ms)
   const _PENDING_COOLDOWN_MS = 60 * 1000;
 
   // 获取有效状态:
   // 1. 终态(success/skipped/antibot)优先于采集中标记 — 因为 collectDone 广播
   //    可能先于 sendMessage .then() 到达,此时 __jzCollectingSkus 仍有该 SKU,
   //    若优先返回 collecting 会导致 badge 永远停在"采集中"(.then() 清除后无刷新)
-  // 2. 采集中(无终态时)优先于冷却期内的等待状态
-  // 3. partial/failed 在冷却期内 → 显示等待中(含倒计时)
+  // 2. 熔断期(antibotDetected)内,非终态 SKU 显示"采集中止"
+  // 3. 采集中(无终态时)优先于冷却期内的等待状态
+  // 4. partial/failed 在冷却期内 → 显示等待重试中(不显示倒计时秒数)
   function _getEffectiveStatus(sku) {
     const skuStr = String(sku);
     // 1. 先检查 _collectStatusMap 的终态
@@ -160,17 +279,21 @@
     if (status && (status.status === 'success' || status.status === 'skipped' || status.status === 'antibot')) {
       return status;
     }
-    // 2. 检查采集中(shared-utils.js 维护的 Set)
+    // 2. 熔断检查:SW 检测到反爬时设置 __jzCircuitBreakerUntil,非终态 SKU 显示"采集中止"
+    if (window.__jzCircuitBreakerUntil && Date.now() < window.__jzCircuitBreakerUntil) {
+      return { status: 'antibot', timestamp: Date.now() };
+    }
+    // 3. 检查采集中(shared-utils.js 维护的 Set)
     if (window.__jzCollectingSkus?.has(skuStr)) {
       return { status: 'collecting', timestamp: Date.now() };
     }
-    // 3. 无状态
+    // 4. 无状态
     if (!status) return null;
-    // 4. partial/failed 且在冷却期内 → 显示等待中(含倒计时)
+    // 5. partial/failed 且在冷却期内 → 显示等待重试中(不显示秒数)
     if ((status.status === 'partial' || status.status === 'failed') && status.timestamp) {
       const elapsed = Date.now() - status.timestamp;
       if (elapsed < _PENDING_COOLDOWN_MS) {
-        return { ...status, _waitSeconds: Math.ceil((_PENDING_COOLDOWN_MS - elapsed) / 1000) };
+        return { ...status, _waiting: true };
       }
     }
     return status;
@@ -191,10 +314,10 @@
       panel.appendChild(bar);
     }
     const meta = _COLLECT_STATUS_LABELS[status.status] || _COLLECT_STATUS_LABELS.failed;
-    // 等待中:显示倒计时;采集中:不显示 duration(还没有);其他:显示 duration
+    // 等待重试中:不显示倒计时秒数;采集中:不显示 duration(还没有);其他:显示 duration
     let extraText = '';
-    if (status._waitSeconds != null) {
-      extraText = ` · 等待重扫 ${status._waitSeconds}s`;
+    if (status._waiting) {
+      extraText = ' · 等待重试中';
     } else if (status.status === 'collecting') {
       extraText = ' · 采集中...';
     } else {
@@ -206,7 +329,7 @@
     let cacheDetail = '';
     if (
       status.status !== 'collecting' &&
-      status._waitSeconds == null &&
+      !status._waiting &&
       Array.isArray(status.results) &&
       status.results.length > 0
     ) {
@@ -243,8 +366,8 @@
     badge.style.backgroundColor = meta.color;
     badge.dataset.status = status.status;
     let title = meta.text;
-    if (status._waitSeconds != null) {
-      title += ` · 等待重扫 ${status._waitSeconds}s`;
+    if (status._waiting) {
+      title += ' · 等待重试中';
     } else if (status.reason) {
       title += ' · ' + (_COLLECT_REASON_LABELS[status.reason] || status.reason);
     }
@@ -290,9 +413,12 @@
       if (panel) renderCollectStatusBar(panel, sku);
     }
   }
-  // 暴露给 shared-utils.js 的 autoCollectOnSkuSeen .then()/.catch() 调用:
-  // 清除 __jzCollectingSkus 后需主动刷新 UI,否则 badge 永远停在"采集中"
+  // SW 广播 collectDone/taskStatus 时会同步 __jzCollectingSkus,
+  // 清除后需主动刷新 UI,否则 badge 永远停在"采集中"
   window.__jzRefreshCollectStatusUi = _refreshCollectStatusUi;
+
+  // 暴露给 shared-utils.js 的 __jzSubmitCollectTask 复用 DOM 提取
+  window.__jzExtractCardInfo = extractCardInfo;
 
   // 刷新当前页所有商品卡 UI
   function _refreshAllCollectStatusUi() {
@@ -311,16 +437,24 @@
   // 启动时拉取一次
   setTimeout(_initCollectStatusMap, 1500);
 
-  // ── 定时重扫:对 partial/failed 状态的 SKU 重新触发采集 ──────────
-  // 问题:IntersectionObserver 在首次可见后 disconnect,loadPanelData 只调一次,
-  //   导致 partial/failed 的 SKU 在不刷新页面的情况下不会重新采集。
-  // 方案:每 60 秒扫描 _collectStatusMap,对 partial/failed 且距上次采集 >60s 的 SKU
-  //   直接调 autoCollectOnSkuSeen(它会检查 _autoCollectSeen 去重)。
-  // 注意:店铺页的非店铺商品(推荐区)被 ensureDataPanel 跳过,不会进入 _collectStatusMap,
-  //   但 _collectStatusMap 可能包含之前在其它页面(搜索/详情)采集过的 SKU。
-  //   若这些 SKU 恰好出现在当前店铺页的非店铺商品区,不应在当前店铺页触发重扫
-  //   (会把 SKU 错误关联到当前店铺)。用 _nonStoreSkus Set 排除。
-  const _nonStoreSkus = new Set(); // 当前店铺页非店铺商品 SKU 集合
+  // 启动时主动查询 SW 队列状态:防止时序竞态(SW 在 content script 注入完成前
+  // 就广播了 queuePaused,onMessage listener 未注册导致错过,panel 永远卡 loading,
+  // AutoScroller isReadyToScroll 死锁)。如果发现队列已暂停,立即应用暂停状态。
+  // 注意:window.sendMessage resolve 的是 response.data,不是完整 response。
+  setTimeout(async () => {
+    try {
+      const resp = await window.sendMessage('getQueueStatus');
+      if (resp?.consumePaused) {
+        console.log('[panel] 启动查询发现队列已暂停:', resp.reason);
+        _applyQueuePaused(resp.reason || 'paused');
+      }
+    } catch (e) {
+      console.warn('[panel] 启动查询队列状态失败:', e);
+    }
+  }, 1200);
+
+  // 当前店铺页非店铺商品 SKU 集合(推荐区等),用于避免把非本店 SKU 关联到当前店铺
+  const _nonStoreSkus = new Set();
 
   // ── store-sku 发现上报 ──────────────────────────────────────
   // panel 加载时上报"发现"关系到后端 ozon_store_sku 集合。
@@ -357,29 +491,7 @@
     }
   }
 
-  const _RESCAN_INTERVAL_MS = 60 * 1000;
-  const _RESCAN_COOLDOWN_MS = 60 * 1000;
-  setInterval(() => {
-    if (!window.__jzAutoCollectOnSkuSeen) return;
-    const now = Date.now();
-    let candidates = 0;
-    let triggered = 0;
-    for (const [sku, status] of _collectStatusMap) {
-      if (status.status !== 'partial' && status.status !== 'failed') continue;
-      if (!status.timestamp || now - status.timestamp < _RESCAN_COOLDOWN_MS) continue;
-      // 店铺页:跳过非店铺商品 SKU(避免错误关联到当前店铺)
-      if (sellerSlug && _nonStoreSkus.has(sku)) continue;
-      candidates++;
-      // 直接调用,autoCollectOnSkuSeen 内部会检查 _autoCollectSeen 去重
-      window.__jzAutoCollectOnSkuSeen(sku, 'shop-page', sellerSlug, { sellerId });
-      triggered++;
-    }
-    if (candidates > 0) {
-      console.log('[panel] 定时重扫: 候选', candidates, '触发', triggered, 'seller=', sellerSlug);
-    }
-  }, _RESCAN_INTERVAL_MS);
-
-  // ── 每秒刷新 UI:更新采集中动画和等待中倒计时 ──────────────────
+  // ── 每秒刷新 UI:更新采集中动画和等待重试状态 ──────────────────
   // 只刷新有状态变化的 SKU(采集中或冷却期内的 partial/failed)
   setInterval(() => {
     const collectingSkus = window.__jzCollectingSkus;
@@ -389,8 +501,13 @@
         _refreshCollectStatusUi(sku);
       }
     }
-    // 刷新冷却期内的 partial/failed SKU(倒计时更新)
     const now = Date.now();
+    // 熔断到期:刷新所有 UI(从 antibot 恢复到正常状态)
+    if (window.__jzCircuitBreakerUntil && now >= window.__jzCircuitBreakerUntil) {
+      window.__jzCircuitBreakerUntil = 0;
+      _refreshAllCollectStatusUi();
+    }
+    // 刷新冷却期内的 partial/failed SKU(等待重试状态更新)
     for (const [sku, status] of _collectStatusMap) {
       if (status.status !== 'partial' && status.status !== 'failed') continue;
       if (!status.timestamp) continue;
@@ -447,11 +564,25 @@
     const priceText = extractVisiblePriceText(card, priceNode);
     const price = window.normalizePrice ? window.normalizePrice(priceText) : null;
 
+    // 评价数："4.8 · 1 234" 取 ·/空格后的整数；只有评分时返回 null
+    const ratingEl = card.querySelector('[data-widget="searchResultsRating"]');
+    let ratingCount = null;
+    if (ratingEl) {
+      const text = (ratingEl.textContent || '').trim();
+      const parts = text.split(/[·•\s]+/).filter(Boolean);
+      if (parts.length >= 2) {
+        const raw = parts[parts.length - 1].replace(/\s/g, '').replace(/,/g, '.');
+        const n = Number(raw);
+        if (Number.isInteger(n) && n >= 0) ratingCount = n;
+      }
+    }
+
     return {
       url: link?.href || '',
       name: title,
       price,
       image: img?.getAttribute('src') || img?.getAttribute('data-src') || '',
+      ratingCount,
     };
   }
 
@@ -471,6 +602,10 @@
       panel.innerHTML = '';
       return;
     }
+
+    // 用于 collectDone 广播快速定位面板
+    card.dataset.jzSku = productId;
+    if (panel) panel.dataset.jzSku = productId;
 
     // 上报"发现"关系到后端 ozon_store_sku(店铺页店铺商品 + 详情页当前 SKU)
     // - 店铺页:仅当 isStoreSkuCard(card)=true 时上报(非店铺商品已被 ensureDataPanel 跳过)
@@ -495,6 +630,7 @@
             name: info.name || '',
             price: info.price != null ? Number(info.price) : null,
             image: info.image || '',
+            ratingCount: info.ratingCount ?? null,
           },
         });
       } catch {
@@ -502,6 +638,12 @@
       }
     }
 
+    // 1) 新采集队列:fire-and-forget 提交任务(店铺页才会真正入队)
+    if (window.__jzSubmitCollectTask) {
+      window.__jzSubmitCollectTask(productId, card, sellerSlug, sellerId).catch(() => {});
+    }
+
+    // 2) 优先用本页已 fetch 的缓存渲染(避免重复请求)
     if (panelDataCache.has(productId)) {
       const cached = panelDataCache.get(productId);
       // V2 优先(对齐详情页 5-section 布局),用 cached.preFetched 复用之前已 fetch 的结果
@@ -509,105 +651,56 @@
         window.jzRenderProductPanelV2(panel, { sku: productId, initial: cached });
         try {
           await window.jzPopulatePanelV2(panel, productId, { preFetched: cached.preFetched });
-        } catch { }
+        } catch {}
       } else {
         window.jzRenderProductCardPanel(panel, cached);
       }
       if (panel) panel.dataset.jzLoadStatus = 'ready';
-      // 触发 autoCollect(检查 onlyWithSales / smartFilter / 中国店铺 Gate 0.5);
-      // fire-and-forget,不阻塞 panel 渲染。sellerSlug/sellerId 来自 jz-seller-info 事件缓存。
-      window.__jzCollectAutoIfMatched?.(productId, card, info, cached, panel, 'shop-page', sellerSlug, sellerId);
-      // 渲染采集状态(徽章+状态条)
       updateCollectBadge(card, productId);
       renderCollectStatusBar(panel, productId);
       return;
     }
 
-    const showError = () => {
-      if (panel) panel.dataset.jzLoadStatus = 'error';
-      panel.innerHTML =
-        '<div class="ozon-helper-panel-error" style="cursor:pointer;color:var(--oh-red,#ff4d4f);font-size:12px;padding:8px 12px;">数据加载失败，点击重试</div>';
-      panel.querySelector('.ozon-helper-panel-error')?.addEventListener(
-        'click',
-        () => {
-          window.jzRenderPanelSkeleton(panel);
-          loadPanelData(card, panel);
-        },
-        { once: true }
-      );
-    };
-
+    // 3) 缓存未命中时异步查 ERP 兜底;有数据直接渲染。
+    // 无数据时也必须立刻 ready:骨架保留,等 collectDone 广播回填。
+    // 若等采集完成才 ready,AutoScroller.isReadyToScroll 会永久卡在
+    //「等待视口数据就绪」(翻页 ↔ 采集耦合,与队列重构解耦目标相反)。
     try {
-      // searchVariants 现走 sw.js /api/v1/search + bundle 组合,bundle 注入物理 attr
-      // (4497 重量、9454-9456 尺寸)到 items[0].attributes,jzMergeCardPanelData
-      // 直接从 sv 拿到。jzFetchPublicFollowSell 同源 composer-api 内部有 cache。
-      const fetchTask = () =>
-        Promise.allSettled([
-          window.sendMessage('getMarketStats', { sku: productId }),
-          window.sendMessage('getProductStats', { url: info.url }),
-          window.sendMessage('searchVariants', { sku: productId }),
-          window.jzFetchPublicFollowSell(productId),
-        ]);
-      const [marketResult, productResult, variantResult, followSellResult] = await taskQueue.add(
-        `stats-${productId}`,
-        fetchTask
-      );
-
-      if (marketResult.status === 'rejected' && productResult.status === 'rejected') {
-        showError();
-        return;
-      }
-
-      // sv 失败/auth issue 兜底:从 chrome.storage.local 读详情页采集的 cache
-      const cachedWeightDims =
-        variantResult.status !== 'fulfilled' || !variantResult.value?.items?.[0]
-          ? await (window.jzReadCachedWeightDims?.(productId).catch(() => null) ?? null)
-          : null;
-
-      const data = window.jzMergeCardPanelData(
-        marketResult.status === 'fulfilled' ? marketResult.value : null,
-        productResult.status === 'fulfilled' ? productResult.value : null,
-        variantResult.status === 'fulfilled' ? variantResult.value : null,
-        followSellResult.status === 'fulfilled' && followSellResult.value
-          ? {
-            followSellCount: followSellResult.value.count,
-            sellers: followSellResult.value.sellers,
-          }
-          : null,
-        productId,
-        cachedWeightDims
-      );
-      // 把 fetch 结果挂到 cache 上,后续命中 cache 时 V2 走 preFetched 路径
-      // 复用已有结果,避免再次往 backend / SW 发请求。
-      data.preFetched = {
-        stats: productResult,
-        market: marketResult,
-        variant: variantResult,
-        followCount: followSellResult,
-      };
-      panelDataCache.set(productId, data);
-      // V2 完整对齐详情页 5-section 布局(对齐 PDP)。jzRenderProductPanelV2 渲染
-      // 骨架,jzPopulatePanelV2(走 preFetched 路径)同步把 stats / market /
-      // variant / followCount 字段灌进 data-field 节点。fallback 走旧 V1 渲染。
-      if (typeof window.jzRenderProductPanelV2 === 'function') {
-        window.jzRenderProductPanelV2(panel, { sku: productId, initial: data });
-        try {
-          await window.jzPopulatePanelV2(panel, productId, { preFetched: data.preFetched });
-        } catch { }
+      const erpData = await window.sendMessage('queryErpProductData', { sku: productId });
+      if (erpData) {
+        if (typeof window.jzRenderProductPanelV2 === 'function' && erpData.preFetched) {
+          window.jzRenderProductPanelV2(panel, { sku: productId, initial: erpData });
+          try {
+            await window.jzPopulatePanelV2(panel, productId, { preFetched: erpData.preFetched });
+          } catch {}
+        } else {
+          window.jzRenderProductCardPanel(panel, erpData);
+        }
       } else {
-        window.jzRenderProductCardPanel(panel, data);
+        // ERP 无数据:补查终态/队列暂停,用于徽章文案;不论是否命中都 ready。
+        // 时序竞态:SW 很快终态时 collectDone 可能先于 panel 创建 → 广播丢失,
+        // 这里用 _collectStatusMap 兜底徽章,避免误显示「采集中」。
+        const st = _collectStatusMap.get(String(productId));
+        if (st && ['success', 'partial', 'skipped', 'failed', 'antibot'].includes(st.status)) {
+          // 已有终态,仅刷新徽章
+        } else if (window.__jzQueuePaused) {
+          // 队列暂停广播可能先于本 panel 创建,补一条 skipped 状态
+          if (_collectStatusMap.size > 2000) _collectStatusMap.clear();
+          _collectStatusMap.set(String(productId), {
+            status: 'skipped',
+            reason: window.__jzQueuePaused.reason || 'paused',
+            results: null,
+            duration: null,
+            timestamp: Date.now(),
+          });
+        }
       }
-
-      if (panel) panel.dataset.jzLoadStatus = 'ready';
-      // 触发 autoCollect(检查 onlyWithSales / smartFilter / 中国店铺 Gate 0.5);
-      // fire-and-forget,不阻塞 panel 渲染。sellerSlug/sellerId 来自 jz-seller-info 事件缓存。
-      window.__jzCollectAutoIfMatched?.(productId, card, info, data, panel, 'shop-page', sellerSlug, sellerId);
-      // 渲染采集状态(徽章+状态条)
-      updateCollectBadge(card, productId);
-      renderCollectStatusBar(panel, productId);
-    } catch {
-      showError();
+    } catch (e) {
+      console.warn('[panel] ERP query failed:', e);
     }
+    if (panel) panel.dataset.jzLoadStatus = 'ready';
+    updateCollectBadge(card, productId);
+    renderCollectStatusBar(panel, productId);
   }
 
   function ensureDataPanel(card) {
@@ -631,7 +724,7 @@
     // 注意:仍渲染 jz-seller-tag 标签(灰色"非店铺商品"),让用户知道这些是推荐商品
     if (sellerSlug && !isStoreSkuCard(card)) {
       card._ohPanelSkipped = true; // 标记跳过,供 applyToAll/removeDataPanel 识别
-      // 记录非店铺商品 SKU,供定时重扫排除(避免把推荐区 SKU 错误关联到当前店铺)
+      // 记录非店铺商品 SKU,避免把推荐区 SKU 错误关联到当前店铺
       const link = card.querySelector('a[href*="/product/"]');
       const m = link?.href.match(/\/product\/.*-(\d{5,})/);
       if (m) _nonStoreSkus.add(String(m[1]));
@@ -668,6 +761,45 @@
       { rootMargin: '200px' }
     );
     observer.observe(panel);
+
+    // 兜底:快速滚动时 IntersectionObserver 可能漏触发(元素从视口下方直接
+    // 跳到上方,从未在视口+margin 范围内停留)。记录滚动起止位置,scroll 事件
+    // 中检查 panel 是否在滚动路径上(起点到终点之间)。
+    let _lastScrollY = window.scrollY;
+    const _scrollCheck = () => {
+      if (panel.dataset.jzLoadStatus !== 'pending') {
+        window.removeEventListener('scroll', _scrollCheck, { capture: true });
+        return;
+      }
+      if (panel._jzRafPending) return;
+      panel._jzRafPending = true;
+      const startY = _lastScrollY;
+      const endY = window.scrollY;
+      _lastScrollY = endY;
+      requestAnimationFrame(() => {
+        panel._jzRafPending = false;
+        if (panel.dataset.jzLoadStatus !== 'pending') return;
+        const rect = panel.getBoundingClientRect();
+        const vh = window.innerHeight;
+        // panel 在视口+margin 内(正常触发)
+        if (rect.top < vh + 200 && rect.bottom > -200) {
+          window.removeEventListener('scroll', _scrollCheck, { capture: true });
+          observer.disconnect();
+          loadPanelData(card, panel);
+          return;
+        }
+        // panel 在滚动路径上(快速滚动跳过):panel 的文档绝对位置在 startY~endY+vh 之间
+        const panelDocTop = endY + rect.top;
+        const scrollMin = Math.min(startY, endY) - 200;
+        const scrollMax = Math.max(startY, endY) + vh + 200;
+        if (panelDocTop >= scrollMin && panelDocTop <= scrollMax) {
+          window.removeEventListener('scroll', _scrollCheck, { capture: true });
+          observer.disconnect();
+          loadPanelData(card, panel);
+        }
+      });
+    };
+    window.addEventListener('scroll', _scrollCheck, { capture: true, passive: true });
   }
 
   // ─── 点击事件分发 ──────────────────────────────────
@@ -907,7 +1039,7 @@
         panelState.enabled = changes[STORAGE_KEY].newValue !== false;
         applyToAll();
       });
-    } catch { }
+    } catch {}
   }
 
   function createObserver() {
@@ -958,13 +1090,13 @@
     if (_collectorPanel) {
       try {
         _collectorPanel.destroy();
-      } catch { }
+      } catch {}
       _collectorPanel = null;
     }
     if (_autoScroller) {
       try {
         _autoScroller.stop && _autoScroller.stop();
-      } catch { }
+      } catch {}
       _autoScroller = null;
     }
   }
@@ -977,7 +1109,7 @@
         if (collectorEnabled) mountCollectorHere();
         else unmountCollectorHere();
       });
-    } catch { }
+    } catch {}
   }
 
   function mountCollectorHere() {
@@ -1029,17 +1161,17 @@
             _collectorPanel.toast(which === 'paused' ? '队列拥塞，自动暂停翻页' : '队列恢复，继续翻页', 'info', 1800);
             try {
               _collectorPanel.setAutoScrollStatus(_autoScroller.getScrollStatus());
-            } catch { }
+            } catch {}
           },
           onEmpty: () => {
             if (!_collectorPanel) return;
             _collectorPanel.toast('当前页已抓取完成', 'success', 1800);
             try {
               _collectorPanel.setAutoScrollStatus(_autoScroller.getScrollStatus());
-            } catch { }
+            } catch {}
           },
         });
-      } catch { }
+      } catch {}
       // 500ms 轮询翻页状态，更新面板展示
       if (_autoScrollStatusTimer) clearInterval(_autoScrollStatusTimer);
       _autoScrollStatusTimer = setInterval(() => {
@@ -1058,7 +1190,7 @@
             status = _autoScroller.getScrollStatus();
           }
           _collectorPanel.setAutoScrollStatus(status);
-        } catch { }
+        } catch {}
       }, 500);
     }
 
@@ -1090,7 +1222,7 @@
           onlyWithSales = !!next;
         },
         onForceRefresh: () => {
-          // 强制刷新:重置去重集合 + 重新扫描已见 SKU(带 forceRefresh)
+          // 强制刷新:重置去重集合 + 重新提交当前页可见 SKU
           window.__jzAutoCollectResetSeen?.();
           try {
             const cards = getCards();
@@ -1098,21 +1230,7 @@
               const info = extractCardInfo(card);
               const productId = extractProductId(info.url);
               if (!productId) continue;
-              const cached = panelDataCache.get(productId);
-              const panel = card._ohPanel || card.querySelector('.ozon-helper-data-panel');
-              window.__jzCollectAutoIfMatched?.(
-                productId,
-                card,
-                info,
-                cached,
-                panel,
-                'shop-page',
-                sellerSlug,
-                sellerId,
-                {
-                  forceRefresh: true,
-                }
-              );
+              window.__jzSubmitCollectTask?.(productId, card, sellerSlug, sellerId);
             }
           } catch (err) {
             console.warn('[ozon-data-panel] force refresh rescan failed:', err);
@@ -1132,7 +1250,7 @@
       if (cb && cb.checked) {
         try {
           _autoScroller.start();
-        } catch { }
+        } catch {}
       }
     }
 
@@ -1150,7 +1268,7 @@
   // ─── 监听 MAIN world 的 seller-info-main.js 发来的店铺信息 ────────
   // 店铺页 seller-info-main.js 从 __NUXT__ / data-state 提取 slug/name/sellerId +
   // companyInfo(含 country),通过 CustomEvent 推过来。这里:
-  //   1) 缓存 sellerSlug 供 loadPanelData → collectAutoIfMatched 用
+  //   1) 缓存 sellerSlug 供 loadPanelData → __jzSubmitCollectTask 用
   //   2) 调 SW checkStoreClassification 做中国店铺判定,并更新 QX面板店铺检测区块
   //      (window.__qxCollectorPanel 由 Task 21 创建,未渲染时跳过)
   //
@@ -1198,7 +1316,7 @@
       console.log('[ozon-data-panel] slug 为空,跳过');
       return;
     }
-    sellerSlug = slug; // 缓存,供 loadPanelData → collectAutoIfMatched 用
+    sellerSlug = slug; // 缓存,供 loadPanelData → __jzSubmitCollectTask 用
     sellerName = name || ''; // 缓存店铺名称,供 renderSellerTag 显示
     sellerId = detail.sellerId || ''; // 缓存 sellerId,供上报 store-sku 用
     // 店铺切换时清空非店铺商品 SKU 集合(页面刷新时 Set 自然重置,此处防御性处理)
@@ -1371,25 +1489,21 @@
   console.log('[ozon-data-panel] seller info polling started (max', _sellerInfoPollMax, 'attempts)');
 
   // 监听人工标记后的通知(用户在 QX面板手动标记某店铺为中国/非中国)。
-  // 标记为中国后:重置去重集合 + 重新扫描页面已挂面板的 SKU,触发 autoCollect。
+  // 标记为中国后:重置去重集合 + 重新提交当前页可见 SKU。
   window.addEventListener('jz-store-classified', (e) => {
     const { slug, isChinese } = e.detail || {};
     if (isChinese !== true) return;
     if (slug) sellerSlug = slug;
-    // 重置去重集合,让已见 SKU 重新触发 autoCollect
+    // 重置去重集合,让已见 SKU 重新触发提交
     window.__jzAutoCollectResetSeen?.();
-    // 重新扫描页面已挂面板的 card,用 panelDataCache 缓存数据调 collectAutoIfMatched
-    // (避免重新 fetch;cache 未命中的 card 留待 IntersectionObserver 后续触发)
+    // 重新扫描页面已挂面板的 card,用新队列入口提交任务
     try {
       const cards = getCards();
       for (const card of cards) {
         const info = extractCardInfo(card);
         const productId = extractProductId(info.url);
         if (!productId) continue;
-        const cached = panelDataCache.get(productId);
-        if (!cached) continue;
-        const panel = card._ohPanel || card.querySelector('.ozon-helper-data-panel');
-        window.__jzCollectAutoIfMatched?.(productId, card, info, cached, panel, 'shop-page', sellerSlug, sellerId);
+        window.__jzSubmitCollectTask?.(productId, card, sellerSlug, sellerId);
       }
     } catch (err) {
       console.warn('[ozon-data-panel] jz-store-classified rescan failed:', err);

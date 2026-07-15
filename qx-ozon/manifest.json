@@ -17,7 +17,8 @@
     "http://localhost:3000/*",
     "http://store.localhost:3000/*",
     "http://localhost:3001/*",
-    "https://open.er-api.com/*"
+    "https://open.er-api.com/*",
+    "http://localhost:7777/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js"
@@ -32,7 +33,9 @@
         "https://www.ozon.ru/seller/*",
         "https://www.ozon.ru/product/*",
         "https://ozon.ru/seller/*",
-        "https://ozon.ru/product/*"
+        "https://ozon.ru/product/*",
+        "http://localhost:7777/seller/*",
+        "http://localhost:7777/product/*"
       ],
       "js": ["content/seller-info-main.js"],
       "world": "MAIN",
@@ -51,14 +54,21 @@
         "https://ozon.kz/search-by-image*",
         "https://*.ozon.kz/category/*",
         "https://*.ozon.kz/search/*",
-        "https://*.ozon.kz/search-by-image*"
+        "https://*.ozon.kz/search-by-image*",
+        "http://localhost:7777/product/*"
       ],
       "js": ["content/ozon-bff-interceptor.js"],
       "world": "MAIN",
       "run_at": "document_start"
     },
     {
-      "matches": ["https://www.ozon.ru/*", "https://ozon.ru/*", "https://ozon.kz/*", "https://*.ozon.kz/*"],
+      "matches": [
+        "https://www.ozon.ru/*",
+        "https://ozon.ru/*",
+        "https://ozon.kz/*",
+        "https://*.ozon.kz/*",
+        "http://localhost:7777/*"
+      ],
       "js": [
         "content/shared-utils.js",
         "content/jzc-calc.js",
@@ -99,7 +109,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.ozon.ru/*", "https://ozon.kz/*", "https://*.ozon.kz/*"],
+      "matches": ["https://www.ozon.ru/*", "https://ozon.kz/*", "https://*.ozon.kz/*", "http://localhost:7777/*"],
       "exclude_matches": [
         "https://www.ozon.ru/category/*",
         "https://www.ozon.ru/search/*",
@@ -109,7 +119,10 @@
         "https://ozon.kz/search-by-image*",
         "https://*.ozon.kz/category/*",
         "https://*.ozon.kz/search/*",
-        "https://*.ozon.kz/search-by-image*"
+        "https://*.ozon.kz/search-by-image*",
+        "http://localhost:7777/category/*",
+        "http://localhost:7777/search/*",
+        "http://localhost:7777/search-by-image*"
       ],
       "js": [
         "content/shared-utils.js",
@@ -121,7 +134,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://seller.ozon.ru/*"],
+      "matches": ["https://seller.ozon.ru/*", "http://localhost:7777/app/*"],
       "js": ["content/ozon-seller-bridge.js"],
       "run_at": "document_idle"
     },

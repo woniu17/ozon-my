@@ -1,0 +1,26 @@
+{
+  "name": "e2e-auto-collect",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Ozon 自动采集功能端到端测试环境(mock-server + puppeteer runner)",
+  "scripts": {
+    "mock": "node mock-server/server.js",
+    "mock:antibot": "cross-env MOCK_ANTIBOT=1 node mock-server/server.js",
+    "test": "node runner/puppeteer-runner.js all",
+    "test:basic": "node runner/puppeteer-runner.js basic",
+    "test:dedup": "node runner/puppeteer-runner.js dedup",
+    "test:non-chinese": "node runner/puppeteer-runner.js non-chinese",
+    "test:daily-limit": "node runner/puppeteer-runner.js daily-limit",
+    "test:cache-hit": "node runner/puppeteer-runner.js cache-hit",
+    "test:antibot": "node runner/puppeteer-runner.js antibot"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "mongodb": "^7.5.0",
+    "puppeteer": "^23.0.0"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  }
+}

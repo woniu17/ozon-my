@@ -118,11 +118,9 @@ onMounted(() => {
   <div>
     <div class="toolbar">
       <h2>批量上架</h2>
-      <button
-        class="btn btn-ghost"
-        :disabled="state.loading"
-        @click="loadList"
-      >{{ state.loading ? '刷新中...' : '刷新' }}</button>
+      <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
+        {{ state.loading ? '刷新中...' : '刷新' }}
+      </button>
     </div>
 
     <div class="filter-bar">
@@ -192,18 +190,14 @@ onMounted(() => {
     />
 
     <!-- 详情弹窗 -->
-    <AppModal
-      :open="detailOpen"
-      title="批量任务详情"
-      size="lg"
-      @update:open="detailOpen = $event"
-    >
+    <AppModal :open="detailOpen" title="批量任务详情" size="lg" @update:open="detailOpen = $event">
       <div v-if="detailLoading" class="empty">加载中...</div>
       <template v-else-if="detail">
         <div class="batch-detail-head">
           <div><b>任务ID:</b> {{ detail.localTaskId }}</div>
           <div><b>店铺:</b> {{ storeName(detail.storeId) }}</div>
-          <div><b>状态:</b>
+          <div>
+            <b>状态:</b>
             <span class="badge" :class="statusInfo(detail.status).cls">{{ statusInfo(detail.status).label }}</span>
           </div>
           <div><b>总计:</b> {{ detail.totalCount ?? 0 }}</div>
@@ -224,7 +218,7 @@ onMounted(() => {
             <tr v-if="!detail.items || !detail.items.length">
               <td colspan="3" class="muted" style="text-align: center">无明细</td>
             </tr>
-            <tr v-for="(it, idx) in (detail.items || [])" :key="idx">
+            <tr v-for="(it, idx) in detail.items || []" :key="idx">
               <td>{{ it.sourceSku || '—' }}</td>
               <td>
                 <span class="badge" :class="itemStatusInfo(it.status).cls">{{ itemStatusInfo(it.status).label }}</span>

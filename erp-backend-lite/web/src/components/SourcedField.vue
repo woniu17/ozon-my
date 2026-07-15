@@ -14,12 +14,8 @@ const sourceDetail = computed(() => props.field?.sourceDetail || '');
 const isNull = computed(() => value.value == null);
 const isBool = computed(() => typeof value.value === 'boolean');
 const isArray = computed(() => Array.isArray(value.value));
-const isObject = computed(
-  () => !isNull.value && !isArray.value && typeof value.value === 'object'
-);
-const isPlain = computed(
-  () => !isNull.value && !isBool.value && !isArray.value && !isObject.value
-);
+const isObject = computed(() => !isNull.value && !isArray.value && typeof value.value === 'object');
+const isPlain = computed(() => !isNull.value && !isBool.value && !isArray.value && !isObject.value);
 
 const boolText = computed(() => (isBool.value ? (value.value ? '是' : '否') : ''));
 const plainText = computed(() => (isPlain.value ? String(value.value) : ''));
@@ -28,9 +24,9 @@ const sourceClass = computed(() => {
   const map = {
     'seller-portal': 'sf-source-tag--blue',
     'page-json': 'sf-source-tag--purple',
-    'dom': 'sf-source-tag--green',
-    'form': 'sf-source-tag--orange',
-    'legacy': 'sf-source-tag--gray',
+    dom: 'sf-source-tag--green',
+    form: 'sf-source-tag--orange',
+    legacy: 'sf-source-tag--gray',
   };
   return map[source.value] || 'sf-source-tag--gray';
 });
@@ -85,9 +81,19 @@ const sourceClass = computed(() => {
   white-space: nowrap;
   height: fit-content;
 }
-.sf-source-tag--blue { background: #2563eb; }
-.sf-source-tag--purple { background: #8b5cf6; }
-.sf-source-tag--green { background: #16a34a; }
-.sf-source-tag--orange { background: #ea580c; }
-.sf-source-tag--gray { background: #6b7280; }
+.sf-source-tag--blue {
+  background: #2563eb;
+}
+.sf-source-tag--purple {
+  background: #8b5cf6;
+}
+.sf-source-tag--green {
+  background: #16a34a;
+}
+.sf-source-tag--orange {
+  background: #ea580c;
+}
+.sf-source-tag--gray {
+  background: #6b7280;
+}
 </style>

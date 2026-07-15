@@ -113,11 +113,9 @@ onMounted(() => {
   <div>
     <div class="toolbar">
       <h2>操作日志</h2>
-      <button
-        class="btn btn-ghost"
-        :disabled="state.loading"
-        @click="loadList"
-      >{{ state.loading ? '刷新中...' : '刷新' }}</button>
+      <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
+        {{ state.loading ? '刷新中...' : '刷新' }}
+      </button>
     </div>
 
     <div class="filter-bar">

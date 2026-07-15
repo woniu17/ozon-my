@@ -35,7 +35,10 @@ export async function apply(items, message) {
         const titleResp = await client.chat.completions.create({
           model: MODEL,
           messages: [
-            { role: 'system', content: '你是电商文案专家。重写商品标题使其更吸引俄罗斯买家,保持俄文,不超过 200 字符,只输出标题。' },
+            {
+              role: 'system',
+              content: '你是电商文案专家。重写商品标题使其更吸引俄罗斯买家,保持俄文,不超过 200 字符,只输出标题。',
+            },
             { role: 'user', content: item.name },
           ],
           max_tokens: 100,
@@ -53,7 +56,10 @@ export async function apply(items, message) {
         const descResp = await client.chat.completions.create({
           model: MODEL,
           messages: [
-            { role: 'system', content: '你是电商文案专家。优化商品描述,突出卖点,保持俄文,不超过 4096 字符,只输出描述。' },
+            {
+              role: 'system',
+              content: '你是电商文案专家。优化商品描述,突出卖点,保持俄文,不超过 4096 字符,只输出描述。',
+            },
             { role: 'user', content: String(item.scraped_description).slice(0, 2000) },
           ],
           max_tokens: 500,

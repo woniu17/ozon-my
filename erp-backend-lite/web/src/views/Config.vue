@@ -195,11 +195,9 @@ onMounted(() => {
   <div>
     <div class="toolbar">
       <h2>配置中心</h2>
-      <button
-        class="btn btn-ghost"
-        :disabled="state.flagsLoading || state.configLoading"
-        @click="refreshAll"
-      >{{ state.flagsLoading || state.configLoading ? '刷新中...' : '刷新' }}</button>
+      <button class="btn btn-ghost" :disabled="state.flagsLoading || state.configLoading" @click="refreshAll">
+        {{ state.flagsLoading || state.configLoading ? '刷新中...' : '刷新' }}
+      </button>
     </div>
 
     <!-- Feature Flags 区域 -->
@@ -210,9 +208,7 @@ onMounted(() => {
           <div v-if="state.flagsLoading" class="muted" style="padding: 24px; text-align: center; grid-column: 1 / -1">
             加载中...
           </div>
-          <div v-else-if="!state.flags.length" class="empty" style="grid-column: 1 / -1">
-            暂无 feature flags
-          </div>
+          <div v-else-if="!state.flags.length" class="empty" style="grid-column: 1 / -1">暂无 feature flags</div>
           <div v-for="flag in state.flags" :key="flag.key" class="cfg-field">
             <span class="cfg-label">
               <code class="cfg-key">{{ flag.key }}</code>
@@ -233,12 +229,8 @@ onMounted(() => {
 
     <!-- ERP 配置项区域 -->
     <div class="config-form">
-      <div v-if="state.configLoading" class="muted" style="padding: 24px; text-align: center">
-        加载中...
-      </div>
-      <div v-else-if="!configGroups.length" class="empty">
-        暂无配置项
-      </div>
+      <div v-if="state.configLoading" class="muted" style="padding: 24px; text-align: center">加载中...</div>
+      <div v-else-if="!configGroups.length" class="empty">暂无配置项</div>
       <template v-else>
         <div v-for="grp in configGroups" :key="grp.name" class="cfg-group">
           <h3>{{ grp.name }}</h3>
@@ -284,11 +276,9 @@ onMounted(() => {
           </div>
         </div>
         <div class="form-actions" style="padding: 8px 0 0">
-          <button
-            class="btn btn-primary"
-            :disabled="state.savingConfig || !dirty.size"
-            @click="saveConfig"
-          >{{ state.savingConfig ? '保存中...' : '保存配置' }}</button>
+          <button class="btn btn-primary" :disabled="state.savingConfig || !dirty.size" @click="saveConfig">
+            {{ state.savingConfig ? '保存中...' : '保存配置' }}
+          </button>
           <button class="btn btn-ghost" @click="showRaw = true">查看原始 JSON</button>
           <span v-if="dirty.size" class="muted small">{{ dirty.size }} 项已修改</span>
         </div>

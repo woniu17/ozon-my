@@ -39,8 +39,8 @@
       this.isReadyToScroll = opts.isReadyToScroll || (() => true);
       this.readinessPollMs = opts.readinessPollMs ?? 1000;
       this.maxReadinessWaitMs = opts.maxReadinessWaitMs ?? 0;
-      this.onEmpty = opts.onEmpty || (() => { });
-      this.onCongestionPause = opts.onCongestionPause || (() => { });
+      this.onEmpty = opts.onEmpty || (() => {});
+      this.onCongestionPause = opts.onCongestionPause || (() => {});
 
       this._timer = null;
       this._userActive = false; // 用户意图：true=想跑
@@ -195,13 +195,13 @@
         console.log('[QXAutoScroller] → autoPaused=true (翻页已暂停)', stats);
         try {
           this.onCongestionPause('paused');
-        } catch { }
+        } catch {}
       } else if (level === 'low' && this._autoPaused) {
         this._autoPaused = false;
         console.log('[QXAutoScroller] → autoPaused=false (翻页将恢复)', stats);
         try {
           this.onCongestionPause('resumed');
-        } catch { }
+        } catch {}
         this._scheduleNext(this.intervalMs);
       } else {
         console.log('[QXAutoScroller] _onCongestion no-op');

@@ -11,7 +11,10 @@ const router = Router();
 // 单机版:直接返回 PENDING,无跨设备派单
 router.post('/browser-agents/collection-jobs', authMiddleware, async (req, res) => {
   const { skus, storeId } = req.body || {};
-  logger.info({ skusCount: Array.isArray(skus) ? skus.length : 0, storeId }, 'collection-jobs 派单(单机版直接返回 PENDING)');
+  logger.info(
+    { skusCount: Array.isArray(skus) ? skus.length : 0, storeId },
+    'collection-jobs 派单(单机版直接返回 PENDING)'
+  );
   res.json({
     jobId: `local-${Date.now()}`,
     status: 'PENDING',

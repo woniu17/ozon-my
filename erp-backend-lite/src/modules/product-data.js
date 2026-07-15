@@ -41,9 +41,7 @@ router.post('/ozon/product-data/batch', storeGuard, async (req, res, next) => {
         continue;
       }
       // 2. 命中 DB 缓存
-      const row = db
-        .prepare(`SELECT data, fetched_at FROM product_data_cache WHERE sku=?`)
-        .get(String(sku));
+      const row = db.prepare(`SELECT data, fetched_at FROM product_data_cache WHERE sku=?`).get(String(sku));
       if (row) {
         const age = Date.now() - new Date(row.fetched_at).getTime();
         if (age < config.productDataCacheTtlMs) {
@@ -100,9 +98,7 @@ router.get('/ozon/product-data/:sku', storeGuard, async (req, res, next) => {
     if (cached) return res.json({ data: cached });
 
     // 2. DB 缓存
-    const row = db
-      .prepare(`SELECT data, fetched_at FROM product_data_cache WHERE sku=?`)
-      .get(sku);
+    const row = db.prepare(`SELECT data, fetched_at FROM product_data_cache WHERE sku=?`).get(sku);
     if (row) {
       const age = Date.now() - new Date(row.fetched_at).getTime();
       if (age < config.productDataCacheTtlMs) {

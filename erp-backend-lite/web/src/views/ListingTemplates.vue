@@ -92,9 +92,7 @@ function buildConfig() {
     applyAiRewrite: !!c.applyAiRewrite,
     defaultStock: Number(c.defaultStock) || 0,
     salePriceStrategy: { type: 'ratio', value: Number(c.salePriceStrategy?.value) || 1 },
-    minPriceStrategy: editForm.minPriceEnabled
-      ? { type: 'ratio', value: Number(editForm.minPriceValue) || 1 }
-      : null,
+    minPriceStrategy: editForm.minPriceEnabled ? { type: 'ratio', value: Number(editForm.minPriceValue) || 1 } : null,
     oldPriceStrategy: { type: 'ratio', value: Number(c.oldPriceStrategy?.value) || 1 },
   };
 }
@@ -207,23 +205,23 @@ onMounted(load);
           </td>
           <td class="muted">{{ t.updatedAt }}</td>
           <td class="actions">
-            <button
-              v-if="!t.isDefault"
-              class="btn btn-sm btn-ghost"
-              @click="setDefault(t)"
-            >设为默认</button>
+            <button v-if="!t.isDefault" class="btn btn-sm btn-ghost" @click="setDefault(t)">设为默认</button>
             <button
               class="btn btn-sm btn-ghost"
               :disabled="t.isBuiltin"
               :title="t.isBuiltin ? '内置模板不可编辑' : ''"
               @click="openEdit(t)"
-            >编辑</button>
+            >
+              编辑
+            </button>
             <button
               class="btn btn-sm btn-danger"
               :disabled="t.isBuiltin"
               :title="t.isBuiltin ? '内置模板不可删除' : ''"
               @click="remove(t)"
-            >删除</button>
+            >
+              删除
+            </button>
           </td>
         </tr>
       </tbody>

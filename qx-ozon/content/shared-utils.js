@@ -40,110 +40,22 @@ if (!globalThis.__JZ_BRAND__) {
 (function () {
   'use strict';
 
+  // 调试标志:供 puppeteer 确认 shared-utils 已执行(ISOLATED world 不可被 page.evaluate 直接访问)
+  document.documentElement.setAttribute('data-jz-shared-utils-loaded', 'true');
+
+  // ─── IS_TEST_MODE 检测(content script 有 location,直接读 origin) ─────
+  // 测试模式下 Ozon www 与 seller portal 都由本地 mock server (port 7777) 扮演。
+  // 改 flag 后页面刷新即可生效,无需重启 SW。
+  const IS_TEST_MODE = /^http:\/\/localhost:7777$/.test(location.origin);
+  const OZON_WWW = IS_TEST_MODE ? 'http://localhost:7777' : 'https://www.ozon.ru';
+  const OZON_SELLER = IS_TEST_MODE ? 'http://localhost:7777' : 'https://seller.ozon.ru';
+
   const STATE_CACHE = {};
   const KEY_CACHE = {};
-  const _autoCollectSeen = new Set(); // 页面级去重,避免同一 SKU 重复触发 autoCollect
+  const _autoCollectSeen = new Set(); // 页面级去重,避免同一 SKU 重复提交采集任务
   // 正在采集中的 SKU 集合(用于 UI 显示"采集中"状态)
-  // autoCollectOnSkuSeen 发送前 add,collectDone 收到后 delete
+  // __jzSubmitCollectTask 提交前 add,collectDone/taskStatus 收到后 delete
   window.__jzCollectingSkus = window.__jzCollectingSkus || new Set();
-
-  // ── 重载退避:防止扩展重载瞬间 N 标签页 × M SKU 同时涌入 SW ────────
-  // 触发条件:5 秒内调用 autoCollectOnSkuSeen 超过 20 次(典型重载场景)。
-  // 退避动作:后续请求延迟到 SW 能消化的节奏(每 500ms 发一个),而非全部 fire-and-forget。
-  // 退避自动恢复:5 秒滑动窗口内请求数降到 5 以下时恢复 fire-and-forget。
-  const _AUTO_COLLECT_BURST_WINDOW_MS = 5000;
-  const _AUTO_COLLECT_BURST_THRESHOLD = 20;
-  const _AUTO_COLLECT_BURST_INTERVAL_MS = 500;
-  const _autoCollectBurstTs = []; // 时间戳数组
-  let _autoCollectBurstActive = false;
-  let _autoCollectBurstTimer = null;
-  const _autoCollectBurstQueue = []; // [{ args, options }]
-
-  const _autoCollectFlushBurstQueue = () => {
-    if (_autoCollectBurstTimer) {
-      clearInterval(_autoCollectBurstTimer);
-      _autoCollectBurstTimer = null;
-    }
-    if (_autoCollectBurstQueue.length === 0) {
-      _autoCollectBurstActive = false;
-      return;
-    }
-    _autoCollectBurstTimer = setInterval(() => {
-      if (_autoCollectBurstQueue.length === 0) {
-        clearInterval(_autoCollectBurstTimer);
-        _autoCollectBurstTimer = null;
-        _autoCollectBurstActive = false;
-        return;
-      }
-      const { sku, source, sellerSlug, options } = _autoCollectBurstQueue.shift();
-      _autoCollectSendNow(sku, source, sellerSlug, options);
-    }, _AUTO_COLLECT_BURST_INTERVAL_MS);
-  };
-
-  // 实际发送逻辑(从 autoCollectOnSkuSeen 抽出,供 burst queue 调用)
-  const _autoCollectSendNow = (sku, source, sellerSlug, options = {}) => {
-    const skuStr = String(sku);
-    // 已在入队前 add 到 _autoCollectSeen,这里不再重复检查
-    window.__jzCollectingSkus.add(skuStr);
-    console.log('[autoCollect] 发送采集请求:', skuStr, 'source=', source, 'seller=', sellerSlug);
-    sendMessage('autoCollect', {
-      sku: skuStr,
-      source,
-      sellerSlug,
-      sellerId: options.sellerId || '',
-      depth: 'Full',
-      forceRefresh: options.forceRefresh || false,
-    })
-      .then((result) => {
-        window.__jzCollectingSkus.delete(skuStr);
-        if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
-        const status = result?.status;
-        const results = Array.isArray(result?.results) ? result.results : [];
-        const hitSummary = results.map((r) => `${r.type}:${r.hit ? '✓' : '✗'}`).join(' ');
-        console.log(
-          '[autoCollect] 采集完成:',
-          skuStr,
-          'status=',
-          status,
-          'dur=',
-          result?.totalDuration + 'ms',
-          '|',
-          hitSummary
-        );
-        if (status !== 'success') {
-          _autoCollectSeen.delete(skuStr);
-          console.log('[autoCollect] 移除去重,允许补全:', skuStr, 'status=', status);
-        }
-      })
-      .catch((e) => {
-        window.__jzCollectingSkus.delete(skuStr);
-        if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
-        _autoCollectSeen.delete(skuStr);
-        console.warn('[autoCollect] 发送失败:', skuStr, e?.message || e);
-      });
-  };
-
-  // ─── autoCollectRunning:自动采集总开关 ──────────────────────────
-  // 默认开启;由 popup 通过 chrome.storage.local['jz-auto-collect-config'] 控制。
-  let autoCollectRunning = true;
-
-  // content script 启动时加载初始值
-  chrome.storage.local.get('jz-auto-collect-config', (result) => {
-    const cfg = result['jz-auto-collect-config'];
-    if (cfg && typeof cfg.autoCollectRunning === 'boolean') {
-      autoCollectRunning = cfg.autoCollectRunning;
-    }
-  });
-
-  // 监听 storage 变化,实时同步开关状态
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes['jz-auto-collect-config']) {
-      const cfg = changes['jz-auto-collect-config'].newValue;
-      if (cfg && typeof cfg.autoCollectRunning === 'boolean') {
-        autoCollectRunning = cfg.autoCollectRunning;
-      }
-    }
-  });
 
   // ─── Machine fingerprint v3 (2026-05-27 起,跟 popup.js / frontend
   //     device-fingerprint.ts 严格对齐) ─────────────────────────────
@@ -1082,9 +994,7 @@ if (!globalThis.__JZ_BRAND__) {
     // Default 60s timeout; long-running actions get more time
     // uploadFollowSellVideo:视频转存(download 跨源 .mp4 + media-storage 上传)executeScript
     // 内部可达 90s+,默认 60s 会让 content 侧先超时拿不到结果 → 放宽。
-    // autoCollect:8 类缓存编排(Step1-6),含 Gate 等待 + 多次真调,常超 60s;
-    //   若 60s 超时,.catch() 会移除去重 → 定时重扫立即重新触发 → 形成无限"采集中"循环。
-    const LONG_ACTIONS = ['followSell', 'importBySku', 'uploadFollowSellVideo', 'autoCollect'];
+    const LONG_ACTIONS = ['followSell', 'importBySku', 'uploadFollowSellVideo'];
     const timeoutMs = LONG_ACTIONS.includes(action) ? 600000 : 60000;
     console.log(`[sendMessage] sending action=${action}`);
     return new Promise((resolve, reject) => {
@@ -1542,8 +1452,8 @@ if (!globalThis.__JZ_BRAND__) {
         </div>`;
       let bodyHtml = '';
       for (const g of groups) {
-        const items = byGroup
-          .get(g)
+        const fields = byGroup.get(g);
+        const items = fields
           .map((f) => {
             const checked = map[f.field] === false ? '' : 'checked';
             return `<label class="jz-fieldset-item">
@@ -1552,8 +1462,15 @@ if (!globalThis.__JZ_BRAND__) {
           </label>`;
           })
           .join('');
+        // 全选状态:该组所有字段都 checked 时全选框才 checked
+        const allChecked = fields.every((f) => map[f.field] !== false);
         bodyHtml += `<div class="jz-fieldset-group">
-          <div class="jz-fieldset-group-title">${_ohEsc(g)}</div>
+          <div class="jz-fieldset-group-title">
+            <label class="jz-fieldset-selectall">
+              <input type="checkbox" data-jz-selectall="${_ohEsc(g)}" ${allChecked ? 'checked' : ''} />
+              <span>${_ohEsc(g)}</span>
+            </label>
+          </div>
           <div class="jz-fieldset-grid">${items}</div>
         </div>`;
       }
@@ -1618,6 +1535,30 @@ if (!globalThis.__JZ_BRAND__) {
           e.preventDefault();
           e.stopPropagation();
           close();
+        }
+      });
+
+      // 全选复选框联动:勾选/取消全选 → 同步该组所有字段;
+      // 单个字段变化 → 反查该组全选状态并更新。
+      modal.addEventListener('change', (e) => {
+        const selectAllCb = e.target.closest('input[data-jz-selectall]');
+        if (selectAllCb) {
+          const fieldset = selectAllCb.closest('.jz-fieldset-group');
+          if (!fieldset) return;
+          fieldset.querySelectorAll('input[data-jz-field]').forEach((cb) => {
+            cb.checked = selectAllCb.checked;
+          });
+          return;
+        }
+        const fieldCb = e.target.closest('input[data-jz-field]');
+        if (fieldCb) {
+          const fieldset = fieldCb.closest('.jz-fieldset-group');
+          if (!fieldset) return;
+          const allCbs = fieldset.querySelectorAll('input[data-jz-field]');
+          const selectAll = fieldset.querySelector('input[data-jz-selectall]');
+          if (selectAll) {
+            selectAll.checked = Array.from(allCbs).every((cb) => cb.checked);
+          }
         }
       });
     });
@@ -2051,10 +1992,10 @@ if (!globalThis.__JZ_BRAND__) {
       // 走 SW 开 tab(content script 无 chrome.tabs;SW 能复用已有 tab);失败兜底 window.open。
       try {
         window.sendMessage('openSellerPortal', {}).catch(() => {
-          window.open('https://seller.ozon.ru/app/products', '_blank');
+          window.open(OZON_SELLER + '/app/products', '_blank');
         });
       } catch {
-        window.open('https://seller.ozon.ru/app/products', '_blank');
+        window.open(OZON_SELLER + '/app/products', '_blank');
       }
     });
     hint.append(text, btn);
@@ -2682,11 +2623,7 @@ if (!globalThis.__JZ_BRAND__) {
   }
 
   function _fsRenderSellerRow(seller, flags = {}) {
-    const sellerUrl = seller.link
-      ? seller.link.startsWith('http')
-        ? seller.link
-        : 'https://www.ozon.ru' + seller.link
-      : '';
+    const sellerUrl = seller.link ? (seller.link.startsWith('http') ? seller.link : OZON_WWW + seller.link) : '';
     const avatarHtml = seller.avatar
       ? `<img class="oh-seller-avatar" src="${_ohEsc(seller.avatar)}" alt="" loading="lazy" />`
       : `<span class="oh-seller-avatar oh-seller-avatar-fallback" style="background:${_fsColor(seller.name)}">${_ohEsc(_fsInitial(seller.name))}</span>`;
@@ -2804,7 +2741,7 @@ if (!globalThis.__JZ_BRAND__) {
     _fsCloseExistingModal();
 
     const totalCount = Number(product.followSellCount) || 0;
-    const ozonModalUrl = sku ? `https://www.ozon.ru/product/${sku}/?prefer_sellers=true` : null;
+    const ozonModalUrl = sku ? `${OZON_WWW}/product/${sku}/?prefer_sellers=true` : null;
     let activeSellerMode = 'price';
     let loadedSellers = [];
     let loadedTotalCount = totalCount;
@@ -3908,108 +3845,115 @@ if (!globalThis.__JZ_BRAND__) {
     }
   };
 
-  // ─── autoCollect 统一入口(Task 12)─────────────────────────────
+  // ─── 新采集队列提交入口(Phase 3)────────────────────────────────
   /**
-   * 自动采集统一入口:页面级去重 + fire-and-forget 发送 autoCollect 消息给 SW
-   * @param {string|number} sku - 商品 SKU
-   * @param {string} source - 来源:'shop-page' | 'pdp'
-   * @param {string} sellerSlug - 卖家 slug(从店铺页/详情页提取)
-   * @param {object} [options] - 可选参数
-   * @param {boolean} [options.forceRefresh=false] - 强制刷新:跳过页面级去重,向 SW 发 forceRefresh:true
+   * 从商品卡提取 submitTask 需要的轻量 DOM 信息。
+   * 优先复用 ozon-data-panel.js 暴露的 __jzExtractCardInfo,不可用则退化最小实现。
    */
-  function autoCollectOnSkuSeen(sku, source, sellerSlug, options = {}) {
-    const skuStr = String(sku);
-    if (!options.forceRefresh && _autoCollectSeen.has(skuStr)) {
-      console.log('[autoCollect] 去重跳过:', skuStr, 'source=', source);
-      return;
-    }
-    _autoCollectSeen.add(skuStr);
-
-    // ── 重载退避:5 秒窗口内请求数超过阈值 → 切换到错峰发送 ──────
-    // 防止扩展重载时 N 标签页 × M SKU 同时涌入 SW 导致 SW 消息队列爆炸。
-    const now = Date.now();
-    // 清理过期时间戳(5 秒外)
-    while (_autoCollectBurstTs.length > 0 && now - _autoCollectBurstTs[0] > _AUTO_COLLECT_BURST_WINDOW_MS) {
-      _autoCollectBurstTs.shift();
-    }
-    _autoCollectBurstTs.push(now);
-
-    if (!_autoCollectBurstActive && _autoCollectBurstTs.length >= _AUTO_COLLECT_BURST_THRESHOLD) {
-      _autoCollectBurstActive = true;
-      console.warn(
-        '[autoCollect] 检测到请求突发(',
-        _autoCollectBurstTs.length,
-        '次/',
-        _AUTO_COLLECT_BURST_WINDOW_MS,
-        'ms),切换到错峰发送模式(每',
-        _AUTO_COLLECT_BURST_INTERVAL_MS,
-        'ms 一个)'
-      );
+  function _extractDomInfoForTask(card) {
+    if (window.__jzExtractCardInfo) {
+      const info = window.__jzExtractCardInfo(card);
+      return {
+        title: info.name || '',
+        price: info.price != null ? Number(info.price) : null,
+        imageUrl: info.image || '',
+        ratingCount: info.ratingCount ?? null,
+      };
     }
 
-    if (_autoCollectBurstActive) {
-      // 入队等待错峰发送(不立即 fire-and-forget)
-      _autoCollectBurstQueue.push({ sku: skuStr, source, sellerSlug, options });
-      _autoCollectFlushBurstQueue();
-      return;
-    }
+    const link = card?.querySelector('a[href*="/product/"]');
+    const img = card?.querySelector('img');
+    const priceNode =
+      card?.querySelector('[data-widget="searchResultsPrice"]') || card?.querySelector('[data-widget="webPrice"]');
+    const priceText = priceNode?.textContent || '';
 
-    // 正常模式:直接 fire-and-forget
-    _autoCollectSendNow(skuStr, source, sellerSlug, options);
-  }
-  window.__jzAutoCollectOnSkuSeen = autoCollectOnSkuSeen;
-
-  /**
-   * 筛选检查:先检查 onlyWithSales,再检查 smartFilterState.enabled && smartMatches。
-   * @param {object} data - marketStats 数据(已过 jzExtractPanelFilterData 归一化)
-   * @param {object} info - 商品信息
-   * @param {object} panel - 面板实例(含 onlyWithSales / smartFilterState)
-   * @returns {boolean} - true 表示通过筛选
-   */
-  function passCollectorFilters(data, info, panel) {
-    if (panel?.onlyWithSales) {
-      const soldCount = Number(data?.soldCount) || 0;
-      if (soldCount <= 0) return false;
-    }
-    if (panel?.smartFilterState?.enabled) {
-      if (window.QXSmartFilter && !window.QXSmartFilter.smartMatches(data, info, panel.smartFilterState)) {
-        return false;
+    const ratingEl = card?.querySelector('[data-widget="searchResultsRating"]');
+    let ratingCount = null;
+    if (ratingEl) {
+      const text = (ratingEl.textContent || '').trim();
+      const parts = text.split(/[·•\s]+/).filter(Boolean);
+      if (parts.length >= 2) {
+        const raw = parts[parts.length - 1].replace(/\s/g, '').replace(/,/g, '.');
+        const n = Number(raw);
+        if (Number.isInteger(n) && n >= 0) ratingCount = n;
       }
     }
-    return true;
+
+    return {
+      title: (link?.getAttribute('aria-label') || img?.getAttribute('alt') || link?.textContent?.trim() || '').slice(
+        0,
+        200
+      ),
+      price: window.normalizePrice ? window.normalizePrice(priceText) : null,
+      imageUrl: img?.getAttribute('src') || img?.getAttribute('data-src') || '',
+      ratingCount,
+    };
   }
 
   /**
-   * 筛选入口:检查 autoCollectRunning → 提取筛选数据 → passCollectorFilters →
-   * 通过则调 autoCollectOnSkuSeen(fire-and-forget 发 autoCollect 消息)。
-   * @param {string|number} productId - 商品 ID
-   * @param {object} card - 商品卡数据(保留以对齐旧 collectSaleIfMatched 签名)
-   * @param {object} info - 商品信息
-   * @param {object} data - marketStats 数据(含 soldCount 等)
-   * @param {object} panel - 面板实例(含 onlyWithSales / smartFilterState)
-   * @param {string} source - 来源:'shop-page' | 'pdp'
-   * @param {string} sellerSlug - 卖家 slug
+   * 提交采集任务到 SW 队列。
+   * - 全站可用(店铺页/搜索页/详情页等),非店铺页无 sellerSlug 时自动跳过中国卖家筛选;
+   * - 开启 onlyChineseStores 时先 checkStoreClass,非中国店铺永久跳过,未分类/SW 故障仅本次跳过;
+   * - 页面级 _autoCollectSeen 去重,最终去权由 SW 队列保证。
+   *
+   * @param {string|number} sku
+   * @param {HTMLElement} card
+   * @param {string} sellerSlug
+   * @param {string} sellerId
    */
-  async function collectAutoIfMatched(productId, card, info, data, panel, source, sellerSlug, sellerId, options = {}) {
-    const sku = String(productId);
-    // forceRefresh 时跳过 autoCollectRunning + 筛选检查,直接发 autoCollect
-    if (!autoCollectRunning && !options.forceRefresh) {
-      console.log('[autoCollect] 跳过(未开启):', sku, 'source=', source);
+  async function __jzSubmitCollectTask(sku, card, sellerSlug, sellerId) {
+    const skuStr = String(sku);
+    if (_autoCollectSeen.has(skuStr)) {
       return;
     }
-    // 提取筛选数据(参考旧 collectSaleIfMatched):jzExtractPanelFilterData 会从
-    // panel DOM + info + baseData 归一化 soldCount/price/gmvSum 等字段。
-    const sourceData = window.jzExtractPanelFilterData
-      ? window.jzExtractPanelFilterData(panel, info, data || {})
-      : data || {};
-    if (!options.forceRefresh && !passCollectorFilters(sourceData, info, panel)) {
-      console.log('[autoCollect] 跳过(筛选未通过):', sku, 'source=', source, 'soldCount=', sourceData?.soldCount);
-      return;
+
+    let config = {};
+    try {
+      const r = await chrome.storage.local.get('jz-auto-collect-config');
+      config = r['jz-auto-collect-config'] || {};
+    } catch {
+      /* 忽略,按默认配置走 */
     }
-    console.log('[autoCollect] 通过筛选,触发采集:', sku, 'source=', source);
-    autoCollectOnSkuSeen(sku, source, sellerSlug, { ...options, sellerId });
+
+    // 中国店铺筛选:仅在店铺页(sellerSlug 非空)且开启 onlyChineseStores 时执行。
+    // - isChinese === false:确实非中国,永久跳过(add 到 seen)
+    // - isChinese === null/undefined(未分类):本次跳过但不永久标记,下次可重试
+    // - checkStoreClass 异常(SW 短暂故障):本次跳过但不永久标记,下次可重试
+    if (config.onlyChineseStores && sellerSlug) {
+      try {
+        const result = await window.sendMessage('checkStoreClass', { slug: sellerSlug, sellerId: sellerId || '' });
+        if (result?.isChinese === false) {
+          console.log('[submitTask] 跳过非中国店铺:', sellerSlug, result);
+          if (_autoCollectSeen.size > 2000) _autoCollectSeen.clear();
+          _autoCollectSeen.add(skuStr);
+          return;
+        }
+        if (result?.isChinese !== true) {
+          console.log('[submitTask] 店铺未分类,本次跳过:', sellerSlug, result);
+          return;
+        }
+      } catch (e) {
+        console.warn('[submitTask] checkStoreClass 失败,本次跳过:', skuStr, e);
+        return;
+      }
+    }
+
+    const domInfo = _extractDomInfoForTask(card);
+    try {
+      await window.sendMessage('submitTask', {
+        sku: skuStr,
+        sellerSlug: sellerSlug || '',
+        sellerId: sellerId || '',
+        domInfo,
+      });
+      if (_autoCollectSeen.size > 2000) _autoCollectSeen.clear();
+      _autoCollectSeen.add(skuStr);
+      console.log('[submitTask] 已提交:', skuStr);
+    } catch (e) {
+      console.warn('[submitTask] 提交失败:', skuStr, e);
+    }
   }
-  window.__jzCollectAutoIfMatched = collectAutoIfMatched;
+  window.__jzSubmitCollectTask = __jzSubmitCollectTask;
 
   /**
    * 清空去重集合(供面板/popup「强制刷新当前页」调用)
@@ -4019,9 +3963,27 @@ if (!globalThis.__JZ_BRAND__) {
   };
 
   // 监听 SW 发来的 __jzAutoCollectResetSeen 消息,清空去重集合
+  // 同时处理 collectDone / taskStatus 广播,同步"采集中"集合与徽章。
   chrome.runtime.onMessage?.addListener((message) => {
-    if (message === '__jzAutoCollectResetSeen' || (message && message.type === '__jzAutoCollectResetSeen')) {
+    if (!message) return;
+    if (message === '__jzAutoCollectResetSeen' || message.type === '__jzAutoCollectResetSeen') {
       _autoCollectSeen.clear();
+      return;
+    }
+    if (message.type === 'collectDone' && message.sku) {
+      const skuStr = String(message.sku);
+      window.__jzCollectingSkus.delete(skuStr);
+      if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
+      return;
+    }
+    if (message.type === 'taskStatus' && message.sku) {
+      const skuStr = String(message.sku);
+      if (message.status === 'running' || message.status === 'pending') {
+        window.__jzCollectingSkus.add(skuStr);
+      } else {
+        window.__jzCollectingSkus.delete(skuStr);
+      }
+      if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
     }
   });
 })();

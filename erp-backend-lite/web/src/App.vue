@@ -9,7 +9,7 @@ const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
-// 9 个 Tab:与后端原 admin.html 保持一致
+// 导航 Tab 列表
 const tabs = [
   { key: '/admin', label: '首页统计' },
   { key: '/stores', label: '店铺管理' },
@@ -22,6 +22,7 @@ const tabs = [
   { key: '/listing-templates', label: '上架模板' },
   { key: '/cache', label: '缓存管理' },
   { key: '/collect-logs', label: '采集日志' },
+  { key: '/collect-queue', label: '采集队列' },
 ];
 
 // 当前激活的 Tab(用 route.path 匹配)

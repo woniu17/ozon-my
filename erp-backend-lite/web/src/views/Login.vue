@@ -38,13 +38,7 @@ const onSubmit = async () => {
     <form class="form" @submit.prevent="onSubmit">
       <label>
         <span>手机号</span>
-        <input
-          type="text"
-          v-model.trim="form.phoneNumber"
-          placeholder="13800138000"
-          autocomplete="username"
-          required
-        />
+        <input type="text" v-model.trim="form.phoneNumber" placeholder="13800138000" autocomplete="username" required />
       </label>
       <label>
         <span>密码</span>

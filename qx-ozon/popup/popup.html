@@ -511,8 +511,8 @@
                 <span class="ac-warning">⚠ 熔断中</span>
                 <span id="ac-paused-countdown"></span>
               </div>
-              <!-- 限速配置(可折叠):买家页间隔/卖家后台间隔/SKU 间隔/每日上限。
-                   字段对应 jz-auto-collect-config 中 buyerPageMinInterval 等。 -->
+              <!-- 限速配置(可折叠):队列间隔(秒)/每日上限。
+                   字段对应 jz-auto-collect-config 中 consumeRateSec/perDayLimit。 -->
               <div class="ac-ratecfg" id="ac-ratecfg">
                 <button class="ac-ratecfg-toggle" id="ac-ratecfg-toggle" type="button">
                   <span>限速配置</span>
@@ -532,19 +532,9 @@
                 </button>
                 <div class="ac-ratecfg-body" id="ac-ratecfg-body" style="display: none">
                   <label class="ac-ratecfg-row">
-                    <span class="ac-ratecfg-label">买家页间隔</span>
-                    <input type="number" id="ac-rate-buyer" min="1000" max="60000" step="500" data-unit="ms" />
-                    <span class="ac-ratecfg-unit">ms</span>
-                  </label>
-                  <label class="ac-ratecfg-row">
-                    <span class="ac-ratecfg-label">卖家后台间隔</span>
-                    <input type="number" id="ac-rate-seller" min="100" max="10000" step="100" data-unit="ms" />
-                    <span class="ac-ratecfg-unit">ms</span>
-                  </label>
-                  <label class="ac-ratecfg-row">
-                    <span class="ac-ratecfg-label">SKU 间隔</span>
-                    <input type="number" id="ac-rate-sku" min="2000" max="120000" step="1000" data-unit="ms" />
-                    <span class="ac-ratecfg-unit">ms</span>
+                    <span class="ac-ratecfg-label">队列间隔</span>
+                    <input type="number" id="ac-rate-sku" min="5" max="120" step="1" data-unit="s" />
+                    <span class="ac-ratecfg-unit">s</span>
                   </label>
                   <label class="ac-ratecfg-row">
                     <span class="ac-ratecfg-label">每日上限</span>

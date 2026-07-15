@@ -4,8 +4,8 @@
   "private": true,
   "description": "MY - Chrome extension",
   "scripts": {
-    "format": "prettier --write \"0.13.31.1/**/*.{js,css,html,json}\"",
-    "format:check": "prettier --check \"0.13.31.1/**/*.{js,css,html,json}\""
+    "format": "prettier --write \"qx-ozon/**/*.{js,css,html,json}\" \"erp-backend-lite/src/**/*.{js,css,html,json}\" \"erp-backend-lite/web/src/**/*.{js,css,html,json,vue}\" \"docs/**/*.md\"",
+    "format:check": "prettier --check \"qx-ozon/**/*.{js,css,html,json}\" \"erp-backend-lite/src/**/*.{js,css,html,json}\" \"erp-backend-lite/web/src/**/*.{js,css,html,json,vue}\" \"docs/**/*.md\""
   },
   "devDependencies": {
     "prettier": "^3.3.3"
