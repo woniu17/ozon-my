@@ -3796,8 +3796,9 @@ try {
         await _saveAutoCollectConfig({ todayDate: today, todayCount: 0 });
       }
 
-      // 检查 autoCollectRunning
-      if (!config.autoCollectRunning) {
+      // 检查 autoCollectRunning(source='manual' 时绕过:深度采集管理页独立运行,
+      // 不受店铺页自动采集开关影响;daily-limit/paused/熔断仍生效)
+      if (source !== 'manual' && !config.autoCollectRunning) {
         console.log('[SW autoCollect] Gate0 跳过(not-running):', sku);
         _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'not-running');
         return { status: 'skipped', reason: 'not-running' };
@@ -4217,6 +4218,10 @@ try {
   let _opsPollTimer = null;
   const _completedTodaySkus = new Set();
 
+  // 深度采集管理页 tab 集合:广播 collectDone/queuePaused/queueResumed 时同时发给这些 tab,
+  // 让页面能实时收到状态更新(不再只依赖 5s 轮询)。
+  const _collectManagerTabIds = new Set();
+
   const _withQueueLock = (fn) => {
     const prev = _queueWriteLock;
     let release;
@@ -4453,6 +4458,24 @@ try {
     }
   };
 
+  // 向所有已注册的深度采集管理页 tab 发送消息(供 collectDone/queuePaused/queueResumed 复用)。
+  // MV3 SW 生命周期不可控,必须 await Promise.allSettled 确保 sendMessage 完成。
+  const _broadcastToCollectManagers = async (payload) => {
+    if (_collectManagerTabIds.size === 0) return;
+    const sends = [];
+    for (const tabId of _collectManagerTabIds) {
+      sends.push(
+        chrome.tabs.sendMessage(tabId, payload).catch((e) => {
+          // tab 已关闭/不存在,从集合中移除
+          if (e?.message?.includes('Could not establish connection') || e?.message?.includes('No tab')) {
+            _collectManagerTabIds.delete(tabId);
+          }
+        })
+      );
+    }
+    await Promise.allSettled(sends);
+  };
+
   const _broadcastCollectDoneV2 = async (sku, sellerSlug, status, data, collectedAt, duration, steps, error) => {
     try {
       const tabs = await chrome.tabs.query({
@@ -4475,6 +4498,8 @@ try {
         if (!t.id) continue;
         chrome.tabs.sendMessage(t.id, payload).catch(() => {});
       }
+      // 同步发给深度采集管理页(让页面实时更新单 SKU 状态)
+      await _broadcastToCollectManagers(payload);
     } catch (e) {
       /* fire-and-forget */
     }
@@ -4500,6 +4525,9 @@ try {
           })
         );
       await Promise.allSettled(sends);
+      // 不发给 collect-manager:该广播是店铺页 content script 的 panel 死锁兜底,
+      // collect-manager 无 AutoScroller 不会死锁,且批量提交时 N 次广播会风暴。
+      // collect-manager 通过 5s 轮询 getCollectManagerState 获取暂停状态即可。
     } catch (e) {
       console.warn('[broadcastQueuePaused] error:', e?.message || e);
     }
@@ -4517,6 +4545,7 @@ try {
       const payload = { type: 'queueResumed' };
       const sends = tabs.filter((t) => t.id).map((t) => chrome.tabs.sendMessage(t.id, payload).catch(() => {}));
       await Promise.allSettled(sends);
+      // 不发给 collect-manager(同 _broadcastQueuePaused 理由)
     } catch {
       /* fire-and-forget */
     }
@@ -4739,7 +4768,9 @@ try {
               .map((a) => {
                 const key = String(a.attribute_id || a.key || '');
                 if (!key) return null;
-                const vals = Array.isArray(a.values) ? a.values.filter((v) => v && v.value != null && v.value !== '') : [];
+                const vals = Array.isArray(a.values)
+                  ? a.values.filter((v) => v && v.value != null && v.value !== '')
+                  : [];
                 if (vals.length === 0) return null;
                 if (vals.length > 1) return { key, collection: vals.map((v) => String(v.value)) };
                 return { key, value: String(vals[0].value) };
@@ -4981,7 +5012,7 @@ try {
     try {
       const config = await _loadAutoCollectConfig();
       const depth = task.depth || config.depth || 'Full';
-      result = await _doAutoCollect(task.sku, 'shop-page', task.sellerSlug, depth, false, task.sellerId);
+      result = await _doAutoCollect(task.sku, task.source || 'shop-page', task.sellerSlug, depth, false, task.sellerId);
       const duration = Date.now() - startTime;
       steps = _buildSteps(result?.results);
 
@@ -5053,15 +5084,28 @@ try {
         return;
       }
       if (meta.consumePaused) {
-        console.log('[Queue] paused, skip');
-        // 队列已暂停(可能是 daily-limit/not-running/paused):
-        // 广播让新入队任务的 panel 也设 ready(之前的广播可能先于 panel 创建到达)
-        await _broadcastQueuePaused('paused');
-        return;
+        // consumePaused 可能是店铺页关了自动采集触发的,但 manual 任务应继续消费。
+        // peek 下一个待消费任务,如果是 manual 则重置 consumePaused 恢复消费。
+        const peekTask = await _getNextPending();
+        if (peekTask?.source === 'manual') {
+          console.log('[Queue] consumePaused but next is manual task, resume');
+          await _saveQueueMeta({ consumePaused: false });
+          meta = await _loadQueueMeta();
+        } else {
+          console.log('[Queue] paused, skip');
+          // 队列已暂停(可能是 daily-limit/not-running/paused):
+          // 广播让新入队任务的 panel 也设 ready(之前的广播可能先于 panel 创建到达)
+          await _broadcastQueuePaused('paused');
+          return;
+        }
       }
 
       const config = await _loadAutoCollectConfig();
-      if (!config.autoCollectRunning || (config.paused && Date.now() < config.pausedUntil)) {
+      // peek 下一个待消费任务,manual 任务绕过 autoCollectRunning 检查
+      // (深度采集管理页独立运行,不受店铺页自动采集开关影响)
+      const nextTask = await _getNextPending();
+      const isNextManual = nextTask?.source === 'manual';
+      if (!isNextManual && (!config.autoCollectRunning || (config.paused && Date.now() < config.pausedUntil))) {
         console.log('[Queue] autoCollect config paused/not-running, pause queue');
         await _saveQueueMeta({ consumePaused: true });
         await _broadcastQueuePaused(config.paused ? 'paused' : 'not-running');
@@ -5074,7 +5118,7 @@ try {
         return;
       }
 
-      const task = await _getNextPending();
+      const task = nextTask;
       if (!task) {
         console.log('[Queue] no pending task, stop loop');
         return;
@@ -5344,8 +5388,9 @@ try {
     return { allHit, results };
   };
 
-  const _handleSubmitTask = async ({ sku, sellerSlug, sellerId, domInfo }) => {
+  const _handleSubmitTask = async ({ sku, sellerSlug, sellerId, domInfo, source }) => {
     if (!sku) return { ok: false, error: 'sku required' };
+    const taskSource = source === 'manual' ? 'manual' : 'shop-page';
     const exists = await _isTaskQueuedOrCompletedToday(sku);
     if (exists) return { ok: true, data: { alreadyQueued: true } };
 
@@ -5369,6 +5414,7 @@ try {
       sellerSlug: sellerSlug || '',
       sellerId: sellerId || '',
       domInfo: domInfo || null,
+      source: taskSource,
       status: 'pending',
       attempts: 0,
       maxAttempts: 3,
@@ -5388,11 +5434,13 @@ try {
     // 或 _consumeOne 设置 consumePaused 的时机晚于此处检查。
     // 直接检查暂停条件(daily-limit/not-running/paused/熔断),如果满足则广播 queuePaused,
     // 让新入队任务的 panel 设 ready 避免 AutoScroller 死锁。
+    // 注意:source='manual' 时绕过 autoCollectRunning 检查(深度采集管理页独立运行),
+    // 但仍受 daily-limit/paused/熔断限制(避免超额和反爬风险)。
     const _meta = await _loadQueueMeta();
     const _cfg = await _loadAutoCollectConfig();
     const _shouldPause =
       _meta.consumePaused ||
-      !_cfg.autoCollectRunning ||
+      (taskSource !== 'manual' && !_cfg.autoCollectRunning) ||
       (_cfg.paused && Date.now() < _cfg.pausedUntil) ||
       _meta.todayCount >= _cfg.perDayLimit ||
       Date.now() < _meta.circuitBreakerUntil; // 熔断期也需广播,否则 panel 卡 loading
@@ -7102,8 +7150,9 @@ try {
         }
         case 'submitTask': {
           // Phase 1+2:前端提交 SKU 到采集队列,立即返回,SW 按 consumeRateSec 串行消费。
-          const { sku, sellerSlug, sellerId, domInfo } = message;
-          return _handleSubmitTask({ sku, sellerSlug, sellerId, domInfo });
+          // source: 'shop-page'(店铺页自动采集,默认) | 'manual'(深度采集管理页手动触发)
+          const { sku, sellerSlug, sellerId, domInfo, source } = message;
+          return _handleSubmitTask({ sku, sellerSlug, sellerId, domInfo, source });
         }
         case 'autoCollectGetConfig': {
           // Task 22:面板读取 autoCollect 配置(白名单字段)。
@@ -7360,27 +7409,26 @@ try {
           const qSku = message.sku;
           if (!qSku) return { ok: true, data: null };
           try {
-            const [card, detail, composer, entrypoint, search, bundle, marketStats, followSell] =
-              await Promise.all([
-                _cardCacheGet(qSku).catch(() => null),
-                _detailCacheGet(qSku).catch(() => null),
-                _composerCacheGet(qSku).catch(() => null),
-                _entrypointCacheGet(qSku).catch(() => null),
-                (async () => {
-                  const l1 = await _idbGet(_IDB_STORE_SEARCH, qSku).catch(() => null);
-                  if (l1?.data) return l1.data;
-                  const l2 = await _erpCacheGet('search', qSku).catch(() => null);
-                  return l2?.data || null;
-                })().catch(() => null),
-                (async () => {
-                  const l1 = await _idbGet(_IDB_STORE_BUNDLE, qSku).catch(() => null);
-                  if (l1?.data) return l1.data;
-                  const l2 = await _erpCacheGet('bundle', qSku).catch(() => null);
-                  return l2?.data || null;
-                })().catch(() => null),
-                _marketStatsCacheGet(qSku).catch(() => null),
-                _followSellCacheGet(qSku).catch(() => null),
-              ]);
+            const [card, detail, composer, entrypoint, search, bundle, marketStats, followSell] = await Promise.all([
+              _cardCacheGet(qSku).catch(() => null),
+              _detailCacheGet(qSku).catch(() => null),
+              _composerCacheGet(qSku).catch(() => null),
+              _entrypointCacheGet(qSku).catch(() => null),
+              (async () => {
+                const l1 = await _idbGet(_IDB_STORE_SEARCH, qSku).catch(() => null);
+                if (l1?.data) return l1.data;
+                const l2 = await _erpCacheGet('search', qSku).catch(() => null);
+                return l2?.data || null;
+              })().catch(() => null),
+              (async () => {
+                const l1 = await _idbGet(_IDB_STORE_BUNDLE, qSku).catch(() => null);
+                if (l1?.data) return l1.data;
+                const l2 = await _erpCacheGet('bundle', qSku).catch(() => null);
+                return l2?.data || null;
+              })().catch(() => null),
+              _marketStatsCacheGet(qSku).catch(() => null),
+              _followSellCacheGet(qSku).catch(() => null),
+            ]);
             const results = [
               { type: 'card', hit: !!card },
               { type: 'composer', hit: !!composer },
@@ -7395,6 +7443,140 @@ try {
             return { ok: true, data: { results, hitCount, total: results.length } };
           } catch (e) {
             return { ok: true, data: null };
+          }
+        }
+        case 'getCollectStores': {
+          // 深度采集管理页:查询已分类店铺列表(供下拉选择)
+          // 转发 ERP GET /admin/api/store-classification,返回 { items: [{ sellerSlug, sellerName, isChinese }] }
+          try {
+            const resp = await apiRequest(
+              'GET',
+              `${backendUrl}/admin/api/store-classification?pageSize=500`,
+              null,
+              token
+            );
+            const data = resp?.data || resp;
+            return { ok: true, data };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'getStoreSkuList': {
+          // 深度采集管理页:按店铺 slug 查询所有 SKU + card 缓存(图片/评论数/价格)
+          // 转发 ERP GET /admin/api/store-sku/by-store/:slug
+          const slug = String(message.slug || '');
+          if (!slug) return { ok: false, error: 'missing slug' };
+          try {
+            const resp = await apiRequest(
+              'GET',
+              `${backendUrl}/admin/api/store-sku/by-store/${encodeURIComponent(slug)}`,
+              null,
+              token
+            );
+            const data = resp?.data || resp;
+            return { ok: true, data };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'registerCollectManager': {
+          // 深度采集管理页加载时注册自己的 tabId,SW 广播 collectDone/queuePaused/queueResumed
+          // 时同步发给这些 tab,让页面实时收到状态更新(不再只依赖 5s 轮询)。
+          const tabId = sender?.tab?.id;
+          if (typeof tabId === 'number') {
+            _collectManagerTabIds.add(tabId);
+          }
+          return { ok: true, data: { registered: true, tabId } };
+        }
+        case 'unregisterCollectManager': {
+          // 页面 beforeunload 时主动注销(避免向已关闭 tab 发消息)。
+          const tabId = sender?.tab?.id;
+          if (typeof tabId === 'number') {
+            _collectManagerTabIds.delete(tabId);
+          }
+          return { ok: true, data: { unregistered: true } };
+        }
+        case 'getCollectManagerState': {
+          // 深度采集管理页:查询队列当前状态(running SKU + 进度计数 + 暂停状态 + 每 SKU 详细状态)
+          const _cmsMeta = await _loadQueueMeta();
+          const _cmsCfg = await _loadAutoCollectConfig();
+          const _cmsQueue = await _loadQueue();
+          const running = _cmsQueue.filter((t) => t.status === 'running');
+          const pending = _cmsQueue.filter((t) => t.status === 'pending');
+          const finished = _cmsQueue.filter((t) => ['success', 'partial', 'failed', 'skipped'].includes(t.status));
+          // 返回每个 SKU 的详细状态(供表格按 SKU 更新 status/finishedAt)
+          const tasks = _cmsQueue.map((t) => ({
+            sku: t.sku,
+            status: t.status,
+            source: t.source || 'shop-page',
+            sellerSlug: t.sellerSlug || '',
+            sellerId: t.sellerId || '',
+            startedAt: t.startedAt || null,
+            finishedAt: t.finishedAt || null,
+            createdAt: t.createdAt || null,
+            attempts: t.attempts || 0,
+            maxAttempts: t.maxAttempts || 3,
+            lastError: t.lastError || null,
+          }));
+          return {
+            ok: true,
+            data: {
+              runningSkus: running.map((t) => t.sku),
+              pendingCount: pending.length,
+              finishedCount: finished.length,
+              totalCount: _cmsQueue.length,
+              todayCount: _cmsMeta.todayCount,
+              perDayLimit: _cmsCfg.perDayLimit,
+              consumePaused: _cmsMeta.consumePaused,
+              circuitBreakerUntil: _cmsMeta.circuitBreakerUntil,
+              autoCollectRunning: _cmsCfg.autoCollectRunning,
+              lastConsumeAt: _cmsMeta.lastConsumeAt || 0,
+              consumeRateSec: _cmsMeta.consumeRateSec || 15,
+              tasks,
+            },
+          };
+        }
+        case 'removeQueueTask': {
+          // 采集队列监控页:删除单个队列任务(按 SKU)
+          try {
+            await _deleteQueueTask(String(message.sku));
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'clearFinishedQueueTasks': {
+          // 采集队列监控页:清空所有已完成任务(success/partial/failed/skipped/antibot)
+          try {
+            const _cfQueue = await _loadQueue();
+            const finishedStatuses = [
+              'success',
+              'partial',
+              'failed',
+              'failed_final',
+              'failed_partial',
+              'skipped',
+              'antibot',
+            ];
+            const kept = _cfQueue.filter((t) => !finishedStatuses.includes(t.status));
+            const removed = _cfQueue.length - kept.length;
+            await setStorage({ [COLLECT_QUEUE_KEY]: kept });
+            console.log('[Queue] cleared finished tasks:', removed);
+            return { ok: true, data: { removed } };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        case 'clearAntibotState': {
+          // 采集队列监控页:强制清除反爬熔断状态
+          // 重置:circuitBreakerUntil=0, consumePaused=false, config.paused=false/pausedUntil=0
+          try {
+            await _saveQueueMeta({ circuitBreakerUntil: 0, consumePaused: false });
+            await _saveAutoCollectConfig({ paused: false, pausedUntil: 0 });
+            console.log('[Queue] antibot state cleared by user');
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
           }
         }
         case 'getMembershipSummary': {

@@ -1314,6 +1314,41 @@ router.delete('/admin/api/store-sku/:sku', async (req, res, next) => {
   }
 });
 
+// GET /admin/api/store-sku/by-store/:slug — 按店铺 slug 查询所有 SKU 并 join card 缓存
+// 返回 { items: [{ sku, sellerId, sellerSlug, sellerName, card: { name, price, image, ratingCount } }] }
+// 供深度采集管理页面使用:一次请求拿到店铺全部 SKU + 商品卡信息(图片/评论数/价格)
+router.get('/admin/api/store-sku/by-store/:slug', async (req, res, next) => {
+  try {
+    const slug = String(req.params.slug || '');
+    if (!slug) return res.status(400).json({ error: 'missing slug' });
+
+    const skuCol = await cols.storeSku();
+    const cardCol = await cols.cardCache();
+
+    // 查该店铺所有 SKU 关联记录
+    const skuDocs = await skuCol.find({ sellerSlug: slug }).sort({ lastSeenAt: -1 }).toArray();
+    if (!skuDocs.length) return res.json(ok({ items: [], total: 0 }));
+
+    // 批量查 card 缓存(一次 $in 查询)
+    const skus = skuDocs.map((d) => d._id);
+    const cardDocs = await cardCol.find({ _id: { $in: skus } }).toArray();
+    const cardMap = new Map(cardDocs.map((d) => [d._id, d.data || null]));
+
+    const items = skuDocs.map((d) => ({
+      sku: d._id,
+      sellerId: d.sellerId || '',
+      sellerSlug: d.sellerSlug || '',
+      sellerName: d.sellerName || '',
+      card: cardMap.get(d._id) || null,
+    }));
+
+    return res.json(ok({ items, total: items.length }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[store-sku] by-store failed');
+    next(e);
+  }
+});
+
 // GET /admin/api/store-sku — 列表查询(分页 + 关键字过滤)
 // query: keyword(匹配 sellerSlug/sellerName/sellerId/sku)/currentPage/pageSize
 router.get('/admin/api/store-sku', async (req, res, next) => {

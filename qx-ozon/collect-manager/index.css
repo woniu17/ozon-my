@@ -1,0 +1,710 @@
+/* =========================================================
+   MY 深度采集管理 — 复用 batch-upload 设计语言
+   ========================================================= */
+:root {
+  /* ─── 主色系 ─── */
+  --primary: #1677ff;
+  --primary-2: #4096ff;
+  --primary-tint: #e6f4ff;
+  --primary-line: #91caff;
+  --primary-soft: #bae0ff;
+
+  --accent: #0958d9;
+  --accent-tint: #e6f0ff;
+  --accent-line: #adc6ff;
+
+  /* ─── 状态色 ─── */
+  --success: #52c41a;
+  --success-fg: #389e0d;
+  --success-tint: #f6ffed;
+  --success-line: #b7eb8f;
+
+  --warning: #faad14;
+  --warning-fg: #d48806;
+  --warning-tint: #fffbe6;
+  --warning-line: #ffe58f;
+
+  --error: #f5222d;
+  --error-fg: #cf1322;
+  --error-tint: #fff1f0;
+  --error-line: #ffa39e;
+
+  --info: #13c2c2;
+  --info-fg: #08979c;
+  --info-tint: #e6fffb;
+  --info-line: #87e8de;
+
+  /* ─── 中性 ─── */
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #fafbfc;
+  --ink: #1f2329;
+  --ink-2: #4e5969;
+  --ink-3: #86909c;
+  --ink-4: #c9cdd4;
+  --line: #e5e6eb;
+  --line-2: #f2f3f5;
+  --line-strong: #c9cdd4;
+
+  /* ─── 圆角 / 阴影 ─── */
+  --r: 4px;
+  --r-sm: 3px;
+  --r-lg: 6px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.03);
+  --shadow-2: 0 2px 4px rgba(0, 0, 0, 0.06);
+
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html,
+body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+body {
+  font-feature-settings: 'tnum' 0;
+}
+.is-mono,
+.mono {
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-feature-settings: 'tnum';
+}
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+input,
+select {
+  font-family: inherit;
+}
+
+/* ============ Sticky toolbar (56px) ============ */
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  box-shadow: var(--shadow-1);
+}
+.tb-l {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tb-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r);
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+.tb-icon::before {
+  content: '深';
+}
+.tb-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tb-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.2;
+}
+.tb-sub {
+  font-size: 11px;
+  color: var(--ink-3);
+  line-height: 1.2;
+}
+.tb-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--line);
+}
+.tb-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.tb-conn .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-4);
+}
+.tb-conn.is-on .dot {
+  background: var(--success);
+}
+.tb-conn.is-off .dot {
+  background: var(--error);
+}
+.tb-r {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ============ Buttons ============ */
+.tb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  transition: all 0.15s;
+}
+.tb-btn:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--primary-line);
+  background: var(--primary-tint);
+}
+.tb-btn:disabled {
+  color: var(--ink-4);
+  cursor: not-allowed;
+}
+.tb-btn .ic {
+  width: 14px;
+  height: 14px;
+}
+.tb-btn-primary {
+  height: 32px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--primary);
+  border-radius: var(--r);
+  transition: all 0.15s;
+}
+.tb-btn-primary:hover:not(:disabled) {
+  background: var(--primary-2);
+}
+.tb-btn-primary:disabled {
+  background: var(--ink-4);
+  cursor: not-allowed;
+}
+.tb-btn-warn {
+  height: 32px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--warning-fg);
+  border-radius: var(--r);
+}
+.tb-btn-warn:hover {
+  background: var(--warning);
+}
+
+/* ============ Notice ============ */
+.notice {
+  margin: 12px 20px 0;
+  padding: 10px 14px;
+  border-radius: var(--r);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.notice-error {
+  background: var(--error-tint);
+  border: 1px solid var(--error-line);
+  color: var(--error-fg);
+}
+
+/* ============ Body layout ============ */
+.body {
+  padding: 16px 20px 40px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+.col-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ============ Card ============ */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--surface-2);
+}
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.card-title-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.card-head-hint {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.card-body {
+  padding: 14px 16px;
+}
+.card-body.is-flush {
+  padding: 0;
+}
+
+/* ============ Chip ============ */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.chip-info {
+  background: var(--primary-tint);
+  color: var(--primary);
+  border: 1px solid var(--primary-line);
+}
+.chip-primary {
+  background: var(--primary);
+  color: #fff;
+}
+.chip-success {
+  background: var(--success-tint);
+  color: var(--success-fg);
+  border: 1px solid var(--success-line);
+}
+.chip-error {
+  background: var(--error-tint);
+  color: var(--error-fg);
+  border: 1px solid var(--error-line);
+}
+.chip-warn {
+  background: var(--warning-tint);
+  color: var(--warning-fg);
+  border: 1px solid var(--warning-line);
+}
+
+/* ============ Seg / Form ============ */
+.seg {
+  padding: 12px 16px;
+}
+.seg-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.seg-label {
+  width: 80px;
+  font-size: 12px;
+  color: var(--ink-2);
+  flex-shrink: 0;
+}
+.seg-req {
+  color: var(--error);
+  margin-right: 2px;
+}
+.seg-control {
+  flex: 1;
+}
+.fld {
+  display: block;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.fld:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-tint);
+}
+.fld.is-sm {
+  height: 28px;
+  font-size: 12px;
+}
+.fld.is-mono {
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+/* ============ Link button ============ */
+.link-btn {
+  font-size: 12px;
+  color: var(--primary);
+  background: none;
+  padding: 2px 4px;
+  border-radius: var(--r-sm);
+}
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* ============ Inline check ============ */
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.inline-check input {
+  margin: 0;
+}
+
+/* ============ Filters ============ */
+.filter-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+}
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.filter-label {
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.filter-sep {
+  color: var(--ink-3);
+}
+.filter-tip {
+  font-size: 10px;
+  color: var(--ink-3);
+  background: var(--line-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ============ Progress ============ */
+.progress-bar-wrap {
+  height: 8px;
+  background: var(--line-2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--primary), var(--primary-2));
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.running-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.running-label {
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+.running-list {
+  color: var(--ink);
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+/* ============ Table ============ */
+.table-wrap {
+  overflow-x: auto;
+  max-height: 1000px;
+  overflow-y: auto;
+}
+.sku-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.sku-table thead {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  z-index: 2;
+}
+.sku-table th {
+  padding: 9px 10px;
+  text-align: left;
+  font-weight: 500;
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.sku-table td {
+  padding: 8px 10px;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line-2);
+  vertical-align: middle;
+}
+.sku-table tbody tr:hover {
+  background: var(--surface-2);
+}
+.sku-table tbody tr.is-running {
+  background: var(--primary-tint);
+}
+.sku-table tbody tr.is-running:hover {
+  background: var(--primary-soft);
+}
+
+.c-check {
+  width: 36px;
+  text-align: center;
+}
+.c-check input {
+  margin: 0;
+}
+.c-img {
+  width: 160px;
+}
+.c-sku {
+  min-width: 110px;
+}
+.c-rating,
+.c-price,
+.c-weight,
+.c-dim,
+.c-chinese {
+  width: 80px;
+  text-align: right;
+}
+.c-status {
+  width: 90px;
+}
+.c-finish {
+  width: 110px;
+}
+.c-finish-cell {
+  font-size: 11px;
+  white-space: nowrap;
+  text-align: right;
+}
+.c-detail {
+  width: 200px;
+}
+
+.cell-img {
+  width: 140px;
+  height: 140px;
+  object-fit: cover;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--line-2);
+}
+.cell-sku {
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--ink);
+}
+.cell-mono {
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  text-align: right;
+}
+.cell-empty {
+  color: var(--ink-4);
+  text-align: right;
+}
+
+/* ============ Status badges ============ */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.status-pending {
+  background: var(--line-2);
+  color: var(--ink-3);
+}
+.status-running {
+  background: var(--primary-tint);
+  color: var(--primary);
+  border: 1px solid var(--primary-line);
+}
+.status-success {
+  background: var(--success-tint);
+  color: var(--success-fg);
+  border: 1px solid var(--success-line);
+}
+.status-partial {
+  background: var(--warning-tint);
+  color: var(--warning-fg);
+  border: 1px solid var(--warning-line);
+}
+.status-failed {
+  background: var(--error-tint);
+  color: var(--error-fg);
+  border: 1px solid var(--error-line);
+}
+.status-skipped {
+  background: var(--line-2);
+  color: var(--ink-3);
+}
+
+/* ============ Cache status (参考数据面板 jz-collect-status-bar) ============ */
+.cache-status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.cache-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.cache-row-1 {
+  font-weight: 600;
+}
+/* 明细行:4 行 2 列 grid 严格对齐 */
+.cache-row-detail {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 8px;
+}
+.cache-icon {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+}
+.cache-text {
+  font-size: 11px;
+}
+.cache-summary {
+  color: var(--ink-3);
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+.cache-hit,
+.cache-miss {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  white-space: nowrap;
+  text-align: left;
+  min-width: 0;
+}
+.cache-hit {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.08);
+}
+.cache-miss {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+/* ============ Chinese flag ============ */
+.cn-yes {
+  color: var(--error);
+  font-weight: 500;
+}
+.cn-no {
+  color: var(--ink-3);
+}
+.cn-unknown {
+  color: var(--ink-4);
+}
+
+/* ============ Foot hint ============ */
+.hint-foot {
+  padding: 24px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.hint-foot code {
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  background: var(--line-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--ink-2);
+}
+
+/* ============ Loading spinner ============ */
+.is-loading {
+  position: relative;
+  opacity: 0.7;
+  pointer-events: none;
+}
+.is-loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 2px solid var(--line);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

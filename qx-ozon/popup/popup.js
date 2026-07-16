@@ -1216,6 +1216,26 @@
         }
         return;
       }
+      // 深度采集管理页:在新标签页打开(不单独开窗口,方便与其他 Ozon 标签页并排)
+      if (action === 'collect-manager') {
+        try {
+          await chrome.tabs.create({ url: chrome.runtime.getURL('collect-manager/index.html') });
+          window.close();
+        } catch (e) {
+          console.error('[popup] open collect-manager failed:', e);
+        }
+        return;
+      }
+      // 采集队列监控页:展示 SW 队列实时状态
+      if (action === 'collect-queue') {
+        try {
+          await chrome.tabs.create({ url: chrome.runtime.getURL('collect-queue/index.html') });
+          window.close();
+        } catch (e) {
+          console.error('[popup] open collect-queue failed:', e);
+        }
+        return;
+      }
       // 数据透视眼：toggle 而非跳转。首次启用弹 confirm 警告 TOS 风险。
       if (action === 'premium-pivot') {
         await togglePremiumPivot();

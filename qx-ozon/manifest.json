@@ -164,7 +164,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["batch-upload/*", "lib/*", "icons/*"],
+      "resources": ["batch-upload/*", "collect-manager/*", "collect-queue/*", "lib/*", "icons/*"],
       "matches": ["<all_urls>"]
     }
   ],
