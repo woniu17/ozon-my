@@ -36,18 +36,6 @@
   var POLL_INTERVAL_MS = 5000;
   var COUNTDOWN_INTERVAL_MS = 1000;
 
-  // 8 类缓存命中
-  var CACHE_TYPES = [
-    { key: 'card', label: 'card' },
-    { key: 'detail', label: 'detail' },
-    { key: 'composer', label: 'composer' },
-    { key: 'entrypoint', label: 'entrypoint' },
-    { key: 'search', label: 'search' },
-    { key: 'bundle', label: 'bundle' },
-    { key: 'marketStats', label: 'marketStats', staleable: true },
-    { key: 'followSell', label: 'followSell', staleable: true },
-  ];
-
   var BRAND_DISPLAY_NAME = (globalThis.__JZ_BRAND__ && globalThis.__JZ_BRAND__.displayName) || 'MY';
 
   function _toNumber(value) {
@@ -110,9 +98,17 @@
       this.callbacks = options.callbacks || {};
 
       this.config = {};
-      this.stats = {};
-      this.recent = [];
-      this.storeDetection = { slug: null, name: null, isChinese: undefined, classifiedBy: null };
+      this.storeDetection = {
+        slug: null,
+        name: null,
+        sellerId: '',
+        pageType: '',
+        method: '',
+        companyInfo: null,
+        isChinese: undefined,
+        classifiedBy: null,
+      };
+      this.storeSkuCount = 0; // 店铺 SKU 收集计数(由 ozon-data-panel.js 注入)
 
       this.panelEl = null;
       this.bubbleEl = null;
@@ -120,7 +116,6 @@
       this.toastEl = null;
 
       this.pollTimer = null;
-      this.queueTimer = null; // 采集队列快速刷新定时器(500ms,只刷队列区域)
       this.countdownTimer = null;
       this.toastTimer = null;
 
@@ -194,9 +189,7 @@
       this._applyCollapsedState();
       this._restoreInputs();
       this._renderStatus();
-      this._renderStats();
-      this._renderCacheHits();
-      this._renderRecent();
+      this._renderStoreSkuCount();
       this._renderAutoScrollStatus();
       this._renderCircuitBreaker();
       this.updateStoreDetection(this.storeDetection);
@@ -306,47 +299,13 @@
         '    <div class="qx-c-section-title">店铺检测</div>' +
         '    <div data-el="store-detection"></div>' +
         '  </div>' +
-        // 今日统计
-        '  <div class="qx-c-section-block">' +
-        '    <div class="qx-c-section-title">今日统计</div>' +
-        '    <div class="qx-c-progress">' +
-        '      <div class="qx-c-stat">' +
-        '        <span class="qx-c-stat-num" data-el="stat-success">0</span>' +
-        '        <span class="qx-c-stat-label">成功</span>' +
-        '      </div>' +
-        '      <div class="qx-c-stat">' +
-        '        <span class="qx-c-stat-num" data-el="stat-skipped">0</span>' +
-        '        <span class="qx-c-stat-label">跳过</span>' +
-        '      </div>' +
-        '      <div class="qx-c-stat is-failed">' +
-        '        <span class="qx-c-stat-num" data-el="stat-failed">0</span>' +
-        '        <span class="qx-c-stat-label">失败</span>' +
-        '      </div>' +
-        '      <div class="qx-c-stat is-antibot">' +
-        '        <span class="qx-c-stat-num" data-el="stat-antibot">0</span>' +
-        '        <span class="qx-c-stat-label">熔断</span>' +
-        '      </div>' +
-        '    </div>' +
-        '  </div>' +
-        // 缓存命中
-        '  <div class="qx-c-section-block">' +
-        '    <div class="qx-c-section-title">缓存命中 (8 类)</div>' +
-        '    <div class="qx-c-cache-grid" data-el="cache-grid">' +
-        '      <div class="qx-c-cache-item"><span class="qx-c-cache-label">card</span><span class="qx-c-cache-num" data-el="cache-card">0</span></div>' +
-        '      <div class="qx-c-cache-item"><span class="qx-c-cache-label">detail</span><span class="qx-c-cache-num" data-el="cache-detail">0</span></div>' +
-        '      <div class="qx-c-cache-item"><span class="qx-c-cache-label">composer</span><span class="qx-c-cache-num" data-el="cache-composer">0</span></div>' +
-        '      <div class="qx-c-cache-item"><span class="qx-c-cache-label">entrypoint</span><span class="qx-c-cache-num" data-el="cache-entrypoint">0</span></div>' +
-        '      <div class="qx-c-cache-item"><span class="qx-c-cache-label">search</span><span class="qx-c-cache-num" data-el="cache-search">0</span></div>' +
-        '      <div class="qx-c-cache-item"><span class="qx-c-cache-label">bundle</span><span class="qx-c-cache-num" data-el="cache-bundle">0</span></div>' +
-        '      <div class="qx-c-cache-item" data-el="cache-marketStats-row"><span class="qx-c-cache-label">marketStats</span><span class="qx-c-cache-num" data-el="cache-marketStats">0</span></div>' +
-        '      <div class="qx-c-cache-item" data-el="cache-followSell-row"><span class="qx-c-cache-label">followSell</span><span class="qx-c-cache-num" data-el="cache-followSell">0</span></div>' +
-        '    </div>' +
-        '  </div>' +
-        // 采集队列
-        '  <div class="qx-c-section-block">' +
-        '    <div class="qx-c-section-title">采集队列 <span class="qx-c-queue-len" data-el="queue-len">0</span></div>' +
-        '    <div class="qx-c-recent" data-el="recent-list"></div>' +
-        '  </div>' +
+        // 店铺 SKU 收集(仅店铺页)
+        (shopOnly
+          ? '  <div class="qx-c-section-block">' +
+            '    <div class="qx-c-section-title">店铺SKU收集 <span class="qx-c-queue-len" data-el="store-sku-count">0</span></div>' +
+            '    <div class="qx-c-store-sku-hint">已收集店铺 SKU 数量(卡片角标 ✓ 表示已收集)</div>' +
+            '  </div>'
+          : '') +
         // 操作按钮
         '  <div class="qx-c-actions">' +
         '    <button class="qx-c-btn qx-c-btn-ghost" data-act="force-refresh">强制刷新当前页</button>' +
@@ -605,23 +564,14 @@
       this.pollTimer = setInterval(function () {
         self._poll();
       }, POLL_INTERVAL_MS);
-      // 采集队列快速刷新:500ms 刷一次,实时反映"采集中→已完成"状态变化
-      // __jzCollectingSkus 是 content script 内存 Set,无需走 SW 消息,读取零开销
-      this.queueTimer = setInterval(function () {
-        self._renderRecent();
-      }, 500);
     }
 
     async _poll() {
+      // 只拉 config(主开关/中国店铺/熔断状态),不再拉 stats/recent
+      // 今日统计/缓存命中/采集队列三个区块已移除
       var tasks = [
         this._send('autoCollectGetConfig').then(function (c) {
           return { type: 'config', data: c };
-        }),
-        this._send('autoCollectGetStats').then(function (s) {
-          return { type: 'stats', data: s };
-        }),
-        this._send('autoCollectGetRecent', { limit: 5 }).then(function (r) {
-          return { type: 'recent', data: r };
         }),
       ];
       var results = await Promise.allSettled(tasks);
@@ -629,8 +579,6 @@
         if (r.status !== 'fulfilled') return;
         var res = r.value;
         if (res.type === 'config') this._applyConfig(res.data);
-        else if (res.type === 'stats') this._applyStats(res.data);
-        else if (res.type === 'recent') this._applyRecent(res.data);
       }, this);
     }
 
@@ -652,141 +600,22 @@
       this._renderCircuitBreaker();
     }
 
-    _applyStats(stats) {
-      if (!stats) return;
-      this.stats = stats;
-      this._renderStats();
-      this._renderCacheHits();
-    }
-
-    _applyRecent(recent) {
-      this.recent = Array.isArray(recent) ? recent : [];
-      this._renderRecent();
-    }
-
     // ── 渲染: 状态 ──
     _renderStatus() {
       var toggleCb = this._q('toggle');
       if (toggleCb && toggleCb.checked !== this.running) toggleCb.checked = this.running;
     }
 
-    // ── 渲染: 今日统计 ──
-    _renderStats() {
-      var today = (this.stats && this.stats.today) || {};
-      var el;
-      el = this._q('stat-success');
-      if (el) el.textContent = String(today.success || 0);
-      el = this._q('stat-skipped');
-      if (el) el.textContent = String(today.skipped || 0);
-      el = this._q('stat-failed');
-      if (el) el.textContent = String(today.failed || 0);
-      el = this._q('stat-antibot');
-      if (el) el.textContent = String(today.antibot || 0);
+    // ── 渲染: 店铺 SKU 收集计数 ──
+    _renderStoreSkuCount() {
+      var el = this._q('store-sku-count');
+      if (el) el.textContent = String(this.storeSkuCount || 0);
     }
 
-    // ── 渲染: 缓存命中 (8 类) ──
-    _renderCacheHits() {
-      var byType = (this.stats && this.stats.byType) || {};
-      var byTypeStale = (this.stats && this.stats.byTypeStale) || {};
-      var self = this;
-      CACHE_TYPES.forEach(function (t) {
-        var el = self._q('cache-' + t.key);
-        if (el) el.textContent = String(byType[t.key] || 0);
-        if (t.staleable) {
-          var row = self._q('cache-' + t.key + '-row');
-          if (row) {
-            // stale 计数 > 0 时标橙
-            row.classList.toggle('qx-c-stale', (byTypeStale[t.key] || 0) > 0);
-          }
-        }
-      });
-    }
-
-    // ── 渲染: 采集队列(正在采集 + 最近已完成,合并去重,限 5 条) ──
-    _renderRecent() {
-      var container = this._q('recent-list');
-      if (!container) return;
-
-      // 1. 正在采集的 SKU(从 shared-utils 的 __jzCollectingSkus Set 读取)
-      var collectingSkus = [];
-      try {
-        var set = window.__jzCollectingSkus;
-        if (set && typeof set.forEach === 'function') {
-          set.forEach(function (sku) {
-            collectingSkus.push({ sku: String(sku), status: 'collecting', source: '—', duration: null });
-          });
-        }
-      } catch (_) {}
-
-      // 2. 已完成的最近记录(SW 端 _autoCollectRecent)
-      var recent = this.recent || [];
-      var collectingSet = {};
-      collectingSkus.forEach(function (c) {
-        collectingSet[c.sku] = true;
-      });
-      // 去重:已完成的 SKU 如果正在采集中,不重复显示(以 collecting 状态为准)
-      var doneList = recent.filter(function (r) {
-        return !collectingSet[r.sku];
-      });
-
-      // 3. 合并:collecting 在前,已完成在后,限 5 条
-      var list = collectingSkus.concat(doneList).slice(0, 5);
-
-      // 更新队列长度徽章:只显示正在采集的数量
-      var queueLenEl = this._q('queue-len');
-      if (queueLenEl) {
-        var inFlight = collectingSkus.length;
-        queueLenEl.textContent = String(inFlight);
-        // 有进行中任务时高亮为品牌色
-        if (inFlight > 0) {
-          queueLenEl.classList.add('is-active');
-        } else {
-          queueLenEl.classList.remove('is-active');
-        }
-      }
-
-      if (!list.length) {
-        container.innerHTML = '<div class="qx-c-recent-empty">暂无记录</div>';
-        return;
-      }
-
-      var html =
-        '<div class="qx-c-recent-head">' +
-        '<span>SKU</span><span>来源</span><span>状态</span><span>耗时</span>' +
-        '</div>';
-      html += list
-        .map(function (r) {
-          var statusCls = 'qx-c-recent-status-' + (r.status || 'unknown');
-          var statusText = r.status || '—';
-          var duration = '—';
-          if (r.duration != null) {
-            duration = (r.duration / 1000).toFixed(1) + 's';
-          }
-          var sku = r.sku || '—';
-          var source = r.source || '—';
-          return (
-            '<div class="qx-c-recent-row">' +
-            '<span class="qx-c-recent-sku" title="' +
-            sku +
-            '">' +
-            sku +
-            '</span>' +
-            '<span>' +
-            source +
-            '</span>' +
-            '<span class="' +
-            statusCls +
-            '">' +
-            statusText +
-            '</span>' +
-            '<span>' +
-            duration +
-            '</span>' +
-            '</div>'
-          );
-        })
-        .join('');
-      container.innerHTML = html;
+    // 外部注入店铺 SKU 收集计数(ozon-data-panel.js 调用)
+    setStoreSkuCount(count) {
+      this.storeSkuCount = Math.max(0, Number(count) || 0);
+      this._renderStoreSkuCount();
     }
 
     // ── 渲染: 熔断倒计时 ──
@@ -1279,10 +1108,6 @@
       if (this.pollTimer) {
         clearInterval(this.pollTimer);
         this.pollTimer = null;
-      }
-      if (this.queueTimer) {
-        clearInterval(this.queueTimer);
-        this.queueTimer = null;
       }
       this._stopCountdownTimer();
       if (this.toastTimer) {

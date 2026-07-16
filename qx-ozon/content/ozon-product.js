@@ -11966,6 +11966,10 @@
       const update = {
         slug,
         name,
+        sellerId: detail.sellerId || '',
+        pageType: detail.pageType || '',
+        method: detail.method || '',
+        companyInfo: detail.companyInfo || null,
         isChinese: result ? result.isChinese : null,
         classifiedBy: result ? result.classifiedBy : null,
       };

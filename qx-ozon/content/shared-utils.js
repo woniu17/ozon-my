@@ -3821,7 +3821,11 @@ if (!globalThis.__JZ_BRAND__) {
     // 与 market(对陌生跟卖 SKU 不返 per-item 类目/品牌),两源皆空时这俩显示 "-"。
     // sv item 本身带 brand(attr 85)+ categories[],这里仿照重量/尺寸做兜底。
     if (variantResult.status === 'fulfilled' && variantResult.value) {
-      const items = variantResult.value.items || variantResult.value.data?.items || [];
+      // 兼容两种 shape:
+      //   1. searchVariants action 返回的 { items: [...] }
+      //   2. _getSearchVariantForBroadcast(collectDone 广播)返回的单个 item 对象
+      const v = variantResult.value;
+      const items = v.items || v.data?.items || (Array.isArray(v.attributes) ? [v] : []);
       const item = items.find((it) => String(it.variant_id) === skuStr) || items[0];
       // 字段仍为占位 "-"(backend 没填)时才用 sv 覆盖,避免盖掉后端真值
       const fieldEmpty = (name) => {
@@ -3878,6 +3882,31 @@ if (!globalThis.__JZ_BRAND__) {
           }
           if (l1 && fieldEmpty('category')) updateField('category', l1);
           if (deepest && fieldEmpty('categoryL3')) updateField('categoryL3', deepest);
+        }
+      }
+      // 顶层字段兜底:bundle item 的 weight/depth/width/height 在顶层
+      // (SW _getSearchVariantForBroadcast 已尽量转成 attrs,但作为二次保险)
+      if (item) {
+        const w = Number(item.weight);
+        const dp = Number(item.depth);
+        const wd = Number(item.width);
+        const ht = Number(item.height);
+        if (w > 0 && !panel.querySelector('[data-field="weight"]')?.textContent?.includes('g')) {
+          updateField('weight', `${w}g`);
+          updateField('heroSize', `${w}g`);
+        }
+        if (
+          dp > 0 &&
+          wd > 0 &&
+          ht > 0 &&
+          !panel.querySelector('[data-field="dimensions"]')?.textContent?.includes('mm')
+        ) {
+          updateField('dimensions', `${dp} × ${wd} × ${ht}mm`);
+          updateHeroSub('heroSize', `${dp}×${wd}×${ht}mm`);
+          if (!panel.querySelector('[data-field="volume"]')?.textContent?.includes('L')) {
+            const vol = window.jzVolumeLiters(dp, wd, ht);
+            if (vol != null) updateField('volume', `${vol} L`);
+          }
         }
       }
     }

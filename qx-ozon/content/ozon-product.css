@@ -6015,21 +6015,36 @@
   color: #fff;
 }
 
-/* 数据面板底部状态条 */
+/* 数据面板状态条(hero 下方,3 行结构) */
 .jz-collect-status-bar {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--oh-border, #e5e7eb);
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--oh-section-bg, #f8fafc);
+}
+/* hero 已有 border-bottom,状态条紧邻 hero 时不再重复顶部分隔 */
+.oh-hero-section + .jz-collect-status-bar {
+  border-top: none;
+}
+
+.jz-collect-status-row {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 10px;
-  border-top: 1px solid var(--oh-border, #e5e7eb);
-  font-size: 11px;
-  line-height: 1.4;
-  background: var(--oh-bg-elevated, #fafafa);
   flex-wrap: wrap;
+  min-height: 18px;
+}
+.jz-collect-status-row + .jz-collect-status-row {
+  margin-top: 2px;
+}
+
+.jz-collect-status-row-1 {
+  font-weight: 600;
 }
 
 .jz-collect-status-icon {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: bold;
   flex-shrink: 0;
 }
@@ -6041,7 +6056,7 @@
 
 .jz-collect-status-reason {
   color: var(--oh-text-secondary, #6b7280);
-  font-size: 11px;
+  font-weight: 400;
   display: inline-flex;
   align-items: center;
   gap: 2px;

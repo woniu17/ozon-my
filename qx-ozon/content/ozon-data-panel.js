@@ -79,7 +79,7 @@
   function _maybeFlushSku(sku, card, ctx) {
     if (ctx.timedOut) {
       // 超时降级:sellerInfo 未到达,按空 slug 提交(让 SW 判定 unclassified-store)
-      window.__jzSubmitCollectTask?.(sku, card, '', '').catch(() => {});
+      window.__jzSubmitCollectTask?.(sku, card, '', '').catch(() => { });
       return;
     }
     // onlyChineseStores 开启时,非中国店铺静默丢弃(不入 _autoCollectSeen,允许切换店铺重试)
@@ -88,7 +88,7 @@
       return;
     }
     // 中国店铺 / 未分类 / onlyChineseStores=false → 提交
-    window.__jzSubmitCollectTask?.(sku, card, ctx.sellerSlug, ctx.sellerId).catch(() => {});
+    window.__jzSubmitCollectTask?.(sku, card, ctx.sellerSlug, ctx.sellerId).catch(() => { });
   }
 
   // 批量 flush pending 队列(用于 sellerInfo 到达 / 用户手动标记后)
@@ -135,6 +135,12 @@
   // results: [{type, hit}] 8 类缓存命中明细
   const _collectStatusMap = new Map();
   let _collectStatusMapReady = false;
+
+  // ── 定时刷新:panel 级 5s 定时器,主动查缓存刷新数据 + 采集状态 ──
+  // panel 创建后启动,removeDataPanel 时清理。
+  // 不依赖自动采集开关:即使自动采集关闭,也定时查 SW 缓存填充面板。
+  const PANEL_REFRESH_INTERVAL_MS = 5000;
+  const _panelRefreshTimers = new WeakMap(); // panel → timer id
 
   // 初始化:从 SW 拉取最近 200 条采集记录,填充 Map
   async function _initCollectStatusMap() {
@@ -344,13 +350,13 @@
   };
   const _CACHE_TYPE_LABELS = [
     'card',
-    'detail',
     'composer',
     'entrypoint',
     'search',
     'bundle',
     'marketStats',
     'followSell',
+    'detail',
   ];
 
   // partial/failed 状态在 UI 上显示"等待重试中"的冷却时长(单位:ms)
@@ -390,79 +396,170 @@
     return status;
   }
 
-  // 渲染状态条(数据面板底部)
-  function renderCollectStatusBar(panel, sku) {
+  // 渲染状态条(数据面板 hero section 下方,商品信息上方,固定展示)
+  // 仅展示 8 类缓存命中状态,不查采集队列状态。
+  // 3 行结构:行1 缓存命中汇总,行2/3 8 类缓存明细
+  // cacheStatus: { results: [{type, hit}], hitCount, total } | null | undefined
+  function renderCollectStatusBar(panel, sku, cacheStatus) {
     if (!panel) return;
     let bar = panel.querySelector('.jz-collect-status-bar');
-    const status = _getEffectiveStatus(sku);
-    if (!status) {
-      if (bar) bar.remove();
-      return;
-    }
     if (!bar) {
       bar = document.createElement('div');
       bar.className = 'jz-collect-status-bar';
-      panel.appendChild(bar);
+      // 插入到 hero section 之后,无 hero 时插入到 body 顶部
+      const hero = panel.querySelector('.oh-hero-section');
+      if (hero) {
+        hero.insertAdjacentElement('afterend', bar);
+      } else {
+        const body = panel.querySelector('.ozon-helper-sidebar-card-body');
+        if (body) {
+          body.insertAdjacentElement('afterbegin', bar);
+        } else {
+          panel.appendChild(bar);
+        }
+      }
     }
-    const meta = _COLLECT_STATUS_LABELS[status.status] || _COLLECT_STATUS_LABELS.failed;
-    // 等待重试中:不显示倒计时秒数;采集中:不显示 duration(还没有);其他:显示 duration
-    let extraText = '';
-    if (status._waiting) {
-      extraText = ' · 等待重试中';
-    } else if (status.status === 'collecting') {
-      extraText = ' · 采集中...';
+    // 构建缓存命中明细(按 _CACHE_TYPE_LABELS 固定顺序)
+    // cacheStatus 为 null/undefined 时用全 miss 占位(让用户看到 8 类缓存字段布局)
+    const results =
+      cacheStatus && Array.isArray(cacheStatus.results) && cacheStatus.results.length > 0
+        ? _CACHE_TYPE_LABELS.map(
+          (type) => cacheStatus.results.find((r) => r.type === type) || { type, hit: false }
+        )
+        : _CACHE_TYPE_LABELS.map((type) => ({ type, hit: false }));
+    const hitCount = results.filter((r) => r.hit).length;
+    const total = results.length;
+    // 行1:缓存命中汇总
+    // 全命中:绿色 ✓ 缓存完整;部分命中:橙色 ◐ 缓存部分;全未命中:灰色 ○ 无缓存
+    let icon, color, text;
+    if (hitCount === 0) {
+      icon = '○';
+      color = '#94a3b8';
+      text = '无缓存';
+    } else if (hitCount === total) {
+      icon = '✓';
+      color = '#16a34a';
+      text = '缓存完整';
     } else {
-      const reasonText = status.reason ? ` · ${_COLLECT_REASON_LABELS[status.reason] || status.reason}` : '';
-      const durationText = status.duration != null ? ` · ${(status.duration / 1000).toFixed(1)}s` : '';
-      extraText = reasonText + durationText;
+      icon = '◐';
+      color = '#f59e0b';
+      text = '缓存部分';
     }
-    // 8 类缓存命中明细(采集中/等待中不显示)
-    let cacheDetail = '';
-    if (
-      status.status !== 'collecting' &&
-      !status._waiting &&
-      Array.isArray(status.results) &&
-      status.results.length > 0
-    ) {
-      const hitCount = status.results.filter((r) => r.hit).length;
-      const detailParts = status.results.map((r) => {
-        const label = r.type;
-        return `<span class="jz-cache-${r.hit ? 'hit' : 'miss'}">${label}${r.hit ? '✓' : '✗'}</span>`;
-      });
-      cacheDetail = ` · <span class="jz-cache-summary">${hitCount}/${status.results.length}</span> <span class="jz-cache-detail">${detailParts.join(' ')}</span>`;
-    }
+    const renderLine = (arr) =>
+      arr
+        .map((r) => `<span class="jz-cache-${r.hit ? 'hit' : 'miss'}">${r.type}${r.hit ? '✓' : '✗'}</span>`)
+        .join(' ');
+    const line1 = renderLine(results.slice(0, 4));
+    const line2 = renderLine(results.slice(4, 8));
     bar.innerHTML =
-      `<span class="jz-collect-status-icon jz-collect-status-icon-${status.status}" style="color:${meta.color}">${meta.icon}</span>` +
-      `<span class="jz-collect-status-text" style="color:${meta.color}">${meta.text}</span>` +
-      `<span class="jz-collect-status-reason">${extraText}${cacheDetail}</span>`;
-    bar.dataset.status = status.status;
+      `<div class="jz-collect-status-row jz-collect-status-row-1">` +
+      `<span class="jz-collect-status-icon" style="color:${color}">${icon}</span>` +
+      `<span class="jz-collect-status-text" style="color:${color}">${text}</span>` +
+      `<span class="jz-collect-status-reason"> · <span class="jz-cache-summary">${hitCount}/${total}</span></span>` +
+      `</div>` +
+      `<div class="jz-collect-status-row jz-collect-status-row-2">${line1}</div>` +
+      `<div class="jz-collect-status-row jz-collect-status-row-3">${line2}</div>`;
+    bar.dataset.hitCount = String(hitCount);
+    bar.dataset.total = String(total);
+  }
+
+  // 异步刷新状态条:查询 SW 缓存状态(queryCacheStatus)后渲染
+  // 供事件驱动(collectDone / taskStatus)和初始加载调用
+  // 5s 定时器在 _refreshPanelData 中单独处理(复用同一查询)
+  async function refreshCollectStatusBar(panel, sku) {
+    if (!panel || !panel.isConnected) return;
+    try {
+      const cacheStatus = await window.sendMessage('queryCacheStatus', { sku });
+      renderCollectStatusBar(panel, sku, cacheStatus);
+    } catch (e) {
+      renderCollectStatusBar(panel, sku, null);
+    }
+  }
+
+  // ── 定时刷新:panel 级 5s 定时器 ──
+  // 主动查 SW 缓存(queryErpProductData)刷新面板数据 + 采集状态。
+  // 不依赖自动采集开关:即使自动采集关闭,也定时查缓存填充面板。
+  async function _refreshPanelData(card, panel) {
+    const info = extractCardInfo(card);
+    const productId = extractProductId(info.url);
+    if (!productId || !panel || !panel.isConnected) {
+      _stopPanelRefresh(panel);
+      return;
+    }
+    try {
+      const erpData = await window.sendMessage('queryErpProductData', { sku: productId });
+      if (erpData?.preFetched && typeof window.jzPopulatePanelV2 === 'function') {
+        // 面板已渲染过 V2 → 直接 populate 回填新数据
+        if (panel.querySelector('.ozon-helper-sidebar-card-body')) {
+          try {
+            await window.jzPopulatePanelV2(panel, productId, { preFetched: erpData.preFetched });
+          } catch { }
+        } else {
+          // 面板仍是 skeleton → 先 render V2 再 populate
+          if (typeof window.jzRenderProductPanelV2 === 'function') {
+            window.jzRenderProductPanelV2(panel, { sku: productId, initial: erpData });
+            try {
+              await window.jzPopulatePanelV2(panel, productId, { preFetched: erpData.preFetched });
+            } catch { }
+          }
+        }
+        // 写入 panelDataCache,供后续 hit 时复用
+        panelDataCache.set(productId, erpData);
+      }
+    } catch (e) {
+      // 静默失败,下次定时再试
+    }
+    // 刷新徽章 + 状态条(查 SW 缓存状态,不查采集队列状态)
+    updateCollectBadge(card, productId);
+    try {
+      const cacheStatus = await window.sendMessage('queryCacheStatus', { sku: productId });
+      renderCollectStatusBar(panel, productId, cacheStatus);
+    } catch (e) {
+      renderCollectStatusBar(panel, productId, null);
+    }
+  }
+
+  function _startPanelRefresh(card, panel) {
+    if (!panel) return;
+    _stopPanelRefresh(panel);
+    const timer = setInterval(() => {
+      if (!panel.isConnected) {
+        _stopPanelRefresh(panel);
+        return;
+      }
+      _refreshPanelData(card, panel);
+    }, PANEL_REFRESH_INTERVAL_MS);
+    _panelRefreshTimers.set(panel, timer);
+  }
+
+  function _stopPanelRefresh(panel) {
+    if (!panel) return;
+    const timer = _panelRefreshTimers.get(panel);
+    if (timer) {
+      clearInterval(timer);
+      _panelRefreshTimers.delete(panel);
+    }
   }
 
   // 渲染角落徽章(商品卡 tile-root 右上角)
+  // 语义:已收集的店铺 SKU 显示绿色 ✓ badge,非店铺 SKU 不显示
   function updateCollectBadge(card, sku) {
     if (!card) return;
     let badge = card.querySelector('.jz-collect-badge');
-    const status = _getEffectiveStatus(sku);
-    if (!status) {
+    const isCollected = _storeCollectedSkus.has(String(sku));
+    if (!isCollected) {
       if (badge) badge.remove();
       return;
     }
-    const meta = _COLLECT_STATUS_LABELS[status.status] || _COLLECT_STATUS_LABELS.failed;
     if (!badge) {
       badge = document.createElement('div');
       badge.className = 'jz-collect-badge';
       card.appendChild(badge);
     }
-    badge.textContent = meta.icon;
-    badge.style.backgroundColor = meta.color;
-    badge.dataset.status = status.status;
-    let title = meta.text;
-    if (status._waiting) {
-      title += ' · 等待重试中';
-    } else if (status.reason) {
-      title += ' · ' + (_COLLECT_REASON_LABELS[status.reason] || status.reason);
-    }
-    badge.title = title;
+    badge.textContent = '✓';
+    badge.style.backgroundColor = '#16a34a';
+    badge.dataset.status = 'collected';
+    badge.title = '已收集';
   }
 
   // 渲染店铺归属标签(商品卡顶部左上角)
@@ -501,7 +598,7 @@
       if (String(m[1]) !== String(sku)) continue;
       updateCollectBadge(card, sku);
       const panel = card._ohPanel;
-      if (panel) renderCollectStatusBar(panel, sku);
+      if (panel) refreshCollectStatusBar(panel, sku);
     }
   }
   // SW 广播 collectDone/taskStatus 时会同步 __jzCollectingSkus,
@@ -521,7 +618,7 @@
       if (!m) continue;
       updateCollectBadge(card, m[1]);
       const panel = card._ohPanel;
-      if (panel) renderCollectStatusBar(panel, m[1]);
+      if (panel) refreshCollectStatusBar(panel, m[1]);
     }
   }
 
@@ -546,6 +643,18 @@
 
   // 当前店铺页非店铺商品 SKU 集合(推荐区等),用于避免把非本店 SKU 关联到当前店铺
   const _nonStoreSkus = new Set();
+
+  // 当前店铺页已收集的店铺 SKU 集合(用于 MY 采集器面板计数 + jz-collect-badge 标记)
+  // 收集时机:ensureDataPanel 创建 panel 时(即店铺 SKU 卡片进入视口)
+  const _storeCollectedSkus = new Set();
+
+  // 更新 MY 采集器面板的店铺 SKU 收集计数
+  function _updateStoreSkuCount() {
+    const panel = window.__qxCollectorPanel;
+    if (panel && typeof panel.setStoreSkuCount === 'function') {
+      panel.setStoreSkuCount(_storeCollectedSkus.size);
+    }
+  }
 
   // ── store-sku 发现上报 ──────────────────────────────────────
   // panel 加载时上报"发现"关系到后端 ozon_store_sku 集合。
@@ -720,11 +829,11 @@
       }
     }
 
-    // 1) 新采集队列:交给 collectGate 门控,避免 IntersectionObserver 在 sellerSlug
-    //    就绪前触发导致空 slug 入队 + dedup 阻止重提交。
-    //    panel 渲染(查 ERP、渲染字段)零阻塞,只有采集提交被 gate 门控。
+    // 1) 采集任务提交:受 panelState.enabled(自动采集开关)控制。
+    //    关闭时不提交采集任务,但面板仍渲染(通过定时刷新查缓存填充数据)。
+    //    panel 渲染(查 ERP、渲染字段)零阻塞,只有采集提交被 gate + 开关门控。
     //    非店铺页(无 sellerInfo)_collectGate 会被立即 resolve,等同直接提交。
-    if (window.__jzSubmitCollectTask && _collectGate) {
+    if (window.__jzSubmitCollectTask && _collectGate && panelState.enabled) {
       _pendingSkus.push({ sku: productId, card });
       _collectGate.then((ctx) => _maybeFlushSku(productId, card, ctx));
     }
@@ -737,13 +846,13 @@
         window.jzRenderProductPanelV2(panel, { sku: productId, initial: cached });
         try {
           await window.jzPopulatePanelV2(panel, productId, { preFetched: cached.preFetched });
-        } catch {}
+        } catch { }
       } else {
         window.jzRenderProductCardPanel(panel, cached);
       }
       if (panel) panel.dataset.jzLoadStatus = 'ready';
       updateCollectBadge(card, productId);
-      renderCollectStatusBar(panel, productId);
+      refreshCollectStatusBar(panel, productId);
       return;
     }
 
@@ -758,12 +867,17 @@
           window.jzRenderProductPanelV2(panel, { sku: productId, initial: erpData });
           try {
             await window.jzPopulatePanelV2(panel, productId, { preFetched: erpData.preFetched });
-          } catch {}
+          } catch { }
         } else {
           window.jzRenderProductCardPanel(panel, erpData);
         }
       } else {
-        // ERP 无数据:补查终态/队列暂停,用于徽章文案;不论是否命中都 ready。
+        // ERP 无数据:直接渲染 V2 骨架(全 '-' 字段 + 状态条),等 collectDone 广播回填。
+        // 避免面板停在 skeleton 状态,让用户看到完整字段布局 + 采集状态。
+        if (typeof window.jzRenderProductPanelV2 === 'function') {
+          window.jzRenderProductPanelV2(panel, { sku: productId });
+        }
+        // 补查终态/队列暂停,用于徽章文案;不论是否命中都 ready。
         // 时序竞态:SW 很快终态时 collectDone 可能先于 panel 创建 → 广播丢失,
         // 这里用 _collectStatusMap 兜底徽章,避免误显示「采集中」。
         const st = _collectStatusMap.get(String(productId));
@@ -786,7 +900,9 @@
     }
     if (panel) panel.dataset.jzLoadStatus = 'ready';
     updateCollectBadge(card, productId);
-    renderCollectStatusBar(panel, productId);
+    refreshCollectStatusBar(panel, productId);
+    // 启动 5s 定时刷新(主动查缓存刷新数据 + 采集状态,不依赖自动采集开关)
+    _startPanelRefresh(card, panel);
   }
 
   function ensureDataPanel(card) {
@@ -801,6 +917,20 @@
 
     // 渲染店铺归属标签(店铺 SKU / 非店铺商品)
     renderSellerTag(card);
+
+    // 店铺页:收集店铺 SKU 到 _storeCollectedSkus(用于 MY 采集器面板计数 + badge 标记)
+    // 非店铺商品(推荐区)不收集,只记录到 _nonStoreSkus
+    if (sellerSlug && isStoreSkuCard(card)) {
+      const link = card.querySelector('a[href*="/product/"]');
+      const m = link?.href.match(/\/product\/.*-(\d{5,})/);
+      if (m) {
+        const skuStr = String(m[1]);
+        if (!_storeCollectedSkus.has(skuStr)) {
+          _storeCollectedSkus.add(skuStr);
+          _updateStoreSkuCount();
+        }
+      }
+    }
 
     // 店铺页:非店铺商品(推荐区/相关商品)只显示归属标签,不加载 panel 也不请求数据。
     // 原因:
@@ -1073,6 +1203,7 @@
 
   function removeDataPanel(card) {
     if (card._ohPanel) {
+      _stopPanelRefresh(card._ohPanel);
       card._ohPanel.remove();
       card._ohPanel = null;
     }
@@ -1092,12 +1223,10 @@
   }
 
   function applyToAll() {
+    // 数据面板始终展示,不再受自动采集开关(panelState.enabled)控制。
+    // panelState.enabled 只控制采集行为(队列暂停/恢复),不影响面板显隐。
     const cards = getCards();
-    if (panelState.enabled) {
-      cards.forEach((card) => ensureDataPanel(card));
-    } else {
-      cards.forEach((card) => removeDataPanel(card));
-    }
+    cards.forEach((card) => ensureDataPanel(card));
   }
 
   // ─── 数据面板开关：从 chrome.storage.local 读 + 监听 onChanged ───
@@ -1123,9 +1252,10 @@
         if (area !== 'local') return;
         if (!changes[STORAGE_KEY]) return;
         panelState.enabled = changes[STORAGE_KEY].newValue !== false;
-        applyToAll();
+        // 数据面板始终展示,这里只更新 panelState.enabled(控制采集行为)
+        // 不再调用 applyToAll() 移除/恢复面板
       });
-    } catch {}
+    } catch { }
   }
 
   function createObserver() {
@@ -1176,13 +1306,13 @@
     if (_collectorPanel) {
       try {
         _collectorPanel.destroy();
-      } catch {}
+      } catch { }
       _collectorPanel = null;
     }
     if (_autoScroller) {
       try {
         _autoScroller.stop && _autoScroller.stop();
-      } catch {}
+      } catch { }
       _autoScroller = null;
     }
   }
@@ -1195,7 +1325,7 @@
         if (collectorEnabled) mountCollectorHere();
         else unmountCollectorHere();
       });
-    } catch {}
+    } catch { }
   }
 
   function mountCollectorHere() {
@@ -1234,8 +1364,8 @@
       try {
         _autoScroller = new window.QXAutoScroller({
           queue: taskQueue,
-          intervalMs: 60000,
-          settleMs: 2000,
+          intervalMs: 500,
+          settleMs: 1000,
           scrollStepRatio: 0.95,
           minScrollStepPx: 680,
           emptyThreshold: 5,
@@ -1247,17 +1377,17 @@
             _collectorPanel.toast(which === 'paused' ? '队列拥塞，自动暂停翻页' : '队列恢复，继续翻页', 'info', 1800);
             try {
               _collectorPanel.setAutoScrollStatus(_autoScroller.getScrollStatus());
-            } catch {}
+            } catch { }
           },
           onEmpty: () => {
             if (!_collectorPanel) return;
             _collectorPanel.toast('当前页已抓取完成', 'success', 1800);
             try {
               _collectorPanel.setAutoScrollStatus(_autoScroller.getScrollStatus());
-            } catch {}
+            } catch { }
           },
         });
-      } catch {}
+      } catch { }
       // 500ms 轮询翻页状态，更新面板展示
       if (_autoScrollStatusTimer) clearInterval(_autoScrollStatusTimer);
       _autoScrollStatusTimer = setInterval(() => {
@@ -1276,7 +1406,7 @@
             status = _autoScroller.getScrollStatus();
           }
           _collectorPanel.setAutoScrollStatus(status);
-        } catch {}
+        } catch { }
       }, 500);
     }
 
@@ -1284,11 +1414,11 @@
     _collectorPanel = window.QXCollectorPanel.create({
       callbacks: {
         onToggleRunning: (next) => {
-          // 主开关：控制 panelState（数据面板自动加载）+ autoCollectRunning(SW 侧)
+          // 主开关:只控制采集行为(队列暂停/恢复),不影响数据面板显隐。
+          // 数据面板始终展示,通过定时刷新主动查缓存填充数据。
           panelState.enabled = next;
           if (next) {
             taskQueue.resume();
-            applyToAll();
             // 恢复采集: 若"自动翻页"开关仍勾选(用户偏好), 重新启动 AutoScroller
             if (_autoScroller) {
               const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
@@ -1336,7 +1466,7 @@
       if (cb && cb.checked) {
         try {
           _autoScroller.start();
-        } catch {}
+        } catch { }
       }
     }
 
@@ -1469,6 +1599,10 @@
       const update = {
         slug,
         name,
+        sellerId: detail.sellerId || '',
+        pageType: detail.pageType || '',
+        method: detail.method || '',
+        companyInfo: detail.companyInfo || null,
         isChinese: result ? result.isChinese : null,
         classifiedBy: result ? result.classifiedBy : null,
       };

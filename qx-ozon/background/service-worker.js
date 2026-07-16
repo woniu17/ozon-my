@@ -2286,7 +2286,8 @@ try {
       // ── fetch 2:跟卖 modal endpoint(三合一改造) ──
       // /api/composer-api.bx/page/json/v2?url=/modal/otherOffersFromSellers?product_id=<sku>
       // 解析 webSellerList widget,抽取 {count, sellers, source}。
-      // 失败 / 零跟卖 / 解析失败均返回结构化结果(SW 侧写 followSell 缓存,避免重复真调)。
+      // 仅 HTTP 200 才写缓存(零跟卖/解析失败也写,避免重复真调);
+      // HTTP 非 200(403/5xx 等)视为失败,不写缓存(允许后续重试),与内容侧行为对齐。
       const fsSku = (relPath.match(/-(\d+)\/?$/) || [])[1] || '';
       let followSellData = null;
       if (fsSku) {
@@ -2297,7 +2298,11 @@ try {
           const fsTimer = setTimeout(() => fsController.abort(), timeout);
           const fsResp = await fetch(fsUrl, {
             credentials: 'include',
-            headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
+            headers: {
+              'x-o3-app-name': 'dweb_client',
+              'x-o3-language': 'ru', // 与内容侧对齐,避免 BFF 返回不同 shape
+              accept: 'application/json',
+            },
             signal: fsController.signal,
           });
           clearTimeout(fsTimer);
@@ -2362,7 +2367,9 @@ try {
               }
             }
           } else {
-            followSellData = { count: 0, sellers: [], source: 'no-sellers' };
+            // HTTP 非 200(403/5xx 等)视为失败,不写缓存(允许后续重试)
+            console.warn('[fetchVariantMedia] followSell modal HTTP', fsResp.status, 'sku=', fsSku);
+            followSellData = null;
           }
         } catch (e) {
           // modal fetch 网络失败 / 超时 — 不写 no-sellers(允许后续重试)
@@ -2796,9 +2803,12 @@ try {
     }
 
     // L2: MongoDB
+    // 注意:与 L1 同样的校验 — classifiedBy 为空字符串的记录视为无效(历史 bug:
+    // ERP 前端 updateStoreClass 不传 classifiedBy 导致后端写空字符串),不信任 L2,
+    // 继续走规则引擎让 country=CN 等规则重新分类并覆盖脏记录。
     const l2 = await _erpStoreClassGet(slug);
     console.log('[store-class] L2 MongoDB:', l2);
-    if (l2 && l2.isChinese !== null && l2.isChinese !== undefined) {
+    if (l2 && l2.isChinese !== null && l2.isChinese !== undefined && l2.classifiedBy) {
       console.log('[store-class] L2 hit →', { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy });
       try {
         await setStorage({
@@ -2808,6 +2818,10 @@ try {
         console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
       }
       return { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy };
+    }
+    // L2 无效或 classifiedBy 为空:记录日志,后续规则引擎重新分类后会覆盖
+    if (l2 && (!l2.classifiedBy || l2.isChinese === null || l2.isChinese === undefined)) {
+      console.log('[store-class] L2 ignored (invalid classifiedBy):', l2);
     }
 
     // 规则引擎
@@ -4022,12 +4036,45 @@ try {
                 _erpCacheSetAndSyncFlag(_IDB_STORE_SEARCH, 'search', sku, { data: cacheData });
 
                 // 调 bundle(fetchBundleByVariantId 内部有 L1+L2+L3 三层缓存)
+                // bundle 返回后把物理 attrs(4497/9454-9456)merge 进 items[0],
+                // 并重新写 search_cache,让 _getSearchVariantForBroadcast 能读到完整数据
                 const variantId = items[0].variant_id;
                 if (variantId) {
                   const bundleItem = await fetchBundleByVariantId(sku, variantId, companyId, {
                     forceRefresh: false,
                   });
-                  if (bundleItem) results[5].hit = true; // bundle
+                  if (bundleItem) {
+                    results[5].hit = true; // bundle
+                    const existingKeys = new Set(items[0].attributes.map((a) => String(a.key)));
+                    const physicalAttrs = [];
+                    if (Number(bundleItem.weight) > 0 && !existingKeys.has('4497')) {
+                      physicalAttrs.push({ key: '4497', value: String(bundleItem.weight) });
+                    }
+                    if (Number(bundleItem.depth) > 0 && !existingKeys.has('9454')) {
+                      physicalAttrs.push({ key: '9454', value: String(bundleItem.depth) });
+                    }
+                    if (Number(bundleItem.width) > 0 && !existingKeys.has('9455')) {
+                      physicalAttrs.push({ key: '9455', value: String(bundleItem.width) });
+                    }
+                    if (Number(bundleItem.height) > 0 && !existingKeys.has('9456')) {
+                      physicalAttrs.push({ key: '9456', value: String(bundleItem.height) });
+                    }
+                    if (bundleItem.barcode && !existingKeys.has('7822')) {
+                      physicalAttrs.push({ key: '7822', value: String(bundleItem.barcode) });
+                    }
+                    if (physicalAttrs.length > 0) {
+                      items[0] = { ...items[0], attributes: [...items[0].attributes, ...physicalAttrs] };
+                      // 重新写 search_cache(覆盖上面 5 attrs 版本)
+                      const mergedCacheData = { items };
+                      _idbPut(_IDB_STORE_SEARCH, {
+                        sku,
+                        data: mergedCacheData,
+                        fetchedAt: Date.now(),
+                        l2Synced: false,
+                      }).catch(() => {});
+                      _erpCacheSetAndSyncFlag(_IDB_STORE_SEARCH, 'search', sku, { data: mergedCacheData });
+                    }
+                  }
                 }
                 console.log('[SW autoCollect] Step5 search/bundle 真调成功:', sku, 'items=', items.length);
               } else {
@@ -4621,15 +4668,98 @@ try {
     }
   };
 
+  // 从 bundle item 顶层提取物理字段(weight/depth/width/height/barcode)
+  // 并以 sv attr key (4497/9454/9455/9456/7822) 形式返回,与 searchVariants Step2
+  // 的 merge 逻辑一致。用于 _getSearchVariantForBroadcast 的 bundle 兜底:
+  // 当 search_cache 的 item 缺物理 attrs(因 searchVariants bundle 步骤失败/未跑)
+  // 时,从 bundle_cache 顶层字段补齐,让面板重量·尺寸能显示。
+  const _extractBundlePhysicalAttrs = (bundleItem) => {
+    if (!bundleItem) return [];
+    const attrs = [];
+    if (Number(bundleItem.weight) > 0) attrs.push({ key: '4497', value: String(bundleItem.weight) });
+    if (Number(bundleItem.depth) > 0) attrs.push({ key: '9454', value: String(bundleItem.depth) });
+    if (Number(bundleItem.width) > 0) attrs.push({ key: '9455', value: String(bundleItem.width) });
+    if (Number(bundleItem.height) > 0) attrs.push({ key: '9456', value: String(bundleItem.height) });
+    if (bundleItem.barcode) attrs.push({ key: '7822', value: String(bundleItem.barcode) });
+    return attrs;
+  };
+
+  // 从 bundle_cache(L1 IDB → L2 ERP)取 bundle item,不要求 attrs 非空
+  // (bundle 顶层 weight/depth/width/height 即使 attributes 为空也有效)。
+  const _getBundleItemForBroadcast = async (sku) => {
+    try {
+      const l1 = await _idbGet(_IDB_STORE_BUNDLE, sku);
+      if (l1?.data) return l1.data;
+      const l2 = await _erpCacheGet('bundle', sku);
+      if (l2?.data) return l2.data;
+    } catch (e) {
+      console.warn('[Queue] get bundle item failed:', e?.message || e);
+    }
+    return null;
+  };
+
   const _getSearchVariantForBroadcast = async (sku) => {
     try {
+      let item = null;
       const l1 = await _idbGet(_IDB_STORE_SEARCH, sku);
       if (l1 && Array.isArray(l1.data?.items) && l1.data.items.length > 0) {
-        return l1.data.items[0];
+        item = l1.data.items[0];
       }
-      const l2 = await _erpCacheGet('search', sku);
-      if (l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0) {
-        return l2.data.items[0];
+      if (!item) {
+        const l2 = await _erpCacheGet('search', sku);
+        if (l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0) {
+          item = l2.data.items[0];
+        }
+      }
+      // search_cache item 缺物理 attrs 时,从 bundle_cache 顶层字段补齐
+      // (searchVariants Step2 的 bundle merge 可能因反爬/超时失败,导致 search_cache
+      // 里的 item 没被 merge 进 4497/9454-9456,但 bundle_cache 独立写入,仍有数据)
+      if (item) {
+        const attrKeys = new Set((item.attributes || []).map((a) => String(a.key)));
+        const needPhysical = !attrKeys.has('4497') && !attrKeys.has('9454');
+        if (needPhysical) {
+          const bundleItem = await _getBundleItemForBroadcast(sku);
+          const physicalAttrs = _extractBundlePhysicalAttrs(bundleItem);
+          if (physicalAttrs.length > 0) {
+            item = {
+              ...item,
+              attributes: [...(item.attributes || []), ...physicalAttrs],
+            };
+          }
+        }
+        return item;
+      }
+      // search_cache 完全未命中:直接用 bundle item(含顶层物理字段 + 完整 attrs)
+      // bundle item 顶层有 weight/depth/width/height,但 content 端按 attr key 读,
+      // 这里转 sv shape:把顶层物理字段 push 进 attributes
+      const bundleItem = await _getBundleItemForBroadcast(sku);
+      if (bundleItem) {
+        const attributes = Array.isArray(bundleItem.attributes)
+          ? bundleItem.attributes
+              .map((a) => {
+                const key = String(a.attribute_id || a.key || '');
+                if (!key) return null;
+                const vals = Array.isArray(a.values) ? a.values.filter((v) => v && v.value != null && v.value !== '') : [];
+                if (vals.length === 0) return null;
+                if (vals.length > 1) return { key, collection: vals.map((v) => String(v.value)) };
+                return { key, value: String(vals[0].value) };
+              })
+              .filter(Boolean)
+          : [];
+        const existingKeys = new Set(attributes.map((a) => String(a.key)));
+        for (const pa of _extractBundlePhysicalAttrs(bundleItem)) {
+          if (!existingKeys.has(pa.key)) {
+            attributes.push(pa);
+            existingKeys.add(pa.key);
+          }
+        }
+        return {
+          variant_id: bundleItem.variant_id || sku,
+          description_category_id: bundleItem.description_category_id || 0,
+          categories: bundleItem.categories || [],
+          attributes,
+          _bundleItem: bundleItem,
+        };
       }
     } catch (e) {
       console.warn('[Queue] get search variant failed:', e?.message || e);
@@ -7190,7 +7320,10 @@ try {
           }
         }
         case 'queryErpProductData': {
-          // 队列架构:从 ERP 查询已采集的完整数据(数据卡进视口时兜底)
+          // 队列架构:从 ERP 查询已采集的完整数据(数据卡进视口时兜底)。
+          // 改造:ERP 无任务结果时,主动查 SW 缓存(stats/market/variant/followCount)
+          // 组装成 preFetched 返回,让面板进入视口时立即显示缓存数据,
+          // 不再空骨架等 collectDone 广播(采集未完成也能显示已有缓存)。
           const qSku = message.sku;
           if (!qSku) return { ok: true, data: null };
           try {
@@ -7203,11 +7336,63 @@ try {
             // apiRequest 返回 { ok, data },data = MongoDB 任务文档(含 result 字段)
             const taskData = doc?.data || doc;
             if (taskData && taskData.result) {
-              // 包装成 { preFetched } 格式,与 collectDone 广播的 msg.data 结构一致,
-              // 让 loadPanelData 的 erpData.preFetched 能直接访问
+              // 任务已完成:返回完整快照(与 collectDone 广播的 msg.data 结构一致)
               return { ok: true, data: { preFetched: taskData.result } };
             }
+            // 任务未完成 / 不存在:主动查 SW 缓存,组装 preFetched。
+            // _buildCollectDoneData 并行查 stats(ERP 后端)/ market(SW 缓存)/
+            // variant(IDB+ERP cache)/ followCount(SW 缓存),均为安全查询不开 Ozon tab。
+            const preFetched = await _buildCollectDoneData(qSku, null);
+            const hasData =
+              preFetched.stats?.value ||
+              preFetched.market?.value ||
+              preFetched.variant?.value ||
+              preFetched.followCount?.value;
+            // 全 null 时不返回(保持空骨架,等 collectDone 广播回填)
+            return { ok: true, data: hasData ? { preFetched } : null };
+          } catch (e) {
             return { ok: true, data: null };
+          }
+        }
+        case 'queryCacheStatus': {
+          // 查询 8 类缓存命中状态(供数据面板状态条展示,不查采集队列)
+          // 返回 { results: [{ type, hit }], hitCount, total }
+          const qSku = message.sku;
+          if (!qSku) return { ok: true, data: null };
+          try {
+            const [card, detail, composer, entrypoint, search, bundle, marketStats, followSell] =
+              await Promise.all([
+                _cardCacheGet(qSku).catch(() => null),
+                _detailCacheGet(qSku).catch(() => null),
+                _composerCacheGet(qSku).catch(() => null),
+                _entrypointCacheGet(qSku).catch(() => null),
+                (async () => {
+                  const l1 = await _idbGet(_IDB_STORE_SEARCH, qSku).catch(() => null);
+                  if (l1?.data) return l1.data;
+                  const l2 = await _erpCacheGet('search', qSku).catch(() => null);
+                  return l2?.data || null;
+                })().catch(() => null),
+                (async () => {
+                  const l1 = await _idbGet(_IDB_STORE_BUNDLE, qSku).catch(() => null);
+                  if (l1?.data) return l1.data;
+                  const l2 = await _erpCacheGet('bundle', qSku).catch(() => null);
+                  return l2?.data || null;
+                })().catch(() => null),
+                _marketStatsCacheGet(qSku).catch(() => null),
+                _followSellCacheGet(qSku).catch(() => null),
+              ]);
+            const results = [
+              { type: 'card', hit: !!card },
+              { type: 'composer', hit: !!composer },
+              { type: 'entrypoint', hit: !!entrypoint },
+              { type: 'search', hit: !!search },
+              { type: 'bundle', hit: !!bundle },
+              { type: 'marketStats', hit: !!(marketStats && marketStats.data) },
+              { type: 'followSell', hit: !!(followSell && followSell.data) },
+              { type: 'detail', hit: !!detail },
+            ];
+            const hitCount = results.filter((r) => r.hit).length;
+            return { ok: true, data: { results, hitCount, total: results.length } };
           } catch (e) {
             return { ok: true, data: null };
           }
@@ -7899,6 +8084,17 @@ try {
                 }
               } catch (e) {
                 console.warn(`[searchVariants] bundle injection failed for sku=${sku}:`, e.message || e);
+              }
+
+              // Step2 bundle merge 完成后,重新写 search_cache(覆盖 Step1 写入的 5 attrs 版本)。
+              // 否则 _getSearchVariantForBroadcast(collectDone 广播 / queryErpProductData)
+              // 读 search_cache 会拿到缺物理 attrs 的旧版本,导致面板重量·尺寸不显示。
+              if (attempt === 1) {
+                const cacheData = { items };
+                _idbPut(_IDB_STORE_SEARCH, { sku, data: cacheData, fetchedAt: Date.now(), l2Synced: false }).catch(
+                  () => {}
+                );
+                _erpCacheSetAndSyncFlag(_IDB_STORE_SEARCH, 'search', sku, { data: cacheData });
               }
 
               return { ok: true, data: { items } };
