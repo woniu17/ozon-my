@@ -17,6 +17,11 @@
 (function () {
   'use strict';
 
+  // 加载守卫:扩展重载后 chrome.scripting.executeScript 重新注入时,
+  // 新 ISOLATED world 没有此标志,脚本正常执行;旧 ISOLATED world 已设标志不会重复执行。
+  if (window.__JZ_DATA_PANEL_LOADED__) return;
+  window.__JZ_DATA_PANEL_LOADED__ = true;
+
   // 通用商品卡 selector — Ozon 各页面（search / category / 首页 carousel /
   // brand / seller / 收藏夹 / 商品详情页"也看了"）目前都用 .tile-root 作为容器
   const CARD_SELECTORS = [
@@ -39,6 +44,68 @@
   let sellerSlug = '';
   let sellerName = ''; // 店铺名称,用于在商品卡上显示"店铺商品:xxx"标签
   let sellerId = ''; // 卖家 ID(从 __NUXT__ 获取,稳定主键,slug 可变)
+
+  // ── 采集门控(collectGate):解决 IntersectionObserver 与 sellerSlug 竞态 ──
+  // 问题:IO 在 t≈200ms 触发,但 sellerSlug 要等 t≈500ms~15s 才就绪。
+  //       若 IO 触发时直接提交 __jzSubmitCollectTask,会用空 slug 入队 + dedup 阻止重提交。
+  // 方案:SKU 先入 _pendingSkus 队列,等 collectGate(sellerInfo+分类结果)就绪后批量 flush。
+  //       panel 渲染零阻塞(查 ERP、渲染字段立即执行),只有采集提交被 gate 门控。
+  // 非店铺页(无 sellerInfo)直接 resolve gate(isNonShopPage=true),立即放行。
+  let _collectGate = null;
+  let _resolveCollectGate = null;
+  let _pendingSkus = [];
+  let _storeClassResult = null; // { isChinese, classifiedBy } | null
+  let _gateState = 'pending'; // 'pending' | 'ready' | 'timedOut'
+
+  function _initCollectGate() {
+    _gateState = 'pending';
+    _pendingSkus = [];
+    _collectGate = new Promise((resolve) => {
+      _resolveCollectGate = resolve;
+    });
+    // 超时降级:5s 后 sellerInfo 仍未到达,按"未分类"放行(让 SW 判定 unclassified-store)
+    // 避免页面卡死,也避免 sellerInfo 异常时永不提交
+    setTimeout(() => {
+      if (_gateState === 'pending') {
+        _gateState = 'timedOut';
+        console.warn('[panel] collectGate 超时降级,sellerInfo 未到达');
+        _resolveCollectGate({ timedOut: true, sellerSlug: '', sellerId: '', isChinese: null });
+        _flushPendingSkus();
+      }
+    }, 5000);
+  }
+
+  // gate 就绪后对单个 SKU 决策:提交 / 静默丢弃
+  function _maybeFlushSku(sku, card, ctx) {
+    if (ctx.timedOut) {
+      // 超时降级:sellerInfo 未到达,按空 slug 提交(让 SW 判定 unclassified-store)
+      window.__jzSubmitCollectTask?.(sku, card, '', '').catch(() => {});
+      return;
+    }
+    // onlyChineseStores 开启时,非中国店铺静默丢弃(不入 _autoCollectSeen,允许切换店铺重试)
+    if (_storeClassResult && _storeClassResult.isChinese === false) {
+      console.log('[panel] 非中国店铺,跳过采集:', sku);
+      return;
+    }
+    // 中国店铺 / 未分类 / onlyChineseStores=false → 提交
+    window.__jzSubmitCollectTask?.(sku, card, ctx.sellerSlug, ctx.sellerId).catch(() => {});
+  }
+
+  // 批量 flush pending 队列(用于 sellerInfo 到达 / 用户手动标记后)
+  function _flushPendingSkus() {
+    if (_pendingSkus.length === 0) return;
+    const ctx = {
+      sellerSlug,
+      sellerId,
+      isChinese: _storeClassResult?.isChinese,
+      timedOut: _gateState === 'timedOut',
+    };
+    console.log(`[panel] flush ${_pendingSkus.length} 个 pending SKU, gateState=${_gateState}`);
+    for (const { sku, card } of _pendingSkus) {
+      _maybeFlushSku(sku, card, ctx);
+    }
+    _pendingSkus = [];
+  }
 
   // 判断商品卡是否属于当前店铺 SKU(而非"推荐/相关商品"区域)。
   // 方案 1(最可靠):向上查找 data-widget 属性。
@@ -76,8 +143,10 @@
     try {
       const recent = await window.sendMessage('autoCollectGetRecent', { limit: 200 });
       if (!Array.isArray(recent)) return;
-      // 倒序遍历,后到的覆盖先到的(保留最近一次状态)
-      for (let i = recent.length - 1; i >= 0; i--) {
+      // recent 来自 SW 的 _autoCollectRecent.slice(-N).reverse(),排列为新→旧。
+      // 正序遍历(新→旧),!has(sku) 保留先到的(最新的),确保同一 SKU 的
+      // 最新状态覆盖旧状态(如 success 覆盖早期的 skipped+paused)。
+      for (let i = 0; i < recent.length; i++) {
         const e = recent[i];
         if (!e || !e.sku) continue;
         if (!_collectStatusMap.has(e.sku)) {
@@ -157,6 +226,28 @@
     if (msg.type === 'queueResumed') {
       console.log('[panel] 队列恢复,清除 __jzQueuePaused 标志');
       window.__jzQueuePaused = false;
+      return;
+    }
+
+    // rescan:SW 通过 rescan op 触发的不刷新页面重新扫描。
+    // 清空 dedup + 清除暂停标志 + 重置所有 panel 为 loading + 重新提交所有可见 SKU。
+    if (msg.type === 'rescan') {
+      console.log('[panel] 收到 rescan,重新提交所有可见 SKU');
+      window.__jzAutoCollectResetSeen?.();
+      window.__jzQueuePaused = false;
+      try {
+        const cards = getCards();
+        for (const card of cards) {
+          const info = extractCardInfo(card);
+          const productId = extractProductId(info.url);
+          if (!productId) continue;
+          const panel = card.querySelector('.ozon-helper-data-panel');
+          if (panel) panel.dataset.jzLoadStatus = 'loading';
+          window.__jzSubmitCollectTask?.(productId, card, sellerSlug, sellerId);
+        }
+      } catch (err) {
+        console.warn('[panel] rescan failed:', err);
+      }
       return;
     }
 
@@ -564,18 +655,9 @@
     const priceText = extractVisiblePriceText(card, priceNode);
     const price = window.normalizePrice ? window.normalizePrice(priceText) : null;
 
-    // 评价数："4.8 · 1 234" 取 ·/空格后的整数；只有评分时返回 null
-    const ratingEl = card.querySelector('[data-widget="searchResultsRating"]');
-    let ratingCount = null;
-    if (ratingEl) {
-      const text = (ratingEl.textContent || '').trim();
-      const parts = text.split(/[·•\s]+/).filter(Boolean);
-      if (parts.length >= 2) {
-        const raw = parts[parts.length - 1].replace(/\s/g, '').replace(/,/g, '.');
-        const n = Number(raw);
-        if (Number.isInteger(n) && n >= 0) ratingCount = n;
-      }
-    }
+    // 评价数:Ozon 新版 DOM 移除了 data-widget 属性,改用公共提取函数
+    // (见 shared-utils.js window.jzExtractRatingCount)
+    const ratingCount = window.jzExtractRatingCount ? window.jzExtractRatingCount(card) : null;
 
     return {
       url: link?.href || '',
@@ -638,9 +720,13 @@
       }
     }
 
-    // 1) 新采集队列:fire-and-forget 提交任务(店铺页才会真正入队)
-    if (window.__jzSubmitCollectTask) {
-      window.__jzSubmitCollectTask(productId, card, sellerSlug, sellerId).catch(() => {});
+    // 1) 新采集队列:交给 collectGate 门控,避免 IntersectionObserver 在 sellerSlug
+    //    就绪前触发导致空 slug 入队 + dedup 阻止重提交。
+    //    panel 渲染(查 ERP、渲染字段)零阻塞,只有采集提交被 gate 门控。
+    //    非店铺页(无 sellerInfo)_collectGate 会被立即 resolve,等同直接提交。
+    if (window.__jzSubmitCollectTask && _collectGate) {
+      _pendingSkus.push({ sku: productId, card });
+      _collectGate.then((ctx) => _maybeFlushSku(productId, card, ctx));
     }
 
     // 2) 优先用本页已 fetch 的缓存渲染(避免重复请求)
@@ -1386,6 +1472,13 @@
         isChinese: result ? result.isChinese : null,
         classifiedBy: result ? result.classifiedBy : null,
       };
+      // 缓存分类结果 + resolve collectGate,让 pending SKU 批量 flush
+      _storeClassResult = result ? { isChinese: result.isChinese, classifiedBy: result.classifiedBy } : null;
+      if (_gateState === 'pending') {
+        _gateState = 'ready';
+        _resolveCollectGate({ sellerSlug, sellerId, isChinese: update.isChinese });
+      }
+      _flushPendingSkus();
       console.log('[ozon-data-panel] 准备 updateStoreDetection:', update);
       _pendingStoreUpdate = update; // 缓存,供 mountCollectorHere 重放
       if (window.__qxCollectorPanel) {
@@ -1489,11 +1582,17 @@
   console.log('[ozon-data-panel] seller info polling started (max', _sellerInfoPollMax, 'attempts)');
 
   // 监听人工标记后的通知(用户在 QX面板手动标记某店铺为中国/非中国)。
-  // 标记为中国后:重置去重集合 + 重新提交当前页可见 SKU。
+  // 标记为中国后:重置去重集合 + 更新分类结果 + resolve gate + 重新提交当前页可见 SKU。
   window.addEventListener('jz-store-classified', (e) => {
     const { slug, isChinese } = e.detail || {};
     if (isChinese !== true) return;
     if (slug) sellerSlug = slug;
+    // 更新分类结果 + resolve collectGate(让 pending SKU flush)
+    _storeClassResult = { isChinese: true, classifiedBy: 'manual' };
+    if (_gateState === 'pending') {
+      _gateState = 'ready';
+      _resolveCollectGate({ sellerSlug, sellerId, isChinese: true });
+    }
     // 重置去重集合,让已见 SKU 重新触发提交
     window.__jzAutoCollectResetSeen?.();
     // 重新扫描页面已挂面板的 card,用新队列入口提交任务
@@ -1519,6 +1618,16 @@
 
     if (SKIP_PATHS.some((p) => new RegExp(`^${p.replace(/\*/g, '.*')}$`).test(window.location.pathname))) {
       return;
+    }
+
+    // 初始化 collectGate:门控采集任务提交时机,避免 IntersectionObserver 在
+    // sellerSlug 就绪前触发导致空 slug 入队。
+    // 店铺页(/seller/*)等 sellerInfo 到达后 resolve;非店铺页立即 resolve(放行)。
+    _initCollectGate();
+    const _isShopPage = /^\/seller\/[^/]+\/?($|\/products\/?$)/i.test(window.location.pathname);
+    if (!_isShopPage) {
+      _gateState = 'ready';
+      _resolveCollectGate({ sellerSlug: '', sellerId: '', isChinese: null });
     }
 
     // 鉴权检查：未登录就不加载（避免无 token 调极掌后端打 401 产生 spam）

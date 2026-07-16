@@ -278,11 +278,31 @@
     const slug = slugMatch ? slugMatch[1] : '';
     const name = _extractShopNameFromDOM(slug);
 
-    // 等 __NUXT__.state.pageInfo.analyticsInfo.sellerId(15s,每 500ms 检查)
-    const sellerIdRaw = await waitFor(() => window.__NUXT__?.state?.pageInfo?.analyticsInfo?.sellerId, 15000, 500);
+    // 阶段 1:slug 立即 publish,让 ISOLATED 端先跑分类查询(collectGate 可提前 resolve)
+    // sellerId/companyInfo 后到再补发(seq 自增,接收端覆盖)
+    publishToIsolatedWorld({
+      pageType: 'shop',
+      slug,
+      name,
+      sellerId: '',
+      companyInfo: null,
+      method: 'slug-only',
+    });
+
+    // 等 __NUXT__.state.pageInfo.analyticsInfo.sellerId(15s,每 100ms 检查)
+    // 间隔从 500ms 缩短到 100ms,典型命中延迟从 ~500ms 降到 ~100ms
+    const sellerIdRaw = await waitFor(() => window.__NUXT__?.state?.pageInfo?.analyticsInfo?.sellerId, 15000, 100);
     if (!sellerIdRaw) {
-      console.warn('[seller-info-main] ShopPage: __NUXT__ sellerId 等待超时');
-      return null;
+      console.warn('[seller-info-main] ShopPage: __NUXT__ sellerId 等待超时,仅 slug 已发布');
+      // 超时时仍返回 slug(而非 null),让 ISOLATED 端至少能用 slug 做基础展示
+      return {
+        pageType: 'shop',
+        slug,
+        name,
+        sellerId: '',
+        companyInfo: null,
+        method: 'nuxt-timeout',
+      };
     }
     const sellerId = String(sellerIdRaw);
 

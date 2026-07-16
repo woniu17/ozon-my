@@ -14,7 +14,9 @@ const PUBLIC_PATHS = new Set([
 
 function isPublic(path) {
   if (PUBLIC_PATHS.has(path)) return true;
-  // /extension/latest 属于版本检查,允许匿名(可选)
+  // SW 内部轮询接口,SW 可能没有有效 token(扩展重载后 token 可能过期)
+  if (path === '/admin/api/collect-queue/ops/pending') return true;
+  if (path.startsWith('/admin/api/collect-queue/ops/') && path.endsWith('/processed')) return true;
   return false;
 }
 

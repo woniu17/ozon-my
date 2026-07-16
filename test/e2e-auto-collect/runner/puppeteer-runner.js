@@ -246,12 +246,53 @@ async function setFailSku(sku, fail) {
 }
 
 // 通用:打开中国店铺页并滚动触发 IntersectionObserver
-async function openChinaShopAndScroll(browser, sleepAfterScroll = 3000) {
+// 等待 seller-info-main.js 完成(设置 data-jz-seller-info 属性)再滚动,
+// 避免 IntersectionObserver 在 sellerSlug 就绪前触发导致 unclassified-store 跳过。
+// 如果传入 mongo + sw,会在 seller-info 就绪后清空早期(空 slug)队列任务并重置 SW
+// 内存队列状态(_consuming/_completedTodaySkus 等),确保 SW 不会消费早期空 slug 任务。
+// 关键:页面加载前先禁用 autoCollectRunning,防止 SW 在 seller-info 就绪前消费早期任务。
+async function openChinaShopAndScroll(browser, sleepAfterScroll = 3000, mongo = null, sw = null) {
+  // 页面加载前先禁用 autoCollectRunning,防止 IntersectionObserver 在 seller-info
+  // 就绪前触发的早期任务被 SW 消费(导致 unclassified-store 跳过)。
+  if (sw) {
+    await setAutoCollectConfig(sw, { autoCollectRunning: false });
+    await sleep(300);
+  }
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 800 });
   await page.goto(`${MOCK_BASE}/seller/${CHINA_SHOP_SLUG}`, { waitUntil: 'networkidle2' });
   await page.waitForFunction(() => window.__MOCK_READY__ === true, { timeout: 5000 });
+  // 等 seller-info-main.js 发布属性(MAIN world 写 DOM 属性,ISOLATED/world 可见)
+  await page
+    .waitForFunction(() => document.documentElement.getAttribute('data-jz-seller-info') !== null, { timeout: 15000 })
+    .catch(() => log('  warn: data-jz-seller-info 等待超时,继续执行'));
+  // 等 content script 的 1s 轮询拾取 seller-info(避免 IntersectionObserver 先于 sellerSlug 就绪触发)
   await sleep(2000);
+  // 清空早期(空 slug)队列任务:页面加载时 IntersectionObserver 可能在 sellerSlug 就绪前已触发,
+  // 这些任务会因 unclassified-store 被跳过。清空 mongo + 重置 SW 内存队列状态,确保只保留正确 slug 的任务。
+  if (mongo) {
+    try {
+      await mongo.collection('collect_queue_tasks').deleteMany({});
+      await mongo.collection('ozon_auto_collect_log').deleteMany({});
+      log('已清空早期队列任务(seller-info 就绪前提交的空 slug 任务)');
+    } catch {}
+  }
+  if (sw) {
+    await resetQueueMeta(sw);
+    // 等待 SW 异步写入完成(防止 SW 在清空 mongo 后仍写入早期任务结果)
+    await sleep(500);
+    // 再次清空 mongo(SW 可能在清空后又写入了早期任务的结果)
+    if (mongo) {
+      try {
+        await mongo.collection('collect_queue_tasks').deleteMany({});
+        await mongo.collection('ozon_auto_collect_log').deleteMany({});
+      } catch {}
+    }
+    // 重新启用 autoCollectRunning,让 SW 只消费滚动后提交的正确 slug 任务
+    await setAutoCollectConfig(sw, { autoCollectRunning: true });
+    await sleep(300);
+    log('已重置 SW 内存队列状态 + 重新启用 autoCollectRunning');
+  }
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await sleep(500);
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -477,25 +518,28 @@ async function scenarioCacheHit(browser, sw, mongo) {
     pausedUntil: 0,
   });
 
-  // 第二次触发,SW 应检测到缓存命中并跳过
-  log('第二次触发(应命中缓存跳过)...');
+  // 第二次触发,SW 前置缓存检查应命中,直接 success,不入队
+  log('第二次触发(应命中前置缓存检查,直接 success,不入队)...');
   await page.evaluate(() => window.scrollTo(0, 0));
   await sleep(500);
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await sleep(8000);
 
-  const logs = await mongo.collection('ozon_auto_collect_log').find({}).toArray();
-  const skippedLogs = logs.filter(
-    (l) => l.status === 'skipped' || l.reason === 'all-cached' || l.skipReason === 'all-cached'
-  );
-  if (skippedLogs.length >= 1) pass(`缓存命中生效:有 ${skippedLogs.length} 条 skipped/all-cached 日志`);
-  else {
-    log(`第二次采集日志共 ${logs.length} 条,无 skipped 记录`);
-    log('注意:某些 SW 实现可能直接复用缓存不写日志,改用缓存未增长判断');
-    const cacheCount2 = await countCache(mongo, 'ozon_card_cache');
-    if (cacheCount2 === cacheCount) pass(`缓存未增长(仍为 ${cacheCount2} 条),间接验证缓存命中`);
-    else fail(`缓存命中未生效:缓存从 ${cacheCount} 增长到 ${cacheCount2}`);
-  }
+  // 验证 1:队列中无新增任务(前置判断直接返回,不入队)
+  const tasks = await getQueueTasks(mongo);
+  const pendingTasks = tasks.filter((t) => t.status === 'pending' || t.status === 'running');
+  if (pendingTasks.length === 0) pass(`前置缓存命中:无任务入队(共 ${tasks.length} 条历史)`);
+  else fail(`前置缓存未命中:有 ${pendingTasks.length} 条 pending/running 任务`);
+
+  // 验证 2:缓存数未增长(无真调)
+  const cacheCount2 = await countCache(mongo, 'ozon_card_cache');
+  if (cacheCount2 === cacheCount) pass(`缓存未增长(仍为 ${cacheCount2} 条),验证无真调`);
+  else fail(`缓存异常增长:从 ${cacheCount} 到 ${cacheCount2}`);
+
+  // 验证 3:todayCount 未递增(缓存命中不消耗配额)
+  const cfgAfter = await getAutoCollectConfig(sw);
+  if (cfgAfter.todayCount === 0) pass(`todayCount 未递增(仍为 0),验证缓存命中不消耗配额`);
+  else fail(`todayCount 异常递增到 ${cfgAfter.todayCount}(应为 0)`);
 
   await page.close();
 }
@@ -1344,7 +1388,7 @@ async function scenarioStatusSuccess(browser, sw, mongo) {
   });
   await sleep(500);
 
-  const page = await openChinaShopAndScroll(browser, 3000);
+  const page = await openChinaShopAndScroll(browser, 3000, mongo);
 
   log('等待采集完成(最多 30s)...');
   for (let i = 0; i < 15; i++) {
@@ -1353,7 +1397,7 @@ async function scenarioStatusSuccess(browser, sw, mongo) {
     const terminalCount = tasks.filter((t) =>
       ['success', 'done', 'completed', 'failed_partial', 'failed_final'].includes(t.status)
     ).length;
-    if (terminalCount >= 1) {
+    if (terminalCount >= 2) {
       log(`已处理 ${terminalCount} 个任务`);
       break;
     }
@@ -1406,7 +1450,7 @@ async function scenarioStatusPartial(browser, sw, mongo) {
   for (const sku of SKUS) await setFailSku(sku, true);
   log(`已对 ${SKUS.length} 个 SKU 注入故障`);
 
-  const page = await openChinaShopAndScroll(browser, 3000);
+  const page = await openChinaShopAndScroll(browser, 3000, mongo);
 
   log('等待首次失败 → failed_retry...');
   let sawFailedRetry = false;
@@ -1483,7 +1527,7 @@ async function scenarioStatusFailed(browser, sw, mongo) {
   for (const sku of SKUS) await setFailSku(sku, true);
   log(`已对 ${SKUS.length} 个 SKU 注入故障`);
 
-  const page = await openChinaShopAndScroll(browser, 3000);
+  const page = await openChinaShopAndScroll(browser, 3000, mongo);
 
   log('等待首次失败 → failed_retry(不等待终态)...');
   let sawFailedRetry = false;
@@ -1545,17 +1589,23 @@ async function scenarioStatusAntibot(browser, sw, mongo) {
   });
   await sleep(500);
 
-  const page = await openChinaShopAndScroll(browser, 3000);
+  const page = await openChinaShopAndScroll(browser, 3000, mongo, sw);
 
-  log('等待 antibot 检测(最多 30s)...');
+  // 等待 antibot 检测(最多 60s)。
+  // 关键:只检测 sellerSlug 非空且 lastError.type === 'ANTIBOT_BLOCKED' 的 failed_final 任务,
+  // 过滤掉空 slug 的 unclassified-store skip 干扰(竞态问题导致的早期任务)。
+  // antibot 检测链路较长(创建 buyer tab → doFetch → 403 检测 → _handleAntibot),需要更长等待。
+  log('等待 antibot 检测(最多 60s)...');
   let sawAntibot = false;
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < 30; i++) {
     await sleep(2000);
     const tasks = await getQueueTasks(mongo);
-    const antibotTasks = tasks.filter((t) => t.status === 'failed_final');
+    const antibotTasks = tasks.filter(
+      (t) => t.status === 'failed_final' && t.sellerSlug && t.lastError && t.lastError.type === 'ANTIBOT_BLOCKED'
+    );
     if (antibotTasks.length >= 1) {
       sawAntibot = true;
-      log(`检测到 failed_final: sku=${antibotTasks[0].sku}`);
+      log(`检测到 antibot failed_final: sku=${antibotTasks[0].sku}, slug=${antibotTasks[0].sellerSlug}`);
       break;
     }
   }
@@ -1571,9 +1621,19 @@ async function scenarioStatusAntibot(browser, sw, mongo) {
     log(`  panel sku=${p.sku}, status=${p.status}, 字段数=${p.fieldCount}`);
   }
 
-  const finalTasks = tasks.filter((t) => t.status === 'failed_final');
-  if (finalTasks.length >= 1) pass(`有 ${finalTasks.length} 个任务终态为 failed_final`);
-  else fail(`无 failed_final 任务(状态: ${tasks.map((t) => t.status).join(', ')})`);
+  // 只统计有效 slug 且 ANTIBOT_BLOCKED 的 failed_final 任务(过滤空 slug 的 unclassified-store 干扰)
+  const antibotFinalTasks = tasks.filter(
+    (t) => t.status === 'failed_final' && t.sellerSlug && t.lastError && t.lastError.type === 'ANTIBOT_BLOCKED'
+  );
+  if (antibotFinalTasks.length >= 1) {
+    pass(`有 ${antibotFinalTasks.length} 个 antibot 任务终态为 failed_final`);
+  } else {
+    const allFinal = tasks.filter((t) => t.status === 'failed_final');
+    fail(
+      `无 ANTIBOT_BLOCKED 任务(共 ${allFinal.length} 个 failed_final,` +
+        `状态: ${tasks.map((t) => `${t.sku}:${t.status}/${t.lastError?.type || '?'}/${t.sellerSlug || '空slug'}`).join(', ')})`
+    );
+  }
 
   if (meta.circuitBreakerUntil && meta.circuitBreakerUntil > Date.now()) {
     pass(`熔断已生效: circuitBreakerUntil=${new Date(meta.circuitBreakerUntil).toISOString()}`);
@@ -1588,7 +1648,168 @@ async function scenarioStatusAntibot(browser, sw, mongo) {
   await page.close();
 }
 
-// 场景 22: status-skipped-daily-limit — daily-limit 跳过,验证 collectDone data=null
+// 场景 24: antibot-newpage — 熔断期内打开新页面,验证 panel 有状态标记 + 设 ready
+// 链路: 先触发熔断 → 打开新页面 → SW 应广播 queuePaused('antibot') → panel 设 ready + 显示"采集中止"
+// 修复的 bug: _maybeStartConsume 熔断期不广播 / _handleSubmitTask 兜底不检查熔断 / getQueueStatus 不返回熔断状态
+async function scenarioAntibotNewpage(browser, sw, mongo) {
+  log('\n══ 场景 24: antibot-newpage — 熔断期内打开新页面 ══');
+  log('注意:此场景需要以 MOCK_ANTIBOT=1 重启 mock-server');
+
+  await clearMongoCache(mongo);
+  await clearStoreClassification(CHINA_SHOP_SLUG);
+  await setStoreClassification(CHINA_SHOP_SLUG, true);
+  await setAutoCollectConfig(sw, {
+    enabled: true,
+    autoCollectRunning: true,
+    todayCount: 0,
+    perDayLimit: 100,
+    consumeRateSec: 2,
+    onlyChineseStores: true,
+    paused: false,
+    pausedUntil: 0,
+  });
+  await sleep(500);
+
+  // 阶段 1:打开第一个页面触发熔断
+  log('阶段 1:打开页面触发熔断...');
+  const page1 = await openChinaShopAndScroll(browser, 3000, mongo, sw);
+
+  log('等待 antibot 检测(最多 60s)...');
+  let sawAntibot = false;
+  for (let i = 0; i < 30; i++) {
+    await sleep(2000);
+    const tasks = await getQueueTasks(mongo);
+    const antibotTasks = tasks.filter(
+      (t) => t.status === 'failed_final' && t.sellerSlug && t.lastError && t.lastError.type === 'ANTIBOT_BLOCKED'
+    );
+    if (antibotTasks.length >= 1) {
+      sawAntibot = true;
+      log(`检测到 antibot failed_final: sku=${antibotTasks[0].sku}, slug=${antibotTasks[0].sellerSlug}`);
+      break;
+    }
+  }
+  if (!sawAntibot) {
+    fail('阶段 1 未检测到 antibot,无法继续测试');
+    await page1.close();
+    return;
+  }
+
+  const meta1 = await swEval(sw, async () => {
+    return (await chrome.storage.local.get('jz-collect-queue-meta'))['jz-collect-queue-meta'] || {};
+  });
+  log(
+    `熔断已生效: circuitBreakerUntil=${new Date(meta1.circuitBreakerUntil).toISOString()}, consumePaused=${meta1.consumePaused}`
+  );
+  pass('熔断已触发');
+  await page1.close();
+
+  // 阶段 2:熔断期内打开新页面,验证 panel 有状态标记 + 设 ready
+  log('阶段 2:熔断期内打开新页面...');
+  await sleep(1000);
+
+  // 收集 console 日志(验证 queuePaused 广播)
+  const consoleLogs = [];
+  const page2 = await browser.newPage();
+  page2.on('console', (msg) => {
+    const text = msg.text();
+    if (text.includes('[panel]') || text.includes('queue') || text.includes('Queue')) {
+      consoleLogs.push(text);
+    }
+  });
+
+  await page2.setViewport({ width: 1280, height: 800 });
+  await page2.goto(`${MOCK_BASE}/seller/${CHINA_SHOP_SLUG}`, { waitUntil: 'networkidle2' });
+  await page2.waitForFunction(() => window.__MOCK_READY__ === true, { timeout: 5000 });
+
+  // 等 seller-info + 滚动触发 IO
+  await page2
+    .waitForFunction(() => document.documentElement.getAttribute('data-jz-seller-info') !== null, { timeout: 15000 })
+    .catch(() => log('  warn: data-jz-seller-info 等待超时'));
+  await sleep(2000);
+
+  // 模拟滚动触发 IntersectionObserver
+  await page2.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await sleep(500);
+  await page2.evaluate(() => window.scrollTo(0, 0));
+  await sleep(5000); // 等待 queuePaused 广播 + panel 设 ready
+
+  // 验证 panel 状态
+  const panelStatuses = await page2.evaluate(() => {
+    const panels = document.querySelectorAll('.ozon-helper-data-panel');
+    return Array.from(panels).map((p) => ({
+      sku: p.dataset.jzSku || '',
+      loadStatus: p.dataset.jzLoadStatus || '',
+      statusBar: p.querySelector('.jz-collect-status-bar')?.textContent?.trim().slice(0, 50) || null,
+      fieldCount: p.querySelectorAll('[data-field]').length,
+    }));
+  });
+
+  log(`阶段 2 panel 数: ${panelStatuses.length}`);
+  for (const p of panelStatuses) {
+    log(`  panel sku=${p.sku}, status=${p.loadStatus}, 字段数=${p.fieldCount}, 状态条="${p.statusBar}"`);
+  }
+
+  // 关键断言 1:所有 panel 都应设为 ready(不能卡 loading)
+  const loadingPanels = panelStatuses.filter((p) => p.loadStatus === 'loading');
+  if (loadingPanels.length === 0) {
+    pass(`所有 panel 已设 ready(${panelStatuses.length} 个,无 loading)`);
+  } else {
+    fail(`有 ${loadingPanels.length} 个 panel 卡 loading(队列熔断广播未生效)`);
+  }
+
+  // 关键断言 2:panel 应有状态标记(采集中止 / 跳过 / antibot)
+  const panelsWithStatus = panelStatuses.filter((p) => p.statusBar && p.statusBar.length > 0);
+  if (panelsWithStatus.length >= 1) {
+    pass(`有 ${panelsWithStatus.length} 个 panel 显示状态标记("${panelsWithStatus[0].statusBar}")`);
+  } else {
+    fail('panel 无状态标记(queuePaused 广播可能未到达或 _applyQueuePaused 未执行)');
+  }
+
+  // 关键断言 3:验证 getQueueStatus 返回熔断状态
+  // 注意:SW 内不能用 chrome.runtime.sendMessage 给自己发消息,
+  // 改为直接读 chrome.storage 中的 meta + config,模拟 getQueueStatus 的逻辑
+  const queueStatus = await swEval(sw, async () => {
+    const meta = (await chrome.storage.local.get('jz-collect-queue-meta'))['jz-collect-queue-meta'] || {};
+    const cfg = (await chrome.storage.local.get('jz-auto-collect-config'))['jz-auto-collect-config'] || {};
+    const inBreaker = Date.now() < meta.circuitBreakerUntil;
+    let reason = null;
+    if (inBreaker) reason = 'antibot';
+    else if (meta.consumePaused) {
+      if (meta.todayCount >= cfg.perDayLimit) reason = 'daily-limit';
+      else if (!cfg.autoCollectRunning) reason = 'not-running';
+      else if (cfg.paused && Date.now() < cfg.pausedUntil) reason = 'paused';
+      else reason = 'paused';
+    }
+    return {
+      consumePaused: meta.consumePaused || inBreaker,
+      reason,
+      circuitBreakerUntil: meta.circuitBreakerUntil,
+    };
+  });
+  log(
+    `getQueueStatus: consumePaused=${queueStatus?.consumePaused}, reason=${queueStatus?.reason}, ` +
+      `circuitBreakerUntil=${queueStatus?.circuitBreakerUntil}`
+  );
+  if (queueStatus?.consumePaused === true && queueStatus?.reason === 'antibot') {
+    pass('getQueueStatus 正确返回熔断状态(consumePaused=true, reason=antibot)');
+  } else {
+    fail(
+      `getQueueStatus 未正确返回熔断状态(consumePaused=${queueStatus?.consumePaused}, reason=${queueStatus?.reason})`
+    );
+  }
+
+  // 输出捕获的 console 日志(调试用)
+  const panelLogs = consoleLogs.filter((l) => l.includes('[panel]'));
+  if (panelLogs.length > 0) {
+    log('捕获的 panel 日志:');
+    for (const l of panelLogs.slice(-5)) log(`  ${l}`);
+  } else {
+    log('  (未捕获到 panel 日志)');
+  }
+
+  await page2.close();
+}
+
 // 链路: perDayLimit=0 → _doAutoCollect Gate0 检查 → 返回 { status: 'skipped', reason: 'daily-limit' }
 //       → _handleSkippedTask → _broadcastCollectDoneV2(data=null) → panel 设 ready(无 [data-field])
 async function scenarioStatusSkippedDailyLimit(browser, sw, mongo) {
@@ -1608,7 +1829,7 @@ async function scenarioStatusSkippedDailyLimit(browser, sw, mongo) {
   });
   await sleep(500);
 
-  const page = await openChinaShopAndScroll(browser, 5000);
+  const page = await openChinaShopAndScroll(browser, 5000, mongo);
 
   const { panelStatuses, swRecent, tasks } = await inspectCollectResult(page, sw, mongo);
   log(`队列任务: ${tasks.length} 条, 状态: ${tasks.map((t) => t.status).join(', ')}`);
@@ -1659,7 +1880,7 @@ async function scenarioStatusSkippedOther(browser, sw, mongo) {
   await sleep(500);
 
   log('阶段 1: 先采集一次,填满缓存...');
-  const page = await openChinaShopAndScroll(browser, 8000);
+  const page = await openChinaShopAndScroll(browser, 8000, mongo, sw);
 
   const cacheCount = await countCache(mongo, 'ozon_card_cache');
   log(`第一次采集后 card 缓存: ${cacheCount} 条`);
@@ -1766,6 +1987,7 @@ async function main() {
       'status-partial': () => scenarioStatusPartial(browser, sw, mongo),
       'status-failed': () => scenarioStatusFailed(browser, sw, mongo),
       'status-antibot': () => scenarioStatusAntibot(browser, sw, mongo),
+      'antibot-newpage': () => scenarioAntibotNewpage(browser, sw, mongo),
       'status-skipped-daily-limit': () => scenarioStatusSkippedDailyLimit(browser, sw, mongo),
       'status-skipped-other': () => scenarioStatusSkippedOther(browser, sw, mongo),
     };

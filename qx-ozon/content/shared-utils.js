@@ -40,6 +40,13 @@ if (!globalThis.__JZ_BRAND__) {
 (function () {
   'use strict';
 
+  // 加载守卫:shared-utils.js 在 manifest Group 3 和 Group 5 中都被声明,
+  // 店铺页(/seller/*)会同时匹配两组,导致本文件被加载两次。
+  // 无守卫时:DOM 事件监听器重复注册(tooltip/zoom 双浮层)、onMessage 重复触发 UI 双刷新。
+  // 与 task-queue.js 的 window.JZTaskQueue 守卫模式一致。
+  if (window.__JZ_SHARED_UTILS_LOADED__) return;
+  window.__JZ_SHARED_UTILS_LOADED__ = true;
+
   // 调试标志:供 puppeteer 确认 shared-utils 已执行(ISOLATED world 不可被 page.evaluate 直接访问)
   document.documentElement.setAttribute('data-jz-shared-utils-loaded', 'true');
 
@@ -1048,6 +1055,37 @@ if (!globalThis.__JZ_BRAND__) {
       if (lang && lang.startsWith('zh')) return true;
     } catch {}
     return false;
+  };
+
+  // ─── 评价数提取(Ozon 新版 DOM) ─────────────────────────
+  // Ozon 移除了 data-widget 属性,评分和评价数是两个独立 span:
+  //   店铺商品: <span style="color:var(--textPremium)">4.9</span>
+  //             <span class="c7w1_7_3-a0">229 отзывов</span>
+  //   非店铺商品: <span>4.4</span><span>46 224 отзыва</span>
+  // 评价数 span 文本特征:数字开头(含千位空格) + 俄语 отзыв(ов/а)。
+  // 翻译态 fallback(отзыв 被翻成中文):数字开头 + 非价格符号字符,
+  //   排除纯数字(评分)、价格(¥₽руб%)、库存(шт/осталось)。
+  //   仅翻译态启用,避免非翻译态误匹配 "2 984 шт осталось" 等库存文本。
+  window.jzExtractRatingCount = function (card) {
+    if (!card) return null;
+    const spans = Array.from(card.querySelectorAll('span'));
+    let ratingSpan = spans.find((s) => /отзыв/.test(s.textContent));
+    if (!ratingSpan && window.jzIsTranslated && window.jzIsTranslated()) {
+      ratingSpan = spans.find((s) => {
+        const t = (s.textContent || '').trim();
+        if (!/^\d/.test(t)) return false;
+        if (/^\d+[.,]?\d*$/.test(t)) return false;
+        if (/[¥₽руб%]/i.test(t)) return false;
+        if (/шт|осталось/i.test(t)) return false;
+        return /\d\s+\D/.test(t);
+      });
+    }
+    if (!ratingSpan) return null;
+    const text = ratingSpan.textContent.trim();
+    const numMatch = text.match(/[\d\s]+/);
+    if (!numMatch) return null;
+    const n = Number(numMatch[0].replace(/\s/g, ''));
+    return Number.isInteger(n) && n >= 0 ? n : null;
   };
 
   // ─── 防浏览器翻译污染极掌注入 UI ─────────────────────────
@@ -3867,17 +3905,7 @@ if (!globalThis.__JZ_BRAND__) {
       card?.querySelector('[data-widget="searchResultsPrice"]') || card?.querySelector('[data-widget="webPrice"]');
     const priceText = priceNode?.textContent || '';
 
-    const ratingEl = card?.querySelector('[data-widget="searchResultsRating"]');
-    let ratingCount = null;
-    if (ratingEl) {
-      const text = (ratingEl.textContent || '').trim();
-      const parts = text.split(/[·•\s]+/).filter(Boolean);
-      if (parts.length >= 2) {
-        const raw = parts[parts.length - 1].replace(/\s/g, '').replace(/,/g, '.');
-        const n = Number(raw);
-        if (Number.isInteger(n) && n >= 0) ratingCount = n;
-      }
-    }
+    const ratingCount = window.jzExtractRatingCount ? window.jzExtractRatingCount(card) : null;
 
     return {
       title: (link?.getAttribute('aria-label') || img?.getAttribute('alt') || link?.textContent?.trim() || '').slice(
@@ -3913,6 +3941,11 @@ if (!globalThis.__JZ_BRAND__) {
       config = r['jz-auto-collect-config'] || {};
     } catch {
       /* 忽略,按默认配置走 */
+    }
+
+    // 自动采集总开关:未开启时不提交任务(避免 sellerInfo 到达前的早期任务被 SW 消费)
+    if (config.autoCollectRunning === false) {
+      return;
     }
 
     // 中国店铺筛选:仅在店铺页(sellerSlug 非空)且开启 onlyChineseStores 时执行。

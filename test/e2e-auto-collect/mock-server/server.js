@@ -8,7 +8,7 @@
 
 import http from 'node:http';
 import { URL } from 'node:url';
-import { PRODUCTS, PRODUCT_MAP, CHINA_SHOP, FOREIGN_SHOP, productUrl } from './products.js';
+import { PRODUCTS, PRODUCT_MAP, CHINA_SHOP, FOREIGN_SHOP, RECOMMENDED_PRODUCTS, productUrl } from './products.js';
 
 const PORT = process.env.MOCK_PORT || 7777;
 const ANTIBOT_MODE = process.env.MOCK_ANTIBOT === '1';
@@ -72,23 +72,94 @@ function extractSkuFromUrlParam(body) {
 }
 
 // ─── HTML 模板 ─────────────────────────────────────────────
+// 对齐真实 Ozon 新版 DOM 结构(2026-07 观察):
+//   - card 外层 .tile-root 无 data-widget 属性(旧版有,新版移除)
+//   - 评分和评价数是两个独立 span,不在同一元素内
+//   - 评价数 span 文本含俄语 отзыв(ов/а)
+//   - 店铺商品祖先含 [data-widget="infiniteVirtualPaginator"]#paginator
+//   - 推荐区祖先含 [data-widget="skuGrid"]
+//   - 插件 isStoreSkuCard 用 infiniteVirtualPaginator/skuGrid 区分
+
+function ratingHtml(ratingCount) {
+  if (!ratingCount) return '';
+  const { score, count } = ratingCount;
+  // 评分 span(真实页面有 SVG 星星图标,这里简化用 span)
+  const scoreSpan = `<span class="tsBodyControl300XSmall" style="padding-left: 2px; color: var(--textPremium);">${score}</span>`;
+  // 评价数 span(count=null 时不渲染,模拟新品无评价)
+  const countSpan =
+    count != null
+      ? `<span class="c7w1_7_3-a0 tsBodyControl300XSmall" style="padding-left: 4px; color: var(--textSecondary);">${formatOtziv(count)}</span>`
+      : '';
+  return `<div class="g1s_20 c7w1_7_3-a" style="padding-top: 2px; padding-bottom: 2px;">${scoreSpan}${countSpan}</div>`;
+}
+
+// 俄语评价数复数形式:1=отзыв, 2-4=отзыва, 5+=отзывов, 0=отзывов
+function formatOtziv(n) {
+  if (n === 0) return '0 отзывов';
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${n} отзыв`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return `${n} отзыва`;
+  return `${n} отзывов`;
+}
+
+function storeCardHtml(p, index) {
+  return `
+      <div class="tile-root gr3_20 hl3_20 hl4_20" data-index="${index}">
+        <a target="_blank" href="${productUrl(p.sku)}?_bctx=mock" rel="noopener" class="q4b1_5_6-a tile-clickable-element gr9_20 r9g_20">
+          <div class="rg6_20">
+            <div class="gr7_20">
+              <img loading="eager" src="${p.image}" alt="${p.name}" class="g7r_20 b95_4_0-a" />
+            </div>
+          </div>
+        </a>
+        <div class="rg3_20">
+          <div class="g1s_20 g2s_20 c35_4_0-a">
+            <span class="c35_4_0-a1 tsHeadline500Medium">${p.price}</span>
+          </div>
+          <div class="ea5_6_0-a">
+            <a target="_blank" href="${productUrl(p.sku)}?_bctx=mock" rel="noopener" class="q4b1_5_6-a tile-clickable-element sg2_20">
+              <div class="bq03_8_3-a g1s_20" style="color: var(--textPrimary);">
+                <span class="tsBody500Medium">${p.name}</span>
+              </div>
+            </a>
+          </div>
+          ${ratingHtml(p.ratingCount)}
+        </div>
+      </div>`;
+}
+
+function recommendedCardHtml(p) {
+  return `
+      <div class="tile-root gu4_20 ug4_20 gz7_20 g8z_20" data-index="0">
+        <a target="_self" href="${productUrl(p.sku)}" rel="noopener" class="q4b1_5_6-a tile-clickable-element gu5_20 g3u_20">
+          <div class="g2u_20 ug2_20">
+            <div class="g1u_20">
+              <img loading="lazy" src="${p.image}" alt="${p.name}" class="b95_4_0-a" />
+            </div>
+          </div>
+          <section class="q1b1_5_8-a">
+            <div class="b5_7_1-a0">
+              <span class="tsBody500Medium">${p.name}</span>
+            </div>
+            <div class="c35_4_0-a">
+              <span class="c35_4_0-a1 tsHeadline500Medium">${p.price}</span>
+            </div>
+            ${ratingHtml(p.ratingCount)}
+          </section>
+        </a>
+      </div>`;
+}
 
 function sellerPageHtml(slug) {
   const shop = slug === CHINA_SHOP.slug ? CHINA_SHOP : slug === FOREIGN_SHOP.slug ? FOREIGN_SHOP : null;
   if (!shop) return `<!DOCTYPE html><html><body>Shop not found: ${slug}</body></html>`;
 
-  const cards = PRODUCTS.filter((p) => p.sellerSlug === slug)
-    .map(
-      (p) => `
-      <div class="tile-root" data-widget="searchResultsItem">
-        <a href="${productUrl(p.sku)}" aria-label="${p.name}">
-          <img src="${p.image}" alt="${p.name}" />
-        </a>
-        <div data-widget="searchResultsPrice">${p.price}</div>
-        <div data-widget="searchResultsRating">${p.ratingCount}</div>
-      </div>`
-    )
-    .join('\n');
+  const storeProducts = PRODUCTS.filter((p) => p.sellerSlug === slug);
+  const storeCards = storeProducts.map((p, i) => storeCardHtml(p, i)).join('\n');
+
+  // 推荐区商品(所有店铺页都显示相同的推荐商品,用于测试 isStoreSkuCard 排除逻辑)
+  const recommendedCards = RECOMMENDED_PRODUCTS.map((p) => recommendedCardHtml(p)).join('\n');
 
   return `<!DOCTYPE html>
 <html lang="ru">
@@ -98,15 +169,40 @@ function sellerPageHtml(slug) {
   <meta property="og:title" content="${shop.name}" />
 </head>
 <body>
-  <div data-widget="sellerTransparency">
-    <span class="tsHeadline600Large">${shop.name}</span>
-  </div>
-  <h1>${shop.name}</h1>
+  <div data-widget="blockVertical">
+    <div data-widget="wallpaper">
+      <header data-widget="header"></header>
+      <div data-widget="container" class="container c">
+        <div data-widget="sellerTransparency">
+          <span class="tsHeadline600Large">${shop.name}</span>
+        </div>
 
-  <!-- 商品网格:tileGridDesktop + infiniteVirtualPaginator 标识为店铺商品 -->
-  <div data-widget="tileGridDesktop">
-    <div data-widget="infiniteVirtualPaginator">
-      ${cards}
+        <!-- 店铺商品区:infiniteVirtualPaginator 标识为店铺商品 -->
+        <div data-widget="row" class="e1">
+          <div data-widget="column" class="c8">
+            <div data-widget="infiniteVirtualPaginator" class="search_d3a" id="paginator">
+              <div id="contentScrollPaginator" class="search_d1a search_a3d search_a2d">
+                <div class="search_da2">
+                  <div>
+                    <div class="l2h_20">
+                      ${storeCards}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 推荐区:skuGrid 标识为非店铺商品(isStoreSkuCard 返回 false) -->
+        <div data-widget="island" class="k0c_7">
+          <div data-widget="skuGrid" class="zg6_20">
+            <div class="z6g_20">
+              ${recommendedCards}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -382,10 +478,18 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 403, { error: { code: 'ANTIBOT_BLOCKED' } });
     }
 
-    // entrypoint-api.bx
-    if (method === 'POST' && pathname.includes('/entrypoint-api.bx/page/json/v2')) {
-      const body = await readBody(req);
-      const sku = extractSkuFromUrlParam(body) || extractSkuFromPath(pathname);
+    // entrypoint-api.bx (支持 GET 和 POST:SW doFetch 用 GET,seller-info-main.js 也用 GET)
+    if (pathname.includes('/entrypoint-api.bx/page/json/v2')) {
+      let sku = null;
+      if (method === 'POST') {
+        const body = await readBody(req);
+        sku = extractSkuFromUrlParam(body) || extractSkuFromPath(pathname);
+      } else {
+        // GET: url 参数在 query string 中 (?url=/product/slug-12345/)
+        const urlParam = fullUrl.searchParams.get('url') || '';
+        const m = urlParam.match(/-(\d{5,})\/?/);
+        sku = m ? m[1] : extractSkuFromPath(pathname);
+      }
       if (shouldFailSku(sku)) {
         console.log(`[mock] fail-sku → 500: entrypoint sku=${sku}`);
         return sendJson(res, 500, { error: { code: 'INJECTED_FAIL', sku } });
@@ -393,10 +497,17 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, entrypointResponse(sku));
     }
 
-    // composer-api.bx page/json/v2
-    if (method === 'POST' && pathname.includes('/composer-api.bx/page/json/v2')) {
-      const body = await readBody(req);
-      const sku = extractSkuFromUrlParam(body) || extractSkuFromPath(pathname);
+    // composer-api.bx page/json/v2 (支持 GET 和 POST)
+    if (pathname.includes('/composer-api.bx/page/json/v2')) {
+      let sku = null;
+      if (method === 'POST') {
+        const body = await readBody(req);
+        sku = extractSkuFromUrlParam(body) || extractSkuFromPath(pathname);
+      } else {
+        const urlParam = fullUrl.searchParams.get('url') || '';
+        const m = urlParam.match(/-(\d{5,})\/?/);
+        sku = m ? m[1] : extractSkuFromPath(pathname);
+      }
       if (shouldFailSku(sku)) {
         console.log(`[mock] fail-sku → 500: composer sku=${sku}`);
         return sendJson(res, 500, { error: { code: 'INJECTED_FAIL', sku } });

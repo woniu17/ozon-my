@@ -176,8 +176,9 @@
     const sellerNode = card.querySelector('[data-widget="searchResultsSeller"]');
     const sellerText = sellerNode?.textContent?.trim();
 
-    const ratingNode = card.querySelector('[data-widget="searchResultsRating"]');
-    const ratingText = ratingNode?.textContent?.trim();
+    // 评价数:Ozon 新版 DOM 移除了 data-widget,改用 span 文本匹配
+    const _ratingSpan = Array.from(card.querySelectorAll('span')).find((s) => /отзыв/.test(s.textContent));
+    const ratingText = _ratingSpan?.textContent?.trim();
 
     badge.innerHTML = `
       ${salesText ? `<div class="ozon-helper-card-sales">${salesText}</div>` : ''}

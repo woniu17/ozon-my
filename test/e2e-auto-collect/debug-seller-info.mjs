@@ -17,15 +17,31 @@ const browser = await puppeteer.launch({
   args: [
     `--disable-extensions-except=${EXTENSION_PATH}`,
     `--load-extension=${EXTENSION_PATH}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-popup-blocking',
     '--no-sandbox',
   ],
 });
+
+// Wait for SW to be ready first
+console.log('Waiting for SW...');
+for (let i = 0; i < 60; i++) {
+  const targets = browser.targets();
+  const sw = targets.find((t) => t.type() === 'service_worker');
+  if (sw) {
+    console.log('SW target found');
+    break;
+  }
+  await sleep(500);
+}
+await sleep(2000);
 
 // Capture console logs
 const page = await browser.newPage();
 page.on('console', (msg) => {
   const text = msg.text();
-  if (text.includes('seller-info') || text.includes('panel') || text.includes('jz')) {
+  if (text.includes('seller-info') || text.includes('panel') || text.includes('jz') || text.includes('extract')) {
     console.log('[page console]', msg.type(), text);
   }
 });
@@ -36,8 +52,8 @@ console.log('Navigating to mock seller page...');
 await page.goto(`${MOCK_BASE}/seller/${CHINA_SHOP_SLUG}`, { waitUntil: 'networkidle2' });
 await page.waitForFunction(() => window.__MOCK_READY__ === true, { timeout: 5000 });
 
-console.log('Waiting 5s for seller-info-main.js to complete...');
-await sleep(5000);
+console.log('Waiting 8s for seller-info-main.js to complete...');
+await sleep(8000);
 
 // Check various state
 const state = await page.evaluate(() => {

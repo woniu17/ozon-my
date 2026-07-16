@@ -1601,7 +1601,8 @@ try {
     let ready = pickReadyTab(tabs);
     if (ready) return ready;
 
-    // 有 tab 但都在 loading → 等它们 complete；途中全被关掉就落到下面 create
+    // 有 tab 但都在 loading → 等它们 complete;超时直接报错,不再新开 tab
+    // (避免后台残留 pinned tab + 旧 tab 持续 loading 双重占用)
     if (tabs.length) {
       console.log('[ensureSellerTab] 已有 tab 但都在加载中，等待 complete...');
       const waitDeadline = Date.now() + timeoutMs;
@@ -1610,10 +1611,13 @@ try {
         tabs = await queryTabs();
         ready = pickReadyTab(tabs);
         if (ready) return ready;
-        if (tabs.length === 0) break;
+        if (tabs.length === 0) break; // 全被关 → 落到下面 create
       }
-      // 等待超时或全被关 → fall through 到 create 一个新 tab
-      console.warn('[ensureSellerTab] 等待已有 tab complete 失败，新开一个');
+      // 等待超时(旧 tab 仍 loading)→ 直接报错,不再新开
+      if (tabs.length > 0) {
+        throw new Error(`seller.ozon.ru tab 加载超时（${timeoutMs / 1000}s）`);
+      }
+      console.warn('[ensureSellerTab] 已有 tab 全被关闭，新开一个');
     }
 
     console.log('[ensureSellerTab] 无可用 seller.ozon.ru tab，后台打开...');
@@ -1711,6 +1715,8 @@ try {
     let tabs = await queryTabs();
     let ready = pickReady(tabs);
     if (ready) return ready;
+    // 有 tab 但都在 loading → 等它们 complete;超时直接报错,不再新开 tab
+    // (反爬挑战页会一直 loading,新开 tab 只会加重反爬 + 残留 pinned tab)
     if (tabs.length) {
       const waitDeadline = Date.now() + timeoutMs;
       while (Date.now() < waitDeadline) {
@@ -1718,8 +1724,12 @@ try {
         tabs = await queryTabs();
         ready = pickReady(tabs);
         if (ready) return ready;
-        if (tabs.length === 0) break;
+        if (tabs.length === 0) break; // 全被关 → 落到下面 create
       }
+      if (tabs.length > 0) {
+        throw new Error(`www.ozon.ru tab 加载超时（${timeoutMs / 1000}s）`);
+      }
+      console.warn('[ensureBuyerTab] 已有 tab 全被关闭，新开一个');
     }
     console.log('[ensureBuyerTab] 无可用 www.ozon.ru tab，后台打开...');
     const created = await chrome.tabs.create({ url: OZON_WWW_ORIGIN + '/', active: false, pinned: true });
@@ -1741,6 +1751,10 @@ try {
   // 抽自原 uploadFollowSellVideo case,供「一键跟卖 / 单采 / 纯采集 / 批量上架」共用同一转存实现。
   const transferVideoToOzon = async (srcUrl) => {
     if (!srcUrl || typeof srcUrl !== 'string') return { ok: false, error: 'srcUrl required' };
+    // 熔断期检查:反爬触发后不再开 seller tab,直接返失败
+    if ((await _isCircuitBreakerActive()).active) {
+      return { ok: false, error: 'ANTIBOT_BLOCKED', message: '反爬熔断中,请稍后再试' };
+    }
     const targetTab = await ensureSellerTab();
     const scCookies = await chrome.cookies.getAll({ url: OZON_SELLER_ORIGIN + '/', name: 'sc_company_id' });
     const companyId = scCookies[0]?.value || '';
@@ -2060,6 +2074,37 @@ try {
           // 所以这里不返回,继续执行 doFetch
         }
       }
+
+      // cacheOnly 模式(熔断期):不真调,返回当前最佳 cache 数据或 EMPTY
+      if (options.cacheOnly) {
+        if (epCached) {
+          return {
+            mp4: epCached.mp4 || null,
+            richContent: epCached.richContent || '',
+            description: epCached.description || '',
+            hashtags: Array.isArray(epCached.hashtags) ? epCached.hashtags : [],
+            endpoint: 'entrypoint-cache',
+          };
+        }
+        if (ccCached && ccCached.widgetStates) {
+          const states = ccCached.widgetStates;
+          return {
+            mp4: _extractMp4FromStates(states),
+            richContent: _extractRichFromStates(states),
+            description: _extractDescriptionFromStates(states),
+            hashtags: _extractHashtagsFromStates(states),
+            endpoint: 'composer-cache',
+          };
+        }
+        EMPTY.errorReason = 'CACHE_ONLY_MISS';
+        return EMPTY;
+      }
+    }
+
+    // cacheOnly 模式 + 无 urlSku(无法查 cache)→ 直接返空
+    if (options.cacheOnly) {
+      EMPTY.errorReason = 'CACHE_ONLY_MISS';
+      return EMPTY;
     }
 
     let tab;
@@ -4163,6 +4208,17 @@ try {
     }
   };
 
+  // 熔断期检查(供按需 API 调用入口使用,避免反爬时仍开 tab 发请求)
+  // 返回 { active: boolean, remainingMs: number }
+  const _isCircuitBreakerActive = async () => {
+    const meta = await _loadQueueMeta();
+    const now = Date.now();
+    if (now < meta.circuitBreakerUntil) {
+      return { active: true, remainingMs: meta.circuitBreakerUntil - now };
+    }
+    return { active: false, remainingMs: 0 };
+  };
+
   const _saveQueueMeta = async (partial) => {
     return _withQueueLock(async () => {
       const meta = await _loadQueueMeta();
@@ -4419,6 +4475,115 @@ try {
     }
   };
 
+  // rescan 广播:不刷新页面重新提交所有可见 SKU。
+  // 先发 __jzAutoCollectResetSeen 清空 dedup(content script 旧代码已有监听),
+  // 再用 chrome.scripting.executeScript 注入 inline 脚本(ISOLATED world)遍历 cards 重新提交。
+  // 这样不依赖 content script 的 rescan 消息处理(重载扩展后 content script 可能仍是旧代码)。
+  const _broadcastRescan = async () => {
+    try {
+      const urlFilter = IS_TEST_MODE
+        ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
+        : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'];
+      const tabs = await chrome.tabs.query({ url: urlFilter });
+      const sends = tabs
+        .filter((t) => t.id)
+        .map((t) => chrome.tabs.sendMessage(t.id, { type: '__jzAutoCollectResetSeen' }).catch(() => {}));
+      await Promise.allSettled(sends);
+
+      // 扩展重载后旧 content script 被孤立(无法收 SW 消息),
+      // 需重新注入 content scripts 到新 ISOLATED world。
+      // 各文件有加载守卫,新 world 未设标志,会正常执行。
+      const injectFiles = ['content/shared-utils.js', 'content/collector/task-queue.js', 'content/ozon-data-panel.js'];
+
+      // rescan 脚本:遍历 cards + 清除旧 panel 守卫 + 调 __jzSubmitCollectTask 重新提交
+      // 关键:扩展重载后旧 content script 被孤立,旧 panel 是骨架状态(loadPanelData
+      // 因 ERP 无数据未调 jzRenderProductPanelV2)。card._ohPanelAttached 是 DOM expando
+      // 属性,跨 ISOLATED world 共享,会阻止新 content script 的 ensureDataPanel 重建 panel。
+      // 必须清除该标志 + 删除旧 panel,让新 content script 的 MutationObserver 触发
+      // applyToAll → ensureDataPanel 重建 panel,新 IntersectionObserver 触发 loadPanelData
+      // 重新查 ERP + 渲染 [data-field] 字段结构。
+      const rescanFn = () => {
+        try {
+          let slug = '';
+          let sellerId = '';
+          try {
+            const raw = document.documentElement.getAttribute('data-jz-seller-info');
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              slug = parsed?.detail?.slug || '';
+              sellerId = parsed?.detail?.sellerId || '';
+            }
+          } catch (_) {
+            /* ignore */
+          }
+          const selectors = [
+            '.tile-root',
+            '[data-widget="searchResultsV2"] [data-widget="searchResultsItem"]',
+            '[data-widget="searchResults"] [data-widget="searchResultsItem"]',
+          ];
+          const cardSet = new Set();
+          selectors.forEach((s) => document.querySelectorAll(s).forEach((c) => cardSet.add(c)));
+          let count = 0;
+          for (const card of cardSet) {
+            const link = card.querySelector('a[href*="/product/"]');
+            if (!link) continue;
+            const href = link.getAttribute('href') || '';
+            const m = href.match(/\/product\/.*-(\d{5,})/);
+            if (!m) continue;
+            const productId = m[1];
+            // 清除旧 content script 的加载守卫 + 删除旧骨架 panel,
+            // 让新 content script 的 MutationObserver 触发 ensureDataPanel 重建 panel。
+            card._ohPanelAttached = false;
+            card._ohPanelSkipped = false;
+            const oldPanel = card.querySelector('.ozon-helper-data-panel');
+            if (oldPanel) oldPanel.remove();
+            // 优先用 __jzSubmitCollectTask(含 dedup + config 检查 + DOM 信息提取)
+            if (typeof window.__jzSubmitCollectTask === 'function') {
+              window.__jzSubmitCollectTask(productId, card, slug, sellerId);
+            } else {
+              // 兜底:直接发消息到 SW
+              try {
+                chrome.runtime.sendMessage({
+                  type: 'submitTask',
+                  sku: String(productId),
+                  sellerSlug: slug,
+                  sellerId: sellerId,
+                  domInfo: null,
+                });
+              } catch (_) {
+                /* ignore */
+              }
+            }
+            count++;
+          }
+          console.log('[rescan] injected rescan done, submitted', count, 'SKUs');
+          return count;
+        } catch (e) {
+          console.warn('[rescan] injected rescan failed:', e?.message || e);
+          return 0;
+        }
+      };
+
+      const injects = tabs
+        .filter((t) => t.id)
+        .map(async (t) => {
+          try {
+            // 1. 重新注入 content scripts
+            await chrome.scripting.executeScript({ target: { tabId: t.id }, files: injectFiles });
+            // 2. 等待 content script 初始化(读 config、注册 listener 等)
+            await new Promise((r) => setTimeout(r, 500));
+            // 3. 注入 rescan 脚本
+            await chrome.scripting.executeScript({ target: { tabId: t.id }, func: rescanFn });
+          } catch (e) {
+            console.warn('[rescan] inject failed tab=%d:', t.id, e?.message);
+          }
+        });
+      await Promise.allSettled(injects);
+    } catch {
+      /* fire-and-forget */
+    }
+  };
+
   // 测试专用:暴露队列状态重置函数,供 E2E 测试在场景间清除内存状态
   // (_completedTodaySkus / _consuming 无法通过 storage 重置)。
   // IS_TEST_MODE 异步读取,故在函数内部检查;生产模式下不可用。
@@ -4568,7 +4733,10 @@ try {
     try {
       const url = await getBackendUrl();
       const stored = await getStorage([STORAGE_KEYS.token]);
-      return await apiRequest('GET', `${url}/admin/api/collect-queue/ops/pending`, null, stored[STORAGE_KEYS.token]);
+      const r = await apiRequest('GET', `${url}/admin/api/collect-queue/ops/pending`, null, stored[STORAGE_KEYS.token]);
+      // apiRequest 返回 { ok, data },data = { items, count }
+      const items = r?.data?.items || r?.items || (Array.isArray(r) ? r : []);
+      return items;
     } catch (e) {
       console.warn('[Queue] ERP ops pending failed:', e?.message || e);
       return [];
@@ -4600,19 +4768,26 @@ try {
     });
     if (!task) return;
 
+    // 先构建广播数据(_buildCollectDoneData),同时用于 ERP 结果存储和 collectDone 广播,
+    // 确保 queryErpProductData 返回的数据格式与 collectDone 一致(preFetched 格式)
+    const data = await _buildCollectDoneData(sku, collectResult);
+
     if (collectResult) {
       await _erpQueueResult(sku, {
         status,
         duration,
         steps,
         error: lastError,
-        ...(collectResult.status === 'success' || collectResult.status === 'partial' ? { data: collectResult } : {}),
+        // 存 _buildCollectDoneData 的结果(与 collectDone 广播的 data 一致),
+        // 让 queryErpProductData 返回的数据格式与 collectDone 一致,
+        // content script 可直接用作 preFetched 回填面板。
+        // 注意:字段名必须是 result(ERP 后端 /result 接口和 queryErpProductData 都查 result)
+        ...(collectResult.status === 'success' || collectResult.status === 'partial' ? { result: data } : {}),
       });
     }
 
     await _erpQueueUpdate({ ...task, status, steps, lastError, finishedAt: now });
 
-    const data = await _buildCollectDoneData(sku, collectResult);
     await _broadcastCollectDoneV2(sku, task.sellerSlug, status, data, now, duration, steps, lastError);
 
     if (status === 'success' || status === 'failed_final' || status === 'failed_partial') {
@@ -4814,6 +4989,9 @@ try {
     let meta = await _loadQueueMeta();
     if (Date.now() < meta.circuitBreakerUntil) {
       console.log('[Queue] maybeStart: in circuit breaker, skip');
+      // 熔断期内也需广播 queuePaused,让新入队任务的 panel 设 ready,
+      // 避免 AutoScroller.isReadyToScroll 死锁(与 consumePaused 分支行为一致)
+      await _broadcastQueuePaused('antibot');
       return;
     }
     // 自动恢复:跨日或熔断过期时,重置 consumePaused,避免队列永久卡死
@@ -4928,6 +5106,15 @@ try {
           await _clearPendingQueueTasks(op.ts || 0);
           return true;
         }
+        case 'rescan': {
+          // 不刷新页面重新扫描:清空 SW 状态 + 广播让 content script 重新提交所有可见 SKU
+          // 1. 清空已完成集合和本地队列(让 _isTaskQueuedOrCompletedToday 返回 false)
+          _completedTodaySkus.clear();
+          await chrome.storage.local.set({ [COLLECT_QUEUE_KEY]: [] });
+          // 2. 广播 rescan 消息(content script 收到后清空 dedup + 重置 panel + 重新提交)
+          await _broadcastRescan();
+          return true;
+        }
         default:
           return false;
       }
@@ -4961,10 +5148,91 @@ try {
     }
   };
 
+  // 前置缓存检查:并行查 8 类缓存,返回是否全部命中。
+  // 用于 _handleSubmitTask 入队前快速判断,避免缓存命中任务占用 15s 队列 slot。
+  // 逻辑与 _doAutoCollect Step1+Step5 内部缓存查询保持一致,但不做 L1/L2 同步(仅查询)。
+  const _checkAllCachesHit = async (sku) => {
+    const results = [
+      { type: 'card', hit: false },
+      { type: 'detail', hit: false },
+      { type: 'composer', hit: false },
+      { type: 'entrypoint', hit: false },
+      { type: 'search', hit: false },
+      { type: 'bundle', hit: false },
+      { type: 'marketStats', hit: false },
+      { type: 'followSell', hit: false },
+    ];
+
+    try {
+      // search 查询:L1 → L2(命中即停,不回填)
+      const searchHitP = (async () => {
+        try {
+          const l1 = await _idbGet(_IDB_STORE_SEARCH, sku);
+          if (l1 && Array.isArray(l1.data?.items) && l1.data.items.length > 0) return true;
+          const l2 = await _erpCacheGet('search', sku);
+          return !!(l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0);
+        } catch (e) {
+          return false;
+        }
+      })();
+
+      // bundle 查询:仅 L1(跟随原 Step5 逻辑,L2 由真调时回填)
+      const bundleHitP = (async () => {
+        try {
+          const l1 = await _idbGet(_IDB_STORE_BUNDLE, sku);
+          return _bundleUsable(l1);
+        } catch (e) {
+          return false;
+        }
+      })();
+
+      // 6 类直接缓存 + search + bundle,全部并行
+      const [card, detail, composer, entrypoint, marketStats, followSell, searchHit, bundleHit] = await Promise.all([
+        _cardCacheGet(sku).catch(() => null),
+        _detailCacheGet(sku).catch(() => null),
+        _composerCacheGet(sku).catch(() => null),
+        _entrypointCacheGet(sku).catch(() => null),
+        _marketStatsCacheGet(sku).catch(() => null),
+        _followSellCacheGet(sku).catch(() => null),
+        searchHitP,
+        bundleHitP,
+      ]);
+
+      results[0].hit = !!card;
+      results[1].hit = !!detail;
+      results[2].hit = !!composer;
+      results[3].hit = !!entrypoint;
+      results[4].hit = !!searchHit;
+      results[5].hit = !!bundleHit;
+      results[6].hit = !!marketStats && !marketStats.stale;
+      results[7].hit = !!followSell && !followSell.stale;
+    } catch (e) {
+      console.warn('[SW autoCollect] _checkAllCachesHit error:', sku, e?.message || e);
+    }
+
+    const allHit = results.every((r) => r.hit);
+    return { allHit, results };
+  };
+
   const _handleSubmitTask = async ({ sku, sellerSlug, sellerId, domInfo }) => {
     if (!sku) return { ok: false, error: 'sku required' };
     const exists = await _isTaskQueuedOrCompletedToday(sku);
     if (exists) return { ok: true, data: { alreadyQueued: true } };
+
+    // 前置缓存检查:8 类缓存全命中 → 直接 success,不入队
+    // 避免缓存命中任务占用 15s 队列 slot,且不消耗 daily-limit 配额(修复原 bug)。
+    // Gate 0(not-running/paused/daily-limit)的本质是限制真调,缓存命中无需真调,故不需要前置 Gate 0。
+    const { allHit, results } = await _checkAllCachesHit(sku);
+    if (allHit) {
+      const now = Date.now();
+      const collectResult = { status: 'success', results, reason: 'all-cached', totalDuration: 0 };
+      const steps = _buildSteps(results);
+      _addCompletedToday(sku);
+      const data = await _buildCollectDoneData(sku, collectResult);
+      await _broadcastCollectDoneV2(sku, sellerSlug || '', 'success', data, now, 0, steps, null);
+      console.log('[Queue] cache all hit, skip enqueue:', sku);
+      return { ok: true, data: { cacheHit: true } };
+    }
 
     const task = {
       sku,
@@ -4988,7 +5256,7 @@ try {
     _maybeStartConsume();
     // 队列暂停兜底:_maybeStartConsume 是 fire-and-forget,可能被 _consuming 拦截,
     // 或 _consumeOne 设置 consumePaused 的时机晚于此处检查。
-    // 直接检查暂停条件(daily-limit/not-running/paused),如果满足则广播 queuePaused,
+    // 直接检查暂停条件(daily-limit/not-running/paused/熔断),如果满足则广播 queuePaused,
     // 让新入队任务的 panel 设 ready 避免 AutoScroller 死锁。
     const _meta = await _loadQueueMeta();
     const _cfg = await _loadAutoCollectConfig();
@@ -4996,9 +5264,11 @@ try {
       _meta.consumePaused ||
       !_cfg.autoCollectRunning ||
       (_cfg.paused && Date.now() < _cfg.pausedUntil) ||
-      _meta.todayCount >= _cfg.perDayLimit;
+      _meta.todayCount >= _cfg.perDayLimit ||
+      Date.now() < _meta.circuitBreakerUntil; // 熔断期也需广播,否则 panel 卡 loading
     if (_shouldPause) {
-      await _broadcastQueuePaused('paused');
+      const _pauseReason = Date.now() < _meta.circuitBreakerUntil ? 'antibot' : 'paused';
+      await _broadcastQueuePaused(_pauseReason);
     }
     return { ok: true, data: { queued: isNew, alreadyQueued: !isNew } };
   };
@@ -6790,8 +7060,12 @@ try {
           // (SW 在 content script 注入完成前广播,onMessage listener 未注册导致错过)。
           const _qsMeta = await _loadQueueMeta();
           const _qsCfg = await _loadAutoCollectConfig();
+          const _inCircuitBreaker = Date.now() < _qsMeta.circuitBreakerUntil;
           let _qsReason = null;
-          if (_qsMeta.consumePaused) {
+          // 熔断优先级最高(独立于 consumePaused,熔断期 consumePaused 可能为 false)
+          if (_inCircuitBreaker) {
+            _qsReason = 'antibot';
+          } else if (_qsMeta.consumePaused) {
             if (_qsMeta.todayCount >= _qsCfg.perDayLimit) _qsReason = 'daily-limit';
             else if (!_qsCfg.autoCollectRunning) _qsReason = 'not-running';
             else if (_qsCfg.paused && Date.now() < _qsCfg.pausedUntil) _qsReason = 'paused';
@@ -6800,13 +7074,14 @@ try {
           return {
             ok: true,
             data: {
-              consumePaused: _qsMeta.consumePaused,
+              consumePaused: _qsMeta.consumePaused || _inCircuitBreaker,
               reason: _qsReason,
               todayCount: _qsMeta.todayCount,
               perDayLimit: _qsCfg.perDayLimit,
               autoCollectRunning: _qsCfg.autoCollectRunning,
               paused: _qsCfg.paused,
               pausedUntil: _qsCfg.pausedUntil,
+              circuitBreakerUntil: _qsMeta.circuitBreakerUntil,
             },
           };
         }
@@ -6865,14 +7140,25 @@ try {
           // 未命中 / stale → 调 _fetchMarketStatsDirect(seller tab 注入 data/v3 + 归一化)。
           // __needSellerLogin → proxyMarketData 代采降级(保留原有降级,noProxy 防递归)。
           // __antibot → 返回反爬信号。成功 → 写缓存后返回。null → NO_DATA。
+          // 熔断期:只查 cache(接受 stale 兜底),不真调 seller tab
           const mSku = message.sku;
           if (!mSku) return { ok: true, data: null };
           const mPeriod = message.period === 'weekly' ? 'weekly' : 'monthly';
+          const cb = await _isCircuitBreakerActive();
           try {
             // ── L1→L2 缓存优先 ──
             const cached = await _marketStatsCacheGet(mSku);
+            // 正常路径:未 stale 的缓存直接返回
             if (cached && !cached.stale && cached.data) {
               return { ok: true, data: cached.data };
+            }
+            // 熔断期:不再真调 seller tab。
+            // 有 stale 缓存时返回 stale 数据兜底(优于无数据);否则返 antibot 信号
+            if (cb.active) {
+              if (cached && cached.data) {
+                return { ok: true, data: cached.data };
+              }
+              return { ok: true, data: { __antibot: true, __reason: 'CIRCUIT_BREAKER', remainingMs: cb.remainingMs } };
             }
             // ── 缓存未命中 / stale → 直调 ──
             const result = await _fetchMarketStatsDirect(mSku, mPeriod);
@@ -6914,8 +7200,12 @@ try {
               null,
               token
             );
-            if (doc && doc.result) {
-              return { ok: true, data: doc.result };
+            // apiRequest 返回 { ok, data },data = MongoDB 任务文档(含 result 字段)
+            const taskData = doc?.data || doc;
+            if (taskData && taskData.result) {
+              // 包装成 { preFetched } 格式,与 collectDone 广播的 msg.data 结构一致,
+              // 让 loadPanelData 的 erpData.preFetched 能直接访问
+              return { ok: true, data: { preFetched: taskData.result } };
             }
             return { ok: true, data: null };
           } catch (e) {
@@ -7297,13 +7587,17 @@ try {
           // 卖家自有 Ozon 视频。无视频 / 抓取失败 / 转存失败 → ok:true + url:null(best-effort,不阻断上架)。
           // 同一次 page json 顺带抽到的源富内容(11254)+ 描述(4191)+ 主题标签(23171)一并透传 ——
           // 视频开关开着时这三样零增量请求(sku-collect 据此注入 distilled / _sourceVariant)。
+          // 熔断期:只查 cache(富内容/描述/标签),不真调 buyer tab;无 mp4 则跳过视频转存
+          const _cb = await _isCircuitBreakerActive();
           try {
-            const media = await fetchVariantMediaViaBuyerTab(message.url);
+            const media = await fetchVariantMediaViaBuyerTab(message.url, { cacheOnly: _cb.active });
             const richContent = media.richContent || '';
             const description = media.description || '';
             const hashtags = Array.isArray(media.hashtags) ? media.hashtags : [];
             const endpoint = media.endpoint || null;
             if (!media.mp4) return { ok: true, data: { url: null, richContent, description, hashtags, endpoint } };
+            // 熔断期不开 seller tab 转存视频,只返回 cache 中的富内容
+            if (_cb.active) return { ok: true, data: { url: null, richContent, description, hashtags, endpoint } };
             const r = await transferVideoToOzon(media.mp4);
             return { ok: true, data: { url: r.ok ? r.url : null, richContent, description, hashtags, endpoint } };
           } catch (e) {
@@ -7314,8 +7608,10 @@ try {
           // batch-upload 逐 SKU 用(视频转存关闭时的源内容独立通道):借买家 tab 拉 PDP page
           // json,抽源富内容(11254)+ 描述(4191)+ 主题标签(23171),纯读不写(无 upload-file 门户请求)。
           // 抓不到 / 失败 → ok:true + 空值(best-effort,不阻断上架)。
+          // 熔断期:只查 cache,不真调 buyer tab
+          const _cb = await _isCircuitBreakerActive();
           try {
-            const media = await fetchVariantMediaViaBuyerTab(message.url);
+            const media = await fetchVariantMediaViaBuyerTab(message.url, { cacheOnly: _cb.active });
             return {
               ok: true,
               data: {
@@ -7334,6 +7630,10 @@ try {
           const forceRefresh = Boolean(message.forceRefresh);
           // 跟卖时用户本就在 www 商品页 → 用来源标签走跨域快路,免依赖 seller 专用标签
           const senderTabId = sender?.tab?.id || null;
+          // 熔断期检查:反爬触发后不再开 seller tab,直接返 antibot 信号
+          if ((await _isCircuitBreakerActive()).active) {
+            return { ok: false, error: 'ANTIBOT_BLOCKED', message: '反爬熔断中,请稍后再试' };
+          }
           // 2026-05 Ozon 把 /api/v1/search-variant-model endpoint 下线(实测所有
           // SKU/参数都返 404 ResourceNotFound)。新流程是 /api/v1/search 拿元数据
           // + /api/site/seller-prototype/create-bundle-by-variant-id 补完整 attributes:
@@ -7407,12 +7707,6 @@ try {
           const scCookies = await chrome.cookies.getAll({ url: 'https://seller.ozon.ru/', name: 'sc_company_id' });
           const companyId = scCookies[0]?.value || '';
           if (!companyId) {
-            // 本机没登卖家端 → 透明回退:派给同租户已登录设备代采。message.noProxy
-            // 由代采执行端(agent action)设置,杜绝"代采里再触发代采"的递归。
-            if (!message.noProxy) {
-              const proxied = await proxyCollectVariant(backendUrl, token, storeId, sku);
-              if (proxied) return proxied;
-            }
             return {
               ok: false,
               error: 'AUTH_REQUIRED',

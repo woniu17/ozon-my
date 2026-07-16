@@ -334,6 +334,28 @@ router.post('/admin/api/collect-queue/consume-resume', async (req, res, next) =>
   }
 });
 
+// POST /admin/api/collect-queue/rescan
+// 创建 rescan op,SW 轮询到后清空 SW 状态 + 广播让 content script 重新提交所有可见 SKU。
+// 用于不刷新页面的场景(避免触发 Ozon 反爬)。
+router.post('/admin/api/collect-queue/rescan', async (req, res, next) => {
+  try {
+    const opsCol = await cols.collectQueueOps();
+    const r = await opsCol.insertOne({
+      op: 'rescan',
+      sku: null,
+      params: {},
+      ts: nowDate(),
+      processed: false,
+      processedAt: null,
+    });
+
+    return res.json(ok({ insertedId: r.insertedId, op: 'rescan' }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[collect-queue] rescan failed');
+    next(e);
+  }
+});
+
 // ── SW 上报队列快照(对账) ────────────────────────────────────────────────
 
 // POST /admin/api/collect-queue/sync-snapshot
