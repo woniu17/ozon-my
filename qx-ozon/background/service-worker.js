@@ -2288,7 +2288,11 @@ try {
       // 解析 webSellerList widget,抽取 {count, sellers, source}。
       // 仅 HTTP 200 才写缓存(零跟卖/解析失败也写,避免重复真调);
       // HTTP 非 200(403/5xx 等)视为失败,不写缓存(允许后续重试),与内容侧行为对齐。
-      const fsSku = (relPath.match(/-(\d+)\/?$/) || [])[1] || '';
+      // 注意:relPath = pathname + search,可能带 ?query=... 后缀,
+      // 不能用 /-(\d+)\/?$/ 匹配(结尾是 query string 不是 -数字/),
+      // 需先去 query 再从 pathname 提取 SKU。
+      const _fsPath = relPath.split('?')[0];
+      const fsSku = (_fsPath.match(/-(\d+)\/?$/) || [])[1] || '';
       let followSellData = null;
       if (fsSku) {
         try {
@@ -3576,49 +3580,13 @@ try {
     return updated;
   };
 
-  // ── autoCollect 内存计数器(今日统计 + 环形缓冲最近 50 条) ──────────────────
-  // SW 休眠后清零(非持久化),仅用于 popup 实时面板展示。持久化统计走 _writeAutoCollectLog(ERP)。
-  const _autoCollectStats = {
-    today: { success: 0, skipped: 0, failed: 0, antibot: 0, total: 0 },
-    byType: {
-      card: 0,
-      detail: 0,
-      composer: 0,
-      entrypoint: 0,
-      search: 0,
-      bundle: 0,
-      marketStats: 0,
-      followSell: 0,
-    },
-    bySource: { 'shop-page': 0, pdp: 0 },
-    byStoreClass: { chinese: 0, 'non-chinese': 0, unclassified: 0 },
-  };
-  const _autoCollectRecent = []; // 环形缓冲,最近 50 条
+  // ── autoCollect 环形缓冲(最近 200 条,供面板查询采集状态) ──────────────────
+  // SW 休眠后清零(非持久化)。持久化统计走 _writeAutoCollectLog(ERP)。
+  const _autoCollectRecent = [];
 
-  // sku + startTime 也需传入用于环形缓冲记录。
+  // 推送一条采集记录到环形缓冲。
   // reason: skipped 时记录具体跳过原因(not-running/paused/daily-limit/non-chinese-store/unclassified-store/all-cached)
-  const _incrementAutoCollectStats = (sku, status, source, storeClassified, results, startTime, reason) => {
-    _autoCollectStats.today.total++;
-    if (status === 'success') _autoCollectStats.today.success++;
-    else if (status === 'antibot') _autoCollectStats.today.antibot++;
-    else if (status === 'failed') _autoCollectStats.today.failed++;
-    else _autoCollectStats.today.skipped++;
-
-    if (source && _autoCollectStats.bySource[source] !== undefined) {
-      _autoCollectStats.bySource[source]++;
-    }
-    if (storeClassified && _autoCollectStats.byStoreClass[storeClassified] !== undefined) {
-      _autoCollectStats.byStoreClass[storeClassified]++;
-    }
-    // byType:统计命中的类目
-    if (Array.isArray(results)) {
-      results.forEach((r) => {
-        if (r.hit && _autoCollectStats.byType[r.type] !== undefined) {
-          _autoCollectStats.byType[r.type]++;
-        }
-      });
-    }
-    // 环形缓冲(扩容到 200,供商品卡状态查询)
+  const _pushAutoCollectRecent = (sku, status, source, storeClassified, results, startTime, reason) => {
     const entry = {
       sku,
       source,
@@ -3654,58 +3622,9 @@ try {
     });
 
     // 更新内存计数器
-    _incrementAutoCollectStats(sku, 'antibot', source, storeClassified, results, startTime, 'antibot');
+    _pushAutoCollectRecent(sku, 'antibot', source, storeClassified, results, startTime, 'antibot');
 
     return { status: 'antibot', pausedUntil };
-  };
-
-  // ── Task 22:SW 启动时从 MongoDB 聚合初始化内存计数器 ──────────────────────
-  // SW 休眠/重启后 _autoCollectStats 清零,面板会看到 0。本函数从 ERP stats 接口
-  // 拉今日聚合,回填内存计数器,让面板重启后仍能看到今日累计。
-  // fire-and-forget:在 onInstalled/onStartup 中调用,不阻塞启动,失败仅告警。
-  const _initAutoCollectStatsFromDb = async () => {
-    try {
-      const url = await getBackendUrl();
-      if (!url) return;
-      const stored = await getStorage([STORAGE_KEYS.token]);
-      const token = stored?.[STORAGE_KEYS.token];
-      if (!token) return;
-
-      // 调 ERP stats 接口获取今日统计
-      const resp = await fetch(`${url}/admin/api/auto-collect/stats`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!resp.ok) return;
-      const data = await resp.json();
-
-      // 用今日统计初始化内存计数器
-      const today = data.today || {};
-      _autoCollectStats.today.success = today.success || 0;
-      _autoCollectStats.today.skipped = today.skipped || 0;
-      _autoCollectStats.today.failed = today.failed || 0;
-      _autoCollectStats.today.antibot = today.antibot || 0;
-      _autoCollectStats.today.total = today.total || 0;
-
-      if (today.byType) {
-        for (const key of Object.keys(_autoCollectStats.byType)) {
-          _autoCollectStats.byType[key] = today.byType[key] || 0;
-        }
-      }
-      if (today.bySource) {
-        for (const key of Object.keys(_autoCollectStats.bySource)) {
-          _autoCollectStats.bySource[key] = today.bySource[key] || 0;
-        }
-      }
-      if (today.byStoreClass) {
-        for (const key of Object.keys(_autoCollectStats.byStoreClass)) {
-          _autoCollectStats.byStoreClass[key] = today.byStoreClass[key] || 0;
-        }
-      }
-
-      console.log('[autoCollect] 内存计数器已从 MongoDB 初始化:', _autoCollectStats.today);
-    } catch (e) {
-      console.warn('[autoCollect] 初始化内存计数器失败:', e?.message || e);
-    }
   };
 
   // ── Task 6:autoCollect 核心编排函数(8 类编排 + Gate 0.5 中国店铺检查) ──────
@@ -3800,20 +3719,20 @@ try {
       // 不受店铺页自动采集开关影响;daily-limit/paused/熔断仍生效)
       if (source !== 'manual' && !config.autoCollectRunning) {
         console.log('[SW autoCollect] Gate0 跳过(not-running):', sku);
-        _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'not-running');
+        _pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'not-running');
         return { status: 'skipped', reason: 'not-running' };
       }
       // 检查 paused / 冷却期
       if (config.paused && Date.now() < config.pausedUntil) {
         const remainMs = config.pausedUntil - Date.now();
         console.log('[SW autoCollect] Gate0 跳过(paused):', sku, '剩余', Math.round(remainMs / 1000) + 's');
-        _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'paused');
+        _pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'paused');
         return { status: 'skipped', reason: 'paused', pausedUntil: config.pausedUntil };
       }
       // 检查每日上限
       if (config.todayCount >= config.perDayLimit) {
         console.log('[SW autoCollect] Gate0 跳过(daily-limit):', sku, config.todayCount + '/' + config.perDayLimit);
-        _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'daily-limit');
+        _pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'daily-limit');
         return { status: 'skipped', reason: 'daily-limit' };
       }
 
@@ -3836,7 +3755,7 @@ try {
           results,
           totalDuration: Date.now() - startTime,
         });
-        _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, reason);
+        _pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, reason);
         return { status: 'skipped', reason };
       }
 
@@ -3895,7 +3814,7 @@ try {
           results,
           totalDuration: Date.now() - startTime,
         });
-        _incrementAutoCollectStats(sku, 'skipped', source, storeClassified, results, startTime, 'all-cached');
+        _pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'all-cached');
         return { status: 'skipped', reason: 'all-cached', results, totalDuration: Date.now() - startTime };
       }
 
@@ -4148,7 +4067,7 @@ try {
       );
 
       // 更新内存计数器
-      _incrementAutoCollectStats(sku, status, source, storeClassified, results, startTime, null);
+      _pushAutoCollectRecent(sku, status, source, storeClassified, results, startTime, null);
 
       // 写日志(fire-and-forget,不阻塞返回)
       _writeAutoCollectLog({
@@ -6053,8 +5972,6 @@ try {
     setTimeout(() => refreshExchangeRate(), 2_000);
     setTimeout(() => handleBrowserAgentAlarm(), 3_000);
     setTimeout(() => reloadSellerTabs(), 4_000);
-    // Task 22:从 MongoDB 拉今日聚合回填内存计数器(fire-and-forget,不阻塞启动)
-    setTimeout(() => _initAutoCollectStatsFromDb(), 5_000);
   });
 
   chrome.runtime.onStartup.addListener(() => {
@@ -6070,8 +5987,6 @@ try {
     setTimeout(() => refreshExchangeRate(), 1_000);
     setTimeout(() => handleBrowserAgentAlarm(), 2_000);
     setTimeout(() => reloadSellerTabs(), 3_000);
-    // Task 22:从 MongoDB 拉今日聚合回填内存计数器(fire-and-forget,不阻塞启动)
-    setTimeout(() => _initAutoCollectStatsFromDb(), 4_000);
   });
 
   // SW 冷启动(install/startup 之外的 import 时)也要 init,
@@ -7214,20 +7129,6 @@ try {
           // 推送 configChanged 通知面板/popup(fire-and-forget,无监听者不报错)
           chrome.runtime.sendMessage({ type: 'configChanged', config: _acFiltered }).catch(() => {});
           return { ok: true };
-        }
-        case 'autoCollectGetStats': {
-          // Task 22:面板读取今日内存计数器(SW 休眠后清零,仅用于实时展示)。
-          return {
-            ok: true,
-            data: {
-              today: { ..._autoCollectStats.today },
-              byType: { ..._autoCollectStats.byType },
-              bySource: { ..._autoCollectStats.bySource },
-              byStoreClass: { ..._autoCollectStats.byStoreClass },
-              successRate:
-                _autoCollectStats.today.total > 0 ? _autoCollectStats.today.success / _autoCollectStats.today.total : 0,
-            },
-          };
         }
         case 'autoCollectGetRecent': {
           // Task 22:面板读取最近 N 条采集记录(环形缓冲,默认 5 条,倒序)。

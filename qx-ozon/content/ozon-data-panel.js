@@ -38,7 +38,7 @@
 
   const panelState = { enabled: true };
   const panelDataCache = new Map();
-  let onlyWithSales = false;
+  let onlyWithRating = false;
   // 从 jz-seller-info 事件缓存的当前页卖家 slug,供 loadPanelData → __jzSubmitCollectTask 用。
   // 店铺页 seller-info-main.js 提取后通过 CustomEvent 推过来;非店铺页保持 ''。
   let sellerSlug = '';
@@ -247,6 +247,8 @@
           const info = extractCardInfo(card);
           const productId = extractProductId(info.url);
           if (!productId) continue;
+          // "仅抓有评价"开启时跳过无评价商品
+          if (onlyWithRating && !info.ratingCount) continue;
           const panel = card.querySelector('.ozon-helper-data-panel');
           if (panel) panel.dataset.jzLoadStatus = 'loading';
           window.__jzSubmitCollectTask?.(productId, card, sellerSlug, sellerId);
@@ -833,9 +835,14 @@
     //    关闭时不提交采集任务,但面板仍渲染(通过定时刷新查缓存填充数据)。
     //    panel 渲染(查 ERP、渲染字段)零阻塞,只有采集提交被 gate + 开关门控。
     //    非店铺页(无 sellerInfo)_collectGate 会被立即 resolve,等同直接提交。
+    //    "仅抓有评价"开启时跳过 ratingCount=0/null 的商品(不入队不采集)。
     if (window.__jzSubmitCollectTask && _collectGate && panelState.enabled) {
-      _pendingSkus.push({ sku: productId, card });
-      _collectGate.then((ctx) => _maybeFlushSku(productId, card, ctx));
+      if (onlyWithRating && !info.ratingCount) {
+        // 无评价且开关开启 → 跳过采集(但仍渲染面板)
+      } else {
+        _pendingSkus.push({ sku: productId, card });
+        _collectGate.then((ctx) => _maybeFlushSku(productId, card, ctx));
+      }
     }
 
     // 2) 优先用本页已 fetch 的缓存渲染(避免重复请求)
@@ -1435,29 +1442,14 @@
           else _autoScroller.stop();
         },
         onSalesFilterChange: (next) => {
-          onlyWithSales = !!next;
-        },
-        onForceRefresh: () => {
-          // 强制刷新:重置去重集合 + 重新提交当前页可见 SKU
-          window.__jzAutoCollectResetSeen?.();
-          try {
-            const cards = getCards();
-            for (const card of cards) {
-              const info = extractCardInfo(card);
-              const productId = extractProductId(info.url);
-              if (!productId) continue;
-              window.__jzSubmitCollectTask?.(productId, card, sellerSlug, sellerId);
-            }
-          } catch (err) {
-            console.warn('[ozon-data-panel] force refresh rescan failed:', err);
-          }
+          onlyWithRating = !!next;
         },
       },
     });
     // 暴露 jzCollectorToast 兼容 shared-utils.js 中可能的 toast 调用
     window.jzCollectorToast = (msg, type, duration) => _collectorPanel?.toast?.(msg, type, duration);
     _collectorPanel.setRunning(panelState.enabled);
-    onlyWithSales = _collectorPanel.getInitialSalesFilter();
+    onlyWithRating = _collectorPanel.getInitialSalesFilter();
 
     // 页面加载恢复:若主开关已开启且自动翻页开关勾选,启动 AutoScroller
     // (onToggleRunning 只在用户点击时触发,页面加载恢复时不会走那个分支)

@@ -6,12 +6,11 @@
 //     callbacks: {
 //       onToggleRunning:        (running) => {},   // 主开关切换
 //       onAutoScrollToggle:     (enabled) => {},   // 自动翻页 on/off
-//       onSalesFilterChange:    (enabled) => {},   // 仅抓有销量
+//       onSalesFilterChange:    (enabled) => {},   // 仅抓有评价
 //       onOnlyChineseStoresChange: (enabled) => {},// 只采集中国店铺
 //       onFilterOpen:           () => {},          // 智能筛选弹窗打开
 //       onFilterSave:           (state) => {},     // 智能筛选保存
 //       onFilterReset:          () => {},          // 智能筛选重置
-//       onForceRefresh:         () => {},          // 强制刷新当前页
 //       onViewErp:              () => {},          // 查看 ERP
 //     },
 //   });
@@ -129,7 +128,7 @@
       // 智能筛选 state（从 chrome.storage.local 异步加载）
       this.smartFilterState = null;
 
-      // 只在店铺页启用 AutoScroller / 仅抓有销量 / 智能筛选
+      // 只在店铺页启用 AutoScroller / 仅抓有评价 / 智能筛选
       this.isShopPage =
         /^\/seller\/[^/]+\/?$/i.test(location.pathname) || /^\/seller\/[^/]+\/products\/?$/i.test(location.pathname);
 
@@ -274,7 +273,7 @@
             '    <div class="qx-c-row">' +
             '      <label class="qx-c-checkbox">' +
             '        <input type="checkbox" data-act="sales-filter" data-el="sales-filter" />' +
-            '        <span>仅抓有销量</span>' +
+            '        <span>仅抓有评价</span>' +
             '      </label>' +
             '    </div>'
           : '') +
@@ -308,7 +307,6 @@
           : '') +
         // 操作按钮
         '  <div class="qx-c-actions">' +
-        '    <button class="qx-c-btn qx-c-btn-ghost" data-act="force-refresh">强制刷新当前页</button>' +
         '    <button class="qx-c-btn qx-c-btn-ghost" data-act="view-erp">查看ERP</button>' +
         '  </div>' +
         // 熔断倒计时
@@ -364,7 +362,6 @@
         var act = btn.dataset.act;
         if (act === 'collapse') return self._collapse();
         if (act === 'toggle') return self._onToggleClick();
-        if (act === 'force-refresh') return self._onForceRefresh();
         if (act === 'view-erp') return self._onViewErp();
         if (act === 'filter-open') return self._openFilterModal();
       });
@@ -469,7 +466,7 @@
     }
 
     _restoreInputs() {
-      // 仅抓有销量
+      // 仅抓有评价
       var salesCb = this._q('sales-filter');
       if (salesCb) salesCb.checked = localStorage.getItem(SALES_FILTER_KEY) === '1';
       // 自动翻页
@@ -529,18 +526,6 @@
         // 回滚 checkbox
         var cb = this._q('only-chinese');
         if (cb) cb.checked = !enabled;
-      }
-    }
-
-    async _onForceRefresh() {
-      try {
-        await this._send('autoCollectForceRefreshPage');
-        if (typeof this.callbacks.onForceRefresh === 'function') {
-          this.callbacks.onForceRefresh();
-        }
-        this.toast('已强制刷新当前页', 'success', 1500);
-      } catch (err) {
-        this.toast(err.message || '强制刷新失败', 'error', 2500);
       }
     }
 
@@ -708,7 +693,7 @@
       textEl.textContent = detail ? reason + ' · ' + detail : reason;
     }
 
-    // ── 仅抓有销量初始值 ──
+    // ── 仅抓有评价初始值 ──
     getInitialSalesFilter() {
       var cb = this._q('sales-filter');
       return cb ? cb.checked : localStorage.getItem(SALES_FILTER_KEY) === '1';

@@ -533,9 +533,6 @@
           if (item) item.status = status;
           renderTable();
         }
-      } else if (type === 'queuePaused' || type === 'queueResumed' || type === 'antibotDetected') {
-        // 忽略:暂停/恢复状态由 updateProgress 轮询 getCollectManagerState 权威获取,
-        // 不依赖广播(避免批量提交时 N 次广播风暴)
       }
       // 不阻塞
       if (sendResponse) sendResponse({ ok: true });

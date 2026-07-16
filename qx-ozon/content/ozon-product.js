@@ -12102,18 +12102,10 @@
     });
 
     // 挂载 QX采集器面板(详情页)
-    // 详情页面板仅展示状态/统计/熔断/强制刷新/查看ERP/店铺检测(panel.js isShopPage=false
-    // 自动隐藏自动翻页/仅抓有销量/智能筛选)
+    // 详情页面板仅展示状态/统计/熔断/查看ERP/店铺检测(panel.js isShopPage=false
+    // 自动隐藏自动翻页/仅抓有评价/智能筛选)
     if (window.QXCollectorPanel) {
-      window.QXCollectorPanel.create({
-        callbacks: {
-          onForceRefresh: () => {
-            // 新队列架构下,强制刷新不再在 PDP 单独触发 autoCollect;
-            // 如需重采,请在店铺页队列管理页中操作。
-            window.__jzAutoCollectResetSeen?.();
-          },
-        },
-      });
+      window.QXCollectorPanel.create({});
 
       // 重放早到的店铺信息(若 MAIN world 写 data-jz-seller-info 时面板还没挂好)
       if (_pendingPdpStoreUpdate && window.__qxCollectorPanel) {
