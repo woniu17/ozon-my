@@ -62,6 +62,12 @@ function ensureMigrations() {
   migrateCollectBoxV2BySku(db);
   // collect_box_v2:增加 collect_source 列(功能来源)
   migrateCollectBoxV2CollectSource(db);
+  // collect_queue_tasks:增加 duration 列(SW result 接口上报任务耗时)
+  const taskCols = db.prepare(`PRAGMA table_info(collect_queue_tasks)`).all();
+  if (!taskCols.some((c) => c.name === 'duration')) {
+    db.exec(`ALTER TABLE collect_queue_tasks ADD COLUMN duration INTEGER`);
+    console.log('[db] migration: added column collect_queue_tasks.duration');
+  }
 }
 
 // collect_box_v2 迁移:从 anchor_sku 维度(一条含多变体)改为 sku 维度(一变体一条)

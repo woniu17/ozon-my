@@ -153,6 +153,9 @@ try {
     // 就绪前不发任何网络请求,只做本地计数。用 `chrome.storage.local.set({
     // l1ReportEnabled: true })` 启用。详见 .claude/plans/chrome-api-purring-haven.md。
     l1ReportEnabled: 'l1ReportEnabled',
+    // 专用买家 tab 持久化状态(跨 SW 重启 + 插件重载复用)
+    // { tabId, callCount, lastSku }
+    dedicatedBuyerTab: 'dedicatedBuyerTab',
   };
 
   // L1 SW 端运行时计数器(本进程级,SW 重启会清零;持久化指标走影子表 IndexedDB)
@@ -564,18 +567,14 @@ try {
   const _erpCacheDelete = (type, sku) => __jzCollect.erpCacheDelete(type, sku);
   const _erpCacheSetAndSyncFlag = (store, type, sku, body) =>
     __jzCollect.erpCacheSetAndSyncFlag(store, type, sku, body);
-  const _syncL2FromL1 = (store, type, sku, l1Entry) =>
-    __jzCollect.syncL2FromL1(store, type, sku, l1Entry);
+  const _syncL2FromL1 = (store, type, sku, l1Entry) => __jzCollect.syncL2FromL1(store, type, sku, l1Entry);
   const _writeAutoCollectLog = (payload) => __jzCollect.writeAutoCollectLog(payload);
   const _cardCacheGet = (sku) => __jzCollect.cardCacheGet(sku);
   const _cardCacheSet = (sku, data) => __jzCollect.cardCacheSet(sku, data);
   const _cardCacheDelete = (sku) => __jzCollect.cardCacheDelete(sku);
-  const _composerCacheGet = (sku) => __jzCollect.composerCacheGet(sku);
-  const _composerCacheSet = (sku, data) => __jzCollect.composerCacheSet(sku, data);
-  const _composerCacheDelete = (sku) => __jzCollect.composerCacheDelete(sku);
-  const _entrypointCacheGet = (sku) => __jzCollect.entrypointCacheGet(sku);
-  const _entrypointCacheSet = (sku, data) => __jzCollect.entrypointCacheSet(sku, data);
-  const _entrypointCacheDelete = (sku) => __jzCollect.entrypointCacheDelete(sku);
+  const _richMediaCacheGet = (sku) => __jzCollect.richMediaCacheGet(sku);
+  const _richMediaCacheSet = (sku, data) => __jzCollect.richMediaCacheSet(sku, data);
+  const _richMediaCacheDelete = (sku) => __jzCollect.richMediaCacheDelete(sku);
   const _detailCacheGet = (sku) => __jzCollect.detailCacheGet(sku);
   const _detailCacheSet = (sku, data) => __jzCollect.detailCacheSet(sku, data);
   const _detailCacheDelete = (sku) => __jzCollect.detailCacheDelete(sku);
@@ -984,14 +983,14 @@ try {
 
   // _ensureSellerTabImpl / ensureSellerTab / normalizeMarketItem / ensureBuyerTab 已迁移到 collect/background/collect-tab.js
   const ensureSellerTab = (timeoutMs = 20000) => __jzCollect.ensureSellerTab(timeoutMs);
-  const ensureBuyerTab = (timeoutMs = 20000) => __jzCollect.ensureBuyerTab(timeoutMs);
+  const ensureBuyerTab = (sku, timeoutMs = 20000) => __jzCollect.ensureBuyerTab(sku, timeoutMs);
 
   // transferVideoToOzon 已迁移到 collect/background/collect-tab.js
   const transferVideoToOzon = (srcUrl) => __jzCollect.transferVideoToOzon(srcUrl);
 
-  // _isRichDoc / _extract*FromStates / fetchVariantMediaViaBuyerTab 已迁移到 collect/background/collect-tab.js
-  const fetchVariantMediaViaBuyerTab = (productUrl, options = {}) =>
-    __jzCollect.fetchVariantMediaViaBuyerTab(productUrl, options);
+  // _isRichDoc / _extract*FromStates / fetchPdpBundleViaBuyerTab 已迁移到 collect/background/collect-tab.js
+  const fetchPdpBundleViaBuyerTab = (productUrl, options = {}) =>
+    __jzCollect.fetchPdpBundleViaBuyerTab(productUrl, options);
 
   // ── 采集配置层(已迁移到 collect/background/collect-config.js) ──────────────
   // 保留常量与委托包装器:IIFE 内其他模块(checkStoreClassification/_doAutoCollect 等)
@@ -1329,8 +1328,7 @@ try {
   const _cleanupCompletedTasksLocked = (queue) => __jzCollect._cleanupCompletedTasksLocked(queue);
   const _syncConsumeRateFromConfig = () => __jzCollect._syncConsumeRateFromConfig();
   const _isCircuitBreakerActive = () => __jzCollect._isCircuitBreakerActive();
-  const _broadcastQueueStatus = (sku, sellerSlug, status) =>
-    __jzCollect._broadcastQueueStatus(sku, sellerSlug, status);
+  const _broadcastQueueStatus = (sku, sellerSlug, status) => __jzCollect._broadcastQueueStatus(sku, sellerSlug, status);
   const _broadcastTaskStatus = (sku, status, attempts, maxAttempts, nextRetryAt) =>
     __jzCollect._broadcastTaskStatus(sku, status, attempts, maxAttempts, nextRetryAt);
   const _broadcastToCollectManagers = (payload) => __jzCollect._broadcastToCollectManagers(payload);
@@ -1344,6 +1342,47 @@ try {
   const _getBundleItemForBroadcast = (sku) => __jzCollect._getBundleItemForBroadcast(sku);
   const _getSearchVariantForBroadcast = (sku) => __jzCollect._getSearchVariantForBroadcast(sku);
   const _buildCollectDoneData = (sku, collectResult) => __jzCollect._buildCollectDoneData(sku, collectResult);
+
+  // ── 批量查询去重:相同 SKU 的并发查询合并为一次 ──
+  // 场景:多个 content_scripts(ozon-data-panel 5s 定时器 + manager 轮询)
+  // 同一 tick 内可能对同一 SKU 发起多次查询,inflight Map 合并避免重复 HTTP/缓存查询。
+  const _erpQueryInflight = new Map(); // sku → Promise<preFetched>
+  const _cacheStatusInflight = new Map(); // sku → Promise<{ results, hitCount, total }>
+
+  // 单 SKU 缓存状态查询(抽出供 queryCacheStatus 和 queryCacheStatusBatch 复用)
+  async function _queryCacheStatusOne(qSku) {
+    if (!qSku) return null;
+    const [card, detail, pdp, search, bundle, marketStats, followSell] = await Promise.all([
+      _cardCacheGet(qSku).catch(() => null),
+      _detailCacheGet(qSku).catch(() => null),
+      _richMediaCacheGet(qSku).catch(() => null),
+      (async () => {
+        const l1 = await _idbGet(_IDB_STORE_SEARCH, qSku).catch(() => null);
+        if (l1?.data) return l1.data;
+        const l2 = await _erpCacheGet('search', qSku).catch(() => null);
+        return l2?.data || null;
+      })().catch(() => null),
+      (async () => {
+        const l1 = await _idbGet(_IDB_STORE_BUNDLE, qSku).catch(() => null);
+        if (l1?.data) return l1.data;
+        const l2 = await _erpCacheGet('bundle', qSku).catch(() => null);
+        return l2?.data || null;
+      })().catch(() => null),
+      _marketStatsCacheGet(qSku).catch(() => null),
+      _followSellCacheGet(qSku).catch(() => null),
+    ]);
+    const results = [
+      { type: 'card', hit: !!card },
+      { type: 'detail', hit: !!detail },
+      { type: 'pdp', hit: !!pdp },
+      { type: 'search', hit: !!search },
+      { type: 'bundle', hit: !!bundle },
+      { type: 'marketStats', hit: !!(marketStats && marketStats.data) },
+      { type: 'followSell', hit: !!(followSell && followSell.data) },
+    ];
+    const hitCount = results.filter((r) => r.hit).length;
+    return { results, hitCount, total: results.length };
+  }
   const _erpQueueInsert = (task) => __jzCollect._erpQueueInsert(task);
   const _erpQueueUpdate = (task) => __jzCollect._erpQueueUpdate(task);
   const _erpQueueResult = (sku, result) => __jzCollect._erpQueueResult(sku, result);
@@ -2316,14 +2355,18 @@ try {
           // forceRefresh=true 时跳过缓存,清 L1+L2 后走真调
           const forceRefresh = !!message?.forceRefresh;
           if (!forceRefresh && urlSku) {
-            const cached = await _composerCacheGet(urlSku);
+            const cached = await _richMediaCacheGet(urlSku);
             if (cached && cached.fields && cached.widgetStates) {
-              sendResponse({ ok: true, data: cached, cached: true });
+              sendResponse({
+                ok: true,
+                data: { fields: cached.fields, widgetStates: cached.widgetStates },
+                cached: true,
+              });
               return;
             }
           }
           if (forceRefresh && urlSku) {
-            _composerCacheDelete(urlSku);
+            _richMediaCacheDelete(urlSku);
           }
 
           // composer-api page endpoint。SW 直 fetch 反爬必死 403,走 fetchOzonWwwViaTab
@@ -2434,9 +2477,23 @@ try {
               widgetStates[k] = ws[k];
             }
           }
-          // 异步写 composer 缓存(L1 + L2),不阻塞返回
+          // 异步写 richMedia 缓存(L1 + L2),不阻塞返回。
+          // fetchProductPageState 只负责 fields + widgetStates;media 字段
+          // (mp4/richContent/description/hashtags/gallery)留空,由 fetchPdpMedia
+          // / fetchPdpBundleViaBuyerTab 在富内容采集时回填。
           if (sku) {
-            _composerCacheSet(sku, { fields, widgetStates });
+            const richMediaData = {
+              mp4: null,
+              richContent: '',
+              richContentHasText: false,
+              description: '',
+              hashtags: [],
+              gallery: [],
+              fields,
+              widgetStates,
+              hitEndpoints: [],
+            };
+            _richMediaCacheSet(sku, richMediaData);
           }
           // shared-utils.js window.sendMessage 协议:成功必须 { ok:true, data:{...} }
           // 否则 caller 只 resolve(response.data) 会拿到 undefined。
@@ -2808,56 +2865,36 @@ try {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'composerCacheGet': {
-          // 查 composer 缓存(L1→L2),用于 content 端 ensurePdpState 兜底。
+        case 'richMediaCacheGet': {
+          // 查 richMedia 缓存(L1→L2),用于 content 端 ensurePdpState 兜底 +
+          // fetchVariantGallery / fetchPdpBundleViaBuyerTab 缓存优先。
           try {
             const sku = String(message.sku || '');
             if (!sku) return { ok: true, data: null };
-            const data = await _composerCacheGet(sku);
+            const data = await _richMediaCacheGet(sku);
             return { ok: true, data };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'composerCacheDelete': {
-          // forceRefresh 时清 composer 缓存。
-          try {
-            const sku = String(message.sku || '');
-            if (sku) _composerCacheDelete(sku);
-            return { ok: true };
-          } catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-          }
-        }
-        case 'entrypointCacheGet': {
-          // 查 entrypoint 缓存(L1→L2),用于 fetchVariantGallery / fetchVariantMediaViaBuyerTab 缓存优先。
-          try {
-            const sku = String(message.sku || '');
-            if (!sku) return { ok: true, data: null };
-            const data = await _entrypointCacheGet(sku);
-            return { ok: true, data };
-          } catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-          }
-        }
-        case 'entrypointCacheSet': {
-          // fetchVariantGallery / fetchVariantMediaViaBuyerTab 真调成功后,异步写 entrypoint 缓存。
+        case 'richMediaCacheSet': {
+          // fetchVariantGallery / fetchPdpBundleViaBuyerTab 真调成功后,异步写 richMedia 缓存。
           // 入参: { sku, data }  返回: { ok: true }(异步写,不等 L2)
           try {
             const sku = String(message.sku || '');
             const data = message.data;
             if (!sku || !data) return { ok: true };
-            _entrypointCacheSet(sku, data);
+            _richMediaCacheSet(sku, data);
             return { ok: true };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'entrypointCacheDelete': {
-          // forceRefresh 时清 entrypoint 缓存。
+        case 'richMediaCacheDelete': {
+          // forceRefresh 时清 richMedia 缓存。
           try {
             const sku = String(message.sku || '');
-            if (sku) _entrypointCacheDelete(sku);
+            if (sku) _richMediaCacheDelete(sku);
             return { ok: true };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
@@ -3365,44 +3402,34 @@ try {
             },
           };
         }
-        case 'debugEntrypointComposerCache': {
+        case 'debugRichMediaCache': {
           const dSku = message.sku || '';
           if (!dSku) return { ok: false, error: 'sku required' };
-          let dEp = null,
-            dCc = null;
+          let dRm = null;
           try {
-            dEp = await _entrypointCacheGet(dSku);
+            dRm = await _richMediaCacheGet(dSku);
           } catch (e) {
-            dEp = { error: e?.message || e };
-          }
-          try {
-            dCc = await _composerCacheGet(dSku);
-          } catch (e) {
-            dCc = { error: e?.message || e };
+            dRm = { error: e?.message || e };
           }
           return {
             ok: true,
             data: {
-              entrypoint: dEp
+              richMedia: dRm
                 ? {
                     has: true,
-                    keys: Object.keys(dEp),
-                    richContentLen: (dEp.richContent || '').length,
-                    descriptionLen: (dEp.description || '').length,
-                    hasMp4: !!dEp.mp4,
-                    hashtagsCount: Array.isArray(dEp.hashtags) ? dEp.hashtags.length : 0,
+                    keys: Object.keys(dRm),
+                    hasFields: !!dRm.fields,
+                    hasWidgetStates: !!dRm.widgetStates,
+                    widgetStateKeys: dRm.widgetStates ? Object.keys(dRm.widgetStates).slice(0, 10) : [],
+                    richContentLen: (dRm.richContent || '').length,
+                    descriptionLen: (dRm.description || '').length,
+                    hasMp4: !!dRm.mp4,
+                    hashtagsCount: Array.isArray(dRm.hashtags) ? dRm.hashtags.length : 0,
+                    galleryCount: Array.isArray(dRm.gallery) ? dRm.gallery.length : 0,
+                    hitEndpoints: Array.isArray(dRm.hitEndpoints) ? dRm.hitEndpoints : [],
                   }
                 : { has: false },
-              composer: dCc
-                ? {
-                    has: true,
-                    keys: Object.keys(dCc),
-                    hasWidgetStates: !!dCc.widgetStates,
-                    widgetStateKeys: dCc.widgetStates ? Object.keys(dCc.widgetStates).slice(0, 10) : [],
-                    hasFields: !!dCc.fields,
-                  }
-                : { has: false },
-              buildVersion: '20260714-fix-composer-cache',
+              buildVersion: '20260717-rich-media-cache',
             },
           };
         }
@@ -3505,45 +3532,109 @@ try {
           }
         }
         case 'queryCacheStatus': {
-          // 查询 8 类缓存命中状态(供数据面板状态条展示,不查采集队列)
+          // 查询 7 类缓存命中状态(供数据面板状态条展示,不查采集队列)
           // 返回 { results: [{ type, hit }], hitCount, total }
+          // 复用 _queryCacheStatusOne(含 inflight 去重)
           const qSku = message.sku;
           if (!qSku) return { ok: true, data: null };
           try {
-            const [card, detail, composer, entrypoint, search, bundle, marketStats, followSell] = await Promise.all([
-              _cardCacheGet(qSku).catch(() => null),
-              _detailCacheGet(qSku).catch(() => null),
-              _composerCacheGet(qSku).catch(() => null),
-              _entrypointCacheGet(qSku).catch(() => null),
-              (async () => {
-                const l1 = await _idbGet(_IDB_STORE_SEARCH, qSku).catch(() => null);
-                if (l1?.data) return l1.data;
-                const l2 = await _erpCacheGet('search', qSku).catch(() => null);
-                return l2?.data || null;
-              })().catch(() => null),
-              (async () => {
-                const l1 = await _idbGet(_IDB_STORE_BUNDLE, qSku).catch(() => null);
-                if (l1?.data) return l1.data;
-                const l2 = await _erpCacheGet('bundle', qSku).catch(() => null);
-                return l2?.data || null;
-              })().catch(() => null),
-              _marketStatsCacheGet(qSku).catch(() => null),
-              _followSellCacheGet(qSku).catch(() => null),
-            ]);
-            const results = [
-              { type: 'card', hit: !!card },
-              { type: 'composer', hit: !!composer },
-              { type: 'entrypoint', hit: !!entrypoint },
-              { type: 'search', hit: !!search },
-              { type: 'bundle', hit: !!bundle },
-              { type: 'marketStats', hit: !!(marketStats && marketStats.data) },
-              { type: 'followSell', hit: !!(followSell && followSell.data) },
-              { type: 'detail', hit: !!detail },
-            ];
-            const hitCount = results.filter((r) => r.hit).length;
-            return { ok: true, data: { results, hitCount, total: results.length } };
+            let p = _cacheStatusInflight.get(qSku);
+            if (!p) {
+              p = _queryCacheStatusOne(qSku).finally(() => _cacheStatusInflight.delete(qSku));
+              _cacheStatusInflight.set(qSku, p);
+            }
+            return { ok: true, data: await p };
           } catch (e) {
             return { ok: true, data: null };
+          }
+        }
+        case 'queryErpProductDataBatch': {
+          // 批量查询 ERP 数据(视口内多个 SKU 一次性查)
+          // 走后端 POST /admin/api/collect-queue/batch 一次 HTTP 拿所有任务,
+          // 无 result 的 SKU 再用 _buildCollectDoneData 查 SW 缓存兜底。
+          const skus = Array.isArray(message.skus) ? message.skus.filter(Boolean) : [];
+          if (!skus.length) return { ok: true, data: {} };
+          try {
+            // 1) 后端批量查询(一次 HTTP)
+            const batchResp = await apiRequest('POST', `${backendUrl}/admin/api/collect-queue/batch`, { skus }, token);
+            const sku2doc = batchResp?.data || batchResp || {};
+
+            // 2) 缓存兜底:对无 result 的 SKU 并行查 SW 缓存
+            const needFallback = skus.filter((sku) => {
+              const doc = sku2doc[sku];
+              return !doc || !doc.result;
+            });
+            if (needFallback.length) {
+              const fallbackEntries = await Promise.all(
+                needFallback.map(async (sku) => {
+                  try {
+                    const inflight = _erpQueryInflight.get(sku);
+                    if (inflight) return [sku, await inflight];
+                    const p = _buildCollectDoneData(sku, null).finally(() => _erpQueryInflight.delete(sku));
+                    _erpQueryInflight.set(sku, p);
+                    const preFetched = await p;
+                    const hasData =
+                      preFetched.stats?.value ||
+                      preFetched.market?.value ||
+                      preFetched.variant?.value ||
+                      preFetched.followCount?.value;
+                    return [sku, hasData ? { preFetched } : null];
+                  } catch {
+                    return [sku, null];
+                  }
+                })
+              );
+              for (const [sku, data] of fallbackEntries) {
+                sku2doc[sku] = data ? { result: data.preFetched, _fromCache: true } : sku2doc[sku];
+              }
+            }
+
+            // 3) 组装最终结果:{ [sku]: { preFetched } | null }
+            const result = {};
+            for (const sku of skus) {
+              const doc = sku2doc[sku];
+              if (doc?.result) {
+                result[sku] = { preFetched: doc.result };
+              } else if (doc?._fromCache) {
+                result[sku] = { preFetched: doc.result };
+              } else {
+                result[sku] = null;
+              }
+            }
+            return { ok: true, data: result };
+          } catch (e) {
+            // 整体失败:返回全 null,让调用方静默降级
+            const result = {};
+            for (const sku of skus) result[sku] = null;
+            return { ok: true, data: result };
+          }
+        }
+        case 'queryCacheStatusBatch': {
+          // 批量查询 7 类缓存命中状态(视口内多 SKU 一次性查)
+          // 每个 SKU 内部 7 路 Promise.all,SKU 间也 Promise.all,全并行。
+          const skus = Array.isArray(message.skus) ? message.skus.filter(Boolean) : [];
+          if (!skus.length) return { ok: true, data: {} };
+          try {
+            const entries = await Promise.all(
+              skus.map(async (sku) => {
+                try {
+                  // 复用单 SKU inflight 去重
+                  let p = _cacheStatusInflight.get(sku);
+                  if (!p) {
+                    p = _queryCacheStatusOne(sku).finally(() => _cacheStatusInflight.delete(sku));
+                    _cacheStatusInflight.set(sku, p);
+                  }
+                  return [sku, await p];
+                } catch {
+                  return [sku, null];
+                }
+              })
+            );
+            return { ok: true, data: Object.fromEntries(entries) };
+          } catch {
+            const result = {};
+            for (const sku of skus) result[sku] = null;
+            return { ok: true, data: result };
           }
         }
         case 'getCollectStores': {
@@ -4058,7 +4149,7 @@ try {
           // 熔断期:只查 cache(富内容/描述/标签),不真调 buyer tab;无 mp4 则跳过视频转存
           const _cb = await _isCircuitBreakerActive();
           try {
-            const media = await fetchVariantMediaViaBuyerTab(message.url, { cacheOnly: _cb.active });
+            const media = await fetchPdpBundleViaBuyerTab(message.url, { cacheOnly: _cb.active });
             const richContent = media.richContent || '';
             const description = media.description || '';
             const hashtags = Array.isArray(media.hashtags) ? media.hashtags : [];
@@ -4079,7 +4170,7 @@ try {
           // 熔断期:只查 cache,不真调 buyer tab
           const _cb = await _isCircuitBreakerActive();
           try {
-            const media = await fetchVariantMediaViaBuyerTab(message.url, { cacheOnly: _cb.active });
+            const media = await fetchPdpBundleViaBuyerTab(message.url, { cacheOnly: _cb.active });
             return {
               ok: true,
               data: {

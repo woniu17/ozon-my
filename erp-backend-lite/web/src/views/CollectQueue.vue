@@ -18,15 +18,14 @@ import JsonTree from '../components/JsonTree.vue';
 
 const { show } = useToast();
 
-// 8 个采集步骤(与 SW 侧 _doAutoCollect 一致)
+// 7 个采集步骤(与 SW 侧 _doAutoCollect 一致)
 const STEP_KEYS = [
   { key: 'card', label: 'card' },
   { key: 'detail', label: 'detail' },
-  { key: 'composer', label: 'composer' },
-  { key: 'entrypoint', label: 'entrypoint' },
+  { key: 'pdp', label: 'pdp' },
   { key: 'search', label: 'search' },
-  { key: 'marketStats', label: 'marketStats' },
   { key: 'bundle', label: 'bundle' },
+  { key: 'marketStats', label: 'marketStats' },
   { key: 'followSell', label: 'followSell' },
 ];
 

@@ -55,17 +55,8 @@
   /** @type {Set<string>} 已提交采集的 SKU(用于进度统计) */
   const submittedSkus = new Set();
 
-  // 8 类缓存固定展示顺序(与数据面板 ozon-data-panel.js _CACHE_TYPE_LABELS 对齐)
-  const CACHE_TYPE_LABELS = [
-    'card',
-    'composer',
-    'entrypoint',
-    'search',
-    'bundle',
-    'marketStats',
-    'followSell',
-    'detail',
-  ];
+  // 7 类缓存固定展示顺序(与数据面板 ozon-data-panel.js _CACHE_TYPE_LABELS 对齐)
+  const CACHE_TYPE_LABELS = ['card', 'detail', 'pdp', 'search', 'bundle', 'marketStats', 'followSell'];
   let currentStoreSlug = '';
   let isCollecting = false;
 
@@ -164,7 +155,7 @@
         status: 'pending',
         cacheHits: null,
       }));
-      // 并行查缓存命中状态(用于展示 8 类缓存命中情况)
+      // 并行查缓存命中状态(用于展示 7 类缓存命中情况)
       await refreshCacheHits();
       renderTable();
       filterCard.style.display = 'block';
@@ -183,25 +174,27 @@
 
   // ─── 缓存命中查询(批量) ───
   const refreshCacheHits = async () => {
-    const tasks = allSkus.map(async (item) => {
-      try {
-        const resp = await sendMessage({ action: 'queryCacheStatus', sku: item.sku });
-        if (resp?.ok && resp.data) {
-          item.cacheHits = resp.data;
+    if (!allSkus.length) return;
+    try {
+      // 一次批量查所有 SKU 的缓存状态(取代旧的逐个 sendMessage + BATCH=6 并发)
+      const resp = await sendMessage({
+        action: 'queryCacheStatusBatch',
+        skus: allSkus.map((i) => i.sku),
+      });
+      const batch = resp?.ok ? resp.data || {} : {};
+      for (const item of allSkus) {
+        const data = batch[item.sku];
+        if (data) {
+          item.cacheHits = data;
           // 根据 cacheHits 推断初始状态:8 类全命中 = success
-          if (item.status === 'pending' && resp.data.hitCount === resp.data.total) {
+          if (item.status === 'pending' && data.hitCount === data.total) {
             item.status = 'success';
-            statusMap.set(item.sku, { status: 'success', results: resp.data.results });
+            statusMap.set(item.sku, { status: 'success', results: data.results });
           }
         }
-      } catch {
-        /* ignore */
       }
-    });
-    // 限制并发,避免 SW 消息拥堵
-    const BATCH = 6;
-    for (let i = 0; i < tasks.length; i += BATCH) {
-      await Promise.all(tasks.slice(i, i + BATCH));
+    } catch {
+      /* ignore */
     }
   };
 
@@ -325,7 +318,7 @@
   };
 
   // 渲染缓存状态(参考数据面板 renderCollectStatusBar 的 3 行结构)
-  // 行1:汇总(图标+文字+N/8) 行2/3:8 类缓存明细(每行 4 类,hit 绿色✓ / miss 灰色✗)
+  // 行1:汇总(图标+文字+N/7) 行2/3:7 类缓存明细(3 列 grid,hit 绿色✓ / miss 灰色✗)
   const renderCacheStatus = (cacheHits) => {
     // 按 CACHE_TYPE_LABELS 固定顺序补齐,无数据时全 miss 占位
     const results =
@@ -351,7 +344,7 @@
       text = '缓存部分';
     }
     const renderItem = (r) => `<span class="cache-${r.hit ? 'hit' : 'miss'}">${r.type}${r.hit ? '✓' : '✗'}</span>`;
-    // 4 行 2 列 grid 对齐:每个 grid cell 放一个缓存项
+    // 3 列 grid 对齐:每个 grid cell 放一个缓存项(7 项 + 2 空格 = 9 cell)
     const detailCells = results.map(renderItem).join('');
     return (
       `<div class="cache-status">` +
@@ -432,6 +425,24 @@
         const TERMINAL_STATUSES = ['success', 'failed_final', 'failed_partial', 'skipped'];
         // 用 tasks 数组更新每个 SKU 的状态和完成时间(tasks 来自 SW 队列,权威)
         const taskMap = new Map(tasks.map((t) => [String(t.sku), t]));
+        // 先批量查出"之前 running 但现已不在队列"的 SKU 的 ERP 终态
+        // (旧实现逐个 sendMessage 循环查,N 个 SKU = N 次消息;批量一次搞定)
+        const needErpCheck = allSkus.filter((item) => {
+          const t = taskMap.get(item.sku);
+          return !t && !running.includes(item.sku) && item.status === 'running';
+        });
+        let erpBatch = {};
+        if (needErpCheck.length) {
+          try {
+            const erpResp = await sendMessage({
+              action: 'queryErpProductDataBatch',
+              skus: needErpCheck.map((i) => i.sku),
+            });
+            erpBatch = erpResp?.ok ? erpResp.data || {} : {};
+          } catch {
+            /* ignore */
+          }
+        }
         for (const item of allSkus) {
           const t = taskMap.get(item.sku);
           if (t) {
@@ -447,9 +458,9 @@
             item.status = 'running';
             statusMap.set(item.sku, { status: 'running' });
           } else if (item.status === 'running') {
-            // 之前 running,现在不在队列中,查 ERP 终态
-            const erpResp = await sendMessage({ action: 'queryErpProductData', sku: item.sku });
-            if (erpResp?.ok && erpResp.data?.preFetched) {
+            // 之前 running,现在不在队列中:用批量预查结果判定终态
+            const erpData = erpBatch[item.sku];
+            if (erpData?.preFetched) {
               item.status = 'success';
               item.finishedAt = Date.now();
               statusMap.set(item.sku, { status: 'success', finishedAt: item.finishedAt });

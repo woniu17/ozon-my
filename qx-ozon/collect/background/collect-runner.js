@@ -16,12 +16,12 @@
  *   - checkStoreClassification(三层查询:L1 chrome.storage → L2 MongoDB → 规则引擎)
  *   - manualClassifyStore(人工确认分类)
  *   - _handleAntibot(反爬熔断:暂停 10 分钟 + 通知 + 写日志)
- *   - _checkAllCachesHit(8 类缓存前置检查)
+ *   - _checkAllCachesHit(7 类缓存前置检查)
  *
  * 暂留 service-worker.js(B 类:依赖未迁移的 Tab/限流层):
  *   - fetchBundleByVariantId(依赖 fetchSellerPortal)
  *   - transferVideoToOzon(依赖 ensureSellerTab)
- *   - fetchVariantMediaViaBuyerTab(依赖 ensureBuyerTab)
+ *   - fetchPdpBundleViaBuyerTab(依赖 ensureBuyerTab)
  *   - _fetchMarketStatsDirect(依赖 ensureSellerTab + _sellerPortalGate)
  *   - _doAutoCollect(依赖 fetchSellerPortal + 上述 4 个 B 类函数)
  *   - _isCircuitBreakerActive(依赖 _loadQueueMeta)
@@ -318,15 +318,14 @@
       return { status: 'antibot', pausedUntil };
     };
 
-    // ── 前置缓存检查:并行查 8 类缓存,返回是否全部命中 ──────────────────────────
+    // ── 前置缓存检查:并行查 7 类缓存,返回是否全部命中 ──────────────────────────
     // 用于 _handleSubmitTask 入队前快速判断,避免缓存命中任务占用 15s 队列 slot。
     // 逻辑与 _doAutoCollect Step1+Step5 内部缓存查询保持一致,但不做 L1/L2 同步(仅查询)。
     this._checkAllCachesHit = async (sku) => {
       const results = [
         { type: 'card', hit: false },
         { type: 'detail', hit: false },
-        { type: 'composer', hit: false },
-        { type: 'entrypoint', hit: false },
+        { type: 'pdp', hit: false },
         { type: 'search', hit: false },
         { type: 'bundle', hit: false },
         { type: 'marketStats', hit: false },
@@ -359,12 +358,11 @@
           }
         })();
 
-        // 6 类直接缓存 + search + bundle,全部并行
-        const [card, detail, composer, entrypoint, marketStats, followSell, searchHit, bundleHit] = await Promise.all([
+        // 5 类直接缓存 + search + bundle,全部并行
+        const [card, detail, pdp, marketStats, followSell, searchHit, bundleHit] = await Promise.all([
           this.cardCacheGet(sku).catch(() => null),
           this.detailCacheGet(sku).catch(() => null),
-          this.composerCacheGet(sku).catch(() => null),
-          this.entrypointCacheGet(sku).catch(() => null),
+          this.richMediaCacheGet(sku).catch(() => null),
           this.marketStatsCacheGet(sku).catch(() => null),
           this.followSellCacheGet(sku).catch(() => null),
           searchHitP,
@@ -373,12 +371,11 @@
 
         results[0].hit = !!card;
         results[1].hit = !!detail;
-        results[2].hit = !!composer;
-        results[3].hit = !!entrypoint;
-        results[4].hit = !!searchHit;
-        results[5].hit = !!bundleHit;
-        results[6].hit = !!marketStats && !marketStats.stale;
-        results[7].hit = !!followSell && !followSell.stale;
+        results[2].hit = !!pdp;
+        results[3].hit = !!searchHit;
+        results[4].hit = !!bundleHit;
+        results[5].hit = !!marketStats && !marketStats.stale;
+        results[6].hit = !!followSell && !followSell.stale;
       } catch (e) {
         console.warn('[SW autoCollect] _checkAllCachesHit error:', sku, e?.message || e);
       }

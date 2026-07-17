@@ -8,8 +8,6 @@ import {
   clearCache,
   getCacheOverview,
   getOpiPreview,
-  getAutoCollectStats,
-  getAutoCollectLogs,
   getStoreClassificationList,
   updateStoreClassification,
   deleteStoreClassification,
@@ -28,8 +26,7 @@ const stats = ref({
   search: { count: 0 },
   bundle: { count: 0, emptyAttrs: 0, stale: 0 },
   card: { count: 0 },
-  composer: { count: 0 },
-  entrypoint: { count: 0 },
+  richMedia: { count: 0 },
   detail: { count: 0 },
   marketStats: { count: 0 },
   followSell: { count: 0 },
@@ -45,7 +42,7 @@ async function loadStats() {
 
 // ── 列表 ───────────────────────────────────────────────────
 const state = reactive({
-  type: 'overview', // overview | search | bundle | card | composer | entrypoint | detail
+  type: 'overview', // overview | search | bundle | card | richMedia | detail
   keyword: '',
   items: [],
   total: 0,
@@ -98,10 +95,7 @@ function switchType(t) {
   state.type = t;
   state.page = 1;
   state.keyword = '';
-  if (t === 'auto-collect') {
-    loadAutoCollectStats();
-    loadLogs();
-  } else if (t === 'store-classification') {
+  if (t === 'store-classification') {
     loadStoreClassifications();
   } else if (t === 'store-sku') {
     loadStoreSkus();
@@ -184,8 +178,7 @@ const TYPE_LABELS = {
   search: 'search',
   bundle: 'bundle',
   card: 'card(商品卡)',
-  composer: 'composer',
-  entrypoint: 'entrypoint',
+  richMedia: 'richMedia(富媒体)',
   detail: 'detail(详情页)',
   marketStats: 'marketStats(市场统计)',
   followSell: 'followSell(跟卖)',
@@ -196,18 +189,6 @@ const singleTypeColspan = computed(() => {
   if (state.type === 'bundle' || state.type === 'marketStats' || state.type === 'followSell') return 5;
   return 3;
 });
-
-// 8 类缓存类型(用于自动采集统计/日志结果列)
-const EIGHT_TYPES = [
-  { key: 'card', label: 'card' },
-  { key: 'detail', label: 'detail' },
-  { key: 'composer', label: 'composer' },
-  { key: 'entrypoint', label: 'entrypoint' },
-  { key: 'search', label: 'search' },
-  { key: 'bundle', label: 'bundle' },
-  { key: 'marketStats', label: 'marketStats' },
-  { key: 'followSell', label: 'followSell' },
-];
 
 // ── OPI 预览 ───────────────────────────────────────────────
 const opiOpen = ref(false);
@@ -245,85 +226,7 @@ function opiSourceLabel(hit, type) {
   return hit ? type : '—';
 }
 
-// ── 自动采集 ───────────────────────────────────────────────
-const autoCollectStats = ref({});
-const logs = ref([]);
-const logFilters = reactive({
-  sku: '',
-  status: '',
-  source: '',
-  sellerSlug: '',
-});
-const logPager = reactive({
-  current: 1,
-  total: 0,
-  pageSize: 50,
-});
-
-async function loadAutoCollectStats() {
-  try {
-    autoCollectStats.value = await getAutoCollectStats();
-  } catch (err) {
-    show(err.message || String(err), 'error');
-  }
-}
-
-async function loadLogs() {
-  try {
-    const data = await getAutoCollectLogs({
-      sku: logFilters.sku.trim(),
-      status: logFilters.status,
-      source: logFilters.source,
-      sellerSlug: logFilters.sellerSlug.trim(),
-      page: logPager.current,
-      pageSize: logPager.pageSize,
-    });
-    logs.value = data?.items || [];
-    logPager.total = data?.total || 0;
-  } catch (err) {
-    show(err.message || String(err), 'error');
-    logs.value = [];
-    logPager.total = 0;
-  }
-}
-
-function searchLogs() {
-  logPager.current = 1;
-  loadLogs();
-}
-
-function onLogPageChange(p) {
-  logPager.current = p;
-  loadLogs();
-}
-
-// 日志结果列:按 8 类顺序取 hit/error 标记
-function logResultTag(log, type) {
-  const r = log.results?.find((x) => x.type === type);
-  if (!r) return '—';
-  if (r.hit) return '✓';
-  if (r.error) return '✗';
-  return '-';
-}
-
-// 日志结果列 CSS class
-function logResultClass(log, type) {
-  const r = log.results?.find((x) => x.type === type);
-  if (!r) return '';
-  if (r.hit) return 'result-hit';
-  if (r.error) return 'result-err';
-  return '';
-}
-
-// 日志状态标签 class
-function logStatusTag(status) {
-  if (status === 'success') return 'tag tag-ok';
-  if (status === 'failed' || status === 'antibot') return 'tag tag-err';
-  if (status === 'partial') return 'tag tag-warn';
-  return 'tag tag-mute';
-}
-
-// 店铺分类徽章 class
+// ── 店铺分类徽章 ──────────────────────────────────────────
 function storeClassBadge(isChinese) {
   if (isChinese === true) return 'badge-chinese';
   if (isChinese === false) return 'badge-non-chinese';
@@ -499,14 +402,9 @@ onMounted(() => {
         <div class="cache-stat-sub">条(商品卡 sku/url/name/price/image)</div>
       </div>
       <div class="cache-stat-card">
-        <div class="cache-stat-label">composer 缓存</div>
-        <div class="cache-stat-value">{{ stats.composer?.count || 0 }}</div>
-        <div class="cache-stat-sub">条(widgetStates)</div>
-      </div>
-      <div class="cache-stat-card">
-        <div class="cache-stat-label">entrypoint 缓存</div>
-        <div class="cache-stat-value">{{ stats.entrypoint?.count || 0 }}</div>
-        <div class="cache-stat-sub">条(page-json 图册/富内容)</div>
+        <div class="cache-stat-label">richMedia 缓存</div>
+        <div class="cache-stat-value">{{ stats.richMedia?.count || 0 }}</div>
+        <div class="cache-stat-sub">条(图册/视频/富内容/fields)</div>
       </div>
       <div class="cache-stat-card">
         <div class="cache-stat-label">detail 缓存</div>
@@ -539,11 +437,8 @@ onMounted(() => {
       <button class="cache-type-tab" :class="{ active: state.type === 'card' }" @click="switchType('card')">
         商品卡缓存
       </button>
-      <button class="cache-type-tab" :class="{ active: state.type === 'composer' }" @click="switchType('composer')">
-        composer 缓存
-      </button>
-      <button class="cache-type-tab" :class="{ active: state.type === 'entrypoint' }" @click="switchType('entrypoint')">
-        entrypoint 缓存
+      <button class="cache-type-tab" :class="{ active: state.type === 'richMedia' }" @click="switchType('richMedia')">
+        richMedia 缓存
       </button>
       <button class="cache-type-tab" :class="{ active: state.type === 'detail' }" @click="switchType('detail')">
         详情页缓存
@@ -560,13 +455,6 @@ onMounted(() => {
       </button>
       <button
         class="cache-type-tab"
-        :class="{ active: state.type === 'auto-collect' }"
-        @click="switchType('auto-collect')"
-      >
-        自动采集
-      </button>
-      <button
-        class="cache-type-tab"
         :class="{ active: state.type === 'store-classification' }"
         @click="switchType('store-classification')"
       >
@@ -577,9 +465,9 @@ onMounted(() => {
       </button>
     </div>
 
-    <!-- 缓存列表区(非自动采集/店铺分类/店铺 SKU tab) -->
+    <!-- 缓存列表区(非店铺分类/店铺 SKU tab) -->
     <template
-      v-if="state.type !== 'auto-collect' && state.type !== 'store-classification' && state.type !== 'store-sku'"
+      v-if="state.type !== 'store-classification' && state.type !== 'store-sku'"
     >
       <!-- 筛选 -->
       <div class="filter-bar">
@@ -606,8 +494,7 @@ onMounted(() => {
               <th title="Seller Portal /api/v1/search 源数据">search</th>
               <th title="create-bundle-by-variant-id 完整属性">bundle</th>
               <th title="商品卡 DOM:sku/url/name/price/image">商品卡</th>
-              <th title="composer-api widgetStates">composer</th>
-              <th title="entrypoint-api page-json 图册/富内容">entrypoint</th>
+              <th title="富媒体缓存(合并 entrypoint+composer:图册/视频/富内容/描述/标签/fields)">richMedia</th>
               <th title="详情页 DOM 全字段(静态+动态)">详情页</th>
               <th title="市场统计缓存">marketStats</th>
               <th title="跟卖缓存">followSell</th>
@@ -616,10 +503,10 @@ onMounted(() => {
           </thead>
           <tbody>
             <tr v-if="state.loading && !state.items.length">
-              <td colspan="10" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+              <td colspan="9" class="muted" style="padding: 24px; text-align: center">加载中...</td>
             </tr>
             <tr v-else-if="!state.items.length">
-              <td colspan="10" class="empty">暂无缓存记录</td>
+              <td colspan="9" class="empty">暂无缓存记录</td>
             </tr>
             <tr v-for="it in state.items" :key="it.sku">
               <td class="col-sku">{{ it.sku }}</td>
@@ -642,11 +529,7 @@ onMounted(() => {
                 <span v-else class="tag tag-mute">—</span>
               </td>
               <td>
-                <span v-if="it.composer" class="tag tag-ok" :title="fmtTime(it.composer.fetchedAt)">✓</span>
-                <span v-else class="tag tag-mute">—</span>
-              </td>
-              <td>
-                <span v-if="it.entrypoint" class="tag tag-ok" :title="fmtTime(it.entrypoint.fetchedAt)">✓</span>
+                <span v-if="it.richMedia" class="tag tag-ok" :title="fmtTime(it.richMedia.fetchedAt)">✓</span>
                 <span v-else class="tag tag-mute">—</span>
               </td>
               <td>
@@ -723,116 +606,6 @@ onMounted(() => {
         @update:modelValue="onPageChange"
       />
     </template>
-
-    <!-- ── 自动采集 tab ───────────────────────────────────── -->
-    <div v-if="state.type === 'auto-collect'" class="auto-collect-tab">
-      <!-- 统计卡片 -->
-      <div class="cache-stats">
-        <div class="cache-stat-card">
-          <div class="cache-stat-label">今日成功率</div>
-          <div class="cache-stat-value">{{ autoCollectStats.today?.successRate || 0 }}%</div>
-          <div class="cache-stat-sub">采集成功率</div>
-        </div>
-        <div class="cache-stat-card">
-          <div class="cache-stat-label">反爬次数</div>
-          <div class="cache-stat-value" :class="{ 'stat-err': (autoCollectStats.today?.antibot || 0) > 0 }">
-            {{ autoCollectStats.today?.antibot || 0 }}
-          </div>
-          <div class="cache-stat-sub">次</div>
-        </div>
-        <div class="cache-stat-card">
-          <div class="cache-stat-label">按店铺分类</div>
-          <div class="cache-stat-value" style="font-size: 16px">
-            中国: {{ autoCollectStats.today?.byStoreClass?.chinese || 0 }} / 非中国:
-            {{ autoCollectStats.today?.byStoreClass?.['non-chinese'] || 0 }} / 未分类:
-            {{ autoCollectStats.today?.byStoreClass?.unclassified || 0 }}
-          </div>
-          <div class="cache-stat-sub">今日采集</div>
-        </div>
-      </div>
-
-      <!-- 各类目命中数 -->
-      <div class="type-hits">
-        <div v-for="t in EIGHT_TYPES" :key="t.key" class="type-hit">
-          <span class="type-hit-label">{{ t.label }}:</span>
-          <span class="type-hit-value">{{ autoCollectStats.today?.byType?.[t.key] || 0 }}</span>
-        </div>
-      </div>
-
-      <!-- 日志筛选 -->
-      <div class="filter-bar">
-        <input
-          class="filter-input"
-          type="text"
-          v-model.trim="logFilters.sku"
-          placeholder="SKU"
-          @keydown.enter="searchLogs"
-        />
-        <select v-model="logFilters.status" class="filter-input">
-          <option value="">全部状态</option>
-          <option value="success">成功</option>
-          <option value="partial">部分成功</option>
-          <option value="failed">失败</option>
-          <option value="skipped">跳过</option>
-          <option value="antibot">反爬</option>
-        </select>
-        <select v-model="logFilters.source" class="filter-input">
-          <option value="">全部来源</option>
-          <option value="shop-page">店铺页</option>
-          <option value="pdp">详情页</option>
-        </select>
-        <input
-          class="filter-input"
-          type="text"
-          v-model.trim="logFilters.sellerSlug"
-          placeholder="卖家 Slug"
-          @keydown.enter="searchLogs"
-        />
-        <button class="btn btn-primary" @click="searchLogs">查询</button>
-      </div>
-
-      <!-- 日志列表 -->
-      <div class="table-wrap">
-        <table class="data-table log-table">
-          <thead>
-            <tr>
-              <th>SKU</th>
-              <th>来源</th>
-              <th>状态</th>
-              <th>耗时</th>
-              <th v-for="t in EIGHT_TYPES" :key="t.key" :title="t.label + ' 缓存命中'">{{ t.label }}</th>
-              <th>卖家</th>
-              <th>采集时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="!logs.length">
-              <td :colspan="4 + EIGHT_TYPES.length + 2" class="empty">暂无日志记录</td>
-            </tr>
-            <tr v-for="log in logs" :key="log._id">
-              <td class="col-sku">{{ log.sku }}</td>
-              <td>{{ log.source }}</td>
-              <td>
-                <span :class="logStatusTag(log.status)">{{ log.status }}</span>
-              </td>
-              <td>{{ log.totalDuration }}ms</td>
-              <td v-for="t in EIGHT_TYPES" :key="t.key" :class="logResultClass(log, t.key)">
-                {{ logResultTag(log, t.key) }}
-              </td>
-              <td>{{ log.sellerSlug || '—' }}</td>
-              <td class="col-time">{{ fmtTime(log.collectedAt) }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <AppPager
-        :modelValue="logPager.current"
-        :total="logPager.total"
-        :pageSize="logPager.pageSize"
-        @update:modelValue="onLogPageChange"
-      />
-    </div>
 
     <!-- ── 店铺分类 tab ───────────────────────────────────── -->
     <div v-if="state.type === 'store-classification'" class="store-classification-tab">
@@ -1006,8 +779,7 @@ onMounted(() => {
           <span :class="opiSourceTag(opiSources.search)">search</span>
           <span :class="opiSourceTag(opiSources.bundle)">bundle</span>
           <span :class="opiSourceTag(opiSources.card)">商品卡</span>
-          <span :class="opiSourceTag(opiSources.composer)">composer</span>
-          <span :class="opiSourceTag(opiSources.entrypoint)">entrypoint</span>
+          <span :class="opiSourceTag(opiSources.richMedia)">richMedia</span>
           <span :class="opiSourceTag(opiSources.detail)">详情页</span>
         </div>
       </div>
@@ -1030,16 +802,10 @@ onMounted(() => {
             商品卡 {{ opiSourceLabel(opiSources?.card, '✓') }}
           </span>
           <span
-            :class="opiSourceTag(opiSources?.composer)"
-            :title="opiSourceLabel(opiSources?.composer, 'composer-api')"
+            :class="opiSourceTag(opiSources?.richMedia)"
+            :title="opiSourceLabel(opiSources?.richMedia, '富媒体缓存(合并 entrypoint+composer)')"
           >
-            composer {{ opiSourceLabel(opiSources?.composer, '✓') }}
-          </span>
-          <span
-            :class="opiSourceTag(opiSources?.entrypoint)"
-            :title="opiSourceLabel(opiSources?.entrypoint, 'entrypoint-api')"
-          >
-            entrypoint {{ opiSourceLabel(opiSources?.entrypoint, '✓') }}
+            richMedia {{ opiSourceLabel(opiSources?.richMedia, '✓') }}
           </span>
           <span :class="opiSourceTag(opiSources?.detail)" :title="opiSourceLabel(opiSources?.detail, '详情页 DOM')">
             详情页 {{ opiSourceLabel(opiSources?.detail, '✓') }}
@@ -1247,49 +1013,6 @@ onMounted(() => {
 .stale .tag {
   background: #fff7ed;
   color: #c2410c;
-}
-
-/* ── 自动采集 tab ─────────────────────────────────────── */
-.type-hits {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  padding: 0 24px 12px;
-  font-size: 13px;
-}
-.type-hit {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  background: #f9fafb;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-}
-.type-hit-label {
-  color: var(--muted);
-}
-.type-hit-value {
-  font-weight: 600;
-  color: var(--text);
-}
-
-.log-table th,
-.log-table td {
-  text-align: center;
-  font-size: 12px;
-}
-.log-table .col-sku,
-.log-table td:nth-child(1) {
-  text-align: left;
-}
-.result-hit {
-  color: #16a34a;
-  font-weight: 600;
-}
-.result-err {
-  color: #dc2626;
-  font-weight: 600;
 }
 
 /* ── 店铺分类 tab ─────────────────────────────────────── */

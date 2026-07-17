@@ -619,10 +619,10 @@ select {
 .cache-row-1 {
   font-weight: 600;
 }
-/* 明细行:4 行 2 列 grid 严格对齐 */
+/* 明细行:3 列 grid 严格对齐(7 项 + 2 空格 = 9 cell) */
 .cache-row-detail {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 2px 8px;
 }
 .cache-icon {

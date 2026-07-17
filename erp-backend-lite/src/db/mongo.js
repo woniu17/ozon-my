@@ -111,6 +111,7 @@ export const cols = {
   cardCache: () => getMongo().then((d) => d.collection('ozon_card_cache')),
   composerCache: () => getMongo().then((d) => d.collection('ozon_composer_cache')),
   entrypointCache: () => getMongo().then((d) => d.collection('ozon_entrypoint_cache')),
+  richMediaCache: () => getMongo().then((d) => d.collection('ozon_rich_media_cache')),
   detailCache: () => getMongo().then((d) => d.collection('ozon_detail_cache')),
   marketStatsCache: () => getMongo().then((d) => d.collection('ozon_market_stats_cache')),
   followSellCache: () => getMongo().then((d) => d.collection('ozon_follow_sell_cache')),

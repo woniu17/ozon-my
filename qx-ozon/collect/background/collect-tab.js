@@ -13,12 +13,12 @@
  *   - 通过 this.xxx 访问缓存层 / 配置层 / Runner / 队列层暴露的函数
  *
  * 覆盖范围:
- *   - B 类纯函数(normalizeMarketItem/_isRichDoc/_extract*FromStates)
+ *   - B 类纯函数(normalizeMarketItem/_isRichDoc)
  *   - Tab 管理(_ensureSellerTabImpl/ensureSellerTab/ensureBuyerTab)
  *   - 限流层(_sellerPortalGate + sellerPortalGateChain/sellerPortalLastAt 状态)
  *   - 跨域快路(fetchSellerViaOzonTab/fetchSellerPortal)
  *   - B 类真调函数(fetchBundleByVariantId/transferVideoToOzon/
- *     fetchVariantMediaViaBuyerTab/_fetchMarketStatsDirect)
+ *     fetchPdpBundleViaBuyerTab/_fetchMarketStatsDirect)
  *   - 并发限流(_acquireAutoCollectSlot/_releaseAutoCollectSlot +
  *     autoCollectRunning/autoCollectQueue 状态)
  *   - 核心编排(_doAutoCollect 8 步编排)
@@ -92,163 +92,15 @@
     // 让批量上架继承源店铺描述与标签(与手动跟卖 extractPageDescription/extractKeywords 同语义)。
     // 注:源标签裸下发会触发 Ozon BR_hashtag_brand,品牌清洗在 backend 注入处做(此处只负责抓回)。
     // 返回 { mp4, richContent, description, hashtags };失败返回全空(best-effort 降级)。
-    // ── page-json widgetStates 共享抽取器(供缓存复用路径 + doFetch 内联版本共用) ──
-    // 注:doFetch 在 buyer tab MAIN world 执行,其内联版可访问 globalThis.JZOzonVideoExtract
-    // 和 globalThis.JZFollowSellContentCopy;SW 顶层共享版不依赖这些 helper(仅扫结构化数据)。
+    // ── _isRichDoc 谓词(判定 widgetStates 中是否含富内容文档结构,导出供外部复用) ──
+    // 注:fetchPdpMedia 在 buyer tab MAIN world 执行,其内联版可访问 globalThis.JZOzonVideoExtract
+    // 和 globalThis.JZFollowSellContentCopy,不依赖此 SW 顶层谓词。
     const _isRichDoc = (o) =>
       o &&
       typeof o === 'object' &&
       Array.isArray(o.content) &&
       o.content.length > 0 &&
       o.content.some((b) => b && typeof b === 'object' && typeof b.widgetName === 'string');
-
-    const _extractRichFromStates = (states) => {
-      for (const k of Object.keys(states)) {
-        let v = states[k];
-        if (typeof v === 'string') {
-          try {
-            v = JSON.parse(v);
-          } catch {
-            continue;
-          }
-        }
-        if (!v || typeof v !== 'object') continue;
-        if (typeof v.richAnnotationJson === 'string' && v.richAnnotationJson.trim()) {
-          try {
-            if (_isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim();
-          } catch {}
-        }
-        if (_isRichDoc(v)) return JSON.stringify({ content: v.content, version: v.version || 0.3 });
-      }
-      return '';
-    };
-
-    const _extractMp4FromStates = (states) => {
-      for (const k of Object.keys(states || {})) {
-        if (!/gallery/i.test(k)) continue;
-        let v = states[k];
-        if (typeof v === 'string') {
-          try {
-            v = JSON.parse(v);
-          } catch {
-            continue;
-          }
-        }
-        const vids = v && Array.isArray(v.videos) ? v.videos : [];
-        for (const it of vids) {
-          const raw = typeof it === 'string' ? it : (it && (it.url || it.src)) || '';
-          if (raw && /\.mp4(\?|#|$)/i.test(raw)) return raw;
-        }
-      }
-      return null;
-    };
-
-    const _extractDescriptionFromStates = (states) => {
-      // SW 顶层无 JZFollowSellContentCopy helper,直接从 webDescription widget 抽 text 字段
-      const keys = Object.keys(states || {});
-      const descKeys = keys.filter((k) => /description/i.test(k));
-      for (const k of descKeys) {
-        let v = states[k];
-        if (typeof v === 'string') {
-          try {
-            v = JSON.parse(v);
-          } catch {
-            continue;
-          }
-        }
-        if (!v || typeof v !== 'object') continue;
-        // webDescription widget 通常有 text/html 字段
-        const text = v.text || v.html || v.content || '';
-        if (typeof text === 'string' && text.trim()) return text.trim().slice(0, 4096);
-      }
-      return '';
-    };
-
-    const _extractHashtagsFromStates = (states) => {
-      const out = [];
-      const seen = new Set();
-      const push = (s) => {
-        const t = String(s == null ? '' : s).trim();
-        if (!t || t.length < 2 || !t.startsWith('#')) return;
-        const key = t.toLowerCase();
-        if (seen.has(key)) return;
-        seen.add(key);
-        if (out.length < 30) out.push(t);
-      };
-      const walk = (node, depth) => {
-        if (out.length >= 30 || depth > 32 || node == null) return;
-        if (typeof node === 'string') {
-          push(node);
-          return;
-        }
-        if (Array.isArray(node)) {
-          for (const it of node) walk(it, depth + 1);
-          return;
-        }
-        if (typeof node === 'object') {
-          for (const k of Object.keys(node)) walk(node[k], depth + 1);
-        }
-      };
-      for (const k of Object.keys(states || {})) {
-        if (!/hashtag|taglist/i.test(k)) continue;
-        let v = states[k];
-        if (typeof v === 'string') {
-          try {
-            v = JSON.parse(v);
-          } catch {
-            continue;
-          }
-        }
-        walk(v, 0);
-      }
-      return out;
-    };
-
-    // ── 从 widgetStates 提取图册(供 entrypoint 缓存写入时用) ──
-    const _extractGalleryFromStates = (states) => {
-      let bestImages = [];
-      let bestCover = null;
-      for (const k of Object.keys(states)) {
-        let v = states[k];
-        if (typeof v === 'string') {
-          try {
-            v = JSON.parse(v);
-          } catch {
-            continue;
-          }
-        }
-        if (!v || typeof v !== 'object') continue;
-        if (!Array.isArray(v.images)) continue;
-        if (v.images.length > bestImages.length) {
-          bestImages = v.images;
-          bestCover = v.coverImage || null;
-        }
-      }
-      // upgrade 到 wc1000 + 去重
-      const upgrade = (u) =>
-        typeof u === 'string' && u.includes('ir.ozone.ru') ? u.replace(/\/wc\d+\//, '/wc1000/') : u;
-      const norm = (u) =>
-        String(u || '')
-          .split('?')[0]
-          .split('#')[0]
-          .toLowerCase();
-      const seen = new Set();
-      const out = [];
-      const push = (raw) => {
-        const upgraded = upgrade(raw);
-        if (!upgraded) return;
-        const n = norm(upgraded);
-        if (seen.has(n)) return;
-        seen.add(n);
-        out.push(upgraded);
-      };
-      if (bestCover) push(bestCover);
-      for (const img of bestImages) {
-        const u = typeof img === 'string' ? img : img?.src || img?.url || img?.image;
-        if (u) push(u);
-      }
-      return out;
-    };
 
     // ── Tab 管理 ───────────────────────────────────────────────────────────────
     /**
@@ -333,50 +185,126 @@
       return _ensureSellerTabInflight;
     };
 
-    // 找/开一个 www.ozon.ru 买家 tab，用于在 MAIN world 跑 composer-api 抓 PDP 图册视频
-    // （SW 直 fetch composer-api 反爬必死 403，必须借买家 tab 的 cookie/UA/fingerprint）。
-    // 用于 batch-upload（扩展页发起、无 ozon.ru content_script sender）逐 SKU 抓竞品视频。
-    const ensureBuyerTab = async (timeoutMs = 20000) => {
-      const queryTabs = () =>
-        chrome.tabs.query({
-          url: sw.IS_TEST_MODE ? ['http://localhost:7777/*'] : ['https://www.ozon.ru/*', 'https://ozon.ru/*'],
-        });
-      const pickReady = (list) =>
-        list.find((t) => t.status === 'complete' && /\/(product|category|search)\b/i.test(t.url || '')) ||
-        list.find((t) => t.status === 'complete') ||
-        null;
-      let tabs = await queryTabs();
-      let ready = pickReady(tabs);
-      if (ready) return ready;
-      // 有 tab 但都在 loading → 等它们 complete;超时直接报错,不再新开 tab
-      // (反爬挑战页会一直 loading,新开 tab 只会加重反爬 + 残留 pinned tab)
-      if (tabs.length) {
-        const waitDeadline = Date.now() + timeoutMs;
-        while (Date.now() < waitDeadline) {
-          await new Promise((r) => setTimeout(r, 500));
-          tabs = await queryTabs();
-          ready = pickReady(tabs);
-          if (ready) return ready;
-          if (tabs.length === 0) break; // 全被关 → 落到下面 create
-        }
-        if (tabs.length > 0) {
-          throw new Error(`www.ozon.ru tab 加载超时（${timeoutMs / 1000}s）`);
-        }
-        console.warn('[ensureBuyerTab] 已有 tab 全被关闭，新开一个');
+    // ── 专用买家 Tab 管理 ──────────────────────────────────────────────
+    // 设计要点(详见 2026-07 设计文档):
+    //   1. 专用 tab:不查找已有 tab,只用自己持久化的 tabId(跟用户浏览隔离)
+    //   2. 持久化:chrome.storage.local,跨 SW 重启 + 插件重载都能复用
+    //   3. PDP 页:专用 tab 加载商品详情页(sku 构造),而非首页
+    //   4. 每 7 次重载:callCount % 7 === 0 时用当前 sku 重载 tab(刷新会话)
+    //   5. 串行排队:确保 callCount 精确累加,避免并发 read-modify-write 竞态
+    //
+    // 关键洞察:fetchPdpMedia 在 tab MAIN world 执行参数化 fetch,跟 tab 当前 URL 无关,
+    //          所以中间不重载时 tab.url 可能是旧 SKU,但数据正确。
+    const _DEDICATED_BUYER_TAB_RELOAD_INTERVAL = 7;
+    let _dedicatedBuyerTabLock = Promise.resolve();
+
+    // 读持久化 state
+    const _loadBuyerTabState = async () => {
+      try {
+        const data = await chrome.storage.local.get(sw.STORAGE_KEYS.dedicatedBuyerTab);
+        return data[sw.STORAGE_KEYS.dedicatedBuyerTab] || null;
+      } catch {
+        return null;
       }
-      console.log('[ensureBuyerTab] 无可用 www.ozon.ru tab，后台打开...');
-      const created = await chrome.tabs.create({ url: sw.OZON_WWW_ORIGIN + '/', active: false, pinned: true });
-      const createDeadline = Date.now() + timeoutMs;
-      while (Date.now() < createDeadline) {
+    };
+    // 写持久化 state
+    const _saveBuyerTabState = async (state) => {
+      try {
+        await chrome.storage.local.set({ [sw.STORAGE_KEYS.dedicatedBuyerTab]: state });
+      } catch (e) {
+        console.warn('[ensureBuyerTab] state 写入失败:', e?.message || e);
+      }
+    };
+
+    // 等 tab 加载完成(新建或重载后调用)
+    const _waitForBuyerTabComplete = async (tabId, timeoutMs) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 500));
         try {
-          const t = await chrome.tabs.get(created.id);
+          const t = await chrome.tabs.get(tabId);
           if (t.status === 'complete') return t;
         } catch {
-          throw new Error('自动打开的 www.ozon.ru tab 已被关闭');
+          throw new Error('专用 buyer tab 已被关闭');
         }
       }
-      throw new Error(`www.ozon.ru tab 加载超时（${timeoutMs / 1000}s）`);
+      throw new Error(`专用 buyer tab 加载超时（${timeoutMs / 1000}s）`);
+    };
+
+    // 判断 tab url 是否在 OZON_WWW_ORIGIN 域内
+    const _isInBuyerOrigin = (url) => {
+      if (!url) return false;
+      try {
+        const u = new URL(url);
+        const origin = sw.IS_TEST_MODE ? 'http://localhost:7777' : 'https://www.ozon.ru';
+        return u.origin === origin || u.origin === 'https://ozon.ru';
+      } catch {
+        return false;
+      }
+    };
+
+    // 核心实现(串行锁内执行)
+    const _doEnsureBuyerTab = async (sku, timeoutMs) => {
+      if (!sku) throw new Error('ensureBuyerTab: sku required');
+      const pdpUrl = sw.OZON_WWW_ORIGIN + '/product/' + sku;
+      const state = await _loadBuyerTabState();
+
+      // ── 复用分支:校验 state.tabId 是否仍可用 ──
+      if (state && state.tabId) {
+        let existingTab = null;
+        try {
+          existingTab = await chrome.tabs.get(state.tabId);
+        } catch {
+          // tab 已被关闭 → 落到新建分支
+        }
+        if (existingTab && _isInBuyerOrigin(existingTab.url)) {
+          // tab 在域内 → 复用,callCount 累加
+          const newCount = (state.callCount || 0) + 1;
+          const shouldReload = newCount % _DEDICATED_BUYER_TAB_RELOAD_INTERVAL === 0;
+          console.log(
+            `[ensureBuyerTab] 复用 tab=${existingTab.id} callCount=${newCount}` +
+              (shouldReload ? ` → 重载到 sku=${sku}` : ' (不重载)')
+          );
+          if (shouldReload) {
+            await chrome.tabs.update(existingTab.id, { url: pdpUrl });
+            const reloaded = await _waitForBuyerTabComplete(existingTab.id, timeoutMs);
+            await _saveBuyerTabState({ tabId: existingTab.id, callCount: newCount, lastSku: sku });
+            return reloaded;
+          }
+          await _saveBuyerTabState({ tabId: existingTab.id, callCount: newCount, lastSku: sku });
+          return existingTab;
+        }
+        // tab 不存在或被导航到非 ozon.ru → 新建(不关用户的页)
+        if (existingTab) {
+          console.warn(`[ensureBuyerTab] tab=${existingTab.id} url=${existingTab.url} 已离开 ozon.ru,新建专用 tab`);
+        }
+      }
+
+      // ── 新建分支 ──
+      console.log(`[ensureBuyerTab] 新建专用 tab, sku=${sku}`);
+      const created = await chrome.tabs.create({ url: pdpUrl, active: false, pinned: true });
+      const ready = await _waitForBuyerTabComplete(created.id, timeoutMs);
+      await _saveBuyerTabState({ tabId: created.id, callCount: 1, lastSku: sku });
+      return ready;
+    };
+
+    // 对外接口(串行锁包装,确保 callCount 精确累加)
+    const ensureBuyerTab = (sku, timeoutMs = 20000) => {
+      // 串行:后到的等前一个完成
+      const prev = _dedicatedBuyerTabLock;
+      let release;
+      const cur = new Promise((r) => (release = r));
+      _dedicatedBuyerTabLock = cur;
+      return prev.then(
+        () =>
+          _doEnsureBuyerTab(sku, timeoutMs).finally(() => {
+            release();
+          }),
+        () =>
+          _doEnsureBuyerTab(sku, timeoutMs).finally(() => {
+            release();
+          })
+      );
     };
 
     // 把任意 .mp4 直链转存成卖家自有 Ozon 视频(ir.ozone.ru/s3):走 seller-tab MAIN world 会话
@@ -463,7 +391,7 @@
     // 让批量上架继承源店铺描述与标签(与手动跟卖 extractPageDescription/extractKeywords 同语义)。
     // 注:源标签裸下发会触发 Ozon BR_hashtag_brand,品牌清洗在 backend 注入处做(此处只负责抓回)。
     // 返回 { mp4, richContent, description, hashtags };失败返回全空(best-effort 降级)。
-    const fetchVariantMediaViaBuyerTab = async (productUrl, options = {}) => {
+    const fetchPdpBundleViaBuyerTab = async (productUrl, options = {}) => {
       const EMPTY = {
         mp4: null,
         richContent: '',
@@ -494,83 +422,33 @@
         }
       })();
 
-      // ── 缓存优先:entrypoint + composer 都命中才直接返回 ──
-      // entrypoint 缓存存蒸馏后的 { gallery, richContent, description, hashtags, mp4 }
-      // composer 缓存存原始 widgetStates,需用同名抽取器解析
-      // forceEntrypoint: 当 entrypoint 缓存为空但 composer 有数据时,仍真调 entrypoint-api 补全 entrypoint 缓存
-      //
-      // 重要:entrypoint 缓存命中但 composer 缓存不存在时,不能直接返回 — 否则 composer
-      // 缓存永远不会被补全(doFetch 不执行 → 无 composerWidgetStates → 不写 composer 缓存),
-      // 导致后续每次采集 composer 都显示 "-"(有记录无命中无错误)。
-      // 修复:两个缓存都有才走缓存返回;缺一个就继续 doFetch 补全。
-      if (urlSku && !options.forceEntrypoint) {
-        let epCached = null;
-        let ccCached = null;
+      // ── 缓存优先:richMediaCache 命中即返回 ──
+      // richMediaCache 合并了原 entrypoint + composer 缓存,存蒸馏后的:
+      //   { mp4, richContent, richContentHasText, description, hashtags, gallery,
+      //     fields, widgetStates, hitEndpoints }
+      // 命中(HTTP 200 即缓存,包括空内容)直接返回,跳过 buyer tab 注入 + 网络请求。
+      // 缓存为空 → pending.pdp=true → Step 4 自然真调,无需额外标志位。
+      if (urlSku) {
+        let rmCached = null;
         try {
-          epCached = await this.entrypointCacheGet(urlSku);
+          rmCached = await this.richMediaCacheGet(urlSku);
         } catch {}
-        try {
-          ccCached = await this.composerCacheGet(urlSku);
-        } catch {}
-        console.log(
-          '[fetchVariantMedia] 缓存检查:',
-          urlSku,
-          'ep=' + !!epCached,
-          'cc=' + !!ccCached,
-          'forceEntrypoint=' + !!options.forceEntrypoint
-        );
-        // 两个缓存都有 → 直接返回(entrypoint 缓存优先,HTTP 200 即缓存包括空内容)
-        if (epCached && ccCached) {
+        console.log('[fetchPdpBundle] 缓存检查:', urlSku, 'rm=' + !!rmCached);
+        // 命中 → 直接返回(空内容也是商品本身的数据特征,缓存避免重复无效真调)
+        if (rmCached) {
           return {
-            mp4: epCached.mp4 || null,
-            richContent: epCached.richContent || '',
-            description: epCached.description || '',
-            hashtags: Array.isArray(epCached.hashtags) ? epCached.hashtags : [],
-            endpoint: 'entrypoint-cache',
+            mp4: rmCached.mp4 || null,
+            richContent: rmCached.richContent || '',
+            description: rmCached.description || '',
+            hashtags: Array.isArray(rmCached.hashtags) ? rmCached.hashtags : [],
+            endpoint: 'richMedia-cache',
+            composerFields: rmCached.fields || null,
+            followSellData: null, // followSell 走独立缓存,不混入 richMedia 返回
           };
         }
-        // entrypoint 缓存有但 composer 没有 → 继续执行 doFetch 补全 composer 缓存
-        // composer 缓存有但 entrypoint 没有 → 继续执行 doFetch 补全 entrypoint 缓存
-        // 两个都没有 → 继续执行 doFetch
-        // (doFetch 内部会依次试 entrypoint-api + composer-api,并写两个缓存)
 
-        // composer 缓存单独命中且有内容 → 尝试用 composer 缓存返回(forceEntrypoint 时除外)
-        if (ccCached && ccCached.widgetStates) {
-          const states = ccCached.widgetStates;
-          const richContent = _extractRichFromStates(states);
-          const mp4 = _extractMp4FromStates(states);
-          const description = _extractDescriptionFromStates(states);
-          const hashtags = _extractHashtagsFromStates(states);
-          if (richContent || mp4 || description || hashtags.length) {
-            // 有内容但 entrypoint 缓存缺失 → 标记 endpoint 为 composer-cache,
-            // doFetch 仍会执行(因为 epCached 为 null)来补全 entrypoint 缓存
-            // 这里提前返回会让 doFetch 不执行,所以仅在 epCached 也存在时返回
-            // 实际上 epCached 为 null 时走到这里,我们需要继续 doFetch
-            // 所以这里不返回,继续执行 doFetch
-          }
-        }
-
-        // cacheOnly 模式(熔断期):不真调,返回当前最佳 cache 数据或 EMPTY
+        // cacheOnly 模式(熔断期):不真调,缓存 miss 返空
         if (options.cacheOnly) {
-          if (epCached) {
-            return {
-              mp4: epCached.mp4 || null,
-              richContent: epCached.richContent || '',
-              description: epCached.description || '',
-              hashtags: Array.isArray(epCached.hashtags) ? epCached.hashtags : [],
-              endpoint: 'entrypoint-cache',
-            };
-          }
-          if (ccCached && ccCached.widgetStates) {
-            const states = ccCached.widgetStates;
-            return {
-              mp4: _extractMp4FromStates(states),
-              richContent: _extractRichFromStates(states),
-              description: _extractDescriptionFromStates(states),
-              hashtags: _extractHashtagsFromStates(states),
-              endpoint: 'composer-cache',
-            };
-          }
           EMPTY.errorReason = 'CACHE_ONLY_MISS';
           return EMPTY;
         }
@@ -584,9 +462,10 @@
 
       let tab;
       try {
-        tab = await ensureBuyerTab();
+        // 专用 tab 需 sku 构造 PDP URL;urlSku 空时 ensureBuyerTab 抛错走 catch
+        tab = await ensureBuyerTab(urlSku);
       } catch (e) {
-        console.warn('[fetchVariantMedia] ensureBuyerTab 失败:', e?.message || e);
+        console.warn('[fetchPdpBundle] ensureBuyerTab 失败:', e?.message || e);
         EMPTY.errorReason = 'BUYER_TAB_FAILED:' + (e?.message || 'unknown');
         return EMPTY;
       }
@@ -594,36 +473,243 @@
       // (与 fetchOzonPublicProduct 同口径)。executeScript 序列化注入,不能引用 SW 闭包 ——
       // 富内容抽取逻辑须内联(与 content/ozon-product.js 的 jzExtractRichContentFromStates
       // 同规则:richAnnotationJson 字符串 / state 顶层 {content:[{widgetName}],version})。
-      const doFetch = async (relPath, timeout) => {
-        const endpoints = [
-          `/api/entrypoint-api.bx/page/json/v2?url=${encodeURIComponent(relPath)}`,
-          `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(relPath)}`,
-        ];
+      const fetchPdpMedia = async (relPath, timeout) => {
+        const parseMaybeJson = (value) => {
+          if (typeof value !== 'string') return value;
+          const trimmed = value.trim();
+          if (!trimmed || !/^[\[{]/.test(trimmed)) return value;
+          try {
+            return JSON.parse(trimmed);
+          } catch {
+            return value;
+          }
+        };
+        const normalizeOzonProductInnerPath = (value) => {
+          const raw = String(value || '').trim();
+          if (!raw) return '';
+          try {
+            const url = new URL(raw, 'https://www.ozon.ru');
+            return (url.pathname || '') + (url.search || '');
+          } catch {
+            const noHash = raw.split('#')[0];
+            return noHash.startsWith('/') ? noHash : '/' + noHash;
+          }
+        };
+        const ozonProductPathKey = (value) => normalizeOzonProductInnerPath(value).split('?')[0].replace(/\/+$/, '');
+        const ozonProductId = (value) => {
+          const pathKey = ozonProductPathKey(value);
+          const match = pathKey.match(/\/product\/(?:[^/?#]*-)?(\d+)$/i);
+          return match ? match[1] : '';
+        };
+        const endpointQueue = [];
+        const seenEndpoints = new Set();
+        const enqueuePath = (innerPath) => {
+          const normalized = normalizeOzonProductInnerPath(innerPath);
+          if (!normalized) return;
+          const urls = [
+            `/api/entrypoint-api.bx/page/json/v2?url=${encodeURIComponent(normalized)}`,
+            `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(normalized)}`,
+          ];
+          for (const url of urls) {
+            if (seenEndpoints.has(url)) continue;
+            seenEndpoints.add(url);
+            endpointQueue.push(url);
+          }
+        };
+        enqueuePath(relPath);
         const isRichDoc = (o) =>
           o &&
           typeof o === 'object' &&
           Array.isArray(o.content) &&
           o.content.length > 0 &&
           o.content.some((b) => b && typeof b === 'object' && typeof b.widgetName === 'string');
-        const extractRich = (states) => {
-          for (const k of Object.keys(states)) {
-            let v = states[k];
-            if (typeof v === 'string') {
-              try {
-                v = JSON.parse(v);
-              } catch {
-                continue;
+        const collectRichStats = (doc) => {
+          const stats = {
+            widgetCount: 0,
+            textWidgetCount: 0,
+            layoutWidgetCount: 0,
+            chessWidgetCount: 0,
+            imageCount: 0,
+            textNodeCount: 0,
+            textChars: 0,
+            hasRealText: false,
+          };
+          const skipTextKeys = new Set([
+            'widgetName',
+            'align',
+            'size',
+            'color',
+            'type',
+            'src',
+            'srcMobile',
+            'url',
+            'link',
+            'imgLink',
+            'richAnnotationJson',
+            'class',
+            'className',
+            'style',
+            'trackingInfo',
+            'layoutTrackingInfo',
+            'gifUrl',
+            'videoUrl',
+            'previewUrl',
+            'backgroundColor',
+            'theme',
+            'padding',
+            'margin',
+            'id',
+            'reff',
+            'fontColor',
+            'borderColor',
+            'position',
+            'positionMobile',
+          ]);
+          const looksLikeImageUrl = (text) => /^https?:\/\/.+\.(?:jpg|jpeg|png|webp|gif|avif)(?:[?#].*)?$/i.test(text);
+          const pushText = (value, key) => {
+            if (key && skipTextKeys.has(key)) return;
+            const text = String(value == null ? '' : value)
+              .replace(/\s+/g, ' ')
+              .trim();
+            if (text.length < 2 || /^https?:\/\//i.test(text) || looksLikeImageUrl(text)) return;
+            if (!/[A-Za-zА-Яа-яЁё]/.test(text)) return;
+            stats.textNodeCount += 1;
+            stats.textChars += text.length;
+          };
+          const walk = (node, key, depth) => {
+            if (node == null || depth > 24) return;
+            if (typeof node === 'string') {
+              pushText(node, key);
+              return;
+            }
+            if (Array.isArray(node)) {
+              for (const item of node) walk(item, key, depth + 1);
+              return;
+            }
+            if (typeof node !== 'object') return;
+            const widgetName = String(node.widgetName || '');
+            const type = String(node.type || '');
+            if (widgetName) {
+              stats.widgetCount += 1;
+              if (/text|description|annotation/i.test(widgetName)) stats.textWidgetCount += 1;
+              if (/chess/i.test(widgetName) || /chess/i.test(type)) stats.chessWidgetCount += 1;
+              if (
+                /showcase|billboard|roll|tile|media|chess/i.test(widgetName) ||
+                /billboard|roll|chess|tile/i.test(type)
+              ) {
+                stats.layoutWidgetCount += 1;
               }
             }
-            if (!v || typeof v !== 'object') continue;
-            if (typeof v.richAnnotationJson === 'string' && v.richAnnotationJson.trim()) {
-              try {
-                if (isRichDoc(JSON.parse(v.richAnnotationJson))) return v.richAnnotationJson.trim();
-              } catch {}
+            if (node.img && typeof node.img === 'object') stats.imageCount += 1;
+            for (const imageKey of ['src', 'srcMobile', 'url', 'image', 'imageUrl', 'coverImage']) {
+              const raw = node[imageKey];
+              if (typeof raw === 'string' && /^https?:\/\//i.test(raw) && looksLikeImageUrl(raw)) {
+                stats.imageCount += 1;
+              }
             }
-            if (isRichDoc(v)) return JSON.stringify({ content: v.content, version: v.version || 0.3 });
-          }
-          return '';
+            for (const childKey of Object.keys(node)) {
+              if (skipTextKeys.has(childKey) && childKey !== 'text' && childKey !== 'title') continue;
+              walk(node[childKey], childKey, depth + 1);
+            }
+          };
+          walk(doc?.content, 'content', 0);
+          stats.hasRealText = stats.textChars >= 12 || stats.textNodeCount >= 2 || stats.textWidgetCount > 0;
+          return stats;
+        };
+        const extractRich = (states) => {
+          const candidates = [];
+          const seenJson = new Set();
+          const seenObjects = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
+          const addCandidate = (doc, rawJson) => {
+            if (!isRichDoc(doc)) return;
+            const json =
+              typeof rawJson === 'string' && rawJson.trim()
+                ? rawJson.trim()
+                : JSON.stringify({ content: doc.content, version: doc.version || 0.3 });
+            if (seenJson.has(json)) return;
+            seenJson.add(json);
+            const stats = collectRichStats(doc);
+            candidates.push({
+              json,
+              score:
+                (stats.hasRealText ? 100000 : 0) +
+                stats.chessWidgetCount * 20000 +
+                stats.textWidgetCount * 12000 +
+                stats.layoutWidgetCount * 600 +
+                stats.textChars * 40 +
+                stats.textNodeCount * 500 +
+                stats.widgetCount * 80 +
+                stats.imageCount * 20 +
+                Math.min(json.length, 20000) / 20000 -
+                candidates.length / 1000,
+            });
+          };
+          const walk = (node, depth) => {
+            if (node == null || depth > 24) return;
+            const parsed = parseMaybeJson(node);
+            if (!parsed || typeof parsed !== 'object') return;
+            if (seenObjects) {
+              if (seenObjects.has(parsed)) return;
+              seenObjects.add(parsed);
+            }
+            if (typeof parsed.richAnnotationJson === 'string' && parsed.richAnnotationJson.trim()) {
+              addCandidate(parseMaybeJson(parsed.richAnnotationJson), parsed.richAnnotationJson);
+            }
+            if (isRichDoc(parsed)) addCandidate(parsed, null);
+            if (Array.isArray(parsed)) {
+              for (const item of parsed) walk(item, depth + 1);
+              return;
+            }
+            for (const key of Object.keys(parsed)) walk(parsed[key], depth + 1);
+          };
+          walk(states, 0);
+          candidates.sort((a, b) => b.score - a.score);
+          return candidates[0]?.json || '';
+        };
+        const hasRichContentText = (raw) => {
+          const doc = parseMaybeJson(raw);
+          return isRichDoc(doc) && collectRichStats(doc).hasRealText;
+        };
+        const collectOzonRichContentPagePaths = (states, currentPath) => {
+          const out = [];
+          const seenPaths = new Set();
+          const seenObjects = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
+          const currentProductKey = ozonProductPathKey(currentPath);
+          const currentProductId = ozonProductId(currentPath);
+          const push = (candidate) => {
+            const pagePath = normalizeOzonProductInnerPath(candidate);
+            if (!pagePath || !/[?&]layout_container=pdpPage2column(?:&|$)/.test(pagePath)) return;
+            const productKey = ozonProductPathKey(pagePath);
+            const productId = ozonProductId(pagePath);
+            if (currentProductId && productId && currentProductId !== productId) return;
+            if (
+              (!currentProductId || !productId) &&
+              currentProductKey &&
+              productKey &&
+              productKey !== currentProductKey
+            )
+              return;
+            if (seenPaths.has(pagePath)) return;
+            seenPaths.add(pagePath);
+            out.push(pagePath);
+          };
+          const walk = (node, depth) => {
+            if (node == null || depth > 18) return;
+            const parsed = parseMaybeJson(node);
+            if (!parsed || typeof parsed !== 'object') return;
+            if (seenObjects) {
+              if (seenObjects.has(parsed)) return;
+              seenObjects.add(parsed);
+            }
+            if (typeof parsed.nextPage === 'string') push(parsed.nextPage);
+            if (Array.isArray(parsed)) {
+              for (const item of parsed) walk(item, depth + 1);
+              return;
+            }
+            for (const key of Object.keys(parsed)) walk(parsed[key], depth + 1);
+          };
+          walk(states, 0);
+          return out;
         };
         const extractMp4 = (states) => {
           const helper = globalThis.JZOzonVideoExtract;
@@ -714,6 +800,7 @@
         let anyOk = false;
         let hitEndpoint = null;
         let richContent = '';
+        let richContentHasText = false;
         let mp4 = null;
         let description = '';
         let hashtags = [];
@@ -721,7 +808,10 @@
         const composerWidgetStates = {};
         // 收集每个 endpoint 的失败原因(全失败时用于细化 NO_ENDPOINT)
         const failReasons = [];
-        for (const url of endpoints) {
+        // 所有命中的 endpoint 列表(诊断用,区分 entrypoint/composer 命中)
+        const hitEndpoints = [];
+        for (let endpointIndex = 0; endpointIndex < endpointQueue.length; endpointIndex += 1) {
+          const url = endpointQueue[endpointIndex];
           const epName = url.includes('entrypoint-api') ? 'entrypoint' : 'composer';
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeout);
@@ -737,10 +827,22 @@
               continue;
             }
             anyOk = true;
+            const epFullName = url.includes('entrypoint-api') ? 'entrypoint-api' : 'composer-api';
+            if (!hitEndpoints.includes(epFullName)) hitEndpoints.push(epFullName);
+            if (!hitEndpoint) hitEndpoint = epFullName;
             const data = await resp.json();
             const states = data && data.widgetStates ? data.widgetStates : {};
-            if (!hitEndpoint) hitEndpoint = url.includes('entrypoint-api') ? 'entrypoint-api' : 'composer-api';
-            if (!richContent) richContent = extractRich(states);
+            // nextPage 扩散:扫 states 找 layout_container=pdpPage2column 的 nextPage
+            for (const nextPage of collectOzonRichContentPagePaths(states, relPath)) enqueuePath(nextPage);
+            // 富内容抽取(打分制,优先选有真实文本的 candidate)
+            const candidateRichContent = extractRich(states);
+            if (candidateRichContent) {
+              const candidateHasText = hasRichContentText(candidateRichContent);
+              if (!richContent || (!richContentHasText && candidateHasText)) {
+                richContent = candidateRichContent;
+                richContentHasText = candidateHasText;
+              }
+            }
             if (!mp4) mp4 = extractMp4(states);
             if (!description) description = extractDescription(states);
             if (!hashtags.length) hashtags = extractHashtags(states);
@@ -748,7 +850,8 @@
             for (const k of Object.keys(states)) composerWidgetStates[k] = states[k];
             // 视频 + 富内容都到手即可提前结束(描述/标签随当前 states 顺带抽,不单独多跑 endpoint);
             // 否则继续试下一个 endpoint(视频/富内容偶尔只在 composer 而不在 entrypoint)。
-            if (mp4 && richContent) break;
+            // 注:需 richContentHasText 或已是最后一个 endpoint,避免选中无文本占位
+            if (mp4 && richContent && (richContentHasText || endpointIndex + 1 >= endpointQueue.length)) break;
           } catch (e) {
             clearTimeout(timer);
             // 单个 endpoint 失败 → 试下一个。区分超时/网络错误
@@ -758,126 +861,115 @@
           }
         }
 
-        // ── fetch 2:跟卖 modal endpoint(三合一改造) ──
-        // /api/composer-api.bx/page/json/v2?url=/modal/otherOffersFromSellers?product_id=<sku>
-        // 解析 webSellerList widget,抽取 {count, sellers, source}。
-        // 仅 HTTP 200 才写缓存(零跟卖/解析失败也写,避免重复真调);
-        // HTTP 非 200(403/5xx 等)视为失败,不写缓存(允许后续重试),与内容侧行为对齐。
-        // 注意:relPath = pathname + search,可能带 ?query=... 后缀,
-        // 不能用 /-(\d+)\/?$/ 匹配(结尾是 query string 不是 -数字/),
-        // 需先去 query 再从 pathname 提取 SKU。
-        const _fsPath = relPath.split('?')[0];
-        const fsSku = (_fsPath.match(/-(\d+)\/?$/) || [])[1] || '';
-        let followSellData = null;
-        if (fsSku) {
-          try {
-            const inner = `/modal/otherOffersFromSellers?product_id=${fsSku}`;
-            const fsUrl = `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(inner)}`;
-            const fsController = new AbortController();
-            const fsTimer = setTimeout(() => fsController.abort(), timeout);
-            const fsResp = await fetch(fsUrl, {
-              credentials: 'include',
-              headers: {
-                'x-o3-app-name': 'dweb_client',
-                'x-o3-language': 'ru', // 与内容侧对齐,避免 BFF 返回不同 shape
-                accept: 'application/json',
-              },
-              signal: fsController.signal,
-            });
-            clearTimeout(fsTimer);
-            if (fsResp.ok) {
-              const fsData = await fsResp.json();
-              const fsStates = fsData && fsData.widgetStates ? fsData.widgetStates : {};
-              const wslKey = Object.keys(fsStates).find((k) => k.startsWith('webSellerList'));
-              if (!wslKey) {
-                // modal 正常加载但无 webSellerList widget — 零跟卖商品
-                followSellData = { count: 0, sellers: [], source: 'no-sellers' };
-              } else {
-                let wsl = fsStates[wslKey];
-                if (typeof wsl === 'string') {
-                  try {
-                    wsl = JSON.parse(wsl);
-                  } catch {
-                    followSellData = { count: 0, sellers: [], source: 'parse-fail' };
-                  }
-                }
-                if (!followSellData) {
-                  const rawSellers = Array.isArray(wsl?.sellers) ? wsl.sellers : [];
-                  const normSeller = (item) => {
-                    if (!item || typeof item !== 'object') return null;
-                    const txt = (v) =>
-                      typeof v === 'string'
-                        ? v.trim()
-                        : v && typeof v === 'object' && v.text
-                          ? String(v.text).trim()
-                          : '';
-                    const name =
-                      txt(item.name) || txt(item.sellerName) || txt(item.seller?.name) || txt(item.title) || '';
-                    const priceRaw =
-                      item.price?.cardPrice?.price ?? item.price?.cardPrice ?? item.price ?? item.finalPrice ?? '';
-                    const price = txt(priceRaw);
-                    if (!name && !price) return null;
-                    const link =
-                      (typeof item.productLink === 'string' ? item.productLink : '') ||
-                      item.link?.action?.link ||
-                      item.link?.link ||
-                      item.link ||
-                      '';
-                    const avatar =
-                      (typeof item.avatar === 'string' ? item.avatar : '') || item.avatar?.url || item.logo?.url || '';
-                    const rating =
-                      item.rating?.totalScore ?? item.rating?.value ?? item.rating ?? item.sellerRating ?? null;
-                    const reviewsCount = item.rating?.reviewsCount ?? item.reviewsCount ?? item.reviewCount ?? null;
-                    return {
-                      name,
-                      price,
-                      sku: txt(item.sku) || txt(item.id) || txt(item.skuId),
-                      link: typeof link === 'string' ? link : '',
-                      avatar: typeof avatar === 'string' ? avatar : '',
-                      rating: Number.isFinite(Number(rating)) ? Number(rating) : null,
-                      reviewsCount: Number.isFinite(Number(reviewsCount)) ? Number(reviewsCount) : null,
-                      region: txt(item.region) || txt(item.location),
-                      deliveryText: txt(item.deliveryText) || txt(item.delivery?.text),
-                      deliveryRank: null,
-                    };
-                  };
-                  const sellers = rawSellers.map(normSeller).filter(Boolean);
-                  followSellData = { count: rawSellers.length, sellers, source: 'modal' };
-                }
-              }
-            } else {
-              // HTTP 非 200(403/5xx 等)视为失败,不写缓存(允许后续重试)
-              console.warn('[fetchVariantMedia] followSell modal HTTP', fsResp.status, 'sku=', fsSku);
-              followSellData = null;
-            }
-          } catch (e) {
-            // modal fetch 网络失败 / 超时 — 不写 no-sellers(允许后续重试)
-            followSellData = null;
-          }
-        }
-
+        // followSell modal 已拆到独立子函数 fetchFollowSellModal
         // 有 200 过则按真实抽取结果返回;全失败则 ok:false。
-        // 三合一改造:额外返回 composerWidgetStates(SW 抽 fields)+ followSellData
         // 全失败时返回 failReasons(细化 NO_ENDPOINT:HTTP 状态码/超时/网络错误)
         return anyOk
           ? {
               ok: true,
               mp4,
               richContent,
+              richContentHasText,
               description,
               hashtags,
               endpoint: hitEndpoint,
+              hitEndpoints,
               composerWidgetStates,
-              followSellData,
             }
           : {
               ok: false,
               error: 'all endpoints failed',
               failReasons: failReasons.length ? failReasons.join('|') : 'NO_REQUEST_ATTEMPTED',
-              followSellData,
             };
       };
+      // ── 子函数 2:fetchFollowSellModal(独立 followSell modal 抓取) ──
+      // 与 fetchPdpMedia 并行执行,自包含(不引用闭包变量),作为 executeScript func 注入 MAIN world。
+      // fsSku 由外层传入(主函数已从 productUrl 提取 urlSku),内部不再从 relPath 提取。
+      // 仅 HTTP 200 才视为成功(ok:true)并返回 followSellData(零跟卖/解析失败也返回,避免重复真调);
+      // HTTP 非 200(403/5xx 等)视为失败(ok:false),不写缓存(允许后续重试),与内容侧行为对齐。
+      const fetchFollowSellModal = async (fsSku, timeout) => {
+        if (!fsSku) {
+          return { ok: false, followSellData: null, errorReason: 'NO_SKU' };
+        }
+        const fsController = new AbortController();
+        const fsTimer = setTimeout(() => fsController.abort(), timeout);
+        try {
+          const inner = `/modal/otherOffersFromSellers?product_id=${fsSku}`;
+          const fsUrl = `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(inner)}`;
+          const fsResp = await fetch(fsUrl, {
+            credentials: 'include',
+            headers: {
+              'x-o3-app-name': 'dweb_client',
+              'x-o3-language': 'ru', // 与内容侧对齐,避免 BFF 返回不同 shape
+              accept: 'application/json',
+            },
+            signal: fsController.signal,
+          });
+          clearTimeout(fsTimer);
+          if (!fsResp.ok) {
+            // HTTP 非 200(403/5xx 等)视为失败,不写缓存(允许后续重试)
+            console.warn('[fetchPdpBundle] followSell modal HTTP', fsResp.status, 'sku=', fsSku);
+            return { ok: false, followSellData: null, errorReason: 'HTTP_' + fsResp.status };
+          }
+          const fsData = await fsResp.json();
+          const fsStates = fsData && fsData.widgetStates ? fsData.widgetStates : {};
+          const wslKey = Object.keys(fsStates).find((k) => k.startsWith('webSellerList'));
+          if (!wslKey) {
+            // modal 正常加载但无 webSellerList widget — 零跟卖商品
+            return { ok: true, followSellData: { count: 0, sellers: [], source: 'no-sellers' } };
+          }
+          let wsl = fsStates[wslKey];
+          if (typeof wsl === 'string') {
+            try {
+              wsl = JSON.parse(wsl);
+            } catch {
+              return { ok: true, followSellData: { count: 0, sellers: [], source: 'parse-fail' } };
+            }
+          }
+          const rawSellers = Array.isArray(wsl?.sellers) ? wsl.sellers : [];
+          const normSeller = (item) => {
+            if (!item || typeof item !== 'object') return null;
+            const txt = (v) =>
+              typeof v === 'string' ? v.trim() : v && typeof v === 'object' && v.text ? String(v.text).trim() : '';
+            const name = txt(item.name) || txt(item.sellerName) || txt(item.seller?.name) || txt(item.title) || '';
+            const priceRaw =
+              item.price?.cardPrice?.price ?? item.price?.cardPrice ?? item.price ?? item.finalPrice ?? '';
+            const price = txt(priceRaw);
+            if (!name && !price) return null;
+            const link =
+              (typeof item.productLink === 'string' ? item.productLink : '') ||
+              item.link?.action?.link ||
+              item.link?.link ||
+              item.link ||
+              '';
+            const avatar =
+              (typeof item.avatar === 'string' ? item.avatar : '') || item.avatar?.url || item.logo?.url || '';
+            const rating = item.rating?.totalScore ?? item.rating?.value ?? item.rating ?? item.sellerRating ?? null;
+            const reviewsCount = item.rating?.reviewsCount ?? item.reviewsCount ?? item.reviewCount ?? null;
+            return {
+              name,
+              price,
+              sku: txt(item.sku) || txt(item.id) || txt(item.skuId),
+              link: typeof link === 'string' ? link : '',
+              avatar: typeof avatar === 'string' ? avatar : '',
+              rating: Number.isFinite(Number(rating)) ? Number(rating) : null,
+              reviewsCount: Number.isFinite(Number(reviewsCount)) ? Number(reviewsCount) : null,
+              region: txt(item.region) || txt(item.location),
+              deliveryText: txt(item.deliveryText) || txt(item.delivery?.text),
+              deliveryRank: null,
+            };
+          };
+          const sellers = rawSellers.map(normSeller).filter(Boolean);
+          return { ok: true, followSellData: { count: rawSellers.length, sellers, source: 'modal' } };
+        } catch (e) {
+          clearTimeout(fsTimer);
+          // modal fetch 网络失败 / 超时 — 不写 no-sellers(允许后续重试)
+          const reason = e?.name === 'AbortError' ? 'TIMEOUT' : 'NET_' + (e?.message || 'error').slice(0, 60);
+          return { ok: false, followSellData: null, errorReason: reason };
+        }
+      };
       try {
+        // 注入 helpers(fetchPdpMedia 需要,fetchFollowSellModal 不需要但不影响)
         try {
           await chrome.scripting.executeScript({
             target: { tabId: tab.id },
@@ -885,10 +977,10 @@
             world: 'MAIN',
           });
         } catch (e) {
-          console.warn('[fetchVariantMedia] video helper inject failed:', e?.message || e);
+          console.warn('[fetchPdpBundle] video helper inject failed:', e?.message || e);
         }
         try {
-          // doFetch 的 extractDescription 复用 JZFollowSellContentCopy.extractDescriptionText;
+          // fetchPdpMedia 的 extractDescription 复用 JZFollowSellContentCopy.extractDescriptionText;
           // 注入失败仅降级描述抽取(返回空),不影响视频/富内容/标签。
           await chrome.scripting.executeScript({
             target: { tabId: tab.id },
@@ -896,172 +988,199 @@
             world: 'MAIN',
           });
         } catch (e) {
-          console.warn('[fetchVariantMedia] content-copy helper inject failed:', e?.message || e);
+          console.warn('[fetchPdpBundle] content-copy helper inject failed:', e?.message || e);
         }
-        const results = await Promise.race([
+        // ── 并行执行 fetchPdpMedia + fetchFollowSellModal ──
+        // 两个子函数独立无依赖,并行节省 tab 占用时间(串行 30s → 并行 15s)。
+        const [mediaSettled, fsSettled] = await Promise.allSettled([
           chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            func: doFetch,
+            func: fetchPdpMedia,
             args: [path, 15000],
             world: 'MAIN',
           }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('executeScript 超时')), 40000)),
+          chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: fetchFollowSellModal,
+            args: [urlSku, 15000],
+            world: 'MAIN',
+          }),
         ]);
-        const r = results && results[0] && results[0].result;
-        if (!r || !r.ok) {
-          console.warn('[fetchVariantMedia] 抓取失败:', r && r.error, r && r.failReasons);
-          // 即使产品页 fetch 全失败,跟卖 modal 可能成功 — 仍写 followSell 缓存
-          if (urlSku && r && r.followSellData) {
-            this.followSellCacheSet(urlSku, r.followSellData);
-          }
-          // 细化 errorReason:doFetch 全失败时透传 failReasons
-          if (!r) {
-            EMPTY.errorReason = 'DOFETCH_NO_RESULT';
-          } else if (r.failReasons) {
-            EMPTY.errorReason = 'ALL_ENDPOINTS_FAILED:' + r.failReasons;
+        const mediaRes = mediaSettled.status === 'fulfilled' ? mediaSettled.value?.[0]?.result : null;
+        const fsRes = fsSettled.status === 'fulfilled' ? fsSettled.value?.[0]?.result : null;
+
+        console.log(
+          '[fetchPdpBundle] 并行结果:',
+          urlSku,
+          'media.ok=' + !!mediaRes?.ok,
+          'media.endpoint=' + (mediaRes?.endpoint || 'null'),
+          'fs.ok=' + !!fsRes?.ok,
+          'fs.followSellData=' + !!fsRes?.followSellData
+        );
+
+        // ── followSell 缓存写入(独立于 media 结果) ──
+        if (urlSku && fsRes?.ok && fsRes.followSellData) {
+          this.followSellCacheSet(urlSku, fsRes.followSellData);
+        }
+
+        // ── media 失败处理 ──
+        if (!mediaRes || !mediaRes.ok) {
+          console.warn('[fetchPdpBundle] media 抓取失败:', mediaRes?.error, mediaRes?.failReasons);
+          let mediaErrorReason;
+          if (!mediaRes) {
+            mediaErrorReason = 'MEDIA_NO_RESULT';
+          } else if (mediaRes.failReasons) {
+            mediaErrorReason = 'MEDIA_ALL_ENDPOINTS_FAILED:' + mediaRes.failReasons;
           } else {
-            EMPTY.errorReason = 'DOFETCH_FAILED:' + (r.error || 'unknown');
+            mediaErrorReason = 'MEDIA_FAILED:' + (mediaRes.error || 'unknown');
           }
+          EMPTY.followSellData = fsRes?.ok ? fsRes.followSellData || null : null;
+          EMPTY.errorReason = mediaErrorReason;
           return EMPTY;
         }
+
+        // ── media 成功:构建返回值 ──
         const result = {
-          mp4: r.mp4 || null,
-          richContent: r.richContent || '',
-          description: r.description || '',
-          hashtags: Array.isArray(r.hashtags) ? r.hashtags : [],
-          endpoint: r.endpoint || null,
+          mp4: mediaRes.mp4 || null,
+          richContent: mediaRes.richContent || '',
+          description: mediaRes.description || '',
+          hashtags: Array.isArray(mediaRes.hashtags) ? mediaRes.hashtags : [],
+          endpoint: mediaRes.endpoint || null,
           composerFields: null,
-          followSellData: r.followSellData || null,
+          followSellData: fsRes?.ok ? fsRes.followSellData || null : null,
         };
-        // 真调成功后异步写 entrypoint 缓存(按 sku 索引,蒸馏后字段)
-        // 只要 endpoint === 'entrypoint-api'(HTTP 200)就写入,包括空内容 ——
-        // 空内容是商品本身的数据特征,缓存后避免后续重复无效真调
-        if (urlSku && result.endpoint === 'entrypoint-api') {
-          this.entrypointCacheSet(urlSku, {
-            gallery: [],
-            richContent: result.richContent || '',
-            description: result.description || '',
-            hashtags: Array.isArray(result.hashtags) ? result.hashtags : [],
-            mp4: result.mp4 || null,
-          });
-        }
-        // ── 三合一改造:从 composerWidgetStates 抽 fields + 写 composer 缓存 ──
+        // ── 从 composerWidgetStates 抽 fields + 写 richMedia 缓存(合并 media + fields + widgetStates) ──
         // 复用 fetchProductPageState 同口径的 widget 解析(gallery/heading/aspects/price/
-        // seller/brand),把蒸馏后的 fields + 过滤后 widgetStates 写入 composer 缓存(L1+L2)。
-        // 与 entrypoint 缓存一致:只要 doFetch 返回 anyOk(HTTP 200)就写入,包括空内容 —
+        // seller/brand),把蒸馏后的 fields + 过滤后 widgetStates 与 media 字段一起写入 richMediaCache。
+        // 策略:只要 fetchPdpMedia 返回 anyOk(HTTP 200)就写入,包括空内容 —
         // 空内容是商品本身的数据特征,缓存后避免后续重复无效真调。
-        const cwsKeys = r.composerWidgetStates ? Object.keys(r.composerWidgetStates).length : 0;
+        const cwsKeys = mediaRes.composerWidgetStates ? Object.keys(mediaRes.composerWidgetStates).length : 0;
         console.log(
-          '[fetchVariantMedia] composer 写入检查:',
+          '[fetchPdpBundle] richMedia 写入检查:',
           urlSku,
           'urlSku=' + !!urlSku,
-          'r.ok=' + !!r?.ok,
+          'mediaRes.ok=' + !!mediaRes?.ok,
           'cwsKeys=' + cwsKeys,
-          'endpoint=' + (r?.endpoint || 'null')
+          'endpoint=' + (mediaRes?.endpoint || 'null')
         );
-        if (urlSku && r.ok && r.composerWidgetStates) {
+        if (urlSku && mediaRes.ok) {
           try {
-            const ws = r.composerWidgetStates;
-            const keys = Object.keys(ws);
-            const find = (prefix) => keys.find((k) => k.startsWith(prefix));
-            const parse = (key) => {
-              if (!key) return null;
-              const raw = ws[key];
-              if (typeof raw === 'object' && raw !== null) return raw;
+            let fields = null;
+            let filteredStates = {};
+            if (mediaRes.composerWidgetStates) {
+              const ws = mediaRes.composerWidgetStates;
+              const keys = Object.keys(ws);
+              const find = (prefix) => keys.find((k) => k.startsWith(prefix));
+              const parse = (key) => {
+                if (!key) return null;
+                const raw = ws[key];
+                if (typeof raw === 'object' && raw !== null) return raw;
+                try {
+                  return JSON.parse(raw);
+                } catch {
+                  return null;
+                }
+              };
+              const gallery = parse(find('webGallery'));
+              const heading = parse(find('webProductHeading'));
+              const aspects = parse(find('webAspects'));
+              const price = parse(find('webPrice'));
+              const seller = parse(find('webCurrentSeller'));
+              const shortChars = parse(find('webShortCharacteristics'));
+              const detailSku = parse(find('webDetailSKU'));
+              const brand = parse(find('webBrand'));
+              const images = Array.isArray(gallery?.images)
+                ? gallery.images
+                    .map((it) => (typeof it === 'string' ? it : it?.url || it?.link || it?.src))
+                    .filter(Boolean)
+                : [];
+              const coverImage =
+                typeof gallery?.coverImage === 'string'
+                  ? gallery.coverImage
+                  : gallery?.coverImage?.url || gallery?.coverImage?.link || images[0] || '';
+              let sellerName = '';
+              let sellerLink = '';
               try {
-                return JSON.parse(raw);
-              } catch {
-                return null;
+                sellerName =
+                  seller?.header?.title?.text ||
+                  seller?.sellerCell?.centerBlock?.title?.text ||
+                  seller?.sellerCell?.name ||
+                  seller?.name ||
+                  '';
+                sellerLink =
+                  seller?.header?.title?.link ||
+                  seller?.sellerCell?.centerBlock?.title?.link ||
+                  seller?.sellerCell?.link ||
+                  seller?.link ||
+                  '';
+              } catch {}
+              fields = {
+                title: heading?.title || '',
+                sku: urlSku,
+                productId: String(gallery?.sku || detailSku?.sku || detailSku?.itemId || urlSku || ''),
+                price: price?.cardPrice || price?.price || price?.originalPrice || '',
+                images,
+                coverImage,
+                aspects: Array.isArray(aspects?.aspects) ? aspects.aspects : [],
+                seller: { name: sellerName, link: sellerLink },
+                brand: brand?.title || brand?.name || '',
+                shortCharacteristicsRaw: shortChars || null,
+              };
+              result.composerFields = fields;
+              // 过滤后 widgetStates(仅业务 widget,剔除布局 meta)
+              const usefulPrefixes = [
+                'webGallery',
+                'webProductHeading',
+                'webAspects',
+                'webPrice',
+                'webAddToCart',
+                'webCurrentSeller',
+                'webBrand',
+                'webDetailSKU',
+                'webShortCharacteristics',
+                'webCharacteristics',
+                'webDescription',
+                'webMarketingLabels',
+                'webSale',
+                'webReviewProductScore',
+                'webSingleProductScore',
+                'webModelParams',
+                'webHashtags',
+                'webBestSeller',
+                'webProductMainWidget',
+              ];
+              for (const k of keys) {
+                if (usefulPrefixes.some((p) => k.startsWith(p))) filteredStates[k] = ws[k];
               }
-            };
-            const gallery = parse(find('webGallery'));
-            const heading = parse(find('webProductHeading'));
-            const aspects = parse(find('webAspects'));
-            const price = parse(find('webPrice'));
-            const seller = parse(find('webCurrentSeller'));
-            const shortChars = parse(find('webShortCharacteristics'));
-            const detailSku = parse(find('webDetailSKU'));
-            const brand = parse(find('webBrand'));
-            const images = Array.isArray(gallery?.images)
-              ? gallery.images.map((it) => (typeof it === 'string' ? it : it?.url || it?.link || it?.src)).filter(Boolean)
-              : [];
-            const coverImage =
-              typeof gallery?.coverImage === 'string'
-                ? gallery.coverImage
-                : gallery?.coverImage?.url || gallery?.coverImage?.link || images[0] || '';
-            let sellerName = '';
-            let sellerLink = '';
-            try {
-              sellerName =
-                seller?.header?.title?.text ||
-                seller?.sellerCell?.centerBlock?.title?.text ||
-                seller?.sellerCell?.name ||
-                seller?.name ||
-                '';
-              sellerLink =
-                seller?.header?.title?.link ||
-                seller?.sellerCell?.centerBlock?.title?.link ||
-                seller?.sellerCell?.link ||
-                seller?.link ||
-                '';
-            } catch {}
-            const fields = {
-              title: heading?.title || '',
-              sku: urlSku,
-              productId: String(gallery?.sku || detailSku?.sku || detailSku?.itemId || urlSku || ''),
-              price: price?.cardPrice || price?.price || price?.originalPrice || '',
-              images,
-              coverImage,
-              aspects: Array.isArray(aspects?.aspects) ? aspects.aspects : [],
-              seller: { name: sellerName, link: sellerLink },
-              brand: brand?.title || brand?.name || '',
-              shortCharacteristicsRaw: shortChars || null,
-            };
-            result.composerFields = fields;
-            // 过滤后 widgetStates(仅业务 widget,剔除布局 meta)
-            const usefulPrefixes = [
-              'webGallery',
-              'webProductHeading',
-              'webAspects',
-              'webPrice',
-              'webAddToCart',
-              'webCurrentSeller',
-              'webBrand',
-              'webDetailSKU',
-              'webShortCharacteristics',
-              'webCharacteristics',
-              'webDescription',
-              'webMarketingLabels',
-              'webSale',
-              'webReviewProductScore',
-              'webSingleProductScore',
-              'webModelParams',
-              'webHashtags',
-              'webBestSeller',
-              'webProductMainWidget',
-            ];
-            const filteredStates = {};
-            for (const k of keys) {
-              if (usefulPrefixes.some((p) => k.startsWith(p))) filteredStates[k] = ws[k];
             }
-            this.composerCacheSet(urlSku, { fields, widgetStates: filteredStates });
+            // 合并写入 richMedia 缓存:media 字段 + fields + widgetStates + hitEndpoints
+            const richMediaData = {
+              mp4: result.mp4,
+              richContent: result.richContent,
+              richContentHasText: !!mediaRes.richContentHasText,
+              description: result.description,
+              hashtags: result.hashtags,
+              gallery: fields?.images || [],
+              fields,
+              widgetStates: filteredStates,
+              hitEndpoints: Array.isArray(mediaRes.hitEndpoints) ? mediaRes.hitEndpoints : [],
+            };
+            this.richMediaCacheSet(urlSku, richMediaData);
             console.log(
-              '[fetchVariantMedia] composer 缓存已写入:',
+              '[fetchPdpBundle] richMedia 缓存已写入:',
               urlSku,
-              'fieldsKeys=' + Object.keys(fields).length,
-              'widgetStateKeys=' + Object.keys(filteredStates).length
+              'fieldsKeys=' + (fields ? Object.keys(fields).length : 0),
+              'widgetStateKeys=' + Object.keys(filteredStates).length,
+              'hitEndpoints=' + richMediaData.hitEndpoints.join(',')
             );
           } catch (e) {
-            console.warn('[fetchVariantMedia] composer fields extract failed:', e?.message || e);
+            console.warn('[fetchPdpBundle] richMedia fields extract failed:', e?.message || e);
           }
         }
-        // ── 三合一改造:写 followSell 缓存(L1+L2) ──
-        if (urlSku && result.followSellData) {
-          this.followSellCacheSet(urlSku, result.followSellData);
-        }
+        // followSell 缓存已在上方写入(独立于 media 结果),此处不再重复
         return result;
       } catch (e) {
-        console.warn('[fetchVariantMedia] executeScript 异常:', e?.message || e);
+        console.warn('[fetchPdpBundle] executeScript 异常:', e?.message || e);
         EMPTY.errorReason = 'EXECUTE_SCRIPT_FAILED:' + (e?.message || 'unknown').slice(0, 80);
         return EMPTY;
       }
@@ -1105,7 +1224,9 @@
       // 解析目标标签:优先消息来源标签(用户正所在的 www 商品页),否则任意已加载完成的
       // *.ozon.ru 标签(www 或 seller 都行 —— cookie 域级共享、且都有真实浏览器指纹)。
       const isOzonUrl = (u) =>
-        sw.IS_TEST_MODE ? /^http:\/\/localhost:7777\//i.test(u || '') : /^https?:\/\/([^/]+\.)?ozon\.ru\//i.test(u || '');
+        sw.IS_TEST_MODE
+          ? /^http:\/\/localhost:7777\//i.test(u || '')
+          : /^https?:\/\/([^/]+\.)?ozon\.ru\//i.test(u || '');
       let target = null;
       if (preferTabId) {
         try {
@@ -1658,8 +1779,7 @@
       const results = [
         { type: 'card', hit: false },
         { type: 'detail', hit: false },
-        { type: 'composer', hit: false },
-        { type: 'entrypoint', hit: false },
+        { type: 'pdp', hit: false },
         { type: 'search', hit: false },
         { type: 'bundle', hit: false },
         { type: 'marketStats', hit: false },
@@ -1718,7 +1838,8 @@
         // === Gate 0.5: 中国店铺检查 ===
         const cls = await this.checkStoreClassification(sellerSlug, null, null, sellerId);
         if (cls) {
-          storeClassified = cls.isChinese === true ? 'chinese' : cls.isChinese === false ? 'non-chinese' : 'unclassified';
+          storeClassified =
+            cls.isChinese === true ? 'chinese' : cls.isChinese === false ? 'non-chinese' : 'unclassified';
         }
         console.log('[SW autoCollect] Gate0.5 店铺分类:', sku, 'slug=', sellerSlug, 'class=', storeClassified);
         if (config.onlyChineseStores && cls?.isChinese !== true) {
@@ -1738,28 +1859,27 @@
           return { status: 'skipped', reason };
         }
 
-        // === Step 1: 并行查 8 类缓存 ===
+        // === Step 1: 并行查 7 类缓存 ===
         // search/bundle 通过 Step 5 内部查缓存,这里用 null 占位
-        const [card, detail, composer, entrypoint, , , marketStats, followSell] = await Promise.all([
+        // pdp 缓存合并了原 entrypoint + composer,命中即跳过 Step 4 真调
+        const [card, detail, pdp, , , marketStats, followSell] = await Promise.all([
           this.cardCacheGet(sku),
           this.detailCacheGet(sku),
-          this.composerCacheGet(sku),
-          this.entrypointCacheGet(sku),
-          Promise.resolve(null), // 占位,Step 5 处理
-          Promise.resolve(null), // 占位,Step 5 处理
+          this.richMediaCacheGet(sku),
+          Promise.resolve(null), // 占位,Step 5 处理 search
+          Promise.resolve(null), // 占位,Step 5 处理 bundle
           this.marketStatsCacheGet(sku),
           this.followSellCacheGet(sku),
         ]);
 
         // 标记命中(forceRefresh 时所有缓存不计为命中)
-        // entrypoint/marketStats 只要缓存存在即命中(HTTP 200 即缓存,包括空内容/空数据)
+        // pdp/marketStats/followSell 只要缓存存在即命中(HTTP 200 即缓存,包括空内容/空数据)
         results[0].hit = !!card && !forceRefresh;
         results[1].hit = !!detail && !forceRefresh;
-        results[2].hit = !!composer && !forceRefresh;
-        results[3].hit = !!entrypoint && !forceRefresh;
+        results[2].hit = !!pdp && !forceRefresh;
         // search/bundle 在 Step 5 处理
-        results[6].hit = !!marketStats && !marketStats.stale && !forceRefresh;
-        results[7].hit = !!followSell && !followSell.stale && !forceRefresh;
+        results[5].hit = !!marketStats && !marketStats.stale && !forceRefresh;
+        results[6].hit = !!followSell && !followSell.stale && !forceRefresh;
 
         console.log(
           '[SW autoCollect] Step1 缓存查询:',
@@ -1769,12 +1889,11 @@
 
         // === Step 2: 计算 pending ===
         const pending = {
-          composer: !results[2].hit,
-          entrypoint: !results[3].hit,
+          pdp: !results[2].hit,
           search: !forceRefresh, // 简化:Step 5 内部检查缓存
           bundle: !forceRefresh, // 简化:Step 5 内部检查缓存
-          marketStats: !results[6].hit,
-          followSell: !results[7].hit,
+          marketStats: !results[5].hit,
+          followSell: !results[6].hit,
         };
         const hasPending = Object.values(pending).some(Boolean);
         const pendingList = Object.entries(pending)
@@ -1799,51 +1918,42 @@
 
         // === Step 4: 买家页采集(composer+entrypoint+followSell) ===
         // Phase 5: 移除 _autoCollectGate / _buyerPageGate 显式调用,由队列消费者统一限速。
-        if (pending.composer || pending.entrypoint || pending.followSell) {
+        if (pending.pdp || pending.followSell) {
           try {
-            // fetchVariantMediaViaBuyerTab 接收 productUrl,从 card 缓存取 url 或构造 fallback
+            // fetchPdpBundleViaBuyerTab 接收 productUrl,从 card 缓存取 url 或构造 fallback
             const productUrl = card?.url || `${sw.OZON_WWW_ORIGIN}/product/-${sku}/`;
-            // forceEntrypoint: entrypoint 缓存为空时,即使 composer 缓存有数据也真调 entrypoint-api 补全
-            const mediaResult = await fetchVariantMediaViaBuyerTab(productUrl, {
-              forceEntrypoint: pending.entrypoint,
-            });
-            // fetchVariantMediaViaBuyerTab 内部已写 entrypoint/composer/followSell 缓存,
+            const mediaResult = await fetchPdpBundleViaBuyerTab(productUrl);
+            // fetchPdpBundleViaBuyerTab 内部已写 richMedia/followSell 缓存,
             // 这里仅根据返回字段标记命中。
-            // 注意:endpoint 字段可能为 'entrypoint-api'/'composer-api'/'entrypoint-cache'/'composer-cache',
-            // entrypoint 缓存在 endpoint === 'entrypoint-api' 时写入(HTTP 200 即写,包括空内容),
-            // 所以 results[3].hit 只要匹配 'entrypoint-*' 即表示已采集。
+            // endpoint 可能为 'entrypoint-api'/'composer-api'/'richMedia-cache',
+            // richMedia 缓存在 anyOk(HTTP 200)时写入(包括空内容),所以只要有 endpoint 就标记命中。
             const ep = String(mediaResult?.endpoint || '');
-            // 只要走了 entrypoint-* 就标记命中(HTTP 200 即采集完成,包括空内容)
-            if (ep.startsWith('entrypoint-')) {
-              results[3].hit = true;
+            if (ep && ep !== 'richMedia-cache') {
+              // 真调成功(entrypoint-api / composer-api)→ pdp 缓存已写入
+              results[2].hit = true;
             } else if (!ep) {
               // 细化 NO_ENDPOINT:从 mediaResult.errorReason 取具体原因
-              // (BUYER_TAB_FAILED / ALL_ENDPOINTS_FAILED:entrypoint:HTTP_404|composer:HTTP_404 / TIMEOUT 等)
-              results[3].error = mediaResult?.errorReason || 'NO_ENDPOINT';
+              // (MEDIA_NO_RESULT / MEDIA_ALL_ENDPOINTS_FAILED:entrypoint:HTTP_403|composer:HTTP_403 / MEDIA_FAILED:xxx 等)
+              results[2].error = mediaResult?.errorReason || 'NO_ENDPOINT';
               // 反爬检测:买家页 endpoint 全部 403/429 视为反爬挑战,抛 ANTIBOT_BLOCKED
               // 触发 _handleAntibot 熔断(暂停 10 分钟),避免持续无效真调被 Ozon 进一步限制。
-              // (fetchVariantMediaViaBuyerTab 内部把 403 当普通 HTTP 错误记到 failReasons,
-              //  不会抛 ANTIBOT_BLOCKED,这里补上检测)
-              const reason = String(results[3].error || '');
+              const reason = String(results[2].error || '');
               if (/HTTP_403|HTTP_429/.test(reason)) {
                 throw new Error('ANTIBOT_BLOCKED');
               }
             } else {
-              results[3].error = 'FALLBACK_' + ep;
+              results[2].error = 'FALLBACK_' + ep;
             }
-            if (ep.startsWith('composer-') || mediaResult?.composerFields) results[2].hit = true;
-            if (mediaResult?.followSellData) results[7].hit = true;
+            if (mediaResult?.followSellData) results[6].hit = true;
             console.log(
               '[SW autoCollect] Step4 买家页采集:',
               sku,
               'endpoint=',
               ep || '(null)',
-              'composer:',
+              'pdp:',
               results[2].hit ? '✓' : '✗',
-              'entrypoint:',
-              results[3].hit ? '✓' : '✗',
               'followSell:',
-              results[7].hit ? '✓' : '✗'
+              results[6].hit ? '✓' : '✗'
             );
           } catch (e) {
             if (e?.message === 'ANTIBOT_BLOCKED') {
@@ -1851,7 +1961,7 @@
               return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
             }
             // 截断到 80 字符,避免超长 HTML 挑战页内容污染日志
-            results[3].error = e?.message ? String(e.message).slice(0, 80) : 'STEP4_FAILED';
+            results[2].error = e?.message ? String(e.message).slice(0, 80) : 'STEP4_FAILED';
             console.warn('[SW autoCollect] Step4 failed:', sku, e?.message || e);
           }
         }
@@ -1874,17 +1984,22 @@
               const l2 = await this.erpCacheGet('search', sku);
               if (l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0) {
                 searchCacheHit = l2.data;
-                this.idbPut(this.IDB_STORES.SEARCH, { sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true }).catch(() => {});
+                this.idbPut(this.IDB_STORES.SEARCH, {
+                  sku,
+                  data: l2.data,
+                  fetchedAt: Date.now(),
+                  l2Synced: true,
+                }).catch(() => {});
               }
             }
 
             if (searchCacheHit) {
-              results[4].hit = true; // search
+              results[3].hit = true; // search
               // search 缓存命中,检查 bundle 缓存
               try {
                 const bundleL1 = await this.idbGet(this.IDB_STORES.BUNDLE, sku);
                 if (this.bundleUsable(bundleL1)) {
-                  results[5].hit = true; // bundle
+                  results[4].hit = true; // bundle
                 }
               } catch (e) {
                 console.warn('[SW autoCollect] bundle L1 get failed:', e?.message || e);
@@ -1923,7 +2038,7 @@
                       : [];
                 const items = rawVariants.map(this.normalizeSearchVariantToSv).filter(Boolean);
                 if (items.length > 0) {
-                  results[4].hit = true; // search
+                  results[3].hit = true; // search
                   // 写 search 缓存(L1 + L2)
                   const cacheData = { items };
                   this.idbPut(this.IDB_STORES.SEARCH, {
@@ -1943,7 +2058,7 @@
                       forceRefresh: false,
                     });
                     if (bundleItem) {
-                      results[5].hit = true; // bundle
+                      results[4].hit = true; // bundle
                       const existingKeys = new Set(items[0].attributes.map((a) => String(a.key)));
                       const physicalAttrs = [];
                       if (Number(bundleItem.weight) > 0 && !existingKeys.has('4497')) {
@@ -2005,7 +2120,7 @@
             const marketData = await _fetchMarketStatsDirect(sku);
             // 检查顺序:__needSellerLogin(AUTH_REQUIRED) → __antibot(跳 ANTIBOT) → 其余(HTTP 200)写缓存
             if (marketData?.__needSellerLogin) {
-              results[6].error = 'AUTH_REQUIRED';
+              results[5].error = 'AUTH_REQUIRED';
               console.log('[SW autoCollect] Step6 marketStats: AUTH_REQUIRED:', sku);
             } else if (marketData?.__antibot) {
               console.warn('[SW autoCollect] Step6 marketStats 反爬熔断:', sku);
@@ -2013,16 +2128,16 @@
             } else if (marketData) {
               // HTTP 200 即写缓存(包括 __empty 空数据),标记已采集
               this.marketStatsCacheSet(sku, marketData);
-              results[6].hit = true;
+              results[5].hit = true;
               console.log('[SW autoCollect] Step6 marketStats 成功:', sku, marketData.__empty ? '(空数据)' : '');
             } else {
               // null:临时性失败(所有 tab 注入异常等),不写缓存
-              results[6].error = 'NO_DATA';
+              results[5].error = 'NO_DATA';
               console.log('[SW autoCollect] Step6 marketStats: NO_DATA:', sku);
             }
           } catch (e) {
             console.warn('[SW autoCollect] Step6 failed:', sku, e?.message || e);
-            results[6].error = e?.message || 'UNKNOWN';
+            results[5].error = e?.message || 'UNKNOWN';
             // 失败不熔断
           }
         }
@@ -2098,11 +2213,6 @@
     // ── 暴露函数(保留原 _ 前缀,SW 中用 const _xxx = (...) => __jzCollect._xxx(...) 委托) ──
     this.normalizeMarketItem = normalizeMarketItem;
     this._isRichDoc = _isRichDoc;
-    this._extractRichFromStates = _extractRichFromStates;
-    this._extractMp4FromStates = _extractMp4FromStates;
-    this._extractDescriptionFromStates = _extractDescriptionFromStates;
-    this._extractHashtagsFromStates = _extractHashtagsFromStates;
-    this._extractGalleryFromStates = _extractGalleryFromStates;
     this._ensureSellerTabImpl = _ensureSellerTabImpl;
     this.ensureSellerTab = ensureSellerTab;
     this.ensureBuyerTab = ensureBuyerTab;
@@ -2111,7 +2221,7 @@
     this.fetchSellerPortal = fetchSellerPortal;
     this.fetchBundleByVariantId = fetchBundleByVariantId;
     this.transferVideoToOzon = transferVideoToOzon;
-    this.fetchVariantMediaViaBuyerTab = fetchVariantMediaViaBuyerTab;
+    this.fetchPdpBundleViaBuyerTab = fetchPdpBundleViaBuyerTab;
     this._fetchMarketStatsDirect = _fetchMarketStatsDirect;
     this._acquireAutoCollectSlot = _acquireAutoCollectSlot;
     this._releaseAutoCollectSlot = _releaseAutoCollectSlot;

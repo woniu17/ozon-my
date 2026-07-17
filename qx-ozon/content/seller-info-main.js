@@ -135,18 +135,39 @@
       return null;
     }
 
+    // sellerId fallback 链:Ozon 多次改版,badge 路径时有变化
     const sellerId =
       state?.badge?.subscribed?.common?.action?.params?.sellerId ||
       state?.badge?.unsubscribed?.common?.action?.params?.sellerId ||
+      state?.sellerCell?.sellerId ||
+      state?.sellerCell?.common?.action?.params?.sellerId ||
+      state?.sellerId ||
       '';
-    const sellerName = state?.sellerCell?.centerBlock?.title?.text || '';
-    const sellerLink = state?.sellerCell?.centerBlock?.common?.action?.link || '';
+    // sellerName / sellerLink fallback 链(对齐 ozon-product.js#L468-499 已验证路径)
+    const sc = state?.sellerCell;
+    const strOr = (v) => (typeof v === 'string' && v ? v : '');
+    const sellerName =
+      strOr(sc?.centerBlock?.title?.text) || strOr(sc?.centerBlock?.title) || strOr(sc?.name) || strOr(state?.name) || '';
+    const sellerLink =
+      strOr(sc?.common?.action?.link) ||
+      strOr(sc?.centerBlock?.title?.link) ||
+      strOr(sc?.link) ||
+      strOr(state?.link) ||
+      '';
     const slugMatch = sellerLink.match(/\/seller\/([^/]+)/);
     const slug = slugMatch ? slugMatch[1] : '';
     const companyInfo = _extractCompanyInfoFromState(state);
 
     if (!sellerId && !slug) {
       console.warn('[seller-info-main] PDP: 既无 sellerId 也无 slug,放弃');
+      console.warn(
+        '[seller-info-main] state 顶层 keys:',
+        state ? Object.keys(state) : 'null',
+        'sellerCell keys:',
+        sc ? Object.keys(sc) : 'null',
+        'badge keys:',
+        state?.badge ? Object.keys(state.badge) : 'null'
+      );
       return null;
     }
 

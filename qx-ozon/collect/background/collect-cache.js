@@ -8,10 +8,10 @@
  *   - 通过 this.state.xxx 访问采集运行时状态
  *
  * 覆盖范围:
- *   - L1 IndexedDB 封装(8 个 store:search/bundle/card/composer/entrypoint/detail/
- *     market_stats/follow_sell)
+ *   - L1 IndexedDB 封装(9 个 store:search/bundle/card/composer/entrypoint/rich_media/detail/
+ *     market_stats/follow_sell;composer/entrypoint 仅保留扫老数据补写 L2)
  *   - L2 ERP MongoDB 缓存封装(/ozon/cache/{type}/:sku,JWT 鉴权)
- *   - 6 类业务缓存 Get/Set/Delete(card/composer/entrypoint/detail/marketStats/followSell)
+ *   - 6 类业务缓存 Get/Set/Delete(card/richMedia/detail/marketStats/followSell + search/bundle 走 idb 直查)
  *   - L2 定时补写(chrome.alarms 每 5 分钟扫描 l2Synced=false 的记录)
  *   - 自动采集日志(fire-and-forget 写入 ERP)
  * ========================================================= */
@@ -23,7 +23,7 @@
 
     // ── 常量 ──────────────────────────────────────────────────────────────────
     const _IDB_NAME = 'ozon-cache';
-    const _IDB_VERSION = 6;
+    const _IDB_VERSION = 7;
     const _IDB_STORE_SEARCH = 'search_cache';
     const _IDB_STORE_BUNDLE = 'bundle_cache';
     const _IDB_STORE_CARD = 'card_cache';
@@ -33,6 +33,8 @@
     // v6:新增 market_stats / follow_sell 缓存(带 stale 判定,不删旧 6 store)
     const _IDB_STORE_MARKET_STATS = 'market_stats_cache';
     const _IDB_STORE_FOLLOW_SELL = 'follow_sell_cache';
+    // v7:新增 rich_media 缓存(合并 entrypoint + composer,对齐 MY 富内容打分制)
+    const _IDB_STORE_RICH_MEDIA = 'rich_media_cache';
     const _ATTRS_EMPTY_REVERIFY_MS = 6 * 60 * 60 * 1000; // 空属性 6h 重验
     const CACHE_SYNC_ALARM = 'jz:cache-sync-l2';
     const CACHE_SYNC_INTERVAL_MINUTES = 5;
@@ -71,6 +73,11 @@
           }
           if (!db.objectStoreNames.contains(_IDB_STORE_FOLLOW_SELL)) {
             db.createObjectStore(_IDB_STORE_FOLLOW_SELL, { keyPath: 'sku' });
+          }
+          // v7:新增 rich_media 缓存 store(合并 entrypoint + composer)。
+          // 用 contains 守卫保证从任意旧版本升级都幂等创建,不删旧 8 store。
+          if (!db.objectStoreNames.contains(_IDB_STORE_RICH_MEDIA)) {
+            db.createObjectStore(_IDB_STORE_RICH_MEDIA, { keyPath: 'sku' });
           }
           // v5:删除旧 pdp_cache / dynamic_store(已合并为 detail_cache)
           if (db.objectStoreNames.contains('pdp_cache')) {
@@ -276,6 +283,7 @@
       DETAIL: _IDB_STORE_DETAIL,
       MARKET_STATS: _IDB_STORE_MARKET_STATS,
       FOLLOW_SELL: _IDB_STORE_FOLLOW_SELL,
+      RICH_MEDIA: _IDB_STORE_RICH_MEDIA,
     };
     this.ATTRS_EMPTY_REVERIFY_MS = _ATTRS_EMPTY_REVERIFY_MS;
     // loadAutoCollectConfig 由 SW 桥接传入(marketStats/followSell 缓存的 stale 判定需要读取配置)
@@ -320,59 +328,24 @@
       _erpCacheDelete('card', sku);
     };
 
-    // ── composer 缓存(composer-api widgetStates,缓存优先) ─────────────────────────
-    // 缓存对象:fetchProductPageState 返回的 19 个业务 widgetStates 子集
-    // 策略:无 TTL(永久),缓存优先(命中直接返回,跳过网络请求)
-    // L1 IndexedDB → L2 MongoDB → L3 真调 composer-api
-    this.composerCacheGet = async (sku) => {
-      try {
-        // L1
-        const l1 = await _idbGet(_IDB_STORE_COMPOSER, sku);
-        if (l1 && l1.data) return l1.data;
-        // L2
-        const l2 = await _erpCacheGet('composer', sku);
-        if (l2 && l2.data) {
-          _idbPut(_IDB_STORE_COMPOSER, {
-            sku,
-            data: l2.data,
-            fetchedAt: Date.now(),
-            l2Synced: true,
-          }).catch(() => {});
-          return l2.data;
-        }
-      } catch (e) {
-        console.warn(`[cache] composer get failed sku=${sku}:`, e?.message || e);
-      }
-      return null;
-    };
-
-    this.composerCacheSet = (sku, widgetStates) => {
-      _idbPut(_IDB_STORE_COMPOSER, {
-        sku,
-        data: widgetStates,
-        fetchedAt: Date.now(),
-        l2Synced: false,
-      }).catch(() => {});
-      _erpCacheSetAndSyncFlag(_IDB_STORE_COMPOSER, 'composer', sku, { data: widgetStates });
-    };
-
-    this.composerCacheDelete = (sku) => {
-      _idbDelete(_IDB_STORE_COMPOSER, sku).catch(() => {});
-      _erpCacheDelete('composer', sku);
-    };
-
-    // ── entrypoint 缓存(entrypoint-api page-json,缓存优先) ─────────────────────────
-    // 缓存对象:fetchVariantGallery / fetchVariantMediaViaBuyerTab 从 entrypoint-api.bx 蒸馏的
-    //   { gallery, richContent, description, hashtags } 等字段
+    // ── richMedia 缓存(合并 entrypoint + composer,对齐 MY 富内容打分制) ──────────
+    // 缓存对象:fetchPdpBundleViaBuyerTab 从 entrypoint-api + composer-api page-json 蒸馏的
+    //   {
+    //     mp4, richContent, richContentHasText, description, hashtags, gallery,  // media 字段
+    //     fields: { title, sku, productId, price, images, coverImage, aspects, seller, brand, ... },
+    //     widgetStates: object,  // 过滤后的 19 类业务 widget 子集(供 ensurePdpState 兜底)
+    //     hitEndpoints: string[], // 实际命中的 endpoint 列表(诊断用)
+    //   }
     // 策略:无 TTL(永久),缓存优先(命中直接返回,跳过 buyer tab 注入 + 网络请求)
-    // L1 IndexedDB → L2 MongoDB → L3 真调 entrypoint-api
-    this.entrypointCacheGet = async (sku) => {
+    // L1 IndexedDB → L2 MongoDB → L3 真调 entrypoint-api + composer-api
+    // 注:entrypoint/composer 缓存已合并到此处,旧 store 保留不删除(自然过期)
+    this.richMediaCacheGet = async (sku) => {
       try {
-        const l1 = await _idbGet(_IDB_STORE_ENTRYPOINT, sku);
+        const l1 = await _idbGet(_IDB_STORE_RICH_MEDIA, sku);
         if (l1 && l1.data) return l1.data;
-        const l2 = await _erpCacheGet('entrypoint', sku);
+        const l2 = await _erpCacheGet('richMedia', sku);
         if (l2 && l2.data) {
-          _idbPut(_IDB_STORE_ENTRYPOINT, {
+          _idbPut(_IDB_STORE_RICH_MEDIA, {
             sku,
             data: l2.data,
             fetchedAt: Date.now(),
@@ -381,24 +354,24 @@
           return l2.data;
         }
       } catch (e) {
-        console.warn(`[cache] entrypoint get failed sku=${sku}:`, e?.message || e);
+        console.warn(`[cache] richMedia get failed sku=${sku}:`, e?.message || e);
       }
       return null;
     };
 
-    this.entrypointCacheSet = (sku, data) => {
-      _idbPut(_IDB_STORE_ENTRYPOINT, {
+    this.richMediaCacheSet = (sku, data) => {
+      _idbPut(_IDB_STORE_RICH_MEDIA, {
         sku,
         data,
         fetchedAt: Date.now(),
         l2Synced: false,
       }).catch(() => {});
-      _erpCacheSetAndSyncFlag(_IDB_STORE_ENTRYPOINT, 'entrypoint', sku, { data });
+      _erpCacheSetAndSyncFlag(_IDB_STORE_RICH_MEDIA, 'richMedia', sku, { data });
     };
 
-    this.entrypointCacheDelete = (sku) => {
-      _idbDelete(_IDB_STORE_ENTRYPOINT, sku).catch(() => {});
-      _erpCacheDelete('entrypoint', sku);
+    this.richMediaCacheDelete = (sku) => {
+      _idbDelete(_IDB_STORE_RICH_MEDIA, sku).catch(() => {});
+      _erpCacheDelete('richMedia', sku);
     };
 
     // ── detail 缓存(详情页 DOM 全字段:原 pdp 静态 + dynamic 动态合并) ─────────────────────────
@@ -538,7 +511,7 @@
 
     // ── 定时补写 L2:扫描 L1 中 l2Synced=false 的记录 ──────────────────────────
     // 由 chrome.alarms 每 5 分钟触发,不受 SW 休眠影响。
-    // 扫描 search/bundle/card/composer/entrypoint/detail/marketStats/followSell 八个 store,
+    // 扫描 search/bundle/card/composer/entrypoint/detail/marketStats/followSell/richMedia 九个 store,
     // 逐条补写 L2,成功后置 l2Synced=true。
     // forceAll=true:全量同步(忽略 l2Synced 标志),由 popup 手动按钮触发
     // forceAll=false(默认):只补写 l2Synced=false 的记录,由定时 alarm 触发
@@ -553,6 +526,7 @@
           detail: 0,
           marketStats: 0,
           followSell: 0,
+          richMedia: 0,
         };
       S.cacheSyncRunning = true;
       const stats = {
@@ -564,6 +538,7 @@
         detail: 0,
         marketStats: 0,
         followSell: 0,
+        richMedia: 0,
       };
       try {
         for (const { store, type } of [
@@ -575,6 +550,7 @@
           { store: _IDB_STORE_DETAIL, type: 'detail' },
           { store: _IDB_STORE_MARKET_STATS, type: 'marketStats' },
           { store: _IDB_STORE_FOLLOW_SELL, type: 'followSell' },
+          { store: _IDB_STORE_RICH_MEDIA, type: 'richMedia' },
         ]) {
           const unsynced = await _idbScanUnsynced(store, forceAll).catch(() => []);
           for (const entry of unsynced) {
@@ -588,10 +564,10 @@
             }
           }
         }
-        const total = stats.search + stats.bundle + stats.card + stats.marketStats + stats.followSell;
+        const total = stats.search + stats.bundle + stats.card + stats.marketStats + stats.followSell + stats.richMedia;
         if (total > 0)
           console.log(
-            `[cache-sync] 补写 ${total} 条 L2 缓存 (search=${stats.search}, bundle=${stats.bundle}, card=${stats.card}, composer=${stats.composer}, entrypoint=${stats.entrypoint}, detail=${stats.detail}, marketStats=${stats.marketStats}, followSell=${stats.followSell}, forceAll=${forceAll})`
+            `[cache-sync] 补写 ${total} 条 L2 缓存 (search=${stats.search}, bundle=${stats.bundle}, card=${stats.card}, composer=${stats.composer}, entrypoint=${stats.entrypoint}, detail=${stats.detail}, marketStats=${stats.marketStats}, followSell=${stats.followSell}, richMedia=${stats.richMedia}, forceAll=${forceAll})`
           );
       } catch (e) {
         console.warn('[cache-sync] batch failed:', e?.message || e);

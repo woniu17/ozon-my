@@ -233,7 +233,10 @@
         const queue = await _loadQueue();
         const today = new Date().toLocaleDateString('en-CA');
         for (const t of queue) {
-          if ((t.status === 'success' || t.status === 'failed_final' || t.status === 'failed_partial') && t.finishedAt) {
+          if (
+            (t.status === 'success' || t.status === 'failed_final' || t.status === 'failed_partial') &&
+            t.finishedAt
+          ) {
             const d = new Date(t.finishedAt).toLocaleDateString('en-CA');
             if (d === today) S.completedTodaySkus.add(t.sku);
           }
@@ -739,7 +742,12 @@
       try {
         const url = await sw.getBackendUrl();
         const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
-        const r = await sw.apiRequest('GET', `${url}/admin/api/collect-queue/ops/pending`, null, stored[sw.STORAGE_KEYS.token]);
+        const r = await sw.apiRequest(
+          'GET',
+          `${url}/admin/api/collect-queue/ops/pending`,
+          null,
+          stored[sw.STORAGE_KEYS.token]
+        );
         // apiRequest 返回 { ok, data },data = { items, count }
         const items = r?.data?.items || r?.items || (Array.isArray(r) ? r : []);
         return items;
@@ -839,7 +847,16 @@
         // 注意:任务回 pending(非终态),跨日恢复后会重新消费,但 panel 需要知道
         // "今天不会再处理了"的信号,否则永远卡 loading(isReadyToScroll 死锁)。
         const lastError = { type: 'daily-limit', message: reason, step: 'unknown', ts: Date.now() };
-        await _broadcastCollectDoneV2(task.sku, task.sellerSlug, 'skipped', null, Date.now(), duration, steps, lastError);
+        await _broadcastCollectDoneV2(
+          task.sku,
+          task.sellerSlug,
+          'skipped',
+          null,
+          Date.now(),
+          duration,
+          steps,
+          lastError
+        );
         return;
       }
       const lastError = { type: 'skipped', message: reason, step: 'unknown', ts: Date.now() };
@@ -965,7 +982,7 @@
       const exists = await _isTaskQueuedOrCompletedToday(sku);
       if (exists) return { ok: true, data: { alreadyQueued: true } };
 
-      // 前置缓存检查:8 类缓存全命中 → 直接 success,不入队
+      // 前置缓存检查:7 类缓存全命中 → 直接 success,不入队
       // 避免缓存命中任务占用 15s 队列 slot,且不消耗 daily-limit 配额(修复原 bug)。
       // Gate 0(not-running/paused/daily-limit)的本质是限制真调,缓存命中无需真调,故不需要前置 Gate 0。
       const { allHit, results } = await this._checkAllCachesHit(sku);

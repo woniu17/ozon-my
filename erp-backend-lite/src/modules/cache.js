@@ -1,4 +1,5 @@
-// Ozon search/bundle/card/composer/entrypoint/detail/marketStats/followSell 缓存路由(MongoDB 持久存储,按 sku 全局共享)
+// Ozon search/bundle/card/composer/entrypoint/detail/marketStats/followSell 缓存路由
+// 存储驱动通过 DAO 层(adapter.js)注入:DB_DRIVER=sqlite(默认)|mongo
 // - search:无 TTL(永久),forceRefresh 主动删除
 // - bundle:无 TTL(永久),空属性 6h 重验,forceRefresh 主动删除
 // - card:无 TTL(永久),商品卡 DOM 字段(sku/url/name/price/image),搜索页/店铺页采集
@@ -10,7 +11,7 @@
 // 另含:ozon_auto_collect_log 采集日志端点 + ozon_store_classification 店铺分类端点
 // 鉴权:JWT(authMiddleware),不走 storeGuard(缓存按 sku 全局共享,不区分店铺)
 import { Router } from 'express';
-import { cols } from '../db/mongo.js';
+import { getDaos } from '../db/adapter.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import { transformItemForPortal, extractCategoryIds } from '../services/prepare-bundle.js';
@@ -29,15 +30,13 @@ function readStoresForPreview() {
   }
 }
 
+// DAO 单例(顶层 await:启动时即建立连接,失败立即可见)
+const daos = await getDaos();
+
 const router = Router();
 
-const ATTRS_EMPTY_REVERIFY_MS = 6 * 60 * 60 * 1000; // 空属性 6h 重验
 const MARKET_STATS_STALE_MS = 24 * 60 * 60 * 1000; // marketStats stale 判定 24h
 const FOLLOW_SELL_STALE_MS = 4 * 60 * 60 * 1000; // followSell stale 判定 4h
-
-function hasAttrs(bundleItem) {
-  return Array.isArray(bundleItem?.attributes) && bundleItem.attributes.length > 0;
-}
 
 // ── search 缓存 ────────────────────────────────────────────
 
@@ -45,10 +44,9 @@ function hasAttrs(bundleItem) {
 router.get('/ozon/cache/search/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.searchCache();
-    const doc = await col.findOne({ _id: sku });
-    if (doc && doc.data) {
-      return res.json({ data: doc.data, fetchedAt: doc.fetchedAt });
+    const r = await daos.searchDao.getBySku(sku);
+    if (r.data) {
+      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
     }
     return res.json({ data: null });
   } catch (e) {
@@ -63,8 +61,7 @@ router.post('/ozon/cache/search/:sku', async (req, res, next) => {
     const sku = String(req.params.sku);
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
-    const col = await cols.searchCache();
-    await col.updateOne({ _id: sku }, { $set: { sku, data, fetchedAt: new Date() } }, { upsert: true });
+    await daos.searchDao.upsert(sku, data);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] search set failed');
@@ -76,8 +73,7 @@ router.post('/ozon/cache/search/:sku', async (req, res, next) => {
 router.delete('/ozon/cache/search/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.searchCache();
-    await col.deleteOne({ _id: sku });
+    await daos.searchDao.deleteBySku(sku);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] search delete failed');
@@ -93,19 +89,9 @@ router.delete('/ozon/cache/search/:sku', async (req, res, next) => {
 router.get('/ozon/cache/bundle/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.bundleCache();
-    const doc = await col.findOne({ _id: sku });
-    if (!doc || !doc.data) return res.json({ data: null });
-
-    // 空属性 6h 重验
-    if (!hasAttrs(doc.data)) {
-      const verifiedAt = doc.attrsEmptyVerifiedAt ? new Date(doc.attrsEmptyVerifiedAt).getTime() : 0;
-      if (!verifiedAt || Date.now() - verifiedAt >= ATTRS_EMPTY_REVERIFY_MS) {
-        // 超过 6h 未验证 → 视为 stale,调用方应真拉
-        return res.json({ data: null, stale: true });
-      }
-    }
-    return res.json({ data: doc.data, fetchedAt: doc.fetchedAt });
+    // DAO.getBySku 内置空属性 6h 重验逻辑
+    const r = await daos.bundleDao.getBySku(sku);
+    return res.json(r);
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] bundle get failed');
     next(e);
@@ -119,20 +105,8 @@ router.post('/ozon/cache/bundle/:sku', async (req, res, next) => {
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
     const bundleId = req.body?.bundleId || null;
-    const col = await cols.bundleCache();
-
-    const update = {
-      sku,
-      data,
-      bundleId,
-      fetchedAt: new Date(),
-    };
-    // 空属性打 attrsEmptyVerifiedAt 标记(6h 内复用,过期重验)
-    if (!hasAttrs(data)) {
-      update.attrsEmptyVerifiedAt = new Date();
-    }
-
-    await col.updateOne({ _id: sku }, { $set: update }, { upsert: true });
+    // DAO.upsert 内置:空属性时自动打 attrsEmptyVerifiedAt 标记
+    await daos.bundleDao.upsert(sku, data, { bundleId });
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] bundle set failed');
@@ -144,8 +118,7 @@ router.post('/ozon/cache/bundle/:sku', async (req, res, next) => {
 router.delete('/ozon/cache/bundle/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.bundleCache();
-    await col.deleteOne({ _id: sku });
+    await daos.bundleDao.deleteBySku(sku);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] bundle delete failed');
@@ -159,10 +132,9 @@ router.delete('/ozon/cache/bundle/:sku', async (req, res, next) => {
 router.get('/ozon/cache/card/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.cardCache();
-    const doc = await col.findOne({ _id: sku });
-    if (doc && doc.data) {
-      return res.json({ data: doc.data, fetchedAt: doc.fetchedAt });
+    const r = await daos.cardDao.getBySku(sku);
+    if (r.data) {
+      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
     }
     return res.json({ data: null });
   } catch (e) {
@@ -177,8 +149,7 @@ router.post('/ozon/cache/card/:sku', async (req, res, next) => {
     const sku = String(req.params.sku);
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
-    const col = await cols.cardCache();
-    await col.updateOne({ _id: sku }, { $set: { sku, data, fetchedAt: new Date() } }, { upsert: true });
+    await daos.cardDao.upsert(sku, data);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] card set failed');
@@ -190,8 +161,7 @@ router.post('/ozon/cache/card/:sku', async (req, res, next) => {
 router.delete('/ozon/cache/card/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.cardCache();
-    await col.deleteOne({ _id: sku });
+    await daos.cardDao.deleteBySku(sku);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] card delete failed');
@@ -205,10 +175,9 @@ router.delete('/ozon/cache/card/:sku', async (req, res, next) => {
 router.get('/ozon/cache/composer/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.composerCache();
-    const doc = await col.findOne({ _id: sku });
-    if (doc && doc.data) {
-      return res.json({ data: doc.data, fetchedAt: doc.fetchedAt });
+    const r = await daos.composerDao.getBySku(sku);
+    if (r.data) {
+      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
     }
     return res.json({ data: null });
   } catch (e) {
@@ -223,8 +192,7 @@ router.post('/ozon/cache/composer/:sku', async (req, res, next) => {
     const sku = String(req.params.sku);
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
-    const col = await cols.composerCache();
-    await col.updateOne({ _id: sku }, { $set: { sku, data, fetchedAt: new Date() } }, { upsert: true });
+    await daos.composerDao.upsert(sku, data);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] composer set failed');
@@ -236,8 +204,7 @@ router.post('/ozon/cache/composer/:sku', async (req, res, next) => {
 router.delete('/ozon/cache/composer/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.composerCache();
-    await col.deleteOne({ _id: sku });
+    await daos.composerDao.deleteBySku(sku);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] composer delete failed');
@@ -251,10 +218,9 @@ router.delete('/ozon/cache/composer/:sku', async (req, res, next) => {
 router.get('/ozon/cache/entrypoint/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.entrypointCache();
-    const doc = await col.findOne({ _id: sku });
-    if (doc && doc.data) {
-      return res.json({ data: doc.data, fetchedAt: doc.fetchedAt });
+    const r = await daos.entrypointDao.getBySku(sku);
+    if (r.data) {
+      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
     }
     return res.json({ data: null });
   } catch (e) {
@@ -269,8 +235,7 @@ router.post('/ozon/cache/entrypoint/:sku', async (req, res, next) => {
     const sku = String(req.params.sku);
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
-    const col = await cols.entrypointCache();
-    await col.updateOne({ _id: sku }, { $set: { sku, data, fetchedAt: new Date() } }, { upsert: true });
+    await daos.entrypointDao.upsert(sku, data);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] entrypoint set failed');
@@ -282,8 +247,7 @@ router.post('/ozon/cache/entrypoint/:sku', async (req, res, next) => {
 router.delete('/ozon/cache/entrypoint/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.entrypointCache();
-    await col.deleteOne({ _id: sku });
+    await daos.entrypointDao.deleteBySku(sku);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] entrypoint delete failed');
@@ -297,10 +261,9 @@ router.delete('/ozon/cache/entrypoint/:sku', async (req, res, next) => {
 router.get('/ozon/cache/detail/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.detailCache();
-    const doc = await col.findOne({ _id: sku });
-    if (doc && doc.data) {
-      return res.json({ data: doc.data, fetchedAt: doc.fetchedAt });
+    const r = await daos.detailDao.getBySku(sku);
+    if (r.data) {
+      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
     }
     return res.json({ data: null });
   } catch (e) {
@@ -315,8 +278,7 @@ router.post('/ozon/cache/detail/:sku', async (req, res, next) => {
     const sku = String(req.params.sku);
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
-    const col = await cols.detailCache();
-    await col.updateOne({ _id: sku }, { $set: { sku, data, fetchedAt: new Date() } }, { upsert: true });
+    await daos.detailDao.upsert(sku, data);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] detail set failed');
@@ -328,8 +290,7 @@ router.post('/ozon/cache/detail/:sku', async (req, res, next) => {
 router.delete('/ozon/cache/detail/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.detailCache();
-    await col.deleteOne({ _id: sku });
+    await daos.detailDao.deleteBySku(sku);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] detail delete failed');
@@ -343,16 +304,15 @@ router.delete('/ozon/cache/detail/:sku', async (req, res, next) => {
 router.get('/ozon/cache/marketStats/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.marketStatsCache();
-    const doc = await col.findOne({ _id: sku }, { projection: { _id: 1, sku: 1, data: 1, fetchedAt: 1, l2Synced: 1 } });
-    if (!doc || !doc.data) return res.json({ data: null });
+    const r = await daos.marketStatsDao.getBySku(sku);
+    if (!r.data) return res.json({ data: null });
     // stale 预计算:fetchedAt 距今 > 24h
-    const fetchedAtMs = doc.fetchedAt ? new Date(doc.fetchedAt).getTime() : 0;
+    const fetchedAtMs = r.fetchedAt ? new Date(r.fetchedAt).getTime() : 0;
     const stale = !fetchedAtMs || Date.now() - fetchedAtMs > MARKET_STATS_STALE_MS;
     return res.json({
-      data: doc.data,
-      fetchedAt: doc.fetchedAt,
-      l2Synced: doc.l2Synced === true,
+      data: r.data,
+      fetchedAt: r.fetchedAt,
+      l2Synced: r.l2Synced === true,
       stale,
     });
   } catch (e) {
@@ -367,8 +327,7 @@ router.post('/ozon/cache/marketStats/:sku', async (req, res, next) => {
     const sku = String(req.params.sku);
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
-    const col = await cols.marketStatsCache();
-    await col.updateOne({ _id: sku }, { $set: { sku, data, fetchedAt: new Date(), l2Synced: true } }, { upsert: true });
+    await daos.marketStatsDao.upsert(sku, data);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] marketStats set failed');
@@ -380,8 +339,7 @@ router.post('/ozon/cache/marketStats/:sku', async (req, res, next) => {
 router.delete('/ozon/cache/marketStats/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.marketStatsCache();
-    await col.deleteOne({ _id: sku });
+    await daos.marketStatsDao.deleteBySku(sku);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] marketStats delete failed');
@@ -395,16 +353,15 @@ router.delete('/ozon/cache/marketStats/:sku', async (req, res, next) => {
 router.get('/ozon/cache/followSell/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.followSellCache();
-    const doc = await col.findOne({ _id: sku }, { projection: { _id: 1, sku: 1, data: 1, fetchedAt: 1, l2Synced: 1 } });
-    if (!doc || !doc.data) return res.json({ data: null });
+    const r = await daos.followSellDao.getBySku(sku);
+    if (!r.data) return res.json({ data: null });
     // stale 预计算:fetchedAt 距今 > 4h
-    const fetchedAtMs = doc.fetchedAt ? new Date(doc.fetchedAt).getTime() : 0;
+    const fetchedAtMs = r.fetchedAt ? new Date(r.fetchedAt).getTime() : 0;
     const stale = !fetchedAtMs || Date.now() - fetchedAtMs > FOLLOW_SELL_STALE_MS;
     return res.json({
-      data: doc.data,
-      fetchedAt: doc.fetchedAt,
-      l2Synced: doc.l2Synced === true,
+      data: r.data,
+      fetchedAt: r.fetchedAt,
+      l2Synced: r.l2Synced === true,
       stale,
     });
   } catch (e) {
@@ -419,8 +376,7 @@ router.post('/ozon/cache/followSell/:sku', async (req, res, next) => {
     const sku = String(req.params.sku);
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
-    const col = await cols.followSellCache();
-    await col.updateOne({ _id: sku }, { $set: { sku, data, fetchedAt: new Date(), l2Synced: true } }, { upsert: true });
+    await daos.followSellDao.upsert(sku, data);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] followSell set failed');
@@ -432,8 +388,7 @@ router.post('/ozon/cache/followSell/:sku', async (req, res, next) => {
 router.delete('/ozon/cache/followSell/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.followSellCache();
-    await col.deleteOne({ _id: sku });
+    await daos.followSellDao.deleteBySku(sku);
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] followSell delete failed');
@@ -441,55 +396,86 @@ router.delete('/ozon/cache/followSell/:sku', async (req, res, next) => {
   }
 });
 
+// ── richMedia 缓存(合并 entrypoint + composer,对齐 MY 富内容打分制) ─────────────────────────
+// 缓存对象:{ mp4, richContent, richContentHasText, description, hashtags, gallery,
+//           fields, widgetStates, hitEndpoints }
+// 由 qx-ozon fetchPdpBundleViaBuyerTab 写入,合并原 entrypoint + composer 双缓存
+
+// GET /ozon/cache/richMedia/:sku
+router.get('/ozon/cache/richMedia/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const r = await daos.richMediaDao.getBySku(sku);
+    if (r.data) {
+      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
+    }
+    return res.json({ data: null });
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] richMedia get failed');
+    next(e);
+  }
+});
+
+// POST /ozon/cache/richMedia/:sku  body: { data }
+router.post('/ozon/cache/richMedia/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const data = req.body?.data;
+    if (!data) return res.status(422).json({ error: 'missing data' });
+    await daos.richMediaDao.upsert(sku, data);
+    return res.json({ ok: true });
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] richMedia set failed');
+    next(e);
+  }
+});
+
+// DELETE /ozon/cache/richMedia/:sku
+router.delete('/ozon/cache/richMedia/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    await daos.richMediaDao.deleteBySku(sku);
+    return res.json({ ok: true });
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] richMedia delete failed');
+    next(e);
+  }
+});
+
 // ── 管理后台 API(/admin/api/cache/*) ───────────────────────
 // 列表/统计/详情/清空,供前端缓存管理页面使用
 
-// GET /admin/api/cache/stats — 缓存统计(8 类集合文档数 + 空属性数 + 总体积)
+// GET /admin/api/cache/stats — 缓存统计(7 类集合文档数 + 空属性数 + 总体积)
+// 注:composer/entrypoint 已合并为 richMedia,旧 collection 保留但不展示
 router.get('/admin/api/cache/stats', async (req, res, next) => {
   try {
-    const [sCol, bCol, cCol, coCol, eCol, dCol, mCol, fCol] = await Promise.all([
-      cols.searchCache(),
-      cols.bundleCache(),
-      cols.cardCache(),
-      cols.composerCache(),
-      cols.entrypointCache(),
-      cols.detailCache(),
-      cols.marketStatsCache(),
-      cols.followSellCache(),
-    ]);
     const [
       searchCount,
       bundleCount,
       bundleEmptyAttrs,
       bundleStale,
       cardCount,
-      composerCount,
-      entrypointCount,
+      richMediaCount,
       detailCount,
       marketStatsCount,
       followSellCount,
     ] = await Promise.all([
-      sCol.estimatedDocumentCount(),
-      bCol.estimatedDocumentCount(),
-      bCol.countDocuments({ 'data.attributes': { $size: 0 } }),
-      bCol.countDocuments({
-        'data.attributes': { $size: 0 },
-        attrsEmptyVerifiedAt: { $lt: new Date(Date.now() - ATTRS_EMPTY_REVERIFY_MS) },
-      }),
-      cCol.estimatedDocumentCount(),
-      coCol.estimatedDocumentCount(),
-      eCol.estimatedDocumentCount(),
-      dCol.estimatedDocumentCount(),
-      mCol.estimatedDocumentCount(),
-      fCol.estimatedDocumentCount(),
+      daos.searchDao.estimatedCount(),
+      daos.bundleDao.estimatedCount(),
+      daos.bundleDao.countEmptyAttrs(),
+      daos.bundleDao.countStaleEmptyAttrs(),
+      daos.cardDao.estimatedCount(),
+      daos.richMediaDao.estimatedCount(),
+      daos.detailDao.estimatedCount(),
+      daos.marketStatsDao.estimatedCount(),
+      daos.followSellDao.estimatedCount(),
     ]);
     return res.json(
       ok({
         search: { count: searchCount },
         bundle: { count: bundleCount, emptyAttrs: bundleEmptyAttrs, stale: bundleStale },
         card: { count: cardCount },
-        composer: { count: composerCount },
-        entrypoint: { count: entrypointCount },
+        richMedia: { count: richMediaCount },
         detail: { count: detailCount },
         marketStats: { count: marketStatsCount },
         followSell: { count: followSellCount },
@@ -501,33 +487,32 @@ router.get('/admin/api/cache/stats', async (req, res, next) => {
   }
 });
 
-// 类型 → 集合 映射(管理接口统一入口)
-const CACHE_TYPES = ['search', 'bundle', 'card', 'composer', 'entrypoint', 'detail', 'marketStats', 'followSell'];
-const getColByType = (type) => {
+// 类型 → DAO 映射(管理接口统一入口)
+// 注:composer/entrypoint 已合并为 richMedia,旧 SW-facing 路由保留(sycL2Batch 老数据补写)
+const CACHE_TYPES = ['search', 'bundle', 'card', 'richMedia', 'detail', 'marketStats', 'followSell'];
+const getDaoByType = (type) => {
   switch (type) {
     case 'search':
-      return cols.searchCache();
+      return daos.searchDao;
     case 'bundle':
-      return cols.bundleCache();
+      return daos.bundleDao;
     case 'card':
-      return cols.cardCache();
-    case 'composer':
-      return cols.composerCache();
-    case 'entrypoint':
-      return cols.entrypointCache();
+      return daos.cardDao;
+    case 'richMedia':
+      return daos.richMediaDao;
     case 'detail':
-      return cols.detailCache();
+      return daos.detailDao;
     case 'marketStats':
-      return cols.marketStatsCache();
+      return daos.marketStatsDao;
     case 'followSell':
-      return cols.followSellCache();
+      return daos.followSellDao;
     default:
-      return cols.bundleCache();
+      return daos.bundleDao;
   }
 };
 
 // GET /admin/api/cache/list — 缓存列表(支持 type/search/分页)
-// query: type=search|bundle|card|composer|entrypoint|detail|marketStats|followSell, keyword, page, pageSize
+// query: type=search|bundle|card|richMedia|detail|marketStats|followSell, keyword, page, pageSize
 router.get('/admin/api/cache/list', async (req, res, next) => {
   try {
     const type = CACHE_TYPES.includes(req.query.type) ? req.query.type : 'bundle';
@@ -535,28 +520,11 @@ router.get('/admin/api/cache/list', async (req, res, next) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
 
-    const col = await getColByType(type);
-    const query = keyword ? { sku: { $regex: keyword, $options: 'i' } } : {};
-    // projection 按类型差异化:bundle 取属性/attrsEmptyVerifiedAt/bundleId,marketStats/followSell 取 l2Synced
-    const projection =
-      type === 'bundle'
-        ? { _id: 1, sku: 1, fetchedAt: 1, attrsEmptyVerifiedAt: 1, bundleId: 1, 'data.attributes': 1 }
-        : type === 'marketStats' || type === 'followSell'
-          ? { _id: 1, sku: 1, fetchedAt: 1, l2Synced: 1 }
-          : { _id: 1, sku: 1, fetchedAt: 1 };
-    const [total, docs] = await Promise.all([
-      col.countDocuments(query),
-      col
-        .find(query, { projection })
-        .sort({ fetchedAt: -1 })
-        .skip((page - 1) * pageSize)
-        .limit(pageSize)
-        .toArray(),
-    ]);
+    const { items, total } = await getDaoByType(type).findPagedList(keyword, page, pageSize);
 
-    const items = docs.map((d) => {
+    // 按类型差异化重塑(bundle 已由 DAO 预计算 attrsEmpty/attrsStale)
+    const reshaped = items.map((d) => {
       const sku = d.sku || d._id;
-      // bundle 类型才需要预计算空属性 + 待重验状态
       if (type !== 'bundle') {
         // marketStats / followSell 预计算 stale + l2Synced
         if (type === 'marketStats' || type === 'followSell') {
@@ -567,23 +535,18 @@ router.get('/admin/api/cache/list', async (req, res, next) => {
         }
         return { sku, fetchedAt: d.fetchedAt };
       }
-      const attrsEmpty = !hasAttrs(d.data);
-      let attrsStale = false;
-      if (attrsEmpty) {
-        const verifiedAt = d.attrsEmptyVerifiedAt ? new Date(d.attrsEmptyVerifiedAt).getTime() : 0;
-        attrsStale = !verifiedAt || Date.now() - verifiedAt >= ATTRS_EMPTY_REVERIFY_MS;
-      }
+      // bundle:DAO 已返回 attrsEmpty/attrsStale/bundleId/attrsEmptyVerifiedAt
       return {
         sku,
         fetchedAt: d.fetchedAt,
         attrsEmptyVerifiedAt: d.attrsEmptyVerifiedAt || null,
-        attrsEmpty,
-        attrsStale,
+        attrsEmpty: d.attrsEmpty,
+        attrsStale: d.attrsStale,
         bundleId: d.bundleId || null,
       };
     });
 
-    return res.json(ok({ items, total, page, pageSize }));
+    return res.json(ok({ items: reshaped, total, page, pageSize }));
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] list failed');
     next(e);
@@ -597,8 +560,7 @@ router.get('/admin/api/cache/:type/:sku', async (req, res, next) => {
     if (req.params.type === 'overview' || req.params.type === 'opi-preview') return next('route');
     const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'bundle';
     const sku = String(req.params.sku);
-    const col = await getColByType(type);
-    const doc = await col.findOne({ _id: sku });
+    const doc = await getDaoByType(type).findById(sku);
     if (!doc) return res.json(ok(null));
     // marketStats / followSell 额外返回 l2Synced + stale 预计算
     if (type === 'marketStats' || type === 'followSell') {
@@ -635,8 +597,7 @@ router.delete('/admin/api/cache/:type/:sku', async (req, res, next) => {
   try {
     const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'bundle';
     const sku = String(req.params.sku);
-    const col = await getColByType(type);
-    await col.deleteOne({ _id: sku });
+    await getDaoByType(type).deleteBySku(sku);
     return res.json(ok({ deleted: true }));
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] admin delete failed');
@@ -648,8 +609,7 @@ router.delete('/admin/api/cache/:type/:sku', async (req, res, next) => {
 router.delete('/admin/api/cache/:type', async (req, res, next) => {
   try {
     const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'bundle';
-    const col = await getColByType(type);
-    const r = await col.deleteMany({});
+    const r = await getDaoByType(type).clearAll();
     return res.json(ok({ deletedCount: r.deletedCount }));
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] clear all failed');
@@ -657,12 +617,12 @@ router.delete('/admin/api/cache/:type', async (req, res, next) => {
   }
 });
 
-// ── 全览接口:聚合 8 类缓存,展示每 SKU 的缓存状态矩阵 ─────────────────────────
+// ── 全览接口:聚合 7 类缓存,展示每 SKU 的缓存状态矩阵 ─────────────────────────
 
-// GET /admin/api/cache/overview — 全览列表(聚合 8 类缓存的 SKU)
+// GET /admin/api/cache/overview — 全览列表(聚合 7 类缓存的 SKU)
 // query: keyword, page, pageSize
 // 返回: { items: [{ sku, search:{fetchedAt}, bundle:{fetchedAt,attrsEmpty}, card:{fetchedAt},
-//                  composer:{fetchedAt}, entrypoint:{fetchedAt}, detail:{fetchedAt},
+//                  richMedia:{fetchedAt}, detail:{fetchedAt},
 //                  marketStats:{fetchedAt,stale}, followSell:{fetchedAt,stale} }], total }
 router.get('/admin/api/cache/overview', async (req, res, next) => {
   try {
@@ -670,33 +630,15 @@ router.get('/admin/api/cache/overview', async (req, res, next) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
 
-    // 8 类缓存并行查询所有 SKU(仅取 _id/sku/fetchedAt/关键字段)
-    const [sCol, bCol, cCol, coCol, eCol, dCol, mCol, fCol] = await Promise.all([
-      cols.searchCache(),
-      cols.bundleCache(),
-      cols.cardCache(),
-      cols.composerCache(),
-      cols.entrypointCache(),
-      cols.detailCache(),
-      cols.marketStatsCache(),
-      cols.followSellCache(),
-    ]);
-
-    const skuFilter = keyword ? { sku: { $regex: keyword, $options: 'i' } } : {};
-
-    const [sDocs, bDocs, cDocs, coDocs, eDocs, dDocs, mDocs, fDocs] = await Promise.all([
-      sCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
-      bCol
-        .find(skuFilter, {
-          projection: { _id: 1, sku: 1, fetchedAt: 1, attrsEmptyVerifiedAt: 1, 'data.attributes': 1 },
-        })
-        .toArray(),
-      cCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
-      coCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
-      eCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
-      dCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
-      mCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
-      fCol.find(skuFilter, { projection: { _id: 1, sku: 1, fetchedAt: 1 } }).toArray(),
+    // 7 类缓存并行查询所有 SKU(仅取 _id/sku/fetchedAt/关键字段)
+    const [sDocs, bDocs, cDocs, rmDocs, dDocs, mDocs, fDocs] = await Promise.all([
+      daos.searchDao.findOverviewList(keyword),
+      daos.bundleDao.findOverviewList(keyword),
+      daos.cardDao.findOverviewList(keyword),
+      daos.richMediaDao.findOverviewList(keyword),
+      daos.detailDao.findOverviewList(keyword),
+      daos.marketStatsDao.findOverviewList(keyword),
+      daos.followSellDao.findOverviewList(keyword),
     ]);
 
     // 聚合所有 SKU
@@ -708,8 +650,7 @@ router.get('/admin/api/cache/overview', async (req, res, next) => {
           search: null,
           bundle: null,
           card: null,
-          composer: null,
-          entrypoint: null,
+          richMedia: null,
           detail: null,
           marketStats: null,
           followSell: null,
@@ -724,26 +665,16 @@ router.get('/admin/api/cache/overview', async (req, res, next) => {
     }
     for (const d of bDocs) {
       const sku = d.sku || d._id;
-      const item = ensure(sku);
-      const attrsEmpty = !hasAttrs(d.data);
-      let attrsStale = false;
-      if (attrsEmpty) {
-        const verifiedAt = d.attrsEmptyVerifiedAt ? new Date(d.attrsEmptyVerifiedAt).getTime() : 0;
-        attrsStale = !verifiedAt || Date.now() - verifiedAt >= ATTRS_EMPTY_REVERIFY_MS;
-      }
-      item.bundle = { fetchedAt: d.fetchedAt, attrsEmpty, attrsStale };
+      // bundle DAO 已预计算 attrsEmpty / attrsStale
+      ensure(sku).bundle = { fetchedAt: d.fetchedAt, attrsEmpty: d.attrsEmpty, attrsStale: d.attrsStale };
     }
     for (const d of cDocs) {
       const sku = d.sku || d._id;
       ensure(sku).card = { fetchedAt: d.fetchedAt };
     }
-    for (const d of coDocs) {
+    for (const d of rmDocs) {
       const sku = d.sku || d._id;
-      ensure(sku).composer = { fetchedAt: d.fetchedAt };
-    }
-    for (const d of eDocs) {
-      const sku = d.sku || d._id;
-      ensure(sku).entrypoint = { fetchedAt: d.fetchedAt };
+      ensure(sku).richMedia = { fetchedAt: d.fetchedAt };
     }
     for (const d of dDocs) {
       const sku = d.sku || d._id;
@@ -762,15 +693,14 @@ router.get('/admin/api/cache/overview', async (req, res, next) => {
       ensure(sku).followSell = { fetchedAt: d.fetchedAt, stale };
     }
 
-    // 排序:按最新 fetchedAt 降序(8 类取最大值)
+    // 排序:按最新 fetchedAt 降序(7 类取最大值)
     let items = Array.from(skuMap.values());
     items.sort((a, b) => {
       const aMax = Math.max(
         new Date(a.search?.fetchedAt || 0).getTime(),
         new Date(a.bundle?.fetchedAt || 0).getTime(),
         new Date(a.card?.fetchedAt || 0).getTime(),
-        new Date(a.composer?.fetchedAt || 0).getTime(),
-        new Date(a.entrypoint?.fetchedAt || 0).getTime(),
+        new Date(a.richMedia?.fetchedAt || 0).getTime(),
         new Date(a.detail?.fetchedAt || 0).getTime(),
         new Date(a.marketStats?.fetchedAt || 0).getTime(),
         new Date(a.followSell?.fetchedAt || 0).getTime()
@@ -779,8 +709,7 @@ router.get('/admin/api/cache/overview', async (req, res, next) => {
         new Date(b.search?.fetchedAt || 0).getTime(),
         new Date(b.bundle?.fetchedAt || 0).getTime(),
         new Date(b.card?.fetchedAt || 0).getTime(),
-        new Date(b.composer?.fetchedAt || 0).getTime(),
-        new Date(b.entrypoint?.fetchedAt || 0).getTime(),
+        new Date(b.richMedia?.fetchedAt || 0).getTime(),
         new Date(b.detail?.fetchedAt || 0).getTime(),
         new Date(b.marketStats?.fetchedAt || 0).getTime(),
         new Date(b.followSell?.fetchedAt || 0).getTime()
@@ -797,7 +726,7 @@ router.get('/admin/api/cache/overview', async (req, res, next) => {
   }
 });
 
-// GET /admin/api/cache/opi-preview/:sku — 从 MongoDB 缓存合成 OPI v3 预览
+// GET /admin/api/cache/opi-preview/:sku — 从缓存合成 OPI v3 预览
 // query: storeId(可选,用于字典白名单过滤)
 // 返回: { item: opiItem, sources: {...} }
 router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
@@ -805,30 +734,21 @@ router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
     const sku = String(req.params.sku);
     const storeId = String(req.query.storeId || '');
 
-    // 并行读取 6 类缓存(cols.xxxCache() 返回 Promise<Collection>,需先 await)
-    const [sCol, bCol, cCol, coCol, eCol, dCol] = await Promise.all([
-      cols.searchCache(),
-      cols.bundleCache(),
-      cols.cardCache(),
-      cols.composerCache(),
-      cols.entrypointCache(),
-      cols.detailCache(),
-    ]);
-    const [sDoc, bDoc, cDoc, coDoc, eDoc, dDoc] = await Promise.all([
-      sCol.findOne({ _id: sku }),
-      bCol.findOne({ _id: sku }),
-      cCol.findOne({ _id: sku }),
-      coCol.findOne({ _id: sku }),
-      eCol.findOne({ _id: sku }),
-      dCol.findOne({ _id: sku }),
+    // 并行读取 5 类缓存
+    // richMedia 合并了原 entrypoint(mp4/richContent/description/hashtags/gallery)+ composer(fields/widgetStates)
+    const [sDoc, bDoc, cDoc, rmDoc, dDoc] = await Promise.all([
+      daos.searchDao.findById(sku),
+      daos.bundleDao.findById(sku),
+      daos.cardDao.findById(sku),
+      daos.richMediaDao.findById(sku),
+      daos.detailDao.findById(sku),
     ]);
 
     const sources = {
       search: !!sDoc,
       bundle: !!bDoc,
       card: !!cDoc,
-      composer: !!coDoc,
-      entrypoint: !!eDoc,
+      richMedia: !!rmDoc,
       detail: !!dDoc,
     };
 
@@ -839,7 +759,7 @@ router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
     const bundleData = bDoc?.data || null;
     const searchData = sDoc?.data || null;
     const cardData = cDoc?.data || null;
-    const entrypointData = eDoc?.data || null;
+    const richMediaData = rmDoc?.data || null;
     const detailData = dDoc?.data || null;
 
     // 从 search 缓存提取 sv(归一化后的 sourceVariant)
@@ -853,11 +773,13 @@ router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
       ? bundleItem.attributes.filter((a) => Number(a.complex_id) > 0)
       : [];
 
-    // images:优先 bundle.primary_image + bundle.images,兜底 entrypoint.gallery / detail.images / card.image
+    // images:优先 bundle.primary_image + bundle.images,兜底 richMedia.gallery / richMedia.fields.images / detail.images / card.image
+    // (richMedia.gallery 新采集才有,旧数据可能为空,此时回退 richMedia.fields.images)
+    const rmGallery = richMediaData?.gallery?.length ? richMediaData.gallery : (richMediaData?.fields?.images || []);
     let primaryImage = bundleItem.primary_image || '';
     let images = Array.isArray(bundleItem.images) ? [...bundleItem.images] : [];
-    if (!primaryImage && entrypointData?.gallery?.length) primaryImage = entrypointData.gallery[0];
-    if (!images.length && entrypointData?.gallery?.length) images = entrypointData.gallery.slice(1);
+    if (!primaryImage && rmGallery.length) primaryImage = rmGallery[0];
+    if (!images.length && rmGallery.length) images = rmGallery.slice(1);
     if (!images.length && detailData?.images?.length) images = [...detailData.images];
     if (!primaryImage && detailData?.images?.length) primaryImage = detailData.images[0];
     if (!primaryImage && cardData?.image) primaryImage = cardData.image;
@@ -873,11 +795,11 @@ router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
     if (!name) name = detailData?.title || '';
     if (!name) name = cardData?.name || '';
 
-    // description:优先 bundle attr 4191,兜底 entrypoint.description
+    // description:优先 bundle attr 4191,兜底 richMedia.description
     let description = '';
     const bAttr4191 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4191');
     if (bAttr4191?.values?.[0]?.value) description = bAttr4191.values[0].value;
-    if (!description) description = entrypointData?.description || '';
+    if (!description) description = richMediaData?.description || '';
 
     // price:detail.price(原 dynamic),兜底 card.price
     const price = detailData?.price || cardData?.price || '';
@@ -906,7 +828,7 @@ router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
       height: bundleItem.height || '',
       scraped_description: description,
       barcode,
-      videoUrl: entrypointData?.mp4 || '',
+      videoUrl: richMediaData?.mp4 || '',
       videoCover: '',
     };
 
@@ -944,7 +866,7 @@ router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
 // ozon_auto_collect_log 集合的统计/列表/详情/写入端点
 // 鉴权:全局 JWT(authMiddleware);POST /log 由 SW 持 token 调用
 
-const LOG_TYPES = ['card', 'detail', 'composer', 'entrypoint', 'search', 'bundle', 'marketStats', 'followSell'];
+const LOG_TYPES = ['card', 'detail', 'pdp', 'search', 'bundle', 'marketStats', 'followSell'];
 const LOG_SOURCES = ['shop-page', 'pdp'];
 const LOG_STORE_CLASSES = ['chinese', 'non-chinese', 'unclassified'];
 const LOG_STATUS_KEYS = ['success', 'partial', 'failed', 'skipped', 'antibot'];
@@ -963,39 +885,21 @@ function emptyLogStats() {
   };
 }
 
-// 聚合指定时间范围内的采集日志统计
-async function aggregateLogStats(matchStage) {
-  const col = await cols.autoCollectLog();
-  const [result] = await col
-    .aggregate([
-      matchStage,
-      {
-        $facet: {
-          statusCounts: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
-          typeCounts: [{ $unwind: '$results' }, { $group: { _id: '$results.type', count: { $sum: 1 } } }],
-          sourceCounts: [{ $group: { _id: '$source', count: { $sum: 1 } } }],
-          storeClassCounts: [{ $group: { _id: '$storeClassified', count: { $sum: 1 } } }],
-          total: [{ $count: 'count' }],
-        },
-      },
-    ])
-    .toArray();
-
+// 将 DAO aggregateStats 返回值转换为前端期望的 legacy 形状
+function toLegacyLogStats(daoResult) {
   const stats = emptyLogStats();
-  stats.total = result.total?.[0]?.count || 0;
-  for (const s of result.statusCounts || []) {
-    if (LOG_STATUS_KEYS.includes(s._id)) stats[s._id] = s.count;
-  }
-  for (const t of result.typeCounts || []) {
-    if (t._id != null) stats.byType[t._id] = (stats.byType[t._id] || 0) + t.count;
-  }
-  for (const s of result.sourceCounts || []) {
-    if (s._id != null) stats.bySource[s._id] = (stats.bySource[s._id] || 0) + s.count;
-  }
-  for (const s of result.storeClassCounts || []) {
-    if (s._id != null) stats.byStoreClass[s._id] = (stats.byStoreClass[s._id] || 0) + s.count;
-  }
+  stats.total = daoResult.total || 0;
+  for (const k of LOG_STATUS_KEYS) stats[k] = daoResult.statusCounts?.[k] || 0;
+  stats.byType = { ...stats.byType, ...(daoResult.typeCounts || {}) };
+  stats.bySource = { ...stats.bySource, ...(daoResult.sourceCounts || {}) };
+  stats.byStoreClass = { ...stats.byStoreClass, ...(daoResult.storeClassCounts || {}) };
   return stats;
+}
+
+// 聚合指定时间范围内的采集日志统计
+async function aggregateLogStats(filter) {
+  const daoResult = await daos.autoCollectLogDao.aggregateStats(filter);
+  return toLegacyLogStats(daoResult);
 }
 
 // 计算今日 00:00(本地时区)
@@ -1020,8 +924,8 @@ router.get('/admin/api/auto-collect/stats', async (req, res, next) => {
     const todayStart = startOfToday();
     const weekStart = startOfWeek();
     const [today, week] = await Promise.all([
-      aggregateLogStats({ $match: { collectedAt: { $gte: todayStart } } }),
-      aggregateLogStats({ $match: { collectedAt: { $gte: weekStart } } }),
+      aggregateLogStats({ collectedAtGte: todayStart }),
+      aggregateLogStats({ collectedAtGte: weekStart }),
     ]);
     return res.json(ok({ today, week }));
   } catch (e) {
@@ -1043,33 +947,21 @@ router.get('/admin/api/auto-collect/logs', async (req, res, next) => {
     const startTime = req.query.startTime ? new Date(Number(req.query.startTime) || req.query.startTime) : null;
     const endTime = req.query.endTime ? new Date(Number(req.query.endTime) || req.query.endTime) : null;
 
-    const query = {};
-    if (sku) query.sku = sku;
+    const filter = {};
+    if (sku) filter.sku = sku;
     if (statusRaw) {
       const statuses = statusRaw
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      query.status = statuses.length === 1 ? statuses[0] : { $in: statuses };
+      filter.status = statuses.length === 1 ? statuses[0] : statuses;
     }
-    if (source) query.source = source;
-    if (sellerSlug) query.sellerSlug = sellerSlug;
-    if (startTime || endTime) {
-      query.collectedAt = {};
-      if (startTime) query.collectedAt.$gte = startTime;
-      if (endTime) query.collectedAt.$lte = endTime;
-    }
+    if (source) filter.source = source;
+    if (sellerSlug) filter.sellerSlug = sellerSlug;
+    if (startTime) filter.startTime = startTime;
+    if (endTime) filter.endTime = endTime;
 
-    const col = await cols.autoCollectLog();
-    const [total, items] = await Promise.all([
-      col.countDocuments(query),
-      col
-        .find(query, { projection: { _id: 0 } })
-        .sort({ collectedAt: -1 })
-        .skip((currentPage - 1) * pageSize)
-        .limit(pageSize)
-        .toArray(),
-    ]);
+    const { items, total } = await daos.autoCollectLogDao.findPagedList(filter, currentPage, pageSize);
 
     return res.json(ok({ items, total, current: currentPage, pageSize }));
   } catch (e) {
@@ -1082,11 +974,7 @@ router.get('/admin/api/auto-collect/logs', async (req, res, next) => {
 router.get('/admin/api/auto-collect/logs/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.autoCollectLog();
-    const items = await col
-      .find({ sku }, { projection: { _id: 0 } })
-      .sort({ collectedAt: -1 })
-      .toArray();
+    const items = await daos.autoCollectLogDao.findBySku(sku);
     return res.json(ok({ items }));
   } catch (e) {
     logger.warn({ err: e.message }, '[auto-collect] logs by sku failed');
@@ -1117,8 +1005,7 @@ router.post('/admin/api/auto-collect/log', async (req, res, next) => {
       collectedAt: body.collectedAt ? new Date(body.collectedAt) : new Date(),
     };
 
-    const col = await cols.autoCollectLog();
-    const r = await col.insertOne(doc);
+    const r = await daos.autoCollectLogDao.insert(doc);
     return res.json(ok({ insertedId: r.insertedId }));
   } catch (e) {
     logger.warn({ err: e.message }, '[auto-collect] log insert failed');
@@ -1135,8 +1022,7 @@ router.post('/admin/api/auto-collect/log', async (req, res, next) => {
 router.get('/admin/api/store-classification/:slug', async (req, res, next) => {
   try {
     const slug = String(req.params.slug);
-    const col = await cols.storeClassification();
-    const doc = await col.findOne({ _id: slug });
+    const doc = await daos.storeClassificationDao.getBySlug(slug);
     if (!doc) return res.status(404).json({ error: 'not found' });
     return res.json(
       ok({
@@ -1182,8 +1068,7 @@ router.post('/admin/api/store-classification/:slug', async (req, res, next) => {
       update.sellerId = String(body.sellerId);
     }
 
-    const col = await cols.storeClassification();
-    await col.updateOne({ _id: slug }, { $set: update }, { upsert: true });
+    await daos.storeClassificationDao.upsertBySlug(slug, update);
     return res.json(ok({ upserted: true, sellerSlug: slug }));
   } catch (e) {
     logger.warn({ err: e.message }, '[store-classification] upsert failed');
@@ -1195,8 +1080,7 @@ router.post('/admin/api/store-classification/:slug', async (req, res, next) => {
 router.delete('/admin/api/store-classification/:slug', async (req, res, next) => {
   try {
     const slug = String(req.params.slug);
-    const col = await cols.storeClassification();
-    const r = await col.deleteOne({ _id: slug });
+    const r = await daos.storeClassificationDao.deleteBySlug(slug);
     return res.json(ok({ deletedCount: r.deletedCount }));
   } catch (e) {
     logger.warn({ err: e.message }, '[store-classification] delete failed');
@@ -1212,29 +1096,13 @@ router.get('/admin/api/store-classification', async (req, res, next) => {
     const currentPage = Math.max(1, Number(req.query.currentPage) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 20));
 
-    const query = {};
+    const filter = {};
     // isChinese: 'true' → true, 'false' → false, 其他(包括不传/null) → 不过滤
-    if (req.query.isChinese === 'true') query.isChinese = true;
-    else if (req.query.isChinese === 'false') query.isChinese = false;
+    if (req.query.isChinese === 'true') filter.isChinese = true;
+    else if (req.query.isChinese === 'false') filter.isChinese = false;
+    if (keyword) filter.keyword = keyword;
 
-    if (keyword) {
-      query.$or = [
-        { sellerName: { $regex: keyword, $options: 'i' } },
-        { sellerSlug: { $regex: keyword, $options: 'i' } },
-        { sellerId: { $regex: keyword, $options: 'i' } },
-      ];
-    }
-
-    const col = await cols.storeClassification();
-    const [total, items] = await Promise.all([
-      col.countDocuments(query),
-      col
-        .find(query, { projection: { _id: 0 } })
-        .sort({ lastSeenAt: -1 })
-        .skip((currentPage - 1) * pageSize)
-        .limit(pageSize)
-        .toArray(),
-    ]);
+    const { items, total } = await daos.storeClassificationDao.findPagedList(filter, currentPage, pageSize);
 
     return res.json(ok({ items, total, current: currentPage, pageSize }));
   } catch (e) {
@@ -1253,8 +1121,7 @@ router.get('/admin/api/store-classification', async (req, res, next) => {
 router.get('/admin/api/store-sku/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.storeSku();
-    const doc = await col.findOne({ _id: sku });
+    const doc = await daos.storeSkuDao.getBySku(sku);
     if (!doc) return res.status(404).json({ error: 'not found' });
     return res.json(ok(doc));
   } catch (e) {
@@ -1273,27 +1140,21 @@ router.post('/admin/api/store-sku', async (req, res, next) => {
     if (!sku) return res.status(400).json({ error: 'missing sku' });
     if (!body.sellerId) return res.status(400).json({ error: 'missing sellerId' });
 
-    const now = new Date();
-    const col = await cols.storeSku();
-
-    // 用 $setOnInsert 写 firstSeenAt(仅首次创建时),$set 更新其它字段
-    const setOnInsert = { firstSeenAt: now };
-    const set = {
+    const setFields = {
       sellerId: String(body.sellerId),
       sellerSlug: body.sellerSlug != null ? String(body.sellerSlug) : '',
-      lastSeenAt: now,
     };
     // sellerName 只在非空时更新,避免 SW 采集上报(sellerName=null)覆盖 panel 已写入的店铺名
     if (body.sellerName != null && String(body.sellerName) !== '') {
-      set.sellerName = String(body.sellerName);
+      setFields.sellerName = String(body.sellerName);
     }
     if (body.lastCollectAt) {
-      set.lastCollectAt = new Date(body.lastCollectAt);
-      set.lastCollectStatus = body.lastCollectStatus != null ? String(body.lastCollectStatus) : '';
-      set.lastCollectResults = Array.isArray(body.lastCollectResults) ? body.lastCollectResults : [];
+      setFields.lastCollectAt = new Date(body.lastCollectAt).toISOString();
+      setFields.lastCollectStatus = body.lastCollectStatus != null ? String(body.lastCollectStatus) : '';
+      setFields.lastCollectResults = Array.isArray(body.lastCollectResults) ? body.lastCollectResults : [];
     }
 
-    await col.updateOne({ _id: sku }, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+    await daos.storeSkuDao.upsertBySku(sku, setFields);
     return res.json(ok({ upserted: true, sku }));
   } catch (e) {
     logger.error({ err: e, sku: body?.sku, sellerId: body?.sellerId, body }, '[store-sku] upsert failed');
@@ -1305,8 +1166,7 @@ router.post('/admin/api/store-sku', async (req, res, next) => {
 router.delete('/admin/api/store-sku/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const col = await cols.storeSku();
-    const r = await col.deleteOne({ _id: sku });
+    const r = await daos.storeSkuDao.deleteBySku(sku);
     return res.json(ok({ deletedCount: r.deletedCount }));
   } catch (e) {
     logger.warn({ err: e.message }, '[store-sku] delete failed');
@@ -1322,24 +1182,21 @@ router.get('/admin/api/store-sku/by-store/:slug', async (req, res, next) => {
     const slug = String(req.params.slug || '');
     if (!slug) return res.status(400).json({ error: 'missing slug' });
 
-    const skuCol = await cols.storeSku();
-    const cardCol = await cols.cardCache();
-
     // 查该店铺所有 SKU 关联记录
-    const skuDocs = await skuCol.find({ sellerSlug: slug }).sort({ lastSeenAt: -1 }).toArray();
+    const skuDocs = await daos.storeSkuDao.findBySellerSlug(slug);
     if (!skuDocs.length) return res.json(ok({ items: [], total: 0 }));
 
-    // 批量查 card 缓存(一次 $in 查询)
-    const skus = skuDocs.map((d) => d._id);
-    const cardDocs = await cardCol.find({ _id: { $in: skus } }).toArray();
-    const cardMap = new Map(cardDocs.map((d) => [d._id, d.data || null]));
+    // 批量查 card 缓存(DAO findManyBySkuList)
+    const skus = skuDocs.map((d) => d.sku || d._id);
+    const cardDocs = await daos.cardDao.findManyBySkuList(skus);
+    const cardMap = new Map(cardDocs.map((d) => [d.sku || d._id, d.data || null]));
 
     const items = skuDocs.map((d) => ({
-      sku: d._id,
+      sku: d.sku || d._id,
       sellerId: d.sellerId || '',
       sellerSlug: d.sellerSlug || '',
       sellerName: d.sellerName || '',
-      card: cardMap.get(d._id) || null,
+      card: cardMap.get(d.sku || d._id) || null,
     }));
 
     return res.json(ok({ items, total: items.length }));
@@ -1357,28 +1214,9 @@ router.get('/admin/api/store-sku', async (req, res, next) => {
     const currentPage = Math.max(1, Number(req.query.currentPage) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 20));
 
-    const query = {};
-    if (keyword) {
-      query.$or = [
-        { _id: { $regex: keyword, $options: 'i' } },
-        { sellerSlug: { $regex: keyword, $options: 'i' } },
-        { sellerName: { $regex: keyword, $options: 'i' } },
-        { sellerId: { $regex: keyword, $options: 'i' } },
-      ];
-    }
+    const { items, total } = await daos.storeSkuDao.findPagedList(keyword, currentPage, pageSize);
 
-    const col = await cols.storeSku();
-    const [total, items] = await Promise.all([
-      col.countDocuments(query),
-      col
-        .find(query)
-        .sort({ lastSeenAt: -1 })
-        .skip((currentPage - 1) * pageSize)
-        .limit(pageSize)
-        .toArray(),
-    ]);
-
-    // _id 即 SKU,补到 sku 字段方便前端展示
+    // _id 即 SKU,补到 sku 字段方便前端展示(DAO 已补 sku,这里兜底)
     for (const it of items) {
       it.sku = it.sku || it._id;
     }

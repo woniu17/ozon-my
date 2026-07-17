@@ -174,6 +174,182 @@ CREATE TABLE IF NOT EXISTS follow_sell_task_payloads (
 CREATE INDEX IF NOT EXISTS idx_fstp_task ON follow_sell_task_payloads(local_task_id DESC);
 CREATE INDEX IF NOT EXISTS idx_fstp_created ON follow_sell_task_payloads(created_at DESC);
 
+-- ════════════════════════════════════════════════════════════════
+-- 以下表用于缓存/采集日志/店铺分类/采集队列(可选 MongoDB 替代)
+-- 启用条件:DB_DRIVER=sqlite(默认)
+-- 启用后由 src/db/adapter.js → src/db/dao/sqlite/* 使用
+-- ════════════════════════════════════════════════════════════════
+
+-- ── 9 类缓存表(_id=sku, data=JSON, fetchedAt=ISO8601) ───────
+CREATE TABLE IF NOT EXISTS ozon_search_cache (
+  _id        TEXT PRIMARY KEY,        -- = sku
+  data       TEXT NOT NULL,           -- JSON
+  fetchedAt  TEXT NOT NULL            -- ISO8601
+);
+
+CREATE TABLE IF NOT EXISTS ozon_bundle_cache (
+  _id                   TEXT PRIMARY KEY,
+  data                  TEXT NOT NULL,
+  bundleId              TEXT,
+  attrsEmptyVerifiedAt  TEXT,         -- 空属性 6h 重验
+  fetchedAt             TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ozon_card_cache (
+  _id        TEXT PRIMARY KEY,
+  data       TEXT NOT NULL,
+  fetchedAt  TEXT NOT NULL
+);
+
+-- legacy(已被 richMedia 合并,保留供老数据补写 L2)
+CREATE TABLE IF NOT EXISTS ozon_composer_cache (
+  _id        TEXT PRIMARY KEY,
+  data       TEXT NOT NULL,
+  fetchedAt  TEXT NOT NULL
+);
+
+-- legacy(已被 richMedia 合并,保留供老数据补写 L2)
+CREATE TABLE IF NOT EXISTS ozon_entrypoint_cache (
+  _id        TEXT PRIMARY KEY,
+  data       TEXT NOT NULL,
+  fetchedAt  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ozon_rich_media_cache (
+  _id        TEXT PRIMARY KEY,
+  data       TEXT NOT NULL,           -- { mp4, richContent, description, hashtags, gallery, fields, widgetStates, hitEndpoints, ... }
+  fetchedAt  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ozon_detail_cache (
+  _id        TEXT PRIMARY KEY,
+  data       TEXT NOT NULL,
+  fetchedAt  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ozon_market_stats_cache (
+  _id        TEXT PRIMARY KEY,
+  data       TEXT NOT NULL,
+  fetchedAt  TEXT NOT NULL,
+  l2Synced   INTEGER DEFAULT 0       -- 0/1
+);
+
+CREATE TABLE IF NOT EXISTS ozon_follow_sell_cache (
+  _id        TEXT PRIMARY KEY,
+  data       TEXT NOT NULL,
+  fetchedAt  TEXT NOT NULL,
+  l2Synced   INTEGER DEFAULT 0
+);
+
+-- ── 采集日志(原 ozon_auto_collect_log) ───────────────────────
+CREATE TABLE IF NOT EXISTS ozon_auto_collect_log (
+  _id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  sku              TEXT NOT NULL,
+  source           TEXT,             -- 'shop-page' | 'pdp' | NULL
+  sellerSlug       TEXT,
+  storeClassified  TEXT,             -- 'chinese' | 'non-chinese' | 'unclassified'
+  depth            INTEGER,
+  status           TEXT NOT NULL,   -- 'success' | 'partial' | 'failed' | 'skipped' | 'antibot'
+  results          TEXT NOT NULL,   -- JSON 数组:[{type,hit,error?}]
+  totalDuration    INTEGER,
+  collectedAt      TEXT NOT NULL    -- ISO8601
+);
+CREATE INDEX IF NOT EXISTS idx_log_sku_time    ON ozon_auto_collect_log(sku, collectedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_log_status_time ON ozon_auto_collect_log(status, collectedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_log_time        ON ozon_auto_collect_log(collectedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_log_seller_time ON ozon_auto_collect_log(sellerSlug, collectedAt DESC);
+
+-- ── 店铺分类 ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS ozon_store_classification (
+  _id           TEXT PRIMARY KEY,    -- = sellerSlug
+  sellerSlug    TEXT NOT NULL,
+  sellerId      TEXT,                -- 可为空/空串
+  sellerName    TEXT,
+  isChinese     INTEGER,             -- NULL/0/1
+  classifiedBy  TEXT,
+  classifiedAt  TEXT,
+  companyInfo   TEXT,                -- JSON
+  lastSeenAt    TEXT,
+  lastSeenUrl   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sc_chinese ON ozon_store_classification(isChinese);
+CREATE INDEX IF NOT EXISTS idx_sc_name    ON ozon_store_classification(sellerName);
+CREATE INDEX IF NOT EXISTS idx_sc_seen    ON ozon_store_classification(lastSeenAt DESC);
+-- partialFilterExpression 唯一索引:仅对非空 sellerId 建唯一约束
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sc_sellerId_unique
+  ON ozon_store_classification(sellerId)
+  WHERE sellerId IS NOT NULL AND sellerId != '';
+
+-- ── 店铺 SKU 关联 ───────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS ozon_store_sku (
+  _id                 TEXT PRIMARY KEY,    -- = sku
+  sellerId            TEXT,
+  sellerSlug          TEXT,
+  sellerName          TEXT,
+  firstSeenAt         TEXT,                -- 仅首次插入
+  lastSeenAt          TEXT,
+  lastCollectAt       TEXT,
+  lastCollectStatus   TEXT,
+  lastCollectResults  TEXT                 -- JSON 数组
+);
+CREATE INDEX IF NOT EXISTS idx_ss_seller_seen    ON ozon_store_sku(sellerId, lastSeenAt DESC);
+CREATE INDEX IF NOT EXISTS idx_ss_seller_collect ON ozon_store_sku(sellerId, lastCollectAt DESC);
+CREATE INDEX IF NOT EXISTS idx_ss_collect        ON ozon_store_sku(lastCollectAt DESC);
+
+-- ── 采集队列任务 ─────────────────────────────────────────────
+-- 设计:快照文档单独建表,避免 _id='__snapshot__' 与 sku unique 约束冲突
+CREATE TABLE IF NOT EXISTS collect_queue_tasks (
+  _id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  sku            TEXT NOT NULL UNIQUE,
+  sellerSlug     TEXT,
+  sellerId       TEXT,
+  domInfo        TEXT,                -- JSON
+  status         TEXT NOT NULL,      -- 'pending'|'running'|'failed_retry'|'failed_final'|'failed_partial'|'success'
+  attempts       INTEGER DEFAULT 0,
+  maxAttempts    INTEGER,
+  nextRetryAt    TEXT,
+  lastError      TEXT,                -- JSON:{type,...}
+  startedAt      TEXT,
+  finishedAt     TEXT,
+  duration       INTEGER,             -- 任务耗时(ms),SW result 接口上报
+  steps          TEXT,                -- JSON
+  result         TEXT,                -- JSON
+  createdAt      TEXT NOT NULL,
+  updatedAt      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_status_retry ON collect_queue_tasks(status, nextRetryAt);
+CREATE INDEX IF NOT EXISTS idx_task_created      ON collect_queue_tasks(createdAt DESC);
+CREATE INDEX IF NOT EXISTS idx_task_updated      ON collect_queue_tasks(updatedAt DESC);
+
+-- 队列快照(替代原 _id='__snapshot__' 特殊文档,单行表)
+CREATE TABLE IF NOT EXISTS collect_queue_snapshot (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  pending        INTEGER DEFAULT 0,
+  running        INTEGER DEFAULT 0,
+  success        INTEGER DEFAULT 0,
+  failed         INTEGER DEFAULT 0,
+  syncedAt       TEXT,
+  consumePaused  INTEGER,             -- NULL/0/1
+  lastConsumeAt  TEXT
+);
+INSERT OR IGNORE INTO collect_queue_snapshot (id) VALUES (1);
+
+-- ── 采集队列操作指令 ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS collect_queue_ops (
+  _id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  op           TEXT NOT NULL,         -- 'retry'|'delete'|'clear'|'pause'|'resume'|'rescan'
+  sku          TEXT,                  -- 可为 NULL(clear/pause/resume/rescan)
+  params       TEXT,                  -- JSON
+  ts           TEXT NOT NULL,
+  processed    INTEGER DEFAULT 0,     -- 0/1
+  processedAt  TEXT                   -- 非 NULL 时由 TTL 定时任务清理(7 天)
+);
+CREATE INDEX IF NOT EXISTS idx_ops_pending_ts   ON collect_queue_ops(processed, ts);
+CREATE INDEX IF NOT EXISTS idx_ops_ts           ON collect_queue_ops(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_ops_dedup        ON collect_queue_ops(op, sku, processed);
+CREATE INDEX IF NOT EXISTS idx_ops_processedAt  ON collect_queue_ops(processedAt);
+
+
 -- 上架模板(跟卖面板人工输入值的预设方案)
 -- 字段对齐 mv-listing-config(chrome.storage.local 持久化的那套)
 -- config_json 结构: {brand, imageOrder, currency, mergeEnabled, uploadMode,

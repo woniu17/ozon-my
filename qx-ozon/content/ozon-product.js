@@ -1556,7 +1556,7 @@
     fetchVariantGallery,
     jzCollectPageRichContent,
     jzInjectRichContentAttr,
-    lucideSvg: _lucideSvg,
+    lucideSvg: (name) => _lucideSvg(name),
   };
 
   function createActionBar() {
@@ -9470,42 +9470,29 @@
     const TAG = '[jz-rc][gallery]';
     console.log(TAG, 'START variantLink=', variantLink, 'path=', path, 'urlSku=', urlSku);
 
-    // ── 缓存优先:entrypoint → composer ──
+    // ── 缓存优先:richMedia(合并自旧 entrypoint + composer 缓存) ──
     if (urlSku && typeof window.sendMessage === 'function') {
       try {
-        const epResp = await window.sendMessage('entrypointCacheGet', { sku: urlSku });
-        const epData = epResp?.ok ? epResp.data : null;
-        if (epData && (epData.gallery?.length || epData.richContent)) {
-          console.log(
-            TAG,
-            'cache HIT entrypoint, gallery=',
-            epData.gallery?.length,
-            'richContentLen=',
-            epData.richContent?.length
-          );
-          return {
-            images: Array.isArray(epData.gallery) ? epData.gallery : [],
-            richContent: epData.richContent || '',
-            endpoint: 'entrypoint-cache',
-          };
-        }
-      } catch (e) {
-        console.log(TAG, 'entrypoint cache get failed:', e?.message);
-      }
-      try {
-        const ccResp = await window.sendMessage('composerCacheGet', { sku: urlSku });
-        const ccData = ccResp?.ok ? ccResp.data : null;
-        if (ccData && ccData.widgetStates) {
-          const states = ccData.widgetStates;
-          const imgs = _extractGalleryFromWidgetStates(states, upgrade, norm);
-          const rc = jzExtractRichContentFromStates(states);
-          if (imgs.length || rc) {
-            console.log(TAG, 'cache HIT composer, gallery=', imgs.length, 'richContentLen=', rc.length);
-            return { images: imgs, richContent: rc, endpoint: 'composer-cache' };
+        const rmResp = await window.sendMessage('richMediaCacheGet', { sku: urlSku });
+        const rmData = rmResp?.ok ? rmResp.data : null;
+        if (rmData) {
+          const cachedImages = Array.isArray(rmData.gallery)
+            ? rmData.gallery
+            : Array.isArray(rmData.fields?.images)
+              ? rmData.fields.images
+              : [];
+          const cachedRc = rmData.richContent || '';
+          if (cachedImages.length || cachedRc) {
+            console.log(TAG, 'cache HIT richMedia, gallery=', cachedImages.length, 'richContentLen=', cachedRc.length);
+            return {
+              images: cachedImages,
+              richContent: cachedRc,
+              endpoint: 'richMedia-cache',
+            };
           }
         }
       } catch (e) {
-        console.log(TAG, 'composer cache get failed:', e?.message);
+        console.log(TAG, 'richMedia cache get failed:', e?.message);
       }
     }
 
@@ -9691,23 +9678,8 @@
       hitEndpoint
     );
 
-    // 真调成功后异步写 entrypoint 缓存(按 sku 索引,蒸馏后字段)
-    if (urlSku && hitEndpoint === 'entrypoint-api' && typeof window.sendMessage === 'function') {
-      try {
-        window.sendMessage('entrypointCacheSet', {
-          sku: urlSku,
-          data: {
-            gallery: collectedImages || [],
-            richContent: richContent || '',
-            description: '',
-            hashtags: [],
-            mp4: null,
-          },
-        });
-      } catch {
-        /* fire-and-forget */
-      }
-    }
+    // content 侧只读 richMedia 缓存,不写回(SW 侧 fetchPdpBundleViaBuyerTab 负责写完整
+    // media+fields+widgetStates;此处仅做同源 fetch 兜底,避免 partial 写覆盖 SW 的完整数据)。
 
     if (collectedImages && collectedImages.length > 0)
       return { images: collectedImages, richContent, endpoint: hitEndpoint };

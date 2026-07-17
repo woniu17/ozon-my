@@ -141,6 +141,11 @@
     }
 
     static create(options) {
+      // 全局判重:防止多个 content_scripts(如 PDP 上 ozon-product.js 和
+      // ozon-data-panel.js 都调 create)挂出多个面板。已存在则直接复用。
+      if (window.__qxCollectorPanel && window.__qxCollectorPanel.panelEl) {
+        return window.__qxCollectorPanel;
+      }
       var panel = new QXCollectorPanel(options);
       panel.mount();
       return panel;

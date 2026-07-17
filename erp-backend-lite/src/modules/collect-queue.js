@@ -1,10 +1,11 @@
 // 采集队列管理接口(ERP 镜像 + 操作指令)
 // 路由挂载在 /admin/api/collect-queue,走全局 JWT 鉴权(authMiddleware)
 import { Router } from 'express';
-import { ObjectId } from 'mongodb';
-import { cols } from '../db/mongo.js';
+import { getDaos } from '../db/adapter.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
+
+const daos = await getDaos();
 
 const router = Router();
 
@@ -24,20 +25,13 @@ function isValidStatus(status) {
   return TASK_STATUSES.includes(status);
 }
 
-function nowDate() {
-  return new Date();
-}
-
 // ── 队列统计 ────────────────────────────────────────────────
 
 // GET /admin/api/collect-queue/stats
 // 返回各状态任务数 + 今日完成/失败 + 熔断状态(从最近 ANTIBOT_BLOCKED 错误推导)+ consumePaused(从 sync-snapshot 读取)
 router.get('/admin/api/collect-queue/stats', async (req, res, next) => {
   try {
-    const col = await cols.collectQueueTasks();
-    const statusCounts = await col
-      .aggregate([{ $match: { _id: { $ne: '__snapshot__' } } }, { $group: { _id: '$status', count: { $sum: 1 } } }])
-      .toArray();
+    const statusCounts = await daos.collectQueueTasksDao.aggregateStatusCounts();
 
     const byStatus = Object.fromEntries(TASK_STATUSES.map((s) => [s, 0]));
     for (const s of statusCounts) {
@@ -48,18 +42,13 @@ router.get('/admin/api/collect-queue/stats', async (req, res, next) => {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const [successToday, failedFinalToday] = await Promise.all([
-      col.countDocuments({ status: 'success', finishedAt: { $gte: todayStart } }),
-      col.countDocuments({ status: 'failed_final', finishedAt: { $gte: todayStart } }),
+      daos.collectQueueTasksDao.countTodayByStatus('success', todayStart),
+      daos.collectQueueTasksDao.countTodayByStatus('failed_final', todayStart),
     ]);
 
     // 推导熔断:最近 10 分钟内有 ANTIBOT_BLOCKED 终态任务则认为熔断中
-    const latestAntibot = await col.findOne(
-      {
-        status: 'failed_final',
-        'lastError.type': 'ANTIBOT_BLOCKED',
-        finishedAt: { $gte: new Date(Date.now() - CIRCUIT_BREAKER_MS) },
-      },
-      { sort: { finishedAt: -1 }, projection: { finishedAt: 1, lastError: 1 } }
+    const latestAntibot = await daos.collectQueueTasksDao.findLatestAntibotBlocked(
+      new Date(Date.now() - CIRCUIT_BREAKER_MS)
     );
 
     const circuitBreaker = latestAntibot
@@ -71,7 +60,7 @@ router.get('/admin/api/collect-queue/stats', async (req, res, next) => {
       : { active: false, triggeredAt: null, remainingMs: 0 };
 
     // 从 sync-snapshot 读取 consumePaused / lastConsumeAt(ERP 无法直接访问 chrome.storage,由 SW 上报)
-    const snapshot = await col.findOne({ _id: '__snapshot__' }, { projection: { consumePaused: 1, lastConsumeAt: 1 } });
+    const snapshot = await daos.collectQueueTasksDao.findSnapshot();
 
     return res.json(
       ok({
@@ -99,18 +88,12 @@ router.get('/admin/api/collect-queue/list', async (req, res, next) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 20));
 
-    const query = { _id: { $ne: '__snapshot__' } };
-    if (status && isValidStatus(status)) query.status = status;
+    const filter = {};
+    if (status && isValidStatus(status)) filter.status = status;
 
-    const col = await cols.collectQueueTasks();
     const [total, items] = await Promise.all([
-      col.countDocuments(query),
-      col
-        .find(query)
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * pageSize)
-        .limit(pageSize)
-        .toArray(),
+      daos.collectQueueTasksDao.countList(filter),
+      daos.collectQueueTasksDao.findList(filter, page, pageSize),
     ]);
 
     return res.json(ok({ items, total, page, pageSize }));
@@ -128,13 +111,34 @@ router.get('/admin/api/collect-queue/:sku', async (req, res, next) => {
     const sku = normalizeSku(req.params.sku);
     if (!sku) return res.status(422).json({ error: 'missing sku' });
 
-    const col = await cols.collectQueueTasks();
-    const doc = await col.findOne({ sku });
+    const doc = await daos.collectQueueTasksDao.getBySku(sku);
     if (!doc) return res.status(404).json({ error: 'not found' });
 
     return res.json(ok(doc));
   } catch (e) {
     logger.warn({ err: e.message, sku: req.params.sku }, '[collect-queue] detail failed');
+    next(e);
+  }
+});
+
+// POST /admin/api/collect-queue/batch body: { skus: [] }
+// 批量查询任务详情。返回 { [sku]: doc | null },不存在的 SKU 值为 null。
+// 上限 200 个 SKU,避免一次性查太多。
+router.post('/admin/api/collect-queue/batch', async (req, res, next) => {
+  try {
+    const rawSkus = Array.isArray(req.body?.skus) ? req.body.skus : [];
+    const skus = rawSkus.map(normalizeSku).filter(Boolean).slice(0, 200);
+    if (!skus.length) return res.status(422).json({ error: 'missing skus' });
+
+    const docs = await daos.collectQueueTasksDao.findBySkus(skus);
+
+    const map = {};
+    for (const sku of skus) map[sku] = null;
+    for (const doc of docs) map[doc.sku] = doc;
+
+    return res.json(ok(map));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[collect-queue] batch failed');
     next(e);
   }
 });
@@ -148,30 +152,18 @@ router.post('/admin/api/collect-queue/:sku/retry', async (req, res, next) => {
     const sku = normalizeSku(req.params.sku);
     if (!sku) return res.status(422).json({ error: 'missing sku' });
 
-    const opsCol = await cols.collectQueueOps();
     // 去重:已有未处理的 retry op 则不重复插入
-    const existing = await opsCol.findOne({ op: 'retry', sku, processed: false });
+    const existing = await daos.collectQueueOpsDao.findDedup('retry', sku);
     let opId;
     if (existing) {
       opId = existing._id;
     } else {
-      const r = await opsCol.insertOne({
-        op: 'retry',
-        sku,
-        params: {},
-        ts: nowDate(),
-        processed: false,
-        processedAt: null,
-      });
+      const r = await daos.collectQueueOpsDao.insertOp('retry', sku, {});
       opId = r.insertedId;
     }
 
     // 直接重置 ERP 文档状态(管理页即时生效)
-    const taskCol = await cols.collectQueueTasks();
-    await taskCol.updateOne(
-      { sku },
-      { $set: { status: 'pending', attempts: 0, nextRetryAt: null, lastError: null, updatedAt: nowDate() } }
-    );
+    await daos.collectQueueTasksDao.resetBySku(sku);
 
     return res.json(ok({ insertedId: opId, op: 'retry', sku, deduped: existing != null }));
   } catch (e) {
@@ -187,27 +179,18 @@ router.delete('/admin/api/collect-queue/:sku', async (req, res, next) => {
     const sku = normalizeSku(req.params.sku);
     if (!sku) return res.status(422).json({ error: 'missing sku' });
 
-    const opsCol = await cols.collectQueueOps();
     // 去重:已有未处理的 delete op 则不重复插入
-    const existing = await opsCol.findOne({ op: 'delete', sku, processed: false });
+    const existing = await daos.collectQueueOpsDao.findDedup('delete', sku);
     let opId;
     if (existing) {
       opId = existing._id;
     } else {
-      const r = await opsCol.insertOne({
-        op: 'delete',
-        sku,
-        params: {},
-        ts: nowDate(),
-        processed: false,
-        processedAt: null,
-      });
+      const r = await daos.collectQueueOpsDao.insertOp('delete', sku, {});
       opId = r.insertedId;
     }
 
     // 直接删除 ERP 文档(管理页即时生效)
-    const taskCol = await cols.collectQueueTasks();
-    await taskCol.deleteOne({ sku });
+    await daos.collectQueueTasksDao.deleteBySku(sku);
 
     return res.json(ok({ insertedId: opId, op: 'delete', sku, deduped: existing != null }));
   } catch (e) {
@@ -223,8 +206,7 @@ router.delete('/admin/api/collect-queue/:sku/confirm', async (req, res, next) =>
     const sku = normalizeSku(req.params.sku);
     if (!sku) return res.status(422).json({ error: 'missing sku' });
 
-    const taskCol = await cols.collectQueueTasks();
-    const r = await taskCol.deleteOne({ sku });
+    const r = await daos.collectQueueTasksDao.deleteBySku(sku);
 
     return res.json(ok({ deletedCount: r.deletedCount, sku }));
   } catch (e) {
@@ -242,23 +224,11 @@ router.post('/admin/api/collect-queue/batch-retry', async (req, res, next) => {
     const skus = Array.isArray(req.body?.skus) ? req.body.skus.map(normalizeSku).filter(Boolean) : [];
     if (!skus.length) return res.status(422).json({ error: 'missing skus' });
 
-    const opsCol = await cols.collectQueueOps();
-    const docs = skus.map((sku) => ({
-      op: 'retry',
-      sku,
-      params: {},
-      ts: nowDate(),
-      processed: false,
-      processedAt: null,
-    }));
-    const r = await opsCol.insertMany(docs);
+    const docs = skus.map((sku) => ({ op: 'retry', sku, params: {} }));
+    const r = await daos.collectQueueOpsDao.insertManyOps(docs);
 
     // 直接批量重置 ERP 文档状态(管理页即时生效)
-    const taskCol = await cols.collectQueueTasks();
-    await taskCol.updateMany(
-      { sku: { $in: skus } },
-      { $set: { status: 'pending', attempts: 0, nextRetryAt: null, lastError: null, updatedAt: nowDate() } }
-    );
+    await daos.collectQueueTasksDao.resetBySkus(skus);
 
     return res.json(ok({ insertedCount: r.insertedCount, skus }));
   } catch (e) {
@@ -273,19 +243,10 @@ router.post('/admin/api/collect-queue/batch-retry', async (req, res, next) => {
 // 写 op + 直接删除所有 status=pending 的文档(管理页即时生效)
 router.post('/admin/api/collect-queue/clear', async (req, res, next) => {
   try {
-    const opsCol = await cols.collectQueueOps();
-    const r = await opsCol.insertOne({
-      op: 'clear',
-      sku: null,
-      params: {},
-      ts: nowDate(),
-      processed: false,
-      processedAt: null,
-    });
+    const r = await daos.collectQueueOpsDao.insertOp('clear', null, {});
 
     // 直接删除所有 pending 文档(管理页即时生效)
-    const taskCol = await cols.collectQueueTasks();
-    const del = await taskCol.deleteMany({ status: 'pending', _id: { $ne: '__snapshot__' } });
+    const del = await daos.collectQueueTasksDao.deletePendingAll();
 
     return res.json(ok({ insertedId: r.insertedId, op: 'clear', deletedCount: del.deletedCount }));
   } catch (e) {
@@ -297,15 +258,7 @@ router.post('/admin/api/collect-queue/clear', async (req, res, next) => {
 // POST /admin/api/collect-queue/consume-pause
 router.post('/admin/api/collect-queue/consume-pause', async (req, res, next) => {
   try {
-    const opsCol = await cols.collectQueueOps();
-    const r = await opsCol.insertOne({
-      op: 'pause',
-      sku: null,
-      params: {},
-      ts: nowDate(),
-      processed: false,
-      processedAt: null,
-    });
+    const r = await daos.collectQueueOpsDao.insertOp('pause', null, {});
 
     return res.json(ok({ insertedId: r.insertedId, op: 'pause' }));
   } catch (e) {
@@ -317,15 +270,7 @@ router.post('/admin/api/collect-queue/consume-pause', async (req, res, next) => 
 // POST /admin/api/collect-queue/consume-resume
 router.post('/admin/api/collect-queue/consume-resume', async (req, res, next) => {
   try {
-    const opsCol = await cols.collectQueueOps();
-    const r = await opsCol.insertOne({
-      op: 'resume',
-      sku: null,
-      params: {},
-      ts: nowDate(),
-      processed: false,
-      processedAt: null,
-    });
+    const r = await daos.collectQueueOpsDao.insertOp('resume', null, {});
 
     return res.json(ok({ insertedId: r.insertedId, op: 'resume' }));
   } catch (e) {
@@ -339,15 +284,7 @@ router.post('/admin/api/collect-queue/consume-resume', async (req, res, next) =>
 // 用于不刷新页面的场景(避免触发 Ozon 反爬)。
 router.post('/admin/api/collect-queue/rescan', async (req, res, next) => {
   try {
-    const opsCol = await cols.collectQueueOps();
-    const r = await opsCol.insertOne({
-      op: 'rescan',
-      sku: null,
-      params: {},
-      ts: nowDate(),
-      processed: false,
-      processedAt: null,
-    });
+    const r = await daos.collectQueueOpsDao.insertOp('rescan', null, {});
 
     return res.json(ok({ insertedId: r.insertedId, op: 'rescan' }));
   } catch (e) {
@@ -360,30 +297,19 @@ router.post('/admin/api/collect-queue/rescan', async (req, res, next) => {
 
 // POST /admin/api/collect-queue/sync-snapshot
 // body: { pending, running, success, failed, syncedAt, consumePaused?, lastConsumeAt? }
-// 存入 collect_queue_tasks 中 _id='__snapshot__' 的文档(upsert)
+// 存入 __snapshot__ 文档(upsert,具体存储方式由 DAO 决定:Mongo 单文档 / SQLite 独立单行表)
 router.post('/admin/api/collect-queue/sync-snapshot', async (req, res, next) => {
   try {
     const body = req.body || {};
-    const col = await cols.collectQueueTasks();
-    const now = nowDate();
-    const r = await col.updateOne(
-      { _id: '__snapshot__' },
-      {
-        $set: {
-          _id: '__snapshot__',
-          sku: '__snapshot__',
-          pending: Number(body.pending) || 0,
-          running: Number(body.running) || 0,
-          success: Number(body.success) || 0,
-          failed: Number(body.failed) || 0,
-          syncedAt: body.syncedAt ? new Date(body.syncedAt) : now,
-          consumePaused: body.consumePaused != null ? Boolean(body.consumePaused) : null,
-          lastConsumeAt: body.lastConsumeAt ? new Date(body.lastConsumeAt) : null,
-          updatedAt: now,
-        },
-      },
-      { upsert: true }
-    );
+    const r = await daos.collectQueueTasksDao.upsertSnapshot({
+      pending: Number(body.pending) || 0,
+      running: Number(body.running) || 0,
+      success: Number(body.success) || 0,
+      failed: Number(body.failed) || 0,
+      syncedAt: body.syncedAt ? new Date(body.syncedAt) : null,
+      consumePaused: body.consumePaused != null ? Boolean(body.consumePaused) : null,
+      lastConsumeAt: body.lastConsumeAt ? new Date(body.lastConsumeAt) : null,
+    });
 
     return res.json(ok({ ok: true, upserted: r.upsertedCount === 1, syncedAt: body.syncedAt }));
   } catch (e) {
@@ -397,8 +323,7 @@ router.post('/admin/api/collect-queue/sync-snapshot', async (req, res, next) => 
 // GET /admin/api/collect-queue/ops/pending
 router.get('/admin/api/collect-queue/ops/pending', async (req, res, next) => {
   try {
-    const col = await cols.collectQueueOps();
-    const items = await col.find({ processed: false }).sort({ ts: 1 }).limit(100).toArray();
+    const items = await daos.collectQueueOpsDao.findPendingOps(100);
 
     return res.json(ok({ items, count: items.length }));
   } catch (e) {
@@ -411,13 +336,9 @@ router.get('/admin/api/collect-queue/ops/pending', async (req, res, next) => {
 router.post('/admin/api/collect-queue/ops/:id/processed', async (req, res, next) => {
   try {
     const id = req.params.id;
-    if (!id || !ObjectId.isValid(id)) return res.status(422).json({ error: 'invalid id' });
+    if (!id) return res.status(422).json({ error: 'invalid id' });
 
-    const col = await cols.collectQueueOps();
-    const r = await col.updateOne(
-      { _id: new ObjectId(id), processed: false },
-      { $set: { processed: true, processedAt: nowDate() } }
-    );
+    const r = await daos.collectQueueOpsDao.markProcessed(id);
 
     return res.json(ok({ matchedCount: r.matchedCount, modifiedCount: r.modifiedCount }));
   } catch (e) {
@@ -437,9 +358,7 @@ router.post('/admin/api/collect-queue/:sku/result', async (req, res, next) => {
 
     const body = req.body || {};
     const status = String(body.status || '').trim();
-    const update = {
-      updatedAt: nowDate(),
-    };
+    const update = {};
 
     if (status && isValidStatus(status)) update.status = status;
     if (body.result !== undefined) update.result = body.result;
@@ -450,8 +369,7 @@ router.post('/admin/api/collect-queue/:sku/result', async (req, res, next) => {
     if (body.duration !== undefined) update.duration = Number(body.duration) || 0;
     if (body.finishedAt) update.finishedAt = new Date(body.finishedAt);
 
-    const col = await cols.collectQueueTasks();
-    const r = await col.updateOne({ sku }, { $set: update });
+    const r = await daos.collectQueueTasksDao.updateResult(sku, update);
 
     return res.json(ok({ updated: r.matchedCount > 0, sku, matchedCount: r.matchedCount }));
   } catch (e) {
@@ -471,11 +389,8 @@ router.post('/admin/api/collect-queue', async (req, res, next) => {
     const sku = normalizeSku(body.sku);
     if (!sku) return res.status(422).json({ error: 'missing sku' });
 
-    const now = nowDate();
     const status = String(body.status || '').trim() || 'pending';
-    const col = await cols.collectQueueTasks();
-
-    const set = {
+    const task = {
       sku,
       sellerSlug: body.sellerSlug != null ? String(body.sellerSlug) : null,
       sellerId: body.sellerId != null ? String(body.sellerId) : null,
@@ -485,22 +400,15 @@ router.post('/admin/api/collect-queue', async (req, res, next) => {
       maxAttempts: body.maxAttempts != null ? Number(body.maxAttempts) || 3 : 3,
       nextRetryAt: body.nextRetryAt != null ? (body.nextRetryAt ? new Date(body.nextRetryAt) : null) : null,
       lastError: body.lastError != null ? body.lastError : null,
-      // startedAt / finishedAt / steps 为可变字段(SW 会上报),放在 $set 中
+      // startedAt / finishedAt / steps 为可变字段(SW 会上报)
       startedAt: body.startedAt ? new Date(body.startedAt) : null,
       finishedAt: body.finishedAt ? new Date(body.finishedAt) : null,
       steps: body.steps != null ? body.steps : null,
-      updatedAt: now,
     };
 
-    // 仅首次创建时写入 createdAt / result,避免覆盖已有值
-    const setOnInsert = {
-      createdAt: now,
-      result: null,
-    };
+    const r = await daos.collectQueueTasksDao.submit(task);
 
-    const r = await col.updateOne({ sku }, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
-
-    return res.json(ok({ upserted: true, sku, created: r.upsertedCount === 1 }));
+    return res.json(ok({ upserted: true, sku, created: r.created }));
   } catch (e) {
     logger.warn({ err: e.message, sku: body?.sku }, '[collect-queue] submit failed');
     next(e);

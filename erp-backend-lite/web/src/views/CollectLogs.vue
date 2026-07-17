@@ -6,12 +6,11 @@ import AppPager from '../components/AppPager.vue';
 
 const { show } = useToast();
 
-// 8 类缓存类型
+// 7 类缓存类型
 const EIGHT_TYPES = [
   { key: 'card', label: 'card' },
   { key: 'detail', label: 'detail' },
-  { key: 'composer', label: 'composer' },
-  { key: 'entrypoint', label: 'entrypoint' },
+  { key: 'pdp', label: 'pdp' },
   { key: 'search', label: 'search' },
   { key: 'bundle', label: 'bundle' },
   { key: 'marketStats', label: 'marketStats' },

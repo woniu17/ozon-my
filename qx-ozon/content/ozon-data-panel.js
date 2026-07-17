@@ -137,11 +137,10 @@
   //   - renderCollectStatusBar/refreshCollectStatusBar/updateCollectBadge
   //   - STATUS_MAP/CACHE_TYPE_LABELS(常量)
 
-  // ── 定时刷新:panel 级 5s 定时器,主动查缓存刷新数据 + 采集状态 ──
-  // panel 创建后启动,removeDataPanel 时清理。
-  // 不依赖自动采集开关:即使自动采集关闭,也定时查 SW 缓存填充面板。
+  // ── 定时刷新:页面级 5s 定时器 + 视口批量查询 ──
+  // 主动查缓存刷新数据 + 采集状态。不依赖自动采集开关:即使自动采集关闭,
+  // 也定时查 SW 缓存填充面板。详见下方 _refreshVisiblePanels 实现。
   const PANEL_REFRESH_INTERVAL_MS = 5000;
-  const _panelRefreshTimers = new WeakMap(); // panel → timer id
 
   // 接收 SW 推送的 collectDone / taskStatus / antibotDetected 事件,实时更新
   // 状态读写通过 window.__jzCollectStatus.* 桥接(collect/content/collect-status.js)
@@ -265,70 +264,151 @@
     CS()?.refreshUi(skuStr);
   });
 
-  // ── 定时刷新:panel 级 5s 定时器 ──
-  // 主动查 SW 缓存(queryErpProductData)刷新面板数据 + 采集状态。
-  // 不依赖自动采集开关:即使自动采集关闭,也定时查缓存填充面板。
+  // ── 定时刷新:页面级 5s 定时器 + 视口批量查询 ──────────────────
+  // 旧实现:每个 panel 独立 setInterval,N 个 panel = 2N 条消息/5s(SW 消息洪水)。
+  // 新实现:1 个页面级定时器,批量查视口内所有 panel 的 ERP 数据 + 缓存状态,
+  //       2 条消息搞定所有 panel(消息数固定,与 panel 数量无关)。
+  // 批量 action:queryErpProductDataBatch / queryCacheStatusBatch(SW inflight 去重)。
+  const _pageRefreshSkus = new Map(); // sku → { card, panel }
+  let _pageRefreshTimer = null;
+  let _pageRefreshInflight = false; // 防止上一轮未完成就启动下一轮
+
+  function _startPageRefresh() {
+    if (_pageRefreshTimer) return;
+    _pageRefreshTimer = setInterval(_refreshVisiblePanels, PANEL_REFRESH_INTERVAL_MS);
+  }
+
+  function _stopPageRefresh() {
+    if (_pageRefreshTimer) {
+      clearInterval(_pageRefreshTimer);
+      _pageRefreshTimer = null;
+    }
+    _pageRefreshSkus.clear();
+  }
+
+  // 注册 panel 到页面级刷新(替代旧 _startPanelRefresh)
+  function _registerPanelForRefresh(card, panel) {
+    if (!panel) return;
+    const info = extractCardInfo(card);
+    const productId = extractProductId(info.url);
+    if (!productId) return;
+    _pageRefreshSkus.set(String(productId), { card, panel });
+    // 确保页面级定时器已启动
+    _startPageRefresh();
+  }
+
+  function _unregisterPanelForRefresh(panel) {
+    if (!panel) return;
+    for (const [sku, entry] of _pageRefreshSkus) {
+      if (entry.panel === panel) {
+        _pageRefreshSkus.delete(sku);
+        break;
+      }
+    }
+  }
+
+  // 批量刷新视口内所有 panel
+  async function _refreshVisiblePanels() {
+    if (_pageRefreshInflight) return; // 上一轮还没完成,跳过
+    _pageRefreshInflight = true;
+    try {
+      // 收集视口内所有需要刷新的 panel
+      const visible = [];
+      for (const [sku, { card, panel }] of _pageRefreshSkus) {
+        if (!panel.isConnected) {
+          _pageRefreshSkus.delete(sku);
+          continue;
+        }
+        const rect = panel.getBoundingClientRect();
+        if (rect.bottom > -200 && rect.top < window.innerHeight + 200) {
+          visible.push({ sku, card, panel });
+        }
+      }
+      if (!visible.length) return;
+
+      // 批量查 ERP 数据 + 缓存状态(2 条消息搞定所有 SKU)
+      const skus = visible.map((v) => v.sku);
+      const [erpBatch, cacheBatch] = await Promise.all([
+        window.sendMessage('queryErpProductDataBatch', { skus }).catch(() => null),
+        window.sendMessage('queryCacheStatusBatch', { skus }).catch(() => null),
+      ]);
+
+      // 分发结果到各 panel
+      for (const { sku, card, panel } of visible) {
+        const erpData = erpBatch?.[sku];
+        const cacheStatus = cacheBatch?.[sku] || null;
+        try {
+          if (erpData?.preFetched && typeof window.jzPopulatePanelV2 === 'function') {
+            if (panel.querySelector('.ozon-helper-sidebar-card-body')) {
+              try {
+                await window.jzPopulatePanelV2(panel, sku, { preFetched: erpData.preFetched });
+              } catch {}
+            } else if (typeof window.jzRenderProductPanelV2 === 'function') {
+              window.jzRenderProductPanelV2(panel, { sku, initial: erpData });
+              try {
+                await window.jzPopulatePanelV2(panel, sku, { preFetched: erpData.preFetched });
+              } catch {}
+            }
+            panelDataCache.set(sku, erpData);
+          }
+        } catch {
+          // 静默失败,下次定时再试
+        }
+        // 刷新徽章 + 状态条
+        window.__jzCollectStatus?.updateCollectBadge(card, sku);
+        window.__jzCollectStatus?.renderCollectStatusBar(panel, sku, cacheStatus);
+      }
+    } finally {
+      _pageRefreshInflight = false;
+    }
+  }
+
+  // 单 panel 首次加载数据(不改批量,首次进入视口立即查,不等 5s 定时器)
   async function _refreshPanelData(card, panel) {
     const info = extractCardInfo(card);
     const productId = extractProductId(info.url);
-    if (!productId || !panel || !panel.isConnected) {
-      _stopPanelRefresh(panel);
-      return;
-    }
+    if (!productId || !panel || !panel.isConnected) return;
     try {
       const erpData = await window.sendMessage('queryErpProductData', { sku: productId });
       if (erpData?.preFetched && typeof window.jzPopulatePanelV2 === 'function') {
-        // 面板已渲染过 V2 → 直接 populate 回填新数据
         if (panel.querySelector('.ozon-helper-sidebar-card-body')) {
           try {
             await window.jzPopulatePanelV2(panel, productId, { preFetched: erpData.preFetched });
           } catch {}
-        } else {
-          // 面板仍是 skeleton → 先 render V2 再 populate
-          if (typeof window.jzRenderProductPanelV2 === 'function') {
-            window.jzRenderProductPanelV2(panel, { sku: productId, initial: erpData });
-            try {
-              await window.jzPopulatePanelV2(panel, productId, { preFetched: erpData.preFetched });
-            } catch {}
-          }
+        } else if (typeof window.jzRenderProductPanelV2 === 'function') {
+          window.jzRenderProductPanelV2(panel, { sku: productId, initial: erpData });
+          try {
+            await window.jzPopulatePanelV2(panel, productId, { preFetched: erpData.preFetched });
+          } catch {}
         }
-        // 写入 panelDataCache,供后续 hit 时复用
         panelDataCache.set(productId, erpData);
       }
-    } catch (e) {
-      // 静默失败,下次定时再试
+    } catch {
+      // 静默失败,5s 定时器会再试
     }
-    // 刷新徽章 + 状态条(查 SW 缓存状态,不查采集队列状态)
-    // 通过 collect-status.js 桥接访问
     window.__jzCollectStatus?.updateCollectBadge(card, productId);
     try {
       const cacheStatus = await window.sendMessage('queryCacheStatus', { sku: productId });
       window.__jzCollectStatus?.renderCollectStatusBar(panel, productId, cacheStatus);
-    } catch (e) {
+    } catch {
       window.__jzCollectStatus?.renderCollectStatusBar(panel, productId, null);
     }
   }
 
   function _startPanelRefresh(card, panel) {
-    if (!panel) return;
-    _stopPanelRefresh(panel);
-    const timer = setInterval(() => {
-      if (!panel.isConnected) {
-        _stopPanelRefresh(panel);
-        return;
-      }
-      _refreshPanelData(card, panel);
-    }, PANEL_REFRESH_INTERVAL_MS);
-    _panelRefreshTimers.set(panel, timer);
+    // 注册到页面级批量刷新(旧 _panelRefreshTimers 已废弃)
+    _registerPanelForRefresh(card, panel);
   }
 
   function _stopPanelRefresh(panel) {
-    if (!panel) return;
-    const timer = _panelRefreshTimers.get(panel);
-    if (timer) {
-      clearInterval(timer);
-      _panelRefreshTimers.delete(panel);
-    }
+    _unregisterPanelForRefresh(panel);
+  }
+
+  // 判断当前是否在 PDP(/product/<sku>/)
+  // PDP 上的商品卡(主商品下方"也看了"/相关推荐)都不属于当前商品所在店铺,
+  // 应统一标记为"非店铺商品",不依赖 isStoreSkuCard 的父级 widget 判定。
+  function _isPdpPage() {
+    return /^\/product\/[^/]+\/?$/i.test(window.location.pathname);
   }
 
   // 渲染店铺归属标签(商品卡顶部左上角)
@@ -337,12 +417,14 @@
   function renderSellerTag(card) {
     if (!card) return;
     let tag = card.querySelector('.jz-seller-tag');
-    // 仅在店铺页(sellerSlug 非空)才显示标签
+    // 仅在店铺页(sellerSlug 非空)或 PDP(有 sellerInfo)才显示标签
     if (!sellerSlug) {
       if (tag) tag.remove();
       return;
     }
-    const isStore = isStoreSkuCard(card);
+    // PDP 推荐区:所有 tile 都是非店铺商品(主商品不是 tile,不会进此函数)
+    // 店铺页:用 isStoreSkuCard 区分店铺 SKU vs 推荐区
+    const isStore = _isPdpPage() ? false : isStoreSkuCard(card);
     const text = isStore ? `店铺商品${sellerName ? ': ' + sellerName : ''}` : '非店铺商品';
     if (!tag) {
       tag = document.createElement('div');
@@ -616,7 +698,8 @@
     // 店铺页:收集店铺 SKU 到 collect-status.js 的 _storeCollectedSkus
     // (用于 MY 采集器面板计数 + jz-collect-badge 标记)
     // 非店铺商品(推荐区)不收集,只记录到 _nonStoreSkus
-    if (sellerSlug && isStoreSkuCard(card)) {
+    // PDP 推荐区全部视为非店铺,不收集(跟 renderSellerTag 判定一致)
+    if (sellerSlug && !_isPdpPage() && isStoreSkuCard(card)) {
       const link = card.querySelector('a[href*="/product/"]');
       const m = link?.href.match(/\/product\/.*-(\d{5,})/);
       if (m) {
@@ -634,7 +717,9 @@
     //   2. 节省网络请求(每个 panel 至少 4 个 fetch:marketStats/productStats/variants/followSell)
     //   3. 减少反爬风险(推荐区商品多达 30+,真调密度过高)
     // 注意:仍渲染 jz-seller-tag 标签(灰色"非店铺商品"),让用户知道这些是推荐商品
-    if (sellerSlug && !isStoreSkuCard(card)) {
+    // PDP 推荐区全部视为非店铺商品(跟 renderSellerTag 的判定一致)
+    const isStore = _isPdpPage() ? false : isStoreSkuCard(card);
+    if (sellerSlug && !isStore) {
       card._ohPanelSkipped = true; // 标记跳过,供 applyToAll/removeDataPanel 识别
       // 记录非店铺商品 SKU,避免把推荐区 SKU 错误关联到当前店铺
       const link = card.querySelector('a[href*="/product/"]');

@@ -11,11 +11,11 @@
 
 | 链路 | 触发入口 | source | 受 autoCollectRunning 约束 | 用途 |
 |---|---|---|---|---|
-| **店铺页轻量采集** | content `__jzSubmitCollectTask` | `'shop-page'`(默认) | 是 | 店铺页商品卡进入 SW 队列走完整 8 类采集 |
+| **店铺页轻量采集** | content `__jzSubmitCollectTask` | `'shop-page'`(默认) | 是 | 店铺页商品卡进入 SW 队列走完整 7 类采集 |
 | **深度采集管理页** | [collect/pages/manager/index.js](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/manager/index.js) `startCollect` | `'manual'` | 否(绕过) | 手动批量采集,复用 SW 队列与限流 |
 | **采集队列监控** | [collect/pages/queue/index.js](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/queue/index.js) | — | — | 仅监控 SW 队列状态,不提交任务 |
 
-> **重要**:三条链路共用同一个 SW 队列(`jz-collect-queue`)、同一套 8 类缓存、同一套限流机制,仅 `source` 字段区分。`source='manual'` 任务在 SW `_consumeOne` 中绕过 `autoCollectRunning` 检查并重置 `consumePaused`。
+> **重要**:三条链路共用同一个 SW 队列(`jz-collect-queue`)、同一套 7 类缓存、同一套限流机制,仅 `source` 字段区分。`source='manual'` 任务在 SW `_consumeOne` 中绕过 `autoCollectRunning` 检查并重置 `consumePaused`。
 
 ### 1.2 三层架构
 
@@ -32,7 +32,7 @@
 │   ├─ 采集队列:chrome.storage.local 持久化 + ERP 镜像        │
 │   ├─ 消费循环:_consumeOne 串行调度,consumeRateSec 间隔     │
 │   ├─ 8 步编排:_doAutoCollect(Gate 0/0.5 + Step 1-7)        │
-│   ├─ 8 类缓存:IDB(L1) + ERP MongoDB(L2)                   │
+│   ├─ 7 类缓存:IDB(L1) + ERP MongoDB(L2)                   │
 │   ├─ 限流:全局并发 3 + seller portal 闸门 200ms            │
 │   └─ 反爬熔断:10 分钟暂停 + 缓存兜底                       │
 └──────────────┬──────────────────────────────────────────────┘
@@ -40,7 +40,7 @@
 ┌──────────────▼──────────────────────────────────────────────┐
 │  ERP 后端(MongoDB)                                         │
 │   ├─ 采集队列任务镜像                                       │
-│   ├─ 8 类缓存 L2 存储                                        │
+│   ├─ 7 类缓存 L2 存储                                        │
 │   └─ 采集日志持久化                                         │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -58,7 +58,7 @@
 [SW _handleSubmitTask]
     │
     ├─ 去重检查(_isTaskQueuedOrCompletedToday)
-    ├─ 8 类缓存前置检查(_checkAllCachesHit)
+    ├─ 7 类缓存前置检查(_checkAllCachesHit)
     │   └─ 全命中 → 直接返回 success,不入队(不消耗 daily-limit)
     └─ 入队 → _maybeStartConsume
                 │
@@ -68,8 +68,8 @@
                 ├─ manual 任务绕过 autoCollectRunning
                 ├─ 跨日重置 / 熔断检查 / daily-limit 检查
                 ├─ _doAutoCollect 8 步采集
-                │   ├─ Step1 并行查 8 类缓存
-                │   ├─ Step4 买家页(composer+entrypoint+followSell)
+                │   ├─ Step1 并行查 7 类缓存
+                │   ├─ Step4 买家页(pdp+followSell)
                 │   ├─ Step5 seller portal(search+bundle)
                 │   ├─ Step6 seller portal(marketStats)
                 │   └─ Step7 写日志+广播
@@ -161,18 +161,19 @@ pending ──(_consumeOne 取出)──→ running ──(_doAutoCollect 返回
 
 **完成队列清理**:终态任务超过 500 条(`COLLECT_QUEUE_MAX_COMPLETED`)时按 `finishedAt` 升序删除最旧的([SW 4215-4230](file:///c:/root/code/ozon-my/qx-ozon/background/service-worker.js#L4215))。
 
-### 2.4 8 类深度采集缓存
+### 2.4 7 类深度采集缓存
 
 | 缓存 | IDB store | 写入源 | 用途 | TTL |
 |---|---|---|---|---|
 | **card** | `card_cache` | content `extractCardInfo()` → SW `cardCacheSet` handler | 商品卡 5 字段(sku/url/name/price/image + ratingCount),全览展示 + OPI 预览 fallback | 永久 |
 | **detail** | `detail_cache` | content `extractProductData()` → SW `detailCacheSet` handler | 详情页 DOM 全字段(title/images/videos/characteristics/price/seller/statistics 等) | 永久 |
-| **composer** | `composer_cache` | `fetchVariantMediaViaBuyerTab` 内部 | composer-api widgetStates 业务子集 | 永久 |
-| **entrypoint** | `entrypoint_cache` | `fetchVariantMediaViaBuyerTab` 内部 | entrypoint-api 蒸馏的 {gallery, richContent, description, hashtags} | 永久 |
+| **pdp (richMedia)** | `rich_media_cache` | `fetchPdpBundleViaBuyerTab` / `fetchProductPageState` 内部 | entrypoint-api + composer-api page-json 蒸馏的 {mp4, richContent, richContentHasText, description, hashtags, gallery, fields, widgetStates, hitEndpoints} | 永久 |
 | **search** | `search_cache` | `_doAutoCollect` Step5 真调后写 | seller portal `/api/v1/search` 结果(items 数组,含物理 attrs merge) | 永久 |
 | **bundle** | `bundle_cache` | `fetchBundleByVariantId` 内部 | seller portal `create-bundle-by-variant-id` 结果(重量/尺寸/条码等物理 attrs) | 永久 |
 | **marketStats** | `market_stats_cache` | `_doAutoCollect` Step6 / `getMarketStats` handler | 市场统计(销量/评价/排名) | 24h stale |
-| **followSell** | `follow_sell_cache` | `fetchVariantMediaViaBuyerTab` 内部 | 跟卖可用性/竞品数据 | 4h stale |
+| **followSell** | `follow_sell_cache` | `fetchPdpBundleViaBuyerTab` 内部 | 跟卖可用性/竞品数据 | 4h stale |
+
+> **richMedia 合并说明**:v7 起将旧 `composer_cache`(composer-api widgetStates 子集)与 `entrypoint_cache`(entrypoint-api 蒸馏字段)合并为单一 `rich_media_cache`,对齐 MY 富内容打分制。旧 `composer_cache` / `entrypoint_cache` IDB store 保留不删除(syncL2Batch 仍扫老数据补写 L2),但 Get/Set/Delete wrapper 已移除。
 
 **两级缓存**:L1 = IndexedDB(本地),L2 = ERP MongoDB。`l2Synced` 标志驱动定时补写(`_idbScanUnsynced` 每 5 分钟扫描)。
 
@@ -188,14 +189,14 @@ pending ──(_consumeOne 取出)──→ running ──(_doAutoCollect 返回
 1. SKU 校验
 2. 去重检查(_isTaskQueuedOrCompletedToday)
    └─ 已在队列或今日已完成 → 返回 {alreadyQueued: true}
-3. 8 类缓存前置检查(_checkAllCachesHit)
+3. 7 类缓存前置检查(_checkAllCachesHit)
    └─ 全命中 → 直接返回 success,不入队,不消耗 daily-limit
 4. 入队(_enqueueTask)+ ERP 镜像(_erpQueueInsert)
 5. 调度消费(_maybeStartConsume)
 6. 暂停兜底广播(若队列应暂停 → _broadcastQueuePaused)
 ```
 
-**8 类缓存前置检查** `_checkAllCachesHit`([SW 5243-5304](file:///c:/root/code/ozon-my/qx-ozon/background/service-worker.js#L5243)):并行查 8 类缓存,search 走 L1→L2,bundle 仅 L1,marketStats/followSell 需未 stale。全命中时直接返回 `success` 并广播 `collectDone`,避免缓存命中任务占用 15s 队列 slot。
+**7 类缓存前置检查** `_checkAllCachesHit`([SW 5243-5304](file:///c:/root/code/ozon-my/qx-ozon/background/service-worker.js#L5243)):并行查 7 类缓存,search 走 L1→L2,bundle 仅 L1,marketStats/followSell 需未 stale。全命中时直接返回 `success` 并广播 `collectDone`,避免缓存命中任务占用 15s 队列 slot。
 
 ### 3.2 消费循环:`_consumeOne`([SW 4977-5074](file:///c:/root/code/ozon-my/qx-ozon/background/service-worker.js#L4977))
 
@@ -231,9 +232,9 @@ pending ──(_consumeOne 取出)──→ running ──(_doAutoCollect 返回
 | **并发 slot 获取** | 3687-3700 | `_acquireAutoCollectSlot`,超时 60s 丢弃返回 `skipped` | — |
 | **Gate 0 基础检查** | 3703-3733 | 跨日重置 / autoCollectRunning(manual 绕过) / paused / daily-limit | config + meta |
 | **Gate 0.5 中国店铺** | 3735-3756 | `checkStoreClassification`,`onlyChineseStores` 开启时非中国店铺返回 `skipped` | ERP |
-| **Step 1 并行查 8 类缓存** | 3758-3785 | `Promise.all` 查 card/detail/composer/entrypoint/marketStats/followSell | IDB + ERP |
+| **Step 1 并行查 7 类缓存** | 3758-3785 | `Promise.all` 查 card/detail/pdp/marketStats/followSell | IDB + ERP |
 | **Step 2 计算 pending** | 3787-3815 | `hasPending=false` → 返回 `skipped`(reason:`all-cached`) | — |
-| **Step 4 买家页采集** | 3817-3874 | `fetchVariantMediaViaBuyerTab` 取 composer+entrypoint+followSell | www.ozon.ru tab |
+| **Step 4 买家页采集** | 3817-3874 | `fetchPdpBundleViaBuyerTab` 取 pdp(richMedia)+followSell | www.ozon.ru tab |
 | **Step 5 seller portal 采集** | 3876-4016 | `/api/v1/search` + `create-bundle-by-variant-id`,merge 物理 attrs 后重写 search_cache | seller.ozon.ru |
 | **Step 6 seller portal marketStats** | 4018-4045 | `_fetchMarketStatsDirect` | seller.ozon.ru |
 | **Step 7 写日志+计数** | 4047-4094 | `_pushAutoCollectRecent` + `_writeAutoCollectLog` + `_erpStoreSkuReport` | — |

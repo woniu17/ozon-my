@@ -4,7 +4,7 @@
  * 从 content/ozon-data-panel.js 提取的采集状态相关代码:
  *   - _collectStatusMap(SKU→状态表)
  *   - _storeCollectedSkus(店铺 SKU 集合,供 badge 标记)
- *   - renderCollectStatusBar / refreshCollectStatusBar(8 类缓存状态条)
+ *   - renderCollectStatusBar / refreshCollectStatusBar(7 类缓存状态条)
  *   - updateCollectBadge(商品卡角落徽章)
  *   - _refreshCollectStatusUi / _refreshAllCollectStatusUi
  *   - _applyQueuePaused(队列暂停状态应用)
@@ -43,7 +43,7 @@
   // sku → { status, reason, results, duration, timestamp }
   // status: 'success' | 'partial' | 'skipped' | 'failed' | 'antibot'
   // reason: skipped 时为 'not-running'/'paused'/'daily-limit'/'non-chinese-store'/'unclassified-store'/'all-cached'
-  // results: [{type, hit}] 8 类缓存命中明细
+  // results: [{type, hit}] 7 类缓存命中明细
   const _collectStatusMap = new Map();
   let _collectStatusMapReady = false;
 
@@ -135,19 +135,10 @@
     'daily-limit': '达每日上限',
     'non-chinese-store': '非中国店铺',
     'unclassified-store': '店铺未分类',
-    'all-cached': '8 类缓存全命中',
+    'all-cached': '7 类缓存全命中',
     antibot: '反爬熔断',
   };
-  const _CACHE_TYPE_LABELS = [
-    'card',
-    'composer',
-    'entrypoint',
-    'search',
-    'bundle',
-    'marketStats',
-    'followSell',
-    'detail',
-  ];
+  const _CACHE_TYPE_LABELS = ['card', 'detail', 'pdp', 'search', 'bundle', 'marketStats', 'followSell'];
 
   // partial/failed 状态在 UI 上显示"等待重试中"的冷却时长(单位:ms)
   const _PENDING_COOLDOWN_MS = 60 * 1000;
@@ -200,8 +191,8 @@
 
   // ── 状态条渲染 ──────────────────────────────────────────────────
   // 渲染状态条(数据面板 hero section 下方,商品信息上方,固定展示)
-  // 仅展示 8 类缓存命中状态,不查采集队列状态。
-  // 3 行结构:行1 缓存命中汇总,行2/3 8 类缓存明细
+  // 仅展示 7 类缓存命中状态,不查采集队列状态。
+  // 3 行结构:行1 缓存命中汇总,行2/3 7 类缓存明细
   // cacheStatus: { results: [{type, hit}], hitCount, total } | null | undefined
   function renderCollectStatusBar(panel, sku, cacheStatus) {
     if (!panel) return;
@@ -223,7 +214,7 @@
       }
     }
     // 构建缓存命中明细(按 _CACHE_TYPE_LABELS 固定顺序)
-    // cacheStatus 为 null/undefined 时用全 miss 占位(让用户看到 8 类缓存字段布局)
+    // cacheStatus 为 null/undefined 时用全 miss 占位(让用户看到 7 类缓存字段布局)
     const results =
       cacheStatus && Array.isArray(cacheStatus.results) && cacheStatus.results.length > 0
         ? _CACHE_TYPE_LABELS.map((type) => cacheStatus.results.find((r) => r.type === type) || { type, hit: false })
