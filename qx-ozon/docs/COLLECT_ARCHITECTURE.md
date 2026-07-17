@@ -12,8 +12,8 @@
 | 链路 | 触发入口 | source | 受 autoCollectRunning 约束 | 用途 |
 |---|---|---|---|---|
 | **店铺页轻量采集** | content `__jzSubmitCollectTask` | `'shop-page'`(默认) | 是 | 店铺页商品卡进入 SW 队列走完整 8 类采集 |
-| **深度采集管理页** | [collect-manager/index.js](file:///c:/root/code/ozon-my/qx-ozon/collect-manager/index.js) `startCollect` | `'manual'` | 否(绕过) | 手动批量采集,复用 SW 队列与限流 |
-| **采集队列监控** | [collect-queue/index.js](file:///c:/root/code/ozon-my/qx-ozon/collect-queue/index.js) | — | — | 仅监控 SW 队列状态,不提交任务 |
+| **深度采集管理页** | [collect/pages/manager/index.js](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/manager/index.js) `startCollect` | `'manual'` | 否(绕过) | 手动批量采集,复用 SW 队列与限流 |
+| **采集队列监控** | [collect/pages/queue/index.js](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/queue/index.js) | — | — | 仅监控 SW 队列状态,不提交任务 |
 
 > **重要**:三条链路共用同一个 SW 队列(`jz-collect-queue`)、同一套 8 类缓存、同一套限流机制,仅 `source` 字段区分。`source='manual'` 任务在 SW `_consumeOne` 中绕过 `autoCollectRunning` 检查并重置 `consumePaused`。
 
@@ -299,14 +299,14 @@ pending ──(_consumeOne 取出)──→ running ──(_doAutoCollect 返回
 
 ### 5.1 深度采集管理页(collect-manager)
 
-**文件**:[collect-manager/index.js](file:///c:/root/code/ozon-my/qx-ozon/collect-manager/index.js)
+**文件**:[collect/pages/manager/index.js](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/manager/index.js)
 
-**提交流程** `startCollect`([L376-418](file:///c:/root/code/ozon-my/qx-ozon/collect-manager/index.js#L376)):
+**提交流程** `startCollect`([L376-418](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/manager/index.js#L376)):
 1. `applyFilters(allSkus)` 获取筛选后所有 SKU
 2. 串行 `await sendMessage('submitTask', {source:'manual'})` 逐个提交
 3. `source='manual'` 让 SW Gate 0 绕过 `autoCollectRunning` 检查
 
-**进度统计** `updateProgress`([L421-494](file:///c:/root/code/ozon-my/qx-ozon/collect-manager/index.js#L421)):
+**进度统计** `updateProgress`([L421-494](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/manager/index.js#L421)):
 - 分子:遍历 `submittedSkus` 统计本次提交中终态任务数
 - 分母:`submittedSkus.size`(本次提交总数)
 - 5s 轮询 `getCollectManagerState` 获取队列状态
@@ -315,15 +315,15 @@ pending ──(_consumeOne 取出)──→ running ──(_doAutoCollect 返回
 
 ### 5.2 采集队列监控页(collect-queue)
 
-**文件**:[collect-queue/index.js](file:///c:/root/code/ozon-my/qx-ozon/collect-queue/index.js)
+**文件**:[collect/pages/queue/index.js](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/queue/index.js)
 
 **功能**:
 - **5s 轮询** `getCollectManagerState` 展示队列实时状态
-- **1s 倒计时** 独立定时器渲染下次执行时间([L271-293](file:///c:/root/code/ozon-my/qx-ozon/collect-queue/index.js#L271))
+- **1s 倒计时** 独立定时器渲染下次执行时间([L271-293](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/queue/index.js#L271))
 - **强制清除反爬状态** 调用 SW `clearAntibotState` handler
 - **清空已完成** 调用 SW `clearFinishedQueueTasks` handler
 
-**倒计时规则**([L250-267](file:///c:/root/code/ozon-my/qx-ozon/collect-queue/index.js#L250)):
+**倒计时规则**([L250-267](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/queue/index.js#L250)):
 - 熔断中 → 倒计时到 `circuitBreakerUntil`
 - 有 pending 且未暂停/未达上限 → 倒计时到 `lastConsumeAt + consumeRateSec*1000`
 - 已过预计时间 → 显示"即将执行"
@@ -435,7 +435,7 @@ card 缓存写入是采集流程的额外补充(供数据面板/OPI 预览 fallb
    - 落地方式:移除 `__jzSubmitCollectTask` 调用,保留 `cardCacheSet`
 
 2. **决策 B:深度采集店铺列表仅限中国店铺,筛选条件简化为评论数范围 + 价格范围**
-   - 现状:[collect-manager/index.html L132-162](file:///c:/root/code/ozon-my/qx-ozon/collect-manager/index.html#L132) 仍保留重量筛选和采集状态筛选
+   - 现状:[collect/pages/manager/index.html L132-162](file:///c:/root/code/ozon-my/qx-ozon/collect/pages/manager/index.html#L132) 仍保留重量筛选和采集状态筛选
    - 落地方式:移除 `f-weight-min/max`、`f-status` 相关 HTML 和 JS 引用
 
 3. **`skuInterval` 旧字段清理**

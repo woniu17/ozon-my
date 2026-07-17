@@ -1,0 +1,177 @@
+/* =========================================================
+ * 采集状态样式(从 ozon-product.css 抽离)
+ *
+ * 包含:
+ *   - .jz-collect-badge 商品卡角落采集徽章
+ *   - .jz-collect-status-bar 数据面板状态条
+ *   - .jz-cache-* 缓存命中/未命中标签
+ *   - 采集中动画(旋转/脉冲/闪烁)
+ *
+ * 注意:.jz-seller-tag 店铺归属标签不是采集专属,
+ *       保留在 ozon-product.css 中。
+ * ========================================================= */
+
+/* 「采集」按钮成功态:绿色短暂反馈 */
+.ozon-helper-sidebar-card-btn.is-collected {
+  background: #ecfdf5 !important;
+  border-color: #10b981 !important;
+  color: #047857 !important;
+}
+.ozon-helper-sidebar-card-btn.is-collected .oh-btn-icon {
+  color: #10b981 !important;
+}
+
+/* ===== 采集状态同步到商品卡(徽章+状态条) ===== */
+
+/* 商品卡容器需要 relative 让徽章定位到角落(Ozon 默认 tile-root 可能没有 position:relative) */
+.tile-root:has(.jz-collect-badge) {
+  position: relative;
+}
+
+/* 商品卡角落徽章 */
+.jz-collect-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 20px;
+  text-align: center;
+  z-index: 10;
+  pointer-events: auto;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: help;
+  user-select: none;
+}
+
+/* 数据面板状态条(hero 下方,3 行结构) */
+.jz-collect-status-bar {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--oh-border, #e5e7eb);
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--oh-section-bg, #f8fafc);
+}
+/* hero 已有 border-bottom,状态条紧邻 hero 时不再重复顶部分隔 */
+.oh-hero-section + .jz-collect-status-bar {
+  border-top: none;
+}
+
+.jz-collect-status-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-height: 18px;
+}
+.jz-collect-status-row + .jz-collect-status-row {
+  margin-top: 2px;
+}
+
+.jz-collect-status-row-1 {
+  font-weight: 600;
+}
+
+.jz-collect-status-icon {
+  font-size: 12px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.jz-collect-status-text {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.jz-collect-status-reason {
+  color: var(--oh-text-secondary, #6b7280);
+  font-weight: 400;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.jz-cache-summary {
+  font-weight: 600;
+  color: var(--oh-text-primary, #374151);
+  margin-left: 2px;
+}
+
+.jz-cache-detail {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-left: 4px;
+}
+
+.jz-cache-hit,
+.jz-cache-miss {
+  font-size: 10px;
+  padding: 0 3px;
+  border-radius: 2px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+.jz-cache-hit {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.jz-cache-miss {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+/* ===== 采集中/等待中 动画效果 ===== */
+
+/* 采集中:图标旋转动画 */
+.jz-collect-status-icon-collecting {
+  animation: jz-spin 1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes jz-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 采集中:徽章脉冲动画 */
+.jz-collect-badge[data-status='collecting'] {
+  animation: jz-pulse 1s ease-in-out infinite;
+}
+
+@keyframes jz-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 1px 6px rgba(59, 130, 246, 0.5);
+  }
+}
+
+/* 等待中:徽章缓慢闪烁 */
+.jz-collect-badge[data-status='pending'] {
+  animation: jz-blink 2s ease-in-out infinite;
+}
+
+@keyframes jz-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}

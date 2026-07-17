@@ -17,7 +17,7 @@ globalThis.JzBackendClient = {
 };
 
 require(path.resolve(__dirname, '../agent/actions.js'));
-require(path.resolve(__dirname, '../agent/collect-actions.js'));
+require(path.resolve(__dirname, '../../collect/agent/collect-actions.js'));
 
 const capabilities = globalThis.JzBrowserAgentActions.capabilities().sort();
 

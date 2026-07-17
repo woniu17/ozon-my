@@ -9,7 +9,7 @@
  * 设计:
  * - postMessage 通道 (非 externally_connectable) — 前端不用知道 extension ID,
  *   靠 ping 超时探测装没装
- * - 复用 lib/sku-collect.js 的 JZSkuCollect.collectBySkus —— 已有 BATCH_SIZE=3 +
+ * - 复用 collect/content/sku-collect.js 的 JZSkuCollect.collectBySkus —— 已有 BATCH_SIZE=3 +
  *   searchVariants(含 bundle 注入) + searchProductBySku 降级 + distill
  * - 协议版本 "v1"
  *
@@ -30,7 +30,7 @@
   const PROTO = 'v1';
 
   if (!window.JZSkuCollect) {
-    // sku-collect.js 应该在 manifest 里排在 bridge 之前; 缺失即配置错误,直接返错
+    // sku-collect.js (collect/content/) 应该在 manifest 里排在 bridge 之前; 缺失即配置错误,直接返错
     console.warn('[jz-bridge] JZSkuCollect 未加载,manifest content_scripts 顺序有误');
   }
 

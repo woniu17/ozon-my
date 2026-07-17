@@ -71,20 +71,28 @@
       ],
       "js": [
         "content/shared-utils.js",
+        "collect/content/collect-status.js",
+        "collect/content/collect-entry.js",
         "content/jzc-calc.js",
-        "content/qx-collector/smart-filter.js",
-        "content/qx-collector/auto-scroller.js",
-        "content/qx-collector/store-detector.js",
-        "content/qx-collector/panel.js",
+        "collect/content/smart-filter.js",
+        "collect/content/auto-scroller.js",
+        "collect/content/store-detector.js",
+        "collect/content/collector-panel.js",
         "lib/cdn-buster.js",
         "lib/watermark-templates.js",
         "lib/follow-sell-content-copy.js",
         "lib/ozon-video-extract.js",
-        "lib/sku-collect.js",
+        "collect/content/sku-collect.js",
+        "collect/content/collect-pdp.js",
         "lib/title-quality.js",
         "content/ozon-product.js"
       ],
-      "css": ["content/jzc-calc.css", "content/ozon-product.css", "content/qx-collector/panel.css"],
+      "css": [
+        "content/jzc-calc.css",
+        "content/ozon-product.css",
+        "collect/content/collector-panel.css",
+        "collect/content/collect-status.css"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -101,11 +109,13 @@
       ],
       "js": [
         "content/shared-utils.js",
-        "content/collector/task-queue.js",
+        "collect/content/collect-status.js",
+        "collect/content/collect-entry.js",
+        "collect/content/task-queue.js",
         "lib/sidebar-section-toggle.js",
         "content/ozon-search.js"
       ],
-      "css": ["content/ozon-product.css", "content/ozon-search.css"],
+      "css": ["content/ozon-product.css", "content/ozon-search.css", "collect/content/collect-status.css"],
       "run_at": "document_idle"
     },
     {
@@ -126,11 +136,13 @@
       ],
       "js": [
         "content/shared-utils.js",
-        "content/collector/task-queue.js",
+        "collect/content/collect-status.js",
+        "collect/content/collect-entry.js",
+        "collect/content/task-queue.js",
         "lib/sidebar-section-toggle.js",
         "content/ozon-data-panel.js"
       ],
-      "css": ["content/ozon-product.css", "content/ozon-search.css"],
+      "css": ["content/ozon-product.css", "content/ozon-search.css", "collect/content/collect-status.css"],
       "run_at": "document_idle"
     },
     {
@@ -164,7 +176,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["batch-upload/*", "collect-manager/*", "collect-queue/*", "lib/*", "icons/*"],
+      "resources": ["batch-upload/*", "collect/pages/manager/*", "collect/pages/queue/*", "lib/*", "icons/*"],
       "matches": ["<all_urls>"]
     }
   ],
