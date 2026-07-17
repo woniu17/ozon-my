@@ -26,7 +26,7 @@ async function loadList() {
   state.loading = true;
   try {
     const params = {
-      page: state.page,
+      currentPage: state.page,
       pageSize: state.pageSize,
       keyword: state.filters.keyword.trim(),
       hasVideo: state.filters.hasVideo,

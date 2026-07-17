@@ -756,7 +756,7 @@ onMounted(() => {
           <table class="pv-diff-table">
             <tr>
               <td>名称</td>
-              <td>{{ state.profile.original.name?.slice(0, 40) || '—' }}</td>
+              <td>{{ state.profile.original.name || '—' }}</td>
             </tr>
             <tr>
               <td>SKU</td>

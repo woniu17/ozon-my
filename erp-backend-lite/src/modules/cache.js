@@ -643,7 +643,8 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
 
       return {
         sku: c.sku,
-        name: cardData.name || '',
+        // name 优先 cardCache(DOM 抓取),为空时 fallback 到 bundleCache(OPI API 原始名,更可靠)
+        name: cardData.name || b?.data?.name || '',
         price: cardData.price ?? '',
         primaryImage: cardData.image || '',
         url: cardData.url || '',

@@ -518,17 +518,19 @@
     const link = card.querySelector('a[href*="/product/"]');
     const img = card.querySelector('img');
 
-    // 名称优先级（避开 Chrome 翻译污染）：
+    // 名称优先级（避开 Chrome 翻译污染 + 价格污染）：
     //   1. <a aria-label>            ← attribute，不被翻译
     //   2. <img alt>                 ← attribute，不被翻译
-    //   3. <a> 上嵌入的 [data-state] / span 子元素 textContent —— 翻译态下退化
-    //   4. <a> textContent            ← 翻译态下是中文，**仅在非翻译态使用**
-    // 翻译态下若都拿不到原始名，name 留空，让后端走 search-variant-model
-    // attr 4180 拿原始俄/英文名（更可靠）。
+    //   3. <a> 内嵌的 title-like 元素(h3/h2/[class*=title]) ← 非翻译态精确取值
+    // 不再 fallback 到 link.textContent / card.textContent —— 它们会抓到价格 span
+    // (如 "110,21 ¥700,89 ¥−84%") 污染 name。
+    // 拿不到原始名时 name 留空,让后端走 search-variant-model attr 4180 拿原始俄/英文名。
     const ariaLabel = (link?.getAttribute('aria-label') || '').trim();
     const imgAlt = (img?.getAttribute('alt') || '').trim();
     const translated = window.jzIsTranslated?.();
-    const textTitle = translated ? '' : link?.textContent?.trim() || card.textContent?.trim().slice(0, 120) || '';
+    const textTitle = translated
+      ? ''
+      : link?.querySelector('h3, h2, [class*="title"], [class*="Title"], [class*="name"]')?.textContent?.trim() || '';
     const title = ariaLabel || imgAlt || textTitle;
 
     const priceNode =

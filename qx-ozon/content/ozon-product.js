@@ -1923,7 +1923,7 @@
       const name =
         link.getAttribute('aria-label') ||
         (img && img.getAttribute('alt')) ||
-        (link.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) ||
+        link.querySelector('h3, h2, [class*="title"], [class*="Title"], [class*="name"]')?.textContent?.trim() ||
         '';
       // 取第一个含币种符号(₽/¥/₸)且带数字的叶子 span 作为售价。
       let price = '';

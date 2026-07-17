@@ -116,21 +116,19 @@
     const link = card.querySelector('a[href*="/product/"]');
     const img = card.querySelector('img');
 
-    // 名称优先级（避开 Chrome 翻译污染）：
+    // 名称优先级（避开 Chrome 翻译污染 + 价格污染）：
     //   1. <a aria-label>            ← attribute，不被翻译
     //   2. <img alt>                 ← attribute，不被翻译
-    //   3. <a> textContent           ← 翻译态下是中文，**仅在非翻译态使用**
-    // 翻译态下若都拿不到原始名，name 留空，让后端走 search-variant-model
-    // attr 4180 拿原始俄/英文名。
+    //   3. <a> 内嵌的 title-like 元素(h3/h2/[class*=title]) ← 非翻译态精确取值
+    // 不再 fallback 到 link.textContent / card.textContent —— 它们会抓到价格 span
+    // (如 "110,21 ¥700,89 ¥−84%") 污染 name。
+    // 拿不到原始名时 name 留空,让后端走 search-variant-model attr 4180 拿原始俄/英文名。
     const ariaLabel = (link?.getAttribute('aria-label') || '').trim();
     const imgAlt = (img?.getAttribute('alt') || '').trim();
     const translated = window.jzIsTranslated?.();
     const textTitle = translated
       ? ''
-      : link?.textContent?.trim() ||
-        card.querySelector('[data-widget="searchResultsV2"]')?.textContent?.trim() ||
-        card.textContent?.trim().slice(0, 120) ||
-        '';
+      : link?.querySelector('h3, h2, [class*="title"], [class*="Title"], [class*="name"]')?.textContent?.trim() || '';
     // 角标(Новинка / 0% до N дней 分期等)会被 textContent 抓进名字,剥掉它们;
     // 整串都是角标时留空,让后端 attr 4180 兜底拿原始俄文名。
     const title = window.jzStripPromo
