@@ -14,9 +14,15 @@ import * as opi from './ozon-opi.js';
 
 /**
  * 从 item 提取 type_id + description_category_id(供查属性字典用)
- * 注意:字典接口 /v1/description-category/attribute 要求的是 level_3_id,
- * 而 transformItemForPortal 上架用的 description_category_id 是最深层 category。
- * 这里返回字典查询用的 (descriptionCategoryId=level3, typeId)。
+ *
+ * 字段来源说明:
+ * - typeId: 来自 qx-ozon normalizeSearchVariantToSv 把 /api/v1/search 的 description_type_dict_value
+ *   映射成 sv.description_category_id(字段名误用,实际值是 type_id)。
+ *   也兼容 bundleItem.type_id(部分数据源有真实 type_id)。
+ * - descriptionCategoryId: OPI 字典接口要求 level_3_id,优先取 sv.categories 中 level=3 的类目,
+ *   fallback 到 bundleItem.description_category_id(注意:该值有时是 level_4,不保证正确),
+ *   再 fallback 到 sv.categories 最深层。
+ *
  * @param {object} item
  * @returns {{ typeId: number, descriptionCategoryId: number }}
  */
@@ -24,13 +30,24 @@ export function extractCategoryIds(item) {
   const sv = item?._sourceVariant || null;
   const bundleItem = sv?._bundleItem || null;
   const cats = Array.isArray(sv?.categories) ? sv.categories : [];
-  // 字典接口需要 level_3_id;优先取 level===3 的类目,没有则退而取最深层(兼容部分类目无 level 3 的情况)
   const lvl3Cat = cats.find((c) => c.id && Number(c.level) === 3);
   const deepestCat = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
-  const typeId = Number(bundleItem?.type_id) || Number(sv?.description_category_id) || 0;
-  const descriptionCategoryId = Number(lvl3Cat?.id) || Number(deepestCat?.id) || 0;
+  // typeId 优先取 sv.description_category_id(实际是 type_id,来自 description_type_dict_value);
+  // fallback 到 bundleItem.type_id(部分数据源有)
+  const typeId = Number(sv?.description_category_id) || Number(bundleItem?.type_id) || 0;
+  // descriptionCategoryId 优先取 sv.categories 中 level=3 的类目(OPI 字典要求 level_3_id);
+  // fallback 到 bundleItem.description_category_id(可能是 level_4,不保证,但聊胜于无);
+  // 再 fallback 到 sv.categories 最深层
+  const descriptionCategoryId =
+    Number(lvl3Cat?.id) ||
+    Number(bundleItem?.description_category_id) ||
+    Number(deepestCat?.id) ||
+    0;
   return { typeId, descriptionCategoryId };
 }
+
+// 注:属性名称仅来源于 OPI /v1/description-category/attribute 字典接口,
+// 不做任何本地臆测映射。前端对未命中字典的属性降级显示 "ID xxx"。
 
 /**
  * transformItemForPortal: 把插件侧 item 格式转换为 OPI v3 portalItem 格式
@@ -87,11 +104,11 @@ export function transformItemForPortal(item, options = {}) {
       if (allowedAttrIds && !allowedAttrIds.has(key)) continue;
       const vals = Array.isArray(ba.values)
         ? ba.values.filter(
-            (v) =>
-              v &&
-              ((v.value != null && v.value !== '') ||
-                (v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0))
-          )
+          (v) =>
+            v &&
+            ((v.value != null && v.value !== '') ||
+              (v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0))
+        )
         : [];
       if (vals.length === 0) continue;
       attributes.push({
@@ -160,11 +177,11 @@ export function transformItemForPortal(item, options = {}) {
       if (!attrId) return null;
       const vals = Array.isArray(ba.values)
         ? ba.values.filter(
-            (v) =>
-              v &&
-              ((v.value != null && v.value !== '') ||
-                (v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0))
-          )
+          (v) =>
+            v &&
+            ((v.value != null && v.value !== '') ||
+              (v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0))
+        )
         : [];
       if (vals.length === 0) return null;
       return {

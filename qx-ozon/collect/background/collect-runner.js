@@ -173,6 +173,40 @@
       }
     };
 
+    // ── L1 命中时异步补查 L2 一致性 ────────────────────────────────────────────
+    // 场景:L1 缓存命中直接返回,但 L2(ERP)可能因历史写入失败(后端不可达/401/网络)
+    // 而缺失。此方法后台静默检查 L2 是否存在且有效,缺失则补写,补写失败则清 L1
+    // 避免脏缓存(下次访问将重新走 L2 → 规则引擎)。
+    // 不阻塞 checkStoreClassification 返回(店铺分类非关键路径)。
+    this._ensureL2Consistency = async (slug, name, companyInfo, sellerId, l1) => {
+      const l2 = await this._erpStoreClassGet(slug);
+      console.log('[store-class] L2 consistency check, L2:', l2);
+      if (l2 && l2.isChinese !== null && l2.isChinese !== undefined && l2.classifiedBy) {
+        return; // L2 有效,无需补写
+      }
+      // L2 缺失或脏数据,补写
+      const ok = await this._erpStoreClassSet(slug, {
+        sellerSlug: slug,
+        sellerId: sellerId || '',
+        sellerName: name,
+        isChinese: l1.isChinese,
+        classifiedBy: l1.classifiedBy,
+        companyInfo: companyInfo || null,
+        lastSeenAt: new Date().toISOString(),
+      });
+      if (!ok) {
+        // L2 补写失败,清 L1 避免下次还走脏缓存(下次会重新走 L2 → 规则引擎)
+        try {
+          await sw.removeStorage([`jz-store-class-${slug}`]);
+        } catch (_) {
+          /* ignore */
+        }
+        console.warn(`[store-class] L2 补写失败,L1 已清除 slug=${slug}(下次访问将重新分类)`);
+      } else {
+        console.log(`[store-class] L2 补写成功 slug=${slug}`);
+      }
+    };
+
     // ── 三层查询:L1 chrome.storage.local → L2 MongoDB → 规则引擎 ────────────────
     // 返回 { isChinese, classifiedBy } | null(未分类,等待人工确认)。
     // sellerId 用于写入 L2 时带上(稳定主键,slug 可变)
@@ -194,6 +228,11 @@
         console.log('[store-class] L1 chrome.storage:', l1);
         if (l1 && l1.isChinese !== null && l1.isChinese !== undefined && l1.classifiedBy) {
           console.log('[store-class] L1 hit →', { isChinese: l1.isChinese, classifiedBy: l1.classifiedBy });
+          // 异步补查 L2 一致性:若 L2 缺失(历史写入失败)则补写,补写失败则清 L1。
+          // 不阻塞返回(店铺分类非关键路径,L2 修复后台静默进行)
+          this._ensureL2Consistency(slug, name, companyInfo, sellerId, l1).catch((e) => {
+            console.warn(`[store-class] L2 consistency check failed slug=${slug}:`, e?.message || e);
+          });
           return { isChinese: l1.isChinese, classifiedBy: l1.classifiedBy };
         }
         // L1 无效或 classifiedBy 为空:清除旧记录,避免下次再被读到
@@ -247,14 +286,24 @@
         } catch (e) {
           console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
         }
-        this._erpStoreClassSet(slug, record);
-        console.log('[store-class] rule result persisted to L1+L2:', record);
+        // await L2 写入:失败时清 L1,避免下次 L1 命中但 L2 缺失的脏缓存
+        const l2Ok = await this._erpStoreClassSet(slug, record);
+        if (!l2Ok) {
+          console.warn(`[store-class] L2 write failed, clearing L1 for slug=${slug}`);
+          try {
+            await sw.removeStorage([l1Key]);
+          } catch (_) {
+            /* ignore */
+          }
+        } else {
+          console.log('[store-class] rule result persisted to L1+L2:', record);
+        }
         return { isChinese: ruleResult.isChinese, classifiedBy: ruleResult.by };
       }
 
       // 未分类:写 L2 记录(isChinese=null,等待人工确认)
       console.log('[store-class] unclassified, writing null record to L2 (waiting manual confirm)');
-      this._erpStoreClassSet(slug, {
+      await this._erpStoreClassSet(slug, {
         sellerSlug: slug,
         sellerId: sellerId || '',
         sellerName: name,

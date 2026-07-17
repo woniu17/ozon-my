@@ -553,6 +553,130 @@ router.get('/admin/api/cache/list', async (req, res, next) => {
   }
 });
 
+// ── 采集箱·缓存视图:以 cardCache 为基准,聚合 7 类缓存命中状态 ──
+// 用于前端"采集箱"页面切换数据源:从 collect_box_v2 表 → 缓存聚合视图
+// 设计:cardCache 含 sku/url/name/price/image,最适合做列表基准
+//      其他 6 类缓存仅取 _id + fetchedAt 用于命中位图 + 排序
+router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
+  try {
+    const keyword = String(req.query.keyword || '').trim();
+    const page = Math.max(1, Number(req.query.currentPage) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
+
+    // hasVideo=1:richMedia 缓存含 mp4(需后置过滤,因 cardCache 无视频信息)
+    const filterHasVideo = req.query.hasVideo === '1' || req.query.hasVideo === 'true';
+    // minCacheHits=N:7 类缓存命中数 ≥ N(后置过滤)
+    const minCacheHits = Math.max(0, Math.min(7, Number(req.query.minCacheHits) || 0));
+
+    // 1) cardCache 分页(基准,findPagedList 不返回 data,仅用于拿 SKU 列表 + total)
+    const { items: cardPage, total } = await daos.cardDao.findPagedList(keyword, page, pageSize);
+    if (!cardPage.length) {
+      return res.json(ok({ items: [], total, current: page, pageSize }));
+    }
+
+    // 2) 并行批量查询:本页 cardCache 的完整 data + 其他 6 类缓存命中状态
+    const skus = cardPage.map((c) => c.sku);
+    const [cardDocs, bDocs, rmDocs, dDocs, mDocs, fDocs, sDocs] = await Promise.all([
+      daos.cardDao.findManyBySkuList(skus), // 取本页 cardCache 的 data(含 name/price/image)
+      daos.bundleDao.findManyBySkuList(skus),
+      daos.richMediaDao.findManyBySkuList(skus),
+      daos.detailDao.findManyBySkuList(skus),
+      daos.marketStatsDao.findManyBySkuList(skus),
+      daos.followSellDao.findManyBySkuList(skus),
+      daos.searchDao.findManyBySkuList(skus),
+    ]);
+
+    // 3) 建立 sku → 缓存命中位图
+    const cardMap = new Map(cardDocs.map((d) => [d.sku, d]));
+    const bundleMap = new Map(bDocs.map((d) => [d.sku, d]));
+    const richMediaMap = new Map(rmDocs.map((d) => [d.sku, d]));
+    const detailMap = new Map(dDocs.map((d) => [d.sku, d]));
+    const marketStatsMap = new Map(mDocs.map((d) => [d.sku, d]));
+    const followSellMap = new Map(fDocs.map((d) => [d.sku, d]));
+    const searchMap = new Map(sDocs.map((d) => [d.sku, d]));
+
+    // 4) 组装返回 items
+    let items = cardPage.map((c) => {
+      // cardCache.data 结构:{ sku, url, name, price, image, ... }(从 findManyBySkuList 取)
+      const cardDoc = cardMap.get(c.sku);
+      const cardData = cardDoc?.data || {};
+      const b = bundleMap.get(c.sku);
+      const rm = richMediaMap.get(c.sku);
+      const d = detailMap.get(c.sku);
+      const m = marketStatsMap.get(c.sku);
+      const f = followSellMap.get(c.sku);
+      const s = searchMap.get(c.sku);
+
+      const cacheHits = {
+        search: !!s,
+        bundle: !!b,
+        card: true, // 基准,恒为 true
+        richMedia: !!rm,
+        detail: !!d,
+        marketStats: !!m,
+        followSell: !!f,
+      };
+      const hitCount = Object.values(cacheHits).filter(Boolean).length;
+
+      // 7 类 fetchedAt 取最大值作为"最近采集时间"
+      const fetchedAts = [
+        c.fetchedAt, b?.fetchedAt, rm?.fetchedAt, d?.fetchedAt,
+        m?.fetchedAt, f?.fetchedAt, s?.fetchedAt,
+      ].filter(Boolean);
+      const lastCollectedAt = fetchedAts.sort().pop() || c.fetchedAt;
+
+      // marketStats 关键字段(P50 价格,如有)
+      let marketPriceP50 = null;
+      if (m?.data) {
+        marketPriceP50 = m.data.priceP50 ?? m.data.priceP50 ?? m.data.p50 ?? null;
+      }
+
+      // followSell 竞争度(跟卖商家数,如有)
+      let competitorCount = null;
+      if (f?.data) {
+        const sellers = f.data.sellers || f.data.competitors || [];
+        competitorCount = Array.isArray(sellers) ? sellers.length : null;
+      }
+
+      // richMedia 视频标志
+      const hasVideo = !!(rm?.data?.mp4);
+
+      return {
+        sku: c.sku,
+        name: cardData.name || '',
+        price: cardData.price ?? '',
+        primaryImage: cardData.image || '',
+        url: cardData.url || '',
+        cacheHits,
+        hitCount,
+        hasVideo,
+        marketPriceP50,
+        competitorCount,
+        lastCollectedAt,
+        // 兼容旧卡片字段(避免前端报错)
+        storeId: '',
+        anchorSku: c.sku,
+        collectSource: 'cache',
+        collectedAt: null,
+        createdAt: c.fetchedAt,
+      };
+    });
+
+    // 5) 后置过滤(hasVideo / minCacheHits)
+    if (filterHasVideo) {
+      items = items.filter((it) => it.hasVideo);
+    }
+    if (minCacheHits > 0) {
+      items = items.filter((it) => it.hitCount >= minCacheHits);
+    }
+
+    return res.json(ok({ items, total, current: page, pageSize }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] collect-box-v2/from-cache failed');
+    next(e);
+  }
+});
+
 // GET /admin/api/cache/:type/:sku — 缓存详情(完整 data)
 router.get('/admin/api/cache/:type/:sku', async (req, res, next) => {
   try {
@@ -726,6 +850,145 @@ router.get('/admin/api/cache/overview', async (req, res, next) => {
   }
 });
 
+// ── 缓存合成 helper(opi-preview + preview/profile 共用) ───
+// 从 5 类缓存(search/bundle/card/richMedia/detail)合成 OPI 输入 item
+// 返回 { sources, item, portalItem, opiItem, raw } 或 { sources, error }
+async function buildSynthesizedFromCache(sku, storeId) {
+  const [sDoc, bDoc, cDoc, rmDoc, dDoc] = await Promise.all([
+    daos.searchDao.findById(sku),
+    daos.bundleDao.findById(sku),
+    daos.cardDao.findById(sku),
+    daos.richMediaDao.findById(sku),
+    daos.detailDao.findById(sku),
+  ]);
+
+  const sources = {
+    search: !!sDoc,
+    bundle: !!bDoc,
+    card: !!cDoc,
+    richMedia: !!rmDoc,
+    detail: !!dDoc,
+  };
+
+  if (!bDoc && !sDoc) {
+    return { sources, error: '缺少 bundle 和 search 缓存,无法合成 OPI' };
+  }
+
+  const bundleData = bDoc?.data || null;
+  const searchData = sDoc?.data || null;
+  const cardData = cDoc?.data || null;
+  const richMediaData = rmDoc?.data || null;
+  const detailData = dDoc?.data || null;
+
+  const sv = (searchData?.items && searchData.items[0]) || {};
+  const bundleItem = bundleData || {};
+  const bundleComplexAttrs = Array.isArray(bundleItem.attributes)
+    ? bundleItem.attributes.filter((a) => Number(a.complex_id) > 0)
+    : [];
+
+  // images:优先 bundle,兜底 richMedia.gallery / richMedia.fields.images / detail.images / card.image
+  const rmGallery = richMediaData?.gallery?.length
+    ? richMediaData.gallery
+    : richMediaData?.fields?.images || [];
+  let primaryImage = bundleItem.primary_image || '';
+  let images = Array.isArray(bundleItem.images) ? [...bundleItem.images] : [];
+  if (!primaryImage && rmGallery.length) primaryImage = rmGallery[0];
+  if (!images.length && rmGallery.length) images = rmGallery.slice(1);
+  if (!images.length && detailData?.images?.length) images = [...detailData.images];
+  if (!primaryImage && detailData?.images?.length) primaryImage = detailData.images[0];
+  if (!primaryImage && cardData?.image) primaryImage = cardData.image;
+
+  // name:优先 bundle attr 4180,兜底 search attr 4180 / detail.title / card.name
+  let name = '';
+  const bAttr4180 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4180');
+  if (bAttr4180?.values?.[0]?.value) name = bAttr4180.values[0].value;
+  if (!name) {
+    const sAttr4180 = sv.attributes?.find((a) => String(a.key) === '4180');
+    if (sAttr4180?.value) name = sAttr4180.value;
+  }
+  if (!name) name = detailData?.title || '';
+  if (!name) name = cardData?.name || '';
+
+  // description:优先 bundle attr 4191,兜底 richMedia.description
+  let description = '';
+  const bAttr4191 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4191');
+  if (bAttr4191?.values?.[0]?.value) description = bAttr4191.values[0].value;
+  if (!description) description = richMediaData?.description || '';
+
+  const price = detailData?.price || cardData?.price || '';
+  const barcode = sv._searchMeta?.barcodes?.[0] || bundleItem.barcode || '';
+
+  const item = {
+    _sourceVariant: { ...sv, _bundleItem: bundleItem, _bundleComplexAttrs: bundleComplexAttrs },
+    images: [
+      ...(primaryImage ? [{ file_name: primaryImage, default: true }] : []),
+      ...images.map((u) => ({ file_name: u, default: false })),
+    ],
+    name,
+    price,
+    old_price: detailData?.originalPrice || '',
+    offer_id: 'SKU' + sku,
+    weight: bundleItem.weight || '',
+    depth: bundleItem.depth || '',
+    width: bundleItem.width || '',
+    height: bundleItem.height || '',
+    scraped_description: description,
+    barcode,
+    videoUrl: richMediaData?.mp4 || '',
+    videoCover: '',
+  };
+
+  // 字典白名单(可选)+ 完整属性字典(供前端展示可读属性名)
+  // 字典查询需要任一 store 的认证;storeId 未传时退而取第一个 store(仅为字典展示用,不影响白名单)
+  const stores = readStoresForPreview();
+  const store = storeId
+    ? stores.find((s) => s.id === storeId)
+    : stores[0] || null;
+  let allowedAttrIds = null;
+  let attrDict = {}; // id(字符串) -> { id, name, description, type, dictionary_id }
+  if (store) {
+    try {
+      const { typeId, descriptionCategoryId } = extractCategoryIds(item);
+      if (typeId && descriptionCategoryId) {
+        const attrs = await descriptionCategoryAttributes(store, {
+          description_category_id: descriptionCategoryId,
+          type_id: typeId,
+        });
+        if (Array.isArray(attrs) && attrs.length > 0) {
+          // 白名单仅在用户选中具体 store 时启用(不同 store 可能有不同类目过滤策略)
+          if (storeId) {
+            allowedAttrIds = new Set(attrs.map((a) => String(a.id)));
+          }
+          // 构建字典: id -> { id, name, description, type, dictionary_id }
+          for (const a of attrs) {
+            attrDict[String(a.id)] = {
+              id: a.id,
+              name: a.name || '',
+              description: a.description || '',
+              type: a.type || '',
+              dictionary_id: a.dictionary_id || 0,
+            };
+          }
+        }
+      }
+    } catch {
+      // 字典查询失败,降级为不过滤
+    }
+  }
+
+  const portalItem = transformItemForPortal(item, { allowedAttrIds });
+  const opiItem = toOpiItem(portalItem);
+
+  return {
+    sources,
+    item,
+    portalItem,
+    opiItem,
+    attrDict,
+    raw: { bundleData, searchData, cardData, richMediaData, detailData },
+  };
+}
+
 // GET /admin/api/cache/opi-preview/:sku — 从缓存合成 OPI v3 预览
 // query: storeId(可选,用于字典白名单过滤)
 // 返回: { item: opiItem, sources: {...} }
@@ -733,131 +996,110 @@ router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
     const storeId = String(req.query.storeId || '');
+    const r = await buildSynthesizedFromCache(sku, storeId);
+    if (r.error) {
+      return res.json(ok({ item: null, sources: r.sources, error: r.error }));
+    }
+    return res.json(ok({ item: r.opiItem, sources: r.sources, portalItem: r.portalItem }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] opi-preview failed');
+    next(e);
+  }
+});
 
-    // 并行读取 5 类缓存
-    // richMedia 合并了原 entrypoint(mp4/richContent/description/hashtags/gallery)+ composer(fields/widgetStates)
-    const [sDoc, bDoc, cDoc, rmDoc, dDoc] = await Promise.all([
-      daos.searchDao.findById(sku),
-      daos.bundleDao.findById(sku),
-      daos.cardDao.findById(sku),
-      daos.richMediaDao.findById(sku),
-      daos.detailDao.findById(sku),
+// ── 上架预览工作台:SKU 全息画像 ────────────────────────────
+// 聚合 7 类缓存,返回原始字段 + 合成 OPI item,供前端预览页渲染
+// query: storeId(可选,用于字典白名单过滤)
+router.get('/admin/api/preview/sku/:sku/profile', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const storeId = String(req.query.storeId || '');
+
+    // 1) 合成 OPI(复用 opi-preview 逻辑)+ 额外读 marketStats/followSell
+    const [synth, mDoc, fDoc] = await Promise.all([
+      buildSynthesizedFromCache(sku, storeId),
+      daos.marketStatsDao.findById(sku),
+      daos.followSellDao.findById(sku),
     ]);
 
     const sources = {
-      search: !!sDoc,
-      bundle: !!bDoc,
-      card: !!cDoc,
-      richMedia: !!rmDoc,
-      detail: !!dDoc,
+      ...synth.sources,
+      marketStats: !!mDoc,
+      followSell: !!fDoc,
     };
 
-    if (!bDoc && !sDoc) {
-      return res.json(ok({ item: null, sources, error: '缺少 bundle 和 search 缓存,无法合成 OPI' }));
+    if (synth.error) {
+      return res.json(ok({ sources, original: null, error: synth.error }));
     }
 
-    const bundleData = bDoc?.data || null;
-    const searchData = sDoc?.data || null;
-    const cardData = cDoc?.data || null;
-    const richMediaData = rmDoc?.data || null;
-    const detailData = dDoc?.data || null;
+    const { raw, item, portalItem, opiItem, attrDict } = synth;
+    const marketStatsData = mDoc?.data || null;
+    const followSellData = fDoc?.data || null;
 
-    // 从 search 缓存提取 sv(归一化后的 sourceVariant)
-    const sv = (searchData?.items && searchData.items[0]) || {};
-    // 从 bundle 缓存提取 bundleItem
-    const bundleItem = bundleData || {};
-
-    // 构造 item(对齐 transformItemForPortal 输入格式)
-    // bundle 的 complex attributes 从 bundle.attributes 拆出
-    const bundleComplexAttrs = Array.isArray(bundleItem.attributes)
-      ? bundleItem.attributes.filter((a) => Number(a.complex_id) > 0)
-      : [];
-
-    // images:优先 bundle.primary_image + bundle.images,兜底 richMedia.gallery / richMedia.fields.images / detail.images / card.image
-    // (richMedia.gallery 新采集才有,旧数据可能为空,此时回退 richMedia.fields.images)
-    const rmGallery = richMediaData?.gallery?.length ? richMediaData.gallery : (richMediaData?.fields?.images || []);
-    let primaryImage = bundleItem.primary_image || '';
-    let images = Array.isArray(bundleItem.images) ? [...bundleItem.images] : [];
-    if (!primaryImage && rmGallery.length) primaryImage = rmGallery[0];
-    if (!images.length && rmGallery.length) images = rmGallery.slice(1);
-    if (!images.length && detailData?.images?.length) images = [...detailData.images];
-    if (!primaryImage && detailData?.images?.length) primaryImage = detailData.images[0];
-    if (!primaryImage && cardData?.image) primaryImage = cardData.image;
-
-    // name:优先 bundle attr 4180,兜底 search attr 4180 / detail.title / card.name
-    let name = '';
-    const bAttr4180 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4180');
-    if (bAttr4180?.values?.[0]?.value) name = bAttr4180.values[0].value;
-    if (!name) {
-      const sAttr4180 = sv.attributes?.find((a) => String(a.key) === '4180');
-      if (sAttr4180?.value) name = sAttr4180.value;
-    }
-    if (!name) name = detailData?.title || '';
-    if (!name) name = cardData?.name || '';
-
-    // description:优先 bundle attr 4191,兜底 richMedia.description
-    let description = '';
-    const bAttr4191 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4191');
-    if (bAttr4191?.values?.[0]?.value) description = bAttr4191.values[0].value;
-    if (!description) description = richMediaData?.description || '';
-
-    // price:detail.price(原 dynamic),兜底 card.price
-    const price = detailData?.price || cardData?.price || '';
-
-    // barcode:search._searchMeta.barcodes[0] / bundle.barcode
-    const barcode = sv._searchMeta?.barcodes?.[0] || bundleItem.barcode || '';
-
-    // 构造 item
-    const item = {
-      _sourceVariant: {
-        ...sv,
-        _bundleItem: bundleItem,
-        _bundleComplexAttrs: bundleComplexAttrs,
-      },
-      images: [
-        ...(primaryImage ? [{ file_name: primaryImage, default: true }] : []),
-        ...images.map((u) => ({ file_name: u, default: false })),
-      ],
-      name,
-      price,
-      old_price: detailData?.originalPrice || '',
-      offer_id: 'SKU' + sku,
-      weight: bundleItem.weight || '',
-      depth: bundleItem.depth || '',
-      width: bundleItem.width || '',
-      height: bundleItem.height || '',
-      scraped_description: description,
-      barcode,
-      videoUrl: richMediaData?.mp4 || '',
-      videoCover: '',
-    };
-
-    // 字典白名单(可选)
-    const store = storeId ? readStoresForPreview().find((s) => s.id === storeId) : null;
-    let allowedAttrIds = null;
-    if (store) {
-      try {
-        const { typeId, descriptionCategoryId } = extractCategoryIds(item);
-        if (typeId && descriptionCategoryId) {
-          const attrs = await descriptionCategoryAttributes(store, {
-            description_category_id: descriptionCategoryId,
-            type_id: typeId,
-          });
-          if (Array.isArray(attrs) && attrs.length > 0) {
-            allowedAttrIds = new Set(attrs.map((a) => String(a.id)));
+    // 2) 组装 original(前端预览页左栏 + 对比卡用)
+    const original = {
+      sku,
+      name: item.name,
+      price: item.price,
+      oldPrice: item.old_price,
+      primaryImage: item.images.find((i) => i.default)?.file_name || item.images[0]?.file_name || '',
+      images: item.images.map((i) => i.file_name).filter(Boolean),
+      url: raw.cardData?.url || `https://www.ozon.ru/product/${sku}/`,
+      description: item.scraped_description,
+      attributes: portalItem.attributes || [],
+      complexAttributes: portalItem.complex_attributes || [],
+      weight: item.weight,
+      dimensions: { depth: item.depth, width: item.width, height: item.height },
+      videoUrl: item.videoUrl,
+      barcode: item.barcode,
+      offerId: item.offer_id,
+      // 市场统计(marketStats 缓存,用于价格对比卡的 P50 参考)
+      marketStats: marketStatsData
+        ? {
+            priceP50: marketStatsData.priceP50 ?? marketStatsData.p50 ?? null,
+            priceP25: marketStatsData.priceP25 ?? marketStatsData.p25 ?? null,
+            priceP75: marketStatsData.priceP75 ?? marketStatsData.p75 ?? null,
+            salesTrend: marketStatsData.salesTrend || null,
           }
-        }
-      } catch {
-        // 字典查询失败,降级为不过滤
-      }
-    }
+        : null,
+      // 跟卖竞争度(followSell 缓存)
+      competitorCount: followSellData
+        ? (followSellData.sellers || followSellData.competitors || []).length
+        : null,
+    };
 
-    const portalItem = transformItemForPortal(item, { allowedAttrIds });
-    const opiItem = toOpiItem(portalItem);
+    // 3) portalItem 关键字段预览(前端右栏对比用)
+    const portalPreview = {
+      name: portalItem.name,
+      price: portalItem.price,
+      oldPrice: portalItem.old_price,
+      primaryImage: portalItem.primary_image || '',
+      images: portalItem.images || [],
+      weight: portalItem.weight,
+      dimensions: {
+        depth: portalItem.depth,
+        width: portalItem.width,
+        height: portalItem.height,
+      },
+      attributes: portalItem.attributes || [],
+      complexAttributes: portalItem.complex_attributes || [],
+      descriptionCategoryId: portalItem.new_description_category_id || null,
+      typeId: portalItem.type_id || null,
+      videoUrl: portalItem.video_url || '',
+    };
 
-    return res.json(ok({ item: opiItem, sources, portalItem }));
+    return res.json(
+      ok({
+        sources,
+        original,
+        item, // 合成的 OPI 输入 item(提交时传给 /ozon/products/import)
+        portalItem: portalPreview,
+        opiItem,
+        attrDict, // 属性 ID -> {id, name, description, type, dictionary_id}(供前端显示可读属性名)
+      })
+    );
   } catch (e) {
-    logger.warn({ err: e.message }, '[cache] opi-preview failed');
+    logger.warn({ err: e.message }, '[cache] preview/sku/profile failed');
     next(e);
   }
 });

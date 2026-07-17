@@ -1,162 +1,44 @@
 // 采集箱 v2 / 收藏路由
+// 注意:collect_box_v2 表已废弃,改为以 cardCache 为基准的缓存视图(/admin/api/collect-box-v2/from-cache)
+// 此处仅保留插件兼容性入口(返回静默成功,不再写库) + 收藏功能
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { storeGuard } from '../middleware/store.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
+import logger from '../middleware/log.js';
 
 const router = Router();
 
-// POST /ozon/collect-box/v2 —— 全数据源采集推送(字段级来源标记)
-// body: { anchorSku, sourcePageUrl, collectSource, variants[], rawBySource, collectedAt }
-// 注:synthesizedItems 已改为前端查询时从 variants 现合成,不再预存
-router.post('/ozon/collect-box/v2', storeGuard, (req, res, next) => {
-  try {
-    const body = req.body || {};
-    if (!body.anchorSku) {
-      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'anchorSku 必填'));
-    }
-    if (!Array.isArray(body.variants) || body.variants.length === 0) {
-      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'variants 必填且非空'));
-    }
-
-    // 大体积保护:raw_by_source 超 5MB 只存 metadata,避免 SQLite 单行过大
-    let rawBySourceJson;
-    const rawStr = JSON.stringify(body.rawBySource || {});
-    if (rawStr.length > 5 * 1024 * 1024) {
-      const meta = {
-        _truncated: true,
-        _originalSize: rawStr.length,
-        _reason: 'raw_by_source 超 5MB,只存 metadata',
-        sources: Object.keys(body.rawBySource || {}),
-      };
-      rawBySourceJson = JSON.stringify(meta);
-    } else {
-      rawBySourceJson = rawStr;
-    }
-
-    // 拆分多变体:每个变体一条记录,以 (store_id, sku) 为 key upsert
-    const variants = body.variants;
-    const collectedAt = Number(body.collectedAt) || Date.now();
-    const storeId = req.storeId;
-    const anchorSku = String(body.anchorSku);
-    const sourcePageUrl = String(body.sourcePageUrl || '');
-    const collectSource = String(body.collectSource || '');
-
-    const selectExisting = db.prepare(
-      `SELECT id FROM collect_box_v2 WHERE COALESCE(store_id, '') = COALESCE(?, '') AND sku = ?`
-    );
-    const updateStmt = db.prepare(
-      `UPDATE collect_box_v2 SET
-         anchor_sku = ?, source_page_url = ?, collect_source = ?, variants_json = ?,
-         raw_by_source_json = ?,
-         collected_at = ?, updated_at = datetime('now')
-       WHERE id = ?`
-    );
-    const insertStmt = db.prepare(
-      `INSERT INTO collect_box_v2
-        (store_id, sku, anchor_sku, source_page_url, collect_source,
-         variants_json, raw_by_source_json, collected_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-
-    const results = [];
-    for (let i = 0; i < variants.length; i++) {
-      const v = variants[i];
-      const sku = String(v?.sku?.value || v?.sku || anchorSku);
-      const variantsJson = JSON.stringify([v]); // 单条变体包装成数组(保持 variants_json 结构一致)
-
-      const existing = selectExisting.get(storeId, sku);
-      let id;
-      let action;
-      if (existing) {
-        updateStmt.run(
-          anchorSku,
-          sourcePageUrl,
-          collectSource,
-          variantsJson,
-          rawBySourceJson,
-          collectedAt,
-          existing.id
-        );
-        id = existing.id;
-        action = 'updated';
-      } else {
-        const info = insertStmt.run(
-          storeId,
-          sku,
-          anchorSku,
-          sourcePageUrl,
-          collectSource,
-          variantsJson,
-          rawBySourceJson,
-          collectedAt
-        );
-        id = info.lastInsertRowid;
-        action = 'created';
-      }
-      results.push({ id, sku, action });
-    }
-
-    res.json({
-      anchorSku,
-      variantCount: variants.length,
-      results,
-    });
-  } catch (e) {
-    next(e);
-  }
+// POST /ozon/collect-box/v2 —— 已废弃(插件仍会调用,返回静默成功避免报错)
+// 数据已改为由 SW 直接写入 7 类缓存表,本接口不再持久化
+router.post('/ozon/collect-box/v2', storeGuard, (req, res) => {
+  const body = req.body || {};
+  const variants = Array.isArray(body.variants) ? body.variants : [];
+  logger.debug(
+    { anchorSku: body.anchorSku, variantCount: variants.length, storeId: req.storeId },
+    'collect-box/v2 已废弃(静默成功,不再写库)'
+  );
+  res.json({
+    anchorSku: body.anchorSku || '',
+    variantCount: variants.length,
+    results: variants.map((v) => ({
+      id: 0,
+      sku: String(v?.sku?.value || v?.sku || body.anchorSku || ''),
+      action: 'ignored',
+    })),
+    deprecated: true,
+  });
 });
 
-// POST /sources/:sourceId/collect —— 多源统一采集(单条 upsert)
-// agent collectSource 调用,body: { raw, storeId?, resetDraft? }
-// raw 是平台原始采集 payload(含 sku 字段),按 store_id + sku upsert 到 collect_box_v2。
-// 返回 { id, action: 'created'|'updated', source } — 上层(agent)用 id 跳转采集箱。
-router.post('/sources/:sourceId/collect', storeGuard, (req, res, next) => {
-  try {
-    const sourceId = req.params.sourceId || 'ozon';
-    const raw = req.body?.raw;
-    if (!raw) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'raw 必填'));
-    const sku = String(raw.sku || raw.id || '');
-    if (!sku) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'raw.sku 必填'));
-
-    const storeId = req.storeId;
-    const now = Date.now();
-    const variantsJson = JSON.stringify([{ sku, ...raw }]);
-    const rawBySourceJson = JSON.stringify({ agent: { raw, sourceId } });
-    const collectSource = sourceId;
-
-    const existing = db
-      .prepare(`SELECT id FROM collect_box_v2 WHERE COALESCE(store_id, '') = COALESCE(?, '') AND sku = ?`)
-      .get(storeId, sku);
-
-    let id;
-    let action;
-    if (existing) {
-      db.prepare(
-        `UPDATE collect_box_v2 SET
-           anchor_sku = ?, source_page_url = ?, collect_source = ?, variants_json = ?,
-           raw_by_source_json = ?,
-           collected_at = ?, updated_at = datetime('now')
-         WHERE id = ?`
-      ).run(sku, raw.url || '', collectSource, variantsJson, rawBySourceJson, now, existing.id);
-      id = existing.id;
-      action = 'updated';
-    } else {
-      const info = db
-        .prepare(
-          `INSERT INTO collect_box_v2
-            (store_id, sku, anchor_sku, source_page_url, collect_source,
-             variants_json, raw_by_source_json, collected_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(storeId, sku, sku, raw.url || '', collectSource, variantsJson, rawBySourceJson, now);
-      id = info.lastInsertRowid;
-      action = 'created';
-    }
-    res.json({ id, action, source: sourceId });
-  } catch (e) {
-    next(e);
-  }
+// POST /sources/:sourceId/collect —— 已废弃(agent 仍会调用,返回静默成功避免报错)
+router.post('/sources/:sourceId/collect', storeGuard, (req, res) => {
+  const raw = req.body?.raw;
+  const sku = String(raw?.sku || raw?.id || '');
+  logger.debug(
+    { sourceId: req.params.sourceId, sku, storeId: req.storeId },
+    'sources/:id/collect 已废弃(静默成功,不再写库)'
+  );
+  res.json({ id: 0, action: 'ignored', source: req.params.sourceId || 'ozon', deprecated: true });
 });
 
 // POST /ozon/favorites

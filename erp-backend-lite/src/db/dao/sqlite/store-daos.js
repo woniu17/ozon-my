@@ -33,6 +33,10 @@ export const storeClassificationDao = {
       } else if (k === 'isChinese') {
         cols.push(k);
         vals.push(v === null ? null : v ? 1 : 0);
+      } else if (v instanceof Date) {
+        // better-sqlite3 不支持 Date 对象绑定,转 ISO 字符串
+        cols.push(k);
+        vals.push(v.toISOString());
       } else {
         cols.push(k);
         vals.push(v);

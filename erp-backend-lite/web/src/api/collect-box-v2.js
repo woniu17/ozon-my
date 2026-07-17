@@ -1,18 +1,26 @@
 import * as request from './request.js';
 
-// 全源采集列表
-export function getCollectBoxV2(params) {
-  return request.get('/admin/api/collect-box-v2', params);
+// 采集箱·缓存视图(以 cardCache 为基准聚合 7 类缓存命中状态)
+// params: { page, pageSize, keyword, hasVideo, minCacheHits }
+export function getCollectBoxV2FromCache(params) {
+  return request.get('/admin/api/collect-box-v2/from-cache', params);
 }
 
-// 全源采集详情
-export function getCollectBoxV2Detail(id) {
-  return request.get('/admin/api/collect-box-v2/' + encodeURIComponent(id));
+// 上架预览·SKU 全息画像(聚合 7 类缓存,返回 original + 合成 OPI item)
+// storeId 可选,传入则按类目字典过滤属性
+export function getSkuProfile(sku, storeId) {
+  const params = storeId ? { storeId } : {};
+  return request.get('/admin/api/preview/sku/' + encodeURIComponent(sku) + '/profile', params);
 }
 
-// 删除全源采集记录
-export function deleteCollectBoxV2(id) {
-  return request.del('/admin/api/collect-box-v2/' + encodeURIComponent(id));
+// 上架预览·一键提交(走 /ozon/products/import,需 x-ozon-store-id header)
+// items: 合成 OPI 输入 item 数组(从 profile 接口拿到 item 后可改 price)
+export function submitPreviewImport(items, storeId) {
+  return request.request('/ozon/products/import', {
+    method: 'POST',
+    headers: { 'x-ozon-store-id': storeId },
+    body: { items },
+  });
 }
 
 // 属性字典:查类目+类型下所有属性描述(名/描述/类型/字典)

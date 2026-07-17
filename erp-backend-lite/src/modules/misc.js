@@ -68,11 +68,10 @@ router.get('/ozon/description-category/:typeId/attributes', storeGuard, async (r
 });
 
 // GET /ozon/collect-box-v2/status-counts(popup 状态计数)
+// collect_box_v2 表已废弃,改为以 cardCache 计数(采集箱主入口已是缓存视图)
 router.get('/ozon/collect-box-v2/status-counts', storeGuard, (req, res, next) => {
   try {
-    const total = db
-      .prepare(`SELECT COUNT(*) as n FROM collect_box_v2 WHERE COALESCE(store_id, '') = COALESCE(?, '')`)
-      .get(req.storeId).n;
+    const total = db.prepare(`SELECT COUNT(*) as n FROM ozon_card_cache`).get().n;
     res.json({ total });
   } catch (e) {
     next(e);

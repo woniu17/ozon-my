@@ -10,7 +10,6 @@ console.log('[seed] 清空旧数据...');
 for (const t of [
   'follow_sell_task_items',
   'follow_sell_tasks',
-  'collect_box_v2',
   'favorites',
   'product_data_cache',
   'product_attributes_cache',
@@ -721,7 +720,6 @@ console.log('\n[seed] 种子数据插入完成:');
 for (const [name, sql] of Object.entries({
   follow_sell_tasks: 'SELECT COUNT(*) AS n FROM follow_sell_tasks',
   follow_sell_task_items: 'SELECT COUNT(*) AS n FROM follow_sell_task_items',
-  collect_box_v2: 'SELECT COUNT(*) AS n FROM collect_box_v2',
   favorites: 'SELECT COUNT(*) AS n FROM favorites',
   product_data_cache: 'SELECT COUNT(*) AS n FROM product_data_cache',
   product_attributes_cache: 'SELECT COUNT(*) AS n FROM product_attributes_cache',

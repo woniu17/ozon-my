@@ -20,7 +20,7 @@ const router = Router();
 
 // ── 内部工具:写入/更新上架记录明细 ───────────────────────
 // upsert:已存在则更新 status/product_id/errors,不存在则插入
-function upsertTaskItems(localTaskId, items) {
+export function upsertTaskItems(localTaskId, items) {
   if (!Array.isArray(items) || items.length === 0) return;
   const stmt = db.prepare(`
     INSERT INTO follow_sell_task_items (local_task_id, offer_id, name, price, product_id, status, errors)
@@ -47,7 +47,7 @@ function upsertTaskItems(localTaskId, items) {
 }
 
 // 按 items 状态汇总任务状态
-function summarizeTaskStatus(localTaskId) {
+export function summarizeTaskStatus(localTaskId) {
   const rows = db.prepare(`SELECT status FROM follow_sell_task_items WHERE local_task_id=?`).all(localTaskId);
   if (rows.length === 0) return null;
   const imported = rows.filter((r) => r.status === 'imported').length;

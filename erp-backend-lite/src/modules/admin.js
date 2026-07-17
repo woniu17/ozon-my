@@ -415,88 +415,9 @@ router.delete('/admin/api/listing-records/:localTaskId', (req, res, next) => {
   }
 });
 
-// ── 采集箱 v2(全数据源采集,字段级来源标记) ───────────────
-
-// GET /admin/api/collect-box-v2 —— 全源采集列表(筛选 + 分页,返摘要+主图+名称+价格)
-// query: ?currentPage=1&pageSize=20&storeId=&keyword=&hasVideo=
-// 每条记录 = 一个 SKU(变体),拆分后无 minVariants 筛选
-router.get('/admin/api/collect-box-v2', (req, res, next) => {
-  try {
-    const current = Math.max(1, Number(req.query.currentPage) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
-    const offset = (current - 1) * pageSize;
-
-    const where = [];
-    const params = [];
-    if (req.query.storeId) {
-      where.push('store_id = ?');
-      params.push(String(req.query.storeId));
-    }
-    if (req.query.keyword) {
-      where.push('(sku LIKE ? OR anchor_sku LIKE ? OR variants_json LIKE ?)');
-      params.push(
-        '%' + String(req.query.keyword) + '%',
-        '%' + String(req.query.keyword) + '%',
-        '%' + String(req.query.keyword) + '%'
-      );
-    }
-    // hasVideo=1:raw_by_source_json 含 transferredVideoUrl(SQLite JSON 查询弱,用 LIKE 兜底)
-    if (req.query.hasVideo === '1' || req.query.hasVideo === 'true') {
-      where.push("raw_by_source_json LIKE '%transferredVideoUrl%'");
-    }
-    const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
-
-    const rows = db
-      .prepare(
-        `SELECT id, store_id, sku, anchor_sku, source_page_url, collect_source,
-                collected_at, created_at, variants_json
-         FROM collect_box_v2 ${whereSql}
-         ORDER BY created_at DESC
-         LIMIT ? OFFSET ?`
-      )
-      .all(...params, pageSize, offset);
-
-    const total = db.prepare(`SELECT COUNT(*) as n FROM collect_box_v2 ${whereSql}`).get(...params).n;
-
-    res.json(
-      ok({
-        items: rows.map((r) => {
-          // variants_json 是单元素数组(拆分后每条记录只含一个变体)
-          const variants = safeParseJson(r.variants_json) || [];
-          const v0 = variants[0] || {};
-          const imgVal = v0.images?.value;
-          const primaryImage = Array.isArray(imgVal) ? imgVal[0] || '' : '';
-          const name = v0.name?.value || '';
-          const price = v0.price?.value ?? '';
-          const oldPrice = v0.oldPrice?.value ?? '';
-          return {
-            id: r.id,
-            sourceTable: 'collect_box_v2',
-            storeId: r.store_id,
-            sku: r.sku,
-            anchorSku: r.anchor_sku,
-            sourcePageUrl: r.source_page_url,
-            collectSource: r.collect_source || '',
-            collectedAt: r.collected_at,
-            createdAt: r.created_at,
-            primaryImage,
-            name,
-            price,
-            oldPrice,
-          };
-        }),
-        total,
-        current,
-        pageSize,
-      })
-    );
-  } catch (e) {
-    next(e);
-  }
-});
-
-// ── 属性字典 / 类目名 / 字典值查询(把数字 ID 翻译成可读名称)──
-// 注意:这三个路由必须放在 /:id 路由之前,否则 "category-names" 等会被当成 :id 匹配。
+// ── 采集箱 v2 属性字典/类目名/字典值查询(把数字 ID 翻译成可读名称)──
+// 注意:collect_box_v2 表已废弃,采集箱前端只用缓存视图(/from-cache);
+//       这三个属性字典接口保留供预览页等场景使用。
 
 // GET /admin/api/collect-box-v2/attribute-dictionary
 // query: ?storeId=&categoryId=&typeId=
@@ -585,52 +506,6 @@ router.get('/admin/api/collect-box-v2/attribute-values', async (req, res, next) 
       type_id: typeId,
     });
     res.json(ok(values));
-  } catch (e) {
-    next(e);
-  }
-});
-
-// GET /admin/api/collect-box-v2/:id —— 全源采集详情(返全量 JSON)
-router.get('/admin/api/collect-box-v2/:id', (req, res, next) => {
-  try {
-    const id = Number(req.params.id);
-    if (!id) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'id 无效'));
-
-    const row = db.prepare(`SELECT * FROM collect_box_v2 WHERE id=?`).get(id);
-    if (!row) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '记录不存在: ' + id));
-
-    res.json(
-      ok({
-        id: row.id,
-        sourceTable: 'collect_box_v2',
-        storeId: row.store_id,
-        sku: row.sku,
-        anchorSku: row.anchor_sku,
-        sourcePageUrl: row.source_page_url,
-        collectSource: row.collect_source || '',
-        variants: safeParseJson(row.variants_json) || [],
-        rawBySource: safeParseJson(row.raw_by_source_json) || {},
-        // synthesizedItems 已改为前端从 variants 现合成,不再返回
-        collectedAt: row.collected_at,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      })
-    );
-  } catch (e) {
-    next(e);
-  }
-});
-
-// DELETE /admin/api/collect-box-v2/:id —— 删除全源采集记录
-router.delete('/admin/api/collect-box-v2/:id', (req, res, next) => {
-  try {
-    const id = Number(req.params.id);
-    if (!id) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'id 无效'));
-    const info = db.prepare(`DELETE FROM collect_box_v2 WHERE id=?`).run(id);
-    if (info.changes === 0) {
-      return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '记录不存在: ' + id));
-    }
-    res.json(ok({ deleted: true, id }));
   } catch (e) {
     next(e);
   }
@@ -907,8 +782,8 @@ router.get('/admin/api/dashboard-stats', (_req, res, next) => {
     }
     const todayRate = todayTotal > 0 ? Math.round((todaySuccess / todayTotal) * 1000) / 10 : 0;
 
-    // 采集箱待发布数(v2 表总数)
-    const collectPending = db.prepare(`SELECT COUNT(*) AS n FROM collect_box_v2`).get().n;
+    // 采集箱缓存数(collect_box_v2 表已废弃,改查 ozon_card_cache,对齐 misc.js#status-counts)
+    const collectPending = db.prepare(`SELECT COUNT(*) AS n FROM ozon_card_cache`).get().n;
 
     // 商品缓存数
     const productCount = db.prepare(`SELECT COUNT(*) AS n FROM product_data_cache`).get().n;

@@ -4,6 +4,7 @@ import Dashboard from '../views/Dashboard.vue';
 import Stores from '../views/Stores.vue';
 import Listings from '../views/Listings.vue';
 import CollectBoxV2 from '../views/CollectBoxV2.vue';
+import Preview from '../views/Preview.vue';
 import Products from '../views/Products.vue';
 import Batch from '../views/Batch.vue';
 import Audit from '../views/Audit.vue';
@@ -25,6 +26,7 @@ const router = createRouter({
     { path: '/stores', name: 'stores', component: Stores },
     { path: '/listings', name: 'listings', component: Listings },
     { path: '/collect-box-v2', name: 'collect-box-v2', component: CollectBoxV2 },
+    { path: '/preview/:sku', name: 'preview', component: Preview, meta: { title: '上架预览' } },
     { path: '/products', name: 'products', component: Products },
     { path: '/batch', name: 'batch', component: Batch },
     { path: '/audit', name: 'audit', component: Audit },

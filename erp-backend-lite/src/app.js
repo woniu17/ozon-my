@@ -23,6 +23,7 @@ import batchRoutes from './modules/batch.js';
 import cacheRoutes from './modules/cache.js';
 import collectQueueRoutes from './modules/collect-queue.js';
 import { auditLog } from './middleware/audit.js';
+import { startImportStatusPoller } from './services/import-status-poller.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -94,6 +95,8 @@ const server = app.listen(config.port, () => {
     { port: config.port, env: process.env.NODE_ENV || 'development' },
     `🚀 ERP 后端(轻量级)启动: http://localhost:${config.port}`
   );
+  // 启动上架结果轮询器:每 5 分钟扫描 PROCESSING 任务,超 1 小时未完成标 FAILED
+  startImportStatusPoller();
 });
 
 // 优雅退出

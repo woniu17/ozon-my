@@ -36,28 +36,6 @@ CREATE TABLE IF NOT EXISTS follow_sell_task_items (
 CREATE INDEX IF NOT EXISTS idx_fsti_task ON follow_sell_task_items(local_task_id);
 CREATE INDEX IF NOT EXISTS idx_fsti_status ON follow_sell_task_items(status);
 
--- 采集箱 v2(全数据源采集,字段级来源标记)
--- 每条记录 = 一个 SKU(变体),多变体采集时拆成多条记录。以 (store_id, sku) 为 key 去重 upsert
-CREATE TABLE IF NOT EXISTS collect_box_v2 (
-  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-  store_id               TEXT,
-  sku                    TEXT NOT NULL,            -- 本记录对应的 SKU(变体 SKU)
-  anchor_sku             TEXT NOT NULL,            -- 母体 SKU(同组变体共享,用于关联查询)
-  source_page_url        TEXT,                     -- 采集源 PDP URL
-  collect_source         TEXT,                     -- 功能来源(详情页一键采集 / MY采集器 / agent)
-  variants_json          TEXT NOT NULL,            -- JSON: 单条 CollectedVariant(本记录对应的变体)
-  raw_by_source_json     TEXT,                     -- JSON: 本变体的数据源原始响应(dom/sellerPortal[sku]/pageJson[sku]/...)
-  synthesized_items_json TEXT,                     -- JSON: 单条 synthesized item(本变体的合成跟卖预览)
-  collected_at           INTEGER,                  -- 采集时间戳(ms)
-  created_at             TEXT DEFAULT (datetime('now')),
-  updated_at             TEXT DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_cbv2_store_created ON collect_box_v2(store_id, created_at DESC);
--- 唯一约束:同店铺同 SKU 只保留一条,重复采集走 upsert 覆盖(store_id 为空时用 '' 兜底)
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_cbv2_store_sku ON collect_box_v2(COALESCE(store_id, ''), sku);
-CREATE INDEX IF NOT EXISTS idx_cbv2_anchor_sku ON collect_box_v2(anchor_sku);
-CREATE INDEX IF NOT EXISTS idx_cbv2_collected ON collect_box_v2(collected_at DESC);
-
 -- 收藏
 CREATE TABLE IF NOT EXISTS favorites (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
