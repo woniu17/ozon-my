@@ -25,6 +25,7 @@ import collectQueueRoutes from './modules/collect-queue.js';
 import { auditLog } from './middleware/audit.js';
 import { startImportStatusPoller } from './services/import-status-poller.js';
 import { startStockSync, stopStockSync } from './services/stock-sync.js';
+import { startIndexSync, stopIndexSync } from './services/index-sync.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -101,12 +102,16 @@ const server = app.listen(config.port, () => {
   // 启动库存自动同步:每 5 分钟扫描 imported 未设库存的 items,调 OPI /v2/products/stocks
   // 失败重试 5 次(约 25 分钟)后放弃
   startStockSync();
+  // 启动索引表跨表字段同步:每 5 分钟刷新 ozon_cache_index 的 seller_slug/seller_name/listed
+  // (数据表 upsert 时即时同步命中位 + 冗余展示字段,本任务只刷跨表聚合字段)
+  startIndexSync();
 });
 
 // 优雅退出
 function shutdown(signal) {
   logger.info({ signal }, '收到退出信号,正在关闭...');
   stopStockSync();
+  stopIndexSync();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);

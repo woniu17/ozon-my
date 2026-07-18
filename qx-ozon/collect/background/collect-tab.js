@@ -1540,47 +1540,21 @@
      * 默认 headers + urlPrefix='/api/site' 即可。
      */
     const fetchBundleByVariantId = async (sku, variantId, companyId, opts = {}) => {
-      // forceRefresh → 清 L1 + L2,确保真拉
+      // v8: bundle 合并到 attribute_cache,通过 attributeCacheGet/Set 统一处理 L1+L2
+      // forceRefresh → 清整条 attribute 记录(search + bundle 都清,下次都重新拉)
       if (opts.forceRefresh) {
-        await Promise.all([
-          this.idbDelete(this.IDB_STORES.BUNDLE, sku).catch(() => {}),
-          this.erpCacheDelete('bundle', sku),
-        ]);
+        this.attributeCacheDelete(sku);
       } else {
-        // L1: IndexedDB(毫秒级)
+        // L1 + L2 由 attributeCacheGet 统一处理
+        // cached: { data, bundleId, attrsEmptyVerifiedAt, fetchedAt } | null
         try {
-          const l1 = await this.idbGet(this.IDB_STORES.BUNDLE, sku);
-          if (this.bundleUsable(l1)) {
-            console.log(`[fetchBundleByVariantId] L1 hit sku=${sku}`);
-            // L2 未同步(之前写入失败) → 用 L1 数据异步补写 L2,成功后置 l2Synced=true
-            if (!l1.l2Synced) this.syncL2FromL1(this.IDB_STORES.BUNDLE, 'bundle', sku, l1);
-            return l1.data;
+          const cached = await this.attributeCacheGet(sku, 'bundle');
+          if (cached && this.bundleUsable(cached)) {
+            console.log(`[fetchBundleByVariantId] cache hit sku=${sku}`);
+            return cached.data;
           }
         } catch (e) {
-          console.warn(`[fetchBundleByVariantId] L1 get failed sku=${sku}:`, e?.message || e);
-        }
-
-        // L2: ERP MongoDB(多设备共享)
-        const l2 = await this.erpCacheGet('bundle', sku);
-        if (l2 && l2.data) {
-          // ERP 已做空属性 6h 重验判定,命中即可复用
-          console.log(`[fetchBundleByVariantId] L2 hit sku=${sku}`);
-          // 回填 L1(l2Synced=true,L2 已有数据)
-          const verifiedAt =
-            Array.isArray(l2.data.attributes) && l2.data.attributes.length > 0
-              ? null
-              : l2.attrsEmptyVerifiedAt
-                ? new Date(l2.attrsEmptyVerifiedAt).getTime()
-                : Date.now();
-          this.idbPut(this.IDB_STORES.BUNDLE, {
-            sku,
-            data: l2.data,
-            bundleId: l2.bundleId || null,
-            fetchedAt: Date.now(),
-            l2Synced: true,
-            ...(verifiedAt ? { attrsEmptyVerifiedAt: verifiedAt } : {}),
-          }).catch(() => {});
-          return l2.data;
+          console.warn(`[fetchBundleByVariantId] cache get failed sku=${sku}:`, e?.message || e);
         }
       }
 
@@ -1604,20 +1578,12 @@
       const item = resp?.item || null;
       if (!item) return null;
 
-      // 异步写回 L1(l2Synced=false) + L2(带重试,成功后回更新 L1 l2Synced=true)
+      // 异步写回 L1 + L2(v8: 通过 attributeCacheSet 统一处理)
       const hasAttrs = Array.isArray(item.attributes) && item.attributes.length > 0;
       const verifiedAt = hasAttrs ? null : Date.now();
-      this.idbPut(this.IDB_STORES.BUNDLE, {
-        sku,
-        data: item,
+      this.attributeCacheSet(sku, 'bundle', item, {
         bundleId: resp.bundle_id || null,
-        fetchedAt: Date.now(),
-        l2Synced: false, // L2 尚未同步;L2 重试成功后会回更新为 true,失败则下次查询补写(兜底)
         ...(verifiedAt ? { attrsEmptyVerifiedAt: verifiedAt } : {}),
-      }).catch(() => {});
-      this.erpCacheSetAndSyncFlag(this.IDB_STORES.BUNDLE, 'bundle', sku, {
-        data: item,
-        bundleId: resp.bundle_id || null,
       });
 
       return item;
@@ -1859,12 +1825,12 @@
           return { status: 'skipped', reason };
         }
 
-        // === Step 1: 并行查 7 类缓存 ===
-        // search/bundle 通过 Step 5 内部查缓存,这里用 null 占位
+        // === Step 1: 并行查 5 类合并缓存 ===
+        // dom 合并 card+detail;attribute 合并 search+bundle(在 Step 5 处理)
         // pdp 缓存合并了原 entrypoint + composer,命中即跳过 Step 4 真调
         const [card, detail, pdp, , , marketStats, followSell] = await Promise.all([
-          this.cardCacheGet(sku),
-          this.detailCacheGet(sku),
+          this.domCacheGet(sku, 'card'),
+          this.domCacheGet(sku, 'detail'),
           this.richMediaCacheGet(sku),
           Promise.resolve(null), // 占位,Step 5 处理 search
           Promise.resolve(null), // 占位,Step 5 处理 bundle
@@ -1969,40 +1935,27 @@
         // === Step 5: seller portal 采集(search+bundle) ===
         if (pending.search || pending.bundle) {
           try {
-            // 检查 search 缓存(L1 IndexedDB → L2 ERP MongoDB)
+            // 检查 search 缓存(L1 IndexedDB 合并表 → L2 ERP SQLite,由 attributeCacheGet 内部处理)
             let searchCacheHit = null;
             try {
-              const l1 = await this.idbGet(this.IDB_STORES.SEARCH, sku);
-              if (l1 && Array.isArray(l1.data?.items) && l1.data.items.length > 0) {
-                searchCacheHit = l1.data;
-                if (!l1.l2Synced) this.syncL2FromL1(this.IDB_STORES.SEARCH, 'search', sku, l1);
+              const cached = await this.attributeCacheGet(sku, 'search');
+              if (cached && Array.isArray(cached.items) && cached.items.length > 0) {
+                searchCacheHit = cached;
               }
             } catch (e) {
-              console.warn('[autoCollect] search L1 get failed:', e?.message || e);
-            }
-            if (!searchCacheHit) {
-              const l2 = await this.erpCacheGet('search', sku);
-              if (l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0) {
-                searchCacheHit = l2.data;
-                this.idbPut(this.IDB_STORES.SEARCH, {
-                  sku,
-                  data: l2.data,
-                  fetchedAt: Date.now(),
-                  l2Synced: true,
-                }).catch(() => {});
-              }
+              console.warn('[autoCollect] search cache get failed:', e?.message || e);
             }
 
             if (searchCacheHit) {
               results[3].hit = true; // search
-              // search 缓存命中,检查 bundle 缓存
+              // search 缓存命中,检查 bundle 缓存(L1 合并表 + L2 合并表)
               try {
-                const bundleL1 = await this.idbGet(this.IDB_STORES.BUNDLE, sku);
-                if (this.bundleUsable(bundleL1)) {
+                const bundleCached = await this.attributeCacheGet(sku, 'bundle');
+                if (this.bundleUsable(bundleCached)) {
                   results[4].hit = true; // bundle
                 }
               } catch (e) {
-                console.warn('[SW autoCollect] bundle L1 get failed:', e?.message || e);
+                console.warn('[SW autoCollect] bundle cache get failed:', e?.message || e);
               }
               console.log('[SW autoCollect] Step5 search/bundle 缓存命中:', sku);
             } else {
@@ -2039,15 +1992,9 @@
                 const items = rawVariants.map(this.normalizeSearchVariantToSv).filter(Boolean);
                 if (items.length > 0) {
                   results[3].hit = true; // search
-                  // 写 search 缓存(L1 + L2)
+                  // 写 search 缓存(L1 合并表 + L2 合并表,由 attributeCacheSet 内部处理)
                   const cacheData = { items };
-                  this.idbPut(this.IDB_STORES.SEARCH, {
-                    sku,
-                    data: cacheData,
-                    fetchedAt: Date.now(),
-                    l2Synced: false,
-                  }).catch(() => {});
-                  this.erpCacheSetAndSyncFlag(this.IDB_STORES.SEARCH, 'search', sku, { data: cacheData });
+                  this.attributeCacheSet(sku, 'search', cacheData);
 
                   // 调 bundle(fetchBundleByVariantId 内部有 L1+L2+L3 三层缓存)
                   // bundle 返回后把物理 attrs(4497/9454-9456)merge 进 items[0],
@@ -2078,15 +2025,9 @@
                       }
                       if (physicalAttrs.length > 0) {
                         items[0] = { ...items[0], attributes: [...items[0].attributes, ...physicalAttrs] };
-                        // 重新写 search_cache(覆盖上面 5 attrs 版本)
+                        // 重新写 search 缓存(覆盖上面 5 attrs 版本)
                         const mergedCacheData = { items };
-                        this.idbPut(this.IDB_STORES.SEARCH, {
-                          sku,
-                          data: mergedCacheData,
-                          fetchedAt: Date.now(),
-                          l2Synced: false,
-                        }).catch(() => {});
-                        this.erpCacheSetAndSyncFlag(this.IDB_STORES.SEARCH, 'search', sku, { data: mergedCacheData });
+                        this.attributeCacheSet(sku, 'search', mergedCacheData);
                       }
                     }
                   }

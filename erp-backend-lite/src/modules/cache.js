@@ -1,13 +1,14 @@
-// Ozon search/bundle/card/composer/entrypoint/detail/marketStats/followSell 缓存路由
+// Ozon dom/attribute/richMedia/marketStats/followSell 缓存路由(5 类合并表)
 // 存储驱动通过 DAO 层(adapter.js)注入:DB_DRIVER=sqlite(默认)|mongo
-// - search:无 TTL(永久),forceRefresh 主动删除
-// - bundle:无 TTL(永久),空属性 6h 重验,forceRefresh 主动删除
-// - card:无 TTL(永久),商品卡 DOM 字段(sku/url/name/price/image),搜索页/店铺页采集
-// - composer:无 TTL(永久),存 composer-api 返回的 19 个业务 widgetStates,缓存优先
-// - entrypoint:无 TTL(永久),存 entrypoint-api 返回的 page-json(图册/富内容/描述/标签),缓存优先
-// - detail:无 TTL(永久),详情页 DOM 全字段(原 pdp 静态 + dynamic 动态合并),DOM 解析失败时兜底
+// - dom:无 TTL(永久),card + detail 合并表,字段独立,互相备份
+//       card=商品卡 DOM 字段(sku/url/name/price/image),搜索页/店铺页采集
+//       detail=详情页 DOM 全字段(原 pdp 静态 + dynamic 动态合并),DOM 解析失败时兜底
+// - attribute:无 TTL(永久),search + bundle 合并表,字段独立,各自保留
+//       bundle 空属性 6h 重验;forceRefresh 主动删除
+// - richMedia:无 TTL(永久),PDP 富内容(原 entrypoint + composer 合并)
 // - marketStats:无 TTL(永久),市场统计(销量/价格分布等),stale 判定 24h(86400000ms)
 // - followSell:无 TTL(永久),跟卖信息,stale 判定 4h(14400000ms)
+// 列表查询走 ozon_cache_index 索引表(由 indexDao 维护),过滤/排序/分页全在 SQL 完成
 // 另含:ozon_auto_collect_log 采集日志端点 + ozon_store_classification 店铺分类端点
 // 鉴权:JWT(authMiddleware),不走 storeGuard(缓存按 sku 全局共享,不区分店铺)
 import { Router } from 'express';
@@ -39,262 +40,98 @@ const router = Router();
 const MARKET_STATS_STALE_MS = 24 * 60 * 60 * 1000; // marketStats stale 判定 24h
 const FOLLOW_SELL_STALE_MS = 4 * 60 * 60 * 1000; // followSell stale 判定 4h
 
-// ── search 缓存 ────────────────────────────────────────────
+// ── dom 缓存(card + detail 合并表,字段独立,互相备份) ─────────────────────────
 
-// GET /ozon/cache/search/:sku
-router.get('/ozon/cache/search/:sku', async (req, res, next) => {
+// GET /ozon/cache/dom/:sku
+// 返回 { card, detail, cardFetchedAt, detailFetchedAt }
+router.get('/ozon/cache/dom/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    const r = await daos.searchDao.getBySku(sku);
-    if (r.data) {
-      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
-    }
-    return res.json({ data: null });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] search get failed');
-    next(e);
-  }
-});
-
-// POST /ozon/cache/search/:sku  body: { data }
-router.post('/ozon/cache/search/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    const data = req.body?.data;
-    if (!data) return res.status(422).json({ error: 'missing data' });
-    await daos.searchDao.upsert(sku, data);
-    return res.json({ ok: true });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] search set failed');
-    next(e);
-  }
-});
-
-// DELETE /ozon/cache/search/:sku
-router.delete('/ozon/cache/search/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    await daos.searchDao.deleteBySku(sku);
-    return res.json({ ok: true });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] search delete failed');
-    next(e);
-  }
-});
-
-// ── bundle 缓存 ────────────────────────────────────────────
-
-// GET /ozon/cache/bundle/:sku
-// 返回 { data, fetchedAt, stale }
-// - stale=true 表示空属性超过 6h 需重验(调用方应真拉刷新)
-router.get('/ozon/cache/bundle/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    // DAO.getBySku 内置空属性 6h 重验逻辑
-    const r = await daos.bundleDao.getBySku(sku);
+    const r = await daos.domDao.getBySku(sku);
     return res.json(r);
   } catch (e) {
-    logger.warn({ err: e.message }, '[cache] bundle get failed');
+    logger.warn({ err: e.message }, '[cache] dom get failed');
     next(e);
   }
 });
 
-// POST /ozon/cache/bundle/:sku  body: { data, bundleId }
-router.post('/ozon/cache/bundle/:sku', async (req, res, next) => {
+// POST /ozon/cache/dom/:sku  body: { type: 'card'|'detail', data }
+// type=card 写入 card_data;type=detail 写入 detail_data(互不影响)
+router.post('/ozon/cache/dom/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
+    const type = req.body?.type === 'detail' ? 'detail' : 'card';
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
-    const bundleId = req.body?.bundleId || null;
-    // DAO.upsert 内置:空属性时自动打 attrsEmptyVerifiedAt 标记
-    await daos.bundleDao.upsert(sku, data, { bundleId });
-    return res.json({ ok: true });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] bundle set failed');
-    next(e);
-  }
-});
-
-// DELETE /ozon/cache/bundle/:sku
-router.delete('/ozon/cache/bundle/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    await daos.bundleDao.deleteBySku(sku);
-    return res.json({ ok: true });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] bundle delete failed');
-    next(e);
-  }
-});
-
-// ── card 缓存(商品卡 DOM 字段:sku/url/name/price/image) ─────────────────────────
-
-// GET /ozon/cache/card/:sku
-router.get('/ozon/cache/card/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    const r = await daos.cardDao.getBySku(sku);
-    if (r.data) {
-      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
+    if (type === 'detail') {
+      await daos.domDao.upsertDetail(sku, data);
+    } else {
+      await daos.domDao.upsertCard(sku, data);
     }
-    return res.json({ data: null });
+    return res.json({ ok: true });
   } catch (e) {
-    logger.warn({ err: e.message }, '[cache] card get failed');
+    logger.warn({ err: e.message }, '[cache] dom set failed');
     next(e);
   }
 });
 
-// POST /ozon/cache/card/:sku  body: { data }
-router.post('/ozon/cache/card/:sku', async (req, res, next) => {
+// DELETE /ozon/cache/dom/:sku
+router.delete('/ozon/cache/dom/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
+    await daos.domDao.deleteBySku(sku);
+    return res.json({ ok: true });
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] dom delete failed');
+    next(e);
+  }
+});
+
+// ── attribute 缓存(search + bundle 合并表,字段独立) ─────────────────────────
+
+// GET /ozon/cache/attribute/:sku
+// 返回 { searchData, bundleData, searchFetchedAt, bundleFetchedAt, bundleId, attrsEmptyVerifiedAt, stale }
+// - stale=true 表示空属性超过 6h 需重验(调用方应真拉刷新)
+router.get('/ozon/cache/attribute/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const r = await daos.attributeDao.getBySku(sku);
+    return res.json(r);
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] attribute get failed');
+    next(e);
+  }
+});
+
+// POST /ozon/cache/attribute/:sku  body: { type: 'search'|'bundle', data, bundleId? }
+// type=search 写入 search_data;type=bundle 写入 bundle_data + bundle_id(空属性时附 attrs_empty_verified_at)
+router.post('/ozon/cache/attribute/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const type = req.body?.type === 'search' ? 'search' : 'bundle';
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
-    await daos.cardDao.upsert(sku, data);
-    return res.json({ ok: true });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] card set failed');
-    next(e);
-  }
-});
-
-// DELETE /ozon/cache/card/:sku
-router.delete('/ozon/cache/card/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    await daos.cardDao.deleteBySku(sku);
-    return res.json({ ok: true });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] card delete failed');
-    next(e);
-  }
-});
-
-// ── composer 缓存(composer-api widgetStates,缓存优先) ─────────────────────────
-
-// GET /ozon/cache/composer/:sku
-router.get('/ozon/cache/composer/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    const r = await daos.composerDao.getBySku(sku);
-    if (r.data) {
-      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
+    if (type === 'search') {
+      await daos.attributeDao.upsertSearch(sku, data);
+    } else {
+      const bundleId = req.body?.bundleId || null;
+      await daos.attributeDao.upsertBundle(sku, data, { bundleId });
     }
-    return res.json({ data: null });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] composer get failed');
-    next(e);
-  }
-});
-
-// POST /ozon/cache/composer/:sku  body: { data }
-router.post('/ozon/cache/composer/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    const data = req.body?.data;
-    if (!data) return res.status(422).json({ error: 'missing data' });
-    await daos.composerDao.upsert(sku, data);
     return res.json({ ok: true });
   } catch (e) {
-    logger.warn({ err: e.message }, '[cache] composer set failed');
+    logger.warn({ err: e.message }, '[cache] attribute set failed');
     next(e);
   }
 });
 
-// DELETE /ozon/cache/composer/:sku
-router.delete('/ozon/cache/composer/:sku', async (req, res, next) => {
+// DELETE /ozon/cache/attribute/:sku
+router.delete('/ozon/cache/attribute/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
-    await daos.composerDao.deleteBySku(sku);
+    await daos.attributeDao.deleteBySku(sku);
     return res.json({ ok: true });
   } catch (e) {
-    logger.warn({ err: e.message }, '[cache] composer delete failed');
-    next(e);
-  }
-});
-
-// ── entrypoint 缓存(entrypoint-api page-json,缓存优先) ─────────────────────────
-
-// GET /ozon/cache/entrypoint/:sku
-router.get('/ozon/cache/entrypoint/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    const r = await daos.entrypointDao.getBySku(sku);
-    if (r.data) {
-      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
-    }
-    return res.json({ data: null });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] entrypoint get failed');
-    next(e);
-  }
-});
-
-// POST /ozon/cache/entrypoint/:sku  body: { data }
-router.post('/ozon/cache/entrypoint/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    const data = req.body?.data;
-    if (!data) return res.status(422).json({ error: 'missing data' });
-    await daos.entrypointDao.upsert(sku, data);
-    return res.json({ ok: true });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] entrypoint set failed');
-    next(e);
-  }
-});
-
-// DELETE /ozon/cache/entrypoint/:sku
-router.delete('/ozon/cache/entrypoint/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    await daos.entrypointDao.deleteBySku(sku);
-    return res.json({ ok: true });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] entrypoint delete failed');
-    next(e);
-  }
-});
-
-// ── detail 缓存(详情页 DOM 全字段:原 pdp 静态 + dynamic 动态合并,永久存储) ─────────────────────────
-
-// GET /ozon/cache/detail/:sku
-router.get('/ozon/cache/detail/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    const r = await daos.detailDao.getBySku(sku);
-    if (r.data) {
-      return res.json({ data: r.data, fetchedAt: r.fetchedAt });
-    }
-    return res.json({ data: null });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] detail get failed');
-    next(e);
-  }
-});
-
-// POST /ozon/cache/detail/:sku  body: { data }
-router.post('/ozon/cache/detail/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    const data = req.body?.data;
-    if (!data) return res.status(422).json({ error: 'missing data' });
-    await daos.detailDao.upsert(sku, data);
-    return res.json({ ok: true });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] detail set failed');
-    next(e);
-  }
-});
-
-// DELETE /ozon/cache/detail/:sku
-router.delete('/ozon/cache/detail/:sku', async (req, res, next) => {
-  try {
-    const sku = String(req.params.sku);
-    await daos.detailDao.deleteBySku(sku);
-    return res.json({ ok: true });
-  } catch (e) {
-    logger.warn({ err: e.message }, '[cache] detail delete failed');
+    logger.warn({ err: e.message }, '[cache] attribute delete failed');
     next(e);
   }
 });
@@ -446,40 +283,21 @@ router.delete('/ozon/cache/richMedia/:sku', async (req, res, next) => {
 // ── 管理后台 API(/admin/api/cache/*) ───────────────────────
 // 列表/统计/详情/清空,供前端缓存管理页面使用
 
-// GET /admin/api/cache/stats — 缓存统计(7 类集合文档数 + 空属性数 + 总体积)
-// 注:composer/entrypoint 已合并为 richMedia,旧 collection 保留但不展示
+// GET /admin/api/cache/stats — 缓存统计(5 类合并表文档数 + 空属性数)
 router.get('/admin/api/cache/stats', async (req, res, next) => {
   try {
-    const [
-      searchCount,
-      bundleCount,
-      bundleEmptyAttrs,
-      bundleStale,
-      cardCount,
-      richMediaCount,
-      detailCount,
-      marketStatsCount,
-      followSellCount,
-    ] = await Promise.all([
-      daos.searchDao.estimatedCount(),
-      daos.bundleDao.estimatedCount(),
-      daos.bundleDao.countEmptyAttrs(),
-      daos.bundleDao.countStaleEmptyAttrs(),
-      daos.cardDao.estimatedCount(),
-      daos.richMediaDao.estimatedCount(),
-      daos.detailDao.estimatedCount(),
-      daos.marketStatsDao.estimatedCount(),
-      daos.followSellDao.estimatedCount(),
+    const [counts, emptyAttrs, stale] = await Promise.all([
+      daos.indexDao.getCacheCounts(),
+      daos.attributeDao.countEmptyAttrs(),
+      daos.attributeDao.countStaleEmptyAttrs(),
     ]);
     return res.json(
       ok({
-        search: { count: searchCount },
-        bundle: { count: bundleCount, emptyAttrs: bundleEmptyAttrs, stale: bundleStale },
-        card: { count: cardCount },
-        richMedia: { count: richMediaCount },
-        detail: { count: detailCount },
-        marketStats: { count: marketStatsCount },
-        followSell: { count: followSellCount },
+        dom: { count: counts.dom },
+        attribute: { count: counts.attribute, emptyAttrs, stale },
+        richMedia: { count: counts.richMedia },
+        marketStats: { count: counts.marketStats },
+        followSell: { count: counts.followSell },
       })
     );
   } catch (e) {
@@ -489,62 +307,65 @@ router.get('/admin/api/cache/stats', async (req, res, next) => {
 });
 
 // 类型 → DAO 映射(管理接口统一入口)
-// 注:composer/entrypoint 已合并为 richMedia,旧 SW-facing 路由保留(sycL2Batch 老数据补写)
-const CACHE_TYPES = ['search', 'bundle', 'card', 'richMedia', 'detail', 'marketStats', 'followSell'];
+const CACHE_TYPES = ['dom', 'attribute', 'richMedia', 'marketStats', 'followSell'];
 const getDaoByType = (type) => {
   switch (type) {
-    case 'search':
-      return daos.searchDao;
-    case 'bundle':
-      return daos.bundleDao;
-    case 'card':
-      return daos.cardDao;
+    case 'dom':
+      return daos.domDao;
+    case 'attribute':
+      return daos.attributeDao;
     case 'richMedia':
       return daos.richMediaDao;
-    case 'detail':
-      return daos.detailDao;
     case 'marketStats':
       return daos.marketStatsDao;
     case 'followSell':
       return daos.followSellDao;
     default:
-      return daos.bundleDao;
+      return daos.attributeDao;
   }
 };
 
 // GET /admin/api/cache/list — 缓存列表(支持 type/search/分页)
-// query: type=search|bundle|card|richMedia|detail|marketStats|followSell, keyword, page, pageSize
+// query: type=dom|attribute|richMedia|marketStats|followSell, keyword, page, pageSize
 router.get('/admin/api/cache/list', async (req, res, next) => {
   try {
-    const type = CACHE_TYPES.includes(req.query.type) ? req.query.type : 'bundle';
+    const type = CACHE_TYPES.includes(req.query.type) ? req.query.type : 'attribute';
     const keyword = String(req.query.keyword || '').trim();
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
 
     const { items, total } = await getDaoByType(type).findPagedList(keyword, page, pageSize);
 
-    // 按类型差异化重塑(bundle 已由 DAO 预计算 attrsEmpty/attrsStale)
+    // 按类型差异化重塑
     const reshaped = items.map((d) => {
       const sku = d.sku || d._id;
-      if (type !== 'bundle') {
-        // marketStats / followSell 预计算 stale + l2Synced
-        if (type === 'marketStats' || type === 'followSell') {
-          const staleMs = type === 'marketStats' ? MARKET_STATS_STALE_MS : FOLLOW_SELL_STALE_MS;
-          const fetchedAtMs = d.fetchedAt ? new Date(d.fetchedAt).getTime() : 0;
-          const stale = !fetchedAtMs || Date.now() - fetchedAtMs > staleMs;
-          return { sku, fetchedAt: d.fetchedAt, l2Synced: d.l2Synced === true, stale };
-        }
-        return { sku, fetchedAt: d.fetchedAt };
+      if (type === 'marketStats' || type === 'followSell') {
+        const staleMs = type === 'marketStats' ? MARKET_STATS_STALE_MS : FOLLOW_SELL_STALE_MS;
+        const fetchedAtMs = d.fetchedAt ? new Date(d.fetchedAt).getTime() : 0;
+        const stale = !fetchedAtMs || Date.now() - fetchedAtMs > staleMs;
+        return { sku, fetchedAt: d.fetchedAt, l2Synced: d.l2Synced === true, stale };
       }
-      // bundle:DAO 已返回 attrsEmpty/attrsStale/bundleId/attrsEmptyVerifiedAt
-      return {
-        sku,
-        fetchedAt: d.fetchedAt,
-        attrsEmptyVerifiedAt: d.attrsEmptyVerifiedAt || null,
-        attrsEmpty: d.attrsEmpty,
-        attrsStale: d.attrsStale,
-        bundleId: d.bundleId || null,
-      };
+      if (type === 'dom') {
+        return {
+          sku,
+          cardFetchedAt: d.cardFetchedAt,
+          detailFetchedAt: d.detailFetchedAt,
+        };
+      }
+      if (type === 'attribute') {
+        // DAO 已预计算 attrsEmpty/attrsStale
+        return {
+          sku,
+          searchFetchedAt: d.searchFetchedAt,
+          bundleFetchedAt: d.bundleFetchedAt,
+          bundleId: d.bundleId || null,
+          attrsEmptyVerifiedAt: d.attrsEmptyVerifiedAt || null,
+          attrsEmpty: d.attrsEmpty,
+          attrsStale: d.attrsStale,
+        };
+      }
+      // richMedia
+      return { sku, fetchedAt: d.fetchedAt };
     });
 
     return res.json(ok({ items: reshaped, total, page, pageSize }));
@@ -554,247 +375,85 @@ router.get('/admin/api/cache/list', async (req, res, next) => {
   }
 });
 
-// ── 采集箱·缓存视图:以 cardCache 为基准,聚合 7 类缓存命中状态 ──
-// 用于前端"采集箱"页面切换数据源:从 collect_box_v2 表 → 缓存聚合视图
-// 设计:cardCache 含 sku/url/name/price/image,最适合做列表基准
-//      其他 6 类缓存仅取 _id + fetchedAt 用于命中位图 + 排序
+// ── 采集箱·缓存视图:走 ozon_cache_index 单表查询 ──
+// 用于前端"采集箱"页面:从 indexDao 单表查询,过滤/排序/分页全在 SQL 完成
+// 冗余字段(name/price/primary_image/url/rating_count/has_video/market_price_p50/competitor_count)
+// 由 indexDao.syncSku 在数据表 upsert 时同步,listed/seller_slug/seller_name 由定时任务批量刷新
 router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
   try {
     const keyword = String(req.query.keyword || '').trim();
     const page = Math.max(1, Number(req.query.currentPage) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
 
-    // hasVideo=1:richMedia 缓存含 mp4(需后置过滤,因 cardCache 无视频信息)
+    // hasVideo=1:richMedia 缓存含 mp4(indexDao 已冗余 has_video,SQL 直接过滤)
     const filterHasVideo = req.query.hasVideo === '1' || req.query.hasVideo === 'true';
-    // minCacheHits=N:7 类缓存命中数 ≥ N(后置过滤)
+    // minCacheHits=N:7 类缓存命中数 ≥ N(索引表已冗余 hit_count)
     const minCacheHits = Math.max(0, Math.min(7, Number(req.query.minCacheHits) || 0));
-    // hasComments=1:cardCache.ratingCount > 0(有评论数)
+    // hasComments=1:rating_count > 0(索引表已冗余 rating_count)
     const filterHasComments = req.query.hasComments === '1' || req.query.hasComments === 'true';
-    // 价格范围:priceMin/priceMax(闭区间,基于 cardCache.price)
-    //   注意:价格可能为 null(未抓到),null 不参与范围匹配
+    // 价格范围:priceMin/priceMax(闭区间,基于索引表冗余 price 字段)
+    //   注意:price 可能为空字符串,CAST(price AS REAL) 对空串返回 0,需额外排除空值
     const priceMin = Number(req.query.priceMin);
     const priceMax = Number(req.query.priceMax);
-    const hasPriceMin = Number.isFinite(priceMin) && priceMin >= 0;
-    const hasPriceMax = Number.isFinite(priceMax) && priceMax >= 0;
 
     // ⚠️ "店铺筛选"语义:采集到的 SKU 所属源卖家(ozon_auto_collect_log.sellerSlug)
     //   与"用户自己的店铺"(stores.json,用于上架)是两个正交概念
-    // - sellerSlug:源 SKU 所属卖家 slug(可选)。提供时,每条 item 增加 sellerSlug/sellerName 字段;
-    //   且仅保留在该卖家采集过的 SKU
-    // - unlisted=1:只返回未上架的(在任意用户店铺 follow_sell_task_items.status='imported')
-    //   独立维度,不依赖 sellerSlug
+    // - sellerSlug:源 SKU 所属卖家 slug(可选)。索引表冗余 seller_slug,SQL 直接过滤
+    // - unlisted=1:只返回未跟卖的(索引表冗余 listed,SQL 直接过滤)
     const sellerSlug = String(req.query.sellerSlug || '').trim();
     const filterUnlisted = req.query.unlisted === '1' || req.query.unlisted === 'true';
 
-    // ⚠️ 过滤必须在分页之前完成,否则:
-    //  - 当前页命中过滤条件的 item 不足 pageSize,页面显示稀疏
-    //  - total 仍是 cardCache 全量计数,与过滤后的实际条数不符,分页器错乱
-    //  - 大量逻辑页"看起来"为空(匹配的 SKU 分布在更靠后的物理页)
-    // 因此:先拉全部 cardCache(仅 keyword 过滤)→ 聚合 7 类命中 → 计算 hitCount/hasVideo/listed/seller
-    //       → 应用 sellerSlug/minCacheHits/hasVideo/unlisted 过滤 → 内存排序 + 分页
-
-    // 1) 拉全部匹配 keyword 的 cardCache(仅 _id/sku/fetchedAt,用于 SKU 列表)
-    //    注意:SQLite DAO 的 findOverviewList 不返回 data 字段,
-    //    需在下方通过 findManyBySkuList 二次取 data(MongoDB 同行为一致)
-    const allCards = await daos.cardDao.findOverviewList(keyword);
-    if (!allCards.length) {
-      return res.json(ok({ items: [], total: 0, current: page, pageSize }));
-    }
-
-    const skus = allCards.map((c) => c.sku);
-
-    // 2) 并行批量查询:cardCache 完整 data + 其他 6 类缓存命中状态
-    //    SQLite DAO 忽略 projection 参数(SELECT *),MongoDB DAO 会按 projection 投影
-    //    为保持两端行为一致,这里不传 projection(原代码也是这样),用全量 data
-    const [cardDocs, bDocs, rmDocs, dDocs, mDocs, fDocs, sDocs] = await Promise.all([
-      daos.cardDao.findManyBySkuList(skus), // 取 cardCache 完整 data(含 name/price/image/url)
-      daos.bundleDao.findManyBySkuList(skus),
-      daos.richMediaDao.findManyBySkuList(skus),
-      daos.detailDao.findManyBySkuList(skus),
-      daos.marketStatsDao.findManyBySkuList(skus),
-      daos.followSellDao.findManyBySkuList(skus),
-      daos.searchDao.findManyBySkuList(skus),
-    ]);
-
-    // 2.5) 采集源卖家信息(从 ozon_auto_collect_log 拿每个 SKU 最新一条 sellerSlug)
-    //      一次性查所有 SKU 的 sellerSlug + storeClassification 的 sellerName
-    //      skuSellerMap:sku → { sellerSlug, sellerName }
-    const skuSellerMap = new Map();
-    {
-      // IN (?, ?, ...) 防 SQL 注入
-      const placeholders = skus.map(() => '?').join(', ');
-      const rows = db
-        .prepare(
-          `SELECT l.sku AS sku, l.sellerSlug AS sellerSlug, sc.sellerName AS sellerName
-           FROM (
-             SELECT sku, sellerSlug,
-                    ROW_NUMBER() OVER (PARTITION BY sku ORDER BY collectedAt DESC) AS rn
-             FROM ozon_auto_collect_log
-             WHERE sku IN (${placeholders}) AND sellerSlug IS NOT NULL AND sellerSlug <> ''
-           ) l
-           LEFT JOIN ozon_store_classification sc ON sc.sellerSlug = l.sellerSlug
-           WHERE l.rn = 1`
-        )
-        .all(...skus);
-      for (const r of rows) {
-        skuSellerMap.set(r.sku, {
-          sellerSlug: r.sellerSlug,
-          sellerName: r.sellerName || '',
-        });
-      }
-    }
-
-    // 2.6) 已跟卖 SKU 集合(始终构建,卡片上要始终显示"已跟卖/未跟卖"标签)
-    //      只要提交过跟卖任务(follow_sell_task_items 有记录)就算"已跟卖",
-    //      不论 OPI 返回状态是 pending/imported/failed/skipped。
-    //      offer_id 格式:{SKU}-{mmdd}-qx,SKU 是纯数字
-    const listedSkuSet = new Set();
-    {
-      const rows = db.prepare(`SELECT offer_id FROM follow_sell_task_items`).all();
-      for (const r of rows) {
-        const oid = String(r.offer_id || '');
-        const m = oid.match(/^(\d+)-/);
-        if (m) listedSkuSet.add(m[1]);
-      }
-    }
-
-    // 3) 建立 sku → 缓存命中位图
-    const cardMap = new Map(cardDocs.map((d) => [d.sku, d]));
-    const bundleMap = new Map(bDocs.map((d) => [d.sku, d]));
-    const richMediaMap = new Map(rmDocs.map((d) => [d.sku, d]));
-    const detailMap = new Map(dDocs.map((d) => [d.sku, d]));
-    const marketStatsMap = new Map(mDocs.map((d) => [d.sku, d]));
-    const followSellMap = new Map(fDocs.map((d) => [d.sku, d]));
-    const searchMap = new Map(sDocs.map((d) => [d.sku, d]));
-
-    // 4) 组装全部 items 并计算 hitCount/hasVideo/listed/seller
-    //    allCards 仅含 _id/sku/fetchedAt(findOverviewList 不返回 data);
-    //    cardMap 提供 cardCache 完整 data(含 name/price/image/url)
-    let allItems = allCards.map((c) => {
-      const cardDoc = cardMap.get(c.sku);
-      const cardData = cardDoc?.data || {};
-      const b = bundleMap.get(c.sku);
-      const rm = richMediaMap.get(c.sku);
-      const d = detailMap.get(c.sku);
-      const m = marketStatsMap.get(c.sku);
-      const f = followSellMap.get(c.sku);
-      const s = searchMap.get(c.sku);
-
-      const cacheHits = {
-        search: !!s,
-        bundle: !!b,
-        card: true, // 基准,恒为 true
-        richMedia: !!rm,
-        detail: !!d,
-        marketStats: !!m,
-        followSell: !!f,
-      };
-      const hitCount = Object.values(cacheHits).filter(Boolean).length;
-
-      // 7 类 fetchedAt 取最大值作为"最近采集时间"
-      const fetchedAts = [
-        c.fetchedAt, b?.fetchedAt, rm?.fetchedAt, d?.fetchedAt,
-        m?.fetchedAt, f?.fetchedAt, s?.fetchedAt,
-      ].filter(Boolean);
-      const lastCollectedAt = fetchedAts.sort().pop() || c.fetchedAt;
-
-      // marketStats 关键字段(P50 价格,如有)
-      let marketPriceP50 = null;
-      if (m?.data) {
-        marketPriceP50 = m.data.priceP50 ?? m.data.p50 ?? null;
-      }
-
-      // followSell 竞争度(跟卖商家数,如有)
-      let competitorCount = null;
-      if (f?.data) {
-        const sellers = f.data.sellers || f.data.competitors || [];
-        competitorCount = Array.isArray(sellers) ? sellers.length : null;
-      }
-
-      // richMedia 视频标志
-      const hasVideo = !!(rm?.data?.mp4);
-
-      // 采集源卖家(从 ozon_auto_collect_log 拿)
-      const seller = skuSellerMap.get(c.sku) || { sellerSlug: '', sellerName: '' };
-
-      return {
-        sku: c.sku,
-        // name 优先 cardCache(DOM 抓取),为空时 fallback 到 bundleCache(OPI API 原始名,更可靠)
-        name: cardData.name || b?.data?.name || '',
-        price: cardData.price ?? '',
-        primaryImage: cardData.image || '',
-        url: cardData.url || '',
-        cacheHits,
-        hitCount,
-        hasVideo,
-        marketPriceP50,
-        competitorCount,
-        // 评论数:cardCache.ratingCount(数字,采集自商品卡 DOM)。可能为 null(未抓到)
-        ratingCount: Number.isFinite(Number(cardData.ratingCount))
-          ? Number(cardData.ratingCount)
-          : null,
-        lastCollectedAt,
-        // 采集源卖家
-        sellerSlug: seller.sellerSlug,
-        sellerName: seller.sellerName,
-        // 上架状态(始终计算,前端卡片始终显示"已上架/未上架"标签)
-        listed: listedSkuSet.has(c.sku),
-        // 兼容旧卡片字段(避免前端报错)
-        storeId: '',
-        anchorSku: c.sku,
-        collectSource: 'cache',
-        collectedAt: null,
-        createdAt: c.fetchedAt,
-        // 用于排序的内部字段(返回前移除)
-        _sortFetchedAt: c.fetchedAt,
-      };
+    // indexDao 单表查询:过滤 + 排序 + 分页全在 SQL 完成
+    const { items, total } = await daos.indexDao.findList({
+      keyword,
+      sellerSlug,
+      unlisted: filterUnlisted,
+      hasComments: filterHasComments,
+      hasVideo: filterHasVideo,
+      priceMin: Number.isFinite(priceMin) ? priceMin : undefined,
+      priceMax: Number.isFinite(priceMax) ? priceMax : undefined,
+      minCacheHits,
+      page,
+      pageSize,
     });
 
-    // 5) 应用过滤器(在分页前):sellerSlug / hasVideo / minCacheHits / unlisted
-    if (sellerSlug) {
-      // 按采集源卖家过滤:只保留 sellerSlug 匹配的 SKU
-      allItems = allItems.filter((it) => it.sellerSlug === sellerSlug);
-    }
-    if (filterHasVideo) {
-      allItems = allItems.filter((it) => it.hasVideo);
-    }
-    if (filterHasComments) {
-      // 只保留有评论的(ratingCount > 0)
-      allItems = allItems.filter((it) => Number(it.ratingCount) > 0);
-    }
-    if (hasPriceMin || hasPriceMax) {
-      // 价格范围过滤:price 缺失(null/空/非数字)的 SKU 不匹配
-      allItems = allItems.filter((it) => {
-        const p = Number(it.price);
-        if (!Number.isFinite(p)) return false;
-        if (hasPriceMin && p < priceMin) return false;
-        if (hasPriceMax && p > priceMax) return false;
-        return true;
-      });
-    }
-    if (minCacheHits > 0) {
-      allItems = allItems.filter((it) => it.hitCount >= minCacheHits);
-    }
-    if (filterUnlisted) {
-      // 只保留未上架的(listed=false)
-      // 此处 listed 必为 boolean(filterUnlisted=true 已触发 listedSkuSet 构建)
-      allItems = allItems.filter((it) => it.listed === false);
-    }
+    // 重塑为前端期望的字段格式(索引表字段为 snake_case,需转 camelCase)
+    const reshaped = items.map((r) => ({
+      sku: r.sku,
+      name: r.name || '',
+      price: r.price ?? '',
+      primaryImage: r.primary_image || '',
+      url: r.url || '',
+      cacheHits: {
+        card: !!r.card_hit,
+        detail: !!r.detail_hit,
+        search: !!r.search_hit,
+        bundle: !!r.bundle_hit,
+        richMedia: !!r.rich_media_hit,
+        marketStats: !!r.market_stats_hit,
+        followSell: !!r.follow_sell_hit,
+      },
+      hitCount: r.hit_count || 0,
+      hasVideo: !!r.has_video,
+      marketPriceP50: r.market_price_p50 ?? null,
+      competitorCount: r.competitor_count ?? null,
+      // 评论数:索引表冗余 rating_count(数字,采集自 card DOM)。可能为 null
+      ratingCount: Number.isFinite(Number(r.rating_count)) ? Number(r.rating_count) : null,
+      lastCollectedAt: r.last_fetched_at,
+      // 采集源卖家(由 index-sync 定时任务批量刷新)
+      sellerSlug: r.seller_slug || '',
+      sellerName: r.seller_name || '',
+      // 上架状态(由 index-sync 定时任务批量刷新)
+      listed: !!r.listed,
+      // 兼容旧卡片字段(避免前端报错)
+      storeId: '',
+      anchorSku: r.sku,
+      collectSource: 'cache',
+      collectedAt: null,
+      createdAt: r.last_fetched_at,
+    }));
 
-    // 6) 排序:按 cardCache.fetchedAt 降序(与原 findPagedList 行为一致)
-    allItems.sort((a, b) => {
-      const ta = a._sortFetchedAt ? new Date(a._sortFetchedAt).getTime() : 0;
-      const tb = b._sortFetchedAt ? new Date(b._sortFetchedAt).getTime() : 0;
-      return tb - ta;
-    });
-
-    // 7) 内存分页 + 清理内部字段
-    const total = allItems.length;
-    const start = (page - 1) * pageSize;
-    const pageItems = allItems.slice(start, start + pageSize);
-    for (const it of pageItems) delete it._sortFetchedAt;
-
-    return res.json(ok({ items: pageItems, total, current: page, pageSize }));
+    return res.json(ok({ items: reshaped, total, current: page, pageSize }));
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] collect-box-v2/from-cache failed');
     next(e);
@@ -806,8 +465,6 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
 router.get('/admin/api/collect-box-v2/sellers', async (_req, res, next) => {
   try {
     // 数据源:ozon_store_sku(店铺-SKU 关联表,记录每个 SKU 采集自哪个卖家)
-    //   相比 ozon_auto_collect_log(只记录触发了自动采集任务的 SKU),
-    //   ozon_store_sku 覆盖更全(只要在店铺页扫到就入库),与采集箱卡片展示一致
     const rows = db
       .prepare(
         `SELECT sellerSlug,
@@ -836,11 +493,11 @@ router.get('/admin/api/cache/:type/:sku', async (req, res, next) => {
   try {
     // overview / opi-preview 走专属路由,这里跳过(避免被 :type 参数捕获)
     if (req.params.type === 'overview' || req.params.type === 'opi-preview') return next('route');
-    const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'bundle';
+    const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'attribute';
     const sku = String(req.params.sku);
     const doc = await getDaoByType(type).findById(sku);
     if (!doc) return res.json(ok(null));
-    // marketStats / followSell 额外返回 l2Synced + stale 预计算
+
     if (type === 'marketStats' || type === 'followSell') {
       const staleMs = type === 'marketStats' ? MARKET_STATS_STALE_MS : FOLLOW_SELL_STALE_MS;
       const fetchedAtMs = doc.fetchedAt ? new Date(doc.fetchedAt).getTime() : 0;
@@ -855,13 +512,36 @@ router.get('/admin/api/cache/:type/:sku', async (req, res, next) => {
         })
       );
     }
+    if (type === 'dom') {
+      return res.json(
+        ok({
+          sku: doc.sku || doc._id,
+          card: doc.card,
+          cardFetchedAt: doc.cardFetchedAt,
+          detail: doc.detail,
+          detailFetchedAt: doc.detailFetchedAt,
+        })
+      );
+    }
+    if (type === 'attribute') {
+      return res.json(
+        ok({
+          sku: doc.sku || doc._id,
+          searchData: doc.searchData,
+          searchFetchedAt: doc.searchFetchedAt,
+          bundleData: doc.bundleData,
+          bundleFetchedAt: doc.bundleFetchedAt,
+          bundleId: doc.bundleId,
+          attrsEmptyVerifiedAt: doc.attrsEmptyVerifiedAt,
+        })
+      );
+    }
+    // richMedia
     return res.json(
       ok({
         sku: doc.sku || doc._id,
         data: doc.data,
         fetchedAt: doc.fetchedAt,
-        attrsEmptyVerifiedAt: doc.attrsEmptyVerifiedAt || null,
-        bundleId: doc.bundleId || null,
       })
     );
   } catch (e) {
@@ -873,7 +553,7 @@ router.get('/admin/api/cache/:type/:sku', async (req, res, next) => {
 // DELETE /admin/api/cache/:type/:sku — 删除单条
 router.delete('/admin/api/cache/:type/:sku', async (req, res, next) => {
   try {
-    const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'bundle';
+    const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'attribute';
     const sku = String(req.params.sku);
     await getDaoByType(type).deleteBySku(sku);
     return res.json(ok({ deleted: true }));
@@ -886,7 +566,7 @@ router.delete('/admin/api/cache/:type/:sku', async (req, res, next) => {
 // DELETE /admin/api/cache/:type — 清空整个集合
 router.delete('/admin/api/cache/:type', async (req, res, next) => {
   try {
-    const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'bundle';
+    const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'attribute';
     const r = await getDaoByType(type).clearAll();
     return res.json(ok({ deletedCount: r.deletedCount }));
   } catch (e) {
@@ -895,144 +575,147 @@ router.delete('/admin/api/cache/:type', async (req, res, next) => {
   }
 });
 
-// ── 全览接口:聚合 7 类缓存,展示每 SKU 的缓存状态矩阵 ─────────────────────────
+// ── 全览接口:走 ozon_cache_index 单表查询 ─────────────────────────
 
-// GET /admin/api/cache/overview — 全览列表(聚合 7 类缓存的 SKU)
+// GET /admin/api/cache/overview — 全览列表(索引表命中位矩阵)
 // query: keyword, page, pageSize
-// 返回: { items: [{ sku, search:{fetchedAt}, bundle:{fetchedAt,attrsEmpty}, card:{fetchedAt},
-//                  richMedia:{fetchedAt}, detail:{fetchedAt},
-//                  marketStats:{fetchedAt,stale}, followSell:{fetchedAt,stale} }], total }
+// 返回: { items: [{ sku, card:{fetchedAt}, detail:{fetchedAt}, search:{fetchedAt},
+//                  bundle:{fetchedAt}, richMedia:{fetchedAt},
+//                  marketStats:{fetchedAt,stale}, followSell:{fetchedAt,stale},
+//                  hitCount, lastFetchedAt, listed }], total }
 router.get('/admin/api/cache/overview', async (req, res, next) => {
   try {
     const keyword = String(req.query.keyword || '').trim();
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
 
-    // 7 类缓存并行查询所有 SKU(仅取 _id/sku/fetchedAt/关键字段)
-    const [sDocs, bDocs, cDocs, rmDocs, dDocs, mDocs, fDocs] = await Promise.all([
-      daos.searchDao.findOverviewList(keyword),
-      daos.bundleDao.findOverviewList(keyword),
-      daos.cardDao.findOverviewList(keyword),
-      daos.richMediaDao.findOverviewList(keyword),
-      daos.detailDao.findOverviewList(keyword),
-      daos.marketStatsDao.findOverviewList(keyword),
-      daos.followSellDao.findOverviewList(keyword),
-    ]);
+    const { items, total } = await daos.indexDao.findOverviewList(keyword, page, pageSize);
 
-    // 聚合所有 SKU
-    const skuMap = new Map();
-    const ensure = (sku) => {
-      if (!skuMap.has(sku)) {
-        skuMap.set(sku, {
-          sku,
-          search: null,
-          bundle: null,
-          card: null,
-          richMedia: null,
-          detail: null,
-          marketStats: null,
-          followSell: null,
-        });
-      }
-      return skuMap.get(sku);
-    };
-
-    for (const d of sDocs) {
-      const sku = d.sku || d._id;
-      ensure(sku).search = { fetchedAt: d.fetchedAt };
-    }
-    for (const d of bDocs) {
-      const sku = d.sku || d._id;
-      // bundle DAO 已预计算 attrsEmpty / attrsStale
-      ensure(sku).bundle = { fetchedAt: d.fetchedAt, attrsEmpty: d.attrsEmpty, attrsStale: d.attrsStale };
-    }
-    for (const d of cDocs) {
-      const sku = d.sku || d._id;
-      ensure(sku).card = { fetchedAt: d.fetchedAt };
-    }
-    for (const d of rmDocs) {
-      const sku = d.sku || d._id;
-      ensure(sku).richMedia = { fetchedAt: d.fetchedAt };
-    }
-    for (const d of dDocs) {
-      const sku = d.sku || d._id;
-      ensure(sku).detail = { fetchedAt: d.fetchedAt };
-    }
-    for (const d of mDocs) {
-      const sku = d.sku || d._id;
-      const fetchedAtMs = d.fetchedAt ? new Date(d.fetchedAt).getTime() : 0;
-      const stale = !fetchedAtMs || Date.now() - fetchedAtMs > MARKET_STATS_STALE_MS;
-      ensure(sku).marketStats = { fetchedAt: d.fetchedAt, stale };
-    }
-    for (const d of fDocs) {
-      const sku = d.sku || d._id;
-      const fetchedAtMs = d.fetchedAt ? new Date(d.fetchedAt).getTime() : 0;
-      const stale = !fetchedAtMs || Date.now() - fetchedAtMs > FOLLOW_SELL_STALE_MS;
-      ensure(sku).followSell = { fetchedAt: d.fetchedAt, stale };
-    }
-
-    // 排序:按最新 fetchedAt 降序(7 类取最大值)
-    let items = Array.from(skuMap.values());
-    items.sort((a, b) => {
-      const aMax = Math.max(
-        new Date(a.search?.fetchedAt || 0).getTime(),
-        new Date(a.bundle?.fetchedAt || 0).getTime(),
-        new Date(a.card?.fetchedAt || 0).getTime(),
-        new Date(a.richMedia?.fetchedAt || 0).getTime(),
-        new Date(a.detail?.fetchedAt || 0).getTime(),
-        new Date(a.marketStats?.fetchedAt || 0).getTime(),
-        new Date(a.followSell?.fetchedAt || 0).getTime()
-      );
-      const bMax = Math.max(
-        new Date(b.search?.fetchedAt || 0).getTime(),
-        new Date(b.bundle?.fetchedAt || 0).getTime(),
-        new Date(b.card?.fetchedAt || 0).getTime(),
-        new Date(b.richMedia?.fetchedAt || 0).getTime(),
-        new Date(b.detail?.fetchedAt || 0).getTime(),
-        new Date(b.marketStats?.fetchedAt || 0).getTime(),
-        new Date(b.followSell?.fetchedAt || 0).getTime()
-      );
-      return bMax - aMax;
+    const reshaped = items.map((r) => {
+      const mkStale = (fetchedAt, staleMs) => {
+        const fetchedAtMs = fetchedAt ? new Date(fetchedAt).getTime() : 0;
+        return !fetchedAtMs || Date.now() - fetchedAtMs > staleMs;
+      };
+      return {
+        sku: r.sku,
+        card: r.card_hit ? { fetchedAt: r.card_fetched_at } : null,
+        detail: r.detail_hit ? { fetchedAt: r.detail_fetched_at } : null,
+        search: r.search_hit ? { fetchedAt: r.search_fetched_at } : null,
+        bundle: r.bundle_hit ? { fetchedAt: r.bundle_fetched_at } : null,
+        richMedia: r.rich_media_hit ? { fetchedAt: r.rich_media_fetched_at } : null,
+        marketStats: r.market_stats_hit
+          ? {
+              fetchedAt: r.market_stats_fetched_at,
+              stale: mkStale(r.market_stats_fetched_at, MARKET_STATS_STALE_MS),
+            }
+          : null,
+        followSell: r.follow_sell_hit
+          ? {
+              fetchedAt: r.follow_sell_fetched_at,
+              stale: mkStale(r.follow_sell_fetched_at, FOLLOW_SELL_STALE_MS),
+            }
+          : null,
+        hitCount: r.hit_count || 0,
+        lastFetchedAt: r.last_fetched_at,
+        listed: !!r.listed,
+      };
     });
 
-    const total = items.length;
-    const pagedItems = items.slice((page - 1) * pageSize, page * pageSize);
-    return res.json(ok({ items: pagedItems, total, page, pageSize }));
+    return res.json(ok({ items: reshaped, total, page, pageSize }));
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] overview failed');
     next(e);
   }
 });
 
+// GET /admin/api/cache/listed/:sku — 按 SKU 查跟卖记录
+// 返回该 SKU 关联的所有 follow_sell_task_items 记录(JOIN follow_sell_tasks 取店铺/任务时间)
+// offer_id 格式 {SKU}-{mmdd}-qx,用 LIKE 通配符匹配
+router.get('/admin/api/cache/listed/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    if (!sku) return res.json(ok({ items: [] }));
+    const rows = db
+      .prepare(
+        `SELECT
+           ti.id, ti.local_task_id, ti.offer_id, ti.name, ti.price,
+           ti.product_id, ti.status, ti.errors,
+           ti.stock_set, ti.stock_attempts,
+           ti.created_at AS item_created_at,
+           ti.updated_at AS item_updated_at,
+           t.store_id, t.status AS task_status, t.created_at AS task_created_at,
+           t.completed_at AS task_completed_at
+         FROM follow_sell_task_items ti
+         JOIN follow_sell_tasks t ON t.local_task_id = ti.local_task_id
+         WHERE ti.offer_id LIKE ? || '-%'
+         ORDER BY ti.created_at DESC`
+      )
+      .all(sku);
+    const items = rows.map((r) => ({
+      id: r.id,
+      localTaskId: r.local_task_id,
+      offerId: r.offer_id,
+      name: r.name,
+      price: r.price,
+      productId: r.product_id,
+      status: r.status,
+      errors: r.errors ? safeJsonParse(r.errors) : null,
+      stockSet: r.stock_set,
+      stockAttempts: r.stock_attempts,
+      itemCreatedAt: r.item_created_at,
+      itemUpdatedAt: r.item_updated_at,
+      storeId: r.store_id,
+      taskStatus: r.task_status,
+      taskCreatedAt: r.task_created_at,
+      taskCompletedAt: r.task_completed_at,
+    }));
+    return res.json(ok({ items }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] listed failed');
+    next(e);
+  }
+});
+
+// 安全 JSON 解析(失败返回原字符串)
+function safeJsonParse(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
+}
+
 // ── 缓存合成 helper(opi-preview + preview/profile 共用) ───
-// 从 5 类缓存(search/bundle/card/richMedia/detail)合成 OPI 输入 item
+// 从 3 类合并表(dom/attribute/richMedia)合成 OPI 输入 item
 // 返回 { sources, item, portalItem, opiItem, raw } 或 { sources, error }
 async function buildSynthesizedFromCache(sku, storeId) {
-  const [sDoc, bDoc, cDoc, rmDoc, dDoc] = await Promise.all([
-    daos.searchDao.findById(sku),
-    daos.bundleDao.findById(sku),
-    daos.cardDao.findById(sku),
+  const [domDoc, attrDoc, rmDoc] = await Promise.all([
+    daos.domDao.findById(sku),
+    daos.attributeDao.findById(sku),
     daos.richMediaDao.findById(sku),
-    daos.detailDao.findById(sku),
   ]);
 
+  // sources 同时返回新合并表维度 + 兼容旧拆解维度(供前端 sources 标签展示)
   const sources = {
-    search: !!sDoc,
-    bundle: !!bDoc,
-    card: !!cDoc,
+    dom: !!domDoc,
+    attribute: !!attrDoc,
     richMedia: !!rmDoc,
-    detail: !!dDoc,
+    // 兼容字段(旧前端 sources.search/bundle/card/detail 标签)
+    card: !!(domDoc?.card),
+    detail: !!(domDoc?.detail),
+    search: !!(attrDoc?.searchData),
+    bundle: !!(attrDoc?.bundleData),
   };
 
-  if (!bDoc && !sDoc) {
-    return { sources, error: '缺少 bundle 和 search 缓存,无法合成 OPI' };
+  if (!attrDoc) {
+    return { sources, error: '缺少 attribute 缓存,无法合成 OPI' };
   }
 
-  const bundleData = bDoc?.data || null;
-  const searchData = sDoc?.data || null;
-  const cardData = cDoc?.data || null;
+  const cardData = domDoc?.card || null;
+  const detailData = domDoc?.detail || null;
+  const searchData = attrDoc?.searchData || null;
+  const bundleData = attrDoc?.bundleData || null;
   const richMediaData = rmDoc?.data || null;
-  const detailData = dDoc?.data || null;
 
   const sv = (searchData?.items && searchData.items[0]) || {};
   const bundleItem = bundleData || {};
@@ -1162,7 +845,7 @@ router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
 });
 
 // ── 上架预览工作台:SKU 全息画像 ────────────────────────────
-// 聚合 7 类缓存,返回原始字段 + 合成 OPI item,供前端预览页渲染
+// 聚合 3 类合并表(dom/attribute/richMedia) + marketStats/followSell,返回原始字段 + 合成 OPI item
 // query: storeId(可选,用于字典白名单过滤)
 router.get('/admin/api/preview/sku/:sku/profile', async (req, res, next) => {
   try {
@@ -1570,7 +1253,7 @@ router.delete('/admin/api/store-sku/:sku', async (req, res, next) => {
   }
 });
 
-// GET /admin/api/store-sku/by-store/:slug — 按店铺 slug 查询所有 SKU 并 join card 缓存
+// GET /admin/api/store-sku/by-store/:slug — 按店铺 slug 查询所有 SKU 并 join dom 缓存的 card 部分
 // 返回 { items: [{ sku, sellerId, sellerSlug, sellerName, card: { name, price, image, ratingCount } }] }
 // 供深度采集管理页面使用:一次请求拿到店铺全部 SKU + 商品卡信息(图片/评论数/价格)
 router.get('/admin/api/store-sku/by-store/:slug', async (req, res, next) => {
@@ -1582,10 +1265,10 @@ router.get('/admin/api/store-sku/by-store/:slug', async (req, res, next) => {
     const skuDocs = await daos.storeSkuDao.findBySellerSlug(slug);
     if (!skuDocs.length) return res.json(ok({ items: [], total: 0 }));
 
-    // 批量查 card 缓存(DAO findManyBySkuList)
+    // 批量查 dom 缓存(取 card 部分)
     const skus = skuDocs.map((d) => d.sku || d._id);
-    const cardDocs = await daos.cardDao.findManyBySkuList(skus);
-    const cardMap = new Map(cardDocs.map((d) => [d.sku || d._id, d.data || null]));
+    const domDocs = await daos.domDao.findManyBySkuList(skus);
+    const cardMap = new Map(domDocs.map((d) => [d.sku || d._id, d.card || null]));
 
     const items = skuDocs.map((d) => ({
       sku: d.sku || d._id,

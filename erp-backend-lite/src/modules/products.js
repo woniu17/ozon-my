@@ -14,6 +14,7 @@ import { storeGuard } from '../middleware/store.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { prepareBundleItems } from '../services/prepare-bundle.js';
 import * as opi from '../services/ozon-opi.js';
+import { indexDao } from '../db/dao/sqlite/index-dao.js';
 import logger from '../middleware/log.js';
 
 const router = Router();
@@ -44,6 +45,11 @@ export function upsertTaskItems(localTaskId, items) {
       Array.isArray(it.errors) && it.errors.length > 0 ? JSON.stringify(it.errors) : null
     );
   }
+  // fire-and-forget:刷新 ozon_cache_index.listed 字段
+  // 让数据管理页"已跟卖"列即时更新(避免等 5 分钟定时任务)
+  indexDao.refreshListedStatus().catch((e) => {
+    logger.warn({ err: e.message }, 'refreshListedStatus after upsertTaskItems failed');
+  });
 }
 
 // 按 items 状态汇总任务状态

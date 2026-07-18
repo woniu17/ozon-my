@@ -303,15 +303,6 @@
         '        <span>只采集中国店铺</span>' +
         '      </label>' +
         '    </div>' +
-        (shopOnly
-          ? '    <div class="qx-c-filter-entry">' +
-            '      <div>' +
-            '        <strong>智能筛选</strong>' +
-            '        <span class="qx-c-filter-summary" data-el="filter-summary">未配置</span>' +
-            '      </div>' +
-            '      <button class="qx-c-btn qx-c-btn-ghost" data-act="filter-open">筛选设置</button>' +
-            '    </div>'
-          : '') +
         '  </div>' +
         // 店铺检测
         '  <div class="qx-c-section-block">' +

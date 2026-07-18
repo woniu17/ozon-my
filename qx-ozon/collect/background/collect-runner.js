@@ -367,7 +367,7 @@
       return { status: 'antibot', pausedUntil };
     };
 
-    // ── 前置缓存检查:并行查 7 类缓存,返回是否全部命中 ──────────────────────────
+    // ── 前置缓存检查:并行查 5 类合并缓存,返回是否全部命中 ──────────────────────
     // 用于 _handleSubmitTask 入队前快速判断,避免缓存命中任务占用 15s 队列 slot。
     // 逻辑与 _doAutoCollect Step1+Step5 内部缓存查询保持一致,但不做 L1/L2 同步(仅查询)。
     this._checkAllCachesHit = async (sku) => {
@@ -381,36 +381,31 @@
         { type: 'followSell', hit: false },
       ];
 
-      const SEARCH = this.IDB_STORES.SEARCH;
-      const BUNDLE = this.IDB_STORES.BUNDLE;
-
       try {
-        // search 查询:L1 → L2(命中即停,不回填)
+        // search 查询:attributeCacheGet('search') 返回 searchData(即 { items: [...] })
         const searchHitP = (async () => {
           try {
-            const l1 = await this.idbGet(SEARCH, sku);
-            if (l1 && Array.isArray(l1.data?.items) && l1.data.items.length > 0) return true;
-            const l2 = await this.erpCacheGet('search', sku);
-            return !!(l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0);
+            const cached = await this.attributeCacheGet(sku, 'search');
+            return !!(cached && Array.isArray(cached.items) && cached.items.length > 0);
           } catch (e) {
             return false;
           }
         })();
 
-        // bundle 查询:仅 L1(跟随原 Step5 逻辑,L2 由真调时回填)
+        // bundle 查询:attributeCacheGet('bundle') 返回 { data, bundleId, attrsEmptyVerifiedAt, fetchedAt }
         const bundleHitP = (async () => {
           try {
-            const l1 = await this.idbGet(BUNDLE, sku);
-            return this.bundleUsable(l1);
+            const cached = await this.attributeCacheGet(sku, 'bundle');
+            return this.bundleUsable(cached);
           } catch (e) {
             return false;
           }
         })();
 
-        // 5 类直接缓存 + search + bundle,全部并行
+        // 5 类合并缓存 + search + bundle,全部并行
         const [card, detail, pdp, marketStats, followSell, searchHit, bundleHit] = await Promise.all([
-          this.cardCacheGet(sku).catch(() => null),
-          this.detailCacheGet(sku).catch(() => null),
+          this.domCacheGet(sku, 'card').catch(() => null),
+          this.domCacheGet(sku, 'detail').catch(() => null),
           this.richMediaCacheGet(sku).catch(() => null),
           this.marketStatsCacheGet(sku).catch(() => null),
           this.followSellCacheGet(sku).catch(() => null),

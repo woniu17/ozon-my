@@ -15,6 +15,26 @@ export function getCacheDetail(type, sku) {
   return request.get(`/admin/api/cache/${type}/${encodeURIComponent(sku)}`);
 }
 
+// 按类型查缓存原始数据(GET /ozon/cache/{type}/:sku)
+// type: 'dom' | 'attribute' | 'richMedia' | 'marketStats' | 'followSell'
+// 返回结构因 type 而异:
+//   dom: { card, detail, cardFetchedAt, detailFetchedAt }
+//   attribute: { searchData, bundleData, searchFetchedAt, bundleFetchedAt, bundleId, attrsEmptyVerifiedAt, stale }
+//   richMedia: { data, fetchedAt }
+//   marketStats: { data, fetchedAt, l2Synced, stale }
+//   followSell: { data, fetchedAt, l2Synced, stale }
+export function getCacheByType(type, sku) {
+  return request.get(`/ozon/cache/${type}/${encodeURIComponent(sku)}`);
+}
+
+// 按 SKU 查跟卖记录(GET /admin/api/cache/listed/:sku)
+// 返回 { items: [{ localTaskId, offerId, name, price, productId, status, errors,
+//                  stockSet, stockAttempts, itemCreatedAt, itemUpdatedAt,
+//                  storeId, taskStatus, taskCreatedAt, taskCompletedAt }] }
+export function getListedRecords(sku) {
+  return request.get(`/admin/api/cache/listed/${encodeURIComponent(sku)}`);
+}
+
 // 删除单条
 export function deleteCache(type, sku) {
   return request.del(`/admin/api/cache/${type}/${encodeURIComponent(sku)}`);

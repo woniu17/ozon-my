@@ -612,11 +612,12 @@
       }
     }
 
-    // 异步写 card 缓存(商品卡 DOM 5 字段,fire-and-forget,对齐 ozon-search.js)
+    // 异步写 dom 缓存(card 类型,商品卡 DOM 5 字段,fire-and-forget,对齐 ozon-search.js)
     if (window.sendMessage) {
       try {
-        window.sendMessage('cardCacheSet', {
+        window.sendMessage('domCacheSet', {
           sku: String(productId),
+          type: 'card',
           data: {
             sku: String(productId),
             url: info.url || '',

@@ -86,6 +86,30 @@ function ensureMigrations() {
     db.exec(`ALTER TABLE follow_sell_task_items ADD COLUMN stock_attempts INTEGER DEFAULT 0`);
     console.log('[db] migration: added column follow_sell_task_items.stock_attempts');
   }
+  // 缓存表重构:直接 DROP 旧 7 表 + legacy 表,新版用 6 张表(1 索引 + 5 数据)
+  // 不写迁移脚本,旧数据自然过期(SW 重新采集填充新表)
+  dropLegacyCacheTables(db);
+}
+
+// 清理旧缓存表(card/detail/search/bundle/composer/entrypoint 已合并为 dom/attribute)
+function dropLegacyCacheTables(db) {
+  const legacyTables = [
+    'ozon_card_cache',
+    'ozon_detail_cache',
+    'ozon_search_cache',
+    'ozon_bundle_cache',
+    'ozon_composer_cache',
+    'ozon_entrypoint_cache',
+  ];
+  for (const name of legacyTables) {
+    const exists = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
+      .get(name);
+    if (exists) {
+      db.exec(`DROP TABLE IF EXISTS ${name}`);
+      console.log(`[db] migration: dropped legacy table ${name} (已合并到 dom/attribute)`);
+    }
+  }
 }
 
 // 清理旧 collect_box_v2 表(及其索引)

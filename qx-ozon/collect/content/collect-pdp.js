@@ -635,7 +635,7 @@
       const _urlSku = (window.location.pathname.match(/-(\d{5,})\/?$/) || [])[1] || product?.sku || '';
       if (_urlSku && window.sendMessage) {
         try {
-          const cacheResp = await window.sendMessage('detailCacheGet', { sku: String(_urlSku) });
+          const cacheResp = await window.sendMessage('domCacheGet', { sku: String(_urlSku), type: 'detail' });
           const cached = cacheResp?.ok ? cacheResp.data : null;
           if (cached) {
             // 用缓存的静态字段补全 product(动态字段保持当前 DOM 解析值,可能为空)
@@ -670,7 +670,7 @@
       const _needDynamicFallback = !product.price && !product.seller?.name && !product.statistics?.sold_count;
       if (_needDynamicFallback) {
         try {
-          const dynResp = await window.sendMessage('detailCacheGet', { sku: String(product.sku) });
+          const dynResp = await window.sendMessage('domCacheGet', { sku: String(product.sku), type: 'detail' });
           const dynCached = dynResp?.ok ? dynResp.data : null;
           if (dynCached) {
             if (!product.price && dynCached.price) product.price = dynCached.price;

@@ -622,19 +622,25 @@
       deliveryMode,
     };
 
-    // 有 sku 时异步写 detail 缓存(详情页全字段,不阻塞返回)
+    // 有 sku 时异步写 detail 缓存(详情页关键字段,不阻塞返回)
     // DOM 解析失败时由 performProductCollect 查缓存兜底
+    // 字段精简:只保留 collect-pdp / buildSynthesizedFromCache 实际读取的字段
+    //   静态兜底:title/images/sku/productId/brand/category/characteristics/videos
+    //   动态兜底:price/walletPrice/originalPrice/seller/statistics/freeRest/
+    //            followSellCount/followSellMinPrice/deliveryMode/rating/reviewCount
+    //   后端合成:images/title/price/originalPrice(已含在上面)
+    //   不再写入:url(cardCache 已有,避免冗余)
     if (_product.sku && window.sendMessage) {
       try {
-        window.sendMessage('detailCacheSet', {
+        window.sendMessage('domCacheSet', {
           sku: String(_product.sku),
+          type: 'detail',
           data: {
             title: _product.title,
             images: _product.images,
             videos: _product.videos,
             sku: _product.sku,
             productId: _product.productId,
-            url: _product.url,
             brand: _product.brand,
             category: _product.category,
             characteristics: _product.characteristics,
@@ -655,11 +661,12 @@
         /* fire-and-forget,不影响采集 */
       }
 
-      // 同步写 card 缓存(商品卡 5 字段 sku/url/name/price/image,供搜索页/店铺页兜底)
+      // 同步写 dom 缓存(card 类型,商品卡 5 字段 sku/url/name/price/image,供搜索页/店铺页兜底)
       try {
         const firstImg = Array.isArray(_product.images) ? _product.images[0] : '';
-        window.sendMessage('cardCacheSet', {
+        window.sendMessage('domCacheSet', {
           sku: String(_product.sku),
+          type: 'card',
           data: {
             sku: String(_product.sku),
             url: _product.url || window.location.href,

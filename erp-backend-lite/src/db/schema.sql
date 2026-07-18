@@ -166,53 +166,111 @@ CREATE INDEX IF NOT EXISTS idx_fstp_created ON follow_sell_task_payloads(created
 -- 启用后由 src/db/adapter.js → src/db/dao/sqlite/* 使用
 -- ════════════════════════════════════════════════════════════════
 
--- ── 9 类缓存表(_id=sku, data=JSON, fetchedAt=ISO8601) ───────
-CREATE TABLE IF NOT EXISTS ozon_search_cache (
-  _id        TEXT PRIMARY KEY,        -- = sku
-  data       TEXT NOT NULL,           -- JSON
-  fetchedAt  TEXT NOT NULL            -- ISO8601
-);
+-- ════════════════════════════════════════════════════════════════
+-- 缓存表设计(6 张表:1 索引 + 5 数据)
+--   ozon_cache_index        — 索引表,列表查询唯一入口
+--   ozon_dom_cache          — card + detail 合并,互相备份
+--   ozon_attribute_cache    — search + bundle 合并,各自独立
+--   ozon_rich_media_cache   — PDP 富内容(独立,不与 detail 互备)
+--   ozon_market_stats_cache — 市场统计
+--   ozon_follow_sell_cache  — 跟卖竞争
+-- ════════════════════════════════════════════════════════════════
 
-CREATE TABLE IF NOT EXISTS ozon_bundle_cache (
-  _id                   TEXT PRIMARY KEY,
-  data                  TEXT NOT NULL,
-  bundleId              TEXT,
-  attrsEmptyVerifiedAt  TEXT,         -- 空属性 6h 重验
-  fetchedAt             TEXT NOT NULL
-);
+-- ── 索引表:列表查询唯一入口(1 行/SKU) ───────────────────────
+-- 冗余字段 + 7 类命中位 + hit_count + listed + seller
+-- 由 5 张数据表的 DAO upsert 时同步更新(listed/seller 由定时任务刷新)
+CREATE TABLE IF NOT EXISTS ozon_cache_index (
+  sku                TEXT PRIMARY KEY,
 
-CREATE TABLE IF NOT EXISTS ozon_card_cache (
-  _id        TEXT PRIMARY KEY,
-  data       TEXT NOT NULL,
-  fetchedAt  TEXT NOT NULL
-);
+  -- 7 类缓存命中位 + fetchedAt
+  card_hit           INTEGER DEFAULT 0,  card_fetched_at     TEXT,
+  detail_hit         INTEGER DEFAULT 0,  detail_fetched_at   TEXT,
+  search_hit         INTEGER DEFAULT 0,  search_fetched_at   TEXT,
+  bundle_hit         INTEGER DEFAULT 0,  bundle_fetched_at   TEXT,
+  rich_media_hit     INTEGER DEFAULT 0,  rich_media_fetched_at TEXT,
+  market_stats_hit   INTEGER DEFAULT 0,  market_stats_fetched_at TEXT,
+  follow_sell_hit    INTEGER DEFAULT 0,  follow_sell_fetched_at TEXT,
 
--- legacy(已被 richMedia 合并,保留供老数据补写 L2)
-CREATE TABLE IF NOT EXISTS ozon_composer_cache (
-  _id        TEXT PRIMARY KEY,
-  data       TEXT NOT NULL,
-  fetchedAt  TEXT NOT NULL
-);
+  -- 冗余计算字段
+  hit_count          INTEGER DEFAULT 0,  -- 7 类命中数(0-7)
+  last_fetched_at    TEXT,                -- 7 类最新 fetchedAt,排序用
 
--- legacy(已被 richMedia 合并,保留供老数据补写 L2)
-CREATE TABLE IF NOT EXISTS ozon_entrypoint_cache (
-  _id        TEXT PRIMARY KEY,
-  data       TEXT NOT NULL,
-  fetchedAt  TEXT NOT NULL
-);
+  -- 冗余展示字段(从 dom/attribute/marketStats/followSell 提取)
+  name               TEXT,                -- dom: card.name || detail.title
+  price              TEXT,                -- dom: detail.price || card.price
+  primary_image      TEXT,                -- dom: card.image || detail.images[0]
+  url                TEXT,                -- dom: card.url
+  rating_count       INTEGER,             -- dom: card.ratingCount
+  has_video          INTEGER DEFAULT 0,   -- richMedia: !!mp4
+  market_price_p50   TEXT,                -- marketStats: priceP50
+  competitor_count   INTEGER,             -- followSell: sellers.length
 
+  -- 采集源
+  seller_slug        TEXT,
+  seller_name        TEXT,
+
+  -- 跟卖状态(0=未跟卖, 1=已跟卖)
+  listed             INTEGER DEFAULT 0,
+
+  -- 全文搜索(name + sku + seller_name 拼接)
+  searchable_text    TEXT,
+
+  updated_at         TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ci_hit_count    ON ozon_cache_index(hit_count);
+CREATE INDEX IF NOT EXISTS idx_ci_listed       ON ozon_cache_index(listed);
+CREATE INDEX IF NOT EXISTS idx_ci_seller       ON ozon_cache_index(seller_slug);
+CREATE INDEX IF NOT EXISTS idx_ci_rating       ON ozon_cache_index(rating_count);
+CREATE INDEX IF NOT EXISTS idx_ci_last_fetched ON ozon_cache_index(last_fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ci_fts          ON ozon_cache_index(searchable_text COLLATE NOCASE);
+
+-- ── dom 缓存(card + detail 合并,互相备份) ──────────────────
+-- card 部分:商品卡 DOM 轻量字段(name/price/image/url/ratingCount)
+-- detail 部分:PDP DOM 解析精简 19 字段(详见 ozon-product.js detailCacheSet)
+-- 读取时:任一非空即进列表,字段优先级 card 优先,detail 兜底
+CREATE TABLE IF NOT EXISTS ozon_dom_cache (
+  _id                TEXT PRIMARY KEY,    -- = sku
+  card_data          TEXT,                -- JSON: {name, price, image, url, ratingCount}
+  card_fetched_at    TEXT,
+  detail_data        TEXT,                -- JSON: {title, images, videos, sku, productId,
+                                          --        brand, category, characteristics, price,
+                                          --        walletPrice, originalPrice, seller,
+                                          --        statistics, freeRest, followSellCount,
+                                          --        followSellMinPrice, deliveryMode,
+                                          --        rating, reviewCount}
+  detail_fetched_at  TEXT,
+  updated_at         TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dom_name            ON ozon_dom_cache(card_data);
+CREATE INDEX IF NOT EXISTS idx_dom_card_fetched    ON ozon_dom_cache(card_fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dom_detail_fetched  ON ozon_dom_cache(detail_fetched_at DESC);
+
+-- ── attribute 缓存(search + bundle 合并,各自独立) ──────────
+-- search 部分:seller portal /api/v1/search 结果(items 数组)
+-- bundle 部分:seller portal create-bundle-by-variant-id(顶层物理字段 + attrs)
+-- 读取时:attributes 优先 bundle(含物理 attrs merge),空则 search
+CREATE TABLE IF NOT EXISTS ozon_attribute_cache (
+  _id                       TEXT PRIMARY KEY,    -- = sku
+  search_data               TEXT,                -- JSON: {items:[{attributes, price, ...}], _searchMeta}
+  search_fetched_at         TEXT,
+  bundle_data               TEXT,                -- JSON: bundle 原始(顶层物理字段 + attributes)
+  bundle_id                 TEXT,
+  bundle_fetched_at         TEXT,
+  attrs_empty_verified_at   TEXT,                -- 空属性 6h 重验
+  updated_at                TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_attr_search_fetched ON ozon_attribute_cache(search_fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attr_bundle_fetched ON ozon_attribute_cache(bundle_fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attr_bundle_id      ON ozon_attribute_cache(bundle_id);
+
+-- ── richMedia 缓存(PDP 富内容,独立) ────────────────────────
 CREATE TABLE IF NOT EXISTS ozon_rich_media_cache (
   _id        TEXT PRIMARY KEY,
   data       TEXT NOT NULL,           -- { mp4, richContent, description, hashtags, gallery, fields, widgetStates, hitEndpoints, ... }
   fetchedAt  TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS ozon_detail_cache (
-  _id        TEXT PRIMARY KEY,
-  data       TEXT NOT NULL,
-  fetchedAt  TEXT NOT NULL
-);
-
+-- ── marketStats 缓存(市场统计) ─────────────────────────────
 CREATE TABLE IF NOT EXISTS ozon_market_stats_cache (
   _id        TEXT PRIMARY KEY,
   data       TEXT NOT NULL,
@@ -220,6 +278,7 @@ CREATE TABLE IF NOT EXISTS ozon_market_stats_cache (
   l2Synced   INTEGER DEFAULT 0       -- 0/1
 );
 
+-- ── followSell 缓存(跟卖竞争) ──────────────────────────────
 CREATE TABLE IF NOT EXISTS ozon_follow_sell_cache (
   _id        TEXT PRIMARY KEY,
   data       TEXT NOT NULL,

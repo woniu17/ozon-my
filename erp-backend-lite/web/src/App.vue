@@ -20,7 +20,7 @@ const tabs = [
   { key: '/audit', label: '操作日志' },
   { key: '/config', label: '配置中心' },
   { key: '/listing-templates', label: '上架模板' },
-  { key: '/cache', label: '缓存管理' },
+  { key: '/cache', label: '数据管理' },
   { key: '/collect-logs', label: '采集日志' },
   { key: '/collect-queue', label: '采集队列' },
 ];

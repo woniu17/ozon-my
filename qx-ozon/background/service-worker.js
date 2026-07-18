@@ -517,16 +517,21 @@ try {
 
   // ── 采集缓存层(已迁移到 collect/background/collect-cache.js) ──────────────
   // 常量保留在 IIFE 内(其他模块引用 _IDB_STORE_* 等),collect-cache.js 中也有一份(字符串重复无害)
+  // v8: card+detail→dom, search+bundle→attribute(详见 collect-cache.js)
   const _IDB_NAME = 'ozon-cache';
-  const _IDB_VERSION = 6;
+  const _IDB_VERSION = 8;
+  const _IDB_STORE_DOM = 'dom_cache';
+  const _IDB_STORE_ATTRIBUTE = 'attribute_cache';
+  const _IDB_STORE_RICH_MEDIA = 'rich_media_cache';
+  const _IDB_STORE_MARKET_STATS = 'market_stats_cache';
+  const _IDB_STORE_FOLLOW_SELL = 'follow_sell_cache';
+  // 旧 store(仅迁移用,保留常量以兼容其他模块引用)
   const _IDB_STORE_SEARCH = 'search_cache';
   const _IDB_STORE_BUNDLE = 'bundle_cache';
   const _IDB_STORE_CARD = 'card_cache';
   const _IDB_STORE_COMPOSER = 'composer_cache';
   const _IDB_STORE_ENTRYPOINT = 'entrypoint_cache';
   const _IDB_STORE_DETAIL = 'detail_cache';
-  const _IDB_STORE_MARKET_STATS = 'market_stats_cache';
-  const _IDB_STORE_FOLLOW_SELL = 'follow_sell_cache';
   const _ATTRS_EMPTY_REVERIFY_MS = 6 * 60 * 60 * 1000;
 
   // 初始化 __jzCollect 命名空间(apiRequest 定义在后面,用箭头函数延迟求值;
@@ -569,15 +574,16 @@ try {
     __jzCollect.erpCacheSetAndSyncFlag(store, type, sku, body);
   const _syncL2FromL1 = (store, type, sku, l1Entry) => __jzCollect.syncL2FromL1(store, type, sku, l1Entry);
   const _writeAutoCollectLog = (payload) => __jzCollect.writeAutoCollectLog(payload);
-  const _cardCacheGet = (sku) => __jzCollect.cardCacheGet(sku);
-  const _cardCacheSet = (sku, data) => __jzCollect.cardCacheSet(sku, data);
-  const _cardCacheDelete = (sku) => __jzCollect.cardCacheDelete(sku);
+  // v8: card+detail→domCache, search+bundle→attributeCache
+  const _domCacheGet = (sku, type) => __jzCollect.domCacheGet(sku, type);
+  const _domCacheSet = (sku, type, data) => __jzCollect.domCacheSet(sku, type, data);
+  const _domCacheDelete = (sku) => __jzCollect.domCacheDelete(sku);
+  const _attributeCacheGet = (sku, type) => __jzCollect.attributeCacheGet(sku, type);
+  const _attributeCacheSet = (sku, type, data, extra) => __jzCollect.attributeCacheSet(sku, type, data, extra);
+  const _attributeCacheDelete = (sku) => __jzCollect.attributeCacheDelete(sku);
   const _richMediaCacheGet = (sku) => __jzCollect.richMediaCacheGet(sku);
   const _richMediaCacheSet = (sku, data) => __jzCollect.richMediaCacheSet(sku, data);
   const _richMediaCacheDelete = (sku) => __jzCollect.richMediaCacheDelete(sku);
-  const _detailCacheGet = (sku) => __jzCollect.detailCacheGet(sku);
-  const _detailCacheSet = (sku, data) => __jzCollect.detailCacheSet(sku, data);
-  const _detailCacheDelete = (sku) => __jzCollect.detailCacheDelete(sku);
   const _marketStatsCacheGet = (sku) => __jzCollect.marketStatsCacheGet(sku);
   const _marketStatsCacheSet = (sku, data) => __jzCollect.marketStatsCacheSet(sku, data);
   const _marketStatsCacheDelete = (sku) => __jzCollect.marketStatsCacheDelete(sku);
@@ -1352,22 +1358,13 @@ try {
   // 单 SKU 缓存状态查询(抽出供 queryCacheStatus 和 queryCacheStatusBatch 复用)
   async function _queryCacheStatusOne(qSku) {
     if (!qSku) return null;
+    // v8: card/detail → domCache, search/bundle → attributeCache(7 个 hit 位,5 次 IO)
     const [card, detail, pdp, search, bundle, marketStats, followSell] = await Promise.all([
-      _cardCacheGet(qSku).catch(() => null),
-      _detailCacheGet(qSku).catch(() => null),
+      _domCacheGet(qSku, 'card').catch(() => null),
+      _domCacheGet(qSku, 'detail').catch(() => null),
       _richMediaCacheGet(qSku).catch(() => null),
-      (async () => {
-        const l1 = await _idbGet(_IDB_STORE_SEARCH, qSku).catch(() => null);
-        if (l1?.data) return l1.data;
-        const l2 = await _erpCacheGet('search', qSku).catch(() => null);
-        return l2?.data || null;
-      })().catch(() => null),
-      (async () => {
-        const l1 = await _idbGet(_IDB_STORE_BUNDLE, qSku).catch(() => null);
-        if (l1?.data) return l1.data;
-        const l2 = await _erpCacheGet('bundle', qSku).catch(() => null);
-        return l2?.data || null;
-      })().catch(() => null),
+      _attributeCacheGet(qSku, 'search').catch(() => null),
+      _attributeCacheGet(qSku, 'bundle').catch(() => null),
       _marketStatsCacheGet(qSku).catch(() => null),
       _followSellCacheGet(qSku).catch(() => null),
     ]);
@@ -2830,37 +2827,68 @@ try {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'cardCacheGet': {
-          // 查 card 缓存(L1→L2),用于全览展示 / OPI 预览 fallback。
-          // 入参: { sku }  返回: { ok, data: cardFields | null }
+        case 'domCacheGet': {
+          // 查 dom 缓存(L1→L2),用于全览展示 / OPI 预览 fallback / 详情页 DOM 兜底。
+          // 入参: { sku, type: 'card'|'detail' }  返回: { ok, data: fields | null }
+          // 兼容旧消息: type 省略时按 'card' 处理(老 caller)
           try {
             const sku = String(message.sku || '');
             if (!sku) return { ok: true, data: null };
-            const data = await _cardCacheGet(sku);
+            const type = message.type === 'detail' ? 'detail' : 'card';
+            const data = await _domCacheGet(sku, type);
             return { ok: true, data };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'cardCacheSet': {
-          // content script 的 extractCardInfo() 成功后,异步写 card 缓存(商品卡 5 字段)。
-          // 入参: { sku, data: cardFields }  返回: { ok: true }(异步写,不等 L2)
+        case 'domCacheSet': {
+          // 异步写 dom 缓存(card 或 detail,由 type 参数区分)。
+          // 入参: { sku, type: 'card'|'detail', data }  返回: { ok: true }(异步写,不等 L2)
           try {
             const sku = String(message.sku || '');
+            const type = message.type === 'detail' ? 'detail' : 'card';
             const data = message.data;
             if (!sku || !data) return { ok: true };
-            _cardCacheSet(sku, data);
+            _domCacheSet(sku, type, data);
             return { ok: true };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
         }
-        case 'cardCacheDelete': {
-          // forceRefresh 时清 card 缓存。
+        case 'domCacheDelete': {
+          // forceRefresh 时清 dom 缓存(同时清 card + detail)。
           try {
             const sku = String(message.sku || '');
-            if (sku) _cardCacheDelete(sku);
+            if (sku) _domCacheDelete(sku);
             return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
+        // ── 旧消息名兼容(content/*.js 旧 caller 未升级前继续可用) ──
+        case 'cardCacheGet':
+        case 'cardCacheSet':
+        case 'cardCacheDelete':
+        case 'detailCacheGet':
+        case 'detailCacheSet':
+        case 'detailCacheDelete': {
+          // 路由到新 domCache* 接口,按消息名推断 type
+          try {
+            const sku = String(message.sku || '');
+            if (!sku) return message.action.endsWith('Get') ? { ok: true, data: null } : { ok: true };
+            const type = message.action.startsWith('detail') ? 'detail' : 'card';
+            if (message.action.endsWith('Get')) {
+              const data = await _domCacheGet(sku, type);
+              return { ok: true, data };
+            } else if (message.action.endsWith('Set')) {
+              const data = message.data;
+              if (data) _domCacheSet(sku, type, data);
+              return { ok: true };
+            } else {
+              // Delete
+              _domCacheDelete(sku);
+              return { ok: true };
+            }
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
@@ -2895,40 +2923,6 @@ try {
           try {
             const sku = String(message.sku || '');
             if (sku) _richMediaCacheDelete(sku);
-            return { ok: true };
-          } catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-          }
-        }
-        case 'detailCacheGet': {
-          // 查 detail 缓存(L1→L2),详情页 DOM 解析失败时兜底。
-          try {
-            const sku = String(message.sku || '');
-            if (!sku) return { ok: true, data: null };
-            const data = await _detailCacheGet(sku);
-            return { ok: true, data };
-          } catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-          }
-        }
-        case 'detailCacheSet': {
-          // content script 的 extractProductData() 成功后,异步写 detail 缓存(详情页全字段)。
-          // 入参: { sku, data: detailFields }  返回: { ok: true }(异步写,不等 L2)
-          try {
-            const sku = String(message.sku || '');
-            const data = message.data;
-            if (!sku || !data) return { ok: true };
-            _detailCacheSet(sku, data);
-            return { ok: true };
-          } catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-          }
-        }
-        case 'detailCacheDelete': {
-          // forceRefresh 时清 detail 缓存。
-          try {
-            const sku = String(message.sku || '');
-            if (sku) _detailCacheDelete(sku);
             return { ok: true };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
@@ -4274,37 +4268,23 @@ try {
           }
 
           const MAX_RETRIES = 2;
-          // search 缓存查询(三层:L1 IndexedDB → L2 ERP MongoDB → L3 真调)
+          // search 缓存查询(三层:L1 IndexedDB → L2 ERP SQLite → L3 真调)
           // 命中后跳过 /search 真调,直接用缓存 items 进入 Step 2(bundle 有自己的缓存)
+          // v8: search/bundle 合并到 attribute_cache,通过 attributeCacheGet('search') 查询
           let searchCacheHit = null; // { items } | null
           if (!forceRefresh) {
-            // L1: IndexedDB
             try {
-              const l1 = await _idbGet(_IDB_STORE_SEARCH, sku);
-              if (l1 && Array.isArray(l1.data?.items) && l1.data.items.length > 0) {
-                console.log(`[searchVariants] search L1 hit sku=${sku}`);
-                searchCacheHit = l1.data;
-                // L2 未同步 → 用 L1 数据异步补写 L2
-                if (!l1.l2Synced) _syncL2FromL1(_IDB_STORE_SEARCH, 'search', sku, l1);
+              const cached = await _attributeCacheGet(sku, 'search');
+              if (cached && Array.isArray(cached.items) && cached.items.length > 0) {
+                console.log(`[searchVariants] search cache hit sku=${sku}`);
+                searchCacheHit = cached;
               }
             } catch (e) {
-              console.warn(`[searchVariants] search L1 get failed:`, e?.message || e);
-            }
-            // L2: ERP MongoDB
-            if (!searchCacheHit) {
-              const l2 = await _erpCacheGet('search', sku);
-              if (l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0) {
-                console.log(`[searchVariants] search L2 hit sku=${sku}`);
-                searchCacheHit = l2.data;
-                // 回填 L1(l2Synced=true)
-                _idbPut(_IDB_STORE_SEARCH, { sku, data: l2.data, fetchedAt: Date.now(), l2Synced: true }).catch(
-                  () => {}
-                );
-              }
+              console.warn(`[searchVariants] search cache get failed:`, e?.message || e);
             }
           } else {
-            // forceRefresh → 清 L1 + L2
-            await Promise.all([_idbDelete(_IDB_STORE_SEARCH, sku).catch(() => {}), _erpCacheDelete('search', sku)]);
+            // forceRefresh → 清整条 attribute 记录(search + bundle 都清,下次都重新拉)
+            _attributeCacheDelete(sku);
           }
 
           for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -4359,10 +4339,8 @@ try {
                 // 异步写回 L1(l2Synced=false) + L2(带重试,成功后回更新 L1 l2Synced=true)
                 if (attempt === 1) {
                   const cacheData = { items };
-                  _idbPut(_IDB_STORE_SEARCH, { sku, data: cacheData, fetchedAt: Date.now(), l2Synced: false }).catch(
-                    () => {}
-                  );
-                  _erpCacheSetAndSyncFlag(_IDB_STORE_SEARCH, 'search', sku, { data: cacheData });
+                  // v8: 写入 attribute_cache 的 search 字段(L1 + L2 由 attributeCacheSet 统一处理)
+                  _attributeCacheSet(sku, 'search', cacheData);
                 }
               }
 
@@ -4465,10 +4443,8 @@ try {
               // 读 search_cache 会拿到缺物理 attrs 的旧版本,导致面板重量·尺寸不显示。
               if (attempt === 1) {
                 const cacheData = { items };
-                _idbPut(_IDB_STORE_SEARCH, { sku, data: cacheData, fetchedAt: Date.now(), l2Synced: false }).catch(
-                  () => {}
-                );
-                _erpCacheSetAndSyncFlag(_IDB_STORE_SEARCH, 'search', sku, { data: cacheData });
+                // v8: 写入 attribute_cache 的 search 字段(L1 + L2 由 attributeCacheSet 统一处理)
+                _attributeCacheSet(sku, 'search', cacheData);
               }
 
               return { ok: true, data: { items } };
