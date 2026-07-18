@@ -165,6 +165,45 @@ export function transformItemForPortal(item, options = {}) {
     usedKeys.add('4191');
   }
 
+  // 5.2d 强制属性覆盖:来自前端 Preview 的 _forcedAttributes(品牌/卖家代码/型号名称等)
+  // 这些属性由前端通过 OPI 字典接口查到正确的 dictionary_value_id 后注入,
+  // 优先级最高 —— 即使 bundleItem/sv 中有同 id 属性,也用前端传入的版本覆盖。
+  // 用于解决"品牌(85)是字典属性,从 sv 提取会丢 dictionary_value_id 导致 Ozon 拒绝"的问题。
+  if (Array.isArray(item._forcedAttributes)) {
+    for (const fa of item._forcedAttributes) {
+      const faId = Number(fa.id || fa.attribute_id || 0);
+      if (!faId) continue;
+      const key = String(faId);
+      const vals = Array.isArray(fa.values)
+        ? fa.values.filter(
+            (v) =>
+              v &&
+              ((v.value != null && v.value !== '') ||
+                (v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0))
+          )
+        : [];
+      if (vals.length === 0) continue;
+      const entry = {
+        complex_id: Number(fa.complex_id) || 0,
+        id: faId,
+        values: vals.map((v) => ({
+          value: String(v.value ?? ''),
+          ...(v.dictionary_value_id != null && Number(v.dictionary_value_id) > 0
+            ? { dictionary_value_id: Number(v.dictionary_value_id) }
+            : {}),
+        })),
+      };
+      // 按 id 覆盖:已有则替换,没有则追加
+      const existIdx = attributes.findIndex((a) => Number(a.id) === faId);
+      if (existIdx >= 0) {
+        attributes[existIdx] = entry;
+      } else {
+        attributes.push(entry);
+      }
+      usedKeys.add(key);
+    }
+  }
+
   // 5.3 complex_attributes(视频/PDF 等):bundleComplexAttrs 透传
   // 兼容两种输入形状:
   //   - 扁平: {attribute_id, complex_id, values}(来自 sv._bundleComplexAttrs,实际数据)
@@ -214,17 +253,11 @@ export function transformItemForPortal(item, options = {}) {
     }
   }
 
-  // 5.4 type_id + description_category_id(上架用最深层 category,与字典查询的 level_3 不同)
-  const cats = Array.isArray(sv?.categories) ? sv.categories : [];
-  const deepestCat = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
-  const typeId = Number(bundleItem?.type_id) || Number(sv?.description_category_id) || 0;
-  const descriptionCategoryId =
-    Number(bundleItem?.description_category_id) ||
-    Number(bundleItem?.category?.description_category_id) ||
-    Number(bundleItem?.description_category?.id) ||
-    Number(sv?.search_description_category_id) ||
-    Number(deepestCat?.id) ||
-    0;
+  // 5.4 type_id + description_category_id
+  // ⚠️ 必须与 extractCategoryIds() 用同一套提取逻辑,否则前端拿到的 typeId/descriptionCategoryId
+  // 与查属性字典时用的组合不一致,会导致 /v1/description-category/attribute/values 报 400
+  // "category with level_3_id=xxx and type=xxx is not found"
+  const { typeId, descriptionCategoryId } = extractCategoryIds(item);
 
   // 5.5 构造 portalItem(OPI v3 schema)
   const portalItem = {

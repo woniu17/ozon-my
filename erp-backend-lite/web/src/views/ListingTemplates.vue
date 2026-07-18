@@ -15,11 +15,15 @@ const list = ref([]);
 const loading = ref(false);
 
 // 默认 config(对齐 mv-listing-config 字段)
+// 价格公式:
+//   售价   = 原SKU售价 * salePriceA% + salePriceB   (salePriceA: 50~500, salePriceB: -10~10)
+//   划线价 = 售价 * oldPriceA%                       (oldPriceA: 110~200)
+//   最低价 = 售价 - minPriceB                        (minPriceB: 0~5)
+// 品牌强制 no_brand 不可改;货币取店铺合同货币(currency_code),模板不再存
 function defaultConfig() {
   return {
     brand: 'no_brand',
     imageOrder: 'keep',
-    currency: 'CNY',
     mergeEnabled: false,
     uploadMode: 'api',
     applyWatermark: false,
@@ -28,9 +32,10 @@ function defaultConfig() {
     posterPrimaryOnly: false,
     applyAiRewrite: false,
     defaultStock: 10,
-    salePriceStrategy: { type: 'ratio', value: 1 },
-    minPriceStrategy: null,
-    oldPriceStrategy: { type: 'ratio', value: 2 },
+    salePriceA: 130,
+    salePriceB: 0,
+    oldPriceA: 150,
+    minPriceB: 2,
   };
 }
 
@@ -43,9 +48,6 @@ const editForm = reactive({
   name: '',
   isDefault: false,
   cfg: defaultConfig(),
-  // 最低价启用态(因 minPriceStrategy 可为 null)
-  minPriceEnabled: false,
-  minPriceValue: 1,
 });
 
 function resetEditForm() {
@@ -53,8 +55,6 @@ function resetEditForm() {
   editForm.name = '';
   editForm.isDefault = false;
   editForm.cfg = defaultConfig();
-  editForm.minPriceEnabled = false;
-  editForm.minPriceValue = 1;
   editErr.value = '';
 }
 
@@ -64,11 +64,6 @@ function openEdit(tpl) {
     editForm.name = tpl.name;
     editForm.isDefault = !!tpl.isDefault;
     editForm.cfg = { ...defaultConfig(), ...(tpl.config || {}) };
-    // 策略对象兜底
-    editForm.cfg.salePriceStrategy = editForm.cfg.salePriceStrategy || { type: 'ratio', value: 1 };
-    editForm.cfg.oldPriceStrategy = editForm.cfg.oldPriceStrategy || { type: 'ratio', value: 2 };
-    editForm.minPriceEnabled = !!editForm.cfg.minPriceStrategy;
-    editForm.minPriceValue = editForm.cfg.minPriceStrategy?.value ?? 1;
   } else {
     resetEditForm();
   }
@@ -79,10 +74,14 @@ function openEdit(tpl) {
 // 从表单构造 config 对象
 function buildConfig() {
   const c = editForm.cfg;
+  const clamp = (v, min, max, def) => {
+    const n = Number(v);
+    if (isNaN(n)) return def;
+    return Math.min(max, Math.max(min, n));
+  };
   return {
-    brand: c.brand || 'no_brand',
-    imageOrder: c.imageOrder || 'keep',
-    currency: c.currency || 'CNY',
+    brand: 'no_brand',
+    imageOrder: c.imageOrder === 'shuffle_non_primary' ? 'shuffle_non_primary' : 'keep',
     mergeEnabled: !!c.mergeEnabled,
     uploadMode: c.uploadMode || 'api',
     applyWatermark: !!c.applyWatermark,
@@ -91,9 +90,10 @@ function buildConfig() {
     posterPrimaryOnly: !!c.posterPrimaryOnly,
     applyAiRewrite: !!c.applyAiRewrite,
     defaultStock: Number(c.defaultStock) || 0,
-    salePriceStrategy: { type: 'ratio', value: Number(c.salePriceStrategy?.value) || 1 },
-    minPriceStrategy: editForm.minPriceEnabled ? { type: 'ratio', value: Number(editForm.minPriceValue) || 1 } : null,
-    oldPriceStrategy: { type: 'ratio', value: Number(c.oldPriceStrategy?.value) || 1 },
+    salePriceA: clamp(c.salePriceA, 50, 500, 130),
+    salePriceB: clamp(c.salePriceB, -10, 10, 0),
+    oldPriceA: clamp(c.oldPriceA, 110, 200, 150),
+    minPriceB: clamp(c.minPriceB, 0, 5, 2),
   };
 }
 
@@ -197,11 +197,12 @@ onMounted(load);
             <span v-else class="muted">—</span>
           </td>
           <td class="cfg-cell">
-            <span>品牌:{{ t.config?.brand || '—' }}</span>
-            <span>货币:{{ t.config?.currency || '—' }}</span>
+            <span>品牌:{{ t.config?.brand === 'no_brand' ? '无品牌' : (t.config?.brand || '—') }}</span>
             <span>库存:{{ t.config?.defaultStock ?? '—' }}</span>
-            <span>售价倍率:{{ t.config?.salePriceStrategy?.value ?? '—' }}</span>
-            <span>划线价倍率:{{ t.config?.oldPriceStrategy?.value ?? '—' }}</span>
+            <span>图片:{{ t.config?.imageOrder === 'shuffle_non_primary' ? '主图不变打乱' : '不更改' }}</span>
+            <span>售价:{{ t.config?.salePriceA ?? '—' }}% + {{ t.config?.salePriceB ?? 0 }}</span>
+            <span>划线价:{{ t.config?.oldPriceA ?? '—' }}%</span>
+            <span>最低价:售价 − {{ t.config?.minPriceB ?? '—' }}</span>
           </td>
           <td class="muted">{{ t.updatedAt }}</td>
           <td class="actions">
@@ -245,15 +246,15 @@ onMounted(load);
           <div class="grid2">
             <label>
               <span>品牌</span>
-              <input type="text" v-model.trim="editForm.cfg.brand" placeholder="no_brand" />
-            </label>
-            <label>
-              <span>货币</span>
-              <input type="text" v-model.trim="editForm.cfg.currency" placeholder="CNY" />
+              <input type="text" :value="editForm.cfg.brand" disabled title="强制无品牌,不可更改" />
+              <em class="hint-inline">强制无品牌,不可更改</em>
             </label>
             <label>
               <span>图片排序</span>
-              <input type="text" v-model.trim="editForm.cfg.imageOrder" placeholder="keep" />
+              <select v-model="editForm.cfg.imageOrder">
+                <option value="keep">不更改</option>
+                <option value="shuffle_non_primary">主图不变,其它随机打乱</option>
+              </select>
             </label>
             <label>
               <span>上架方式</span>
@@ -263,10 +264,11 @@ onMounted(load);
               </select>
             </label>
             <label>
-              <span>默认库存</span>
+              <span>库存</span>
               <input type="number" v-model.number="editForm.cfg.defaultStock" placeholder="10" />
             </label>
           </div>
+          <p class="hint-inline">货币取店铺合同货币(currency_code),无需在模板配置</p>
           <div class="checks">
             <label class="check"><input type="checkbox" v-model="editForm.cfg.mergeEnabled" /> 合并</label>
             <label class="check"><input type="checkbox" v-model="editForm.cfg.applyWatermark" /> 水印</label>
@@ -281,22 +283,28 @@ onMounted(load);
         </fieldset>
 
         <fieldset class="form-group">
-          <legend>价格策略(倍率)</legend>
+          <legend>价格公式</legend>
+          <p class="hint-inline">
+            售价 = 原价 × A% + B ｜ 划线价 = 售价 × A% ｜ 最低价 = 售价 − B(强制启用)
+          </p>
           <div class="grid2">
             <label>
-              <span>售价倍率</span>
-              <input type="number" step="0.01" v-model.number="editForm.cfg.salePriceStrategy.value" />
+              <span>售价 A % <em>(50~500)</em></span>
+              <input type="number" min="50" max="500" step="1" v-model.number="editForm.cfg.salePriceA" />
             </label>
             <label>
-              <span>划线价倍率</span>
-              <input type="number" step="0.01" v-model.number="editForm.cfg.oldPriceStrategy.value" />
+              <span>售价 B <em>(-10~10)</em></span>
+              <input type="number" min="-10" max="10" step="0.01" v-model.number="editForm.cfg.salePriceB" />
+            </label>
+            <label>
+              <span>划线价 A % <em>(110~200)</em></span>
+              <input type="number" min="110" max="200" step="1" v-model.number="editForm.cfg.oldPriceA" />
+            </label>
+            <label>
+              <span>最低价 B <em>(0~5)</em></span>
+              <input type="number" min="0" max="5" step="0.01" v-model.number="editForm.cfg.minPriceB" />
             </label>
           </div>
-          <label class="check"><input type="checkbox" v-model="editForm.minPriceEnabled" /> 启用最低价</label>
-          <label v-if="editForm.minPriceEnabled">
-            <span>最低价倍率</span>
-            <input type="number" step="0.01" v-model.number="editForm.minPriceValue" />
-          </label>
         </fieldset>
 
         <label class="check">
@@ -381,5 +389,12 @@ onMounted(load);
   font-size: 13px;
   color: #374151;
   cursor: pointer;
+}
+.hint-inline {
+  display: block;
+  font-size: 11px;
+  color: #6b7280;
+  font-style: normal;
+  margin: 4px 0;
 }
 </style>

@@ -83,6 +83,11 @@ router.post('/ozon/products/import', storeGuard, async (req, res, next) => {
     const items = Array.isArray(message.items) ? message.items : [];
     const localTaskId = `local-${Date.now()}-${randomUUID().slice(0, 8)}`;
 
+    // 库存快照:任务创建时记录模板 defaultStock + templateId
+    // 后续模板修改不影响本任务(stock-sync.js 据此设库存)
+    const stockSnapshot = Math.max(0, Math.min(100000, Number(message.defaultStock) || 0));
+    const templateId = Number(message.templateId) || null;
+
     // 备份插件原始请求体(raw),便于排查
     try {
       db.prepare(
@@ -92,12 +97,12 @@ router.post('/ozon/products/import', storeGuard, async (req, res, next) => {
       logger.warn({ localTaskId, err: e.message }, 'backup raw payload failed');
     }
 
-    // 入库 PENDING
+    // 入库 PENDING(含库存快照,供 stock-sync.js 定时任务读取)
     db.prepare(
       `INSERT INTO follow_sell_tasks
-        (local_task_id, via_portal, store_id, status, items_count, items_preview)
-       VALUES (?, 0, ?, 'PENDING', ?, ?)`
-    ).run(localTaskId, req.storeId, items.length, JSON.stringify(items.slice(0, 5)));
+        (local_task_id, via_portal, store_id, status, items_count, items_preview, stock_snapshot, template_id)
+       VALUES (?, 0, ?, 'PENDING', ?, ?, ?, ?)`
+    ).run(localTaskId, req.storeId, items.length, JSON.stringify(items.slice(0, 5)), stockSnapshot, templateId);
 
     // 写入上架记录明细(pending 状态,待 import-info 查询后更新)
     upsertTaskItems(

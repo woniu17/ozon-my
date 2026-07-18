@@ -66,6 +66,26 @@ function ensureMigrations() {
     db.exec(`ALTER TABLE collect_queue_tasks ADD COLUMN duration INTEGER`);
     console.log('[db] migration: added column collect_queue_tasks.duration');
   }
+  // follow_sell_tasks:库存快照列(任务创建时存,模板修改不影响)
+  const fstCols = db.prepare(`PRAGMA table_info(follow_sell_tasks)`).all();
+  if (!fstCols.some((c) => c.name === 'stock_snapshot')) {
+    db.exec(`ALTER TABLE follow_sell_tasks ADD COLUMN stock_snapshot INTEGER DEFAULT 0`);
+    console.log('[db] migration: added column follow_sell_tasks.stock_snapshot');
+  }
+  if (!fstCols.some((c) => c.name === 'template_id')) {
+    db.exec(`ALTER TABLE follow_sell_tasks ADD COLUMN template_id INTEGER`);
+    console.log('[db] migration: added column follow_sell_tasks.template_id');
+  }
+  // follow_sell_task_items:库存同步状态
+  const fstiCols = db.prepare(`PRAGMA table_info(follow_sell_task_items)`).all();
+  if (!fstiCols.some((c) => c.name === 'stock_set')) {
+    db.exec(`ALTER TABLE follow_sell_task_items ADD COLUMN stock_set INTEGER DEFAULT 0`);
+    console.log('[db] migration: added column follow_sell_task_items.stock_set');
+  }
+  if (!fstiCols.some((c) => c.name === 'stock_attempts')) {
+    db.exec(`ALTER TABLE follow_sell_task_items ADD COLUMN stock_attempts INTEGER DEFAULT 0`);
+    console.log('[db] migration: added column follow_sell_task_items.stock_attempts');
+  }
 }
 
 // 清理旧 collect_box_v2 表(及其索引)

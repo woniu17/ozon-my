@@ -211,6 +211,27 @@ export function warehouseList(store) {
   return call(store, '/v2/warehouse/list', {});
 }
 
+// /v2/products/stocks —— 批量更新库存
+// OPI 限制:单请求 ≤100 组(商品-仓库),每分钟 ≤80 请求,每 30 秒同组只能更新一次
+// 商品状态需变 price_sent 后才能设库存,故新 imported 商品可能返回 errors,需重试
+// 请求: { stocks: [{ offer_id, product_id, stock, warehouse_id }] }
+// 响应: { result: [{ warehouse_id, product_id, offer_id, updated: bool, errors: [] }] }
+//  - items: [{ offerId, productId, stock }](warehouse_id 自动取 store.warehouse_id)
+export function productStocks(store, items) {
+  const wid = Number(store.warehouse_id);
+  if (!wid) {
+    throw new Error('store.warehouse_id 未配置,无法设置库存');
+  }
+  return call(store, '/v2/products/stocks', {
+    stocks: items.map((it) => ({
+      offer_id: it.offerId,
+      product_id: Number(it.productId),
+      stock: Number(it.stock),
+      warehouse_id: wid,
+    })),
+  });
+}
+
 // /v3/category/tree —— 不需要 Api-Key 但需走 OPI 域名
 export function categoryTree(store, language = 'DEFAULT') {
   return call(store, '/v3/category/tree', { language }, { method: 'POST' });

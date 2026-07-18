@@ -1,12 +1,29 @@
 <script setup>
-import { reactive, onMounted } from 'vue';
+import { reactive, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { getCollectBoxV2FromCache } from '../api/collect-box-v2.js';
+import { getCollectBoxV2FromCache, getCollectBoxV2Sellers } from '../api/collect-box-v2.js';
 import { useToast } from '../components/useToast.js';
 import AppPager from '../components/AppPager.vue';
 
 const router = useRouter();
 const { show } = useToast();
+
+// 采集源卖家列表(供下拉框) — 从 ozon_auto_collect_log distinct sellerSlug
+const sellers = ref([]);
+
+// 记住上一次筛选条件(localStorage 持久化,跨会话保留)
+const FILTERS_STORAGE_KEY = 'collect-box-v2:filters';
+function loadStoredFilters() {
+  try {
+    const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+const storedFilters = loadStoredFilters();
 
 // ── 列表状态(缓存视图:以 cardCache 为基准,聚合 7 类缓存命中位图) ──
 const state = reactive({
@@ -17,8 +34,12 @@ const state = reactive({
   pageSize: 20,
   filters: {
     keyword: '',
-    hasVideo: '',
-    minCacheHits: '',
+    fullData: false, // 数据完整:7 类缓存命中 ≥5
+    sellerSlug: '',
+    unlisted: false,
+    hasComments: false,
+    // 用上次的筛选条件覆盖初值
+    ...(storedFilters || {}),
   },
 });
 
@@ -29,9 +50,11 @@ async function loadList() {
       currentPage: state.page,
       pageSize: state.pageSize,
       keyword: state.filters.keyword.trim(),
-      hasVideo: state.filters.hasVideo,
     };
-    if (state.filters.minCacheHits) params.minCacheHits = state.filters.minCacheHits;
+    if (state.filters.fullData) params.minCacheHits = '5';
+    if (state.filters.sellerSlug) params.sellerSlug = state.filters.sellerSlug;
+    if (state.filters.unlisted) params.unlisted = '1';
+    if (state.filters.hasComments) params.hasComments = '1';
     const data = await getCollectBoxV2FromCache(params);
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -53,6 +76,19 @@ function onPageChange(p) {
   state.page = p;
   loadList();
 }
+
+// 持久化筛选条件:任意字段变化时写回 localStorage
+watch(
+  () => state.filters,
+  (v) => {
+    try {
+      localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(v));
+    } catch {
+      /* 忽略写入失败(如 quota 超限) */
+    }
+  },
+  { deep: true }
+);
 
 // 7 类缓存命中位图
 const CACHE_HIT_KEYS = [
@@ -93,6 +129,14 @@ function fmtTime(t) {
 }
 
 onMounted(() => {
+  // 加载采集源卖家列表(供下拉框)
+  getCollectBoxV2Sellers()
+    .then((list) => {
+      sellers.value = Array.isArray(list) ? list : [];
+    })
+    .catch(() => {
+      sellers.value = [];
+    });
   loadList();
 });
 </script>
@@ -114,16 +158,24 @@ onMounted(() => {
         placeholder="搜索 SKU"
         @keydown.enter="search"
       />
-      <select class="filter-select" v-model="state.filters.hasVideo">
-        <option value="">全部</option>
-        <option value="1">有视频</option>
+      <select class="filter-select" v-model="state.filters.sellerSlug" title="按采集源 SKU 所属卖家筛选">
+        <option value="">全部卖家</option>
+        <option v-for="s in sellers" :key="s.sellerSlug" :value="s.sellerSlug">
+          {{ s.sellerName || s.sellerSlug }} ({{ s.skuCount }})
+        </option>
       </select>
-      <select class="filter-select" v-model="state.filters.minCacheHits" title="7 类缓存命中数 ≥ N">
-        <option value="">命中数不限</option>
-        <option value="3">≥3 类</option>
-        <option value="5">≥5 类</option>
-        <option value="7">=7 类(全)</option>
-      </select>
+      <label class="filter-check" title="只显示有评论数(ratingCount > 0)的 SKU">
+        <input type="checkbox" v-model="state.filters.hasComments" />
+        <span>有评论</span>
+      </label>
+      <label class="filter-check" title="只显示在任意用户店铺尚未提交跟卖任务的 SKU">
+        <input type="checkbox" v-model="state.filters.unlisted" />
+        <span>未跟卖</span>
+      </label>
+      <label class="filter-check" title="只显示 7 类缓存命中数 ≥ 5 的 SKU(数据完整)">
+        <input type="checkbox" v-model="state.filters.fullData" />
+        <span>数据完整</span>
+      </label>
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
@@ -172,13 +224,37 @@ onMounted(() => {
               >
             </div>
             <div class="cb-cache-extra">
+              <span
+                v-if="it.sellerSlug"
+                class="cb-extra-tag cb-tag-seller"
+                :title="`采集自卖家:${it.sellerName || it.sellerSlug}`"
+                >{{ it.sellerName || it.sellerSlug }}</span
+              >
               <span v-if="it.marketPriceP50 != null" class="cb-extra-tag" title="市场 P50 价格">
                 P50: {{ it.marketPriceP50 }}
               </span>
               <span v-if="it.competitorCount != null" class="cb-extra-tag" title="跟卖竞争度">
                 竞争: {{ it.competitorCount }}
               </span>
+              <span
+                v-if="it.ratingCount != null"
+                class="cb-extra-tag cb-tag-comments"
+                title="商品评论数(采集自商品卡 DOM)"
+                >评论: {{ it.ratingCount }}</span
+              >
               <span v-if="it.hasVideo" class="cb-extra-tag cb-tag-video" title="richMedia 含 mp4">视频</span>
+              <span
+                v-if="it.listed === true"
+                class="cb-extra-tag cb-tag-listed"
+                title="该 SKU 已在任意店铺提交跟卖任务(不论 OPI 返回状态)"
+                >已跟卖</span
+              >
+              <span
+                v-else-if="it.listed === false"
+                class="cb-extra-tag cb-tag-unlisted"
+                title="该 SKU 在任意店铺尚未提交跟卖任务"
+                >未跟卖</span
+              >
             </div>
           </div>
 
@@ -337,6 +413,34 @@ onMounted(() => {
 .cb-tag-video {
   background: #fff7e6;
   color: #fa8c16;
+}
+.cb-tag-seller {
+  background: #f0f5ff;
+  color: #2f54eb;
+}
+.cb-tag-listed {
+  background: #e6fffb;
+  color: #08979c;
+}
+.cb-tag-unlisted {
+  background: #fff1f0;
+  color: #cf1322;
+}
+.cb-tag-comments {
+  background: #f9f0ff;
+  color: #722ed1;
+}
+.filter-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #555;
+  cursor: pointer;
+  user-select: none;
+}
+.filter-check input {
+  margin: 0;
 }
 .cb-foot {
   margin-top: 4px;

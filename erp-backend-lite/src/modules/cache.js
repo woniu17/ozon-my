@@ -12,6 +12,7 @@
 // 鉴权:JWT(authMiddleware),不走 storeGuard(缓存按 sku 全局共享,不区分店铺)
 import { Router } from 'express';
 import { getDaos } from '../db/adapter.js';
+import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import { transformItemForPortal, extractCategoryIds } from '../services/prepare-bundle.js';
@@ -567,17 +568,40 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     const filterHasVideo = req.query.hasVideo === '1' || req.query.hasVideo === 'true';
     // minCacheHits=N:7 类缓存命中数 ≥ N(后置过滤)
     const minCacheHits = Math.max(0, Math.min(7, Number(req.query.minCacheHits) || 0));
+    // hasComments=1:cardCache.ratingCount > 0(有评论数)
+    const filterHasComments = req.query.hasComments === '1' || req.query.hasComments === 'true';
 
-    // 1) cardCache 分页(基准,findPagedList 不返回 data,仅用于拿 SKU 列表 + total)
-    const { items: cardPage, total } = await daos.cardDao.findPagedList(keyword, page, pageSize);
-    if (!cardPage.length) {
-      return res.json(ok({ items: [], total, current: page, pageSize }));
+    // ⚠️ "店铺筛选"语义:采集到的 SKU 所属源卖家(ozon_auto_collect_log.sellerSlug)
+    //   与"用户自己的店铺"(stores.json,用于上架)是两个正交概念
+    // - sellerSlug:源 SKU 所属卖家 slug(可选)。提供时,每条 item 增加 sellerSlug/sellerName 字段;
+    //   且仅保留在该卖家采集过的 SKU
+    // - unlisted=1:只返回未上架的(在任意用户店铺 follow_sell_task_items.status='imported')
+    //   独立维度,不依赖 sellerSlug
+    const sellerSlug = String(req.query.sellerSlug || '').trim();
+    const filterUnlisted = req.query.unlisted === '1' || req.query.unlisted === 'true';
+
+    // ⚠️ 过滤必须在分页之前完成,否则:
+    //  - 当前页命中过滤条件的 item 不足 pageSize,页面显示稀疏
+    //  - total 仍是 cardCache 全量计数,与过滤后的实际条数不符,分页器错乱
+    //  - 大量逻辑页"看起来"为空(匹配的 SKU 分布在更靠后的物理页)
+    // 因此:先拉全部 cardCache(仅 keyword 过滤)→ 聚合 7 类命中 → 计算 hitCount/hasVideo/listed/seller
+    //       → 应用 sellerSlug/minCacheHits/hasVideo/unlisted 过滤 → 内存排序 + 分页
+
+    // 1) 拉全部匹配 keyword 的 cardCache(仅 _id/sku/fetchedAt,用于 SKU 列表)
+    //    注意:SQLite DAO 的 findOverviewList 不返回 data 字段,
+    //    需在下方通过 findManyBySkuList 二次取 data(MongoDB 同行为一致)
+    const allCards = await daos.cardDao.findOverviewList(keyword);
+    if (!allCards.length) {
+      return res.json(ok({ items: [], total: 0, current: page, pageSize }));
     }
 
-    // 2) 并行批量查询:本页 cardCache 的完整 data + 其他 6 类缓存命中状态
-    const skus = cardPage.map((c) => c.sku);
+    const skus = allCards.map((c) => c.sku);
+
+    // 2) 并行批量查询:cardCache 完整 data + 其他 6 类缓存命中状态
+    //    SQLite DAO 忽略 projection 参数(SELECT *),MongoDB DAO 会按 projection 投影
+    //    为保持两端行为一致,这里不传 projection(原代码也是这样),用全量 data
     const [cardDocs, bDocs, rmDocs, dDocs, mDocs, fDocs, sDocs] = await Promise.all([
-      daos.cardDao.findManyBySkuList(skus), // 取本页 cardCache 的 data(含 name/price/image)
+      daos.cardDao.findManyBySkuList(skus), // 取 cardCache 完整 data(含 name/price/image/url)
       daos.bundleDao.findManyBySkuList(skus),
       daos.richMediaDao.findManyBySkuList(skus),
       daos.detailDao.findManyBySkuList(skus),
@@ -585,6 +609,48 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       daos.followSellDao.findManyBySkuList(skus),
       daos.searchDao.findManyBySkuList(skus),
     ]);
+
+    // 2.5) 采集源卖家信息(从 ozon_auto_collect_log 拿每个 SKU 最新一条 sellerSlug)
+    //      一次性查所有 SKU 的 sellerSlug + storeClassification 的 sellerName
+    //      skuSellerMap:sku → { sellerSlug, sellerName }
+    const skuSellerMap = new Map();
+    {
+      // IN (?, ?, ...) 防 SQL 注入
+      const placeholders = skus.map(() => '?').join(', ');
+      const rows = db
+        .prepare(
+          `SELECT l.sku AS sku, l.sellerSlug AS sellerSlug, sc.sellerName AS sellerName
+           FROM (
+             SELECT sku, sellerSlug,
+                    ROW_NUMBER() OVER (PARTITION BY sku ORDER BY collectedAt DESC) AS rn
+             FROM ozon_auto_collect_log
+             WHERE sku IN (${placeholders}) AND sellerSlug IS NOT NULL AND sellerSlug <> ''
+           ) l
+           LEFT JOIN ozon_store_classification sc ON sc.sellerSlug = l.sellerSlug
+           WHERE l.rn = 1`
+        )
+        .all(...skus);
+      for (const r of rows) {
+        skuSellerMap.set(r.sku, {
+          sellerSlug: r.sellerSlug,
+          sellerName: r.sellerName || '',
+        });
+      }
+    }
+
+    // 2.6) 已跟卖 SKU 集合(始终构建,卡片上要始终显示"已跟卖/未跟卖"标签)
+    //      只要提交过跟卖任务(follow_sell_task_items 有记录)就算"已跟卖",
+    //      不论 OPI 返回状态是 pending/imported/failed/skipped。
+    //      offer_id 格式:{SKU}-{mmdd}-qx,SKU 是纯数字
+    const listedSkuSet = new Set();
+    {
+      const rows = db.prepare(`SELECT offer_id FROM follow_sell_task_items`).all();
+      for (const r of rows) {
+        const oid = String(r.offer_id || '');
+        const m = oid.match(/^(\d+)-/);
+        if (m) listedSkuSet.add(m[1]);
+      }
+    }
 
     // 3) 建立 sku → 缓存命中位图
     const cardMap = new Map(cardDocs.map((d) => [d.sku, d]));
@@ -595,9 +661,10 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     const followSellMap = new Map(fDocs.map((d) => [d.sku, d]));
     const searchMap = new Map(sDocs.map((d) => [d.sku, d]));
 
-    // 4) 组装返回 items
-    let items = cardPage.map((c) => {
-      // cardCache.data 结构:{ sku, url, name, price, image, ... }(从 findManyBySkuList 取)
+    // 4) 组装全部 items 并计算 hitCount/hasVideo/listed/seller
+    //    allCards 仅含 _id/sku/fetchedAt(findOverviewList 不返回 data);
+    //    cardMap 提供 cardCache 完整 data(含 name/price/image/url)
+    let allItems = allCards.map((c) => {
       const cardDoc = cardMap.get(c.sku);
       const cardData = cardDoc?.data || {};
       const b = bundleMap.get(c.sku);
@@ -628,7 +695,7 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       // marketStats 关键字段(P50 价格,如有)
       let marketPriceP50 = null;
       if (m?.data) {
-        marketPriceP50 = m.data.priceP50 ?? m.data.priceP50 ?? m.data.p50 ?? null;
+        marketPriceP50 = m.data.priceP50 ?? m.data.p50 ?? null;
       }
 
       // followSell 竞争度(跟卖商家数,如有)
@@ -640,6 +707,9 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
 
       // richMedia 视频标志
       const hasVideo = !!(rm?.data?.mp4);
+
+      // 采集源卖家(从 ozon_auto_collect_log 拿)
+      const seller = skuSellerMap.get(c.sku) || { sellerSlug: '', sellerName: '' };
 
       return {
         sku: c.sku,
@@ -653,27 +723,94 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
         hasVideo,
         marketPriceP50,
         competitorCount,
+        // 评论数:cardCache.ratingCount(数字,采集自商品卡 DOM)。可能为 null(未抓到)
+        ratingCount: Number.isFinite(Number(cardData.ratingCount))
+          ? Number(cardData.ratingCount)
+          : null,
         lastCollectedAt,
+        // 采集源卖家
+        sellerSlug: seller.sellerSlug,
+        sellerName: seller.sellerName,
+        // 上架状态(始终计算,前端卡片始终显示"已上架/未上架"标签)
+        listed: listedSkuSet.has(c.sku),
         // 兼容旧卡片字段(避免前端报错)
         storeId: '',
         anchorSku: c.sku,
         collectSource: 'cache',
         collectedAt: null,
         createdAt: c.fetchedAt,
+        // 用于排序的内部字段(返回前移除)
+        _sortFetchedAt: c.fetchedAt,
       };
     });
 
-    // 5) 后置过滤(hasVideo / minCacheHits)
+    // 5) 应用过滤器(在分页前):sellerSlug / hasVideo / minCacheHits / unlisted
+    if (sellerSlug) {
+      // 按采集源卖家过滤:只保留 sellerSlug 匹配的 SKU
+      allItems = allItems.filter((it) => it.sellerSlug === sellerSlug);
+    }
     if (filterHasVideo) {
-      items = items.filter((it) => it.hasVideo);
+      allItems = allItems.filter((it) => it.hasVideo);
+    }
+    if (filterHasComments) {
+      // 只保留有评论的(ratingCount > 0)
+      allItems = allItems.filter((it) => Number(it.ratingCount) > 0);
     }
     if (minCacheHits > 0) {
-      items = items.filter((it) => it.hitCount >= minCacheHits);
+      allItems = allItems.filter((it) => it.hitCount >= minCacheHits);
+    }
+    if (filterUnlisted) {
+      // 只保留未上架的(listed=false)
+      // 此处 listed 必为 boolean(filterUnlisted=true 已触发 listedSkuSet 构建)
+      allItems = allItems.filter((it) => it.listed === false);
     }
 
-    return res.json(ok({ items, total, current: page, pageSize }));
+    // 6) 排序:按 cardCache.fetchedAt 降序(与原 findPagedList 行为一致)
+    allItems.sort((a, b) => {
+      const ta = a._sortFetchedAt ? new Date(a._sortFetchedAt).getTime() : 0;
+      const tb = b._sortFetchedAt ? new Date(b._sortFetchedAt).getTime() : 0;
+      return tb - ta;
+    });
+
+    // 7) 内存分页 + 清理内部字段
+    const total = allItems.length;
+    const start = (page - 1) * pageSize;
+    const pageItems = allItems.slice(start, start + pageSize);
+    for (const it of pageItems) delete it._sortFetchedAt;
+
+    return res.json(ok({ items: pageItems, total, current: page, pageSize }));
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] collect-box-v2/from-cache failed');
+    next(e);
+  }
+});
+
+// GET /admin/api/collect-box-v2/sellers — 采集源卖家列表(供下拉框)
+// 返回 [{ sellerSlug, sellerName, skuCount }] — 按 skuCount 降序
+router.get('/admin/api/collect-box-v2/sellers', async (_req, res, next) => {
+  try {
+    // 从 ozon_auto_collect_log 拿 distinct sellerSlug + SKU 数量
+    // LEFT JOIN ozon_store_classification 拿 sellerName
+    const rows = db
+      .prepare(
+        `SELECT l.sellerSlug AS sellerSlug,
+                COUNT(DISTINCT l.sku) AS skuCount,
+                sc.sellerName AS sellerName
+         FROM ozon_auto_collect_log l
+         LEFT JOIN ozon_store_classification sc ON sc.sellerSlug = l.sellerSlug
+         WHERE l.sellerSlug IS NOT NULL AND l.sellerSlug <> ''
+         GROUP BY l.sellerSlug
+         ORDER BY skuCount DESC`
+      )
+      .all();
+    const sellers = rows.map((r) => ({
+      sellerSlug: r.sellerSlug,
+      sellerName: r.sellerName || '',
+      skuCount: r.skuCount,
+    }));
+    return res.json(ok(sellers));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] collect-box-v2/sellers failed');
     next(e);
   }
 });
@@ -1084,7 +1221,7 @@ router.get('/admin/api/preview/sku/:sku/profile', async (req, res, next) => {
       },
       attributes: portalItem.attributes || [],
       complexAttributes: portalItem.complex_attributes || [],
-      descriptionCategoryId: portalItem.new_description_category_id || null,
+      descriptionCategoryId: portalItem.description_category_id || null,
       typeId: portalItem.type_id || null,
       videoUrl: portalItem.video_url || '',
     };

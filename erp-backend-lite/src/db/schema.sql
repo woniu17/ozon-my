@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS follow_sell_tasks (
   error_message TEXT,
   strict_skipped TEXT,
   invalid_image  TEXT,
+  -- 库存自动同步:任务创建时快照的 defaultStock + 模板 ID(模板修改不影响该任务)
+  -- 定时任务 stock-sync.js 据此对 imported 的 items 调 OPI /v2/products/stocks
+  stock_snapshot INTEGER DEFAULT 0,
+  template_id    INTEGER,
   created_at    TEXT DEFAULT (datetime('now')),
   completed_at  TEXT
 );
@@ -29,6 +33,10 @@ CREATE TABLE IF NOT EXISTS follow_sell_task_items (
   product_id     TEXT,
   status         TEXT DEFAULT 'pending', -- pending/imported/failed/skipped
   errors         TEXT,                  -- JSON 数组
+  -- 库存同步状态:0=未设/待处理, 1=已成功设置, 2=失败/放弃
+  -- stock_attempts:OPI /v2/products/stocks 失败重试次数,≥5 不再重试
+  stock_set      INTEGER DEFAULT 0,
+  stock_attempts INTEGER DEFAULT 0,
   created_at     TEXT DEFAULT (datetime('now')),
   updated_at     TEXT DEFAULT (datetime('now')),
   UNIQUE(local_task_id, offer_id)

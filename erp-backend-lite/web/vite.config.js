@@ -13,6 +13,9 @@ export default defineConfig({
       '/admin/api': { target: BACKEND, changeOrigin: true },
       '/auth': { target: BACKEND, changeOrigin: true },
       '/health': { target: BACKEND, changeOrigin: true },
+      // /ozon/products/* 等业务路由由后端 products.js 提供,dev 模式下必须代理到 3001,
+      // 否则 fetch('/ozon/products/import') 会打到 5173 被 vite 返回 404
+      '/ozon': { target: BACKEND, changeOrigin: true },
     },
   },
   build: {
