@@ -38,6 +38,8 @@ const state = reactive({
     sellerSlug: '',
     unlisted: false,
     hasComments: false,
+    priceMin: '', // 价格范围(闭区间,空字符串=不限)
+    priceMax: '',
     // 用上次的筛选条件覆盖初值
     ...(storedFilters || {}),
   },
@@ -55,6 +57,8 @@ async function loadList() {
     if (state.filters.sellerSlug) params.sellerSlug = state.filters.sellerSlug;
     if (state.filters.unlisted) params.unlisted = '1';
     if (state.filters.hasComments) params.hasComments = '1';
+    if (state.filters.priceMin !== '') params.priceMin = state.filters.priceMin;
+    if (state.filters.priceMax !== '') params.priceMax = state.filters.priceMax;
     const data = await getCollectBoxV2FromCache(params);
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -176,6 +180,27 @@ onMounted(() => {
         <input type="checkbox" v-model="state.filters.fullData" />
         <span>数据完整</span>
       </label>
+      <span class="filter-price-range" title="按 cardCache.price 过滤(闭区间)">
+        <input
+          class="filter-input filter-price"
+          type="number"
+          min="0"
+          step="1"
+          v-model.trim="state.filters.priceMin"
+          placeholder="最低价"
+          @keydown.enter="search"
+        />
+        <span class="filter-price-sep">~</span>
+        <input
+          class="filter-input filter-price"
+          type="number"
+          min="0"
+          step="1"
+          v-model.trim="state.filters.priceMax"
+          placeholder="最高价"
+          @keydown.enter="search"
+        />
+      </span>
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
@@ -441,6 +466,20 @@ onMounted(() => {
 }
 .filter-check input {
   margin: 0;
+}
+.filter-price-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.filter-price {
+  width: 90px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+.filter-price-sep {
+  color: #999;
+  font-size: 13px;
 }
 .cb-foot {
   margin-top: 4px;

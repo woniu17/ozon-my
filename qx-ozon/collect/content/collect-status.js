@@ -268,24 +268,44 @@
 
   // ── 徽章渲染 ──────────────────────────────────────────────────
   // 渲染角落徽章(商品卡 tile-root 右上角)
-  // 语义:已收集的店铺 SKU 显示绿色 ✓ badge,非店铺 SKU 不显示
+  // 三态:
+  //   - 无徽章      = 未发现(非店铺商品,或还未扫到)
+  //   - 蓝色 •      = 已发现未采集(店铺 SKU 已收集,但 SW 队列未提交/未完成)
+  //                   典型场景:开启"仅抓有评价"跳过无评价商品、自动采集关闭、队列暂停
+  //   - 绿色 ✓      = 已采集(SW 队列有过真实提交记录,不论 success/failed/pending)
+  // 判定依据:
+  //   - _storeCollectedSkus.has(sku) = 已发现(店铺页扫到 + addStoreSku 调用过)
+  //   - _collectStatusMap.has(sku) + status≠'skipped' = 已采集(SW 写过 ozon_auto_collect_log)
   function updateCollectBadge(card, sku) {
     if (!card) return;
-    let badge = card.querySelector('.jz-collect-badge');
-    const isCollected = _storeCollectedSkus.has(String(sku));
-    if (!isCollected) {
+    const skuStr = String(sku);
+    const isDiscovered = _storeCollectedSkus.has(skuStr);
+    if (!isDiscovered) {
+      const badge = card.querySelector('.jz-collect-badge');
       if (badge) badge.remove();
       return;
     }
+    const statusEntry = _collectStatusMap.get(skuStr);
+    const isCollected = !!statusEntry && statusEntry.status !== 'skipped';
+
+    let badge = card.querySelector('.jz-collect-badge');
     if (!badge) {
       badge = document.createElement('div');
       badge.className = 'jz-collect-badge';
       card.appendChild(badge);
     }
-    badge.textContent = '✓';
-    badge.style.backgroundColor = '#16a34a';
-    badge.dataset.status = 'collected';
-    badge.title = '已收集';
+    if (isCollected) {
+      badge.textContent = '✓';
+      badge.style.backgroundColor = '#16a34a';
+      badge.dataset.status = 'collected';
+      badge.title = '已采集';
+    } else {
+      badge.textContent = '•';
+      badge.style.backgroundColor = '#0ea5e9';
+      badge.dataset.status = 'discovered';
+      const reason = statusEntry?.reason ? `(跳过:${statusEntry.reason})` : '';
+      badge.title = `已发现未采集${reason}`;
+    }
   }
 
   // 添加店铺 SKU 到已收集集合(供 data-panel 的 ensureDataPanel 调用)

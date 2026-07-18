@@ -192,6 +192,42 @@
   accent-color: rgb(232, 77, 146);
 }
 
+/* 价格/评论数范围输入行(只在店铺页显示) */
+.qx-c-range-row {
+  gap: 6px;
+  padding: 2px 2px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.75);
+}
+.qx-c-range-label {
+  flex: 0 0 28px;
+  color: rgba(0, 0, 0, 0.6);
+}
+.qx-c-range-input {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+  background: #fff;
+  color: rgba(0, 0, 0, 0.85);
+  outline: none;
+}
+.qx-c-range-input:focus {
+  border-color: rgb(232, 77, 146);
+  box-shadow: 0 0 0 2px rgba(232, 77, 146, 0.15);
+}
+.qx-c-range-input::-webkit-outer-spin-button,
+.qx-c-range-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.qx-c-range-sep {
+  flex: 0 0 auto;
+  color: rgba(0, 0, 0, 0.4);
+}
+
 /* ── 自动翻页状态行 ── */
 .qx-c-autoscroll-status {
   display: flex;

@@ -570,6 +570,12 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     const minCacheHits = Math.max(0, Math.min(7, Number(req.query.minCacheHits) || 0));
     // hasComments=1:cardCache.ratingCount > 0(有评论数)
     const filterHasComments = req.query.hasComments === '1' || req.query.hasComments === 'true';
+    // 价格范围:priceMin/priceMax(闭区间,基于 cardCache.price)
+    //   注意:价格可能为 null(未抓到),null 不参与范围匹配
+    const priceMin = Number(req.query.priceMin);
+    const priceMax = Number(req.query.priceMax);
+    const hasPriceMin = Number.isFinite(priceMin) && priceMin >= 0;
+    const hasPriceMax = Number.isFinite(priceMax) && priceMax >= 0;
 
     // ⚠️ "店铺筛选"语义:采集到的 SKU 所属源卖家(ozon_auto_collect_log.sellerSlug)
     //   与"用户自己的店铺"(stores.json,用于上架)是两个正交概念
@@ -755,6 +761,16 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     if (filterHasComments) {
       // 只保留有评论的(ratingCount > 0)
       allItems = allItems.filter((it) => Number(it.ratingCount) > 0);
+    }
+    if (hasPriceMin || hasPriceMax) {
+      // 价格范围过滤:price 缺失(null/空/非数字)的 SKU 不匹配
+      allItems = allItems.filter((it) => {
+        const p = Number(it.price);
+        if (!Number.isFinite(p)) return false;
+        if (hasPriceMin && p < priceMin) return false;
+        if (hasPriceMax && p > priceMax) return false;
+        return true;
+      });
     }
     if (minCacheHits > 0) {
       allItems = allItems.filter((it) => it.hitCount >= minCacheHits);

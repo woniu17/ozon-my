@@ -39,6 +39,32 @@
   const panelState = { enabled: true };
   const panelDataCache = new Map();
   let onlyWithRating = false;
+  // 价格/评论数范围过滤:[minNum|null, maxNum|null](null 表示不限)
+  // 解析:null/空/非数字 → null(不限);否则取 Number
+  let priceRange = [null, null];
+  let ratingRange = [null, null];
+  function _parseRange(minStr, maxStr) {
+    const min = minStr !== '' && Number.isFinite(Number(minStr)) ? Number(minStr) : null;
+    const max = maxStr !== '' && Number.isFinite(Number(maxStr)) ? Number(maxStr) : null;
+    return [min, max];
+  }
+  // 判定商品卡是否通过范围过滤(price/ratingCount 任一不在范围内则过滤掉)
+  // null 字段表示不限。商品卡字段缺失(number 不有限)视为不匹配。
+  function _passesRangeFilter(info) {
+    if (priceRange[0] != null || priceRange[1] != null) {
+      const p = Number(info.price);
+      if (!Number.isFinite(p)) return false;
+      if (priceRange[0] != null && p < priceRange[0]) return false;
+      if (priceRange[1] != null && p > priceRange[1]) return false;
+    }
+    if (ratingRange[0] != null || ratingRange[1] != null) {
+      const r = Number(info.ratingCount);
+      if (!Number.isFinite(r)) return false;
+      if (ratingRange[0] != null && r < ratingRange[0]) return false;
+      if (ratingRange[1] != null && r > ratingRange[1]) return false;
+    }
+    return true;
+  }
   // 从 jz-seller-info 事件缓存的当前页卖家 slug,供 loadPanelData → __jzSubmitCollectTask 用。
   // 店铺页 seller-info-main.js 提取后通过 CustomEvent 推过来;非店铺页保持 ''。
   let sellerSlug = '';
@@ -184,6 +210,8 @@
           if (!productId) continue;
           // "仅抓有评价"开启时跳过无评价商品
           if (onlyWithRating && !info.ratingCount) continue;
+          // 价格/评论数范围过滤:不在范围内则跳过采集
+          if (!_passesRangeFilter(info)) continue;
           const panel = card.querySelector('.ozon-helper-data-panel');
           if (panel) panel.dataset.jzLoadStatus = 'loading';
           window.__jzSubmitCollectTask?.(productId, card, sellerSlug, sellerId);
@@ -608,9 +636,12 @@
     //    panel 渲染(查 ERP、渲染字段)零阻塞,只有采集提交被 gate + 开关门控。
     //    非店铺页(无 sellerInfo)_collectGate 会被立即 resolve,等同直接提交。
     //    "仅抓有评价"开启时跳过 ratingCount=0/null 的商品(不入队不采集)。
+    //    价格/评论数范围过滤同理:不在范围内不入队(但仍渲染面板)
     if (window.__jzSubmitCollectTask && _collectGate && panelState.enabled) {
       if (onlyWithRating && !info.ratingCount) {
         // 无评价且开关开启 → 跳过采集(但仍渲染面板)
+      } else if (!_passesRangeFilter(info)) {
+        // 不在价格/评论范围 → 跳过采集(但仍渲染面板)
       } else {
         _pendingSkus.push({ sku: productId, card });
         _collectGate.then((ctx) => _maybeFlushSku(productId, card, ctx));
@@ -1220,12 +1251,31 @@
         onSalesFilterChange: (next) => {
           onlyWithRating = !!next;
         },
+        // 价格/评论数范围变化:更新内部变量,影响后续新扫到的卡片是否入队
+        // (已入队的不会主动取消,等下次自然轮询/rescan 时新过滤生效)
+        onRangeFilterChange: ({ priceMin, priceMax, ratingMin, ratingMax }) => {
+          if (priceMin !== undefined && priceMax !== undefined) {
+            priceRange = _parseRange(priceMin, priceMax);
+          }
+          if (ratingMin !== undefined && ratingMax !== undefined) {
+            ratingRange = _parseRange(ratingMin, ratingMax);
+          }
+        },
       },
     });
     // 暴露 jzCollectorToast 兼容 shared-utils.js 中可能的 toast 调用
     window.jzCollectorToast = (msg, type, duration) => _collectorPanel?.toast?.(msg, type, duration);
     _collectorPanel.setRunning(panelState.enabled);
     onlyWithRating = _collectorPanel.getInitialSalesFilter();
+    // 启动时读面板初值(用户上次设置的过滤范围)
+    try {
+      const pRange = _collectorPanel.getPriceRange?.() || ['', ''];
+      priceRange = _parseRange(pRange[0], pRange[1]);
+      const rRange = _collectorPanel.getRatingRange?.() || ['', ''];
+      ratingRange = _parseRange(rRange[0], rRange[1]);
+    } catch (e) {
+      console.warn('[panel] 读取范围初值失败:', e);
+    }
 
     // 页面加载恢复:若主开关已开启且自动翻页开关勾选,启动 AutoScroller
     // (onToggleRunning 只在用户点击时触发,页面加载恢复时不会走那个分支)

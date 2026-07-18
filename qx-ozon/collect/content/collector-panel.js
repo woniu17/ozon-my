@@ -29,6 +29,9 @@
   var COLLAPSED_KEY = 'qx-c-panel-collapsed';
   var SALES_FILTER_KEY = 'qx-c-sales-filter';
   var AUTO_SCROLL_KEY = 'qx-c-auto-scroll';
+  // 价格范围 / 评论数范围 持久化 key(空字符串=不限)
+  var PRICE_RANGE_KEY = 'qx-c-price-range';
+  var RATING_RANGE_KEY = 'qx-c-rating-range';
   var SMART_FILTER_STORAGE_KEY = 'qx-smart-filter-state';
   var SMART_FILTER_DEFAULT_ID = 'smart-filter-default';
   var SMART_TEMPLATE_MAX_NAME_LENGTH = 40;
@@ -280,6 +283,18 @@
             '        <input type="checkbox" data-act="sales-filter" data-el="sales-filter" />' +
             '        <span>仅抓有评价</span>' +
             '      </label>' +
+            '    </div>' +
+            '    <div class="qx-c-row qx-c-range-row">' +
+            '      <span class="qx-c-range-label">价格</span>' +
+            '      <input type="number" class="qx-c-range-input" data-act="price-min" data-el="price-min" min="0" step="1" placeholder="不限" />' +
+            '      <span class="qx-c-range-sep">~</span>' +
+            '      <input type="number" class="qx-c-range-input" data-act="price-max" data-el="price-max" min="0" step="1" placeholder="不限" />' +
+            '    </div>' +
+            '    <div class="qx-c-row qx-c-range-row">' +
+            '      <span class="qx-c-range-label">评论</span>' +
+            '      <input type="number" class="qx-c-range-input" data-act="rating-min" data-el="rating-min" min="0" step="1" placeholder="不限" />' +
+            '      <span class="qx-c-range-sep">~</span>' +
+            '      <input type="number" class="qx-c-range-input" data-act="rating-max" data-el="rating-max" min="0" step="1" placeholder="不限" />' +
             '    </div>'
           : '') +
         '    <div class="qx-c-row">' +
@@ -382,6 +397,18 @@
         if (act === 'only-chinese') return self._onOnlyChineseChange(t.checked);
       });
 
+      // input 委托(价格/评论范围 number 输入,实时持久化 + 通知)
+      panelEl.addEventListener('input', function (e) {
+        var t = e.target;
+        if (!t.dataset || !t.dataset.act) return;
+        if (t.dataset.act === 'price-min' || t.dataset.act === 'price-max') {
+          return self._onPriceRangeChange();
+        }
+        if (t.dataset.act === 'rating-min' || t.dataset.act === 'rating-max') {
+          return self._onRatingRangeChange();
+        }
+      });
+
       // bubble 点击展开
       this.bubbleEl.addEventListener('click', function () {
         self._expand();
@@ -477,7 +504,39 @@
       // 自动翻页
       var scrollCb = this._q('auto-scroll-toggle');
       if (scrollCb) scrollCb.checked = localStorage.getItem(AUTO_SCROLL_KEY) === '1';
+      // 价格范围 / 评论数范围
+      var priceRange = this._loadRange(PRICE_RANGE_KEY);
+      var priceMin = this._q('price-min');
+      var priceMax = this._q('price-max');
+      if (priceMin) priceMin.value = priceRange[0];
+      if (priceMax) priceMax.value = priceRange[1];
+      var ratingRange = this._loadRange(RATING_RANGE_KEY);
+      var ratingMin = this._q('rating-min');
+      var ratingMax = this._q('rating-max');
+      if (ratingMin) ratingMin.value = ratingRange[0];
+      if (ratingMax) ratingMax.value = ratingRange[1];
       // 只采集中国店铺 — 由轮询 config 填充, 这里不预设
+    }
+
+    // 范围输入辅助:[minStr, maxStr] 空字符串表示不限
+    _loadRange(key) {
+      try {
+        var raw = localStorage.getItem(key);
+        if (!raw) return ['', ''];
+        var parsed = JSON.parse(raw);
+        return Array.isArray(parsed) && parsed.length === 2
+          ? [String(parsed[0] || ''), String(parsed[1] || '')]
+          : ['', ''];
+      } catch (e) {
+        return ['', ''];
+      }
+    }
+    _saveRange(key, min, max) {
+      try {
+        localStorage.setItem(key, JSON.stringify([String(min || ''), String(max || '')]));
+      } catch (e) {
+        /* 忽略 quota 错误 */
+      }
     }
 
     // ── 主开关 ──
@@ -517,6 +576,46 @@
           this.toast(err.message || '操作失败', 'error', 2500);
         }
       }
+    }
+
+    // 价格范围输入变化:持久化 + 通知 data-panel 重扫
+    _onPriceRangeChange() {
+      var minEl = this._q('price-min');
+      var maxEl = this._q('price-max');
+      var min = minEl ? String(minEl.value || '') : '';
+      var max = maxEl ? String(maxEl.value || '') : '';
+      this._saveRange(PRICE_RANGE_KEY, min, max);
+      if (typeof this.callbacks.onRangeFilterChange === 'function') {
+        try {
+          this.callbacks.onRangeFilterChange({ priceMin: min, priceMax: max });
+        } catch (err) {
+          this.toast(err.message || '操作失败', 'error', 2500);
+        }
+      }
+    }
+
+    // 评论数范围输入变化:持久化 + 通知 data-panel 重扫
+    _onRatingRangeChange() {
+      var minEl = this._q('rating-min');
+      var maxEl = this._q('rating-max');
+      var min = minEl ? String(minEl.value || '') : '';
+      var max = maxEl ? String(maxEl.value || '') : '';
+      this._saveRange(RATING_RANGE_KEY, min, max);
+      if (typeof this.callbacks.onRangeFilterChange === 'function') {
+        try {
+          this.callbacks.onRangeFilterChange({ ratingMin: min, ratingMax: max });
+        } catch (err) {
+          this.toast(err.message || '操作失败', 'error', 2500);
+        }
+      }
+    }
+
+    // 供 data-panel 查询当前范围(初值用)
+    getPriceRange() {
+      return this._loadRange(PRICE_RANGE_KEY);
+    }
+    getRatingRange() {
+      return this._loadRange(RATING_RANGE_KEY);
     }
 
     async _onOnlyChineseChange(enabled) {
