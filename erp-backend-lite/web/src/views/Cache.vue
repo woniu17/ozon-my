@@ -32,7 +32,10 @@ const state = reactive({
   pageSize: 50,
 });
 
+// 并发请求序号:用户快速翻页/搜索时,旧请求的响应应被忽略,避免旧数据覆盖新状态
+let loadListReqId = 0;
 async function loadList() {
+  const myId = ++loadListReqId;
   state.loading = true;
   try {
     const data = await getCacheOverview({
@@ -40,14 +43,16 @@ async function loadList() {
       page: state.page,
       pageSize: state.pageSize,
     });
+    if (myId !== loadListReqId) return; // 已被新请求取代,丢弃旧响应
     state.items = data?.items || [];
     state.total = data?.total || 0;
   } catch (err) {
+    if (myId !== loadListReqId) return;
     show(err.message || String(err), 'error');
     state.items = [];
     state.total = 0;
   } finally {
-    state.loading = false;
+    if (myId === loadListReqId) state.loading = false;
   }
 }
 
@@ -185,26 +190,33 @@ const TYPE_LABELS = {
   listed: '已跟卖(跟卖任务记录)',
 };
 
+// 详情弹窗并发序号:用户快速切换不同 SKU/类型时,旧请求响应应被忽略
+let openDetailReqId = 0;
 async function openDetail(it, type) {
   // 仅在命中时才允许打开
   if (!hitBadgeText(it, type) || hitBadgeText(it, type) === '—') return;
+  const myId = ++openDetailReqId;
   detailOpen.value = true;
   detailLoading.value = true;
   detailType.value = type;
   detailSku.value = it.sku;
   detailData.value = null;
   try {
+    let data;
     if (type === 'listed') {
       // 跟卖记录走 /admin/api/cache/listed/:sku
-      detailData.value = await getListedRecords(it.sku);
+      data = await getListedRecords(it.sku);
     } else {
-      detailData.value = await getCacheByType(type, it.sku);
+      data = await getCacheByType(type, it.sku);
     }
+    if (myId !== openDetailReqId) return; // 已被新请求取代,丢弃旧响应
+    detailData.value = data;
   } catch (err) {
+    if (myId !== openDetailReqId) return;
     show(err.message || String(err), 'error');
     detailData.value = null;
   } finally {
-    detailLoading.value = false;
+    if (myId === openDetailReqId) detailLoading.value = false;
   }
 }
 
@@ -282,7 +294,10 @@ const opiSources = ref(null);
 const opiError = ref('');
 const opiTitle = computed(() => `OPI 预览 · ${opiSku.value}`);
 
+// OPI 预览并发序号:用户快速切换不同 SKU 时,旧请求响应应被忽略
+let openOpiReqId = 0;
 async function openOpiPreview(sku) {
+  const myId = ++openOpiReqId;
   opiOpen.value = true;
   opiLoading.value = true;
   opiSku.value = sku;
@@ -291,13 +306,15 @@ async function openOpiPreview(sku) {
   opiError.value = '';
   try {
     const r = await getOpiPreview(sku);
+    if (myId !== openOpiReqId) return; // 已被新请求取代,丢弃旧响应
     opiData.value = r?.item || null;
     opiSources.value = r?.sources || null;
     opiError.value = r?.error || '';
   } catch (err) {
+    if (myId !== openOpiReqId) return;
     opiError.value = err.message || String(err);
   } finally {
-    opiLoading.value = false;
+    if (myId === openOpiReqId) opiLoading.value = false;
   }
 }
 
@@ -328,7 +345,10 @@ const storeClassPager = reactive({
   pageSize: 50,
 });
 
+// 店铺分类列表并发序号:翻页/搜索时旧请求响应应被忽略
+let loadStoreClassReqId = 0;
 async function loadStoreClassifications() {
+  const myId = ++loadStoreClassReqId;
   try {
     const data = await getStoreClassificationList({
       isChinese: storeClassFilters.isChinese,
@@ -336,9 +356,11 @@ async function loadStoreClassifications() {
       page: storeClassPager.current,
       pageSize: storeClassPager.pageSize,
     });
+    if (myId !== loadStoreClassReqId) return; // 已被新请求取代
     storeClassifications.value = data?.items || [];
     storeClassPager.total = data?.total || 0;
   } catch (err) {
+    if (myId !== loadStoreClassReqId) return;
     show(err.message || String(err), 'error');
     storeClassifications.value = [];
     storeClassPager.total = 0;
@@ -389,16 +411,21 @@ const storeSkuPager = reactive({
   pageSize: 50,
 });
 
+// 店铺 SKU 列表并发序号:翻页/搜索时旧请求响应应被忽略
+let loadStoreSkuReqId = 0;
 async function loadStoreSkus() {
+  const myId = ++loadStoreSkuReqId;
   try {
     const data = await getStoreSkuList({
       keyword: storeSkuFilters.keyword.trim(),
       currentPage: storeSkuPager.current,
       pageSize: storeSkuPager.pageSize,
     });
+    if (myId !== loadStoreSkuReqId) return; // 已被新请求取代
     storeSkus.value = data?.items || [];
     storeSkuPager.total = data?.total || 0;
   } catch (err) {
+    if (myId !== loadStoreSkuReqId) return;
     show(err.message || String(err), 'error');
     storeSkus.value = [];
     storeSkuPager.total = 0;

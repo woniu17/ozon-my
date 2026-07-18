@@ -89,6 +89,66 @@ function ensureMigrations() {
   // 缓存表重构:直接 DROP 旧 7 表 + legacy 表,新版用 6 张表(1 索引 + 5 数据)
   // 不写迁移脚本,旧数据自然过期(SW 重新采集填充新表)
   dropLegacyCacheTables(db);
+  // 索引表新增 price_value 列 + FTS5 虚拟表 + 触发器
+  ensureCacheIndexFtsAndPriceValue(db);
+}
+
+// 旧表迁移:为 ozon_cache_index 补 price_value 列 + 一次性 rebuild FTS5 索引
+// 注:price_value/FTS5 在 schema.sql 中已对全新库创建,本函数只为旧库补列 + 重建索引
+function ensureCacheIndexFtsAndPriceValue(db) {
+  const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
+  if (ciCols.length === 0) return; // 表不存在,跳过(schema.sql 会创建)
+  if (!ciCols.some((c) => c.name === 'price_value')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN price_value REAL`);
+    console.log('[db] migration: added column ozon_cache_index.price_value');
+    // 回填:从 price 字段解析数字写入 price_value
+    // 注:SQLite 的 CAST(price AS REAL) 对 "1 299 ₽" 这种带空格/符号的字符串会截断为 1
+    //     用 REPLACE 去除空格 + 非数字字符后再 CAST
+    db.exec(`
+      UPDATE ozon_cache_index
+      SET price_value = CAST(
+        REPLACE(REPLACE(REPLACE(REPLACE(price, ' ', ''), '₽', ''), '€', ''), '$', '') AS REAL
+      )
+      WHERE price IS NOT NULL AND price <> ''
+    `);
+    console.log('[db] migration: backfilled price_value from price');
+  }
+  // 删除旧的 idx_ci_fts(普通 B-tree,对 LIKE '%keyword%' 无效,被 FTS5 虚拟表替代)
+  db.exec(`DROP INDEX IF EXISTS idx_ci_fts`);
+  // 确保 FTS5 虚拟表与触发器存在(schema.sql 已创建,但旧库需补)
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS ozon_cache_index_fts USING fts5(
+      sku, name, seller_name,
+      content='ozon_cache_index', content_rowid='rowid',
+      tokenize='unicode61 remove_diacritics 2'
+    );
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS ozon_cache_index_fts_ai AFTER INSERT ON ozon_cache_index BEGIN
+      INSERT INTO ozon_cache_index_fts(rowid, sku, name, seller_name)
+      VALUES (new.rowid, new.sku, new.name, new.seller_name);
+    END;
+    CREATE TRIGGER IF NOT EXISTS ozon_cache_index_fts_ad AFTER DELETE ON ozon_cache_index BEGIN
+      INSERT INTO ozon_cache_index_fts(ozon_cache_index_fts, rowid, sku, name, seller_name)
+      VALUES ('delete', old.rowid, old.sku, old.name, old.seller_name);
+    END;
+    CREATE TRIGGER IF NOT EXISTS ozon_cache_index_fts_au AFTER UPDATE ON ozon_cache_index BEGIN
+      INSERT INTO ozon_cache_index_fts(ozon_cache_index_fts, rowid, sku, name, seller_name)
+      VALUES ('delete', old.rowid, old.sku, old.name, old.seller_name);
+      INSERT INTO ozon_cache_index_fts(rowid, sku, name, seller_name)
+      VALUES (new.rowid, new.sku, new.name, new.seller_name);
+    END;
+  `);
+  // 一次性 rebuild FTS5 索引(若 FTS5 表为空但 ozon_cache_index 非空,说明是旧库首次升级)
+  const ftsCount = db.prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index_fts`).get().n;
+  const ciCount = db.prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index`).get().n;
+  if (ciCount > 0 && ftsCount === 0) {
+    db.exec(`
+      INSERT INTO ozon_cache_index_fts(rowid, sku, name, seller_name)
+      SELECT rowid, sku, name, seller_name FROM ozon_cache_index
+    `);
+    console.log(`[db] migration: rebuilt FTS5 index with ${ciCount} rows`);
+  }
 }
 
 // 清理旧缓存表(card/detail/search/bundle/composer/entrypoint 已合并为 dom/attribute)

@@ -16,42 +16,66 @@ import { indexDao } from '../db/dao/sqlite/index-dao.js';
 import logger from '../middleware/log.js';
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟
+const STARTUP_DELAY_MS = 30 * 1000; // 启动后 30 秒做首次扫描
 
 // 单次扫描:返回 { sellersRefreshed, listedRefreshed }
+// 使用 running 标志位抑制重入:若上一次扫描未完成,setInterval 的下一次触发会被跳过
+let running = false;
 async function scanOnce() {
-  const [sellerRes, listedRes] = await Promise.all([
-    indexDao.refreshSellerInfo(),
-    indexDao.refreshListedStatus(),
-  ]);
-  return {
-    sellersRefreshed: sellerRes.refreshed,
-    sellersTotal: sellerRes.total,
-    listedRefreshed: listedRes.refreshed,
-    listedTotal: listedRes.total,
-  };
+  if (running) {
+    logger.warn('index-sync: 上一次扫描仍在进行,本次跳过');
+    return { skipped: true };
+  }
+  running = true;
+  try {
+    // 用 allSettled 而非 all:两个任务彼此独立,一个失败不影响另一个
+    const [sellerRes, listedRes] = await Promise.allSettled([
+      indexDao.refreshSellerInfo(),
+      indexDao.refreshListedStatus(),
+    ]);
+    const seller = sellerRes.status === 'fulfilled' ? sellerRes.value : { refreshed: 0, total: 0 };
+    const listed = listedRes.status === 'fulfilled' ? listedRes.value : { refreshed: 0, total: 0 };
+    if (sellerRes.status === 'rejected') {
+      logger.warn({ err: sellerRes.reason?.message }, 'index-sync: refreshSellerInfo 失败');
+    }
+    if (listedRes.status === 'rejected') {
+      logger.warn({ err: listedRes.reason?.message }, 'index-sync: refreshListedStatus 失败');
+    }
+    return {
+      sellersRefreshed: seller.refreshed,
+      sellersTotal: seller.total,
+      listedRefreshed: listed.refreshed,
+      listedTotal: listed.total,
+    };
+  } finally {
+    running = false;
+  }
 }
 
-let timer = null;
+let startupTimer = null; // 启动延迟 setTimeout 句柄
+let intervalTimer = null; // 周期 setInterval 句柄
 
 export function startIndexSync() {
-  if (timer) return;
+  if (startupTimer || intervalTimer) return;
   // 启动后 30 秒做首次扫描(错开 import-status-poller 的 30 秒 + stock-sync 的 1 分钟)
   // 让数据先就绪,本任务再批量刷新索引
-  setTimeout(() => {
+  startupTimer = setTimeout(() => {
+    startupTimer = null;
     scanOnce()
       .then((r) => {
         logger.info(r, 'index-sync: 首次刷新完成');
       })
       .catch((e) => logger.warn({ err: e.message }, 'index-sync 首次刷新异常'));
-    timer = setInterval(() => {
+    intervalTimer = setInterval(() => {
       scanOnce()
         .then((r) => {
           logger.info(r, 'index-sync: 刷新完成');
         })
         .catch((e) => logger.warn({ err: e.message }, 'index-sync 刷新异常'));
     }, SYNC_INTERVAL_MS);
-    timer.unref();
-  }, 30 * 1000).unref();
+    intervalTimer.unref();
+  }, STARTUP_DELAY_MS);
+  startupTimer.unref();
   logger.info(
     { intervalMin: SYNC_INTERVAL_MS / 60000 },
     'index-sync: 已启动(5分钟刷新一次 seller/listed 字段)'
@@ -59,8 +83,13 @@ export function startIndexSync() {
 }
 
 export function stopIndexSync() {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
+  // 同时清理启动延迟 setTimeout 与周期 setInterval,避免 30 秒内停机出现"僵尸 setInterval"
+  if (startupTimer) {
+    clearTimeout(startupTimer);
+    startupTimer = null;
+  }
+  if (intervalTimer) {
+    clearInterval(intervalTimer);
+    intervalTimer = null;
   }
 }

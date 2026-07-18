@@ -1541,9 +1541,10 @@
      */
     const fetchBundleByVariantId = async (sku, variantId, companyId, opts = {}) => {
       // v8: bundle 合并到 attribute_cache,通过 attributeCacheGet/Set 统一处理 L1+L2
-      // forceRefresh → 清整条 attribute 记录(search + bundle 都清,下次都重新拉)
+      // forceRefresh → 仅失效 bundle 缓存,保留 searchData
+      //   (searchData 由 searchVariants 流程刚写入,与本函数无关,不应被清掉)
       if (opts.forceRefresh) {
-        this.attributeCacheDelete(sku);
+        this.attributeCacheDeleteType(sku, 'bundle');
       } else {
         // L1 + L2 由 attributeCacheGet 统一处理
         // cached: { data, bundleId, attrsEmptyVerifiedAt, fetchedAt } | null

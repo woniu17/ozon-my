@@ -145,6 +145,35 @@
           })
       );
 
+    // 原子合并写入:在单个 readwrite 事务内 read-modify-write,避免并发 lost update。
+    // 场景:domCacheSet/attributeCacheSet 合并表(card/detail、search/bundle 字段独立)
+    //      原先用 _idbGet→_idbPut 两次独立事务,两个并发的同 SKU 写入会让后写的覆盖
+    //      前写的另一类型字段(如 card 写完未提交时 detail 也读到旧记录,合并后写回,
+    //      card 字段丢失)。改为单事务内 get+put,IDB 事务隔离保证串行化。
+    // mergeFn(existing) 返回要写入的对象;返回 undefined 则跳过写入(只读)。
+    // 解析为 true 的 didWrite 表示实际发生了 put。
+    const _idbMergePut = (store, sku, mergeFn) =>
+      _openIdb().then(
+        (db) =>
+          new Promise((resolve, reject) => {
+            const tx = db.transaction(store, 'readwrite');
+            const os = tx.objectStore(store);
+            const getReq = os.get(sku);
+            let didWrite = false;
+            getReq.onsuccess = () => {
+              const existing = getReq.result || null;
+              const patch = mergeFn(existing);
+              if (patch !== undefined) {
+                os.put(patch);
+                didWrite = true;
+              }
+            };
+            tx.oncomplete = () => resolve(didWrite);
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error);
+          })
+      );
+
     // bundle 空属性判定:有 attributes → 可复用;无 attributes 且 6h 内已验证 → 可复用;否则 miss
     // 兼容两种 entry 形状:
     //   1) 旧 bundle_cache 直接 idbGet 返回的 { data, attrsEmptyVerifiedAt, ... }
@@ -366,17 +395,16 @@
         if (l2) {
           const data = type === 'card' ? l2.card : l2.detail;
           if (data) {
-            // 回填 L1(合并写入,保留已有字段)
-            const existing = (await _idbGet(_IDB_STORE_DOM, sku)) || { sku };
+            // 原子回填 L1(合并写入,保留已有字段,避免并发覆盖另一类型)
             const fetchedAt = type === 'card' ? l2.cardFetchedAt : l2.detailFetchedAt;
             const fetchedAtMs = fetchedAt ? new Date(fetchedAt).getTime() : Date.now();
-            _idbPut(_IDB_STORE_DOM, {
-              ...existing,
+            _idbMergePut(_IDB_STORE_DOM, sku, (existing) => ({
+              ...(existing || { sku }),
               sku,
               [`${type}Data`]: data,
               [`${type}FetchedAt`]: fetchedAtMs,
               [`${type}L2Synced`]: true,
-            }).catch(() => {});
+            })).catch(() => {});
             return data;
           }
         }
@@ -391,27 +419,21 @@
       const dataKey = `${type}Data`;
       const fetchedAtKey = `${type}FetchedAt`;
       const l2SyncedKey = `${type}L2Synced`;
-      // 先读现有记录(合并写入,不覆盖另一类型)
-      _idbGet(_IDB_STORE_DOM, sku)
-        .then((existing) => {
-          _idbPut(_IDB_STORE_DOM, {
-            ...(existing || { sku }),
-            sku,
-            [dataKey]: data,
-            [fetchedAtKey]: Date.now(),
-            [l2SyncedKey]: false,
-          }).catch(() => {});
-        })
-        .catch(() => {});
-      // L2 异步写入(成功后回更新 L1 对应 type 的 l2Synced=true)
+      // 原子合并写入:单事务内 read-modify-write,避免并发同 SKU 写入丢失另一类型字段
+      _idbMergePut(_IDB_STORE_DOM, sku, (existing) => ({
+        ...(existing || { sku }),
+        sku,
+        [dataKey]: data,
+        [fetchedAtKey]: Date.now(),
+        [l2SyncedKey]: false,
+      })).catch(() => {});
+      // L2 异步写入(成功后原子回更新 L1 对应 type 的 l2Synced=true)
       _erpCacheSet('dom', sku, { type, data })
         .then((ok) => {
           if (ok) {
-            _idbGet(_IDB_STORE_DOM, sku)
-              .then((entry) => {
-                if (entry) _idbPut(_IDB_STORE_DOM, { ...entry, [l2SyncedKey]: true }).catch(() => {});
-              })
-              .catch(() => {});
+            _idbMergePut(_IDB_STORE_DOM, sku, (existing) =>
+              existing ? { ...existing, [l2SyncedKey]: true } : undefined
+            ).catch(() => {});
           }
         })
         .catch(() => {});
@@ -456,33 +478,46 @@
         if (l2) {
           const data = type === 'search' ? l2.searchData : l2.bundleData;
           if (data) {
-            // 回填 L1(合并写入,保留已有字段)
-            const existing = (await _idbGet(_IDB_STORE_ATTRIBUTE, sku)) || { sku };
+            // 原子回填 L1(合并写入,保留已有字段,避免并发覆盖另一类型)
             const fetchedAt = type === 'search' ? l2.searchFetchedAt : l2.bundleFetchedAt;
             const fetchedAtMs = fetchedAt ? new Date(fetchedAt).getTime() : Date.now();
-            const patch = {
-              ...existing,
-              sku,
-              [`${type}Data`]: data,
-              [`${type}FetchedAt`]: fetchedAtMs,
-              [`${type}L2Synced`]: true,
-            };
-            // bundle 类型额外回填 bundleId 和 attrsEmptyVerifiedAt
-            if (type === 'bundle') {
-              if (l2.bundleId != null) patch.bundleId = l2.bundleId;
-              if (l2.attrsEmptyVerifiedAt) {
-                patch.attrsEmptyVerifiedAt = new Date(l2.attrsEmptyVerifiedAt).getTime();
+            // 在 mergeFn 内构造 patch,保证读取与写入在同一事务
+            let returnBundle = null;
+            await _idbMergePut(_IDB_STORE_ATTRIBUTE, sku, (existing) => {
+              const patch = {
+                ...(existing || { sku }),
+                sku,
+                [`${type}Data`]: data,
+                [`${type}FetchedAt`]: fetchedAtMs,
+                [`${type}L2Synced`]: true,
+              };
+              // bundle 类型额外回填 bundleId 和 attrsEmptyVerifiedAt
+              if (type === 'bundle') {
+                if (l2.bundleId != null) patch.bundleId = l2.bundleId;
+                if (l2.attrsEmptyVerifiedAt) {
+                  patch.attrsEmptyVerifiedAt = new Date(l2.attrsEmptyVerifiedAt).getTime();
+                }
+                returnBundle = {
+                  data,
+                  bundleId: patch.bundleId || null,
+                  attrsEmptyVerifiedAt: patch.attrsEmptyVerifiedAt || null,
+                  fetchedAt: fetchedAtMs,
+                };
               }
-            }
-            _idbPut(_IDB_STORE_ATTRIBUTE, patch).catch(() => {});
+              return patch;
+            }).catch(() => {});
             // 返回格式与 L1 一致
             if (type === 'bundle') {
-              return {
-                data,
-                bundleId: patch.bundleId || null,
-                attrsEmptyVerifiedAt: patch.attrsEmptyVerifiedAt || null,
-                fetchedAt: fetchedAtMs,
-              };
+              return (
+                returnBundle || {
+                  data,
+                  bundleId: l2.bundleId || null,
+                  attrsEmptyVerifiedAt: l2.attrsEmptyVerifiedAt
+                    ? new Date(l2.attrsEmptyVerifiedAt).getTime()
+                    : null,
+                  fetchedAt: fetchedAtMs,
+                }
+              );
             }
             return data;
           }
@@ -501,32 +536,29 @@
       const l2SyncedKey = `${type}L2Synced`;
       const body = { type, data };
       if (type === 'bundle' && extra.bundleId != null) body.bundleId = extra.bundleId;
-      _idbGet(_IDB_STORE_ATTRIBUTE, sku)
-        .then((existing) => {
-          const patch = {
-            ...(existing || { sku }),
-            sku,
-            [dataKey]: data,
-            [fetchedAtKey]: Date.now(),
-            [l2SyncedKey]: false,
-          };
-          if (type === 'bundle') {
-            if (extra.bundleId != null) patch.bundleId = extra.bundleId;
-            if (extra.attrsEmptyVerifiedAt != null) {
-              patch.attrsEmptyVerifiedAt = extra.attrsEmptyVerifiedAt;
-            }
+      // 原子合并写入:单事务内 read-modify-write,避免并发同 SKU 写入丢失另一类型字段
+      _idbMergePut(_IDB_STORE_ATTRIBUTE, sku, (existing) => {
+        const patch = {
+          ...(existing || { sku }),
+          sku,
+          [dataKey]: data,
+          [fetchedAtKey]: Date.now(),
+          [l2SyncedKey]: false,
+        };
+        if (type === 'bundle') {
+          if (extra.bundleId != null) patch.bundleId = extra.bundleId;
+          if (extra.attrsEmptyVerifiedAt != null) {
+            patch.attrsEmptyVerifiedAt = extra.attrsEmptyVerifiedAt;
           }
-          _idbPut(_IDB_STORE_ATTRIBUTE, patch).catch(() => {});
-        })
-        .catch(() => {});
+        }
+        return patch;
+      }).catch(() => {});
       _erpCacheSet('attribute', sku, body)
         .then((ok) => {
           if (ok) {
-            _idbGet(_IDB_STORE_ATTRIBUTE, sku)
-              .then((entry) => {
-                if (entry) _idbPut(_IDB_STORE_ATTRIBUTE, { ...entry, [l2SyncedKey]: true }).catch(() => {});
-              })
-              .catch(() => {});
+            _idbMergePut(_IDB_STORE_ATTRIBUTE, sku, (existing) =>
+              existing ? { ...existing, [l2SyncedKey]: true } : undefined
+            ).catch(() => {});
           }
         })
         .catch(() => {});
@@ -534,6 +566,33 @@
 
     this.attributeCacheDelete = (sku) => {
       _idbDelete(_IDB_STORE_ATTRIBUTE, sku).catch(() => {});
+      _erpCacheDelete('attribute', sku);
+    };
+
+    // 按 type 删除 attribute 缓存(仅删 L1 中该 type 的字段,保留另一 type 的数据)
+    // 应用场景:fetchBundleByVariantId forceRefresh=true 时只需失效 bundle,
+    //   不应清掉刚由 searchVariants 写入的 searchData。
+    // L2 限制:当前后端 DELETE /ozon/cache/attribute/:sku 是整条删,不支持 ?type=bundle,
+    //   所以 L2 仍整条删。损失:L2 中刚写入的 searchData 丢失,但 L1 仍保留(syncL2Batch
+    //   5min 内会从 L1 重新补写 L2)。这是当前后端限制下最稳妥的折衷。
+    this.attributeCacheDeleteType = (sku, type) => {
+      // type: 'search' | 'bundle'
+      const dataKey = `${type}Data`;
+      const fetchedAtKey = `${type}FetchedAt`;
+      const l2SyncedKey = `${type}L2Synced`;
+      _idbMergePut(_IDB_STORE_ATTRIBUTE, sku, (existing) => {
+        if (!existing) return undefined; // 无记录可删
+        const patch = { ...existing };
+        delete patch[dataKey];
+        delete patch[fetchedAtKey];
+        delete patch[l2SyncedKey];
+        // bundle 专属字段一并清
+        if (type === 'bundle') {
+          delete patch.bundleId;
+          delete patch.attrsEmptyVerifiedAt;
+        }
+        return patch;
+      }).catch(() => {});
       _erpCacheDelete('attribute', sku);
     };
 

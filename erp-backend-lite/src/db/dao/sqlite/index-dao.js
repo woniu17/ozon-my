@@ -2,6 +2,7 @@
 // 设计:5 张数据表(dom/attribute/richMedia/marketStats/followSell)upsert 时
 //      调用 syncSku(sku) 同步索引表;listed/seller 由定时任务批量刷新
 // 查询:from-cache / overview 只查这一张表,过滤/排序/分页全在 SQL 完成
+// 全文搜索:走 ozon_cache_index_fts(FTS5 虚拟表),通过触发器自动同步
 import { db } from '../../index.js';
 
 function parseJson(s) {
@@ -11,6 +12,30 @@ function parseJson(s) {
   } catch {
     return null;
   }
+}
+
+// 从价格字符串中提取数字(去除货币符号/空格/小数点以外的字符)
+// 例:"1 299 ₽" → 1299,"1299.00" → 1299.00,"" → null
+function parsePriceValue(price) {
+  if (price == null || price === '') return null;
+  // 去除空格 + 常见货币符号,保留数字与小数点
+  const cleaned = String(price).replace(/[^\d.]/g, '');
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+// FTS5 查询表达式转义:用户输入的 keyword 可能含 FTS5 特殊字符(" * ( ) - :)
+// 策略:移除特殊字符,按空格分词,每词加前缀匹配 * 并用双引号包起来避免歧义
+// 例:"手机 壳" → "\"手机\"* \"壳\"*" → 匹配含"手机"或"壳"前缀的文档
+function fts5Escape(keyword) {
+  const cleaned = String(keyword || '').replace(/["*()\-:]/g, ' ').trim();
+  if (!cleaned) return '';
+  return cleaned
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => `"${w}"*`)
+    .join(' ');
 }
 
 export const indexDao = {
@@ -56,6 +81,8 @@ export const indexDao = {
 
     const name = cardData?.name || detailData?.title || '';
     const price = detailData?.price || cardData?.price || '';
+    // price_value:解析后的数字价格(供范围过滤用,走 idx_ci_price_value 索引)
+    const priceValue = parsePriceValue(price);
     const primaryImage = cardData?.image || detailData?.images?.[0] || '';
     const url = cardData?.url || '';
     const ratingCount = Number.isFinite(Number(cardData?.ratingCount))
@@ -101,11 +128,11 @@ export const indexDao = {
         market_stats_hit, market_stats_fetched_at,
         follow_sell_hit, follow_sell_fetched_at,
         hit_count, last_fetched_at,
-        name, price, primary_image, url, rating_count,
+        name, price, price_value, primary_image, url, rating_count,
         has_video, market_price_p50, competitor_count,
         seller_slug, seller_name, listed, searchable_text, updated_at
       ) VALUES (
-        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
+        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
       )
       ON CONFLICT(sku) DO UPDATE SET
         card_hit=excluded.card_hit, card_fetched_at=excluded.card_fetched_at,
@@ -116,10 +143,15 @@ export const indexDao = {
         market_stats_hit=excluded.market_stats_hit, market_stats_fetched_at=excluded.market_stats_fetched_at,
         follow_sell_hit=excluded.follow_sell_hit, follow_sell_fetched_at=excluded.follow_sell_fetched_at,
         hit_count=excluded.hit_count, last_fetched_at=excluded.last_fetched_at,
-        name=excluded.name, price=excluded.price, primary_image=excluded.primary_image,
+        name=excluded.name, price=excluded.price, price_value=excluded.price_value,
+        primary_image=excluded.primary_image,
         url=excluded.url, rating_count=excluded.rating_count,
         has_video=excluded.has_video, market_price_p50=excluded.market_price_p50,
         competitor_count=excluded.competitor_count,
+        -- seller_slug/seller_name/listed 不覆盖定时任务已写入的值(COALESCE 保留已有值)
+        seller_slug=COALESCE(ozon_cache_index.seller_slug, excluded.seller_slug),
+        seller_name=COALESCE(ozon_cache_index.seller_name, excluded.seller_name),
+        listed=COALESCE(NULLIF(ozon_cache_index.listed, 0), excluded.listed),
         searchable_text=excluded.searchable_text,
         updated_at=datetime('now')`
     ).run(
@@ -142,6 +174,7 @@ export const indexDao = {
       lastFetchedAt,
       name,
       price,
+      priceValue,
       primaryImage,
       url,
       ratingCount,
@@ -192,9 +225,17 @@ export const indexDao = {
 
     const where = [];
     const params = [];
+    // 关键词搜索:优先 FTS5(走倒排索引),fallback 到 LIKE(FTS5 表为空或查询失败时)
     if (keyword) {
-      where.push('searchable_text LIKE ? COLLATE NOCASE');
-      params.push(`%${keyword}%`);
+      const ftsExpr = fts5Escape(keyword);
+      if (ftsExpr) {
+        where.push('sku IN (SELECT sku FROM ozon_cache_index_fts WHERE ozon_cache_index_fts MATCH ?)');
+        params.push(ftsExpr);
+      } else {
+        // FTS5 转义后为空(纯特殊字符),退化为 LIKE
+        where.push('searchable_text LIKE ? COLLATE NOCASE');
+        params.push(`%${keyword}%`);
+      }
     }
     if (sellerSlug) {
       where.push('seller_slug = ?');
@@ -209,14 +250,14 @@ export const indexDao = {
     if (hasVideo) {
       where.push('has_video = 1');
     }
-    // 价格范围:price 为 TEXT 列(可能为空串/数字字符串/NULL)
-    //   CAST(price AS REAL) 对空串/NULL 返回 0,需额外排除 price 为空/NULL 的情况
+    // 价格范围:走 price_value(REAL 列,有 idx_ci_price_value 索引)
+    //   原 CAST(price AS REAL) 无法用索引且对 "1 299 ₽" 这种字符串会截断为 1
     if (Number.isFinite(Number(priceMin))) {
-      where.push('price IS NOT NULL AND price <> "" AND CAST(price AS REAL) >= ?');
+      where.push('price_value IS NOT NULL AND price_value >= ?');
       params.push(Number(priceMin));
     }
     if (Number.isFinite(Number(priceMax))) {
-      where.push('price IS NOT NULL AND price <> "" AND CAST(price AS REAL) <= ?');
+      where.push('price_value IS NOT NULL AND price_value <= ?');
       params.push(Number(priceMax));
     }
     if (Number.isFinite(Number(minCacheHits)) && Number(minCacheHits) > 0) {
@@ -244,8 +285,14 @@ export const indexDao = {
     const where = [];
     const params = [];
     if (keyword) {
-      where.push('searchable_text LIKE ? COLLATE NOCASE');
-      params.push(`%${keyword}%`);
+      const ftsExpr = fts5Escape(keyword);
+      if (ftsExpr) {
+        where.push('sku IN (SELECT sku FROM ozon_cache_index_fts WHERE ozon_cache_index_fts MATCH ?)');
+        params.push(ftsExpr);
+      } else {
+        where.push('searchable_text LIKE ? COLLATE NOCASE');
+        params.push(`%${keyword}%`);
+      }
     }
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const items = db
@@ -267,62 +314,95 @@ export const indexDao = {
     return { items, total };
   },
 
-  /** 批量更新 seller 信息(由 index-sync 定时任务调用) */
+  /** 批量更新 seller 信息(由 index-sync 定时任务调用)
+   *  改为单条 UPDATE FROM(避免 N+1 循环 UPDATE)
+   *  SQLite 3.33+ 支持 UPDATE...FROM 语法
+   */
   async refreshSellerInfo() {
-    // 从 ozon_auto_collect_log 拿每个 SKU 最新一条 sellerSlug
-    const rows = db
+    // total = 有 log 记录的 sku 数(用于统计)
+    const totalRow = db
       .prepare(
-        `SELECT l.sku, l.sellerSlug, sc.sellerName
-         FROM (
-           SELECT sku, sellerSlug,
-                  ROW_NUMBER() OVER (PARTITION BY sku ORDER BY collectedAt DESC) AS rn
-           FROM ozon_auto_collect_log
-           WHERE sellerSlug IS NOT NULL AND sellerSlug <> ''
-         ) l
-         LEFT JOIN ozon_store_classification sc ON sc.sellerSlug = l.sellerSlug
-         WHERE l.rn = 1`
+        `SELECT COUNT(DISTINCT sku) AS n
+         FROM ozon_auto_collect_log
+         WHERE sellerSlug IS NOT NULL AND sellerSlug <> ''`
       )
-      .all();
-    let updated = 0;
-    for (const r of rows) {
-      const sellerName = r.sellerName || '';
-      const result = db
-        .prepare(
-          `UPDATE ozon_cache_index
-           SET seller_slug = ?, seller_name = ?,
-               searchable_text = COALESCE(name, '') || ' ' || sku || ' ' || ?,
-               updated_at = datetime('now')
-           WHERE sku = ?`
-        )
-        .run(r.sellerSlug, sellerName, sellerName, r.sku);
-      if (result.changes > 0) updated++;
-    }
-    return { refreshed: updated, total: rows.length };
+      .get();
+    const total = totalRow?.n || 0;
+    const result = db
+      .prepare(
+        `WITH latest_sellers AS (
+           SELECT l.sku, l.sellerSlug, sc.sellerName
+           FROM (
+             SELECT sku, sellerSlug,
+                    ROW_NUMBER() OVER (PARTITION BY sku ORDER BY collectedAt DESC) AS rn
+             FROM ozon_auto_collect_log
+             WHERE sellerSlug IS NOT NULL AND sellerSlug <> ''
+           ) l
+           LEFT JOIN ozon_store_classification sc ON sc.sellerSlug = l.sellerSlug
+           WHERE l.rn = 1
+         )
+         UPDATE ozon_cache_index
+         SET seller_slug = ls.sellerSlug,
+             seller_name = COALESCE(ls.sellerName, ''),
+             searchable_text = COALESCE(name, '') || ' ' || sku || ' ' || COALESCE(ls.sellerName, ''),
+             updated_at = datetime('now')
+         FROM latest_sellers ls
+         WHERE ozon_cache_index.sku = ls.sku`
+      )
+      .run();
+    return { refreshed: result.changes, total };
   },
 
-  /** 批量更新 listed 状态(由 index-sync 定时任务调用) */
+  /** 批量更新 listed 状态(由 index-sync 定时任务调用)
+   *  改为基于 follow_sell_task_items.offer_id 提取 SKU 前缀做精确匹配,
+   *  仅 status='imported' 才算已跟卖(原 LEFT JOIN + LIKE 全表扫描会误算 failed/skipped)
+   *  两步 UPDATE 在事务中执行,避免中间状态
+   */
   async refreshListedStatus() {
-    // 已跟卖 = follow_sell_task_items 有记录(offer_id 格式 {SKU}-{mmdd}-qx)
-    // 用 LIKE 通配符匹配 SKU 前缀
-    const rows = db
+    // total = imported task_items 涉及的 sku 数
+    const totalRow = db
       .prepare(
-        `SELECT DISTINCT
-           ci.sku,
-           CASE WHEN fti.offer_id IS NOT NULL THEN 1 ELSE 0 END AS listed
-         FROM ozon_cache_index ci
-         LEFT JOIN follow_sell_task_items fti
-           ON fti.offer_id LIKE ci.sku || '-%'
-         GROUP BY ci.sku`
+        `SELECT COUNT(DISTINCT SUBSTR(offer_id, 1, INSTR(offer_id, '-') - 1)) AS n
+         FROM follow_sell_task_items
+         WHERE status = 'imported' AND offer_id LIKE '%-%'`
       )
-      .all();
-    let updated = 0;
-    for (const r of rows) {
-      const result = db
-        .prepare(`UPDATE ozon_cache_index SET listed = ?, updated_at = datetime('now') WHERE sku = ?`)
-        .run(r.listed, r.sku);
-      if (result.changes > 0) updated++;
-    }
-    return { refreshed: updated, total: rows.length };
+      .get();
+    const total = totalRow?.n || 0;
+
+    // 提取 SKU 前缀的子查询(可被多次复用,SQLite 会缓存 CTE)
+    const listedSkuExpr = `(
+      SELECT DISTINCT SUBSTR(offer_id, 1, INSTR(offer_id, '-') - 1) AS sku
+      FROM follow_sell_task_items
+      WHERE status = 'imported' AND offer_id LIKE '%-%'
+    )`;
+
+    const tx = db.transaction(() => {
+      // Step 1: imported → listed=1(仅更新原值为 0 的行,减少无意义写入)
+      db.prepare(
+        `UPDATE ozon_cache_index
+         SET listed = 1, updated_at = datetime('now')
+         WHERE listed = 0
+           AND sku IN ${listedSkuExpr}`
+      ).run();
+      // Step 2: cache_index.listed=1 但 sku 不再属于 imported 集合 → listed=0
+      //   (处理任务被删/状态从 imported 改为 failed 的场景)
+      db.prepare(
+        `UPDATE ozon_cache_index
+         SET listed = 0, updated_at = datetime('now')
+         WHERE listed = 1
+           AND sku NOT IN ${listedSkuExpr}`
+      ).run();
+    });
+    tx();
+    // 注:transaction 后无法直接拿到 changes 总数,通过 SELECT 反查差异
+    const refreshed = db
+      .prepare(
+        `SELECT (
+           (SELECT COUNT(*) FROM ozon_cache_index WHERE listed = 1)
+         ) AS listed_count`
+      )
+      .get().listed_count;
+    return { refreshed, total };
   },
 
   /** 统计各类缓存文档数(供 dashboard 用) */

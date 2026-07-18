@@ -635,8 +635,10 @@
       const _urlSku = (window.location.pathname.match(/-(\d{5,})\/?$/) || [])[1] || product?.sku || '';
       if (_urlSku && window.sendMessage) {
         try {
-          const cacheResp = await window.sendMessage('domCacheGet', { sku: String(_urlSku), type: 'detail' });
-          const cached = cacheResp?.ok ? cacheResp.data : null;
+          // window.sendMessage 已 unwrap SW 响应:resolve(response.data)。
+          // 旧代码 cacheResp?.ok ? cacheResp.data : null 永远拿到 null(detail 数据
+          // 自身不带 ok 字段),静态字段兜底完全失效。这里直接用返回值。
+          const cached = await window.sendMessage('domCacheGet', { sku: String(_urlSku), type: 'detail' });
           if (cached) {
             // 用缓存的静态字段补全 product(动态字段保持当前 DOM 解析值,可能为空)
             if (!hasTitle && cached.title) {
@@ -670,8 +672,8 @@
       const _needDynamicFallback = !product.price && !product.seller?.name && !product.statistics?.sold_count;
       if (_needDynamicFallback) {
         try {
-          const dynResp = await window.sendMessage('domCacheGet', { sku: String(product.sku), type: 'detail' });
-          const dynCached = dynResp?.ok ? dynResp.data : null;
+          // window.sendMessage 已 unwrap SW 响应,直接拿 detail 数据对象
+          const dynCached = await window.sendMessage('domCacheGet', { sku: String(product.sku), type: 'detail' });
           if (dynCached) {
             if (!product.price && dynCached.price) product.price = dynCached.price;
             if (!product.walletPrice && dynCached.walletPrice) product.walletPrice = dynCached.walletPrice;

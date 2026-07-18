@@ -491,8 +491,8 @@ router.get('/admin/api/collect-box-v2/sellers', async (_req, res, next) => {
 // GET /admin/api/cache/:type/:sku — 缓存详情(完整 data)
 router.get('/admin/api/cache/:type/:sku', async (req, res, next) => {
   try {
-    // overview / opi-preview 走专属路由,这里跳过(避免被 :type 参数捕获)
-    if (req.params.type === 'overview' || req.params.type === 'opi-preview') return next('route');
+    // overview / opi-preview / listed 走专属路由,这里跳过(避免被 :type 参数捕获)
+    if (['overview', 'opi-preview', 'listed'].includes(req.params.type)) return next('route');
     const type = CACHE_TYPES.includes(req.params.type) ? req.params.type : 'attribute';
     const sku = String(req.params.sku);
     const doc = await getDaoByType(type).findById(sku);

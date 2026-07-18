@@ -197,7 +197,8 @@ CREATE TABLE IF NOT EXISTS ozon_cache_index (
 
   -- 冗余展示字段(从 dom/attribute/marketStats/followSell 提取)
   name               TEXT,                -- dom: card.name || detail.title
-  price              TEXT,                -- dom: detail.price || card.price
+  price              TEXT,                -- dom: detail.price || card.price(原始字符串,可能含货币符号)
+  price_value        REAL,                -- 解析后的数字价格(供范围过滤用,走索引)
   primary_image      TEXT,                -- dom: card.image || detail.images[0]
   url                TEXT,                -- dom: card.url
   rating_count       INTEGER,             -- dom: card.ratingCount
@@ -212,7 +213,8 @@ CREATE TABLE IF NOT EXISTS ozon_cache_index (
   -- 跟卖状态(0=未跟卖, 1=已跟卖)
   listed             INTEGER DEFAULT 0,
 
-  -- 全文搜索(name + sku + seller_name 拼接)
+  -- 全文搜索(name + sku + seller_name 拼接,仅作 fallback)
+  -- 实际搜索走 ozon_cache_index_fts(FTS5 虚拟表,见下)
   searchable_text    TEXT,
 
   updated_at         TEXT DEFAULT (datetime('now'))
@@ -222,7 +224,33 @@ CREATE INDEX IF NOT EXISTS idx_ci_listed       ON ozon_cache_index(listed);
 CREATE INDEX IF NOT EXISTS idx_ci_seller       ON ozon_cache_index(seller_slug);
 CREATE INDEX IF NOT EXISTS idx_ci_rating       ON ozon_cache_index(rating_count);
 CREATE INDEX IF NOT EXISTS idx_ci_last_fetched ON ozon_cache_index(last_fetched_at DESC);
-CREATE INDEX IF NOT EXISTS idx_ci_fts          ON ozon_cache_index(searchable_text COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_ci_price_value  ON ozon_cache_index(price_value);
+
+-- ── FTS5 全文搜索虚拟表(外部内容表,与 ozon_cache_index 同步) ──────────────
+-- 替代原 idx_ci_fts(普通 B-tree 索引对 LIKE '%keyword%' 无效)
+-- 通过触发器自动同步,DAO 查询用 MATCH 操作符走 FTS5 倒排索引
+CREATE VIRTUAL TABLE IF NOT EXISTS ozon_cache_index_fts USING fts5(
+  sku,
+  name,
+  seller_name,
+  content='ozon_cache_index',
+  content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS ozon_cache_index_fts_ai AFTER INSERT ON ozon_cache_index BEGIN
+  INSERT INTO ozon_cache_index_fts(rowid, sku, name, seller_name)
+  VALUES (new.rowid, new.sku, new.name, new.seller_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ozon_cache_index_fts_ad AFTER DELETE ON ozon_cache_index BEGIN
+  INSERT INTO ozon_cache_index_fts(ozon_cache_index_fts, rowid, sku, name, seller_name)
+  VALUES ('delete', old.rowid, old.sku, old.name, old.seller_name);
+END;
+CREATE TRIGGER IF NOT EXISTS ozon_cache_index_fts_au AFTER UPDATE ON ozon_cache_index BEGIN
+  INSERT INTO ozon_cache_index_fts(ozon_cache_index_fts, rowid, sku, name, seller_name)
+  VALUES ('delete', old.rowid, old.sku, old.name, old.seller_name);
+  INSERT INTO ozon_cache_index_fts(rowid, sku, name, seller_name)
+  VALUES (new.rowid, new.sku, new.name, new.seller_name);
+END;
 
 -- ── dom 缓存(card + detail 合并,互相备份) ──────────────────
 -- card 部分:商品卡 DOM 轻量字段(name/price/image/url/ratingCount)

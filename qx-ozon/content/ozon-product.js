@@ -9480,8 +9480,10 @@
     // ── 缓存优先:richMedia(合并自旧 entrypoint + composer 缓存) ──
     if (urlSku && typeof window.sendMessage === 'function') {
       try {
-        const rmResp = await window.sendMessage('richMediaCacheGet', { sku: urlSku });
-        const rmData = rmResp?.ok ? rmResp.data : null;
+        // window.sendMessage 已 unwrap SW 响应:resolve(response.data)。
+        // 旧代码 rmResp?.ok ? rmResp.data : null 永远拿到 null(richMedia 数据
+        // 自身不带 ok 字段),缓存优先路径完全失效。这里直接用返回值。
+        const rmData = await window.sendMessage('richMediaCacheGet', { sku: urlSku });
         if (rmData) {
           const cachedImages = Array.isArray(rmData.gallery)
             ? rmData.gallery
