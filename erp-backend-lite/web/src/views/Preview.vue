@@ -718,6 +718,15 @@ onMounted(() => {
     <!-- 顶栏 -->
     <div class="pv-toolbar">
       <button class="btn btn-ghost" @click="goBack">← 返回采集箱</button>
+      <a
+        v-if="sku"
+        class="btn btn-ghost"
+        :href="`https://www.ozon.ru/product/${sku}/`"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="新窗口打开 Ozon 商品详情页"
+        >商品详情页 ↗</a
+      >
       <h2 class="pv-title">上架预览 · SKU {{ sku }}</h2>
       <div class="pv-toolbar-right">
         <select class="filter-select" v-model="state.storeId" title="选择目标店铺(必选,影响属性字典过滤 + 提交)">

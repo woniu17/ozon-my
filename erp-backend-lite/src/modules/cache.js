@@ -789,17 +789,17 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
 // 返回 [{ sellerSlug, sellerName, skuCount }] — 按 skuCount 降序
 router.get('/admin/api/collect-box-v2/sellers', async (_req, res, next) => {
   try {
-    // 从 ozon_auto_collect_log 拿 distinct sellerSlug + SKU 数量
-    // LEFT JOIN ozon_store_classification 拿 sellerName
+    // 数据源:ozon_store_sku(店铺-SKU 关联表,记录每个 SKU 采集自哪个卖家)
+    //   相比 ozon_auto_collect_log(只记录触发了自动采集任务的 SKU),
+    //   ozon_store_sku 覆盖更全(只要在店铺页扫到就入库),与采集箱卡片展示一致
     const rows = db
       .prepare(
-        `SELECT l.sellerSlug AS sellerSlug,
-                COUNT(DISTINCT l.sku) AS skuCount,
-                sc.sellerName AS sellerName
-         FROM ozon_auto_collect_log l
-         LEFT JOIN ozon_store_classification sc ON sc.sellerSlug = l.sellerSlug
-         WHERE l.sellerSlug IS NOT NULL AND l.sellerSlug <> ''
-         GROUP BY l.sellerSlug
+        `SELECT sellerSlug,
+                MAX(sellerName) AS sellerName,   -- 同一 slug 取任一非空名
+                COUNT(*) AS skuCount
+         FROM ozon_store_sku
+         WHERE sellerSlug IS NOT NULL AND sellerSlug <> ''
+         GROUP BY sellerSlug
          ORDER BY skuCount DESC`
       )
       .all();
