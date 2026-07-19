@@ -34,7 +34,7 @@
   const _DEFAULTS = {
     intervalMs: 800, // 翻页间隔(毫秒),默认 800ms(比 DOM 滚动快 3-5 倍)
     maxConsecutiveErrors: 3, // 连续失败次数上限,超过则停止
-    requestTimeoutMs: 15000, // 单次 fetch 超时
+    requestTimeoutMs: 30000, // 单次 fetch 超时
   };
 
   /**
@@ -375,7 +375,7 @@
           const duration = Date.now() - pageStartTime;
           console.log(
             `[ApiScroller] 第${this._currentPage}页完成: ${items.length} 个 SKU, 耗时 ${duration}ms` +
-              (nextPage ? `, 下一页存在` : ', 已到最后一页')
+            (nextPage ? `, 下一页存在` : ', 已到最后一页')
           );
 
           this.onPageDone?.({
