@@ -950,13 +950,17 @@
 
   const renderAutoCollect = async () => {
     const config = await loadAutoCollectConfig();
-    const toggle = document.getElementById('ac-toggle');
+    const shallowToggle = document.getElementById('ac-shallow-toggle');
+    const deepToggle = document.getElementById('ac-deep-toggle');
     const todayCount = document.getElementById('ac-today-count');
     const statusDot = document.getElementById('ac-status-dot');
     const pausedDiv = document.getElementById('ac-paused');
-    if (!toggle) return; // HTML 缺节点时优雅降级
+    if (!shallowToggle && !deepToggle) return; // HTML 缺节点时优雅降级
 
-    toggle.checked = config.autoCollectRunning !== false;
+    const shallowOn = config.shallowCollectRunning !== false;
+    const deepOn = config.autoCollectRunning !== false;
+    if (shallowToggle) shallowToggle.checked = shallowOn;
+    if (deepToggle) deepToggle.checked = deepOn;
     if (todayCount) todayCount.textContent = String(config.todayCount || 0);
 
     if (config.paused && Date.now() < (config.pausedUntil || 0)) {
@@ -965,7 +969,11 @@
         pausedDiv.style.display = 'flex';
         updatePausedCountdown(config.pausedUntil);
       }
-    } else if (config.autoCollectRunning !== false) {
+    } else if (shallowOn && deepOn) {
+      if (statusDot) statusDot.className = 'status-dot running';
+      if (pausedDiv) pausedDiv.style.display = 'none';
+    } else if (shallowOn || deepOn) {
+      // 部分开启 → running(黄色提示在 QX 面板看四态徽章)
       if (statusDot) statusDot.className = 'status-dot running';
       if (pausedDiv) pausedDiv.style.display = 'none';
     } else {
@@ -977,7 +985,12 @@
     renderRateConfig(config);
   };
 
-  document.getElementById('ac-toggle')?.addEventListener('change', async (e) => {
+  document.getElementById('ac-shallow-toggle')?.addEventListener('change', async (e) => {
+    await saveAutoCollectConfig({ shallowCollectRunning: e.target.checked });
+    await renderAutoCollect();
+  });
+
+  document.getElementById('ac-deep-toggle')?.addEventListener('change', async (e) => {
     await saveAutoCollectConfig({ autoCollectRunning: e.target.checked });
     await renderAutoCollect();
   });

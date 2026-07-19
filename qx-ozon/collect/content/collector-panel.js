@@ -29,6 +29,13 @@
   var COLLAPSED_KEY = 'qx-c-panel-collapsed';
   var SALES_FILTER_KEY = 'qx-c-sales-filter';
   var AUTO_SCROLL_KEY = 'qx-c-auto-scroll';
+  // 自动翻页间隔(秒),范围 0.5-10,步长 0.5,默认 3
+  var AUTO_SCROLL_INTERVAL_KEY = 'qx-c-auto-scroll-interval';
+  var AUTO_SCROLL_INTERVAL_DEFAULT = 3;
+  // 自动翻页模式: 'dom'=DOM滚动 / 'api'=API直取,默认 dom
+  var AUTO_SCROLL_MODE_KEY = 'qx-c-auto-scroll-mode';
+  var AUTO_SCROLL_MODE_DEFAULT = 'dom';
+  var AUTO_SCROLL_MODES = ['dom', 'api'];
   // 价格范围 / 评论数范围 持久化 key(空字符串=不限)
   var PRICE_RANGE_KEY = 'qx-c-price-range';
   var RATING_RANGE_KEY = 'qx-c-rating-range';
@@ -125,7 +132,8 @@
       this.toastTimer = null;
 
       this.collapsed = localStorage.getItem(COLLAPSED_KEY) === '1';
-      this.running = false;
+      this.running = false;              // 深度采集开关(沿用,对应 autoCollectRunning)
+      this.shallowRunning = false;       // 浅度采集开关(新增,对应 shallowCollectRunning)
 
       // 自动翻页状态
       this._autoScrollStatus = { status: 'idle', reason: '未启动', detail: '' };
@@ -262,11 +270,19 @@
         // 主控制
         '  <div class="qx-c-section-block">' +
         '    <div class="qx-c-section-title">主控制</div>' +
+        '    <div class="qx-c-row qx-c-toggle-row">' +
+        '      <label class="qx-c-switch">' +
+        '        <input type="checkbox" data-act="shallow-toggle" data-el="shallow-toggle" />' +
+        '        <span class="qx-c-switch-track"><span class="qx-c-switch-knob"></span></span>' +
+        '        <span class="qx-c-switch-label">浅度采集</span>' +
+        '      </label>' +
+        '      <span class="qx-c-status-badge qx-c-status-badge-green" data-el="collect-status-badge">采集:浅度+深度</span>' +
+        '    </div>' +
         '    <div class="qx-c-row">' +
         '      <label class="qx-c-switch">' +
-        '        <input type="checkbox" data-act="toggle" data-el="toggle" />' +
+        '        <input type="checkbox" data-act="deep-toggle" data-el="deep-toggle" />' +
         '        <span class="qx-c-switch-track"><span class="qx-c-switch-knob"></span></span>' +
-        '        <span class="qx-c-switch-label">自动采集</span>' +
+        '        <span class="qx-c-switch-label">深度采集</span>' +
         '      </label>' +
         '    </div>' +
         (shopOnly
@@ -280,6 +296,16 @@
             '    <div class="qx-c-autoscroll-status qx-c-hidden" data-el="autoscroll-status">' +
             '      <span class="qx-c-autoscroll-dot"></span>' +
             '      <span class="qx-c-autoscroll-text" data-el="autoscroll-status-text">未启动</span>' +
+            '    </div>' +
+            '    <div class="qx-c-row qx-c-range-row">' +
+            '      <span class="qx-c-range-label">间隔</span>' +
+            '      <input type="number" class="qx-c-range-input qx-c-interval-input" data-act="auto-scroll-interval" data-el="auto-scroll-interval" min="0.5" max="10" step="0.5" placeholder="3" />' +
+            '      <span class="qx-c-range-sep">秒</span>' +
+            '    </div>' +
+            '    <div class="qx-c-row qx-c-mode-row">' +
+            '      <span class="qx-c-range-label">模式</span>' +
+            '      <label class="qx-c-radio"><input type="radio" name="qx-c-auto-scroll-mode" value="dom" data-act="auto-scroll-mode" data-el="auto-scroll-mode-dom" /><span>DOM滚动</span></label>' +
+            '      <label class="qx-c-radio"><input type="radio" name="qx-c-auto-scroll-mode" value="api" data-act="auto-scroll-mode" data-el="auto-scroll-mode-api" /><span>API直取</span></label>' +
             '    </div>' +
             '    <div class="qx-c-row">' +
             '      <label class="qx-c-checkbox">' +
@@ -307,18 +333,20 @@
         '      </label>' +
         '    </div>' +
         '  </div>' +
-        // 店铺检测
-        '  <div class="qx-c-section-block">' +
-        '    <div class="qx-c-section-title">店铺检测</div>' +
-        '    <div data-el="store-detection"></div>' +
-        '  </div>' +
         // 店铺 SKU 发现(仅店铺页)— 第一行展示发现总数,第二行拆分采集/略过
+        // 位置:放在"店铺检测"上面,因为这是用户最关心的实时进度信息
+        // 数据源:collect-status.js 的 _storeCollectedSkus Set,DOM/API 两种翻页模式共用,确保计数统一
         (shopOnly
           ? '  <div class="qx-c-section-block">' +
             '    <div class="qx-c-section-title">店铺SKU发现 <span class="qx-c-queue-len" data-el="store-sku-total">0</span></div>' +
             '    <div class="qx-c-store-sku-hint">采集 <span data-el="store-sku-collected-hint">0</span> 个,略过 <span data-el="store-sku-skipped-hint">0</span> 个(卡片角标 ✓ 表示已发现)</div>' +
             '  </div>'
           : '') +
+        // 店铺检测
+        '  <div class="qx-c-section-block">' +
+        '    <div class="qx-c-section-title">店铺检测</div>' +
+        '    <div data-el="store-detection"></div>' +
+        '  </div>' +
         // 操作按钮
         '  <div class="qx-c-actions">' +
         '    <button class="qx-c-btn qx-c-btn-ghost" data-act="view-erp">查看ERP</button>' +
@@ -375,7 +403,8 @@
         if (!btn) return;
         var act = btn.dataset.act;
         if (act === 'collapse') return self._collapse();
-        if (act === 'toggle') return self._onToggleClick();
+        if (act === 'shallow-toggle') return self._onShallowToggleClick();
+        if (act === 'deep-toggle') return self._onDeepToggleClick();
         if (act === 'view-erp') return self._onViewErp();
         if (act === 'filter-open') return self._openFilterModal();
       });
@@ -385,7 +414,7 @@
         var t = e.target;
         if (!t.dataset || !t.dataset.act) return;
         var act = t.dataset.act;
-        if (act === 'toggle') return; // 主开关由 click 处理
+        if (act === 'shallow-toggle' || act === 'deep-toggle') return; // 由 click 处理
         if (act === 'auto-scroll-toggle') return self._onAutoScrollToggle(t.checked);
         if (act === 'sales-filter') return self._onSalesFilterChange(t.checked);
         if (act === 'only-chinese') return self._onOnlyChineseChange(t.checked);
@@ -400,6 +429,17 @@
         }
         if (t.dataset.act === 'rating-min' || t.dataset.act === 'rating-max') {
           return self._onRatingRangeChange();
+        }
+        if (t.dataset.act === 'auto-scroll-interval') {
+          return self._onAutoScrollIntervalChange(t.value);
+        }
+      });
+      // radio 用 change 事件(input 事件在 radio 上行为不一致)
+      panelEl.addEventListener('change', function (e) {
+        var t = e.target;
+        if (!t.dataset || !t.dataset.act) return;
+        if (t.dataset.act === 'auto-scroll-mode') {
+          return self._onAutoScrollModeChange(t.value);
         }
       });
 
@@ -498,6 +538,15 @@
       // 自动翻页
       var scrollCb = this._q('auto-scroll-toggle');
       if (scrollCb) scrollCb.checked = localStorage.getItem(AUTO_SCROLL_KEY) === '1';
+      // 自动翻页间隔(秒)
+      var intervalInput = this._q('auto-scroll-interval');
+      if (intervalInput) intervalInput.value = this.getAutoScrollInterval();
+      // 自动翻页模式(dom/api)
+      var mode = this.getAutoScrollMode();
+      var domRadio = this._q('auto-scroll-mode-dom');
+      var apiRadio = this._q('auto-scroll-mode-api');
+      if (domRadio) domRadio.checked = mode === 'dom';
+      if (apiRadio) apiRadio.checked = mode === 'api';
       // 价格范围 / 评论数范围
       var priceRange = this._loadRange(PRICE_RANGE_KEY);
       var priceMin = this._q('price-min');
@@ -533,19 +582,40 @@
       }
     }
 
-    // ── 主开关 ──
-    async _onToggleClick() {
+    // ── 浅度采集开关 ──
+    async _onShallowToggleClick() {
+      var next = !this.shallowRunning;
+      try {
+        await this._send('autoCollectSetConfig', { config: { shallowCollectRunning: next } });
+        this.shallowRunning = next;
+        this._renderStatus();
+        if (typeof this.callbacks.onShallowToggle === 'function') {
+          this.callbacks.onShallowToggle(next);
+        }
+        this.toast(next ? '已启动浅度采集' : '已停止浅度采集', 'success', 1500);
+      } catch (err) {
+        this._renderStatus(); // 回滚 checkbox
+        this.toast(err.message || '操作失败', 'error', 2500);
+      }
+    }
+
+    // ── 深度采集开关 ──
+    // 回调优先级:onDeepToggle(新) > onToggleRunning(旧,向后兼容)
+    // 旧名 onToggleRunning 保留用于未升级的调用方,新代码应使用 onDeepToggle
+    async _onDeepToggleClick() {
       var next = !this.running;
       try {
         await this._send('autoCollectSetConfig', { config: { autoCollectRunning: next } });
         this.running = next;
         this._renderStatus();
-        if (typeof this.callbacks.onToggleRunning === 'function') {
+        if (typeof this.callbacks.onDeepToggle === 'function') {
+          this.callbacks.onDeepToggle(next);
+        } else if (typeof this.callbacks.onToggleRunning === 'function') {
           this.callbacks.onToggleRunning(next);
         }
-        this.toast(next ? '已启动自动采集' : '已停止自动采集', 'success', 1500);
+        this.toast(next ? '已启动深度采集' : '已停止深度采集', 'success', 1500);
       } catch (err) {
-        this._renderStatus(); // 回滚 checkbox 到 this.running
+        this._renderStatus(); // 回滚 checkbox
         this.toast(err.message || '操作失败', 'error', 2500);
       }
     }
@@ -559,6 +629,64 @@
           this.toast(err.message || '操作失败', 'error', 2500);
         }
       }
+    }
+
+    // 自动翻页间隔变化:规范化 → 持久化 → 通知 data-panel 实时更新 AutoScroller
+    // 规范化:空值/非法值 → 默认值;超出范围 → 截断;有效值 → 保留 1 位小数
+    _onAutoScrollIntervalChange(rawValue) {
+      var normalized = this._normalizeAutoScrollInterval(rawValue);
+      var inputEl = this._q('auto-scroll-interval');
+      if (inputEl && String(inputEl.value) !== String(normalized)) {
+        inputEl.value = normalized;
+      }
+      localStorage.setItem(AUTO_SCROLL_INTERVAL_KEY, String(normalized));
+      if (typeof this.callbacks.onAutoScrollIntervalChange === 'function') {
+        try {
+          this.callbacks.onAutoScrollIntervalChange(normalized);
+        } catch (err) {
+          this.toast(err.message || '操作失败', 'error', 2500);
+        }
+      }
+    }
+
+    // 规范化翻页间隔(秒):空/NaN/≤0 → 默认值;< 0.5 → 0.5;> 10 → 10;否则四舍五入到 1 位小数
+    _normalizeAutoScrollInterval(rawValue) {
+      var n = parseFloat(rawValue);
+      if (!isFinite(n) || n <= 0) return AUTO_SCROLL_INTERVAL_DEFAULT;
+      if (n < 0.5) return 0.5;
+      if (n > 10) return 10;
+      return Math.round(n * 10) / 10;
+    }
+
+    // 读取持久化的翻页间隔(秒),无配置返回默认值
+    getAutoScrollInterval() {
+      var raw = localStorage.getItem(AUTO_SCROLL_INTERVAL_KEY);
+      var n = parseFloat(raw);
+      if (!isFinite(n) || n <= 0) return AUTO_SCROLL_INTERVAL_DEFAULT;
+      if (n < 0.5) return 0.5;
+      if (n > 10) return 10;
+      return Math.round(n * 10) / 10;
+    }
+
+    // 翻页模式变化:持久化 + 通知调用方
+    // 切换模式不会自动停止当前正在运行的翻页(由调用方决定是否切换)
+    _onAutoScrollModeChange(mode) {
+      if (AUTO_SCROLL_MODES.indexOf(mode) === -1) mode = AUTO_SCROLL_MODE_DEFAULT;
+      localStorage.setItem(AUTO_SCROLL_MODE_KEY, mode);
+      if (typeof this.callbacks.onAutoScrollModeChange === 'function') {
+        try {
+          this.callbacks.onAutoScrollModeChange(mode);
+        } catch (err) {
+          this.toast(err.message || '操作失败', 'error', 2500);
+        }
+      }
+    }
+
+    // 读取持久化的翻页模式('dom' / 'api'),无配置返回默认值 'dom'
+    getAutoScrollMode() {
+      var mode = localStorage.getItem(AUTO_SCROLL_MODE_KEY);
+      if (AUTO_SCROLL_MODES.indexOf(mode) === -1) return AUTO_SCROLL_MODE_DEFAULT;
+      return mode;
     }
 
     _onSalesFilterChange(enabled) {
@@ -668,12 +796,18 @@
     _applyConfig(config) {
       if (!config) return;
       this.config = config;
-      // 主开关
+      // 浅度采集开关
+      var wasShallow = this.shallowRunning;
+      this.shallowRunning = config.shallowCollectRunning !== false;
+      if (wasShallow !== this.shallowRunning) this._renderStatus();
+      var shallowCb = this._q('shallow-toggle');
+      if (shallowCb && shallowCb.checked !== this.shallowRunning) shallowCb.checked = this.shallowRunning;
+      // 深度采集开关
       var wasRunning = this.running;
       this.running = !!config.autoCollectRunning;
       if (wasRunning !== this.running) this._renderStatus();
-      var toggleCb = this._q('toggle');
-      if (toggleCb && toggleCb.checked !== this.running) toggleCb.checked = this.running;
+      var deepCb = this._q('deep-toggle');
+      if (deepCb && deepCb.checked !== this.running) deepCb.checked = this.running;
       // 只采集中国店铺
       var chineseCb = this._q('only-chinese');
       if (chineseCb && config.onlyChineseStores !== undefined) {
@@ -681,12 +815,28 @@
       }
       // 熔断倒计时
       this._renderCircuitBreaker();
+      // 状态徽章(四态)
+      this._renderStatus();
     }
 
-    // ── 渲染: 状态 ──
+    // ── 渲染: 状态(浅度+深度四态显示) ──
     _renderStatus() {
-      var toggleCb = this._q('toggle');
-      if (toggleCb && toggleCb.checked !== this.running) toggleCb.checked = this.running;
+      // checkbox 同步
+      var shallowCb = this._q('shallow-toggle');
+      if (shallowCb && shallowCb.checked !== this.shallowRunning) shallowCb.checked = this.shallowRunning;
+      var deepCb = this._q('deep-toggle');
+      if (deepCb && deepCb.checked !== this.running) deepCb.checked = this.running;
+      // 状态徽章:四态(浅度+深度 / 仅浅度 / 仅深度 / 已停止)
+      var badge = this._q('collect-status-badge');
+      if (badge) {
+        var cls, text;
+        if (this.shallowRunning && this.running) { cls = 'qx-c-status-badge-green'; text = '采集:浅度+深度'; }
+        else if (this.shallowRunning && !this.running) { cls = 'qx-c-status-badge-yellow'; text = '采集:仅浅度'; }
+        else if (!this.shallowRunning && this.running) { cls = 'qx-c-status-badge-blue'; text = '采集:仅深度'; }
+        else { cls = 'qx-c-status-badge-gray'; text = '采集:已停止'; }
+        badge.className = 'qx-c-status-badge ' + cls;
+        badge.textContent = text;
+      }
     }
 
     // ── 渲染: 店铺 SKU 发现总数 + 采集/略过拆分 ──
@@ -777,9 +927,15 @@
       }
     }
 
-    // ── 主开关状态 ──
+    // ── 主开关状态(深度采集,兼容外部调用) ──
     setRunning(running) {
       this.running = !!running;
+      this._renderStatus();
+    }
+
+    // ── 浅度采集开关状态(外部调用) ──
+    setShallowRunning(running) {
+      this.shallowRunning = !!running;
       this._renderStatus();
     }
 

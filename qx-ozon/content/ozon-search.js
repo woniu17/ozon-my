@@ -18,9 +18,10 @@
   // panelState.enabled = 数据面板自动加载开关。新用户默认开(true)— 搜索/类目页
   // 一进来卡片就自动挂面板、拉数据填充。老用户在 popup 里显式关过会读出来保持关。
   const panelState = { enabled: true };
-  // 自动采集总开关(对应 popup 上的"自动采集"toggle,storage key 'jz-auto-collect-config')。
-  // 关闭后:不提交深度采集任务、不写 card 缓存(避免搜索页/类目页持续污染 dom 缓存)。
-  const autoCollectState = { running: true };
+  // 浅度采集开关(对应 jz-auto-collect-config.shallowCollectRunning)。
+  // 门控:DOM 缓存(card/detail)写入 + content script submitTask 入口
+  // 关闭后:不写 DOM 缓存、不提交采集任务(深度开关仍独立控制 SW 队列消费)
+  const shallowCollectState = { running: true };
   const panelDataCache = new Map();
 
   // --- TaskQueue ---
@@ -226,10 +227,10 @@
     if (panel) panel.dataset.jzSku = productId;
 
     // 异步写 dom 缓存(card 类型,商品卡 DOM 字段,fire-and-forget)
-    // 受 autoCollectState.running(自动采集总开关)控制:关闭时不写 card 缓存,
-    // 避免 highlight/搜索等页面在用户关闭后仍持续污染 dom 缓存。
+    // 受 shallowCollectState.running(浅度采集开关)控制:关闭时不写 card 缓存,
+    // 避免 highlight/搜索等页面在用户关闭浅度采集后仍持续污染 dom 缓存。
     // 关闭时面板仍可渲染(通过定时刷新查 ERP 缓存填充数据)。
-    if (productId && window.sendMessage && autoCollectState.running) {
+    if (productId && window.sendMessage && shallowCollectState.running) {
       try {
         window.sendMessage('domCacheSet', {
           sku: String(productId),
@@ -614,9 +615,10 @@
     try {
       const r = await chrome.storage.local.get(AUTO_COLLECT_CONFIG_KEY);
       const cfg = r[AUTO_COLLECT_CONFIG_KEY] || {};
-      autoCollectState.running = cfg.autoCollectRunning !== false;
+      // 浅度采集开关:DOM 缓存写入 + submitTask 入口门控
+      shallowCollectState.running = cfg.shallowCollectRunning !== false;
     } catch {
-      autoCollectState.running = true;
+      shallowCollectState.running = true;
     }
   }
 
@@ -636,7 +638,8 @@
         }
         if (changes[AUTO_COLLECT_CONFIG_KEY]) {
           const cfg = changes[AUTO_COLLECT_CONFIG_KEY].newValue || {};
-          autoCollectState.running = cfg.autoCollectRunning !== false;
+          // 浅度采集开关变化时同步本地状态
+          shallowCollectState.running = cfg.shallowCollectRunning !== false;
         }
       });
     } catch {}

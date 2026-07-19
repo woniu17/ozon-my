@@ -76,6 +76,7 @@
         "content/jzc-calc.js",
         "collect/content/smart-filter.js",
         "collect/content/auto-scroller.js",
+        "collect/content/api-scroller.js",
         "collect/content/store-detector.js",
         "collect/content/collector-panel.js",
         "lib/cdn-buster.js",

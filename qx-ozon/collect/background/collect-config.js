@@ -26,7 +26,8 @@
     const _AUTO_COLLECT_CONFIG_KEY = 'jz-auto-collect-config';
     const _AUTO_COLLECT_CONFIG_DEFAULT = {
       enabled: true,
-      autoCollectRunning: true,
+      autoCollectRunning: true,        // 深度采集开关(SW 队列真调 Step4/5/6)
+      shallowCollectRunning: true,     // 浅度采集开关(content script DOM 写 card/detail + submitTask 入口)
       depth: 'Full',
       paused: false,
       pausedUntil: 0,

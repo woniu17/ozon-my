@@ -534,8 +534,8 @@
             </div>
           </div>
 
-          <!-- 自动采集卡片(popup 简化视图:仅总开关 + 今日计数 + 熔断简略提示。
-               深度/限速/自动翻页/筛选/只采集中国店铺等详细配置在 QX 面板,不在此暴露) -->
+          <!-- 自动采集卡片(popup 简化视图:浅度+深度双开关 + 今日计数 + 熔断简略提示。
+               限速/自动翻页/筛选/只采集中国店铺等详细配置在 QX 面板,不在此暴露) -->
           <div class="card auto-collect-card">
             <div class="card-header">
               <span class="card-title">自动采集</span>
@@ -543,8 +543,12 @@
             </div>
             <div class="card-body">
               <label class="switch-label">
-                <input type="checkbox" id="ac-toggle" />
-                <span>总开关</span>
+                <input type="checkbox" id="ac-shallow-toggle" />
+                <span>浅度采集</span>
+              </label>
+              <label class="switch-label">
+                <input type="checkbox" id="ac-deep-toggle" />
+                <span>深度采集</span>
               </label>
               <div class="ac-stats">
                 <span>今日已采: <strong id="ac-today-count">0</strong></span>

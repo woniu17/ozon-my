@@ -37,10 +37,15 @@
   const SKIP_PATHS = [];
 
   const panelState = { enabled: true };
-  // 自动采集总开关(对应 popup 上的"自动采集"toggle,storage key 'jz-auto-collect-config')。
-  // 关闭后:不提交深度采集任务、不写 card 缓存(避免 highlight/店铺页等持续污染 dom 缓存)。
+  // 浅度采集开关(对应 jz-auto-collect-config.shallowCollectRunning)。
+  // 门控:DOM 缓存(card/detail)写入 + content script submitTask 入口 + AutoScroller 启停
+  // 关闭后:不写 DOM 缓存、不提交采集任务、不自动翻页
   // 数据面板显隐与渲染不受此开关影响(仍可查 ERP 缓存展示历史数据)。
-  const autoCollectState = { running: true };
+  const shallowCollectState = { running: true };
+  // 深度采集开关(对应 jz-auto-collect-config.autoCollectRunning)。
+  // 门控:taskQueue 暂停/恢复(配合 SW Gate 0 的队列消费)
+  // SW 侧真正的真调门控由 SW 自己读 config.autoCollectRunning 判断
+  const autoCollectRunningState = { running: true };
   const panelDataCache = new Map();
   let onlyWithRating = false;
   // 价格/评论数范围过滤:[minNum|null, maxNum|null](null 表示不限)
@@ -622,10 +627,10 @@
     }
 
     // 异步写 dom 缓存(card 类型,商品卡 DOM 5 字段,fire-and-forget,对齐 ozon-search.js)
-    // 受 autoCollectState.running(自动采集总开关)控制:关闭时不写 card 缓存,
-    // 避免 highlight/店铺页等在用户关闭自动采集后仍持续污染 dom 缓存。
+    // 受 shallowCollectState.running(浅度采集开关)控制:关闭时不写 card 缓存,
+    // 避免 highlight/店铺页等在用户关闭浅度采集后仍持续污染 dom 缓存。
     // 关闭时面板仍可渲染(通过定时刷新查 ERP 缓存填充数据)。
-    if (window.sendMessage && autoCollectState.running) {
+    if (window.sendMessage && shallowCollectState.running) {
       try {
         window.sendMessage('domCacheSet', {
           sku: String(productId),
@@ -644,13 +649,15 @@
       }
     }
 
-    // 1) 采集任务提交:受 panelState.enabled(自动采集开关)控制。
+    // 1) 采集任务提交:受 shallowCollectState.running(浅度采集开关)控制。
     //    关闭时不提交采集任务,但面板仍渲染(通过定时刷新查缓存填充数据)。
     //    panel 渲染(查 ERP、渲染字段)零阻塞,只有采集提交被 gate + 开关门控。
     //    非店铺页(无 sellerInfo)_collectGate 会被立即 resolve,等同直接提交。
     //    "仅抓有评价"开启时跳过 ratingCount=0/null 的商品(不入队不采集)。
     //    价格/评论数范围过滤同理:不在范围内不入队(但仍渲染面板)
-    if (window.__jzSubmitCollectTask && _collectGate && panelState.enabled) {
+    //    注:card 缓存写入与 submitTask 入口均由 shallowCollectState.running 门控,
+    //    与数据面板开关(panelState.enabled)解耦,避免数据面板 OFF 时 card 写入但任务不入队。
+    if (window.__jzSubmitCollectTask && _collectGate && shallowCollectState.running) {
       if (onlyWithRating && !info.ratingCount) {
         // 无评价且开关开启 → 跳过采集(但仍渲染面板)
       } else if (!_passesRangeFilter(info)) {
@@ -1050,8 +1057,8 @@
   }
 
   function applyToAll() {
-    // 数据面板始终展示,不再受自动采集开关(panelState.enabled)控制。
-    // panelState.enabled 只控制采集行为(队列暂停/恢复),不影响面板显隐。
+    // 数据面板始终展示,不再受采集开关控制。
+    // panelState.enabled 只用于搜索页数据面板显隐(ozon-search.js),不影响任何采集行为。
     const cards = getCards();
     cards.forEach((card) => ensureDataPanel(card));
   }
@@ -1078,9 +1085,13 @@
     try {
       const r = await chrome.storage.local.get(AUTO_COLLECT_CONFIG_KEY);
       const cfg = r[AUTO_COLLECT_CONFIG_KEY] || {};
-      autoCollectState.running = cfg.autoCollectRunning !== false;
+      // 浅度采集开关:DOM 缓存写入 + submitTask 入口 + AutoScroller 门控
+      shallowCollectState.running = cfg.shallowCollectRunning !== false;
+      // 深度采集开关:taskQueue 暂停/恢复(配合 SW 队列消费)
+      autoCollectRunningState.running = cfg.autoCollectRunning !== false;
     } catch {
-      autoCollectState.running = true;
+      shallowCollectState.running = true;
+      autoCollectRunningState.running = true;
     }
   }
 
@@ -1089,13 +1100,21 @@
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local') return;
         if (changes[STORAGE_KEY]) {
+          // 数据面板开关:只控制搜索页数据面板显隐(ozon-search.js)
+          // 不影响任何采集行为
           panelState.enabled = changes[STORAGE_KEY].newValue !== false;
-          // 数据面板始终展示,这里只更新 panelState.enabled(控制采集行为)
-          // 不再调用 applyToAll() 移除/恢复面板
         }
         if (changes[AUTO_COLLECT_CONFIG_KEY]) {
           const cfg = changes[AUTO_COLLECT_CONFIG_KEY].newValue || {};
-          autoCollectState.running = cfg.autoCollectRunning !== false;
+          // 浅度采集开关变化:同步本地状态
+          shallowCollectState.running = cfg.shallowCollectRunning !== false;
+          // 深度采集开关变化:同步本地状态 + 同步 taskQueue 暂停/恢复
+          const deepRunning = cfg.autoCollectRunning !== false;
+          const prevDeep = autoCollectRunningState.running;
+          autoCollectRunningState.running = deepRunning;
+          if (prevDeep !== deepRunning && _collectorPanel) {
+            _collectorPanel.setRunning(deepRunning);
+          }
         }
       });
     } catch {}
@@ -1134,7 +1153,43 @@
   let collectorEnabled = true;
   let _collectorPanel = null;
   let _autoScroller = null;
+  let _apiScroller = null;
   let _autoScrollStatusTimer = null;
+
+  // 统一的翻页器控制:根据当前模式(dom/api)启停对应的翻页器
+  // 避免回调中耦合具体的翻页器实例,便于扩展新模式
+  function _getAutoScrollMode() {
+    return _collectorPanel?.getAutoScrollMode?.() || 'dom';
+  }
+
+  function _isAutoScrollRunning() {
+    if (_autoScroller && _autoScroller.isUserActive()) return true;
+    if (_apiScroller && _apiScroller.isRunning()) return true;
+    return false;
+  }
+
+  function _startAutoScroll() {
+    const mode = _getAutoScrollMode();
+    if (mode === 'api') {
+      if (!_apiScroller) {
+        _collectorPanel?.toast?.('API 直取模式不可用', 'error', 2000);
+        return;
+      }
+      // 启动前确保 DOM 滚动已停止(避免双重翻页)
+      if (_autoScroller) _autoScroller.stop();
+      _apiScroller.start({ sellerSlug, sellerId });
+    } else {
+      if (!_autoScroller) return;
+      // 启动前确保 API 翻页已停止
+      if (_apiScroller) _apiScroller.stop();
+      _autoScroller.start();
+    }
+  }
+
+  function _stopAutoScroll() {
+    if (_autoScroller) _autoScroller.stop();
+    if (_apiScroller) _apiScroller.stop();
+  }
 
   async function loadCollectorEnabled() {
     try {
@@ -1185,7 +1240,9 @@
     }
 
     function isCurrentViewportDataReady() {
-      if (!panelState.enabled) return true;
+      // 浅度采集关闭时:不阻塞 AutoScroller,直接视为就绪
+      // (此时不写 DOM 缓存也不 submitTask,无需等待 panel 数据)
+      if (!shallowCollectState.running) return true;
       // 注意: 必须用 panel 的 rect 而非 card 的 rect 判定视口范围, 且 margin 对齐
       // ensureDataPanel 里 IntersectionObserver 的 rootMargin('200px').
       // 否则当 card 很高时, card 顶部进入 +80px 范围但 panel(在 card 底部)还在
@@ -1205,9 +1262,13 @@
     // QXAutoScroller：仅店铺页启用(panel.js isShopPage 判断控制 UI 显示)
     if (window.QXAutoScroller && !_autoScroller) {
       try {
+        // 翻页间隔从用户配置读取(秒 → 毫秒),无配置用 AutoScroller 内部默认值
+        const userIntervalSec = _collectorPanel?.getAutoScrollInterval?.();
+        const intervalMs = userIntervalSec ? Math.round(userIntervalSec * 1000) : undefined;
         _autoScroller = new window.QXAutoScroller({
           queue: taskQueue,
-          intervalMs: 500,
+          // 仅传用户配置,intervalMs 缺省时 AutoScroller 内部用 3000
+          ...(intervalMs ? { intervalMs } : {}),
           settleMs: 1000,
           scrollStepRatio: 0.95,
           minScrollStepPx: 680,
@@ -1232,21 +1293,28 @@
         });
       } catch {}
       // 500ms 轮询翻页状态，更新面板展示
+      // 按 mode 路由到对应翻页器(DOM → _autoScroller / API → _apiScroller)
       if (_autoScrollStatusTimer) clearInterval(_autoScrollStatusTimer);
       _autoScrollStatusTimer = setInterval(() => {
-        if (!_autoScroller || !_collectorPanel) return;
+        if (!_collectorPanel) return;
         try {
+          const mode = _getAutoScrollMode();
+          // 优先读活跃翻页器;另一侧的 completed 状态作为兜底
+          const scroller = mode === 'api' ? _apiScroller : _autoScroller;
+          if (!scroller) return;
           let status;
-          if (!_autoScroller.isUserActive()) {
-            // 自动翻页未开启: 如果有完成原因显示完成,否则显示 disabled
-            const sc = _autoScroller.getScrollStatus();
-            if (sc.status === 'completed') {
+          if (!scroller.isUserActive()) {
+            // 自动翻页未开启: 如果有终态原因显示终态(completed/failed),否则显示 disabled
+            // ApiScroller 失败终止时 status='failed',需要识别为终态显示失败信息,
+            // 而非当作"自动翻页未开启"丢失错误反馈
+            const sc = scroller.getScrollStatus();
+            if (sc.status === 'completed' || sc.status === 'failed') {
               status = sc;
             } else {
               status = { status: 'disabled', reason: '自动翻页未开启', detail: '' };
             }
           } else {
-            status = _autoScroller.getScrollStatus();
+            status = scroller.getScrollStatus();
           }
           _collectorPanel.setAutoScrollStatus(status);
         } catch {}
@@ -1254,28 +1322,59 @@
     }
 
     // QXCollectorPanel.create 内部已调 mount(),无需单独调用
+    // 注意:_apiScroller 的创建必须放在 _collectorPanel 之后,
+    // 否则 _collectorPanel?.getAutoScrollInterval?.() 返回 undefined,
+    // 导致 intervalMs 走 800ms 默认值,出现"面板显示 6 秒但实际没限速"的问题。
     _collectorPanel = window.QXCollectorPanel.create({
       callbacks: {
-        onToggleRunning: (next) => {
-          // 主开关:只控制采集行为(队列暂停/恢复),不影响数据面板显隐。
-          // 数据面板始终展示,通过定时刷新主动查缓存填充数据。
-          panelState.enabled = next;
+        // 浅度采集开关:DOM 缓存 + submitTask 入口 + AutoScroller/ApiScroller 启停
+        // 关闭时:停止自动翻页(避免无效滚动);开启时:按用户偏好恢复自动翻页
+        // 不影响数据面板显隐(由 panelState.enabled 独立控制)
+        onShallowToggle: (next) => {
+          shallowCollectState.running = next;
+          if (next) {
+            // 恢复采集:若"自动翻页"开关仍勾选(用户偏好),重新启动对应模式的翻页器
+            const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
+            if (cb && cb.checked) _startAutoScroll();
+          } else {
+            _stopAutoScroll();
+          }
+        },
+        // 深度采集开关:仅控制 taskQueue 暂停/恢复(配合 SW 队列消费)
+        // SW 侧 Gate 0 由 autoCollectRunning 独立判断,content 侧只需同步 taskQueue 状态
+        onDeepToggle: (next) => {
           if (next) {
             taskQueue.resume();
-            // 恢复采集: 若"自动翻页"开关仍勾选(用户偏好), 重新启动 AutoScroller
-            if (_autoScroller) {
-              const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
-              if (cb && cb.checked) _autoScroller.start();
-            }
           } else {
             taskQueue.pause();
-            if (_autoScroller) _autoScroller.stop();
           }
         },
         onAutoScrollToggle: (next) => {
-          if (!_autoScroller) return;
-          if (next) _autoScroller.start();
-          else _autoScroller.stop();
+          if (next) _startAutoScroll();
+          else _stopAutoScroll();
+        },
+        // 翻页间隔变化:实时更新当前活跃翻页器的 intervalMs(下次 tick 生效)
+        onAutoScrollIntervalChange: (intervalSec) => {
+          const ms = Math.round(intervalSec * 1000);
+          if (_autoScroller) _autoScroller.intervalMs = ms;
+          if (_apiScroller) _apiScroller.opts.intervalMs = ms;
+        },
+        // 翻页模式变化:切换 DOM滚动 / API直取
+        // 切换时若当前正在翻页,先停止旧的再启动新的
+        onAutoScrollModeChange: (mode) => {
+          const wasRunning = _isAutoScrollRunning();
+          _stopAutoScroll();
+          if (wasRunning) {
+            // 短延迟后启动新模式,让 UI 状态先稳定
+            setTimeout(() => _startAutoScroll(), 100);
+          }
+          if (_collectorPanel) {
+            _collectorPanel.toast(
+              mode === 'api' ? '已切换到 API 直取模式' : '已切换到 DOM 滚动模式',
+              'info',
+              1500
+            );
+          }
         },
         onSalesFilterChange: (next) => {
           onlyWithRating = !!next;
@@ -1292,9 +1391,104 @@
         },
       },
     });
+
+    // QXApiScroller:API 直取翻页器(独立于 DOM AutoScroller)
+    // 仅店铺页创建,用户在面板上切换"DOM滚动"/"API直取"模式
+    // 与 _autoScroller 并存,但同一时刻只有一个在运行(由 _startAutoScroll/_stopAutoScroll 控制)
+    // 必须在 _collectorPanel 创建之后创建:此时 getAutoScrollInterval() 能读到用户持久化配置值,
+    // 否则 intervalMs 会走 800ms 默认值,导致"面板显示 6 秒但实际没限速"的问题。
+    if (window.QXApiScroller && !_apiScroller) {
+      try {
+        const userIntervalSec = _collectorPanel?.getAutoScrollInterval?.();
+        const intervalMs = userIntervalSec ? Math.round(userIntervalSec * 1000) : 800;
+        _apiScroller = new window.QXApiScroller({
+          intervalMs,
+          maxConsecutiveErrors: 3,
+          requestTimeoutMs: 15000,
+          // 每个 SKU 提取后:写 card 缓存 + submitTask 入队 + 店铺 SKU 发现上报 + 计数刷新
+          // card 字段对齐 ozon-data-panel.js 的 domCacheSet 调用
+          onCardExtracted: (card) => {
+            if (!card?.sku) return;
+            // 浅度采集开关关闭时不写不提交(与 DOM 路径保持一致)
+            if (!shallowCollectState.running) return;
+            // 店铺 SKU 发现上报(对齐 DOM 模式 L625 的 reportStoreSkuDiscovery 调用)
+            // ApiScroller 仅在店铺页运行,所有 SKU 均属于当前店铺,无需 isStoreSkuCard 判定
+            reportStoreSkuDiscovery(card.sku);
+            // 加入店铺 SKU 已收集集合并刷新面板计数(对齐 DOM 模式 L755-765)
+            // 否则 API 模式下"店铺SKU发现 xx 采集XX个 略过XX个"统计不更新
+            if (window.__jzCollectStatus?.addStoreSku(String(card.sku))) {
+              _updateStoreSkuCount();
+            }
+            // 写 card 缓存(与 loadPanelData 中的 domCacheSet 调用对齐)
+            if (window.sendMessage) {
+              try {
+                window.sendMessage('domCacheSet', {
+                  sku: card.sku,
+                  type: 'card',
+                  data: {
+                    sku: card.sku,
+                    url: card.url || '',
+                    name: card.name || '',
+                    price: card.price != null ? Number(card.price) : null,
+                    image: card.imageUrl || '',
+                    ratingCount: card.ratingCount ?? null,
+                  },
+                });
+              } catch {
+                /* fire-and-forget */
+              }
+            }
+            // submitTask 入队:ApiScroller 已提取好 domInfo,直接调 sendMessage
+            // 跳过 __jzSubmitCollectTask 的 DOM 提取(它的 _extractDomInfoForTask 要求 HTMLElement)
+            // 注意:此处绕过了 collect-entry.js 的页面级 _autoCollectSeen 去重和 onlyChineseStores 筛选
+            //      (店铺页本身就是该店铺的商品,无需 onlyChineseStores 筛选;_autoCollectSeen 去重由 SW 队列二次保证)
+            if (window.sendMessage) {
+              try {
+                window.sendMessage('submitTask', {
+                  sku: card.sku,
+                  sellerSlug: _apiScroller?._sellerSlug || sellerSlug || '',
+                  sellerId: _apiScroller?._sellerId || sellerId || '',
+                  domInfo: {
+                    title: card.name || '',
+                    price: card.price != null ? Number(card.price) : null,
+                    imageUrl: card.imageUrl || '',
+                    ratingCount: card.ratingCount ?? null,
+                  },
+                });
+              } catch {
+                /* fire-and-forget */
+              }
+            }
+          },
+          onPageDone: (info) => {
+            if (!_collectorPanel) return;
+            _collectorPanel.toast(
+              `第${info.page}页: ${info.itemsCount} 个 SKU (累计 ${info.totalCards})`,
+              'info',
+              1500
+            );
+          },
+          onEmpty: () => {
+            if (!_collectorPanel) return;
+            _collectorPanel.toast('全部页已抓取完成', 'success', 2000);
+            // 同步关闭自动翻页开关
+            const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
+            if (cb) cb.checked = false;
+          },
+          onError: (err) => {
+            if (!_collectorPanel) return;
+            _collectorPanel.toast(err?.message || 'API 翻页失败', 'error', 2500);
+          },
+        });
+      } catch (e) {
+        console.warn('[ApiScroller] 创建失败:', e?.message);
+      }
+    }
+
     // 暴露 jzCollectorToast 兼容 shared-utils.js 中可能的 toast 调用
     window.jzCollectorToast = (msg, type, duration) => _collectorPanel?.toast?.(msg, type, duration);
-    _collectorPanel.setRunning(panelState.enabled);
+    // setRunning 同步深度开关状态到 collector 面板(深度开关控制 taskQueue)
+    _collectorPanel.setRunning(autoCollectRunningState.running);
     onlyWithRating = _collectorPanel.getInitialSalesFilter();
     // 启动时读面板初值(用户上次设置的过滤范围)
     try {
@@ -1306,13 +1500,13 @@
       console.warn('[panel] 读取范围初值失败:', e);
     }
 
-    // 页面加载恢复:若主开关已开启且自动翻页开关勾选,启动 AutoScroller
-    // (onToggleRunning 只在用户点击时触发,页面加载恢复时不会走那个分支)
-    if (panelState.enabled && _autoScroller) {
+    // 页面加载恢复:若浅度采集开关已开启且自动翻页开关勾选,启动对应模式的翻页器
+    // (onShallowToggle 只在用户点击时触发,页面加载恢复时不会走那个分支)
+    if (shallowCollectState.running) {
       const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
       if (cb && cb.checked) {
         try {
-          _autoScroller.start();
+          _startAutoScroll();
         } catch {}
       }
     }

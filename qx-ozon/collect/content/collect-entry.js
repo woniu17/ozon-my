@@ -86,8 +86,10 @@
       /* 忽略,按默认配置走 */
     }
 
-    // 自动采集总开关:未开启时不提交任务(避免 sellerInfo 到达前的早期任务被 SW 消费)
-    if (config.autoCollectRunning === false) {
+    // 浅度采集开关:关闭时不提交任务到 SW 队列
+    // (浅度开关门控"是否触发采集",深度开关门控"SW 是否消费任务",两者独立)
+    // 深度开关 autoCollectRunning 关闭时,任务仍会入队,SW Gate0 跳过,等用户开启后再消费
+    if (config.shallowCollectRunning === false) {
       return;
     }
 
