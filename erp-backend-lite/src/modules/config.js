@@ -344,8 +344,7 @@ router.delete('/admin/api/listing-templates/:id', (req, res, next) => {
 });
 
 // ── 预览接口:把 items 转换为 OPI v3 schema(不实际发送到 Ozon) ──
-import { transformItemForPortal, extractCategoryIds } from '../services/prepare-bundle.js';
-import { toOpiItem, descriptionCategoryAttributes } from '../services/ozon-opi.js';
+import { resolveAttrWhitelist, buildOpiItem } from '../services/opi-item-builder.js';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -371,36 +370,13 @@ router.post('/admin/api/preview-opi', async (req, res, next) => {
     }
     // 字典白名单:按 (descriptionCategoryId, typeId) 预查,同类目只查一次
     // storeId 未传或查询失败时 allowedAttrIds=null,降级为不过滤
+    // 统一走 opi-item-builder.resolveAttrWhitelist + buildOpiItem
     const storeId = String(req.body?.storeId || '');
     const store = storeId ? readStoresForPreview().find((s) => s.id === storeId) : null;
-    const allowedAttrIdsCache = new Map();
-    async function resolveAllowedAttrIds(item) {
-      if (!store) return null;
-      const { typeId, descriptionCategoryId } = extractCategoryIds(item);
-      if (!typeId || !descriptionCategoryId) return null;
-      const cacheKey = `${descriptionCategoryId}:${typeId}`;
-      if (allowedAttrIdsCache.has(cacheKey)) return allowedAttrIdsCache.get(cacheKey);
-      let result = null;
-      try {
-        const attrs = await descriptionCategoryAttributes(store, {
-          description_category_id: descriptionCategoryId,
-          type_id: typeId,
-        });
-        if (Array.isArray(attrs) && attrs.length > 0) {
-          result = new Set(attrs.map((a) => String(a.id)));
-        }
-      } catch {
-        // 字典查询失败,降级为不过滤
-      }
-      allowedAttrIdsCache.set(cacheKey, result);
-      return result;
-    }
-    // 转换: item → transformItemForPortal → toOpiItem
     const opiItems = [];
     for (const it of items) {
-      const allowedAttrIds = await resolveAllowedAttrIds(it);
-      const portalItem = transformItemForPortal(it, { allowedAttrIds });
-      opiItems.push(toOpiItem(portalItem));
+      const { allowedAttrIds } = await resolveAttrWhitelist(store, it, { enableWhitelist: true });
+      opiItems.push(buildOpiItem(it, { allowedAttrIds }).opiItem);
     }
     res.json(ok({ items: opiItems }));
   } catch (e) {

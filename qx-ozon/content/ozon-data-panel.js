@@ -37,6 +37,10 @@
   const SKIP_PATHS = [];
 
   const panelState = { enabled: true };
+  // 自动采集总开关(对应 popup 上的"自动采集"toggle,storage key 'jz-auto-collect-config')。
+  // 关闭后:不提交深度采集任务、不写 card 缓存(避免 highlight/店铺页等持续污染 dom 缓存)。
+  // 数据面板显隐与渲染不受此开关影响(仍可查 ERP 缓存展示历史数据)。
+  const autoCollectState = { running: true };
   const panelDataCache = new Map();
   let onlyWithRating = false;
   // 价格/评论数范围过滤:[minNum|null, maxNum|null](null 表示不限)
@@ -235,6 +239,8 @@
           timestamp: Date.now(),
         });
         CS()?.refreshUi(skuStr);
+        // 状态变化可能影响采集/略过拆分计数(如 pending→skipped),刷新面板计数
+        _updateStoreSkuCount();
       }
       return;
     }
@@ -267,6 +273,8 @@
       duration: msg.duration != null ? msg.duration : null,
       timestamp: msg.collectedAt || Date.now(),
     });
+    // 采集完成(终态)后刷新采集/略过拆分计数
+    _updateStoreSkuCount();
 
     // 广播携带完整数据时即时回填面板
     // 注意:无论 status 是 success/partial/skipped/failed_final,collectDone 都表示
@@ -473,11 +481,12 @@
   const _nonStoreSkus = new Set();
 
   // 更新 MY 采集器面板的店铺 SKU 收集计数
-  // 通过 collect-status.js 的 getStoreSkuCount() 桥接读取
+  // 通过 collect-status.js 的 getStoreSkuStats() 桥接读取采集/略过拆分计数
   function _updateStoreSkuCount() {
     const panel = window.__qxCollectorPanel;
     if (panel && typeof panel.setStoreSkuCount === 'function') {
-      panel.setStoreSkuCount(window.__jzCollectStatus?.getStoreSkuCount() || 0);
+      const stats = window.__jzCollectStatus?.getStoreSkuStats?.() || { collected: 0, skipped: 0 };
+      panel.setStoreSkuCount(stats);
     }
   }
 
@@ -613,7 +622,10 @@
     }
 
     // 异步写 dom 缓存(card 类型,商品卡 DOM 5 字段,fire-and-forget,对齐 ozon-search.js)
-    if (window.sendMessage) {
+    // 受 autoCollectState.running(自动采集总开关)控制:关闭时不写 card 缓存,
+    // 避免 highlight/店铺页等在用户关闭自动采集后仍持续污染 dom 缓存。
+    // 关闭时面板仍可渲染(通过定时刷新查 ERP 缓存填充数据)。
+    if (window.sendMessage && autoCollectState.running) {
       try {
         window.sendMessage('domCacheSet', {
           sku: String(productId),
@@ -1050,6 +1062,7 @@
   // chrome.storage.local.ozon_data_panel_enabled。
   // 这里只订阅 storage 变化，自动 apply/remove 面板。
   const STORAGE_KEY = 'ozon_data_panel_enabled';
+  const AUTO_COLLECT_CONFIG_KEY = 'jz-auto-collect-config';
 
   async function loadPanelEnabled() {
     try {
@@ -1061,14 +1074,29 @@
     }
   }
 
+  async function loadAutoCollectRunning() {
+    try {
+      const r = await chrome.storage.local.get(AUTO_COLLECT_CONFIG_KEY);
+      const cfg = r[AUTO_COLLECT_CONFIG_KEY] || {};
+      autoCollectState.running = cfg.autoCollectRunning !== false;
+    } catch {
+      autoCollectState.running = true;
+    }
+  }
+
   function listenStorageToggle() {
     try {
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local') return;
-        if (!changes[STORAGE_KEY]) return;
-        panelState.enabled = changes[STORAGE_KEY].newValue !== false;
-        // 数据面板始终展示,这里只更新 panelState.enabled(控制采集行为)
-        // 不再调用 applyToAll() 移除/恢复面板
+        if (changes[STORAGE_KEY]) {
+          panelState.enabled = changes[STORAGE_KEY].newValue !== false;
+          // 数据面板始终展示,这里只更新 panelState.enabled(控制采集行为)
+          // 不再调用 applyToAll() 移除/恢复面板
+        }
+        if (changes[AUTO_COLLECT_CONFIG_KEY]) {
+          const cfg = changes[AUTO_COLLECT_CONFIG_KEY].newValue || {};
+          autoCollectState.running = cfg.autoCollectRunning !== false;
+        }
       });
     } catch {}
   }
@@ -1593,6 +1621,7 @@
     }
 
     await loadPanelEnabled();
+    await loadAutoCollectRunning();
     listenStorageToggle();
     applyToAll();
     createObserver();

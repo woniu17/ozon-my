@@ -10,7 +10,15 @@ import { apply as applyAiRewrite } from './enrichments/ai-rewrite.js';
 import { apply as applyWatermark } from './enrichments/watermark.js';
 import { apply as applyPoster } from './enrichments/poster.js';
 import { apply as applyCopyBan } from './enrichments/copy-ban.js';
-import * as opi from './ozon-opi.js';
+import { getDaos } from '../db/adapter.js';
+import {
+  batchInjectRichContentAttr,
+  resolveAttrWhitelist,
+  buildOpiItem,
+} from './opi-item-builder.js';
+
+// DAO 单例(顶层 await:启动时即建立连接,失败立即可见)
+const daos = await getDaos();
 
 /**
  * 从 item 提取 type_id + description_category_id(供查属性字典用)
@@ -358,6 +366,12 @@ export async function prepareBundleItems(message, storeId, store) {
     };
   }
 
+  // ── 0. 富内容(11254)补全:从 ERP richMedia 缓存批量查询并注入 _forcedAttributes ──
+  // 插件发来的 message.items 中,如果 _sourceVariant.attributes 没有 11254(captureRichContent
+  // 未触发或失败),此处从 ERP 缓存兜底补上,确保上架请求带富内容。
+  // 统一走 opi-item-builder.batchInjectRichContentAttr
+  await batchInjectRichContentAttr(items, daos);
+
   const flags = config.featureFlags || {};
   const strict = message.strict === true;
 
@@ -435,37 +449,17 @@ export async function prepareBundleItems(message, storeId, store) {
   }
 
   // ── 5. 分组打包 + item 格式转换(面板格式 → seller.ozon.ru proto 格式) ──
-  // transformItemForPortal 已抽取为模块级导出函数(见文件顶部),此处直接调用
-  // 字典白名单:按 (descriptionCategoryId, typeId) 预查属性字典,同类目只查一次(opi 内部有缓存)
+  // 字典白名单:按 (descriptionCategoryId, typeId) 预查,同类目只查一次(opi 内部有 5min 全局缓存)
   // 查询失败时 allowedAttrIds=null,降级为不过滤(保持原行为),避免字典接口故障阻断上架
-
-  const allowedAttrIdsCache = new Map(); // key: `${descriptionCategoryId}:${typeId}` → Set<string> | null
-  async function resolveAllowedAttrIds(item) {
-    const { typeId, descriptionCategoryId } = extractCategoryIds(item);
-    if (!store || !typeId || !descriptionCategoryId) return null;
-    const cacheKey = `${descriptionCategoryId}:${typeId}`;
-    if (allowedAttrIdsCache.has(cacheKey)) return allowedAttrIdsCache.get(cacheKey);
-    let result = null;
-    try {
-      const attrs = await opi.descriptionCategoryAttributes(store, {
-        description_category_id: descriptionCategoryId,
-        type_id: typeId,
-      });
-      if (Array.isArray(attrs) && attrs.length > 0) {
-        result = new Set(attrs.map((a) => String(a.id)));
-      }
-    } catch (e) {
-      logger.warn({ err: e?.message, descriptionCategoryId, typeId }, '属性字典查询失败,降级为不过滤');
-    }
-    allowedAttrIdsCache.set(cacheKey, result);
-    return result;
-  }
+  // 统一走 opi-item-builder.resolveAttrWhitelist + buildOpiItem
 
   const bundles = [];
   for (const [catName, groupItems] of groups) {
     // 取该组首个 item 的类目信息预查字典(同组类目相同,查一次即可)
-    const allowedAttrIds = await resolveAllowedAttrIds(groupItems[0]);
-    const transformedItems = groupItems.map((it) => transformItemForPortal(it, { allowedAttrIds }));
+    const { allowedAttrIds } = await resolveAttrWhitelist(store, groupItems[0], {
+      enableWhitelist: true,
+    });
+    const transformedItems = groupItems.map((it) => buildOpiItem(it, { allowedAttrIds }).portalItem);
     // DEBUG: 记录每个 bundle 的类目名和首个 item 的分类字段,排查按名匹配是否生效
     logger.info(
       {

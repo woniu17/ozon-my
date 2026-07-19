@@ -323,6 +323,22 @@
     return _storeCollectedSkus.size;
   }
 
+  // 获取已发现店铺 SKU 的采集/略过统计(供 MY 采集器面板展示拆分计数)
+  // - collected(采集):已发现 + _collectStatusMap 有记录且 status !== 'skipped'
+  //                  (含 success/partial/failed/antibot,即 SW 真实处理过)
+  // - skipped(略过):已发现总数 - 采集数
+  //                  (含显式 skipped + 未提交到 SW + 队列 pending 等所有"未采集"情况)
+  // 注:用户期望"略过"涵盖所有"已发现但未采集"的 SKU,而非仅显式 skipped 状态
+  function getStoreSkuStats() {
+    let collected = 0;
+    const total = _storeCollectedSkus.size;
+    for (const sku of _storeCollectedSkus) {
+      const s = _collectStatusMap.get(sku);
+      if (s && s.status !== 'skipped') collected++;
+    }
+    return { collected, skipped: Math.max(0, total - collected), total };
+  }
+
   // ── UI 刷新 ──────────────────────────────────────────────────
   // 刷新单个 SKU 对应的所有商品卡 UI(徽章+状态条)
   function _refreshCollectStatusUi(sku) {
@@ -411,6 +427,7 @@
     updateCollectBadge,
     addStoreSku,
     getStoreSkuCount,
+    getStoreSkuStats,
     refreshUi: _refreshCollectStatusUi,
     refreshAllUi: _refreshAllCollectStatusUi,
     setStatus,

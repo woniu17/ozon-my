@@ -110,7 +110,10 @@
         isChinese: undefined,
         classifiedBy: null,
       };
-      this.storeSkuCount = 0; // 店铺 SKU 收集计数(由 ozon-data-panel.js 注入)
+      this.storeSkuCount = 0; // 店铺 SKU 收集计数(由 ozon-data-panel.js 注入,旧字段保留兼容)
+      this.storeSkuTotal = 0; // 已发现总数
+      this.storeSkuCollected = 0; // 已采集数(拆分计数)
+      this.storeSkuSkipped = 0; // 已略过数(= total - collected)
 
       this.panelEl = null;
       this.bubbleEl = null;
@@ -309,11 +312,11 @@
         '    <div class="qx-c-section-title">店铺检测</div>' +
         '    <div data-el="store-detection"></div>' +
         '  </div>' +
-        // 店铺 SKU 收集(仅店铺页)
+        // 店铺 SKU 发现(仅店铺页)— 第一行展示发现总数,第二行拆分采集/略过
         (shopOnly
           ? '  <div class="qx-c-section-block">' +
-            '    <div class="qx-c-section-title">店铺SKU收集 <span class="qx-c-queue-len" data-el="store-sku-count">0</span></div>' +
-            '    <div class="qx-c-store-sku-hint">已收集店铺 SKU 数量(卡片角标 ✓ 表示已收集)</div>' +
+            '    <div class="qx-c-section-title">店铺SKU发现 <span class="qx-c-queue-len" data-el="store-sku-total">0</span></div>' +
+            '    <div class="qx-c-store-sku-hint">采集 <span data-el="store-sku-collected-hint">0</span> 个,略过 <span data-el="store-sku-skipped-hint">0</span> 个(卡片角标 ✓ 表示已发现)</div>' +
             '  </div>'
           : '') +
         // 操作按钮
@@ -686,15 +689,32 @@
       if (toggleCb && toggleCb.checked !== this.running) toggleCb.checked = this.running;
     }
 
-    // ── 渲染: 店铺 SKU 收集计数 ──
+    // ── 渲染: 店铺 SKU 发现总数 + 采集/略过拆分 ──
     _renderStoreSkuCount() {
-      var el = this._q('store-sku-count');
-      if (el) el.textContent = String(this.storeSkuCount || 0);
+      var total = this.storeSkuTotal || 0;
+      var collected = this.storeSkuCollected || 0;
+      var skipped = this.storeSkuSkipped || 0;
+      var elT = this._q('store-sku-total');
+      if (elT) elT.textContent = String(total);
+      var elCHint = this._q('store-sku-collected-hint');
+      if (elCHint) elCHint.textContent = String(collected);
+      var elSHint = this._q('store-sku-skipped-hint');
+      if (elSHint) elSHint.textContent = String(skipped);
     }
 
-    // 外部注入店铺 SKU 收集计数(ozon-data-panel.js 调用)
-    setStoreSkuCount(count) {
-      this.storeSkuCount = Math.max(0, Number(count) || 0);
+    // 外部注入店铺 SKU 计数(ozon-data-panel.js 调用)
+    // 接受 {total, collected, skipped} 对象,或兼容旧接口的单数字(视为 total)
+    setStoreSkuCount(countOrStats) {
+      if (countOrStats && typeof countOrStats === 'object') {
+        this.storeSkuTotal = Math.max(0, Number(countOrStats.total) || 0);
+        this.storeSkuCollected = Math.max(0, Number(countOrStats.collected) || 0);
+        this.storeSkuSkipped = Math.max(0, Number(countOrStats.skipped) || 0);
+      } else {
+        // 旧调用方兼容:单数字 = 已发现总数,无拆分
+        this.storeSkuTotal = Math.max(0, Number(countOrStats) || 0);
+        this.storeSkuCollected = 0;
+        this.storeSkuSkipped = 0;
+      }
       this._renderStoreSkuCount();
     }
 

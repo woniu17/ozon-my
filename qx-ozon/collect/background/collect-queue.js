@@ -576,20 +576,26 @@
 
     const _getSearchVariantForBroadcast = async (sku) => {
       try {
-        let item = null;
-        // attributeCacheGet('search') 返回 searchData 原始对象(items 数组在 .items 中)
+        // 方案B:search cache 存 Ozon /api/v1/search 原始 variants,读取时按需合成 sv shape
+        // 兼容旧数据:旧 search_cache 是 sv shape(已 normalize,有 attributes 数组),直接用
         const searchData = await this.attributeCacheGet(sku, 'search');
+        const bundleItem = await _getBundleItemForBroadcast(sku);
+
+        let item = null;
         if (searchData && Array.isArray(searchData?.items) && searchData.items.length > 0) {
-          item = searchData.items[0];
+          const raw = searchData.items[0];
+          // 旧版 sv shape(已有 attributes 数组)→ 原样用,只补物理 attrs
+          // 新版原始 variants(扁平字段)→ 调 normalizeSearchVariantToSv 合成
+          item = Array.isArray(raw.attributes) && raw.attributes.length > 0
+            ? { ...raw }
+            : this.normalizeSearchVariantToSv(raw);
         }
-        // search_cache item 缺物理 attrs 时,从 bundle_cache 顶层字段补齐
-        // (searchVariants Step2 的 bundle merge 可能因反爬/超时失败,导致 search_cache
-        // 里的 item 没被 merge 进 4497/9454-9456,但 bundle_cache 独立写入,仍有数据)
+
         if (item) {
+          // search 缺物理 attrs 时,从 bundle 顶层字段补齐(兼容老逻辑)
           const attrKeys = new Set((item.attributes || []).map((a) => String(a.key)));
           const needPhysical = !attrKeys.has('4497') && !attrKeys.has('9454');
           if (needPhysical) {
-            const bundleItem = await _getBundleItemForBroadcast(sku);
             const physicalAttrs = _extractBundlePhysicalAttrs(bundleItem);
             if (physicalAttrs.length > 0) {
               item = {
@@ -598,12 +604,12 @@
               };
             }
           }
+          // 挂上完整 bundleItem(供高级 caller 用全 40-63 个 attr)
+          if (bundleItem) item._bundleItem = bundleItem;
           return item;
         }
-        // search_cache 完全未命中:直接用 bundle item(含顶层物理字段 + 完整 attrs)
-        // bundle item 顶层有 weight/depth/width/height,但 content 端按 attr key 读,
-        // 这里转 sv shape:把顶层物理字段 push 进 attributes
-        const bundleItem = await _getBundleItemForBroadcast(sku);
+
+        // search_cache 完全未命中:直接用 bundle item 合成 sv shape(原 fallback 逻辑)
         if (bundleItem) {
           const attributes = Array.isArray(bundleItem.attributes)
             ? bundleItem.attributes

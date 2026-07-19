@@ -16,8 +16,12 @@ import { getDaos } from '../db/adapter.js';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
-import { transformItemForPortal, extractCategoryIds } from '../services/prepare-bundle.js';
-import { toOpiItem, descriptionCategoryAttributes } from '../services/ozon-opi.js';
+import { composeSvShape } from '../services/compose-sv-shape.js';
+import {
+  resolveAttrWhitelist,
+  injectRichContentAttr,
+  buildOpiItem,
+} from '../services/opi-item-builder.js';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -853,11 +857,20 @@ async function buildSynthesizedFromCache(sku, storeId) {
   const bundleData = attrDoc?.bundleData || null;
   const richMediaData = rmDoc?.data || null;
 
-  const sv = (searchData?.items && searchData.items[0]) || {};
+  // 方案B:search cache 存原始 variants,bundle cache 存原始 bundle item,
+  // 通过 composeSvShape 在读取时合成 sv shape(含 bundle merge 后的物理属性 / complex属性)
+  const searchRaw =
+    searchData && Array.isArray(searchData.items) && searchData.items.length > 0
+      ? searchData.items[0]
+      : null;
   const bundleItem = bundleData || {};
-  const bundleComplexAttrs = Array.isArray(bundleItem.attributes)
-    ? bundleItem.attributes.filter((a) => Number(a.complex_id) > 0)
-    : [];
+  const composedSv = composeSvShape(searchRaw, bundleItem) || {};
+  const sv = composedSv;
+  const bundleComplexAttrs = Array.isArray(composedSv._bundleComplexAttrs)
+    ? composedSv._bundleComplexAttrs
+    : Array.isArray(bundleItem.attributes)
+      ? bundleItem.attributes.filter((a) => Number(a.complex_id) > 0)
+      : [];
 
   // images:优先 bundle,兜底 richMedia.gallery / richMedia.fields.images / detail.images / card.image
   const rmGallery = richMediaData?.gallery?.length
@@ -911,46 +924,24 @@ async function buildSynthesizedFromCache(sku, storeId) {
     videoCover: '',
   };
 
-  // 字典白名单(可选)+ 完整属性字典(供前端展示可读属性名)
+  // 11254 富内容注入:统一走 opi-item-builder
+  // search/bundle 接口都不返回 11254,只有 richMedia 缓存中有,需显式注入
+  injectRichContentAttr(item, richMediaData?.richContent || '');
+
+  // 字典白名单 + 属性字典(供前端展示可读属性名)
   // 字典查询需要任一 store 的认证;storeId 未传时退而取第一个 store(仅为字典展示用,不影响白名单)
+  // 白名单仅在用户选中具体 store 时启用(不同 store 可能有不同类目过滤策略)
   const stores = readStoresForPreview();
   const store = storeId
     ? stores.find((s) => s.id === storeId)
     : stores[0] || null;
-  let allowedAttrIds = null;
-  let attrDict = {}; // id(字符串) -> { id, name, description, type, dictionary_id }
-  if (store) {
-    try {
-      const { typeId, descriptionCategoryId } = extractCategoryIds(item);
-      if (typeId && descriptionCategoryId) {
-        const attrs = await descriptionCategoryAttributes(store, {
-          description_category_id: descriptionCategoryId,
-          type_id: typeId,
-        });
-        if (Array.isArray(attrs) && attrs.length > 0) {
-          // 白名单仅在用户选中具体 store 时启用(不同 store 可能有不同类目过滤策略)
-          if (storeId) {
-            allowedAttrIds = new Set(attrs.map((a) => String(a.id)));
-          }
-          // 构建字典: id -> { id, name, description, type, dictionary_id }
-          for (const a of attrs) {
-            attrDict[String(a.id)] = {
-              id: a.id,
-              name: a.name || '',
-              description: a.description || '',
-              type: a.type || '',
-              dictionary_id: a.dictionary_id || 0,
-            };
-          }
-        }
-      }
-    } catch {
-      // 字典查询失败,降级为不过滤
-    }
-  }
+  const { allowedAttrIds, attrDict: attrDictOrNull } = await resolveAttrWhitelist(store, item, {
+    returnAttrDict: true,
+    enableWhitelist: !!storeId,
+  });
+  const attrDict = attrDictOrNull || {};
 
-  const portalItem = transformItemForPortal(item, { allowedAttrIds });
-  const opiItem = toOpiItem(portalItem);
+  const { portalItem, opiItem } = buildOpiItem(item, { allowedAttrIds });
 
   return {
     sources,

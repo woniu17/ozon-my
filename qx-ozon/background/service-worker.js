@@ -4284,7 +4284,9 @@ try {
               let items;
               if (searchCacheHit) {
                 // 缓存命中 → 跳过 /search 真调
-                items = searchCacheHit.items;
+                // 方案B:cache 存的是 Ozon /api/v1/search 原始 variants,读取时调
+                // normalizeSearchVariantToSv 合成 sv shape(运行时合成,不写回 cache)
+                items = searchCacheHit.items.map(normalizeSearchVariantToSv).filter(Boolean);
               } else {
                 const resp = await fetchSellerPortal(
                   '/search',
@@ -4318,8 +4320,8 @@ try {
                       : Array.isArray(resp)
                         ? resp
                         : [];
-                items = rawVariants.map(normalizeSearchVariantToSv).filter(Boolean);
-                if (items.length === 0) {
+                // 方案B:cache 只存原始 variants,不做 normalize 转换
+                if (rawVariants.length === 0) {
                   if (attempt === 1) {
                     console.log(
                       `[searchVariants] sku=${sku} no variants from /search, raw:`,
@@ -4328,12 +4330,12 @@ try {
                   }
                   return { ok: true, data: { items: [] } };
                 }
-                // 异步写回 L1(l2Synced=false) + L2(带重试,成功后回更新 L1 l2Synced=true)
                 if (attempt === 1) {
-                  const cacheData = { items };
-                  // v8: 写入 attribute_cache 的 search 字段(L1 + L2 由 attributeCacheSet 统一处理)
-                  _attributeCacheSet(sku, 'search', cacheData);
+                  // v8: 写入 attribute_cache 的 search 字段(原始 variants,不转换)
+                  _attributeCacheSet(sku, 'search', { items: rawVariants });
                 }
+                // 运行时合成 sv shape 给 sender(即时消费,不写回 cache)
+                items = rawVariants.map(normalizeSearchVariantToSv).filter(Boolean);
               }
 
               // Step 2: bundle 补完整 attributes(物理 + 含 40-63 个完整 attr)
@@ -4430,14 +4432,11 @@ try {
                 console.warn(`[searchVariants] bundle injection failed for sku=${sku}:`, e.message || e);
               }
 
-              // Step2 bundle merge 完成后,重新写 search_cache(覆盖 Step1 写入的 5 attrs 版本)。
-              // 否则 _getSearchVariantForBroadcast(collectDone 广播 / queryErpProductData)
-              // 读 search_cache 会拿到缺物理 attrs 的旧版本,导致面板重量·尺寸不显示。
-              if (attempt === 1) {
-                const cacheData = { items };
-                // v8: 写入 attribute_cache 的 search 字段(L1 + L2 由 attributeCacheSet 统一处理)
-                _attributeCacheSet(sku, 'search', cacheData);
-              }
+              // Step2 bundle merge 完成后不再覆盖写 search_cache(方案B)。
+              // search cache 始终保持 Ozon /api/v1/search 原始 variants,读取端按需合成。
+              // bundle 数据由 bundle cache 独立存储(见 fetchBundleByVariantId)。
+              // 运行时 items(含 merge 后的物理 attrs / _bundleItem / _bundleComplexAttrs)
+              // 仅返回给 sender 即时消费,不写回 cache。
 
               return { ok: true, data: { items } };
             } catch (e) {

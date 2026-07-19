@@ -1990,49 +1990,26 @@
                     : Array.isArray(resp?.products)
                       ? resp.products
                       : [];
-                const items = rawVariants.map(this.normalizeSearchVariantToSv).filter(Boolean);
-                if (items.length > 0) {
+                // 方案B:search 缓存只存 Ozon /api/v1/search 的原始 variants 数组,
+                // 不再做 normalizeSearchVariantToSv 转换、不二次 merge bundle 物理属性。
+                // 读取端(collect-queue.js / 后端 compose-sv-shape.js)按需合成 sv shape。
+                if (rawVariants.length > 0) {
                   results[3].hit = true; // search
-                  // 写 search 缓存(L1 合并表 + L2 合并表,由 attributeCacheSet 内部处理)
-                  const cacheData = { items };
-                  this.attributeCacheSet(sku, 'search', cacheData);
+                  // 写 search 缓存(原始 variants,不做任何转换)
+                  this.attributeCacheSet(sku, 'search', { items: rawVariants });
 
                   // 调 bundle(fetchBundleByVariantId 内部有 L1+L2+L3 三层缓存)
-                  // bundle 返回后把物理 attrs(4497/9454-9456)merge 进 items[0],
-                  // 并重新写 search_cache,让 _getSearchVariantForBroadcast 能读到完整数据
-                  const variantId = items[0].variant_id;
+                  // bundle 返回后由 bundle cache 独立存储,不再 merge 回 search cache
+                  const variantId = rawVariants[0]?.variant_id;
                   if (variantId) {
                     const bundleItem = await fetchBundleByVariantId(sku, variantId, companyId, {
                       forceRefresh: false,
                     });
                     if (bundleItem) {
                       results[4].hit = true; // bundle
-                      const existingKeys = new Set(items[0].attributes.map((a) => String(a.key)));
-                      const physicalAttrs = [];
-                      if (Number(bundleItem.weight) > 0 && !existingKeys.has('4497')) {
-                        physicalAttrs.push({ key: '4497', value: String(bundleItem.weight) });
-                      }
-                      if (Number(bundleItem.depth) > 0 && !existingKeys.has('9454')) {
-                        physicalAttrs.push({ key: '9454', value: String(bundleItem.depth) });
-                      }
-                      if (Number(bundleItem.width) > 0 && !existingKeys.has('9455')) {
-                        physicalAttrs.push({ key: '9455', value: String(bundleItem.width) });
-                      }
-                      if (Number(bundleItem.height) > 0 && !existingKeys.has('9456')) {
-                        physicalAttrs.push({ key: '9456', value: String(bundleItem.height) });
-                      }
-                      if (bundleItem.barcode && !existingKeys.has('7822')) {
-                        physicalAttrs.push({ key: '7822', value: String(bundleItem.barcode) });
-                      }
-                      if (physicalAttrs.length > 0) {
-                        items[0] = { ...items[0], attributes: [...items[0].attributes, ...physicalAttrs] };
-                        // 重新写 search 缓存(覆盖上面 5 attrs 版本)
-                        const mergedCacheData = { items };
-                        this.attributeCacheSet(sku, 'search', mergedCacheData);
-                      }
                     }
                   }
-                  console.log('[SW autoCollect] Step5 search/bundle 真调成功:', sku, 'items=', items.length);
+                  console.log('[SW autoCollect] Step5 search/bundle 真调成功:', sku, 'items=', rawVariants.length);
                 } else {
                   console.log('[SW autoCollect] Step5 search 真调无数据:', sku);
                 }

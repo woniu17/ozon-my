@@ -18,6 +18,9 @@
   // panelState.enabled = 数据面板自动加载开关。新用户默认开(true)— 搜索/类目页
   // 一进来卡片就自动挂面板、拉数据填充。老用户在 popup 里显式关过会读出来保持关。
   const panelState = { enabled: true };
+  // 自动采集总开关(对应 popup 上的"自动采集"toggle,storage key 'jz-auto-collect-config')。
+  // 关闭后:不提交深度采集任务、不写 card 缓存(避免搜索页/类目页持续污染 dom 缓存)。
+  const autoCollectState = { running: true };
   const panelDataCache = new Map();
 
   // --- TaskQueue ---
@@ -223,7 +226,10 @@
     if (panel) panel.dataset.jzSku = productId;
 
     // 异步写 dom 缓存(card 类型,商品卡 DOM 字段,fire-and-forget)
-    if (productId && window.sendMessage) {
+    // 受 autoCollectState.running(自动采集总开关)控制:关闭时不写 card 缓存,
+    // 避免 highlight/搜索等页面在用户关闭后仍持续污染 dom 缓存。
+    // 关闭时面板仍可渲染(通过定时刷新查 ERP 缓存填充数据)。
+    if (productId && window.sendMessage && autoCollectState.running) {
       try {
         window.sendMessage('domCacheSet', {
           sku: String(productId),
@@ -591,6 +597,7 @@
   // 现在统一移到极掌 popup 里 toggle，状态持久化到
   // chrome.storage.local.ozon_data_panel_enabled。
   const PANEL_STORAGE_KEY = 'ozon_data_panel_enabled';
+  const AUTO_COLLECT_CONFIG_KEY = 'jz-auto-collect-config';
 
   async function loadPanelEnabled() {
     try {
@@ -603,18 +610,33 @@
     }
   }
 
+  async function loadAutoCollectRunning() {
+    try {
+      const r = await chrome.storage.local.get(AUTO_COLLECT_CONFIG_KEY);
+      const cfg = r[AUTO_COLLECT_CONFIG_KEY] || {};
+      autoCollectState.running = cfg.autoCollectRunning !== false;
+    } catch {
+      autoCollectState.running = true;
+    }
+  }
+
   function listenStorageToggle() {
     try {
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local') return;
-        if (!changes[PANEL_STORAGE_KEY]) return;
-        // !== false 兼容 undefined/true 两种 default-on 写法
-        panelState.enabled = changes[PANEL_STORAGE_KEY].newValue !== false;
-        const cards = getCards();
-        if (panelState.enabled) {
-          cards.forEach((c) => ensureDataPanel(c));
-        } else {
-          cards.forEach((c) => removeDataPanel(c));
+        if (changes[PANEL_STORAGE_KEY]) {
+          // !== false 兼容 undefined/true 两种 default-on 写法
+          panelState.enabled = changes[PANEL_STORAGE_KEY].newValue !== false;
+          const cards = getCards();
+          if (panelState.enabled) {
+            cards.forEach((c) => ensureDataPanel(c));
+          } else {
+            cards.forEach((c) => removeDataPanel(c));
+          }
+        }
+        if (changes[AUTO_COLLECT_CONFIG_KEY]) {
+          const cfg = changes[AUTO_COLLECT_CONFIG_KEY].newValue || {};
+          autoCollectState.running = cfg.autoCollectRunning !== false;
         }
       });
     } catch {}
@@ -669,6 +691,7 @@
     }
 
     await loadPanelEnabled();
+    await loadAutoCollectRunning();
     listenStorageToggle();
     applyToCards();
     createObserver();

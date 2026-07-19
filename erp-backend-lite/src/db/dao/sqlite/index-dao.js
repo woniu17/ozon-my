@@ -4,6 +4,7 @@
 // 查询:from-cache / overview 只查这一张表,过滤/排序/分页全在 SQL 完成
 // 全文搜索:走 ozon_cache_index_fts(FTS5 虚拟表),通过触发器自动同步
 import { db } from '../../index.js';
+import { composeSvShape } from '../../../services/compose-sv-shape.js';
 
 function parseJson(s) {
   if (!s) return null;
@@ -89,15 +90,22 @@ export const indexDao = {
     const msData = parseJson(ms?.data);
     const fsData = parseJson(fs?.data);
 
+    // 方案B:search cache 存原始 variants,bundle cache 存原始 bundle item,
+    // 通过 composeSvShape 在读取时合成 sv shape(兼容旧版 sv shape 数据)
+    const searchRaw =
+      attrData && Array.isArray(attrData.items) && attrData.items.length > 0
+        ? attrData.items[0]
+        : null;
+    const bundleItem = bundleData || null;
+    const sv = composeSvShape(searchRaw, bundleItem) || {};
+
     // name fallback 链(与 opi-preview 的合成逻辑对齐):
     //   1. bundle attr 4180(商品名,最权威)
     //   2. search attr 4180
     //   3. detail.title(DOM)
     //   4. card.name(DOM,搜索页/店铺页采集)
     // 注:之前只看 card.name + detail.title,DOM 解析失败时即使 bundle/search 有 4180 也显示未命名
-    const sv = (attrData?.items && attrData.items[0]) || {};
-    const bundleItem = bundleData || {};
-    const bAttr4180 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4180');
+    const bAttr4180 = bundleItem?.attributes?.find((a) => String(a.attribute_id) === '4180');
     const sAttr4180 = sv.attributes?.find((a) => String(a.key) === '4180');
     const name =
       bAttr4180?.values?.[0]?.value ||
@@ -389,7 +397,7 @@ export const indexDao = {
          UPDATE ozon_cache_index
          SET seller_slug = ls.sellerSlug,
              seller_name = COALESCE(ls.sellerName, ''),
-             searchable_text = COALESCE(name, '') || ' ' || sku || ' ' || COALESCE(ls.sellerName, ''),
+             searchable_text = COALESCE(name, '') || ' ' || ozon_cache_index.sku || ' ' || COALESCE(ls.sellerName, ''),
              updated_at = datetime('now')
          FROM latest_sellers ls
          WHERE ozon_cache_index.sku = ls.sku`
@@ -402,6 +410,9 @@ export const indexDao = {
    *  只要 SKU 在 follow_sell_task_items 中存在任意记录,就标记为已跟卖(listed=1)
    *  不区分 item.status(pending/imported/failed/skipped 都算"已创建跟卖任务")
    *  两步 UPDATE 在事务中执行,避免中间状态
+   *
+   *  注:node:sqlite 的 DatabaseSync 没有 transaction() 方法(与 better-sqlite3 不同),
+   *      这里用 BEGIN/COMMIT/ROLLBACK 手动管理事务
    */
   async refreshListedStatus() {
     // total = 有 task_items 记录的 sku 数
@@ -423,7 +434,8 @@ export const indexDao = {
 
     let step1Changes = 0;
     let step2Changes = 0;
-    const tx = db.transaction(() => {
+    try {
+      db.exec('BEGIN');
       // Step 1: 有 task_items 记录 → listed=1(仅更新原值为 0 的行,减少无意义写入)
       const r1 = db
         .prepare(
@@ -445,8 +457,11 @@ export const indexDao = {
         )
         .run();
       step2Changes = r2.changes;
-    });
-    tx();
+      db.exec('COMMIT');
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw e;
+    }
     // refreshed = 实际发生变更的行数(新增 listed=1 + 回退 listed=0)
     return { refreshed: step1Changes + step2Changes, total };
   },
