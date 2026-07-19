@@ -15,10 +15,14 @@ function makeUnsupportedDao(name) {
     `Mongo 模式不支持 ${name}(新表结构仅在 SQLite 模式下实现)。请设置 DB_DRIVER=sqlite 或为 Mongo 补齐 ${name} 实现。`
   );
   // 拦截所有可能的属性访问,统一抛错
+  // 白名单:symbol 属性(如 Symbol.toPrimitive/Symbol.iterator)+ then
+  //   (避免 await/解构/隐式转换触发意外抛错,这些场景应该走 undefined 而非 throw)
   return new Proxy(
     {},
     {
-      get() {
+      get(_target, prop) {
+        if (typeof prop === 'symbol') return undefined;
+        if (prop === 'then') return undefined; // 避免 await dao 时被当作 thenable
         throw err;
       },
     }

@@ -66,12 +66,22 @@ const detailOpen = ref(false);
 const detailLoading = ref(false);
 const detailTask = ref(null);
 const detailItems = ref([]);
+// 详情弹窗内的 tab:items=商品明细 / payloads=请求体与响应
+const detailTab = ref('items');
+// 请求体与响应(raw / transformed / opi_request / opi_response)
+const detailPayloads = ref([]);
+const detailPayloadsLoading = ref(false);
+// 当前选中的 payload stage
+const activePayloadStage = ref('');
 
 async function openDetail(localTaskId) {
   detailOpen.value = true;
   detailLoading.value = true;
+  detailTab.value = 'items';
   detailTask.value = null;
   detailItems.value = [];
+  detailPayloads.value = [];
+  activePayloadStage.value = '';
   try {
     const data = await get('/admin/api/listing-records/' + encodeURIComponent(localTaskId));
     detailTask.value = data?.task || null;
@@ -81,6 +91,60 @@ async function openDetail(localTaskId) {
   } finally {
     detailLoading.value = false;
   }
+}
+
+// 切到「请求体与响应」tab 时按需加载 payloads(只拉一次)
+async function ensurePayloadsLoaded() {
+  if (!detailTask.value || detailPayloads.value.length > 0) return;
+  detailPayloadsLoading.value = true;
+  try {
+    const data = await get(
+      '/admin/api/listing-records/' + encodeURIComponent(detailTask.value.localTaskId) + '/payloads'
+    );
+    const stages = data?.stages || [];
+    detailPayloads.value = stages;
+    // 默认选中第一个 stage
+    if (stages.length > 0 && !activePayloadStage.value) {
+      activePayloadStage.value = stages[stages.length - 1].stage;
+    }
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    detailPayloadsLoading.value = false;
+  }
+}
+
+function switchTab(tab) {
+  detailTab.value = tab;
+  if (tab === 'payloads') ensurePayloadsLoaded();
+}
+
+// payload 展示标签映射
+const STAGE_LABEL = {
+  raw: '插件原始 (raw)',
+  transformed: '转换后 (transformed)',
+  opi_request: 'OPI 请求体 (opi_request)',
+  opi_response: 'OPI 查询响应 (opi_response)',
+};
+function stageLabel(st) {
+  return STAGE_LABEL[st] || st;
+}
+
+// 格式化 JSON 展示(2 空格缩进)
+function prettyJson(obj) {
+  try {
+    return JSON.stringify(obj, null, 2);
+  } catch {
+    return String(obj);
+  }
+}
+
+// 按 stage 排序:raw → transformed → opi_request → opi_response
+const STAGE_ORDER = ['raw', 'transformed', 'opi_request', 'opi_response'];
+function sortedPayloads(list) {
+  return [...list].sort(
+    (a, b) => STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage)
+  );
 }
 
 // ── 渲染辅助 ───────────────────────────────────────────────
@@ -110,9 +174,9 @@ function resultText(r) {
   return `✓${s.imported || 0} ✗${s.failed || 0}`;
 }
 
-// 详情:从 items 数组按状态计数(成功/失败)
+// 详情:从 items 数组按"有效状态"计数(imported + hasError 计为 failed)
 function countByStatus(items, st) {
-  return (items || []).filter((i) => String(i.status) === st).length;
+  return (items || []).filter((i) => effectiveStatus(i) === st).length;
 }
 
 const ITEM_STATUS_LABEL = {
@@ -123,6 +187,29 @@ const ITEM_STATUS_LABEL = {
 };
 function itemStatusLabel(st) {
   return ITEM_STATUS_LABEL[st] || st || '—';
+}
+
+// 详情列表行状态展示(根据 status + hasError + hasWarning 组合判断):
+//   - imported + hasError   → "审核拒绝"(红色,实质失败)
+//   - imported + hasWarning → "已创建(有警告)"(黄色,成功但有警告)
+//   - imported + 无错误     → "已创建"(绿色)
+//   - failed                → "失败"(红色)
+//   - pending/skipped       → 原状态
+function itemDisplayStatus(it) {
+  if (it.status === 'imported' && it.hasError) return { label: '审核拒绝', cls: 'is-failed' };
+  if (it.status === 'imported' && it.hasWarning) return { label: '已创建(有警告)', cls: 'is-warning' };
+  if (it.status === 'imported') return { label: '已创建', cls: 'is-imported' };
+  if (it.status === 'failed') return { label: '失败', cls: 'is-failed' };
+  if (it.status === 'pending') return { label: '处理中', cls: 'is-pending' };
+  if (it.status === 'skipped') return { label: '跳过', cls: 'is-skipped' };
+  return { label: it.status || '—', cls: '' };
+}
+
+// 详情列表:成功/失败计数按"有效状态"计算
+// imported + hasError → 计为失败;其余按 status
+function effectiveStatus(it) {
+  if (it.status === 'imported' && it.hasError) return 'failed';
+  return it.status;
 }
 
 // 商品错误信息拼接(对齐原 admin.js renderListingDetailItems)
@@ -162,7 +249,7 @@ onMounted(() => {
         class="filter-input"
         type="text"
         v-model.trim="state.filters.keyword"
-        placeholder="搜索任务ID / Ozon Task ID"
+        placeholder="搜索任务ID / Ozon Task ID / 跟卖SKU"
         @keydown.enter="search"
       />
       <select class="filter-select" v-model="state.filters.status">
@@ -257,33 +344,91 @@ onMounted(() => {
           </div>
         </div>
 
-        <h3 style="margin: 16px 0 8px">商品明细</h3>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>SKU</th>
-              <th>状态</th>
-              <th>错误信息</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="!detailItems.length">
-              <td colspan="3" class="muted" style="padding: 16px; text-align: center">
-                无明细数据(可能任务尚未完成或未上报)
-              </td>
-            </tr>
-            <tr v-for="(it, idx) in detailItems" :key="idx">
-              <td class="col-task">{{ it.offerId || '—' }}</td>
-              <td>
-                <span class="item-status" :class="it.status">{{ itemStatusLabel(it.status) }}</span>
-              </td>
-              <td>
-                <span v-if="itemErrorText(it)">{{ itemErrorText(it) }}</span>
-                <span v-else style="color: #52c41a">无错误</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <!-- Tab 切换:商品明细 / 请求体与响应 -->
+        <div class="detail-tabs">
+          <button
+            class="detail-tab-btn"
+            :class="{ active: detailTab === 'items' }"
+            @click="switchTab('items')"
+          >
+            商品明细
+          </button>
+          <button
+            class="detail-tab-btn"
+            :class="{ active: detailTab === 'payloads' }"
+            @click="switchTab('payloads')"
+          >
+            请求体与响应
+          </button>
+        </div>
+
+        <!-- 商品明细 -->
+        <div v-if="detailTab === 'items'">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>SKU</th>
+                <th>状态</th>
+                <th>错误信息</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!detailItems.length">
+                <td colspan="3" class="muted" style="padding: 16px; text-align: center">
+                  无明细数据(可能任务尚未完成或未上报)
+                </td>
+              </tr>
+              <tr v-for="(it, idx) in detailItems" :key="idx">
+                <td class="col-task">{{ it.offerId || '—' }}</td>
+                <td>
+                  <span class="item-status" :class="itemDisplayStatus(it).cls">
+                    {{ itemDisplayStatus(it).label }}
+                  </span>
+                </td>
+                <td>
+                  <span v-if="itemErrorText(it)">{{ itemErrorText(it) }}</span>
+                  <span v-else style="color: #52c41a">无错误</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 请求体与响应 -->
+        <div v-else-if="detailTab === 'payloads'">
+          <div v-if="detailPayloadsLoading" class="empty">加载中...</div>
+          <template v-else>
+            <div v-if="!detailPayloads.length" class="empty" style="padding: 16px">
+              无请求体备份(可能为模拟手动上架 viaPortal,或数据未保存)
+            </div>
+            <template v-else>
+              <!-- stage 切换 -->
+              <div class="payload-stage-tabs">
+                <button
+                  v-for="p in sortedPayloads(detailPayloads)"
+                  :key="p.stage"
+                  class="payload-stage-btn"
+                  :class="{ active: activePayloadStage === p.stage }"
+                  @click="activePayloadStage = p.stage"
+                >
+                  {{ stageLabel(p.stage) }}
+                </button>
+              </div>
+              <!-- 当前 stage 内容 -->
+              <div
+                v-for="p in detailPayloads"
+                :key="p.stage"
+                v-show="activePayloadStage === p.stage"
+                class="payload-block"
+              >
+                <div class="payload-meta">
+                  <span class="muted">时间:{{ fmtTime(p.createdAt) }}</span>
+                </div>
+                <pre class="payload-json">{{ prettyJson(p.payload) }}</pre>
+              </div>
+            </template>
+          </template>
+        </div>
       </template>
       <div v-else class="empty">无数据</div>
     </AppModal>

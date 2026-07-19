@@ -664,21 +664,30 @@ h3 {
   font-size: 11px;
   font-weight: 500;
 }
-.item-status.imported {
+.item-status.imported,
+.item-status.is-imported {
   background: #dcfce7;
   color: var(--success);
 }
-.item-status.failed {
+.item-status.failed,
+.item-status.is-failed {
   background: #fee2e2;
   color: var(--danger);
 }
-.item-status.pending {
+.item-status.pending,
+.item-status.is-pending {
   background: #fef3c7;
   color: var(--warning);
 }
-.item-status.skipped {
+.item-status.skipped,
+.item-status.is-skipped {
   background: #f3f4f6;
   color: var(--muted);
+}
+/* imported + hasWarning:黄色(有警告但已创建) */
+.item-status.is-warning {
+  background: #fef3c7;
+  color: var(--warning);
 }
 
 /* ── 分页 ── */
@@ -1065,6 +1074,80 @@ h3 {
 }
 .listing-detail-meta .error-text {
   margin: 0;
+}
+
+/* ── 上架记录详情:Tab 切换 ── */
+.detail-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin: 16px 0 12px;
+}
+.detail-tab-btn {
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.detail-tab-btn:hover {
+  color: var(--text);
+}
+.detail-tab-btn.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 500;
+}
+
+/* ── 上架记录详情:Payload stage 切换 ── */
+.payload-stage-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.payload-stage-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+.payload-stage-btn:hover {
+  color: var(--text);
+  border-color: var(--primary);
+}
+.payload-stage-btn.active {
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.payload-block {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fafafa;
+}
+.payload-meta {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.payload-json {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 60vh;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
 }
 
 /* ── 商品详情弹窗:二级 Sub Tab ── */

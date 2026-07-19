@@ -30,8 +30,8 @@ import { startIndexSync, stopIndexSync } from './services/index-sync.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
 
-// 初始化数据库 schema
-initSchema();
+// 初始化数据库 schema(异步:含一次性 backfill name 历史数据)
+await initSchema();
 
 const app = express();
 

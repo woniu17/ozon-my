@@ -204,10 +204,8 @@ try {
   const BROWSER_AGENT_ALARM = 'jz:browser-agent';
   const BROWSER_AGENT_INTERVAL_MINUTES = 1;
 
-  // L1→L2 缓存补写定时任务:扫描 IndexedDB 中 l2Synced=false 的记录,补写到 ERP MongoDB。
-  // 触发场景:L3 真调后写 L1 成功但写 L2 失败(ERP 宕机/网络抖动) → 定时任务补写。
-  const CACHE_SYNC_ALARM = 'jz:cache-sync-l2';
-  const CACHE_SYNC_INTERVAL_MINUTES = 5;
+  // 注:L1→L2 缓存补写定时任务已废弃(取消 IndexedDB 后所有缓存直接入库 SQLite)
+  // 原 CACHE_SYNC_ALARM / CACHE_SYNC_INTERVAL_MINUTES 常量已删除
 
   // ── 采集队列常量(已迁移到 collect/background/collect-queue.js) ─────────────
   // 常量保留在 IIFE 内(alarm handler / clearFinishedQueueTasks 等引用),
@@ -563,16 +561,10 @@ try {
   });
 
   // 委托包装器:IIFE 内其他模块通过 _xxx 调用,实际委托到 __jzCollect.xxx
-  const _idbGet = (store, sku) => __jzCollect.idbGet(store, sku);
-  const _idbPut = (store, val) => __jzCollect.idbPut(store, val);
-  const _idbDelete = (store, sku) => __jzCollect.idbDelete(store, sku);
   const _bundleUsable = (entry) => __jzCollect.bundleUsable(entry);
   const _erpCacheGet = (type, sku) => __jzCollect.erpCacheGet(type, sku);
   const _erpCacheSet = (type, sku, body) => __jzCollect.erpCacheSet(type, sku, body);
   const _erpCacheDelete = (type, sku) => __jzCollect.erpCacheDelete(type, sku);
-  const _erpCacheSetAndSyncFlag = (store, type, sku, body) =>
-    __jzCollect.erpCacheSetAndSyncFlag(store, type, sku, body);
-  const _syncL2FromL1 = (store, type, sku, l1Entry) => __jzCollect.syncL2FromL1(store, type, sku, l1Entry);
   const _writeAutoCollectLog = (payload) => __jzCollect.writeAutoCollectLog(payload);
   // v8: card+detail→domCache, search+bundle→attributeCache
   const _domCacheGet = (sku, type) => __jzCollect.domCacheGet(sku, type);
@@ -590,8 +582,6 @@ try {
   const _followSellCacheGet = (sku) => __jzCollect.followSellCacheGet(sku);
   const _followSellCacheSet = (sku, data) => __jzCollect.followSellCacheSet(sku, data);
   const _followSellCacheDelete = (sku) => __jzCollect.followSellCacheDelete(sku);
-  const syncL2Batch = (forceAll) => __jzCollect.syncL2Batch(forceAll);
-  const setupCacheSyncAlarm = () => __jzCollect.setupCacheSyncAlarm();
 
   // SW 启动时清理 24h 过期的采集去重 cache(plan v3 子项 ②)。
   // key 形如 `jz-collect-recent-v1:{host}:{storeId}:{sourceId}:{sku}`,
@@ -1358,7 +1348,11 @@ try {
   // 单 SKU 缓存状态查询(抽出供 queryCacheStatus 和 queryCacheStatusBatch 复用)
   async function _queryCacheStatusOne(qSku) {
     if (!qSku) return null;
-    // v8: card/detail → domCache, search/bundle → attributeCache(7 个 hit 位,5 次 IO)
+    // v8: card/detail → domCache, search/bundle → attributeCache
+    // 5 类合并命中位(与采集箱对齐):
+    //   dom = card OR detail(任一有采集)
+    //   attribute = search AND bundle(都需要)
+    //   richMedia / marketStats / followSell 各自独立
     const [card, detail, pdp, search, bundle, marketStats, followSell] = await Promise.all([
       _domCacheGet(qSku, 'card').catch(() => null),
       _domCacheGet(qSku, 'detail').catch(() => null),
@@ -1369,11 +1363,9 @@ try {
       _followSellCacheGet(qSku).catch(() => null),
     ]);
     const results = [
-      { type: 'card', hit: !!card },
-      { type: 'detail', hit: !!detail },
-      { type: 'pdp', hit: !!pdp },
-      { type: 'search', hit: !!search },
-      { type: 'bundle', hit: !!bundle },
+      { type: 'dom', hit: !!(card || detail) },
+      { type: 'attribute', hit: !!(search && bundle) },
+      { type: 'richMedia', hit: !!pdp },
       { type: 'marketStats', hit: !!(marketStats && marketStats.data) },
       { type: 'followSell', hit: !!(followSell && followSell.data) },
     ];
@@ -2145,8 +2137,6 @@ try {
       handleClientSyncAlarm(alarm.name);
     } else if (alarm.name === BROWSER_AGENT_ALARM) {
       handleBrowserAgentAlarm();
-    } else if (alarm.name === CACHE_SYNC_ALARM) {
-      __jzCollect.syncL2Batch();
     } else if (alarm.name === COLLECT_QUEUE_ALARM) {
       _maybeStartConsume();
       _checkStaleRunningTasks();
@@ -2201,7 +2191,6 @@ try {
     initBrowserAgentContext();
     setupClientSyncAlarms();
     setupBrowserAgentAlarm();
-    __jzCollect.setupCacheSyncAlarm();
     setupCollectQueueAlarm();
     // 异步重负载:错开执行,避免重载瞬间并发风暴导致 OOM
     setTimeout(() => checkForUpdate(), 1_000);
@@ -2218,7 +2207,6 @@ try {
     initBrowserAgentContext();
     setupClientSyncAlarms();
     setupBrowserAgentAlarm();
-    __jzCollect.setupCacheSyncAlarm();
     setupCollectQueueAlarm();
     setTimeout(() => refreshExchangeRate(), 1_000);
     setTimeout(() => handleBrowserAgentAlarm(), 2_000);
@@ -2243,11 +2231,10 @@ try {
     }
   })();
 
-  // SW 被挂起前清理资源:重置 IDB 缓存让下次唤醒重连,避免使用已关闭的连接。
+  // SW 被挂起前清理资源(原 IDB 缓存重置已废弃,取消 L1 后无需清理)
   // lease heartbeat timer 由 SW 终止时隐式清理,无需显式处理。
   chrome.runtime.onSuspend.addListener(() => {
-    __jzCollect.state.idbPromise = null;
-    console.log('[SW] onSuspend: cleared IDB cache');
+    console.log('[SW] onSuspend');
   });
 
   // tab 关闭时清理采集器心跳记录
@@ -2818,14 +2805,19 @@ try {
           return { ok: true, data: { synced: false } };
         }
         case 'syncAllCacheToL2': {
-          // popup 手动触发:全量同步 L1 → L2(MongoDB),忽略 l2Synced 标志。
-          // 返回 { ok, data: { search, bundle, pdp } } 供 popup 显示同步条数。
-          try {
-            const stats = await __jzCollect.syncL2Batch(true);
-            return { ok: true, data: stats };
-          } catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-          }
+          // 已废弃:取消 L1 IndexedDB 后,所有缓存直接入库 SQLite,无需手动同步。
+          // 保留 case 兼容旧 popup,返回空 stats。
+          return {
+            ok: true,
+            data: {
+              dom: 0,
+              attribute: 0,
+              richMedia: 0,
+              marketStats: 0,
+              followSell: 0,
+              migrated: 0,
+            },
+          };
         }
         case 'domCacheGet': {
           // 查 dom 缓存(L1→L2),用于全览展示 / OPI 预览 fallback / 详情页 DOM 兜底。

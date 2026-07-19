@@ -561,14 +561,13 @@
       return attrs;
     };
 
-    // 从 bundle_cache(L1 IDB → L2 ERP)取 bundle item,不要求 attrs 非空
+    // 从 attribute 缓存取 bundle item,不要求 attrs 非空
     // (bundle 顶层 weight/depth/width/height 即使 attributes 为空也有效)。
+    // 取消 L1 IndexedDB 后,直接查 ERP SQLite(attributeCacheGet 内部封装)。
     const _getBundleItemForBroadcast = async (sku) => {
       try {
-        const l1 = await this.idbGet(this.IDB_STORES.BUNDLE, sku);
-        if (l1?.data) return l1.data;
-        const l2 = await this.erpCacheGet('bundle', sku);
-        if (l2?.data) return l2.data;
+        const cached = await this.attributeCacheGet(sku, 'bundle');
+        if (cached?.data) return cached.data;
       } catch (e) {
         console.warn('[Queue] get bundle item failed:', e?.message || e);
       }
@@ -578,15 +577,10 @@
     const _getSearchVariantForBroadcast = async (sku) => {
       try {
         let item = null;
-        const l1 = await this.idbGet(this.IDB_STORES.SEARCH, sku);
-        if (l1 && Array.isArray(l1.data?.items) && l1.data.items.length > 0) {
-          item = l1.data.items[0];
-        }
-        if (!item) {
-          const l2 = await this.erpCacheGet('search', sku);
-          if (l2 && Array.isArray(l2.data?.items) && l2.data.items.length > 0) {
-            item = l2.data.items[0];
-          }
+        // attributeCacheGet('search') 返回 searchData 原始对象(items 数组在 .items 中)
+        const searchData = await this.attributeCacheGet(sku, 'search');
+        if (searchData && Array.isArray(searchData?.items) && searchData.items.length > 0) {
+          item = searchData.items[0];
         }
         // search_cache item 缺物理 attrs 时,从 bundle_cache 顶层字段补齐
         // (searchVariants Step2 的 bundle merge 可能因反爬/超时失败,导致 search_cache

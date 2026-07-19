@@ -45,6 +45,21 @@ export function clearCache(type) {
   return request.del(`/admin/api/cache/${type}`);
 }
 
+// 删除单个 SKU 的全部缓存(5 类数据表 + 索引行)
+// 用于"SKU 数据管理"页单个删除
+export function deleteSkuAll(sku) {
+  return request.del(`/admin/api/cache/sku/${encodeURIComponent(sku)}`);
+}
+
+// 批量删除 SKU 的全部缓存
+// params: { skus?: string[], filter?: { keyword?: string } }
+//   - skus 非空:按显式 SKU 数组删除(选中删除)
+//   - skus 为空且 filter 提供:按筛选条件删除(当前条件筛选删除)
+// 返回: { deletedCount, failed, total }
+export function batchDeleteSkus(params) {
+  return request.post('/admin/api/cache/skus/delete', params);
+}
+
 // 全览列表(聚合 6 类缓存的 SKU 状态矩阵)
 export function getCacheOverview(params) {
   return request.get('/admin/api/cache/overview', params);

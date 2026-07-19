@@ -135,10 +135,14 @@
     'daily-limit': '达每日上限',
     'non-chinese-store': '非中国店铺',
     'unclassified-store': '店铺未分类',
-    'all-cached': '7 类缓存全命中',
+    'all-cached': '5 类缓存全命中',
     antibot: '反爬熔断',
   };
-  const _CACHE_TYPE_LABELS = ['card', 'detail', 'pdp', 'search', 'bundle', 'marketStats', 'followSell'];
+  // 5 类合并缓存命中位(与采集箱对齐)
+  //   dom = card OR detail(任一有采集)
+  //   attribute = search AND bundle(都需要)
+  //   richMedia / marketStats / followSell 各自独立
+  const _CACHE_TYPE_LABELS = ['dom', 'attribute', 'richMedia', 'marketStats', 'followSell'];
 
   // partial/failed 状态在 UI 上显示"等待重试中"的冷却时长(单位:ms)
   const _PENDING_COOLDOWN_MS = 60 * 1000;
@@ -213,16 +217,16 @@
         }
       }
     }
-    // 构建缓存命中明细(按 _CACHE_TYPE_LABELS 固定顺序)
-    // cacheStatus 为 null/undefined 时用全 miss 占位(让用户看到 7 类缓存字段布局)
+    // 构建缓存命中明细(5 类合并,与采集箱对齐)
+    // cacheStatus 为 null/undefined 时用全 miss 占位(让用户看到 5 类缓存字段布局)
     const results =
       cacheStatus && Array.isArray(cacheStatus.results) && cacheStatus.results.length > 0
         ? _CACHE_TYPE_LABELS.map((type) => cacheStatus.results.find((r) => r.type === type) || { type, hit: false })
         : _CACHE_TYPE_LABELS.map((type) => ({ type, hit: false }));
     const hitCount = results.filter((r) => r.hit).length;
     const total = results.length;
-    // 行1:缓存命中汇总
-    // 全命中:绿色 ✓ 缓存完整;部分命中:橙色 ◐ 缓存部分;全未命中:灰色 ○ 无缓存
+    // 单行布局:汇总图标 + 文案 + 3 类命中明细
+    //   全命中:绿色 ✓ 缓存完整;部分命中:橙色 ◐ 缓存部分;全未命中:灰色 ○ 无缓存
     let icon, color, text;
     if (hitCount === 0) {
       icon = '○';
@@ -237,18 +241,15 @@
       color = '#f59e0b';
       text = '缓存部分';
     }
-    const renderLine = (arr) =>
-      arr.map((r) => `<span class="jz-cache-${r.hit ? 'hit' : 'miss'}">${r.type}${r.hit ? '✓' : '✗'}</span>`).join(' ');
-    const line1 = renderLine(results.slice(0, 4));
-    const line2 = renderLine(results.slice(4, 8));
+    const detailHtml = results
+      .map((r) => `<span class="jz-cache-${r.hit ? 'hit' : 'miss'}">${r.type}${r.hit ? '✓' : '✗'}</span>`)
+      .join(' ');
     bar.innerHTML =
       `<div class="jz-collect-status-row jz-collect-status-row-1">` +
       `<span class="jz-collect-status-icon" style="color:${color}">${icon}</span>` +
       `<span class="jz-collect-status-text" style="color:${color}">${text}</span>` +
-      `<span class="jz-collect-status-reason"> · <span class="jz-cache-summary">${hitCount}/${total}</span></span>` +
-      `</div>` +
-      `<div class="jz-collect-status-row jz-collect-status-row-2">${line1}</div>` +
-      `<div class="jz-collect-status-row jz-collect-status-row-3">${line2}</div>`;
+      `<span class="jz-collect-status-reason"> · <span class="jz-cache-summary">${hitCount}/${total}</span> · ${detailHtml}</span>` +
+      `</div>`;
     bar.dataset.hitCount = String(hitCount);
     bar.dataset.total = String(total);
   }

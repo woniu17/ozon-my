@@ -387,8 +387,13 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
 
     // hasVideo=1:richMedia 缓存含 mp4(indexDao 已冗余 has_video,SQL 直接过滤)
     const filterHasVideo = req.query.hasVideo === '1' || req.query.hasVideo === 'true';
-    // minCacheHits=N:7 类缓存命中数 ≥ N(索引表已冗余 hit_count)
-    const minCacheHits = Math.max(0, Math.min(7, Number(req.query.minCacheHits) || 0));
+    // hasRichContent=1:richMedia 缓存含富内容(richContent 字段非空,11254 属性)
+    const filterHasRichContent = req.query.hasRichContent === '1' || req.query.hasRichContent === 'true';
+    // minCacheHits=N:3 类合并缓存命中数 ≥ N(dom + attribute + richMedia)
+    //   dom_hit = card OR detail(任一有采集)
+    //   attribute_hit = search AND bundle(都需要)
+    //   rich_media_hit = richMedia
+    const minCacheHits = Math.max(0, Math.min(3, Number(req.query.minCacheHits) || 0));
     // hasComments=1:rating_count > 0(索引表已冗余 rating_count)
     const filterHasComments = req.query.hasComments === '1' || req.query.hasComments === 'true';
     // 价格范围:priceMin/priceMax(闭区间,基于索引表冗余 price 字段)
@@ -410,6 +415,7 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       unlisted: filterUnlisted,
       hasComments: filterHasComments,
       hasVideo: filterHasVideo,
+      hasRichContent: filterHasRichContent,
       priceMin: Number.isFinite(priceMin) ? priceMin : undefined,
       priceMax: Number.isFinite(priceMax) ? priceMax : undefined,
       minCacheHits,
@@ -425,16 +431,26 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       primaryImage: r.primary_image || '',
       url: r.url || '',
       cacheHits: {
-        card: !!r.card_hit,
-        detail: !!r.detail_hit,
-        search: !!r.search_hit,
-        bundle: !!r.bundle_hit,
+        // 5 类合并命中位(采集状态:dom + attribute + richMedia + marketStats + followSell)
+        //   dom = card OR detail(任一有采集)
+        //   attribute = search AND bundle(都需要)
+        //   richMedia / marketStats / followSell 各自独立
+        dom: !!(r.card_hit || r.detail_hit),
+        attribute: !!(r.search_hit && r.bundle_hit),
         richMedia: !!r.rich_media_hit,
         marketStats: !!r.market_stats_hit,
         followSell: !!r.follow_sell_hit,
       },
-      hitCount: r.hit_count || 0,
+      // hitCount = 5 类合并命中数(0-5)
+      // 注:"数据完整"筛选(minCacheHits=3)只看 dom + attribute + richMedia 三类
+      hitCount:
+        (r.card_hit || r.detail_hit ? 1 : 0) +
+        (r.search_hit && r.bundle_hit ? 1 : 0) +
+        (r.rich_media_hit ? 1 : 0) +
+        (r.market_stats_hit ? 1 : 0) +
+        (r.follow_sell_hit ? 1 : 0),
       hasVideo: !!r.has_video,
+      hasRichContent: !!r.has_rich_content,
       marketPriceP50: r.market_price_p50 ?? null,
       competitorCount: r.competitor_count ?? null,
       // 评论数:索引表冗余 rating_count(数字,采集自 card DOM)。可能为 null
@@ -546,6 +562,126 @@ router.get('/admin/api/cache/:type/:sku', async (req, res, next) => {
     );
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] detail failed');
+    next(e);
+  }
+});
+
+// DELETE /admin/api/cache/sku/:sku — 删除单个 SKU 的全部缓存(5 类数据表 + 索引行)
+// 用于"SKU 数据管理"页单个删除:一次清掉该 SKU 在 dom/attribute/richMedia/marketStats/followSell
+// 5 张表的所有记录 + ozon_cache_index 索引行
+// 注:此路由必须注册在 /admin/api/cache/:type/:sku 之前,否则 :type 会匹配到 "sku"
+router.delete('/admin/api/cache/sku/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    if (!sku) return res.status(400).json({ error: 'sku required' });
+    let deletedTables = 0;
+    for (const type of CACHE_TYPES) {
+      try {
+        await getDaoByType(type).deleteBySku(sku);
+        deletedTables++;
+      } catch (e) {
+        logger.warn({ err: e.message, type, sku }, '[cache] deleteSkuAll: table delete failed');
+      }
+    }
+    try {
+      await daos.indexDao.deleteSku(sku);
+    } catch (e) {
+      logger.warn({ err: e.message, sku }, '[cache] deleteSkuAll: index delete failed');
+    }
+    return res.json(ok({ sku, deletedTables }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] deleteSkuAll failed');
+    next(e);
+  }
+});
+
+// POST /admin/api/cache/skus/delete — 批量删除 SKU 的全部缓存
+// body: { skus?: string[], filter?: { keyword?: string } }
+//   - skus 非空:按显式 SKU 数组删除(选中删除)
+//   - skus 为空且 filter 提供:按筛选条件删除(当前条件筛选删除,目前只支持 keyword)
+// 返回: { deletedCount, failed: [{sku, error}] }
+router.post('/admin/api/cache/skus/delete', async (req, res, next) => {
+  try {
+    const skus = Array.isArray(req.body?.skus)
+      ? req.body.skus.map((s) => String(s)).filter(Boolean)
+      : [];
+    const filter = req.body?.filter && typeof req.body.filter === 'object' ? req.body.filter : null;
+
+    // 按筛选条件解析目标 SKU 列表(目前 overview 只支持 keyword 过滤)
+    let targetSkus = skus;
+    if (targetSkus.length === 0 && filter) {
+      const keyword = String(filter.keyword || '').trim();
+      // 直接查 ozon_cache_index,与 overview 列表筛选条件保持一致
+      // 注:此处不复用 findOverviewList 的分页,直接拿全部匹配 SKU
+      // FTS5 + LIKE 双路径:与 findList 一致,避免纯 CJK keyword 走 FTS5 漏匹配
+      let rows;
+      if (keyword) {
+        // 检测 CJK:含 CJK 的 keyword 走 LIKE 路径(FTS5 unicode61 不分词中文)
+        const hasCjk = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(keyword);
+        if (hasCjk) {
+          rows = db
+            .prepare(`SELECT sku FROM ozon_cache_index WHERE searchable_text LIKE ? COLLATE NOCASE`)
+            .all(`%${keyword}%`)
+            .map((r) => r.sku);
+        } else {
+          // FTS5 转义(与 index-dao.js fts5Escape 一致):移除特殊字符 + 每词加前缀 *
+          const cleaned = keyword.replace(/["*()\-:]/g, ' ').trim();
+          const ftsExpr = cleaned
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((w) => `"${w}"*`)
+            .join(' ');
+          if (ftsExpr) {
+            rows = db
+              .prepare(
+                `SELECT DISTINCT sku FROM ozon_cache_index
+                 WHERE sku IN (SELECT sku FROM ozon_cache_index_fts WHERE ozon_cache_index_fts MATCH ?)`
+              )
+              .all(ftsExpr)
+              .map((r) => r.sku);
+          } else {
+            rows = db
+              .prepare(`SELECT sku FROM ozon_cache_index WHERE searchable_text LIKE ? COLLATE NOCASE`)
+              .all(`%${keyword}%`)
+              .map((r) => r.sku);
+          }
+        }
+      } else {
+        // 无 keyword:删除全部
+        rows = db.prepare(`SELECT sku FROM ozon_cache_index`).all().map((r) => r.sku);
+      }
+      targetSkus = rows.filter(Boolean);
+    }
+
+    if (targetSkus.length === 0) {
+      return res.json(ok({ deletedCount: 0, failed: [], total: 0 }));
+    }
+
+    let deletedCount = 0;
+    const failed = [];
+    for (const sku of targetSkus) {
+      try {
+        for (const type of CACHE_TYPES) {
+          try {
+            await getDaoByType(type).deleteBySku(sku);
+          } catch (e) {
+            // 单表失败不阻断,记录日志继续
+            logger.warn({ err: e.message, type, sku }, '[cache] batch delete: table delete failed');
+          }
+        }
+        try {
+          await daos.indexDao.deleteSku(sku);
+        } catch (e) {
+          logger.warn({ err: e.message, sku }, '[cache] batch delete: index delete failed');
+        }
+        deletedCount++;
+      } catch (e) {
+        failed.push({ sku, error: e.message || String(e) });
+      }
+    }
+    return res.json(ok({ deletedCount, failed, total: targetSkus.length }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] batch delete failed');
     next(e);
   }
 });

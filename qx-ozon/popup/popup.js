@@ -1062,40 +1062,13 @@
     });
   } catch {}
 
-  // ─── 同步 IndexedDB 缓存到 MongoDB ───────────────────────
-  // 手动触发,立即扫描 L1 中所有 l2Synced=false 记录,补写到 ERP MongoDB。
-  // 用于定时任务(CACHE_SYNC_ALARM 5 分钟周期)之外需要即时同步的场景。
+  // ─── 缓存同步按钮(已废弃) ───────────────────────
+  // 取消 L1 IndexedDB 后,所有缓存直接入库 SQLite,无需手动同步。
+  // 保留按钮但点击后提示"已自动入库",避免用户困惑。
   const cacheSyncBtn = document.getElementById('cache-sync-btn');
   const cacheSyncLabel = document.getElementById('cache-sync-label');
-  cacheSyncBtn?.addEventListener('click', async () => {
-    if (cacheSyncBtn.disabled) return;
-    cacheSyncBtn.disabled = true;
-    cacheSyncLabel.textContent = '同步中…';
-    try {
-      const resp = await sendMessage({ action: 'syncAllCacheToL2' });
-      if (resp?.ok) {
-        const { search = 0, bundle = 0 } = resp.data || {};
-        const total = search + bundle;
-        cacheSyncLabel.textContent = total > 0 ? `已同步 ${total}` : '已是最新';
-        setTimeout(() => {
-          cacheSyncLabel.textContent = '同步缓存(8 类)';
-        }, 2500);
-      } else {
-        cacheSyncLabel.textContent = '同步失败';
-        setTimeout(() => {
-          cacheSyncLabel.textContent = '同步缓存(8 类)';
-        }, 2500);
-      }
-    } catch (e) {
-      cacheSyncLabel.textContent = '同步失败';
-      setTimeout(() => {
-        cacheSyncLabel.textContent = '同步缓存(8 类)';
-      }, 2500);
-      console.warn('[popup] cache sync failed:', e?.message);
-    } finally {
-      cacheSyncBtn.disabled = false;
-    }
-  });
+  if (cacheSyncLabel) cacheSyncLabel.textContent = '已自动入库';
+  if (cacheSyncBtn) cacheSyncBtn.disabled = true;
 
   // seller.ozon.ru 跳转/登录:复用 service-worker 的 openSellerPortal(复用现有
   // seller tab 或新开 /app/products;未登录时 Ozon 自动转登录页)。点完弹窗通常因

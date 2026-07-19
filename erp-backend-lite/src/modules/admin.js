@@ -254,9 +254,16 @@ router.get('/admin/api/listing-records', (req, res, next) => {
       where.push('via_portal = 0');
     }
     if (req.query.keyword) {
-      where.push('(local_task_id LIKE ? OR ozon_task_id LIKE ? OR items_preview LIKE ?)');
+      // keyword 同时匹配:任务ID / Ozon Task ID / items_preview / items 表的 offer_id(跟卖SKU)
+      // offer_id 走子查询 EXISTS,避免同一任务因多个匹配项重复出现
+      where.push(
+        `(local_task_id LIKE ? OR ozon_task_id LIKE ? OR items_preview LIKE ?
+          OR EXISTS (SELECT 1 FROM follow_sell_task_items i
+                     WHERE i.local_task_id = follow_sell_tasks.local_task_id
+                       AND i.offer_id LIKE ?))`
+      );
       const kw = '%' + String(req.query.keyword) + '%';
-      params.push(kw, kw, kw);
+      params.push(kw, kw, kw, kw);
     }
     const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
 
@@ -269,10 +276,21 @@ router.get('/admin/api/listing-records', (req, res, next) => {
     let countMap = {};
     if (localIds.length > 0) {
       const placeholders = localIds.map(() => '?').join(',');
+      // 按 (local_task_id, effective_status) 汇总:
+      //   imported + has_error=1 → 视为 failed(审核拒绝)
+      //   imported + has_error=0 → imported
+      //   其余按原 status
       const cntRows = db
         .prepare(
-          `SELECT local_task_id, status, COUNT(*) as n FROM follow_sell_task_items
-           WHERE local_task_id IN (${placeholders}) GROUP BY local_task_id, status`
+          `SELECT local_task_id,
+             CASE
+               WHEN status='imported' AND has_error=1 THEN 'failed'
+               ELSE status
+             END AS eff_status,
+             COUNT(*) as n
+           FROM follow_sell_task_items
+           WHERE local_task_id IN (${placeholders})
+           GROUP BY local_task_id, eff_status`
         )
         .all(...localIds);
       for (const r of cntRows) {
@@ -280,9 +298,9 @@ router.get('/admin/api/listing-records', (req, res, next) => {
           countMap[r.local_task_id] = { imported: 0, failed: 0, pending: 0, skipped: 0 };
         }
         const bucket = countMap[r.local_task_id];
-        if (r.status === 'imported') bucket.imported = r.n;
-        else if (r.status === 'failed') bucket.failed = r.n;
-        else if (r.status === 'skipped') bucket.skipped = r.n;
+        if (r.eff_status === 'imported') bucket.imported = r.n;
+        else if (r.eff_status === 'failed') bucket.failed = r.n;
+        else if (r.eff_status === 'skipped') bucket.skipped = r.n;
         else bucket.pending = r.n;
       }
     }
@@ -350,6 +368,8 @@ router.get('/admin/api/listing-records/:localTaskId', (req, res, next) => {
           price: r.price,
           productId: r.product_id,
           status: r.status,
+          hasError: !!r.has_error,
+          hasWarning: !!r.has_warning,
           errors: safeParseErrors(r.errors),
           createdAt: r.created_at,
           updatedAt: r.updated_at,

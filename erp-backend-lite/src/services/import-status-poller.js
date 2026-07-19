@@ -11,7 +11,7 @@
 import { db } from '../db/index.js';
 import config from '../config/index.js';
 import * as opi from './ozon-opi.js';
-import { upsertTaskItems, summarizeTaskStatus } from '../modules/products.js';
+import { upsertTaskItems, summarizeTaskStatus, saveOpiResponse } from '../modules/products.js';
 import logger from '../middleware/log.js';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟
@@ -77,6 +77,8 @@ async function scanOnce() {
 
     try {
       const info = await opi.productImportInfo(store, row.ozon_task_id);
+      // 保存 OPI 响应(覆盖式),供「上架记录-详情」展示
+      saveOpiResponse(row.local_task_id, row.store_id, info);
       const items = (info?.result?.items || []).map((it) => ({
         offer_id: it.offer_id,
         product_id: it.product_id,

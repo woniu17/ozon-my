@@ -21,20 +21,28 @@ const router = Router();
 
 // ── 内部工具:写入/更新上架记录明细 ───────────────────────
 // upsert:已存在则更新 status/product_id/errors,不存在则插入
+// 同时按 errors[].level 计算 has_error / has_warning:
+//   - has_error=1:商品虽 imported 但审核被拒(DESCRIPTION_DECLINE 等),实质失败
+//   - has_warning=1:有警告但不影响上架(marking_auto_corrected 等)
 export function upsertTaskItems(localTaskId, items) {
   if (!Array.isArray(items) || items.length === 0) return;
   const stmt = db.prepare(`
-    INSERT INTO follow_sell_task_items (local_task_id, offer_id, name, price, product_id, status, errors)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO follow_sell_task_items (local_task_id, offer_id, name, price, product_id, status, errors, has_error, has_warning)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(local_task_id, offer_id) DO UPDATE SET
       product_id = excluded.product_id,
       status = excluded.status,
       errors = excluded.errors,
+      has_error = excluded.has_error,
+      has_warning = excluded.has_warning,
       updated_at = datetime('now')
   `);
   for (const it of items) {
     const offerId = String(it.offer_id || '');
     if (!offerId) continue;
+    const errs = Array.isArray(it.errors) ? it.errors : [];
+    const hasError = errs.some((e) => String(e.level || '').toLowerCase() === 'error') ? 1 : 0;
+    const hasWarning = errs.some((e) => String(e.level || '').toLowerCase() === 'warning') ? 1 : 0;
     stmt.run(
       localTaskId,
       offerId,
@@ -42,7 +50,9 @@ export function upsertTaskItems(localTaskId, items) {
       it.price || null,
       it.product_id ? String(it.product_id) : null,
       it.status || 'pending',
-      Array.isArray(it.errors) && it.errors.length > 0 ? JSON.stringify(it.errors) : null
+      errs.length > 0 ? JSON.stringify(errs) : null,
+      hasError,
+      hasWarning
     );
   }
   // fire-and-forget:刷新 ozon_cache_index.listed 字段
@@ -53,11 +63,17 @@ export function upsertTaskItems(localTaskId, items) {
 }
 
 // 按 items 状态汇总任务状态
+// 判断规则:
+//   - imported + has_error=1 → 视为审核拒绝(计入 failed)
+//   - imported + has_error=0 → 真正成功(计入 imported)
+//   - failed / pending / skipped 按原状态
 export function summarizeTaskStatus(localTaskId) {
-  const rows = db.prepare(`SELECT status FROM follow_sell_task_items WHERE local_task_id=?`).all(localTaskId);
+  const rows = db
+    .prepare(`SELECT status, has_error FROM follow_sell_task_items WHERE local_task_id=?`)
+    .all(localTaskId);
   if (rows.length === 0) return null;
-  const imported = rows.filter((r) => r.status === 'imported').length;
-  const failed = rows.filter((r) => r.status === 'failed').length;
+  const imported = rows.filter((r) => r.status === 'imported' && !r.has_error).length;
+  const failed = rows.filter((r) => r.status === 'failed' || (r.status === 'imported' && r.has_error)).length;
   const pending = rows.filter((r) => r.status === 'pending' || r.status === 'skipped').length;
   let status;
   if (pending > 0) status = 'PROCESSING';
@@ -69,6 +85,24 @@ export function summarizeTaskStatus(localTaskId) {
     `UPDATE follow_sell_tasks SET status=?, completed_at=datetime('now') WHERE local_task_id=? AND status NOT IN ('SUCCESS','FAILED')`
   ).run(status, localTaskId);
   return { status, imported, failed, pending, total: rows.length };
+}
+
+// 保存通过 OPI 接口查询到的上架任务响应(/v1/product/import/info)
+// 覆盖式写入:每次只保留最新一条 opi_response(避免轮询累积导致表膨胀)
+// 供前端「上架记录-详情」展示「通过OPI接口查询到的上架任务响应信息」
+export function saveOpiResponse(localTaskId, storeId, response) {
+  if (!localTaskId) return;
+  db.exec('BEGIN');
+  try {
+    db.prepare(`DELETE FROM follow_sell_task_payloads WHERE local_task_id=? AND stage='opi_response'`).run(localTaskId);
+    db.prepare(
+      `INSERT INTO follow_sell_task_payloads (local_task_id, store_id, stage, payload) VALUES (?, ?, 'opi_response', ?)`
+    ).run(localTaskId, storeId || null, JSON.stringify(response ?? null));
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    logger.warn({ localTaskId, err: e.message }, 'saveOpiResponse failed');
+  }
 }
 
 // ⭐ POST /ozon/products/prepare-bundle-items (viaPortal=true 第 1 步)
@@ -143,6 +177,16 @@ router.post('/ozon/products/import', storeGuard, async (req, res, next) => {
       } catch (e) {
         logger.warn({ localTaskId, err: e.message }, 'backup transformed payload failed');
       }
+      // 备份最终发给 OPI 的请求体(opi_request):经过 toOpiItem 转换为 OPI v3 schema 的最终形态
+      // 与 transformed 区别:transformed 是 transformItemForPortal 输出,opi_request 是 toOpiItem 输出
+      try {
+        const opiRequestPayload = { items: transformedItems.map(opi.toOpiItem) };
+        db.prepare(
+          `INSERT INTO follow_sell_task_payloads (local_task_id, store_id, stage, payload) VALUES (?, ?, 'opi_request', ?)`
+        ).run(localTaskId, req.storeId, JSON.stringify(opiRequestPayload));
+      } catch (e) {
+        logger.warn({ localTaskId, err: e.message }, 'backup opi_request payload failed');
+      }
       const r = await opi.productImport(req.store, transformedItems);
       ozonTaskId = r?.result?.task_id ? String(r.result.task_id) : null;
     } catch (e) {
@@ -191,6 +235,8 @@ router.post('/ozon/products/import/status', storeGuard, async (req, res, next) =
     if (row.ozon_task_id && row.status !== 'SUCCESS' && row.status !== 'FAILED') {
       try {
         const info = await opi.productImportInfo(req.store, row.ozon_task_id);
+        // 保存 OPI 响应(覆盖式),供「上架记录-详情」展示
+        saveOpiResponse(row.local_task_id, row.store_id, info);
         const items = info?.result?.items || [];
         const processed = items.filter((x) => x.status === 'imported').length;
         const failed = items.filter((x) => x.errors?.length).length;
@@ -371,6 +417,8 @@ router.post('/ozon/products/import-info', storeGuard, async (req, res, next) => 
       return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'task_id 必填'));
     }
     const r = await opi.productImportInfo(req.store, task_id);
+    // 保存 OPI 响应(覆盖式),供「上架记录-详情」展示
+    if (local_task_id) saveOpiResponse(local_task_id, req.storeId, r);
     const items = (r?.result?.items || []).map((it) => ({
       offer_id: it.offer_id,
       product_id: it.product_id,

@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS follow_sell_task_items (
   product_id     TEXT,
   status         TEXT DEFAULT 'pending', -- pending/imported/failed/skipped
   errors         TEXT,                  -- JSON 数组
+  -- 按 errors[].level 计算:有 error 视为审核拒绝(失败),有 warning 视为有警告但成功
+  -- 用于 summarizeTaskStatus:imported + has_error=1 计入失败数
+  has_error      INTEGER DEFAULT 0,
+  has_warning    INTEGER DEFAULT 0,
   -- 库存同步状态:0=未设/待处理, 1=已成功设置, 2=失败/放弃
   -- stock_attempts:OPI /v2/products/stocks 失败重试次数,≥5 不再重试
   stock_set      INTEGER DEFAULT 0,
@@ -148,12 +152,13 @@ CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action);
 
 -- 上架请求体备份:用于排查 OPI /v3/product/import 提交的完整数据
--- 记录转换前(插件原始 message.items)和转换后(transformItemForPortal 输出的 OPI v3 格式)
+-- 记录转换前(插件原始 message.items)、转换后(transformItemForPortal 输出)、
+-- 最终发给 OPI 的请求体(toOpiItem 输出)、OPI 查询响应(/v1/product/import/info 返回)
 CREATE TABLE IF NOT EXISTS follow_sell_task_payloads (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   local_task_id  TEXT NOT NULL,
   store_id       TEXT,
-  stage          TEXT NOT NULL,    -- raw(插件原始) / transformed(转换后) / opi_request(最终提交OPI)
+  stage          TEXT NOT NULL,    -- raw(插件原始) / transformed(转换后) / opi_request(最终提交OPI) / opi_response(OPI查询响应,覆盖式)
   payload        TEXT NOT NULL,    -- JSON 字符串
   created_at     TEXT DEFAULT (datetime('now'))
 );
@@ -203,6 +208,7 @@ CREATE TABLE IF NOT EXISTS ozon_cache_index (
   url                TEXT,                -- dom: card.url
   rating_count       INTEGER,             -- dom: card.ratingCount
   has_video          INTEGER DEFAULT 0,   -- richMedia: !!mp4
+  has_rich_content   INTEGER DEFAULT 0,   -- richMedia: !!richContent(富内容 11254 是否有内容)
   market_price_p50   TEXT,                -- marketStats: priceP50
   competitor_count   INTEGER,             -- followSell: sellers.length
 
@@ -224,7 +230,9 @@ CREATE INDEX IF NOT EXISTS idx_ci_listed       ON ozon_cache_index(listed);
 CREATE INDEX IF NOT EXISTS idx_ci_seller       ON ozon_cache_index(seller_slug);
 CREATE INDEX IF NOT EXISTS idx_ci_rating       ON ozon_cache_index(rating_count);
 CREATE INDEX IF NOT EXISTS idx_ci_last_fetched ON ozon_cache_index(last_fetched_at DESC);
-CREATE INDEX IF NOT EXISTS idx_ci_price_value  ON ozon_cache_index(price_value);
+-- 注:idx_ci_price_value 在 db/index.js 的 ensureCacheIndexFtsAndPriceValue 中创建,
+-- 因为旧库 ozon_cache_index 表已存在(CREATE TABLE IF NOT EXISTS 不会添加 price_value 列),
+-- 需先 ALTER TABLE 补列再建索引,否则会报 "no such column: price_value"
 
 -- ── FTS5 全文搜索虚拟表(外部内容表,与 ozon_cache_index 同步) ──────────────
 -- 替代原 idx_ci_fts(普通 B-tree 索引对 LIKE '%keyword%' 无效)

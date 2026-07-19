@@ -4,12 +4,13 @@ import {
   getCacheOverview,
   getOpiPreview,
   getCacheByType,
-  getListedRecords,
   getStoreClassificationList,
   updateStoreClassification,
   deleteStoreClassification,
   getStoreSkuList,
   deleteStoreSku,
+  deleteSkuAll,
+  batchDeleteSkus,
 } from '../api/cache.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
@@ -30,7 +31,18 @@ const state = reactive({
   loading: false,
   page: 1,
   pageSize: 50,
+  deleting: false, // 批量/单个删除进行中(禁用按钮)
 });
+
+// 当前页选中的 SKU 集合(Set 便于增删查;切换页/搜索时清空)
+const selectedSkus = ref(new Set());
+const allChecked = computed(
+  () => state.items.length > 0 && state.items.every((it) => selectedSkus.value.has(it.sku))
+);
+const someChecked = computed(
+  () => state.items.some((it) => selectedSkus.value.has(it.sku)) && !allChecked.value
+);
+const selectedCount = computed(() => selectedSkus.value.size);
 
 // 并发请求序号:用户快速翻页/搜索时,旧请求的响应应被忽略,避免旧数据覆盖新状态
 let loadListReqId = 0;
@@ -46,11 +58,14 @@ async function loadList() {
     if (myId !== loadListReqId) return; // 已被新请求取代,丢弃旧响应
     state.items = data?.items || [];
     state.total = data?.total || 0;
+    // 翻页/搜索后清空选中(选中集合仅限当前页有效)
+    selectedSkus.value = new Set();
   } catch (err) {
     if (myId !== loadListReqId) return;
     show(err.message || String(err), 'error');
     state.items = [];
     state.total = 0;
+    selectedSkus.value = new Set();
   } finally {
     if (myId === loadListReqId) state.loading = false;
   }
@@ -70,12 +85,100 @@ function switchType(t) {
   state.type = t;
   state.page = 1;
   state.keyword = '';
+  selectedSkus.value = new Set();
   if (t === 'store-classification') {
     loadStoreClassifications();
   } else if (t === 'store-sku') {
     loadStoreSkus();
   } else {
     loadList();
+  }
+}
+
+// ── SKU 多选与删除 ─────────────────────────────────────────
+function toggleRow(sku, checked) {
+  const next = new Set(selectedSkus.value);
+  if (checked) next.add(sku);
+  else next.delete(sku);
+  selectedSkus.value = next;
+}
+
+function toggleAll(checked) {
+  const next = new Set(selectedSkus.value);
+  if (checked) {
+    for (const it of state.items) next.add(it.sku);
+  } else {
+    for (const it of state.items) next.delete(it.sku);
+  }
+  selectedSkus.value = next;
+}
+
+// 单个删除:删除该 SKU 的 5 类缓存 + 索引行
+async function deleteOne(it) {
+  if (!it?.sku) return;
+  if (!confirm(`确认删除 SKU ${it.sku} 的全部缓存(dom/attribute/richMedia/marketStats/followSell + 索引)?`)) return;
+  state.deleting = true;
+  try {
+    await deleteSkuAll(it.sku);
+    show(`已删除 SKU ${it.sku}`, 'success');
+    // 从选中集合中移除(若存在)
+    if (selectedSkus.value.has(it.sku)) {
+      const next = new Set(selectedSkus.value);
+      next.delete(it.sku);
+      selectedSkus.value = next;
+    }
+    await loadList();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    state.deleting = false;
+  }
+}
+
+// 选中删除:批量删除当前选中的 SKU
+async function deleteSelected() {
+  const skus = Array.from(selectedSkus.value);
+  if (!skus.length) {
+    show('请先选择要删除的 SKU', 'error');
+    return;
+  }
+  if (!confirm(`确认删除选中的 ${skus.length} 个 SKU 的全部缓存?`)) return;
+  state.deleting = true;
+  try {
+    const r = await batchDeleteSkus({ skus });
+    const ok2 = r?.deletedCount || 0;
+    const fail = r?.failed?.length || 0;
+    show(`已删除 ${ok2}/${skus.length} 个 SKU${fail ? `,${fail} 个失败` : ''}`, fail ? 'error' : 'success');
+    selectedSkus.value = new Set();
+    await loadList();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    state.deleting = false;
+  }
+}
+
+// 按当前筛选条件删除:删除所有匹配 keyword 的 SKU(不限当前页)
+async function deleteByFilter() {
+  const kw = state.keyword.trim();
+  const tip = kw
+    ? `确认删除所有匹配关键词 "${kw}" 的 SKU 缓存?(不限当前页,可能数量较多)`
+    : '确认删除所有 SKU 缓存?(未输入关键词,将清空全部)';
+  if (!confirm(tip)) return;
+  state.deleting = true;
+  try {
+    const r = await batchDeleteSkus({ filter: { keyword: kw } });
+    const ok2 = r?.deletedCount || 0;
+    const fail = r?.failed?.length || 0;
+    const total = r?.total || 0;
+    show(`已删除 ${ok2}/${total} 个 SKU${fail ? `,${fail} 个失败` : ''}`, fail ? 'error' : 'success');
+    selectedSkus.value = new Set();
+    state.page = 1;
+    await loadList();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    state.deleting = false;
   }
 }
 
@@ -117,11 +220,18 @@ function isStale(it, type) {
     const age = Date.now() - new Date(entry.fetchedAt).getTime();
     return age > 24 * 60 * 60 * 1000;
   }
+  // followSell:基于 fetchedAt 超过 4h 判定 stale(与后端 FOLLOW_SELL_STALE_MS 对齐)
+  if (type === 'followSell') {
+    const entry = it.followSell;
+    if (!entry || !entry.fetchedAt) return false;
+    const age = Date.now() - new Date(entry.fetchedAt).getTime();
+    return age > 4 * 60 * 60 * 1000;
+  }
   return false;
 }
 
 // 命中徽章渲染
-// type: 'dom' | 'attribute' | 'richMedia' | 'marketStats' | 'listed'
+// type: 'dom' | 'attribute' | 'richMedia' | 'marketStats' | 'followSell'
 function hitBadgeClass(it, type) {
   let hit = false;
   let stale = false;
@@ -134,8 +244,9 @@ function hitBadgeClass(it, type) {
   } else if (type === 'marketStats') {
     hit = !!it.marketStats;
     stale = isStale(it, 'marketStats');
-  } else if (type === 'listed') {
-    hit = !!it.listed;
+  } else if (type === 'followSell') {
+    hit = !!it.followSell;
+    stale = isStale(it, 'followSell');
   }
   if (!hit) return 'tag tag-mute';
   return stale ? 'tag tag-warn' : 'tag tag-ok';
@@ -157,8 +268,10 @@ function hitBadgeText(it, type) {
     hit = !!it.marketStats;
     stale = isStale(it, 'marketStats');
     fetchedAt = it.marketStats?.fetchedAt;
-  } else if (type === 'listed') {
-    hit = !!it.listed;
+  } else if (type === 'followSell') {
+    hit = !!it.followSell;
+    stale = isStale(it, 'followSell');
+    fetchedAt = it.followSell?.fetchedAt;
   }
   if (!hit) return '—';
   if (stale) return '过期';
@@ -170,14 +283,14 @@ function hitBadgeTitle(it, type) {
   else if (type === 'attribute') fetchedAt = attributeFetchedAt(it);
   else if (type === 'richMedia') fetchedAt = it.richMedia?.fetchedAt;
   else if (type === 'marketStats') fetchedAt = it.marketStats?.fetchedAt;
-  else if (type === 'listed') return it.listed ? '已提交跟卖任务' : '未跟卖';
+  else if (type === 'followSell') fetchedAt = it.followSell?.fetchedAt;
   return fetchedAt ? `抓取于 ${fmtTime(fetchedAt)}` : '';
 }
 
-// ── 详情弹窗(按 type 调用 /ozon/cache/{type}/:sku 或 /admin/api/cache/listed/:sku) ────
+// ── 详情弹窗(按 type 调用 /ozon/cache/{type}/:sku,5 类缓存统一接口) ────
 const detailOpen = ref(false);
 const detailLoading = ref(false);
-const detailType = ref(''); // 'dom' | 'attribute' | 'richMedia' | 'marketStats' | 'listed'
+const detailType = ref(''); // 'dom' | 'attribute' | 'richMedia' | 'marketStats' | 'followSell'
 const detailSku = ref('');
 const detailData = ref(null); // 原始响应
 const detailTitle = computed(() => `详情 · ${detailType.value} · ${detailSku.value}`);
@@ -187,7 +300,7 @@ const TYPE_LABELS = {
   attribute: 'Attribute(search + bundle 合并)',
   richMedia: 'richMedia(富媒体)',
   marketStats: 'marketStats(市场统计)',
-  listed: '已跟卖(跟卖任务记录)',
+  followSell: '跟卖列表(采集到的跟卖数据)',
 };
 
 // 详情弹窗并发序号:用户快速切换不同 SKU/类型时,旧请求响应应被忽略
@@ -202,13 +315,8 @@ async function openDetail(it, type) {
   detailSku.value = it.sku;
   detailData.value = null;
   try {
-    let data;
-    if (type === 'listed') {
-      // 跟卖记录走 /admin/api/cache/listed/:sku
-      data = await getListedRecords(it.sku);
-    } else {
-      data = await getCacheByType(type, it.sku);
-    }
+    // 5 类缓存统一走 /ozon/cache/{type}/:sku
+    const data = await getCacheByType(type, it.sku);
     if (myId !== openDetailReqId) return; // 已被新请求取代,丢弃旧响应
     detailData.value = data;
   } catch (err) {
@@ -244,9 +352,17 @@ function detailMetaItems() {
       items.push({ label: 'L2 同步', value: d.l2Synced ? '已同步' : '待同步' });
     if (d.stale !== undefined)
       items.push({ label: '数据状态', value: d.stale ? '已过期' : '新鲜' });
-  } else if (detailType.value === 'listed') {
-    const count = d.items?.length || 0;
-    items.push({ label: '跟卖记录数', value: String(count) });
+  } else if (detailType.value === 'followSell') {
+    if (d.fetchedAt) items.push({ label: '抓取时间', value: fmtTime(d.fetchedAt) });
+    if (d.l2Synced !== undefined)
+      items.push({ label: 'L2 同步', value: d.l2Synced ? '已同步' : '待同步' });
+    if (d.stale !== undefined)
+      items.push({ label: '数据状态', value: d.stale ? '已过期(>4h)' : '新鲜' });
+    // 跟卖列表数据可能有 sellers / competitors 字段
+    const sellers = d.data?.sellers || d.data?.competitors;
+    if (Array.isArray(sellers)) {
+      items.push({ label: '跟卖卖家数', value: String(sellers.length) });
+    }
   }
   return items;
 }
@@ -266,23 +382,10 @@ function detailJsonNodes() {
     if (d.data) nodes.push({ key: 'data', data: d.data });
   } else if (detailType.value === 'marketStats') {
     if (d.data) nodes.push({ key: 'data', data: d.data });
+  } else if (detailType.value === 'followSell') {
+    if (d.data) nodes.push({ key: 'data', data: d.data });
   }
-  // listed 类型不返回 JsonTree 节点,改用专门表格展示
   return nodes;
-}
-
-// listed 详情的跟卖记录列表
-function listedRecords() {
-  if (detailType.value !== 'listed' || !detailData.value) return [];
-  return detailData.value.items || [];
-}
-
-// 跟卖记录状态徽章
-function listedStatusBadge(status) {
-  if (status === 'imported') return 'tag tag-ok';
-  if (status === 'failed') return 'tag tag-err';
-  if (status === 'pending' || status === 'skipped') return 'tag tag-mute';
-  return 'tag tag-mute';
 }
 
 // ── OPI 预览 ───────────────────────────────────────────────
@@ -512,6 +615,26 @@ onMounted(() => {
           @keydown.enter="search"
         />
         <button class="btn btn-primary" @click="search">查询</button>
+        <span style="flex: 1"></span>
+        <span v-if="selectedCount" class="muted" style="font-size: 12px; align-self: center">
+          已选 {{ selectedCount }} 个
+        </span>
+        <button
+          class="btn btn-sm btn-ghost"
+          :disabled="state.deleting || !selectedCount"
+          :title="'删除当前选中的 SKU 缓存'"
+          @click="deleteSelected"
+        >
+          选中删除
+        </button>
+        <button
+          class="btn btn-sm btn-danger"
+          :disabled="state.deleting"
+          :title="'按当前关键词筛选删除所有匹配 SKU 缓存(不限当前页)'"
+          @click="deleteByFilter"
+        >
+          按筛选删除
+        </button>
       </div>
 
       <!-- 列表 -->
@@ -519,23 +642,39 @@ onMounted(() => {
         <table class="data-table overview-table">
           <thead>
             <tr>
+              <th class="col-check">
+                <input
+                  type="checkbox"
+                  :checked="allChecked"
+                  :indeterminate.prop="someChecked"
+                  @change="toggleAll($event.target.checked)"
+                  title="全选/反选当前页"
+                />
+              </th>
               <th>SKU</th>
               <th title="card + detail 合并表(DOM 解析字段)">Dom</th>
               <th title="search + bundle 合并表(Seller Portal 属性)">Attribute</th>
               <th title="富媒体缓存(图册/视频/富内容/fields)">richMedia</th>
               <th title="市场统计缓存(stale 24h)">marketStats</th>
-              <th title="是否已提交过跟卖任务(基于 follow_sell_task_items)">已跟卖</th>
+              <th title="点击查看采集到的跟卖列表数据(基于 followSell 缓存)">跟卖列表</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="state.loading && !state.items.length">
-              <td colspan="7" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+              <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中...</td>
             </tr>
             <tr v-else-if="!state.items.length">
-              <td colspan="7" class="empty">暂无数据</td>
+              <td colspan="8" class="empty">暂无数据</td>
             </tr>
             <tr v-for="it in state.items" :key="it.sku">
+              <td class="col-check">
+                <input
+                  type="checkbox"
+                  :checked="selectedSkus.has(it.sku)"
+                  @change="toggleRow(it.sku, $event.target.checked)"
+                />
+              </td>
               <td class="col-sku">
                 <a :href="OZON_PDP_PREFIX + it.sku + '/'" target="_blank" rel="noopener" class="sku-link">
                   {{ it.sku }}
@@ -571,13 +710,20 @@ onMounted(() => {
               </td>
               <td
                 class="cell-clickable"
-                :title="hitBadgeTitle(it, 'listed')"
-                @click="openDetail(it, 'listed')"
+                :title="hitBadgeTitle(it, 'followSell')"
+                @click="openDetail(it, 'followSell')"
               >
-                <span :class="hitBadgeClass(it, 'listed')">{{ hitBadgeText(it, 'listed') }}</span>
+                <span :class="hitBadgeClass(it, 'followSell')">{{ hitBadgeText(it, 'followSell') }}</span>
               </td>
               <td class="row-actions">
                 <button class="btn btn-sm btn-primary" @click="openOpiPreview(it.sku)">OPI 预览</button>
+                <button
+                  class="btn btn-sm btn-danger"
+                  :disabled="state.deleting"
+                  @click="deleteOne(it)"
+                >
+                  删除
+                </button>
               </td>
             </tr>
           </tbody>
@@ -732,46 +878,8 @@ onMounted(() => {
             <b>{{ m.label }}:</b> {{ m.value }}
           </div>
         </div>
-        <!-- listed 类型:展示跟卖记录表格 -->
-        <div v-if="detailType === 'listed'" class="listed-records">
-          <table v-if="listedRecords().length" class="data-table listed-table">
-            <thead>
-              <tr>
-                <th>Offer ID</th>
-                <th>店铺</th>
-                <th>商品名</th>
-                <th>价格</th>
-                <th>Product ID</th>
-                <th>状态</th>
-                <th>库存</th>
-                <th>提交时间</th>
-                <th>任务状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="r in listedRecords()" :key="r.id">
-                <td class="col-sku">{{ r.offerId }}</td>
-                <td>{{ r.storeId || '—' }}</td>
-                <td class="col-name">{{ r.name || '—' }}</td>
-                <td>{{ r.price || '—' }}</td>
-                <td>{{ r.productId || '—' }}</td>
-                <td>
-                  <span :class="listedStatusBadge(r.status)">{{ r.status }}</span>
-                </td>
-                <td>
-                  <span v-if="r.stockSet === 1" class="tag tag-ok">已设置</span>
-                  <span v-else-if="r.stockSet === 2" class="tag tag-err">失败</span>
-                  <span v-else class="tag tag-mute">待处理</span>
-                </td>
-                <td class="col-time">{{ fmtTime(r.itemCreatedAt) }}</td>
-                <td>{{ r.taskStatus || '—' }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-else class="muted">无跟卖记录</p>
-        </div>
-        <!-- 其他类型:展示 JsonTree -->
-        <div v-else class="cache-detail-data">
+        <!-- 所有 5 类缓存统一展示 JsonTree(dom/attribute/richMedia/marketStats/followSell) -->
+        <div class="cache-detail-data">
           <div v-for="(node, i) in detailJsonNodes()" :key="i" class="json-block">
             <h3>{{ node.key }}</h3>
             <JsonTree :data="node.data" :default-expand-level="2" :root-key="node.key" />
@@ -895,6 +1003,14 @@ onMounted(() => {
 .overview-table .col-sku {
   text-align: left;
 }
+.overview-table .col-check {
+  width: 36px;
+  text-align: center;
+}
+.overview-table .col-check input[type='checkbox'] {
+  margin: 0;
+  cursor: pointer;
+}
 .tag-mute {
   background: #f3f4f6;
   color: #9ca3af;
@@ -943,26 +1059,6 @@ onMounted(() => {
   border-bottom: 1px solid var(--border);
 }
 
-/* listed 跟卖记录表格 */
-.listed-records .listed-table {
-  font-size: 12px;
-}
-.listed-records .listed-table th,
-.listed-records .listed-table td {
-  padding: 6px 8px;
-  text-align: left;
-  vertical-align: top;
-}
-.listed-records .col-name {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.listed-records .col-time {
-  white-space: nowrap;
-  color: var(--muted);
-}
 .tag-err {
   background: #fef2f2;
   color: #b91c1c;

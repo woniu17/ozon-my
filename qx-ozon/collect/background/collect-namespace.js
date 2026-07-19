@@ -22,9 +22,7 @@
   const C = {
     // ── 采集运行时状态(原 IIFE 内的 let/const 变量)──
     state: {
-      // IDB
-      idbPromise: null,
-      cacheSyncRunning: false,
+      // 注:idbPromise / cacheSyncRunning 已废弃(取消 L1 IndexedDB 后不再需要)
 
       // 队列
       consuming: false,

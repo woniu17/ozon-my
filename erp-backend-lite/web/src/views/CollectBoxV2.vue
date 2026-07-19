@@ -34,10 +34,11 @@ const state = reactive({
   pageSize: 20,
   filters: {
     keyword: '',
-    fullData: false, // 数据完整:7 类缓存命中 ≥5
+    fullData: false, // 数据完整:dom + attribute + richMedia 三类全命中(marketStats/followSell 不算)
     sellerSlug: '',
     unlisted: false,
     hasComments: false,
+    hasRichContent: false, // 只看有富内容(richMedia.richContent 非空)
     priceMin: '', // 价格范围(闭区间,空字符串=不限)
     priceMax: '',
     // 用上次的筛选条件覆盖初值
@@ -53,10 +54,11 @@ async function loadList() {
       pageSize: state.pageSize,
       keyword: state.filters.keyword.trim(),
     };
-    if (state.filters.fullData) params.minCacheHits = '5';
+    if (state.filters.fullData) params.minCacheHits = '3';
     if (state.filters.sellerSlug) params.sellerSlug = state.filters.sellerSlug;
     if (state.filters.unlisted) params.unlisted = '1';
     if (state.filters.hasComments) params.hasComments = '1';
+    if (state.filters.hasRichContent) params.hasRichContent = '1';
     if (state.filters.priceMin !== '') params.priceMin = state.filters.priceMin;
     if (state.filters.priceMax !== '') params.priceMax = state.filters.priceMax;
     const data = await getCollectBoxV2FromCache(params);
@@ -94,13 +96,15 @@ watch(
   { deep: true }
 );
 
-// 7 类缓存命中位图
+// 5 类合并缓存命中位图
+//   dom = card OR detail(任一有采集)
+//   attribute = search AND bundle(都需要)
+//   richMedia / marketStats / followSell 各自独立
+// 注:"数据完整"筛选只看前 3 类(dom + attribute + richMedia)
 const CACHE_HIT_KEYS = [
-  { key: 'search', label: 'S', title: 'search 缓存' },
-  { key: 'bundle', label: 'B', title: 'bundle 缓存' },
-  { key: 'card', label: 'C', title: 'card 缓存' },
+  { key: 'dom', label: 'D', title: 'dom 缓存(card/detail 任一)' },
+  { key: 'attribute', label: 'A', title: 'attribute 缓存(search+bundle)' },
   { key: 'richMedia', label: 'R', title: 'richMedia 缓存' },
-  { key: 'detail', label: 'D', title: 'detail 缓存' },
   { key: 'marketStats', label: 'M', title: 'marketStats 缓存' },
   { key: 'followSell', label: 'F', title: 'followSell 缓存' },
 ];
@@ -172,11 +176,15 @@ onMounted(() => {
         <input type="checkbox" v-model="state.filters.hasComments" />
         <span>有评论</span>
       </label>
+      <label class="filter-check" title="只显示 richMedia 含富内容(richContent 非空)的 SKU">
+        <input type="checkbox" v-model="state.filters.hasRichContent" />
+        <span>有富内容</span>
+      </label>
       <label class="filter-check" title="只显示在任意用户店铺尚未提交跟卖任务的 SKU">
         <input type="checkbox" v-model="state.filters.unlisted" />
         <span>未跟卖</span>
       </label>
-      <label class="filter-check" title="只显示 7 类缓存命中数 ≥ 5 的 SKU(数据完整)">
+      <label class="filter-check" title="只显示 dom + attribute + richMedia 三类缓存全命中的 SKU(数据完整)">
         <input type="checkbox" v-model="state.filters.fullData" />
         <span>数据完整</span>
       </label>
@@ -238,7 +246,7 @@ onMounted(() => {
           </div>
 
           <div class="cb-cache-hits">
-            <div class="cb-dots" :title="`命中 ${it.hitCount}/7 类缓存`">
+            <div class="cb-dots" :title="`命中 ${it.hitCount}/5 类缓存(dom + attribute + richMedia + marketStats + followSell)`">
               <span
                 v-for="ck in CACHE_HIT_KEYS"
                 :key="ck.key"
@@ -268,6 +276,7 @@ onMounted(() => {
                 >评论: {{ it.ratingCount }}</span
               >
               <span v-if="it.hasVideo" class="cb-extra-tag cb-tag-video" title="richMedia 含 mp4">视频</span>
+              <span v-if="it.hasRichContent" class="cb-extra-tag cb-tag-rich" title="richMedia 含富内容(richContent 非空)">富内容</span>
               <span
                 v-if="it.listed === true"
                 class="cb-extra-tag cb-tag-listed"
@@ -438,6 +447,10 @@ onMounted(() => {
 .cb-tag-video {
   background: #fff7e6;
   color: #fa8c16;
+}
+.cb-tag-rich {
+  background: #f6ffed;
+  color: #389e0d;
 }
 .cb-tag-seller {
   background: #f0f5ff;

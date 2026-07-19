@@ -27,9 +27,17 @@ function parsePriceValue(price) {
 
 // FTS5 查询表达式转义:用户输入的 keyword 可能含 FTS5 特殊字符(" * ( ) - :)
 // 策略:移除特殊字符,按空格分词,每词加前缀匹配 * 并用双引号包起来避免歧义
-// 例:"手机 壳" → "\"手机\"* \"壳\"*" → 匹配含"手机"或"壳"前缀的文档
+// 例:"apple phone" → "\"apple\"* \"phone\"*" → 匹配含"apple" AND "phone"前缀的文档(FTS5 默认 AND)
+// 注:含 CJK 字符(中文/日文/韩文)的 keyword 走 LIKE 路径(返回空串触发 fallback)
+//   FTS5 unicode61 不分词中文,MATCH "手机壳"* 只匹配以"手机壳"开头的文档,
+//   原 LIKE '%手机壳%' 能匹配任何包含"手机壳"的文档(子串匹配),功能性回归。
+//   且用户期望子串搜索语义,故对 CJK keyword 退化为 LIKE。
 function fts5Escape(keyword) {
-  const cleaned = String(keyword || '').replace(/["*()\-:]/g, ' ').trim();
+  const raw = String(keyword || '').trim();
+  if (!raw) return '';
+  // 检测 CJK 统一表意文字 + 日文假名 + 韩文谚文
+  if (/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(raw)) return '';
+  const cleaned = raw.replace(/["*()\-:]/g, ' ').trim();
   if (!cleaned) return '';
   return cleaned
     .split(/\s+/)
@@ -75,11 +83,28 @@ export const indexDao = {
     // 提取冗余展示字段
     const cardData = parseJson(dom?.card_data);
     const detailData = parseJson(dom?.detail_data);
+    const attrData = parseJson(attr?.search_data);
+    const bundleData = parseJson(attr?.bundle_data);
     const rmData = parseJson(rm?.data);
     const msData = parseJson(ms?.data);
     const fsData = parseJson(fs?.data);
 
-    const name = cardData?.name || detailData?.title || '';
+    // name fallback 链(与 opi-preview 的合成逻辑对齐):
+    //   1. bundle attr 4180(商品名,最权威)
+    //   2. search attr 4180
+    //   3. detail.title(DOM)
+    //   4. card.name(DOM,搜索页/店铺页采集)
+    // 注:之前只看 card.name + detail.title,DOM 解析失败时即使 bundle/search 有 4180 也显示未命名
+    const sv = (attrData?.items && attrData.items[0]) || {};
+    const bundleItem = bundleData || {};
+    const bAttr4180 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4180');
+    const sAttr4180 = sv.attributes?.find((a) => String(a.key) === '4180');
+    const name =
+      bAttr4180?.values?.[0]?.value ||
+      sAttr4180?.value ||
+      detailData?.title ||
+      cardData?.name ||
+      '';
     const price = detailData?.price || cardData?.price || '';
     // price_value:解析后的数字价格(供范围过滤用,走 idx_ci_price_value 索引)
     const priceValue = parsePriceValue(price);
@@ -89,6 +114,9 @@ export const indexDao = {
       ? Number(cardData?.ratingCount)
       : null;
     const hasVideo = rmData?.mp4 ? 1 : 0;
+    // has_rich_content:richMedia.data.richContent(富内容 11254)有内容则 1
+    // 不用 richContentHasText(语义过严),只要字符串非空就算"有富内容"
+    const hasRichContent = rmData?.richContent && String(rmData.richContent).length > 0 ? 1 : 0;
     const marketPriceP50 = msData?.priceP50 ?? msData?.p50 ?? null;
     const competitorCount =
       Array.isArray(fsData?.sellers)
@@ -129,10 +157,10 @@ export const indexDao = {
         follow_sell_hit, follow_sell_fetched_at,
         hit_count, last_fetched_at,
         name, price, price_value, primary_image, url, rating_count,
-        has_video, market_price_p50, competitor_count,
+        has_video, has_rich_content, market_price_p50, competitor_count,
         seller_slug, seller_name, listed, searchable_text, updated_at
       ) VALUES (
-        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
+        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
       )
       ON CONFLICT(sku) DO UPDATE SET
         card_hit=excluded.card_hit, card_fetched_at=excluded.card_fetched_at,
@@ -146,12 +174,16 @@ export const indexDao = {
         name=excluded.name, price=excluded.price, price_value=excluded.price_value,
         primary_image=excluded.primary_image,
         url=excluded.url, rating_count=excluded.rating_count,
-        has_video=excluded.has_video, market_price_p50=excluded.market_price_p50,
+        has_video=excluded.has_video, has_rich_content=excluded.has_rich_content,
+        market_price_p50=excluded.market_price_p50,
         competitor_count=excluded.competitor_count,
-        -- seller_slug/seller_name/listed 不覆盖定时任务已写入的值(COALESCE 保留已有值)
+        -- seller_slug/seller_name/listed 不覆盖定时任务已写入的值
+        -- 注:ozon_cache_index.xxx 是冲突行 DB 当前值,excluded.xxx 是本次 INSERT 想写入的值
+        --   - listed:用 ozon_cache_index.listed 永远保留 DB 当前值(syncSku 从不主动改 listed)
+        --   - seller_slug/seller_name:COALESCE 保留 DB 当前值,仅在 DB 为 NULL 时取 excluded(空串)
         seller_slug=COALESCE(ozon_cache_index.seller_slug, excluded.seller_slug),
         seller_name=COALESCE(ozon_cache_index.seller_name, excluded.seller_name),
-        listed=COALESCE(NULLIF(ozon_cache_index.listed, 0), excluded.listed),
+        listed=ozon_cache_index.listed,
         searchable_text=excluded.searchable_text,
         updated_at=datetime('now')`
     ).run(
@@ -179,6 +211,7 @@ export const indexDao = {
       url,
       ratingCount,
       hasVideo,
+      hasRichContent,
       marketPriceP50,
       competitorCount,
       sellerSlug,
@@ -201,6 +234,7 @@ export const indexDao = {
    * @param {boolean} [opts.unlisted] - 只看未跟卖
    * @param {boolean} [opts.hasComments] - 只看有评论
    * @param {boolean} [opts.hasVideo] - 只看有视频
+   * @param {boolean} [opts.hasRichContent] - 只看有富内容(richContent)
    * @param {number} [opts.priceMin] - 价格下限
    * @param {number} [opts.priceMax] - 价格上限
    * @param {number} [opts.minCacheHits] - 最小命中数
@@ -215,6 +249,7 @@ export const indexDao = {
       unlisted,
       hasComments,
       hasVideo,
+      hasRichContent,
       priceMin,
       priceMax,
       minCacheHits,
@@ -250,6 +285,9 @@ export const indexDao = {
     if (hasVideo) {
       where.push('has_video = 1');
     }
+    if (hasRichContent) {
+      where.push('has_rich_content = 1');
+    }
     // 价格范围:走 price_value(REAL 列,有 idx_ci_price_value 索引)
     //   原 CAST(price AS REAL) 无法用索引且对 "1 299 ₽" 这种字符串会截断为 1
     if (Number.isFinite(Number(priceMin))) {
@@ -261,7 +299,14 @@ export const indexDao = {
       params.push(Number(priceMax));
     }
     if (Number.isFinite(Number(minCacheHits)) && Number(minCacheHits) > 0) {
-      where.push('hit_count >= ?');
+      // 数据完整 = 3 类合并缓存都有(dom + attribute + richMedia)
+      //   dom_hit = card OR detail(任一有采集即可)
+      //   attribute_hit = search AND bundle(都需要)
+      //   rich_media_hit = richMedia
+      // 合并命中数 = (card OR detail) + (search AND bundle) + richMedia ∈ [0, 3]
+      where.push('((CASE WHEN card_hit=1 OR detail_hit=1 THEN 1 ELSE 0 END) + ' +
+                  '(CASE WHEN search_hit=1 AND bundle_hit=1 THEN 1 ELSE 0 END) + ' +
+                  '(CASE WHEN rich_media_hit=1 THEN 1 ELSE 0 END)) >= ?');
       params.push(Number(minCacheHits));
     }
 
@@ -354,55 +399,56 @@ export const indexDao = {
   },
 
   /** 批量更新 listed 状态(由 index-sync 定时任务调用)
-   *  改为基于 follow_sell_task_items.offer_id 提取 SKU 前缀做精确匹配,
-   *  仅 status='imported' 才算已跟卖(原 LEFT JOIN + LIKE 全表扫描会误算 failed/skipped)
+   *  只要 SKU 在 follow_sell_task_items 中存在任意记录,就标记为已跟卖(listed=1)
+   *  不区分 item.status(pending/imported/failed/skipped 都算"已创建跟卖任务")
    *  两步 UPDATE 在事务中执行,避免中间状态
    */
   async refreshListedStatus() {
-    // total = imported task_items 涉及的 sku 数
+    // total = 有 task_items 记录的 sku 数
     const totalRow = db
       .prepare(
         `SELECT COUNT(DISTINCT SUBSTR(offer_id, 1, INSTR(offer_id, '-') - 1)) AS n
          FROM follow_sell_task_items
-         WHERE status = 'imported' AND offer_id LIKE '%-%'`
+         WHERE offer_id LIKE '%-%'`
       )
       .get();
     const total = totalRow?.n || 0;
 
-    // 提取 SKU 前缀的子查询(可被多次复用,SQLite 会缓存 CTE)
+    // 提取 SKU 前缀的子查询(任意 status 都算已跟卖)
     const listedSkuExpr = `(
       SELECT DISTINCT SUBSTR(offer_id, 1, INSTR(offer_id, '-') - 1) AS sku
       FROM follow_sell_task_items
-      WHERE status = 'imported' AND offer_id LIKE '%-%'
+      WHERE offer_id LIKE '%-%'
     )`;
 
+    let step1Changes = 0;
+    let step2Changes = 0;
     const tx = db.transaction(() => {
-      // Step 1: imported → listed=1(仅更新原值为 0 的行,减少无意义写入)
-      db.prepare(
-        `UPDATE ozon_cache_index
-         SET listed = 1, updated_at = datetime('now')
-         WHERE listed = 0
-           AND sku IN ${listedSkuExpr}`
-      ).run();
-      // Step 2: cache_index.listed=1 但 sku 不再属于 imported 集合 → listed=0
-      //   (处理任务被删/状态从 imported 改为 failed 的场景)
-      db.prepare(
-        `UPDATE ozon_cache_index
-         SET listed = 0, updated_at = datetime('now')
-         WHERE listed = 1
-           AND sku NOT IN ${listedSkuExpr}`
-      ).run();
+      // Step 1: 有 task_items 记录 → listed=1(仅更新原值为 0 的行,减少无意义写入)
+      const r1 = db
+        .prepare(
+          `UPDATE ozon_cache_index
+           SET listed = 1, updated_at = datetime('now')
+           WHERE listed = 0
+             AND sku IN ${listedSkuExpr}`
+        )
+        .run();
+      step1Changes = r1.changes;
+      // Step 2: cache_index.listed=1 但 sku 不再属于有记录的集合 → listed=0
+      //   (处理任务被删/所有 items 被清理的场景)
+      const r2 = db
+        .prepare(
+          `UPDATE ozon_cache_index
+           SET listed = 0, updated_at = datetime('now')
+           WHERE listed = 1
+             AND sku NOT IN ${listedSkuExpr}`
+        )
+        .run();
+      step2Changes = r2.changes;
     });
     tx();
-    // 注:transaction 后无法直接拿到 changes 总数,通过 SELECT 反查差异
-    const refreshed = db
-      .prepare(
-        `SELECT (
-           (SELECT COUNT(*) FROM ozon_cache_index WHERE listed = 1)
-         ) AS listed_count`
-      )
-      .get().listed_count;
-    return { refreshed, total };
+    // refreshed = 实际发生变更的行数(新增 listed=1 + 回退 listed=0)
+    return { refreshed: step1Changes + step2Changes, total };
   },
 
   /** 统计各类缓存文档数(供 dashboard 用) */
