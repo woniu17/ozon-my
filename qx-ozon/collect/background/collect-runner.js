@@ -120,40 +120,52 @@
     };
 
     // ── ERP 店铺分类 CRUD(L2 MongoDB) ────────────────────────────────────────
-    // GET /admin/api/store-classification/:slug — 返回分类记录或 null
-    this._erpStoreClassGet = async (slug) => {
+    // 2026-07:路径参数改用 sellerId(稳定主键),sellerSlug 作为 fallback
+    // GET /admin/api/store-classification/:sellerId — 返回分类记录或 null
+    // 入参优先级:sellerId(主键) > slug(兼容 fallback)
+    this._erpStoreClassGet = async (slug, sellerId) => {
       try {
         const url = await sw.getBackendUrl();
         const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        // 优先用 sellerId 查(后端主键 _id = sellerId);无 sellerId 时用 slug(后端 fallback 到 slug 反查)
+        const id = sellerId || slug;
+        if (!id) return null;
         const r = await sw.apiRequest(
           'GET',
-          `${url}/admin/api/store-classification/${encodeURIComponent(slug)}`,
+          `${url}/admin/api/store-classification/${encodeURIComponent(id)}`,
           null,
           stored[sw.STORAGE_KEYS.token]
         );
         // ERP 返回 { ok: true, data: { isChinese, classifiedBy, ... } },解包取 data
         return r?.data || null;
       } catch (e) {
-        console.warn(`[store-class] ERP get failed slug=${slug}:`, e?.message || e);
+        console.warn(`[store-class] ERP get failed sellerId=${sellerId} slug=${slug}:`, e?.message || e);
         return null;
       }
     };
 
-    // POST /admin/api/store-classification/:slug(upsert)
-    // record: { sellerSlug, sellerName, isChinese, classifiedBy, companyInfo, lastSeenAt }
-    this._erpStoreClassSet = async (slug, record) => {
+    // POST /admin/api/store-classification/:sellerId(upsert)
+    // 2026-07:路径参数改用 sellerId(稳定主键);sellerId 为空时 fallback 到 slug
+    // record: { sellerSlug?, sellerName, isChinese, classifiedBy, companyInfo, lastSeenAt }
+    this._erpStoreClassSet = async (slug, record, sellerId) => {
       try {
         const url = await sw.getBackendUrl();
         const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        // 优先用 sellerId(主键);无 sellerId 时 fallback 到 slug(后端兼容路径)
+        const id = sellerId || record?.sellerId || slug;
+        if (!id) {
+          console.warn('[store-class] ERP set skipped: missing identifier (sellerId/slug both empty)');
+          return false;
+        }
         await sw.apiRequest(
           'POST',
-          `${url}/admin/api/store-classification/${encodeURIComponent(slug)}`,
+          `${url}/admin/api/store-classification/${encodeURIComponent(id)}`,
           record,
           stored[sw.STORAGE_KEYS.token]
         );
         return true;
       } catch (e) {
-        console.warn(`[store-class] ERP set failed slug=${slug}:`, e?.message || e);
+        console.warn(`[store-class] ERP set failed sellerId=${sellerId} slug=${slug}:`, e?.message || e);
         return false;
       }
     };
@@ -179,21 +191,25 @@
     // 避免脏缓存(下次访问将重新走 L2 → 规则引擎)。
     // 不阻塞 checkStoreClassification 返回(店铺分类非关键路径)。
     this._ensureL2Consistency = async (slug, name, companyInfo, sellerId, l1) => {
-      const l2 = await this._erpStoreClassGet(slug);
+      const l2 = await this._erpStoreClassGet(slug, sellerId);
       console.log('[store-class] L2 consistency check, L2:', l2);
       if (l2 && l2.isChinese !== null && l2.isChinese !== undefined && l2.classifiedBy) {
         return; // L2 有效,无需补写
       }
       // L2 缺失或脏数据,补写
-      const ok = await this._erpStoreClassSet(slug, {
-        sellerSlug: slug,
-        sellerId: sellerId || '',
-        sellerName: name,
-        isChinese: l1.isChinese,
-        classifiedBy: l1.classifiedBy,
-        companyInfo: companyInfo || null,
-        lastSeenAt: new Date().toISOString(),
-      });
+      const ok = await this._erpStoreClassSet(
+        slug,
+        {
+          sellerSlug: slug,
+          sellerId: sellerId || '',
+          sellerName: name,
+          isChinese: l1.isChinese,
+          classifiedBy: l1.classifiedBy,
+          companyInfo: companyInfo || null,
+          lastSeenAt: new Date().toISOString(),
+        },
+        sellerId
+      );
       if (!ok) {
         // L2 补写失败,清 L1 避免下次还走脏缓存(下次会重新走 L2 → 规则引擎)
         try {
@@ -248,7 +264,7 @@
       // 注意:与 L1 同样的校验 — classifiedBy 为空字符串的记录视为无效(历史 bug:
       // ERP 前端 updateStoreClass 不传 classifiedBy 导致后端写空字符串),不信任 L2,
       // 继续走规则引擎让 country=CN 等规则重新分类并覆盖脏记录。
-      const l2 = await this._erpStoreClassGet(slug);
+      const l2 = await this._erpStoreClassGet(slug, sellerId);
       console.log('[store-class] L2 MongoDB:', l2);
       if (l2 && l2.isChinese !== null && l2.isChinese !== undefined && l2.classifiedBy) {
         console.log('[store-class] L2 hit →', { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy });
@@ -287,7 +303,7 @@
           console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
         }
         // await L2 写入:失败时清 L1,避免下次 L1 命中但 L2 缺失的脏缓存
-        const l2Ok = await this._erpStoreClassSet(slug, record);
+        const l2Ok = await this._erpStoreClassSet(slug, record, sellerId);
         if (!l2Ok) {
           console.warn(`[store-class] L2 write failed, clearing L1 for slug=${slug}`);
           try {
@@ -311,7 +327,7 @@
         classifiedBy: null,
         companyInfo: companyInfo || null,
         lastSeenAt: new Date().toISOString(),
-      });
+      }, sellerId);
       return null;
     };
 
@@ -336,13 +352,14 @@
         classifiedAt,
         companyInfo: null,
         lastSeenAt: classifiedAt,
-      });
+      }, sellerId);
       return { ok: true };
     };
 
     // ── ANTIBOT 分支处理:暂停 10 分钟 + 通知 popup + 写日志 + 更新计数器 ────────
     // 由 Step 4/5/6 检测到反爬时调用。返回 { status:'antibot', pausedUntil } 给调用方。
-    this._handleAntibot = async (sku, source, sellerSlug, storeClassified, depth, startTime, results) => {
+    // sellerId 用于日志写入(稳定主键,slug 可变)
+    this._handleAntibot = async (sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId) => {
       const pausedUntil = Date.now() + 10 * 60 * 1000; // 10 分钟
       await this.saveAutoCollectConfig({ paused: true, pausedUntil });
 
@@ -354,6 +371,7 @@
         sku,
         source,
         sellerSlug,
+        sellerId: sellerId || '',
         storeClassified,
         depth,
         status: 'antibot',

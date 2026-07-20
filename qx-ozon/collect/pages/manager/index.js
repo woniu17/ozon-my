@@ -123,7 +123,7 @@
         items
           .map(
             (s) =>
-              `<option value="${escapeHtml(s.sellerSlug)}">${escapeHtml(s.sellerName || s.sellerSlug)}${
+              `<option value="${escapeHtml(s.sellerId || s.sellerSlug)}" data-slug="${escapeHtml(s.sellerSlug || '')}">${escapeHtml(s.sellerName || s.sellerSlug || s.sellerId)}${
                 s.isChinese ? ' 🇨🇳' : ''
               }</option>`
           )
@@ -136,20 +136,30 @@
 
   // ─── 商品队列加载 ───
   const loadSkus = async () => {
-    const slug = storeSelect.value;
-    if (!slug) return;
-    currentStoreSlug = slug;
+    // 2026-07:option value 优先存 sellerId(稳定主键),无 sellerId 时 fallback 到 sellerSlug。
+    // 通过 data-slug 属性区分:value === data-slug 表示 fallback 到 slug(无 sellerId)。
+    const selectedOption = storeSelect.options[storeSelect.selectedIndex];
+    const sellerId = storeSelect.value;
+    const slug = selectedOption?.dataset?.slug || '';
+    // 如果 value 与 data-slug 相同,说明 sellerId 为空 fallback 到 slug
+    const effectiveSellerId = slug && sellerId === slug ? '' : sellerId;
+    if (!sellerId) return;
+    currentStoreSlug = slug || sellerId;
     btnLoadSkus.disabled = true;
     btnLoadSkus.textContent = '加载中…';
     emptyHint.style.display = 'none';
     try {
-      const resp = await sendMessage({ action: 'getStoreSkuList', slug });
+      const resp = await sendMessage({
+        action: 'getStoreSkuList',
+        sellerId: effectiveSellerId,
+        slug: slug || sellerId,
+      });
       const data = resp?.ok ? resp.data : null;
       const items = data?.items || [];
       allSkus = items.map((it) => ({
         sku: String(it.sku),
-        sellerId: it.sellerId || '',
-        sellerSlug: it.sellerSlug || slug,
+        sellerId: it.sellerId || effectiveSellerId || '',
+        sellerSlug: it.sellerSlug || slug || '',
         sellerName: it.sellerName || '',
         card: it.card || null,
         status: 'pending',

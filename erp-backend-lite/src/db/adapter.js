@@ -10,10 +10,13 @@ let daosPromise = null;
 
 /**
  * 获取 DAO 集合(单例,首次调用时初始化)
- * @returns {Promise<Object>} { searchDao, bundleDao, cardDao, composerDao, entrypointDao,
- *   richMediaDao, detailDao, marketStatsDao, followSellDao,
- *   autoCollectLogDao, storeClassificationDao, storeSkuDao,
- *   collectQueueTasksDao, collectQueueOpsDao }
+ *
+ * SQLite 路径返回: { domDao, attributeDao, indexDao, richMediaDao,
+ *   marketStatsDao, followSellDao, autoCollectLogDao, storeClassificationDao,
+ *   storeSkuDao, collectQueueTasksDao, collectQueueOpsDao }
+ *
+ * Mongo 路径目前仅 stub:domDao/attributeDao/indexDao 走 makeUnsupportedDao,
+ *   其余 DAO 仍可用,但新业务代码依赖的前三者一旦调用会抛错。
  */
 export function getDaos() {
   if (!daosPromise) {

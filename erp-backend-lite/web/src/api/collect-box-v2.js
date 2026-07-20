@@ -1,12 +1,14 @@
 import * as request from './request.js';
 
 // 采集箱·缓存视图(以 cardCache 为基准聚合 7 类缓存命中状态)
-// params: { currentPage, pageSize, keyword, hasVideo, minCacheHits, sellerSlug, unlisted }
+// params: { currentPage, pageSize, keyword, hasVideo, minCacheHits, sellerId, unlisted }
+// 2026-07:sellerId 优先(稳定主键);sellerSlug 兼容保留(可变,店铺改名时变)
 export function getCollectBoxV2FromCache(params) {
   return request.get('/admin/api/collect-box-v2/from-cache', params);
 }
 
-// 采集源卖家列表(供下拉框)— 从 ozon_auto_collect_log distinct sellerSlug
+// 采集源卖家列表(供下拉框)— 从 ozon_store_sku 按 sellerId 分组
+// 返回 [{ sellerId, sellerSlug, sellerName, skuCount }]
 export function getCollectBoxV2Sellers() {
   return request.get('/admin/api/collect-box-v2/sellers');
 }

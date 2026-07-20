@@ -566,6 +566,7 @@ try {
   const _erpCacheSet = (type, sku, body) => __jzCollect.erpCacheSet(type, sku, body);
   const _erpCacheDelete = (type, sku) => __jzCollect.erpCacheDelete(type, sku);
   const _writeAutoCollectLog = (payload) => __jzCollect.writeAutoCollectLog(payload);
+  const _writeShallowCollectLog = (payload) => __jzCollect.writeShallowCollectLog(payload);
   // v8: card+detail→domCache, search+bundle→attributeCache
   const _domCacheGet = (sku, type) => __jzCollect.domCacheGet(sku, type);
   const _domCacheSet = (sku, type, data) => __jzCollect.domCacheSet(sku, type, data);
@@ -582,6 +583,7 @@ try {
   const _followSellCacheGet = (sku) => __jzCollect.followSellCacheGet(sku);
   const _followSellCacheSet = (sku, data) => __jzCollect.followSellCacheSet(sku, data);
   const _followSellCacheDelete = (sku) => __jzCollect.followSellCacheDelete(sku);
+  const _batchCacheStatus = (skus) => __jzCollect.batchCacheStatus(skus);
 
   // SW 启动时清理 24h 过期的采集去重 cache(plan v3 子项 ②)。
   // key 形如 `jz-collect-recent-v1:{host}:{storeId}:{sourceId}:{sku}`,
@@ -1003,8 +1005,8 @@ try {
   // 委托包装器:IIFE 内 _doAutoCollect 和 onMessage handler 通过 _xxx 调用,实际委托到 __jzCollect.xxx。
   const classifyStoreByRules = (slug, name, companyInfo, config) =>
     __jzCollect.classifyStoreByRules(slug, name, companyInfo, config);
-  const _erpStoreClassGet = (slug) => __jzCollect._erpStoreClassGet(slug);
-  const _erpStoreClassSet = (slug, record) => __jzCollect._erpStoreClassSet(slug, record);
+  const _erpStoreClassGet = (slug, sellerId) => __jzCollect._erpStoreClassGet(slug, sellerId);
+  const _erpStoreClassSet = (slug, record, sellerId) => __jzCollect._erpStoreClassSet(slug, record, sellerId);
   const _erpStoreSkuReport = (payload) => __jzCollect._erpStoreSkuReport(payload);
   const checkStoreClassification = (slug, name, companyInfo, sellerId) =>
     __jzCollect.checkStoreClassification(slug, name, companyInfo, sellerId);
@@ -1294,8 +1296,8 @@ try {
   // IIFE 内通过 _saveAutoCollectConfig / _pushAutoCollectRecent 委托包装器调用(见 L2129-2132)。
 
   // _handleAntibot 已迁移到 collect/background/collect-runner.js
-  const _handleAntibot = (sku, source, sellerSlug, storeClassified, depth, startTime, results) =>
-    __jzCollect._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
+  const _handleAntibot = (sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId) =>
+    __jzCollect._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId);
 
   // _doAutoCollect 已迁移到 collect/background/collect-tab.js
   const _doAutoCollect = (sku, source, sellerSlug, depth, forceRefresh, sellerId) =>
@@ -1345,7 +1347,7 @@ try {
   const _erpQueryInflight = new Map(); // sku → Promise<preFetched>
   const _cacheStatusInflight = new Map(); // sku → Promise<{ results, hitCount, total }>
 
-  // 单 SKU 缓存状态查询(抽出供 queryCacheStatus 和 queryCacheStatusBatch 复用)
+  // 单 SKU 缓存状态查询(抽出供 queryCacheStatus 和 queryCacheStatusBatch 兜底复用)
   async function _queryCacheStatusOne(qSku) {
     if (!qSku) return null;
     // v8: card/detail → domCache, search/bundle → attributeCache
@@ -1353,18 +1355,22 @@ try {
     //   dom = card OR detail(任一有采集)
     //   attribute = search AND bundle(都需要)
     //   richMedia / marketStats / followSell 各自独立
-    const [card, detail, pdp, search, bundle, marketStats, followSell] = await Promise.all([
-      _domCacheGet(qSku, 'card').catch(() => null),
-      _domCacheGet(qSku, 'detail').catch(() => null),
+    // 优化:dom card/detail 共享一次 _erpCacheGet('dom',sku),attribute search/bundle
+    // 共享一次 _erpCacheGet('attribute',sku)。原本 7 路 HTTP → 5 路 HTTP。
+    const [dom, attribute, pdp, marketStats, followSell] = await Promise.all([
+      _erpCacheGet('dom', qSku).catch(() => null),
+      _erpCacheGet('attribute', qSku).catch(() => null),
       _richMediaCacheGet(qSku).catch(() => null),
-      _attributeCacheGet(qSku, 'search').catch(() => null),
-      _attributeCacheGet(qSku, 'bundle').catch(() => null),
       _marketStatsCacheGet(qSku).catch(() => null),
       _followSellCacheGet(qSku).catch(() => null),
     ]);
+    const hasCard = !!(dom && dom.card);
+    const hasDetail = !!(dom && dom.detail);
+    const hasSearch = !!(attribute && attribute.searchData);
+    const hasBundle = !!(attribute && attribute.bundleData);
     const results = [
-      { type: 'dom', hit: !!(card || detail) },
-      { type: 'attribute', hit: !!(search && bundle) },
+      { type: 'dom', hit: hasCard || hasDetail },
+      { type: 'attribute', hit: hasSearch && hasBundle },
       { type: 'richMedia', hit: !!pdp },
       { type: 'marketStats', hit: !!(marketStats && marketStats.data) },
       { type: 'followSell', hit: !!(followSell && followSell.data) },
@@ -2847,6 +2853,21 @@ try {
             return { ok: false, error: e?.message || String(e) };
           }
         }
+        case 'shallowCollectLog': {
+          // 浅度采集日志上报:由 ozon-data-panel.js onCardExtracted 回调触发,
+          // 每个发现的 SKU 一条。fire-and-forget,不阻塞 content 端采集流程。
+          // 入参: { sku, sellerSlug, sellerId, name, price, ratingCount, imageUrl,
+          //   passesFilter, skipReason, source }  返回: { ok: true }
+          try {
+            const payload = message && typeof message === 'object' ? { ...message } : {};
+            delete payload.action;
+            if (!payload.sku) return { ok: true };
+            _writeShallowCollectLog(payload);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
         case 'domCacheDelete': {
           // forceRefresh 时清 dom 缓存(同时清 card + detail)。
           try {
@@ -3596,15 +3617,41 @@ try {
           }
         }
         case 'queryCacheStatusBatch': {
-          // 批量查询 7 类缓存命中状态(视口内多 SKU 一次性查)
-          // 每个 SKU 内部 7 路 Promise.all,SKU 间也 Promise.all,全并行。
+          // 批量查询 5 类缓存命中状态(视口内多 SKU 一次性查)
+          // v1:对每个 SKU 调 _queryCacheStatusOne(7 路 HTTP/SKU,含 dom/attribute 重复),N×7 次 HTTP。
+          // v2:走后端 POST /ozon/cache/status-batch,1 次 HTTP 查所有 SKU × 5 类命中位矩阵。
+          // 兜底:接口失败 → 退回 v1 单 SKU 调用(保留 inflight 去重)。
           const skus = Array.isArray(message.skus) ? message.skus.filter(Boolean) : [];
           if (!skus.length) return { ok: true, data: {} };
           try {
+            const batchResult = await _batchCacheStatus(skus);
+            if (batchResult) {
+              // 后端返回 { [sku]: { dom, attribute, richMedia, marketStats, followSell } }
+              // 转成 _queryCacheStatusOne 一致的 { results, hitCount, total } 形状
+              const data = {};
+              for (const sku of skus) {
+                const r = batchResult[sku];
+                if (!r) {
+                  data[sku] = null;
+                  continue;
+                }
+                const results = [
+                  { type: 'dom', hit: !!r.dom },
+                  { type: 'attribute', hit: !!r.attribute },
+                  { type: 'richMedia', hit: !!r.richMedia },
+                  { type: 'marketStats', hit: !!r.marketStats },
+                  { type: 'followSell', hit: !!r.followSell },
+                ];
+                const hitCount = results.filter((x) => x.hit).length;
+                data[sku] = { results, hitCount, total: results.length };
+              }
+              return { ok: true, data };
+            }
+            // 兜底:批量接口失败 → 单 SKU 并行查(旧逻辑,保留 inflight 去重)
+            console.warn('[sw] cache status-batch failed, fallback to per-sku');
             const entries = await Promise.all(
               skus.map(async (sku) => {
                 try {
-                  // 复用单 SKU inflight 去重
                   let p = _cacheStatusInflight.get(sku);
                   if (!p) {
                     p = _queryCacheStatusOne(sku).finally(() => _cacheStatusInflight.delete(sku));
@@ -3640,17 +3687,18 @@ try {
           }
         }
         case 'getStoreSkuList': {
-          // 深度采集管理页:按店铺 slug 查询所有 SKU + card 缓存(图片/评论数/价格)
-          // 转发 ERP GET /admin/api/store-sku/by-store/:slug
+          // 深度采集管理页:按店铺查询所有 SKU + card 缓存(图片/评论数/价格)
+          // 2026-07:优先用 sellerId(稳定主键)调用 /by-seller/:sellerId,
+          // 无 sellerId 时 fallback 到 slug 调用 /by-store/:slug(兼容旧前端)
+          const sellerId = String(message.sellerId || '');
           const slug = String(message.slug || '');
-          if (!slug) return { ok: false, error: 'missing slug' };
+          const id = sellerId || slug;
+          if (!id) return { ok: false, error: 'missing sellerId or slug' };
+          const endpoint = sellerId
+            ? `${backendUrl}/admin/api/store-sku/by-seller/${encodeURIComponent(sellerId)}`
+            : `${backendUrl}/admin/api/store-sku/by-store/${encodeURIComponent(slug)}`;
           try {
-            const resp = await apiRequest(
-              'GET',
-              `${backendUrl}/admin/api/store-sku/by-store/${encodeURIComponent(slug)}`,
-              null,
-              token
-            );
+            const resp = await apiRequest('GET', endpoint, null, token);
             const data = resp?.data || resp;
             return { ok: true, data };
           } catch (e) {

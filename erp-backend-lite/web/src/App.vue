@@ -21,7 +21,8 @@ const tabs = [
   { key: '/config', label: '配置中心' },
   { key: '/listing-templates', label: '上架模板' },
   { key: '/cache', label: '数据管理' },
-  { key: '/collect-logs', label: '采集日志' },
+  { key: '/collect-logs', label: '深度采集日志' },
+  { key: '/shallow-collect-logs', label: '浅度采集日志' },
   { key: '/collect-queue', label: '采集队列' },
 ];
 

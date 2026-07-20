@@ -1,5 +1,8 @@
-// MongoDB 连接(缓存集合:ozon_search_cache / ozon_bundle_cache / ozon_card_cache / ozon_composer_cache / ozon_entrypoint_cache / ozon_detail_cache / ozon_market_stats_cache / ozon_follow_sell_cache)
-// 其它集合:ozon_auto_collect_log(采集日志)/ ozon_store_classification(店铺分类)
+// MongoDB 连接(仅保留新表结构对应的集合)
+// 缓存集合:ozon_rich_media_cache / ozon_market_stats_cache / ozon_follow_sell_cache
+// 其它集合:ozon_auto_collect_log(采集日志)/ ozon_store_classification(店铺分类)/ ozon_store_sku / collect_queue_tasks / collect_queue_ops
+// 旧的 search/bundle/card/composer/entrypoint/detail 6 类集合已合并到 SQLite 的 dom/attribute 表,
+// Mongo 模式若要启用需先补齐 domDao/attributeDao/indexDao 三个新 DAO 实现。
 // .env 配置:MONGO_HOST / MONGO_PORT / MONGO_USERNAME / MONGO_PASSWORD / MONGO_AUTH_SOURCE
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
@@ -105,14 +108,10 @@ async function ensureIndexes(db) {
 }
 
 // 集合引用(懒加载,首次调用时连接)
+// 旧的 searchCache/bundleCache/cardCache/composerCache/entrypointCache/detailCache 6 个引用已移除,
+// mongo DAO 入口(createMongoDaos)不再使用它们。
 export const cols = {
-  searchCache: () => getMongo().then((d) => d.collection('ozon_search_cache')),
-  bundleCache: () => getMongo().then((d) => d.collection('ozon_bundle_cache')),
-  cardCache: () => getMongo().then((d) => d.collection('ozon_card_cache')),
-  composerCache: () => getMongo().then((d) => d.collection('ozon_composer_cache')),
-  entrypointCache: () => getMongo().then((d) => d.collection('ozon_entrypoint_cache')),
   richMediaCache: () => getMongo().then((d) => d.collection('ozon_rich_media_cache')),
-  detailCache: () => getMongo().then((d) => d.collection('ozon_detail_cache')),
   marketStatsCache: () => getMongo().then((d) => d.collection('ozon_market_stats_cache')),
   followSellCache: () => getMongo().then((d) => d.collection('ozon_follow_sell_cache')),
   autoCollectLog: () => getMongo().then((d) => d.collection('ozon_auto_collect_log')),

@@ -11040,7 +11040,13 @@
     const { slug, name, companyInfo } = detail;
     if (!slug) return;
     try {
-      const result = await window.sendMessage('checkStoreClassification', { slug, name, companyInfo });
+      // 2026-07:传 sellerId(稳定主键),SW 端 checkStoreClassification 用其写 L2(主键 _id = sellerId)
+      const result = await window.sendMessage('checkStoreClassification', {
+        slug,
+        name,
+        companyInfo,
+        sellerId: detail.sellerId || '',
+      });
       const update = {
         slug,
         name,

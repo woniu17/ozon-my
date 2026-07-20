@@ -71,7 +71,7 @@ export function getOpiPreview(sku, storeId) {
   return request.get(`/admin/api/cache/opi-preview/${encodeURIComponent(sku)}${qs}`);
 }
 
-// ── 自动采集 ───────────────────────────────────────────────
+// ── 自动采集(深度采集) ───────────────────────────────────
 // 自动采集统计
 export function getAutoCollectStats() {
   return request.get('/admin/api/auto-collect/stats');
@@ -87,6 +87,22 @@ export function getAutoCollectLogsBySku(sku) {
   return request.get(`/admin/api/auto-collect/logs/${encodeURIComponent(sku)}`);
 }
 
+// ── 浅度采集 ───────────────────────────────────────────────
+// 浅度采集统计
+export function getShallowCollectStats() {
+  return request.get('/admin/api/shallow-collect/stats');
+}
+
+// 浅度采集日志列表
+export function getShallowCollectLogs(params) {
+  return request.get('/admin/api/shallow-collect/logs', params);
+}
+
+// 单 SKU 浅度采集历史
+export function getShallowCollectLogsBySku(sku) {
+  return request.get(`/admin/api/shallow-collect/logs/${encodeURIComponent(sku)}`);
+}
+
 // ── 缓存查询(调试用) ─────────────────────────────────────
 export function getMarketStatsCache(sku) {
   return request.get(`/ozon/cache/marketStats/${encodeURIComponent(sku)}`);
@@ -97,20 +113,22 @@ export function getFollowSellCache(sku) {
 }
 
 // ── 店铺分类 ───────────────────────────────────────────────
+// 2026-07:主键改为 sellerId(稳定),_id = sellerId;sellerSlug 作为普通字段 + 索引(反查用)
+// path 参数语义:标识符(优先按 sellerId 查,后端 fallback 到 slug 反查)
 export function getStoreClassificationList(params) {
   return request.get('/admin/api/store-classification', params);
 }
 
-export function getStoreClassification(slug) {
-  return request.get(`/admin/api/store-classification/${encodeURIComponent(slug)}`);
+export function getStoreClassification(sellerId) {
+  return request.get(`/admin/api/store-classification/${encodeURIComponent(sellerId)}`);
 }
 
-export function updateStoreClassification(slug, data) {
-  return request.post(`/admin/api/store-classification/${encodeURIComponent(slug)}`, data);
+export function updateStoreClassification(sellerId, data) {
+  return request.post(`/admin/api/store-classification/${encodeURIComponent(sellerId)}`, data);
 }
 
-export function deleteStoreClassification(slug) {
-  return request.del(`/admin/api/store-classification/${encodeURIComponent(slug)}`);
+export function deleteStoreClassification(sellerId) {
+  return request.del(`/admin/api/store-classification/${encodeURIComponent(sellerId)}`);
 }
 
 // ── 店铺 SKU 关联 ─────────────────────────────────────────

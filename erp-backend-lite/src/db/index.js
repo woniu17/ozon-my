@@ -96,6 +96,11 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE follow_sell_task_items ADD COLUMN has_warning INTEGER DEFAULT 0`);
     console.log('[db] migration: added column follow_sell_task_items.has_warning');
   }
+  // 2026-07: sellerSlug → sellerId 主键迁移
+  // 1) ozon_cache_index 补 seller_id 列 + 索引,从 ozon_store_sku 反查回填
+  // 2) ozon_auto_collect_log 补 sellerId 列 + 索引,从 ozon_store_sku 反查回填
+  // 3) ozon_store_classification 重建表(_id = sellerId),旧表数据迁移到 legacy 表
+  await migrateSellerIdPrimaryKey(db);
   // ozon_cache_index.has_rich_content:richMedia.data.richContent 非空则 1,用于采集箱"有富内容"筛选
   const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
   let addedHasRichContent = false;
@@ -283,6 +288,168 @@ function dropLegacyCollectBoxV2(db) {
     db.exec(`DROP TABLE IF EXISTS collect_box_v2`);
     console.log('[db] migration: dropped legacy table collect_box_v2 (已用缓存视图替代)');
   }
+}
+
+// 2026-07: sellerSlug → sellerId 主键迁移
+// 三件事:
+//  1) ozon_cache_index 补 seller_id 列 + 索引,从 ozon_store_sku 反查回填
+//  2) ozon_auto_collect_log 补 sellerId 列 + 索引,从 ozon_store_sku 反查回填
+//  3) ozon_store_classification 重建表(_id = sellerId),旧表数据迁移到 legacy 表
+// 幂等:已迁移过的库(新表结构)直接跳过。
+async function migrateSellerIdPrimaryKey(db) {
+  // ── Step 1: ozon_cache_index 补 seller_id 列 + 索引 ──
+  const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
+  if (ciCols.length > 0 && !ciCols.some((c) => c.name === 'seller_id')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN seller_id TEXT`);
+    console.log('[db] migration: added column ozon_cache_index.seller_id');
+    // 从 ozon_store_sku 反查回填(优先 sellerId 非空的记录)
+    // 多条 store_sku 记录同一 sku 时取最近一条(lastSeenAt DESC)
+    db.exec(`
+      UPDATE ozon_cache_index
+      SET seller_id = (
+        SELECT s.sellerId FROM ozon_store_sku s
+        WHERE s._id = ozon_cache_index.sku
+          AND s.sellerId IS NOT NULL AND s.sellerId != ''
+        ORDER BY s.lastSeenAt DESC LIMIT 1
+      )
+      WHERE seller_id IS NULL
+    `);
+    const filled = db
+      .prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index WHERE seller_id IS NOT NULL AND seller_id != ''`)
+      .get().n;
+    console.log(`[db] migration: backfilled ozon_cache_index.seller_id for ${filled} rows`);
+  }
+  // 索引(schema.sql 已声明,IF NOT EXISTS 幂等)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ci_seller_id ON ozon_cache_index(seller_id)`);
+
+  // ── Step 2: ozon_auto_collect_log 补 sellerId 列 + 索引 ──
+  const logCols = db.prepare(`PRAGMA table_info(ozon_auto_collect_log)`).all();
+  if (logCols.length > 0 && !logCols.some((c) => c.name === 'sellerId')) {
+    db.exec(`ALTER TABLE ozon_auto_collect_log ADD COLUMN sellerId TEXT`);
+    console.log('[db] migration: added column ozon_auto_collect_log.sellerId');
+    // 从 ozon_store_sku 反查回填(按 sellerSlug 关联)
+    // 一条 log 的 sellerSlug 可能对应多条 store_sku,取最近一条的 sellerId
+    db.exec(`
+      UPDATE ozon_auto_collect_log
+      SET sellerId = (
+        SELECT s.sellerId FROM ozon_store_sku s
+        WHERE s.sellerSlug = ozon_auto_collect_log.sellerSlug
+          AND s.sellerId IS NOT NULL AND s.sellerId != ''
+        ORDER BY s.lastSeenAt DESC LIMIT 1
+      )
+      WHERE sellerId IS NULL
+        AND sellerSlug IS NOT NULL AND sellerSlug != ''
+    `);
+    const filled = db
+      .prepare(`SELECT COUNT(*) AS n FROM ozon_auto_collect_log WHERE sellerId IS NOT NULL AND sellerId != ''`)
+      .get().n;
+    console.log(`[db] migration: backfilled ozon_auto_collect_log.sellerId for ${filled} rows`);
+  }
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_log_sellerId_time ON ozon_auto_collect_log(sellerId, collectedAt DESC)`
+  );
+
+  // ── Step 3: ozon_store_classification 重建表(_id = sellerId) ──
+  // 检测旧表结构:_id = sellerSlug(旧)vs _id = sellerId(新)
+  // 旧表 sellerSlug NOT NULL + sellerId 可空;新表 sellerId NOT NULL + sellerSlug 可空
+  const scCols = db.prepare(`PRAGMA table_info(ozon_store_classification)`).all();
+  if (scCols.length > 0) {
+    const sellerIdCol = scCols.find((c) => c.name === 'sellerId');
+    const isOldSchema = sellerIdCol && (sellerIdCol.notnull === 0 || sellerIdCol.dflt_value === null);
+    // 旧表特征:sellerId 可为空(NOT NULL = 0);新表特征:sellerId NOT NULL
+    if (isOldSchema && sellerIdCol.notnull === 0) {
+      console.log('[db] migration: rebuilding ozon_store_classification (_id = sellerId)');
+
+      // 确保新表 + legacy 表已创建(schema.sql 已声明,但旧库可能没有)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ozon_store_classification_new (
+          _id           TEXT PRIMARY KEY,
+          sellerId      TEXT NOT NULL,
+          sellerSlug    TEXT,
+          sellerName    TEXT,
+          isChinese     INTEGER,
+          classifiedBy  TEXT,
+          classifiedAt  TEXT,
+          companyInfo   TEXT,
+          lastSeenAt    TEXT,
+          lastSeenUrl   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_sc_new_chinese ON ozon_store_classification_new(isChinese);
+        CREATE INDEX IF NOT EXISTS idx_sc_new_name    ON ozon_store_classification_new(sellerName);
+        CREATE INDEX IF NOT EXISTS idx_sc_new_seen    ON ozon_store_classification_new(lastSeenAt DESC);
+        CREATE INDEX IF NOT EXISTS idx_sc_new_slug    ON ozon_store_classification_new(sellerSlug);
+
+        CREATE TABLE IF NOT EXISTS ozon_store_classification_legacy (
+          _id           TEXT PRIMARY KEY,
+          sellerSlug    TEXT NOT NULL,
+          sellerId      TEXT,
+          sellerName    TEXT,
+          isChinese     INTEGER,
+          classifiedBy  TEXT,
+          classifiedAt  TEXT,
+          companyInfo   TEXT,
+          lastSeenAt    TEXT,
+          lastSeenUrl   TEXT,
+          migratedAt    TEXT NOT NULL
+        );
+      `);
+
+      // 1) sellerId 非空的记录迁移到新表(_id = sellerId)
+      const migrated = db
+        .prepare(
+          `INSERT OR REPLACE INTO ozon_store_classification_new
+           (_id, sellerId, sellerSlug, sellerName, isChinese, classifiedBy, classifiedAt,
+            companyInfo, lastSeenAt, lastSeenUrl)
+           SELECT sellerId, sellerId, sellerSlug, sellerName, isChinese, classifiedBy, classifiedAt,
+                  companyInfo, lastSeenAt, lastSeenUrl
+           FROM ozon_store_classification
+           WHERE sellerId IS NOT NULL AND sellerId != ''`
+        )
+        .run();
+      console.log(
+        `[db] migration: migrated ${migrated.changes} rows to ozon_store_classification_new (_id = sellerId)`
+      );
+
+      // 2) sellerId 为空的记录迁移到 legacy 表
+      const legacyCount = db
+        .prepare(
+          `INSERT OR REPLACE INTO ozon_store_classification_legacy
+           (_id, sellerSlug, sellerId, sellerName, isChinese, classifiedBy, classifiedAt,
+            companyInfo, lastSeenAt, lastSeenUrl, migratedAt)
+           SELECT _id, sellerSlug, sellerId, sellerName, isChinese, classifiedBy, classifiedAt,
+                  companyInfo, lastSeenAt, lastSeenUrl, datetime('now')
+           FROM ozon_store_classification
+           WHERE sellerId IS NULL OR sellerId = ''`
+        )
+        .run();
+      console.log(
+        `[db] migration: moved ${legacyCount.changes} rows to ozon_store_classification_legacy (sellerId 为空)`
+      );
+
+      // 3) 替换旧表
+      db.exec(`
+        DROP TABLE ozon_store_classification;
+        ALTER TABLE ozon_store_classification_new RENAME TO ozon_store_classification;
+      `);
+      // 索引名规范化(去掉 _new 后缀)
+      db.exec(`
+        DROP INDEX IF EXISTS idx_sc_new_chinese;
+        DROP INDEX IF EXISTS idx_sc_new_name;
+        DROP INDEX IF EXISTS idx_sc_new_seen;
+        DROP INDEX IF EXISTS idx_sc_new_slug;
+        CREATE INDEX IF NOT EXISTS idx_sc_chinese ON ozon_store_classification(isChinese);
+        CREATE INDEX IF NOT EXISTS idx_sc_name    ON ozon_store_classification(sellerName);
+        CREATE INDEX IF NOT EXISTS idx_sc_seen    ON ozon_store_classification(lastSeenAt DESC);
+        CREATE INDEX IF NOT EXISTS idx_sc_slug    ON ozon_store_classification(sellerSlug);
+      `);
+      console.log('[db] migration: ozon_store_classification rebuild complete');
+    }
+  }
+
+  // ── Step 4: 浅度采集日志补 sellerId 索引(字段已在 schema.sql 中,索引补建) ──
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_shallow_log_sellerId_time ON ozon_shallow_collect_log(sellerId, collectedAt DESC)`
+  );
 }
 
 // 直接运行时初始化(node src/db/index.js)

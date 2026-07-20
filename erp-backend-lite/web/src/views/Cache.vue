@@ -480,11 +480,15 @@ function onStoreClassPageChange(p) {
   loadStoreClassifications();
 }
 
-async function updateStoreClass(slug, data) {
+async function updateStoreClass(sellerId, data) {
+  if (!sellerId) {
+    show('缺少 sellerId,无法更新(可能为旧数据,需扩展端上报 sellerId 后再操作)', 'error');
+    return;
+  }
   try {
     // ERP 后台手动标记视为 manual 分类,与 SW 的 manualClassifyStore 保持一致
     // (不补 classifiedBy 时后端默认写空字符串,导致 SW L2 命中后无法识别分类来源)
-    await updateStoreClassification(slug, { ...data, classifiedBy: 'manual' });
+    await updateStoreClassification(sellerId, { ...data, classifiedBy: 'manual' });
     show('已更新', 'success');
     await loadStoreClassifications();
   } catch (err) {
@@ -492,10 +496,15 @@ async function updateStoreClass(slug, data) {
   }
 }
 
-async function deleteStoreClass(slug) {
-  if (!confirm(`确认删除店铺分类 ${slug}?`)) return;
+async function deleteStoreClass(sellerId, displayName) {
+  const label = displayName || sellerId;
+  if (!confirm(`确认删除店铺分类 ${label}?`)) return;
+  if (!sellerId) {
+    show('缺少 sellerId,无法删除(可能为旧数据)', 'error');
+    return;
+  }
   try {
-    await deleteStoreClassification(slug);
+    await deleteStoreClassification(sellerId);
     show('已删除', 'success');
     await loadStoreClassifications();
   } catch (err) {
@@ -760,6 +769,7 @@ onMounted(() => {
         <table class="data-table">
           <thead>
             <tr>
+              <th>Seller ID</th>
               <th>Seller Slug</th>
               <th>Seller Name</th>
               <th>是否中国</th>
@@ -771,10 +781,11 @@ onMounted(() => {
           </thead>
           <tbody>
             <tr v-if="!storeClassifications.length">
-              <td colspan="7" class="empty">暂无店铺分类记录</td>
+              <td colspan="8" class="empty">暂无店铺分类记录</td>
             </tr>
             <tr v-for="sc in storeClassifications" :key="sc._id">
-              <td class="col-sku">{{ sc.sellerSlug }}</td>
+              <td class="col-sku">{{ sc.sellerId || sc._id || '—' }}</td>
+              <td>{{ sc.sellerSlug || '—' }}</td>
               <td>{{ sc.sellerName || '—' }}</td>
               <td>
                 <span :class="storeClassBadge(sc.isChinese)">
@@ -785,13 +796,13 @@ onMounted(() => {
               <td>{{ sc.companyInfo?.companyName || '—' }}</td>
               <td class="col-time">{{ fmtTime(sc.lastSeenAt) }}</td>
               <td class="row-actions">
-                <button class="btn btn-sm btn-primary" @click="updateStoreClass(sc.sellerSlug, { isChinese: true })">
+                <button class="btn btn-sm btn-primary" :disabled="!sc.sellerId" @click="updateStoreClass(sc.sellerId || sc._id, { isChinese: true })">
                   标记中国
                 </button>
-                <button class="btn btn-sm btn-ghost" @click="updateStoreClass(sc.sellerSlug, { isChinese: false })">
+                <button class="btn btn-sm btn-ghost" :disabled="!sc.sellerId" @click="updateStoreClass(sc.sellerId || sc._id, { isChinese: false })">
                   标记非中国
                 </button>
-                <button class="btn btn-sm btn-danger" @click="deleteStoreClass(sc.sellerSlug)">删除</button>
+                <button class="btn btn-sm btn-danger" :disabled="!sc.sellerId" @click="deleteStoreClass(sc.sellerId || sc._id, sc.sellerName || sc.sellerSlug)">删除</button>
               </td>
             </tr>
           </tbody>

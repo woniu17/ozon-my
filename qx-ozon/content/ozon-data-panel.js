@@ -404,6 +404,72 @@
     }
   }
 
+  // ── 首次加载微批队列:合并同时进入视口的多个 SKU 成一次批量 ERP 查询 ──
+  // 问题:IntersectionObserver 触发 loadPanelData 时,step 3 独立调
+  //       queryErpProductData(单 SKU),N 个 panel 同时进入视口 = N 次 SW→ERP HTTP。
+  // 方案:16ms 收集窗口内所有首次加载的 SKU,合并成一次 queryErpProductDataBatch。
+  //       渲染逻辑与原 loadPanelData step 3 一致(有数据渲染,无数据渲染骨架+补查终态)。
+  const _loadPanelBatchQueue = [];
+  let _loadPanelBatchTimer = null;
+  const _LOAD_PANEL_BATCH_DELAY_MS = 16;
+
+  function _enqueuePanelLoad(sku, card, panel) {
+    _loadPanelBatchQueue.push({ sku: String(sku), card, panel });
+    if (_loadPanelBatchTimer) return;
+    _loadPanelBatchTimer = setTimeout(_flushPanelLoadBatch, _LOAD_PANEL_BATCH_DELAY_MS);
+  }
+
+  async function _flushPanelLoadBatch() {
+    _loadPanelBatchTimer = null;
+    const batch = _loadPanelBatchQueue.splice(0);
+    if (!batch.length) return;
+
+    const skus = batch.map((b) => b.sku);
+    const erpBatch = await window
+      .sendMessage('queryErpProductDataBatch', { skus })
+      .catch(() => null);
+
+    for (const { sku, card, panel } of batch) {
+      if (!panel.isConnected) continue;
+      const erpData = erpBatch?.[sku];
+      try {
+        if (erpData) {
+          if (typeof window.jzRenderProductPanelV2 === 'function' && erpData.preFetched) {
+            window.jzRenderProductPanelV2(panel, { sku, initial: erpData });
+            try {
+              await window.jzPopulatePanelV2(panel, sku, { preFetched: erpData.preFetched });
+            } catch {}
+            panelDataCache.set(sku, erpData);
+          } else {
+            window.jzRenderProductCardPanel(panel, erpData);
+          }
+        } else {
+          // ERP 无数据:渲染骨架 + 补查终态/队列暂停(对齐原 loadPanelData step 3 的兜底)
+          if (typeof window.jzRenderProductPanelV2 === 'function') {
+            window.jzRenderProductPanelV2(panel, { sku });
+          }
+          const CS = window.__jzCollectStatus;
+          const st = CS?.getStatus(String(sku));
+          if (st && ['success', 'partial', 'skipped', 'failed', 'antibot'].includes(st.status)) {
+            // 已有终态,仅刷新徽章
+          } else if (window.__jzQueuePaused) {
+            CS?.setStatus(String(sku), {
+              status: 'skipped',
+              reason: window.__jzQueuePaused.reason || 'paused',
+              results: null,
+              duration: null,
+              timestamp: Date.now(),
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[panel] batch render failed:', sku, e);
+      }
+      window.__jzCollectStatus?.updateCollectBadge(card, sku);
+      window.__jzCollectStatus?.refreshCollectStatusBar(panel, sku);
+    }
+  }
+
   // 单 panel 首次加载数据(不改批量,首次进入视口立即查,不等 5s 定时器)
   async function _refreshPanelData(card, panel) {
     const info = extractCardInfo(card);
@@ -428,12 +494,9 @@
       // 静默失败,5s 定时器会再试
     }
     window.__jzCollectStatus?.updateCollectBadge(card, productId);
-    try {
-      const cacheStatus = await window.sendMessage('queryCacheStatus', { sku: productId });
-      window.__jzCollectStatus?.renderCollectStatusBar(panel, productId, cacheStatus);
-    } catch {
-      window.__jzCollectStatus?.renderCollectStatusBar(panel, productId, null);
-    }
+    // 2026-07:取消单 SKU queryCacheStatus 即时查询(导致后端 /ozon/cache/{attribute,
+    // richMedia,marketStats}/:sku 单 SKU 日志刷屏)。状态条改由 5s 定时器批量刷新。
+    // window.__jzCollectStatus?.renderCollectStatusBar 由定时器调用,这里不再触发。
   }
 
   function _startPanelRefresh(card, panel) {
@@ -686,48 +749,12 @@
       return;
     }
 
-    // 3) 缓存未命中时异步查 ERP 兜底;有数据直接渲染。
-    // 无数据时也必须立刻 ready:骨架保留,等 collectDone 广播回填。
-    // 若等采集完成才 ready,AutoScroller.isReadyToScroll 会永久卡在
-    //「等待视口数据就绪」(翻页 ↔ 采集耦合,与队列重构解耦目标相反)。
-    try {
-      const erpData = await window.sendMessage('queryErpProductData', { sku: productId });
-      if (erpData) {
-        if (typeof window.jzRenderProductPanelV2 === 'function' && erpData.preFetched) {
-          window.jzRenderProductPanelV2(panel, { sku: productId, initial: erpData });
-          try {
-            await window.jzPopulatePanelV2(panel, productId, { preFetched: erpData.preFetched });
-          } catch {}
-        } else {
-          window.jzRenderProductCardPanel(panel, erpData);
-        }
-      } else {
-        // ERP 无数据:直接渲染 V2 骨架(全 '-' 字段 + 状态条),等 collectDone 广播回填。
-        // 避免面板停在 skeleton 状态,让用户看到完整字段布局 + 采集状态。
-        if (typeof window.jzRenderProductPanelV2 === 'function') {
-          window.jzRenderProductPanelV2(panel, { sku: productId });
-        }
-        // 补查终态/队列暂停,用于徽章文案;不论是否命中都 ready。
-        // 时序竞态:SW 很快终态时 collectDone 可能先于 panel 创建 → 广播丢失,
-        // 这里用 collect-status 的 _collectStatusMap 兜底徽章,避免误显示「采集中」。
-        const CS = window.__jzCollectStatus;
-        const st = CS?.getStatus(String(productId));
-        if (st && ['success', 'partial', 'skipped', 'failed', 'antibot'].includes(st.status)) {
-          // 已有终态,仅刷新徽章
-        } else if (window.__jzQueuePaused) {
-          // 队列暂停广播可能先于本 panel 创建,补一条 skipped 状态
-          CS?.setStatus(String(productId), {
-            status: 'skipped',
-            reason: window.__jzQueuePaused.reason || 'paused',
-            results: null,
-            duration: null,
-            timestamp: Date.now(),
-          });
-        }
-      }
-    } catch (e) {
-      console.warn('[panel] ERP query failed:', e);
-    }
+    // 3) 缓存未命中:加入微批队列,16ms 内合并多个 SKU 一次批量查 ERP。
+    //    渲染逻辑在 _flushPanelLoadBatch 异步执行,不阻塞 loadPanelData 返回。
+    //    无数据时也必须立刻 ready:骨架保留,等 collectDone 广播回填。
+    //    若等采集完成才 ready,AutoScroller.isReadyToScroll 会永久卡在
+    //    「等待视口数据就绪」(翻页 ↔ 采集耦合,与队列重构解耦目标相反)。
+    _enqueuePanelLoad(productId, card, panel);
     if (panel) panel.dataset.jzLoadStatus = 'ready';
     window.__jzCollectStatus?.updateCollectBadge(card, productId);
     window.__jzCollectStatus?.refreshCollectStatusBar(panel, productId);
@@ -1369,11 +1396,7 @@
             setTimeout(() => _startAutoScroll(), 100);
           }
           if (_collectorPanel) {
-            _collectorPanel.toast(
-              mode === 'api' ? '已切换到 API 直取模式' : '已切换到 DOM 滚动模式',
-              'info',
-              1500
-            );
+            _collectorPanel.toast(mode === 'api' ? '已切换到 API 直取模式' : '已切换到 DOM 滚动模式', 'info', 1500);
           }
         },
         onSalesFilterChange: (next) => {
@@ -1405,21 +1428,83 @@
           intervalMs,
           maxConsecutiveErrors: 3,
           requestTimeoutMs: 15000,
-          // 每个 SKU 提取后:写 card 缓存 + submitTask 入队 + 店铺 SKU 发现上报 + 计数刷新
+          // 每个 SKU 提取后:过滤检查 → 写 card 缓存 + submitTask 入队 + 店铺 SKU 发现上报 + 计数刷新
           // card 字段对齐 ozon-data-panel.js 的 domCacheSet 调用
           onCardExtracted: (card) => {
             if (!card?.sku) return;
             // 浅度采集开关关闭时不写不提交(与 DOM 路径保持一致)
             if (!shallowCollectState.running) return;
+
+            // === 4 道过滤(对齐 DOM 模式 L660-665 的过滤逻辑) ===
+            // 1. "仅抓有评论":开启时跳过 ratingCount=0/null
+            // 2. 价格范围:priceRange=[min, max](null=不限)
+            // 3. 评论数范围:ratingRange=[min, max](null=不限)
+            // 4. "只采中国店铺":店铺页本身就是该店铺商品,无需判定(同 DOM 模式店铺页行为)
+            const passesOnlyWithRating = !onlyWithRating || !!card.ratingCount;
+            const passesRange = _passesRangeFilter({
+              price: card.price,
+              ratingCount: card.ratingCount,
+            });
+            const passesFilter = passesOnlyWithRating && passesRange;
+
+            // 计算过滤不通过的具体原因(便于日志记录和用户排查)
+            // 优先级:无评论 > 价格越界 > 评论数越界
+            let skipReason = null;
+            if (!passesFilter) {
+              if (onlyWithRating && !card.ratingCount) skipReason = 'no-rating';
+              else if (!passesRange) {
+                const p = Number(card.price);
+                if (Number.isFinite(p)) {
+                  if (priceRange[0] != null && p < priceRange[0]) skipReason = 'price-below-min';
+                  else if (priceRange[1] != null && p > priceRange[1]) skipReason = 'price-above-max';
+                } else {
+                  skipReason = 'price-invalid';
+                }
+                const r = Number(card.ratingCount);
+                if (Number.isFinite(r)) {
+                  if (ratingRange[0] != null && r < ratingRange[0]) skipReason = 'rating-below-min';
+                  else if (ratingRange[1] != null && r > ratingRange[1]) skipReason = 'rating-above-max';
+                }
+              }
+            }
+
             // 店铺 SKU 发现上报(对齐 DOM 模式 L625 的 reportStoreSkuDiscovery 调用)
-            // ApiScroller 仅在店铺页运行,所有 SKU 均属于当前店铺,无需 isStoreSkuCard 判定
+            // 无论是否通过过滤都计入"发现"计数,让用户看到完整扫描结果
+            // "略过" = 发现 - 采集,由 collect-status.js 的 getStoreSkuStats 自动计算
             reportStoreSkuDiscovery(card.sku);
-            // 加入店铺 SKU 已收集集合并刷新面板计数(对齐 DOM 模式 L755-765)
-            // 否则 API 模式下"店铺SKU发现 xx 采集XX个 略过XX个"统计不更新
             if (window.__jzCollectStatus?.addStoreSku(String(card.sku))) {
               _updateStoreSkuCount();
             }
-            // 写 card 缓存(与 loadPanelData 中的 domCacheSet 调用对齐)
+
+            // 浅度采集日志上报(无论是否通过过滤都记录,便于用户排查过滤效果)
+            // SW 转发到后端 POST /admin/api/shallow-collect/log
+            if (window.sendMessage) {
+              try {
+                window.sendMessage('shallowCollectLog', {
+                  sku: String(card.sku),
+                  sellerSlug: _apiScroller?._sellerSlug || sellerSlug || '',
+                  sellerId: _apiScroller?._sellerId || sellerId || '',
+                  name: card.name || '',
+                  price: card.price != null ? Number(card.price) : null,
+                  ratingCount: card.ratingCount ?? null,
+                  imageUrl: card.imageUrl || '',
+                  passesFilter,
+                  skipReason,
+                  source: 'api-scroller',
+                });
+              } catch {
+                /* fire-and-forget */
+              }
+            }
+
+            // 过滤不通过:不写 card 缓存、不入队(用户需求:过滤不通过的 SKU 不写 card 缓存)
+            // 仅计入"发现"计数(上面已处理),数据管理 SKU 数据中也不会出现
+            if (!passesFilter) {
+              return;
+            }
+
+            // 通过过滤:写 card 缓存 → 触发 indexDao.syncSku → ozon_cache_index 更新
+            // 这样数据管理 SKU 数据页面能立即查到该 SKU
             if (window.sendMessage) {
               try {
                 window.sendMessage('domCacheSet', {
@@ -1462,11 +1547,16 @@
           },
           onPageDone: (info) => {
             if (!_collectorPanel) return;
-            _collectorPanel.toast(
-              `第${info.page}页: ${info.itemsCount} 个 SKU (累计 ${info.totalCards})`,
-              'info',
-              1500
-            );
+            // 区分三种情况:正常页/含重复/空页,让用户能看到去重和空页信号
+            let msg;
+            if (info.newCount === 0) {
+              msg = `第${info.page}页: 空页(累计 ${info.totalCards})`;
+            } else if (info.dupCount > 0) {
+              msg = `第${info.page}页: 新增 ${info.newCount} 重复 ${info.dupCount} (累计 ${info.totalCards})`;
+            } else {
+              msg = `第${info.page}页: ${info.itemsCount} 个 SKU (累计 ${info.totalCards})`;
+            }
+            _collectorPanel.toast(msg, 'info', 1500);
           },
           onEmpty: () => {
             if (!_collectorPanel) return;
@@ -1502,12 +1592,27 @@
 
     // 页面加载恢复:若浅度采集开关已开启且自动翻页开关勾选,启动对应模式的翻页器
     // (onShallowToggle 只在用户点击时触发,页面加载恢复时不会走那个分支)
+    //
+    // 安全约束:API 直取模式不会在页面加载时自动启动。
+    // 原因:API 直取是后台静默 fetch,无视觉反馈,持久化的 localStorage 开关状态
+    // 会让用户"以为自己没开自动翻页"时仍然开始抓取(曾出现此 bug)。
+    // 用户若想用 API 模式,必须当次会话主动勾选"自动翻页"开关才会启动。
     if (shallowCollectState.running) {
       const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
       if (cb && cb.checked) {
-        try {
-          _startAutoScroll();
-        } catch {}
+        const mode = _getAutoScrollMode();
+        if (mode === 'api') {
+          // API 模式:页面加载恢复时不自动启动,同步关闭 toggle 让用户明确感知
+          cb.checked = false;
+          try {
+            localStorage.setItem('qx-c-auto-scroll', '0');
+          } catch {}
+          console.log('[ozon-data-panel] 页面加载恢复:检测到 API 直取模式,不自动启动,需用户手动开启自动翻页');
+        } else {
+          try {
+            _startAutoScroll();
+          } catch {}
+        }
       }
     }
 

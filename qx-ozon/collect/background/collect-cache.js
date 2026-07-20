@@ -60,6 +60,29 @@
         return null;
       }
     };
+
+    // ── 批量缓存命中位查询 ────────────────────────────────────────────────────
+    // POST /ozon/cache/status-batch,一次 HTTP 查多 SKU × 5 类缓存的命中位矩阵。
+    // 替代原来对每个 SKU 调 _queryCacheStatusOne(7 次 HTTP)的 N×7 模式。
+    // 返回: { [sku]: { dom, attribute, richMedia, marketStats, followSell } }(全 boolean)
+    // 失败返回 null,调用方需兜底。
+    this.batchCacheStatus = async (skus) => {
+      if (!Array.isArray(skus) || !skus.length) return {};
+      try {
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        const r = await sw.apiRequest(
+          'POST',
+          `${url}/ozon/cache/status-batch`,
+          { skus: skus.map(String).filter(Boolean).slice(0, 200) },
+          stored[sw.STORAGE_KEYS.token]
+        );
+        return r || null;
+      } catch (e) {
+        console.warn('[cache] batch status failed:', e?.message || e);
+        return null;
+      }
+    };
     const _erpCacheSet = async (type, sku, body) => {
       try {
         const url = await sw.getBackendUrl();
@@ -106,12 +129,28 @@
       }
     };
 
+    // ── 浅度采集日志:fire-and-forget 写入 ERP(带 JWT) ─────────────────────────
+    // 由 ozon-data-panel.js 的 onCardExtracted 回调上报(每个发现的 SKU 一条)。
+    // 调用方不应 await(不阻塞主流程),失败仅 warn 不影响采集结果。
+    // payload: { sku, sellerSlug, sellerId, name, price, ratingCount, imageUrl,
+    //   passesFilter, skipReason, source }
+    const _writeShallowCollectLog = async (payload) => {
+      try {
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        await sw.apiRequest('POST', `${url}/admin/api/shallow-collect/log`, payload, stored[sw.STORAGE_KEYS.token]);
+      } catch (e) {
+        console.warn('[shallow-collect-log] write failed:', e?.message || e);
+      }
+    };
+
     // ── 暴露 ERP 基础操作给外部 ──
     this.erpCacheGet = _erpCacheGet;
     this.erpCacheSet = _erpCacheSet;
     this.erpCacheDelete = _erpCacheDelete;
     this.bundleUsable = _bundleUsable;
     this.writeAutoCollectLog = _writeAutoCollectLog;
+    this.writeShallowCollectLog = _writeShallowCollectLog;
     this.ATTRS_EMPTY_REVERIFY_MS = _ATTRS_EMPTY_REVERIFY_MS;
     // loadAutoCollectConfig 由 SW 桥接传入(marketStats/followSell 缓存的 stale 判定需要读取配置)
     this.loadAutoCollectConfig = sw.loadAutoCollectConfig;

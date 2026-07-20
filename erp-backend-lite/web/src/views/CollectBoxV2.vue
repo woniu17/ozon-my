@@ -8,7 +8,7 @@ import AppPager from '../components/AppPager.vue';
 const router = useRouter();
 const { show } = useToast();
 
-// 采集源卖家列表(供下拉框) — 从 ozon_auto_collect_log distinct sellerSlug
+// 采集源卖家列表(供下拉框) — 从 ozon_store_sku 按 sellerId 分组
 const sellers = ref([]);
 
 // 记住上一次筛选条件(localStorage 持久化,跨会话保留)
@@ -18,6 +18,10 @@ function loadStoredFilters() {
     const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && 'sellerSlug' in parsed && !('sellerId' in parsed)) {
+      // 旧版用 sellerSlug,新版改用 sellerId,旧值清空避免误用
+      delete parsed.sellerSlug;
+    }
     return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;
@@ -35,7 +39,7 @@ const state = reactive({
   filters: {
     keyword: '',
     fullData: false, // 数据完整:dom + attribute + richMedia 三类全命中(marketStats/followSell 不算)
-    sellerSlug: '',
+    sellerId: '', // 2026-07:从 sellerSlug 改用 sellerId(稳定主键)
     unlisted: false,
     hasComments: false,
     hasRichContent: false, // 只看有富内容(richMedia.richContent 非空)
@@ -55,7 +59,7 @@ async function loadList() {
       keyword: state.filters.keyword.trim(),
     };
     if (state.filters.fullData) params.minCacheHits = '3';
-    if (state.filters.sellerSlug) params.sellerSlug = state.filters.sellerSlug;
+    if (state.filters.sellerId) params.sellerId = state.filters.sellerId;
     if (state.filters.unlisted) params.unlisted = '1';
     if (state.filters.hasComments) params.hasComments = '1';
     if (state.filters.hasRichContent) params.hasRichContent = '1';
@@ -166,10 +170,10 @@ onMounted(() => {
         placeholder="搜索 SKU"
         @keydown.enter="search"
       />
-      <select class="filter-select" v-model="state.filters.sellerSlug" title="按采集源 SKU 所属卖家筛选">
+      <select class="filter-select" v-model="state.filters.sellerId" title="按采集源 SKU 所属卖家筛选">
         <option value="">全部卖家</option>
-        <option v-for="s in sellers" :key="s.sellerSlug" :value="s.sellerSlug">
-          {{ s.sellerName || s.sellerSlug }} ({{ s.skuCount }})
+        <option v-for="s in sellers" :key="s.sellerId" :value="s.sellerId">
+          {{ s.sellerName || s.sellerId }} ({{ s.skuCount }})
         </option>
       </select>
       <label class="filter-check" title="只显示有评论数(ratingCount > 0)的 SKU">
@@ -258,10 +262,10 @@ onMounted(() => {
             </div>
             <div class="cb-cache-extra">
               <span
-                v-if="it.sellerSlug"
+                v-if="it.sellerId || it.sellerSlug"
                 class="cb-extra-tag cb-tag-seller"
-                :title="`采集自卖家:${it.sellerName || it.sellerSlug}`"
-                >{{ it.sellerName || it.sellerSlug }}</span
+                :title="`采集自卖家:${it.sellerName || it.sellerId || it.sellerSlug}`"
+                >{{ it.sellerName || it.sellerId || it.sellerSlug }}</span
               >
               <span v-if="it.marketPriceP50 != null" class="cb-extra-tag" title="市场 P50 价格">
                 P50: {{ it.marketPriceP50 }}

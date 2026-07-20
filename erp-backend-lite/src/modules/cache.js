@@ -284,6 +284,90 @@ router.delete('/ozon/cache/richMedia/:sku', async (req, res, next) => {
   }
 });
 
+// POST /ozon/cache/status-batch — 批量查询多 SKU × 5 类缓存的命中位矩阵
+// 入参: { skus: string[] } 最多 200 个 SKU
+// 出参: { [sku]: { dom, attribute, richMedia, marketStats, followSell } }(全 boolean)
+// 用途:SW 端 queryCacheStatusBatch 用 1 次 HTTP 替代原来对每个 SKU 调
+//       _queryCacheStatusOne 的 7N 次 HTTP(其中 dom card/detail 和 attribute
+//       search/bundle 是同一接口的重复请求)。
+// 命中规则(对齐 _queryCacheStatusOne):
+//   dom = card_data OR detail_data 非空
+//   attribute = search_data AND bundle_data 都非空
+//   richMedia / marketStats / followSell = data 字段非空
+router.post('/ozon/cache/status-batch', async (req, res, next) => {
+  try {
+    const rawSkus = Array.isArray(req.body?.skus) ? req.body.skus : [];
+    const skus = rawSkus.map(String).filter(Boolean).slice(0, 200);
+    if (!skus.length) return res.json(ok({}));
+
+    const result = {};
+    for (const sku of skus) {
+      result[sku] = {
+        dom: false,
+        attribute: false,
+        richMedia: false,
+        marketStats: false,
+        followSell: false,
+      };
+    }
+    const placeholders = skus.map(() => '?').join(', ');
+
+    // 5 类缓存各一次 SQL,IN 子句批量查
+    const domRows = db
+      .prepare(
+        `SELECT _id,
+                (card_data IS NOT NULL AND card_data != '') AS card_hit,
+                (detail_data IS NOT NULL AND detail_data != '') AS detail_hit
+         FROM ozon_dom_cache WHERE _id IN (${placeholders})`
+      )
+      .all(...skus);
+    for (const r of domRows) {
+      if (result[r._id]) result[r._id].dom = !!(r.card_hit || r.detail_hit);
+    }
+
+    const attrRows = db
+      .prepare(
+        `SELECT _id,
+                (search_data IS NOT NULL AND search_data != '') AS search_hit,
+                (bundle_data IS NOT NULL AND bundle_data != '') AS bundle_hit
+         FROM ozon_attribute_cache WHERE _id IN (${placeholders})`
+      )
+      .all(...skus);
+    for (const r of attrRows) {
+      if (result[r._id]) result[r._id].attribute = !!(r.search_hit && r.bundle_hit);
+    }
+
+    const richRows = db
+      .prepare(
+        `SELECT _id FROM ozon_rich_media_cache
+         WHERE _id IN (${placeholders}) AND data IS NOT NULL AND data != ''`
+      )
+      .all(...skus);
+    for (const r of richRows) result[r._id].richMedia = true;
+
+    const marketRows = db
+      .prepare(
+        `SELECT _id FROM ozon_market_stats_cache
+         WHERE _id IN (${placeholders}) AND data IS NOT NULL AND data != ''`
+      )
+      .all(...skus);
+    for (const r of marketRows) result[r._id].marketStats = true;
+
+    const followRows = db
+      .prepare(
+        `SELECT _id FROM ozon_follow_sell_cache
+         WHERE _id IN (${placeholders}) AND data IS NOT NULL AND data != ''`
+      )
+      .all(...skus);
+    for (const r of followRows) result[r._id].followSell = true;
+
+    return res.json(ok(result));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] status-batch failed');
+    next(e);
+  }
+});
+
 // ── 管理后台 API(/admin/api/cache/*) ───────────────────────
 // 列表/统计/详情/清空,供前端缓存管理页面使用
 
@@ -405,16 +489,19 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     const priceMin = Number(req.query.priceMin);
     const priceMax = Number(req.query.priceMax);
 
-    // ⚠️ "店铺筛选"语义:采集到的 SKU 所属源卖家(ozon_auto_collect_log.sellerSlug)
+    // ⚠️ "店铺筛选"语义:采集到的 SKU 所属源卖家(ozon_auto_collect_log.sellerId)
     //   与"用户自己的店铺"(stores.json,用于上架)是两个正交概念
-    // - sellerSlug:源 SKU 所属卖家 slug(可选)。索引表冗余 seller_slug,SQL 直接过滤
+    // - sellerId:源 SKU 所属卖家 ID(可选,稳定主键)。索引表冗余 seller_id,SQL 直接过滤
+    // - sellerSlug:兼容字段(可变,店铺改名时变化)。sellerId 优先
     // - unlisted=1:只返回未跟卖的(索引表冗余 listed,SQL 直接过滤)
+    const sellerId = String(req.query.sellerId || '').trim();
     const sellerSlug = String(req.query.sellerSlug || '').trim();
     const filterUnlisted = req.query.unlisted === '1' || req.query.unlisted === 'true';
 
     // indexDao 单表查询:过滤 + 排序 + 分页全在 SQL 完成
     const { items, total } = await daos.indexDao.findList({
       keyword,
+      sellerId,
       sellerSlug,
       unlisted: filterUnlisted,
       hasComments: filterHasComments,
@@ -461,6 +548,7 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       ratingCount: Number.isFinite(Number(r.rating_count)) ? Number(r.rating_count) : null,
       lastCollectedAt: r.last_fetched_at,
       // 采集源卖家(由 index-sync 定时任务批量刷新)
+      sellerId: r.seller_id || '',
       sellerSlug: r.seller_slug || '',
       sellerName: r.seller_name || '',
       // 上架状态(由 index-sync 定时任务批量刷新)
@@ -481,23 +569,26 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
 });
 
 // GET /admin/api/collect-box-v2/sellers — 采集源卖家列表(供下拉框)
-// 返回 [{ sellerSlug, sellerName, skuCount }] — 按 skuCount 降序
+// 返回 [{ sellerId, sellerSlug, sellerName, skuCount }] — 按 skuCount 降序
+// 2026-07:改用 sellerId 分组(稳定主键),sellerSlug/sellerName 取任一非空值
 router.get('/admin/api/collect-box-v2/sellers', async (_req, res, next) => {
   try {
     // 数据源:ozon_store_sku(店铺-SKU 关联表,记录每个 SKU 采集自哪个卖家)
     const rows = db
       .prepare(
-        `SELECT sellerSlug,
-                MAX(sellerName) AS sellerName,   -- 同一 slug 取任一非空名
+        `SELECT sellerId,
+                MAX(sellerSlug) AS sellerSlug,    -- 同一 sellerId 取任一非空 slug
+                MAX(sellerName) AS sellerName,   -- 同一 sellerId 取任一非空名
                 COUNT(*) AS skuCount
          FROM ozon_store_sku
-         WHERE sellerSlug IS NOT NULL AND sellerSlug <> ''
-         GROUP BY sellerSlug
+         WHERE sellerId IS NOT NULL AND sellerId <> ''
+         GROUP BY sellerId
          ORDER BY skuCount DESC`
       )
       .all();
     const sellers = rows.map((r) => ({
-      sellerSlug: r.sellerSlug,
+      sellerId: r.sellerId,
+      sellerSlug: r.sellerSlug || '',
       sellerName: r.sellerName || '',
       skuCount: r.skuCount,
     }));
@@ -1141,12 +1232,14 @@ router.get('/admin/api/auto-collect/stats', async (req, res, next) => {
 });
 
 // GET /admin/api/auto-collect/logs — 采集日志列表(分页 + 过滤)
-// query: sku/status(逗号分隔多值)/source/sellerSlug/currentPage/pageSize/startTime/endTime
+// query: sku/status(逗号分隔多值)/source/sellerId/sellerSlug/currentPage/pageSize/startTime/endTime
+// 2026-07:sellerId 优先(稳定主键),sellerSlug 兼容
 router.get('/admin/api/auto-collect/logs', async (req, res, next) => {
   try {
     const sku = String(req.query.sku || '').trim();
     const statusRaw = String(req.query.status || '').trim();
     const source = String(req.query.source || '').trim();
+    const sellerId = String(req.query.sellerId || '').trim();
     const sellerSlug = String(req.query.sellerSlug || '').trim();
     const currentPage = Math.max(1, Number(req.query.currentPage) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 20));
@@ -1163,7 +1256,8 @@ router.get('/admin/api/auto-collect/logs', async (req, res, next) => {
       filter.status = statuses.length === 1 ? statuses[0] : statuses;
     }
     if (source) filter.source = source;
-    if (sellerSlug) filter.sellerSlug = sellerSlug;
+    if (sellerId) filter.sellerId = sellerId;
+    else if (sellerSlug) filter.sellerSlug = sellerSlug;
     if (startTime) filter.startTime = startTime;
     if (endTime) filter.endTime = endTime;
 
@@ -1189,8 +1283,9 @@ router.get('/admin/api/auto-collect/logs/:sku', async (req, res, next) => {
 });
 
 // POST /admin/api/auto-collect/log — 写入一条采集日志(SW 调用,JWT 鉴权)
-// body: { sku, source, sellerSlug, storeClassified, depth, status, results, totalDuration, collectedAt }
+// body: { sku, source, sellerSlug, sellerId, storeClassified, depth, status, results, totalDuration, collectedAt }
 // results: 数组,每项 { type, hit, error? }
+// 2026-07:sellerId 推荐传入(稳定主键),sellerSlug 兼容
 router.post('/admin/api/auto-collect/log', async (req, res, next) => {
   try {
     const body = req.body || {};
@@ -1203,6 +1298,7 @@ router.post('/admin/api/auto-collect/log', async (req, res, next) => {
       sku,
       source: body.source != null ? String(body.source) : null,
       sellerSlug: body.sellerSlug != null ? String(body.sellerSlug) : null,
+      sellerId: body.sellerId != null ? String(body.sellerId) : null,
       storeClassified: body.storeClassified != null ? String(body.storeClassified) : 'unclassified',
       depth: body.depth != null ? Number(body.depth) || 0 : 0,
       status,
@@ -1219,21 +1315,125 @@ router.post('/admin/api/auto-collect/log', async (req, res, next) => {
   }
 });
 
+// ── 浅度采集日志(/admin/api/shallow-collect) ───────────────────
+// 与 auto-collect(深度)日志的区别:
+//   深度:SW 实际执行采集流程后的完整记录(success/partial/failed/...+ results 数组)
+//   浅度:店铺页扫描发现的每个 SKU 一条(仅记录 card 字段 + passesFilter + skipReason)
+// 用途:排查过滤效果(略过原因分布)+ 浅度采集统计
+
+// GET /admin/api/shallow-collect/stats — 浅度采集日志统计(今日 + 本周)
+router.get('/admin/api/shallow-collect/stats', async (req, res, next) => {
+  try {
+    const todayStart = startOfToday();
+    const weekStart = startOfWeek();
+    const [today, week] = await Promise.all([
+      daos.shallowCollectLogDao.aggregateStats({ collectedAtGte: todayStart }),
+      daos.shallowCollectLogDao.aggregateStats({ collectedAtGte: weekStart }),
+    ]);
+    return res.json(ok({ today, week }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[shallow-collect] stats failed');
+    next(e);
+  }
+});
+
+// GET /admin/api/shallow-collect/logs — 浅度采集日志列表(分页 + 过滤)
+// query: sku/passesFilter(0|1)/skipReason/source/sellerId/sellerSlug/currentPage/pageSize/startTime/endTime
+// 2026-07:sellerId 优先(稳定主键),sellerSlug 兼容
+router.get('/admin/api/shallow-collect/logs', async (req, res, next) => {
+  try {
+    const sku = String(req.query.sku || '').trim();
+    const passesFilterRaw = String(req.query.passesFilter || '').trim();
+    const skipReason = String(req.query.skipReason || '').trim();
+    const source = String(req.query.source || '').trim();
+    const sellerId = String(req.query.sellerId || '').trim();
+    const sellerSlug = String(req.query.sellerSlug || '').trim();
+    const currentPage = Math.max(1, Number(req.query.currentPage) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 20));
+    const startTime = req.query.startTime ? new Date(Number(req.query.startTime) || req.query.startTime) : null;
+    const endTime = req.query.endTime ? new Date(Number(req.query.endTime) || req.query.endTime) : null;
+
+    const filter = {};
+    if (sku) filter.sku = sku;
+    if (passesFilterRaw === '0') filter.passesFilter = false;
+    else if (passesFilterRaw === '1') filter.passesFilter = true;
+    if (skipReason) filter.skipReason = skipReason;
+    if (source) filter.source = source;
+    if (sellerId) filter.sellerId = sellerId;
+    else if (sellerSlug) filter.sellerSlug = sellerSlug;
+    if (startTime) filter.startTime = startTime;
+    if (endTime) filter.endTime = endTime;
+
+    const { items, total } = await daos.shallowCollectLogDao.findPagedList(filter, currentPage, pageSize);
+    return res.json(ok({ items, total, current: currentPage, pageSize }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[shallow-collect] logs list failed');
+    next(e);
+  }
+});
+
+// GET /admin/api/shallow-collect/logs/:sku — 单 SKU 浅度采集历史
+router.get('/admin/api/shallow-collect/logs/:sku', async (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const items = await daos.shallowCollectLogDao.findBySku(sku);
+    return res.json(ok({ items }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[shallow-collect] logs by sku failed');
+    next(e);
+  }
+});
+
+// POST /admin/api/shallow-collect/log — 写入一条浅度采集日志(SW 调用,JWT 鉴权)
+// body: { sku, sellerSlug, sellerId, name, price, ratingCount, imageUrl,
+//         passesFilter, skipReason, source, collectedAt }
+router.post('/admin/api/shallow-collect/log', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const sku = String(body.sku || '').trim();
+    if (!sku) return res.status(422).json({ error: 'missing sku' });
+
+    const doc = {
+      sku,
+      sellerSlug: body.sellerSlug != null ? String(body.sellerSlug) : null,
+      sellerId: body.sellerId != null ? String(body.sellerId) : null,
+      name: body.name != null ? String(body.name) : null,
+      price: body.price != null ? Number(body.price) : null,
+      ratingCount: body.ratingCount != null ? Number(body.ratingCount) : null,
+      imageUrl: body.imageUrl != null ? String(body.imageUrl) : null,
+      passesFilter: !!body.passesFilter,
+      skipReason: body.skipReason != null ? String(body.skipReason) : null,
+      source: body.source != null ? String(body.source) : null,
+      collectedAt: body.collectedAt ? new Date(body.collectedAt) : new Date(),
+    };
+
+    const r = await daos.shallowCollectLogDao.insert(doc);
+    return res.json(ok({ insertedId: r.insertedId }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[shallow-collect] log insert failed');
+    next(e);
+  }
+});
+
 // ── 店铺分类(/admin/api/store-classification) ───────────────────
 // ozon_store_classification 集合的 CRUD 端点
-// 鉴权:全局 JWT;不走 storeGuard(全局共享,按 slug 查询)
-// _id = sellerSlug(便于 upsert)
+// 鉴权:全局 JWT;不走 storeGuard(全局共享)
+// 2026-07:主键改为 sellerId(稳定),_id = sellerId;sellerSlug 作为普通字段 + 索引(反查用)
 
-// GET /admin/api/store-classification/:slug — 查询单条分类记录
-router.get('/admin/api/store-classification/:slug', async (req, res, next) => {
+// GET /admin/api/store-classification/:sellerId — 查询单条分类记录
+// 优先按 sellerId 查(主键);若查不到且标识符不像数字 ID,尝试 slug 反查(兼容历史数据)
+router.get('/admin/api/store-classification/:sellerId', async (req, res, next) => {
   try {
-    const slug = String(req.params.slug);
-    const doc = await daos.storeClassificationDao.getBySlug(slug);
+    const sellerId = String(req.params.sellerId);
+    let doc = await daos.storeClassificationDao.getBySellerId(sellerId);
+    // 兼容:sellerId 查不到时,尝试按 slug 反查(仅当 slug 形式)
+    if (!doc) doc = await daos.storeClassificationDao.getBySlug(sellerId);
     if (!doc) return res.status(404).json({ error: 'not found' });
     return res.json(
       ok({
-        sellerSlug: doc.sellerSlug || doc._id,
-        sellerId: doc.sellerId || '',
+        _id: doc._id || doc.sellerId || '',
+        sellerSlug: doc.sellerSlug || '',
+        sellerId: doc.sellerId || doc._id || '',
         sellerName: doc.sellerName || '',
         isChinese: doc.isChinese === true,
         classifiedBy: doc.classifiedBy || '',
@@ -1248,19 +1448,19 @@ router.get('/admin/api/store-classification/:slug', async (req, res, next) => {
   }
 });
 
-// POST /admin/api/store-classification/:slug — upsert 分类记录
-// body: { sellerId, sellerName, isChinese, classifiedBy, companyInfo, lastSeenAt, lastSeenUrl }
-// 已存在时更新 isChinese/classifiedBy/classifiedAt 并刷新 lastSeenAt
-// sellerId 用于后续以 ID 为主键查询(sparse unique index 避免历史空值冲突)
-router.post('/admin/api/store-classification/:slug', async (req, res, next) => {
+// POST /admin/api/store-classification/:sellerId — upsert 分类记录
+// body: { sellerSlug?, sellerName, isChinese, classifiedBy, companyInfo, lastSeenAt, lastSeenUrl }
+// sellerId 从 path 取(主键);sellerSlug 可选(店铺改名时变化)
+router.post('/admin/api/store-classification/:sellerId', async (req, res, next) => {
   try {
-    const slug = String(req.params.slug);
+    const sellerId = String(req.params.sellerId);
     const body = req.body || {};
+    if (!sellerId) return res.status(400).json({ error: 'missing sellerId' });
+
     const now = new Date();
     const lastSeenAt = body.lastSeenAt ? new Date(body.lastSeenAt) : now;
 
     const update = {
-      sellerSlug: slug,
       sellerName: body.sellerName != null ? String(body.sellerName) : '',
       isChinese: body.isChinese === true,
       classifiedBy: body.classifiedBy != null ? String(body.classifiedBy) : '',
@@ -1269,24 +1469,24 @@ router.post('/admin/api/store-classification/:slug', async (req, res, next) => {
       lastSeenAt,
       lastSeenUrl: body.lastSeenUrl != null ? String(body.lastSeenUrl) : '',
     };
-    // sellerId 仅在非空时设置,避免空字符串违反 partialFilterExpression 唯一索引
-    if (body.sellerId != null && String(body.sellerId) !== '') {
-      update.sellerId = String(body.sellerId);
+    // sellerSlug 可选(店铺改名时变化,允许通过 body 更新)
+    if (body.sellerSlug != null && String(body.sellerSlug) !== '') {
+      update.sellerSlug = String(body.sellerSlug);
     }
 
-    await daos.storeClassificationDao.upsertBySlug(slug, update);
-    return res.json(ok({ upserted: true, sellerSlug: slug }));
+    await daos.storeClassificationDao.upsertBySellerId(sellerId, update);
+    return res.json(ok({ upserted: true, sellerId }));
   } catch (e) {
     logger.warn({ err: e.message }, '[store-classification] upsert failed');
     next(e);
   }
 });
 
-// DELETE /admin/api/store-classification/:slug — 删除单条
-router.delete('/admin/api/store-classification/:slug', async (req, res, next) => {
+// DELETE /admin/api/store-classification/:sellerId — 删除单条
+router.delete('/admin/api/store-classification/:sellerId', async (req, res, next) => {
   try {
-    const slug = String(req.params.slug);
-    const r = await daos.storeClassificationDao.deleteBySlug(slug);
+    const sellerId = String(req.params.sellerId);
+    const r = await daos.storeClassificationDao.deleteBySellerId(sellerId);
     return res.json(ok({ deletedCount: r.deletedCount }));
   } catch (e) {
     logger.warn({ err: e.message }, '[store-classification] delete failed');
@@ -1380,19 +1580,49 @@ router.delete('/admin/api/store-sku/:sku', async (req, res, next) => {
   }
 });
 
-// GET /admin/api/store-sku/by-store/:slug — 按店铺 slug 查询所有 SKU 并 join dom 缓存的 card 部分
+// GET /admin/api/store-sku/by-seller/:sellerId — 按卖家 ID 查询所有 SKU 并 join dom 缓存的 card 部分
 // 返回 { items: [{ sku, sellerId, sellerSlug, sellerName, card: { name, price, image, ratingCount } }] }
 // 供深度采集管理页面使用:一次请求拿到店铺全部 SKU + 商品卡信息(图片/评论数/价格)
+// 2026-07:改用 sellerId(稳定主键,走 idx_ss_seller_seen 索引)
+router.get('/admin/api/store-sku/by-seller/:sellerId', async (req, res, next) => {
+  try {
+    const sellerId = String(req.params.sellerId || '');
+    if (!sellerId) return res.status(400).json({ error: 'missing sellerId' });
+
+    // 查该店铺所有 SKU 关联记录(走 idx_ss_seller_seen 索引)
+    const skuDocs = await daos.storeSkuDao.findBySellerId(sellerId);
+    if (!skuDocs.length) return res.json(ok({ items: [], total: 0 }));
+
+    // 批量查 dom 缓存(取 card 部分)
+    const skus = skuDocs.map((d) => d.sku || d._id);
+    const domDocs = await daos.domDao.findManyBySkuList(skus);
+    const cardMap = new Map(domDocs.map((d) => [d.sku || d._id, d.card || null]));
+
+    const items = skuDocs.map((d) => ({
+      sku: d.sku || d._id,
+      sellerId: d.sellerId || '',
+      sellerSlug: d.sellerSlug || '',
+      sellerName: d.sellerName || '',
+      card: cardMap.get(d.sku || d._id) || null,
+    }));
+
+    return res.json(ok({ items, total: items.length }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[store-sku] by-seller failed');
+    next(e);
+  }
+});
+
+// GET /admin/api/store-sku/by-store/:slug — 兼容旧路径(按 slug 查询 SKU)
+// 推荐使用 /by-seller/:sellerId;此路由仅作过渡期兼容
 router.get('/admin/api/store-sku/by-store/:slug', async (req, res, next) => {
   try {
     const slug = String(req.params.slug || '');
     if (!slug) return res.status(400).json({ error: 'missing slug' });
 
-    // 查该店铺所有 SKU 关联记录
     const skuDocs = await daos.storeSkuDao.findBySellerSlug(slug);
     if (!skuDocs.length) return res.json(ok({ items: [], total: 0 }));
 
-    // 批量查 dom 缓存(取 card 部分)
     const skus = skuDocs.map((d) => d.sku || d._id);
     const domDocs = await daos.domDao.findManyBySkuList(skus);
     const cardMap = new Map(domDocs.map((d) => [d.sku || d._id, d.card || null]));

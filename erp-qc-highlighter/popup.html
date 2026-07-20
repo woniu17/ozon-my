@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ERP 质检单高亮 - 设置</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <h1>ERP 质检单高亮</h1>
+      <p class="subtitle">订单号以任一前缀开头即为质检单</p>
+    </header>
+
+    <section class="section">
+      <label class="label">质检单前缀</label>
+      <p class="hint">每行一个前缀，留空保存将恢复默认（02131、02478）</p>
+      <textarea
+        id="prefixes"
+        class="textarea"
+        rows="6"
+        placeholder="02131&#10;02478"
+        spellcheck="false"
+      ></textarea>
+
+      <div class="actions">
+        <button id="save" class="btn btn-primary">保存</button>
+        <button id="reset" class="btn btn-ghost">恢复默认</button>
+      </div>
+
+      <div id="toast" class="toast" hidden></div>
+    </section>
+
+    <footer class="footer">
+      <div>匹配页面：</div>
+      <code>erp.91miaoshou.com/order/package/index*</code>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

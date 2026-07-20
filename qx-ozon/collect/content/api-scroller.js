@@ -9,15 +9,21 @@
  * 工作流程:
  *   1. start() → fetch 首页 entrypoint-api(path=/seller/{slug}/)
  *   2. 解析 widgetStates.tileGridDesktop-*.items → SKU 列表
- *   3. 对每个 SKU: 调 onCardExtracted 回调(由调用方写缓存 + submitTask)
+ *   3. 对每个 SKU: 去重(_seenSkus)后调 onCardExtracted 回调(由调用方写缓存 + submitTask)
  *   4. 解析 widgetStates.infiniteVirtualPaginator-*.nextPage
  *   5. nextPage 非空 → fetch 下一页,循环(受 intervalMs 节流)
  *   6. nextPage 为空 → onEmpty 回调
  *
  * 终止条件:
- *   - nextPage 为空(到达最后一页)
+ *   - nextPage 为空(到达最后一页,正常结束)
+ *   - 连续 maxConsecutiveEmptyPages 页无新 SKU(防御 Ozon 反爬/分页异常死循环)
  *   - stop() 被调用(用户手动停止)
  *   - fetch 连续失败 maxConsecutiveErrors 次
+ *
+ * 去重机制:
+ *   - 内部 _seenSkus Set:跨页去重,避免 Ozon 反爬限流返回上一页内容时重复触发回调
+ *   - 与外部 collect-entry.js 的 _autoCollectSeen 解耦(ApiScroller 自洽,不依赖外部去重)
+ *   - 命中重复 SKU:不计 _totalCards、不调 onCardExtracted,仅累加 dupCountThisPage
  *
  * 与 DOM AutoScroller 的差异:
  *   - 不滚动页面(后台 fetch)
@@ -35,6 +41,10 @@
     intervalMs: 800, // 翻页间隔(毫秒),默认 800ms(比 DOM 滚动快 3-5 倍)
     maxConsecutiveErrors: 3, // 连续失败次数上限,超过则停止
     requestTimeoutMs: 30000, // 单次 fetch 超时
+    // 连续空页上限:超过则视为抓取完成(防御 Ozon 反爬/分页异常导致的死循环)
+    // 实测:正常店铺末页 nextPage 为空会自然终止;异常时 Ozon 可能持续返回 items=[] + nextPage 非空,
+    // 不加上限会无限翻页(用户曾遇到"23 页只发现 16 个 SKU"的故障即为此)
+    maxConsecutiveEmptyPages: 3,
   };
 
   /**
@@ -212,6 +222,13 @@
       this._firstPagePath = opts.firstPagePath || '';
       this._nextPagePath = null;
       this._consecutiveErrors = 0;
+      // SKU 去重 Set:避免 onCardExtracted 对同一 SKU 重复回调
+      // (Ozon 反爬限流时可能返回上一页内容,导致重复 SKU;
+      //  此 Set 与外部 _autoCollectSeen 解耦,ApiScroller 自洽,不依赖外部去重)
+      this._seenSkus = new Set();
+      // 连续空页计数:Ozon 异常时 items=[] + nextPage 非空会导致死循环,
+      // 用此计数器在连续 N 页 0 items 时主动终止
+      this._consecutiveEmptyPages = 0;
       // 状态追踪(供 getStatus 读取,与 AutoScroller getScrollStatus 结构对齐)
       // phase: 'idle' | 'fetching' | 'throttling' | 'error-backoff' | 'completed'
       this._phase = 'idle';
@@ -241,6 +258,9 @@
       this._currentPage = 0;
       this._totalCards = 0;
       this._consecutiveErrors = 0;
+      // 重置去重 Set 与空页计数(同一实例多次 start 时保证干净状态)
+      this._seenSkus = new Set();
+      this._consecutiveEmptyPages = 0;
       this._nextPagePath = this._firstPagePath;
       this._setPhase('fetching');
       console.log(`[ApiScroller] 启动, slug=${slug}, firstPage=${this._firstPagePath}`);
@@ -338,12 +358,15 @@
       return {
         running: this._running,
         currentPage: this._currentPage,
-        totalCards: this._totalCards,
+        totalCards: this._totalCards, // 去重后的累计 SKU 数(_seenSkus.size 同义)
+        uniqueSkuCount: this._seenSkus.size, // 去重 Set 大小(与 totalCards 相等,语义更明确)
+        consecutiveEmptyPages: this._consecutiveEmptyPages,
         sellerSlug: this._sellerSlug,
+        sellerId: this._sellerId,
       };
     }
 
-    /** 主循环: fetch → 解析 → 回调 → 节流 → 下一页 */
+    /** 主循环: fetch → 解析 → 去重回调 → 节流 → 下一页 */
     async _loop() {
       while (!this._stopped && this._nextPagePath) {
         const pageStartTime = Date.now();
@@ -355,12 +378,24 @@
           this._currentPage = page || this._currentPage + 1;
           if (sellerId) this._sellerId = String(sellerId);
 
-          // 提取每个 SKU 并回调
+          // 提取每个 SKU 并回调(带去重)
+          // - _seenSkus 命中:跳过(不计 _totalCards,不调 onCardExtracted)
+          //   场景:Ozon 反爬限流时可能返回上一页内容,导致同一 SKU 跨页重复
+          // - _seenSkus 未命中:add + _totalCards++ + onCardExtracted 回调
+          let newCountThisPage = 0;
+          let dupCountThisPage = 0;
           for (const item of items) {
             if (this._stopped) break;
             const card = _extractCardFromItem(item);
             if (!card.sku) continue;
+            const skuStr = String(card.sku);
+            if (this._seenSkus.has(skuStr)) {
+              dupCountThisPage++;
+              continue;
+            }
+            this._seenSkus.add(skuStr);
             this._totalCards++;
+            newCountThisPage++;
             try {
               this.onCardExtracted?.(card);
             } catch (e) {
@@ -372,25 +407,53 @@
           this._nextPagePath = nextPage || null;
           this._lastPageDoneAt = Date.now();
 
+          // 空页计数:本页新增 SKU 为 0 视为"空页"(含 items=[] 或全重复两种情况)
+          // 连续 N 页空即视为抓取完成,避免 Ozon 异常时死循环翻页
+          if (newCountThisPage === 0) {
+            this._consecutiveEmptyPages++;
+          } else {
+            this._consecutiveEmptyPages = 0;
+          }
+
           const duration = Date.now() - pageStartTime;
+          const emptySuffix =
+            newCountThisPage === 0
+              ? `, 空页(${this._consecutiveEmptyPages}/${this.opts.maxConsecutiveEmptyPages})`
+              : dupCountThisPage > 0
+                ? `, 新增 ${newCountThisPage} 重复 ${dupCountThisPage}`
+                : '';
           console.log(
             `[ApiScroller] 第${this._currentPage}页完成: ${items.length} 个 SKU, 耗时 ${duration}ms` +
-            (nextPage ? `, 下一页存在` : ', 已到最后一页')
+              (nextPage ? ', 下一页存在' : ', 已到最后一页') +
+              emptySuffix
           );
 
           this.onPageDone?.({
             page: this._currentPage,
             itemsCount: items.length,
+            newCount: newCountThisPage,
+            dupCount: dupCountThisPage,
             totalCards: this._totalCards,
             duration,
             hasNext: !!nextPage,
           });
 
-          // 终止: nextPage 为空
+          // 终止条件 1: nextPage 为空(正常结束)
           if (!nextPage) {
             this._running = false;
             this._setPhase('completed');
             console.log(`[ApiScroller] 全部完成,共 ${this._totalCards} 个 SKU`);
+            this.onEmpty?.();
+            break;
+          }
+
+          // 终止条件 2: 连续空页达到上限(异常结束,防御 Ozon 反爬/分页死循环)
+          if (this._consecutiveEmptyPages >= this.opts.maxConsecutiveEmptyPages) {
+            console.warn(
+              `[ApiScroller] 连续 ${this._consecutiveEmptyPages} 页无新 SKU,视为抓取完成,共 ${this._totalCards} 个 SKU`
+            );
+            this._running = false;
+            this._setPhase('completed');
             this.onEmpty?.();
             break;
           }

@@ -254,17 +254,15 @@
     bar.dataset.total = String(total);
   }
 
-  // 异步刷新状态条:查询 SW 缓存状态(queryCacheStatus)后渲染
-  // 供事件驱动(collectDone / taskStatus)和初始加载调用
-  // 5s 定时器在 data-panel 的 _refreshPanelData 中单独处理(复用同一查询)
+  // 异步刷新状态条:no-op(2026-07 移除单 SKU queryCacheStatus 调用)
+  // 原实现:内部调 window.sendMessage('queryCacheStatus', { sku }) 触发 SW 5 路 HTTP,
+  //        被 collectDone/taskStatus 广播 + 首次进入视口 + loadPanelData 多处触发,
+  //        导致后端 /ozon/cache/{attribute,richMedia,marketStats}/:sku 单 SKU 日志刷屏。
+  // 现状:状态条由 5s 定时器 _pageRefreshTimer 通过 queryCacheStatusBatch 批量刷新,
+  //      单 SKU 即时刷新取消,首次渲染最多 5s 后由定时器补上。
+  // 保留函数签名避免破坏外部调用方(ozon-data-panel.js 等)。
   async function refreshCollectStatusBar(panel, sku) {
-    if (!panel || !panel.isConnected) return;
-    try {
-      const cacheStatus = await window.sendMessage('queryCacheStatus', { sku });
-      renderCollectStatusBar(panel, sku, cacheStatus);
-    } catch (e) {
-      renderCollectStatusBar(panel, sku, null);
-    }
+    return;
   }
 
   // ── 徽章渲染 ──────────────────────────────────────────────────

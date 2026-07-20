@@ -149,9 +149,10 @@ export const indexDao = {
     // 全文搜索字段(name + sku + seller_name 会在定时任务里补 seller)
     // 这里先用现有 seller_name(可能为空)
     const existing = db
-      .prepare(`SELECT seller_slug, seller_name, listed FROM ozon_cache_index WHERE sku=?`)
+      .prepare(`SELECT seller_slug, seller_id, seller_name, listed FROM ozon_cache_index WHERE sku=?`)
       .get(sku);
     const sellerSlug = existing?.seller_slug || '';
+    const sellerId = existing?.seller_id || '';
     const sellerName = existing?.seller_name || '';
     const listed = existing?.listed || 0;
     const searchableText = [name, sku, sellerName].filter(Boolean).join(' ');
@@ -166,9 +167,9 @@ export const indexDao = {
         hit_count, last_fetched_at,
         name, price, price_value, primary_image, url, rating_count,
         has_video, has_rich_content, market_price_p50, competitor_count,
-        seller_slug, seller_name, listed, searchable_text, updated_at
+        seller_slug, seller_id, seller_name, listed, searchable_text, updated_at
       ) VALUES (
-        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
+        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
       )
       ON CONFLICT(sku) DO UPDATE SET
         card_hit=excluded.card_hit, card_fetched_at=excluded.card_fetched_at,
@@ -185,11 +186,12 @@ export const indexDao = {
         has_video=excluded.has_video, has_rich_content=excluded.has_rich_content,
         market_price_p50=excluded.market_price_p50,
         competitor_count=excluded.competitor_count,
-        -- seller_slug/seller_name/listed 不覆盖定时任务已写入的值
+        -- seller_slug/seller_id/seller_name/listed 不覆盖定时任务已写入的值
         -- 注:ozon_cache_index.xxx 是冲突行 DB 当前值,excluded.xxx 是本次 INSERT 想写入的值
         --   - listed:用 ozon_cache_index.listed 永远保留 DB 当前值(syncSku 从不主动改 listed)
-        --   - seller_slug/seller_name:COALESCE 保留 DB 当前值,仅在 DB 为 NULL 时取 excluded(空串)
+        --   - seller_slug/seller_id/seller_name:COALESCE 保留 DB 当前值,仅在 DB 为 NULL 时取 excluded(空串)
         seller_slug=COALESCE(ozon_cache_index.seller_slug, excluded.seller_slug),
+        seller_id=COALESCE(ozon_cache_index.seller_id, excluded.seller_id),
         seller_name=COALESCE(ozon_cache_index.seller_name, excluded.seller_name),
         listed=ozon_cache_index.listed,
         searchable_text=excluded.searchable_text,
@@ -223,6 +225,7 @@ export const indexDao = {
       marketPriceP50,
       competitorCount,
       sellerSlug,
+      sellerId,
       sellerName,
       listed,
       searchableText
@@ -246,6 +249,8 @@ export const indexDao = {
    * @param {number} [opts.priceMin] - 价格下限
    * @param {number} [opts.priceMax] - 价格上限
    * @param {number} [opts.minCacheHits] - 最小命中数
+   * @param {string} [opts.sellerId] - 卖家 ID(2026-07 新增,稳定主键,走 idx_ci_seller_id 索引)
+   * @param {string} [opts.sellerSlug] - 卖家 slug(兼容字段,可变,走 idx_ci_seller 索引)
    * @param {number} [opts.page=1]
    * @param {number} [opts.pageSize=50]
    * @returns {Promise<{items: Array, total: number}>}
@@ -253,6 +258,7 @@ export const indexDao = {
   async findList(opts = {}) {
     const {
       keyword,
+      sellerId,
       sellerSlug,
       unlisted,
       hasComments,
@@ -280,7 +286,11 @@ export const indexDao = {
         params.push(`%${keyword}%`);
       }
     }
-    if (sellerSlug) {
+    // 店铺过滤:sellerId 优先(稳定主键),sellerSlug 兼容
+    if (sellerId) {
+      where.push('seller_id = ?');
+      params.push(sellerId);
+    } else if (sellerSlug) {
       where.push('seller_slug = ?');
       params.push(sellerSlug);
     }
@@ -370,32 +380,34 @@ export const indexDao = {
   /** 批量更新 seller 信息(由 index-sync 定时任务调用)
    *  改为单条 UPDATE FROM(避免 N+1 循环 UPDATE)
    *  SQLite 3.33+ 支持 UPDATE...FROM 语法
+   *  2026-07:改用 sellerId 关联(稳定主键),sellerSlug 仅作 fallback
    */
   async refreshSellerInfo() {
-    // total = 有 log 记录的 sku 数(用于统计)
+    // total = 有 log 记录的 sku 数(用于统计,sellerId 非空)
     const totalRow = db
       .prepare(
         `SELECT COUNT(DISTINCT sku) AS n
          FROM ozon_auto_collect_log
-         WHERE sellerSlug IS NOT NULL AND sellerSlug <> ''`
+         WHERE sellerId IS NOT NULL AND sellerId <> ''`
       )
       .get();
     const total = totalRow?.n || 0;
     const result = db
       .prepare(
         `WITH latest_sellers AS (
-           SELECT l.sku, l.sellerSlug, sc.sellerName
+           SELECT l.sku, l.sellerId, l.sellerSlug, sc.sellerName
            FROM (
-             SELECT sku, sellerSlug,
+             SELECT sku, sellerId, sellerSlug,
                     ROW_NUMBER() OVER (PARTITION BY sku ORDER BY collectedAt DESC) AS rn
              FROM ozon_auto_collect_log
-             WHERE sellerSlug IS NOT NULL AND sellerSlug <> ''
+             WHERE sellerId IS NOT NULL AND sellerId <> ''
            ) l
-           LEFT JOIN ozon_store_classification sc ON sc.sellerSlug = l.sellerSlug
+           LEFT JOIN ozon_store_classification sc ON sc._id = l.sellerId
            WHERE l.rn = 1
          )
          UPDATE ozon_cache_index
-         SET seller_slug = ls.sellerSlug,
+         SET seller_id = ls.sellerId,
+             seller_slug = COALESCE(ls.sellerSlug, seller_slug),
              seller_name = COALESCE(ls.sellerName, ''),
              searchable_text = COALESCE(name, '') || ' ' || ozon_cache_index.sku || ' ' || COALESCE(ls.sellerName, ''),
              updated_at = datetime('now')

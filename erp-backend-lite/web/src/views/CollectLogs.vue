@@ -25,11 +25,12 @@ const logs = ref([]);
 const expandedRows = ref(new Set());
 
 // 筛选条件
+// 2026-07:sellerId 优先(稳定主键);sellerSlug 兼容(可变,店铺改名时变)
 const filters = reactive({
   sku: '',
   status: '',
   source: '',
-  sellerSlug: '',
+  sellerId: '',
 });
 
 // 分页
@@ -63,7 +64,7 @@ async function loadLogs() {
       sku: filters.sku.trim(),
       status: filters.status,
       source: filters.source,
-      sellerSlug: filters.sellerSlug.trim(),
+      sellerId: filters.sellerId.trim(),
       page: pager.current,
       pageSize: pager.pageSize,
     });
@@ -285,8 +286,8 @@ onUnmounted(() => {
         <input
           class="filter-input"
           type="text"
-          v-model.trim="filters.sellerSlug"
-          placeholder="卖家 Slug"
+          v-model.trim="filters.sellerId"
+          placeholder="卖家 ID"
           @keydown.enter="searchLogs"
         />
         <button class="btn btn-primary" @click="searchLogs">查询</button>
@@ -347,7 +348,7 @@ onUnmounted(() => {
               <td v-for="t in EIGHT_TYPES" :key="t.key" :class="logResultClass(log, t.key)">
                 {{ logResultTag(log, t.key) }}
               </td>
-              <td>{{ log.sellerSlug || '—' }}</td>
+              <td>{{ log.sellerId || log.sellerSlug || '—' }}</td>
               <td class="col-time">{{ fmtTime(log.collectedAt) }}</td>
             </tr>
             <tr v-if="isExpanded(log._id)" class="row-detail">

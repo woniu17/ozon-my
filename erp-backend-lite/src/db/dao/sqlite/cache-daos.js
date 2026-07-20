@@ -1,10 +1,11 @@
-// SQLite 缓存 DAO 工厂:9 类缓存共用,差异通过 options 配置
+// SQLite 缓存 DAO 工厂:richMedia / marketStats / followSell 三类独立缓存共用,
+// 其余 4 类(dom/attribute/index)结构特殊,各自有专属 DAO 文件。
 // 日期统一用 new Date().toISOString() 写入(UTC, T 分隔,带 Z)
 import { db } from '../../index.js';
 
 /**
  * 创建通用缓存 DAO(SQLite 实现)
- * @param {string} table - 表名(如 'ozon_search_cache')
+ * @param {string} table - 表名(如 'ozon_rich_media_cache')
  * @param {object} [opts]
  * @param {string[]} [opts.extraColumns] - 额外列(如 ['bundleId', 'attrsEmptyVerifiedAt'])
  * @param {boolean} [opts.hasL2Synced] - 是否含 l2Synced 列(marketStats/followSell)

@@ -12,6 +12,7 @@ import Config from '../views/Config.vue';
 import ListingTemplates from '../views/ListingTemplates.vue';
 import Cache from '../views/Cache.vue';
 import CollectLogs from '../views/CollectLogs.vue';
+import ShallowCollectLogs from '../views/ShallowCollectLogs.vue';
 import CollectQueue from '../views/CollectQueue.vue';
 import { useAuthStore } from '../stores/auth.js';
 
@@ -33,7 +34,8 @@ const router = createRouter({
     { path: '/config', name: 'config', component: Config },
     { path: '/listing-templates', name: 'listing-templates', component: ListingTemplates },
     { path: '/cache', name: 'cache', component: Cache },
-    { path: '/collect-logs', name: 'collect-logs', component: CollectLogs },
+    { path: '/collect-logs', name: 'collect-logs', component: CollectLogs, meta: { title: '深度采集日志' } },
+    { path: '/shallow-collect-logs', name: 'shallow-collect-logs', component: ShallowCollectLogs, meta: { title: '浅度采集日志' } },
     { path: '/collect-queue', name: 'collect-queue', component: CollectQueue, meta: { title: '采集队列' } },
   ],
 });

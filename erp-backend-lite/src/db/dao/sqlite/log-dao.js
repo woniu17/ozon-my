@@ -98,6 +98,10 @@ export const autoCollectLogDao = {
       whereParts.push('sellerSlug = ?');
       params.push(filter.sellerSlug);
     }
+    if (filter.sellerId) {
+      whereParts.push('sellerId = ?');
+      params.push(filter.sellerId);
+    }
     if (filter.startTime) {
       whereParts.push('collectedAt >= ?');
       params.push(new Date(filter.startTime).toISOString());
@@ -111,7 +115,7 @@ export const autoCollectLogDao = {
 
     const items = db
       .prepare(
-        `SELECT sku, source, sellerSlug, storeClassified, depth, status, results, totalDuration, collectedAt
+        `SELECT sku, source, sellerSlug, sellerId, storeClassified, depth, status, results, totalDuration, collectedAt
          FROM ozon_auto_collect_log ${where}
          ORDER BY collectedAt DESC LIMIT ? OFFSET ?`
       )
@@ -129,7 +133,7 @@ export const autoCollectLogDao = {
   async findBySku(sku) {
     const items = db
       .prepare(
-        `SELECT sku, source, sellerSlug, storeClassified, depth, status, results, totalDuration, collectedAt
+        `SELECT sku, source, sellerSlug, sellerId, storeClassified, depth, status, results, totalDuration, collectedAt
          FROM ozon_auto_collect_log WHERE sku = ?
          ORDER BY collectedAt DESC`
       )
@@ -146,13 +150,14 @@ export const autoCollectLogDao = {
     const r = db
       .prepare(
         `INSERT INTO ozon_auto_collect_log
-         (sku, source, sellerSlug, storeClassified, depth, status, results, totalDuration, collectedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (sku, source, sellerSlug, sellerId, storeClassified, depth, status, results, totalDuration, collectedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         doc.sku,
         doc.source ?? null,
         doc.sellerSlug ?? null,
+        doc.sellerId ?? null,
         doc.storeClassified || 'unclassified',
         doc.depth ?? 0,
         doc.status,

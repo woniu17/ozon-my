@@ -214,6 +214,7 @@ CREATE TABLE IF NOT EXISTS ozon_cache_index (
 
   -- 采集源
   seller_slug        TEXT,
+  seller_id          TEXT,                -- 稳定主键(2026-07 新增,seller_slug 可变,主查询用 seller_id)
   seller_name        TEXT,
 
   -- 跟卖状态(0=未跟卖, 1=已跟卖)
@@ -230,9 +231,10 @@ CREATE INDEX IF NOT EXISTS idx_ci_listed       ON ozon_cache_index(listed);
 CREATE INDEX IF NOT EXISTS idx_ci_seller       ON ozon_cache_index(seller_slug);
 CREATE INDEX IF NOT EXISTS idx_ci_rating       ON ozon_cache_index(rating_count);
 CREATE INDEX IF NOT EXISTS idx_ci_last_fetched ON ozon_cache_index(last_fetched_at DESC);
--- 注:idx_ci_price_value 在 db/index.js 的 ensureCacheIndexFtsAndPriceValue 中创建,
--- 因为旧库 ozon_cache_index 表已存在(CREATE TABLE IF NOT EXISTS 不会添加 price_value 列),
--- 需先 ALTER TABLE 补列再建索引,否则会报 "no such column: price_value"
+-- 注:idx_ci_seller_id 由 db/index.js 的 migrateSellerIdPrimaryKey 负责创建,
+-- 因为旧库 ozon_cache_index 表已存在(CREATE TABLE IF NOT EXISTS 不会添加 seller_id 列),
+-- 需先 ALTER TABLE 补列再建索引,否则会报 "no such column: seller_id"
+-- 注:idx_ci_price_value 同理,在 ensureCacheIndexFtsAndPriceValue 中创建
 
 -- ── FTS5 全文搜索虚拟表(外部内容表,与 ozon_cache_index 同步) ──────────────
 -- 替代原 idx_ci_fts(普通 B-tree 索引对 LIKE '%keyword%' 无效)
@@ -322,12 +324,13 @@ CREATE TABLE IF NOT EXISTS ozon_follow_sell_cache (
   l2Synced   INTEGER DEFAULT 0
 );
 
--- ── 采集日志(原 ozon_auto_collect_log) ───────────────────────
+-- ── 深度采集日志(原 ozon_auto_collect_log,2026-07 改名) ───────────────────────
 CREATE TABLE IF NOT EXISTS ozon_auto_collect_log (
   _id              INTEGER PRIMARY KEY AUTOINCREMENT,
   sku              TEXT NOT NULL,
   source           TEXT,             -- 'shop-page' | 'pdp' | NULL
   sellerSlug       TEXT,
+  sellerId         TEXT,             -- 稳定主键(2026-07 新增,sellerSlug 可变,主查询用 sellerId)
   storeClassified  TEXT,             -- 'chinese' | 'non-chinese' | 'unclassified'
   depth            INTEGER,
   status           TEXT NOT NULL,   -- 'success' | 'partial' | 'failed' | 'skipped' | 'antibot'
@@ -335,16 +338,47 @@ CREATE TABLE IF NOT EXISTS ozon_auto_collect_log (
   totalDuration    INTEGER,
   collectedAt      TEXT NOT NULL    -- ISO8601
 );
-CREATE INDEX IF NOT EXISTS idx_log_sku_time    ON ozon_auto_collect_log(sku, collectedAt DESC);
-CREATE INDEX IF NOT EXISTS idx_log_status_time ON ozon_auto_collect_log(status, collectedAt DESC);
-CREATE INDEX IF NOT EXISTS idx_log_time        ON ozon_auto_collect_log(collectedAt DESC);
-CREATE INDEX IF NOT EXISTS idx_log_seller_time ON ozon_auto_collect_log(sellerSlug, collectedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_log_sku_time        ON ozon_auto_collect_log(sku, collectedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_log_status_time     ON ozon_auto_collect_log(status, collectedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_log_time            ON ozon_auto_collect_log(collectedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_log_seller_time     ON ozon_auto_collect_log(sellerSlug, collectedAt DESC);
+-- 注:idx_log_sellerId_time 由 db/index.js 的 migrateSellerIdPrimaryKey 负责创建
+-- (旧库需先 ALTER TABLE 补 sellerId 列再建索引,否则会报 "no such column: sellerId")
 
--- ── 店铺分类 ─────────────────────────────────────────────────
+-- ── 浅度采集日志(2026-07 新增:店铺页扫描发现的每个 SKU 一条) ─────────────────
+-- 与深度采集日志的区别:
+--   深度采集日志:SW 入队后实际执行采集流程(card/detail/pdp/search/bundle/marketStats/followSell)的完整记录
+--   浅度采集日志:仅记录"在店铺页扫描时发现了某 SKU + 是否通过过滤"的轻量记录
+-- 用途:用户排查过滤效果(为什么有些 SKU 被略过)+ 浅度采集统计
+CREATE TABLE IF NOT EXISTS ozon_shallow_collect_log (
+  _id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  sku            TEXT NOT NULL,
+  sellerSlug     TEXT,
+  sellerId       TEXT,
+  name           TEXT,
+  price          REAL,              -- 可空(卡片未提取到价格)
+  ratingCount    INTEGER,           -- 可空
+  imageUrl       TEXT,
+  passesFilter   INTEGER NOT NULL,  -- 0=过滤不通过(略过) | 1=通过(已写 card 缓存并入队)
+  skipReason     TEXT,              -- 'no-rating'|'price-below-min'|'price-above-max'|'price-invalid'|'rating-below-min'|'rating-above-max'|NULL
+  source         TEXT,              -- 'api-scroller' | 'dom-scroller' | 'shop-page' | 'pdp'
+  collectedAt    TEXT NOT NULL      -- ISO8601
+);
+CREATE INDEX IF NOT EXISTS idx_shallow_log_sku_time        ON ozon_shallow_collect_log(sku, collectedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_shallow_log_passes_time     ON ozon_shallow_collect_log(passesFilter, collectedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_shallow_log_time            ON ozon_shallow_collect_log(collectedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_shallow_log_seller_time     ON ozon_shallow_collect_log(sellerSlug, collectedAt DESC);
+-- 注:idx_shallow_log_sellerId_time 由 db/index.js 的 migrateSellerIdPrimaryKey 负责创建
+-- (旧库需先 ALTER TABLE 补 sellerId 列再建索引,否则会报 "no such column: sellerId")
+
+-- ── 店铺分类(2026-07 重构:_id 改为 sellerId,sellerSlug 降级为普通字段) ─────
+-- 旧表 _id = sellerSlug,但 sellerSlug 可变(店铺改名时变),导致历史记录无法关联。
+-- 新表 _id = sellerId(稳定主键),sellerSlug 作为普通字段 + 索引(按 slug 反查仍可用)。
+-- 历史数据中 sellerId 为空的记录迁移到 ozon_store_classification_legacy 保留备查。
 CREATE TABLE IF NOT EXISTS ozon_store_classification (
-  _id           TEXT PRIMARY KEY,    -- = sellerSlug
-  sellerSlug    TEXT NOT NULL,
-  sellerId      TEXT,                -- 可为空/空串
+  _id           TEXT PRIMARY KEY,    -- = sellerId(稳定主键,从 __NUXT__ 获取)
+  sellerId      TEXT NOT NULL,       -- 冗余字段,便于 ORM/查询(= _id)
+  sellerSlug    TEXT,                -- 可变(店铺改名时变),仅用于反查/展示
   sellerName    TEXT,
   isChinese     INTEGER,             -- NULL/0/1
   classifiedBy  TEXT,
@@ -356,10 +390,23 @@ CREATE TABLE IF NOT EXISTS ozon_store_classification (
 CREATE INDEX IF NOT EXISTS idx_sc_chinese ON ozon_store_classification(isChinese);
 CREATE INDEX IF NOT EXISTS idx_sc_name    ON ozon_store_classification(sellerName);
 CREATE INDEX IF NOT EXISTS idx_sc_seen    ON ozon_store_classification(lastSeenAt DESC);
--- partialFilterExpression 唯一索引:仅对非空 sellerId 建唯一约束
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sc_sellerId_unique
-  ON ozon_store_classification(sellerId)
-  WHERE sellerId IS NOT NULL AND sellerId != '';
+CREATE INDEX IF NOT EXISTS idx_sc_slug    ON ozon_store_classification(sellerSlug);
+
+-- 旧表 _id = sellerSlug 的历史数据迁移到这里(sellerId 为空无法迁移到新表)
+-- 业务上不查询此表,仅保留备查
+CREATE TABLE IF NOT EXISTS ozon_store_classification_legacy (
+  _id           TEXT PRIMARY KEY,    -- = sellerSlug(旧主键)
+  sellerSlug    TEXT NOT NULL,
+  sellerId      TEXT,                -- 可为空/空串
+  sellerName    TEXT,
+  isChinese     INTEGER,
+  classifiedBy  TEXT,
+  classifiedAt  TEXT,
+  companyInfo   TEXT,
+  lastSeenAt    TEXT,
+  lastSeenUrl   TEXT,
+  migratedAt    TEXT NOT NULL        -- 迁移到 legacy 的时间
+);
 
 -- ── 店铺 SKU 关联 ───────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS ozon_store_sku (

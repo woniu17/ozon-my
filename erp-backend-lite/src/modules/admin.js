@@ -802,8 +802,8 @@ router.get('/admin/api/dashboard-stats', (_req, res, next) => {
     }
     const todayRate = todayTotal > 0 ? Math.round((todaySuccess / todayTotal) * 1000) / 10 : 0;
 
-    // 采集箱缓存数(collect_box_v2 表已废弃,改查 ozon_card_cache,对齐 misc.js#status-counts)
-    const collectPending = db.prepare(`SELECT COUNT(*) AS n FROM ozon_card_cache`).get().n;
+    // 采集箱缓存数(collect_box_v2 与旧 ozon_card_cache 表均已废弃,改查 ozon_cache_index.card_hit=1,对齐 misc.js#status-counts)
+    const collectPending = db.prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index WHERE card_hit = 1`).get().n;
 
     // 商品缓存数
     const productCount = db.prepare(`SELECT COUNT(*) AS n FROM product_data_cache`).get().n;

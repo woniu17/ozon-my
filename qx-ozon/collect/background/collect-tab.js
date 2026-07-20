@@ -1816,6 +1816,7 @@
             sku,
             source,
             sellerSlug,
+            sellerId: sellerId || '',
             storeClassified,
             depth,
             status: 'skipped',
@@ -1872,6 +1873,7 @@
             sku,
             source,
             sellerSlug,
+            sellerId: sellerId || '',
             storeClassified,
             depth,
             status: 'skipped',
@@ -1925,7 +1927,7 @@
           } catch (e) {
             if (e?.message === 'ANTIBOT_BLOCKED') {
               console.warn('[SW autoCollect] Step4 反爬熔断:', sku);
-              return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
+              return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId);
             }
             // 截断到 80 字符,避免超长 HTML 挑战页内容污染日志
             results[2].error = e?.message ? String(e.message).slice(0, 80) : 'STEP4_FAILED';
@@ -2026,7 +2028,7 @@
               );
             if (looksAntibot || e?.__antibot) {
               console.warn('[SW autoCollect] Step5 反爬熔断:', sku);
-              return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
+              return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId);
             }
             console.warn('[SW autoCollect] Step5 failed:', sku, e?.message || e);
           }
@@ -2043,7 +2045,7 @@
               console.log('[SW autoCollect] Step6 marketStats: AUTH_REQUIRED:', sku);
             } else if (marketData?.__antibot) {
               console.warn('[SW autoCollect] Step6 marketStats 反爬熔断:', sku);
-              return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results);
+              return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId);
             } else if (marketData) {
               // HTTP 200 即写缓存(包括 __empty 空数据),标记已采集
               this.marketStatsCacheSet(sku, marketData);
@@ -2087,6 +2089,7 @@
           sku,
           source,
           sellerSlug,
+          sellerId: sellerId || '',
           storeClassified,
           depth,
           status,

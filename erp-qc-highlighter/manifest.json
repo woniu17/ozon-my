@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "ERP 质检单高亮",
+  "version": "1.0.0",
+  "description": "在 ERP 91miaoshou 订单页面中识别并突出展示质检单（订单号以 02131 或 02478 开头）",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://erp.91miaoshou.com/*"
+  ],
+  "action": {
+    "default_title": "ERP 质检单高亮 - 设置",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://erp.91miaoshou.com/order/package/index*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

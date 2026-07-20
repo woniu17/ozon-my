@@ -52,7 +52,7 @@ export const autoCollectLogDao = {
 
   /**
    * 分页列表
-   * @param {object} filter - { sku?, status?(string|string[]), source?, sellerSlug?, startTime?, endTime? }
+   * @param {object} filter - { sku?, status?(string|string[]), source?, sellerId?, sellerSlug?, startTime?, endTime? }
    */
   async findPagedList(filter, page, pageSize) {
     const col = await cols.autoCollectLog();
@@ -62,7 +62,9 @@ export const autoCollectLogDao = {
       query.status = Array.isArray(filter.status) ? { $in: filter.status } : filter.status;
     }
     if (filter.source) query.source = filter.source;
-    if (filter.sellerSlug) query.sellerSlug = filter.sellerSlug;
+    // sellerId 优先(稳定主键),sellerSlug 兼容
+    if (filter.sellerId) query.sellerId = filter.sellerId;
+    else if (filter.sellerSlug) query.sellerSlug = filter.sellerSlug;
     if (filter.startTime || filter.endTime) {
       query.collectedAt = {};
       if (filter.startTime) query.collectedAt.$gte = new Date(filter.startTime);
@@ -89,6 +91,7 @@ export const autoCollectLogDao = {
       sku: doc.sku,
       source: doc.source ?? null,
       sellerSlug: doc.sellerSlug ?? null,
+      sellerId: doc.sellerId ?? null,
       storeClassified: doc.storeClassified || 'unclassified',
       depth: doc.depth ?? 0,
       status: doc.status,

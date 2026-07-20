@@ -5,6 +5,7 @@ import { domDao } from './dom-dao.js';
 import { attributeDao } from './attribute-dao.js';
 import { indexDao } from './index-dao.js';
 import { autoCollectLogDao } from './log-dao.js';
+import { shallowCollectLogDao } from './shallow-log-dao.js';
 import { storeClassificationDao, storeSkuDao } from './store-daos.js';
 import { collectQueueTasksDao, collectQueueOpsDao } from './queue-daos.js';
 import { startTtlCleaner } from './ttl-cleaner.js';
@@ -40,6 +41,7 @@ export async function createSqliteDaos() {
     followSellDao,
     // 其他业务 DAO
     autoCollectLogDao,
+    shallowCollectLogDao,
     storeClassificationDao,
     storeSkuDao,
     collectQueueTasksDao,
