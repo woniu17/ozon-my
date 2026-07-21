@@ -22,6 +22,7 @@ import configRoutes from './modules/config.js';
 import batchRoutes from './modules/batch.js';
 import cacheRoutes from './modules/cache.js';
 import collectQueueRoutes from './modules/collect-queue.js';
+import categoryFilterRoutes from './modules/category-filter.js';
 import { auditLog } from './middleware/audit.js';
 import { startImportStatusPoller } from './services/import-status-poller.js';
 import { startStockSync, stopStockSync } from './services/stock-sync.js';
@@ -81,6 +82,7 @@ app.use(configRoutes);
 app.use(batchRoutes);
 app.use(cacheRoutes);
 app.use(collectQueueRoutes);
+app.use(categoryFilterRoutes);
 
 // 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
 if (config.featureFlags?.proxy_collect) {

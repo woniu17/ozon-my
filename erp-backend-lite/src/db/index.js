@@ -101,6 +101,8 @@ async function ensureMigrations() {
   // 2) ozon_auto_collect_log 补 sellerId 列 + 索引,从 ozon_store_sku 反查回填
   // 3) ozon_store_classification 重建表(_id = sellerId),旧表数据迁移到 legacy 表
   await migrateSellerIdPrimaryKey(db);
+  // 2026-07: 类目过滤功能 — ozon_cache_index 补类目列 + 索引 + 从 bundle_data 回填
+  await migrateCategoryFields(db);
   // ozon_cache_index.has_rich_content:richMedia.data.richContent 非空则 1,用于采集箱"有富内容"筛选
   const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
   let addedHasRichContent = false;
@@ -450,6 +452,114 @@ async function migrateSellerIdPrimaryKey(db) {
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_shallow_log_sellerId_time ON ozon_shallow_collect_log(sellerId, collectedAt DESC)`
   );
+}
+
+// 2026-07: 类目过滤功能 — ozon_cache_index 补类目列 + 索引 + 从 bundle_data 回填
+// 三件事:
+//  1) 补 description_category_id / type_id / category_name 三列(旧库 ALTER TABLE)
+//  2) 创建 idx_ci_desc_cat_id / idx_ci_type_id 索引
+//  3) 从 ozon_attribute_cache.bundle_data(JSON)回填类目字段到索引表
+// 幂等:已迁移过的库(新表结构)直接跳过。
+async function migrateCategoryFields(db) {
+  const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
+  if (ciCols.length === 0) return; // 表不存在,跳过(schema.sql 会创建)
+
+  // Step 1: 补列
+  let addedDescCatId = false;
+  let addedTypeId = false;
+  let addedCategoryName = false;
+  if (!ciCols.some((c) => c.name === 'description_category_id')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN description_category_id INTEGER`);
+    console.log('[db] migration: added column ozon_cache_index.description_category_id');
+    addedDescCatId = true;
+  }
+  if (!ciCols.some((c) => c.name === 'type_id')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN type_id INTEGER`);
+    console.log('[db] migration: added column ozon_cache_index.type_id');
+    addedTypeId = true;
+  }
+  if (!ciCols.some((c) => c.name === 'category_name')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN category_name TEXT`);
+    console.log('[db] migration: added column ozon_cache_index.category_name');
+    addedCategoryName = true;
+  }
+
+  // Step 2: 索引(IF NOT EXISTS 幂等)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ci_desc_cat_id ON ozon_cache_index(description_category_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ci_type_id ON ozon_cache_index(type_id)`);
+
+  // Step 3: 从 bundle_data + search_data 回填类目字段(幂等:每次启动都执行,COALESCE 保留已有值)
+  // 与 syncSku / prepare-bundle.js extractCategoryIds 同源:
+  //   - type_id:优先 search_data.items[0].description_type_dict_value(注意:字段名误用,实际是 type_id)
+  //              fallback bundle_data.type_id(bundle 接口通常不返此字段)
+  //   - description_category_id:优先 search_data.categories 中 level=3 的类目(OPI 字典要求 level_3_id)
+  //              fallback bundle_data.description_category_id(该值通常是 level_4,不保证正确)
+  //   - category_name:detail_data.category(DOM 面包屑)
+  // 注:SQLite UPDATE...FROM 在 JOIN ON/WHERE 中引用 target table 列时报错,改用相关子查询
+  //     (与 backfillHasRichContent 的写法一致)
+  if (addedDescCatId || addedTypeId || addedCategoryName) {
+    console.log('[db] migration: backfilling category fields from bundle_data + search_data...');
+  }
+  const result = db
+    .prepare(
+      `UPDATE ozon_cache_index
+       SET description_category_id = COALESCE(
+             -- 优先 search_data.categories level=3
+             (SELECT CASE
+                       WHEN EXISTS (
+                         SELECT 1 FROM json_each(
+                           json_extract(a.search_data, '$.items[0].categories')
+                         ) e
+                         WHERE json_extract(e.value, '$.level') = '3'
+                          OR json_extract(e.value, '$.level') = 3
+                       )
+                       THEN (
+                         SELECT CAST(json_extract(e.value, '$.id') AS INTEGER)
+                         FROM json_each(
+                           json_extract(a.search_data, '$.items[0].categories')
+                         ) e
+                         WHERE json_extract(e.value, '$.level') = '3'
+                            OR json_extract(e.value, '$.level') = 3
+                         LIMIT 1
+                       )
+                       ELSE NULL
+                     END
+              FROM ozon_attribute_cache a
+              WHERE a._id = ozon_cache_index.sku AND a.search_data IS NOT NULL),
+             -- fallback bundle_data.description_category_id
+             (SELECT CAST(json_extract(a.bundle_data, '$.description_category_id') AS INTEGER)
+              FROM ozon_attribute_cache a
+              WHERE a._id = ozon_cache_index.sku AND a.bundle_data IS NOT NULL
+                AND json_extract(a.bundle_data, '$.description_category_id') IS NOT NULL),
+             description_category_id),
+           type_id = COALESCE(
+             -- 优先 search_data.description_type_dict_value(实际是 type_id)
+             (SELECT CAST(json_extract(a.search_data, '$.items[0].description_type_dict_value') AS INTEGER)
+              FROM ozon_attribute_cache a
+              WHERE a._id = ozon_cache_index.sku AND a.search_data IS NOT NULL
+                AND json_extract(a.search_data, '$.items[0].description_type_dict_value') IS NOT NULL),
+             -- fallback bundle_data.type_id
+             (SELECT CAST(json_extract(a.bundle_data, '$.type_id') AS INTEGER)
+              FROM ozon_attribute_cache a
+              WHERE a._id = ozon_cache_index.sku AND a.bundle_data IS NOT NULL
+                AND json_extract(a.bundle_data, '$.type_id') IS NOT NULL),
+             type_id),
+           category_name = COALESCE(
+             (SELECT json_extract(d.detail_data, '$.category')
+              FROM ozon_dom_cache d WHERE d._id = ozon_cache_index.sku),
+             category_name)
+       WHERE EXISTS (
+         SELECT 1 FROM ozon_attribute_cache a
+         WHERE a._id = ozon_cache_index.sku
+           AND (a.bundle_data IS NOT NULL OR a.search_data IS NOT NULL)
+       )`
+    )
+    .run();
+  if (result.changes > 0) {
+    console.log(
+      `[db] migration: backfilled category fields for ${result.changes} SKUs`
+    );
+  }
 }
 
 // 直接运行时初始化(node src/db/index.js)

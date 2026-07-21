@@ -146,6 +146,52 @@ export const indexDao = {
     fetchedAts.sort();
     const lastFetchedAt = fetchedAts.pop() || null;
 
+    // 类目信息(2026-07 新增,从 bundle_data 提取冗余,供类目过滤功能使用)
+    // 与 prepare-bundle.js extractCategoryIds 同源:
+    //   - typeId:优先 search_data 的 description_type_dict_value(实际是 type_id,字段名误用);
+    //             fallback bundle_data.type_id(bundle 接口通常不返此字段,几乎全为空)
+    //   - descriptionCategoryId:优先 search_data.categories 中 level=3 的类目(OPI 字典要求 level_3_id);
+    //             fallback bundle_data.description_category_id(注意:该值通常是 level_4,不保证正确);
+    //             再 fallback search_data.categories 最深层
+    // detail_data.category 是 DOM 面包屑字符串(如 "服装/鞋类/运动鞋"),仅作 category_name 显示用
+    let descriptionCategoryId = null;
+    let typeId = null;
+    // Step 1: bundle_data 兜底(几乎只有 description_category_id,type_id 通常为空)
+    if (bundleData && typeof bundleData === 'object') {
+      const bDci = Number(bundleData.description_category_id);
+      const bTi = Number(bundleData.type_id);
+      if (Number.isFinite(bDci) && bDci > 0) descriptionCategoryId = bDci;
+      if (Number.isFinite(bTi) && bTi > 0) typeId = bTi;
+    }
+    // Step 2: search_data 兜底(优先级最高,但仅在 bundle 未命中时写入)
+    if ((descriptionCategoryId === null || typeId === null) && attrData) {
+      const searchItem =
+        Array.isArray(attrData.items) && attrData.items.length > 0 ? attrData.items[0] : null;
+      if (searchItem) {
+        // typeId:取 description_type_dict_value(注意:字段名误用,实际值是 type_id)
+        if (typeId === null) {
+          const sTi = Number(searchItem.description_type_dict_value);
+          if (Number.isFinite(sTi) && sTi > 0) typeId = sTi;
+        }
+        // descriptionCategoryId:优先 categories 中 level=3 的类目,再 fallback 最深层
+        if (descriptionCategoryId === null && Array.isArray(searchItem.categories)) {
+          const lvl3 = searchItem.categories.find((c) => c && Number(c.level) === 3);
+          if (lvl3 && Number.isFinite(Number(lvl3.id)) && Number(lvl3.id) > 0) {
+            descriptionCategoryId = Number(lvl3.id);
+          } else {
+            const sorted = [...searchItem.categories]
+              .filter((c) => c && Number.isFinite(Number(c.id)))
+              .sort((a, b) => Number(b.level || 0) - Number(a.level || 0));
+            if (sorted.length > 0) {
+              const topId = Number(sorted[0].id);
+              if (topId > 0) descriptionCategoryId = topId;
+            }
+          }
+        }
+      }
+    }
+    const categoryName = detailData?.category || null;
+
     // 全文搜索字段(name + sku + seller_name 会在定时任务里补 seller)
     // 这里先用现有 seller_name(可能为空)
     const existing = db
@@ -167,9 +213,11 @@ export const indexDao = {
         hit_count, last_fetched_at,
         name, price, price_value, primary_image, url, rating_count,
         has_video, has_rich_content, market_price_p50, competitor_count,
-        seller_slug, seller_id, seller_name, listed, searchable_text, updated_at
+        seller_slug, seller_id, seller_name,
+        description_category_id, type_id, category_name,
+        listed, searchable_text, updated_at
       ) VALUES (
-        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
+        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
       )
       ON CONFLICT(sku) DO UPDATE SET
         card_hit=excluded.card_hit, card_fetched_at=excluded.card_fetched_at,
@@ -193,6 +241,10 @@ export const indexDao = {
         seller_slug=COALESCE(ozon_cache_index.seller_slug, excluded.seller_slug),
         seller_id=COALESCE(ozon_cache_index.seller_id, excluded.seller_id),
         seller_name=COALESCE(ozon_cache_index.seller_name, excluded.seller_name),
+        -- 类目字段:COALESCE 保留 DB 当前值,仅在 DB 为 NULL 时取 excluded(避免 bundle 暂无数据时清空)
+        description_category_id=COALESCE(ozon_cache_index.description_category_id, excluded.description_category_id),
+        type_id=COALESCE(ozon_cache_index.type_id, excluded.type_id),
+        category_name=COALESCE(ozon_cache_index.category_name, excluded.category_name),
         listed=ozon_cache_index.listed,
         searchable_text=excluded.searchable_text,
         updated_at=datetime('now')`
@@ -227,6 +279,9 @@ export const indexDao = {
       sellerSlug,
       sellerId,
       sellerName,
+      descriptionCategoryId,
+      typeId,
+      categoryName,
       listed,
       searchableText
     );

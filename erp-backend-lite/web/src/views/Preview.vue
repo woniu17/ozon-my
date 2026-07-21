@@ -2,10 +2,11 @@
 // 上架预览工作台:上半部分(上架参数/预检清单/数据来源),下半部分(左原商品预览 + 右 4 项对比卡)
 // 4 项对比卡:图片对比、价格对比、字段概览对比、属性对比,左右双列对比,凸显差异
 // 品牌强制:不检测原数据,上架侧一律强制 brand(85)= "无品牌"
-import { reactive, ref, computed, watch, onMounted } from 'vue';
+import { reactive, ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getSkuProfile, submitPreviewImport } from '../api/collect-box-v2.js';
 import { getListingTemplates } from '../api/listingTemplates.js';
+import { checkFilteredBySku } from '../api/category-filter.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
 
@@ -53,6 +54,9 @@ const state = reactive({
   submitting: false,
   submitResult: null,
   showOpiJson: false,
+  // 类目过滤黑名单(2026-07 新增):若该 SKU 类目在黑名单中,一键提交被禁用
+  categoryFiltered: false, // 是否在过滤名单中
+  categoryFilterLoading: false, // 检查中
 });
 
 // ── 加载 profile ───────────────────────────────────────────
@@ -60,17 +64,51 @@ async function loadProfile() {
   state.loading = true;
   state.error = '';
   state.profile = null;
+  // 重置类目过滤状态(profile 变更后需重新检查)
+  state.categoryFiltered = false;
+  state.categoryFilterLoading = false;
   try {
     const data = await getSkuProfile(sku.value, state.storeId || undefined);
     if (data.error) {
       state.error = data.error;
     } else {
       state.profile = data;
+      // profile 加载成功后,异步检查该 SKU 类目是否在过滤黑名单中
+      checkCategoryFilter();
     }
   } catch (err) {
     state.error = err.message || String(err);
   } finally {
     state.loading = false;
+  }
+}
+
+// ── 检查该 SKU 的类目是否在过滤黑名单中 ───────────────────
+// 用 SKU 调后端 check-by-sku API,后端内部查 ozon_cache_index(与采集箱同源),
+// 避免与 portalItem 的 OPI 合成路径(优先 search_data level_3)数据源不一致导致过滤失效
+// 失败时默认为"未过滤"(不阻断提交),避免后端故障影响主流程
+async function checkCategoryFilter() {
+  if (!sku.value) {
+    state.categoryFiltered = false;
+    return;
+  }
+  state.categoryFilterLoading = true;
+  try {
+    const r = await checkFilteredBySku(sku.value);
+    state.categoryFiltered = !!r?.filtered;
+    // 后端返回的 descriptionCategoryId/typeId/categoryName 与采集箱一致,
+    // 覆盖 portalItem 的 OPI 合成值,确保横幅显示与采集箱加入过滤时是同一个 key
+    if (r?.descriptionCategoryId && state.profile?.portalItem) {
+      state.profile.portalItem.descriptionCategoryId = r.descriptionCategoryId;
+      state.profile.portalItem.typeId = Number(r.typeId) || 0;
+      if (r.categoryName) state.profile.portalItem.categoryName = r.categoryName;
+    }
+  } catch (err) {
+    // 静默失败:不阻断主流程
+    console.warn('[Preview] checkCategoryFilter failed:', err);
+    state.categoryFiltered = false;
+  } finally {
+    state.categoryFilterLoading = false;
   }
 }
 
@@ -273,7 +311,29 @@ const preflight = computed(() => {
 
 const preflightBlocks = computed(() => preflight.value.filter((c) => c.level === 'block'));
 const preflightWarns = computed(() => preflight.value.filter((c) => c.level === 'warn'));
-const canSubmit = computed(() => preflightBlocks.value.length === 0 && !state.submitting && !!state.storeId);
+// 2026-07:canSubmit 增加 categoryFiltered 判定,过滤名单中的类目禁用一键提交
+const canSubmit = computed(
+  () =>
+    preflightBlocks.value.length === 0 &&
+    !state.submitting &&
+    !!state.storeId &&
+    !state.categoryFiltered
+);
+
+// 一键提交按钮被禁用时的原因(供 title 提示)
+const submitDisabledReason = computed(() => {
+  if (state.categoryFiltered) {
+    const p = state.profile?.portalItem;
+    const descCatId = p?.descriptionCategoryId;
+    const typeId = p?.typeId;
+    const label = descCatId ? `${descCatId}:${Number(typeId) || 0}` : '当前类目';
+    return `该商品类目 ${label} 在过滤名单中,无法一键提交`;
+  }
+  if (!state.storeId) return '请先选择店铺';
+  if (preflightBlocks.value.length) return `预检失败:${preflightBlocks.value[0].msg}`;
+  if (state.submitting) return '提交中...';
+  return '';
+});
 
 // ── portalItem 便捷引用 ────────────────────────────────────
 const portalItem = computed(() => state.profile?.portalItem || {});
@@ -481,7 +541,8 @@ const hasImages = computed(() => allImages.value.length > 0);
 const shuffledOrder = ref([]);
 const shuffleEnabled = computed(() => state.params.imageOrder === 'shuffle_non_primary');
 
-const processedImages = computed(() => {
+// 基础顺序图片(应用 keep / shuffle 策略后的结果,未含手动调整)
+const baseImages = computed(() => {
   const imgs = allImages.value;
   if (!imgs.length) return [];
   if (shuffleEnabled.value && shuffledOrder.value.length === imgs.length) {
@@ -490,17 +551,44 @@ const processedImages = computed(() => {
   return imgs;
 });
 
+// 手动调整覆盖层(2026-07 新增)
+// 设计:用户在 keep / shuffle 任意模式下都能继续手动调整(拖拽排序 + 删除)
+// 实现:用 manualOverride 存"调整后的图片 URL 数组",初始化为 null(未调整)
+//   - null:未手动调整,processedImages 直接用 baseImages
+//   - 数组:已手动调整,processedImages 用 manualOverride(其元素仍来自 baseImages)
+// 切换 imageOrder / 重新打乱 / 加载新 SKU 时,manualOverride 重置为 null(让 baseImages 重新生效)
+const manualOverride = ref(null);
+const manualDragIdx = ref(-1);
+
+// 当 baseImages 变化(模式切换/重排/换 SKU)时,清空手动覆盖
+watch(
+  baseImages,
+  () => {
+    manualOverride.value = null;
+  }
+);
+
+const processedImages = computed(() => {
+  if (manualOverride.value) return manualOverride.value.slice();
+  return baseImages.value;
+});
+
 // 图片差异信息:数量、顺序
 const imageDiff = computed(() => {
   const origCount = allImages.value.length;
   const listCount = processedImages.value.length;
-  const orderChanged =
+  const baseChanged =
     shuffleEnabled.value &&
     shuffledOrder.value.length === origCount &&
     shuffledOrder.value.some((idx, i) => idx !== i);
+  // 手动调整的顺序变化:manualOverride 与 baseImages 顺序/数量不一致
+  const manualChanged =
+    manualOverride.value !== null &&
+    (manualOverride.value.length !== baseImages.value.length ||
+      manualOverride.value.some((img, i) => img !== baseImages.value[i]));
   return {
     countChanged: origCount !== listCount,
-    orderChanged,
+    orderChanged: baseChanged || manualChanged,
     origCount,
     listCount,
   };
@@ -519,6 +607,119 @@ function reshuffle() {
     [rest[i], rest[j]] = [rest[j], rest[i]];
   }
   shuffledOrder.value = [0, ...rest];
+  // 重新打乱后手动覆盖失效
+  manualOverride.value = null;
+}
+
+// 手动调整:把当前 processedImages 作为初始值写入 manualOverride(首次调整时初始化)
+function ensureManualOverride() {
+  if (manualOverride.value === null) {
+    manualOverride.value = processedImages.value.slice();
+  }
+}
+
+// 重置:清空手动覆盖,回到当前模式下的基础顺序(keep 或 shuffle)
+function resetManualImages() {
+  manualOverride.value = null;
+}
+
+// 删除某张图片
+function removeManualImage(i) {
+  ensureManualOverride();
+  if (i < 0 || i >= manualOverride.value.length) return;
+  manualOverride.value.splice(i, 1);
+}
+
+// 计算当前 processedImages 第 i 位的"位置转换信息"
+// 统一逻辑:用图片 URL 在原图 allImages 中的索引作为"原位置"
+// - shuffle 模式:每张图显示其在原图中的位置(与 shuffledOrder 等价但更稳健)
+// - 手动调整(删除/拖拽)后:剩余图片仍能正确显示原位置(URL 锚点不变)
+// - keep 模式无调整:origIdx === i,不显示标签
+// - 找不到 URL(如新添加的图片):不显示标签
+function getOrigPosLabel(i) {
+  const url = processedImages.value[i];
+  if (!url) return '';
+  const origIdx = allImages.value.indexOf(url);
+  if (origIdx >= 0 && origIdx !== i) return `← #${origIdx + 1}`;
+  return '';
+}
+
+// ── 图片放大预览(Lightbox,2026-07 新增) ──
+const lightbox = reactive({
+  open: false,
+  url: '',
+  title: '',
+  index: 0,
+  list: [], // 当前 lightbox 的图片来源列表(allImages 或 processedImages)
+});
+
+function openLightbox(url, list, title = '') {
+  const idx = Array.isArray(list) ? list.indexOf(url) : -1;
+  lightbox.list = Array.isArray(list) ? list.slice() : [url];
+  lightbox.url = url;
+  lightbox.title = title;
+  lightbox.index = idx >= 0 ? idx : 0;
+  lightbox.open = true;
+  document.body.style.overflow = 'hidden';
+}
+function closeLightbox() {
+  lightbox.open = false;
+  lightbox.url = '';
+  lightbox.list = [];
+  document.body.style.overflow = '';
+}
+function lightboxPrev() {
+  if (!lightbox.list.length) return;
+  lightbox.index = (lightbox.index - 1 + lightbox.list.length) % lightbox.list.length;
+  lightbox.url = lightbox.list[lightbox.index];
+}
+function lightboxNext() {
+  if (!lightbox.list.length) return;
+  lightbox.index = (lightbox.index + 1) % lightbox.list.length;
+  lightbox.url = lightbox.list[lightbox.index];
+}
+function onLightboxKey(e) {
+  if (!lightbox.open) return;
+  if (e.key === 'Escape') closeLightbox();
+  else if (e.key === 'ArrowLeft') lightboxPrev();
+  else if (e.key === 'ArrowRight') lightboxNext();
+}
+onMounted(() => {
+  window.addEventListener('keydown', onLightboxKey);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onLightboxKey);
+  if (lightbox.open) document.body.style.overflow = '';
+});
+
+// HTML5 拖拽排序
+function onManualDragStart(e, i) {
+  ensureManualOverride();
+  manualDragIdx.value = i;
+  e.dataTransfer.effectAllowed = 'move';
+  try {
+    e.dataTransfer.setData('text/plain', String(i));
+  } catch {
+    /* 某些浏览器在 setData 时可能抛错,忽略 */
+  }
+}
+function onManualDragOver(e, i) {
+  // 必须 preventDefault 才能触发 drop
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  if (manualDragIdx.value !== i) {
+    // 实时交换:让用户在拖拽过程中就能看到顺序变化
+    const from = manualDragIdx.value;
+    if (from < 0 || from >= manualOverride.value.length) return;
+    const arr = manualOverride.value.slice();
+    const [moved] = arr.splice(from, 1);
+    arr.splice(i, 0, moved);
+    manualOverride.value = arr;
+    manualDragIdx.value = i;
+  }
+}
+function onManualDragEnd() {
+  manualDragIdx.value = -1;
 }
 
 watch(
@@ -757,10 +958,32 @@ onMounted(() => {
           预检 {{ preflight.length - preflightBlocks.length }}/{{ preflight.length }}
         </span>
         <button class="btn btn-ghost" @click="state.showOpiJson = true">查看 OPI JSON</button>
-        <button class="btn btn-primary" :disabled="!canSubmit" @click="onSubmit">
+        <button
+          class="btn btn-primary"
+          :class="{ 'btn-filtered-block': state.categoryFiltered }"
+          :disabled="!canSubmit"
+          :title="!canSubmit ? submitDisabledReason : ''"
+          @click="onSubmit"
+        >
           {{ state.submitting ? '提交中...' : '一键提交' }}
         </button>
       </div>
+    </div>
+
+    <!-- 类目过滤告警横幅(2026-07 新增) -->
+    <div
+      v-if="state.categoryFiltered && !state.loading && !state.error"
+      class="pv-filtered-banner"
+      role="alert"
+    >
+      <span class="pv-filtered-icon">⚠</span>
+      <span class="pv-filtered-text">
+        该商品类目
+        <strong>{{ state.profile?.portalItem?.descriptionCategoryId || '—' }}:{{ state.profile?.portalItem?.typeId || '—' }}</strong>
+        {{ state.profile?.portalItem?.categoryName ? `(${state.profile.portalItem.categoryName})` : '' }}
+        在过滤名单中,一键提交已被禁用。
+      </span>
+      <a class="pv-filtered-link" href="#/category-filter" target="_blank" rel="noopener">前往类目过滤管理页 →</a>
     </div>
 
     <!-- 加载/错误态 -->
@@ -847,6 +1070,15 @@ onMounted(() => {
                 title="主图不变,其他图片重新随机打乱"
               >
                 🎲 重新打乱
+              </button>
+              <button
+                v-if="manualOverride !== null"
+                class="btn btn-ghost pv-reshuffle-btn"
+                type="button"
+                @click="resetManualImages"
+                title="撤销所有手动调整(拖拽/删除),恢复到当前模式的基础顺序"
+              >
+                ♻ 重置图片
               </button>
             </div>
             <div class="pv-process-chain">
@@ -954,7 +1186,12 @@ onMounted(() => {
               <div class="pv-cmp-col">
                 <div class="pv-cmp-col-label">原商品 · {{ imageDiff.origCount }} 张</div>
                 <div class="pv-img-grid">
-                  <div v-for="(img, i) in allImages" :key="'o' + i" class="pv-img-cell">
+                  <div
+                    v-for="(img, i) in allImages"
+                    :key="'o' + i"
+                    class="pv-img-cell pv-img-clickable"
+                    @click="openLightbox(img, allImages, `原商品 #${i + 1}${i === 0 ? ' 主图' : ''}`)"
+                  >
                     <div class="pv-img-cell-idx">#{{ i + 1 }}{{ i === 0 ? ' 主图' : '' }}</div>
                     <img :src="img" class="pv-ic-img" alt="" loading="lazy" @error="$event.target.style.opacity = 0.2" />
                   </div>
@@ -963,6 +1200,7 @@ onMounted(() => {
               <div class="pv-cmp-col">
                 <div class="pv-cmp-col-label">
                   上架 · {{ imageDiff.listCount }} 张
+                  <span v-if="manualOverride !== null" class="pv-ic-tags">[已手动调整]</span>
                   <span v-if="shuffleEnabled" class="pv-ic-tags">[顺序已打乱]</span>
                   <span v-if="state.params.imageProcess.watermark" class="pv-ic-tags">[水]</span>
                   <span v-if="state.params.imageProcess.poster" class="pv-ic-tags">[海]</span>
@@ -971,17 +1209,41 @@ onMounted(() => {
                 <div class="pv-img-grid">
                   <div
                     v-for="(img, i) in processedImages"
-                    :key="'p' + i"
-                    class="pv-img-cell"
-                    :class="{ 'pv-img-changed': shuffleEnabled && shuffledOrder[i] !== i }"
+                    :key="'p' + i + '-' + img"
+                    class="pv-img-cell pv-img-manual"
+                    :class="{
+                      'pv-img-changed': getOrigPosLabel(i),
+                      'pv-img-dragging': manualDragIdx === i,
+                    }"
+                    draggable="true"
+                    @dragstart="onManualDragStart($event, i)"
+                    @dragover="onManualDragOver($event, i)"
+                    @dragend="onManualDragEnd()"
                   >
+                    <button
+                      class="pv-img-del-btn"
+                      type="button"
+                      title="删除该图片"
+                      @click.stop="removeManualImage(i)"
+                    >×</button>
                     <div class="pv-img-cell-idx">
                       #{{ i + 1 }}{{ i === 0 ? ' 主图' : '' }}
-                      <span v-if="shuffleEnabled && shuffledOrder[i] !== i" class="pv-img-reorder-tag">
-                        ← #{{ (shuffledOrder[i] ?? i) + 1 }}
+                      <span v-if="getOrigPosLabel(i)" class="pv-img-reorder-tag">
+                        {{ getOrigPosLabel(i) }}
                       </span>
+                      <span class="pv-img-reorder-tag" title="拖拽排序">⋮⋮</span>
                     </div>
-                    <img :src="img" class="pv-ic-img" alt="" loading="lazy" @error="$event.target.style.opacity = 0.2" />
+                    <img
+                      :src="img"
+                      class="pv-ic-img pv-img-clickable-img"
+                      alt=""
+                      loading="lazy"
+                      @click="openLightbox(img, processedImages, `上架 #${i + 1}${i === 0 ? ' 主图' : ''}`)"
+                      @error="$event.target.style.opacity = 0.2"
+                    />
+                  </div>
+                  <div v-if="!processedImages.length" class="pv-no-img-sm" style="flex: 1 1 100%">
+                    所有图片已删除,请点击"重置图片"恢复
                   </div>
                 </div>
               </div>
@@ -1145,6 +1407,32 @@ onMounted(() => {
         </div>
         <pre class="pv-json-body">{{ opiJsonText }}</pre>
       </div>
+    </div>
+
+    <!-- 图片放大 Lightbox -->
+    <div v-if="lightbox.open" class="pv-lightbox" @click.self="closeLightbox">
+      <button class="pv-lb-close" type="button" title="关闭 (Esc)" @click="closeLightbox">×</button>
+      <button
+        v-if="lightbox.list.length > 1"
+        class="pv-lb-nav pv-lb-prev"
+        type="button"
+        title="上一张 (←)"
+        @click.stop="lightboxPrev"
+      >‹</button>
+      <div class="pv-lb-img-wrap" @click.self="closeLightbox">
+        <img v-if="lightbox.url" :src="lightbox.url" class="pv-lb-img" alt="" />
+        <div v-if="lightbox.title" class="pv-lb-title">{{ lightbox.title }}</div>
+        <div v-if="lightbox.list.length > 1" class="pv-lb-counter">
+          {{ lightbox.index + 1 }} / {{ lightbox.list.length }}
+        </div>
+      </div>
+      <button
+        v-if="lightbox.list.length > 1"
+        class="pv-lb-nav pv-lb-next"
+        type="button"
+        title="下一张 (→)"
+        @click.stop="lightboxNext"
+      >›</button>
     </div>
   </div>
 </template>
@@ -1550,6 +1838,157 @@ onMounted(() => {
   border-color: #f59e0b;
   background: #fffbeb;
 }
+/* 手动模式:可拖拽 + 删除按钮 */
+.pv-img-cell.pv-img-manual {
+  cursor: grab;
+  position: relative;
+  border: 1px dashed #93c5fd;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+.pv-img-cell.pv-img-manual:hover {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+.pv-img-cell.pv-img-manual:active {
+  cursor: grabbing;
+}
+.pv-img-cell.pv-img-dragging {
+  opacity: 0.5;
+  border-color: #2563eb;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+.pv-img-del-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(220, 38, 38, 0.85);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  opacity: 0.85;
+  transition: opacity 0.15s, background 0.15s;
+}
+.pv-img-del-btn:hover {
+  opacity: 1;
+  background: #dc2626;
+}
+/* 点击放大光标提示 */
+.pv-img-cell.pv-img-clickable {
+  cursor: zoom-in;
+}
+.pv-img-clickable-img {
+  cursor: zoom-in;
+}
+.pv-img-cell.pv-img-manual .pv-img-clickable-img {
+  cursor: zoom-in;
+}
+/* 上架侧图片 cell 整体可拖拽,但内部 img 点击放大需阻止拖拽默认行为 */
+.pv-img-cell.pv-img-manual .pv-ic-img {
+  -webkit-user-drag: none;
+  user-drag: none;
+  pointer-events: auto;
+}
+
+/* ── Lightbox 图片放大 ── */
+.pv-lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+.pv-lb-img-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: 100%;
+  cursor: zoom-out;
+}
+.pv-lb-img {
+  max-width: 90vw;
+  max-height: 80vh;
+  object-fit: contain;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  cursor: zoom-out;
+}
+.pv-lb-title {
+  color: #fff;
+  font-size: 13px;
+  margin-top: 12px;
+  text-align: center;
+  opacity: 0.9;
+}
+.pv-lb-counter {
+  color: #fff;
+  font-size: 12px;
+  margin-top: 6px;
+  opacity: 0.7;
+}
+.pv-lb-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+  z-index: 10000;
+}
+.pv-lb-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+.pv-lb-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 64px;
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 32px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+  z-index: 10000;
+}
+.pv-lb-nav:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+.pv-lb-prev {
+  left: 20px;
+}
+.pv-lb-next {
+  right: 20px;
+}
 .pv-img-cell-idx {
   font-size: 10px;
   color: #6b7280;
@@ -1770,5 +2209,48 @@ onMounted(() => {
   background: #fafafa;
   white-space: pre;
   flex: 1;
+}
+
+/* ════════════ 类目过滤告警横幅(2026-07 新增) ════════════ */
+.pv-filtered-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: #fff1f0;
+  border-bottom: 1px solid #ffa39e;
+  color: #cf1322;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.pv-filtered-icon {
+  font-size: 16px;
+  font-weight: 700;
+}
+.pv-filtered-text {
+  flex: 1;
+}
+.pv-filtered-text strong {
+  font-family: monospace;
+  background: #ffe7e6;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin: 0 2px;
+}
+.pv-filtered-link {
+  color: #cf1322;
+  text-decoration: underline;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.pv-filtered-link:hover {
+  color: #a8071a;
+}
+/* 一键提交按钮:被过滤时强制置灰样式(即使 disabled 也能看出原因) */
+.btn-filtered-block {
+  background: #d9d9d9 !important;
+  border-color: #d9d9d9 !important;
+  color: #fff !important;
+  cursor: not-allowed !important;
 }
 </style>

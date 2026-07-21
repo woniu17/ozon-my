@@ -14,6 +14,7 @@ import Cache from '../views/Cache.vue';
 import CollectLogs from '../views/CollectLogs.vue';
 import ShallowCollectLogs from '../views/ShallowCollectLogs.vue';
 import CollectQueue from '../views/CollectQueue.vue';
+import CategoryFilter from '../views/CategoryFilter.vue';
 import { useAuthStore } from '../stores/auth.js';
 
 // 路由配置 + JWT 守卫
@@ -37,6 +38,7 @@ const router = createRouter({
     { path: '/collect-logs', name: 'collect-logs', component: CollectLogs, meta: { title: '深度采集日志' } },
     { path: '/shallow-collect-logs', name: 'shallow-collect-logs', component: ShallowCollectLogs, meta: { title: '浅度采集日志' } },
     { path: '/collect-queue', name: 'collect-queue', component: CollectQueue, meta: { title: '采集队列' } },
+    { path: '/category-filter', name: 'category-filter', component: CategoryFilter, meta: { title: '类目过滤' } },
   ],
 });
 

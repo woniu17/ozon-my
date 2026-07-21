@@ -66,7 +66,7 @@
       <div class="jz-qc-floater-row"><span>质检单</span><b id="jz-qc-count" class="jz-qc-floater-hit">0</b></div>
       <div class="jz-qc-floater-tip">订单号以 ${prefixes.join(' / ')} 开头</div>
     `;
-    document.body.appendChild(floaterEl);
+    // document.body.appendChild(floaterEl);
   }
 
   function updateFloater() {

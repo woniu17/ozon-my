@@ -551,6 +551,11 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       sellerId: r.seller_id || '',
       sellerSlug: r.seller_slug || '',
       sellerName: r.seller_name || '',
+      // 类目信息(2026-07 新增,供类目过滤功能使用)
+      descriptionCategoryId:
+        Number.isFinite(Number(r.description_category_id)) ? Number(r.description_category_id) : null,
+      typeId: Number.isFinite(Number(r.type_id)) ? Number(r.type_id) : null,
+      categoryName: r.category_name || '',
       // 上架状态(由 index-sync 定时任务批量刷新)
       listed: !!r.listed,
       // 兼容旧卡片字段(避免前端报错)

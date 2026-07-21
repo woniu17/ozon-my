@@ -3321,6 +3321,7 @@ try {
             data: {
               enabled: _acCfg.enabled,
               autoCollectRunning: _acCfg.autoCollectRunning,
+              shallowCollectRunning: _acCfg.shallowCollectRunning,
               depth: _acCfg.depth,
               paused: _acCfg.paused,
               pausedUntil: _acCfg.pausedUntil,
@@ -3347,6 +3348,7 @@ try {
           const _acAllowed = [
             'enabled',
             'autoCollectRunning',
+            'shallowCollectRunning',
             'paused',
             'depth',
             'buyerPageMinInterval',

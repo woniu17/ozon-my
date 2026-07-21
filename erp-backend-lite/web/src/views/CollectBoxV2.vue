@@ -2,14 +2,152 @@
 import { reactive, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { getCollectBoxV2FromCache, getCollectBoxV2Sellers } from '../api/collect-box-v2.js';
+import {
+  getFilteredCategories,
+  addFilteredCategory,
+  deleteFilteredCategory,
+  getCategoryNamesBatch,
+} from '../api/category-filter.js';
 import { useToast } from '../components/useToast.js';
 import AppPager from '../components/AppPager.vue';
+import ImageLightbox from '../components/ImageLightbox.vue';
 
 const router = useRouter();
 const { show } = useToast();
 
 // 采集源卖家列表(供下拉框) — 从 ozon_store_sku 按 sellerId 分组
 const sellers = ref([]);
+
+// ── 中文类目名映射(2026-07 新增) ───────────────────────────
+// key = descriptionCategoryId, value = categoryName(中文,来自 OPI 类目树 ZH_HANS)
+// 当前数据 type_id 全部为 NULL,只能查到 description_category 这层的中文类目名,
+// type_name 无法获取,前端统一显示"—"
+const categoryNameMap = ref({});
+const typeNameMap = ref({});
+
+// 取商品的中文类目名(优先用 OPI 中文名,其次用商品自带 categoryName,最后回退 ID)
+function displayCategoryName(it) {
+  if (!it?.descriptionCategoryId) return '';
+  const cn = categoryNameMap.value[it.descriptionCategoryId];
+  if (cn) return cn;
+  if (it.categoryName) return it.categoryName;
+  return `${it.descriptionCategoryId}:${it.typeId || 0}`;
+}
+
+// 取商品的中文类型名(当前数据无 type_id,统一显示"—")
+function displayTypeName(it) {
+  if (!it?.typeId) return '—';
+  const tn = typeNameMap.value[it.typeId];
+  return tn || '—';
+}
+
+// 批量加载当前页所有商品的中文类目名 + 类型名
+async function loadCategoryNamesForPage(items) {
+  if (!items || items.length === 0) return;
+  const descCatIds = [
+    ...new Set(
+      items
+        .map((it) => Number(it.descriptionCategoryId))
+        .filter((v) => Number.isFinite(v) && v > 0)
+    ),
+  ];
+  const typeIds = [
+    ...new Set(
+      items
+        .map((it) => Number(it.typeId))
+        .filter((v) => Number.isFinite(v) && v > 0)
+    ),
+  ];
+  if (descCatIds.length === 0 && typeIds.length === 0) return;
+  try {
+    const r = await getCategoryNamesBatch(
+      descCatIds.length > 0 ? descCatIds : [],
+      typeIds.length > 0 ? typeIds : []
+    );
+    const catList = r?.items || [];
+    const typeList = r?.typeItems || [];
+    const catMap = { ...categoryNameMap.value };
+    for (const it of catList) {
+      if (it.categoryName) catMap[it.descriptionCategoryId] = it.categoryName;
+    }
+    categoryNameMap.value = catMap;
+    if (typeList.length > 0) {
+      const tMap = { ...typeNameMap.value };
+      for (const it of typeList) {
+        if (it.typeName) tMap[it.typeId] = it.typeName;
+      }
+      typeNameMap.value = tMap;
+    }
+  } catch (err) {
+    // 静默失败:不影响主列表渲染,类目显示回退到 ID
+    console.warn('[CollectBoxV2] loadCategoryNamesForPage failed:', err);
+  }
+}
+
+// ── 类目过滤黑名单(2026-07 新增) ───────────────────────────
+// Vue 3 reactive(Set) 支持 add/delete/has 的响应式追踪
+// key = `${descriptionCategoryId}:${typeId || 0}`
+// 注:当前 bundle_data 不含 type_id,实际 type_id 全部为 NULL,前端用 0 占位
+//    过滤实际按 descriptionCategoryId 单维度工作,typeId 为 0 时所有同类目商品共享同一 key
+const filteredSet = reactive(new Set());
+
+function filterKey(descCatId, typeId) {
+  return `${descCatId}:${Number(typeId) || 0}`;
+}
+
+function isFiltered(it) {
+  if (!it || !it.descriptionCategoryId) return false;
+  return filteredSet.has(filterKey(it.descriptionCategoryId, it.typeId));
+}
+
+async function loadFilteredList() {
+  try {
+    const data = await getFilteredCategories();
+    const list = data?.items || [];
+    list.forEach((c) => {
+      if (c.descriptionCategoryId) {
+        filteredSet.add(filterKey(c.descriptionCategoryId, c.typeId));
+      }
+    });
+  } catch (err) {
+    // 静默失败:不影响主列表渲染
+    console.warn('[CollectBoxV2] loadFilteredList failed:', err);
+  }
+}
+
+async function toggleFilter(it) {
+  if (!it.descriptionCategoryId) {
+    show('该商品缺少类目信息,无法加入类型过滤', 'error');
+    return;
+  }
+  const key = filterKey(it.descriptionCategoryId, it.typeId);
+  const label = displayCategoryName(it) || key;
+  if (filteredSet.has(key)) {
+    // 取消类型过滤
+    try {
+      await deleteFilteredCategory(it.descriptionCategoryId, it.typeId);
+      filteredSet.delete(key);
+      // 当前页同类目商品的"已过滤"标签会因 filteredSet 响应式自动联动更新
+      show(`已从类型过滤名单移除 ${label}`, 'success');
+    } catch (err) {
+      show(err.message || '取消类型过滤失败', 'error');
+    }
+  } else {
+    // 加入类型过滤
+    try {
+      await addFilteredCategory({
+        descriptionCategoryId: it.descriptionCategoryId,
+        typeId: Number(it.typeId) || 0,
+        categoryName: displayCategoryName(it) || it.categoryName || '',
+      });
+      filteredSet.add(key);
+      // 当前页同类目商品的"已过滤"标签会因 filteredSet 响应式自动联动更新
+      show(`已将 ${label} 加入类型过滤名单`, 'success');
+    } catch (err) {
+      show(err.message || '加入类型过滤失败', 'error');
+    }
+  }
+}
 
 // 记住上一次筛选条件(localStorage 持久化,跨会话保留)
 const FILTERS_STORAGE_KEY = 'collect-box-v2:filters';
@@ -68,6 +206,8 @@ async function loadList() {
     const data = await getCollectBoxV2FromCache(params);
     state.items = data?.items || [];
     state.total = data?.total || 0;
+    // 异步加载当前页商品的中文类目名(不 await,不阻塞列表渲染)
+    loadCategoryNamesForPage(state.items);
   } catch (err) {
     show(err.message || String(err), 'error');
     state.items = [];
@@ -140,6 +280,22 @@ function fmtTime(t) {
   return s;
 }
 
+// ── 图片放大 Lightbox ──
+const lightbox = reactive({
+  open: false,
+  url: '',
+  list: [],
+  title: '',
+});
+
+function openImage(it) {
+  if (!it?.primaryImage) return;
+  lightbox.url = it.primaryImage;
+  lightbox.list = [it.primaryImage];
+  lightbox.title = it.name || it.sku || '';
+  lightbox.open = true;
+}
+
 onMounted(() => {
   // 加载采集源卖家列表(供下拉框)
   getCollectBoxV2Sellers()
@@ -149,6 +305,8 @@ onMounted(() => {
     .catch(() => {
       sellers.value = [];
     });
+  // 加载类目过滤黑名单(与列表并行加载,不影响主列表渲染)
+  loadFilteredList();
   loadList();
 });
 </script>
@@ -220,7 +378,11 @@ onMounted(() => {
       <div v-if="state.loading && !state.items.length" class="empty" style="grid-column: 1/-1">加载中...</div>
       <div v-else-if="!state.items.length" class="empty" style="grid-column: 1/-1">暂无采集记录</div>
       <div v-for="it in state.items" :key="it.sku || ''" class="cb-card">
-        <div class="cb-thumb">
+        <div
+          class="cb-thumb"
+          :class="{ 'cb-thumb-clickable': it.primaryImage }"
+          @click="openImage(it)"
+        >
           <img
             v-if="it.primaryImage"
             :src="it.primaryImage"
@@ -293,6 +455,24 @@ onMounted(() => {
                 title="该 SKU 在任意店铺尚未提交跟卖任务"
                 >未跟卖</span
               >
+              <span
+                v-if="it.descriptionCategoryId"
+                class="cb-extra-tag cb-tag-category"
+                :title="`类目 ID:${it.descriptionCategoryId}:${it.typeId || 0}`"
+                >类目:{{ displayCategoryName(it) }}</span
+              >
+              <span
+                v-if="it.descriptionCategoryId"
+                class="cb-extra-tag cb-tag-category-type"
+                :title="`类型 ID:${it.typeId || 0}`"
+                >类型:{{ displayTypeName(it) }}</span
+              >
+              <span
+                v-if="isFiltered(it)"
+                class="cb-extra-tag cb-tag-filtered"
+                title="该商品类目在过滤名单中,上架预览一键提交将被禁用"
+                >已过滤</span
+              >
             </div>
           </div>
 
@@ -304,6 +484,15 @@ onMounted(() => {
           <button class="btn btn-sm btn-primary" @click="goPreview(it)" title="进入上架预览工作台">
             上架预览
           </button>
+          <button
+            v-if="it.descriptionCategoryId"
+            class="btn btn-sm"
+            :class="isFiltered(it) ? 'btn-ghost' : 'btn-warn'"
+            @click="toggleFilter(it)"
+            :title="isFiltered(it) ? '从类型过滤名单移除该类目' : '将该类目加入类型过滤名单'"
+          >
+            {{ isFiltered(it) ? '取消类型过滤' : '类型过滤' }}
+          </button>
         </div>
       </div>
     </div>
@@ -313,6 +502,14 @@ onMounted(() => {
       :total="state.total"
       :pageSize="state.pageSize"
       @update:modelValue="onPageChange"
+    />
+
+    <!-- 图片放大 Lightbox -->
+    <ImageLightbox
+      v-model:open="lightbox.open"
+      :url="lightbox.url"
+      :list="lightbox.list"
+      :title="lightbox.title"
     />
   </div>
 </template>
@@ -375,6 +572,12 @@ onMounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.cb-thumb.cb-thumb-clickable {
+  cursor: zoom-in;
+}
+.cb-thumb.cb-thumb-clickable:hover img {
+  opacity: 0.85;
 }
 .cb-no-img {
   color: #999;
@@ -472,6 +675,28 @@ onMounted(() => {
   background: #f9f0ff;
   color: #722ed1;
 }
+.cb-tag-category {
+  background: #f5f5f5;
+  color: #333;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-tag-category-type {
+  background: #e6f7ff;
+  color: #1890ff;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-tag-filtered {
+  background: #fff1f0;
+  color: #cf1322;
+  font-weight: 500;
+  border: 1px solid #ffa39e;
+}
 .filter-check {
   display: inline-flex;
   align-items: center;
@@ -513,5 +738,20 @@ onMounted(() => {
 .btn-sm {
   padding: 4px 10px;
   font-size: 12px;
+}
+.btn-warn {
+  background: #fa8c16;
+  color: #fff;
+  border: 1px solid #fa8c16;
+  cursor: pointer;
+}
+.btn-warn:hover {
+  background: #d46b08;
+  border-color: #d46b08;
+}
+.btn-warn:disabled {
+  background: #ffd591;
+  border-color: #ffd591;
+  cursor: not-allowed;
 }
 </style>

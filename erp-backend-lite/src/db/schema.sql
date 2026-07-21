@@ -217,6 +217,11 @@ CREATE TABLE IF NOT EXISTS ozon_cache_index (
   seller_id          TEXT,                -- 稳定主键(2026-07 新增,seller_slug 可变,主查询用 seller_id)
   seller_name        TEXT,
 
+  -- 类目信息(2026-07 新增,从 bundle_data 提取冗余,供类目过滤功能使用)
+  description_category_id INTEGER,        -- Ozon 描述类目 ID(如 服装/鞋类)
+  type_id            INTEGER,             -- Ozon 商品类型 ID(如 运动鞋)
+  category_name      TEXT,                -- 类目名称(从 detail.category 面包屑提取,显示用)
+
   -- 跟卖状态(0=未跟卖, 1=已跟卖)
   listed             INTEGER DEFAULT 0,
 
@@ -235,6 +240,8 @@ CREATE INDEX IF NOT EXISTS idx_ci_last_fetched ON ozon_cache_index(last_fetched_
 -- 因为旧库 ozon_cache_index 表已存在(CREATE TABLE IF NOT EXISTS 不会添加 seller_id 列),
 -- 需先 ALTER TABLE 补列再建索引,否则会报 "no such column: seller_id"
 -- 注:idx_ci_price_value 同理,在 ensureCacheIndexFtsAndPriceValue 中创建
+-- 注:idx_ci_desc_cat_id / idx_ci_type_id 由 db/index.js 的 migrateCategoryFields 负责创建
+-- (旧库需先 ALTER TABLE 补列再建索引,同理)
 
 -- ── FTS5 全文搜索虚拟表(外部内容表,与 ozon_cache_index 同步) ──────────────
 -- 替代原 idx_ci_fts(普通 B-tree 索引对 LIKE '%keyword%' 无效)
@@ -495,3 +502,17 @@ CREATE TABLE IF NOT EXISTS listing_templates (
 );
 CREATE INDEX IF NOT EXISTS idx_lt_default ON listing_templates(is_default);
 CREATE INDEX IF NOT EXISTS idx_lt_builtin ON listing_templates(is_builtin);
+
+-- ── 类目过滤黑名单(2026-07 新增) ─────────────────────────────
+-- 用户维护的"过滤类目类型"列表,采集箱商品若属于此类目则:
+--   1. 采集箱中显示"已过滤"标签(可一键加入/移出)
+--   2. 上架预览中"一键提交"按钮置灰
+-- 主键 = (description_category_id, type_id) 组合,两者一起唯一确定一个类目节点
+CREATE TABLE IF NOT EXISTS ozon_filtered_categories (
+  description_category_id INTEGER NOT NULL,  -- Ozon 描述类目 ID
+  type_id                 INTEGER NOT NULL,  -- Ozon 商品类型 ID
+  category_name           TEXT,              -- 显示用(从采集数据冗余,可能为空)
+  type_name               TEXT,              -- 显示用(同上)
+  created_at              TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (description_category_id, type_id)
+);
