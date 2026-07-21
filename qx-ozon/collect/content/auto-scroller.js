@@ -30,7 +30,12 @@
       if (typeof opts.getCardCount !== 'function') throw new Error('QXAutoScroller: getCardCount required');
 
       this.queue = opts.queue;
-      this.intervalMs = opts.intervalMs ?? 3000;
+      // 翻页间隔(毫秒),支持范围随机:优先用 intervalMinMs/intervalMaxMs,缺省时 fallback 到 intervalMs
+      // 用户在面板配置 min~max 秒,每次 tick 末尾 _scheduleNext 时取 [min, max] 内随机值
+      // 兼容旧调用:仅传 intervalMs 时视为 min=max=intervalMs(固定间隔)
+      this.intervalMinMs = opts.intervalMinMs ?? null;
+      this.intervalMaxMs = opts.intervalMaxMs ?? null;
+      this.intervalMs = opts.intervalMs ?? 3000; // 兼容字段:仅当 min/max 未设置时使用
       this.settleMs = opts.settleMs ?? 2500;
       this.scrollStepRatio = opts.scrollStepRatio ?? 0.75;
       this.minScrollStepPx = opts.minScrollStepPx ?? 480;
@@ -202,7 +207,7 @@
         try {
           this.onCongestionPause('resumed');
         } catch {}
-        this._scheduleNext(this.intervalMs);
+        this._scheduleNext(this._getNextInterval());
       } else {
         console.log('[QXAutoScroller] _onCongestion no-op');
       }
@@ -213,6 +218,18 @@
       this._nextTickReason = reason || 'interval';
       this._nextTickAt = Date.now() + delay;
       this._timer = setTimeout(() => this._tick(), delay);
+    }
+
+    // 计算下一次翻页的间隔(毫秒)
+    // 优先用 [intervalMinMs, intervalMaxMs] 范围随机(反爬+拟人化);
+    // 若未配置范围则 fallback 到固定值 intervalMs(兼容旧调用)
+    _getNextInterval() {
+      var lo = this.intervalMinMs;
+      var hi = this.intervalMaxMs;
+      if (lo != null && hi != null && hi >= lo) {
+        return lo + Math.random() * (hi - lo);
+      }
+      return this.intervalMs;
     }
 
     async _tick() {
@@ -336,7 +353,7 @@
       } else {
         this._emptyStreak = 0;
       }
-      this._scheduleNext(this.intervalMs, 'interval');
+      this._scheduleNext(this._getNextInterval(), 'interval');
     }
   }
 

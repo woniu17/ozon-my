@@ -48,6 +48,16 @@
   const queueTbody = $('queue-tbody');
   const emptyHint = $('empty-hint');
 
+  // rate config
+  const rateMin = $('rate-min');
+  const rateMax = $('rate-max');
+  const ratePerday = $('rate-perday');
+  const rateHint = $('rate-hint');
+
+  // collect switches
+  const swDeep = $('sw-deep-toggle');
+  const swShallow = $('sw-shallow-toggle');
+
   // ─── State ───
   /** @type {Array} SW 队列里所有任务 */
   let allTasks = [];
@@ -218,6 +228,160 @@
       .join('');
   };
 
+  // ─── 采集开关(深度/浅度) ──────────────────────────────
+  // 与 popup / MY 采集器面板共用同一份配置(autoCollectRunning / shallowCollectRunning),
+  // 通过 autoCollectSetConfig 保存到 SW,SW 广播 configChanged 后各端同步。
+  const renderSwitches = (d) => {
+    if (swDeep && document.activeElement !== swDeep) {
+      swDeep.checked = !!d?.autoCollectRunning;
+    }
+    if (swShallow && document.activeElement !== swShallow) {
+      swShallow.checked = d?.shallowCollectRunning !== false;
+    }
+  };
+
+  swDeep?.addEventListener('change', async () => {
+    try {
+      await sendMessage({ action: 'autoCollectSetConfig', config: { autoCollectRunning: swDeep.checked } });
+      await fetchState();
+    } catch (e) {
+      // 失败回滚
+      await fetchState();
+    }
+  });
+
+  swShallow?.addEventListener('change', async () => {
+    try {
+      await sendMessage({ action: 'autoCollectSetConfig', config: { shallowCollectRunning: swShallow.checked } });
+      await fetchState();
+    } catch (e) {
+      await fetchState();
+    }
+  });
+
+  // ─── 限速配置 ──────────────────────────────────────────
+  // 与 popup 限速配置一致:队列间隔 min~max(秒,每次随机),每日上限。
+  // min/max 与 input 的 min/max 属性保持一致 [5, 120],超界不写入并提示。
+  // 兼容旧字段 consumeRateSec:读取时若 min/max 不存在则用 consumeRateSec 作为 min=max。
+  const RATE_RANGE = { min: 5, max: 120 };
+
+  let _rateHintTimer = null;
+  const showRateHint = (text, kind) => {
+    if (!rateHint) return;
+    rateHint.textContent = text;
+    rateHint.className = 'ratecfg-hint' + (kind ? ' is-' + kind : '');
+    if (_rateHintTimer) clearTimeout(_rateHintTimer);
+    _rateHintTimer = setTimeout(() => {
+      rateHint.textContent = '';
+      rateHint.className = 'ratecfg-hint';
+      _rateHintTimer = null;
+    }, 2000);
+  };
+
+  // 读取队列间隔范围(秒):优先 consumeRateMinSec/consumeRateMaxSec,fallback 到 consumeRateSec
+  const getRateRangeFromState = (d) => {
+    let lo = d?.consumeRateMinSec;
+    let hi = d?.consumeRateMaxSec;
+    if (lo == null || hi == null) {
+      const single = d?.consumeRateSec;
+      lo = single;
+      hi = single;
+    }
+    lo = Number(lo);
+    hi = Number(hi);
+    if (!Number.isFinite(lo)) lo = 5;
+    if (!Number.isFinite(hi)) hi = 15;
+    lo = Math.max(RATE_RANGE.min, Math.min(RATE_RANGE.max, lo));
+    hi = Math.max(RATE_RANGE.min, Math.min(RATE_RANGE.max, hi));
+    if (lo > hi) {
+      const t = lo;
+      lo = hi;
+      hi = t;
+    }
+    return { min: lo, max: hi };
+  };
+
+  // 渲染限速输入框(用户正在编辑的字段跳过,避免输入被打断)
+  const renderRateConfig = (d) => {
+    if (rateMin && document.activeElement !== rateMin) {
+      const range = getRateRangeFromState(d);
+      rateMin.value = range.min;
+    }
+    if (rateMax && document.activeElement !== rateMax) {
+      const range = getRateRangeFromState(d);
+      rateMax.value = range.max;
+    }
+    if (ratePerday && document.activeElement !== ratePerday) {
+      const v = d?.perDayLimit;
+      if (typeof v === 'number') ratePerday.value = v;
+      else if (v != null) ratePerday.value = String(v);
+    }
+  };
+
+  // 保存限速配置到 SW(走 autoCollectSetConfig,SW 会同步到 queueMeta)
+  const saveAutoCollectConfig = async (cfg) => {
+    const resp = await sendMessage({ action: 'autoCollectSetConfig', config: cfg });
+    return resp?.ok === true;
+  };
+
+  // 队列间隔范围(min~max)change 事件:任意一边变化都校验两边并一起保存
+  const saveRateRange = async () => {
+    const rawMin = (rateMin?.value || '').trim();
+    const rawMax = (rateMax?.value || '').trim();
+    if (rawMin === '' || rawMax === '') return; // 任一为空不保存(等用户填齐)
+    let lo = Number(rawMin);
+    let hi = Number(rawMax);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+      showRateHint('队列间隔: 非数字', 'err');
+      return;
+    }
+    if (lo < RATE_RANGE.min || lo > RATE_RANGE.max || hi < RATE_RANGE.min || hi > RATE_RANGE.max) {
+      showRateHint(`队列间隔: 范围 [${RATE_RANGE.min}, ${RATE_RANGE.max}]`, 'err');
+      return;
+    }
+    if (lo > hi) {
+      // 自动互换而非报错(与 popup / collector-panel 行为一致)
+      const t = lo;
+      lo = hi;
+      hi = t;
+      if (rateMin) rateMin.value = lo;
+      if (rateMax) rateMax.value = hi;
+    }
+    try {
+      const ok = await saveAutoCollectConfig({ consumeRateMinSec: lo, consumeRateMaxSec: hi });
+      showRateHint(ok ? '队列间隔 已保存' : '队列间隔 保存失败', ok ? 'ok' : 'err');
+      if (ok) fetchState();
+    } catch (e) {
+      showRateHint('队列间隔 保存失败', 'err');
+    }
+  };
+
+  // 每日上限 change 事件
+  const saveRatePerday = async () => {
+    const raw = (ratePerday?.value || '').trim();
+    if (raw === '') return;
+    const num = Number(raw);
+    if (!Number.isFinite(num)) {
+      showRateHint('每日上限: 非数字', 'err');
+      return;
+    }
+    if (num < 0 || num > 100000) {
+      showRateHint('每日上限: 范围 [0, 100000]', 'err');
+      return;
+    }
+    try {
+      const ok = await saveAutoCollectConfig({ perDayLimit: num });
+      showRateHint(ok ? '每日上限 已保存' : '每日上限 保存失败', ok ? 'ok' : 'err');
+      if (ok) fetchState();
+    } catch (e) {
+      showRateHint('每日上限 保存失败', 'err');
+    }
+  };
+
+  rateMin?.addEventListener('change', saveRateRange);
+  rateMax?.addEventListener('change', saveRateRange);
+  ratePerday?.addEventListener('change', saveRatePerday);
+
   // ─── 渲染概览 ───
   const renderStats = (d) => {
     statTotal.textContent = String(d.totalCount || 0);
@@ -249,7 +413,9 @@
 
     // 计算下次执行时间(用于 1s 倒计时渲染)
     // 规则:
-    //   - 有 pending 任务 + 队列未暂停/未熔断 → nextRunAt = lastConsumeAt + consumeRateSec*1000
+    //   - 有 pending 任务 + 队列未暂停/未熔断 → nextRunAt = lastConsumeAt + interval*1000
+    //     interval 优先用 consumeRateMinSec/consumeRateMaxSec 的中点(展示用,SW 实际随机);
+    //     fallback 到 consumeRateSec
     //   - 熔断中 → nextRunAt = circuitBreakerUntil
     //   - 暂停/达上限/无 pending → nextRunAt = 0(显示"—")
     // 注:now 已在上方"队列状态"段声明,此处复用
@@ -257,7 +423,8 @@
     if (now < (d.circuitBreakerUntil || 0)) {
       nextRunAt = d.circuitBreakerUntil;
     } else if (hasPending && !d.consumePaused && d.todayCount < d.perDayLimit) {
-      const interval = (d.consumeRateSec || 15) * 1000;
+      const range = getRateRangeFromState(d);
+      const interval = Math.round((range.min + range.max) / 2) * 1000;
       nextRunAt = (d.lastConsumeAt || 0) + interval;
       // 如果已过预计时间(SW 还没调度到),显示 "即将执行"
       if (nextRunAt < now) nextRunAt = now + 500;
@@ -303,6 +470,8 @@
         allTasks = Array.isArray(d.tasks) ? d.tasks : [];
         renderStats(d);
         renderTable();
+        renderSwitches(d);
+        renderRateConfig(d);
         emptyHint.style.display = 'none';
 
         // SW 连接状态

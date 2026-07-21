@@ -148,7 +148,7 @@
     if (mergeToggle && typeof cfg.mergeEnabled === 'boolean') {
       mergeToggle.checked = cfg.mergeEnabled;
       if (cfg.mergeEnabled && mergeField && !mergeField.value.trim()) {
-        mergeField.value = 'JZ-' + Date.now().toString(36).toUpperCase();
+        mergeField.value = Date.now().toString(36).toUpperCase();
       }
     }
     setChecked('cfg-watermark', cfg.applyWatermark);
@@ -1281,7 +1281,7 @@
     const field = $('cfg-merge-model');
     if (!toggle || !field) return;
     // 整批唯一 + 共享一个值即可让 Ozon 合并;用户可改成更可读的型号名。
-    const genModel = () => 'JZ-' + Date.now().toString(36).toUpperCase();
+    const genModel = () => Date.now().toString(36).toUpperCase();
     // 只缓存「是否合并」这个偏好,不缓存型号名本身:每次开页重新生成新型号名,
     // 避免不同批次复用同一型号名导致 Ozon 把不相关商品错误并到一张卡。
     const persist = (on) => {

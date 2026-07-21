@@ -251,6 +251,72 @@
             </div>
           </div>
 
+          <!-- 自动采集卡片(popup 简化视图:浅度+深度双开关 + 今日计数 + 熔断简略提示。
+               限速/自动翻页/筛选/只采集中国店铺等详细配置在 QX 面板,不在此暴露) -->
+          <div class="card auto-collect-card">
+            <div class="card-header">
+              <span class="card-title">自动采集</span>
+              <span class="status-dot" id="ac-status-dot"></span>
+            </div>
+            <div class="card-body">
+              <label class="qx-switch">
+                <input type="checkbox" id="ac-shallow-toggle" />
+                <span class="qx-switch-track"><span class="qx-switch-knob"></span></span>
+                <span class="qx-switch-label">浅度采集</span>
+              </label>
+              <label class="qx-switch">
+                <input type="checkbox" id="ac-deep-toggle" />
+                <span class="qx-switch-track"><span class="qx-switch-knob"></span></span>
+                <span class="qx-switch-label">深度采集</span>
+              </label>
+              <div class="ac-stats">
+                <span>今日已采: <strong id="ac-today-count">0</strong></span>
+              </div>
+              <div class="ac-paused" id="ac-paused" style="display: none">
+                <span class="ac-warning">⚠ 熔断中</span>
+                <span id="ac-paused-countdown"></span>
+              </div>
+              <!-- 限速配置(可折叠):队列间隔范围(秒)/每日上限。
+                   字段对应 jz-auto-collect-config 中 consumeRateMinSec/consumeRateMaxSec/perDayLimit。
+                   每次消费在 [min, max] 内取随机值(反爬+拟人化)。 -->
+              <div class="ac-ratecfg" id="ac-ratecfg">
+                <button class="ac-ratecfg-toggle" id="ac-ratecfg-toggle" type="button">
+                  <span>限速配置</span>
+                  <svg
+                    class="ac-ratecfg-chevron"
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+                <div class="ac-ratecfg-body" id="ac-ratecfg-body" style="display: none">
+                  <label class="ac-ratecfg-row ac-ratecfg-row-range">
+                    <span class="ac-ratecfg-label">队列间隔</span>
+                    <span class="ac-ratecfg-range">
+                      <input type="number" id="ac-rate-sku-min" min="5" max="120" step="1" data-unit="s" placeholder="5" />
+                      <span class="ac-ratecfg-sep">~</span>
+                      <input type="number" id="ac-rate-sku-max" min="5" max="120" step="1" data-unit="s" placeholder="15" />
+                      <span class="ac-ratecfg-unit">s</span>
+                    </span>
+                  </label>
+                  <label class="ac-ratecfg-row">
+                    <span class="ac-ratecfg-label">每日上限</span>
+                    <input type="number" id="ac-rate-perday" min="0" max="100000" step="50" data-unit="个" />
+                    <span class="ac-ratecfg-unit">个</span>
+                  </label>
+                  <div class="ac-ratecfg-hint" id="ac-ratecfg-hint"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Nav: 商品管理 -->
           <div class="nav-section">
             <div class="nav-title">商品管理</div>
@@ -531,65 +597,6 @@
                 <span>MY 采集器</span>
                 <span class="nav-cell-badge premium-badge is-on" id="nav-badge-collector">开</span>
               </button>
-            </div>
-          </div>
-
-          <!-- 自动采集卡片(popup 简化视图:浅度+深度双开关 + 今日计数 + 熔断简略提示。
-               限速/自动翻页/筛选/只采集中国店铺等详细配置在 QX 面板,不在此暴露) -->
-          <div class="card auto-collect-card">
-            <div class="card-header">
-              <span class="card-title">自动采集</span>
-              <span class="status-dot" id="ac-status-dot"></span>
-            </div>
-            <div class="card-body">
-              <label class="switch-label">
-                <input type="checkbox" id="ac-shallow-toggle" />
-                <span>浅度采集</span>
-              </label>
-              <label class="switch-label">
-                <input type="checkbox" id="ac-deep-toggle" />
-                <span>深度采集</span>
-              </label>
-              <div class="ac-stats">
-                <span>今日已采: <strong id="ac-today-count">0</strong></span>
-              </div>
-              <div class="ac-paused" id="ac-paused" style="display: none">
-                <span class="ac-warning">⚠ 熔断中</span>
-                <span id="ac-paused-countdown"></span>
-              </div>
-              <!-- 限速配置(可折叠):队列间隔(秒)/每日上限。
-                   字段对应 jz-auto-collect-config 中 consumeRateSec/perDayLimit。 -->
-              <div class="ac-ratecfg" id="ac-ratecfg">
-                <button class="ac-ratecfg-toggle" id="ac-ratecfg-toggle" type="button">
-                  <span>限速配置</span>
-                  <svg
-                    class="ac-ratecfg-chevron"
-                    width="10"
-                    height="10"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <polyline points="6 9 12 15 18 9" />
-                  </svg>
-                </button>
-                <div class="ac-ratecfg-body" id="ac-ratecfg-body" style="display: none">
-                  <label class="ac-ratecfg-row">
-                    <span class="ac-ratecfg-label">队列间隔</span>
-                    <input type="number" id="ac-rate-sku" min="5" max="120" step="1" data-unit="s" />
-                    <span class="ac-ratecfg-unit">s</span>
-                  </label>
-                  <label class="ac-ratecfg-row">
-                    <span class="ac-ratecfg-label">每日上限</span>
-                    <input type="number" id="ac-rate-perday" min="0" max="100000" step="50" data-unit="个" />
-                    <span class="ac-ratecfg-unit">个</span>
-                  </label>
-                  <div class="ac-ratecfg-hint" id="ac-ratecfg-hint"></div>
-                </div>
-              </div>
             </div>
           </div>
 

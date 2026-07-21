@@ -181,6 +181,7 @@ const state = reactive({
     unlisted: false,
     hasComments: false,
     hasRichContent: false, // 只看有富内容(richMedia.richContent 非空)
+    excludeFilteredCategories: false, // 排除已在类目过滤黑名单中的商品(ozon_filtered_categories 表)
     priceMin: '', // 价格范围(闭区间,空字符串=不限)
     priceMax: '',
     // 用上次的筛选条件覆盖初值
@@ -201,6 +202,7 @@ async function loadList() {
     if (state.filters.unlisted) params.unlisted = '1';
     if (state.filters.hasComments) params.hasComments = '1';
     if (state.filters.hasRichContent) params.hasRichContent = '1';
+    if (state.filters.excludeFilteredCategories) params.excludeFilteredCategories = '1';
     if (state.filters.priceMin !== '') params.priceMin = state.filters.priceMin;
     if (state.filters.priceMax !== '') params.priceMax = state.filters.priceMax;
     const data = await getCollectBoxV2FromCache(params);
@@ -350,6 +352,10 @@ onMounted(() => {
         <input type="checkbox" v-model="state.filters.fullData" />
         <span>数据完整</span>
       </label>
+      <label class="filter-check" title="排除已在类目过滤黑名单中的 SKU(ozon_filtered_categories 表)">
+        <input type="checkbox" v-model="state.filters.excludeFilteredCategories" />
+        <span>排除类型过滤</span>
+      </label>
       <span class="filter-price-range" title="按 cardCache.price 过滤(闭区间)">
         <input
           class="filter-input filter-price"
@@ -471,7 +477,7 @@ onMounted(() => {
                 v-if="isFiltered(it)"
                 class="cb-extra-tag cb-tag-filtered"
                 title="该商品类目在过滤名单中,上架预览一键提交将被禁用"
-                >已过滤</span
+                >类型过滤</span
               >
             </div>
           </div>

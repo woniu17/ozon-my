@@ -497,6 +497,10 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     const sellerId = String(req.query.sellerId || '').trim();
     const sellerSlug = String(req.query.sellerSlug || '').trim();
     const filterUnlisted = req.query.unlisted === '1' || req.query.unlisted === 'true';
+    // excludeFilteredCategories=1:排除已在类目过滤黑名单(ozon_filtered_categories)中的商品
+    // 前端采集箱"排除类型过滤"勾选项,与 toggleFilter 写入的 ozon_filtered_categories 表联动
+    const excludeFilteredCategories =
+      req.query.excludeFilteredCategories === '1' || req.query.excludeFilteredCategories === 'true';
 
     // indexDao 单表查询:过滤 + 排序 + 分页全在 SQL 完成
     const { items, total } = await daos.indexDao.findList({
@@ -510,6 +514,7 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       priceMin: Number.isFinite(priceMin) ? priceMin : undefined,
       priceMax: Number.isFinite(priceMax) ? priceMax : undefined,
       minCacheHits,
+      excludeFilteredCategories,
       page,
       pageSize,
     });

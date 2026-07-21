@@ -34,7 +34,9 @@
       buyerPageMinInterval: 5000,
       sellerPortalMinInterval: 200,
       skuInterval: 30000,
-      consumeRateSec: 15,
+      consumeRateSec: 15,              // 旧字段(固定值),保留作为 fallback
+      consumeRateMinSec: 5,            // 新字段:队列消费间隔范围(秒),每次随机
+      consumeRateMaxSec: 15,           // 新字段:队列消费间隔范围(秒),每次随机
       perDayLimit: 2000,
       todayCount: 0,
       todayDate: '',
@@ -67,6 +69,25 @@
         } else if (_rawMs != null) {
           merged.consumeRateSec = Math.max(5, Math.min(120, Math.round(_rawMs / 1000)));
         }
+        // v3:consumeRateMinSec/consumeRateMaxSec 取代 consumeRateSec,支持范围随机。
+        // 迁移策略:
+        //   - 若 raw 已含 min/max 字段 → 直接 clamp 规整
+        //   - 若 raw 仅含 consumeRateSec(旧版) → min = max = consumeRateSec(固定值兼容)
+        //   - 若 raw 都没有 → 用 defaults 的 5/15
+        const _rawMin = raw?.consumeRateMinSec;
+        const _rawMax = raw?.consumeRateMaxSec;
+        if (_rawMin != null && _rawMax != null) {
+          let _lo = Math.max(5, Math.min(120, Math.round(_rawMin)));
+          let _hi = Math.max(5, Math.min(120, Math.round(_rawMax)));
+          if (_lo > _hi) { const _t = _lo; _lo = _hi; _hi = _t; }
+          merged.consumeRateMinSec = _lo;
+          merged.consumeRateMaxSec = _hi;
+        } else if (_rawSec != null || _rawMs != null) {
+          // 旧版仅有 consumeRateSec:迁移为 min = max = consumeRateSec
+          merged.consumeRateMinSec = merged.consumeRateSec;
+          merged.consumeRateMaxSec = merged.consumeRateSec;
+        }
+        // defaults 已含 5/15,无需再补
         S.autoCollectConfigCache = merged;
       } catch (e) {
         console.warn('[autoCollectConfig] load failed, fallback to defaults:', e?.message || e);

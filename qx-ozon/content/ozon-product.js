@@ -5115,12 +5115,12 @@
 
     const mergeInput = panel.querySelector('[data-field="merge-model"]');
     const mergeCb = panel.querySelector('[data-field="merge-enabled"]');
-    // 只恢复「是否合并」偏好,不恢复型号名:勾上则生成全新型号名(JZ-<ts>),避免复用
+    // 只恢复「是否合并」偏好,不恢复型号名:勾上则生成全新型号名(Epoch 转 36 进制),避免复用
     // 上次竞品的 9048 把不相关商品并到同一张卡(对齐 followSellMergeEnabled 安全设计)。
     if (mergeCb && typeof cfg.mergeEnabled === 'boolean') {
       mergeCb.checked = cfg.mergeEnabled;
       if (cfg.mergeEnabled && mergeInput && !mergeInput.value.trim()) {
-        mergeInput.value = 'JZ-' + Date.now().toString(36).toUpperCase();
+        mergeInput.value = Date.now().toString(36).toUpperCase();
       }
     }
 
@@ -6298,12 +6298,12 @@
     panel.querySelector('[data-action="cancel"]').addEventListener('click', () => closePanel(panel));
 
     // 「合并成一张卡」勾选 ↔ 型号名(attr 9048):勾选且型号空 → 自动生成共享型号名
-    // (JZ-…)→ 整组变体合并为同一张卡;取消勾选 → 清空(每个变体各自独立成卡)。
+    // (当前时间 Epoch 转 36 进制)→ 整组变体合并为同一张卡;取消勾选 → 清空(每个变体各自独立成卡)。
     // 手动改型号也同步勾选态。与批量上架(cfg-merge-model)同款交互。
     const mergeCb = panel.querySelector('[data-field="merge-enabled"]');
     const mergeInput = panel.querySelector('[data-field="merge-model"]');
     if (mergeCb && mergeInput) {
-      const genMergeModel = () => 'JZ-' + Date.now().toString(36).toUpperCase();
+      const genMergeModel = () => Date.now().toString(36).toUpperCase();
       // 只缓存「是否合并」偏好,不缓存型号名:每次开面板重新生成新型号名,
       // 避免不同竞品复用同一型号名(attr 9048)被 Ozon 错误并到一张卡。
       const persistMerge = (on) => {

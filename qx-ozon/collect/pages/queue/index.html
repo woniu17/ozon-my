@@ -107,6 +107,49 @@
         </div>
       </section>
 
+      <!-- ============ Collect config (switches + rate) ============ -->
+      <section class="card">
+        <div class="card-head">
+          <div class="card-title">采集配置</div>
+          <div class="card-title-meta">
+            <span class="card-head-hint">采集开关与队列限速</span>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="switch-grid">
+            <label class="qx-switch">
+              <input type="checkbox" id="sw-deep-toggle" />
+              <span class="qx-switch-track"><span class="qx-switch-knob"></span></span>
+              <span class="qx-switch-label">深度采集</span>
+            </label>
+            <label class="qx-switch">
+              <input type="checkbox" id="sw-shallow-toggle" />
+              <span class="qx-switch-track"><span class="qx-switch-knob"></span></span>
+              <span class="qx-switch-label">浅度采集</span>
+            </label>
+          </div>
+          <div class="ratecfg-grid">
+            <div class="ratecfg-row">
+              <label class="ratecfg-label" for="rate-min">队列间隔</label>
+              <div class="ratecfg-range">
+                <input type="number" id="rate-min" class="fld is-sm" min="5" max="120" step="1" placeholder="5" />
+                <span class="ratecfg-sep">~</span>
+                <input type="number" id="rate-max" class="fld is-sm" min="5" max="120" step="1" placeholder="15" />
+                <span class="ratecfg-unit">秒</span>
+              </div>
+            </div>
+            <div class="ratecfg-row">
+              <label class="ratecfg-label" for="rate-perday">每日上限</label>
+              <div class="ratecfg-range">
+                <input type="number" id="rate-perday" class="fld is-sm" min="0" max="100000" step="50" placeholder="2000" />
+                <span class="ratecfg-unit">个</span>
+              </div>
+            </div>
+            <div class="ratecfg-hint" id="rate-hint"></div>
+          </div>
+        </div>
+      </section>
+
       <!-- ============ Filters ============ -->
       <section class="card">
         <div class="card-head">

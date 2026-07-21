@@ -151,10 +151,12 @@
       try {
         const url = await sw.getBackendUrl();
         const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
-        // 优先用 sellerId(主键);无 sellerId 时 fallback 到 slug(后端兼容路径)
-        const id = sellerId || record?.sellerId || slug;
-        if (!id) {
-          console.warn('[store-class] ERP set skipped: missing identifier (sellerId/slug both empty)');
+        // sellerId 必须是纯数字才写入主表(后端 upsertBySellerId 会校验)。
+        // sellerId 为空或非数字(如 slug)时不写入 L2,避免产生 _id=slug 的脏数据。
+        // 仅写 L1(chrome.storage)已由调用方完成,L2 等后续拿到真实 sellerId 再写入。
+        const id = sellerId || record?.sellerId || '';
+        if (!id || !/^\d+$/.test(String(id))) {
+          console.warn('[store-class] ERP set skipped: sellerId missing or non-numeric (避免产生 _id=slug 脏数据)', { slug, sellerId, recordSellerId: record?.sellerId });
           return false;
         }
         await sw.apiRequest(
@@ -224,7 +226,8 @@
     };
 
     // ── 三层查询:L1 chrome.storage.local → L2 MongoDB → 规则引擎 ────────────────
-    // 返回 { isChinese, classifiedBy } | null(未分类,等待人工确认)。
+    // 返回 { isChinese, classifiedBy, sellerId } | null(未分类,等待人工确认)。
+    // sellerId 用于调用方(如 API 直取启动前)获取稳定卖家主键
     // sellerId 用于写入 L2 时带上(稳定主键,slug 可变)
     this.checkStoreClassification = async (slug, name, companyInfo, sellerId) => {
       if (!slug) return null;
@@ -249,7 +252,7 @@
           this._ensureL2Consistency(slug, name, companyInfo, sellerId, l1).catch((e) => {
             console.warn(`[store-class] L2 consistency check failed slug=${slug}:`, e?.message || e);
           });
-          return { isChinese: l1.isChinese, classifiedBy: l1.classifiedBy };
+          return { isChinese: l1.isChinese, classifiedBy: l1.classifiedBy, sellerId: l1.sellerId || '' };
         }
         // L1 无效或 classifiedBy 为空:清除旧记录,避免下次再被读到
         if (l1 && (!l1.classifiedBy || l1.isChinese === null || l1.isChinese === undefined)) {
@@ -270,12 +273,12 @@
         console.log('[store-class] L2 hit →', { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy });
         try {
           await sw.setStorage({
-            [l1Key]: { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy },
+            [l1Key]: { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy, sellerId: l2.sellerId || '' },
           });
         } catch (e) {
           console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
         }
-        return { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy };
+        return { isChinese: l2.isChinese, classifiedBy: l2.classifiedBy, sellerId: l2.sellerId || '' };
       }
       // L2 无效或 classifiedBy 为空:记录日志,后续规则引擎重新分类后会覆盖
       if (l2 && (!l2.classifiedBy || l2.isChinese === null || l2.isChinese === undefined)) {
@@ -297,7 +300,7 @@
         };
         try {
           await sw.setStorage({
-            [l1Key]: { isChinese: ruleResult.isChinese, classifiedBy: ruleResult.by },
+            [l1Key]: { isChinese: ruleResult.isChinese, classifiedBy: ruleResult.by, sellerId: sellerId || '' },
           });
         } catch (e) {
           console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
@@ -314,7 +317,7 @@
         } else {
           console.log('[store-class] rule result persisted to L1+L2:', record);
         }
-        return { isChinese: ruleResult.isChinese, classifiedBy: ruleResult.by };
+        return { isChinese: ruleResult.isChinese, classifiedBy: ruleResult.by, sellerId: sellerId || '' };
       }
 
       // 未分类:写 L2 记录(isChinese=null,等待人工确认)
@@ -339,7 +342,7 @@
       const classifiedAt = new Date().toISOString();
       const l1Key = `jz-store-class-${slug}`;
       try {
-        await sw.setStorage({ [l1Key]: { isChinese, classifiedBy } });
+        await sw.setStorage({ [l1Key]: { isChinese, classifiedBy, sellerId: sellerId || '' } });
       } catch (e) {
         console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
       }

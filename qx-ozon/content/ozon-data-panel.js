@@ -1195,9 +1195,39 @@
     return false;
   }
 
-  function _startAutoScroll() {
+  async function _startAutoScroll() {
     const mode = _getAutoScrollMode();
     if (mode === 'api') {
+      // 安全约束:API 直取必须同时满足"浅度采集开启"+"自动翻页开启"才运行。
+      // 浅度采集关闭时 API 直取会空转后台 fetch(无视觉反馈),需阻止启动并同步关闭开关。
+      if (!shallowCollectState.running) {
+        _collectorPanel?.toast?.('API 直取需同时开启浅度采集和自动翻页', 'error', 2500);
+        const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
+        if (cb) cb.checked = false;
+        try { localStorage.setItem('qx-c-auto-scroll', '0'); } catch {}
+        return;
+      }
+      // sellerId 守卫:API 直取入队需要 sellerId(写采集队列 + 店铺 SKU 关联)。
+      // 若当前闭包变量 sellerId 为空,先用 sellerSlug 调 SW checkStoreClass 查店铺分类拿 sellerId。
+      // 拿不到 sellerId 则不启动(避免入队 sellerId 为空的任务)。
+      if (!sellerId && sellerSlug) {
+        try {
+          const r = await window.sendMessage('checkStoreClass', { slug: sellerSlug });
+          if (r?.ok && r.data?.sellerId) {
+            sellerId = String(r.data.sellerId);
+            console.log('[ozon-data-panel] API 直取启动前从店铺分类拿到 sellerId:', sellerId);
+          }
+        } catch (e) {
+          console.warn('[ozon-data-panel] 查店铺分类拿 sellerId 失败:', e?.message || e);
+        }
+      }
+      if (!sellerId) {
+        _collectorPanel?.toast?.('无法获取卖家ID,API 直取未启动', 'error', 2500);
+        const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
+        if (cb) cb.checked = false;
+        try { localStorage.setItem('qx-c-auto-scroll', '0'); } catch {}
+        return;
+      }
       if (!_apiScroller) {
         _collectorPanel?.toast?.('API 直取模式不可用', 'error', 2000);
         return;
@@ -1289,13 +1319,16 @@
     // QXAutoScroller：仅店铺页启用(panel.js isShopPage 判断控制 UI 显示)
     if (window.QXAutoScroller && !_autoScroller) {
       try {
-        // 翻页间隔从用户配置读取(秒 → 毫秒),无配置用 AutoScroller 内部默认值
-        const userIntervalSec = _collectorPanel?.getAutoScrollInterval?.();
-        const intervalMs = userIntervalSec ? Math.round(userIntervalSec * 1000) : undefined;
+        // 翻页间隔从用户配置读取(秒 → 毫秒),支持范围随机
+        // 未配置时 AutoScroller 内部用 3000ms 固定值(兼容旧逻辑)
+        const intervalRange = _collectorPanel?.getAutoScrollIntervalRange?.();
+        const intervalMinMs = intervalRange ? Math.round(intervalRange.minSec * 1000) : undefined;
+        const intervalMaxMs = intervalRange ? Math.round(intervalRange.maxSec * 1000) : undefined;
         _autoScroller = new window.QXAutoScroller({
           queue: taskQueue,
-          // 仅传用户配置,intervalMs 缺省时 AutoScroller 内部用 3000
-          ...(intervalMs ? { intervalMs } : {}),
+          // 仅传用户配置,缺省时 AutoScroller 内部用 3000ms
+          ...(intervalMinMs != null ? { intervalMinMs } : {}),
+          ...(intervalMaxMs != null ? { intervalMaxMs } : {}),
           settleMs: 1000,
           scrollStepRatio: 0.95,
           minScrollStepPx: 680,
@@ -1380,11 +1413,20 @@
           if (next) _startAutoScroll();
           else _stopAutoScroll();
         },
-        // 翻页间隔变化:实时更新当前活跃翻页器的 intervalMs(下次 tick 生效)
-        onAutoScrollIntervalChange: (intervalSec) => {
-          const ms = Math.round(intervalSec * 1000);
-          if (_autoScroller) _autoScroller.intervalMs = ms;
-          if (_apiScroller) _apiScroller.opts.intervalMs = ms;
+        // 翻页间隔变化:实时更新当前活跃翻页器的 intervalMinMs/intervalMaxMs(下次 tick 生效)
+        // 接收 { minSec, maxSec } 范围,转为毫秒写入翻页器
+        onAutoScrollIntervalChange: (intervalRange) => {
+          if (!intervalRange || typeof intervalRange !== 'object') return;
+          const minMs = Math.round(intervalRange.minSec * 1000);
+          const maxMs = Math.round(intervalRange.maxSec * 1000);
+          if (_autoScroller) {
+            _autoScroller.intervalMinMs = minMs;
+            _autoScroller.intervalMaxMs = maxMs;
+          }
+          if (_apiScroller) {
+            _apiScroller.opts.intervalMinMs = minMs;
+            _apiScroller.opts.intervalMaxMs = maxMs;
+          }
         },
         // 翻页模式变化:切换 DOM滚动 / API直取
         // 切换时若当前正在翻页,先停止旧的再启动新的
@@ -1418,14 +1460,17 @@
     // QXApiScroller:API 直取翻页器(独立于 DOM AutoScroller)
     // 仅店铺页创建,用户在面板上切换"DOM滚动"/"API直取"模式
     // 与 _autoScroller 并存,但同一时刻只有一个在运行(由 _startAutoScroll/_stopAutoScroll 控制)
-    // 必须在 _collectorPanel 创建之后创建:此时 getAutoScrollInterval() 能读到用户持久化配置值,
+    // 必须在 _collectorPanel 创建之后创建:此时 getAutoScrollIntervalRange() 能读到用户持久化配置值,
     // 否则 intervalMs 会走 800ms 默认值,导致"面板显示 6 秒但实际没限速"的问题。
     if (window.QXApiScroller && !_apiScroller) {
       try {
-        const userIntervalSec = _collectorPanel?.getAutoScrollInterval?.();
-        const intervalMs = userIntervalSec ? Math.round(userIntervalSec * 1000) : 800;
+        const intervalRange = _collectorPanel?.getAutoScrollIntervalRange?.();
+        const intervalMinMs = intervalRange ? Math.round(intervalRange.minSec * 1000) : null;
+        const intervalMaxMs = intervalRange ? Math.round(intervalRange.maxSec * 1000) : null;
         _apiScroller = new window.QXApiScroller({
-          intervalMs,
+          // 范围随机优先,未配置时 ApiScroller 内部用 800ms 默认值
+          ...(intervalMinMs != null ? { intervalMinMs } : {}),
+          ...(intervalMaxMs != null ? { intervalMaxMs } : {}),
           maxConsecutiveErrors: 3,
           requestTimeoutMs: 15000,
           // 每个 SKU 提取后:过滤检查 → 写 card 缓存 + submitTask 入队 + 店铺 SKU 发现上报 + 计数刷新

@@ -50,7 +50,9 @@
     const _COLLECT_QUEUE_META_DEFAULT = {
       consuming: false,
       circuitBreakerUntil: 0,
-      consumeRateSec: 15,
+      consumeRateSec: 15,              // 旧字段(固定值),保留作为 fallback 和监控页兼容
+      consumeRateMinSec: 5,            // 新字段:队列消费间隔范围(秒),每次随机
+      consumeRateMaxSec: 15,           // 新字段:队列消费间隔范围(秒),每次随机
       consumePaused: false,
       lastConsumeAt: 0,
       todayCount: 0,
@@ -123,14 +125,30 @@
     const _syncConsumeRateFromConfig = async () => {
       try {
         const config = await sw.loadAutoCollectConfig();
-        // skuInterval 历史单位为毫秒,consumeRateSec 为秒;优先使用 consumeRateSec。
-        const rateSec = Math.max(
-          5,
-          Math.min(120, Math.round(config.consumeRateSec ?? (config.skuInterval ? config.skuInterval / 1000 : 15)))
-        );
+        // v3:优先用 consumeRateMinSec/consumeRateMaxSec,旧 consumeRateSec 作为 fallback
+        // skuInterval 历史单位为毫秒,consumeRateSec 为秒
+        let lo, hi;
+        if (config.consumeRateMinSec != null && config.consumeRateMaxSec != null) {
+          lo = Math.max(5, Math.min(120, Math.round(config.consumeRateMinSec)));
+          hi = Math.max(5, Math.min(120, Math.round(config.consumeRateMaxSec)));
+        } else {
+          const rateSec = Math.max(
+            5,
+            Math.min(120, Math.round(config.consumeRateSec ?? (config.skuInterval ? config.skuInterval / 1000 : 15)))
+          );
+          lo = rateSec;
+          hi = rateSec;
+        }
+        if (lo > hi) { const t = lo; lo = hi; hi = t; }
         const meta = await _loadQueueMeta();
-        if (meta.consumeRateSec !== rateSec) {
-          await _saveQueueMeta({ consumeRateSec: rateSec });
+        const updates = {};
+        if (meta.consumeRateMinSec !== lo) updates.consumeRateMinSec = lo;
+        if (meta.consumeRateMaxSec !== hi) updates.consumeRateMaxSec = hi;
+        // 同步更新旧字段 consumeRateSec 为 max(监控页 fallback 用)
+        const fallbackSec = hi;
+        if (meta.consumeRateSec !== fallbackSec) updates.consumeRateSec = fallbackSec;
+        if (Object.keys(updates).length > 0) {
+          await _saveQueueMeta(updates);
         }
       } catch (e) {
         console.warn('[Queue] sync consume rate failed:', e?.message || e);

@@ -1461,6 +1461,24 @@ try {
     return { result, isTerminal };
   };
 
+  // 根据队列 meta 计算下一次消费的间隔(毫秒)
+  // 优先用 [consumeRateMinSec, consumeRateMaxSec] 范围随机(反爬+拟人化);
+  // 若未配置范围(min 或 max 为空/0)则 fallback 到旧字段 consumeRateSec(固定值)
+  // fallback 也为空时用默认值 15 秒
+  const _getNextConsumeIntervalMs = (meta) => {
+    const lo = Number(meta?.consumeRateMinSec);
+    const hi = Number(meta?.consumeRateMaxSec);
+    if (Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo && lo > 0) {
+      // [lo, hi] 秒内取随机毫秒
+      const loMs = lo * 1000;
+      const hiMs = hi * 1000;
+      return loMs + Math.random() * (hiMs - loMs);
+    }
+    // fallback:旧字段 consumeRateSec(固定值)
+    const fallbackSec = Number(meta?.consumeRateSec) || 15;
+    return fallbackSec * 1000;
+  };
+
   const _consumeOne = async () => {
     if (__jzCollect.state.consuming) return;
     __jzCollect.state.consuming = true;
@@ -1541,12 +1559,12 @@ try {
         ...(isTerminal ? { todayCount: meta.todayCount + 1 } : {}),
       });
 
-      const rateSec = meta.consumeRateSec || 15;
+      const rateMs = _getNextConsumeIntervalMs(meta);
       scheduleNext = true;
       setTimeout(() => {
         __jzCollect.state.consuming = false;
         _consumeOne();
-      }, rateSec * 1000);
+      }, rateMs);
     } catch (e) {
       console.error('[Queue] consume error:', e);
       // Phase 2: ERP 不可用时(claim 失败)暂停消费,避免反复失败。
@@ -1600,10 +1618,11 @@ try {
     const task = peekList?.items?.[0] || null;
     if (!task) return;
 
-    // 尊重配置间隔:SW 被杀后 alarm 唤醒,若距上次消费不足 consumeRateSec,
+    // 尊重配置间隔:SW 被杀后 alarm 唤醒,若距上次消费不足配置间隔,
     // 则 setTimeout 等待剩余时间,避免实际间隔小于用户配置。
+    // 用 _getNextConsumeIntervalMs 计算随机间隔(meta 含 min/max 字段)
     const elapsed = Date.now() - (meta.lastConsumeAt || 0);
-    const interval = (meta.consumeRateSec || 15) * 1000;
+    const interval = _getNextConsumeIntervalMs(meta);
     if (elapsed < interval) {
       const wait = interval - elapsed;
       console.log('[Queue] maybeStart: respect interval, wait', wait, 'ms');
@@ -3034,7 +3053,8 @@ try {
         case 'checkStoreClassification': {
           // 三层查询店铺中国身份(L1 chrome.storage → L2 MongoDB → 规则引擎)。
           // 入参: { slug, name, companyInfo?, sellerId? }
-          // 返回: { ok, data: { isChinese, classifiedBy } | null }
+          // 返回: { ok, data: { isChinese, classifiedBy, sellerId } | null }
+          //   sellerId 用于调用方(如 API 直取启动前)获取稳定卖家主键
           try {
             const slug = String(message.slug || '');
             const name = message.name || '';
@@ -3374,6 +3394,8 @@ try {
             'sellerPortalMinInterval',
             'skuInterval',
             'consumeRateSec',
+            'consumeRateMinSec',
+            'consumeRateMaxSec',
             'perDayLimit',
             'marketStatsStaleMs',
             'followSellStaleMs',
@@ -3386,10 +3408,43 @@ try {
             if (_acUpdates[_k] !== undefined) _acFiltered[_k] = _acUpdates[_k];
           }
           await _saveAutoCollectConfig(_acFiltered);
-          // consumeRateSec 变更同步到队列 meta
-          if (_acFiltered.consumeRateSec != null) {
+          // 限速字段变更同步到队列 meta
+          // v3:优先同步 consumeRateMinSec/consumeRateMaxSec,旧 consumeRateSec 单字段也兼容
+          const _hasMinMax =
+            _acFiltered.consumeRateMinSec != null && _acFiltered.consumeRateMaxSec != null;
+          if (_hasMinMax) {
+            let _lo = Math.max(5, Math.min(120, Math.round(_acFiltered.consumeRateMinSec)));
+            let _hi = Math.max(5, Math.min(120, Math.round(_acFiltered.consumeRateMaxSec)));
+            if (_lo > _hi) { const _t = _lo; _lo = _hi; _hi = _t; }
+            // 同步更新旧字段 consumeRateSec 为 max(监控页 fallback 用)
+            await _saveQueueMeta({
+              consumeRateMinSec: _lo,
+              consumeRateMaxSec: _hi,
+              consumeRateSec: _hi,
+            });
+          } else if (_acFiltered.consumeRateSec != null) {
+            // 旧字段单独写入:迁移为 min = max = consumeRateSec
             const rateSec = Math.max(5, Math.min(120, Math.round(_acFiltered.consumeRateSec)));
-            await _saveQueueMeta({ consumeRateSec: rateSec });
+            await _saveQueueMeta({
+              consumeRateSec: rateSec,
+              consumeRateMinSec: rateSec,
+              consumeRateMaxSec: rateSec,
+            });
+          }
+          // 深度采集开关开启 / 手动解除 paused 时,需重置 consumePaused 并触发消费。
+          // 否则队列会卡死:之前因 not-running/paused 被设为 consumePaused=true,
+          // _maybeStartConsume 只在跨天/熔断过期时才重置,用户开启开关后队列不会自动恢复。
+          const _shouldResume =
+            (_acFiltered.autoCollectRunning === true || _acFiltered.paused === false) &&
+            !_acFiltered.paused;
+          if (_shouldResume) {
+            const _resumeMeta = await _loadQueueMeta();
+            if (_resumeMeta.consumePaused) {
+              await _saveQueueMeta({ consumePaused: false });
+              await _broadcastQueueResumed();
+              console.log('[Queue] autoCollectSetConfig: consumePaused reset (深度采集开启或 paused 解除)');
+            }
+            sw.maybeStartConsume();
           }
           // 推送 configChanged 通知面板/popup(fire-and-forget,无监听者不报错)
           chrome.runtime.sendMessage({ type: 'configChanged', config: _acFiltered }).catch(() => {});
@@ -3781,8 +3836,11 @@ try {
               consumePaused: _cmsMeta.consumePaused,
               circuitBreakerUntil: _cmsMeta.circuitBreakerUntil,
               autoCollectRunning: _cmsCfg.autoCollectRunning,
+              shallowCollectRunning: _cmsCfg.shallowCollectRunning,
               lastConsumeAt: _cmsMeta.lastConsumeAt || 0,
               consumeRateSec: _cmsMeta.consumeRateSec || 15,
+              consumeRateMinSec: _cmsMeta.consumeRateMinSec ?? _cmsMeta.consumeRateSec ?? 5,
+              consumeRateMaxSec: _cmsMeta.consumeRateMaxSec ?? _cmsMeta.consumeRateSec ?? 15,
               tasks,
             },
           };

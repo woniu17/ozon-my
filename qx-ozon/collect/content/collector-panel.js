@@ -29,9 +29,17 @@
   var COLLAPSED_KEY = 'qx-c-panel-collapsed';
   var SALES_FILTER_KEY = 'qx-c-sales-filter';
   var AUTO_SCROLL_KEY = 'qx-c-auto-scroll';
-  // 自动翻页间隔(秒),范围 0.5-10,步长 0.5,默认 3
-  var AUTO_SCROLL_INTERVAL_KEY = 'qx-c-auto-scroll-interval';
-  var AUTO_SCROLL_INTERVAL_DEFAULT = 3;
+  // 自动翻页间隔范围(秒),min/max 各自范围 0.5-60,步长 0.5
+  // 默认 min=5, max=10,每次翻页在 [min, max] 内取随机值(反爬+拟人化)
+  // 兼容旧 key qx-c-auto-scroll-interval:启动时若新 key 不存在但旧 key 存在,迁移为 min=max=旧值
+  var AUTO_SCROLL_INTERVAL_KEY_LEGACY = 'qx-c-auto-scroll-interval';
+  var AUTO_SCROLL_INTERVAL_MIN_KEY = 'qx-c-auto-scroll-interval-min';
+  var AUTO_SCROLL_INTERVAL_MAX_KEY = 'qx-c-auto-scroll-interval-max';
+  var AUTO_SCROLL_INTERVAL_MIN_DEFAULT = 5;
+  var AUTO_SCROLL_INTERVAL_MAX_DEFAULT = 10;
+  // 单边允许的范围(秒):太小无意义,太大用户体验差
+  var AUTO_SCROLL_INTERVAL_ABS_MIN = 0.5;
+  var AUTO_SCROLL_INTERVAL_ABS_MAX = 60;
   // 自动翻页模式: 'dom'=DOM滚动 / 'api'=API直取,默认 dom
   var AUTO_SCROLL_MODE_KEY = 'qx-c-auto-scroll-mode';
   var AUTO_SCROLL_MODE_DEFAULT = 'dom';
@@ -270,6 +278,13 @@
         // 主控制
         '  <div class="qx-c-section-block">' +
         '    <div class="qx-c-section-title">主控制</div>' +
+        '    <div class="qx-c-row">' +
+        '      <label class="qx-c-switch">' +
+        '        <input type="checkbox" data-act="deep-toggle" data-el="deep-toggle" />' +
+        '        <span class="qx-c-switch-track"><span class="qx-c-switch-knob"></span></span>' +
+        '        <span class="qx-c-switch-label">深度采集</span>' +
+        '      </label>' +
+        '    </div>' +
         '    <div class="qx-c-row qx-c-toggle-row">' +
         '      <label class="qx-c-switch">' +
         '        <input type="checkbox" data-act="shallow-toggle" data-el="shallow-toggle" />' +
@@ -277,13 +292,6 @@
         '        <span class="qx-c-switch-label">浅度采集</span>' +
         '      </label>' +
         '      <span class="qx-c-status-badge qx-c-status-badge-green" data-el="collect-status-badge">采集:浅度+深度</span>' +
-        '    </div>' +
-        '    <div class="qx-c-row">' +
-        '      <label class="qx-c-switch">' +
-        '        <input type="checkbox" data-act="deep-toggle" data-el="deep-toggle" />' +
-        '        <span class="qx-c-switch-track"><span class="qx-c-switch-knob"></span></span>' +
-        '        <span class="qx-c-switch-label">深度采集</span>' +
-        '      </label>' +
         '    </div>' +
         (shopOnly
           ? '    <div class="qx-c-row">' +
@@ -299,7 +307,9 @@
             '    </div>' +
             '    <div class="qx-c-row qx-c-range-row">' +
             '      <span class="qx-c-range-label">间隔</span>' +
-            '      <input type="number" class="qx-c-range-input qx-c-interval-input" data-act="auto-scroll-interval" data-el="auto-scroll-interval" min="0.5" max="10" step="0.5" placeholder="3" />' +
+            '      <input type="number" class="qx-c-range-input qx-c-interval-input" data-act="auto-scroll-interval-min" data-el="auto-scroll-interval-min" min="0.5" max="60" step="0.5" placeholder="5" />' +
+            '      <span class="qx-c-range-sep">~</span>' +
+            '      <input type="number" class="qx-c-range-input qx-c-interval-input" data-act="auto-scroll-interval-max" data-el="auto-scroll-interval-max" min="0.5" max="60" step="0.5" placeholder="10" />' +
             '      <span class="qx-c-range-sep">秒</span>' +
             '    </div>' +
             '    <div class="qx-c-row qx-c-mode-row">' +
@@ -430,8 +440,11 @@
         if (t.dataset.act === 'rating-min' || t.dataset.act === 'rating-max') {
           return self._onRatingRangeChange();
         }
-        if (t.dataset.act === 'auto-scroll-interval') {
-          return self._onAutoScrollIntervalChange(t.value);
+        if (t.dataset.act === 'auto-scroll-interval-min') {
+          return self._onAutoScrollIntervalChange('min', t.value);
+        }
+        if (t.dataset.act === 'auto-scroll-interval-max') {
+          return self._onAutoScrollIntervalChange('max', t.value);
         }
       });
       // radio 用 change 事件(input 事件在 radio 上行为不一致)
@@ -538,9 +551,12 @@
       // 自动翻页
       var scrollCb = this._q('auto-scroll-toggle');
       if (scrollCb) scrollCb.checked = localStorage.getItem(AUTO_SCROLL_KEY) === '1';
-      // 自动翻页间隔(秒)
-      var intervalInput = this._q('auto-scroll-interval');
-      if (intervalInput) intervalInput.value = this.getAutoScrollInterval();
+      // 自动翻页间隔范围(秒):min ~ max,默认 5 ~ 10
+      var intervalRange = this.getAutoScrollIntervalRange();
+      var intervalMinInput = this._q('auto-scroll-interval-min');
+      if (intervalMinInput) intervalMinInput.value = intervalRange.minSec;
+      var intervalMaxInput = this._q('auto-scroll-interval-max');
+      if (intervalMaxInput) intervalMaxInput.value = intervalRange.maxSec;
       // 自动翻页模式(dom/api)
       var mode = this.getAutoScrollMode();
       var domRadio = this._q('auto-scroll-mode-dom');
@@ -631,41 +647,91 @@
       }
     }
 
-    // 自动翻页间隔变化:规范化 → 持久化 → 通知 data-panel 实时更新 AutoScroller
-    // 规范化:空值/非法值 → 默认值;超出范围 → 截断;有效值 → 保留 1 位小数
-    _onAutoScrollIntervalChange(rawValue) {
-      var normalized = this._normalizeAutoScrollInterval(rawValue);
-      var inputEl = this._q('auto-scroll-interval');
+    // 自动翻页间隔变化(min 或 max 任一变化):规范化 → 持久化 → 通知 data-panel 实时更新翻页器
+    // 规范化:空值/非法值 → 默认值;超出范围 → 截断;min > max → 互换
+    // which: 'min' | 'max',表示哪个输入框触发了变化
+    _onAutoScrollIntervalChange(which, rawValue) {
+      var normalized = this._normalizeIntervalSide(rawValue, which);
+      var inputEl = this._q(which === 'max' ? 'auto-scroll-interval-max' : 'auto-scroll-interval-min');
       if (inputEl && String(inputEl.value) !== String(normalized)) {
         inputEl.value = normalized;
       }
-      localStorage.setItem(AUTO_SCROLL_INTERVAL_KEY, String(normalized));
+      localStorage.setItem(
+        which === 'max' ? AUTO_SCROLL_INTERVAL_MAX_KEY : AUTO_SCROLL_INTERVAL_MIN_KEY,
+        String(normalized)
+      );
+      // 规范化另一侧:确保 min <= max
+      var range = this.getAutoScrollIntervalRange();
+      if (range.minSec > range.maxSec) {
+        // 互换:让 min/max 满足 min <= max
+        if (which === 'min') {
+          // 修改的是 min 但 min > max,把 max 抬到 min
+          localStorage.setItem(AUTO_SCROLL_INTERVAL_MAX_KEY, String(range.minSec));
+          var maxInput = this._q('auto-scroll-interval-max');
+          if (maxInput) maxInput.value = range.minSec;
+        } else {
+          // 修改的是 max 但 max < min,把 min 压到 max
+          localStorage.setItem(AUTO_SCROLL_INTERVAL_MIN_KEY, String(range.maxSec));
+          var minInput = this._q('auto-scroll-interval-min');
+          if (minInput) minInput.value = range.maxSec;
+        }
+      }
+      var finalRange = this.getAutoScrollIntervalRange();
       if (typeof this.callbacks.onAutoScrollIntervalChange === 'function') {
         try {
-          this.callbacks.onAutoScrollIntervalChange(normalized);
+          this.callbacks.onAutoScrollIntervalChange(finalRange);
         } catch (err) {
           this.toast(err.message || '操作失败', 'error', 2500);
         }
       }
     }
 
-    // 规范化翻页间隔(秒):空/NaN/≤0 → 默认值;< 0.5 → 0.5;> 10 → 10;否则四舍五入到 1 位小数
-    _normalizeAutoScrollInterval(rawValue) {
+    // 规范化单边间隔值(秒)
+    // which: 'min' | 'max',用于选择非法值时的默认 fallback
+    _normalizeIntervalSide(rawValue, which) {
       var n = parseFloat(rawValue);
-      if (!isFinite(n) || n <= 0) return AUTO_SCROLL_INTERVAL_DEFAULT;
-      if (n < 0.5) return 0.5;
-      if (n > 10) return 10;
+      var defaultVal = which === 'max' ? AUTO_SCROLL_INTERVAL_MAX_DEFAULT : AUTO_SCROLL_INTERVAL_MIN_DEFAULT;
+      if (!isFinite(n) || n <= 0) return defaultVal;
+      if (n < AUTO_SCROLL_INTERVAL_ABS_MIN) return AUTO_SCROLL_INTERVAL_ABS_MIN;
+      if (n > AUTO_SCROLL_INTERVAL_ABS_MAX) return AUTO_SCROLL_INTERVAL_ABS_MAX;
       return Math.round(n * 10) / 10;
     }
 
-    // 读取持久化的翻页间隔(秒),无配置返回默认值
-    getAutoScrollInterval() {
-      var raw = localStorage.getItem(AUTO_SCROLL_INTERVAL_KEY);
-      var n = parseFloat(raw);
-      if (!isFinite(n) || n <= 0) return AUTO_SCROLL_INTERVAL_DEFAULT;
-      if (n < 0.5) return 0.5;
-      if (n > 10) return 10;
-      return Math.round(n * 10) / 10;
+    // 读取持久化的翻页间隔范围(秒),返回 { minSec, maxSec }
+    // 兼容旧 key qx-c-auto-scroll-interval:若新 key 不存在但旧 key 存在,迁移为 min=max=旧值
+    getAutoScrollIntervalRange() {
+      var hasNewMin = localStorage.getItem(AUTO_SCROLL_INTERVAL_MIN_KEY) != null;
+      var hasNewMax = localStorage.getItem(AUTO_SCROLL_INTERVAL_MAX_KEY) != null;
+      if (!hasNewMin && !hasNewMax) {
+        var legacyRaw = localStorage.getItem(AUTO_SCROLL_INTERVAL_KEY_LEGACY);
+        var legacyN = parseFloat(legacyRaw);
+        if (isFinite(legacyN) && legacyN > 0) {
+          // 迁移:旧单值 → min=max=旧值(保留用户原有配置)
+          var clamped = Math.max(AUTO_SCROLL_INTERVAL_ABS_MIN, Math.min(AUTO_SCROLL_INTERVAL_ABS_MAX, legacyN));
+          clamped = Math.round(clamped * 10) / 10;
+          localStorage.setItem(AUTO_SCROLL_INTERVAL_MIN_KEY, String(clamped));
+          localStorage.setItem(AUTO_SCROLL_INTERVAL_MAX_KEY, String(clamped));
+          localStorage.removeItem(AUTO_SCROLL_INTERVAL_KEY_LEGACY);
+          return { minSec: clamped, maxSec: clamped };
+        }
+      }
+      var minRaw = localStorage.getItem(AUTO_SCROLL_INTERVAL_MIN_KEY);
+      var maxRaw = localStorage.getItem(AUTO_SCROLL_INTERVAL_MAX_KEY);
+      var minN = parseFloat(minRaw);
+      var maxN = parseFloat(maxRaw);
+      var minSec = !isFinite(minN) || minN <= 0 ? AUTO_SCROLL_INTERVAL_MIN_DEFAULT : minN;
+      var maxSec = !isFinite(maxN) || maxN <= 0 ? AUTO_SCROLL_INTERVAL_MAX_DEFAULT : maxN;
+      minSec = Math.max(AUTO_SCROLL_INTERVAL_ABS_MIN, Math.min(AUTO_SCROLL_INTERVAL_ABS_MAX, minSec));
+      maxSec = Math.max(AUTO_SCROLL_INTERVAL_ABS_MIN, Math.min(AUTO_SCROLL_INTERVAL_ABS_MAX, maxSec));
+      minSec = Math.round(minSec * 10) / 10;
+      maxSec = Math.round(maxSec * 10) / 10;
+      // 兜底:保证 min <= max
+      if (minSec > maxSec) {
+        var tmp = minSec;
+        minSec = maxSec;
+        maxSec = tmp;
+      }
+      return { minSec, maxSec };
     }
 
     // 翻页模式变化:持久化 + 通知调用方

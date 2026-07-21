@@ -997,10 +997,11 @@
 
   // ─── 限速配置(可折叠,与 jz-auto-collect-config 共享) ─────────────
   // 字段对应 SW 内 _AUTO_COLLECT_CONFIG_DEFAULT 的限速项。
-  // 新队列架构下只保留队列消费间隔(秒)和每日上限。
+  // 新队列架构下保留队列消费间隔范围(秒,每次随机)和每日上限。
   // min/max 与 input 的 min/max 属性保持一致,超界不写入并提示。
+  // 兼容旧字段 consumeRateSec:读取时若 min/max 不存在则用 consumeRateSec 作为 min=max
+  const RATE_RANGE = { min: 5, max: 120 };
   const RATE_FIELDS = [
-    { id: 'ac-rate-sku', key: 'consumeRateSec', min: 5, max: 120, label: '队列间隔' },
     { id: 'ac-rate-perday', key: 'perDayLimit', min: 0, max: 100000, label: '每日上限' },
   ];
 
@@ -1018,7 +1019,38 @@
     }, 2000);
   };
 
+  // 读取队列间隔范围(秒):优先 consumeRateMinSec/consumeRateMaxSec,fallback 到 consumeRateSec
+  const getRateRangeFromConfig = (config) => {
+    let lo = config.consumeRateMinSec;
+    let hi = config.consumeRateMaxSec;
+    if (lo == null || hi == null) {
+      const single = config.consumeRateSec;
+      lo = single;
+      hi = single;
+    }
+    lo = Number(lo);
+    hi = Number(hi);
+    if (!Number.isFinite(lo)) lo = 5;
+    if (!Number.isFinite(hi)) hi = 15;
+    lo = Math.max(RATE_RANGE.min, Math.min(RATE_RANGE.max, lo));
+    hi = Math.max(RATE_RANGE.min, Math.min(RATE_RANGE.max, hi));
+    if (lo > hi) { const t = lo; lo = hi; hi = t; }
+    return { min: lo, max: hi };
+  };
+
   const renderRateConfig = (config) => {
+    // 队列间隔范围(min~max)
+    const minInput = document.getElementById('ac-rate-sku-min');
+    const maxInput = document.getElementById('ac-rate-sku-max');
+    if (minInput && document.activeElement !== minInput) {
+      const range = getRateRangeFromConfig(config);
+      minInput.value = range.min;
+    }
+    if (maxInput && document.activeElement !== maxInput) {
+      const range = getRateRangeFromConfig(config);
+      maxInput.value = range.max;
+    }
+    // 其他单值字段
     for (const f of RATE_FIELDS) {
       const input = document.getElementById(f.id);
       if (!input) continue;
@@ -1039,7 +1071,7 @@
     if (body) body.style.display = rateCfgEl.classList.contains('is-open') ? '' : 'none';
   });
 
-  // 限速输入框 change(失焦或回车触发)→ 校验 → saveAutoCollectConfig
+  // 单值字段(每日上限)change 事件
   RATE_FIELDS.forEach((f) => {
     const input = document.getElementById(f.id);
     if (!input) return;
@@ -1063,6 +1095,41 @@
       }
     });
   });
+
+  // 队列间隔范围(min~max)change 事件:任意一边变化都校验两边并一起保存
+  const rateMinInput = document.getElementById('ac-rate-sku-min');
+  const rateMaxInput = document.getElementById('ac-rate-sku-max');
+  const saveRateRange = async () => {
+    const rawMin = (rateMinInput?.value || '').trim();
+    const rawMax = (rateMaxInput?.value || '').trim();
+    if (rawMin === '' || rawMax === '') return; // 任一为空不保存(等用户填齐)
+    let lo = Number(rawMin);
+    let hi = Number(rawMax);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+      showRateHint('队列间隔: 非数字', 'err');
+      return;
+    }
+    if (lo < RATE_RANGE.min || lo > RATE_RANGE.max || hi < RATE_RANGE.min || hi > RATE_RANGE.max) {
+      showRateHint(`队列间隔: 范围 [${RATE_RANGE.min}, ${RATE_RANGE.max}]`, 'err');
+      return;
+    }
+    if (lo > hi) {
+      // 自动互换而非报错(与 collector-panel.js 行为一致)
+      const t = lo;
+      lo = hi;
+      hi = t;
+      if (rateMinInput) rateMinInput.value = lo;
+      if (rateMaxInput) rateMaxInput.value = hi;
+    }
+    try {
+      await saveAutoCollectConfig({ consumeRateMinSec: lo, consumeRateMaxSec: hi });
+      showRateHint('队列间隔 已保存', 'ok');
+    } catch (e) {
+      showRateHint('队列间隔 保存失败', 'err');
+    }
+  };
+  rateMinInput?.addEventListener('change', saveRateRange);
+  rateMaxInput?.addEventListener('change', saveRateRange);
 
   // SW 推送消息:antibotDetected(熔断触发)/ configChanged(配置变化)→ 重渲。
   try {

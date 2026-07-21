@@ -29,13 +29,17 @@ export const storeClassificationDao = {
   /** 按 sellerSlug 查询(兼容方法,走 idx_sc_slug 索引)
    *  用途:扩展端首次访问时 sellerId 可能未取到,只有 sellerSlug;以及反查场景
    *  注意:sellerSlug 可变(店铺改名),此方法返回的记录可能滞后,生产环境优先用 getBySellerId
+   *  防御:同一 slug 可能存在多条记录(历史脏数据 _id=slug + 正确 _id=sellerId),
+   *  优先返回 _id 是纯数字的记录,避免命中脏数据。
    */
   async getBySlug(slug) {
     if (!slug) return null;
-    const row = db
-      .prepare(`SELECT * FROM ozon_store_classification WHERE sellerSlug = ? LIMIT 1`)
-      .get(String(slug));
-    if (!row) return null;
+    const rows = db
+      .prepare(`SELECT * FROM ozon_store_classification WHERE sellerSlug = ?`)
+      .all(String(slug));
+    if (!rows.length) return null;
+    // 优先返回 _id 是纯数字的记录;都没有则返回第一条(纯 slug 脏记录)
+    const row = rows.find((r) => /^\d+$/.test(String(r._id))) || rows[0];
     return {
       _id: row._id,
       sellerId: row.sellerId,
@@ -53,9 +57,14 @@ export const storeClassificationDao = {
   /** upsert by sellerId(新主键)
    *  update 字段可含 sellerSlug / sellerName / isChinese / classifiedBy / companyInfo / lastSeenUrl
    *  sellerId 必填(主键),sellerSlug 可选(店铺改名时变化)
+   *  校验:sellerId 必须是纯数字(防止 slug 被当 sellerId 写入产生脏数据,
+   *  历史 bug:_id='xizixiaopu' 等脏记录即由此产生)。非数字 sellerId 抛错。
    */
   async upsertBySellerId(sellerId, update) {
     const id = String(sellerId);
+    if (!/^\d+$/.test(id)) {
+      throw new Error(`upsertBySellerId: sellerId must be numeric, got "${id}" (疑似 slug 被当 sellerId)`);
+    }
     const now = new Date().toISOString();
     const cols = ['_id', 'sellerId'];
     const vals = [id, id];

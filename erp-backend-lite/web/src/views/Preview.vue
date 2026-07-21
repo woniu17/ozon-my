@@ -23,9 +23,8 @@ const sku = computed(() => String(route.params.sku || ''));
 // ⚠️ 提交时 dictionary_value_id 和 value 必须同时传且匹配字典,否则 Ozon 报"请检查数值"
 const BRAND_ATTR_ID = 85;
 const NO_BRAND_VALUE = 'Нет бренда';
-const NO_BRAND_DISPLAY = '无品牌'; // UI 展示用中文
 const NO_BRAND_DICTIONARY_VALUE_ID = 126745801;
-// 卖家代码(Артикул)= Offer ID;型号名称 = {Offer ID}-merge(用于合并为一张商品卡片)
+// 卖家代码(Артикул)= Offer ID;型号名称 = 当前时间毫秒级 Epoch 转 36 进制大写(用于合并为一张商品卡片)
 const SELLER_CODE_ATTR_ID = 9024;
 const MODEL_NAME_ATTR_ID = 9048;
 
@@ -172,6 +171,9 @@ const todayMMdd = computed(() => {
   return `${mm}${dd}`;
 });
 const listingOfferId = computed(() => `${sku.value}-${todayMMdd.value}-qx`);
+// 型号名称(attr 9048):当前时间毫秒级 Epoch 转 36 进制(大写字母)。进入预览页时生成一次,
+// 后续保持稳定,确保预览展示值与提交值一致(避免每次重算 timestamp 漂移)。
+const listingModelName = ref(Date.now().toString(36).toUpperCase());
 // 上架货币:取店铺合同货币(currency_code),不再硬编码
 const listingCurrency = computed(() => storesStore.findStore(state.storeId)?.currency_code || '');
 const LISTING_VAT = '0';
@@ -388,11 +390,11 @@ const originalAttrs = computed(() => {
 // ── 上架属性:在原商品属性基础上,强制 brand(85)= "无品牌" ──
 const listingAttrs = computed(() => {
   const list = originalAttrs.value.map((a) => ({ ...a, forced: false }));
-  // 强制注入:品牌(85)=无品牌、卖家代码(9024)=Offer ID、型号名称(9048)={Offer ID}-merge
+  // 强制注入:品牌(85)=无品牌、卖家代码(9024)=Offer ID、型号名称(9048)=毫秒级 Epoch 转 36 进制大写
   const forcedEntries = [
     { id: BRAND_ATTR_ID, value: NO_BRAND_VALUE },
     { id: SELLER_CODE_ATTR_ID, value: listingOfferId.value },
-    { id: MODEL_NAME_ATTR_ID, value: `${listingOfferId.value}-merge` },
+    { id: MODEL_NAME_ATTR_ID, value: listingModelName.value },
   ];
   for (const fe of forcedEntries) {
     const dict = attrDict.value[String(fe.id)];
@@ -523,7 +525,7 @@ const fieldDiff = computed(() => {
     },
     { key: 'attr_85', label: '品牌 (attr 85)', original: '—', listing: '无品牌(强制)' },
     { key: 'attr_9024', label: '卖家代码 (attr 9024)', original: '—', listing: listingOfferId.value },
-    { key: 'attr_9048', label: '型号名称 (attr 9048)', original: '—', listing: `${listingOfferId.value}-merge` },
+    { key: 'attr_9048', label: '型号名称 (attr 9048)', original: '—', listing: listingModelName.value },
   ];
   return rows.map((f) => ({
     ...f,
@@ -839,7 +841,7 @@ async function onSubmit() {
     item.vat = LISTING_VAT;
     if (state.params.videoMode === 'skip') item.videoUrl = '';
 
-    // 强制注入:品牌(85)=无品牌(常量 126745801)、卖家代码(9024)=Offer ID、型号名称(9048)={Offer ID}-merge
+    // 强制注入:品牌(85)=无品牌(常量 126745801)、卖家代码(9024)=Offer ID、型号名称(9048)=毫秒级 Epoch 转 36 进制大写
     // 品牌 dictionary_value_id=126745801 是 Ozon 全局"无品牌"占位,value="Нет бренда" 与字典匹配
     // 卖家代码/型号名称是普通字符串属性,dictionary_value_id=0 即可
     // ⚠️ 后端 transformItemForPortal 会从 _bundleItem/sv 重新提取 attributes,
@@ -848,7 +850,7 @@ async function onSubmit() {
     const forcedAttrValues = [
       { id: BRAND_ATTR_ID, value: NO_BRAND_VALUE, dictionaryValueId: NO_BRAND_DICTIONARY_VALUE_ID },
       { id: SELLER_CODE_ATTR_ID, value: listingOfferId.value, dictionaryValueId: 0 },
-      { id: MODEL_NAME_ATTR_ID, value: `${listingOfferId.value}-merge`, dictionaryValueId: 0 },
+      { id: MODEL_NAME_ATTR_ID, value: listingModelName.value, dictionaryValueId: 0 },
     ];
     item._forcedAttributes = forcedAttrValues.map((fe) => ({
       complex_id: 0,
@@ -919,67 +921,44 @@ onMounted(() => {
     <!-- 顶栏 -->
     <div class="pv-toolbar">
       <button class="btn btn-ghost" @click="goBack">← 返回采集箱</button>
-      <a
-        v-if="sku"
-        class="btn btn-ghost"
-        :href="`https://www.ozon.ru/product/${sku}/`"
-        target="_blank"
-        rel="noopener noreferrer"
-        title="新窗口打开 Ozon 商品详情页"
-        >商品详情页 ↗</a
-      >
+      <a v-if="sku" class="btn btn-ghost" :href="`https://www.ozon.ru/product/${sku}/`" target="_blank"
+        rel="noopener noreferrer" title="新窗口打开 Ozon 商品详情页">商品详情页 ↗</a>
       <h2 class="pv-title">上架预览 · SKU {{ sku }}</h2>
       <div class="pv-toolbar-right">
         <select class="filter-select" v-model="state.storeId" title="选择目标店铺(必选,影响属性字典过滤 + 提交)">
           <option value="">选择店铺...</option>
           <option v-for="s in storesStore.list" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
-        <select
-          class="filter-select"
-          v-model="state.templateId"
-          @change="
-            () => {
-              const t = state.templates.find((x) => x.id === state.templateId);
-              if (t) applyTemplate(t);
-            }
-          "
-          title="应用上架模板"
-        >
+        <select class="filter-select" v-model="state.templateId" @change="
+          () => {
+            const t = state.templates.find((x) => x.id === state.templateId);
+            if (t) applyTemplate(t);
+          }
+        " title="应用上架模板">
           <option value="">无模板</option>
           <option v-for="t in state.templates" :key="t.id" :value="t.id">
             {{ t.name }}{{ t.isDefault ? ' (默认)' : '' }}
           </option>
         </select>
-        <span
-          class="pv-preflight-badge"
-          :class="{ ok: !preflightBlocks.length, block: preflightBlocks.length }"
-          :title="`通过 ${preflight.length - preflightBlocks.length - preflightWarns.length}/${preflight.length} · 警告 ${preflightWarns.length} · 阻断 ${preflightBlocks.length}`"
-        >
+        <span class="pv-preflight-badge" :class="{ ok: !preflightBlocks.length, block: preflightBlocks.length }"
+          :title="`通过 ${preflight.length - preflightBlocks.length - preflightWarns.length}/${preflight.length} · 警告 ${preflightWarns.length} · 阻断 ${preflightBlocks.length}`">
           预检 {{ preflight.length - preflightBlocks.length }}/{{ preflight.length }}
         </span>
         <button class="btn btn-ghost" @click="state.showOpiJson = true">查看 OPI JSON</button>
-        <button
-          class="btn btn-primary"
-          :class="{ 'btn-filtered-block': state.categoryFiltered }"
-          :disabled="!canSubmit"
-          :title="!canSubmit ? submitDisabledReason : ''"
-          @click="onSubmit"
-        >
+        <button class="btn btn-primary" :class="{ 'btn-filtered-block': state.categoryFiltered }" :disabled="!canSubmit"
+          :title="!canSubmit ? submitDisabledReason : ''" @click="onSubmit">
           {{ state.submitting ? '提交中...' : '一键提交' }}
         </button>
       </div>
     </div>
 
     <!-- 类目过滤告警横幅(2026-07 新增) -->
-    <div
-      v-if="state.categoryFiltered && !state.loading && !state.error"
-      class="pv-filtered-banner"
-      role="alert"
-    >
+    <div v-if="state.categoryFiltered && !state.loading && !state.error" class="pv-filtered-banner" role="alert">
       <span class="pv-filtered-icon">⚠</span>
       <span class="pv-filtered-text">
         该商品类目
-        <strong>{{ state.profile?.portalItem?.descriptionCategoryId || '—' }}:{{ state.profile?.portalItem?.typeId || '—' }}</strong>
+        <strong>{{ state.profile?.portalItem?.descriptionCategoryId || '—' }}:{{ state.profile?.portalItem?.typeId ||
+          '—' }}</strong>
         {{ state.profile?.portalItem?.categoryName ? `(${state.profile.portalItem.categoryName})` : '' }}
         在过滤名单中,一键提交已被禁用。
       </span>
@@ -1002,54 +981,26 @@ onMounted(() => {
             <p class="muted pv-chain-note">售价 = 原价 × A% + B ｜ 划线价 = 售价 × A% ｜ 最低价 = 售价 − B</p>
             <div class="pv-param-row">
               <label>售价 A%</label>
-              <input
-                class="filter-input"
-                type="number"
-                min="50"
-                max="500"
-                step="1"
-                v-model.number="state.params.salePriceA"
-                placeholder="50~500"
-              />
+              <input class="filter-input" type="number" min="50" max="500" step="1"
+                v-model.number="state.params.salePriceA" placeholder="50~500" />
               <span class="pv-param-range">50~500</span>
             </div>
             <div class="pv-param-row">
               <label>售价 B</label>
-              <input
-                class="filter-input"
-                type="number"
-                min="-10"
-                max="10"
-                step="0.01"
-                v-model.number="state.params.salePriceB"
-                placeholder="-10~10"
-              />
+              <input class="filter-input" type="number" min="-10" max="10" step="0.01"
+                v-model.number="state.params.salePriceB" placeholder="-10~10" />
               <span class="pv-param-result">= ¥{{ salePrice || '—' }}</span>
             </div>
             <div class="pv-param-row">
               <label>划线价 A%</label>
-              <input
-                class="filter-input"
-                type="number"
-                min="110"
-                max="200"
-                step="1"
-                v-model.number="state.params.oldPriceA"
-                placeholder="110~200"
-              />
+              <input class="filter-input" type="number" min="110" max="200" step="1"
+                v-model.number="state.params.oldPriceA" placeholder="110~200" />
               <span class="pv-param-result">= ¥{{ oldPrice || '—' }}</span>
             </div>
             <div class="pv-param-row">
               <label>最低价 B</label>
-              <input
-                class="filter-input"
-                type="number"
-                min="0"
-                max="5"
-                step="0.01"
-                v-model.number="state.params.minPriceB"
-                placeholder="0~5"
-              />
+              <input class="filter-input" type="number" min="0" max="5" step="0.01"
+                v-model.number="state.params.minPriceB" placeholder="0~5" />
               <span class="pv-param-result">= ¥{{ minPrice || '—' }}</span>
             </div>
           </fieldset>
@@ -1062,22 +1013,12 @@ onMounted(() => {
                 <option value="keep">不更改</option>
                 <option value="shuffle_non_primary">主图不变,其它随机打乱</option>
               </select>
-              <button
-                v-if="state.params.imageOrder === 'shuffle_non_primary'"
-                class="btn btn-ghost pv-reshuffle-btn"
-                type="button"
-                @click="reshuffle"
-                title="主图不变,其他图片重新随机打乱"
-              >
+              <button v-if="state.params.imageOrder === 'shuffle_non_primary'" class="btn btn-ghost pv-reshuffle-btn"
+                type="button" @click="reshuffle" title="主图不变,其他图片重新随机打乱">
                 🎲 重新打乱
               </button>
-              <button
-                v-if="manualOverride !== null"
-                class="btn btn-ghost pv-reshuffle-btn"
-                type="button"
-                @click="resetManualImages"
-                title="撤销所有手动调整(拖拽/删除),恢复到当前模式的基础顺序"
-              >
+              <button v-if="manualOverride !== null" class="btn btn-ghost pv-reshuffle-btn" type="button"
+                @click="resetManualImages" title="撤销所有手动调整(拖拽/删除),恢复到当前模式的基础顺序">
                 ♻ 重置图片
               </button>
             </div>
@@ -1131,7 +1072,8 @@ onMounted(() => {
           <div class="pv-card-title">
             预检清单
             <span class="pv-card-title-meta">
-              通过 {{ preflight.length - preflightBlocks.length - preflightWarns.length }} · 警告 {{ preflightWarns.length }} · 阻断 {{ preflightBlocks.length }}
+              通过 {{ preflight.length - preflightBlocks.length - preflightWarns.length }} · 警告 {{ preflightWarns.length
+              }} · 阻断 {{ preflightBlocks.length }}
             </span>
           </div>
           <ul class="pv-preflight">
@@ -1146,14 +1088,8 @@ onMounted(() => {
         <div class="pv-card pv-top-card">
           <div class="pv-card-title">数据来源 (7 类缓存)</div>
           <div class="pv-dots">
-            <span
-              v-for="ck in CACHE_KEYS"
-              :key="ck.key"
-              class="cb-dot"
-              :class="{ hit: state.profile.sources[ck.key] }"
-              :title="ck.key + (state.profile.sources[ck.key] ? ' ✓' : ' ✗')"
-              >{{ ck.label }}</span
-            >
+            <span v-for="ck in CACHE_KEYS" :key="ck.key" class="cb-dot" :class="{ hit: state.profile.sources[ck.key] }"
+              :title="ck.key + (state.profile.sources[ck.key] ? ' ✓' : ' ✗')">{{ ck.label }}</span>
           </div>
           <div class="pv-source-list">
             <div v-for="ck in CACHE_KEYS" :key="ck.key" class="pv-source-row">
@@ -1186,14 +1122,11 @@ onMounted(() => {
               <div class="pv-cmp-col">
                 <div class="pv-cmp-col-label">原商品 · {{ imageDiff.origCount }} 张</div>
                 <div class="pv-img-grid">
-                  <div
-                    v-for="(img, i) in allImages"
-                    :key="'o' + i"
-                    class="pv-img-cell pv-img-clickable"
-                    @click="openLightbox(img, allImages, `原商品 #${i + 1}${i === 0 ? ' 主图' : ''}`)"
-                  >
+                  <div v-for="(img, i) in allImages" :key="'o' + i" class="pv-img-cell pv-img-clickable"
+                    @click="openLightbox(img, allImages, `原商品 #${i + 1}${i === 0 ? ' 主图' : ''}`)">
                     <div class="pv-img-cell-idx">#{{ i + 1 }}{{ i === 0 ? ' 主图' : '' }}</div>
-                    <img :src="img" class="pv-ic-img" alt="" loading="lazy" @error="$event.target.style.opacity = 0.2" />
+                    <img :src="img" class="pv-ic-img" alt="" loading="lazy"
+                      @error="$event.target.style.opacity = 0.2" />
                   </div>
                 </div>
               </div>
@@ -1207,25 +1140,14 @@ onMounted(() => {
                   <span v-if="state.params.imageProcess.antiCopy" class="pv-ic-tags">[防盗]</span>
                 </div>
                 <div class="pv-img-grid">
-                  <div
-                    v-for="(img, i) in processedImages"
-                    :key="'p' + i + '-' + img"
-                    class="pv-img-cell pv-img-manual"
+                  <div v-for="(img, i) in processedImages" :key="'p' + i + '-' + img" class="pv-img-cell pv-img-manual"
                     :class="{
                       'pv-img-changed': getOrigPosLabel(i),
                       'pv-img-dragging': manualDragIdx === i,
-                    }"
-                    draggable="true"
-                    @dragstart="onManualDragStart($event, i)"
-                    @dragover="onManualDragOver($event, i)"
-                    @dragend="onManualDragEnd()"
-                  >
-                    <button
-                      class="pv-img-del-btn"
-                      type="button"
-                      title="删除该图片"
-                      @click.stop="removeManualImage(i)"
-                    >×</button>
+                    }" draggable="true" @dragstart="onManualDragStart($event, i)"
+                    @dragover="onManualDragOver($event, i)" @dragend="onManualDragEnd()">
+                    <button class="pv-img-del-btn" type="button" title="删除该图片"
+                      @click.stop="removeManualImage(i)">×</button>
                     <div class="pv-img-cell-idx">
                       #{{ i + 1 }}{{ i === 0 ? ' 主图' : '' }}
                       <span v-if="getOrigPosLabel(i)" class="pv-img-reorder-tag">
@@ -1233,14 +1155,9 @@ onMounted(() => {
                       </span>
                       <span class="pv-img-reorder-tag" title="拖拽排序">⋮⋮</span>
                     </div>
-                    <img
-                      :src="img"
-                      class="pv-ic-img pv-img-clickable-img"
-                      alt=""
-                      loading="lazy"
+                    <img :src="img" class="pv-ic-img pv-img-clickable-img" alt="" loading="lazy"
                       @click="openLightbox(img, processedImages, `上架 #${i + 1}${i === 0 ? ' 主图' : ''}`)"
-                      @error="$event.target.style.opacity = 0.2"
-                    />
+                      @error="$event.target.style.opacity = 0.2" />
                   </div>
                   <div v-if="!processedImages.length" class="pv-no-img-sm" style="flex: 1 1 100%">
                     所有图片已删除,请点击"重置图片"恢复
@@ -1288,13 +1205,15 @@ onMounted(() => {
                   <span class="pv-cmp-val" :class="'level-' + priceLevel">¥{{ salePrice || '—' }}</span>
                   <span class="pv-cmp-formula">{{ salePriceFormula }}</span>
                 </div>
-                <div v-if="oldPrice" class="pv-cmp-row" :class="{ 'pv-cmp-changed': String(state.profile.original.oldPrice || '') !== String(oldPrice) }">
+                <div v-if="oldPrice" class="pv-cmp-row"
+                  :class="{ 'pv-cmp-changed': String(state.profile.original.oldPrice || '') !== String(oldPrice) }">
                   <span class="pv-cmp-key">划线价</span>
                   <span class="pv-cmp-val">¥{{ oldPrice }}</span>
                 </div>
                 <div v-if="minPrice" class="pv-cmp-row">
                   <span class="pv-cmp-key">最低价</span>
-                  <span class="pv-cmp-val" :class="{ 'pv-cmp-warn': salePrice && salePrice < minPrice }">¥{{ minPrice }}</span>
+                  <span class="pv-cmp-val" :class="{ 'pv-cmp-warn': salePrice && salePrice < minPrice }">¥{{ minPrice
+                    }}</span>
                 </div>
               </div>
             </div>
@@ -1305,7 +1224,8 @@ onMounted(() => {
             <div class="pv-card-title">
               字段概览对比
               <span class="pv-card-title-meta">
-                共 {{ fieldDiff.length }} 项 · 差异 <strong class="pv-diff-count">{{ fieldDiffChangedCount }}</strong> 项 · 必填 <span class="pv-required-star">*</span>
+                共 {{ fieldDiff.length }} 项 · 差异 <strong class="pv-diff-count">{{ fieldDiffChangedCount }}</strong> 项 ·
+                必填 <span class="pv-required-star">*</span>
               </span>
             </div>
             <table class="pv-cmp-table">
@@ -1336,7 +1256,8 @@ onMounted(() => {
             <div class="pv-card-title">
               属性对比
               <span class="pv-card-title-meta">
-                共 {{ attrDiff.length }} 项 · 差异 <strong class="pv-diff-count">{{ attrDiffChangedCount }}</strong> 项 · 必填 <span class="pv-required-star">*</span>
+                共 {{ attrDiff.length }} 项 · 差异 <strong class="pv-diff-count">{{ attrDiffChangedCount }}</strong> 项 · 必填
+                <span class="pv-required-star">*</span>
                 <span class="pv-diff-tag">含强制品牌(#{{ BRAND_ATTR_ID }}=无品牌)</span>
               </span>
             </div>
@@ -1349,15 +1270,11 @@ onMounted(() => {
                 </tr>
               </thead>
               <tbody>
-                <tr
-                  v-for="a in attrDiff"
-                  :key="a.id"
-                  :class="{
-                    'pv-cmp-row-added': a.added,
-                    'pv-cmp-row-removed': a.removed,
-                    'pv-cmp-row-changed': a.changed && !a.added && !a.removed,
-                  }"
-                >
+                <tr v-for="a in attrDiff" :key="a.id" :class="{
+                  'pv-cmp-row-added': a.added,
+                  'pv-cmp-row-removed': a.removed,
+                  'pv-cmp-row-changed': a.changed && !a.added && !a.removed,
+                }">
                   <td class="pv-cmp-key">
                     <span v-if="a.required" class="pv-required-star">*</span>{{ a.name }}
                     <span class="pv-attr-id-tag">#{{ a.id }}</span>
@@ -1376,11 +1293,8 @@ onMounted(() => {
           </div>
 
           <!-- 提交结果 -->
-          <div
-            v-if="state.submitResult"
-            class="pv-card"
-            :class="{ 'pv-card-success': !state.submitResult.error, 'pv-card-error': state.submitResult.error }"
-          >
+          <div v-if="state.submitResult" class="pv-card"
+            :class="{ 'pv-card-success': !state.submitResult.error, 'pv-card-error': state.submitResult.error }">
             <div class="pv-card-title">提交结果</div>
             <p v-if="state.submitResult.task_id">Ozon 任务 ID: {{ state.submitResult.task_id }}</p>
             <p v-if="state.submitResult.local_task_id">本地任务 ID: {{ state.submitResult.local_task_id }}</p>
@@ -1412,13 +1326,8 @@ onMounted(() => {
     <!-- 图片放大 Lightbox -->
     <div v-if="lightbox.open" class="pv-lightbox" @click.self="closeLightbox">
       <button class="pv-lb-close" type="button" title="关闭 (Esc)" @click="closeLightbox">×</button>
-      <button
-        v-if="lightbox.list.length > 1"
-        class="pv-lb-nav pv-lb-prev"
-        type="button"
-        title="上一张 (←)"
-        @click.stop="lightboxPrev"
-      >‹</button>
+      <button v-if="lightbox.list.length > 1" class="pv-lb-nav pv-lb-prev" type="button" title="上一张 (←)"
+        @click.stop="lightboxPrev">‹</button>
       <div class="pv-lb-img-wrap" @click.self="closeLightbox">
         <img v-if="lightbox.url" :src="lightbox.url" class="pv-lb-img" alt="" />
         <div v-if="lightbox.title" class="pv-lb-title">{{ lightbox.title }}</div>
@@ -1426,13 +1335,8 @@ onMounted(() => {
           {{ lightbox.index + 1 }} / {{ lightbox.list.length }}
         </div>
       </div>
-      <button
-        v-if="lightbox.list.length > 1"
-        class="pv-lb-nav pv-lb-next"
-        type="button"
-        title="下一张 (→)"
-        @click.stop="lightboxNext"
-      >›</button>
+      <button v-if="lightbox.list.length > 1" class="pv-lb-nav pv-lb-next" type="button" title="下一张 (→)"
+        @click.stop="lightboxNext">›</button>
     </div>
   </div>
 </template>
@@ -1443,6 +1347,7 @@ onMounted(() => {
   flex-direction: column;
   height: 100%;
 }
+
 .pv-toolbar {
   display: flex;
   align-items: center;
@@ -1452,37 +1357,44 @@ onMounted(() => {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+
 .pv-title {
   font-size: 16px;
   font-weight: 600;
   margin: 0;
   flex: 1;
 }
+
 .pv-toolbar-right {
   display: flex;
   align-items: center;
   gap: 8px;
 }
+
 .pv-preflight-badge {
   padding: 3px 10px;
   border-radius: 4px;
   font-size: 12px;
   font-weight: 600;
 }
+
 .pv-preflight-badge.ok {
   background: #d1fae5;
   color: #065f46;
 }
+
 .pv-preflight-badge.block {
   background: #fee2e2;
   color: #991b1b;
 }
+
 .pv-loading,
 .pv-error {
   padding: 40px;
   text-align: center;
   color: #6b7280;
 }
+
 .pv-error {
   color: #dc2626;
 }
@@ -1504,6 +1416,7 @@ onMounted(() => {
   gap: 12px;
   flex-shrink: 0;
 }
+
 .pv-top-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -1519,6 +1432,7 @@ onMounted(() => {
   flex: 1;
   min-height: 0;
 }
+
 .pv-listing-title {
   font-size: 13px;
   font-weight: 700;
@@ -1529,6 +1443,7 @@ onMounted(() => {
   padding-bottom: 6px;
   border-bottom: 1px solid #e5e7eb;
 }
+
 .pv-listing {
   display: flex;
   flex-direction: column;
@@ -1537,6 +1452,7 @@ onMounted(() => {
   overflow-y: auto;
   flex: 1;
 }
+
 .pv-attr-id-tag {
   display: inline-block;
   margin-left: 4px;
@@ -1546,6 +1462,7 @@ onMounted(() => {
   font-family: monospace;
   font-weight: 400;
 }
+
 .pv-attr-forced-tag {
   display: inline-block;
   margin-left: 4px;
@@ -1564,14 +1481,17 @@ onMounted(() => {
   border-radius: 8px;
   padding: 12px;
 }
+
 .pv-card-success {
   border-color: #10b981;
   background: #ecfdf5;
 }
+
 .pv-card-error {
   border-color: #ef4444;
   background: #fef2f2;
 }
+
 .pv-card-title {
   font-size: 13px;
   font-weight: 600;
@@ -1582,6 +1502,7 @@ onMounted(() => {
   gap: 6px;
   flex-wrap: wrap;
 }
+
 .pv-card-title-meta {
   font-size: 11px;
   font-weight: 400;
@@ -1590,6 +1511,7 @@ onMounted(() => {
   align-items: center;
   gap: 4px;
 }
+
 .pv-diff-tag {
   display: inline-block;
   padding: 1px 6px;
@@ -1600,6 +1522,7 @@ onMounted(() => {
   border-radius: 3px;
   margin-left: 4px;
 }
+
 .pv-diff-count {
   color: #b45309;
   font-weight: 700;
@@ -1611,25 +1534,30 @@ onMounted(() => {
   gap: 4px;
   margin-bottom: 10px;
 }
+
 .pv-source-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
 }
+
 .pv-source-row {
   display: flex;
   justify-content: space-between;
   padding: 3px 0;
   border-bottom: 1px dashed #f3f4f6;
 }
+
 .pv-source-label {
   color: #6b7280;
 }
+
 .pv-source-status {
   font-weight: 600;
   color: #dc2626;
 }
+
 .pv-source-status.hit {
   color: #059669;
 }
@@ -1644,6 +1572,7 @@ onMounted(() => {
   border-radius: 4px;
   color: #92400e;
 }
+
 .pv-brand-tag {
   display: inline-block;
   padding: 1px 8px;
@@ -1662,22 +1591,27 @@ onMounted(() => {
   margin: 0;
   font-size: 13px;
 }
+
 .pv-preflight li {
   padding: 3px 0;
   display: flex;
   align-items: center;
   gap: 6px;
 }
+
 .pf-ok {
   color: #059669;
 }
+
 .pf-warn {
   color: #d97706;
 }
+
 .pf-block {
   color: #dc2626;
   font-weight: 600;
 }
+
 .pf-icon {
   width: 16px;
   text-align: center;
@@ -1690,12 +1624,14 @@ onMounted(() => {
   padding: 8px 10px;
   margin-bottom: 10px;
 }
+
 .pv-fieldset legend {
   font-size: 12px;
   font-weight: 600;
   color: #6b7280;
   padding: 0 6px;
 }
+
 .pv-param-row {
   display: flex;
   align-items: center;
@@ -1703,43 +1639,51 @@ onMounted(() => {
   margin-bottom: 6px;
   font-size: 13px;
 }
+
 .pv-param-row label {
   width: 60px;
   flex-shrink: 0;
   color: #4b5563;
 }
+
 .pv-param-row .filter-select,
 .pv-param-row .filter-input {
   flex: 1;
   min-width: 0;
 }
+
 .pv-param-result {
   font-size: 12px;
   font-weight: 600;
   color: #059669;
   white-space: nowrap;
 }
+
 .pv-param-range {
   font-size: 11px;
   color: #9ca3af;
   white-space: nowrap;
 }
+
 .pv-process-chain {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   font-size: 13px;
 }
+
 .pv-chain-item {
   display: flex;
   align-items: center;
   gap: 4px;
   cursor: pointer;
 }
+
 .pv-chain-note {
   font-size: 10px;
   margin-top: 6px;
 }
+
 .pv-reshuffle-btn {
   padding: 2px 8px;
   font-size: 11px;
@@ -1748,6 +1692,7 @@ onMounted(() => {
   border-radius: 4px;
   cursor: pointer;
 }
+
 .pv-reshuffle-btn:hover {
   background: #f3f4f6;
 }
@@ -1759,6 +1704,7 @@ onMounted(() => {
   gap: 10px;
   align-items: start;
 }
+
 .pv-cmp-col {
   border: 1px solid #e5e7eb;
   border-radius: 6px;
@@ -1766,6 +1712,7 @@ onMounted(() => {
   background: #fafafa;
   min-width: 0;
 }
+
 .pv-cmp-col-label {
   font-size: 12px;
   font-weight: 600;
@@ -1776,6 +1723,7 @@ onMounted(() => {
   gap: 4px;
   flex-wrap: wrap;
 }
+
 .pv-cmp-row {
   display: flex;
   align-items: center;
@@ -1784,35 +1732,44 @@ onMounted(() => {
   font-size: 12px;
   border-bottom: 1px dashed #f3f4f6;
 }
+
 .pv-cmp-row:last-child {
   border-bottom: none;
 }
+
 .pv-cmp-key {
   color: #6b7280;
   width: 60px;
   flex-shrink: 0;
 }
+
 .pv-cmp-val {
   font-weight: 600;
   color: #111827;
 }
+
 .pv-cmp-formula {
   font-size: 10px;
   color: #9ca3af;
   margin-left: auto;
 }
+
 .pv-cmp-val.level-low {
   color: #dc2626;
 }
+
 .pv-cmp-val.level-mid {
   color: #d97706;
 }
+
 .pv-cmp-val.level-high {
   color: #059669;
 }
+
 .pv-cmp-warn {
   color: #dc2626 !important;
 }
+
 .pv-cmp-changed {
   background: #fef3c7;
   border-radius: 3px;
@@ -1825,6 +1782,7 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 6px;
 }
+
 .pv-img-cell {
   flex: 1 1 100px;
   max-width: 160px;
@@ -1834,10 +1792,12 @@ onMounted(() => {
   border-radius: 4px;
   padding: 2px;
 }
+
 .pv-img-cell.pv-img-changed {
   border-color: #f59e0b;
   background: #fffbeb;
 }
+
 /* 手动模式:可拖拽 + 删除按钮 */
 .pv-img-cell.pv-img-manual {
   cursor: grab;
@@ -1845,18 +1805,22 @@ onMounted(() => {
   border: 1px dashed #93c5fd;
   transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
 }
+
 .pv-img-cell.pv-img-manual:hover {
   border-color: #2563eb;
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
 }
+
 .pv-img-cell.pv-img-manual:active {
   cursor: grabbing;
 }
+
 .pv-img-cell.pv-img-dragging {
   opacity: 0.5;
   border-color: #2563eb;
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
+
 .pv-img-del-btn {
   position: absolute;
   top: 2px;
@@ -1878,20 +1842,25 @@ onMounted(() => {
   opacity: 0.85;
   transition: opacity 0.15s, background 0.15s;
 }
+
 .pv-img-del-btn:hover {
   opacity: 1;
   background: #dc2626;
 }
+
 /* 点击放大光标提示 */
 .pv-img-cell.pv-img-clickable {
   cursor: zoom-in;
 }
+
 .pv-img-clickable-img {
   cursor: zoom-in;
 }
+
 .pv-img-cell.pv-img-manual .pv-img-clickable-img {
   cursor: zoom-in;
 }
+
 /* 上架侧图片 cell 整体可拖拽,但内部 img 点击放大需阻止拖拽默认行为 */
 .pv-img-cell.pv-img-manual .pv-ic-img {
   -webkit-user-drag: none;
@@ -1911,6 +1880,7 @@ onMounted(() => {
   padding: 24px;
   box-sizing: border-box;
 }
+
 .pv-lb-img-wrap {
   display: flex;
   flex-direction: column;
@@ -1920,6 +1890,7 @@ onMounted(() => {
   max-height: 100%;
   cursor: zoom-out;
 }
+
 .pv-lb-img {
   max-width: 90vw;
   max-height: 80vh;
@@ -1927,6 +1898,7 @@ onMounted(() => {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
   cursor: zoom-out;
 }
+
 .pv-lb-title {
   color: #fff;
   font-size: 13px;
@@ -1934,12 +1906,14 @@ onMounted(() => {
   text-align: center;
   opacity: 0.9;
 }
+
 .pv-lb-counter {
   color: #fff;
   font-size: 12px;
   margin-top: 6px;
   opacity: 0.7;
 }
+
 .pv-lb-close {
   position: absolute;
   top: 16px;
@@ -1959,9 +1933,11 @@ onMounted(() => {
   transition: background 0.15s;
   z-index: 10000;
 }
+
 .pv-lb-close:hover {
   background: rgba(255, 255, 255, 0.3);
 }
+
 .pv-lb-nav {
   position: absolute;
   top: 50%;
@@ -1980,20 +1956,25 @@ onMounted(() => {
   transition: background 0.15s;
   z-index: 10000;
 }
+
 .pv-lb-nav:hover {
   background: rgba(255, 255, 255, 0.25);
 }
+
 .pv-lb-prev {
   left: 20px;
 }
+
 .pv-lb-next {
   right: 20px;
 }
+
 .pv-img-cell-idx {
   font-size: 10px;
   color: #6b7280;
   margin-bottom: 3px;
 }
+
 .pv-img-reorder-tag {
   display: inline-block;
   margin-left: 3px;
@@ -2003,6 +1984,7 @@ onMounted(() => {
   background: #fef3c7;
   border-radius: 2px;
 }
+
 .pv-ic-img {
   width: 100%;
   max-height: 120px;
@@ -2010,11 +1992,13 @@ onMounted(() => {
   border-radius: 4px;
   background: #f9fafb;
 }
+
 .pv-ic-tags {
   color: #2563eb;
   font-size: 10px;
   margin-left: 4px;
 }
+
 .pv-no-img-sm {
   height: 80px;
   display: flex;
@@ -2025,6 +2009,7 @@ onMounted(() => {
   border-radius: 4px;
   font-size: 12px;
 }
+
 .pv-ic-note {
   font-size: 10px;
   margin-top: 6px;
@@ -2037,6 +2022,7 @@ onMounted(() => {
   font-size: 12px;
   border-collapse: collapse;
 }
+
 .pv-cmp-table thead th {
   text-align: left;
   padding: 5px 8px;
@@ -2049,18 +2035,22 @@ onMounted(() => {
   top: 0;
   z-index: 1;
 }
+
 .pv-cmp-th-key {
   width: 230px;
 }
+
 .pv-cmp-th {
   width: auto;
 }
+
 .pv-cmp-table td {
   padding: 4px 8px;
   border-bottom: 1px solid #f3f4f6;
   vertical-align: top;
   word-break: break-word;
 }
+
 .pv-cmp-table .pv-cmp-key {
   color: #6b7280;
   width: 230px;
@@ -2069,34 +2059,42 @@ onMounted(() => {
   font-weight: 500;
   white-space: nowrap;
 }
+
 /* 必填项红色星号 */
 .pv-required-star {
   color: #dc2626;
   font-weight: 700;
   margin-right: 2px;
 }
+
 .pv-cmp-cell {
   color: #111827;
 }
+
 .pv-cmp-cell-changed {
   background: #fef3c7;
   color: #92400e;
   font-weight: 600;
 }
+
 .pv-cmp-arrow {
   color: #b45309;
   margin-left: 4px;
   font-size: 10px;
 }
+
 .pv-cmp-row-changed {
   background: #fffbeb;
 }
+
 .pv-cmp-row-added {
   background: #ecfdf5;
 }
+
 .pv-cmp-row-removed {
   background: #fef2f2;
 }
+
 .pv-cmp-flag {
   display: inline-block;
   margin-left: 4px;
@@ -2105,14 +2103,17 @@ onMounted(() => {
   font-weight: 700;
   border-radius: 3px;
 }
+
 .pv-cmp-flag-add {
   color: #065f46;
   background: #d1fae5;
 }
+
 .pv-cmp-flag-del {
   color: #991b1b;
   background: #fee2e2;
 }
+
 .pv-cmp-flag-mod {
   color: #92400e;
   background: #fde68a;
@@ -2134,6 +2135,7 @@ onMounted(() => {
   justify-content: center;
   padding: 24px;
 }
+
 .pv-json-modal {
   background: #fff;
   border-radius: 8px;
@@ -2144,6 +2146,7 @@ onMounted(() => {
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
   overflow: hidden;
 }
+
 .pv-json-header {
   display: flex;
   justify-content: space-between;
@@ -2151,16 +2154,19 @@ onMounted(() => {
   padding: 12px 16px;
   border-bottom: 1px solid #e5e7eb;
 }
+
 .pv-json-header h3 {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
   color: #111827;
 }
+
 .pv-json-actions {
   display: flex;
   gap: 8px;
 }
+
 .pv-json-btn {
   padding: 4px 10px;
   font-size: 12px;
@@ -2169,9 +2175,11 @@ onMounted(() => {
   border-radius: 4px;
   cursor: pointer;
 }
+
 .pv-json-btn:hover {
   background: #f3f4f6;
 }
+
 .pv-json-meta {
   display: flex;
   gap: 16px;
@@ -2183,6 +2191,7 @@ onMounted(() => {
   flex-wrap: wrap;
   align-items: center;
 }
+
 .pv-json-tag {
   display: inline-block;
   padding: 1px 8px;
@@ -2190,14 +2199,17 @@ onMounted(() => {
   font-weight: 600;
   margin: 0 4px;
 }
+
 .pv-json-tag.ok {
   background: #d1fae5;
   color: #065f46;
 }
+
 .pv-json-tag.err {
   background: #fee2e2;
   color: #991b1b;
 }
+
 .pv-json-body {
   margin: 0;
   padding: 14px 16px;
@@ -2223,13 +2235,16 @@ onMounted(() => {
   font-size: 13px;
   flex-shrink: 0;
 }
+
 .pv-filtered-icon {
   font-size: 16px;
   font-weight: 700;
 }
+
 .pv-filtered-text {
   flex: 1;
 }
+
 .pv-filtered-text strong {
   font-family: monospace;
   background: #ffe7e6;
@@ -2237,15 +2252,18 @@ onMounted(() => {
   border-radius: 3px;
   margin: 0 2px;
 }
+
 .pv-filtered-link {
   color: #cf1322;
   text-decoration: underline;
   white-space: nowrap;
   font-weight: 500;
 }
+
 .pv-filtered-link:hover {
   color: #a8071a;
 }
+
 /* 一键提交按钮:被过滤时强制置灰样式(即使 disabled 也能看出原因) */
 .btn-filtered-block {
   background: #d9d9d9 !important;

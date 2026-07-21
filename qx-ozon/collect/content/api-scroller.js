@@ -39,6 +39,8 @@
   // 默认配置
   const _DEFAULTS = {
     intervalMs: 800, // 翻页间隔(毫秒),默认 800ms(比 DOM 滚动快 3-5 倍)
+    intervalMinMs: null, // 翻页间隔范围(毫秒):设置后每次在 [min, max] 内取随机值,反爬+拟人化
+    intervalMaxMs: null, // 仅 intervalMinMs/intervalMaxMs 都设置时才启用范围随机,否则 fallback 到 intervalMs
     maxConsecutiveErrors: 3, // 连续失败次数上限,超过则停止
     requestTimeoutMs: 30000, // 单次 fetch 超时
     // 连续空页上限:超过则视为抓取完成(防御 Ozon 反爬/分页异常导致的死循环)
@@ -273,6 +275,18 @@
       this._phaseStartedAt = Date.now();
     }
 
+    // 计算下一次翻页的间隔(毫秒)
+    // 优先用 [opts.intervalMinMs, opts.intervalMaxMs] 范围随机(反爬+拟人化);
+    // 若未配置范围则 fallback 到固定值 opts.intervalMs(兼容旧调用)
+    _getNextInterval() {
+      const lo = this.opts.intervalMinMs;
+      const hi = this.opts.intervalMaxMs;
+      if (lo != null && hi != null && hi >= lo) {
+        return lo + Math.random() * (hi - lo);
+      }
+      return this.opts.intervalMs;
+    }
+
     /**
      * 获取当前状态(与 AutoScroller.getScrollStatus 结构兼容)
      * 返回 { status, reason, detail }
@@ -459,10 +473,11 @@
           }
 
           // 节流: 等待 intervalMs(速度配置生效)
-          if (this.opts.intervalMs > 0) {
+          if (this.opts.intervalMs > 0 || (this.opts.intervalMinMs != null && this.opts.intervalMaxMs != null)) {
+            const delay = this._getNextInterval();
             this._setPhase('throttling');
-            this._throttleUntil = Date.now() + this.opts.intervalMs;
-            await new Promise((r) => setTimeout(r, this.opts.intervalMs));
+            this._throttleUntil = Date.now() + delay;
+            await new Promise((r) => setTimeout(r, delay));
           }
         } catch (err) {
           this._consecutiveErrors++;

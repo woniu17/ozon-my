@@ -101,6 +101,8 @@ async function ensureMigrations() {
   // 2) ozon_auto_collect_log 补 sellerId 列 + 索引,从 ozon_store_sku 反查回填
   // 3) ozon_store_classification 重建表(_id = sellerId),旧表数据迁移到 legacy 表
   await migrateSellerIdPrimaryKey(db);
+  // 2026-07: 清理 ozon_store_classification 中 _id 非 数字 的脏记录(slug 被当 sellerId 写入)
+  await cleanupStoreClassificationDirtyRows(db);
   // 2026-07: 类目过滤功能 — ozon_cache_index 补类目列 + 索引 + 从 bundle_data 回填
   await migrateCategoryFields(db);
   // ozon_cache_index.has_rich_content:richMedia.data.richContent 非空则 1,用于采集箱"有富内容"筛选
@@ -290,6 +292,54 @@ function dropLegacyCollectBoxV2(db) {
     db.exec(`DROP TABLE IF EXISTS collect_box_v2`);
     console.log('[db] migration: dropped legacy table collect_box_v2 (已用缓存视图替代)');
   }
+}
+
+// 2026-07: 清理 ozon_store_classification 中 _id 非数字的脏记录
+// 根因:SW _erpStoreClassSet 曾在 sellerId 为空时 fallback 用 slug 作为 _id 写入主表,
+// 产生 _id='xizixiaopu' 之类脏数据(同一 slug 后续拿到真实 sellerId 后会再写一条 _id=数字 的正确记录)。
+// 清理策略:
+//   - _id 非数字 + 同一 slug 已有数字 ID 记录 → 直接删除脏记录(信息已由正确记录保留)
+//   - _id 非数字 + 同一 slug 无数字 ID 记录 → 迁移到 legacy 表后删除(保留历史分类信息)
+// 幂等:无脏记录时直接跳过。
+async function cleanupStoreClassificationDirtyRows(db) {
+  const tableExists = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='ozon_store_classification'`)
+    .get();
+  if (!tableExists) return;
+
+  const dirtyRows = db
+    .prepare(`SELECT _id, sellerSlug, sellerId, sellerName, isChinese, classifiedBy, companyInfo, classifiedAt, lastSeenAt, lastSeenUrl FROM ozon_store_classification WHERE _id NOT GLOB '[0-9]*'`)
+    .all();
+  if (dirtyRows.length === 0) return;
+
+  let deleted = 0;
+  let migrated = 0;
+  for (const d of dirtyRows) {
+    const slug = d.sellerSlug || '';
+    // 查同一 slug 是否已有数字 ID 的正确记录
+    const correct = slug
+      ? db
+          .prepare(`SELECT _id FROM ozon_store_classification WHERE sellerSlug = ? AND _id GLOB '[0-9]*'`)
+          .get(slug)
+      : null;
+    if (correct) {
+      // 已有正确记录,直接删除脏记录
+      db.prepare(`DELETE FROM ozon_store_classification WHERE _id = ?`).run(d._id);
+      deleted++;
+    } else {
+      // 无正确记录,迁移到 legacy 表后删除
+      db.prepare(
+        `INSERT OR REPLACE INTO ozon_store_classification_legacy (_id, sellerSlug, sellerId, sellerName, isChinese, classifiedBy, companyInfo, classifiedAt, lastSeenAt, lastSeenUrl, migratedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        d._id, slug, d.sellerId || '', d.sellerName || '', d.isChinese, d.classifiedBy || '',
+        d.companyInfo || null, d.classifiedAt, d.lastSeenAt, d.lastSeenUrl || '', new Date().toISOString()
+      );
+      db.prepare(`DELETE FROM ozon_store_classification WHERE _id = ?`).run(d._id);
+      migrated++;
+    }
+  }
+  console.log(`[db] migration: cleanupStoreClassificationDirtyRows 删除 ${deleted} 条,迁移到 legacy ${migrated} 条`);
 }
 
 // 2026-07: sellerSlug → sellerId 主键迁移

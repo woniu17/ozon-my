@@ -322,6 +322,7 @@ export const indexDao = {
       priceMin,
       priceMax,
       minCacheHits,
+      excludeFilteredCategories,
       page = 1,
       pageSize = 50,
     } = opts;
@@ -381,6 +382,19 @@ export const indexDao = {
                   '(CASE WHEN search_hit=1 AND bundle_hit=1 THEN 1 ELSE 0 END) + ' +
                   '(CASE WHEN rich_media_hit=1 THEN 1 ELSE 0 END)) >= ?');
       params.push(Number(minCacheHits));
+    }
+    // 排除类目过滤黑名单中的商品:
+    //   ozon_filtered_categories 主键 (description_category_id, type_id)
+    //   仅当商品的 description_category_id + type_id 组合命中黑名单时排除
+    //   类目为 NULL 的商品不参与过滤(类目未识别,保留显示)
+    if (excludeFilteredCategories) {
+      where.push(
+        `NOT EXISTS (
+          SELECT 1 FROM ozon_filtered_categories fc
+          WHERE fc.description_category_id = ozon_cache_index.description_category_id
+            AND fc.type_id = COALESCE(ozon_cache_index.type_id, 0)
+        )`
+      );
     }
 
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
