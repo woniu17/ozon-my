@@ -1310,6 +1310,8 @@ try {
   // _collectManagerTabIds)已迁移到 __jzCollect.state(collect-namespace.js)。
   const _COLLECT_QUEUE_META_DEFAULT = __jzCollect._COLLECT_QUEUE_META_DEFAULT;
   const _withQueueLock = (fn) => __jzCollect._withQueueLock(fn);
+  // Phase 2 废弃:以下本地队列 CRUD 函数已不再使用(队列真相源移至 ERP)
+  // 保留委托包装器仅为向后兼容,实际调用应使用 _erpQueueClaim/_erpQueueList 等
   const _loadQueue = () => __jzCollect._loadQueue();
   const _loadQueueMeta = () => __jzCollect._loadQueueMeta();
   const _saveQueueMeta = (partial) => __jzCollect._saveQueueMeta(partial);
@@ -1384,8 +1386,14 @@ try {
   const _erpQueueDelete = (sku) => __jzCollect._erpQueueDelete(sku);
   const _erpGetPendingOps = () => __jzCollect._erpGetPendingOps();
   const _erpMarkOpProcessed = (opId) => __jzCollect._erpMarkOpProcessed(opId);
-  const _finalizeTask = (sku, status, lastError, steps, startedAt, duration, collectResult) =>
-    __jzCollect._finalizeTask(sku, status, lastError, steps, startedAt, duration, collectResult);
+  // Phase 2: ERP 真相源模式 - 新增 claim/stats/list 等委托
+  const _erpQueueClaim = () => __jzCollect._erpQueueClaim();
+  const _erpQueueClearTerminal = () => __jzCollect._erpQueueClearTerminal();
+  const _erpQueueStats = () => __jzCollect._erpQueueStats();
+  const _erpQueueList = (status, page, pageSize) => __jzCollect._erpQueueList(status, page, pageSize);
+  const _migrateLocalQueueIfNeeded = () => __jzCollect._migrateLocalQueueIfNeeded();
+  const _finalizeTask = (task, status, lastError, steps, startedAt, duration, collectResult) =>
+    __jzCollect._finalizeTask(task, status, lastError, steps, startedAt, duration, collectResult);
   const _handleRetryOrFinal = (task, result, steps, startedAt, duration, errorType, maxAttempts, backoffMs) =>
     __jzCollect._handleRetryOrFinal(task, result, steps, startedAt, duration, errorType, maxAttempts, backoffMs);
   const _handleSkippedTask = (task, result, steps, startedAt, duration) =>
@@ -1397,6 +1405,7 @@ try {
     const startTime = Date.now();
     let result = null;
     let steps = null;
+    let isTerminal = false;
 
     await _broadcastQueueStatus(task.sku, task.sellerSlug, 'running');
     _broadcastTaskStatus(task.sku, 'running', task.attempts || 0, task.maxAttempts || 3, 0);
@@ -1409,11 +1418,11 @@ try {
       steps = _buildSteps(result?.results);
 
       if (result?.status === 'success') {
-        await _finalizeTask(task.sku, 'success', null, steps, startTime, duration, result);
+        isTerminal = await _finalizeTask(task, 'success', null, steps, startTime, duration, result);
       } else if (result?.status === 'partial') {
-        await _handleRetryOrFinal(task, result, steps, startTime, duration, 'partial', 2, 30000);
+        isTerminal = await _handleRetryOrFinal(task, result, steps, startTime, duration, 'partial', 2, 30000);
       } else if (result?.status === 'skipped') {
-        await _handleSkippedTask(task, result, steps, startTime, duration);
+        isTerminal = await _handleSkippedTask(task, result, steps, startTime, duration);
       } else if (result?.status === 'antibot') {
         const lastError = {
           type: 'ANTIBOT_BLOCKED',
@@ -1421,10 +1430,10 @@ try {
           step: 'unknown',
           ts: Date.now(),
         };
-        await _finalizeTask(task.sku, 'failed_final', lastError, steps, startTime, duration, result);
+        isTerminal = await _finalizeTask(task, 'failed_final', lastError, steps, startTime, duration, result);
         await _saveQueueMeta({ circuitBreakerUntil: Date.now() + 10 * 60 * 1000 });
       } else {
-        await _handleRetryOrFinal(
+        isTerminal = await _handleRetryOrFinal(
           task,
           result,
           steps,
@@ -1438,7 +1447,7 @@ try {
     } catch (e) {
       const duration = Date.now() - startTime;
       console.error('[Queue] process task error:', task.sku, e);
-      await _handleRetryOrFinal(
+      isTerminal = await _handleRetryOrFinal(
         task,
         { error: e?.message || 'internal_error' },
         steps,
@@ -1449,6 +1458,7 @@ try {
         5000
       );
     }
+    return { result, isTerminal };
   };
 
   const _consumeOne = async () => {
@@ -1475,11 +1485,16 @@ try {
         console.log('[Queue] circuit breaker active, skip');
         return;
       }
+
+      // Phase 2: peek 用 ERP list(pending),判断 manual 任务是否需要绕过暂停。
+      // 注:只 peek pending(不含 failed_retry 退避期到的),边缘场景影响小。
+      const peekList = await _erpQueueList('pending', 1, 1);
+      const peekTask = peekList?.items?.[0] || null;
+      const isNextManual = peekTask?.source === 'manual';
+
       if (meta.consumePaused) {
         // consumePaused 可能是店铺页关了自动采集触发的,但 manual 任务应继续消费。
-        // peek 下一个待消费任务,如果是 manual 则重置 consumePaused 恢复消费。
-        const peekTask = await _getNextPending();
-        if (peekTask?.source === 'manual') {
+        if (isNextManual) {
           console.log('[Queue] consumePaused but next is manual task, resume');
           await _saveQueueMeta({ consumePaused: false });
           meta = await _loadQueueMeta();
@@ -1493,10 +1508,8 @@ try {
       }
 
       const config = await _loadAutoCollectConfig();
-      // peek 下一个待消费任务,manual 任务绕过 autoCollectRunning 检查
+      // manual 任务绕过 autoCollectRunning 检查
       // (深度采集管理页独立运行,不受店铺页自动采集开关影响)
-      const nextTask = await _getNextPending();
-      const isNextManual = nextTask?.source === 'manual';
       if (!isNextManual && (!config.autoCollectRunning || (config.paused && Date.now() < config.pausedUntil))) {
         console.log('[Queue] autoCollect config paused/not-running, pause queue');
         await _saveQueueMeta({ consumePaused: true });
@@ -1510,25 +1523,19 @@ try {
         return;
       }
 
-      const task = nextTask;
+      // Phase 2: 原子抢占任务(ERP 端 UPDATE...RETURNING,多 SW 并发安全)
+      // claim 已在 ERP 端改 status=running, attempts+1, startedAt,无需再调 _updateQueueTask
+      const task = await _erpQueueClaim();
       if (!task) {
-        console.log('[Queue] no pending task, stop loop');
+        console.log('[Queue] no pending task (claim returned null), stop loop');
         return;
       }
 
-      await _updateQueueTask(task.sku, { status: 'running', startedAt: Date.now() });
-      await _processTask(task);
+      const { isTerminal } = await _processTask(task);
 
       // 只在任务到达终态(success/failed_final/failed_partial)时递增 todayCount,
-      // 重试(failed_retry)不计数。重载任务判断最终态。
+      // 重试(failed_retry)不计数。
       meta = await _loadQueueMeta();
-      const queue = await _loadQueue();
-      const finalTask = queue.find((t) => t.sku === task.sku);
-      const isTerminal =
-        finalTask &&
-        (finalTask.status === 'success' ||
-          finalTask.status === 'failed_final' ||
-          finalTask.status === 'failed_partial');
       await _saveQueueMeta({
         lastConsumeAt: Date.now(),
         ...(isTerminal ? { todayCount: meta.todayCount + 1 } : {}),
@@ -1542,6 +1549,10 @@ try {
       }, rateSec * 1000);
     } catch (e) {
       console.error('[Queue] consume error:', e);
+      // Phase 2: ERP 不可用时(claim 失败)暂停消费,避免反复失败。
+      // _processTask 内部有 try/catch 不会抛出,此处 catch 主要是 ERP 不可用。
+      await _saveQueueMeta({ consumePaused: true }).catch(() => {});
+      await _broadcastQueuePaused('erp-unavailable').catch(() => {});
     } finally {
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       if (!scheduleNext) {
@@ -1583,7 +1594,10 @@ try {
         return;
       }
     }
-    const task = await _getNextPending();
+    // Phase 2: peek 用 ERP list(pending)判断是否有待消费任务。
+    // 注:peek 为空时 failed_retry 退避期到的任务会等 alarm 唤醒(可接受)。
+    const peekList = await _erpQueueList('pending', 1, 1);
+    const task = peekList?.items?.[0] || null;
     if (!task) return;
 
     // 尊重配置间隔:SW 被杀后 alarm 唤醒,若距上次消费不足 consumeRateSec,
@@ -2224,9 +2238,14 @@ try {
   initClientSyncContext();
   initBrowserAgentContext();
 
-  // 采集队列冷启动恢复:初始化今日完成集合、重置卡死任务、同步速率、启动 ops 轮询。
+  // 采集队列冷启动恢复:迁移本地队列到 ERP、初始化今日完成集合、重置卡死任务、同步速率、启动 ops 轮询。
   (async () => {
     try {
+      // Phase 2: 先迁移本地队列到 ERP(如果有残留),再从 ERP 初始化状态
+      const migration = await _migrateLocalQueueIfNeeded();
+      if (migration?.migrated > 0) {
+        console.log('[Queue] migrated local queue to ERP:', migration.migrated);
+      }
       await _initCompletedTodaySet();
       await _checkStaleRunningTasks();
       await _syncConsumeRateFromConfig();
@@ -3726,12 +3745,14 @@ try {
         }
         case 'getCollectManagerState': {
           // 深度采集管理页:查询队列当前状态(running SKU + 进度计数 + 暂停状态 + 每 SKU 详细状态)
+          // Phase 2: 从 ERP 读取队列(ERP 是真相源),本地 meta 只提供 consumePaused/circuitBreaker/todayCount
           const _cmsMeta = await _loadQueueMeta();
           const _cmsCfg = await _loadAutoCollectConfig();
-          const _cmsQueue = await _loadQueue();
+          const _cmsStats = await _erpQueueStats();
+          const _cmsList = await _erpQueueList(null, 1, 200); // 所有状态,最多 200 条
+          const _cmsQueue = _cmsList?.items || [];
+          const byStatus = _cmsStats?.byStatus || {};
           const running = _cmsQueue.filter((t) => t.status === 'running');
-          const pending = _cmsQueue.filter((t) => t.status === 'pending');
-          const finished = _cmsQueue.filter((t) => ['success', 'partial', 'failed', 'skipped'].includes(t.status));
           // 返回每个 SKU 的详细状态(供表格按 SKU 更新 status/finishedAt)
           const tasks = _cmsQueue.map((t) => ({
             sku: t.sku,
@@ -3750,9 +3771,11 @@ try {
             ok: true,
             data: {
               runningSkus: running.map((t) => t.sku),
-              pendingCount: pending.length,
-              finishedCount: finished.length,
-              totalCount: _cmsQueue.length,
+              pendingCount: byStatus.pending || 0,
+              // ERP 终态:success/failed_final/failed_partial(failed_retry 不算终态)
+              finishedCount:
+                (byStatus.success || 0) + (byStatus.failed_final || 0) + (byStatus.failed_partial || 0),
+              totalCount: _cmsStats?.total || _cmsQueue.length,
               todayCount: _cmsMeta.todayCount,
               perDayLimit: _cmsCfg.perDayLimit,
               consumePaused: _cmsMeta.consumePaused,
@@ -3766,30 +3789,20 @@ try {
         }
         case 'removeQueueTask': {
           // 采集队列监控页:删除单个队列任务(按 SKU)
+          // Phase 2: 委托 ERP delete 接口(ERP 是真相源)
           try {
-            await _deleteQueueTask(String(message.sku));
+            await _erpQueueDelete(String(message.sku));
             return { ok: true };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
           }
         }
         case 'clearFinishedQueueTasks': {
-          // 采集队列监控页:清空所有已完成任务(success/partial/failed/skipped/antibot)
+          // 采集队列监控页:清空所有已完成任务
+          // Phase 2: 委托 ERP clear-terminal 接口(ERP 是真相源)
           try {
-            const _cfQueue = await _loadQueue();
-            const finishedStatuses = [
-              'success',
-              'partial',
-              'failed',
-              'failed_final',
-              'failed_partial',
-              'skipped',
-              'antibot',
-            ];
-            const kept = _cfQueue.filter((t) => !finishedStatuses.includes(t.status));
-            const removed = _cfQueue.length - kept.length;
-            await setStorage({ [COLLECT_QUEUE_KEY]: kept });
-            console.log('[Queue] cleared finished tasks:', removed);
+            const removed = await _erpQueueClearTerminal();
+            console.log('[Queue] cleared terminal tasks via ERP:', removed);
             return { ok: true, data: { removed } };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };

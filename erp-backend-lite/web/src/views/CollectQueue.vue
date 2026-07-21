@@ -398,7 +398,7 @@ onUnmounted(() => {
           </tr>
           <tr v-for="row in items" :key="row._id || row.sku" @click="openDetail(row)">
             <td class="col-sku">{{ row.sku }}</td>
-            <td>{{ row.sellerSlug || '—' }}</td>
+            <td>{{ row.sellerId || '—' }}</td>
             <td>
               <span :class="statusTag(row.status)">{{ statusLabel(row.status) }}</span>
             </td>
@@ -440,10 +440,7 @@ onUnmounted(() => {
             <span class="meta-k">SKU:</span><span class="meta-v">{{ detail.sku }}</span>
           </div>
           <div class="meta-row">
-            <span class="meta-k">卖家:</span><span class="meta-v">{{ detail.sellerSlug || '—' }}</span>
-          </div>
-          <div class="meta-row">
-            <span class="meta-k">Seller ID:</span><span class="meta-v">{{ detail.sellerId || '—' }}</span>
+            <span class="meta-k">卖家:</span><span class="meta-v">{{ detail.sellerId || '—' }}</span>
           </div>
           <div class="meta-row">
             <span class="meta-k">状态:</span>

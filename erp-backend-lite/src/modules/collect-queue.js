@@ -144,28 +144,19 @@ router.post('/admin/api/collect-queue/batch', async (req, res, next) => {
 });
 
 // ── 操作指令:retry / delete ────────────────────────────────────────────────
+// 注:Phase 1 重构后 SW 直接读 ERP,不再轮询 retry/delete op,故这两个操作改为直接改 ERP
+// pause/resume/rescan 三种 op 仍走 op 机制(因为它们是 SW 本地状态切换,无 ERP 数据可改)
 
 // POST /admin/api/collect-queue/:sku/retry
-// 写 op(去重)+ 直接重置任务状态(让 ERP 管理页即时生效)
+// 直接重置任务状态为 pending(管理页即时生效,SW 下次 claim 时会取到)
 router.post('/admin/api/collect-queue/:sku/retry', async (req, res, next) => {
   try {
     const sku = normalizeSku(req.params.sku);
     if (!sku) return res.status(422).json({ error: 'missing sku' });
 
-    // 去重:已有未处理的 retry op 则不重复插入
-    const existing = await daos.collectQueueOpsDao.findDedup('retry', sku);
-    let opId;
-    if (existing) {
-      opId = existing._id;
-    } else {
-      const r = await daos.collectQueueOpsDao.insertOp('retry', sku, {});
-      opId = r.insertedId;
-    }
-
-    // 直接重置 ERP 文档状态(管理页即时生效)
     await daos.collectQueueTasksDao.resetBySku(sku);
 
-    return res.json(ok({ insertedId: opId, op: 'retry', sku, deduped: existing != null }));
+    return res.json(ok({ op: 'retry', sku }));
   } catch (e) {
     logger.warn({ err: e.message, sku: req.params.sku }, '[collect-queue] retry failed');
     next(e);
@@ -173,28 +164,17 @@ router.post('/admin/api/collect-queue/:sku/retry', async (req, res, next) => {
 });
 
 // DELETE /admin/api/collect-queue/:sku
-// 写 op(去重)+ 直接从 collect_queue_tasks 删除该文档(管理页即时生效)
+// 直接从 collect_queue_tasks 删除该文档(管理页即时生效)
 router.delete('/admin/api/collect-queue/:sku', async (req, res, next) => {
   try {
     const sku = normalizeSku(req.params.sku);
     if (!sku) return res.status(422).json({ error: 'missing sku' });
 
-    // 去重:已有未处理的 delete op 则不重复插入
-    const existing = await daos.collectQueueOpsDao.findDedup('delete', sku);
-    let opId;
-    if (existing) {
-      opId = existing._id;
-    } else {
-      const r = await daos.collectQueueOpsDao.insertOp('delete', sku, {});
-      opId = r.insertedId;
-    }
+    const r = await daos.collectQueueTasksDao.deleteBySku(sku);
 
-    // 直接删除 ERP 文档(管理页即时生效)
-    await daos.collectQueueTasksDao.deleteBySku(sku);
-
-    return res.json(ok({ insertedId: opId, op: 'delete', sku, deduped: existing != null }));
+    return res.json(ok({ op: 'delete', sku, deletedCount: r.deletedCount }));
   } catch (e) {
-    logger.warn({ err: e.message, sku: req.params.sku }, '[collect-queue] delete op failed');
+    logger.warn({ err: e.message, sku: req.params.sku }, '[collect-queue] delete failed');
     next(e);
   }
 });
@@ -218,19 +198,15 @@ router.delete('/admin/api/collect-queue/:sku/confirm', async (req, res, next) =>
 // ── 批量重试 ────────────────────────────────────────────────
 
 // POST /admin/api/collect-queue/batch-retry body: { skus: [] }
-// 写 ops + 直接批量重置任务状态(管理页即时生效)
+// 直接批量重置任务状态(管理页即时生效,SW 下次 claim 时会取到)
 router.post('/admin/api/collect-queue/batch-retry', async (req, res, next) => {
   try {
     const skus = Array.isArray(req.body?.skus) ? req.body.skus.map(normalizeSku).filter(Boolean) : [];
     if (!skus.length) return res.status(422).json({ error: 'missing skus' });
 
-    const docs = skus.map((sku) => ({ op: 'retry', sku, params: {} }));
-    const r = await daos.collectQueueOpsDao.insertManyOps(docs);
-
-    // 直接批量重置 ERP 文档状态(管理页即时生效)
     await daos.collectQueueTasksDao.resetBySkus(skus);
 
-    return res.json(ok({ insertedCount: r.insertedCount, skus }));
+    return res.json(ok({ op: 'batch-retry', skus }));
   } catch (e) {
     logger.warn({ err: e.message }, '[collect-queue] batch-retry failed');
     next(e);
@@ -240,17 +216,28 @@ router.post('/admin/api/collect-queue/batch-retry', async (req, res, next) => {
 // ── 队列级操作 ────────────────────────────────────────────────
 
 // POST /admin/api/collect-queue/clear
-// 写 op + 直接删除所有 status=pending 的文档(管理页即时生效)
+// 直接删除所有 status=pending 的文档(管理页即时生效)
 router.post('/admin/api/collect-queue/clear', async (req, res, next) => {
   try {
-    const r = await daos.collectQueueOpsDao.insertOp('clear', null, {});
-
-    // 直接删除所有 pending 文档(管理页即时生效)
     const del = await daos.collectQueueTasksDao.deletePendingAll();
 
-    return res.json(ok({ insertedId: r.insertedId, op: 'clear', deletedCount: del.deletedCount }));
+    return res.json(ok({ op: 'clear', deletedCount: del.deletedCount }));
   } catch (e) {
     logger.warn({ err: e.message }, '[collect-queue] clear failed');
+    next(e);
+  }
+});
+
+// POST /admin/api/collect-queue/clear-terminal
+// 清空所有终态任务(success/failed_final/failed_partial),管理页即时生效
+// 与 queue-cleanup-poller 的区别:poller 保留 500 条,此接口全删(keepCount=0)
+router.post('/admin/api/collect-queue/clear-terminal', async (req, res, next) => {
+  try {
+    const r = await daos.collectQueueTasksDao.cleanupTerminalTasks(0);
+
+    return res.json(ok({ op: 'clear-terminal', deletedCount: r.deletedCount, total: r.total }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[collect-queue] clear-terminal failed');
     next(e);
   }
 });
@@ -350,7 +337,8 @@ router.post('/admin/api/collect-queue/ops/:id/processed', async (req, res, next)
 // ── 任务结果回写(SW 调用) ────────────────────────────────────────────────
 
 // POST /admin/api/collect-queue/:sku/result
-// body: { result, steps, status, finishedAt, duration, lastError | error }
+// body: { result, steps, status, finishedAt, duration, lastError | error, attempts?, maxAttempts?, nextRetryAt?, startedAt? }
+// Phase 2 扩展:支持 attempts/maxAttempts/nextRetryAt/startedAt 字段(SW 写 failed_retry/pending 回退时需要)
 router.post('/admin/api/collect-queue/:sku/result', async (req, res, next) => {
   try {
     const sku = normalizeSku(req.params.sku);
@@ -368,6 +356,17 @@ router.post('/admin/api/collect-queue/:sku/result', async (req, res, next) => {
     else if (body.error !== undefined) update.lastError = body.error;
     if (body.duration !== undefined) update.duration = Number(body.duration) || 0;
     if (body.finishedAt) update.finishedAt = new Date(body.finishedAt);
+    // Phase 2 新增:允许 SW 回写 attempts/maxAttempts/nextRetryAt/startedAt
+    if (body.attempts !== undefined) update.attempts = Number(body.attempts) || 0;
+    if (body.maxAttempts !== undefined) update.maxAttempts = Number(body.maxAttempts) || 3;
+    // nextRetryAt 统一存 ms 时间戳(number),与 claimNextPending 的 CAST AS INTEGER 兼容
+    // 注:不能存 ISO 字符串,否则 CAST("2026-..." AS INTEGER) 只取开头数字 2026,导致退避失效
+    if (body.nextRetryAt !== undefined) {
+      const nr = body.nextRetryAt;
+      update.nextRetryAt = nr ? (typeof nr === 'number' ? nr : new Date(nr).getTime()) : null;
+    }
+    // startedAt 存 ISO 字符串(stale-reset 用 ISO 字符串字典序比较,与时间顺序一致)
+    if (body.startedAt !== undefined) update.startedAt = body.startedAt ? new Date(body.startedAt) : null;
 
     const r = await daos.collectQueueTasksDao.updateResult(sku, update);
 
@@ -381,8 +380,9 @@ router.post('/admin/api/collect-queue/:sku/result', async (req, res, next) => {
 // ── 任务初始提交(SW 调用) ────────────────────────────────────────────────
 
 // POST /admin/api/collect-queue
-// body: { sku, sellerSlug, sellerId, domInfo, status, attempts, maxAttempts, nextRetryAt, lastError, steps, startedAt, finishedAt }
-// SW 的 _erpQueueUpdate 调用此接口 upsert 整个 task 对象
+// body: { sku, sellerSlug, sellerId, domInfo, status, attempts, maxAttempts, nextRetryAt, lastError, steps, startedAt, finishedAt, skipIfTodaySuccess? }
+// SW 的 _handleSubmitTask 调用此接口入队
+// skipIfTodaySuccess:默认 true(若该 SKU 24h 内已 success,跳过入队);显式传 false 可关闭
 router.post('/admin/api/collect-queue', async (req, res, next) => {
   try {
     const body = req.body || {};
@@ -406,11 +406,49 @@ router.post('/admin/api/collect-queue', async (req, res, next) => {
       steps: body.steps != null ? body.steps : null,
     };
 
-    const r = await daos.collectQueueTasksDao.submit(task);
+    const skipIfTodaySuccess = body.skipIfTodaySuccess !== false;
+    const r = await daos.collectQueueTasksDao.submit(task, { skipIfTodaySuccess });
 
-    return res.json(ok({ upserted: true, sku, created: r.created }));
+    return res.json(
+      ok({
+        upserted: r.skipped !== true,
+        sku,
+        created: r.created,
+        skipped: r.skipped === true,
+      })
+    );
   } catch (e) {
     logger.warn({ err: e.message, sku: body?.sku }, '[collect-queue] submit failed');
+    next(e);
+  }
+});
+
+// ── 任务消费(SW 调用) ────────────────────────────────────────────────
+
+// POST /admin/api/collect-queue/claim
+// SW 消费者调用:原子抢占下一个可消费任务(pending 或 failed_retry 到期)
+// 多 SW 实例并发安全:SQLite UPDATE...RETURNING / Mongo findOneAndUpdate 原子操作
+// 返回 { task: doc | null } null 表示队列无可消费任务
+router.post('/admin/api/collect-queue/claim', async (req, res, next) => {
+  try {
+    const task = await daos.collectQueueTasksDao.claimNextPending();
+    return res.json(ok({ task, claimed: task != null }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[collect-queue] claim failed');
+    next(e);
+  }
+});
+
+// POST /admin/api/collect-queue/stale-reset
+// SW 定时(每 60s)调用:重置超时 running 任务为 failed_retry
+// body 可选: { staleMs?: number } 默认 5 分钟
+router.post('/admin/api/collect-queue/stale-reset', async (req, res, next) => {
+  try {
+    const staleMs = Number(req.body?.staleMs) || 5 * 60 * 1000;
+    const r = await daos.collectQueueTasksDao.resetStaleRunning(staleMs);
+    return res.json(ok({ resetCount: r.resetCount, staleMs }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[collect-queue] stale-reset failed');
     next(e);
   }
 });

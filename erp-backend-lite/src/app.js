@@ -25,6 +25,7 @@ import collectQueueRoutes from './modules/collect-queue.js';
 import categoryFilterRoutes from './modules/category-filter.js';
 import { auditLog } from './middleware/audit.js';
 import { startImportStatusPoller } from './services/import-status-poller.js';
+import { startQueueCleanupPoller } from './services/queue-cleanup-poller.js';
 import { startStockSync, stopStockSync } from './services/stock-sync.js';
 import { startIndexSync, stopIndexSync } from './services/index-sync.js';
 
@@ -101,6 +102,8 @@ const server = app.listen(config.port, () => {
   );
   // 启动上架结果轮询器:每 5 分钟扫描 PROCESSING 任务,超 1 小时未完成标 FAILED
   startImportStatusPoller();
+  // 启动采集队列终态清理器:每 5 分钟清理 success/failed_final/failed_partial 任务,保留最新 500 条
+  startQueueCleanupPoller();
   // 启动库存自动同步:每 5 分钟扫描 imported 未设库存的 items,调 OPI /v2/products/stocks
   // 失败重试 5 次(约 25 分钟)后放弃
   startStockSync();

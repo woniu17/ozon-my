@@ -204,7 +204,7 @@
 
         return `<tr class="queue-row${runningClass}" data-sku="${escapeHtml(t.sku)}">
           <td><span class="cell-sku">${escapeHtml(t.sku)}</span></td>
-          <td><span class="cell-store">${escapeHtml(t.sellerSlug || '-')}</span></td>
+          <td><span class="cell-store">${escapeHtml(t.sellerId || '-')}</span></td>
           <td>${sourceBadge}</td>
           <td>${statusBadge}</td>
           <td class="cell-mono">${attempts}</td>

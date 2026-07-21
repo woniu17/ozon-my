@@ -164,6 +164,87 @@ export const collectQueueTasksDao = {
     return { matchedCount: r.changes, modifiedCount: r.changes };
   },
 
+  /**
+   * 原子抢占下一个可消费任务(SQLite UPDATE...RETURNING)
+   * 条件:status='pending' 或 (status='failed_retry' 且 nextRetryAt<=now)
+   * 副作用:status→'running', startedAt→now, attempts+1, updatedAt→now
+   * 多 SW 实例并发安全:UPDATE...RETURNING 在 SQLite 中是原子的
+   * 注:nextRetryAt 历史数据可能是 ms 时间戳(number),用 CAST AS INTEGER 兼容
+   */
+  async claimNextPending(now = new Date()) {
+    const nowIso = now.toISOString();
+    const nowMs = now.getTime();
+    const row = db
+      .prepare(
+        `UPDATE collect_queue_tasks
+         SET status = 'running',
+             startedAt = ?,
+             attempts = attempts + 1,
+             updatedAt = ?
+         WHERE _id = (
+           SELECT _id FROM collect_queue_tasks
+           WHERE status = 'pending'
+              OR (status = 'failed_retry' AND (nextRetryAt IS NULL OR CAST(nextRetryAt AS INTEGER) <= ?))
+           ORDER BY createdAt ASC
+           LIMIT 1
+         )
+         RETURNING *`
+      )
+      .get(nowIso, nowIso, nowMs);
+    return row ? reshapeTask(row) : null;
+  },
+
+  /**
+   * 重置超时 running 任务为 failed_retry(僵尸任务恢复)
+   * 条件:status='running' 且 startedAt < cutoff
+   * 副作用:status→'failed_retry', nextRetryAt→now+30s, lastError→STALE, updatedAt→now
+   */
+  async resetStaleRunning(staleMs = 5 * 60 * 1000, now = new Date()) {
+    const cutoffIso = new Date(now.getTime() - staleMs).toISOString();
+    const nowIso = now.toISOString();
+    const nextRetryMs = now.getTime() + 30000; // 30s 后可重试
+    const lastError = JSON.stringify({ type: 'STALE', message: 'running timeout, reset by stale-reset' });
+    const r = db
+      .prepare(
+        `UPDATE collect_queue_tasks
+         SET status = 'failed_retry',
+             nextRetryAt = ?,
+             lastError = ?,
+             updatedAt = ?
+         WHERE status = 'running' AND startedAt < ?`
+      )
+      .run(nextRetryMs, lastError, nowIso, cutoffIso);
+    return { resetCount: r.changes };
+  },
+
+  /**
+   * 清理终态任务,保留最新 N 条(按 finishedAt 降序)
+   * 终态:success / failed_final / failed_partial
+   */
+  async cleanupTerminalTasks(keepCount = 500) {
+    const cnt = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM collect_queue_tasks
+         WHERE status IN ('success', 'failed_final', 'failed_partial')`
+      )
+      .get().n;
+    if (cnt <= keepCount) return { deletedCount: 0, total: cnt };
+
+    const toDelete = cnt - keepCount;
+    const r = db
+      .prepare(
+        `DELETE FROM collect_queue_tasks
+         WHERE _id IN (
+           SELECT _id FROM collect_queue_tasks
+           WHERE status IN ('success', 'failed_final', 'failed_partial')
+           ORDER BY finishedAt ASC
+           LIMIT ?
+         )`
+      )
+      .run(toDelete);
+    return { deletedCount: r.changes, total: cnt };
+  },
+
   async deleteBySku(sku) {
     const r = db.prepare(`DELETE FROM collect_queue_tasks WHERE sku = ?`).run(sku);
     return { deletedCount: r.changes };
@@ -236,9 +317,31 @@ export const collectQueueTasksDao = {
     return { matchedCount: r.changes };
   },
 
-  /** submit:upsert,firstSeenAt → 用 createdAt ON CONFLICT 不更新 */
-  async submit(task) {
-    const now = new Date().toISOString();
+  /**
+   * submit:upsert,firstSeenAt → 用 createdAt ON CONFLICT 不更新
+   * options.skipIfTodaySuccess(true 默认):若该 SKU 今日(最近 24h)已有 success 任务,跳过入队
+   *   场景:SW 多次扫描同一商品时,避免重复入队已成功采集的 SKU
+   *   返回 { upsertedCount, created, skipped: true } 表示因今日已成功而跳过
+   */
+  async submit(task, options = {}) {
+    const { skipIfTodaySuccess = true } = options;
+    const now = new Date();
+    const nowIso = now.toISOString();
+
+    // 今日去重:24h 内有 success 任务则跳过(不更新已有任务,不新建)
+    if (skipIfTodaySuccess) {
+      const sinceIso = new Date(now.getTime() - 24 * 3600 * 1000).toISOString();
+      const todaySuccess = db
+        .prepare(
+          `SELECT 1 FROM collect_queue_tasks
+           WHERE sku = ? AND status = 'success' AND finishedAt >= ?`
+        )
+        .get(task.sku, sinceIso);
+      if (todaySuccess) {
+        return { upsertedCount: 0, created: false, skipped: true };
+      }
+    }
+
     // 预查 sku 是否已存在(ON CONFLICT 无法可靠区分 INSERT/UPDATE:lastInsertRowid 在 UPDATE 时保留上次值)
     const existed = !!db.prepare(`SELECT 1 FROM collect_queue_tasks WHERE sku = ?`).get(task.sku);
     const cols = [

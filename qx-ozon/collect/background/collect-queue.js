@@ -223,22 +223,23 @@
     };
 
     const _isTaskQueuedOrCompletedToday = async (sku) => {
-      const queue = await _loadQueue();
-      if (queue.some((t) => t.sku === sku)) return true;
+      // Phase 2 重构后:不再读本地队列(队列在 ERP),只检查内存 completedTodaySkus
+      // ERP 端 submit 有 skipIfTodaySuccess 去重,这里只做快速内存过滤避免 HTTP 往返
       return S.completedTodaySkus.has(sku);
     };
 
     const _initCompletedTodaySet = async () => {
       try {
-        const queue = await _loadQueue();
+        // Phase 2 重构后:从 ERP 查询今日已完成任务(success/failed_final/failed_partial)重建内存 Set
+        // 拉 3 类终态任务,按 finishedAt 过滤今日
         const today = new Date().toLocaleDateString('en-CA');
-        for (const t of queue) {
-          if (
-            (t.status === 'success' || t.status === 'failed_final' || t.status === 'failed_partial') &&
-            t.finishedAt
-          ) {
-            const d = new Date(t.finishedAt).toLocaleDateString('en-CA');
-            if (d === today) S.completedTodaySkus.add(t.sku);
+        for (const status of ['success', 'failed_final', 'failed_partial']) {
+          const r = await _erpQueueList(status, 1, 200);
+          for (const t of r.items || []) {
+            if (t.finishedAt) {
+              const d = new Date(t.finishedAt).toLocaleDateString('en-CA');
+              if (d === today) S.completedTodaySkus.add(t.sku);
+            }
           }
         }
       } catch (e) {
@@ -663,25 +664,28 @@
       };
     };
 
-    // ERP 镜像写入(fire-and-forget,失败仅 warn)
+    // ERP 入队(Phase 2 主写入,含 skipIfTodaySuccess 去重)
+    // 返回 ERP 响应 { data: { upserted, sku, created, skipped } },失败向上抛
     const _erpQueueInsert = async (task) => {
       const url = await sw.getBackendUrl();
       const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
       const doInsert = async () => {
-        await sw.apiRequest('POST', `${url}/admin/api/collect-queue`, task, stored[sw.STORAGE_KEYS.token]);
+        return await sw.apiRequest('POST', `${url}/admin/api/collect-queue`, task, stored[sw.STORAGE_KEYS.token]);
       };
       try {
-        await doInsert();
+        return await doInsert();
       } catch (e1) {
         try {
           await new Promise((r) => setTimeout(r, 2000));
-          await doInsert();
+          return await doInsert();
         } catch (e2) {
           console.warn('[Queue] ERP insert failed after retry:', e2?.message || e2);
+          throw e2;
         }
       }
     };
 
+    // _erpQueueUpdate 保留:rescan 等场景需 upsert 整个 task(但 Phase 2 后主要用 /result)
     const _erpQueueUpdate = async (task) => {
       const url = await sw.getBackendUrl();
       const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
@@ -772,41 +776,158 @@
       }
     };
 
-    const _finalizeTask = async (sku, status, lastError, steps, startedAt, duration, collectResult) => {
+    // ── Phase 2 新增:ERP 直接消费/管理接口(不再经过本地队列) ──────────────────
+
+    // POST /admin/api/collect-queue/claim
+    // 原子抢占下一个可消费任务,返回 { task: doc | null }
+    // 多 SW 实例并发安全:ERP 端 UPDATE...RETURNING 原子操作
+    const _erpQueueClaim = async () => {
+      try {
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        const r = await sw.apiRequest(
+          'POST',
+          `${url}/admin/api/collect-queue/claim`,
+          {},
+          stored[sw.STORAGE_KEYS.token]
+        );
+        return r?.data?.task || null;
+      } catch (e) {
+        console.warn('[Queue] ERP claim failed:', e?.message || e);
+        throw e; // 向上抛,让 _consumeOne 感知 ERP 不可用并暂停
+      }
+    };
+
+    // POST /admin/api/collect-queue/stale-reset
+    // 重置超时 running 任务为 failed_retry,返回 { resetCount }
+    const _erpQueueStaleReset = async (staleMs) => {
+      try {
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        const r = await sw.apiRequest(
+          'POST',
+          `${url}/admin/api/collect-queue/stale-reset`,
+          staleMs ? { staleMs } : {},
+          stored[sw.STORAGE_KEYS.token]
+        );
+        return r?.data?.resetCount || 0;
+      } catch (e) {
+        console.warn('[Queue] ERP stale-reset failed:', e?.message || e);
+        return 0;
+      }
+    };
+
+    // POST /admin/api/collect-queue/clear
+    // 清空所有 pending 任务,返回 { deletedCount }
+    const _erpQueueClearPending = async () => {
+      try {
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        const r = await sw.apiRequest(
+          'POST',
+          `${url}/admin/api/collect-queue/clear`,
+          {},
+          stored[sw.STORAGE_KEYS.token]
+        );
+        return r?.data?.deletedCount || 0;
+      } catch (e) {
+        console.warn('[Queue] ERP clear failed:', e?.message || e);
+        return 0;
+      }
+    };
+
+    // POST /admin/api/collect-queue/clear-terminal
+    // 清空所有终态任务(success/failed_final/failed_partial),返回 { deletedCount }
+    const _erpQueueClearTerminal = async () => {
+      try {
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        const r = await sw.apiRequest(
+          'POST',
+          `${url}/admin/api/collect-queue/clear-terminal`,
+          {},
+          stored[sw.STORAGE_KEYS.token]
+        );
+        return r?.data?.deletedCount || 0;
+      } catch (e) {
+        console.warn('[Queue] ERP clear-terminal failed:', e?.message || e);
+        return 0;
+      }
+    };
+
+    // GET /admin/api/collect-queue/stats
+    // 返回 { byStatus, successToday, failedFinalToday, circuitBreaker, total, consumePaused, lastConsumeAt }
+    const _erpQueueStats = async () => {
+      try {
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        const r = await sw.apiRequest(
+          'GET',
+          `${url}/admin/api/collect-queue/stats`,
+          null,
+          stored[sw.STORAGE_KEYS.token]
+        );
+        return r?.data || null;
+      } catch (e) {
+        console.warn('[Queue] ERP stats failed:', e?.message || e);
+        return null;
+      }
+    };
+
+    // GET /admin/api/collect-queue/list?status=&page=&pageSize=
+    // 返回 { items, total, page, pageSize }
+    const _erpQueueList = async (status, page = 1, pageSize = 200) => {
+      try {
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        const qs = new URLSearchParams({ page, pageSize });
+        if (status) qs.set('status', status);
+        const r = await sw.apiRequest(
+          'GET',
+          `${url}/admin/api/collect-queue/list?${qs.toString()}`,
+          null,
+          stored[sw.STORAGE_KEYS.token]
+        );
+        return r?.data || { items: [], total: 0 };
+      } catch (e) {
+        console.warn('[Queue] ERP list failed:', e?.message || e);
+        return { items: [], total: 0 };
+      }
+    };
+
+    const _finalizeTask = async (task, status, lastError, steps, startedAt, duration, collectResult) => {
       const now = Date.now();
-      const task = await _updateQueueTask(sku, {
-        status,
-        steps,
-        lastError,
-        finishedAt: now,
-      });
-      if (!task) return;
+      const sku = task.sku;
+      const sellerSlug = task.sellerSlug || '';
 
       // 先构建广播数据(_buildCollectDoneData),同时用于 ERP 结果存储和 collectDone 广播,
       // 确保 queryErpProductData 返回的数据格式与 collectDone 一致(preFetched 格式)
       const data = await _buildCollectDoneData(sku, collectResult);
 
-      if (collectResult) {
-        await _erpQueueResult(sku, {
-          status,
-          duration,
-          steps,
-          error: lastError,
-          // 存 _buildCollectDoneData 的结果(与 collectDone 广播的 data 一致),
-          // 让 queryErpProductData 返回的数据格式与 collectDone 一致,
-          // content script 可直接用作 preFetched 回填面板。
-          // 注意:字段名必须是 result(ERP 后端 /result 接口和 queryErpProductData 都查 result)
-          ...(collectResult.status === 'success' || collectResult.status === 'partial' ? { result: data } : {}),
-        });
-      }
+      // 写 ERP result(含 status/steps/lastError/finishedAt/duration/result)
+      // Phase 2 重构后:ERP 是真相源,只调 /result 接口,不再调 /admin/api/collect-queue 镜像
+      await _erpQueueResult(sku, {
+        status,
+        duration,
+        steps,
+        error: lastError,
+        finishedAt: now,
+        // 存 _buildCollectDoneData 的结果(与 collectDone 广播的 data 一致),
+        // 让 queryErpProductData 返回的数据格式与 collectDone 一致,
+        // content script 可直接用作 preFetched 回填面板。
+        // 注意:字段名必须是 result(ERP 后端 /result 接口和 queryErpProductData 都查 result)
+        ...(collectResult && (collectResult.status === 'success' || collectResult.status === 'partial')
+          ? { result: data }
+          : {}),
+      });
 
-      await _erpQueueUpdate({ ...task, status, steps, lastError, finishedAt: now });
+      await _broadcastCollectDoneV2(sku, sellerSlug, status, data, now, duration, steps, lastError);
 
-      await _broadcastCollectDoneV2(sku, task.sellerSlug, status, data, now, duration, steps, lastError);
-
-      if (status === 'success' || status === 'failed_final' || status === 'failed_partial') {
+      const isTerminal = status === 'success' || status === 'failed_final' || status === 'failed_partial';
+      if (isTerminal) {
         _addCompletedToday(sku);
       }
+      return isTerminal;
     };
 
     const _handleRetryOrFinal = async (task, result, steps, startedAt, duration, errorType, maxAttempts, backoffMs) => {
@@ -819,18 +940,19 @@
       };
       if (attempts >= maxAttempts) {
         const finalStatus = errorType === 'partial' ? 'failed_partial' : 'failed_final';
-        await _finalizeTask(task.sku, finalStatus, lastError, steps, startedAt, duration, result);
+        return await _finalizeTask(task, finalStatus, lastError, steps, startedAt, duration, result);
       } else {
         const nextRetryAt = Date.now() + backoffMs;
-        const updated = await _updateQueueTask(task.sku, {
+        // Phase 2 重构后:只调 ERP /result 写 failed_retry 状态,不再写本地队列
+        await _erpQueueResult(task.sku, {
           status: 'failed_retry',
           attempts,
           maxAttempts,
           nextRetryAt,
-          lastError,
+          error: lastError,
         });
-        if (updated) await _erpQueueUpdate(updated);
         _broadcastTaskStatus(task.sku, 'failed_retry', attempts, maxAttempts, nextRetryAt);
+        return false; // 非终态
       }
     };
 
@@ -838,9 +960,14 @@
       const reason = result?.reason || 'skipped';
       if (reason === 'daily-limit') {
         await _saveQueueMeta({ consumePaused: true });
-        await _updateQueueTask(task.sku, {
+        // 任务回 pending(非终态):跨日恢复后会重新消费
+        // 但不写 ERP(ERP 端 claim 不会取 running 任务,task 仍保持 running 状态,
+        //   stale-reset 会把它重置为 failed_retry,然后被重新 claim)
+        // 实际上:daily-limit 场景下任务已被 claim(running),需要回退为 pending
+        await _erpQueueResult(task.sku, {
           status: 'pending',
-          lastError: { type: 'daily-limit', message: reason, step: 'unknown', ts: Date.now() },
+          attempts: task.attempts || 0, // 不增加 attempts
+          error: { type: 'daily-limit', message: reason, step: 'unknown', ts: Date.now() },
           finishedAt: Date.now(),
         });
         // 广播 collectDone(status='skipped')让 panel 变 ready,避免 AutoScroller 死锁。
@@ -857,69 +984,26 @@
           steps,
           lastError
         );
-        return;
+        return false; // 非终态(回 pending)
       }
       const lastError = { type: 'skipped', message: reason, step: 'unknown', ts: Date.now() };
-      await _finalizeTask(task.sku, 'failed_final', lastError, steps, startedAt, duration, result);
+      return await _finalizeTask(task, 'failed_final', lastError, steps, startedAt, duration, result);
     };
 
     const _checkStaleRunningTasks = async () => {
-      await _withQueueLock(async () => {
-        const queue = await _loadQueue();
-        const now = Date.now();
-        let changed = false;
-        for (const task of queue) {
-          if (task.status === 'running' && task.startedAt && now - task.startedAt > COLLECT_QUEUE_STALE_RUNNING_MS) {
-            // 达到 maxAttempts 则置终态,避免无限重试
-            const nextAttempts = (task.attempts || 0) + 1;
-            const maxAttempts = task.maxAttempts || 3;
-            const isFinal = nextAttempts >= maxAttempts;
-            task.status = isFinal ? 'failed_final' : 'failed_retry';
-            task.attempts = nextAttempts;
-            task.nextRetryAt = isFinal ? 0 : now + 30000;
-            task.lastError = {
-              type: 'timeout',
-              message: 'SW killed, task stale',
-              step: 'unknown',
-              ts: now,
-            };
-            // 非终态(failed_retry)不应有 finishedAt,仅终态设置
-            if (isFinal) {
-              task.finishedAt = now;
-            }
-            changed = true;
-            console.warn('[Queue] stale running task reset:', task.sku, '->', task.status);
-            // 同步到 ERP(fire-and-forget,不阻塞锁)
-            _erpQueueUpdate(task);
-          }
-        }
-        if (changed) {
-          await sw.setStorage({ [COLLECT_QUEUE_KEY]: queue });
-        }
-      });
+      // Phase 2 重构后:委托 ERP 端 stale-reset,不再遍历本地队列
+      // ERP 端会重置 startedAt 超时的 running 任务为 failed_retry(nextRetryAt=now+30s)
+      const resetCount = await _erpQueueStaleReset(COLLECT_QUEUE_STALE_RUNNING_MS);
+      if (resetCount > 0) {
+        console.warn('[Queue] stale running tasks reset by ERP:', resetCount);
+      }
     };
 
     const _processQueueOp = async (op) => {
       try {
         switch (op.op) {
-          case 'retry': {
-            if (!op.sku) return false;
-            const task = await _updateQueueTask(op.sku, {
-              status: 'pending',
-              attempts: 0,
-              nextRetryAt: 0,
-              lastError: null,
-              finishedAt: null,
-            });
-            if (!task) return false;
-            sw.maybeStartConsume();
-            return true;
-          }
-          case 'delete': {
-            if (!op.sku) return false;
-            await _deleteQueueTask(op.sku);
-            return true;
-          }
+          // Phase 2 重构后:retry/delete/clear 不再走 op 机制(ERP 管理页直接改 ERP)
+          // 保留 pause/resume/rescan 三种 op(它们是 SW 本地状态切换,无 ERP 数据可改)
           case 'pause': {
             await _saveQueueMeta({ consumePaused: true });
             return true;
@@ -929,22 +1013,20 @@
             sw.maybeStartConsume();
             return true;
           }
-          case 'clear': {
-            // 仅清除 op 创建时已入队的 pending 任务,避免重复执行误清新任务
-            await _clearPendingQueueTasks(op.ts || 0);
-            return true;
-          }
           case 'rescan': {
             // 不刷新页面重新扫描:清空 SW 状态 + 广播让 content script 重新提交所有可见 SKU
-            // 1. 清空已完成集合和本地队列(让 _isTaskQueuedOrCompletedToday 返回 false)
+            // 1. 清空已完成集合(让 _isTaskQueuedOrCompletedToday 返回 false)
             S.completedTodaySkus.clear();
-            await chrome.storage.local.set({ [COLLECT_QUEUE_KEY]: [] });
-            // 2. 广播 rescan 消息(content script 收到后清空 dedup + 重置 panel + 重新提交)
+            // 2. 清空 ERP pending 任务(已完成的保留,running/failed_retry 也保留)
+            await _erpQueueClearPending();
+            // 3. 广播 rescan 消息(content script 收到后清空 dedup + 重置 panel + 重新提交)
             await _broadcastRescan();
             return true;
           }
           default:
-            return false;
+            // retry/delete/clear 等 op 已废弃,直接标记已处理(避免堆积)
+            console.warn('[Queue] op deprecated (Phase 2):', op.op);
+            return true;
         }
       } catch (e) {
         console.warn('[Queue] process op failed:', op, e?.message || e);
@@ -1013,10 +1095,28 @@
         startedAt: null,
         finishedAt: null,
       };
-      const { isNew } = await _enqueueTask(task);
-      if (isNew) {
-        _erpQueueInsert(task);
+
+      // Phase 2 重构后:直接调 ERP 入队(含 skipIfTodaySuccess 去重),不再写本地队列
+      // ERP 端 submit 是 upsert(ON CONFLICT sku DO UPDATE),重复提交不会新建
+      let isNew = true;
+      try {
+        const r = await _erpQueueInsert(task);
+        const skipped = r?.data?.skipped === true;
+        if (skipped) {
+          // ERP 端检测到今日已 success,跳过入队
+          return { ok: true, data: { alreadyQueued: true, skipped: true } };
+        }
+        isNew = r?.data?.created === true;
+      } catch (e) {
+        // ERP 不可用:返回错误,让 content script 知道入队失败
+        // 不写本地队列(已废弃),任务丢失由用户重新触发
+        console.warn('[Queue] ERP insert failed, task not queued:', sku, e?.message || e);
+        return { ok: false, error: 'ERP unavailable: ' + (e?.message || e) };
       }
+
+      // 广播 pending 徽章(ERP 入队成功后)
+      _broadcastTaskStatus(sku, 'pending', 0, task.maxAttempts, 0);
+
       sw.maybeStartConsume();
       // 队列暂停兜底:_maybeStartConsume 是 fire-and-forget,可能被 _consuming 拦截,
       // 或 _consumeOne 设置 consumePaused 的时机晚于此处检查。
@@ -1037,6 +1137,63 @@
         await _broadcastQueuePaused(_pauseReason);
       }
       return { ok: true, data: { queued: isNew, alreadyQueued: !isNew } };
+    };
+
+    // Phase 2 新增:从 ERP 迁移本地队列数据(SW 启动时一次性执行)
+    // 把 chrome.storage.local['jz-collect-queue'] 中 pending/failed_retry 任务迁移到 ERP
+    // 迁移完成后清空本地队列,后续不再使用
+    const _migrateLocalQueueIfNeeded = async () => {
+      try {
+        const stored = await sw.getStorage([COLLECT_QUEUE_KEY]);
+        const localQueue = Array.isArray(stored?.[COLLECT_QUEUE_KEY]) ? stored[COLLECT_QUEUE_KEY] : [];
+        if (localQueue.length === 0) {
+          console.log('[Queue] migrate: local queue empty, skip');
+          return { migrated: 0, skipped: true };
+        }
+        // 只迁移可消费任务(pending/failed_retry),终态任务丢弃(ERP cleanup 会处理)
+        const consumable = localQueue.filter(
+          (t) => t && t.sku && (t.status === 'pending' || t.status === 'failed_retry')
+        );
+        console.log(
+          '[Queue] migrate: local queue has %d tasks, %d consumable',
+          localQueue.length,
+          consumable.length
+        );
+        let migrated = 0;
+        for (const t of consumable) {
+          try {
+            // 迁移时不启用 skipIfTodaySuccess(任务可能今日已 success 但本地仍 pending)
+            // 实际上:pending 任务今日不可能 success(skipIfTodaySuccess 会阻止入队)
+            await _erpQueueInsert({
+              sku: t.sku,
+              sellerSlug: t.sellerSlug || '',
+              sellerId: t.sellerId || '',
+              domInfo: t.domInfo || null,
+              status: t.status === 'failed_retry' ? 'failed_retry' : 'pending',
+              attempts: t.attempts || 0,
+              maxAttempts: t.maxAttempts || 3,
+              nextRetryAt: t.nextRetryAt || 0,
+              lastError: t.lastError || null,
+              steps: t.steps || null,
+              createdAt: t.createdAt || Date.now(),
+              startedAt: null,
+              finishedAt: null,
+              // 显式关闭 skipIfTodaySuccess,确保迁移不受今日 success 影响
+              skipIfTodaySuccess: false,
+            });
+            migrated++;
+          } catch (e) {
+            console.warn('[Queue] migrate task failed:', t.sku, e?.message || e);
+          }
+        }
+        // 迁移完成后清空本地队列
+        await sw.setStorage({ [COLLECT_QUEUE_KEY]: [] });
+        console.log('[Queue] migrate: done, %d tasks migrated, local queue cleared', migrated);
+        return { migrated, skipped: false };
+      } catch (e) {
+        console.warn('[Queue] migrate failed:', e?.message || e);
+        return { migrated: 0, skipped: false, error: e?.message || String(e) };
+      }
     };
 
     const setupCollectQueueAlarm = () => {
@@ -1087,6 +1244,14 @@
     this._erpQueueDelete = _erpQueueDelete;
     this._erpGetPendingOps = _erpGetPendingOps;
     this._erpMarkOpProcessed = _erpMarkOpProcessed;
+    // Phase 2: ERP 真相源模式 - 暴露给 SW 编排层
+    this._erpQueueClaim = _erpQueueClaim;
+    this._erpQueueStaleReset = _erpQueueStaleReset;
+    this._erpQueueClearPending = _erpQueueClearPending;
+    this._erpQueueClearTerminal = _erpQueueClearTerminal;
+    this._erpQueueStats = _erpQueueStats;
+    this._erpQueueList = _erpQueueList;
+    this._migrateLocalQueueIfNeeded = _migrateLocalQueueIfNeeded;
     this._fetchProductDataStats = _fetchProductDataStats;
     this._extractBundlePhysicalAttrs = _extractBundlePhysicalAttrs;
     this._getBundleItemForBroadcast = _getBundleItemForBroadcast;
