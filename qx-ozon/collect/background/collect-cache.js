@@ -77,7 +77,7 @@
           { skus: skus.map(String).filter(Boolean).slice(0, 200) },
           stored[sw.STORAGE_KEYS.token]
         );
-        return r || null;
+        return r?.data || null;
       } catch (e) {
         console.warn('[cache] batch status failed:', e?.message || e);
         return null;
@@ -283,21 +283,17 @@
       _erpCacheDelete('richMedia', sku);
     };
 
-    // ── marketStats 缓存(市场统计:销量/评价/排名等,24h stale) ───────────────────
+    // ── marketStats 缓存(市场统计:销量/评价/排名等,永久) ───────────────────
     // 缓存对象:getMarketStats 真调返回的市场统计聚合
-    // 策略:24h stale(marketStatsStaleMs 从 loadAutoCollectConfig 读取),
-    //   stale 时仍返回记录(含 stale=true),由调用方决定是否刷新。
-    // 直接入库 SQLite,GET /ozon/cache/marketStats/:sku 返回 { data, fetchedAt, l2Synced, stale } | { data: null }
-    // 返回:{ data, fetchedAt, stale } | null
+    // 策略:永久,不再 stale(避免因过期而重新真调)
+    // 直接入库 SQLite,GET /ozon/cache/marketStats/:sku 返回 { data, fetchedAt } | { data: null }
+    // 返回:{ data, fetchedAt, stale: false } | null
     this.marketStatsCacheGet = async (sku) => {
       try {
         const l2 = await _erpCacheGet('marketStats', sku);
         if (l2 && l2.data) {
-          const cfg = await this.loadAutoCollectConfig();
-          const staleMs = Number(cfg.marketStatsStaleMs) || 86400000;
           const fetchedAtMs = l2.fetchedAt ? new Date(l2.fetchedAt).getTime() : 0;
-          const stale = !fetchedAtMs || Date.now() - fetchedAtMs > staleMs || l2.stale === true;
-          return { data: l2.data, fetchedAt: fetchedAtMs, stale };
+          return { data: l2.data, fetchedAt: fetchedAtMs, stale: false };
         }
       } catch (e) {
         console.warn(`[cache] marketStats get failed sku=${sku}:`, e?.message || e);
@@ -314,21 +310,17 @@
       _erpCacheDelete('marketStats', sku);
     };
 
-    // ── followSell 缓存(跟卖预取结果,4h stale) ──────────────────────────────
+    // ── followSell 缓存(跟卖预取结果,永久) ──────────────────────────────
     // 缓存对象:followSell 预取的跟卖可用性 / 竞品数据
-    // 策略:4h stale(followSellStaleMs 从 loadAutoCollectConfig 读取),
-    //   stale 时仍返回记录(含 stale=true),由调用方决定是否刷新。
-    // 直接入库 SQLite,GET /ozon/cache/followSell/:sku 返回 { data, fetchedAt, l2Synced, stale } | { data: null }
-    // 返回:{ data, fetchedAt, stale } | null
+    // 策略:永久,不再 stale(避免因过期而重新真调)
+    // 直接入库 SQLite,GET /ozon/cache/followSell/:sku 返回 { data, fetchedAt } | { data: null }
+    // 返回:{ data, fetchedAt, stale: false } | null
     this.followSellCacheGet = async (sku) => {
       try {
         const l2 = await _erpCacheGet('followSell', sku);
         if (l2 && l2.data) {
-          const cfg = await this.loadAutoCollectConfig();
-          const staleMs = Number(cfg.followSellStaleMs) || 14400000;
           const fetchedAtMs = l2.fetchedAt ? new Date(l2.fetchedAt).getTime() : 0;
-          const stale = !fetchedAtMs || Date.now() - fetchedAtMs > staleMs || l2.stale === true;
-          return { data: l2.data, fetchedAt: fetchedAtMs, stale };
+          return { data: l2.data, fetchedAt: fetchedAtMs, stale: false };
         }
       } catch (e) {
         console.warn(`[cache] followSell get failed sku=${sku}:`, e?.message || e);

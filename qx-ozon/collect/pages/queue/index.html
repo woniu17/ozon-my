@@ -92,13 +92,6 @@
                 <span class="ratecfg-unit">秒</span>
               </div>
             </div>
-            <div class="ratecfg-row">
-              <label class="ratecfg-label" for="rate-perday">每日上限</label>
-              <div class="ratecfg-range">
-                <input type="number" id="rate-perday" class="fld is-sm" min="0" max="100000" step="50" placeholder="2000" />
-                <span class="ratecfg-unit">个</span>
-              </div>
-            </div>
             <div class="ratecfg-hint" id="rate-hint"></div>
           </div>
         </div>
@@ -194,10 +187,6 @@
                 <option value="pending">待采集</option>
                 <option value="running">采集中</option>
                 <option value="success">成功</option>
-                <option value="partial">部分</option>
-                <option value="failed_final">失败</option>
-                <option value="failed_partial">部分失败</option>
-                <option value="failed_retry">重试中</option>
                 <option value="skipped">跳过</option>
                 <option value="antibot">反爬</option>
               </select>

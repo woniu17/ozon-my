@@ -16,7 +16,7 @@
  *   - 已完成集合(completedTodaySkus add/has/init)
  *   - 辅助函数(buildSteps/retryBackoffMs/cleanupCompleted/syncConsumeRate)
  *   - 熔断检查(isCircuitBreakerActive)
- *   - 广播(queueStatus/taskStatus/collectManagers/collectDoneV2/paused/resumed/rescan)
+ *   - 广播(collectManagers/collectDoneV2/paused/resumed/rescan)
  *   - ERP 镜像(queue insert/update/result/delete/getPendingOps/markOpProcessed)
  *   - 数据辅助(fetchProductDataStats/extractBundlePhysicalAttrs/getBundleItemForBroadcast/
  *     getSearchVariantForBroadcast/buildCollectDoneData)
@@ -54,8 +54,7 @@
       consumeRateMaxSec: 15,           // 队列消费间隔范围(秒),每次随机
       consumePaused: false,
       lastConsumeAt: 0,
-      todayCount: 0,
-      todayDate: '',
+      todayDate: '',                   // 仅用于跨日重置 completedTodaySkus(去重用)
     };
 
     // 内存写锁初始化(namespace.js 中 queueWriteLock 初始为 null)
@@ -142,7 +141,7 @@
 
     const _cleanupCompletedTasksLocked = (queue) => {
       const completed = queue.filter(
-        (t) => t.status === 'success' || t.status === 'failed_final' || t.status === 'failed_partial'
+        (t) => t.status === 'success' || t.status === 'skipped'
       );
       if (completed.length > COLLECT_QUEUE_MAX_COMPLETED) {
         completed.sort((a, b) => (a.finishedAt || 0) - (b.finishedAt || 0));
@@ -167,8 +166,6 @@
         _cleanupCompletedTasksLocked(queue);
         queue.push(task);
         await sw.setStorage({ [COLLECT_QUEUE_KEY]: queue });
-        // 广播 pending 徽章(fire-and-forget,不阻塞锁)
-        _broadcastTaskStatus(task.sku, 'pending', 0, task.maxAttempts || 3, 0);
         return { task, isNew: true };
       });
     };
@@ -213,12 +210,7 @@
 
     const _getNextPending = async () => {
       const queue = await _loadQueue();
-      const now = Date.now();
-      // pending 与 failed_retry(退避时间到)都可消费。failed_retry 是内部展示态,
-      // 实际重试时回到 pending + nextRetryAt;兼容处理防止旧任务滞留。
-      return queue.find(
-        (t) => (t.status === 'pending' || t.status === 'failed_retry') && (!t.nextRetryAt || t.nextRetryAt <= now)
-      );
+      return queue.find((t) => t.status === 'pending');
     };
 
     const _addCompletedToday = (sku) => {
@@ -233,10 +225,10 @@
 
     const _initCompletedTodaySet = async () => {
       try {
-        // Phase 2 重构后:从 ERP 查询今日已完成任务(success/failed_final/failed_partial)重建内存 Set
-        // 拉 3 类终态任务,按 finishedAt 过滤今日
+        // Phase 2 重构后:从 ERP 查询今日已完成任务(success/skipped)重建内存 Set
+        // 拉 2 类终态任务,按 finishedAt 过滤今日
         const today = new Date().toLocaleDateString('en-CA');
-        for (const status of ['success', 'failed_final', 'failed_partial']) {
+        for (const status of ['success', 'skipped']) {
           const r = await _erpQueueList(status, 1, 200);
           for (const t of r.items || []) {
             if (t.finishedAt) {
@@ -260,55 +252,7 @@
       return steps;
     };
 
-    const _retryBackoffMs = (attempts) => {
-      const table = [10000, 30000, 90000];
-      return table[Math.min(attempts, table.length - 1)] || 10000;
-    };
-
-    const _broadcastQueueStatus = async (sku, sellerSlug, status) => {
-      try {
-        const tabs = await chrome.tabs.query({
-          url: sw.IS_TEST_MODE
-            ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
-            : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'],
-        });
-        for (const t of tabs) {
-          if (!t.id) continue;
-          chrome.tabs.sendMessage(t.id, { type: 'collectStatus', sku, sellerSlug, status }).catch(() => {});
-        }
-      } catch (e) {
-        /* fire-and-forget */
-      }
-    };
-
-    // 向所有 Ozon tab 广播任务中间态(pending/running/failed_retry),驱动前端徽章
-    const _broadcastTaskStatus = async (sku, status, attempts, maxAttempts, nextRetryAt) => {
-      try {
-        const tabs = await chrome.tabs.query({
-          url: sw.IS_TEST_MODE
-            ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
-            : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'],
-        });
-        const payload = {
-          type: 'taskStatus',
-          sku,
-          status,
-          attempts: attempts || 0,
-          maxAttempts: maxAttempts || 3,
-          nextRetryAt: nextRetryAt || 0,
-        };
-        for (const t of tabs) {
-          chrome.tabs.sendMessage(t.id, payload).catch(() => {});
-        }
-      } catch (e) {
-        /* fire-and-forget */
-      }
-    };
-
     // rescan 广播:不刷新页面重新提交所有可见 SKU。
-    // 先发 __jzAutoCollectResetSeen 清空 dedup(content script 旧代码已有监听),
-    // 再用 chrome.scripting.executeScript 注入 inline 脚本(ISOLATED world)遍历 cards 重新提交。
-    // 这样不依赖 content script 的 rescan 消息处理(重载扩展后 content script 可能仍是旧代码)。
     const _broadcastRescan = async () => {
       try {
         const urlFilter = sw.IS_TEST_MODE
@@ -709,7 +653,7 @@
     };
 
     // POST /admin/api/collect-queue/stale-reset
-    // 重置超时 running 任务为 failed_retry,返回 { resetCount }
+    // 重置超时 running 任务为 pending,返回 { resetCount }
     const _erpQueueStaleReset = async (staleMs) => {
       try {
         const url = await sw.getBackendUrl();
@@ -747,7 +691,7 @@
     };
 
     // POST /admin/api/collect-queue/clear-terminal
-    // 清空所有终态任务(success/failed_final/failed_partial),返回 { deletedCount }
+    // 清空所有终态任务(success/skipped),返回 { deletedCount }
     const _erpQueueClearTerminal = async () => {
       try {
         const url = await sw.getBackendUrl();
@@ -833,14 +777,14 @@
           : {}),
       });
 
-      const isTerminal = status === 'success' || status === 'failed_final' || status === 'failed_partial';
+      const isTerminal = status === 'success' || status === 'skipped';
       if (isTerminal) {
         _addCompletedToday(sku);
       }
       return isTerminal;
     };
 
-    const _handleRetryOrFinal = async (task, result, steps, startedAt, duration, errorType, maxAttempts, backoffMs) => {
+    const _handlePartialTask = async (task, result, steps, startedAt, duration, errorType) => {
       const attempts = (task.attempts || 0) + 1;
       const lastError = {
         type: errorType,
@@ -848,47 +792,33 @@
         step: 'unknown',
         ts: Date.now(),
       };
-      if (attempts >= maxAttempts) {
-        const finalStatus = errorType === 'partial' ? 'failed_partial' : 'failed_final';
-        return await _finalizeTask(task, finalStatus, lastError, steps, startedAt, duration, result);
-      } else {
-        const nextRetryAt = Date.now() + backoffMs;
-        // Phase 2 重构后:只调 ERP /result 写 failed_retry 状态,不再写本地队列
-        await _erpQueueResult(task.sku, {
-          status: 'failed_retry',
-          attempts,
-          maxAttempts,
-          nextRetryAt,
-          error: lastError,
-        });
-        _broadcastTaskStatus(task.sku, 'failed_retry', attempts, maxAttempts, nextRetryAt);
-        return false; // 非终态
-      }
+      // 塞到队尾重新 pending:更新 createdAt=now 让 ERP claim(ORDER BY createdAt ASC)排到后面
+      await _erpQueueUpdate({
+        sku: task.sku,
+        sellerSlug: task.sellerSlug || '',
+        sellerId: task.sellerId || '',
+        domInfo: task.domInfo || null,
+        source: task.source || 'shop-page',
+        status: 'pending',
+        attempts,
+        lastError,
+        steps: steps || task.steps,
+        createdAt: Date.now(),
+        startedAt: null,
+        finishedAt: null,
+      });
+      return false; // 非终态,回 pending 等待下次 try
     };
 
     const _handleSkippedTask = async (task, result, steps, startedAt, duration) => {
       const reason = result?.reason || 'skipped';
-      if (reason === 'daily-limit') {
-        await _saveQueueMeta({ consumePaused: true });
-        // 任务回 pending(非终态):跨日恢复后会重新消费
-        // 但不写 ERP(ERP 端 claim 不会取 running 任务,task 仍保持 running 状态,
-        //   stale-reset 会把它重置为 failed_retry,然后被重新 claim)
-        // 实际上:daily-limit 场景下任务已被 claim(running),需要回退为 pending
-        await _erpQueueResult(task.sku, {
-          status: 'pending',
-          attempts: task.attempts || 0, // 不增加 attempts
-          error: { type: 'daily-limit', message: reason, step: 'unknown', ts: Date.now() },
-          finishedAt: Date.now(),
-        });
-        return false; // 非终态(回 pending)
-      }
       const lastError = { type: 'skipped', message: reason, step: 'unknown', ts: Date.now() };
-      return await _finalizeTask(task, 'failed_final', lastError, steps, startedAt, duration, result);
+      return await _finalizeTask(task, 'skipped', lastError, steps, startedAt, duration, result);
     };
 
     const _checkStaleRunningTasks = async () => {
       // Phase 2 重构后:委托 ERP 端 stale-reset,不再遍历本地队列
-      // ERP 端会重置 startedAt 超时的 running 任务为 failed_retry(nextRetryAt=now+30s)
+      // ERP 端会重置 startedAt 超时的 running 任务为 pending(塞回队尾等下次 claim)
       const resetCount = await _erpQueueStaleReset(COLLECT_QUEUE_STALE_RUNNING_MS);
       if (resetCount > 0) {
         console.warn('[Queue] stale running tasks reset by ERP:', resetCount);
@@ -913,7 +843,7 @@
             // 不刷新页面重新扫描:清空 SW 状态 + 广播让 content script 重新提交所有可见 SKU
             // 1. 清空已完成集合(让 _isTaskQueuedOrCompletedToday 返回 false)
             S.completedTodaySkus.clear();
-            // 2. 清空 ERP pending 任务(已完成的保留,running/failed_retry 也保留)
+            // 2. 清空 ERP pending 任务(已完成的保留,running 也保留)
             await _erpQueueClearPending();
             // 3. 广播 rescan 消息(content script 收到后清空 dedup + 重置 panel + 重新提交)
             await _broadcastRescan();
@@ -981,8 +911,6 @@
         source: 'shop-page',
         status: 'pending',
         attempts: 0,
-        maxAttempts: 3,
-        nextRetryAt: 0,
         lastError: null,
         steps: null,
         createdAt: Date.now(),
@@ -1008,15 +936,12 @@
         return { ok: false, error: 'ERP unavailable: ' + (e?.message || e) };
       }
 
-      // 广播 pending 徽章(ERP 入队成功后)
-      _broadcastTaskStatus(sku, 'pending', 0, task.maxAttempts, 0);
-
       sw.maybeStartConsume();
       return { ok: true, data: { queued: isNew, alreadyQueued: !isNew } };
     };
 
     // Phase 2 新增:从 ERP 迁移本地队列数据(SW 启动时一次性执行)
-    // 把 chrome.storage.local['jz-collect-queue'] 中 pending/failed_retry 任务迁移到 ERP
+    // 把 chrome.storage.local['jz-collect-queue'] 中 pending 任务迁移到 ERP
     // 迁移完成后清空本地队列,后续不再使用
     const _migrateLocalQueueIfNeeded = async () => {
       try {
@@ -1026,10 +951,8 @@
           console.log('[Queue] migrate: local queue empty, skip');
           return { migrated: 0, skipped: true };
         }
-        // 只迁移可消费任务(pending/failed_retry),终态任务丢弃(ERP cleanup 会处理)
-        const consumable = localQueue.filter(
-          (t) => t && t.sku && (t.status === 'pending' || t.status === 'failed_retry')
-        );
+        // 只迁移 pending 任务,终态任务丢弃(ERP cleanup 会处理)
+        const consumable = localQueue.filter((t) => t && t.sku && t.status === 'pending');
         console.log(
           '[Queue] migrate: local queue has %d tasks, %d consumable',
           localQueue.length,
@@ -1045,10 +968,8 @@
               sellerSlug: t.sellerSlug || '',
               sellerId: t.sellerId || '',
               domInfo: t.domInfo || null,
-              status: t.status === 'failed_retry' ? 'failed_retry' : 'pending',
+              status: 'pending',
               attempts: t.attempts || 0,
-              maxAttempts: t.maxAttempts || 3,
-              nextRetryAt: t.nextRetryAt || 0,
               lastError: t.lastError || null,
               steps: t.steps || null,
               createdAt: t.createdAt || Date.now(),
@@ -1103,12 +1024,9 @@
     this._isTaskQueuedOrCompletedToday = _isTaskQueuedOrCompletedToday;
     this._initCompletedTodaySet = _initCompletedTodaySet;
     this._buildSteps = _buildSteps;
-    this._retryBackoffMs = _retryBackoffMs;
     this._cleanupCompletedTasksLocked = _cleanupCompletedTasksLocked;
     this._syncConsumeRateFromConfig = _syncConsumeRateFromConfig;
     this._isCircuitBreakerActive = _isCircuitBreakerActive;
-    this._broadcastQueueStatus = _broadcastQueueStatus;
-    this._broadcastTaskStatus = _broadcastTaskStatus;
     this._broadcastRescan = _broadcastRescan;
     this._erpQueueInsert = _erpQueueInsert;
     this._erpQueueUpdate = _erpQueueUpdate;
@@ -1130,7 +1048,7 @@
     this._getSearchVariantForBroadcast = _getSearchVariantForBroadcast;
     this._buildCollectDoneData = _buildCollectDoneData;
     this._finalizeTask = _finalizeTask;
-    this._handleRetryOrFinal = _handleRetryOrFinal;
+    this._handlePartialTask = _handlePartialTask;
     this._handleSkippedTask = _handleSkippedTask;
     this._checkStaleRunningTasks = _checkStaleRunningTasks;
     this._processQueueOp = _processQueueOp;

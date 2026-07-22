@@ -177,38 +177,10 @@
   // 也定时查 SW 缓存填充面板。详见下方 _refreshVisiblePanels 实现。
   const PANEL_REFRESH_INTERVAL_MS = 5000;
 
-  // rescan 由 SW 主动广播;采集结果统一由 5s 定时刷新查缓存回填,
+  // 采集结果统一由 5s 定时刷新查缓存回填,
   // 队列暂停/恢复/任务状态变化不再通知页面(深度采集状态与页面 UI 完全解耦)。
-  // taskStatus 监听已移除 — 徽章仅由缓存命中驱动(_skuCacheHitSet),
+  // taskStatus/collectStatus/rescan 消息监听均已移除 — 徽章仅由缓存命中驱动(_skuCacheHitSet),
   // 不再依赖深度采集队列状态(_collectStatusMap 已删除)。
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (!msg) return;
-
-    // rescan:SW 通过 rescan op 触发的不刷新页面重新扫描。
-    // 清空 dedup + 重置所有 panel 为 loading + 重新提交所有可见 SKU。
-    if (msg.type === 'rescan') {
-      console.log('[panel] 收到 rescan,重新提交所有可见 SKU');
-      window.__jzAutoCollectResetSeen?.();
-      try {
-        const cards = getCards();
-        for (const card of cards) {
-          const info = extractCardInfo(card);
-          const productId = extractProductId(info.url);
-          if (!productId) continue;
-          // "仅抓有评价"开启时跳过无评价商品
-          if (onlyWithRating && !info.ratingCount) continue;
-          // 价格/评论数范围过滤:不在范围内则跳过采集
-          if (!_passesRangeFilter(info)) continue;
-          const panel = card.querySelector('.ozon-helper-data-panel');
-          if (panel) panel.dataset.jzLoadStatus = 'loading';
-          window.__jzSubmitCollectTask?.(productId, card, sellerSlug, sellerId);
-        }
-      } catch (err) {
-        console.warn('[panel] rescan failed:', err);
-      }
-      return;
-    }
-  });
 
   // ── 定时刷新:页面级 5s 定时器 + 视口批量查询 ──────────────────
   // 旧实现:每个 panel 独立 setInterval,N 个 panel = 2N 条消息/5s(SW 消息洪水)。

@@ -36,11 +36,8 @@
       skuInterval: 30000,
       consumeRateMinSec: 5,            // 队列消费间隔范围(秒),每次随机
       consumeRateMaxSec: 15,           // 队列消费间隔范围(秒),每次随机
-      perDayLimit: 2000,
-      todayCount: 0,
-      todayDate: '',
-      marketStatsStaleMs: 86400000,
-      followSellStaleMs: 14400000,
+      // perDayLimit/todayCount/todayDate 已移除(去掉每日上限)
+      // marketStatsStaleMs/followSellStaleMs 已移除(stale 策略改为永久)
       onlyChineseStores: true,
       knownChineseSlugs: [],
       knownNonChineseSlugs: [],

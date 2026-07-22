@@ -952,7 +952,6 @@
     const config = await loadAutoCollectConfig();
     const shallowToggle = document.getElementById('ac-shallow-toggle');
     const deepToggle = document.getElementById('ac-deep-toggle');
-    const todayCount = document.getElementById('ac-today-count');
     const statusDot = document.getElementById('ac-status-dot');
     const pausedDiv = document.getElementById('ac-paused');
     if (!shallowToggle && !deepToggle) return; // HTML 缺节点时优雅降级
@@ -961,7 +960,6 @@
     const deepOn = config.autoCollectRunning !== false;
     if (shallowToggle) shallowToggle.checked = shallowOn;
     if (deepToggle) deepToggle.checked = deepOn;
-    if (todayCount) todayCount.textContent = String(config.todayCount || 0);
 
     if (config.paused && Date.now() < (config.pausedUntil || 0)) {
       if (statusDot) statusDot.className = 'status-dot paused';
@@ -997,12 +995,10 @@
 
   // ─── 限速配置(可折叠,与 jz-auto-collect-config 共享) ─────────────
   // 字段对应 SW 内 _AUTO_COLLECT_CONFIG_DEFAULT 的限速项。
-  // 新队列架构下保留队列消费间隔范围(秒,每次随机)和每日上限。
+  // 新队列架构下保留队列消费间隔范围(秒,每次随机)。
   // min/max 与 input 的 min/max 属性保持一致,超界不写入并提示。
   const RATE_RANGE = { min: 5, max: 120 };
-  const RATE_FIELDS = [
-    { id: 'ac-rate-perday', key: 'perDayLimit', min: 0, max: 100000, label: '每日上限' },
-  ];
+  const RATE_FIELDS = [];
 
   let _rateHintTimer = null;
   const showRateHint = (text, kind) => {

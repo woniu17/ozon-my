@@ -439,8 +439,8 @@
         results[2].hit = !!pdp;
         results[3].hit = !!searchHit;
         results[4].hit = !!bundleHit;
-        results[5].hit = !!marketStats && !marketStats.stale;
-        results[6].hit = !!followSell && !followSell.stale;
+        results[5].hit = !!marketStats;
+        results[6].hit = !!followSell;
       } catch (e) {
         console.warn('[SW autoCollect] _checkAllCachesHit error:', sku, e?.message || e);
       }

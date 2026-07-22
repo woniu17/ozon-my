@@ -439,10 +439,8 @@ CREATE TABLE IF NOT EXISTS collect_queue_tasks (
   sellerSlug     TEXT,
   sellerId       TEXT,
   domInfo        TEXT,                -- JSON
-  status         TEXT NOT NULL,      -- 'pending'|'running'|'failed_retry'|'failed_final'|'failed_partial'|'success'
+  status         TEXT NOT NULL,      -- 'pending'|'running'|'partial'|'success'|'skipped'(终态:success/skipped)
   attempts       INTEGER DEFAULT 0,
-  maxAttempts    INTEGER,
-  nextRetryAt    TEXT,
   lastError      TEXT,                -- JSON:{type,...}
   startedAt      TEXT,
   finishedAt     TEXT,
@@ -452,7 +450,7 @@ CREATE TABLE IF NOT EXISTS collect_queue_tasks (
   createdAt      TEXT NOT NULL,
   updatedAt      TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_task_status_retry ON collect_queue_tasks(status, nextRetryAt);
+CREATE INDEX IF NOT EXISTS idx_task_status      ON collect_queue_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_task_created      ON collect_queue_tasks(createdAt DESC);
 CREATE INDEX IF NOT EXISTS idx_task_updated      ON collect_queue_tasks(updatedAt DESC);
 

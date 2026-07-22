@@ -22,7 +22,7 @@
  *   - 本文件在 ozon-data-panel.js 之前注入(manifest 顺序)
  *   - 暴露 window.__jzCollectStatus = { ... } 供 data-panel 调用
  *   - 暴露 window.__jzRefreshCollectStatusUi 兼容 collect-entry.js 旧调用
- *   - onMessage listener 保留在 data-panel.js(仅 rescan)
+ *   - onMessage listener 已移除(2026-07 重构后深度采集状态与页面 UI 完全解耦)
  * ========================================================= */
 
 (function () {

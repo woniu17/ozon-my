@@ -30,9 +30,10 @@ export function batchRetryCollectQueueTasks(skus) {
   return request.post('/admin/api/collect-queue/batch-retry', { skus });
 }
 
-// 批量重试所有失败终态任务(按状态)
+// 批量重试所有部分失败任务(按状态)
+// 注:后端 batch-retry 接口当前只接受 skus 数组,此函数传 status 需后端支持按状态批量重试
 export function batchRetryAllFailed() {
-  return request.post('/admin/api/collect-queue/batch-retry', { status: 'failed_final' });
+  return request.post('/admin/api/collect-queue/batch-retry', { status: 'partial' });
 }
 
 // 清空 pending

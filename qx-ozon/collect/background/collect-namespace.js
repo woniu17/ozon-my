@@ -26,6 +26,11 @@
 
       // 队列
       consuming: false,
+      consumeStartedAt: 0, // _consumeOne 开始时间戳,供 _maybeStartConsume 检测卡死
+      // 下次消费的预计触发时间戳(setTimeout 调度时刻),供监控页面精确倒计时。
+      // 在 _consumeOne/_maybeStartConsume 计算出真实随机间隔后写入;
+      // _consumeOne 开始时清零,SW 重启后自然丢失(前端回退到 lastConsumeAt+中点估算)。
+      nextConsumeAt: 0,
       queueWriteLock: null,
       opsPollTimer: null,
       completedTodaySkus: new Set(),

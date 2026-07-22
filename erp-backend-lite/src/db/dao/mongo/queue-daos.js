@@ -19,13 +19,15 @@ export const collectQueueTasksDao = {
     return col.countDocuments({ status, finishedAt: { $gte: since } });
   },
 
-  /** 查最近 ANTIBOT_BLOCKED 任务(嵌套字段 'lastError.type' + sort) */
+  /** 查最近 antibot 任务(嵌套字段 'lastError.type' + sort)
+   *  antibot 不再是终态,SW 会把 antibot 任务回 pending 重试(lastError.type='antibot')
+   *  此处查询用于推导熔断状态:最近 10 分钟内有 antibot 任务则认为熔断中
+   */
   async findLatestAntibotBlocked(since) {
     const col = await cols.collectQueueTasks();
     return col.findOne(
       {
-        status: 'failed_final',
-        'lastError.type': 'ANTIBOT_BLOCKED',
+        'lastError.type': 'antibot',
         finishedAt: { $gte: since },
       },
       { sort: { finishedAt: -1 }, projection: { finishedAt: 1, lastError: 1 } }
@@ -95,7 +97,7 @@ export const collectQueueTasksDao = {
     const now = new Date().toISOString();
     return col.updateOne(
       { sku },
-      { $set: { status: 'pending', attempts: 0, nextRetryAt: null, lastError: null, updatedAt: now } }
+      { $set: { status: 'pending', attempts: 0, lastError: null, updatedAt: now } }
     );
   },
 
@@ -111,7 +113,7 @@ export const collectQueueTasksDao = {
     const now = new Date().toISOString();
     return col.updateMany(
       { sku: { $in: skus } },
-      { $set: { status: 'pending', attempts: 0, nextRetryAt: null, lastError: null, updatedAt: now } }
+      { $set: { status: 'pending', attempts: 0, lastError: null, updatedAt: now } }
     );
   },
 
@@ -159,8 +161,6 @@ export const collectQueueTasksDao = {
       domInfo: task.domInfo,
       status: task.status,
       attempts: task.attempts,
-      maxAttempts: task.maxAttempts,
-      nextRetryAt: task.nextRetryAt,
       lastError: task.lastError,
       startedAt: task.startedAt,
       finishedAt: task.finishedAt,

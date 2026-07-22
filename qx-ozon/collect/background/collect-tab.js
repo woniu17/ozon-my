@@ -195,7 +195,7 @@
     //
     // 关键洞察:fetchPdpMedia 在 tab MAIN world 执行参数化 fetch,跟 tab 当前 URL 无关,
     //          所以中间不重载时 tab.url 可能是旧 SKU,但数据正确。
-    const _DEDICATED_BUYER_TAB_RELOAD_INTERVAL = 7;
+    const _DEDICATED_BUYER_TAB_RELOAD_INTERVAL = 1;
     let _dedicatedBuyerTabLock = Promise.resolve();
 
     // 读持久化 state
@@ -263,7 +263,7 @@
           const shouldReload = newCount % _DEDICATED_BUYER_TAB_RELOAD_INTERVAL === 0;
           console.log(
             `[ensureBuyerTab] 复用 tab=${existingTab.id} callCount=${newCount}` +
-              (shouldReload ? ` → 重载到 sku=${sku}` : ' (不重载)')
+            (shouldReload ? ` → 重载到 sku=${sku}` : ' (不重载)')
           );
           if (shouldReload) {
             await chrome.tabs.update(existingTab.id, { url: pdpUrl });
@@ -408,7 +408,7 @@
       try {
         const u = new URL(productUrl, sw.OZON_WWW_ORIGIN);
         path = u.pathname + u.search;
-      } catch {}
+      } catch { }
       if (!path.startsWith('/')) path = '/' + path;
 
       // 从 path 提取 sku 用于缓存查询(/product/xxx-<sku>/)
@@ -432,10 +432,17 @@
         let rmCached = null;
         try {
           rmCached = await this.richMediaCacheGet(urlSku);
-        } catch {}
+        } catch { }
         console.log('[fetchPdpBundle] 缓存检查:', urlSku, 'rm=' + !!rmCached);
         // 命中 → 直接返回(空内容也是商品本身的数据特征,缓存避免重复无效真调)
         if (rmCached) {
+          // followSell 独立查缓存:richMedia 缓存命中时不再真调买家页,
+          // 但 followSell 数据与 richMedia 存在不同缓存,需单独查一次。
+          // 若 followSell 缓存也命中,一起返回;若 miss,返回 null(Step4 据此标记 hit=false)。
+          let fsCached = null;
+          try {
+            fsCached = await this.followSellCacheGet(urlSku);
+          } catch { }
           return {
             mp4: rmCached.mp4 || null,
             richContent: rmCached.richContent || '',
@@ -443,7 +450,7 @@
             hashtags: Array.isArray(rmCached.hashtags) ? rmCached.hashtags : [],
             endpoint: 'richMedia-cache',
             composerFields: rmCached.fields || null,
-            followSellData: null, // followSell 走独立缓存,不混入 richMedia 返回
+            followSellData: fsCached?.data || null,
           };
         }
 
@@ -866,21 +873,21 @@
         // 全失败时返回 failReasons(细化 NO_ENDPOINT:HTTP 状态码/超时/网络错误)
         return anyOk
           ? {
-              ok: true,
-              mp4,
-              richContent,
-              richContentHasText,
-              description,
-              hashtags,
-              endpoint: hitEndpoint,
-              hitEndpoints,
-              composerWidgetStates,
-            }
+            ok: true,
+            mp4,
+            richContent,
+            richContentHasText,
+            description,
+            hashtags,
+            endpoint: hitEndpoint,
+            hitEndpoints,
+            composerWidgetStates,
+          }
           : {
-              ok: false,
-              error: 'all endpoints failed',
-              failReasons: failReasons.length ? failReasons.join('|') : 'NO_REQUEST_ATTEMPTED',
-            };
+            ok: false,
+            error: 'all endpoints failed',
+            failReasons: failReasons.length ? failReasons.join('|') : 'NO_REQUEST_ATTEMPTED',
+          };
       };
       // ── 子函数 2:fetchFollowSellModal(独立 followSell modal 抓取) ──
       // 与 fetchPdpMedia 并行执行,自包含(不引用闭包变量),作为 executeScript func 注入 MAIN world。
@@ -1091,8 +1098,8 @@
               const brand = parse(find('webBrand'));
               const images = Array.isArray(gallery?.images)
                 ? gallery.images
-                    .map((it) => (typeof it === 'string' ? it : it?.url || it?.link || it?.src))
-                    .filter(Boolean)
+                  .map((it) => (typeof it === 'string' ? it : it?.url || it?.link || it?.src))
+                  .filter(Boolean)
                 : [];
               const coverImage =
                 typeof gallery?.coverImage === 'string'
@@ -1113,7 +1120,7 @@
                   seller?.sellerCell?.link ||
                   seller?.link ||
                   '';
-              } catch {}
+              } catch { }
               fields = {
                 title: heading?.title || '',
                 sku: urlSku,
@@ -1203,7 +1210,7 @@
         S.sellerPortalLastAt = Date.now();
       });
       // 串行化:下一个调用排在这次放行之后;.catch 防止异常断链(wait 只 await setTimeout,不会 reject)。
-      S.sellerPortalGateChain = wait.catch(() => {});
+      S.sellerPortalGateChain = wait.catch(() => { });
       return wait;
     };
 
@@ -1232,7 +1239,7 @@
         try {
           const t = await chrome.tabs.get(preferTabId);
           if (t && isOzonUrl(t.url)) target = t; // 来源标签是 live 的(它刚发的消息),不强求 complete
-        } catch {}
+        } catch { }
       }
       if (!target) {
         const tabs = await chrome.tabs.query({
@@ -1270,7 +1277,7 @@
             try {
               const j = JSON.parse(text);
               parsedCode = (j && (j.code || (j.error && j.error.code))) || '';
-            } catch {}
+            } catch { }
             return {
               ok: false,
               status: resp.status,
@@ -1386,7 +1393,7 @@
             try {
               const json = JSON.parse(text);
               parsedCode = (json && (json.code || (json.error && json.error.code))) || '';
-            } catch {}
+            } catch { }
             return {
               ok: false,
               status: resp.status,
@@ -1773,14 +1780,6 @@
         // === Gate 0: 基础检查 ===
         const config = await sw.loadAutoCollectConfig();
 
-        // 跨日重置 todayCount
-        const today = new Date().toDateString();
-        if (config.todayDate !== today) {
-          config.todayDate = today;
-          config.todayCount = 0;
-          await this.saveAutoCollectConfig({ todayDate: today, todayCount: 0 });
-        }
-
         // 检查 autoCollectRunning(深度采集开关)
         if (!config.autoCollectRunning) {
           console.log('[SW autoCollect] Gate0 跳过(not-running):', sku);
@@ -1793,12 +1792,6 @@
           console.log('[SW autoCollect] Gate0 跳过(paused):', sku, '剩余', Math.round(remainMs / 1000) + 's');
           this.pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'paused');
           return { status: 'skipped', reason: 'paused', pausedUntil: config.pausedUntil };
-        }
-        // 检查每日上限
-        if (config.todayCount >= config.perDayLimit) {
-          console.log('[SW autoCollect] Gate0 跳过(daily-limit):', sku, config.todayCount + '/' + config.perDayLimit);
-          this.pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'daily-limit');
-          return { status: 'skipped', reason: 'daily-limit' };
         }
 
         // === Gate 0.5: 中国店铺检查 ===
@@ -1845,8 +1838,8 @@
         results[1].hit = !!detail && !forceRefresh;
         results[2].hit = !!pdp && !forceRefresh;
         // search/bundle 在 Step 5 处理
-        results[5].hit = !!marketStats && !marketStats.stale && !forceRefresh;
-        results[6].hit = !!followSell && !followSell.stale && !forceRefresh;
+        results[5].hit = !!marketStats && !forceRefresh;
+        results[6].hit = !!followSell && !forceRefresh;
 
         console.log(
           '[SW autoCollect] Step1 缓存查询:',
@@ -1875,13 +1868,13 @@
             sellerId: sellerId || '',
             storeClassified,
             depth,
-            status: 'skipped',
+            status: 'success',
             reason: 'all-cached',
             results,
             totalDuration: Date.now() - startTime,
           });
-          this.pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'all-cached');
-          return { status: 'skipped', reason: 'all-cached', results, totalDuration: Date.now() - startTime };
+          this.pushAutoCollectRecent(sku, 'success', source, storeClassified, results, startTime, 'all-cached');
+          return { status: 'success', reason: 'all-cached', results, totalDuration: Date.now() - startTime };
         }
 
         // === Step 4: 买家页采集(composer+entrypoint+followSell) ===
@@ -2064,7 +2057,11 @@
 
         // === Step 7: 写日志 + 更新计数器 ===
         const totalDuration = Date.now() - startTime;
-        const hasError = results.some((r) => r.error);
+        // 只有真正采集失败(hit=false 且有 error)才算 partial;
+        // FALLBACK_* 类 error(如 FALLBACK_richMedia-cache)是缓存兜底标注,hit=true,
+        // 不应触发 partial 导致无限重试(否则 pdp 缓存命中但 followSell 缓存缺失的任务
+        // 会因 pdp 的 FALLBACK error 永远回 pending,每次重试都走缓存直接返回,87 次/173 次循环)。
+        const hasError = results.some((r) => !r.hit && r.error);
         const status = hasError ? 'partial' : 'success';
         const hitCount = results.filter((r) => r.hit).length;
         console.log(
@@ -2120,12 +2117,12 @@
           sellerSlug,
           storeClassified,
           depth,
-          status: 'failed',
+          status: 'partial',
           results,
           totalDuration,
           error: e?.message,
         });
-        return { status: 'failed', error: e?.message, totalDuration };
+        return { status: 'partial', error: e?.message, totalDuration };
       } finally {
         if (acquiredSlot) _releaseAutoCollectSlot();
       }

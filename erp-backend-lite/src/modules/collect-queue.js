@@ -10,7 +10,10 @@ const daos = await getDaos();
 const router = Router();
 
 // 任务合法状态
-const TASK_STATUSES = ['pending', 'running', 'failed_retry', 'failed_final', 'failed_partial', 'success'];
+// 终态:success / skipped；非终态:pending / running
+// 注:'partial' 保留用于前端 tab 兼容,但 SW 从不向 ERP 写入 partial 状态
+// (partial 是 _doAutoCollect 返回值语义,SW 收到后调 _handlePartialTask 回 pending)
+const TASK_STATUSES = ['pending', 'running', 'partial', 'success', 'skipped'];
 
 // 熔断窗口(ms),与 SW 侧保持一致(10 分钟)
 const CIRCUIT_BREAKER_MS = 10 * 60 * 1000;
@@ -38,15 +41,16 @@ router.get('/admin/api/collect-queue/stats', async (req, res, next) => {
       if (s._id) byStatus[s._id] = s.count;
     }
 
-    // 今日完成/失败统计(按 finishedAt 过滤)
+    // 今日完成统计(按 finishedAt 过滤)
+    // successToday:今日成功(终态)
+    // 注:partialToday 已移除 — SW 从不向 ERP 写 partial 状态(_handlePartialTask 写 pending),
+    // countTodayByStatus('partial') 永远返回 0,属于死查询
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    const [successToday, failedFinalToday] = await Promise.all([
-      daos.collectQueueTasksDao.countTodayByStatus('success', todayStart),
-      daos.collectQueueTasksDao.countTodayByStatus('failed_final', todayStart),
-    ]);
+    const successToday = await daos.collectQueueTasksDao.countTodayByStatus('success', todayStart);
 
-    // 推导熔断:最近 10 分钟内有 ANTIBOT_BLOCKED 终态任务则认为熔断中
+    // 推导熔断:最近 10 分钟内有 antibot 的 partial 任务则认为熔断中
+    // (antibot 不再是终态,SW 会把 antibot 任务回 pending 重试,lastError.type 统一为小写 'antibot')
     const latestAntibot = await daos.collectQueueTasksDao.findLatestAntibotBlocked(
       new Date(Date.now() - CIRCUIT_BREAKER_MS)
     );
@@ -66,7 +70,7 @@ router.get('/admin/api/collect-queue/stats', async (req, res, next) => {
       ok({
         byStatus,
         successToday,
-        failedFinalToday,
+        partialToday: 0, // 已废弃:SW 从不写 partial 状态,保留字段兼容前端
         circuitBreaker,
         total: Object.values(byStatus).reduce((a, b) => a + b, 0),
         consumePaused: snapshot?.consumePaused ?? null,
@@ -240,7 +244,7 @@ router.post('/admin/api/collect-queue/clear', async (req, res, next) => {
 });
 
 // POST /admin/api/collect-queue/clear-terminal
-// 清空所有终态任务(success/failed_final/failed_partial),管理页即时生效
+// 清空所有终态任务(success/skipped),管理页即时生效
 // 与 queue-cleanup-poller 的区别:poller 保留 500 条,此接口全删(keepCount=0)
 router.post('/admin/api/collect-queue/clear-terminal', async (req, res, next) => {
   try {
@@ -294,8 +298,9 @@ router.post('/admin/api/collect-queue/rescan', async (req, res, next) => {
 // ── SW 上报队列快照(对账) ────────────────────────────────────────────────
 
 // POST /admin/api/collect-queue/sync-snapshot
-// body: { pending, running, success, failed, syncedAt, consumePaused?, lastConsumeAt? }
+// body: { pending, running, success, failed(语义为 partial 计数), syncedAt, consumePaused?, lastConsumeAt? }
 // 存入 __snapshot__ 文档(upsert,具体存储方式由 DAO 决定:Mongo 单文档 / SQLite 独立单行表)
+// 注:failed 字段名保留以兼容快照表结构,实际语义为 partial(部分采集失败,非终态)
 router.post('/admin/api/collect-queue/sync-snapshot', async (req, res, next) => {
   try {
     const body = req.body || {};
@@ -348,8 +353,9 @@ router.post('/admin/api/collect-queue/ops/:id/processed', async (req, res, next)
 // ── 任务结果回写(SW 调用) ────────────────────────────────────────────────
 
 // POST /admin/api/collect-queue/:sku/result
-// body: { result, steps, status, finishedAt, duration, lastError | error, attempts?, maxAttempts?, nextRetryAt?, startedAt? }
-// Phase 2 扩展:支持 attempts/maxAttempts/nextRetryAt/startedAt 字段(SW 写 failed_retry/pending 回退时需要)
+// body: { result, steps, status, finishedAt, duration, lastError | error, attempts?, startedAt? }
+// status 取值:success/skipped(终态) 或 partial(回 pending 重试)
+// 注:已移除 maxAttempts/nextRetryAt 退避机制,失败任务无限重试直到成功
 router.post('/admin/api/collect-queue/:sku/result', async (req, res, next) => {
   try {
     const sku = normalizeSku(req.params.sku);
@@ -367,15 +373,8 @@ router.post('/admin/api/collect-queue/:sku/result', async (req, res, next) => {
     else if (body.error !== undefined) update.lastError = body.error;
     if (body.duration !== undefined) update.duration = Number(body.duration) || 0;
     if (body.finishedAt) update.finishedAt = new Date(body.finishedAt);
-    // Phase 2 新增:允许 SW 回写 attempts/maxAttempts/nextRetryAt/startedAt
+    // attempts:partial 时 SW 回写累计尝试次数
     if (body.attempts !== undefined) update.attempts = Number(body.attempts) || 0;
-    if (body.maxAttempts !== undefined) update.maxAttempts = Number(body.maxAttempts) || 3;
-    // nextRetryAt 统一存 ms 时间戳(number),与 claimNextPending 的 CAST AS INTEGER 兼容
-    // 注:不能存 ISO 字符串,否则 CAST("2026-..." AS INTEGER) 只取开头数字 2026,导致退避失效
-    if (body.nextRetryAt !== undefined) {
-      const nr = body.nextRetryAt;
-      update.nextRetryAt = nr ? (typeof nr === 'number' ? nr : new Date(nr).getTime()) : null;
-    }
     // startedAt 存 ISO 字符串(stale-reset 用 ISO 字符串字典序比较,与时间顺序一致)
     if (body.startedAt !== undefined) update.startedAt = body.startedAt ? new Date(body.startedAt) : null;
 
@@ -391,9 +390,10 @@ router.post('/admin/api/collect-queue/:sku/result', async (req, res, next) => {
 // ── 任务初始提交(SW 调用) ────────────────────────────────────────────────
 
 // POST /admin/api/collect-queue
-// body: { sku, sellerSlug, sellerId, domInfo, status, attempts, maxAttempts, nextRetryAt, lastError, steps, startedAt, finishedAt, skipIfTodaySuccess? }
+// body: { sku, sellerSlug, sellerId, domInfo, status, attempts, lastError, steps, startedAt, finishedAt, skipIfTodaySuccess? }
 // SW 的 _handleSubmitTask 调用此接口入队
 // skipIfTodaySuccess:默认 true(若该 SKU 24h 内已 success,跳过入队);显式传 false 可关闭
+// 注:已移除 maxAttempts/nextRetryAt 字段(无退避,失败无限重试直到成功)
 router.post('/admin/api/collect-queue', async (req, res, next) => {
   try {
     const body = req.body || {};
@@ -408,13 +408,14 @@ router.post('/admin/api/collect-queue', async (req, res, next) => {
       domInfo: body.domInfo != null ? body.domInfo : null,
       status: isValidStatus(status) ? status : 'pending',
       attempts: body.attempts != null ? Number(body.attempts) || 0 : 0,
-      maxAttempts: body.maxAttempts != null ? Number(body.maxAttempts) || 3 : 3,
-      nextRetryAt: body.nextRetryAt != null ? (body.nextRetryAt ? new Date(body.nextRetryAt) : null) : null,
       lastError: body.lastError != null ? body.lastError : null,
       // startedAt / finishedAt / steps 为可变字段(SW 会上报)
       startedAt: body.startedAt ? new Date(body.startedAt) : null,
       finishedAt: body.finishedAt ? new Date(body.finishedAt) : null,
       steps: body.steps != null ? body.steps : null,
+      // createdAt: 可选,SW _handlePartialTask 传则刷新(失败任务排到队尾重试)
+      // 不传时 DAO 用 now(首次入队)
+      ...(body.createdAt != null ? { createdAt: new Date(body.createdAt) } : {}),
     };
 
     const skipIfTodaySuccess = body.skipIfTodaySuccess !== false;
@@ -437,7 +438,7 @@ router.post('/admin/api/collect-queue', async (req, res, next) => {
 // ── 任务消费(SW 调用) ────────────────────────────────────────────────
 
 // POST /admin/api/collect-queue/claim
-// SW 消费者调用:原子抢占下一个可消费任务(pending 或 failed_retry 到期)
+// SW 消费者调用:原子抢占下一个可消费任务(仅 pending)
 // 多 SW 实例并发安全:SQLite UPDATE...RETURNING / Mongo findOneAndUpdate 原子操作
 // 返回 { task: doc | null } null 表示队列无可消费任务
 router.post('/admin/api/collect-queue/claim', async (req, res, next) => {
@@ -451,7 +452,7 @@ router.post('/admin/api/collect-queue/claim', async (req, res, next) => {
 });
 
 // POST /admin/api/collect-queue/stale-reset
-// SW 定时(每 60s)调用:重置超时 running 任务为 failed_retry
+// SW 定时(每 60s)调用:重置超时 running 任务为 pending(僵尸任务恢复)
 // body 可选: { staleMs?: number } 默认 5 分钟
 router.post('/admin/api/collect-queue/stale-reset', async (req, res, next) => {
   try {

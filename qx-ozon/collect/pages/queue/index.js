@@ -56,7 +56,6 @@
   // rate config
   const rateMin = $('rate-min');
   const rateMax = $('rate-max');
-  const ratePerday = $('rate-perday');
   const rateHint = $('rate-hint');
 
   // collect switches
@@ -131,12 +130,9 @@
   const renderStatusBadge = (status) => {
     const map = {
       pending: { cls: 'status-pending', text: '待采集' },
-      failed_retry: { cls: 'status-pending', text: '重试中' },
       running: { cls: 'status-running', text: '采集中' },
       success: { cls: 'status-success', text: '成功' },
       partial: { cls: 'status-partial', text: '部分' },
-      failed_final: { cls: 'status-failed', text: '失败' },
-      failed_partial: { cls: 'status-partial', text: '部分失败' },
       failed: { cls: 'status-failed', text: '失败' },
       skipped: { cls: 'status-skipped', text: '跳过' },
       antibot: { cls: 'status-antibot', text: '反爬' },
@@ -191,7 +187,7 @@
     // 排序:running 最前 → pending → 其他按 finishedAt 倒序
     // 注:createdAt/finishedAt 是 ISO 字符串,需转时间戳再比较
     const _ts = (v) => (v ? new Date(v).getTime() : 0);
-    const statusOrder = { running: 0, pending: 1, failed_retry: 2 };
+    const statusOrder = { running: 0, pending: 1 };
     filtered.sort((a, b) => {
       const oa = statusOrder[a.status] ?? 3;
       const ob = statusOrder[b.status] ?? 3;
@@ -206,7 +202,7 @@
         const runningClass = t.status === 'running' ? ' is-running' : '';
         const sourceBadge = renderSourceBadge(t.source);
         const statusBadge = renderStatusBadge(t.status);
-        const attempts = `${t.attempts || 0}/${t.maxAttempts || 3}`;
+        const attempts = t.attempts != null ? `第${t.attempts}次` : '';
         const created = formatTime(t.createdAt);
         const started = formatTime(t.startedAt);
         const finished = formatTime(t.finishedAt);
@@ -263,7 +259,7 @@
   });
 
   // ─── 限速配置 ──────────────────────────────────────────
-  // 与 popup 限速配置一致:队列间隔 min~max(秒,每次随机),每日上限。
+  // 与 popup 限速配置一致:队列间隔 min~max(秒,每次随机)。
   // min/max 与 input 的 min/max 属性保持一致 [5, 120],超界不写入并提示。
   const RATE_RANGE = { min: 5, max: 120 };
 
@@ -306,11 +302,6 @@
       const range = getRateRangeFromState(d);
       rateMax.value = range.max;
     }
-    if (ratePerday && document.activeElement !== ratePerday) {
-      const v = d?.perDayLimit;
-      if (typeof v === 'number') ratePerday.value = v;
-      else if (v != null) ratePerday.value = String(v);
-    }
   };
 
   // 保存限速配置到 SW(走 autoCollectSetConfig,SW 会同步到 queueMeta)
@@ -351,31 +342,8 @@
     }
   };
 
-  // 每日上限 change 事件
-  const saveRatePerday = async () => {
-    const raw = (ratePerday?.value || '').trim();
-    if (raw === '') return;
-    const num = Number(raw);
-    if (!Number.isFinite(num)) {
-      showRateHint('每日上限: 非数字', 'err');
-      return;
-    }
-    if (num < 0 || num > 100000) {
-      showRateHint('每日上限: 范围 [0, 100000]', 'err');
-      return;
-    }
-    try {
-      const ok = await saveAutoCollectConfig({ perDayLimit: num });
-      showRateHint(ok ? '每日上限 已保存' : '每日上限 保存失败', ok ? 'ok' : 'err');
-      if (ok) fetchState();
-    } catch (e) {
-      showRateHint('每日上限 保存失败', 'err');
-    }
-  };
-
   rateMin?.addEventListener('change', saveRateRange);
   rateMax?.addEventListener('change', saveRateRange);
-  ratePerday?.addEventListener('change', saveRatePerday);
 
   // ─── 渲染队列任务窗口视图 ──────────────────────────────
   // 窗口式滑动展示 5 个 SKU(任务从左到右流动:左边等待 → 中间采集 → 右边完成):
@@ -390,7 +358,7 @@
   //
   // 示例:窗口 A B C D E,采集顺序 E→D→C→B→A(C 正在采集)
   //   C 完成后窗口变成 X A B C D(X 新进入最左,B 升到 center,C 移到 right-1)
-  // 徽章:成功(success/partial)、失败(failed_final/failed_partial/failed)、采集中(running)、未采集(pending/failed_retry)
+  // 徽章:成功(success/skipped)、失败(partial/failed)、采集中(running)、未采集(pending)
   // 每个槽位的视觉参数(scale/opacity),FLIP 动画用
   const SLOT_VIS = [
     { scale: 0.88, opacity: 0.65 }, // left-2
@@ -420,10 +388,10 @@
     const ts = (v) => (v ? new Date(v).getTime() : 0);
     const running = allTasks.filter((t) => t.status === 'running');
     const finished = allTasks
-      .filter((t) => ['success', 'partial', 'failed_final', 'failed_partial', 'failed', 'skipped', 'antibot'].includes(t.status))
+      .filter((t) => ['success', 'skipped'].includes(t.status))
       .sort((a, b) => ts(b.finishedAt) - ts(a.finishedAt)); // 最近完成在前
     const pending = allTasks
-      .filter((t) => ['pending', 'failed_retry'].includes(t.status))
+      .filter((t) => t.status === 'pending')
       .sort((a, b) => ts(a.createdAt) - ts(b.createdAt)); // 早创建在前(下一个要采集)
 
     // 中间槽:优先 running,没有 running 时用最近完成的(保留完成状态,不空着)
@@ -528,7 +496,7 @@
     const dom = t.domInfo || {};
     const title = dom.title || '(无标题)';
     const price =
-      dom.price != null ? Number(dom.price).toLocaleString('ru-RU') + ' ₽' : '-';
+      dom.price != null ? '¥' + Number(dom.price).toLocaleString('zh-CN') : '-';
     const img = dom.imageUrl
       ? `<img class="tw-thumb" src="${escapeHtml(dom.imageUrl)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display=''" /><div class="tw-thumb tw-thumb-placeholder" style="display:none">无图</div>`
       : `<div class="tw-thumb tw-thumb-placeholder">无图</div>`;
@@ -544,8 +512,6 @@
       timeMeta = `<span class="tw-meta">完成 ${formatTime(t.finishedAt)}</span>`;
     } else if (t.status === 'pending') {
       timeMeta = `<span class="tw-meta">等待中</span>`;
-    } else if (t.status === 'failed_retry') {
-      timeMeta = `<span class="tw-meta">重试中</span>`;
     }
     const rating =
       dom.ratingCount != null ? `<span class="tw-meta">评价 ${dom.ratingCount}</span>` : '';
@@ -574,14 +540,10 @@
     const map = {
       running: { cls: 'tw-badge tw-badge-running', text: '采集中' },
       success: { cls: 'tw-badge tw-badge-success', text: '采集成功' },
-      partial: { cls: 'tw-badge tw-badge-success', text: '采集成功' },
-      failed_final: { cls: 'tw-badge tw-badge-failed', text: '采集失败' },
-      failed_partial: { cls: 'tw-badge tw-badge-failed', text: '采集失败' },
-      failed: { cls: 'tw-badge tw-badge-failed', text: '采集失败' },
       skipped: { cls: 'tw-badge tw-badge-skipped', text: '已跳过' },
+      failed: { cls: 'tw-badge tw-badge-failed', text: '采集失败' },
       antibot: { cls: 'tw-badge tw-badge-failed', text: '反爬' },
       pending: { cls: 'tw-badge tw-badge-pending', text: '未采集' },
-      failed_retry: { cls: 'tw-badge tw-badge-pending', text: '未采集' },
     };
     const m = map[status] || { cls: 'tw-badge tw-badge-pending', text: '未采集' };
     return `<span class="${m.cls}">${m.text}</span>`;
@@ -593,7 +555,7 @@
     statPending.textContent = String(d.pendingCount || 0);
     statRunning.textContent = String(d.runningSkus?.length || 0);
     statFinished.textContent = String(d.finishedCount || 0);
-    statToday.textContent = `${d.todayCount || 0} / ${d.perDayLimit || 0}`;
+    statToday.textContent = String(d.finishedCount || 0);
 
     // 队列状态
     const now = Date.now();
@@ -602,32 +564,51 @@
       statPaused.innerHTML = `<span style="color:var(--error-fg)">熔断 ${remainSec}s</span>`;
     } else if (d.consumePaused) {
       statPaused.innerHTML = '<span style="color:var(--warning-fg)">已暂停</span>';
-    } else if (d.todayCount >= d.perDayLimit) {
-      statPaused.innerHTML = '<span style="color:var(--warning-fg)">达上限</span>';
     } else {
       statPaused.innerHTML = '<span style="color:var(--success-fg)">运行中</span>';
     }
 
-    // 自动采集状态
-    autoStatus.textContent = `自动采集: ${d.autoCollectRunning ? '开' : '关'}`;
-    autoStatus.style.color = d.autoCollectRunning ? 'var(--success-fg)' : 'var(--ink-3)';
+    // 自动采集状态 + SW 消费诊断
+    // consuming=true 且近期 → "采集中(Xs)";consuming=true 且 >5min → "疑似卡死";false → "空闲"
+    let consumeHint = '';
+    if (d.consuming) {
+      const elapsedSec = Math.round((now - (d.consumeStartedAt || 0)) / 1000);
+      if (elapsedSec > 300) {
+        consumeHint = ` · 疑似卡死 ${elapsedSec}s`;
+        autoStatus.style.color = 'var(--error-fg)';
+      } else {
+        consumeHint = ` · 采集中 ${elapsedSec}s`;
+        autoStatus.style.color = 'var(--success-fg)';
+      }
+    } else {
+      consumeHint = ' · 空闲';
+      autoStatus.style.color = d.autoCollectRunning ? 'var(--success-fg)' : 'var(--ink-3)';
+    }
+    autoStatus.textContent = `自动采集: ${d.autoCollectRunning ? '开' : '关'}${consumeHint}`;
 
     // 计算下次执行时间(用于 1s 倒计时渲染)
     // 规则:
-    //   - 有 pending 任务 + 队列未暂停/未熔断 → nextRunAt = lastConsumeAt + interval*1000
-    //     interval 用 consumeRateMinSec/consumeRateMaxSec 的中点(展示用,SW 实际随机)
+    //   - 优先用 SW 的 nextConsumeAt(setTimeout 调度的真实随机值)
+    //   - 回退:lastConsumeAt + (min+max)/2 中点估算(SW 刚重启 / nextConsumeAt=0 时)
     //   - 熔断中 → nextRunAt = circuitBreakerUntil
     //   - 暂停/达上限/无 pending → nextRunAt = 0(显示"—")
     // 注:now 已在上方"队列状态"段声明,此处复用
     const hasPending = (d.pendingCount || 0) > 0;
     if (now < (d.circuitBreakerUntil || 0)) {
       nextRunAt = d.circuitBreakerUntil;
-    } else if (hasPending && !d.consumePaused && d.todayCount < d.perDayLimit) {
-      const range = getRateRangeFromState(d);
-      const interval = Math.round((range.min + range.max) / 2) * 1000;
-      nextRunAt = (d.lastConsumeAt || 0) + interval;
-      // 如果已过预计时间(SW 还没调度到),显示 "即将执行"
-      if (nextRunAt < now) nextRunAt = now + 500;
+    } else if (hasPending && !d.consumePaused) {
+      if (d.nextConsumeAt) {
+        // SW 提供精确下次执行时间(setTimeout 调度的真实随机值)
+        nextRunAt = d.nextConsumeAt;
+        // 已过预计时间但 SW 还没回调(setTimeout 可能有几 ms 抖动),显示"即将执行"
+        if (nextRunAt < now) nextRunAt = now + 500;
+      } else {
+        // 回退:SW 刚重启或未调度,用 lastConsumeAt + 中点估算
+        const range = getRateRangeFromState(d);
+        const interval = Math.round((range.min + range.max) / 2) * 1000;
+        nextRunAt = (d.lastConsumeAt || 0) + interval;
+        if (nextRunAt < now) nextRunAt = now + 500;
+      }
     } else {
       nextRunAt = 0;
     }
@@ -685,8 +666,6 @@
         if (now < (d.circuitBreakerUntil || 0)) {
           const remainSec = Math.ceil((d.circuitBreakerUntil - now) / 1000);
           showNotice(`检测到反爬熔断,采集将暂停 ${remainSec} 秒`);
-        } else if (d.todayCount >= d.perDayLimit) {
-          showNotice(`已达每日上限(${d.perDayLimit}),次日自动恢复`);
         } else {
           hideNotice();
         }

@@ -1324,13 +1324,9 @@ try {
   const _isTaskQueuedOrCompletedToday = (sku) => __jzCollect._isTaskQueuedOrCompletedToday(sku);
   const _initCompletedTodaySet = () => __jzCollect._initCompletedTodaySet();
   const _buildSteps = (results) => __jzCollect._buildSteps(results);
-  const _retryBackoffMs = (attempts) => __jzCollect._retryBackoffMs(attempts);
   const _cleanupCompletedTasksLocked = (queue) => __jzCollect._cleanupCompletedTasksLocked(queue);
   const _syncConsumeRateFromConfig = () => __jzCollect._syncConsumeRateFromConfig();
   const _isCircuitBreakerActive = () => __jzCollect._isCircuitBreakerActive();
-  const _broadcastQueueStatus = (sku, sellerSlug, status) => __jzCollect._broadcastQueueStatus(sku, sellerSlug, status);
-  const _broadcastTaskStatus = (sku, status, attempts, maxAttempts, nextRetryAt) =>
-    __jzCollect._broadcastTaskStatus(sku, status, attempts, maxAttempts, nextRetryAt);
   const _broadcastRescan = () => __jzCollect._broadcastRescan();
   const _fetchProductDataStats = (sku) => __jzCollect._fetchProductDataStats(sku);
   const _extractBundlePhysicalAttrs = (bundleItem) => __jzCollect._extractBundlePhysicalAttrs(bundleItem);
@@ -1389,8 +1385,8 @@ try {
   const _migrateLocalQueueIfNeeded = () => __jzCollect._migrateLocalQueueIfNeeded();
   const _finalizeTask = (task, status, lastError, steps, startedAt, duration, collectResult) =>
     __jzCollect._finalizeTask(task, status, lastError, steps, startedAt, duration, collectResult);
-  const _handleRetryOrFinal = (task, result, steps, startedAt, duration, errorType, maxAttempts, backoffMs) =>
-    __jzCollect._handleRetryOrFinal(task, result, steps, startedAt, duration, errorType, maxAttempts, backoffMs);
+  const _handlePartialTask = (task, result, steps, startedAt, duration, errorType) =>
+    __jzCollect._handlePartialTask(task, result, steps, startedAt, duration, errorType);
   const _handleSkippedTask = (task, result, steps, startedAt, duration) =>
     __jzCollect._handleSkippedTask(task, result, steps, startedAt, duration);
   // 测试专用:重置队列状态(委托到 collect-queue.js)
@@ -1402,9 +1398,6 @@ try {
     let steps = null;
     let isTerminal = false;
 
-    await _broadcastQueueStatus(task.sku, task.sellerSlug, 'running');
-    _broadcastTaskStatus(task.sku, 'running', task.attempts || 0, task.maxAttempts || 3, 0);
-
     try {
       const config = await _loadAutoCollectConfig();
       const depth = task.depth || config.depth || 'Full';
@@ -1415,42 +1408,31 @@ try {
       if (result?.status === 'success') {
         isTerminal = await _finalizeTask(task, 'success', null, steps, startTime, duration, result);
       } else if (result?.status === 'partial') {
-        isTerminal = await _handleRetryOrFinal(task, result, steps, startTime, duration, 'partial', 2, 30000);
+        // 部分/全部失败:回 pending 队尾重试(无限重试,无退避)
+        isTerminal = await _handlePartialTask(task, result, steps, startTime, duration, 'partial');
       } else if (result?.status === 'skipped') {
         isTerminal = await _handleSkippedTask(task, result, steps, startTime, duration);
       } else if (result?.status === 'antibot') {
-        const lastError = {
-          type: 'ANTIBOT_BLOCKED',
-          message: 'antibot detected',
-          step: 'unknown',
-          ts: Date.now(),
-        };
-        isTerminal = await _finalizeTask(task, 'failed_final', lastError, steps, startTime, duration, result);
-        await _saveQueueMeta({ circuitBreakerUntil: Date.now() + 10 * 60 * 1000 });
+        // 反爬:触发熔断,任务回 pending 队尾等熔断结束后重试
+        // 复用 _handleAntibot 返回的 pausedUntil,避免两次 Date.now() 调用导致
+        // config.pausedUntil 与 meta.circuitBreakerUntil 之间产生毫秒级漂移
+        const _pausedUntil = result?.pausedUntil || Date.now() + 10 * 60 * 1000;
+        await _saveQueueMeta({ circuitBreakerUntil: _pausedUntil });
+        isTerminal = await _handlePartialTask(task, result, steps, startTime, duration, 'antibot');
       } else {
-        isTerminal = await _handleRetryOrFinal(
-          task,
-          result,
-          steps,
-          startTime,
-          duration,
-          'failed',
-          3,
-          _retryBackoffMs(task.attempts || 0)
-        );
+        // 其他异常(如 _doAutoCollect 内部 catch):回 pending 队尾重试
+        isTerminal = await _handlePartialTask(task, result, steps, startTime, duration, 'failed');
       }
     } catch (e) {
       const duration = Date.now() - startTime;
       console.error('[Queue] process task error:', task.sku, e);
-      isTerminal = await _handleRetryOrFinal(
+      isTerminal = await _handlePartialTask(
         task,
         { error: e?.message || 'internal_error' },
         steps,
         startTime,
         duration,
-        'internal',
-        2,
-        5000
+        'internal'
       );
     }
     return { result, isTerminal };
@@ -1473,6 +1455,8 @@ try {
   const _consumeOne = async () => {
     if (__jzCollect.state.consuming) return;
     __jzCollect.state.consuming = true;
+    __jzCollect.state.consumeStartedAt = Date.now();
+    __jzCollect.state.nextConsumeAt = 0; // 开始消费,清空下次预计时间
 
     let keepAliveTimer = null;
     let scheduleNext = false;
@@ -1485,7 +1469,7 @@ try {
       const today = new Date().toLocaleDateString('en-CA');
       if (meta.todayDate !== today) {
         __jzCollect.state.completedTodaySkus.clear();
-        meta = await _saveQueueMeta({ todayDate: today, todayCount: 0, consumePaused: false });
+        meta = await _saveQueueMeta({ todayDate: today, consumePaused: false });
       }
 
       if (Date.now() < meta.circuitBreakerUntil) {
@@ -1494,7 +1478,6 @@ try {
       }
 
       // Phase 2: peek 用 ERP list(pending),判断是否有待消费任务。
-      // 注:只 peek pending(不含 failed_retry 退避期到的),边缘场景影响小。
       const peekList = await _erpQueueList('pending', 1, 1);
       const peekTask = peekList?.items?.[0] || null;
 
@@ -1509,11 +1492,6 @@ try {
         await _saveQueueMeta({ consumePaused: true });
         return;
       }
-      if (meta.todayCount >= config.perDayLimit) {
-        console.log('[Queue] daily limit reached, pause');
-        await _saveQueueMeta({ consumePaused: true });
-        return;
-      }
 
       // Phase 2: 原子抢占任务(ERP 端 UPDATE...RETURNING,多 SW 并发安全)
       // claim 已在 ERP 端改 status=running, attempts+1, startedAt,无需再调 _updateQueueTask
@@ -1525,18 +1503,17 @@ try {
 
       const { isTerminal } = await _processTask(task);
 
-      // 只在任务到达终态(success/failed_final/failed_partial)时递增 todayCount,
-      // 重试(failed_retry)不计数。
       meta = await _loadQueueMeta();
       await _saveQueueMeta({
         lastConsumeAt: Date.now(),
-        ...(isTerminal ? { todayCount: meta.todayCount + 1 } : {}),
       });
 
       const rateMs = _getNextConsumeIntervalMs(meta);
       scheduleNext = true;
+      __jzCollect.state.nextConsumeAt = Date.now() + rateMs; // 精确下次执行时间
       setTimeout(() => {
         __jzCollect.state.consuming = false;
+        __jzCollect.state.consumeStartedAt = 0;
         _consumeOne();
       }, rateMs);
     } catch (e) {
@@ -1548,12 +1525,28 @@ try {
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       if (!scheduleNext) {
         __jzCollect.state.consuming = false;
+        __jzCollect.state.consumeStartedAt = 0;
       }
     }
   };
 
+  // consuming 卡死阈值:单次 _processTask 正常 < 5min(stale-reset 也是 5min),
+  // 超过 10min 视为卡死(_doAutoCollect 内某 await 永不返回),强制重置让 alarm 能恢复。
+  const _CONSUME_STUCK_MS = 10 * 60 * 1000;
+
   const _maybeStartConsume = async () => {
-    if (__jzCollect.state.consuming) return;
+    if (__jzCollect.state.consuming) {
+      // 卡死检测:consuming=true 且超过阈值,强制重置(防止 _doAutoCollect 内部
+      // 某 await 永不返回导致队列永久停摆,alarm 每分钟触发都因 consuming=true 直接 return)。
+      const stuckMs = Date.now() - (__jzCollect.state.consumeStartedAt || 0);
+      if (stuckMs > _CONSUME_STUCK_MS) {
+        console.warn('[Queue] maybeStart: consuming stuck for', Math.round(stuckMs / 1000) + 's, force reset');
+        __jzCollect.state.consuming = false;
+        __jzCollect.state.consumeStartedAt = 0;
+      } else {
+        return;
+      }
+    }
     let meta = await _loadQueueMeta();
     if (Date.now() < meta.circuitBreakerUntil) {
       console.log('[Queue] maybeStart: in circuit breaker, skip');
@@ -1567,7 +1560,7 @@ try {
       const breakerExpired = Date.now() >= meta.circuitBreakerUntil;
       if (crossedDay) {
         __jzCollect.state.completedTodaySkus.clear();
-        meta = await _saveQueueMeta({ todayDate: today, todayCount: 0, consumePaused: false });
+        meta = await _saveQueueMeta({ todayDate: today, consumePaused: false });
         console.log('[Queue] maybeStart: cross-day reset, resume');
       } else if (breakerExpired) {
         meta = await _saveQueueMeta({ consumePaused: false });
@@ -1578,7 +1571,6 @@ try {
       }
     }
     // Phase 2: peek 用 ERP list(pending)判断是否有待消费任务。
-    // 注:peek 为空时 failed_retry 退避期到的任务会等 alarm 唤醒(可接受)。
     const peekList = await _erpQueueList('pending', 1, 1);
     const task = peekList?.items?.[0] || null;
     if (!task) return;
@@ -1591,6 +1583,7 @@ try {
     if (elapsed < interval) {
       const wait = interval - elapsed;
       console.log('[Queue] maybeStart: respect interval, wait', wait, 'ms');
+      __jzCollect.state.nextConsumeAt = Date.now() + wait; // 精确下次执行时间
       setTimeout(() => {
         _consumeOne();
       }, wait);
@@ -3328,16 +3321,11 @@ try {
               depth: _acCfg.depth,
               paused: _acCfg.paused,
               pausedUntil: _acCfg.pausedUntil,
-              todayCount: _acCfg.todayCount,
-              perDayLimit: _acCfg.perDayLimit,
-              todayDate: _acCfg.todayDate,
               buyerPageMinInterval: _acCfg.buyerPageMinInterval,
               sellerPortalMinInterval: _acCfg.sellerPortalMinInterval,
               skuInterval: _acCfg.skuInterval,
               consumeRateMinSec: _acCfg.consumeRateMinSec,
               consumeRateMaxSec: _acCfg.consumeRateMaxSec,
-              marketStatsStaleMs: _acCfg.marketStatsStaleMs,
-              followSellStaleMs: _acCfg.followSellStaleMs,
               onlyChineseStores: _acCfg.onlyChineseStores,
               knownChineseSlugs: _acCfg.knownChineseSlugs,
               knownNonChineseSlugs: _acCfg.knownNonChineseSlugs,
@@ -3346,8 +3334,8 @@ try {
         }
         case 'autoCollectSetConfig': {
           // 面板写入 autoCollect 配置(仅白名单字段,内部状态如
-          // todayDate/pausedUntil 不允许面板直改)。限速字段(consumeRateMin/MaxSec/
-          // perDayLimit)由 popup 调整,旧字段(buyerPageMinInterval 等)保留兼容。
+          // todayDate/pausedUntil 不允许面板直改)。限速字段(consumeRateMin/MaxSec)
+          // 由 popup 调整,旧字段(buyerPageMinInterval 等)保留兼容。
           const _acUpdates = message.config || message;
           const _acAllowed = [
             'enabled',
@@ -3360,9 +3348,6 @@ try {
             'skuInterval',
             'consumeRateMinSec',
             'consumeRateMaxSec',
-            'perDayLimit',
-            'marketStatsStaleMs',
-            'followSellStaleMs',
             'onlyChineseStores',
             'knownChineseSlugs',
             'knownNonChineseSlugs',
@@ -3416,8 +3401,7 @@ try {
           if (_inCircuitBreaker) {
             _qsReason = 'antibot';
           } else if (_qsMeta.consumePaused) {
-            if (_qsMeta.todayCount >= _qsCfg.perDayLimit) _qsReason = 'daily-limit';
-            else if (!_qsCfg.autoCollectRunning) _qsReason = 'not-running';
+            if (!_qsCfg.autoCollectRunning) _qsReason = 'not-running';
             else if (_qsCfg.paused && Date.now() < _qsCfg.pausedUntil) _qsReason = 'paused';
             else _qsReason = 'paused';
           }
@@ -3426,8 +3410,6 @@ try {
             data: {
               consumePaused: _qsMeta.consumePaused || _inCircuitBreaker,
               reason: _qsReason,
-              todayCount: _qsMeta.todayCount,
-              perDayLimit: _qsCfg.perDayLimit,
               autoCollectRunning: _qsCfg.autoCollectRunning,
               paused: _qsCfg.paused,
               pausedUntil: _qsCfg.pausedUntil,
@@ -3706,7 +3688,7 @@ try {
           let _recentFinished = [];
           try {
             const _fList1 = await _erpQueueList('success', 1, 5, 'finishedAt:desc');
-            const _fList2 = await _erpQueueList('partial', 1, 5, 'finishedAt:desc');
+            const _fList2 = await _erpQueueList('skipped', 1, 5, 'finishedAt:desc');
             const _fItems = [...(_fList1?.items || []), ...(_fList2?.items || [])];
             _recentFinished = _fItems
               .sort((a, b) => new Date(b.finishedAt || 0).getTime() - new Date(a.finishedAt || 0).getTime())
@@ -3750,7 +3732,6 @@ try {
             finishedAt: t.finishedAt || null,
             createdAt: t.createdAt || null,
             attempts: t.attempts || 0,
-            maxAttempts: t.maxAttempts || 3,
             lastError: t.lastError || null,
             domInfo: t.domInfo || null,
           }));
@@ -3769,12 +3750,10 @@ try {
               runningSkus: running.map((t) => t.sku),
               runningTasks,
               pendingCount: byStatus.pending || 0,
-              // ERP 终态:success/failed_final/failed_partial(failed_retry 不算终态)
+              // ERP 终态:success/skipped(partial 非终态,回 pending 重试)
               finishedCount:
-                (byStatus.success || 0) + (byStatus.failed_final || 0) + (byStatus.failed_partial || 0),
+                (byStatus.success || 0) + (byStatus.skipped || 0),
               totalCount: _cmsStats?.total || _cmsQueue.length,
-              todayCount: _cmsMeta.todayCount,
-              perDayLimit: _cmsCfg.perDayLimit,
               consumePaused: _cmsMeta.consumePaused,
               circuitBreakerUntil: _cmsMeta.circuitBreakerUntil,
               autoCollectRunning: _cmsCfg.autoCollectRunning,
@@ -3782,6 +3761,14 @@ try {
               lastConsumeAt: _cmsMeta.lastConsumeAt || 0,
               consumeRateMinSec: _cmsMeta.consumeRateMinSec ?? 5,
               consumeRateMaxSec: _cmsMeta.consumeRateMaxSec ?? 15,
+              // 诊断字段:SW 内存消费状态,用于判断队列是否真的在消费
+              // consuming=true 且 consumeStartedAt 很久未变 → 卡死;
+              // consuming=true 且 consumeStartedAt 近期 → 正在采集;
+              // consuming=false 且有 pending → alarm 未触发或间隔等待中
+              consuming: __jzCollect.state.consuming,
+              consumeStartedAt: __jzCollect.state.consumeStartedAt || 0,
+              // SW 内 setTimeout 调度的精确下次执行时间戳(0 = 无调度/SW 刚重启)
+              nextConsumeAt: __jzCollect.state.nextConsumeAt || 0,
               tasks,
             },
           };

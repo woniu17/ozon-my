@@ -31,8 +31,6 @@ function reshapeTask(row) {
     domInfo: parseJsonCol(row, 'domInfo'),
     status: row.status,
     attempts: row.attempts,
-    maxAttempts: row.maxAttempts,
-    nextRetryAt: row.nextRetryAt,
     lastError: parseJsonCol(row, 'lastError'),
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
@@ -64,14 +62,16 @@ export const collectQueueTasksDao = {
       .get(status, sinceIso).n;
   },
 
-  /** 查最近 ANTIBOT_BLOCKED 任务:json_extract(lastError, '$.type') */
+  /** 查最近 antibot 任务:json_extract(lastError, '$.type') = 'antibot'
+   *  antibot 不再是终态,SW 会把 antibot 任务回 pending 重试(走 _handlePartialTask, errorType='antibot')
+   *  此处查询用于推导熔断状态:最近 10 分钟内有 antibot 任务则认为熔断中
+   */
   async findLatestAntibotBlocked(since) {
     const sinceIso = new Date(since).toISOString();
     const row = db
       .prepare(
         `SELECT finishedAt, lastError FROM collect_queue_tasks
-         WHERE status = 'failed_final'
-           AND json_extract(lastError, '$.type') = 'ANTIBOT_BLOCKED'
+         WHERE json_extract(lastError, '$.type') = 'antibot'
            AND finishedAt >= ?
          ORDER BY finishedAt DESC LIMIT 1`
       )
@@ -167,7 +167,7 @@ export const collectQueueTasksDao = {
     const r = db
       .prepare(
         `UPDATE collect_queue_tasks
-         SET status = 'pending', attempts = 0, nextRetryAt = NULL, lastError = NULL, updatedAt = ?
+         SET status = 'pending', attempts = 0, lastError = NULL, updatedAt = ?
          WHERE sku = ?`
       )
       .run(now, sku);
@@ -176,14 +176,12 @@ export const collectQueueTasksDao = {
 
   /**
    * 原子抢占下一个可消费任务(SQLite UPDATE...RETURNING)
-   * 条件:status='pending' 或 (status='failed_retry' 且 nextRetryAt<=now)
+   * 条件:status='pending'(已移除 failed_retry 退避机制,失败任务直接回 pending)
    * 副作用:status→'running', startedAt→now, attempts+1, updatedAt→now
    * 多 SW 实例并发安全:UPDATE...RETURNING 在 SQLite 中是原子的
-   * 注:nextRetryAt 历史数据可能是 ms 时间戳(number),用 CAST AS INTEGER 兼容
    */
   async claimNextPending(now = new Date()) {
     const nowIso = now.toISOString();
-    const nowMs = now.getTime();
     const row = db
       .prepare(
         `UPDATE collect_queue_tasks
@@ -194,48 +192,46 @@ export const collectQueueTasksDao = {
          WHERE _id = (
            SELECT _id FROM collect_queue_tasks
            WHERE status = 'pending'
-              OR (status = 'failed_retry' AND (nextRetryAt IS NULL OR CAST(nextRetryAt AS INTEGER) <= ?))
            ORDER BY createdAt ASC
            LIMIT 1
          )
          RETURNING *`
       )
-      .get(nowIso, nowIso, nowMs);
+      .get(nowIso, nowIso);
     return row ? reshapeTask(row) : null;
   },
 
   /**
-   * 重置超时 running 任务为 failed_retry(僵尸任务恢复)
+   * 重置超时 running 任务为 pending(僵尸任务恢复)
    * 条件:status='running' 且 startedAt < cutoff
-   * 副作用:status→'failed_retry', nextRetryAt→now+30s, lastError→STALE, updatedAt→now
+   * 副作用:status→'pending', lastError→STALE, updatedAt→now
+   * 注:已移除 nextRetryAt 退避,直接回 pending 等待下次 claim
    */
   async resetStaleRunning(staleMs = 5 * 60 * 1000, now = new Date()) {
     const cutoffIso = new Date(now.getTime() - staleMs).toISOString();
     const nowIso = now.toISOString();
-    const nextRetryMs = now.getTime() + 30000; // 30s 后可重试
     const lastError = JSON.stringify({ type: 'STALE', message: 'running timeout, reset by stale-reset' });
     const r = db
       .prepare(
         `UPDATE collect_queue_tasks
-         SET status = 'failed_retry',
-             nextRetryAt = ?,
+         SET status = 'pending',
              lastError = ?,
              updatedAt = ?
          WHERE status = 'running' AND startedAt < ?`
       )
-      .run(nextRetryMs, lastError, nowIso, cutoffIso);
+      .run(lastError, nowIso, cutoffIso);
     return { resetCount: r.changes };
   },
 
   /**
    * 清理终态任务,保留最新 N 条(按 finishedAt 降序)
-   * 终态:success / failed_final / failed_partial
+   * 终态:success / skipped
    */
   async cleanupTerminalTasks(keepCount = 500) {
     const cnt = db
       .prepare(
         `SELECT COUNT(*) AS n FROM collect_queue_tasks
-         WHERE status IN ('success', 'failed_final', 'failed_partial')`
+         WHERE status IN ('success', 'skipped')`
       )
       .get().n;
     if (cnt <= keepCount) return { deletedCount: 0, total: cnt };
@@ -246,7 +242,7 @@ export const collectQueueTasksDao = {
         `DELETE FROM collect_queue_tasks
          WHERE _id IN (
            SELECT _id FROM collect_queue_tasks
-           WHERE status IN ('success', 'failed_final', 'failed_partial')
+           WHERE status IN ('success', 'skipped')
            ORDER BY finishedAt ASC
            LIMIT ?
          )`
@@ -267,7 +263,7 @@ export const collectQueueTasksDao = {
     const r = db
       .prepare(
         `UPDATE collect_queue_tasks
-         SET status = 'pending', attempts = 0, nextRetryAt = NULL, lastError = NULL, updatedAt = ?
+         SET status = 'pending', attempts = 0, lastError = NULL, updatedAt = ?
          WHERE sku IN (${placeholders})`
       )
       .run(now, ...skus);
@@ -355,8 +351,8 @@ export const collectQueueTasksDao = {
     // 预查 sku 是否已存在(ON CONFLICT 无法可靠区分 INSERT/UPDATE:lastInsertRowid 在 UPDATE 时保留上次值)
     const existed = !!db.prepare(`SELECT 1 FROM collect_queue_tasks WHERE sku = ?`).get(task.sku);
     const cols = [
-      'sku', 'sellerSlug', 'sellerId', 'domInfo', 'status', 'attempts', 'maxAttempts',
-      'nextRetryAt', 'lastError', 'startedAt', 'finishedAt', 'steps', 'createdAt', 'updatedAt',
+      'sku', 'sellerSlug', 'sellerId', 'domInfo', 'status', 'attempts',
+      'lastError', 'startedAt', 'finishedAt', 'steps', 'createdAt', 'updatedAt',
     ];
     const vals = [
       task.sku,
@@ -365,17 +361,16 @@ export const collectQueueTasksDao = {
       task.domInfo ? JSON.stringify(task.domInfo) : null,
       task.status,
       task.attempts ?? 0,
-      task.maxAttempts ?? null,
-      task.nextRetryAt ?? null,
       task.lastError ? JSON.stringify(task.lastError) : null,
       task.startedAt ?? null,
       task.finishedAt ?? null,
       task.steps ? JSON.stringify(task.steps) : null,
-      now, // createdAt(仅首次写入)
+      // createdAt:SW _handlePartialTask 传则刷新(失败排到队尾);首次入队用 now
+      task.createdAt ?? now,
       now,
     ];
-    // ON CONFLICT(sku) DO UPDATE:不更新 createdAt 和 result
-    const updateCols = cols.filter((c) => c !== 'sku' && c !== 'createdAt');
+    // ON CONFLICT(sku) DO UPDATE:不更新 sku 和 result(createdAt 在传入时更新)
+    const updateCols = cols.filter((c) => c !== 'sku');
     const setClause = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
     const placeholders = cols.map(() => '?').join(', ');
     db

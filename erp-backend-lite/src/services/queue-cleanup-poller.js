@@ -1,10 +1,10 @@
 // 采集队列终态任务清理器
-// 周期性清理 collect_queue_tasks 表中的终态任务(success / failed_final / failed_partial),
+// 周期性清理 collect_queue_tasks 表中的终态任务(success / skipped),
 // 保留最新 N 条(按 finishedAt 降序),避免表无限膨胀。
 //
 // 规则:
 //   - 每 5 分钟扫描一次
-//   - 仅清理终态任务,不影响 pending/running/failed_retry
+//   - 仅清理终态任务,不影响 pending/running/partial
 //   - 保留最新 500 条终态任务(可配置)
 //   - 单次扫描失败不阻塞下一次(只 warn)
 import { getDaos } from '../db/adapter.js';

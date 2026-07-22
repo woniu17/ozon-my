@@ -30,22 +30,22 @@ const STEP_KEYS = [
 ];
 
 // 状态 tab
+// 终态:success / skipped；非终态:pending / running / partial(部分失败,回 pending 重试)
 const TABS = [
   { key: 'pending', label: '待采集' },
   { key: 'running', label: '采集中' },
-  { key: 'failed_retry', label: '重试中' },
+  { key: 'partial', label: '部分失败' },
   { key: 'success', label: '已完成' },
-  { key: 'failed_final', label: '失败' },
+  { key: 'skipped', label: '已跳过' },
   { key: '', label: '全部' },
 ];
 
 const STATUS_LABELS = {
   pending: '待采集',
   running: '采集中',
-  failed_retry: '重试中',
-  failed_final: '失败',
-  failed_partial: '部分失败',
+  partial: '部分失败',
   success: '已完成',
+  skipped: '已跳过',
 };
 
 // ── 统计 ───────────────────────────────────────────────────
@@ -257,8 +257,8 @@ function statusTag(status) {
   if (status === 'success') return 'tag tag-ok';
   if (status === 'running') return 'tag tag-info';
   if (status === 'pending') return 'tag tag-muted';
-  if (status === 'failed_retry') return 'tag tag-warn';
-  if (status === 'failed_final' || status === 'failed_partial') return 'tag tag-err';
+  if (status === 'partial') return 'tag tag-warn';
+  if (status === 'skipped') return 'tag tag-muted';
   return 'tag tag-muted';
 }
 
@@ -318,9 +318,9 @@ onUnmounted(() => {
         <div class="stat-sub">running</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">重试中</div>
-        <div class="stat-value stat-warn">{{ stats.byStatus?.failed_retry || 0 }}</div>
-        <div class="stat-sub">failed_retry</div>
+        <div class="stat-label">部分失败</div>
+        <div class="stat-value stat-warn">{{ stats.byStatus?.partial || 0 }}</div>
+        <div class="stat-sub">partial</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">已完成</div>
@@ -328,11 +328,9 @@ onUnmounted(() => {
         <div class="stat-sub">success</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">失败终态</div>
-        <div class="stat-value" :class="{ 'stat-err': (stats.byStatus?.failed_final || 0) > 0 }">
-          {{ stats.byStatus?.failed_final || 0 }}
-        </div>
-        <div class="stat-sub">failed_final</div>
+        <div class="stat-label">已跳过</div>
+        <div class="stat-value stat-muted">{{ stats.byStatus?.skipped || 0 }}</div>
+        <div class="stat-sub">skipped</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">熔断状态</div>
@@ -360,7 +358,7 @@ onUnmounted(() => {
         <button v-if="!stats.consumePaused" class="btn btn-ghost" @click="onPauseConsume">暂停消费</button>
         <button v-else class="btn btn-ghost" @click="onResumeConsume">恢复消费</button>
         <button class="btn btn-danger" @click="onClearPending">清空待采集</button>
-        <button class="btn btn-primary" @click="batchRetryFailed" v-if="currentTab === 'failed_final'">批量重试</button>
+        <button class="btn btn-primary" @click="batchRetryFailed" v-if="currentTab === 'partial'">批量重试</button>
       </div>
     </div>
 
@@ -402,9 +400,9 @@ onUnmounted(() => {
             <td>
               <span :class="statusTag(row.status)">{{ statusLabel(row.status) }}</span>
             </td>
-            <td>{{ row.attempts || 0 }} / {{ row.maxAttempts || 3 }}</td>
+            <td>{{ row.attempts || 0 }}</td>
             <td class="col-time">{{ fmtTime(row.createdAt) }}</td>
-            <td class="col-time">{{ row.nextRetryAt ? fmtTime(row.nextRetryAt) : '—' }}</td>
+            <td class="col-time">{{ fmtTime(row.finishedAt) || '—' }}</td>
             <td
               :title="
                 row.lastError ? (typeof row.lastError === 'string' ? row.lastError : JSON.stringify(row.lastError)) : ''
@@ -413,7 +411,7 @@ onUnmounted(() => {
               <span class="error-summary">{{ errorSummary(row.lastError) }}</span>
             </td>
             <td class="row-actions" @click.stop>
-              <button v-if="row.status === 'failed_final'" class="btn btn-sm btn-primary" @click="retryTask(row.sku)">
+              <button v-if="row.status === 'partial'" class="btn btn-sm btn-primary" @click="retryTask(row.sku)">
                 重试
               </button>
               <button class="btn btn-sm btn-danger" @click="removeTask(row.sku)">删除</button>
