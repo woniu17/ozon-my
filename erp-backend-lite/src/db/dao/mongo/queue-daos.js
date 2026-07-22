@@ -55,12 +55,23 @@ export const collectQueueTasksDao = {
     return col.countDocuments(query);
   },
 
-  /** 列表查询(排除 __snapshot__,按 createdAt 降序) */
-  async findList(filter = {}, page, pageSize) {
+  /** 列表查询(排除 __snapshot__,默认按 createdAt 降序) */
+  async findList(filter = {}, page, pageSize, sort) {
     const col = await cols.collectQueueTasks();
     const query = { _id: { $ne: '__snapshot__' }, ...filter };
     const skip = (page - 1) * pageSize;
-    return col.find(query).sort({ createdAt: -1 }).skip(skip).limit(pageSize).toArray();
+    // 排序:默认 createdAt DESC。sort 参数格式 { col: 1|-1 }
+    const SORT_ALLOWED = ['createdAt', 'updatedAt', 'finishedAt', 'startedAt', 'status', 'sku', 'attempts'];
+    let sortSpec = { createdAt: -1 };
+    if (sort && typeof sort === 'object') {
+      const spec = {};
+      for (const [col, dir] of Object.entries(sort)) {
+        if (!SORT_ALLOWED.includes(col)) continue;
+        spec[col] = String(dir).toUpperCase() === 'ASC' ? 1 : -1;
+      }
+      if (Object.keys(spec).length) sortSpec = spec;
+    }
+    return col.find(query).sort(sortSpec).skip(skip).limit(pageSize).toArray();
   },
 
   /** 按 SKU 查询 */

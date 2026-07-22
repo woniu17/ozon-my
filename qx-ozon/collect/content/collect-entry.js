@@ -3,29 +3,28 @@
  *
  * 职责:
  *   - 页面级 SKU 去重(_autoCollectSeen)
- *   - 维护"采集中" SKU 集合(__jzCollectingSkus)
  *   - 提交采集任务到 SW 队列(__jzSubmitCollectTask)
- *   - 监听 SW 广播同步采集状态(collectDone/taskStatus)
+ *   - 监听 __jzAutoCollectResetSeen 消息清空去重集合
  *
  * 依赖(window 挂载,由其他文件提供):
  *   - window.__jzExtractCardInfo  (ozon-data-panel.js)
  *   - window.jzExtractRatingCount (shared-utils.js)
  *   - window.normalizePrice       (shared-utils.js)
  *   - window.sendMessage          (shared-utils.js)
- *   - window.__jzRefreshCollectStatusUi (ozon-data-panel.js)
  *
  * 暴露(window 挂载):
  *   - window.__jzSubmitCollectTask
  *   - window.__jzAutoCollectResetSeen
- *   - window.__jzCollectingSkus
+ *
+ * 2026-07 重构:深度采集状态与页面 UI 完全解耦。
+ *   - 移除 __jzCollectingSkus Set(不再维护"采集中"状态)
+ *   - 移除 collectDone/taskStatus 监听(不再监听深度采集状态变化)
+ *   - 徽章仅由缓存命中驱动,由 5s 定时器查 ERP 缓存刷新
  * ========================================================= */
 (() => {
   if (window.__jzSubmitCollectTask) return; // 守卫,防止重复加载
 
   const _autoCollectSeen = new Set(); // 页面级去重,避免同一 SKU 重复提交采集任务
-  // 正在采集中的 SKU 集合(用于 UI 显示"采集中"状态)
-  // __jzSubmitCollectTask 提交前 add,collectDone/taskStatus 收到后 delete
-  window.__jzCollectingSkus = window.__jzCollectingSkus || new Set();
 
   /**
    * 从商品卡提取 submitTask 需要的轻量 DOM 信息。
@@ -141,27 +140,12 @@
   };
 
   // 监听 SW 发来的 __jzAutoCollectResetSeen 消息,清空去重集合
-  // 同时处理 collectDone / taskStatus 广播,同步"采集中"集合与徽章。
+  // taskStatus/collectDone 监听已移除:深度采集状态不再通知页面,
+  // 徽章统一由 5s 定时器查缓存命中刷新(_skuCacheHitSet)。
   chrome.runtime.onMessage?.addListener((message) => {
     if (!message) return;
     if (message === '__jzAutoCollectResetSeen' || message.type === '__jzAutoCollectResetSeen') {
       _autoCollectSeen.clear();
-      return;
-    }
-    if (message.type === 'collectDone' && message.sku) {
-      const skuStr = String(message.sku);
-      window.__jzCollectingSkus.delete(skuStr);
-      if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
-      return;
-    }
-    if (message.type === 'taskStatus' && message.sku) {
-      const skuStr = String(message.sku);
-      if (message.status === 'running' || message.status === 'pending') {
-        window.__jzCollectingSkus.add(skuStr);
-      } else {
-        window.__jzCollectingSkus.delete(skuStr);
-      }
-      if (window.__jzRefreshCollectStatusUi) window.__jzRefreshCollectStatusUi(skuStr);
     }
   });
 })();

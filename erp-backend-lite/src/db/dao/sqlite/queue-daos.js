@@ -114,7 +114,7 @@ export const collectQueueTasksDao = {
     return db.prepare(`SELECT COUNT(*) AS n FROM collect_queue_tasks ${where}`).get(...params).n;
   },
 
-  async findList(filter = {}, page, pageSize) {
+  async findList(filter = {}, page, pageSize, sort) {
     const whereParts = [];
     const params = [];
     if (filter.status) {
@@ -123,9 +123,19 @@ export const collectQueueTasksDao = {
     }
     const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
     const skip = (page - 1) * pageSize;
+    // 排序:默认 createdAt DESC。sort 参数格式 { col: 'ASC'|'DESC' }
+    // 白名单列名防 SQL 注入
+    const SORT_ALLOWED = ['createdAt', 'updatedAt', 'finishedAt', 'startedAt', 'status', 'sku', 'attempts'];
+    let orderBy = 'ORDER BY createdAt DESC';
+    if (sort && typeof sort === 'object') {
+      const parts = Object.entries(sort)
+        .filter(([col]) => SORT_ALLOWED.includes(col))
+        .map(([col, dir]) => `${col} ${String(dir).toUpperCase() === 'ASC' ? 'ASC' : 'DESC'}`);
+      if (parts.length) orderBy = `ORDER BY ${parts.join(', ')}`;
+    }
     const rows = db
       .prepare(
-        `SELECT * FROM collect_queue_tasks ${where} ORDER BY createdAt DESC LIMIT ? OFFSET ?`
+        `SELECT * FROM collect_queue_tasks ${where} ${orderBy} LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, skip);
     return rows.map(reshapeTask);

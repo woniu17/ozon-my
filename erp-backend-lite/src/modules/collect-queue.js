@@ -81,7 +81,7 @@ router.get('/admin/api/collect-queue/stats', async (req, res, next) => {
 
 // ── 任务列表 ────────────────────────────────────────────────
 
-// GET /admin/api/collect-queue/list?status=&page=&pageSize=
+// GET /admin/api/collect-queue/list?status=&page=&pageSize=&sort=createdAt:asc,updatedAt:desc
 router.get('/admin/api/collect-queue/list', async (req, res, next) => {
   try {
     const status = String(req.query.status || '').trim();
@@ -91,9 +91,20 @@ router.get('/admin/api/collect-queue/list', async (req, res, next) => {
     const filter = {};
     if (status && isValidStatus(status)) filter.status = status;
 
+    // 解析 sort 参数,格式 "col:dir,col:dir",dir 可选 ASC/DESC(默认 DESC)
+    let sort;
+    const sortParam = String(req.query.sort || '').trim();
+    if (sortParam) {
+      sort = {};
+      for (const part of sortParam.split(',')) {
+        const [col, dir] = part.trim().split(':');
+        if (col) sort[col.trim()] = (dir || 'DESC').trim().toUpperCase();
+      }
+    }
+
     const [total, items] = await Promise.all([
       daos.collectQueueTasksDao.countList(filter),
-      daos.collectQueueTasksDao.findList(filter, page, pageSize),
+      daos.collectQueueTasksDao.findList(filter, page, pageSize, sort),
     ]);
 
     return res.json(ok({ items, total, page, pageSize }));

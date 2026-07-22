@@ -10,6 +10,8 @@ const PUBLIC_PATHS = new Set([
   '/auth/captcha',
   '/auth/sms/verify',
   '/favicon.ico',
+  // 扩展更新检查:SW 启动时调用,不带 Authorization(版本信息无敏感数据)
+  '/extension/latest',
 ]);
 
 function isPublic(path) {

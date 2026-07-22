@@ -34,9 +34,8 @@
       buyerPageMinInterval: 5000,
       sellerPortalMinInterval: 200,
       skuInterval: 30000,
-      consumeRateSec: 15,              // 旧字段(固定值),保留作为 fallback
-      consumeRateMinSec: 5,            // 新字段:队列消费间隔范围(秒),每次随机
-      consumeRateMaxSec: 15,           // 新字段:队列消费间隔范围(秒),每次随机
+      consumeRateMinSec: 5,            // 队列消费间隔范围(秒),每次随机
+      consumeRateMaxSec: 15,           // 队列消费间隔范围(秒),每次随机
       perDayLimit: 2000,
       todayCount: 0,
       todayDate: '',
@@ -60,20 +59,7 @@
           raw && typeof raw === 'object'
             ? { ..._AUTO_COLLECT_CONFIG_DEFAULT, ...raw }
             : { ..._AUTO_COLLECT_CONFIG_DEFAULT };
-        // v2:consumeRateSec 取代 skuInterval,旧配置迁移(秒,限制 5-120)。
-        // 注意:defaults 已含 consumeRateSec,所以需用 raw 原始字段判断是否存在旧 skuInterval。
-        const _rawSec = raw?.consumeRateSec;
-        const _rawMs = raw?.skuInterval;
-        if (_rawSec != null) {
-          merged.consumeRateSec = Math.max(5, Math.min(120, Math.round(_rawSec)));
-        } else if (_rawMs != null) {
-          merged.consumeRateSec = Math.max(5, Math.min(120, Math.round(_rawMs / 1000)));
-        }
-        // v3:consumeRateMinSec/consumeRateMaxSec 取代 consumeRateSec,支持范围随机。
-        // 迁移策略:
-        //   - 若 raw 已含 min/max 字段 → 直接 clamp 规整
-        //   - 若 raw 仅含 consumeRateSec(旧版) → min = max = consumeRateSec(固定值兼容)
-        //   - 若 raw 都没有 → 用 defaults 的 5/15
+        // 规整 consumeRateMinSec/consumeRateMaxSec 到 [5, 120]
         const _rawMin = raw?.consumeRateMinSec;
         const _rawMax = raw?.consumeRateMaxSec;
         if (_rawMin != null && _rawMax != null) {
@@ -82,10 +68,6 @@
           if (_lo > _hi) { const _t = _lo; _lo = _hi; _hi = _t; }
           merged.consumeRateMinSec = _lo;
           merged.consumeRateMaxSec = _hi;
-        } else if (_rawSec != null || _rawMs != null) {
-          // 旧版仅有 consumeRateSec:迁移为 min = max = consumeRateSec
-          merged.consumeRateMinSec = merged.consumeRateSec;
-          merged.consumeRateMaxSec = merged.consumeRateSec;
         }
         // defaults 已含 5/15,无需再补
         S.autoCollectConfigCache = merged;

@@ -177,7 +177,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["batch-upload/*", "collect/pages/manager/*", "collect/pages/queue/*", "lib/*", "icons/*"],
+      "resources": ["batch-upload/*", "collect/pages/queue/*", "lib/*", "icons/*"],
       "matches": ["<all_urls>"]
     }
   ],

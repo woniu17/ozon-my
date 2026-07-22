@@ -7,7 +7,7 @@
  *   - 通过 this._sw 访问 SW 工具(getBackendUrl/getStorage/setStorage/
  *     apiRequest/STORAGE_KEYS/loadAutoCollectConfig/IS_TEST_MODE/maybeStartConsume)
  *   - 通过 this.state.xxx 访问采集运行时状态(consuming/queueWriteLock/opsPollTimer/
- *     completedTodaySkus/collectManagerTabIds)
+ *     completedTodaySkus)
  *   - 通过 __jzCollect.xxx 访问缓存/配置层暴露的函数
  *
  * 覆盖范围:
@@ -50,9 +50,8 @@
     const _COLLECT_QUEUE_META_DEFAULT = {
       consuming: false,
       circuitBreakerUntil: 0,
-      consumeRateSec: 15,              // 旧字段(固定值),保留作为 fallback 和监控页兼容
-      consumeRateMinSec: 5,            // 新字段:队列消费间隔范围(秒),每次随机
-      consumeRateMaxSec: 15,           // 新字段:队列消费间隔范围(秒),每次随机
+      consumeRateMinSec: 5,            // 队列消费间隔范围(秒),每次随机
+      consumeRateMaxSec: 15,           // 队列消费间隔范围(秒),每次随机
       consumePaused: false,
       lastConsumeAt: 0,
       todayCount: 0,
@@ -125,28 +124,14 @@
     const _syncConsumeRateFromConfig = async () => {
       try {
         const config = await sw.loadAutoCollectConfig();
-        // v3:优先用 consumeRateMinSec/consumeRateMaxSec,旧 consumeRateSec 作为 fallback
-        // skuInterval 历史单位为毫秒,consumeRateSec 为秒
-        let lo, hi;
-        if (config.consumeRateMinSec != null && config.consumeRateMaxSec != null) {
-          lo = Math.max(5, Math.min(120, Math.round(config.consumeRateMinSec)));
-          hi = Math.max(5, Math.min(120, Math.round(config.consumeRateMaxSec)));
-        } else {
-          const rateSec = Math.max(
-            5,
-            Math.min(120, Math.round(config.consumeRateSec ?? (config.skuInterval ? config.skuInterval / 1000 : 15)))
-          );
-          lo = rateSec;
-          hi = rateSec;
-        }
+        // 用 consumeRateMinSec/consumeRateMaxSec(秒),clamp 到 [5, 120]
+        let lo = Math.max(5, Math.min(120, Math.round(config.consumeRateMinSec)));
+        let hi = Math.max(5, Math.min(120, Math.round(config.consumeRateMaxSec)));
         if (lo > hi) { const t = lo; lo = hi; hi = t; }
         const meta = await _loadQueueMeta();
         const updates = {};
         if (meta.consumeRateMinSec !== lo) updates.consumeRateMinSec = lo;
         if (meta.consumeRateMaxSec !== hi) updates.consumeRateMaxSec = hi;
-        // 同步更新旧字段 consumeRateSec 为 max(监控页 fallback 用)
-        const fallbackSec = hi;
-        if (meta.consumeRateSec !== fallbackSec) updates.consumeRateSec = fallbackSec;
         if (Object.keys(updates).length > 0) {
           await _saveQueueMeta(updates);
         }
@@ -316,99 +301,6 @@
           chrome.tabs.sendMessage(t.id, payload).catch(() => {});
         }
       } catch (e) {
-        /* fire-and-forget */
-      }
-    };
-
-    // 向所有已注册的深度采集管理页 tab 发送消息(供 collectDone/queuePaused/queueResumed 复用)。
-    // MV3 SW 生命周期不可控,必须 await Promise.allSettled 确保 sendMessage 完成。
-    const _broadcastToCollectManagers = async (payload) => {
-      if (S.collectManagerTabIds.size === 0) return;
-      const sends = [];
-      for (const tabId of S.collectManagerTabIds) {
-        sends.push(
-          chrome.tabs.sendMessage(tabId, payload).catch((e) => {
-            // tab 已关闭/不存在,从集合中移除
-            if (e?.message?.includes('Could not establish connection') || e?.message?.includes('No tab')) {
-              S.collectManagerTabIds.delete(tabId);
-            }
-          })
-        );
-      }
-      await Promise.allSettled(sends);
-    };
-
-    const _broadcastCollectDoneV2 = async (sku, sellerSlug, status, data, collectedAt, duration, steps, error) => {
-      try {
-        const tabs = await chrome.tabs.query({
-          url: sw.IS_TEST_MODE
-            ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
-            : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'],
-        });
-        const payload = {
-          type: 'collectDone',
-          sku,
-          sellerSlug,
-          status,
-          data,
-          collectedAt,
-          duration,
-          steps,
-          error,
-        };
-        for (const t of tabs) {
-          if (!t.id) continue;
-          chrome.tabs.sendMessage(t.id, payload).catch(() => {});
-        }
-        // 同步发给深度采集管理页(让页面实时更新单 SKU 状态)
-        await _broadcastToCollectManagers(payload);
-      } catch (e) {
-        /* fire-and-forget */
-      }
-    };
-
-    // 队列暂停广播:当 daily-limit/not-running/paused 导致队列暂停时,
-    // 通知所有 content script 将 loading 状态的 panel 设为 ready,
-    // 避免 AutoScroller 的 isReadyToScroll 死锁。
-    const _broadcastQueuePaused = async (reason) => {
-      try {
-        const urlFilter = sw.IS_TEST_MODE
-          ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
-          : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'];
-        const tabs = await chrome.tabs.query({ url: urlFilter });
-        const payload = { type: 'queuePaused', reason };
-        // 必须等待所有 sendMessage 完成,否则 SW 可能在消息投递前被终止(MV3 生命周期),
-        // 导致 content script 收不到广播,panel 永远卡 loading,AutoScroller 死锁。
-        const sends = tabs
-          .filter((t) => t.id)
-          .map((t) =>
-            chrome.tabs.sendMessage(t.id, payload).catch((e) => {
-              console.warn('[broadcastQueuePaused] sendMessage failed tab=%d:', t.id, e?.message);
-            })
-          );
-        await Promise.allSettled(sends);
-        // 不发给 collect-manager:该广播是店铺页 content script 的 panel 死锁兜底,
-        // collect-manager 无 AutoScroller 不会死锁,且批量提交时 N 次广播会风暴。
-        // collect-manager 通过 5s 轮询 getCollectManagerState 获取暂停状态即可。
-      } catch (e) {
-        console.warn('[broadcastQueuePaused] error:', e?.message || e);
-      }
-    };
-
-    // 队列恢复广播:跨日重置或熔断过期后恢复消费时通知 content script,
-    // 清除 __jzQueuePaused 标志,让后续新 panel 正常走采集流程。
-    const _broadcastQueueResumed = async () => {
-      try {
-        const tabs = await chrome.tabs.query({
-          url: sw.IS_TEST_MODE
-            ? ['http://localhost:7777/seller/*', 'http://localhost:7777/product/*']
-            : ['https://www.ozon.ru/seller/*', 'https://www.ozon.ru/product/*'],
-        });
-        const payload = { type: 'queueResumed' };
-        const sends = tabs.filter((t) => t.id).map((t) => chrome.tabs.sendMessage(t.id, payload).catch(() => {}));
-        await Promise.allSettled(sends);
-        // 不发给 collect-manager(同 _broadcastQueuePaused 理由)
-      } catch {
         /* fire-and-forget */
       }
     };
@@ -892,14 +784,16 @@
       }
     };
 
-    // GET /admin/api/collect-queue/list?status=&page=&pageSize=
+    // GET /admin/api/collect-queue/list?status=&page=&pageSize=&sort=
     // 返回 { items, total, page, pageSize }
-    const _erpQueueList = async (status, page = 1, pageSize = 200) => {
+    // sort 格式 "col:dir,col:dir"(如 "createdAt:asc"),默认 createdAt DESC
+    const _erpQueueList = async (status, page = 1, pageSize = 200, sort) => {
       try {
         const url = await sw.getBackendUrl();
         const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
         const qs = new URLSearchParams({ page, pageSize });
         if (status) qs.set('status', status);
+        if (sort) qs.set('sort', sort);
         const r = await sw.apiRequest(
           'GET',
           `${url}/admin/api/collect-queue/list?${qs.toString()}`,
@@ -938,8 +832,6 @@
           ? { result: data }
           : {}),
       });
-
-      await _broadcastCollectDoneV2(sku, sellerSlug, status, data, now, duration, steps, lastError);
 
       const isTerminal = status === 'success' || status === 'failed_final' || status === 'failed_partial';
       if (isTerminal) {
@@ -988,20 +880,6 @@
           error: { type: 'daily-limit', message: reason, step: 'unknown', ts: Date.now() },
           finishedAt: Date.now(),
         });
-        // 广播 collectDone(status='skipped')让 panel 变 ready,避免 AutoScroller 死锁。
-        // 注意:任务回 pending(非终态),跨日恢复后会重新消费,但 panel 需要知道
-        // "今天不会再处理了"的信号,否则永远卡 loading(isReadyToScroll 死锁)。
-        const lastError = { type: 'daily-limit', message: reason, step: 'unknown', ts: Date.now() };
-        await _broadcastCollectDoneV2(
-          task.sku,
-          task.sellerSlug,
-          'skipped',
-          null,
-          Date.now(),
-          duration,
-          steps,
-          lastError
-        );
         return false; // 非终态(回 pending)
       }
       const lastError = { type: 'skipped', message: reason, step: 'unknown', ts: Date.now() };
@@ -1076,9 +954,8 @@
       }
     };
 
-    const _handleSubmitTask = async ({ sku, sellerSlug, sellerId, domInfo, source }) => {
+    const _handleSubmitTask = async ({ sku, sellerSlug, sellerId, domInfo }) => {
       if (!sku) return { ok: false, error: 'sku required' };
-      const taskSource = source === 'manual' ? 'manual' : 'shop-page';
       const exists = await _isTaskQueuedOrCompletedToday(sku);
       if (exists) return { ok: true, data: { alreadyQueued: true } };
 
@@ -1092,7 +969,6 @@
         const steps = _buildSteps(results);
         _addCompletedToday(sku);
         const data = await _buildCollectDoneData(sku, collectResult);
-        await _broadcastCollectDoneV2(sku, sellerSlug || '', 'success', data, now, 0, steps, null);
         console.log('[Queue] cache all hit, skip enqueue:', sku);
         return { ok: true, data: { cacheHit: true } };
       }
@@ -1102,7 +978,7 @@
         sellerSlug: sellerSlug || '',
         sellerId: sellerId || '',
         domInfo: domInfo || null,
-        source: taskSource,
+        source: 'shop-page',
         status: 'pending',
         attempts: 0,
         maxAttempts: 3,
@@ -1136,24 +1012,6 @@
       _broadcastTaskStatus(sku, 'pending', 0, task.maxAttempts, 0);
 
       sw.maybeStartConsume();
-      // 队列暂停兜底:_maybeStartConsume 是 fire-and-forget,可能被 _consuming 拦截,
-      // 或 _consumeOne 设置 consumePaused 的时机晚于此处检查。
-      // 直接检查暂停条件(daily-limit/not-running/paused/熔断),如果满足则广播 queuePaused,
-      // 让新入队任务的 panel 设 ready 避免 AutoScroller 死锁。
-      // 注意:source='manual' 时绕过 autoCollectRunning 检查(深度采集管理页独立运行),
-      // 但仍受 daily-limit/paused/熔断限制(避免超额和反爬风险)。
-      const _meta = await _loadQueueMeta();
-      const _cfg = await sw.loadAutoCollectConfig();
-      const _shouldPause =
-        _meta.consumePaused ||
-        (taskSource !== 'manual' && !_cfg.autoCollectRunning) ||
-        (_cfg.paused && Date.now() < _cfg.pausedUntil) ||
-        _meta.todayCount >= _cfg.perDayLimit ||
-        Date.now() < _meta.circuitBreakerUntil; // 熔断期也需广播,否则 panel 卡 loading
-      if (_shouldPause) {
-        const _pauseReason = Date.now() < _meta.circuitBreakerUntil ? 'antibot' : 'paused';
-        await _broadcastQueuePaused(_pauseReason);
-      }
       return { ok: true, data: { queued: isNew, alreadyQueued: !isNew } };
     };
 
@@ -1251,10 +1109,6 @@
     this._isCircuitBreakerActive = _isCircuitBreakerActive;
     this._broadcastQueueStatus = _broadcastQueueStatus;
     this._broadcastTaskStatus = _broadcastTaskStatus;
-    this._broadcastToCollectManagers = _broadcastToCollectManagers;
-    this._broadcastCollectDoneV2 = _broadcastCollectDoneV2;
-    this._broadcastQueuePaused = _broadcastQueuePaused;
-    this._broadcastQueueResumed = _broadcastQueueResumed;
     this._broadcastRescan = _broadcastRescan;
     this._erpQueueInsert = _erpQueueInsert;
     this._erpQueueUpdate = _erpQueueUpdate;

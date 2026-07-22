@@ -1306,8 +1306,8 @@ try {
   // ── 采集队列(已迁移到 collect/background/collect-queue.js) ─────────────────
   // 委托包装器:IIFE 内编排层(_processTask/_consumeOne/_maybeStartConsume)和
   // onMessage handler 通过 _xxx 调用,实际委托到 __jzCollect._xxx。
-  // 状态变量(_consuming/_completedTodaySkus/_queueWriteLock/_opsPollTimer/
-  // _collectManagerTabIds)已迁移到 __jzCollect.state(collect-namespace.js)。
+  // 状态变量(_consuming/_completedTodaySkus/_queueWriteLock/_opsPollTimer)
+  // 已迁移到 __jzCollect.state(collect-namespace.js)。
   const _COLLECT_QUEUE_META_DEFAULT = __jzCollect._COLLECT_QUEUE_META_DEFAULT;
   const _withQueueLock = (fn) => __jzCollect._withQueueLock(fn);
   // Phase 2 废弃:以下本地队列 CRUD 函数已不再使用(队列真相源移至 ERP)
@@ -1331,11 +1331,6 @@ try {
   const _broadcastQueueStatus = (sku, sellerSlug, status) => __jzCollect._broadcastQueueStatus(sku, sellerSlug, status);
   const _broadcastTaskStatus = (sku, status, attempts, maxAttempts, nextRetryAt) =>
     __jzCollect._broadcastTaskStatus(sku, status, attempts, maxAttempts, nextRetryAt);
-  const _broadcastToCollectManagers = (payload) => __jzCollect._broadcastToCollectManagers(payload);
-  const _broadcastCollectDoneV2 = (sku, sellerSlug, status, data, collectedAt, duration, steps, error) =>
-    __jzCollect._broadcastCollectDoneV2(sku, sellerSlug, status, data, collectedAt, duration, steps, error);
-  const _broadcastQueuePaused = (reason) => __jzCollect._broadcastQueuePaused(reason);
-  const _broadcastQueueResumed = () => __jzCollect._broadcastQueueResumed();
   const _broadcastRescan = () => __jzCollect._broadcastRescan();
   const _fetchProductDataStats = (sku) => __jzCollect._fetchProductDataStats(sku);
   const _extractBundlePhysicalAttrs = (bundleItem) => __jzCollect._extractBundlePhysicalAttrs(bundleItem);
@@ -1390,7 +1385,7 @@ try {
   const _erpQueueClaim = () => __jzCollect._erpQueueClaim();
   const _erpQueueClearTerminal = () => __jzCollect._erpQueueClearTerminal();
   const _erpQueueStats = () => __jzCollect._erpQueueStats();
-  const _erpQueueList = (status, page, pageSize) => __jzCollect._erpQueueList(status, page, pageSize);
+  const _erpQueueList = (status, page, pageSize, sort) => __jzCollect._erpQueueList(status, page, pageSize, sort);
   const _migrateLocalQueueIfNeeded = () => __jzCollect._migrateLocalQueueIfNeeded();
   const _finalizeTask = (task, status, lastError, steps, startedAt, duration, collectResult) =>
     __jzCollect._finalizeTask(task, status, lastError, steps, startedAt, duration, collectResult);
@@ -1462,21 +1457,17 @@ try {
   };
 
   // 根据队列 meta 计算下一次消费的间隔(毫秒)
-  // 优先用 [consumeRateMinSec, consumeRateMaxSec] 范围随机(反爬+拟人化);
-  // 若未配置范围(min 或 max 为空/0)则 fallback 到旧字段 consumeRateSec(固定值)
-  // fallback 也为空时用默认值 15 秒
+  // 用 [consumeRateMinSec, consumeRateMaxSec] 范围随机(反爬+拟人化);
+  // 字段缺失或非法时用默认值 5~15 秒
   const _getNextConsumeIntervalMs = (meta) => {
-    const lo = Number(meta?.consumeRateMinSec);
-    const hi = Number(meta?.consumeRateMaxSec);
-    if (Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo && lo > 0) {
-      // [lo, hi] 秒内取随机毫秒
-      const loMs = lo * 1000;
-      const hiMs = hi * 1000;
-      return loMs + Math.random() * (hiMs - loMs);
-    }
-    // fallback:旧字段 consumeRateSec(固定值)
-    const fallbackSec = Number(meta?.consumeRateSec) || 15;
-    return fallbackSec * 1000;
+    let lo = Number(meta?.consumeRateMinSec);
+    let hi = Number(meta?.consumeRateMaxSec);
+    if (!Number.isFinite(lo) || lo <= 0) lo = 5;
+    if (!Number.isFinite(hi) || hi <= 0) hi = 15;
+    if (hi < lo) hi = lo;
+    const loMs = lo * 1000;
+    const hiMs = hi * 1000;
+    return loMs + Math.random() * (hiMs - loMs);
   };
 
   const _consumeOne = async () => {
@@ -1494,9 +1485,7 @@ try {
       const today = new Date().toLocaleDateString('en-CA');
       if (meta.todayDate !== today) {
         __jzCollect.state.completedTodaySkus.clear();
-        const wasPaused = meta.consumePaused;
         meta = await _saveQueueMeta({ todayDate: today, todayCount: 0, consumePaused: false });
-        if (wasPaused) await _broadcastQueueResumed();
       }
 
       if (Date.now() < meta.circuitBreakerUntil) {
@@ -1504,40 +1493,25 @@ try {
         return;
       }
 
-      // Phase 2: peek 用 ERP list(pending),判断 manual 任务是否需要绕过暂停。
+      // Phase 2: peek 用 ERP list(pending),判断是否有待消费任务。
       // 注:只 peek pending(不含 failed_retry 退避期到的),边缘场景影响小。
       const peekList = await _erpQueueList('pending', 1, 1);
       const peekTask = peekList?.items?.[0] || null;
-      const isNextManual = peekTask?.source === 'manual';
 
       if (meta.consumePaused) {
-        // consumePaused 可能是店铺页关了自动采集触发的,但 manual 任务应继续消费。
-        if (isNextManual) {
-          console.log('[Queue] consumePaused but next is manual task, resume');
-          await _saveQueueMeta({ consumePaused: false });
-          meta = await _loadQueueMeta();
-        } else {
-          console.log('[Queue] paused, skip');
-          // 队列已暂停(可能是 daily-limit/not-running/paused):
-          // 广播让新入队任务的 panel 也设 ready(之前的广播可能先于 panel 创建到达)
-          await _broadcastQueuePaused('paused');
-          return;
-        }
+        console.log('[Queue] paused, skip');
+        return;
       }
 
       const config = await _loadAutoCollectConfig();
-      // manual 任务绕过 autoCollectRunning 检查
-      // (深度采集管理页独立运行,不受店铺页自动采集开关影响)
-      if (!isNextManual && (!config.autoCollectRunning || (config.paused && Date.now() < config.pausedUntil))) {
+      if (!config.autoCollectRunning || (config.paused && Date.now() < config.pausedUntil)) {
         console.log('[Queue] autoCollect config paused/not-running, pause queue');
         await _saveQueueMeta({ consumePaused: true });
-        await _broadcastQueuePaused(config.paused ? 'paused' : 'not-running');
         return;
       }
       if (meta.todayCount >= config.perDayLimit) {
         console.log('[Queue] daily limit reached, pause');
         await _saveQueueMeta({ consumePaused: true });
-        await _broadcastQueuePaused('daily-limit');
         return;
       }
 
@@ -1570,7 +1544,6 @@ try {
       // Phase 2: ERP 不可用时(claim 失败)暂停消费,避免反复失败。
       // _processTask 内部有 try/catch 不会抛出,此处 catch 主要是 ERP 不可用。
       await _saveQueueMeta({ consumePaused: true }).catch(() => {});
-      await _broadcastQueuePaused('erp-unavailable').catch(() => {});
     } finally {
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       if (!scheduleNext) {
@@ -1584,9 +1557,6 @@ try {
     let meta = await _loadQueueMeta();
     if (Date.now() < meta.circuitBreakerUntil) {
       console.log('[Queue] maybeStart: in circuit breaker, skip');
-      // 熔断期内也需广播 queuePaused,让新入队任务的 panel 设 ready,
-      // 避免 AutoScroller.isReadyToScroll 死锁(与 consumePaused 分支行为一致)
-      await _broadcastQueuePaused('antibot');
       return;
     }
     // 自动恢复:跨日或熔断过期时,重置 consumePaused,避免队列永久卡死
@@ -1599,16 +1569,11 @@ try {
         __jzCollect.state.completedTodaySkus.clear();
         meta = await _saveQueueMeta({ todayDate: today, todayCount: 0, consumePaused: false });
         console.log('[Queue] maybeStart: cross-day reset, resume');
-        await _broadcastQueueResumed();
       } else if (breakerExpired) {
         meta = await _saveQueueMeta({ consumePaused: false });
         console.log('[Queue] maybeStart: circuit breaker expired, resume');
-        await _broadcastQueueResumed();
       } else {
         console.log('[Queue] maybeStart: paused, skip');
-        // 队列暂停时,新任务入队触发的 _maybeStartConsume 会走到这里。
-        // 广播 queuePaused 让新入队任务的 panel 也设 ready(之前的广播可能先于 panel 创建到达)
-        await _broadcastQueuePaused('paused');
         return;
       }
     }
@@ -3347,10 +3312,9 @@ try {
           return queueProductStats(String(sku), { backendUrl, token, storeId });
         }
         case 'submitTask': {
-          // Phase 1+2:前端提交 SKU 到采集队列,立即返回,SW 按 consumeRateSec 串行消费。
-          // source: 'shop-page'(店铺页自动采集,默认) | 'manual'(深度采集管理页手动触发)
-          const { sku, sellerSlug, sellerId, domInfo, source } = message;
-          return _handleSubmitTask({ sku, sellerSlug, sellerId, domInfo, source });
+          // Phase 1+2:前端提交 SKU 到采集队列,立即返回,SW 按 consumeRateMin/MaxSec 串行消费。
+          const { sku, sellerSlug, sellerId, domInfo } = message;
+          return _handleSubmitTask({ sku, sellerSlug, sellerId, domInfo });
         }
         case 'autoCollectGetConfig': {
           // Task 22:面板读取 autoCollect 配置(白名单字段)。
@@ -3370,7 +3334,8 @@ try {
               buyerPageMinInterval: _acCfg.buyerPageMinInterval,
               sellerPortalMinInterval: _acCfg.sellerPortalMinInterval,
               skuInterval: _acCfg.skuInterval,
-              consumeRateSec: _acCfg.consumeRateSec,
+              consumeRateMinSec: _acCfg.consumeRateMinSec,
+              consumeRateMaxSec: _acCfg.consumeRateMaxSec,
               marketStatsStaleMs: _acCfg.marketStatsStaleMs,
               followSellStaleMs: _acCfg.followSellStaleMs,
               onlyChineseStores: _acCfg.onlyChineseStores,
@@ -3381,7 +3346,7 @@ try {
         }
         case 'autoCollectSetConfig': {
           // 面板写入 autoCollect 配置(仅白名单字段,内部状态如
-          // todayDate/pausedUntil 不允许面板直改)。限速字段(consumeRateSec/
+          // todayDate/pausedUntil 不允许面板直改)。限速字段(consumeRateMin/MaxSec/
           // perDayLimit)由 popup 调整,旧字段(buyerPageMinInterval 等)保留兼容。
           const _acUpdates = message.config || message;
           const _acAllowed = [
@@ -3393,7 +3358,6 @@ try {
             'buyerPageMinInterval',
             'sellerPortalMinInterval',
             'skuInterval',
-            'consumeRateSec',
             'consumeRateMinSec',
             'consumeRateMaxSec',
             'perDayLimit',
@@ -3408,27 +3372,14 @@ try {
             if (_acUpdates[_k] !== undefined) _acFiltered[_k] = _acUpdates[_k];
           }
           await _saveAutoCollectConfig(_acFiltered);
-          // 限速字段变更同步到队列 meta
-          // v3:优先同步 consumeRateMinSec/consumeRateMaxSec,旧 consumeRateSec 单字段也兼容
-          const _hasMinMax =
-            _acFiltered.consumeRateMinSec != null && _acFiltered.consumeRateMaxSec != null;
-          if (_hasMinMax) {
+          // 限速字段变更同步到队列 meta(仅 consumeRateMinSec/consumeRateMaxSec)
+          if (_acFiltered.consumeRateMinSec != null && _acFiltered.consumeRateMaxSec != null) {
             let _lo = Math.max(5, Math.min(120, Math.round(_acFiltered.consumeRateMinSec)));
             let _hi = Math.max(5, Math.min(120, Math.round(_acFiltered.consumeRateMaxSec)));
             if (_lo > _hi) { const _t = _lo; _lo = _hi; _hi = _t; }
-            // 同步更新旧字段 consumeRateSec 为 max(监控页 fallback 用)
             await _saveQueueMeta({
               consumeRateMinSec: _lo,
               consumeRateMaxSec: _hi,
-              consumeRateSec: _hi,
-            });
-          } else if (_acFiltered.consumeRateSec != null) {
-            // 旧字段单独写入:迁移为 min = max = consumeRateSec
-            const rateSec = Math.max(5, Math.min(120, Math.round(_acFiltered.consumeRateSec)));
-            await _saveQueueMeta({
-              consumeRateSec: rateSec,
-              consumeRateMinSec: rateSec,
-              consumeRateMaxSec: rateSec,
             });
           }
           // 深度采集开关开启 / 手动解除 paused 时,需重置 consumePaused 并触发消费。
@@ -3441,7 +3392,6 @@ try {
             const _resumeMeta = await _loadQueueMeta();
             if (_resumeMeta.consumePaused) {
               await _saveQueueMeta({ consumePaused: false });
-              await _broadcastQueueResumed();
               console.log('[Queue] autoCollectSetConfig: consumePaused reset (深度采集开启或 paused 解除)');
             }
             sw.maybeStartConsume();
@@ -3632,61 +3582,35 @@ try {
           }
         }
         case 'queryErpProductDataBatch': {
-          // 批量查询 ERP 数据(视口内多个 SKU 一次性查)
-          // 走后端 POST /admin/api/collect-queue/batch 一次 HTTP 拿所有任务,
-          // 无 result 的 SKU 再用 _buildCollectDoneData 查 SW 缓存兜底。
+          // 批量查询采集结果(视口内多 SKU 一次性查)
+          // 统一走 _buildCollectDoneData 查 SW + ERP 缓存,不再查 collect-queue 集合。
+          // 缓存写入是采集流程的副产物,查缓存即查"采集是否完成 + 数据是否就绪"。
           const skus = Array.isArray(message.skus) ? message.skus.filter(Boolean) : [];
           if (!skus.length) return { ok: true, data: {} };
           try {
-            // 1) 后端批量查询(一次 HTTP)
-            const batchResp = await apiRequest('POST', `${backendUrl}/admin/api/collect-queue/batch`, { skus }, token);
-            const sku2doc = batchResp?.data || batchResp || {};
-
-            // 2) 缓存兜底:对无 result 的 SKU 并行查 SW 缓存
-            const needFallback = skus.filter((sku) => {
-              const doc = sku2doc[sku];
-              return !doc || !doc.result;
-            });
-            if (needFallback.length) {
-              const fallbackEntries = await Promise.all(
-                needFallback.map(async (sku) => {
-                  try {
-                    const inflight = _erpQueryInflight.get(sku);
-                    if (inflight) return [sku, await inflight];
-                    const p = _buildCollectDoneData(sku, null).finally(() => _erpQueryInflight.delete(sku));
-                    _erpQueryInflight.set(sku, p);
-                    const preFetched = await p;
-                    const hasData =
-                      preFetched.stats?.value ||
-                      preFetched.market?.value ||
-                      preFetched.variant?.value ||
-                      preFetched.followCount?.value;
-                    return [sku, hasData ? { preFetched } : null];
-                  } catch {
-                    return [sku, null];
-                  }
-                })
-              );
-              for (const [sku, data] of fallbackEntries) {
-                sku2doc[sku] = data ? { result: data.preFetched, _fromCache: true } : sku2doc[sku];
-              }
-            }
-
-            // 3) 组装最终结果:{ [sku]: { preFetched } | null }
+            const entries = await Promise.all(
+              skus.map(async (sku) => {
+                try {
+                  const inflight = _erpQueryInflight.get(sku);
+                  if (inflight) return [sku, await inflight];
+                  const p = _buildCollectDoneData(sku, null).finally(() => _erpQueryInflight.delete(sku));
+                  _erpQueryInflight.set(sku, p);
+                  const preFetched = await p;
+                  const hasData =
+                    preFetched?.stats?.value ||
+                    preFetched?.market?.value ||
+                    preFetched?.variant?.value ||
+                    preFetched?.followCount?.value;
+                  return [sku, hasData ? { preFetched } : null];
+                } catch {
+                  return [sku, null];
+                }
+              })
+            );
             const result = {};
-            for (const sku of skus) {
-              const doc = sku2doc[sku];
-              if (doc?.result) {
-                result[sku] = { preFetched: doc.result };
-              } else if (doc?._fromCache) {
-                result[sku] = { preFetched: doc.result };
-              } else {
-                result[sku] = null;
-              }
-            }
+            for (const [sku, data] of entries) result[sku] = data;
             return { ok: true, data: result };
-          } catch (e) {
-            // 整体失败:返回全 null,让调用方静默降级
+          } catch {
             const result = {};
             for (const sku of skus) result[sku] = null;
             return { ok: true, data: result };
@@ -3746,60 +3670,8 @@ try {
             return { ok: true, data: result };
           }
         }
-        case 'getCollectStores': {
-          // 深度采集管理页:查询已分类店铺列表(供下拉选择)
-          // 转发 ERP GET /admin/api/store-classification,返回 { items: [{ sellerSlug, sellerName, isChinese }] }
-          try {
-            const resp = await apiRequest(
-              'GET',
-              `${backendUrl}/admin/api/store-classification?pageSize=500`,
-              null,
-              token
-            );
-            const data = resp?.data || resp;
-            return { ok: true, data };
-          } catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-          }
-        }
-        case 'getStoreSkuList': {
-          // 深度采集管理页:按店铺查询所有 SKU + card 缓存(图片/评论数/价格)
-          // 2026-07:优先用 sellerId(稳定主键)调用 /by-seller/:sellerId,
-          // 无 sellerId 时 fallback 到 slug 调用 /by-store/:slug(兼容旧前端)
-          const sellerId = String(message.sellerId || '');
-          const slug = String(message.slug || '');
-          const id = sellerId || slug;
-          if (!id) return { ok: false, error: 'missing sellerId or slug' };
-          const endpoint = sellerId
-            ? `${backendUrl}/admin/api/store-sku/by-seller/${encodeURIComponent(sellerId)}`
-            : `${backendUrl}/admin/api/store-sku/by-store/${encodeURIComponent(slug)}`;
-          try {
-            const resp = await apiRequest('GET', endpoint, null, token);
-            const data = resp?.data || resp;
-            return { ok: true, data };
-          } catch (e) {
-            return { ok: false, error: e?.message || String(e) };
-          }
-        }
-        case 'registerCollectManager': {
-          // 深度采集管理页加载时注册自己的 tabId,SW 广播 collectDone/queuePaused/queueResumed
-          // 时同步发给这些 tab,让页面实时收到状态更新(不再只依赖 5s 轮询)。
-          const tabId = sender?.tab?.id;
-          if (typeof tabId === 'number') {
-            __jzCollect.state.collectManagerTabIds.add(tabId);
-          }
-          return { ok: true, data: { registered: true, tabId } };
-        }
-        case 'unregisterCollectManager': {
-          // 页面 beforeunload 时主动注销(避免向已关闭 tab 发消息)。
-          const tabId = sender?.tab?.id;
-          if (typeof tabId === 'number') {
-            __jzCollect.state.collectManagerTabIds.delete(tabId);
-          }
-          return { ok: true, data: { unregistered: true } };
-        }
         case 'getCollectManagerState': {
-          // 深度采集管理页:查询队列当前状态(running SKU + 进度计数 + 暂停状态 + 每 SKU 详细状态)
+          // 采集队列监控页:查询队列当前状态(running SKU + 进度计数 + 暂停状态 + 每 SKU 详细状态)
           // Phase 2: 从 ERP 读取队列(ERP 是真相源),本地 meta 只提供 consumePaused/circuitBreaker/todayCount
           const _cmsMeta = await _loadQueueMeta();
           const _cmsCfg = await _loadAutoCollectConfig();
@@ -3807,9 +3679,68 @@ try {
           const _cmsList = await _erpQueueList(null, 1, 200); // 所有状态,最多 200 条
           const _cmsQueue = _cmsList?.items || [];
           const byStatus = _cmsStats?.byStatus || {};
-          const running = _cmsQueue.filter((t) => t.status === 'running');
+          // 单独查询 running 状态任务:
+          // 统一列表(createdAt DESC)在 pending 任务很多时(>200)会把 running 任务挤到列表外,
+          // 导致 runningSkus/runningTasks 永远为空(渲染异常)。
+          // running 任务通常很少(<10),单独查一次保证拿到。
+          let _runningTasks = _cmsQueue.filter((t) => t.status === 'running');
+          if (byStatus.running > 0 && _runningTasks.length === 0) {
+            try {
+              const _rList = await _erpQueueList('running', 1, 50);
+              _runningTasks = (_rList?.items || []).filter((t) => t.status === 'running');
+            } catch (_) {
+              /* 单独查询失败时回退到统一列表(可能为空) */
+            }
+          }
+          const running = _runningTasks;
+          // 合并 running 任务到统一列表(避免 200 条 pending 把 running 挤出导致
+          // 监控页"窗口视图"中间槽为空)。去重:已存在则替换,否则前插。
+          const runningSkus = new Set(running.map((t) => t.sku));
+          const mergedQueue = [...running, ..._cmsQueue.filter((t) => !runningSkus.has(t.sku))];
+
+          // 补充最近完成的任务(供监控页"窗口视图"右侧槽展示):
+          // 统一列表(createdAt DESC)在 pending 任务很多时(>200)会把 finished 任务挤到列表外,
+          // 或者列表里的 finished 是按 createdAt 排序的(不是 finishedAt),导致右侧显示的不是
+          // 最近完成的任务。总是单独查最近的 5 条已完成任务(按 finishedAt DESC)并合并。
+          // 注:DAO 的 SORT_ALLOWED 已支持 finishedAt,可直接用 finishedAt:desc 排序。
+          let _recentFinished = [];
+          try {
+            const _fList1 = await _erpQueueList('success', 1, 5, 'finishedAt:desc');
+            const _fList2 = await _erpQueueList('partial', 1, 5, 'finishedAt:desc');
+            const _fItems = [...(_fList1?.items || []), ...(_fList2?.items || [])];
+            _recentFinished = _fItems
+              .sort((a, b) => new Date(b.finishedAt || 0).getTime() - new Date(a.finishedAt || 0).getTime())
+              .slice(0, 5);
+          } catch (_) {
+            /* 查询失败时回退到统一列表 */
+          }
+          // 合并 finished 任务到 mergedQueue(去重)
+          const _existingSkus = new Set(mergedQueue.map((t) => t.sku));
+          const _finishedToAdd = _recentFinished.filter((t) => !_existingSkus.has(t.sku));
+          let finalQueue = [...mergedQueue, ..._finishedToAdd];
+
+          // 补充最早的 pending 任务(供监控页"窗口视图"左侧槽展示"即将采集"):
+          // ERP claim 是 ORDER BY createdAt ASC(最早创建的先采集),但统一列表是
+          // createdAt DESC LIMIT 200(最新 200 条)。当 pending > 200 时,最早的 pending
+          // (真正下一个要采集的)不在列表里,导致窗口视图左侧显示的是最新创建的 pending
+          // 而非即将采集的。
+          // 注:不能用 _pendingInList.length < 5 判断,因为 200 条列表里大部分是 pending
+          // (pending 占多数),_pendingInList.length ≈ 200 远大于 5,条件永远 false。
+          // 正确做法:总是单独查最早的 5 条 pending(createdAt:asc)并合并,确保窗口
+          // 视图左侧能拿到真正即将采集的任务。
+          try {
+            const _earliestPending = await _erpQueueList('pending', 1, 5, 'createdAt:asc');
+            const _epItems = (_earliestPending?.items || []).filter(
+              (t) => !_existingSkus.has(t.sku)
+            );
+            finalQueue = [...finalQueue, ..._epItems];
+          } catch (_) {
+            /* 查询失败时回退到统一列表 */
+          }
+
           // 返回每个 SKU 的详细状态(供表格按 SKU 更新 status/finishedAt)
-          const tasks = _cmsQueue.map((t) => ({
+          // domInfo 由入队时从店铺卡片写入:{title, price, imageUrl, ratingCount}
+          const tasks = finalQueue.map((t) => ({
             sku: t.sku,
             status: t.status,
             source: t.source || 'shop-page',
@@ -3821,11 +3752,22 @@ try {
             attempts: t.attempts || 0,
             maxAttempts: t.maxAttempts || 3,
             lastError: t.lastError || null,
+            domInfo: t.domInfo || null,
+          }));
+          // 正在采集任务的富信息(供监控页展示商品图片/价格/标题等)
+          // domInfo 由入队时从店铺卡片写入:{title, price, imageUrl, ratingCount}
+          const runningTasks = running.map((t) => ({
+            sku: t.sku,
+            sellerSlug: t.sellerSlug || '',
+            sellerId: t.sellerId || '',
+            startedAt: t.startedAt || null,
+            domInfo: t.domInfo || null,
           }));
           return {
             ok: true,
             data: {
               runningSkus: running.map((t) => t.sku),
+              runningTasks,
               pendingCount: byStatus.pending || 0,
               // ERP 终态:success/failed_final/failed_partial(failed_retry 不算终态)
               finishedCount:
@@ -3838,9 +3780,8 @@ try {
               autoCollectRunning: _cmsCfg.autoCollectRunning,
               shallowCollectRunning: _cmsCfg.shallowCollectRunning,
               lastConsumeAt: _cmsMeta.lastConsumeAt || 0,
-              consumeRateSec: _cmsMeta.consumeRateSec || 15,
-              consumeRateMinSec: _cmsMeta.consumeRateMinSec ?? _cmsMeta.consumeRateSec ?? 5,
-              consumeRateMaxSec: _cmsMeta.consumeRateMaxSec ?? _cmsMeta.consumeRateSec ?? 15,
+              consumeRateMinSec: _cmsMeta.consumeRateMinSec ?? 5,
+              consumeRateMaxSec: _cmsMeta.consumeRateMaxSec ?? 15,
               tasks,
             },
           };

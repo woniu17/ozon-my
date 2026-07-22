@@ -29,7 +29,6 @@
       queueWriteLock: null,
       opsPollTimer: null,
       completedTodaySkus: new Set(),
-      collectManagerTabIds: new Set(),
 
       // 并发
       autoCollectRunning: 0,

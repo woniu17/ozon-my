@@ -672,19 +672,75 @@
     });
   }
 
-  // 接收 SW 推送的 collectDone 事件,回填面板数据(搜索页无 ozon-data-panel.js)
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg?.type !== 'collectDone' || !msg.sku || !msg.data) return;
-    const skuStr = String(msg.sku);
-    const panel = document.querySelector(`[data-jz-sku="${skuStr}"] .ozon-helper-data-panel`);
-    if (panel && typeof window.jzPopulatePanelV2 === 'function') {
-      try {
-        window.jzPopulatePanelV2(panel, skuStr, { preFetched: msg.data });
-      } catch (e) {
-        console.warn('[ozon-search] collectDone 回填面板失败:', skuStr, e);
-      }
+  // ── 5s 定时刷新:批量查 ERP 缓存,回填 loading/error 面板 ──────────
+  // 替代原 collectDone 广播监听 — 深度采集结果不再主动推送,
+  // 页面统一通过 5s 轮询查 ERP 缓存获取采集结果(与 ozon-data-panel.js 对齐)。
+  // 仅处理 jzLoadStatus 为 'loading'(初始 fetch 进行中或返回空)和
+  // 'error'(初始 fetch 失败)的面板,已 ready 的不重复刷新避免浪费。
+  const SEARCH_REFRESH_INTERVAL_MS = 5000;
+  let _searchRefreshTimer = null;
+  let _searchRefreshInflight = false;
+
+  function _startSearchRefresh() {
+    if (_searchRefreshTimer) return;
+    _searchRefreshTimer = setInterval(_refreshSearchPanels, SEARCH_REFRESH_INTERVAL_MS);
+  }
+
+  function _stopSearchRefresh() {
+    if (_searchRefreshTimer) {
+      clearInterval(_searchRefreshTimer);
+      _searchRefreshTimer = null;
     }
-  });
+  }
+
+  async function _refreshSearchPanels() {
+    if (_searchRefreshInflight) return;
+    _searchRefreshInflight = true;
+    try {
+      // 收集视口内处于 loading / error 状态的面板
+      const pending = [];
+      const cards = document.querySelectorAll('[data-jz-sku]');
+      for (const card of cards) {
+        const panel = card.querySelector('.ozon-helper-data-panel');
+        if (!panel) continue;
+        const status = panel.dataset.jzLoadStatus;
+        if (status !== 'loading' && status !== 'error') continue;
+        const rect = panel.getBoundingClientRect();
+        if (rect.bottom <= -200 || rect.top >= window.innerHeight + 200) continue;
+        const sku = card.dataset.jzSku;
+        if (sku) pending.push({ sku: String(sku), panel });
+      }
+      if (!pending.length) return;
+
+      // 批量查 ERP 缓存(SW inflight 去重)
+      const skus = pending.map((p) => p.sku);
+      const erpBatch = await window
+        .sendMessage('queryErpProductDataBatch', { skus })
+        .catch(() => null);
+
+      // 分发结果到各 panel
+      for (const { sku, panel } of pending) {
+        const erpData = erpBatch?.[sku];
+        if (!erpData?.preFetched) continue;
+        if (typeof window.jzPopulatePanelV2 !== 'function') continue;
+        // 若 panel 未渲染 V2 结构(loading 状态首次回填),先渲染骨架再填充
+        if (!panel.querySelector('.ozon-helper-sidebar-card-body') &&
+            typeof window.jzRenderProductPanelV2 === 'function') {
+          window.jzRenderProductPanelV2(panel, { sku, initial: erpData });
+        }
+        try {
+          await window.jzPopulatePanelV2(panel, sku, { preFetched: erpData.preFetched });
+          panel.dataset.jzLoadStatus = 'ready';
+          // 写入页面级缓存,后续 loadPanelData 命中直接渲染
+          panelDataCache.set(sku, erpData);
+        } catch (e) {
+          console.warn('[ozon-search] 5s 定时回填面板失败:', sku, e);
+        }
+      }
+    } finally {
+      _searchRefreshInflight = false;
+    }
+  }
 
   async function init() {
     const auth = await window.checkAuth();
@@ -698,6 +754,8 @@
     listenStorageToggle();
     applyToCards();
     createObserver();
+    // 启动 5s 定时刷新(替代 collectDone 广播,从 ERP 缓存被动回填)
+    _startSearchRefresh();
   }
 
   if (document.readyState === 'loading') {

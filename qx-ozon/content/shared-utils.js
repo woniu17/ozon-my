@@ -3908,7 +3908,8 @@ if (!globalThis.__JZ_BRAND__) {
     }
   };
 
-  // 采集入口(__jzSubmitCollectTask / __jzAutoCollectResetSeen / __jzCollectingSkus)
+  // 采集入口(__jzSubmitCollectTask / __jzAutoCollectResetSeen)
   // 已迁移到 collect/content/collect-entry.js,由 manifest 在 shared-utils.js 之后加载。
+  // 注:__jzCollectingSkus Set 已于 2026-07 移除(深度采集状态与页面 UI 解耦)。
 })();
 

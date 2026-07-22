@@ -1781,9 +1781,8 @@
           await this.saveAutoCollectConfig({ todayDate: today, todayCount: 0 });
         }
 
-        // 检查 autoCollectRunning(source='manual' 时绕过:深度采集管理页独立运行,
-        // 不受店铺页自动采集开关影响;daily-limit/paused/熔断仍生效)
-        if (source !== 'manual' && !config.autoCollectRunning) {
+        // 检查 autoCollectRunning(深度采集开关)
+        if (!config.autoCollectRunning) {
           console.log('[SW autoCollect] Gate0 跳过(not-running):', sku);
           this.pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'not-running');
           return { status: 'skipped', reason: 'not-running' };

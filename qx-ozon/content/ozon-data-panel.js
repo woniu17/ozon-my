@@ -165,52 +165,30 @@
 
   // 采集状态相关代码已迁移至 collect/content/collect-status.js,
   // 通过 window.__jzCollectStatus.* 桥接访问:
-  //   - setStatus/getStatus(SKU 状态读写)
   //   - refreshUi/refreshAllUi(刷新徽章+状态条)
-  //   - applyQueuePaused(应用队列暂停状态)
-  //   - addStoreSku/getStoreSkuCount(店铺 SKU 收集)
+  //   - addStoreSku/getStoreSkuCount/getStoreSkuStats(店铺 SKU 收集 + 统计)
   //   - renderCollectStatusBar/refreshCollectStatusBar/updateCollectBadge
-  //   - STATUS_MAP/CACHE_TYPE_LABELS(常量)
+  //   - CACHE_TYPE_LABELS(常量)
+  // 注:2026-07 重构后,setStatus/getStatus/applyQueuePaused/STATUS_MAP 已移除,
+  //     徽章仅由缓存命中驱动(_skuCacheHitSet),不再依赖深度采集队列状态。
 
   // ── 定时刷新:页面级 5s 定时器 + 视口批量查询 ──
   // 主动查缓存刷新数据 + 采集状态。不依赖自动采集开关:即使自动采集关闭,
   // 也定时查 SW 缓存填充面板。详见下方 _refreshVisiblePanels 实现。
   const PANEL_REFRESH_INTERVAL_MS = 5000;
 
-  // 接收 SW 推送的 collectDone / taskStatus / antibotDetected 事件,实时更新
-  // 状态读写通过 window.__jzCollectStatus.* 桥接(collect/content/collect-status.js)
+  // rescan 由 SW 主动广播;采集结果统一由 5s 定时刷新查缓存回填,
+  // 队列暂停/恢复/任务状态变化不再通知页面(深度采集状态与页面 UI 完全解耦)。
+  // taskStatus 监听已移除 — 徽章仅由缓存命中驱动(_skuCacheHitSet),
+  // 不再依赖深度采集队列状态(_collectStatusMap 已删除)。
   chrome.runtime.onMessage.addListener((msg) => {
     if (!msg) return;
-    const CS = () => window.__jzCollectStatus;
-
-    // 熔断检测:SW 检测到反爬时广播 antibotDetected
-    if (msg.type === 'antibotDetected' && msg.pausedUntil) {
-      window.__jzCircuitBreakerUntil = msg.pausedUntil;
-      CS()?.refreshAllUi();
-      return;
-    }
-
-    // 队列暂停:SW 因 daily-limit/not-running/paused 暂停队列时广播。
-    // 详见 collect-status.js 的 applyQueuePaused(同时用于启动时主动查询,防时序竞态)。
-    if (msg.type === 'queuePaused') {
-      CS()?.applyQueuePaused(msg.reason);
-      return;
-    }
-
-    // 队列恢复:SW 跨日重置或熔断过期后恢复消费时广播。
-    // 清除全局标志,让后续新 panel 正常走采集流程。
-    if (msg.type === 'queueResumed') {
-      console.log('[panel] 队列恢复,清除 __jzQueuePaused 标志');
-      window.__jzQueuePaused = false;
-      return;
-    }
 
     // rescan:SW 通过 rescan op 触发的不刷新页面重新扫描。
-    // 清空 dedup + 清除暂停标志 + 重置所有 panel 为 loading + 重新提交所有可见 SKU。
+    // 清空 dedup + 重置所有 panel 为 loading + 重新提交所有可见 SKU。
     if (msg.type === 'rescan') {
       console.log('[panel] 收到 rescan,重新提交所有可见 SKU');
       window.__jzAutoCollectResetSeen?.();
-      window.__jzQueuePaused = false;
       try {
         const cards = getCards();
         for (const card of cards) {
@@ -230,79 +208,6 @@
       }
       return;
     }
-
-    // taskStatus:SW 在入队/开始处理/重试时广播,更新 _collectStatusMap
-    if (msg.type === 'taskStatus' && msg.sku) {
-      const skuStr = String(msg.sku);
-      const uiStatus = CS()?.STATUS_MAP?.[msg.status];
-      if (uiStatus) {
-        CS()?.setStatus(skuStr, {
-          status: uiStatus,
-          reason: null,
-          results: null,
-          duration: null,
-          timestamp: Date.now(),
-        });
-        CS()?.refreshUi(skuStr);
-        // 状态变化可能影响采集/略过拆分计数(如 pending→skipped),刷新面板计数
-        _updateStoreSkuCount();
-      }
-      return;
-    }
-
-    if (msg.type !== 'collectDone' || !msg.sku) return;
-    const skuStr = String(msg.sku);
-
-    const uiStatus = CS()?.STATUS_MAP?.[msg.status] || msg.status;
-
-    // steps { card:'ok', detail:'ok', ... } → results [{ type, hit }]
-    let results = null;
-    if (msg.steps && typeof msg.steps === 'object') {
-      const labels = CS()?.CACHE_TYPE_LABELS || [];
-      results = labels.map((type) => ({ type, hit: msg.steps[type] === 'ok' }));
-    }
-
-    const hitCount = results ? results.filter((r) => r.hit).length + '/' + results.length : '?';
-    console.log('[panel] 收到 collectDone:', skuStr, 'status=', uiStatus, 'hit=', hitCount);
-    // collectDone 携带实际采集结果(success/partial/failed)说明队列已恢复消费,
-    // 清除 __jzQueuePaused 标志,让后续新 panel 正常走采集流程。
-    // skipped 状态不清除(可能是 daily-limit/not-running 导致的跳过,队列仍暂停)。
-    if (window.__jzQueuePaused && uiStatus !== 'skipped') {
-      window.__jzQueuePaused = false;
-      console.log('[panel] collectDone 非 skip 状态,清除 __jzQueuePaused 标志');
-    }
-    CS()?.setStatus(skuStr, {
-      status: uiStatus,
-      reason: msg.error?.type || msg.reason || null,
-      results: results || msg.results || null,
-      duration: msg.duration != null ? msg.duration : null,
-      timestamp: msg.collectedAt || Date.now(),
-    });
-    // 采集完成(终态)后刷新采集/略过拆分计数
-    _updateStoreSkuCount();
-
-    // 广播携带完整数据时即时回填面板
-    // 注意:无论 status 是 success/partial/skipped/failed_final,collectDone 都表示
-    // 该 SKU 的处理已结束,panel 应标记为 ready,否则 AutoScroller 的 isReadyToScroll
-    // 会永远等待(尤其 skipped 时 data 全 null,panel 停在 'loading' 导致死锁)。
-    const panel = document.querySelector(`[data-jz-sku="${skuStr}"] .ozon-helper-data-panel`);
-    if (panel) {
-      if (msg.data && typeof window.jzPopulatePanelV2 === 'function') {
-        try {
-          // 必须先调 jzRenderProductPanelV2 创建带 [data-field] 的 HTML 结构,
-          // 否则 jzPopulatePanelV2 的 updateField 找不到字段节点,数据无法回填。
-          if (typeof window.jzRenderProductPanelV2 === 'function') {
-            window.jzRenderProductPanelV2(panel, { sku: skuStr, initial: { preFetched: msg.data } });
-          }
-          window.jzPopulatePanelV2(panel, skuStr, { preFetched: msg.data });
-        } catch (e) {
-          console.warn('[panel] collectDone 回填面板失败:', skuStr, e);
-        }
-      }
-      panel.dataset.jzLoadStatus = 'ready';
-    }
-
-    CS()?.refreshUi(skuStr);
   });
 
   // ── 定时刷新:页面级 5s 定时器 + 视口批量查询 ──────────────────
@@ -444,22 +349,9 @@
             window.jzRenderProductCardPanel(panel, erpData);
           }
         } else {
-          // ERP 无数据:渲染骨架 + 补查终态/队列暂停(对齐原 loadPanelData step 3 的兜底)
+          // ERP 无数据:渲染骨架,等 5s 定时刷新查缓存回填
           if (typeof window.jzRenderProductPanelV2 === 'function') {
             window.jzRenderProductPanelV2(panel, { sku });
-          }
-          const CS = window.__jzCollectStatus;
-          const st = CS?.getStatus(String(sku));
-          if (st && ['success', 'partial', 'skipped', 'failed', 'antibot'].includes(st.status)) {
-            // 已有终态,仅刷新徽章
-          } else if (window.__jzQueuePaused) {
-            CS?.setStatus(String(sku), {
-              status: 'skipped',
-              reason: window.__jzQueuePaused.reason || 'paused',
-              results: null,
-              duration: null,
-              timestamp: Date.now(),
-            });
           }
         }
       } catch (e) {

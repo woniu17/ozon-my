@@ -359,15 +359,15 @@
       return { ok: true };
     };
 
-    // ── ANTIBOT 分支处理:暂停 10 分钟 + 通知 popup + 写日志 + 更新计数器 ────────
+    // ── ANTIBOT 分支处理:暂停 10 分钟 + 写日志 + 更新计数器 ────────
     // 由 Step 4/5/6 检测到反爬时调用。返回 { status:'antibot', pausedUntil } 给调用方。
     // sellerId 用于日志写入(稳定主键,slug 可变)
+    // 注:antibotDetected 广播已删除 — 前端页面不再展示深度采集状态;
+    // saveAutoCollectConfig 写入 paused:true 后,chrome.storage.onChanged 自动触发 popup 重渲,
+    // queue 监控页通过自身的 5s 轮询感知状态变化,无需主动广播。
     this._handleAntibot = async (sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId) => {
       const pausedUntil = Date.now() + 10 * 60 * 1000; // 10 分钟
       await this.saveAutoCollectConfig({ paused: true, pausedUntil });
-
-      // 通知 QX面板 + popup(fire-and-forget,无监听者也不报错)
-      chrome.runtime.sendMessage({ type: 'antibotDetected', pausedUntil }).catch(() => {});
 
       // 写日志(fire-and-forget,不阻塞)
       this.writeAutoCollectLog({

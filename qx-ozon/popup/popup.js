@@ -999,7 +999,6 @@
   // 字段对应 SW 内 _AUTO_COLLECT_CONFIG_DEFAULT 的限速项。
   // 新队列架构下保留队列消费间隔范围(秒,每次随机)和每日上限。
   // min/max 与 input 的 min/max 属性保持一致,超界不写入并提示。
-  // 兼容旧字段 consumeRateSec:读取时若 min/max 不存在则用 consumeRateSec 作为 min=max
   const RATE_RANGE = { min: 5, max: 120 };
   const RATE_FIELDS = [
     { id: 'ac-rate-perday', key: 'perDayLimit', min: 0, max: 100000, label: '每日上限' },
@@ -1019,17 +1018,10 @@
     }, 2000);
   };
 
-  // 读取队列间隔范围(秒):优先 consumeRateMinSec/consumeRateMaxSec,fallback 到 consumeRateSec
+  // 读取队列间隔范围(秒):consumeRateMinSec/consumeRateMaxSec
   const getRateRangeFromConfig = (config) => {
-    let lo = config.consumeRateMinSec;
-    let hi = config.consumeRateMaxSec;
-    if (lo == null || hi == null) {
-      const single = config.consumeRateSec;
-      lo = single;
-      hi = single;
-    }
-    lo = Number(lo);
-    hi = Number(hi);
+    let lo = Number(config.consumeRateMinSec);
+    let hi = Number(config.consumeRateMaxSec);
     if (!Number.isFinite(lo)) lo = 5;
     if (!Number.isFinite(hi)) hi = 15;
     lo = Math.max(RATE_RANGE.min, Math.min(RATE_RANGE.max, lo));
@@ -1131,11 +1123,13 @@
   rateMinInput?.addEventListener('change', saveRateRange);
   rateMaxInput?.addEventListener('change', saveRateRange);
 
-  // SW 推送消息:antibotDetected(熔断触发)/ configChanged(配置变化)→ 重渲。
+  // SW 推送消息:configChanged(配置变化)→ 重渲。
+  // antibotDetected 监听已删除 — 熔断触发时 saveAutoCollectConfig 写入 paused:true,
+  // chrome.storage.onChanged 监听器已自动调 renderAutoCollect,无需重复触发。
   try {
     chrome.runtime.onMessage.addListener((message) => {
       if (!message) return;
-      if (message.type === 'antibotDetected' || message.type === 'configChanged') {
+      if (message.type === 'configChanged') {
         renderAutoCollect();
       }
       return false;
@@ -1266,16 +1260,6 @@
           window.close();
         } catch (e) {
           console.error('[popup] open batch-upload failed:', e);
-        }
-        return;
-      }
-      // 深度采集管理页:在新标签页打开(不单独开窗口,方便与其他 Ozon 标签页并排)
-      if (action === 'collect-manager') {
-        try {
-          await chrome.tabs.create({ url: chrome.runtime.getURL('collect/pages/manager/index.html') });
-          window.close();
-        } catch (e) {
-          console.error('[popup] open collect-manager failed:', e);
         }
         return;
       }

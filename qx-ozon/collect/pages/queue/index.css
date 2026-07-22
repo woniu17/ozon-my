@@ -1,5 +1,5 @@
 /* =========================================================
-   SW 采集队列监控 — 复用 batch-upload/collect-manager 设计语言
+   SW 采集队列监控 — 复用 batch-upload 设计语言
    ========================================================= */
 :root {
   /* ─── 主色系 ─── */
@@ -582,10 +582,6 @@ select {
   border-radius: 9px;
   white-space: nowrap;
 }
-.source-manual {
-  background: var(--accent-tint);
-  color: var(--accent);
-}
 .source-shop-page {
   background: var(--line-2);
   color: var(--ink-3);
@@ -640,6 +636,208 @@ select {
 }
 .qx-switch-label {
   font-weight: 500;
+}
+
+/* ============ Task window (carousel) ============ */
+/* 5 槽窗口视图:中间为采集中,左侧已完成,右侧即将采集 */
+.task-window {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr 1fr 1fr;
+  gap: 8px;
+  align-items: stretch;
+  width: 100%;
+  min-height: 180px;
+}
+.tw-slot {
+  display: flex;
+  min-width: 0;
+}
+.tw-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  width: 100%;
+  /* transform/opacity 交由 JS FLIP 动画管理,不加 CSS transition 避免冲突 */
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.tw-card-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-4);
+  font-size: 14px;
+  background: transparent;
+  border: 1px dashed var(--line);
+}
+/* 中间槽:采集中,加亮 + 脉冲 */
+.tw-slot-center .tw-card {
+  background: var(--primary-tint);
+  border: 2px solid var(--primary);
+  box-shadow: 0 0 0 4px rgba(22, 119, 255, 0.08), 0 4px 12px rgba(22, 119, 255, 0.15);
+  animation: tw-center-pulse 2s ease-in-out infinite;
+}
+@keyframes tw-center-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 4px rgba(22, 119, 255, 0.08), 0 4px 12px rgba(22, 119, 255, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(22, 119, 255, 0.15), 0 6px 16px rgba(22, 119, 255, 0.25);
+  }
+}
+/* 左/右槽:略缩小 + 透明度,突出中心 */
+.tw-slot-left-1 .tw-card,
+.tw-slot-right-1 .tw-card {
+  transform: scale(0.96);
+  opacity: 0.9;
+}
+.tw-slot-left-2 .tw-card,
+.tw-slot-right-2 .tw-card {
+  transform: scale(0.88);
+  opacity: 0.65;
+}
+.tw-thumb {
+  width: 100%;
+  height: 80px;
+  object-fit: cover;
+  border-radius: var(--r-sm);
+  background: var(--surface-2, #f5f5f5);
+  flex-shrink: 0;
+}
+.tw-thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--ink-4);
+  border: 1px dashed var(--line);
+}
+.tw-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tw-badge-row {
+  margin-bottom: 2px;
+}
+.tw-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-all;
+}
+.tw-price {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--error-fg);
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-feature-settings: 'tnum' 1;
+}
+.tw-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  margin-top: 2px;
+}
+.tw-meta {
+  font-size: 10px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.tw-meta-sku {
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  color: var(--primary);
+}
+.tw-error {
+  font-size: 10px;
+  color: var(--error-fg);
+  background: rgba(255, 77, 79, 0.08);
+  border-radius: var(--r-sm);
+  padding: 2px 4px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tw-empty {
+  text-align: center;
+  padding: 24px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+/* 窗口徽章(4 类状态) */
+.tw-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.tw-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.tw-badge-running {
+  background: rgba(22, 119, 255, 0.12);
+  color: var(--primary);
+}
+.tw-badge-success {
+  background: rgba(82, 196, 26, 0.12);
+  color: #389e0d;
+}
+.tw-badge-failed {
+  background: rgba(255, 77, 79, 0.12);
+  color: #cf1322;
+}
+.tw-badge-pending {
+  background: rgba(250, 173, 20, 0.12);
+  color: #d48806;
+}
+.tw-badge-skipped {
+  background: rgba(114, 124, 139, 0.12);
+  color: #52525b;
+}
+
+/* ============ Filter toggle ============ */
+.filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+}
+.filter-toggle .chev {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.15s ease;
+}
+.filter-toggle.is-open .chev {
+  transform: rotate(180deg);
 }
 
 /* ============ Rate config ============ */
