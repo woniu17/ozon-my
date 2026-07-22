@@ -13,7 +13,7 @@
  *     批量查询,结果传入 renderCollectStatusBar 时同步更新 _skuCacheHitSet
  *
  * 保留职责:
- *   - _storeCollectedSkus(店铺 SKU 集合,供徽章判定 + MY 采集器面板计数)
+ *   - _storeCollectedSkus(店铺 SKU 集合,供徽章判定 + QX 采集器面板计数)
  *   - renderCollectStatusBar(数据面板内 5 类缓存命中状态条)
  *   - updateCollectBadge(商品卡角落徽章 — 缓存命中驱动)
  *   - _refreshCollectStatusUi / _refreshAllCollectStatusUi(刷新徽章 + 状态条)
@@ -37,15 +37,16 @@
     '[data-widget="searchResults"] [data-widget="searchResultsItem"]',
   ];
 
-  // 当前店铺页已收集的店铺 SKU 集合(用于 MY 采集器面板计数 + jz-collect-badge 标记)
+  // 当前店铺页已收集的店铺 SKU 集合(用于 QX 采集器面板计数 + jz-collect-badge 标记)
   // 收集时机:data-panel 的 ensureDataPanel 创建 panel 时调用 addStoreSku(sku)
   const _storeCollectedSkus = new Set();
 
-  // 已采集 SKU 集合(缓存命中驱动)
-  // 由 renderCollectStatusBar 在收到 5s 定时器的 cacheStatus 时同步更新:
-  //   - hitCount > 0 → 加入集合(已采集)
-  //   - hitCount === 0 → 从集合移除(未采集,可能采集未完成或还未采集)
-  // 该集合是徽章"已采集"判定的唯一依据,不依赖深度采集队列状态。
+  // 通过过滤的店铺 SKU 集合(passesFilter=true)
+  // 用于判定"采集"状态:通过过滤 = 已采集,未通过 = 略过
+  const _storeCollectedSkusPassed = new Set();
+
+  // 已采集 SKU 集合(缓存命中驱动,仅用于状态条展示)
+  // 由 renderCollectStatusBar 在收到 5s 定时器的 cacheStatus 时同步更新
   const _skuCacheHitSet = new Set();
 
   // 5 类合并缓存命中位(与采集箱对齐)
@@ -137,12 +138,12 @@
   // 渲染角落徽章(商品卡 tile-root 右上角)
   // 二态(2026-07 重构,深度采集状态与 UI 解耦):
   //   - 无徽章  = 未发现(非店铺商品,或还未扫到)
-  //   - 蓝色 •  = 已发现未采集(店铺 SKU 已收集,但 ERP 缓存无数据)
-  //                   典型场景:浅度采集开关关闭、采集未完成、5s 定时器尚未查询
-  //   - 绿色 ✓  = 已采集(ERP 缓存有数据 — 任一缓存类型命中即视为已采集)
+  //   - 蓝色 •  = 已发现未采集(店铺 SKU 已收集,但未通过过滤条件)
+  //                   典型场景:被价格/评论/评分过滤条件略过
+  //   - 绿色 ✓  = 已采集(通过过滤条件 — passesFilter=true)
   // 判定依据:
   //   - _storeCollectedSkus.has(sku) = 已发现(店铺页扫到 + addStoreSku 调用过)
-  //   - _skuCacheHitSet.has(sku) = 已采集(5s 定时器查缓存命中后写入集合)
+  //   - _storeCollectedSkusPassed.has(sku) = 已采集(通过过滤条件)
   function updateCollectBadge(card, sku) {
     if (!card) return;
     const skuStr = String(sku);
@@ -152,7 +153,7 @@
       if (badge) badge.remove();
       return;
     }
-    const isCollected = _skuCacheHitSet.has(skuStr);
+    const isCollected = _storeCollectedSkusPassed.has(skuStr);
 
     let badge = card.querySelector('.jz-collect-badge');
     if (!badge) {
@@ -174,12 +175,33 @@
   }
 
   // 添加店铺 SKU 到已收集集合(供 data-panel 的 ensureDataPanel 调用)
+  // passesFilter: 是否通过过滤条件(用于判定"采集"/"略过")
   // 返回 true 表示新增,false 表示已存在(Set.add 幂等)
-  function addStoreSku(sku) {
+  function addStoreSku(sku, passesFilter) {
     const skuStr = String(sku);
     if (_storeCollectedSkus.has(skuStr)) return false;
     _storeCollectedSkus.add(skuStr);
+    if (passesFilter) {
+      _storeCollectedSkusPassed.add(skuStr);
+    }
     return true;
+  }
+
+  // 更新已收集 SKU 的 passesFilter 状态(供 DOM 模式 loadPanelData 查询完数据后调用)
+  // 返回 true 表示状态有变化,false 表示无变化
+  function updateStoreSkuPassFilter(sku, passesFilter) {
+    const skuStr = String(sku);
+    if (!_storeCollectedSkus.has(skuStr)) return false;
+    const wasPassed = _storeCollectedSkusPassed.has(skuStr);
+    if (passesFilter && !wasPassed) {
+      _storeCollectedSkusPassed.add(skuStr);
+      return true;
+    }
+    if (!passesFilter && wasPassed) {
+      _storeCollectedSkusPassed.delete(skuStr);
+      return true;
+    }
+    return false;
   }
 
   // 获取已收集店铺 SKU 数量(供 data-panel 的 _updateStoreSkuCount 调用)
@@ -187,17 +209,12 @@
     return _storeCollectedSkus.size;
   }
 
-  // 获取已发现店铺 SKU 的采集/略过统计(供 MY 采集器面板展示拆分计数)
-  // - collected(采集):已发现 + ERP 缓存命中(_skuCacheHitSet)
-  // - skipped(略过):已发现总数 - 采集数
-  // 注:缓存命中是异步的(5s 定时器刷新),首次加载时 collected 可能为 0,
-  //     定时器跑过一轮后即准确。
+  // 获取已发现店铺 SKU 的采集/略过统计(供 QX 采集器面板展示拆分计数)
+  // - collected(采集):已发现 + 通过过滤条件(_storeCollectedSkusPassed)
+  // - skipped(略过):已发现总数 - 采集数(未通过过滤的 SKU)
   function getStoreSkuStats() {
-    let collected = 0;
     const total = _storeCollectedSkus.size;
-    for (const sku of _storeCollectedSkus) {
-      if (_skuCacheHitSet.has(sku)) collected++;
-    }
+    const collected = _storeCollectedSkusPassed.size;
     return { collected, skipped: Math.max(0, total - collected), total };
   }
 
@@ -239,6 +256,7 @@
     refreshCollectStatusBar,
     updateCollectBadge,
     addStoreSku,
+    updateStoreSkuPassFilter,
     getStoreSkuCount,
     getStoreSkuStats,
     refreshUi: _refreshCollectStatusUi,

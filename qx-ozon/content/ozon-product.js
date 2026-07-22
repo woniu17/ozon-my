@@ -17,7 +17,7 @@
   // (通常 >1s 后),sync extractStateData 已能 hit cache 拿 widgetStates。
   // 失败静默(非 /product/ 页 / 网络挂),不影响主功能。
   if (window.ensurePdpState) {
-    window.ensurePdpState().catch(() => {});
+    window.ensurePdpState().catch(() => { });
   }
 
   let _recBtn = null;
@@ -113,7 +113,7 @@
   // 页面类型判定:
   //   - 商品详情页(/product/) → 完整 action bar(采集/跟卖/批量上架/算价/...);
   //   - 非详情页里"含商品卡的列表页"(搜索/类目/卖家/品牌) → 精简浮窗
-  //     (只有 一键跟卖 / 极掌算价 / 进入ERP,其中一键跟卖只列当前页商品卡 SKU);
+  //     (只有 一键跟卖 / QX算价 / 进入ERP,其中一键跟卖只列当前页商品卡 SKU);
   //   - 其余页面(首页/购物车/结算/...)不注入任何浮窗。
   const _JZ_IS_PRODUCT_PAGE = window.location.pathname.includes('/product/');
   const _JZ_IS_LISTING_PAGE =
@@ -126,7 +126,7 @@
   // ── 跟卖面板 RUB→CNY 汇率缓存 ──────────────────────────────────
   // Ozon 页面所有价格(extractProductData.price / extractAspectVariants 的 d.price)
   // 都是 RUB ₽,但跟卖面板的"原售价 / 实际售价 / 划线价"输入框语义是 CNY ¥
-  // (与极掌算价器、Ozon import-by-sku 的 currency_code=CNY 跨境店模式对齐)。
+  // (与QX算价器、Ozon import-by-sku 的 currency_code=CNY 跨境店模式对齐)。
   //
   // 不做转换会导致:¥734 实际是 734 ₽(≈64 CNY),defaultOldPrice = v.price*2 = 1468
   // 也是 RUB×2,提交给后端会以巨大的 CNY 金额上架,翻车。
@@ -146,7 +146,7 @@
       const next = changes['jz_calc_fx_rate_v1'].newValue;
       if (next?.rate && next.rate > 0) _jzFxCnyToRub = next.rate;
     });
-  } catch {}
+  } catch { }
   // RUB → CNY,保留 2 位小数。0 / 负数 / NaN 全部返回 0。
   function _rubToCny(rub) {
     const n = Number(rub);
@@ -211,7 +211,7 @@
           return cur;
         }
       }
-    } catch {}
+    } catch { }
     // JSON-LD 兜底
     try {
       const ld = extractJsonLd();
@@ -221,7 +221,7 @@
         _jzPageCurrencyCached = String(cur).toUpperCase();
         return _jzPageCurrencyCached;
       }
-    } catch {}
+    } catch { }
     _jzPageCurrencyCached = null; // unknown
     return null;
   }
@@ -237,7 +237,7 @@
           if (product) return product;
         }
       }
-    } catch {}
+    } catch { }
     return null;
   }
 
@@ -328,7 +328,7 @@
           if (n && n > 0) walletPrice = n;
         }
       }
-    } catch {}
+    } catch { }
     // 商品没参与 Ozon Bank 折扣时 webPrice JSON 里只有 cardPrice 没有 price，
     // 此时 cardPrice 本身就是黑标价（无折扣）。
     if (!price && walletPrice) price = walletPrice;
@@ -347,11 +347,11 @@
 
     let originalPrice = window.normalizePrice(
       webPrice?.originalPrice ||
-        webPrice?.oldPrice ||
-        webPrice?.previousPrice ||
-        priceData?.originalPrice ||
-        priceData?.price ||
-        detailInfo.old_price
+      webPrice?.oldPrice ||
+      webPrice?.previousPrice ||
+      priceData?.originalPrice ||
+      priceData?.price ||
+      detailInfo.old_price
     );
     if (!originalPrice) {
       originalPrice =
@@ -363,8 +363,8 @@
     // Images: multiple extraction strategies with debug logging
     let images = Array.isArray(webGallery?.images)
       ? webGallery.images
-          .map((img) => (typeof img === 'string' ? img : img?.url || img?.src || img?.image))
-          .filter((url) => typeof url === 'string' && url.length > 0)
+        .map((img) => (typeof img === 'string' ? img : img?.url || img?.src || img?.image))
+        .filter((url) => typeof url === 'string' && url.length > 0)
       : [];
     if (images.length > 0) console.log(`[extractProductData] Images from webGallery: ${images.length}`);
     if (images.length === 0 && galleryData?.images && Array.isArray(galleryData.images)) {
@@ -703,7 +703,7 @@
             });
           }
         })
-        .catch(() => {});
+        .catch(() => { });
     }
 
     // 新队列架构下,自动采集仅在店铺页发起;详情页不再提交采集任务,
@@ -728,14 +728,14 @@
         if (!raw || raw.length < 20) continue;
         const data = JSON.parse(raw);
         if (data && Array.isArray(data.aspects) && data.aspects.length > 0) return data.aspects;
-      } catch {}
+      } catch { }
     }
     const widget = document.querySelector('[data-widget="webAspects"], [data-widget="aspects"]');
     if (widget) {
       try {
         const data = JSON.parse(widget.getAttribute('data-state') || '');
         if (Array.isArray(data?.aspects)) return data.aspects;
-      } catch {}
+      } catch { }
     }
     const ws = window.extractStateData('state-webAspects');
     if (Array.isArray(ws?.aspects) && ws.aspects.length > 0) return ws.aspects;
@@ -762,7 +762,7 @@
           aspectsData = data.aspects;
           break;
         }
-      } catch {}
+      } catch { }
     }
 
     // Fallback: data-widget="webAspects"
@@ -772,7 +772,7 @@
         try {
           const data = JSON.parse(widget.getAttribute('data-state') || '');
           if (Array.isArray(data?.aspects)) aspectsData = data.aspects;
-        } catch {}
+        } catch { }
       }
     }
 
@@ -849,7 +849,7 @@
         const u = new URL(path);
         path = u.pathname + u.search;
       }
-    } catch {}
+    } catch { }
     if (!path.startsWith('/')) path = '/' + path;
     const endpoints = [
       `/api/entrypoint-api.bx/page/json/v2?url=${encodeURIComponent(path)}`,
@@ -957,7 +957,7 @@
           .filter((t) => t && t !== 'Ozon' && t !== 'Главная');
         if (items.length > 0) return items;
       }
-    } catch {}
+    } catch { }
 
     // 翻译态下：DOM 文本是被中文化的版本，回传给后端 findCategoryByBreadcrumbs
     // 用中文匹配俄文类目树会 100% 失败 → 直接返空数组让后端走 sourceVariant 路径
@@ -1114,7 +1114,7 @@
             }
           }
         }
-      } catch {}
+      } catch { }
       console.log(`[JiZhang] Strategy D (JSON-LD): found ${characteristics.length}`);
     }
 
@@ -1156,7 +1156,7 @@
                 }
               };
               walk(data);
-            } catch {}
+            } catch { }
           }
         }
       }
@@ -1209,7 +1209,7 @@
           };
           findCharArrays(data, 0);
           if (characteristics.length > 0) break;
-        } catch {}
+        } catch { }
       }
       console.log(`[JiZhang] Strategy F (deep scan all data-state): found ${characteristics.length}`);
     }
@@ -1516,7 +1516,7 @@
       if (!srcMp4) return null;
       try {
         if (typeof onLabel === 'function') onLabel('转存视频…');
-      } catch (_) {}
+      } catch (_) { }
       // window.sendMessage 成功时 resolve 的是 SW 的 response.data(失败则 throw),故 up = { url }。
       let up = null;
       try {
@@ -1848,7 +1848,7 @@
 
   // ───────────────────────────────────────────────────────────────
   // 精简浮窗(列表页:搜索 / 类目 / 卖家 / 品牌)
-  //   只有 [一键跟卖(本页商品卡 SKU 列表)] / [极掌算价] / [进入ERP]。
+  //   只有 [一键跟卖(本页商品卡 SKU 列表)] / [QX算价] / [进入ERP]。
   //   复用详情页 action bar 的同一套样式 / 拖拽 / 位置&折叠持久化。
   // ───────────────────────────────────────────────────────────────
   function createSlimActionBar() {
@@ -2169,14 +2169,13 @@
           <span class="ozon-helper-label">当前价格</span>
           <span class="ozon-helper-value">${window.formatNumber(currentPrice)} ₽</span>
         </div>
-        ${
-          originalPrice
-            ? `<div class="ozon-helper-panel-row">
+        ${originalPrice
+        ? `<div class="ozon-helper-panel-row">
           <span class="ozon-helper-label">原价</span>
           <span class="ozon-helper-value">${window.formatNumber(originalPrice)} ₽ <span class="ozon-helper-discount">(-${discountPercent}%)</span></span>
         </div>`
-            : ''
-        }
+        : ''
+      }
         <div class="ozon-helper-panel-row">
           <span class="ozon-helper-label">均价对比</span>
           <span class="ozon-helper-value ${avgPrice ? (currentPrice <= avgPrice ? 'is-good' : 'is-bad') : 'is-muted'}">${avgPrice ? (currentPrice <= avgPrice ? `${window.lucideIcon('check', 12)} 低于均价` : `${window.lucideIcon('trending-up', 12)} 高于均价`) : '均价未知'}</span>
@@ -4234,7 +4233,7 @@
         try {
           const savedCfg = await _getListingConfig();
           restoreManualSelectedStores(panel, savedCfg, storeList);
-        } catch {}
+        } catch { }
 
         // "全选" checkbox logic
         const selectAllCb = storeDropdown.querySelector('.ozon-helper-mv-store-select-all');
@@ -4301,7 +4300,7 @@
           if (panel.querySelector('input[name="jz-upload-mode"]:checked')?.value === 'portal') {
             panel._applyPortalStoreConstraint(true);
           }
-        } catch {}
+        } catch { }
 
         storeDropdown.addEventListener('change', (e) => {
           const target = e.target;
@@ -4731,7 +4730,7 @@
         const merged = [...newIds, ...existing.filter((x) => !newIds.includes(x))].slice(0, 12);
         chrome.storage.local.set({ 'mv-store-recent': merged });
       });
-    } catch {}
+    } catch { }
   }
 
   // 一键上架面板的「记住上次选择」—— 店铺/品牌/图片顺序/上架货币/水印/AI 改图/AI 重写。
@@ -4756,7 +4755,7 @@
         const prev = (r && typeof r[MV_LISTING_CFG_KEY] === 'object' && r[MV_LISTING_CFG_KEY]) || {};
         chrome.storage.local.set({ [MV_LISTING_CFG_KEY]: { ...prev, ...partial } });
       });
-    } catch {}
+    } catch { }
   }
 
   function normalizeManualListingMultiplier(value) {
@@ -5350,12 +5349,11 @@
             </label>
           </div>
           <div class="ohm-sp-list">
-            ${
-              grouped.length === 0
-                ? '<div class="ohm-sp-empty">\u6ca1\u6709\u5339\u914d\u7684\u5e97\u94fa</div>'
-                : grouped
-                    .map(
-                      (g) => `
+            ${grouped.length === 0
+            ? '<div class="ohm-sp-empty">\u6ca1\u6709\u5339\u914d\u7684\u5e97\u94fa</div>'
+            : grouped
+              .map(
+                (g) => `
                 <div class="ohm-sp-group">
                   <div class="ohm-sp-group-head">
                     <span class="ohm-sp-group-dot"></span>
@@ -5382,9 +5380,9 @@
                     .join('')}
                 </div>
               `
-                    )
-                    .join('')
-            }
+              )
+              .join('')
+          }
           </div>
           <div class="ohm-sp-footer">
             <span class="ohm-sp-footer-count">\u5df2\u9009 <b>${totalSelected}</b> \u5bb6</span>
@@ -5527,7 +5525,7 @@
       if (parsed && JZ_MV_SORTABLE_FIELDS.has(parsed.field) && (parsed.order === 'asc' || parsed.order === 'desc')) {
         return { field: parsed.field, order: parsed.order };
       }
-    } catch {}
+    } catch { }
     return { ...JZ_MV_DEFAULT_SORT };
   }
 
@@ -5537,7 +5535,7 @@
         JZ_MV_SORT_STORAGE_KEY,
         JSON.stringify({ field: sortState.field, order: sortState.order })
       );
-    } catch {}
+    } catch { }
   }
 
   function jzMultiVariantSortHeader(label, field, title = '') {
@@ -6190,7 +6188,7 @@
             wmCb.checked = panel._erpConfig.enable_watermark;
           }
         }
-      } catch {}
+      } catch { }
     })();
 
     // Load warehouses for current/selected store and populate the warehouse select.
@@ -6309,7 +6307,7 @@
       const persistMerge = (on) => {
         try {
           chrome.storage.local.set({ followSellMergeEnabled: !!on });
-        } catch (e) {}
+        } catch (e) { }
       };
       mergeCb.checked = !!mergeInput.value.trim(); // 复用上次填的型号时回显勾选
       mergeCb.addEventListener('change', () => {
@@ -6336,7 +6334,7 @@
             if (!mergeInput.value.trim()) mergeInput.value = genMergeModel();
           }
         });
-      } catch (e) {}
+      } catch (e) { }
     }
 
     // AI 卡折叠（默认折叠以节省纵向空间；点击 header 切换）
@@ -6466,7 +6464,7 @@
         rechargeLink.style.display = '';
         rechargeLink.onclick = (e) => {
           e.preventDefault();
-          window.sendMessage('openFrontend', { path: RECHARGE_PATH_V2 }).catch(() => {});
+          window.sendMessage('openFrontend', { path: RECHARGE_PATH_V2 }).catch(() => { });
         };
       }
     };
@@ -6514,7 +6512,7 @@
         if (el) el.checked = true;
         // 恢复成模拟手动上架时,若店铺已加载则立即收紧成单店(未加载则由店铺渲染末尾兜底)
         if (mode === 'portal') panel._applyPortalStoreConstraint?.(true);
-      } catch {}
+      } catch { }
     })();
 
     // 上架配置只在成功提交后保存，避免临时试调但未上架的配置污染下次默认值。
@@ -6987,7 +6985,7 @@
         applyShowAll();
         try {
           chrome.storage.local.set({ [STORAGE_KEY]: showAllToggle.checked });
-        } catch {}
+        } catch { }
       });
     }
 
@@ -7046,7 +7044,7 @@
       toast.querySelector('[data-action="undo"]').addEventListener('click', () => {
         try {
           undoFn();
-        } catch {}
+        } catch { }
         closeT();
       });
       toast.querySelector('[data-action="close"]').addEventListener('click', closeT);
@@ -7159,8 +7157,8 @@
           <div class="ohm-bp-preview">
             <div class="ohm-bp-preview-head">预览（前 ${preview.length} 行）</div>
             ${preview
-              .map(
-                (p) => `
+            .map(
+              (p) => `
               <div class="ohm-bp-preview-row">
                 <span class="ohm-bp-preview-dot" style="background:${p.color}"></span>
                 <span class="ohm-bp-preview-name">${_escHtml(p.name)}</span>
@@ -7168,8 +7166,8 @@
                 <span class="ohm-bp-preview-arrow">→</span>
                 <span class="ohm-bp-preview-to">${p.to}</span>
               </div>`
-              )
-              .join('')}
+            )
+            .join('')}
           </div>`
           : '';
 
@@ -7617,7 +7615,7 @@
         const v = (prefixInput.value || '').trim();
         try {
           chrome.storage.local.set({ [OFFER_ID_PREFIX_KEY]: v || 'jz-' });
-        } catch {}
+        } catch { }
       };
       prefixInput.addEventListener('blur', savePrefix);
       prefixInput.addEventListener('keydown', (e) => {
@@ -7813,7 +7811,7 @@
       const upgrade = bar.querySelector('[data-action="membership-upgrade"]');
       if (upgrade) {
         upgrade.addEventListener('click', () => {
-          window.sendMessage('openFrontend', { path: '#config' }).catch(() => {});
+          window.sendMessage('openFrontend', { path: '#config' }).catch(() => { });
         });
       }
     } catch (e) {
@@ -7922,7 +7920,7 @@
           if (link) {
             link.addEventListener('click', (ev) => {
               ev.preventDefault();
-              window.sendMessage('openFrontend', { path: '#config' }).catch(() => {});
+              window.sendMessage('openFrontend', { path: '#config' }).catch(() => { });
             });
           }
         }
@@ -8220,7 +8218,7 @@
             () => {
               try {
                 opts.onCancel();
-              } catch {}
+              } catch { }
             },
             { once: true }
           );
@@ -8272,7 +8270,7 @@
     btn.textContent = '升级会员';
     btn.style.marginLeft = '8px';
     btn.addEventListener('click', () => {
-      window.sendMessage('openFrontend', { path: '#config' }).catch(() => {});
+      window.sendMessage('openFrontend', { path: '#config' }).catch(() => { });
     });
     statusDiv.appendChild(msg);
     statusDiv.appendChild(btn);
@@ -8529,7 +8527,7 @@
         prefetchCancelled = true;
         try {
           prefetchAbort.abort();
-        } catch {}
+        } catch { }
       };
 
       const BATCH_SIZE = 3;
@@ -8687,15 +8685,15 @@
       const sharedBundleComplex = independentProducts
         ? null
         : (() => {
-            if (Array.isArray(anchorSv?._bundleComplexAttrs) && anchorSv._bundleComplexAttrs.length > 0) {
-              return anchorSv._bundleComplexAttrs;
-            }
-            for (const s of sourceMap.values()) {
-              if (Array.isArray(s?._bundleComplexAttrs) && s._bundleComplexAttrs.length > 0)
-                return s._bundleComplexAttrs;
-            }
-            return null;
-          })();
+          if (Array.isArray(anchorSv?._bundleComplexAttrs) && anchorSv._bundleComplexAttrs.length > 0) {
+            return anchorSv._bundleComplexAttrs;
+          }
+          for (const s of sourceMap.values()) {
+            if (Array.isArray(s?._bundleComplexAttrs) && s._bundleComplexAttrs.length > 0)
+              return s._bundleComplexAttrs;
+          }
+          return null;
+        })();
       if (sharedBundleComplex) {
         console.log(`[MultiFollowSell] bundle complex attrs (视频/PDF) available: ${sharedBundleComplex.length}`);
       }
@@ -8711,7 +8709,7 @@
         const onLabel = (t) => {
           try {
             if (typeof _confirmBtn !== 'undefined' && _confirmBtn) _confirmBtn.textContent = t;
-          } catch (_) {}
+          } catch (_) { }
         };
         const media = await captureAndTransferPageVideoMedia(onLabel);
         if (media?.videoUrl || media?.videoCover) {
@@ -8903,12 +8901,12 @@
         // 简介只取源真实描述(自定义→源 4191),空则退标题；不再用页面描述兜底(会抓回富内容)。
         const description = contentCopy?.pickFollowSellDescription
           ? contentCopy.pickFollowSellDescription({
-              customDescription: ts.customDescription,
-              sourceVariant: sv,
-              richContent: variantRichContent,
-              fallbackName: variantName,
-              max: DESC_MAX,
-            })
+            customDescription: ts.customDescription,
+            sourceVariant: sv,
+            richContent: variantRichContent,
+            fallbackName: variantName,
+            max: DESC_MAX,
+          })
           : safeText(ts.customDescription || variantName, DESC_MAX);
         contentCopy?.mergeSourceHashtagsIntoVariant?.(sv, sharedHashtags);
         items.push({
@@ -9077,7 +9075,7 @@
           }
 
           // 埋点（当天去重在 sw 层做,失败静默；多店扇出时去重也能保证只发一次）
-          window.sendMessage('usageTrack', { featureKey: 'follow-sell:submit' }).catch(() => {});
+          window.sendMessage('usageTrack', { featureKey: 'follow-sell:submit' }).catch(() => { });
 
           const importResult = await window.sendMessage('followSell', {
             storeId,
@@ -9251,10 +9249,10 @@
       console.error('[MultiFollowSell] 上架流程未捕获异常,已解锁 UI 供重试:', err);
       try {
         showMvStatus(statusDiv, 'error', '上架出错:' + (err?.message || err) + '，请刷新页面后重试');
-      } catch (_) {}
+      } catch (_) { }
       try {
         _unlockUI();
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -9457,7 +9455,7 @@
         const u = new URL(path);
         path = u.pathname + u.search;
       }
-    } catch {}
+    } catch { }
     if (!path.startsWith('/')) path = '/' + path;
 
     // 从 path 提取 sku 用于缓存查询(/product/xxx-<sku>/)
@@ -9769,7 +9767,7 @@
         const globalItems = searchResp?.items || searchResp?.data?.items || [];
         if (globalItems.length > 0) {
           console.log(`[prefetch] /search global found ${globalItems.length} items for sku=${sku}`);
-          window.sendMessage('syncSellerCookies').catch(() => {});
+          window.sendMessage('syncSellerCookies').catch(() => { });
           return { items: globalItems };
         }
       } catch (e) {
@@ -9779,7 +9777,7 @@
 
     // 即使 items 为空也算"已通过 gate"(网络层无错),返回空 items 让上层走 fallback
     if (result.items.length > 0) {
-      window.sendMessage('syncSellerCookies').catch(() => {});
+      window.sendMessage('syncSellerCookies').catch(() => { });
     }
     return { items: result.items };
   }
@@ -9855,7 +9853,7 @@
 
     if (result.items.length > 0) {
       // Auto-sync cookies to backend (fire-and-forget)
-      window.sendMessage('syncSellerCookies').catch(() => {});
+      window.sendMessage('syncSellerCookies').catch(() => { });
       const exact = result.items.find((it) => String(it.variant_id) === sku);
       return exact || result.items[0];
     }
@@ -10086,20 +10084,19 @@
     return `
       <div class="oh-seller-list">
         ${sorted
-          .map((seller) => {
-            const price = _parsePriceNum(seller.price);
-            const rank = _sellerDeliveryRank(seller);
-            return _renderSellerRow(seller, {
-              isMinPrice: stats.minPrice != null && price != null && price === stats.minPrice,
-              isFastest: stats.fastestRank != null && rank != null && rank === stats.fastestRank,
-            });
-          })
-          .join('')}
+        .map((seller) => {
+          const price = _parsePriceNum(seller.price);
+          const rank = _sellerDeliveryRank(seller);
+          return _renderSellerRow(seller, {
+            isMinPrice: stats.minPrice != null && price != null && price === stats.minPrice,
+            isFastest: stats.fastestRank != null && rank != null && rank === stats.fastestRank,
+          });
+        })
+        .join('')}
       </div>
-      ${
-        sellers.length < totalCount
-          ? `<div class="oh-modal-partial">已显示 ${sellers.length} / ${totalCount},完整列表点击下方按钮查看</div>`
-          : ''
+      ${sellers.length < totalCount
+        ? `<div class="oh-modal-partial">已显示 ${sellers.length} / ${totalCount},完整列表点击下方按钮查看</div>`
+        : ''
       }
     `;
   }
@@ -10164,11 +10161,10 @@
         <div class="oh-seller-list">${_renderSkeletonRows(5)}</div>
       </div>
       <div class="oh-modal-footer">
-        ${
-          ozonModalUrl
-            ? `<a class="oh-modal-cta" href="${_escHtml(ozonModalUrl)}" target="_blank" rel="noopener">在 Ozon 查看完整列表 →</a>`
-            : ''
-        }
+        ${ozonModalUrl
+        ? `<a class="oh-modal-cta" href="${_escHtml(ozonModalUrl)}" target="_blank" rel="noopener">在 Ozon 查看完整列表 →</a>`
+        : ''
+      }
       </div>
     `;
 
@@ -10258,11 +10254,10 @@
         <div class="oh-modal-empty-icon">${_lucideSvg('users')}</div>
         <div class="oh-modal-empty-title">${totalCount > 0 ? `${totalCount} 个跟卖商家` : '暂无跟卖商家'}</div>
         <div class="oh-modal-empty-hint">${totalCount > 0 ? '完整卖家列表(含价格、配送、评分)请在 Ozon 查看' : '该商品当前没有其他商家跟卖'}</div>
-        ${
-          ozonModalUrl && totalCount > 0
-            ? `<a class="oh-modal-empty-btn" href="${_escHtml(ozonModalUrl)}" target="_blank" rel="noopener">在 Ozon 查看 →</a>`
-            : ''
-        }
+        ${ozonModalUrl && totalCount > 0
+        ? `<a class="oh-modal-empty-btn" href="${_escHtml(ozonModalUrl)}" target="_blank" rel="noopener">在 Ozon 查看 →</a>`
+        : ''
+      }
       </div>
     `;
   }
@@ -10343,7 +10338,7 @@
     const close = () => {
       try {
         dialog.remove();
-      } catch {}
+      } catch { }
     };
 
     return { dialog, update, close };
@@ -10367,7 +10362,7 @@
       btn.innerHTML = `<span class="oh-btn-icon">${_lucideSvg('refresh-cw')}</span>采集中…`;
       try {
         await window.ensurePdpState();
-      } catch {}
+      } catch { }
       btn.disabled = false;
       if (originalBtnHtml != null) btn.innerHTML = originalBtnHtml;
     }
@@ -10483,7 +10478,7 @@
                     fetchedAspects = data.aspects;
                     break;
                   }
-                } catch {}
+                } catch { }
               }
               if (!fetchedAspects) {
                 phaseADoneCount++;

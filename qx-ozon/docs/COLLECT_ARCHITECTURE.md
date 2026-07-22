@@ -388,6 +388,89 @@ _doAutoCollect 返回值:
 
 [ozon-product.js L10-13](file:///c:/root/code/ozon-my/qx-ozon/content/ozon-product.js#L10) 使用 `window.__JZ_PRODUCT_INSTALLED__` 守卫,防止重载时重复执行顶层 `ensurePdpState()` 网络请求。
 
+### 6.4 浅度采集徽章与计数
+
+> **核心原则**:商品卡角落徽章与 QX 采集器面板的"发现/采集/略过"计数,**均基于浅度采集的 `passesFilter` 判定**,不依赖深度采集队列状态或 ERP 缓存命中。
+>
+> 这与"采集队列监控页"的 4 类状态徽章(采集中/采集成功/采集失败/未采集,见 5.1)是两套独立 UI——后者描述深度采集任务状态,前者描述浅度采集过滤结果。
+
+#### 文件位置
+
+| 文件 | 职责 |
+|---|---|
+| [collect-status.js](file:///c:/root/code/ozon-my/qx-ozon/collect/content/collect-status.js) | 维护已发现/已通过过滤 SKU 集合、徽章渲染、计数统计、5 类缓存状态条渲染 |
+| [ozon-data-panel.js](file:///c:/root/code/ozon-my/qx-ozon/content/ozon-data-panel.js) | API/DOM 模式提取卡片 → 调用 `addStoreSku`/`updateStoreSkuPassFilter` → 刷新计数 |
+
+#### 三态徽章定义
+
+| 状态 | 视觉 | 判定依据 | 含义 |
+|---|---|---|---|
+| 未发现 | 无徽章 | `!_storeCollectedSkus.has(sku)` | 非店铺商品,或还未扫到 |
+| 已发现未采集 | 蓝色 `•` | `_storeCollectedSkus.has(sku)` 且 `!_storeCollectedSkusPassed.has(sku)` | 店铺 SKU 已扫到,但未通过过滤条件(价格/评论/评分范围) |
+| 已采集 | 绿色 `✓` | `_storeCollectedSkusPassed.has(sku)` | 通过过滤条件(`passesFilter=true`) |
+
+#### "发现/采集/略过"计数定义
+
+QX 采集器面板顶部状态条展示三项计数(由 `getStoreSkuStats()` 返回):
+
+| 计数 | 计算公式 | 含义 |
+|---|---|---|
+| 发现 | `_storeCollectedSkus.size` | 当前店铺页扫到的所有店铺 SKU |
+| 采集 | `_storeCollectedSkusPassed.size` | 通过过滤条件的 SKU 数 |
+| 略过 | `发现 - 采集` | 未通过过滤条件的 SKU 数 |
+
+#### 核心数据结构(collect-status.js)
+
+```javascript
+// 已发现店铺 SKU 集合(用于计数 + 徽章"已发现"判定)
+const _storeCollectedSkus = new Set();
+
+// 通过过滤的店铺 SKU 集合(passesFilter=true)
+// 用于"已采集"判定:通过过滤 = 已采集,未通过 = 略过
+const _storeCollectedSkusPassed = new Set();
+
+// 5 类缓存命中集合(仅用于状态条展示,不参与徽章/计数判定)
+const _skuCacheHitSet = new Set();
+```
+
+#### passesFilter 计算时机
+
+**API 直取模式**([ozon-data-panel.js onCardExtracted](file:///c:/root/code/ozon-my/qx-ozon/content/ozon-data-panel.js#L1342)):
+
+卡片提取时即可计算 `passesFilter`(价格/评论/评分范围过滤),直接传入 `addStoreSku(sku, passesFilter)`。无论是否通过过滤都会:
+- `reportStoreSkuDiscovery` → 发现计数 +1
+- `addStoreSku(sku, passesFilter)` → 加入 `_storeCollectedSkus`,通过则同时加入 `_storeCollectedSkusPassed`
+- `shallowCollectLog` → 写浅度采集日志(ERP 后端可见,含 `passesFilter` 字段)
+
+仅 `passesFilter=true` 的 SKU 才会写 dom card 缓存并提交深度采集任务。
+
+**DOM 滚动模式**([ozon-data-panel.js loadPanelData](file:///c:/root/code/ozon-my/qx-ozon/content/ozon-data-panel.js#L579)):
+
+`ensureDataPanel` 创建 panel 时 SKU 详情未查询,先调 `addStoreSku(sku)`(passesFilter 未定)。
+`loadPanelData` 查询到 `info`(ratingCount/price/rating)后计算 `passesFilter`,再调 `updateStoreSkuPassFilter(sku, passesFilter)` 更新过滤状态:
+
+```js
+const passesFilter = !(onlyWithRating && !info.ratingCount) && _passesRangeFilter(info);
+if (window.__jzCollectStatus?.updateStoreSkuPassFilter(productId, passesFilter)) {
+  _updateStoreSkuCount();  // 状态有变化时刷新面板计数
+}
+```
+
+#### 5s 定时器刷新
+
+`_refreshVisiblePanels`([ozon-data-panel.js L229](file:///c:/root/code/ozon-my/qx-ozon/content/ozon-data-panel.js#L229))每 5s 批量查询视口内 panel 的 ERP 数据 + 缓存状态,末尾调用 `_updateStoreSkuCount()` 刷新面板计数。这确保 DOM 模式下 `updateStoreSkuPassFilter` 异步更新后,面板计数能及时刷新。
+
+#### 桥接接口(window.__jzCollectStatus)
+
+| 方法 | 用途 |
+|---|---|
+| `addStoreSku(sku, passesFilter)` | 添加店铺 SKU,同时记录过滤状态 |
+| `updateStoreSkuPassFilter(sku, passesFilter)` | 更新已存在 SKU 的过滤状态(DOM 模式用) |
+| `getStoreSkuCount()` | 返回已发现 SKU 总数 |
+| `getStoreSkuStats()` | 返回 `{collected, skipped, total}` |
+| `updateCollectBadge(card, sku)` | 渲染商品卡角落徽章 |
+| `renderCollectStatusBar(panel, sku, cacheStatus)` | 渲染 5 类缓存命中状态条(独立于徽章判定) |
+
 ---
 
 ## 七、配置与广播

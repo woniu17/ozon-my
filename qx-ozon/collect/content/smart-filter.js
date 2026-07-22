@@ -1,4 +1,4 @@
-// 极掌采集器 — Smart Filter (V3)
+// QX采集器 — Smart Filter (V3)
 //
 // 智能筛选模块,从 collector/panel.js 抽取。
 // 提供多字段范围匹配、品牌筛选、发货模式筛选及模板管理。
@@ -359,11 +359,11 @@
     if (template.shippingMode && template.shippingMode !== '不限') {
       const shippingMode = String(
         data?.shippingMode ||
-          data?.deliverySchema ||
-          data?.deliveryType ||
-          data?.salesSchema ||
-          (Array.isArray(data?.sources) ? data.sources.join('/') : '') ||
-          ''
+        data?.deliverySchema ||
+        data?.deliveryType ||
+        data?.salesSchema ||
+        (Array.isArray(data?.sources) ? data.sources.join('/') : '') ||
+        ''
       )
         .trim()
         .toUpperCase();
@@ -394,11 +394,11 @@
       const seenIds = new Set();
       const templates = Array.isArray(parsed?.templates)
         ? parsed.templates.map(_smartNormTemplate).filter((item) => {
-            if (!item || !item.id) return false;
-            if (seenIds.has(item.id)) return false;
-            seenIds.add(item.id);
-            return true;
-          })
+          if (!item || !item.id) return false;
+          if (seenIds.has(item.id)) return false;
+          seenIds.add(item.id);
+          return true;
+        })
         : [_smartDefaultTemplate()];
       if (!templates.length) templates.push(_smartDefaultTemplate());
       if (!templates.some((item) => item.id === SMART_FILTER_DEFAULT_ID)) {
@@ -446,7 +446,7 @@
     };
     try {
       await chrome.storage.local.set({ [STORAGE_KEY]: fixed });
-    } catch {}
+    } catch { }
   }
 
   async function listTemplates() {

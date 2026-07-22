@@ -1,12 +1,12 @@
 (() => {
   // dev 直接加载源码时 build.js 没跑,brand 占位符保持字面量 → 运行时兜底成平台默认。
   // 用 /__BRAND/ 探测而不写全占位符:build 的 textual replace 会把出现的全占位符全换掉,
-  // 若把探测串也写全,分销商 build 会被错误兜底成平台默认(store.jizhangerp.com / 极掌)。
+  // 若把探测串也写全,分销商 build 会被错误兜底成平台默认(store.jizhangerp.com / QX)。
   const _brandFallback = (val, fb) => (/__BRAND/.test(val) ? fb : val);
   const BRAND_WEB_HOST = 'localhost:3001';
-  const BRAND_DISPLAY_NAME = _brandFallback('MY', '极掌');
+  const BRAND_DISPLAY_NAME = _brandFallback('QX', 'QX');
 
-  // popup.html 里的 MY 静态占位符(标题/logo/按钮文案)在 dev 源码
+  // popup.html 里的 QX 静态占位符(标题/logo/按钮文案)在 dev 源码
   // 加载时不会被 build 替换 → 运行时扫一遍文本节点 + title + img[alt] 兜底替换。
   const applyBrandToDom = () => {
     const PH = '__BRAND' + '_DISPLAY_NAME__'; // 拆写,避免被 build textual replace 命中
@@ -528,7 +528,7 @@
       if (Object.keys(fresh).length !== Object.keys(m).length) {
         try {
           await chrome.storage.local.set({ [COLLECTED_URL_KEY]: fresh });
-        } catch {}
+        } catch { }
       }
       return fresh;
     } catch {
@@ -540,7 +540,7 @@
       const fresh = await loadCollectedUrls();
       fresh[normalizeProductUrl(url)] = Date.now();
       await chrome.storage.local.set({ [COLLECTED_URL_KEY]: fresh });
-    } catch {}
+    } catch { }
   };
   const isUrlCollected = async (url) => {
     const fresh = await loadCollectedUrls();
@@ -916,7 +916,7 @@
     // 通知 SW:配置已变更(SW 内 autoCollectSetConfig 走对应处理)
     try {
       chrome.runtime.sendMessage({ action: 'autoCollectSetConfig', config: cfg });
-    } catch {}
+    } catch { }
   };
 
   // 熔断倒计时:每秒更新 #ac-paused-countdown,到时隐藏熔断提示并重渲一次。
@@ -1130,7 +1130,7 @@
       }
       return false;
     });
-  } catch {}
+  } catch { }
 
   // ─── 缓存同步按钮(已废弃) ───────────────────────
   // 取消 L1 IndexedDB 后,所有缓存直接入库 SQLite,无需手动同步。
@@ -1274,17 +1274,17 @@
         await togglePremiumPivot();
         return;
       }
-      // 数据面板：toggle ozon.ru 商品卡下方的极掌 ERP 数据卡。
+      // 数据面板：toggle ozon.ru 商品卡下方的QX ERP 数据卡。
       if (action === 'data-panel') {
         await toggleDataPanel();
         return;
       }
-      // 极掌采集器：toggle search/category 页面右下角浮动采集器面板。
+      // QX采集器：toggle search/category 页面右下角浮动采集器面板。
       if (action === 'collector') {
         await toggleCollector();
         return;
       }
-      // 极掌算价：jzc-calc.js 浮动面板只在 ozon.ru 商品页激活，
+      // QX算价：jzc-calc.js 浮动面板只在 ozon.ru 商品页激活，
       // 这里直接切到已打开的商品页，没有则提示用户打开商品页
       if (action === 'pricing') {
         await openJzcCalc();
@@ -1307,10 +1307,10 @@
     if (wantOn && !ozon_premium_acknowledged) {
       const ok = window.confirm(
         '⚠ 数据透视眼会客户端伪造 Ozon Premium 会员状态\n\n' +
-          '• 该功能可能违反 Ozon TOS 导致店铺封禁\n' +
-          '• 伪造的图表数据是随机数，无业务参考价值\n' +
-          '• 一切风险由您自行承担\n\n' +
-          '确认开启？'
+        '• 该功能可能违反 Ozon TOS 导致店铺封禁\n' +
+        '• 伪造的图表数据是随机数，无业务参考价值\n' +
+        '• 一切风险由您自行承担\n\n' +
+        '确认开启？'
       );
       if (!ok) return;
       await chrome.storage.local.set({ ozon_premium_acknowledged: true });
@@ -1347,7 +1347,7 @@
     badge.classList.toggle('is-on', on);
   }
 
-  // ─── 极掌算价：跳到 ozon.ru 商品页激活 jzc-calc 浮动面板 ──
+  // ─── QX算价：跳到 ozon.ru 商品页激活 jzc-calc 浮动面板 ──
   async function openJzcCalc() {
     try {
       // 优先级 1：已打开的商品页（jzc-calc 浮窗就在那）
@@ -1380,7 +1380,7 @@
     }
   }
 
-  // ─── 极掌采集器 toggle(默认关 — 用户主动开才显示采集器浮窗) ───────
+  // ─── QX采集器 toggle(默认关 — 用户主动开才显示采集器浮窗) ───────
   async function toggleCollector() {
     const { ozon_collector_enabled } = await chrome.storage.local.get('ozon_collector_enabled');
     // 默认关:undefined → currentlyOn=false → 点击切到 true
@@ -1399,9 +1399,9 @@
   }
 
   // 启动时初次刷新
-  syncPremiumBadge().catch(() => {});
-  syncDataPanelBadge().catch(() => {});
-  syncCollectorBadge().catch(() => {});
+  syncPremiumBadge().catch(() => { });
+  syncDataPanelBadge().catch(() => { });
+  syncCollectorBadge().catch(() => { });
 
   // 监听 storage 变化（浮动面板上 toggle 也能反传到 popup）
   try {
@@ -1413,7 +1413,7 @@
       // 自动采集配置变化(SW 写入或 QX 面板写入)→ 跨页保持状态一致
       if (changes[AC_CONFIG_KEY]) renderAutoCollect();
     });
-  } catch {}
+  } catch { }
 
   document.getElementById('web-login-btn').addEventListener('click', async () => {
     const { baseUrl } = await sendMessage({ action: 'getErpBaseUrl' });

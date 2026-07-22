@@ -15,7 +15,7 @@
 (() => {
   // ── Bestsellers 类目映射 relay ──────────────────────────────
   // page-world hook（content/ozon-bestsellers-hook.js）通过 window.postMessage 上报
-  // {name, leafIds}，这里转发给 service worker → 极掌后端入库。
+  // {name, leafIds}，这里转发给 service worker → QX后端入库。
   //
   // ── Premium 透视眼 storage 同步 relay ─────────────────────
   // page-world hook（content/ozon-premium-hook.js）通过 window.postMessage 询问
@@ -63,7 +63,7 @@
             }
           }
         );
-      } catch {}
+      } catch { }
       return;
     }
 
@@ -71,7 +71,7 @@
     if (d.type === 'JZC_PREMIUM_REQUEST_TOGGLE') {
       try {
         chrome.storage.local.set({ ozon_premium_enabled: !!d.next });
-      } catch {}
+      } catch { }
       return;
     }
 
@@ -79,7 +79,7 @@
     if (d.type === 'JZC_PREMIUM_PANEL_POS' && d.pos) {
       try {
         chrome.storage.local.set({ ozon_premium_panel_pos: d.pos });
-      } catch {}
+      } catch { }
       return;
     }
   });
@@ -103,7 +103,7 @@
         }
       }
     );
-  } catch {}
+  } catch { }
 
   // 监听 storage 变化（来自 popup / 别 tab）→ 推送给本 tab 的 main-world hook
   try {
@@ -130,7 +130,7 @@
         );
       }
     });
-  } catch {}
+  } catch { }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type !== 'sellerPortalFetch') return false;
@@ -197,7 +197,7 @@
             try {
               const json = JSON.parse(text);
               parsedCode = (json && (json.code || (json.error && json.error.code))) || '';
-            } catch {}
+            } catch { }
             sendResponse({
               ok: false,
               status: resp.status,

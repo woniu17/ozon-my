@@ -1,7 +1,7 @@
 globalThis.__JZ_BRAND__ = {
-  code: 'my',
-  displayName: 'MY',
-  productName: 'MY',
+  code: 'qx',
+  displayName: 'QX',
+  productName: 'QX',
   primaryColor: 'rgb(232,77,146)',
   apiHost: 'localhost:3001',
   webHost: 'localhost:3001',
@@ -43,7 +43,7 @@ globalThis.__JZ_BRAND__ = {
   // 避免 N 个 iframe × 1s 定时器 × N 个扩展重载场景下的 CPU 风暴。
   const IS_TOP_FRAME = window === window.top;
   const BRAND_DISPLAY_NAME =
-    (globalThis.__JZ_BRAND__ && globalThis.__JZ_BRAND__.displayName) || (/__BRAND/.test('MY') ? '平台' : 'MY');
+    (globalThis.__JZ_BRAND__ && globalThis.__JZ_BRAND__.displayName) || (/__BRAND/.test('QX') ? '平台' : 'QX');
 
   function escapeHtml(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => {

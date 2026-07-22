@@ -53,7 +53,7 @@
   var POLL_INTERVAL_MS = 5000;
   var COUNTDOWN_INTERVAL_MS = 1000;
 
-  var BRAND_DISPLAY_NAME = (globalThis.__JZ_BRAND__ && globalThis.__JZ_BRAND__.displayName) || 'MY';
+  var BRAND_DISPLAY_NAME = (globalThis.__JZ_BRAND__ && globalThis.__JZ_BRAND__.displayName) || 'QX';
 
   function _toNumber(value) {
     if (value === null || value === undefined || value === '') return null;

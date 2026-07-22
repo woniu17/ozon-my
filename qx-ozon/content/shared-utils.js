@@ -1,23 +1,23 @@
 globalThis.__JZ_BRAND__ = {
-  code: 'my',
-  displayName: 'MY',
-  productName: 'MY',
+  code: 'qx',
+  displayName: 'QX',
+  productName: 'QX',
   primaryColor: 'rgb(232,77,146)',
   apiHost: 'localhost:3001',
   webHost: 'localhost:3001',
   logoUrl:
     'https://jz-item-image-bucket.oss-cn-beijing.aliyuncs.com/images/2026-05-21/1779387908462_11498a0f1bc945b4.png',
 };
-// Shared utility functions for 极掌 (JiZhang) Extension
+// Shared utility functions for QX (JiZhang) Extension
 // This file is loaded before other content scripts via manifest.json
 
 // Brand 兜底:dev 直接加载源码时 esbuild define 未注入 globalThis.__JZ_BRAND__,
-// fallback 默认极掌。生产 build 时 build.js esbuild define 把 globalThis.__JZ_BRAND__
+// fallback 默认QX。生产 build 时 build.js esbuild define 把 globalThis.__JZ_BRAND__
 // 静态 inline 成实际 brand 对象,该 if 判断恒为 false,赋值被 DCE。
 // per-field 兜底:防止某个 brand build 漏配字段(如 distributor 配置只有
 // displayName/logoUrl 没 webHost)→ `https://${undefined}` 这种线上 bug。
-const BRAND_DISPLAY_NAME_FALLBACK = /__BRAND/.test('MY') ? '平台' : 'MY';
-const BRAND_PRODUCT_NAME_FALLBACK = /__BRAND/.test('MY') ? `${BRAND_DISPLAY_NAME_FALLBACK}算价` : 'MY';
+const BRAND_DISPLAY_NAME_FALLBACK = /__BRAND/.test('QX') ? '平台' : 'QX';
+const BRAND_PRODUCT_NAME_FALLBACK = /__BRAND/.test('QX') ? `${BRAND_DISPLAY_NAME_FALLBACK}算价` : 'QX';
 const __JZ_BRAND_DEFAULTS__ = {
   code: 'platform',
   displayName: BRAND_DISPLAY_NAME_FALLBACK,
@@ -121,7 +121,7 @@ if (!globalThis.__JZ_BRAND__) {
         void chrome.runtime.lastError;
       });
     }
-  } catch {}
+  } catch { }
 
   /**
    * Inline lucide-style SVG icons. 替代 emoji 用作 UI 装饰，统一克制风格。
@@ -208,7 +208,7 @@ if (!globalThis.__JZ_BRAND__) {
           return parsed;
         }
       }
-    } catch {}
+    } catch { }
     // Fallback: 命中 composer-api 缓存(Ozon 2026 纯客户端 hydrate 场景)
     if (_jzPdpStateCache && _jzPdpStateCache.url === window.location.href && _jzPdpStateCache.expiresAt > Date.now()) {
       const prefix = _statePrefixOf(stateName);
@@ -221,7 +221,7 @@ if (!globalThis.__JZ_BRAND__) {
             STATE_CACHE[stateName] = parsed;
             return parsed;
           }
-        } catch {}
+        } catch { }
       }
     }
     return null;
@@ -327,7 +327,7 @@ if (!globalThis.__JZ_BRAND__) {
           KEY_CACHE[cacheKey] = data;
           return data;
         }
-      } catch {}
+      } catch { }
     }
     return null;
   };
@@ -1028,7 +1028,7 @@ if (!globalThis.__JZ_BRAND__) {
           // 排查得翻 SW 控制台。这里把两者都带上,页面错误面板直接看到根因。
           console.error(
             `[sendMessage] FAIL action=${action}: ${response?.error || 'UNKNOWN'}` +
-              (response?.message && response.message !== response.error ? ` — ${response.message}` : '')
+            (response?.message && response.message !== response.error ? ` — ${response.message}` : '')
           );
           reject(new Error(response?.message || response?.error || 'Unknown error'));
         }
@@ -1049,7 +1049,7 @@ if (!globalThis.__JZ_BRAND__) {
       // Ozon 原生 ru / en，翻译后通常变 zh / zh-CN / zh-Hans
       // 如果页面原生 zh 也认为是"翻译态"——这种情况 Ozon DOM 不会是俄/英，统一退化更安全
       if (lang && lang.startsWith('zh')) return true;
-    } catch {}
+    } catch { }
     return false;
   };
 
@@ -1084,12 +1084,12 @@ if (!globalThis.__JZ_BRAND__) {
     return Number.isInteger(n) && n >= 0 ? n : null;
   };
 
-  // ─── 防浏览器翻译污染极掌注入 UI ─────────────────────────
-  // 用户可能开了 Chrome / Edge 翻译把页面翻成中文，会污染极掌的：
-  //   - UI 文本（"商品信息 / 月销量 / 极掌 ERP" 等）
+  // ─── 防浏览器翻译污染QX注入 UI ─────────────────────────
+  // 用户可能开了 Chrome / Edge 翻译把页面翻成中文，会污染QX的：
+  //   - UI 文本（"商品信息 / 月销量 / QX ERP" 等）
   //   - 用户后续从 DOM 读取的内容（采集器抓 textContent → 中文进库）
   //
-  // 给所有极掌注入的 DOM 元素打 translate="no" 属性，浏览器翻译会跳过这些子树。
+  // 给所有QX注入的 DOM 元素打 translate="no" 属性，浏览器翻译会跳过这些子树。
   // 选择器：所有以 ozon-helper-* / jzc-* / jz-c- 开头的 className，
   // 以及透视眼浮窗的固定 ID（jzc_premium_panel）。
   // 子元素继承祖先的 translate 属性，所以只需给根元素打就够了。
@@ -1099,14 +1099,14 @@ if (!globalThis.__JZ_BRAND__) {
       if (el && el.setAttribute && el.nodeType === 1 && !el.hasAttribute('translate')) {
         el.setAttribute('translate', 'no');
       }
-    } catch {}
+    } catch { }
   };
   const _scanAndProtect = (root) => {
     try {
       if (!root || !root.querySelectorAll) return;
       if (root.matches?.(_OH_SELECTOR)) _setNoTranslate(root);
       root.querySelectorAll(_OH_SELECTOR).forEach(_setNoTranslate);
-    } catch {}
+    } catch { }
   };
   const _initTranslateGuard = () => {
     if (window.__jzcTranslateGuardInstalled__) return;
@@ -1114,7 +1114,7 @@ if (!globalThis.__JZ_BRAND__) {
     if (!document.body) return;
     // 立即扫一遍现有元素
     _scanAndProtect(document.body);
-    // 监听后续注入的极掌元素
+    // 监听后续注入的QX元素
     try {
       new MutationObserver((mutations) => {
         for (const m of mutations) {
@@ -1124,7 +1124,7 @@ if (!globalThis.__JZ_BRAND__) {
             });
         }
       }).observe(document.body, { childList: true, subtree: true });
-    } catch {}
+    } catch { }
   };
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _initTranslateGuard, { once: true });
@@ -1391,7 +1391,7 @@ if (!globalThis.__JZ_BRAND__) {
         if (p === 'weekly' || p === 'monthly') _jzSalesPeriod = p;
       }
     });
-  } catch {}
+  } catch { }
   window.jzGetSalesPeriod = () => _jzSalesPeriod; // 'monthly' | 'weekly'
   window.jzSalesPeriodCnShort = () => (_jzSalesPeriod === 'weekly' ? '周' : '月');
   window.jzSalesPeriodDays = () => (_jzSalesPeriod === 'weekly' ? 7 : 30);
@@ -1557,7 +1557,7 @@ if (!globalThis.__JZ_BRAND__) {
             if (periodChanged) {
               try {
                 location.reload();
-              } catch {}
+              } catch { }
             }
           });
           close();
@@ -1723,44 +1723,44 @@ if (!globalThis.__JZ_BRAND__) {
 
     const heroHtml = `<div class="oh-hero-section">
       ${_ohHeroStat({
-        field: 'sales30d',
-        accent: 'blue',
-        label: `${window.jzSalesPeriodCnShort?.() || '月'}销量`,
-        value: heroSold,
-        tip: `商品${window.jzSalesPeriodCnLong?.() || '近 30 天'}销售数量`,
-      })}
+      field: 'sales30d',
+      accent: 'blue',
+      label: `${window.jzSalesPeriodCnShort?.() || '月'}销量`,
+      value: heroSold,
+      tip: `商品${window.jzSalesPeriodCnLong?.() || '近 30 天'}销售数量`,
+    })}
       ${_ohHeroStat({
-        field: 'createDate',
-        accent: 'green',
-        label: '上架时间',
-        value: dateMain,
-        sub: dateSub,
-        tip: '商品首次上架的日期',
-      })}
+      field: 'createDate',
+      accent: 'green',
+      label: '上架时间',
+      value: dateMain,
+      sub: dateSub,
+      tip: '商品首次上架的日期',
+    })}
       ${_ohHeroStat({
-        field: 'heroFollow',
-        accent: 'orange',
-        label: '跟卖',
-        value: followVal,
-        sub: followSub,
-        // followCount === 0 才禁用(确认无跟卖);null(fetch 失败/反爬退避中) 仍允许跳
-        // Ozon 原生卖家列表,作为兜底。
-        tip:
-          followCount === 0
-            ? '商品当前无跟卖者'
-            : followCount > 0
-              ? '\u70b9\u51fb\u67e5\u770b\u8ddf\u5356\u5546\u5bb6\u5217\u8868'
-              : '\u8ddf\u5356\u6570\u52a0\u8f7d\u4e2d,\u70b9\u51fb\u67e5\u770b\u5356\u5bb6\u5217\u8868',
-        clickAction: followCount === 0 ? null : 'show-followsell-modal',
-      })}
+      field: 'heroFollow',
+      accent: 'orange',
+      label: '跟卖',
+      value: followVal,
+      sub: followSub,
+      // followCount === 0 才禁用(确认无跟卖);null(fetch 失败/反爬退避中) 仍允许跳
+      // Ozon 原生卖家列表,作为兜底。
+      tip:
+        followCount === 0
+          ? '商品当前无跟卖者'
+          : followCount > 0
+            ? '\u70b9\u51fb\u67e5\u770b\u8ddf\u5356\u5546\u5bb6\u5217\u8868'
+            : '\u8ddf\u5356\u6570\u52a0\u8f7d\u4e2d,\u70b9\u51fb\u67e5\u770b\u5356\u5bb6\u5217\u8868',
+      clickAction: followCount === 0 ? null : 'show-followsell-modal',
+    })}
       ${_ohHeroStat({
-        field: 'heroSize',
-        accent: 'purple',
-        label: '重量·尺寸',
-        value: sizeMain,
-        sub: sizeSub,
-        tip: '商品重量与长×宽×高(mm)',
-      })}
+      field: 'heroSize',
+      accent: 'purple',
+      label: '重量·尺寸',
+      value: sizeMain,
+      sub: sizeSub,
+      tip: '商品重量与长×宽×高(mm)',
+    })}
     </div>`;
 
     // Sections:删除 hero 已展示的「月销量」「跟卖数」
@@ -2228,7 +2228,7 @@ if (!globalThis.__JZ_BRAND__) {
           ttl: ttl || FOLLOW_SELL_CACHE_TTL_MS,
         })
       );
-    } catch {}
+    } catch { }
   }
 
   function readFollowSellMissCache(sku) {
@@ -2563,7 +2563,7 @@ if (!globalThis.__JZ_BRAND__) {
       sendMessage('followSellCacheSet', {
         sku,
         data: { count: result.count, sellers: result.sellers, source: result.source },
-      }).catch(() => {});
+      }).catch(() => { });
       return { count: result.count, sellers: result.sellers };
     } catch (e) {
       console.error(`[jz follow-sell] modal fetch failed for sku=${sku}: ${e?.message || e}`);
@@ -2701,20 +2701,19 @@ if (!globalThis.__JZ_BRAND__) {
     return `
       <div class="oh-seller-list">
         ${sorted
-          .map((seller) => {
-            const price = _fsParsePrice(seller.price);
-            const rank = _fsDeliveryRank(seller);
-            return _fsRenderSellerRow(seller, {
-              isMinPrice: stats.minPrice != null && price != null && price === stats.minPrice,
-              isFastest: stats.fastestRank != null && rank != null && rank === stats.fastestRank,
-            });
-          })
-          .join('')}
+        .map((seller) => {
+          const price = _fsParsePrice(seller.price);
+          const rank = _fsDeliveryRank(seller);
+          return _fsRenderSellerRow(seller, {
+            isMinPrice: stats.minPrice != null && price != null && price === stats.minPrice,
+            isFastest: stats.fastestRank != null && rank != null && rank === stats.fastestRank,
+          });
+        })
+        .join('')}
       </div>
-      ${
-        sellers.length < totalCount
-          ? `<div class="oh-modal-partial">\u5df2\u663e\u793a ${sellers.length} / ${totalCount},\u5b8c\u6574\u5217\u8868\u70b9\u51fb\u4e0b\u65b9\u6309\u94ae\u67e5\u770b</div>`
-          : ''
+      ${sellers.length < totalCount
+        ? `<div class="oh-modal-partial">\u5df2\u663e\u793a ${sellers.length} / ${totalCount},\u5b8c\u6574\u5217\u8868\u70b9\u51fb\u4e0b\u65b9\u6309\u94ae\u67e5\u770b</div>`
+        : ''
       }
     `;
   }
@@ -2745,11 +2744,10 @@ if (!globalThis.__JZ_BRAND__) {
         <div class="oh-modal-empty-icon">${window.lucideIcon ? window.lucideIcon('users', 28) : ''}</div>
         <div class="oh-modal-empty-title">${totalCount > 0 ? `${totalCount} \u4e2a\u8ddf\u5356\u5546\u5bb6` : '\u6682\u65e0\u8ddf\u5356\u5546\u5bb6'}</div>
         <div class="oh-modal-empty-hint">${totalCount > 0 ? '\u5b8c\u6574\u5356\u5bb6\u5217\u8868(\u542b\u4ef7\u683c\u3001\u914d\u9001\u3001\u8bc4\u5206)\u8bf7\u5728 Ozon \u67e5\u770b' : '\u8be5\u5546\u54c1\u5f53\u524d\u6ca1\u6709\u5176\u4ed6\u5546\u5bb6\u8ddf\u5356'}</div>
-        ${
-          ozonModalUrl && totalCount > 0
-            ? `<a class="oh-modal-empty-btn" href="${_ohEsc(ozonModalUrl)}" target="_blank" rel="noopener">\u5728 Ozon \u67e5\u770b -></a>`
-            : ''
-        }
+        ${ozonModalUrl && totalCount > 0
+        ? `<a class="oh-modal-empty-btn" href="${_ohEsc(ozonModalUrl)}" target="_blank" rel="noopener">\u5728 Ozon \u67e5\u770b -></a>`
+        : ''
+      }
       </div>
     `;
   }
@@ -2804,11 +2802,10 @@ if (!globalThis.__JZ_BRAND__) {
         <div class="oh-seller-list">${_fsRenderSkeletonRows(5)}</div>
       </div>
       <div class="oh-modal-footer">
-        ${
-          ozonModalUrl
-            ? `<a class="oh-modal-cta" href="${_ohEsc(ozonModalUrl)}" target="_blank" rel="noopener">\u5728 Ozon \u67e5\u770b\u5b8c\u6574\u5217\u8868 -></a>`
-            : ''
-        }
+        ${ozonModalUrl
+        ? `<a class="oh-modal-cta" href="${_ohEsc(ozonModalUrl)}" target="_blank" rel="noopener">\u5728 Ozon \u67e5\u770b\u5b8c\u6574\u5217\u8868 -></a>`
+        : ''
+      }
       </div>
     `;
 
@@ -2841,7 +2838,7 @@ if (!globalThis.__JZ_BRAND__) {
       cleanups.splice(0).forEach((fn) => {
         try {
           fn();
-        } catch {}
+        } catch { }
       });
       modal.remove();
       if (_followSellModalState?.modal === modal) _followSellModalState = null;
@@ -2927,7 +2924,7 @@ if (!globalThis.__JZ_BRAND__) {
   };
 
   window.jzBindFollowSellHover = function (root) {
-    if (!root || root._jzFollowSellHoverBound) return () => {};
+    if (!root || root._jzFollowSellHoverBound) return () => { };
     root._jzFollowSellHoverBound = true;
     // Compatibility no-op: follow-sell seller list is click-only again.
     // The actual click dispatch lives in ozon-product / ozon-search / ozon-data-panel.
@@ -3016,7 +3013,7 @@ if (!globalThis.__JZ_BRAND__) {
         };
         chrome.storage.local.set({ [_wdLocalKey(sku)]: merged });
       });
-    } catch {}
+    } catch { }
   };
 
   // 只读 cache 入口,数据卡片 sv 失败时兜底用。
@@ -3047,11 +3044,11 @@ if (!globalThis.__JZ_BRAND__) {
     try {
       const raw = sessionStorage.getItem(`jz-fs5:${sku}`);
       out.cache = raw ? JSON.parse(raw) : null;
-    } catch {}
+    } catch { }
     try {
       const raw = sessionStorage.getItem(`jz-fs2-miss:${sku}`);
       out.miss = raw ? JSON.parse(raw) : null;
-    } catch {}
+    } catch { }
     out.paused = Date.now() < followSellFailureState.pausedUntil;
     const inner = `/modal/otherOffersFromSellers?product_id=${sku}`;
     const url = `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(inner)}`;
@@ -3073,7 +3070,7 @@ if (!globalThis.__JZ_BRAND__) {
         if (typeof wsl === 'string') {
           try {
             wsl = JSON.parse(wsl);
-          } catch {}
+          } catch { }
         }
         const rawSellers = Array.isArray(wsl?.sellers) ? wsl.sellers : [];
         out.rawSellerCount = rawSellers.length;
@@ -3126,7 +3123,7 @@ if (!globalThis.__JZ_BRAND__) {
           await navigator.clipboard.writeText(value);
           return true;
         }
-      } catch {}
+      } catch { }
 
       try {
         const ta = document.createElement('textarea');

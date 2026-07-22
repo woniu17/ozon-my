@@ -228,7 +228,7 @@
   };
 
   // ─── 采集开关(深度/浅度) ──────────────────────────────
-  // 与 popup / MY 采集器面板共用同一份配置(autoCollectRunning / shallowCollectRunning),
+  // 与 popup / QX 采集器面板共用同一份配置(autoCollectRunning / shallowCollectRunning),
   // 通过 autoCollectSetConfig 保存到 SW,SW 广播 configChanged 后各端同步。
   const renderSwitches = (d) => {
     if (swDeep && document.activeElement !== swDeep) {

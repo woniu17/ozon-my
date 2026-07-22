@@ -1,7 +1,7 @@
 globalThis.__JZ_BRAND__ = {
-  code: 'my',
-  displayName: 'MY',
-  productName: 'MY',
+  code: 'qx',
+  displayName: 'QX',
+  productName: 'QX',
   primaryColor: 'rgb(232,77,146)',
   apiHost: 'localhost:3001',
   webHost: 'localhost:3001',
@@ -20,10 +20,10 @@ if (typeof chrome !== 'undefined') {
       removeAll: (cb) => {
         try {
           cb && cb();
-        } catch (_) {}
+        } catch (_) { }
       },
-      create: () => {},
-      onClicked: { addListener: () => {}, removeListener: () => {} },
+      create: () => { },
+      onClicked: { addListener: () => { }, removeListener: () => { } },
     };
   }
   if (typeof chrome.notifications === 'undefined') {
@@ -31,14 +31,14 @@ if (typeof chrome !== 'undefined') {
       create: (id, opts, cb) => {
         try {
           cb && cb(typeof id === 'string' ? id : '');
-        } catch (_) {}
+        } catch (_) { }
       },
       clear: (id, cb) => {
         try {
           cb && cb(true);
-        } catch (_) {}
+        } catch (_) { }
       },
-      onClicked: { addListener: () => {}, removeListener: () => {} },
+      onClicked: { addListener: () => { }, removeListener: () => { } },
     };
   }
   if (typeof chrome.cookies === 'undefined') {
@@ -48,7 +48,7 @@ if (typeof chrome !== 'undefined') {
         if (typeof cb === 'function') {
           try {
             cb(empty);
-          } catch (_) {}
+          } catch (_) { }
           return;
         }
         return Promise.resolve(empty);
@@ -105,7 +105,7 @@ try {
     }
   );
 
-  // 启动版本标识：用户跟卖前看 chrome://extensions 极掌 → service worker → console
+  // 启动版本标识：用户跟卖前看 chrome://extensions QX → service worker → console
   // 必须能看到下面这行才说明新代码已加载（否则说明 sw 没 reload）
   console.log(
     '[SW] booted: searchVariants = /api/v1/search + /api/site/seller-prototype/create-bundle-by-variant-id (sv endpoint 2026-05 下线) + ensureSellerTab + client-sync'
@@ -178,7 +178,7 @@ try {
   const COLLECTOR_STALE_MS = 90 * 1000;
   const collectorTabs = new Map(); // tabId → { tabId, stats, currentKeyword, autoScrollerRunning, bucketCount, url, title, ts }
 
-  // ── 极掌算价：CNY→RUB 实时汇率 ──
+  // ── QX算价：CNY→RUB 实时汇率 ──
   // 每日刷新一次写入 chrome.storage.local。content/jzc-calc.js 监听 storage 变化自动重算
   const FX_STORAGE_KEY = 'jz_calc_fx_rate_v1';
   const FX_ALARM = 'jzc-fx-refresh';
@@ -345,10 +345,10 @@ try {
                 localStorage.removeItem('currentOzonStoreId');
                 // 刷新页面,admin.js 检测到无 token 自动显示登录视图
                 location.reload();
-              } catch {}
+              } catch { }
             },
           });
-        } catch {}
+        } catch { }
       }
     } catch (e) {
       console.warn('[ServiceWorker] clearWebAuthTabs failed:', e?.message);
@@ -378,7 +378,7 @@ try {
           resolvedBackendUrl = url;
           return url;
         }
-      } catch {}
+      } catch { }
     }
     resolvedBackendUrl = BACKEND_URLS[BACKEND_URLS.length - 1];
     return resolvedBackendUrl;
@@ -510,7 +510,7 @@ try {
         await new Promise((r) => chrome.storage.local.remove(stale, r));
         console.log(`[SW] cleared ${stale.length} legacy bundle cache entries (migrated to IndexedDB+ERP)`);
       }
-    } catch {}
+    } catch { }
   })();
 
   // ── 采集缓存层(已迁移到 collect/background/collect-cache.js) ──────────────
@@ -615,7 +615,7 @@ try {
         console.log(`[SW] cleared ${expired.length} expired collect dedupe entries (>24h)`);
       }
       await new Promise((r) => chrome.storage.local.set({ [_COLLECT_CLEANUP_KEY]: { at: now } }, r));
-    } catch {}
+    } catch { }
   })();
 
   // fetchBundleByVariantId 已迁移到 collect/background/collect-tab.js
@@ -649,7 +649,7 @@ try {
         if (cached && Date.now() - (cached.at || 0) < _SELLER_TREE_TTL_MS && cached.tree) {
           return cached.tree;
         }
-      } catch {}
+      } catch { }
     }
     const resp = await fetchSellerPortal(
       '/seller-tree/get-by-company-id',
@@ -667,7 +667,7 @@ try {
     if (!tree || typeof tree !== 'object') return null;
     try {
       chrome.storage.local.set({ [cacheKey]: { at: Date.now(), tree } });
-    } catch {}
+    } catch { }
     return tree;
   };
 
@@ -1155,7 +1155,7 @@ try {
       if (refreshed) {
         try {
           await setStorage({ [STORAGE_KEYS.token]: refreshed });
-        } catch {}
+        } catch { }
       }
       return response.json();
     } catch (e) {
@@ -1187,7 +1187,7 @@ try {
   const MD_PROXY_MAX_INFLIGHT = 5;
   let _mdProxyInflight = 0;
   const proxyCollectVariant = async (backendUrl, token, storeId, sku) => {
-    if (!token) return null; // 未登录极掌,无法派单
+    if (!token) return null; // 未登录QX,无法派单
     try {
       const job = await apiRequest(
         'POST',
@@ -1240,7 +1240,7 @@ try {
   // 与 proxyCollectVariant 同构。成功返回远端 getMarketStats 的整包 { ok, data }(data 可能
   // 为 null = 该 SKU 确无市场数据);派单失败/超时/无人代采返回 null,由调用方回退到「需登录」提示。
   const proxyMarketData = async (backendUrl, token, storeId, sku, period) => {
-    if (!token) return null; // 未登录极掌,无法派单
+    if (!token) return null; // 未登录QX,无法派单
     if (_mdProxyInflight >= MD_PROXY_MAX_INFLIGHT) return null; // 限流:网格场景别刷爆代采池
     _mdProxyInflight++;
     try {
@@ -1462,7 +1462,7 @@ try {
     let scheduleNext = false;
     try {
       keepAliveTimer = setInterval(() => {
-        chrome.runtime.getPlatformInfo(() => {});
+        chrome.runtime.getPlatformInfo(() => { });
       }, 15000);
 
       let meta = await _loadQueueMeta();
@@ -1520,7 +1520,7 @@ try {
       console.error('[Queue] consume error:', e);
       // Phase 2: ERP 不可用时(claim 失败)暂停消费,避免反复失败。
       // _processTask 内部有 try/catch 不会抛出,此处 catch 主要是 ERP 不可用。
-      await _saveQueueMeta({ consumePaused: true }).catch(() => {});
+      await _saveQueueMeta({ consumePaused: true }).catch(() => { });
     } finally {
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       if (!scheduleNext) {
@@ -1685,7 +1685,7 @@ try {
     });
 
   const createContextMenus = () => {
-    chrome.contextMenus.removeAll(() => {});
+    chrome.contextMenus.removeAll(() => { });
   };
 
   // ── 插件更新检查 ──
@@ -1828,7 +1828,7 @@ try {
             message: '官方下载文件 SHA-256 不匹配，已阻止本次更新提示。请检查后端配置或联系管理员。',
             priority: 2,
           });
-        } catch {}
+        } catch { }
         return;
       }
 
@@ -1933,7 +1933,7 @@ try {
     });
   };
 
-  // ── 极掌算价：拉取 CNY→RUB 实时汇率 ──
+  // ── QX算价：拉取 CNY→RUB 实时汇率 ──
   const refreshExchangeRate = async () => {
     try {
       const ctrl = new AbortController();
@@ -1984,7 +1984,7 @@ try {
       getDeviceKey: async () => getExtensionFingerprint(),
       getDeviceName: async () => {
         const manifest = chrome.runtime.getManifest() || {};
-        return `${manifest.name || '极掌'} / Chrome`;
+        return `${manifest.name || 'QX'} / Chrome`;
       },
     });
   };
@@ -2145,7 +2145,7 @@ try {
 
   chrome.notifications.onClicked.addListener((notificationId) => {
     if (notificationId.startsWith('follow-sell-fail-')) {
-      chrome.action.openPopup().catch(() => {});
+      chrome.action.openPopup().catch(() => { });
       chrome.notifications.clear(notificationId);
     }
   });
@@ -2245,7 +2245,7 @@ try {
   });
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    // 极掌算价：手动重拉汇率（content/jzc-calc.js 走 message.type 路由，
+    // QX算价：手动重拉汇率（content/jzc-calc.js 走 message.type 路由，
     // 与现有 message.action dispatch 完全独立）
     if (message?.type === 'jzc:refreshFx') {
       refreshExchangeRate().then((rate) => sendResponse({ ok: rate != null, rate }));
@@ -2330,7 +2330,7 @@ try {
           try {
             const u = new URL(inputUrl, OZON_WWW_ORIGIN);
             productPath = u.pathname;
-          } catch {}
+          } catch { }
           if (!productPath.startsWith('/product/')) {
             sendResponse({ ok: false, error: 'not a product url' });
             return;
@@ -2412,12 +2412,12 @@ try {
               seller?.sellerCell?.link ||
               seller?.link ||
               '';
-          } catch {}
+          } catch { }
           // brand
           let brandName = '';
           try {
             brandName = brand?.title || brand?.name || '';
-          } catch {}
+          } catch { }
           // price
           const priceStr = price?.cardPrice || price?.price || price?.originalPrice || '';
           const fields = {
@@ -2618,7 +2618,7 @@ try {
                     deviceId,
                     status: 'FAILED',
                     error: 'lease-busy: 另一台设备正在同步该店铺同类型数据',
-                  }).catch(() => {});
+                  }).catch(() => { });
                 }
               })
               .catch(async (e) => {
@@ -2630,13 +2630,13 @@ try {
                   deviceId,
                   status: 'FAILED',
                   error: String(e?.message || e).slice(0, 500),
-                }).catch(() => {});
+                }).catch(() => { });
               })
           );
         } catch (e) {
           try {
             sendResponse({ ok: false, error: e?.message || String(e) });
-          } catch {}
+          } catch { }
         }
       })();
       return true;
@@ -3090,7 +3090,7 @@ try {
                       if (s && localStorage.getItem('currentOzonStoreId') !== s) {
                         localStorage.setItem('currentOzonStoreId', s);
                       }
-                    } catch {}
+                    } catch { }
                   },
                   args: [token, storeId || null],
                 });
@@ -3126,7 +3126,7 @@ try {
               if (existing[0].windowId != null) {
                 try {
                   await chrome.windows.update(existing[0].windowId, { focused: true });
-                } catch {}
+                } catch { }
               }
               return { ok: true, data: { reused: true } };
             }
@@ -3382,7 +3382,7 @@ try {
             sw.maybeStartConsume();
           }
           // 推送 configChanged 通知面板/popup(fire-and-forget,无监听者不报错)
-          chrome.runtime.sendMessage({ type: 'configChanged', config: _acFiltered }).catch(() => {});
+          chrome.runtime.sendMessage({ type: 'configChanged', config: _acFiltered }).catch(() => { });
           return { ok: true };
         }
         case 'autoCollectGetRecent': {
@@ -3431,18 +3431,18 @@ try {
             data: {
               richMedia: dRm
                 ? {
-                    has: true,
-                    keys: Object.keys(dRm),
-                    hasFields: !!dRm.fields,
-                    hasWidgetStates: !!dRm.widgetStates,
-                    widgetStateKeys: dRm.widgetStates ? Object.keys(dRm.widgetStates).slice(0, 10) : [],
-                    richContentLen: (dRm.richContent || '').length,
-                    descriptionLen: (dRm.description || '').length,
-                    hasMp4: !!dRm.mp4,
-                    hashtagsCount: Array.isArray(dRm.hashtags) ? dRm.hashtags.length : 0,
-                    galleryCount: Array.isArray(dRm.gallery) ? dRm.gallery.length : 0,
-                    hitEndpoints: Array.isArray(dRm.hitEndpoints) ? dRm.hitEndpoints : [],
-                  }
+                  has: true,
+                  keys: Object.keys(dRm),
+                  hasFields: !!dRm.fields,
+                  hasWidgetStates: !!dRm.widgetStates,
+                  widgetStateKeys: dRm.widgetStates ? Object.keys(dRm.widgetStates).slice(0, 10) : [],
+                  richContentLen: (dRm.richContent || '').length,
+                  descriptionLen: (dRm.description || '').length,
+                  hasMp4: !!dRm.mp4,
+                  hashtagsCount: Array.isArray(dRm.hashtags) ? dRm.hashtags.length : 0,
+                  galleryCount: Array.isArray(dRm.gallery) ? dRm.gallery.length : 0,
+                  hitEndpoints: Array.isArray(dRm.hitEndpoints) ? dRm.hitEndpoints : [],
+                }
                 : { has: false },
               buildVersion: '20260717-rich-media-cache',
             },
@@ -3453,7 +3453,7 @@ try {
           // 清空 shared-utils 维护的去重集合,让页面已见 SKU 重新触发采集。
           const _acTabId = sender.tab?.id;
           if (_acTabId) {
-            chrome.tabs.sendMessage(_acTabId, { type: '__jzAutoCollectResetSeen' }).catch(() => {});
+            chrome.tabs.sendMessage(_acTabId, { type: '__jzAutoCollectResetSeen' }).catch(() => { });
           }
           return { ok: true };
         }
@@ -4075,7 +4075,7 @@ try {
           };
         }
         case 'getFxRate': {
-          // CNY→RUB 实时汇率（复用「极掌算价」的 FX 缓存 jz_calc_fx_rate_v1）。
+          // CNY→RUB 实时汇率（复用「QX算价」的 FX 缓存 jz_calc_fx_rate_v1）。
           // 给 1688 AI 采集向导按店铺货币定价用：成本是人民币，需换算成店铺货币。
           // 缓存缺失/过期则即时刷新一次。
           try {
@@ -4745,7 +4745,7 @@ try {
         }
         case 'reportCategoryMapping': {
           // 由 ozon-bestsellers-hook 在 seller.ozon.ru 上学到的 (一级类目名 → leaf IDs[])
-          // 转发上报到极掌后端入库。失败仅 console，不阻塞任何用户操作。
+          // 转发上报到QX后端入库。失败仅 console，不阻塞任何用户操作。
           try {
             if (!token || !storeId) return { ok: false, error: 'no auth' };
             // erp-lite 门控:bestsellers_snapshot 默认 false,未启用时不上报类目映射
@@ -5074,9 +5074,9 @@ try {
       'transferVariantVideo',
     ]);
     if (KEEP_ALIVE_ACTIONS.has(message?.action)) {
-      chrome.runtime.getPlatformInfo(() => {});
+      chrome.runtime.getPlatformInfo(() => { });
       keepAliveTimer = setInterval(() => {
-        chrome.runtime.getPlatformInfo(() => {});
+        chrome.runtime.getPlatformInfo(() => { });
       }, 15_000);
     }
 

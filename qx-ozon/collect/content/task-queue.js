@@ -1,4 +1,4 @@
-// 极掌采集器 — TaskQueue 通用类
+// QX采集器 — TaskQueue 通用类
 //
 // 用法:
 //   const q = new window.JZTaskQueue({ concurrency: 10, timeoutMs: 120000 });

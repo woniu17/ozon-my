@@ -12,7 +12,7 @@
  *   3. 同时在 popover DOM 中读取**已勾选**且**仅一个**一级类目 row 的中文名。
  *   4. 把 (name, leafIds) 通过 window.postMessage 转给 isolated world content
  *      script（jzc-bestsellers-relay），它再用 chrome.runtime.sendMessage 发到
- *      service worker 入库到极掌后端。
+ *      service worker 入库到QX后端。
  *
  * 仅当 popover 当前**只有一个**一级类目处于选中状态时才上报，避免多选时无法
  * 反推哪些 leafId 属于哪个类目。

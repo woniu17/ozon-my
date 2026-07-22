@@ -32,7 +32,7 @@
   const RECHARGE_PATH = '/ozon/settings/jidian';
   const MEMBERSHIP_PATH = '/ozon/settings/membership';
   const BATCH_UPLOAD_LISTING_CFG_KEY = 'batch-upload-listing-config-v1';
-  const DEFAULT_BRAND_DISPLAY_NAME = /__BRAND/.test('MY') ? '平台' : 'MY';
+  const DEFAULT_BRAND_DISPLAY_NAME = /__BRAND/.test('QX') ? '平台' : 'QX';
 
   // ─── State ──────────────────────────────────────
   const state = {
@@ -95,7 +95,7 @@
     if (!cfg || typeof cfg !== 'object') return;
     try {
       chrome.storage.local.set({ [BATCH_UPLOAD_LISTING_CFG_KEY]: cfg });
-    } catch {}
+    } catch { }
   }
 
   function captureBatchListingConfig() {
@@ -610,7 +610,7 @@
         await sendMessage({ action: 'syncSellerCookies' });
         appendLog('Cookie 已刷新，重试...');
         gate = await window.JZSkuCollect.gateCheck(firstSku);
-      } catch {}
+      } catch { }
       if (!gate.ok && fundamentalErrors.includes(gate.errorCode)) {
         // 真正的环境问题（没登录 / 没开 Ozon tab）→ 提示但不直接 abort，
         // 让 collectBySkus 跑一遍：万一是 search-variant-model 没登录但
@@ -699,8 +699,8 @@
       // 客户端 shuffle 图片（按 imageOrder 设定）
       const reorderedDistilled = distilled
         ? Object.assign({}, distilled, {
-            images: applyImageOrder(distilled.images, cfg.imageOrder),
-          })
+          images: applyImageOrder(distilled.images, cfg.imageOrder),
+        })
         : null;
       const built = window.JZV3Payload.buildV3Item(r, reorderedDistilled, {
         offerIdPrefix: cfg.offerIdPrefix,
@@ -759,7 +759,7 @@
     let submitDone = 0;
 
     // 埋点（当天去重在 sw 层做,失败静默）
-    sendMessage({ action: 'usageTrack', featureKey: 'batch-upload:submit' }).catch(() => {});
+    sendMessage({ action: 'usageTrack', featureKey: 'batch-upload:submit' }).catch(() => { });
 
     const settled = await Promise.allSettled(
       storeIds.map(async (sid) => {
@@ -989,9 +989,8 @@
     if (totalFailed > 0) {
       const summary = document.createElement('div');
       summary.className = 'result-row';
-      summary.innerHTML = `<span class="result-store">未上架</span><span>${
-        collectResult.failed.length
-      } 个 SKU 批采失败 / ${itemsFailed.length} 个 item 拼装失败</span>`;
+      summary.innerHTML = `<span class="result-store">未上架</span><span>${collectResult.failed.length
+        } 个 SKU 批采失败 / ${itemsFailed.length} 个 item 拼装失败</span>`;
       list.appendChild(summary);
     }
 
@@ -1214,9 +1213,8 @@
         balanceRow.style.display = '';
         balanceRow.classList.toggle('insufficient', !sufficient);
         balanceIcon.textContent = sufficient ? '✓' : '⚠';
-        balanceText.textContent = `余额：${balance.toLocaleString()} ${state.pointLabel} · ${
-          sufficient ? '充足' : '不足'
-        }`;
+        balanceText.textContent = `余额：${balance.toLocaleString()} ${state.pointLabel} · ${sufficient ? '充足' : '不足'
+          }`;
         if (sufficient) {
           rechargeLink.style.display = 'none';
         } else {
@@ -1287,7 +1285,7 @@
     const persist = (on) => {
       try {
         chrome.storage.local.set({ batchMergeCardEnabled: !!on });
-      } catch {}
+      } catch { }
     };
     toggle.addEventListener('change', () => {
       if (toggle.checked) {
@@ -1313,13 +1311,13 @@
           if (!field.value.trim()) field.value = genModel();
         }
       });
-    } catch {}
+    } catch { }
   }
 
   // 头栏 logo + 标题：按 brand 配置渲染（分销商扩展看到自家 logo/名称，
-  // 而不是固定的"极"方块和"极掌"文案）。
+  // 而不是固定的"极"方块和"QX"文案）。
   //   - tb-icon：有 brand.logoUrl 用 <img>，否则用 displayName[0] 占位字符
-  //   - document.title：MY 占位符在主插件 build.js /
+  //   - document.title：QX 占位符在主插件 build.js /
   //     分销商 extension-build.service.ts textual replace 流程会被替换；dev
   //     加载源码时占位符没替换，这里 runtime 兜底
   function renderBrandHeader() {
@@ -1342,8 +1340,8 @@
       }
     }
     // dev 加载源码时占位符没被 build 替换 → 兜底
-    if (document.title.includes('MY')) {
-      document.title = document.title.split('MY').join(displayName);
+    if (document.title.includes('QX')) {
+      document.title = document.title.split('QX').join(displayName);
     }
   }
 
@@ -1355,7 +1353,7 @@
     try {
       const manifest = chrome.runtime.getManifest();
       $('hdr-version').textContent = 'v' + manifest.version;
-    } catch {}
+    } catch { }
 
     // 鉴权 + tab 检查
     const authed = await checkAuth();

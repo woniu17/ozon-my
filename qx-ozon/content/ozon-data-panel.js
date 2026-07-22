@@ -1,5 +1,5 @@
 /**
- * 数据面板 — 在所有 ozon.ru 商品卡下方注入「极掌 ERP」销量/转化数据卡。
+ * 数据面板 — 在所有 ozon.ru 商品卡下方注入「QX ERP」销量/转化数据卡。
  *
  * 跟 ozon-search.js 的关系：
  *   - 之前数据面板逻辑跟「选品模式 / 采集器 / 自动滚动 / 关键词导航」捆在 ozon-search.js
@@ -114,7 +114,7 @@
   function _maybeFlushSku(sku, card, ctx) {
     if (ctx.timedOut) {
       // 超时降级:sellerInfo 未到达,按空 slug 提交(让 SW 判定 unclassified-store)
-      window.__jzSubmitCollectTask?.(sku, card, '', '').catch(() => {});
+      window.__jzSubmitCollectTask?.(sku, card, '', '').catch(() => { });
       return;
     }
     // onlyChineseStores 开启时,非中国店铺静默丢弃(不入 _autoCollectSeen,允许切换店铺重试)
@@ -123,7 +123,7 @@
       return;
     }
     // 中国店铺 / 未分类 / onlyChineseStores=false → 提交
-    window.__jzSubmitCollectTask?.(sku, card, ctx.sellerSlug, ctx.sellerId).catch(() => {});
+    window.__jzSubmitCollectTask?.(sku, card, ctx.sellerSlug, ctx.sellerId).catch(() => { });
   }
 
   // 批量 flush pending 队列(用于 sellerInfo 到达 / 用户手动标记后)
@@ -260,12 +260,12 @@
             if (panel.querySelector('.ozon-helper-sidebar-card-body')) {
               try {
                 await window.jzPopulatePanelV2(panel, sku, { preFetched: erpData.preFetched });
-              } catch {}
+              } catch { }
             } else if (typeof window.jzRenderProductPanelV2 === 'function') {
               window.jzRenderProductPanelV2(panel, { sku, initial: erpData });
               try {
                 await window.jzPopulatePanelV2(panel, sku, { preFetched: erpData.preFetched });
-              } catch {}
+              } catch { }
             }
             panelDataCache.set(sku, erpData);
           }
@@ -276,6 +276,8 @@
         window.__jzCollectStatus?.updateCollectBadge(card, sku);
         window.__jzCollectStatus?.renderCollectStatusBar(panel, sku, cacheStatus);
       }
+      // 刷新面板计数(确保采集/略过统计在缓存查询完成后及时更新)
+      _updateStoreSkuCount();
     } finally {
       _pageRefreshInflight = false;
     }
@@ -315,7 +317,7 @@
             window.jzRenderProductPanelV2(panel, { sku, initial: erpData });
             try {
               await window.jzPopulatePanelV2(panel, sku, { preFetched: erpData.preFetched });
-            } catch {}
+            } catch { }
             panelDataCache.set(sku, erpData);
           } else {
             window.jzRenderProductCardPanel(panel, erpData);
@@ -345,12 +347,12 @@
         if (panel.querySelector('.ozon-helper-sidebar-card-body')) {
           try {
             await window.jzPopulatePanelV2(panel, productId, { preFetched: erpData.preFetched });
-          } catch {}
+          } catch { }
         } else if (typeof window.jzRenderProductPanelV2 === 'function') {
           window.jzRenderProductPanelV2(panel, { sku: productId, initial: erpData });
           try {
             await window.jzPopulatePanelV2(panel, productId, { preFetched: erpData.preFetched });
-          } catch {}
+          } catch { }
         }
         panelDataCache.set(productId, erpData);
       }
@@ -412,7 +414,7 @@
   // 当前店铺页非店铺商品 SKU 集合(推荐区等),用于避免把非本店 SKU 关联到当前店铺
   const _nonStoreSkus = new Set();
 
-  // 更新 MY 采集器面板的店铺 SKU 收集计数
+  // 更新 QX 采集器面板的店铺 SKU 收集计数
   // 通过 collect-status.js 的 getStoreSkuStats() 桥接读取采集/略过拆分计数
   function _updateStoreSkuCount() {
     const panel = window.__qxCollectorPanel;
@@ -584,15 +586,18 @@
     //    价格/评论数范围过滤同理:不在范围内不入队(但仍渲染面板)
     //    注:card 缓存写入与 submitTask 入口均由 shallowCollectState.running 门控,
     //    与数据面板开关(panelState.enabled)解耦,避免数据面板 OFF 时 card 写入但任务不入队。
+    const passesFilter = !(onlyWithRating && !info.ratingCount) && _passesRangeFilter(info);
     if (window.__jzSubmitCollectTask && _collectGate && shallowCollectState.running) {
-      if (onlyWithRating && !info.ratingCount) {
-        // 无评价且开关开启 → 跳过采集(但仍渲染面板)
-      } else if (!_passesRangeFilter(info)) {
-        // 不在价格/评论范围 → 跳过采集(但仍渲染面板)
+      if (!passesFilter) {
+        // 过滤不通过 → 跳过采集(但仍渲染面板)
       } else {
         _pendingSkus.push({ sku: productId, card });
         _collectGate.then((ctx) => _maybeFlushSku(productId, card, ctx));
       }
+    }
+    // 更新 passesFilter 状态(用于面板计数和徽章判定)
+    if (window.__jzCollectStatus?.updateStoreSkuPassFilter(productId, passesFilter)) {
+      _updateStoreSkuCount();
     }
 
     // 2) 优先用本页已 fetch 的缓存渲染(避免重复请求)
@@ -603,7 +608,7 @@
         window.jzRenderProductPanelV2(panel, { sku: productId, initial: cached });
         try {
           await window.jzPopulatePanelV2(panel, productId, { preFetched: cached.preFetched });
-        } catch {}
+        } catch { }
       } else {
         window.jzRenderProductCardPanel(panel, cached);
       }
@@ -640,7 +645,7 @@
     renderSellerTag(card);
 
     // 店铺页:收集店铺 SKU 到 collect-status.js 的 _storeCollectedSkus
-    // (用于 MY 采集器面板计数 + jz-collect-badge 标记)
+    // (用于 QX 采集器面板计数 + jz-collect-badge 标记)
     // 非店铺商品(推荐区)不收集,只记录到 _nonStoreSkus
     // PDP 推荐区全部视为非店铺,不收集(跟 renderSellerTag 判定一致)
     if (sellerSlug && !_isPdpPage() && isStoreSkuCard(card)) {
@@ -956,7 +961,7 @@
 
   // ─── 数据面板开关：从 chrome.storage.local 读 + 监听 onChanged ───
   // 旧版本是右下角浮动 toggle 按钮（.ozon-helper-panel-toggle）。
-  // 现在统一移到极掌 popup 「工具与分析」分区里 toggle，状态持久化到
+  // 现在统一移到QX popup 「工具与分析」分区里 toggle，状态持久化到
   // chrome.storage.local.ozon_data_panel_enabled。
   // 这里只订阅 storage 变化，自动 apply/remove 面板。
   const STORAGE_KEY = 'ozon_data_panel_enabled';
@@ -1008,7 +1013,7 @@
           }
         }
       });
-    } catch {}
+    } catch { }
   }
 
   function createObserver() {
@@ -1068,7 +1073,7 @@
         _collectorPanel?.toast?.('API 直取需同时开启浅度采集和自动翻页', 'error', 2500);
         const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
         if (cb) cb.checked = false;
-        try { localStorage.setItem('qx-c-auto-scroll', '0'); } catch {}
+        try { localStorage.setItem('qx-c-auto-scroll', '0'); } catch { }
         return;
       }
       // sellerId 守卫:API 直取入队需要 sellerId(写采集队列 + 店铺 SKU 关联)。
@@ -1089,7 +1094,7 @@
         _collectorPanel?.toast?.('无法获取卖家ID,API 直取未启动', 'error', 2500);
         const cb = document.querySelector('[data-el="auto-scroll-toggle"]');
         if (cb) cb.checked = false;
-        try { localStorage.setItem('qx-c-auto-scroll', '0'); } catch {}
+        try { localStorage.setItem('qx-c-auto-scroll', '0'); } catch { }
         return;
       }
       if (!_apiScroller) {
@@ -1125,13 +1130,13 @@
     if (_collectorPanel) {
       try {
         _collectorPanel.destroy();
-      } catch {}
+      } catch { }
       _collectorPanel = null;
     }
     if (_autoScroller) {
       try {
         _autoScroller.stop && _autoScroller.stop();
-      } catch {}
+      } catch { }
       _autoScroller = null;
     }
   }
@@ -1144,7 +1149,7 @@
         if (collectorEnabled) mountCollectorHere();
         else unmountCollectorHere();
       });
-    } catch {}
+    } catch { }
   }
 
   function mountCollectorHere() {
@@ -1205,17 +1210,17 @@
             _collectorPanel.toast(which === 'paused' ? '队列拥塞，自动暂停翻页' : '队列恢复，继续翻页', 'info', 1800);
             try {
               _collectorPanel.setAutoScrollStatus(_autoScroller.getScrollStatus());
-            } catch {}
+            } catch { }
           },
           onEmpty: () => {
             if (!_collectorPanel) return;
             _collectorPanel.toast('当前页已抓取完成', 'success', 1800);
             try {
               _collectorPanel.setAutoScrollStatus(_autoScroller.getScrollStatus());
-            } catch {}
+            } catch { }
           },
         });
-      } catch {}
+      } catch { }
       // 500ms 轮询翻页状态，更新面板展示
       // 按 mode 路由到对应翻页器(DOM → _autoScroller / API → _apiScroller)
       if (_autoScrollStatusTimer) clearInterval(_autoScrollStatusTimer);
@@ -1241,7 +1246,7 @@
             status = scroller.getScrollStatus();
           }
           _collectorPanel.setAutoScrollStatus(status);
-        } catch {}
+        } catch { }
       }, 500);
     }
 
@@ -1379,9 +1384,9 @@
 
             // 店铺 SKU 发现上报(对齐 DOM 模式 L625 的 reportStoreSkuDiscovery 调用)
             // 无论是否通过过滤都计入"发现"计数,让用户看到完整扫描结果
-            // "略过" = 发现 - 采集,由 collect-status.js 的 getStoreSkuStats 自动计算
+            // passesFilter: 是否通过过滤(用于判定"采集"/"略过")
             reportStoreSkuDiscovery(card.sku);
-            if (window.__jzCollectStatus?.addStoreSku(String(card.sku))) {
+            if (window.__jzCollectStatus?.addStoreSku(String(card.sku), passesFilter)) {
               _updateStoreSkuCount();
             }
 
@@ -1515,12 +1520,12 @@
           cb.checked = false;
           try {
             localStorage.setItem('qx-c-auto-scroll', '0');
-          } catch {}
+          } catch { }
           console.log('[ozon-data-panel] 页面加载恢复:检测到 API 直取模式,不自动启动,需用户手动开启自动翻页');
         } else {
           try {
             _startAutoScroll();
-          } catch {}
+          } catch { }
         }
       }
     }
@@ -1819,7 +1824,7 @@
       _resolveCollectGate({ sellerSlug: '', sellerId: '', isChinese: null });
     }
 
-    // 鉴权检查：未登录就不加载（避免无 token 调极掌后端打 401 产生 spam）
+    // 鉴权检查：未登录就不加载（避免无 token 调QX后端打 401 产生 spam）
     try {
       const auth = await window.checkAuth?.();
       if (auth && !auth.loggedIn) return;

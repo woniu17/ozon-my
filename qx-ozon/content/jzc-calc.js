@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 极掌算价 · v1.2 · Floating Panel
+ * QX算价 · v1.2 · Floating Panel
  * 独立悬浮面板：右上角浮窗，可拖拽 / 最小化 / 关闭，关闭后变小球可恢复
  */
 
@@ -34,8 +34,8 @@
   const MAIN_EXT_UPDATE_URL = 'http://localhost:3001/extension/latest';
   const MAIN_EXT_INSTALL_URL_FALLBACK = 'http://localhost:3001/admin';
   const MAIN_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
-  const DEFAULT_BRAND_DISPLAY_NAME = /__BRAND/.test('MY') ? '极掌' : 'MY';
-  const DEFAULT_BRAND_PRODUCT_NAME = /__BRAND/.test('MY') ? `${DEFAULT_BRAND_DISPLAY_NAME} - Ozon选品管理工具` : 'MY';
+  const DEFAULT_BRAND_DISPLAY_NAME = /__BRAND/.test('QX') ? 'QX' : 'QX';
+  const DEFAULT_BRAND_PRODUCT_NAME = /__BRAND/.test('QX') ? `${DEFAULT_BRAND_DISPLAY_NAME} - Ozon选品管理工具` : 'QX';
 
   // ── Freight tables ──────────────────────────────
   // base 单位：¥/包；rates 单位：¥/g
@@ -296,9 +296,9 @@
     n == null || isNaN(n)
       ? '—'
       : Number(n).toLocaleString('zh-CN', {
-          minimumFractionDigits: d,
-          maximumFractionDigits: d,
-        });
+        minimumFractionDigits: d,
+        maximumFractionDigits: d,
+      });
 
   // ── Storage helpers ─────────────────────────────
   function storageGet(keys) {
@@ -396,7 +396,7 @@
       const hashParams = new URLSearchParams(hash);
       if (hashParams.has('jzcForceMigrate')) return hashParams.get('jzcForceMigrate') || '1';
       if (/[?&#]jzcForceMigrate(=|&|$)/.test(window.location.href)) return '1';
-    } catch {}
+    } catch { }
     return null;
   }
 
@@ -496,9 +496,9 @@
             const n = parsePriceNum(p.cardPrice);
             if (!isNaN(n) && n > 0) data.greenPrice = n;
           }
-        } catch (_) {}
+        } catch (_) { }
       }
-    } catch (_) {}
+    } catch (_) { }
     if (!data.blackPrice) {
       const el = document.querySelector('[data-widget="webPrice"] span');
       if (el) {
@@ -558,10 +558,10 @@
     const SEP = '[\\s]*[\\u0445\\u0425×x*✕✖][\\s]*';
     const triRe = new RegExp(
       '(\\d+(?:[.,]\\d+)?)' +
-        SEP +
-        '(\\d+(?:[.,]\\d+)?)' +
-        SEP +
-        '(\\d+(?:[.,]\\d+)?)\\s*(мм|mm|см|cm|метр|m|米|毫米)?',
+      SEP +
+      '(\\d+(?:[.,]\\d+)?)' +
+      SEP +
+      '(\\d+(?:[.,]\\d+)?)\\s*(мм|mm|см|cm|метр|m|米|毫米)?',
       'i'
     );
     const numUnit = /(\d+(?:[.,]\d+)?)\s*(мм|mm|см|cm|кг|kg|г|g|公斤|千克|克|毫米|米|m)?/i;
@@ -655,7 +655,7 @@
       }
     };
 
-    // 1) 主路径：参考极掌主插件，定位含 characteristics 数组的 data-state 节点
+    // 1) 主路径：参考QX主插件，定位含 characteristics 数组的 data-state 节点
     //    Ozon 特征结构：{ title: { textRs: [{content}] }, values: [{text}] }
     let charsBlock = null;
     document.querySelectorAll('[data-state]').forEach((el) => {
@@ -670,7 +670,7 @@
           // 同时执行通用 walk
           walk(data);
         }
-      } catch (_) {}
+      } catch (_) { }
     });
     if (charsBlock?.characteristics) {
       charsBlock.characteristics.forEach((c) => {
@@ -1321,7 +1321,7 @@
           if (typeof window.__jzcOnUnmount === 'function') {
             try {
               window.__jzcOnUnmount();
-            } catch {}
+            } catch { }
           }
         } else {
           showTrigger();
@@ -1656,7 +1656,7 @@
     // bundle 直接拿后台完整 weight/dim,覆盖率远高于公开 /features/(小百货/
     // 服饰类目公开页几乎不暴露物理参数)。
     const sku = d.sku || currentSku();
-    console.log('[极掌算价] DOM 取数:', { weight: d.weight, dimL: d.dimL, dimW: d.dimW, dimH: d.dimH });
+    console.log('[QX算价] DOM 取数:', { weight: d.weight, dimL: d.dimL, dimW: d.dimW, dimH: d.dimH });
 
     // 把 jzc-calc 抓到的 normalized 重量/尺寸 持久化到 chrome.storage.local,
     // 跨 tab 共享给搜索页/列表页数据卡片(用户浏览过的 SKU 下次在任意位置
@@ -1691,7 +1691,7 @@
 
     if (sku) {
       autoFillFromSellerPortal(sku).then((sp) => {
-        console.log('[极掌算价] seller portal 取数:', sp);
+        console.log('[QX算价] seller portal 取数:', sp);
         if (['weight', 'dimL', 'dimW', 'dimH'].some((f) => sp[f] != null)) {
           persistJzc(sp, 'jzc-seller');
           applyExtra(sp, /* force */ true);
@@ -1728,12 +1728,12 @@
       try {
         chrome.runtime.sendMessage({ action: 'searchVariants', sku }, (resp) => {
           if (chrome.runtime.lastError) {
-            console.warn('[极掌算价] seller portal: ' + chrome.runtime.lastError.message);
+            console.warn('[QX算价] seller portal: ' + chrome.runtime.lastError.message);
             finish({});
             return;
           }
           if (!resp?.ok) {
-            console.warn('[极掌算价] seller portal:', resp?.error || 'no response');
+            console.warn('[QX算价] seller portal:', resp?.error || 'no response');
             finish({});
             return;
           }
@@ -1760,7 +1760,7 @@
           finish(out);
         });
       } catch (e) {
-        console.warn('[极掌算价] seller portal: ' + (e?.message || e));
+        console.warn('[QX算价] seller portal: ' + (e?.message || e));
         finish({});
       }
       // 安全超时（background 端 25s + executeScript 自身延时）
@@ -1905,7 +1905,7 @@
       applyFxRate(next);
       if (panelEl && DPI_FACTOR !== prevRate) recalcAll();
     });
-  } catch {}
+  } catch { }
 
   function loadSettings() {
     storageGet([LS_STATE, `${LS_STATE}_pos`, LS_SKU_SPECS]).then((res) => {
@@ -1997,7 +1997,7 @@
   // 用于针对性反馈(哪个 SKU 抓不到 → 把输出贴回来)
   window.__jzc = {
     debugWeight: async () => {
-      console.group('[极掌算价] debug');
+      console.group('[QX算价] debug');
       console.log('URL:', location.href);
       const dom = extractWeightAndDims();
       console.log('① DOM/data-state 抓取:', dom);
@@ -2014,7 +2014,7 @@
               widget: el.getAttribute('data-widget') || '',
               keys: Object.keys(o).slice(0, 12),
             });
-        } catch (_) {}
+        } catch (_) { }
       });
       console.log('④ 页面 data-state 概览:', stateKeys);
       console.groupEnd();

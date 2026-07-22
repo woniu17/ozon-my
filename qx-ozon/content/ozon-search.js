@@ -250,7 +250,7 @@
 
     // 新采集队列:fire-and-forget 提交任务(搜索页无 sellerSlug,传空字符串)
     if (window.__jzSubmitCollectTask) {
-      window.__jzSubmitCollectTask(productId, card, '', '').catch(() => {});
+      window.__jzSubmitCollectTask(productId, card, '', '').catch(() => { });
     }
 
     if (panelDataCache.has(productId)) {
@@ -260,7 +260,7 @@
         window.jzRenderProductPanelV2(panel, { sku: productId, initial: cached });
         try {
           await window.jzPopulatePanelV2(panel, productId, { preFetched: cached.preFetched });
-        } catch {}
+        } catch { }
       } else {
         window.jzRenderProductCardPanel(panel, cached);
       }
@@ -321,9 +321,9 @@
         variantResult.status === 'fulfilled' ? variantResult.value : null,
         followSellResult.status === 'fulfilled' && followSellResult.value
           ? {
-              followSellCount: followSellResult.value.count,
-              sellers: followSellResult.value.sellers,
-            }
+            followSellCount: followSellResult.value.count,
+            sellers: followSellResult.value.sellers,
+          }
           : null,
         productId,
         cachedWeightDims
@@ -341,7 +341,7 @@
         window.jzRenderProductPanelV2(panel, { sku: productId, initial: data });
         try {
           await window.jzPopulatePanelV2(panel, productId, { preFetched: data.preFetched });
-        } catch {}
+        } catch { }
       } else {
         window.jzRenderProductCardPanel(panel, data);
       }
@@ -595,7 +595,7 @@
 
   // --- Data Panel: 开关从 chrome.storage.local 读取 + 监听 onChanged ---
   // 旧版本是右下角浮动 toggle 按钮（.ozon-helper-panel-toggle）。
-  // 现在统一移到极掌 popup 里 toggle，状态持久化到
+  // 现在统一移到QX popup 里 toggle，状态持久化到
   // chrome.storage.local.ozon_data_panel_enabled。
   const PANEL_STORAGE_KEY = 'ozon_data_panel_enabled';
   const AUTO_COLLECT_CONFIG_KEY = 'jz-auto-collect-config';
@@ -642,7 +642,7 @@
           shallowCollectState.running = cfg.shallowCollectRunning !== false;
         }
       });
-    } catch {}
+    } catch { }
   }
 
   function applyToCards() {
@@ -725,7 +725,7 @@
         if (typeof window.jzPopulatePanelV2 !== 'function') continue;
         // 若 panel 未渲染 V2 结构(loading 状态首次回填),先渲染骨架再填充
         if (!panel.querySelector('.ozon-helper-sidebar-card-body') &&
-            typeof window.jzRenderProductPanelV2 === 'function') {
+          typeof window.jzRenderProductPanelV2 === 'function') {
           window.jzRenderProductPanelV2(panel, { sku, initial: erpData });
         }
         try {
