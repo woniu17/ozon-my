@@ -2,6 +2,7 @@
 // 其余 4 类(dom/attribute/index)结构特殊,各自有专属 DAO 文件。
 // 日期统一用 new Date().toISOString() 写入(UTC, T 分隔,带 Z)
 import { db } from '../../index.js';
+import { indexDao } from './index-dao.js';
 
 /**
  * 创建通用缓存 DAO(SQLite 实现)
@@ -65,6 +66,12 @@ export function createCacheDao(table, opts = {}) {
         `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})
          ON CONFLICT(_id) DO UPDATE SET ${setClause}`
       ).run(...vals);
+      // upsert 后同步索引表(与 domDao/attributeDao 行为一致),
+      // 确保 followSell/richMedia/marketStats 写入后 ozon_cache_index 的 hit 位及时更新。
+      // 不 await:避免阻塞调用方,失败不影响缓存写入本身。
+      indexDao.syncSku(sku).catch((e) => {
+        console.warn(`[cacheDao:${table}] index sync failed for ${sku}:`, e?.message || e);
+      });
     },
 
     async deleteBySku(sku) {
