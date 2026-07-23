@@ -24,7 +24,8 @@ const router = Router();
 // 同时按 errors[].level 计算 has_error / has_warning:
 //   - has_error=1:商品虽 imported 但审核被拒(DESCRIPTION_DECLINE 等),实质失败
 //   - has_warning=1:有警告但不影响上架(marking_auto_corrected 等)
-export function upsertTaskItems(localTaskId, items) {
+// storeId:用于即时标记 listed(跟卖到的目标店铺),空值则不标记
+export function upsertTaskItems(localTaskId, items, storeId) {
   if (!Array.isArray(items) || items.length === 0) return;
   const stmt = db.prepare(`
     INSERT INTO follow_sell_task_items (local_task_id, offer_id, name, price, product_id, status, errors, has_error, has_warning)
@@ -55,11 +56,22 @@ export function upsertTaskItems(localTaskId, items) {
       hasWarning
     );
   }
-  // fire-and-forget:刷新 ozon_cache_index.listed 字段
-  // 让数据管理页"已跟卖"列即时更新(避免等 5 分钟定时任务)
-  indexDao.refreshListedStatus().catch((e) => {
-    logger.warn({ err: e.message }, 'refreshListedStatus after upsertTaskItems failed');
-  });
+  // 即时标记 listed(同步,SQLite 同步 API 毫秒级)
+  // offer_id 格式:sku-variantId,取第一段作为 SKU 前缀
+  const skuSet = new Set();
+  for (const it of items) {
+    const offerId = String(it.offer_id || '');
+    if (!offerId || !offerId.includes('-')) continue;
+    const sku = offerId.split('-')[0];
+    if (sku) skuSet.add(sku);
+  }
+  if (skuSet.size > 0 && storeId) {
+    try {
+      indexDao.markListed([...skuSet], storeId, localTaskId);
+    } catch (e) {
+      logger.warn({ localTaskId, storeId, err: e.message }, 'markListed failed');
+    }
+  }
 }
 
 // 按 items 状态汇总任务状态
@@ -152,7 +164,8 @@ router.post('/ozon/products/import', storeGuard, async (req, res, next) => {
         name: it.name,
         price: it.price,
         status: 'pending',
-      }))
+      })),
+      req.storeId
     );
 
     // 调 OPI /v3/product/import
@@ -203,7 +216,8 @@ router.post('/ozon/products/import', storeGuard, async (req, res, next) => {
           price: it.price,
           status: 'failed',
           errors: [{ code: 'IMPORT_ERROR', message: errorMessage }],
-        }))
+        })),
+        req.storeId
       );
       logger.warn({ localTaskId, err: errorMessage }, 'import failed');
       return res.json({ result: { task_id: null, localTaskId, error: errorMessage } });
@@ -322,6 +336,18 @@ router.post('/ozon/products/import-by-sku', storeGuard, async (req, res, next) =
        VALUES (?, 0, ?, 'PENDING', ?, ?)`
     ).run(localTaskId, req.storeId, items.length, JSON.stringify(items.slice(0, 5)));
 
+    // 写入上架记录明细(pending 状态)并即时标记 listed
+    upsertTaskItems(
+      localTaskId,
+      items.map((it) => ({
+        offer_id: it.offer_id,
+        name: it.offer_id,
+        price: it.price,
+        status: 'pending',
+      })),
+      req.storeId
+    );
+
     let ozonTaskId = null;
     try {
       const r = await opi.productImport(
@@ -343,6 +369,18 @@ router.post('/ozon/products/import-by-sku', storeGuard, async (req, res, next) =
       db.prepare(
         `UPDATE follow_sell_tasks SET status='FAILED', error_message=?, completed_at=datetime('now') WHERE local_task_id=?`
       ).run(e.message, localTaskId);
+      // 失败:更新 items 为 failed(listed 已标记,不回退)
+      upsertTaskItems(
+        localTaskId,
+        items.map((it) => ({
+          offer_id: it.offer_id,
+          name: it.offer_id,
+          price: it.price,
+          status: 'failed',
+          errors: [{ code: 'IMPORT_ERROR', message: e.message }],
+        })),
+        req.storeId
+      );
     }
 
     const row = db.prepare(`SELECT * FROM follow_sell_tasks WHERE local_task_id=?`).get(localTaskId);
@@ -438,7 +476,7 @@ router.post('/ozon/products/import-info', storeGuard, async (req, res, next) => 
     // (viaPortal=false 路径在 import 时已创建 local_task_id;viaPortal 路径由 report 接口写入)
     if (local_task_id) {
       try {
-        upsertTaskItems(local_task_id, items);
+        upsertTaskItems(local_task_id, items, req.storeId);
         summarizeTaskStatus(local_task_id);
       } catch (e) {
         logger.warn({ local_task_id, err: e.message }, 'persist task items failed');
@@ -505,8 +543,8 @@ router.post('/ozon/products/listing-records/report', storeGuard, async (req, res
       );
     }
 
-    // 写入/更新 items
-    upsertTaskItems(localTaskId, items);
+    // 写入/更新 items 并即时标记 listed
+    upsertTaskItems(localTaskId, items, req.storeId);
     const summary = summarizeTaskStatus(localTaskId);
 
     logger.info(

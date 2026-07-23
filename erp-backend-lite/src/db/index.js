@@ -105,6 +105,9 @@ async function ensureMigrations() {
   await cleanupStoreClassificationDirtyRows(db);
   // 2026-07: 类目过滤功能 — ozon_cache_index 补类目列 + 索引 + 从 bundle_data 回填
   await migrateCategoryFields(db);
+  // 2026-07: 跟卖状态即时标记 — ozon_cache_index 补 listed_store_id/listed_at/listed_task_id 列
+  // 并从 follow_sell_task_items + follow_sell_tasks 一次性回填(取最近一条任务)
+  await migrateListedFields(db);
   // ozon_cache_index.has_rich_content:richMedia.data.richContent 非空则 1,用于采集箱"有富内容"筛选
   const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
   let addedHasRichContent = false;
@@ -610,6 +613,76 @@ async function migrateCategoryFields(db) {
       `[db] migration: backfilled category fields for ${result.changes} SKUs`
     );
   }
+}
+
+// 2026-07: 跟卖状态即时标记 — 给 ozon_cache_index 补 listed_store_id/listed_at/listed_task_id 列
+// 并从 follow_sell_task_items + follow_sell_tasks 一次性回填(取最近一条任务)
+// 迁移后 listed 字段不再由 index-sync 定时任务刷新,改由 upsertTaskItems 即时写入
+// 幂等:已迁移过的库(新表结构)直接跳过 ALTER,回填用 COALESCE 保留已有值
+async function migrateListedFields(db) {
+  const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
+  if (ciCols.length === 0) return; // 表不存在,跳过(schema.sql 会创建)
+
+  let addedListedStoreId = false;
+  if (!ciCols.some((c) => c.name === 'listed_store_id')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN listed_store_id TEXT`);
+    console.log('[db] migration: added column ozon_cache_index.listed_store_id');
+    addedListedStoreId = true;
+  }
+  if (!ciCols.some((c) => c.name === 'listed_at')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN listed_at TEXT`);
+    console.log('[db] migration: added column ozon_cache_index.listed_at');
+  }
+  if (!ciCols.some((c) => c.name === 'listed_task_id')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN listed_task_id TEXT`);
+    console.log('[db] migration: added column ozon_cache_index.listed_task_id');
+  }
+
+  // 仅在首次新增 listed_store_id 列时执行回填(其他列一同被回填)
+  // 后续启动时 listed 字段由 upsertTaskItems 维护,不再批量回填
+  if (!addedListedStoreId) return;
+
+  // 子查询:对每个 SKU 取最近一条 task_items 关联的 task(按 i.id DESC)
+  // offer_id 格式:sku-variantId,用 SUBSTR(offer_id, 1, INSTR(offer_id, '-') - 1) 提取 SKU 前缀
+  const result = db
+    .prepare(
+      `UPDATE ozon_cache_index
+       SET listed = 1,
+           listed_store_id = COALESCE(
+             (SELECT t.store_id
+              FROM follow_sell_task_items i
+              JOIN follow_sell_tasks t ON t.local_task_id = i.local_task_id
+              WHERE SUBSTR(i.offer_id, 1, INSTR(i.offer_id, '-') - 1) = ozon_cache_index.sku
+                AND i.offer_id LIKE '%-%'
+                AND t.store_id IS NOT NULL AND t.store_id != ''
+              ORDER BY i.id DESC LIMIT 1),
+             listed_store_id),
+           listed_at = COALESCE(
+             (SELECT t.created_at
+              FROM follow_sell_task_items i
+              JOIN follow_sell_tasks t ON t.local_task_id = i.local_task_id
+              WHERE SUBSTR(i.offer_id, 1, INSTR(i.offer_id, '-') - 1) = ozon_cache_index.sku
+                AND i.offer_id LIKE '%-%'
+              ORDER BY i.id DESC LIMIT 1),
+             listed_at),
+           listed_task_id = COALESCE(
+             (SELECT i.local_task_id
+              FROM follow_sell_task_items i
+              WHERE SUBSTR(i.offer_id, 1, INSTR(i.offer_id, '-') - 1) = ozon_cache_index.sku
+                AND i.offer_id LIKE '%-%'
+              ORDER BY i.id DESC LIMIT 1),
+             listed_task_id)
+       WHERE listed = 0
+         AND sku IN (
+           SELECT DISTINCT SUBSTR(offer_id, 1, INSTR(offer_id, '-') - 1)
+           FROM follow_sell_task_items
+           WHERE offer_id LIKE '%-%'
+         )`
+    )
+    .run();
+  console.log(
+    `[db] migration: backfill listed fields for ${result.changes} SKUs`
+  );
 }
 
 // 直接运行时初始化(node src/db/index.js)

@@ -1,6 +1,6 @@
 // 索引表 DAO(SQLite):ozon_cache_index 的维护与查询
 // 设计:5 张数据表(dom/attribute/richMedia/marketStats/followSell)upsert 时
-//      调用 syncSku(sku) 同步索引表;listed/seller 由定时任务批量刷新
+//      调用 syncSku(sku) 同步索引表;listed* 由 upsertTaskItems 即时写入
 // 查询:from-cache / overview 只查这一张表,过滤/排序/分页全在 SQL 完成
 // 全文搜索:走 ozon_cache_index_fts(FTS5 虚拟表),通过触发器自动同步
 import { db } from '../../index.js';
@@ -51,7 +51,9 @@ export const indexDao = {
   /**
    * 同步单个 SKU 的索引行(从 5 张数据表聚合最新状态)
    * 触发时机:数据表 upsert 后 fire-and-forget 调用
-   * 注意:listed/seller_slug/seller_name 不在此处更新(由 index-sync 定时任务批量刷新)
+   * 注意:listed 系列字段 / seller 系列字段不在此处更新
+   *       - listed / listed_store_id / listed_at / listed_task_id 由 products.js upsertTaskItems 即时写入
+   *       - seller_slug / seller_id / seller_name 由 index-sync 定时任务批量刷新
    */
   async syncSku(sku) {
     const [dom, attr, rm, ms, fs] = await Promise.all([
@@ -487,64 +489,32 @@ export const indexDao = {
     return { refreshed: result.changes, total };
   },
 
-  /** 批量更新 listed 状态(由 index-sync 定时任务调用)
-   *  只要 SKU 在 follow_sell_task_items 中存在任意记录,就标记为已跟卖(listed=1)
-   *  不区分 item.status(pending/imported/failed/skipped 都算"已创建跟卖任务")
-   *  两步 UPDATE 在事务中执行,避免中间状态
+  /** 即时标记 SKU 为已跟卖(由 products.js upsertTaskItems 调用)
+   *  写入 listed=1 + listed_store_id + listed_at + listed_task_id
+   *  仅更新 listed=0 或 listed_store_id 与本次 storeId 不同的行,减少无意义写入
+   *  幂等:同一 SKU 多次提交同一店铺的任务不会产生重复 UPDATE
    *
-   *  注:node:sqlite 的 DatabaseSync 没有 transaction() 方法(与 better-sqlite3 不同),
-   *      这里用 BEGIN/COMMIT/ROLLBACK 手动管理事务
+   *  注:不处理"删除任务后回退 listed=0"的场景(按需求,删除任务不回退 listed)
+   *  如未来需要支持多店铺跟卖状态,改用关联表 ozon_cache_listed_stores
    */
-  async refreshListedStatus() {
-    // total = 有 task_items 记录的 sku 数
-    const totalRow = db
+  async markListed(skus, storeId, localTaskId) {
+    if (!Array.isArray(skus) || skus.length === 0) return { refreshed: 0 };
+    const placeholders = skus.map(() => '?').join(', ');
+    // 仅更新 listed=0 或当前 listed_store_id 与本次 storeId 不同的行(幂等,减少无意义写入)
+    // 用 IS NULL OR != 而非 IS NOT:避免 NULL <> 'x' 返回 NULL(falsy)导致漏更新
+    const r = db
       .prepare(
-        `SELECT COUNT(DISTINCT SUBSTR(offer_id, 1, INSTR(offer_id, '-') - 1)) AS n
-         FROM follow_sell_task_items
-         WHERE offer_id LIKE '%-%'`
+        `UPDATE ozon_cache_index
+         SET listed = 1,
+             listed_store_id = ?,
+             listed_at = datetime('now'),
+             listed_task_id = ?,
+             updated_at = datetime('now')
+         WHERE sku IN (${placeholders})
+           AND (listed = 0 OR listed_store_id IS NULL OR listed_store_id != ?)`
       )
-      .get();
-    const total = totalRow?.n || 0;
-
-    // 提取 SKU 前缀的子查询(任意 status 都算已跟卖)
-    const listedSkuExpr = `(
-      SELECT DISTINCT SUBSTR(offer_id, 1, INSTR(offer_id, '-') - 1) AS sku
-      FROM follow_sell_task_items
-      WHERE offer_id LIKE '%-%'
-    )`;
-
-    let step1Changes = 0;
-    let step2Changes = 0;
-    try {
-      db.exec('BEGIN');
-      // Step 1: 有 task_items 记录 → listed=1(仅更新原值为 0 的行,减少无意义写入)
-      const r1 = db
-        .prepare(
-          `UPDATE ozon_cache_index
-           SET listed = 1, updated_at = datetime('now')
-           WHERE listed = 0
-             AND sku IN ${listedSkuExpr}`
-        )
-        .run();
-      step1Changes = r1.changes;
-      // Step 2: cache_index.listed=1 但 sku 不再属于有记录的集合 → listed=0
-      //   (处理任务被删/所有 items 被清理的场景)
-      const r2 = db
-        .prepare(
-          `UPDATE ozon_cache_index
-           SET listed = 0, updated_at = datetime('now')
-           WHERE listed = 1
-             AND sku NOT IN ${listedSkuExpr}`
-        )
-        .run();
-      step2Changes = r2.changes;
-      db.exec('COMMIT');
-    } catch (e) {
-      try { db.exec('ROLLBACK'); } catch {}
-      throw e;
-    }
-    // refreshed = 实际发生变更的行数(新增 listed=1 + 回退 listed=0)
-    return { refreshed: step1Changes + step2Changes, total };
+      .run(storeId || null, localTaskId || null, ...skus, storeId || null);
+    return { refreshed: r.changes };
   },
 
   /** 统计各类缓存文档数(供 dashboard 用) */

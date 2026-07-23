@@ -99,7 +99,7 @@ async function scanOnce() {
         continue;
       }
 
-      upsertTaskItems(row.local_task_id, items);
+      upsertTaskItems(row.local_task_id, items, row.store_id);
       const summary = summarizeTaskStatus(row.local_task_id);
       updated++;
       logger.info(

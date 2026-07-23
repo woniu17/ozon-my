@@ -183,7 +183,7 @@ CREATE INDEX IF NOT EXISTS idx_fstp_created ON follow_sell_task_payloads(created
 
 -- ── 索引表:列表查询唯一入口(1 行/SKU) ───────────────────────
 -- 冗余字段 + 7 类命中位 + hit_count + listed + seller
--- 由 5 张数据表的 DAO upsert 时同步更新(listed/seller 由定时任务刷新)
+-- 由 5 张数据表的 DAO upsert 时同步更新(listed* 在 upsertTaskItems 时即时写入)
 CREATE TABLE IF NOT EXISTS ozon_cache_index (
   sku                TEXT PRIMARY KEY,
 
@@ -222,8 +222,11 @@ CREATE TABLE IF NOT EXISTS ozon_cache_index (
   type_id            INTEGER,             -- Ozon 商品类型 ID(如 运动鞋)
   category_name      TEXT,                -- 类目名称(从 detail.category 面包屑提取,显示用)
 
-  -- 跟卖状态(0=未跟卖, 1=已跟卖)
+  -- 跟卖状态(0=未跟卖, 1=已跟卖) + 跟卖目标店铺信息(由 upsertTaskItems 即时写入)
   listed             INTEGER DEFAULT 0,
+  listed_store_id    TEXT,                -- 跟卖到的店铺 ID(follow_sell_tasks.store_id)
+  listed_at          TEXT,                -- 最近一次标记跟卖的时间
+  listed_task_id     TEXT,                -- 关联的 local_task_id(便于追溯)
 
   -- 全文搜索(name + sku + seller_name 拼接,仅作 fallback)
   -- 实际搜索走 ozon_cache_index_fts(FTS5 虚拟表,见下)
