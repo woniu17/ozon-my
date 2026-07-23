@@ -1558,14 +1558,16 @@ router.delete('/admin/api/store-classification/:sellerId', async (req, res, next
   }
 });
 
-// GET /admin/api/store-classification — 列表查询(分页 + 过滤)
-// query: isMainlandChina(true/false/null 不传则不过滤)/keyword(匹配 sellerName/sellerSlug)/currentPage/pageSize
+// GET /admin/api/store-classification — 列表查询(分页 + 过滤 + 排序)
+// query: isMainlandChina(true/false/null 不传则不过滤)/keyword(匹配 sellerName/sellerSlug/sellerId)
+//       currentPage/pageSize/sortBy('skuCount' → 按采集 SKU 数降序,默认按 lastSeenAt DESC)
 // 返回 items 每条附加 skuCount(该店铺采集到的 SKU 数,来自 ozon_store_sku 按 sellerId 聚合)
 router.get('/admin/api/store-classification', async (req, res, next) => {
   try {
     const keyword = String(req.query.keyword || '').trim();
     const currentPage = Math.max(1, Number(req.query.currentPage) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 20));
+    const sortBy = String(req.query.sortBy || '').trim();
 
     const filter = {};
     // isMainlandChina: 'true' → true, 'false' → false, 其他(包括不传/null) → 不过滤
@@ -1573,10 +1575,10 @@ router.get('/admin/api/store-classification', async (req, res, next) => {
     else if (req.query.isMainlandChina === 'false') filter.isMainlandChina = false;
     if (keyword) filter.keyword = keyword;
 
-    const { items, total } = await daos.storeClassificationDao.findPagedList(filter, currentPage, pageSize);
+    const { items, total } = await daos.storeClassificationDao.findPagedList(filter, currentPage, pageSize, sortBy);
 
-    // 批量统计每家店铺的采集 SKU 数(ozon_store_sku 按 sellerId 分组),避免 N+1
-    if (Array.isArray(items) && items.length > 0) {
+    // sortBy=skuCount 时 DAO 已通过 LEFT JOIN 注入 skuCount,无需再批量查询
+    if (sortBy !== 'skuCount' && Array.isArray(items) && items.length > 0) {
       const sellerIds = items.map((it) => it.sellerId || it._id).filter(Boolean);
       const countMap = await daos.storeSkuDao.countBySellerIds(sellerIds);
       for (const it of items) {

@@ -173,23 +173,66 @@ export const storeClassificationDao = {
     return { deletedCount: r1.changes + r2.changes };
   },
 
-  /** 分页列表:LIKE 三字段模糊(sellerId / sellerName / sellerSlug) */
-  async findPagedList(filter, page, pageSize) {
+  /** 分页列表:LIKE 三字段模糊(sellerId / sellerName / sellerSlug)
+   *  sortBy: 'skuCount' → 按采集 SKU 数降序(LEFT JOIN 子查询);默认按 lastSeenAt DESC
+   */
+  async findPagedList(filter, page, pageSize, sortBy) {
+    // whereParts 不带表前缀(用于 total 查询与无 JOIN 查询)
+    // joinWhereParts 带 sc. 前缀(用于 JOIN 查询,避免列名歧义)
     const whereParts = [];
+    const joinWhereParts = [];
     const params = [];
     if (filter.isMainlandChina === true || filter.isMainlandChina === false) {
       whereParts.push('isMainlandChina = ?');
+      joinWhereParts.push('sc.isMainlandChina = ?');
       params.push(filter.isMainlandChina ? 1 : 0);
     }
     if (filter.keyword) {
       const kw = `%${filter.keyword}%`;
-      whereParts.push(
-        '(sellerName LIKE ? COLLATE NOCASE OR sellerSlug LIKE ? COLLATE NOCASE OR sellerId LIKE ? COLLATE NOCASE)'
-      );
+      const cond = '(sellerName LIKE ? COLLATE NOCASE OR sellerSlug LIKE ? COLLATE NOCASE OR sellerId LIKE ? COLLATE NOCASE)';
+      const joinCond = '(sc.sellerName LIKE ? COLLATE NOCASE OR sc.sellerSlug LIKE ? COLLATE NOCASE OR sc.sellerId LIKE ? COLLATE NOCASE)';
+      whereParts.push(cond);
+      joinWhereParts.push(joinCond);
       params.push(kw, kw, kw);
     }
     const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+    const joinWhere = joinWhereParts.length ? `WHERE ${joinWhereParts.join(' AND ')}` : '';
     const skip = (page - 1) * pageSize;
+    // params 在两个查询里复用(顺序一致),但 JOIN 查询后还要追加 pageSize/skip
+    // 所以给 params 做一份拷贝给 total 用(total 不带 LIMIT/OFFSET)
+    const totalParams = [...params];
+
+    // sortBy=skuCount:LEFT JOIN 子查询聚合 ozon_store_sku,按采集数降序(NULL 末尾)
+    if (sortBy === 'skuCount') {
+      const items = db
+        .prepare(
+          `SELECT sc.sellerId, sc.sellerSlug, sc.sellerName, sc.isMainlandChina, sc.classifiedBy,
+                  sc.classifiedAt, sc.companyInfo, sc.lastSeenAt, sc.lastSeenUrl,
+                  COALESCE(ss.cnt, 0) AS skuCount
+           FROM ozon_store_classification sc
+           LEFT JOIN (SELECT sellerId, COUNT(*) AS cnt FROM ozon_store_sku GROUP BY sellerId) ss
+             ON ss.sellerId = sc.sellerId
+           ${joinWhere}
+           ORDER BY skuCount DESC, sc.lastSeenAt DESC LIMIT ? OFFSET ?`
+        )
+        .all(...params, pageSize, skip);
+      const total = db
+        .prepare(`SELECT COUNT(*) AS n FROM ozon_store_classification ${where}`)
+        .get(...totalParams).n;
+      const reshaped = items.map((r) => ({
+        sellerId: r.sellerId,
+        sellerSlug: r.sellerSlug,
+        sellerName: r.sellerName,
+        isMainlandChina: r.isMainlandChina === null ? null : !!r.isMainlandChina,
+        classifiedBy: r.classifiedBy,
+        classifiedAt: r.classifiedAt,
+        companyInfo: r.companyInfo ? JSON.parse(r.companyInfo) : null,
+        lastSeenAt: r.lastSeenAt,
+        lastSeenUrl: r.lastSeenUrl,
+        skuCount: r.skuCount || 0,
+      }));
+      return { items: reshaped, total };
+    }
 
     const items = db
       .prepare(
@@ -200,7 +243,7 @@ export const storeClassificationDao = {
       .all(...params, pageSize, skip);
     const total = db
       .prepare(`SELECT COUNT(*) AS n FROM ozon_store_classification ${where}`)
-      .get(...params).n;
+      .get(...totalParams).n;
     const reshaped = items.map((r) => ({
       ...r,
       isMainlandChina: r.isMainlandChina === null ? null : !!r.isMainlandChina,

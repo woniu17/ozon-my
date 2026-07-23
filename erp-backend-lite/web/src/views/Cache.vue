@@ -1,5 +1,6 @@
 <script setup>
-import { reactive, ref, computed, onMounted } from 'vue';
+import { reactive, ref, computed, onMounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import {
   getCacheOverview,
   getOpiPreview,
@@ -18,13 +19,32 @@ import AppPager from '../components/AppPager.vue';
 import JsonTree from '../components/JsonTree.vue';
 
 const { show } = useToast();
+const route = useRoute();
+const router = useRouter();
 
 // Ozon 商品详情页 URL(sku 直接拼到 /product/-{sku}/)
 const OZON_PDP_PREFIX = 'https://www.ozon.ru/product/-';
 
+// 子 tab type 到一级路由 path 的映射(用于导航高亮与切换)
+const TYPE_TO_PATH = {
+  overview: '/sku-data',
+  'store-classification': '/store-data',
+  'store-sku': '/store-sku',
+};
+const PATH_TO_TYPE = {
+  '/sku-data': 'overview',
+  '/store-data': 'store-classification',
+  '/store-sku': 'store-sku',
+};
+
+// 由当前路由 path 决定初始 type(一级 tab 驱动)
+function typeFromRoute() {
+  return PATH_TO_TYPE[route.path] || 'overview';
+}
+
 // ── SKU 数据列表 ───────────────────────────────────────────
 const state = reactive({
-  type: 'overview', // overview | store-classification | store-sku
+  type: typeFromRoute(), // overview | store-classification | store-sku
   keyword: '',
   items: [],
   total: 0,
@@ -81,19 +101,33 @@ function onPageChange(p) {
   loadList();
 }
 
+// 切换子 tab 现通过一级路由导航实现(保留 switchType 供内部调用)
 function switchType(t) {
-  state.type = t;
-  state.page = 1;
-  state.keyword = '';
-  selectedSkus.value = new Set();
-  if (t === 'store-classification') {
-    loadStoreClassifications();
-  } else if (t === 'store-sku') {
-    loadStoreSkus();
-  } else {
-    loadList();
+  const path = TYPE_TO_PATH[t];
+  if (path && path !== route.path) {
+    router.push(path);
   }
 }
+
+// 路由变化时同步 state.type 并加载对应数据(一级 tab 切换驱动)
+watch(
+  () => route.path,
+  (newPath) => {
+    const t = PATH_TO_TYPE[newPath];
+    if (!t || t === state.type) return;
+    state.type = t;
+    state.page = 1;
+    state.keyword = '';
+    selectedSkus.value = new Set();
+    if (t === 'store-classification') {
+      loadStoreClassifications();
+    } else if (t === 'store-sku') {
+      loadStoreSkus();
+    } else {
+      loadList();
+    }
+  }
+);
 
 // ── SKU 多选与删除 ─────────────────────────────────────────
 function toggleRow(sku, checked) {
@@ -447,6 +481,7 @@ const storeClassifications = ref([]);
 const storeClassFilters = reactive({
   isMainlandChina: null,
   keyword: '',
+  sortBy: 'skuCount', // 默认按采集 SKU 数降序;'' → 按 lastSeenAt 降序
 });
 const storeClassPager = reactive({
   current: 1,
@@ -464,6 +499,7 @@ async function loadStoreClassifications() {
       keyword: storeClassFilters.keyword.trim(),
       page: storeClassPager.current,
       pageSize: storeClassPager.pageSize,
+      sortBy: storeClassFilters.sortBy,
     });
     if (myId !== loadStoreClassReqId) return; // 已被新请求取代
     storeClassifications.value = data?.items || [];
@@ -474,6 +510,13 @@ async function loadStoreClassifications() {
     storeClassifications.value = [];
     storeClassPager.total = 0;
   }
+}
+
+// 切换排序方式:skuCount ↔ lastSeenAt
+function toggleStoreClassSort() {
+  storeClassFilters.sortBy = storeClassFilters.sortBy === 'skuCount' ? '' : 'skuCount';
+  storeClassPager.current = 1;
+  loadStoreClassifications();
 }
 
 function searchStoreClassifications() {
@@ -580,15 +623,30 @@ function collectStatusTag(status) {
   return 'tag tag-mute';
 }
 
+// 各 type 对应的页面标题
+const PAGE_TITLE = {
+  overview: 'SKU 数据',
+  'store-classification': '店铺数据',
+  'store-sku': '店铺 SKU',
+};
+const pageTitle = computed(() => PAGE_TITLE[state.type] || '数据管理');
+
 onMounted(() => {
-  loadList();
+  // 根据当前路由 type 加载对应列表
+  if (state.type === 'store-classification') {
+    loadStoreClassifications();
+  } else if (state.type === 'store-sku') {
+    loadStoreSkus();
+  } else {
+    loadList();
+  }
 });
 </script>
 
 <template>
   <div>
     <div class="toolbar">
-      <h2>数据管理</h2>
+      <h2>{{ pageTitle }}</h2>
       <div style="display: flex; gap: 8px">
         <button
           v-if="state.type === 'overview'"
@@ -599,23 +657,6 @@ onMounted(() => {
           {{ state.loading ? '刷新中...' : '刷新列表' }}
         </button>
       </div>
-    </div>
-
-    <!-- 类型切换 -->
-    <div class="cache-type-tabs">
-      <button class="cache-type-tab" :class="{ active: state.type === 'overview' }" @click="switchType('overview')">
-        SKU 数据
-      </button>
-      <button
-        class="cache-type-tab"
-        :class="{ active: state.type === 'store-classification' }"
-        @click="switchType('store-classification')"
-      >
-        店铺数据
-      </button>
-      <button class="cache-type-tab" :class="{ active: state.type === 'store-sku' }" @click="switchType('store-sku')">
-        店铺 SKU
-      </button>
     </div>
 
     <!-- SKU 数据 tab -->
@@ -765,7 +806,7 @@ onMounted(() => {
           class="filter-input"
           type="text"
           v-model.trim="storeClassFilters.keyword"
-          placeholder="店铺名/Slug"
+          placeholder="店铺名 / Seller ID"
           @keydown.enter="searchStoreClassifications"
         />
         <button class="btn btn-primary" @click="searchStoreClassifications">查询</button>
@@ -776,24 +817,25 @@ onMounted(() => {
           <thead>
             <tr>
               <th>Seller ID</th>
-              <th>Seller Slug</th>
               <th>Seller Name</th>
               <th>是否中国</th>
               <th>分类方式</th>
               <th>公司信息</th>
               <th>店铺链接</th>
-              <th>采集 SKU 数</th>
+              <th class="th-sortable" @click="toggleStoreClassSort" :title="storeClassFilters.sortBy === 'skuCount' ? '当前:按采集数降序,点击切换为按时间' : '当前:按时间降序,点击切换为按采集数'">
+                采集 SKU 数
+                <span class="sort-indicator">{{ storeClassFilters.sortBy === 'skuCount' ? '▼' : '' }}</span>
+              </th>
               <th>最后访问</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="!storeClassifications.length">
-              <td colspan="10" class="empty">暂无店铺分类记录</td>
+              <td colspan="9" class="empty">暂无店铺分类记录</td>
             </tr>
             <tr v-for="sc in storeClassifications" :key="sc._id">
               <td class="col-sku">{{ sc.sellerId || sc._id || '—' }}</td>
-              <td>{{ sc.sellerSlug || '—' }}</td>
               <td>{{ sc.sellerName || '—' }}</td>
               <td>
                 <span :class="storeClassBadge(sc.isMainlandChina)">
@@ -1026,6 +1068,19 @@ onMounted(() => {
 }
 .table-link:hover {
   text-decoration: underline;
+}
+.th-sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.th-sortable:hover {
+  color: var(--primary);
+}
+.sort-indicator {
+  font-size: 11px;
+  color: var(--primary);
+  margin-left: 2px;
 }
 
 /* 全览表格 */
