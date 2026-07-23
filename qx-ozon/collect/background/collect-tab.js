@@ -1800,11 +1800,11 @@
         const cls = await this.checkStoreClassification(sellerSlug, null, null, sellerId);
         if (cls) {
           storeClassified =
-            cls.isMainlandChina === true ? 'chinese' : cls.isMainlandChina === false ? 'non-chinese' : 'unclassified';
+            cls.isMainlandChina === true ? 'mainland-china' : cls.isMainlandChina === false ? 'non-mainland-china' : 'unclassified';
         }
         console.log('[SW autoCollect] Gate0.5 店铺分类:', sku, 'slug=', sellerSlug, 'class=', storeClassified);
         if (config.onlyMainlandChinaStores && cls?.isMainlandChina !== true) {
-          const reason = cls?.isMainlandChina === false ? 'non-chinese-store' : 'unclassified-store';
+          const reason = cls?.isMainlandChina === false ? 'non-mainland-china-store' : 'unclassified-store';
           // Gate 0.5 跳过分支也调 _writeAutoCollectLog
           this.writeAutoCollectLog({
             sku,

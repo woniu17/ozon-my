@@ -431,9 +431,15 @@ function opiSourceLabel(hit, type) {
 
 // ── 店铺分类徽章 ──────────────────────────────────────────
 function storeClassBadge(isMainlandChina) {
-  if (isMainlandChina === true) return 'badge-chinese';
-  if (isMainlandChina === false) return 'badge-non-chinese';
+  if (isMainlandChina === true) return 'badge-mainland-china';
+  if (isMainlandChina === false) return 'badge-non-mainland-china';
   return 'badge-pending';
+}
+
+// 店铺链接:固定格式 https://www.ozon.ru/seller/{sellerId}
+function storeUrl(sc) {
+  const sid = sc?.sellerId || sc?._id || '';
+  return sid ? `https://www.ozon.ru/seller/${sid}/` : '';
 }
 
 // ── 店铺分类 ───────────────────────────────────────────────
@@ -775,13 +781,15 @@ onMounted(() => {
               <th>是否中国</th>
               <th>分类方式</th>
               <th>公司信息</th>
+              <th>店铺链接</th>
+              <th>采集 SKU 数</th>
               <th>最后访问</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="!storeClassifications.length">
-              <td colspan="8" class="empty">暂无店铺分类记录</td>
+              <td colspan="10" class="empty">暂无店铺分类记录</td>
             </tr>
             <tr v-for="sc in storeClassifications" :key="sc._id">
               <td class="col-sku">{{ sc.sellerId || sc._id || '—' }}</td>
@@ -794,6 +802,13 @@ onMounted(() => {
               </td>
               <td>{{ sc.classifiedBy || '—' }}</td>
               <td>{{ sc.companyInfo?.companyName || '—' }}</td>
+              <td>
+                <a v-if="storeUrl(sc)" :href="storeUrl(sc)" target="_blank" rel="noopener noreferrer" class="table-link" :title="storeUrl(sc)">
+                  访问店铺
+                </a>
+                <template v-else>—</template>
+              </td>
+              <td>{{ sc.skuCount ?? 0 }}</td>
               <td class="col-time">{{ fmtTime(sc.lastSeenAt) }}</td>
               <td class="row-actions">
                 <button class="btn btn-sm btn-primary" :disabled="!sc.sellerId" @click="updateStoreClass(sc.sellerId || sc._id, { isMainlandChina: true })">
@@ -1005,6 +1020,13 @@ onMounted(() => {
 .sku-link:hover {
   text-decoration: underline;
 }
+.table-link {
+  color: var(--primary);
+  text-decoration: none;
+}
+.table-link:hover {
+  text-decoration: underline;
+}
 
 /* 全览表格 */
 .overview-table th,
@@ -1145,7 +1167,7 @@ onMounted(() => {
 }
 
 /* ── 店铺数据 tab ─────────────────────────────────────── */
-.badge-chinese {
+.badge-mainland-china {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 4px;
@@ -1154,7 +1176,7 @@ onMounted(() => {
   background: #dbeafe;
   color: #1d4ed8;
 }
-.badge-non-chinese {
+.badge-non-mainland-china {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 4px;

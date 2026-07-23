@@ -52,32 +52,6 @@
       try {
         const stored = await sw.getStorage([_AUTO_COLLECT_CONFIG_KEY]);
         let raw = stored?.[_AUTO_COLLECT_CONFIG_KEY];
-        // 2026-07: 配置项改名迁移(旧 key → 新 key)
-        // onlyChineseStores → onlyMainlandChinaStores
-        // knownChineseSlugs → knownMainlandChinaSlugs
-        // knownNonChineseSlugs → knownNonMainlandChinaSlugs
-        if (raw && typeof raw === 'object') {
-          let migrated = false;
-          if ('onlyChineseStores' in raw && !('onlyMainlandChinaStores' in raw)) {
-            raw.onlyMainlandChinaStores = raw.onlyChineseStores;
-            delete raw.onlyChineseStores;
-            migrated = true;
-          }
-          if ('knownChineseSlugs' in raw && !('knownMainlandChinaSlugs' in raw)) {
-            raw.knownMainlandChinaSlugs = raw.knownChineseSlugs;
-            delete raw.knownChineseSlugs;
-            migrated = true;
-          }
-          if ('knownNonChineseSlugs' in raw && !('knownNonMainlandChinaSlugs' in raw)) {
-            raw.knownNonMainlandChinaSlugs = raw.knownNonChineseSlugs;
-            delete raw.knownNonChineseSlugs;
-            migrated = true;
-          }
-          if (migrated) {
-            await sw.setStorage({ [_AUTO_COLLECT_CONFIG_KEY]: raw });
-            console.log('[autoCollectConfig] migrated old Chinese keys to MainlandChina');
-          }
-        }
         const merged =
           raw && typeof raw === 'object'
             ? { ..._AUTO_COLLECT_CONFIG_DEFAULT, ...raw }

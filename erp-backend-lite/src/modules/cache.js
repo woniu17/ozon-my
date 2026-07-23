@@ -1229,7 +1229,7 @@ router.get('/admin/api/preview/sku/:sku/profile', async (req, res, next) => {
 
 const LOG_TYPES = ['card', 'detail', 'pdp', 'search', 'bundle', 'marketStats', 'followSell'];
 const LOG_SOURCES = ['shop-page', 'pdp'];
-const LOG_STORE_CLASSES = ['chinese', 'non-chinese', 'unclassified'];
+const LOG_STORE_CLASSES = ['mainland-china', 'non-mainland-china', 'unclassified'];
 const LOG_STATUS_KEYS = ['success', 'partial', 'failed', 'skipped', 'antibot'];
 
 function emptyLogStats() {
@@ -1560,6 +1560,7 @@ router.delete('/admin/api/store-classification/:sellerId', async (req, res, next
 
 // GET /admin/api/store-classification — 列表查询(分页 + 过滤)
 // query: isMainlandChina(true/false/null 不传则不过滤)/keyword(匹配 sellerName/sellerSlug)/currentPage/pageSize
+// 返回 items 每条附加 skuCount(该店铺采集到的 SKU 数,来自 ozon_store_sku 按 sellerId 聚合)
 router.get('/admin/api/store-classification', async (req, res, next) => {
   try {
     const keyword = String(req.query.keyword || '').trim();
@@ -1573,6 +1574,15 @@ router.get('/admin/api/store-classification', async (req, res, next) => {
     if (keyword) filter.keyword = keyword;
 
     const { items, total } = await daos.storeClassificationDao.findPagedList(filter, currentPage, pageSize);
+
+    // 批量统计每家店铺的采集 SKU 数(ozon_store_sku 按 sellerId 分组),避免 N+1
+    if (Array.isArray(items) && items.length > 0) {
+      const sellerIds = items.map((it) => it.sellerId || it._id).filter(Boolean);
+      const countMap = await daos.storeSkuDao.countBySellerIds(sellerIds);
+      for (const it of items) {
+        it.skuCount = countMap[it.sellerId || it._id] || 0;
+      }
+    }
 
     return res.json(ok({ items, total, current: currentPage, pageSize }));
   } catch (e) {

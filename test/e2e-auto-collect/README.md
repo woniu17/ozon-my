@@ -82,7 +82,7 @@ cd test/e2e-auto-collect
 # 单场景运行
 ./start.sh basic
 ./start.sh dedup
-./start.sh non-chinese
+./start.sh non-mainland-china
 ./start.sh daily-limit
 ./start.sh cache-hit
 
@@ -134,7 +134,7 @@ npm run test:basic        # 单场景
 |------|------|--------|
 | 基础 E2E | `npm run test:basic` | 店铺页滚动 → 采集 → 缓存落库(card/entrypoint/log) |
 | 去重 | `npm run test:dedup` | 多次滚动同一 SKU,任务数 ≤ SKU 数 |
-| 非中国店铺跳过 | `npm run test:non-chinese` | 外国店铺页不提交任何任务 |
+| 非中国大陆店铺跳过 | `npm run test:non-mainland-china` | 外国店铺页不提交任何任务 |
 | 每日上限 | `npm run test:daily-limit` | perDayLimit=1,只完成 1 个任务 |
 | 缓存命中 | `npm run test:cache-hit` | 第二次触发命中缓存,跳过或日志记 all-cached |
 | 反爬熔断 | `npm run test:antibot` | API 返回 403 → SW 设置 paused=true + pausedUntil |
@@ -156,8 +156,8 @@ npm run test:basic        # 单场景
 
 `mock-server/products.js` 定义:
 
-- **CHINA_SHOP**:slug=`mock-china-shop`,sellerId=`12345`,isChinese=true
-- **FOREIGN_SHOP**:slug=`mock-foreign-shop`,sellerId=`67890`,isChinese=false
+- **CHINA_SHOP**:slug=`mock-china-shop`,sellerId=`12345`,isMainlandChina=true
+- **FOREIGN_SHOP**:slug=`mock-foreign-shop`,sellerId=`67890`,isMainlandChina=false
 - **3 个 SKU**:100001/100002/100003,均属于 CHINA_SHOP
 
 可在此文件扩展更多测试数据。

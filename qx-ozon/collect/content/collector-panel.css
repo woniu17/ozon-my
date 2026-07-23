@@ -876,11 +876,11 @@
   font-size: 10px;
   font-weight: 600;
 }
-.qx-c-store-chinese {
+.qx-c-store-mainland-china {
   background: #dcfce7;
   color: #15803d;
 }
-.qx-c-store-non-chinese {
+.qx-c-store-non-mainland-china {
   background: #fee2e2;
   color: #b91c1c;
 }

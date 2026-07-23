@@ -451,7 +451,7 @@ async function migrateSellerIdPrimaryKey(db) {
           lastSeenAt    TEXT,
           lastSeenUrl   TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_sc_new_chinese ON ozon_store_classification_new(isMainlandChina);
+        CREATE INDEX IF NOT EXISTS idx_sc_new_mainland_china ON ozon_store_classification_new(isMainlandChina);
         CREATE INDEX IF NOT EXISTS idx_sc_new_name    ON ozon_store_classification_new(sellerName);
         CREATE INDEX IF NOT EXISTS idx_sc_new_seen    ON ozon_store_classification_new(lastSeenAt DESC);
         CREATE INDEX IF NOT EXISTS idx_sc_new_slug    ON ozon_store_classification_new(sellerSlug);
@@ -510,11 +510,12 @@ async function migrateSellerIdPrimaryKey(db) {
       `);
       // 索引名规范化(去掉 _new 后缀)
       db.exec(`
+        DROP INDEX IF EXISTS idx_sc_new_mainland_chinese;
         DROP INDEX IF EXISTS idx_sc_new_chinese;
         DROP INDEX IF EXISTS idx_sc_new_name;
         DROP INDEX IF EXISTS idx_sc_new_seen;
         DROP INDEX IF EXISTS idx_sc_new_slug;
-        CREATE INDEX IF NOT EXISTS idx_sc_chinese ON ozon_store_classification(isMainlandChina);
+        CREATE INDEX IF NOT EXISTS idx_sc_mainland_china ON ozon_store_classification(isMainlandChina);
         CREATE INDEX IF NOT EXISTS idx_sc_name    ON ozon_store_classification(sellerName);
         CREATE INDEX IF NOT EXISTS idx_sc_seen    ON ozon_store_classification(lastSeenAt DESC);
         CREATE INDEX IF NOT EXISTS idx_sc_slug    ON ozon_store_classification(sellerSlug);

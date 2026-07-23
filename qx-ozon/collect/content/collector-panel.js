@@ -874,10 +874,10 @@
       if (wasRunning !== this.running) this._renderStatus();
       var deepCb = this._q('deep-toggle');
       if (deepCb && deepCb.checked !== this.running) deepCb.checked = this.running;
-      // 只采集中国店铺
-      var chineseCb = this._q('only-mainland-china');
-      if (chineseCb && config.onlyMainlandChinaStores !== undefined) {
-        chineseCb.checked = !!config.onlyMainlandChinaStores;
+      // 只采集中国大陆店铺
+      var mainlandChinaCb = this._q('only-mainland-china');
+      if (mainlandChinaCb && config.onlyMainlandChinaStores !== undefined) {
+        mainlandChinaCb.checked = !!config.onlyMainlandChinaStores;
       }
       // 熔断倒计时
       this._renderCircuitBreaker();

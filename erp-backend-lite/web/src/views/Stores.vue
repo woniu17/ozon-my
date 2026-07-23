@@ -25,6 +25,7 @@ const editForm = reactive({
   name: '',
   warehouse_id: '',
   currency_code: 'CNY',
+  link: '',
   clientId: '',
   apiKey: '',
 });
@@ -34,6 +35,7 @@ function resetEditForm() {
   editForm.name = '';
   editForm.warehouse_id = '';
   editForm.currency_code = 'CNY';
+  editForm.link = '';
   editForm.clientId = '';
   editForm.apiKey = '';
   editErr.value = '';
@@ -45,6 +47,7 @@ function openEdit(store) {
     editForm.name = store.name || '';
     editForm.warehouse_id = store.warehouse_id || '';
     editForm.currency_code = store.currency_code || 'CNY';
+    editForm.link = store.link || '';
     editForm.clientId = store.sync_credentials?.clientId || '';
     editForm.apiKey = store.sync_credentials?.apiKey || '';
   } else {
@@ -60,6 +63,7 @@ function readBody() {
     name: editForm.name.trim(),
     warehouse_id: editForm.warehouse_id.trim(),
     currency_code: editForm.currency_code,
+    link: editForm.link.trim(),
     sync_credentials: {
       clientId: editForm.clientId.trim(),
       apiKey: editForm.apiKey.trim(),
@@ -216,6 +220,8 @@ async function setDefaultWarehouse(wid) {
     await updateStore(store.id, {
       name: store.name,
       warehouse_id: wid,
+      currency_code: store.currency_code,
+      link: store.link,
       sync_credentials: store.sync_credentials,
     });
     show('已设为默认仓库', 'success');
@@ -255,6 +261,19 @@ onMounted(() => {
             <span class="v"
               ><strong>{{ s.currency_code || 'CNY' }}</strong></span
             >
+          </div>
+          <div class="row">
+            <span class="k">店铺链接</span>
+            <span class="v">
+              <a v-if="s.link" :href="s.link" target="_blank" rel="noopener noreferrer" class="store-link">
+                {{ s.link }}
+              </a>
+              <template v-else>—</template>
+            </span>
+          </div>
+          <div class="row">
+            <span class="k">采集 SKU 数</span>
+            <span class="v"><strong>{{ s.collected_sku_count ?? 0 }}</strong></span>
           </div>
           <div class="row">
             <span class="k">Client-Id</span>
@@ -307,6 +326,10 @@ onMounted(() => {
         <label>
           <span>合同货币</span>
           <input type="text" v-model.trim="editForm.currency_code" placeholder="CNY" />
+        </label>
+        <label>
+          <span>店铺链接</span>
+          <input type="text" v-model.trim="editForm.link" placeholder="https://www.ozon.ru/seller/..." />
         </label>
         <label>
           <span>Client-Id</span>

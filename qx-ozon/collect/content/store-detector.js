@@ -83,13 +83,13 @@
     // 中国大陆/非中国大陆/待确认 badge
     if (state.isMainlandChina === true) {
       const badge = document.createElement('span');
-      badge.className = 'qx-c-store-badge qx-c-store-chinese';
+      badge.className = 'qx-c-store-badge qx-c-store-mainland-china';
       const ruleText = state.classifiedBy === 'manual' ? '(人工确认)' : `(规则: ${state.classifiedBy || '未知'})`;
       badge.textContent = `✓ 中国大陆店铺 ${ruleText}`;
       statusDiv.appendChild(badge);
     } else if (state.isMainlandChina === false) {
       const badge = document.createElement('span');
-      badge.className = 'qx-c-store-badge qx-c-store-non-chinese';
+      badge.className = 'qx-c-store-badge qx-c-store-non-mainland-china';
       const ruleText = state.classifiedBy === 'manual' ? '(人工确认)' : `(规则: ${state.classifiedBy || '未知'})`;
       badge.textContent = `✗ 非中国大陆店铺 ${ruleText}`;
       statusDiv.appendChild(badge);

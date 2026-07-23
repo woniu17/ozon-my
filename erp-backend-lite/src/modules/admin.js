@@ -59,6 +59,9 @@ function normalizeStore(input) {
     .trim()
     .toUpperCase();
 
+  // 店铺链接:可选,通常为 Ozon 卖家后台或店铺前台 URL,卡片展示为可点击链接
+  const link = String(body.link || '').trim();
+
   return {
     name,
     // Ozon 个人版 company_id 与 Client-Id 同值(同义字段),为兼容 prepare-bundle 的
@@ -66,6 +69,7 @@ function normalizeStore(input) {
     company_id: clientId,
     warehouse_id: String(body.warehouse_id || '').trim(),
     currency_code: currencyCode,
+    link,
     sync_credentials: { clientId, apiKey },
   };
 }
@@ -91,11 +95,27 @@ async function testOpiCredentials(clientId, apiKey) {
 
 // ── 路由 ────────────────────────────────────────────────────
 
-// GET /admin/api/stores —— 列出全部店铺(含凭据,个人版明文展示)
+// GET /admin/api/stores —— 列出全部店铺(含凭据,个人版明文展示)+ 每家店铺采集 SKU 数
+// 采集 SKU 数:ozon_cache_index 中 listed_store_id = store.id 的行数(已跟卖到该店铺的 SKU)
 router.get('/admin/api/stores', (_req, res, next) => {
   try {
     const stores = readStores();
-    res.json(ok(stores));
+    // 一次性按 listed_store_id 分组聚合,避免 N+1 查询
+    const countRows = db
+      .prepare(
+        `SELECT listed_store_id AS sid, COUNT(*) AS n
+         FROM ozon_cache_index
+         WHERE listed_store_id IS NOT NULL AND listed_store_id != ''
+         GROUP BY listed_store_id`
+      )
+      .all();
+    const countMap = {};
+    for (const r of countRows) countMap[r.sid] = r.n;
+    const result = stores.map((s) => ({
+      ...s,
+      collected_sku_count: countMap[s.id] || 0,
+    }));
+    res.json(ok(result));
   } catch (e) {
     next(e);
   }

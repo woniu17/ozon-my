@@ -62,8 +62,8 @@
 
   /**
    * 提交采集任务到 SW 队列。
-   * - 全站可用(店铺页/搜索页/详情页等),非店铺页无 sellerSlug 时自动跳过中国卖家筛选;
-   * - 开启 onlyMainlandChinaStores 时先 checkStoreClass,非中国店铺永久跳过,未分类/SW 故障仅本次跳过;
+   * - 全站可用(店铺页/搜索页/详情页等),非店铺页无 sellerSlug 时自动跳过中国大陆卖家筛选;
+   * - 开启 onlyMainlandChinaStores 时先 checkStoreClass,非中国大陆店铺永久跳过,未分类/SW 故障仅本次跳过;
    * - 页面级 _autoCollectSeen 去重,最终去权由 SW 队列保证。
    *
    * @param {string|number} sku

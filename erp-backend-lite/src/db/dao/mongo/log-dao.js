@@ -3,7 +3,7 @@ import { cols } from '../../mongo.js';
 
 const LOG_TYPES = ['card', 'detail', 'pdp', 'search', 'bundle', 'marketStats', 'followSell'];
 const LOG_SOURCES = ['shop-page', 'pdp'];
-const LOG_STORE_CLASSES = ['chinese', 'non-chinese', 'unclassified'];
+const LOG_STORE_CLASSES = ['mainland-china', 'non-mainland-china', 'unclassified'];
 const LOG_STATUS_KEYS = ['success', 'partial', 'failed', 'skipped', 'antibot'];
 
 export const autoCollectLogDao = {

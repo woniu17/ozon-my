@@ -349,6 +349,14 @@ h3 {
 .store-fields .row .v {
   word-break: break-all;
 }
+.store-fields .store-link {
+  color: var(--primary);
+  text-decoration: none;
+  word-break: break-all;
+}
+.store-fields .store-link:hover {
+  text-decoration: underline;
+}
 .store-card-actions {
   display: flex;
   gap: 8px;

@@ -244,8 +244,8 @@ onUnmounted(() => {
       <div class="stat-card">
         <div class="stat-label">店铺分类</div>
         <div class="stat-value" style="font-size: 14px">
-          中国 {{ stats.today?.byStoreClass?.chinese || 0 }} / 非中国
-          {{ stats.today?.byStoreClass?.['non-chinese'] || 0 }} / 未分类
+          中国大陆 {{ stats.today?.byStoreClass?.['mainland-china'] || 0 }} / 非中国大陆
+          {{ stats.today?.byStoreClass?.['non-mainland-china'] || 0 }} / 未分类
           {{ stats.today?.byStoreClass?.unclassified || 0 }}
         </div>
         <div class="stat-sub">今日</div>

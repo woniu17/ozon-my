@@ -10957,7 +10957,7 @@
         <div class="ozon-helper-recommendation-tabs">
           <button class="ozon-helper-tab active" data-tab="hot">${window.lucideIcon('flame', 13)} 热卖榜单</button>
           <button class="ozon-helper-tab" data-tab="blue">${window.lucideIcon('gem', 13)} 蓝海商品</button>
-          <button class="ozon-helper-tab" data-tab="china">${window.lucideIcon('flag', 13)} 中国大陆卖家</button>
+          <button class="ozon-helper-tab" data-tab="mainland-china">${window.lucideIcon('flag', 13)} 中国大陆卖家</button>
         </div>
         <div class="ozon-helper-recommendation-content">
           <div class="ozon-helper-recommendation-loading">加载中...</div>

@@ -364,7 +364,7 @@ CREATE TABLE IF NOT EXISTS ozon_auto_collect_log (
   source           TEXT,             -- 'shop-page' | 'pdp' | NULL
   sellerSlug       TEXT,
   sellerId         TEXT,             -- 稳定主键(2026-07 新增,sellerSlug 可变,主查询用 sellerId)
-  storeClassified  TEXT,             -- 'chinese' | 'non-chinese' | 'unclassified'
+  storeClassified  TEXT,             -- 'mainland-china' | 'non-mainland-china' | 'unclassified'
   depth            INTEGER,
   status           TEXT NOT NULL,   -- 'success' | 'partial' | 'failed' | 'skipped' | 'antibot'
   results          TEXT NOT NULL,   -- JSON 数组:[{type,hit,error?}]

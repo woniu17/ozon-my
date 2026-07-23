@@ -271,6 +271,26 @@ export const storeSkuDao = {
     }));
   },
 
+  /** 批量统计每个 sellerId 的 SKU 数(走 idx_ss_seller_seen 索引)
+   *  @param {string[]} sellerIds
+   *  @returns {Object<string, number>} { sellerId: count }
+   */
+  async countBySellerIds(sellerIds) {
+    if (!Array.isArray(sellerIds) || sellerIds.length === 0) return {};
+    const placeholders = sellerIds.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT sellerId, COUNT(*) AS n
+         FROM ozon_store_sku
+         WHERE sellerId IN (${placeholders})
+         GROUP BY sellerId`
+      )
+      .all(...sellerIds.map(String));
+    const map = {};
+    for (const r of rows) map[r.sellerId] = r.n;
+    return map;
+  },
+
   /** 按 sellerSlug 查全量(兼容方法,无索引全表扫描)
    *  仅用于扩展端首次访问时 sellerId 未取到的场景,生产环境优先用 findBySellerId
    */

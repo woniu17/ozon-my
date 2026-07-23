@@ -139,6 +139,24 @@ export const storeSkuDao = {
     return col.find({ sellerId: String(sellerId) }).sort({ lastSeenAt: -1 }).toArray();
   },
 
+  /** 批量统计每个 sellerId 的 SKU 数
+   *  @param {string[]} sellerIds
+   *  @returns {Object<string, number>} { sellerId: count }
+   */
+  async countBySellerIds(sellerIds) {
+    if (!Array.isArray(sellerIds) || sellerIds.length === 0) return {};
+    const col = await cols.storeSku();
+    const rows = await col
+      .aggregate([
+        { $match: { sellerId: { $in: sellerIds.map(String) } } },
+        { $group: { _id: '$sellerId', n: { $sum: 1 } } },
+      ])
+      .toArray();
+    const map = {};
+    for (const r of rows) map[r._id] = r.n;
+    return map;
+  },
+
   /** 按 sellerSlug 查全量(兼容方法,可变字段)
    *  仅用于扩展端首次访问时 sellerId 未取到的场景
    */

@@ -1,4 +1,4 @@
-﻿# 采集队列重构设计文档
+# 采集队列重构设计文档
 
 > 状态:已实施 v3(实施后评审有待修 P0/P1,见 §十七)
 > 日期:2026-07-14
@@ -13,7 +13,7 @@
 | 疑点 3 | ERP ops 轮询延迟 | A: 接受 5 秒延迟 |
 | 疑点 4 | alarm 1 分钟空窗 | A: 接受 |
 | 疑点 5 | 广播数据量 | **A: 广播发完整数据(见 §8 详解)** |
-| 疑点 6 | 中国卖家筛选 | A: 保持现有机制,提取不到不采集 |
+| 疑点 6 | 中国大陆卖家筛选 | A: 保持现有机制,提取不到不采集 |
 | 疑点 7 | 消费速率配置同步 | 新队列架构下只保留 `consumeRateSec`(秒,5-120) 和 `perDayLimit`;popup 已移除买家页/卖家后台间隔配置 |
 | 疑点 8 | 过渡策略 | A: 一次性切换,删除旧 `autoCollect` handler |
 | 疑点 9 | SW 重启恢复 | SW 启动时扫描所有 running 任务重置为 failed_retry |
@@ -40,7 +40,7 @@
 ```
 [商品卡进视口] → IntersectionObserver
   ↓
-前端:DOM 提取(标题/价格/图片URL/评价数) + 前端筛选(价格/中国卖家/有评价)
+前端:DOM 提取(标题/价格/图片URL/评价数) + 前端筛选(价格/中国大陆卖家/有评价)
   ↓
 submitTask(sku, sellerSlug, sellerId, domInfo) → sendMessage('submitTask')
   ↓
@@ -478,18 +478,18 @@ async function _checkStaleRunningTasks() {
 
 ---
 
-## 五、中国卖家筛选机制
+## 五、中国大陆卖家筛选机制
 
 ### 5.1 筛选流程
 
 ```
 商品卡进视口 → DOM 提取(sellerSlug + sellerId)
   ↓
-前端提交任务前:检查 onlyChineseStores 配置
+前端提交任务前:检查 onlyMainlandChinaStores 配置
   ↓ 开启
-查中国卖家状态(三层查询):
+查中国大陆卖家状态(三层查询):
   L1: chrome.storage.local(jz-store-class-<slug>) — 热缓存
-    ↓ 命中(有 isChinese 值)
+    ↓ 命中(有 isMainlandChina 值)
     通过/拒绝
   L2: ERP MongoDB(/admin/api/store-classification/:slug) — 持久化
     ↓ 命中
@@ -524,20 +524,20 @@ async function _checkStaleRunningTasks() {
 ```js
 // 前端提交任务前
 async function submitTask(sku, card, sellerSlug, sellerId) {
-  // 检查 onlyChineseStores
+  // 检查 onlyMainlandChinaStores
   const config = await _getConfig();
-  if (config.onlyChineseStores && sellerSlug) {
+  if (config.onlyMainlandChinaStores && sellerSlug) {
     const result = await sendMessage('checkStoreClass', { slug: sellerSlug, sellerId });
-    if (result.isChinese === false) {
-      console.log('[submit] skip non-chinese store:', sellerSlug);
+    if (result.isMainlandChina === false) {
+      console.log('[submit] skip non-mainland-china store:', sellerSlug);
       return; // 非中国,跳过
     }
-    if (result.isChinese === null) {
+    if (result.isMainlandChina === null) {
       // 店铺信息缺失,不采集
       console.log('[submit] skip unknown store (no info):', sellerSlug);
       return;
     }
-    // isChinese === true,继续提交
+    // isMainlandChina === true,继续提交
   }
 
   // DOM 提取
@@ -949,7 +949,7 @@ pending ──→ running ──→ success(终态)                         │
 | 3 | ERP ops 轮询延迟 | 接受 5 秒延迟 | §9.6 |
 | 4 | alarm 1 分钟空窗 | 接受 | §4.5 |
 | 5 | 广播数据量 | 广播发完整数据(2-5KB),对齐 preFetched 结构 | §8.2 |
-| 6 | 中国卖家筛选 | 保持现有机制,提取不到不采集 | §5 |
+| 6 | 中国大陆卖家筛选 | 保持现有机制,提取不到不采集 | §5 |
 | 7 | 消费速率配置同步 | 复用 skuInterval 字段,重命名 consumeRateSec | §7 |
 | 8 | 过渡策略 | 一次性切换,删除旧 autoCollect handler | §11 |
 | 9 | SW 重启恢复 | SW 启动时扫描 running 任务重置为 failed_retry | §4.6 |
@@ -1041,12 +1041,12 @@ const consumeRateSec = config.consumeRateSec ?? config.skuInterval ?? 15;
 
 #### 疑点 20:前端筛选条件与店铺页 URL 的关系
 
-**问题**:前端筛选(价格/中国卖家/有评价)在店铺页执行。但用户可能在非店铺页(如搜索页)也开启自动采集。非店铺页没有 sellerSlug,中国卖家筛选无法执行。
+**问题**:前端筛选(价格/中国大陆卖家/有评价)在店铺页执行。但用户可能在非店铺页(如搜索页)也开启自动采集。非店铺页没有 sellerSlug,中国大陆卖家筛选无法执行。
 
 **方案**:
 - 店铺页(`https://www.ozon.ru/seller/*`):正常执行前端筛选 + 提交任务
-- 非店铺页(如搜索页):跳过中国卖家筛选(无 sellerSlug),只执行价格/评价筛选,提交任务时 sellerSlug 为空
-- SW 侧:无 sellerSlug 的任务,跳过中国卖家检查,直接入队
+- 非店铺页(如搜索页):跳过中国大陆卖家筛选(无 sellerSlug),只执行价格/评价筛选,提交任务时 sellerSlug 为空
+- SW 侧:无 sellerSlug 的任务,跳过中国大陆卖家检查,直接入队
 
 ---
 

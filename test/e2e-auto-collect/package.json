@@ -10,7 +10,7 @@
     "test": "node runner/puppeteer-runner.js all",
     "test:basic": "node runner/puppeteer-runner.js basic",
     "test:dedup": "node runner/puppeteer-runner.js dedup",
-    "test:non-chinese": "node runner/puppeteer-runner.js non-chinese",
+    "test:non-mainland-china": "node runner/puppeteer-runner.js non-mainland-china",
     "test:daily-limit": "node runner/puppeteer-runner.js daily-limit",
     "test:cache-hit": "node runner/puppeteer-runner.js cache-hit",
     "test:antibot": "node runner/puppeteer-runner.js antibot"

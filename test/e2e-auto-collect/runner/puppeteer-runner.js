@@ -2,7 +2,7 @@
 //
 // 用法:
 //   node test/e2e-auto-collect/runner/puppeteer-runner.js [场景名]
-//   场景名: basic | dedup | non-chinese | daily-limit | cache-hit | antibot | all (默认 all)
+//   场景名: basic | dedup | non-mainland-china | daily-limit | cache-hit | antibot | all (默认 all)
 //
 // 前置条件:
 //   1. erp-backend-lite 已启动 (端口 3001)
@@ -409,9 +409,9 @@ async function scenarioDedup(browser, sw, mongo) {
   await page.close();
 }
 
-// 场景 3: 非中国店铺跳过
-async function scenarioNonChinese(browser, sw, mongo) {
-  log('\n══ 场景 3: 非中国店铺跳过 ══');
+// 场景 3: 非中国大陆店铺跳过
+async function scenarioNonMainlandChina(browser, sw, mongo) {
+  log('\n══ 场景 3: 非中国大陆店铺跳过 ══');
   await clearMongoCache(mongo);
   await clearStoreClassification(FOREIGN_SHOP_SLUG);
   await setStoreClassification(FOREIGN_SHOP_SLUG, false);
@@ -1968,7 +1968,7 @@ async function main() {
     const scenarios = {
       basic: () => scenarioBasic(browser, sw, mongo),
       dedup: () => scenarioDedup(browser, sw, mongo),
-      'non-chinese': () => scenarioNonChinese(browser, sw, mongo),
+      'non-mainland-china': () => scenarioNonMainlandChina(browser, sw, mongo),
       'daily-limit': () => scenarioDailyLimit(browser, sw, mongo),
       'cache-hit': () => scenarioCacheHit(browser, sw, mongo),
       antibot: () => scenarioAntibot(browser, sw, mongo),

@@ -180,7 +180,7 @@
 | `running` | 采集中 | 否 |
 | `partial` | 部分采集失败(`_doAutoCollect` 返回值,非队列持久状态) | 否(回 pending) |
 | `success` | 全部采集成功(含 all-cached 缓存全命中) | 是 |
-| `skipped` | 跳过(not-running/paused/non-chinese-store/unclassified-store/queue_timeout) | 是 |
+| `skipped` | 跳过(not-running/paused/non-mainland-china-store/unclassified-store/queue_timeout) | 是 |
 
 > **状态机设计原则**(2026-07 重构):
 > - 终态只有 `success` 和 `skipped`
@@ -188,7 +188,7 @@
 > - 无退避策略(已移除 `nextRetryAt`/`maxAttempts`)
 > - `partial` 是 `_doAutoCollect` 的返回值语义,表示"部分缓存命中但没全部采集成功",SW 收到后调 `_handlePartialTask` 回 `pending`
 > - **`partial` 从不持久化到 ERP**:SW 的 `_handlePartialTask` 写 `status:'pending'` 而非 `'partial'`,ERP `TASK_STATUSES` 保留 `'partial'` 仅为前端 tab 兼容,实际 `byStatus.partial` 恒为 0
-> - `skipped` 携带过滤原因(reason),如 `not-running`/`paused`/`non-chinese-store`/`unclassified-store`/`queue_timeout`
+> - `skipped` 携带过滤原因(reason),如 `not-running`/`paused`/`non-mainland-china-store`/`unclassified-store`/`queue_timeout`
 
 **重试机制**:`_handlePartialTask`([collect-queue.js L787](file:///c:/root/code/ozon-my/qx-ozon/collect/background/collect-queue.js#L787))将任务回 `pending`,`createdAt=now` 排到队尾,`attempts+1` 记录尝试次数,`lastError` 记录上次失败原因(type/message/step/ts)。无退避,无最大重试次数。
 
@@ -274,7 +274,7 @@ _doAutoCollect 返回值:
 |---|---|---|
 | **并发 slot 获取** | `_acquireAutoCollectSlot`,超时 60s 丢弃返回 `skipped` | — |
 | **Gate 0 基础检查** | autoCollectRunning / paused / queue_timeout | config + meta |
-| **Gate 0.5 中国店铺** | `checkStoreClassification`,`onlyChineseStores` 开启时非中国/未分类店铺返回 `skipped` | ERP |
+| **Gate 0.5 中国大陆店铺** | `checkStoreClassification`,`onlyMainlandChinaStores` 开启时非中国/未分类店铺返回 `skipped` | ERP |
 | **Step 1 并行查 5 类缓存** | `Promise.all` 查 dom(card+detail)/attribute(search+bundle)/richMedia/marketStats/followSell | ERP SQLite |
 | **Step 2 计算 pending** | `hasPending=false` → 返回 `success`(reason:`all-cached`) | — |
 | **Step 4 买家页采集** | `fetchPdpBundleViaBuyerTab` 取 pdp(richMedia)+followSell | www.ozon.ru tab |
@@ -377,7 +377,7 @@ _doAutoCollect 返回值:
 1. _autoCollectSeen 去重(同会话不重复提交)
 2. 检查 shallowCollectRunning 开关
 3. 读 jz-auto-collect-config,检查 shallowCollectRunning
-4. (仅店铺页)checkStoreClass 中国店铺筛选
+4. (仅店铺页)checkStoreClass 中国大陆店铺筛选
 5. 提取 domInfo → sendMessage('submitTask', {sku, sellerSlug, sellerId, domInfo})
 6. 加入 _autoCollectSeen
 ```
@@ -492,9 +492,9 @@ if (window.__jzCollectStatus?.updateStoreSkuPassFilter(productId, passesFilter))
   skuInterval: 30000,             // v1 旧字段(保留兼容)
   consumeRateMinSec: 5,           // 队列消费间隔下限(5-120 秒)
   consumeRateMaxSec: 15,          // 队列消费间隔上限(5-120 秒)
-  onlyChineseStores: true,        // 仅采集中国店铺
-  knownChineseSlugs: [],          // 已知中国店铺 slug 白名单
-  knownNonChineseSlugs: [],       // 已知非中国店铺 slug 黑名单
+  onlyMainlandChinaStores: true,        // 仅采集中国大陆店铺
+  knownMainlandChinaSlugs: [],          // 已知中国大陆店铺 slug 白名单
+  knownNonMainlandChinaSlugs: [],       // 已知非中国大陆店铺 slug 黑名单
 }
 ```
 

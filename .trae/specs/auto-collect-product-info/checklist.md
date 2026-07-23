@@ -1,12 +1,12 @@
 # Checklist
 
-> V3 变更:在 V2 八类缓存基础上,(1)去掉搜索页采集相关验收项;(2)新增中国店铺检测验收项(规则引擎/人工确认/三层查询/Gate 0.5/非中国店铺跳过/未分类等待/onlyChineseStores 开关);(3)新增 store_classification collection+端点验收项;(4)新增 store-detector.js 验收项;(5)auto_collect_log 增加 sellerSlug/storeClassified 字段验收;(6)内存计数器新增 byStoreClass 验收;(7)ERP overview 新增店铺分类 tab 验收。
+> V3 变更:在 V2 八类缓存基础上,(1)去掉搜索页采集相关验收项;(2)新增中国大陆店铺检测验收项(规则引擎/人工确认/三层查询/Gate 0.5/非中国大陆店铺跳过/未分类等待/onlyMainlandChinaStores 开关);(3)新增 store_classification collection+端点验收项;(4)新增 store-detector.js 验收项;(5)auto_collect_log 增加 sellerSlug/storeClassified 字段验收;(6)内存计数器新增 byStoreClass 验收;(7)ERP overview 新增店铺分类 tab 验收。
 
 ## P0 · Service Worker 核心编排
 
 - [ ] service-worker.js 新增 `_buyerPageGate()`(500ms,从 chrome.storage 读参数,作用域 entrypoint/composer/followSell)
 - [ ] service-worker.js 新增 `_autoCollectGate()`(1000ms,从 chrome.storage 读参数)
-- [ ] service-worker.js `_loadAutoCollectConfig()` 含 `onlyChineseStores`/`knownChineseSlugs`/`knownNonChineseSlugs` 参数(默认 onlyChineseStores=true)
+- [ ] service-worker.js `_loadAutoCollectConfig()` 含 `onlyMainlandChinaStores`/`knownMainlandChinaSlugs`/`knownNonMainlandChinaSlugs` 参数(默认 onlyMainlandChinaStores=true)
 - [ ] service-worker.js `_IDB_VERSION` 从 5 升级为 6
 - [ ] service-worker.js 新增常量 `_IDB_STORE_MARKET_STATS` / `_IDB_STORE_FOLLOW_SELL`
 - [ ] service-worker.js `onupgradeneeded` v6 分支创建 `market_stats_cache` / `follow_sell_cache` 两个 store(keyPath=sku),不删旧 6 个 store
@@ -31,11 +31,11 @@
 - [ ] **service-worker.js 新增 `classifyStoreByRules(slug, name, companyInfo, config)` 规则引擎**(5 条优先级规则)
 - [ ] **service-worker.js 新增 `_erpStoreClassGet(slug)` / `_erpStoreClassSet(slug, record)`**(对接 ERP store-classification 端点)
 - [ ] **service-worker.js 新增 `checkStoreClassification(slug, name, companyInfo)` 三层查询函数**(L1 chrome.storage → L2 MongoDB → 规则引擎 → 未分类返回 null)
-- [ ] **service-worker.js 新增 `case 'checkStoreClassification'` 消息路由**(返回 `{isChinese, classifiedBy} | null`)
+- [ ] **service-worker.js 新增 `case 'checkStoreClassification'` 消息路由**(返回 `{isMainlandChina, classifiedBy} | null`)
 - [ ] **service-worker.js 新增 `case 'classifyStore'` 消息路由**(人工确认,写 L1+L2,classifiedBy='manual')
 - [ ] service-worker.js 新增 `case 'autoCollect'` 消息路由(接收 `{sku, source, sellerSlug, depth, forceRefresh?}`)
 - [ ] autoCollect Gate 0:autoCollectRunning/paused/冷却期/每日上限/跨日重置
-- [ ] **autoCollect Gate 0.5 中国店铺检查**:调 `checkStoreClassification`,onlyChineseStores 开启且 isChinese !== true 时跳过(reason=non-chinese-store 或 unclassified-store)
+- [ ] **autoCollect Gate 0.5 中国大陆店铺检查**:调 `checkStoreClassification`,onlyMainlandChinaStores 开启且 isMainlandChina !== true 时跳过(reason=non-mainland-china-store 或 unclassified-store)
 - [ ] autoCollect Step 1:并行查 8 类缓存,bundle 空属性 6h 窗口,marketStats 24h stale,followSell 4h stale
 - [ ] autoCollect Step 2:计算 pending,空则返回 all-cached
 - [ ] autoCollect Step 3:`await _autoCollectGate()`
@@ -44,14 +44,14 @@
 - [ ] autoCollect Step 6:seller portal 采集 marketStats(若未命中或 stale),先检查 `!marketData`(NO_DATA)再检查 `__needSellerLogin`(AUTH_REQUIRED)再检查 `__antibot`(跳 ANTIBOT),失败不熔断
 - [ ] autoCollect Step 7:写日志(含 sellerSlug + storeClassified,results 数组 8 项)+ 更新内存计数器(含 byStoreClass)+ todayCount++,返回 success/partial
 - [ ] autoCollect ANTIBOT 分支:设 pausedUntil + 通知 QX面板+popup + 写 log + 返回 antibot
-- [ ] **autoCollect Gate 0.5 跳过分支也调 `_writeAutoCollectLog`**(记录 non-chinese-store/unclassified-store)
+- [ ] **autoCollect Gate 0.5 跳过分支也调 `_writeAutoCollectLog`**(记录 non-mainland-china-store/unclassified-store)
 - [ ] service-worker.js `syncL2Batch` 扩展为 8 类(遍历 8 个 store)
 - [ ] service-worker.js `_idbScanUnsynced` 扩展为 8 类(扫描 8 个 store 的 `l2Synced=false` 记录)
 - [ ] `syncAllCacheToL2` message 处理同步 8 类(`forceAll=true` 扫描全部记录)
 
 ## P0 · ERP 后端日志接口
 
-- [ ] cache.js 新增 `GET /admin/api/auto-collect/stats`(聚合统计,byType 含 8 类,**bySource 含 shop-page/pdp**,**byStoreClass 含 chinese/non-chinese/unclassified**)
+- [ ] cache.js 新增 `GET /admin/api/auto-collect/stats`(聚合统计,byType 含 8 类,**bySource 含 shop-page/pdp**,**byStoreClass 含 mainland-china/non-mainland-china/unclassified**)
 - [ ] cache.js 新增 `GET /admin/api/auto-collect/logs`(分页+筛选 sku/status/source/**sellerSlug**)
 - [ ] cache.js 新增 `GET /admin/api/auto-collect/logs/:sku`(单 SKU 历史)
 - [ ] cache.js 新增 `POST /admin/api/auto-collect/log`(SW 写入,JWT 鉴权,字段含 sellerSlug/storeClassified)
@@ -73,17 +73,17 @@
 
 - [ ] mongo.js `cols` 对象新增 `storeClassification` collection(`ozon_store_classification`)
 - [ ] cache.js 新增 `GET /ozon/store-classification/:slug`(按 slug 查询单条分类记录)
-- [ ] cache.js 新增 `POST /ozon/store-classification/:slug`(upsert 分类记录,含 isChinese/classifiedBy/companyInfo/lastSeenAt)
-- [ ] cache.js 新增 `GET /ozon/store-classification`(列表查询,支持 isChinese 筛选 + keyword 搜索 + 分页)
+- [ ] cache.js 新增 `POST /ozon/store-classification/:slug`(upsert 分类记录,含 isMainlandChina/classifiedBy/companyInfo/lastSeenAt)
+- [ ] cache.js 新增 `GET /ozon/store-classification`(列表查询,支持 isMainlandChina 筛选 + keyword 搜索 + 分页)
 - [ ] cache.js 新增 `DELETE /ozon/store-classification/:slug`(删除单条分类记录)
-- [ ] MongoDB `ozon_store_classification` 创建 3 个索引(isChinese / sellerName / lastSeenAt)
+- [ ] MongoDB `ozon_store_classification` 创建 3 个索引(isMainlandChina / sellerName / lastSeenAt)
 
 ## P0 · SW 写日志接口对接
 
 - [ ] service-worker.js 新增 `_writeAutoCollectLog(payload)`(调 ERP API,fire-and-forget,payload 含 sellerSlug/storeClassified)
 - [ ] autoCollect Step 7 调用 `_writeAutoCollectLog`
 - [ ] autoCollect ANTIBOT 分支调用 `_writeAutoCollectLog`
-- [ ] **autoCollect Gate 0.5 跳过分支调用 `_writeAutoCollectLog`**(记录 non-chinese-store/unclassified-store)
+- [ ] **autoCollect Gate 0.5 跳过分支调用 `_writeAutoCollectLog`**(记录 non-mainland-china-store/unclassified-store)
 
 ## P1 · Content Scripts 接入
 
@@ -131,7 +131,7 @@
 - [ ] ozon-data-panel.js 移除旧 `collectSaleIfMatched` / `JZCollectorDB.putSale` 调用链
 - [ ] ozon-product.js `extractProductData` 在 cardCacheSet 后提取 sellerSlug(从 `_product.seller.link`)
 - [ ] ozon-product.js 调 `sendMessage('checkStoreClassification', {slug, name})` 更新面板店铺检测状态
-- [ ] ozon-product.js 调 `autoCollectOnSkuSeen(sku, 'pdp', sellerSlug)`(详情页不筛选,但仍检查中国店铺 Gate 0.5)
+- [ ] ozon-product.js 调 `autoCollectOnSkuSeen(sku, 'pdp', sellerSlug)`(详情页不筛选,但仍检查中国大陆店铺 Gate 0.5)
 - [ ] autoCollectOnSkuSeen 与原有 panelDataCache/variantsQueue/followSellQueue 逻辑不阻塞
 
 ## P1.5 · QX采集器面板(从旧 collector 移植)
@@ -141,25 +141,25 @@
 - [ ] smart-filter.js 18 字段中 16 字段从 marketStats 缓存读取,2 字段从 followSell 缓存读取
 - [ ] `qx-collector/auto-scroller.js` 移植(类名 QXAutoScroller,逻辑零改),挂 `window.QXAutoScroller`
 - [ ] **`qx-collector/store-detector.js` 创建**(NEW,挂 `window.QXStoreDetector`)
-- [ ] store-detector.js `renderStoreDetectionBlock` 根据 isChinese 渲染 4 种状态(中国/非中国/待确认/未检测)
-- [ ] store-detector.js [标记中国] 按钮点击 → `sendMessage('classifyStore', {slug, name, isChinese:true})` + 通知该页未采集 SKU 开始 autoCollect
-- [ ] store-detector.js [标记非中国] 按钮点击 → `sendMessage('classifyStore', {slug, name, isChinese:false})`
+- [ ] store-detector.js `renderStoreDetectionBlock` 根据 isMainlandChina 渲染 4 种状态(中国/非中国/待确认/未检测)
+- [ ] store-detector.js [标记中国大陆] 按钮点击 → `sendMessage('classifyStore', {slug, name, isMainlandChina:true})` + 通知该页未采集 SKU 开始 autoCollect
+- [ ] store-detector.js [标记非中国大陆] 按钮点击 → `sendMessage('classifyStore', {slug, name, isMainlandChina:false})`
 - [ ] store-detector.js [重新分类] 按钮点击 → 区块回到「待确认」状态
 - [ ] `qx-collector/panel.js` 创建(精简:去掉本地桶/CSV/推送/关键词采集,保留主开关/自动翻页/仅抓有销量/智能筛选)
 - [ ] **panel.js 新增店铺检测区块**(委托 `QXStoreDetector.renderStoreDetectionBlock` 渲染,位于主开关下方)
-- [ ] **panel.js 新增「只采集中国店铺」开关**(读写 `config.onlyChineseStores`)
+- [ ] **panel.js 新增「只采集中国大陆店铺」开关**(读写 `config.onlyMainlandChinaStores`)
 - [ ] panel.js 新增区块:今日统计/缓存类目命中(8 类,marketStats/followSell stale 标橙色)/最近采集/强制刷新/查看ERP/熔断倒计时
 - [ ] panel.js 通过 SW action 获取数据(GetConfig/GetStats/GetRecent,5s 轮询 + 推送)
-- [ ] panel.js 新增回调 `onOnlyChineseStoresChange`(切换 onlyChineseStores)
+- [ ] panel.js 新增回调 `onOnlyMainlandChinaStoresChange`(切换 onlyMainlandChinaStores)
 - [ ] `qx-collector/panel.css` 创建,样式前缀 `.qx-c-*`
 - [ ] 类名 QXCollectorPanel 挂 `window.QXCollectorPanel`
-- [ ] SW `autoCollectGetConfig` 返回含 `marketStatsStaleMs` / `followSellStaleMs` / **`onlyChineseStores` / `knownChineseSlugs` / `knownNonChineseSlugs`**
-- [ ] SW `autoCollectSetConfig` 支持设置 `marketStatsStaleMs` / `followSellStaleMs` / **`onlyChineseStores` / `knownChineseSlugs` / `knownNonChineseSlugs`**
-- [ ] SW `autoCollectGetStats` 返回 `byType` 含 8 类,**`bySource` 含 shop-page/pdp**(去掉 search-page),**`byStoreClass` 含 chinese/non-chinese/unclassified**
+- [ ] SW `autoCollectGetConfig` 返回含 `marketStatsStaleMs` / `followSellStaleMs` / **`onlyMainlandChinaStores` / `knownMainlandChinaSlugs` / `knownNonMainlandChinaSlugs`**
+- [ ] SW `autoCollectSetConfig` 支持设置 `marketStatsStaleMs` / `followSellStaleMs` / **`onlyMainlandChinaStores` / `knownMainlandChinaSlugs` / `knownNonMainlandChinaSlugs`**
+- [ ] SW `autoCollectGetStats` 返回 `byType` 含 8 类,**`bySource` 含 shop-page/pdp**(去掉 search-page),**`byStoreClass` 含 mainland-china/non-mainland-china/unclassified**
 - [ ] SW 内存计数器(今日 success/skipped/failed/antibot)+ 环形缓冲(最近 50 条日志)+ byStoreClass
 - [ ] SW 启动时从 MongoDB auto_collect_log 聚合初始化内存计数器(含 byStoreClass)
 - [ ] **SW `checkStoreClassification` action 可被面板调用**(Task 5.5 已实现)
-- [ ] **SW `classifyStore` action 可被面板调用**(Task 5.6 已实现,人工标记中国后触发该页未采集 SKU autoCollect)
+- [ ] **SW `classifyStore` action 可被面板调用**(Task 5.6 已实现,人工标记中国大陆后触发该页未采集 SKU autoCollect)
 - [ ] ozon-data-panel.js 替换 `JZCollectorPanel` → `QXCollectorPanel`
 - [ ] ozon-data-panel.js 实例化 `QXAutoScroller`(仅店铺页)
 - [ ] ozon-product.js 详情页新增 QX面板挂载(只显示状态/统计/熔断/强制刷新/查看ERP/**店铺检测**,无自动翻页/筛选)
@@ -173,7 +173,7 @@
 
 - [ ] popup.html 新增「自动采集」简化卡片(总开关/今日计数/状态 dot/熔断简略倒计时)
 - [ ] popup.html 「同步缓存」按钮文案更新为「同步缓存(8 类)」
-- [ ] popup.html 不暴露深度/限速/自动翻页/筛选/**只采集中国店铺**(这些在 QX面板)
+- [ ] popup.html 不暴露深度/限速/自动翻页/筛选/**只采集中国大陆店铺**(这些在 QX面板)
 - [ ] popup.js 新增 `loadAutoCollectConfig` / `saveAutoCollectConfig`
 - [ ] popup.js 总开关切换 → 保存 autoCollectRunning + 通知 SW
 - [ ] popup.js 监听 SW `antibotDetected` / `configChanged` 消息 → 同步状态
@@ -188,7 +188,7 @@
 - [ ] Cache.vue tabs 新增 `{key:'auto-collect', label:'自动采集'}` 和 `{key:'store-classification', label:'店铺分类'}`
 - [ ] Cache.vue 自动采集 tab 统计卡片(成功率/各类目命中 8 类/反爬次数/**byStoreClass**)
 - [ ] Cache.vue 自动采集 tab 日志列表(sku/status/source/**sellerSlug** 筛选 + 分页,表格列含 8 类命中 + sellerSlug)
-- [ ] **Cache.vue 店铺分类 tab 分类列表**(isChinese 筛选 + keyword 搜索 + 分页,支持手动改分类)
+- [ ] **Cache.vue 店铺分类 tab 分类列表**(isMainlandChina 筛选 + keyword 搜索 + 分页,支持手动改分类)
 - [ ] Cache.vue overview 矩阵显示 8 类缓存(marketStats/followSell stale 标橙色)
 - [ ] shared-utils.js 监听 `__jzAutoCollectResetSeen` 消息清空去重集合
 - [ ] QX面板「强制刷新当前页」按钮 → 调 SW action → 清空去重 + 重发 forceRefresh
@@ -196,25 +196,25 @@
 
 ## 验证与收尾
 
-### 中国店铺检测验证(NEW)
+### 中国大陆店铺检测验证(NEW)
 
-- [ ] 店铺页浏览中国店铺 10 SKU → 八类缓存各 10 条(detail 空),log 10 条(storeClassified=chinese)
-- [ ] 详情页浏览中国店铺 10 SKU → 八类缓存各 10 条(含 detail)
-- [ ] **店铺页浏览非中国店铺 → 不触发 autoCollect,log 记 `non-chinese-store`(storeClassified=non-chinese)**
+- [ ] 店铺页浏览中国大陆店铺 10 SKU → 八类缓存各 10 条(detail 空),log 10 条(storeClassified=mainland-china)
+- [ ] 详情页浏览中国大陆店铺 10 SKU → 八类缓存各 10 条(含 detail)
+- [ ] **店铺页浏览非中国大陆店铺 → 不触发 autoCollect,log 记 `non-mainland-china-store`(storeClassified=non-mainland-china)**
 - [ ] **店铺页浏览未分类店铺 → QX面板显示「待确认」,不触发 autoCollect,log 记 `unclassified-store`(storeClassified=unclassified)**
-- [ ] **人工标记未分类店铺为中国店铺 → 该页 SKU 开始采集**
-- [ ] **人工标记中国店铺为非中国店铺 → 该页后续 SKU 不采集**
-- [ ] **规则自动判定:knownNonChineseSlugs 列表中的 slug → 自动标记为非中国店铺**
-- [ ] **规则自动判定:companyInfo.country=CN → 自动标记为中国店铺(classifiedBy=rule:company-country)**
-- [ ] **规则自动判定:companyInfo.country 非 CN → 自动标记为非中国店铺**
+- [ ] **人工标记未分类店铺为中国大陆店铺 → 该页 SKU 开始采集**
+- [ ] **人工标记中国大陆店铺为非中国大陆店铺 → 该页后续 SKU 不采集**
+- [ ] **规则自动判定:knownNonMainlandChinaSlugs 列表中的 slug → 自动标记为非中国大陆店铺**
+- [ ] **规则自动判定:companyInfo.country=CN → 自动标记为中国大陆店铺(classifiedBy=rule:company-country)**
+- [ ] **规则自动判定:companyInfo.country 非 CN → 自动标记为非中国大陆店铺**
 - [ ] **店铺页方案 A 验证:fetch 详情页 HTML 成功 → companyInfo 含 country(如 "CN")→ 规则引擎 Rule 4/5 自动判定**
 - [ ] **店铺页方案 B 验证:fetch 失败退回 entrypoint-api → companyInfo 仅 companyName,country=null → 走人工确认**
 - [ ] **三层查询缓存命中:同一店铺第二次访问 → L1 命中,不查 L2 不跑规则引擎**
 - [ ] **三层查询 L2 命中:L1 未命中时查 L2,L2 命中写 L1 + 返回**
-- [ ] **QX面板「只采集中国店铺」开关关闭 → 非中国店铺也采集**
+- [ ] **QX面板「只采集中国大陆店铺」开关关闭 → 非中国大陆店铺也采集**
 - [ ] **QX面板店铺检测区块 4 种状态显示正确**(中国/非中国/待确认/未检测)
 - [ ] **[重新分类] 按钮 → 区块回到「待确认」状态,用户可重新标记**
-- [ ] **store-detector.js 渲染逻辑正确**(isChinese=true/false/null/未检测 4 种状态)
+- [ ] **store-detector.js 渲染逻辑正确**(isMainlandChina=true/false/null/未检测 4 种状态)
 - [ ] **搜索页浏览 SKU → 不触发 autoCollect**(V3 已移除搜索页采集)
 
 ### 八类缓存验证
@@ -239,11 +239,11 @@
 ### ERP overview 验证
 
 - [ ] ERP overview「自动采集」tab 可见统计 + 日志列表(含 sellerSlug 列)
-- [ ] **ERP overview「店铺分类」tab 可见分类列表(支持 isChinese 筛选),可手动改分类**
+- [ ] **ERP overview「店铺分类」tab 可见分类列表(支持 isMainlandChina 筛选),可手动改分类**
 - [ ] ERP overview 缓存矩阵显示 8 类(marketStats/followSell stale 标橙色)
 - [ ] popup「同步缓存(8 类)」按钮 → 8 类 L1 全部同步到 L2,统计正确
 - [ ] 「强制刷新当前页」→ 该页 SKU 重新真调写入 8 类
-- [ ] 内存计数器 byStoreClass 统计正确(chinese/non-chinese/unclassified)
+- [ ] 内存计数器 byStoreClass 统计正确(mainland-china/non-mainland-china/unclassified)
 
 ### 代码质量
 
