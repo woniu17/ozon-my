@@ -108,6 +108,8 @@ async function ensureMigrations() {
   // 2026-07: 跟卖状态即时标记 — ozon_cache_index 补 listed_store_id/listed_at/listed_task_id 列
   // 并从 follow_sell_task_items + follow_sell_tasks 一次性回填(取最近一条任务)
   await migrateListedFields(db);
+  // P2-2: 批量均衡上架 — batch_upload_tasks / batch_upload_items 补列(多店铺分配 + 顺序执行 + 速度控制)
+  migrateBatchUploadTables(db);
   // ozon_cache_index.has_rich_content:richMedia.data.richContent 非空则 1,用于采集箱"有富内容"筛选
   const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
   let addedHasRichContent = false;
@@ -683,6 +685,70 @@ async function migrateListedFields(db) {
   console.log(
     `[db] migration: backfill listed fields for ${result.changes} SKUs`
   );
+}
+
+// P2-2: 批量均衡上架 — batch_upload_tasks / batch_upload_items 补列
+// 旧库(P2-1 阶段建的表)缺 P2-2 新增列,需 ALTER TABLE 补列 + 建索引
+// 新库由 schema.sql CREATE TABLE IF NOT EXISTS 直接建好,此函数幂等跳过
+function migrateBatchUploadTables(db) {
+  // ── batch_upload_tasks 补列 ──
+  const butCols = db.prepare(`PRAGMA table_info(batch_upload_tasks)`).all();
+  if (butCols.length === 0) return; // 表不存在,跳过(schema.sql 会创建)
+  if (!butCols.some((c) => c.name === 'batch_no')) {
+    db.exec(`ALTER TABLE batch_upload_tasks ADD COLUMN batch_no TEXT`);
+    console.log('[db] migration: added column batch_upload_tasks.batch_no');
+  }
+  if (!butCols.some((c) => c.name === 'name')) {
+    db.exec(`ALTER TABLE batch_upload_tasks ADD COLUMN name TEXT`);
+    console.log('[db] migration: added column batch_upload_tasks.name');
+  }
+  if (!butCols.some((c) => c.name === 'store_ids')) {
+    db.exec(`ALTER TABLE batch_upload_tasks ADD COLUMN store_ids TEXT`);
+    console.log('[db] migration: added column batch_upload_tasks.store_ids');
+  }
+  if (!butCols.some((c) => c.name === 'skipped_count')) {
+    db.exec(`ALTER TABLE batch_upload_tasks ADD COLUMN skipped_count INTEGER DEFAULT 0`);
+    console.log('[db] migration: added column batch_upload_tasks.skipped_count');
+  }
+  if (!butCols.some((c) => c.name === 'speed_config')) {
+    db.exec(`ALTER TABLE batch_upload_tasks ADD COLUMN speed_config TEXT`);
+    console.log('[db] migration: added column batch_upload_tasks.speed_config');
+  }
+  if (!butCols.some((c) => c.name === 'started_at')) {
+    db.exec(`ALTER TABLE batch_upload_tasks ADD COLUMN started_at TEXT`);
+    console.log('[db] migration: added column batch_upload_tasks.started_at');
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_but_status ON batch_upload_tasks(status, created_at DESC)`);
+
+  // ── batch_upload_items 补列 ──
+  const buiCols = db.prepare(`PRAGMA table_info(batch_upload_items)`).all();
+  if (buiCols.length === 0) return;
+  if (!buiCols.some((c) => c.name === 'seq')) {
+    db.exec(`ALTER TABLE batch_upload_items ADD COLUMN seq INTEGER DEFAULT 0`);
+    console.log('[db] migration: added column batch_upload_items.seq');
+  }
+  if (!buiCols.some((c) => c.name === 'seller_id')) {
+    db.exec(`ALTER TABLE batch_upload_items ADD COLUMN seller_id TEXT`);
+    console.log('[db] migration: added column batch_upload_items.seller_id');
+  }
+  if (!buiCols.some((c) => c.name === 'target_store_id')) {
+    db.exec(`ALTER TABLE batch_upload_items ADD COLUMN target_store_id TEXT`);
+    console.log('[db] migration: added column batch_upload_items.target_store_id');
+  }
+  if (!buiCols.some((c) => c.name === 'skip_reason')) {
+    db.exec(`ALTER TABLE batch_upload_items ADD COLUMN skip_reason TEXT`);
+    console.log('[db] migration: added column batch_upload_items.skip_reason');
+  }
+  if (!buiCols.some((c) => c.name === 'started_at')) {
+    db.exec(`ALTER TABLE batch_upload_items ADD COLUMN started_at TEXT`);
+    console.log('[db] migration: added column batch_upload_items.started_at');
+  }
+  if (!buiCols.some((c) => c.name === 'finished_at')) {
+    db.exec(`ALTER TABLE batch_upload_items ADD COLUMN finished_at TEXT`);
+    console.log('[db] migration: added column batch_upload_items.finished_at');
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_bui_batch_seq ON batch_upload_items(batch_task_id, seq)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_bui_status ON batch_upload_items(status)`);
 }
 
 // 直接运行时初始化(node src/db/index.js)

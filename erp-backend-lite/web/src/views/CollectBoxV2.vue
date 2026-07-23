@@ -11,9 +11,48 @@ import {
 import { useToast } from '../components/useToast.js';
 import AppPager from '../components/AppPager.vue';
 import ImageLightbox from '../components/ImageLightbox.vue';
+import BatchUploadDialog from '../components/BatchUploadDialog.vue';
 
 const router = useRouter();
 const { show } = useToast();
+
+// ── 跨页多选(批量均衡上架) ───────────────────────────────
+// ref(new Set()) 在 Vue 3.4+ 中,Set 会被 reactive 代理,.add/.delete/.clear/.has 均触发响应式
+const selectedSkus = ref(new Set());
+const batchDialogVisible = ref(false);
+
+function isSkuSelected(sku) {
+  return !!sku && selectedSkus.value.has(sku);
+}
+
+// 单个 SKU 勾选/取消勾选(stopPropagation 已在模板 @click.stop 上处理)
+function toggleSelect(sku, checked) {
+  if (!sku) return;
+  if (checked) selectedSkus.value.add(sku);
+  else selectedSkus.value.delete(sku);
+  // 强制重赋值以触发依赖此 Set 的 computed/watch(ref + Set 兼容性保险)
+  selectedSkus.value = new Set(selectedSkus.value);
+}
+
+function selectAllOnPage() {
+  for (const it of state.items) {
+    if (it.sku) selectedSkus.value.add(it.sku);
+  }
+  selectedSkus.value = new Set(selectedSkus.value);
+}
+
+function clearSelection() {
+  selectedSkus.value.clear();
+  selectedSkus.value = new Set();
+}
+
+function openBatchDialog() {
+  if (selectedSkus.value.size === 0) {
+    show('请先选择 SKU', 'error');
+    return;
+  }
+  batchDialogVisible.value = true;
+}
 
 // 采集源卖家列表(供下拉框) — 从 ozon_store_sku 按 sellerId 分组
 const sellers = ref([]);
@@ -380,6 +419,14 @@ onMounted(() => {
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
+    <!-- 批量操作栏(已选 SKU > 0 时显示) -->
+    <div v-if="selectedSkus.size > 0" class="cb-batch-bar">
+      <span class="cb-batch-count">已选 {{ selectedSkus.size }} 件</span>
+      <button class="btn btn-sm btn-ghost" @click="selectAllOnPage">全选当前页</button>
+      <button class="btn btn-sm btn-ghost" @click="clearSelection">清空选择</button>
+      <button class="btn btn-sm btn-primary" @click="openBatchDialog">批量均衡上架</button>
+    </div>
+
     <div class="cb-grid">
       <div v-if="state.loading && !state.items.length" class="empty" style="grid-column: 1/-1">加载中...</div>
       <div v-else-if="!state.items.length" class="empty" style="grid-column: 1/-1">暂无采集记录</div>
@@ -389,6 +436,14 @@ onMounted(() => {
           :class="{ 'cb-thumb-clickable': it.primaryImage }"
           @click="openImage(it)"
         >
+          <input
+            v-if="it.sku"
+            type="checkbox"
+            class="cb-select"
+            :checked="isSkuSelected(it.sku)"
+            @click.stop="toggleSelect(it.sku, $event.target.checked)"
+            :title="isSkuSelected(it.sku) ? '取消选择' : '选择此 SKU'"
+          />
           <img
             v-if="it.primaryImage"
             :src="it.primaryImage"
@@ -516,6 +571,13 @@ onMounted(() => {
       :url="lightbox.url"
       :list="lightbox.list"
       :title="lightbox.title"
+    />
+
+    <!-- 批量均衡上架配置弹窗 -->
+    <BatchUploadDialog
+      v-if="batchDialogVisible"
+      :skus="[...selectedSkus]"
+      @close="batchDialogVisible = false"
     />
   </div>
 </template>
@@ -759,5 +821,39 @@ onMounted(() => {
   background: #ffd591;
   border-color: #ffd591;
   cursor: not-allowed;
+}
+
+/* 跨页多选:卡片左上角 checkbox */
+.cb-select {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  z-index: 2;
+  margin: 0;
+  accent-color: var(--primary, #2563eb);
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 3px;
+}
+
+/* 批量操作栏(筛选栏下方) */
+.cb-batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.cb-batch-count {
+  font-weight: 600;
+  color: var(--primary, #2563eb);
+  margin-right: 4px;
 }
 </style>

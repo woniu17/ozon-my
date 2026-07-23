@@ -52,16 +52,18 @@ function normalizeStore(input) {
   const clientId = String(creds.clientId || '').trim();
   const apiKey = String(creds.apiKey || '').trim();
 
-  // 货币代码:Ozon 店铺合同货币(RUB/KZT/USD/EUR/...),默认 RUB
+  // 货币代码:Ozon 店铺合同货币(RUB/KZT/USD/EUR/...),默认 CNY(跨境店铺常用)
   // 必须与店铺在 Ozon 后台合同约定的货币一致,否则 /v3/product/import 会报:
   //   "Неверно указана валюта..." (货币不正确)
-  const currencyCode = String(body.currency_code || 'RUB')
+  const currencyCode = String(body.currency_code || 'CNY')
     .trim()
     .toUpperCase();
 
   return {
     name,
-    company_id: String(body.company_id || '').trim(),
+    // Ozon 个人版 company_id 与 Client-Id 同值(同义字段),为兼容 prepare-bundle 的
+    // 公司一致性护栏(store_company_id)而保留,值直接取 clientId
+    company_id: clientId,
     warehouse_id: String(body.warehouse_id || '').trim(),
     currency_code: currencyCode,
     sync_credentials: { clientId, apiKey },
@@ -109,7 +111,8 @@ router.post('/admin/api/stores', (req, res, next) => {
     while (stores.some((s) => s.id === id)) {
       id = `store-${slugify(partial.name)}-${randomUUID().slice(0, 6)}`;
     }
-    const store = { id, ...partial };
+    // credentials_verified 默认 false,需通过 /test-connection 验证后才会置 true
+    const store = { id, ...partial, credentials_verified: false };
     stores.push(store);
     writeStores(stores);
     res.status(201).json(ok(store));
@@ -128,7 +131,17 @@ router.put('/admin/api/stores/:id', (req, res, next) => {
       return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, `店铺不存在: ${id}`));
     }
     const partial = normalizeStore(req.body);
-    stores[idx] = { id, ...partial };
+    // 凭据变化时重置 verified=false(下次需重新测试);凭据未变则保留原 verified 状态
+    const prev = stores[idx] || {};
+    const prevCreds = prev.sync_credentials || {};
+    const newCreds = partial.sync_credentials || {};
+    const credsChanged =
+      prevCreds.clientId !== newCreds.clientId || prevCreds.apiKey !== newCreds.apiKey;
+    stores[idx] = {
+      id,
+      ...partial,
+      credentials_verified: credsChanged ? false : !!prev.credentials_verified,
+    };
     writeStores(stores);
     res.json(ok(stores[idx]));
   } catch (e) {
@@ -170,15 +183,20 @@ router.get('/admin/api/stores/:id/warehouses', async (req, res, next) => {
 });
 
 // POST /admin/api/stores/:id/test-connection —— 测试已保存店铺的 OPI 凭据
+// 成功时把 credentials_verified 持久化为 true,失败时置 false
 router.post('/admin/api/stores/:id/test-connection', async (req, res, next) => {
   try {
     const id = req.params.id;
     const stores = readStores();
-    const store = stores.find((s) => s.id === id);
-    if (!store) {
+    const idx = stores.findIndex((s) => s.id === id);
+    if (idx < 0) {
       return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, `店铺不存在: ${id}`));
     }
+    const store = stores[idx];
     const result = await testOpiCredentials(store.sync_credentials?.clientId, store.sync_credentials?.apiKey);
+    // 同步 verified 状态到 stores.json,前端刷新后凭据 badge 会更新
+    stores[idx] = { ...store, credentials_verified: result.success };
+    writeStores(stores);
     res.json(ok(result));
   } catch (e) {
     next(e);

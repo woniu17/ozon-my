@@ -43,11 +43,15 @@ router.get('/admin/api/collect-queue/stats', async (req, res, next) => {
 
     // 今日完成统计(按 finishedAt 过滤)
     // successToday:今日成功(终态)
+    // skippedToday:今日跳过(终态,过滤掉的 SKU)
     // 注:partialToday 已移除 — SW 从不向 ERP 写 partial 状态(_handlePartialTask 写 pending),
     // countTodayByStatus('partial') 永远返回 0,属于死查询
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    const successToday = await daos.collectQueueTasksDao.countTodayByStatus('success', todayStart);
+    const [successToday, skippedToday] = await Promise.all([
+      daos.collectQueueTasksDao.countTodayByStatus('success', todayStart),
+      daos.collectQueueTasksDao.countTodayByStatus('skipped', todayStart),
+    ]);
 
     // 推导熔断:最近 10 分钟内有 antibot 的 partial 任务则认为熔断中
     // (antibot 不再是终态,SW 会把 antibot 任务回 pending 重试,lastError.type 统一为小写 'antibot')
@@ -70,6 +74,7 @@ router.get('/admin/api/collect-queue/stats', async (req, res, next) => {
       ok({
         byStatus,
         successToday,
+        skippedToday,
         partialToday: 0, // 已废弃:SW 从不写 partial 状态,保留字段兼容前端
         circuitBreaker,
         total: Object.values(byStatus).reduce((a, b) => a + b, 0),

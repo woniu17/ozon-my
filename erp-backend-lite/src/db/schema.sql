@@ -107,35 +107,58 @@ CREATE TABLE IF NOT EXISTS watermark_templates (
 );
 CREATE INDEX IF NOT EXISTS idx_wm_default ON watermark_templates(is_default);
 
--- 批量上架任务(P2-1)
+-- 批量上架任务(P2-1 CRUD + P2-2 均衡分配调度)
+-- P2-2 扩展:多店铺均衡分配 + 顺序执行 + 速度控制
+--   store_ids:多店铺 JSON 数组(新增);store_id 保留兼容(取 store_ids[0] 或首个目标店铺)
+--   speed_config:速度配置 JSON {intervalSec, onFailure}
+--   batch_no:业务编号(便于前端展示),name:批次名称
 CREATE TABLE IF NOT EXISTS batch_upload_tasks (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   local_task_id  TEXT UNIQUE NOT NULL,
-  store_id       TEXT NOT NULL,
-  status         TEXT NOT NULL DEFAULT 'PENDING', -- PENDING/RUNNING/SUCCESS/FAILED/PARTIAL
+  batch_no       TEXT,                 -- P2-2:业务编号 bat-{timestamp}-{rand}
+  name           TEXT,                 -- P2-2:批次名称
+  store_id       TEXT NOT NULL,        -- 兼容:首个目标店铺(多店铺场景取 store_ids[0])
+  store_ids      TEXT,                 -- P2-2:多店铺 JSON 数组 ["store-yql01-..","store-yql02-.."]
+  status         TEXT NOT NULL DEFAULT 'PENDING', -- PENDING/RUNNING/PAUSED/SUCCESS/FAILED/PARTIAL
   total_count    INTEGER DEFAULT 0,
   success_count  INTEGER DEFAULT 0,
   failed_count   INTEGER DEFAULT 0,
-  config         TEXT,  -- JSON: 水印/AI/库存等配置快照
+  skipped_count  INTEGER DEFAULT 0,    -- P2-2:跳过数(已listed/数据不完整)
+  config         TEXT,  -- JSON: 模板/库存/水印等配置快照
+  speed_config   TEXT,  -- P2-2:JSON {intervalSec:10, onFailure:'continue'|'pause'}
   error_message  TEXT,
   created_at     TEXT DEFAULT (datetime('now')),
+  started_at     TEXT,                 -- P2-2:首次执行时间
   completed_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_but_store_created ON batch_upload_tasks(store_id, created_at DESC);
+-- 注:idx_but_status 由 db/index.js 的 migrateBatchUploadTables 负责创建
+-- (旧库 batch_upload_tasks 表已存在,CREATE TABLE IF NOT EXISTS 不会补 status 索引相关的已存在列,
+--  但 idx_but_status 是新索引可直接 IF NOT EXISTS 创建 — 实际无依赖新列,可在此创建)
+CREATE INDEX IF NOT EXISTS idx_but_status ON batch_upload_tasks(status, created_at DESC);
 
 -- 批量上架任务明细(每个商品一行)
+-- P2-2 扩展:seq 执行顺序 + seller_id 来源卖家 + target_store_id 分配目标 + skip_reason 跳过原因
 CREATE TABLE IF NOT EXISTS batch_upload_items (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   batch_task_id   TEXT NOT NULL,
+  seq             INTEGER DEFAULT 0,   -- P2-2:执行顺序(0起)
   source_sku      TEXT,
   source_url      TEXT,
+  seller_id       TEXT,                -- P2-2:来源卖家(ozon_cache_index.seller_id,审计用)
+  target_store_id TEXT,                -- P2-2:分配到的目标店铺(stores.json 的 id)
   follow_task_id  TEXT, -- 关联 follow_sell_tasks.local_task_id
-  status          TEXT DEFAULT 'PENDING', -- PENDING/RUNNING/SUCCESS/FAILED
+  status          TEXT DEFAULT 'PENDING', -- PENDING/RUNNING/SUCCESS/FAILED/SKIPPED/CANCELLED
+  skip_reason     TEXT,                -- P2-2:跳过原因 INSUFFICIENT_DATA/LISTED/CANCELLED
   error_message   TEXT,
   created_at      TEXT DEFAULT (datetime('now')),
+  started_at      TEXT,                -- P2-2:开始执行时间
+  finished_at     TEXT,                -- P2-2:完成时间(成功/失败/跳过)
   updated_at      TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_bui_batch ON batch_upload_items(batch_task_id);
+-- 注:idx_bui_batch_seq / idx_bui_status 由 db/index.js 的 migrateBatchUploadTables 负责创建
+-- (旧库 batch_upload_items 表已存在且无 seq 列,需先 ALTER TABLE 补列再建索引)
 
 -- 操作日志(P2-3:审计)
 CREATE TABLE IF NOT EXISTS audit_logs (

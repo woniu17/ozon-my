@@ -16,106 +16,20 @@ import { prepareBundleItems } from '../services/prepare-bundle.js';
 import * as opi from '../services/ozon-opi.js';
 import { indexDao } from '../db/dao/sqlite/index-dao.js';
 import logger from '../middleware/log.js';
+// P2-2:上架核心逻辑抽离到 services/listing-builder.js
+// upsertTaskItems/summarizeTaskStatus/saveOpiResponse 从 listing-builder re-export 保持兼容
+// executeListing 供 POST /import 和 batch-upload-poller 复用
+import {
+  upsertTaskItems,
+  summarizeTaskStatus,
+  saveOpiResponse,
+  executeListing,
+} from '../services/listing-builder.js';
+
+// re-export 保持现有 import 路径不变(import-status-poller/stock-sync 等仍从 products.js 导入)
+export { upsertTaskItems, summarizeTaskStatus, saveOpiResponse };
 
 const router = Router();
-
-// ── 内部工具:写入/更新上架记录明细 ───────────────────────
-// upsert:已存在则更新 status/product_id/errors,不存在则插入
-// 同时按 errors[].level 计算 has_error / has_warning:
-//   - has_error=1:商品虽 imported 但审核被拒(DESCRIPTION_DECLINE 等),实质失败
-//   - has_warning=1:有警告但不影响上架(marking_auto_corrected 等)
-// storeId:用于即时标记 listed(跟卖到的目标店铺),空值则不标记
-export function upsertTaskItems(localTaskId, items, storeId) {
-  if (!Array.isArray(items) || items.length === 0) return;
-  const stmt = db.prepare(`
-    INSERT INTO follow_sell_task_items (local_task_id, offer_id, name, price, product_id, status, errors, has_error, has_warning)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(local_task_id, offer_id) DO UPDATE SET
-      product_id = excluded.product_id,
-      status = excluded.status,
-      errors = excluded.errors,
-      has_error = excluded.has_error,
-      has_warning = excluded.has_warning,
-      updated_at = datetime('now')
-  `);
-  for (const it of items) {
-    const offerId = String(it.offer_id || '');
-    if (!offerId) continue;
-    const errs = Array.isArray(it.errors) ? it.errors : [];
-    const hasError = errs.some((e) => String(e.level || '').toLowerCase() === 'error') ? 1 : 0;
-    const hasWarning = errs.some((e) => String(e.level || '').toLowerCase() === 'warning') ? 1 : 0;
-    stmt.run(
-      localTaskId,
-      offerId,
-      it.name || null,
-      it.price || null,
-      it.product_id ? String(it.product_id) : null,
-      it.status || 'pending',
-      errs.length > 0 ? JSON.stringify(errs) : null,
-      hasError,
-      hasWarning
-    );
-  }
-  // 即时标记 listed(同步,SQLite 同步 API 毫秒级)
-  // offer_id 格式:sku-variantId,取第一段作为 SKU 前缀
-  const skuSet = new Set();
-  for (const it of items) {
-    const offerId = String(it.offer_id || '');
-    if (!offerId || !offerId.includes('-')) continue;
-    const sku = offerId.split('-')[0];
-    if (sku) skuSet.add(sku);
-  }
-  if (skuSet.size > 0 && storeId) {
-    try {
-      indexDao.markListed([...skuSet], storeId, localTaskId);
-    } catch (e) {
-      logger.warn({ localTaskId, storeId, err: e.message }, 'markListed failed');
-    }
-  }
-}
-
-// 按 items 状态汇总任务状态
-// 判断规则:
-//   - imported + has_error=1 → 视为审核拒绝(计入 failed)
-//   - imported + has_error=0 → 真正成功(计入 imported)
-//   - failed / pending / skipped 按原状态
-export function summarizeTaskStatus(localTaskId) {
-  const rows = db
-    .prepare(`SELECT status, has_error FROM follow_sell_task_items WHERE local_task_id=?`)
-    .all(localTaskId);
-  if (rows.length === 0) return null;
-  const imported = rows.filter((r) => r.status === 'imported' && !r.has_error).length;
-  const failed = rows.filter((r) => r.status === 'failed' || (r.status === 'imported' && r.has_error)).length;
-  const pending = rows.filter((r) => r.status === 'pending' || r.status === 'skipped').length;
-  let status;
-  if (pending > 0) status = 'PROCESSING';
-  else if (imported === 0 && failed > 0) status = 'FAILED';
-  else if (failed > 0)
-    status = 'SUCCESS'; // 部分成功
-  else status = 'SUCCESS';
-  db.prepare(
-    `UPDATE follow_sell_tasks SET status=?, completed_at=datetime('now') WHERE local_task_id=? AND status NOT IN ('SUCCESS','FAILED')`
-  ).run(status, localTaskId);
-  return { status, imported, failed, pending, total: rows.length };
-}
-
-// 保存通过 OPI 接口查询到的上架任务响应(/v1/product/import/info)
-// 覆盖式写入:每次只保留最新一条 opi_response(避免轮询累积导致表膨胀)
-// 供前端「上架记录-详情」展示「通过OPI接口查询到的上架任务响应信息」
-export function saveOpiResponse(localTaskId, storeId, response) {
-  if (!localTaskId) return;
-  db.exec('BEGIN');
-  try {
-    db.prepare(`DELETE FROM follow_sell_task_payloads WHERE local_task_id=? AND stage='opi_response'`).run(localTaskId);
-    db.prepare(
-      `INSERT INTO follow_sell_task_payloads (local_task_id, store_id, stage, payload) VALUES (?, ?, 'opi_response', ?)`
-    ).run(localTaskId, storeId || null, JSON.stringify(response ?? null));
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    logger.warn({ localTaskId, err: e.message }, 'saveOpiResponse failed');
-  }
-}
 
 // ⭐ POST /ozon/products/prepare-bundle-items (viaPortal=true 第 1 步)
 router.post('/ozon/products/prepare-bundle-items', storeGuard, async (req, res, next) => {
@@ -129,106 +43,15 @@ router.post('/ozon/products/prepare-bundle-items', storeGuard, async (req, res, 
 });
 
 // POST /ozon/products/import (viaPortal=false,官方 API)
+// P2-2:核心逻辑抽到 executeListing,本路由仅做参数传递 + 响应格式化
 router.post('/ozon/products/import', storeGuard, async (req, res, next) => {
   try {
     const message = req.body || {};
-    const items = Array.isArray(message.items) ? message.items : [];
-    const localTaskId = `local-${Date.now()}-${randomUUID().slice(0, 8)}`;
-
-    // 库存快照:任务创建时记录模板 defaultStock + templateId
-    // 后续模板修改不影响本任务(stock-sync.js 据此设库存)
-    const stockSnapshot = Math.max(0, Math.min(100000, Number(message.defaultStock) || 0));
-    const templateId = Number(message.templateId) || null;
-
-    // 备份插件原始请求体(raw),便于排查
-    try {
-      db.prepare(
-        `INSERT INTO follow_sell_task_payloads (local_task_id, store_id, stage, payload) VALUES (?, ?, 'raw', ?)`
-      ).run(localTaskId, req.storeId, JSON.stringify(items));
-    } catch (e) {
-      logger.warn({ localTaskId, err: e.message }, 'backup raw payload failed');
+    const result = await executeListing(message, req.storeId, req.store);
+    if (result.error) {
+      return res.json({ result: { task_id: null, localTaskId: result.localTaskId, error: result.error } });
     }
-
-    // 入库 PENDING(含库存快照,供 stock-sync.js 定时任务读取)
-    db.prepare(
-      `INSERT INTO follow_sell_tasks
-        (local_task_id, via_portal, store_id, status, items_count, items_preview, stock_snapshot, template_id)
-       VALUES (?, 0, ?, 'PENDING', ?, ?, ?, ?)`
-    ).run(localTaskId, req.storeId, items.length, JSON.stringify(items.slice(0, 5)), stockSnapshot, templateId);
-
-    // 写入上架记录明细(pending 状态,待 import-info 查询后更新)
-    upsertTaskItems(
-      localTaskId,
-      items.map((it) => ({
-        offer_id: it.offer_id,
-        name: it.name,
-        price: it.price,
-        status: 'pending',
-      })),
-      req.storeId
-    );
-
-    // 调 OPI /v3/product/import
-    // ⚠️ 关键:先走 prepareBundleItems 做完整转换(含 dictionary_value_id、complex_attributes、
-    // 描述 4191 注入等),再把转换好的 OPI v3 格式 items 提交给 Ozon。
-    // 之前直接透传 message.items 会导致品牌(85)丢 dictionary_value_id、描述(4191)放顶层
-    // (OPI 不识别)、complex_attributes 恒空等问题。
-    let ozonTaskId = null;
-    let errorMessage = null;
-    try {
-      const bundleResult = await prepareBundleItems(message, req.storeId, req.store);
-      // 把所有 bundle 的 items 合并成扁平数组(transformItemForPortal 已转为 OPI v3 格式)
-      const transformedItems = (bundleResult.bundles || []).flatMap((b) => b.items || []);
-      if (transformedItems.length === 0) {
-        throw new Error('prepareBundleItems 转换后无有效 items(可能全部被严格模式/无效图片过滤)');
-      }
-      // 备份转换后的请求体(transformed),便于排查
-      try {
-        db.prepare(
-          `INSERT INTO follow_sell_task_payloads (local_task_id, store_id, stage, payload) VALUES (?, ?, 'transformed', ?)`
-        ).run(localTaskId, req.storeId, JSON.stringify(transformedItems));
-      } catch (e) {
-        logger.warn({ localTaskId, err: e.message }, 'backup transformed payload failed');
-      }
-      // 备份最终发给 OPI 的请求体(opi_request):经过 toOpiItem 转换为 OPI v3 schema 的最终形态
-      // 与 transformed 区别:transformed 是 transformItemForPortal 输出,opi_request 是 toOpiItem 输出
-      try {
-        const opiRequestPayload = { items: transformedItems.map(opi.toOpiItem) };
-        db.prepare(
-          `INSERT INTO follow_sell_task_payloads (local_task_id, store_id, stage, payload) VALUES (?, ?, 'opi_request', ?)`
-        ).run(localTaskId, req.storeId, JSON.stringify(opiRequestPayload));
-      } catch (e) {
-        logger.warn({ localTaskId, err: e.message }, 'backup opi_request payload failed');
-      }
-      const r = await opi.productImport(req.store, transformedItems);
-      ozonTaskId = r?.result?.task_id ? String(r.result.task_id) : null;
-    } catch (e) {
-      errorMessage = e.message;
-      db.prepare(
-        `UPDATE follow_sell_tasks SET status='FAILED', error_message=?, completed_at=datetime('now') WHERE local_task_id=?`
-      ).run(errorMessage, localTaskId);
-      // 失败:更新 items 为 failed
-      upsertTaskItems(
-        localTaskId,
-        items.map((it) => ({
-          offer_id: it.offer_id,
-          name: it.name,
-          price: it.price,
-          status: 'failed',
-          errors: [{ code: 'IMPORT_ERROR', message: errorMessage }],
-        })),
-        req.storeId
-      );
-      logger.warn({ localTaskId, err: errorMessage }, 'import failed');
-      return res.json({ result: { task_id: null, localTaskId, error: errorMessage } });
-    }
-
-    db.prepare(`UPDATE follow_sell_tasks SET status='PROCESSING', ozon_task_id=? WHERE local_task_id=?`).run(
-      ozonTaskId,
-      localTaskId
-    );
-
-    res.json({ result: { task_id: ozonTaskId, local_task_id: localTaskId } });
+    res.json({ result: { task_id: result.ozonTaskId, local_task_id: result.localTaskId } });
   } catch (e) {
     next(e);
   }

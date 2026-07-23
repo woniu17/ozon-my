@@ -3753,6 +3753,11 @@ try {
               // ERP 终态:success/skipped(partial 非终态,回 pending 重试)
               finishedCount:
                 (byStatus.success || 0) + (byStatus.skipped || 0),
+              // 各状态明细(供监控页"失败/反爬"等格使用)
+              byStatus,
+              // 今日完成明细(供监控页"今日完成"格使用)
+              successToday: _cmsStats?.successToday || 0,
+              skippedToday: _cmsStats?.skippedToday || 0,
               totalCount: _cmsStats?.total || _cmsQueue.length,
               consumePaused: _cmsMeta.consumePaused,
               circuitBreakerUntil: _cmsMeta.circuitBreakerUntil,

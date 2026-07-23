@@ -929,7 +929,7 @@ function safeJsonParse(s) {
 // ── 缓存合成 helper(opi-preview + preview/profile 共用) ───
 // 从 3 类合并表(dom/attribute/richMedia)合成 OPI 输入 item
 // 返回 { sources, item, portalItem, opiItem, raw } 或 { sources, error }
-async function buildSynthesizedFromCache(sku, storeId) {
+export async function buildSynthesizedFromCache(sku, storeId) {
   const [domDoc, attrDoc, rmDoc] = await Promise.all([
     daos.domDao.findById(sku),
     daos.attributeDao.findById(sku),

@@ -319,6 +319,20 @@ select {
 }
 
 /* ============ Stats grid ============ */
+.stats-group {
+  margin-bottom: 16px;
+}
+.stats-group:last-child {
+  margin-bottom: 0;
+}
+.stats-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -344,6 +358,12 @@ select {
   color: var(--ink);
   font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
   line-height: 1.3;
+}
+.stat-sub {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 500;
 }
 .stat-pending {
   color: var(--ink-3);

@@ -20,6 +20,7 @@ import miscRoutes from './modules/misc.js';
 import adminRoutes from './modules/admin.js';
 import configRoutes from './modules/config.js';
 import batchRoutes from './modules/batch.js';
+import batchUploadRoutes from './modules/batch-upload.js';
 import cacheRoutes from './modules/cache.js';
 import collectQueueRoutes from './modules/collect-queue.js';
 import categoryFilterRoutes from './modules/category-filter.js';
@@ -28,6 +29,7 @@ import { startImportStatusPoller } from './services/import-status-poller.js';
 import { startQueueCleanupPoller } from './services/queue-cleanup-poller.js';
 import { startStockSync, stopStockSync } from './services/stock-sync.js';
 import { startIndexSync, stopIndexSync } from './services/index-sync.js';
+import { startBatchUploadPoller, stopBatchUploadPoller } from './services/batch-upload-poller.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -81,6 +83,7 @@ app.use(miscRoutes);
 app.use(adminRoutes);
 app.use(configRoutes);
 app.use(batchRoutes);
+app.use(batchUploadRoutes);
 app.use(cacheRoutes);
 app.use(collectQueueRoutes);
 app.use(categoryFilterRoutes);
@@ -110,6 +113,8 @@ const server = app.listen(config.port, () => {
   // 启动索引表跨表字段同步:每 5 分钟刷新 ozon_cache_index 的 seller_slug/seller_name/listed
   // (数据表 upsert 时即时同步命中位 + 冗余展示字段,本任务只刷跨表聚合字段)
   startIndexSync();
+  // P2-2:启动批量均衡上架调度器:每 2 秒检查一次,全局串行,固定间隔限速
+  startBatchUploadPoller();
 });
 
 // 优雅退出
@@ -117,6 +122,7 @@ function shutdown(signal) {
   logger.info({ signal }, '收到退出信号,正在关闭...');
   stopStockSync();
   stopIndexSync();
+  stopBatchUploadPoller();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);

@@ -26,12 +26,14 @@
   const authNoticeText = $('auth-notice-text');
 
   // stats
-  const statTotal = $('stat-total');
   const statPending = $('stat-pending');
   const statRunning = $('stat-running');
   const statFinished = $('stat-finished');
-  const statToday = $('stat-today');
+  const statTodayMain = $('stat-today-main');
+  const statTodaySub = $('stat-today-sub');
   const statPaused = $('stat-paused');
+  const statFailedAntibot = $('stat-failed-antibot');
+  const statLastConsume = $('stat-last-consume');
   const statNextRun = $('stat-next-run');
 
   // task window
@@ -39,18 +41,6 @@
   const twEmpty = $('tw-empty');
   const windowStatusHint = $('window-status-hint');
 
-  // filters
-  const fStatus = $('f-status');
-  const fSource = $('f-source');
-  const fStore = $('f-store');
-  const fSku = $('f-sku');
-  const filterStat = $('filter-stat');
-  const btnResetFilter = $('btn-reset-filter');
-  const btnToggleFilter = $('btn-toggle-filter');
-  const filterBody = $('filter-body');
-
-  // table
-  const queueTbody = $('queue-tbody');
   const emptyHint = $('empty-hint');
 
   // rate config
@@ -124,107 +114,6 @@
     const m = Math.floor(sec / 60);
     const s = sec % 60;
     return `${m}m${String(s).padStart(2, '0')}s`;
-  };
-
-  // ─── 状态/来源 badge 渲染 ───
-  const renderStatusBadge = (status) => {
-    const map = {
-      pending: { cls: 'status-pending', text: '待采集' },
-      running: { cls: 'status-running', text: '采集中' },
-      success: { cls: 'status-success', text: '成功' },
-      partial: { cls: 'status-partial', text: '部分' },
-      failed: { cls: 'status-failed', text: '失败' },
-      skipped: { cls: 'status-skipped', text: '跳过' },
-      antibot: { cls: 'status-antibot', text: '反爬' },
-    };
-    const m = map[status] || map.pending;
-    return `<span class="status-badge ${m.cls}">${m.text}</span>`;
-  };
-
-  const renderSourceBadge = (source) => {
-    return '<span class="source-badge source-shop-page">自动</span>';
-  };
-
-  // ─── 筛选 ───
-  const applyFilters = (list) => {
-    const statusFilter = fStatus.value;
-    const sourceFilter = fSource.value;
-    const storeFilter = fStore.value.trim().toLowerCase();
-    const skuFilter = fSku.value.trim().toLowerCase();
-
-    return list.filter((t) => {
-      if (statusFilter && t.status !== statusFilter) return false;
-      if (sourceFilter && t.source !== sourceFilter) return false;
-      if (
-        storeFilter &&
-        !String(t.sellerSlug || '')
-          .toLowerCase()
-          .includes(storeFilter)
-      )
-        return false;
-      if (
-        skuFilter &&
-        !String(t.sku || '')
-          .toLowerCase()
-          .includes(skuFilter)
-      )
-        return false;
-      return true;
-    });
-  };
-
-  // ─── 渲染表格(筛选区,可折叠) ───
-  const renderTable = () => {
-    const filtered = applyFilters(allTasks);
-    filterStat.textContent = `${filtered.length} / ${allTasks.length}`;
-
-    if (!filtered.length) {
-      queueTbody.innerHTML =
-        '<tr><td colspan="10" style="text-align:center;color:#86909c;padding:24px">无符合条件的任务</td></tr>';
-      return;
-    }
-
-    // 排序:running 最前 → pending → 其他按 finishedAt 倒序
-    // 注:createdAt/finishedAt 是 ISO 字符串,需转时间戳再比较
-    const _ts = (v) => (v ? new Date(v).getTime() : 0);
-    const statusOrder = { running: 0, pending: 1 };
-    filtered.sort((a, b) => {
-      const oa = statusOrder[a.status] ?? 3;
-      const ob = statusOrder[b.status] ?? 3;
-      if (oa !== ob) return oa - ob;
-      // 同组内:running/ pending 按 createdAt 升序,其他按 finishedAt 倒序
-      if (oa <= 2) return _ts(a.createdAt) - _ts(b.createdAt);
-      return _ts(b.finishedAt) - _ts(a.finishedAt);
-    });
-
-    queueTbody.innerHTML = filtered
-      .map((t) => {
-        const runningClass = t.status === 'running' ? ' is-running' : '';
-        const sourceBadge = renderSourceBadge(t.source);
-        const statusBadge = renderStatusBadge(t.status);
-        const attempts = t.attempts != null ? `第${t.attempts}次` : '';
-        const created = formatTime(t.createdAt);
-        const started = formatTime(t.startedAt);
-        const finished = formatTime(t.finishedAt);
-        const duration = formatDuration(t.startedAt, t.finishedAt);
-        const error = t.lastError
-          ? `<td class="cell-error" title="${escapeHtml(t.lastError)}">${escapeHtml(t.lastError)}</td>`
-          : '<td class="cell-empty">-</td>';
-
-        return `<tr class="queue-row${runningClass}" data-sku="${escapeHtml(t.sku)}">
-          <td><span class="cell-sku">${escapeHtml(t.sku)}</span></td>
-          <td><span class="cell-store">${escapeHtml(t.sellerId || '-')}</span></td>
-          <td>${sourceBadge}</td>
-          <td>${statusBadge}</td>
-          <td class="cell-mono">${attempts}</td>
-          <td class="cell-mono">${created}</td>
-          <td class="cell-mono">${started}</td>
-          <td class="cell-mono">${finished}</td>
-          <td class="cell-mono">${duration}</td>
-          ${error}
-        </tr>`;
-      })
-      .join('');
   };
 
   // ─── 采集开关(深度/浅度) ──────────────────────────────
@@ -551,11 +440,17 @@
 
   // ─── 渲染概览 ───
   const renderStats = (d) => {
-    statTotal.textContent = String(d.totalCount || 0);
+    const byStatus = d.byStatus || {};
     statPending.textContent = String(d.pendingCount || 0);
     statRunning.textContent = String(d.runningSkus?.length || 0);
     statFinished.textContent = String(d.finishedCount || 0);
-    statToday.textContent = String(d.finishedCount || 0);
+
+    // 今日完成:主数字 successToday + 副标 skippedToday
+    const successToday = d.successToday || 0;
+    const skippedToday = d.skippedToday || 0;
+    statTodayMain.textContent = String(successToday);
+    statTodaySub.textContent = skippedToday > 0 ? `+${skippedToday} 跳过` : '';
+    statTodaySub.style.color = skippedToday > 0 ? 'var(--warning-fg)' : 'var(--ink-3)';
 
     // 队列状态
     const now = Date.now();
@@ -566,6 +461,29 @@
       statPaused.innerHTML = '<span style="color:var(--warning-fg)">已暂停</span>';
     } else {
       statPaused.innerHTML = '<span style="color:var(--success-fg)">运行中</span>';
+    }
+
+    // 失败 / 反爬:byStatus.failed / byStatus.antibot(>0 红色高亮)
+    const failedCount = byStatus.failed || 0;
+    const antibotCount = byStatus.antibot || 0;
+    statFailedAntibot.textContent = `${failedCount} / ${antibotCount}`;
+    statFailedAntibot.style.color =
+      failedCount > 0 || antibotCount > 0 ? 'var(--error-fg)' : 'var(--ink-1)';
+
+    // 上次消费:距离 lastConsumeAt 的相对时间,超过 5min 警告
+    const lastConsumeAt = d.lastConsumeAt || 0;
+    if (lastConsumeAt > 0) {
+      const elapsedSec = Math.floor((now - lastConsumeAt) / 1000);
+      let text;
+      if (elapsedSec < 60) text = `${elapsedSec}s 前`;
+      else if (elapsedSec < 3600) text = `${Math.floor(elapsedSec / 60)}m 前`;
+      else text = `${Math.floor(elapsedSec / 3600)}h 前`;
+      statLastConsume.textContent = text;
+      statLastConsume.style.color =
+        elapsedSec > 300 ? 'var(--warning-fg)' : 'var(--ink-1)';
+    } else {
+      statLastConsume.textContent = '—';
+      statLastConsume.style.color = 'var(--ink-3)';
     }
 
     // 自动采集状态 + SW 消费诊断
@@ -651,7 +569,6 @@
         allTasks = Array.isArray(d.tasks) ? d.tasks : [];
         renderStats(d);
         renderTaskWindow();
-        renderTable();
         renderSwitches(d);
         renderRateConfig(d);
         emptyHint.style.display = 'none';
@@ -786,27 +703,6 @@
     if (autoRefresh.checked) startPolling();
     else stopPolling();
   });
-  fStatus.addEventListener('change', renderTable);
-  fSource.addEventListener('change', renderTable);
-  fStore.addEventListener('input', renderTable);
-  fSku.addEventListener('input', renderTable);
-  btnResetFilter.addEventListener('click', () => {
-    fStatus.value = '';
-    fSource.value = '';
-    fStore.value = '';
-    fSku.value = '';
-    renderTable();
-  });
-
-  // 筛选区折叠/展开
-  if (btnToggleFilter && filterBody) {
-    btnToggleFilter.addEventListener('click', () => {
-      const isOpen = filterBody.style.display !== 'none';
-      filterBody.style.display = isOpen ? 'none' : '';
-      btnToggleFilter.classList.toggle('is-open', !isOpen);
-      btnToggleFilter.setAttribute('aria-expanded', String(!isOpen));
-    });
-  }
 
   // ─── 初始化 ───
   fetchState().then(() => {

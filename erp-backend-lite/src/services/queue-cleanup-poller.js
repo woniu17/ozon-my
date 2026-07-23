@@ -5,13 +5,13 @@
 // 规则:
 //   - 每 5 分钟扫描一次
 //   - 仅清理终态任务,不影响 pending/running/partial
-//   - 保留最新 500 条终态任务(可配置)
+//   - 保留最新 5000 条终态任务(可配置)
 //   - 单次扫描失败不阻塞下一次(只 warn)
 import { getDaos } from '../db/adapter.js';
 import logger from '../middleware/log.js';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟
-const DEFAULT_KEEP_COUNT = 500;
+const DEFAULT_KEEP_COUNT = 5000;
 
 const daos = await getDaos();
 
@@ -41,7 +41,7 @@ export function startQueueCleanupPoller() {
   }, 60 * 1000).unref();
   logger.info(
     { intervalMin: POLL_INTERVAL_MS / 60000, keepCount: DEFAULT_KEEP_COUNT },
-    'queue-cleanup-poller: 已启动(5分钟清理一次,保留最新500条终态任务)'
+    'queue-cleanup-poller: 已启动(5分钟清理一次,保留最新5000条终态任务)'
   );
 }
 

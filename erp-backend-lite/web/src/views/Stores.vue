@@ -23,9 +23,8 @@ const editErr = ref('');
 const editForm = reactive({
   id: '',
   name: '',
-  company_id: '',
   warehouse_id: '',
-  currency_code: 'RUB',
+  currency_code: 'CNY',
   clientId: '',
   apiKey: '',
 });
@@ -33,9 +32,8 @@ const editForm = reactive({
 function resetEditForm() {
   editForm.id = '';
   editForm.name = '';
-  editForm.company_id = '';
   editForm.warehouse_id = '';
-  editForm.currency_code = 'RUB';
+  editForm.currency_code = 'CNY';
   editForm.clientId = '';
   editForm.apiKey = '';
   editErr.value = '';
@@ -45,9 +43,8 @@ function openEdit(store) {
   if (store) {
     editForm.id = store.id || '';
     editForm.name = store.name || '';
-    editForm.company_id = store.company_id || '';
     editForm.warehouse_id = store.warehouse_id || '';
-    editForm.currency_code = store.currency_code || 'RUB';
+    editForm.currency_code = store.currency_code || 'CNY';
     editForm.clientId = store.sync_credentials?.clientId || '';
     editForm.apiKey = store.sync_credentials?.apiKey || '';
   } else {
@@ -58,9 +55,9 @@ function openEdit(store) {
 }
 
 function readBody() {
+  // company_id 与 Client-Id 同值,后端会自动同步,前端不再单独传
   return {
     name: editForm.name.trim(),
-    company_id: editForm.company_id.trim(),
     warehouse_id: editForm.warehouse_id.trim(),
     currency_code: editForm.currency_code,
     sync_credentials: {
@@ -106,7 +103,8 @@ async function testConnInForm() {
   testingInForm.value = true;
   try {
     const r = await testConnection({ sync_credentials: body.sync_credentials });
-    const result = r?.data || {};
+    // request() 已解 envelope:r 即 { success, warehouses, error }
+    const result = r || {};
     if (result.success) {
       const n = (result.warehouses || []).length;
       show(`连接成功,共 ${n} 个仓库`, 'success');
@@ -132,10 +130,13 @@ async function testConnForStore(store) {
   testingStoreId.value = store.id;
   try {
     const r = await testConnectionForStore(store.id);
-    const result = r?.data || {};
+    // request() 已解 envelope:r 即 { success, warehouses, error }
+    const result = r || {};
     if (result.success) {
       const n = (result.warehouses || []).length;
       show(`「${store.name}」连接成功,共 ${n} 个仓库`, 'success');
+      // 后端已把 credentials_verified 持久化为 true,刷新店铺列表以更新 badge
+      await storesStore.load(true);
     } else {
       show(`「${store.name}」连接失败:` + (result.error || '未知错误'), 'error');
     }
@@ -182,7 +183,8 @@ async function fetchWarehouses() {
   whError.value = '';
   try {
     const r = await getStoreWarehouses(whStore.value.id);
-    const result = r?.data || {};
+    // request() 已解 envelope:r 即 { success, warehouses, error }
+    const result = r || {};
     if (result.success) {
       const items = result.warehouses || [];
       whStatus.value = `共 ${items.length} 个仓库(实时拉取)`;
@@ -213,7 +215,6 @@ async function setDefaultWarehouse(wid) {
   try {
     await updateStore(store.id, {
       name: store.name,
-      company_id: store.company_id || '',
       warehouse_id: wid,
       sync_credentials: store.sync_credentials,
     });
@@ -247,15 +248,12 @@ onMounted(() => {
         </div>
         <div class="store-fields">
           <div class="row">
-            <span class="k">公司ID</span><span class="v">{{ s.company_id || '—' }}</span>
-          </div>
-          <div class="row">
             <span class="k">默认仓库</span><span class="v">{{ s.warehouse_id || '—' }}</span>
           </div>
           <div class="row">
             <span class="k">合同货币</span>
             <span class="v"
-              ><strong>{{ s.currency_code || 'RUB' }}</strong></span
+              ><strong>{{ s.currency_code || 'CNY' }}</strong></span
             >
           </div>
           <div class="row">
@@ -269,7 +267,15 @@ onMounted(() => {
           <div class="row">
             <span class="k">凭据状态</span>
             <span class="v">
-              <span v-if="s.sync_credentials?.clientId && s.sync_credentials?.apiKey" class="badge badge-pending"
+              <span
+                v-if="s.credentials_verified"
+                class="badge badge-success"
+                title="最近一次连接测试已通过"
+                >已验证</span
+              >
+              <span
+                v-else-if="s.sync_credentials?.clientId && s.sync_credentials?.apiKey"
+                class="badge badge-pending"
                 >未验证</span
               >
               <span v-else class="badge badge-fail">未配置</span>
@@ -295,16 +301,12 @@ onMounted(() => {
           <input type="text" v-model.trim="editForm.name" placeholder="店铺名称" />
         </label>
         <label>
-          <span>公司ID</span>
-          <input type="text" v-model.trim="editForm.company_id" placeholder="Ozon 公司ID" />
-        </label>
-        <label>
           <span>默认仓库</span>
           <input type="text" v-model.trim="editForm.warehouse_id" placeholder="默认仓库ID" />
         </label>
         <label>
           <span>合同货币</span>
-          <input type="text" v-model.trim="editForm.currency_code" placeholder="RUB" />
+          <input type="text" v-model.trim="editForm.currency_code" placeholder="CNY" />
         </label>
         <label>
           <span>Client-Id</span>

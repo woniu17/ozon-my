@@ -106,34 +106,49 @@
           </div>
         </div>
         <div class="card-body">
-          <div class="stats-grid">
-            <div class="stat-cell">
-              <div class="stat-label">总数</div>
-              <div class="stat-value" id="stat-total">0</div>
+          <div class="stats-group">
+            <div class="stats-group-title">队列任务</div>
+            <div class="stats-grid">
+              <div class="stat-cell">
+                <div class="stat-label">待采集</div>
+                <div class="stat-value stat-pending" id="stat-pending">0</div>
+              </div>
+              <div class="stat-cell">
+                <div class="stat-label">采集中</div>
+                <div class="stat-value stat-running" id="stat-running">0</div>
+              </div>
+              <div class="stat-cell">
+                <div class="stat-label">已完成</div>
+                <div class="stat-value stat-success" id="stat-finished">0</div>
+              </div>
+              <div class="stat-cell">
+                <div class="stat-label">今日完成</div>
+                <div class="stat-value stat-success" id="stat-today">
+                  <span id="stat-today-main">0</span>
+                  <span class="stat-sub" id="stat-today-sub"></span>
+                </div>
+              </div>
             </div>
-            <div class="stat-cell">
-              <div class="stat-label">待采集</div>
-              <div class="stat-value stat-pending" id="stat-pending">0</div>
-            </div>
-            <div class="stat-cell">
-              <div class="stat-label">采集中</div>
-              <div class="stat-value stat-running" id="stat-running">0</div>
-            </div>
-            <div class="stat-cell">
-              <div class="stat-label">已完成</div>
-              <div class="stat-value stat-success" id="stat-finished">0</div>
-            </div>
-            <div class="stat-cell">
-              <div class="stat-label">今日采集</div>
-              <div class="stat-value" id="stat-today">0 / 0</div>
-            </div>
-            <div class="stat-cell">
-              <div class="stat-label">队列状态</div>
-              <div class="stat-value" id="stat-paused">-</div>
-            </div>
-            <div class="stat-cell">
-              <div class="stat-label">下次执行</div>
-              <div class="stat-value" id="stat-next-run">—</div>
+          </div>
+          <div class="stats-group">
+            <div class="stats-group-title">运行状态</div>
+            <div class="stats-grid">
+              <div class="stat-cell">
+                <div class="stat-label">队列状态</div>
+                <div class="stat-value" id="stat-paused">-</div>
+              </div>
+              <div class="stat-cell">
+                <div class="stat-label">失败 / 反爬</div>
+                <div class="stat-value" id="stat-failed-antibot">0 / 0</div>
+              </div>
+              <div class="stat-cell">
+                <div class="stat-label">上次消费</div>
+                <div class="stat-value" id="stat-last-consume">—</div>
+              </div>
+              <div class="stat-cell">
+                <div class="stat-label">下次执行</div>
+                <div class="stat-value" id="stat-next-run">—</div>
+              </div>
             </div>
           </div>
         </div>
@@ -159,79 +174,6 @@
             <div class="tw-slot tw-slot-right-2" data-pos="2"></div>
           </div>
           <div class="tw-empty" id="tw-empty" style="display: none">暂无队列任务</div>
-        </div>
-      </section>
-
-      <!-- ============ Filters (collapsible) ============ -->
-      <section class="card">
-        <div class="card-head">
-          <div class="card-title">
-            <button class="filter-toggle" id="btn-toggle-filter" aria-expanded="false">
-              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-              筛选
-              <span class="chip chip-info" id="filter-stat">0 / 0</span>
-            </button>
-          </div>
-          <div class="card-title-meta">
-            <button class="link-btn" id="btn-reset-filter">重置</button>
-          </div>
-        </div>
-        <div class="card-body filter-body" id="filter-body" style="display: none">
-          <div class="filter-grid">
-            <div class="filter-row">
-              <label class="filter-label">状态</label>
-              <select id="f-status" class="fld is-sm">
-                <option value="">全部</option>
-                <option value="pending">待采集</option>
-                <option value="running">采集中</option>
-                <option value="success">成功</option>
-                <option value="skipped">跳过</option>
-                <option value="antibot">反爬</option>
-              </select>
-            </div>
-            <div class="filter-row">
-              <label class="filter-label">来源</label>
-              <select id="f-source" class="fld is-sm">
-                <option value="">全部</option>
-                <option value="shop-page">自动(店铺页)</option>
-              </select>
-            </div>
-            <div class="filter-row">
-              <label class="filter-label">店铺</label>
-              <input
-                type="text"
-                id="f-store"
-                class="fld is-sm is-mono"
-                placeholder="seller slug"
-                style="width: 160px"
-              />
-            </div>
-            <div class="filter-row">
-              <label class="filter-label">SKU</label>
-              <input type="text" id="f-sku" class="fld is-sm is-mono" placeholder="搜索 SKU" style="width: 160px" />
-            </div>
-          </div>
-          <div class="table-wrap" style="margin-top: 12px">
-            <table class="sku-table" id="queue-table">
-              <thead>
-                <tr>
-                  <th class="c-sku">SKU</th>
-                  <th class="c-store">卖家</th>
-                  <th class="c-source">来源</th>
-                  <th class="c-status">状态</th>
-                  <th class="c-attempts">尝试</th>
-                  <th class="c-created">创建时间</th>
-                  <th class="c-started">开始时间</th>
-                  <th class="c-finish">完成时间</th>
-                  <th class="c-duration">耗时</th>
-                  <th class="c-error">最后错误</th>
-                </tr>
-              </thead>
-              <tbody id="queue-tbody"></tbody>
-            </table>
-          </div>
         </div>
       </section>
 

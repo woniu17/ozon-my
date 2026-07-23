@@ -1,6 +1,6 @@
 [
   {
-    "id": "store-001",
+    "id": "store-yql01-b6b2b1",
     "name": "YQL01",
     "company_id": "3891653",
     "warehouse_id": "1020005004829630",
@@ -8,7 +8,8 @@
     "sync_credentials": {
       "clientId": "3891653",
       "apiKey": "109b580e-c486-4fd8-89b3-bce3b669796e"
-    }
+    },
+    "credentials_verified": true
   },
   {
     "id": "store-yql02-e2d170",
@@ -19,6 +20,19 @@
     "sync_credentials": {
       "clientId": "3905796",
       "apiKey": "23e99795-902c-499d-a736-e39de7f9ebf6"
-    }
+    },
+    "credentials_verified": true
+  },
+  {
+    "id": "store-yql03-b6b2b3",
+    "name": "YQL03",
+    "company_id": "4173548",
+    "warehouse_id": "1020005008384940",
+    "currency_code": "CNY",
+    "sync_credentials": {
+      "clientId": "4173548",
+      "apiKey": "b61af8bf-e14d-4ba9-9004-33a40c685747"
+    },
+    "credentials_verified": true
   }
 ]
