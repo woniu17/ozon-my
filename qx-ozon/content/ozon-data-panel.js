@@ -89,7 +89,7 @@
   let _collectGate = null;
   let _resolveCollectGate = null;
   let _pendingSkus = [];
-  let _storeClassResult = null; // { isChinese, classifiedBy } | null
+  let _storeClassResult = null; // { isMainlandChina, classifiedBy } | null
   let _gateState = 'pending'; // 'pending' | 'ready' | 'timedOut'
 
   function _initCollectGate() {
@@ -104,7 +104,7 @@
       if (_gateState === 'pending') {
         _gateState = 'timedOut';
         console.warn('[panel] collectGate 超时降级,sellerInfo 未到达');
-        _resolveCollectGate({ timedOut: true, sellerSlug: '', sellerId: '', isChinese: null });
+        _resolveCollectGate({ timedOut: true, sellerSlug: '', sellerId: '', isMainlandChina: null });
         _flushPendingSkus();
       }
     }, 5000);
@@ -117,12 +117,12 @@
       window.__jzSubmitCollectTask?.(sku, card, '', '').catch(() => { });
       return;
     }
-    // onlyChineseStores 开启时,非中国店铺静默丢弃(不入 _autoCollectSeen,允许切换店铺重试)
-    if (_storeClassResult && _storeClassResult.isChinese === false) {
+    // onlyMainlandChinaStores 开启时,非中国店铺静默丢弃(不入 _autoCollectSeen,允许切换店铺重试)
+    if (_storeClassResult && _storeClassResult.isMainlandChina === false) {
       console.log('[panel] 非中国店铺,跳过采集:', sku);
       return;
     }
-    // 中国店铺 / 未分类 / onlyChineseStores=false → 提交
+    // 中国店铺 / 未分类 / onlyMainlandChinaStores=false → 提交
     window.__jzSubmitCollectTask?.(sku, card, ctx.sellerSlug, ctx.sellerId).catch(() => { });
   }
 
@@ -132,7 +132,7 @@
     const ctx = {
       sellerSlug,
       sellerId,
-      isChinese: _storeClassResult?.isChinese,
+      isMainlandChina: _storeClassResult?.isMainlandChina,
       timedOut: _gateState === 'timedOut',
     };
     console.log(`[panel] flush ${_pendingSkus.length} 个 pending SKU, gateState=${_gateState}`);
@@ -1439,8 +1439,8 @@
             }
             // submitTask 入队:ApiScroller 已提取好 domInfo,直接调 sendMessage
             // 跳过 __jzSubmitCollectTask 的 DOM 提取(它的 _extractDomInfoForTask 要求 HTMLElement)
-            // 注意:此处绕过了 collect-entry.js 的页面级 _autoCollectSeen 去重和 onlyChineseStores 筛选
-            //      (店铺页本身就是该店铺的商品,无需 onlyChineseStores 筛选;_autoCollectSeen 去重由 SW 队列二次保证)
+            // 注意:此处绕过了 collect-entry.js 的页面级 _autoCollectSeen 去重和 onlyMainlandChinaStores 筛选
+            //      (店铺页本身就是该店铺的商品,无需 onlyMainlandChinaStores 筛选;_autoCollectSeen 去重由 SW 队列二次保证)
             if (window.sendMessage) {
               try {
                 window.sendMessage('submitTask', {
@@ -1643,7 +1643,7 @@
         'data-jz-seller-info-debug',
         JSON.stringify({
           step: 'SW-returned',
-          result: result ? { isChinese: result.isChinese, classifiedBy: result.classifiedBy } : null,
+          result: result ? { isMainlandChina: result.isMainlandChina, classifiedBy: result.classifiedBy } : null,
           hasPanel: !!window.__qxCollectorPanel,
         })
       );
@@ -1653,9 +1653,9 @@
         'hasPanel:',
         !!window.__qxCollectorPanel
       );
-      // result: { isChinese, classifiedBy } | null
+      // result: { isMainlandChina, classifiedBy } | null
       // SW 返回 null 表示已查询但未分类(规则引擎无匹配 + ERP 无记录),
-      // 此时 isChinese 应为 null(待确认),不能是 undefined(会被 store-detector 当作"未检测")
+      // 此时 isMainlandChina 应为 null(待确认),不能是 undefined(会被 store-detector 当作"未检测")
       const update = {
         slug,
         name,
@@ -1663,14 +1663,14 @@
         pageType: detail.pageType || '',
         method: detail.method || '',
         companyInfo: detail.companyInfo || null,
-        isChinese: result ? result.isChinese : null,
+        isMainlandChina: result ? result.isMainlandChina : null,
         classifiedBy: result ? result.classifiedBy : null,
       };
       // 缓存分类结果 + resolve collectGate,让 pending SKU 批量 flush
-      _storeClassResult = result ? { isChinese: result.isChinese, classifiedBy: result.classifiedBy } : null;
+      _storeClassResult = result ? { isMainlandChina: result.isMainlandChina, classifiedBy: result.classifiedBy } : null;
       if (_gateState === 'pending') {
         _gateState = 'ready';
-        _resolveCollectGate({ sellerSlug, sellerId, isChinese: update.isChinese });
+        _resolveCollectGate({ sellerSlug, sellerId, isMainlandChina: update.isMainlandChina });
       }
       _flushPendingSkus();
       console.log('[ozon-data-panel] 准备 updateStoreDetection:', update);
@@ -1778,14 +1778,14 @@
   // 监听人工标记后的通知(用户在 QX面板手动标记某店铺为中国/非中国)。
   // 标记为中国后:重置去重集合 + 更新分类结果 + resolve gate + 重新提交当前页可见 SKU。
   window.addEventListener('jz-store-classified', (e) => {
-    const { slug, isChinese } = e.detail || {};
-    if (isChinese !== true) return;
+    const { slug, isMainlandChina } = e.detail || {};
+    if (isMainlandChina !== true) return;
     if (slug) sellerSlug = slug;
     // 更新分类结果 + resolve collectGate(让 pending SKU flush)
-    _storeClassResult = { isChinese: true, classifiedBy: 'manual' };
+    _storeClassResult = { isMainlandChina: true, classifiedBy: 'manual' };
     if (_gateState === 'pending') {
       _gateState = 'ready';
-      _resolveCollectGate({ sellerSlug, sellerId, isChinese: true });
+      _resolveCollectGate({ sellerSlug, sellerId, isMainlandChina: true });
     }
     // 重置去重集合,让已见 SKU 重新触发提交
     window.__jzAutoCollectResetSeen?.();
@@ -1821,7 +1821,7 @@
     const _isShopPage = /^\/seller\/[^/]+\/?($|\/products\/?$)/i.test(window.location.pathname);
     if (!_isShopPage) {
       _gateState = 'ready';
-      _resolveCollectGate({ sellerSlug: '', sellerId: '', isChinese: null });
+      _resolveCollectGate({ sellerSlug: '', sellerId: '', isMainlandChina: null });
     }
 
     // 鉴权检查：未登录就不加载（避免无 token 调QX后端打 401 产生 spam）

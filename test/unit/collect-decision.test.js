@@ -7,8 +7,8 @@
 //
 // 决策分支:
 //   1. already-seen      — _autoCollectSeen 已含 sku → 跳过
-//   2. non-chinese-store — checkStoreClass 返回 isChinese=false → 跳过 + 永久标记
-//   3. unclassified-store — checkStoreClass 返回 null/isChinese=null → 跳过(不标记,允许重试)
+//   2. non-chinese-store — checkStoreClass 返回 isMainlandChina=false → 跳过 + 永久标记
+//   3. unclassified-store — checkStoreClass 返回 null/isMainlandChina=null → 跳过(不标记,允许重试)
 //   4. checkStoreClass-error — checkStoreClass 抛异常 → 跳过(不标记,允许重试)
 //   5. submit — 通过所有检查 → 提交 + 标记
 
@@ -23,7 +23,7 @@ import assert from 'node:assert/strict';
  *
  * @param {object} params
  * @param {string|number} params.sku
- * @param {object} params.config - autoCollect 配置(至少含 onlyChineseStores)
+ * @param {object} params.config - autoCollect 配置(至少含 onlyMainlandChinaStores)
  * @param {string} params.sellerSlug - 当前页卖家 slug(空字符串表示非店铺页)
  * @param {object|null|undefined} params.storeClassResult - checkStoreClass 返回值
  * @param {boolean} params.storeClassError - checkStoreClass 是否出错
@@ -38,15 +38,15 @@ function decideCollectSubmission({ sku, config, sellerSlug, storeClassResult, st
     return { action: 'skip', reason: 'already-seen', markSeen: false };
   }
 
-  // 2. 中国店铺筛选(仅在店铺页 + 开启 onlyChineseStores 时执行)
-  if (config.onlyChineseStores && sellerSlug) {
+  // 2. 中国店铺筛选(仅在店铺页 + 开启 onlyMainlandChinaStores 时执行)
+  if (config.onlyMainlandChinaStores && sellerSlug) {
     if (storeClassError) {
       return { action: 'skip', reason: 'checkStoreClass-error', markSeen: false };
     }
-    if (storeClassResult?.isChinese === false) {
+    if (storeClassResult?.isMainlandChina === false) {
       return { action: 'skip', reason: 'non-chinese-store', markSeen: true };
     }
-    if (storeClassResult?.isChinese !== true) {
+    if (storeClassResult?.isMainlandChina !== true) {
       return { action: 'skip', reason: 'unclassified-store', markSeen: false };
     }
   }
@@ -58,7 +58,7 @@ function decideCollectSubmission({ sku, config, sellerSlug, storeClassResult, st
 // ─── 测试场景 ─────────────────────────────────────────────
 
 describe('decideCollectSubmission', () => {
-  const BASE_CONFIG = { onlyChineseStores: true };
+  const BASE_CONFIG = { onlyMainlandChinaStores: true };
   const CHINA_SHOP = 'mock-china-shop';
 
   test('1. already-seen: sku 已在 seenSet → 跳过,不标记', () => {
@@ -67,7 +67,7 @@ describe('decideCollectSubmission', () => {
       sku: '100001',
       config: BASE_CONFIG,
       sellerSlug: CHINA_SHOP,
-      storeClassResult: { isChinese: true },
+      storeClassResult: { isMainlandChina: true },
       storeClassError: false,
       seenSet,
     });
@@ -76,13 +76,13 @@ describe('decideCollectSubmission', () => {
     assert.equal(result.markSeen, false);
   });
 
-  test('2. non-chinese-store: isChinese=false → 跳过 + 永久标记', () => {
+  test('2. non-chinese-store: isMainlandChina=false → 跳过 + 永久标记', () => {
     const seenSet = new Set();
     const result = decideCollectSubmission({
       sku: '100001',
       config: BASE_CONFIG,
       sellerSlug: CHINA_SHOP,
-      storeClassResult: { isChinese: false, classifiedBy: 'manual' },
+      storeClassResult: { isMainlandChina: false, classifiedBy: 'manual' },
       storeClassError: false,
       seenSet,
     });
@@ -106,13 +106,13 @@ describe('decideCollectSubmission', () => {
     assert.equal(result.markSeen, false);
   });
 
-  test('3b. unclassified-store: isChinese=null → 跳过,不标记(允许重试)', () => {
+  test('3b. unclassified-store: isMainlandChina=null → 跳过,不标记(允许重试)', () => {
     const seenSet = new Set();
     const result = decideCollectSubmission({
       sku: '100001',
       config: BASE_CONFIG,
       sellerSlug: CHINA_SHOP,
-      storeClassResult: { isChinese: null },
+      storeClassResult: { isMainlandChina: null },
       storeClassError: false,
       seenSet,
     });
@@ -121,13 +121,13 @@ describe('decideCollectSubmission', () => {
     assert.equal(result.markSeen, false);
   });
 
-  test('3c. unclassified-store: isChinese=undefined → 跳过,不标记(允许重试)', () => {
+  test('3c. unclassified-store: isMainlandChina=undefined → 跳过,不标记(允许重试)', () => {
     const seenSet = new Set();
     const result = decideCollectSubmission({
       sku: '100001',
       config: BASE_CONFIG,
       sellerSlug: CHINA_SHOP,
-      storeClassResult: { isChinese: undefined },
+      storeClassResult: { isMainlandChina: undefined },
       storeClassError: false,
       seenSet,
     });
@@ -151,13 +151,13 @@ describe('decideCollectSubmission', () => {
     assert.equal(result.markSeen, false);
   });
 
-  test('5. submit-chinese: isChinese=true → 提交 + 标记', () => {
+  test('5. submit-chinese: isMainlandChina=true → 提交 + 标记', () => {
     const seenSet = new Set();
     const result = decideCollectSubmission({
       sku: '100001',
       config: BASE_CONFIG,
       sellerSlug: CHINA_SHOP,
-      storeClassResult: { isChinese: true, classifiedBy: 'manual' },
+      storeClassResult: { isMainlandChina: true, classifiedBy: 'manual' },
       storeClassError: false,
       seenSet,
     });
@@ -166,11 +166,11 @@ describe('decideCollectSubmission', () => {
     assert.equal(result.markSeen, true);
   });
 
-  test('6. submit-no-filter: onlyChineseStores=false → 跳过筛选,直接提交', () => {
+  test('6. submit-no-filter: onlyMainlandChinaStores=false → 跳过筛选,直接提交', () => {
     const seenSet = new Set();
     const result = decideCollectSubmission({
       sku: '100001',
-      config: { onlyChineseStores: false },
+      config: { onlyMainlandChinaStores: false },
       sellerSlug: CHINA_SHOP,
       storeClassResult: null, // 即使未分类也提交
       storeClassError: false,
@@ -214,7 +214,7 @@ describe('decideCollectSubmission', () => {
       sku: '100001',
       config: BASE_CONFIG,
       sellerSlug: CHINA_SHOP,
-      storeClassResult: { isChinese: true },
+      storeClassResult: { isMainlandChina: true },
       storeClassError: false,
       seenSet,
     });
@@ -229,7 +229,7 @@ describe('decideCollectSubmission', () => {
       sku: '100001',
       config: BASE_CONFIG,
       sellerSlug: CHINA_SHOP,
-      storeClassResult: { isChinese: false },
+      storeClassResult: { isMainlandChina: false },
       storeClassError: false,
       seenSet,
     });
@@ -243,7 +243,7 @@ describe('decideCollectSubmission', () => {
       sku: '100001',
       config: BASE_CONFIG,
       sellerSlug: CHINA_SHOP,
-      storeClassResult: { isChinese: false },
+      storeClassResult: { isMainlandChina: false },
       storeClassError: false,
       seenSet,
     });
@@ -304,7 +304,7 @@ describe('decideCollectSubmission', () => {
         sku,
         config: BASE_CONFIG,
         sellerSlug: CHINA_SHOP,
-        storeClassResult: { isChinese: true },
+        storeClassResult: { isMainlandChina: true },
         storeClassError: false,
         seenSet,
       });
@@ -330,21 +330,21 @@ describe('decideCollectSubmission', () => {
  */
 function classifyStoreByRules(slug, name, companyInfo, config) {
   if (!config) {
-    return { isChinese: null, by: null };
+    return { isMainlandChina: null, by: null };
   }
   if (Array.isArray(config.knownChineseSlugs) && config.knownChineseSlugs.includes(slug)) {
-    return { isChinese: true, by: 'rule:known-list' };
+    return { isMainlandChina: true, by: 'rule:known-list' };
   }
   if (Array.isArray(config.knownNonChineseSlugs) && config.knownNonChineseSlugs.includes(slug)) {
-    return { isChinese: false, by: 'rule:known-list' };
+    return { isMainlandChina: false, by: 'rule:known-list' };
   }
   if (companyInfo && companyInfo.country === 'CN') {
-    return { isChinese: true, by: 'rule:company-country' };
+    return { isMainlandChina: true, by: 'rule:company-country' };
   }
   if (companyInfo && companyInfo.country && companyInfo.country !== 'CN') {
-    return { isChinese: false, by: 'rule:company-country' };
+    return { isMainlandChina: false, by: 'rule:company-country' };
   }
-  return { isChinese: null, by: null };
+  return { isMainlandChina: null, by: null };
 }
 
 describe('classifyStoreByRules', () => {
@@ -353,70 +353,70 @@ describe('classifyStoreByRules', () => {
     knownNonChineseSlugs: ['known-foreign-shop'],
   };
 
-  test('1. config=null → isChinese=null(需人工确认)', () => {
+  test('1. config=null → isMainlandChina=null(需人工确认)', () => {
     const r = classifyStoreByRules('any-shop', 'name', null, null);
-    assert.equal(r.isChinese, null);
+    assert.equal(r.isMainlandChina, null);
     assert.equal(r.by, null);
   });
 
-  test('2. knownChineseSlugs 命中 → isChinese=true', () => {
+  test('2. knownChineseSlugs 命中 → isMainlandChina=true', () => {
     const r = classifyStoreByRules('known-china-shop', 'name', null, CONFIG);
-    assert.equal(r.isChinese, true);
+    assert.equal(r.isMainlandChina, true);
     assert.equal(r.by, 'rule:known-list');
   });
 
-  test('3. knownNonChineseSlugs 命中 → isChinese=false', () => {
+  test('3. knownNonChineseSlugs 命中 → isMainlandChina=false', () => {
     const r = classifyStoreByRules('known-foreign-shop', 'name', null, CONFIG);
-    assert.equal(r.isChinese, false);
+    assert.equal(r.isMainlandChina, false);
     assert.equal(r.by, 'rule:known-list');
   });
 
-  test('4. companyInfo.country=CN → isChinese=true', () => {
+  test('4. companyInfo.country=CN → isMainlandChina=true', () => {
     const r = classifyStoreByRules('unknown-shop', 'name', { country: 'CN' }, CONFIG);
-    assert.equal(r.isChinese, true);
+    assert.equal(r.isMainlandChina, true);
     assert.equal(r.by, 'rule:company-country');
   });
 
-  test('5. companyInfo.country=US → isChinese=false', () => {
+  test('5. companyInfo.country=US → isMainlandChina=false', () => {
     const r = classifyStoreByRules('unknown-shop', 'name', { country: 'US' }, CONFIG);
-    assert.equal(r.isChinese, false);
+    assert.equal(r.isMainlandChina, false);
     assert.equal(r.by, 'rule:company-country');
   });
 
-  test('6. 无任何匹配 → isChinese=null(需人工确认)', () => {
+  test('6. 无任何匹配 → isMainlandChina=null(需人工确认)', () => {
     // 用户报告的场景:新店铺,不在已知列表,无 companyInfo
     const r = classifyStoreByRules('new-unknown-shop', 'name', null, CONFIG);
-    assert.equal(r.isChinese, null);
+    assert.equal(r.isMainlandChina, null);
     assert.equal(r.by, null);
   });
 
-  test('7. companyInfo=null → isChinese=null', () => {
+  test('7. companyInfo=null → isMainlandChina=null', () => {
     const r = classifyStoreByRules('unknown-shop', 'name', null, CONFIG);
-    assert.equal(r.isChinese, null);
+    assert.equal(r.isMainlandChina, null);
   });
 
-  test('8. companyInfo.country 为空字符串 → isChinese=null', () => {
+  test('8. companyInfo.country 为空字符串 → isMainlandChina=null', () => {
     const r = classifyStoreByRules('unknown-shop', 'name', { country: '' }, CONFIG);
-    assert.equal(r.isChinese, null);
+    assert.equal(r.isMainlandChina, null);
   });
 
   test('9. 优先级:knownChineseSlugs 优先于 companyInfo.country=US', () => {
     // slug 在中国列表但 companyInfo 显示美国 → 应判定中国(规则1优先)
     const r = classifyStoreByRules('known-china-shop', 'name', { country: 'US' }, CONFIG);
-    assert.equal(r.isChinese, true);
+    assert.equal(r.isMainlandChina, true);
     assert.equal(r.by, 'rule:known-list');
   });
 
   test('10. 用户场景: 新店铺无 companyInfo → null → checkStoreClassification 返回 null → 4 SKU 全跳过', () => {
     // 模拟完整链路:规则引擎返回 null
     const ruleResult = classifyStoreByRules('new-shop', 'New Shop', null, CONFIG);
-    assert.equal(ruleResult.isChinese, null);
+    assert.equal(ruleResult.isMainlandChina, null);
 
     // checkStoreClassification 会返回 null → __jzSubmitCollectTask 跳过
     const storeClassResult = null; // checkStoreClassification 返回值
     const decision = decideCollectSubmission({
       sku: '100001',
-      config: { onlyChineseStores: true },
+      config: { onlyMainlandChinaStores: true },
       sellerSlug: 'new-shop',
       storeClassResult,
       storeClassError: false,

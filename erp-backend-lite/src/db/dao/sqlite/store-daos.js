@@ -17,10 +17,11 @@ export const storeClassificationDao = {
       sellerId: row.sellerId,
       sellerSlug: row.sellerSlug,
       sellerName: row.sellerName,
-      isChinese: row.isChinese === null ? null : !!row.isChinese,
+      isMainlandChina: row.isMainlandChina === null ? null : !!row.isMainlandChina,
       classifiedBy: row.classifiedBy,
       classifiedAt: row.classifiedAt,
       companyInfo: row.companyInfo ? JSON.parse(row.companyInfo) : null,
+      logoImageUrl: row.logoImageUrl || null,
       lastSeenAt: row.lastSeenAt,
       lastSeenUrl: row.lastSeenUrl,
     };
@@ -45,17 +46,18 @@ export const storeClassificationDao = {
       sellerId: row.sellerId,
       sellerSlug: row.sellerSlug,
       sellerName: row.sellerName,
-      isChinese: row.isChinese === null ? null : !!row.isChinese,
+      isMainlandChina: row.isMainlandChina === null ? null : !!row.isMainlandChina,
       classifiedBy: row.classifiedBy,
       classifiedAt: row.classifiedAt,
       companyInfo: row.companyInfo ? JSON.parse(row.companyInfo) : null,
+      logoImageUrl: row.logoImageUrl || null,
       lastSeenAt: row.lastSeenAt,
       lastSeenUrl: row.lastSeenUrl,
     };
   },
 
   /** upsert by sellerId(新主键)
-   *  update 字段可含 sellerSlug / sellerName / isChinese / classifiedBy / companyInfo / lastSeenUrl
+   *  update 字段可含 sellerSlug / sellerName / isMainlandChina / classifiedBy / companyInfo / logoImageUrl / lastSeenUrl
    *  sellerId 必填(主键),sellerSlug 可选(店铺改名时变化)
    *  校验:sellerId 必须是纯数字(防止 slug 被当 sellerId 写入产生脏数据,
    *  历史 bug:_id='xizixiaopu' 等脏记录即由此产生)。非数字 sellerId 抛错。
@@ -73,7 +75,7 @@ export const storeClassificationDao = {
       if (k === 'companyInfo' && v && typeof v === 'object') {
         cols.push(k);
         vals.push(JSON.stringify(v));
-      } else if (k === 'isChinese') {
+      } else if (k === 'isMainlandChina') {
         cols.push(k);
         vals.push(v === null ? null : v ? 1 : 0);
       } else if (v instanceof Date) {
@@ -125,7 +127,7 @@ export const storeClassificationDao = {
       if (k === 'companyInfo' && v && typeof v === 'object') {
         cols.push(k);
         vals.push(JSON.stringify(v));
-      } else if (k === 'isChinese') {
+      } else if (k === 'isMainlandChina') {
         cols.push(k);
         vals.push(v === null ? null : v ? 1 : 0);
       } else if (v instanceof Date) {
@@ -175,9 +177,9 @@ export const storeClassificationDao = {
   async findPagedList(filter, page, pageSize) {
     const whereParts = [];
     const params = [];
-    if (filter.isChinese === true || filter.isChinese === false) {
-      whereParts.push('isChinese = ?');
-      params.push(filter.isChinese ? 1 : 0);
+    if (filter.isMainlandChina === true || filter.isMainlandChina === false) {
+      whereParts.push('isMainlandChina = ?');
+      params.push(filter.isMainlandChina ? 1 : 0);
     }
     if (filter.keyword) {
       const kw = `%${filter.keyword}%`;
@@ -191,7 +193,7 @@ export const storeClassificationDao = {
 
     const items = db
       .prepare(
-        `SELECT sellerId, sellerSlug, sellerName, isChinese, classifiedBy, classifiedAt, companyInfo, lastSeenAt, lastSeenUrl
+        `SELECT sellerId, sellerSlug, sellerName, isMainlandChina, classifiedBy, classifiedAt, companyInfo, lastSeenAt, lastSeenUrl
          FROM ozon_store_classification ${where}
          ORDER BY lastSeenAt DESC LIMIT ? OFFSET ?`
       )
@@ -201,7 +203,7 @@ export const storeClassificationDao = {
       .get(...params).n;
     const reshaped = items.map((r) => ({
       ...r,
-      isChinese: r.isChinese === null ? null : !!r.isChinese,
+      isMainlandChina: r.isMainlandChina === null ? null : !!r.isMainlandChina,
       companyInfo: r.companyInfo ? JSON.parse(r.companyInfo) : null,
     }));
     return { items: reshaped, total };

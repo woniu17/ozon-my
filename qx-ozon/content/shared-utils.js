@@ -2376,15 +2376,20 @@ if (!globalThis.__JZ_BRAND__) {
     return null;
   }
 
+  // _normalizeSeller: 完整 14 字段对齐 webSellerList widget sellers[i] 原始结构
+  // 移除旧 10 字段(avatar/rating/reviewsCount/region/deliveryText/deliveryRank)
+  // avatar -> logoImageUrl, deliveryText 改从 advantages 提取(由前端读取侧处理)
   function _normalizeSeller(item) {
     if (!item || typeof item !== 'object') return null;
+    const _txt = (v) =>
+      typeof v === 'string' ? v.trim() : v && typeof v === 'object' && v.text ? String(v.text).trim() : '';
+    const _str = (v) => (typeof v === 'string' ? v : '');
     const name =
-      _extractText(item.name) ||
-      _extractText(item.sellerName) ||
-      _extractText(item.seller?.name || item.seller) ||
-      _extractText(item.title) ||
-      _extractText(item.subtitle);
-    // webSellerList shape: price = { cardPrice: { price: "16,87 ¥" }, ... }
+      _txt(item.name) ||
+      _txt(item.sellerName) ||
+      _txt(item.seller?.name || item.seller) ||
+      _txt(item.title) ||
+      _txt(item.subtitle);
     const priceRaw =
       item.price?.cardPrice?.price ??
       item.price?.cardPrice ??
@@ -2394,100 +2399,31 @@ if (!globalThis.__JZ_BRAND__) {
       item.discountPrice ??
       item.originalPrice ??
       item.priceText;
-    const price = _extractText(priceRaw);
+    const price = _txt(priceRaw);
     if (!name && !price) return null;
-    const sku = _extractText(item.sku) || _extractText(item.id) || _extractText(item.skuId);
-    // webSellerList shape: productLink = absolute url string
-    const link =
-      (typeof item.productLink === 'string' ? item.productLink : '') ||
-      item.link?.action?.link ||
-      item.link?.link ||
-      item.link ||
-      item.action?.link ||
-      item.url ||
-      '';
-    // webSellerList shape: rating = { totalScore: 3.5, reviewsCount: 163 }
-    const rating = item.rating?.totalScore ?? item.rating?.value ?? item.rating ?? item.sellerRating ?? null;
-    const reviewsCount =
-      item.rating?.reviewsCount ??
-      item.rating?.reviews_count ??
-      item.reviewsCount ??
-      item.reviewCount ??
-      item.sellerReviewsCount ??
-      null;
-    const region = _extractText(item.region) || _extractText(item.location);
-    const avatar =
-      _extractUrl(item.avatar) ||
-      _extractUrl(item.logo) ||
-      _extractUrl(item.sellerLogo) ||
-      _extractUrl(item.seller?.avatar) ||
-      _extractUrl(item.seller?.logo) ||
-      _extractUrl(item.image) ||
-      _extractUrl(item.picture) ||
-      _extractUrl(item.icon);
-    // 2026-05-27:Ozon /modal/otherOffersFromSellers 实际把 delivery 藏在
-    // advantages[i].contentRs.headRs[i].content,key="delivery"。之前的 fallback 链
-    // 漏掉这条 → deliveryText 全 null → 排序"更快配送" tab 落到 price tiebreaker,
-    // 跟"较低价格" tab 同顺序,user 感知 tab 切换无效。
-    const _advantageDeliveryText = (() => {
-      const advs = Array.isArray(item?.advantages) ? item.advantages : [];
-      for (const a of advs) {
-        if (a && (a.key === 'delivery' || a.iconKey === 'iconOrderPlane')) {
-          const heads = a?.contentRs?.headRs;
-          if (Array.isArray(heads)) {
-            for (const h of heads) {
-              if (h && typeof h.content === 'string' && h.content.trim()) return h.content.trim();
-            }
-          }
-        }
-      }
-      return null;
-    })();
-    const deliveryText =
-      _firstText(
-        _advantageDeliveryText,
-        item.deliveryText,
-        item.deliveryDate,
-        item.delivery?.text,
-        item.delivery?.title,
-        item.delivery?.subtitle,
-        item.delivery?.description,
-        item.delivery?.date,
-        item.deliveryInfo,
-        item.deliveryTerms,
-        item.shipmentText,
-        item.shipmentDate,
-        item.shipment?.text,
-        item.shipment?.title,
-        item.shipment?.subtitle,
-        item.shipment?.date,
-        item.shippingText,
-        item.shipping?.text,
-        item.shipping?.title,
-        item.shipping?.subtitle,
-        item.shipping?.date,
-        item.logistics?.delivery,
-        item.logistics?.shipping
-      ) ||
-      _findTextByKey(
-        item,
-        /delivery|deliver|shipping|shipment|date|term|logistic|достав|отправ|срок/i,
-        /\d|сегодня|завтра|today|tomorrow|достав|отправ|deliver|ship|月|日|天/i
-      );
-    const deliveryRank =
-      _parseDeliveryRank(deliveryText) ??
-      _parseDeliveryRank(_firstText(item.delivery?.date, item.deliveryDate, item.shipmentDate));
     return {
-      name: typeof name === 'string' ? name.trim() : '',
-      price: typeof price === 'string' ? price.trim() : '',
-      sku: typeof sku === 'string' ? sku.trim() : '',
-      link: typeof link === 'string' ? link : '',
-      avatar,
-      rating: Number.isFinite(Number(rating)) ? Number(rating) : null,
-      reviewsCount: Number.isFinite(Number(reviewsCount)) ? Number(reviewsCount) : null,
-      region: typeof region === 'string' ? region.trim() : '',
-      deliveryText: typeof deliveryText === 'string' ? deliveryText.trim() : '',
-      deliveryRank: Number.isFinite(Number(deliveryRank)) ? Number(deliveryRank) : null,
+      // 标识
+      sku: _txt(item.sku) || _txt(item.skuId) || '',
+      id: _txt(item.id) || _txt(item.sellerId) || '',
+      name,
+      link: _str(item.link),
+      // 店铺资质
+      credentials: Array.isArray(item.credentials) ? item.credentials.map(String) : [],
+      logoImageUrl:
+        _str(item.logoImageUrl) ||
+        (item.logo?.url ? _str(item.logo.url) : '') ||
+        (item.avatar?.url ? _str(item.avatar.url) : ''),
+      // 卖点
+      advantages: Array.isArray(item.advantages) ? item.advantages : [],
+      subtitle: _txt(item.subtitle),
+      // 商品价格/图
+      price: item.price || null,
+      coverImage: _str(item.coverImage),
+      productLink: _str(item.productLink),
+      // 埋点(透传)
+      trackingInfo: item.trackingInfo || null,
+      sellerInfoTracking: item.sellerInfoTracking || null,
+      informationBtnTracking: item.informationBtnTracking || null,
     };
   }
   // 2026-05 Ozon 把跟卖数据从商品页主响应里搬走了 — webOtherSellers/Followers/otherSellers
@@ -2541,7 +2477,9 @@ if (!globalThis.__JZ_BRAND__) {
 
   // 返回 { count, sellers } 或 null(失败/反爬退避中)
   // - count: number(跟卖卖家数)
-  // - sellers: Array<{name, price, sku, link, avatar, rating, reviewsCount, region, deliveryText, deliveryRank}>
+  // - sellers: Array<{sku, id, name, link, credentials, logoImageUrl, advantages,
+  //                    subtitle, price, coverImage, productLink,
+  //                    trackingInfo, sellerInfoTracking, informationBtnTracking}>
   // 历史调用方期望 number,有向后兼容包装 jzFetchPublicFollowSellCount。
   window.jzFetchPublicFollowSell = async function (sku) {
     if (!sku) return null;
@@ -2611,9 +2549,32 @@ if (!globalThis.__JZ_BRAND__) {
     return Number.isFinite(n) ? n : null;
   }
 
+  // 从 seller.price 对象提取价格字符串(新 14 字段方案:price 保留原始对象)
+  function _fsPriceText(seller) {
+    if (!seller) return '';
+    if (typeof seller.price === 'string') return seller.price;
+    return seller.price?.cardPrice?.price || seller.price?.cardPrice || '';
+  }
+
+  // 从 seller.advantages 提取配送文本(新 14 字段方案:deliveryText 不再单独提取)
+  function _fsDeliveryText(seller) {
+    if (!seller || !Array.isArray(seller.advantages)) return '';
+    for (const a of seller.advantages) {
+      if (a && (a.key === 'delivery' || a.iconKey === 'iconOrderPlane')) {
+        const heads = a?.contentRs?.headRs;
+        if (Array.isArray(heads)) {
+          for (const h of heads) {
+            if (h && typeof h.content === 'string' && h.content.trim()) return h.content.trim();
+          }
+        }
+      }
+    }
+    return '';
+  }
+
   function _fsDeliveryRank(seller) {
-    const rank = Number(seller?.deliveryRank);
-    return Number.isFinite(rank) ? rank : null;
+    // 旧字段 seller.deliveryRank 已移除,改从 advantages 提取文本后调用 _parseDeliveryRank
+    return _parseDeliveryRank(_fsDeliveryText(seller));
   }
 
   function _fsSortSellers(sellers, mode) {
@@ -2629,8 +2590,8 @@ if (!globalThis.__JZ_BRAND__) {
             if (ar !== br) return ar - br;
           }
         }
-        const ap = _fsParsePrice(a.seller.price);
-        const bp = _fsParsePrice(b.seller.price);
+        const ap = _fsParsePrice(_fsPriceText(a.seller));
+        const bp = _fsParsePrice(_fsPriceText(b.seller));
         if (ap != null || bp != null) {
           if (ap == null) return 1;
           if (bp == null) return -1;
@@ -2645,7 +2606,7 @@ if (!globalThis.__JZ_BRAND__) {
     let minPrice = Infinity;
     let fastestRank = Infinity;
     for (const seller of sellers) {
-      const price = _fsParsePrice(seller.price);
+      const price = _fsParsePrice(_fsPriceText(seller));
       if (price != null && price < minPrice) minPrice = price;
       const rank = _fsDeliveryRank(seller);
       if (rank != null && rank < fastestRank) fastestRank = rank;
@@ -2658,25 +2619,22 @@ if (!globalThis.__JZ_BRAND__) {
 
   function _fsRenderSellerRow(seller, flags = {}) {
     const sellerUrl = seller.link ? (seller.link.startsWith('http') ? seller.link : OZON_WWW + seller.link) : '';
-    const avatarHtml = seller.avatar
-      ? `<img class="oh-seller-avatar" src="${_ohEsc(seller.avatar)}" alt="" loading="lazy" />`
+    // 新 14 字段方案:avatar -> logoImageUrl,rating/reviewsCount/region 已移除
+    const logoUrl = seller.logoImageUrl || '';
+    const avatarHtml = logoUrl
+      ? `<img class="oh-seller-avatar" src="${_ohEsc(logoUrl)}" alt="" loading="lazy" />`
       : `<span class="oh-seller-avatar oh-seller-avatar-fallback" style="background:${_fsColor(seller.name)}">${_ohEsc(_fsInitial(seller.name))}</span>`;
     const nameHtml = sellerUrl
       ? `<a class="oh-seller-name oh-seller-link" href="${_ohEsc(sellerUrl)}" target="_blank" rel="noopener">${_ohEsc(seller.name || '\u672a\u77e5\u5356\u5bb6')}</a>`
       : `<span class="oh-seller-name">${_ohEsc(seller.name || '\u672a\u77e5\u5356\u5bb6')}</span>`;
-    const ratingHtml =
-      typeof seller.rating === 'number'
-        ? `<span class="oh-seller-rating">\u2605 ${seller.rating.toFixed(1)}</span>`
-        : '';
-    const reviewsText = _fsFormatReviews(seller.reviewsCount);
-    const reviewsHtml = reviewsText ? `<span class="oh-seller-reviews">${_ohEsc(reviewsText)}</span>` : '';
-    const regionHtml = seller.region ? `<span class="oh-seller-region">${_ohEsc(seller.region)}</span>` : '';
     const skuHtml = seller.sku ? `<span class="oh-seller-sku">SKU ${_ohEsc(seller.sku)}</span>` : '';
-    const priceHtml = seller.price
-      ? `<span class="oh-seller-price${flags.isMinPrice ? ' is-min' : ''}">${_ohEsc(seller.price)}${flags.isMinPrice ? ' <span class="oh-seller-tag is-price">\u6700\u4f4e</span>' : ''}</span>`
+    const priceText = _fsPriceText(seller);
+    const priceHtml = priceText
+      ? `<span class="oh-seller-price${flags.isMinPrice ? ' is-min' : ''}">${_ohEsc(priceText)}${flags.isMinPrice ? ' <span class="oh-seller-tag is-price">\u6700\u4f4e</span>' : ''}</span>`
       : `<span class="oh-seller-price oh-seller-price-empty">-</span>`;
-    const deliveryHtml = seller.deliveryText
-      ? `<span class="oh-seller-delivery-main">${_ohEsc(seller.deliveryText)}</span>`
+    const deliveryText = _fsDeliveryText(seller);
+    const deliveryHtml = deliveryText
+      ? `<span class="oh-seller-delivery-main">${_ohEsc(deliveryText)}</span>`
       : `<span class="oh-seller-delivery-main is-muted">\u914d\u9001\u4fe1\u606f\u672a\u8fd4\u56de</span>`;
     const fastestTag = flags.isFastest ? `<span class="oh-seller-tag is-delivery">\u6700\u5feb</span>` : '';
     return `
@@ -2684,7 +2642,7 @@ if (!globalThis.__JZ_BRAND__) {
         <div class="oh-seller-cell oh-seller-avatar-cell">${avatarHtml}</div>
         <div class="oh-seller-cell oh-seller-name-cell">
           ${nameHtml}
-          <div class="oh-seller-meta">${ratingHtml}${reviewsHtml}${regionHtml}${skuHtml}</div>
+          <div class="oh-seller-meta">${skuHtml}</div>
         </div>
         <div class="oh-seller-cell oh-seller-price-cell">${priceHtml}</div>
         <div class="oh-seller-cell oh-seller-delivery-cell">

@@ -213,18 +213,72 @@ router.get('/ozon/cache/followSell/:sku', async (req, res, next) => {
 });
 
 // POST /ozon/cache/followSell/:sku  body: { data }
+// data 结构: { count, sellers:[14字段], source }
+// 副作用:从 sellers 抽取店铺数据 upsert 到 ozon_store_classification(失败不阻塞主流程)
 router.post('/ozon/cache/followSell/:sku', async (req, res, next) => {
   try {
     const sku = String(req.params.sku);
     const data = req.body?.data;
     if (!data) return res.status(422).json({ error: 'missing data' });
     await daos.followSellDao.upsert(sku, data);
+    // 店铺抽取:从 sellers 数组提取每个卖家信息,upsert 到 store_classification
+    // 失败仅 warn 日志,不影响主缓存写入;isMainlandChina/classifiedBy 不动(保留原值)
+    await extractSellersToStoreClassification(data).catch((e) => {
+      logger.warn({ err: e.message, sku }, '[cache] followSell store extract failed');
+    });
     return res.json({ ok: true });
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] followSell set failed');
     next(e);
   }
 });
+
+// 从跟卖 sellers 数组抽取店铺数据 upsert 到 ozon_store_classification
+// seller.id 必须是纯数字(与 __NUXT__ sellerId 体系一致),否则跳过
+// companyInfo 存结构化对象 { companyName, legalAddress, country }
+// isMainlandChina 判定:仅 credentials[2] 国家代码 === 'CN' 时为 true(中国大陆卖家),
+//   HK(香港)/其他/无法识别 → false,与现有 collect-runner.js Rule 3/4 对齐
+// classifiedBy='rule:follow-sell-credentials',标识来源为跟卖列表抽取
+async function extractSellersToStoreClassification(data) {
+  const sellers = Array.isArray(data?.sellers) ? data.sellers : [];
+  if (!sellers.length) return;
+  const now = new Date().toISOString();
+  for (const s of sellers) {
+    if (!s?.id) continue;
+    const sellerId = String(s.id);
+    if (!/^\d+$/.test(sellerId)) continue; // 防止 slug 被当 sellerId
+    // 从 link "/seller/3308213/" 提取 slug,失败则用 id
+    const slugMatch = (s.link || '').match(/\/seller\/([^/]+)/);
+    const slug = slugMatch ? slugMatch[1] : sellerId;
+    // 从 credentials[2] "<国家代码>, <地区>" 提取国家代码
+    const creds = Array.isArray(s.credentials) ? s.credentials : [];
+    const locField = creds[2] || '';
+    const countryMatch = String(locField).match(/^([A-Z]{2})\b/);
+    const country = countryMatch ? countryMatch[1] : null;
+    const isMainlandChina = country === 'CN'; // 仅中国大陆,HK/其他均为 false
+    // 构造结构化 companyInfo(与 seller-info-main.js 格式对齐,供规则引擎复用)
+    const companyInfo = {
+      companyName: creds[0] || null,
+      legalAddress: creds[1] || null,
+      country: country,
+    };
+    try {
+      await daos.storeClassificationDao.upsertBySellerId(sellerId, {
+        sellerSlug: slug,
+        sellerName: s.name || null,
+        companyInfo,
+        logoImageUrl: s.logoImageUrl || null,
+        isMainlandChina,
+        classifiedBy: 'rule:follow-sell-credentials',
+        lastSeenAt: now,
+        lastSeenUrl: s.link || null,
+      });
+    } catch (e) {
+      // 单条失败不中断,继续处理其他 seller
+      logger.warn({ err: e.message, sellerId }, '[cache] store upsert single failed');
+    }
+  }
+}
 
 // DELETE /ozon/cache/followSell/:sku
 router.delete('/ozon/cache/followSell/:sku', async (req, res, next) => {
@@ -1445,7 +1499,7 @@ router.get('/admin/api/store-classification/:sellerId', async (req, res, next) =
         sellerSlug: doc.sellerSlug || '',
         sellerId: doc.sellerId || doc._id || '',
         sellerName: doc.sellerName || '',
-        isChinese: doc.isChinese === true,
+        isMainlandChina: doc.isMainlandChina === true,
         classifiedBy: doc.classifiedBy || '',
         companyInfo: doc.companyInfo || null,
         lastSeenAt: doc.lastSeenAt || null,
@@ -1459,7 +1513,7 @@ router.get('/admin/api/store-classification/:sellerId', async (req, res, next) =
 });
 
 // POST /admin/api/store-classification/:sellerId — upsert 分类记录
-// body: { sellerSlug?, sellerName, isChinese, classifiedBy, companyInfo, lastSeenAt, lastSeenUrl }
+// body: { sellerSlug?, sellerName, isMainlandChina, classifiedBy, companyInfo, lastSeenAt, lastSeenUrl }
 // sellerId 从 path 取(主键);sellerSlug 可选(店铺改名时变化)
 router.post('/admin/api/store-classification/:sellerId', async (req, res, next) => {
   try {
@@ -1472,7 +1526,7 @@ router.post('/admin/api/store-classification/:sellerId', async (req, res, next) 
 
     const update = {
       sellerName: body.sellerName != null ? String(body.sellerName) : '',
-      isChinese: body.isChinese === true,
+      isMainlandChina: body.isMainlandChina === true,
       classifiedBy: body.classifiedBy != null ? String(body.classifiedBy) : '',
       classifiedAt: body.classifiedAt ? new Date(body.classifiedAt) : now,
       companyInfo: body.companyInfo != null ? body.companyInfo : null,
@@ -1505,7 +1559,7 @@ router.delete('/admin/api/store-classification/:sellerId', async (req, res, next
 });
 
 // GET /admin/api/store-classification — 列表查询(分页 + 过滤)
-// query: isChinese(true/false/null 不传则不过滤)/keyword(匹配 sellerName/sellerSlug)/currentPage/pageSize
+// query: isMainlandChina(true/false/null 不传则不过滤)/keyword(匹配 sellerName/sellerSlug)/currentPage/pageSize
 router.get('/admin/api/store-classification', async (req, res, next) => {
   try {
     const keyword = String(req.query.keyword || '').trim();
@@ -1513,9 +1567,9 @@ router.get('/admin/api/store-classification', async (req, res, next) => {
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 20));
 
     const filter = {};
-    // isChinese: 'true' → true, 'false' → false, 其他(包括不传/null) → 不过滤
-    if (req.query.isChinese === 'true') filter.isChinese = true;
-    else if (req.query.isChinese === 'false') filter.isChinese = false;
+    // isMainlandChina: 'true' → true, 'false' → false, 其他(包括不传/null) → 不过滤
+    if (req.query.isMainlandChina === 'true') filter.isMainlandChina = true;
+    else if (req.query.isMainlandChina === 'false') filter.isMainlandChina = false;
     if (keyword) filter.keyword = keyword;
 
     const { items, total } = await daos.storeClassificationDao.findPagedList(filter, currentPage, pageSize);

@@ -213,14 +213,14 @@ async function loginErp() {
 }
 
 // 通过 ERP 后端设置店铺分类(中国/非中国)
-async function setStoreClassification(slug, isChinese) {
+async function setStoreClassification(slug, isMainlandChina) {
   const resp = await fetch(`${ERP_BASE}/admin/api/store-classification/${slug}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${ERP_TOKEN}`,
     },
-    body: JSON.stringify({ isChinese, classifiedAt: new Date().toISOString() }),
+    body: JSON.stringify({ isMainlandChina, classifiedAt: new Date().toISOString() }),
   });
   return resp.ok;
 }
@@ -315,7 +315,7 @@ async function scenarioBasic(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -382,7 +382,7 @@ async function scenarioDedup(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 5,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -421,7 +421,7 @@ async function scenarioNonChinese(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -452,7 +452,7 @@ async function scenarioDailyLimit(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 1,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -486,7 +486,7 @@ async function scenarioCacheHit(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -513,7 +513,7 @@ async function scenarioCacheHit(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -560,7 +560,7 @@ async function scenarioAntibot(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -620,7 +620,7 @@ async function scenarioNotRunning(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -672,7 +672,7 @@ async function scenarioRetryBackoff(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -747,7 +747,7 @@ async function scenarioQueuePersistence(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -823,7 +823,7 @@ async function scenarioAntibotRecovery(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: true,
     pausedUntil: expiredPausedUntil,
   });
@@ -863,7 +863,7 @@ async function scenarioPanelReadyOnCollectDone(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -933,8 +933,8 @@ async function scenarioPanelReadyOnCollectDone(browser, sw, mongo) {
 }
 
 // 场景 12: unclassified-mark — 未分类不采集,标记中国后重新加载可采集
-// 验证:未分类时 isChinese !== true → 不提交且不 add 到去重集(可重试)
-//       标记中国后重新加载 → checkStoreClass 返回 isChinese=true → 提交采集
+// 验证:未分类时 isMainlandChina !== true → 不提交且不 add 到去重集(可重试)
+//       标记中国后重新加载 → checkStoreClass 返回 isMainlandChina=true → 提交采集
 async function scenarioUnclassifiedMark(browser, sw, mongo) {
   log('\n══ 场景 12: 未分类 → 标记中国 → 采集 ══');
   await clearMongoCache(mongo);
@@ -945,7 +945,7 @@ async function scenarioUnclassifiedMark(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -993,7 +993,7 @@ async function scenarioDailyLimitPending(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 1, // 只允许 1 个
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1041,7 +1041,7 @@ async function scenarioPausedSoftExpiry(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: true,
     pausedUntil: Date.now() - 1000, // 已过期
   });
@@ -1078,7 +1078,7 @@ async function scenarioDailyLimitDeadlock(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 0,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1141,7 +1141,7 @@ async function scenarioScrollNewSkus(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1231,7 +1231,7 @@ async function scenarioCollectDataRender(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1382,7 +1382,7 @@ async function scenarioStatusSuccess(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1441,7 +1441,7 @@ async function scenarioStatusPartial(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1518,7 +1518,7 @@ async function scenarioStatusFailed(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1583,7 +1583,7 @@ async function scenarioStatusAntibot(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1664,7 +1664,7 @@ async function scenarioAntibotNewpage(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1823,7 +1823,7 @@ async function scenarioStatusSkippedDailyLimit(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 0,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1873,7 +1873,7 @@ async function scenarioStatusSkippedOther(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });
@@ -1894,7 +1894,7 @@ async function scenarioStatusSkippedOther(browser, sw, mongo) {
     todayCount: 0,
     perDayLimit: 100,
     consumeRateSec: 2,
-    onlyChineseStores: true,
+    onlyMainlandChinaStores: true,
     paused: false,
     pausedUntil: 0,
   });

@@ -430,16 +430,16 @@ function opiSourceLabel(hit, type) {
 }
 
 // ── 店铺分类徽章 ──────────────────────────────────────────
-function storeClassBadge(isChinese) {
-  if (isChinese === true) return 'badge-chinese';
-  if (isChinese === false) return 'badge-non-chinese';
+function storeClassBadge(isMainlandChina) {
+  if (isMainlandChina === true) return 'badge-chinese';
+  if (isMainlandChina === false) return 'badge-non-chinese';
   return 'badge-pending';
 }
 
 // ── 店铺分类 ───────────────────────────────────────────────
 const storeClassifications = ref([]);
 const storeClassFilters = reactive({
-  isChinese: null,
+  isMainlandChina: null,
   keyword: '',
 });
 const storeClassPager = reactive({
@@ -454,7 +454,7 @@ async function loadStoreClassifications() {
   const myId = ++loadStoreClassReqId;
   try {
     const data = await getStoreClassificationList({
-      isChinese: storeClassFilters.isChinese,
+      isMainlandChina: storeClassFilters.isMainlandChina,
       keyword: storeClassFilters.keyword.trim(),
       page: storeClassPager.current,
       pageSize: storeClassPager.pageSize,
@@ -750,7 +750,7 @@ onMounted(() => {
     <!-- ── 店铺数据 tab ───────────────────────────────────── -->
     <div v-if="state.type === 'store-classification'" class="store-classification-tab">
       <div class="filter-bar">
-        <select v-model="storeClassFilters.isChinese" class="filter-input">
+        <select v-model="storeClassFilters.isMainlandChina" class="filter-input">
           <option :value="null">全部分类</option>
           <option :value="true">中国店铺</option>
           <option :value="false">非中国店铺</option>
@@ -788,18 +788,18 @@ onMounted(() => {
               <td>{{ sc.sellerSlug || '—' }}</td>
               <td>{{ sc.sellerName || '—' }}</td>
               <td>
-                <span :class="storeClassBadge(sc.isChinese)">
-                  {{ sc.isChinese === true ? '中国' : sc.isChinese === false ? '非中国' : '待确认' }}
+                <span :class="storeClassBadge(sc.isMainlandChina)">
+                  {{ sc.isMainlandChina === true ? '中国' : sc.isMainlandChina === false ? '非中国' : '待确认' }}
                 </span>
               </td>
               <td>{{ sc.classifiedBy || '—' }}</td>
               <td>{{ sc.companyInfo?.companyName || '—' }}</td>
               <td class="col-time">{{ fmtTime(sc.lastSeenAt) }}</td>
               <td class="row-actions">
-                <button class="btn btn-sm btn-primary" :disabled="!sc.sellerId" @click="updateStoreClass(sc.sellerId || sc._id, { isChinese: true })">
+                <button class="btn btn-sm btn-primary" :disabled="!sc.sellerId" @click="updateStoreClass(sc.sellerId || sc._id, { isMainlandChina: true })">
                   标记中国
                 </button>
-                <button class="btn btn-sm btn-ghost" :disabled="!sc.sellerId" @click="updateStoreClass(sc.sellerId || sc._id, { isChinese: false })">
+                <button class="btn btn-sm btn-ghost" :disabled="!sc.sellerId" @click="updateStoreClass(sc.sellerId || sc._id, { isMainlandChina: false })">
                   标记非中国
                 </button>
                 <button class="btn btn-sm btn-danger" :disabled="!sc.sellerId" @click="deleteStoreClass(sc.sellerId || sc._id, sc.sellerName || sc.sellerSlug)">删除</button>

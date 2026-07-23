@@ -63,7 +63,7 @@
   /**
    * 提交采集任务到 SW 队列。
    * - 全站可用(店铺页/搜索页/详情页等),非店铺页无 sellerSlug 时自动跳过中国卖家筛选;
-   * - 开启 onlyChineseStores 时先 checkStoreClass,非中国店铺永久跳过,未分类/SW 故障仅本次跳过;
+   * - 开启 onlyMainlandChinaStores 时先 checkStoreClass,非中国店铺永久跳过,未分类/SW 故障仅本次跳过;
    * - 页面级 _autoCollectSeen 去重,最终去权由 SW 队列保证。
    *
    * @param {string|number} sku
@@ -92,20 +92,20 @@
       return;
     }
 
-    // 中国店铺筛选:仅在店铺页(sellerSlug 非空)且开启 onlyChineseStores 时执行。
-    // - isChinese === false:确实非中国,永久跳过(add 到 seen)
-    // - isChinese === null/undefined(未分类):本次跳过但不永久标记,下次可重试
+    // 中国店铺筛选:仅在店铺页(sellerSlug 非空)且开启 onlyMainlandChinaStores 时执行。
+    // - isMainlandChina === false:确实非中国,永久跳过(add 到 seen)
+    // - isMainlandChina === null/undefined(未分类):本次跳过但不永久标记,下次可重试
     // - checkStoreClass 异常(SW 短暂故障):本次跳过但不永久标记,下次可重试
-    if (config.onlyChineseStores && sellerSlug) {
+    if (config.onlyMainlandChinaStores && sellerSlug) {
       try {
         const result = await window.sendMessage('checkStoreClass', { slug: sellerSlug, sellerId: sellerId || '' });
-        if (result?.isChinese === false) {
+        if (result?.isMainlandChina === false) {
           console.log('[submitTask] 跳过非中国店铺:', sellerSlug, result);
           if (_autoCollectSeen.size > 2000) _autoCollectSeen.clear();
           _autoCollectSeen.add(skuStr);
           return;
         }
-        if (result?.isChinese !== true) {
+        if (result?.isMainlandChina !== true) {
           console.log('[submitTask] 店铺未分类,本次跳过:', sellerSlug, result);
           return;
         }

@@ -1010,8 +1010,8 @@ try {
   const _erpStoreSkuReport = (payload) => __jzCollect._erpStoreSkuReport(payload);
   const checkStoreClassification = (slug, name, companyInfo, sellerId) =>
     __jzCollect.checkStoreClassification(slug, name, companyInfo, sellerId);
-  const manualClassifyStore = (slug, name, isChinese, sellerId) =>
-    __jzCollect.manualClassifyStore(slug, name, isChinese, sellerId);
+  const manualClassifyStore = (slug, name, isMainlandChina, sellerId) =>
+    __jzCollect.manualClassifyStore(slug, name, isMainlandChina, sellerId);
 
   // fetchSellerViaOzonTab 已迁移到 collect/background/collect-tab.js
   const fetchSellerViaOzonTab = (path, body, opts = {}, preferTabId = null) =>
@@ -3011,7 +3011,7 @@ try {
         case 'checkStoreClassification': {
           // 三层查询店铺中国身份(L1 chrome.storage → L2 MongoDB → 规则引擎)。
           // 入参: { slug, name, companyInfo?, sellerId? }
-          // 返回: { ok, data: { isChinese, classifiedBy, sellerId } | null }
+          // 返回: { ok, data: { isMainlandChina, classifiedBy, sellerId } | null }
           //   sellerId 用于调用方(如 API 直取启动前)获取稳定卖家主键
           try {
             const slug = String(message.slug || '');
@@ -3027,16 +3027,16 @@ try {
         }
         case 'classifyStore': {
           // 人工确认店铺分类:写 L1 + L2(classifiedBy:'manual')。
-          // 入参: { slug, name, isChinese, sellerId? }  返回: { ok: true }
+          // 入参: { slug, name, isMainlandChina, sellerId? }  返回: { ok: true }
           try {
             const slug = String(message.slug || '');
             const name = message.name || '';
-            const isChinese = message.isChinese;
+            const isMainlandChina = message.isMainlandChina;
             const sellerId = message.sellerId || '';
-            if (!slug || isChinese === undefined || isChinese === null) {
-              return { ok: false, error: 'missing slug or isChinese' };
+            if (!slug || isMainlandChina === undefined || isMainlandChina === null) {
+              return { ok: false, error: 'missing slug or isMainlandChina' };
             }
-            const data = await manualClassifyStore(slug, name, isChinese, sellerId);
+            const data = await manualClassifyStore(slug, name, isMainlandChina, sellerId);
             return { ok: true, data };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
@@ -3326,9 +3326,9 @@ try {
               skuInterval: _acCfg.skuInterval,
               consumeRateMinSec: _acCfg.consumeRateMinSec,
               consumeRateMaxSec: _acCfg.consumeRateMaxSec,
-              onlyChineseStores: _acCfg.onlyChineseStores,
-              knownChineseSlugs: _acCfg.knownChineseSlugs,
-              knownNonChineseSlugs: _acCfg.knownNonChineseSlugs,
+              onlyMainlandChinaStores: _acCfg.onlyMainlandChinaStores,
+              knownMainlandChinaSlugs: _acCfg.knownMainlandChinaSlugs,
+              knownNonMainlandChinaSlugs: _acCfg.knownNonMainlandChinaSlugs,
             },
           };
         }
@@ -3348,9 +3348,9 @@ try {
             'skuInterval',
             'consumeRateMinSec',
             'consumeRateMaxSec',
-            'onlyChineseStores',
-            'knownChineseSlugs',
-            'knownNonChineseSlugs',
+            'onlyMainlandChinaStores',
+            'knownMainlandChinaSlugs',
+            'knownNonMainlandChinaSlugs',
           ];
           const _acFiltered = {};
           for (const _k of _acAllowed) {

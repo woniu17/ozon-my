@@ -23,7 +23,7 @@ export const storeClassificationDao = {
   },
 
   /** upsert by sellerId(新主键)
-   *  update 字段可含 sellerSlug / sellerName / isChinese / classifiedBy / companyInfo / lastSeenUrl
+   *  update 字段可含 sellerSlug / sellerName / isMainlandChina / classifiedBy / companyInfo / logoImageUrl / lastSeenUrl
    *  sellerId 必填(主键),sellerSlug 可选(店铺改名时变化)
    */
   async upsertBySellerId(sellerId, update) {
@@ -84,8 +84,8 @@ export const storeClassificationDao = {
   async findPagedList(filter, page, pageSize) {
     const col = await cols.storeClassification();
     const query = {};
-    if (filter.isChinese === true || filter.isChinese === false) {
-      query.isChinese = filter.isChinese;
+    if (filter.isMainlandChina === true || filter.isMainlandChina === false) {
+      query.isMainlandChina = filter.isMainlandChina;
     }
     if (filter.keyword) {
       const re = { $regex: filter.keyword, $options: 'i' };

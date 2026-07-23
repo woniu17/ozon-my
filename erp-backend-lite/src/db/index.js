@@ -20,6 +20,19 @@ db.exec('PRAGMA foreign_keys = ON;');
 
 // 初始化 schema
 export async function initSchema() {
+  // 2026-07: isChinese → isMainlandChina 列重命名必须在 exec(schema.sql) 之前执行,
+  // 因为 schema.sql 的 CREATE INDEX 引用 isMainlandChina 列,旧库需先 RENAME 才能创建索引
+  const _scColsPre = db.prepare(`PRAGMA table_info(ozon_store_classification)`).all();
+  if (_scColsPre.length > 0 && _scColsPre.some((c) => c.name === 'isChinese')) {
+    db.exec(`ALTER TABLE ozon_store_classification RENAME COLUMN isChinese TO isMainlandChina`);
+    db.exec(`DROP INDEX IF EXISTS idx_sc_chinese`);
+    console.log('[db] migration: renamed column ozon_store_classification.isChinese → isMainlandChina');
+  }
+  const _legacyColsPre = db.prepare(`PRAGMA table_info(ozon_store_classification_legacy)`).all();
+  if (_legacyColsPre.length > 0 && _legacyColsPre.some((c) => c.name === 'isChinese')) {
+    db.exec(`ALTER TABLE ozon_store_classification_legacy RENAME COLUMN isChinese TO isMainlandChina`);
+    console.log('[db] migration: renamed column ozon_store_classification_legacy.isChinese → isMainlandChina');
+  }
   const sql = readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(sql);
   await ensureMigrations();
@@ -135,6 +148,13 @@ async function ensureMigrations() {
   if (addedHasRichContent) {
     backfillHasRichContent();
   }
+  // 2026-07: 跟卖列表抽取店铺数据 — ozon_store_classification 补 logoImageUrl 列
+  const scCols = db.prepare(`PRAGMA table_info(ozon_store_classification)`).all();
+  if (scCols.length > 0 && !scCols.some((c) => c.name === 'logoImageUrl')) {
+    db.exec(`ALTER TABLE ozon_store_classification ADD COLUMN logoImageUrl TEXT`);
+    console.log('[db] migration: added column ozon_store_classification.logoImageUrl');
+  }
+  // isChinese → isMainlandChina 列重命名已在 ensureMigrations 开头执行
 }
 
 // 一次性回填 ozon_cache_index.has_rich_content
@@ -313,7 +333,7 @@ async function cleanupStoreClassificationDirtyRows(db) {
   if (!tableExists) return;
 
   const dirtyRows = db
-    .prepare(`SELECT _id, sellerSlug, sellerId, sellerName, isChinese, classifiedBy, companyInfo, classifiedAt, lastSeenAt, lastSeenUrl FROM ozon_store_classification WHERE _id NOT GLOB '[0-9]*'`)
+    .prepare(`SELECT _id, sellerSlug, sellerId, sellerName, isMainlandChina, classifiedBy, companyInfo, classifiedAt, lastSeenAt, lastSeenUrl FROM ozon_store_classification WHERE _id NOT GLOB '[0-9]*'`)
     .all();
   if (dirtyRows.length === 0) return;
 
@@ -334,10 +354,10 @@ async function cleanupStoreClassificationDirtyRows(db) {
     } else {
       // 无正确记录,迁移到 legacy 表后删除
       db.prepare(
-        `INSERT OR REPLACE INTO ozon_store_classification_legacy (_id, sellerSlug, sellerId, sellerName, isChinese, classifiedBy, companyInfo, classifiedAt, lastSeenAt, lastSeenUrl, migratedAt)
+        `INSERT OR REPLACE INTO ozon_store_classification_legacy (_id, sellerSlug, sellerId, sellerName, isMainlandChina, classifiedBy, companyInfo, classifiedAt, lastSeenAt, lastSeenUrl, migratedAt)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
-        d._id, slug, d.sellerId || '', d.sellerName || '', d.isChinese, d.classifiedBy || '',
+        d._id, slug, d.sellerId || '', d.sellerName || '', d.isMainlandChina, d.classifiedBy || '',
         d.companyInfo || null, d.classifiedAt, d.lastSeenAt, d.lastSeenUrl || '', new Date().toISOString()
       );
       db.prepare(`DELETE FROM ozon_store_classification WHERE _id = ?`).run(d._id);
@@ -424,14 +444,14 @@ async function migrateSellerIdPrimaryKey(db) {
           sellerId      TEXT NOT NULL,
           sellerSlug    TEXT,
           sellerName    TEXT,
-          isChinese     INTEGER,
+          isMainlandChina     INTEGER,
           classifiedBy  TEXT,
           classifiedAt  TEXT,
           companyInfo   TEXT,
           lastSeenAt    TEXT,
           lastSeenUrl   TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_sc_new_chinese ON ozon_store_classification_new(isChinese);
+        CREATE INDEX IF NOT EXISTS idx_sc_new_chinese ON ozon_store_classification_new(isMainlandChina);
         CREATE INDEX IF NOT EXISTS idx_sc_new_name    ON ozon_store_classification_new(sellerName);
         CREATE INDEX IF NOT EXISTS idx_sc_new_seen    ON ozon_store_classification_new(lastSeenAt DESC);
         CREATE INDEX IF NOT EXISTS idx_sc_new_slug    ON ozon_store_classification_new(sellerSlug);
@@ -441,7 +461,7 @@ async function migrateSellerIdPrimaryKey(db) {
           sellerSlug    TEXT NOT NULL,
           sellerId      TEXT,
           sellerName    TEXT,
-          isChinese     INTEGER,
+          isMainlandChina     INTEGER,
           classifiedBy  TEXT,
           classifiedAt  TEXT,
           companyInfo   TEXT,
@@ -455,9 +475,9 @@ async function migrateSellerIdPrimaryKey(db) {
       const migrated = db
         .prepare(
           `INSERT OR REPLACE INTO ozon_store_classification_new
-           (_id, sellerId, sellerSlug, sellerName, isChinese, classifiedBy, classifiedAt,
+           (_id, sellerId, sellerSlug, sellerName, isMainlandChina, classifiedBy, classifiedAt,
             companyInfo, lastSeenAt, lastSeenUrl)
-           SELECT sellerId, sellerId, sellerSlug, sellerName, isChinese, classifiedBy, classifiedAt,
+           SELECT sellerId, sellerId, sellerSlug, sellerName, isMainlandChina, classifiedBy, classifiedAt,
                   companyInfo, lastSeenAt, lastSeenUrl
            FROM ozon_store_classification
            WHERE sellerId IS NOT NULL AND sellerId != ''`
@@ -471,9 +491,9 @@ async function migrateSellerIdPrimaryKey(db) {
       const legacyCount = db
         .prepare(
           `INSERT OR REPLACE INTO ozon_store_classification_legacy
-           (_id, sellerSlug, sellerId, sellerName, isChinese, classifiedBy, classifiedAt,
+           (_id, sellerSlug, sellerId, sellerName, isMainlandChina, classifiedBy, classifiedAt,
             companyInfo, lastSeenAt, lastSeenUrl, migratedAt)
-           SELECT _id, sellerSlug, sellerId, sellerName, isChinese, classifiedBy, classifiedAt,
+           SELECT _id, sellerSlug, sellerId, sellerName, isMainlandChina, classifiedBy, classifiedAt,
                   companyInfo, lastSeenAt, lastSeenUrl, datetime('now')
            FROM ozon_store_classification
            WHERE sellerId IS NULL OR sellerId = ''`
@@ -494,7 +514,7 @@ async function migrateSellerIdPrimaryKey(db) {
         DROP INDEX IF EXISTS idx_sc_new_name;
         DROP INDEX IF EXISTS idx_sc_new_seen;
         DROP INDEX IF EXISTS idx_sc_new_slug;
-        CREATE INDEX IF NOT EXISTS idx_sc_chinese ON ozon_store_classification(isChinese);
+        CREATE INDEX IF NOT EXISTS idx_sc_chinese ON ozon_store_classification(isMainlandChina);
         CREATE INDEX IF NOT EXISTS idx_sc_name    ON ozon_store_classification(sellerName);
         CREATE INDEX IF NOT EXISTS idx_sc_seen    ON ozon_store_classification(lastSeenAt DESC);
         CREATE INDEX IF NOT EXISTS idx_sc_slug    ON ozon_store_classification(sellerSlug);

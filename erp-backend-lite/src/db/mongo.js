@@ -43,7 +43,7 @@ async function ensureIndexes(db) {
     console.warn('[mongo] ensureIndexes auto_collect_log failed:', e.message);
   }
 
-  // ozon_store_classification 索引(店铺分类,按 isChinese/sellerName/lastSeenAt 查询)
+  // ozon_store_classification 索引(店铺分类,按 isMainlandChina/sellerName/lastSeenAt 查询)
   try {
     const clsCol = db.collection('ozon_store_classification');
     // 旧索引使用 sparse: true,但 sparse 只跳过 null/不存在,不跳过空字符串,
@@ -54,7 +54,7 @@ async function ensureIndexes(db) {
       /* 旧索引可能不存在(首次部署),忽略 */
     }
     await Promise.all([
-      clsCol.createIndex({ isChinese: 1 }),
+      clsCol.createIndex({ isMainlandChina: 1 }),
       clsCol.createIndex({ sellerName: 1 }),
       clsCol.createIndex({ lastSeenAt: -1 }),
       clsCol.createIndex(

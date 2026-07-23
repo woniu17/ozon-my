@@ -698,7 +698,7 @@
             window.__qxCollectorPanel.updateStoreDetection({
               slug: sellerSlug,
               name: _product?.seller?.name,
-              isChinese: result?.isChinese,
+              isMainlandChina: result?.isMainlandChina,
               classifiedBy: result?.classifiedBy,
             });
           }
@@ -9994,8 +9994,43 @@
   }
 
   function _sellerDeliveryRank(seller) {
-    const rank = Number(seller?.deliveryRank);
-    return Number.isFinite(rank) ? rank : null;
+    // 旧字段 seller.deliveryRank 已移除,改从 advantages 提取文本后解析
+    return _parseDeliveryRankFromAdvantages(seller);
+  }
+
+  // 从 seller.advantages 提取配送文本(新 14 字段方案:deliveryText 不再单独提取)
+  function _sellerDeliveryText(seller) {
+    if (!seller || !Array.isArray(seller.advantages)) return '';
+    for (const a of seller.advantages) {
+      if (a && (a.key === 'delivery' || a.iconKey === 'iconOrderPlane')) {
+        const heads = a?.contentRs?.headRs;
+        if (Array.isArray(heads)) {
+          for (const h of heads) {
+            if (h && typeof h.content === 'string' && h.content.trim()) return h.content.trim();
+          }
+        }
+      }
+    }
+    return '';
+  }
+
+  // 从 seller.price 对象提取价格字符串(新 14 字段方案:price 保留原始对象)
+  function _sellerPriceText(seller) {
+    if (!seller) return '';
+    if (typeof seller.price === 'string') return seller.price;
+    return seller.price?.cardPrice?.price || seller.price?.cardPrice || '';
+  }
+
+  // 简化配送日期解析:сегодня/today=0,завтра/tomorrow=1,否则尝试 N天/дн/day
+  function _parseDeliveryRankFromAdvantages(seller) {
+    const text = _sellerDeliveryText(seller);
+    if (!text) return null;
+    const s = String(text).toLowerCase();
+    if (/сегодня|today|今天/.test(s)) return 0;
+    if (/завтра|tomorrow|明天/.test(s)) return 1;
+    const daysMatch = s.match(/(\d{1,2})\s*(?:дн|day|days|天)/i);
+    if (daysMatch) return Number(daysMatch[1]);
+    return null;
   }
 
   function _sortSellersForMode(sellers, mode) {
@@ -10010,8 +10045,8 @@
           if (ar !== br) return ar - br;
         }
       }
-      const ap = _parsePriceNum(a.seller.price);
-      const bp = _parsePriceNum(b.seller.price);
+      const ap = _parsePriceNum(_sellerPriceText(a.seller));
+      const bp = _parsePriceNum(_sellerPriceText(b.seller));
       if (ap != null || bp != null) {
         if (ap == null) return 1;
         if (bp == null) return -1;
@@ -10026,7 +10061,7 @@
     let minPrice = Infinity;
     let fastestRank = Infinity;
     sellers.forEach((seller) => {
-      const price = _parsePriceNum(seller.price);
+      const price = _parsePriceNum(_sellerPriceText(seller));
       if (price != null && price < minPrice) minPrice = price;
       const rank = _sellerDeliveryRank(seller);
       if (rank != null && rank < fastestRank) fastestRank = rank;
@@ -10043,23 +10078,22 @@
         ? seller.link
         : 'https://www.ozon.ru' + seller.link
       : '';
-    const avatarHtml = seller.avatar
-      ? `<img class="oh-seller-avatar" src="${_escHtml(seller.avatar)}" alt="" loading="lazy" />`
+    // 新 14 字段方案:avatar -> logoImageUrl,rating/reviewsCount/region 已移除
+    const logoUrl = seller.logoImageUrl || '';
+    const avatarHtml = logoUrl
+      ? `<img class="oh-seller-avatar" src="${_escHtml(logoUrl)}" alt="" loading="lazy" />`
       : `<span class="oh-seller-avatar oh-seller-avatar-fallback" style="background:${_sellerColor(seller.name)}">${_escHtml(_sellerInitial(seller.name))}</span>`;
     const nameHtml = sellerUrl
       ? `<a class="oh-seller-name oh-seller-link" href="${_escHtml(sellerUrl)}" target="_blank" rel="noopener">${_escHtml(seller.name || '未知卖家')}</a>`
       : `<span class="oh-seller-name">${_escHtml(seller.name || '未知卖家')}</span>`;
-    const ratingHtml =
-      typeof seller.rating === 'number' ? `<span class="oh-seller-rating">★ ${seller.rating.toFixed(1)}</span>` : '';
-    const reviewsText = _formatSellerReviews(seller.reviewsCount);
-    const reviewsHtml = reviewsText ? `<span class="oh-seller-reviews">${_escHtml(reviewsText)}</span>` : '';
-    const regionHtml = seller.region ? `<span class="oh-seller-region">${_escHtml(seller.region)}</span>` : '';
     const skuHtml = seller.sku ? `<span class="oh-seller-sku">SKU ${_escHtml(seller.sku)}</span>` : '';
-    const priceHtml = seller.price
-      ? `<span class="oh-seller-price${flags.isMinPrice ? ' is-min' : ''}">${_escHtml(seller.price)}${flags.isMinPrice ? ' <span class="oh-seller-tag is-price">\u6700\u4f4e</span>' : ''}</span>`
+    const priceText = _sellerPriceText(seller);
+    const priceHtml = priceText
+      ? `<span class="oh-seller-price${flags.isMinPrice ? ' is-min' : ''}">${_escHtml(priceText)}${flags.isMinPrice ? ' <span class="oh-seller-tag is-price">\u6700\u4f4e</span>' : ''}</span>`
       : `<span class="oh-seller-price oh-seller-price-empty">—</span>`;
-    const deliveryHtml = seller.deliveryText
-      ? `<span class="oh-seller-delivery-main">${_escHtml(seller.deliveryText)}</span>`
+    const deliveryText = _sellerDeliveryText(seller);
+    const deliveryHtml = deliveryText
+      ? `<span class="oh-seller-delivery-main">${_escHtml(deliveryText)}</span>`
       : `<span class="oh-seller-delivery-main is-muted">\u914d\u9001\u4fe1\u606f\u672a\u8fd4\u56de</span>`;
     const fastestTag = flags.isFastest ? `<span class="oh-seller-tag is-delivery">\u6700\u5feb</span>` : '';
     return `
@@ -10067,7 +10101,7 @@
         <div class="oh-seller-cell oh-seller-avatar-cell">${avatarHtml}</div>
         <div class="oh-seller-cell oh-seller-name-cell">
           ${nameHtml}
-          <div class="oh-seller-meta">${ratingHtml}${reviewsHtml}${regionHtml}${skuHtml}</div>
+          <div class="oh-seller-meta">${skuHtml}</div>
         </div>
         <div class="oh-seller-cell oh-seller-price-cell">${priceHtml}</div>
         <div class="oh-seller-cell oh-seller-delivery-cell">
@@ -10923,7 +10957,7 @@
         <div class="ozon-helper-recommendation-tabs">
           <button class="ozon-helper-tab active" data-tab="hot">${window.lucideIcon('flame', 13)} 热卖榜单</button>
           <button class="ozon-helper-tab" data-tab="blue">${window.lucideIcon('gem', 13)} 蓝海商品</button>
-          <button class="ozon-helper-tab" data-tab="china">${window.lucideIcon('flag', 13)} 中国卖家</button>
+          <button class="ozon-helper-tab" data-tab="china">${window.lucideIcon('flag', 13)} 中国大陆卖家</button>
         </div>
         <div class="ozon-helper-recommendation-content">
           <div class="ozon-helper-recommendation-loading">加载中...</div>
@@ -11049,7 +11083,7 @@
         pageType: detail.pageType || '',
         method: detail.method || '',
         companyInfo: detail.companyInfo || null,
-        isChinese: result ? result.isChinese : null,
+        isMainlandChina: result ? result.isMainlandChina : null,
         classifiedBy: result ? result.classifiedBy : null,
       };
       _pendingPdpStoreUpdate = update;

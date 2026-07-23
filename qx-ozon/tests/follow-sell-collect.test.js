@@ -80,15 +80,32 @@ function swParseFollowSellModal(fsResp, fsSku) {
       }
       if (!followSellData) {
         const rawSellers = Array.isArray(wsl?.sellers) ? wsl.sellers : [];
+        // normSeller: 14 字段完整版,与 collect-tab.js / shared-utils.js 对齐
         const normSeller = (item) => {
           if (!item || typeof item !== 'object') return null;
           const txt = (v) =>
             typeof v === 'string' ? v.trim() : v && typeof v === 'object' && v.text ? String(v.text).trim() : '';
+          const str = (v) => (typeof v === 'string' ? v : '');
           const name = txt(item.name) || txt(item.sellerName) || txt(item.seller?.name) || txt(item.title) || '';
           const priceRaw = item.price?.cardPrice?.price ?? item.price?.cardPrice ?? item.price ?? item.finalPrice ?? '';
           const price = txt(priceRaw);
           if (!name && !price) return null;
-          return { name, price, sku: txt(item.sku) || txt(item.id) || txt(item.skuId) };
+          return {
+            sku: txt(item.sku) || txt(item.skuId) || '',
+            id: txt(item.id) || txt(item.sellerId) || '',
+            name,
+            link: str(item.link),
+            credentials: Array.isArray(item.credentials) ? item.credentials.map(String) : [],
+            logoImageUrl: str(item.logoImageUrl),
+            advantages: Array.isArray(item.advantages) ? item.advantages : [],
+            subtitle: txt(item.subtitle),
+            price: item.price || null,
+            coverImage: str(item.coverImage),
+            productLink: str(item.productLink),
+            trackingInfo: item.trackingInfo || null,
+            sellerInfoTracking: item.sellerInfoTracking || null,
+            informationBtnTracking: item.informationBtnTracking || null,
+          };
         };
         const sellers = rawSellers.map(normSeller).filter(Boolean);
         followSellData = { count: rawSellers.length, sellers, source: 'modal' };
@@ -239,7 +256,9 @@ test('fsSku 为空 → 返回 null', () => {
 });
 
 // 1.9 price 字段多种格式 fallback
-test('price 字段 fallback:cardPrice.price / cardPrice / price / finalPrice', () => {
+// 新方案:price 字段保留原始 item.price 对象(便于读取侧自由提取 cardPrice/oldPrice 等)
+// 无 item.price 时为 null(finalPrice/priceText 等不再单独提取到 price 字段)
+test('price 字段:保留原始 item.price 对象,无 item.price 时为 null', () => {
   const resp = {
     ok: true,
     status: 200,
@@ -258,10 +277,94 @@ test('price 字段 fallback:cardPrice.price / cardPrice / price / finalPrice', (
   };
   const result = swParseFollowSellModal(resp, '123');
   assert.strictEqual(result.sellers.length, 4);
-  assert.strictEqual(result.sellers[0].price, '100 ₽');
-  assert.strictEqual(result.sellers[1].price, '200 ₽');
+  // A/B/C 有 item.price,原样保留;D 无 item.price(finalPrice 不再提取到 price 字段)
+  assert.deepStrictEqual(result.sellers[0].price, { cardPrice: { price: '100 ₽' } });
+  assert.deepStrictEqual(result.sellers[1].price, { cardPrice: '200 ₽' });
   assert.strictEqual(result.sellers[2].price, '300 ₽');
-  assert.strictEqual(result.sellers[3].price, '400 ₽');
+  assert.strictEqual(result.sellers[3].price, null);
+});
+
+// 1.10 ★14 字段完整抽取(对齐 hello.json 真实结构)
+test('★14 字段完整抽取:sku/id/name/link/credentials/logoImageUrl/advantages/subtitle/price/coverImage/productLink/trackingInfo/sellerInfoTracking/informationBtnTracking', () => {
+  const resp = {
+    ok: true,
+    status: 200,
+    jsonData: {
+      widgetStates: {
+        'webSellerList-4723017-default-1': JSON.stringify({
+          sellers: [
+            {
+              sku: '4790402820',
+              id: '3308213',
+              name: 'Золотой эталон',
+              link: '/seller/3308213/',
+              credentials: ['Shenzhen Silugou Co., Ltd.', 'Room 102, Urumqi'],
+              logoImageUrl: 'https://cdn1.ozonusercontent.com/logo.png',
+              advantages: [{ key: 'delivery', iconKey: 'iconOrderPlane', contentRs: { headRs: [{ type: 'text', content: 'Доставим 30 июля' }] } }],
+              subtitle: 'Перейти в магазин',
+              price: { cardPrice: { price: '67,28 ¥' } },
+              coverImage: 'https://ir-20.ozonstatic.cn/cover.jpg',
+              productLink: 'https://www.ozon.ru/product/sumka-4790402820/',
+              trackingInfo: { click: { actionType: 'click', key: 'k1' } },
+              sellerInfoTracking: { click: { actionType: 'click', key: 'k2' } },
+              informationBtnTracking: { click: { actionType: 'click', key: 'k3' } },
+            },
+          ],
+        }),
+      },
+    },
+  };
+  const result = swParseFollowSellModal(resp, '4790402820');
+  assert.strictEqual(result.sellers.length, 1);
+  const s = result.sellers[0];
+  // 标识(4)
+  assert.strictEqual(s.sku, '4790402820');
+  assert.strictEqual(s.id, '3308213');
+  assert.strictEqual(s.name, 'Золотой эталон');
+  assert.strictEqual(s.link, '/seller/3308213/');
+  // 店铺资质(2)
+  assert.deepStrictEqual(s.credentials, ['Shenzhen Silugou Co., Ltd.', 'Room 102, Urumqi']);
+  assert.strictEqual(s.logoImageUrl, 'https://cdn1.ozonusercontent.com/logo.png');
+  // 卖点(2)
+  assert.strictEqual(s.advantages.length, 1);
+  assert.strictEqual(s.advantages[0].key, 'delivery');
+  assert.strictEqual(s.subtitle, 'Перейти в магазин');
+  // 商品价格/图(3)
+  assert.deepStrictEqual(s.price, { cardPrice: { price: '67,28 ¥' } });
+  assert.strictEqual(s.coverImage, 'https://ir-20.ozonstatic.cn/cover.jpg');
+  assert.strictEqual(s.productLink, 'https://www.ozon.ru/product/sumka-4790402820/');
+  // 埋点(3)
+  assert.deepStrictEqual(s.trackingInfo, { click: { actionType: 'click', key: 'k1' } });
+  assert.deepStrictEqual(s.sellerInfoTracking, { click: { actionType: 'click', key: 'k2' } });
+  assert.deepStrictEqual(s.informationBtnTracking, { click: { actionType: 'click', key: 'k3' } });
+});
+
+// 1.11 字段缺失时安全降级(null/[] 兜底)
+test('字段缺失安全降级:无 id/credentials/logoImageUrl → 空串/空数组/null', () => {
+  const resp = {
+    ok: true,
+    status: 200,
+    jsonData: {
+      widgetStates: {
+        'webSellerList-1': JSON.stringify({
+          sellers: [{ name: 'Minimal Seller', price: '100 ₽' }],
+        }),
+      },
+    },
+  };
+  const result = swParseFollowSellModal(resp, '1');
+  const s = result.sellers[0];
+  assert.strictEqual(s.sku, '');
+  assert.strictEqual(s.id, '');
+  assert.deepStrictEqual(s.credentials, []);
+  assert.strictEqual(s.logoImageUrl, '');
+  assert.deepStrictEqual(s.advantages, []);
+  assert.strictEqual(s.subtitle, '');
+  assert.strictEqual(s.coverImage, '');
+  assert.strictEqual(s.productLink, '');
+  assert.strictEqual(s.trackingInfo, null);
+  assert.strictEqual(s.sellerInfoTracking, null);
+  assert.strictEqual(s.informationBtnTracking, null);
 });
 
 // ============================================================

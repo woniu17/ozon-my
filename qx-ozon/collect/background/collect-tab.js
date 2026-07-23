@@ -934,36 +934,38 @@
             }
           }
           const rawSellers = Array.isArray(wsl?.sellers) ? wsl.sellers : [];
+          // normSeller: 完整 14 字段对齐 webSellerList widget sellers[i] 原始结构
+          // 移除旧 10 字段(avatar/rating/reviewsCount/region/deliveryText/deliveryRank)
+          // avatar -> logoImageUrl, deliveryText 从 advantages[].contentRs.headRs[].content 提取(由前端读取侧处理)
           const normSeller = (item) => {
             if (!item || typeof item !== 'object') return null;
             const txt = (v) =>
               typeof v === 'string' ? v.trim() : v && typeof v === 'object' && v.text ? String(v.text).trim() : '';
+            const str = (v) => (typeof v === 'string' ? v : '');
             const name = txt(item.name) || txt(item.sellerName) || txt(item.seller?.name) || txt(item.title) || '';
-            const priceRaw =
-              item.price?.cardPrice?.price ?? item.price?.cardPrice ?? item.price ?? item.finalPrice ?? '';
+            const priceRaw = item.price?.cardPrice?.price ?? item.price?.cardPrice ?? item.price ?? item.finalPrice ?? '';
             const price = txt(priceRaw);
             if (!name && !price) return null;
-            const link =
-              (typeof item.productLink === 'string' ? item.productLink : '') ||
-              item.link?.action?.link ||
-              item.link?.link ||
-              item.link ||
-              '';
-            const avatar =
-              (typeof item.avatar === 'string' ? item.avatar : '') || item.avatar?.url || item.logo?.url || '';
-            const rating = item.rating?.totalScore ?? item.rating?.value ?? item.rating ?? item.sellerRating ?? null;
-            const reviewsCount = item.rating?.reviewsCount ?? item.reviewsCount ?? item.reviewCount ?? null;
             return {
+              // 标识
+              sku: txt(item.sku) || txt(item.skuId) || '',
+              id: txt(item.id) || txt(item.sellerId) || '',
               name,
-              price,
-              sku: txt(item.sku) || txt(item.id) || txt(item.skuId),
-              link: typeof link === 'string' ? link : '',
-              avatar: typeof avatar === 'string' ? avatar : '',
-              rating: Number.isFinite(Number(rating)) ? Number(rating) : null,
-              reviewsCount: Number.isFinite(Number(reviewsCount)) ? Number(reviewsCount) : null,
-              region: txt(item.region) || txt(item.location),
-              deliveryText: txt(item.deliveryText) || txt(item.delivery?.text),
-              deliveryRank: null,
+              link: str(item.link),
+              // 店铺资质
+              credentials: Array.isArray(item.credentials) ? item.credentials.map(String) : [],
+              logoImageUrl: str(item.logoImageUrl) || (item.logo?.url ? str(item.logo.url) : ''),
+              // 卖点
+              advantages: Array.isArray(item.advantages) ? item.advantages : [],
+              subtitle: txt(item.subtitle),
+              // 商品价格/图
+              price: item.price || null,
+              coverImage: str(item.coverImage),
+              productLink: str(item.productLink),
+              // 埋点(透传)
+              trackingInfo: item.trackingInfo || null,
+              sellerInfoTracking: item.sellerInfoTracking || null,
+              informationBtnTracking: item.informationBtnTracking || null,
             };
           };
           const sellers = rawSellers.map(normSeller).filter(Boolean);
@@ -1798,11 +1800,11 @@
         const cls = await this.checkStoreClassification(sellerSlug, null, null, sellerId);
         if (cls) {
           storeClassified =
-            cls.isChinese === true ? 'chinese' : cls.isChinese === false ? 'non-chinese' : 'unclassified';
+            cls.isMainlandChina === true ? 'chinese' : cls.isMainlandChina === false ? 'non-chinese' : 'unclassified';
         }
         console.log('[SW autoCollect] Gate0.5 店铺分类:', sku, 'slug=', sellerSlug, 'class=', storeClassified);
-        if (config.onlyChineseStores && cls?.isChinese !== true) {
-          const reason = cls?.isChinese === false ? 'non-chinese-store' : 'unclassified-store';
+        if (config.onlyMainlandChinaStores && cls?.isMainlandChina !== true) {
+          const reason = cls?.isMainlandChina === false ? 'non-chinese-store' : 'unclassified-store';
           // Gate 0.5 跳过分支也调 _writeAutoCollectLog
           this.writeAutoCollectLog({
             sku,

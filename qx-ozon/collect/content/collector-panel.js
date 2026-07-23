@@ -7,7 +7,7 @@
 //       onToggleRunning:        (running) => {},   // 主开关切换
 //       onAutoScrollToggle:     (enabled) => {},   // 自动翻页 on/off
 //       onSalesFilterChange:    (enabled) => {},   // 仅抓有评价
-//       onOnlyChineseStoresChange: (enabled) => {},// 只采集中国店铺
+//       onOnlyMainlandChinaStoresChange: (enabled) => {},// 只采集中国大陆店铺
 //       onFilterOpen:           () => {},          // 智能筛选弹窗打开
 //       onFilterSave:           (state) => {},     // 智能筛选保存
 //       onFilterReset:          () => {},          // 智能筛选重置
@@ -15,7 +15,7 @@
 //     },
 //   });
 //   panel.setRunning(true);
-//   panel.updateStoreDetection({ slug, name, isChinese, classifiedBy });
+//   panel.updateStoreDetection({ slug, name, isMainlandChina, classifiedBy });
 //   panel.toast('提示', 'success', 2000);
 //   panel.destroy();
 //
@@ -122,7 +122,7 @@
         pageType: '',
         method: '',
         companyInfo: null,
-        isChinese: undefined,
+        isMainlandChina: undefined,
         classifiedBy: null,
       };
       this.storeSkuCount = 0; // 店铺 SKU 收集计数(由 ozon-data-panel.js 注入,旧字段保留兼容)
@@ -338,8 +338,8 @@
           : '') +
         '    <div class="qx-c-row">' +
         '      <label class="qx-c-checkbox">' +
-        '        <input type="checkbox" data-act="only-chinese" data-el="only-chinese" />' +
-        '        <span>只采集中国店铺</span>' +
+        '        <input type="checkbox" data-act="only-mainland-china" data-el="only-mainland-china" />' +
+        '        <span>只采集中国大陆店铺</span>' +
         '      </label>' +
         '    </div>' +
         '  </div>' +
@@ -427,7 +427,7 @@
         if (act === 'shallow-toggle' || act === 'deep-toggle') return; // 由 click 处理
         if (act === 'auto-scroll-toggle') return self._onAutoScrollToggle(t.checked);
         if (act === 'sales-filter') return self._onSalesFilterChange(t.checked);
-        if (act === 'only-chinese') return self._onOnlyChineseChange(t.checked);
+        if (act === 'only-mainland-china') return self._onOnlyMainlandChinaChange(t.checked);
       });
 
       // input 委托(价格/评论范围 number 输入,实时持久化 + 通知)
@@ -806,17 +806,17 @@
       return this._loadRange(RATING_RANGE_KEY);
     }
 
-    async _onOnlyChineseChange(enabled) {
+    async _onOnlyMainlandChinaChange(enabled) {
       try {
-        await this._send('autoCollectSetConfig', { config: { onlyChineseStores: enabled } });
-        if (typeof this.callbacks.onOnlyChineseStoresChange === 'function') {
-          this.callbacks.onOnlyChineseStoresChange(enabled);
+        await this._send('autoCollectSetConfig', { config: { onlyMainlandChinaStores: enabled } });
+        if (typeof this.callbacks.onOnlyMainlandChinaStoresChange === 'function') {
+          this.callbacks.onOnlyMainlandChinaStoresChange(enabled);
         }
-        this.toast(enabled ? '已开启只采集中国店铺' : '已关闭只采集中国店铺', 'success', 1500);
+        this.toast(enabled ? '已开启只采集中国大陆店铺' : '已关闭只采集中国大陆店铺', 'success', 1500);
       } catch (err) {
         this.toast(err.message || '操作失败', 'error', 2500);
         // 回滚 checkbox
-        var cb = this._q('only-chinese');
+        var cb = this._q('only-mainland-china');
         if (cb) cb.checked = !enabled;
       }
     }
@@ -875,9 +875,9 @@
       var deepCb = this._q('deep-toggle');
       if (deepCb && deepCb.checked !== this.running) deepCb.checked = this.running;
       // 只采集中国店铺
-      var chineseCb = this._q('only-chinese');
-      if (chineseCb && config.onlyChineseStores !== undefined) {
-        chineseCb.checked = !!config.onlyChineseStores;
+      var chineseCb = this._q('only-mainland-china');
+      if (chineseCb && config.onlyMainlandChinaStores !== undefined) {
+        chineseCb.checked = !!config.onlyMainlandChinaStores;
       }
       // 熔断倒计时
       this._renderCircuitBreaker();

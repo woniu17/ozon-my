@@ -413,17 +413,22 @@ CREATE TABLE IF NOT EXISTS ozon_store_classification (
   sellerId      TEXT NOT NULL,       -- 冗余字段,便于 ORM/查询(= _id)
   sellerSlug    TEXT,                -- 可变(店铺改名时变),仅用于反查/展示
   sellerName    TEXT,
-  isChinese     INTEGER,             -- NULL/0/1
+  isMainlandChina INTEGER,             -- NULL/0/1(中国大陆店铺判定)
   classifiedBy  TEXT,
   classifiedAt  TEXT,
   companyInfo   TEXT,                -- JSON
+  logoImageUrl  TEXT,                -- 店铺 logo URL(从跟卖列表 seller.logoImageUrl 抽取)
   lastSeenAt    TEXT,
   lastSeenUrl   TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_sc_chinese ON ozon_store_classification(isChinese);
+CREATE INDEX IF NOT EXISTS idx_sc_mainland_china ON ozon_store_classification(isMainlandChina);
 CREATE INDEX IF NOT EXISTS idx_sc_name    ON ozon_store_classification(sellerName);
 CREATE INDEX IF NOT EXISTS idx_sc_seen    ON ozon_store_classification(lastSeenAt DESC);
 CREATE INDEX IF NOT EXISTS idx_sc_slug    ON ozon_store_classification(sellerSlug);
+
+-- 幂等迁移:已有库补 logoImageUrl 列(SQLite ALTER TABLE ADD COLUMN 幂等性靠 PRAGMA 检查)
+-- 在应用启动时由 migrate() 函数检测列是否存在后执行
+-- ALTER TABLE ozon_store_classification ADD COLUMN logoImageUrl TEXT;
 
 -- 旧表 _id = sellerSlug 的历史数据迁移到这里(sellerId 为空无法迁移到新表)
 -- 业务上不查询此表,仅保留备查
@@ -432,7 +437,7 @@ CREATE TABLE IF NOT EXISTS ozon_store_classification_legacy (
   sellerSlug    TEXT NOT NULL,
   sellerId      TEXT,                -- 可为空/空串
   sellerName    TEXT,
-  isChinese     INTEGER,
+  isMainlandChina INTEGER,
   classifiedBy  TEXT,
   classifiedAt  TEXT,
   companyInfo   TEXT,
