@@ -24,6 +24,8 @@ const loadingFiltered = ref(false);
 const loadingAvailable = ref(false);
 // 添加对话框
 const addDialogVisible = ref(false);
+// 当前激活的 tab:'filtered' 已过滤类目 | 'available' 已采集商品的类目
+const activeTab = ref('filtered');
 // 添加表单(手动输入)
 const addForm = reactive({
   descriptionCategoryId: '',
@@ -246,14 +248,39 @@ onMounted(() => {
       </button>
     </div>
 
-    <div class="grid-wrap">
-      <!-- 左侧:已过滤的类目列表 -->
-      <div class="card">
+    <div class="tabs-bar">
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'filtered' }"
+        @click="activeTab = 'filtered'"
+      >
+        已过滤类目 ({{ filteredList.length }})
+      </button>
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'available' }"
+        @click="activeTab = 'available'"
+      >
+        已采集商品的类目 ({{ availableList.length }})
+      </button>
+    </div>
+
+    <div class="tab-content">
+      <!-- 已过滤的类目列表 -->
+      <div v-if="activeTab === 'filtered'" class="card">
         <div class="card-header">
           <h3>已过滤类目 ({{ filteredList.length }})</h3>
         </div>
         <div class="table-wrap">
           <table class="data-table">
+            <colgroup>
+              <col style="width: 110px" />
+              <col style="width: 110px" />
+              <col />
+              <col />
+              <col style="width: 120px" />
+              <col style="width: 70px" />
+            </colgroup>
             <thead>
               <tr>
                 <th>描述类目 ID</th>
@@ -283,14 +310,23 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- 右侧:可用类目列表(从已采集商品中提取) -->
-      <div class="card">
+      <!-- 可用类目列表(从已采集商品中提取) -->
+      <div v-else class="card">
         <div class="card-header">
           <h3>已采集商品的类目 ({{ availableList.length }})</h3>
-          <p class="card-sub">点击"类型过滤"快速添加到左侧黑名单</p>
+          <p class="card-sub">点击"类型过滤"快速添加到过滤黑名单</p>
         </div>
         <div class="table-wrap">
           <table class="data-table">
+            <colgroup>
+              <col style="width: 110px" />
+              <col style="width: 110px" />
+              <col />
+              <col />
+              <col style="width: 70px" />
+              <col style="width: 70px" />
+              <col style="width: 80px" />
+            </colgroup>
             <thead>
               <tr>
                 <th>描述类目 ID</th>
@@ -394,7 +430,7 @@ onMounted(() => {
 <style scoped>
 .category-filter-page {
   padding: 16px;
-  max-width: 1600px;
+  max-width: 1000px;
   margin: 0 auto;
 }
 
@@ -422,16 +458,34 @@ onMounted(() => {
   margin-bottom: 16px;
 }
 
-.grid-wrap {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+.tabs-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  margin-bottom: 16px;
 }
 
-@media (max-width: 1100px) {
-  .grid-wrap {
-    grid-template-columns: 1fr;
-  }
+.tab-btn {
+  padding: 10px 20px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary, #111827);
+}
+
+.tab-btn.active {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+  font-weight: 600;
 }
 
 .card {
@@ -468,14 +522,17 @@ onMounted(() => {
   width: 100%;
   font-size: 12px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 .data-table th,
 .data-table td {
-  padding: 8px 12px;
+  padding: 6px 8px;
   text-align: left;
   border-bottom: 1px solid var(--border, #f3f4f6);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .data-table th {
