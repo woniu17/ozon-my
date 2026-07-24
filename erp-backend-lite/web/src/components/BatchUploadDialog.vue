@@ -17,6 +17,9 @@ const router = useRouter();
 const storesStore = useStoresStore();
 const { show } = useToast();
 
+// localStorage key:记住上次选中的店铺(跨会话持久化)
+const SELECTED_STORE_IDS_KEY = 'qx-batch-upload-selected-store-ids';
+
 // ── 配置表单 ───────────────────────────────────────────────
 const form = reactive({
   storeIds: [],            // 多选店铺
@@ -37,6 +40,16 @@ const preview = ref(null);
 onMounted(async () => {
   try {
     await storesStore.load();
+    // 从 localStorage 恢复上次选中的店铺(过滤掉已不存在的店铺 ID)
+    try {
+      const saved = JSON.parse(localStorage.getItem(SELECTED_STORE_IDS_KEY) || '[]');
+      if (Array.isArray(saved) && saved.length) {
+        form.storeIds = saved.filter((id) => storesStore.list.some((s) => s.id === id));
+      }
+    } catch (e) {
+      // 静默失败:localStorage 数据损坏时回退到空选择
+      console.warn('[BatchUploadDialog] 恢复上次店铺失败:', e?.message);
+    }
   } catch (err) {
     show(err.message || '店铺列表加载失败', 'error');
   }
@@ -61,6 +74,12 @@ function toggleStore(id) {
   const i = form.storeIds.indexOf(id);
   if (i >= 0) form.storeIds.splice(i, 1);
   else form.storeIds.push(id);
+  // 持久化:记住上次选中的店铺,下次打开弹窗自动恢复
+  try {
+    localStorage.setItem(SELECTED_STORE_IDS_KEY, JSON.stringify(form.storeIds));
+  } catch (e) {
+    // 静默失败:隐私模式或存储已满时不影响本次操作
+  }
 }
 
 // ── 预览分配 ───────────────────────────────────────────────

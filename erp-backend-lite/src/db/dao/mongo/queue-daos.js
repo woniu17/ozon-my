@@ -34,6 +34,17 @@ export const collectQueueTasksDao = {
     );
   },
 
+  /** 按错误类型计数(可选时间窗)
+   *  按 lastError.type 嵌套字段过滤(失败/反爬/partial/internal/STALE 等都走 pending 重试,
+   *  状态值无法区分,必须查 lastError.type)。since 省略时统计全量(当前队列中正在重试的)。
+   */
+  async countByErrorType(type, since) {
+    const col = await cols.collectQueueTasks();
+    const query = { 'lastError.type': type };
+    if (since) query.finishedAt = { $gte: since };
+    return col.countDocuments(query);
+  },
+
   /** 读取 __snapshot__ 文档(全字段,与 sqlite 实现对齐) */
   async findSnapshot() {
     const col = await cols.collectQueueTasks();

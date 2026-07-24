@@ -3755,6 +3755,9 @@ try {
                 (byStatus.success || 0) + (byStatus.skipped || 0),
               // 各状态明细(供监控页"失败/反爬"等格使用)
               byStatus,
+              // 今日失败/反爬等明细(按 lastError.type 过滤,因为 failed/antibot 都回 pending
+              // 重试,status 列无法区分;原 byStatus.failed/antibot 恒为 0,改用 byErrorType)
+              byErrorType: _cmsStats?.byErrorType || {},
               // 今日完成明细(供监控页"今日完成"格使用)
               successToday: _cmsStats?.successToday || 0,
               skippedToday: _cmsStats?.skippedToday || 0,

@@ -463,9 +463,16 @@
       statPaused.innerHTML = '<span style="color:var(--success-fg)">运行中</span>';
     }
 
-    // 失败 / 反爬:byStatus.failed / byStatus.antibot(>0 红色高亮)
-    const failedCount = byStatus.failed || 0;
-    const antibotCount = byStatus.antibot || 0;
+    // 失败 / 反爬:按 lastError.type 统计当前队列中正在重试的任务
+    // _doAutoCollect 的失败统一返回 status='partial'(从不返回 'failed'),
+    // 所以"失败"= partial + failed + internal + STALE(所有非 antibot 的错误类型)
+    const byErrorType = d.byErrorType || {};
+    const failedCount =
+      (byErrorType.partial || 0) +
+      (byErrorType.failed || 0) +
+      (byErrorType.internal || 0) +
+      (byErrorType.STALE || 0);
+    const antibotCount = byErrorType.antibot || 0;
     statFailedAntibot.textContent = `${failedCount} / ${antibotCount}`;
     statFailedAntibot.style.color =
       failedCount > 0 || antibotCount > 0 ? 'var(--error-fg)' : 'var(--ink-1)';

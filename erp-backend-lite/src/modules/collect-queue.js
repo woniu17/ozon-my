@@ -53,6 +53,18 @@ router.get('/admin/api/collect-queue/stats', async (req, res, next) => {
       daos.collectQueueTasksDao.countTodayByStatus('skipped', todayStart),
     ]);
 
+    // 失败/反爬统计(按 lastError.type 过滤,不限时间)
+    // failed/antibot/partial/internal 都回 pending 重试,status 无法区分,必须查 lastError.type。
+    // 不限时间:反映"当前队列中有多少任务因失败/反爬正在重试"(成功重试后 lastError 会被清空)。
+    // byErrorType 供监控页"失败/反爬"格使用(原 byStatus.failed/antibot 恒为 0,已废弃)。
+    const ERROR_TYPES = ['failed', 'antibot', 'partial', 'internal', 'STALE'];
+    const errorCounts = await Promise.all(
+      ERROR_TYPES.map((t) => daos.collectQueueTasksDao.countByErrorType(t))
+    );
+    const byErrorType = Object.fromEntries(
+      ERROR_TYPES.map((t, i) => [t, errorCounts[i] || 0])
+    );
+
     // 推导熔断:最近 10 分钟内有 antibot 的 partial 任务则认为熔断中
     // (antibot 不再是终态,SW 会把 antibot 任务回 pending 重试,lastError.type 统一为小写 'antibot')
     const latestAntibot = await daos.collectQueueTasksDao.findLatestAntibotBlocked(
@@ -73,6 +85,9 @@ router.get('/admin/api/collect-queue/stats', async (req, res, next) => {
     return res.json(
       ok({
         byStatus,
+        // 今日失败/反爬等明细(按 lastError.type 过滤,因为 failed/antibot 都回 pending 重试,
+        // status 列无法区分;原 byStatus.failed/antibot 恒为 0,已废弃)
+        byErrorType,
         successToday,
         skippedToday,
         partialToday: 0, // 已废弃:SW 从不写 partial 状态,保留字段兼容前端

@@ -83,6 +83,29 @@ export const collectQueueTasksDao = {
     };
   },
 
+  /** 按错误类型计数(可选时间窗)
+   *  按 lastError.type 嵌套字段过滤(失败/反爬/partial/internal/STALE 等都走 pending 重试,
+   *  状态值无法区分,必须查 lastError.type)。since 省略时统计全量(当前队列中正在重试的)。
+   */
+  async countByErrorType(type, since) {
+    if (since) {
+      const sinceIso = new Date(since).toISOString();
+      return db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM collect_queue_tasks
+           WHERE json_extract(lastError, '$.type') = ?
+             AND finishedAt >= ?`
+        )
+        .get(type, sinceIso).n;
+    }
+    return db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM collect_queue_tasks
+         WHERE json_extract(lastError, '$.type') = ?`
+      )
+      .get(type).n;
+  },
+
   /** 读取快照(独立单行表) */
   async findSnapshot() {
     const row = db

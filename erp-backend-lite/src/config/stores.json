@@ -34,5 +34,44 @@
       "apiKey": "b61af8bf-e14d-4ba9-9004-33a40c685747"
     },
     "credentials_verified": true
+  },
+  {
+    "id": "store-yql04-534363",
+    "name": "YQL04",
+    "company_id": "4173939",
+    "warehouse_id": "1020005008463290",
+    "currency_code": "CNY",
+    "link": "",
+    "sync_credentials": {
+      "clientId": "4173939",
+      "apiKey": "ff3694d2-8d10-486c-b424-d51afec0fcc4"
+    },
+    "credentials_verified": true
+  },
+  {
+    "id": "store-yql05-e3ec37",
+    "name": "YQL05",
+    "company_id": "4173989",
+    "warehouse_id": "1020005008450510",
+    "currency_code": "CNY",
+    "link": "",
+    "sync_credentials": {
+      "clientId": "4173989",
+      "apiKey": "e331e231-085f-494f-82ec-15da999ec3a4"
+    },
+    "credentials_verified": true
+  },
+  {
+    "id": "store-yql06-5f70aa",
+    "name": "YQL06",
+    "company_id": "4174037",
+    "warehouse_id": "1020005008464080",
+    "currency_code": "CNY",
+    "link": "",
+    "sync_credentials": {
+      "clientId": "4174037",
+      "apiKey": "bc1b22d9-2f94-44d2-b0dc-71799646b681"
+    },
+    "credentials_verified": true
   }
 ]

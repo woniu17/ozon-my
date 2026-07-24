@@ -187,8 +187,44 @@
    *   安全性:path 来自 Ozon 自己返回的 nextPage 字段,格式可控,
    *   不会包含 # 或其他会破坏顶层 URL 结构的字符。
    */
+  /**
+   * 发送前重写 path 的 query 参数:
+   *   1. 去掉 sorting 参数,然后加入 sorting=discount(强制按折扣排序)
+   *   2. 判断 __rr 参数,有的话去掉(避免 Ozon 反爬会话参数影响分页结果)
+   *
+   * 实现说明:使用字符串正则而非 URLSearchParams,
+   * 以保留原 path 中其他参数(如 paginator_token)的字面量编码不被 re-encode。
+   *
+   * @param {string} path - 形如 /seller/foo/?layout_page_index=2&page=2&sorting=rating&__rr=xxx
+   * @returns {string} 重写后的 path
+   */
+  function _rewritePath(path) {
+    if (!path) return path;
+    const qIdx = path.indexOf('?');
+    if (qIdx < 0) {
+      // 无 query:直接追加 sorting=discount
+      return path + '?sorting=discount';
+    }
+    const pathname = path.slice(0, qIdx);
+    let search = path.slice(qIdx + 1);
+    // 1. 去掉 sorting 参数(可能有多个,全部移除)
+    search = search.replace(/(^|&)sorting=[^&]*/g, '').replace(/^&/, '');
+    // 2. 判断并去掉 __rr 参数(若存在)
+    search = search.replace(/(^|&)__rr=[^&]*/g, '').replace(/^&/, '');
+    // 3. 加入 sorting=discount(放在最前)
+    search = search ? 'sorting=discount&' + search : 'sorting=discount';
+    return pathname + '?' + search;
+  }
+
   async function _fetchEntryPage(path, timeoutMs) {
-    const url = ENTRYPOINT_API_BASE + path;
+    // 发送前重写 path 的 query 参数:
+    //   - 去掉 sorting,加入 sorting=discount(强制按折扣排序)
+    //   - 去掉 __rr(若存在)
+    const rewritten = _rewritePath(path);
+    if (rewritten !== path) {
+      console.log('[ApiScroller] rewrite path:', path, '→', rewritten);
+    }
+    const url = ENTRYPOINT_API_BASE + rewritten;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
