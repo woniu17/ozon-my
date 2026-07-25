@@ -8,6 +8,7 @@ import { Router } from 'express';
 import { db } from '../db/index.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { ok } from '../utils/response.js';
+import { invalidateTemplateConfigCache } from '../services/listing-builder.js';
 
 const router = Router();
 
@@ -320,6 +321,8 @@ router.put('/admin/api/listing-templates/:id', (req, res, next) => {
       db.prepare(`UPDATE listing_templates SET is_default=0 WHERE id != ?`).run(id);
       db.prepare(`UPDATE listing_templates SET is_default=1 WHERE id=?`).run(id);
     }
+    // 模板被修改:清空内存缓存(避免后续 buildListingMessage 用旧配置算价)
+    invalidateTemplateConfigCache(id);
     res.json(ok({ updated: true, id }));
   } catch (e) {
     next(e);
@@ -337,6 +340,7 @@ router.delete('/admin/api/listing-templates/:id', (req, res, next) => {
       return next(new ApiError(ErrorCode.VALIDATION_ERROR, '内置模板不可删除'));
     }
     db.prepare(`DELETE FROM listing_templates WHERE id=?`).run(id);
+    invalidateTemplateConfigCache(id);
     res.json(ok({ deleted: true, id }));
   } catch (e) {
     next(e);

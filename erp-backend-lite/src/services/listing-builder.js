@@ -109,10 +109,67 @@ export function saveOpiResponse(localTaskId, storeId, response) {
   }
 }
 
+// ── 价格策略:从上架模板计算售价/划线价/最低价 ───────────────
+// 对齐 Preview.vue salePrice/oldPrice/minPrice computed 公式:
+//   售价   = originalPrice × salePriceA% + salePriceB
+//   划线价 = 售价 × oldPriceA%
+//   最低价 = 售价 − minPriceB
+// 任一参数缺失则对应字段返回 null(不覆盖)
+// originalPrice 取缓存合成的 item.price(即 detailData.price || cardData.price)
+function round2(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+function computePricesFromTemplate(originalPrice, tplCfg) {
+  const orig = Number(originalPrice);
+  if (!isFinite(orig) || orig <= 0) return { salePrice: null, oldPrice: null, minPrice: null };
+  const sa = Number(tplCfg?.salePriceA);
+  const sb = Number(tplCfg?.salePriceB);
+  const oa = Number(tplCfg?.oldPriceA);
+  const mb = Number(tplCfg?.minPriceB);
+  let salePrice = null;
+  let oldPrice = null;
+  let minPrice = null;
+  if (isFinite(sa) && isFinite(sb)) {
+    salePrice = round2(orig * (sa / 100) + sb);
+    if (isFinite(oa)) oldPrice = round2(salePrice * (oa / 100));
+    if (isFinite(mb)) minPrice = round2(salePrice - mb);
+  }
+  return { salePrice, oldPrice, minPrice };
+}
+
+// 按 templateId 读取 listing_templates.config_json(内存缓存,避免每次上架都查库)
+const _templateConfigCache = new Map();
+function getTemplateConfig(templateId) {
+  const id = Number(templateId);
+  if (!id) return null;
+  if (_templateConfigCache.has(id)) return _templateConfigCache.get(id);
+  let cfg = null;
+  try {
+    const row = db.prepare(`SELECT config_json FROM listing_templates WHERE id=?`).get(id);
+    cfg = row?.config_json ? JSON.parse(row.config_json) : null;
+  } catch (e) {
+    logger.warn({ templateId: id, err: e.message }, 'getTemplateConfig 读取失败');
+  }
+  _templateConfigCache.set(id, cfg);
+  return cfg;
+}
+
+// 模板被修改/删除时调用,清空对应缓存(传 null/undefined 清空全部)
+export function invalidateTemplateConfigCache(templateId) {
+  if (templateId == null) {
+    _templateConfigCache.clear();
+    return;
+  }
+  _templateConfigCache.delete(Number(templateId));
+}
+
 // ── 从 SKU 构建上架 message ─────────────────────────────────
 // 对齐 Preview.vue onSubmit 的改造逻辑:
 //   1. 从缓存组装完整 item(buildSynthesizedFromCache)
 //   2. 覆盖 price/old_price/min_price
+//      - options 显式传入优先(预览页用户手填值)
+//      - 否则按 templateId 读取模板配置自动算价(对齐 Preview.vue computed)
 //   3. 注入 OPI 强制字段:offer_id(格式 {SKU}-{mmdd}-qx)、currency_code、vat
 //   4. 强制注入 _forcedAttributes:品牌(85)=无品牌、卖家代码(9024)=Offer ID、型号名称(9048)=时间戳36进制
 //
@@ -137,10 +194,47 @@ export async function buildListingMessage(sku, storeId, options = {}) {
   // 深拷贝避免污染缓存合成结果
   const item = JSON.parse(JSON.stringify(synth.item));
 
-  // 覆盖价格
-  if (salePrice != null) item.price = String(salePrice);
-  if (oldPrice != null) item.old_price = String(oldPrice);
-  if (minPrice != null) item.min_price = String(minPrice);
+  // 覆盖价格:
+  //   - 显式传入优先(预览页用户手填值,批量均衡上架不传则走模板自动算价)
+  //   - 缺失字段按 templateId 模板公式补齐(对齐 Preview.vue computed)
+  let finalSalePrice = salePrice;
+  let finalOldPrice = oldPrice;
+  let finalMinPrice = minPrice;
+  if (
+    templateId &&
+    (finalSalePrice == null || finalOldPrice == null || finalMinPrice == null)
+  ) {
+    const tplCfg = getTemplateConfig(templateId);
+    if (tplCfg) {
+      const computed = computePricesFromTemplate(item.price, tplCfg);
+      if (finalSalePrice == null && computed.salePrice != null) finalSalePrice = computed.salePrice;
+      if (finalOldPrice == null && computed.oldPrice != null) finalOldPrice = computed.oldPrice;
+      if (finalMinPrice == null && computed.minPrice != null) finalMinPrice = computed.minPrice;
+    }
+  }
+  if (finalSalePrice != null) item.price = String(finalSalePrice);
+  if (finalOldPrice != null) item.old_price = String(finalOldPrice);
+  if (finalMinPrice != null) item.min_price = String(finalMinPrice);
+
+  // 图片顺序策略(对齐 Preview.vue reshuffle):
+  //   - shuffle_non_primary: 主图(default:true)位置不变,其余图片 Fisher-Yates 随机打乱
+  //   - keep / 其它: 保持原序
+  // 显式 options.imageOrder 优先;否则按 templateId 读模板配置
+  const imageOrder =
+    options.imageOrder || (templateId ? getTemplateConfig(templateId)?.imageOrder : null) || 'keep';
+  if (imageOrder === 'shuffle_non_primary' && Array.isArray(item.images) && item.images.length > 2) {
+    const primaryIdx = item.images.findIndex((im) => im && im.default);
+    if (primaryIdx >= 0) {
+      const primary = item.images[primaryIdx];
+      const rest = item.images.filter((_, i) => i !== primaryIdx);
+      // Fisher-Yates 洗牌(每次上架独立随机,对齐 Preview.vue reshuffle 用 Math.random)
+      for (let i = rest.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [rest[i], rest[j]] = [rest[j], rest[i]];
+      }
+      item.images = [primary, ...rest];
+    }
+  }
 
   // OPI 强制字段:offer_id(格式 {SKU}-{mmdd}-qx)、currency_code、vat
   const today = new Date();
