@@ -571,6 +571,7 @@
             price: info.price != null ? Number(info.price) : null,
             image: info.image || '',
             ratingCount: info.ratingCount ?? null,
+            source: 'dom',
           },
         });
       } catch {
@@ -1431,6 +1432,7 @@
                     price: card.price != null ? Number(card.price) : null,
                     image: card.imageUrl || '',
                     ratingCount: card.ratingCount ?? null,
+                    source: 'api',
                   },
                 });
               } catch {

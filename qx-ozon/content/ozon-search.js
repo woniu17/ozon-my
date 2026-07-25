@@ -241,6 +241,8 @@
             name: info.name || '',
             price: info.price != null ? Number(info.price) : null,
             image: info.image || '',
+            ratingCount: info.ratingCount ?? null,
+            source: 'dom',
           },
         });
       } catch {

@@ -497,7 +497,7 @@ async function loadStoreClassifications() {
     const data = await getStoreClassificationList({
       isMainlandChina: storeClassFilters.isMainlandChina,
       keyword: storeClassFilters.keyword.trim(),
-      page: storeClassPager.current,
+      currentPage: storeClassPager.current,
       pageSize: storeClassPager.pageSize,
       sortBy: storeClassFilters.sortBy,
     });

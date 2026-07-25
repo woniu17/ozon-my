@@ -120,9 +120,14 @@ export const indexDao = {
     const priceValue = parsePriceValue(price);
     const primaryImage = cardData?.image || detailData?.images?.[0] || '';
     const url = cardData?.url || '';
+    // rating_count fallback 链:
+    //   1. cardData.ratingCount (DOM/API card 采集时写入,2386/2425 缺失)
+    //   2. detailData.reviewCount (detail 步骤从 JSON-LD 抓取,98.8% 命中)
     const ratingCount = Number.isFinite(Number(cardData?.ratingCount))
       ? Number(cardData?.ratingCount)
-      : null;
+      : Number.isFinite(Number(detailData?.reviewCount))
+        ? Number(detailData?.reviewCount)
+        : null;
     const hasVideo = rmData?.mp4 ? 1 : 0;
     // has_rich_content:richMedia.data.richContent(富内容 11254)有内容则 1
     // 不用 richContentHasText(语义过严),只要字符串非空就算"有富内容"
