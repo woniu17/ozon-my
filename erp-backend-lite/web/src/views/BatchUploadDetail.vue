@@ -142,8 +142,26 @@ function storeName(storeId) {
 
 function fmtTime(t) {
   if (!t) return '—';
-  const s = String(t).replace('T', ' ').slice(0, 19);
-  return s;
+  const s = String(t).trim();
+  if (!s) return '—';
+  // 后端 SQLite datetime('now') 存储 UTC 时间,格式 'YYYY-MM-DD HH:MM:SS'(无时区后缀)
+  // 需补 Z 后再解析,否则 new Date 按本地时区解析导致偏移
+  let d;
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) {
+    d = new Date(s); // 已带时区(Z 或 +08:00),直接解析
+  } else {
+    d = new Date(s.replace(' ', 'T') + 'Z'); // 无时区,视为 UTC
+  }
+  if (isNaN(d.getTime())) return s; // 解析失败,返回原值
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    d.getFullYear() + '-' +
+    pad(d.getMonth() + 1) + '-' +
+    pad(d.getDate()) + ' ' +
+    pad(d.getHours()) + ':' +
+    pad(d.getMinutes()) + ':' +
+    pad(d.getSeconds())
+  );
 }
 
 // 批次级状态徽章

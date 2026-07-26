@@ -12,6 +12,7 @@ import { useToast } from '../components/useToast.js';
 import AppPager from '../components/AppPager.vue';
 import ImageLightbox from '../components/ImageLightbox.vue';
 import BatchUploadDialog from '../components/BatchUploadDialog.vue';
+import AutoPickBatchDialog from '../components/AutoPickBatchDialog.vue';
 
 const router = useRouter();
 const { show } = useToast();
@@ -20,6 +21,12 @@ const { show } = useToast();
 // ref(new Set()) 在 Vue 3.4+ 中,Set 会被 reactive 代理,.add/.delete/.clear/.has 均触发响应式
 const selectedSkus = ref(new Set());
 const batchDialogVisible = ref(false);
+
+// ── 按筛选条件自动选取 + 批量均衡上架 ───────────────────────
+const autoPickDialogVisible = ref(false);
+function openAutoPickDialog() {
+  autoPickDialogVisible.value = true;
+}
 
 function isSkuSelected(sku) {
   return !!sku && selectedSkus.value.has(sku);
@@ -356,9 +363,18 @@ onMounted(() => {
   <div>
     <div class="toolbar">
       <h2>采集箱</h2>
-      <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
-        {{ state.loading ? '刷新中...' : '刷新' }}
-      </button>
+      <div class="toolbar-actions">
+        <button
+          class="btn btn-primary"
+          @click="openAutoPickDialog"
+          title="按当前筛选条件自动选取 N 个商品,均衡分配到目标店铺上架"
+        >
+          按筛选自动上架
+        </button>
+        <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
+          {{ state.loading ? '刷新中...' : '刷新' }}
+        </button>
+      </div>
     </div>
 
     <div class="filter-bar">
@@ -579,6 +595,13 @@ onMounted(() => {
       :skus="[...selectedSkus]"
       @close="batchDialogVisible = false"
     />
+
+    <!-- 按筛选条件自动选取 + 批量均衡上架弹窗 -->
+    <AutoPickBatchDialog
+      v-if="autoPickDialogVisible"
+      :filters="state.filters"
+      @close="autoPickDialogVisible = false"
+    />
   </div>
 </template>
 
@@ -592,6 +615,11 @@ onMounted(() => {
 .toolbar h2 {
   margin: 0;
   font-size: 18px;
+}
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 .filter-bar {
   display: flex;

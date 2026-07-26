@@ -13,9 +13,13 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { ok } from '../utils/response.js';
-import { distributeSkus, summarizeDistribution } from '../services/batch-distributor.js';
+import { distributeSkus, distributeSkusByStore, summarizeDistribution, autoPickBySeller } from '../services/batch-distributor.js';
+import { getDaos } from '../db/adapter.js';
 
 const router = Router();
+
+// DAO 单例(顶层 await:启动时即建立连接,失败立即可见)
+const daos = await getDaos();
 
 function parseJson(value) {
   if (value == null) return null;
@@ -99,6 +103,126 @@ function fetchSkuInfo(skus) {
   }
   return map;
 }
+
+// ── 按筛选条件自动选取 + 预览分配(不落库) ───────────────────
+// body: {
+//   filters: { keyword, sellerId, unlisted, hasComments, hasVideo, hasRichContent,
+//              priceMin, priceMax, minCacheHits, excludeFilteredCategories },
+//   perStoreCount: number, — 每家目标店铺上架数量 M(总选取数 N = M × storeIds.length)
+//   storeIds: string[],    — 目标上架店铺
+//   config?: { templateId, defaultStock, ... },
+//   speedConfig?: { intervalSec, onFailure }
+// }
+// 返回: { assignments, summary, skipped, pickInfo, config, speedConfig }
+//   assignments: [{sku, sellerId, targetStoreId, seq, price, ratingCount, name, primaryImage}]
+//   pickInfo: { perStoreCount, requestedCount, actualPicked, totalAvailable, totalSellers,
+//               insufficient, bySellerCount, eligibleCount, skippedCount }
+router.post('/admin/api/batch-upload/auto-pick', async (req, res, next) => {
+  try {
+    const { filters = {}, perStoreCount, storeIds, config = {}, speedConfig = {} } = req.body || {};
+    const M = Math.max(0, Math.floor(Number(perStoreCount) || 0));
+    if (M <= 0) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'perStoreCount 必填且为正整数'));
+    }
+    if (!Array.isArray(storeIds) || storeIds.length === 0) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'storeIds 必填且非空'));
+    }
+    // 总选取数 = 每家店铺数量 × 目标店铺数
+    const N = M * storeIds.length;
+
+    // 解析筛选条件(与 collect-box-v2/from-cache 路由一致)
+    const filterOpts = {
+      keyword: String(filters.keyword || '').trim(),
+      sellerId: String(filters.sellerId || '').trim(),
+      sellerSlug: String(filters.sellerSlug || '').trim(),
+      unlisted: filters.unlisted === '1' || filters.unlisted === 'true',
+      hasComments: filters.hasComments === '1' || filters.hasComments === 'true',
+      hasVideo: filters.hasVideo === '1' || filters.hasVideo === 'true',
+      hasRichContent: filters.hasRichContent === '1' || filters.hasRichContent === 'true',
+      priceMin: Number(filters.priceMin),
+      priceMax: Number(filters.priceMax),
+      minCacheHits: Math.max(0, Math.min(3, Number(filters.minCacheHits) || 0)),
+      excludeFilteredCategories:
+        filters.excludeFilteredCategories === '1' || filters.excludeFilteredCategories === 'true',
+    };
+
+    // 拉取所有候选 SKU(按筛选条件,已按 last_fetched_at DESC 排序)
+    const candidates = await daos.indexDao.findListForAutoPick(filterOpts);
+
+    // 门槛校验:过滤掉 LISTED 和 INSUFFICIENT_DATA(无法上架)
+    // 注:即使筛选条件没勾 unlisted/fullData,auto-pick 也强制排除(无法上架的 SKU)
+    const eligible = [];
+    const skipped = [];
+    for (const c of candidates) {
+      if (c.listed) {
+        skipped.push({ sku: c.sku, reason: 'LISTED', message: '已跟卖,自动跳过' });
+        continue;
+      }
+      if (!c.cacheHits.dom || !c.cacheHits.attribute || !c.cacheHits.richMedia) {
+        skipped.push({
+          sku: c.sku,
+          reason: 'INSUFFICIENT_DATA',
+          message: `数据不完整(dom=${c.cacheHits.dom}, attribute=${c.cacheHits.attribute}, richMedia=${c.cacheHits.richMedia})`,
+        });
+        continue;
+      }
+      eligible.push(c);
+    }
+
+    // 按来源卖家均衡选取 N 个(差额均摊给有富余的卖家)
+    const pickResult = autoPickBySeller(eligible, N);
+
+    // 把选出的 SKU 精确均衡分配到目标店铺(每家 M 个,同源 SKU 尽量散到不同店铺)
+    // 注:用 distributeSkusByStore 而非 distributeSkus,保证每家店铺精确 M 个(当 N = M × storeCount)
+    const assignments = distributeSkusByStore(
+      pickResult.picked.map((p) => ({ sku: p.sku, sellerId: p.sellerId })),
+      storeIds,
+      M
+    );
+
+    // 把 price/ratingCount/name 等展示字段合并到 assignments(便于前端预览)
+    const pickedMap = new Map(pickResult.picked.map((p) => [p.sku, p]));
+    const assignmentsWithInfo = assignments.map((a) => {
+      const info = pickedMap.get(a.sku) || {};
+      return {
+        sku: a.sku,
+        sellerId: a.sellerId,
+        targetStoreId: a.targetStoreId,
+        seq: a.seq,
+        price: info.price ?? '',
+        ratingCount: info.ratingCount ?? null,
+        name: info.name || '',
+        primaryImage: info.primaryImage || '',
+      };
+    });
+
+    const summary = summarizeDistribution(assignments, storeIds);
+
+    res.json(
+      ok({
+        assignments: assignmentsWithInfo,
+        summary,
+        skipped,
+        pickInfo: {
+          perStoreCount: M,
+          storeCount: storeIds.length,
+          requestedCount: pickResult.requestedCount,
+          actualPicked: pickResult.actualPicked,
+          totalAvailable: pickResult.totalAvailable,
+          totalSellers: pickResult.totalSellers,
+          insufficient: pickResult.insufficient,
+          bySellerCount: pickResult.bySellerCount,
+          eligibleCount: eligible.length,
+          skippedCount: skipped.length,
+        },
+        config,
+        speedConfig,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
 
 // ── 预览分配(不落库) ───────────────────────────────────────
 // body: { skus: string[], storeIds: string[], config?: {templateId, defaultStock, ...}, speedConfig?: {intervalSec, onFailure} }

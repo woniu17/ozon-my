@@ -11,6 +11,20 @@ export function previewBatchUpload(data) {
   return request.post('/admin/api/batch-upload/preview', data);
 }
 
+// 按筛选条件自动选取 + 预览分配(不落库)
+// data: { filters, perStoreCount, storeIds, config?, speedConfig? }
+//   filters: 与 collect-box-v2/from-cache 一致的筛选条件
+//   perStoreCount: 每家目标店铺上架数量 M(总选取数 N = M × storeIds.length)
+// 返回:{
+//   assignments:[{sku,sellerId,targetStoreId,seq,price,ratingCount,name,primaryImage}],
+//   summary, skipped, pickInfo, config, speedConfig
+// }
+// pickInfo: { perStoreCount, storeCount, requestedCount, actualPicked, totalAvailable,
+//             totalSellers, insufficient, bySellerCount, eligibleCount, skippedCount }
+export function autoPickBatchUpload(data) {
+  return request.post('/admin/api/batch-upload/auto-pick', data);
+}
+
 // 创建批次(立即执行)
 // data: { skus, storeIds, name?, config?, speedConfig?, assignments? }
 // 返回:批次对象(rowToBatch)

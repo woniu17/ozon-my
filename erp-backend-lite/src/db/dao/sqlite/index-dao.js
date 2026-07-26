@@ -47,6 +47,84 @@ function fts5Escape(keyword) {
     .join(' ');
 }
 
+// 构造列表查询的 WHERE 子句 + 参数(供 findList / findListForAutoPick 复用)
+// 返回 { where: string[], params: any[] }
+function buildFilterWhere(opts) {
+  const {
+    keyword,
+    sellerId,
+    sellerSlug,
+    unlisted,
+    hasComments,
+    hasVideo,
+    hasRichContent,
+    priceMin,
+    priceMax,
+    minCacheHits,
+    excludeFilteredCategories,
+  } = opts;
+  const where = [];
+  const params = [];
+  // 关键词搜索:优先 FTS5(走倒排索引),fallback 到 LIKE(FTS5 表为空或查询失败时)
+  if (keyword) {
+    const ftsExpr = fts5Escape(keyword);
+    if (ftsExpr) {
+      where.push('sku IN (SELECT sku FROM ozon_cache_index_fts WHERE ozon_cache_index_fts MATCH ?)');
+      params.push(ftsExpr);
+    } else {
+      // FTS5 转义后为空(纯特殊字符),退化为 LIKE
+      where.push('searchable_text LIKE ? COLLATE NOCASE');
+      params.push(`%${keyword}%`);
+    }
+  }
+  // 店铺过滤:sellerId 优先(稳定主键),sellerSlug 兼容
+  if (sellerId) {
+    where.push('seller_id = ?');
+    params.push(sellerId);
+  } else if (sellerSlug) {
+    where.push('seller_slug = ?');
+    params.push(sellerSlug);
+  }
+  if (unlisted) {
+    where.push('listed = 0');
+  }
+  if (hasComments) {
+    where.push('rating_count > 0');
+  }
+  if (hasVideo) {
+    where.push('has_video = 1');
+  }
+  if (hasRichContent) {
+    where.push('has_rich_content = 1');
+  }
+  // 价格范围:走 price_value(REAL 列,有 idx_ci_price_value 索引)
+  if (Number.isFinite(Number(priceMin))) {
+    where.push('price_value IS NOT NULL AND price_value >= ?');
+    params.push(Number(priceMin));
+  }
+  if (Number.isFinite(Number(priceMax))) {
+    where.push('price_value IS NOT NULL AND price_value <= ?');
+    params.push(Number(priceMax));
+  }
+  if (Number.isFinite(Number(minCacheHits)) && Number(minCacheHits) > 0) {
+    // 数据完整 = 3 类合并缓存都有(dom + attribute + richMedia)
+    where.push('((CASE WHEN card_hit=1 OR detail_hit=1 THEN 1 ELSE 0 END) + ' +
+                '(CASE WHEN search_hit=1 AND bundle_hit=1 THEN 1 ELSE 0 END) + ' +
+                '(CASE WHEN rich_media_hit=1 THEN 1 ELSE 0 END)) >= ?');
+    params.push(Number(minCacheHits));
+  }
+  if (excludeFilteredCategories) {
+    where.push(
+      `NOT EXISTS (
+        SELECT 1 FROM ozon_filtered_categories fc
+        WHERE fc.description_category_id = ozon_cache_index.description_category_id
+          AND fc.type_id = COALESCE(ozon_cache_index.type_id, 0)
+      )`
+    );
+  }
+  return { where, params };
+}
+
 export const indexDao = {
   /**
    * 同步单个 SKU 的索引行(从 5 张数据表聚合最新状态)
@@ -318,91 +396,10 @@ export const indexDao = {
    * @returns {Promise<{items: Array, total: number}>}
    */
   async findList(opts = {}) {
-    const {
-      keyword,
-      sellerId,
-      sellerSlug,
-      unlisted,
-      hasComments,
-      hasVideo,
-      hasRichContent,
-      priceMin,
-      priceMax,
-      minCacheHits,
-      excludeFilteredCategories,
-      page = 1,
-      pageSize = 50,
-    } = opts;
+    const { page = 1, pageSize = 50 } = opts;
     const skip = (page - 1) * pageSize;
 
-    const where = [];
-    const params = [];
-    // 关键词搜索:优先 FTS5(走倒排索引),fallback 到 LIKE(FTS5 表为空或查询失败时)
-    if (keyword) {
-      const ftsExpr = fts5Escape(keyword);
-      if (ftsExpr) {
-        where.push('sku IN (SELECT sku FROM ozon_cache_index_fts WHERE ozon_cache_index_fts MATCH ?)');
-        params.push(ftsExpr);
-      } else {
-        // FTS5 转义后为空(纯特殊字符),退化为 LIKE
-        where.push('searchable_text LIKE ? COLLATE NOCASE');
-        params.push(`%${keyword}%`);
-      }
-    }
-    // 店铺过滤:sellerId 优先(稳定主键),sellerSlug 兼容
-    if (sellerId) {
-      where.push('seller_id = ?');
-      params.push(sellerId);
-    } else if (sellerSlug) {
-      where.push('seller_slug = ?');
-      params.push(sellerSlug);
-    }
-    if (unlisted) {
-      where.push('listed = 0');
-    }
-    if (hasComments) {
-      where.push('rating_count > 0');
-    }
-    if (hasVideo) {
-      where.push('has_video = 1');
-    }
-    if (hasRichContent) {
-      where.push('has_rich_content = 1');
-    }
-    // 价格范围:走 price_value(REAL 列,有 idx_ci_price_value 索引)
-    //   原 CAST(price AS REAL) 无法用索引且对 "1 299 ₽" 这种字符串会截断为 1
-    if (Number.isFinite(Number(priceMin))) {
-      where.push('price_value IS NOT NULL AND price_value >= ?');
-      params.push(Number(priceMin));
-    }
-    if (Number.isFinite(Number(priceMax))) {
-      where.push('price_value IS NOT NULL AND price_value <= ?');
-      params.push(Number(priceMax));
-    }
-    if (Number.isFinite(Number(minCacheHits)) && Number(minCacheHits) > 0) {
-      // 数据完整 = 3 类合并缓存都有(dom + attribute + richMedia)
-      //   dom_hit = card OR detail(任一有采集即可)
-      //   attribute_hit = search AND bundle(都需要)
-      //   rich_media_hit = richMedia
-      // 合并命中数 = (card OR detail) + (search AND bundle) + richMedia ∈ [0, 3]
-      where.push('((CASE WHEN card_hit=1 OR detail_hit=1 THEN 1 ELSE 0 END) + ' +
-                  '(CASE WHEN search_hit=1 AND bundle_hit=1 THEN 1 ELSE 0 END) + ' +
-                  '(CASE WHEN rich_media_hit=1 THEN 1 ELSE 0 END)) >= ?');
-      params.push(Number(minCacheHits));
-    }
-    // 排除类目过滤黑名单中的商品:
-    //   ozon_filtered_categories 主键 (description_category_id, type_id)
-    //   仅当商品的 description_category_id + type_id 组合命中黑名单时排除
-    //   类目为 NULL 的商品不参与过滤(类目未识别,保留显示)
-    if (excludeFilteredCategories) {
-      where.push(
-        `NOT EXISTS (
-          SELECT 1 FROM ozon_filtered_categories fc
-          WHERE fc.description_category_id = ozon_cache_index.description_category_id
-            AND fc.type_id = COALESCE(ozon_cache_index.type_id, 0)
-        )`
-      );
-    }
+    const { where, params } = buildFilterWhere(opts);
 
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const items = db
@@ -416,6 +413,43 @@ export const indexDao = {
       .prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index ${whereClause}`)
       .get(...params).n;
     return { items, total };
+  },
+
+  /**
+   * 自动选取查询(批量均衡上架 auto-pick 用):复用 findList 的筛选条件,不分页
+   * 返回所有符合条件的 SKU(含 price/ratingCount/name 等展示字段 + listed/cacheHits 门槛位),按 seller_id 分组便于均衡选取
+   * @param {object} opts - 同 findList 的筛选参数(忽略 page/pageSize)
+   * @returns {Promise<Array<{sku, sellerId, sellerName, price, ratingCount, name, primaryImage, lastFetchedAt, listed, cacheHits}>>}
+   */
+  async findListForAutoPick(opts = {}) {
+    const { where, params } = buildFilterWhere(opts);
+    const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = db
+      .prepare(
+        `SELECT sku, seller_id, seller_name, price, price_value, rating_count,
+                name, primary_image, last_fetched_at,
+                listed, card_hit, detail_hit, search_hit, bundle_hit, rich_media_hit
+         FROM ozon_cache_index ${whereClause}
+         ORDER BY last_fetched_at DESC NULLS LAST`
+      )
+      .all(...params);
+    return rows.map((r) => ({
+      sku: r.sku,
+      sellerId: r.seller_id || '',
+      sellerName: r.seller_name || '',
+      price: r.price ?? '',
+      priceValue: r.price_value ?? null,
+      ratingCount: Number.isFinite(Number(r.rating_count)) ? Number(r.rating_count) : null,
+      name: r.name || '',
+      primaryImage: r.primary_image || '',
+      lastFetchedAt: r.last_fetched_at,
+      listed: !!r.listed,
+      cacheHits: {
+        dom: !!(r.card_hit || r.detail_hit),
+        attribute: !!(r.search_hit && r.bundle_hit),
+        richMedia: !!r.rich_media_hit,
+      },
+    }));
   },
 
   /** overview 全览(轻量,只取命中位 + 时间) */
