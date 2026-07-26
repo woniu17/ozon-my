@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue';
-import { getProducts, getProductDetail } from '../api/products.js';
+import { getProducts, getProductDetail, syncProducts } from '../api/products.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
@@ -24,6 +24,10 @@ const state = reactive({
     status: '',
   },
 });
+
+// 同步状态:从 Ozon 拉取店铺商品写入本地缓存
+const syncing = ref(false);
+const syncLabel = ref('同步店铺商品');
 
 async function loadList() {
   state.loading = true;
@@ -50,6 +54,60 @@ async function loadList() {
 function search() {
   state.page = 1;
   loadList();
+}
+
+// 同步:从 Ozon 拉取店铺商品写入本地缓存
+// - 选了店铺:只同步该店铺
+// - 未选店铺:依次同步所有店铺,逐个显示进度,单店铺失败不影响其他
+async function syncStoreProducts() {
+  const storeId = state.filters.storeId;
+  const targets = storeId
+    ? [{ id: storeId, name: storeName(storeId) }]
+    : (storesStore.list || []).map((s) => ({ id: s.id, name: s.name || s.id }));
+
+  if (targets.length === 0) {
+    show('没有可同步的店铺', 'error');
+    return;
+  }
+
+  const scopeText = storeId ? `店铺「${storeName(storeId)}」` : `全部 ${targets.length} 个店铺`;
+  if (!confirm(`确认从 Ozon 拉取 ${scopeText} 的商品到本地缓存?大店铺可能耗时较久。`)) {
+    return;
+  }
+
+  syncing.value = true;
+  let totalSynced = 0;
+  let totalTotal = 0;
+  let totalRemoved = 0;
+  let totalMs = 0;
+  let failed = 0;
+  try {
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      syncLabel.value = storeId
+        ? '同步中...'
+        : `同步中 (${i + 1}/${targets.length}) ${t.name}`;
+      try {
+        const r = await syncProducts(t.id);
+        totalSynced += r?.synced ?? 0;
+        totalTotal += r?.total ?? 0;
+        totalRemoved += r?.removed ?? 0;
+        totalMs += r?.durationMs ?? 0;
+      } catch (err) {
+        failed++;
+        show(`店铺 ${t.name} 同步失败: ${err.message || String(err)}`, 'error');
+      }
+    }
+    const summary = `同步完成:写入 ${totalSynced}/${totalTotal} 条,清理 ${totalRemoved} 条已下架${
+      failed > 0 ? `,失败 ${failed} 个店铺` : ''
+    }`;
+    show(summary, failed > 0 ? 'error' : 'success');
+    state.page = 1;
+    await loadList();
+  } finally {
+    syncing.value = false;
+    syncLabel.value = '同步店铺商品';
+  }
 }
 
 // 翻页:先更新页码再加载,确保读取最新 page
@@ -146,7 +204,10 @@ onMounted(() => {
   <div>
     <div class="toolbar">
       <h2>商品列表</h2>
-      <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
+      <button class="btn btn-primary" :disabled="syncing" @click="syncStoreProducts">
+        {{ syncLabel }}
+      </button>
+      <button class="btn btn-ghost" :disabled="state.loading || syncing" @click="loadList">
         {{ state.loading ? '刷新中...' : '刷新' }}
       </button>
     </div>

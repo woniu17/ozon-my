@@ -9,3 +9,8 @@ export function getProducts(params) {
 export function getProductDetail(id) {
   return request.get('/admin/api/products/' + encodeURIComponent(id));
 }
+
+// 从 Ozon 拉取店铺全部商品并写入 product_data_cache(阻塞返回)
+export function syncProducts(storeId) {
+  return request.post('/admin/api/products/sync?storeId=' + encodeURIComponent(storeId));
+}

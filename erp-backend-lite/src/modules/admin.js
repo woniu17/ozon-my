@@ -629,7 +629,9 @@ router.get('/admin/api/products', (req, res, next) => {
 
 // POST /admin/api/products/sync —— 从 Ozon 拉取店铺全部商品并写入 product_data_cache
 // query: ?storeId=xxx(必填,OPI 凭据所属店铺)
-// 响应: { synced, total, durationMs }
+// 全量替换语义:同步完成后删除该店铺本次未刷新的旧记录(Ozon 端已不存在的商品)
+// 同步过程中若异常,已写入的新数据保留,旧数据不删除(失败安全)
+// 响应: { synced, total, removed, durationMs }
 router.post('/admin/api/products/sync', async (req, res) => {
   try {
     const storeId = req.query.storeId ? String(req.query.storeId) : '';
@@ -643,6 +645,9 @@ router.post('/admin/api/products/sync', async (req, res) => {
     }
 
     const startedAt = Date.now();
+    // 同步起点时间戳:本次同步所有写入记录的 fetched_at 都会 >= 此值
+    // 用 datetime('now') 而非 JS Date,确保与 SQLite 服务器时钟一致
+    const syncStartedAt = db.prepare(`SELECT datetime('now') as t`).get().t;
     let lastId = '';
     let total = 0;
     let synced = 0;
@@ -674,8 +679,14 @@ router.post('/admin/api/products/sync', async (req, res) => {
       if (items.length < limit) break; // 最后一页
     }
 
+    // 全量替换:删除该店铺本次同步未刷新的旧记录(Ozon 端已不存在的商品)
+    // 同步成功到达此处才执行删除,中途异常不删旧数据(失败安全)
+    const removed = db
+      .prepare(`DELETE FROM product_data_cache WHERE store_id = ? AND fetched_at < ?`)
+      .run(storeId, syncStartedAt).changes;
+
     const durationMs = Date.now() - startedAt;
-    res.json(ok({ synced, total, durationMs }));
+    res.json(ok({ synced, total, removed, durationMs }));
   } catch (err) {
     res.status(500).json({ code: 1, message: err.message });
   }
