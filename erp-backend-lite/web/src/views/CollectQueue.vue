@@ -10,6 +10,8 @@ import {
   clearCollectQueue,
   pauseCollectQueueConsume,
   resumeCollectQueueConsume,
+  getExtensionConfig,
+  putExtensionConfigItem,
 } from '../api/collectQueue.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
@@ -65,6 +67,42 @@ async function loadStats() {
     show(err.message || String(err), 'error');
   } finally {
     statsLoading.value = false;
+  }
+}
+
+// ── 熔断配置(存 ERP app_config,scope=extension)──
+// 扩展端 _handleAntibot 会优先读 ERP 此处配置,失败回退本地 chrome.storage
+const antibotPauseMin = ref(10);
+const antibotPauseMinLoading = ref(false);
+const antibotPauseMinSaving = ref(false);
+
+async function loadAntibotPauseMin() {
+  antibotPauseMinLoading.value = true;
+  try {
+    const res = await getExtensionConfig();
+    const v = res?.data?.antibot_pause_min;
+    if (typeof v === 'number' && v >= 1 && v <= 120) {
+      antibotPauseMin.value = v;
+    }
+  } catch (err) {
+    // 静默失败,使用默认 10
+    console.warn('load antibot_pause_min failed:', err);
+  } finally {
+    antibotPauseMinLoading.value = false;
+  }
+}
+
+async function saveAntibotPauseMin() {
+  const v = Math.max(1, Math.min(120, Math.round(Number(antibotPauseMin.value) || 10)));
+  antibotPauseMin.value = v;
+  antibotPauseMinSaving.value = true;
+  try {
+    await putExtensionConfigItem('antibot_pause_min', v, '反爬熔断时长(分钟),范围 [1, 120]');
+    show(`熔断时长已更新为 ${v} 分钟`, 'success');
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    antibotPauseMinSaving.value = false;
   }
 }
 
@@ -293,6 +331,7 @@ function remainingMinutes(ms) {
 // ── 生命周期 ───────────────────────────────────────────────
 onMounted(() => {
   refreshAll();
+  loadAntibotPauseMin();
   startAutoRefresh();
   document.addEventListener('visibilitychange', onVisibilityChange);
 });
@@ -355,6 +394,26 @@ onUnmounted(() => {
         </button>
       </div>
       <div class="action-bar">
+        <div class="antibot-cfg" title="反爬熔断时长(分钟)。修改后下次触发反爬时立即生效,扩展端优先读 ERP 此处配置">
+          <label class="antibot-cfg-label">熔断时长</label>
+          <input
+            type="number"
+            class="antibot-cfg-input"
+            min="1"
+            max="120"
+            step="1"
+            v-model.number="antibotPauseMin"
+            :disabled="antibotPauseMinLoading || antibotPauseMinSaving"
+          />
+          <span class="antibot-cfg-unit">min</span>
+          <button
+            class="btn btn-primary btn-sm"
+            @click="saveAntibotPauseMin"
+            :disabled="antibotPauseMinSaving"
+          >
+            {{ antibotPauseMinSaving ? '保存中...' : '保存' }}
+          </button>
+        </div>
         <button v-if="!stats.consumePaused" class="btn btn-ghost" @click="onPauseConsume">暂停消费</button>
         <button v-else class="btn btn-ghost" @click="onResumeConsume">恢复消费</button>
         <button class="btn btn-danger" @click="onClearPending">清空待采集</button>
@@ -590,6 +649,39 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+/* 熔断配置行 */
+.antibot-cfg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-soft, #f9fafb);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+}
+.antibot-cfg-label {
+  font-size: 13px;
+  color: var(--text-muted, #6b7280);
+  white-space: nowrap;
+}
+.antibot-cfg-input {
+  width: 64px;
+  padding: 3px 6px;
+  font-size: 13px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 4px;
+  text-align: center;
+}
+.antibot-cfg-unit {
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+}
+.btn-sm {
+  padding: 3px 10px;
+  font-size: 12px;
 }
 
 /* Tab */

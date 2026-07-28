@@ -42,6 +42,7 @@ const config = {
   membership: membershipConfig,
   featureFlags: featureFlagsConfig,
   loadStores,
+  imageHostBaseUrl: process.env.IMAGE_HOST_BASE_URL || '',
 };
 
 export default config;

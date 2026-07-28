@@ -10,6 +10,7 @@ import Batch from '../views/Batch.vue';
 import Audit from '../views/Audit.vue';
 import Config from '../views/Config.vue';
 import ListingTemplates from '../views/ListingTemplates.vue';
+import WatermarkTemplates from '../views/WatermarkTemplates.vue';
 import Cache from '../views/Cache.vue';
 import CollectLogs from '../views/CollectLogs.vue';
 import ShallowCollectLogs from '../views/ShallowCollectLogs.vue';
@@ -34,6 +35,7 @@ const router = createRouter({
     { path: '/audit', name: 'audit', component: Audit },
     { path: '/config', name: 'config', component: Config },
     { path: '/listing-templates', name: 'listing-templates', component: ListingTemplates },
+    { path: '/watermark-templates', name: 'watermark-templates', component: WatermarkTemplates, meta: { title: '水印模板' } },
     { path: '/cache', redirect: '/sku-data' },
     { path: '/sku-data', name: 'sku-data', component: Cache, meta: { title: 'SKU 数据' } },
     { path: '/store-data', name: 'store-data', component: Cache, meta: { title: '店铺数据' } },

@@ -20,6 +20,7 @@ const tabs = [
   { key: '/audit', label: '操作日志' },
   { key: '/config', label: '配置中心' },
   { key: '/listing-templates', label: '上架模板' },
+  { key: '/watermark-templates', label: '水印模板' },
   { key: '/sku-data', label: 'SKU 数据' },
   { key: '/store-data', label: '店铺数据' },
   { key: '/store-sku', label: '店铺 SKU' },

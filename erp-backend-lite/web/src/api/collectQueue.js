@@ -50,3 +50,14 @@ export function pauseCollectQueueConsume() {
 export function resumeCollectQueueConsume() {
   return request.post('/admin/api/collect-queue/consume-resume');
 }
+
+// ── 熔断配置(存 app_config 表,scope=extension)──
+// 读取 scope=extension 全部配置(含 antibot_pause_min)
+export function getExtensionConfig() {
+  return request.get('/admin/api/app-config', { scope: 'extension' });
+}
+
+// 写入单条配置
+export function putExtensionConfigItem(key, value, description) {
+  return request.put('/admin/api/app-config', { key, value, scope: 'extension', description });
+}

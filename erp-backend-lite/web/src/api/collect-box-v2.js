@@ -23,10 +23,13 @@ export function getSkuProfile(sku, storeId) {
 // 上架预览·一键提交(走 /ozon/products/import,需 x-ozon-store-id header)
 // items: 合成 OPI 输入 item 数组(从 profile 接口拿到 item 后可改 price)
 // options.templateId / options.defaultStock: 任务创建时存快照,stock-sync 定时任务据此设库存
+// options.applyWatermark / options.watermarkTemplateId: 水印加工链控制(显式传入优先于模板反查)
 export function submitPreviewImport(items, storeId, options = {}) {
   const body = { items };
   if (options.templateId != null) body.templateId = options.templateId;
   if (options.defaultStock != null) body.defaultStock = options.defaultStock;
+  if (options.applyWatermark != null) body.applyWatermark = options.applyWatermark;
+  if (options.watermarkTemplateId != null) body.watermarkTemplateId = options.watermarkTemplateId;
   return request.request('/ozon/products/import', {
     method: 'POST',
     headers: { 'x-ozon-store-id': storeId },

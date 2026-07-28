@@ -36,6 +36,7 @@
       skuInterval: 30000,
       consumeRateMinSec: 5,            // 队列消费间隔范围(秒),每次随机
       consumeRateMaxSec: 15,           // 队列消费间隔范围(秒),每次随机
+      antibotPauseMin: 10,             // 反爬熔断时长(分钟),范围 [1, 120]
       // perDayLimit/todayCount/todayDate 已移除(去掉每日上限)
       // marketStatsStaleMs/followSellStaleMs 已移除(stale 策略改为永久)
       onlyMainlandChinaStores: true,
@@ -66,7 +67,12 @@
           merged.consumeRateMinSec = _lo;
           merged.consumeRateMaxSec = _hi;
         }
-        // defaults 已含 5/15,无需再补
+        // 规整 antibotPauseMin(分钟)到 [1, 120]
+        const _rawPauseMin = raw?.antibotPauseMin;
+        if (_rawPauseMin != null) {
+          merged.antibotPauseMin = Math.max(1, Math.min(120, Math.round(_rawPauseMin)));
+        }
+        // defaults 已含 5/15/10,无需再补
         S.autoCollectConfigCache = merged;
       } catch (e) {
         console.warn('[autoCollectConfig] load failed, fallback to defaults:', e?.message || e);

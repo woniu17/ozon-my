@@ -1,0 +1,29 @@
+# Checklist
+
+- [x] `config/index.js` 新增 `imageHostBaseUrl` 字段，读取 `process.env.IMAGE_HOST_BASE_URL`
+- [x] `.env.example` 追加 `IMAGE_HOST_BASE_URL` 配置段（含说明：不配置则降级透传）
+- [x] 新增 `services/image-host.js`，导出 `processImage(url, sku, templateConfig)` 函数
+- [x] `image-host.js` 实现下载（undici，30s 超时）→ sharp 渲染 → 落盘 → 返回公网 URL 全流程
+- [x] `image-host.js` 支持三种模板类型：`text`（SVG 文本 composite）、`border`（sharp extend）、`image`（下载水印图 composite）
+- [x] `image-host.js` 实现幂等：目标文件已存在时跳过下载与渲染，直接返回公网 URL
+- [x] `image-host.js` 自动创建 `public/images/{sku}/` 子目录（`fs.mkdir recursive`）
+- [x] `enrichments/watermark.js` 删除"标记模式"实现，改为调用 `image-host.processImage`
+- [x] `enrichments/watermark.js` 读取 `message.watermarkTemplateId` → 查 `watermark_templates` 表 → 拿到 config JSON
+- [x] `enrichments/watermark.js` 保留 `img.default` 字段不变（确保主图识别正确）
+- [x] `enrichments/watermark.js` 任一失败场景透传原 URL（IMAGE_HOST_BASE_URL 未配置 / sharp 未安装 / 模板不存在 / 下载失败 / 渲染失败 / 落盘失败）
+- [x] `enrichments/watermark.js` 处理完成后记录 `logger.info({total, processed, fallback})` 统计
+- [x] `listing-builder.js` 的 `buildListingMessage` 从 `getTemplateConfig(templateId)` 读取 `applyWatermark` / `watermarkTemplateId`
+- [x] `listing-builder.js` 注入 `message.applyWatermark` 和 `message.watermarkTemplateId`
+- [x] `prepare-bundle.js` 加工链门控改为 `message.applyWatermark === true`（解除对 `flags.watermark` 的依赖）
+- [x] `prepare-bundle.js` 顶部加工链注释更新
+- [x] `schema.sql` 中 `watermark_templates` 表注释追加 `config` JSON schema 约定
+- [x] `enrichments/watermark.js` 顶部 JSDoc 注释说明 schema
+- [x] `.gitignore` 追加 `src/public/images/`
+- [x] `package.json` 将 `sharp` 从 `optionalDependencies` 移到 `dependencies`
+- [x] 端到端验证：按筛选自动上架触发后，`follow_sell_task_payloads.opi_request` 中 `images` 字段为图床 URL
+- [x] 端到端验证：批量均衡上架触发后，同上
+- [x] 端到端验证：上架预览一键上架触发后，同上（已修复 executeListing 注入字段）
+- [x] 幂等性验证：同一 SKU 重复触发上架，`public/images/{sku}/` 下不重复生成文件
+- [x] 降级验证：`IMAGE_HOST_BASE_URL` 未配置时，images 全部透传原 URL，上架不中断
+- [x] 降级验证：sharp 未安装时，images 全部透传原 URL，启动日志 warn 提示
+- [x] 降级验证：单张图片下载失败时，仅该图透传，其余图正常替换为图床 URL

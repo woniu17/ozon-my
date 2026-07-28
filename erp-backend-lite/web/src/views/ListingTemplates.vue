@@ -6,10 +6,14 @@ import {
   updateListingTemplate,
   deleteListingTemplate,
 } from '../api/listingTemplates.js';
+import { getWatermarkTemplates } from '../api/watermarkTemplates.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
 
 const { show } = useToast();
+
+// 水印模板列表(供下拉框选择,名称独一无二)
+const watermarkTemplates = ref([]);
 
 const list = ref([]);
 const loading = ref(false);
@@ -84,7 +88,7 @@ function buildConfig() {
     imageOrder: c.imageOrder === 'shuffle_non_primary' ? 'shuffle_non_primary' : 'keep',
     mergeEnabled: !!c.mergeEnabled,
     uploadMode: c.uploadMode || 'api',
-    applyWatermark: !!c.applyWatermark,
+    applyWatermark: !!c.applyWatermark || !!c.watermarkTemplateId,
     watermarkTemplateId: c.watermarkTemplateId || '',
     applyPoster: !!c.applyPoster,
     posterPrimaryOnly: !!c.posterPrimaryOnly,
@@ -148,14 +152,27 @@ async function remove(tpl) {
 async function load() {
   loading.value = true;
   try {
-    const r = await getListingTemplates();
+    // 并行加载上架模板 + 水印模板(水印模板用于下拉框选择)
+    const [r, wmList] = await Promise.all([
+      getListingTemplates(),
+      getWatermarkTemplates().catch(() => []),
+    ]);
     // request.js 已对 envelope {ok,data} 解包,此处 r 即模板数组
     list.value = Array.isArray(r) ? r : [];
+    watermarkTemplates.value = Array.isArray(wmList) ? wmList : [];
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
     loading.value = false;
   }
+}
+
+// 水印模板 id → name 映射(用于列表展示)
+function watermarkName(id) {
+  const idNum = Number(id);
+  if (!idNum) return '';
+  const wm = watermarkTemplates.value.find((w) => Number(w.id) === idNum);
+  return wm?.name || '';
 }
 
 onMounted(load);
@@ -200,6 +217,7 @@ onMounted(load);
             <span>品牌:{{ t.config?.brand === 'no_brand' ? '无品牌' : (t.config?.brand || '—') }}</span>
             <span>库存:{{ t.config?.defaultStock ?? '—' }}</span>
             <span>图片:{{ t.config?.imageOrder === 'shuffle_non_primary' ? '主图不变打乱' : '不更改' }}</span>
+            <span>水印:{{ t.config?.applyWatermark ? watermarkName(t.config?.watermarkTemplateId) || `ID=${t.config?.watermarkTemplateId}` : '关' }}</span>
             <span>售价:{{ t.config?.salePriceA ?? '—' }}% + {{ t.config?.salePriceB ?? 0 }}</span>
             <span>划线价:{{ t.config?.oldPriceA ?? '—' }}%</span>
             <span>最低价:售价 − {{ t.config?.minPriceB ?? '—' }}</span>
@@ -277,8 +295,18 @@ onMounted(load);
             <label class="check"><input type="checkbox" v-model="editForm.cfg.applyAiRewrite" /> AI 改写</label>
           </div>
           <label>
-            <span>水印模板ID</span>
-            <input type="text" v-model.trim="editForm.cfg.watermarkTemplateId" placeholder="留空表示不指定" />
+            <span>水印模板</span>
+            <select v-model="editForm.cfg.watermarkTemplateId">
+              <option value="">不应用水印</option>
+              <option v-for="wm in watermarkTemplates" :key="wm.id" :value="String(wm.id)">
+                {{ wm.name }}（ID={{ wm.id }}{{ wm.isDefault ? '，默认' : '' }}）
+              </option>
+            </select>
+            <em class="hint-inline">
+              前往
+              <router-link to="/watermark-templates" class="link">水印模板管理</router-link>
+              创建/维护水印模板（名称需独一无二）
+            </em>
           </label>
         </fieldset>
 

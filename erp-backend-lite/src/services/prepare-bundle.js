@@ -1,7 +1,9 @@
 // prepare-bundle-items 加工逻辑
 // 对齐插件 service-worker.js:645-652 的 viaPortal 第 1 步
 //
-// 可插拔加工链(feature-flag 门控):
+// 可插拔加工链:
+//   - ai_rewrite / ai_poster / copy_ban_solution: 由 feature-flags 门控
+//   - watermark: 由 listing_templates.applyWatermark 显式开启(不依赖 feature-flags.watermark)
 //   ai_rewrite → watermark → ai_poster → copy_ban_solution
 // 严格模式 + 无效图片剔除:对齐 0.13 strictSkipped/invalidImage
 import logger from '../middleware/log.js';
@@ -383,7 +385,7 @@ export async function prepareBundleItems(message, storeId, store) {
       logger.info('加工链: AI 重写...');
       processed = await applyAiRewrite(processed, message);
     }
-    if (flags.watermark && message.applyWatermark !== false) {
+    if (message.applyWatermark === true) {
       logger.info('加工链: 水印...');
       processed = await applyWatermark(processed, message);
     }

@@ -30,3 +30,9 @@ export function deleteListingTemplate(id) {
 export function previewOpi(items, storeId) {
   return request.post('/admin/api/preview-opi', { items, storeId });
 }
+
+// 批量水印预览:传入图片 URL 数组 + watermarkTemplateId,返回水印处理后的图床 URL
+// 用途:上架预览页勾选水印时,展示水印后的图片 + OPI JSON 用图床 URL 替换原 URL
+export function previewWatermark(urls, templateId, sku) {
+  return request.post('/admin/api/preview/watermark', { urls, templateId, sku });
+}

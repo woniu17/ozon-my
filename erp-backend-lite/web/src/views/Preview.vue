@@ -5,7 +5,8 @@
 import { reactive, ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getSkuProfile, submitPreviewImport } from '../api/collect-box-v2.js';
-import { getListingTemplates } from '../api/listingTemplates.js';
+import { getListingTemplates, previewWatermark } from '../api/listingTemplates.js';
+import { getWatermarkTemplates } from '../api/watermarkTemplates.js';
 import { checkFilteredBySku } from '../api/category-filter.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
@@ -38,6 +39,7 @@ const state = reactive({
   storeId: localStorage.getItem(STORE_ID_STORAGE_KEY) || '',
   templates: [],
   templateId: '',
+  watermarkTemplates: [], // 水印模板列表(供下拉框选择,名称独一无二)
   defaultStock: 0, // 模板默认库存快照(任务创建时存,stock-sync 据此设库存)
   // 上架参数(价格公式:售价=原价*A%+B,划线价=售价*A%,最低价=售价-B)
   params: {
@@ -46,7 +48,7 @@ const state = reactive({
     oldPriceA: 150, // 110~200
     minPriceB: 2, // 0~5(强制启用)
     imageOrder: 'keep', // keep | shuffle_non_primary
-    imageProcess: { watermark: false, poster: false, antiCopy: false, posterPrimaryOnly: true },
+    imageProcess: { watermark: false, watermarkTemplateId: '', poster: false, antiCopy: false, posterPrimaryOnly: true },
     videoMode: 'mp4',
     descriptionMode: 'original',
   },
@@ -114,8 +116,13 @@ async function checkCategoryFilter() {
 // ── 加载模板列表 ───────────────────────────────────────────
 async function loadTemplates() {
   try {
-    const list = await getListingTemplates();
+    // 并行加载上架模板 + 水印模板(水印模板用于下拉框选择)
+    const [list, wmList] = await Promise.all([
+      getListingTemplates(),
+      getWatermarkTemplates().catch(() => []),
+    ]);
     state.templates = Array.isArray(list) ? list : [];
+    state.watermarkTemplates = Array.isArray(wmList) ? wmList : [];
     const def = state.templates.find((t) => t.isDefault) || state.templates[0];
     if (def) applyTemplate(def);
   } catch (err) {
@@ -133,6 +140,7 @@ function applyTemplate(t) {
   if (c.minPriceB != null) state.params.minPriceB = Number(c.minPriceB);
   if (c.imageOrder) state.params.imageOrder = c.imageOrder;
   if (c.applyWatermark != null) state.params.imageProcess.watermark = !!c.applyWatermark;
+  if (c.watermarkTemplateId != null) state.params.imageProcess.watermarkTemplateId = String(c.watermarkTemplateId) || '';
   if (c.applyPoster != null) state.params.imageProcess.poster = !!c.applyPoster;
   if (c.posterPrimaryOnly != null) state.params.imageProcess.posterPrimaryOnly = !!c.posterPrimaryOnly;
 }
@@ -576,6 +584,69 @@ const processedImages = computed(() => {
   return baseImages.value;
 });
 
+// ── 水印预览(勾选水印且 watermarkTemplateId 有效时,后端渲染并返回图床 URL) ──
+// watermarkPreviewMap: 原图 URL → 水印处理后图床 URL 的映射
+// displayImages: processedImages 经水印替换后的最终 URL 数组(用于展示 + OPI JSON + 提交)
+const watermarkPreviewMap = ref({});
+const watermarkLoading = ref(false);
+const watermarkError = ref('');
+
+// 水印开关 + 模板 ID 都有效时才触发预览
+const watermarkEnabled = computed(
+  () =>
+    !!state.params.imageProcess.watermark &&
+    !!Number(state.params.imageProcess.watermarkTemplateId)
+);
+
+// 实际展示/提交的图片 URL 数组(若水印开启且预览已就绪,替换为图床 URL)
+const displayImages = computed(() => {
+  if (!watermarkEnabled.value || Object.keys(watermarkPreviewMap.value).length === 0) {
+    return processedImages.value.slice();
+  }
+  return processedImages.value.map((url) => watermarkPreviewMap.value[url] || url);
+});
+
+// watch 水印开关/模板 ID/allImages 变化时,重新调用水印预览接口
+// 使用请求序号避免竞态(切换模板时旧请求覆盖新请求)
+let _wmReqSeq = 0;
+watch(
+  [watermarkEnabled, () => state.params.imageProcess.watermarkTemplateId, allImages],
+  async () => {
+    if (!watermarkEnabled.value) {
+      watermarkPreviewMap.value = {};
+      watermarkError.value = '';
+      return;
+    }
+    const urls = allImages.value.filter((u) => u && /^https?:\/\//i.test(u));
+    if (urls.length === 0) {
+      watermarkPreviewMap.value = {};
+      return;
+    }
+    const templateId = Number(state.params.imageProcess.watermarkTemplateId);
+    const seq = ++_wmReqSeq;
+    watermarkLoading.value = true;
+    watermarkError.value = '';
+    try {
+      const r = await previewWatermark(urls, templateId, sku.value || 'preview');
+      // 旧请求返回,丢弃(防止切换模板时旧结果覆盖新结果)
+      if (seq !== _wmReqSeq) return;
+      const results = Array.isArray(r?.results) ? r.results : [];
+      const map = {};
+      for (const it of results) {
+        if (it && it.originalUrl) map[it.originalUrl] = it.publicUrl || it.originalUrl;
+      }
+      watermarkPreviewMap.value = map;
+    } catch (e) {
+      if (seq !== _wmReqSeq) return;
+      watermarkError.value = e?.message || String(e);
+      watermarkPreviewMap.value = {};
+    } finally {
+      if (seq === _wmReqSeq) watermarkLoading.value = false;
+    }
+  },
+  { immediate: false }
+);
+
 // 图片差异信息:数量、顺序
 const imageDiff = computed(() => {
   const origCount = allImages.value.length;
@@ -776,8 +847,8 @@ const opiJsonPayload = computed(() => {
     dimension_unit: 'mm',
     description_category_id: Number(p.descriptionCategoryId) || 0,
     type_id: Number(p.typeId) || 0,
-    images: processedImages.value.slice(),
-    primary_image: processedImages.value[0] || '',
+    images: displayImages.value.slice(),
+    primary_image: displayImages.value[0] || '',
     attributes: listingAttrs.value
       .filter((a) => a.hasValue)
       .map((a) => ({
@@ -858,6 +929,12 @@ async function onSubmit() {
       id: fe.id,
       values: [{ dictionary_value_id: fe.dictionaryValueId, value: fe.value }],
     }));
+    // 覆盖 item.images:按 processedImages 顺序重建,水印开启时用图床 URL 替换原 URL
+    // 这样预览阶段和提交阶段一致,OPI 请求中 images 即为水印后的图床 URL
+    if (Array.isArray(item.images)) {
+      item.images = displayImages.value.map((url, i) => ({ file_name: url, default: i === 0 }));
+      item.primary_image = displayImages.value[0] || '';
+    }
     // item.attributes 也同步覆盖(用于"查看 OPI JSON"展示 + 后端备份的 raw payload)
     if (Array.isArray(item.attributes)) {
       for (const fe of forcedAttrValues) {
@@ -871,6 +948,8 @@ async function onSubmit() {
     const r = await submitPreviewImport([item], state.storeId, {
       templateId: state.templateId,
       defaultStock: state.defaultStock,
+      applyWatermark: !!state.params.imageProcess.watermark,
+      watermarkTemplateId: state.params.imageProcess.watermarkTemplateId || null,
     });
     state.submitResult = r?.result || {};
     if (r?.result?.error) {
@@ -1028,6 +1107,20 @@ onMounted(() => {
                 <input type="checkbox" v-model="state.params.imageProcess.watermark" />
                 水印
               </label>
+              <select
+                v-if="state.params.imageProcess.watermark"
+                class="filter-select pv-wm-select"
+                v-model="state.params.imageProcess.watermarkTemplateId"
+                title="选择水印模板(名称独一无二)"
+              >
+                <option value="">不指定</option>
+                <option v-for="wm in state.watermarkTemplates" :key="wm.id" :value="String(wm.id)">
+                  {{ wm.name }}{{ wm.isDefault ? '（默认）' : '' }}
+                </option>
+              </select>
+              <span v-if="watermarkLoading" class="pv-wm-status">渲染中…</span>
+              <span v-else-if="watermarkError" class="pv-wm-error" :title="watermarkError">⚠ 水印渲染失败</span>
+              <span v-else-if="watermarkEnabled && Object.keys(watermarkPreviewMap).length" class="pv-wm-ok">✓ 已渲染</span>
               <label class="pv-chain-item">
                 <input type="checkbox" v-model="state.params.imageProcess.poster" />
                 海报
@@ -1041,7 +1134,7 @@ onMounted(() => {
                 防盗图
               </label>
             </div>
-            <p class="muted pv-chain-note">水印/海报/防盗待接入后端</p>
+            <p class="muted pv-chain-note">水印提交时由后端渲染并替换为图床 URL;海报/防盗待接入</p>
           </fieldset>
 
           <fieldset class="pv-fieldset">
@@ -1141,7 +1234,7 @@ onMounted(() => {
                   <span v-if="state.params.imageProcess.antiCopy" class="pv-ic-tags">[防盗]</span>
                 </div>
                 <div class="pv-img-grid">
-                  <div v-for="(img, i) in processedImages" :key="'p' + i + '-' + img" class="pv-img-cell pv-img-manual"
+                  <div v-for="(img, i) in displayImages" :key="'p' + i + '-' + img" class="pv-img-cell pv-img-manual"
                     :class="{
                       'pv-img-changed': getOrigPosLabel(i),
                       'pv-img-dragging': manualDragIdx === i,
@@ -1157,16 +1250,16 @@ onMounted(() => {
                       <span class="pv-img-reorder-tag" title="拖拽排序">⋮⋮</span>
                     </div>
                     <img :src="img" class="pv-ic-img pv-img-clickable-img" alt="" loading="lazy"
-                      @click="openLightbox(img, processedImages, `上架 #${i + 1}${i === 0 ? ' 主图' : ''}`)"
+                      @click="openLightbox(img, displayImages, `上架 #${i + 1}${i === 0 ? ' 主图' : ''}`)"
                       @error="$event.target.style.opacity = 0.2" />
                   </div>
-                  <div v-if="!processedImages.length" class="pv-no-img-sm" style="flex: 1 1 100%">
+                  <div v-if="!displayImages.length" class="pv-no-img-sm" style="flex: 1 1 100%">
                     所有图片已删除,请点击"重置图片"恢复
                   </div>
                 </div>
               </div>
             </div>
-            <p class="muted pv-ic-note">主图处理(水印/海报/防盗)待接入后端,当前展示原图,顺序处理可调整顺序</p>
+            <p class="muted pv-ic-note">水印已接入:勾选后由后端渲染并替换为图床 URL;海报/防盗待接入。顺序处理可调整顺序</p>
           </div>
 
           <!-- ② 价格对比 -->
@@ -1683,6 +1776,30 @@ onMounted(() => {
 .pv-chain-note {
   font-size: 10px;
   margin-top: 6px;
+}
+
+.pv-wm-select {
+  padding: 2px 6px;
+  font-size: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  max-width: 200px;
+}
+
+.pv-wm-status {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.pv-wm-ok {
+  font-size: 11px;
+  color: #10b981;
+}
+
+.pv-wm-error {
+  font-size: 11px;
+  color: #ef4444;
+  cursor: help;
 }
 
 .pv-reshuffle-btn {

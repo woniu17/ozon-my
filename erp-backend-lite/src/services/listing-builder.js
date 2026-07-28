@@ -278,8 +278,26 @@ export async function buildListingMessage(sku, storeId, options = {}) {
     }
   }
 
+  // 水印字段注入(供 prepareBundleItems 加工链读取)
+  // 优先 options 显式传入,否则按 templateId 读模板配置
+  let applyWatermark = options.applyWatermark ?? null;
+  let watermarkTemplateId = options.watermarkTemplateId ?? null;
+  if (templateId && (applyWatermark === null || watermarkTemplateId === null)) {
+    const tplCfg = getTemplateConfig(templateId);
+    if (tplCfg) {
+      if (applyWatermark === null) applyWatermark = tplCfg.applyWatermark === true;
+      if (watermarkTemplateId === null) watermarkTemplateId = tplCfg.watermarkTemplateId ?? null;
+    }
+  }
+
   return {
-    message: { items: [item], defaultStock, templateId },
+    message: {
+      items: [item],
+      defaultStock,
+      templateId,
+      applyWatermark: applyWatermark === true,
+      watermarkTemplateId: watermarkTemplateId ?? null,
+    },
     offerId,
   };
 }
@@ -321,6 +339,21 @@ export async function executeListing(message, storeId, store) {
     items.map((it) => ({ offer_id: it.offer_id, name: it.name, price: it.price, status: 'pending' })),
     storeId
   );
+
+  // 水印字段注入(与 buildListingMessage 对齐):
+  // 若 message 未显式传入 applyWatermark / watermarkTemplateId,则按 templateId 读模板配置补齐
+  // 确保 Preview.vue → /ozon/products/import → executeListing 路径下水印加工链能正常触发
+  const tplId = Number(message.templateId) || 0;
+  if (tplId && (message.applyWatermark === undefined || message.watermarkTemplateId === undefined)) {
+    const tplCfg = getTemplateConfig(tplId);
+    if (tplCfg) {
+      if (message.applyWatermark === undefined) message.applyWatermark = tplCfg.applyWatermark === true;
+      if (message.watermarkTemplateId === undefined) message.watermarkTemplateId = tplCfg.watermarkTemplateId ?? null;
+    }
+  }
+  // 兜底:确保两个字段有默认值,避免 prepare-bundle.js 门控判定 undefined
+  if (message.applyWatermark === undefined) message.applyWatermark = false;
+  if (message.watermarkTemplateId === undefined) message.watermarkTemplateId = null;
 
   // 调 prepareBundleItems 做完整转换(含 dictionary_value_id、complex_attributes、描述 4191 注入等)
   try {

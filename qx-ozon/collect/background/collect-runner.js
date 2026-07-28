@@ -366,7 +366,47 @@
     // saveAutoCollectConfig 写入 paused:true 后,chrome.storage.onChanged 自动触发 popup 重渲,
     // queue 监控页通过自身的 5s 轮询感知状态变化,无需主动广播。
     this._handleAntibot = async (sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId) => {
-      const pausedUntil = Date.now() + 10 * 60 * 1000; // 10 分钟
+      // 熔断时长优先级:ERP app_config.antibot_pause_min > 本地 chrome.storage.antibotPauseMin > 默认 10
+      // ERP 配置由采集队列监控页设置,允许运维不依赖扩展 popup 调整熔断策略
+      let pauseMin = 10;
+      try {
+        const cfg = await this.loadAutoCollectConfig();
+        pauseMin = Math.max(1, Math.min(120, Math.round(cfg?.antibotPauseMin ?? 10)));
+      } catch (_) { /* loadAutoCollectConfig 失败时用默认 10 */ }
+      try {
+        const sw = this._sw;
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        const token = stored[sw.STORAGE_KEYS.token];
+        if (url && token) {
+          // 用原生 fetch 而非 sw.apiRequest:apiRequest 在 401 时会清 token,
+          // 反爬时 token 过期会导致整个采集流程因缺 token 崩溃,这里不能有副作用。
+          // 2s 超时:反爬时需尽快写入 paused:true,不能让 ERP 慢响应拖延熔断生效
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 2000);
+          try {
+            const resp = await fetch(`${url}/admin/api/app-config?scope=extension`, {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: ctrl.signal,
+            });
+            clearTimeout(timer);
+            if (resp.ok) {
+              const r = await resp.json();
+              const erpVal = r?.data?.antibot_pause_min;
+              if (typeof erpVal === 'number' && erpVal >= 1 && erpVal <= 120) {
+                pauseMin = Math.round(erpVal);
+              }
+            }
+          } catch (e) {
+            clearTimeout(timer);
+            throw e;
+          }
+        }
+      } catch (e) {
+        // ERP 不可达 / 未授权 / 超时:静默回退本地配置
+        console.warn('[antibot] 读取 ERP antibot_pause_min 失败,回退本地配置:', e?.message || e);
+      }
+      const pausedUntil = Date.now() + pauseMin * 60 * 1000;
       await this.saveAutoCollectConfig({ paused: true, pausedUntil });
 
       // 写日志(fire-and-forget,不阻塞)

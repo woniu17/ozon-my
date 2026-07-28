@@ -998,7 +998,10 @@
   // 新队列架构下保留队列消费间隔范围(秒,每次随机)。
   // min/max 与 input 的 min/max 属性保持一致,超界不写入并提示。
   const RATE_RANGE = { min: 5, max: 120 };
-  const RATE_FIELDS = [];
+  // 单值字段(直接读 config[key] 写回 config[key],与 RATE_RANGE 范围字段区分)
+  const RATE_FIELDS = [
+    { id: 'ac-rate-antibot-min', key: 'antibotPauseMin', label: '熔断时长', min: 1, max: 120 },
+  ];
 
   let _rateHintTimer = null;
   const showRateHint = (text, kind) => {

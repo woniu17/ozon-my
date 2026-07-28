@@ -123,6 +123,34 @@ async function ensureMigrations() {
   await migrateListedFields(db);
   // P2-2: 批量均衡上架 — batch_upload_tasks / batch_upload_items 补列(多店铺分配 + 顺序执行 + 速度控制)
   migrateBatchUploadTables(db);
+  // 2026-07: watermark_templates.name UNIQUE 索引(旧库 schema 没有 UNIQUE,需补建)
+  // 若已存在重名行,迁移前先去重(保留最早 id),再建 UNIQUE 索引
+  const wmCols = db.prepare(`PRAGMA table_info(watermark_templates)`).all();
+  if (wmCols.length > 0) {
+    const dupNames = db
+      .prepare(`SELECT name, COUNT(*) as n FROM watermark_templates GROUP BY name HAVING n > 1`)
+      .all();
+    if (dupNames.length > 0) {
+      // 重名行:保留最小 id,其余改为 "{name}_{id}" 避免冲突
+      for (const d of dupNames) {
+        const rows = db
+          .prepare(`SELECT id, name FROM watermark_templates WHERE name=? ORDER BY id ASC`)
+          .all(d.name);
+        for (let i = 1; i < rows.length; i++) {
+          const r = rows[i];
+          db.prepare(`UPDATE watermark_templates SET name=? WHERE id=?`).run(`${r.name}_${r.id}`, r.id);
+        }
+      }
+      console.log(`[db] migration: deduplicated ${dupNames.length} watermark_templates names`);
+    }
+    const idxExists = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='watermark_templates' AND name='idx_wm_name_unique'`)
+      .get();
+    if (!idxExists) {
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wm_name_unique ON watermark_templates(name)`);
+      console.log('[db] migration: created UNIQUE index watermark_templates.name');
+    }
+  }
   // ozon_cache_index.has_rich_content:richMedia.data.richContent 非空则 1,用于采集箱"有富内容"筛选
   const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
   let addedHasRichContent = false;

@@ -96,10 +96,21 @@ CREATE TABLE IF NOT EXISTS app_config (
 );
 CREATE INDEX IF NOT EXISTS idx_app_config_scope ON app_config(scope);
 
--- 水印模板(插件 content script 用 Canvas 渲染,后端只存配置)
+-- 水印模板(后端 sharp 渲染 + 插件 content script Canvas 渲染共用此配置)
+-- config JSON schema 约定:
+--   {
+--     "type": "text|border|image",
+--     "text":   { "content": "string", "fontSize": 32, "color": "#FFFFFF", "opacity": 0.6, "position": "bottom-right" },
+--     "border": { "width": 10, "color": "#000000", "opacity": 0.5 },
+--     "image":  { "url": "https://...", "scale": 0.2, "opacity": 0.5, "position": "bottom-right" }
+--   }
+--   - position 枚举: top-left | top-right | bottom-left | bottom-right | center
+--   - opacity 范围 0-1
+--   - type=text 时 text 必填; type=border 时 border 必填; type=image 时 image 必填
+--   - 字段缺失时使用默认值(如 fontSize=32, opacity=0.6, position='bottom-right')
 CREATE TABLE IF NOT EXISTS watermark_templates (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  name        TEXT NOT NULL,
+  name        TEXT NOT NULL UNIQUE,  -- 水印模板名称独一无二(2026-07: 上架模板用名称展示)
   config      TEXT NOT NULL,  -- JSON: 文字/位置/透明度/字体/颜色等
   is_default  INTEGER DEFAULT 0,
   created_at  TEXT DEFAULT (datetime('now')),

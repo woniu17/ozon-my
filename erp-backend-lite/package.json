@@ -17,12 +17,12 @@
     "jsonwebtoken": "^9.0.2",
     "node-cache": "^5.1.2",
     "pino": "^9.1.0",
+    "sharp": "^0.33.0",
     "undici": "^6.19.0"
   },
   "optionalDependencies": {
     "mongodb": "^7.5.0",
-    "openai": "^4.67.0",
-    "sharp": "^0.33.0"
+    "openai": "^4.67.0"
   },
   "engines": {
     "node": ">=22.5.0"

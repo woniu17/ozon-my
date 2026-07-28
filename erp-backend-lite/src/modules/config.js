@@ -131,6 +131,11 @@ router.post('/watermark-templates', (req, res, next) => {
     const body = req.body || {};
     const name = String(body.name || '').trim();
     if (!name) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'name 必填'));
+    // 名称唯一校验(2026-07: 上架模板用名称展示,要求独一无二)
+    const existed = db.prepare(`SELECT id FROM watermark_templates WHERE name=?`).get(name);
+    if (existed) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, `水印模板名称「${name}」已存在,请换一个`));
+    }
     const config = body.config || {};
     const isDefault = body.isDefault ? 1 : 0;
 
@@ -167,6 +172,13 @@ router.put('/watermark-templates/:id', (req, res, next) => {
     const body = req.body || {};
     const name = body.name != null ? String(body.name).trim() : row.name;
     if (!name) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'name 不能为空'));
+    // 名称唯一校验(排除自身)
+    if (name !== row.name) {
+      const existed = db.prepare(`SELECT id FROM watermark_templates WHERE name=? AND id != ?`).get(name, id);
+      if (existed) {
+        return next(new ApiError(ErrorCode.VALIDATION_ERROR, `水印模板名称「${name}」已存在,请换一个`));
+      }
+    }
     const config = body.config != null ? JSON.stringify(body.config) : row.config;
 
     // 切换默认:若本次设为默认,取消其他默认
@@ -383,6 +395,58 @@ router.post('/admin/api/preview-opi', async (req, res, next) => {
       opiItems.push(buildOpiItem(it, { allowedAttrIds }).opiItem);
     }
     res.json(ok({ items: opiItems }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /admin/api/preview/watermark —— 批量水印预览
+// body: { urls: [string], templateId: number, sku?: string }
+// 返回: { results: [{ originalUrl, publicUrl, ok, error? }] }
+// 用途:上架预览页勾选水印时,前端调用此接口得到水印处理后的图床 URL,用于展示和 OPI JSON
+router.post('/admin/api/preview/watermark', async (req, res, next) => {
+  try {
+    const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
+    const templateId = Number(req.body?.templateId) || 0;
+    const sku = String(req.body?.sku || 'preview');
+    if (urls.length === 0) {
+      return res.json(ok({ results: [] }));
+    }
+    if (!templateId) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'templateId 必填'));
+    }
+    // 查水印模板 config
+    let templateConfig = null;
+    try {
+      const row = db.prepare('SELECT config FROM watermark_templates WHERE id=?').get(templateId);
+      if (!row) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '水印模板不存在: ' + templateId));
+      templateConfig = typeof row.config === 'string' ? JSON.parse(row.config) : row.config;
+    } catch (e) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, '水印模板 config 解析失败'));
+    }
+    if (!templateConfig || !templateConfig.type) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, '水印模板 config 无效(type 缺失)'));
+    }
+    // 动态导入避免循环依赖(config.js 在 app 启动早期加载)
+    const { processImage, sharpAvailable } = await import('../services/image-host.js');
+    if (!sharpAvailable) {
+      return next(new ApiError(ErrorCode.INTERNAL_ERROR, 'sharp 未安装,水印不可用'));
+    }
+    const results = [];
+    for (const url of urls) {
+      if (!url || !/^https?:\/\//i.test(url)) {
+        results.push({ originalUrl: url, publicUrl: url, ok: false, error: 'invalid url' });
+        continue;
+      }
+      try {
+        const publicUrl = await processImage(url, sku, templateConfig);
+        results.push({ originalUrl: url, publicUrl, ok: true });
+      } catch (e) {
+        // 单图失败透传原 URL,不阻断整体预览
+        results.push({ originalUrl: url, publicUrl: url, ok: false, error: e?.message || String(e) });
+      }
+    }
+    res.json(ok({ results }));
   } catch (e) {
     next(e);
   }
