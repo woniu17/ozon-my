@@ -663,6 +663,12 @@ h3 {
   background: #fef3c7;
   color: var(--warning);
 }
+/* 任务级 WARNING(全部成功但 OPI 响应含 level=warning):橙色,与 badge-pending 浅黄区分 */
+.badge-warning {
+  background: #ffedd5;
+  color: #c2410c;
+  font-weight: 600;
+}
 
 /* 商品状态徽章(行内) */
 .item-status {

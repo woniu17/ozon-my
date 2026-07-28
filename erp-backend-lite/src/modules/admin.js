@@ -325,18 +325,24 @@ router.get('/admin/api/listing-records', (req, res, next) => {
                WHEN status='imported' AND has_error=1 THEN 'failed'
                ELSE status
              END AS eff_status,
+             CASE
+               WHEN status='imported' AND has_error=0 AND has_warning=1 THEN 1
+               ELSE 0
+             END AS is_warning,
              COUNT(*) as n
            FROM follow_sell_task_items
            WHERE local_task_id IN (${placeholders})
-           GROUP BY local_task_id, eff_status`
+           GROUP BY local_task_id, eff_status, is_warning`
         )
         .all(...localIds);
       for (const r of cntRows) {
         if (!countMap[r.local_task_id]) {
-          countMap[r.local_task_id] = { imported: 0, failed: 0, pending: 0, skipped: 0 };
+          countMap[r.local_task_id] = { imported: 0, failed: 0, pending: 0, skipped: 0, warning: 0 };
         }
         const bucket = countMap[r.local_task_id];
-        if (r.eff_status === 'imported') bucket.imported = r.n;
+        // eff_status='imported' 且 is_warning=1 → 警告桶(从 imported 中拆出)
+        if (r.eff_status === 'imported' && r.is_warning === 1) bucket.warning += r.n;
+        else if (r.eff_status === 'imported') bucket.imported = r.n;
         else if (r.eff_status === 'failed') bucket.failed = r.n;
         else if (r.eff_status === 'skipped') bucket.skipped = r.n;
         else bucket.pending = r.n;

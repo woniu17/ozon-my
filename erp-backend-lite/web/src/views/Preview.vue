@@ -230,8 +230,9 @@ const preflight = computed(() => {
     msg: o.primaryImage ? `主图: ✓ (${o.images.length} 张)` : '主图缺失',
   });
 
-  // 违规 attr 检测(4194/4195/4497/9454/9455/9456)
-  const BANNED = ['4194', '4195', '4497', '9454', '9455', '9456'];
+  // 违规 attr 检测(4194/4195/4497/9454/9455/9456/23536)
+  // 23536: 用户要求过滤(2026-07),与后端 prepare-bundle.js SKIP_ATTR_IDS 保持一致
+  const BANNED = ['4194', '4195', '4497', '9454', '9455', '9456', '23536'];
   const attrs = p?.attributes || [];
   const bannedFound = attrs.filter((a) => BANNED.includes(String(a.id)));
   checks.push({

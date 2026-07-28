@@ -74,23 +74,32 @@ export function upsertTaskItems(localTaskId, items, storeId) {
 }
 
 // 按 items 状态汇总任务状态(从 products.js 移入)
+// 状态机:
+//   有 pending/skipped           → PROCESSING
+//   全部 failed(或 imported+has_error) → FAILED
+//   全部 imported 无 has_error:
+//     有 has_warning              → WARNING(新增,2026-07:OPI 响应含 level=warning)
+//     无 has_warning              → SUCCESS
+//   有 failed 也有 imported(无 has_error) → SUCCESS(部分成功,与 WARNING 互斥)
 export function summarizeTaskStatus(localTaskId) {
   const rows = db
-    .prepare(`SELECT status, has_error FROM follow_sell_task_items WHERE local_task_id=?`)
+    .prepare(`SELECT status, has_error, has_warning FROM follow_sell_task_items WHERE local_task_id=?`)
     .all(localTaskId);
   if (rows.length === 0) return null;
   const imported = rows.filter((r) => r.status === 'imported' && !r.has_error).length;
   const failed = rows.filter((r) => r.status === 'failed' || (r.status === 'imported' && r.has_error)).length;
   const pending = rows.filter((r) => r.status === 'pending' || r.status === 'skipped').length;
+  const warning = rows.filter((r) => r.status === 'imported' && !r.has_error && r.has_warning).length;
   let status;
   if (pending > 0) status = 'PROCESSING';
   else if (imported === 0 && failed > 0) status = 'FAILED';
   else if (failed > 0) status = 'SUCCESS'; // 部分成功
+  else if (warning > 0) status = 'WARNING'; // 全部成功但有警告
   else status = 'SUCCESS';
   db.prepare(
-    `UPDATE follow_sell_tasks SET status=?, completed_at=datetime('now') WHERE local_task_id=? AND status NOT IN ('SUCCESS','FAILED')`
+    `UPDATE follow_sell_tasks SET status=?, completed_at=datetime('now') WHERE local_task_id=? AND status NOT IN ('SUCCESS','FAILED','WARNING')`
   ).run(status, localTaskId);
-  return { status, imported, failed, pending, total: rows.length };
+  return { status, imported, failed, pending, warning, total: rows.length };
 }
 
 // 保存 OPI 查询响应(从 products.js 移入)

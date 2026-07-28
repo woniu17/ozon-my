@@ -155,6 +155,7 @@ function storeName(storeId) {
 
 const STATUS_MAP = {
   SUCCESS: { cls: 'badge-success', label: '成功' },
+  WARNING: { cls: 'badge-warning', label: '警告' },
   FAILED: { cls: 'badge-failed', label: '失败' },
   PROCESSING: { cls: 'badge-processing', label: '处理中' },
   PENDING: { cls: 'badge-pending', label: '待处理' },
@@ -187,15 +188,22 @@ function fmtTime(t) {
   );
 }
 
-// 列表行:成功/失败计数(summary 可能为 null)
+// 列表行:成功/警告/失败计数(summary 可能为 null)
 function resultText(r) {
-  const s = r.summary || { imported: 0, failed: 0 };
-  return `✓${s.imported || 0} ✗${s.failed || 0}`;
+  const s = r.summary || { imported: 0, failed: 0, warning: 0 };
+  const warn = s.warning || 0;
+  const tail = warn > 0 ? ` ⚠${warn}` : '';
+  return `✓${s.imported || 0}${tail} ✗${s.failed || 0}`;
 }
 
 // 详情:从 items 数组按"有效状态"计数(imported + hasError 计为 failed)
 function countByStatus(items, st) {
   return (items || []).filter((i) => effectiveStatus(i) === st).length;
+}
+
+// 详情:统计 imported + hasWarning(无 hasError)的数量,单独展示警告数
+function countWarnings(items) {
+  return (items || []).filter((i) => i.status === 'imported' && !i.hasError && i.hasWarning).length;
 }
 
 const ITEM_STATUS_LABEL = {
@@ -274,6 +282,7 @@ onMounted(() => {
       <select class="filter-select" v-model="state.filters.status">
         <option value="">全部状态</option>
         <option value="SUCCESS">成功</option>
+        <option value="WARNING">警告</option>
         <option value="FAILED">失败</option>
         <option value="PROCESSING">处理中</option>
       </select>
@@ -357,6 +366,9 @@ onMounted(() => {
           </div>
           <div class="meta-row">
             <span class="meta-k">成功</span><span class="meta-v">{{ countByStatus(detailItems, 'imported') }}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-k">警告</span><span class="meta-v">{{ countWarnings(detailItems) }}</span>
           </div>
           <div class="meta-row">
             <span class="meta-k">失败</span><span class="meta-v">{{ countByStatus(detailItems, 'failed') }}</span>

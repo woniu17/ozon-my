@@ -68,8 +68,8 @@ router.post('/ozon/products/import/status', storeGuard, async (req, res, next) =
       .get(String(task_id), String(task_id));
     if (!row) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '任务不存在'));
 
-    // 若未完成,查 OPI 最新状态
-    if (row.ozon_task_id && row.status !== 'SUCCESS' && row.status !== 'FAILED') {
+    // 若未完成,查 OPI 最新状态(终态包含 SUCCESS / FAILED / WARNING,避免重复查询覆盖)
+    if (row.ozon_task_id && !['SUCCESS', 'FAILED', 'WARNING'].includes(row.status)) {
       try {
         const info = await opi.productImportInfo(req.store, row.ozon_task_id);
         // 保存 OPI 响应(覆盖式),供「上架记录-详情」展示
@@ -80,8 +80,20 @@ router.post('/ozon/products/import/status', storeGuard, async (req, res, next) =
         const size = items.length;
         const done = processed + failed >= size && size > 0;
         if (done) {
+          // WARNING 判定:items 中存在 level=warning 但无 level=error(对齐 summarizeTaskStatus)
+          const hasErrorLevel = items.some((x) =>
+            (x.errors || []).some((e) => String(e.level || '').toLowerCase() === 'error')
+          );
+          const hasWarningLevel = items.some((x) =>
+            (x.errors || []).some((e) => String(e.level || '').toLowerCase() === 'warning')
+          );
+          let newStatus;
+          if (failed > 0 && processed === 0) newStatus = 'FAILED';
+          else if (hasErrorLevel) newStatus = 'SUCCESS'; // 部分成功
+          else if (hasWarningLevel) newStatus = 'WARNING';
+          else newStatus = 'SUCCESS';
           db.prepare(`UPDATE follow_sell_tasks SET status=?, completed_at=datetime('now') WHERE id=?`).run(
-            failed > 0 && processed === 0 ? 'FAILED' : 'SUCCESS',
+            newStatus,
             row.id
           );
         }

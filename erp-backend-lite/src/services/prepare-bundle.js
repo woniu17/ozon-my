@@ -96,7 +96,8 @@ export function transformItemForPortal(item, options = {}) {
   const images = rawImages;
 
   // 5.2 attributes: 优先从 bundleItem 提取 v3 标准格式(含 dictionary_value_id)
-  const SKIP_ATTR_IDS = new Set([4194, 4195, 4497, 9454, 9455, 9456]);
+  // 23536: 用户要求过滤(2026-07),覆盖采集箱 opi-preview / 上架预览 profile / 一键提交三处
+  const SKIP_ATTR_IDS = new Set([4194, 4195, 4497, 9454, 9455, 9456, 23536]);
   const attributes = [];
   const usedKeys = new Set();
 
