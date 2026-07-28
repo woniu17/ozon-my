@@ -117,8 +117,18 @@ try {
   //     (http://localhost:3001),不再 fallback jizhangerp.com。
   //   - __JZ_PROD_BUILD__ 历史上用于 esbuild define 切 prod 候选,迁移后两分支
   //     同址,条件移除但保留上下文注释。
+  //   - 2026-07-28:popup 支持用户在候选 ERP 后端间切换,选择持久化在
+  //     chrome.storage.local[ERP_BACKEND_STORAGE_KEY]。
+  //     detectBackendUrl 优先读用户选择,无选择时回退 BACKEND_URLS[0]。
   let BACKEND_URLS;
   BACKEND_URLS = ['http://localhost:3001'];
+
+  // ERP 后端候选地址(popup 切换用)。第一个为本地默认,第二个为远程服务器。
+  const ERP_BACKEND_CANDIDATES = [
+    { label: '本地 (localhost:3001)', url: 'http://localhost:3001' },
+    { label: '远程 (2.tencent.yochylin.com)', url: 'https://2.tencent.yochylin.com:17443' },
+  ];
+  const ERP_BACKEND_STORAGE_KEY = 'erpBackendChoice';
 
   // 迁移至 erp-backend-lite:Web 前端即 erp-lite /admin,域 = 后端域
   const BRAND_WEB_HOST = 'localhost:3001';
@@ -358,6 +368,15 @@ try {
   let resolvedBackendUrl = null;
 
   const detectBackendUrl = async () => {
+    // 优先读用户在 popup 中选择的后端地址(持久化在 chrome.storage.local)
+    try {
+      const stored = await getStorage([ERP_BACKEND_STORAGE_KEY]);
+      const choice = stored?.[ERP_BACKEND_STORAGE_KEY];
+      if (choice && typeof choice === 'string' && /^https?:\/\//.test(choice)) {
+        resolvedBackendUrl = choice;
+        return resolvedBackendUrl;
+      }
+    } catch { }
     // 生产构建(__JZ_PROD_BUILD__ DCE 后)只剩一个候选 URL,无需探活,直接定址。
     // 旧实现拿 /auth/captcha 当探针:MV3 SW 空闲 ~30s 即被杀,每次重启都重新探活,
     // 每次探活后端真实生成一张验证码(SVG + Redis 写)—— 是生产 /auth/captcha
@@ -3146,6 +3165,29 @@ try {
           // 迁移至 erp-backend-lite:供 popup/content 动态获取后端基址拼 /admin URL
           const baseUrl = await getBackendUrl();
           return { ok: true, baseUrl };
+        }
+        case 'getErpBackendState': {
+          // 供 popup 渲染后端切换 UI:返回候选列表 + 当前选择 + 实际生效地址
+          const stored = await getStorage([ERP_BACKEND_STORAGE_KEY]);
+          const current = await getBackendUrl();
+          return {
+            ok: true,
+            candidates: ERP_BACKEND_CANDIDATES,
+            selected: stored?.[ERP_BACKEND_STORAGE_KEY] || null,
+            current,
+          };
+        }
+        case 'setErpBackend': {
+          // popup 切换后端:持久化用户选择 + 立即清缓存重检测 + 失效 feature flags
+          const { url } = message;
+          const valid = ERP_BACKEND_CANDIDATES.some((c) => c.url === url);
+          if (!valid) {
+            return { ok: false, error: 'invalid backend url' };
+          }
+          await setStorage({ [ERP_BACKEND_STORAGE_KEY]: url });
+          resolvedBackendUrl = url;
+          cachedFeatureFlags = null;
+          return { ok: true, current: url };
         }
         case 'getConfig': {
           // 从 erp-lite 配置中心拉取 extension + pricing 两个 scope 的配置合并返回

@@ -83,6 +83,10 @@
             <span class="status-dot"></span>
             <span class="status-text">检测服务器...</span>
           </span>
+          <div class="erp-backend-row erp-backend-row-login">
+            <span class="erp-backend-label">ERP 后端</span>
+            <select id="erp-backend-select-login" class="erp-backend-select" aria-label="切换 ERP 后端地址"></select>
+          </div>
         </div>
       </section>
 
@@ -612,6 +616,12 @@
               <polyline points="12 5 19 12 12 19" />
             </svg>
           </button>
+
+          <!-- ERP 后端切换(popup 内选择后端地址,持久化到 chrome.storage.local) -->
+          <div class="erp-backend-row" id="erp-backend-row">
+            <span class="erp-backend-label">ERP 后端</span>
+            <select id="erp-backend-select" class="erp-backend-select" aria-label="切换 ERP 后端地址"></select>
+          </div>
         </div>
       </section>
     </div>

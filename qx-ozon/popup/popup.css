@@ -325,7 +325,9 @@ select:focus {
 
 .login-footer {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
 }
 
 .server-status {
@@ -945,6 +947,45 @@ select:focus {
   50% {
     opacity: 0.4;
   }
+}
+
+/* ── ERP 后端切换行(popup 主视图底部 + 登录页 footer 共用)── */
+.erp-backend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.erp-backend-label {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.erp-backend-select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  cursor: pointer;
+}
+.erp-backend-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+/* 登录页 footer 内嵌的切换行:垂直布局,与服务器状态上下排列 */
+.erp-backend-row-login {
+  margin-top: 10px;
+  background: rgba(255, 255, 255, 0.6);
 }
 
 .browser-agent-card {

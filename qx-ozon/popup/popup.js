@@ -1200,12 +1200,62 @@
     FRONTEND_BASE_URL =
       auth.backendUrl && auth.backendUrl.includes('localhost') ? 'http://localhost:3000' : 'https://' + BRAND_WEB_HOST;
     await loadStores();
-    await Promise.all([buildSignals(), checkUpdateBanner()]);
+    await Promise.all([buildSignals(), checkUpdateBanner(), renderErpBackendSwitch()]);
     startCollectorMonPolling();
     startBrowserAgentPolling();
     // 自动采集卡片初始渲染(总开关状态 + 今日计数 + 熔断简略提示)
     renderAutoCollect();
   };
+
+  // ─── ERP 后端切换 ───
+  // 登录页 + 主视图共用一个 select 渲染逻辑。两处 select 共享同一份候选 +
+  // change handler,切换后两端同步刷新。
+  const erpBackendSelects = [
+    document.getElementById('erp-backend-select'),
+    document.getElementById('erp-backend-select-login'),
+  ].filter(Boolean);
+  let _erpBackendSaving = false;
+
+  const renderErpBackendSwitch = async () => {
+    if (!erpBackendSelects.length) return;
+    const resp = await sendMessage({ action: 'getErpBackendState' });
+    if (!resp?.ok || !Array.isArray(resp.candidates)) return;
+    const effective = resp.selected || resp.current;
+    for (const sel of erpBackendSelects) {
+      sel.innerHTML = '';
+      for (const c of resp.candidates) {
+        const opt = document.createElement('option');
+        opt.value = c.url;
+        opt.textContent = c.label;
+        if (c.url === effective) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    }
+  };
+
+  const bindErpBackendSelect = (sel) => {
+    sel.addEventListener('change', async () => {
+      if (_erpBackendSaving) return;
+      _erpBackendSaving = true;
+      try {
+        const url = sel.value;
+        const resp = await sendMessage({ action: 'setErpBackend', url });
+        if (!resp?.ok) {
+          // 切换失败:回滚所有 select 到当前实际生效地址
+          await renderErpBackendSwitch();
+          return;
+        }
+        // 切换成功:同步另一处 select 的值,避免两处显示不一致
+        for (const other of erpBackendSelects) {
+          if (other !== sel) other.value = url;
+        }
+        // 切换成功后 token/feature flags 可能与新后端不匹配,用户需重新登录
+      } finally {
+        _erpBackendSaving = false;
+      }
+    });
+  };
+  erpBackendSelects.forEach(bindErpBackendSelect);
 
   logoutBtn.addEventListener('click', async () => {
     await sendMessage({ action: 'logout' });
@@ -1422,6 +1472,8 @@
 
   // ─── Boot ───
   const init = async () => {
+    // 登录页 ERP 后端切换器需要尽早渲染,用户可在登录前选择后端
+    renderErpBackendSwitch().catch(() => { });
     const auth = await fetchAuth();
     if (auth.token) {
       setLoginState(true);

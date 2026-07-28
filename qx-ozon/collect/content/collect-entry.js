@@ -92,11 +92,17 @@
       return;
     }
 
-    // 中国店铺筛选:仅在店铺页(sellerSlug 非空)且开启 onlyMainlandChinaStores 时执行。
+    // 中国店铺筛选:开启 onlyMainlandChinaStores 时执行。
+    // - sellerSlug 为空(搜索页 / collectGate 超时降级 / 非店铺页):不入队,
+    //   避免深度阶段才被 Gate 0.5 拦下来标记 unclassified-store,浪费队列配额。
     // - isMainlandChina === false:确实非中国,永久跳过(add 到 seen)
     // - isMainlandChina === null/undefined(未分类):本次跳过但不永久标记,下次可重试
     // - checkStoreClass 异常(SW 短暂故障):本次跳过但不永久标记,下次可重试
-    if (config.onlyMainlandChinaStores && sellerSlug) {
+    if (config.onlyMainlandChinaStores) {
+      if (!sellerSlug) {
+        console.log('[submitTask] 跳过(无 sellerSlug,onlyMainlandChinaStores):', skuStr);
+        return;
+      }
       try {
         const result = await window.sendMessage('checkStoreClass', { slug: sellerSlug, sellerId: sellerId || '' });
         if (result?.isMainlandChina === false) {
