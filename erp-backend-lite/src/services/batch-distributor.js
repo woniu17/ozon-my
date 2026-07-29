@@ -177,12 +177,17 @@ export function distributeSkusByStore(skus, storeIds, perStoreCount) {
     }
   }
 
-  // 5. 合并所有桶,按桶顺序编号 seq
+  // 5. 穿插合并:按索引轮流从每个桶取一个,编号 seq
+  // 这样 OPI poller 按 seq 升序执行时,会轮流向各店铺提交(store1[0], store2[0], store3[0], store1[1]...)
+  // 而非先把 store1 全部提交完再提交 store2
   const result = [];
   let seq = 0;
-  for (const b of buckets) {
-    for (const item of b.items) {
-      result.push({ ...item, seq: seq++ });
+  const maxLen = Math.max(...buckets.map((b) => b.items.length));
+  for (let i = 0; i < maxLen; i++) {
+    for (const b of buckets) {
+      if (i < b.items.length) {
+        result.push({ ...b.items[i], seq: seq++ });
+      }
     }
   }
   return result;

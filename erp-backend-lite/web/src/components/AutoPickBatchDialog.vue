@@ -5,7 +5,7 @@
 //   2. 调用 /admin/api/batch-upload/auto-pick 后端按 sellerId 均衡选取 N 个 SKU
 //   3. 分配预览表增加价格、评论数列(便于评估选取质量)
 //   4. 创建批次时,用 auto-pick 返回的 skus + assignments 调用原 createBatchUpload
-import { reactive, ref, computed, onMounted } from 'vue';
+import { reactive, ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useStoresStore } from '../stores/stores.js';
 import { getListingTemplates } from '../api/listingTemplates.js';
@@ -23,17 +23,58 @@ const { show } = useToast();
 
 // localStorage key:记住上次选中的店铺(跨会话持久化,与 BatchUploadDialog 共用)
 const SELECTED_STORE_IDS_KEY = 'qx-batch-upload-selected-store-ids';
+// localStorage key:记住上次的所有配置(跨会话持久化)
+const CONFIG_KEY = 'qx-auto-pick-config';
+
+// 默认配置
+const DEFAULT_FORM = {
+  perStoreCount: 25,
+  storeIds: [],
+  intervalSec: 10,
+  onFailure: 'continue',
+  templateId: '',
+  defaultStock: 10,
+  name: '',
+};
+
+// 从 localStorage 恢复上次配置
+function loadSavedConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}');
+    return {
+      perStoreCount: saved.perStoreCount ?? DEFAULT_FORM.perStoreCount,
+      intervalSec: saved.intervalSec ?? DEFAULT_FORM.intervalSec,
+      onFailure: saved.onFailure ?? DEFAULT_FORM.onFailure,
+      templateId: saved.templateId ?? DEFAULT_FORM.templateId,
+      defaultStock: saved.defaultStock ?? DEFAULT_FORM.defaultStock,
+    };
+  } catch {
+    return {};
+  }
+}
+
+const savedConfig = loadSavedConfig();
 
 // ── 配置表单 ───────────────────────────────────────────────
 const form = reactive({
-  perStoreCount: 25,       // 每家目标店铺上架数量 M(总选取数 N = M × storeIds.length)
-  storeIds: [],            // 多选店铺
-  intervalSec: 10,         // 提交间隔(秒)
-  onFailure: 'continue',   // 失败处理:continue / pause
-  templateId: '',          // 上架模板 ID
-  defaultStock: 10,        // 默认库存
-  name: '',                // 批次名称(可选)
+  perStoreCount: savedConfig.perStoreCount ?? DEFAULT_FORM.perStoreCount,
+  storeIds: [],            // storeIds 单独从 SELECTED_STORE_IDS_KEY 恢复(与 BatchUploadDialog 共用)
+  intervalSec: savedConfig.intervalSec ?? DEFAULT_FORM.intervalSec,
+  onFailure: savedConfig.onFailure ?? DEFAULT_FORM.onFailure,
+  templateId: savedConfig.templateId ?? DEFAULT_FORM.templateId,
+  defaultStock: savedConfig.defaultStock ?? DEFAULT_FORM.defaultStock,
+  name: DEFAULT_FORM.name, // 批次名称不持久化(一次性使用)
 });
+
+// 持久化所有配置(除 name 外)
+function persistConfig() {
+  try {
+    const { name, ...rest } = form;
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(rest));
+  } catch {
+    /* 静默失败 */
+  }
+}
 
 const templates = ref([]);
 const loadingPreview = ref(false);
@@ -59,16 +100,30 @@ onMounted(async () => {
   try {
     const list = await getListingTemplates();
     templates.value = Array.isArray(list) ? list : [];
-    const def = templates.value.find((t) => t.isDefault) || templates.value[0];
-    if (def) {
-      form.templateId = def.id;
-      const c = def.config || {};
-      if (c.defaultStock != null) form.defaultStock = Number(c.defaultStock) || 0;
+    // 只在 templateId 为空或无效时才用默认模板(避免覆盖已恢复的上次选择)
+    const validTemplate = templates.value.find((t) => String(t.id) === String(form.templateId));
+    if (!validTemplate) {
+      const def = templates.value.find((t) => t.isDefault) || templates.value[0];
+      if (def) {
+        form.templateId = def.id;
+        // 首次使用默认模板时同步 defaultStock(后续不再覆盖用户的修改)
+        if (!savedConfig.templateId) {
+          const c = def.config || {};
+          if (c.defaultStock != null) form.defaultStock = Number(c.defaultStock) || 0;
+        }
+      }
     }
   } catch (err) {
     show(err.message || '模板列表加载失败', 'error');
   }
 });
+
+// 监听表单变化自动持久化(除 name 外)
+watch(
+  () => ({ ...form }),
+  () => persistConfig(),
+  { deep: true }
+);
 
 function toggleStore(id) {
   const i = form.storeIds.indexOf(id);
