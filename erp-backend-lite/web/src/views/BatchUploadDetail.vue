@@ -179,12 +179,15 @@ function statusInfo(st) {
   return STATUS_BADGE[st] || STATUS_BADGE[String(st).toUpperCase()] || { cls: 'badge-pending', label: st };
 }
 
-// 子任务级状态徽章(PENDING/RUNNING/SUCCESS/FAILED/SKIPPED/CANCELLED)
+// 子任务级状态徽章(两阶段状态机 2026-07)
+// PENDING → IMAGE_PENDING → IMAGE_DONE → RUNNING → SUCCESS/FAILED/SKIPPED
 function itemStatusInfo(st) {
   const s = String(st || '').toUpperCase();
   if (s === 'SUCCESS') return { cls: 'badge-success', label: '成功' };
   if (s === 'FAILED') return { cls: 'badge-failed', label: '失败' };
-  if (s === 'RUNNING') return { cls: 'badge-processing', label: '执行中' };
+  if (s === 'RUNNING') return { cls: 'badge-processing', label: 'OPI 提交中' };
+  if (s === 'IMAGE_PENDING') return { cls: 'badge-processing', label: '图片处理中' };
+  if (s === 'IMAGE_DONE') return { cls: 'badge-pending', label: '图片就绪·待OPI' };
   if (s === 'PENDING') return { cls: 'badge-pending', label: '待执行' };
   if (s === 'SKIPPED') return { cls: 'badge-pending', label: '已跳过' };
   if (s === 'CANCELLED') return { cls: 'badge-failed', label: '已取消' };
