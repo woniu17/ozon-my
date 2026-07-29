@@ -23,7 +23,7 @@
  */
 import logger from '../../middleware/log.js';
 import { db } from '../../db/index.js';
-import { processImage, sharpAvailable } from '../image-host.js';
+import { processImageBatch, sharpAvailable } from '../image-host.js';
 
 /**
  * @param {Array} items - 商品 items 数组
@@ -63,7 +63,7 @@ export async function apply(items, message) {
     return items;
   }
 
-  // 4. 遍历 items 处理图片
+  // 4. 遍历 items 处理图片(每 item 一次批量调用,本地并行/远程 1 次 HTTP)
   let total = 0;
   let processed = 0;
   let fallback = 0;
@@ -73,20 +73,41 @@ export async function apply(items, message) {
     // SKU 提取:offer_id 形如 "4143566763-0718-qx",取首段;否则用 offer_id 整体
     const sku = String(item.offer_id || '').split('-')[0] || 'unknown';
 
+    // 收集该 item 下所有 http(s) 图片 URL(跳过已是图床 URL 的 /images/... 相对路径或 data: URL)
+    const urls = [];
     for (const img of item.images) {
-      // 只处理 http(s) URL(跳过已是图床 URL 的 /images/... 相对路径或 data: URL)
-      if (!img?.file_name || !/^https?:\/\//i.test(img.file_name)) continue;
-      total++;
-      try {
-        const publicUrl = await processImage(img.file_name, sku, templateConfig);
-        // 成功:替换 file_name,保留 default 字段不变
-        img.file_name = publicUrl;
-        processed++;
-      } catch (e) {
-        // 失败:透传原 URL,记录 warn
-        logger.warn({ offerId: item.offer_id, url: img.file_name, err: e?.message }, '水印处理失败,透传原图');
-        fallback++;
+      if (img?.file_name && /^https?:\/\//i.test(img.file_name)) {
+        urls.push(img.file_name);
       }
+    }
+    if (urls.length === 0) continue;
+    total += urls.length;
+
+    try {
+      // 批量处理:本地模式 Promise.all 并行渲染,远程模式 1 次 HTTP
+      const { results } = await processImageBatch(urls, sku, templateConfig);
+      // 构建 originalUrl → publicUrl 映射(失败项透传原图)
+      const urlMap = new Map();
+      for (const r of results) {
+        if (r.ok) {
+          urlMap.set(r.originalUrl, r.publicUrl);
+          processed++;
+        } else {
+          urlMap.set(r.originalUrl, r.originalUrl);
+          fallback++;
+          logger.warn({ offerId: item.offer_id, url: r.originalUrl, err: r.error }, '水印处理失败,透传原图');
+        }
+      }
+      // 回写到 item.images
+      for (const img of item.images) {
+        if (img?.file_name && urlMap.has(img.file_name)) {
+          img.file_name = urlMap.get(img.file_name);
+        }
+      }
+    } catch (e) {
+      // 整体失败(远程网络异常等):该 item 所有图透传原图
+      fallback += urls.length;
+      logger.warn({ offerId: item.offer_id, err: e?.message }, '水印批量处理整体失败,该 item 透传原图');
     }
   }
 

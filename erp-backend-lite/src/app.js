@@ -30,12 +30,43 @@ import { startQueueCleanupPoller } from './services/queue-cleanup-poller.js';
 import { startStockSync, stopStockSync } from './services/stock-sync.js';
 import { startIndexSync, stopIndexSync } from './services/index-sync.js';
 import { startBatchUploadPoller, stopBatchUploadPoller } from './services/batch-upload-poller.js';
+import { startBatchImagePoller, stopBatchImagePoller } from './services/batch-image-poller.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
 
 // 初始化数据库 schema(异步:含一次性 backfill name 历史数据)
 await initSchema();
+
+// 水印处理依赖检测(2026-07):local/self 模式下 sharp 必需,缺失则启动失败
+// remote 模式下图片处理在远程 ERP 完成,本地不需要 sharp
+const { sharpAvailable } = await import('./services/image-host.js');
+if ((config.imageHostMode === 'local' || config.imageHostMode === 'self') && !sharpAvailable) {
+  logger.error('sharp 未安装,水印功能不可用。请执行 npm install sharp 后重启。');
+  process.exit(1);
+}
+
+// 图片处理代理配置校验(2026-07):remote/self 模式必填项检查
+if (config.imageHostMode === 'remote' || config.imageHostMode === 'self') {
+  // self 模式下 URL 缺省时自动填本机地址(测试用)
+  if (!config.remoteImageHostUrl) {
+    if (config.imageHostMode === 'self') {
+      config.remoteImageHostUrl = `http://localhost:${config.port}`;
+      logger.info({ url: config.remoteImageHostUrl }, 'self 模式: REMOTE_IMAGE_HOST_URL 缺省,自动填本机地址');
+    } else {
+      logger.error('IMAGE_HOST_MODE=remote 但 REMOTE_IMAGE_HOST_URL 未配置,启动失败');
+      process.exit(1);
+    }
+  }
+  if (!config.remoteImageHostToken) {
+    logger.error(`IMAGE_HOST_MODE=${config.imageHostMode} 但 REMOTE_IMAGE_HOST_TOKEN 未配置,启动失败`);
+    process.exit(1);
+  }
+  if (config.imageHostMode === 'remote' && !/^https:\/\//i.test(config.remoteImageHostUrl)) {
+    logger.warn({ url: config.remoteImageHostUrl }, 'REMOTE_IMAGE_HOST_URL 非 https,建议使用 HTTPS 防止 token 泄露');
+  }
+  logger.info({ mode: config.imageHostMode, url: config.remoteImageHostUrl }, '图片处理代理已启用');
+}
 
 const app = express();
 
@@ -113,7 +144,10 @@ const server = app.listen(config.port, () => {
   // 启动索引表跨表字段同步:每 5 分钟刷新 ozon_cache_index 的 seller_slug/seller_name/listed
   // (数据表 upsert 时即时同步命中位 + 冗余展示字段,本任务只刷跨表聚合字段)
   startIndexSync();
-  // P2-2:启动批量均衡上架调度器:每 2 秒检查一次,全局串行,固定间隔限速
+  // P2-2:启动批量均衡上架调度器(两阶段改造 2026-07):
+  //   第一阶段 batch-image-poller:每 500ms 扫描,并发 5,不限速,负责图片处理/水印渲染(PENDING→IMAGE_DONE)
+  //   第二阶段 batch-upload-poller:每 2 秒扫描,全局串行,OPI 阶段限速(IMAGE_DONE→SUCCESS/FAILED)
+  startBatchImagePoller();
   startBatchUploadPoller();
 });
 
@@ -122,6 +156,7 @@ function shutdown(signal) {
   logger.info({ signal }, '收到退出信号,正在关闭...');
   stopStockSync();
   stopIndexSync();
+  stopBatchImagePoller();
   stopBatchUploadPoller();
   server.close(() => {
     logger.info('已关闭');

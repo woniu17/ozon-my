@@ -9,6 +9,7 @@ import { db } from '../db/index.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { ok } from '../utils/response.js';
 import { invalidateTemplateConfigCache } from '../services/listing-builder.js';
+import config from '../config/index.js';
 
 const router = Router();
 
@@ -402,7 +403,7 @@ router.post('/admin/api/preview-opi', async (req, res, next) => {
 
 // POST /admin/api/preview/watermark —— 批量水印预览
 // body: { urls: [string], templateId: number, sku?: string }
-// 返回: { results: [{ originalUrl, publicUrl, ok, error? }] }
+// 返回: { results: [{ originalUrl, publicUrl, ok, cached?, error? }] }
 // 用途:上架预览页勾选水印时,前端调用此接口得到水印处理后的图床 URL,用于展示和 OPI JSON
 router.post('/admin/api/preview/watermark', async (req, res, next) => {
   try {
@@ -428,25 +429,64 @@ router.post('/admin/api/preview/watermark', async (req, res, next) => {
       return next(new ApiError(ErrorCode.VALIDATION_ERROR, '水印模板 config 无效(type 缺失)'));
     }
     // 动态导入避免循环依赖(config.js 在 app 启动早期加载)
-    const { processImage, sharpAvailable } = await import('../services/image-host.js');
+    const { processImageBatch, sharpAvailable } = await import('../services/image-host.js');
     if (!sharpAvailable) {
       return next(new ApiError(ErrorCode.INTERNAL_ERROR, 'sharp 未安装,水印不可用'));
     }
-    const results = [];
+    // 校验 url 格式,无效项直接标记失败
+    const validUrls = [];
+    const invalidResults = [];
     for (const url of urls) {
       if (!url || !/^https?:\/\//i.test(url)) {
-        results.push({ originalUrl: url, publicUrl: url, ok: false, error: 'invalid url' });
-        continue;
-      }
-      try {
-        const publicUrl = await processImage(url, sku, templateConfig);
-        results.push({ originalUrl: url, publicUrl, ok: true });
-      } catch (e) {
-        // 单图失败透传原 URL,不阻断整体预览
-        results.push({ originalUrl: url, publicUrl: url, ok: false, error: e?.message || String(e) });
+        invalidResults.push({ originalUrl: url, publicUrl: url, ok: false, error: 'invalid url' });
+      } else {
+        validUrls.push(url);
       }
     }
-    res.json(ok({ results }));
+    let batchResults = [];
+    if (validUrls.length > 0) {
+      // 批量处理:本地模式并行渲染,远程模式 1 次 HTTP
+      // 整体失败时(远程网络异常)降级为全部透传原图
+      try {
+        const { results } = await processImageBatch(validUrls, sku, templateConfig);
+        batchResults = results;
+      } catch (e) {
+        for (const url of validUrls) {
+          batchResults.push({ originalUrl: url, publicUrl: url, ok: false, error: e?.message || String(e) });
+        }
+      }
+    }
+    res.json(ok({ results: [...invalidResults, ...batchResults] }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /admin/api/image-host/process-batch —— 远程图片处理代理接口(批量)
+// 鉴权:x-image-host-token header(独立 token,非 JWT,已加入 auth.js PUBLIC_PATHS)
+// body: { urls: string[], sku: string, templateConfig: object }
+// 返回: { ok: true, results: [{ originalUrl, publicUrl, ok, cached, error? }] }
+// 用途:本地 ERP(IMAGE_HOST_MODE=remote)转发图片处理请求,远程处理完返回公网 URL
+router.post('/admin/api/image-host/process-batch', async (req, res, next) => {
+  try {
+    // token 鉴权(独立于 JWT)
+    if (!config.remoteImageHostToken) {
+      return res.status(500).json({ ok: false, error: '远程图片处理未配置 token' });
+    }
+    if (req.headers['x-image-host-token'] !== config.remoteImageHostToken) {
+      return res.status(401).json({ ok: false, error: 'invalid token' });
+    }
+    const { urls, sku, templateConfig } = req.body || {};
+    if (!Array.isArray(urls) || urls.length === 0 || urls.length > 20) {
+      return res.status(400).json({ ok: false, error: 'urls 必须为非空数组且 ≤ 20 张' });
+    }
+    if (!sku || !templateConfig || !templateConfig.type) {
+      return res.status(400).json({ ok: false, error: 'sku 和 templateConfig.type 必填' });
+    }
+    // 复用 processImageBatch 的本地实现:Promise.all 并行处理,单图失败隔离
+    const { processImageBatchLocal } = await import('../services/image-host.js');
+    const { results } = await processImageBatchLocal(urls, String(sku), templateConfig);
+    res.json({ ok: true, results });
   } catch (e) {
     next(e);
   }

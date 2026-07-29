@@ -460,7 +460,7 @@ router.post('/admin/api/batch-upload/:batchNo/resume', (req, res, next) => {
   }
 });
 
-// ── 取消批次(软取消:PENDING→SKIPPED,RUNNING 等完成) ───────
+// ── 取消批次(软取消:PENDING/IMAGE_PENDING/IMAGE_DONE→SKIPPED,RUNNING 等完成) ───────
 router.post('/admin/api/batch-upload/:batchNo/cancel', (req, res, next) => {
   try {
     const batch = db.prepare(`SELECT * FROM batch_upload_tasks WHERE batch_no=?`).get(req.params.batchNo);
@@ -468,15 +468,16 @@ router.post('/admin/api/batch-upload/:batchNo/cancel', (req, res, next) => {
     if (['SUCCESS', 'FAILED', 'PARTIAL'].includes(batch.status)) {
       return next(new ApiError(ErrorCode.VALIDATION_ERROR, `批次已终态(${batch.status}),不可取消`));
     }
-    // PENDING 子任务标 SKIPPED(正在 RUNNING 的等其完成)
+    // 未执行的子任务(PENDING/IMAGE_PENDING/IMAGE_DONE)标 SKIPPED(正在 RUNNING 的等其完成)
+    // 两阶段改造:IMAGE_PENDING/IMAGE_DONE 也属于未完成 OPI 的状态,取消时一并跳过
     const result = db
       .prepare(
         `UPDATE batch_upload_items
          SET status='SKIPPED', skip_reason='CANCELLED', finished_at=datetime('now'), updated_at=datetime('now')
-         WHERE batch_task_id=? AND status='PENDING'`
+         WHERE batch_task_id=? AND status IN ('PENDING','IMAGE_PENDING','IMAGE_DONE')`
       )
       .run(batch.local_task_id);
-    // 若无 RUNNING 子任务,直接标终态;否则等 poller 检测到无 PENDING 后自动 completeBatch
+    // 若无 RUNNING 子任务,直接标终态;否则等 poller 检测到无待处理后自动 completeBatch
     const runningCount = db
       .prepare(`SELECT COUNT(*) AS n FROM batch_upload_items WHERE batch_task_id=? AND status='RUNNING'`)
       .get(batch.local_task_id).n;
@@ -485,9 +486,7 @@ router.post('/admin/api/batch-upload/:batchNo/cancel', (req, res, next) => {
         batch.local_task_id
       );
     } else {
-      // 标记 PAUSED,poller 不会取 RUNNING 批次的 PENDING(已无 PENDING),等 RUNNING 完成后 completeBatch 会标 CANCELLED
-      // 但 completeBatch 标的是 SUCCESS/FAILED/PARTIAL,需特殊处理:批次被取消时标 CANCELLED
-      // 简化:直接标 CANCELLED,允许 RUNNING 子任务完成后 poller 不再处理此批次
+      // 直接标 CANCELLED,允许 RUNNING 子任务完成后 poller 不再处理此批次
       db.prepare(`UPDATE batch_upload_tasks SET status='CANCELLED' WHERE local_task_id=?`).run(batch.local_task_id);
     }
     res.json(ok({ cancelledPending: result.changes, runningCount }));

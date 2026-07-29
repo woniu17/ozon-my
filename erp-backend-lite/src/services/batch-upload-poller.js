@@ -1,14 +1,17 @@
-// 批量均衡上架调度器(P2-2)
+// 批量均衡上架·第二阶段:OPI 上架 poller(2026-07 两阶段改造)
 // 模式:沿用现有 poller 模式(setInterval + .unref())
 // 职责:
 //   1. 全局串行:同一时刻只跑一个批次(查 status='RUNNING' 的批次,取一个)
-//   2. 顺序执行:取该批次下 seq 最小的 status='PENDING' 子任务
+//   2. 顺序执行:取该批次下 seq 最小的 status='IMAGE_DONE' 子任务(图片已就绪)
 //   3. 速度控制:距上一子任务 finished_at < intervalSec 则跳过本轮
-//   4. 执行:buildListingMessage(sku, targetStoreId) → executeListing
-//   5. 状态更新:子任务 SUCCESS/FAILED,批次进度计数,无 PENDING 则批次完成
-//   6. 软取消:取消时 PENDING→SKIPPED,RUNNING 等其完成
+//   4. 执行:从 follow_sell_task_payloads 读取 transformedItems → commitListing(opi.productImport)
+//   5. 状态更新:子任务 SUCCESS/FAILED,批次进度计数,无待处理则批次完成
+//   6. 软取消:取消时 PENDING/IMAGE_PENDING/IMAGE_DONE→SKIPPED,RUNNING 等其完成
+//
+// 注意:图片处理(第一阶段)由 batch-image-poller 负责,不受 intervalSec 限速
+// 本 poller 只负责 OPI 请求阶段,受 intervalSec 限速
 import { db } from '../db/index.js';
-import { buildListingMessage, executeListing } from './listing-builder.js';
+import { commitListing } from './listing-builder.js';
 import logger from '../middleware/log.js';
 
 const POLL_INTERVAL_MS = 2 * 1000; // 每 2 秒检查一次
@@ -21,7 +24,7 @@ let timer = null;
 let running = false; // 防止 scanOnce 重入
 
 /**
- * 扫描一次:取 RUNNING 批次 → 取 PENDING 子任务 → 速度控制 → 执行
+ * 扫描一次:取 RUNNING 批次 → 取 IMAGE_DONE 子任务 → 速度控制 → 执行 OPI
  */
 async function scanOnce() {
   if (running) return; // 上一轮未完成,跳过
@@ -33,21 +36,32 @@ async function scanOnce() {
       .get();
     if (!batch) return;
 
-    // 2. 取该批次下 seq 最小的 PENDING 子任务
+    // 2. 取该批次下 seq 最小的 IMAGE_DONE 子任务(图片已就绪,待 OPI)
     const item = db
       .prepare(
         `SELECT * FROM batch_upload_items
-         WHERE batch_task_id = ? AND status = 'PENDING'
+         WHERE batch_task_id = ? AND status = 'IMAGE_DONE'
          ORDER BY seq ASC LIMIT 1`
       )
       .get(batch.local_task_id);
     if (!item) {
-      // 无 PENDING 子任务 → 批次完成
-      await completeBatch(batch.local_task_id);
+      // 无 IMAGE_DONE 子任务,检查是否还有待处理(PENDING/IMAGE_PENDING/IMAGE_DONE)
+      // 若全部处理完(无 PENDING/IMAGE_PENDING/IMAGE_DONE),则批次完成
+      const pending = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM batch_upload_items
+           WHERE batch_task_id = ? AND status IN ('PENDING','IMAGE_PENDING','IMAGE_DONE')`
+        )
+        .get(batch.local_task_id);
+      if (pending.n === 0) {
+        await completeBatch(batch.local_task_id);
+      }
+      // 否则:图片阶段还在处理中,等下一轮
       return;
     }
 
     // 3. 速度控制:距上一子任务 finished_at < intervalSec 则跳过
+    // finished_at 是 OPI 阶段的完成时间(图片阶段不写 finished_at)
     const speedConfig = parseJson(batch.speed_config) || {};
     const intervalSec = Number(speedConfig.intervalSec) || DEFAULT_INTERVAL_SEC;
     const lastFinished = db
@@ -61,7 +75,7 @@ async function scanOnce() {
       if (elapsed < intervalSec * 1000) return; // 间隔不足,跳过本轮
     }
 
-    // 4. 执行子任务
+    // 4. 执行 OPI 上架子任务
     await executeBatchItem(batch, item, speedConfig);
   } catch (e) {
     logger.warn({ err: e.message }, 'batch-upload-poller 扫描异常');
@@ -71,42 +85,46 @@ async function scanOnce() {
 }
 
 /**
- * 执行单个子任务:buildListingMessage → executeListing → 更新状态
+ * 执行单个子任务的 OPI 阶段:读取缓存的 transformedItems → commitListing → 更新状态
  */
 async function executeBatchItem(batch, item, speedConfig) {
   const batchTaskId = batch.local_task_id;
-  // ⚠️ 数据库字段是 snake_case:source_sku / target_store_id,不能直接解构为 sku
-  const sku = item.source_sku;
+  const localTaskId = item.follow_task_id; // prepareListing 返回的 localTaskId
   const targetStoreId = item.target_store_id;
+  const sku = item.source_sku;
 
-  // 标记 RUNNING + started_at
-  db.prepare(
-    `UPDATE batch_upload_items SET status='RUNNING', started_at=datetime('now'), updated_at=datetime('now') WHERE id=?`
-  ).run(item.id);
-
-  // 首次执行时更新 batch.started_at
-  if (!batch.started_at) {
-    db.prepare(`UPDATE batch_upload_tasks SET started_at=datetime('now') WHERE local_task_id=? AND started_at IS NULL`).run(
-      batchTaskId
-    );
+  if (!localTaskId) {
+    // 异常:IMAGE_DONE 但无 follow_task_id(数据不一致)
+    db.prepare(
+      `UPDATE batch_upload_items
+       SET status='FAILED', error_message='IMAGE_DONE 但 follow_task_id 为空', finished_at=datetime('now'), updated_at=datetime('now')
+       WHERE id=?`
+    ).run(item.id);
+    db.prepare(`UPDATE batch_upload_tasks SET failed_count = failed_count + 1 WHERE local_task_id=?`).run(batchTaskId);
+    logger.warn({ batchTaskId, sku, itemId: item.id }, 'batch-upload 子任务异常:IMAGE_DONE 但 follow_task_id 为空');
+    return;
   }
 
-  try {
-    // 解析配置(模板 + 库存 + 价格策略)
-    const config = parseJson(batch.config) || {};
-    const options = {
-      defaultStock: config.defaultStock ?? 0,
-      templateId: config.templateId ?? null,
-    };
-    // 价格策略(可选,来自模板配置)
-    if (config.salePrice != null) options.salePrice = config.salePrice;
-    if (config.oldPrice != null) options.oldPrice = config.oldPrice;
-    if (config.minPrice != null) options.minPrice = config.minPrice;
+  // 标记 RUNNING
+  db.prepare(
+    `UPDATE batch_upload_items SET status='RUNNING', updated_at=datetime('now') WHERE id=?`
+  ).run(item.id);
 
-    // 构建上架 message
-    const { message } = await buildListingMessage(sku, targetStoreId, options);
-    // 执行上架
-    const result = await executeListing(message, targetStoreId);
+  try {
+    // 从 follow_sell_task_payloads 读取 prepareListing 缓存的 transformedItems
+    const row = db
+      .prepare(`SELECT payload FROM follow_sell_task_payloads WHERE local_task_id=? AND stage='transformed'`)
+      .get(localTaskId);
+    if (!row) {
+      throw new Error(`transformedItems 缓存不存在(local_task_id=${localTaskId})`);
+    }
+    const transformedItems = JSON.parse(row.payload);
+    if (!Array.isArray(transformedItems) || transformedItems.length === 0) {
+      throw new Error('transformedItems 为空或非数组');
+    }
+
+    // 执行 OPI 上架(第二阶段,受 intervalSec 限速)
+    const result = await commitListing(localTaskId, transformedItems, targetStoreId);
 
     if (result.error) {
       // 失败
@@ -115,17 +133,15 @@ async function executeBatchItem(batch, item, speedConfig) {
          SET status='FAILED', follow_task_id=?, error_message=?, finished_at=datetime('now'), updated_at=datetime('now')
          WHERE id=?`
       ).run(result.localTaskId, result.error, item.id);
-      db.prepare(
-        `UPDATE batch_upload_tasks SET failed_count = failed_count + 1 WHERE local_task_id=?`
-      ).run(batchTaskId);
-      logger.warn({ batchTaskId, sku, err: result.error }, 'batch-upload 子任务失败');
+      db.prepare(`UPDATE batch_upload_tasks SET failed_count = failed_count + 1 WHERE local_task_id=?`).run(batchTaskId);
+      logger.warn({ batchTaskId, sku, err: result.error }, 'batch-upload OPI 子任务失败');
 
       // 失败策略:onFailure='pause' 则暂停批次
       if (speedConfig.onFailure === 'pause') {
         db.prepare(
-          `UPDATE batch_upload_tasks SET status='PAUSED', error_message='子任务失败触发暂停' WHERE local_task_id=?`
+          `UPDATE batch_upload_tasks SET status='PAUSED', error_message='OPI 子任务失败触发暂停' WHERE local_task_id=?`
         ).run(batchTaskId);
-        logger.info({ batchTaskId, sku }, 'batch-upload 批次因失败暂停');
+        logger.info({ batchTaskId, sku }, 'batch-upload 批次因 OPI 失败暂停');
       }
     } else {
       // 成功(OPI 调用成功,进入 PROCESSING,最终状态由 import-status-poller 收尾)
@@ -134,34 +150,30 @@ async function executeBatchItem(batch, item, speedConfig) {
          SET status='SUCCESS', follow_task_id=?, finished_at=datetime('now'), updated_at=datetime('now')
          WHERE id=?`
       ).run(result.localTaskId, item.id);
-      db.prepare(
-        `UPDATE batch_upload_tasks SET success_count = success_count + 1 WHERE local_task_id=?`
-      ).run(batchTaskId);
-      logger.info({ batchTaskId, sku, localTaskId: result.localTaskId }, 'batch-upload 子任务成功');
+      db.prepare(`UPDATE batch_upload_tasks SET success_count = success_count + 1 WHERE local_task_id=?`).run(batchTaskId);
+      logger.info({ batchTaskId, sku, localTaskId: result.localTaskId, ozonTaskId: result.ozonTaskId }, 'batch-upload OPI 子任务成功');
     }
   } catch (e) {
-    // 构建或执行过程异常(如缓存数据不足)
+    // 读取缓存或 OPI 调用异常
     const errMsg = e.message;
     db.prepare(
       `UPDATE batch_upload_items
        SET status='FAILED', error_message=?, finished_at=datetime('now'), updated_at=datetime('now')
        WHERE id=?`
     ).run(errMsg, item.id);
-    db.prepare(
-      `UPDATE batch_upload_tasks SET failed_count = failed_count + 1 WHERE local_task_id=?`
-    ).run(batchTaskId);
-    logger.warn({ batchTaskId, sku, err: errMsg, stack: e.stack }, 'batch-upload 子任务异常');
+    db.prepare(`UPDATE batch_upload_tasks SET failed_count = failed_count + 1 WHERE local_task_id=?`).run(batchTaskId);
+    logger.warn({ batchTaskId, sku, err: errMsg, stack: e.stack }, 'batch-upload OPI 子任务异常');
 
     if (speedConfig.onFailure === 'pause') {
       db.prepare(
-        `UPDATE batch_upload_tasks SET status='PAUSED', error_message='子任务异常触发暂停' WHERE local_task_id=?`
+        `UPDATE batch_upload_tasks SET status='PAUSED', error_message='OPI 子任务异常触发暂停' WHERE local_task_id=?`
       ).run(batchTaskId);
     }
   }
 }
 
 /**
- * 批次完成:无 PENDING 子任务,汇总状态
+ * 批次完成:无待处理子任务(PENDING/IMAGE_PENDING/IMAGE_DONE),汇总状态
  */
 async function completeBatch(batchTaskId) {
   const stats = db
@@ -211,7 +223,7 @@ export function startBatchUploadPoller() {
   }, FIRST_SCAN_DELAY_MS).unref();
   logger.info(
     { intervalSec: POLL_INTERVAL_MS / 1000, defaultIntervalSec: DEFAULT_INTERVAL_SEC },
-    'batch-upload-poller: 已启动(2秒检查一次,全局串行,固定间隔限速)'
+    'batch-upload-poller: 已启动(2秒检查,全局串行,OPI阶段限速,取IMAGE_DONE执行OPI)'
   );
 }
 

@@ -12,6 +12,8 @@ const PUBLIC_PATHS = new Set([
   '/favicon.ico',
   // 扩展更新检查:SW 启动时调用,不带 Authorization(版本信息无敏感数据)
   '/extension/latest',
+  // 图片处理代理:服务间调用,用 x-image-host-token 鉴权(非 JWT)
+  '/admin/api/image-host/process-batch',
 ]);
 
 function isPublic(path) {

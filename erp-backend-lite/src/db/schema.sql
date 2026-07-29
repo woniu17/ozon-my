@@ -159,7 +159,10 @@ CREATE TABLE IF NOT EXISTS batch_upload_items (
   seller_id       TEXT,                -- P2-2:来源卖家(ozon_cache_index.seller_id,审计用)
   target_store_id TEXT,                -- P2-2:分配到的目标店铺(stores.json 的 id)
   follow_task_id  TEXT, -- 关联 follow_sell_tasks.local_task_id
-  status          TEXT DEFAULT 'PENDING', -- PENDING/RUNNING/SUCCESS/FAILED/SKIPPED/CANCELLED
+  status          TEXT DEFAULT 'PENDING', -- 状态机(2026-07 两阶段改造):
+  --   PENDING → IMAGE_PENDING → IMAGE_DONE → RUNNING → SUCCESS/FAILED
+  --   PENDING:初始 / IMAGE_PENDING:图片处理中(不限速) / IMAGE_DONE:图片已就绪待OPI / RUNNING:OPI调用中 / SUCCESS:OPI成功 / FAILED:失败 / SKIPPED:跳过
+  -- 旧数据 status='PENDING' 由 batch-image-poller 当作 IMAGE_PENDING 处理(兼容)
   skip_reason     TEXT,                -- P2-2:跳过原因 INSUFFICIENT_DATA/LISTED/CANCELLED
   error_message   TEXT,
   created_at      TEXT DEFAULT (datetime('now')),

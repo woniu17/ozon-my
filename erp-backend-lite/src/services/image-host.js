@@ -24,15 +24,30 @@ try {
 export const sharpAvailable = !!sharp;
 
 /**
- * 处理单张商品图片:下载 → 渲染水印 → 落盘 → 返回公网 URL
- * 任一步失败时抛错,由调用方(watermark.js)捕获并降级为透传原 URL
+ * 计算图片的落盘路径与公网 URL(供本地处理与缓存预判共用)
+ * 文件名 hash 必须包含原图 URL + 水印模板配置,
+ * 否则切换水印模板时同 URL 命中旧缓存,水印不更新(2026-07 修复)
+ */
+function computeImagePath(url, sku, templateConfig) {
+  const templateFingerprint = JSON.stringify(templateConfig);
+  const hash = createHash('md5').update(url).update(templateFingerprint).digest('hex');
+  const safeSku = sanitizeSku(sku);
+  const subDir = join(IMAGES_DIR, safeSku);
+  const filePath = join(subDir, hash + '.jpg');
+  const publicUrl = `${config.imageHostBaseUrl}/images/${safeSku}/${hash}.jpg`;
+  return { filePath, publicUrl, subDir };
+}
+
+/**
+ * 本地处理单张商品图片:下载 → 渲染水印 → 落盘 → 返回公网 URL
+ * 任一步失败时抛错,由调用方捕获并降级为透传原 URL
  *
  * @param {string} url - 原图 URL(http/https)
  * @param {string} sku - SKU 标识(用于子目录命名)
  * @param {object} templateConfig - 水印模板配置 JSON
  * @returns {Promise<string>} 公网反代 URL
  */
-export async function processImage(url, sku, templateConfig) {
+export async function processImageLocal(url, sku, templateConfig) {
   if (!config.imageHostBaseUrl) {
     throw new Error('IMAGE_HOST_BASE_URL 未配置');
   }
@@ -44,14 +59,7 @@ export async function processImage(url, sku, templateConfig) {
     throw new Error('水印模板 type 无效');
   }
 
-  // 文件名 hash 必须包含原图 URL + 水印模板配置,
-  // 否则切换水印模板时同 URL 命中旧缓存,水印不更新(2026-07 修复)
-  const templateFingerprint = JSON.stringify(templateConfig);
-  const hash = createHash('md5').update(url).update(templateFingerprint).digest('hex');
-  const safeSku = sanitizeSku(sku);
-  const subDir = join(IMAGES_DIR, safeSku);
-  const filePath = join(subDir, hash + '.jpg');
-  const publicUrl = `${config.imageHostBaseUrl}/images/${safeSku}/${hash}.jpg`;
+  const { filePath, publicUrl, subDir } = computeImagePath(url, sku, templateConfig);
 
   // 幂等:同 url + 同水印模板配置已存在则直接返回,跳过下载和渲染
   if (existsSync(filePath)) {
@@ -89,6 +97,132 @@ export async function processImage(url, sku, templateConfig) {
 
   writeFileSync(filePath, renderedBuffer);
   return publicUrl;
+}
+
+/**
+ * 远程处理单张图片(包装批量接口,提取首项结果)
+ * 供 previewWatermark 等单图场景使用,失败抛错由调用方降级
+ */
+async function processImageRemote(url, sku, templateConfig) {
+  const { results } = await processImageBatchRemote([url], sku, templateConfig);
+  const r = results[0];
+  if (!r || !r.ok) {
+    throw new Error(r?.error || '远程图片处理失败');
+  }
+  return r.publicUrl;
+}
+
+/**
+ * 处理单张商品图片(分发器):根据 IMAGE_HOST_MODE 走本地或远程
+ * 保持原 processImage 签名,供 previewWatermark 等单图场景调用
+ *   local  = 直接调 processImageLocal
+ *   remote/self = 调 processImageRemote(走 HTTP 批量接口)
+ * @returns {Promise<string>} 公网反代 URL
+ */
+export async function processImage(url, sku, templateConfig) {
+  if (config.imageHostMode === 'remote' || config.imageHostMode === 'self') {
+    return processImageRemote(url, sku, templateConfig);
+  }
+  return processImageLocal(url, sku, templateConfig);
+}
+
+/**
+ * 本地批量处理:Promise.all 并行渲染,单图失败隔离透传原图
+ * @returns {Promise<{results: Array}>} 统一结构,永不抛错
+ */
+export async function processImageBatchLocal(urls, sku, templateConfig) {
+  const results = await Promise.all(
+    urls.map(async (url) => {
+      try {
+        const { filePath, publicUrl } = computeImagePath(url, sku, templateConfig);
+        const cached = existsSync(filePath);
+        await processImageLocal(url, sku, templateConfig);
+        return { originalUrl: url, publicUrl, ok: true, cached };
+      } catch (e) {
+        return { originalUrl: url, publicUrl: null, ok: false, cached: false, error: e.message };
+      }
+    })
+  );
+  return { results };
+}
+
+/**
+ * 远程批量处理:HTTP POST 远程 ERP 批量接口
+ * 网络/鉴权失败时整体抛错(由 watermark.js 捕获后全部透传原图)
+ * 单图失败在 results 中返回 ok:false,不抛错
+ * @returns {Promise<{results: Array}>}
+ */
+async function processImageBatchRemote(urls, sku, templateConfig) {
+  if (!config.remoteImageHostUrl) {
+    throw new Error('REMOTE_IMAGE_HOST_URL 未配置');
+  }
+  if (!config.remoteImageHostToken) {
+    throw new Error('REMOTE_IMAGE_HOST_TOKEN 未配置');
+  }
+
+  const endpoint = `${config.remoteImageHostUrl}/admin/api/image-host/process-batch`;
+  let res;
+  try {
+    res = await request(endpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-image-host-token': config.remoteImageHostToken,
+      },
+      body: JSON.stringify({ urls, sku, templateConfig }),
+      headersTimeout: 120_000,
+      bodyTimeout: 120_000,
+      maxRedirections: 5,
+    });
+  } catch (e) {
+    logger.warn({ err: e?.message, endpoint, sku, urlCount: urls.length }, '远程图片处理请求失败');
+    throw e;
+  }
+
+  if (res.statusCode === 401) {
+    throw new Error('远程图片处理鉴权失败(token 无效)');
+  }
+  if (res.statusCode === 400) {
+    throw new Error('远程图片处理请求体非法(urls 非数组/为空/超 20 张)');
+  }
+  if (res.statusCode >= 400) {
+    let msg = `远程图片处理失败: HTTP ${res.statusCode}`;
+    try {
+      const body = await res.body.json();
+      if (body?.error) msg += ` - ${body.error}`;
+    } catch {
+      // 忽略响应体解析失败
+    }
+    throw new Error(msg);
+  }
+
+  const data = await res.body.json();
+  if (!data || data.ok !== true || !Array.isArray(data.results)) {
+    throw new Error('远程图片处理响应格式异常');
+  }
+  return { results: data.results };
+}
+
+/**
+ * 批量处理图片(分发器):根据 IMAGE_HOST_MODE 走本地并行或远程批量接口
+ *   local  = 直接调 processImageBatchLocal(Promise.all 并行渲染)
+ *   remote = HTTP POST 远程 ERP 批量接口
+ *   self   = HTTP POST 本机 /admin/api/image-host/process-batch(测试用,走完整远程链路)
+ *
+ * 统一返回结构(本地/远程一致):
+ * { results: [{ originalUrl, publicUrl, ok, cached, error? }] }
+ * 永不抛错(远程整体失败除外,此时抛错由 watermark.js 透传所有原图)
+ *
+ * @param {string[]} urls - 原图 URL 数组
+ * @param {string} sku - SKU 标识
+ * @param {object} templateConfig - 水印模板配置
+ * @returns {Promise<{results: Array}>}
+ */
+export async function processImageBatch(urls, sku, templateConfig) {
+  if (config.imageHostMode === 'remote' || config.imageHostMode === 'self') {
+    return processImageBatchRemote(urls, sku, templateConfig);
+  }
+  return processImageBatchLocal(urls, sku, templateConfig);
 }
 
 /**

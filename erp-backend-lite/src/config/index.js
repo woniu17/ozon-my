@@ -43,6 +43,10 @@ const config = {
   featureFlags: featureFlagsConfig,
   loadStores,
   imageHostBaseUrl: process.env.IMAGE_HOST_BASE_URL || '',
+  // 图片处理代理(2026-07):local=本地处理,remote=转发远程 ERP
+  imageHostMode: process.env.IMAGE_HOST_MODE || 'local',
+  remoteImageHostUrl: (process.env.REMOTE_IMAGE_HOST_URL || '').replace(/\/$/, ''),
+  remoteImageHostToken: process.env.REMOTE_IMAGE_HOST_TOKEN || '',
 };
 
 export default config;
