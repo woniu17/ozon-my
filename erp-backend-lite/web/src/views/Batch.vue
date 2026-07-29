@@ -1,11 +1,14 @@
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
-import { getBatchTasks, getBatchTaskDetail } from '../api/batch.js';
+// 批量上架 · 批次列表页(新版 batch-upload 两阶段系统)
+// 点击"查看详情"跳转到 BatchUploadDetail.vue(与创建批次后进入的详情页一致)
+import { reactive, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import { getBatchUploadList } from '../api/batch-upload.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
-import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
 
+const router = useRouter();
 const storesStore = useStoresStore();
 const { show } = useToast();
 
@@ -17,7 +20,6 @@ const state = reactive({
   page: 1,
   pageSize: 20,
   filters: {
-    storeId: '',
     status: '',
     keyword: '',
   },
@@ -26,10 +28,9 @@ const state = reactive({
 async function loadList() {
   state.loading = true;
   try {
-    const data = await getBatchTasks({
+    const data = await getBatchUploadList({
       currentPage: state.page,
       pageSize: state.pageSize,
-      storeId: state.filters.storeId,
       status: state.filters.status,
       keyword: state.filters.keyword.trim(),
     });
@@ -44,56 +45,39 @@ async function loadList() {
   }
 }
 
-// 查询:重置到第 1 页后加载
 function search() {
   state.page = 1;
   loadList();
 }
 
-// 翻页:先更新页码再加载
 function onPageChange(p) {
   state.page = p;
   loadList();
 }
 
-// ── 详情弹窗 ───────────────────────────────────────────────
-const detailOpen = ref(false);
-const detailLoading = ref(false);
-const detail = ref(null);
-
-async function openDetail(localTaskId) {
-  detailOpen.value = true;
-  detailLoading.value = true;
-  detail.value = null;
-  try {
-    const data = await getBatchTaskDetail(localTaskId);
-    detail.value = data || null;
-  } catch (err) {
-    show(err.message || String(err), 'error');
-  } finally {
-    detailLoading.value = false;
-  }
+// 跳转到批次详情页(与创建时进入的页面一致)
+function openDetail(batchNo) {
+  router.push('/batch-upload/' + encodeURIComponent(batchNo));
 }
 
 // ── 渲染辅助 ───────────────────────────────────────────────
-function storeName(storeId) {
-  const s = storesStore.list.find((x) => x.id === storeId);
-  return s?.name || storeId || '—';
+function storeNames(storeIds) {
+  const ids = Array.isArray(storeIds) ? storeIds : [storeIds].filter(Boolean);
+  if (!ids.length) return '—';
+  return ids.map((id) => storesStore.list.find((x) => x.id === id)?.name || id).join(', ');
 }
 
 function fmtTime(t) {
   if (!t) return '—';
   const s = String(t).trim();
   if (!s) return '—';
-  // 后端 SQLite datetime('now') 存储 UTC 时间,格式 'YYYY-MM-DD HH:MM:SS'(无时区后缀)
-  // 需补 Z 后再解析,否则 new Date 按本地时区解析导致偏移
   let d;
   if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) {
-    d = new Date(s); // 已带时区(Z 或 +08:00),直接解析
+    d = new Date(s);
   } else {
-    d = new Date(s.replace(' ', 'T') + 'Z'); // 无时区,视为 UTC
+    d = new Date(s.replace(' ', 'T') + 'Z');
   }
-  if (isNaN(d.getTime())) return s; // 解析失败,返回原值
+  if (isNaN(d.getTime())) return s;
   const pad = (n) => String(n).padStart(2, '0');
   return (
     d.getFullYear() + '-' +
@@ -105,26 +89,20 @@ function fmtTime(t) {
   );
 }
 
-// 任务级状态徽章(兼容大小写)
+// 批次级状态徽章(与 BatchUploadDetail.vue 一致)
 const STATUS_BADGE = {
   PENDING: { cls: 'badge-pending', label: '待处理' },
   RUNNING: { cls: 'badge-processing', label: '进行中' },
+  PAUSED: { cls: 'badge-pending', label: '已暂停' },
   SUCCESS: { cls: 'badge-success', label: '成功' },
-  PARTIAL: { cls: 'badge-processing', label: '部分成功' },
   FAILED: { cls: 'badge-failed', label: '失败' },
+  PARTIAL: { cls: 'badge-processing', label: '部分成功' },
+  CANCELLED: { cls: 'badge-failed', label: '已取消' },
 };
 
 function statusInfo(st) {
   if (!st) return { cls: 'badge-pending', label: '—' };
   return STATUS_BADGE[st] || STATUS_BADGE[String(st).toUpperCase()] || { cls: 'badge-pending', label: st };
-}
-
-// 商品级明细状态徽章(SUCCESS/FAILED)
-function itemStatusInfo(st) {
-  const s = String(st || '').toUpperCase();
-  if (s === 'SUCCESS') return { cls: 'badge-success', label: '成功' };
-  if (s === 'FAILED') return { cls: 'badge-failed', label: '失败' };
-  return { cls: 'badge-pending', label: st || '—' };
 }
 
 onMounted(() => {
@@ -143,22 +121,21 @@ onMounted(() => {
     </div>
 
     <div class="filter-bar">
-      <select class="filter-select" v-model="state.filters.storeId">
-        <option value="">全部店铺</option>
-        <option v-for="s in storesStore.list" :key="s.id" :value="s.id">{{ s.name }}</option>
-      </select>
       <select class="filter-select" v-model="state.filters.status">
         <option value="">全部状态</option>
-        <option value="processing">进行中</option>
-        <option value="success">成功</option>
-        <option value="failed">失败</option>
-        <option value="pending">待处理</option>
+        <option value="RUNNING">进行中</option>
+        <option value="PAUSED">已暂停</option>
+        <option value="SUCCESS">成功</option>
+        <option value="PARTIAL">部分成功</option>
+        <option value="FAILED">失败</option>
+        <option value="CANCELLED">已取消</option>
+        <option value="PENDING">待处理</option>
       </select>
       <input
         class="filter-input"
         type="text"
         v-model.trim="state.filters.keyword"
-        placeholder="搜索任务 ID / SKU"
+        placeholder="搜索批次号 / 名称"
         @keydown.enter="search"
       />
       <button class="btn btn-primary" @click="search">查询</button>
@@ -168,10 +145,11 @@ onMounted(() => {
       <table class="data-table">
         <thead>
           <tr>
-            <th>任务ID</th>
-            <th>店铺</th>
-            <th>SKU 数</th>
-            <th>成功/失败</th>
+            <th>批次号</th>
+            <th>名称</th>
+            <th>目标店铺</th>
+            <th>总数</th>
+            <th>成功/失败/跳过</th>
             <th>状态</th>
             <th>创建时间</th>
             <th>操作</th>
@@ -179,22 +157,23 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="7" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+            <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中...</td>
           </tr>
           <tr v-else-if="!state.items.length">
-            <td colspan="7" class="empty">暂无批量上架任务</td>
+            <td colspan="8" class="empty">暂无批量上架批次</td>
           </tr>
-          <tr v-for="t in state.items" :key="t.localTaskId">
-            <td>{{ t.localTaskId }}</td>
-            <td>{{ storeName(t.storeId) }}</td>
+          <tr v-for="t in state.items" :key="t.batchNo">
+            <td>{{ t.batchNo }}</td>
+            <td>{{ t.name || '—' }}</td>
+            <td>{{ storeNames(t.storeIds) }}</td>
             <td>{{ t.totalCount ?? 0 }}</td>
-            <td>{{ t.successCount ?? 0 }} / {{ t.failedCount ?? 0 }}</td>
+            <td>{{ t.successCount ?? 0 }} / {{ t.failedCount ?? 0 }} / {{ t.skippedCount ?? 0 }}</td>
             <td>
               <span class="badge" :class="statusInfo(t.status).cls">{{ statusInfo(t.status).label }}</span>
             </td>
             <td>{{ fmtTime(t.createdAt) }}</td>
             <td>
-              <button class="btn btn-sm btn-ghost" @click="openDetail(t.localTaskId)">查看详情</button>
+              <button class="btn btn-sm btn-ghost" @click="openDetail(t.batchNo)">查看详情</button>
             </td>
           </tr>
         </tbody>
@@ -207,47 +186,5 @@ onMounted(() => {
       :pageSize="state.pageSize"
       @update:modelValue="onPageChange"
     />
-
-    <!-- 详情弹窗 -->
-    <AppModal :open="detailOpen" title="批量任务详情" size="lg" @update:open="detailOpen = $event">
-      <div v-if="detailLoading" class="empty">加载中...</div>
-      <template v-else-if="detail">
-        <div class="batch-detail-head">
-          <div><b>任务ID:</b> {{ detail.localTaskId }}</div>
-          <div><b>店铺:</b> {{ storeName(detail.storeId) }}</div>
-          <div>
-            <b>状态:</b>
-            <span class="badge" :class="statusInfo(detail.status).cls">{{ statusInfo(detail.status).label }}</span>
-          </div>
-          <div><b>总计:</b> {{ detail.totalCount ?? 0 }}</div>
-          <div><b>成功:</b> {{ detail.successCount ?? 0 }}</div>
-          <div><b>失败:</b> {{ detail.failedCount ?? 0 }}</div>
-          <div><b>创建:</b> {{ fmtTime(detail.createdAt) }}</div>
-          <div><b>完成:</b> {{ fmtTime(detail.completedAt) }}</div>
-        </div>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>SKU</th>
-              <th>状态</th>
-              <th>错误信息</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="!detail.items || !detail.items.length">
-              <td colspan="3" class="muted" style="text-align: center">无明细</td>
-            </tr>
-            <tr v-for="(it, idx) in detail.items || []" :key="idx">
-              <td>{{ it.sourceSku || '—' }}</td>
-              <td>
-                <span class="badge" :class="itemStatusInfo(it.status).cls">{{ itemStatusInfo(it.status).label }}</span>
-              </td>
-              <td>{{ it.errorMessage || it.followTaskId || '—' }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </template>
-      <div v-else class="empty">无数据</div>
-    </AppModal>
   </div>
 </template>
