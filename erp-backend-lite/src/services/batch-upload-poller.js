@@ -20,6 +20,10 @@ const FIRST_SCAN_DELAY_MS = 10 * 1000; // 启动后 10 秒首次扫描
 // 默认速度配置(批次未配置时用)
 const DEFAULT_INTERVAL_SEC = 10;
 
+// 图片处理完成后的冷却期(秒):IMAGE_DONE 后等待 N 秒才允许提交 OPI
+// 确保落盘文件可被静态资源服务/公网 CDN 访问
+const IMAGE_DONE_COOLDOWN_SEC = 5;
+
 let timer = null;
 let running = false; // 防止 scanOnce 重入
 
@@ -60,7 +64,16 @@ async function scanOnce() {
       return;
     }
 
-    // 3. 速度控制:距上一子任务 finished_at < intervalSec 则跳过
+    // 3. 图片冷却:IMAGE_DONE 后等待冷却期,确保落盘文件可被访问
+    if (item.updated_at) {
+      const imageDoneTime = new Date(item.updated_at + 'Z').getTime();
+      const elapsedSinceDone = Date.now() - imageDoneTime;
+      if (elapsedSinceDone < IMAGE_DONE_COOLDOWN_SEC * 1000) {
+        return; // 冷却中,等下一轮
+      }
+    }
+
+    // 4. 速度控制:距上一子任务 finished_at < intervalSec 则跳过
     // finished_at 是 OPI 阶段的完成时间(图片阶段不写 finished_at)
     const speedConfig = parseJson(batch.speed_config) || {};
     const intervalSec = Number(speedConfig.intervalSec) || DEFAULT_INTERVAL_SEC;
@@ -75,7 +88,7 @@ async function scanOnce() {
       if (elapsed < intervalSec * 1000) return; // 间隔不足,跳过本轮
     }
 
-    // 4. 执行 OPI 上架子任务
+    // 5. 执行 OPI 上架子任务
     await executeBatchItem(batch, item, speedConfig);
   } catch (e) {
     logger.warn({ err: e.message }, 'batch-upload-poller 扫描异常');
