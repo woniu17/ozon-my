@@ -127,6 +127,7 @@ try {
   const ERP_BACKEND_CANDIDATES = [
     { label: '本地 (localhost:3001)', url: 'http://localhost:3001' },
     { label: '远程 (2.tencent.yochylin.com)', url: 'https://2.tencent.yochylin.com:17443' },
+    { label: '远程 (yochylin.com)', url: 'https://yochylin.com:17443' },
   ];
   const ERP_BACKEND_STORAGE_KEY = 'erpBackendChoice';
 
