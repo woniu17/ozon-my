@@ -602,3 +602,39 @@ CREATE TABLE IF NOT EXISTS image_refresh_items (
 );
 CREATE INDEX IF NOT EXISTS idx_iri_task ON image_refresh_items(task_id);
 CREATE INDEX IF NOT EXISTS idx_iri_status ON image_refresh_items(status);
+
+-- ── 库存更新任务(2026-07) ──────────────────────────────────
+-- 基于已上架商品单独/批量更新库存(/v2/products/stocks)
+-- 复用图片更新的轻量任务模型,不复用 batch_upload 框架
+-- OPI 限制:单请求 ≤100 组(商品-仓库),每分钟 ≤80 请求,每 30 秒同组只能更新一次
+CREATE TABLE IF NOT EXISTS stock_refresh_tasks (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  local_task_id  TEXT UNIQUE NOT NULL,    -- stk-{timestamp}-{rand}
+  store_id       TEXT NOT NULL,            -- 目标店铺(库存所属店铺)
+  status         TEXT NOT NULL DEFAULT 'PENDING', -- PENDING/RUNNING/SUCCESS/FAILED/PARTIAL
+  total_count    INTEGER DEFAULT 0,
+  success_count  INTEGER DEFAULT 0,
+  failed_count   INTEGER DEFAULT 0,
+  stock_value    INTEGER NOT NULL,         -- 本次任务设置的统一库存值
+  source_type    TEXT DEFAULT 'manual',   -- manual(单条) / batch(批量)
+  error_message  TEXT,
+  created_at     TEXT DEFAULT (datetime('now')),
+  completed_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_srt_status ON stock_refresh_tasks(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS stock_refresh_items (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id          TEXT NOT NULL,          -- 关联 stock_refresh_tasks.local_task_id
+  product_id       TEXT NOT NULL,          -- Ozon 商品 ID
+  store_id         TEXT NOT NULL,
+  offer_id         TEXT,                   -- 卖家 SKU(可空,仅展示用)
+  status           TEXT DEFAULT 'PENDING',  -- PENDING/PROCESSING/SUCCESS/FAILED
+  stock_value      INTEGER NOT NULL,       -- 该 item 的库存值(从任务级 stock_value 复制)
+  opi_result       TEXT,                   -- JSON: /v2/products/stocks 返回的 result 项
+  error_message    TEXT,
+  created_at       TEXT DEFAULT (datetime('now')),
+  updated_at       TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sri_task ON stock_refresh_items(task_id);
+CREATE INDEX IF NOT EXISTS idx_sri_status ON stock_refresh_items(status);

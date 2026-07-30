@@ -9,6 +9,7 @@ import AppPager from '../components/AppPager.vue';
 import AppAccordion from '../components/AppAccordion.vue';
 import JsonTree from '../components/JsonTree.vue';
 import ImageRefreshDialog from '../components/ImageRefreshDialog.vue';
+import StockRefreshDialog from '../components/StockRefreshDialog.vue';
 
 const router = useRouter();
 const storesStore = useStoresStore();
@@ -34,6 +35,8 @@ const state = reactive({
 const selectedSkus = ref([]);
 // 图片更新弹窗
 const refreshDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
+// 库存更新弹窗(2026-07)
+const stockDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
 
 // 同步状态:从 Ozon 拉取店铺商品写入本地缓存
 const syncing = ref(false);
@@ -206,6 +209,32 @@ function openBatchRefresh() {
   refreshDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
 }
 
+// ── 库存更新(2026-07)──────────────────────────────────────
+// 单条更新库存:列表行操作触发
+function openSingleStock(item) {
+  if (!item.productId) {
+    show('该商品无 product_id,可能未同步完整', 'error');
+    return;
+  }
+  stockDialog.value = {
+    open: true,
+    mode: 'single',
+    singleItem: { productId: item.productId, storeId: item.storeId, offerId: item.offerId },
+    selectedProducts: [],
+  };
+}
+// 批量更新库存:列表勾选触发
+function openBatchStock() {
+  const products = state.items
+    .filter((r) => selectedSkus.value.includes(r.sku) && r.productId)
+    .map((r) => ({ productId: r.productId, storeId: r.storeId }));
+  if (!products.length) {
+    show('请先勾选有 product_id 的商品', 'error');
+    return;
+  }
+  stockDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
+}
+
 // 商品状态:从列表项 _raw.statuses 提取(OPI /v3/product/info/list 状态嵌套在 statuses 对象内)
 function productStatus(item) {
   const raw = item?._raw || {};
@@ -242,7 +271,7 @@ function stockBadgeClass(it) {
   return it.hasStock ? 'badge-success' : 'badge-failed';
 }
 function stockBadgeLabel(it) {
-  return it.hasStock ? '有库存' : '无库存';
+  return String(Number(it.stockPresent) || 0);
 }
 
 // 图片徽章:基于后端返回的 hasImageError(来自 OPI errors[].code 判断)
@@ -347,6 +376,7 @@ onMounted(() => {
     <div v-if="selectedSkus.length" style="display:flex;gap:12px;align-items:center;padding:8px 4px">
       <span class="muted">已选 {{ selectedSkus.length }} 个商品</span>
       <button class="btn btn-primary" @click="openBatchRefresh">批量更新图片</button>
+      <button class="btn btn-primary" @click="openBatchStock">批量更新库存</button>
     </div>
 
     <div class="table-wrap">
@@ -393,6 +423,7 @@ onMounted(() => {
             <td>
               <button class="btn btn-sm btn-ghost" @click="openDetail(it.sku)">查看详情</button>
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleRefresh(it)">更新图片</button>
+              <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleStock(it)">更新库存</button>
             </td>
           </tr>
         </tbody>
@@ -422,6 +453,9 @@ onMounted(() => {
           <button class="btn btn-primary" @click="openSingleRefresh({ productId: detail.productId, storeId: detail.storeId, sku: detail.sku })">
             更新图片
           </button>
+          <button class="btn btn-primary" @click="openSingleStock({ productId: detail.productId, storeId: detail.storeId, offerId: detail.data?.offer_id })">
+            更新库存
+          </button>
         </div>
       </template>
       <div v-else class="empty">无数据</div>
@@ -433,6 +467,14 @@ onMounted(() => {
       :mode="refreshDialog.mode"
       :single-item="refreshDialog.singleItem"
       :selected-products="refreshDialog.selectedProducts"
+    />
+
+    <!-- 库存更新弹窗 -->
+    <StockRefreshDialog
+      v-model:open="stockDialog.open"
+      :mode="stockDialog.mode"
+      :single-item="stockDialog.singleItem"
+      :selected-products="stockDialog.selectedProducts"
     />
   </div>
 </template>

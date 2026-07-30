@@ -668,6 +668,10 @@ router.get('/admin/api/products', (req, res, next) => {
             // 库存:OPI /v3/product/info/list 的 stocks.has_stock(布尔)
             //   true=有库存可售;false=无库存(price_sent 准备出售但缺货)
             hasStock: data.stocks?.has_stock === true,
+            // 库存数量:汇总 stocks.stocks[].present(FBS/FBO 各仓库可用库存之和)
+            stockPresent: Array.isArray(data.stocks?.stocks)
+              ? data.stocks.stocks.reduce((sum, s) => sum + (Number(s?.present) || 0), 0)
+              : 0,
             // 图片状态:OPI errors[] 中出现任一图片错误码即视为有问题
             //   primary_image_load_failed / pics_http_error / some_image_failed / all_image_failed
             //   (简化判断:不区分 WARNING/ERROR 级别,出现即标红)

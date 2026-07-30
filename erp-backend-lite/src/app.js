@@ -32,7 +32,9 @@ import { startIndexSync, stopIndexSync } from './services/index-sync.js';
 import { startBatchUploadPoller, stopBatchUploadPoller } from './services/batch-upload-poller.js';
 import { startBatchImagePoller, stopBatchImagePoller } from './services/batch-image-poller.js';
 import { startImageRefreshPoller, stopImageRefreshPoller } from './services/image-refresh-poller.js';
+import { startStockRefreshPoller, stopStockRefreshPoller } from './services/stock-refresh-poller.js';
 import imageRefreshRoutes from './modules/image-refresh.js';
+import stockRefreshRoutes from './modules/stock-refresh.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -121,6 +123,7 @@ app.use(cacheRoutes);
 app.use(collectQueueRoutes);
 app.use(categoryFilterRoutes);
 app.use(imageRefreshRoutes);
+app.use(stockRefreshRoutes);
 
 // 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
 if (config.featureFlags?.proxy_collect) {
@@ -154,6 +157,8 @@ const server = app.listen(config.port, () => {
   startBatchUploadPoller();
   // 图片更新任务调度器(2026-07):每 2s 扫描,并发 3,负责已上架商品图片重提
   startImageRefreshPoller();
+  // 库存更新任务调度器(2026-07):每 10s 扫描,串行处理,item 间 10s 间隔,负责已上架商品库存设置
+  startStockRefreshPoller();
 });
 
 // 优雅退出
@@ -164,6 +169,7 @@ function shutdown(signal) {
   stopBatchImagePoller();
   stopBatchUploadPoller();
   stopImageRefreshPoller();
+  stopStockRefreshPoller();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);
