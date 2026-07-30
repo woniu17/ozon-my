@@ -118,6 +118,7 @@ async function syncStoreProducts() {
     let totalTotal = 0;
     let totalRemoved = 0;
     let failed = 0;
+    let totalFailedBatches = 0;
     for (const r of results) {
       if (r.error) {
         failed++;
@@ -126,11 +127,12 @@ async function syncStoreProducts() {
       totalSynced += r.result?.synced ?? 0;
       totalTotal += r.result?.total ?? 0;
       totalRemoved += r.result?.removed ?? 0;
+      totalFailedBatches += r.result?.failedBatches ?? 0;
     }
     const summary = `同步完成:写入 ${totalSynced}/${totalTotal} 条,清理 ${totalRemoved} 条已下架${
       failed > 0 ? `,失败 ${failed} 个店铺` : ''
-    }`;
-    show(summary, failed > 0 ? 'error' : 'success');
+    }${totalFailedBatches > 0 ? `,${totalFailedBatches} 批详情拉取失败(见日志)` : ''}`;
+    show(summary, failed > 0 || totalFailedBatches > 0 ? 'error' : 'success');
     state.page = 1;
     await loadList();
   } finally {

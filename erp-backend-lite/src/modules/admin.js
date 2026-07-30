@@ -746,6 +746,7 @@ router.post('/admin/api/products/sync', async (req, res) => {
     const limit = 1000;
     // 耗时拆分(用于定位同步瓶颈:list/info/db/delete)
     let listMs = 0, infoMs = 0, dbMs = 0, pages = 0;
+    let failedBatches = 0; // info 接口批次失败数(504 等),记录后跳过不中断同步
 
     // 循环拉取商品列表(游标分页),批量拉详情后写入 product_data_cache
     while (true) {
@@ -766,8 +767,33 @@ router.post('/admin/api/products/sync', async (req, res) => {
         const INFO_BATCH_SIZE = 300;
         for (let i = 0; i < productIds.length; i += INFO_BATCH_SIZE) {
           const batch = productIds.slice(i, i + INFO_BATCH_SIZE);
+          const batchNo = Math.floor(i / INFO_BATCH_SIZE) + 1;
           const __ti = Date.now();
-          const infoResp = await opi.productInfoListV3(store, { productIds: batch });
+          let infoResp;
+          try {
+            infoResp = await opi.productInfoListV3(store, { productIds: batch });
+          } catch (e) {
+            // 记录详情供分析(504 网关超时 / 其他 HTTP 错误 / 网络异常)
+            // 不中断整店同步,跳过本批继续下一批(部分数据缺失比整店失败好)
+            const httpStatus = e?.details?.httpStatus;
+            logger.warn(
+              {
+                storeId,
+                page: pages,
+                batchNo,
+                batchStart: i,
+                batchEnd: i + batch.length,
+                batchSize: batch.length,
+                productIds: batch,
+                httpStatus: httpStatus ?? null,
+                errCode: e?.code ?? null,
+                errMessage: e?.message ?? String(e),
+              },
+              '[sync] productInfoListV3 批次失败,跳过'
+            );
+            failedBatches++;
+            continue;
+          }
           infoMs += Date.now() - __ti;
           const infoItems = infoResp?.result?.items || infoResp?.items || [];
           const __td = Date.now();
@@ -795,10 +821,10 @@ router.post('/admin/api/products/sync', async (req, res) => {
 
     const durationMs = Date.now() - startedAt;
     logger.info(
-      { storeId, total, synced, removed, pages, listMs, infoMs, dbMs, delMs, totalMs: durationMs },
+      { storeId, total, synced, removed, pages, failedBatches, listMs, infoMs, dbMs, delMs, totalMs: durationMs },
       '[sync-profile] 同步耗时拆分'
     );
-    res.json(ok({ synced, total, removed, durationMs }));
+    res.json(ok({ synced, total, removed, failedBatches, durationMs }));
   } catch (err) {
     res.status(500).json({ code: 1, message: err.message });
   }

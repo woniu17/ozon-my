@@ -35,7 +35,9 @@ async function call(store, path, body, { method = 'POST', timeoutMs = DEFAULT_TI
     }
     if (res.statusCode >= 400) {
       logger.warn({ url, status: res.statusCode, body: parsed }, 'OPI non-2xx');
-      throw new ApiError(ErrorCode.NETWORK_ERROR, `OPI ${path} 返回 ${res.statusCode}: ${parsed?.message || text}`);
+      throw new ApiError(ErrorCode.NETWORK_ERROR, `OPI ${path} 返回 ${res.statusCode}: ${parsed?.message || text}`, {
+        details: { httpStatus: res.statusCode, body: parsed },
+      });
     }
     return parsed;
   } catch (e) {
