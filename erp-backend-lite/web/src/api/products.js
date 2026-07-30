@@ -14,3 +14,8 @@ export function getProductDetail(id) {
 export function syncProducts(storeId) {
   return request.post('/admin/api/products/sync?storeId=' + encodeURIComponent(storeId));
 }
+
+// 查询所有店铺的同步进度(轮询用)
+export function getSyncProgress() {
+  return request.get('/admin/api/products/sync-progress');
+}

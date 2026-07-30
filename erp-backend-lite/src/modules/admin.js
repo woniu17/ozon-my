@@ -724,19 +724,64 @@ router.get('/admin/api/products', (req, res, next) => {
 // 全量替换语义:同步完成后删除该店铺本次未刷新的旧记录(Ozon 端已不存在的商品)
 // 同步过程中若异常,已写入的新数据保留,旧数据不删除(失败安全)
 // 响应: { synced, total, removed, durationMs }
-router.post('/admin/api/products/sync', async (req, res) => {
-  try {
-    const storeId = req.query.storeId ? String(req.query.storeId) : '';
-    if (!storeId) {
-      return res.status(400).json({ code: 1, message: '需要 storeId 参数' });
-    }
-    const stores = readStores();
-    const store = stores.find((s) => s.id === storeId);
-    if (!store) {
-      return res.status(404).json({ code: 1, message: `店铺不存在: ${storeId}` });
-    }
+// 进度:执行过程实时更新 syncProgressMap,前端可通过 GET /sync-progress 轮询
 
-    const startedAt = Date.now();
+// 内存进度状态(进程级,重启丢失):storeId → 进度对象
+// 同步进行中实时更新;完成后保留 60s 供前端最后查询,之后自动清理
+const syncProgressMap = new Map();
+const PROGRESS_RETAIN_MS = 60_000; // 完成后保留时长
+
+function setProgress(storeId, patch) {
+  const now = Date.now();
+  const cur = syncProgressMap.get(storeId) || { storeId, startedAt: now };
+  const next = { ...cur, ...patch, elapsedMs: now - (cur.startedAt || now) };
+  syncProgressMap.set(storeId, next);
+}
+
+function finalizeProgress(storeId, status, extra = {}) {
+  const cur = syncProgressMap.get(storeId) || { storeId, startedAt: Date.now() };
+  const now = Date.now();
+  syncProgressMap.set(storeId, {
+    ...cur,
+    ...extra,
+    status,
+    elapsedMs: now - (cur.startedAt || now),
+    finishedAt: now,
+  });
+  // 60s 后清理,避免内存泄漏
+  setTimeout(() => syncProgressMap.delete(storeId), PROGRESS_RETAIN_MS);
+}
+
+// GET /admin/api/products/sync-progress —— 查询所有店铺的同步进度
+// 返回 { items: [{ storeId, storeName, status, phase, page, total, synced, failedBatches, elapsedMs, message }] }
+router.get('/admin/api/products/sync-progress', (req, res, next) => {
+  try {
+    const stores = readStores();
+    const nameMap = new Map(stores.map((s) => [s.id, s.name || s.id]));
+    const items = Array.from(syncProgressMap.values()).map((p) => ({
+      ...p,
+      storeName: nameMap.get(p.storeId) || p.storeId,
+    }));
+    res.json(ok({ items }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/admin/api/products/sync', async (req, res) => {
+  const storeId = req.query.storeId ? String(req.query.storeId) : '';
+  if (!storeId) {
+    return res.status(400).json({ code: 1, message: '需要 storeId 参数' });
+  }
+  const stores = readStores();
+  const store = stores.find((s) => s.id === storeId);
+  if (!store) {
+    return res.status(404).json({ code: 1, message: `店铺不存在: ${storeId}` });
+  }
+
+  const startedAt = Date.now();
+  setProgress(storeId, { status: 'running', phase: 'init', page: 0, total: 0, synced: 0, failedBatches: 0, startedAt, message: '初始化' });
+  try {
     // 同步起点时间戳:本次同步所有写入记录的 fetched_at 都会 >= 此值
     // 用 datetime('now') 而非 JS Date,确保与 SQLite 服务器时钟一致
     const syncStartedAt = db.prepare(`SELECT datetime('now') as t`).get().t;
@@ -750,6 +795,7 @@ router.post('/admin/api/products/sync', async (req, res) => {
 
     // 循环拉取商品列表(游标分页),批量拉详情后写入 product_data_cache
     while (true) {
+      setProgress(storeId, { phase: 'list', page: pages, total, synced, failedBatches, message: `拉取列表第 ${pages + 1} 页` });
       const __tl = Date.now();
       const listResp = await opi.productList(store, { lastId, limit });
       listMs += Date.now() - __tl;
@@ -765,9 +811,18 @@ router.post('/admin/api/products/sync', async (req, res) => {
         );
         // 分批拉详情:OPI /v3/product/info/list 单次最多 300 个 product_id
         const INFO_BATCH_SIZE = 300;
+        const totalBatches = Math.ceil(productIds.length / INFO_BATCH_SIZE);
         for (let i = 0; i < productIds.length; i += INFO_BATCH_SIZE) {
           const batch = productIds.slice(i, i + INFO_BATCH_SIZE);
           const batchNo = Math.floor(i / INFO_BATCH_SIZE) + 1;
+          setProgress(storeId, {
+            phase: 'info',
+            page: pages,
+            total,
+            synced,
+            failedBatches,
+            message: `拉取详情 第${pages}页 批次${batchNo}/${totalBatches} (${synced}/${total})`,
+          });
           const __ti = Date.now();
           let infoResp;
           try {
@@ -792,6 +847,7 @@ router.post('/admin/api/products/sync', async (req, res) => {
               '[sync] productInfoListV3 批次失败,跳过'
             );
             failedBatches++;
+            setProgress(storeId, { failedBatches });
             continue;
           }
           infoMs += Date.now() - __ti;
@@ -804,6 +860,7 @@ router.post('/admin/api/products/sync', async (req, res) => {
             synced++;
           }
           dbMs += Date.now() - __td;
+          setProgress(storeId, { synced });
         }
       }
 
@@ -813,6 +870,7 @@ router.post('/admin/api/products/sync', async (req, res) => {
 
     // 全量替换:删除该店铺本次同步未刷新的旧记录(Ozon 端已不存在的商品)
     // 同步成功到达此处才执行删除,中途异常不删旧数据(失败安全)
+    setProgress(storeId, { phase: 'delete', message: `清理旧记录` });
     const __tdel = Date.now();
     const removed = db
       .prepare(`DELETE FROM product_data_cache WHERE store_id = ? AND fetched_at < ?`)
@@ -824,8 +882,10 @@ router.post('/admin/api/products/sync', async (req, res) => {
       { storeId, total, synced, removed, pages, failedBatches, listMs, infoMs, dbMs, delMs, totalMs: durationMs },
       '[sync-profile] 同步耗时拆分'
     );
+    finalizeProgress(storeId, 'done', { phase: 'done', page: pages, total, synced, removed, failedBatches, durationMs, message: `完成:写入${synced}/${total},清理${removed}` });
     res.json(ok({ synced, total, removed, failedBatches, durationMs }));
   } catch (err) {
+    finalizeProgress(storeId, 'error', { phase: 'error', message: err.message });
     res.status(500).json({ code: 1, message: err.message });
   }
 });

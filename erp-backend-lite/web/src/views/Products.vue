@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { getProducts, getProductDetail, syncProducts } from '../api/products.js';
+import { getProducts, getProductDetail, syncProducts, getSyncProgress } from '../api/products.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
@@ -43,6 +43,40 @@ const filterBatchLoading = ref('');
 // 同步状态:从 Ozon 拉取店铺商品写入本地缓存
 const syncing = ref(false);
 const syncLabel = ref('同步店铺商品');
+// 同步进度:各店铺实时进度列表(轮询 GET /sync-progress 填充)
+const syncProgressItems = ref([]);
+let syncProgressTimer = null;
+
+function startProgressPolling() {
+  stopProgressPolling();
+  const poll = async () => {
+    try {
+      const r = await getSyncProgress();
+      syncProgressItems.value = r?.items || [];
+    } catch {
+      // 轮询失败不阻断,下次重试
+    }
+  };
+  poll();
+  syncProgressTimer = setInterval(poll, 2000);
+}
+
+function stopProgressPolling() {
+  if (syncProgressTimer) {
+    clearInterval(syncProgressTimer);
+    syncProgressTimer = null;
+  }
+}
+
+// 格式化单条进度为简短文本
+function fmtProgress(p) {
+  if (!p) return '';
+  const secs = Math.round((p.elapsedMs || 0) / 1000);
+  const t = `${secs}s`;
+  if (p.status === 'done') return `✓ ${p.message} (${t})`;
+  if (p.status === 'error') return `✗ ${p.message} (${t})`;
+  return `${p.message || p.phase} (${t})`;
+}
 
 async function loadList() {
   state.loading = true;
@@ -94,6 +128,7 @@ async function syncStoreProducts() {
 
   syncing.value = true;
   const STORE_INTERVAL_MS = 5000; // 店铺间发请求间隔,避免触发 Ozon 限流
+  startProgressPolling(); // 启动进度轮询(2s 间隔)
   try {
     // 并行启动:第 i 个店铺延迟 i*5s 发请求,各店铺独立 await 不阻塞其他
     const promises = targets.map((t, i) => {
@@ -110,7 +145,7 @@ async function syncStoreProducts() {
       });
     });
 
-    // 显示"同步中"提示(并行模式下无法显示逐个进度)
+    // 显示"同步中"提示(详细进度见下方进度列表)
     syncLabel.value = storeId ? '同步中...' : `同步中 (并行 ${targets.length} 个店铺)`;
 
     const results = await Promise.all(promises);
@@ -136,6 +171,11 @@ async function syncStoreProducts() {
     state.page = 1;
     await loadList();
   } finally {
+    // 最后再轮询一次拿终态,然后停止
+    try { const r = await getSyncProgress(); syncProgressItems.value = r?.items || []; } catch {}
+    stopProgressPolling();
+    // 保留进度显示 5s 后清空
+    setTimeout(() => { syncProgressItems.value = []; }, 5000);
     syncing.value = false;
     syncLabel.value = '同步店铺商品';
   }
@@ -385,6 +425,20 @@ onMounted(() => {
       <button class="btn btn-ghost" :disabled="state.loading || syncing" @click="loadList">
         {{ state.loading ? '刷新中...' : '刷新' }}
       </button>
+    </div>
+
+    <!-- 同步进度:各店铺实时状态(仅同步进行中/刚完成时显示) -->
+    <div v-if="syncProgressItems.length" style="display:flex;flex-direction:column;gap:4px;padding:8px 0;margin-bottom:4px">
+      <div
+        v-for="p in syncProgressItems"
+        :key="p.storeId"
+        style="display:flex;gap:8px;align-items:center;font-size:13px"
+      >
+        <span style="min-width:90px;font-weight:600">{{ p.storeName }}</span>
+        <span :style="{ color: p.status === 'done' ? '#2e7d32' : p.status === 'error' ? '#c62828' : '#666' }">
+          {{ fmtProgress(p) }}
+        </span>
+      </div>
     </div>
 
     <div class="filter-bar">
