@@ -698,13 +698,13 @@ router.get('/admin/api/products', (req, res, next) => {
             //   (简化判断:不区分 WARNING/ERROR 级别,出现即标红)
             hasImageError: Array.isArray(data.errors)
               ? data.errors.some(
-                  (e) =>
-                    e.code === 'primary_image_load_failed' ||
-                    e.code === 'pics_http_error' ||
-                    e.code === 'some_image_failed' ||
-                    e.code === 'all_image_failed' ||
-                    e.code === 'warning_all_image_failed'
-                )
+                (e) =>
+                  e.code === 'primary_image_load_failed' ||
+                  e.code === 'pics_http_error' ||
+                  e.code === 'some_image_failed' ||
+                  e.code === 'all_image_failed' ||
+                  e.code === 'warning_all_image_failed'
+              )
               : false,
             _raw: data,
           };
@@ -759,21 +759,26 @@ router.post('/admin/api/products/sync', async (req, res) => {
 
       const productIds = items.map((it) => it.product_id).filter(Boolean);
       if (productIds.length > 0) {
-        const __ti = Date.now();
-        const infoResp = await opi.productInfoListV3(store, { productIds });
-        infoMs += Date.now() - __ti;
-        const infoItems = infoResp?.result?.items || infoResp?.items || [];
-        const __td = Date.now();
         const stmt = db.prepare(
           `INSERT OR REPLACE INTO product_data_cache (sku, data, store_id, fetched_at) VALUES (?, ?, ?, datetime('now'))`
         );
-        for (const item of infoItems) {
-          const sku = String(item.sku || item.id || '');
-          if (!sku) continue;
-          stmt.run(sku, JSON.stringify(item), storeId);
-          synced++;
+        // 分批拉详情:OPI /v3/product/info/list 单次最多 300 个 product_id
+        const INFO_BATCH_SIZE = 300;
+        for (let i = 0; i < productIds.length; i += INFO_BATCH_SIZE) {
+          const batch = productIds.slice(i, i + INFO_BATCH_SIZE);
+          const __ti = Date.now();
+          const infoResp = await opi.productInfoListV3(store, { productIds: batch });
+          infoMs += Date.now() - __ti;
+          const infoItems = infoResp?.result?.items || infoResp?.items || [];
+          const __td = Date.now();
+          for (const item of infoItems) {
+            const sku = String(item.sku || item.id || '');
+            if (!sku) continue;
+            stmt.run(sku, JSON.stringify(item), storeId);
+            synced++;
+          }
+          dbMs += Date.now() - __td;
         }
-        dbMs += Date.now() - __td;
       }
 
       lastId = listResp?.result?.last_id || listResp?.last_id || '';
