@@ -296,28 +296,16 @@ onMounted(() => {
 
         <!-- 操作按钮 -->
         <div class="bud-detail-actions">
-          <button
-            v-if="state.detail.status === 'RUNNING'"
-            class="btn btn-sm btn-ghost"
-            :disabled="state.actionLoading === 'pause'"
-            @click="onPause"
-          >
+          <button v-if="state.detail.status === 'RUNNING'" class="btn btn-sm btn-ghost"
+            :disabled="state.actionLoading === 'pause'" @click="onPause">
             {{ state.actionLoading === 'pause' ? '暂停中...' : '暂停' }}
           </button>
-          <button
-            v-if="state.detail.status === 'PAUSED'"
-            class="btn btn-sm btn-primary"
-            :disabled="state.actionLoading === 'resume'"
-            @click="onResume"
-          >
+          <button v-if="state.detail.status === 'PAUSED'" class="btn btn-sm btn-primary"
+            :disabled="state.actionLoading === 'resume'" @click="onResume">
             {{ state.actionLoading === 'resume' ? '继续中...' : '继续' }}
           </button>
-          <button
-            v-if="isCancelable(state.detail.status)"
-            class="btn btn-sm btn-danger"
-            :disabled="state.actionLoading === 'cancel'"
-            @click="onCancel"
-          >
+          <button v-if="isCancelable(state.detail.status)" class="btn btn-sm btn-danger"
+            :disabled="state.actionLoading === 'cancel'" @click="onCancel">
             {{ state.actionLoading === 'cancel' ? '取消中...' : '取消批次' }}
           </button>
           <span v-if="['RUNNING', 'PAUSED'].includes(state.detail.status)" class="muted small">
@@ -332,10 +320,10 @@ onMounted(() => {
           <thead>
             <tr>
               <th style="width: 50px">序号</th>
-              <th>SKU</th>
-              <th>来源卖家</th>
-              <th style="width: 180px">目标店铺</th>
-              <th style="width: 90px">状态</th>
+              <th style="width: 150px">SKU</th>
+              <th style="width: 150px">来源卖家</th>
+              <th style="width: 150px">目标店铺</th>
+              <th style="width: 130px">状态</th>
               <th>跳过原因/错误</th>
               <th style="width: 150px">开始时间</th>
               <th style="width: 150px">完成时间</th>
@@ -350,13 +338,8 @@ onMounted(() => {
               <td class="bud-sku">{{ it.sourceSku || '—' }}</td>
               <td>{{ it.sellerId || '—' }}</td>
               <td>
-                <select
-                  v-if="it.status === 'PENDING'"
-                  class="bud-store-select"
-                  :value="it.targetStoreId"
-                  :disabled="state.reassigningId === it.id"
-                  @change="onReassign(it, $event.target.value)"
-                >
+                <select v-if="it.status === 'PENDING'" class="bud-store-select" :value="it.targetStoreId"
+                  :disabled="state.reassigningId === it.id" @change="onReassign(it, $event.target.value)">
                   <option v-for="s in state.detail.storeIds || []" :key="s" :value="s">
                     {{ storeName(s) }}
                   </option>
@@ -385,10 +368,12 @@ onMounted(() => {
   align-items: baseline;
   gap: 4px;
 }
+
 .bud-head-right {
   display: flex;
   gap: 8px;
 }
+
 .bud-detail-card {
   margin: 0 24px 16px;
   background: #fff;
@@ -397,25 +382,30 @@ onMounted(() => {
   padding: 16px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
 }
+
 .bud-detail-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 8px 16px;
   font-size: 13px;
 }
+
 .bud-meta-row {
   display: flex;
   gap: 6px;
   align-items: center;
 }
+
 .bud-meta-k {
   color: var(--muted, #6b7280);
   min-width: 80px;
   font-size: 12px;
 }
+
 .bud-meta-v {
   word-break: break-all;
 }
+
 .bud-progress {
   position: relative;
   margin-top: 12px;
@@ -424,12 +414,14 @@ onMounted(() => {
   border-radius: 4px;
   overflow: hidden;
 }
+
 .bud-progress-bar {
   position: absolute;
   inset: 0 auto 0 0;
   background: var(--primary, #2563eb);
   transition: width 0.3s ease;
 }
+
 .bud-progress-text {
   position: absolute;
   inset: 0;
@@ -440,6 +432,7 @@ onMounted(() => {
   color: #fff;
   font-weight: 500;
 }
+
 .bud-detail-actions {
   display: flex;
   gap: 8px;
@@ -448,10 +441,12 @@ onMounted(() => {
   padding-top: 12px;
   border-top: 1px solid var(--border, #e4e8ee);
 }
+
 .bud-sku {
   font-family: ui-monospace, Menlo, monospace;
   font-size: 12px;
 }
+
 .bud-store-select {
   width: 100%;
   padding: 4px 6px;
@@ -460,10 +455,12 @@ onMounted(() => {
   font-size: 12px;
   background: #fff;
 }
+
 .bud-store-select:focus {
   outline: none;
   border-color: var(--primary, #2563eb);
 }
+
 .bud-error-cell {
   max-width: 240px;
   font-size: 12px;
