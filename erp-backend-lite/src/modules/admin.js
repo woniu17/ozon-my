@@ -599,6 +599,33 @@ router.get('/admin/api/collect-box-v2/attribute-values', async (req, res, next) 
 
 // ── 商品列表(查 product_data_cache,跨店铺) ───────────────
 
+// 简化商品状态:基于 OPI /v3/product/info/list 的 4 维原始字段计算 6 类用户可理解的状态
+// 输入:product_data_cache.data 解析后的对象
+// 优先级:rejected > saleable/created_no_stock > pending_creation > in_review > unknown
+//   - saleable(可售):is_created=true AND has_stock=true (98.7% 商品)
+//   - created_no_stock(已创建缺货):is_created=true AND has_stock=false
+//   - pending_creation(待创建):is_created=false AND approved AND validation=success
+//     (审核通过但 Ozon 未完成创建,调 /v2/products/stocks 会返回 PRODUCT_IS_NOT_CREATED)
+//   - in_review(审核中):moderate_status ∈ ('', 'in-moderating') OR validation_status=pending
+//   - rejected(审核拒绝):moderate_status=declined OR validation_status=fail OR status=unmatched
+//   - unknown(数据异常):其他(如全 null)
+// 注:rejected 判定优先于 created,避免如 declined + created=1 的边界行被误归到 created_no_stock
+function computeProductStatus(data) {
+  const st = data?.statuses || {};
+  const mod = st.moderate_status ?? '';
+  const val = st.validation_status ?? '';
+  const status = st.status ?? '';
+  const isCreated = st.is_created === true || st.is_created === 1;
+  const hasStock = data?.stocks?.has_stock === true || data?.stocks?.has_stock === 1;
+
+  if (mod === 'declined' || val === 'fail' || status === 'unmatched') return 'rejected';
+  if (isCreated && hasStock) return 'saleable';
+  if (isCreated && !hasStock) return 'created_no_stock';
+  if (!isCreated && mod === 'approved' && val === 'success') return 'pending_creation';
+  if (mod === '' || mod === 'in-moderating' || val === 'pending') return 'in_review';
+  return 'unknown';
+}
+
 // GET /admin/api/products —— 商品数据缓存列表(支持 keyword 模糊搜 sku / data)
 // query: ?currentPage=1&pageSize=20&keyword=&idsOnly=1
 //   idsOnly=1 时跳过分页,返回全量精简列表(仅 productId/storeId/offerId),供"按筛选批量更新"使用
@@ -632,6 +659,37 @@ router.get('/admin/api/products', (req, res, next) => {
     if (req.query.status) {
       where.push("json_extract(data, '$.statuses.status') = ?");
       params.push(String(req.query.status));
+    }
+    // 简化状态筛选(2026-07):基于 is_created + moderate + validation + has_stock 计算 6 类
+    //   saleable / created_no_stock / pending_creation / in_review / rejected / unknown
+    // 优先级:rejected > saleable/created_no_stock > pending_creation > in_review > unknown
+    // (rejected 判定优先,避免如 declined + created=1 的边界行被误归到 created_no_stock)
+    if (req.query.productStatus) {
+      const ps = String(req.query.productStatus);
+      // SQL CASE 表达式:与后端 computeProductStatus 保持一致
+      where.push(
+        `(CASE
+            WHEN COALESCE(json_extract(data, '$.statuses.moderate_status'), '') = 'declined'
+                 OR json_extract(data, '$.statuses.validation_status') = 'fail'
+                 OR json_extract(data, '$.statuses.status') = 'unmatched'
+              THEN 'rejected'
+            WHEN json_extract(data, '$.statuses.is_created') = 1
+                 AND COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 1
+              THEN 'saleable'
+            WHEN json_extract(data, '$.statuses.is_created') = 1
+                 AND COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 0
+              THEN 'created_no_stock'
+            WHEN json_extract(data, '$.statuses.is_created') = 0
+                 AND json_extract(data, '$.statuses.moderate_status') = 'approved'
+                 AND json_extract(data, '$.statuses.validation_status') = 'success'
+              THEN 'pending_creation'
+            WHEN COALESCE(json_extract(data, '$.statuses.moderate_status'), '') IN ('', 'in-moderating')
+                 OR json_extract(data, '$.statuses.validation_status') = 'pending'
+              THEN 'in_review'
+            ELSE 'unknown'
+           END) = ?`
+      );
+      params.push(ps);
     }
     // 图片问题筛选:基于 data.errors 数组中的图片错误码
     //   OPI 返回的 errors[].code 命中以下任一即视为图片有问题
@@ -679,6 +737,9 @@ router.get('/admin/api/products', (req, res, next) => {
             sku: r.sku,
             storeId: r.store_id || '',
             fetchedAt: r.fetched_at,
+            // 简化商品状态(2026-07):6 类用户可理解状态,前端展示与筛选主用此字段
+            // 原始 statuses.* 仍保留在 _raw 中供详情页查看
+            productStatus: computeProductStatus(data),
             // 提取常用展示字段(容错:不同 OPI 版本字段名可能不同)
             name: data.name || data.title || '',
             productId: data.product_id || data.id || '',
@@ -809,8 +870,9 @@ router.post('/admin/api/products/sync', async (req, res) => {
         const stmt = db.prepare(
           `INSERT OR REPLACE INTO product_data_cache (sku, data, store_id, fetched_at) VALUES (?, ?, ?, datetime('now'))`
         );
-        // 分批拉详情:OPI /v3/product/info/list 单次最多 300 个 product_id
-        const INFO_BATCH_SIZE = 300;
+        // 分批拉详情:OPI /v3/product/info/list
+        // 2026-07:改回 1000/批(单批越多总请求数越少,大店铺更快)
+        const INFO_BATCH_SIZE = 1000;
         const totalBatches = Math.ceil(productIds.length / INFO_BATCH_SIZE);
         for (let i = 0; i < productIds.length; i += INFO_BATCH_SIZE) {
           const batch = productIds.slice(i, i + INFO_BATCH_SIZE);

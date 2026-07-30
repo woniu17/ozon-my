@@ -25,7 +25,7 @@ const state = reactive({
   filters: {
     storeId: '',
     keyword: '',
-    status: '',
+    productStatus: '', // 简化状态(2026-07):'' 全部 | saleable/created_no_stock/pending_creation/in_review/rejected/unknown
     hasStock: '', // '' 全部 | '1' 有库存 | '0' 无库存
     imageIssue: '',
   },
@@ -46,6 +46,12 @@ const syncLabel = ref('同步店铺商品');
 // 同步进度:各店铺实时进度列表(轮询 GET /sync-progress 填充)
 const syncProgressItems = ref([]);
 let syncProgressTimer = null;
+// 同步总计时(从开始同步到所有店铺完成,显示在进度面板标题处)
+const syncStartedAt = ref(0); // 0 表示未开始
+const syncElapsedSec = ref(0); // 实时累计秒数
+let syncElapsedTimer = null;
+// 同步是否已完成(用于完成后停止计时但保留面板)
+const syncFinished = ref(false);
 
 function startProgressPolling() {
   stopProgressPolling();
@@ -68,6 +74,45 @@ function stopProgressPolling() {
   }
 }
 
+// 启动总计时器:每秒更新 syncElapsedSec
+function startElapsedTimer() {
+  stopElapsedTimer();
+  syncStartedAt.value = Date.now();
+  syncElapsedSec.value = 0;
+  syncFinished.value = false;
+  syncElapsedTimer = setInterval(() => {
+    if (syncStartedAt.value) {
+      syncElapsedSec.value = Math.floor((Date.now() - syncStartedAt.value) / 1000);
+    }
+  }, 1000);
+}
+
+function stopElapsedTimer() {
+  if (syncElapsedTimer) {
+    clearInterval(syncElapsedTimer);
+    syncElapsedTimer = null;
+  }
+}
+
+// 格式化秒数为 mm:ss 或 h:mm:ss
+function fmtDuration(sec) {
+  if (!sec || sec < 0) return '0s';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// 用户手动关闭进度面板
+function closeSyncPanel() {
+  syncProgressItems.value = [];
+  stopElapsedTimer();
+  syncStartedAt.value = 0;
+  syncElapsedSec.value = 0;
+  syncFinished.value = false;
+}
+
 // 格式化单条进度为简短文本
 function fmtProgress(p) {
   if (!p) return '';
@@ -86,7 +131,7 @@ async function loadList() {
       pageSize: state.pageSize,
       storeId: state.filters.storeId,
       keyword: state.filters.keyword.trim(),
-      status: state.filters.status,
+      productStatus: state.filters.productStatus,
       hasStock: state.filters.hasStock,
       imageIssue: state.filters.imageIssue,
     });
@@ -129,6 +174,7 @@ async function syncStoreProducts() {
   syncing.value = true;
   const STORE_INTERVAL_MS = 5000; // 店铺间发请求间隔,避免触发 Ozon 限流
   startProgressPolling(); // 启动进度轮询(2s 间隔)
+  startElapsedTimer(); // 启动总计时器(每秒更新)
   try {
     // 并行启动:第 i 个店铺延迟 i*5s 发请求,各店铺独立 await 不阻塞其他
     const promises = targets.map((t, i) => {
@@ -171,11 +217,11 @@ async function syncStoreProducts() {
     state.page = 1;
     await loadList();
   } finally {
-    // 最后再轮询一次拿终态,然后停止
+    // 最后再轮询一次拿终态,然后停止轮询(但保留面板显示,用户手动关闭)
     try { const r = await getSyncProgress(); syncProgressItems.value = r?.items || []; } catch {}
     stopProgressPolling();
-    // 保留进度显示 5s 后清空
-    setTimeout(() => { syncProgressItems.value = []; }, 5000);
+    stopElapsedTimer(); // 停止计时,保留最终耗时显示
+    syncFinished.value = true; // 标记完成,面板显示"关闭"按钮
     syncing.value = false;
     syncLabel.value = '同步店铺商品';
   }
@@ -300,7 +346,7 @@ async function openFilteredBatch(type) {
     const data = await getProducts({
       storeId: state.filters.storeId,
       keyword: state.filters.keyword.trim(),
-      status: state.filters.status,
+      productStatus: state.filters.productStatus,
       hasStock: state.filters.hasStock,
       imageIssue: state.filters.imageIssue,
       idsOnly: 1,
@@ -331,34 +377,37 @@ function openFilteredStock() {
   return openFilteredBatch('stock');
 }
 
-// 商品状态:从列表项 _raw.statuses 提取(OPI /v3/product/info/list 状态嵌套在 statuses 对象内)
-function productStatus(item) {
-  const raw = item?._raw || {};
-  return raw.statuses?.status || raw.status || raw.state || '';
-}
-
-const STATUS_BADGE = {
-  // 实际数据中出现的状态(OPI /v3/product/info/list 的 statuses.status)
-  price_sent: { cls: 'badge-success', label: '准备出售' },
-  variant_wait: { cls: 'badge-failed', label: '未创建' },
-  new: { cls: 'badge-pending', label: '新建' },
-  unmatched: { cls: 'badge-failed', label: '未匹配' },
-  moderated: { cls: 'badge-success', label: '已审核' },
-  offer_validated: { cls: 'badge-processing', label: '报价已验证' },
-  // 兼容可能出现的其他状态(同步拉取后可能出现)
-  published: { cls: 'badge-success', label: '已发布' },
-  imported: { cls: 'badge-processing', label: '已导入' },
-  ready_to_publish: { cls: 'badge-processing', label: '待发布' },
-  pending: { cls: 'badge-pending', label: '待处理' },
-  pending_moderation: { cls: 'badge-pending', label: '待审核' },
-  moderating: { cls: 'badge-processing', label: '审核中' },
-  failed_validation: { cls: 'badge-failed', label: '校验失败' },
-  failed: { cls: 'badge-failed', label: '失败' },
-  removed: { cls: 'badge-failed', label: '已下架' },
+// 商品简化状态徽章(2026-07):基于后端返回的 productStatus(6 类)
+// 不再从 _raw.statuses.status 解析,改用后端统一计算的简化状态
+const PRODUCT_STATUS_BADGE = {
+  saleable: { cls: 'badge-success', label: '可售' },
+  created_no_stock: { cls: 'badge-pending', label: '已创建缺货' },
+  pending_creation: { cls: 'badge-processing', label: '待创建' },
+  in_review: { cls: 'badge-pending', label: '审核中' },
+  rejected: { cls: 'badge-failed', label: '审核拒绝' },
+  unknown: { cls: 'badge-pending', label: '数据异常' },
 };
 
-function statusInfo(st) {
-  return STATUS_BADGE[st] || { cls: 'badge-pending', label: st || '—' };
+function productStatusInfo(it) {
+  return PRODUCT_STATUS_BADGE[it.productStatus] || { cls: 'badge-pending', label: it.productStatus || '—' };
+}
+
+// 状态子tab 配置(2026-07):顺序与展示标签,与 PRODUCT_STATUS_BADGE 同步
+const PRODUCT_STATUS_TABS = [
+  { value: 'saleable', label: '可售' },
+  { value: 'created_no_stock', label: '已创建缺货' },
+  { value: 'pending_creation', label: '待创建' },
+  { value: 'in_review', label: '审核中' },
+  { value: 'rejected', label: '审核拒绝' },
+  { value: 'unknown', label: '数据异常' },
+];
+
+// 切换状态 tab:重置到第 1 页并加载
+function setStatusTab(val) {
+  if (state.filters.productStatus === val) return;
+  state.filters.productStatus = val;
+  state.page = 1;
+  loadList();
 }
 
 // 库存徽章:基于后端返回的 hasStock(来自 OPI stocks.has_stock)
@@ -427,14 +476,28 @@ onMounted(() => {
       </button>
     </div>
 
-    <!-- 同步进度:右上角浮动卡片(不占文档流,避免破坏页面布局) -->
+    <!-- 同步进度:右上角浮动卡片(不占文档流,避免破坏页面布局)
+         2026-07:完成后不自动消失,显示总计时 + 关闭按钮供用户手动关闭 -->
     <div
-      v-if="syncProgressItems.length"
+      v-if="syncProgressItems.length || syncFinished"
       style="position:fixed;top:16px;right:16px;z-index:2000;min-width:320px;max-width:420px;background:#fff;border:1px solid #e0e0e0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.12);padding:12px 14px;font-size:13px"
     >
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #f0f0f0">
-        <span style="font-weight:600">同步进度</span>
-        <span style="color:#999;font-size:12px">{{ syncProgressItems.length }} 个店铺</span>
+        <span style="font-weight:600">
+          同步进度
+          <span style="color:#666;font-weight:normal;margin-left:8px">{{ syncProgressItems.length }} 个店铺</span>
+        </span>
+        <span style="display:flex;align-items:center;gap:10px">
+          <span :style="{ color: syncFinished ? '#2e7d32' : '#0288d1', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }" :title="'总耗时'">
+            ⏱ {{ fmtDuration(syncElapsedSec) }}
+          </span>
+          <button
+            v-if="syncFinished"
+            style="background:none;border:none;cursor:pointer;color:#999;font-size:16px;padding:0 2px;line-height:1"
+            title="关闭"
+            @click="closeSyncPanel"
+          >×</button>
+        </span>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;max-height:50vh;overflow-y:auto">
         <div
@@ -462,34 +525,39 @@ onMounted(() => {
         placeholder="搜索 SKU / 名称"
         @keydown.enter="search"
       />
-      <select class="filter-select" v-model="state.filters.status">
-        <option value="">全部状态</option>
-        <option value="price_sent">准备出售</option>
-        <option value="variant_wait">未创建</option>
-        <option value="new">新建</option>
-        <option value="unmatched">未匹配</option>
-        <option value="moderated">已审核</option>
-        <option value="offer_validated">报价已验证</option>
-        <option value="published">已发布</option>
-        <option value="imported">已导入</option>
-        <option value="ready_to_publish">待发布</option>
-        <option value="pending">待处理</option>
-        <option value="pending_moderation">待审核</option>
-        <option value="moderating">审核中</option>
-        <option value="failed_validation">校验失败</option>
-        <option value="failed">失败</option>
-        <option value="removed">已下架</option>
-      </select>
-      <select class="filter-select" v-model="state.filters.imageIssue">
-        <option value="">全部商品</option>
-        <option value="1">仅图片问题</option>
-      </select>
-      <select class="filter-select" v-model="state.filters.hasStock">
-        <option value="">全部库存</option>
-        <option value="1">有库存</option>
-        <option value="0">无库存</option>
-      </select>
+      <label class="filter-checkbox" :title="'勾选后只显示无库存的商品'">
+        <input
+          type="checkbox"
+          :checked="state.filters.hasStock === '0'"
+          @change="state.filters.hasStock = $event.target.checked ? '0' : ''"
+        />
+        <span>无库存</span>
+      </label>
+      <label class="filter-checkbox" :title="'勾选后只显示图片缺失的商品'">
+        <input
+          type="checkbox"
+          :checked="state.filters.imageIssue === '1'"
+          @change="state.filters.imageIssue = $event.target.checked ? '1' : ''"
+        />
+        <span>图片缺失</span>
+      </label>
       <button class="btn btn-primary" @click="search">查询</button>
+    </div>
+
+    <!-- 状态子tab筛选(2026-07):替代原状态下拉,直观展示 6 类简化状态 -->
+    <div class="status-tabs">
+      <button
+        class="status-tab"
+        :class="{ active: state.filters.productStatus === '' }"
+        @click="setStatusTab('')"
+      >全部</button>
+      <button
+        v-for="opt in PRODUCT_STATUS_TABS"
+        :key="opt.value"
+        class="status-tab"
+        :class="{ active: state.filters.productStatus === opt.value, ['status-tab-' + opt.value]: true }"
+        @click="setStatusTab(opt.value)"
+      >{{ opt.label }}</button>
     </div>
 
     <div v-if="selectedSkus.length" style="display:flex;gap:12px;align-items:center;padding:8px 4px">
@@ -539,8 +607,8 @@ onMounted(() => {
             <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="it.name">{{ it.name || '—' }}</td>
             <td>{{ storeName(it.storeId) }}</td>
             <td>
-              <span class="badge" :class="statusInfo(productStatus(it)).cls">{{
-                statusInfo(productStatus(it)).label
+              <span class="badge" :class="productStatusInfo(it).cls">{{
+                productStatusInfo(it).label
               }}</span>
             </td>
             <td>

@@ -557,6 +557,67 @@ h3 {
 .filter-input {
   min-width: 200px;
 }
+/* 筛选栏复选框(如"仅图片问题"):与 .filter-select 同高度,点击区域更大 */
+.filter-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.filter-checkbox input {
+  margin: 0;
+  cursor: pointer;
+}
+.filter-checkbox:hover {
+  border-color: var(--primary);
+}
+
+/* ── 状态子tab筛选条(商品列表等) ── */
+/* 横向排列的按钮组,选中项高亮,与状态徽章颜色对应 */
+.status-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 8px 4px 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.status-tab {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.status-tab:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.status-tab.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+/* 各状态 active 时使用对应语义色(覆盖 var(--primary)) */
+.status-tab-saleable.active { background: #2e7d32; border-color: #2e7d32; }
+.status-tab-created_no_stock.active { background: #ed6c02; border-color: #ed6c02; }
+.status-tab-pending_creation.active { background: #0288d1; border-color: #0288d1; }
+.status-tab-in_review.active { background: #ed6c02; border-color: #ed6c02; }
+.status-tab-rejected.active { background: #c62828; border-color: #c62828; }
+.status-tab-unknown.active { background: #757575; border-color: #757575; }
 
 /* ── 上架记录表格 ── */
 .listings-table-wrap {
