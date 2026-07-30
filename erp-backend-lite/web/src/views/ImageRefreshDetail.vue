@@ -21,8 +21,39 @@ const state = ref({
   error: '',
   retryingId: '',
   checkingId: '',
+  activeStore: '', // '' = 全部,跨店铺时按店铺筛选 items
 });
 let pollTimer = null;
+
+// 是否跨店铺任务(items 来自多个店铺)
+const isMultiStore = computed(() => {
+  const items = state.value.detail?.items || [];
+  const set = new Set(items.map((it) => it.storeId));
+  return set.size > 1;
+});
+
+// 按店铺分组统计:[{ storeId, storeName, total, success, failed }]
+const storeGroups = computed(() => {
+  const items = state.value.detail?.items || [];
+  const map = new Map();
+  for (const it of items) {
+    if (!map.has(it.storeId)) {
+      map.set(it.storeId, { storeId: it.storeId, storeName: storeName(it.storeId), total: 0, success: 0, failed: 0 });
+    }
+    const g = map.get(it.storeId);
+    g.total++;
+    if (it.status === 'SUCCESS') g.success++;
+    else if (it.status === 'FAILED') g.failed++;
+  }
+  return Array.from(map.values());
+});
+
+// 按 activeStore 筛选后的 items
+const filteredItems = computed(() => {
+  const items = state.value.detail?.items || [];
+  if (!state.value.activeStore) return items;
+  return items.filter((it) => it.storeId === state.value.activeStore);
+});
 
 async function loadDetail(silent = false) {
   if (!silent) state.value.loading = true;
@@ -150,7 +181,13 @@ onBeforeUnmount(() => {
       <!-- 任务概要 -->
       <div class="ir-summary">
         <div class="meta-row"><span class="meta-k">任务 ID</span><span class="meta-v">{{ state.detail.task.localTaskId }}</span></div>
-        <div class="meta-row"><span class="meta-k">店铺</span><span class="meta-v">{{ storeName(state.detail.task.storeId) }}</span></div>
+        <div class="meta-row">
+          <span class="meta-k">店铺</span>
+          <span class="meta-v">
+            <span v-if="isMultiStore" style="color:#1890ff;font-weight:600">多个 ({{ storeGroups.length }} 个店铺)</span>
+            <span v-else>{{ storeName(state.detail.task.storeId) }}</span>
+          </span>
+        </div>
         <div class="meta-row"><span class="meta-k">状态</span><span class="meta-v"><span class="badge" :class="statusInfo(state.detail.task.status).cls">{{ statusInfo(state.detail.task.status).label }}</span></span></div>
         <div class="meta-row"><span class="meta-k">总计</span><span class="meta-v">{{ state.detail.task.totalCount }}</span></div>
         <div class="meta-row"><span class="meta-k">成功</span><span class="meta-v" style="color:#52c41a">{{ state.detail.task.successCount }}</span></div>
@@ -160,11 +197,34 @@ onBeforeUnmount(() => {
         <div class="meta-row"><span class="meta-k">完成时间</span><span class="meta-v">{{ fmtTime(state.detail.task.completedAt) }}</span></div>
       </div>
 
+      <!-- 跨店铺:店铺筛选 tab + 各店铺统计 -->
+      <div v-if="isMultiStore" class="store-tabs">
+        <button
+          class="store-tab"
+          :class="{ active: !state.activeStore }"
+          @click="state.activeStore = ''"
+        >
+          全部 ({{ state.detail.items.length }})
+        </button>
+        <button
+          v-for="g in storeGroups"
+          :key="g.storeId"
+          class="store-tab"
+          :class="{ active: state.activeStore === g.storeId }"
+          @click="state.activeStore = g.storeId"
+        >
+          {{ g.storeName }} ({{ g.total }})
+          <span v-if="g.failed" style="color:#ff4d4f">·失败{{ g.failed }}</span>
+          <span v-else-if="g.success === g.total" style="color:#52c41a">·全成功</span>
+        </button>
+      </div>
+
       <!-- items 表 -->
       <div class="listings-table-wrap">
         <table class="listings-table">
           <thead>
             <tr>
+              <th v-if="isMultiStore">店铺</th>
               <th>商品 ID</th>
               <th>SKU</th>
               <th>状态</th>
@@ -175,10 +235,11 @@ onBeforeUnmount(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-if="!state.detail.items.length">
-              <td colspan="7" class="muted" style="padding:16px;text-align:center">无明细数据</td>
+            <tr v-if="!filteredItems.length">
+              <td :colspan="isMultiStore ? 8 : 7" class="muted" style="padding:16px;text-align:center">无明细数据</td>
             </tr>
-            <tr v-for="it in state.detail.items" :key="it.id">
+            <tr v-for="it in filteredItems" :key="it.id">
+              <td v-if="isMultiStore" style="font-size:12px;color:#666">{{ storeName(it.storeId) }}</td>
               <td>{{ it.productId }}</td>
               <td>{{ it.offerId || '—' }}</td>
               <td><span class="badge" :class="statusInfo(it.status).cls">{{ statusInfo(it.status).label }}</span></td>
@@ -231,6 +292,30 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   padding: 12px;
   margin-bottom: 16px;
+}
+.store-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.store-tab {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.store-tab:hover {
+  border-color: #1890ff;
+  color: #1890ff;
+}
+.store-tab.active {
+  background: #1890ff;
+  border-color: #1890ff;
+  color: #fff;
 }
 .meta-row {
   display: flex;
