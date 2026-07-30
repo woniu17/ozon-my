@@ -17,6 +17,7 @@ const tabs = [
   { key: '/collect-box-v2', label: '采集箱' },
   { key: '/products', label: '商品列表' },
   { key: '/batch', label: '批量上架' },
+  { key: '/image-refresh-tasks', label: '图片更新任务' },
   { key: '/audit', label: '操作日志' },
   { key: '/config', label: '配置中心' },
   { key: '/listing-templates', label: '上架模板' },
@@ -36,6 +37,8 @@ const activeTab = computed(() => {
   // 精确匹配优先,否则前缀匹配
   const exact = tabs.find((t) => t.key === p);
   if (exact) return exact.key;
+  // 特殊:图片更新详情页 /image-refresh/:id 高亮"图片更新任务" tab
+  if (p.startsWith('/image-refresh/')) return '/image-refresh-tasks';
   return tabs.find((t) => p.startsWith(t.key))?.key || '/admin';
 });
 

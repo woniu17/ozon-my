@@ -7,6 +7,7 @@ import CollectBoxV2 from '../views/CollectBoxV2.vue';
 import Preview from '../views/Preview.vue';
 import Products from '../views/Products.vue';
 import Batch from '../views/Batch.vue';
+import ImageRefreshList from '../views/ImageRefreshList.vue';
 import Audit from '../views/Audit.vue';
 import Config from '../views/Config.vue';
 import ListingTemplates from '../views/ListingTemplates.vue';
@@ -32,6 +33,7 @@ const router = createRouter({
     { path: '/preview/:sku', name: 'preview', component: Preview, meta: { title: '上架预览' } },
     { path: '/products', name: 'products', component: Products },
     { path: '/batch', name: 'batch', component: Batch },
+    { path: '/image-refresh-tasks', name: 'image-refresh-tasks', component: ImageRefreshList, meta: { title: '图片更新任务' } },
     { path: '/audit', name: 'audit', component: Audit },
     { path: '/config', name: 'config', component: Config },
     { path: '/listing-templates', name: 'listing-templates', component: ListingTemplates },

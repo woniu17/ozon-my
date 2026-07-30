@@ -26,7 +26,8 @@ const router = useRouter();
 const { show } = useToast();
 
 const templates = ref([]);
-const templateId = ref(''); // '' = 不加工直接重提源图
+const TEMPLATE_LS_KEY = 'imageRefresh.lastTemplateId';
+const templateId = ref(localStorage.getItem(TEMPLATE_LS_KEY) || ''); // '' = 不加工直接重提源图
 const submitting = ref(false);
 // 单条模式:图片 URL 列表(可编辑,每行一个)
 const imageLines = ref('');
@@ -39,10 +40,19 @@ watch(
   async (v) => {
     if (!v) return;
     imageLines.value = '';
-    templateId.value = '';
+    // 记忆上次选择的模板(若该模板已被删除,则回退为空)
+    const last = localStorage.getItem(TEMPLATE_LS_KEY) || '';
+    templateId.value =
+      last === '' || templates.value.some((t) => String(t.id) === String(last)) ? last : '';
     try {
       const data = await getListingTemplates();
       templates.value = Array.isArray(data) ? data : data?.items || [];
+      // 模板加载完成后再校验一次 last 是否仍有效
+      if (last !== '' && !templates.value.some((t) => String(t.id) === String(last))) {
+        templateId.value = '';
+      } else {
+        templateId.value = last;
+      }
     } catch (e) {
       templates.value = [];
     }
@@ -98,6 +108,8 @@ async function submit() {
       };
     }
     const r = await createImageRefresh(body);
+    // 记忆本次选择的模板,下次打开时自动回填
+    localStorage.setItem(TEMPLATE_LS_KEY, templateId.value || '');
     show('图片更新任务已创建', 'success');
     emit('submitted', r);
     emit('update:open', false);

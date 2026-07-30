@@ -64,16 +64,23 @@ function expandRecordsToItems(records) {
 }
 
 // products 模式:按 productId + storeId 创建 items(商品列表用,不限图片问题)
-// 通过 product_data_cache 关联 offer_id(sku),便于 poller 从 follow_sell_task_payloads 读源图
+// productId = Ozon 的 data.id(数字,用于调 OPI 接口)
+// offer_id = data.offer_id(卖家SKU,用于关联 follow_sell_task_items)
+// 注意:product_data_cache.sku 字段存的是 FBS 变体 SKU(data.sku),不能用作 offer_id
 function expandProductsToItems(products) {
   const out = [];
   for (const p of products) {
     if (!p.productId || !p.storeId) continue;
-    // 从 product_data_cache 查 offer_id(sku)
+    // 通过 data.id 反查 product_data_cache,提取真正的 offer_id(卖家SKU)
+    // json_extract 返回数字,productId 需转 Number 才能匹配
     const cache = db
-      .prepare(`SELECT sku FROM product_data_cache WHERE store_id=? AND data LIKE ?`)
-      .get(p.storeId, '%"product_id":' + String(p.productId) + '%');
-    const offerId = cache?.sku || null;
+      .prepare(
+        `SELECT json_extract(data, '$.offer_id') as offer_id
+         FROM product_data_cache
+         WHERE store_id=? AND json_extract(data, '$.id')=?`
+      )
+      .get(String(p.storeId), Number(p.productId));
+    const offerId = cache?.offer_id || null;
     out.push({ productId: p.productId, storeId: p.storeId, offerId });
   }
   return out;

@@ -1,7 +1,7 @@
 // 图片更新任务调度 poller(2026-07)
 // 职责:轮询 image_refresh_tasks(PENDING/RUNNING),对每个 item 执行
 //   读源图 → 按模板加工水印 → 调 /v1/product/pictures/import 提交 → 等5s → 查 /v2/product/pictures/info 验证 → 更新状态
-// 并发:单次最多 3 个 item;轮询周期 2s
+// 串行处理每个 item,item 间间隔 2s,避免触发 Ozon API 限流;轮询周期 2s
 import { db } from '../db/index.js';
 import config from '../config/index.js';
 import { processImageBatch } from './image-host.js';
@@ -10,7 +10,8 @@ import logger from '../middleware/log.js';
 
 const POLL_INTERVAL_MS = 2000;
 const FIRST_SCAN_DELAY_MS = 8 * 1000;
-const MAX_CONCURRENCY = 3;
+const MAX_CONCURRENCY = 1; // 串行处理,降低并发避免 Ozon API 限流
+const ITEM_INTERVAL_MS = 2000; // item 间时间间隔,防止连续提交触发限流
 const COOLDOWN_MS = 5000; // 提交后等 5s 再查状态(对齐项目约定)
 
 let timer = null;
@@ -67,12 +68,14 @@ function getSourceImages(item) {
     if (rawImgs) return rawImgs;
   }
   // 4. 无 source_task_id(商品列表模式):按 offer_id 反查最近的 follow_sell_task_items 找 sourceTaskId
+  //    注意:不要求 product_id IS NOT NULL —— 上架时 product_id 可能为 null(OPI 还没返回),
+  //    但 payload 已存在,local_task_id 足以定位源图
   const offerId = item.source_item_offer_id || item.offer_id;
   if (offerId) {
     const tItem = db
       .prepare(
         `SELECT i.local_task_id, i.product_id FROM follow_sell_task_items i
-         WHERE i.offer_id=? AND i.product_id IS NOT NULL
+         WHERE i.offer_id=?
          ORDER BY i.id DESC LIMIT 1`
       )
       .get(offerId);
@@ -275,7 +278,11 @@ async function scanOnce() {
         .prepare(`SELECT * FROM image_refresh_items WHERE task_id=? AND status='PENDING' ORDER BY id ASC LIMIT ?`)
         .all(task.local_task_id, MAX_CONCURRENCY);
       if (items.length === 0) continue;
-      await Promise.all(items.map((it) => processItem(it, task)));
+      // 串行处理每个 item,item 间增加时间间隔,避免触发 Ozon API 限流
+      for (const it of items) {
+        await processItem(it, task);
+        await new Promise((r) => setTimeout(r, ITEM_INTERVAL_MS));
+      }
     }
   } catch (e) {
     logger.warn({ err: e.message }, 'image-refresh-poller 扫描异常');
@@ -294,8 +301,8 @@ export function startImageRefreshPoller() {
     timer.unref();
   }, FIRST_SCAN_DELAY_MS).unref();
   logger.info(
-    { intervalMs: POLL_INTERVAL_MS, concurrency: MAX_CONCURRENCY },
-    'image-refresh-poller: 已启动(2s检查,并发3,图片更新调度)'
+    { intervalMs: POLL_INTERVAL_MS, concurrency: MAX_CONCURRENCY, itemIntervalMs: ITEM_INTERVAL_MS },
+    'image-refresh-poller: 已启动(2s检查,串行处理,item间2s间隔,图片更新调度)'
   );
 }
 

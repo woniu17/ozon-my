@@ -1,5 +1,6 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { getListings } from '../api/listings.js';
 import { get } from '../api/request.js';
 import { useStoresStore } from '../stores/stores.js';
@@ -7,6 +8,7 @@ import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
 
+const router = useRouter();
 const storesStore = useStoresStore();
 const { show } = useToast();
 
@@ -164,6 +166,21 @@ function statusInfo(st) {
   return STATUS_MAP[st] || { cls: 'badge-pending', label: st || '—' };
 }
 
+// 图片更新任务状态徽章
+const IMAGE_REFRESH_STATUS_MAP = {
+  PENDING: { cls: 'badge-pending', label: '待处理' },
+  RUNNING: { cls: 'badge-processing', label: '进行中' },
+  SUCCESS: { cls: 'badge-success', label: '成功' },
+  PARTIAL: { cls: 'badge-processing', label: '部分成功' },
+  FAILED: { cls: 'badge-failed', label: '失败' },
+};
+function imageRefreshInfo(st) {
+  return IMAGE_REFRESH_STATUS_MAP[st] || { cls: 'badge-pending', label: st || '—' };
+}
+function openImageRefreshDetail(localTaskId) {
+  router.push('/image-refresh/' + encodeURIComponent(localTaskId));
+}
+
 function fmtTime(t) {
   if (!t) return '—';
   const s = String(t).trim();
@@ -301,16 +318,17 @@ onMounted(() => {
             <th>SKU 数</th>
             <th>成功/失败</th>
             <th>状态</th>
+            <th>图片更新</th>
             <th class="col-time">创建时间</th>
             <th class="col-actions">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="7" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+            <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中...</td>
           </tr>
           <tr v-else-if="!state.items.length">
-            <td colspan="7" class="muted" style="padding: 24px; text-align: center">暂无上架记录</td>
+            <td colspan="8" class="muted" style="padding: 24px; text-align: center">暂无上架记录</td>
           </tr>
           <tr v-for="r in state.items" :key="r.localTaskId">
             <td class="col-task" :title="r.localTaskId">{{ r.localTaskId }}</td>
@@ -319,6 +337,12 @@ onMounted(() => {
             <td class="col-result">{{ resultText(r) }}</td>
             <td>
               <span class="badge" :class="statusInfo(r.status).cls">{{ statusInfo(r.status).label }}</span>
+            </td>
+            <td>
+              <span v-if="r.imageRefreshTaskId" class="badge clickable" :class="imageRefreshInfo(r.imageRefreshStatus).cls" :title="r.imageRefreshTaskId" @click="openImageRefreshDetail(r.imageRefreshTaskId)">
+                {{ imageRefreshInfo(r.imageRefreshStatus).label }}
+              </span>
+              <span v-else class="muted">—</span>
             </td>
             <td class="col-time">{{ fmtTime(r.createdAt) }}</td>
             <td class="col-actions">
@@ -465,3 +489,14 @@ onMounted(() => {
     </AppModal>
   </div>
 </template>
+
+<style scoped>
+.badge.clickable {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.badge.clickable:hover {
+  opacity: 0.85;
+}
+</style>

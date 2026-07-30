@@ -74,6 +74,13 @@ async function fetchAndSaveOpiResult(row, store) {
         templateId: task?.template_id || null,
         sourceType: 'auto',
       });
+      // 回写关联字段到上架任务,供上架记录页展示图片更新状态徽章
+      if (result?.localTaskId) {
+        db.prepare(`UPDATE follow_sell_tasks SET image_refresh_task_id=? WHERE local_task_id=?`).run(
+          result.localTaskId,
+          row.local_task_id
+        );
+      }
       logger.info(
         { localTaskId: row.local_task_id, refreshTaskId: result?.localTaskId, count: imageErrorItems.length },
         'import-status-poller: 检测到图片错误,已自动创建图片更新任务'

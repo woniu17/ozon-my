@@ -279,37 +279,37 @@ router.get('/admin/api/listing-records', (req, res, next) => {
     const where = [];
     const params = [];
     if (req.query.storeId) {
-      where.push('store_id = ?');
+      where.push('f.store_id = ?');
       params.push(String(req.query.storeId));
     }
     if (req.query.status) {
-      where.push('status = ?');
+      where.push('f.status = ?');
       params.push(String(req.query.status));
     }
     if (req.query.imageIssue === '1' || req.query.imageIssue === 'true') {
       // 图片问题筛选:invalid_image 非空 OR items 有图片相关错误
       // 快速预筛(基于上架时已存的 OPI 响应),详情页提供「检查图片状态」按钮实时查 Ozon 最新状态
       where.push(
-        `((invalid_image IS NOT NULL AND invalid_image != '' AND invalid_image != '[]')
+        `((f.invalid_image IS NOT NULL AND f.invalid_image != '' AND f.invalid_image != '[]')
           OR EXISTS (SELECT 1 FROM follow_sell_task_items i
-                     WHERE i.local_task_id = follow_sell_tasks.local_task_id
+                     WHERE i.local_task_id = f.local_task_id
                        AND i.has_error = 1
                        AND (i.errors LIKE '%image%' OR i.errors LIKE '%photo%'
                             OR i.errors LIKE '%picture%' OR i.errors LIKE '%图片%' OR i.errors LIKE '%照片%')))`
       );
     }
     if (req.query.viaPortal === '1' || req.query.viaPortal === 'true') {
-      where.push('via_portal = 1');
+      where.push('f.via_portal = 1');
     } else if (req.query.viaPortal === '0' || req.query.viaPortal === 'false') {
-      where.push('via_portal = 0');
+      where.push('f.via_portal = 0');
     }
     if (req.query.keyword) {
       // keyword 同时匹配:任务ID / Ozon Task ID / items_preview / items 表的 offer_id(跟卖SKU)
       // offer_id 走子查询 EXISTS,避免同一任务因多个匹配项重复出现
       where.push(
-        `(local_task_id LIKE ? OR ozon_task_id LIKE ? OR items_preview LIKE ?
+        `(f.local_task_id LIKE ? OR f.ozon_task_id LIKE ? OR f.items_preview LIKE ?
           OR EXISTS (SELECT 1 FROM follow_sell_task_items i
-                     WHERE i.local_task_id = follow_sell_tasks.local_task_id
+                     WHERE i.local_task_id = f.local_task_id
                        AND i.offer_id LIKE ?))`
       );
       const kw = '%' + String(req.query.keyword) + '%';
@@ -318,7 +318,12 @@ router.get('/admin/api/listing-records', (req, res, next) => {
     const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
 
     const rows = db
-      .prepare(`SELECT * FROM follow_sell_tasks ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .prepare(
+        `SELECT f.*, irt.status AS image_refresh_status
+         FROM follow_sell_tasks f
+         LEFT JOIN image_refresh_tasks irt ON irt.local_task_id = f.image_refresh_task_id
+         ${whereSql} ORDER BY f.created_at DESC LIMIT ? OFFSET ?`
+      )
       .all(...params, pageSize, offset);
 
     // 按 local_task_id 批量汇总 items 状态计数
@@ -361,7 +366,9 @@ router.get('/admin/api/listing-records', (req, res, next) => {
       }
     }
 
-    const total = db.prepare(`SELECT COUNT(*) as n FROM follow_sell_tasks ${whereSql}`).get(...params).n;
+    const total = db
+      .prepare(`SELECT COUNT(*) as n FROM follow_sell_tasks f ${whereSql}`)
+      .get(...params).n;
 
     res.json(
       ok({
@@ -377,6 +384,8 @@ router.get('/admin/api/listing-records', (req, res, next) => {
           errorMessage: r.error_message,
           createdAt: r.created_at,
           completedAt: r.completed_at,
+          imageRefreshTaskId: r.image_refresh_task_id || null,
+          imageRefreshStatus: r.image_refresh_status || null,
           summary: countMap[r.local_task_id] || null,
         })),
         total,
@@ -617,20 +626,19 @@ router.get('/admin/api/products', (req, res, next) => {
       where.push("COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = ?");
       params.push(v);
     }
-    // 状态筛选:data JSON 里的 status 或 state 字段(OPI 商品 info 返回)
+    // 状态筛选:OPI /v3/product/info/list 的状态嵌套在 statuses.status 字段
     if (req.query.status) {
-      where.push("(data LIKE ?)");
-      params.push('%"status":"' + String(req.query.status) + '"%');
+      where.push("json_extract(data, '$.statuses.status') = ?");
+      params.push(String(req.query.status));
     }
-    // 图片问题筛选:关联 follow_sell_task_items(offer_id=sku)查有图片错误
+    // 图片问题筛选:基于 data.errors 数组中的图片错误码
+    //   OPI 返回的 errors[].code 命中以下任一即视为图片有问题
     if (req.query.imageIssue === '1' || req.query.imageIssue === 'true') {
       where.push(
-        `EXISTS (SELECT 1 FROM follow_sell_task_items i
-                 WHERE i.offer_id = product_data_cache.sku
-                   AND i.has_error = 1
-                   AND (i.errors LIKE '%image%' OR i.errors LIKE '%photo%'
-                        OR i.errors LIKE '%picture%' OR i.errors LIKE '%pics%'
-                        OR i.errors LIKE '%图片%' OR i.errors LIKE '%照片%'))`
+        `EXISTS (SELECT 1 FROM json_each(data, '$.errors')
+                 WHERE json_each.value->>'$.code' IN
+                   ('primary_image_load_failed','pics_http_error',
+                    'some_image_failed','all_image_failed','warning_all_image_failed'))`
       );
     }
     const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
@@ -669,7 +677,8 @@ router.get('/admin/api/products', (req, res, next) => {
                     e.code === 'primary_image_load_failed' ||
                     e.code === 'pics_http_error' ||
                     e.code === 'some_image_failed' ||
-                    e.code === 'all_image_failed'
+                    e.code === 'all_image_failed' ||
+                    e.code === 'warning_all_image_failed'
                 )
               : false,
             _raw: data,

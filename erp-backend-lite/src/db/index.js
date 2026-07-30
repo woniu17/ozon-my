@@ -95,6 +95,12 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE follow_sell_tasks ADD COLUMN opi_submitted_at TEXT`);
     console.log('[db] migration: added column follow_sell_tasks.opi_submitted_at');
   }
+  // 2026-07:自动触发图片更新时回写的关联任务 ID(import-status-poller 检测到图片错误后创建)
+  // 用于上架记录页展示"图片更新"状态徽章并跳转到详情
+  if (!fstCols.some((c) => c.name === 'image_refresh_task_id')) {
+    db.exec(`ALTER TABLE follow_sell_tasks ADD COLUMN image_refresh_task_id TEXT`);
+    console.log('[db] migration: added column follow_sell_tasks.image_refresh_task_id');
+  }
   // follow_sell_task_items:库存同步状态
   const fstiCols = db.prepare(`PRAGMA table_info(follow_sell_task_items)`).all();
   if (!fstiCols.some((c) => c.name === 'stock_set')) {

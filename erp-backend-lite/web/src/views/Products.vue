@@ -189,7 +189,8 @@ function openSingleRefresh(item) {
   refreshDialog.value = {
     open: true,
     mode: 'single',
-    singleItem: { productId: item.productId, storeId: item.storeId, offerId: item.sku },
+    // offerId 用后端返回的卖家SKU(data.offer_id),不能用 item.sku(那是 FBS 变体SKU)
+    singleItem: { productId: item.productId, storeId: item.storeId, offerId: item.offerId },
     selectedProducts: [],
   };
 }
@@ -212,14 +213,20 @@ function productStatus(item) {
 }
 
 const STATUS_BADGE = {
+  // 实际数据中出现的状态(OPI /v3/product/info/list 的 statuses.status)
+  price_sent: { cls: 'badge-success', label: '准备出售' },
+  variant_wait: { cls: 'badge-failed', label: '未创建' },
+  new: { cls: 'badge-pending', label: '新建' },
+  unmatched: { cls: 'badge-failed', label: '未匹配' },
+  moderated: { cls: 'badge-success', label: '已审核' },
+  offer_validated: { cls: 'badge-processing', label: '报价已验证' },
+  // 兼容可能出现的其他状态(同步拉取后可能出现)
   published: { cls: 'badge-success', label: '已发布' },
   imported: { cls: 'badge-processing', label: '已导入' },
   ready_to_publish: { cls: 'badge-processing', label: '待发布' },
   pending: { cls: 'badge-pending', label: '待处理' },
   pending_moderation: { cls: 'badge-pending', label: '待审核' },
   moderating: { cls: 'badge-processing', label: '审核中' },
-  variant_wait: { cls: 'badge-failed', label: '未创建' },
-  price_sent: { cls: 'badge-success', label: '准备出售' },
   failed_validation: { cls: 'badge-failed', label: '校验失败' },
   failed: { cls: 'badge-failed', label: '失败' },
   removed: { cls: 'badge-failed', label: '已下架' },
@@ -309,6 +316,12 @@ onMounted(() => {
       />
       <select class="filter-select" v-model="state.filters.status">
         <option value="">全部状态</option>
+        <option value="price_sent">准备出售</option>
+        <option value="variant_wait">未创建</option>
+        <option value="new">新建</option>
+        <option value="unmatched">未匹配</option>
+        <option value="moderated">已审核</option>
+        <option value="offer_validated">报价已验证</option>
         <option value="published">已发布</option>
         <option value="imported">已导入</option>
         <option value="ready_to_publish">待发布</option>
@@ -342,6 +355,7 @@ onMounted(() => {
           <tr>
             <th style="width:32px"><input type="checkbox" :checked="allSelected" @change="toggleSelectAll" /></th>
             <th>SKU</th>
+            <th>Offer ID</th>
             <th>名称</th>
             <th>店铺</th>
             <th>状态</th>
@@ -353,14 +367,15 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="9" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+            <td colspan="10" class="muted" style="padding: 24px; text-align: center">加载中...</td>
           </tr>
           <tr v-else-if="!state.items.length">
-            <td colspan="9" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
+            <td colspan="10" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
           </tr>
           <tr v-for="it in state.items" :key="it.sku">
             <td><input type="checkbox" :checked="isSelected(it.sku)" @change="toggleSelect(it.sku)" /></td>
             <td>{{ it.sku }}</td>
+            <td>{{ it.offerId || '—' }}</td>
             <td :title="it.name">{{ it.name || '—' }}</td>
             <td>{{ storeName(it.storeId) }}</td>
             <td>

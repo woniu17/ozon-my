@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS follow_sell_tasks (
   -- 定时任务 stock-sync.js 据此对 imported 的 items 调 OPI /v2/products/stocks
   stock_snapshot INTEGER DEFAULT 0,
   template_id    INTEGER,
+  -- 2026-07:自动触发图片更新时回写的关联任务 ID(import-status-poller 检测到图片错误后创建)
+  -- 用于上架记录页展示"图片更新"状态徽章并跳转到详情
+  image_refresh_task_id TEXT,
   created_at    TEXT DEFAULT (datetime('now')),
   completed_at  TEXT
 );
