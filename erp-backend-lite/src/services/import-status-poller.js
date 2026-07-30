@@ -14,6 +14,7 @@ import { db } from '../db/index.js';
 import config from '../config/index.js';
 import * as opi from './ozon-opi.js';
 import { upsertTaskItems, summarizeTaskStatus, saveOpiResponse } from '../modules/products.js';
+import { createImageRefreshTask, hasImageErrors } from '../modules/image-refresh.js';
 import logger from '../middleware/log.js';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟
@@ -55,6 +56,36 @@ async function fetchAndSaveOpiResult(row, store) {
     { localTaskId: row.local_task_id, ozonTaskId: row.ozon_task_id, summary },
     'import-status-poller: 已更新任务状态'
   );
+
+  // 自动触发图片更新:发现图片相关错误时,在该任务内创建一个图片更新任务
+  // sourceType='auto' 标记为自动触发,poller 会复用该上架任务的源图(payload)
+  const imageErrorItems = items.filter((it) => it.product_id && hasImageErrors(it.errors));
+  if (imageErrorItems.length > 0) {
+    try {
+      // 查该上架任务用的模板(自动触发时复用同模板重新加工)
+      const task = db.prepare(`SELECT template_id FROM follow_sell_tasks WHERE local_task_id=?`).get(row.local_task_id);
+      const refreshItems = imageErrorItems.map((it) => ({
+        productId: it.product_id,
+        storeId: row.store_id,
+        sourceTaskId: row.local_task_id,
+        offerId: it.offer_id,
+      }));
+      const result = createImageRefreshTask(refreshItems, {
+        templateId: task?.template_id || null,
+        sourceType: 'auto',
+      });
+      logger.info(
+        { localTaskId: row.local_task_id, refreshTaskId: result?.localTaskId, count: imageErrorItems.length },
+        'import-status-poller: 检测到图片错误,已自动创建图片更新任务'
+      );
+    } catch (e) {
+      logger.warn(
+        { localTaskId: row.local_task_id, err: e.message },
+        'import-status-poller: 自动创建图片更新任务失败(不影响主流程)'
+      );
+    }
+  }
+
   return true;
 }
 

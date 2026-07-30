@@ -1,5 +1,6 @@
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { getProducts, getProductDetail, syncProducts } from '../api/products.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
@@ -7,7 +8,9 @@ import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
 import AppAccordion from '../components/AppAccordion.vue';
 import JsonTree from '../components/JsonTree.vue';
+import ImageRefreshDialog from '../components/ImageRefreshDialog.vue';
 
+const router = useRouter();
 const storesStore = useStoresStore();
 const { show } = useToast();
 
@@ -23,8 +26,14 @@ const state = reactive({
     keyword: '',
     status: '',
     hasStock: '', // '' 全部 | '1' 有库存 | '0' 无库存
+    imageIssue: '',
   },
 });
+
+// 列表行勾选(批量更新图片用)
+const selectedSkus = ref([]);
+// 图片更新弹窗
+const refreshDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
 
 // 同步状态:从 Ozon 拉取店铺商品写入本地缓存
 const syncing = ref(false);
@@ -40,6 +49,7 @@ async function loadList() {
       keyword: state.filters.keyword.trim(),
       status: state.filters.status,
       hasStock: state.filters.hasStock,
+      imageIssue: state.filters.imageIssue,
     });
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -148,6 +158,53 @@ function fmtTime(t) {
   return String(t).replace('T', ' ').slice(0, 19);
 }
 
+// ── 图片更新 ──────────────────────────────────────────────
+function toggleSelect(sku) {
+  const idx = selectedSkus.value.indexOf(sku);
+  if (idx >= 0) selectedSkus.value.splice(idx, 1);
+  else selectedSkus.value.push(sku);
+}
+function isSelected(sku) {
+  return selectedSkus.value.includes(sku);
+}
+const allSelected = computed(
+  () => state.items.length > 0 && state.items.every((r) => selectedSkus.value.includes(r.sku))
+);
+function toggleSelectAll() {
+  if (allSelected.value) {
+    const skus = new Set(state.items.map((r) => r.sku));
+    selectedSkus.value = selectedSkus.value.filter((s) => !skus.has(s));
+  } else {
+    const existing = new Set(selectedSkus.value);
+    for (const r of state.items) existing.add(r.sku);
+    selectedSkus.value = [...existing];
+  }
+}
+// 单条更新图片:详情弹窗「图片」分组触发
+function openSingleRefresh(item) {
+  if (!item.productId) {
+    show('该商品无 product_id,可能未同步完整', 'error');
+    return;
+  }
+  refreshDialog.value = {
+    open: true,
+    mode: 'single',
+    singleItem: { productId: item.productId, storeId: item.storeId, offerId: item.sku },
+    selectedProducts: [],
+  };
+}
+// 批量更新图片:列表勾选触发(不限图片问题)
+function openBatchRefresh() {
+  const products = state.items
+    .filter((r) => selectedSkus.value.includes(r.sku) && r.productId)
+    .map((r) => ({ productId: r.productId, storeId: r.storeId }));
+  if (!products.length) {
+    show('请先勾选有 product_id 的商品', 'error');
+    return;
+  }
+  refreshDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
+}
+
 // 商品状态:从列表项 _raw.statuses 提取(OPI /v3/product/info/list 状态嵌套在 statuses 对象内)
 function productStatus(item) {
   const raw = item?._raw || {};
@@ -254,9 +311,17 @@ onMounted(() => {
         <option value="">全部状态</option>
         <option value="published">已发布</option>
         <option value="imported">已导入</option>
+        <option value="ready_to_publish">待发布</option>
         <option value="pending">待处理</option>
+        <option value="pending_moderation">待审核</option>
         <option value="moderating">审核中</option>
+        <option value="failed_validation">校验失败</option>
         <option value="failed">失败</option>
+        <option value="removed">已下架</option>
+      </select>
+      <select class="filter-select" v-model="state.filters.imageIssue">
+        <option value="">全部商品</option>
+        <option value="1">仅图片问题</option>
       </select>
       <select class="filter-select" v-model="state.filters.hasStock">
         <option value="">全部库存</option>
@@ -266,10 +331,16 @@ onMounted(() => {
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
+    <div v-if="selectedSkus.length" style="display:flex;gap:12px;align-items:center;padding:8px 4px">
+      <span class="muted">已选 {{ selectedSkus.length }} 个商品</span>
+      <button class="btn btn-primary" @click="openBatchRefresh">批量更新图片</button>
+    </div>
+
     <div class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
+            <th style="width:32px"><input type="checkbox" :checked="allSelected" @change="toggleSelectAll" /></th>
             <th>SKU</th>
             <th>名称</th>
             <th>店铺</th>
@@ -282,12 +353,13 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+            <td colspan="9" class="muted" style="padding: 24px; text-align: center">加载中...</td>
           </tr>
           <tr v-else-if="!state.items.length">
-            <td colspan="8" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
+            <td colspan="9" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
           </tr>
           <tr v-for="it in state.items" :key="it.sku">
+            <td><input type="checkbox" :checked="isSelected(it.sku)" @change="toggleSelect(it.sku)" /></td>
             <td>{{ it.sku }}</td>
             <td :title="it.name">{{ it.name || '—' }}</td>
             <td>{{ storeName(it.storeId) }}</td>
@@ -305,6 +377,7 @@ onMounted(() => {
             <td>{{ fmtTime(it.fetchedAt) }}</td>
             <td>
               <button class="btn btn-sm btn-ghost" @click="openDetail(it.sku)">查看详情</button>
+              <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleRefresh(it)">更新图片</button>
             </td>
           </tr>
         </tbody>
@@ -330,8 +403,21 @@ onMounted(() => {
         >
           <JsonTree :data="sec.value" :root-key="sec.title" />
         </AppAccordion>
+        <div v-if="detail.productId" style="margin-top:12px;text-align:right">
+          <button class="btn btn-primary" @click="openSingleRefresh({ productId: detail.productId, storeId: detail.storeId, sku: detail.sku })">
+            更新图片
+          </button>
+        </div>
       </template>
       <div v-else class="empty">无数据</div>
     </AppModal>
+
+    <!-- 图片更新弹窗 -->
+    <ImageRefreshDialog
+      v-model:open="refreshDialog.open"
+      :mode="refreshDialog.mode"
+      :single-item="refreshDialog.singleItem"
+      :selected-products="refreshDialog.selectedProducts"
+    />
   </div>
 </template>

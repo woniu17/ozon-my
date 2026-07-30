@@ -48,7 +48,7 @@ function getSourceImages(item) {
       if (Array.isArray(arr) && arr.length > 0) return arr;
     } catch {}
   }
-  // 2. follow_sell_task_payloads.transformed(已加工图床 URL,可直接重提)
+  // 2. 有 source_task_id:直接读该任务的 payload
   if (item.source_task_id && item.source_item_offer_id) {
     const tRow = db
       .prepare(
@@ -65,6 +65,33 @@ function getSourceImages(item) {
       .get(item.source_task_id);
     const rawImgs = extractImagesFromPayload(rRow?.payload, item.source_item_offer_id);
     if (rawImgs) return rawImgs;
+  }
+  // 4. 无 source_task_id(商品列表模式):按 offer_id 反查最近的 follow_sell_task_items 找 sourceTaskId
+  const offerId = item.source_item_offer_id || item.offer_id;
+  if (offerId) {
+    const tItem = db
+      .prepare(
+        `SELECT i.local_task_id, i.product_id FROM follow_sell_task_items i
+         WHERE i.offer_id=? AND i.product_id IS NOT NULL
+         ORDER BY i.id DESC LIMIT 1`
+      )
+      .get(offerId);
+    if (tItem?.local_task_id) {
+      const tRow = db
+        .prepare(
+          `SELECT payload FROM follow_sell_task_payloads WHERE local_task_id=? AND stage='transformed' ORDER BY created_at DESC LIMIT 1`
+        )
+        .get(tItem.local_task_id);
+      const imgs = extractImagesFromPayload(tRow?.payload, offerId);
+      if (imgs) return imgs;
+      const rRow = db
+        .prepare(
+          `SELECT payload FROM follow_sell_task_payloads WHERE local_task_id=? AND stage='raw' ORDER BY created_at DESC LIMIT 1`
+        )
+        .get(tItem.local_task_id);
+      const rawImgs = extractImagesFromPayload(rRow?.payload, offerId);
+      if (rawImgs) return rawImgs;
+    }
   }
   return null;
 }

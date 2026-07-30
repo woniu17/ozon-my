@@ -63,55 +63,92 @@ function expandRecordsToItems(records) {
   return out;
 }
 
-// POST /admin/api/image-refresh —— 创建图片更新任务(单条/批量)
-// body: { items: [{ sourceTaskId?, offerId, productId, storeId, sourceImages? }], templateId? }
-// 每个 item 必须含 productId + storeId;sourceTaskId 用于 poller 读源图
+// products 模式:按 productId + storeId 创建 items(商品列表用,不限图片问题)
+// 通过 product_data_cache 关联 offer_id(sku),便于 poller 从 follow_sell_task_payloads 读源图
+function expandProductsToItems(products) {
+  const out = [];
+  for (const p of products) {
+    if (!p.productId || !p.storeId) continue;
+    // 从 product_data_cache 查 offer_id(sku)
+    const cache = db
+      .prepare(`SELECT sku FROM product_data_cache WHERE store_id=? AND data LIKE ?`)
+      .get(p.storeId, '%"product_id":' + String(p.productId) + '%');
+    const offerId = cache?.sku || null;
+    out.push({ productId: p.productId, storeId: p.storeId, offerId });
+  }
+  return out;
+}
+
+// 图片错误判定:errors 数组中含图片相关错误(code/field/message 命中关键词)
+export function hasImageErrors(errors) {
+  if (!Array.isArray(errors) || errors.length === 0) return false;
+  const KW = ['image', 'photo', 'picture', 'pics', '图片', '照片'];
+  return errors.some((e) => {
+    const text = `${e.code || ''} ${e.field || ''} ${e.message || ''} ${e.description || ''}`.toLowerCase();
+    return KW.some((k) => text.includes(k.toLowerCase()));
+  });
+}
+
+// 公共函数:创建图片更新任务(供路由 + import-status-poller 自动触发调用)
+// items: [{ productId, storeId, sourceTaskId?, offerId?, sourceImages? }]
+// options: { templateId?, sourceType? }
+export function createImageRefreshTask(items, options = {}) {
+  if (!items || items.length === 0) return null;
+  const templateId = options.templateId ? Number(options.templateId) || null : null;
+  const localTaskId = `img-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const firstStoreId = items[0].storeId;
+  const sourceType = options.sourceType || (items.length > 1 ? 'batch' : 'manual');
+
+  db.prepare(
+    `INSERT INTO image_refresh_tasks
+      (local_task_id, store_id, status, total_count, template_id, source_type)
+     VALUES (?, ?, 'PENDING', ?, ?, ?)`
+  ).run(localTaskId, firstStoreId, items.length, templateId, sourceType);
+
+  const stmt = db.prepare(
+    `INSERT INTO image_refresh_items
+      (task_id, source_task_id, source_item_offer_id, product_id, store_id, status, source_images)
+     VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`
+  );
+  for (const it of items) {
+    const srcImgs = Array.isArray(it.sourceImages) && it.sourceImages.length > 0 ? it.sourceImages : null;
+    stmt.run(
+      localTaskId,
+      it.sourceTaskId || null,
+      it.offerId || null,
+      String(it.productId),
+      String(it.storeId),
+      srcImgs ? JSON.stringify(srcImgs) : null
+    );
+  }
+  logger.info({ localTaskId, count: items.length, templateId, sourceType }, 'image-refresh 任务已创建');
+  return { localTaskId, totalCount: items.length };
+}
+
+// POST /admin/api/image-refresh —— 创建图片更新任务(单条/批量/商品列表)
+// body 支持:
+//   { items: [...], templateId? }              — 精确指定(单条/上架记录详情)
+//   { records: [{sourceTaskId, storeId}], ... } — 按上架记录展开图片问题 items
+//   { products: [{productId, storeId}], ... }   — 按商品列表(不限图片问题)
 router.post('/admin/api/image-refresh', async (req, res, next) => {
   try {
     const body = req.body || {};
     let items = Array.isArray(body.items) ? body.items : [];
-    // 批量模式:records → 后端展开为图片问题 items(单条模式用 items 精确指定)
     if (Array.isArray(body.records) && body.records.length > 0) {
       items = expandRecordsToItems(body.records);
+    } else if (Array.isArray(body.products) && body.products.length > 0) {
+      items = expandProductsToItems(body.products);
     }
     if (items.length === 0) {
-      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'items/records 必填且展开后非空,可能所选记录无图片问题 item'));
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'items/records/products 必填且展开后非空'));
     }
-    // 校验每个 item
     for (const it of items) {
       if (!it.productId || !it.storeId) {
         return next(new ApiError(ErrorCode.VALIDATION_ERROR, '每个 item 必须含 productId 和 storeId'));
       }
     }
-    const templateId = body.templateId ? Number(body.templateId) || null : null;
-    const localTaskId = `img-${Date.now()}-${randomUUID().slice(0, 8)}`;
-    const firstStoreId = items[0].storeId;
-    const sourceType = items.length > 1 ? 'batch' : 'manual';
-
-    db.prepare(
-      `INSERT INTO image_refresh_tasks
-        (local_task_id, store_id, status, total_count, template_id, source_type)
-       VALUES (?, ?, 'PENDING', ?, ?, ?)`
-    ).run(localTaskId, firstStoreId, items.length, templateId, sourceType);
-
-    const stmt = db.prepare(
-      `INSERT INTO image_refresh_items
-        (task_id, source_task_id, source_item_offer_id, product_id, store_id, status, source_images)
-       VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`
-    );
-    for (const it of items) {
-      const srcImgs = Array.isArray(it.sourceImages) && it.sourceImages.length > 0 ? it.sourceImages : null;
-      stmt.run(
-        localTaskId,
-        it.sourceTaskId || null,
-        it.offerId || null,
-        String(it.productId),
-        String(it.storeId),
-        srcImgs ? JSON.stringify(srcImgs) : null
-      );
-    }
-    logger.info({ localTaskId, count: items.length, templateId, sourceType }, 'image-refresh 任务已创建');
-    res.json(ok({ localTaskId, totalCount: items.length }));
+    const result = createImageRefreshTask(items, { templateId: body.templateId });
+    res.json(ok(result));
   } catch (e) {
     next(e);
   }

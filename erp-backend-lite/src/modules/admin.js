@@ -617,6 +617,22 @@ router.get('/admin/api/products', (req, res, next) => {
       where.push("COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = ?");
       params.push(v);
     }
+    // 状态筛选:data JSON 里的 status 或 state 字段(OPI 商品 info 返回)
+    if (req.query.status) {
+      where.push("(data LIKE ?)");
+      params.push('%"status":"' + String(req.query.status) + '"%');
+    }
+    // 图片问题筛选:关联 follow_sell_task_items(offer_id=sku)查有图片错误
+    if (req.query.imageIssue === '1' || req.query.imageIssue === 'true') {
+      where.push(
+        `EXISTS (SELECT 1 FROM follow_sell_task_items i
+                 WHERE i.offer_id = product_data_cache.sku
+                   AND i.has_error = 1
+                   AND (i.errors LIKE '%image%' OR i.errors LIKE '%photo%'
+                        OR i.errors LIKE '%picture%' OR i.errors LIKE '%pics%'
+                        OR i.errors LIKE '%图片%' OR i.errors LIKE '%照片%'))`
+      );
+    }
     const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
 
     const rows = db

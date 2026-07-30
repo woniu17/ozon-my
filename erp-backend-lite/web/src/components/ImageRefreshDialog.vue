@@ -13,10 +13,12 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   // 'single' | 'batch'
   mode: { type: String, default: 'single' },
-  // single 模式:{ sourceTaskId, offerId, productId, storeId }
+  // single 模式:{ productId, storeId, offerId?, sourceTaskId? }
   singleItem: { type: Object, default: null },
-  // batch 模式:[{ localTaskId, storeId }]
+  // batch 模式(上架记录):[{ localTaskId, storeId }]
   selectedRecords: { type: Array, default: () => [] },
+  // batch 模式(商品列表):[{ productId, storeId }]
+  selectedProducts: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['update:open', 'submitted']);
 
@@ -53,15 +55,23 @@ async function submit() {
   try {
     let body;
     if (isBatch.value) {
-      if (!props.selectedRecords.length) {
+      // 商品列表批量模式:selectedProducts
+      if (props.selectedProducts && props.selectedProducts.length > 0) {
+        body = {
+          products: props.selectedProducts.map((p) => ({ productId: p.productId, storeId: p.storeId })),
+          templateId: templateId.value ? Number(templateId.value) : null,
+        };
+      } else if (props.selectedRecords && props.selectedRecords.length > 0) {
+        // 上架记录批量模式:selectedRecords
+        body = {
+          records: props.selectedRecords.map((r) => ({ sourceTaskId: r.localTaskId, storeId: r.storeId })),
+          templateId: templateId.value ? Number(templateId.value) : null,
+        };
+      } else {
         show('未选中任何记录', 'error');
         submitting.value = false;
         return;
       }
-      body = {
-        records: props.selectedRecords.map((r) => ({ sourceTaskId: r.localTaskId, storeId: r.storeId })),
-        templateId: templateId.value ? Number(templateId.value) : null,
-      };
     } else {
       const it = props.singleItem;
       if (!it || !it.productId || !it.storeId) {
@@ -116,11 +126,14 @@ async function submit() {
       <!-- 批量模式信息 -->
       <div v-else-if="isBatch" class="ir-info">
         <div class="meta-row">
-          <span class="meta-k">选中记录</span>
-          <span class="meta-v">{{ selectedRecords.length }} 条</span>
+          <span class="meta-k">选中商品</span>
+          <span class="meta-v">{{ (selectedProducts.length || selectedRecords.length) }} 个</span>
         </div>
-        <div class="muted" style="margin-top: 4px">
-          后端将自动展开每条记录中"图片有问题"的 item(审核拒绝/无效图),非图片问题 item 会被跳过
+        <div v-if="selectedProducts.length" class="muted" style="margin-top: 4px">
+          商品列表模式:为选中的每个商品创建图片更新任务(不限图片问题)
+        </div>
+        <div v-else class="muted" style="margin-top: 4px">
+          上架记录模式:自动展开每条记录中"图片有问题"的 item,非图片问题 item 会被跳过
         </div>
       </div>
 
