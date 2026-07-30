@@ -22,6 +22,7 @@ const state = reactive({
     storeId: '',
     keyword: '',
     status: '',
+    hasStock: '', // '' 全部 | '1' 有库存 | '0' 无库存
   },
 });
 
@@ -38,6 +39,7 @@ async function loadList() {
       storeId: state.filters.storeId,
       keyword: state.filters.keyword.trim(),
       status: state.filters.status,
+      hasStock: state.filters.hasStock,
     });
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -146,10 +148,10 @@ function fmtTime(t) {
   return String(t).replace('T', ' ').slice(0, 19);
 }
 
-// 商品状态:从列表项 _raw 提取(Ozon 商品 info 的 status / state 字段)
+// 商品状态:从列表项 _raw.statuses 提取(OPI /v3/product/info/list 状态嵌套在 statuses 对象内)
 function productStatus(item) {
   const raw = item?._raw || {};
-  return raw.status || raw.state || '';
+  return raw.statuses?.status || raw.status || raw.state || '';
 }
 
 const STATUS_BADGE = {
@@ -159,6 +161,8 @@ const STATUS_BADGE = {
   pending: { cls: 'badge-pending', label: '待处理' },
   pending_moderation: { cls: 'badge-pending', label: '待审核' },
   moderating: { cls: 'badge-processing', label: '审核中' },
+  variant_wait: { cls: 'badge-failed', label: '未创建' },
+  price_sent: { cls: 'badge-success', label: '准备出售' },
   failed_validation: { cls: 'badge-failed', label: '校验失败' },
   failed: { cls: 'badge-failed', label: '失败' },
   removed: { cls: 'badge-failed', label: '已下架' },
@@ -166,6 +170,24 @@ const STATUS_BADGE = {
 
 function statusInfo(st) {
   return STATUS_BADGE[st] || { cls: 'badge-pending', label: st || '—' };
+}
+
+// 库存徽章:基于后端返回的 hasStock(来自 OPI stocks.has_stock)
+//   true=有库存可售(绿);false=无库存(price_sent 准备出售但缺货,红)
+function stockBadgeClass(it) {
+  return it.hasStock ? 'badge-success' : 'badge-failed';
+}
+function stockBadgeLabel(it) {
+  return it.hasStock ? '有库存' : '无库存';
+}
+
+// 图片徽章:基于后端返回的 hasImageError(来自 OPI errors[].code 判断)
+//   false=正常(无图片错误);true=警告(出现 primary_image_load_failed/pics_http_error/some_image_failed/all_image_failed)
+function imageBadgeClass(it) {
+  return it.hasImageError ? 'badge-failed' : 'badge-success';
+}
+function imageBadgeLabel(it) {
+  return it.hasImageError ? '图片异常' : '正常';
 }
 
 // 详情弹窗:用 AppAccordion 分组展示商品缓存数据
@@ -177,7 +199,11 @@ function detailSections(d) {
     sku: d.sku,
     name: raw.name || raw.title || '',
     store_id: d.storeId,
-    status: raw.status || raw.state || '',
+    status: raw.statuses?.status || raw.status || raw.state || '',
+    status_name: raw.statuses?.status_name || '',
+    moderate_status: raw.statuses?.moderate_status || '',
+    validation_status: raw.statuses?.validation_status || '',
+    is_created: raw.statuses?.is_created,
     fetchedAt: d.fetchedAt,
     productId: raw.product_id || raw.id || '',
   };
@@ -232,6 +258,11 @@ onMounted(() => {
         <option value="moderating">审核中</option>
         <option value="failed">失败</option>
       </select>
+      <select class="filter-select" v-model="state.filters.hasStock">
+        <option value="">全部库存</option>
+        <option value="1">有库存</option>
+        <option value="0">无库存</option>
+      </select>
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
@@ -243,16 +274,18 @@ onMounted(() => {
             <th>名称</th>
             <th>店铺</th>
             <th>状态</th>
+            <th>库存</th>
+            <th>图片</th>
             <th>更新时间</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="6" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+            <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中...</td>
           </tr>
           <tr v-else-if="!state.items.length">
-            <td colspan="6" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
+            <td colspan="8" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
           </tr>
           <tr v-for="it in state.items" :key="it.sku">
             <td>{{ it.sku }}</td>
@@ -262,6 +295,12 @@ onMounted(() => {
               <span class="badge" :class="statusInfo(productStatus(it)).cls">{{
                 statusInfo(productStatus(it)).label
               }}</span>
+            </td>
+            <td>
+              <span class="badge" :class="stockBadgeClass(it)">{{ stockBadgeLabel(it) }}</span>
+            </td>
+            <td>
+              <span class="badge" :class="imageBadgeClass(it)">{{ imageBadgeLabel(it) }}</span>
             </td>
             <td>{{ fmtTime(it.fetchedAt) }}</td>
             <td>

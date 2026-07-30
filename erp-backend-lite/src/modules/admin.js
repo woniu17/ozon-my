@@ -596,6 +596,15 @@ router.get('/admin/api/products', (req, res, next) => {
       where.push('store_id = ?');
       params.push(String(req.query.storeId));
     }
+    // hasStock 筛选:基于 data.stocks.has_stock(布尔)
+    //   hasStock=1 -> 有库存(有变体可下单)
+    //   hasStock=0 -> 无库存(price_sent 准备出售但缺货,或下架)
+    // SQLite json_extract 把 true/false 解析为 1/0,用 COALESCE 兜底空值
+    if (req.query.hasStock === '1' || req.query.hasStock === '0') {
+      const v = Number(req.query.hasStock);
+      where.push("COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = ?");
+      params.push(v);
+    }
     const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
 
     const rows = db
@@ -620,6 +629,21 @@ router.get('/admin/api/products', (req, res, next) => {
             price: data.price || data.marketing_price || '',
             currency: data.currency || data.marketing_currency || '',
             image: data.primary_image || data.image || (Array.isArray(data.images) ? data.images[0] : '') || '',
+            // 库存:OPI /v3/product/info/list 的 stocks.has_stock(布尔)
+            //   true=有库存可售;false=无库存(price_sent 准备出售但缺货)
+            hasStock: data.stocks?.has_stock === true,
+            // 图片状态:OPI errors[] 中出现任一图片错误码即视为有问题
+            //   primary_image_load_failed / pics_http_error / some_image_failed / all_image_failed
+            //   (简化判断:不区分 WARNING/ERROR 级别,出现即标红)
+            hasImageError: Array.isArray(data.errors)
+              ? data.errors.some(
+                  (e) =>
+                    e.code === 'primary_image_load_failed' ||
+                    e.code === 'pics_http_error' ||
+                    e.code === 'some_image_failed' ||
+                    e.code === 'all_image_failed'
+                )
+              : false,
             _raw: data,
           };
         }),
