@@ -4,6 +4,7 @@ import { request } from 'undici';
 import config from '../config/index.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import logger from '../middleware/log.js';
+import * as metaDao from '../db/dao/sqlite/meta-dao.js';
 
 const BASE = config.ozonOpiBaseUrl;
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -287,9 +288,14 @@ export function productInfoListV3(store, { offerIds, productIds, skus } = {}) {
 
 // ── description-category 系列:属性名/类目名/字典值查询 ──
 // 这三个端点用于把采集箱中的数字 ID(attribute_id / category_id / type_id /
-// dictionary_value_id)翻译成人类可读的名称。响应不常变,做 5 分钟内存缓存。
+// dictionary_value_id)翻译成人类可读的名称。
+// 三层缓存(2026-07 改造,跨店铺共享):
+//   L1: 进程内 Map(5 min,TTL)— 高频访问免查 SQLite
+//   L2: SQLite(永久,仅管理员手动刷新失效)— 进程重启不丢失
+//   L3: OPI /v1/description-category/* — miss 时拉取并写回 L2+L1
+// cacheKey 不含 store.id(类目元数据是平台级数据,所有店铺共享)
 
-const META_CACHE_TTL = 5 * 60 * 1000; // 5 min
+const META_CACHE_TTL = 5 * 60 * 1000; // 5 min(L1)
 const metaCache = new Map(); // key → { data, expiresAt }
 
 function metaGet(key) {
@@ -303,15 +309,28 @@ function metaSet(key, data) {
   metaCache.set(key, { data, expiresAt: Date.now() + META_CACHE_TTL });
 }
 
+// 清空 L1 内存缓存(管理员刷新路由调用,下次访问触发 L2 查询或 OPI 拉取)
+export function invalidateMetaCache() {
+  metaCache.clear();
+}
+
 // /v1/description-category/tree —— 类目树(含 category_name + type_name)
 // language: ZH_HANS(中文) / RU(俄语) / EN(英语) / DEFAULT(默认俄语)
 // 响应: { result: [{ description_category_id, category_name, children: [..., { type_name, type_id }] }] }
 export async function descriptionCategoryTree(store, language = 'ZH_HANS') {
-  const cacheKey = `tree:${store?.id}:${language}`;
+  const cacheKey = `tree:${language}`;
   const cached = metaGet(cacheKey);
   if (cached) return cached;
+  // L2: SQLite
+  const l2 = metaDao.getCategoryTree(language);
+  if (l2) {
+    metaSet(cacheKey, l2);
+    return l2;
+  }
+  // L3: OPI
   const r = await call(store, '/v1/description-category/tree', { language });
   const result = r?.result || r || [];
+  metaDao.upsertCategoryTree(language, result);
   metaSet(cacheKey, result);
   return result;
 }
@@ -320,15 +339,23 @@ export async function descriptionCategoryTree(store, language = 'ZH_HANS') {
 // language: ZH_HANS(中文) / RU(俄语) / EN(英语) / DEFAULT(默认俄语)
 // 响应: { result: [{ id, name, description, type, is_required, dictionary_id, ... }] }
 export async function descriptionCategoryAttributes(store, { description_category_id, type_id, language = 'ZH_HANS' }) {
-  const cacheKey = `attrs:${store?.id}:${description_category_id}:${type_id}:${language}`;
+  const cacheKey = `attrs:${language}:${description_category_id}:${type_id}`;
   const cached = metaGet(cacheKey);
   if (cached) return cached;
+  // L2: SQLite
+  const l2 = metaDao.getCategoryAttributes(description_category_id, type_id, language);
+  if (l2) {
+    metaSet(cacheKey, l2);
+    return l2;
+  }
+  // L3: OPI
   const r = await call(store, '/v1/description-category/attribute', {
     description_category_id,
     type_id,
     language,
   });
   const result = r?.result || r || [];
+  metaDao.upsertCategoryAttributes(description_category_id, type_id, language, result);
   metaSet(cacheKey, result);
   return result;
 }
@@ -340,6 +367,16 @@ export async function descriptionCategoryAttributeValues(
   store,
   { attribute_id, description_category_id, type_id, language = 'ZH_HANS', limit = 5000 }
 ) {
+  const cacheKey = `values:${language}:${description_category_id}:${type_id}:${attribute_id}`;
+  const cached = metaGet(cacheKey);
+  if (cached) return cached;
+  // L2: SQLite
+  const l2 = metaDao.getAttributeValues(description_category_id, type_id, attribute_id, language);
+  if (l2) {
+    metaSet(cacheKey, l2);
+    return l2;
+  }
+  // L3: OPI
   const r = await call(store, '/v1/description-category/attribute/values', {
     attribute_id,
     description_category_id,
@@ -347,7 +384,10 @@ export async function descriptionCategoryAttributeValues(
     language,
     limit,
   });
-  return r?.result || r || [];
+  const result = r?.result || r || [];
+  metaDao.upsertAttributeValues(description_category_id, type_id, attribute_id, language, result);
+  metaSet(cacheKey, result);
+  return result;
 }
 
 // ── 商品图片更新(2026-07) ───────────────────────────────────

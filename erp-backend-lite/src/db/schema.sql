@@ -638,3 +638,38 @@ CREATE TABLE IF NOT EXISTS stock_refresh_items (
 );
 CREATE INDEX IF NOT EXISTS idx_sri_task ON stock_refresh_items(task_id);
 CREATE INDEX IF NOT EXISTS idx_sri_status ON stock_refresh_items(status);
+
+-- ── 类目元数据持久化(2026-07) ─────────────────────────────
+-- OPI description-category 系列响应的持久化缓存,跨店铺共享(平台级数据)
+-- 设计:每个查询维度一行,完整 JSON 存 payload,避免拆字段(响应结构偶变)
+-- 失效策略:永久缓存,仅管理员手动 POST /admin/api/meta/refresh 触发清空
+-- 层级:L1 进程内 Map(5min) → L2 SQLite(永久) → L3 OPI
+
+-- 类目树(/v1/description-category/tree):1 个 language 1 行
+CREATE TABLE IF NOT EXISTS ozon_meta_category_tree (
+  language   TEXT NOT NULL,                    -- ZH_HANS / RU / EN / DEFAULT
+  payload    TEXT NOT NULL,                    -- JSON: OPI result 数组(含 children 嵌套)
+  fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (language)
+);
+
+-- 类目+类型下属性(/v1/description-category/attribute)
+CREATE TABLE IF NOT EXISTS ozon_meta_category_attributes (
+  description_category_id INTEGER NOT NULL,
+  type_id                 INTEGER NOT NULL,
+  language                TEXT NOT NULL,
+  payload                 TEXT NOT NULL,       -- JSON: 属性描述数组
+  fetched_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (description_category_id, type_id, language)
+);
+
+-- 字典属性可选值(/v1/description-category/attribute/values)
+CREATE TABLE IF NOT EXISTS ozon_meta_attribute_values (
+  description_category_id INTEGER NOT NULL,
+  type_id                 INTEGER NOT NULL,
+  attribute_id            INTEGER NOT NULL,
+  language                TEXT NOT NULL,
+  payload                 TEXT NOT NULL,       -- JSON: 字典值数组
+  fetched_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (description_category_id, type_id, attribute_id, language)
+);

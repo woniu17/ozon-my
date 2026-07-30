@@ -11,6 +11,7 @@ import config from '../config/index.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { ok } from '../utils/response.js';
 import * as opi from '../services/ozon-opi.js';
+import * as metaDao from '../db/dao/sqlite/meta-dao.js';
 import logger from '../middleware/log.js';
 
 const router = Router();
@@ -1043,6 +1044,69 @@ router.get('/admin/api/audit-logs', (req, res, next) => {
         total,
         currentPage: page,
         pageSize: size,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 类目元数据缓存管理(2026-07) ──────────────────────────
+// 类目树/属性/字典值的 L2(SQLite)持久化缓存,跨店铺共享,永久有效
+// 仅通过本路由手动清空,下次访问自动从 OPI 重新拉取并落库
+
+// POST /admin/api/meta/refresh
+// body: { type: 'tree'|'attrs'|'values', language?: 'ZH_HANS', categoryId?, typeId?, attributeId? }
+//   - type=tree:必传 language,清空整棵树(按 language)
+//   - type=attrs:可选 categoryId+typeId,传了删单条,不传删该 language 全部
+//   - type=values:可选 categoryId+typeId+attributeId,逐级精确删除
+// 仅清空 L2 + L1,不在此调 OPI(下次访问触发拉取)
+router.post('/admin/api/meta/refresh', (req, res, next) => {
+  try {
+    const type = String(req.body?.type || '');
+    const language = String(req.body?.language || 'ZH_HANS');
+    const categoryId = req.body?.categoryId != null ? Number(req.body.categoryId) : null;
+    const typeId = req.body?.typeId != null ? Number(req.body.typeId) : null;
+    const attributeId = req.body?.attributeId != null ? Number(req.body.attributeId) : null;
+
+    if (!['tree', 'attrs', 'values'].includes(type)) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'type 必须为 tree|attrs|values'));
+    }
+
+    if (type === 'tree') {
+      metaDao.deleteCategoryTree(language);
+    } else if (type === 'attrs') {
+      metaDao.deleteCategoryAttributes(language, categoryId, typeId);
+    } else {
+      metaDao.deleteAttributeValues(language, categoryId, typeId, attributeId);
+    }
+
+    opi.invalidateMetaCache(); // 清 L1 内存
+
+    logger.info({ type, language, categoryId, typeId, attributeId }, 'meta cache refreshed');
+    res.json(ok({ cleared: true }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /admin/api/meta/status —— 查看缓存状态(行数 + 最近 fetched_at)
+router.get('/admin/api/meta/status', (req, res, next) => {
+  try {
+    const tree = db
+      .prepare('SELECT COUNT(*) as n, MAX(fetched_at) as last FROM ozon_meta_category_tree')
+      .get();
+    const attrs = db
+      .prepare('SELECT COUNT(*) as n, MAX(fetched_at) as last FROM ozon_meta_category_attributes')
+      .get();
+    const values = db
+      .prepare('SELECT COUNT(*) as n, MAX(fetched_at) as last FROM ozon_meta_attribute_values')
+      .get();
+    res.json(
+      ok({
+        tree: { rows: tree.n, lastFetchedAt: tree.last },
+        attrs: { rows: attrs.n, lastFetchedAt: attrs.last },
+        values: { rows: values.n, lastFetchedAt: values.last },
       })
     );
   } catch (e) {
