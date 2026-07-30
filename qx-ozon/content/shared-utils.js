@@ -1375,6 +1375,27 @@ if (!globalThis.__JZ_BRAND__) {
     });
   };
 
+  // 商品卡面板(V2)默认只展示 SKU 字段;PDP 侧边栏 / V1 卡保持默认全显。
+  // stored = 用户显式覆盖(存的是「偏离默认」的项:true=强制显示,false=强制隐藏)。
+  // context='card' → 未存字段取商品卡默认(仅 sku 显示);其它 → 默认全显。
+  // 返回的 map 给 jzApplyFieldVisibility 用(false 隐藏,true/undefined 显示)。
+  window.jzCardDefaultVisible = function (field) {
+    return field === 'sku';
+  };
+  window.jzEffectiveFieldVisibility = function (stored, context) {
+    const map = stored || {};
+    const isCard = context === 'card';
+    const eff = {};
+    for (const f of window.JZ_DATACARD_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(map, f.field)) {
+        eff[f.field] = !!map[f.field];
+      } else {
+        eff[f.field] = isCard ? window.jzCardDefaultVisible(f.field) : true;
+      }
+    }
+    return eff;
+  };
+
   // ── 数据卡销量周期(月 / 周)──────────────────────────────────
   // Ozon what_to_sell 支持 period:'monthly'(月,默认)/ 'weekly'(周)。2026-06 月接口已恢复,
   // 默认回月。用户可在字段设置弹窗切换;数据卡的销量/销售额/周转动态据此取数,标签随之「月/周」。
@@ -1433,10 +1454,15 @@ if (!globalThis.__JZ_BRAND__) {
   };
 
   // 把显隐设置应用到页面上所有已渲染的数据卡。
+  // visMap 是 storage 里的「偏离默认」项;每张卡按自身 context(商品卡 V2 vs PDP/V1)
+  // 计算有效显隐:商品卡默认仅 SKU,PDP/V1 默认全显。
   window.jzApplyFieldVisibilityToAll = function (visMap) {
     document
       .querySelectorAll('.ozon-helper-sidebar-card, [data-jz-datacard]')
-      .forEach((card) => window.jzApplyFieldVisibility(card, visMap));
+      .forEach((card) => {
+        const ctx = card.getAttribute('data-jz-card-context') === 'card' ? 'card' : 'pdp';
+        window.jzApplyFieldVisibility(card, window.jzEffectiveFieldVisibility(visMap, ctx));
+      });
   };
 
   // 字段设置弹窗:按 group 列出 checkbox,保存时写 storage + 刷新所有数据卡。
@@ -1446,7 +1472,10 @@ if (!globalThis.__JZ_BRAND__) {
     if (document.querySelector('.jz-fieldset-mask')) return;
 
     window.jzLoadFieldVisibility().then((visMap) => {
-      const map = visMap || {};
+      const stored = visMap || {};
+      // 弹窗以「商品卡面板」默认(仅 SKU 显示)为基准展示勾选状态;
+      // 保存时只持久化偏离该默认的项,PDP 侧边栏仍保持自己的默认(全显)。
+      const map = window.jzEffectiveFieldVisibility(stored, 'card');
 
       const mask = document.createElement('div');
       mask.className = 'jz-fieldset-mask';
@@ -1514,7 +1543,7 @@ if (!globalThis.__JZ_BRAND__) {
           <span class="jz-fieldset-title"><span class="jz-fieldset-title-icon">${gearIcon}</span>数据卡字段设置</span>
           <button class="jz-fieldset-close" data-jz-act="cancel" title="关闭">&times;</button>
         </div>
-        <div class="jz-fieldset-note">关闭的字段在所有数据卡生效(店铺详情页 / 搜索 / 列表)</div>
+        <div class="jz-fieldset-note">勾选=显示,取消=隐藏;商品卡面板默认仅显示 SKU,详情页侧边栏默认全显。设置对所有数据卡生效。</div>
         <div class="jz-fieldset-body">${periodHtml}${bodyHtml}</div>
         <div class="jz-fieldset-footer">
           <button class="jz-fieldset-btn" data-jz-act="cancel">取消</button>
@@ -1542,8 +1571,12 @@ if (!globalThis.__JZ_BRAND__) {
         if (act === 'save') {
           const next = {};
           modal.querySelectorAll('input[data-jz-field]').forEach((cb) => {
-            // 只持久化「关闭」项(false);默认全显,map 越小越好、向后兼容
-            if (!cb.checked) next[cb.getAttribute('data-jz-field')] = false;
+            // 持久化「偏离商品卡默认」的项:勾选状态 ≠ 默认(仅 SKU 显示)才存,
+            // 与默认一致的不存 → map 最小、向后兼容;PDP 侧边栏未存字段仍走自己的全显默认。
+            const f = cb.getAttribute('data-jz-field');
+            if (cb.checked !== window.jzCardDefaultVisible(f)) {
+              next[f] = cb.checked;
+            }
           });
           // 数据周期:切换需重新取数(getMarketStats 的 period 变 + 标签月/周),保存后若变化则刷新本页。
           const selPeriod =
@@ -3390,9 +3423,13 @@ if (!globalThis.__JZ_BRAND__) {
       ${actionsHtml}`;
 
     // 标记为数据卡 + 应用当前显隐(齿轮点击由 caller 的 [data-action] 委托统一捕获)。
+    // data-jz-card-context='card' → 商品卡面板默认仅显示 SKU 字段(jzApplyFieldVisibilityToAll 据此区分默认)。
     panel.setAttribute('data-jz-datacard', '1');
+    panel.setAttribute('data-jz-card-context', 'card');
     window.jzBindDataCardCopyButtons(panel);
-    window.jzLoadFieldVisibility().then((v) => window.jzApplyFieldVisibility(panel, v));
+    window.jzLoadFieldVisibility().then((v) =>
+      window.jzApplyFieldVisibility(panel, window.jzEffectiveFieldVisibility(v, 'card'))
+    );
   };
 
   /**

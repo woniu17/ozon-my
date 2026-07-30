@@ -424,10 +424,10 @@ onMounted(() => {
     <!-- 按当前筛选条件批量操作(不限于当前页) -->
     <div v-if="state.total > 0" style="display:flex;gap:12px;align-items:center;padding:8px 4px">
       <span class="muted">当前筛选匹配 {{ state.total }} 个商品</span>
-      <button class="btn btn-ghost" :disabled="filterBatchLoading" @click="openFilteredRefresh">
+      <button class="btn btn-ghost" :disabled="!!filterBatchLoading" @click="openFilteredRefresh">
         {{ filterBatchLoading === 'image' ? '拉取中...' : '按筛选更新图片' }}
       </button>
-      <button class="btn btn-ghost" :disabled="filterBatchLoading" @click="openFilteredStock">
+      <button class="btn btn-ghost" :disabled="!!filterBatchLoading" @click="openFilteredStock">
         {{ filterBatchLoading === 'stock' ? '拉取中...' : '按筛选更新库存' }}
       </button>
     </div>
