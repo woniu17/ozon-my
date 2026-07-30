@@ -8,10 +8,10 @@ import { processImageBatch } from './image-host.js';
 import * as opi from './ozon-opi.js';
 import logger from '../middleware/log.js';
 
-const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 10000;
 const FIRST_SCAN_DELAY_MS = 8 * 1000;
 const MAX_CONCURRENCY = 1; // 串行处理,降低并发避免 Ozon API 限流
-const ITEM_INTERVAL_MS = 2000; // item 间时间间隔,防止连续提交触发限流
+const ITEM_INTERVAL_MS = 10000; // item 间时间间隔,防止连续提交触发限流
 const COOLDOWN_MS = 5000; // 提交后等 5s 再查状态(对齐项目约定)
 
 let timer = null;
@@ -47,7 +47,7 @@ function getSourceImages(item) {
     try {
       const arr = JSON.parse(item.source_images);
       if (Array.isArray(arr) && arr.length > 0) return arr;
-    } catch {}
+    } catch { }
   }
   // 2. 有 source_task_id:直接读该任务的 payload
   if (item.source_task_id && item.source_item_offer_id) {
