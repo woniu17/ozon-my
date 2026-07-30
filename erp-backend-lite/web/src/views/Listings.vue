@@ -1,11 +1,12 @@
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { getListings } from '../api/listings.js';
 import { get } from '../api/request.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
+import ImageRefreshDialog from '../components/ImageRefreshDialog.vue';
 
 const storesStore = useStoresStore();
 const { show } = useToast();
@@ -21,10 +22,16 @@ const state = reactive({
     storeId: '',
     keyword: '',
     status: '',
+    imageIssue: '',
     dateFrom: '',
     dateTo: '',
   },
 });
+
+// 列表行勾选(批量更新图片用)
+const selectedIds = ref([]);
+// 图片更新弹窗
+const refreshDialog = ref({ open: false, mode: 'single', singleItem: null, selectedRecords: [] });
 
 async function loadListings() {
   state.loading = true;
@@ -35,6 +42,7 @@ async function loadListings() {
       storeId: state.filters.storeId,
       keyword: state.filters.keyword.trim(),
       status: state.filters.status,
+      imageIssue: state.filters.imageIssue,
       dateFrom: state.filters.dateFrom,
       dateTo: state.filters.dateTo,
     });
@@ -252,6 +260,54 @@ function itemErrorText(it) {
     .join('; ');
 }
 
+// ── 图片更新 ──────────────────────────────────────────────
+function toggleSelect(localTaskId) {
+  const idx = selectedIds.value.indexOf(localTaskId);
+  if (idx >= 0) selectedIds.value.splice(idx, 1);
+  else selectedIds.value.push(localTaskId);
+}
+function isSelected(localTaskId) {
+  return selectedIds.value.includes(localTaskId);
+}
+const allSelected = computed(
+  () => state.items.length > 0 && state.items.every((r) => selectedIds.value.includes(r.localTaskId))
+);
+function toggleSelectAll() {
+  if (allSelected.value) {
+    const ids = new Set(state.items.map((r) => r.localTaskId));
+    selectedIds.value = selectedIds.value.filter((id) => !ids.has(id));
+  } else {
+    const existing = new Set(selectedIds.value);
+    for (const r of state.items) existing.add(r.localTaskId);
+    selectedIds.value = [...existing];
+  }
+}
+// 单条更新图片:从详情弹窗 items 触发
+function openSingleRefresh(it) {
+  refreshDialog.value = {
+    open: true,
+    mode: 'single',
+    singleItem: {
+      sourceTaskId: detailTask.value?.localTaskId,
+      offerId: it.offerId,
+      productId: it.productId,
+      storeId: detailTask.value?.storeId,
+    },
+    selectedRecords: [],
+  };
+}
+// 批量更新图片:从列表勾选触发
+function openBatchRefresh() {
+  const records = state.items
+    .filter((r) => selectedIds.value.includes(r.localTaskId))
+    .map((r) => ({ localTaskId: r.localTaskId, storeId: r.storeId }));
+  if (!records.length) {
+    show('请先勾选记录', 'error');
+    return;
+  }
+  refreshDialog.value = { open: true, mode: 'batch', singleItem: null, selectedRecords: records };
+}
+
 onMounted(() => {
   storesStore.load();
   loadListings();
@@ -286,16 +342,26 @@ onMounted(() => {
         <option value="FAILED">失败</option>
         <option value="PROCESSING">处理中</option>
       </select>
+      <select class="filter-select" v-model="state.filters.imageIssue">
+        <option value="">全部记录</option>
+        <option value="1">仅图片问题</option>
+      </select>
       <input class="filter-input" type="date" v-model="state.filters.dateFrom" />
       <span class="muted">至</span>
       <input class="filter-input" type="date" v-model="state.filters.dateTo" />
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
+    <div v-if="selectedIds.length" style="display:flex;gap:12px;align-items:center;padding:8px 4px">
+      <span class="muted">已选 {{ selectedIds.length }} 条</span>
+      <button class="btn btn-primary" @click="openBatchRefresh">批量更新图片</button>
+    </div>
+
     <div class="listings-table-wrap">
       <table class="listings-table">
         <thead>
           <tr>
+            <th style="width:32px"><input type="checkbox" :checked="allSelected" @change="toggleSelectAll" /></th>
             <th class="col-task">任务ID</th>
             <th class="col-store">店铺</th>
             <th>SKU 数</th>
@@ -307,12 +373,13 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="7" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+            <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中...</td>
           </tr>
           <tr v-else-if="!state.items.length">
-            <td colspan="7" class="muted" style="padding: 24px; text-align: center">暂无上架记录</td>
+            <td colspan="8" class="muted" style="padding: 24px; text-align: center">暂无上架记录</td>
           </tr>
           <tr v-for="r in state.items" :key="r.localTaskId">
+            <td><input type="checkbox" :checked="isSelected(r.localTaskId)" @change="toggleSelect(r.localTaskId)" /></td>
             <td class="col-task" :title="r.localTaskId">{{ r.localTaskId }}</td>
             <td class="col-store">{{ storeName(r.storeId) }}</td>
             <td>{{ r.itemsCount }}</td>
@@ -401,11 +468,12 @@ onMounted(() => {
                 <th>SKU</th>
                 <th>状态</th>
                 <th>错误信息</th>
+                <th class="col-actions">操作</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="!detailItems.length">
-                <td colspan="3" class="muted" style="padding: 16px; text-align: center">
+                <td colspan="4" class="muted" style="padding: 16px; text-align: center">
                   无明细数据(可能任务尚未完成或未上报)
                 </td>
               </tr>
@@ -419,6 +487,15 @@ onMounted(() => {
                 <td>
                   <span v-if="itemErrorText(it)">{{ itemErrorText(it) }}</span>
                   <span v-else style="color: #52c41a">无错误</span>
+                </td>
+                <td class="col-actions">
+                  <button
+                    v-if="it.productId"
+                    class="btn btn-sm btn-ghost"
+                    @click="openSingleRefresh(it)"
+                  >
+                    更新图片
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -463,5 +540,13 @@ onMounted(() => {
       </template>
       <div v-else class="empty">无数据</div>
     </AppModal>
+
+    <!-- 图片更新弹窗 -->
+    <ImageRefreshDialog
+      v-model:open="refreshDialog.open"
+      :mode="refreshDialog.mode"
+      :single-item="refreshDialog.singleItem"
+      :selected-records="refreshDialog.selectedRecords"
+    />
   </div>
 </template>

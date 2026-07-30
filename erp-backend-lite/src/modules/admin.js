@@ -286,6 +286,18 @@ router.get('/admin/api/listing-records', (req, res, next) => {
       where.push('status = ?');
       params.push(String(req.query.status));
     }
+    if (req.query.imageIssue === '1' || req.query.imageIssue === 'true') {
+      // 图片问题筛选:invalid_image 非空 OR items 有图片相关错误
+      // 快速预筛(基于上架时已存的 OPI 响应),详情页提供「检查图片状态」按钮实时查 Ozon 最新状态
+      where.push(
+        `((invalid_image IS NOT NULL AND invalid_image != '' AND invalid_image != '[]')
+          OR EXISTS (SELECT 1 FROM follow_sell_task_items i
+                     WHERE i.local_task_id = follow_sell_tasks.local_task_id
+                       AND i.has_error = 1
+                       AND (i.errors LIKE '%image%' OR i.errors LIKE '%photo%'
+                            OR i.errors LIKE '%picture%' OR i.errors LIKE '%图片%' OR i.errors LIKE '%照片%')))`
+      );
+    }
     if (req.query.viaPortal === '1' || req.query.viaPortal === 'true') {
       where.push('via_portal = 1');
     } else if (req.query.viaPortal === '0' || req.query.viaPortal === 'false') {

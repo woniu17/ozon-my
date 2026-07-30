@@ -278,7 +278,7 @@ export async function commitListing(localTaskId, transformedItems, storeId, stor
   try {
     const r = await opi.productImport(storeObj, transformedItems);
     const ozonTaskId = r?.result?.task_id ? String(r.result.task_id) : null;
-    db.prepare(`UPDATE follow_sell_tasks SET status='PROCESSING', ozon_task_id=? WHERE local_task_id=?`).run(
+    db.prepare(`UPDATE follow_sell_tasks SET status='PROCESSING', ozon_task_id=?, opi_submitted_at=datetime('now') WHERE local_task_id=?`).run(
       ozonTaskId,
       localTaskId
     );

@@ -31,6 +31,8 @@ import { startStockSync, stopStockSync } from './services/stock-sync.js';
 import { startIndexSync, stopIndexSync } from './services/index-sync.js';
 import { startBatchUploadPoller, stopBatchUploadPoller } from './services/batch-upload-poller.js';
 import { startBatchImagePoller, stopBatchImagePoller } from './services/batch-image-poller.js';
+import { startImageRefreshPoller, stopImageRefreshPoller } from './services/image-refresh-poller.js';
+import imageRefreshRoutes from './modules/image-refresh.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -118,6 +120,7 @@ app.use(batchUploadRoutes);
 app.use(cacheRoutes);
 app.use(collectQueueRoutes);
 app.use(categoryFilterRoutes);
+app.use(imageRefreshRoutes);
 
 // 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
 if (config.featureFlags?.proxy_collect) {
@@ -149,6 +152,8 @@ const server = app.listen(config.port, () => {
   //   第二阶段 batch-upload-poller:每 2 秒扫描,全局串行,OPI 阶段限速(IMAGE_DONE→SUCCESS/FAILED)
   startBatchImagePoller();
   startBatchUploadPoller();
+  // 图片更新任务调度器(2026-07):每 2s 扫描,并发 3,负责已上架商品图片重提
+  startImageRefreshPoller();
 });
 
 // 优雅退出
@@ -158,6 +163,7 @@ function shutdown(signal) {
   stopIndexSync();
   stopBatchImagePoller();
   stopBatchUploadPoller();
+  stopImageRefreshPoller();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);

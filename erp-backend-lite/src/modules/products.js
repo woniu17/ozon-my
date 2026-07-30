@@ -196,7 +196,7 @@ router.post('/ozon/products/import-by-sku', storeGuard, async (req, res, next) =
         }))
       );
       ozonTaskId = r?.result?.task_id ? String(r.result.task_id) : null;
-      db.prepare(`UPDATE follow_sell_tasks SET status='PROCESSING', ozon_task_id=? WHERE local_task_id=?`).run(
+      db.prepare(`UPDATE follow_sell_tasks SET status='PROCESSING', ozon_task_id=?, opi_submitted_at=datetime('now') WHERE local_task_id=?`).run(
         ozonTaskId,
         localTaskId
       );
@@ -347,12 +347,15 @@ router.post('/ozon/products/listing-records/report', storeGuard, async (req, res
 
     if (existing) {
       // 更新已有任务
+      // 若上报了新 ozonTaskId(首次提交或重试),补记 opi_submitted_at 用于精准判超时
       db.prepare(
         `UPDATE follow_sell_tasks SET status=?, ozon_task_id=COALESCE(?, ozon_task_id),
+         opi_submitted_at=CASE WHEN ? IS NOT NULL THEN datetime('now') ELSE opi_submitted_at END,
          bundle_ids=COALESCE(?, bundle_ids), error_message=?, completed_at=datetime('now')
          WHERE local_task_id=?`
       ).run(
         body.status || 'SUCCESS',
+        body.ozonTaskId || null,
         body.ozonTaskId || null,
         body.bundleIds ? JSON.stringify(body.bundleIds) : null,
         body.errorMessage || null,
@@ -363,8 +366,8 @@ router.post('/ozon/products/listing-records/report', storeGuard, async (req, res
       db.prepare(
         `INSERT INTO follow_sell_tasks
           (local_task_id, via_portal, store_id, status, items_count, items_preview,
-           ozon_task_id, bundle_ids, error_message, completed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+           ozon_task_id, opi_submitted_at, bundle_ids, error_message, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
       ).run(
         localTaskId,
         body.viaPortal ? 1 : 0,
@@ -373,6 +376,7 @@ router.post('/ozon/products/listing-records/report', storeGuard, async (req, res
         items.length,
         JSON.stringify(items.slice(0, 5)),
         body.ozonTaskId || null,
+        body.ozonTaskId ? new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '') : null,
         body.bundleIds ? JSON.stringify(body.bundleIds) : null,
         body.errorMessage || null
       );

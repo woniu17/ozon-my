@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS follow_sell_tasks (
   items_count   INTEGER DEFAULT 0,
   items_preview TEXT,
   ozon_task_id  TEXT,
+  -- OPI 提交完成(拿到 ozon_task_id)的时刻,用于 import-status-poller 精准计时 Ozon 侧处理时长
+  -- 避免用 created_at 判超时把本地图片加工耗时误算进 Ozon 处理时长
+  opi_submitted_at TEXT,
   bundle_ids    TEXT,
   error_message TEXT,
   strict_skipped TEXT,
@@ -559,3 +562,40 @@ CREATE TABLE IF NOT EXISTS ozon_filtered_categories (
   created_at              TEXT DEFAULT (datetime('now')),
   PRIMARY KEY (description_category_id, type_id)
 );
+
+-- ── 图片更新任务(2026-07) ──────────────────────────────────
+-- 上架后图片出问题时,基于已上架商品单独/批量重提图片(/v1/product/pictures/import)
+-- 轻量任务模型,不复用 batch_upload 框架(场景不同:基于已上架商品非新商品分配)
+CREATE TABLE IF NOT EXISTS image_refresh_tasks (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  local_task_id  TEXT UNIQUE NOT NULL,    -- img-{timestamp}-{rand}
+  store_id       TEXT NOT NULL,            -- 目标店铺(图片所属店铺)
+  status         TEXT NOT NULL DEFAULT 'PENDING', -- PENDING/RUNNING/SUCCESS/FAILED/PARTIAL
+  total_count    INTEGER DEFAULT 0,
+  success_count  INTEGER DEFAULT 0,
+  failed_count   INTEGER DEFAULT 0,
+  template_id    INTEGER,                  -- 使用的上架模板(水印/图片顺序),NULL=不加工直接重提
+  source_type    TEXT DEFAULT 'manual',   -- manual(单条) / batch(批量)
+  error_message  TEXT,
+  created_at     TEXT DEFAULT (datetime('now')),
+  completed_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_irt_status ON image_refresh_tasks(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS image_refresh_items (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id          TEXT NOT NULL,          -- 关联 image_refresh_tasks.local_task_id
+  source_task_id   TEXT,                   -- 来源上架记录 local_task_id(follow_sell_tasks)
+  source_item_offer_id TEXT,              -- 来源上架记录的 offer_id(卖家 SKU)
+  product_id       TEXT NOT NULL,          -- Ozon 商品 ID
+  store_id         TEXT NOT NULL,
+  status           TEXT DEFAULT 'PENDING',  -- PENDING/PROCESSING/SUCCESS/FAILED/SKIPPED
+  source_images    TEXT,                   -- JSON: 源图 URL 数组(加工前)
+  processed_images TEXT,                   -- JSON: 加工后 URL 数组(水印+图床,提交给 OPI 的)
+  opi_result       TEXT,                   -- JSON: /v2/product/pictures/info 返回的图片状态 + errors
+  error_message    TEXT,
+  created_at       TEXT DEFAULT (datetime('now')),
+  updated_at       TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_iri_task ON image_refresh_items(task_id);
+CREATE INDEX IF NOT EXISTS idx_iri_status ON image_refresh_items(status);

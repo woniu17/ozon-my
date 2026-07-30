@@ -345,3 +345,26 @@ export async function descriptionCategoryAttributeValues(
   });
   return r?.result || r || [];
 }
+
+// ── 商品图片更新(2026-07) ───────────────────────────────────
+// /v1/product/pictures/import —— 上传或更新商品图片
+// 扁平请求体(对齐 Swagger productv1ProductImportPicturesRequest):
+//   { product_id: integer, images: string[], color_image?: string, images360?: string[] }
+// 第一张 images 自动为主图(is_primary),无需额外指定
+// 响应: { result: { pictures: [{ state, is_primary, ... }] } }
+export function productPicturesImport(store, { product_id, images, color_image, images360 }) {
+  const body = { product_id: Number(product_id) };
+  if (Array.isArray(images)) body.images = images;
+  if (color_image) body.color_image = color_image;
+  if (Array.isArray(images360)) body.images360 = images360;
+  return call(store, '/v1/product/pictures/import', body);
+}
+
+// /v2/product/pictures/info —— 查询商品图片状态
+// 请求: { product_id: string[] }(最多 1000,Swagger schema items format int64)
+// 响应: { items: [{ product_id, primary_photo[], photo[], color_photo[], photo_360[], errors[] }] }
+// errors 为空表示图片无问题
+export function productPicturesInfo(store, productIds) {
+  const arr = (Array.isArray(productIds) ? productIds : [productIds]).map(String);
+  return call(store, '/v2/product/pictures/info', { product_id: arr });
+}

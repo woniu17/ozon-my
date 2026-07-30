@@ -89,6 +89,12 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE follow_sell_tasks ADD COLUMN template_id INTEGER`);
     console.log('[db] migration: added column follow_sell_tasks.template_id');
   }
+  // 2026-07: OPI 提交时间(拿到 ozon_task_id 的时刻),用于 import-status-poller 精准判超时
+  // 旧数据 opi_submitted_at=NULL,poller 回退到 created_at 计算(保持向后兼容)
+  if (!fstCols.some((c) => c.name === 'opi_submitted_at')) {
+    db.exec(`ALTER TABLE follow_sell_tasks ADD COLUMN opi_submitted_at TEXT`);
+    console.log('[db] migration: added column follow_sell_tasks.opi_submitted_at');
+  }
   // follow_sell_task_items:库存同步状态
   const fstiCols = db.prepare(`PRAGMA table_info(follow_sell_task_items)`).all();
   if (!fstiCols.some((c) => c.name === 'stock_set')) {
