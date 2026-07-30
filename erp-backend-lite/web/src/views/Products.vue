@@ -427,17 +427,26 @@ onMounted(() => {
       </button>
     </div>
 
-    <!-- 同步进度:各店铺实时状态(仅同步进行中/刚完成时显示) -->
-    <div v-if="syncProgressItems.length" style="display:flex;flex-direction:column;gap:4px;padding:8px 0;margin-bottom:4px">
-      <div
-        v-for="p in syncProgressItems"
-        :key="p.storeId"
-        style="display:flex;gap:8px;align-items:center;font-size:13px"
-      >
-        <span style="min-width:90px;font-weight:600">{{ p.storeName }}</span>
-        <span :style="{ color: p.status === 'done' ? '#2e7d32' : p.status === 'error' ? '#c62828' : '#666' }">
-          {{ fmtProgress(p) }}
-        </span>
+    <!-- 同步进度:右上角浮动卡片(不占文档流,避免破坏页面布局) -->
+    <div
+      v-if="syncProgressItems.length"
+      style="position:fixed;top:16px;right:16px;z-index:2000;min-width:320px;max-width:420px;background:#fff;border:1px solid #e0e0e0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.12);padding:12px 14px;font-size:13px"
+    >
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #f0f0f0">
+        <span style="font-weight:600">同步进度</span>
+        <span style="color:#999;font-size:12px">{{ syncProgressItems.length }} 个店铺</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px;max-height:50vh;overflow-y:auto">
+        <div
+          v-for="p in syncProgressItems"
+          :key="p.storeId"
+          style="display:flex;gap:10px;align-items:center"
+        >
+          <span style="min-width:64px;font-weight:600;flex-shrink:0">{{ p.storeName }}</span>
+          <span :style="{ color: p.status === 'done' ? '#2e7d32' : p.status === 'error' ? '#c62828' : '#666', flex:1, wordBreak:'break-all' }">
+            {{ fmtProgress(p) }}
+          </span>
+        </div>
       </div>
     </div>
 
