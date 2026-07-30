@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
 import { prepareBundleItems } from './prepare-bundle.js';
 import * as opi from './ozon-opi.js';
+import { ErrorCode } from '../utils/error-codes.js';
 import { indexDao } from '../db/dao/sqlite/index-dao.js';
 import { buildSynthesizedFromCache } from '../modules/cache.js';
 import config from '../config/index.js';
@@ -272,11 +273,36 @@ export async function prepareListing(message, storeId, store) {
 
 // commitListing:从 transformedItems 直接调 opi.productImport(第二阶段,受 intervalSec 限速)
 // localTaskId 需与 prepareListing 返回的一致,以便关联 follow_sell_tasks 记录
+// 连接超时(TCP 握手阶段)重试:总尝试 3 次,其他错误立即失败
+//   - 仅 ConnectTimeoutError 重试(请求未到达 Ozon,安全)
+//   - headers/body 超时不重试(请求可能已到 Ozon,避免重复)
+const PRODUCT_IMPORT_MAX_ATTEMPTS = 3;
+async function callProductImportWithRetry(store, items) {
+  let lastErr;
+  for (let attempt = 1; attempt <= PRODUCT_IMPORT_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await opi.productImport(store, items);
+    } catch (e) {
+      lastErr = e;
+      const isConnectTimeout =
+        e.code === ErrorCode.TIMEOUT && e.details?.kind === 'connect_timeout';
+      if (!isConnectTimeout || attempt === PRODUCT_IMPORT_MAX_ATTEMPTS) break;
+      const delayMs = 1000 * attempt; // 线性退避:1s, 2s
+      logger.warn(
+        { attempt, maxAttempts: PRODUCT_IMPORT_MAX_ATTEMPTS, delayMs, err: e.message },
+        'commitListing: productImport 连接超时,准备重试'
+      );
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 export async function commitListing(localTaskId, transformedItems, storeId, store) {
   const storeObj = store || config.loadStores().find((s) => s.id === storeId);
   if (!storeObj) throw new Error(`店铺不存在: ${storeId}`);
   try {
-    const r = await opi.productImport(storeObj, transformedItems);
+    const r = await callProductImportWithRetry(storeObj, transformedItems);
     const ozonTaskId = r?.result?.task_id ? String(r.result.task_id) : null;
     db.prepare(`UPDATE follow_sell_tasks SET status='PROCESSING', ozon_task_id=?, opi_submitted_at=datetime('now') WHERE local_task_id=?`).run(
       ozonTaskId,

@@ -75,7 +75,7 @@ function search() {
 
 // 同步:从 Ozon 拉取店铺商品写入本地缓存
 // - 选了店铺:只同步该店铺
-// - 未选店铺:依次同步所有店铺,逐个显示进度,单店铺失败不影响其他
+// - 未选店铺:并行同步所有店铺,店铺间间隔 5s 发请求避免触发限流,单店铺失败不影响其他
 async function syncStoreProducts() {
   const storeId = state.filters.storeId;
   const targets = storeId
@@ -93,27 +93,39 @@ async function syncStoreProducts() {
   }
 
   syncing.value = true;
-  let totalSynced = 0;
-  let totalTotal = 0;
-  let totalRemoved = 0;
-  let totalMs = 0;
-  let failed = 0;
+  const STORE_INTERVAL_MS = 5000; // 店铺间发请求间隔,避免触发 Ozon 限流
   try {
-    for (let i = 0; i < targets.length; i++) {
-      const t = targets[i];
-      syncLabel.value = storeId
-        ? '同步中...'
-        : `同步中 (${i + 1}/${targets.length}) ${t.name}`;
-      try {
+    // 并行启动:第 i 个店铺延迟 i*5s 发请求,各店铺独立 await 不阻塞其他
+    const promises = targets.map((t, i) => {
+      // 单店铺任务:延迟启动 + 独立错误隔离
+      const task = async () => {
+        if (i > 0) await new Promise((r) => setTimeout(r, i * STORE_INTERVAL_MS));
         const r = await syncProducts(t.id);
-        totalSynced += r?.synced ?? 0;
-        totalTotal += r?.total ?? 0;
-        totalRemoved += r?.removed ?? 0;
-        totalMs += r?.durationMs ?? 0;
-      } catch (err) {
-        failed++;
+        return { target: t, result: r };
+      };
+      return task().catch((err) => {
+        // 单店铺失败不影响其他,返回 error 标记
         show(`店铺 ${t.name} 同步失败: ${err.message || String(err)}`, 'error');
+        return { target: t, error: err };
+      });
+    });
+
+    // 显示"同步中"提示(并行模式下无法显示逐个进度)
+    syncLabel.value = storeId ? '同步中...' : `同步中 (并行 ${targets.length} 个店铺)`;
+
+    const results = await Promise.all(promises);
+    let totalSynced = 0;
+    let totalTotal = 0;
+    let totalRemoved = 0;
+    let failed = 0;
+    for (const r of results) {
+      if (r.error) {
+        failed++;
+        continue;
       }
+      totalSynced += r.result?.synced ?? 0;
+      totalTotal += r.result?.total ?? 0;
+      totalRemoved += r.result?.removed ?? 0;
     }
     const summary = `同步完成:写入 ${totalSynced}/${totalTotal} 条,清理 ${totalRemoved} 条已下架${
       failed > 0 ? `,失败 ${failed} 个店铺` : ''

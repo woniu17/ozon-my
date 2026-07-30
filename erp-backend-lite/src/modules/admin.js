@@ -743,18 +743,26 @@ router.post('/admin/api/products/sync', async (req, res) => {
     let total = 0;
     let synced = 0;
     const limit = 1000;
+    // 耗时拆分(用于定位同步瓶颈:list/info/db/delete)
+    let listMs = 0, infoMs = 0, dbMs = 0, pages = 0;
 
     // 循环拉取商品列表(游标分页),批量拉详情后写入 product_data_cache
     while (true) {
+      const __tl = Date.now();
       const listResp = await opi.productList(store, { lastId, limit });
+      listMs += Date.now() - __tl;
       const items = listResp?.result?.items || listResp?.items || [];
       total = listResp?.result?.total || listResp?.total || total;
       if (items.length === 0) break;
+      pages++;
 
       const productIds = items.map((it) => it.product_id).filter(Boolean);
       if (productIds.length > 0) {
+        const __ti = Date.now();
         const infoResp = await opi.productInfoListV3(store, { productIds });
+        infoMs += Date.now() - __ti;
         const infoItems = infoResp?.result?.items || infoResp?.items || [];
+        const __td = Date.now();
         const stmt = db.prepare(
           `INSERT OR REPLACE INTO product_data_cache (sku, data, store_id, fetched_at) VALUES (?, ?, ?, datetime('now'))`
         );
@@ -764,6 +772,7 @@ router.post('/admin/api/products/sync', async (req, res) => {
           stmt.run(sku, JSON.stringify(item), storeId);
           synced++;
         }
+        dbMs += Date.now() - __td;
       }
 
       lastId = listResp?.result?.last_id || listResp?.last_id || '';
@@ -772,11 +781,17 @@ router.post('/admin/api/products/sync', async (req, res) => {
 
     // 全量替换:删除该店铺本次同步未刷新的旧记录(Ozon 端已不存在的商品)
     // 同步成功到达此处才执行删除,中途异常不删旧数据(失败安全)
+    const __tdel = Date.now();
     const removed = db
       .prepare(`DELETE FROM product_data_cache WHERE store_id = ? AND fetched_at < ?`)
       .run(storeId, syncStartedAt).changes;
+    const delMs = Date.now() - __tdel;
 
     const durationMs = Date.now() - startedAt;
+    logger.info(
+      { storeId, total, synced, removed, pages, listMs, infoMs, dbMs, delMs, totalMs: durationMs },
+      '[sync-profile] 同步耗时拆分'
+    );
     res.json(ok({ synced, total, removed, durationMs }));
   } catch (err) {
     res.status(500).json({ code: 1, message: err.message });
