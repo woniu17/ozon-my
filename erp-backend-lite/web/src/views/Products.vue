@@ -37,6 +37,8 @@ const selectedSkus = ref([]);
 const refreshDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
 // 库存更新弹窗(2026-07)
 const stockDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
+// 按筛选批量操作:拉取中的状态('image' | 'stock' | '')
+const filterBatchLoading = ref('');
 
 // 同步状态:从 Ozon 拉取店铺商品写入本地缓存
 const syncing = ref(false);
@@ -235,6 +237,46 @@ function openBatchStock() {
   stockDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
 }
 
+// 按当前筛选条件批量更新(不限于当前页,拉取全量匹配商品的 productId/storeId)
+// type: 'image' | 'stock'
+async function openFilteredBatch(type) {
+  if (filterBatchLoading.value) return;
+  filterBatchLoading.value = type;
+  try {
+    const data = await getProducts({
+      storeId: state.filters.storeId,
+      keyword: state.filters.keyword.trim(),
+      status: state.filters.status,
+      hasStock: state.filters.hasStock,
+      imageIssue: state.filters.imageIssue,
+      idsOnly: 1,
+    });
+    const products = (data?.items || []).filter((p) => p.productId);
+    if (!products.length) {
+      show('当前筛选无可用商品(缺少 product_id)', 'error');
+      return;
+    }
+    if (!confirm(`将对当前筛选匹配的 ${products.length} 个商品批量更新${type === 'image' ? '图片' : '库存'},是否继续?`)) {
+      return;
+    }
+    if (type === 'image') {
+      refreshDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
+    } else {
+      stockDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
+    }
+  } catch (e) {
+    show(e.message || String(e), 'error');
+  } finally {
+    filterBatchLoading.value = '';
+  }
+}
+function openFilteredRefresh() {
+  return openFilteredBatch('image');
+}
+function openFilteredStock() {
+  return openFilteredBatch('stock');
+}
+
 // 商品状态:从列表项 _raw.statuses 提取(OPI /v3/product/info/list 状态嵌套在 statuses 对象内)
 function productStatus(item) {
   const raw = item?._raw || {};
@@ -379,14 +421,25 @@ onMounted(() => {
       <button class="btn btn-primary" @click="openBatchStock">批量更新库存</button>
     </div>
 
+    <!-- 按当前筛选条件批量操作(不限于当前页) -->
+    <div v-if="state.total > 0" style="display:flex;gap:12px;align-items:center;padding:8px 4px">
+      <span class="muted">当前筛选匹配 {{ state.total }} 个商品</span>
+      <button class="btn btn-ghost" :disabled="filterBatchLoading" @click="openFilteredRefresh">
+        {{ filterBatchLoading === 'image' ? '拉取中...' : '按筛选更新图片' }}
+      </button>
+      <button class="btn btn-ghost" :disabled="filterBatchLoading" @click="openFilteredStock">
+        {{ filterBatchLoading === 'stock' ? '拉取中...' : '按筛选更新库存' }}
+      </button>
+    </div>
+
     <div class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
             <th style="width:32px"><input type="checkbox" :checked="allSelected" @change="toggleSelectAll" /></th>
             <th>SKU</th>
-            <th>Offer ID</th>
-            <th>名称</th>
+            <th style="width:140px">Offer ID</th>
+            <th style="width:140px">名称</th>
             <th>店铺</th>
             <th>状态</th>
             <th>库存</th>
@@ -406,7 +459,7 @@ onMounted(() => {
             <td><input type="checkbox" :checked="isSelected(it.sku)" @change="toggleSelect(it.sku)" /></td>
             <td>{{ it.sku }}</td>
             <td>{{ it.offerId || '—' }}</td>
-            <td :title="it.name">{{ it.name || '—' }}</td>
+            <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="it.name">{{ it.name || '—' }}</td>
             <td>{{ storeName(it.storeId) }}</td>
             <td>
               <span class="badge" :class="statusInfo(productStatus(it)).cls">{{

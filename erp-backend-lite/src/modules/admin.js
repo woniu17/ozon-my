@@ -599,7 +599,8 @@ router.get('/admin/api/collect-box-v2/attribute-values', async (req, res, next) 
 // ── 商品列表(查 product_data_cache,跨店铺) ───────────────
 
 // GET /admin/api/products —— 商品数据缓存列表(支持 keyword 模糊搜 sku / data)
-// query: ?currentPage=1&pageSize=20&keyword=
+// query: ?currentPage=1&pageSize=20&keyword=&idsOnly=1
+//   idsOnly=1 时跳过分页,返回全量精简列表(仅 productId/storeId/offerId),供"按筛选批量更新"使用
 router.get('/admin/api/products', (req, res, next) => {
   try {
     const current = Math.max(1, Number(req.query.currentPage) || 1);
@@ -642,6 +643,25 @@ router.get('/admin/api/products', (req, res, next) => {
       );
     }
     const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
+
+    // idsOnly 模式:跳过分页,只返回 productId/storeId/offerId 精简列表
+    // 用于"按当前筛选批量更新图片/库存"场景,避免拉取完整 data JSON
+    if (req.query.idsOnly === '1' || req.query.idsOnly === 'true') {
+      const idRows = db
+        .prepare(
+          `SELECT
+             COALESCE(json_extract(data, '$.product_id'), json_extract(data, '$.id')) AS productId,
+             store_id AS storeId,
+             COALESCE(json_extract(data, '$.offer_id'), json_extract(data, '$.sku'), sku) AS offerId
+           FROM product_data_cache ${whereSql}
+           ORDER BY fetched_at DESC`
+        )
+        .all(...params);
+      const items = idRows
+        .filter((r) => r.productId)
+        .map((r) => ({ productId: String(r.productId), storeId: r.storeId || '', offerId: r.offerId || '' }));
+      return res.json(ok({ items, total: items.length }));
+    }
 
     const rows = db
       .prepare(
