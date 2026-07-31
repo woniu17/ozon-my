@@ -44,7 +44,7 @@ async function call(store, path, body, { method = 'POST', timeoutMs = DEFAULT_TI
     if (e instanceof ApiError) throw e;
     // 连接超时(TCP 握手阶段):请求未到达 Ozon,重试安全
     if (e.name === 'ConnectTimeoutError') {
-      throw new ApiError(ErrorCode.TIMEOUT, `OPI ${path} 连接超时`, { kind: 'connect_timeout' });
+      throw new ApiError(ErrorCode.TIMEOUT, `OPI ${path} 连接超时`, { details: { kind: 'connect_timeout' } });
     }
     if (e.name === 'HeadersTimeoutError' || e.name === 'BodyTimeoutError') {
       throw new ApiError(ErrorCode.TIMEOUT, `OPI ${path} 请求超时`);
