@@ -599,21 +599,19 @@ router.get('/admin/api/collect-box-v2/attribute-values', async (req, res, next) 
 
 // ── 商品列表(查 product_data_cache,跨店铺) ───────────────
 
-// 简化商品状态:基于 OPI /v3/product/info/list 的 4 维原始字段计算 6 类用户可理解的状态
+// 简化商品状态:基于 OPI /v3/product/info/list 的 4 维原始字段计算 5 类用户可理解的状态
 // 输入:product_data_cache.data 解析后的对象
-// 优先级:rejected > saleable/created_no_stock > pending_creation > in_review > unknown
-//   - saleable(可售):is_created=true AND has_stock=true (98.7% 商品)
-//   - created_no_stock(已创建缺货):is_created=true AND has_stock=false
-//   - pending_creation(待创建):is_created=false AND 非拒绝
-//     (商品尚未创建,可能卡在校验/审核任一阶段,调 /v2/products/stocks 会返回 PRODUCT_IS_NOT_CREATED)
-//   - in_review(审核中):is_created=true AND moderate_status ∈ ('', 'in-moderating')
-//     (商品已创建,正在审核中,尚未 price_sent)
-//   - rejected(审核拒绝):moderate_status=declined OR validation_status=fail OR status=unmatched
-//   - unknown(数据异常):其他(如全 null)
-// 注:rejected 判定优先于 created,避免如 declined + created=1 的边界行被误归到 created_no_stock
-// 2026-07:修正 pending_creation 判定(原要求 approved+success 过严)
-//   is_created=false 本身就表示"商品未创建",无论卡在校验还是审核阶段
-//   与 Ozon 后台"未创建(Не создан)"显示一致,避免误归为 in_review
+// 优先级:pending_creation > rejected > saleable/created_no_stock > other
+//   - pending_creation(待创建):is_created=false
+//     (商品尚未创建,无论审核状态如何,与 Ozon 后台"未创建(Не создан)"显示一致)
+//   - saleable(出售中):is_created=true AND has_stock=true (98.7% 商品)
+//   - created_no_stock(准备出售):is_created=true AND has_stock=false
+//   - rejected(审核拒绝):is_created=true AND (moderate_status=declined OR validation_status=fail OR status=unmatched)
+//   - other(其它):is_created=true 且非拒绝/非 saleable/非 created_no_stock
+//     (含原 in_review 审核中、unknown 数据异常,2026-07 合并以简化前端展示)
+// 2026-07:is_created=0 优先于 rejected 判定
+//   Ozon 后台对 is_created=0 的商品统一显示"未创建",无论 moderate_status 是否 declined
+//   原 declined 优先逻辑会把"未创建+审核被拒"误判为 rejected,与后台显示不一致
 function computeProductStatus(data) {
   const st = data?.statuses || {};
   const mod = st.moderate_status ?? '';
@@ -622,14 +620,76 @@ function computeProductStatus(data) {
   const isCreated = st.is_created === true || st.is_created === 1;
   const hasStock = data?.stocks?.has_stock === true || data?.stocks?.has_stock === 1;
 
+  // is_created=0 优先:统一判为待创建,与 Ozon 后台"未创建"显示一致
+  // 覆盖未创建+审核被拒/未创建+校验未通过/未创建+审核中等所有情况
+  if (!isCreated) return 'pending_creation';
+  // 以下均针对 is_created=true 的商品
   if (mod === 'declined' || val === 'fail' || status === 'unmatched') return 'rejected';
   if (isCreated && hasStock) return 'saleable';
   if (isCreated && !hasStock) return 'created_no_stock';
-  // is_created=false 且非拒绝 → 待创建(覆盖校验未通过/审核中/审核通过但未创建等情况)
-  if (!isCreated) return 'pending_creation';
-  // is_created=true 但 moderate_status 为空或 in-moderating → 审核中(已创建尚未 price_sent)
-  if (mod === '' || mod === 'in-moderating') return 'in_review';
-  return 'unknown';
+  // 其余情况(原 in_review 审核中 / unknown 数据异常)统一合并为 other
+  return 'other';
+}
+
+// OPI errors[].code → 中文映射表(2026-07)
+// 用于商品列表状态列下方的错误提示展示
+// 未命中的 code 原样透传,不阻塞展示
+const ERROR_CODE_CN_MAP = {
+  // 校验类(待创建)
+  error_attribute_values_empty: '必填属性为空',
+  error_attribute_value_invalid: '属性值无效',
+  error_attribute_value_too_long: '属性值过长',
+  error_attribute_value_too_short: '属性值过短',
+  error_attribute_unknown: '未知属性',
+  error_attribute_required: '缺少必填属性',
+  BR_ASSORTMENT: '禁止 assortment 销售',
+  BR_NOT_IN_ASSORTMENT: '不在 assortment 中',
+  // 审核类(待创建/审核拒绝)
+  DESCRIPTION_DECLINE: '描述/图片审核被拒',
+  IMAGE_DECLINE: '图片审核被拒',
+  NAME_DECLINE: '名称审核被拒',
+  // 图片加载类(各状态均可能)
+  primary_image_load_failed: '主图加载失败',
+  pics_http_error: '图片 HTTP 错误',
+  some_image_failed: '部分图片失败',
+  all_image_failed: '全部图片失败',
+  warning_all_image_failed: '全部图片失败(警告)',
+  // 其他常见
+  PRODUCT_IS_NOT_CREATED: '商品未创建',
+  PRODUCT_NOT_FOUND: '商品不存在',
+  forbidden: '无权限',
+  not_found: '未找到',
+  bad_request: '请求参数错误',
+  internal_error: '服务器内部错误',
+};
+
+// 抽取并简化 errors[] 为前端友好的结构
+// 输入:product_data_cache.data 解析后的对象
+// 输出:{ count, items }
+//   items: [{ code, codeCn, attributeName, description, level }]
+//   去重:相同 code+attribute_id 的错误只保留一条(如 BR_ASSORTMENT 出现 3 次)
+function extractStatusErrors(data) {
+  const errs = Array.isArray(data?.errors) ? data.errors : [];
+  if (errs.length === 0) return { count: 0, items: [] };
+  const seen = new Set();
+  const items = [];
+  for (const e of errs) {
+    const code = String(e?.code || '');
+    const attrId = e?.attribute_id ?? '';
+    // 去重 key:code + attribute_id(同一属性同一错误码视为重复)
+    const key = `${code}#${attrId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const texts = e?.texts || {};
+    items.push({
+      code,
+      codeCn: ERROR_CODE_CN_MAP[code] || code,
+      attributeName: texts.attribute_name || '',
+      description: texts.description || texts.message || '',
+      level: e?.level === 'ERROR_LEVEL_WARNING' ? 'warning' : 'error',
+    });
+  }
+  return { count: items.length, items };
 }
 
 // GET /admin/api/products —— 商品数据缓存列表(支持 keyword 模糊搜 sku / data)
@@ -666,16 +726,22 @@ router.get('/admin/api/products', (req, res, next) => {
       where.push("json_extract(data, '$.statuses.status') = ?");
       params.push(String(req.query.status));
     }
-    // 简化状态筛选(2026-07):基于 is_created + moderate + validation + has_stock 计算 6 类
-    //   saleable / created_no_stock / pending_creation / in_review / rejected / unknown
-    // 优先级:rejected > saleable/created_no_stock > pending_creation > in_review > unknown
-    // (rejected 判定优先,避免如 declined + created=1 的边界行被误归到 created_no_stock)
-    // 2026-07:修正 pending_creation 判定(is_created=0 即待创建,原 approved+success 过严)
+    // 简化状态筛选(2026-07):基于 is_created + moderate + validation + has_stock 计算 5 类
+    //   saleable / created_no_stock / pending_creation / rejected / other
+    // 优先级:pending_creation > rejected > saleable/created_no_stock > other
+    // (is_created=0 优先,与 Ozon 后台"未创建"显示一致;rejected 仅针对已创建被拒的商品)
+    // 2026-07:合并 in_review/unknown → other(方案 B 彻底合并)
+    // 注意:productStatus 筛选单独维护,不 push 到 where 数组
+    //   where 数组仅含基础筛选(keyword/storeId/hasStock/status/imageIssue),
+    //   用于 statusCounts 查询(口径 A:统计各状态数量时排除 productStatus 筛选)
+    let productStatusWhere = '';
     if (req.query.productStatus) {
       const ps = String(req.query.productStatus);
       // SQL CASE 表达式:与后端 computeProductStatus 保持一致
-      where.push(
-        `(CASE
+      productStatusWhere =
+        ` AND (CASE
+            WHEN json_extract(data, '$.statuses.is_created') = 0
+              THEN 'pending_creation'
             WHEN COALESCE(json_extract(data, '$.statuses.moderate_status'), '') = 'declined'
                  OR json_extract(data, '$.statuses.validation_status') = 'fail'
                  OR json_extract(data, '$.statuses.status') = 'unmatched'
@@ -686,14 +752,8 @@ router.get('/admin/api/products', (req, res, next) => {
             WHEN json_extract(data, '$.statuses.is_created') = 1
                  AND COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 0
               THEN 'created_no_stock'
-            WHEN json_extract(data, '$.statuses.is_created') = 0
-              THEN 'pending_creation'
-            WHEN json_extract(data, '$.statuses.is_created') = 1
-                 AND COALESCE(json_extract(data, '$.statuses.moderate_status'), '') IN ('', 'in-moderating')
-              THEN 'in_review'
-            ELSE 'unknown'
-           END) = ?`
-      );
+            ELSE 'other'
+           END) = ?`;
       params.push(ps);
     }
     // 图片问题筛选:基于 data.errors 数组中的图片错误码
@@ -706,7 +766,12 @@ router.get('/admin/api/products', (req, res, next) => {
                     'some_image_failed','all_image_failed','warning_all_image_failed'))`
       );
     }
-    const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
+    const baseWhereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
+    // 拼接 productStatus 筛选(列表/total/idsOnly 查询用)
+    // productStatusWhere 以 ' AND ' 开头,baseWhereSql 为空时需补 'WHERE 1=1'
+    const fullWhereSql = baseWhereSql
+      ? baseWhereSql + productStatusWhere
+      : (productStatusWhere ? 'WHERE 1=1' + productStatusWhere : '');
 
     // idsOnly 模式:跳过分页,只返回 productId/storeId/offerId 精简列表
     // 用于"按当前筛选批量更新图片/库存"场景,避免拉取完整 data JSON
@@ -717,7 +782,7 @@ router.get('/admin/api/products', (req, res, next) => {
              COALESCE(json_extract(data, '$.product_id'), json_extract(data, '$.id')) AS productId,
              store_id AS storeId,
              COALESCE(json_extract(data, '$.offer_id'), json_extract(data, '$.sku'), sku) AS offerId
-           FROM product_data_cache ${whereSql}
+           FROM product_data_cache ${fullWhereSql}
            ORDER BY fetched_at DESC`
         )
         .all(...params);
@@ -729,10 +794,45 @@ router.get('/admin/api/products', (req, res, next) => {
 
     const rows = db
       .prepare(
-        `SELECT sku, data, store_id, fetched_at FROM product_data_cache ${whereSql} ORDER BY fetched_at DESC LIMIT ? OFFSET ?`
+        `SELECT sku, data, store_id, fetched_at FROM product_data_cache ${fullWhereSql} ORDER BY fetched_at DESC LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, offset);
-    const total = db.prepare(`SELECT COUNT(*) as n FROM product_data_cache ${whereSql}`).get(...params).n;
+    const total = db.prepare(`SELECT COUNT(*) as n FROM product_data_cache ${fullWhereSql}`).get(...params).n;
+
+    // statusCounts:各状态数量统计(口径 A:排除 productStatus 筛选,保留其他基础筛选)
+    // 用 baseWhereSql(不含 productStatus),一条 GROUP BY SQL 查询全部 5 类状态计数
+    // 前端 Tab 展示"全部(N) 出售中(N) 准备出售(N) 待创建(N) 审核拒绝(N) 其它(N)"
+    const countRows = db
+      .prepare(
+        `SELECT (CASE
+            WHEN json_extract(data, '$.statuses.is_created') = 0
+              THEN 'pending_creation'
+            WHEN COALESCE(json_extract(data, '$.statuses.moderate_status'), '') = 'declined'
+                 OR json_extract(data, '$.statuses.validation_status') = 'fail'
+                 OR json_extract(data, '$.statuses.status') = 'unmatched'
+              THEN 'rejected'
+            WHEN json_extract(data, '$.statuses.is_created') = 1
+                 AND COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 1
+              THEN 'saleable'
+            WHEN json_extract(data, '$.statuses.is_created') = 1
+                 AND COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 0
+              THEN 'created_no_stock'
+            ELSE 'other'
+           END) AS ps, COUNT(*) AS n
+         FROM product_data_cache ${baseWhereSql}
+         GROUP BY ps`
+      )
+      .all(...params.slice(0, params.length - (req.query.productStatus ? 1 : 0)));
+    // statusCounts params:baseWhereSql 对应基础筛选参数
+    // params 末尾可能是 productStatus 的 ps(如果有 productStatus 筛选),需排除
+    const statusCounts = { saleable: 0, created_no_stock: 0, pending_creation: 0, rejected: 0, other: 0 };
+    for (const r of countRows) {
+      if (statusCounts[r.ps] !== undefined) statusCounts[r.ps] = r.n;
+    }
+    // 「全部」= 各状态数量之和(基础筛选下的总数,不含 productStatus 筛选)
+    statusCounts.all =
+      statusCounts.saleable + statusCounts.created_no_stock + statusCounts.pending_creation +
+      statusCounts.rejected + statusCounts.other;
 
     res.json(
       ok({
@@ -745,6 +845,10 @@ router.get('/admin/api/products', (req, res, next) => {
             // 简化商品状态(2026-07):6 类用户可理解状态,前端展示与筛选主用此字段
             // 原始 statuses.* 仍保留在 _raw 中供详情页查看
             productStatus: computeProductStatus(data),
+            // 状态错误信息(2026-07):抽取 errors[] 并翻译为中文,前端状态列下方展示
+            //   statusErrorCount: 去重后的错误条数(0 表示无错误)
+            //   statusErrors: [{ code, codeCn, attributeName, description, level }]
+            statusErrors: extractStatusErrors(data),
             // 提取常用展示字段(容错:不同 OPI 版本字段名可能不同)
             name: data.name || data.title || '',
             productId: data.product_id || data.id || '',
@@ -778,6 +882,9 @@ router.get('/admin/api/products', (req, res, next) => {
         total,
         current,
         pageSize,
+        // 各状态数量(口径 A:排除 productStatus 筛选,前端 Tab 展示数量用)
+        // { all, saleable, created_no_stock, pending_creation, rejected, other }
+        statusCounts,
       })
     );
   } catch (e) {

@@ -612,12 +612,12 @@ h3 {
   color: #fff;
 }
 /* 各状态 active 时使用对应语义色(覆盖 var(--primary)) */
+/* 2026-07:合并 in_review/unknown → other,使用灰色 */
 .status-tab-saleable.active { background: #2e7d32; border-color: #2e7d32; }
 .status-tab-created_no_stock.active { background: #ed6c02; border-color: #ed6c02; }
 .status-tab-pending_creation.active { background: #0288d1; border-color: #0288d1; }
-.status-tab-in_review.active { background: #ed6c02; border-color: #ed6c02; }
 .status-tab-rejected.active { background: #c62828; border-color: #c62828; }
-.status-tab-unknown.active { background: #757575; border-color: #757575; }
+.status-tab-other.active { background: #757575; border-color: #757575; }
 
 /* ── 上架记录表格 ── */
 .listings-table-wrap {
@@ -657,6 +657,24 @@ h3 {
 }
 .data-table tbody tr:last-child td {
   border-bottom: none;
+}
+/* 商品列表状态单元格:徽章 + 错误提示垂直排列 */
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+/* 状态错误提示小字(2026-07):hover 显示完整 tooltip */
+.err-hint {
+  font-size: 11px;
+  color: var(--danger, #dc2626);
+  line-height: 1.3;
+  cursor: help;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
 }
 .listings-table {
   width: 100%;

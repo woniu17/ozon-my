@@ -22,10 +22,13 @@ const state = reactive({
   loading: false,
   page: 1,
   pageSize: 20,
+  // 各状态数量(口径 A:排除 productStatus 筛选,后端返回)
+  // { all, saleable, created_no_stock, pending_creation, rejected, other }
+  statusCounts: { all: 0, saleable: 0, created_no_stock: 0, pending_creation: 0, rejected: 0, other: 0 },
   filters: {
     storeId: '',
     keyword: '',
-    productStatus: '', // 简化状态(2026-07):'' 全部 | saleable/created_no_stock/pending_creation/in_review/rejected/unknown
+    productStatus: '', // 简化状态(2026-07):'' 全部 | saleable/created_no_stock/pending_creation/rejected/other
     hasStock: '', // '' 全部 | '1' 有库存 | '0' 无库存
     imageIssue: '',
   },
@@ -137,6 +140,7 @@ async function loadList() {
     });
     state.items = data?.items || [];
     state.total = data?.total || 0;
+    state.statusCounts = data?.statusCounts || state.statusCounts;
   } catch (err) {
     show(err.message || String(err), 'error');
     state.items = [];
@@ -377,29 +381,47 @@ function openFilteredStock() {
   return openFilteredBatch('stock');
 }
 
-// 商品简化状态徽章(2026-07):基于后端返回的 productStatus(6 类)
-// 不再从 _raw.statuses.status 解析,改用后端统一计算的简化状态
+// 商品简化状态徽章(2026-07):基于后端返回的 productStatus(5 类)
+// 2026-07:改名 saleable→出售中、created_no_stock→准备出售;合并 in_review/unknown → other
 const PRODUCT_STATUS_BADGE = {
-  saleable: { cls: 'badge-success', label: '可售' },
-  created_no_stock: { cls: 'badge-pending', label: '已创建缺货' },
+  saleable: { cls: 'badge-success', label: '出售中' },
+  created_no_stock: { cls: 'badge-pending', label: '准备出售' },
   pending_creation: { cls: 'badge-processing', label: '待创建' },
-  in_review: { cls: 'badge-pending', label: '审核中' },
   rejected: { cls: 'badge-failed', label: '审核拒绝' },
-  unknown: { cls: 'badge-pending', label: '数据异常' },
+  other: { cls: 'badge-pending', label: '其它' },
 };
 
 function productStatusInfo(it) {
   return PRODUCT_STATUS_BADGE[it.productStatus] || { cls: 'badge-pending', label: it.productStatus || '—' };
 }
 
+// 状态错误提示(2026-07):基于后端返回的 statusErrors(去重+中文翻译)
+// 用于状态列下方的小字提示 + hover tooltip 展示完整错误
+// 返回:{ count, hint, tooltip } 或 null(无错误)
+function statusErrorInfo(it) {
+  const se = it.statusErrors;
+  if (!se || !se.count || !Array.isArray(se.items) || se.items.length === 0) return null;
+  // hint:第 1 条错误的中文描述(短),前面带计数
+  const first = se.items[0];
+  const hint = se.count === 1 ? first.codeCn : `${first.codeCn} 等 ${se.count} 条`;
+  // tooltip:拼接所有错误(最多 5 条),格式「· 中文描述(属性名)」
+  const lines = se.items.slice(0, 5).map((e) => {
+    const attr = e.attributeName ? `(${e.attributeName})` : '';
+    return `· ${e.codeCn}${attr}`;
+  });
+  if (se.count > 5) lines.push(`... 共 ${se.count} 条`);
+  const tooltip = lines.join('\n');
+  return { count: se.count, hint, tooltip };
+}
+
 // 状态子tab 配置(2026-07):顺序与展示标签,与 PRODUCT_STATUS_BADGE 同步
+// 2026-07:改名 + 合并 in_review/unknown → other
 const PRODUCT_STATUS_TABS = [
-  { value: 'saleable', label: '可售' },
-  { value: 'created_no_stock', label: '已创建缺货' },
+  { value: 'saleable', label: '出售中' },
+  { value: 'created_no_stock', label: '准备出售' },
   { value: 'pending_creation', label: '待创建' },
-  { value: 'in_review', label: '审核中' },
   { value: 'rejected', label: '审核拒绝' },
-  { value: 'unknown', label: '数据异常' },
+  { value: 'other', label: '其它' },
 ];
 
 // 切换状态 tab:重置到第 1 页并加载
@@ -544,20 +566,20 @@ onMounted(() => {
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
-    <!-- 状态子tab筛选(2026-07):替代原状态下拉,直观展示 6 类简化状态 -->
+    <!-- 状态子tab筛选(2026-07):5 类简化状态 + 数量统计 -->
     <div class="status-tabs">
       <button
         class="status-tab"
         :class="{ active: state.filters.productStatus === '' }"
         @click="setStatusTab('')"
-      >全部</button>
+      >全部({{ state.statusCounts.all || 0 }})</button>
       <button
         v-for="opt in PRODUCT_STATUS_TABS"
         :key="opt.value"
         class="status-tab"
         :class="{ active: state.filters.productStatus === opt.value, ['status-tab-' + opt.value]: true }"
         @click="setStatusTab(opt.value)"
-      >{{ opt.label }}</button>
+      >{{ opt.label }}({{ state.statusCounts[opt.value] || 0 }})</button>
     </div>
 
     <div v-if="selectedSkus.length" style="display:flex;gap:12px;align-items:center;padding:8px 4px">
@@ -607,9 +629,16 @@ onMounted(() => {
             <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="it.name">{{ it.name || '—' }}</td>
             <td>{{ storeName(it.storeId) }}</td>
             <td>
-              <span class="badge" :class="productStatusInfo(it).cls">{{
-                productStatusInfo(it).label
-              }}</span>
+              <div class="status-cell">
+                <span class="badge" :class="productStatusInfo(it).cls">{{
+                  productStatusInfo(it).label
+                }}</span>
+                <span
+                  v-if="statusErrorInfo(it)"
+                  class="err-hint"
+                  :title="statusErrorInfo(it).tooltip"
+                >{{ statusErrorInfo(it).hint }}</span>
+              </div>
             </td>
             <td>
               <span class="badge" :class="stockBadgeClass(it)">{{ stockBadgeLabel(it) }}</span>
