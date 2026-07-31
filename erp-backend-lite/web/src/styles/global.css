@@ -18,6 +18,45 @@
   box-sizing: border-box;
 }
 
+/* 2026-07 可访问性修复 */
+/* 屏幕阅读器专用文本(视觉隐藏但可读) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+/* skip link:Tab 聚焦时显示,跳到主内容 */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--primary);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 0 0 6px 0;
+  z-index: 1000;
+  text-decoration: none;
+}
+.skip-link:focus {
+  top: 0;
+}
+/* 尊重用户减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* 关键:防止 display:flex 等规则覆盖 [hidden],否则弹窗关不掉 */
 [hidden] {
   display: none !important;
@@ -130,15 +169,23 @@ h3 {
   color: var(--danger);
   font-style: normal;
 }
-.form input {
+.form input,
+.form select {
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 14px;
   background: #fff;
+  color: var(--text);
   transition: border-color 0.15s;
 }
-.form input:focus {
+.form input:focus,
+.form select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.form input:focus-visible,
+.form select:focus-visible {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
@@ -169,12 +216,18 @@ h3 {
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
+  touch-action: manipulation;
   transition:
     background 0.15s,
     border-color 0.15s,
     color 0.15s;
   background: #fff;
   color: var(--text);
+}
+/* 2026-07:键盘聚焦时显示 ring(替代 :focus,避免点击也显示) */
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35);
 }
 .btn:disabled {
   opacity: 0.5;
@@ -372,11 +425,16 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: center;
+  color-scheme: light;
 }
 .modal-mask {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.45);
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
 }
 .modal-card {
   position: relative;
@@ -408,6 +466,12 @@ h3 {
   color: var(--muted);
   cursor: pointer;
   padding: 0 4px;
+  touch-action: manipulation;
+}
+.modal-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35);
+  border-radius: 4px;
 }
 .modal-close:hover {
   color: var(--text);
@@ -415,6 +479,7 @@ h3 {
 .modal-body {
   padding: 16px 20px;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .modal .form {
   margin-top: 16px;
@@ -512,10 +577,17 @@ h3 {
   color: var(--muted);
   font-size: 14px;
   cursor: pointer;
+  text-decoration: none;
+  touch-action: manipulation;
   border-bottom: 2px solid transparent;
   transition:
     color 0.15s,
     border-color 0.15s;
+}
+.tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35);
+  border-radius: 6px 6px 0 0;
 }
 .tab:hover {
   color: var(--text);
@@ -547,9 +619,15 @@ h3 {
   font-size: 13px;
   background: #fff;
   color: var(--text);
+  touch-action: manipulation;
 }
 .filter-select:focus,
 .filter-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.filter-select:focus-visible,
+.filter-input:focus-visible {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
@@ -600,7 +678,13 @@ h3 {
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
+  touch-action: manipulation;
+  font-variant-numeric: tabular-nums;
   transition: all 0.15s;
+}
+.status-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35);
 }
 .status-tab:hover {
   border-color: var(--primary);
@@ -798,6 +882,7 @@ h3 {
   color: var(--muted);
   font-size: 12px;
   margin-right: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .pager button {
   padding: 4px 12px;
@@ -807,6 +892,12 @@ h3 {
   color: var(--text);
   font-size: 12px;
   cursor: pointer;
+  touch-action: manipulation;
+}
+.pager button:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 .pager button:hover:not(:disabled) {
   background: #f3f4f6;
@@ -952,6 +1043,7 @@ h3 {
   font-weight: 700;
   color: var(--text);
   line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
 .dash-card-value.dash-ok {
   color: #059669;
@@ -1103,9 +1195,13 @@ h3 {
   border-radius: 4px;
   font-size: 13px;
 }
-.cfg-input-wrap input:focus {
+.cfg-input-wrap input:focus,
+.cfg-input-wrap input:focus-visible {
   outline: none;
   border-color: var(--primary);
+}
+.cfg-input-wrap input:focus-visible {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 .cfg-unit {
   font-size: 12px;
@@ -1121,9 +1217,13 @@ h3 {
   font-size: 12px;
   resize: vertical;
 }
-.cfg-textarea:focus {
+.cfg-textarea:focus,
+.cfg-textarea:focus-visible {
   outline: none;
   border-color: var(--primary);
+}
+.cfg-textarea:focus-visible {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 .cfg-switch {
   display: inline-flex;

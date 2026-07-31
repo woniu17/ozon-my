@@ -221,7 +221,7 @@ function close() {
         <!-- 配置区 -->
         <div class="bud-section">
           <div class="bud-section-title">店铺多选</div>
-          <div v-if="!storesStore.loaded" class="muted small">加载中...</div>
+          <div v-if="!storesStore.loaded" class="muted small">加载中…</div>
           <div v-else-if="!storesStore.list.length" class="muted small">暂无店铺,请先在店铺管理中配置</div>
           <div v-else class="bud-store-grid">
             <label
@@ -290,10 +290,10 @@ function close() {
         <div class="bud-actions">
           <button class="btn btn-ghost" @click="close">取消</button>
           <button class="btn btn-primary" :disabled="loadingPreview" @click="doPreview">
-            {{ loadingPreview ? '预览中...' : '预览分配' }}
+            {{ loadingPreview ? '预览中…' : '预览分配' }}
           </button>
           <button class="btn btn-primary" :disabled="creating" @click="doCreate">
-            {{ creating ? '创建中...' : '确认创建' }}
+            {{ creating ? '创建中…' : '确认创建' }}
           </button>
         </div>
 

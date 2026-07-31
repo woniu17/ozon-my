@@ -17,8 +17,10 @@ import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
 import JsonTree from '../components/JsonTree.vue';
+import { useConfirmStore } from '../stores/confirm.js';
 
 const { show } = useToast();
+const confirmStore = useConfirmStore();
 const route = useRoute();
 const router = useRouter();
 
@@ -150,7 +152,7 @@ function toggleAll(checked) {
 // 单个删除:删除该 SKU 的 5 类缓存 + 索引行
 async function deleteOne(it) {
   if (!it?.sku) return;
-  if (!confirm(`确认删除 SKU ${it.sku} 的全部缓存(dom/attribute/richMedia/marketStats/followSell + 索引)?`)) return;
+  if (!(await confirmStore.ask({ message: `确认删除 SKU ${it.sku} 的全部缓存(dom/attribute/richMedia/marketStats/followSell + 索引)?`, danger: true }))) return;
   state.deleting = true;
   try {
     await deleteSkuAll(it.sku);
@@ -176,7 +178,7 @@ async function deleteSelected() {
     show('请先选择要删除的 SKU', 'error');
     return;
   }
-  if (!confirm(`确认删除选中的 ${skus.length} 个 SKU 的全部缓存?`)) return;
+  if (!(await confirmStore.ask({ message: `确认删除选中的 ${skus.length} 个 SKU 的全部缓存?`, danger: true }))) return;
   state.deleting = true;
   try {
     const r = await batchDeleteSkus({ skus });
@@ -198,7 +200,7 @@ async function deleteByFilter() {
   const tip = kw
     ? `确认删除所有匹配关键词 "${kw}" 的 SKU 缓存?(不限当前页,可能数量较多)`
     : '确认删除所有 SKU 缓存?(未输入关键词,将清空全部)';
-  if (!confirm(tip)) return;
+  if (!(await confirmStore.ask({ message: tip, danger: true }))) return;
   state.deleting = true;
   try {
     const r = await batchDeleteSkus({ filter: { keyword: kw } });
@@ -547,7 +549,7 @@ async function updateStoreClass(sellerId, data) {
 
 async function deleteStoreClass(sellerId, displayName) {
   const label = displayName || sellerId;
-  if (!confirm(`确认删除店铺分类 ${label}?`)) return;
+  if (!(await confirmStore.ask({ message: `确认删除店铺分类 ${label}?`, danger: true }))) return;
   if (!sellerId) {
     show('缺少 sellerId,无法删除(可能为旧数据)', 'error');
     return;
@@ -604,7 +606,7 @@ function onStoreSkuPageChange(p) {
 }
 
 async function deleteStoreSkuRecord(sku) {
-  if (!confirm(`确认删除店铺 SKU 关联 ${sku}?`)) return;
+  if (!(await confirmStore.ask({ message: `确认删除店铺 SKU 关联 ${sku}?`, danger: true }))) return;
   try {
     await deleteStoreSku(sku);
     show('已删除', 'success');
@@ -654,7 +656,7 @@ onMounted(() => {
           :disabled="state.loading"
           @click="loadList"
         >
-          {{ state.loading ? '刷新中...' : '刷新列表' }}
+          {{ state.loading ? '刷新中…' : '刷新列表' }}
         </button>
       </div>
     </div>
@@ -718,7 +720,7 @@ onMounted(() => {
           </thead>
           <tbody>
             <tr v-if="state.loading && !state.items.length">
-              <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+              <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中…</td>
             </tr>
             <tr v-else-if="!state.items.length">
               <td colspan="8" class="empty">暂无数据</td>
@@ -938,7 +940,7 @@ onMounted(() => {
 
     <!-- 详情弹窗 -->
     <AppModal :open="detailOpen" :title="detailTitle" size="lg" @update:open="detailOpen = $event">
-      <p v-if="detailLoading" class="muted">加载中...</p>
+      <p v-if="detailLoading" class="muted">加载中…</p>
       <div v-else-if="detailData" class="cache-detail">
         <div class="cache-detail-meta">
           <div class="meta-header">{{ TYPE_LABELS[detailType] }}</div>
@@ -960,7 +962,7 @@ onMounted(() => {
 
     <!-- OPI 预览弹窗 -->
     <AppModal :open="opiOpen" :title="opiTitle" size="lg" @update:open="opiOpen = $event">
-      <p v-if="opiLoading" class="muted">加载中...</p>
+      <p v-if="opiLoading" class="muted">加载中…</p>
       <div v-else-if="opiError" class="opi-error">
         <p>⚠️ {{ opiError }}</p>
         <div v-if="opiSources" class="opi-sources">

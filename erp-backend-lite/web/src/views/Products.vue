@@ -1,6 +1,6 @@
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
 import { getProducts, getProductDetail, syncProducts, getSyncProgress } from '../api/products.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
@@ -10,10 +10,13 @@ import AppAccordion from '../components/AppAccordion.vue';
 import JsonTree from '../components/JsonTree.vue';
 import ImageRefreshDialog from '../components/ImageRefreshDialog.vue';
 import StockRefreshDialog from '../components/StockRefreshDialog.vue';
+import { useConfirmStore } from '../stores/confirm.js';
 
 const router = useRouter();
+const route = useRoute();
 const storesStore = useStoresStore();
 const { show } = useToast();
+const confirmStore = useConfirmStore();
 
 // ── 列表状态 ───────────────────────────────────────────────
 const state = reactive({
@@ -150,6 +153,75 @@ async function loadList() {
   }
 }
 
+// ── URL state 同步(2026-07) ─────────────────────────────────
+// 筛选条件 + 页码同步到 URL query params,刷新/分享不丢失状态
+// 设计:
+//   - onMounted 时从 route.query 回填 state(loadFromUrl),再 loadList
+//   - watch state.filters(deep) + state.page → debounce 300ms 写入 router.replace(syncToUrl)
+//   - 用 syncUrlPending flag 防止 loadFromUrl → watch → syncToUrl 循环
+//   - 空值不写入 query,保持 URL 简洁
+let syncUrlTimer = null;
+let syncUrlPending = false; // true 时跳过 watch 触发的 syncToUrl(loadFromUrl 回填期间)
+
+function buildQueryFromState() {
+  const q = {};
+  const f = state.filters;
+  if (f.storeId) q.storeId = f.storeId;
+  if (f.keyword && f.keyword.trim()) q.keyword = f.keyword.trim();
+  if (f.productStatus) q.productStatus = f.productStatus;
+  if (f.hasStock) q.hasStock = f.hasStock;
+  if (f.imageIssue) q.imageIssue = f.imageIssue;
+  if (state.page && state.page > 1) q.page = String(state.page);
+  return q;
+}
+
+function syncToUrl() {
+  if (syncUrlPending) return; // loadFromUrl 回填期间跳过
+  if (syncUrlTimer) clearTimeout(syncUrlTimer);
+  syncUrlTimer = setTimeout(() => {
+    const q = buildQueryFromState();
+    // 仅当 query 变化时才 replace,避免无谓的导航
+    const cur = route.query;
+    const changed =
+      Object.keys({ ...q, ...cur }).some((k) => String(q[k] ?? '') !== String(cur[k] ?? ''));
+    if (changed) {
+      router.replace({ query: q });
+    }
+  }, 300);
+}
+
+function loadFromUrl() {
+  syncUrlPending = true;
+  const q = route.query || {};
+  // 回填筛选条件(容错:非法值忽略)
+  if (typeof q.storeId === 'string' && q.storeId) state.filters.storeId = q.storeId;
+  if (typeof q.keyword === 'string' && q.keyword) state.filters.keyword = q.keyword;
+  if (typeof q.productStatus === 'string' && q.productStatus) {
+    // 仅接受合法状态值,防止恶意 URL
+    const valid = ['', 'saleable', 'created_no_stock', 'pending_creation', 'rejected', 'other'];
+    if (valid.includes(q.productStatus)) state.filters.productStatus = q.productStatus;
+  }
+  if (q.hasStock === '0' || q.hasStock === '1') state.filters.hasStock = q.hasStock;
+  if (q.imageIssue === '0' || q.imageIssue === '1') state.filters.imageIssue = q.imageIssue;
+  if (q.page) {
+    const n = parseInt(q.page, 10);
+    if (!Number.isNaN(n) && n >= 1) state.page = n;
+  }
+  // 回填完成后,下一 tick 解除 flag,允许后续 watch 正常同步
+  syncUrlPending = false;
+}
+
+// watch filters + page → debounce 写入 URL
+watch(
+  () => state.filters,
+  () => syncToUrl(),
+  { deep: true }
+);
+watch(
+  () => state.page,
+  () => syncToUrl()
+);
+
 // 查询:重置到第 1 页后加载
 function search() {
   state.page = 1;
@@ -171,7 +243,7 @@ async function syncStoreProducts() {
   }
 
   const scopeText = storeId ? `店铺「${storeName(storeId)}」` : `全部 ${targets.length} 个店铺`;
-  if (!confirm(`确认从 Ozon 拉取 ${scopeText} 的商品到本地缓存?大店铺可能耗时较久。`)) {
+  if (!(await confirmStore.ask({ message: `确认从 Ozon 拉取 ${scopeText} 的商品到本地缓存?大店铺可能耗时较久。` }))) {
     return;
   }
 
@@ -196,7 +268,7 @@ async function syncStoreProducts() {
     });
 
     // 显示"同步中"提示(详细进度见下方进度列表)
-    syncLabel.value = storeId ? '同步中...' : `同步中 (并行 ${targets.length} 个店铺)`;
+    syncLabel.value = storeId ? '同步中…' : `同步中 (并行 ${targets.length} 个店铺)`;
 
     const results = await Promise.all(promises);
     let totalSynced = 0;
@@ -360,7 +432,7 @@ async function openFilteredBatch(type) {
       show('当前筛选无可用商品(缺少 product_id)', 'error');
       return;
     }
-    if (!confirm(`将对当前筛选匹配的 ${products.length} 个商品批量更新${type === 'image' ? '图片' : '库存'},是否继续?`)) {
+    if (!(await confirmStore.ask({ message: `将对当前筛选匹配的 ${products.length} 个商品批量更新${type === 'image' ? '图片' : '库存'},是否继续?` }))) {
       return;
     }
     if (type === 'image') {
@@ -482,6 +554,8 @@ function detailSections(d) {
 
 onMounted(() => {
   storesStore.load();
+  // 先从 URL 回填筛选/页码,再加载列表(支持刷新/分享保状态)
+  loadFromUrl();
   loadList();
 });
 </script>
@@ -494,7 +568,7 @@ onMounted(() => {
         {{ syncLabel }}
       </button>
       <button class="btn btn-ghost" :disabled="state.loading || syncing" @click="loadList">
-        {{ state.loading ? '刷新中...' : '刷新' }}
+        {{ state.loading ? '刷新中…' : '刷新' }}
       </button>
     </div>
 
@@ -592,18 +666,19 @@ onMounted(() => {
     <div v-if="state.total > 0" style="display:flex;gap:12px;align-items:center;padding:8px 4px">
       <span class="muted">当前筛选匹配 {{ state.total }} 个商品</span>
       <button class="btn btn-ghost" :disabled="!!filterBatchLoading" @click="openFilteredRefresh">
-        {{ filterBatchLoading === 'image' ? '拉取中...' : '按筛选更新图片' }}
+        {{ filterBatchLoading === 'image' ? '拉取中…' : '按筛选更新图片' }}
       </button>
       <button class="btn btn-ghost" :disabled="!!filterBatchLoading" @click="openFilteredStock">
-        {{ filterBatchLoading === 'stock' ? '拉取中...' : '按筛选更新库存' }}
+        {{ filterBatchLoading === 'stock' ? '拉取中…' : '按筛选更新库存' }}
       </button>
     </div>
 
     <div class="table-wrap">
-      <table class="data-table">
+      <table class="data-table" aria-label="商品列表">
+        <caption class="sr-only">商品数据缓存列表,含 SKU、Offer ID、名称、店铺、状态、库存、图片与操作</caption>
         <thead>
           <tr>
-            <th style="width:32px"><input type="checkbox" :checked="allSelected" @change="toggleSelectAll" /></th>
+            <th style="width:32px"><input type="checkbox" :checked="allSelected" aria-label="全选当前页" @change="toggleSelectAll" /></th>
             <th>SKU</th>
             <th style="width:140px">Offer ID</th>
             <th style="width:140px">名称</th>
@@ -617,13 +692,13 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="10" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+            <td colspan="10" class="muted" style="padding: 24px; text-align: center">加载中…</td>
           </tr>
           <tr v-else-if="!state.items.length">
             <td colspan="10" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
           </tr>
           <tr v-for="it in state.items" :key="it.sku">
-            <td><input type="checkbox" :checked="isSelected(it.sku)" @change="toggleSelect(it.sku)" /></td>
+            <td><input type="checkbox" :checked="isSelected(it.sku)" :aria-label="`选择 SKU ${it.sku}`" @change="toggleSelect(it.sku)" /></td>
             <td>{{ it.sku }}</td>
             <td>{{ it.offerId || '—' }}</td>
             <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="it.name">{{ it.name || '—' }}</td>
@@ -666,7 +741,7 @@ onMounted(() => {
 
     <!-- 详情弹窗 -->
     <AppModal :open="detailOpen" title="商品详情" size="lg" @update:open="detailOpen = $event">
-      <div v-if="detailLoading" class="empty">加载中...</div>
+      <div v-if="detailLoading" class="empty">加载中…</div>
       <template v-else-if="detail">
         <AppAccordion
           v-for="(sec, idx) in detailSections(detail)"

@@ -10,11 +10,13 @@ import { getWatermarkTemplates } from '../api/watermarkTemplates.js';
 import { checkFilteredBySku } from '../api/category-filter.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
+import { useConfirmStore } from '../stores/confirm.js';
 
 const route = useRoute();
 const router = useRouter();
 const storesStore = useStoresStore();
 const { show } = useToast();
+const confirmStore = useConfirmStore();
 
 const sku = computed(() => String(route.params.sku || ''));
 
@@ -342,7 +344,7 @@ const submitDisabledReason = computed(() => {
   }
   if (!state.storeId) return '请先选择店铺';
   if (preflightBlocks.value.length) return `预检失败:${preflightBlocks.value[0].msg}`;
-  if (state.submitting) return '提交中...';
+  if (state.submitting) return '提交中…';
   return '';
 });
 
@@ -897,7 +899,7 @@ async function onSubmit() {
     return;
   }
   if (preflightWarns.value.length) {
-    if (!confirm(`有 ${preflightWarns.value.length} 项警告,确认继续提交?`)) return;
+    if (!(await confirmStore.ask({ message: `有 ${preflightWarns.value.length} 项警告,确认继续提交?` }))) return;
   }
 
   state.submitting = true;
@@ -1027,7 +1029,7 @@ onMounted(() => {
         <button class="btn btn-ghost" @click="state.showOpiJson = true">查看 OPI JSON</button>
         <button class="btn btn-primary" :class="{ 'btn-filtered-block': state.categoryFiltered }" :disabled="!canSubmit"
           :title="!canSubmit ? submitDisabledReason : ''" @click="onSubmit">
-          {{ state.submitting ? '提交中...' : '一键提交' }}
+          {{ state.submitting ? '提交中…' : '一键提交' }}
         </button>
       </div>
     </div>
@@ -1046,7 +1048,7 @@ onMounted(() => {
     </div>
 
     <!-- 加载/错误态 -->
-    <p v-if="state.loading" class="pv-loading">加载中...</p>
+    <p v-if="state.loading" class="pv-loading">加载中…</p>
     <p v-else-if="state.error" class="pv-error">⚠ {{ state.error }}</p>
 
     <div v-else-if="state.profile" class="pv-body">

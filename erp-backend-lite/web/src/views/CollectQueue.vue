@@ -17,8 +17,10 @@ import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
 import JsonTree from '../components/JsonTree.vue';
+import { useConfirmStore } from '../stores/confirm.js';
 
 const { show } = useToast();
+const confirmStore = useConfirmStore();
 
 // 7 个采集步骤(与 SW 侧 _doAutoCollect 一致)
 const STEP_KEYS = [
@@ -163,7 +165,7 @@ async function retryTask(sku) {
 }
 
 async function removeTask(sku) {
-  if (!confirm(`确认删除任务 ${sku}?`)) return;
+  if (!(await confirmStore.ask({ message: `确认删除任务 ${sku}?`, danger: true }))) return;
   try {
     await deleteCollectQueueTask(sku);
     show('已提交删除指令', 'success');
@@ -174,7 +176,7 @@ async function removeTask(sku) {
 }
 
 async function batchRetryFailed() {
-  if (!confirm('确认批量重试所有失败终态任务?')) return;
+  if (!(await confirmStore.ask({ message: '确认批量重试所有失败终态任务?' }))) return;
   try {
     await batchRetryAllFailed();
     show('已提交批量重试指令', 'success');
@@ -390,7 +392,7 @@ onUnmounted(() => {
     <div class="toolbar">
       <div class="filter-bar">
         <button class="btn btn-ghost" @click="refreshAll" :disabled="loading || statsLoading">
-          {{ loading || statsLoading ? '刷新中...' : '刷新' }}
+          {{ loading || statsLoading ? '刷新中…' : '刷新' }}
         </button>
       </div>
       <div class="action-bar">
@@ -411,7 +413,7 @@ onUnmounted(() => {
             @click="saveAntibotPauseMin"
             :disabled="antibotPauseMinSaving"
           >
-            {{ antibotPauseMinSaving ? '保存中...' : '保存' }}
+            {{ antibotPauseMinSaving ? '保存中…' : '保存' }}
           </button>
         </div>
         <button v-if="!stats.consumePaused" class="btn btn-ghost" @click="onPauseConsume">暂停消费</button>
@@ -451,7 +453,7 @@ onUnmounted(() => {
         </thead>
         <tbody>
           <tr v-if="!items.length">
-            <td colspan="8" class="empty">{{ loading ? '加载中...' : '暂无任务' }}</td>
+            <td colspan="8" class="empty">{{ loading ? '加载中…' : '暂无任务' }}</td>
           </tr>
           <tr v-for="row in items" :key="row._id || row.sku" @click="openDetail(row)">
             <td class="col-sku">{{ row.sku }}</td>
@@ -489,7 +491,7 @@ onUnmounted(() => {
 
     <!-- 详情弹窗 -->
     <AppModal :open="detailOpen" :title="detailTitle" size="lg" @update:open="detailOpen = $event">
-      <p v-if="detailLoading" class="muted">加载中...</p>
+      <p v-if="detailLoading" class="muted">加载中…</p>
       <div v-else-if="detail" class="task-detail">
         <!-- 基础信息 -->
         <div class="detail-meta">

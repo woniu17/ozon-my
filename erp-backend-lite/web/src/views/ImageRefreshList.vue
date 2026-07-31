@@ -115,7 +115,7 @@ onMounted(() => {
     <div class="toolbar">
       <h2>图片更新任务</h2>
       <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
-        {{ state.loading ? '刷新中...' : '刷新' }}
+        {{ state.loading ? '刷新中…' : '刷新' }}
       </button>
     </div>
 
@@ -152,7 +152,7 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="9" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+            <td colspan="9" class="muted" style="padding: 24px; text-align: center">加载中…</td>
           </tr>
           <tr v-else-if="!state.items.length">
             <td colspan="9" class="empty">暂无图片更新任务</td>

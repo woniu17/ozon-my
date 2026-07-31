@@ -11,9 +11,11 @@ import {
 } from '../api/stores.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
+import { useConfirmStore } from '../stores/confirm.js';
 
 const storesStore = useStoresStore();
 const { show } = useToast();
+const confirmStore = useConfirmStore();
 
 // ── 编辑/新增弹窗 ───────────────────────────────────────────
 const editOpen = ref(false);
@@ -152,7 +154,7 @@ async function testConnForStore(store) {
 }
 
 async function removeStore(store) {
-  if (!confirm(`确认删除店铺「${store.name}」?此操作不可恢复。`)) return;
+  if (!(await confirmStore.ask({ message: `确认删除店铺「${store.name}」?此操作不可恢复。`, danger: true }))) return;
   try {
     await deleteStore(store.id);
     show('已删除', 'success');
@@ -244,7 +246,7 @@ onMounted(() => {
       <button class="btn btn-primary" @click="openEdit(null)">+ 新增店铺</button>
     </div>
 
-    <div v-if="!storesStore.loaded" class="empty">加载中...</div>
+    <div v-if="!storesStore.loaded" class="empty">加载中…</div>
     <div v-else-if="!storesStore.list.length" class="empty">暂无店铺,点击右上角「+ 新增店铺」开始配置</div>
     <div v-else class="store-list">
       <div v-for="s in storesStore.list" :key="s.id" class="store-card">
@@ -304,7 +306,7 @@ onMounted(() => {
         <div class="store-card-actions">
           <button class="btn btn-sm btn-ghost" @click="openWarehouse(s)">查看仓库</button>
           <button class="btn btn-sm btn-ghost" :disabled="testingStoreId === s.id" @click="testConnForStore(s)">
-            {{ testingStoreId === s.id ? '测试中...' : '测试连接' }}
+            {{ testingStoreId === s.id ? '测试中…' : '测试连接' }}
           </button>
           <button class="btn btn-sm btn-ghost" @click="openEdit(s)">编辑</button>
           <button class="btn btn-sm btn-danger" @click="removeStore(s)">删除</button>
@@ -317,34 +319,40 @@ onMounted(() => {
       <form class="form" @submit.prevent="submitEdit">
         <label>
           <span>店铺名称 <em>*</em></span>
-          <input type="text" v-model.trim="editForm.name" placeholder="店铺名称" />
+          <input type="text" v-model.trim="editForm.name" placeholder="店铺名称…" autocomplete="off" />
         </label>
         <label>
           <span>默认仓库</span>
-          <input type="text" v-model.trim="editForm.warehouse_id" placeholder="默认仓库ID" />
+          <input type="text" v-model.trim="editForm.warehouse_id" placeholder="默认仓库ID…" autocomplete="off" />
         </label>
         <label>
           <span>合同货币</span>
-          <input type="text" v-model.trim="editForm.currency_code" placeholder="CNY" />
+          <select v-model="editForm.currency_code" aria-label="合同货币">
+            <option value="CNY">CNY</option>
+            <option value="RUB">RUB</option>
+            <option value="KZT">KZT</option>
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+          </select>
         </label>
         <label>
           <span>店铺链接</span>
-          <input type="text" v-model.trim="editForm.link" placeholder="https://www.ozon.ru/seller/..." />
+          <input type="url" inputmode="url" v-model.trim="editForm.link" placeholder="https://www.ozon.ru/seller/…" autocomplete="off" />
         </label>
         <label>
           <span>Client-Id</span>
-          <input type="text" v-model.trim="editForm.clientId" placeholder="OPI Client-Id" />
+          <input type="text" v-model.trim="editForm.clientId" placeholder="OPI Client-Id…" autocomplete="off" spellcheck="false" />
         </label>
         <label>
           <span>Api-Key</span>
-          <input type="text" v-model.trim="editForm.apiKey" placeholder="OPI Api-Key" />
+          <input type="text" v-model.trim="editForm.apiKey" placeholder="OPI Api-Key…" autocomplete="off" spellcheck="false" />
         </label>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary" :disabled="editSaving">
-            {{ editSaving ? '保存中...' : '保存' }}
+            {{ editSaving ? '保存中…' : '保存' }}
           </button>
           <button type="button" class="btn btn-ghost" :disabled="testingInForm" @click="testConnInForm">
-            {{ testingInForm ? '测试中...' : '测试连接' }}
+            {{ testingInForm ? '测试中…' : '测试连接' }}
           </button>
         </div>
         <p class="error-text" v-show="editErr">{{ editErr }}</p>

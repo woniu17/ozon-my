@@ -1,13 +1,14 @@
 <script setup>
 import { computed } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute } from 'vue-router';
+import { RouterLink, RouterView } from 'vue-router';
 import { useAuthStore } from './stores/auth.js';
 import AppTopbar from './components/AppTopbar.vue';
 import AppToast from './components/AppToast.vue';
+import AppConfirm from './components/AppConfirm.vue';
 
 const auth = useAuthStore();
 const route = useRoute();
-const router = useRouter();
 
 // 导航 Tab 列表
 const tabs = [
@@ -44,25 +45,25 @@ const activeTab = computed(() => {
   if (p.startsWith('/stock-refresh/')) return '/stock-refresh-tasks';
   return tabs.find((t) => p.startsWith(t.key))?.key || '/admin';
 });
-
-const onTabClick = (key) => {
-  router.push(key);
-};
 </script>
 
 <template>
   <AppTopbar />
   <AppToast />
-  <nav v-if="auth.isLoggedIn" class="tabs">
-    <button
+  <AppConfirm />
+  <a href="#main-content" class="skip-link">跳到主内容</a>
+  <nav v-if="auth.isLoggedIn" class="tabs" aria-label="主导航">
+    <RouterLink
       v-for="t in tabs"
       :key="t.key"
       class="tab"
       :class="{ active: activeTab === t.key }"
-      @click="onTabClick(t.key)"
+      :to="t.key"
     >
       {{ t.label }}
-    </button>
+    </RouterLink>
   </nav>
-  <RouterView />
+  <main id="main-content">
+    <RouterView />
+  </main>
 </template>

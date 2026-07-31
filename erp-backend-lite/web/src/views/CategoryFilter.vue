@@ -12,8 +12,10 @@ import {
   getCategoryNamesBatch,
 } from '../api/category-filter.js';
 import { useToast } from '../components/useToast.js';
+import { useConfirmStore } from '../stores/confirm.js';
 
 const { show } = useToast();
+const confirmStore = useConfirmStore();
 
 // 已过滤的类目列表
 const filteredList = ref([]);
@@ -190,7 +192,7 @@ async function submitAdd() {
 
 // ── 删除过滤类目 ───────────────────────────────────────────
 async function removeItem(item) {
-  if (!confirm(`确认移出类型过滤名单?\n类目: ${displayCategoryName(item)}\n类型: ${item.typeName || (Number(item.typeId) || 0)}`)) {
+  if (!(await confirmStore.ask({ message: `确认移出类型过滤名单?\n类目: ${displayCategoryName(item)}\n类型: ${item.typeName || (Number(item.typeId) || 0)}` }))) {
     return;
   }
   try {
@@ -244,7 +246,7 @@ onMounted(() => {
     <div class="actions-bar">
       <button class="btn btn-primary" @click="openAddDialog">+ 手动添加</button>
       <button class="btn btn-ghost" @click="refreshAll" :disabled="loadingFiltered || loadingAvailable">
-        {{ loadingFiltered || loadingAvailable ? '加载中...' : '刷新' }}
+        {{ loadingFiltered || loadingAvailable ? '加载中…' : '刷新' }}
       </button>
     </div>
 
@@ -293,7 +295,7 @@ onMounted(() => {
             </thead>
             <tbody>
               <tr v-if="!filteredList.length">
-                <td colspan="6" class="empty">{{ loadingFiltered ? '加载中...' : '暂无过滤类目' }}</td>
+                <td colspan="6" class="empty">{{ loadingFiltered ? '加载中…' : '暂无过滤类目' }}</td>
               </tr>
               <tr v-for="it in filteredList" :key="`${it.descriptionCategoryId}-${it.typeId}`">
                 <td class="mono">{{ it.descriptionCategoryId }}</td>
@@ -340,7 +342,7 @@ onMounted(() => {
             </thead>
             <tbody>
               <tr v-if="!availableList.length">
-                <td colspan="7" class="empty">{{ loadingAvailable ? '加载中...' : '暂无已采集类目数据' }}</td>
+                <td colspan="7" class="empty">{{ loadingAvailable ? '加载中…' : '暂无已采集类目数据' }}</td>
               </tr>
               <tr v-for="it in availableList" :key="`${it.descriptionCategoryId}-${it.typeId}`">
                 <td class="mono">{{ it.descriptionCategoryId }}</td>
@@ -419,7 +421,7 @@ onMounted(() => {
         <div class="modal-footer">
           <button class="btn btn-ghost" @click="addDialogVisible = false">取消</button>
           <button class="btn btn-primary" :disabled="submitting" @click="submitAdd">
-            {{ submitting ? '提交中...' : '确认添加' }}
+            {{ submitting ? '提交中…' : '确认添加' }}
           </button>
         </div>
       </div>

@@ -38,21 +38,29 @@ const onSubmit = async () => {
     <form class="form" @submit.prevent="onSubmit">
       <label>
         <span>手机号</span>
-        <input type="text" v-model.trim="form.phoneNumber" placeholder="13800138000" autocomplete="username" required />
+        <input
+          type="tel"
+          inputmode="tel"
+          v-model.trim="form.phoneNumber"
+          placeholder="13800138000"
+          autocomplete="username"
+          spellcheck="false"
+          required
+        />
       </label>
       <label>
         <span>密码</span>
         <input
           type="password"
           v-model="form.password"
-          placeholder="请输入密码"
+          placeholder="请输入密码…"
           autocomplete="current-password"
           required
         />
       </label>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" :disabled="form.loading">
-          {{ form.loading ? '登录中...' : '登录' }}
+          {{ form.loading ? '登录中…' : '登录' }}
         </button>
       </div>
       <p class="error-text" v-show="form.err">{{ form.err }}</p>

@@ -175,7 +175,7 @@ onBeforeUnmount(() => {
       <button class="btn btn-ghost" @click="router.back()">返回</button>
     </div>
 
-    <div v-if="state.loading" class="empty">加载中...</div>
+    <div v-if="state.loading" class="empty">加载中…</div>
     <div v-else-if="state.error" class="empty">加载失败:{{ state.error }}</div>
     <template v-else-if="state.detail">
       <!-- 任务概要 -->

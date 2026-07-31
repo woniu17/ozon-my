@@ -18,7 +18,7 @@ const onLogout = () => {
       <span class="subtitle">店铺 / 上架 / 采集 / 商品</span>
     </div>
     <div class="topbar-right">
-      <span v-if="auth.isLoggedIn" class="user-badge">👤 {{ auth.phone }}</span>
+      <span v-if="auth.isLoggedIn" class="user-badge"><span aria-hidden="true">👤</span> {{ auth.phone }}</span>
       <button v-if="auth.isLoggedIn" class="btn btn-ghost" @click="onLogout">退出登录</button>
     </div>
   </div>

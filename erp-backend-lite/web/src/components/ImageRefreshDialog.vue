@@ -177,7 +177,7 @@ async function submit() {
       <div class="ir-actions">
         <button class="btn btn-ghost" :disabled="submitting" @click="$emit('update:open', false)">取消</button>
         <button class="btn btn-primary" :disabled="submitting" @click="submit">
-          {{ submitting ? '提交中...' : '提交' }}
+          {{ submitting ? '提交中…' : '提交' }}
         </button>
       </div>
     </div>

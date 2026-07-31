@@ -372,7 +372,7 @@ onMounted(() => {
           按筛选自动上架
         </button>
         <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
-          {{ state.loading ? '刷新中...' : '刷新' }}
+          {{ state.loading ? '刷新中…' : '刷新' }}
         </button>
       </div>
     </div>
@@ -444,7 +444,7 @@ onMounted(() => {
     </div>
 
     <div class="cb-grid">
-      <div v-if="state.loading && !state.items.length" class="empty" style="grid-column: 1/-1">加载中...</div>
+      <div v-if="state.loading && !state.items.length" class="empty" style="grid-column: 1/-1">加载中…</div>
       <div v-else-if="!state.items.length" class="empty" style="grid-column: 1/-1">暂无采集记录</div>
       <div v-for="it in state.items" :key="it.sku || ''" class="cb-card">
         <div

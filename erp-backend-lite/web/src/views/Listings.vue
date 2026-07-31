@@ -280,7 +280,7 @@ onMounted(() => {
     <div class="toolbar">
       <h2>上架记录</h2>
       <button class="btn btn-ghost" :disabled="state.loading" @click="loadListings">
-        {{ state.loading ? '刷新中...' : '刷新' }}
+        {{ state.loading ? '刷新中…' : '刷新' }}
       </button>
     </div>
 
@@ -325,7 +325,7 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中...</td>
+            <td colspan="8" class="muted" style="padding: 24px; text-align: center">加载中…</td>
           </tr>
           <tr v-else-if="!state.items.length">
             <td colspan="8" class="muted" style="padding: 24px; text-align: center">暂无上架记录</td>
@@ -362,7 +362,7 @@ onMounted(() => {
 
     <!-- 详情弹窗 -->
     <AppModal :open="detailOpen" title="上架记录详情" size="lg" @update:open="detailOpen = $event">
-      <div v-if="detailLoading" class="empty">加载中...</div>
+      <div v-if="detailLoading" class="empty">加载中…</div>
       <template v-else-if="detailTask">
         <div class="listing-detail-meta">
           <div class="meta-row">
@@ -451,7 +451,7 @@ onMounted(() => {
 
         <!-- 请求体与响应 -->
         <div v-else-if="detailTab === 'payloads'">
-          <div v-if="detailPayloadsLoading" class="empty">加载中...</div>
+          <div v-if="detailPayloadsLoading" class="empty">加载中…</div>
           <template v-else>
             <div v-if="!detailPayloads.length" class="empty" style="padding: 16px">
               无请求体备份(可能为模拟手动上架 viaPortal,或数据未保存)

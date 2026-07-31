@@ -13,11 +13,13 @@ import {
 } from '../api/batch-upload.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
+import { useConfirmStore } from '../stores/confirm.js';
 
 const route = useRoute();
 const router = useRouter();
 const storesStore = useStoresStore();
 const { show } = useToast();
+const confirmStore = useConfirmStore();
 
 const batchNo = computed(() => String(route.params.batchNo || ''));
 
@@ -103,7 +105,7 @@ async function onResume() {
 
 async function onCancel() {
   if (state.value.actionLoading) return;
-  if (!confirm('确认取消该批次?未执行的子任务将被标记为 SKIPPED。')) return;
+  if (!(await confirmStore.ask({ message: '确认取消该批次?未执行的子任务将被标记为 SKIPPED。', danger: true }))) return;
   state.value.actionLoading = 'cancel';
   try {
     await cancelBatchUpload(batchNo.value);
@@ -223,12 +225,12 @@ onMounted(() => {
       <div class="bud-head-right">
         <button class="btn btn-ghost btn-sm" @click="router.back()">返回</button>
         <button class="btn btn-ghost btn-sm" :disabled="state.loading" @click="loadDetail()">
-          {{ state.loading ? '刷新中...' : '刷新' }}
+          {{ state.loading ? '刷新中…' : '刷新' }}
         </button>
       </div>
     </div>
 
-    <div v-if="state.loading && !state.detail" class="empty">加载中...</div>
+    <div v-if="state.loading && !state.detail" class="empty">加载中…</div>
     <div v-else-if="state.error && !state.detail" class="empty error-text">{{ state.error }}</div>
     <template v-else-if="state.detail">
       <!-- 批次信息卡 -->
@@ -298,15 +300,15 @@ onMounted(() => {
         <div class="bud-detail-actions">
           <button v-if="state.detail.status === 'RUNNING'" class="btn btn-sm btn-ghost"
             :disabled="state.actionLoading === 'pause'" @click="onPause">
-            {{ state.actionLoading === 'pause' ? '暂停中...' : '暂停' }}
+            {{ state.actionLoading === 'pause' ? '暂停中…' : '暂停' }}
           </button>
           <button v-if="state.detail.status === 'PAUSED'" class="btn btn-sm btn-primary"
             :disabled="state.actionLoading === 'resume'" @click="onResume">
-            {{ state.actionLoading === 'resume' ? '继续中...' : '继续' }}
+            {{ state.actionLoading === 'resume' ? '继续中…' : '继续' }}
           </button>
           <button v-if="isCancelable(state.detail.status)" class="btn btn-sm btn-danger"
             :disabled="state.actionLoading === 'cancel'" @click="onCancel">
-            {{ state.actionLoading === 'cancel' ? '取消中...' : '取消批次' }}
+            {{ state.actionLoading === 'cancel' ? '取消中…' : '取消批次' }}
           </button>
           <span v-if="['RUNNING', 'PAUSED'].includes(state.detail.status)" class="muted small">
             (自动刷新中,每 3 秒)

@@ -68,7 +68,7 @@ const trendBars = computed(() => {
     <div class="dash-cards">
       <div class="dash-card">
         <div class="dash-card-label">今日上架</div>
-        <div class="dash-card-value">{{ loading ? '加载中...' : stats.todayTotal }}</div>
+        <div class="dash-card-value">{{ loading ? '加载中…' : stats.todayTotal }}</div>
         <div class="dash-card-sub">{{ stats.todayRate }}</div>
       </div>
       <div class="dash-card">
@@ -96,7 +96,7 @@ const trendBars = computed(() => {
     <div class="dash-trend">
       <h3>近 7 天上架趋势</h3>
       <div class="dash-chart">
-        <div v-if="loading" class="muted" style="padding: 24px; text-align: center">加载中...</div>
+        <div v-if="loading" class="muted" style="padding: 24px; text-align: center">加载中…</div>
         <div v-else-if="!trendBars.length" class="muted" style="padding: 24px; text-align: center">近 7 天暂无数据</div>
         <div v-else class="dash-bar-chart">
           <div v-for="b in trendBars" :key="b.date" class="dash-bar-col">

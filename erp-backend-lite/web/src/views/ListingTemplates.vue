@@ -9,8 +9,10 @@ import {
 import { getWatermarkTemplates } from '../api/watermarkTemplates.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
+import { useConfirmStore } from '../stores/confirm.js';
 
 const { show } = useToast();
+const confirmStore = useConfirmStore();
 
 // 水印模板列表(供下拉框选择,名称独一无二)
 const watermarkTemplates = ref([]);
@@ -139,7 +141,7 @@ async function setDefault(tpl) {
 }
 
 async function remove(tpl) {
-  if (!confirm(`确认删除模板「${tpl.name}」?此操作不可恢复。`)) return;
+  if (!(await confirmStore.ask({ message: `确认删除模板「${tpl.name}」?此操作不可恢复。`, danger: true }))) return;
   try {
     await deleteListingTemplate(tpl.id);
     show('已删除', 'success');
@@ -189,7 +191,7 @@ onMounted(load);
       模板用于预设跟卖面板的人工输入值(品牌、货币、库存、价格倍率等)。内置模板不可编辑/删除,可设其他模板为默认,跟卖面板打开时自动应用默认模板。
     </p>
 
-    <div v-if="loading" class="empty">加载中...</div>
+    <div v-if="loading" class="empty">加载中…</div>
     <div v-else-if="!list.length" class="empty">暂无模板</div>
     <table v-else class="tpl-table">
       <thead>
@@ -341,7 +343,7 @@ onMounted(load);
 
         <div class="form-actions">
           <button type="submit" class="btn btn-primary" :disabled="editSaving">
-            {{ editSaving ? '保存中...' : '保存' }}
+            {{ editSaving ? '保存中…' : '保存' }}
           </button>
         </div>
         <p class="error-text" v-show="editErr">{{ editErr }}</p>

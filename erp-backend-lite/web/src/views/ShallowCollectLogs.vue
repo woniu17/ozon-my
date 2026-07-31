@@ -264,7 +264,7 @@ onUnmounted(() => {
         />
         <button class="btn btn-primary" @click="searchLogs">查询</button>
         <button class="btn btn-ghost" @click="refreshAll" :disabled="loading">
-          {{ loading ? '加载中...' : '刷新' }}
+          {{ loading ? '加载中…' : '刷新' }}
         </button>
       </div>
       <div class="refresh-ctrl">
@@ -303,7 +303,7 @@ onUnmounted(() => {
         </thead>
         <tbody>
           <tr v-if="!logs.length">
-            <td colspan="9" class="empty">{{ loading ? '加载中...' : '暂无日志记录' }}</td>
+            <td colspan="9" class="empty">{{ loading ? '加载中…' : '暂无日志记录' }}</td>
           </tr>
           <tr v-for="log in logs" :key="log._id || (log.sku + log.collectedAt)">
             <td class="col-sku">{{ log.sku }}</td>

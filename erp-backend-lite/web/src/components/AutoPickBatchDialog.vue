@@ -352,7 +352,7 @@ function close() {
 
         <div class="apbd-section">
           <div class="apbd-section-title">店铺多选(目标上架店铺)</div>
-          <div v-if="!storesStore.loaded" class="muted small">加载中...</div>
+          <div v-if="!storesStore.loaded" class="muted small">加载中…</div>
           <div v-else-if="!storesStore.list.length" class="muted small">暂无店铺,请先在店铺管理中配置</div>
           <div v-else class="apbd-store-grid">
             <label
@@ -421,14 +421,14 @@ function close() {
         <div class="apbd-actions">
           <button class="btn btn-ghost" @click="close">取消</button>
           <button class="btn btn-primary" :disabled="loadingPreview" @click="doPreview">
-            {{ loadingPreview ? '选取中...' : '自动选取+预览' }}
+            {{ loadingPreview ? '选取中…' : '自动选取+预览' }}
           </button>
           <button
             class="btn btn-primary"
             :disabled="creating || !preview?.assignments?.length"
             @click="doCreate"
           >
-            {{ creating ? '创建中...' : '确认创建' }}
+            {{ creating ? '创建中…' : '确认创建' }}
           </button>
         </div>
 

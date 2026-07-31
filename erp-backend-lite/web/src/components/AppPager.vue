@@ -30,9 +30,20 @@ const onJump = (e) => {
 <template>
   <div class="pager">
     <span class="pager-info">共 {{ total }} 条 / 第 {{ modelValue }}/{{ totalPages }} 页</span>
-    <button :disabled="modelValue <= 1" @click="prev">上一页</button>
-    <button :disabled="modelValue >= totalPages" @click="next">下一页</button>
-    <input class="pager-jump" type="number" min="1" :max="totalPages" :value="modelValue" @change="onJump" />
+    <button :disabled="modelValue <= 1" aria-label="上一页" @click="prev">上一页</button>
+    <button :disabled="modelValue >= totalPages" aria-label="下一页" @click="next">下一页</button>
+    <label class="pager-jump-label">
+      <span class="sr-only">跳转到页码</span>
+      <input
+        class="pager-jump"
+        type="number"
+        min="1"
+        :max="totalPages"
+        :value="modelValue"
+        @change="onJump"
+        aria-label="跳转到页码"
+      />
+    </label>
   </div>
 </template>
 
@@ -44,9 +55,30 @@ const onJump = (e) => {
   border-radius: 4px;
   font-size: 12px;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
+/* 2026-07:用 focus-visible 替代 outline:none,键盘聚焦时显示 ring */
 .pager-jump:focus {
   outline: none;
+}
+.pager-jump:focus-visible {
+  outline: none;
   border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+/* 屏幕阅读器专用文本(视觉隐藏) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.pager-jump-label {
+  margin: 0;
 }
 </style>
