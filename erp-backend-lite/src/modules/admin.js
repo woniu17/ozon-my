@@ -604,12 +604,16 @@ router.get('/admin/api/collect-box-v2/attribute-values', async (req, res, next) 
 // 优先级:rejected > saleable/created_no_stock > pending_creation > in_review > unknown
 //   - saleable(可售):is_created=true AND has_stock=true (98.7% 商品)
 //   - created_no_stock(已创建缺货):is_created=true AND has_stock=false
-//   - pending_creation(待创建):is_created=false AND approved AND validation=success
-//     (审核通过但 Ozon 未完成创建,调 /v2/products/stocks 会返回 PRODUCT_IS_NOT_CREATED)
-//   - in_review(审核中):moderate_status ∈ ('', 'in-moderating') OR validation_status=pending
+//   - pending_creation(待创建):is_created=false AND 非拒绝
+//     (商品尚未创建,可能卡在校验/审核任一阶段,调 /v2/products/stocks 会返回 PRODUCT_IS_NOT_CREATED)
+//   - in_review(审核中):is_created=true AND moderate_status ∈ ('', 'in-moderating')
+//     (商品已创建,正在审核中,尚未 price_sent)
 //   - rejected(审核拒绝):moderate_status=declined OR validation_status=fail OR status=unmatched
 //   - unknown(数据异常):其他(如全 null)
 // 注:rejected 判定优先于 created,避免如 declined + created=1 的边界行被误归到 created_no_stock
+// 2026-07:修正 pending_creation 判定(原要求 approved+success 过严)
+//   is_created=false 本身就表示"商品未创建",无论卡在校验还是审核阶段
+//   与 Ozon 后台"未创建(Не создан)"显示一致,避免误归为 in_review
 function computeProductStatus(data) {
   const st = data?.statuses || {};
   const mod = st.moderate_status ?? '';
@@ -621,8 +625,10 @@ function computeProductStatus(data) {
   if (mod === 'declined' || val === 'fail' || status === 'unmatched') return 'rejected';
   if (isCreated && hasStock) return 'saleable';
   if (isCreated && !hasStock) return 'created_no_stock';
-  if (!isCreated && mod === 'approved' && val === 'success') return 'pending_creation';
-  if (mod === '' || mod === 'in-moderating' || val === 'pending') return 'in_review';
+  // is_created=false 且非拒绝 → 待创建(覆盖校验未通过/审核中/审核通过但未创建等情况)
+  if (!isCreated) return 'pending_creation';
+  // is_created=true 但 moderate_status 为空或 in-moderating → 审核中(已创建尚未 price_sent)
+  if (mod === '' || mod === 'in-moderating') return 'in_review';
   return 'unknown';
 }
 
@@ -664,6 +670,7 @@ router.get('/admin/api/products', (req, res, next) => {
     //   saleable / created_no_stock / pending_creation / in_review / rejected / unknown
     // 优先级:rejected > saleable/created_no_stock > pending_creation > in_review > unknown
     // (rejected 判定优先,避免如 declined + created=1 的边界行被误归到 created_no_stock)
+    // 2026-07:修正 pending_creation 判定(is_created=0 即待创建,原 approved+success 过严)
     if (req.query.productStatus) {
       const ps = String(req.query.productStatus);
       // SQL CASE 表达式:与后端 computeProductStatus 保持一致
@@ -680,11 +687,9 @@ router.get('/admin/api/products', (req, res, next) => {
                  AND COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 0
               THEN 'created_no_stock'
             WHEN json_extract(data, '$.statuses.is_created') = 0
-                 AND json_extract(data, '$.statuses.moderate_status') = 'approved'
-                 AND json_extract(data, '$.statuses.validation_status') = 'success'
               THEN 'pending_creation'
-            WHEN COALESCE(json_extract(data, '$.statuses.moderate_status'), '') IN ('', 'in-moderating')
-                 OR json_extract(data, '$.statuses.validation_status') = 'pending'
+            WHEN json_extract(data, '$.statuses.is_created') = 1
+                 AND COALESCE(json_extract(data, '$.statuses.moderate_status'), '') IN ('', 'in-moderating')
               THEN 'in_review'
             ELSE 'unknown'
            END) = ?`
