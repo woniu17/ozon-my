@@ -673,3 +673,41 @@ CREATE TABLE IF NOT EXISTS ozon_meta_attribute_values (
   fetched_at              TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (description_category_id, type_id, attribute_id, language)
 );
+
+-- ── 商品信息更新任务(2026-07) ──────────────────────────────
+-- 通用商品信息更新:基于已上架商品单独/批量更新标题/描述/价格等字段
+-- 统一走 /v3/product/import 全量重传(数据源=Ozon 实时数据,只替换用户指定字段)
+-- 可拓展:每个可更新字段对应一个 FieldUpdater,新增字段不改表结构(new_values JSON 存所有字段新值)
+CREATE TABLE IF NOT EXISTS product_update_tasks (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  local_task_id  TEXT UNIQUE NOT NULL,    -- pu-{timestamp}-{rand}
+  store_id       TEXT NOT NULL,            -- 目标店铺
+  status         TEXT NOT NULL DEFAULT 'PENDING', -- PENDING/RUNNING/SUCCESS/FAILED/PARTIAL
+  total_count    INTEGER DEFAULT 0,
+  success_count  INTEGER DEFAULT 0,
+  failed_count   INTEGER DEFAULT 0,
+  update_fields  TEXT NOT NULL,           -- JSON: 任务级字段清单 ["name","description"](所有 item 的并集)
+  source_type    TEXT DEFAULT 'manual',   -- manual(单条) / batch(批量)
+  error_message  TEXT,
+  created_at     TEXT DEFAULT (datetime('now')),
+  completed_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_put_status ON product_update_tasks(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS product_update_items (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id          TEXT NOT NULL,          -- 关联 product_update_tasks.local_task_id
+  product_id       TEXT NOT NULL,          -- Ozon 商品 ID
+  offer_id         TEXT NOT NULL,          -- 卖家 SKU(必填,API 用)
+  store_id         TEXT NOT NULL,
+  status           TEXT DEFAULT 'PENDING', -- PENDING/PROCESSING/SUCCESS/FAILED
+  update_fields    TEXT NOT NULL,          -- JSON: 该 item 实际更新哪些字段 ["name","description"]
+  new_values       TEXT NOT NULL,          -- JSON: { "name": "新标题", "description": "新描述" }(只含 update_fields 对应的键)
+  opi_task_id      TEXT,                   -- Ozon 返回的 task_id
+  opi_result       TEXT,                   -- JSON: /v1/product/import/info 查询结果
+  error_message    TEXT,
+  created_at       TEXT DEFAULT (datetime('now')),
+  updated_at       TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pui_task ON product_update_items(task_id);
+CREATE INDEX IF NOT EXISTS idx_pui_status ON product_update_items(status);

@@ -10,6 +10,7 @@ import AppAccordion from '../components/AppAccordion.vue';
 import JsonTree from '../components/JsonTree.vue';
 import ImageRefreshDialog from '../components/ImageRefreshDialog.vue';
 import StockRefreshDialog from '../components/StockRefreshDialog.vue';
+import ProductUpdateDialog from '../components/ProductUpdateDialog.vue';
 import { useConfirmStore } from '../stores/confirm.js';
 
 const router = useRouter();
@@ -43,6 +44,8 @@ const selectedSkus = ref([]);
 const refreshDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
 // 库存更新弹窗(2026-07)
 const stockDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
+// 商品信息更新弹窗(2026-07)
+const productUpdateDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
 // 按筛选批量操作:拉取中的状态('image' | 'stock' | '')
 const filterBatchLoading = ref('');
 
@@ -413,6 +416,32 @@ function openBatchStock() {
   stockDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
 }
 
+// ── 商品信息更新(2026-07)──────────────────────────────────
+// 单条更新信息:列表行操作触发
+function openSingleProductUpdate(item) {
+  if (!item.productId) {
+    show('该商品无 product_id,可能未同步完整', 'error');
+    return;
+  }
+  productUpdateDialog.value = {
+    open: true,
+    mode: 'single',
+    singleItem: { productId: item.productId, storeId: item.storeId, offerId: item.offerId },
+    selectedProducts: [],
+  };
+}
+// 批量更新信息:列表勾选触发(同文案,统一更新相同字段)
+function openBatchProductUpdate() {
+  const products = state.items
+    .filter((r) => selectedSkus.value.includes(r.sku) && r.productId)
+    .map((r) => ({ productId: r.productId, storeId: r.storeId, offerId: r.offerId }));
+  if (!products.length) {
+    show('请先勾选有 product_id 的商品', 'error');
+    return;
+  }
+  productUpdateDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
+}
+
 // 按当前筛选条件批量更新(不限于当前页,拉取全量匹配商品的 productId/storeId)
 // type: 'image' | 'stock'
 async function openFilteredBatch(type) {
@@ -660,6 +689,7 @@ onMounted(() => {
       <span class="muted">已选 {{ selectedSkus.length }} 个商品</span>
       <button class="btn btn-primary" @click="openBatchRefresh">批量更新图片</button>
       <button class="btn btn-primary" @click="openBatchStock">批量更新库存</button>
+      <button class="btn btn-primary" @click="openBatchProductUpdate">批量更新信息</button>
     </div>
 
     <!-- 按当前筛选条件批量操作(不限于当前页) -->
@@ -726,6 +756,7 @@ onMounted(() => {
               <button class="btn btn-sm btn-ghost" @click="openDetail(it.sku)">查看详情</button>
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleRefresh(it)">更新图片</button>
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleStock(it)">更新库存</button>
+              <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleProductUpdate(it)">更新信息</button>
             </td>
           </tr>
         </tbody>
@@ -758,6 +789,9 @@ onMounted(() => {
           <button class="btn btn-primary" @click="openSingleStock({ productId: detail.productId, storeId: detail.storeId, offerId: detail.data?.offer_id })">
             更新库存
           </button>
+          <button class="btn btn-primary" @click="openSingleProductUpdate({ productId: detail.productId, storeId: detail.storeId, offerId: detail.data?.offer_id })">
+            更新信息
+          </button>
         </div>
       </template>
       <div v-else class="empty">无数据</div>
@@ -777,6 +811,14 @@ onMounted(() => {
       :mode="stockDialog.mode"
       :single-item="stockDialog.singleItem"
       :selected-products="stockDialog.selectedProducts"
+    />
+
+    <!-- 商品信息更新弹窗(2026-07) -->
+    <ProductUpdateDialog
+      v-model:open="productUpdateDialog.open"
+      :mode="productUpdateDialog.mode"
+      :single-item="productUpdateDialog.singleItem"
+      :selected-products="productUpdateDialog.selectedProducts"
     />
   </div>
 </template>

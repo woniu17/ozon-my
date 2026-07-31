@@ -33,8 +33,10 @@ import { startBatchUploadPoller, stopBatchUploadPoller } from './services/batch-
 import { startBatchImagePoller, stopBatchImagePoller } from './services/batch-image-poller.js';
 import { startImageRefreshPoller, stopImageRefreshPoller } from './services/image-refresh-poller.js';
 import { startStockRefreshPoller, stopStockRefreshPoller } from './services/stock-refresh-poller.js';
+import { startProductUpdatePoller, stopProductUpdatePoller } from './services/product-update-poller.js';
 import imageRefreshRoutes from './modules/image-refresh.js';
 import stockRefreshRoutes from './modules/stock-refresh.js';
+import productUpdateRoutes from './modules/product-update.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -124,6 +126,7 @@ app.use(collectQueueRoutes);
 app.use(categoryFilterRoutes);
 app.use(imageRefreshRoutes);
 app.use(stockRefreshRoutes);
+app.use(productUpdateRoutes);
 
 // 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
 if (config.featureFlags?.proxy_collect) {
@@ -159,6 +162,9 @@ const server = app.listen(config.port, () => {
   startImageRefreshPoller();
   // 库存更新任务调度器(2026-07):每 10s 扫描,串行处理,item 间 10s 间隔,负责已上架商品库存设置
   startStockRefreshPoller();
+  // 商品信息更新任务调度器(2026-07):每 5s 扫描,串行处理,统一走 /v3/product/import 全量重传
+  //   负责已上架商品的标题/描述等字段更新(FieldUpdater 可拓展)
+  startProductUpdatePoller();
 });
 
 // 优雅退出
@@ -170,6 +176,7 @@ function shutdown(signal) {
   stopBatchUploadPoller();
   stopImageRefreshPoller();
   stopStockRefreshPoller();
+  stopProductUpdatePoller();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);

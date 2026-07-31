@@ -414,3 +414,106 @@ export function productPicturesInfo(store, productIds) {
   const arr = (Array.isArray(productIds) ? productIds : [productIds]).map(String);
   return call(store, '/v2/product/pictures/info', { product_id: arr });
 }
+
+// ── 商品信息更新任务(2026-07)─────────────────────────────────
+// 统一走 /v3/product/import 全量重传:从 Ozon 实时拉完整商品数据,
+// 只替换用户指定字段(FieldUpdater),其他字段保留 Ozon 当前值
+// project_memory 硬约束:必须过滤 SKIP_ATTR_IDS,避免重复字段错误
+
+const SKIP_ATTR_IDS = new Set([4194, 4195, 4497, 9454, 9455, 9456, 23536]);
+
+// 从 Ozon 实时拉取完整商品数据,根据 updateFields 替换指定字段,构建 /v3/product/import 的 payload
+// 流程:
+//   1. /v3/product/info/list 拿 price/old_price/min_price/vat 等顶层字段
+//   2. /v4/product/info/attributes 拿 weight/dims/images/attributes/type_id/desc_cat_id
+//   3. 转换 attributes:过滤 SKIP_ATTR_IDS,用 {complex_id, id, values:[{value}]} 格式
+//   4. 构建 OPI v3 item(保留 Ozon 实时值)
+//   5. 根据 updateFields 逐个调用 FieldUpdater 替换字段
+//   6. min_price 仅当 < price 时才传(避免"最低价格应低于价格"错误)
+// 返回: opiItem(可直接塞进 {items:[opiItem]} 调 productImport)
+export async function buildProductUpdatePayload(store, offerId, updateFields, newValues, applyFieldUpdaters) {
+  // Step 1: /v3/product/info/list 拿顶层字段
+  const pInfoResp = await productInfoList(store, [offerId]);
+  const pInfo = pInfoResp?.items?.[0];
+  if (!pInfo) {
+    throw new ApiError(ErrorCode.RESOURCE_NOT_FOUND, `Ozon 未查到商品 offer_id=${offerId}`);
+  }
+  const productId = Number(pInfo.id);
+  if (!productId) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `商品 ${offerId} 无 product_id,可能尚未创建`);
+  }
+
+  // Step 2: /v4/product/info/attributes 拿 weight/dims/images/attributes/type_id/desc_cat_id
+  const pAttrsResp = await productInfoAttributes(store, { product_id: [productId] });
+  const pAttrs = pAttrsResp?.result?.[0];
+  if (!pAttrs) {
+    throw new ApiError(ErrorCode.RESOURCE_NOT_FOUND, `Ozon 未查到商品属性 product_id=${productId}`);
+  }
+
+  // Step 3: 转换 attributes(过滤 SKIP_ATTR_IDS)
+  const attributes = [];
+  let skippedCount = 0;
+  for (const a of pAttrs.attributes || []) {
+    const attrId = Number(a.id);
+    if (SKIP_ATTR_IDS.has(attrId)) {
+      skippedCount++;
+      continue;
+    }
+    const vals = (a.values || [])
+      .filter((v) => v.value != null && v.value !== '')
+      .map((v) => ({ value: String(v.value) }));
+    if (vals.length === 0) continue;
+    attributes.push({
+      complex_id: Number(a.complex_id) || 0,
+      id: attrId,
+      values: vals,
+    });
+  }
+  logger.debug(
+    { offerId, productId, attrCount: attributes.length, skippedCount },
+    'buildProductUpdatePayload: attributes 转换完成'
+  );
+
+  // Step 4: 构建 OPI v3 item(保留 Ozon 实时值)
+  // 注意:price 必须从顶层取,不是 .price.price(否则会 undefined 触发"价格不能为负数")
+  const price = String(pInfo.price || '0');
+  const oldPrice = String(pInfo.old_price || pInfo.price || '0');
+  const minPrice = pInfo.min_price ? String(pInfo.min_price) : null;
+
+  const opiItem = {
+    name: String(pInfo.name || ''),
+    offer_id: String(pInfo.offer_id),
+    price,
+    old_price: oldPrice,
+    currency_code: pInfo.currency_code || 'RUB',
+    vat: String(pInfo.vat ?? '0'),
+    weight: Number(pAttrs.weight) > 0 ? Math.round(Number(pAttrs.weight)) : 100,
+    weight_unit: pAttrs.weight_unit || 'g',
+    depth: Number(pAttrs.depth) > 0 ? Math.round(Number(pAttrs.depth)) : 100,
+    width: Number(pAttrs.width) > 0 ? Math.round(Number(pAttrs.width)) : 100,
+    height: Number(pAttrs.height) > 0 ? Math.round(Number(pAttrs.height)) : 100,
+    dimension_unit: pAttrs.dimension_unit || 'mm',
+    images: (pAttrs.images || []).filter(Boolean),
+    attributes,
+  };
+  if (pAttrs.primary_image) opiItem.primary_image = String(pAttrs.primary_image);
+  if (pAttrs.color_image) opiItem.color_image = String(pAttrs.color_image);
+  if (Number(pAttrs.type_id) > 0) opiItem.type_id = Number(pAttrs.type_id);
+  if (Number(pAttrs.description_category_id) > 0) opiItem.description_category_id = Number(pAttrs.description_category_id);
+  if (pInfo.video_url) opiItem.video_url = String(pInfo.video_url);
+  if (pInfo.video_cover) opiItem.video_cover = String(pInfo.video_cover);
+  // min_price 仅当存在且 < price 时才传(避免"最低价格应低于价格"错误)
+  if (minPrice && Number(minPrice) > 0 && Number(minPrice) < Number(price)) {
+    opiItem.min_price = minPrice;
+  }
+
+  // Step 5: 应用 FieldUpdater 替换用户指定字段
+  if (Array.isArray(updateFields) && updateFields.length > 0) {
+    if (typeof applyFieldUpdaters !== 'function') {
+      throw new ApiError(ErrorCode.VALIDATION_ERROR, 'applyFieldUpdaters 未提供');
+    }
+    applyFieldUpdaters(pInfo, pAttrs, opiItem, updateFields, newValues || {});
+  }
+
+  return opiItem;
+}
