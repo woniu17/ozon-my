@@ -555,6 +555,9 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     // 前端采集箱"排除类型过滤"勾选项,与 toggleFilter 写入的 ozon_filtered_categories 表联动
     const excludeFilteredCategories =
       req.query.excludeFilteredCategories === '1' || req.query.excludeFilteredCategories === 'true';
+    // ultraLight:超轻小件(Extra Small)筛选 — 重量<500g 且 三边之和<90cm
+    //   '1'=只看超轻小件,'0'=只看非超轻小件(含无尺寸数据商品),空=不限
+    const ultraLight = String(req.query.ultraLight || '').trim();
 
     // indexDao 单表查询:过滤 + 排序 + 分页全在 SQL 完成
     const { items, total } = await daos.indexDao.findList({
@@ -569,6 +572,7 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       priceMax: Number.isFinite(priceMax) ? priceMax : undefined,
       minCacheHits,
       excludeFilteredCategories,
+      ultraLight,
       page,
       pageSize,
     });

@@ -265,6 +265,12 @@ CREATE TABLE IF NOT EXISTS ozon_cache_index (
   type_id            INTEGER,             -- Ozon 商品类型 ID(如 运动鞋)
   category_name      TEXT,                -- 类目名称(从 detail.category 面包屑提取,显示用)
 
+  -- 超轻小件(Extra Small)筛选冗余字段(2026-08 新增,从 bundle_data 顶层物理字段提取)
+  -- 单位:weight_g = 克(g),dim_sum_mm = 长+宽+高(毫米 mm)
+  -- 超轻小件阈值:weight_g < 500 AND dim_sum_mm < 900(即 90cm,Ozon Extra Small 官方标准)
+  weight_g           REAL,                -- 重量(克),bundle_data.weight
+  dim_sum_mm         REAL,                -- 三边之和(毫米),bundle_data.depth + width + height
+
   -- 跟卖状态(0=未跟卖, 1=已跟卖) + 跟卖目标店铺信息(由 upsertTaskItems 即时写入)
   listed             INTEGER DEFAULT 0,
   listed_store_id    TEXT,                -- 跟卖到的店铺 ID(follow_sell_tasks.store_id)

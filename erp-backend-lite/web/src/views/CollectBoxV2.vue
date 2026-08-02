@@ -228,6 +228,7 @@ const state = reactive({
     hasComments: false,
     hasRichContent: false, // 只看有富内容(richMedia.richContent 非空)
     excludeFilteredCategories: false, // 排除已在类目过滤黑名单中的商品(ozon_filtered_categories 表)
+    ultraLight: '', // 超轻小件筛选:''=不限,'1'=超轻小件,'0'=非超轻小件
     priceMin: '', // 价格范围(闭区间,空字符串=不限)
     priceMax: '',
     // 用上次的筛选条件覆盖初值
@@ -249,6 +250,7 @@ async function loadList() {
     if (state.filters.hasComments) params.hasComments = '1';
     if (state.filters.hasRichContent) params.hasRichContent = '1';
     if (state.filters.excludeFilteredCategories) params.excludeFilteredCategories = '1';
+    if (state.filters.ultraLight !== '') params.ultraLight = state.filters.ultraLight;
     if (state.filters.priceMin !== '') params.priceMin = state.filters.priceMin;
     if (state.filters.priceMax !== '') params.priceMax = state.filters.priceMax;
     const data = await getCollectBoxV2FromCache(params);
@@ -411,6 +413,16 @@ onMounted(() => {
         <input type="checkbox" v-model="state.filters.excludeFilteredCategories" />
         <span>排除类型过滤</span>
       </label>
+      <select
+        class="filter-select"
+        v-model="state.filters.ultraLight"
+        title="超轻小件(Extra Small):重量<500g 且 长+宽+高<90cm"
+        @change="search"
+      >
+        <option value="">全部尺寸</option>
+        <option value="1">超轻小件</option>
+        <option value="0">非超轻小件</option>
+      </select>
       <span class="filter-price-range" title="按 cardCache.price 过滤(闭区间)">
         <input
           class="filter-input filter-price"

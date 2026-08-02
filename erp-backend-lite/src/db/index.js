@@ -133,6 +133,8 @@ async function ensureMigrations() {
   // 2026-07: 跟卖状态即时标记 — ozon_cache_index 补 listed_store_id/listed_at/listed_task_id 列
   // 并从 follow_sell_task_items + follow_sell_tasks 一次性回填(取最近一条任务)
   await migrateListedFields(db);
+  // 2026-08: 超轻小件筛选 — ozon_cache_index 补 weight_g / dim_sum_mm 列 + 从 bundle_data 回填
+  await migrateUltraLightFields(db);
   // P2-2: 批量均衡上架 — batch_upload_tasks / batch_upload_items 补列(多店铺分配 + 顺序执行 + 速度控制)
   migrateBatchUploadTables(db);
   // 2026-07: watermark_templates.name UNIQUE 索引(旧库 schema 没有 UNIQUE,需补建)
@@ -745,6 +747,70 @@ async function migrateListedFields(db) {
     .run();
   console.log(
     `[db] migration: backfill listed fields for ${result.changes} SKUs`
+  );
+}
+
+// 2026-08: 超轻小件筛选 — ozon_cache_index 补 weight_g / dim_sum_mm 列 + 从 bundle_data 回填
+// 两件事:
+//  1) 补 weight_g(克)/ dim_sum_mm(三边之和,毫米)两列(旧库 ALTER TABLE)
+//  2) 从 ozon_attribute_cache.bundle_data(JSON 顶层物理字段)回填到索引表
+// 幂等:已迁移过的库(新表结构)直接跳过 ALTER,回填仅首次执行
+async function migrateUltraLightFields(db) {
+  const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
+  if (ciCols.length === 0) return; // 表不存在,跳过(schema.sql 会创建)
+
+  let addedWeightG = false;
+  if (!ciCols.some((c) => c.name === 'weight_g')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN weight_g REAL`);
+    console.log('[db] migration: added column ozon_cache_index.weight_g');
+    addedWeightG = true;
+  }
+  if (!ciCols.some((c) => c.name === 'dim_sum_mm')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN dim_sum_mm REAL`);
+    console.log('[db] migration: added column ozon_cache_index.dim_sum_mm');
+  }
+
+  // 仅在首次新增列时执行回填,后续启动由 syncSku 维护
+  if (!addedWeightG) return;
+
+  // 从 bundle_data 顶层物理字段提取(OPI bundle 接口单位:g / mm)
+  //   weight_g = bundle_data.weight(>0 才有效)
+  //   dim_sum_mm = bundle_data.depth + width + height(三者均 >0 才有效)
+  const result = db
+    .prepare(
+      `UPDATE ozon_cache_index
+       SET weight_g = (
+             SELECT CASE
+                      WHEN json_extract(a.bundle_data, '$.weight') IS NOT NULL
+                        AND CAST(json_extract(a.bundle_data, '$.weight') AS REAL) > 0
+                      THEN CAST(json_extract(a.bundle_data, '$.weight') AS REAL)
+                      ELSE NULL END
+             FROM ozon_attribute_cache a
+             WHERE a._id = ozon_cache_index.sku AND a.bundle_data IS NOT NULL
+           ),
+           dim_sum_mm = (
+             SELECT CASE
+                      WHEN json_extract(a.bundle_data, '$.depth') IS NOT NULL
+                        AND json_extract(a.bundle_data, '$.width') IS NOT NULL
+                        AND json_extract(a.bundle_data, '$.height') IS NOT NULL
+                        AND CAST(json_extract(a.bundle_data, '$.depth') AS REAL) > 0
+                        AND CAST(json_extract(a.bundle_data, '$.width') AS REAL) > 0
+                        AND CAST(json_extract(a.bundle_data, '$.height') AS REAL) > 0
+                      THEN CAST(json_extract(a.bundle_data, '$.depth') AS REAL)
+                         + CAST(json_extract(a.bundle_data, '$.width') AS REAL)
+                         + CAST(json_extract(a.bundle_data, '$.height') AS REAL)
+                      ELSE NULL END
+             FROM ozon_attribute_cache a
+             WHERE a._id = ozon_cache_index.sku AND a.bundle_data IS NOT NULL
+           )
+       WHERE EXISTS (
+         SELECT 1 FROM ozon_attribute_cache a
+         WHERE a._id = ozon_cache_index.sku AND a.bundle_data IS NOT NULL
+       )`
+    )
+    .run();
+  console.log(
+    `[db] migration: backfilled weight_g / dim_sum_mm for ${result.changes} SKUs`
   );
 }
 

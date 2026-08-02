@@ -122,6 +122,14 @@ function buildFilterWhere(opts) {
       )`
     );
   }
+  // 超轻小件(Extra Small)筛选 — Ozon 官方物流分组标准:
+  //   重量 < 500g 且 三边之和 < 90cm(= 900mm,索引表存 mm)
+  // ultraLight='1':只看超轻小件;ultraLight='0':只看非超轻小件(含无数据商品)
+  if (opts.ultraLight === '1' || opts.ultraLight === 1 || opts.ultraLight === '0' || opts.ultraLight === 0) {
+    const isUltra = String(opts.ultraLight) === '1';
+    const cond = `weight_g IS NOT NULL AND weight_g < 500 AND dim_sum_mm IS NOT NULL AND dim_sum_mm < 900`;
+    where.push(isUltra ? cond : `NOT (${cond})`);
+  }
   return { where, params };
 }
 
@@ -277,6 +285,22 @@ export const indexDao = {
     }
     const categoryName = detailData?.category || null;
 
+    // 超轻小件筛选冗余字段:weight_g(克) + dim_sum_mm(三边之和,毫米)
+    // 从 bundle_data 顶层物理字段提取(OPI bundle 接口单位:g / mm)
+    //   weight_g:weight > 0 才有效,否则 null(无数据)
+    //   dim_sum_mm:depth + width + height 三者均 > 0 才有效,否则 null
+    const rawWeight = Number(bundleItem?.weight);
+    const weightG = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : null;
+    const rawDepth = Number(bundleItem?.depth);
+    const rawWidth = Number(bundleItem?.width);
+    const rawHeight = Number(bundleItem?.height);
+    const dimSumMm =
+      Number.isFinite(rawDepth) && rawDepth > 0 &&
+      Number.isFinite(rawWidth) && rawWidth > 0 &&
+      Number.isFinite(rawHeight) && rawHeight > 0
+        ? rawDepth + rawWidth + rawHeight
+        : null;
+
     // 全文搜索字段(name + sku + seller_name 会在定时任务里补 seller)
     // 这里先用现有 seller_name(可能为空)
     const existing = db
@@ -300,9 +324,10 @@ export const indexDao = {
         has_video, has_rich_content, market_price_p50, competitor_count,
         seller_slug, seller_id, seller_name,
         description_category_id, type_id, category_name,
+        weight_g, dim_sum_mm,
         listed, searchable_text, updated_at
       ) VALUES (
-        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
+        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
       )
       ON CONFLICT(sku) DO UPDATE SET
         card_hit=excluded.card_hit, card_fetched_at=excluded.card_fetched_at,
@@ -330,6 +355,7 @@ export const indexDao = {
         description_category_id=COALESCE(ozon_cache_index.description_category_id, excluded.description_category_id),
         type_id=COALESCE(ozon_cache_index.type_id, excluded.type_id),
         category_name=COALESCE(ozon_cache_index.category_name, excluded.category_name),
+        weight_g=excluded.weight_g, dim_sum_mm=excluded.dim_sum_mm,
         listed=ozon_cache_index.listed,
         searchable_text=excluded.searchable_text,
         updated_at=datetime('now')`
@@ -367,6 +393,8 @@ export const indexDao = {
       descriptionCategoryId,
       typeId,
       categoryName,
+      weightG,
+      dimSumMm,
       listed,
       searchableText
     );
@@ -391,6 +419,7 @@ export const indexDao = {
    * @param {number} [opts.minCacheHits] - 最小命中数
    * @param {string} [opts.sellerId] - 卖家 ID(2026-07 新增,稳定主键,走 idx_ci_seller_id 索引)
    * @param {string} [opts.sellerSlug] - 卖家 slug(兼容字段,可变,走 idx_ci_seller 索引)
+   * @param {string|number} [opts.ultraLight] - 超轻小件筛选:'1'=超轻小件,'0'=非超轻小件
    * @param {number} [opts.page=1]
    * @param {number} [opts.pageSize=50]
    * @returns {Promise<{items: Array, total: number}>}
