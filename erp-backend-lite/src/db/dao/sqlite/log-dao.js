@@ -167,4 +167,10 @@ export const autoCollectLogDao = {
       );
     return { insertedId: r.lastInsertRowid };
   },
+
+  /** 清空全部深度采集日志 */
+  async clearAll() {
+    const r = db.prepare(`DELETE FROM ozon_auto_collect_log`).run();
+    return { deletedCount: r.changes };
+  },
 };

@@ -1,10 +1,12 @@
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, computed } from 'vue';
-import { getAutoCollectStats, getAutoCollectLogs } from '../api/cache.js';
+import { getAutoCollectStats, getAutoCollectLogs, clearAutoCollectLogs } from '../api/cache.js';
 import { useToast } from '../components/useToast.js';
+import { useConfirmStore } from '../stores/confirm.js';
 import AppPager from '../components/AppPager.vue';
 
 const { show } = useToast();
+const confirmStore = useConfirmStore();
 
 // 7 类缓存类型
 const EIGHT_TYPES = [
@@ -47,6 +49,8 @@ let refreshTimer = null;
 
 // 加载状态
 const loading = ref(false);
+// 清空中
+const clearing = ref(false);
 
 // ── 数据加载 ───────────────────────────────────────────────
 async function loadStats() {
@@ -94,6 +98,33 @@ function onPageChange(p) {
 function refreshAll() {
   loadStats();
   loadLogs();
+}
+
+// ── 一键清空 ───────────────────────────────────────────────
+async function clearAllLogs() {
+  if (clearing.value) return;
+  const total = pager.total;
+  if (total === 0) {
+    show('当前无日志可清空', 'info');
+    return;
+  }
+  if (!(await confirmStore.ask({
+    message: `确认清空全部深度采集日志记录?共 ${total} 条(仅清空日志,不影响缓存数据,且不可恢复)`,
+    danger: true,
+  }))) return;
+  clearing.value = true;
+  try {
+    const r = await clearAutoCollectLogs();
+    const n = r?.deletedCount ?? 0;
+    show(`已清空 ${n} 条日志`, 'success');
+    expandedRows.value.clear();
+    pager.current = 1;
+    await refreshAll();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    clearing.value = false;
+  }
 }
 
 // ── 自动刷新 ───────────────────────────────────────────────
@@ -310,6 +341,14 @@ onUnmounted(() => {
           <option :value="10">10秒</option>
           <option :value="30">30秒</option>
         </select>
+        <button
+          class="btn btn-danger"
+          :disabled="clearing || loading || pager.total === 0"
+          :title="pager.total === 0 ? '当前无日志' : '清空全部深度采集日志(不影响缓存数据)'"
+          @click="clearAllLogs"
+        >
+          {{ clearing ? '清空中…' : '清空日志' }}
+        </button>
       </div>
     </div>
 

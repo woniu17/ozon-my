@@ -87,6 +87,11 @@ export function getAutoCollectLogsBySku(sku) {
   return request.get(`/admin/api/auto-collect/logs/${encodeURIComponent(sku)}`);
 }
 
+// 一键清空全部深度采集日志
+export function clearAutoCollectLogs() {
+  return request.del('/admin/api/auto-collect/logs');
+}
+
 // ── 浅度采集 ───────────────────────────────────────────────
 // 浅度采集统计
 export function getShallowCollectStats() {
@@ -101,6 +106,11 @@ export function getShallowCollectLogs(params) {
 // 单 SKU 浅度采集历史
 export function getShallowCollectLogsBySku(sku) {
   return request.get(`/admin/api/shallow-collect/logs/${encodeURIComponent(sku)}`);
+}
+
+// 一键清空全部浅度采集日志
+export function clearShallowCollectLogs() {
+  return request.del('/admin/api/shallow-collect/logs');
 }
 
 // ── 缓存查询(调试用) ─────────────────────────────────────

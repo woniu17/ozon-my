@@ -205,4 +205,10 @@ export const shallowCollectLogDao = {
       );
     return { insertedId: r.lastInsertRowid };
   },
+
+  /** 清空全部浅度采集日志 */
+  async clearAll() {
+    const r = db.prepare(`DELETE FROM ozon_shallow_collect_log`).run();
+    return { deletedCount: r.changes };
+  },
 };

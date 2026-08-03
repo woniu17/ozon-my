@@ -102,4 +102,11 @@ export const autoCollectLogDao = {
     const r = await col.insertOne(fullDoc);
     return { insertedId: r.insertedId };
   },
+
+  /** 清空全部深度采集日志 */
+  async clearAll() {
+    const col = await cols.autoCollectLog();
+    const r = await col.deleteMany({});
+    return { deletedCount: r.deletedCount };
+  },
 };

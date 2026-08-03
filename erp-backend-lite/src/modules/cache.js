@@ -1383,6 +1383,18 @@ router.post('/admin/api/auto-collect/log', async (req, res, next) => {
   }
 });
 
+// DELETE /admin/api/auto-collect/logs — 一键清空全部深度采集日志
+router.delete('/admin/api/auto-collect/logs', async (req, res, next) => {
+  try {
+    const r = await daos.autoCollectLogDao.clearAll();
+    logger.info({ deletedCount: r.deletedCount }, '[auto-collect] logs cleared');
+    return res.json(ok({ deletedCount: r.deletedCount }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[auto-collect] logs clear failed');
+    next(e);
+  }
+});
+
 // ── 浅度采集日志(/admin/api/shallow-collect) ───────────────────
 // 与 auto-collect(深度)日志的区别:
 //   深度:SW 实际执行采集流程后的完整记录(success/partial/failed/...+ results 数组)
@@ -1479,6 +1491,18 @@ router.post('/admin/api/shallow-collect/log', async (req, res, next) => {
     return res.json(ok({ insertedId: r.insertedId }));
   } catch (e) {
     logger.warn({ err: e.message }, '[shallow-collect] log insert failed');
+    next(e);
+  }
+});
+
+// DELETE /admin/api/shallow-collect/logs — 一键清空全部浅度采集日志
+router.delete('/admin/api/shallow-collect/logs', async (req, res, next) => {
+  try {
+    const r = await daos.shallowCollectLogDao.clearAll();
+    logger.info({ deletedCount: r.deletedCount }, '[shallow-collect] logs cleared');
+    return res.json(ok({ deletedCount: r.deletedCount }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[shallow-collect] logs clear failed');
     next(e);
   }
 });

@@ -5,11 +5,13 @@
 //   浅度:仅记录"发现了某 SKU + 是否通过过滤"(无 status,有 passesFilter/skipReason)
 // 用途:排查过滤效果(为什么有些 SKU 被略过)+ 浅度采集统计
 import { ref, reactive, onMounted, onUnmounted, computed } from 'vue';
-import { getShallowCollectStats, getShallowCollectLogs } from '../api/cache.js';
+import { getShallowCollectStats, getShallowCollectLogs, clearShallowCollectLogs } from '../api/cache.js';
 import { useToast } from '../components/useToast.js';
+import { useConfirmStore } from '../stores/confirm.js';
 import AppPager from '../components/AppPager.vue';
 
 const { show } = useToast();
+const confirmStore = useConfirmStore();
 
 // 统计数据
 const stats = ref({});
@@ -62,6 +64,8 @@ let refreshTimer = null;
 
 // 加载状态
 const loading = ref(false);
+// 清空中
+const clearing = ref(false);
 
 // ── 数据加载 ───────────────────────────────────────────────
 async function loadStats() {
@@ -108,6 +112,32 @@ function onPageChange(p) {
 function refreshAll() {
   loadStats();
   loadLogs();
+}
+
+// ── 一键清空 ───────────────────────────────────────────────
+async function clearAllLogs() {
+  if (clearing.value) return;
+  const total = pager.total;
+  if (total === 0) {
+    show('当前无日志可清空', 'info');
+    return;
+  }
+  if (!(await confirmStore.ask({
+    message: `确认清空全部浅度采集日志记录?共 ${total} 条(仅清空日志,不影响缓存数据,且不可恢复)`,
+    danger: true,
+  }))) return;
+  clearing.value = true;
+  try {
+    const r = await clearShallowCollectLogs();
+    const n = r?.deletedCount ?? 0;
+    show(`已清空 ${n} 条日志`, 'success');
+    pager.current = 1;
+    await refreshAll();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    clearing.value = false;
+  }
 }
 
 // ── 自动刷新 ───────────────────────────────────────────────
@@ -282,6 +312,14 @@ onUnmounted(() => {
           <option :value="10">10秒</option>
           <option :value="30">30秒</option>
         </select>
+        <button
+          class="btn btn-danger"
+          :disabled="clearing || loading || pager.total === 0"
+          :title="pager.total === 0 ? '当前无日志' : '清空全部浅度采集日志(不影响缓存数据)'"
+          @click="clearAllLogs"
+        >
+          {{ clearing ? '清空中…' : '清空日志' }}
+        </button>
       </div>
     </div>
 
