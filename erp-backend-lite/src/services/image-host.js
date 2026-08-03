@@ -71,7 +71,7 @@ export async function processImageLocal(url, sku, templateConfig) {
   // 下载原图(CDN 偶发抖动时重试 1 次;HTTP 4xx 业务错误不重试)
   let buffer;
   let lastErr = null;
-  const MAX_ATTEMPTS = 2;
+  const MAX_ATTEMPTS = 3;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const res = await request(url, {
