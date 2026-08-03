@@ -68,22 +68,37 @@ export async function processImageLocal(url, sku, templateConfig) {
 
   mkdirSync(subDir, { recursive: true });
 
-  // 下载原图
+  // 下载原图(CDN 偶发抖动时重试 1 次;HTTP 4xx 业务错误不重试)
   let buffer;
-  try {
-    const res = await request(url, {
-      method: 'GET',
-      headersTimeout: 30_000,
-      bodyTimeout: 30_000,
-      maxRedirections: 5,
-    });
-    if (res.statusCode >= 400) {
-      throw new Error(`下载原图失败: HTTP ${res.statusCode}`);
+  let lastErr = null;
+  const MAX_ATTEMPTS = 2;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await request(url, {
+        method: 'GET',
+        headersTimeout: 10_000,
+        bodyTimeout: 20_000,
+        maxRedirections: 5,
+      });
+      if (res.statusCode >= 400) {
+        throw new Error(`下载原图失败: HTTP ${res.statusCode}`);
+      }
+      buffer = Buffer.from(await res.body.arrayBuffer());
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = e;
+      // HTTP 业务错误(4xx/5xx)不重试
+      if (/^下载原图失败: HTTP/.test(e.message)) break;
+      if (attempt < MAX_ATTEMPTS) {
+        logger.warn({ err: e?.message, url, sku, attempt }, '下载原图失败,重试中');
+        continue;
+      }
     }
-    buffer = Buffer.from(await res.body.arrayBuffer());
-  } catch (e) {
-    logger.warn({ err: e?.message, url, sku }, '下载原图失败');
-    throw e;
+  }
+  if (lastErr) {
+    logger.warn({ err: lastErr?.message, url, sku }, '下载原图失败');
+    throw lastErr;
   }
 
   // 渲染水印
