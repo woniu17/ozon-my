@@ -633,11 +633,26 @@ watch(
       // 旧请求返回,丢弃(防止切换模板时旧结果覆盖新结果)
       if (seq !== _wmReqSeq) return;
       const results = Array.isArray(r?.results) ? r.results : [];
+      // 仅收录 ok:true 的项;ok:false 的项跳过(由 displayImages 的 || url 兜底透传原图)
       const map = {};
+      let failCount = 0;
+      let firstErr = '';
       for (const it of results) {
-        if (it && it.originalUrl) map[it.originalUrl] = it.publicUrl || it.originalUrl;
+        if (!it || !it.originalUrl) continue;
+        if (it.ok) {
+          map[it.originalUrl] = it.publicUrl || it.originalUrl;
+        } else {
+          failCount++;
+          if (!firstErr) firstErr = it.error || '未知错误';
+        }
       }
       watermarkPreviewMap.value = map;
+      // 有任何失败项时设置错误提示(部分成功仍展示已渲染的图,但需告知用户有图渲染失败)
+      if (failCount > 0) {
+        watermarkError.value = failCount >= results.length
+          ? `水印渲染失败: ${firstErr}`
+          : `部分图片水印渲染失败(${failCount}/${results.length}): ${firstErr}`;
+      }
     } catch (e) {
       if (seq !== _wmReqSeq) return;
       watermarkError.value = e?.message || String(e);

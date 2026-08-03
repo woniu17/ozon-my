@@ -72,6 +72,11 @@ if (config.imageHostMode === 'remote' || config.imageHostMode === 'self') {
     logger.warn({ url: config.remoteImageHostUrl }, 'REMOTE_IMAGE_HOST_URL 非 https,建议使用 HTTPS 防止 token 泄露');
   }
   logger.info({ mode: config.imageHostMode, url: config.remoteImageHostUrl }, '图片处理代理已启用');
+} else if (config.imageHostMode === 'local') {
+  // local 模式作为远程接收端时也需配置 token,漏配会导致接收接口运行时返回 500
+  if (!config.remoteImageHostToken) {
+    logger.warn('IMAGE_HOST_MODE=local 且 REMOTE_IMAGE_HOST_TOKEN 未配置,图片处理代理接收接口(/admin/api/image-host/process-batch)不可用;如不作为远程接收端可忽略');
+  }
 }
 
 const app = express();
