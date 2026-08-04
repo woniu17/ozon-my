@@ -10,16 +10,86 @@
 //   POST /admin/api/batch-upload/:batchNo/items/:id/reassign — 手动调整子任务目标店铺
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { db } from '../db/index.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { ok } from '../utils/response.js';
-import { distributeSkus, distributeSkusByStore, summarizeDistribution, autoPickBySeller } from '../services/batch-distributor.js';
+import { distributeSkus, distributeSkusByStore, distributeSkusByStoreWithQuota, summarizeDistribution, autoPickBySeller } from '../services/batch-distributor.js';
 import { getDaos } from '../db/adapter.js';
+import * as opi from '../services/ozon-opi.js';
+import logger from '../middleware/log.js';
 
 const router = Router();
 
 // DAO 单例(顶层 await:启动时即建立连接,失败立即可见)
 const daos = await getDaos();
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const STORES_FILE = join(__dirname, '../config/stores.json');
+
+// 读取 stores.json(与 admin.js 一致的热加载方式,每次读最新)
+function readStores() {
+  try {
+    return JSON.parse(readFileSync(STORES_FILE, 'utf-8'));
+  } catch (e) {
+    logger.warn({ err: e.message }, 'stores.json 读取失败,回退为空数组');
+    return [];
+  }
+}
+
+// ── 配额实时查询 ───────────────────────────────────────────
+// 实时拉取单店铺的配额剩余(无缓存,每次调用都打 OPI)
+// 跟卖只消耗 daily_create 和 total 两类配额
+// total.usage 含归档商品,需扣减归档数(查 ARCHIVED 一次即可,子类明细仅展示用)
+// 返回:
+//   { storeId, storeName, total: {usage, limit, remaining}, daily: {usage, limit, remaining},
+//     archived, effectiveRemaining, error? }
+//   - effectiveRemaining = min(total.remaining, daily.remaining),跟卖可分配硬上限
+//   - limit=-1 表示无限制,remaining 记为 Number.MAX_SAFE_INTEGER
+//   - error 非空时其他字段为 null(单店铺失败隔离)
+async function fetchStoreQuotaRemaining(store) {
+  const out = {
+    storeId: store.id,
+    storeName: store.name,
+    total: { usage: null, limit: null, remaining: null },
+    daily: { usage: null, limit: null, remaining: null },
+    archived: null,
+    effectiveRemaining: null,
+    error: null,
+  };
+  try {
+    // 并发:/v4 配额 + /v3 ARCHIVED 归档数
+    const [quota, archivedCount] = await Promise.all([
+      opi.productInfoLimit(store),
+      opi.productListTotalByVisibility(store, 'ARCHIVED'),
+    ]);
+    const t = quota?.total || {};
+    const dc = quota?.daily_create || {};
+    const tUsage = typeof t.usage === 'number' ? t.usage : 0;
+    const tLimit = typeof t.limit === 'number' ? t.limit : 0;
+    const archived = typeof archivedCount === 'number' ? archivedCount : 0;
+    // 账号总数剩余 = limit - (usage - archived),扣减归档商品
+    const tRemaining = tLimit === -1 ? Number.MAX_SAFE_INTEGER : Math.max(0, tLimit - (tUsage - archived));
+    const dcUsage = typeof dc.usage === 'number' ? dc.usage : 0;
+    const dcLimit = typeof dc.limit === 'number' ? dc.limit : 0;
+    const dcRemaining = dcLimit === -1 ? Number.MAX_SAFE_INTEGER : Math.max(0, dcLimit - dcUsage);
+    out.total = { usage: tUsage, limit: tLimit, remaining: tRemaining };
+    out.daily = { usage: dcUsage, limit: dcLimit, remaining: dcRemaining };
+    out.archived = archived;
+    out.effectiveRemaining = Math.min(tRemaining, dcRemaining);
+  } catch (e) {
+    out.error = e?.message || String(e);
+    logger.warn({ storeId: store.id, err: out.error }, '配额查询失败');
+  }
+  return out;
+}
+
+// 批量并发查询多店铺配额(单店铺失败隔离,不影响其他店铺)
+async function fetchStoresQuotaRemaining(stores) {
+  return Promise.all(stores.map(fetchStoreQuotaRemaining));
+}
 
 function parseJson(value) {
   if (value == null) return null;
@@ -117,6 +187,23 @@ function fetchSkuInfo(skus) {
 //   assignments: [{sku, sellerId, targetStoreId, seq, price, ratingCount, name, primaryImage}]
 //   pickInfo: { perStoreCount, requestedCount, actualPicked, totalAvailable, totalSellers,
 //               insufficient, bySellerCount, eligibleCount, skippedCount }
+// ── 配额预检(轻量,查所有店铺) ─────────────────────────────
+// 无请求体参数,自动查询 stores.json 中所有店铺
+// 返回: { items: [{ storeId, storeName, total, daily, archived, effectiveRemaining, error? }] }
+// 用途: 打开自动上架面板时自动加载,在店铺列表旁展示配额剩余
+router.post('/admin/api/batch-upload/quota-check', async (_req, res, next) => {
+  try {
+    const allStores = readStores();
+    if (allStores.length === 0) {
+      return res.json(ok({ items: [] }));
+    }
+    const items = await fetchStoresQuotaRemaining(allStores);
+    res.json(ok({ items }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.post('/admin/api/batch-upload/auto-pick', async (req, res, next) => {
   try {
     const { filters = {}, perStoreCount, storeIds, config = {}, speedConfig = {} } = req.body || {};
@@ -127,8 +214,77 @@ router.post('/admin/api/batch-upload/auto-pick', async (req, res, next) => {
     if (!Array.isArray(storeIds) || storeIds.length === 0) {
       return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'storeIds 必填且非空'));
     }
-    // 总选取数 = 每家店铺数量 × 目标店铺数
-    const N = M * storeIds.length;
+
+    // ── 配额预检:实时拉取每个店铺的剩余配额 ──────────────────────
+    // 跟卖消耗 daily_create 和 total 两类配额,有效剩余 = min(总数剩余, 日建剩余)
+    // total.usage 含归档商品,需扣减归档数(查 ARCHIVED 一次)
+    const allStores = readStores();
+    const targetStores = storeIds
+      .map((sid) => allStores.find((s) => s.id === sid))
+      .filter(Boolean);
+    if (targetStores.length === 0) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'storeIds 中无有效店铺'));
+    }
+    const quotaResults = await fetchStoresQuotaRemaining(targetStores);
+    // 每店铺实际可分配数 = min(用户请求 M, 该店有效剩余)
+    // 配额查询失败的店铺,视为 0(保守策略,不分配)
+    const perStoreQuota = {};
+    const quotaInfo = [];
+    for (const q of quotaResults) {
+      const eff = q.error ? 0 : (q.effectiveRemaining ?? 0);
+      const granted = Math.max(0, Math.min(M, eff));
+      perStoreQuota[q.storeId] = granted;
+      quotaInfo.push({
+        storeId: q.storeId,
+        storeName: q.storeName,
+        requested: M,
+        granted,
+        // 原始剩余(供前端展示)
+        totalRemaining: q.total?.remaining ?? null,
+        totalLimit: q.total?.limit ?? null,
+        totalUsage: q.total?.usage ?? null,
+        dailyRemaining: q.daily?.remaining ?? null,
+        dailyLimit: q.daily?.limit ?? null,
+        dailyUsage: q.daily?.usage ?? null,
+        archived: q.archived,
+        effectiveRemaining: q.effectiveRemaining ?? null,
+        error: q.error,
+        // 是否被配额截断(granted < requested)
+        truncated: granted < M,
+        // 配额状态:ok=充足, warn=部分截断, exhausted=耗尽, error=查询失败
+        status: q.error ? 'error' : granted === 0 ? 'exhausted' : granted < M ? 'warn' : 'ok',
+      });
+    }
+
+    // 总选取数 = Σ 各店铺实际可分配数(而非 M × storeIds.length)
+    const N = quotaInfo.reduce((sum, q) => sum + q.granted, 0);
+
+    // 全部店铺配额耗尽或查询失败:直接返回(无需查候选 SKU)
+    if (N === 0) {
+      return res.json(
+        ok({
+          assignments: [],
+          summary: { byStore: {}, total: 0 },
+          skipped: [],
+          pickInfo: {
+            perStoreCount: M,
+            storeCount: storeIds.length,
+            requestedCount: 0,
+            actualPicked: 0,
+            totalAvailable: 0,
+            totalSellers: 0,
+            insufficient: true,
+            insufficientReason: 'QUOTA_EXHAUSTED',
+            bySellerCount: {},
+            eligibleCount: 0,
+            skippedCount: 0,
+          },
+          quotaInfo,
+          config,
+          speedConfig,
+        })
+      );
+    }
 
     // 解析筛选条件(与 collect-box-v2/from-cache 路由一致)
     const filterOpts = {
@@ -172,12 +328,13 @@ router.post('/admin/api/batch-upload/auto-pick', async (req, res, next) => {
     // 按来源卖家均衡选取 N 个(差额均摊给有富余的卖家)
     const pickResult = autoPickBySeller(eligible, N);
 
-    // 把选出的 SKU 精确均衡分配到目标店铺(每家 M 个,同源 SKU 尽量散到不同店铺)
-    // 注:用 distributeSkusByStore 而非 distributeSkus,保证每家店铺精确 M 个(当 N = M × storeCount)
-    const assignments = distributeSkusByStore(
+    // 把选出的 SKU 按各店铺配额分配(每店独立上限,同源 SKU 尽量散到不同店铺)
+    // 注:用 distributeSkusByStoreWithQuota 而非 distributeSkusByStore,
+    //   因为各店铺配额可能不同(部分被截断),不能用固定 M
+    const assignments = distributeSkusByStoreWithQuota(
       pickResult.picked.map((p) => ({ sku: p.sku, sellerId: p.sellerId })),
       storeIds,
-      M
+      perStoreQuota
     );
 
     // 把 price/ratingCount/name 等展示字段合并到 assignments(便于前端预览)
@@ -215,6 +372,7 @@ router.post('/admin/api/batch-upload/auto-pick', async (req, res, next) => {
           eligibleCount: eligible.length,
           skippedCount: skipped.length,
         },
+        quotaInfo,
         config,
         speedConfig,
       })

@@ -4,6 +4,13 @@ import * as request from './request.js';
 // 后端路由前缀:/admin/api/batch-upload
 // 注:request.js 已自动解包 envelope,这些函数的返回值即 envelope.data
 
+// 配额预检(轻量,查所有店铺的剩余配额)
+// 无参数,后端自动查询 stores.json 中所有店铺
+// 返回:{ items: [{ storeId, storeName, total, daily, archived, effectiveRemaining, error? }] }
+export function checkStoresQuota() {
+  return request.post('/admin/api/batch-upload/quota-check', {});
+}
+
 // 预览分配(不落库)
 // data: { skus, storeIds, config?, speedConfig? }
 // 返回:{ assignments:[{sku,sellerId,targetStoreId,seq}], summary, skipped, config, speedConfig }

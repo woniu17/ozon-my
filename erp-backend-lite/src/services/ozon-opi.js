@@ -275,6 +275,28 @@ export function productList(store, { filter, lastId, limit } = {}) {
   });
 }
 
+// /v3/product/list —— 按 visibility 查询商品总数(只取 result.total,无需翻页)
+// 用途: 配额计算时统计归档商品数等,limit=1 减少数据传输
+// visibility 枚举见 docs/ozon-seller-api-swagger-en.json:
+//   ARCHIVED / AUTO_ARCHIVED / MANUAL_ARCHIVED / SEASONAL_AUTO_ARCHIVED 等
+// 返回: number(失败时抛异常)
+export async function productListTotalByVisibility(store, visibility) {
+  const r = await call(store, '/v3/product/list', {
+    filter: { visibility },
+    last_id: '',
+    limit: 1,
+  });
+  return Number(r?.result?.total) || 0;
+}
+
+// /v4/product/info/limit —— 获取账号上传配额
+// 返回: { daily_create, daily_update, operation_limits, total }
+//   - total.usage 含归档商品,实际可用额度需扣减归档数
+//   - limit=-1 表示无限制
+export function productInfoLimit(store) {
+  return call(store, '/v4/product/info/limit');
+}
+
 // /v3/product/info/list —— 根据标识符批量获取商品完整信息(v3 升级版,支持 sku 过滤)
 // 用途: 相比 v2 版本,新增 sku 维度过滤,可按 offer_id / product_id / sku 任意组合查询
 // 请求体: 从 offerIds / productIds / skus 中取非 undefined 的字段构造

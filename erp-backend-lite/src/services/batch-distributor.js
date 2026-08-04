@@ -298,3 +298,86 @@ export function autoPickBySeller(skus, targetCount) {
     insufficient: picked.length < N,
   };
 }
+
+/**
+ * 带配额上限的均衡分配(每店铺独立上限)
+ *
+ * 与 distributeSkusByStore 的区别:
+ *   - distributeSkusByStore 用固定 M 作为每桶上限
+ *   - 本函数用 perStoreQuota[storeId] 作为每桶独立上限(可不同)
+ *
+ * 算法与 distributeSkusByStore 一致(同源最少 + 总数最少 + 穿插 seq),
+ *   仅改桶满判断为各店独立配额。
+ *
+ * @param {Array<{sku, sellerId?}>} skus - 已选好的 SKU(数量应 ≤ Σ perStoreQuota)
+ * @param {string[]} storeIds - 目标店铺 ID 列表
+ * @param {Object<string, number>} perStoreQuota - 每店铺可分配上限 { [storeId]: number }
+ *   - 0 表示该店配额已满,不分配任何 SKU
+ *   - 超大数(如 Number.MAX_SAFE_INTEGER)表示无限制
+ * @returns {Array<{sku, sellerId, targetStoreId, seq}>} 分配结果(按 seq 升序)
+ */
+export function distributeSkusByStoreWithQuota(skus, storeIds, perStoreQuota) {
+  if (!Array.isArray(skus) || skus.length === 0) return [];
+  if (!Array.isArray(storeIds) || storeIds.length === 0) {
+    throw new Error('storeIds 必填且非空');
+  }
+
+  // 1. 按 sellerId 分组(空值归入 "__unknown__")
+  const groups = new Map();
+  for (const s of skus) {
+    const key = s.sellerId || '__unknown__';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  }
+
+  // 2. 桶:每个店铺一个,记录已放 SKU 和各来源卖家计数
+  const buckets = storeIds.map((sid) => ({
+    store: sid,
+    items: [],
+    sellerCount: {},
+    quota: perStoreQuota[sid] || 0, // 该店配额上限
+  }));
+
+  // 3. 按组大小降序排列(大组先分配,更容易均衡散开)
+  const sortedGroups = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+
+  // 4. 对每个组的每个 SKU,选择最优桶(未满 + 同源最少 + 总数最少)
+  for (const [sellerId, groupSkus] of sortedGroups) {
+    for (const skuItem of groupSkus) {
+      let bestBucket = null;
+      let bestScore = Infinity;
+      for (const b of buckets) {
+        // 桶满判断:已放数 >= 该店配额(配额=0 的桶永远跳过)
+        if (b.items.length >= b.quota) continue;
+        const sameSeller = b.sellerCount[sellerId] || 0;
+        // 评分:同源数优先(权重 1000),其次总数(保证均衡)
+        const score = sameSeller * 1000 + b.items.length;
+        if (score < bestScore) {
+          bestScore = score;
+          bestBucket = b;
+        }
+      }
+      if (!bestBucket) break; // 所有桶都满了,丢弃剩余 SKU
+      bestBucket.items.push({
+        sku: skuItem.sku,
+        sellerId: sellerId === '__unknown__' ? '' : sellerId,
+        targetStoreId: bestBucket.store,
+      });
+      bestBucket.sellerCount[sellerId] = (bestBucket.sellerCount[sellerId] || 0) + 1;
+    }
+  }
+
+  // 5. 穿插合并:按索引轮流从每个桶取一个,编号 seq
+  // 这样 OPI poller 按 seq 升序执行时,会轮流向各店铺提交
+  const result = [];
+  let seq = 0;
+  const maxLen = Math.max(...buckets.map((b) => b.items.length));
+  for (let i = 0; i < maxLen; i++) {
+    for (const b of buckets) {
+      if (i < b.items.length) {
+        result.push({ ...b.items[i], seq: seq++ });
+      }
+    }
+  }
+  return result;
+}

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { useStoresStore } from '../stores/stores.js';
 import {
   createStore,
@@ -8,6 +8,7 @@ import {
   testConnection,
   testConnectionForStore,
   getStoreWarehouses,
+  getStoresQuota,
 } from '../api/stores.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
@@ -16,6 +17,92 @@ import { useConfirmStore } from '../stores/confirm.js';
 const storesStore = useStoresStore();
 const { show } = useToast();
 const confirmStore = useConfirmStore();
+
+// ── 上传配额面板 ───────────────────────────────────────────
+const quotaLoading = ref(false);
+const quotaItems = ref([]); // [{ storeId, storeName, quota, archived, effective, error }]
+const quotaLoadedAt = ref('');
+
+async function loadQuota() {
+  quotaLoading.value = true;
+  try {
+    const r = await getStoresQuota();
+    // request 已解 envelope:r 即 { items: [...] }
+    const data = r && r.items ? r : r?.data || {};
+    quotaItems.value = Array.isArray(data.items) ? data.items : [];
+    quotaLoadedAt.value = new Date().toLocaleTimeString();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    quotaLoading.value = false;
+  }
+}
+
+// 配额卡片展示用:扁平化每店铺一行
+const quotaRows = computed(() =>
+  quotaItems.value.map((it) => {
+    const q = it.quota || {};
+    const t = q.total || {};
+    const dc = q.daily_create || {};
+    const du = q.daily_update || {};
+    const a = it.archived || {};
+    const eff = it.effective || null;
+    return {
+      storeId: it.storeId,
+      storeName: it.storeName,
+      // 账号总数(原始)
+      totalUsage: t.usage ?? null,
+      totalLimit: t.limit ?? null,
+      totalPercent:
+        typeof t.limit === 'number' && t.limit !== -1 && typeof t.usage === 'number'
+          ? Number(((t.usage / t.limit) * 100).toFixed(1))
+          : null,
+      // 扣除归档后
+      effUsage: eff?.usage ?? null,
+      effLimit: eff?.limit ?? null,
+      effPercent: eff?.percent ?? null,
+      archived: a.ARCHIVED ?? null,
+      archivedAuto: a.AUTO_ARCHIVED ?? null,
+      archivedManual: a.MANUAL_ARCHIVED ?? null,
+      archivedSeasonal: a.SEASONAL_AUTO_ARCHIVED ?? null,
+      // 日建/日更
+      dcUsage: dc.usage ?? null,
+      dcLimit: dc.limit ?? null,
+      dcPercent:
+        typeof dc.limit === 'number' && dc.limit !== -1 && typeof dc.usage === 'number'
+          ? Number(((dc.usage / dc.limit) * 100).toFixed(1))
+          : null,
+      dcResetAt: dc.reset_at || '',
+      duUsage: du.usage ?? null,
+      duLimit: du.limit ?? null,
+      duPercent:
+        typeof du.limit === 'number' && du.limit !== -1 && typeof du.usage === 'number'
+          ? Number(((du.usage / du.limit) * 100).toFixed(1))
+          : null,
+      duResetAt: du.reset_at || '',
+      error: it.error || null,
+    };
+  })
+);
+
+// 根据使用率返回颜色 class
+function levelClass(percent) {
+  if (percent == null) return '';
+  if (percent >= 100) return 'quota-crit';
+  if (percent >= 80) return 'quota-warn';
+  return 'quota-ok';
+}
+
+function fmtResetAt(iso) {
+  if (!iso) return '';
+  // ISO UTC -> 北京时间 HH:MM
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
+  } catch {
+    return iso;
+  }
+}
 
 // ── 编辑/新增弹窗 ───────────────────────────────────────────
 const editOpen = ref(false);
@@ -236,6 +323,7 @@ async function setDefaultWarehouse(wid) {
 
 onMounted(() => {
   storesStore.load();
+  loadQuota();
 });
 </script>
 
@@ -244,6 +332,88 @@ onMounted(() => {
     <div class="toolbar">
       <h2>店铺管理</h2>
       <button class="btn btn-primary" @click="openEdit(null)">+ 新增店铺</button>
+    </div>
+
+    <!-- 上传配额面板 -->
+    <div class="quota-panel">
+      <div class="quota-head">
+        <h3>上传配额</h3>
+        <div class="quota-head-right">
+          <span v-if="quotaLoadedAt" class="muted">更新于 {{ quotaLoadedAt }}</span>
+          <button class="btn btn-sm" :disabled="quotaLoading" @click="loadQuota">
+            {{ quotaLoading ? '刷新中…' : '刷新' }}
+          </button>
+        </div>
+      </div>
+      <div v-if="quotaLoading && !quotaRows.length" class="empty">加载中…(实时调用 OPI,约 2-5 秒)</div>
+      <div v-else-if="!quotaRows.length" class="empty">暂无配额数据,点击右上角刷新</div>
+      <div v-else class="quota-grid">
+        <div v-for="r in quotaRows" :key="r.storeId" class="quota-card">
+          <div class="quota-card-head">
+            <span class="quota-store-name">{{ r.storeName }}</span>
+            <span v-if="r.error" class="badge badge-fail" :title="r.error">异常</span>
+          </div>
+          <!-- 账号总数(扣除归档) -->
+          <div class="quota-row">
+            <div class="quota-row-label">
+              账号总数
+              <span class="quota-row-hint" v-if="r.archived != null">(扣除归档 {{ r.archived }})</span>
+            </div>
+            <div class="quota-row-value">
+              <strong :class="levelClass(r.effPercent ?? r.totalPercent)">
+                {{ r.effUsage ?? r.totalUsage ?? '-' }}
+              </strong>
+              <span class="muted"> / {{ r.effLimit ?? r.totalLimit ?? '-' }}</span>
+              <span
+                v-if="r.effPercent != null"
+                class="quota-pct"
+                :class="levelClass(r.effPercent)"
+              >{{ r.effPercent }}%</span>
+              <span v-else-if="r.totalPercent != null" class="quota-pct" :class="levelClass(r.totalPercent)">
+                {{ r.totalPercent }}%(含归档)
+              </span>
+              <span v-else-if="r.totalLimit === -1" class="quota-pct quota-ok">无限制</span>
+            </div>
+          </div>
+          <!-- 日建 -->
+          <div class="quota-row">
+            <div class="quota-row-label">
+              日建
+              <span class="quota-row-hint" v-if="r.dcResetAt">重置 {{ fmtResetAt(r.dcResetAt) }}</span>
+            </div>
+            <div class="quota-row-value">
+              <strong :class="levelClass(r.dcPercent)">{{ r.dcUsage ?? '-' }}</strong>
+              <span class="muted"> / {{ r.dcLimit ?? '-' }}</span>
+              <span v-if="r.dcPercent != null" class="quota-pct" :class="levelClass(r.dcPercent)">{{ r.dcPercent }}%</span>
+              <span v-else-if="r.dcLimit === -1" class="quota-pct quota-ok">无限制</span>
+            </div>
+          </div>
+          <!-- 日更 -->
+          <div class="quota-row">
+            <div class="quota-row-label">
+              日更
+              <span class="quota-row-hint" v-if="r.duResetAt">重置 {{ fmtResetAt(r.duResetAt) }}</span>
+            </div>
+            <div class="quota-row-value">
+              <strong :class="levelClass(r.duPercent)">{{ r.duUsage ?? '-' }}</strong>
+              <span class="muted"> / {{ r.duLimit ?? '-' }}</span>
+              <span v-if="r.duPercent != null" class="quota-pct" :class="levelClass(r.duPercent)">{{ r.duPercent }}%</span>
+              <span v-else-if="r.duLimit === -1" class="quota-pct quota-ok">无限制</span>
+            </div>
+          </div>
+          <!-- 归档明细 -->
+          <div v-if="r.archived != null || r.archivedAuto != null" class="quota-archived">
+            归档:
+            <span>总 {{ r.archived ?? '-' }}</span>
+            <span class="muted">·</span>
+            <span>自动 {{ r.archivedAuto ?? '-' }}</span>
+            <span class="muted">·</span>
+            <span>手动 {{ r.archivedManual ?? '-' }}</span>
+            <span v-if="r.archivedSeasonal" class="muted">· 季节 {{ r.archivedSeasonal }}</span>
+          </div>
+          <div v-if="r.error" class="quota-error">{{ r.error }}</div>
+        </div>
+      </div>
     </div>
 
     <div v-if="!storesStore.loaded" class="empty">加载中…</div>

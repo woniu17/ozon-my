@@ -224,6 +224,70 @@ router.post('/admin/api/stores/:id/test-connection', async (req, res, next) => {
   }
 });
 
+// GET /admin/api/stores/quota —— 批量查询所有店铺的上传配额 + 归档商品数
+// 返回: { items: [{ storeId, storeName, quota, archived, effective, error? }] }
+//   - quota: /v4/product/info/limit 原始响应(total.usage 含归档商品)
+//   - archived: { ARCHIVED, AUTO_ARCHIVED, MANUAL_ARCHIVED, SEASONAL_AUTO_ARCHIVED }
+//   - effective: 扣除归档后的有效使用情况 { usage, limit, percent }
+//   - error: 单店铺失败时的错误信息(不影响其他店铺)
+// 并发调用各店铺,单店铺失败隔离;归档数 4 路并发,整体不阻塞
+router.get('/admin/api/stores/quota', async (_req, res, next) => {
+  try {
+    const stores = readStores();
+    const items = await Promise.all(
+      stores.map(async (s) => {
+        const out = {
+          storeId: s.id,
+          storeName: s.name,
+          quota: null,
+          archived: null,
+          effective: null,
+          error: null,
+        };
+        // 1) 配额(/v4/product/info/limit)
+        try {
+          out.quota = await opi.productInfoLimit(s);
+        } catch (e) {
+          out.error = `配额查询失败: ${e?.message || String(e)}`;
+        }
+        // 2) 归档数(/v3/product/list 4 路 visibility 并发)
+        const visibilities = ['ARCHIVED', 'AUTO_ARCHIVED', 'MANUAL_ARCHIVED', 'SEASONAL_AUTO_ARCHIVED'];
+        const entries = await Promise.allSettled(
+          visibilities.map((v) => opi.productListTotalByVisibility(s, v).then((n) => ({ v, n })))
+        );
+        const archived = {};
+        for (let i = 0; i < visibilities.length; i++) {
+          const v = visibilities[i];
+          const e = entries[i];
+          if (e.status === 'fulfilled') {
+            archived[v] = e.value.n;
+          } else {
+            archived[v] = null;
+            if (!out.error) out.error = `归档数(${v})查询失败: ${e.reason?.message || e.reason}`;
+          }
+        }
+        out.archived = archived;
+        // 3) 计算有效使用率:usage - archived.ARCHIVED
+        if (out.quota?.total && typeof archived.ARCHIVED === 'number') {
+          const t = out.quota.total;
+          const effUsage = (typeof t.usage === 'number' ? t.usage : 0) - archived.ARCHIVED;
+          const limit = typeof t.limit === 'number' ? t.limit : 0;
+          out.effective = {
+            usage: effUsage,
+            limit,
+            archived: archived.ARCHIVED,
+            percent: limit === -1 ? -1 : limit > 0 ? Number(((effUsage / limit) * 100).toFixed(1)) : null,
+          };
+        }
+        return out;
+      })
+    );
+    res.json(ok({ items }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // POST /admin/api/test-connection —— 用请求体凭据测试(无需先保存,便于新增时即时验证)
 router.post('/admin/api/test-connection', async (req, res, next) => {
   try {

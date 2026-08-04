@@ -39,3 +39,9 @@ export function testConnectionForStore(id) {
 export function getStoreWarehouses(id) {
   return request.get('/admin/api/stores/' + encodeURIComponent(id) + '/warehouses');
 }
+
+// 批量查询所有店铺的上传配额 + 归档商品数
+// 返回: { items: [{ storeId, storeName, quota, archived, effective, error? }] }
+export function getStoresQuota() {
+  return request.get('/admin/api/stores/quota');
+}

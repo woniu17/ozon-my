@@ -1056,6 +1056,109 @@ h3 {
   font-size: 12px;
   margin-top: 6px;
 }
+
+/* ── 上传配额面板(Stores.vue) ──────────────────────────────── */
+.quota-panel {
+  margin: 0 0 24px;
+  padding: 16px 24px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.quota-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.quota-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.quota-head-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.quota-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.quota-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.quota-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border);
+}
+.quota-store-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.quota-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.quota-row-label {
+  color: var(--muted);
+}
+.quota-row-hint {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: 4px;
+}
+.quota-row-value strong {
+  font-size: 15px;
+  font-weight: 700;
+}
+.quota-pct {
+  margin-left: 6px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.quota-ok {
+  color: #059669;
+  background: rgba(5, 150, 105, 0.1);
+}
+.quota-warn {
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.12);
+}
+.quota-crit {
+  color: var(--danger);
+  background: rgba(220, 38, 38, 0.12);
+}
+.quota-archived {
+  font-size: 11px;
+  color: var(--muted);
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.quota-error {
+  font-size: 11px;
+  color: var(--danger);
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  word-break: break-all;
+}
 .dash-trend {
   padding: 0 24px 24px;
 }

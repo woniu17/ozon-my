@@ -9,7 +9,7 @@ import { reactive, ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useStoresStore } from '../stores/stores.js';
 import { getListingTemplates } from '../api/listingTemplates.js';
-import { autoPickBatchUpload, createBatchUpload } from '../api/batch-upload.js';
+import { autoPickBatchUpload, createBatchUpload, checkStoresQuota } from '../api/batch-upload.js';
 import { useToast } from './useToast.js';
 
 const props = defineProps({
@@ -82,6 +82,39 @@ const creating = ref(false);
 // 预览结果(assignments 本地可编辑,统计摘要 + 跳过列表 + 选取信息)
 const preview = ref(null);
 
+// ── 配额预加载(打开面板时自动查询所有店铺配额) ───────────────
+const quotaLoading = ref(false);
+const storeQuotaMap = ref({}); // { [storeId]: { total, daily, archived, effectiveRemaining, error } }
+
+async function loadStoreQuota() {
+  quotaLoading.value = true;
+  try {
+    const r = await checkStoresQuota();
+    const items = r?.items || [];
+    const map = {};
+    for (const it of items) {
+      map[it.storeId] = it;
+    }
+    storeQuotaMap.value = map;
+  } catch (err) {
+    // 配额加载失败不阻塞用户操作,静默降级
+    console.warn('[AutoPickBatchDialog] 配额加载失败:', err?.message);
+  } finally {
+    quotaLoading.value = false;
+  }
+}
+
+// 店铺配额标签(用于店铺列表旁展示)
+function storeQuotaTag(storeId) {
+  const q = storeQuotaMap.value[storeId];
+  if (!q) return null;
+  if (q.error) return { cls: 'quota-tag-err', label: '查询失败', title: q.error };
+  const eff = q.effectiveRemaining ?? 0;
+  if (eff === 0) return { cls: 'quota-tag-exhausted', label: '已满', title: '配额已耗尽' };
+  if (eff < 50) return { cls: 'quota-tag-warn', label: `剩 ${eff}`, title: '剩余配额不足 50' };
+  return { cls: 'quota-tag-ok', label: `剩 ${eff}`, title: `有效剩余 ${eff}` };
+}
+
 // ── 加载店铺列表 + 模板列表 ─────────────────────────────────
 onMounted(async () => {
   try {
@@ -116,6 +149,8 @@ onMounted(async () => {
   } catch (err) {
     show(err.message || '模板列表加载失败', 'error');
   }
+  // 店铺列表加载完成后,自动查询配额(不阻塞模板加载)
+  loadStoreQuota();
 });
 
 // 监听表单变化自动持久化(除 name 外)
@@ -152,11 +187,45 @@ const filterSummary = computed(() => {
   return parts.length ? parts.join(' / ') : '无(全部采集箱商品)';
 });
 
-// 总选取数预览 = 每家店铺数量 × 已选目标店铺数
+// 总选取数预览 = 每家店铺数量 × 已选目标店铺数(理论最大值,实际受配额限制)
 const totalRequestedPreview = computed(() => {
   const M = Number(form.perStoreCount) || 0;
   return M * form.storeIds.length;
 });
+
+// 配额状态文案映射
+const QUOTA_STATUS_LABEL = {
+  ok: { cls: 'tag-ok', label: '充足' },
+  warn: { cls: 'tag-warn', label: '部分截断' },
+  exhausted: { cls: 'tag-fail', label: '配额已满' },
+  error: { cls: 'tag-warn', label: '查询失败' },
+};
+
+// 配额汇总:实际总分配数 + 被截断店铺数
+const quotaSummary = computed(() => {
+  const qi = preview.value?.quotaInfo;
+  if (!Array.isArray(qi) || qi.length === 0) return null;
+  const totalGranted = qi.reduce((s, q) => s + (q.granted || 0), 0);
+  const totalRequested = qi.reduce((s, q) => s + (q.requested || 0), 0);
+  const truncatedCount = qi.filter((q) => q.truncated).length;
+  const exhaustedCount = qi.filter((q) => q.status === 'exhausted').length;
+  const errorCount = qi.filter((q) => q.status === 'error').length;
+  return { totalGranted, totalRequested, truncatedCount, exhaustedCount, errorCount };
+});
+
+// 配额耗尽时禁用"确认创建"
+const quotaAllExhausted = computed(() => {
+  const qi = preview.value?.quotaInfo;
+  if (!Array.isArray(qi) || qi.length === 0) return false;
+  return qi.every((q) => q.granted === 0);
+});
+
+// 格式化剩余数(Number.MAX_SAFE_INTEGER 显示为"无限制")
+function fmtRemain(n) {
+  if (n == null) return '—';
+  if (n >= Number.MAX_SAFE_INTEGER) return '无限制';
+  return String(n);
+}
 
 // ── 自动选取 + 预览分配 ───────────────────────────────────
 async function doPreview() {
@@ -205,9 +274,18 @@ async function doPreview() {
       preview.value.assignments = preview.value.assignments.map((a) => ({ ...a }));
     }
     const pi = preview.value?.pickInfo || {};
-    if (pi.insufficient) {
+    const qs = quotaSummary.value;
+    // 配额相关提示优先
+    if (pi.insufficientReason === 'QUOTA_EXHAUSTED') {
+      show(`所有店铺配额已耗尽,无法上架。请等待配额重置或清理归档商品`, 'error');
+    } else if (qs && qs.truncatedCount > 0) {
       show(
-        `候选不足:符合 ${pi.eligibleCount} 件,实际选取 ${pi.actualPicked}/${pi.requestedCount} 件(每家店铺约 ${Math.floor(pi.actualPicked / pi.storeCount)} 件)`,
+        `选取完成:${pi.actualPicked} 件(配额截断 ${qs.truncatedCount} 家店铺,请求 ${qs.totalRequested} 实际分配 ${qs.totalGranted}),跳过 ${pi.skippedCount} 件`,
+        'warn'
+      );
+    } else if (pi.insufficient) {
+      show(
+        `候选不足:符合 ${pi.eligibleCount} 件,实际选取 ${pi.actualPicked}/${pi.requestedCount} 件`,
         'warn'
       );
     } else {
@@ -345,13 +423,24 @@ function close() {
             </div>
           </div>
           <div class="muted small" style="margin-top: 6px">
-            算法:总选取数 N = M × 目标店铺数。按来源卖家(sellerId)均衡选取 N 个(每家来源卖家取 floor(N/卖家数),差额均摊),
-            再 round-robin 分配到目标店铺(同源 SKU 散到不同店铺,保证每家店铺内来源尽量分散)
+            算法:总选取数 N = Σ 各店铺 min(M, 剩余配额)。实时查询每店铺的总数剩余(扣减归档)和日建剩余,
+            按有效剩余截断分配数。再按来源卖家(sellerId)均衡选取 N 个,round-robin 分配到目标店铺(同源 SKU 散到不同店铺)
           </div>
         </div>
 
         <div class="apbd-section">
-          <div class="apbd-section-title">店铺多选(目标上架店铺)</div>
+          <div class="apbd-section-title">
+            店铺多选(目标上架店铺)
+            <button
+              v-if="storesStore.loaded && storesStore.list.length"
+              class="apbd-quota-refresh-btn"
+              :disabled="quotaLoading"
+              @click="loadStoreQuota"
+              :title="quotaLoading ? '刷新中…' : '刷新配额'"
+            >
+              {{ quotaLoading ? '配额查询中…' : '刷新配额' }}
+            </button>
+          </div>
           <div v-if="!storesStore.loaded" class="muted small">加载中…</div>
           <div v-else-if="!storesStore.list.length" class="muted small">暂无店铺,请先在店铺管理中配置</div>
           <div v-else class="apbd-store-grid">
@@ -367,6 +456,12 @@ function close() {
                 @change="toggleStore(s.id)"
               />
               <span>{{ s.name }}</span>
+              <span
+                v-if="storeQuotaTag(s.id)"
+                class="apbd-quota-tag"
+                :class="storeQuotaTag(s.id).cls"
+                :title="storeQuotaTag(s.id).title"
+              >{{ storeQuotaTag(s.id).label }}</span>
               <span class="apbd-store-id">{{ s.id }}</span>
             </label>
           </div>
@@ -425,7 +520,7 @@ function close() {
           </button>
           <button
             class="btn btn-primary"
-            :disabled="creating || !preview?.assignments?.length"
+            :disabled="creating || !preview?.assignments?.length || quotaAllExhausted"
             @click="doCreate"
           >
             {{ creating ? '创建中…' : '确认创建' }}
@@ -434,6 +529,61 @@ function close() {
 
         <!-- 预览结果 -->
         <template v-if="preview">
+          <!-- 配额信息 -->
+          <div v-if="preview.quotaInfo && preview.quotaInfo.length" class="apbd-section">
+            <div class="apbd-section-title">
+              配额信息(实时)
+              <span v-if="quotaSummary" class="tag" :class="quotaSummary.truncatedCount > 0 ? 'tag-warn' : 'tag-ok'">
+                请求 {{ quotaSummary.totalRequested }} / 实际分配 {{ quotaSummary.totalGranted }}
+                <template v-if="quotaSummary.truncatedCount > 0">
+                  ({{ quotaSummary.truncatedCount }} 家截断)
+                </template>
+              </span>
+            </div>
+            <div class="apbd-quota-grid">
+              <div
+                v-for="q in preview.quotaInfo"
+                :key="q.storeId"
+                class="apbd-quota-card"
+                :class="'quota-' + q.status"
+              >
+                <div class="apbd-quota-head">
+                  <span class="apbd-quota-store">{{ q.storeName }}</span>
+                  <span class="tag" :class="(QUOTA_STATUS_LABEL[q.status] || {}).cls">
+                    {{ (QUOTA_STATUS_LABEL[q.status] || {}).label || q.status }}
+                  </span>
+                </div>
+                <div class="apbd-quota-row">
+                  <span>请求 / 实际</span>
+                  <span>
+                    <b>{{ q.requested }}</b> / <b>{{ q.granted }}</b>
+                  </span>
+                </div>
+                <div class="apbd-quota-row">
+                  <span>总数剩余 / 上限</span>
+                  <span>
+                    <b>{{ fmtRemain(q.totalRemaining) }}</b> / {{ fmtRemain(q.totalLimit) }}
+                    <span v-if="q.archived != null" class="muted small">(归档 {{ q.archived }})</span>
+                  </span>
+                </div>
+                <div class="apbd-quota-row">
+                  <span>日建剩余 / 上限</span>
+                  <span>
+                    <b>{{ fmtRemain(q.dailyRemaining) }}</b> / {{ fmtRemain(q.dailyLimit) }}
+                  </span>
+                </div>
+                <div v-if="q.error" class="apbd-quota-error">{{ q.error }}</div>
+              </div>
+            </div>
+            <div v-if="quotaSummary && quotaSummary.truncatedCount > 0" class="apbd-warn">
+              有 {{ quotaSummary.truncatedCount }} 家店铺因配额不足被截断,实际分配数小于请求数。
+              <template v-if="quotaSummary.exhaustedCount > 0">
+                其中 {{ quotaSummary.exhaustedCount }} 家配额已满,本次不分配。
+              </template>
+              可等待日建配额重置或清理归档商品后再上架。
+            </div>
+          </div>
+
           <!-- 选取摘要 -->
           <div class="apbd-section" v-if="preview.pickInfo">
             <div class="apbd-section-title">
@@ -688,6 +838,50 @@ function close() {
   color: var(--muted, #6b7280);
   font-family: ui-monospace, Menlo, monospace;
 }
+.apbd-quota-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.apbd-quota-tag.quota-tag-ok {
+  color: #059669;
+  background: rgba(5, 150, 105, 0.12);
+}
+.apbd-quota-tag.quota-tag-warn {
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.14);
+}
+.apbd-quota-tag.quota-tag-exhausted {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.14);
+}
+.apbd-quota-tag.quota-tag-err {
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.14);
+}
+.apbd-quota-refresh-btn {
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--border, #e4e8ee);
+  border-radius: 4px;
+  background: #fff;
+  font-size: 12px;
+  color: var(--muted, #6b7280);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.apbd-quota-refresh-btn:hover:not(:disabled) {
+  border-color: var(--primary, #2563eb);
+  color: var(--primary, #2563eb);
+}
+.apbd-quota-refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .apbd-form-row {
   display: flex;
   gap: 12px;
@@ -808,5 +1002,68 @@ function close() {
 .apbd-store-select:focus {
   outline: none;
   border-color: var(--primary, #2563eb);
+}
+
+/* ── 配额信息卡片 ── */
+.apbd-quota-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+.apbd-quota-card {
+  border: 1px solid var(--border, #e4e8ee);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.apbd-quota-card.quota-ok {
+  border-left: 3px solid #10b981;
+}
+.apbd-quota-card.quota-warn {
+  border-left: 3px solid #f59e0b;
+  background: #fffbeb;
+}
+.apbd-quota-card.quota-exhausted {
+  border-left: 3px solid #ef4444;
+  background: #fef2f2;
+}
+.apbd-quota-card.quota-error {
+  border-left: 3px solid #f59e0b;
+  background: #fffbeb;
+}
+.apbd-quota-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--border, #e4e8ee);
+}
+.apbd-quota-store {
+  font-weight: 600;
+  font-size: 13px;
+}
+.apbd-quota-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+.apbd-quota-row > span:first-child {
+  color: var(--muted, #6b7280);
+}
+.apbd-quota-row b {
+  font-weight: 600;
+  color: var(--text, #1f2937);
+}
+.apbd-quota-error {
+  color: #ef4444;
+  font-size: 11px;
+  word-break: break-all;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border, #e4e8ee);
 }
 </style>
