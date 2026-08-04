@@ -97,6 +97,9 @@ app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-ozon-store-id, x-o3-app-name');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  // 暴露 X-Refreshed-Token 给前端:否则 CORS 下 res.headers.get('X-Refreshed-Token') 永远返回 null,
+  // 滑动续期失效,token 7 天后必过期。
+  res.setHeader('Access-Control-Expose-Headers', 'X-Refreshed-Token');
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
   }
