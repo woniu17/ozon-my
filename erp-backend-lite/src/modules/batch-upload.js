@@ -298,8 +298,17 @@ router.post('/admin/api/batch-upload/auto-pick', async (req, res, next) => {
       priceMin: Number(filters.priceMin),
       priceMax: Number(filters.priceMax),
       minCacheHits: Math.max(0, Math.min(3, Number(filters.minCacheHits) || 0)),
+      maxCacheHits: Number.isFinite(Number(filters.maxCacheHits))
+        ? Math.max(0, Math.min(3, Number(filters.maxCacheHits)))
+        : undefined,
       excludeFilteredCategories:
         filters.excludeFilteredCategories === '1' || filters.excludeFilteredCategories === 'true',
+      // 超轻小件筛选:'1'=只看超轻小件,'0'=只看非超轻小件,空=不限
+      ultraLight: String(filters.ultraLight || '').trim(),
+      // 描述质量过滤(0=空/1=占位/2=按钮污染/3=正常),支持单值或多值"1,2"
+      descriptionQuality: /^[0-9]+(,[0-9]+)*$/.test(String(filters.descriptionQuality || '').trim())
+        ? String(filters.descriptionQuality).trim()
+        : '',
     };
 
     // 拉取所有候选 SKU(按筛选条件,已按 last_fetched_at DESC 排序)

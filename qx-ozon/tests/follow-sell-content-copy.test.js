@@ -10,6 +10,7 @@ const {
   pickBestVisibleDescriptionText,
   mergeSourceDescriptionIntoVariant,
   shouldForceCollectRefresh,
+  isPlaceholderDescriptionText,
 } = require('../lib/follow-sell-content-copy.js');
 
 const sourceVariant = {
@@ -219,5 +220,43 @@ assert.deepStrictEqual(svEmptyTagged.attributes, [{ key: '23171', value: '#new' 
 const svIdOnlyTagged = { attributes: [{ id: 23171, value: '#kept' }] };
 mergeSourceHashtagsIntoVariant(svIdOnlyTagged, ['#new']);
 assert.deepStrictEqual(svIdOnlyTagged.attributes, [{ id: 23171, value: '#kept', key: '23171' }]);
+
+// ── 「加载失败」占位/展开按钮文案不当描述(实测 cfe3a0d0 把它上架成了新品简介)──
+const loadFailPlaceholder = 'Не удалось загрузить статью. Читать далее Показать полностью';
+
+// 占位识别:占位 → true;真描述(哪怕末尾粘按钮文案)→ false;空值 → false(交上层 falsy)。
+assert.strictEqual(isPlaceholderDescriptionText(loadFailPlaceholder), true);
+assert.strictEqual(isPlaceholderDescriptionText('Читать далее Показать полностью'), true);
+assert.strictEqual(isPlaceholderDescriptionText('Обычное описание товара. Читать далее'), false);
+assert.strictEqual(isPlaceholderDescriptionText(''), false);
+assert.strictEqual(isPlaceholderDescriptionText(null), false);
+
+// extractDescriptionText:整段占位 → 空;真描述末尾的按钮文案被剥掉、正文保留。
+assert.strictEqual(extractDescriptionText(loadFailPlaceholder), '');
+assert.strictEqual(
+  extractDescriptionText('Крючок самоклеящийся для ванной. Читать далее Показать полностью'),
+  'Крючок самоклеящийся для ванной.'
+);
+
+// pickFollowSellDescription:源 4191 是占位 → 退标题,而非把报错文案当简介。
+assert.strictEqual(
+  pickFollowSellDescription({
+    customDescription: '',
+    sourceVariant: { attributes: [{ key: '4191', value: loadFailPlaceholder }] },
+    fallbackName: 'Product title',
+    max: 4096,
+  }),
+  'Product title'
+);
+
+// mergeSourceDescriptionIntoVariant:占位不写 4191(extract 返空后 rawDescription 兜底也被拦)。
+{
+  const svPlaceholder = { attributes: [] };
+  mergeSourceDescriptionIntoVariant(svPlaceholder, loadFailPlaceholder);
+  assert.strictEqual(
+    svPlaceholder.attributes.some((a) => String(a.key) === '4191'),
+    false
+  );
+}
 
 console.log('follow-sell content copy test passed');

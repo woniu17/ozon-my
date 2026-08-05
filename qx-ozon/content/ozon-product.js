@@ -681,29 +681,13 @@
     }
 
     // ─── 中国店铺检测 + autoCollect 接入(Task 17)─────────────────
-    // 从 _product.seller.link 提取 sellerSlug(/seller/<slug>/ 或绝对 URL 均可)
+    // 2026-08:店铺分类改用 sellerId(稳定主键),不再用 slug。
+    // 此处不发起 checkStoreClassification(sellerId 需从 __NUXT__/data-state 解析,
+    // 由 seller-info-main.js 完成),完全由下方 handlePdpSellerInfo 接管。
+    // sellerSlug 仅作为审计字段保留在 _product 中,不参与分类逻辑。
     const sellerSlug = _product?.seller?.link?.match(/\/seller\/([^/]+)/)?.[1] || '';
-
-    if (sellerSlug && window.sendMessage) {
-      // 调 SW checkStoreClassification(仅 slug+name;companyInfo 由 jz-seller-info
-      // 事件监听器带 country 再调一次,SW 内部会按 slug 升级缓存)
-      window
-        .sendMessage('checkStoreClassification', {
-          slug: sellerSlug,
-          name: _product?.seller?.name,
-        })
-        .then((result) => {
-          // 更新 QX面板店铺检测区块状态(面板由 Task 21 创建,未渲染时跳过)
-          if (window.__qxCollectorPanel) {
-            window.__qxCollectorPanel.updateStoreDetection({
-              slug: sellerSlug,
-              name: _product?.seller?.name,
-              isMainlandChina: result?.isMainlandChina,
-              classifiedBy: result?.classifiedBy,
-            });
-          }
-        })
-        .catch(() => { });
+    if (sellerSlug) {
+      _product.sellerSlug = sellerSlug; // 审计字段,后续 _erpStoreSkuReport 仍可携带
     }
 
     // 新队列架构下,自动采集仅在店铺页发起;详情页不再提交采集任务,
@@ -11052,8 +11036,8 @@
   // ─── 监听 MAIN world 的 seller-info-main.js 发来的店铺信息(详情页)─────
   // seller-info-main.js 从 div[id^="state-webCurrentSeller-"] 的 data-state
   // 提取 slug/name + companyInfo(含 country),通过 CustomEvent 推过来。
-  // 这里带 companyInfo 调 SW checkStoreClassification(规则引擎可用 country 判定,
-  // 比 extractProductData 内仅用 slug+name 调的一次更完整,SW 内部按 slug 升级缓存)。
+  // 这里带 companyInfo 调 SW checkStoreClassification(规则引擎可用 country 判定)。
+  // 2026-08:改用 sellerId 作为店铺主键(稳定),slug 不再参与分类。
   //
   // MV3 跨 world 通信:seller-info-main.js 在 MAIN world 执行,dispatchEvent 不会跨到
   // ISOLATED world。MAIN world 同时写 documentElement data-jz-seller-info 属性(DOM 属性
@@ -11067,19 +11051,18 @@
   async function handlePdpSellerInfo(detail) {
     if (!detail || detail.pageType !== 'pdp') return;
     const { slug, name, companyInfo } = detail;
-    if (!slug) return;
+    const sellerId = String(detail.sellerId || '');
+    if (!sellerId) return; // 无 sellerId 无法分类,等待 seller-info-main 解析成功
     try {
-      // 2026-07:传 sellerId(稳定主键),SW 端 checkStoreClassification 用其写 L2(主键 _id = sellerId)
       const result = await window.sendMessage('checkStoreClassification', {
-        slug,
+        sellerId,
         name,
         companyInfo,
-        sellerId: detail.sellerId || '',
       });
       const update = {
-        slug,
+        slug, // 审计字段保留(面板展示用),不参与分类
         name,
-        sellerId: detail.sellerId || '',
+        sellerId,
         pageType: detail.pageType || '',
         method: detail.method || '',
         companyInfo: detail.companyInfo || null,

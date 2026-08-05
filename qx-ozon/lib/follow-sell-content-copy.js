@@ -14,6 +14,27 @@
       .replace(/<[^>]*>/g, ' ');
   }
 
+  // ── Ozon「加载失败」占位 / 展开按钮文案过滤 ────────────────────────────
+  // 实测坑(任务 cfe3a0d0):源页描述区没渲染出来时,页面/page-json 抽到的是
+  // 「Не удалось загрузить статью. Читать далее Показать полностью」(加载失败占位 +
+  // 两个展开按钮文案),被当"真描述"写进 4191 → 原样上架成了新品简介。
+  // 统一口径:按钮文案剥掉(真描述末尾偶尔会粘到),剥完为空、或开头是「加载失败」类
+  // 提示 → 判占位,当空处理(上层自然退下一候选/标题)。
+  const DESCRIPTION_UI_CHROME_RE = /(читать далее|показать полностью|свернуть описание|развернуть описание)/gi;
+  const DESCRIPTION_LOAD_FAIL_RE = /(не удалось загрузить|ошибка загрузки|попробуйте (обновить|позже)|failed to load)/i;
+
+  function stripDescriptionUiChrome(value) {
+    return safeText(String(value == null ? '' : value).replace(DESCRIPTION_UI_CHROME_RE, ' '));
+  }
+
+  function isPlaceholderDescriptionText(value) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return false; // 本来就空 → 交给上层 falsy 处理,不算"占位"
+    const cleaned = stripDescriptionUiChrome(raw);
+    if (!cleaned) return true; // 剥掉按钮文案后什么都不剩 → 纯 UI 噪声
+    return DESCRIPTION_LOAD_FAIL_RE.test(cleaned.slice(0, 120));
+  }
+
   function extractRichContentText(value, max) {
     const maxChars = max || 2000;
     let doc = value;
@@ -101,8 +122,7 @@
     return deduped.join(' ').slice(0, maxChars).trim();
   }
 
-  function extractDescriptionText(value, max) {
-    const maxChars = max || 4096;
+  function extractDescriptionTextInner(value, maxChars) {
     if (value == null) return '';
     if (typeof value === 'string') {
       const richText = extractRichContentText(value, maxChars);
@@ -132,6 +152,17 @@
     }
 
     return extractRichContentText(value, maxChars);
+  }
+
+  function extractDescriptionText(value, max) {
+    const maxChars = max || 4096;
+    const text = extractDescriptionTextInner(value, maxChars);
+    if (!text) return '';
+    // 占位/按钮文案清洗:SW page-json 与内容脚本抽 state 都走本函数 —— 单一收口。
+    // 「Читать далее/Показать полностью」剥掉;整段是「Не удалось загрузить…」→ 当空。
+    const cleaned = stripDescriptionUiChrome(text);
+    if (!cleaned || isPlaceholderDescriptionText(cleaned)) return '';
+    return cleaned.length > maxChars ? cleaned.slice(0, maxChars) : cleaned;
   }
 
   function visibleTextToLines(value) {
@@ -311,7 +342,9 @@
 
   function mergeSourceDescriptionIntoVariant(sourceVariant, rawDescription) {
     const text = safeText(extractDescriptionText(rawDescription, 4096) || rawDescription, 4096);
-    if (!text) return sourceVariant;
+    // extractDescriptionText 判占位返空后,`|| rawDescription` 兜底会把原始占位文案重新放进来
+    // —— 这里再拦一道,加载失败占位绝不写进 4191。
+    if (!text || isPlaceholderDescriptionText(text)) return sourceVariant;
     const target = sourceVariant && typeof sourceVariant === 'object' ? sourceVariant : {};
     const attrs = Array.isArray(target.attributes) ? target.attributes : [];
     const existing = attrs.find((attr) => String(attr?.key ?? attr?.id) === '4191');
@@ -379,6 +412,8 @@
   const api = {
     safeText,
     extractDescriptionText,
+    stripDescriptionUiChrome,
+    isPlaceholderDescriptionText,
     extractVisibleDescriptionText,
     pickBestVisibleDescriptionText,
     extractRichContentText,

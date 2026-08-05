@@ -172,6 +172,13 @@ function toggleStore(id) {
 }
 
 // ── 当前筛选条件摘要(展示用) ───────────────────────────────
+const DESC_QUALITY_LABEL = {
+  '0': '描述为空',
+  '1': '含占位符',
+  '2': '按钮污染',
+  '3': '描述有效',
+  '1,2': '需清洗',
+};
 const filterSummary = computed(() => {
   const f = props.filters || {};
   const parts = [];
@@ -182,6 +189,9 @@ const filterSummary = computed(() => {
   if (f.unlisted) parts.push('未跟卖');
   if (f.fullData) parts.push('数据完整');
   if (f.excludeFilteredCategories) parts.push('排除类型过滤');
+  if (f.descriptionQuality && DESC_QUALITY_LABEL[f.descriptionQuality]) {
+    parts.push(`描述:${DESC_QUALITY_LABEL[f.descriptionQuality]}`);
+  }
   if (f.priceMin !== '' && f.priceMin != null) parts.push(`最低价 ${f.priceMin}`);
   if (f.priceMax !== '' && f.priceMax != null) parts.push(`最高价 ${f.priceMax}`);
   return parts.length ? parts.join(' / ') : '无(全部采集箱商品)';
@@ -252,7 +262,9 @@ async function doPreview() {
       excludeFilteredCategories: f.excludeFilteredCategories ? '1' : '',
       priceMin: f.priceMin !== '' && f.priceMin != null ? String(f.priceMin) : '',
       priceMax: f.priceMax !== '' && f.priceMax != null ? String(f.priceMax) : '',
-      minCacheHits: f.fullData ? '3' : '',
+      minCacheHits: f.cacheCompleteness === 'full' ? '3' : '',
+      maxCacheHits: f.cacheCompleteness === 'partial' ? '2' : '',
+      descriptionQuality: f.descriptionQuality || '',
     };
     const payload = {
       filters,

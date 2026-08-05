@@ -123,9 +123,18 @@
    * - 4194 主图 / 4195 图册
    * - 4497 重量(g) / 9454 深 / 9455 宽 / 9456 高 (mm)
    * - 7822 GTIN（写入 item.barcode 顶层字段，影响内容评分）
+   *
+   * 4191 描述经 extractDescriptionText 清洗 —— 防御 seller-portal 异常返回「Не удалось
+   * загрузить статью…」类占位文案(MY 任务 cfe3a0d0 实测坑,见 lib/follow-sell-content-copy.js)。
+   * searchVariants 通常不返占位,但 seller-portal 抖动时仍可能返异常串,防御性清洗零成本。
    */
   function distillSource(sv) {
     if (!sv) return null;
+    const helper =
+      (root && root.JZFollowSellContentCopy) ||
+      (typeof window !== 'undefined' && window.JZFollowSellContentCopy) ||
+      null;
+    const rawDesc = readSourceText(sv, '4191');
     return {
       _sourceVariant: sv,
       _pageProduct: null,
@@ -133,7 +142,7 @@
       // 顶层透出(与原始 sv 同 key),让批量 buildV3Item 能直接带上,跟卖原 SKU 视频。
       _bundleComplexAttrs: sv._bundleComplexAttrs || undefined,
       name: readSourceText(sv, '4180'),
-      description: readSourceText(sv, '4191'),
+      description: helper?.extractDescriptionText ? helper.extractDescriptionText(rawDesc, 4096) : rawDesc,
       richContent: readSourceText(sv, '11254'),
       images: readSourceImages(sv),
       breadcrumbs: [], // sv 单源下不需要,backend 严格模式不走面包屑
@@ -387,7 +396,15 @@
     const injectSourceText = (distilled, description, hashtags, endpoint) => {
       if (!distilled) return;
       const sv = distilled._sourceVariant;
-      const desc = typeof description === 'string' ? description.trim() : '';
+      // 描述占位判定:page-json 抽到的 webDescription 在源页描述区没渲染时会是
+      // 「Не удалось загрузить статью. Читать далее Показать полностью」(MY cfe3a0d0 实测坑)。
+      // mergeSourceDescriptionIntoVariant 内部已二次拦截保护 sv 4191,但 distilled.description
+      // 是独立字段(v2 通道带到 admin 全源展示页),这里先拦一道,避免占位污染 distilled.description。
+      const rawDesc = typeof description === 'string' ? description.trim() : '';
+      const desc =
+        rawDesc && (!contentCopy?.isPlaceholderDescriptionText || !contentCopy.isPlaceholderDescriptionText(rawDesc))
+          ? rawDesc
+          : '';
       if (desc) {
         if (!distilled.description) distilled.description = desc;
         if (sv && typeof sv === 'object' && contentCopy?.mergeSourceDescriptionIntoVariant) {

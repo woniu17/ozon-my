@@ -1023,15 +1023,15 @@ try {
 
   // ── 店铺中国身份分类 + ERP CRUD + 人工确认(已迁移到 collect/background/collect-runner.js) ──
   // 委托包装器:IIFE 内 _doAutoCollect 和 onMessage handler 通过 _xxx 调用,实际委托到 __jzCollect.xxx。
-  const classifyStoreByRules = (slug, name, companyInfo, config) =>
-    __jzCollect.classifyStoreByRules(slug, name, companyInfo, config);
-  const _erpStoreClassGet = (slug, sellerId) => __jzCollect._erpStoreClassGet(slug, sellerId);
-  const _erpStoreClassSet = (slug, record, sellerId) => __jzCollect._erpStoreClassSet(slug, record, sellerId);
+  const classifyStoreByRules = (sellerId, name, companyInfo, config) =>
+    __jzCollect.classifyStoreByRules(sellerId, name, companyInfo, config);
+  const _erpStoreClassGet = (sellerId) => __jzCollect._erpStoreClassGet(sellerId);
+  const _erpStoreClassSet = (sellerId, record) => __jzCollect._erpStoreClassSet(sellerId, record);
   const _erpStoreSkuReport = (payload) => __jzCollect._erpStoreSkuReport(payload);
-  const checkStoreClassification = (slug, name, companyInfo, sellerId) =>
-    __jzCollect.checkStoreClassification(slug, name, companyInfo, sellerId);
-  const manualClassifyStore = (slug, name, isMainlandChina, sellerId) =>
-    __jzCollect.manualClassifyStore(slug, name, isMainlandChina, sellerId);
+  const checkStoreClassification = (sellerId, name, companyInfo) =>
+    __jzCollect.checkStoreClassification(sellerId, name, companyInfo);
+  const manualClassifyStore = (sellerId, name, isMainlandChina) =>
+    __jzCollect.manualClassifyStore(sellerId, name, isMainlandChina);
 
   // fetchSellerViaOzonTab 已迁移到 collect/background/collect-tab.js
   const fetchSellerViaOzonTab = (path, body, opts = {}, preferTabId = null) =>
@@ -1421,7 +1421,7 @@ try {
     try {
       const config = await _loadAutoCollectConfig();
       const depth = task.depth || config.depth || 'Full';
-      result = await _doAutoCollect(task.sku, task.source || 'shop-page', task.sellerSlug, depth, false, task.sellerId);
+      result = await _doAutoCollect(task.sku, task.source || 'shop-page', task.sellerSlug, depth, !!task.forceRefresh, task.sellerId);
       const duration = Date.now() - startTime;
       steps = _buildSteps(result?.results);
 
@@ -2214,6 +2214,22 @@ try {
     setTimeout(() => refreshExchangeRate(), 2_000);
     setTimeout(() => handleBrowserAgentAlarm(), 3_000);
     setTimeout(() => reloadSellerTabs(), 4_000);
+    // 2026-08:Step 2/3 迁移 — 旧 Slugs 字段反查 sellerId + 清理旧 L1 缓存
+    // 延迟 5s 等 detectBackendUrl 完成,失败不阻塞主流程
+    setTimeout(async () => {
+      try {
+        const mig = await __jzCollect.migrateSlugsToSellerIds();
+        console.log('[SW onInstalled] Slugs→SellerIds 迁移结果:', mig);
+      } catch (e) {
+        console.warn('[SW onInstalled] Slugs→SellerIds 迁移异常:', e?.message || e);
+      }
+      try {
+        const clean = await __jzCollect.cleanupLegacyStoreClassCache();
+        console.log('[SW onInstalled] L1 缓存清理结果:', clean);
+      } catch (e) {
+        console.warn('[SW onInstalled] L1 缓存清理异常:', e?.message || e);
+      }
+    }, 5_000);
   });
 
   chrome.runtime.onStartup.addListener(() => {
@@ -2228,6 +2244,21 @@ try {
     setTimeout(() => refreshExchangeRate(), 1_000);
     setTimeout(() => handleBrowserAgentAlarm(), 2_000);
     setTimeout(() => reloadSellerTabs(), 3_000);
+    // 2026-08:Step 2/3 迁移(onStartup 也执行,覆盖浏览器重启场景)
+    setTimeout(async () => {
+      try {
+        const mig = await __jzCollect.migrateSlugsToSellerIds();
+        console.log('[SW onStartup] Slugs→SellerIds 迁移结果:', mig);
+      } catch (e) {
+        console.warn('[SW onStartup] Slugs→SellerIds 迁移异常:', e?.message || e);
+      }
+      try {
+        const clean = await __jzCollect.cleanupLegacyStoreClassCache();
+        console.log('[SW onStartup] L1 缓存清理结果:', clean);
+      } catch (e) {
+        console.warn('[SW onStartup] L1 缓存清理异常:', e?.message || e);
+      }
+    }, 5_000);
   });
 
   // SW 冷启动(install/startup 之外的 import 时)也要 init,
@@ -3030,16 +3061,15 @@ try {
         case 'checkStoreClass':
         case 'checkStoreClassification': {
           // 三层查询店铺中国身份(L1 chrome.storage → L2 MongoDB → 规则引擎)。
-          // 入参: { slug, name, companyInfo?, sellerId? }
+          // 2026-08:改用 sellerId 作为店铺主键(稳定),slug 不再参与分类。
+          // 入参: { sellerId, name, companyInfo? }
           // 返回: { ok, data: { isMainlandChina, classifiedBy, sellerId } | null }
-          //   sellerId 用于调用方(如 API 直取启动前)获取稳定卖家主键
           try {
-            const slug = String(message.slug || '');
+            const sellerId = String(message.sellerId || '');
             const name = message.name || '';
             const companyInfo = message.companyInfo || null;
-            const sellerId = message.sellerId || '';
-            if (!slug) return { ok: true, data: null };
-            const data = await checkStoreClassification(slug, name, companyInfo, sellerId);
+            if (!sellerId) return { ok: true, data: null };
+            const data = await checkStoreClassification(sellerId, name, companyInfo);
             return { ok: true, data };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
@@ -3047,16 +3077,16 @@ try {
         }
         case 'classifyStore': {
           // 人工确认店铺分类:写 L1 + L2(classifiedBy:'manual')。
-          // 入参: { slug, name, isMainlandChina, sellerId? }  返回: { ok: true }
+          // 2026-08:改用 sellerId,slug 不再参与。
+          // 入参: { sellerId, name, isMainlandChina }  返回: { ok: true }
           try {
-            const slug = String(message.slug || '');
+            const sellerId = String(message.sellerId || '');
             const name = message.name || '';
             const isMainlandChina = message.isMainlandChina;
-            const sellerId = message.sellerId || '';
-            if (!slug || isMainlandChina === undefined || isMainlandChina === null) {
-              return { ok: false, error: 'missing slug or isMainlandChina' };
+            if (!sellerId || isMainlandChina === undefined || isMainlandChina === null) {
+              return { ok: false, error: 'missing sellerId or isMainlandChina' };
             }
-            const data = await manualClassifyStore(slug, name, isMainlandChina, sellerId);
+            const data = await manualClassifyStore(sellerId, name, isMainlandChina);
             return { ok: true, data };
           } catch (e) {
             return { ok: false, error: e?.message || String(e) };
@@ -3370,8 +3400,8 @@ try {
               consumeRateMinSec: _acCfg.consumeRateMinSec,
               consumeRateMaxSec: _acCfg.consumeRateMaxSec,
               onlyMainlandChinaStores: _acCfg.onlyMainlandChinaStores,
-              knownMainlandChinaSlugs: _acCfg.knownMainlandChinaSlugs,
-              knownNonMainlandChinaSlugs: _acCfg.knownNonMainlandChinaSlugs,
+              knownMainlandChinaSellerIds: _acCfg.knownMainlandChinaSellerIds,
+              knownNonMainlandChinaSellerIds: _acCfg.knownNonMainlandChinaSellerIds,
             },
           };
         }
@@ -3392,8 +3422,8 @@ try {
             'consumeRateMinSec',
             'consumeRateMaxSec',
             'onlyMainlandChinaStores',
-            'knownMainlandChinaSlugs',
-            'knownNonMainlandChinaSlugs',
+            'knownMainlandChinaSellerIds',
+            'knownNonMainlandChinaSellerIds',
           ];
           const _acFiltered = {};
           for (const _k of _acAllowed) {

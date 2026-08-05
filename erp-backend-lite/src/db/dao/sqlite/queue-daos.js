@@ -37,6 +37,7 @@ function reshapeTask(row) {
     duration: row.duration ?? null,
     steps: parseJsonCol(row, 'steps'),
     result: parseJsonCol(row, 'result'),
+    forceRefresh: row.forceRefresh === 1 || row.forceRefresh === true,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -375,7 +376,7 @@ export const collectQueueTasksDao = {
     const existed = !!db.prepare(`SELECT 1 FROM collect_queue_tasks WHERE sku = ?`).get(task.sku);
     const cols = [
       'sku', 'sellerSlug', 'sellerId', 'domInfo', 'status', 'attempts',
-      'lastError', 'startedAt', 'finishedAt', 'steps', 'createdAt', 'updatedAt',
+      'lastError', 'startedAt', 'finishedAt', 'steps', 'forceRefresh', 'createdAt', 'updatedAt',
     ];
     const vals = [
       task.sku,
@@ -388,6 +389,7 @@ export const collectQueueTasksDao = {
       task.startedAt ?? null,
       task.finishedAt ?? null,
       task.steps ? JSON.stringify(task.steps) : null,
+      task.forceRefresh ? 1 : 0,
       // createdAt:SW _handlePartialTask 传则刷新(失败排到队尾);首次入队用 now
       task.createdAt ?? now,
       now,

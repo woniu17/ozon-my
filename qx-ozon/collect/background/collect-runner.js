@@ -83,26 +83,27 @@
 
     // ── 店铺中国身份分类:规则引擎(纯函数) ─────────────────────────────────────
     // 规则覆盖 known 列表 + companyInfo.country,无匹配返回 null(等待人工确认)。
-    this.classifyStoreByRules = (slug, name, companyInfo, config) => {
+    // 2026-08:改用 sellerId 作为店铺主键,slug 不再参与分类(可变,不稳定)
+    this.classifyStoreByRules = (sellerId, name, companyInfo, config) => {
       if (!config) {
-        console.log('[store-class] classifyStoreByRules: no config, returning null', { slug });
+        console.log('[store-class] classifyStoreByRules: no config, returning null', { sellerId });
         return { isMainlandChina: null, by: null };
       }
       console.log('[store-class] classifyStoreByRules input:', {
-        slug,
+        sellerId,
         name,
         companyInfo,
-        knownMainlandChinaSlugs: config.knownMainlandChinaSlugs,
-        knownNonMainlandChinaSlugs: config.knownNonMainlandChinaSlugs,
+        knownMainlandChinaSellerIds: config.knownMainlandChinaSellerIds,
+        knownNonMainlandChinaSellerIds: config.knownNonMainlandChinaSellerIds,
       });
-      // Rule 1: knownMainlandChinaSlugs
-      if (Array.isArray(config.knownMainlandChinaSlugs) && config.knownMainlandChinaSlugs.includes(slug)) {
-        console.log('[store-class] Rule 1 hit: knownMainlandChinaSlugs → isMainlandChina=true');
+      // Rule 1: knownMainlandChinaSellerIds
+      if (Array.isArray(config.knownMainlandChinaSellerIds) && config.knownMainlandChinaSellerIds.includes(sellerId)) {
+        console.log('[store-class] Rule 1 hit: knownMainlandChinaSellerIds → isMainlandChina=true');
         return { isMainlandChina: true, by: 'rule:known-list' };
       }
-      // Rule 2: knownNonMainlandChinaSlugs
-      if (Array.isArray(config.knownNonMainlandChinaSlugs) && config.knownNonMainlandChinaSlugs.includes(slug)) {
-        console.log('[store-class] Rule 2 hit: knownNonMainlandChinaSlugs → isMainlandChina=false');
+      // Rule 2: knownNonMainlandChinaSellerIds
+      if (Array.isArray(config.knownNonMainlandChinaSellerIds) && config.knownNonMainlandChinaSellerIds.includes(sellerId)) {
+        console.log('[store-class] Rule 2 hit: knownNonMainlandChinaSellerIds → isMainlandChina=false');
         return { isMainlandChina: false, by: 'rule:known-list' };
       }
       // Rule 3: companyInfo.country === 'CN'
@@ -120,54 +121,46 @@
     };
 
     // ── ERP 店铺分类 CRUD(L2 MongoDB) ────────────────────────────────────────
-    // 2026-07:路径参数改用 sellerId(稳定主键),sellerSlug 作为 fallback
+    // 2026-08:彻底去 slug,只用 sellerId(稳定主键,_id = sellerId)
     // GET /admin/api/store-classification/:sellerId — 返回分类记录或 null
-    // 入参优先级:sellerId(主键) > slug(兼容 fallback)
-    this._erpStoreClassGet = async (slug, sellerId) => {
+    this._erpStoreClassGet = async (sellerId) => {
+      if (!sellerId) return null;
       try {
         const url = await sw.getBackendUrl();
         const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
-        // 优先用 sellerId 查(后端主键 _id = sellerId);无 sellerId 时用 slug(后端 fallback 到 slug 反查)
-        const id = sellerId || slug;
-        if (!id) return null;
         const r = await sw.apiRequest(
           'GET',
-          `${url}/admin/api/store-classification/${encodeURIComponent(id)}`,
+          `${url}/admin/api/store-classification/${encodeURIComponent(sellerId)}`,
           null,
           stored[sw.STORAGE_KEYS.token]
         );
         // ERP 返回 { ok: true, data: { isMainlandChina, classifiedBy, ... } },解包取 data
         return r?.data || null;
       } catch (e) {
-        console.warn(`[store-class] ERP get failed sellerId=${sellerId} slug=${slug}:`, e?.message || e);
+        console.warn(`[store-class] ERP get failed sellerId=${sellerId}:`, e?.message || e);
         return null;
       }
     };
 
     // POST /admin/api/store-classification/:sellerId(upsert)
-    // 2026-07:路径参数改用 sellerId(稳定主键);sellerId 为空时 fallback 到 slug
-    // record: { sellerSlug?, sellerName, isMainlandChina, classifiedBy, companyInfo, lastSeenAt }
-    this._erpStoreClassSet = async (slug, record, sellerId) => {
+    // record: { sellerName, isMainlandChina, classifiedBy, companyInfo, lastSeenAt }
+    this._erpStoreClassSet = async (sellerId, record) => {
+      if (!sellerId || !/^\d+$/.test(String(sellerId))) {
+        console.warn('[store-class] ERP set skipped: sellerId missing or non-numeric', { sellerId, recordSellerId: record?.sellerId });
+        return false;
+      }
       try {
         const url = await sw.getBackendUrl();
         const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
-        // sellerId 必须是纯数字才写入主表(后端 upsertBySellerId 会校验)。
-        // sellerId 为空或非数字(如 slug)时不写入 L2,避免产生 _id=slug 的脏数据。
-        // 仅写 L1(chrome.storage)已由调用方完成,L2 等后续拿到真实 sellerId 再写入。
-        const id = sellerId || record?.sellerId || '';
-        if (!id || !/^\d+$/.test(String(id))) {
-          console.warn('[store-class] ERP set skipped: sellerId missing or non-numeric (避免产生 _id=slug 脏数据)', { slug, sellerId, recordSellerId: record?.sellerId });
-          return false;
-        }
         await sw.apiRequest(
           'POST',
-          `${url}/admin/api/store-classification/${encodeURIComponent(id)}`,
+          `${url}/admin/api/store-classification/${encodeURIComponent(sellerId)}`,
           record,
           stored[sw.STORAGE_KEYS.token]
         );
         return true;
       } catch (e) {
-        console.warn(`[store-class] ERP set failed sellerId=${sellerId} slug=${slug}:`, e?.message || e);
+        console.warn(`[store-class] ERP set failed sellerId=${sellerId}:`, e?.message || e);
         return false;
       }
     };
@@ -192,56 +185,53 @@
     // 而缺失。此方法后台静默检查 L2 是否存在且有效,缺失则补写,补写失败则清 L1
     // 避免脏缓存(下次访问将重新走 L2 → 规则引擎)。
     // 不阻塞 checkStoreClassification 返回(店铺分类非关键路径)。
-    this._ensureL2Consistency = async (slug, name, companyInfo, sellerId, l1) => {
-      const l2 = await this._erpStoreClassGet(slug, sellerId);
+    this._ensureL2Consistency = async (sellerId, name, companyInfo, l1) => {
+      const l2 = await this._erpStoreClassGet(sellerId);
       console.log('[store-class] L2 consistency check, L2:', l2);
       if (l2 && l2.isMainlandChina !== null && l2.isMainlandChina !== undefined && l2.classifiedBy) {
         return; // L2 有效,无需补写
       }
       // L2 缺失或脏数据,补写
       const ok = await this._erpStoreClassSet(
-        slug,
+        sellerId,
         {
-          sellerSlug: slug,
-          sellerId: sellerId || '',
+          sellerId,
           sellerName: name,
           isMainlandChina: l1.isMainlandChina,
           classifiedBy: l1.classifiedBy,
           companyInfo: companyInfo || null,
           lastSeenAt: new Date().toISOString(),
-        },
-        sellerId
+        }
       );
       if (!ok) {
         // L2 补写失败,清 L1 避免下次还走脏缓存(下次会重新走 L2 → 规则引擎)
         try {
-          await sw.removeStorage([`jz-store-class-${slug}`]);
+          await sw.removeStorage([`jz-store-class-${sellerId}`]);
         } catch (_) {
           /* ignore */
         }
-        console.warn(`[store-class] L2 补写失败,L1 已清除 slug=${slug}(下次访问将重新分类)`);
+        console.warn(`[store-class] L2 补写失败,L1 已清除 sellerId=${sellerId}(下次访问将重新分类)`);
       } else {
-        console.log(`[store-class] L2 补写成功 slug=${slug}`);
+        console.log(`[store-class] L2 补写成功 sellerId=${sellerId}`);
       }
     };
 
     // ── 三层查询:L1 chrome.storage.local → L2 MongoDB → 规则引擎 ────────────────
     // 返回 { isMainlandChina, classifiedBy, sellerId } | null(未分类,等待人工确认)。
-    // sellerId 用于调用方(如 API 直取启动前)获取稳定卖家主键
-    // sellerId 用于写入 L2 时带上(稳定主键,slug 可变)
-    this.checkStoreClassification = async (slug, name, companyInfo, sellerId) => {
-      if (!slug) return null;
-      console.log('[store-class] checkStoreClassification called:', { slug, name, companyInfo, sellerId });
+    // 2026-08:彻底去 slug,只用 sellerId(稳定主键,slug 可变不再参与分类)
+    this.checkStoreClassification = async (sellerId, name, companyInfo) => {
+      if (!sellerId) return null;
+      console.log('[store-class] checkStoreClassification called:', { sellerId, name, companyInfo });
       const config = await sw.loadAutoCollectConfig();
       console.log('[store-class] config loaded:', {
-        knownMainlandChinaSlugs: config?.knownMainlandChinaSlugs,
-        knownNonMainlandChinaSlugs: config?.knownNonMainlandChinaSlugs,
+        knownMainlandChinaSellerIds: config?.knownMainlandChinaSellerIds,
+        knownNonMainlandChinaSellerIds: config?.knownNonMainlandChinaSellerIds,
       });
 
       // L1: chrome.storage.local
       // 注意:classifiedBy 为空字符串的记录视为无效(历史 bug:ERP 前端 updateStoreClass
       // 不传 classifiedBy 导致后端写空字符串),不信任 L1,继续查 L2 让规则引擎重新分类。
-      const l1Key = `jz-store-class-${slug}`;
+      const l1Key = `jz-store-class-${sellerId}`;
       try {
         const l1 = (await sw.getStorage([l1Key]))?.[l1Key];
         console.log('[store-class] L1 chrome.storage:', l1);
@@ -249,10 +239,10 @@
           console.log('[store-class] L1 hit →', { isMainlandChina: l1.isMainlandChina, classifiedBy: l1.classifiedBy });
           // 异步补查 L2 一致性:若 L2 缺失(历史写入失败)则补写,补写失败则清 L1。
           // 不阻塞返回(店铺分类非关键路径,L2 修复后台静默进行)
-          this._ensureL2Consistency(slug, name, companyInfo, sellerId, l1).catch((e) => {
-            console.warn(`[store-class] L2 consistency check failed slug=${slug}:`, e?.message || e);
+          this._ensureL2Consistency(sellerId, name, companyInfo, l1).catch((e) => {
+            console.warn(`[store-class] L2 consistency check failed sellerId=${sellerId}:`, e?.message || e);
           });
-          return { isMainlandChina: l1.isMainlandChina, classifiedBy: l1.classifiedBy, sellerId: l1.sellerId || '' };
+          return { isMainlandChina: l1.isMainlandChina, classifiedBy: l1.classifiedBy, sellerId };
         }
         // L1 无效或 classifiedBy 为空:清除旧记录,避免下次再被读到
         if (l1 && (!l1.classifiedBy || l1.isMainlandChina === null || l1.isMainlandChina === undefined)) {
@@ -260,25 +250,25 @@
           console.log('[store-class] L1 cleared (invalid classifiedBy):', l1);
         }
       } catch (e) {
-        console.warn(`[store-class] L1 get failed slug=${slug}:`, e?.message || e);
+        console.warn(`[store-class] L1 get failed sellerId=${sellerId}:`, e?.message || e);
       }
 
       // L2: MongoDB
       // 注意:与 L1 同样的校验 — classifiedBy 为空字符串的记录视为无效(历史 bug:
       // ERP 前端 updateStoreClass 不传 classifiedBy 导致后端写空字符串),不信任 L2,
       // 继续走规则引擎让 country=CN 等规则重新分类并覆盖脏记录。
-      const l2 = await this._erpStoreClassGet(slug, sellerId);
+      const l2 = await this._erpStoreClassGet(sellerId);
       console.log('[store-class] L2 MongoDB:', l2);
       if (l2 && l2.isMainlandChina !== null && l2.isMainlandChina !== undefined && l2.classifiedBy) {
         console.log('[store-class] L2 hit →', { isMainlandChina: l2.isMainlandChina, classifiedBy: l2.classifiedBy });
         try {
           await sw.setStorage({
-            [l1Key]: { isMainlandChina: l2.isMainlandChina, classifiedBy: l2.classifiedBy, sellerId: l2.sellerId || '' },
+            [l1Key]: { isMainlandChina: l2.isMainlandChina, classifiedBy: l2.classifiedBy, sellerId },
           });
         } catch (e) {
-          console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
+          console.warn(`[store-class] L1 set failed sellerId=${sellerId}:`, e?.message || e);
         }
-        return { isMainlandChina: l2.isMainlandChina, classifiedBy: l2.classifiedBy, sellerId: l2.sellerId || '' };
+        return { isMainlandChina: l2.isMainlandChina, classifiedBy: l2.classifiedBy, sellerId };
       }
       // L2 无效或 classifiedBy 为空:记录日志,后续规则引擎重新分类后会覆盖
       if (l2 && (!l2.classifiedBy || l2.isMainlandChina === null || l2.isMainlandChina === undefined)) {
@@ -286,12 +276,11 @@
       }
 
       // 规则引擎
-      const ruleResult = this.classifyStoreByRules(slug, name, companyInfo, config);
+      const ruleResult = this.classifyStoreByRules(sellerId, name, companyInfo, config);
       console.log('[store-class] rule engine result:', ruleResult);
       if (ruleResult.isMainlandChina !== null) {
         const record = {
-          sellerSlug: slug,
-          sellerId: sellerId || '',
+          sellerId,
           sellerName: name,
           isMainlandChina: ruleResult.isMainlandChina,
           classifiedBy: ruleResult.by,
@@ -300,15 +289,15 @@
         };
         try {
           await sw.setStorage({
-            [l1Key]: { isMainlandChina: ruleResult.isMainlandChina, classifiedBy: ruleResult.by, sellerId: sellerId || '' },
+            [l1Key]: { isMainlandChina: ruleResult.isMainlandChina, classifiedBy: ruleResult.by, sellerId },
           });
         } catch (e) {
-          console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
+          console.warn(`[store-class] L1 set failed sellerId=${sellerId}:`, e?.message || e);
         }
         // await L2 写入:失败时清 L1,避免下次 L1 命中但 L2 缺失的脏缓存
-        const l2Ok = await this._erpStoreClassSet(slug, record, sellerId);
+        const l2Ok = await this._erpStoreClassSet(sellerId, record);
         if (!l2Ok) {
-          console.warn(`[store-class] L2 write failed, clearing L1 for slug=${slug}`);
+          console.warn(`[store-class] L2 write failed, clearing L1 for sellerId=${sellerId}`);
           try {
             await sw.removeStorage([l1Key]);
           } catch (_) {
@@ -317,45 +306,43 @@
         } else {
           console.log('[store-class] rule result persisted to L1+L2:', record);
         }
-        return { isMainlandChina: ruleResult.isMainlandChina, classifiedBy: ruleResult.by, sellerId: sellerId || '' };
+        return { isMainlandChina: ruleResult.isMainlandChina, classifiedBy: ruleResult.by, sellerId };
       }
 
       // 未分类:写 L2 记录(isMainlandChina=null,等待人工确认)
       console.log('[store-class] unclassified, writing null record to L2 (waiting manual confirm)');
-      await this._erpStoreClassSet(slug, {
-        sellerSlug: slug,
-        sellerId: sellerId || '',
+      await this._erpStoreClassSet(sellerId, {
+        sellerId,
         sellerName: name,
         isMainlandChina: null,
         classifiedBy: null,
         companyInfo: companyInfo || null,
         lastSeenAt: new Date().toISOString(),
-      }, sellerId);
+      });
       return null;
     };
 
     // ── 人工确认分类:写 L1 + L2(classifiedBy:'manual') ────────────────────────
-    // 入参 { slug, name, isMainlandChina, sellerId } → 返回 { ok: true }
-    this.manualClassifyStore = async (slug, name, isMainlandChina, sellerId) => {
-      if (!slug) return { ok: false, error: 'missing slug' };
+    // 入参 { sellerId, name, isMainlandChina } → 返回 { ok: true }
+    this.manualClassifyStore = async (sellerId, name, isMainlandChina) => {
+      if (!sellerId) return { ok: false, error: 'missing sellerId' };
       const classifiedBy = 'manual';
       const classifiedAt = new Date().toISOString();
-      const l1Key = `jz-store-class-${slug}`;
+      const l1Key = `jz-store-class-${sellerId}`;
       try {
-        await sw.setStorage({ [l1Key]: { isMainlandChina, classifiedBy, sellerId: sellerId || '' } });
+        await sw.setStorage({ [l1Key]: { isMainlandChina, classifiedBy, sellerId } });
       } catch (e) {
-        console.warn(`[store-class] L1 set failed slug=${slug}:`, e?.message || e);
+        console.warn(`[store-class] L1 set failed sellerId=${sellerId}:`, e?.message || e);
       }
-      await this._erpStoreClassSet(slug, {
-        sellerSlug: slug,
-        sellerId: sellerId || '',
+      await this._erpStoreClassSet(sellerId, {
+        sellerId,
         sellerName: name,
         isMainlandChina,
         classifiedBy,
         classifiedAt,
         companyInfo: null,
         lastSeenAt: classifiedAt,
-      }, sellerId);
+      });
       return { ok: true };
     };
 

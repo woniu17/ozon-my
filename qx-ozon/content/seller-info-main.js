@@ -299,23 +299,18 @@
     const slug = slugMatch ? slugMatch[1] : '';
     const name = _extractShopNameFromDOM(slug);
 
-    // 阶段 1:slug 立即 publish,让 ISOLATED 端先跑分类查询(collectGate 可提前 resolve)
-    // sellerId/companyInfo 后到再补发(seq 自增,接收端覆盖)
-    publishToIsolatedWorld({
-      pageType: 'shop',
-      slug,
-      name,
-      sellerId: '',
-      companyInfo: null,
-      method: 'slug-only',
-    });
+    // 2026-08:店铺分类改用 sellerId(稳定主键),slug 不再参与分类。
+    // 阶段 1 的 slug-only publish 已删除 — sellerId 缺失时 ISOLATED 端无法调
+    // checkStoreClassification(入参校验 if (!sellerId) return null)。
+    // 等 sellerId 到达后一次性 publish,延迟通常 ~100ms,最长 15s 超时。
 
     // 等 __NUXT__.state.pageInfo.analyticsInfo.sellerId(15s,每 100ms 检查)
     // 间隔从 500ms 缩短到 100ms,典型命中延迟从 ~500ms 降到 ~100ms
     const sellerIdRaw = await waitFor(() => window.__NUXT__?.state?.pageInfo?.analyticsInfo?.sellerId, 15000, 100);
     if (!sellerIdRaw) {
-      console.warn('[seller-info-main] ShopPage: __NUXT__ sellerId 等待超时,仅 slug 已发布');
-      // 超时时仍返回 slug(而非 null),让 ISOLATED 端至少能用 slug 做基础展示
+      console.warn('[seller-info-main] ShopPage: __NUXT__ sellerId 等待超时,店铺分类跳过');
+      // 超时:返回 slug + 空 sellerId,ISOLATED 端 handlePdpSellerInfo 会因 sellerId 空跳过分类
+      // 面板仍可展示 slug/name(基础信息),店铺检测状态保持"未检测"
       return {
         pageType: 'shop',
         slug,

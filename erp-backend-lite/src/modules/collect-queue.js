@@ -433,12 +433,15 @@ router.post('/admin/api/collect-queue', async (req, res, next) => {
       startedAt: body.startedAt ? new Date(body.startedAt) : null,
       finishedAt: body.finishedAt ? new Date(body.finishedAt) : null,
       steps: body.steps != null ? body.steps : null,
+      // forceRefresh:1=强制重新采集(SW _doAutoCollect 传 forceRefresh=true,忽略已有缓存)
+      forceRefresh: body.forceRefresh === true || body.forceRefresh === 1,
       // createdAt: 可选,SW _handlePartialTask 传则刷新(失败任务排到队尾重试)
       // 不传时 DAO 用 now(首次入队)
       ...(body.createdAt != null ? { createdAt: new Date(body.createdAt) } : {}),
     };
 
-    const skipIfTodaySuccess = body.skipIfTodaySuccess !== false;
+    // forceRefresh=true 时强制跳过 skipIfTodaySuccess 检查(否则 24h 内成功的入不了队,与"强制重采"语义矛盾)
+    const skipIfTodaySuccess = body.skipIfTodaySuccess !== false && !task.forceRefresh;
     const r = await daos.collectQueueTasksDao.submit(task, { skipIfTodaySuccess });
 
     return res.json(
@@ -451,6 +454,97 @@ router.post('/admin/api/collect-queue', async (req, res, next) => {
     );
   } catch (e) {
     logger.warn({ err: e.message, sku: body?.sku }, '[collect-queue] submit failed');
+    next(e);
+  }
+});
+
+// ── 按筛选批量入队(采集箱"深度采集"按钮调用) ────────────────────────
+
+// POST /admin/api/collect-queue/batch-submit-by-filter
+// 对当前筛选条件匹配的全部 SKU 批量入队深度采集任务
+// body: { filters: {...采集箱 filters 对象}, skipIfTodaySuccess?: bool, forceRefresh?: bool }
+//   filters 字段与 collect-box-v2/from-cache 路由的 query 参数一致(字符串型)
+//   skipIfTodaySuccess 默认 true;forceRefresh=true 时强制关闭 skipIfTodaySuccess(语义互斥)
+// 返回: { totalFound, enqueued, skipped, alreadyQueued }
+router.post('/admin/api/collect-queue/batch-submit-by-filter', async (req, res, next) => {
+  try {
+    const { filters = {}, skipIfTodaySuccess = true, forceRefresh = false } = req.body || {};
+
+    // 解析 filters → filterOpts(与 batch-upload.js auto-pick 路由一致)
+    const filterOpts = {
+      keyword: String(filters.keyword || '').trim(),
+      sellerId: String(filters.sellerId || '').trim(),
+      sellerSlug: String(filters.sellerSlug || '').trim(),
+      unlisted: filters.unlisted === '1' || filters.unlisted === 'true',
+      hasComments: filters.hasComments === '1' || filters.hasComments === 'true',
+      hasVideo: filters.hasVideo === '1' || filters.hasVideo === 'true',
+      hasRichContent: filters.hasRichContent === '1' || filters.hasRichContent === 'true',
+      priceMin: Number(filters.priceMin),
+      priceMax: Number(filters.priceMax),
+      minCacheHits: Math.max(0, Math.min(3, Number(filters.minCacheHits) || 0)),
+      maxCacheHits: Number.isFinite(Number(filters.maxCacheHits))
+        ? Math.max(0, Math.min(3, Number(filters.maxCacheHits)))
+        : undefined,
+      excludeFilteredCategories:
+        filters.excludeFilteredCategories === '1' || filters.excludeFilteredCategories === 'true',
+      // 超轻小件筛选:'1'=只看超轻小件,'0'=只看非超轻小件,空=不限
+      ultraLight: String(filters.ultraLight || '').trim(),
+      // 描述质量过滤(0=空/1=占位/2=按钮污染/3=正常),支持单值或多值"1,2"
+      descriptionQuality: /^[0-9]+(,[0-9]+)*$/.test(String(filters.descriptionQuality || '').trim())
+        ? String(filters.descriptionQuality).trim()
+        : '',
+    };
+
+    // 拉取全部匹配 SKU(无分页,复用 auto-pick 的 DAO)
+    const candidates = await daos.indexDao.findListForAutoPick(filterOpts);
+
+    // 批量入队(upsert 语义,已存在的 SKU 会更新 status=pending + forceRefresh)
+    // forceRefresh=true 时强制关闭 skipIfTodaySuccess(否则 24h 内成功的入不了队)
+    const effectiveSkip = skipIfTodaySuccess && !forceRefresh;
+    let enqueued = 0;
+    let skipped = 0;
+    let alreadyQueued = 0;
+    for (const c of candidates) {
+      // 组装 domInfo(与 content script 入队口径一致:{title, price, imageUrl, ratingCount})
+      // 使采集队列监控列表/详情能展示图片缩略图,避免批量入队任务无商品信息
+      const domInfo = {
+        title: c.name || '',
+        price: c.price ?? '',
+        imageUrl: c.primaryImage || '',
+        ratingCount: c.ratingCount ?? null,
+      };
+      const r = await daos.collectQueueTasksDao.submit(
+        {
+          sku: c.sku,
+          sellerId: c.sellerId,
+          sellerSlug: c.sellerSlug,
+          domInfo,
+          status: 'pending',
+          forceRefresh: !!forceRefresh,
+        },
+        { skipIfTodaySuccess: effectiveSkip }
+      );
+      if (r.created) enqueued++;
+      else if (r.skipped) skipped++;
+      else alreadyQueued++;
+    }
+
+    logger.info(
+      { totalFound: candidates.length, enqueued, skipped, alreadyQueued, forceRefresh },
+      '[collect-queue] batch-submit-by-filter done'
+    );
+
+    return res.json(
+      ok({
+        totalFound: candidates.length,
+        enqueued,
+        skipped,
+        alreadyQueued,
+        forceRefresh: !!forceRefresh,
+      })
+    );
+  } catch (e) {
+    logger.warn({ err: e.message }, '[collect-queue] batch-submit-by-filter failed');
     next(e);
   }
 });

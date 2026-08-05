@@ -13,6 +13,7 @@ import AppPager from '../components/AppPager.vue';
 import ImageLightbox from '../components/ImageLightbox.vue';
 import BatchUploadDialog from '../components/BatchUploadDialog.vue';
 import AutoPickBatchDialog from '../components/AutoPickBatchDialog.vue';
+import DeepCollectByFilterDialog from '../components/DeepCollectByFilterDialog.vue';
 
 const router = useRouter();
 const { show } = useToast();
@@ -26,6 +27,12 @@ const batchDialogVisible = ref(false);
 const autoPickDialogVisible = ref(false);
 function openAutoPickDialog() {
   autoPickDialogVisible.value = true;
+}
+
+// ── 按筛选条件批量发起深度采集 ───────────────────────────
+const deepCollectDialogVisible = ref(false);
+function openDeepCollectDialog() {
+  deepCollectDialogVisible.value = true;
 }
 
 function isSkuSelected(sku) {
@@ -206,6 +213,11 @@ function loadStoredFilters() {
       // 旧版用 sellerSlug,新版改用 sellerId,旧值清空避免误用
       delete parsed.sellerSlug;
     }
+    // 旧版用 fullData(boolean),新版改用 cacheCompleteness(三态),迁移旧值
+    if (parsed && typeof parsed === 'object' && 'fullData' in parsed && !('cacheCompleteness' in parsed)) {
+      parsed.cacheCompleteness = parsed.fullData ? 'full' : '';
+      delete parsed.fullData;
+    }
     return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;
@@ -222,7 +234,7 @@ const state = reactive({
   pageSize: 20,
   filters: {
     keyword: '',
-    fullData: false, // 数据完整:dom + attribute + richMedia 三类全命中(marketStats/followSell 不算)
+    cacheCompleteness: '', // 数据完整度:''=全部,'full'=数据完整(3类全命中),'partial'=数据不完整(至少缺一类)
     sellerId: '', // 2026-07:从 sellerSlug 改用 sellerId(稳定主键)
     unlisted: false,
     hasComments: false,
@@ -231,6 +243,7 @@ const state = reactive({
     ultraLight: '', // 超轻小件筛选:''=不限,'1'=超轻小件,'0'=非超轻小件
     priceMin: '', // 价格范围(闭区间,空字符串=不限)
     priceMax: '',
+    descriptionQuality: '', // 描述状态:''=全部,'0'=描述为空,'1'=含占位符,'2'=按钮污染,'3'=描述有效,'1,2'=需清洗
     // 用上次的筛选条件覆盖初值
     ...(storedFilters || {}),
   },
@@ -244,7 +257,8 @@ async function loadList() {
       pageSize: state.pageSize,
       keyword: state.filters.keyword.trim(),
     };
-    if (state.filters.fullData) params.minCacheHits = '3';
+    if (state.filters.cacheCompleteness === 'full') params.minCacheHits = '3';
+    if (state.filters.cacheCompleteness === 'partial') params.maxCacheHits = '2';
     if (state.filters.sellerId) params.sellerId = state.filters.sellerId;
     if (state.filters.unlisted) params.unlisted = '1';
     if (state.filters.hasComments) params.hasComments = '1';
@@ -253,6 +267,7 @@ async function loadList() {
     if (state.filters.ultraLight !== '') params.ultraLight = state.filters.ultraLight;
     if (state.filters.priceMin !== '') params.priceMin = state.filters.priceMin;
     if (state.filters.priceMax !== '') params.priceMax = state.filters.priceMax;
+    if (state.filters.descriptionQuality) params.descriptionQuality = state.filters.descriptionQuality;
     const data = await getCollectBoxV2FromCache(params);
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -373,6 +388,14 @@ onMounted(() => {
         >
           按筛选自动上架
         </button>
+        <button
+          class="btn btn-primary"
+          @click="openDeepCollectDialog"
+          :disabled="state.total === 0"
+          title="对当前筛选匹配的全部商品批量发起深度采集任务"
+        >
+          按筛选深度采集
+        </button>
         <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
           {{ state.loading ? '刷新中…' : '刷新' }}
         </button>
@@ -405,10 +428,29 @@ onMounted(() => {
         <input type="checkbox" v-model="state.filters.unlisted" />
         <span>未跟卖</span>
       </label>
-      <label class="filter-check" title="只显示 dom + attribute + richMedia 三类缓存全命中的 SKU(数据完整)">
-        <input type="checkbox" v-model="state.filters.fullData" />
-        <span>数据完整</span>
-      </label>
+      <select
+        class="filter-select"
+        v-model="state.filters.cacheCompleteness"
+        title="数据完整度:dom + attribute + richMedia 三类缓存命中情况"
+        @change="search"
+      >
+        <option value="">全部数据</option>
+        <option value="full">数据完整</option>
+        <option value="partial">数据不完整</option>
+      </select>
+      <select
+        class="filter-select"
+        v-model="state.filters.descriptionQuality"
+        title="描述状态:richMedia.description 的质量分级"
+        @change="search"
+      >
+        <option value="">全部描述</option>
+        <option value="0">描述为空</option>
+        <option value="1">含占位符</option>
+        <option value="2">按钮污染</option>
+        <option value="3">描述有效</option>
+        <option value="1,2">需清洗</option>
+      </select>
       <label class="filter-check" title="排除已在类目过滤黑名单中的 SKU(ozon_filtered_categories 表)">
         <input type="checkbox" v-model="state.filters.excludeFilteredCategories" />
         <span>排除类型过滤</span>
@@ -533,6 +575,24 @@ onMounted(() => {
               <span v-if="it.hasVideo" class="cb-extra-tag cb-tag-video" title="richMedia 含 mp4">视频</span>
               <span v-if="it.hasRichContent" class="cb-extra-tag cb-tag-rich" title="richMedia 含富内容(richContent 非空)">富内容</span>
               <span
+                v-if="it.descriptionQuality === 0"
+                class="cb-extra-tag cb-tag-warn"
+                title="richMedia.description 为空(未采集或无描述)"
+                >无描述</span
+              >
+              <span
+                v-else-if="it.descriptionQuality === 1"
+                class="cb-extra-tag cb-tag-danger"
+                title="richMedia.description 是加载失败占位文案(如'Не удалось загрузить статью'),需重新采集"
+                >占位</span
+              >
+              <span
+                v-else-if="it.descriptionQuality === 2"
+                class="cb-extra-tag cb-tag-warn"
+                title="richMedia.description 末尾粘有按钮文案(如'Читать далее'),采集时已剥但源数据需清洗"
+                >需清洗</span
+              >
+              <span
                 v-if="it.listed === true"
                 class="cb-extra-tag cb-tag-listed"
                 title="该 SKU 已在任意店铺提交跟卖任务(不论 OPI 返回状态)"
@@ -613,6 +673,13 @@ onMounted(() => {
       v-if="autoPickDialogVisible"
       :filters="state.filters"
       @close="autoPickDialogVisible = false"
+    />
+
+    <!-- 按筛选条件批量发起深度采集弹窗 -->
+    <DeepCollectByFilterDialog
+      v-if="deepCollectDialogVisible"
+      :filters="state.filters"
+      @close="deepCollectDialogVisible = false"
     />
   </div>
 </template>
@@ -766,6 +833,14 @@ onMounted(() => {
 .cb-tag-rich {
   background: #f6ffed;
   color: #389e0d;
+}
+.cb-tag-warn {
+  background: #fffbe6;
+  color: #d48806;
+}
+.cb-tag-danger {
+  background: #fff1f0;
+  color: #cf1322;
 }
 .cb-tag-seller {
   background: #f0f5ff;

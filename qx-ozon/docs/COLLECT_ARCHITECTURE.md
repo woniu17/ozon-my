@@ -493,8 +493,8 @@ if (window.__jzCollectStatus?.updateStoreSkuPassFilter(productId, passesFilter))
   consumeRateMinSec: 5,           // 队列消费间隔下限(5-120 秒)
   consumeRateMaxSec: 15,          // 队列消费间隔上限(5-120 秒)
   onlyMainlandChinaStores: true,        // 仅采集中国大陆店铺
-  knownMainlandChinaSlugs: [],          // 已知中国大陆店铺 slug 白名单
-  knownNonMainlandChinaSlugs: [],       // 已知非中国大陆店铺 slug 黑名单
+  knownMainlandChinaSellerIds: [],      // 已知中国大陆店铺 sellerId 白名单(2026-08:改用 sellerId 替代 slug,稳定主键)
+  knownNonMainlandChinaSellerIds: [],   // 已知非中国大陆店铺 sellerId 黑名单(2026-08:改用 sellerId 替代 slug,稳定主键)
 }
 ```
 

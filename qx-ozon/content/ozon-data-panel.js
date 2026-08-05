@@ -1590,13 +1590,18 @@
       return;
     }
     const { slug, name, companyInfo } = detail;
-    if (!slug) {
-      console.log('[ozon-data-panel] slug 为空,跳过');
+    const sellerIdRaw = String(detail.sellerId || '');
+    if (!sellerIdRaw) {
+      // 2026-08:店铺分类改用 sellerId,sellerId 缺失时无法分类
+      console.log('[ozon-data-panel] sellerId 为空,跳过 checkStoreClassification');
+      // slug/name 仍缓存(基础展示用)
+      if (slug) sellerSlug = slug;
+      sellerName = name || '';
       return;
     }
-    sellerSlug = slug; // 缓存,供 loadPanelData → __jzSubmitCollectTask 用
+    sellerSlug = slug; // 审计字段缓存,供 loadPanelData → __jzSubmitCollectTask 用
     sellerName = name || ''; // 缓存店铺名称,供 renderSellerTag 显示
-    sellerId = detail.sellerId || ''; // 缓存 sellerId,供上报 store-sku 用
+    sellerId = sellerIdRaw; // 缓存 sellerId,供上报 store-sku 用
     // 店铺切换时清空非店铺商品 SKU 集合(页面刷新时 Set 自然重置,此处防御性处理)
     if (detail.pageType === 'shop') _nonStoreSkus.clear();
     // 收到店铺信息后,纠正时序问题(仅店铺页):ensureDataPanel 可能在 sellerSlug 到达前已执行,
@@ -1635,12 +1640,11 @@
     try {
       document.documentElement.setAttribute('data-jz-seller-info-debug', JSON.stringify({ step: 'calling-SW', slug }));
       console.log('[ozon-data-panel] >>> 调用 SW checkStoreClassification, 参数:', {
-        slug,
+        sellerId: sellerIdRaw,
         name,
         companyInfo,
-        sellerId,
       });
-      const result = await window.sendMessage('checkStoreClassification', { slug, name, companyInfo, sellerId });
+      const result = await window.sendMessage('checkStoreClassification', { sellerId: sellerIdRaw, name, companyInfo });
       document.documentElement.setAttribute(
         'data-jz-seller-info-debug',
         JSON.stringify({

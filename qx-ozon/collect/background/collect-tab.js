@@ -428,7 +428,9 @@
       //     fields, widgetStates, hitEndpoints }
       // 命中(HTTP 200 即缓存,包括空内容)直接返回,跳过 buyer tab 注入 + 网络请求。
       // 缓存为空 → pending.pdp=true → Step 4 自然真调,无需额外标志位。
-      if (urlSku) {
+      // forceRefresh=true 时跳过缓存,强制走 buyer tab 真调(与 _doAutoCollect Step1
+      // 的 forceRefresh 语义一致,避免 forceRefresh 任务走缓存兜底导致 pdp 从不真调)。
+      if (urlSku && !options.forceRefresh) {
         let rmCached = null;
         try {
           rmCached = await this.richMediaCacheGet(urlSku);
@@ -1797,12 +1799,13 @@
         }
 
         // === Gate 0.5: 中国店铺检查 ===
-        const cls = await this.checkStoreClassification(sellerSlug, null, null, sellerId);
+        // 2026-08:店铺分类改用 sellerId(稳定主键),不再依赖 slug
+        const cls = await this.checkStoreClassification(sellerId, null, null);
         if (cls) {
           storeClassified =
             cls.isMainlandChina === true ? 'mainland-china' : cls.isMainlandChina === false ? 'non-mainland-china' : 'unclassified';
         }
-        console.log('[SW autoCollect] Gate0.5 店铺分类:', sku, 'slug=', sellerSlug, 'class=', storeClassified);
+        console.log('[SW autoCollect] Gate0.5 店铺分类:', sku, 'sellerId=', sellerId, 'class=', storeClassified);
         if (config.onlyMainlandChinaStores && cls?.isMainlandChina !== true) {
           const reason = cls?.isMainlandChina === false ? 'non-mainland-china-store' : 'unclassified-store';
           // Gate 0.5 跳过分支也调 _writeAutoCollectLog
@@ -1850,10 +1853,14 @@
         );
 
         // === Step 2: 计算 pending ===
+        // search/bundle 总是进入 Step 5:forceRefresh 时跳过缓存直接真调,
+        // 非 forceRefresh 时由 Step 5 内部查缓存决定是否真调。
+        // (原 `!forceRefresh` 在 forceRefresh 时为 false,导致 Step 5 整个被跳过,
+        //  search/bundle 既不查缓存也不真调,results[3]/[4] 保持 false → partial → 无限重试)
         const pending = {
           pdp: !results[2].hit,
-          search: !forceRefresh, // 简化:Step 5 内部检查缓存
-          bundle: !forceRefresh, // 简化:Step 5 内部检查缓存
+          search: true,
+          bundle: true,
           marketStats: !results[5].hit,
           followSell: !results[6].hit,
         };
@@ -1885,7 +1892,7 @@
           try {
             // fetchPdpBundleViaBuyerTab 接收 productUrl,从 card 缓存取 url 或构造 fallback
             const productUrl = card?.url || `${sw.OZON_WWW_ORIGIN}/product/-${sku}/`;
-            const mediaResult = await fetchPdpBundleViaBuyerTab(productUrl);
+            const mediaResult = await fetchPdpBundleViaBuyerTab(productUrl, { forceRefresh: !!forceRefresh });
             // fetchPdpBundleViaBuyerTab 内部已写 richMedia/followSell 缓存,
             // 这里仅根据返回字段标记命中。
             // endpoint 可能为 'entrypoint-api'/'composer-api'/'richMedia-cache',
@@ -1905,6 +1912,10 @@
                 throw new Error('ANTIBOT_BLOCKED');
               }
             } else {
+              // ep === 'richMedia-cache':缓存兜底命中(非 forceRefresh 场景)
+              // 按 L2064 注释意图,FALLBACK_* 是缓存兜底标注而非失败,标记 hit=true
+              // 避免 hasError 误判 partial 导致无限重试
+              results[2].hit = true;
               results[2].error = 'FALLBACK_' + ep;
             }
             if (mediaResult?.followSellData) results[6].hit = true;
@@ -1943,7 +1954,7 @@
               console.warn('[autoCollect] search cache get failed:', e?.message || e);
             }
 
-            if (searchCacheHit) {
+            if (searchCacheHit && !forceRefresh) {
               results[3].hit = true; // search
               // search 缓存命中,检查 bundle 缓存(L1 合并表 + L2 合并表)
               try {
@@ -1999,7 +2010,7 @@
                   const variantId = rawVariants[0]?.variant_id;
                   if (variantId) {
                     const bundleItem = await fetchBundleByVariantId(sku, variantId, companyId, {
-                      forceRefresh: false,
+                      forceRefresh: !!forceRefresh,
                     });
                     if (bundleItem) {
                       results[4].hit = true; // bundle

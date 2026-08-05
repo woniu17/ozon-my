@@ -40,8 +40,9 @@
       // perDayLimit/todayCount/todayDate 已移除(去掉每日上限)
       // marketStatsStaleMs/followSellStaleMs 已移除(stale 策略改为永久)
       onlyMainlandChinaStores: true,
-      knownMainlandChinaSlugs: [],
-      knownNonMainlandChinaSlugs: [],
+      // 2026-08:店铺白/黑名单改用 sellerId(稳定主键),不再用 slug
+      knownMainlandChinaSellerIds: [],
+      knownNonMainlandChinaSellerIds: [],
     };
 
     // ── 配置读取(带内存缓存) ──────────────────────────────────────────────────
@@ -105,6 +106,140 @@
         _invalidateAutoCollectConfigCache();
       }
     });
+
+    // ── Step 2 迁移:旧 Slugs 字段 → 新 SellerIds 字段 ────────────────────────
+    // 2026-08:店铺分类改用 sellerId(稳定主键),旧 knownMainlandChinaSlugs /
+    // knownNonMainlandChinaSlugs 字段需迁移到 knownMainlandChinaSellerIds /
+    // knownNonMainlandChinaSellerIds。
+    //
+    // 迁移策略:
+    // 1. 读旧字段,若都为空 → 跳过(默认值就是空,无需迁移)
+    // 2. 调 ERP /admin/api/collect-box-v2/sellers 拉 (sellerId, sellerSlug) 对
+    // 3. 按 slug 反查 sellerId,写入新字段
+    // 4. 反查失败的 slug 记日志(用户需在 ERP 店铺分类页手动确认)
+    // 5. 清空旧字段(写 []),避免重复迁移
+    //
+    // 幂等:若新字段已非空(用户已手动配置或已迁移过),跳过
+    // 失败隔离:网络/ERP 不可达时跳过迁移,下次启动再试
+    this.migrateSlugsToSellerIds = async () => {
+      try {
+        const cfg = await _loadAutoCollectConfig();
+        const oldCn = Array.isArray(cfg.knownMainlandChinaSlugs) ? cfg.knownMainlandChinaSlugs : [];
+        const oldNonCn = Array.isArray(cfg.knownNonMainlandChinaSlugs) ? cfg.knownNonMainlandChinaSlugs : [];
+        const newCn = Array.isArray(cfg.knownMainlandChinaSellerIds) ? cfg.knownMainlandChinaSellerIds : [];
+        const newNonCn = Array.isArray(cfg.knownNonMainlandChinaSellerIds) ? cfg.knownNonMainlandChinaSellerIds : [];
+
+        // 旧字段都空 → 无需迁移
+        if (oldCn.length === 0 && oldNonCn.length === 0) {
+          console.log('[migrate-slugs] 旧 Slugs 字段为空,跳过迁移');
+          return { migrated: false, reason: 'no-legacy-data' };
+        }
+        // 新字段已有数据 → 避免覆盖用户手动配置
+        if (newCn.length > 0 || newNonCn.length > 0) {
+          console.log('[migrate-slugs] 新 SellerIds 字段已有数据,跳过迁移(避免覆盖)');
+          return { migrated: false, reason: 'already-migrated' };
+        }
+
+        // 拉 ERP sellers 列表(含 sellerId ↔ sellerSlug 映射)
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        const token = stored[sw.STORAGE_KEYS.token];
+        const resp = await sw.apiRequest('GET', `${url}/admin/api/collect-box-v2/sellers`, null, token);
+        const sellers = Array.isArray(resp) ? resp : [];
+        if (sellers.length === 0) {
+          console.warn('[migrate-slugs] ERP sellers 列表为空,无法反查,跳过迁移');
+          return { migrated: false, reason: 'erp-empty-sellers' };
+        }
+
+        // 建 slug → sellerId 反查表(只取 slug 非空的)
+        const slugToSellerId = new Map();
+        for (const s of sellers) {
+          if (s.sellerSlug && s.sellerId) {
+            slugToSellerId.set(String(s.sellerSlug), String(s.sellerId));
+          }
+        }
+        console.log(`[migrate-slugs] ERP sellers 拉取成功,共 ${sellers.length} 家,有 slug 映射 ${slugToSellerId.size} 家`);
+
+        // 反查迁移
+        const migratedCn = [];
+        const migratedNonCn = [];
+        const failedCn = [];
+        const failedNonCn = [];
+        for (const slug of oldCn) {
+          const sid = slugToSellerId.get(String(slug));
+          if (sid) migratedCn.push(sid);
+          else failedCn.push(slug);
+        }
+        for (const slug of oldNonCn) {
+          const sid = slugToSellerId.get(String(slug));
+          if (sid) migratedNonCn.push(sid);
+          else failedNonCn.push(slug);
+        }
+
+        // 写入新字段 + 清空旧字段
+        await _saveAutoCollectConfig({
+          knownMainlandChinaSellerIds: migratedCn,
+          knownNonMainlandChinaSellerIds: migratedNonCn,
+          knownMainlandChinaSlugs: [],
+          knownNonMainlandChinaSlugs: [],
+        });
+
+        console.log('[migrate-slugs] 迁移完成:', {
+          cn: { ok: migratedCn.length, failed: failedCn.length },
+          nonCn: { ok: migratedNonCn.length, failed: failedNonCn.length },
+        });
+        if (failedCn.length > 0) {
+          console.warn('[migrate-slugs] CN 白名单反查失败的 slug(需手动确认):', failedCn);
+        }
+        if (failedNonCn.length > 0) {
+          console.warn('[migrate-slugs] 非 CN 黑名单反查失败的 slug(需手动确认):', failedNonCn);
+        }
+
+        return {
+          migrated: true,
+          cnOk: migratedCn.length,
+          cnFailed: failedCn,
+          nonCnOk: migratedNonCn.length,
+          nonCnFailed: failedNonCn,
+        };
+      } catch (e) {
+        console.warn('[migrate-slugs] 迁移失败,下次启动再试:', e?.message || e);
+        return { migrated: false, reason: 'error', error: e?.message || String(e) };
+      }
+    };
+
+    // ── Step 3a:清理旧 L1 缓存 key(jz-store-class-${slug}) ──────────────────
+    // 2026-08:店铺分类改用 sellerId 后,旧 slug key 成孤儿。
+    // 新 key 格式:jz-store-class-<纯数字 sellerId>
+    // 旧 key 格式:jz-store-class-<slug>(含字母/连字符)
+    // 本方法扫描 chrome.storage.local,删除所有不符合新格式的 key。
+    this.cleanupLegacyStoreClassCache = async () => {
+      try {
+        const all = await sw.getStorage(null);
+        if (!all || typeof all !== 'object') return { cleaned: 0 };
+        const keysToRemove = [];
+        for (const k of Object.keys(all)) {
+          // 只处理 jz-store-class- 前缀
+          if (!k.startsWith('jz-store-class-')) continue;
+          // 提取后缀
+          const suffix = k.slice('jz-store-class-'.length);
+          // 新格式:sellerId 为纯数字。旧 slug 含字母/连字符,删除
+          if (!/^\d+$/.test(suffix)) {
+            keysToRemove.push(k);
+          }
+        }
+        if (keysToRemove.length === 0) {
+          console.log('[cleanup-l1] 无旧 slug 缓存需清理');
+          return { cleaned: 0 };
+        }
+        await sw.removeStorage(keysToRemove);
+        console.log(`[cleanup-l1] 已清理 ${keysToRemove.length} 个旧 slug 缓存 key:`, keysToRemove);
+        return { cleaned: keysToRemove.length };
+      } catch (e) {
+        console.warn('[cleanup-l1] 清理失败:', e?.message || e);
+        return { cleaned: 0, error: e?.message || String(e) };
+      }
+    };
 
     // ── autoCollect 环形缓冲(最近 200 条,供面板查询采集状态) ──────────────────
     // SW 休眠后清零(非持久化)。持久化统计走 writeAutoCollectLog(ERP)。

@@ -70,6 +70,15 @@
       return;
     }
 
+    // 2026-08:店铺分类改用 sellerId,sellerId 缺失时无法手动确认(无法写 L2)
+    if (!state.sellerId) {
+      const statusDiv = document.createElement('div');
+      statusDiv.className = 'qx-c-store-detector-status';
+      statusDiv.innerHTML = '<span class="qx-c-store-badge qx-c-store-pending">— sellerId 未获取,无法分类 —</span>';
+      container.appendChild(statusDiv);
+      return;
+    }
+
     // 状态区
     const statusDiv = document.createElement('div');
     statusDiv.className = 'qx-c-store-detector-status';
@@ -143,10 +152,11 @@
       markCnBtn.onclick = async () => {
         markCnBtn.disabled = true;
         try {
-          await sendMessage('classifyStore', { slug: state.slug, name: state.name, isMainlandChina: true });
+          // 2026-08:人工确认改用 sellerId(稳定主键),slug 仅作审计
+          await sendMessage('classifyStore', { sellerId: state.sellerId, name: state.name, isMainlandChina: true });
           renderStoreDetectionBlock(container, { ...state, isMainlandChina: true, classifiedBy: 'manual' });
           window.dispatchEvent(
-            new CustomEvent('jz-store-classified', { detail: { slug: state.slug, isMainlandChina: true } })
+            new CustomEvent('jz-store-classified', { detail: { sellerId: state.sellerId, isMainlandChina: true } })
           );
         } catch (e) {
           console.error('[QXStoreDetector] 标记中国大陆失败:', e);
@@ -161,10 +171,10 @@
       markNonCnBtn.onclick = async () => {
         markNonCnBtn.disabled = true;
         try {
-          await sendMessage('classifyStore', { slug: state.slug, name: state.name, isMainlandChina: false });
+          await sendMessage('classifyStore', { sellerId: state.sellerId, name: state.name, isMainlandChina: false });
           renderStoreDetectionBlock(container, { ...state, isMainlandChina: false, classifiedBy: 'manual' });
           window.dispatchEvent(
-            new CustomEvent('jz-store-classified', { detail: { slug: state.slug, isMainlandChina: false } })
+            new CustomEvent('jz-store-classified', { detail: { sellerId: state.sellerId, isMainlandChina: false } })
           );
         } catch (e) {
           console.error('[QXStoreDetector] 标记非中国大陆失败:', e);

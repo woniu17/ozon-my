@@ -330,6 +330,14 @@ function remainingMinutes(ms) {
   return Math.ceil(ms / 60000);
 }
 
+// 缩略图加载失败时切换到占位文案
+const thumbErrors = ref(new Set());
+function onThumbError(key) {
+  if (!key) return;
+  thumbErrors.value.add(key);
+  thumbErrors.value = new Set(thumbErrors.value);
+}
+
 // ── 生命周期 ───────────────────────────────────────────────
 onMounted(() => {
   refreshAll();
@@ -442,6 +450,7 @@ onUnmounted(() => {
         <thead>
           <tr>
             <th>SKU</th>
+            <th>图片</th>
             <th>卖家</th>
             <th>状态</th>
             <th>尝试次数</th>
@@ -453,10 +462,25 @@ onUnmounted(() => {
         </thead>
         <tbody>
           <tr v-if="!items.length">
-            <td colspan="8" class="empty">{{ loading ? '加载中…' : '暂无任务' }}</td>
+            <td colspan="9" class="empty">{{ loading ? '加载中…' : '暂无任务' }}</td>
           </tr>
           <tr v-for="row in items" :key="row._id || row.sku" @click="openDetail(row)">
             <td class="col-sku">{{ row.sku }}</td>
+            <td class="col-thumb" @click.stop>
+              <img
+                v-if="
+                  row.domInfo?.imageUrl &&
+                  /^https?:\/\//.test(row.domInfo.imageUrl) &&
+                  !thumbErrors.has(row._id || row.sku)
+                "
+                :src="row.domInfo.imageUrl"
+                alt=""
+                loading="lazy"
+                class="thumb"
+                @error="onThumbError(row._id || row.sku)"
+              />
+              <span v-else class="thumb-placeholder">无图</span>
+            </td>
             <td>{{ row.sellerId || '—' }}</td>
             <td>
               <span :class="statusTag(row.status)">{{ statusLabel(row.status) }}</span>
@@ -726,6 +750,27 @@ onUnmounted(() => {
 .col-sku {
   font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
   font-size: 12px;
+}
+.col-thumb {
+  width: 56px;
+  text-align: center;
+}
+.thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #e5e7eb;
+}
+.thumb-placeholder {
+  display: inline-block;
+  width: 44px;
+  height: 44px;
+  line-height: 44px;
+  font-size: 11px;
+  color: var(--muted, #9ca3af);
+  border: 1px dashed #e5e7eb;
+  border-radius: 4px;
 }
 .col-time {
   font-size: 12px;

@@ -36,6 +36,13 @@ export function batchRetryAllFailed() {
   return request.post('/admin/api/collect-queue/batch-retry', { status: 'partial' });
 }
 
+// 按筛选条件批量入队深度采集任务(采集箱"深度采集"按钮调用)
+// params: { filters: {...}, skipIfTodaySuccess?: bool, forceRefresh?: bool }
+// 返回: { totalFound, enqueued, skipped, alreadyQueued, forceRefresh }
+export function batchSubmitByFilter(params) {
+  return request.post('/admin/api/collect-queue/batch-submit-by-filter', params);
+}
+
 // 清空 pending
 export function clearCollectQueue() {
   return request.post('/admin/api/collect-queue/clear');

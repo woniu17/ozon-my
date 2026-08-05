@@ -79,6 +79,12 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE collect_queue_tasks ADD COLUMN duration INTEGER`);
     console.log('[db] migration: added column collect_queue_tasks.duration');
   }
+  // collect_queue_tasks:增加 force_refresh 列(1=强制重新采集,SW 消费时传 forceRefresh=true)
+  // 旧库(CREATE TABLE IF NOT EXISTS 不会更新旧表结构)需 ALTER TABLE 补列
+  if (!taskCols.some((c) => c.name === 'forceRefresh')) {
+    db.exec(`ALTER TABLE collect_queue_tasks ADD COLUMN forceRefresh INTEGER DEFAULT 0`);
+    console.log('[db] migration: added column collect_queue_tasks.forceRefresh');
+  }
   // follow_sell_tasks:库存快照列(任务创建时存,模板修改不影响)
   const fstCols = db.prepare(`PRAGMA table_info(follow_sell_tasks)`).all();
   if (!fstCols.some((c) => c.name === 'stock_snapshot')) {
@@ -173,6 +179,15 @@ async function ensureMigrations() {
     console.log('[db] migration: added column ozon_cache_index.has_rich_content');
     addedHasRichContent = true;
   }
+  // ozon_cache_index.description_quality:描述质量分级,用于采集箱"描述状态"过滤
+  // 0=空 1=占位(Не удалось загрузить…/纯按钮文案) 2=按钮污染(真描述末尾粘Читать далее) 3=正常
+  // 与 scripts/scan-description-placeholders.mjs + qx-ozon/lib/follow-sell-content-copy.js 同口径
+  let addedDescriptionQuality = false;
+  if (ciCols.length > 0 && !ciCols.some((c) => c.name === 'description_quality')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN description_quality INTEGER DEFAULT 0`);
+    console.log('[db] migration: added column ozon_cache_index.description_quality');
+    addedDescriptionQuality = true;
+  }
   // 缓存表重构:直接 DROP 旧 7 表 + legacy 表,新版用 6 张表(1 索引 + 5 数据)
   // 不写迁移脚本,旧数据自然过期(SW 重新采集填充新表)
   dropLegacyCacheTables(db);
@@ -189,6 +204,11 @@ async function ensureMigrations() {
   // 对 rich_media_hit=1 的 SKU 从 ozon_rich_media_cache 重算 has_rich_content
   if (addedHasRichContent) {
     backfillHasRichContent();
+  }
+  // 一次性回填:description_quality 列刚加上时,旧 syncSku 未计算此字段(默认 0)
+  // 对 rich_media_hit=1 的 SKU 从 ozon_rich_media_cache 提取 description 并 classify
+  if (addedDescriptionQuality) {
+    backfillDescriptionQuality();
   }
   // 2026-07: 跟卖列表抽取店铺数据 — ozon_store_classification 补 logoImageUrl 列
   const scCols = db.prepare(`PRAGMA table_info(ozon_store_classification)`).all();
@@ -207,11 +227,11 @@ function backfillHasRichContent() {
     .prepare(
       `UPDATE ozon_cache_index
        SET has_rich_content = COALESCE((
-         SELECT CASE 
+         SELECT CASE
            WHEN json_extract(r.data, '$.richContent') IS NOT NULL
              AND LENGTH(CAST(json_extract(r.data, '$.richContent') AS TEXT)) > 0
            THEN 1 ELSE 0 END
-         FROM ozon_rich_media_cache r 
+         FROM ozon_rich_media_cache r
          WHERE r._id = ozon_cache_index.sku
        ), 0)
        WHERE rich_media_hit = 1`
@@ -219,6 +239,55 @@ function backfillHasRichContent() {
     .run();
   console.log(
     `[db] migration: backfilled has_rich_content for ${result.changes} SKUs (rich_media_hit=1)`
+  );
+}
+
+// 一次性回填 ozon_cache_index.description_quality
+// 旧 syncSku 不计算此字段,新增列后默认 0,需对 rich_media_hit=1 的 SKU 重算
+// 与 index-dao.js syncSku 的 descriptionQuality 计算同口径:
+//   0=空 1=占位(Не удалось загрузить…/纯按钮文案) 2=按钮污染(真描述末尾粘Читать далее) 3=正常
+// 注:SQL 内用 LIKE 近似实现 classify,边界情况由 scripts/backfill-description-quality.mjs (JS 正则精准版)修正
+function backfillDescriptionQuality() {
+  // 用 UPDATE-FROM 语法(SQLite 3.33+),从 ozon_rich_media_cache.data.description 提取并 classify
+  // - 空或 NULL → 0
+  // - 剥掉按钮文案后为空(纯按钮文案) → 1
+  // - 开头命中加载失败关键词(Не удалось загрузить / JSON Не удалось… / Ошиб…) → 1
+  // - 含按钮文案但剥后非空(真描述末尾粘按钮) → 2
+  // - 其余非空 → 3
+  // REPLACE 区分大小写,故大小写各一次(читать далее/Читать далее 等共 8 次)
+  const result = db
+    .prepare(
+      `UPDATE ozon_cache_index
+       SET description_quality = CASE
+         WHEN r_desc IS NULL OR TRIM(r_desc) = '' THEN 0
+         WHEN TRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+           r_desc,
+           'Читать далее', ''), 'читать далее', ''),
+           'Показать полностью', ''), 'показать полностью', ''),
+           'Свернуть описание', ''), 'свернуть описание', ''),
+           'Развернуть описание', ''), 'развернуть описание', ''
+         )) = '' THEN 1
+         WHEN r_desc LIKE 'Не удалось загрузить%' OR r_desc LIKE 'не удалось загрузить%'
+           OR r_desc LIKE 'JSON Не удалось загрузить%' OR r_desc LIKE 'JSON не удалось загрузить%'
+           OR r_desc LIKE 'Ошиб%' THEN 1
+         WHEN r_desc LIKE '%Читать далее%' OR r_desc LIKE '%читать далее%'
+           OR r_desc LIKE '%Показать полностью%' OR r_desc LIKE '%показать полностью%'
+           OR r_desc LIKE '%Свернуть описание%' OR r_desc LIKE '%свернуть описание%'
+           OR r_desc LIKE '%Развернуть описание%' OR r_desc LIKE '%развернуть описание%' THEN 2
+         ELSE 3
+         END
+       FROM (
+         SELECT oci.sku AS sku,
+                CAST(json_extract(r.data, '$.description') AS TEXT) AS r_desc
+         FROM ozon_cache_index oci
+         LEFT JOIN ozon_rich_media_cache r ON r._id = oci.sku
+       ) src
+       WHERE ozon_cache_index.sku = src.sku
+         AND ozon_cache_index.rich_media_hit = 1`
+    )
+    .run();
+  console.log(
+    `[db] migration: backfilled description_quality for ${result.changes} SKUs (rich_media_hit=1)`
   );
 }
 

@@ -6,6 +6,22 @@
 import { db } from '../../index.js';
 import { composeSvShape } from '../../../services/compose-sv-shape.js';
 
+// 描述质量分级正则(与 qx-ozon/lib/follow-sell-content-copy.js 同口径)
+// 按钮/展开文案 → 剥掉(真描述末尾偶尔会粘到)
+const DESCRIPTION_UI_CHROME_RE = /(читать далее|показать полностью|свернуть описание|развернуть описание)/gi;
+// 加载失败类提示 → 判占位
+const DESCRIPTION_LOAD_FAIL_RE = /(не удалось загрузить|ошибка загрузки|попробуйте (обновить|позже)|failed to load)/i;
+
+// 描述质量分级:0=空 1=占位 2=按钮污染 3=正常
+// 与 scripts/backfill-description-quality.mjs 的 classify 函数同口径
+function classifyDescriptionQuality(descRaw) {
+  if (!descRaw) return 0;
+  const cleaned = String(descRaw).replace(DESCRIPTION_UI_CHROME_RE, ' ').trim();
+  if (!cleaned || DESCRIPTION_LOAD_FAIL_RE.test(cleaned.slice(0, 120))) return 1;
+  if (DESCRIPTION_UI_CHROME_RE.test(String(descRaw))) return 2;
+  return 3;
+}
+
 function parseJson(s) {
   if (!s) return null;
   try {
@@ -61,6 +77,7 @@ function buildFilterWhere(opts) {
     priceMin,
     priceMax,
     minCacheHits,
+    maxCacheHits,
     excludeFilteredCategories,
   } = opts;
   const where = [];
@@ -113,6 +130,13 @@ function buildFilterWhere(opts) {
                 '(CASE WHEN rich_media_hit=1 THEN 1 ELSE 0 END)) >= ?');
     params.push(Number(minCacheHits));
   }
+  if (Number.isFinite(Number(maxCacheHits)) && Number(maxCacheHits) >= 0) {
+    // 数据不完整 = 3 类合并缓存命中数 ≤ maxCacheHits(如 maxCacheHits=2 → 至少缺一类)
+    where.push('((CASE WHEN card_hit=1 OR detail_hit=1 THEN 1 ELSE 0 END) + ' +
+                '(CASE WHEN search_hit=1 AND bundle_hit=1 THEN 1 ELSE 0 END) + ' +
+                '(CASE WHEN rich_media_hit=1 THEN 1 ELSE 0 END)) <= ?');
+    params.push(Number(maxCacheHits));
+  }
   if (excludeFilteredCategories) {
     where.push(
       `NOT EXISTS (
@@ -129,6 +153,26 @@ function buildFilterWhere(opts) {
     const isUltra = String(opts.ultraLight) === '1';
     const cond = `weight_g IS NOT NULL AND weight_g < 500 AND dim_sum_mm IS NOT NULL AND dim_sum_mm < 900`;
     where.push(isUltra ? cond : `NOT (${cond})`);
+  }
+  // 描述质量过滤:支持单值(=)或多值(IN),"1,2" → description_quality IN (1, 2)
+  if (opts.descriptionQuality != null && opts.descriptionQuality !== '') {
+    const q = String(opts.descriptionQuality);
+    if (q.includes(',')) {
+      const vals = q
+        .split(',')
+        .map((v) => parseInt(v, 10))
+        .filter((v) => Number.isInteger(v) && v >= 0 && v <= 3);
+      if (vals.length) {
+        where.push(`description_quality IN (${vals.map(() => '?').join(',')})`);
+        params.push(...vals);
+      }
+    } else {
+      const v = parseInt(q, 10);
+      if (Number.isInteger(v) && v >= 0 && v <= 3) {
+        where.push('description_quality = ?');
+        params.push(v);
+      }
+    }
   }
   return { where, params };
 }
@@ -218,6 +262,8 @@ export const indexDao = {
     // has_rich_content:richMedia.data.richContent(富内容 11254)有内容则 1
     // 不用 richContentHasText(语义过严),只要字符串非空就算"有富内容"
     const hasRichContent = rmData?.richContent && String(rmData.richContent).length > 0 ? 1 : 0;
+    // 描述质量分级:0=空 1=占位 2=按钮污染 3=正常(数据源 richMedia.description,与展示口径一致)
+    const descriptionQuality = classifyDescriptionQuality(rmData?.description || '');
     const marketPriceP50 = msData?.priceP50 ?? msData?.p50 ?? null;
     const competitorCount =
       Array.isArray(fsData?.sellers)
@@ -325,9 +371,10 @@ export const indexDao = {
         seller_slug, seller_id, seller_name,
         description_category_id, type_id, category_name,
         weight_g, dim_sum_mm,
+        description_quality,
         listed, searchable_text, updated_at
       ) VALUES (
-        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
+        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
       )
       ON CONFLICT(sku) DO UPDATE SET
         card_hit=excluded.card_hit, card_fetched_at=excluded.card_fetched_at,
@@ -344,6 +391,7 @@ export const indexDao = {
         has_video=excluded.has_video, has_rich_content=excluded.has_rich_content,
         market_price_p50=excluded.market_price_p50,
         competitor_count=excluded.competitor_count,
+        description_quality=excluded.description_quality,
         -- seller_slug/seller_id/seller_name/listed 不覆盖定时任务已写入的值
         -- 注:ozon_cache_index.xxx 是冲突行 DB 当前值,excluded.xxx 是本次 INSERT 想写入的值
         --   - listed:用 ozon_cache_index.listed 永远保留 DB 当前值(syncSku 从不主动改 listed)
@@ -395,6 +443,7 @@ export const indexDao = {
       categoryName,
       weightG,
       dimSumMm,
+      descriptionQuality,
       listed,
       searchableText
     );
@@ -455,7 +504,7 @@ export const indexDao = {
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const rows = db
       .prepare(
-        `SELECT sku, seller_id, seller_name, price, price_value, rating_count,
+        `SELECT sku, seller_id, seller_slug, seller_name, price, price_value, rating_count,
                 name, primary_image, last_fetched_at,
                 listed, card_hit, detail_hit, search_hit, bundle_hit, rich_media_hit
          FROM ozon_cache_index ${whereClause}
@@ -465,6 +514,7 @@ export const indexDao = {
     return rows.map((r) => ({
       sku: r.sku,
       sellerId: r.seller_id || '',
+      sellerSlug: r.seller_slug || '',
       sellerName: r.seller_name || '',
       price: r.price ?? '',
       priceValue: r.price_value ?? null,

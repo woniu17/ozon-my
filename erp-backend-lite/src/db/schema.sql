@@ -252,6 +252,7 @@ CREATE TABLE IF NOT EXISTS ozon_cache_index (
   rating_count       INTEGER,             -- dom: card.ratingCount
   has_video          INTEGER DEFAULT 0,   -- richMedia: !!mp4
   has_rich_content   INTEGER DEFAULT 0,   -- richMedia: !!richContent(富内容 11254 是否有内容)
+  description_quality INTEGER DEFAULT 0,  -- 描述质量:0=空 1=占位(Не удалось загрузить…) 2=按钮污染(粘Читать далее) 3=正常
   market_price_p50   TEXT,                -- marketStats: priceP50
   competitor_count   INTEGER,             -- followSell: sellers.length
 
@@ -504,6 +505,7 @@ CREATE TABLE IF NOT EXISTS collect_queue_tasks (
   duration       INTEGER,             -- 任务耗时(ms),SW result 接口上报
   steps          TEXT,                -- JSON
   result         TEXT,                -- JSON
+  forceRefresh   INTEGER DEFAULT 0,  -- 1=强制重新采集(忽略已有缓存,SW _doAutoCollect 传 forceRefresh=true)
   createdAt      TEXT NOT NULL,
   updatedAt      TEXT NOT NULL
 );

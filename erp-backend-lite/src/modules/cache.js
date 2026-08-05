@@ -536,6 +536,10 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     //   attribute_hit = search AND bundle(都需要)
     //   rich_media_hit = richMedia
     const minCacheHits = Math.max(0, Math.min(3, Number(req.query.minCacheHits) || 0));
+    // maxCacheHits=N:3 类合并缓存命中数 ≤ N(数据不完整筛选,与 minCacheHits 对称)
+    //   不传或 0 表示不限;前端"数据不完整"传 maxCacheHits=2(至少缺一类)
+    const maxCacheHitsRaw = Number(req.query.maxCacheHits);
+    const maxCacheHits = Number.isFinite(maxCacheHitsRaw) ? Math.max(0, Math.min(3, maxCacheHitsRaw)) : undefined;
     // hasComments=1:rating_count > 0(索引表已冗余 rating_count)
     const filterHasComments = req.query.hasComments === '1' || req.query.hasComments === 'true';
     // 价格范围:priceMin/priceMax(闭区间,基于索引表冗余 price 字段)
@@ -558,6 +562,12 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     // ultraLight:超轻小件(Extra Small)筛选 — 重量<500g 且 三边之和<90cm
     //   '1'=只看超轻小件,'0'=只看非超轻小件(含无尺寸数据商品),空=不限
     const ultraLight = String(req.query.ultraLight || '').trim();
+    // descriptionQuality:描述质量过滤(0=空/1=占位/2=按钮污染/3=正常)
+    //   支持单值(如 '1')或多值(如 '1,2'),正则校验避免 SQL 注入
+    const descriptionQualityRaw = String(req.query.descriptionQuality || '').trim();
+    const descriptionQuality = /^[0-9]+(,[0-9]+)*$/.test(descriptionQualityRaw)
+      ? descriptionQualityRaw
+      : '';
 
     // indexDao 单表查询:过滤 + 排序 + 分页全在 SQL 完成
     const { items, total } = await daos.indexDao.findList({
@@ -571,8 +581,10 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       priceMin: Number.isFinite(priceMin) ? priceMin : undefined,
       priceMax: Number.isFinite(priceMax) ? priceMax : undefined,
       minCacheHits,
+      maxCacheHits,
       excludeFilteredCategories,
       ultraLight,
+      descriptionQuality,
       page,
       pageSize,
     });
@@ -605,6 +617,10 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
         (r.follow_sell_hit ? 1 : 0),
       hasVideo: !!r.has_video,
       hasRichContent: !!r.has_rich_content,
+      // 描述质量(0=空/1=占位/2=按钮污染/3=正常),前端用于卡片标签展示
+      descriptionQuality: Number.isFinite(Number(r.description_quality))
+        ? Number(r.description_quality)
+        : 0,
       marketPriceP50: r.market_price_p50 ?? null,
       competitorCount: r.competitor_count ?? null,
       // 评论数:索引表冗余 rating_count(数字,采集自 card DOM)。可能为 null
