@@ -1147,6 +1147,55 @@ router.get('/admin/api/products/:sku', (req, res, next) => {
   }
 });
 
+// DELETE /admin/api/products/:sku —— 删除同步过来的商品缓存(单条)
+// 仅删除 ERP 本地缓存(product_data_cache + product_attributes_cache + 内存缓存),
+// 不影响 Ozon 后台商品
+router.delete('/admin/api/products/:sku', (req, res, next) => {
+  try {
+    const sku = String(req.params.sku);
+    const row = db.prepare(`SELECT store_id FROM product_data_cache WHERE sku=?`).get(sku);
+    if (!row) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '商品不存在: ' + sku));
+    const del = db.prepare(`DELETE FROM product_data_cache WHERE sku=?`).run(sku);
+    db.prepare(`DELETE FROM product_attributes_cache WHERE sku=?`).run(sku);
+    attrMemCache.del(`attr_${sku}`);
+    logger.info({ sku, storeId: row.store_id, changes: del.changes }, 'product_data_cache deleted');
+    res.json(ok({ sku, deleted: del.changes }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /admin/api/products/delete-batch —— 批量删除同步过来的商品缓存
+// 请求体: { skus: ['sku1','sku2',...] }
+// 响应: { deleted, notFound: ['skuN',...] }
+router.post('/admin/api/products/delete-batch', (req, res, next) => {
+  try {
+    const skus = Array.isArray(req.body?.skus)
+      ? req.body.skus.map((s) => String(s)).filter(Boolean)
+      : [];
+    if (skus.length === 0) {
+      return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'skus 必填(非空数组)'));
+    }
+    const placeholders = skus.map(() => '?').join(',');
+    const found = db
+      .prepare(`SELECT sku, store_id FROM product_data_cache WHERE sku IN (${placeholders})`)
+      .all(...skus);
+    const foundSkus = new Set(found.map((r) => r.sku));
+    const del = db.prepare(`DELETE FROM product_data_cache WHERE sku IN (${placeholders})`).run(...skus);
+    db.prepare(`DELETE FROM product_attributes_cache WHERE sku IN (${placeholders})`).run(...skus);
+    for (const sku of skus) attrMemCache.del(`attr_${sku}`);
+    const notFound = skus.filter((s) => !foundSkus.has(s));
+    const storeIds = [...new Set(found.map((r) => r.store_id).filter(Boolean))];
+    logger.info(
+      { count: del.changes, storeIds, notFoundCount: notFound.length },
+      'product_data_cache batch deleted'
+    );
+    res.json(ok({ deleted: del.changes, notFound }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ── 商品特征描述 & 详情(三级缓存:内存 + DB + OPI 实时) ─────
 
 // L1 内存缓存:1 小时(与 DB 缓存互补,key 为 attr_${sku})

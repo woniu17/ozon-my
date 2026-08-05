@@ -19,3 +19,14 @@ export function syncProducts(storeId) {
 export function getSyncProgress() {
   return request.get('/admin/api/products/sync-progress');
 }
+
+// 删除单条商品缓存(仅删除 ERP 本地缓存,不影响 Ozon 后台商品)
+export function deleteProduct(sku) {
+  return request.del('/admin/api/products/' + encodeURIComponent(sku));
+}
+
+// 批量删除商品缓存
+// body: { skus: ['sku1','sku2',...] }  响应: { deleted, notFound }
+export function deleteProductsBatch(skus) {
+  return request.post('/admin/api/products/delete-batch', { skus });
+}

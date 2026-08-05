@@ -33,6 +33,10 @@ function resolveAction(method, path) {
   if (m && method === 'DELETE') return { action: 'batch.delete', target: m[1] };
   m = /^\/ozon\/products\/batch-import\/([^/]+)\/retry$/.exec(path);
   if (m && method === 'POST') return { action: 'batch.retry', target: m[1] };
+  // 商品缓存删除(仅清 ERP 本地缓存,不影响 Ozon 后台)
+  m = /^\/admin\/api\/products\/([^/]+)$/.exec(path);
+  if (m && method === 'DELETE') return { action: 'product.delete', target: m[1] };
+  if (path === '/admin/api/products/delete-batch' && method === 'POST') return { action: 'product.deleteBatch' };
   return null;
 }
 

@@ -1,7 +1,14 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-import { getProducts, getProductDetail, syncProducts, getSyncProgress } from '../api/products.js';
+import {
+  getProducts,
+  getProductDetail,
+  syncProducts,
+  getSyncProgress,
+  deleteProduct as deleteProductApi,
+  deleteProductsBatch,
+} from '../api/products.js';
 import { useStoresStore } from '../stores/stores.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
@@ -48,6 +55,8 @@ const stockDialog = ref({ open: false, mode: 'single', singleItem: null, selecte
 const productUpdateDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
 // 按筛选批量操作:拉取中的状态('image' | 'stock' | '')
 const filterBatchLoading = ref('');
+// 删除中状态(单条 sku 或 'batch' 或 '')
+const deletingId = ref('');
 
 // 同步状态:从 Ozon 拉取店铺商品写入本地缓存
 const syncing = ref(false);
@@ -482,6 +491,64 @@ function openFilteredStock() {
   return openFilteredBatch('stock');
 }
 
+// ── 删除商品缓存(2026-08)──────────────────────────────────────
+// 单条删除:仅删除 ERP 本地缓存,不影响 Ozon 后台商品
+async function deleteSingle(it) {
+  if (deletingId.value) return;
+  if (
+    !(await confirmStore.ask({
+      title: '删除商品缓存',
+      message: `确认删除商品「${it.sku}」的本地缓存?此操作仅删除 ERP 缓存,不影响 Ozon 后台商品。`,
+      danger: true,
+      confirmText: '删除',
+    }))
+  )
+    return;
+  deletingId.value = it.sku;
+  try {
+    await deleteProductApi(it.sku);
+    selectedSkus.value = selectedSkus.value.filter((s) => s !== it.sku);
+    show('已删除', 'success');
+    await loadList();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    deletingId.value = '';
+  }
+}
+
+// 批量删除:基于已勾选的 SKU
+async function deleteSelected() {
+  if (deletingId.value) return;
+  const skus = [...selectedSkus.value];
+  if (!skus.length) {
+    show('请先勾选要删除的商品', 'error');
+    return;
+  }
+  if (
+    !(await confirmStore.ask({
+      title: '批量删除商品缓存',
+      message: `确认删除已勾选的 ${skus.length} 个商品的本地缓存?此操作仅删除 ERP 缓存,不影响 Ozon 后台商品。`,
+      danger: true,
+      confirmText: '删除',
+    }))
+  )
+    return;
+  deletingId.value = 'batch';
+  try {
+    const r = await deleteProductsBatch(skus);
+    const deleted = r?.deleted ?? 0;
+    const notFoundCount = r?.notFound?.length ?? 0;
+    show(`已删除 ${deleted} 个商品${notFoundCount ? `,${notFoundCount} 个未找到` : ''}`, 'success');
+    selectedSkus.value = [];
+    await loadList();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    deletingId.value = '';
+  }
+}
+
 // 商品简化状态徽章(2026-07):基于后端返回的 productStatus(5 类)
 // 2026-07:改名 saleable→出售中、created_no_stock→准备出售;合并 in_review/unknown → other
 const PRODUCT_STATUS_BADGE = {
@@ -690,6 +757,11 @@ onMounted(() => {
       <button class="btn btn-primary" @click="openBatchRefresh">批量更新图片</button>
       <button class="btn btn-primary" @click="openBatchStock">批量更新库存</button>
       <button class="btn btn-primary" @click="openBatchProductUpdate">批量更新信息</button>
+      <button
+        class="btn btn-danger"
+        :disabled="!!deletingId"
+        @click="deleteSelected"
+      >{{ deletingId === 'batch' ? '删除中…' : '批量删除' }}</button>
     </div>
 
     <!-- 按当前筛选条件批量操作(不限于当前页) -->
@@ -757,6 +829,11 @@ onMounted(() => {
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleRefresh(it)">更新图片</button>
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleStock(it)">更新库存</button>
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleProductUpdate(it)">更新信息</button>
+              <button
+                class="btn btn-sm btn-danger"
+                :disabled="deletingId === it.sku || deletingId === 'batch'"
+                @click="deleteSingle(it)"
+              >{{ deletingId === it.sku ? '删除中…' : '删除' }}</button>
             </td>
           </tr>
         </tbody>
