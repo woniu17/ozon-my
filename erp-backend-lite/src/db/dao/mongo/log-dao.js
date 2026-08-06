@@ -1,7 +1,7 @@
 // 采集日志 DAO(MongoDB 实现):含 aggregateLogStats 的 $facet+$unwind+$group
 import { cols } from '../../mongo.js';
 
-const LOG_TYPES = ['card', 'detail', 'pdp', 'search', 'bundle', 'marketStats', 'followSell'];
+const LOG_TYPES = ['card', 'detail', 'richMedia', 'search', 'bundle', 'marketStats', 'followSell'];
 const LOG_SOURCES = ['shop-page', 'pdp'];
 const LOG_STORE_CLASSES = ['mainland-china', 'non-mainland-china', 'unclassified'];
 const LOG_STATUS_KEYS = ['success', 'partial', 'failed', 'skipped', 'antibot'];

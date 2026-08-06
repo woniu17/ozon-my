@@ -1247,7 +1247,7 @@ router.get('/admin/api/preview/sku/:sku/profile', async (req, res, next) => {
 // ozon_auto_collect_log 集合的统计/列表/详情/写入端点
 // 鉴权:全局 JWT(authMiddleware);POST /log 由 SW 持 token 调用
 
-const LOG_TYPES = ['card', 'detail', 'pdp', 'search', 'bundle', 'marketStats', 'followSell'];
+const LOG_TYPES = ['card', 'detail', 'richMedia', 'search', 'bundle', 'marketStats', 'followSell'];
 const LOG_SOURCES = ['shop-page', 'pdp'];
 const LOG_STORE_CLASSES = ['mainland-china', 'non-mainland-china', 'unclassified'];
 const LOG_STATUS_KEYS = ['success', 'partial', 'failed', 'skipped', 'antibot'];

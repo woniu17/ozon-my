@@ -2,7 +2,7 @@
 // 关键:json_each(results) 展开 results 数组替代 $unwind
 import { db } from '../../index.js';
 
-const LOG_TYPES = ['card', 'detail', 'pdp', 'search', 'bundle', 'marketStats', 'followSell'];
+const LOG_TYPES = ['card', 'detail', 'richMedia', 'search', 'bundle', 'marketStats', 'followSell'];
 const LOG_SOURCES = ['shop-page', 'pdp'];
 const LOG_STORE_CLASSES = ['mainland-china', 'non-mainland-china', 'unclassified'];
 const LOG_STATUS_KEYS = ['success', 'partial', 'failed', 'skipped', 'antibot'];

@@ -26,7 +26,7 @@ const confirmStore = useConfirmStore();
 const STEP_KEYS = [
   { key: 'card', label: 'card' },
   { key: 'detail', label: 'detail' },
-  { key: 'pdp', label: 'pdp' },
+  { key: 'richMedia', label: 'richMedia' },
   { key: 'search', label: 'search' },
   { key: 'bundle', label: 'bundle' },
   { key: 'marketStats', label: 'marketStats' },

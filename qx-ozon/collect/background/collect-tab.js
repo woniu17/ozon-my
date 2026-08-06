@@ -1757,7 +1757,7 @@
       const results = [
         { type: 'card', hit: false },
         { type: 'detail', hit: false },
-        { type: 'pdp', hit: false },
+        { type: 'richMedia', hit: false },
         { type: 'search', hit: false },
         { type: 'bundle', hit: false },
         { type: 'marketStats', hit: false },
