@@ -297,10 +297,16 @@ router.post('/admin/api/batch-upload/auto-pick', async (req, res, next) => {
       hasRichContent: filters.hasRichContent === '1' || filters.hasRichContent === 'true',
       priceMin: Number(filters.priceMin),
       priceMax: Number(filters.priceMax),
-      minCacheHits: Math.max(0, Math.min(3, Number(filters.minCacheHits) || 0)),
-      maxCacheHits: Number.isFinite(Number(filters.maxCacheHits))
-        ? Math.max(0, Math.min(3, Number(filters.maxCacheHits)))
-        : undefined,
+      // 注意:空字符串 '' 会被 Number('') 转成 0(而非 NaN),需先排除空串
+      // 否则用户未勾"数据不完整"时 maxCacheHits 会被误设为 0,触发"命中数<=0"条件导致候选为 0
+      minCacheHits:
+        filters.minCacheHits !== '' && Number.isFinite(Number(filters.minCacheHits))
+          ? Math.max(0, Math.min(3, Number(filters.minCacheHits)))
+          : 0,
+      maxCacheHits:
+        filters.maxCacheHits !== '' && Number.isFinite(Number(filters.maxCacheHits))
+          ? Math.max(0, Math.min(3, Number(filters.maxCacheHits)))
+          : undefined,
       excludeFilteredCategories:
         filters.excludeFilteredCategories === '1' || filters.excludeFilteredCategories === 'true',
       // 超轻小件筛选:'1'=只看超轻小件,'0'=只看非超轻小件,空=不限
