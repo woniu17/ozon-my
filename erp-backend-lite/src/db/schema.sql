@@ -237,6 +237,7 @@ CREATE TABLE IF NOT EXISTS ozon_cache_index (
   bundle_hit         INTEGER DEFAULT 0,  bundle_fetched_at   TEXT,
   rich_media_hit     INTEGER DEFAULT 0,  rich_media_fetched_at TEXT,
   market_stats_hit   INTEGER DEFAULT 0,  market_stats_fetched_at TEXT,
+  market_stats_empty INTEGER DEFAULT 0,  -- marketStats: __empty 标记(采集成功但 Ozon 无数据),用于"有/无市场统计"筛选
   follow_sell_hit    INTEGER DEFAULT 0,  follow_sell_fetched_at TEXT,
 
   -- 冗余计算字段

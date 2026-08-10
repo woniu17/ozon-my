@@ -244,6 +244,7 @@ const state = reactive({
     priceMin: '', // 价格范围(闭区间,空字符串=不限)
     priceMax: '',
     descriptionQuality: '', // 描述状态:''=全部,'0'=描述为空,'1'=含占位符,'2'=按钮污染,'3'=描述有效,'1,2'=需清洗
+    marketStats: '', // 市场统计:''=全部,'has'=有真实数据,'none'=无真实数据(未采集+__empty 空标记)
     // 用上次的筛选条件覆盖初值
     ...(storedFilters || {}),
   },
@@ -268,6 +269,7 @@ async function loadList() {
     if (state.filters.priceMin !== '') params.priceMin = state.filters.priceMin;
     if (state.filters.priceMax !== '') params.priceMax = state.filters.priceMax;
     if (state.filters.descriptionQuality) params.descriptionQuality = state.filters.descriptionQuality;
+    if (state.filters.marketStats) params.marketStats = state.filters.marketStats;
     const data = await getCollectBoxV2FromCache(params);
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -437,6 +439,16 @@ onMounted(() => {
         <option value="">全部数据</option>
         <option value="full">数据完整</option>
         <option value="partial">数据不完整</option>
+      </select>
+      <select
+        class="filter-select"
+        v-model="state.filters.marketStats"
+        title="市场统计:marketStats 缓存是否含真实数据(排除 __empty 空标记)"
+        @change="search"
+      >
+        <option value="">全部市场统计</option>
+        <option value="has">有市场统计</option>
+        <option value="none">无市场统计</option>
       </select>
       <select
         class="filter-select"

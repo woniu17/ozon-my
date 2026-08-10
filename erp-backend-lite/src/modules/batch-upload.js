@@ -315,6 +315,8 @@ router.post('/admin/api/batch-upload/auto-pick', async (req, res, next) => {
       descriptionQuality: /^[0-9]+(,[0-9]+)*$/.test(String(filters.descriptionQuality || '').trim())
         ? String(filters.descriptionQuality).trim()
         : '',
+      // 市场统计筛选 'has'=有真实数据,'none'=无真实数据(未采集+__empty)
+      marketStats: String(filters.marketStats || '').trim(),
     };
 
     // 拉取所有候选 SKU(按筛选条件,已按 last_fetched_at DESC 排序)

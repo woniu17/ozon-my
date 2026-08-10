@@ -192,6 +192,8 @@ const filterSummary = computed(() => {
   if (f.descriptionQuality && DESC_QUALITY_LABEL[f.descriptionQuality]) {
     parts.push(`描述:${DESC_QUALITY_LABEL[f.descriptionQuality]}`);
   }
+  if (f.marketStats === 'has') parts.push('有市场统计');
+  else if (f.marketStats === 'none') parts.push('无市场统计');
   if (f.priceMin !== '' && f.priceMin != null) parts.push(`最低价 ${f.priceMin}`);
   if (f.priceMax !== '' && f.priceMax != null) parts.push(`最高价 ${f.priceMax}`);
   return parts.length ? parts.join(' / ') : '无(全部采集箱商品)';
@@ -265,6 +267,7 @@ async function doPreview() {
       minCacheHits: f.cacheCompleteness === 'full' ? '3' : '',
       maxCacheHits: f.cacheCompleteness === 'partial' ? '2' : '',
       descriptionQuality: f.descriptionQuality || '',
+      marketStats: f.marketStats || '',
     };
     const payload = {
       filters,

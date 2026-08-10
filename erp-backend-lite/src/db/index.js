@@ -188,6 +188,14 @@ async function ensureMigrations() {
     console.log('[db] migration: added column ozon_cache_index.description_quality');
     addedDescriptionQuality = true;
   }
+  // ozon_cache_index.market_stats_empty:marketStats 缓存 __empty 标记(采集成功但 Ozon 无数据)
+  // 用于采集箱"有/无市场统计"筛选。market_stats_hit 不区分 __empty,需额外冗余位
+  let addedMarketStatsEmpty = false;
+  if (ciCols.length > 0 && !ciCols.some((c) => c.name === 'market_stats_empty')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN market_stats_empty INTEGER DEFAULT 0`);
+    console.log('[db] migration: added column ozon_cache_index.market_stats_empty');
+    addedMarketStatsEmpty = true;
+  }
   // 缓存表重构:直接 DROP 旧 7 表 + legacy 表,新版用 6 张表(1 索引 + 5 数据)
   // 不写迁移脚本,旧数据自然过期(SW 重新采集填充新表)
   dropLegacyCacheTables(db);
@@ -209,6 +217,11 @@ async function ensureMigrations() {
   // 对 rich_media_hit=1 的 SKU 从 ozon_rich_media_cache 提取 description 并 classify
   if (addedDescriptionQuality) {
     backfillDescriptionQuality();
+  }
+  // 一次性回填:market_stats_empty 列刚加上时,旧 syncSku 未计算此字段(默认 0)
+  // 对 market_stats_hit=1 的 SKU 从 ozon_market_stats_cache.data 检测 __empty 标记
+  if (addedMarketStatsEmpty) {
+    backfillMarketStatsEmpty();
   }
   // 2026-07: 跟卖列表抽取店铺数据 — ozon_store_classification 补 logoImageUrl 列
   const scCols = db.prepare(`PRAGMA table_info(ozon_store_classification)`).all();
@@ -288,6 +301,28 @@ function backfillDescriptionQuality() {
     .run();
   console.log(
     `[db] migration: backfilled description_quality for ${result.changes} SKUs (rich_media_hit=1)`
+  );
+}
+
+// 一次性回填 ozon_cache_index.market_stats_empty
+// 旧 syncSku 不计算此字段,新增列后默认 0,需对 market_stats_hit=1 的 SKU 重算
+// 逻辑与 index-dao.js syncSku 一致:marketStats.data.__empty === true → 1
+// 用 json_extract 精准匹配布尔 true,避免 LIKE 误伤(LIKE '%__empty%' 可能匹配到子串)
+function backfillMarketStatsEmpty() {
+  const result = db
+    .prepare(
+      `UPDATE ozon_cache_index
+       SET market_stats_empty = CASE
+         WHEN json_extract(m.data, '$.__empty') IS 1 THEN 1
+         ELSE 0
+       END
+       FROM ozon_market_stats_cache m
+       WHERE m._id = ozon_cache_index.sku
+         AND ozon_cache_index.market_stats_hit = 1`
+    )
+    .run();
+  console.log(
+    `[db] migration: backfilled market_stats_empty for ${result.changes} SKUs (market_stats_hit=1)`
   );
 }
 

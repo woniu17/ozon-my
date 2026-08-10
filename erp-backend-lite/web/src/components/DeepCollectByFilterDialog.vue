@@ -53,6 +53,8 @@ const filterSummary = computed(() => {
   }
   if (f.ultraLight === '1') parts.push('超轻小件');
   else if (f.ultraLight === '0') parts.push('非超轻小件');
+  if (f.marketStats === 'has') parts.push('有市场统计');
+  else if (f.marketStats === 'none') parts.push('无市场统计');
   if (f.priceMin !== '' && f.priceMin != null) parts.push(`≥${f.priceMin}`);
   if (f.priceMax !== '' && f.priceMax != null) parts.push(`≤${f.priceMax}`);
   return parts.length ? parts.join('、') : '无筛选(全部商品)';
@@ -75,6 +77,7 @@ function buildFilterParams() {
   if (f.priceMin !== '' && f.priceMin != null) params.priceMin = f.priceMin;
   if (f.priceMax !== '' && f.priceMax != null) params.priceMax = f.priceMax;
   if (f.descriptionQuality) params.descriptionQuality = f.descriptionQuality;
+  if (f.marketStats) params.marketStats = f.marketStats;
   return params;
 }
 

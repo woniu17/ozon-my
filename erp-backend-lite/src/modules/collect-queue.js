@@ -499,6 +499,8 @@ router.post('/admin/api/collect-queue/batch-submit-by-filter', async (req, res, 
       descriptionQuality: /^[0-9]+(,[0-9]+)*$/.test(String(filters.descriptionQuality || '').trim())
         ? String(filters.descriptionQuality).trim()
         : '',
+      // 市场统计筛选 'has'=有真实数据,'none'=无真实数据(未采集+__empty)
+      marketStats: String(filters.marketStats || '').trim(),
     };
 
     // 拉取全部匹配 SKU(无分页,复用 auto-pick 的 DAO)

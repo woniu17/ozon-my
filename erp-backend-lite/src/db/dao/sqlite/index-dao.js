@@ -79,6 +79,7 @@ function buildFilterWhere(opts) {
     minCacheHits,
     maxCacheHits,
     excludeFilteredCategories,
+    marketStats,
   } = opts;
   const where = [];
   const params = [];
@@ -174,6 +175,14 @@ function buildFilterWhere(opts) {
       }
     }
   }
+  // 市场统计筛选:'has'=有真实数据,'none'=无真实数据(未采集 + __empty 空标记)
+  //   有数据:market_stats_hit=1 且 market_stats_empty=0
+  //   无数据:market_stats_hit=0 或 market_stats_empty=1
+  if (marketStats === 'has') {
+    where.push('market_stats_hit = 1 AND market_stats_empty = 0');
+  } else if (marketStats === 'none') {
+    where.push('(market_stats_hit = 0 OR market_stats_empty = 1)');
+  }
   return { where, params };
 }
 
@@ -220,6 +229,9 @@ export const indexDao = {
     const bundleData = parseJson(attr?.bundle_data);
     const rmData = parseJson(rm?.data);
     const msData = parseJson(ms?.data);
+    // market_stats_empty:marketStats.data.__empty === true(采集成功但 Ozon 接口无数据)
+    // 与 market_stats_hit 区分:hit 只看 data 是否存在,__empty 标记真实数据 vs 空标记
+    const msEmpty = msHit && msData?.__empty ? 1 : 0;
     const fsData = parseJson(fs?.data);
 
     // 方案B:search cache 存原始 variants,bundle cache 存原始 bundle item,
@@ -363,7 +375,7 @@ export const indexDao = {
         sku, card_hit, card_fetched_at, detail_hit, detail_fetched_at,
         search_hit, search_fetched_at, bundle_hit, bundle_fetched_at,
         rich_media_hit, rich_media_fetched_at,
-        market_stats_hit, market_stats_fetched_at,
+        market_stats_hit, market_stats_fetched_at, market_stats_empty,
         follow_sell_hit, follow_sell_fetched_at,
         hit_count, last_fetched_at,
         name, price, price_value, primary_image, url, rating_count,
@@ -374,7 +386,7 @@ export const indexDao = {
         description_quality,
         listed, searchable_text, updated_at
       ) VALUES (
-        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
+        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
       )
       ON CONFLICT(sku) DO UPDATE SET
         card_hit=excluded.card_hit, card_fetched_at=excluded.card_fetched_at,
@@ -383,6 +395,7 @@ export const indexDao = {
         bundle_hit=excluded.bundle_hit, bundle_fetched_at=excluded.bundle_fetched_at,
         rich_media_hit=excluded.rich_media_hit, rich_media_fetched_at=excluded.rich_media_fetched_at,
         market_stats_hit=excluded.market_stats_hit, market_stats_fetched_at=excluded.market_stats_fetched_at,
+        market_stats_empty=excluded.market_stats_empty,
         follow_sell_hit=excluded.follow_sell_hit, follow_sell_fetched_at=excluded.follow_sell_fetched_at,
         hit_count=excluded.hit_count, last_fetched_at=excluded.last_fetched_at,
         name=excluded.name, price=excluded.price, price_value=excluded.price_value,
@@ -421,6 +434,7 @@ export const indexDao = {
       rm?.fetchedAt || null,
       msHit,
       ms?.fetchedAt || null,
+      msEmpty,
       fsHit,
       fs?.fetchedAt || null,
       hitCount,
@@ -469,6 +483,7 @@ export const indexDao = {
    * @param {string} [opts.sellerId] - 卖家 ID(2026-07 新增,稳定主键,走 idx_ci_seller_id 索引)
    * @param {string} [opts.sellerSlug] - 卖家 slug(兼容字段,可变,走 idx_ci_seller 索引)
    * @param {string|number} [opts.ultraLight] - 超轻小件筛选:'1'=超轻小件,'0'=非超轻小件
+   * @param {string} [opts.marketStats] - 市场统计筛选:'has'=有真实数据,'none'=无真实数据(未采集+__empty)
    * @param {number} [opts.page=1]
    * @param {number} [opts.pageSize=50]
    * @returns {Promise<{items: Array, total: number}>}

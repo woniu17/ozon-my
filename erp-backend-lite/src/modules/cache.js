@@ -568,6 +568,8 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     const descriptionQuality = /^[0-9]+(,[0-9]+)*$/.test(descriptionQualityRaw)
       ? descriptionQualityRaw
       : '';
+    // marketStats:市场统计筛选 'has'=有真实数据,'none'=无真实数据(未采集+__empty)
+    const marketStats = String(req.query.marketStats || '').trim();
 
     // indexDao 单表查询:过滤 + 排序 + 分页全在 SQL 完成
     const { items, total } = await daos.indexDao.findList({
@@ -585,6 +587,7 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       excludeFilteredCategories,
       ultraLight,
       descriptionQuality,
+      marketStats,
       page,
       pageSize,
     });
