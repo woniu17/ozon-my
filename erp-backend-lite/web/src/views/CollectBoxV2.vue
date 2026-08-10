@@ -694,6 +694,8 @@ onMounted(() => {
   gap: 8px;
   margin-bottom: 16px;
   flex-wrap: wrap;
+  /* 与全局 .toolbar 的 padding: 0 24px 对齐,避免筛选栏内容贴左边界 */
+  padding: 0 24px;
 }
 .filter-input {
   width: 110px;
@@ -886,7 +888,9 @@ onMounted(() => {
   gap: 4px;
 }
 .filter-price {
-  width: 30px;
+  width: 60px;
+  /* 覆盖全局 .filter-input { min-width: 200px }(global.css),避免价格框被撑开 */
+  min-width: 60px;
   padding: 4px 8px;
   font-size: 13px;
 }
