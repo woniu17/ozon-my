@@ -183,7 +183,6 @@ const filterSummary = computed(() => {
   const f = props.filters || {};
   const parts = [];
   if (f.keyword) parts.push(`关键词:"${f.keyword}"`);
-  if (f.sellerId) parts.push('指定来源卖家');
   if (f.hasComments) parts.push('有评论');
   if (f.hasRichContent) parts.push('有富内容');
   if (f.unlisted) parts.push('未跟卖');
@@ -257,7 +256,6 @@ async function doPreview() {
     const f = props.filters || {};
     const filters = {
       keyword: f.keyword || '',
-      sellerId: f.sellerId || '',
       unlisted: f.unlisted ? '1' : '',
       hasComments: f.hasComments ? '1' : '',
       hasRichContent: f.hasRichContent ? '1' : '',

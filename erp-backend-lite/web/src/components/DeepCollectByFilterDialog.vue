@@ -43,7 +43,6 @@ const filterSummary = computed(() => {
   if (f.keyword) parts.push(`关键词="${f.keyword}"`);
   if (f.cacheCompleteness === 'full') parts.push('数据完整');
   else if (f.cacheCompleteness === 'partial') parts.push('数据不完整');
-  if (f.sellerId) parts.push(`卖家=${f.sellerId}`);
   if (f.unlisted) parts.push('未跟卖');
   if (f.hasComments) parts.push('有评论');
   if (f.hasRichContent) parts.push('有富内容');
@@ -68,7 +67,6 @@ function buildFilterParams() {
   if (f.keyword) params.keyword = String(f.keyword).trim();
   if (f.cacheCompleteness === 'full') params.minCacheHits = '3';
   if (f.cacheCompleteness === 'partial') params.maxCacheHits = '2';
-  if (f.sellerId) params.sellerId = f.sellerId;
   if (f.unlisted) params.unlisted = '1';
   if (f.hasComments) params.hasComments = '1';
   if (f.hasRichContent) params.hasRichContent = '1';

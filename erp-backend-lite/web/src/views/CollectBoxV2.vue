@@ -1,7 +1,7 @@
 <script setup>
 import { reactive, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { getCollectBoxV2FromCache, getCollectBoxV2Sellers } from '../api/collect-box-v2.js';
+import { getCollectBoxV2FromCache } from '../api/collect-box-v2.js';
 import {
   getFilteredCategories,
   addFilteredCategory,
@@ -67,9 +67,6 @@ function openBatchDialog() {
   }
   batchDialogVisible.value = true;
 }
-
-// 采集源卖家列表(供下拉框) — 从 ozon_store_sku 按 sellerId 分组
-const sellers = ref([]);
 
 // ── 中文类目名映射(2026-07 新增) ───────────────────────────
 // key = descriptionCategoryId, value = categoryName(中文,来自 OPI 类目树 ZH_HANS)
@@ -209,10 +206,6 @@ function loadStoredFilters() {
     const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && 'sellerSlug' in parsed && !('sellerId' in parsed)) {
-      // 旧版用 sellerSlug,新版改用 sellerId,旧值清空避免误用
-      delete parsed.sellerSlug;
-    }
     // 旧版用 fullData(boolean),新版改用 cacheCompleteness(三态),迁移旧值
     if (parsed && typeof parsed === 'object' && 'fullData' in parsed && !('cacheCompleteness' in parsed)) {
       parsed.cacheCompleteness = parsed.fullData ? 'full' : '';
@@ -235,7 +228,6 @@ const state = reactive({
   filters: {
     keyword: '',
     cacheCompleteness: '', // 数据完整度:''=全部,'full'=数据完整(3类全命中),'partial'=数据不完整(至少缺一类)
-    sellerId: '', // 2026-07:从 sellerSlug 改用 sellerId(稳定主键)
     unlisted: false,
     hasComments: false,
     hasRichContent: false, // 只看有富内容(richMedia.richContent 非空)
@@ -260,7 +252,6 @@ async function loadList() {
     };
     if (state.filters.cacheCompleteness === 'full') params.minCacheHits = '3';
     if (state.filters.cacheCompleteness === 'partial') params.maxCacheHits = '2';
-    if (state.filters.sellerId) params.sellerId = state.filters.sellerId;
     if (state.filters.unlisted) params.unlisted = '1';
     if (state.filters.hasComments) params.hasComments = '1';
     if (state.filters.hasRichContent) params.hasRichContent = '1';
@@ -364,14 +355,6 @@ function openImage(it) {
 }
 
 onMounted(() => {
-  // 加载采集源卖家列表(供下拉框)
-  getCollectBoxV2Sellers()
-    .then((list) => {
-      sellers.value = Array.isArray(list) ? list : [];
-    })
-    .catch(() => {
-      sellers.value = [];
-    });
   // 加载类目过滤黑名单(与列表并行加载,不影响主列表渲染)
   loadFilteredList();
   loadList();
@@ -412,12 +395,6 @@ onMounted(() => {
         placeholder="搜索 SKU"
         @keydown.enter="search"
       />
-      <select class="filter-select" v-model="state.filters.sellerId" title="按采集源 SKU 所属卖家筛选">
-        <option value="">全部卖家</option>
-        <option v-for="s in sellers" :key="s.sellerId" :value="s.sellerId">
-          {{ s.sellerName || s.sellerId }} ({{ s.skuCount }})
-        </option>
-      </select>
       <label class="filter-check" title="只显示有评论数(ratingCount > 0)的 SKU">
         <input type="checkbox" v-model="state.filters.hasComments" />
         <span>有评论</span>
@@ -719,8 +696,7 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 .filter-input {
-  flex: 1;
-  min-width: 180px;
+  width: 110px;
   padding: 6px 10px;
   border: 1px solid var(--border, #d9d9d9);
   border-radius: 4px;
@@ -910,7 +886,7 @@ onMounted(() => {
   gap: 4px;
 }
 .filter-price {
-  width: 90px;
+  width: 30px;
   padding: 4px 8px;
   font-size: 13px;
 }
