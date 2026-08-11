@@ -291,12 +291,12 @@ CREATE INDEX IF NOT EXISTS idx_ci_listed       ON ozon_cache_index(listed);
 CREATE INDEX IF NOT EXISTS idx_ci_seller       ON ozon_cache_index(seller_slug);
 CREATE INDEX IF NOT EXISTS idx_ci_rating       ON ozon_cache_index(rating_count);
 CREATE INDEX IF NOT EXISTS idx_ci_last_fetched ON ozon_cache_index(last_fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ci_desc_cat_id  ON ozon_cache_index(description_category_id);
+CREATE INDEX IF NOT EXISTS idx_ci_type_id       ON ozon_cache_index(type_id);
 -- 注:idx_ci_seller_id 由 db/index.js 的 migrateSellerIdPrimaryKey 负责创建,
 -- 因为旧库 ozon_cache_index 表已存在(CREATE TABLE IF NOT EXISTS 不会添加 seller_id 列),
 -- 需先 ALTER TABLE 补列再建索引,否则会报 "no such column: seller_id"
 -- 注:idx_ci_price_value 同理,在 ensureCacheIndexFtsAndPriceValue 中创建
--- 注:idx_ci_desc_cat_id / idx_ci_type_id 由 db/index.js 的 migrateCategoryFields 负责创建
--- (旧库需先 ALTER TABLE 补列再建索引,同理)
 
 -- ── FTS5 全文搜索虚拟表(外部内容表,与 ozon_cache_index 同步) ──────────────
 -- 替代原 idx_ci_fts(普通 B-tree 索引对 LIKE '%keyword%' 无效)

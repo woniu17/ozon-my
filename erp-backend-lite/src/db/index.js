@@ -146,8 +146,6 @@ async function ensureMigrations() {
   await migrateSellerIdPrimaryKey(db);
   // 2026-07: 清理 ozon_store_classification 中 _id 非 数字 的脏记录(slug 被当 sellerId 写入)
   await cleanupStoreClassificationDirtyRows(db);
-  // 2026-07: 类目过滤功能 — ozon_cache_index 补类目列 + 索引 + 从 bundle_data 回填
-  await migrateCategoryFields(db);
   // 2026-07: 跟卖状态即时标记 — ozon_cache_index 补 listed_store_id/listed_at/listed_task_id 列
   // 并从 follow_sell_task_items + follow_sell_tasks 一次性回填(取最近一条任务)
   await migrateListedFields(db);
@@ -213,13 +211,6 @@ async function ensureMigrations() {
   dropLegacyCacheTables(db);
   // 索引表新增 price_value 列 + FTS5 虚拟表 + 触发器
   ensureCacheIndexFtsAndPriceValue(db);
-  // 一次性回填:旧 syncSku 的 name fallback 只看 card.name + detail.title,
-  // DOM 解析失败时即使 bundle/search 有 4180 也写入空 name。
-  // 新 syncSku 扩展 fallback 链后,需主动重算历史空 name 行。
-  // 注:动态 import 避免循环依赖(db 模块初始化时 index-dao 尚未加载)
-  await backfillEmptyNames().catch((e) => {
-    console.warn('[db] migration: backfillEmptyNames failed:', e?.message || e);
-  });
   // 一次性回填:has_rich_content 列刚加上时,旧 syncSku 未计算此字段(默认 0)
   // 对 rich_media_hit=1 的 SKU 从 ozon_rich_media_cache 重算 has_rich_content
   if (addedHasRichContent) {
@@ -362,48 +353,6 @@ function backfillMarketStatsEmpty() {
   console.log(
     `[db] migration: backfilled market_stats_empty for ${result.changes} SKUs (market_stats_hit=1)`
   );
-}
-
-// 一次性回填 ozon_cache_index.name 为空但有缓存的 SKU
-// 通过动态 import indexDao 调用 syncSku,沿用最新 fallback 链
-async function backfillEmptyNames() {
-  const stats = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM ozon_cache_index
-       WHERE (name IS NULL OR name = '')
-         AND (card_hit=1 OR detail_hit=1 OR search_hit=1 OR bundle_hit=1
-              OR rich_media_hit=1 OR market_stats_hit=1 OR follow_sell_hit=1)`
-    )
-    .get();
-  if (!stats.n) return;
-  console.log(`[db] migration: backfilling name for ${stats.n} SKUs with empty name...`);
-  // 预防性 rebuild FTS5:旧库 FTS5 索引可能对部分行损坏(报 "database disk image is malformed"),
-  // rebuild 后这些行才能正常 upsert 触发器
-  try {
-    db.exec(`INSERT INTO ozon_cache_index_fts(ozon_cache_index_fts) VALUES('rebuild')`);
-  } catch (e) {
-    console.warn('[db] migration: FTS5 rebuild failed:', e?.message || e);
-  }
-  const { indexDao } = await import('./dao/sqlite/index-dao.js');
-  const skus = db
-    .prepare(
-      `SELECT sku FROM ozon_cache_index
-       WHERE (name IS NULL OR name = '')
-         AND (card_hit=1 OR detail_hit=1 OR search_hit=1 OR bundle_hit=1
-              OR rich_media_hit=1 OR market_stats_hit=1 OR follow_sell_hit=1)`
-    )
-    .all()
-    .map((r) => r.sku);
-  let fixed = 0;
-  for (const sku of skus) {
-    try {
-      await indexDao.syncSku(sku);
-      fixed++;
-    } catch (e) {
-      console.warn(`[db] migration: syncSku failed for ${sku}:`, e?.message || e);
-    }
-  }
-  console.log(`[db] migration: backfilled name for ${fixed}/${skus.length} SKUs`);
 }
 
 // 旧表迁移:为 ozon_cache_index 补 price_value 列 + 一次性 rebuild FTS5 索引
@@ -712,114 +661,6 @@ async function migrateSellerIdPrimaryKey(db) {
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_shallow_log_sellerId_time ON ozon_shallow_collect_log(sellerId, collectedAt DESC)`
   );
-}
-
-// 2026-07: 类目过滤功能 — ozon_cache_index 补类目列 + 索引 + 从 bundle_data 回填
-// 三件事:
-//  1) 补 description_category_id / type_id / category_name 三列(旧库 ALTER TABLE)
-//  2) 创建 idx_ci_desc_cat_id / idx_ci_type_id 索引
-//  3) 从 ozon_attribute_cache.bundle_data(JSON)回填类目字段到索引表
-// 幂等:已迁移过的库(新表结构)直接跳过。
-async function migrateCategoryFields(db) {
-  const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
-  if (ciCols.length === 0) return; // 表不存在,跳过(schema.sql 会创建)
-
-  // Step 1: 补列
-  let addedDescCatId = false;
-  let addedTypeId = false;
-  let addedCategoryName = false;
-  if (!ciCols.some((c) => c.name === 'description_category_id')) {
-    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN description_category_id INTEGER`);
-    console.log('[db] migration: added column ozon_cache_index.description_category_id');
-    addedDescCatId = true;
-  }
-  if (!ciCols.some((c) => c.name === 'type_id')) {
-    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN type_id INTEGER`);
-    console.log('[db] migration: added column ozon_cache_index.type_id');
-    addedTypeId = true;
-  }
-  if (!ciCols.some((c) => c.name === 'category_name')) {
-    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN category_name TEXT`);
-    console.log('[db] migration: added column ozon_cache_index.category_name');
-    addedCategoryName = true;
-  }
-
-  // Step 2: 索引(IF NOT EXISTS 幂等)
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_ci_desc_cat_id ON ozon_cache_index(description_category_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_ci_type_id ON ozon_cache_index(type_id)`);
-
-  // Step 3: 从 bundle_data + search_data 回填类目字段(幂等:每次启动都执行,COALESCE 保留已有值)
-  // 与 syncSku / prepare-bundle.js extractCategoryIds 同源:
-  //   - type_id:优先 search_data.items[0].description_type_dict_value(注意:字段名误用,实际是 type_id)
-  //              fallback bundle_data.type_id(bundle 接口通常不返此字段)
-  //   - description_category_id:优先 search_data.categories 中 level=3 的类目(OPI 字典要求 level_3_id)
-  //              fallback bundle_data.description_category_id(该值通常是 level_4,不保证正确)
-  //   - category_name:detail_data.category(DOM 面包屑)
-  // 注:SQLite UPDATE...FROM 在 JOIN ON/WHERE 中引用 target table 列时报错,改用相关子查询
-  //     (与 backfillHasRichContent 的写法一致)
-  if (addedDescCatId || addedTypeId || addedCategoryName) {
-    console.log('[db] migration: backfilling category fields from bundle_data + search_data...');
-  }
-  const result = db
-    .prepare(
-      `UPDATE ozon_cache_index
-       SET description_category_id = COALESCE(
-             -- 优先 search_data.categories level=3
-             (SELECT CASE
-                       WHEN EXISTS (
-                         SELECT 1 FROM json_each(
-                           json_extract(a.search_data, '$.items[0].categories')
-                         ) e
-                         WHERE json_extract(e.value, '$.level') = '3'
-                          OR json_extract(e.value, '$.level') = 3
-                       )
-                       THEN (
-                         SELECT CAST(json_extract(e.value, '$.id') AS INTEGER)
-                         FROM json_each(
-                           json_extract(a.search_data, '$.items[0].categories')
-                         ) e
-                         WHERE json_extract(e.value, '$.level') = '3'
-                            OR json_extract(e.value, '$.level') = 3
-                         LIMIT 1
-                       )
-                       ELSE NULL
-                     END
-              FROM ozon_attribute_cache a
-              WHERE a._id = ozon_cache_index.sku AND a.search_data IS NOT NULL),
-             -- fallback bundle_data.description_category_id
-             (SELECT CAST(json_extract(a.bundle_data, '$.description_category_id') AS INTEGER)
-              FROM ozon_attribute_cache a
-              WHERE a._id = ozon_cache_index.sku AND a.bundle_data IS NOT NULL
-                AND json_extract(a.bundle_data, '$.description_category_id') IS NOT NULL),
-             description_category_id),
-           type_id = COALESCE(
-             -- 优先 search_data.description_type_dict_value(实际是 type_id)
-             (SELECT CAST(json_extract(a.search_data, '$.items[0].description_type_dict_value') AS INTEGER)
-              FROM ozon_attribute_cache a
-              WHERE a._id = ozon_cache_index.sku AND a.search_data IS NOT NULL
-                AND json_extract(a.search_data, '$.items[0].description_type_dict_value') IS NOT NULL),
-             -- fallback bundle_data.type_id
-             (SELECT CAST(json_extract(a.bundle_data, '$.type_id') AS INTEGER)
-              FROM ozon_attribute_cache a
-              WHERE a._id = ozon_cache_index.sku AND a.bundle_data IS NOT NULL
-                AND json_extract(a.bundle_data, '$.type_id') IS NOT NULL),
-             type_id),
-           category_name = COALESCE(
-             (SELECT json_extract(d.detail_data, '$.category')
-              FROM ozon_dom_cache d WHERE d._id = ozon_cache_index.sku),
-             category_name)
-       WHERE EXISTS (
-         SELECT 1 FROM ozon_attribute_cache a
-         WHERE a._id = ozon_cache_index.sku
-           AND (a.bundle_data IS NOT NULL OR a.search_data IS NOT NULL)
-       )`
-    )
-    .run();
-  if (result.changes > 0) {
-    console.log(
-      `[db] migration: backfilled category fields for ${result.changes} SKUs`
-    );
-  }
 }
 
 // 2026-07: 跟卖状态即时标记 — 给 ozon_cache_index 补 listed_store_id/listed_at/listed_task_id 列

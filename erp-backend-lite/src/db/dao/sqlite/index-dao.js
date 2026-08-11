@@ -282,7 +282,7 @@ export const indexDao = {
     fetchedAts.sort();
     const lastFetchedAt = fetchedAts.pop() || null;
 
-    // 类目信息(2026-07 新增,从 bundle_data 提取冗余,供类目过滤功能使用)
+    // 类目信息(2026-07 新增,从 search_data / bundle_data 提取冗余,供类目过滤功能使用)
     // 与 prepare-bundle.js extractCategoryIds 同源:
     //   - typeId:优先 search_data 的 description_type_dict_value(实际是 type_id,字段名误用);
     //             fallback bundle_data.type_id(bundle 接口通常不返此字段,几乎全为空)
@@ -292,25 +292,16 @@ export const indexDao = {
     // detail_data.category 是 DOM 面包屑字符串(如 "服装/鞋类/运动鞋"),仅作 category_name 显示用
     let descriptionCategoryId = null;
     let typeId = null;
-    // Step 1: bundle_data 兜底(几乎只有 description_category_id,type_id 通常为空)
-    if (bundleData && typeof bundleData === 'object') {
-      const bDci = Number(bundleData.description_category_id);
-      const bTi = Number(bundleData.type_id);
-      if (Number.isFinite(bDci) && bDci > 0) descriptionCategoryId = bDci;
-      if (Number.isFinite(bTi) && bTi > 0) typeId = bTi;
-    }
-    // Step 2: search_data 兜底(优先级最高,但仅在 bundle 未命中时写入)
-    if ((descriptionCategoryId === null || typeId === null) && attrData) {
+    // Step 1: search_data 优先(level=3 类目最准确)
+    if (attrData) {
       const searchItem =
         Array.isArray(attrData.items) && attrData.items.length > 0 ? attrData.items[0] : null;
       if (searchItem) {
         // typeId:取 description_type_dict_value(注意:字段名误用,实际值是 type_id)
-        if (typeId === null) {
-          const sTi = Number(searchItem.description_type_dict_value);
-          if (Number.isFinite(sTi) && sTi > 0) typeId = sTi;
-        }
+        const sTi = Number(searchItem.description_type_dict_value);
+        if (Number.isFinite(sTi) && sTi > 0) typeId = sTi;
         // descriptionCategoryId:优先 categories 中 level=3 的类目,再 fallback 最深层
-        if (descriptionCategoryId === null && Array.isArray(searchItem.categories)) {
+        if (Array.isArray(searchItem.categories)) {
           const lvl3 = searchItem.categories.find((c) => c && Number(c.level) === 3);
           if (lvl3 && Number.isFinite(Number(lvl3.id)) && Number(lvl3.id) > 0) {
             descriptionCategoryId = Number(lvl3.id);
@@ -324,6 +315,17 @@ export const indexDao = {
             }
           }
         }
+      }
+    }
+    // Step 2: bundle_data fallback(几乎只有 description_category_id,type_id 通常为空)
+    if ((descriptionCategoryId === null || typeId === null) && bundleData && typeof bundleData === 'object') {
+      if (descriptionCategoryId === null) {
+        const bDci = Number(bundleData.description_category_id);
+        if (Number.isFinite(bDci) && bDci > 0) descriptionCategoryId = bDci;
+      }
+      if (typeId === null) {
+        const bTi = Number(bundleData.type_id);
+        if (Number.isFinite(bTi) && bTi > 0) typeId = bTi;
       }
     }
     const categoryName = detailData?.category || null;
@@ -397,10 +399,11 @@ export const indexDao = {
         seller_slug=COALESCE(ozon_cache_index.seller_slug, excluded.seller_slug),
         seller_id=COALESCE(ozon_cache_index.seller_id, excluded.seller_id),
         seller_name=COALESCE(ozon_cache_index.seller_name, excluded.seller_name),
-        -- 类目字段:COALESCE 保留 DB 当前值,仅在 DB 为 NULL 时取 excluded(避免 bundle 暂无数据时清空)
-        description_category_id=COALESCE(ozon_cache_index.description_category_id, excluded.description_category_id),
-        type_id=COALESCE(ozon_cache_index.type_id, excluded.type_id),
-        category_name=COALESCE(ozon_cache_index.category_name, excluded.category_name),
+        -- 类目字段:优先 excluded(syncSku 已按 search_data > bundle_data 优先级计算),
+        -- 仅当本次未算出值时保留 DB 当前值(避免 cache 缺失时清空已有类目)
+        description_category_id=COALESCE(excluded.description_category_id, ozon_cache_index.description_category_id),
+        type_id=COALESCE(excluded.type_id, ozon_cache_index.type_id),
+        category_name=COALESCE(excluded.category_name, ozon_cache_index.category_name),
         weight_g=excluded.weight_g, dim_sum_mm=excluded.dim_sum_mm,
         listed=ozon_cache_index.listed,
         searchable_text=excluded.searchable_text,
