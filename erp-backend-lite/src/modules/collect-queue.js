@@ -557,6 +557,91 @@ router.post('/admin/api/collect-queue/batch-submit-by-filter', async (req, res, 
   }
 });
 
+// ── 按本店商品批量入队(商品列表页"按筛选深度采集"按钮调用) ──────────
+
+// POST /admin/api/collect-queue/batch-submit-by-products
+// 对商品列表当前筛选匹配的全部本店商品,按其源 SKU 批量入队深度采集任务
+// body: { storeId, items: [{offerId, productId}], skipIfTodaySuccess?: bool, forceRefresh?: bool }
+//   offerId 格式如 "3468630567-0805-qx",源 SKU = offerId.split('-')[0]
+//   skipIfTodaySuccess 默认 true;forceRefresh=true 时强制关闭 skipIfTodaySuccess(语义互斥)
+//   无 ozon_cache_index 缓存记录的商品(sellerId 未知)会被跳过
+// 返回: { totalFound, enqueued, skipped, alreadyQueued, noCacheSkipped, forceRefresh }
+router.post('/admin/api/collect-queue/batch-submit-by-products', async (req, res, next) => {
+  try {
+    const { storeId = '', items = [], skipIfTodaySuccess = true, forceRefresh = false } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.json(ok({ totalFound: 0, enqueued: 0, skipped: 0, alreadyQueued: 0, noCacheSkipped: 0 }));
+    }
+
+    // 提取源 SKU(与 opi-item-builder.js / ProductUpdateDialog.vue fillFromCache 一致)
+    const sourceSkus = items
+      .map((it) => String(it.offerId || '').split('-')[0])
+      .filter((s) => s && s !== 'undefined' && s !== 'null');
+
+    // 批量查 ozon_cache_index 获取 sellerId/sellerSlug/domInfo
+    const cachedMap = await daos.indexDao.findListBySkus(sourceSkus);
+
+    // 批量入队(复用 collectQueueTasksDao.submit,语义与 batch-submit-by-filter 一致)
+    const effectiveSkip = skipIfTodaySuccess && !forceRefresh;
+    let enqueued = 0;
+    let skipped = 0;
+    let alreadyQueued = 0;
+    let noCacheSkipped = 0;
+    for (const it of items) {
+      const sourceSku = String(it.offerId || '').split('-')[0];
+      if (!sourceSku || sourceSku === 'undefined' || sourceSku === 'null') {
+        noCacheSkipped++;
+        continue;
+      }
+      const c = cachedMap.get(sourceSku);
+      if (!c) {
+        // 无缓存记录,sellerId 未知,跳过
+        noCacheSkipped++;
+        continue;
+      }
+      const domInfo = {
+        title: c.name || '',
+        price: c.price ?? '',
+        imageUrl: c.primaryImage || '',
+        ratingCount: c.ratingCount ?? null,
+      };
+      const r = await daos.collectQueueTasksDao.submit(
+        {
+          sku: sourceSku,
+          sellerId: c.sellerId,
+          sellerSlug: c.sellerSlug,
+          domInfo,
+          status: 'pending',
+          forceRefresh: !!forceRefresh,
+        },
+        { skipIfTodaySuccess: effectiveSkip }
+      );
+      if (r.created) enqueued++;
+      else if (r.skipped) skipped++;
+      else alreadyQueued++;
+    }
+
+    logger.info(
+      { storeId, totalFound: items.length, enqueued, skipped, alreadyQueued, noCacheSkipped, forceRefresh },
+      '[collect-queue] batch-submit-by-products done'
+    );
+
+    return res.json(
+      ok({
+        totalFound: items.length,
+        enqueued,
+        skipped,
+        alreadyQueued,
+        noCacheSkipped,
+        forceRefresh: !!forceRefresh,
+      })
+    );
+  } catch (e) {
+    logger.warn({ err: e.message }, '[collect-queue] batch-submit-by-products failed');
+    next(e);
+  }
+});
+
 // ── 任务消费(SW 调用) ────────────────────────────────────────────────
 
 // POST /admin/api/collect-queue/claim

@@ -43,6 +43,13 @@ export function batchSubmitByFilter(params) {
   return request.post('/admin/api/collect-queue/batch-submit-by-filter', params);
 }
 
+// 按本店商品批量入队深度采集任务(商品列表页"按筛选深度采集"按钮调用)
+// params: { storeId, items: [{offerId, productId}], skipIfTodaySuccess?: bool, forceRefresh?: bool }
+// 返回: { totalFound, enqueued, skipped, alreadyQueued, noCacheSkipped, forceRefresh }
+export function batchSubmitByProducts(params) {
+  return request.post('/admin/api/collect-queue/batch-submit-by-products', params);
+}
+
 // 清空 pending
 export function clearCollectQueue() {
   return request.post('/admin/api/collect-queue/clear');

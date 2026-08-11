@@ -19,6 +19,7 @@ import JsonTree from '../components/JsonTree.vue';
 import ImageRefreshDialog from '../components/ImageRefreshDialog.vue';
 import StockRefreshDialog from '../components/StockRefreshDialog.vue';
 import ProductUpdateDialog from '../components/ProductUpdateDialog.vue';
+import DeepCollectByProductsDialog from '../components/DeepCollectByProductsDialog.vue';
 import { useConfirmStore } from '../stores/confirm.js';
 
 const router = useRouter();
@@ -55,7 +56,9 @@ const refreshDialog = ref({ open: false, mode: 'single', singleItem: null, selec
 const stockDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
 // 商品信息更新弹窗(2026-07)
 const productUpdateDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
-// 按筛选批量操作:拉取中的状态('image' | 'stock' | '')
+// 按筛选深度采集弹窗(2026-08)
+const deepCollectDialog = ref({ open: false, items: [], storeId: '' });
+// 按筛选批量操作:拉取中的状态('image' | 'stock' | 'info' | 'collect' | '')
 const filterBatchLoading = ref('');
 // 删除中状态(单条 sku 或 'batch' 或 '')
 const deletingId = ref('');
@@ -537,7 +540,7 @@ function openBatchProductUpdate() {
 }
 
 // 按当前筛选条件批量更新(不限于当前页,拉取全量匹配商品的 productId/storeId)
-// type: 'image' | 'stock' | 'info'
+// type: 'image' | 'stock' | 'info' | 'collect'
 async function openFilteredBatch(type) {
   if (filterBatchLoading.value) return;
   filterBatchLoading.value = type;
@@ -553,6 +556,15 @@ async function openFilteredBatch(type) {
     const products = (data?.items || []).filter((p) => p.productId);
     if (!products.length) {
       show('当前筛选无可用商品(缺少 product_id)', 'error');
+      return;
+    }
+    if (type === 'collect') {
+      // 深度采集:直接打开弹窗,弹窗内展示匹配数并二次确认
+      deepCollectDialog.value = {
+        open: true,
+        items: products.map((p) => ({ offerId: String(p.offerId || ''), productId: String(p.productId), storeId: p.storeId || '' })),
+        storeId: state.filters.storeId || '',
+      };
       return;
     }
     const typeLabel = type === 'image' ? '图片' : type === 'stock' ? '库存' : '信息';
@@ -580,6 +592,9 @@ function openFilteredStock() {
 }
 function openFilteredProductUpdate() {
   return openFilteredBatch('info');
+}
+function openFilteredDeepCollect() {
+  return openFilteredBatch('collect');
 }
 
 // ── 删除商品缓存(2026-08)──────────────────────────────────────
@@ -888,6 +903,9 @@ onMounted(() => {
       <button class="btn btn-ghost" :disabled="!!filterBatchLoading" @click="openFilteredProductUpdate">
         {{ filterBatchLoading === 'info' ? '拉取中…' : '按筛选更新信息' }}
       </button>
+      <button class="btn btn-ghost" :disabled="!!filterBatchLoading" @click="openFilteredDeepCollect">
+        {{ filterBatchLoading === 'collect' ? '拉取中…' : '按筛选深度采集' }}
+      </button>
     </div>
 
     <div class="table-wrap">
@@ -1028,6 +1046,12 @@ onMounted(() => {
       :mode="productUpdateDialog.mode"
       :single-item="productUpdateDialog.singleItem"
       :selected-products="productUpdateDialog.selectedProducts"
+    />
+    <DeepCollectByProductsDialog
+      v-if="deepCollectDialog.open"
+      :items="deepCollectDialog.items"
+      :store-id="deepCollectDialog.storeId"
+      @close="deepCollectDialog.open = false"
     />
   </div>
 </template>

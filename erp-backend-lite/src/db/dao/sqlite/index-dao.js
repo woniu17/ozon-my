@@ -531,6 +531,37 @@ export const indexDao = {
     }));
   },
 
+  /**
+   * 按源 SKU 列表批量查询(商品列表页"按筛选深度采集"调用)
+   * 用于从本店商品的源 SKU 反查 sellerId/sellerSlug/domInfo 字段
+   * @param {string[]} skus - 源 SKU 列表(从 offerId.split('-')[0] 提取)
+   * @returns {Promise<Map<string, {sku, sellerId, sellerSlug, name, price, primaryImage, ratingCount}>>}
+   */
+  async findListBySkus(skus) {
+    if (!skus || skus.length === 0) return new Map();
+    const placeholders = skus.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT sku, seller_id, seller_slug, name, price, primary_image, rating_count
+         FROM ozon_cache_index WHERE sku IN (${placeholders})`
+      )
+      .all(...skus);
+    return new Map(
+      rows.map((r) => [
+        r.sku,
+        {
+          sku: r.sku,
+          sellerId: r.seller_id || '',
+          sellerSlug: r.seller_slug || '',
+          name: r.name || '',
+          price: r.price ?? '',
+          primaryImage: r.primary_image || '',
+          ratingCount: Number.isFinite(Number(r.rating_count)) ? Number(r.rating_count) : null,
+        },
+      ])
+    );
+  },
+
   /** overview 全览(轻量,只取命中位 + 时间) */
   async findOverviewList(keyword, page = 1, pageSize = 50) {
     const skip = (page - 1) * pageSize;
