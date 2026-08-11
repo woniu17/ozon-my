@@ -21,6 +21,7 @@
   }
 
   let _recBtn = null;
+  let _descRetrySku = ''; // 防止同一 SKU 的 webDescription 轮询重复启动
 
   function _escHtml(str) {
     if (!str) return '';
@@ -255,6 +256,45 @@
       if (text) return text;
     }
     return '';
+  }
+
+  // 从 webDescription widget DOM 提取并清洗 HTML 描述,保留 OPI 支持的标签白名单。
+  // 返回清洗后的 HTML 字符串;widget 不存在时返回 ''。
+  // webDescription widget 是懒加载的(需滚动到描述区域才渲染),首次调用可能返回空。
+  function extractDescriptionFromWidget() {
+    const descWidget = document.querySelector('[data-widget="webDescription"]');
+    if (!descWidget) return '';
+    const clone = descWidget.cloneNode(true);
+    // 移除标题元素("Описание" 等),保留正文
+    clone.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => h.remove());
+    // 允许下发给 OPI 的标签白名单(其他标签剥离但保留内容)
+    const ALLOWED_TAGS = new Set(['br', 'ul', 'ol', 'li', 'p', 'b', 'strong', 'i', 'em']);
+    const tmp = document.createElement('div');
+    tmp.appendChild(clone);
+    // 递归遍历,剥离非白名单标签(保留其子节点内容)+ 移除注释节点
+    const walk = (node) => {
+      const children = Array.from(node.childNodes);
+      for (const child of children) {
+        if (child.nodeType === 8) {
+          node.removeChild(child);
+        } else if (child.nodeType === 1) {
+          walk(child);
+          const tag = child.tagName.toLowerCase();
+          if (!ALLOWED_TAGS.has(tag)) {
+            while (child.firstChild) {
+              node.insertBefore(child.firstChild, child);
+            }
+            node.removeChild(child);
+          }
+        }
+      }
+    };
+    walk(tmp);
+    return tmp.innerHTML
+      .replace(/<br\s*\/?>/gi, '<br>')
+      .replace(/(<br>){3,}/gi, '<br><br>')
+      .replace(/>\s+</g, '><')
+      .trim();
   }
 
   function extractProductData() {
@@ -564,48 +604,11 @@
     //     webDescription widget 的 HTML 可能包含:
     //       <br> 段落分隔、<ul>/<ol>+<li> 列表、<p> 段落、<b>/<strong> 加粗等
     //     OPI /v3/product/import 描述字段支持上述基础 HTML 标签,直接下发保留格式。
-    let description = '';
-    const descWidget = document.querySelector('[data-widget="webDescription"]');
-    if (descWidget) {
-      const clone = descWidget.cloneNode(true);
-      // 移除标题元素("Описание" 等),保留正文
-      clone.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => h.remove());
-      // 允许下发给 OPI 的标签白名单(其他标签剥离但保留内容)
-      const ALLOWED_TAGS = new Set(['br', 'ul', 'ol', 'li', 'p', 'b', 'strong', 'i', 'em']);
-      // 先在临时容器中清洗,再用 innerHTML 拿到规整化的 HTML
-      const tmp = document.createElement('div');
-      tmp.appendChild(clone);
-      // 递归遍历,剥离非白名单标签(保留其子节点内容)+ 移除注释节点
-      const walk = (node) => {
-        const children = Array.from(node.childNodes);
-        for (const child of children) {
-          if (child.nodeType === 8) {
-            // HTML 注释 <!--...-->
-            node.removeChild(child);
-          } else if (child.nodeType === 1) {
-            walk(child);
-            const tag = child.tagName.toLowerCase();
-            if (!ALLOWED_TAGS.has(tag)) {
-              // 用子节点替换当前标签(保留内容)
-              while (child.firstChild) {
-                node.insertBefore(child.firstChild, child);
-              }
-              node.removeChild(child);
-            }
-          }
-        }
-      };
-      walk(tmp);
-      description = tmp.innerHTML
-        // 归一化 <br> 写法(<br>/<br/>/<br /> → <br>)
-        .replace(/<br\s*\/?>/gi, '<br>')
-        // 压缩连续 3+ 个 <br> 为 2 个(避免过多空行)
-        .replace(/(<br>){3,}/gi, '<br><br>')
-        // 移除标签间的空白文本节点(避免 <ul> 前后多余空格)
-        .replace(/>\s+</g, '><')
-        .trim();
-    }
+    //     ⚠ webDescription widget 是懒加载的,首次调用可能返回空 —
+    //     此处先尝试,为空时下方 _retryDescriptionFromWidget 会异步轮询补抓。
+    let description = extractDescriptionFromWidget();
     if (!description) description = jsonLd?.description || '';
+    console.log('[DESC] description len:', description.length, 'source:', /<[a-z]/i.test(description) ? 'widget' : 'jsonLd', 'has ul:', /<ul/i.test(description));
 
     // Characteristics (dimensions/weight) — from data-state with characteristics key
     const charsData = window.findStateDataByKeys(['characteristics', 'titleRs']);
@@ -728,6 +731,60 @@
         });
       } catch {
         /* fire-and-forget */
+      }
+    }
+
+    // webDescription widget 是懒加载的 — 首次 extractProductData 时可能尚未渲染,
+    // description 退化为 jsonLd 纯文本。此处异步轮询,widget 出现后补抓 HTML 描述
+    // 并更新 detail 缓存,确保 <ul>/<li>/<br> 等格式不丢失。
+    // ⚠ upsertDetail 会整体覆盖 detail_data,所以必须重发完整字段(而非仅 description)。
+    if (_product.sku && window.sendMessage && !/<[a-z]/i.test(_product.description)) {
+      const _sku = String(_product.sku);
+      const _retryPath = window.location.pathname;
+      if (_descRetrySku !== _sku) {
+        _descRetrySku = _sku;
+        (async () => {
+          const maxAttempts = 30; // 500ms × 30 = 15s
+          for (let i = 0; i < maxAttempts; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            if (window.location.pathname !== _retryPath) return; // SPA 导航离开
+            const desc = extractDescriptionFromWidget();
+            if (desc) {
+              console.log('[DESC_RETRY] widget appeared after', (i + 1) * 500, 'ms, desc len:', desc.length, 'has ul:', /<ul/i.test(desc));
+              _product.description = desc;
+              try {
+                window.sendMessage('domCacheSet', {
+                  sku: _sku,
+                  type: 'detail',
+                  data: {
+                    title: _product.title,
+                    images: _product.images,
+                    videos: _product.videos,
+                    sku: _product.sku,
+                    productId: _product.productId,
+                    brand: _product.brand,
+                    category: _product.category,
+                    characteristics: _product.characteristics,
+                    price: _product.price,
+                    walletPrice: _product.walletPrice,
+                    originalPrice: _product.originalPrice,
+                    seller: _product.seller,
+                    statistics: _product.statistics,
+                    freeRest: _product.freeRest,
+                    followSellCount: _product.followSellCount,
+                    followSellMinPrice: _product.followSellMinPrice,
+                    deliveryMode: _product.deliveryMode,
+                    rating: _product.rating,
+                    reviewCount: _product.reviewCount,
+                    description: desc,
+                  },
+                });
+              } catch { /* fire-and-forget */ }
+              return;
+            }
+          }
+          console.log('[DESC_RETRY] widget not appeared after 15s, keeping jsonLd description');
+        })();
       }
     }
 
