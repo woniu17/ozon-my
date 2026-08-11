@@ -5,6 +5,7 @@ import {
   getProducts,
   getProductDetail,
   syncProducts,
+  syncProductDescriptions,
   getSyncProgress,
   deleteProduct as deleteProductApi,
   deleteProductsBatch,
@@ -42,6 +43,7 @@ const state = reactive({
     productStatus: '', // 简化状态(2026-07):'' 全部 | saleable/created_no_stock/pending_creation/rejected/other
     hasStock: '', // '' 全部 | '1' 有库存 | '0' 无库存
     imageIssue: '',
+    descriptionQuality: '', // 描述状态:'' 全部 | '0' 空 | '1' 占位 | '2' 按钮污染 | '3' 正常 | '1,2' 需清洗
   },
 });
 
@@ -61,6 +63,10 @@ const deletingId = ref('');
 // 同步状态:从 Ozon 拉取店铺商品写入本地缓存
 const syncing = ref(false);
 const syncLabel = ref('同步店铺商品');
+// 描述同步状态:批量拉取 /v1/product/info/description 并计算描述质量标记
+// 复用 syncing 进度面板(syncProgressMap 按 storeId + phase=desc-* 上报)
+const syncingDesc = ref(false);
+const syncDescLabel = ref('同步描述');
 // 同步进度:各店铺实时进度列表(轮询 GET /sync-progress 填充)
 const syncProgressItems = ref([]);
 let syncProgressTimer = null;
@@ -152,6 +158,7 @@ async function loadList() {
       productStatus: state.filters.productStatus,
       hasStock: state.filters.hasStock,
       imageIssue: state.filters.imageIssue,
+      descriptionQuality: state.filters.descriptionQuality,
     });
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -183,6 +190,7 @@ function buildQueryFromState() {
   if (f.productStatus) q.productStatus = f.productStatus;
   if (f.hasStock) q.hasStock = f.hasStock;
   if (f.imageIssue) q.imageIssue = f.imageIssue;
+  if (f.descriptionQuality) q.descriptionQuality = f.descriptionQuality;
   if (state.page && state.page > 1) q.page = String(state.page);
   return q;
 }
@@ -215,6 +223,12 @@ function loadFromUrl() {
   }
   if (q.hasStock === '0' || q.hasStock === '1') state.filters.hasStock = q.hasStock;
   if (q.imageIssue === '0' || q.imageIssue === '1') state.filters.imageIssue = q.imageIssue;
+  // 描述状态:'' 全部 | '0'/'1'/'2'/'3' | '1,2' 需清洗(校验避免恶意 URL)
+  if (typeof q.descriptionQuality === 'string' && q.descriptionQuality) {
+    if (/^[0-9]+(,[0-9]+)*$/.test(q.descriptionQuality)) {
+      state.filters.descriptionQuality = q.descriptionQuality;
+    }
+  }
   if (q.page) {
     const n = parseInt(q.page, 10);
     if (!Number.isNaN(n) && n >= 1) state.page = n;
@@ -312,6 +326,77 @@ async function syncStoreProducts() {
     syncFinished.value = true; // 标记完成,面板显示"关闭"按钮
     syncing.value = false;
     syncLabel.value = '同步店铺商品';
+  }
+}
+
+// 同步描述:批量拉取 /v1/product/info/description,计算描述质量标记(占位/按钮污染)
+// 复用进度面板(syncProgressMap phase=desc-*);需先「同步店铺商品」拿到商品列表后才有意义
+async function syncDescriptions() {
+  const storeId = state.filters.storeId;
+  const targets = storeId
+    ? [{ id: storeId, name: storeName(storeId) }]
+    : (storesStore.list || []).map((s) => ({ id: s.id, name: s.name || s.id }));
+
+  if (targets.length === 0) {
+    show('没有可同步描述的店铺', 'error');
+    return;
+  }
+
+  const scopeText = storeId ? `店铺「${storeName(storeId)}」` : `全部 ${targets.length} 个店铺`;
+  if (
+    !(await confirmStore.ask({
+      message: `确认拉取 ${scopeText} 的商品描述并计算描述质量?大店铺需逐条调用接口,耗时较长。默认仅拉取未缓存的描述。`,
+    }))
+  ) {
+    return;
+  }
+
+  syncingDesc.value = true;
+  startProgressPolling();
+  startElapsedTimer();
+  syncFinished.value = false;
+  try {
+    const STORE_INTERVAL_MS = 5000;
+    const promises = targets.map((t, i) => {
+      const task = async () => {
+        if (i > 0) await new Promise((r) => setTimeout(r, i * STORE_INTERVAL_MS));
+        const r = await syncProductDescriptions(t.id, false);
+        return { target: t, result: r };
+      };
+      return task().catch((err) => {
+        show(`店铺 ${t.name} 描述同步失败: ${err.message || String(err)}`, 'error');
+        return { target: t, error: err };
+      });
+    });
+
+    syncDescLabel.value = storeId ? '描述同步中…' : `描述同步中 (并行 ${targets.length} 个店铺)`;
+
+    const results = await Promise.all(promises);
+    let totalSynced = 0;
+    let totalTotal = 0;
+    let failedStores = 0;
+    let totalFailed = 0;
+    for (const r of results) {
+      if (r.error) {
+        failedStores++;
+        continue;
+      }
+      totalSynced += r.result?.synced ?? 0;
+      totalTotal += r.result?.total ?? 0;
+      totalFailed += r.result?.failed ?? 0;
+    }
+    const summary = `描述同步完成:${totalSynced}/${totalTotal}${
+      failedStores > 0 ? `,失败 ${failedStores} 个店铺` : ''
+    }${totalFailed > 0 ? `,${totalFailed} 条拉取失败(见日志)` : ''}`;
+    show(summary, failedStores > 0 || totalFailed > 0 ? 'error' : 'success');
+    await loadList();
+  } finally {
+    try { const r = await getSyncProgress(); syncProgressItems.value = r?.items || []; } catch {}
+    stopProgressPolling();
+    stopElapsedTimer();
+    syncFinished.value = true;
+    syncingDesc.value = false;
+    syncDescLabel.value = '同步描述';
   }
 }
 
@@ -660,10 +745,18 @@ onMounted(() => {
   <div>
     <div class="toolbar">
       <h2>商品列表</h2>
-      <button class="btn btn-primary" :disabled="syncing" @click="syncStoreProducts">
+      <button class="btn btn-primary" :disabled="syncing || syncingDesc" @click="syncStoreProducts">
         {{ syncLabel }}
       </button>
-      <button class="btn btn-ghost" :disabled="state.loading || syncing" @click="loadList">
+      <button
+        class="btn btn-primary"
+        :disabled="syncing || syncingDesc"
+        :title="'批量拉取商品描述并计算描述质量(占位/按钮污染),用于「描述状态」筛选'"
+        @click="syncDescriptions"
+      >
+        {{ syncDescLabel }}
+      </button>
+      <button class="btn btn-ghost" :disabled="state.loading || syncing || syncingDesc" @click="loadList">
         {{ state.loading ? '刷新中…' : '刷新' }}
       </button>
     </div>
@@ -733,6 +826,19 @@ onMounted(() => {
         />
         <span>图片缺失</span>
       </label>
+      <select
+        class="filter-select"
+        v-model="state.filters.descriptionQuality"
+        title="描述状态:同步时按描述内容质量分级(占位文案/按钮污染)"
+        @change="search"
+      >
+        <option value="">全部描述</option>
+        <option value="0">描述为空</option>
+        <option value="1">含占位符</option>
+        <option value="2">按钮污染</option>
+        <option value="3">描述有效</option>
+        <option value="1,2">需清洗</option>
+      </select>
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
@@ -783,7 +889,7 @@ onMounted(() => {
             <th style="width:32px"><input type="checkbox" :checked="allSelected" aria-label="全选当前页" @change="toggleSelectAll" /></th>
             <th>SKU</th>
             <th style="width:140px">Offer ID</th>
-            <th style="width:140px">名称</th>
+            <th style="width:160px">名称</th>
             <th>店铺</th>
             <th>状态</th>
             <th>库存</th>
@@ -803,7 +909,24 @@ onMounted(() => {
             <td><input type="checkbox" :checked="isSelected(it.sku)" :aria-label="`选择 SKU ${it.sku}`" @change="toggleSelect(it.sku)" /></td>
             <td>{{ it.sku }}</td>
             <td>{{ it.offerId || '—' }}</td>
-            <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="it.name">{{ it.name || '—' }}</td>
+            <td style="max-width:160px">
+              <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="it.name">{{ it.name || '—' }}</div>
+              <span
+                v-if="it.descriptionQuality === 0"
+                class="dq-tag dq-tag-warn"
+                title="商品描述为空(未填写或无描述)"
+              >无描述</span>
+              <span
+                v-else-if="it.descriptionQuality === 1"
+                class="dq-tag dq-tag-danger"
+                title="描述是加载失败占位文案(如「Не удалось загрузить」),需重新填写"
+              >占位</span>
+              <span
+                v-else-if="it.descriptionQuality === 2"
+                class="dq-tag dq-tag-warn"
+                title="描述末尾粘有按钮文案(如「Читать далее」),源数据需清洗"
+              >需清洗</span>
+            </td>
             <td>{{ storeName(it.storeId) }}</td>
             <td>
               <div class="status-cell">
@@ -899,3 +1022,24 @@ onMounted(() => {
     />
   </div>
 </template>
+
+<style scoped>
+/* 描述质量标签(与采集箱 cb-extra-tag 同口径配色) */
+.dq-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  margin-top: 2px;
+  background: #f0f0f0;
+  color: #666;
+}
+.dq-tag-warn {
+  background: #fffbe6;
+  color: #d48806;
+}
+.dq-tag-danger {
+  background: #fff1f0;
+  color: #cf1322;
+}
+</style>

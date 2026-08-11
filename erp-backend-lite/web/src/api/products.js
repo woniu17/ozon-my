@@ -15,6 +15,13 @@ export function syncProducts(storeId) {
   return request.post('/admin/api/products/sync?storeId=' + encodeURIComponent(storeId));
 }
 
+// 批量拉取商品描述(/v1/product/info/description)并计算描述质量标记
+// force=1 时强制重新拉取已缓存的描述,默认增量(仅拉未缓存的)
+export function syncProductDescriptions(storeId, force = false) {
+  const q = 'storeId=' + encodeURIComponent(storeId) + (force ? '&force=1' : '');
+  return request.post('/admin/api/products/sync-descriptions?' + q);
+}
+
 // 查询所有店铺的同步进度(轮询用)
 export function getSyncProgress() {
   return request.get('/admin/api/products/sync-progress');

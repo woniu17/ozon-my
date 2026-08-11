@@ -65,10 +65,11 @@ CREATE TABLE IF NOT EXISTS favorites (
 
 -- 商品数据缓存
 CREATE TABLE IF NOT EXISTS product_data_cache (
-  sku        TEXT PRIMARY KEY,
-  data       TEXT NOT NULL,
-  store_id   TEXT,
-  fetched_at TEXT DEFAULT (datetime('now'))
+  sku                 TEXT PRIMARY KEY,
+  data                TEXT NOT NULL,
+  store_id            TEXT,
+  description_quality INTEGER DEFAULT 0,  -- 描述质量:0=空 1=占位 2=按钮污染 3=正常(同步时由 classifyDescriptionQuality 计算)
+  fetched_at          TEXT DEFAULT (datetime('now'))
 );
 
 -- 商品属性缓存(/v4/product/info/attributes 与 /v1/product/info/description 原始 JSON)

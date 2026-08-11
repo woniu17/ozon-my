@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { classifyDescriptionQuality } from '../utils/description-quality.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', '..', 'data');
@@ -45,6 +46,17 @@ async function ensureMigrations() {
   if (!cols.some((c) => c.name === 'store_id')) {
     db.exec(`ALTER TABLE product_data_cache ADD COLUMN store_id TEXT`);
     console.log('[db] migration: added column product_data_cache.store_id');
+  }
+  // product_data_cache.description_quality:描述质量分级,用于商品列表"描述状态"过滤
+  // 0=空 1=占位 2=按钮污染 3=正常(同步时由 classifyDescriptionQuality 计算)
+  let addedProductDescQuality = false;
+  if (!cols.some((c) => c.name === 'description_quality')) {
+    db.exec(`ALTER TABLE product_data_cache ADD COLUMN description_quality INTEGER DEFAULT 0`);
+    console.log('[db] migration: added column product_data_cache.description_quality');
+    addedProductDescQuality = true;
+  }
+  if (addedProductDescQuality) {
+    backfillProductDescriptionQuality();
   }
   // listing_templates 内置默认模板(is_builtin=1,不可删不可改)
   const builtinCount = db.prepare(`SELECT COUNT(*) as n FROM listing_templates WHERE is_builtin = 1`).get().n;
@@ -302,6 +314,32 @@ function backfillDescriptionQuality() {
   console.log(
     `[db] migration: backfilled description_quality for ${result.changes} SKUs (rich_media_hit=1)`
   );
+}
+
+// 一次性回填 product_data_cache.description_quality
+// v3 product/info/list 不返回 description,描述仅在 product_attributes_cache.description_data 中缓存
+// (由「同步描述」或属性面板拉取 /v1/product/info/description 后写入)
+// 回填从 product_attributes_cache.description_data 提取 description 并 classify
+// 用 JS 正则精准分类(与 admin.js、index-dao.js syncSku 同口径),
+// SQLite 无内建正则,故逐行读出 → classify → 批量 UPDATE(事务包裹)
+function backfillProductDescriptionQuality() {
+  const rows = db
+    .prepare(
+      `SELECT p.sku AS sku, json_extract(a.description_data, '$.description') AS desc
+       FROM product_data_cache p
+       JOIN product_attributes_cache a ON a.sku = p.sku
+       WHERE a.description_data IS NOT NULL`
+    )
+    .all();
+  if (!rows.length) return;
+  const update = db.prepare(`UPDATE product_data_cache SET description_quality = ? WHERE sku = ?`);
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      update.run(classifyDescriptionQuality(r.desc), r.sku);
+    }
+  });
+  tx();
+  console.log(`[db] migration: backfilled product_data_cache.description_quality for ${rows.length} products (from product_attributes_cache)`);
 }
 
 // 一次性回填 ozon_cache_index.market_stats_empty
