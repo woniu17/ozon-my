@@ -558,9 +558,22 @@
     const rating = jsonLd?.aggregateRating?.ratingValue || null;
     const reviewCount = jsonLd?.aggregateRating?.reviewCount || null;
 
-    // Description — from JSON-LD (Ozon PDP SSR 必带,长度通常 500-2000 字符)
-    // 供 dom detail 缓存 → 后端 buildSynthesizedFromCache 兜底使用
-    const description = jsonLd?.description || '';
+    // Description — 优先 webDescription widget DOM(保留 <br> 段落标签),兜底 JSON-LD
+    // 注:JSON-LD description 是 schema.org 规范的纯文本,Ozon SSR 生成时剥离所有 HTML 和换行,
+    //     段落直接粘连(如 "...использованияСветодиодный"),不适合直接展示。
+    //     webDescription widget 的 HTML 保留 <br><br> 段落分隔,OPI 提交时直接下发 <br> 给 Ozon。
+    let description = '';
+    const descWidget = document.querySelector('[data-widget="webDescription"]');
+    if (descWidget) {
+      const clone = descWidget.cloneNode(true);
+      clone.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => h.remove());
+      description = clone.innerHTML
+        .replace(/<br\s*\/?>/gi, '<br>')
+        .replace(/(<br>){3,}/gi, '<br><br>')
+        .replace(/<[^>]+>/g, (tag) => (tag.toLowerCase() === '<br>' ? '<br>' : ''))
+        .trim();
+    }
+    if (!description) description = jsonLd?.description || '';
 
     // Characteristics (dimensions/weight) — from data-state with characteristics key
     const charsData = window.findStateDataByKeys(['characteristics', 'titleRs']);
