@@ -207,19 +207,24 @@ async function fillBatchFromCache() {
   }
   batchCacheLoading.value = true;
   try {
-    const r = await getSkuProfileBatch(skus, currentStoreId.value);
-    const items = r?.items || [];
+    // 后端 batch 接口限制单次最多 200 个 SKU,这里分批调用
+    const BATCH_SIZE = 200;
     const dataMap = new Map();
     let hitCount = 0;
-    for (const item of items) {
-      const offerIds = skuMap.get(item.sku) || [];
-      for (const oid of offerIds) {
-        dataMap.set(oid, {
-          name: item.name || '',
-          description: item.description || '',
-          sources: item.sources || {},
-        });
-        if (item.name || item.description) hitCount++;
+    for (let i = 0; i < skus.length; i += BATCH_SIZE) {
+      const chunk = skus.slice(i, i + BATCH_SIZE);
+      const r = await getSkuProfileBatch(chunk, currentStoreId.value);
+      const items = r?.items || [];
+      for (const item of items) {
+        const offerIds = skuMap.get(item.sku) || [];
+        for (const oid of offerIds) {
+          dataMap.set(oid, {
+            name: item.name || '',
+            description: item.description || '',
+            sources: item.sources || {},
+          });
+          if (item.name || item.description) hitCount++;
+        }
       }
     }
     batchCacheData.value = dataMap;
