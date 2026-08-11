@@ -551,6 +551,7 @@ async function openFilteredBatch(type) {
       productStatus: state.filters.productStatus,
       hasStock: state.filters.hasStock,
       imageIssue: state.filters.imageIssue,
+      descriptionQuality: state.filters.descriptionQuality,
       idsOnly: 1,
     });
     const products = (data?.items || []).filter((p) => p.productId);
