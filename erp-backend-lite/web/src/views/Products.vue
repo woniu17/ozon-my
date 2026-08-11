@@ -348,7 +348,7 @@ async function syncDescriptions() {
   const scopeText = storeId ? `店铺「${storeName(storeId)}」` : `全部 ${targets.length} 个店铺`;
   if (
     !(await confirmStore.ask({
-      message: `确认拉取 ${scopeText} 的商品描述并计算描述质量?大店铺需逐条调用接口,耗时较长。默认仅拉取未缓存的描述。`,
+      message: `确认拉取 ${scopeText} 的商品描述并计算描述质量?大店铺需逐条调用接口,耗时较长。将统一重新拉取全部商品描述(不判断本地是否已有)。`,
     }))
   ) {
     return;
@@ -363,7 +363,7 @@ async function syncDescriptions() {
     const promises = targets.map((t, i) => {
       const task = async () => {
         if (i > 0) await new Promise((r) => setTimeout(r, i * STORE_INTERVAL_MS));
-        const r = await syncProductDescriptions(t.id, false);
+        const r = await syncProductDescriptions(t.id, true);
         return { target: t, result: r };
       };
       return task().catch((err) => {
