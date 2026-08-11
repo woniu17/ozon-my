@@ -20,6 +20,16 @@ export function getSkuProfile(sku, storeId) {
   return request.get('/admin/api/preview/sku/' + encodeURIComponent(sku) + '/profile', params);
 }
 
+// 批量查询 SKU 缓存画像(精简版,仅 name/description/sources)
+// skus: string[](最多 200),storeId 可选
+// 返回 { items: [{ sku, name, description, sources }] }
+// 用途:批量更新信息时一次性拉取所有商品的缓存标题/描述
+export function getSkuProfileBatch(skus, storeId) {
+  const body = { skus };
+  if (storeId) body.storeId = storeId;
+  return request.post('/admin/api/preview/sku/profile/batch', body);
+}
+
 // 上架预览·一键提交(走 /ozon/products/import,需 x-ozon-store-id header)
 // items: 合成 OPI 输入 item 数组(从 profile 接口拿到 item 后可改 price)
 // options.templateId / options.defaultStock: 任务创建时存快照,stock-sync 定时任务据此设库存

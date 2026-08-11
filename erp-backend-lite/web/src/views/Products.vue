@@ -537,7 +537,7 @@ function openBatchProductUpdate() {
 }
 
 // 按当前筛选条件批量更新(不限于当前页,拉取全量匹配商品的 productId/storeId)
-// type: 'image' | 'stock'
+// type: 'image' | 'stock' | 'info'
 async function openFilteredBatch(type) {
   if (filterBatchLoading.value) return;
   filterBatchLoading.value = type;
@@ -555,13 +555,16 @@ async function openFilteredBatch(type) {
       show('当前筛选无可用商品(缺少 product_id)', 'error');
       return;
     }
-    if (!(await confirmStore.ask({ message: `将对当前筛选匹配的 ${products.length} 个商品批量更新${type === 'image' ? '图片' : '库存'},是否继续?` }))) {
+    const typeLabel = type === 'image' ? '图片' : type === 'stock' ? '库存' : '信息';
+    if (!(await confirmStore.ask({ message: `将对当前筛选匹配的 ${products.length} 个商品批量更新${typeLabel},是否继续?` }))) {
       return;
     }
     if (type === 'image') {
       refreshDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
-    } else {
+    } else if (type === 'stock') {
       stockDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
+    } else if (type === 'info') {
+      productUpdateDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
     }
   } catch (e) {
     show(e.message || String(e), 'error');
@@ -574,6 +577,9 @@ function openFilteredRefresh() {
 }
 function openFilteredStock() {
   return openFilteredBatch('stock');
+}
+function openFilteredProductUpdate() {
+  return openFilteredBatch('info');
 }
 
 // ── 删除商品缓存(2026-08)──────────────────────────────────────
@@ -878,6 +884,9 @@ onMounted(() => {
       </button>
       <button class="btn btn-ghost" :disabled="!!filterBatchLoading" @click="openFilteredStock">
         {{ filterBatchLoading === 'stock' ? '拉取中…' : '按筛选更新库存' }}
+      </button>
+      <button class="btn btn-ghost" :disabled="!!filterBatchLoading" @click="openFilteredProductUpdate">
+        {{ filterBatchLoading === 'info' ? '拉取中…' : '按筛选更新信息' }}
       </button>
     </div>
 

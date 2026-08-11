@@ -1304,6 +1304,41 @@ router.get('/admin/api/preview/sku/:sku/profile', async (req, res, next) => {
   }
 });
 
+// POST /admin/api/preview/sku/profile/batch — 批量查询 SKU 缓存画像(精简)
+// 入参: { skus: string[] }(最多 200), storeId?(可选,仅供 buildSynthesizedFromCache 字典过滤用)
+// 出参: { items: [{ sku, name, description, sources }] }
+// 用途:批量更新信息时前端一次性拉取所有商品的缓存 name/description,避免 N 次单 SKU 请求
+// 精简:只返回 name/description/sources,不返回完整 OPI(前端不需要)
+router.post('/admin/api/preview/sku/profile/batch', async (req, res, next) => {
+  try {
+    const rawSkus = Array.isArray(req.body?.skus) ? req.body.skus : [];
+    const skus = rawSkus.map(String).filter(Boolean).slice(0, 200);
+    const storeId = String(req.body?.storeId || '');
+    if (!skus.length) return res.json(ok({ items: [] }));
+
+    // 并发查询,单 SKU 失败不影响其他(返回空 name/description)
+    const results = await Promise.all(
+      skus.map(async (sku) => {
+        try {
+          const synth = await buildSynthesizedFromCache(sku, storeId);
+          return {
+            sku,
+            name: synth.item?.name || '',
+            description: synth.item?.scraped_description || '',
+            sources: synth.sources || {},
+          };
+        } catch (e) {
+          return { sku, name: '', description: '', sources: {}, error: e.message };
+        }
+      })
+    );
+    return res.json(ok({ items: results }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[cache] preview/sku/profile/batch failed');
+    next(e);
+  }
+});
+
 // ── 采集日志(/admin/api/auto-collect/*) ────────────────────
 // ozon_auto_collect_log 集合的统计/列表/详情/写入端点
 // 鉴权:全局 JWT(authMiddleware);POST /log 由 SW 持 token 调用
