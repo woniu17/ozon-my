@@ -1128,12 +1128,13 @@ export async function buildSynthesizedFromCache(sku, storeId) {
   if (!name) name = detailData?.title || '';
   if (!name) name = cardData?.name || '';
 
-  // description:优先 bundle attr 4191,兜底 richMedia.description → detailData.description
+  // description:优先 bundle attr 4191(卖家原始填写) → detailData.description(PDP DOM 带 <br> 格式)
+  //   → richMedia.description(纯文本兜底,无 <br>)
   let description = '';
   const bAttr4191 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4191');
   if (bAttr4191?.values?.[0]?.value) description = bAttr4191.values[0].value;
-  if (!description) description = richMediaData?.description || '';
   if (!description) description = detailData?.description || '';
+  if (!description) description = richMediaData?.description || '';
 
   const price = detailData?.price || cardData?.price || '';
   const barcode = sv._searchMeta?.barcodes?.[0] || bundleItem.barcode || '';
