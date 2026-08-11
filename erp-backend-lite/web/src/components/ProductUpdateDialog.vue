@@ -65,9 +65,6 @@ const currentStoreId = computed(() => {
 // 当前生效的 offerId(single 模式)
 const currentOfferId = computed(() => props.singleItem?.offerId || '');
 
-// 当前商品的 Ozon 数字 SKU(single 模式,用于从本地缓存读取数据)
-const currentSku = computed(() => props.singleItem?.sku || '');
-
 // 从缓存填充字段的加载状态 + 缓存命中情况
 const fillingFromCache = ref(false);
 const cacheProfile = ref(null); // getSkuProfile 返回的 original,缓存后供多次按钮复用
@@ -120,15 +117,19 @@ async function loadPreview() {
 // 从本地 SKU 缓存填充指定字段的值
 // field: 'name' | 'description'(后续可拓展 price/weight 等)
 async function fillFromCache(field) {
-  if (!currentSku.value) {
-    show('缺少 SKU,无法从缓存获取(仅单条模式可用)', 'error');
+  // 跟卖上架后 offer_id 格式为 {源Ozon数字SKU}-{MMDD}-qx(如 3468630567-0805-qx)
+  // ozon_cache_index 等缓存表以源 Ozon 数字 SKU 为主键,需从 offer_id 提取前缀
+  const offerId = props.singleItem?.offerId || '';
+  const cacheSku = offerId ? String(offerId).split('-')[0] : '';
+  if (!cacheSku) {
+    show('缺少 offer_id,无法从缓存获取(仅单条模式可用)', 'error');
     return;
   }
   // 首次调用时拉取缓存画像,后续复用(避免每个字段按钮都打一次接口)
   if (!cacheProfile.value) {
     fillingFromCache.value = true;
     try {
-      const r = await getSkuProfile(currentSku.value, currentStoreId.value);
+      const r = await getSkuProfile(cacheSku, currentStoreId.value);
       if (r?.error) {
         show(`缓存不可用:${r.error}`, 'error');
         return;
@@ -294,7 +295,7 @@ async function submit() {
               :disabled="submitting"
             />
             <button
-              v-if="!isBatch && currentSku"
+              v-if="!isBatch && (props.singleItem?.offerId)"
               class="btn btn-sm btn-ghost pu-cache-btn"
               :disabled="fillingFromCache || submitting"
               :title="cacheSourcesSummary || '从本地采集缓存填充标题'"
@@ -318,7 +319,7 @@ async function submit() {
               :disabled="submitting"
             ></textarea>
             <button
-              v-if="!isBatch && currentSku"
+              v-if="!isBatch && (props.singleItem?.offerId)"
               class="btn btn-sm btn-ghost pu-cache-btn"
               :disabled="fillingFromCache || submitting"
               :title="cacheSourcesSummary || '从本地采集缓存填充描述'"

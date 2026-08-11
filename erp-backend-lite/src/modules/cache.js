@@ -1026,7 +1026,62 @@ export async function buildSynthesizedFromCache(sku, storeId) {
   };
 
   if (!attrDoc) {
-    return { sources, error: '缺少 attribute 缓存,无法合成 OPI' };
+    // 降级:attribute 缓存缺失,无法合成完整 OPI(无 attributes/weight/dimensions)
+    // 但仍从 dom/richMedia 提取基础字段(name/description/price/images),
+    // 供"商品更新信息"等场景读取缓存值
+    const cardData = domDoc?.card || null;
+    const detailData = domDoc?.detail || null;
+    const richMediaData = rmDoc?.data || null;
+    const name = detailData?.title || cardData?.name || '';
+    const description = richMediaData?.description || detailData?.description || '';
+    const price = detailData?.price || cardData?.price || '';
+    let primaryImage = cardData?.image || '';
+    if (!primaryImage && detailData?.images?.length) primaryImage = detailData.images[0];
+    const images = Array.isArray(detailData?.images) ? [...detailData.images] : [];
+    const item = {
+      _sourceVariant: {},
+      images: [
+        ...(primaryImage ? [{ file_name: primaryImage, default: true }] : []),
+        ...images.map((u) => ({ file_name: u, default: false })),
+      ],
+      name,
+      price,
+      old_price: detailData?.originalPrice || '',
+      offer_id: 'SKU' + sku,
+      weight: '',
+      depth: '',
+      width: '',
+      height: '',
+      scraped_description: description,
+      barcode: '',
+      videoUrl: richMediaData?.mp4 || '',
+      videoCover: '',
+    };
+    const portalItem = {
+      name,
+      price,
+      old_price: item.old_price,
+      primary_image: primaryImage,
+      images,
+      weight: '',
+      depth: '',
+      width: '',
+      height: '',
+      attributes: [],
+      complex_attributes: [],
+      description_category_id: null,
+      type_id: null,
+      video_url: item.videoUrl,
+    };
+    return {
+      sources,
+      item,
+      portalItem,
+      opiItem: null,
+      attrDict: {},
+      raw: { bundleData: null, searchData: null, cardData, richMediaData, detailData },
+      partial: true,
+    };
   }
 
   const cardData = domDoc?.card || null;
@@ -1073,11 +1128,12 @@ export async function buildSynthesizedFromCache(sku, storeId) {
   if (!name) name = detailData?.title || '';
   if (!name) name = cardData?.name || '';
 
-  // description:优先 bundle attr 4191,兜底 richMedia.description
+  // description:优先 bundle attr 4191,兜底 richMedia.description → detailData.description
   let description = '';
   const bAttr4191 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4191');
   if (bAttr4191?.values?.[0]?.value) description = bAttr4191.values[0].value;
   if (!description) description = richMediaData?.description || '';
+  if (!description) description = detailData?.description || '';
 
   const price = detailData?.price || cardData?.price || '';
   const barcode = sv._searchMeta?.barcodes?.[0] || bundleItem.barcode || '';
@@ -1238,6 +1294,7 @@ router.get('/admin/api/preview/sku/:sku/profile', async (req, res, next) => {
         portalItem: portalPreview,
         opiItem,
         attrDict, // 属性 ID -> {id, name, description, type, dictionary_id}(供前端显示可读属性名)
+        partial: !!synth.partial, // 降级模式(attribute 缓存缺失,opiItem 为 null)
       })
     );
   } catch (e) {

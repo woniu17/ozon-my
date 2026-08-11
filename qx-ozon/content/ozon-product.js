@@ -558,6 +558,10 @@
     const rating = jsonLd?.aggregateRating?.ratingValue || null;
     const reviewCount = jsonLd?.aggregateRating?.reviewCount || null;
 
+    // Description — from JSON-LD (Ozon PDP SSR 必带,长度通常 500-2000 字符)
+    // 供 dom detail 缓存 → 后端 buildSynthesizedFromCache 兜底使用
+    const description = jsonLd?.description || '';
+
     // Characteristics (dimensions/weight) — from data-state with characteristics key
     const charsData = window.findStateDataByKeys(['characteristics', 'titleRs']);
     const characteristics = {};
@@ -620,6 +624,7 @@
       followSellCount,
       followSellMinPrice,
       deliveryMode,
+      description,
     };
 
     // 有 sku 时异步写 detail 缓存(详情页关键字段,不阻塞返回)
@@ -655,6 +660,7 @@
             deliveryMode: _product.deliveryMode,
             rating: _product.rating,
             reviewCount: _product.reviewCount,
+            description: _product.description,
           },
         });
       } catch {
