@@ -12,6 +12,7 @@ import {
 import { useStoresStore } from '../stores/stores.js';
 import { useConfirmStore } from '../stores/confirm.js';
 import { useToast } from '../components/useToast.js';
+import AppPager from '../components/AppPager.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -28,13 +29,15 @@ const state = ref({
   retryingId: '',
   cancelling: false,
 });
+const page = ref(1);
+const pageSize = ref(50);
 let pollTimer = null;
 
 async function loadDetail(silent = false) {
   if (!silent) state.value.loading = true;
   state.value.error = '';
   try {
-    const r = await getProductUpdateDetail(localTaskId.value);
+    const r = await getProductUpdateDetail(localTaskId.value, { page: page.value, pageSize: pageSize.value });
     state.value.detail = r || null;
     schedulePolling();
   } catch (err) {
@@ -43,6 +46,11 @@ async function loadDetail(silent = false) {
   } finally {
     if (!silent) state.value.loading = false;
   }
+}
+
+function onPageChange(p) {
+  page.value = p;
+  loadDetail();
 }
 
 // RUNNING/PENDING 时每 3s 轮询
@@ -160,13 +168,12 @@ function opiErrors(item) {
   return errs.map((e) => e.message || e.code || e.description || JSON.stringify(e)).join('; ');
 }
 
-// 是否可取消(还有 PENDING/PROCESSING items 且任务未终态)
+// 是否可取消(任务未终态,且 total > success+failed 表示还有未处理 items)
 const canCancel = computed(() => {
   const task = state.value.detail?.task;
   if (!task) return false;
   if (['SUCCESS', 'FAILED', 'PARTIAL'].includes(task.status)) return false;
-  const items = state.value.detail?.items || [];
-  return items.some((it) => it.status === 'PENDING' || it.status === 'PROCESSING');
+  return task.totalCount > (task.successCount || 0) + (task.failedCount || 0);
 });
 
 onMounted(() => {
@@ -263,6 +270,13 @@ onBeforeUnmount(() => {
           </tbody>
         </table>
       </div>
+
+      <AppPager
+        :modelValue="page"
+        :total="state.detail.total || 0"
+        :pageSize="pageSize"
+        @update:modelValue="onPageChange"
+      />
     </template>
     <div v-else class="empty">无数据</div>
   </div>

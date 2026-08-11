@@ -153,7 +153,9 @@ router.get('/admin/api/product-update/supported-fields', (_req, res) => {
   res.json(ok({ fields: getSupportedFields() }));
 });
 
-// GET /admin/api/product-update/:localTaskId —— 任务详情(含 items)
+// GET /admin/api/product-update/:localTaskId —— 任务详情(含 items,分页)
+// query: page=1&pageSize=50(默认 50,最大 200);不传则默认 page=1&pageSize=50
+// 返回 { task, items, total, page, pageSize }
 router.get('/admin/api/product-update/:localTaskId', (req, res, next) => {
   try {
     const localTaskId = String(req.params.localTaskId);
@@ -161,9 +163,15 @@ router.get('/admin/api/product-update/:localTaskId', (req, res, next) => {
     if (!task) {
       return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '商品信息更新任务不存在: ' + localTaskId));
     }
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+    const offset = (page - 1) * pageSize;
+    const total = db
+      .prepare(`SELECT COUNT(*) AS n FROM product_update_items WHERE task_id=?`)
+      .get(localTaskId).n;
     const itemRows = db
-      .prepare(`SELECT * FROM product_update_items WHERE task_id=? ORDER BY id ASC`)
-      .all(localTaskId);
+      .prepare(`SELECT * FROM product_update_items WHERE task_id=? ORDER BY id ASC LIMIT ? OFFSET ?`)
+      .all(localTaskId, pageSize, offset);
     res.json(
       ok({
         task: {
@@ -193,6 +201,9 @@ router.get('/admin/api/product-update/:localTaskId', (req, res, next) => {
           createdAt: r.created_at,
           updatedAt: r.updated_at,
         })),
+        total,
+        page,
+        pageSize,
       })
     );
   } catch (e) {

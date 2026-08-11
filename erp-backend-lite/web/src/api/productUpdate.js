@@ -11,9 +11,13 @@ export function getProductUpdateList(params) {
   return request.get('/admin/api/product-update', params);
 }
 
-// 任务详情(含 items)
-export function getProductUpdateDetail(localTaskId) {
-  return request.get('/admin/api/product-update/' + encodeURIComponent(localTaskId));
+// 任务详情(含 items,分页)
+export function getProductUpdateDetail(localTaskId, params = {}) {
+  const q = new URLSearchParams();
+  if (params.page) q.set('page', params.page);
+  if (params.pageSize) q.set('pageSize', params.pageSize);
+  const qs = q.toString();
+  return request.get('/admin/api/product-update/' + encodeURIComponent(localTaskId) + (qs ? '?' + qs : ''));
 }
 
 // 取消未处理 items
