@@ -5,7 +5,7 @@
 // 全文搜索:走 ozon_cache_index_fts(FTS5 虚拟表),通过触发器自动同步
 import { db } from '../../index.js';
 import { composeSvShape } from '../../../services/compose-sv-shape.js';
-import { classifyDescriptionQuality } from '../../utils/description-quality.js';
+import { classifyDescriptionQuality } from '../../../utils/description-quality.js';
 
 function parseJson(s) {
   if (!s) return null;
