@@ -62,7 +62,7 @@ const batchCacheData = ref(new Map());
 const batchCacheLoading = ref(false);
 // 批量分页
 const batchPage = ref(1);
-const batchPageSize = 10;
+const batchPageSize = 3;
 
 const isBatch = computed(() => props.mode === 'batch');
 
@@ -475,35 +475,35 @@ async function submit() {
           </label>
         </div>
 
-        <!-- 批量缓存模式:分页预览表格 -->
+        <!-- 批量缓存模式:分页预览(卡片式,每页3个) -->
         <div v-if="isBatch && useBatchCacheMode && batchCacheData.size > 0" class="pu-batch-table">
           <div class="pu-batch-table-title">
             缓存值预览(可编辑) — 第 {{ batchPage }}/{{ batchTotalPages }} 页
           </div>
-          <div class="pu-batch-row pu-batch-row-header">
-            <span class="pu-batch-col-offer">Offer ID</span>
-            <span class="pu-batch-col-name">标题(缓存)</span>
-            <span class="pu-batch-col-desc">描述(缓存)</span>
-          </div>
-          <div v-for="p in batchPagedItems" :key="p.offerId" class="pu-batch-row">
-            <span class="pu-batch-col-offer muted">{{ p.offerId }}</span>
-            <input
-              v-if="fieldState.name.checked"
-              class="pu-input pu-batch-input"
-              :value="getBatchCacheValue(p.offerId, 'name')"
-              @input="(e) => { const d = batchCacheData.get(p.offerId); if (d) { d.name = e.target.value; batchCacheData.value = new Map(batchCacheData.value); } }"
-              placeholder="(无缓存)"
-            />
-            <span v-else class="muted">—</span>
-            <textarea
-              v-if="fieldState.description.checked"
-              class="pu-textarea pu-batch-input"
-              :value="getBatchCacheValue(p.offerId, 'description')"
-              @input="(e) => { const d = batchCacheData.get(p.offerId); if (d) { d.description = e.target.value; batchCacheData.value = new Map(batchCacheData.value); } }"
-              placeholder="(无缓存)"
-              rows="2"
-            ></textarea>
-            <span v-else class="muted">—</span>
+          <div v-for="p in batchPagedItems" :key="p.offerId" class="pu-batch-card">
+            <div class="pu-batch-card-head">
+              <span class="pu-batch-card-offer">{{ p.offerId }}</span>
+              <span v-if="!getBatchCacheValue(p.offerId, 'name') && !getBatchCacheValue(p.offerId, 'description')" class="pu-batch-card-empty">无缓存</span>
+            </div>
+            <div v-if="fieldState.name.checked" class="pu-batch-field">
+              <label class="pu-batch-field-label">标题</label>
+              <input
+                class="pu-input pu-batch-name-input"
+                :value="getBatchCacheValue(p.offerId, 'name')"
+                @input="(e) => { const d = batchCacheData.get(p.offerId); if (d) { d.name = e.target.value; batchCacheData.value = new Map(batchCacheData.value); } }"
+                placeholder="(无缓存)"
+              />
+            </div>
+            <div v-if="fieldState.description.checked" class="pu-batch-field">
+              <label class="pu-batch-field-label">描述</label>
+              <textarea
+                class="pu-textarea pu-batch-desc-input"
+                :value="getBatchCacheValue(p.offerId, 'description')"
+                @input="(e) => { const d = batchCacheData.get(p.offerId); if (d) { d.description = e.target.value; batchCacheData.value = new Map(batchCacheData.value); } }"
+                placeholder="(无缓存)"
+                rows="6"
+              ></textarea>
+            </div>
           </div>
           <!-- 分页控件 -->
           <div v-if="batchTotalPages > 1" class="pu-batch-pager">
@@ -693,35 +693,62 @@ async function submit() {
 .pu-batch-table-title {
   font-size: 12px;
   color: #666;
-  padding: 6px 8px;
+  padding: 6px 10px;
   background: #fafafa;
   border-bottom: 1px solid #e8e8e8;
 }
-.pu-batch-row {
-  display: grid;
-  grid-template-columns: 120px 1fr 1.5fr;
-  gap: 6px;
-  padding: 6px 8px;
+/* 卡片式:每页3个,垂直堆叠,标题/描述分行展示更宽更长 */
+.pu-batch-card {
+  padding: 10px 12px;
   border-bottom: 1px solid #f0f0f0;
-  align-items: flex-start;
 }
-.pu-batch-row-header {
-  background: #fafafa;
-  font-size: 12px;
-  color: #888;
-  font-weight: 600;
-}
-.pu-batch-row:last-child {
+.pu-batch-card:last-of-type {
   border-bottom: none;
 }
-.pu-batch-col-offer {
-  font-size: 11px;
-  word-break: break-all;
-  line-height: 1.8;
+.pu-batch-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
-.pu-batch-input {
+.pu-batch-card-offer {
   font-size: 12px;
-  padding: 4px 6px;
+  color: #555;
+  font-weight: 600;
+  word-break: break-all;
+}
+.pu-batch-card-empty {
+  font-size: 11px;
+  color: #ff4d4f;
+  background: #fff1f0;
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+.pu-batch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.pu-batch-field:last-child {
+  margin-bottom: 0;
+}
+.pu-batch-field-label {
+  font-size: 11px;
+  color: #999;
+}
+.pu-batch-name-input {
+  font-size: 13px;
+  padding: 6px 8px;
+  width: 100%;
+}
+.pu-batch-desc-input {
+  font-size: 12px;
+  padding: 6px 8px;
+  width: 100%;
+  line-height: 1.6;
+  resize: vertical;
+  min-height: 120px;
 }
 .pu-batch-pager {
   display: flex;
