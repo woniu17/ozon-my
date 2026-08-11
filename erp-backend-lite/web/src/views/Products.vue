@@ -520,7 +520,7 @@ function openSingleProductUpdate(item) {
   productUpdateDialog.value = {
     open: true,
     mode: 'single',
-    singleItem: { productId: item.productId, storeId: item.storeId, offerId: item.offerId },
+    singleItem: { productId: item.productId, storeId: item.storeId, offerId: item.offerId, sku: item.sku },
     selectedProducts: [],
   };
 }
@@ -989,7 +989,7 @@ onMounted(() => {
           <button class="btn btn-primary" @click="openSingleStock({ productId: detail.productId, storeId: detail.storeId, offerId: detail.data?.offer_id })">
             更新库存
           </button>
-          <button class="btn btn-primary" @click="openSingleProductUpdate({ productId: detail.productId, storeId: detail.storeId, offerId: detail.data?.offer_id })">
+          <button class="btn btn-primary" @click="openSingleProductUpdate({ productId: detail.productId, storeId: detail.storeId, offerId: detail.data?.offer_id, sku: detail.sku })">
             更新信息
           </button>
         </div>

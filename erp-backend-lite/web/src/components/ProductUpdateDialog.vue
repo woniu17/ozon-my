@@ -6,6 +6,7 @@
 import { ref, watch, computed, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { createProductUpdate, previewProductUpdate, getSupportedFields } from '../api/productUpdate.js';
+import { getSkuProfile } from '../api/collect-box-v2.js';
 import { useToast } from './useToast.js';
 import AppModal from './AppModal.vue';
 
@@ -64,6 +65,13 @@ const currentStoreId = computed(() => {
 // 当前生效的 offerId(single 模式)
 const currentOfferId = computed(() => props.singleItem?.offerId || '');
 
+// 当前商品的 Ozon 数字 SKU(single 模式,用于从本地缓存读取数据)
+const currentSku = computed(() => props.singleItem?.sku || '');
+
+// 从缓存填充字段的加载状态 + 缓存命中情况
+const fillingFromCache = ref(false);
+const cacheProfile = ref(null); // getSkuProfile 返回的 original,缓存后供多次按钮复用
+
 // 打开时重置状态 + 拉取支持字段
 watch(
   () => props.open,
@@ -73,6 +81,7 @@ watch(
     fieldState.name = { checked: false, value: '' };
     fieldState.description = { checked: false, value: '' };
     previewData.value = null;
+    cacheProfile.value = null;
     // 拉取支持字段(后端可拓展)
     try {
       const r = await getSupportedFields();
@@ -107,6 +116,61 @@ async function loadPreview() {
     previewing.value = false;
   }
 }
+
+// 从本地 SKU 缓存填充指定字段的值
+// field: 'name' | 'description'(后续可拓展 price/weight 等)
+async function fillFromCache(field) {
+  if (!currentSku.value) {
+    show('缺少 SKU,无法从缓存获取(仅单条模式可用)', 'error');
+    return;
+  }
+  // 首次调用时拉取缓存画像,后续复用(避免每个字段按钮都打一次接口)
+  if (!cacheProfile.value) {
+    fillingFromCache.value = true;
+    try {
+      const r = await getSkuProfile(currentSku.value, currentStoreId.value);
+      if (r?.error) {
+        show(`缓存不可用:${r.error}`, 'error');
+        return;
+      }
+      if (!r?.original) {
+        show('该 SKU 无缓存数据', 'error');
+        return;
+      }
+      cacheProfile.value = r.original;
+    } catch (e) {
+      show(e.message || String(e), 'error');
+      return;
+    } finally {
+      fillingFromCache.value = false;
+    }
+  }
+  const orig = cacheProfile.value;
+  // 字段映射:表单字段键 → 缓存 original 中的路径
+  const FIELD_MAP = {
+    name: orig.name || '',
+    description: orig.description || '',
+  };
+  const val = FIELD_MAP[field];
+  if (!val) {
+    show(`缓存中「${fieldLabel(field)}」无值`, 'error');
+    return;
+  }
+  fieldState[field].value = val;
+  show(`已从缓存填充「${fieldLabel(field)}」`, 'success');
+}
+
+// 缓存命中情况摘要(展示在按钮 tooltip)
+const cacheSourcesSummary = computed(() => {
+  // cacheProfile 存在说明已成功加载,但 sources 字段在顶层 profile 上
+  // 此处用 cacheProfile 是否存在 + original 字段是否有值来粗略判断
+  if (!cacheProfile.value) return '';
+  const o = cacheProfile.value;
+  const parts = [];
+  if (o.name) parts.push('标题');
+  if (o.description) parts.push('描述');
+  return parts.length ? `缓存含:${parts.join('、')}` : '缓存已加载(字段为空)';
+});
 
 // 选中的字段列表
 const checkedFields = computed(() => supportedFields.value.filter((f) => fieldState[f]?.checked));
@@ -222,13 +286,21 @@ async function submit() {
             <input type="checkbox" v-model="fieldState.name.checked" />
             <span>标题</span>
           </label>
-          <input
-            v-if="fieldState.name.checked"
-            class="pu-input"
-            v-model="fieldState.name.value"
-            placeholder="输入新标题"
-            :disabled="submitting"
-          />
+          <div v-if="fieldState.name.checked" class="pu-input-with-action">
+            <input
+              class="pu-input"
+              v-model="fieldState.name.value"
+              placeholder="输入新标题"
+              :disabled="submitting"
+            />
+            <button
+              v-if="!isBatch && currentSku"
+              class="btn btn-sm btn-ghost pu-cache-btn"
+              :disabled="fillingFromCache || submitting"
+              :title="cacheSourcesSummary || '从本地采集缓存填充标题'"
+              @click="fillFromCache('name')"
+            >{{ fillingFromCache ? '读取中…' : '从缓存获取' }}</button>
+          </div>
         </div>
 
         <!-- 描述 -->
@@ -237,14 +309,22 @@ async function submit() {
             <input type="checkbox" v-model="fieldState.description.checked" />
             <span>描述</span>
           </label>
-          <textarea
-            v-if="fieldState.description.checked"
-            class="pu-textarea"
-            v-model="fieldState.description.value"
-            placeholder="输入新描述(支持多行)"
-            rows="5"
-            :disabled="submitting"
-          ></textarea>
+          <div v-if="fieldState.description.checked" class="pu-input-with-action">
+            <textarea
+              class="pu-textarea"
+              v-model="fieldState.description.value"
+              placeholder="输入新描述(支持多行)"
+              rows="5"
+              :disabled="submitting"
+            ></textarea>
+            <button
+              v-if="!isBatch && currentSku"
+              class="btn btn-sm btn-ghost pu-cache-btn"
+              :disabled="fillingFromCache || submitting"
+              :title="cacheSourcesSummary || '从本地采集缓存填充描述'"
+              @click="fillFromCache('description')"
+            >{{ fillingFromCache ? '读取中…' : '从缓存获取' }}</button>
+          </div>
         </div>
 
         <!-- 占位:后续可拓展的价格/重量等字段 -->
@@ -376,6 +456,24 @@ async function submit() {
   font-size: 13px;
   resize: vertical;
   font-family: inherit;
+}
+.pu-input-with-action {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+.pu-input-with-action .pu-input,
+.pu-input-with-action .pu-textarea {
+  flex: 1;
+  min-width: 0;
+}
+.pu-cache-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 5px 10px;
+  align-self: flex-start;
+  margin-top: 1px;
 }
 .pu-disabled {
   opacity: 0.6;
