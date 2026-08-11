@@ -558,19 +558,51 @@
     const rating = jsonLd?.aggregateRating?.ratingValue || null;
     const reviewCount = jsonLd?.aggregateRating?.reviewCount || null;
 
-    // Description — 优先 webDescription widget DOM(保留 <br> 段落标签),兜底 JSON-LD
+    // Description — 优先 webDescription widget DOM,保留 Ozon 支持的 HTML 标签,兜底 JSON-LD
     // 注:JSON-LD description 是 schema.org 规范的纯文本,Ozon SSR 生成时剥离所有 HTML 和换行,
     //     段落直接粘连(如 "...использованияСветодиодный"),不适合直接展示。
-    //     webDescription widget 的 HTML 保留 <br><br> 段落分隔,OPI 提交时直接下发 <br> 给 Ozon。
+    //     webDescription widget 的 HTML 可能包含:
+    //       <br> 段落分隔、<ul>/<ol>+<li> 列表、<p> 段落、<b>/<strong> 加粗等
+    //     OPI /v3/product/import 描述字段支持上述基础 HTML 标签,直接下发保留格式。
     let description = '';
     const descWidget = document.querySelector('[data-widget="webDescription"]');
     if (descWidget) {
       const clone = descWidget.cloneNode(true);
+      // 移除标题元素("Описание" 等),保留正文
       clone.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => h.remove());
-      description = clone.innerHTML
+      // 允许下发给 OPI 的标签白名单(其他标签剥离但保留内容)
+      const ALLOWED_TAGS = new Set(['br', 'ul', 'ol', 'li', 'p', 'b', 'strong', 'i', 'em']);
+      // 先在临时容器中清洗,再用 innerHTML 拿到规整化的 HTML
+      const tmp = document.createElement('div');
+      tmp.appendChild(clone);
+      // 递归遍历,剥离非白名单标签(保留其子节点内容)+ 移除注释节点
+      const walk = (node) => {
+        const children = Array.from(node.childNodes);
+        for (const child of children) {
+          if (child.nodeType === 8) {
+            // HTML 注释 <!--...-->
+            node.removeChild(child);
+          } else if (child.nodeType === 1) {
+            walk(child);
+            const tag = child.tagName.toLowerCase();
+            if (!ALLOWED_TAGS.has(tag)) {
+              // 用子节点替换当前标签(保留内容)
+              while (child.firstChild) {
+                node.insertBefore(child.firstChild, child);
+              }
+              node.removeChild(child);
+            }
+          }
+        }
+      };
+      walk(tmp);
+      description = tmp.innerHTML
+        // 归一化 <br> 写法(<br>/<br/>/<br /> → <br>)
         .replace(/<br\s*\/?>/gi, '<br>')
+        // 压缩连续 3+ 个 <br> 为 2 个(避免过多空行)
         .replace(/(<br>){3,}/gi, '<br><br>')
-        .replace(/<[^>]+>/g, (tag) => (tag.toLowerCase() === '<br>' ? '<br>' : ''))
+        // 移除标签间的空白文本节点(避免 <ul> 前后多余空格)
+        .replace(/>\s+</g, '><')
         .trim();
     }
     if (!description) description = jsonLd?.description || '';
