@@ -1412,20 +1412,42 @@ try {
   // 测试专用:重置队列状态(委托到 collect-queue.js)
   self.__jzResetQueueState = () => __jzCollect.resetQueueState();
 
+  // 单次 _processTask 总超时:4 分钟(小于 stale-reset 的 5 分钟阈值)
+  // 超时后强制走 partial 回写,避免被 stale-reset 触发死循环 + 幽灵任务累积。
+  // _doAutoCollect 可能仍在后台跑(其结果被 Promise.race 丢弃),但不会再次回写。
+  const _TASK_TIMEOUT_MS = 4 * 60 * 1000;
+
   const _processTask = async (task) => {
     const startTime = Date.now();
     let result = null;
     let steps = null;
     let isTerminal = false;
+    let timedOut = false;
+
+    // 总超时包装:_doAutoCollect 4 分钟未完成,强制返回 partial 结果
+    const timeoutPromise = new Promise((resolve) => {
+      setTimeout(() => {
+        timedOut = true;
+        resolve({ status: 'partial', error: 'task_timeout_4min', results: null });
+      }, _TASK_TIMEOUT_MS);
+    });
 
     try {
       const config = await _loadAutoCollectConfig();
       const depth = task.depth || config.depth || 'Full';
-      result = await _doAutoCollect(task.sku, task.source || 'shop-page', task.sellerSlug, depth, !!task.forceRefresh, task.sellerId);
+      result = await Promise.race([
+        _doAutoCollect(task.sku, task.source || 'shop-page', task.sellerSlug, depth, !!task.forceRefresh, task.sellerId),
+        timeoutPromise,
+      ]);
       const duration = Date.now() - startTime;
       steps = _buildSteps(result?.results);
 
-      if (result?.status === 'success') {
+      if (timedOut) {
+        // 超时:_doAutoCollect 可能还在后台跑,但其结果已被丢弃,不会触发 _finalizeTask。
+        // 回写 partial 让任务回 pending,避免被 stale-reset(5 分钟)触发死循环。
+        console.warn('[Queue] task timeout (4min), force partial:', task.sku);
+        isTerminal = await _handlePartialTask(task, result, steps, startTime, duration, 'timeout');
+      } else if (result?.status === 'success') {
         isTerminal = await _finalizeTask(task, 'success', null, steps, startTime, duration, result);
       } else if (result?.status === 'partial') {
         // 部分/全部失败:回 pending 队尾重试(无限重试,无退避)

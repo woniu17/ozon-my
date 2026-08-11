@@ -43,6 +43,10 @@ function reshapeTask(row) {
   };
 }
 
+// 最大尝试次数:超过后不再 re-claim,stale-reset 时直接标记 skipped
+// 正常任务 attempts=1 即成功;失败任务最多重试 MAX_TASK_ATTEMPTS 次
+const MAX_TASK_ATTEMPTS = 10;
+
 export const collectQueueTasksDao = {
   /** 聚合状态计数(SQLite 无需排除 __snapshot__,因为快照在独立表) */
   async aggregateStatusCounts() {
@@ -200,7 +204,7 @@ export const collectQueueTasksDao = {
 
   /**
    * 原子抢占下一个可消费任务(SQLite UPDATE...RETURNING)
-   * 条件:status='pending'(已移除 failed_retry 退避机制,失败任务直接回 pending)
+   * 条件:status='pending' AND attempts < MAX_TASK_ATTEMPTS(超过上限的不再 claim,避免死循环)
    * 副作用:status→'running', startedAt→now, attempts+1, updatedAt→now
    * 多 SW 实例并发安全:UPDATE...RETURNING 在 SQLite 中是原子的
    */
@@ -215,27 +219,42 @@ export const collectQueueTasksDao = {
              updatedAt = ?
          WHERE _id = (
            SELECT _id FROM collect_queue_tasks
-           WHERE status = 'pending'
+           WHERE status = 'pending' AND attempts < ?
            ORDER BY createdAt ASC
            LIMIT 1
          )
          RETURNING *`
       )
-      .get(nowIso, nowIso);
+      .get(nowIso, nowIso, MAX_TASK_ATTEMPTS);
     return row ? reshapeTask(row) : null;
   },
 
   /**
-   * 重置超时 running 任务为 pending(僵尸任务恢复)
+   * 重置超时 running 任务(僵尸任务恢复)
    * 条件:status='running' 且 startedAt < cutoff
-   * 副作用:status→'pending', lastError→STALE, updatedAt→now
+   * 副作用:
+   *   - attempts >= MAX_TASK_ATTEMPTS:status→'skipped', lastError→MAX_ATTEMPTS_EXCEEDED(不再 re-claim)
+   *   - 否则:status→'pending', lastError→STALE(等下次 claim)
    * 注:已移除 nextRetryAt 退避,直接回 pending 等待下次 claim
    */
   async resetStaleRunning(staleMs = 5 * 60 * 1000, now = new Date()) {
     const cutoffIso = new Date(now.getTime() - staleMs).toISOString();
     const nowIso = now.toISOString();
-    const lastError = JSON.stringify({ type: 'STALE', message: 'running timeout, reset by stale-reset' });
-    const r = db
+    // 1. 超过最大尝试次数的,标记 skipped(打破死循环)
+    const failedErr = JSON.stringify({ type: 'MAX_ATTEMPTS_EXCEEDED', message: `exceeded ${MAX_TASK_ATTEMPTS} attempts, marked as skipped` });
+    const r1 = db
+      .prepare(
+        `UPDATE collect_queue_tasks
+         SET status = 'skipped',
+             lastError = ?,
+             finishedAt = ?,
+             updatedAt = ?
+         WHERE status = 'running' AND startedAt < ? AND attempts >= ?`
+      )
+      .run(failedErr, nowIso, nowIso, cutoffIso, MAX_TASK_ATTEMPTS);
+    // 2. 未超过的,回 pending 等下次 claim
+    const staleErr = JSON.stringify({ type: 'STALE', message: 'running timeout, reset by stale-reset' });
+    const r2 = db
       .prepare(
         `UPDATE collect_queue_tasks
          SET status = 'pending',
@@ -243,8 +262,8 @@ export const collectQueueTasksDao = {
              updatedAt = ?
          WHERE status = 'running' AND startedAt < ?`
       )
-      .run(lastError, nowIso, cutoffIso);
-    return { resetCount: r.changes };
+      .run(staleErr, nowIso, cutoffIso);
+    return { resetCount: r2.changes, failedCount: r1.changes };
   },
 
   /**

@@ -580,7 +580,7 @@ router.post('/admin/api/collect-queue/stale-reset', async (req, res, next) => {
   try {
     const staleMs = Number(req.body?.staleMs) || 5 * 60 * 1000;
     const r = await daos.collectQueueTasksDao.resetStaleRunning(staleMs);
-    return res.json(ok({ resetCount: r.resetCount, staleMs }));
+    return res.json(ok({ resetCount: r.resetCount, failedCount: r.failedCount, staleMs }));
   } catch (e) {
     logger.warn({ err: e.message }, '[collect-queue] stale-reset failed');
     next(e);
