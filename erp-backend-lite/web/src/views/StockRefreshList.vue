@@ -161,7 +161,10 @@ onMounted(() => {
             <td :title="t.localTaskId" style="font-family: monospace; font-size: 12px">
               {{ t.localTaskId.slice(0, 24) }}…
             </td>
-            <td>{{ storeName(t.storeId) }}</td>
+            <td>
+              <span v-if="t.storeIds && t.storeIds.length > 1" :title="t.storeIds.map(storeName).join(', ')" style="color:#1890ff;font-weight:600">多店铺 ({{ t.storeIds.length }})</span>
+              <span v-else>{{ storeName(t.storeId) }}</span>
+            </td>
             <td>{{ SOURCE_TYPE_LABEL[t.sourceType] || t.sourceType || '—' }}</td>
             <td style="color:#1890ff;font-weight:600">{{ t.stockValue }}</td>
             <td>{{ t.totalCount ?? 0 }}</td>

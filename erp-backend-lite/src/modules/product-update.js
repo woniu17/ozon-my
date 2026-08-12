@@ -111,7 +111,8 @@ router.get('/admin/api/product-update', (req, res, next) => {
     const where = [];
     const params = [];
     if (req.query.storeId) {
-      where.push('store_id = ?');
+      // 跨店铺任务:items 表任一 item 属于该店铺即命中(task.store_id 只是首个店铺)
+      where.push('EXISTS(SELECT 1 FROM product_update_items WHERE task_id=t.local_task_id AND store_id=?)');
       params.push(String(req.query.storeId));
     }
     if (req.query.status) {
@@ -120,14 +121,19 @@ router.get('/admin/api/product-update', (req, res, next) => {
     }
     const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
     const rows = db
-      .prepare(`SELECT * FROM product_update_tasks ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .prepare(
+        `SELECT t.*,
+           (SELECT GROUP_CONCAT(DISTINCT i.store_id) FROM product_update_items i WHERE i.task_id=t.local_task_id) AS store_ids_str
+         FROM product_update_tasks t ${whereSql} ORDER BY t.created_at DESC LIMIT ? OFFSET ?`
+      )
       .all(...params, pageSize, offset);
-    const total = db.prepare(`SELECT COUNT(*) as n FROM product_update_tasks ${whereSql}`).get(...params).n;
+    const total = db.prepare(`SELECT COUNT(*) as n FROM product_update_tasks t ${whereSql}`).get(...params).n;
     res.json(
       ok({
         items: rows.map((r) => ({
           localTaskId: r.local_task_id,
           storeId: r.store_id,
+          storeIds: r.store_ids_str ? r.store_ids_str.split(',') : [r.store_id],
           status: r.status,
           totalCount: r.total_count,
           successCount: r.success_count,
@@ -154,8 +160,9 @@ router.get('/admin/api/product-update/supported-fields', (_req, res) => {
 });
 
 // GET /admin/api/product-update/:localTaskId —— 任务详情(含 items,分页)
-// query: page=1&pageSize=50(默认 50,最大 200);不传则默认 page=1&pageSize=50
+// query: page=1&pageSize=50(默认 50,最大 200);storeId(可选,跨店铺筛选);不传则默认 page=1&pageSize=50
 // 返回 { task, items, total, page, pageSize }
+// task 额外返回 storeIds(所有 distinct store_id)和 storeStats(每店铺 total/success/failed),供前端跨店铺 UI
 router.get('/admin/api/product-update/:localTaskId', (req, res, next) => {
   try {
     const localTaskId = String(req.params.localTaskId);
@@ -166,12 +173,34 @@ router.get('/admin/api/product-update/:localTaskId', (req, res, next) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
     const offset = (page - 1) * pageSize;
+    const filterStoreId = req.query.storeId ? String(req.query.storeId) : '';
+
+    // 全任务级店铺统计(不受 storeId 筛选影响,供 tab 展示)
+    const storeStatRows = db
+      .prepare(
+        `SELECT store_id AS storeId,
+           COUNT(*) AS total,
+           SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) AS success,
+           SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) AS failed
+         FROM product_update_items WHERE task_id=?
+         GROUP BY store_id ORDER BY MIN(id) ASC`
+      )
+      .all(localTaskId);
+
+    // items 分页查询(可选按 storeId 筛选)
+    const itemWhere = ['task_id=?'];
+    const itemParams = [localTaskId];
+    if (filterStoreId) {
+      itemWhere.push('store_id=?');
+      itemParams.push(filterStoreId);
+    }
+    const itemWhereSql = itemWhere.join(' AND ');
     const total = db
-      .prepare(`SELECT COUNT(*) AS n FROM product_update_items WHERE task_id=?`)
-      .get(localTaskId).n;
+      .prepare(`SELECT COUNT(*) AS n FROM product_update_items WHERE ${itemWhereSql}`)
+      .get(...itemParams).n;
     const itemRows = db
-      .prepare(`SELECT * FROM product_update_items WHERE task_id=? ORDER BY id ASC LIMIT ? OFFSET ?`)
-      .all(localTaskId, pageSize, offset);
+      .prepare(`SELECT * FROM product_update_items WHERE ${itemWhereSql} ORDER BY id ASC LIMIT ? OFFSET ?`)
+      .all(...itemParams, pageSize, offset);
     res.json(
       ok({
         task: {
@@ -186,6 +215,8 @@ router.get('/admin/api/product-update/:localTaskId', (req, res, next) => {
           errorMessage: task.error_message,
           createdAt: task.created_at,
           completedAt: task.completed_at,
+          storeIds: storeStatRows.map((r) => r.storeId),
+          storeStats: storeStatRows,
         },
         items: itemRows.map((r) => ({
           id: r.id,

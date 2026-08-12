@@ -12,10 +12,12 @@ export function getProductUpdateList(params) {
 }
 
 // 任务详情(含 items,分页)
+// params: { page?, pageSize?, storeId? } storeId 用于跨店铺筛选
 export function getProductUpdateDetail(localTaskId, params = {}) {
   const q = new URLSearchParams();
   if (params.page) q.set('page', params.page);
   if (params.pageSize) q.set('pageSize', params.pageSize);
+  if (params.storeId) q.set('storeId', params.storeId);
   const qs = q.toString();
   return request.get('/admin/api/product-update/' + encodeURIComponent(localTaskId) + (qs ? '?' + qs : ''));
 }

@@ -28,16 +28,37 @@ const state = ref({
   error: '',
   retryingId: '',
   cancelling: false,
+  activeStore: '', // '' = 全部,跨店铺时按店铺筛选 items(后端分页)
 });
 const page = ref(1);
 const pageSize = ref(50);
 let pollTimer = null;
 
+// 是否跨店铺任务(基于后端返回的 task.storeIds,不依赖当前页 items)
+const isMultiStore = computed(() => {
+  const ids = state.value.detail?.task?.storeIds || [];
+  return ids.length > 1;
+});
+
+// 按店铺分组统计(来自后端 task.storeStats,不受分页影响)
+const storeGroups = computed(() => {
+  const stats = state.value.detail?.task?.storeStats || [];
+  return stats.map((s) => ({
+    storeId: s.storeId,
+    storeName: storeName(s.storeId),
+    total: s.total || 0,
+    success: s.success || 0,
+    failed: s.failed || 0,
+  }));
+});
+
 async function loadDetail(silent = false) {
   if (!silent) state.value.loading = true;
   state.value.error = '';
   try {
-    const r = await getProductUpdateDetail(localTaskId.value, { page: page.value, pageSize: pageSize.value });
+    const params = { page: page.value, pageSize: pageSize.value };
+    if (state.value.activeStore) params.storeId = state.value.activeStore;
+    const r = await getProductUpdateDetail(localTaskId.value, params);
     state.value.detail = r || null;
     schedulePolling();
   } catch (err) {
@@ -50,6 +71,13 @@ async function loadDetail(silent = false) {
 
 function onPageChange(p) {
   page.value = p;
+  loadDetail();
+}
+
+// 跨店铺 tab 切换:重置到第 1 页并按 storeId 筛选
+function selectStore(storeId) {
+  state.value.activeStore = storeId;
+  page.value = 1;
   loadDetail();
 }
 
@@ -208,7 +236,13 @@ onBeforeUnmount(() => {
       <!-- 任务概要 -->
       <div class="pu-summary">
         <div class="meta-row"><span class="meta-k">任务 ID</span><span class="meta-v">{{ state.detail.task.localTaskId }}</span></div>
-        <div class="meta-row"><span class="meta-k">店铺</span><span class="meta-v">{{ storeName(state.detail.task.storeId) }}</span></div>
+        <div class="meta-row">
+          <span class="meta-k">店铺</span>
+          <span class="meta-v">
+            <span v-if="isMultiStore" style="color:#1890ff;font-weight:600">多个 ({{ storeGroups.length }} 个店铺)</span>
+            <span v-else>{{ storeName(state.detail.task.storeId) }}</span>
+          </span>
+        </div>
         <div class="meta-row"><span class="meta-k">状态</span><span class="meta-v"><span class="badge" :class="statusInfo(state.detail.task.status).cls">{{ statusInfo(state.detail.task.status).label }}</span></span></div>
         <div class="meta-row">
           <span class="meta-k">更新字段</span>
@@ -223,11 +257,34 @@ onBeforeUnmount(() => {
         <div class="meta-row"><span class="meta-k">完成时间</span><span class="meta-v">{{ fmtTime(state.detail.task.completedAt) }}</span></div>
       </div>
 
+      <!-- 跨店铺:店铺筛选 tab + 各店铺统计 -->
+      <div v-if="isMultiStore" class="store-tabs">
+        <button
+          class="store-tab"
+          :class="{ active: !state.activeStore }"
+          @click="selectStore('')"
+        >
+          全部 ({{ state.detail.task.totalCount }})
+        </button>
+        <button
+          v-for="g in storeGroups"
+          :key="g.storeId"
+          class="store-tab"
+          :class="{ active: state.activeStore === g.storeId }"
+          @click="selectStore(g.storeId)"
+        >
+          {{ g.storeName }} ({{ g.total }})
+          <span v-if="g.failed" style="color:#ff4d4f">·失败{{ g.failed }}</span>
+          <span v-else-if="g.success === g.total" style="color:#52c41a">·全成功</span>
+        </button>
+      </div>
+
       <!-- items 表 -->
       <div class="listings-table-wrap">
         <table class="listings-table">
           <thead>
             <tr>
+              <th v-if="isMultiStore">店铺</th>
               <th>SKU</th>
               <th>状态</th>
               <th>更新字段</th>
@@ -238,9 +295,10 @@ onBeforeUnmount(() => {
           </thead>
           <tbody>
             <tr v-if="!state.detail.items.length">
-              <td colspan="6" class="muted" style="padding:16px;text-align:center">无明细数据</td>
+              <td :colspan="isMultiStore ? 7 : 6" class="muted" style="padding:16px;text-align:center">无明细数据</td>
             </tr>
             <tr v-for="it in state.detail.items" :key="it.id">
+              <td v-if="isMultiStore" style="font-size:12px;color:#666">{{ storeName(it.storeId) }}</td>
               <td style="font-family: monospace; font-size: 12px">{{ it.offerId || '—' }}</td>
               <td><span class="badge" :class="statusInfo(it.status).cls">{{ statusInfo(it.status).label }}</span></td>
               <td>
@@ -288,6 +346,30 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   padding: 12px;
   margin-bottom: 16px;
+}
+.store-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.store-tab {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.store-tab:hover {
+  border-color: #1890ff;
+  color: #1890ff;
+}
+.store-tab.active {
+  background: #1890ff;
+  border-color: #1890ff;
+  color: #fff;
 }
 .meta-row {
   display: flex;

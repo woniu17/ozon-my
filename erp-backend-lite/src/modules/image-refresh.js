@@ -170,7 +170,8 @@ router.get('/admin/api/image-refresh', (req, res, next) => {
     const where = [];
     const params = [];
     if (req.query.storeId) {
-      where.push('store_id = ?');
+      // 跨店铺任务:items 表任一 item 属于该店铺即命中(task.store_id 只是首个店铺)
+      where.push('EXISTS(SELECT 1 FROM image_refresh_items WHERE task_id=t.local_task_id AND store_id=?)');
       params.push(String(req.query.storeId));
     }
     if (req.query.status) {
@@ -180,15 +181,18 @@ router.get('/admin/api/image-refresh', (req, res, next) => {
     const whereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
     const rows = db
       .prepare(
-        `SELECT * FROM image_refresh_tasks ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+        `SELECT t.*,
+           (SELECT GROUP_CONCAT(DISTINCT i.store_id) FROM image_refresh_items i WHERE i.task_id=t.local_task_id) AS store_ids_str
+         FROM image_refresh_tasks t ${whereSql} ORDER BY t.created_at DESC LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, offset);
-    const total = db.prepare(`SELECT COUNT(*) as n FROM image_refresh_tasks ${whereSql}`).get(...params).n;
+    const total = db.prepare(`SELECT COUNT(*) as n FROM image_refresh_tasks t ${whereSql}`).get(...params).n;
     res.json(
       ok({
         items: rows.map((r) => ({
           localTaskId: r.local_task_id,
           storeId: r.store_id,
+          storeIds: r.store_ids_str ? r.store_ids_str.split(',') : [r.store_id],
           status: r.status,
           totalCount: r.total_count,
           successCount: r.success_count,
