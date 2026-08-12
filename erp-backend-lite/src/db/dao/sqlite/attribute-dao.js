@@ -136,7 +136,9 @@ export const attributeDao = {
 
   async deleteBySku(sku) {
     db.prepare(`DELETE FROM ozon_attribute_cache WHERE _id = ?`).run(sku);
-    indexDao.deleteSku(sku).catch(() => {});
+    // 删除单表缓存后只重新聚合 ozon_cache_index(保留 listed/seller 等字段),
+    // 不再调用 indexDao.deleteSku 删除整行(会导致 listed=1 被清零,深度采集后跟卖状态丢失)
+    indexDao.syncSku(sku).catch(() => {});
   },
 
   async estimatedCount() {

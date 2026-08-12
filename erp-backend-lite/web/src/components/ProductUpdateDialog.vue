@@ -304,6 +304,7 @@ async function submit() {
         return {
           productId: String(p.productId),
           offerId: String(p.offerId || ''),
+          storeId: String(p.storeId || ''),
           updateFields: fields,
           newValues,
         };
@@ -333,6 +334,7 @@ async function submit() {
       items = props.selectedProducts.map((p) => ({
         productId: String(p.productId),
         offerId: String(p.offerId || ''),
+        storeId: String(p.storeId || ''),
         updateFields: fields,
         newValues,
       }));
@@ -356,6 +358,7 @@ async function submit() {
       {
         productId: String(it.productId),
         offerId: String(it.offerId || ''),
+        storeId: String(it.storeId || ''),
         updateFields: fields,
         newValues,
       },

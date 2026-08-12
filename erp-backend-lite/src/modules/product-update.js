@@ -90,7 +90,7 @@ router.post('/admin/api/product-update', (req, res, next) => {
         localTaskId,
         String(it.productId),
         String(it.offerId),
-        storeId,
+        String(it.storeId || storeId),
         JSON.stringify(it.updateFields),
         JSON.stringify(it.newValues)
       );

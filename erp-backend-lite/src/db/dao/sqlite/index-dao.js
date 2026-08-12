@@ -643,30 +643,52 @@ export const indexDao = {
 
   /** 即时标记 SKU 为已跟卖(由 products.js upsertTaskItems 调用)
    *  写入 listed=1 + listed_store_id + listed_at + listed_task_id
-   *  仅更新 listed=0 或 listed_store_id 与本次 storeId 不同的行,减少无意义写入
-   *  幂等:同一 SKU 多次提交同一店铺的任务不会产生重复 UPDATE
+   *  使用 INSERT ... ON CONFLICT DO UPDATE,即使 SKU 行不存在(尚未深度采集)也能正确插入占位行
+   *  幂等:同一 SKU 多次提交同一店铺的任务不会产生重复写入(WHERE 子句过滤)
    *
    *  注:不处理"删除任务后回退 listed=0"的场景(按需求,删除任务不回退 listed)
    *  如未来需要支持多店铺跟卖状态,改用关联表 ozon_cache_listed_stores
+   *
+   *  修复历史:原实现用 UPDATE WHERE sku IN (...),当 SKU 行不存在时 UPDATE 影响 0 行,
+   *           listed 字段从未被标记为 1;后续 syncSku 首次 INSERT 时 listed 用默认值 0,
+   *           导致"已跟卖成功"的 SKU 在采集箱页面显示"未跟卖"。
+   *           改为 UPSERT 后,无论 SKU 行是否存在都能正确写入 listed=1。
+   *           syncSku 后续 ON CONFLICT DO UPDATE 子句中 listed=ozon_cache_index.listed
+   *           会保留此处写入的 listed=1,不会被覆盖。
    */
   async markListed(skus, storeId, localTaskId) {
     if (!Array.isArray(skus) || skus.length === 0) return { refreshed: 0 };
-    const placeholders = skus.map(() => '?').join(', ');
-    // 仅更新 listed=0 或当前 listed_store_id 与本次 storeId 不同的行(幂等,减少无意义写入)
+    const sid = storeId || null;
+    const tid = localTaskId || null;
+    // INSERT 提供所有列,ON CONFLICT DO UPDATE 处理已存在行
+    // WHERE 子句:仅当 listed=0 或 store_id 与本次不同时才更新,避免幂等调用产生无意义写入
     // 用 IS NULL OR != 而非 IS NOT:避免 NULL <> 'x' 返回 NULL(falsy)导致漏更新
-    const r = db
-      .prepare(
-        `UPDATE ozon_cache_index
-         SET listed = 1,
-             listed_store_id = ?,
-             listed_at = datetime('now'),
-             listed_task_id = ?,
-             updated_at = datetime('now')
-         WHERE sku IN (${placeholders})
-           AND (listed = 0 OR listed_store_id IS NULL OR listed_store_id != ?)`
-      )
-      .run(storeId || null, localTaskId || null, ...skus, storeId || null);
-    return { refreshed: r.changes };
+    const stmt = db.prepare(
+      `INSERT INTO ozon_cache_index (sku, listed, listed_store_id, listed_at, listed_task_id, updated_at)
+       VALUES (?, 1, ?, datetime('now'), ?, datetime('now'))
+       ON CONFLICT(sku) DO UPDATE SET
+         listed = 1,
+         listed_store_id = excluded.listed_store_id,
+         listed_at = datetime('now'),
+         listed_task_id = excluded.listed_task_id,
+         updated_at = datetime('now')
+       WHERE ozon_cache_index.listed = 0
+         OR ozon_cache_index.listed_store_id IS NULL
+         OR ozon_cache_index.listed_store_id != excluded.listed_store_id`
+    );
+    let refreshed = 0;
+    db.exec('BEGIN');
+    try {
+      for (const sku of skus) {
+        const r = stmt.run(sku, sid, tid);
+        refreshed += r.changes;
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+    return { refreshed };
   },
 
   /** 统计各类缓存文档数(供 dashboard 用) */

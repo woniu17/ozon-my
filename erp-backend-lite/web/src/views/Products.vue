@@ -85,7 +85,26 @@ function startProgressPolling() {
   const poll = async () => {
     try {
       const r = await getSyncProgress();
-      syncProgressItems.value = r?.items || [];
+      const newItems = r?.items || [];
+      // 合并而非直接替换:后端完成后 60s 会清理 syncProgressMap,
+      // 先完成的店铺会从后端响应中消失,前端需保留其终态避免面板丢店铺
+      const seen = new Set();
+      const merged = [];
+      for (const p of newItems) {
+        merged.push(p);
+        seen.add(p.storeId);
+      }
+      // 补上前端已有但后端已清理的(仅限已完成终态)
+      for (const p of syncProgressItems.value) {
+        if (!seen.has(p.storeId) && (p.status === 'done' || p.status === 'error')) {
+          merged.push(p);
+          seen.add(p.storeId);
+        }
+      }
+      // 按 storesStore.list 顺序排序,保持面板稳定
+      const order = new Map((storesStore.list || []).map((s, i) => [s.id, i]));
+      merged.sort((a, b) => (order.get(a.storeId) ?? 999) - (order.get(b.storeId) ?? 999));
+      syncProgressItems.value = merged;
     } catch {
       // 轮询失败不阻断,下次重试
     }
