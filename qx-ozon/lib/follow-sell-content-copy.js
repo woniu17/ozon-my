@@ -3,14 +3,21 @@
 
   function safeText(value, max) {
     if (value == null) return '';
-    const text = String(value).replace(/\s+/g, ' ').trim();
+    // 保留换行结构:水平空白(空格/制表符)压成单空格,连续空行压成单个换行
+    // 原用 /\s+/g→' ' 会把 \n 压成空格,导致多段描述粘连成一行(2026-08 修复)
+    const text = String(value)
+      .replace(/[ \t\r\f\v]+/g, ' ')
+      .replace(/ *\n[ \n]*/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
     return max && text.length > max ? text.slice(0, max) : text;
   }
 
   function htmlToText(value) {
+    // 块级标签闭合 → 换行(保留段落结构),其他标签剥离为空格
     return String(value || '')
-      .replace(/<br\s*\/?>/gi, ' ')
-      .replace(/<\/p\s*>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|li|h[1-6]|section|article|tr)\s*>/gi, '\n')
       .replace(/<[^>]*>/g, ' ');
   }
 
@@ -166,10 +173,8 @@
   }
 
   function visibleTextToLines(value) {
-    return String(value || '')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/(p|div|li|h[1-6]|section|article|tr)\s*>/gi, '\n')
-      .replace(/<[^>]*>/g, ' ')
+    // htmlToText 已把 <br>/</p> 等转成 \n,这里按 \n 切行,逐行清洗行内空白
+    return htmlToText(value)
       .split(/\r?\n/)
       .map((line) => safeText(line))
       .filter(Boolean);
@@ -268,7 +273,7 @@
       if (bodyLines.join(' ').length >= maxChars) break;
     }
 
-    const text = safeText(bodyLines.join(' '), maxChars);
+    const text = safeText(bodyLines.join('\n'), maxChars);
     if (!text || isDescriptionHeading(text) || isDescriptionStopLine(text) || isDescriptionUiNoiseText(text)) return '';
     return text;
   }

@@ -140,7 +140,7 @@ const visibleDescriptionText = [
 
 assert.strictEqual(
   extractVisibleDescriptionText(visibleDescriptionText, 4096),
-  '13.6-inch MacBook Air case fits M4, M3 and M2 models. 1. Matte texture resists fingerprints. 2. Protects the notebook from scratches. \u88c5\u5907 \u4fdd\u62a4\u58f3'
+  '13.6-inch MacBook Air case fits M4, M3 and M2 models.\n1. Matte texture resists fingerprints.\n2. Protects the notebook from scratches.\n\u88c5\u5907\n\u4fdd\u62a4\u58f3'
 );
 
 const ozonSectionDescriptionText = [
@@ -157,7 +157,7 @@ const ozonSectionDescriptionText = [
 
 assert.strictEqual(
   extractVisibleDescriptionText(ozonSectionDescriptionText, 4096),
-  '\u0421\u043e\u0441\u0442\u0430\u0432 Aqua, Propylene Glycol, Ceramide EOP. \u0421\u043f\u043e\u0441\u043e\u0431 \u043f\u0440\u0438\u043c\u0435\u043d\u0435\u043d\u0438\u044f Apply the cream every morning.'
+  '\u0421\u043e\u0441\u0442\u0430\u0432\nAqua, Propylene Glycol, Ceramide EOP.\n\u0421\u043f\u043e\u0441\u043e\u0431 \u043f\u0440\u0438\u043c\u0435\u043d\u0435\u043d\u0438\u044f\nApply the cream every morning.'
 );
 
 assert.strictEqual(
@@ -175,7 +175,7 @@ if (typeof pickBestVisibleDescriptionText === 'function') {
       ],
       4096
     ),
-    '\u0421\u043e\u0441\u0442\u0430\u0432 Aqua, Propylene Glycol, Ceramide EOP. \u0421\u043f\u043e\u0441\u043e\u0431 \u043f\u0440\u0438\u043c\u0435\u043d\u0435\u043d\u0438\u044f Apply the cream every morning.'
+    '\u0421\u043e\u0441\u0442\u0430\u0432\nAqua, Propylene Glycol, Ceramide EOP.\n\u0421\u043f\u043e\u0441\u043e\u0431 \u043f\u0440\u0438\u043c\u0435\u043d\u0435\u043d\u0438\u044f\nApply the cream every morning.'
   );
 }
 
