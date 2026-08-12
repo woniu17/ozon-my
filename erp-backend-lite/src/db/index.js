@@ -263,14 +263,16 @@ function backfillHasRichContent() {
 // 与 index-dao.js syncSku 的 descriptionQuality 计算同口径:
 //   0=空 1=占位(Не удалось загрузить…/纯按钮文案) 2=按钮污染(真描述末尾粘Читать далее) 3=正常
 // 注:SQL 内用 LIKE 近似实现 classify,边界情况由 scripts/backfill-description-quality.mjs (JS 正则精准版)修正
+// 2026-08 修复:加载失败关键词改为任意位置匹配(原仅开头匹配会漏判末尾占位)
 function backfillDescriptionQuality() {
   // 用 UPDATE-FROM 语法(SQLite 3.33+),从 ozon_rich_media_cache.data.description 提取并 classify
   // - 空或 NULL → 0
   // - 剥掉按钮文案后为空(纯按钮文案) → 1
-  // - 开头命中加载失败关键词(Не удалось загрузить / JSON Не удалось… / Ошиб…) → 1
+  // - 任意位置命中加载失败关键词(Не удалось загрузить / Ошибка загрузки / Попробуйте …) → 1
   // - 含按钮文案但剥后非空(真描述末尾粘按钮) → 2
   // - 其余非空 → 3
   // REPLACE 区分大小写,故大小写各一次(читать далее/Читать далее 等共 8 次)
+  // LIKE 对西里尔字母大小写敏感,故加载失败关键词也大小写各一次
   const result = db
     .prepare(
       `UPDATE ozon_cache_index
@@ -283,9 +285,11 @@ function backfillDescriptionQuality() {
            'Свернуть описание', ''), 'свернуть описание', ''),
            'Развернуть описание', ''), 'развернуть описание', ''
          )) = '' THEN 1
-         WHEN r_desc LIKE 'Не удалось загрузить%' OR r_desc LIKE 'не удалось загрузить%'
-           OR r_desc LIKE 'JSON Не удалось загрузить%' OR r_desc LIKE 'JSON не удалось загрузить%'
-           OR r_desc LIKE 'Ошиб%' THEN 1
+         WHEN r_desc LIKE '%Не удалось загрузить%' OR r_desc LIKE '%не удалось загрузить%'
+           OR r_desc LIKE '%Ошибка загрузки%' OR r_desc LIKE '%ошибка загрузки%'
+           OR r_desc LIKE '%Попробуйте обновить%' OR r_desc LIKE '%попробуйте обновить%'
+           OR r_desc LIKE '%Попробуйте позже%' OR r_desc LIKE '%попробуйте позже%'
+           OR r_desc LIKE '%failed to load%' THEN 1
          WHEN r_desc LIKE '%Читать далее%' OR r_desc LIKE '%читать далее%'
            OR r_desc LIKE '%Показать полностью%' OR r_desc LIKE '%показать полностью%'
            OR r_desc LIKE '%Свернуть описание%' OR r_desc LIKE '%свернуть описание%'
@@ -316,7 +320,7 @@ function backfillDescriptionQuality() {
 function backfillProductDescriptionQuality() {
   const rows = db
     .prepare(
-      `SELECT p.sku AS sku, json_extract(a.description_data, '$.description') AS desc
+      `SELECT p.sku AS sku, json_extract(a.description_data, '$.result.description') AS desc
        FROM product_data_cache p
        JOIN product_attributes_cache a ON a.sku = p.sku
        WHERE a.description_data IS NOT NULL`

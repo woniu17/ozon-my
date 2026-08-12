@@ -1,5 +1,5 @@
-// 一次性回填脚本: 用 JS 正则精准计算 ozon_cache_index.description_quality
-// 用法: node erp-backend-lite/scripts/backfill-description-quality.mjs
+// 一次性回填脚本: 用 JS 正则精准计算 ozon_cache_index + product_data_cache 的 description_quality
+// 用法: node erp-backend-lite/scripts/backfill-description-quality.mjs [--dry-run]
 //
 // 与 db/index.js 的 backfillDescriptionQuality() 的区别:
 //   - db/index.js 用 SQL LIKE 近似 classify,启动时自动跑一次,边界情况可能不准
@@ -12,32 +12,20 @@
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { classifyDescriptionQuality } from '../src/utils/description-quality.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = join(__dirname, '..', 'data', 'erp.db');
 const DRY_RUN = process.argv.includes('--dry-run');
 
-// ── classify 逻辑(与 index-dao.js syncSku + qx-ozon/lib/follow-sell-content-copy.js 同口径) ──
-const UI_CHROME_RE = /(читать далее|показать полностью|свернуть описание|развернуть описание)/gi;
-const LOAD_FAIL_RE = /(не удалось загрузить|ошибка загрузки|попробуйте (обновить|позже)|failed to load)/i;
-
-function classifyDescription(raw) {
-  if (!raw) return 0; // 空
-  const str = String(raw).trim();
-  if (!str) return 0;
-  // 剥按钮文案
-  const cleaned = str.replace(UI_CHROME_RE, ' ').replace(/\s+/g, ' ').trim();
-  if (!cleaned) return 1; // 剥完为空 → 纯按钮文案,占位
-  // 开头(前 120 字符)命中加载失败关键词 → 占位
-  if (LOAD_FAIL_RE.test(cleaned.slice(0, 120))) return 1;
-  // 含按钮文案但剥后非空 → 按钮污染
-  if (UI_CHROME_RE.test(str)) return 2;
-  // 其余 → 正常
-  return 3;
-}
-
 const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL;');
+
+// ════════════════════════════════════════════════════════════════
+// Part A: 回填 ozon_cache_index.description_quality(采集箱商品)
+//   数据源:ozon_rich_media_cache.data.description
+// ════════════════════════════════════════════════════════════════
+console.log('═══ Part A: ozon_cache_index.description_quality ═══');
 
 // 检查列是否存在
 const cols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
@@ -60,18 +48,18 @@ console.log(`    共 ${rows.length} 个 SKU 待回填`);
 
 // classify
 console.log('[2/3] 计算 description_quality...');
-const stats = { 0: 0, 1: 0, 2: 0, 3: 0 };
-const updates = [];
+const statsA = { 0: 0, 1: 0, 2: 0, 3: 0 };
+const updatesA = [];
 for (const r of rows) {
-  const q = classifyDescription(r.description);
-  stats[q]++;
-  updates.push({ sku: r.sku, quality: q });
+  const q = classifyDescriptionQuality(r.description);
+  statsA[q]++;
+  updatesA.push({ sku: r.sku, quality: q });
 }
 console.log('    分级统计:');
-console.log(`      0 (空)     : ${stats[0]}`);
-console.log(`      1 (占位)   : ${stats[1]}`);
-console.log(`      2 (按钮污染): ${stats[2]}`);
-console.log(`      3 (正常)   : ${stats[3]}`);
+console.log(`      0 (空)     : ${statsA[0]}`);
+console.log(`      1 (占位)   : ${statsA[1]}`);
+console.log(`      2 (按钮污染): ${statsA[2]}`);
+console.log(`      3 (正常)   : ${statsA[3]}`);
 
 // 写入
 console.log(`[3/3] ${DRY_RUN ? '预览模式,不写入' : '写入 ozon_cache_index.description_quality...'};`);
@@ -79,20 +67,76 @@ if (!DRY_RUN) {
   const updateStmt = db.prepare(`UPDATE ozon_cache_index SET description_quality = ? WHERE sku = ?`);
   db.exec('BEGIN');
   try {
-    for (const u of updates) updateStmt.run(u.quality, u.sku);
+    for (const u of updatesA) updateStmt.run(u.quality, u.sku);
     db.exec('COMMIT');
-    console.log(`    已更新 ${updates.length} 行`);
+    console.log(`    已更新 ${updatesA.length} 行`);
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
   }
 } else {
-  console.log(`    (预览) 将更新 ${updates.length} 行`);
+  console.log(`    (预览) 将更新 ${updatesA.length} 行`);
 }
 
-// 校验:与旧 SQL 回填结果对比(如有差异说明 SQL 近似有误差)
-console.log('\n[校验] 当前 ozon_cache_index.description_quality 分布:');
-const dist = db
+// ════════════════════════════════════════════════════════════════
+// Part B: 回填 product_data_cache.description_quality(商品列表已上架商品)
+//   数据源:product_attributes_cache.description_data.description
+//   v3/product/info/list 不返回 description,描述由「同步描述」单独拉取缓存到
+//   product_attributes_cache.description_data,故只有同步过描述的商品才能回填
+// ════════════════════════════════════════════════════════════════
+console.log('\n═══ Part B: product_data_cache.description_quality ═══');
+
+const pdcCols = db.prepare(`PRAGMA table_info(product_data_cache)`).all();
+if (!pdcCols.some((c) => c.name === 'description_quality')) {
+  console.error('[error] product_data_cache.description_quality 列不存在,请先启动 ERP 触发迁移');
+  process.exit(1);
+}
+
+console.log('[1/3] 查询需回填的商品(已同步描述的)...');
+const pdcRows = db
+  .prepare(
+    `SELECT p.sku AS sku, json_extract(a.description_data, '$.result.description') AS description
+     FROM product_data_cache p
+     JOIN product_attributes_cache a ON a.sku = p.sku
+     WHERE a.description_data IS NOT NULL`
+  )
+  .all();
+console.log(`    共 ${pdcRows.length} 个商品待回填`);
+
+console.log('[2/3] 计算 description_quality...');
+const statsB = { 0: 0, 1: 0, 2: 0, 3: 0 };
+const updatesB = [];
+for (const r of pdcRows) {
+  const q = classifyDescriptionQuality(r.description);
+  statsB[q]++;
+  updatesB.push({ sku: r.sku, quality: q });
+}
+console.log('    分级统计:');
+console.log(`      0 (空)     : ${statsB[0]}`);
+console.log(`      1 (占位)   : ${statsB[1]}`);
+console.log(`      2 (按钮污染): ${statsB[2]}`);
+console.log(`      3 (正常)   : ${statsB[3]}`);
+
+console.log(`[3/3] ${DRY_RUN ? '预览模式,不写入' : '写入 product_data_cache.description_quality...'};`);
+if (!DRY_RUN) {
+  const updateStmt = db.prepare(`UPDATE product_data_cache SET description_quality = ? WHERE sku = ?`);
+  db.exec('BEGIN');
+  try {
+    for (const u of updatesB) updateStmt.run(u.quality, u.sku);
+    db.exec('COMMIT');
+    console.log(`    已更新 ${updatesB.length} 行`);
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+} else {
+  console.log(`    (预览) 将更新 ${updatesB.length} 行`);
+}
+
+// 校验:当前两张表 description_quality 分布
+console.log('\n═══ 校验:回填后分布 ═══');
+console.log('\n[ozon_cache_index.description_quality 分布]:');
+const distA = db
   .prepare(
     `SELECT description_quality, COUNT(*) as n
      FROM ozon_cache_index
@@ -100,8 +144,21 @@ const dist = db
      ORDER BY description_quality`
   )
   .all();
-for (const d of dist) {
+for (const d of distA) {
   console.log(`  quality=${d.description_quality}: ${d.n} SKUs`);
+}
+
+console.log('\n[product_data_cache.description_quality 分布]:');
+const distB = db
+  .prepare(
+    `SELECT description_quality, COUNT(*) as n
+     FROM product_data_cache
+     GROUP BY description_quality
+     ORDER BY description_quality`
+  )
+  .all();
+for (const d of distB) {
+  console.log(`  quality=${d.description_quality}: ${d.n} 商品`);
 }
 
 db.close();
