@@ -87,16 +87,17 @@ function startProgressPolling() {
       const r = await getSyncProgress();
       const newItems = r?.items || [];
       // 合并而非直接替换:后端完成后 60s 会清理 syncProgressMap,
-      // 先完成的店铺会从后端响应中消失,前端需保留其终态避免面板丢店铺
+      // 先完成的店铺会从后端响应中消失;且延迟启动的店铺后端还没进度
+      // 前端已有的 pending(等待中)/done/error 都需保留
       const seen = new Set();
       const merged = [];
       for (const p of newItems) {
         merged.push(p);
         seen.add(p.storeId);
       }
-      // 补上前端已有但后端已清理的(仅限已完成终态)
+      // 补上前端已有但后端未返回的(pending=还没开始,done/error=已完成被后端清理)
       for (const p of syncProgressItems.value) {
-        if (!seen.has(p.storeId) && (p.status === 'done' || p.status === 'error')) {
+        if (!seen.has(p.storeId)) {
           merged.push(p);
           seen.add(p.storeId);
         }
@@ -162,6 +163,7 @@ function closeSyncPanel() {
 // 格式化单条进度为简短文本
 function fmtProgress(p) {
   if (!p) return '';
+  if (p.status === 'pending') return `⏳ ${p.message || '等待中'}`;
   const secs = Math.round((p.elapsedMs || 0) / 1000);
   const t = `${secs}s`;
   if (p.status === 'done') return `✓ ${p.message} (${t})`;
@@ -297,6 +299,15 @@ async function syncStoreProducts() {
 
   syncing.value = true;
   const STORE_INTERVAL_MS = 5000; // 店铺间发请求间隔,避免触发 Ozon 限流
+  // 立即初始化进度面板:所有店铺显示"等待中",避免延迟启动的店铺一开始不在面板上
+  syncProgressItems.value = targets.map((t) => ({
+    storeId: t.id,
+    storeName: t.name,
+    status: 'pending',
+    phase: 'pending',
+    message: '等待中',
+    elapsedMs: 0,
+  }));
   startProgressPolling(); // 启动进度轮询(2s 间隔)
   startElapsedTimer(); // 启动总计时器(每秒更新)
   try {
@@ -311,6 +322,18 @@ async function syncStoreProducts() {
       return task().catch((err) => {
         // 单店铺失败不影响其他,返回 error 标记
         show(`店铺 ${t.name} 同步失败: ${err.message || String(err)}`, 'error');
+        // 更新进度面板:标记该店铺失败(后端可能未记录,如请求未到达或 storeId 无效)
+        const idx = syncProgressItems.value.findIndex((p) => p.storeId === t.id);
+        if (idx >= 0) {
+          const cur = syncProgressItems.value[idx];
+          syncProgressItems.value[idx] = {
+            ...cur,
+            status: 'error',
+            phase: 'error',
+            message: err.message || String(err),
+            elapsedMs: Date.now() - (cur.startedAt || Date.now()),
+          };
+        }
         return { target: t, error: err };
       });
     });
@@ -341,8 +364,21 @@ async function syncStoreProducts() {
     state.page = 1;
     await loadList();
   } finally {
-    // 最后再轮询一次拿终态,然后停止轮询(但保留面板显示,用户手动关闭)
-    try { const r = await getSyncProgress(); syncProgressItems.value = r?.items || []; } catch {}
+    // 最后再查一次拿终态,与前端已有合并(保留前端 catch 写入的 error 状态)
+    try {
+      const r = await getSyncProgress();
+      const newItems = r?.items || [];
+      const newMap = new Map(newItems.map((p) => [p.storeId, p]));
+      // 以后端为准,后端没有的保留前端已有(error/pending)
+      const merged = newItems.slice();
+      const seen = new Set(newItems.map((p) => p.storeId));
+      for (const p of syncProgressItems.value) {
+        if (!seen.has(p.storeId)) merged.push(p);
+      }
+      const order = new Map((storesStore.list || []).map((s, i) => [s.id, i]));
+      merged.sort((a, b) => (order.get(a.storeId) ?? 999) - (order.get(b.storeId) ?? 999));
+      syncProgressItems.value = merged;
+    } catch {}
     stopProgressPolling();
     stopElapsedTimer(); // 停止计时,保留最终耗时显示
     syncFinished.value = true; // 标记完成,面板显示"关闭"按钮
@@ -374,6 +410,15 @@ async function syncDescriptions() {
   }
 
   syncingDesc.value = true;
+  // 立即初始化进度面板:所有店铺显示"等待中"
+  syncProgressItems.value = targets.map((t) => ({
+    storeId: t.id,
+    storeName: t.name,
+    status: 'pending',
+    phase: 'pending',
+    message: '等待中',
+    elapsedMs: 0,
+  }));
   startProgressPolling();
   startElapsedTimer();
   syncFinished.value = false;
@@ -387,6 +432,18 @@ async function syncDescriptions() {
       };
       return task().catch((err) => {
         show(`店铺 ${t.name} 描述同步失败: ${err.message || String(err)}`, 'error');
+        // 更新进度面板:标记该店铺失败
+        const idx = syncProgressItems.value.findIndex((p) => p.storeId === t.id);
+        if (idx >= 0) {
+          const cur = syncProgressItems.value[idx];
+          syncProgressItems.value[idx] = {
+            ...cur,
+            status: 'error',
+            phase: 'error',
+            message: err.message || String(err),
+            elapsedMs: Date.now() - (cur.startedAt || Date.now()),
+          };
+        }
         return { target: t, error: err };
       });
     });
@@ -413,7 +470,19 @@ async function syncDescriptions() {
     show(summary, failedStores > 0 || totalFailed > 0 ? 'error' : 'success');
     await loadList();
   } finally {
-    try { const r = await getSyncProgress(); syncProgressItems.value = r?.items || []; } catch {}
+    // 最后再查一次拿终态,与前端已有合并(保留前端 catch 写入的 error 状态)
+    try {
+      const r = await getSyncProgress();
+      const newItems = r?.items || [];
+      const merged = newItems.slice();
+      const seen = new Set(newItems.map((p) => p.storeId));
+      for (const p of syncProgressItems.value) {
+        if (!seen.has(p.storeId)) merged.push(p);
+      }
+      const order = new Map((storesStore.list || []).map((s, i) => [s.id, i]));
+      merged.sort((a, b) => (order.get(a.storeId) ?? 999) - (order.get(b.storeId) ?? 999));
+      syncProgressItems.value = merged;
+    } catch {}
     stopProgressPolling();
     stopElapsedTimer();
     syncFinished.value = true;

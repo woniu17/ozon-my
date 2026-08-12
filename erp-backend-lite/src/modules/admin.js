@@ -1078,8 +1078,8 @@ router.post('/admin/api/products/sync', async (req, res) => {
            ON CONFLICT(sku) DO UPDATE SET data=excluded.data, store_id=excluded.store_id, fetched_at=excluded.fetched_at`
         );
         // 分批拉详情:OPI /v3/product/info/list
-        // 2026-07:改回 1000/批(单批越多总请求数越少,大店铺更快)
-        const INFO_BATCH_SIZE = 1000;
+        // 2026-07:改回 300/批(单批越多总请求数越少,大店铺更快)
+        const INFO_BATCH_SIZE = 300;
         const totalBatches = Math.ceil(productIds.length / INFO_BATCH_SIZE);
         for (let i = 0; i < productIds.length; i += INFO_BATCH_SIZE) {
           const batch = productIds.slice(i, i + INFO_BATCH_SIZE);
