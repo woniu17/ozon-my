@@ -1052,7 +1052,7 @@ router.post('/admin/api/products/sync', async (req, res) => {
     let lastId = '';
     let total = 0;
     let synced = 0;
-    const limit = 1000;
+    const limit = 300;
     // 耗时拆分(用于定位同步瓶颈:list/info/db/delete)
     let listMs = 0, infoMs = 0, dbMs = 0, pages = 0;
     let failedBatches = 0; // info 接口批次失败数(504 等),记录后跳过不中断同步
