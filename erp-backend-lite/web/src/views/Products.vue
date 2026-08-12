@@ -121,6 +121,25 @@ function stopProgressPolling() {
   }
 }
 
+// 等待指定店铺集合全部到达终态(done/error)
+// 用于异步同步模式:后端立即返回 202,同步在后台执行,前端通过轮询 syncProgressItems 等待完成
+function waitForSyncComplete(targetIds) {
+  return new Promise((resolve) => {
+    const check = () => {
+      const relevant = syncProgressItems.value.filter((p) => targetIds.has(p.storeId));
+      if (
+        relevant.length >= targetIds.size &&
+        relevant.every((p) => p.status === 'done' || p.status === 'error')
+      ) {
+        resolve();
+        return;
+      }
+      setTimeout(check, 1000);
+    };
+    check();
+  });
+}
+
 // 启动总计时器:每秒更新 syncElapsedSec
 function startElapsedTimer() {
   stopElapsedTimer();
@@ -311,51 +330,56 @@ async function syncStoreProducts() {
   startProgressPolling(); // 启动进度轮询(2s 间隔)
   startElapsedTimer(); // 启动总计时器(每秒更新)
   try {
-    // 并行启动:第 i 个店铺延迟 i*5s 发请求,各店铺独立 await 不阻塞其他
-    const promises = targets.map((t, i) => {
-      // 单店铺任务:延迟启动 + 独立错误隔离
-      const task = async () => {
+    // 异步发起同步请求(后端立即返回 202,同步在后台执行)
+    // 不再 await 结果做汇总——汇总从 syncProgressItems 终态取
+    const targetIds = new Set(targets.map((t) => t.id));
+    const launchPromises = targets.map((t, i) => {
+      return (async () => {
         if (i > 0) await new Promise((r) => setTimeout(r, i * STORE_INTERVAL_MS));
-        const r = await syncProducts(t.id);
-        return { target: t, result: r };
-      };
-      return task().catch((err) => {
-        // 单店铺失败不影响其他,返回 error 标记
-        show(`店铺 ${t.name} 同步失败: ${err.message || String(err)}`, 'error');
-        // 更新进度面板:标记该店铺失败(后端可能未记录,如请求未到达或 storeId 无效)
-        const idx = syncProgressItems.value.findIndex((p) => p.storeId === t.id);
-        if (idx >= 0) {
-          const cur = syncProgressItems.value[idx];
-          syncProgressItems.value[idx] = {
-            ...cur,
-            status: 'error',
-            phase: 'error',
-            message: err.message || String(err),
-            elapsedMs: Date.now() - (cur.startedAt || Date.now()),
-          };
+        try {
+          await syncProducts(t.id); // 立即返回 accepted,不等同步完成
+        } catch (err) {
+          // 启动失败(网络/404等,不是同步本身的失败)
+          show(`店铺 ${t.name} 启动同步失败: ${err.message || String(err)}`, 'error');
+          const idx = syncProgressItems.value.findIndex((p) => p.storeId === t.id);
+          if (idx >= 0) {
+            const cur = syncProgressItems.value[idx];
+            syncProgressItems.value[idx] = {
+              ...cur,
+              status: 'error',
+              phase: 'error',
+              message: err.message || String(err),
+              elapsedMs: Date.now() - (cur.startedAt || Date.now()),
+            };
+          }
         }
-        return { target: t, error: err };
-      });
+      })();
     });
 
-    // 显示"同步中"提示(详细进度见下方进度列表)
     syncLabel.value = storeId ? '同步中…' : `同步中 (并行 ${targets.length} 个店铺)`;
 
-    const results = await Promise.all(promises);
+    // 等所有启动请求发出(后端已返回 202,同步在后台跑)
+    await Promise.all(launchPromises);
+
+    // 等待所有店铺到达终态(done/error),通过轮询 syncProgressItems 检查
+    await waitForSyncComplete(targetIds);
+
+    // 从 syncProgressItems 终态汇总统计
     let totalSynced = 0;
     let totalTotal = 0;
     let totalRemoved = 0;
     let failed = 0;
     let totalFailedBatches = 0;
-    for (const r of results) {
-      if (r.error) {
+    for (const p of syncProgressItems.value) {
+      if (!targetIds.has(p.storeId)) continue;
+      if (p.status === 'error') {
         failed++;
         continue;
       }
-      totalSynced += r.result?.synced ?? 0;
-      totalTotal += r.result?.total ?? 0;
-      totalRemoved += r.result?.removed ?? 0;
-      totalFailedBatches += r.result?.failedBatches ?? 0;
+      totalSynced += p.synced ?? 0;
+      totalTotal += p.total ?? 0;
+      totalRemoved += p.removed ?? 0;
+      totalFailedBatches += p.failedBatches ?? 0;
     }
     const summary = `同步完成:写入 ${totalSynced}/${totalTotal} 条,清理 ${totalRemoved} 条已下架${
       failed > 0 ? `,失败 ${failed} 个店铺` : ''
@@ -364,24 +388,10 @@ async function syncStoreProducts() {
     state.page = 1;
     await loadList();
   } finally {
-    // 最后再查一次拿终态,与前端已有合并(保留前端 catch 写入的 error 状态)
-    try {
-      const r = await getSyncProgress();
-      const newItems = r?.items || [];
-      const newMap = new Map(newItems.map((p) => [p.storeId, p]));
-      // 以后端为准,后端没有的保留前端已有(error/pending)
-      const merged = newItems.slice();
-      const seen = new Set(newItems.map((p) => p.storeId));
-      for (const p of syncProgressItems.value) {
-        if (!seen.has(p.storeId)) merged.push(p);
-      }
-      const order = new Map((storesStore.list || []).map((s, i) => [s.id, i]));
-      merged.sort((a, b) => (order.get(a.storeId) ?? 999) - (order.get(b.storeId) ?? 999));
-      syncProgressItems.value = merged;
-    } catch {}
+    // 轮询已在 waitForSyncComplete 期间持续更新 syncProgressItems,无需再查一次
     stopProgressPolling();
-    stopElapsedTimer(); // 停止计时,保留最终耗时显示
-    syncFinished.value = true; // 标记完成,面板显示"关闭"按钮
+    stopElapsedTimer();
+    syncFinished.value = true;
     syncing.value = false;
     syncLabel.value = '同步店铺商品';
   }
@@ -424,45 +434,47 @@ async function syncDescriptions() {
   syncFinished.value = false;
   try {
     const STORE_INTERVAL_MS = 5000;
-    const promises = targets.map((t, i) => {
-      const task = async () => {
+    const targetIds = new Set(targets.map((t) => t.id));
+    const launchPromises = targets.map((t, i) => {
+      return (async () => {
         if (i > 0) await new Promise((r) => setTimeout(r, i * STORE_INTERVAL_MS));
-        const r = await syncProductDescriptions(t.id, true);
-        return { target: t, result: r };
-      };
-      return task().catch((err) => {
-        show(`店铺 ${t.name} 描述同步失败: ${err.message || String(err)}`, 'error');
-        // 更新进度面板:标记该店铺失败
-        const idx = syncProgressItems.value.findIndex((p) => p.storeId === t.id);
-        if (idx >= 0) {
-          const cur = syncProgressItems.value[idx];
-          syncProgressItems.value[idx] = {
-            ...cur,
-            status: 'error',
-            phase: 'error',
-            message: err.message || String(err),
-            elapsedMs: Date.now() - (cur.startedAt || Date.now()),
-          };
+        try {
+          await syncProductDescriptions(t.id, true); // 立即返回 accepted
+        } catch (err) {
+          show(`店铺 ${t.name} 描述同步失败: ${err.message || String(err)}`, 'error');
+          const idx = syncProgressItems.value.findIndex((p) => p.storeId === t.id);
+          if (idx >= 0) {
+            const cur = syncProgressItems.value[idx];
+            syncProgressItems.value[idx] = {
+              ...cur,
+              status: 'error',
+              phase: 'error',
+              message: err.message || String(err),
+              elapsedMs: Date.now() - (cur.startedAt || Date.now()),
+            };
+          }
         }
-        return { target: t, error: err };
-      });
+      })();
     });
 
     syncDescLabel.value = storeId ? '描述同步中…' : `描述同步中 (并行 ${targets.length} 个店铺)`;
 
-    const results = await Promise.all(promises);
+    await Promise.all(launchPromises);
+    await waitForSyncComplete(targetIds);
+
     let totalSynced = 0;
     let totalTotal = 0;
     let failedStores = 0;
     let totalFailed = 0;
-    for (const r of results) {
-      if (r.error) {
+    for (const p of syncProgressItems.value) {
+      if (!targetIds.has(p.storeId)) continue;
+      if (p.status === 'error') {
         failedStores++;
         continue;
       }
-      totalSynced += r.result?.synced ?? 0;
-      totalTotal += r.result?.total ?? 0;
-      totalFailed += r.result?.failed ?? 0;
+      totalSynced += p.synced ?? 0;
+      totalTotal += p.total ?? 0;
+      totalFailed += p.failedBatches ?? 0;
     }
     const summary = `描述同步完成:${totalSynced}/${totalTotal}${
       failedStores > 0 ? `,失败 ${failedStores} 个店铺` : ''
@@ -470,19 +482,6 @@ async function syncDescriptions() {
     show(summary, failedStores > 0 || totalFailed > 0 ? 'error' : 'success');
     await loadList();
   } finally {
-    // 最后再查一次拿终态,与前端已有合并(保留前端 catch 写入的 error 状态)
-    try {
-      const r = await getSyncProgress();
-      const newItems = r?.items || [];
-      const merged = newItems.slice();
-      const seen = new Set(newItems.map((p) => p.storeId));
-      for (const p of syncProgressItems.value) {
-        if (!seen.has(p.storeId)) merged.push(p);
-      }
-      const order = new Map((storesStore.list || []).map((s, i) => [s.id, i]));
-      merged.sort((a, b) => (order.get(a.storeId) ?? 999) - (order.get(b.storeId) ?? 999));
-      syncProgressItems.value = merged;
-    } catch {}
     stopProgressPolling();
     stopElapsedTimer();
     syncFinished.value = true;

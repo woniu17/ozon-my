@@ -1032,17 +1032,8 @@ router.get('/admin/api/products/sync-progress', (req, res, next) => {
   }
 });
 
-router.post('/admin/api/products/sync', async (req, res) => {
-  const storeId = req.query.storeId ? String(req.query.storeId) : '';
-  if (!storeId) {
-    return res.status(400).json({ code: 1, message: '需要 storeId 参数' });
-  }
-  const stores = readStores();
-  const store = stores.find((s) => s.id === storeId);
-  if (!store) {
-    return res.status(404).json({ code: 1, message: `店铺不存在: ${storeId}` });
-  }
-
+// 异步执行单店商品同步(不阻塞 HTTP 响应,进度通过 syncProgressMap + GET /sync-progress 轮询)
+async function runStoreSync(store, storeId) {
   const startedAt = Date.now();
   setProgress(storeId, { status: 'running', phase: 'init', page: 0, total: 0, synced: 0, failedBatches: 0, startedAt, message: '初始化' });
   try {
@@ -1154,11 +1145,33 @@ router.post('/admin/api/products/sync', async (req, res) => {
       '[sync-profile] 同步耗时拆分'
     );
     finalizeProgress(storeId, 'done', { phase: 'done', page: pages, total, synced, removed, failedBatches, durationMs, message: `完成:写入${synced}/${total},清理${removed}` });
-    res.json(ok({ synced, total, removed, failedBatches, durationMs }));
+    return { synced, total, removed, failedBatches, durationMs };
   } catch (err) {
     finalizeProgress(storeId, 'error', { phase: 'error', message: err.message });
-    res.status(500).json({ code: 1, message: err.message });
+    return { error: err.message };
   }
+}
+
+// POST /admin/api/products/sync —— 立即返回 202,同步在后台异步执行
+// 避免 nginx proxy_read_timeout 导致 504;进度通过 GET /sync-progress 轮询
+router.post('/admin/api/products/sync', (req, res) => {
+  const storeId = req.query.storeId ? String(req.query.storeId) : '';
+  if (!storeId) {
+    return res.status(400).json({ code: 1, message: '需要 storeId 参数' });
+  }
+  const stores = readStores();
+  const store = stores.find((s) => s.id === storeId);
+  if (!store) {
+    return res.status(404).json({ code: 1, message: `店铺不存在: ${storeId}` });
+  }
+
+  // 立即返回,同步在后台异步执行(不 await)
+  res.json(ok({ accepted: true, storeId, message: '同步已启动' }));
+
+  // 错误已在 runStoreSync 内部处理并写入 syncProgressMap,这里仅兜底记录
+  runStoreSync(store, storeId).catch((err) => {
+    logger.error({ storeId, errMessage: err?.message ?? String(err) }, '[sync] 异步同步未捕获异常(不应到达)');
+  });
 });
 
 // POST /admin/api/products/sync-descriptions —— 批量拉取商品描述并计算描述质量
@@ -1167,18 +1180,8 @@ router.post('/admin/api/products/sync', async (req, res) => {
 // 存入 product_attributes_cache.description_data 并计算 description_quality 回写 product_data_cache。
 // 受 Ozon 限流影响,大店铺耗时长;失败的单条跳过不中断整体进度。
 // 进度:复用 syncProgressMap(phase=desc-*),前端可通过 GET /sync-progress 轮询
-router.post('/admin/api/products/sync-descriptions', async (req, res) => {
-  const storeId = req.query.storeId ? String(req.query.storeId) : '';
-  if (!storeId) {
-    return res.status(400).json({ code: 1, message: '需要 storeId 参数' });
-  }
-  const force = req.query.force === '1' || req.query.force === 'true';
-  const stores = readStores();
-  const store = stores.find((s) => s.id === storeId);
-  if (!store) {
-    return res.status(404).json({ code: 1, message: `店铺不存在: ${storeId}` });
-  }
-
+// 异步执行单店描述同步(不阻塞 HTTP 响应,进度通过 syncProgressMap 轮询)
+async function runStoreSyncDescriptions(store, storeId, force) {
   const startedAt = Date.now();
   setProgress(storeId, { status: 'running', phase: 'desc-init', synced: 0, total: 0, failedBatches: 0, startedAt, message: '初始化描述同步' });
   try {
@@ -1202,7 +1205,7 @@ router.post('/admin/api/products/sync-descriptions', async (req, res) => {
     const total = rows.length;
     if (total === 0) {
       finalizeProgress(storeId, 'done', { phase: 'desc-done', synced: 0, total: 0, failedBatches: 0, durationMs: Date.now() - startedAt, message: '无待同步描述的商品' });
-      return res.json(ok({ synced: 0, total: 0, failed: 0, durationMs: Date.now() - startedAt }));
+      return { synced: 0, total: 0, failed: 0, durationMs: Date.now() - startedAt };
     }
 
     setProgress(storeId, { phase: 'desc-fetch', synced: 0, total, failedBatches: 0, message: `拉取描述 0/${total}` });
@@ -1266,11 +1269,31 @@ router.post('/admin/api/products/sync-descriptions', async (req, res) => {
     const durationMs = Date.now() - startedAt;
     logger.info({ storeId, total, synced, failed, durationMs }, '[sync-desc] 描述同步完成');
     finalizeProgress(storeId, 'done', { phase: 'desc-done', synced, total, failedBatches: failed, durationMs, message: `描述同步完成:${synced}/${total}${failed ? `,失败${failed}` : ''}` });
-    res.json(ok({ synced, total, failed, durationMs }));
+    return { synced, total, failed, durationMs };
   } catch (err) {
     finalizeProgress(storeId, 'error', { phase: 'desc-error', message: err.message });
-    res.status(500).json({ code: 1, message: err.message });
+    return { error: err.message };
   }
+}
+
+// POST /admin/api/products/sync-descriptions —— 立即返回 202,描述同步在后台异步执行
+router.post('/admin/api/products/sync-descriptions', (req, res) => {
+  const storeId = req.query.storeId ? String(req.query.storeId) : '';
+  if (!storeId) {
+    return res.status(400).json({ code: 1, message: '需要 storeId 参数' });
+  }
+  const force = req.query.force === '1' || req.query.force === 'true';
+  const stores = readStores();
+  const store = stores.find((s) => s.id === storeId);
+  if (!store) {
+    return res.status(404).json({ code: 1, message: `店铺不存在: ${storeId}` });
+  }
+
+  res.json(ok({ accepted: true, storeId, message: '描述同步已启动' }));
+
+  runStoreSyncDescriptions(store, storeId, force).catch((err) => {
+    logger.error({ storeId, errMessage: err?.message ?? String(err) }, '[sync-desc] 异步同步未捕获异常(不应到达)');
+  });
 });
 
 // GET /admin/api/products/:sku —— 单条商品完整数据(JSON)
