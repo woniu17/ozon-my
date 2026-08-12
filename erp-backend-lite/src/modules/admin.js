@@ -1058,8 +1058,12 @@ router.post('/admin/api/products/sync', async (req, res) => {
     let failedBatches = 0; // info 接口批次失败数(504 等),记录后跳过不中断同步
 
     // 循环拉取商品列表(游标分页),批量拉详情后写入 product_data_cache
+    // limit 与 INFO_BATCH_SIZE 都固定为 300(1:1),不再展示批次,只展示"第x/总y页"
     while (true) {
-      setProgress(storeId, { phase: 'list', page: pages, total, synced, failedBatches, message: `拉取列表第 ${pages + 1} 页` });
+      // 第一页响应拿到 total 后,总页数 = ceil(total / limit);未拿到时仅显示当前页
+      const totalPages = total > 0 ? Math.ceil(total / limit) : 0;
+      const pageLabel = totalPages > 0 ? `${pages + 1}/${totalPages}页` : `第 ${pages + 1} 页`;
+      setProgress(storeId, { phase: 'list', page: pages, total, synced, failedBatches, message: `拉取列表 ${pageLabel} (${synced}/${total})` });
       const __tl = Date.now();
       const listResp = await opi.productList(store, { lastId, limit });
       listMs += Date.now() - __tl;
@@ -1077,20 +1081,19 @@ router.post('/admin/api/products/sync', async (req, res) => {
           `INSERT INTO product_data_cache (sku, data, store_id, fetched_at) VALUES (?, ?, ?, datetime('now'))
            ON CONFLICT(sku) DO UPDATE SET data=excluded.data, store_id=excluded.store_id, fetched_at=excluded.fetched_at`
         );
-        // 分批拉详情:OPI /v3/product/info/list
-        // 2026-07:改回 300/批(单批越多总请求数越少,大店铺更快)
+        // limit 与 INFO_BATCH_SIZE 都是 300,每页只 1 批,不再展示批次号
         const INFO_BATCH_SIZE = 300;
-        const totalBatches = Math.ceil(productIds.length / INFO_BATCH_SIZE);
         for (let i = 0; i < productIds.length; i += INFO_BATCH_SIZE) {
           const batch = productIds.slice(i, i + INFO_BATCH_SIZE);
-          const batchNo = Math.floor(i / INFO_BATCH_SIZE) + 1;
+          const tp = total > 0 ? Math.ceil(total / limit) : 0;
+          const lbl = tp > 0 ? `${pages}/${tp}页` : `第 ${pages} 页`;
           setProgress(storeId, {
             phase: 'info',
             page: pages,
             total,
             synced,
             failedBatches,
-            message: `拉取详情 第${pages}页 批次${batchNo}/${totalBatches} (${synced}/${total})`,
+            message: `拉取详情 ${lbl} (${synced}/${total})`,
           });
           const __ti = Date.now();
           let infoResp;
@@ -1104,7 +1107,6 @@ router.post('/admin/api/products/sync', async (req, res) => {
               {
                 storeId,
                 page: pages,
-                batchNo,
                 batchStart: i,
                 batchEnd: i + batch.length,
                 batchSize: batch.length,
