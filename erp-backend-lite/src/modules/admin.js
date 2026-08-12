@@ -1022,9 +1022,12 @@ router.get('/admin/api/products/sync-progress', (req, res, next) => {
   try {
     const stores = readStores();
     const nameMap = new Map(stores.map((s) => [s.id, s.name || s.id]));
+    const now = Date.now();
     const items = Array.from(syncProgressMap.values()).map((p) => ({
       ...p,
       storeName: nameMap.get(p.storeId) || p.storeId,
+      // running 状态实时计算 elapsedMs,避免 await OPI 期间不调 setProgress 导致计时停滞
+      elapsedMs: p.status === 'running' ? now - (p.startedAt || now) : p.elapsedMs,
     }));
     res.json(ok({ items }));
   } catch (e) {
