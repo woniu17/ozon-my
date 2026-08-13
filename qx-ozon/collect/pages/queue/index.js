@@ -91,6 +91,16 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
 
+  // 跳过原因中文映射(仅 status='skipped' 时 lastError.message 为 reason)
+  const reasonLabel = (msg) => {
+    const map = {
+      'non-ultra-light': '非超轻小件',
+      'no-market-stats': '无市场统计数据',
+      'filtered-category': '过滤类目类别',
+    };
+    return map[msg] || msg;
+  };
+
   // 时间格式化:同天 HH:mm:ss,跨天 MM-DD HH:mm
   const formatTime = (ts) => {
     if (!ts) return '-';
@@ -406,9 +416,9 @@
       dom.ratingCount != null ? `<span class="tw-meta">评价 ${dom.ratingCount}</span>` : '';
     const errorLine =
       t.lastError && typeof t.lastError === 'object' && t.lastError.message
-        ? `<div class="tw-error" title="${escapeHtml(t.lastError.message)}">${escapeHtml(t.lastError.message)}</div>`
+        ? `<div class="tw-error" title="${escapeHtml(t.lastError.message)}">${escapeHtml(t.lastError.type === 'skipped' ? reasonLabel(t.lastError.message) : t.lastError.message)}</div>`
         : t.lastError && typeof t.lastError === 'string'
-          ? `<div class="tw-error" title="${escapeHtml(t.lastError)}">${escapeHtml(t.lastError)}</div>`
+          ? `<div class="tw-error" title="${escapeHtml(t.lastError)}">${escapeHtml(reasonLabel(t.lastError))}</div>`
           : '';
     // 中间槽仅在 running 时才加脉冲高亮;已完成任务保留在中间槽时不加脉冲
     const centerCls = isCenter && t.status === 'running' ? ' tw-card-center' : '';
