@@ -43,6 +43,11 @@
       // 2026-08:店铺白/黑名单改用 sellerId(稳定主键),不再用 slug
       knownMainlandChinaSellerIds: [],
       knownNonMainlandChinaSellerIds: [],
+      // 深度采集门控开关(2026-08 新增)
+      // marketStats 门控:无市场数据时跳过后续采集(richMedia/search/bundle/followSell)
+      enableMarketStatsGate: true,
+      // 类目过滤门控:search+bundle 采集后,类目在黑名单时跳过后续采集(richMedia/followSell)
+      enableCategoryFilterGate: true,
     };
 
     // ── 配置读取(带内存缓存) ──────────────────────────────────────────────────

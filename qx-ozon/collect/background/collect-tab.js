@@ -1884,6 +1884,8 @@
           .map(([k]) => k);
         console.log('[SW autoCollect] Step2 pending:', sku, pendingList.length ? pendingList.join(',') : '(none)');
         if (!hasPending) {
+          // 全缓存命中(search/bundle 总是 true,此分支实际不会执行,保留作安全网)
+          // 门控检查由后续 Step3(marketStats门控A)和 Step4(类目过滤门控B)统一处理
           this.writeAutoCollectLog({
             sku,
             source,
@@ -1900,61 +1902,62 @@
           return { status: 'success', reason: 'all-cached', results, totalDuration: Date.now() - startTime };
         }
 
-        // === Step 4: 买家页采集(composer+entrypoint+followSell) ===
-        // Phase 5: 移除 _autoCollectGate / _buyerPageGate 显式调用,由队列消费者统一限速。
-        if (pending.pdp || pending.followSell) {
+        // === Step 3: marketStats 采集 + 门控A(2026-08 新增) ===
+        // 原 Step6 提前:marketStats 是第一个门控,无市场数据时跳过后续所有采集。
+        // 执行顺序:marketStats(门控A) → search+bundle(门控B) → richMedia+followSell
+        let marketStatsData = null;
+        if (results[5].hit) {
+          // 缓存命中(非 forceRefresh),数据在 Step1 已取到
+          marketStatsData = marketStats?.data;
+        } else if (pending.marketStats) {
+          // 缓存未命中 → 真调(_fetchMarketStatsDirect 内部已调 _sellerPortalGate)
           try {
-            // fetchPdpBundleViaBuyerTab 接收 productUrl,从 card 缓存取 url 或构造 fallback
-            const productUrl = card?.url || `${sw.OZON_WWW_ORIGIN}/product/-${sku}/`;
-            const mediaResult = await fetchPdpBundleViaBuyerTab(productUrl, { forceRefresh: !!forceRefresh });
-            // fetchPdpBundleViaBuyerTab 内部已写 richMedia/followSell 缓存,
-            // 这里仅根据返回字段标记命中。
-            // endpoint 可能为 'entrypoint-api'/'composer-api'/'richMedia-cache',
-            // richMedia 缓存在 anyOk(HTTP 200)时写入(包括空内容),所以只要有 endpoint 就标记命中。
-            const ep = String(mediaResult?.endpoint || '');
-            if (ep && ep !== 'richMedia-cache') {
-              // 真调成功(entrypoint-api / composer-api)→ pdp 缓存已写入
-              results[2].hit = true;
-            } else if (!ep) {
-              // 细化 NO_ENDPOINT:从 mediaResult.errorReason 取具体原因
-              // (MEDIA_NO_RESULT / MEDIA_ALL_ENDPOINTS_FAILED:entrypoint:HTTP_403|composer:HTTP_403 / MEDIA_FAILED:xxx 等)
-              results[2].error = mediaResult?.errorReason || 'NO_ENDPOINT';
-              // 反爬检测:买家页 endpoint 全部 403/429 视为反爬挑战,抛 ANTIBOT_BLOCKED
-              // 触发 _handleAntibot 熔断(暂停 10 分钟),避免持续无效真调被 Ozon 进一步限制。
-              const reason = String(results[2].error || '');
-              if (/HTTP_403|HTTP_429/.test(reason)) {
-                throw new Error('ANTIBOT_BLOCKED');
-              }
-            } else {
-              // ep === 'richMedia-cache':缓存兜底命中(非 forceRefresh 场景)
-              // 按 L2064 注释意图,FALLBACK_* 是缓存兜底标注而非失败,标记 hit=true
-              // 避免 hasError 误判 partial 导致无限重试
-              results[2].hit = true;
-              results[2].error = 'FALLBACK_' + ep;
-            }
-            if (mediaResult?.followSellData) results[6].hit = true;
-            console.log(
-              '[SW autoCollect] Step4 买家页采集:',
-              sku,
-              'endpoint=',
-              ep || '(null)',
-              'pdp:',
-              results[2].hit ? '✓' : '✗',
-              'followSell:',
-              results[6].hit ? '✓' : '✗'
-            );
-          } catch (e) {
-            if (e?.message === 'ANTIBOT_BLOCKED') {
-              console.warn('[SW autoCollect] Step4 反爬熔断:', sku);
+            const marketData = await _fetchMarketStatsDirect(sku);
+            if (marketData?.__needSellerLogin) {
+              results[5].error = 'AUTH_REQUIRED';
+              console.log('[SW autoCollect] Step3 marketStats: AUTH_REQUIRED:', sku);
+            } else if (marketData?.__antibot) {
+              console.warn('[SW autoCollect] Step3 marketStats 反爬熔断:', sku);
               return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId);
+            } else if (marketData) {
+              // HTTP 200 即写缓存(包括 __empty 空数据),标记已采集
+              this.marketStatsCacheSet(sku, marketData);
+              results[5].hit = true;
+              marketStatsData = marketData;
+              console.log('[SW autoCollect] Step3 marketStats 成功:', sku, marketData.__empty ? '(空数据)' : '');
+            } else {
+              // null:临时性失败(所有 tab 注入异常等),不写缓存
+              results[5].error = 'NO_DATA';
+              console.log('[SW autoCollect] Step3 marketStats: NO_DATA:', sku);
             }
-            // 截断到 80 字符,避免超长 HTML 挑战页内容污染日志
-            results[2].error = e?.message ? String(e.message).slice(0, 80) : 'STEP4_FAILED';
-            console.warn('[SW autoCollect] Step4 failed:', sku, e?.message || e);
+          } catch (e) {
+            console.warn('[SW autoCollect] Step3 failed:', sku, e?.message || e);
+            results[5].error = e?.message || 'UNKNOWN';
+            // 失败不熔断
           }
         }
 
-        // === Step 5: seller portal 采集(search+bundle) ===
+        // 门控A:marketStats 无数据 → 跳过后续采集(richMedia/search/bundle/followSell)
+        // 仅在数据成功获取(无 error)时检查;AUTH_REQUIRED/NO_DATA 等错误不触发门控,让任务走 partial 重试
+        if (config.enableMarketStatsGate && !results[5].error) {
+          if (!marketStatsData || marketStatsData.__empty) {
+            console.log('[SW autoCollect] 门控A:marketStats 无数据,跳过后续采集:', sku);
+            const totalDuration = Date.now() - startTime;
+            this.writeAutoCollectLog({
+              sku, source, sellerSlug, sellerId: sellerId || '',
+              storeClassified, depth, status: 'skipped', reason: 'no-market-stats',
+              results, totalDuration,
+            });
+            this.pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'no-market-stats');
+            return { status: 'skipped', reason: 'no-market-stats', results, totalDuration };
+          }
+        }
+
+        // === Step 4: seller portal 采集(search+bundle) + 门控B ===
+        // search+bundle 采集后,检查类目是否在黑名单,命中则跳过后续 richMedia/followSell 采集。
+        // 保存 search variant 和 bundle 数据供门控B使用
+        let searchVariant = null;
+        let bundleDataRef = null;
         if (pending.search || pending.bundle) {
           try {
             // 检查 search 缓存(L1 IndexedDB 合并表 → L2 ERP SQLite,由 attributeCacheGet 内部处理)
@@ -1970,16 +1973,18 @@
 
             if (searchCacheHit && !forceRefresh) {
               results[3].hit = true; // search
+              searchVariant = searchCacheHit.items[0];
               // search 缓存命中,检查 bundle 缓存(L1 合并表 + L2 合并表)
               try {
                 const bundleCached = await this.attributeCacheGet(sku, 'bundle');
                 if (this.bundleUsable(bundleCached)) {
                   results[4].hit = true; // bundle
+                  bundleDataRef = bundleCached.data;
                 }
               } catch (e) {
                 console.warn('[SW autoCollect] bundle cache get failed:', e?.message || e);
               }
-              console.log('[SW autoCollect] Step5 search/bundle 缓存命中:', sku);
+              console.log('[SW autoCollect] Step4 search/bundle 缓存命中:', sku);
             } else {
               // 未缓存 → 真调 /search + bundle(fetchSellerPortal 内部已调 _sellerPortalGate)
               const scCookies = await chrome.cookies.getAll({
@@ -2016,6 +2021,7 @@
                 // 读取端(collect-queue.js / 后端 compose-sv-shape.js)按需合成 sv shape。
                 if (rawVariants.length > 0) {
                   results[3].hit = true; // search
+                  searchVariant = rawVariants[0];
                   // 写 search 缓存(原始 variants,不做任何转换)
                   this.attributeCacheSet(sku, 'search', { items: rawVariants });
 
@@ -2028,14 +2034,15 @@
                     });
                     if (bundleItem) {
                       results[4].hit = true; // bundle
+                      bundleDataRef = bundleItem;
                     }
                   }
-                  console.log('[SW autoCollect] Step5 search/bundle 真调成功:', sku, 'items=', rawVariants.length);
+                  console.log('[SW autoCollect] Step4 search/bundle 真调成功:', sku, 'items=', rawVariants.length);
                 } else {
-                  console.log('[SW autoCollect] Step5 search 真调无数据:', sku);
+                  console.log('[SW autoCollect] Step4 search 真调无数据:', sku);
                 }
               } else {
-                console.log('[SW autoCollect] Step5 跳过(无 sc_company_id cookie):', sku);
+                console.log('[SW autoCollect] Step4 跳过(无 sc_company_id cookie):', sku);
               }
             }
           } catch (e) {
@@ -2046,39 +2053,95 @@
                 msg
               );
             if (looksAntibot || e?.__antibot) {
-              console.warn('[SW autoCollect] Step5 反爬熔断:', sku);
+              console.warn('[SW autoCollect] Step4 反爬熔断:', sku);
               return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId);
             }
-            console.warn('[SW autoCollect] Step5 failed:', sku, e?.message || e);
+            console.warn('[SW autoCollect] Step4 failed:', sku, e?.message || e);
           }
         }
 
-        // === Step 6: seller portal 采集 marketStats ===
-        if (pending.marketStats) {
+        // 门控B:类目过滤 — search 无数据或类目在黑名单 → 跳过后续 richMedia/followSell 采集
+        if (config.enableCategoryFilterGate) {
+          if (!results[3].hit) {
+            // search 无数据(真调无 variants 或缓存缺失,非 ANTIBOT 失败)→ skipped
+            console.log('[SW autoCollect] 门控B:search 无数据,跳过后续采集:', sku);
+            const totalDuration = Date.now() - startTime;
+            this.writeAutoCollectLog({
+              sku, source, sellerSlug, sellerId: sellerId || '',
+              storeClassified, depth, status: 'skipped', reason: 'no-search-data',
+              results, totalDuration,
+            });
+            this.pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'no-search-data');
+            return { status: 'skipped', reason: 'no-search-data', results, totalDuration };
+          }
+          // 提取类目 ID(与 index-dao.js syncSku 同源)并查黑名单
+          const { descCatId, typeId } = this.extractCategoryIds(searchVariant, bundleDataRef);
+          const filterMap = await this._loadFilteredCategories();
+          if (this._isCategoryFiltered(descCatId, typeId, filterMap)) {
+            console.log('[SW autoCollect] 门控B:类目在黑名单,跳过后续采集:', sku, { descCatId, typeId });
+            const totalDuration = Date.now() - startTime;
+            this.writeAutoCollectLog({
+              sku, source, sellerSlug, sellerId: sellerId || '',
+              storeClassified, depth, status: 'skipped', reason: 'filtered-category',
+              results, totalDuration,
+            });
+            this.pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'filtered-category');
+            return { status: 'skipped', reason: 'filtered-category', results, totalDuration };
+          }
+        }
+
+        // === Step 5: 买家页采集(richMedia+followSell) ===
+        // 原 Step4 后移:门控A/B 通过后才采集买家页数据。
+        // Phase 5: 移除 _autoCollectGate / _buyerPageGate 显式调用,由队列消费者统一限速。
+        if (pending.pdp || pending.followSell) {
           try {
-            // _fetchMarketStatsDirect 内部已调 _sellerPortalGate
-            const marketData = await _fetchMarketStatsDirect(sku);
-            // 检查顺序:__needSellerLogin(AUTH_REQUIRED) → __antibot(跳 ANTIBOT) → 其余(HTTP 200)写缓存
-            if (marketData?.__needSellerLogin) {
-              results[5].error = 'AUTH_REQUIRED';
-              console.log('[SW autoCollect] Step6 marketStats: AUTH_REQUIRED:', sku);
-            } else if (marketData?.__antibot) {
-              console.warn('[SW autoCollect] Step6 marketStats 反爬熔断:', sku);
-              return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId);
-            } else if (marketData) {
-              // HTTP 200 即写缓存(包括 __empty 空数据),标记已采集
-              this.marketStatsCacheSet(sku, marketData);
-              results[5].hit = true;
-              console.log('[SW autoCollect] Step6 marketStats 成功:', sku, marketData.__empty ? '(空数据)' : '');
+            // fetchPdpBundleViaBuyerTab 接收 productUrl,从 card 缓存取 url 或构造 fallback
+            const productUrl = card?.url || `${sw.OZON_WWW_ORIGIN}/product/-${sku}/`;
+            const mediaResult = await fetchPdpBundleViaBuyerTab(productUrl, { forceRefresh: !!forceRefresh });
+            // fetchPdpBundleViaBuyerTab 内部已写 richMedia/followSell 缓存,
+            // 这里仅根据返回字段标记命中。
+            // endpoint 可能为 'entrypoint-api'/'composer-api'/'richMedia-cache',
+            // richMedia 缓存在 anyOk(HTTP 200)时写入(包括空内容),所以只要有 endpoint 就标记命中。
+            const ep = String(mediaResult?.endpoint || '');
+            if (ep && ep !== 'richMedia-cache') {
+              // 真调成功(entrypoint-api / composer-api)→ pdp 缓存已写入
+              results[2].hit = true;
+            } else if (!ep) {
+              // 细化 NO_ENDPOINT:从 mediaResult.errorReason 取具体原因
+              // (MEDIA_NO_RESULT / MEDIA_ALL_ENDPOINTS_FAILED:entrypoint:HTTP_403|composer:HTTP_403 / MEDIA_FAILED:xxx 等)
+              results[2].error = mediaResult?.errorReason || 'NO_ENDPOINT';
+              // 反爬检测:买家页 endpoint 全部 403/429 视为反爬挑战,抛 ANTIBOT_BLOCKED
+              // 触发 _handleAntibot 熔断(暂停 10 分钟),避免持续无效真调被 Ozon 进一步限制。
+              const reason = String(results[2].error || '');
+              if (/HTTP_403|HTTP_429/.test(reason)) {
+                throw new Error('ANTIBOT_BLOCKED');
+              }
             } else {
-              // null:临时性失败(所有 tab 注入异常等),不写缓存
-              results[5].error = 'NO_DATA';
-              console.log('[SW autoCollect] Step6 marketStats: NO_DATA:', sku);
+              // ep === 'richMedia-cache':缓存兜底命中(非 forceRefresh 场景)
+              // 按 L2064 注释意图,FALLBACK_* 是缓存兜底标注而非失败,标记 hit=true
+              // 避免 hasError 误判 partial 导致无限重试
+              results[2].hit = true;
+              results[2].error = 'FALLBACK_' + ep;
             }
+            if (mediaResult?.followSellData) results[6].hit = true;
+            console.log(
+              '[SW autoCollect] Step5 买家页采集:',
+              sku,
+              'endpoint=',
+              ep || '(null)',
+              'pdp:',
+              results[2].hit ? '✓' : '✗',
+              'followSell:',
+              results[6].hit ? '✓' : '✗'
+            );
           } catch (e) {
-            console.warn('[SW autoCollect] Step6 failed:', sku, e?.message || e);
-            results[5].error = e?.message || 'UNKNOWN';
-            // 失败不熔断
+            if (e?.message === 'ANTIBOT_BLOCKED') {
+              console.warn('[SW autoCollect] Step5 反爬熔断:', sku);
+              return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId);
+            }
+            // 截断到 80 字符,避免超长 HTML 挑战页内容污染日志
+            results[2].error = e?.message ? String(e.message).slice(0, 80) : 'STEP5_FAILED';
+            console.warn('[SW autoCollect] Step5 failed:', sku, e?.message || e);
           }
         }
 

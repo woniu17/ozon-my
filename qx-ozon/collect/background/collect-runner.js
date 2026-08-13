@@ -415,6 +415,97 @@
       return { status: 'antibot', pausedUntil };
     };
 
+    // ── 类目黑名单 SW 内存缓存(2026-08 新增) ─────────────────────────────────
+    // 深度采集门控B 使用:search+bundle 采集后,检查商品类目是否在黑名单。
+    // 数据来源:GET /admin/api/filtered-categories → Map<descCatId, Set<typeId>>
+    // TTL 5 分钟(懒刷新),SW 休眠后内存清空,下次使用时重新加载。
+    let _filteredCategoriesCache = null; // { map: Map<descCatId, Set<typeId>>, expiresAt }
+    const _FILTERED_CATEGORIES_TTL = 5 * 60 * 1000;
+
+    this._loadFilteredCategories = async (force = false) => {
+      if (!force && _filteredCategoriesCache && _filteredCategoriesCache.expiresAt > Date.now()) {
+        return _filteredCategoriesCache.map;
+      }
+      try {
+        const url = await sw.getBackendUrl();
+        const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
+        const token = stored[sw.STORAGE_KEYS.token];
+        const resp = await sw.apiRequest('GET', `${url}/admin/api/filtered-categories`, null, token);
+        const items = Array.isArray(resp?.items) ? resp.items : [];
+        const map = new Map();
+        for (const it of items) {
+          const descCatId = Number(it.descriptionCategoryId);
+          const typeId = Number(it.typeId) || 0;
+          if (!Number.isFinite(descCatId) || descCatId <= 0) continue;
+          if (!map.has(descCatId)) map.set(descCatId, new Set());
+          map.get(descCatId).add(typeId);
+        }
+        _filteredCategoriesCache = { map, expiresAt: Date.now() + _FILTERED_CATEGORIES_TTL };
+        console.log(`[category-filter] 黑名单加载成功,共 ${map.size} 个类目`);
+        return map;
+      } catch (e) {
+        console.warn('[category-filter] 黑名单加载失败:', e?.message || e);
+        // 加载失败时返回空 Map(不阻断采集,等同门控B关闭)
+        if (_filteredCategoriesCache?.map) return _filteredCategoriesCache.map;
+        return new Map();
+      }
+    };
+
+    // 检查类目是否在黑名单。typeId 为 0 时(数据缺失)按 descCatId 单维度匹配。
+    this._isCategoryFiltered = (descCatId, typeId, map) => {
+      if (!map || !descCatId) return false;
+      const typeSet = map.get(Number(descCatId));
+      if (!typeSet) return false;
+      const tid = Number(typeId) || 0;
+      // 命中条件:精确 typeId 匹配,或黑名单中存在 typeId=0 的条目(单维度过滤)
+      return typeSet.has(tid) || typeSet.has(0);
+    };
+
+    // ── 从 search variant + bundle 提取类目 ID(与 index-dao.js syncSku 同源) ────
+    // typeId:优先 search variant 的 description_type_dict_value(字段名误用,实际是 type_id);
+    //         fallback bundle.type_id(几乎总为空)
+    // descCatId:优先 search variant.categories 中 level=3 的类目(OPI 字典要求 level_3_id);
+    //           fallback bundle.description_category_id(通常是 level_4,不保证正确);
+    //           再 fallback search variant.categories 最深层
+    this.extractCategoryIds = (searchVariant, bundleData) => {
+      let typeId = 0;
+      let descCatId = 0;
+
+      // search variant 优先
+      if (searchVariant && typeof searchVariant === 'object') {
+        // typeId:description_type_dict_value(字段名误用,实际是 type_id)
+        const sTi = Number(searchVariant.description_type_dict_value);
+        if (Number.isFinite(sTi) && sTi > 0) typeId = sTi;
+        // descCatId:categories 中 level=3 的类目
+        if (Array.isArray(searchVariant.categories)) {
+          const level3 = searchVariant.categories.find((c) => Number(c.level) === 3);
+          if (level3) descCatId = Number(level3.id) || 0;
+          // fallback:最深层类目
+          if (!descCatId) {
+            let deepest = null;
+            for (const c of searchVariant.categories) {
+              if (!deepest || Number(c.level) > Number(deepest.level)) deepest = c;
+            }
+            if (deepest) descCatId = Number(deepest.id) || 0;
+          }
+        }
+      }
+
+      // bundle fallback(几乎只有 descCatId,type_id 通常为空)
+      if ((!descCatId || !typeId) && bundleData && typeof bundleData === 'object') {
+        if (!descCatId) {
+          const bDci = Number(bundleData.description_category_id);
+          if (Number.isFinite(bDci) && bDci > 0) descCatId = bDci;
+        }
+        if (!typeId) {
+          const bTi = Number(bundleData.type_id);
+          if (Number.isFinite(bTi) && bTi > 0) typeId = bTi;
+        }
+      }
+
+      return { descCatId, typeId };
+    };
+
     // ── 前置缓存检查:并行查 5 类合并缓存,返回是否全部命中 ──────────────────────
     // 用于 _handleSubmitTask 入队前快速判断,避免缓存命中任务占用 15s 队列 slot。
     // 逻辑与 _doAutoCollect Step1+Step5 内部缓存查询保持一致,但不做 L1/L2 同步(仅查询)。
