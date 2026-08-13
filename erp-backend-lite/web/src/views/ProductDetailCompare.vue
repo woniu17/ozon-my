@@ -194,10 +194,15 @@ function goBack() {
 // ── 已上架商品字段提取 ────────────────────────────────────
 // data: OPI /v3/product/info/list 返回的单个 item(字符串数组 images,标量字段)
 const listedData = computed(() => state.listed?.data || {});
+// /v4 响应 result[0]:weight/depth/width/height/type_id/description_category_id 等顶层字段(权威来源)
+// /v3 的 data 不含这些字段,必须从 /v4 响应取
+const listedV4 = computed(() => {
+  const r = state.attrRes?.attributes?.result;
+  return Array.isArray(r) ? r[0] || {} : {};
+});
 // 已上架属性数组:/v4 响应 result[0].attributes,每项 {attribute_id, complex_id, values:[{value}]}
 const listedAttrItems = computed(() => {
-  const r = state.attrRes?.attributes?.result;
-  const arr = Array.isArray(r) ? r[0]?.attributes : r?.attributes;
+  const arr = listedV4.value.attributes;
   return Array.isArray(arr) ? arr : [];
 });
 // 已上架描述文本:/v1 响应 result.description(防御兼容顶层 description)
@@ -209,6 +214,7 @@ const listedAttrSource = computed(() => state.attrRes?.source || '');
 
 const listed = computed(() => {
   const d = listedData.value;
+  const v4 = listedV4.value;
   const imgs = Array.isArray(d.images) ? d.images : [];
   const primary = d.primary_image || d.image || (imgs.length ? imgs[0] : '');
   return {
@@ -223,14 +229,15 @@ const listed = computed(() => {
     vat: d.vat,
     primaryImage: primary,
     images: imgs,
-    weight: d.weight,
-    depth: d.depth,
-    width: d.width,
-    height: d.height,
-    weightUnit: d.weight_unit,
-    dimensionUnit: d.dimension_unit,
-    descCategoryId: d.description_category_id,
-    typeId: d.type_id,
+    // 物理字段优先取 /v4 顶层(权威),降级 /v3 data
+    weight: v4.weight ?? d.weight,
+    depth: v4.depth ?? d.depth,
+    width: v4.width ?? d.width,
+    height: v4.height ?? d.height,
+    weightUnit: v4.weight_unit || d.weight_unit,
+    dimensionUnit: v4.dimension_unit || d.dimension_unit,
+    descCategoryId: v4.description_category_id ?? d.description_category_id,
+    typeId: v4.type_id ?? d.type_id,
     barcode: d.barcode,
     videoUrl: d.video_url,
     fetchedAt: state.listed?.fetchedAt,
@@ -245,7 +252,7 @@ const source = computed(() => {
   const primary = o.primaryImage || (imgs.length ? imgs[0] : '');
   return {
     sku: o.sku ?? sku.value,
-    offerId: o.offerId,
+    offerId: cleanSourceOfferId(o.offerId),
     name: o.name,
     price: o.price,
     oldPrice: o.oldPrice,
@@ -295,7 +302,7 @@ function fmtPrice(v, currency) {
 }
 function fmtWeight(v, unit) {
   if (v == null || v === '') return '';
-  return v + (unit ? ' ' + unit : ' kg');
+  return v + ' ' + (unit || 'g');
 }
 function fmtDims(d, w, h, unit) {
   const parts = [d, w, h].filter((x) => x != null && x !== '');
@@ -304,6 +311,14 @@ function fmtDims(d, w, h, unit) {
 }
 function or(v, fallback = '—') {
   return v == null || v === '' ? fallback : v;
+}
+
+// 源商品是别人家的商品,本身无卖家 offer_id。
+// 后端 cache.js 无条件用 'SKU' + sku 拼接占位 offer_id(如 "SKU3653913922"),非真实值,不展示
+function cleanSourceOfferId(offerId) {
+  if (!offerId) return '';
+  if (/^SKU\d+$/.test(String(offerId))) return '';
+  return offerId;
 }
 
 // ── ① 图片对比 ────────────────────────────────────────────
@@ -332,7 +347,6 @@ const fieldRows = computed(() => {
   const rows = [
     { key: 'SKU', listed: or(l.sku), source: or(s.sku) },
     { key: 'OfferID', listed: or(l.offerId), source: or(s.offerId) },
-    { key: 'ProductID', listed: or(l.productId), source: or(s.productId) },
     { key: '商品名称', listed: or(l.name), source: or(s.name) },
     { key: '价格', listed: or(fmtPrice(l.price, l.currency)), source: or(fmtPrice(s.price, l.currency)) },
     { key: '划线价', listed: or(fmtPrice(l.oldPrice, l.currency)), source: or(fmtPrice(s.oldPrice, l.currency)) },
@@ -965,11 +979,11 @@ onMounted(() => {
 .pdc-img-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
 }
 .pdc-img-cell {
-  width: 76px;
-  height: 76px;
+  width: 200px;
+  height: 200px;
   border-radius: 8px;
   border: 1px solid #e5e7eb;
   background: #fafafa;
@@ -992,24 +1006,24 @@ onMounted(() => {
 }
 .pdc-img-idx {
   position: absolute;
-  top: 2px;
-  left: 3px;
-  font-size: 10px;
+  top: 4px;
+  left: 5px;
+  font-size: 12px;
   color: #fff;
   background: rgba(0, 0, 0, 0.55);
-  border-radius: 3px;
-  padding: 0 4px;
+  border-radius: 4px;
+  padding: 1px 6px;
   z-index: 1;
 }
 .pdc-img-main-tag {
   position: absolute;
-  bottom: 2px;
-  right: 2px;
-  font-size: 9px;
+  bottom: 4px;
+  right: 5px;
+  font-size: 11px;
   color: #fff;
   background: #6d28d9;
-  border-radius: 3px;
-  padding: 0 4px;
+  border-radius: 4px;
+  padding: 1px 6px;
   z-index: 1;
 }
 .pdc-empty {
