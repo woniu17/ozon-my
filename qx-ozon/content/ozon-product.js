@@ -259,8 +259,12 @@
   }
 
   // 从 webDescription widget DOM 提取并清洗 HTML 描述,保留 OPI 支持的标签白名单。
-  // 返回清洗后的 HTML 字符串;widget 不存在时返回 ''。
-  // webDescription widget 是懒加载的(需滚动到描述区域才渲染),首次调用可能返回空。
+  // 返回清洗后的 HTML 字符串;widget 不存在、或清洗后只剩 UI 按钮文案时返回 ''。
+  // webDescription widget 是懒加载的(需滚动到描述区域才渲染),首次调用可能返回空,
+  // 或只渲染出「Показать полностью」/「Читать далее」展开按钮而无真实描述 ——
+  // 此时返回空让上层走 jsonLd 兜底(2026-08 修复,与 follow-sell-content-copy.js 同口径)。
+  const DESCRIPTION_UI_CHROME_RE = /(читать далее|показать полностью|свернуть описание|развернуть описание)/gi;
+  const DESCRIPTION_LOAD_FAIL_RE = /(не удалось загрузить|ошибка загрузки|попробуйте (обновить|позже)|failed to load)/i;
   function extractDescriptionFromWidget() {
     const descWidget = document.querySelector('[data-widget="webDescription"]');
     if (!descWidget) return '';
@@ -290,11 +294,19 @@
       }
     };
     walk(tmp);
-    return tmp.innerHTML
+    const html = tmp.innerHTML
       .replace(/<br\s*\/?>/gi, '<br>')
       .replace(/(<br>){3,}/gi, '<br><br>')
       .replace(/>\s+</g, '><')
       .trim();
+    if (!html) return '';
+    // 剥掉展开按钮文案(真描述末尾偶尔会粘到),剥完为空 → widget 还没渲染出真实描述
+    const textOnly = html.replace(/<[^>]*>/g, ' ');
+    const cleanedText = textOnly.replace(DESCRIPTION_UI_CHROME_RE, ' ').replace(/\s+/g, ' ').trim();
+    if (!cleanedText) return '';
+    // 含「Не удалось загрузить」加载失败占位 → 视为 widget 未渲染真实描述
+    if (DESCRIPTION_LOAD_FAIL_RE.test(cleanedText.slice(0, 200))) return '';
+    return html;
   }
 
   function extractProductData() {
