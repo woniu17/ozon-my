@@ -868,6 +868,7 @@ router.get('/admin/api/products', (req, res, next) => {
       const idRows = db
         .prepare(
           `SELECT
+             sku,
              COALESCE(json_extract(data, '$.product_id'), json_extract(data, '$.id')) AS productId,
              store_id AS storeId,
              COALESCE(json_extract(data, '$.offer_id'), json_extract(data, '$.sku'), sku) AS offerId
@@ -877,7 +878,7 @@ router.get('/admin/api/products', (req, res, next) => {
         .all(...params);
       const items = idRows
         .filter((r) => r.productId)
-        .map((r) => ({ productId: String(r.productId), storeId: r.storeId || '', offerId: r.offerId || '' }));
+        .map((r) => ({ sku: r.sku, productId: String(r.productId), storeId: r.storeId || '', offerId: r.offerId || '' }));
       return res.json(ok({ items, total: items.length }));
     }
 

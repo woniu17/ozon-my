@@ -515,6 +515,21 @@ async function openDetail(sku) {
   }
 }
 
+// 详情对比页:跳转全屏对比页,携带当前筛选条件(用于上一个/下一个按筛选列表导航)
+// query 前缀 f* 表示"来自列表筛选",与详情页自身参数区分
+function openDetailCompare(item) {
+  const query = {};
+  if (item.storeId) query.storeId = item.storeId;
+  const f = state.filters;
+  if (f.storeId) query.fStoreId = f.storeId;
+  if (f.keyword && f.keyword.trim()) query.fKeyword = f.keyword.trim();
+  if (f.productStatus) query.fProductStatus = f.productStatus;
+  if (f.hasStock) query.fHasStock = f.hasStock;
+  if (f.imageIssue) query.fImageIssue = f.imageIssue;
+  if (f.descriptionQuality) query.fDescriptionQuality = f.descriptionQuality;
+  router.push({ name: 'product-detail', params: { sku: item.sku }, query });
+}
+
 // ── 渲染辅助 ───────────────────────────────────────────────
 function storeName(storeId) {
   const s = storesStore.list.find((x) => x.id === storeId);
@@ -1064,6 +1079,7 @@ onMounted(() => {
             <td>{{ fmtTime(it.fetchedAt) }}</td>
             <td>
               <button class="btn btn-sm btn-ghost" @click="openDetail(it.sku)">查看详情</button>
+              <button class="btn btn-sm btn-ghost" @click="openDetailCompare(it)">详情对比</button>
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleRefresh(it)">更新图片</button>
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleStock(it)">更新库存</button>
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleProductUpdate(it)">更新信息</button>

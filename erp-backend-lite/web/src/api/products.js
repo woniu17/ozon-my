@@ -37,3 +37,12 @@ export function deleteProduct(sku) {
 export function deleteProductsBatch(skus) {
   return request.post('/admin/api/products/delete-batch', { skus });
 }
+
+// 单条商品属性 + 描述(OPI /v4 attributes + /v1 description,三级缓存)
+// 返回 { attributes, description, fetchedAt, source }
+//   attributes: /v4 原始响应 { result: [{ attributes:[{attribute_id,values:[{value}]}] }] }
+//   description: /v1 原始响应 { result: { description: "文本" } }
+export function getProductAttributes(sku, storeId) {
+  const q = storeId ? '?storeId=' + encodeURIComponent(storeId) : '';
+  return request.get('/admin/api/products/' + encodeURIComponent(sku) + '/attributes' + q);
+}

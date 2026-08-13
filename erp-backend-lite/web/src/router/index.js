@@ -6,6 +6,7 @@ import Listings from '../views/Listings.vue';
 import CollectBoxV2 from '../views/CollectBoxV2.vue';
 import Preview from '../views/Preview.vue';
 import Products from '../views/Products.vue';
+import ProductDetailCompare from '../views/ProductDetailCompare.vue';
 import Batch from '../views/Batch.vue';
 import ImageRefreshList from '../views/ImageRefreshList.vue';
 import StockRefreshList from '../views/StockRefreshList.vue';
@@ -34,6 +35,7 @@ const router = createRouter({
     { path: '/collect-box-v2', name: 'collect-box-v2', component: CollectBoxV2 },
     { path: '/preview/:sku', name: 'preview', component: Preview, meta: { title: '上架预览' } },
     { path: '/products', name: 'products', component: Products },
+    { path: '/products/detail/:sku', name: 'product-detail', component: ProductDetailCompare, meta: { title: '商品详情对比' } },
     { path: '/batch', name: 'batch', component: Batch },
     { path: '/image-refresh-tasks', name: 'image-refresh-tasks', component: ImageRefreshList, meta: { title: '图片更新任务' } },
     { path: '/stock-refresh-tasks', name: 'stock-refresh-tasks', component: StockRefreshList, meta: { title: '库存更新任务' } },
