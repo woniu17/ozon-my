@@ -40,6 +40,8 @@ const state = reactive({
   // 导航
   navList: [], // 当前筛选下的全量 sku 列表
   navLoading: false,
+  // 源 SKU(从 offer_id 解析,如 "4339734364-0811-qx" → "4339734364")
+  sourceSku: '',
 });
 
 // Lightbox
@@ -58,7 +60,17 @@ const currentFilters = computed(() => {
   };
 });
 
-// ── 数据加载:并行 3 接口,各自容错 ────────────────────────
+// offer_id 格式约定:{源SKU}-{MMDD}-qx(与 listing-builder.js:416 / collect-queue.js:591 一致)
+// 源 SKU 是纯数字,不含 '-',split('-')[0] 安全
+function extractSourceSku(offerId) {
+  if (!offerId || typeof offerId !== 'string') return '';
+  if (!offerId.includes('-')) return '';
+  return offerId.split('-')[0] || '';
+}
+
+// ── 数据加载:两阶段 ──────────────────────────────────────
+// 阶段1:并行拉 已上架商品(detail) + 属性/描述(attributes),都基于路由 sku(FBS 变体 SKU)
+// 阶段2:从 detail.data.offer_id 解析源 SKU,再用源 SKU 调 getSkuProfile(采集画像)
 async function loadAll() {
   state.loading = true;
   state.error = '';
@@ -67,32 +79,47 @@ async function loadAll() {
   state.listed = null;
   state.attrRes = null;
   state.profile = null;
+  state.sourceSku = '';
   const storeId = route.query.storeId || '';
-  const [detailR, attrR, profileR] = await Promise.allSettled([
+
+  // 阶段1:detail + attributes 并行(都基于 listedSku)
+  const [detailR, attrR] = await Promise.allSettled([
     getProductDetail(sku.value),
     // 始终调用:后端从 product_data_cache.store_id 兜底取 storeId
     getProductAttributes(sku.value, storeId),
-    getSkuProfile(sku.value, storeId || undefined),
   ]);
-  // 已上架商品(主):失败则阻断
-  if (detailR.status === 'fulfilled') {
-    state.listed = detailR.value || null;
-    state.listedStoreId = detailR.value?.storeId || storeId || '';
-  } else {
+
+  // 已上架商品(主):失败则阻断,不再拉 profile
+  if (detailR.status !== 'fulfilled') {
     state.error = detailR.reason?.message || '商品加载失败';
+    state.loading = false;
+    return;
   }
+  state.listed = detailR.value || null;
+  state.listedStoreId = detailR.value?.storeId || storeId || '';
+
   // 属性+描述:失败降级
   if (attrR.status === 'fulfilled') {
     state.attrRes = attrR.value || null;
   } else {
     state.attrError = attrR.reason?.message || '属性/描述加载失败';
   }
-  // 源商品画像:接口本身不抛错(返回 envelope 带 error 字段),仅网络错误才 reject
-  if (profileR.status === 'fulfilled') {
-    state.profile = profileR.value || null;
-    if (profileR.value?.error) state.profileError = profileR.value.error;
+
+  // 阶段2:从 offer_id 解析源 SKU,拉采集画像
+  const offerId = listedData.value.offer_id || '';
+  state.sourceSku = extractSourceSku(offerId);
+  if (state.sourceSku) {
+    try {
+      const profile = await getSkuProfile(state.sourceSku, state.listedStoreId || undefined);
+      state.profile = profile || null;
+      if (profile?.error) state.profileError = profile.error;
+    } catch (err) {
+      state.profileError = err.message || '源商品画像加载失败';
+    }
   } else {
-    state.profileError = profileR.reason?.message || '源商品画像加载失败';
+    state.profileError = offerId
+      ? `OfferID "${offerId}" 不含 "-",无法解析源 SKU`
+      : '已上架商品无 OfferID,无法关联源商品';
   }
   state.loading = false;
 }
