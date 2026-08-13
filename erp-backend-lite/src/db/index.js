@@ -151,6 +151,8 @@ async function ensureMigrations() {
   await migrateListedFields(db);
   // 2026-08: 超轻小件筛选 — ozon_cache_index 补 weight_g / dim_sum_mm 列 + 从 bundle_data 回填
   await migrateUltraLightFields(db);
+  // 2026-08: 深度采集日志补 reason 列(跳过原因)
+  migrateAutoCollectLogReason(db);
   // P2-2: 批量均衡上架 — batch_upload_tasks / batch_upload_items 补列(多店铺分配 + 顺序执行 + 速度控制)
   migrateBatchUploadTables(db);
   // 2026-07: watermark_templates.name UNIQUE 索引(旧库 schema 没有 UNIQUE,需补建)
@@ -799,6 +801,16 @@ async function migrateUltraLightFields(db) {
   console.log(
     `[db] migration: backfilled weight_g / dim_sum_mm for ${result.changes} SKUs`
   );
+}
+
+// 2026-08: 深度采集日志补 reason 列(跳过原因,仅 status='skipped' 时有值)
+// 新库由 schema.sql CREATE TABLE IF NOT EXISTS 直接建好,此函数幂等跳过
+function migrateAutoCollectLogReason(db) {
+  const logCols = db.prepare(`PRAGMA table_info(ozon_auto_collect_log)`).all();
+  if (logCols.length > 0 && !logCols.some((c) => c.name === 'reason')) {
+    db.exec(`ALTER TABLE ozon_auto_collect_log ADD COLUMN reason TEXT`);
+    console.log('[db] migration: added column ozon_auto_collect_log.reason');
+  }
 }
 
 // P2-2: 批量均衡上架 — batch_upload_tasks / batch_upload_items 补列

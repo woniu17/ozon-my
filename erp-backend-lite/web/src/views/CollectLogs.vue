@@ -220,6 +220,23 @@ function logStatusLabel(status) {
   return map[status] || status;
 }
 
+// 跳过原因中文映射(仅 status='skipped' 时有值)
+function logReasonLabel(reason) {
+  if (!reason) return '';
+  const map = {
+    'no-market-stats': '无市场数据',
+    'no-search-data': '无搜索数据',
+    'filtered-category': '类目黑名单',
+    'non-ultra-light': '非超轻小件',
+    'non-mainland-china-store': '非大陆店铺',
+    'unclassified-store': '店铺未分类',
+    'not-running': '采集未开启',
+    'paused': '熔断暂停',
+    'queue_timeout': '排队超时',
+  };
+  return map[reason] || reason;
+}
+
 // 统计:成功率
 const successRate = computed(() => {
   const today = stats.value?.today;
@@ -382,6 +399,7 @@ onUnmounted(() => {
               <td>{{ log.source || '—' }}</td>
               <td>
                 <span :class="logStatusTag(log.status)">{{ logStatusLabel(log.status) }}</span>
+                <div v-if="log.reason" class="log-reason" :title="log.reason">{{ logReasonLabel(log.reason) }}</div>
               </td>
               <td>{{ log.totalDuration }}ms</td>
               <td v-for="t in EIGHT_TYPES" :key="t.key" :class="logResultClass(log, t.key)">
@@ -563,6 +581,12 @@ onUnmounted(() => {
 .col-time {
   font-size: 11px;
   color: var(--text-secondary, #6b7280);
+}
+
+.log-reason {
+  font-size: 10px;
+  color: var(--text-secondary, #9ca3af);
+  margin-top: 2px;
 }
 
 .row-has-error {

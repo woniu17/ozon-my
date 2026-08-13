@@ -115,7 +115,7 @@ export const autoCollectLogDao = {
 
     const items = db
       .prepare(
-        `SELECT sku, source, sellerSlug, sellerId, storeClassified, depth, status, results, totalDuration, collectedAt
+        `SELECT sku, source, sellerSlug, sellerId, storeClassified, depth, status, reason, results, totalDuration, collectedAt
          FROM ozon_auto_collect_log ${where}
          ORDER BY collectedAt DESC LIMIT ? OFFSET ?`
       )
@@ -133,7 +133,7 @@ export const autoCollectLogDao = {
   async findBySku(sku) {
     const items = db
       .prepare(
-        `SELECT sku, source, sellerSlug, sellerId, storeClassified, depth, status, results, totalDuration, collectedAt
+        `SELECT sku, source, sellerSlug, sellerId, storeClassified, depth, status, reason, results, totalDuration, collectedAt
          FROM ozon_auto_collect_log WHERE sku = ?
          ORDER BY collectedAt DESC`
       )
@@ -150,8 +150,8 @@ export const autoCollectLogDao = {
     const r = db
       .prepare(
         `INSERT INTO ozon_auto_collect_log
-         (sku, source, sellerSlug, sellerId, storeClassified, depth, status, results, totalDuration, collectedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (sku, source, sellerSlug, sellerId, storeClassified, depth, status, reason, results, totalDuration, collectedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         doc.sku,
@@ -161,6 +161,7 @@ export const autoCollectLogDao = {
         doc.storeClassified || 'unclassified',
         doc.depth ?? 0,
         doc.status,
+        doc.reason ?? null,
         JSON.stringify(doc.results || []),
         doc.totalDuration ?? 0,
         now

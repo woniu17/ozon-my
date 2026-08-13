@@ -95,6 +95,7 @@ export const autoCollectLogDao = {
       storeClassified: doc.storeClassified || 'unclassified',
       depth: doc.depth ?? 0,
       status: doc.status,
+      reason: doc.reason ?? null,
       results: doc.results || [],
       totalDuration: doc.totalDuration ?? 0,
       collectedAt: doc.collectedAt || new Date(),

@@ -396,6 +396,7 @@ CREATE TABLE IF NOT EXISTS ozon_auto_collect_log (
   storeClassified  TEXT,             -- 'mainland-china' | 'non-mainland-china' | 'unclassified'
   depth            INTEGER,
   status           TEXT NOT NULL,   -- 'success' | 'partial' | 'failed' | 'skipped' | 'antibot'
+  reason           TEXT,            -- 跳过原因(仅 status='skipped' 时有值):'no-market-stats'|'no-search-data'|'filtered-category'|'non-ultra-light'|'non-mainland-china-store'|...
   results          TEXT NOT NULL,   -- JSON 数组:[{type,hit,error?}]
   totalDuration    INTEGER,
   collectedAt      TEXT NOT NULL    -- ISO8601

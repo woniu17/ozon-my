@@ -1482,6 +1482,7 @@ router.post('/admin/api/auto-collect/log', async (req, res, next) => {
       storeClassified: body.storeClassified != null ? String(body.storeClassified) : 'unclassified',
       depth: body.depth != null ? Number(body.depth) || 0 : 0,
       status,
+      reason: body.reason != null ? String(body.reason) : null,
       results: Array.isArray(body.results) ? body.results : [],
       totalDuration: body.totalDuration != null ? Number(body.totalDuration) || 0 : 0,
       collectedAt: body.collectedAt ? new Date(body.collectedAt) : new Date(),
