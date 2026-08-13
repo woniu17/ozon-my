@@ -606,9 +606,17 @@
     //     OPI /v3/product/import 描述字段支持上述基础 HTML 标签,直接下发保留格式。
     //     ⚠ webDescription widget 是懒加载的,首次调用可能返回空 —
     //     此处先尝试,为空时下方 _retryDescriptionFromWidget 会异步轮询补抓。
+    // descriptionSource:记录描述来源,便于排查"首次打开漏抓 webDescription widget"等问题
+    //   webDescription-widget             - [data-widget="webDescription"] DOM(HTML,首选)
+    //   jsonLd                            - JSON-LD description 兜底(纯文本,无格式)
+    //   webDescription-widget(async-retry) - 异步轮询命中 webDescription widget(见下方 _retryDescriptionFromWidget)
     let description = extractDescriptionFromWidget();
-    if (!description) description = jsonLd?.description || '';
-    console.log('[DESC] description len:', description.length, 'source:', /<[a-z]/i.test(description) ? 'widget' : 'jsonLd', 'has ul:', /<ul/i.test(description));
+    let descriptionSource = description ? 'webDescription-widget' : '';
+    if (!description) {
+      description = jsonLd?.description || '';
+      descriptionSource = description ? 'jsonLd' : '';
+    }
+    console.log('[DESC] description len:', description.length, 'source:', descriptionSource || '(empty)', 'has ul:', /<ul/i.test(description));
 
     // Characteristics (dimensions/weight) — from data-state with characteristics key
     const charsData = window.findStateDataByKeys(['characteristics', 'titleRs']);
@@ -673,6 +681,7 @@
       followSellMinPrice,
       deliveryMode,
       description,
+      descriptionSource,
     };
 
     // 有 sku 时异步写 detail 缓存(详情页关键字段,不阻塞返回)
@@ -709,6 +718,7 @@
             rating: _product.rating,
             reviewCount: _product.reviewCount,
             description: _product.description,
+            descriptionSource: _product.descriptionSource,
           },
         });
       } catch {
@@ -752,6 +762,7 @@
             if (desc) {
               console.log('[DESC_RETRY] widget appeared after', (i + 1) * 500, 'ms, desc len:', desc.length, 'has ul:', /<ul/i.test(desc));
               _product.description = desc;
+              _product.descriptionSource = 'webDescription-widget(async-retry)';
               try {
                 window.sendMessage('domCacheSet', {
                   sku: _sku,
@@ -777,6 +788,7 @@
                     rating: _product.rating,
                     reviewCount: _product.reviewCount,
                     description: desc,
+                    descriptionSource: _product.descriptionSource,
                   },
                 });
               } catch { /* fire-and-forget */ }

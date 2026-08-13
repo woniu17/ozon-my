@@ -390,12 +390,13 @@
     // webDescription/富内容/webHashtags widget,故与视频同一次 page json 一并抽,零增量请求 ——
     // 让批量上架继承源店铺描述与标签(与手动跟卖 extractPageDescription/extractKeywords 同语义)。
     // 注:源标签裸下发会触发 Ozon BR_hashtag_brand,品牌清洗在 backend 注入处做(此处只负责抓回)。
-    // 返回 { mp4, richContent, description, hashtags };失败返回全空(best-effort 降级)。
+    // 返回 { mp4, richContent, description, descriptionSource, hashtags };失败返回全空(best-effort 降级)。
     const fetchPdpBundleViaBuyerTab = async (productUrl, options = {}) => {
       const EMPTY = {
         mp4: null,
         richContent: '',
         description: '',
+        descriptionSource: '',
         hashtags: [],
         endpoint: null,
         errorReason: null,
@@ -449,6 +450,7 @@
             mp4: rmCached.mp4 || null,
             richContent: rmCached.richContent || '',
             description: rmCached.description || '',
+            descriptionSource: rmCached.descriptionSource || '',
             hashtags: Array.isArray(rmCached.hashtags) ? rmCached.hashtags : [],
             endpoint: 'richMedia-cache',
             composerFields: rmCached.fields || null,
@@ -746,9 +748,11 @@
         };
         // 源描述(4191):优先 webDescription widget,复用注入的 JZFollowSellContentCopy.extractDescriptionText
         // (与手动跟卖同一套富文本/HTML 解析,绝不把原始 JSON 串当描述)。helper 注入失败则降级空。
+        // 返回 { text, sourceKey } —— sourceKey 记录命中的 widget key(如 webDescription),
+        // 供调用方写入 descriptionSource,排查"加载失败占位符漏判"等问题。
         const extractDescription = (states) => {
           const helper = globalThis.JZFollowSellContentCopy;
-          if (!helper || typeof helper.extractDescriptionText !== 'function') return '';
+          if (!helper || typeof helper.extractDescriptionText !== 'function') return { text: '', sourceKey: '' };
           const keys = Object.keys(states || {});
           const descKeys = keys.filter((k) => /description/i.test(k));
           for (const k of descKeys) {
@@ -761,9 +765,9 @@
               }
             }
             const text = helper.extractDescriptionText(v, 4096);
-            if (text) return text;
+            if (text) return { text, sourceKey: k };
           }
-          return '';
+          return { text: '', sourceKey: '' };
         };
         // 源主题标签(23171):从 webHashtags/tagList state 里递归捞 `#` 前缀串。纯内联(无 helper 依赖),
         // 去重 + 上限 30(Ozon 单卡上限)。品牌清洗在 backend 注入处做,这里只负责把源标签原样抓回。
@@ -812,6 +816,7 @@
         let richContentHasText = false;
         let mp4 = null;
         let description = '';
+        let descriptionSource = '';
         let hashtags = [];
         // 合并所有成功 endpoint 的 widgetStates(SW 侧用于抽 composer fields + 写缓存)
         const composerWidgetStates = {};
@@ -853,7 +858,13 @@
               }
             }
             if (!mp4) mp4 = extractMp4(states);
-            if (!description) description = extractDescription(states);
+            if (!description) {
+              const descResult = extractDescription(states);
+              if (descResult.text) {
+                description = descResult.text;
+                descriptionSource = `page-json:${descResult.sourceKey}`;
+              }
+            }
             if (!hashtags.length) hashtags = extractHashtags(states);
             // 合并 widgetStates(后端覆盖前端,用于 SW 侧抽 composer fields)
             for (const k of Object.keys(states)) composerWidgetStates[k] = states[k];
@@ -880,6 +891,7 @@
             richContent,
             richContentHasText,
             description,
+            descriptionSource,
             hashtags,
             endpoint: hitEndpoint,
             hitEndpoints,
@@ -1055,6 +1067,7 @@
           mp4: mediaRes.mp4 || null,
           richContent: mediaRes.richContent || '',
           description: mediaRes.description || '',
+          descriptionSource: mediaRes.descriptionSource || '',
           hashtags: Array.isArray(mediaRes.hashtags) ? mediaRes.hashtags : [],
           endpoint: mediaRes.endpoint || null,
           composerFields: null,
@@ -1170,6 +1183,7 @@
               richContent: result.richContent,
               richContentHasText: !!mediaRes.richContentHasText,
               description: result.description,
+              descriptionSource: result.descriptionSource || '',
               hashtags: result.hashtags,
               gallery: fields?.images || [],
               fields,

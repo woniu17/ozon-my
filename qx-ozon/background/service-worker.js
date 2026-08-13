@@ -4290,15 +4290,16 @@ try {
             const media = await fetchPdpBundleViaBuyerTab(message.url, { cacheOnly: _cb.active });
             const richContent = media.richContent || '';
             const description = media.description || '';
+            const descriptionSource = media.descriptionSource || '';
             const hashtags = Array.isArray(media.hashtags) ? media.hashtags : [];
             const endpoint = media.endpoint || null;
-            if (!media.mp4) return { ok: true, data: { url: null, richContent, description, hashtags, endpoint } };
+            if (!media.mp4) return { ok: true, data: { url: null, richContent, description, descriptionSource, hashtags, endpoint } };
             // 熔断期不开 seller tab 转存视频,只返回 cache 中的富内容
-            if (_cb.active) return { ok: true, data: { url: null, richContent, description, hashtags, endpoint } };
+            if (_cb.active) return { ok: true, data: { url: null, richContent, description, descriptionSource, hashtags, endpoint } };
             const r = await transferVideoToOzon(media.mp4);
-            return { ok: true, data: { url: r.ok ? r.url : null, richContent, description, hashtags, endpoint } };
+            return { ok: true, data: { url: r.ok ? r.url : null, richContent, description, descriptionSource, hashtags, endpoint } };
           } catch (e) {
-            return { ok: true, data: { url: null, richContent: '', description: '', hashtags: [], endpoint: null } };
+            return { ok: true, data: { url: null, richContent: '', description: '', descriptionSource: '', hashtags: [], endpoint: null } };
           }
         }
         case 'fetchVariantRichContent': {
@@ -4314,12 +4315,13 @@ try {
               data: {
                 richContent: media.richContent || '',
                 description: media.description || '',
+                descriptionSource: media.descriptionSource || '',
                 hashtags: Array.isArray(media.hashtags) ? media.hashtags : [],
                 endpoint: media.endpoint || null,
               },
             };
           } catch (e) {
-            return { ok: true, data: { richContent: '', description: '', hashtags: [], endpoint: null } };
+            return { ok: true, data: { richContent: '', description: '', descriptionSource: '', hashtags: [], endpoint: null } };
           }
         }
         case 'searchVariants': {
