@@ -48,6 +48,9 @@
       enableMarketStatsGate: true,
       // 类目过滤门控:search+bundle 采集后,类目在黑名单时跳过后续采集(richMedia/followSell)
       enableCategoryFilterGate: true,
+      // 超轻小件门控:bundle 采集后,非超轻小件(重量≥500g 或 三边和≥900mm)跳过后续采集
+      // 阈值与 index-dao.js buildFilterWhere ultraLight 一致(Ozon Extra Small 官方标准)
+      enableUltraLightGate: true,
     };
 
     // ── 配置读取(带内存缓存) ──────────────────────────────────────────────────

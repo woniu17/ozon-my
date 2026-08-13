@@ -506,6 +506,22 @@
       return { descCatId, typeId };
     };
 
+    // ── 超轻小件判定(2026-08 新增) ─────────────────────────────────────────────
+    // 与 index-dao.js buildFilterWhere ultraLight SQL 阈值一致(Ozon Extra Small 官方标准):
+    //   重量 < 500g AND 三边之和 < 900mm(90cm)
+    // bundle 数据缺失物理参数(weight/depth/width/height 为空或0)→ 视为非超轻小件,返回 false
+    this.isUltraLight = (bundleData) => {
+      if (!bundleData || typeof bundleData !== 'object') return false;
+      const weightG = Number(bundleData.weight);
+      const depth = Number(bundleData.depth);
+      const width = Number(bundleData.width);
+      const height = Number(bundleData.height);
+      // 任一参数缺失/无效 → 非超轻小件
+      if (![weightG, depth, width, height].every((v) => Number.isFinite(v) && v > 0)) return false;
+      const dimSumMm = depth + width + height;
+      return weightG < 500 && dimSumMm < 900;
+    };
+
     // ── 前置缓存检查:并行查 5 类合并缓存,返回是否全部命中 ──────────────────────
     // 用于 _handleSubmitTask 入队前快速判断,避免缓存命中任务占用 15s 队列 slot。
     // 逻辑与 _doAutoCollect Step1+Step5 内部缓存查询保持一致,但不做 L1/L2 同步(仅查询)。

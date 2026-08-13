@@ -2090,6 +2090,23 @@
           }
         }
 
+        // 门控C:超轻小件过滤 — 非超轻小件(重量≥500g 或 三边和≥900mm)跳过后续 richMedia/followSell 采集
+        // 阈值与 index-dao.js buildFilterWhere ultraLight 一致(Ozon Extra Small 官方标准)
+        // bundle 数据缺失物理参数时视为非超轻小件,过滤掉(与现有 SQL 逻辑一致)
+        if (config.enableUltraLightGate) {
+          if (!this.isUltraLight(bundleDataRef)) {
+            console.log('[SW autoCollect] 门控C:非超轻小件,跳过后续采集:', sku);
+            const totalDuration = Date.now() - startTime;
+            this.writeAutoCollectLog({
+              sku, source, sellerSlug, sellerId: sellerId || '',
+              storeClassified, depth, status: 'skipped', reason: 'non-ultra-light',
+              results, totalDuration,
+            });
+            this.pushAutoCollectRecent(sku, 'skipped', source, storeClassified, results, startTime, 'non-ultra-light');
+            return { status: 'skipped', reason: 'non-ultra-light', results, totalDuration };
+          }
+        }
+
         // === Step 5: 买家页采集(richMedia+followSell) ===
         // 原 Step4 后移:门控A/B 通过后才采集买家页数据。
         // Phase 5: 移除 _autoCollectGate / _buyerPageGate 显式调用,由队列消费者统一限速。
