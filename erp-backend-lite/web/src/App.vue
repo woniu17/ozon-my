@@ -21,6 +21,7 @@ const tabs = [
   { key: '/image-refresh-tasks', label: '图片更新任务' },
   { key: '/stock-refresh-tasks', label: '库存更新任务' },
   { key: '/product-update-tasks', label: '商品信息更新' },
+  { key: '/product-archive-tasks', label: '商品归档任务' },
   { key: '/audit', label: '操作日志' },
   { key: '/config', label: '配置中心' },
   { key: '/listing-templates', label: '上架模板' },
@@ -46,6 +47,8 @@ const activeTab = computed(() => {
   if (p.startsWith('/stock-refresh/')) return '/stock-refresh-tasks';
   // 特殊:商品信息更新详情页 /product-update/:id 高亮"商品信息更新" tab
   if (p.startsWith('/product-update/')) return '/product-update-tasks';
+  // 特殊:商品归档详情页 /product-archive/:id 高亮"商品归档任务" tab
+  if (p.startsWith('/product-archive/')) return '/product-archive-tasks';
   return tabs.find((t) => p.startsWith(t.key))?.key || '/admin';
 });
 </script>

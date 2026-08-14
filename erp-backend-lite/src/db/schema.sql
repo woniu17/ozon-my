@@ -722,3 +722,38 @@ CREATE TABLE IF NOT EXISTS product_update_items (
 );
 CREATE INDEX IF NOT EXISTS idx_pui_task ON product_update_items(task_id);
 CREATE INDEX IF NOT EXISTS idx_pui_status ON product_update_items(status);
+
+-- ── 商品归档任务(2026-08) ──────────────────────────────────
+-- 基于已上架商品单独/批量归档(/v1/product/archive)
+-- 复用轻量任务模型,不复用 batch_upload 框架
+-- OPI 限制:单请求 ≤100 个 product_id,响应仅返回整体布尔 { result: bool }
+--          无 item 级状态:整批成功→所有 item SUCCESS;整批失败→所有 item FAILED
+CREATE TABLE IF NOT EXISTS product_archive_tasks (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  local_task_id  TEXT UNIQUE NOT NULL,    -- arc-{timestamp}-{rand}
+  store_id       TEXT NOT NULL,            -- 目标店铺(商品所属店铺)
+  status         TEXT NOT NULL DEFAULT 'PENDING', -- PENDING/RUNNING/SUCCESS/FAILED/PARTIAL
+  total_count    INTEGER DEFAULT 0,
+  success_count  INTEGER DEFAULT 0,
+  failed_count   INTEGER DEFAULT 0,
+  source_type    TEXT DEFAULT 'manual',   -- manual(单条) / batch(批量勾选) / filter(按筛选)
+  error_message  TEXT,
+  created_at     TEXT DEFAULT (datetime('now')),
+  completed_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pat_status ON product_archive_tasks(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS product_archive_items (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id          TEXT NOT NULL,          -- 关联 product_archive_tasks.local_task_id
+  product_id       TEXT NOT NULL,          -- Ozon 商品 ID
+  store_id         TEXT NOT NULL,
+  offer_id         TEXT,                   -- 卖家 SKU(展示用,反查 product_data_cache)
+  status           TEXT DEFAULT 'PENDING', -- PENDING/PROCESSING/SUCCESS/FAILED
+  opi_result       TEXT,                   -- JSON: 整批响应快照 { result: bool, ... }
+  error_message    TEXT,
+  created_at       TEXT DEFAULT (datetime('now')),
+  updated_at       TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pai_task ON product_archive_items(task_id);
+CREATE INDEX IF NOT EXISTS idx_pai_status ON product_archive_items(status);

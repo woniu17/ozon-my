@@ -34,9 +34,11 @@ import { startBatchImagePoller, stopBatchImagePoller } from './services/batch-im
 import { startImageRefreshPoller, stopImageRefreshPoller } from './services/image-refresh-poller.js';
 import { startStockRefreshPoller, stopStockRefreshPoller } from './services/stock-refresh-poller.js';
 import { startProductUpdatePoller, stopProductUpdatePoller } from './services/product-update-poller.js';
+import { startProductArchivePoller, stopProductArchivePoller } from './services/product-archive-poller.js';
 import imageRefreshRoutes from './modules/image-refresh.js';
 import stockRefreshRoutes from './modules/stock-refresh.js';
 import productUpdateRoutes from './modules/product-update.js';
+import productArchiveRoutes from './modules/product-archive.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -135,6 +137,7 @@ app.use(categoryFilterRoutes);
 app.use(imageRefreshRoutes);
 app.use(stockRefreshRoutes);
 app.use(productUpdateRoutes);
+app.use(productArchiveRoutes);
 
 // 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
 if (config.featureFlags?.proxy_collect) {
@@ -173,6 +176,9 @@ const server = app.listen(config.port, () => {
   // 商品信息更新任务调度器(2026-07):每 5s 扫描,串行处理,统一走 /v3/product/import 全量重传
   //   负责已上架商品的标题/描述等字段更新(FieldUpdater 可拓展)
   startProductUpdatePoller();
+  // 商品归档任务调度器(2026-08):每 5s 扫描,同店铺批量≤100/请求,调 /v1/product/archive
+  //   响应只返回整体布尔,整批要么全成功要么全失败
+  startProductArchivePoller();
 });
 
 // 优雅退出
@@ -185,6 +191,7 @@ function shutdown(signal) {
   stopImageRefreshPoller();
   stopStockRefreshPoller();
   stopProductUpdatePoller();
+  stopProductArchivePoller();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);

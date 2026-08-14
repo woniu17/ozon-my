@@ -19,6 +19,7 @@ import JsonTree from '../components/JsonTree.vue';
 import ImageRefreshDialog from '../components/ImageRefreshDialog.vue';
 import StockRefreshDialog from '../components/StockRefreshDialog.vue';
 import ProductUpdateDialog from '../components/ProductUpdateDialog.vue';
+import ProductArchiveDialog from '../components/ProductArchiveDialog.vue';
 import DeepCollectByProductsDialog from '../components/DeepCollectByProductsDialog.vue';
 import { useConfirmStore } from '../stores/confirm.js';
 
@@ -56,6 +57,9 @@ const refreshDialog = ref({ open: false, mode: 'single', singleItem: null, selec
 const stockDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
 // 商品信息更新弹窗(2026-07)
 const productUpdateDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [] });
+// 商品归档弹窗(2026-08)
+// 高危操作:归档后商品移入 Ozon 归档区,买家不可见
+const archiveDialog = ref({ open: false, mode: 'single', singleItem: null, selectedProducts: [], filters: {}, filterCount: 0 });
 // 按筛选深度采集弹窗(2026-08)
 const deepCollectDialog = ref({ open: false, items: [], storeId: '' });
 // 按筛选批量操作:拉取中的状态('image' | 'stock' | 'info' | 'collect' | '')
@@ -641,6 +645,35 @@ function openBatchProductUpdate() {
   productUpdateDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products };
 }
 
+// ── 商品归档(2026-08)──────────────────────────────────────
+// 高危操作:归档后商品在 Ozon 后台移入归档区,买家不可见,可通过 /v1/product/unarchive 恢复
+// 单条归档:列表行操作触发
+function openSingleArchive(item) {
+  if (!item.productId) {
+    show('该商品无 product_id,可能未同步完整', 'error');
+    return;
+  }
+  archiveDialog.value = {
+    open: true,
+    mode: 'single',
+    singleItem: { productId: item.productId, storeId: item.storeId, offerId: item.offerId },
+    selectedProducts: [],
+    filters: {},
+    filterCount: 0,
+  };
+}
+// 批量归档:列表勾选触发
+function openBatchArchive() {
+  const products = state.items
+    .filter((r) => selectedSkus.value.includes(r.sku) && r.productId)
+    .map((r) => ({ productId: r.productId, storeId: r.storeId }));
+  if (!products.length) {
+    show('请先勾选有 product_id 的商品', 'error');
+    return;
+  }
+  archiveDialog.value = { open: true, mode: 'batch', singleItem: null, selectedProducts: products, filters: {}, filterCount: 0 };
+}
+
 // 按当前筛选条件批量更新(不限于当前页,拉取全量匹配商品的 productId/storeId)
 // type: 'image' | 'stock' | 'info' | 'collect'
 async function openFilteredBatch(type) {
@@ -698,6 +731,32 @@ function openFilteredProductUpdate() {
 }
 function openFilteredDeepCollect() {
   return openFilteredBatch('collect');
+}
+
+// 按当前筛选条件归档(2026-08)
+// 与 image/stock/info 不同:归档 filter 模式直接把筛选条件传给后端展开,无需前端预拉取 IDs
+// filterCount 取 state.total(已在筛选栏展示),弹窗内二次确认后提交
+function openFilteredArchive() {
+  if (state.total <= 0) {
+    show('当前筛选无匹配商品', 'error');
+    return;
+  }
+  const f = state.filters;
+  archiveDialog.value = {
+    open: true,
+    mode: 'filter',
+    singleItem: null,
+    selectedProducts: [],
+    filters: {
+      storeId: f.storeId,
+      keyword: f.keyword.trim(),
+      productStatus: f.productStatus,
+      hasStock: f.hasStock,
+      imageIssue: f.imageIssue,
+      descriptionQuality: f.descriptionQuality,
+    },
+    filterCount: state.total,
+  };
 }
 
 // ── 删除商品缓存(2026-08)──────────────────────────────────────
@@ -987,6 +1046,7 @@ onMounted(() => {
       <button class="btn btn-primary" @click="openBatchRefresh">批量更新图片</button>
       <button class="btn btn-primary" @click="openBatchStock">批量更新库存</button>
       <button class="btn btn-primary" @click="openBatchProductUpdate">批量更新信息</button>
+      <button class="btn btn-danger" @click="openBatchArchive">批量归档</button>
       <button
         class="btn btn-danger"
         :disabled="!!deletingId"
@@ -1009,6 +1069,7 @@ onMounted(() => {
       <button class="btn btn-ghost" :disabled="!!filterBatchLoading" @click="openFilteredDeepCollect">
         {{ filterBatchLoading === 'collect' ? '拉取中…' : '按筛选深度采集' }}
       </button>
+      <button class="btn btn-ghost" @click="openFilteredArchive">按筛选归档</button>
     </div>
 
     <div class="table-wrap">
@@ -1083,6 +1144,7 @@ onMounted(() => {
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleRefresh(it)">更新图片</button>
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleStock(it)">更新库存</button>
               <button v-if="it.productId" class="btn btn-sm btn-ghost" @click="openSingleProductUpdate(it)">更新信息</button>
+              <button v-if="it.productId" class="btn btn-sm btn-danger" @click="openSingleArchive(it)">归档</button>
               <button
                 class="btn btn-sm btn-danger"
                 :disabled="deletingId === it.sku || deletingId === 'batch'"
@@ -1123,6 +1185,9 @@ onMounted(() => {
           <button class="btn btn-primary" @click="openSingleProductUpdate({ productId: detail.productId, storeId: detail.storeId, offerId: detail.data?.offer_id, sku: detail.sku })">
             更新信息
           </button>
+          <button class="btn btn-danger" @click="openSingleArchive({ productId: detail.productId, storeId: detail.storeId, offerId: detail.data?.offer_id })">
+            归档
+          </button>
         </div>
       </template>
       <div v-else class="empty">无数据</div>
@@ -1150,6 +1215,16 @@ onMounted(() => {
       :mode="productUpdateDialog.mode"
       :single-item="productUpdateDialog.singleItem"
       :selected-products="productUpdateDialog.selectedProducts"
+    />
+
+    <!-- 商品归档弹窗(2026-08) -->
+    <ProductArchiveDialog
+      v-model:open="archiveDialog.open"
+      :mode="archiveDialog.mode"
+      :single-item="archiveDialog.singleItem"
+      :selected-products="archiveDialog.selectedProducts"
+      :filters="archiveDialog.filters"
+      :filter-count="archiveDialog.filterCount"
     />
     <DeepCollectByProductsDialog
       v-if="deepCollectDialog.open"

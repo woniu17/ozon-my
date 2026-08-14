@@ -11,6 +11,7 @@ import Batch from '../views/Batch.vue';
 import ImageRefreshList from '../views/ImageRefreshList.vue';
 import StockRefreshList from '../views/StockRefreshList.vue';
 import ProductUpdateList from '../views/ProductUpdateList.vue';
+import ProductArchiveList from '../views/ProductArchiveList.vue';
 import Audit from '../views/Audit.vue';
 import Config from '../views/Config.vue';
 import ListingTemplates from '../views/ListingTemplates.vue';
@@ -40,6 +41,7 @@ const router = createRouter({
     { path: '/image-refresh-tasks', name: 'image-refresh-tasks', component: ImageRefreshList, meta: { title: '图片更新任务' } },
     { path: '/stock-refresh-tasks', name: 'stock-refresh-tasks', component: StockRefreshList, meta: { title: '库存更新任务' } },
     { path: '/product-update-tasks', name: 'product-update-tasks', component: ProductUpdateList, meta: { title: '商品信息更新任务' } },
+    { path: '/product-archive-tasks', name: 'product-archive-tasks', component: ProductArchiveList, meta: { title: '商品归档任务' } },
     { path: '/audit', name: 'audit', component: Audit },
     { path: '/config', name: 'config', component: Config },
     { path: '/listing-templates', name: 'listing-templates', component: ListingTemplates },
@@ -56,6 +58,7 @@ const router = createRouter({
     { path: '/image-refresh/:localTaskId', name: 'image-refresh-detail', component: () => import('../views/ImageRefreshDetail.vue'), meta: { title: '图片更新详情' } },
     { path: '/stock-refresh/:localTaskId', name: 'stock-refresh-detail', component: () => import('../views/StockRefreshDetail.vue'), meta: { title: '库存更新详情' } },
     { path: '/product-update/:localTaskId', name: 'product-update-detail', component: () => import('../views/ProductUpdateDetail.vue'), meta: { title: '商品信息更新详情' } },
+    { path: '/product-archive/:localTaskId', name: 'product-archive-detail', component: () => import('../views/ProductArchiveDetail.vue'), meta: { title: '商品归档详情' } },
   ],
 });
 

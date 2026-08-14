@@ -437,6 +437,25 @@ export function productPicturesInfo(store, productIds) {
   return call(store, '/v2/product/pictures/info', { product_id: arr });
 }
 
+// ── 商品归档任务(2026-08)─────────────────────────────────────
+// /v1/product/archive —— 将商品归档(批量)
+// OPI 限制:单请求 ≤100 个 product_id
+// 请求: { product_id: [number] }
+// 响应: { result: boolean }(true=整批成功,false=整批失败,无 item 级状态)
+// 注:归档后商品在 Ozon 后台移入归档区,买家不可见,可通过 /v1/product/unarchive 恢复
+export function productArchive(store, productIds) {
+  const arr = (Array.isArray(productIds) ? productIds : [productIds])
+    .map((id) => Number(id))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (arr.length === 0) {
+    throw new Error('product_id 不能为空');
+  }
+  if (arr.length > 100) {
+    throw new Error('单次最多归档 100 个 product_id');
+  }
+  return call(store, '/v1/product/archive', { product_id: arr });
+}
+
 // ── 商品信息更新任务(2026-07)─────────────────────────────────
 // 统一走 /v3/product/import 全量重传:从 Ozon 实时拉完整商品数据,
 // 只替换用户指定字段(FieldUpdater),其他字段保留 Ozon 当前值
