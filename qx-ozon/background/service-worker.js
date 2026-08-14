@@ -3446,6 +3446,10 @@ try {
             'onlyMainlandChinaStores',
             'knownMainlandChinaSellerIds',
             'knownNonMainlandChinaSellerIds',
+            // 深度采集门控开关(2026-08 新增,供队列监控页 / popup 通过 SW 统一写入)
+            'enableMarketStatsGate',
+            'enableCategoryFilterGate',
+            'enableUltraLightGate',
           ];
           const _acFiltered = {};
           for (const _k of _acAllowed) {
