@@ -616,6 +616,23 @@ select {
   padding-bottom: 14px;
   border-bottom: 1px dashed var(--line-2);
 }
+/* 深度采集门控分组(市场数据/类目过滤/超轻小件三开关) */
+.gate-section {
+  border-top: 1px dashed var(--line-strong);
+  padding-top: 10px;
+  margin-bottom: 14px;
+}
+.gate-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.gate-section .switch-grid {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
 .qx-switch {
   display: inline-flex;
   align-items: center;

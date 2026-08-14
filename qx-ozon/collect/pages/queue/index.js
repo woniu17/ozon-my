@@ -51,6 +51,10 @@
   // collect switches
   const swDeep = $('sw-deep-toggle');
   const swShallow = $('sw-shallow-toggle');
+  // 深度采集门控开关
+  const swMarketStatsGate = $('sw-market-stats-gate');
+  const swCategoryFilterGate = $('sw-category-filter-gate');
+  const swUltraLightGate = $('sw-ultra-light-gate');
 
   // ─── State ───
   /** @type {Array} SW 队列里所有任务 */
@@ -136,6 +140,16 @@
     if (swShallow && document.activeElement !== swShallow) {
       swShallow.checked = d?.shallowCollectRunning !== false;
     }
+    // 深度采集门控(默认开,用 !== false 与 SW 默认值一致)
+    if (swMarketStatsGate && document.activeElement !== swMarketStatsGate) {
+      swMarketStatsGate.checked = d?.enableMarketStatsGate !== false;
+    }
+    if (swCategoryFilterGate && document.activeElement !== swCategoryFilterGate) {
+      swCategoryFilterGate.checked = d?.enableCategoryFilterGate !== false;
+    }
+    if (swUltraLightGate && document.activeElement !== swUltraLightGate) {
+      swUltraLightGate.checked = d?.enableUltraLightGate !== false;
+    }
   };
 
   swDeep?.addEventListener('change', async () => {
@@ -156,6 +170,21 @@
       await fetchState();
     }
   });
+
+  // 深度采集门控开关 change 事件(与深度/浅度开关一致的保存模式)
+  const bindGateSwitch = (el, key) => {
+    el?.addEventListener('change', async () => {
+      try {
+        await sendMessage({ action: 'autoCollectSetConfig', config: { [key]: el.checked } });
+        await fetchState();
+      } catch (e) {
+        await fetchState();
+      }
+    });
+  };
+  bindGateSwitch(swMarketStatsGate, 'enableMarketStatsGate');
+  bindGateSwitch(swCategoryFilterGate, 'enableCategoryFilterGate');
+  bindGateSwitch(swUltraLightGate, 'enableUltraLightGate');
 
   // ─── 限速配置 ──────────────────────────────────────────
   // 与 popup 限速配置一致:队列间隔 min~max(秒,每次随机)。

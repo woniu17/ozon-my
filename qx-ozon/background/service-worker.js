@@ -3861,6 +3861,10 @@ try {
               circuitBreakerUntil: _cmsMeta.circuitBreakerUntil,
               autoCollectRunning: _cmsCfg.autoCollectRunning,
               shallowCollectRunning: _cmsCfg.shallowCollectRunning,
+              // 深度采集门控开关(供队列监控页回填 UI,默认 true)
+              enableMarketStatsGate: _cmsCfg.enableMarketStatsGate !== false,
+              enableCategoryFilterGate: _cmsCfg.enableCategoryFilterGate !== false,
+              enableUltraLightGate: _cmsCfg.enableUltraLightGate !== false,
               lastConsumeAt: _cmsMeta.lastConsumeAt || 0,
               consumeRateMinSec: _cmsMeta.consumeRateMinSec ?? 5,
               consumeRateMaxSec: _cmsMeta.consumeRateMaxSec ?? 15,

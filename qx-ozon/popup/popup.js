@@ -979,6 +979,14 @@
       if (pausedDiv) pausedDiv.style.display = 'none';
     }
 
+    // 深度采集门控开关(默认开,用 !== false 与 SW 默认值一致)
+    const _marketGate = document.getElementById('ac-market-stats-gate');
+    const _categoryGate = document.getElementById('ac-category-filter-gate');
+    const _ultraLightGate = document.getElementById('ac-ultra-light-gate');
+    if (_marketGate && document.activeElement !== _marketGate) _marketGate.checked = config.enableMarketStatsGate !== false;
+    if (_categoryGate && document.activeElement !== _categoryGate) _categoryGate.checked = config.enableCategoryFilterGate !== false;
+    if (_ultraLightGate && document.activeElement !== _ultraLightGate) _ultraLightGate.checked = config.enableUltraLightGate !== false;
+
     // 同步限速输入框(用户正在编辑的字段跳过,避免输入被打断)
     renderRateConfig(config);
   };
@@ -991,6 +999,20 @@
   document.getElementById('ac-deep-toggle')?.addEventListener('change', async (e) => {
     await saveAutoCollectConfig({ autoCollectRunning: e.target.checked });
     await renderAutoCollect();
+  });
+
+  // 深度采集门控开关 change 事件(与 shallow/deep 开关一致的保存模式)
+  [
+    { id: 'ac-market-stats-gate', key: 'enableMarketStatsGate' },
+    { id: 'ac-category-filter-gate', key: 'enableCategoryFilterGate' },
+    { id: 'ac-ultra-light-gate', key: 'enableUltraLightGate' },
+  ].forEach((f) => {
+    const input = document.getElementById(f.id);
+    if (!input) return;
+    input.addEventListener('change', async () => {
+      await saveAutoCollectConfig({ [f.key]: input.checked });
+      await renderAutoCollect();
+    });
   });
 
   // ─── 限速配置(可折叠,与 jz-auto-collect-config 共享) ─────────────
@@ -1060,6 +1082,16 @@
     rateCfgEl.classList.toggle('is-open');
     const body = document.getElementById('ac-ratecfg-body');
     if (body) body.style.display = rateCfgEl.classList.contains('is-open') ? '' : 'none';
+  });
+
+  // 深度门控折叠展开(复用 ac-ratecfg 折叠样式)
+  const gateToggle = document.getElementById('ac-gatecfg-toggle');
+  const gateCfgEl = document.getElementById('ac-gatecfg');
+  gateToggle?.addEventListener('click', () => {
+    if (!gateCfgEl) return;
+    gateCfgEl.classList.toggle('is-open');
+    const body = document.getElementById('ac-gatecfg-body');
+    if (body) body.style.display = gateCfgEl.classList.contains('is-open') ? '' : 'none';
   });
 
   // 单值字段(每日上限)change 事件

@@ -82,6 +82,26 @@
               <span class="qx-switch-label">浅度采集</span>
             </label>
           </div>
+          <div class="gate-section">
+            <div class="gate-title">深度采集门控</div>
+            <div class="switch-grid">
+              <label class="qx-switch" title="无市场统计数据时跳过后续采集">
+                <input type="checkbox" id="sw-market-stats-gate" />
+                <span class="qx-switch-track"><span class="qx-switch-knob"></span></span>
+                <span class="qx-switch-label">市场数据门控</span>
+              </label>
+              <label class="qx-switch" title="类目命中黑名单时跳过后续采集">
+                <input type="checkbox" id="sw-category-filter-gate" />
+                <span class="qx-switch-track"><span class="qx-switch-knob"></span></span>
+                <span class="qx-switch-label">类目过滤门控</span>
+              </label>
+              <label class="qx-switch" title="非超轻小件(≥500g 或 三边和≥900mm)时跳过">
+                <input type="checkbox" id="sw-ultra-light-gate" />
+                <span class="qx-switch-track"><span class="qx-switch-knob"></span></span>
+                <span class="qx-switch-label">超轻小件门控</span>
+              </label>
+            </div>
+          </div>
           <div class="ratecfg-grid">
             <div class="ratecfg-row">
               <label class="ratecfg-label" for="rate-min">队列间隔</label>

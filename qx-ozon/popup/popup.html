@@ -329,6 +329,44 @@
                   <div class="ac-ratecfg-hint" id="ac-ratecfg-hint"></div>
                 </div>
               </div>
+              <!-- 深度采集门控(可折叠):三个门控开关,默认开。
+                   字段对应 jz-auto-collect-config 中 enable*Gate。
+                   与队列监控页共用同一份配置,通过 autoCollectSetConfig 同步。 -->
+              <div class="ac-ratecfg" id="ac-gatecfg">
+                <button class="ac-ratecfg-toggle" id="ac-gatecfg-toggle" type="button">
+                  <span>深度门控</span>
+                  <svg
+                    class="ac-ratecfg-chevron"
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+                <div class="ac-ratecfg-body" id="ac-gatecfg-body" style="display: none">
+                  <label class="qx-switch" title="无市场统计数据时跳过后续采集">
+                    <input type="checkbox" id="ac-market-stats-gate" />
+                    <span class="qx-switch-track"><span class="qx-switch-knob"></span></span>
+                    <span class="qx-switch-label">市场数据门控</span>
+                  </label>
+                  <label class="qx-switch" title="类目命中黑名单时跳过后续采集">
+                    <input type="checkbox" id="ac-category-filter-gate" />
+                    <span class="qx-switch-track"><span class="qx-switch-knob"></span></span>
+                    <span class="qx-switch-label">类目过滤门控</span>
+                  </label>
+                  <label class="qx-switch" title="非超轻小件(≥500g 或 三边和≥900mm)时跳过">
+                    <input type="checkbox" id="ac-ultra-light-gate" />
+                    <span class="qx-switch-track"><span class="qx-switch-knob"></span></span>
+                    <span class="qx-switch-label">超轻小件门控</span>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
 
