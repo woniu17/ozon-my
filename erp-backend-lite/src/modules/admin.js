@@ -799,9 +799,12 @@ router.get('/admin/api/products', (req, res, next) => {
     // 注意:productStatus 筛选单独维护,不 push 到 where 数组
     //   where 数组仅含基础筛选(keyword/storeId/hasStock/status/imageIssue),
     //   用于 statusCounts 查询(口径 A:统计各状态数量时排除 productStatus 筛选)
+    // productStatus 参数必须最后 push:fullWhereSql 中 productStatus 占位符在末尾,
+    //   早于 descriptionQuality 等 where 内筛选参数 push 会造成绑定错位
     let productStatusWhere = '';
+    let productStatusParam = null;
     if (req.query.productStatus) {
-      const ps = String(req.query.productStatus);
+      productStatusParam = String(req.query.productStatus);
       // SQL CASE 表达式:与后端 computeProductStatus 保持一致
       productStatusWhere =
         ` AND (CASE
@@ -819,7 +822,6 @@ router.get('/admin/api/products', (req, res, next) => {
               THEN 'created_no_stock'
             ELSE 'other'
            END) = ?`;
-      params.push(ps);
     }
     // 图片问题筛选:基于 data.errors 数组中的图片错误码
     //   OPI 返回的 errors[].code 命中以下任一即视为图片有问题
@@ -854,6 +856,11 @@ router.get('/admin/api/products', (req, res, next) => {
           params.push(v);
         }
       }
+    }
+    // productStatus 参数最后 push,与 fullWhereSql 中占位符顺序一致
+    // (baseWhereSql 基础筛选占位符在前,productStatus 占位符在末尾)
+    if (productStatusParam !== null) {
+      params.push(productStatusParam);
     }
     const baseWhereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
     // 拼接 productStatus 筛选(列表/total/idsOnly 查询用)
