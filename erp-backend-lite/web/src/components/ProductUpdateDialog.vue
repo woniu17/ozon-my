@@ -48,10 +48,46 @@ function fieldLabel(f) {
   return FIELD_LABEL[f] || f;
 }
 
+// ── 描述高亮:把占位文案(quality=1)和按钮污染文案(quality=2)标红 ──
+// 与后端 src/utils/description-quality.js 同口径
+const DESC_UI_CHROME_RE = /(читать далее|показать полностью|свернуть описание|развернуть описание)/gi;
+const DESC_LOAD_FAIL_RE = /(не удалось загрузить|ошибка загрузки|попробуйте (обновить|позже)|failed to load)/gi;
+
+// 把描述切分为片段数组:[{ text, type: 'normal'|'placeholder'|'chrome' }]
+// type:'placeholder' = 加载失败占位(quality=1);'chrome' = 按钮污染文案(quality=2)
+function splitDescSegments(desc) {
+  if (!desc) return [];
+  const s = String(desc);
+  const segments = [];
+  // 合并两个正则的所有匹配区间,统一扫描
+  // 用一个组合正则做全局扫描,match 出所有命中片段及位置
+  const combined = new RegExp(
+    '(' + [
+      'читать далее', 'показать полностью', 'свернуть описание', 'развернуть описание',
+      'не удалось загрузить', 'ошибка загрузки', 'попробуйте (?:обновить|позже)', 'failed to load',
+    ].join('|') + ')',
+    'gi'
+  );
+  let last = 0;
+  let m;
+  while ((m = combined.exec(s)) !== null) {
+    if (m.index > last) segments.push({ text: s.slice(last, m.index), type: 'normal' });
+    // 判断类型:命中"加载失败"关键词 → placeholder;否则(按钮文案) → chrome
+    const isFail = DESC_LOAD_FAIL_RE.test(m[0]);
+    segments.push({ text: m[0], type: isFail ? 'placeholder' : 'chrome' });
+    last = m.index + m[0].length;
+    // 防止零宽匹配死循环
+    if (m[0].length === 0) combined.lastIndex++;
+  }
+  if (last < s.length) segments.push({ text: s.slice(last), type: 'normal' });
+  return segments;
+}
+
 // 单条模式:统一字段勾选 + 值(单条和批量统一文案模式共用)
+// 默认勾选标题、描述(用户最常更新的两个字段)
 const fieldState = reactive({
-  name: { checked: false, value: '' },
-  description: { checked: false, value: '' },
+  name: { checked: true, value: '' },
+  description: { checked: true, value: '' },
 });
 
 // 批量模式:是否使用"从缓存批量获取"模式
@@ -98,9 +134,9 @@ watch(
   () => props.open,
   async (v) => {
     if (!v) return;
-    // 重置
-    fieldState.name = { checked: false, value: '' };
-    fieldState.description = { checked: false, value: '' };
+    // 重置(默认勾选标题、描述)
+    fieldState.name = { checked: true, value: '' };
+    fieldState.description = { checked: true, value: '' };
     previewData.value = null;
     cacheProfile.value = null;
     useBatchCacheMode.value = false;
@@ -113,9 +149,18 @@ watch(
     } catch {
       supportedFields.value = ['name', 'description'];
     }
-    // 单条模式自动预览当前值
+    // 单条模式:自动预览 Ozon 当前值 + 从 SKU 缓存自动填充更新内容
     if (!isBatch.value && currentStoreId.value && currentOfferId.value) {
       loadPreview();
+      // 自动从缓存填充(失败静默,用户可手动点"从缓存获取"重试)
+      try {
+        await fillFromCache('name');
+        await fillFromCache('description');
+      } catch (e) { /* 静默:cacheProfile 已在 fillFromCache 内 toast */ }
+    }
+    // 批量模式:自动从缓存批量获取
+    if (isBatch.value && props.selectedProducts?.length > 0 && currentStoreId.value) {
+      fillBatchFromCache();
     }
   }
 );
@@ -414,7 +459,18 @@ async function submit() {
         <div class="preview-row"><span class="preview-k">当前价格</span><span class="preview-v">{{ previewData.price || '—' }} {{ previewData.currencyCode }}</span></div>
         <div class="preview-row preview-desc">
           <span class="preview-k">当前描述</span>
-          <span class="preview-v">{{ previewData.description ? (previewData.description.length > 120 ? previewData.description.slice(0, 120) + '…' : previewData.description) : '—' }}</span>
+          <span class="preview-v preview-desc-text" v-if="previewData.description">
+            <span
+              v-for="(seg, i) in splitDescSegments(previewData.description)"
+              :key="i"
+              :class="seg.type === 'placeholder' ? 'desc-hl-placeholder' : (seg.type === 'chrome' ? 'desc-hl-chrome' : 'desc-hl-normal')"
+            >{{ seg.text }}</span>
+          </span>
+          <span class="preview-v" v-else>—</span>
+        </div>
+        <div class="preview-desc-legend" v-if="previewData.description">
+          <span class="legend-item"><span class="legend-dot desc-hl-placeholder"></span>占位文案</span>
+          <span class="legend-item"><span class="legend-dot desc-hl-chrome"></span>需清洗(按钮污染)</span>
         </div>
       </div>
 
@@ -611,6 +667,49 @@ async function submit() {
 }
 .preview-desc {
   align-items: flex-start;
+}
+/* 当前描述完整展示(保留换行)+ 高亮 */
+.preview-desc-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: block;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  background: #fafafa;
+  border-radius: 4px;
+}
+.desc-hl-placeholder {
+  color: #ff4d4f;
+  background: #fff1f0;
+  font-weight: 600;
+}
+.desc-hl-chrome {
+  color: #ff4d4f;
+  background: #fff7e6;
+  font-weight: 600;
+}
+.desc-hl-normal {
+  color: #333;
+}
+/* 图例 */
+.preview-desc-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: #999;
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
 }
 .pu-fields {
   display: flex;
