@@ -429,7 +429,7 @@ async function submit() {
 </script>
 
 <template>
-  <AppModal :open="open" title="商品信息更新" size="md" @update:open="$emit('update:open', $event)">
+  <AppModal :open="open" title="商品信息更新" size="md" class="pu-modal-wide" @update:open="$emit('update:open', $event)">
     <div class="pu-dialog">
       <!-- 单条模式信息 -->
       <div v-if="!isBatch && singleItem" class="pu-info">
@@ -508,13 +508,23 @@ async function submit() {
             <span>描述</span>
           </label>
           <div v-if="fieldState.description.checked && !useBatchCacheMode" class="pu-input-with-action">
-            <textarea
-              class="pu-textarea"
-              v-model="fieldState.description.value"
-              placeholder="输入新描述(统一文案,支持多行)"
-              rows="5"
-              :disabled="submitting"
-            ></textarea>
+            <div class="pu-desc-editor">
+              <div class="pu-desc-highlight" aria-hidden="true">
+                <span
+                  v-for="(seg, i) in splitDescSegments(fieldState.description.value)"
+                  :key="i"
+                  :class="seg.type === 'placeholder' ? 'desc-hl-placeholder' : (seg.type === 'chrome' ? 'desc-hl-chrome' : 'desc-hl-normal')"
+                >{{ seg.text }}</span>
+                <span v-if="!fieldState.description.value" class="desc-hl-placeholder">{{ '输入新描述(统一文案,支持多行)' }}</span>
+              </div>
+              <textarea
+                class="pu-textarea pu-desc-textarea"
+                v-model="fieldState.description.value"
+                placeholder="输入新描述(统一文案,支持多行)"
+                rows="8"
+                :disabled="submitting"
+              ></textarea>
+            </div>
             <button
               v-if="!isBatch && (props.singleItem?.offerId)"
               class="btn btn-sm btn-ghost pu-cache-btn"
@@ -560,13 +570,23 @@ async function submit() {
             </div>
             <div v-if="fieldState.description.checked" class="pu-batch-field">
               <label class="pu-batch-field-label">描述</label>
-              <textarea
-                class="pu-textarea pu-batch-desc-input"
-                :value="getBatchCacheValue(p.offerId, 'description')"
-                @input="(e) => { const d = batchCacheData.get(p.offerId); if (d) { d.description = e.target.value; batchCacheData.value = new Map(batchCacheData.value); } }"
-                placeholder="(无缓存)"
-                rows="6"
-              ></textarea>
+              <div class="pu-desc-editor pu-batch-desc-editor">
+                <div class="pu-desc-highlight" aria-hidden="true">
+                  <span
+                    v-for="(seg, i) in splitDescSegments(getBatchCacheValue(p.offerId, 'description'))"
+                    :key="i"
+                    :class="seg.type === 'placeholder' ? 'desc-hl-placeholder' : (seg.type === 'chrome' ? 'desc-hl-chrome' : 'desc-hl-normal')"
+                  >{{ seg.text }}</span>
+                  <span v-if="!getBatchCacheValue(p.offerId, 'description')" class="desc-hl-placeholder">(无缓存)</span>
+                </div>
+                <textarea
+                  class="pu-textarea pu-desc-textarea pu-batch-desc-input"
+                  :value="getBatchCacheValue(p.offerId, 'description')"
+                  @input="(e) => { const d = batchCacheData.get(p.offerId); if (d) { d.description = e.target.value; batchCacheData.value = new Map(batchCacheData.value); } }"
+                  placeholder="(无缓存)"
+                  rows="6"
+                ></textarea>
+              </div>
             </div>
           </div>
           <!-- 分页控件 -->
@@ -616,6 +636,11 @@ async function submit() {
 </template>
 
 <style scoped>
+/* 弹窗宽度加宽到 2 倍(960px),便于查看完整描述 */
+.pu-modal-wide :deep(.modal-card) {
+  width: 960px;
+  max-width: calc(100vw - 32px);
+}
 .pu-dialog {
   display: flex;
   flex-direction: column;
@@ -691,6 +716,49 @@ async function submit() {
 }
 .desc-hl-normal {
   color: #333;
+}
+
+/* 描述编辑器:textarea 透明文字 + 后层 div 高亮预览 */
+.pu-desc-editor {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.pu-desc-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+.pu-desc-textarea {
+  position: relative;
+  background: transparent;
+  color: transparent;
+  caret-color: #333;
+  resize: vertical;
+  z-index: 1;
+}
+.pu-desc-textarea::placeholder {
+  color: transparent;
+}
+.pu-desc-textarea:focus {
+  outline: none;
+  border-color: #d9d9d9;
+}
+.pu-batch-desc-editor .pu-desc-highlight {
+  font-size: 12px;
+  line-height: 1.6;
 }
 /* 图例 */
 .preview-desc-legend {
