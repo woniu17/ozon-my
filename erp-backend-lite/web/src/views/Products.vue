@@ -545,17 +545,17 @@ function fmtTime(t) {
   return String(t).replace('T', ' ').slice(0, 19);
 }
 
-// 源商品ID:从 SKU 第一段提取(如 4739085792-0812-qx → 4739085792),用于拼接源商品链接
-// 仅当首段为纯数字时返回,否则视为无效(返回空串)
-function sourceProductId(sku) {
-  if (!sku) return '';
-  const seg = String(sku).split('-')[0];
+// 从 SKU/Offer ID 字符串提取首段纯数字 ID(如 4739085792-0812-qx → 4739085792)
+// 用于拼接 Ozon 商品链接;首段非纯数字时返回空串
+function firstNumericId(s) {
+  if (!s) return '';
+  const seg = String(s).split('-')[0];
   return /^\d+$/.test(seg) ? seg : '';
 }
 
-// Ozon 商品链接:productId 拼接到 https://ozon.ru/product/{id}
-function ozonProductUrl(productId) {
-  return productId ? `https://ozon.ru/product/${productId}` : '';
+// Ozon 商品链接:id 拼接到 https://ozon.ru/product/{id}
+function ozonProductUrl(id) {
+  return id ? `https://ozon.ru/product/${id}` : '';
 }
 
 // ── 图片更新 ──────────────────────────────────────────────
@@ -1116,17 +1116,17 @@ onMounted(() => {
             <td>{{ it.sku }}</td>
             <td>{{ it.offerId || '—' }}</td>
             <td>
-              <a v-if="ozonProductUrl(it.productId)"
-                 :href="ozonProductUrl(it.productId)"
+              <a v-if="ozonProductUrl(firstNumericId(it.sku))"
+                 :href="ozonProductUrl(firstNumericId(it.sku))"
                  target="_blank" rel="noopener noreferrer"
-                 :title="ozonProductUrl(it.productId)">商品</a>
+                 :title="ozonProductUrl(firstNumericId(it.sku))">商品</a>
               <span v-else>—</span>
             </td>
             <td>
-              <a v-if="ozonProductUrl(sourceProductId(it.sku))"
-                 :href="ozonProductUrl(sourceProductId(it.sku))"
+              <a v-if="ozonProductUrl(firstNumericId(it.offerId))"
+                 :href="ozonProductUrl(firstNumericId(it.offerId))"
                  target="_blank" rel="noopener noreferrer"
-                 :title="ozonProductUrl(sourceProductId(it.sku))">源商品</a>
+                 :title="ozonProductUrl(firstNumericId(it.offerId))">源商品</a>
               <span v-else>—</span>
             </td>
             <td style="max-width:160px">
