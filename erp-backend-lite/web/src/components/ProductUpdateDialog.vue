@@ -89,6 +89,19 @@ const fieldState = reactive({
   name: { checked: true, value: '' },
   description: { checked: true, value: '' },
 });
+// 字段是否处于编辑模式(默认 false=只读展示,点"编辑"后 true=显示输入框)
+const editingFields = reactive({
+  name: false,
+  description: false,
+});
+function startEdit(field) { editingFields[field] = true; }
+function finishEdit(field) { editingFields[field] = false; }
+
+// 批量模式:每条商品每字段的编辑状态,key=`${offerId}:${field}`
+const batchEditing = reactive(new Set());
+function isBatchEditing(offerId, field) { return batchEditing.has(`${offerId}:${field}`); }
+function startBatchEdit(offerId, field) { batchEditing.add(`${offerId}:${field}`); }
+function finishBatchEdit(offerId, field) { batchEditing.delete(`${offerId}:${field}`); }
 
 // 批量模式:是否使用"从缓存批量获取"模式
 const useBatchCacheMode = ref(false);
@@ -137,6 +150,9 @@ watch(
     // 重置(默认勾选标题、描述)
     fieldState.name = { checked: true, value: '' };
     fieldState.description = { checked: true, value: '' };
+    editingFields.name = false;
+    editingFields.description = false;
+    batchEditing.clear();
     previewData.value = null;
     cacheProfile.value = null;
     useBatchCacheMode.value = false;
@@ -484,20 +500,29 @@ async function submit() {
             <input type="checkbox" v-model="fieldState.name.checked" />
             <span>标题</span>
           </label>
-          <div v-if="fieldState.name.checked && !useBatchCacheMode" class="pu-input-with-action">
-            <input
-              class="pu-input"
-              v-model="fieldState.name.value"
-              placeholder="输入新标题(统一文案)"
-              :disabled="submitting"
-            />
-            <button
-              v-if="!isBatch && (props.singleItem?.offerId)"
-              class="btn btn-sm btn-ghost pu-cache-btn"
-              :disabled="fillingFromCache || submitting"
-              :title="cacheSourcesSummary || '从本地采集缓存填充标题'"
-              @click="fillFromCache('name')"
-            >{{ fillingFromCache ? '读取中…' : '从缓存获取' }}</button>
+          <div v-if="fieldState.name.checked && !useBatchCacheMode" class="pu-field-content">
+            <!-- 只读展示模式 -->
+            <div v-if="!editingFields.name" class="pu-readonly-view">
+              <div class="pu-readonly-text" :title="fieldState.name.value">{{ fieldState.name.value || '(空,待从缓存获取)' }}</div>
+              <button class="btn btn-sm btn-ghost pu-action-btn" :disabled="submitting" @click="startEdit('name')">编辑</button>
+            </div>
+            <!-- 编辑模式:预填输入框 -->
+            <div v-else class="pu-input-with-action">
+              <input
+                class="pu-input"
+                v-model="fieldState.name.value"
+                placeholder="输入新标题(统一文案)"
+                :disabled="submitting"
+              />
+              <button
+                v-if="!isBatch && (props.singleItem?.offerId)"
+                class="btn btn-sm btn-ghost pu-cache-btn"
+                :disabled="fillingFromCache || submitting"
+                :title="cacheSourcesSummary || '从本地采集缓存填充标题'"
+                @click="fillFromCache('name')"
+              >{{ fillingFromCache ? '读取中…' : '从缓存获取' }}</button>
+              <button class="btn btn-sm btn-primary pu-action-btn" :disabled="submitting" @click="finishEdit('name')">完成</button>
+            </div>
           </div>
         </div>
 
@@ -507,31 +532,49 @@ async function submit() {
             <input type="checkbox" v-model="fieldState.description.checked" />
             <span>描述</span>
           </label>
-          <div v-if="fieldState.description.checked && !useBatchCacheMode" class="pu-input-with-action">
-            <div class="pu-desc-editor">
-              <div class="pu-desc-highlight" aria-hidden="true">
-                <span
-                  v-for="(seg, i) in splitDescSegments(fieldState.description.value)"
-                  :key="i"
-                  :class="seg.type === 'placeholder' ? 'desc-hl-placeholder' : (seg.type === 'chrome' ? 'desc-hl-chrome' : 'desc-hl-normal')"
-                >{{ seg.text }}</span>
-                <span v-if="!fieldState.description.value" class="desc-hl-placeholder">{{ '输入新描述(统一文案,支持多行)' }}</span>
+          <div v-if="fieldState.description.checked && !useBatchCacheMode" class="pu-field-content">
+            <!-- 只读展示模式:带高亮 -->
+            <div v-if="!editingFields.description" class="pu-readonly-view pu-readonly-desc">
+              <div class="pu-readonly-desc-text">
+                <template v-if="fieldState.description.value">
+                  <span
+                    v-for="(seg, i) in splitDescSegments(fieldState.description.value)"
+                    :key="i"
+                    :class="seg.type === 'placeholder' ? 'desc-hl-placeholder' : (seg.type === 'chrome' ? 'desc-hl-chrome' : 'desc-hl-normal')"
+                  >{{ seg.text }}</span>
+                </template>
+                <span v-else class="muted">(空,待从缓存获取)</span>
               </div>
-              <textarea
-                class="pu-textarea pu-desc-textarea"
-                v-model="fieldState.description.value"
-                placeholder="输入新描述(统一文案,支持多行)"
-                rows="8"
-                :disabled="submitting"
-              ></textarea>
+              <button class="btn btn-sm btn-ghost pu-action-btn" :disabled="submitting" @click="startEdit('description')">编辑</button>
             </div>
-            <button
-              v-if="!isBatch && (props.singleItem?.offerId)"
-              class="btn btn-sm btn-ghost pu-cache-btn"
-              :disabled="fillingFromCache || submitting"
-              :title="cacheSourcesSummary || '从本地采集缓存填充描述'"
-              @click="fillFromCache('description')"
-            >{{ fillingFromCache ? '读取中…' : '从缓存获取' }}</button>
+            <!-- 编辑模式:预填输入框 + 高亮叠加 -->
+            <div v-else class="pu-input-with-action">
+              <div class="pu-desc-editor">
+                <div class="pu-desc-highlight" aria-hidden="true">
+                  <span
+                    v-for="(seg, i) in splitDescSegments(fieldState.description.value)"
+                    :key="i"
+                    :class="seg.type === 'placeholder' ? 'desc-hl-placeholder' : (seg.type === 'chrome' ? 'desc-hl-chrome' : 'desc-hl-normal')"
+                  >{{ seg.text }}</span>
+                  <span v-if="!fieldState.description.value" class="desc-hl-placeholder">{{ '输入新描述(统一文案,支持多行)' }}</span>
+                </div>
+                <textarea
+                  class="pu-textarea pu-desc-textarea"
+                  v-model="fieldState.description.value"
+                  placeholder="输入新描述(统一文案,支持多行)"
+                  rows="8"
+                  :disabled="submitting"
+                ></textarea>
+              </div>
+              <button
+                v-if="!isBatch && (props.singleItem?.offerId)"
+                class="btn btn-sm btn-ghost pu-cache-btn"
+                :disabled="fillingFromCache || submitting"
+                :title="cacheSourcesSummary || '从本地采集缓存填充描述'"
+                @click="fillFromCache('description')"
+              >{{ fillingFromCache ? '读取中…' : '从缓存获取' }}</button>
+              <button class="btn btn-sm btn-primary pu-action-btn" :disabled="submitting" @click="finishEdit('description')">完成</button>
+            </div>
           </div>
         </div>
 
@@ -561,16 +604,36 @@ async function submit() {
             </div>
             <div v-if="fieldState.name.checked" class="pu-batch-field">
               <label class="pu-batch-field-label">标题</label>
-              <input
-                class="pu-input pu-batch-name-input"
-                :value="getBatchCacheValue(p.offerId, 'name')"
-                @input="(e) => { const d = batchCacheData.get(p.offerId); if (d) { d.name = e.target.value; batchCacheData.value = new Map(batchCacheData.value); } }"
-                placeholder="(无缓存)"
-              />
+              <div v-if="!isBatchEditing(p.offerId, 'name')" class="pu-readonly-view">
+                <div class="pu-readonly-text" :title="getBatchCacheValue(p.offerId, 'name')">{{ getBatchCacheValue(p.offerId, 'name') || '(无缓存)' }}</div>
+                <button class="btn btn-sm btn-ghost pu-action-btn" @click="startBatchEdit(p.offerId, 'name')">编辑</button>
+              </div>
+              <div v-else class="pu-readonly-view">
+                <input
+                  class="pu-input pu-batch-name-input"
+                  :value="getBatchCacheValue(p.offerId, 'name')"
+                  @input="(e) => { const d = batchCacheData.get(p.offerId); if (d) { d.name = e.target.value; batchCacheData.value = new Map(batchCacheData.value); } }"
+                  placeholder="(无缓存)"
+                />
+                <button class="btn btn-sm btn-primary pu-action-btn" @click="finishBatchEdit(p.offerId, 'name')">完成</button>
+              </div>
             </div>
             <div v-if="fieldState.description.checked" class="pu-batch-field">
               <label class="pu-batch-field-label">描述</label>
-              <div class="pu-desc-editor pu-batch-desc-editor">
+              <div v-if="!isBatchEditing(p.offerId, 'description')" class="pu-readonly-view pu-readonly-desc">
+                <div class="pu-readonly-desc-text">
+                  <template v-if="getBatchCacheValue(p.offerId, 'description')">
+                    <span
+                      v-for="(seg, i) in splitDescSegments(getBatchCacheValue(p.offerId, 'description'))"
+                      :key="i"
+                      :class="seg.type === 'placeholder' ? 'desc-hl-placeholder' : (seg.type === 'chrome' ? 'desc-hl-chrome' : 'desc-hl-normal')"
+                    >{{ seg.text }}</span>
+                  </template>
+                  <span v-else class="muted">(无缓存)</span>
+                </div>
+                <button class="btn btn-sm btn-ghost pu-action-btn" @click="startBatchEdit(p.offerId, 'description')">编辑</button>
+              </div>
+              <div v-else class="pu-desc-editor pu-batch-desc-editor">
                 <div class="pu-desc-highlight" aria-hidden="true">
                   <span
                     v-for="(seg, i) in splitDescSegments(getBatchCacheValue(p.offerId, 'description'))"
@@ -586,6 +649,7 @@ async function submit() {
                   placeholder="(无缓存)"
                   rows="6"
                 ></textarea>
+                <button class="btn btn-sm btn-primary pu-batch-finish-btn" @click="finishBatchEdit(p.offerId, 'description')">完成</button>
               </div>
             </div>
           </div>
@@ -759,6 +823,56 @@ async function submit() {
 .pu-batch-desc-editor .pu-desc-highlight {
   font-size: 12px;
   line-height: 1.6;
+}
+
+/* 字段内容容器 */
+.pu-field-content {
+  flex: 1;
+  min-width: 0;
+}
+/* 只读展示 + 编辑按钮 */
+.pu-readonly-view {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+.pu-readonly-text {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 32px;
+}
+.pu-readonly-desc {
+  flex-direction: column;
+}
+.pu-readonly-desc-text {
+  padding: 6px 8px;
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+  margin-bottom: 6px;
+}
+.pu-action-btn {
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+.pu-batch-finish-btn {
+  margin-top: 6px;
 }
 /* 图例 */
 .preview-desc-legend {
