@@ -427,6 +427,10 @@ h3 {
   justify-content: center;
   color-scheme: light;
 }
+/* 全局确认弹窗(AppConfirm)层级高于普通 AppModal,避免被业务弹窗遮挡 */
+.modal[role="alertdialog"] {
+  z-index: 200;
+}
 .modal-mask {
   position: absolute;
   inset: 0;
