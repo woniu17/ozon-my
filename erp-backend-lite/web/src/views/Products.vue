@@ -545,6 +545,19 @@ function fmtTime(t) {
   return String(t).replace('T', ' ').slice(0, 19);
 }
 
+// 源商品ID:从 SKU 第一段提取(如 4739085792-0812-qx → 4739085792),用于拼接源商品链接
+// 仅当首段为纯数字时返回,否则视为无效(返回空串)
+function sourceProductId(sku) {
+  if (!sku) return '';
+  const seg = String(sku).split('-')[0];
+  return /^\d+$/.test(seg) ? seg : '';
+}
+
+// Ozon 商品链接:productId 拼接到 https://ozon.ru/product/{id}
+function ozonProductUrl(productId) {
+  return productId ? `https://ozon.ru/product/${productId}` : '';
+}
+
 // ── 图片更新 ──────────────────────────────────────────────
 function toggleSelect(sku) {
   const idx = selectedSkus.value.indexOf(sku);
@@ -1074,12 +1087,14 @@ onMounted(() => {
 
     <div class="table-wrap">
       <table class="data-table" aria-label="商品列表">
-        <caption class="sr-only">商品数据缓存列表,含 SKU、Offer ID、名称、店铺、状态、库存、图片与操作</caption>
+        <caption class="sr-only">商品数据缓存列表,含 SKU、Offer ID、商品链接、源商品链接、名称、店铺、状态、库存、图片与操作</caption>
         <thead>
           <tr>
             <th style="width:32px"><input type="checkbox" :checked="allSelected" aria-label="全选当前页" @change="toggleSelectAll" /></th>
             <th>SKU</th>
             <th style="width:140px">Offer ID</th>
+            <th style="width:90px">商品链接</th>
+            <th style="width:90px">源商品链接</th>
             <th style="width:160px">名称</th>
             <th>店铺</th>
             <th>状态</th>
@@ -1091,15 +1106,29 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="10" class="muted" style="padding: 24px; text-align: center">加载中…</td>
+            <td colspan="12" class="muted" style="padding: 24px; text-align: center">加载中…</td>
           </tr>
           <tr v-else-if="!state.items.length">
-            <td colspan="10" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
+            <td colspan="12" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
           </tr>
           <tr v-for="it in state.items" :key="it.sku">
             <td><input type="checkbox" :checked="isSelected(it.sku)" :aria-label="`选择 SKU ${it.sku}`" @change="toggleSelect(it.sku)" /></td>
             <td>{{ it.sku }}</td>
             <td>{{ it.offerId || '—' }}</td>
+            <td>
+              <a v-if="ozonProductUrl(it.productId)"
+                 :href="ozonProductUrl(it.productId)"
+                 target="_blank" rel="noopener noreferrer"
+                 :title="ozonProductUrl(it.productId)">商品</a>
+              <span v-else>—</span>
+            </td>
+            <td>
+              <a v-if="ozonProductUrl(sourceProductId(it.sku))"
+                 :href="ozonProductUrl(sourceProductId(it.sku))"
+                 target="_blank" rel="noopener noreferrer"
+                 :title="ozonProductUrl(sourceProductId(it.sku))">源商品</a>
+              <span v-else>—</span>
+            </td>
             <td style="max-width:160px">
               <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="it.name">{{ it.name || '—' }}</div>
               <span
