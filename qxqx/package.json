@@ -1,0 +1,15 @@
+{
+  "name": "qxqx",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "qxqx - cloakbrowser automation scripts",
+  "main": "hello.js",
+  "scripts": {
+    "start": "node hello.js"
+  },
+  "dependencies": {
+    "cloakbrowser": "^0.5.7",
+    "playwright-core": "^1.62.1"
+  }
+}
