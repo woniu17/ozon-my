@@ -446,15 +446,23 @@ CREATE TABLE IF NOT EXISTS ozon_store_classification (
   isMainlandChina INTEGER,             -- NULL/0/1(中国大陆店铺判定)
   classifiedBy  TEXT,
   classifiedAt  TEXT,
-  companyInfo   TEXT,                -- JSON
+  companyInfo   TEXT,                -- JSON,内嵌 { companyName, legalAddress, country, stats? }
   logoImageUrl  TEXT,                -- 店铺 logo URL(从跟卖列表 seller.logoImageUrl 抽取)
   lastSeenAt    TEXT,
-  lastSeenUrl   TEXT
+  lastSeenUrl   TEXT,
+  -- 店铺统计指标(从 companyInfo.stats 提取到顶层列,便于 SQL 排序/筛选)
+  -- 数据稀疏:仅店铺页方案B(entrypoint-api)能取到,PDP/方案A 为 NULL
+  orders_count  INTEGER,             -- 订单数量(如 455)
+  reviews_count INTEGER,             -- 评论数量(如 126)
+  rating        REAL,                 -- 产品质量分(如 4.5,原值 "4,5 из 5")
+  opened_months INTEGER              -- 店铺开业时长(月数,如 9,原值 "9 месяцев")
 );
 CREATE INDEX IF NOT EXISTS idx_sc_mainland_china ON ozon_store_classification(isMainlandChina);
 CREATE INDEX IF NOT EXISTS idx_sc_name    ON ozon_store_classification(sellerName);
 CREATE INDEX IF NOT EXISTS idx_sc_seen    ON ozon_store_classification(lastSeenAt DESC);
 CREATE INDEX IF NOT EXISTS idx_sc_slug    ON ozon_store_classification(sellerSlug);
+-- 注:idx_sc_orders / idx_sc_rating 索引在 ensureMigrations() 中 ALTER TABLE 补列后创建
+-- (旧库 CREATE TABLE IF NOT EXISTS 不更新表结构,若在此处建索引会因列不存在而报错)
 
 -- 幂等迁移:已有库补 logoImageUrl 列(SQLite ALTER TABLE ADD COLUMN 幂等性靠 PRAGMA 检查)
 -- 在应用启动时由 migrate() 函数检测列是否存在后执行

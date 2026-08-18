@@ -174,7 +174,9 @@ export const storeClassificationDao = {
   },
 
   /** 分页列表:LIKE 三字段模糊(sellerId / sellerName / sellerSlug)
-   *  sortBy: 'skuCount' → 按采集 SKU 数降序(LEFT JOIN 子查询);默认按 lastSeenAt DESC
+   *  sortBy: 'skuCount' → 按采集 SKU 数降序(LEFT JOIN 子查询)
+   *         'ordersCount' / 'reviewsCount' / 'rating' / 'openedMonths' → 按对应顶层列降序(NULL 末尾)
+   *         默认按 lastSeenAt DESC
    */
   async findPagedList(filter, page, pageSize, sortBy) {
     // whereParts 不带表前缀(用于 total 查询与无 JOIN 查询)
@@ -208,6 +210,7 @@ export const storeClassificationDao = {
         .prepare(
           `SELECT sc.sellerId, sc.sellerSlug, sc.sellerName, sc.isMainlandChina, sc.classifiedBy,
                   sc.classifiedAt, sc.companyInfo, sc.lastSeenAt, sc.lastSeenUrl,
+                  sc.orders_count, sc.reviews_count, sc.rating, sc.opened_months,
                   COALESCE(ss.cnt, 0) AS skuCount
            FROM ozon_store_classification sc
            LEFT JOIN (SELECT sellerId, COUNT(*) AS cnt FROM ozon_store_sku GROUP BY sellerId) ss
@@ -229,16 +232,35 @@ export const storeClassificationDao = {
         companyInfo: r.companyInfo ? JSON.parse(r.companyInfo) : null,
         lastSeenAt: r.lastSeenAt,
         lastSeenUrl: r.lastSeenUrl,
+        ordersCount: r.orders_count ?? null,
+        reviewsCount: r.reviews_count ?? null,
+        rating: r.rating ?? null,
+        openedMonths: r.opened_months ?? null,
         skuCount: r.skuCount || 0,
       }));
       return { items: reshaped, total };
     }
 
+    // sortBy 映射到顶层列(SQL 列名),NULL 末尾(SQLite 默认 NULL 在 ASC 时最前/DESC 时最后,
+    // 显式 NULLS LAST 保证一致语义)
+    const sortColMap = {
+      ordersCount: 'orders_count',
+      reviewsCount: 'reviews_count',
+      rating: 'rating',
+      openedMonths: 'opened_months',
+    };
+    const sortCol = sortColMap[sortBy];
+    const orderBy = sortCol
+      ? `${sortCol} DESC NULLS LAST, lastSeenAt DESC`
+      : 'lastSeenAt DESC';
+
     const items = db
       .prepare(
-        `SELECT sellerId, sellerSlug, sellerName, isMainlandChina, classifiedBy, classifiedAt, companyInfo, lastSeenAt, lastSeenUrl
+        `SELECT sellerId, sellerSlug, sellerName, isMainlandChina, classifiedBy, classifiedAt,
+                companyInfo, lastSeenAt, lastSeenUrl,
+                orders_count, reviews_count, rating, opened_months
          FROM ozon_store_classification ${where}
-         ORDER BY lastSeenAt DESC LIMIT ? OFFSET ?`
+         ORDER BY ${orderBy} LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, skip);
     const total = db
@@ -248,6 +270,10 @@ export const storeClassificationDao = {
       ...r,
       isMainlandChina: r.isMainlandChina === null ? null : !!r.isMainlandChina,
       companyInfo: r.companyInfo ? JSON.parse(r.companyInfo) : null,
+      ordersCount: r.orders_count ?? null,
+      reviewsCount: r.reviews_count ?? null,
+      rating: r.rating ?? null,
+      openedMonths: r.opened_months ?? null,
     }));
     return { items: reshaped, total };
   },

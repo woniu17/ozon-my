@@ -2,3 +2,8 @@ node_modules/
 *.log
 .env
 .DS_Store
+.chrome-profile/
+chrome-profile/
+.chrome-cdp-profile/
+.chrome-backfill-profile/
+backfill-progress.json

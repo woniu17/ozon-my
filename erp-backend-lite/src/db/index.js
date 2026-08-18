@@ -234,6 +234,27 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE ozon_store_classification ADD COLUMN logoImageUrl TEXT`);
     console.log('[db] migration: added column ozon_store_classification.logoImageUrl');
   }
+  // 2026-08: 店铺统计指标 — 4 个顶层列(便于 SQL 排序/筛选),数据从 companyInfo.stats 提取
+  // 数据稀疏:仅店铺页方案B(entrypoint-api)能取到,PDP/方案A 为 NULL
+  if (scCols.length > 0 && !scCols.some((c) => c.name === 'orders_count')) {
+    db.exec(`ALTER TABLE ozon_store_classification ADD COLUMN orders_count INTEGER`);
+    console.log('[db] migration: added column ozon_store_classification.orders_count');
+  }
+  if (scCols.length > 0 && !scCols.some((c) => c.name === 'reviews_count')) {
+    db.exec(`ALTER TABLE ozon_store_classification ADD COLUMN reviews_count INTEGER`);
+    console.log('[db] migration: added column ozon_store_classification.reviews_count');
+  }
+  if (scCols.length > 0 && !scCols.some((c) => c.name === 'rating')) {
+    db.exec(`ALTER TABLE ozon_store_classification ADD COLUMN rating REAL`);
+    console.log('[db] migration: added column ozon_store_classification.rating');
+  }
+  if (scCols.length > 0 && !scCols.some((c) => c.name === 'opened_months')) {
+    db.exec(`ALTER TABLE ozon_store_classification ADD COLUMN opened_months INTEGER`);
+    console.log('[db] migration: added column ozon_store_classification.opened_months');
+  }
+  // 排序索引(CREATE INDEX IF NOT EXISTS 自身幂等,无需 PRAGMA 检查)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sc_orders ON ozon_store_classification(orders_count DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sc_rating ON ozon_store_classification(rating DESC)`);
   // isChinese → isMainlandChina 列重命名已在 ensureMigrations 开头执行
 }
 

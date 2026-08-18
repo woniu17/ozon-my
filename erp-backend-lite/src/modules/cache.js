@@ -1678,6 +1678,16 @@ router.post('/admin/api/store-classification/:sellerId', async (req, res, next) 
     if (body.sellerSlug != null && String(body.sellerSlug) !== '') {
       update.sellerSlug = String(body.sellerSlug);
     }
+    // 店铺统计指标:从 companyInfo.stats 提取到 4 个顶层列(便于 SQL 排序/筛选)
+    // 仅在 stats 存在且为对象时塞入 update —— PDP/方案A 路径拿不到 stats(无此字段或为 null),
+    // 此时 update 不含这 4 列,upsert 的 ON CONFLICT DO UPDATE 不会触及它们,保持已有值不被 null 覆盖
+    const stats = body.companyInfo?.stats;
+    if (stats && typeof stats === 'object') {
+      update.orders_count = stats.ordersCount ?? null;
+      update.reviews_count = stats.reviewsCount ?? null;
+      update.rating = stats.rating ?? null;
+      update.opened_months = stats.openedMonths ?? null;
+    }
 
     await daos.storeClassificationDao.upsertBySellerId(sellerId, update);
     return res.json(ok({ upserted: true, sellerId }));

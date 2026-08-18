@@ -64,7 +64,7 @@
   //   texts[1] = legalAddress
   //   texts[2] = 形如 "CN, Xiamen" → 取逗号前大写部分为 country("CN")
   function _extractCompanyInfoFromState(state) {
-    const empty = { companyName: '', legalAddress: '', country: '' };
+    const empty = { companyName: '', legalAddress: '', country: '', stats: null };
     if (!state) return empty;
     // Ozon 改版后 trustFactors 有多个(订单数、关于店铺等),
     // 公司信息在 "О магазине"(关于店铺)的 tooltip.subtitle 数组里。
@@ -110,6 +110,78 @@
     }
 
     return { companyName, legalAddress, country };
+  }
+
+  // ─── 公共:从 entrypoint-api 的 widgetStates 提取店铺统计指标 ──
+  // 数据源:cellList widget(键名形如 cellList-<数字>-default-1,数字不固定),
+  // 值为 JSON 字符串需二次 parse。每个 cell 的 centerBlock.title.text 是字段名
+  // (俄文),rightBlock.badge.text 是值。字段对应:
+  //   "Заказов"                  → 订单数量(如 "455")
+  //   "Работает с Ozon"          → 店铺开业时长(如 "9 месяцев")
+  //   "Средняя оценка товаров"   → 产品质量分(如 "4,5 из 5")
+  //   "Количество отзывов"       → 评论数量(如 "126")
+  function _parseRussianMonths(text) {
+    if (!text) return null;
+    const m = text.match(/(\d+)\s+(месяц|месяца|месяцев)/i);
+    return m ? Number(m[1]) : null;
+  }
+
+  function _extractSellerStatsFromWidgetStates(widgetStates) {
+    const empty = {
+      ordersCount: null,
+      reviewsCount: null,
+      rating: null,
+      ratingRaw: '',
+      openedDurationRaw: '',
+      openedMonths: null,
+    };
+    if (!widgetStates || typeof widgetStates !== 'object') return empty;
+
+    // 找 cellList widget(键名前缀 "cellList-")
+    let cellList = null;
+    for (const key of Object.keys(widgetStates)) {
+      if (!key.startsWith('cellList-')) continue;
+      const w = widgetStates[key];
+      if (typeof w === 'string') {
+        try {
+          cellList = JSON.parse(w);
+        } catch (_) {
+          /* ignore,试下一个 */
+        }
+      } else if (w && typeof w === 'object') {
+        cellList = w;
+      }
+      if (cellList) break;
+    }
+    if (!cellList || !Array.isArray(cellList.cells)) return empty;
+
+    const stats = { ...empty };
+    for (const cell of cellList.cells) {
+      const dsCell = cell?.dsCell;
+      if (!dsCell) continue;
+      const title = dsCell?.centerBlock?.title?.text;
+      const value = dsCell?.rightBlock?.badge?.text;
+      if (!title || !value) continue;
+      switch (title) {
+        case 'Заказов': // 订单数量
+          stats.ordersCount = Number(value.replace(/\s/g, '')) || null;
+          break;
+        case 'Работает с Ozon': // 店铺开业时长
+          stats.openedDurationRaw = value;
+          stats.openedMonths = _parseRussianMonths(value);
+          break;
+        case 'Средняя оценка товаров': // 产品质量分
+          stats.ratingRaw = value;
+          // "4,5 из 5" → 4.5
+          stats.rating =
+            Number(value.replace(',', '.').replace(/\s*из\s*\d+/i, '').trim()) || null;
+          break;
+        case 'Количество отзывов': // 评论数量
+          stats.reviewsCount = Number(value.replace(/\s/g, '')) || null;
+          break;
+      }
+    }
+    return stats;
   }
 
   // ─── 详情页 ────────────────────────────────────────
@@ -291,7 +363,9 @@
     }
 
     // entrypoint-api 拿不到 legalAddress
-    return { companyName, legalAddress: '', country };
+    // 同步提取店铺统计指标(订单数/评论数/开业时长/质量分)
+    const stats = _extractSellerStatsFromWidgetStates(widgetStates);
+    return { companyName, legalAddress: '', country, stats };
   }
 
   async function extractSellerInfoFromShopPage() {
@@ -349,7 +423,7 @@
     }
 
     if (!companyInfo) {
-      companyInfo = { companyName: '', legalAddress: '', country: '' };
+      companyInfo = { companyName: '', legalAddress: '', country: '', stats: null };
       method = 'failed';
     }
 

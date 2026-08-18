@@ -514,9 +514,10 @@ async function loadStoreClassifications() {
   }
 }
 
-// 切换排序方式:skuCount ↔ lastSeenAt
-function toggleStoreClassSort() {
-  storeClassFilters.sortBy = storeClassFilters.sortBy === 'skuCount' ? '' : 'skuCount';
+// 切换排序方式:点击列 → 该列降序;再次点击同列 → 回到默认(lastSeenAt 降序)
+// sortKey 可选值:'skuCount' / 'ordersCount' / 'reviewsCount' / 'rating' / 'openedMonths'
+function toggleStoreClassSort(sortKey = 'skuCount') {
+  storeClassFilters.sortBy = storeClassFilters.sortBy === sortKey ? '' : sortKey;
   storeClassPager.current = 1;
   loadStoreClassifications();
 }
@@ -824,9 +825,25 @@ onMounted(() => {
               <th>分类方式</th>
               <th>公司信息</th>
               <th>店铺链接</th>
-              <th class="th-sortable" @click="toggleStoreClassSort" :title="storeClassFilters.sortBy === 'skuCount' ? '当前:按采集数降序,点击切换为按时间' : '当前:按时间降序,点击切换为按采集数'">
+              <th class="th-sortable" @click="toggleStoreClassSort('skuCount')" :title="storeClassFilters.sortBy === 'skuCount' ? '当前:按采集数降序,点击切回默认' : '点击按采集数降序'">
                 采集 SKU 数
                 <span class="sort-indicator">{{ storeClassFilters.sortBy === 'skuCount' ? '▼' : '' }}</span>
+              </th>
+              <th class="th-sortable" @click="toggleStoreClassSort('ordersCount')" :title="storeClassFilters.sortBy === 'ordersCount' ? '当前:按订单数降序,点击切回默认' : '点击按订单数降序'">
+                订单数
+                <span class="sort-indicator">{{ storeClassFilters.sortBy === 'ordersCount' ? '▼' : '' }}</span>
+              </th>
+              <th class="th-sortable" @click="toggleStoreClassSort('reviewsCount')" :title="storeClassFilters.sortBy === 'reviewsCount' ? '当前:按评论数降序,点击切回默认' : '点击按评论数降序'">
+                评论数
+                <span class="sort-indicator">{{ storeClassFilters.sortBy === 'reviewsCount' ? '▼' : '' }}</span>
+              </th>
+              <th class="th-sortable" @click="toggleStoreClassSort('rating')" :title="storeClassFilters.sortBy === 'rating' ? '当前:按评分降序,点击切回默认' : '点击按评分降序'">
+                评分
+                <span class="sort-indicator">{{ storeClassFilters.sortBy === 'rating' ? '▼' : '' }}</span>
+              </th>
+              <th class="th-sortable" @click="toggleStoreClassSort('openedMonths')" :title="storeClassFilters.sortBy === 'openedMonths' ? '当前:按开业时长降序,点击切回默认' : '点击按开业时长降序'">
+                开业时长
+                <span class="sort-indicator">{{ storeClassFilters.sortBy === 'openedMonths' ? '▼' : '' }}</span>
               </th>
               <th>最后访问</th>
               <th>操作</th>
@@ -834,7 +851,7 @@ onMounted(() => {
           </thead>
           <tbody>
             <tr v-if="!storeClassifications.length">
-              <td colspan="9" class="empty">暂无店铺分类记录</td>
+              <td colspan="13" class="empty">暂无店铺分类记录</td>
             </tr>
             <tr v-for="sc in storeClassifications" :key="sc._id">
               <td class="col-sku">{{ sc.sellerId || sc._id || '—' }}</td>
@@ -853,6 +870,10 @@ onMounted(() => {
                 <template v-else>—</template>
               </td>
               <td>{{ sc.skuCount ?? 0 }}</td>
+              <td>{{ sc.ordersCount ?? '—' }}</td>
+              <td>{{ sc.reviewsCount ?? '—' }}</td>
+              <td>{{ sc.rating != null ? sc.rating.toFixed(1) : '—' }}</td>
+              <td>{{ sc.openedMonths != null ? sc.openedMonths + ' 月' : '—' }}</td>
               <td class="col-time">{{ fmtTime(sc.lastSeenAt) }}</td>
               <td class="row-actions">
                 <button class="btn btn-sm btn-primary" :disabled="!sc.sellerId" @click="updateStoreClass(sc.sellerId || sc._id, { isMainlandChina: true })">

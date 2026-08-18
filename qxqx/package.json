@@ -6,7 +6,14 @@
   "description": "qxqx - cloakbrowser automation scripts",
   "main": "hello.js",
   "scripts": {
-    "start": "node hello.js"
+    "start": "node hello.js",
+    "persistent": "node persistent.js",
+    "extension": "node load-extension.js",
+    "cdp": "node cdp-server.js",
+    "cdp:ext": "CDP_EXTENSION=1 node cdp-server.js",
+    "cdp:headless": "CDP_HEADLESS=1 node cdp-server.js",
+    "backfill": "node backfill-store-stats.js",
+    "backfill:fast": "INTERVAL_MS=3000 node backfill-store-stats.js"
   },
   "dependencies": {
     "cloakbrowser": "^0.5.7",

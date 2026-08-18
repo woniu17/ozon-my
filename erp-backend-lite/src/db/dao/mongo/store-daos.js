@@ -80,8 +80,11 @@ export const storeClassificationDao = {
     return { deletedCount: r.deletedCount };
   },
 
-  /** 分页列表:$or + $regex 三字段模糊(sellerId / sellerName / sellerSlug) */
-  async findPagedList(filter, page, pageSize) {
+  /** 分页列表:$or + $regex 三字段模糊(sellerId / sellerName / sellerSlug)
+   *  sortBy: 'skuCount' / 'ordersCount' / 'reviewsCount' / 'rating' / 'openedMonths' / 默认 lastSeenAt
+   *  返回字段名映射为 camelCase(与 SQLite reshaped 一致,前端无感)
+   */
+  async findPagedList(filter, page, pageSize, sortBy) {
     const col = await cols.storeClassification();
     const query = {};
     if (filter.isMainlandChina === true || filter.isMainlandChina === false) {
@@ -91,12 +94,37 @@ export const storeClassificationDao = {
       const re = { $regex: filter.keyword, $options: 'i' };
       query.$or = [{ sellerName: re }, { sellerSlug: re }, { sellerId: re }];
     }
+    // sortBy 映射:camelCase → snake_case(Mongo 文档字段名)
+    const sortColMap = {
+      ordersCount: 'orders_count',
+      reviewsCount: 'reviews_count',
+      rating: 'rating',
+      openedMonths: 'opened_months',
+    };
+    const sortField = sortColMap[sortBy];
+    const sortSpec = sortField
+      ? { [sortField]: -1, lastSeenAt: -1 }
+      : { lastSeenAt: -1 };
     const skip = (page - 1) * pageSize;
     const [items, total] = await Promise.all([
-      col.find(query, { projection: { _id: 0 } }).sort({ lastSeenAt: -1 }).skip(skip).limit(pageSize).toArray(),
+      col.find(query, { projection: { _id: 0 } }).sort(sortSpec).skip(skip).limit(pageSize).toArray(),
       col.countDocuments(query),
     ]);
-    return { items, total };
+    // 字段名映射:snake_case → camelCase(与 SQLite DAO 返回结构一致)
+    const reshaped = items.map((r) => ({
+      ...r,
+      ordersCount: r.orders_count ?? null,
+      reviewsCount: r.reviews_count ?? null,
+      rating: r.rating ?? null,
+      openedMonths: r.opened_months ?? null,
+    }));
+    // 删除原 snake_case 字段,避免冗余
+    for (const r of reshaped) {
+      delete r.orders_count;
+      delete r.reviews_count;
+      delete r.opened_months;
+    }
+    return { items: reshaped, total };
   },
 };
 
