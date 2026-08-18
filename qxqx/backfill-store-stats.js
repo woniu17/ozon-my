@@ -8,6 +8,11 @@
 //   INTERVAL_MS  - 限速毫秒(默认 10000)
 //   LIMIT        - 只处理前 N 个(测试用)
 //   HEADLESS     - 设为 1 无头模式
+//
+// 示例(bash):
+//   HEADLESS=1 LIMIT=10 node backfill-store-stats.js        # 先测 10 个
+//   HEADLESS=1 LIMIT=100 node backfill-store-stats.js       # 确认 OK 后跑前 100 个
+//   HEADLESS=1 node backfill-store-stats.js                 # 全量(24万,约28天)
 
 import { launchPersistentContext } from 'cloakbrowser';
 import { DatabaseSync } from 'node:sqlite';
