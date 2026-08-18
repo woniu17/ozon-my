@@ -185,7 +185,8 @@ async function main() {
   const progress = loadProgress();
   const doneSet = new Set(progress.done);
   const pending = allIds.filter((id) => !doneSet.has(id));
-  console.log(`[2/4] 总计 ${allIds.length} 个,已完成 ${doneSet.size} 个,待处理 ${pending.length} 个`);
+  const doneInBatch = allIds.length - pending.length;
+  console.log(`[2/4] 本批 ${allIds.length} 个(累计已完成 ${doneSet.size} 个),本批已完成 ${doneInBatch} 个,待处理 ${pending.length} 个`);
 
   if (pending.length === 0) {
     console.log('\n全部完成,无需处理。');
