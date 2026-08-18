@@ -101,6 +101,23 @@ const EXTRACT_STATS_FN = async (sellerId) => {
   }
   if (!cellList || !Array.isArray(cellList.cells)) return { error: 'no cells' };
 
+  // 解析俄语格式数字,兼容 K(тысяча/千)和 M(миллион/百万)后缀
+  // 例:"455" → 455;"13,2 K" → 13200;"1,5 M" → 1500000
+  const parseRussianNumber = (value) => {
+    if (!value) return null;
+    const cleaned = value.replace(/\s/g, '').replace(/\u00A0/g, '').trim();
+    // K(千):"13,2K" → 13.2 × 1000 = 13200
+    const mK = cleaned.match(/^(-?[\d.,]+)\s*K$/i);
+    if (mK) return Math.round(Number(mK[1].replace(',', '.')) * 1000);
+    // M(百万):"1,5M" → 1.5 × 1000000 = 1500000
+    const mM = cleaned.match(/^(-?[\d.,]+)\s*M$/i);
+    if (mM) return Math.round(Number(mM[1].replace(',', '.')) * 1000000);
+    // 普通数字:"4 302" → 4302
+    const plain = cleaned.replace(/[\u00A0\s]/g, '');
+    const n = Number(plain);
+    return isNaN(n) ? null : n;
+  };
+
   const stats = {
     ordersCount: null, reviewsCount: null, rating: null,
     ratingRaw: '', openedDurationRaw: '', openedMonths: null,
@@ -113,7 +130,7 @@ const EXTRACT_STATS_FN = async (sellerId) => {
     if (!title || !value) continue;
     switch (title) {
       case 'Заказов':
-        stats.ordersCount = Number(value.replace(/\s/g, '')) || null;
+        stats.ordersCount = parseRussianNumber(value);
         break;
       case 'Работает с Ozon':
         stats.openedDurationRaw = value;
@@ -130,7 +147,7 @@ const EXTRACT_STATS_FN = async (sellerId) => {
         stats.rating = Number(value.replace(',', '.').replace(/\s*из\s*\d+/i, '').trim()) || null;
         break;
       case 'Количество отзывов':
-        stats.reviewsCount = Number(value.replace(/\s/g, '')) || null;
+        stats.reviewsCount = parseRussianNumber(value);
         break;
     }
   }
