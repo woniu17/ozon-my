@@ -117,8 +117,13 @@ const EXTRACT_STATS_FN = async (sellerId) => {
         break;
       case 'Работает с Ozon':
         stats.openedDurationRaw = value;
-        { const m = value.match(/(\d+)\s+(месяц|месяца|месяцев)/i);
-          stats.openedMonths = m ? Number(m[1]) : null; }
+        { // 月:"9 месяцев" → 9; 年:"1 год"/"2 года"/"5 лет" → 转 月(×12)
+          const mMonth = value.match(/(\d+)\s+(месяц|месяца|месяцев)/i);
+          if (mMonth) { stats.openedMonths = Number(mMonth[1]); break; }
+          const mYear = value.match(/(\d+)\s+(год|года|лет)/i);
+          if (mYear) { stats.openedMonths = Number(mYear[1]) * 12; break; }
+          stats.openedMonths = null;
+        }
         break;
       case 'Средняя оценка товаров':
         stats.ratingRaw = value;
