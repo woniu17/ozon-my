@@ -34,6 +34,8 @@ const HEADLESS = process.env.HEADLESS === '1';
 // ── SQLite ───────────────────────────────────────────────────
 const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL');
+// 等待锁最多 5s,避免与后端服务并发写时立即报 database is locked
+db.exec('PRAGMA busy_timeout = 5000');
 
 function loadPendingSellerIds() {
   // 所有缺 stats 的中国店铺(isMainlandChina=1)
@@ -50,17 +52,33 @@ function loadPendingSellerIds() {
 }
 
 function updateStats(sellerId, stats) {
-  db.prepare(
+  const stmt = db.prepare(
     `UPDATE ozon_store_classification
      SET orders_count = ?, reviews_count = ?, rating = ?, opened_months = ?
      WHERE sellerId = ?`
-  ).run(
+  );
+  const args = [
     stats.ordersCount ?? null,
     stats.reviewsCount ?? null,
     stats.rating ?? null,
     stats.openedMonths ?? null,
-    String(sellerId)
-  );
+    String(sellerId),
+  ];
+  // busy_timeout 仍可能不够,加 1 次重试
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      stmt.run(...args);
+      return;
+    } catch (e) {
+      if (e.code === 'ERR_SQLITE_ERROR' && attempt === 0) {
+        // 等待 200ms 后重试一次
+        const start = Date.now();
+        while (Date.now() - start < 200) {}
+        continue;
+      }
+      throw e;
+    }
+  }
 }
 
 // ── 断点续传 ─────────────────────────────────────────────────
