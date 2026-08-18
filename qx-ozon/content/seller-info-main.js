@@ -117,13 +117,46 @@
   // 值为 JSON 字符串需二次 parse。每个 cell 的 centerBlock.title.text 是字段名
   // (俄文),rightBlock.badge.text 是值。字段对应:
   //   "Заказов"                  → 订单数量(如 "455")
-  //   "Работает с Ozon"          → 店铺开业时长(如 "9 месяцев")
+  //   "Работает с Ozon"          → 店铺开业时长(如 "9 месяцев" / "1 год")
   //   "Средняя оценка товаров"   → 产品质量分(如 "4,5 из 5")
   //   "Количество отзывов"       → 评论数量(如 "126")
   function _parseRussianMonths(text) {
     if (!text) return null;
-    const m = text.match(/(\d+)\s+(месяц|месяца|месяцев)/i);
-    return m ? Number(m[1]) : null;
+    // 月:"9 месяцев" → 9
+    const mMonth = text.match(/(\d+)\s+(месяц|месяца|месяцев)/i);
+    if (mMonth) return Number(mMonth[1]);
+    // 年:"1 год" / "2 года" / "5 лет" → 转换为月(1 年 = 12 个月)
+    const mYear = text.match(/(\d+)\s+(год|года|лет)/i);
+    if (mYear) return Number(mYear[1]) * 12;
+    return null;
+  }
+
+  // 解析俄语格式数字,兼容 K(тысяча/千)和 M(миллион/百万)后缀。
+  // 例:
+  //   "455"         → 455
+  //   "12,2 K"      → 12200   (K=kilo,逗号为俄语小数点)
+  //   "1,5 M"       → 1500000
+  function _parseRussianNumber(value) {
+    if (!value) return null;
+    // 去除普通空格和 NBSP(\u00A0),Ozon 常用 NBSP 作千分位分隔
+    let s = String(value).replace(/[\s\u00A0]/g, '');
+    let multiplier = 1;
+    const kMatch = s.match(/^([\d.,]+)K$/i);
+    if (kMatch) {
+      multiplier = 1000;
+      s = kMatch[1];
+    } else {
+      const mMatch = s.match(/^([\d.,]+)M$/i);
+      if (mMatch) {
+        multiplier = 1000000;
+        s = mMatch[1];
+      }
+    }
+    // 俄语小数点为逗号 → 替换为点
+    s = s.replace(',', '.');
+    const n = Number(s);
+    if (!isFinite(n)) return null;
+    return Math.round(n * multiplier);
   }
 
   function _extractSellerStatsFromWidgetStates(widgetStates) {
@@ -163,8 +196,8 @@
       const value = dsCell?.rightBlock?.badge?.text;
       if (!title || !value) continue;
       switch (title) {
-        case 'Заказов': // 订单数量
-          stats.ordersCount = Number(value.replace(/\s/g, '')) || null;
+        case 'Заказов': // 订单数量,如 "455" / "12,2 K"
+          stats.ordersCount = _parseRussianNumber(value);
           break;
         case 'Работает с Ozon': // 店铺开业时长
           stats.openedDurationRaw = value;
@@ -176,8 +209,8 @@
           stats.rating =
             Number(value.replace(',', '.').replace(/\s*из\s*\d+/i, '').trim()) || null;
           break;
-        case 'Количество отзывов': // 评论数量
-          stats.reviewsCount = Number(value.replace(/\s/g, '')) || null;
+        case 'Количество отзывов': // 评论数量,如 "126" / "1,2 K"
+          stats.reviewsCount = _parseRussianNumber(value);
           break;
       }
     }
