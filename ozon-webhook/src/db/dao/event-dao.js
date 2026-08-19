@@ -79,3 +79,17 @@ export function markFailed(id, retryCount, maxRetry, errMsg) {
   `).run(newStatus, newRetry, errMsg, id);
   return newStatus;
 }
+
+/**
+ * 立即标记为 dead(不重试)
+ * 用于不可恢复的错误,如未知的 message_type
+ */
+export function markDead(id, errMsg) {
+  const db = getDb();
+  db.prepare(`
+    UPDATE ozon_push_events
+    SET status='dead', last_error=?
+    WHERE id=?
+  `).run(errMsg, id);
+  return 'dead';
+}

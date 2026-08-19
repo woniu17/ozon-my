@@ -1,7 +1,7 @@
 // Event Poller:异步消费 ozon_push_events
 // 仿 erp-backend-lite batch-upload-poller.js 模式
 import config from '../config/index.js';
-import { claimPendingEvents, markSuccess, markFailed } from '../db/dao/event-dao.js';
+import { claimPendingEvents, markSuccess, markFailed, markDead } from '../db/dao/event-dao.js';
 import handlers from '../handlers/index.js';
 import logger from '../middleware/log.js';
 
@@ -17,7 +17,10 @@ async function tick() {
       try {
         const handler = handlers[ev.message_type];
         if (!handler) {
-          throw new Error(`unsupported message_type: ${ev.message_type}`);
+          // 未知类型:不可恢复,立即 dead,不重试
+          markDead(ev.id, `unsupported message_type: ${ev.message_type}`);
+          logger.warn({ id: ev.id, type: ev.message_type, newStatus: 'dead' }, '未知类型,直接 dead');
+          continue;
         }
         const payload = JSON.parse(ev.raw_payload);
         await handler(payload, { eventId: ev.id });
