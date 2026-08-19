@@ -1,0 +1,25 @@
+{
+  "name": "ozon-webhook",
+  "version": "1.0.0",
+  "description": "Ozon 推送通知接收服务(Koa 2.x + 异步 Poller)",
+  "type": "module",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node --experimental-sqlite src/app.js",
+    "dev": "node --experimental-sqlite --watch src/app.js",
+    "pm2": "pm2 start src/app.js --name ozon-webhook --node-args=\"--experimental-sqlite\"",
+    "init-db": "node --experimental-sqlite src/db/index.js"
+  },
+  "dependencies": {
+    "@koa/router": "^15.7.0",
+    "dotenv": "^16.4.5",
+    "koa": "^2.15.3",
+    "koa-bodyparser": "^4.4.1",
+    "pino": "^9.1.0",
+    "pino-pretty": "^11.2.2",
+    "undici": "^6.19.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
