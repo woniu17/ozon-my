@@ -5,7 +5,7 @@
   'use strict';
 
   const STORAGE_KEY = 'qc_prefixes';
-  const DEFAULT_PREFIXES = ['02131', '02478'];
+  const DEFAULT_PREFIXES = ['02131', '024785'];
 
   const $textarea = document.getElementById('prefixes');
   const $save = document.getElementById('save');

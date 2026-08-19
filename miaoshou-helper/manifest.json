@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "我的妙手助手",
   "version": "1.0.0",
-  "description": "在 ERP 91miaoshou 订单页面中识别并突出展示质检单（订单号以 02131 或 02478 开头）",
+  "description": "在 ERP 91miaoshou 订单页面中识别并突出展示质检单（订单号以 02131 或 024785 开头）",
   "permissions": [
     "storage"
   ],

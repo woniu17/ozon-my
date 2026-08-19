@@ -25,6 +25,9 @@ if (storesResult.count === 0) {
 
 const app = new Koa();
 
+// 前置 nginx 反代:信任 X-Forwarded-For,使 ctx.ip 取真实客户端 IP
+app.proxy = true;
+
 // 中间件链(顺序敏感)
 // bodyparser → requestLog → errorHandler(放前面捕获后续错误)
 // ipWhitelist → webhook 路由

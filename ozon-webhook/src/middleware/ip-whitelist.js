@@ -23,13 +23,7 @@ function ipv4ToInt(ip) {
   return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
 }
 
-// 取真实客户端 IP:优先信任 X-Forwarded-For 第一个(反代场景)
-function getClientIp(ctx) {
-  const xff = ctx.request.headers['x-forwarded-for'];
-  if (xff) return xff.split(',')[0].trim();
-  return ctx.ip;
-}
-
+// 真实客户端 IP:app.proxy=true 时 ctx.ip 已解析 X-Forwarded-For 首个 IP
 export const ipWhitelist = () => async (ctx, next) => {
   // /health 不受白名单限制(用于反代/监控探活)
   if (ctx.path === '/health') return next();
@@ -38,7 +32,7 @@ export const ipWhitelist = () => async (ctx, next) => {
     return next();
   }
 
-  const ip = getClientIp(ctx);
+  const ip = ctx.ip;
   const allowed = config.ozonPushCidrs.some(cidr => ipInCidr(ip, cidr));
   if (!allowed) {
     logger.warn({ ip, path: ctx.path }, 'IP 白名单拒绝');

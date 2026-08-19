@@ -3,13 +3,13 @@
  * 在 erp.91miaoshou.com/order/package/index 页面识别质检单订单号并突出展示。
  *
  * 规则：订单号（span.platform-order-sn 文本）以任一配置前缀开头即为质检单。
- * 默认前缀：02131、02478
+ * 默认前缀：02131、024785
  */
 (function () {
   'use strict';
 
   const STORAGE_KEY = 'qc_prefixes';
-  const DEFAULT_PREFIXES = ['02131', '02478'];
+  const DEFAULT_PREFIXES = ['02131', '024785'];
   const MARK_ATTR = 'data-jz-qc-marked';
   const HIGHLIGHT_CLASS = 'jz-qc-row';
   const BADGE_CLASS = 'jz-qc-badge';
