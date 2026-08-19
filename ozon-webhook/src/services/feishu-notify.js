@@ -3,6 +3,18 @@
 // 仅用于 ORDER 级通知(TYPE_ORDER_NEW/CANCELLED/STATE_CHANGED)
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
+import { getStoreBySellerId } from './store-loader.js';
+
+/**
+ * 将 seller_id 反查为可读格式:昵称(ID),如 YQL01(3891653)
+ * 未匹配时退化为纯 ID
+ */
+function formatSeller(sellerId) {
+  if (sellerId == null) return '-';
+  const store = getStoreBySellerId(sellerId);
+  if (!store) return String(sellerId);
+  return `${store.name}(${store.company_id})`;
+}
 
 /**
  * 发送飞书文本消息(自动追加来源标识)
@@ -12,7 +24,7 @@ import logger from '../middleware/log.js';
 export async function sendFeishuText(text) {
   const url = config.feishu.webhookUrl;
   if (!url) {
-    logger.debug('feishu-notify: 未配置 FEISHU_WEBHOOK_URL,跳过');
+    logger.warn('feishu-notify: 未配置 FEISHU_WEBHOOK_URL,跳过推送');
     return false;
   }
   try {
@@ -72,7 +84,7 @@ export async function notifyOrderEvent(messageType, payload) {
     title,
     `订单号: ${orderNumber}`,
     `订单ID: ${orderId}`,
-    `卖家ID: ${sellerId}`,
+    `卖家: ${formatSeller(sellerId)}`,
     `${timeField[0]}: ${timeField[1]}`,
     extra,
   ].filter(Boolean).join('\n');
