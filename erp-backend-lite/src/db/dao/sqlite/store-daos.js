@@ -173,10 +173,13 @@ export const storeClassificationDao = {
     return { deletedCount: r1.changes + r2.changes };
   },
 
-  /** 分页列表:LIKE 三字段模糊(sellerId / sellerName / sellerSlug)
+  /** 分页列表:LIKE 三字段模糊(sellerId / sellerName / sellerSlug) + 数值范围过滤
    *  sortBy: 'skuCount' → 按采集 SKU 数降序(LEFT JOIN 子查询)
    *         'ordersCount' / 'reviewsCount' / 'rating' / 'openedMonths' → 按对应顶层列降序(NULL 末尾)
    *         默认按 lastSeenAt DESC
+   *  filter 数值范围字段(均可选,任一可单独传):skuCountMin/Max, ordersCountMin/Max,
+   *         reviewsCountMin/Max, ratingMin/Max, openedMonthsMin/Max
+   *  skuCount 范围过滤会强制走 LEFT JOIN 路径(因 skuCount 来自聚合子查询)
    */
   async findPagedList(filter, page, pageSize, sortBy) {
     // whereParts 不带表前缀(用于 total 查询与无 JOIN 查询)
@@ -197,6 +200,51 @@ export const storeClassificationDao = {
       joinWhereParts.push(joinCond);
       params.push(kw, kw, kw);
     }
+
+    // 数值范围过滤(顶层列):orders_count / reviews_count / rating / opened_months
+    // min/max 各自独立添加,仅在传入有限数字时生效
+    const applyNumRange = (col, min, max) => {
+      if (min !== undefined && min !== null && min !== '') {
+        const v = Number(min);
+        if (Number.isFinite(v)) {
+          whereParts.push(`${col} >= ?`);
+          joinWhereParts.push(`sc.${col} >= ?`);
+          params.push(v);
+        }
+      }
+      if (max !== undefined && max !== null && max !== '') {
+        const v = Number(max);
+        if (Number.isFinite(v)) {
+          whereParts.push(`${col} <= ?`);
+          joinWhereParts.push(`sc.${col} <= ?`);
+          params.push(v);
+        }
+      }
+    };
+    applyNumRange('orders_count', filter.ordersCountMin, filter.ordersCountMax);
+    applyNumRange('reviews_count', filter.reviewsCountMin, filter.reviewsCountMax);
+    applyNumRange('rating', filter.ratingMin, filter.ratingMax);
+    applyNumRange('opened_months', filter.openedMonthsMin, filter.openedMonthsMax);
+
+    // skuCount 范围过滤(强制走 JOIN 路径,因 skuCount 来自 LEFT JOIN 子查询的 COALESCE)
+    const hasSkuCountFilter =
+      (filter.skuCountMin !== undefined && filter.skuCountMin !== null && filter.skuCountMin !== '') ||
+      (filter.skuCountMax !== undefined && filter.skuCountMax !== null && filter.skuCountMax !== '');
+    if (filter.skuCountMin !== undefined && filter.skuCountMin !== null && filter.skuCountMin !== '') {
+      const v = Number(filter.skuCountMin);
+      if (Number.isFinite(v)) {
+        joinWhereParts.push('COALESCE(ss.cnt, 0) >= ?');
+        params.push(v);
+      }
+    }
+    if (filter.skuCountMax !== undefined && filter.skuCountMax !== null && filter.skuCountMax !== '') {
+      const v = Number(filter.skuCountMax);
+      if (Number.isFinite(v)) {
+        joinWhereParts.push('COALESCE(ss.cnt, 0) <= ?');
+        params.push(v);
+      }
+    }
+
     const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
     const joinWhere = joinWhereParts.length ? `WHERE ${joinWhereParts.join(' AND ')}` : '';
     const skip = (page - 1) * pageSize;
@@ -204,8 +252,9 @@ export const storeClassificationDao = {
     // 所以给 params 做一份拷贝给 total 用(total 不带 LIMIT/OFFSET)
     const totalParams = [...params];
 
-    // sortBy=skuCount:LEFT JOIN 子查询聚合 ozon_store_sku,按采集数降序(NULL 末尾)
-    if (sortBy === 'skuCount') {
+    // JOIN 路径触发条件:sortBy=skuCount 或带 skuCount 范围过滤(否则 skuCount 列不可用)
+    if (sortBy === 'skuCount' || hasSkuCountFilter) {
+      // JOIN 路径下,total 也必须走 JOIN(否则会与 items 数量不一致)
       const items = db
         .prepare(
           `SELECT sc.sellerId, sc.sellerSlug, sc.sellerName, sc.isMainlandChina, sc.classifiedBy,
@@ -216,11 +265,18 @@ export const storeClassificationDao = {
            LEFT JOIN (SELECT sellerId, COUNT(*) AS cnt FROM ozon_store_sku GROUP BY sellerId) ss
              ON ss.sellerId = sc.sellerId
            ${joinWhere}
-           ORDER BY skuCount DESC, sc.lastSeenAt DESC LIMIT ? OFFSET ?`
+           ORDER BY ${sortBy === 'skuCount' ? 'skuCount DESC, sc.lastSeenAt DESC' : 'sc.lastSeenAt DESC'}
+           LIMIT ? OFFSET ?`
         )
         .all(...params, pageSize, skip);
       const total = db
-        .prepare(`SELECT COUNT(*) AS n FROM ozon_store_classification ${where}`)
+        .prepare(
+          `SELECT COUNT(*) AS n
+           FROM ozon_store_classification sc
+           LEFT JOIN (SELECT sellerId, COUNT(*) AS cnt FROM ozon_store_sku GROUP BY sellerId) ss
+             ON ss.sellerId = sc.sellerId
+           ${joinWhere}`
+        )
         .get(...totalParams).n;
       const reshaped = items.map((r) => ({
         sellerId: r.sellerId,

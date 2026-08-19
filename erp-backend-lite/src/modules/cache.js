@@ -1712,6 +1712,8 @@ router.delete('/admin/api/store-classification/:sellerId', async (req, res, next
 // GET /admin/api/store-classification — 列表查询(分页 + 过滤 + 排序)
 // query: isMainlandChina(true/false/null 不传则不过滤)/keyword(匹配 sellerName/sellerSlug/sellerId)
 //       currentPage/pageSize/sortBy('skuCount' → 按采集 SKU 数降序,默认按 lastSeenAt DESC)
+//       范围过滤(min/max,任一可单独传):skuCountMin/Max, ordersCountMin/Max,
+//       reviewsCountMin/Max, ratingMin/Max, openedMonthsMin/Max
 // 返回 items 每条附加 skuCount(该店铺采集到的 SKU 数,来自 ozon_store_sku 按 sellerId 聚合)
 router.get('/admin/api/store-classification', async (req, res, next) => {
   try {
@@ -1726,10 +1728,34 @@ router.get('/admin/api/store-classification', async (req, res, next) => {
     else if (req.query.isMainlandChina === 'false') filter.isMainlandChina = false;
     if (keyword) filter.keyword = keyword;
 
+    // 数值范围过滤:仅接受有限数字,空串/NaN 跳过
+    // 注意:skuCount 来自 JOIN 聚合,DAO 内部走 JOIN 路径处理
+    const pickNum = (v) => {
+      if (v === undefined || v === null || v === '') return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    for (const [srcKey, dstKey] of [
+      ['skuCountMin', 'skuCountMin'],
+      ['skuCountMax', 'skuCountMax'],
+      ['ordersCountMin', 'ordersCountMin'],
+      ['ordersCountMax', 'ordersCountMax'],
+      ['reviewsCountMin', 'reviewsCountMin'],
+      ['reviewsCountMax', 'reviewsCountMax'],
+      ['ratingMin', 'ratingMin'],
+      ['ratingMax', 'ratingMax'],
+      ['openedMonthsMin', 'openedMonthsMin'],
+      ['openedMonthsMax', 'openedMonthsMax'],
+    ]) {
+      const v = pickNum(req.query[srcKey]);
+      if (v !== undefined) filter[dstKey] = v;
+    }
+
     const { items, total } = await daos.storeClassificationDao.findPagedList(filter, currentPage, pageSize, sortBy);
 
-    // sortBy=skuCount 时 DAO 已通过 LEFT JOIN 注入 skuCount,无需再批量查询
-    if (sortBy !== 'skuCount' && Array.isArray(items) && items.length > 0) {
+    // sortBy=skuCount 或带 skuCount 范围过滤时,DAO 已通过 LEFT JOIN 注入 skuCount,无需再批量查询
+    const hasSkuCountFilter = filter.skuCountMin !== undefined || filter.skuCountMax !== undefined;
+    if (sortBy !== 'skuCount' && !hasSkuCountFilter && Array.isArray(items) && items.length > 0) {
       const sellerIds = items.map((it) => it.sellerId || it._id).filter(Boolean);
       const countMap = await daos.storeSkuDao.countBySellerIds(sellerIds);
       for (const it of items) {

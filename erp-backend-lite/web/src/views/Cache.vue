@@ -479,11 +479,93 @@ function storeUrl(sc) {
 }
 
 // ── 店铺分类 ───────────────────────────────────────────────
+// 持久化:sortBy 单独存(字符串);其余过滤条件整体以 JSON 存。两者独立,避免互相覆盖
+const STORE_CLASS_SORT_KEY = 'erp:store-classification:sortBy';
+const STORE_CLASS_FILTERS_KEY = 'erp:store-classification:filters';
+function loadPersistedSortBy() {
+  try {
+    const v = localStorage.getItem(STORE_CLASS_SORT_KEY);
+    // 仅接受合法值,空串也合法(表示默认 lastSeenAt 排序)
+    if (v === null) return 'skuCount';
+    if (v === '' || v === 'skuCount' || v === 'ordersCount' || v === 'reviewsCount' || v === 'rating' || v === 'openedMonths') {
+      return v;
+    }
+  } catch (_) { /* localStorage 不可用时回退默认值 */ }
+  return 'skuCount';
+}
+function persistSortBy(v) {
+  try { localStorage.setItem(STORE_CLASS_SORT_KEY, v); } catch (_) { /* 忽略写入失败 */ }
+}
+
+// 读取持久化过滤条件,与默认值合并(缺失字段用默认值,避免旧数据缺字段导致 undefined)
+function loadPersistedFilters() {
+  const defaults = {
+    isMainlandChina: null,
+    keyword: '',
+    skuCountMin: '',
+    skuCountMax: '',
+    ordersCountMin: '',
+    ordersCountMax: '',
+    reviewsCountMin: '',
+    reviewsCountMax: '',
+    ratingMin: '',
+    ratingMax: '',
+    openedMonthsMin: '',
+    openedMonthsMax: '',
+  };
+  try {
+    const raw = localStorage.getItem(STORE_CLASS_FILTERS_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    // isMainlandChina 必须是 null/true/false,其他值回退 null
+    if (parsed.isMainlandChina !== null && parsed.isMainlandChina !== true && parsed.isMainlandChina !== false) {
+      parsed.isMainlandChina = null;
+    }
+    return { ...defaults, ...parsed };
+  } catch (_) {
+    return defaults;
+  }
+}
+// 持久化当前过滤条件(不含 sortBy,sortBy 单独存)
+function persistFilters() {
+  try {
+    localStorage.setItem(
+      STORE_CLASS_FILTERS_KEY,
+      JSON.stringify({
+        isMainlandChina: storeClassFilters.isMainlandChina,
+        keyword: storeClassFilters.keyword,
+        skuCountMin: storeClassFilters.skuCountMin,
+        skuCountMax: storeClassFilters.skuCountMax,
+        ordersCountMin: storeClassFilters.ordersCountMin,
+        ordersCountMax: storeClassFilters.ordersCountMax,
+        reviewsCountMin: storeClassFilters.reviewsCountMin,
+        reviewsCountMax: storeClassFilters.reviewsCountMax,
+        ratingMin: storeClassFilters.ratingMin,
+        ratingMax: storeClassFilters.ratingMax,
+        openedMonthsMin: storeClassFilters.openedMonthsMin,
+        openedMonthsMax: storeClassFilters.openedMonthsMax,
+      })
+    );
+  } catch (_) { /* 忽略写入失败 */ }
+}
+
+const _initFilters = loadPersistedFilters();
 const storeClassifications = ref([]);
 const storeClassFilters = reactive({
-  isMainlandChina: null,
-  keyword: '',
-  sortBy: 'skuCount', // 默认按采集 SKU 数降序;'' → 按 lastSeenAt 降序
+  isMainlandChina: _initFilters.isMainlandChina,
+  keyword: _initFilters.keyword,
+  sortBy: loadPersistedSortBy(), // 默认按采集 SKU 数降序;'' → 按 lastSeenAt 降序
+  // 5 个数值范围筛选(min/max 各自可单独填)
+  skuCountMin: _initFilters.skuCountMin,
+  skuCountMax: _initFilters.skuCountMax,
+  ordersCountMin: _initFilters.ordersCountMin,
+  ordersCountMax: _initFilters.ordersCountMax,
+  reviewsCountMin: _initFilters.reviewsCountMin,
+  reviewsCountMax: _initFilters.reviewsCountMax,
+  ratingMin: _initFilters.ratingMin,
+  ratingMax: _initFilters.ratingMax,
+  openedMonthsMin: _initFilters.openedMonthsMin,
+  openedMonthsMax: _initFilters.openedMonthsMax,
 });
 const storeClassPager = reactive({
   current: 1,
@@ -495,6 +577,8 @@ const storeClassPager = reactive({
 let loadStoreClassReqId = 0;
 async function loadStoreClassifications() {
   const myId = ++loadStoreClassReqId;
+  // 持久化过滤条件:翻页/查询时也保留,与 UI 当前状态一致
+  persistFilters();
   try {
     const data = await getStoreClassificationList({
       isMainlandChina: storeClassFilters.isMainlandChina,
@@ -502,6 +586,16 @@ async function loadStoreClassifications() {
       currentPage: storeClassPager.current,
       pageSize: storeClassPager.pageSize,
       sortBy: storeClassFilters.sortBy,
+      skuCountMin: storeClassFilters.skuCountMin,
+      skuCountMax: storeClassFilters.skuCountMax,
+      ordersCountMin: storeClassFilters.ordersCountMin,
+      ordersCountMax: storeClassFilters.ordersCountMax,
+      reviewsCountMin: storeClassFilters.reviewsCountMin,
+      reviewsCountMax: storeClassFilters.reviewsCountMax,
+      ratingMin: storeClassFilters.ratingMin,
+      ratingMax: storeClassFilters.ratingMax,
+      openedMonthsMin: storeClassFilters.openedMonthsMin,
+      openedMonthsMax: storeClassFilters.openedMonthsMax,
     });
     if (myId !== loadStoreClassReqId) return; // 已被新请求取代
     storeClassifications.value = data?.items || [];
@@ -518,6 +612,25 @@ async function loadStoreClassifications() {
 // sortKey 可选值:'skuCount' / 'ordersCount' / 'reviewsCount' / 'rating' / 'openedMonths'
 function toggleStoreClassSort(sortKey = 'skuCount') {
   storeClassFilters.sortBy = storeClassFilters.sortBy === sortKey ? '' : sortKey;
+  persistSortBy(storeClassFilters.sortBy);
+  storeClassPager.current = 1;
+  loadStoreClassifications();
+}
+
+// 重置筛选(保留 sortBy,因为排序是用户偏好,不应当作筛选清空;清空后也持久化,避免下次恢复旧筛选)
+function resetStoreClassFilters() {
+  storeClassFilters.isMainlandChina = null;
+  storeClassFilters.keyword = '';
+  storeClassFilters.skuCountMin = '';
+  storeClassFilters.skuCountMax = '';
+  storeClassFilters.ordersCountMin = '';
+  storeClassFilters.ordersCountMax = '';
+  storeClassFilters.reviewsCountMin = '';
+  storeClassFilters.reviewsCountMax = '';
+  storeClassFilters.ratingMin = '';
+  storeClassFilters.ratingMax = '';
+  storeClassFilters.openedMonthsMin = '';
+  storeClassFilters.openedMonthsMax = '';
   storeClassPager.current = 1;
   loadStoreClassifications();
 }
@@ -813,6 +926,41 @@ onMounted(() => {
           @keydown.enter="searchStoreClassifications"
         />
         <button class="btn btn-primary" @click="searchStoreClassifications">查询</button>
+      </div>
+
+      <!-- 高级筛选:min/max 数值范围,5 个字段(采集SKU/订单数/评论数/评分/开业时长) -->
+      <div class="filter-advanced">
+        <div class="filter-group">
+          <label>采集 SKU</label>
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.skuCountMin" placeholder="min" @keydown.enter="searchStoreClassifications" />
+          <span class="dash">—</span>
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.skuCountMax" placeholder="max" @keydown.enter="searchStoreClassifications" />
+        </div>
+        <div class="filter-group">
+          <label>订单数</label>
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.ordersCountMin" placeholder="min" @keydown.enter="searchStoreClassifications" />
+          <span class="dash">—</span>
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.ordersCountMax" placeholder="max" @keydown.enter="searchStoreClassifications" />
+        </div>
+        <div class="filter-group">
+          <label>评论数</label>
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.reviewsCountMin" placeholder="min" @keydown.enter="searchStoreClassifications" />
+          <span class="dash">—</span>
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.reviewsCountMax" placeholder="max" @keydown.enter="searchStoreClassifications" />
+        </div>
+        <div class="filter-group">
+          <label>评分</label>
+          <input type="number" class="num-input" step="0.1" min="0" max="5" v-model.trim="storeClassFilters.ratingMin" placeholder="min" @keydown.enter="searchStoreClassifications" />
+          <span class="dash">—</span>
+          <input type="number" class="num-input" step="0.1" min="0" max="5" v-model.trim="storeClassFilters.ratingMax" placeholder="max" @keydown.enter="searchStoreClassifications" />
+        </div>
+        <div class="filter-group">
+          <label>开业时长(月)</label>
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.openedMonthsMin" placeholder="min" @keydown.enter="searchStoreClassifications" />
+          <span class="dash">—</span>
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.openedMonthsMax" placeholder="max" @keydown.enter="searchStoreClassifications" />
+        </div>
+        <button class="btn btn-sm btn-ghost" @click="resetStoreClassFilters">重置筛选</button>
       </div>
 
       <div class="table-wrap">
@@ -1271,5 +1419,43 @@ onMounted(() => {
   font-weight: 500;
   background: #f3f4f6;
   color: #6b7280;
+}
+
+/* ── 店铺数据:高级筛选 ─────────────────────────────────── */
+.filter-advanced {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 10px 0 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--border);
+}
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+.filter-group label {
+  color: var(--muted);
+  white-space: nowrap;
+  margin-right: 2px;
+}
+.filter-group .num-input {
+  width: 76px;
+  padding: 4px 6px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+}
+.filter-group .num-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.filter-group .dash {
+  color: var(--muted);
+  font-size: 12px;
 }
 </style>

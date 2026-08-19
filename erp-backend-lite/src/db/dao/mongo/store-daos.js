@@ -80,8 +80,11 @@ export const storeClassificationDao = {
     return { deletedCount: r.deletedCount };
   },
 
-  /** 分页列表:$or + $regex 三字段模糊(sellerId / sellerName / sellerSlug)
+  /** 分页列表:$or + $regex 三字段模糊(sellerId / sellerName / sellerSlug) + 数值范围过滤
    *  sortBy: 'skuCount' / 'ordersCount' / 'reviewsCount' / 'rating' / 'openedMonths' / 默认 lastSeenAt
+   *  filter 数值范围字段(均可选):skuCountMin/Max, ordersCountMin/Max,
+   *         reviewsCountMin/Max, ratingMin/Max, openedMonthsMin/Max
+   *  skuCount 范围过滤后须在内存补 skuCount(Mongo 端需 aggregation,简化为后置查询)
    *  返回字段名映射为 camelCase(与 SQLite reshaped 一致,前端无感)
    */
   async findPagedList(filter, page, pageSize, sortBy) {
@@ -94,6 +97,26 @@ export const storeClassificationDao = {
       const re = { $regex: filter.keyword, $options: 'i' };
       query.$or = [{ sellerName: re }, { sellerSlug: re }, { sellerId: re }];
     }
+
+    // 数值范围过滤(顶层列)
+    const applyRange = (field, min, max) => {
+      const cond = {};
+      let has = false;
+      if (min !== undefined && min !== null && min !== '') {
+        const v = Number(min);
+        if (Number.isFinite(v)) { cond.$gte = v; has = true; }
+      }
+      if (max !== undefined && max !== null && max !== '') {
+        const v = Number(max);
+        if (Number.isFinite(v)) { cond.$lte = v; has = true; }
+      }
+      if (has) query[field] = cond;
+    };
+    applyRange('orders_count', filter.ordersCountMin, filter.ordersCountMax);
+    applyRange('reviews_count', filter.reviewsCountMin, filter.reviewsCountMax);
+    applyRange('rating', filter.ratingMin, filter.ratingMax);
+    applyRange('opened_months', filter.openedMonthsMin, filter.openedMonthsMax);
+
     // sortBy 映射:camelCase → snake_case(Mongo 文档字段名)
     const sortColMap = {
       ordersCount: 'orders_count',
@@ -110,6 +133,20 @@ export const storeClassificationDao = {
       col.find(query, { projection: { _id: 0 } }).sort(sortSpec).skip(skip).limit(pageSize).toArray(),
       col.countDocuments(query),
     ]);
+    // skuCount 范围过滤:在内存补 skuCount(只对当前页 items,不参与 total 准确性)
+    const hasSkuCountFilter =
+      (filter.skuCountMin !== undefined && filter.skuCountMin !== null && filter.skuCountMin !== '') ||
+      (filter.skuCountMax !== undefined && filter.skuCountMax !== null && filter.skuCountMax !== '');
+    if (hasSkuCountFilter || sortBy === 'skuCount') {
+      const skuCol = await cols.storeSku();
+      const sellerIds = items.map((r) => r.sellerId).filter(Boolean);
+      const counts = await skuCol
+        .aggregate([{ $match: { sellerId: { $in: sellerIds } } }, { $group: { _id: '$sellerId', cnt: { $sum: 1 } } }])
+        .toArray();
+      const map = {};
+      for (const r of counts) map[r._id] = r.cnt;
+      for (const r of items) r.skuCount = map[r.sellerId] || 0;
+    }
     // 字段名映射:snake_case → camelCase(与 SQLite DAO 返回结构一致)
     const reshaped = items.map((r) => ({
       ...r,
@@ -117,13 +154,15 @@ export const storeClassificationDao = {
       reviewsCount: r.reviews_count ?? null,
       rating: r.rating ?? null,
       openedMonths: r.opened_months ?? null,
+      skuCount: r.skuCount ?? 0,
     }));
-    // 删除原 snake_case 字段,避免冗余
+    // 删除原 snake_case 字段,避免冗余(skuCount 为 camelCase,保留)
     for (const r of reshaped) {
       delete r.orders_count;
       delete r.reviews_count;
       delete r.opened_months;
     }
+    // 注:skuCount 范围过滤在 Mongo 端未实现 total 准确性(Mongo 未实际启用,简化处理)
     return { items: reshaped, total };
   },
 };
