@@ -34,8 +34,16 @@ export async function initSchema() {
 
 // 检查并补齐缺失的列(仅支持 ADD COLUMN,不改类型)
 function runMigrations(db) {
+  // column=列名,type=列类型,index=补列后要创建的索引(可空)
+  // 新库 CREATE TABLE 已含这些列,旧库通过 ALTER 补列,索引用 IF NOT EXISTS 幂等创建
   const migrations = [
     { table: 'ozon_push_events', column: 'chat_id', type: 'TEXT', index: 'idx_events_chat' },
+    { table: 'ozon_push_events', column: 'order_number', type: 'TEXT', index: 'idx_events_order' },
+    { table: 'ozon_postings', column: 'order_number', type: 'TEXT', index: 'idx_postings_order' },
+    { table: 'ozon_postings', column: 'uuid', type: 'TEXT', index: null },
+    { table: 'ozon_postings', column: 'posting_type', type: "TEXT NOT NULL DEFAULT 'fbs'", index: 'idx_postings_type' },
+    { table: 'ozon_postings', column: 'creation_date', type: 'TEXT', index: null },
+    { table: 'ozon_postings', column: 'cancel_date', type: 'TEXT', index: null },
   ];
   for (const m of migrations) {
     const cols = db.prepare(`PRAGMA table_info(${m.table})`).all();

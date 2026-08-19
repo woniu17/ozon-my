@@ -27,6 +27,11 @@ const config = {
   // IP 白名单
   ipWhitelistEnabled: String(process.env.IP_WHITELIST_ENABLED ?? 'true') === 'true',
 
+  // 飞书机器人(订单相关通知推送),留空则跳过
+  feishu: {
+    webhookUrl: process.env.FEISHU_WEBHOOK_URL || '',
+  },
+
   // Poller
   poller: {
     intervalMs: Number(process.env.POLLER_INTERVAL_MS) || 2000,

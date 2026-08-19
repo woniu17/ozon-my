@@ -49,6 +49,7 @@ router.post('/webhook/ozon', async (ctx) => {
     product_id: fields.product_id,
     sku: fields.sku,
     chat_id: fields.chat_id,
+    order_number: fields.order_number,
     raw_payload: JSON.stringify(payload),
   });
 

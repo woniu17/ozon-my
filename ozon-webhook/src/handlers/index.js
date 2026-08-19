@@ -25,8 +25,22 @@ import chatClosedHandler from './chat-closed.js';
 // 类目树
 import descriptionCategoryTreeChangedHandler from './description-category-tree-changed.js';
 
+// ORDER 级(3 种,落库 ozon_orders + 推飞书)
+import orderNewHandler from './order-new.js';
+import orderCancelledHandler from './order-cancelled.js';
+import orderStateChangedHandler from './order-state-changed.js';
+
+// FBO 货件(4 种,落库 ozon_postings,posting_type='fbo')
+import fboPostingNewHandler from './fbo-posting-new.js';
+import fboPostingCancelledHandler from './fbo-posting-cancelled.js';
+import fboPostingStateChangedHandler from './fbo-posting-state-changed.js';
+import fboPostingDeliveryDateChangedHandler from './fbo-posting-delivery-date-changed.js';
+
+// FBO 库存(落库 ozon_stocks_snapshot)
+import fboStocksChangedHandler from './fbo-stocks-changed.js';
+
 const handlers = {
-  // 订单类
+  // 订单类(FBS/rFBS 货件)
   TYPE_NEW_POSTING: newPostingHandler,
   TYPE_POSTING_CANCELLED: postingCancelledHandler,
   TYPE_STATE_CHANGED: stateChangedHandler,
@@ -36,7 +50,7 @@ const handlers = {
   TYPE_CREATE_OR_UPDATE_ITEM: createOrUpdateItemHandler,
   TYPE_CREATE_ITEM: createItemHandler,           // 已废弃,仅记录
   TYPE_UPDATE_ITEM: updateItemHandler,           // 已废弃,仅记录
-  // 库存类
+  // 库存类(FBS/rFBS)
   TYPE_STOCKS_CHANGED: stocksChangedHandler,
   // 聊天类
   TYPE_NEW_MESSAGE: newMessageHandler,
@@ -45,6 +59,17 @@ const handlers = {
   TYPE_CHAT_CLOSED: chatClosedHandler,
   // 类目树
   TYPE_DESCRIPTION_CATEGORY_TREE_CHANGED: descriptionCategoryTreeChangedHandler,
+  // ORDER 级(订单,推飞书)
+  TYPE_ORDER_NEW: orderNewHandler,
+  TYPE_ORDER_CANCELLED: orderCancelledHandler,
+  TYPE_ORDER_STATE_CHANGED: orderStateChangedHandler,
+  // FBO 货件
+  TYPE_FBO_POSTING_NEW: fboPostingNewHandler,
+  TYPE_FBO_POSTING_CANCELLED: fboPostingCancelledHandler,
+  TYPE_FBO_POSTING_STATE_CHANGED: fboPostingStateChangedHandler,
+  TYPE_FBO_POSTING_DELIVERY_DATE_CHANGED: fboPostingDeliveryDateChangedHandler,
+  // FBO 库存
+  TYPE_FBO_STOCKS_CHANGED: fboStocksChangedHandler,
 };
 
 export default handlers;

@@ -5,16 +5,16 @@ import { getDb } from '../index.js';
  * 插入事件;命中 UNIQUE 冲突视为重复,返回 inserted=false
  * @returns {{inserted:boolean, id?:number}}
  */
-export function insertEvent({ message_type, idempotency_key, seller_id, posting_number, product_id, sku, chat_id, raw_payload }) {
+export function insertEvent({ message_type, idempotency_key, seller_id, posting_number, product_id, sku, chat_id, order_number, raw_payload }) {
   const db = getDb();
   const received_at = new Date().toISOString();
   try {
     const stmt = db.prepare(`
       INSERT INTO ozon_push_events
-        (message_type, idempotency_key, seller_id, posting_number, product_id, sku, chat_id, raw_payload, status, received_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        (message_type, idempotency_key, seller_id, posting_number, product_id, sku, chat_id, order_number, raw_payload, status, received_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
     `);
-    stmt.run(message_type, idempotency_key, seller_id, posting_number, product_id, sku, chat_id, raw_payload, received_at);
+    stmt.run(message_type, idempotency_key, seller_id, posting_number, product_id, sku, chat_id, order_number, raw_payload, received_at);
     return { inserted: true, id: db.prepare('SELECT last_insert_rowid() AS id').get().id };
   } catch (err) {
     // UNIQUE 冲突(SQLITE_CONSTRAINT)

@@ -55,6 +55,25 @@ export function genIdempotencyKey(messageType, payload) {
     // ── 类目树 ──
     case 'TYPE_DESCRIPTION_CATEGORY_TREE_CHANGED':
       return `TYPE_DESCRIPTION_CATEGORY_TREE_CHANGED:${payload.changed_at}`;
+    // ── ORDER 级(3 种)──
+    case 'TYPE_ORDER_NEW':
+      return `TYPE_ORDER_NEW:${payload.order_number}`;
+    case 'TYPE_ORDER_CANCELLED':
+      return `TYPE_ORDER_CANCELLED:${payload.order_number}:${payload.uuid}`;
+    case 'TYPE_ORDER_STATE_CHANGED':
+      return `TYPE_ORDER_STATE_CHANGED:${payload.order_number}:${payload.new_state}:${payload.uuid}`;
+    // ── FBO 货件(4 种)──
+    case 'TYPE_FBO_POSTING_NEW':
+      return `TYPE_FBO_POSTING_NEW:${payload.posting_number}:${payload.uuid}`;
+    case 'TYPE_FBO_POSTING_CANCELLED':
+      return `TYPE_FBO_POSTING_CANCELLED:${payload.posting_number}:${payload.uuid}`;
+    case 'TYPE_FBO_POSTING_STATE_CHANGED':
+      return `TYPE_FBO_POSTING_STATE_CHANGED:${payload.posting_number}:${payload.new_state}:${payload.uuid}`;
+    case 'TYPE_FBO_POSTING_DELIVERY_DATE_CHANGED':
+      return `TYPE_FBO_POSTING_DELIVERY_DATE_CHANGED:${payload.posting_number}:${payload.new_delivery_date_begin}:${payload.uuid}`;
+    // ── FBO 库存 ──
+    case 'TYPE_FBO_STOCKS_CHANGED':
+      return `TYPE_FBO_STOCKS_CHANGED:${payload.sku}:${payload.updated_at}`;
     default:
       // 未知类型也落库,handler 分发表会拒绝并标 dead
       return `UNKNOWN:${messageType}:${Date.now()}`;
@@ -71,10 +90,15 @@ export function extractIndexFields(messageType, payload) {
     product_id: payload.product_id ?? null,
     sku: null,
     chat_id: payload.chat_id ?? null,
+    order_number: payload.order_number ?? null,
   };
   if (messageType === 'TYPE_STOCKS_CHANGED') {
     const first = payload.items?.[0];
     if (first) fields.sku = first.sku ?? null;
+  }
+  // FBO 货件含 order_number + posting_number,两者都提取
+  if (messageType.startsWith('TYPE_FBO_POSTING')) {
+    fields.order_number = payload.order_number ?? null;
   }
   return fields;
 }
