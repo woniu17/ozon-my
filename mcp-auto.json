@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "Chrome DevTools MCP": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--autoConnect"
+      ],
+      "env": {}
+    }
+  }
+}

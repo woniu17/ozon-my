@@ -255,6 +255,20 @@ export const storeClassificationDao = {
     // JOIN 路径触发条件:sortBy=skuCount 或带 skuCount 范围过滤(否则 skuCount 列不可用)
     if (sortBy === 'skuCount' || hasSkuCountFilter) {
       // JOIN 路径下,total 也必须走 JOIN(否则会与 items 数量不一致)
+      // 注意:JOIN 路径下的 ORDER BY 必须按 sortBy 实际值构造,
+      // 不能因为 JOIN 触发就回退到 lastSeenAt(否则按订单数等列排序会失效)
+      const joinSortColMap = {
+        ordersCount: 'sc.orders_count',
+        reviewsCount: 'sc.reviews_count',
+        rating: 'sc.rating',
+        openedMonths: 'sc.opened_months',
+      };
+      const joinSortCol = joinSortColMap[sortBy];
+      const joinOrderBy = sortBy === 'skuCount'
+        ? 'skuCount DESC, sc.lastSeenAt DESC'
+        : joinSortCol
+          ? `${joinSortCol} DESC NULLS LAST, sc.lastSeenAt DESC`
+          : 'sc.lastSeenAt DESC';
       const items = db
         .prepare(
           `SELECT sc.sellerId, sc.sellerSlug, sc.sellerName, sc.isMainlandChina, sc.classifiedBy,
@@ -265,7 +279,7 @@ export const storeClassificationDao = {
            LEFT JOIN (SELECT sellerId, COUNT(*) AS cnt FROM ozon_store_sku GROUP BY sellerId) ss
              ON ss.sellerId = sc.sellerId
            ${joinWhere}
-           ORDER BY ${sortBy === 'skuCount' ? 'skuCount DESC, sc.lastSeenAt DESC' : 'sc.lastSeenAt DESC'}
+           ORDER BY ${joinOrderBy}
            LIMIT ? OFFSET ?`
         )
         .all(...params, pageSize, skip);
