@@ -4,7 +4,7 @@
 // 日志:pm2 logs ozon-webhook
 module.exports = {
   apps: [{
-    name: 'message',
+    name: 'msg',
     script: 'src/app.js',
     cwd: '/root/code/ozon-my/ozon-webhook',
     node_args: '--experimental-sqlite',
