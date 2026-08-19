@@ -24,8 +24,31 @@ export async function initSchema() {
   const sql = readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(sql);
 
+  // 轻量 migration:已存在的表可能缺新列(chat_id),检查后 ALTER
+  // CREATE TABLE IF NOT EXISTS 不会修改已存在的表,需手动补列
+  runMigrations(db);
+
   logger.info({ path: dbPath }, 'SQLite 初始化完成');
   return db;
+}
+
+// 检查并补齐缺失的列(仅支持 ADD COLUMN,不改类型)
+function runMigrations(db) {
+  const migrations = [
+    { table: 'ozon_push_events', column: 'chat_id', type: 'TEXT', index: 'idx_events_chat' },
+  ];
+  for (const m of migrations) {
+    const cols = db.prepare(`PRAGMA table_info(${m.table})`).all();
+    const exists = cols.some(c => c.name === m.column);
+    if (!exists) {
+      db.exec(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.type}`);
+      logger.info({ table: m.table, column: m.column }, 'migration: 已补列');
+    }
+    // 补列后创建索引(新库 CREATE TABLE 已含列,旧库已 ALTER,此处幂等)
+    if (m.index) {
+      db.exec(`CREATE INDEX IF NOT EXISTS ${m.index} ON ${m.table}(${m.column})`);
+    }
+  }
 }
 
 export function getDb() {
