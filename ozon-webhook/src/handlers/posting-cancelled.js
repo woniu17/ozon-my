@@ -1,6 +1,7 @@
 // TYPE_POSTING_CANCELLED handler
-// 更新 ozon_postings 状态为 posting_canceled,记录取消原因
+// 更新 ozon_postings 状态为 posting_canceled,记录取消原因 + 推送飞书
 import { getDb } from '../db/index.js';
+import { notifyPostingEvent } from '../services/feishu-notify.js';
 import logger from '../middleware/log.js';
 
 export default async function postingCancelledHandler(payload, ctx) {
@@ -45,4 +46,9 @@ export default async function postingCancelledHandler(payload, ctx) {
   }
 
   logger.info({ postingNumber, newState: payload.new_state }, 'POSTING_CANCELLED 落库');
+
+  // 推送飞书(失败不影响落库结果)
+  await notifyPostingEvent('TYPE_POSTING_CANCELLED', payload).catch(err =>
+    logger.warn({ err: err.message }, 'POSTING_CANCELLED 飞书通知失败'),
+  );
 }

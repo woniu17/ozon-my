@@ -1,7 +1,6 @@
 // TYPE_ORDER_STATE_CHANGED handler
-// 更新 ozon_orders.status(订单级状态 order_ 前缀) + 推送飞书
+// 更新 ozon_orders.status(订单级状态 order_ 前缀)
 import { getDb } from '../db/index.js';
-import { notifyOrderEvent } from '../services/feishu-notify.js';
 import logger from '../middleware/log.js';
 
 export default async function orderStateChangedHandler(payload, ctx) {
@@ -45,8 +44,4 @@ export default async function orderStateChangedHandler(payload, ctx) {
   }
 
   logger.info({ orderNumber, oldState: payload.old_state, newState: payload.new_state }, 'ORDER_STATE_CHANGED 落库');
-
-  await notifyOrderEvent('TYPE_ORDER_STATE_CHANGED', payload).catch(err =>
-    logger.warn({ err: err.message }, 'ORDER_STATE_CHANGED 飞书通知失败'),
-  );
 }

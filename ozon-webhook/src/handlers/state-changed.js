@@ -1,6 +1,7 @@
 // TYPE_STATE_CHANGED handler
-// 更新 ozon_postings.status(推送模型状态)
+// 更新 ozon_postings.status(推送模型状态) + 推送飞书
 import { getDb } from '../db/index.js';
+import { notifyPostingEvent } from '../services/feishu-notify.js';
 import logger from '../middleware/log.js';
 
 export default async function stateChangedHandler(payload, ctx) {
@@ -30,4 +31,9 @@ export default async function stateChangedHandler(payload, ctx) {
   }
 
   logger.info({ postingNumber, newState: payload.new_state }, 'STATE_CHANGED 落库');
+
+  // 推送飞书(失败不影响落库结果)
+  await notifyPostingEvent('TYPE_STATE_CHANGED', payload).catch(err =>
+    logger.warn({ err: err.message }, 'STATE_CHANGED 飞书通知失败'),
+  );
 }

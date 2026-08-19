@@ -1,6 +1,6 @@
-// 飞书机器人通知(订单相关推送)
+// 飞书机器人通知(货件相关推送)
 // 参考 get-shop-product/httpsrv/feishuHelper.js,改写为 ESM
-// 仅用于 ORDER 级通知(TYPE_ORDER_NEW/CANCELLED/STATE_CHANGED)
+// 仅用于 FBS/rFBS 货件级通知(TYPE_NEW_POSTING/POSTING_CANCELLED/STATE_CHANGED)
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
 import { getStoreBySellerId } from './store-loader.js';
@@ -48,32 +48,36 @@ export async function sendFeishuText(text) {
 }
 
 /**
- * 推送订单级通知到飞书
- * @param {string} messageType TYPE_ORDER_NEW / TYPE_ORDER_CANCELLED / TYPE_ORDER_STATE_CHANGED
+ * 推送货件级通知到飞书
+ * @param {string} messageType TYPE_NEW_POSTING / TYPE_POSTING_CANCELLED / TYPE_STATE_CHANGED
  * @param {object} payload Ozon 推送原始 payload
  */
-export async function notifyOrderEvent(messageType, payload) {
-  const orderNumber = payload.order_number ?? '-';
-  const orderId = payload.order_id ?? '-';
+export async function notifyPostingEvent(messageType, payload) {
+  const postingNumber = payload.posting_number ?? '-';
   const sellerId = payload.seller_id ?? '-';
-  const uuid = payload.uuid ?? '-';
 
   let title;
   let timeField;
   let extra = '';
   switch (messageType) {
-    case 'TYPE_ORDER_NEW':
-      title = '[新订单] Ozon 推送';
-      timeField = ['创建时间', payload.created_at ?? '-'];
+    case 'TYPE_NEW_POSTING': {
+      title = '[新货件] Ozon 推送';
+      timeField = ['处理时间', payload.in_process_at ?? '-'];
+      const products = Array.isArray(payload.products) ? payload.products : [];
+      const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
+      extra = `\n商品SKU数: ${products.length}\n商品总件数: ${totalQty}`;
+      if (payload.tracking_number) extra += `\n跟踪号: ${payload.tracking_number}`;
       break;
-    case 'TYPE_ORDER_CANCELLED':
-      title = '[订单取消] Ozon 推送';
-      timeField = ['取消时间', payload.cancelled_at ?? '-'];
+    }
+    case 'TYPE_POSTING_CANCELLED':
+      title = '[货件取消] Ozon 推送';
+      timeField = ['取消时间', payload.changed_state_date ?? '-'];
+      extra = `\n旧状态: ${payload.old_state ?? '-'}\n取消原因: ${payload.reason?.message ?? '-'}`;
       break;
-    case 'TYPE_ORDER_STATE_CHANGED':
-      title = '[订单状态变更] Ozon 推送';
-      timeField = ['变更时间', payload.updated_at ?? '-'];
-      extra = `\n旧状态: ${payload.old_state ?? '-'}\n新状态: ${payload.new_state ?? '-'}`;
+    case 'TYPE_STATE_CHANGED':
+      title = '[货件状态变更] Ozon 推送';
+      timeField = ['变更时间', payload.changed_state_date ?? '-'];
+      extra = `\n新状态: ${payload.new_state ?? '-'}`;
       break;
     default:
       title = `[${messageType}] Ozon 推送`;
@@ -82,8 +86,7 @@ export async function notifyOrderEvent(messageType, payload) {
 
   const text = [
     title,
-    `订单号: ${orderNumber}`,
-    `订单ID: ${orderId}`,
+    `货件号: ${postingNumber}`,
     `卖家: ${formatSeller(sellerId)}`,
     `${timeField[0]}: ${timeField[1]}`,
     extra,

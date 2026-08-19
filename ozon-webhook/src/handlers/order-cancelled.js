@@ -1,7 +1,6 @@
 // TYPE_ORDER_CANCELLED handler
-// 更新 ozon_orders 状态为取消 + 推送飞书
+// 更新 ozon_orders 状态为取消
 import { getDb } from '../db/index.js';
-import { notifyOrderEvent } from '../services/feishu-notify.js';
 import logger from '../middleware/log.js';
 
 export default async function orderCancelledHandler(payload, ctx) {
@@ -44,8 +43,4 @@ export default async function orderCancelledHandler(payload, ctx) {
   }
 
   logger.info({ orderNumber }, 'ORDER_CANCELLED 落库');
-
-  await notifyOrderEvent('TYPE_ORDER_CANCELLED', payload).catch(err =>
-    logger.warn({ err: err.message }, 'ORDER_CANCELLED 飞书通知失败'),
-  );
 }

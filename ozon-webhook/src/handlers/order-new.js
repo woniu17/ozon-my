@@ -1,8 +1,7 @@
 // TYPE_ORDER_NEW handler
 // 订单级通知:一个订单可包含多个货件(posting)
-// 落库 ozon_orders + 推送飞书机器人
+// 落库 ozon_orders
 import { getDb } from '../db/index.js';
-import { notifyOrderEvent } from '../services/feishu-notify.js';
 import logger from '../middleware/log.js';
 
 export default async function orderNewHandler(payload, ctx) {
@@ -34,9 +33,4 @@ export default async function orderNewHandler(payload, ctx) {
   );
 
   logger.info({ orderNumber, orderId: payload.order_id, sellerId: payload.seller_id }, 'ORDER_NEW 落库');
-
-  // 推送飞书(失败不影响落库结果)
-  await notifyOrderEvent('TYPE_ORDER_NEW', payload).catch(err =>
-    logger.warn({ err: err.message }, 'ORDER_NEW 飞书通知失败'),
-  );
 }

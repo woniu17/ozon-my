@@ -5,6 +5,7 @@
 import { getDb } from '../db/index.js';
 import { getPostingDetail } from '../services/opi-client.js';
 import { getStoreBySellerId } from '../services/store-loader.js';
+import { notifyPostingEvent } from '../services/feishu-notify.js';
 import logger from '../middleware/log.js';
 
 export default async function newPostingHandler(payload, ctx) {
@@ -81,5 +82,10 @@ export default async function newPostingHandler(payload, ctx) {
   logger.info(
     { postingNumber, sellerId, storeMatched: !!store, storeId: store?.id },
     'NEW_POSTING 落库',
+  );
+
+  // 推送飞书(失败不影响落库结果)
+  await notifyPostingEvent('TYPE_NEW_POSTING', fullPayload).catch(err =>
+    logger.warn({ err: err.message }, 'NEW_POSTING 飞书通知失败'),
   );
 }

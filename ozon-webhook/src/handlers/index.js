@@ -1,7 +1,7 @@
 // Handler 分发表:message_type → async (payload, ctx) => {}
 // 每个 handler 抛错会被 poller 捕获,自动重试或标记 dead
 
-// 订单类(5 种)
+// 订单类(5 种,前 3 种推飞书)
 import newPostingHandler from './new-posting.js';
 import postingCancelledHandler from './posting-cancelled.js';
 import stateChangedHandler from './state-changed.js';
@@ -25,7 +25,7 @@ import chatClosedHandler from './chat-closed.js';
 // 类目树
 import descriptionCategoryTreeChangedHandler from './description-category-tree-changed.js';
 
-// ORDER 级(3 种,落库 ozon_orders + 推飞书)
+// ORDER 级(3 种,落库 ozon_orders)
 import orderNewHandler from './order-new.js';
 import orderCancelledHandler from './order-cancelled.js';
 import orderStateChangedHandler from './order-state-changed.js';
@@ -59,7 +59,7 @@ const handlers = {
   TYPE_CHAT_CLOSED: chatClosedHandler,
   // 类目树
   TYPE_DESCRIPTION_CATEGORY_TREE_CHANGED: descriptionCategoryTreeChangedHandler,
-  // ORDER 级(订单,推飞书)
+  // ORDER 级(订单)
   TYPE_ORDER_NEW: orderNewHandler,
   TYPE_ORDER_CANCELLED: orderCancelledHandler,
   TYPE_ORDER_STATE_CHANGED: orderStateChangedHandler,
