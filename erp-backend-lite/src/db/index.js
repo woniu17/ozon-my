@@ -151,6 +151,8 @@ async function ensureMigrations() {
   await migrateListedFields(db);
   // 2026-08: 超轻小件筛选 — ozon_cache_index 补 weight_g / dim_sum_mm 列 + 从 bundle_data 回填
   await migrateUltraLightFields(db);
+  // 2026-08: 采集箱导出 — ozon_cache_index 补 exported / exported_at / export_task_id 列 + 索引
+  migrateExportFields(db);
   // 2026-08: 深度采集日志补 reason 列(跳过原因)
   migrateAutoCollectLogReason(db);
   // P2-2: 批量均衡上架 — batch_upload_tasks / batch_upload_items 补列(多店铺分配 + 顺序执行 + 速度控制)
@@ -822,6 +824,28 @@ async function migrateUltraLightFields(db) {
   console.log(
     `[db] migration: backfilled weight_g / dim_sum_mm for ${result.changes} SKUs`
   );
+}
+
+// 2026-08: 采集箱导出 — ozon_cache_index 补 exported / exported_at / export_task_id 列 + 索引
+// 旧库(CREATE TABLE IF NOT EXISTS 不会更新旧表结构)需 ALTER TABLE 补列再建索引
+// exported 默认 0(未导出),由导出任务创建时即时写入,syncSku 不维护
+// 幂等:已迁移过的库直接跳过 ALTER
+function migrateExportFields(db) {
+  const ciCols = db.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
+  if (ciCols.length === 0) return; // 表不存在,跳过(schema.sql 会创建)
+  if (!ciCols.some((c) => c.name === 'exported')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN exported INTEGER DEFAULT 0`);
+    console.log('[db] migration: added column ozon_cache_index.exported');
+  }
+  if (!ciCols.some((c) => c.name === 'exported_at')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN exported_at TEXT`);
+    console.log('[db] migration: added column ozon_cache_index.exported_at');
+  }
+  if (!ciCols.some((c) => c.name === 'export_task_id')) {
+    db.exec(`ALTER TABLE ozon_cache_index ADD COLUMN export_task_id TEXT`);
+    console.log('[db] migration: added column ozon_cache_index.export_task_id');
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ci_exported ON ozon_cache_index(exported)`);
 }
 
 // 2026-08: 深度采集日志补 reason 列(跳过原因,仅 status='skipped' 时有值)

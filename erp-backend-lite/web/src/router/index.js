@@ -12,6 +12,7 @@ import ImageRefreshList from '../views/ImageRefreshList.vue';
 import StockRefreshList from '../views/StockRefreshList.vue';
 import ProductUpdateList from '../views/ProductUpdateList.vue';
 import ProductArchiveList from '../views/ProductArchiveList.vue';
+import ExportTasks from '../views/ExportTasks.vue';
 import Audit from '../views/Audit.vue';
 import Config from '../views/Config.vue';
 import ListingTemplates from '../views/ListingTemplates.vue';
@@ -42,6 +43,7 @@ const router = createRouter({
     { path: '/stock-refresh-tasks', name: 'stock-refresh-tasks', component: StockRefreshList, meta: { title: '库存更新任务' } },
     { path: '/product-update-tasks', name: 'product-update-tasks', component: ProductUpdateList, meta: { title: '商品信息更新任务' } },
     { path: '/product-archive-tasks', name: 'product-archive-tasks', component: ProductArchiveList, meta: { title: '商品归档任务' } },
+    { path: '/export-tasks', name: 'export-tasks', component: ExportTasks, meta: { title: '导出任务' } },
     { path: '/audit', name: 'audit', component: Audit },
     { path: '/config', name: 'config', component: Config },
     { path: '/listing-templates', name: 'listing-templates', component: ListingTemplates },

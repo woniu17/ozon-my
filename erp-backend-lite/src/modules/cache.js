@@ -570,6 +570,8 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       : '';
     // marketStats:市场统计筛选 'has'=有真实数据,'none'=无真实数据(未采集+__empty)
     const marketStats = String(req.query.marketStats || '').trim();
+    // exported:导出状态筛选(2026-08 采集箱导出)'unexported'=未导出,'exported'=已导出,空=不限
+    const exportedFilter = String(req.query.exported || '').trim();
 
     // indexDao 单表查询:过滤 + 排序 + 分页全在 SQL 完成
     const { items, total } = await daos.indexDao.findList({
@@ -588,6 +590,7 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       ultraLight,
       descriptionQuality,
       marketStats,
+      exported: exportedFilter,
       page,
       pageSize,
     });
@@ -640,6 +643,8 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       categoryName: r.category_name || '',
       // 上架状态(由 index-sync 定时任务批量刷新)
       listed: !!r.listed,
+      // 导出状态(2026-08:由导出任务创建时即时写入,syncSku 不维护)
+      exported: !!r.exported,
       // 兼容旧卡片字段(避免前端报错)
       storeId: '',
       anchorSku: r.sku,

@@ -65,6 +65,7 @@ function buildFilterWhere(opts) {
     maxCacheHits,
     excludeFilteredCategories,
     marketStats,
+    exported,
   } = opts;
   const where = [];
   const params = [];
@@ -167,6 +168,12 @@ function buildFilterWhere(opts) {
     where.push('market_stats_hit = 1 AND market_stats_empty = 0');
   } else if (marketStats === 'none') {
     where.push('(market_stats_hit = 0 OR market_stats_empty = 1)');
+  }
+  // 导出状态筛选(2026-08 采集箱导出):'unexported'=未导出, 'exported'=已导出
+  if (exported === 'unexported') {
+    where.push('(exported IS NULL OR exported = 0)');
+  } else if (exported === 'exported') {
+    where.push('exported = 1');
   }
   return { where, params };
 }
@@ -497,6 +504,17 @@ export const indexDao = {
   },
 
   /**
+   * 按筛选条件计数(不取数据,供导出任务统计"符合筛选的已导出 SKU 数"等场景)
+   * @param {object} opts - 同 findList 的筛选参数(忽略 page/pageSize)
+   * @returns {Promise<number>}
+   */
+  async countByFilter(opts = {}) {
+    const { where, params } = buildFilterWhere(opts);
+    const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    return db.prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index ${whereClause}`).get(...params).n;
+  },
+
+  /**
    * 自动选取查询(批量均衡上架 auto-pick 用):复用 findList 的筛选条件,不分页
    * 返回所有符合条件的 SKU(含 price/ratingCount/name 等展示字段 + listed/cacheHits 门槛位),按 seller_id 分组便于均衡选取
    * @param {object} opts - 同 findList 的筛选参数(忽略 page/pageSize)
@@ -532,6 +550,76 @@ export const indexDao = {
         richMedia: !!r.rich_media_hit,
       },
     }));
+  },
+
+  /**
+   * 导出选取查询(采集箱按筛选导出 Excel 用):复用 findList 的筛选条件,不分页
+   * 与 findListForAutoPick 的差异:
+   *   - 始终强制 exported=0(已导出的 SKU 强制跳过,不重复导出)
+   *   - 返回 market_stats 位(供"有市场统计占比"设置按比例选取)
+   *   - 返回 exported 位(供采集箱列表展示已导出标签)
+   * @param {object} opts - 同 findList 的筛选参数(忽略 page/pageSize,exported 被强制为未导出)
+   * @returns {Promise<Array<{sku, sellerId, sellerName, name, price, priceValue, ratingCount, marketStats, lastFetchedAt}>>}
+   */
+  async findListForExport(opts = {}) {
+    // 强制只查未导出的(exported 筛选是导出面板入口用的,导出数据源永远排除已导出)
+    const { where, params } = buildFilterWhere({ ...opts, exported: 'unexported' });
+    const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = db
+      .prepare(
+        `SELECT sku, seller_id, seller_slug, seller_name, name, price, price_value,
+                rating_count, market_stats_hit, market_stats_empty,
+                last_fetched_at, exported
+         FROM ozon_cache_index ${whereClause}
+         ORDER BY last_fetched_at DESC NULLS LAST`
+      )
+      .all(...params);
+    return rows.map((r) => ({
+      sku: r.sku,
+      sellerId: r.seller_id || '',
+      sellerSlug: r.seller_slug || '',
+      sellerName: r.seller_name || '',
+      name: r.name || '',
+      price: r.price ?? '',
+      priceValue: r.price_value ?? null,
+      ratingCount: Number.isFinite(Number(r.rating_count)) ? Number(r.rating_count) : null,
+      // 有真实市场统计:hit=1 且非 __empty 空标记(与采集箱"有市场统计"筛选同口径)
+      marketStats: !!(r.market_stats_hit && !r.market_stats_empty),
+      lastFetchedAt: r.last_fetched_at,
+      exported: !!r.exported,
+    }));
+  },
+
+  /**
+   * 即时标记 SKU 为已导出(由 export-excel.js 创建导出任务时调用)
+   * 写入 exported=1 + exported_at + export_task_id,模式对齐 markListed
+   * 注:syncSku 的 ON CONFLICT DO UPDATE 子句不包含 exported 字段,不会被覆盖
+   */
+  async markExported(skus, localTaskId) {
+    if (!Array.isArray(skus) || skus.length === 0) return { refreshed: 0 };
+    const tid = localTaskId || null;
+    const stmt = db.prepare(
+      `INSERT INTO ozon_cache_index (sku, exported, exported_at, export_task_id, updated_at)
+       VALUES (?, 1, datetime('now'), ?, datetime('now'))
+       ON CONFLICT(sku) DO UPDATE SET
+         exported = 1,
+         exported_at = datetime('now'),
+         export_task_id = excluded.export_task_id,
+         updated_at = datetime('now')`
+    );
+    let refreshed = 0;
+    db.exec('BEGIN');
+    try {
+      for (const sku of skus) {
+        const r = stmt.run(sku, tid);
+        refreshed += r.changes;
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+    return { refreshed };
   },
 
   /**

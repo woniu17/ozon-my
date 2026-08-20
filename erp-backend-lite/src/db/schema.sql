@@ -280,6 +280,11 @@ CREATE TABLE IF NOT EXISTS ozon_cache_index (
   listed_at          TEXT,                -- 最近一次标记跟卖的时间
   listed_task_id     TEXT,                -- 关联的 local_task_id(便于追溯)
 
+  -- 导出状态(0=未导出, 1=已导出)+ 导出任务信息(由导出任务创建时即时写入,syncSku 不维护)
+  exported           INTEGER DEFAULT 0,
+  exported_at        TEXT,                -- 最近一次导出的时间
+  export_task_id     TEXT,                -- 关联的导出任务 local_task_id(便于追溯)
+
   -- 全文搜索(name + sku + seller_name 拼接,仅作 fallback)
   -- 实际搜索走 ozon_cache_index_fts(FTS5 虚拟表,见下)
   searchable_text    TEXT,
@@ -765,3 +770,43 @@ CREATE TABLE IF NOT EXISTS product_archive_items (
 );
 CREATE INDEX IF NOT EXISTS idx_pai_task ON product_archive_items(task_id);
 CREATE INDEX IF NOT EXISTS idx_pai_status ON product_archive_items(status);
+
+-- ── 导出任务(2026-08:采集箱按筛选导出 Excel) ───────────────
+-- 导出是同步完成的轻量任务(创建即终态 SUCCESS),记录导出配置与结果统计
+-- 明细存 export_task_items,下载时按明细重新生成 xlsx(可多次下载,无需落盘文件)
+CREATE TABLE IF NOT EXISTS export_tasks (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  local_task_id       TEXT UNIQUE NOT NULL,    -- exp-{timestamp}-{rand}
+  name                TEXT,                    -- 任务名称(可选)
+  status              TEXT NOT NULL DEFAULT 'SUCCESS',
+  requested_count     INTEGER DEFAULT 0,       -- 请求导出数 N
+  total_count         INTEGER DEFAULT 0,       -- 实际导出数
+  market_stats_count  INTEGER DEFAULT 0,       -- 有市场统计数据的条数
+  market_stats_ratio  INTEGER DEFAULT 0,       -- 有市场统计占比设置(0-100)
+  seller_count        INTEGER DEFAULT 0,       -- 来源卖家数
+  skipped_count       INTEGER DEFAULT 0,       -- 跳过数(已导出)
+  filters             TEXT,                    -- JSON:导出时的筛选条件快照
+  download_count      INTEGER DEFAULT 0,       -- 下载次数(可多次下载)
+  created_at          TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_et_created ON export_tasks(created_at DESC);
+
+-- 导出任务明细(每行一个 SKU,字段为导出时刻的快照)
+-- Excel 列:SKU / 评论数 / 原价格 / 跟卖价格(公式) / 跟卖最低价格(公式) / 组合列(公式)
+-- 跟卖价格规则:原价格<=15 → 19,否则 = 原价格;最低价格 = 跟卖价格 - 0.01(公式写在 xlsx 内)
+CREATE TABLE IF NOT EXISTS export_task_items (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id        TEXT NOT NULL,          -- 关联 export_tasks.local_task_id
+  seq            INTEGER DEFAULT 0,      -- 行序(0 起,与 Excel 行序一致)
+  sku            TEXT NOT NULL,
+  seller_id      TEXT,                   -- 来源卖家(审计用)
+  name           TEXT,                   -- 商品名(快照)
+  price          TEXT,                   -- 原始价格字符串(快照)
+  price_value    REAL,                   -- 数字价格(快照,Excel"原价格"列)
+  rating_count   INTEGER,                -- 评论数(快照,可空)
+  market_stats   INTEGER DEFAULT 0,      -- 是否有市场统计(0/1)
+  created_at     TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_eti_task ON export_task_items(task_id, seq);
+-- 注:idx_ci_exported(ozon_cache_index.exported)由 db/index.js 的 migrateExportFields 创建
+-- (旧库 CREATE TABLE IF NOT EXISTS 不更新表结构,需先 ALTER TABLE 补列再建索引)

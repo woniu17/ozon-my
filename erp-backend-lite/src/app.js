@@ -39,6 +39,7 @@ import imageRefreshRoutes from './modules/image-refresh.js';
 import stockRefreshRoutes from './modules/stock-refresh.js';
 import productUpdateRoutes from './modules/product-update.js';
 import productArchiveRoutes from './modules/product-archive.js';
+import exportExcelRoutes from './modules/export-excel.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -138,6 +139,7 @@ app.use(imageRefreshRoutes);
 app.use(stockRefreshRoutes);
 app.use(productUpdateRoutes);
 app.use(productArchiveRoutes);
+app.use(exportExcelRoutes);
 
 // 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
 if (config.featureFlags?.proxy_collect) {

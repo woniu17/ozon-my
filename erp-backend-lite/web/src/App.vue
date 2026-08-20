@@ -22,6 +22,7 @@ const tabs = [
   { key: '/stock-refresh-tasks', label: '库存更新任务' },
   { key: '/product-update-tasks', label: '商品信息更新' },
   { key: '/product-archive-tasks', label: '商品归档任务' },
+  { key: '/export-tasks', label: '导出任务' },
   { key: '/audit', label: '操作日志' },
   { key: '/config', label: '配置中心' },
   { key: '/listing-templates', label: '上架模板' },

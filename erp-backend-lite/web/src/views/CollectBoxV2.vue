@@ -14,6 +14,7 @@ import ImageLightbox from '../components/ImageLightbox.vue';
 import BatchUploadDialog from '../components/BatchUploadDialog.vue';
 import AutoPickBatchDialog from '../components/AutoPickBatchDialog.vue';
 import DeepCollectByFilterDialog from '../components/DeepCollectByFilterDialog.vue';
+import ExportExcelDialog from '../components/ExportExcelDialog.vue';
 
 const router = useRouter();
 const { show } = useToast();
@@ -33,6 +34,16 @@ function openAutoPickDialog() {
 const deepCollectDialogVisible = ref(false);
 function openDeepCollectDialog() {
   deepCollectDialogVisible.value = true;
+}
+
+// ── 按筛选条件导出 Excel(2026-08) ────────────────────────
+const exportDialogVisible = ref(false);
+function openExportDialog() {
+  exportDialogVisible.value = true;
+}
+// 导出完成回调:刷新列表(导出后 SKU 标记已导出,未导出筛选下的列表会变化)
+function onExported() {
+  loadList();
 }
 
 function isSkuSelected(sku) {
@@ -237,6 +248,7 @@ const state = reactive({
     priceMax: '',
     descriptionQuality: '', // 描述状态:''=全部,'0'=描述为空,'1'=含占位符,'2'=按钮污染,'3'=描述有效,'1,2'=需清洗
     marketStats: '', // 市场统计:''=全部,'has'=有真实数据,'none'=无真实数据(未采集+__empty 空标记)
+    exported: '', // 导出状态(2026-08):''=全部,'unexported'=未导出,'exported'=已导出
     // 用上次的筛选条件覆盖初值
     ...(storedFilters || {}),
   },
@@ -261,6 +273,7 @@ async function loadList() {
     if (state.filters.priceMax !== '') params.priceMax = state.filters.priceMax;
     if (state.filters.descriptionQuality) params.descriptionQuality = state.filters.descriptionQuality;
     if (state.filters.marketStats) params.marketStats = state.filters.marketStats;
+    if (state.filters.exported) params.exported = state.filters.exported;
     const data = await getCollectBoxV2FromCache(params);
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -381,6 +394,13 @@ onMounted(() => {
         >
           按筛选深度采集
         </button>
+        <button
+          class="btn btn-primary"
+          @click="openExportDialog"
+          title="按当前筛选条件导出 Excel(跟卖价格/最低价格由公式计算,已导出的 SKU 自动跳过)"
+        >
+          按筛选导出
+        </button>
         <button class="btn btn-ghost" :disabled="state.loading" @click="loadList">
           {{ state.loading ? '刷新中…' : '刷新' }}
         </button>
@@ -426,6 +446,16 @@ onMounted(() => {
         <option value="">全部市场统计</option>
         <option value="has">有市场统计</option>
         <option value="none">无市场统计</option>
+      </select>
+      <select
+        class="filter-select"
+        v-model="state.filters.exported"
+        title="导出状态:是否已通过按筛选导出功能导出过 Excel"
+        @change="search"
+      >
+        <option value="">全部导出状态</option>
+        <option value="unexported">未导出</option>
+        <option value="exported">已导出</option>
       </select>
       <select
         class="filter-select"
@@ -594,6 +624,12 @@ onMounted(() => {
                 >未跟卖</span
               >
               <span
+                v-if="it.exported === true"
+                class="cb-extra-tag cb-tag-exported"
+                title="该 SKU 已通过按筛选导出功能导出过 Excel"
+                >已导出</span
+              >
+              <span
                 v-if="it.descriptionCategoryId"
                 class="cb-extra-tag cb-tag-category"
                 :title="`类目 ID:${it.descriptionCategoryId}:${it.typeId || 0}`"
@@ -669,6 +705,14 @@ onMounted(() => {
       v-if="deepCollectDialogVisible"
       :filters="state.filters"
       @close="deepCollectDialogVisible = false"
+    />
+
+    <!-- 按筛选条件导出 Excel 弹窗(2026-08) -->
+    <ExportExcelDialog
+      v-if="exportDialogVisible"
+      :filters="state.filters"
+      @close="exportDialogVisible = false"
+      @exported="onExported"
     />
   </div>
 </template>
@@ -843,6 +887,10 @@ onMounted(() => {
 .cb-tag-unlisted {
   background: #fff1f0;
   color: #cf1322;
+}
+.cb-tag-exported {
+  background: #f0f5ff;
+  color: #2f54eb;
 }
 .cb-tag-comments {
   background: #f9f0ff;
