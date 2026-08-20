@@ -124,11 +124,15 @@ export function saveOpiResponse(localTaskId, storeId, response) {
 //   售价   = originalPrice × salePriceA% + salePriceB
 //   划线价 = 售价 × oldPriceA%
 //   最低价 = 售价 − minPriceB
+// 低价保底:源商品售价 < 15 且按公式算出的跟卖价 < 19 时,跟卖价取 19
 // 任一参数缺失则对应字段返回 null(不覆盖)
 // originalPrice 取缓存合成的 item.price(即 detailData.price || cardData.price)
 function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
+
+const LOW_PRICE_SOURCE_MAX = 15;
+const LOW_PRICE_FLOOR = 19;
 
 function computePricesFromTemplate(originalPrice, tplCfg) {
   const orig = Number(originalPrice);
@@ -142,6 +146,7 @@ function computePricesFromTemplate(originalPrice, tplCfg) {
   let minPrice = null;
   if (isFinite(sa) && isFinite(sb)) {
     salePrice = round2(orig * (sa / 100) + sb);
+    if (orig < LOW_PRICE_SOURCE_MAX && salePrice < LOW_PRICE_FLOOR) salePrice = LOW_PRICE_FLOOR;
     if (isFinite(oa)) oldPrice = round2(salePrice * (oa / 100));
     if (isFinite(mb)) minPrice = round2(salePrice - mb);
   }

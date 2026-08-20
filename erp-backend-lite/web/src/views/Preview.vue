@@ -150,13 +150,19 @@ function applyTemplate(t) {
 // ── 价格计算引擎(公式:售价=原价*A%+B,划线价=售价*A%,最低价=售价-B)──
 const round2 = (n) => Math.round(n * 100) / 100;
 
+// 低价保底:源商品售价 < 15 且按公式算出的跟卖价 < 19 时,跟卖价取 19(对齐 listing-builder.js)
+const LOW_PRICE_SOURCE_MAX = 15;
+const LOW_PRICE_FLOOR = 19;
+
 const originalPrice = computed(() => Number(state.profile?.original?.price) || 0);
 const salePrice = computed(() => {
   if (!originalPrice.value) return null;
   const a = Number(state.params.salePriceA);
   const b = Number(state.params.salePriceB);
   if (isNaN(a) || isNaN(b)) return null;
-  return round2(originalPrice.value * (a / 100) + b);
+  let p = round2(originalPrice.value * (a / 100) + b);
+  if (originalPrice.value < LOW_PRICE_SOURCE_MAX && p < LOW_PRICE_FLOOR) p = LOW_PRICE_FLOOR;
+  return p;
 });
 const oldPrice = computed(() => {
   if (!salePrice.value) return null;
@@ -197,7 +203,12 @@ const priceLevel = computed(() => {
 
 const salePriceFormula = computed(() => {
   if (!originalPrice.value) return '—';
-  return `${originalPrice.value} × ${state.params.salePriceA}% + ${state.params.salePriceB} = ${salePrice.value ?? '—'}`;
+  const a = Number(state.params.salePriceA);
+  const b = Number(state.params.salePriceB);
+  if (isNaN(a) || isNaN(b)) return '—';
+  const raw = round2(originalPrice.value * (a / 100) + b);
+  const floored = originalPrice.value < LOW_PRICE_SOURCE_MAX && raw < LOW_PRICE_FLOOR;
+  return `${originalPrice.value} × ${a}% + ${b} = ${raw}${floored ? ` → 低价保底 ${LOW_PRICE_FLOOR}` : ''}`;
 });
 
 // ── 预检清单(已移除原数据品牌检测,品牌一律强制上架侧) ────
