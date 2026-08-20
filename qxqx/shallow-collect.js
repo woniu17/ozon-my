@@ -14,6 +14,8 @@
 //   STORE_LIMIT=1 LOG_SKU=1 node shallow-collect.js   # 单店落库 + SKU 逐条日志
 //   STORE_LIMIT=10 node shallow-collect.js            # 小批量
 //   node shallow-collect.js                           # 全量
+// 登录态迁移(跨 Windows/Linux)见 state-transfer.js:
+//   node state-transfer.js --export / --import
 //
 // 设计要点(2026-08 详细设计 v2):
 //   - 翻页循环在 Node 侧,每页一次 page.evaluate(200-500ms),
@@ -61,7 +63,7 @@ function numOrNull(v) {
 // ── 配置 ─────────────────────────────────────────────────────
 const cfg = {
   dbPath: process.env.DB_PATH || path.resolve(__dirname, '../erp-backend-lite/data/erp.db'),
-  profileDir: path.join(__dirname, '.chrome-profile'),
+  profileDir: path.join(__dirname, '.ozon-profile'),
   progressFile: path.join(__dirname, 'shallow-collect-progress.json'),
   lockFile: path.join(__dirname, '.shallow-collect.lock'),
 
@@ -440,8 +442,8 @@ function syncSkuLite(sku) {
   const rawHeight = Number(bundleData?.height);
   const dimSumMm =
     Number.isFinite(rawDepth) && rawDepth > 0 &&
-    Number.isFinite(rawWidth) && rawWidth > 0 &&
-    Number.isFinite(rawHeight) && rawHeight > 0
+      Number.isFinite(rawWidth) && rawWidth > 0 &&
+      Number.isFinite(rawHeight) && rawHeight > 0
       ? rawDepth + rawWidth + rawHeight
       : null;
 
@@ -567,7 +569,7 @@ function flushLogs(logs, store) {
     } catch (e) {
       if (e.code === 'ERR_SQLITE_ERROR' && attempt === 0) {
         const start = Date.now();
-        while (Date.now() - start < 200) {} // 忙等 200ms 后重试一次
+        while (Date.now() - start < 200) { } // 忙等 200ms 后重试一次
         continue;
       }
       throw e;

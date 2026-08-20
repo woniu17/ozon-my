@@ -14,7 +14,9 @@
     "cdp:headless": "CDP_HEADLESS=1 node cdp-server.js",
     "backfill": "node backfill-store-stats.js",
     "backfill:fast": "INTERVAL_MS=3000 node backfill-store-stats.js",
-    "shallow": "node shallow-collect.js"
+    "shallow": "node shallow-collect.js",
+    "state:export": "node state-transfer.js --export",
+    "state:import": "node state-transfer.js --import"
   },
   "dependencies": {
     "cloakbrowser": "^0.5.7",
