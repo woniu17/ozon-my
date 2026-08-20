@@ -16,6 +16,17 @@ import logger from '../middleware/log.js';
 const router = Router();
 const daos = await getDaos();
 
+// 清洗筛选条件:剔除 '', null, undefined 值(JSON body 传空串与 query 缺省统一口径,
+// 避免 buildFilterWhere 把空串数字参数误解析为 0,如 maxCacheHits='' → 命中数<=0)
+function sanitizeFilters(filters) {
+  const out = {};
+  for (const [k, v] of Object.entries(filters || {})) {
+    if (v === '' || v === null || v === undefined) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 // 数字转展示字符串(与 Excel TEXT(x,"0.##") 同口径):18.99→"18.99",19→"19",1299.5→"1299.5"
 function fmtNum(n) {
   if (n == null || !Number.isFinite(n)) return '';
@@ -85,6 +96,59 @@ function buildWorkbook(task, items) {
   return wb;
 }
 
+// POST /admin/api/export-excel/preview —— 导出预览(不创建任务,返回候选池统计)
+// body: { count?: number, marketStatsRatio?: 0-100, filters: {...采集箱筛选条件} }
+// 前端导出弹窗打开时调用,让用户确认导出前先看到候选规模与预计构成
+router.post('/admin/api/export-excel/preview', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const filters = sanitizeFilters(body.filters);
+    const count = Math.max(0, Math.floor(Number(body.count) || 0));
+    const ratio = Math.max(0, Math.min(100, Math.round(Number(body.marketStatsRatio) || 0)));
+
+    // 候选池与创建导出完全同口径:符合筛选 + 未导出;有价格才能进导出池
+    const candidates = await daos.indexDao.findListForExport(filters);
+    const pool = candidates.filter(
+      (c) => c.priceValue != null && Number.isFinite(Number(c.priceValue)) && c.priceValue > 0
+    );
+    const withStats = pool.filter((c) => c.marketStats);
+    const withoutStats = pool.filter((c) => !c.marketStats);
+    const sellerCount = new Set(pool.map((c) => c.sellerId)).size;
+    // 符合筛选但已导出过的 SKU 数(导出时强制跳过)
+    const skippedExported = await daos.indexDao.countByFilter({ ...filters, exported: 'exported' });
+
+    // 按占比 + 互补规则估算构成(与创建导出同口径)
+    let statsTarget = Math.round((count * ratio) / 100);
+    let noStatsTarget = count - statsTarget;
+    if (withStats.length < statsTarget) {
+      noStatsTarget += statsTarget - withStats.length;
+      statsTarget = withStats.length;
+    }
+    if (withoutStats.length < noStatsTarget) {
+      statsTarget += noStatsTarget - withoutStats.length;
+      noStatsTarget = withoutStats.length;
+    }
+
+    return res.json(
+      ok({
+        matchedTotal: candidates.length, // 符合筛选的未导出总数(含无价格)
+        poolTotal: pool.length, // 可导出候选(有有效价格)
+        noPrice: candidates.length - pool.length, // 符合筛选但无有效价格(导出时排除)
+        withStats: withStats.length,
+        withoutStats: withoutStats.length,
+        sellerCount,
+        skippedExported,
+        estimatedExport: Math.min(count, pool.length), // count>0 时 = min(count, poolTotal)
+        statsTarget, // 预计有市场统计条数(互补后)
+        noStatsTarget, // 预计无市场统计条数(互补后)
+        insufficient: count > 0 && pool.length < count,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
 // POST /admin/api/export-excel —— 创建导出任务(同步完成,创建即终态 SUCCESS)
 // body: { count: number, marketStatsRatio: 0-100, name?: string, filters: {...采集箱筛选条件} }
 router.post('/admin/api/export-excel', async (req, res, next) => {
@@ -98,7 +162,7 @@ router.post('/admin/api/export-excel', async (req, res, next) => {
       return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'count 上限 10000'));
     }
     const ratio = Math.max(0, Math.min(100, Math.round(Number(body.marketStatsRatio) || 0)));
-    const filters = body.filters && typeof body.filters === 'object' ? body.filters : {};
+    const filters = sanitizeFilters(body.filters);
 
     // 1. 取候选:符合筛选 + 未导出 + 有价格(跟卖价格公式依赖原价格列)
     const candidates = await daos.indexDao.findListForExport(filters);

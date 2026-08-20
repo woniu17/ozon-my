@@ -3,9 +3,9 @@
 // 逻辑参考"按筛选自动上架":后端按 sellerId 均衡选取(尽可能多地覆盖源店铺)
 // Excel 列:SKU / 评论数 / 原价格 / 跟卖价格(公式) / 跟卖最低价格(公式) / 组合列(公式)
 // 跟卖价格规则:原价格<=15 → 19,否则 = 原价格;最低价格 = 跟卖价格 - 0.01(公式写入 xlsx)
-import { reactive, ref, computed } from 'vue';
+import { reactive, ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { createExportTask, downloadExportExcel } from '../api/exportExcel.js';
+import { createExportTask, downloadExportExcel, previewExportExcel } from '../api/exportExcel.js';
 import { useToast } from './useToast.js';
 
 const props = defineProps({
@@ -79,12 +79,62 @@ const filterSummary = computed(() => {
   return parts.length ? parts.join(' / ') : '无(全部采集箱商品)';
 });
 
-// 有/无市场统计目标数预览
-const statsTargetPreview = computed(() => {
+// ── 导出预览(不创建任务,弹窗打开时统计候选池) ─────────────
+const preview = ref(null);
+const previewLoading = ref(false);
+
+// 构造筛选条件(与 collect-box-v2/from-cache 接口一致的字符串型参数,预览/导出共用)
+function buildFilters() {
+  const f = props.filters || {};
+  return {
+    keyword: f.keyword || '',
+    unlisted: f.unlisted ? '1' : '',
+    hasComments: f.hasComments ? '1' : '',
+    hasRichContent: f.hasRichContent ? '1' : '',
+    excludeFilteredCategories: f.excludeFilteredCategories ? '1' : '',
+    priceMin: f.priceMin !== '' && f.priceMin != null ? String(f.priceMin) : '',
+    priceMax: f.priceMax !== '' && f.priceMax != null ? String(f.priceMax) : '',
+    minCacheHits: f.cacheCompleteness === 'full' ? '3' : '',
+    maxCacheHits: f.cacheCompleteness === 'partial' ? '2' : '',
+    descriptionQuality: f.descriptionQuality || '',
+    marketStats: f.marketStats || '',
+  };
+}
+
+async function loadPreview() {
+  previewLoading.value = true;
+  try {
+    preview.value = await previewExportExcel({ filters: buildFilters() });
+  } catch (err) {
+    show(err.message || '预览加载失败', 'error');
+    preview.value = null;
+  } finally {
+    previewLoading.value = false;
+  }
+}
+onMounted(loadPreview);
+
+// 预计导出构成:count/ratio 变化时即时重算(互补规则与后端同口径,不重复请求)
+const previewBreakdown = computed(() => {
+  const p = preview.value;
+  if (!p) return null;
   const n = Math.max(0, Math.floor(Number(form.count) || 0));
   const r = Math.max(0, Math.min(100, Math.round(Number(form.marketStatsRatio) || 0)));
-  return Math.round((n * r) / 100);
+  let statsTarget = Math.round((n * r) / 100);
+  let noStatsTarget = n - statsTarget;
+  if (p.withStats < statsTarget) {
+    noStatsTarget += statsTarget - p.withStats;
+    statsTarget = p.withStats;
+  }
+  if (p.withoutStats < noStatsTarget) {
+    statsTarget += noStatsTarget - p.withoutStats;
+    noStatsTarget = p.withoutStats;
+  }
+  return { estimated: Math.min(n, p.poolTotal), statsTarget, noStatsTarget };
 });
+
+// 无可导出候选时禁用导出按钮
+const noCandidates = computed(() => !!preview.value && preview.value.poolTotal === 0);
 
 // ── 创建导出任务 ───────────────────────────────────────────
 async function doExport() {
@@ -101,26 +151,11 @@ async function doExport() {
   result.value = null;
   try {
     persistConfig();
-    // 构造筛选条件(与 collect-box-v2/from-cache 接口一致的字符串型参数)
-    const f = props.filters || {};
-    const filters = {
-      keyword: f.keyword || '',
-      unlisted: f.unlisted ? '1' : '',
-      hasComments: f.hasComments ? '1' : '',
-      hasRichContent: f.hasRichContent ? '1' : '',
-      excludeFilteredCategories: f.excludeFilteredCategories ? '1' : '',
-      priceMin: f.priceMin !== '' && f.priceMin != null ? String(f.priceMin) : '',
-      priceMax: f.priceMax !== '' && f.priceMax != null ? String(f.priceMax) : '',
-      minCacheHits: f.cacheCompleteness === 'full' ? '3' : '',
-      maxCacheHits: f.cacheCompleteness === 'partial' ? '2' : '',
-      descriptionQuality: f.descriptionQuality || '',
-      marketStats: f.marketStats || '',
-    };
     const r = await createExportTask({
       count: n,
       marketStatsRatio: Math.max(0, Math.min(100, Math.round(Number(form.marketStatsRatio) || 0))),
       name: form.name.trim() || undefined,
-      filters,
+      filters: buildFilters(),
     });
     result.value = r || null;
     if (r?.insufficient) {
@@ -174,6 +209,58 @@ function close() {
           <span>当前筛选:<b>{{ filterSummary }}</b></span>
         </div>
 
+        <!-- 候选预览(未导出,弹窗打开时统计,不创建任务) -->
+        <div class="eed-section">
+          <div class="eed-section-title">
+            候选预览(未导出)
+            <button
+              class="btn btn-sm btn-ghost eed-preview-refresh"
+              :disabled="previewLoading"
+              @click="loadPreview"
+            >
+              {{ previewLoading ? '统计中…' : '刷新' }}
+            </button>
+          </div>
+          <template v-if="preview">
+            <div class="eed-summary">
+              <div class="eed-summary-item">
+                <span class="eed-summary-label">可导出候选</span>
+                <span class="eed-summary-cnt">{{ preview.poolTotal }}</span>
+              </div>
+              <div class="eed-summary-item">
+                <span class="eed-summary-label">有市场统计</span>
+                <span class="eed-summary-cnt">{{ preview.withStats }}</span>
+              </div>
+              <div class="eed-summary-item">
+                <span class="eed-summary-label">无市场统计</span>
+                <span class="eed-summary-cnt">{{ preview.withoutStats }}</span>
+              </div>
+              <div class="eed-summary-item">
+                <span class="eed-summary-label">覆盖卖家</span>
+                <span class="eed-summary-cnt">{{ preview.sellerCount }}</span>
+              </div>
+              <div v-if="preview.noPrice > 0" class="eed-summary-item">
+                <span class="eed-summary-label">无价格排除</span>
+                <span class="eed-summary-cnt">{{ preview.noPrice }}</span>
+              </div>
+              <div v-if="preview.skippedExported > 0" class="eed-summary-item">
+                <span class="eed-summary-label">已导出跳过</span>
+                <span class="eed-summary-cnt">{{ preview.skippedExported }}</span>
+              </div>
+            </div>
+            <div v-if="noCandidates" class="eed-warn" style="margin-top: 8px">
+              没有符合条件的未导出 SKU{{
+                preview.matchedTotal > 0 ? `(匹配 ${preview.matchedTotal} 条均无有效价格)` : ''
+              }},请调整筛选条件后再导出
+            </div>
+            <div v-else-if="previewBreakdown" class="muted small" style="margin-top: 8px">
+              预计导出 {{ previewBreakdown.estimated }} 条:有市场统计 {{ previewBreakdown.statsTarget }} 条 +
+              无市场统计 {{ previewBreakdown.noStatsTarget }} 条(某组不足时从另一组补足)
+            </div>
+          </template>
+          <div v-else class="muted small">{{ previewLoading ? '候选统计中…' : '暂无预览数据' }}</div>
+        </div>
+
         <!-- 配置区 -->
         <div class="eed-section">
           <div class="eed-form-row">
@@ -193,8 +280,6 @@ function close() {
             </label>
           </div>
           <div class="muted small" style="margin-top: 6px">
-            目标构成:有市场统计约 {{ statsTargetPreview }} 条 + 无市场统计约
-            {{ Math.max(0, (Math.floor(Number(form.count) || 0)) - statsTargetPreview) }} 条(某组不足时从另一组补足);
             已导出过的 SKU 强制跳过;按来源卖家均衡选取,尽可能多地覆盖源店铺
           </div>
         </div>
@@ -220,7 +305,12 @@ function close() {
 
         <div class="eed-actions">
           <button class="btn btn-ghost" @click="close">取消</button>
-          <button class="btn btn-primary" :disabled="creating" @click="doExport">
+          <button
+            class="btn btn-primary"
+            :disabled="creating || noCandidates"
+            :title="noCandidates ? '没有符合条件的未导出 SKU,请调整筛选条件' : ''"
+            @click="doExport"
+          >
             {{ creating ? '导出中…' : '确认导出' }}
           </button>
         </div>
@@ -344,6 +434,9 @@ function close() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.eed-preview-refresh {
+  margin-left: auto;
 }
 .eed-form-row {
   display: flex;

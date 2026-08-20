@@ -50,6 +50,12 @@ function fts5Escape(keyword) {
 
 // 构造列表查询的 WHERE 子句 + 参数(供 findList / findListForAutoPick 复用)
 // 返回 { where: string[], params: any[] }
+// 数字筛选参数:'', null, undefined 均视为未设置
+// (JSON body 传空串与 query 缺省统一口径,避免 Number('')=0 被误当成有效值)
+function hasNum(v) {
+  return v !== '' && v !== null && v !== undefined && Number.isFinite(Number(v));
+}
+
 function buildFilterWhere(opts) {
   const {
     keyword,
@@ -102,22 +108,22 @@ function buildFilterWhere(opts) {
     where.push('has_rich_content = 1');
   }
   // 价格范围:走 price_value(REAL 列,有 idx_ci_price_value 索引)
-  if (Number.isFinite(Number(priceMin))) {
+  if (hasNum(priceMin)) {
     where.push('price_value IS NOT NULL AND price_value >= ?');
     params.push(Number(priceMin));
   }
-  if (Number.isFinite(Number(priceMax))) {
+  if (hasNum(priceMax)) {
     where.push('price_value IS NOT NULL AND price_value <= ?');
     params.push(Number(priceMax));
   }
-  if (Number.isFinite(Number(minCacheHits)) && Number(minCacheHits) > 0) {
+  if (hasNum(minCacheHits) && Number(minCacheHits) > 0) {
     // 数据完整 = 3 类合并缓存都有(dom + attribute + richMedia)
     where.push('((CASE WHEN card_hit=1 OR detail_hit=1 THEN 1 ELSE 0 END) + ' +
                 '(CASE WHEN search_hit=1 AND bundle_hit=1 THEN 1 ELSE 0 END) + ' +
                 '(CASE WHEN rich_media_hit=1 THEN 1 ELSE 0 END)) >= ?');
     params.push(Number(minCacheHits));
   }
-  if (Number.isFinite(Number(maxCacheHits)) && Number(maxCacheHits) >= 0) {
+  if (hasNum(maxCacheHits) && Number(maxCacheHits) >= 0) {
     // 数据不完整 = 3 类合并缓存命中数 ≤ maxCacheHits(如 maxCacheHits=2 → 至少缺一类)
     where.push('((CASE WHEN card_hit=1 OR detail_hit=1 THEN 1 ELSE 0 END) + ' +
                 '(CASE WHEN search_hit=1 AND bundle_hit=1 THEN 1 ELSE 0 END) + ' +

@@ -8,6 +8,12 @@ export function createExportTask(body) {
   return request.post('/admin/api/export-excel', body);
 }
 
+// 导出预览(不创建任务,返回候选池统计与预计构成)
+// body: { count?, marketStatsRatio?, filters: {...采集箱筛选条件} }
+export function previewExportExcel(body) {
+  return request.post('/admin/api/export-excel/preview', body);
+}
+
 // 导出任务列表(分页)
 export function getExportTaskList(params) {
   return request.get('/admin/api/export-excel', params);
