@@ -26,6 +26,7 @@
 import { launchPersistentContext } from 'cloakbrowser';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -107,6 +108,12 @@ const cfg = {
 
   // SKU 逐条日志(1=每个 SKU 一行输出重要字段,便于终端/文件排查)
   logSku: process.env.LOG_SKU === '1',
+
+  // 对齐插件链路(仅 passesFilter=1 的 SKU)
+  // 写 ozon_dom_cache(card)+ ozon_cache_index 索引聚合(FTS 自动同步)
+  writeDomCache: process.env.WRITE_DOM_CACHE !== '0', // 默认开启
+  // 入队 collect_queue_tasks(pending,全部入队;由插件 SW 轮询 claim 消费)
+  enqueueDepth: process.env.ENQUEUE_DEPTH !== '0', // 默认开启
 };
 
 // 配置校验
@@ -213,13 +220,278 @@ function loadStores(progress) {
   return pending;
 }
 
-// 每页 flush:逐条 INSERT,带 1 次重试(与 backfill updateStats 一致)
+// 每页 flush:三链路写入(对齐插件 ozon-data-panel.js onCardExtracted)
+//   ① 浅度日志(全部 SKU,含过滤不通过) → ozon_shallow_collect_log
+//   ② dom card 缓存(仅通过) → ozon_dom_cache(只动 card,不碰 detail;同 domDao.upsertCard)
+//   ③ 深度采集队列入队(仅通过) → collect_queue_tasks(pending;同 queueDao.submit,全部入队)
+//   ④ 索引聚合(仅通过) → ozon_cache_index(轻量版 syncSku;FTS 由触发器自动同步)
+// 全程单事务:崩溃时要么全写要么全不写
 const insertLogStmt = db.prepare(
   `INSERT INTO ozon_shallow_collect_log
    (sku, sellerSlug, sellerId, name, price, ratingCount, imageUrl,
     passesFilter, skipReason, source, collectedAt)
    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 );
+const upsertDomCardStmt = db.prepare(
+  `INSERT INTO ozon_dom_cache (_id, card_data, card_fetched_at, updated_at)
+   VALUES (?, ?, ?, datetime('now'))
+   ON CONFLICT(_id) DO UPDATE SET
+     card_data = excluded.card_data,
+     card_fetched_at = excluded.card_fetched_at,
+     updated_at = datetime('now')`
+);
+const enqueueTaskStmt = db.prepare(
+  `INSERT INTO collect_queue_tasks
+   (sku, sellerSlug, sellerId, domInfo, status, attempts, lastError,
+    startedAt, finishedAt, steps, forceRefresh, createdAt, updatedAt)
+   VALUES (?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, NULL, 0, ?, ?)
+   ON CONFLICT(sku) DO UPDATE SET
+     sellerSlug = excluded.sellerSlug,
+     sellerId = excluded.sellerId,
+     domInfo = excluded.domInfo,
+     status = excluded.status,
+     attempts = excluded.attempts,
+     updatedAt = excluded.updatedAt`
+);
+const upsertIndexStmt = db.prepare(
+  `INSERT INTO ozon_cache_index (
+     sku, card_hit, card_fetched_at, detail_hit, detail_fetched_at,
+     search_hit, search_fetched_at, bundle_hit, bundle_fetched_at,
+     rich_media_hit, rich_media_fetched_at,
+     market_stats_hit, market_stats_fetched_at, market_stats_empty,
+     follow_sell_hit, follow_sell_fetched_at,
+     hit_count, last_fetched_at,
+     name, price, price_value, primary_image, url, rating_count,
+     has_video, has_rich_content, market_price_p50, competitor_count,
+     seller_slug, seller_id, seller_name,
+     description_category_id, type_id, category_name,
+     weight_g, dim_sum_mm,
+     description_quality,
+     listed, searchable_text, updated_at
+   ) VALUES (
+     ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
+   )
+   ON CONFLICT(sku) DO UPDATE SET
+     card_hit=excluded.card_hit, card_fetched_at=excluded.card_fetched_at,
+     detail_hit=excluded.detail_hit, detail_fetched_at=excluded.detail_fetched_at,
+     search_hit=excluded.search_hit, search_fetched_at=excluded.search_fetched_at,
+     bundle_hit=excluded.bundle_hit, bundle_fetched_at=excluded.bundle_fetched_at,
+     rich_media_hit=excluded.rich_media_hit, rich_media_fetched_at=excluded.rich_media_fetched_at,
+     market_stats_hit=excluded.market_stats_hit, market_stats_fetched_at=excluded.market_stats_fetched_at,
+     market_stats_empty=excluded.market_stats_empty,
+     follow_sell_hit=excluded.follow_sell_hit, follow_sell_fetched_at=excluded.follow_sell_fetched_at,
+     hit_count=excluded.hit_count, last_fetched_at=excluded.last_fetched_at,
+     name=excluded.name, price=excluded.price, price_value=excluded.price_value,
+     primary_image=excluded.primary_image,
+     url=excluded.url, rating_count=excluded.rating_count,
+     has_video=excluded.has_video, has_rich_content=excluded.has_rich_content,
+     market_price_p50=excluded.market_price_p50,
+     competitor_count=excluded.competitor_count,
+     description_quality=excluded.description_quality,
+     seller_slug=COALESCE(ozon_cache_index.seller_slug, excluded.seller_slug),
+     seller_id=COALESCE(ozon_cache_index.seller_id, excluded.seller_id),
+     seller_name=COALESCE(ozon_cache_index.seller_name, excluded.seller_name),
+     description_category_id=COALESCE(excluded.description_category_id, ozon_cache_index.description_category_id),
+     type_id=COALESCE(excluded.type_id, ozon_cache_index.type_id),
+     category_name=COALESCE(excluded.category_name, ozon_cache_index.category_name),
+     weight_g=excluded.weight_g, dim_sum_mm=excluded.dim_sum_mm,
+     listed=ozon_cache_index.listed,
+     searchable_text=excluded.searchable_text,
+     updated_at=datetime('now')`
+);
+// syncSkuLite 用预编译查询(7 表主键查,均走索引)
+const qDom = db.prepare(
+  `SELECT card_data, card_fetched_at, detail_data, detail_fetched_at FROM ozon_dom_cache WHERE _id=?`
+);
+const qAttr = db.prepare(
+  `SELECT search_data, search_fetched_at, bundle_data, bundle_fetched_at FROM ozon_attribute_cache WHERE _id=?`
+);
+const qRm = db.prepare(`SELECT data, fetchedAt FROM ozon_rich_media_cache WHERE _id=?`);
+const qMs = db.prepare(`SELECT data, fetchedAt FROM ozon_market_stats_cache WHERE _id=?`);
+const qFs = db.prepare(`SELECT data, fetchedAt FROM ozon_follow_sell_cache WHERE _id=?`);
+const qIdxExisting = db.prepare(
+  `SELECT seller_slug, seller_id, seller_name, listed FROM ozon_cache_index WHERE sku=?`
+);
+
+// JSON 解析(对齐 index-dao.js parseJson)
+function parseJson(s) {
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+// 描述质量分级(对齐 erp-backend-lite/src/utils/description-quality.js 同口径)
+const DESC_UI_CHROME_RE = /(читать далее|показать полностью|свернуть описание|развернуть описание)/gi;
+const DESC_LOAD_FAIL_RE = /(не удалось загрузить|ошибка загрузки|попробуйте (обновить|позже)|failed to load)/i;
+function classifyDescriptionQuality(descRaw) {
+  if (!descRaw) return 0;
+  const cleaned = String(descRaw).replace(DESC_UI_CHROME_RE, ' ').trim();
+  if (!cleaned || DESC_LOAD_FAIL_RE.test(cleaned)) return 1;
+  if (DESC_UI_CHROME_RE.test(String(descRaw))) return 2;
+  return 3;
+}
+
+// 价格字符串 → 数字(对齐 index-dao.js parsePriceValue)
+function parsePriceValue(price) {
+  if (price == null || price === '') return null;
+  const cleaned = String(price).replace(/[^\d.]/g, '');
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+// 索引聚合轻量版(对齐 index-dao.js syncSku 的必要部分):
+// 读 7 张缓存表 → 计算命中位/冗余字段 → upsert ozon_cache_index
+// 差异(有意简化,不影响正确性):
+//   - sv shape 合成省略:直接在 search/bundle 的 attributes 里找 attr 4180(商品名)
+//   - listed/exported 系列不碰(由跟卖/导出任务维护)
+//   - seller_name 由后端 index-sync 定时任务(5 分钟)补齐
+function syncSkuLite(sku) {
+  const [dom, attr, rm, ms, fs] = [qDom.get(sku), qAttr.get(sku), qRm.get(sku), qMs.get(sku), qFs.get(sku)];
+
+  const cardHit = dom?.card_data ? 1 : 0;
+  const detailHit = dom?.detail_data ? 1 : 0;
+  const searchHit = attr?.search_data ? 1 : 0;
+  const bundleHit = attr?.bundle_data ? 1 : 0;
+  const rmHit = rm?.data ? 1 : 0;
+  const msHit = ms?.data ? 1 : 0;
+  const fsHit = fs?.data ? 1 : 0;
+  const hitCount = cardHit + detailHit + searchHit + bundleHit + rmHit + msHit + fsHit;
+
+  const cardData = parseJson(dom?.card_data);
+  const detailData = parseJson(dom?.detail_data);
+  const attrData = parseJson(attr?.search_data);
+  const bundleData = parseJson(attr?.bundle_data);
+  const rmData = parseJson(rm?.data);
+  const msData = parseJson(ms?.data);
+  const msEmpty = msHit && msData?.__empty ? 1 : 0;
+  const fsData = parseJson(fs?.data);
+
+  // name fallback 链: bundle attr4180 → search attr4180 → detail.title → card.name
+  const searchItem =
+    attrData && Array.isArray(attrData.items) && attrData.items.length > 0 ? attrData.items[0] : null;
+  const bAttr4180 = bundleData?.attributes?.find((a) => String(a.attribute_id) === '4180');
+  const sAttr4180 = searchItem?.attributes?.find((a) => String(a.attribute_id) === '4180');
+  const name =
+    bAttr4180?.values?.[0]?.value ||
+    sAttr4180?.values?.[0]?.value ||
+    detailData?.title ||
+    cardData?.name ||
+    '';
+
+  const price = detailData?.price || cardData?.price || '';
+  const priceValue = parsePriceValue(price);
+  const primaryImage = cardData?.image || detailData?.images?.[0] || '';
+  const url = cardData?.url || '';
+  const ratingCount = Number.isFinite(Number(cardData?.ratingCount))
+    ? Number(cardData?.ratingCount)
+    : Number.isFinite(Number(detailData?.reviewCount))
+      ? Number(detailData?.reviewCount)
+      : null;
+  const hasVideo = rmData?.mp4 ? 1 : 0;
+  const hasRichContent = rmData?.richContent && String(rmData.richContent).length > 0 ? 1 : 0;
+  const descriptionQuality = classifyDescriptionQuality(rmData?.description || '');
+  const marketPriceP50 = msData?.priceP50 ?? msData?.p50 ?? null;
+  const competitorCount =
+    Array.isArray(fsData?.sellers)
+      ? fsData.sellers.length
+      : Array.isArray(fsData?.competitors)
+        ? fsData.competitors.length
+        : null;
+
+  // 类目信息:search_data(优先) → bundle_data(fallback)
+  let descriptionCategoryId = null;
+  let typeId = null;
+  if (searchItem) {
+    const sTi = Number(searchItem.description_type_dict_value);
+    if (Number.isFinite(sTi) && sTi > 0) typeId = sTi;
+    if (Array.isArray(searchItem.categories)) {
+      const lvl3 = searchItem.categories.find((c) => c && Number(c.level) === 3);
+      if (lvl3 && Number.isFinite(Number(lvl3.id)) && Number(lvl3.id) > 0) {
+        descriptionCategoryId = Number(lvl3.id);
+      } else {
+        const sorted = [...searchItem.categories]
+          .filter((c) => c && Number.isFinite(Number(c.id)))
+          .sort((a, b) => Number(b.level || 0) - Number(a.level || 0));
+        if (sorted.length > 0 && Number(sorted[0].id) > 0) descriptionCategoryId = Number(sorted[0].id);
+      }
+    }
+  }
+  if ((descriptionCategoryId === null || typeId === null) && bundleData && typeof bundleData === 'object') {
+    if (descriptionCategoryId === null) {
+      const bDci = Number(bundleData.description_category_id);
+      if (Number.isFinite(bDci) && bDci > 0) descriptionCategoryId = bDci;
+    }
+    if (typeId === null) {
+      const bTi = Number(bundleData.type_id);
+      if (Number.isFinite(bTi) && bTi > 0) typeId = bTi;
+    }
+  }
+  const categoryName = detailData?.category || null;
+
+  // 超轻小件冗余字段(bundle 顶层物理字段)
+  const rawWeight = Number(bundleData?.weight);
+  const weightG = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : null;
+  const rawDepth = Number(bundleData?.depth);
+  const rawWidth = Number(bundleData?.width);
+  const rawHeight = Number(bundleData?.height);
+  const dimSumMm =
+    Number.isFinite(rawDepth) && rawDepth > 0 &&
+    Number.isFinite(rawWidth) && rawWidth > 0 &&
+    Number.isFinite(rawHeight) && rawHeight > 0
+      ? rawDepth + rawWidth + rawHeight
+      : null;
+
+  // 全文搜索字段(seller_name 先读现有值,后端定时任务负责补齐)
+  const existing = qIdxExisting.get(sku);
+  const sellerSlug = existing?.seller_slug || '';
+  const sellerId = existing?.seller_id || '';
+  const sellerName = existing?.seller_name || '';
+  const listed = existing?.listed || 0;
+  const searchableText = [name, sku, sellerName].filter(Boolean).join(' ');
+
+  // last_fetched_at:7 类 fetchedAt 的最大值
+  const fetchedAts = [
+    dom?.card_fetched_at,
+    dom?.detail_fetched_at,
+    attr?.search_fetched_at,
+    attr?.bundle_fetched_at,
+    rm?.fetchedAt,
+    ms?.fetchedAt,
+    fs?.fetchedAt,
+  ].filter(Boolean);
+  fetchedAts.sort();
+  const lastFetchedAt = fetchedAts.pop() || null;
+
+  upsertIndexStmt.run(
+    sku,
+    cardHit, dom?.card_fetched_at || null,
+    detailHit, dom?.detail_fetched_at || null,
+    searchHit, attr?.search_fetched_at || null,
+    bundleHit, attr?.bundle_fetched_at || null,
+    rmHit, rm?.fetchedAt || null,
+    msHit, ms?.fetchedAt || null,
+    msEmpty,
+    fsHit, fs?.fetchedAt || null,
+    hitCount,
+    lastFetchedAt,
+    name, price, priceValue, primaryImage, url, ratingCount,
+    hasVideo, hasRichContent, marketPriceP50, competitorCount,
+    sellerSlug, sellerId, sellerName,
+    descriptionCategoryId, typeId, categoryName,
+    weightG, dimSumMm,
+    descriptionQuality,
+    listed,
+    searchableText
+  );
+}
+
+// 每页 flush 主入口
+// 注:node:sqlite 的 DatabaseSync 无 transaction() 方法(better-sqlite3 才有),
+//     手动 BEGIN IMMEDIATE / COMMIT / ROLLBACK 实现
 function flushLogs(logs, store) {
   if (logs.length === 0) return;
   if (cfg.dryRun) {
@@ -227,30 +499,78 @@ function flushLogs(logs, store) {
     return;
   }
   const now = new Date().toISOString();
-  for (const s of logs) {
-    const args = [
-      s.sku, store.sellerSlug ?? null, String(store.sellerId),
-      s.name ?? null,
-      s.price != null ? Number(s.price) : null,
-      s.ratingCount != null ? Number(s.ratingCount) : null,
-      s.imageUrl ?? null,
-      s.passesFilter ? 1 : 0,
-      s.skipReason ?? null,
-      'headless-api',
-      now,
-    ];
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        insertLogStmt.run(...args);
-        break;
-      } catch (e) {
-        if (e.code === 'ERR_SQLITE_ERROR' && attempt === 0) {
-          const start = Date.now();
-          while (Date.now() - start < 200) {} // 忙等 200ms 后重试一次
-          continue;
-        }
-        throw e;
+  const passed = logs.filter((s) => s.passesFilter);
+
+  const writeAll = () => {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      // ① 浅度日志(全部)
+      for (const s of logs) {
+        insertLogStmt.run(
+          s.sku, store.sellerSlug ?? null, String(store.sellerId),
+          s.name ?? null,
+          s.price != null ? Number(s.price) : null,
+          s.ratingCount != null ? Number(s.ratingCount) : null,
+          s.imageUrl ?? null,
+          s.passesFilter ? 1 : 0,
+          s.skipReason ?? null,
+          'headless-api',
+          now
+        );
       }
+      // ②③④ dom 缓存 + 深度队列入队 + 索引聚合(仅通过过滤的)
+      for (const s of passed) {
+        if (cfg.writeDomCache) {
+          upsertDomCardStmt.run(
+            s.sku,
+            JSON.stringify({
+              sku: s.sku,
+              url: s.url || '',
+              name: s.name || '',
+              price: s.price != null ? Number(s.price) : null,
+              image: s.imageUrl || '',
+              ratingCount: s.ratingCount ?? null,
+              source: 'api',
+            }),
+            now
+          );
+        }
+        if (cfg.enqueueDepth) {
+          enqueueTaskStmt.run(
+            s.sku,
+            store.sellerSlug ?? null,
+            String(store.sellerId),
+            JSON.stringify({
+              title: s.name || '',
+              price: s.price != null ? Number(s.price) : null,
+              imageUrl: s.imageUrl || '',
+              ratingCount: s.ratingCount ?? null,
+            }),
+            now, now
+          );
+        }
+        if (cfg.writeDomCache) {
+          syncSkuLite(s.sku); // 索引聚合依赖 dom card,仅开缓存时执行
+        }
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch { /* 已回滚 */ }
+      throw e;
+    }
+  };
+  // 写入带 1 次重试(与 backfill updateStats 一致)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeAll();
+      break;
+    } catch (e) {
+      if (e.code === 'ERR_SQLITE_ERROR' && attempt === 0) {
+        const start = Date.now();
+        while (Date.now() - start < 200) {} // 忙等 200ms 后重试一次
+        continue;
+      }
+      throw e;
     }
   }
 }
@@ -515,6 +835,7 @@ async function collectStore(page, store, state) {
         price: card.price,
         ratingCount: card.ratingCount,
         imageUrl: card.imageUrl,
+        url: card.url,
         passesFilter,
         skipReason,
       });
@@ -562,6 +883,7 @@ async function main() {
   ].filter(([, min, max]) => min != null || max != null)
     .map(([label, min, max]) => `${label}=[${min ?? '-'},${max ?? '-'}]`);
   console.log(`店铺过滤:   仅大陆=${cfg.storeOnlyMainlandChina}${storeRanges.length ? ', ' + storeRanges.join(', ') : ''}`);
+  console.log(`链路对齐:   dom缓存=${cfg.writeDomCache ? '开' : '关'}, 深度入队=${cfg.enqueueDepth ? '开' : '关'}`);
 
   acquireLock();
 
