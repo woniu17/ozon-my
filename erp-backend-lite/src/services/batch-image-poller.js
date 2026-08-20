@@ -4,6 +4,7 @@
 //   2. 标记 IMAGE_PENDING,并发执行 prepareListing(含水印加工链)
 //   3. 完成后标记 IMAGE_DONE,存 follow_task_id 供第二阶段(batch-upload-poller)读取
 //   4. 失败(如缓存数据不足)标记为 FAILED,触发 onFailure 策略
+//   5. 僵尸恢复:超时仍 IMAGE_PENDING 的 item(服务重启导致处理中断)重置回 PENDING 重试
 // 并发度:MAX_CONCURRENCY=5,同时处理 5 个 item 的图片
 // 轮询周期:500ms(短周期提升吞吐,实际处理时间取决于水印渲染)
 import { db } from '../db/index.js';
@@ -13,6 +14,11 @@ import logger from '../middleware/log.js';
 const POLL_INTERVAL_MS = 500; // 500ms 扫描一次(不限速)
 const FIRST_SCAN_DELAY_MS = 8 * 1000; // 启动后 8 秒首次扫描
 const MAX_CONCURRENCY = 5; // 最多同时处理 5 个 item
+
+// IMAGE_PENDING 超时(分钟):超过视为僵尸(服务重启等导致处理中断),重置 PENDING 重试
+// 不恢复会死锁:upload-poller 全局串行只认最早 RUNNING 批次,卡住的 IMAGE_PENDING 让批次永远无法收尾,
+// 后续所有批次的 IMAGE_DONE 都轮不到提交(2026-08-20 bat-1787125801703 事故)
+const IMAGE_PENDING_TIMEOUT_MIN = 10;
 
 let timer = null;
 let running = false; // 防止 scanOnce 重入
@@ -24,6 +30,23 @@ async function scanOnce() {
   if (running) return; // 上一轮未完成,跳过
   running = true;
   try {
+    // 僵尸恢复:超时 IMAGE_PENDING → PENDING(仅 RUNNING 批次,PAUSED 批次等 resume 后自然重试)
+    const recovered = db
+      .prepare(
+        `UPDATE batch_upload_items
+         SET status='PENDING', updated_at=datetime('now')
+         WHERE status='IMAGE_PENDING'
+           AND updated_at < datetime('now', ?)
+           AND batch_task_id IN (SELECT local_task_id FROM batch_upload_tasks WHERE status='RUNNING')`
+      )
+      .run(`-${IMAGE_PENDING_TIMEOUT_MIN} minutes`);
+    if (recovered.changes > 0) {
+      logger.warn(
+        { recovered: recovered.changes, timeoutMin: IMAGE_PENDING_TIMEOUT_MIN },
+        'batch-image-poller 僵尸恢复:超时 IMAGE_PENDING 重置为 PENDING'
+      );
+    }
+
     // 取所有 RUNNING 批次下的 PENDING item(兼容旧数据 PENDING 和新流程)
     // 一次最多取 MAX_CONCURRENCY 个,按 seq 升序
     const items = db
