@@ -84,7 +84,7 @@ function buildWorkbook(task, items) {
     const combined = `${it.sku}, ${fmtNum(salePrice)}, ${fmtNum(minPrice)}`;
     const f = ws.getCell(`F${row}`);
     f.value = {
-      formula: `A${row}&", "&TEXT(D${row},"0.00")&", "&TEXT(E${row},"0.00")`,
+      formula: `A${row}&","&TEXT(D${row},"0.00")&","&TEXT(E${row},"0.00")`,
       result: combined,
     };
   });
