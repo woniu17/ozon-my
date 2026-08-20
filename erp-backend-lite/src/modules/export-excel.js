@@ -27,10 +27,10 @@ function sanitizeFilters(filters) {
   return out;
 }
 
-// 数字转展示字符串(与 Excel TEXT(x,"0.##") 同口径):18.99→"18.99",19→"19",1299.5→"1299.5"
+// 数字转展示字符串(与 Excel TEXT(x,"0.00") 同口径):18.99→"18.99",19→"19.00",1299.5→"1299.50"
 function fmtNum(n) {
   if (n == null || !Number.isFinite(n)) return '';
-  return String(Math.round(n * 100) / 100);
+  return n.toFixed(2);
 }
 
 // 跟卖价格规则(与 Excel 公式 IF(C<=15,19,C) 同口径):原价格<=15 → 19,否则 = 原价格
@@ -50,7 +50,7 @@ function buildWorkbook(task, items) {
     { header: '原价格', key: 'price', width: 12 },
     { header: '跟卖价格', key: 'salePrice', width: 12 },
     { header: '跟卖最低价格', key: 'minPrice', width: 14 },
-    { header: 'SKU, 跟卖价格, 跟卖最低价格', key: 'combined', width: 42 },
+    { header: '跟卖行', key: 'combined', width: 42 },
   ];
   ws.getRow(1).font = { bold: true };
 
@@ -58,41 +58,37 @@ function buildWorkbook(task, items) {
     const row = idx + 2;
     const priceValue =
       it.price_value != null && Number.isFinite(Number(it.price_value)) ? Number(it.price_value) : null;
-    ws.getCell(`A${row}`).value = it.sku;
+    const a = ws.getCell(`A${row}`);
+    a.value = it.sku;
+    a.numFmt = '@'; // SKU 列文本格式,防止 Excel 按数字处理(丢前导零/科学计数)
     ws.getCell(`B${row}`).value =
       it.rating_count != null && Number.isFinite(Number(it.rating_count)) ? Number(it.rating_count) : null;
 
     const c = ws.getCell(`C${row}`);
     c.value = priceValue;
-    c.numFmt = '0.##';
+    c.numFmt = '0.00'; // 数值,固定2位小数
 
     // 跟卖价格 = IF(C<=15, 19, C)
     const salePrice = computeSalePrice(priceValue);
     const d = ws.getCell(`D${row}`);
     d.value = { formula: `IF(C${row}<=15,19,C${row})`, result: salePrice };
-    d.numFmt = '0.##';
+    d.numFmt = '0.00'; // 数值,固定2位小数
 
     // 跟卖最低价格 = D - 0.01
     const minPrice = salePrice == null ? null : Math.round((salePrice - 0.01) * 100) / 100;
     const e = ws.getCell(`E${row}`);
     e.value = { formula: `D${row}-0.01`, result: minPrice };
-    e.numFmt = '0.##';
+    e.numFmt = '0.00'; // 数值,固定2位小数
 
-    // 组合列 = "${SKU}, ${跟卖价格}, ${跟卖最低价格}"
+    // 组合列 = "${SKU}, ${跟卖价格}, ${跟卖最低价格}"(价格固定 2 位小数,与 C/D/E 列同口径)
     const combined = `${it.sku}, ${fmtNum(salePrice)}, ${fmtNum(minPrice)}`;
     const f = ws.getCell(`F${row}`);
     f.value = {
-      formula: `A${row}&", "&TEXT(D${row},"0.##")&", "&TEXT(E${row},"0.##")`,
+      formula: `A${row}&", "&TEXT(D${row},"0.00")&", "&TEXT(E${row},"0.00")`,
       result: combined,
     };
   });
 
-  // 信息行:任务元数据写在数据区下方空两行,便于追溯但不干扰数据复制
-  const metaRow = items.length + 4;
-  ws.getCell(`A${metaRow}`).value = `任务ID: ${task.local_task_id}`;
-  ws.getCell(`A${metaRow + 1}`).value = `导出时间: ${task.created_at}`;
-  ws.getCell(`A${metaRow + 2}`).value =
-    `导出 ${task.total_count} 条(请求 ${task.requested_count}),有市场统计 ${task.market_stats_count} 条,来源卖家 ${task.seller_count} 家`;
   return wb;
 }
 
