@@ -5,3 +5,5 @@ node_modules/
 .*-profile/
 *-profile.zip
 backfill-progress.json
+shallow-collect-progress.json
+.shallow-collect.lock

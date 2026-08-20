@@ -5,7 +5,7 @@
 // 用途:排查过滤效果(略过原因分布)+ 浅度采集统计
 import { db } from '../../index.js';
 
-const SHALLOW_SOURCES = ['api-scroller', 'dom-scroller', 'shop-page', 'pdp'];
+const SHALLOW_SOURCES = ['api-scroller', 'dom-scroller', 'shop-page', 'pdp', 'headless-api'];
 const SHALLOW_SKIP_REASONS = [
   'no-rating',
   'price-below-min',
