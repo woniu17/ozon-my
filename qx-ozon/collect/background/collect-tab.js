@@ -948,9 +948,11 @@
             }
           }
           const rawSellers = Array.isArray(wsl?.sellers) ? wsl.sellers : [];
-          // normSeller: 完整 14 字段对齐 webSellerList widget sellers[i] 原始结构
+          // normSeller: 完整 11 字段对齐 webSellerList widget sellers[i] 原始结构
           // 移除旧 10 字段(avatar/rating/reviewsCount/region/deliveryText/deliveryRank)
           // avatar -> logoImageUrl, deliveryText 从 advantages[].contentRs.headRs[].content 提取(由前端读取侧处理)
+          // 2026-08: 不再透传埋点三字段(trackingInfo/sellerInfoTracking/informationBtnTracking),
+          // 与 shared-utils.js _normalizeSeller 同口径
           const normSeller = (item) => {
             if (!item || typeof item !== 'object') return null;
             const txt = (v) =>
@@ -976,10 +978,7 @@
               price: item.price || null,
               coverImage: str(item.coverImage),
               productLink: str(item.productLink),
-              // 埋点(透传)
-              trackingInfo: item.trackingInfo || null,
-              sellerInfoTracking: item.sellerInfoTracking || null,
-              informationBtnTracking: item.informationBtnTracking || null,
+              // 埋点三字段(trackingInfo/sellerInfoTracking/informationBtnTracking)刻意不透传
             };
           };
           const sellers = rawSellers.map(normSeller).filter(Boolean);

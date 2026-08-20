@@ -2409,9 +2409,12 @@ if (!globalThis.__JZ_BRAND__) {
     return null;
   }
 
-  // _normalizeSeller: 完整 14 字段对齐 webSellerList widget sellers[i] 原始结构
+  // _normalizeSeller: 完整 11 字段对齐 webSellerList widget sellers[i] 原始结构
   // 移除旧 10 字段(avatar/rating/reviewsCount/region/deliveryText/deliveryRank)
   // avatar -> logoImageUrl, deliveryText 改从 advantages 提取(由前端读取侧处理)
+  // 2026-08: 不再透传埋点三字段(trackingInfo/sellerInfoTracking/informationBtnTracking)——
+  // 纯上报标识,落库后零读取价值且占缓存 ~29% 体积(历史数据由
+  // erp-backend-lite/scripts/trim-follow-sell-tracking.mjs 清理)
   function _normalizeSeller(item) {
     if (!item || typeof item !== 'object') return null;
     const _txt = (v) =>
@@ -2453,10 +2456,7 @@ if (!globalThis.__JZ_BRAND__) {
       price: item.price || null,
       coverImage: _str(item.coverImage),
       productLink: _str(item.productLink),
-      // 埋点(透传)
-      trackingInfo: item.trackingInfo || null,
-      sellerInfoTracking: item.sellerInfoTracking || null,
-      informationBtnTracking: item.informationBtnTracking || null,
+      // 埋点三字段(trackingInfo/sellerInfoTracking/informationBtnTracking)刻意不透传
     };
   }
   // 2026-05 Ozon 把跟卖数据从商品页主响应里搬走了 — webOtherSellers/Followers/otherSellers
@@ -2511,8 +2511,7 @@ if (!globalThis.__JZ_BRAND__) {
   // 返回 { count, sellers } 或 null(失败/反爬退避中)
   // - count: number(跟卖卖家数)
   // - sellers: Array<{sku, id, name, link, credentials, logoImageUrl, advantages,
-  //                    subtitle, price, coverImage, productLink,
-  //                    trackingInfo, sellerInfoTracking, informationBtnTracking}>
+  //                    subtitle, price, coverImage, productLink}>
   // 历史调用方期望 number,有向后兼容包装 jzFetchPublicFollowSellCount。
   window.jzFetchPublicFollowSell = async function (sku) {
     if (!sku) return null;

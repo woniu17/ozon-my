@@ -80,7 +80,7 @@ function swParseFollowSellModal(fsResp, fsSku) {
       }
       if (!followSellData) {
         const rawSellers = Array.isArray(wsl?.sellers) ? wsl.sellers : [];
-        // normSeller: 14 字段完整版,与 collect-tab.js / shared-utils.js 对齐
+        // normSeller: 11 字段完整版,与 collect-tab.js / shared-utils.js 对齐(埋点三字段不透传)
         const normSeller = (item) => {
           if (!item || typeof item !== 'object') return null;
           const txt = (v) =>
@@ -102,9 +102,6 @@ function swParseFollowSellModal(fsResp, fsSku) {
             price: item.price || null,
             coverImage: str(item.coverImage),
             productLink: str(item.productLink),
-            trackingInfo: item.trackingInfo || null,
-            sellerInfoTracking: item.sellerInfoTracking || null,
-            informationBtnTracking: item.informationBtnTracking || null,
           };
         };
         const sellers = rawSellers.map(normSeller).filter(Boolean);
@@ -284,8 +281,9 @@ test('price 字段:保留原始 item.price 对象,无 item.price 时为 null', (
   assert.strictEqual(result.sellers[3].price, null);
 });
 
-// 1.10 ★14 字段完整抽取(对齐 hello.json 真实结构)
-test('★14 字段完整抽取:sku/id/name/link/credentials/logoImageUrl/advantages/subtitle/price/coverImage/productLink/trackingInfo/sellerInfoTracking/informationBtnTracking', () => {
+// 1.10 ★11 字段完整抽取(对齐 hello.json 真实结构)
+// 埋点三字段(trackingInfo/sellerInfoTracking/informationBtnTracking)2026-08 起刻意不透传
+test('★11 字段完整抽取:sku/id/name/link/credentials/logoImageUrl/advantages/subtitle/price/coverImage/productLink,埋点三字段剥离', () => {
   const resp = {
     ok: true,
     status: 200,
@@ -333,10 +331,14 @@ test('★14 字段完整抽取:sku/id/name/link/credentials/logoImageUrl/advanta
   assert.deepStrictEqual(s.price, { cardPrice: { price: '67,28 ¥' } });
   assert.strictEqual(s.coverImage, 'https://ir-20.ozonstatic.cn/cover.jpg');
   assert.strictEqual(s.productLink, 'https://www.ozon.ru/product/sumka-4790402820/');
-  // 埋点(3)
-  assert.deepStrictEqual(s.trackingInfo, { click: { actionType: 'click', key: 'k1' } });
-  assert.deepStrictEqual(s.sellerInfoTracking, { click: { actionType: 'click', key: 'k2' } });
-  assert.deepStrictEqual(s.informationBtnTracking, { click: { actionType: 'click', key: 'k3' } });
+  // 埋点三字段:输入含但必须剥离(未提取)
+  assert.strictEqual(s.trackingInfo, undefined);
+  assert.strictEqual(s.sellerInfoTracking, undefined);
+  assert.strictEqual(s.informationBtnTracking, undefined);
+  assert.deepStrictEqual(Object.keys(s).sort(), [
+    'advantages', 'coverImage', 'credentials', 'id', 'link',
+    'logoImageUrl', 'name', 'price', 'productLink', 'sku', 'subtitle',
+  ]);
 });
 
 // 1.11 字段缺失时安全降级(null/[] 兜底)
@@ -362,9 +364,9 @@ test('字段缺失安全降级:无 id/credentials/logoImageUrl → 空串/空数
   assert.strictEqual(s.subtitle, '');
   assert.strictEqual(s.coverImage, '');
   assert.strictEqual(s.productLink, '');
-  assert.strictEqual(s.trackingInfo, null);
-  assert.strictEqual(s.sellerInfoTracking, null);
-  assert.strictEqual(s.informationBtnTracking, null);
+  assert.strictEqual(s.trackingInfo, undefined);
+  assert.strictEqual(s.sellerInfoTracking, undefined);
+  assert.strictEqual(s.informationBtnTracking, undefined);
 });
 
 // ============================================================
