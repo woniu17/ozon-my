@@ -388,24 +388,24 @@ function close() {
                 <tr>
                   <th>#</th>
                   <th>SKU</th>
-                  <th>名称</th>
-                  <th>卖家</th>
                   <th>原价格</th>
                   <th>评论数</th>
                   <th>市场统计</th>
                   <th>采集时间</th>
+                  <th>卖家</th>
+                  <th>名称</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="it in skuPreview.items" :key="it.sku">
                   <td>{{ it.seq }}</td>
                   <td class="eed-item-sku">{{ it.sku }}</td>
-                  <td class="eed-item-name" :title="it.name">{{ it.name || '—' }}</td>
-                  <td :title="it.sellerId">{{ it.sellerName || it.sellerId || '—' }}</td>
                   <td>{{ it.price ?? '—' }}</td>
                   <td>{{ it.ratingCount ?? '—' }}</td>
                   <td>{{ it.marketStats ? '有' : '无' }}</td>
                   <td>{{ fmtTime(it.lastFetchedAt) }}</td>
+                  <td :title="it.sellerId">{{ it.sellerName || it.sellerId || '—' }}</td>
+                  <td class="eed-item-name" :title="it.name">{{ it.name || '—' }}</td>
                 </tr>
               </tbody>
             </table>
@@ -510,7 +510,8 @@ function close() {
   background: #fff;
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-  width: 640px;
+  /* 与"按筛选自动上架"弹窗(AutoPickBatchDialog)宽度对齐 */
+  width: 880px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
   overflow: hidden;
@@ -679,7 +680,7 @@ function close() {
   font-family: ui-monospace, Consolas, monospace;
 }
 .eed-item-name {
-  max-width: 180px;
+  max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
