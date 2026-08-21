@@ -69,6 +69,7 @@ const cfg = {
   claimEmptyWaitMs: Number(process.env.CLAIM_EMPTY_WAIT_MS) || 60000,
   dryRun: process.env.DRY_RUN === '1',
   logSku: process.env.LOG_SKU === '1',
+  logData: process.env.LOG_DATA !== '0', // 关键数据日志(每类采集数据输出核心指标,默认开)
 
   // 节流(反爬拟人化)
   skuIntervalMinMs: Number(process.env.SKU_INTERVAL_MIN_MS) || 8000,
@@ -995,7 +996,7 @@ function parsePriceNum(p) {
   return null;
 }
 
-function buildDetailData(filteredStates, jsonLd, fsData, mp4, sku) {
+function buildDetailData(filteredStates, jsonLd, fsData, mp4, sku, description = '', descriptionSource = '') {
   const ws = filteredStates && typeof filteredStates === 'object' ? filteredStates : {};
   const keys = Object.keys(ws);
   const find = (prefix) => keys.find((k) => k.startsWith(prefix));
@@ -1066,7 +1067,87 @@ function buildDetailData(filteredStates, jsonLd, fsData, mp4, sku) {
     deliveryMode: '',
     rating: reviewScore?.score ?? ld.aggregateRating?.ratingValue ?? null,
     reviewCount: reviewScore?.reviewCount ?? ld.aggregateRating?.reviewCount ?? null,
+    // 描述(对齐插件 detail 字段):page-json 提取优先,jsonLd 纯文本兜底;
+    // ERP 合成时 detailData.description 是 bundle attr 4191 之后的兜底来源
+    description: description || (typeof ld.description === 'string' ? ld.description : ''),
+    descriptionSource: descriptionSource || (description ? '' : typeof ld.description === 'string' ? 'json-ld' : ''),
   };
+}
+
+// ── 关键数据日志(LOG_DATA=0 关闭;每类采集数据一行核心指标) ──
+// 输出形如:      ├─ marketStats(真采): 销量=1.2w GMV=340w 均价=289 库存=8901 ...
+function fmtNum(v) {
+  if (v == null || v === '') return '-';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  if (Math.abs(n) >= 1e8) return (n / 1e8).toFixed(2).replace(/\.?0+$/, '') + '亿';
+  if (Math.abs(n) >= 1e4) return (n / 1e4).toFixed(1).replace(/\.0$/, '') + 'w';
+  return String(Math.round(n * 100) / 100);
+}
+function fmtStr(s, max) {
+  const t = String(s ?? '').trim();
+  if (!t) return '-';
+  return t.length > max ? t.slice(0, max) + '…' : t;
+}
+function logDataLine(tag, summary) {
+  if (cfg.logData) console.log(`      ├─ ${tag}: ${summary}`);
+}
+// marketStats:销量/GMV/均价/库存/浏览/转化/DRR(市场规模判断核心)
+function summarizeMarketStats(d) {
+  if (!d) return '无数据';
+  if (d.__empty) return '__empty(接口无销量数据)';
+  const pct = (v) => (v == null ? '-' : `${v}%`);
+  return (
+    `销量=${fmtNum(d.soldCount)} GMV=${fmtNum(d.gmvSum)} 均价=${fmtNum(d.avgPrice)} 库存=${fmtNum(d.stock)}` +
+    ` 浏览=${fmtNum(d.views)} 加购率=${pct(d.convToCartPdp ?? d.pdpToCartConversion)} DRR=${pct(d.drr)}`
+  );
+}
+// search:变体ID/三级类目/价格(类目过滤与变体定位核心)
+function summarizeSearch(v) {
+  if (!v) return '无数据';
+  const cat = Array.isArray(v.categories) ? v.categories.find((c) => Number(c.level) === 3) : null;
+  const catLabel = cat ? (cat.name ? `${fmtStr(cat.name, 24)}(${cat.id})` : String(cat.id)) : '-';
+  const price = parsePriceNum(v.price);
+  return `variant=${v.variant_id ?? '-'} 类目=${catLabel}` + (price != null ? ` 价格=${fmtNum(price)}` : '');
+}
+// bundle:属性数/重量/尺寸(超轻小件判定与上架属性核心)
+function summarizeBundle(b) {
+  if (!b) return '无数据';
+  const attrs = Array.isArray(b.attributes) ? b.attributes.length : 0;
+  const dim = [b.depth, b.width, b.height].map((x) => fmtNum(x)).join('×');
+  return `属性=${attrs}个 重量=${fmtNum(b.weight)}g 尺寸=${dim}mm 类目ID=${b.description_category_id ?? '-'}/类型ID=${b.type_id ?? '-'}`;
+}
+// richMedia:视频/富文本/描述/标签/图片(跟卖素材核心)
+function summarizeRichMedia(d) {
+  if (!d) return '无数据';
+  return (
+    `视频=${d.mp4 ? '✓' : '✗'} 富文本=${d.richContentHasText ? '有' : '无'}(${(d.richContent || '').length}字)` +
+    ` 描述=${fmtStr(d.descriptionSource || '-', 18)}:${(d.description || '').length}字` +
+    ` 标签=${Array.isArray(d.hashtags) ? d.hashtags.length : 0} 图=${Array.isArray(d.gallery) ? d.gallery.length : 0}张`
+  );
+}
+// followSell:跟卖卖家数/最低价(竞争强度核心)
+function summarizeFollowSell(d) {
+  if (!d) return '无数据';
+  const sellers = Array.isArray(d.sellers) ? d.sellers : [];
+  const nums = sellers.map((s) => parsePriceNum(s?.price)).filter((v) => v != null);
+  const min = nums.length ? Math.min(...nums) : null;
+  return `卖家数=${d.count ?? sellers.length}家 最低价=${min != null ? fmtNum(min) : '-'}`;
+}
+// detail:标题/品牌/价格/评分/图片/描述(商品身份核心)
+function summarizeDetail(d) {
+  if (!d) return '无数据';
+  return (
+    `标题=${fmtStr(d.title, 40)} 品牌=${fmtStr(d.brand, 15)}` +
+    ` 价格=${fmtStr(d.price, 14)} 评分=${d.rating ?? '-'}(${fmtNum(d.reviewCount)}评)` +
+    ` 图=${Array.isArray(d.images) ? d.images.length : 0}张 跟卖最低=${fmtNum(d.followSellMinPrice)}` +
+    ` 描述=${fmtStr(d.descriptionSource || '-', 18)}:${(d.description || '').length}字`
+  );
+}
+// card:浅采写入的 dom 卡片(标题/价格/评分)
+function summarizeCard(c) {
+  if (!c) return '无数据';
+  return `标题=${fmtStr(c.name || c.title, 40)} 价格=${fmtNum(c.price)} 评分=${fmtStr(c.rating, 6)}(${fmtNum(c.ratingCount)}评)`;
 }
 
 // ── 浏览器管理 ───────────────────────────────────────────────
@@ -1251,6 +1332,17 @@ async function doAutoCollect(task, filterMap) {
     byType.search.hit = searchItems.length > 0 && !forceRefresh;
     byType.bundle.hit = !forceRefresh && bundleUsable(attrR);
 
+    // 关键数据日志:缓存命中的部分(真采部分在各自采集点输出)
+    if (cfg.logData) {
+      if (domR?.card) logDataLine('card(缓存)', summarizeCard(domR.card));
+      if (domR?.detail) logDataLine('detail(缓存)', summarizeDetail(domR.detail));
+      if (richR?.data) logDataLine('richMedia(缓存)', summarizeRichMedia(richR.data));
+      if (msR?.data && byType.marketStats.hit) logDataLine('marketStats(缓存)', summarizeMarketStats(msR.data));
+      if (fsR?.data) logDataLine('followSell(缓存)', summarizeFollowSell(fsR.data));
+      if (byType.search.hit) logDataLine(`search(缓存,${searchItems.length}变体)`, summarizeSearch(searchItems[0]));
+      if (byType.bundle.hit) logDataLine('bundle(缓存)', summarizeBundle(attrR?.bundleData));
+    }
+
     // ── Step 3:marketStats 真调(门控A前置) ──
     let marketStatsData = byType.marketStats.hit ? msR.data : null;
     if (!byType.marketStats.hit) {
@@ -1266,6 +1358,7 @@ async function doAutoCollect(task, filterMap) {
         marketStatsData = raw ? normalizeMarketItem(raw) : { __empty: true };
         if (!cfg.dryRun) await erp.setMarketStatsCache(sku, marketStatsData);
         byType.marketStats.hit = true;
+        logDataLine('marketStats(真采)', summarizeMarketStats(marketStatsData));
       }
     }
 
@@ -1298,6 +1391,7 @@ async function doAutoCollect(task, filterMap) {
           if (!cfg.dryRun) await erp.setAttributeCache(sku, 'search', { items: rawVariants });
           searchVariant = rawVariants[0];
           byType.search.hit = true;
+          logDataLine(`search(真采,${rawVariants.length}变体)`, summarizeSearch(searchVariant));
         }
         // HTTP 200 但无 variants(永久性):不标 error → 门控B no-search-data
       }
@@ -1320,6 +1414,7 @@ async function doAutoCollect(task, filterMap) {
             if (!cfg.dryRun) await erp.setAttributeCache(sku, 'bundle', item, bu.data?.bundle_id || null);
             bundleDataRef = item;
             byType.bundle.hit = true;
+            logDataLine('bundle(真采)', summarizeBundle(bundleDataRef));
           }
           // item 为 null(HTTP 200 无数据,永久性):不标 error → 门控C non-ultra-light
         }
@@ -1430,6 +1525,18 @@ async function doAutoCollect(task, filterMap) {
         });
         byType.richMedia.hit = true;
       }
+      // 日志与写缓存解耦:dryRun 也输出(纯展示,不落库)
+      if (mediaRes.anyOk) {
+        logDataLine('richMedia(真采)', summarizeRichMedia({
+          mp4: mediaRes.mp4,
+          richContent: mediaRes.richContent,
+          richContentHasText: mediaRes.richContentHasText,
+          description: mediaRes.description,
+          descriptionSource: mediaRes.descriptionSource,
+          hashtags: mediaRes.hashtags,
+          gallery: mediaRes.fields?.images || [],
+        }));
+      }
 
       // followSell 写入:仅 HTTP 200(fsRes.ok)写(非 200 允许重试,但按设计 best-effort 不阻断)
       const fsData = fsRes?.ok ? fsRes.followSellData || null : null;
@@ -1443,19 +1550,25 @@ async function doAutoCollect(task, filterMap) {
         await erp.setFollowSellCache(sku, fsData);
         byType.followSell.hit = true;
       }
+      if (fsData) logDataLine('followSell(真采)', summarizeFollowSell(fsData));
 
       // detail 写入:widgetStates(主)+ jsonLd(兜底);提取空不视为 partial(best-effort)
-      if ((mediaRes.anyOk || jsonldRes.ok) && !cfg.dryRun) {
+      if (mediaRes.anyOk || jsonldRes.ok) {
         const detail = buildDetailData(
           mediaRes.filteredStates || {},
           jsonldRes.ok ? jsonldRes.data : null,
           fsData,
           mediaRes.mp4 || null,
-          sku
+          sku,
+          mediaRes.description || '',
+          mediaRes.descriptionSource || ''
         );
         if (detail && (detail.title || detail.productId || detail.images.length)) {
-          await erp.setDomCache(sku, 'detail', detail);
-          byType.detail.hit = true;
+          logDataLine('detail(真采)', summarizeDetail(detail));
+          if (!cfg.dryRun) {
+            await erp.setDomCache(sku, 'detail', detail);
+            byType.detail.hit = true;
+          }
         }
       }
       // Step5 各子项 best-effort 降级:失败不标 error、不阻断 → 照常 success(设计 §7.1)
@@ -1639,6 +1752,7 @@ async function main() {
     `门控:      A(市场统计)=${cfg.enableMarketStatsGate ? '开' : '关'}, B(类目)=${cfg.enableCategoryFilterGate ? '开' : '关'}, C(超轻)=${cfg.enableUltraLightGate ? '开' : '关'}, Gate0.5(仅大陆)=${cfg.onlyMainlandChina ? '开' : '关'}`
   );
   console.log(`SKU逐条日志: ${cfg.logSku ? '开启(LOG_SKU=1)' : '关闭'}`);
+  console.log(`关键数据日志: ${cfg.logData ? '开启(LOG_DATA=0 可关)' : '关闭'}`);
 
   acquireFileLock(cfg.lockFile, 'deep-collect');
   // profile 跨脚本锁(浅采/深采共用 profile 时互斥;cloakbrowser 同 userDataDir 本就不允许双开,此处提前给明确报错)
