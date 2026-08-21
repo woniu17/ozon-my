@@ -629,12 +629,22 @@ function isPermanentError(r) {
 // ── 浏览器 ───────────────────────────────────────────────────
 let browser = null;
 
+// 返回工作页:复用会话恢复的第一个标签页(全部关闭会导致上下文退出,后续 newPage 报
+// Protocol error (Target.createTarget): Failed to open a new tab),
+// 其余残留页关闭(后台加载占内存且可能触发反爬);无恢复页时新建
 async function launchBrowser() {
   browser = await launchPersistentContext({
     userDataDir: cfg.profileDir,
     headless: cfg.headless,
   });
-  return browser;
+  const restored = (() => {
+    try { return browser.pages(); } catch { return []; }
+  })();
+  for (const p of restored.slice(1)) await p.close().catch(() => {});
+  if (restored.length > 1) {
+    console.log(`    已关闭 ${restored.length - 1} 个残留标签页,复用第 1 个为工作页`);
+  }
+  return restored[0] || (await browser.newPage());
 }
 
 // 访问 ozon.ru 首页:过反爬挑战 + 建立/刷新 cookie(带健康探测)
@@ -773,10 +783,9 @@ async function main() {
     process.exit(1);
   }
 
-  // 2. 启动浏览器
+  // 2. 启动浏览器(launchBrowser 返回工作页:复用会话恢复的第 1 个标签页)
   console.log('\n[2/5] 启动 stealth 浏览器...');
-  await launchBrowser();
-  const page = await browser.newPage();
+  const page = await launchBrowser();
   await warmup(page);
 
   // 3. 查询待采店铺

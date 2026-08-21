@@ -1085,7 +1085,17 @@ async function launchBrowser() {
     userDataDir: cfg.profileDir,
     headless: cfg.headless,
   });
-  sellerPage = await browser.newPage();
+  // 标签页清理:关闭会话恢复的多余残留页(后台加载占内存且可能触发反爬),
+  // 但保留第 1 个复用为 sellerPage(全部关闭会导致上下文退出,后续 newPage 报
+  // Protocol error (Target.createTarget): Failed to open a new tab)
+  const restored = (() => {
+    try { return browser.pages(); } catch { return []; }
+  })();
+  for (const p of restored.slice(1)) await p.close().catch(() => {});
+  if (restored.length > 1) {
+    console.log(`[启动] 已关闭 ${restored.length - 1} 个残留标签页,复用第 1 个为 sellerPage`);
+  }
+  sellerPage = restored[0] || (await browser.newPage());
   buyerPage = await browser.newPage();
 }
 
@@ -1335,19 +1345,21 @@ async function doAutoCollect(task, filterMap) {
     // ── Step 5:买家页(richMedia + followSell + detail) ──
     if (!byType.richMedia.hit || !byType.detail.hit || !byType.followSell.hit) {
       const productUrl = domR?.card?.url || `https://www.ozon.ru/product/-${sku}/`;
-      let navUrl = productUrl; // goto 用归一化后的绝对 URL(card.url 可能是相对路径)
-      let relPath = `/product/-${sku}/`;
+      let relPath = `/product/-${sku}/`; // entrypoint-api fetch 用(card.url 完整 path+search)
       let urlSku = sku;
       try {
         const u = new URL(productUrl, 'https://www.ozon.ru');
-        navUrl = u.href;
         relPath = u.pathname + u.search;
-        urlSku = (u.pathname.match(/-(\d+)\/?$/) || [])[1] || sku;
+        // sku 提取兼容两种格式:带 slug(/product/xxx-123)与直连(/product/123)
+        urlSku = (u.pathname.match(/\/product\/(?:[^/?#]*-)?(\d+)\/?$/) || [])[1] || sku;
       } catch { /* fallback 已就绪 */ }
 
+      // 导航用 /product/<sku> 直连格式(对齐插件 ensureBuyerTab:
+      // card.url 带 _bctx/at/hs 搜索跟踪参数,直接 goto 触发反爬导致详情页加载失败;
+      // /product/<sku> 由 ozon 302 到规范 slug 页,必能加载)
       let navStatus = 0;
       try {
-        const navResp = await buyerPage.goto(navUrl, {
+        const navResp = await buyerPage.goto(`https://www.ozon.ru/product/${urlSku}/`, {
           waitUntil: 'domcontentloaded',
           timeout: cfg.pageGotoTimeoutMs,
         });
@@ -1358,6 +1370,17 @@ async function doAutoCollect(task, filterMap) {
       }
       if (navStatus === 403 || navStatus === 429) {
         return partial('buyer-page-failed', 'ANTIBOT', 'ANTIBOT');
+      }
+      if (navStatus === 404) {
+        return partial('buyer-page-failed', 'HTTP_404'); // 商品下架/不存在,回 pending 重试
+      }
+      // 重定向检测:最终 URL 偏离 /product/(challenge 页/首页兜底)说明页面未真正加载,
+      // 继续采集只会写入垃圾缓存 → partial 回队重试
+      {
+        const finalUrl = buyerPage.url();
+        if (!/\/product\//.test(finalUrl)) {
+          return partial('buyer-page-failed', 'REDIRECT:' + String(finalUrl).slice(0, 80));
+        }
       }
 
       // helpers 预注入(mp4 提取 + 描述提取;失败降级,对齐插件 warn 继续)

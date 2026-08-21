@@ -187,7 +187,18 @@ async function main() {
     headless: HEADLESS,
   });
 
-  const page = await browser.newPage();
+  // 标签页清理:关闭会话恢复的多余残留页,但保留第 1 个复用为工作页
+  // (全部关闭会导致上下文退出,后续 newPage 报
+  //  Protocol error (Target.createTarget): Failed to open a new tab)
+  const restored = (() => {
+    try { return browser.pages(); } catch { return []; }
+  })();
+  for (const p of restored.slice(1)) await p.close().catch(() => {});
+  if (restored.length > 1) {
+    console.log(`[1/4] 已关闭 ${restored.length - 1} 个残留标签页,复用第 1 个为工作页`);
+  }
+
+  const page = restored[0] || (await browser.newPage());
 
   // 先访问 ozon.ru 首页,让浏览器通过反爬验证 + 建立 cookie
   console.log('[1/4] 访问 ozon.ru 首页(通过反爬 + 建立 cookie)...');
