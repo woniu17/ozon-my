@@ -76,6 +76,9 @@ const filterSummary = computed(() => {
   else if (f.marketStats === 'none') parts.push('无市场统计');
   if (f.priceMin !== '' && f.priceMin != null) parts.push(`最低价 ${f.priceMin}`);
   if (f.priceMax !== '' && f.priceMax != null) parts.push(`最高价 ${f.priceMax}`);
+  if (f.fetchedFrom || f.fetchedTo) {
+    parts.push(`采集时间:${f.fetchedFrom || '…'} ~ ${f.fetchedTo || '…'}`);
+  }
   return parts.length ? parts.join(' / ') : '无(全部采集箱商品)';
 });
 
@@ -98,6 +101,8 @@ function buildFilters() {
     maxCacheHits: f.cacheCompleteness === 'partial' ? '2' : '',
     descriptionQuality: f.descriptionQuality || '',
     marketStats: f.marketStats || '',
+    fetchedFrom: f.fetchedFrom || '',
+    fetchedTo: f.fetchedTo || '',
   };
 }
 

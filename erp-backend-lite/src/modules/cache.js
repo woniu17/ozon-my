@@ -572,6 +572,10 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     const marketStats = String(req.query.marketStats || '').trim();
     // exported:导出状态筛选(2026-08 采集箱导出)'unexported'=未导出,'exported'=已导出,空=不限
     const exportedFilter = String(req.query.exported || '').trim();
+    // fetchedFrom/fetchedTo:采集时间范围('YYYY-MM-DD',闭区间含当日全天,按服务器本地时区)
+    //   过滤 last_fetched_at(7 类缓存最新采集时间);格式校验在 buildFilterWhere 内完成
+    const fetchedFrom = typeof req.query.fetchedFrom === 'string' ? req.query.fetchedFrom.trim() : '';
+    const fetchedTo = typeof req.query.fetchedTo === 'string' ? req.query.fetchedTo.trim() : '';
 
     // indexDao 单表查询:过滤 + 排序 + 分页全在 SQL 完成
     const { items, total } = await daos.indexDao.findList({
@@ -591,6 +595,8 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       descriptionQuality,
       marketStats,
       exported: exportedFilter,
+      fetchedFrom,
+      fetchedTo,
       page,
       pageSize,
     });

@@ -249,6 +249,8 @@ const state = reactive({
     descriptionQuality: '', // 描述状态:''=全部,'0'=描述为空,'1'=含占位符,'2'=按钮污染,'3'=描述有效,'1,2'=需清洗
     marketStats: '', // 市场统计:''=全部,'has'=有真实数据,'none'=无真实数据(未采集+__empty 空标记)
     exported: '', // 导出状态(2026-08):''=全部,'unexported'=未导出,'exported'=已导出
+    fetchedFrom: '', // 采集时间范围('YYYY-MM-DD',闭区间含当日全天,按本地时区;空=不限)
+    fetchedTo: '',
     // 用上次的筛选条件覆盖初值
     ...(storedFilters || {}),
   },
@@ -274,6 +276,8 @@ async function loadList() {
     if (state.filters.descriptionQuality) params.descriptionQuality = state.filters.descriptionQuality;
     if (state.filters.marketStats) params.marketStats = state.filters.marketStats;
     if (state.filters.exported) params.exported = state.filters.exported;
+    if (state.filters.fetchedFrom) params.fetchedFrom = state.filters.fetchedFrom;
+    if (state.filters.fetchedTo) params.fetchedTo = state.filters.fetchedTo;
     const data = await getCollectBoxV2FromCache(params);
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -503,6 +507,19 @@ onMounted(() => {
           v-model.trim="state.filters.priceMax"
           placeholder="最高价"
           @keydown.enter="search"
+        />
+      </span>
+      <span class="filter-date-range" title="按最近采集时间过滤(闭区间,含所选日期当天)">
+        <input
+          class="filter-input filter-date"
+          type="date"
+          v-model="state.filters.fetchedFrom"
+        />
+        <span class="filter-price-sep">~</span>
+        <input
+          class="filter-input filter-date"
+          type="date"
+          v-model="state.filters.fetchedTo"
         />
       </span>
       <button class="btn btn-primary" @click="search">查询</button>
@@ -944,6 +961,18 @@ onMounted(() => {
 }
 .filter-price-sep {
   color: #999;
+  font-size: 13px;
+}
+.filter-date-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.filter-date {
+  width: 130px;
+  /* 覆盖全局 .filter-input { min-width: 200px }(global.css),避免日期框被撑开 */
+  min-width: 130px;
+  padding: 4px 8px;
   font-size: 13px;
 }
 .cb-foot {

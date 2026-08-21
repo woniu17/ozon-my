@@ -56,6 +56,20 @@ function hasNum(v) {
   return v !== '' && v !== null && v !== undefined && Number.isFinite(Number(v));
 }
 
+// 'YYYY-MM-DD' → 当日起点/终点(服务器本地时区)的 ISO-UTC 字符串;非法输入返回 null
+// last_fetched_at 存的是 ISO-UTC 字符串(2026-08-21T10:00:00.000Z),字典序即时间序,可直接字符串比较
+// 注:Date-only 字符串按 UTC 解释、带时间的按本地时区解释(ES 规范),故拼接 'T00:00:00' 走本地时区
+function localDayStartIso(d) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  const dt = new Date(`${d}T00:00:00`);
+  return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+}
+function localDayEndIso(d) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  const dt = new Date(`${d}T23:59:59.999`);
+  return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+}
+
 function buildFilterWhere(opts) {
   const {
     keyword,
@@ -115,6 +129,24 @@ function buildFilterWhere(opts) {
   if (hasNum(priceMax)) {
     where.push('price_value IS NOT NULL AND price_value <= ?');
     params.push(Number(priceMax));
+  }
+  // 采集时间范围:fetchedFrom/fetchedTo('YYYY-MM-DD',闭区间含当日全天,按服务器本地时区)
+  //   过滤 last_fetched_at(7 类缓存最新采集时间,与列表"最近缓存"列同口径)
+  const fetchedFrom = typeof opts.fetchedFrom === 'string' ? opts.fetchedFrom.trim() : '';
+  const fetchedTo = typeof opts.fetchedTo === 'string' ? opts.fetchedTo.trim() : '';
+  if (fetchedFrom) {
+    const start = localDayStartIso(fetchedFrom);
+    if (start) {
+      where.push('last_fetched_at >= ?');
+      params.push(start);
+    }
+  }
+  if (fetchedTo) {
+    const end = localDayEndIso(fetchedTo);
+    if (end) {
+      where.push('last_fetched_at <= ?');
+      params.push(end);
+    }
   }
   if (hasNum(minCacheHits) && Number(minCacheHits) > 0) {
     // 数据完整 = 3 类合并缓存都有(dom + attribute + richMedia)

@@ -501,6 +501,9 @@ router.post('/admin/api/collect-queue/batch-submit-by-filter', async (req, res, 
         : '',
       // 市场统计筛选 'has'=有真实数据,'none'=无真实数据(未采集+__empty)
       marketStats: String(filters.marketStats || '').trim(),
+      // 采集时间范围('YYYY-MM-DD',闭区间含当日全天;过滤 last_fetched_at)
+      fetchedFrom: String(filters.fetchedFrom || '').trim(),
+      fetchedTo: String(filters.fetchedTo || '').trim(),
     };
 
     // 拉取全部匹配 SKU(无分页,复用 auto-pick 的 DAO)

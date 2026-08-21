@@ -56,6 +56,9 @@ const filterSummary = computed(() => {
   else if (f.marketStats === 'none') parts.push('无市场统计');
   if (f.priceMin !== '' && f.priceMin != null) parts.push(`≥${f.priceMin}`);
   if (f.priceMax !== '' && f.priceMax != null) parts.push(`≤${f.priceMax}`);
+  if (f.fetchedFrom || f.fetchedTo) {
+    parts.push(`采集时间:${f.fetchedFrom || '…'} ~ ${f.fetchedTo || '…'}`);
+  }
   return parts.length ? parts.join('、') : '无筛选(全部商品)';
 });
 
@@ -76,6 +79,8 @@ function buildFilterParams() {
   if (f.priceMax !== '' && f.priceMax != null) params.priceMax = f.priceMax;
   if (f.descriptionQuality) params.descriptionQuality = f.descriptionQuality;
   if (f.marketStats) params.marketStats = f.marketStats;
+  if (f.fetchedFrom) params.fetchedFrom = f.fetchedFrom;
+  if (f.fetchedTo) params.fetchedTo = f.fetchedTo;
   return params;
 }
 

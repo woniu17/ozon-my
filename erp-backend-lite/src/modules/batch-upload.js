@@ -317,6 +317,9 @@ router.post('/admin/api/batch-upload/auto-pick', async (req, res, next) => {
         : '',
       // 市场统计筛选 'has'=有真实数据,'none'=无真实数据(未采集+__empty)
       marketStats: String(filters.marketStats || '').trim(),
+      // 采集时间范围('YYYY-MM-DD',闭区间含当日全天;过滤 last_fetched_at)
+      fetchedFrom: String(filters.fetchedFrom || '').trim(),
+      fetchedTo: String(filters.fetchedTo || '').trim(),
     };
 
     // 拉取所有候选 SKU(按筛选条件,已按 last_fetched_at DESC 排序)
