@@ -47,6 +47,9 @@ const config = {
   imageHostMode: process.env.IMAGE_HOST_MODE || 'local',
   remoteImageHostUrl: (process.env.REMOTE_IMAGE_HOST_URL || '').replace(/\/$/, ''),
   remoteImageHostToken: process.env.REMOTE_IMAGE_HOST_TOKEN || '',
+  // 服务间 API Key(2026-08):无头采集脚本(deep-collect.js)等服务调用方
+  // 经 x-api-key 头鉴权(非 JWT,永久有效);未配置时不启用该通道
+  serviceApiKey: process.env.SERVICE_API_KEY || '',
 };
 
 export default config;

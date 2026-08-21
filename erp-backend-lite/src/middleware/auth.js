@@ -29,6 +29,17 @@ export function authMiddleware(req, _res, next) {
     return next();
   }
 
+  // 服务间鉴权(2026-08):x-api-key 匹配 SERVICE_API_KEY → 服务身份直通
+  // (无头采集脚本 deep-collect.js 等机器调用方;跳过 JWT 校验与滑动续期)
+  if (req.headers['x-api-key']) {
+    if (config.serviceApiKey && req.headers['x-api-key'] === config.serviceApiKey) {
+      req.user = { id: 0, service: 'deep-collect' };
+      return next();
+    }
+    // 带 key 但不匹配:直接 401(不回落 JWT,避免误导性报错)
+    return next(new ApiError(ErrorCode.AUTH_EXPIRED, 'x-api-key 无效或服务端未配置 SERVICE_API_KEY'));
+  }
+
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   if (!token) {

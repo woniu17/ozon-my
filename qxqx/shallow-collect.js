@@ -1,7 +1,16 @@
 // 无头 cloakbrowser 浅度采集脚本
 // 用 launchPersistentContext 启动 stealth 浏览器,导航到店铺页,
 // 在店铺页上下文里逐页 fetch entrypoint-api(API 直取,复用 qx-ozon 插件浅采语义),
-// 4 道过滤后写 ozon_shallow_collect_log(source='headless-api')。
+// 4 道过滤后写浅度日志(POST /admin/api/shallow-collect/log,source='headless-api')。
+//
+// 2026-08 起改走 ERP API(对齐 deep-collect.js),不再直连 SQLite:
+//   - 店铺列表:GET /admin/api/store-classification(分页拉全量+过滤+排序)
+//   - 浅度日志:POST /admin/api/shallow-collect/log(逐条,小并发批次)
+//   - dom card 缓存:POST /ozon/cache/dom/:sku(ERP domDao.upsertCard 自动触发 indexDao.syncSku
+//     → 本脚本的 syncSkuLite 索引聚合已整体移除)
+//   - 深度队列入队:POST /admin/api/collect-queue(skipIfTodaySuccess:false,对齐原
+//     "全部入队不做 24h 成功去重"语义)
+//   - 鉴权:x-api-key 头(与后端 SERVICE_API_KEY 同值,见 .env.example)
 //
 // 与 backfill-store-stats.js 的差异:
 //   - backfill:每店一次 fetch 取 stats(订单数/评论数/评分/开业时长)
@@ -24,11 +33,10 @@
 //     (seenSkus 保留,不重复写、不误判空页)
 //   - 错误分类:404 = 永久错误直接跳过;403/429/5xx/网络错误 = 临时错误走熔断
 //   - DRY_RUN=1 完全只读(不写日志、不写 progress)
+//   - ERP 写入失败:请求级重试(2s×1)+连续失败熔断(ERP_FAIL_MAX 后暂停探测 /health 恢复续采)
 
 import { launchPersistentContext } from 'cloakbrowser';
-import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
-import { createHmac } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -62,7 +70,12 @@ function numOrNull(v) {
 
 // ── 配置 ─────────────────────────────────────────────────────
 const cfg = {
-  dbPath: process.env.DB_PATH || path.resolve(__dirname, '../erp-backend-lite/data/erp.db'),
+  // ERP 连接与鉴权(与后端 SERVICE_API_KEY 同值)
+  erpBaseUrl: (process.env.ERP_BASE_URL || 'http://127.0.0.1:3001').replace(/\/$/, ''),
+  erpApiKey: process.env.ERP_API_KEY || '',
+  erpTimeoutMs: Number(process.env.ERP_TIMEOUT_MS) || 15000,
+  erpFailMax: Number(process.env.ERP_FAIL_MAX) || 5,
+
   profileDir: path.join(__dirname, '.ozon-profile'),
   progressFile: path.join(__dirname, 'shallow-collect-progress.json'),
   lockFile: path.join(__dirname, '.shallow-collect.lock'),
@@ -123,15 +136,14 @@ if (cfg.pageIntervalMinMs > cfg.pageIntervalMaxMs) {
   console.error(`[配置错误] PAGE_INTERVAL_MIN_MS(${cfg.pageIntervalMinMs}) > MAX(${cfg.pageIntervalMaxMs})`);
   process.exit(1);
 }
-const SORT_COLUMNS = {
-  lastSeenAt: 'lastSeenAt',
-  ordersCount: 'orders_count',
-  reviewsCount: 'reviews_count',
-  rating: 'rating',
-  openedMonths: 'opened_months',
-};
-if (!SORT_COLUMNS[cfg.storeSort]) {
-  console.error(`[配置错误] STORE_SORT 无效: ${cfg.storeSort}(可选: ${Object.keys(SORT_COLUMNS).join('/')})`);
+if (!cfg.erpApiKey) {
+  console.error('[配置错误] ERP_API_KEY 未配置(与后端 SERVICE_API_KEY 同值,见 .env.example)');
+  process.exit(1);
+}
+// 排序键(与 ERP store-classification DAO sortColMap 一致;lastSeenAt 为服务端默认)
+const SORT_COLUMNS = ['lastSeenAt', 'ordersCount', 'reviewsCount', 'rating', 'openedMonths'];
+if (!SORT_COLUMNS.includes(cfg.storeSort)) {
+  console.error(`[配置错误] STORE_SORT 无效: ${cfg.storeSort}(可选: ${SORT_COLUMNS.join('/')})`);
   process.exit(1);
 }
 
@@ -172,43 +184,158 @@ function releaseLock() {
   try { unlinkSync(cfg.lockFile); } catch { /* 已删除 */ }
 }
 
-// ── SQLite ───────────────────────────────────────────────────
-const db = new DatabaseSync(cfg.dbPath);
-db.exec('PRAGMA journal_mode = WAL');
-// 等待锁最多 5s,避免与后端服务并发写时立即报 database is locked
-db.exec('PRAGMA busy_timeout = 5000');
+// ── ERP API Client(移植自 deep-collect.js) ─────────────────
+// 统一出口:x-api-key 头 + 超时(AbortController) + 请求级重试 + 连续失败熔断
+// 错误分类(kind):ERP_NET / ERP_HTTP_5xx / ERP_AUTH(401,快速失败) / ERP_4xx(请求构造 bug)
+class ErpError extends Error {
+  constructor(kind, message, status) {
+    super(message);
+    this.name = 'ErpError';
+    this.kind = kind;
+    this.status = status;
+  }
+}
 
-function loadStores(progress) {
-  const whereParts = [];
-  const params = [];
-  if (cfg.storeSellerIds.length > 0) {
-    whereParts.push(`sellerId IN (${cfg.storeSellerIds.map(() => '?').join(',')})`);
-    params.push(...cfg.storeSellerIds);
-  } else {
-    if (cfg.storeOnlyMainlandChina) {
-      whereParts.push('isMainlandChina = 1');
+let interrupted = false;
+let erpFailStreak = 0;
+let erpBreakerNotified = false;
+
+async function erpRawRequest(method, reqPath, body, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(cfg.erpBaseUrl + reqPath, {
+      method,
+      headers: {
+        'x-api-key': cfg.erpApiKey,
+        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    if (resp.status === 401) {
+      throw new ErpError('ERP_AUTH', 'x-api-key 无效或后端未配置 SERVICE_API_KEY(检查两侧 .env)', 401);
+    }
+    if (resp.status >= 500) {
+      throw new ErpError('ERP_HTTP_5xx', `HTTP ${resp.status}`, resp.status);
+    }
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new ErpError('ERP_4xx', `HTTP ${resp.status} ${text.slice(0, 200)}`, resp.status);
+    }
+    return await resp.json().catch(() => ({}));
+  } catch (e) {
+    if (e instanceof ErpError) throw e;
+    if (e?.name === 'AbortError') throw new ErpError('ERP_NET', `timeout ${timeoutMs}ms`);
+    throw new ErpError('ERP_NET', String(e?.message || e));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ERP 恢复探测:/health 为 public 路径;每 30s 一次直到恢复
+async function waitForErpRecovery() {
+  console.warn(`[ERP] 连续失败 ${erpFailStreak} 次,暂停采集,每 30s 探测 /health...`);
+  while (!interrupted) {
+    try {
+      await erpRawRequest('GET', '/health', undefined, 10000);
+      erpFailStreak = 0;
+      erpBreakerNotified = false;
+      console.log('[ERP] /health 探测恢复,清零续采');
+      return;
+    } catch {
+      await sleep(30000);
     }
   }
+  throw new ErpError('ERP_NET', '中断于 ERP 恢复等待');
+}
 
-  // 数值范围过滤(orders_count/reviews_count/rating/opened_months;NULL 值被范围条件排除)
-  const applyRange = (col, min, max) => {
-    if (min != null) { whereParts.push(`${col} >= ?`); params.push(min); }
-    if (max != null) { whereParts.push(`${col} <= ?`); params.push(max); }
-  };
-  applyRange('orders_count', cfg.storeOrdersMin, cfg.storeOrdersMax);
-  applyRange('reviews_count', cfg.storeReviewsMin, cfg.storeReviewsMax);
-  applyRange('rating', cfg.storeRatingMin, cfg.storeRatingMax);
-  applyRange('opened_months', cfg.storeOpenedMonthsMin, cfg.storeOpenedMonthsMax);
+async function erpFetch(method, reqPath, body) {
+  if (erpFailStreak >= cfg.erpFailMax) await waitForErpRecovery();
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await erpRawRequest(method, reqPath, body, cfg.erpTimeoutMs);
+      erpFailStreak = 0;
+      erpBreakerNotified = false;
+      return r;
+    } catch (e) {
+      if (e instanceof ErpError && e.kind === 'ERP_AUTH') throw e; // 配置类错误不重试
+      lastErr = e;
+      const retryable = e instanceof ErpError && (e.kind === 'ERP_NET' || e.kind === 'ERP_HTTP_5xx');
+      if (attempt === 0 && retryable) {
+        await sleep(2000); // 对齐插件 _erpQueueUpdate:2s 后重试 1 次
+        continue;
+      }
+      if (!retryable) throw e;
+    }
+  }
+  erpFailStreak++;
+  if (erpFailStreak >= cfg.erpFailMax && !erpBreakerNotified) {
+    erpBreakerNotified = true;
+  }
+  throw lastErr;
+}
 
-  const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
-  const sql = `
-    SELECT sellerId, sellerSlug
-    FROM ozon_store_classification
-    ${where}
-    ORDER BY ${SORT_COLUMNS[cfg.storeSort]} DESC
-  `;
-  let rows = db.prepare(sql).all(...params);
-  rows = rows.filter((r) => r.sellerId && /^\d+$/.test(String(r.sellerId)));
+const erp = {
+  // 店铺分类列表(分页;filter/sortBy 由查询串传递)
+  getStoresPage: async (query) => {
+    const r = await erpFetch('GET', `/admin/api/store-classification?${query}`);
+    return r?.data ?? { items: [], total: 0 };
+  },
+  // 浅度日志(单条)
+  insertShallowLog: (body) => erpFetch('POST', '/admin/api/shallow-collect/log', body),
+  // dom 缓存写入(ERP domDao.upsertCard 自动触发 indexDao.syncSku 索引聚合)
+  setDomCache: (sku, type, data) =>
+    erpFetch('POST', `/ozon/cache/dom/${encodeURIComponent(sku)}`, { type, data }),
+  // 深度队列入队
+  submitTask: (body) => erpFetch('POST', '/admin/api/collect-queue', body),
+  // 启动探活(带鉴权的轻量 GET)
+  getQueueStats: async () => {
+    const r = await erpFetch('GET', '/admin/api/collect-queue/stats');
+    return r?.data ?? null;
+  },
+};
+
+// 查询待采店铺(GET /admin/api/store-classification 分页拉全量)
+// 过滤条件尽量下推 ERP(isMainlandChina/数值范围/排序);
+// sellerIds 白名单(ERP 不支持)与 sellerId 纯数字校验在客户端过滤
+async function loadStores(progress) {
+  const q = new URLSearchParams();
+  if (cfg.storeSellerIds.length === 0 && cfg.storeOnlyMainlandChina) {
+    q.set('isMainlandChina', 'true');
+  }
+  // 数值范围过滤(ERP 参数名与浅采语义一一对应;NULL 值被范围条件排除)
+  const ranges = [
+    ['ordersCount', cfg.storeOrdersMin, cfg.storeOrdersMax],
+    ['reviewsCount', cfg.storeReviewsMin, cfg.storeReviewsMax],
+    ['rating', cfg.storeRatingMin, cfg.storeRatingMax],
+    ['openedMonths', cfg.storeOpenedMonthsMin, cfg.storeOpenedMonthsMax],
+  ];
+  for (const [key, min, max] of ranges) {
+    if (min != null) q.set(`${key}Min`, String(min));
+    if (max != null) q.set(`${key}Max`, String(max));
+  }
+  q.set('sortBy', cfg.storeSort); // lastSeenAt 为服务端默认,显式传递保持一致
+  q.set('pageSize', '200'); // ERP 上限 200
+
+  // 白名单模式(不传 isMainlandChina,客户端按 sellerId 集合过滤)
+  const sellerIdSet = new Set(cfg.storeSellerIds);
+
+  const rows = [];
+  for (let page = 1; ; page++) {
+    q.set('currentPage', String(page));
+    const r = await erp.getStoresPage(q.toString());
+    const items = Array.isArray(r.items) ? r.items : [];
+    for (const it of items) {
+      const sellerId = String(it.sellerId || it._id || '');
+      if (!/^\d+$/.test(sellerId)) continue; // 对齐原 SQL 结果的纯数字校验
+      if (sellerIdSet.size > 0 && !sellerIdSet.has(sellerId)) continue;
+      rows.push({ sellerId, sellerSlug: it.sellerSlug ?? null });
+    }
+    const total = Number(r.total) || 0;
+    if (items.length === 0 || rows.length >= total) break;
+  }
 
   // 断点续传:排除已完成(REVISIT_DAYS=0 永久有效;>0 时 N 天后重采)
   const now = Date.now();
@@ -222,279 +349,18 @@ function loadStores(progress) {
   return pending;
 }
 
-// 每页 flush:三链路写入(对齐插件 ozon-data-panel.js onCardExtracted)
-//   ① 浅度日志(全部 SKU,含过滤不通过) → ozon_shallow_collect_log
-//   ② dom card 缓存(仅通过) → ozon_dom_cache(只动 card,不碰 detail;同 domDao.upsertCard)
-//   ③ 深度采集队列入队(仅通过) → collect_queue_tasks(pending;同 queueDao.submit,全部入队)
-//   ④ 索引聚合(仅通过) → ozon_cache_index(轻量版 syncSku;FTS 由触发器自动同步)
-// 全程单事务:崩溃时要么全写要么全不写
-const insertLogStmt = db.prepare(
-  `INSERT INTO ozon_shallow_collect_log
-   (sku, sellerSlug, sellerId, name, price, ratingCount, imageUrl,
-    passesFilter, skipReason, source, collectedAt)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-);
-const upsertDomCardStmt = db.prepare(
-  `INSERT INTO ozon_dom_cache (_id, card_data, card_fetched_at, updated_at)
-   VALUES (?, ?, ?, datetime('now'))
-   ON CONFLICT(_id) DO UPDATE SET
-     card_data = excluded.card_data,
-     card_fetched_at = excluded.card_fetched_at,
-     updated_at = datetime('now')`
-);
-const enqueueTaskStmt = db.prepare(
-  `INSERT INTO collect_queue_tasks
-   (sku, sellerSlug, sellerId, domInfo, status, attempts, lastError,
-    startedAt, finishedAt, steps, forceRefresh, createdAt, updatedAt)
-   VALUES (?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, NULL, 0, ?, ?)
-   ON CONFLICT(sku) DO UPDATE SET
-     sellerSlug = excluded.sellerSlug,
-     sellerId = excluded.sellerId,
-     domInfo = excluded.domInfo,
-     status = excluded.status,
-     attempts = excluded.attempts,
-     updatedAt = excluded.updatedAt`
-);
-const upsertIndexStmt = db.prepare(
-  `INSERT INTO ozon_cache_index (
-     sku, card_hit, card_fetched_at, detail_hit, detail_fetched_at,
-     search_hit, search_fetched_at, bundle_hit, bundle_fetched_at,
-     rich_media_hit, rich_media_fetched_at,
-     market_stats_hit, market_stats_fetched_at, market_stats_empty,
-     follow_sell_hit, follow_sell_fetched_at,
-     hit_count, last_fetched_at,
-     name, price, price_value, primary_image, url, rating_count,
-     has_video, has_rich_content, market_price_p50, competitor_count,
-     seller_slug, seller_id, seller_name,
-     description_category_id, type_id, category_name,
-     weight_g, dim_sum_mm,
-     description_quality,
-     listed, searchable_text, updated_at
-   ) VALUES (
-     ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now')
-   )
-   ON CONFLICT(sku) DO UPDATE SET
-     card_hit=excluded.card_hit, card_fetched_at=excluded.card_fetched_at,
-     detail_hit=excluded.detail_hit, detail_fetched_at=excluded.detail_fetched_at,
-     search_hit=excluded.search_hit, search_fetched_at=excluded.search_fetched_at,
-     bundle_hit=excluded.bundle_hit, bundle_fetched_at=excluded.bundle_fetched_at,
-     rich_media_hit=excluded.rich_media_hit, rich_media_fetched_at=excluded.rich_media_fetched_at,
-     market_stats_hit=excluded.market_stats_hit, market_stats_fetched_at=excluded.market_stats_fetched_at,
-     market_stats_empty=excluded.market_stats_empty,
-     follow_sell_hit=excluded.follow_sell_hit, follow_sell_fetched_at=excluded.follow_sell_fetched_at,
-     hit_count=excluded.hit_count, last_fetched_at=excluded.last_fetched_at,
-     name=excluded.name, price=excluded.price, price_value=excluded.price_value,
-     primary_image=excluded.primary_image,
-     url=excluded.url, rating_count=excluded.rating_count,
-     has_video=excluded.has_video, has_rich_content=excluded.has_rich_content,
-     market_price_p50=excluded.market_price_p50,
-     competitor_count=excluded.competitor_count,
-     description_quality=excluded.description_quality,
-     seller_slug=COALESCE(ozon_cache_index.seller_slug, excluded.seller_slug),
-     seller_id=COALESCE(ozon_cache_index.seller_id, excluded.seller_id),
-     seller_name=COALESCE(ozon_cache_index.seller_name, excluded.seller_name),
-     description_category_id=COALESCE(excluded.description_category_id, ozon_cache_index.description_category_id),
-     type_id=COALESCE(excluded.type_id, ozon_cache_index.type_id),
-     category_name=COALESCE(excluded.category_name, ozon_cache_index.category_name),
-     weight_g=excluded.weight_g, dim_sum_mm=excluded.dim_sum_mm,
-     listed=ozon_cache_index.listed,
-     searchable_text=excluded.searchable_text,
-     updated_at=datetime('now')`
-);
-// syncSkuLite 用预编译查询(7 表主键查,均走索引)
-const qDom = db.prepare(
-  `SELECT card_data, card_fetched_at, detail_data, detail_fetched_at FROM ozon_dom_cache WHERE _id=?`
-);
-const qAttr = db.prepare(
-  `SELECT search_data, search_fetched_at, bundle_data, bundle_fetched_at FROM ozon_attribute_cache WHERE _id=?`
-);
-const qRm = db.prepare(`SELECT data, fetchedAt FROM ozon_rich_media_cache WHERE _id=?`);
-const qMs = db.prepare(`SELECT data, fetchedAt FROM ozon_market_stats_cache WHERE _id=?`);
-const qFs = db.prepare(`SELECT data, fetchedAt FROM ozon_follow_sell_cache WHERE _id=?`);
-const qIdxExisting = db.prepare(
-  `SELECT seller_slug, seller_id, seller_name, listed FROM ozon_cache_index WHERE sku=?`
-);
+// 每页 flush:三链路写入(对齐插件 ozon-data-panel.js onCardExtracted),走 ERP API
+//   ① 浅度日志(全部 SKU,含过滤不通过) → POST /admin/api/shallow-collect/log
+//   ② dom card 缓存(仅通过) → POST /ozon/cache/dom/:sku
+//      (ERP domDao.upsertCard 自动触发 indexDao.syncSku 索引聚合,
+//       原 syncSkuLite 轻量版已整体移除)
+//   ③ 深度采集队列入队(仅通过) → POST /admin/api/collect-queue
+//      (skipIfTodaySuccess:false,对齐原"全部入队不做 24h 成功去重"语义)
+// 注:原单事务原子性不再保留 — ERP 逐请求写入;页面级失败由 erpFetch 重试+熔断兜底,
+//     熔断恢复后整页重写(浅度日志按 SKU+时间追加,重复写可接受)
+const ERP_WRITE_CONCURRENCY = 4; // 小并发批次,每页几十条请求不打满本地 ERP
 
-// JSON 解析(对齐 index-dao.js parseJson)
-function parseJson(s) {
-  if (!s) return null;
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
-
-// 描述质量分级(对齐 erp-backend-lite/src/utils/description-quality.js 同口径)
-const DESC_UI_CHROME_RE = /(читать далее|показать полностью|свернуть описание|развернуть описание)/gi;
-const DESC_LOAD_FAIL_RE = /(не удалось загрузить|ошибка загрузки|попробуйте (обновить|позже)|failed to load)/i;
-function classifyDescriptionQuality(descRaw) {
-  if (!descRaw) return 0;
-  const cleaned = String(descRaw).replace(DESC_UI_CHROME_RE, ' ').trim();
-  if (!cleaned || DESC_LOAD_FAIL_RE.test(cleaned)) return 1;
-  if (DESC_UI_CHROME_RE.test(String(descRaw))) return 2;
-  return 3;
-}
-
-// 价格字符串 → 数字(对齐 index-dao.js parsePriceValue)
-function parsePriceValue(price) {
-  if (price == null || price === '') return null;
-  const cleaned = String(price).replace(/[^\d.]/g, '');
-  if (!cleaned) return null;
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : null;
-}
-
-// 索引聚合轻量版(对齐 index-dao.js syncSku 的必要部分):
-// 读 7 张缓存表 → 计算命中位/冗余字段 → upsert ozon_cache_index
-// 差异(有意简化,不影响正确性):
-//   - sv shape 合成省略:直接在 search/bundle 的 attributes 里找 attr 4180(商品名)
-//   - listed/exported 系列不碰(由跟卖/导出任务维护)
-//   - seller_name 由后端 index-sync 定时任务(5 分钟)补齐
-function syncSkuLite(sku) {
-  const [dom, attr, rm, ms, fs] = [qDom.get(sku), qAttr.get(sku), qRm.get(sku), qMs.get(sku), qFs.get(sku)];
-
-  const cardHit = dom?.card_data ? 1 : 0;
-  const detailHit = dom?.detail_data ? 1 : 0;
-  const searchHit = attr?.search_data ? 1 : 0;
-  const bundleHit = attr?.bundle_data ? 1 : 0;
-  const rmHit = rm?.data ? 1 : 0;
-  const msHit = ms?.data ? 1 : 0;
-  const fsHit = fs?.data ? 1 : 0;
-  const hitCount = cardHit + detailHit + searchHit + bundleHit + rmHit + msHit + fsHit;
-
-  const cardData = parseJson(dom?.card_data);
-  const detailData = parseJson(dom?.detail_data);
-  const attrData = parseJson(attr?.search_data);
-  const bundleData = parseJson(attr?.bundle_data);
-  const rmData = parseJson(rm?.data);
-  const msData = parseJson(ms?.data);
-  const msEmpty = msHit && msData?.__empty ? 1 : 0;
-  const fsData = parseJson(fs?.data);
-
-  // name fallback 链: bundle attr4180 → search attr4180 → detail.title → card.name
-  const searchItem =
-    attrData && Array.isArray(attrData.items) && attrData.items.length > 0 ? attrData.items[0] : null;
-  const bAttr4180 = bundleData?.attributes?.find((a) => String(a.attribute_id) === '4180');
-  const sAttr4180 = searchItem?.attributes?.find((a) => String(a.attribute_id) === '4180');
-  const name =
-    bAttr4180?.values?.[0]?.value ||
-    sAttr4180?.values?.[0]?.value ||
-    detailData?.title ||
-    cardData?.name ||
-    '';
-
-  const price = detailData?.price || cardData?.price || '';
-  const priceValue = parsePriceValue(price);
-  const primaryImage = cardData?.image || detailData?.images?.[0] || '';
-  const url = cardData?.url || '';
-  const ratingCount = Number.isFinite(Number(cardData?.ratingCount))
-    ? Number(cardData?.ratingCount)
-    : Number.isFinite(Number(detailData?.reviewCount))
-      ? Number(detailData?.reviewCount)
-      : null;
-  const hasVideo = rmData?.mp4 ? 1 : 0;
-  const hasRichContent = rmData?.richContent && String(rmData.richContent).length > 0 ? 1 : 0;
-  const descriptionQuality = classifyDescriptionQuality(rmData?.description || '');
-  const marketPriceP50 = msData?.priceP50 ?? msData?.p50 ?? null;
-  const competitorCount =
-    Array.isArray(fsData?.sellers)
-      ? fsData.sellers.length
-      : Array.isArray(fsData?.competitors)
-        ? fsData.competitors.length
-        : null;
-
-  // 类目信息:search_data(优先) → bundle_data(fallback)
-  let descriptionCategoryId = null;
-  let typeId = null;
-  if (searchItem) {
-    const sTi = Number(searchItem.description_type_dict_value);
-    if (Number.isFinite(sTi) && sTi > 0) typeId = sTi;
-    if (Array.isArray(searchItem.categories)) {
-      const lvl3 = searchItem.categories.find((c) => c && Number(c.level) === 3);
-      if (lvl3 && Number.isFinite(Number(lvl3.id)) && Number(lvl3.id) > 0) {
-        descriptionCategoryId = Number(lvl3.id);
-      } else {
-        const sorted = [...searchItem.categories]
-          .filter((c) => c && Number.isFinite(Number(c.id)))
-          .sort((a, b) => Number(b.level || 0) - Number(a.level || 0));
-        if (sorted.length > 0 && Number(sorted[0].id) > 0) descriptionCategoryId = Number(sorted[0].id);
-      }
-    }
-  }
-  if ((descriptionCategoryId === null || typeId === null) && bundleData && typeof bundleData === 'object') {
-    if (descriptionCategoryId === null) {
-      const bDci = Number(bundleData.description_category_id);
-      if (Number.isFinite(bDci) && bDci > 0) descriptionCategoryId = bDci;
-    }
-    if (typeId === null) {
-      const bTi = Number(bundleData.type_id);
-      if (Number.isFinite(bTi) && bTi > 0) typeId = bTi;
-    }
-  }
-  const categoryName = detailData?.category || null;
-
-  // 超轻小件冗余字段(bundle 顶层物理字段)
-  const rawWeight = Number(bundleData?.weight);
-  const weightG = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : null;
-  const rawDepth = Number(bundleData?.depth);
-  const rawWidth = Number(bundleData?.width);
-  const rawHeight = Number(bundleData?.height);
-  const dimSumMm =
-    Number.isFinite(rawDepth) && rawDepth > 0 &&
-      Number.isFinite(rawWidth) && rawWidth > 0 &&
-      Number.isFinite(rawHeight) && rawHeight > 0
-      ? rawDepth + rawWidth + rawHeight
-      : null;
-
-  // 全文搜索字段(seller_name 先读现有值,后端定时任务负责补齐)
-  const existing = qIdxExisting.get(sku);
-  const sellerSlug = existing?.seller_slug || '';
-  const sellerId = existing?.seller_id || '';
-  const sellerName = existing?.seller_name || '';
-  const listed = existing?.listed || 0;
-  const searchableText = [name, sku, sellerName].filter(Boolean).join(' ');
-
-  // last_fetched_at:7 类 fetchedAt 的最大值
-  const fetchedAts = [
-    dom?.card_fetched_at,
-    dom?.detail_fetched_at,
-    attr?.search_fetched_at,
-    attr?.bundle_fetched_at,
-    rm?.fetchedAt,
-    ms?.fetchedAt,
-    fs?.fetchedAt,
-  ].filter(Boolean);
-  fetchedAts.sort();
-  const lastFetchedAt = fetchedAts.pop() || null;
-
-  upsertIndexStmt.run(
-    sku,
-    cardHit, dom?.card_fetched_at || null,
-    detailHit, dom?.detail_fetched_at || null,
-    searchHit, attr?.search_fetched_at || null,
-    bundleHit, attr?.bundle_fetched_at || null,
-    rmHit, rm?.fetchedAt || null,
-    msHit, ms?.fetchedAt || null,
-    msEmpty,
-    fsHit, fs?.fetchedAt || null,
-    hitCount,
-    lastFetchedAt,
-    name, price, priceValue, primaryImage, url, ratingCount,
-    hasVideo, hasRichContent, marketPriceP50, competitorCount,
-    sellerSlug, sellerId, sellerName,
-    descriptionCategoryId, typeId, categoryName,
-    weightG, dimSumMm,
-    descriptionQuality,
-    listed,
-    searchableText
-  );
-}
-
-// 每页 flush 主入口
-// 注:node:sqlite 的 DatabaseSync 无 transaction() 方法(better-sqlite3 才有),
-//     手动 BEGIN IMMEDIATE / COMMIT / ROLLBACK 实现
-function flushLogs(logs, store) {
+async function flushLogs(logs, store) {
   if (logs.length === 0) return;
   if (cfg.dryRun) {
     console.log(`    [DRY_RUN] 跳过写入 ${logs.length} 条`);
@@ -503,78 +369,65 @@ function flushLogs(logs, store) {
   const now = new Date().toISOString();
   const passed = logs.filter((s) => s.passesFilter);
 
-  const writeAll = () => {
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      // ① 浅度日志(全部)
-      for (const s of logs) {
-        insertLogStmt.run(
-          s.sku, store.sellerSlug ?? null, String(store.sellerId),
-          s.name ?? null,
-          s.price != null ? Number(s.price) : null,
-          s.ratingCount != null ? Number(s.ratingCount) : null,
-          s.imageUrl ?? null,
-          s.passesFilter ? 1 : 0,
-          s.skipReason ?? null,
-          'headless-api',
-          now
-        );
-      }
-      // ②③④ dom 缓存 + 深度队列入队 + 索引聚合(仅通过过滤的)
-      for (const s of passed) {
-        if (cfg.writeDomCache) {
-          upsertDomCardStmt.run(
-            s.sku,
-            JSON.stringify({
-              sku: s.sku,
-              url: s.url || '',
-              name: s.name || '',
-              price: s.price != null ? Number(s.price) : null,
-              image: s.imageUrl || '',
-              ratingCount: s.ratingCount ?? null,
-              source: 'api',
-            }),
-            now
-          );
-        }
-        if (cfg.enqueueDepth) {
-          enqueueTaskStmt.run(
-            s.sku,
-            store.sellerSlug ?? null,
-            String(store.sellerId),
-            JSON.stringify({
-              title: s.name || '',
-              price: s.price != null ? Number(s.price) : null,
-              imageUrl: s.imageUrl || '',
-              ratingCount: s.ratingCount ?? null,
-            }),
-            now, now
-          );
-        }
-        if (cfg.writeDomCache) {
-          syncSkuLite(s.sku); // 索引聚合依赖 dom card,仅开缓存时执行
-        }
-      }
-      db.exec('COMMIT');
-    } catch (e) {
-      try { db.exec('ROLLBACK'); } catch { /* 已回滚 */ }
-      throw e;
+  const runBatch = async (thunks) => {
+    for (let i = 0; i < thunks.length; i += ERP_WRITE_CONCURRENCY) {
+      await Promise.all(thunks.slice(i, i + ERP_WRITE_CONCURRENCY).map((f) => f()));
     }
   };
-  // 写入带 1 次重试(与 backfill updateStats 一致)
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      writeAll();
-      break;
-    } catch (e) {
-      if (e.code === 'ERR_SQLITE_ERROR' && attempt === 0) {
-        const start = Date.now();
-        while (Date.now() - start < 200) { } // 忙等 200ms 后重试一次
-        continue;
-      }
-      throw e;
+
+  // ① 浅度日志(全部 SKU,含过滤不通过)
+  await runBatch(
+    logs.map((s) => () =>
+      erp.insertShallowLog({
+        sku: s.sku,
+        sellerSlug: store.sellerSlug ?? null,
+        sellerId: String(store.sellerId),
+        name: s.name ?? null,
+        price: s.price != null ? Number(s.price) : null,
+        ratingCount: s.ratingCount != null ? Number(s.ratingCount) : null,
+        imageUrl: s.imageUrl ?? null,
+        passesFilter: s.passesFilter,
+        skipReason: s.skipReason ?? null,
+        source: 'headless-api',
+        collectedAt: now,
+      })
+    )
+  );
+
+  // ②③ dom card 缓存 + 深度入队(仅通过过滤的;thunk 延迟执行避免请求提前发出)
+  const writes = [];
+  for (const s of passed) {
+    if (cfg.writeDomCache) {
+      writes.push(() =>
+        erp.setDomCache(s.sku, 'card', {
+          sku: s.sku,
+          url: s.url || '',
+          name: s.name || '',
+          price: s.price != null ? Number(s.price) : null,
+          image: s.imageUrl || '',
+          ratingCount: s.ratingCount ?? null,
+          source: 'api',
+        })
+      );
+    }
+    if (cfg.enqueueDepth) {
+      writes.push(() =>
+        erp.submitTask({
+          sku: s.sku,
+          sellerSlug: store.sellerSlug ?? null,
+          sellerId: String(store.sellerId),
+          domInfo: {
+            title: s.name || '',
+            price: s.price != null ? Number(s.price) : null,
+            imageUrl: s.imageUrl || '',
+            ratingCount: s.ratingCount ?? null,
+          },
+          skipIfTodaySuccess: false, // 全部入队,不做 24h 成功去重(对齐原 SQL 语义)
+        })
+      );
     }
   }
+  await runBatch(writes);
 }
 
 // ── 断点续传 progress(带时间戳对象结构,支持 REVISIT_DAYS 重采) ──
@@ -768,7 +621,6 @@ function isPermanentError(r) {
 
 // ── 浏览器 ───────────────────────────────────────────────────
 let browser = null;
-let interrupted = false;
 
 async function launchBrowser() {
   browser = await launchPersistentContext({
@@ -842,7 +694,8 @@ async function collectStore(page, store, state) {
         skipReason,
       });
     }
-    flushLogs(logs, store);
+    // ERP 写入失败(重试+熔断后仍失败)直接抛给 main,避免静默丢页
+    await flushLogs(logs, store);
 
     // 终止判定
     state.nextPagePath = r.nextPage;
@@ -868,8 +721,8 @@ async function collectStore(page, store, state) {
 
 // ── main ─────────────────────────────────────────────────────
 async function main() {
-  console.log('=== 无头浅度采集(API 直取) ===');
-  console.log(`DB:        ${cfg.dbPath}`);
+  console.log('=== 无头浅度采集(API 直取,走 ERP API) ===');
+  console.log(`ERP:       ${cfg.erpBaseUrl}`);
   console.log(`Profile:   ${cfg.profileDir}`);
   console.log(`无头:      ${cfg.headless}  干跑: ${cfg.dryRun}`);
   console.log(`页间隔:    ${cfg.pageIntervalMinMs}-${cfg.pageIntervalMaxMs}ms 随机`);
@@ -902,17 +755,28 @@ async function main() {
     setTimeout(() => process.exit(0), 3000);
   });
 
-  // 1. 启动浏览器
-  console.log('\n[1/4] 启动 stealth 浏览器...');
+  // 1. ERP 连通性探测(带鉴权轻量 GET;失败快速退出)
+  console.log('\n[1/5] 探测 ERP 连通性...');
+  try {
+    const stats = await erp.getQueueStats();
+    console.log(`[1/5] ERP 连通正常,x-api-key 校验通过(队列 total=${stats?.total ?? '?'})`);
+  } catch (e) {
+    console.error(`[1/5] ERP 探测失败: ${e?.message || e}`);
+    releaseLock();
+    process.exit(1);
+  }
+
+  // 2. 启动浏览器
+  console.log('\n[2/5] 启动 stealth 浏览器...');
   await launchBrowser();
   const page = await browser.newPage();
   await warmup(page);
 
-  // 2. 查询待采店铺
-  console.log('\n[2/4] 查询待采店铺...');
-  const stores = loadStores(progress);
+  // 3. 查询待采店铺
+  console.log('\n[3/5] 查询待采店铺...');
+  const stores = await loadStores(progress);
   const doneCount = Object.keys(progress.done).length;
-  console.log(`[2/4] 累计已完成 ${doneCount} 个,本批待处理 ${stores.length} 个`);
+  console.log(`[3/5] 累计已完成 ${doneCount} 个,本批待处理 ${stores.length} 个`);
   if (stores.length === 0) {
     console.log('\n全部完成,无需处理。');
     await browser.close();
@@ -920,8 +784,8 @@ async function main() {
     return;
   }
 
-  // 3. 逐店采集
-  console.log(`\n[3/4] 开始采集...`);
+  // 4. 逐店采集
+  console.log(`\n[4/5] 开始采集...`);
   let success = 0, skipped = 0, failed = 0;
   const startTime = Date.now();
 
@@ -1034,8 +898,8 @@ async function main() {
     }
   }
 
-  // 4. 汇总
-  console.log('\n[4/4] 汇总');
+  // 5. 汇总
+  console.log('\n[5/5] 汇总');
   console.log(`  成功: ${success}`);
   console.log(`  跳过: ${skipped}`);
   console.log(`  失败: ${failed}`);
@@ -1045,7 +909,6 @@ async function main() {
 
   saveProgress(progress);
   await browser.close();
-  db.close();
   releaseLock();
 }
 
