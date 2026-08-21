@@ -39,6 +39,30 @@ function computeSalePrice(priceValue) {
   return priceValue <= 15 ? 19 : priceValue;
 }
 
+// 按市场统计占比从候选池选取 SKU(创建导出与 SKU 试算预览共用,保证两次结果口径一致)
+// 返回 { picked, statsTarget, noStatsTarget }
+function pickExportSkus(pool, countRaw, ratio) {
+  const withStats = pool.filter((c) => c.marketStats);
+  const withoutStats = pool.filter((c) => !c.marketStats);
+  let statsTarget = Math.round((countRaw * ratio) / 100);
+  let noStatsTarget = countRaw - statsTarget;
+  if (withStats.length < statsTarget) {
+    noStatsTarget += statsTarget - withStats.length;
+    statsTarget = withStats.length;
+  }
+  if (withoutStats.length < noStatsTarget) {
+    statsTarget += noStatsTarget - withoutStats.length;
+    noStatsTarget = withoutStats.length;
+  }
+  const pickedStats = autoPickBySeller(withStats, statsTarget).picked;
+  const pickedNoStats = autoPickBySeller(withoutStats, noStatsTarget).picked;
+  const candBySku = new Map(pool.map((c) => [c.sku, c]));
+  const picked = [...pickedStats, ...pickedNoStats]
+    .map((p) => candBySku.get(p.sku))
+    .filter(Boolean);
+  return { picked, statsTarget, noStatsTarget };
+}
+
 // 生成 xlsx 工作簿(下载接口按 export_task_items 明细重建,每次下载内容一致)
 // 列:A=SKU B=评论数 C=原价格 D=跟卖价格(公式) E=跟卖最低价格(公式) F=组合列(公式)
 function buildWorkbook(task, items) {
@@ -95,6 +119,8 @@ function buildWorkbook(task, items) {
 // POST /admin/api/export-excel/preview —— 导出预览(不创建任务,返回候选池统计)
 // body: { count?: number, marketStatsRatio?: 0-100, filters: {...采集箱筛选条件} }
 // 前端导出弹窗打开时调用,让用户确认导出前先看到候选规模与预计构成
+// 传 count>0 时额外返回 SKU 级试算明细(items,上限 1000 条)与实际选取的采集时间范围,
+//   与创建导出走同一 pickExportSkus 选取逻辑(不落库、不标记已导出)
 router.post('/admin/api/export-excel/preview', async (req, res, next) => {
   try {
     const body = req.body || {};
@@ -125,6 +151,38 @@ router.post('/admin/api/export-excel/preview', async (req, res, next) => {
       noStatsTarget = withoutStats.length;
     }
 
+    // SKU 级试算预览:按当前 count/ratio 预演最终选取结果(不创建任务、不标记已导出)
+    let pickedCount = null;
+    let items = null;
+    let pickedTimeRange = null;
+    let pickedStatsCount = 0;
+    let pickedSellerCount = 0;
+    if (count > 0) {
+      const { picked } = pickExportSkus(pool, count, ratio);
+      pickedCount = picked.length;
+      pickedStatsCount = picked.filter((p) => p.marketStats).length;
+      pickedSellerCount = new Set(picked.map((p) => p.sellerId)).size;
+      // 实际选取 SKU 的采集时间范围 = 全量 picked 的 lastFetchedAt 最小/最大值
+      const times = picked
+        .map((p) => p.lastFetchedAt)
+        .filter(Boolean)
+        .sort();
+      pickedTimeRange = times.length > 0 ? { from: times[0], to: times[times.length - 1] } : null;
+      // 明细最多返回 1000 条(count 上限 10000,全量返回体积太大),统计口径仍按全量
+      items = picked.slice(0, 1000).map((p, i) => ({
+        seq: i + 1,
+        sku: p.sku,
+        name: p.name || '',
+        sellerId: p.sellerId || '',
+        sellerName: p.sellerName || '',
+        price: p.price ?? '',
+        priceValue: p.priceValue,
+        ratingCount: p.ratingCount ?? null,
+        marketStats: !!p.marketStats,
+        lastFetchedAt: p.lastFetchedAt || null,
+      }));
+    }
+
     return res.json(
       ok({
         matchedTotal: candidates.length, // 符合筛选的未导出总数(含无价格)
@@ -138,6 +196,11 @@ router.post('/admin/api/export-excel/preview', async (req, res, next) => {
         statsTarget, // 预计有市场统计条数(互补后)
         noStatsTarget, // 预计无市场统计条数(互补后)
         insufficient: count > 0 && pool.length < count,
+        pickedCount, // 试算实际选取条数(count>0 时;null = 未请求试算)
+        pickedStatsCount, // 试算选取中有市场统计条数
+        pickedSellerCount, // 试算选取覆盖的源卖家数
+        pickedTimeRange, // 试算选取 SKU 的实际采集时间范围 {from, to}(ISO-UTC)
+        items, // 试算选取明细(上限 1000 条;null = 未请求试算)
       })
     );
   } catch (e) {
@@ -171,27 +234,8 @@ router.post('/admin/api/export-excel', async (req, res, next) => {
       );
     }
 
-    // 2. 按"有市场统计占比"分组,目标数不足时互相补足
-    const withStats = pool.filter((c) => c.marketStats);
-    const withoutStats = pool.filter((c) => !c.marketStats);
-    let statsTarget = Math.round((countRaw * ratio) / 100);
-    let noStatsTarget = countRaw - statsTarget;
-    if (withStats.length < statsTarget) {
-      noStatsTarget += statsTarget - withStats.length;
-      statsTarget = withStats.length;
-    }
-    if (withoutStats.length < noStatsTarget) {
-      statsTarget += noStatsTarget - withoutStats.length;
-      noStatsTarget = withoutStats.length;
-    }
-
-    // 3. 每组内按源卖家均衡选取(尽可能多地覆盖源店铺)
-    const pickedStats = autoPickBySeller(withStats, statsTarget).picked;
-    const pickedNoStats = autoPickBySeller(withoutStats, noStatsTarget).picked;
-    const candBySku = new Map(pool.map((c) => [c.sku, c]));
-    const picked = [...pickedStats, ...pickedNoStats]
-      .map((p) => candBySku.get(p.sku))
-      .filter(Boolean);
+    // 2+3. 按占比分组互补 + 组内按源卖家均衡选取(与预览试算共用 pickExportSkus)
+    const { picked } = pickExportSkus(pool, countRaw, ratio);
 
     // 4. 统计 + 落库(任务 + 明细,事务)
     const localTaskId = `exp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

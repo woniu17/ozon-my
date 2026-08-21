@@ -3,7 +3,7 @@
 // 逻辑参考"按筛选自动上架":后端按 sellerId 均衡选取(尽可能多地覆盖源店铺)
 // Excel 列:SKU / 评论数 / 原价格 / 跟卖价格(公式) / 跟卖最低价格(公式) / 组合列(公式)
 // 跟卖价格规则:原价格<=15 → 19,否则 = 原价格;最低价格 = 跟卖价格 - 0.01(公式写入 xlsx)
-import { reactive, ref, computed, onMounted } from 'vue';
+import { reactive, ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { createExportTask, downloadExportExcel, previewExportExcel } from '../api/exportExcel.js';
 import { useToast } from './useToast.js';
@@ -141,6 +141,63 @@ const previewBreakdown = computed(() => {
 // 无可导出候选时禁用导出按钮
 const noCandidates = computed(() => !!preview.value && preview.value.poolTotal === 0);
 
+// ── SKU 级试算预览(按当前 count/ratio 预演最终选取结果,不创建任务、不标记已导出) ──
+const skuPreview = ref(null);
+const skuPreviewLoading = ref(false);
+
+// 时间格式化(ISO-UTC 字符串/ms 时间戳 → 本地时间;与采集箱 fmtTime 同口径)
+function fmtTime(t) {
+  if (!t) return '—';
+  const ms = typeof t === 'number' ? t : /^\d{13}$/.test(String(t)) ? Number(t) : 0;
+  if (ms > 0) {
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+  const s = String(t).replace('T', ' ').slice(0, 19);
+  const ms2 = Date.parse(s.replace(' ', 'T') + 'Z');
+  if (!Number.isNaN(ms2)) {
+    const d = new Date(ms2);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+  return s;
+}
+
+async function loadSkuPreview() {
+  const n = Math.floor(Number(form.count));
+  if (!Number.isFinite(n) || n < 1) {
+    show('请输入有效的导出总数(≥1)后再预览', 'error');
+    return;
+  }
+  if (n > 10000) {
+    show('导出总数上限 10000', 'error');
+    return;
+  }
+  skuPreviewLoading.value = true;
+  try {
+    const r = await previewExportExcel({
+      count: n,
+      marketStatsRatio: Math.max(0, Math.min(100, Math.round(Number(form.marketStatsRatio) || 0))),
+      filters: buildFilters(),
+    });
+    skuPreview.value = r || null;
+  } catch (err) {
+    show(err.message || 'SKU 预览加载失败', 'error');
+    skuPreview.value = null;
+  } finally {
+    skuPreviewLoading.value = false;
+  }
+}
+
+// count/ratio 变化后旧试算结果已失真,自动清空(下次点预览按钮重新试算)
+watch(
+  () => [form.count, form.marketStatsRatio],
+  () => {
+    skuPreview.value = null;
+  }
+);
+
 // ── 创建导出任务 ───────────────────────────────────────────
 async function doExport() {
   const n = Math.floor(Number(form.count));
@@ -163,6 +220,7 @@ async function doExport() {
       filters: buildFilters(),
     });
     result.value = r || null;
+    skuPreview.value = null; // 已导出的 SKU 不再可选,试算结果作废
     if (r?.insufficient) {
       show(`导出完成(候选不足):实际导出 ${r.totalCount}/${r.requestedCount} 条`, 'warn');
     } else {
@@ -286,6 +344,76 @@ function close() {
           </div>
           <div class="muted small" style="margin-top: 6px">
             已导出过的 SKU 强制跳过;按来源卖家均衡选取,尽可能多地覆盖源店铺
+          </div>
+          <div class="eed-form-row" style="margin-top: 10px">
+            <button
+              class="btn btn-ghost"
+              :disabled="skuPreviewLoading || noCandidates"
+              :title="noCandidates ? '没有符合条件的未导出 SKU' : '按当前 N 与占比预演最终选取结果(不创建任务、不标记已导出)'"
+              @click="loadSkuPreview"
+            >
+              {{ skuPreviewLoading ? '试算中…' : '预览选取 SKU' }}
+            </button>
+            <span class="muted small">按当前 N 与占比试算最终选取的 SKU 明细</span>
+          </div>
+        </div>
+
+        <!-- SKU 试算预览结果(点"预览选取 SKU"后显示) -->
+        <div v-if="skuPreview" class="eed-section">
+          <div class="eed-section-title">选取试算(未导出)</div>
+          <div class="eed-summary">
+            <div class="eed-summary-item">
+              <span class="eed-summary-label">试算选取</span>
+              <span class="eed-summary-cnt">{{ skuPreview.pickedCount ?? 0 }}</span>
+            </div>
+            <div class="eed-summary-item">
+              <span class="eed-summary-label">有市场统计</span>
+              <span class="eed-summary-cnt">{{ skuPreview.pickedStatsCount ?? 0 }}</span>
+            </div>
+            <div class="eed-summary-item">
+              <span class="eed-summary-label">来源卖家</span>
+              <span class="eed-summary-cnt">{{ skuPreview.pickedSellerCount ?? 0 }}</span>
+            </div>
+          </div>
+          <div class="muted small" style="margin-top: 8px">
+            实际采集时间范围:{{
+              skuPreview.pickedTimeRange
+                ? `${fmtTime(skuPreview.pickedTimeRange.from)} ~ ${fmtTime(skuPreview.pickedTimeRange.to)}`
+                : '—(所选 SKU 均无采集时间)'
+            }}
+          </div>
+          <div v-if="skuPreview.items && skuPreview.items.length" class="eed-item-table-wrap">
+            <table class="eed-item-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>SKU</th>
+                  <th>名称</th>
+                  <th>卖家</th>
+                  <th>原价格</th>
+                  <th>评论数</th>
+                  <th>市场统计</th>
+                  <th>采集时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="it in skuPreview.items" :key="it.sku">
+                  <td>{{ it.seq }}</td>
+                  <td class="eed-item-sku">{{ it.sku }}</td>
+                  <td class="eed-item-name" :title="it.name">{{ it.name || '—' }}</td>
+                  <td :title="it.sellerId">{{ it.sellerName || it.sellerId || '—' }}</td>
+                  <td>{{ it.price ?? '—' }}</td>
+                  <td>{{ it.ratingCount ?? '—' }}</td>
+                  <td>{{ it.marketStats ? '有' : '无' }}</td>
+                  <td>{{ fmtTime(it.lastFetchedAt) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="muted small" style="margin-top: 6px">
+            明细最多展示 1000 条{{
+              (skuPreview.pickedCount || 0) > 1000 ? `(共 ${skuPreview.pickedCount} 条)` : ''
+            }};试算与最终导出走同一选取逻辑,两次请求之间数据变化可能导致结果略有差异
           </div>
         </div>
 
@@ -519,5 +647,40 @@ function close() {
   border-radius: 4px;
   color: #d46b08;
   font-size: 12px;
+}
+/* SKU 试算明细表(可滚动,表头吸顶) */
+.eed-item-table-wrap {
+  margin-top: 8px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border, #e4e8ee);
+  border-radius: 6px;
+}
+.eed-item-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.eed-item-table th,
+.eed-item-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #f0f1f3;
+  text-align: left;
+  white-space: nowrap;
+}
+.eed-item-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f9fafb;
+  font-weight: 600;
+}
+.eed-item-sku {
+  font-family: ui-monospace, Consolas, monospace;
+}
+.eed-item-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>
