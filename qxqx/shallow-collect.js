@@ -19,10 +19,17 @@
 //
 // 用法: node shallow-collect.js
 // 可选环境变量(见 .env,命令行/env 优先于 .env):
+// Linux/macOS(bash):
 //   STORE_LIMIT=1 DRY_RUN=1 node shallow-collect.js   # 单店干跑
 //   STORE_LIMIT=1 LOG_SKU=1 node shallow-collect.js   # 单店落库 + SKU 逐条日志
 //   STORE_LIMIT=10 node shallow-collect.js            # 小批量
 //   node shallow-collect.js                           # 全量
+// Windows(PowerShell;注意 $env: 会话内持久,全量前先清残留):
+//   $env:STORE_LIMIT='1'; $env:DRY_RUN='1'; node shallow-collect.js   # 单店干跑
+//   $env:STORE_LIMIT='1'; $env:LOG_SKU='1'; node shallow-collect.js   # 单店落库 + SKU 逐条日志
+//   $env:STORE_LIMIT='10'; node shallow-collect.js                    # 小批量
+//   Remove-Item Env:STORE_LIMIT,Env:DRY_RUN,Env:LOG_SKU -ErrorAction SilentlyContinue
+//   node shallow-collect.js                                           # 全量
 // 登录态迁移(跨 Windows/Linux)见 state-transfer.js:
 //   node state-transfer.js --export / --import
 //

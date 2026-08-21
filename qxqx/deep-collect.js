@@ -15,9 +15,16 @@
 //
 // 用法: node deep-collect.js
 // 可选环境变量(见 .env):
+// Linux/macOS(bash):
 //   TASK_LIMIT=1 DRY_RUN=1 node deep-collect.js   # 单任务干跑
 //   TASK_LIMIT=1 LOG_SKU=1 node deep-collect.js   # 单任务落库 + 逐条日志
 //   TASK_LIMIT=10 node deep-collect.js            # 小批量
+// Windows(PowerShell;注意 $env: 会话内持久,常驻前先清残留):
+//   $env:TASK_LIMIT='1'; $env:DRY_RUN='1'; node deep-collect.js   # 单任务干跑
+//   $env:TASK_LIMIT='1'; $env:LOG_SKU='1'; node deep-collect.js   # 单任务落库 + 逐条日志
+//   $env:TASK_LIMIT='10'; node deep-collect.js                    # 小批量
+//   Remove-Item Env:TASK_LIMIT,Env:DRY_RUN,Env:LOG_SKU -ErrorAction SilentlyContinue
+//   node deep-collect.js                                          # 常驻消费(0=不限)
 // 前置:ERP 后端已启动且两侧 .env 配置了相同的 SERVICE_API_KEY / ERP_API_KEY;
 //       profile(.ozon-profile)已人工登录过 seller.ozon.ru(sc_company_id 持久化)。
 
