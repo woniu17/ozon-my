@@ -20,6 +20,10 @@
 //   - localStorage 是 origin 作用域:导入前必须先导航到同源页面
 //   - 导入后 cookie 以新平台自己的加密格式落盘,profile 自此自包含
 //   - cookie 会随服务端轮换过期,建议迁移前现导,勿长期囤 JSON
+//   - 导入全程零真实请求:route 拦截本地 fulfill 导航页,不触发 Ozon 反爬,
+//     也不依赖网络可用(2026-08-21 改造;原版真实访问 ozon.ru 两次)
+//   - 导入目标建议用全新 profile:被旧站点状态污染的 profile(SW/会话恢复残留)
+//     会在启动早期抢占导航(ERR_ABORTED)绕过 route 拦截;旧 profile 先改名备份
 
 import { launchPersistentContext } from 'cloakbrowser';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -69,6 +73,9 @@ async function runStateTransfer(cmd, fileArg) {
   const ctx = await launchPersistentContext({
     userDataDir: cfg.profileDir,
     headless: cfg.headless,
+    // 阻止 Service Worker 激活:profile 中残留的 ozon.ru SW 会接管页面请求,
+    // 绕过 route 拦截真实联网(反爬可见 + 依赖网络);导入只需本地写登录态
+    contextOptions: { serviceWorkers: 'block' },
   });
   try {
     const page = await ctx.newPage();
@@ -118,9 +125,15 @@ async function runStateTransfer(cmd, fileArg) {
       }));
       await ctx.addCookies(cookies);
       console.log(`[导入] 已注入 cookie ${cookies.length} 个`);
-      // localStorage 是 origin 作用域:先导航到 ozon.ru 再写入
+      // 拦截全部网络请求:导航 ozon.ru 仅用于建立正确 origin(localStorage 作用域),
+      // 响应由本地 fulfill,全程零真实请求 → 不触发 Ozon 反爬,也不依赖网络可用
+      await ctx.route('**/*', (route) =>
+        route.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: '<!DOCTYPE html><html><head><title>state-import</title></head><body></body></html>',
+        })
+      );
       await page.goto('https://www.ozon.ru/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForTimeout(3000);
       const origin = state.origins?.find((o) => o.origin === 'https://www.ozon.ru');
       if (origin?.localStorage?.length) {
         await page.evaluate((items) => {
@@ -128,12 +141,9 @@ async function runStateTransfer(cmd, fileArg) {
         }, origin.localStorage);
         console.log(`[导入] 已写入 localStorage ${origin.localStorage.length} 项`);
       }
-      // 重载复查:确认 cookie 真正落进 profile
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForTimeout(5000);
+      // 复查:读本地 cookie store 确认注入量(无需联网;落盘由 ctx.close 时 flush)
       const after = await ctx.cookies();
-      const title = await page.title();
-      console.log(`[导入] 复查: cookie ${after.length} 个,页面标题 "${(title || '').slice(0, 50)}"`);
+      console.log(`[导入] 复查: profile 内 cookie ${after.length} 个(全程零真实请求,未触发反爬)`);
       console.log('[导入] 建议验证: STORE_LIMIT=1 DRY_RUN=1 node shallow-collect.js');
     }
   } finally {
