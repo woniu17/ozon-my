@@ -1763,7 +1763,9 @@
     //   → Step 5(seller portal search+bundle) → Step 6(seller portal marketStats)
     //   → Step 7(写日志 + 更新计数器)
     // ANTIBOT 分支:Step 4/5/6 任一步检测到反爬 → _handleAntibot(暂停 10 分钟 + 通知 + 写日志)。
-    // 失败不熔断:marketStats/followSell 失败返回 partial,不影响其他类目。
+    // 失败不熔断:marketStats/search/bundle 采集失败(临时性)在对应门控(A/B/C)开启时
+    //   拦截后续采集并回 partial 重试,关闭门控时由 Step7 hasError 兜底 partial;
+    // followSell 失败返回 partial,不影响其他类目。
     const _doAutoCollect = async (sku, source, sellerSlug, depth, forceRefresh, sellerId) => {
       await sw.testModeReady; // 确保 IS_TEST_MODE / OZON_*_ORIGIN 已初始化
       const startTime = Date.now();
@@ -1936,9 +1938,22 @@
           }
         }
 
-        // 门控A:marketStats 无数据 → 跳过后续采集(richMedia/search/bundle/followSell)
-        // 仅在数据成功获取(无 error)时检查;AUTH_REQUIRED/NO_DATA 等错误不触发门控,让任务走 partial 重试
-        if (config.enableMarketStatsGate && !results[5].error) {
+        // 门控A:marketStats 失败或无数据 → 不进行后续采集(richMedia/search/bundle/followSell)
+        // - 采集失败(有 error,如 NO_DATA/AUTH_REQUIRED):返回 partial,任务回 pending 重试,
+        //   marketStats 恢复后才采集后续数据(避免失败状态下白采 search/bundle 等)
+        // - 成功但无数据(__empty/null):返回 skipped(no-market-stats) 终态
+        if (config.enableMarketStatsGate) {
+          if (results[5].error) {
+            console.log('[SW autoCollect] 门控A:marketStats 采集失败,本次不采集后续数据,回 pending 重试:', sku);
+            const totalDuration = Date.now() - startTime;
+            this.writeAutoCollectLog({
+              sku, source, sellerSlug, sellerId: sellerId || '',
+              storeClassified, depth, status: 'partial', reason: 'market-stats-failed',
+              results, totalDuration,
+            });
+            this.pushAutoCollectRecent(sku, 'partial', source, storeClassified, results, startTime, 'market-stats-failed');
+            return { status: 'partial', reason: 'market-stats-failed', results, totalDuration };
+          }
           if (!marketStatsData || marketStatsData.__empty) {
             console.log('[SW autoCollect] 门控A:marketStats 无数据,跳过后续采集:', sku);
             const totalDuration = Date.now() - startTime;
@@ -1954,7 +1969,10 @@
 
         // === Step 4: seller portal 采集(search+bundle) + 门控B ===
         // search+bundle 采集后,检查类目是否在黑名单,命中则跳过后续 richMedia/followSell 采集。
-        // 保存 search variant 和 bundle 数据供门控B使用
+        // 保存 search variant 和 bundle 数据供门控B/C使用。
+        // 采集失败(异常/无登录 cookie)标记对应 results[].error:
+        //   门控B/C 开启时据此提前返回 partial 回 pending 重试,关闭时由 Step7 hasError 兜底 partial;
+        //   真调 HTTP 200 无数据(永久性)不标 error,由门控走 skipped 终态(与门控A的 __empty 语义一致)。
         let searchVariant = null;
         let bundleDataRef = null;
         if (pending.search || pending.bundle) {
@@ -2023,26 +2041,47 @@
                   searchVariant = rawVariants[0];
                   // 写 search 缓存(原始 variants,不做任何转换)
                   this.attributeCacheSet(sku, 'search', { items: rawVariants });
-
-                  // 调 bundle(fetchBundleByVariantId 内部有 L1+L2+L3 三层缓存)
-                  // bundle 返回后由 bundle cache 独立存储,不再 merge 回 search cache
-                  const variantId = rawVariants[0]?.variant_id;
-                  if (variantId) {
-                    const bundleItem = await fetchBundleByVariantId(sku, variantId, companyId, {
-                      forceRefresh: !!forceRefresh,
-                    });
-                    if (bundleItem) {
-                      results[4].hit = true; // bundle
-                      bundleDataRef = bundleItem;
-                    }
-                  }
-                  console.log('[SW autoCollect] Step4 search/bundle 真调成功:', sku, 'items=', rawVariants.length);
+                  console.log('[SW autoCollect] Step4 search 真调成功:', sku, 'items=', rawVariants.length);
                 } else {
+                  // HTTP 200 但无 variants:Ozon 真无此数据(永久性),不标 error,由门控B走 skipped 终态
                   console.log('[SW autoCollect] Step4 search 真调无数据:', sku);
                 }
               } else {
+                // 无 sc_company_id cookie(卖家未登录):search 采集失败,标 error 走 partial 重试
+                results[3].error = 'NO_COMPANY_ID';
                 console.log('[SW autoCollect] Step4 跳过(无 sc_company_id cookie):', sku);
               }
+            }
+
+            // bundle 补采:search 已获取但 bundle 未获取(缓存未命中/不可用,或本轮真调未随采)
+            // 统一真调 create-bundle(fetchBundleByVariantId 内部有 L1+L2+L3 三层缓存),
+            // 保证 partial 重试时能单独补采 bundle,无需重采 search。
+            if (results[3].hit && !results[4].hit) {
+              const variantId = searchVariant?.variant_id;
+              if (variantId) {
+                const bundleCookies = await chrome.cookies.getAll({
+                  url: sw.OZON_SELLER_ORIGIN + '/',
+                  name: 'sc_company_id',
+                });
+                const bundleCompanyId = bundleCookies[0]?.value || '';
+                if (!bundleCompanyId) {
+                  // 卖家未登录:bundle 采集失败,标 error 走 partial 重试
+                  results[4].error = 'NO_COMPANY_ID';
+                } else {
+                  const bundleItem = await fetchBundleByVariantId(sku, variantId, bundleCompanyId, {
+                    forceRefresh: !!forceRefresh,
+                  });
+                  if (bundleItem) {
+                    results[4].hit = true; // bundle
+                    bundleDataRef = bundleItem;
+                  }
+                  // bundleItem 为 null(HTTP 200 无 item,永久性)不标 error,
+                  // 由门控C isUltraLight(null) 走 non-ultra-light skipped 终态
+                }
+                console.log('[SW autoCollect] Step4 bundle 补采:', sku, results[4].hit ? '✓' : '✗');
+              }
+              // search variant 无 variant_id(数据异常,重试无益):不标 error,
+              // 由门控C isUltraLight(null) 走 non-ultra-light skipped 终态
             }
           } catch (e) {
             // ANTIBOT 检测:error message 含 HTML 挑战 / 403 / 限流关键词 → 跳 ANTIBOT 分支
@@ -2055,14 +2094,33 @@
               console.warn('[SW autoCollect] Step4 反爬熔断:', sku);
               return this._handleAntibot(sku, source, sellerSlug, storeClassified, depth, startTime, results, sellerId);
             }
+            // 失败标记:search 未获取标 search;search 已获取但 bundle 未获取标 bundle
+            // (均为临时性失败,门控开启时 partial 重试,关闭时 Step7 兜底 partial)
+            const step4Err = e?.message ? String(e.message).slice(0, 80) : 'STEP4_FAILED';
+            if (!results[3].hit) results[3].error = step4Err;
+            else if (!results[4].hit) results[4].error = step4Err;
             console.warn('[SW autoCollect] Step4 failed:', sku, e?.message || e);
           }
         }
 
-        // 门控B:类目过滤 — search 无数据或类目在黑名单 → 跳过后续 richMedia/followSell 采集
+        // 门控B:类目过滤 — search 采集失败/无数据或类目在黑名单 → 不进行后续 richMedia/followSell 采集
+        // - 采集失败(有 error,如 NO_COMPANY_ID/异常):partial 回 pending 重试,search 恢复后才采集后续数据
+        // - 真调无数据(无 error 但未命中,永久性):skipped(no-search-data) 终态
+        // - 类目在黑名单:skipped(filtered-category) 终态
         if (config.enableCategoryFilterGate) {
+          if (results[3].error) {
+            console.log('[SW autoCollect] 门控B:search 采集失败,本次不采集后续数据,回 pending 重试:', sku);
+            const totalDuration = Date.now() - startTime;
+            this.writeAutoCollectLog({
+              sku, source, sellerSlug, sellerId: sellerId || '',
+              storeClassified, depth, status: 'partial', reason: 'search-failed',
+              results, totalDuration,
+            });
+            this.pushAutoCollectRecent(sku, 'partial', source, storeClassified, results, startTime, 'search-failed');
+            return { status: 'partial', reason: 'search-failed', results, totalDuration };
+          }
           if (!results[3].hit) {
-            // search 无数据(真调无 variants 或缓存缺失,非 ANTIBOT 失败)→ skipped
+            // search 无数据(真调无 variants,永久性)→ skipped
             console.log('[SW autoCollect] 门控B:search 无数据,跳过后续采集:', sku);
             const totalDuration = Date.now() - startTime;
             this.writeAutoCollectLog({
@@ -2089,10 +2147,26 @@
           }
         }
 
-        // 门控C:超轻小件过滤 — 非超轻小件(重量≥500g 或 三边和≥900mm)跳过后续 richMedia/followSell 采集
+        // 门控C:超轻小件过滤 — bundle 采集失败或非超轻小件 → 不进行后续 richMedia/followSell 采集
+        // - 采集失败(有 error,如 NO_COMPANY_ID/异常;含上游 search 失败导致 bundle 未尝试):
+        //   partial 回 pending 重试,bundle 恢复后才采集后续数据
+        // - 非超轻小件(重量≥500g 或 三边和≥900mm;bundle 无数据/缺物理参数亦视为非超轻):
+        //   skipped(non-ultra-light) 终态(与现有 SQL 逻辑一致)
         // 阈值与 index-dao.js buildFilterWhere ultraLight 一致(Ozon Extra Small 官方标准)
-        // bundle 数据缺失物理参数时视为非超轻小件,过滤掉(与现有 SQL 逻辑一致)
         if (config.enableUltraLightGate) {
+          if (results[4].error || results[3].error) {
+            // results[3].error 仅在门控B关闭时可达(B开启时已在门控B提前返回)
+            const gateCReason = results[4].error ? 'bundle-failed' : 'search-failed';
+            console.log('[SW autoCollect] 门控C:bundle 采集失败(含上游 search 失败),本次不采集后续数据,回 pending 重试:', sku);
+            const totalDuration = Date.now() - startTime;
+            this.writeAutoCollectLog({
+              sku, source, sellerSlug, sellerId: sellerId || '',
+              storeClassified, depth, status: 'partial', reason: gateCReason,
+              results, totalDuration,
+            });
+            this.pushAutoCollectRecent(sku, 'partial', source, storeClassified, results, startTime, gateCReason);
+            return { status: 'partial', reason: gateCReason, results, totalDuration };
+          }
           if (!this.isUltraLight(bundleDataRef)) {
             console.log('[SW autoCollect] 门控C:非超轻小件,跳过后续采集:', sku);
             const totalDuration = Date.now() - startTime;
