@@ -1354,12 +1354,14 @@ async function doAutoCollect(task, filterMap) {
         urlSku = (u.pathname.match(/\/product\/(?:[^/?#]*-)?(\d+)\/?$/) || [])[1] || sku;
       } catch { /* fallback 已就绪 */ }
 
-      // 导航用 /product/<sku> 直连格式(对齐插件 ensureBuyerTab:
-      // card.url 带 _bctx/at/hs 搜索跟踪参数,直接 goto 触发反爬导致详情页加载失败;
-      // /product/<sku> 由 ozon 302 到规范 slug 页,必能加载)
+      // 导航用 /product/<sku> 直连格式(对齐插件 ensureBuyerTab 的
+      // OZON_WWW_ORIGIN + '/product/' + sku):
+      //   - card.url 带 _bctx/at/hs 搜索跟踪参数,直接 goto 触发反爬导致详情页加载失败
+      //   - 必须无尾部斜杠:/product/<sku>/ 带斜杠不被 ozon 路由识别,302 兜底跳首页
+      //   - /product/<sku> 由 ozon 302 到规范 slug 页(带斜杠),必能加载
       let navStatus = 0;
       try {
-        const navResp = await buyerPage.goto(`https://www.ozon.ru/product/${urlSku}/`, {
+        const navResp = await buyerPage.goto(`https://www.ozon.ru/product/${urlSku}`, {
           waitUntil: 'domcontentloaded',
           timeout: cfg.pageGotoTimeoutMs,
         });
