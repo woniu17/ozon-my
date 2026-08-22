@@ -1139,13 +1139,15 @@ export async function buildSynthesizedFromCache(sku, storeId) {
   if (!name) name = detailData?.title || '';
   if (!name) name = cardData?.name || '';
 
-  // description:优先 bundle attr 4191(卖家原始填写) → detailData.description(PDP DOM 带 <br> 格式)
-  //   → richMedia.description(纯文本兜底,无 <br>)
+  // description:优先 bundle attr 4191(卖家原始填写) → richMedia.description(page-json 纯文本)
+  //   → detailData.description(detail DOM JSON-LD 纯文本兜底)
+  //   2026-08:webDescription widget DOM 抓取已移除,detailData.description 现仅为 JSON-LD;
+  //   带 <ul>/<br> 格式的描述由 page-json 通道的 richAnnotation 提供。
   let description = '';
   const bAttr4191 = bundleItem.attributes?.find((a) => String(a.attribute_id) === '4191');
   if (bAttr4191?.values?.[0]?.value) description = bAttr4191.values[0].value;
-  if (!description) description = detailData?.description || '';
   if (!description) description = richMediaData?.description || '';
+  if (!description) description = detailData?.description || '';
 
   const price = detailData?.price || cardData?.price || '';
   const barcode = sv._searchMeta?.barcodes?.[0] || bundleItem.barcode || '';

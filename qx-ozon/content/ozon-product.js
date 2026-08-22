@@ -21,7 +21,6 @@
   }
 
   let _recBtn = null;
-  let _descRetrySku = ''; // 防止同一 SKU 的 webDescription 轮询重复启动
 
   function _escHtml(str) {
     if (!str) return '';
@@ -256,57 +255,6 @@
       if (text) return text;
     }
     return '';
-  }
-
-  // 从 webDescription widget DOM 提取并清洗 HTML 描述,保留 OPI 支持的标签白名单。
-  // 返回清洗后的 HTML 字符串;widget 不存在、或清洗后只剩 UI 按钮文案时返回 ''。
-  // webDescription widget 是懒加载的(需滚动到描述区域才渲染),首次调用可能返回空,
-  // 或只渲染出「Показать полностью」/「Читать далее」展开按钮而无真实描述 ——
-  // 此时返回空让上层走 jsonLd 兜底(2026-08 修复,与 follow-sell-content-copy.js 同口径)。
-  const DESCRIPTION_UI_CHROME_RE = /(читать далее|показать полностью|свернуть описание|развернуть описание)/gi;
-  const DESCRIPTION_LOAD_FAIL_RE = /(не удалось загрузить|ошибка загрузки|попробуйте (обновить|позже)|failed to load)/i;
-  function extractDescriptionFromWidget() {
-    const descWidget = document.querySelector('[data-widget="webDescription"]');
-    if (!descWidget) return '';
-    const clone = descWidget.cloneNode(true);
-    // 移除标题元素("Описание" 等),保留正文
-    clone.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => h.remove());
-    // 允许下发给 OPI 的标签白名单(其他标签剥离但保留内容)
-    const ALLOWED_TAGS = new Set(['br', 'ul', 'ol', 'li', 'p', 'b', 'strong', 'i', 'em']);
-    const tmp = document.createElement('div');
-    tmp.appendChild(clone);
-    // 递归遍历,剥离非白名单标签(保留其子节点内容)+ 移除注释节点
-    const walk = (node) => {
-      const children = Array.from(node.childNodes);
-      for (const child of children) {
-        if (child.nodeType === 8) {
-          node.removeChild(child);
-        } else if (child.nodeType === 1) {
-          walk(child);
-          const tag = child.tagName.toLowerCase();
-          if (!ALLOWED_TAGS.has(tag)) {
-            while (child.firstChild) {
-              node.insertBefore(child.firstChild, child);
-            }
-            node.removeChild(child);
-          }
-        }
-      }
-    };
-    walk(tmp);
-    const html = tmp.innerHTML
-      .replace(/<br\s*\/?>/gi, '<br>')
-      .replace(/(<br>){3,}/gi, '<br><br>')
-      .replace(/>\s+</g, '><')
-      .trim();
-    if (!html) return '';
-    // 剥掉展开按钮文案(真描述末尾偶尔会粘到),剥完为空 → widget 还没渲染出真实描述
-    const textOnly = html.replace(/<[^>]*>/g, ' ');
-    const cleanedText = textOnly.replace(DESCRIPTION_UI_CHROME_RE, ' ').replace(/\s+/g, ' ').trim();
-    if (!cleanedText) return '';
-    // 含「Не удалось загрузить」加载失败占位 → 视为 widget 未渲染真实描述
-    if (DESCRIPTION_LOAD_FAIL_RE.test(cleanedText.slice(0, 200))) return '';
-    return html;
   }
 
   function extractProductData() {
@@ -610,25 +558,17 @@
     const rating = jsonLd?.aggregateRating?.ratingValue || null;
     const reviewCount = jsonLd?.aggregateRating?.reviewCount || null;
 
-    // Description — 优先 webDescription widget DOM,保留 Ozon 支持的 HTML 标签,兜底 JSON-LD
+    // Description — JSON-LD 纯文本(detail DOM 通道的唯一描述来源)
     // 注:JSON-LD description 是 schema.org 规范的纯文本,Ozon SSR 生成时剥离所有 HTML 和换行,
-    //     段落直接粘连(如 "...использованияСветодиодный"),不适合直接展示。
-    //     webDescription widget 的 HTML 可能包含:
-    //       <br> 段落分隔、<ul>/<ol>+<li> 列表、<p> 段落、<b>/<strong> 加粗等
-    //     OPI /v3/product/import 描述字段支持上述基础 HTML 标签,直接下发保留格式。
-    //     ⚠ webDescription widget 是懒加载的,首次调用可能返回空 —
-    //     此处先尝试,为空时下方 _retryDescriptionFromWidget 会异步轮询补抓。
-    // descriptionSource:记录描述来源,便于排查"首次打开漏抓 webDescription widget"等问题
-    //   webDescription-widget             - [data-widget="webDescription"] DOM(HTML,首选)
-    //   jsonLd                            - JSON-LD description 兜底(纯文本,无格式)
-    //   webDescription-widget(async-retry) - 异步轮询命中 webDescription widget(见下方 _retryDescriptionFromWidget)
-    let description = extractDescriptionFromWidget();
-    let descriptionSource = description ? 'webDescription-widget' : '';
-    if (!description) {
-      description = jsonLd?.description || '';
-      descriptionSource = description ? 'jsonLd' : '';
-    }
-    console.log('[DESC] description len:', description.length, 'source:', descriptionSource || '(empty)', 'has ul:', /<ul/i.test(description));
+    //     段落直接粘连(如 "...использованияСветодиодный")。
+    //     2026-08:webDescription widget DOM 抓取已移除 —— widget 懒加载命中率极低(境外 IP 下
+    //     常常根本不渲染),且 page-json 分片稳定携带 richAnnotation。合成侧优先级为
+    //     bundle attr 4191 → richMedia page-json → detail JSON-LD,格式化描述由 page-json 通道提供。
+    // descriptionSource:记录描述来源,便于排查
+    //   jsonLd - JSON-LD description(纯文本,无格式)
+    let description = jsonLd?.description || '';
+    let descriptionSource = description ? 'jsonLd' : '';
+    console.log('[DESC] description len:', description.length, 'source:', descriptionSource || '(empty)');
 
     // Characteristics (dimensions/weight) — from data-state with characteristics key
     const charsData = window.findStateDataByKeys(['characteristics', 'titleRs']);
@@ -753,62 +693,6 @@
         });
       } catch {
         /* fire-and-forget */
-      }
-    }
-
-    // webDescription widget 是懒加载的 — 首次 extractProductData 时可能尚未渲染,
-    // description 退化为 jsonLd 纯文本。此处异步轮询,widget 出现后补抓 HTML 描述
-    // 并更新 detail 缓存,确保 <ul>/<li>/<br> 等格式不丢失。
-    // ⚠ upsertDetail 会整体覆盖 detail_data,所以必须重发完整字段(而非仅 description)。
-    if (_product.sku && window.sendMessage && !/<[a-z]/i.test(_product.description)) {
-      const _sku = String(_product.sku);
-      const _retryPath = window.location.pathname;
-      if (_descRetrySku !== _sku) {
-        _descRetrySku = _sku;
-        (async () => {
-          const maxAttempts = 30; // 500ms × 30 = 15s
-          for (let i = 0; i < maxAttempts; i++) {
-            await new Promise((r) => setTimeout(r, 500));
-            if (window.location.pathname !== _retryPath) return; // SPA 导航离开
-            const desc = extractDescriptionFromWidget();
-            if (desc) {
-              console.log('[DESC_RETRY] widget appeared after', (i + 1) * 500, 'ms, desc len:', desc.length, 'has ul:', /<ul/i.test(desc));
-              _product.description = desc;
-              _product.descriptionSource = 'webDescription-widget(async-retry)';
-              try {
-                window.sendMessage('domCacheSet', {
-                  sku: _sku,
-                  type: 'detail',
-                  data: {
-                    title: _product.title,
-                    images: _product.images,
-                    videos: _product.videos,
-                    sku: _product.sku,
-                    productId: _product.productId,
-                    brand: _product.brand,
-                    category: _product.category,
-                    characteristics: _product.characteristics,
-                    price: _product.price,
-                    walletPrice: _product.walletPrice,
-                    originalPrice: _product.originalPrice,
-                    seller: _product.seller,
-                    statistics: _product.statistics,
-                    freeRest: _product.freeRest,
-                    followSellCount: _product.followSellCount,
-                    followSellMinPrice: _product.followSellMinPrice,
-                    deliveryMode: _product.deliveryMode,
-                    rating: _product.rating,
-                    reviewCount: _product.reviewCount,
-                    description: desc,
-                    descriptionSource: _product.descriptionSource,
-                  },
-                });
-              } catch { /* fire-and-forget */ }
-              return;
-            }
-          }
-          console.log('[DESC_RETRY] widget not appeared after 15s, keeping jsonLd description');
-        })();
       }
     }
 
