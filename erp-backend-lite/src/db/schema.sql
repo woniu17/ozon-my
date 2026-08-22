@@ -793,7 +793,7 @@ CREATE INDEX IF NOT EXISTS idx_et_created ON export_tasks(created_at DESC);
 
 -- 导出任务明细(每行一个 SKU,字段为导出时刻的快照)
 -- Excel 列:SKU / 评论数 / 原价格 / 跟卖价格(公式) / 跟卖最低价格(公式) / 组合列(公式)
--- 跟卖价格规则:原价格<=15 → 19,否则 = 原价格;最低价格 = 跟卖价格 - 0.01(公式写在 xlsx 内)
+-- 跟卖价格规则:原价格<=15 → 19,否则 = 原价格 × 1.06;最低价格 = 跟卖价格 - 0.01(公式写在 xlsx 内)
 CREATE TABLE IF NOT EXISTS export_task_items (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id        TEXT NOT NULL,          -- 关联 export_tasks.local_task_id

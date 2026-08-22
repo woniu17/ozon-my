@@ -33,10 +33,10 @@ function fmtNum(n) {
   return n.toFixed(2);
 }
 
-// 跟卖价格规则(与 Excel 公式 IF(C<=15,19,C) 同口径):原价格<=15 → 19,否则 = 原价格
+// 跟卖价格规则(与 Excel 公式 IF(C<=15,19,C*1.06) 同口径):原价格<=15 → 19,否则 = 原价格 * 1.06
 function computeSalePrice(priceValue) {
   if (priceValue == null || !Number.isFinite(priceValue)) return null;
-  return priceValue <= 15 ? 19 : priceValue;
+  return priceValue <= 15 ? 19 : Math.round(priceValue * 1.06 * 100) / 100;
 }
 
 // 按市场统计占比从候选池选取 SKU(创建导出与 SKU 试算预览共用,保证两次结果口径一致)
@@ -92,10 +92,10 @@ function buildWorkbook(task, items) {
     c.value = priceValue;
     c.numFmt = '0.00'; // 数值,固定2位小数
 
-    // 跟卖价格 = IF(C<=15, 19, C)
+    // 跟卖价格 = IF(C<=15, 19, C*1.06)
     const salePrice = computeSalePrice(priceValue);
     const d = ws.getCell(`D${row}`);
-    d.value = { formula: `IF(C${row}<=15,19,C${row})`, result: salePrice };
+    d.value = { formula: `IF(C${row}<=15,19,C${row}*1.06)`, result: salePrice };
     d.numFmt = '0.00'; // 数值,固定2位小数
 
     // 跟卖最低价格 = D - 0.01
@@ -177,6 +177,7 @@ router.post('/admin/api/export-excel/preview', async (req, res, next) => {
         sellerName: p.sellerName || '',
         price: p.price ?? '',
         priceValue: p.priceValue,
+        salePrice: computeSalePrice(p.priceValue),
         ratingCount: p.ratingCount ?? null,
         marketStats: !!p.marketStats,
         lastFetchedAt: p.lastFetchedAt || null,

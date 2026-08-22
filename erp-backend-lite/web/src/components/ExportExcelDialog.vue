@@ -2,7 +2,7 @@
 // 按筛选条件导出 Excel 弹窗(2026-08 采集箱导出)
 // 逻辑参考"按筛选自动上架":后端按 sellerId 均衡选取(尽可能多地覆盖源店铺)
 // Excel 列:SKU / 评论数 / 原价格 / 跟卖价格(公式) / 跟卖最低价格(公式) / 组合列(公式)
-// 跟卖价格规则:原价格<=15 → 19,否则 = 原价格;最低价格 = 跟卖价格 - 0.01(公式写入 xlsx)
+// 跟卖价格规则:原价格<=15 → 19,否则 = 原价格 × 1.06;最低价格 = 跟卖价格 - 0.01(公式写入 xlsx)
 import { reactive, ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { createExportTask, downloadExportExcel, previewExportExcel } from '../api/exportExcel.js';
@@ -389,6 +389,7 @@ function close() {
                   <th>#</th>
                   <th>SKU</th>
                   <th>原价格</th>
+                  <th>跟卖价格</th>
                   <th>评论数</th>
                   <th>市场统计</th>
                   <th>采集时间</th>
@@ -401,6 +402,7 @@ function close() {
                   <td>{{ it.seq }}</td>
                   <td class="eed-item-sku">{{ it.sku }}</td>
                   <td>{{ it.price ?? '—' }}</td>
+                  <td>{{ it.salePrice != null ? Number(it.salePrice).toFixed(2) : '—' }}</td>
                   <td>{{ it.ratingCount ?? '—' }}</td>
                   <td>{{ it.marketStats ? '有' : '无' }}</td>
                   <td>{{ fmtTime(it.lastFetchedAt) }}</td>
@@ -431,7 +433,7 @@ function close() {
           <div class="eed-section-title">Excel 列与价格规则</div>
           <div class="muted small eed-rules">
             列:SKU / 评论数 / 原价格 / 跟卖价格 / 跟卖最低价格 / "SKU, 跟卖价格, 跟卖最低价格"组合列<br />
-            跟卖价格 = 原价格 ≤ 15 ? 19 : 原价格(Excel 公式 IF 实现,改原价格列可联动重算)<br />
+            跟卖价格 = 原价格 ≤ 15 ? 19 : 原价格 × 1.06(Excel 公式 IF 实现,改原价格列可联动重算)<br />
             跟卖最低价格 = 跟卖价格 − 0.01(公式实现)
           </div>
         </div>
