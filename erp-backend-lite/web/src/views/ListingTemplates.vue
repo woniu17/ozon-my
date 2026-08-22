@@ -315,7 +315,8 @@ onMounted(load);
         <fieldset class="form-group">
           <legend>价格公式</legend>
           <p class="hint-inline">
-            售价 = 原价 × A% + B ｜ 划线价 = 售价 × A% ｜ 最低价 = 售价 − B(强制启用)
+            售价 = 原价 × A% + B ｜ 划线价 = 售价 × A% ｜ 最低价 = 售价 − B(强制启用)<br />
+            低价保底:源商品售价 &lt; 15 且按公式算出的跟卖价 &lt; 19 时,跟卖价取 19
           </p>
           <div class="grid2">
             <label>

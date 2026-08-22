@@ -29,8 +29,8 @@ function loadSavedConfig() {
 const saved = loadSavedConfig();
 
 const form = reactive({
-  count: saved.count ?? 100,          // 导出总数 N
-  marketStatsRatio: saved.marketStatsRatio ?? 50, // 有市场统计数据的占比(0-100%)
+  count: saved.count ?? 1000,          // 导出总数 N
+  marketStatsRatio: saved.marketStatsRatio ?? 5, // 有市场统计数据的占比(0-100%)
   name: '',                            // 任务名(可选,不持久化)
 });
 
