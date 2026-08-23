@@ -61,11 +61,23 @@ export async function notifyPostingEvent(messageType, payload) {
   let extra = '';
   switch (messageType) {
     case 'TYPE_NEW_POSTING': {
-      title = '[新货件] Ozon 推送';
+      // 02131/024785 开头的货件号为质检单,其余为新订单
+      const store = getStoreBySellerId(sellerId);
+      const sellerName = store ? store.name : String(sellerId);
+      const isQc = typeof postingNumber === 'string'
+        && (postingNumber.startsWith('02131') || postingNumber.startsWith('024785'));
+      title = `[${isQc ? '新质检单' : '新订单'}] [${sellerName}] [${postingNumber}]`;
       timeField = ['处理时间', payload.in_process_at ?? '-'];
       const products = Array.isArray(payload.products) ? payload.products : [];
       const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
       extra = `\n商品SKU数: ${products.length}\n商品总件数: ${totalQty}`;
+      // 商品链接去重后逐行列出
+      const links = [...new Set(
+        products
+          .filter((p) => p.sku != null)
+          .map((p) => `https://www.ozon.ru/product/${p.sku}`),
+      )];
+      if (links.length) extra += `\n商品链接:\n${links.join('\n')}`;
       if (payload.tracking_number) extra += `\n跟踪号: ${payload.tracking_number}`;
       break;
     }
