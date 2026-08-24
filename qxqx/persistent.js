@@ -17,9 +17,9 @@ const ctx = await launchPersistentContext({
 // 复用已打开的页面，没有则新建
 const page = ctx.pages()[0] || (await ctx.newPage());
 
-await page.goto('https://www.baidu.com');
+await page.goto('https://seller.ozon.ru/app/dashboard/main');
 console.log('页面标题:', await page.title());
 
 // 关闭上下文，profile 自动落盘
 // await ctx.close();
-console.log('已关闭，profile 保存在:', userDataDir);
+console.log('profile 保存在:', userDataDir);

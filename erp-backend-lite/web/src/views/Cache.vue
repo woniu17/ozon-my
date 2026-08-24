@@ -24,8 +24,8 @@ const confirmStore = useConfirmStore();
 const route = useRoute();
 const router = useRouter();
 
-// Ozon 商品详情页 URL(sku 直接拼到 /product/-{sku}/)
-const OZON_PDP_PREFIX = 'https://www.ozon.ru/product/-';
+// Ozon 商品详情页 URL(sku 直接拼到 /product/{sku}/)
+const OZON_PDP_PREFIX = 'https://www.ozon.ru/product/';
 
 // 子 tab type 到一级路由 path 的映射(用于导航高亮与切换)
 const TYPE_TO_PATH = {
@@ -764,12 +764,7 @@ onMounted(() => {
     <div class="toolbar">
       <h2>{{ pageTitle }}</h2>
       <div style="display: flex; gap: 8px">
-        <button
-          v-if="state.type === 'overview'"
-          class="btn btn-ghost"
-          :disabled="state.loading"
-          @click="loadList"
-        >
+        <button v-if="state.type === 'overview'" class="btn btn-ghost" :disabled="state.loading" @click="loadList">
           {{ state.loading ? '刷新中…' : '刷新列表' }}
         </button>
       </div>
@@ -779,32 +774,19 @@ onMounted(() => {
     <template v-if="state.type === 'overview'">
       <!-- 筛选 -->
       <div class="filter-bar">
-        <input
-          class="filter-input"
-          type="text"
-          v-model.trim="state.keyword"
-          placeholder="搜索 SKU / 名称 / 店铺"
-          @keydown.enter="search"
-        />
+        <input class="filter-input" type="text" v-model.trim="state.keyword" placeholder="搜索 SKU / 名称 / 店铺"
+          @keydown.enter="search" />
         <button class="btn btn-primary" @click="search">查询</button>
         <span style="flex: 1"></span>
         <span v-if="selectedCount" class="muted" style="font-size: 12px; align-self: center">
           已选 {{ selectedCount }} 个
         </span>
-        <button
-          class="btn btn-sm btn-ghost"
-          :disabled="state.deleting || !selectedCount"
-          :title="'删除当前选中的 SKU 缓存'"
-          @click="deleteSelected"
-        >
+        <button class="btn btn-sm btn-ghost" :disabled="state.deleting || !selectedCount" :title="'删除当前选中的 SKU 缓存'"
+          @click="deleteSelected">
           选中删除
         </button>
-        <button
-          class="btn btn-sm btn-danger"
-          :disabled="state.deleting"
-          :title="'按当前关键词筛选删除所有匹配 SKU 缓存(不限当前页)'"
-          @click="deleteByFilter"
-        >
+        <button class="btn btn-sm btn-danger" :disabled="state.deleting" :title="'按当前关键词筛选删除所有匹配 SKU 缓存(不限当前页)'"
+          @click="deleteByFilter">
           按筛选删除
         </button>
       </div>
@@ -815,13 +797,8 @@ onMounted(() => {
           <thead>
             <tr>
               <th class="col-check">
-                <input
-                  type="checkbox"
-                  :checked="allChecked"
-                  :indeterminate.prop="someChecked"
-                  @change="toggleAll($event.target.checked)"
-                  title="全选/反选当前页"
-                />
+                <input type="checkbox" :checked="allChecked" :indeterminate.prop="someChecked"
+                  @change="toggleAll($event.target.checked)" title="全选/反选当前页" />
               </th>
               <th>SKU</th>
               <th title="card + detail 合并表(DOM 解析字段)">Dom</th>
@@ -841,59 +818,33 @@ onMounted(() => {
             </tr>
             <tr v-for="it in state.items" :key="it.sku">
               <td class="col-check">
-                <input
-                  type="checkbox"
-                  :checked="selectedSkus.has(it.sku)"
-                  @change="toggleRow(it.sku, $event.target.checked)"
-                />
+                <input type="checkbox" :checked="selectedSkus.has(it.sku)"
+                  @change="toggleRow(it.sku, $event.target.checked)" />
               </td>
               <td class="col-sku">
                 <a :href="OZON_PDP_PREFIX + it.sku + '/'" target="_blank" rel="noopener" class="sku-link">
                   {{ it.sku }}
                 </a>
               </td>
-              <td
-                class="cell-clickable"
-                :title="hitBadgeTitle(it, 'dom')"
-                @click="openDetail(it, 'dom')"
-              >
+              <td class="cell-clickable" :title="hitBadgeTitle(it, 'dom')" @click="openDetail(it, 'dom')">
                 <span :class="hitBadgeClass(it, 'dom')">{{ hitBadgeText(it, 'dom') }}</span>
               </td>
-              <td
-                class="cell-clickable"
-                :title="hitBadgeTitle(it, 'attribute')"
-                @click="openDetail(it, 'attribute')"
-              >
+              <td class="cell-clickable" :title="hitBadgeTitle(it, 'attribute')" @click="openDetail(it, 'attribute')">
                 <span :class="hitBadgeClass(it, 'attribute')">{{ hitBadgeText(it, 'attribute') }}</span>
               </td>
-              <td
-                class="cell-clickable"
-                :title="hitBadgeTitle(it, 'richMedia')"
-                @click="openDetail(it, 'richMedia')"
-              >
+              <td class="cell-clickable" :title="hitBadgeTitle(it, 'richMedia')" @click="openDetail(it, 'richMedia')">
                 <span :class="hitBadgeClass(it, 'richMedia')">{{ hitBadgeText(it, 'richMedia') }}</span>
               </td>
-              <td
-                class="cell-clickable"
-                :title="hitBadgeTitle(it, 'marketStats')"
-                @click="openDetail(it, 'marketStats')"
-              >
+              <td class="cell-clickable" :title="hitBadgeTitle(it, 'marketStats')"
+                @click="openDetail(it, 'marketStats')">
                 <span :class="hitBadgeClass(it, 'marketStats')">{{ hitBadgeText(it, 'marketStats') }}</span>
               </td>
-              <td
-                class="cell-clickable"
-                :title="hitBadgeTitle(it, 'followSell')"
-                @click="openDetail(it, 'followSell')"
-              >
+              <td class="cell-clickable" :title="hitBadgeTitle(it, 'followSell')" @click="openDetail(it, 'followSell')">
                 <span :class="hitBadgeClass(it, 'followSell')">{{ hitBadgeText(it, 'followSell') }}</span>
               </td>
               <td class="row-actions">
                 <button class="btn btn-sm btn-primary" @click="openOpiPreview(it.sku)">OPI 预览</button>
-                <button
-                  class="btn btn-sm btn-danger"
-                  :disabled="state.deleting"
-                  @click="deleteOne(it)"
-                >
+                <button class="btn btn-sm btn-danger" :disabled="state.deleting" @click="deleteOne(it)">
                   删除
                 </button>
               </td>
@@ -902,12 +853,8 @@ onMounted(() => {
         </table>
       </div>
 
-      <AppPager
-        :modelValue="state.page"
-        :total="state.total"
-        :pageSize="state.pageSize"
-        @update:modelValue="onPageChange"
-      />
+      <AppPager :modelValue="state.page" :total="state.total" :pageSize="state.pageSize"
+        @update:modelValue="onPageChange" />
     </template>
 
     <!-- ── 店铺数据 tab ───────────────────────────────────── -->
@@ -918,13 +865,8 @@ onMounted(() => {
           <option :value="true">中国店铺</option>
           <option :value="false">非中国店铺</option>
         </select>
-        <input
-          class="filter-input"
-          type="text"
-          v-model.trim="storeClassFilters.keyword"
-          placeholder="店铺名 / Seller ID"
-          @keydown.enter="searchStoreClassifications"
-        />
+        <input class="filter-input" type="text" v-model.trim="storeClassFilters.keyword" placeholder="店铺名 / Seller ID"
+          @keydown.enter="searchStoreClassifications" />
         <button class="btn btn-primary" @click="searchStoreClassifications">查询</button>
       </div>
 
@@ -932,33 +874,43 @@ onMounted(() => {
       <div class="filter-advanced">
         <div class="filter-group">
           <label>采集 SKU</label>
-          <input type="number" class="num-input" v-model.trim="storeClassFilters.skuCountMin" placeholder="min" @keydown.enter="searchStoreClassifications" />
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.skuCountMin" placeholder="min"
+            @keydown.enter="searchStoreClassifications" />
           <span class="dash">—</span>
-          <input type="number" class="num-input" v-model.trim="storeClassFilters.skuCountMax" placeholder="max" @keydown.enter="searchStoreClassifications" />
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.skuCountMax" placeholder="max"
+            @keydown.enter="searchStoreClassifications" />
         </div>
         <div class="filter-group">
           <label>订单数</label>
-          <input type="number" class="num-input" v-model.trim="storeClassFilters.ordersCountMin" placeholder="min" @keydown.enter="searchStoreClassifications" />
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.ordersCountMin" placeholder="min"
+            @keydown.enter="searchStoreClassifications" />
           <span class="dash">—</span>
-          <input type="number" class="num-input" v-model.trim="storeClassFilters.ordersCountMax" placeholder="max" @keydown.enter="searchStoreClassifications" />
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.ordersCountMax" placeholder="max"
+            @keydown.enter="searchStoreClassifications" />
         </div>
         <div class="filter-group">
           <label>评论数</label>
-          <input type="number" class="num-input" v-model.trim="storeClassFilters.reviewsCountMin" placeholder="min" @keydown.enter="searchStoreClassifications" />
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.reviewsCountMin" placeholder="min"
+            @keydown.enter="searchStoreClassifications" />
           <span class="dash">—</span>
-          <input type="number" class="num-input" v-model.trim="storeClassFilters.reviewsCountMax" placeholder="max" @keydown.enter="searchStoreClassifications" />
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.reviewsCountMax" placeholder="max"
+            @keydown.enter="searchStoreClassifications" />
         </div>
         <div class="filter-group">
           <label>评分</label>
-          <input type="number" class="num-input" step="0.1" min="0" max="5" v-model.trim="storeClassFilters.ratingMin" placeholder="min" @keydown.enter="searchStoreClassifications" />
+          <input type="number" class="num-input" step="0.1" min="0" max="5" v-model.trim="storeClassFilters.ratingMin"
+            placeholder="min" @keydown.enter="searchStoreClassifications" />
           <span class="dash">—</span>
-          <input type="number" class="num-input" step="0.1" min="0" max="5" v-model.trim="storeClassFilters.ratingMax" placeholder="max" @keydown.enter="searchStoreClassifications" />
+          <input type="number" class="num-input" step="0.1" min="0" max="5" v-model.trim="storeClassFilters.ratingMax"
+            placeholder="max" @keydown.enter="searchStoreClassifications" />
         </div>
         <div class="filter-group">
           <label>开业时长(月)</label>
-          <input type="number" class="num-input" v-model.trim="storeClassFilters.openedMonthsMin" placeholder="min" @keydown.enter="searchStoreClassifications" />
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.openedMonthsMin" placeholder="min"
+            @keydown.enter="searchStoreClassifications" />
           <span class="dash">—</span>
-          <input type="number" class="num-input" v-model.trim="storeClassFilters.openedMonthsMax" placeholder="max" @keydown.enter="searchStoreClassifications" />
+          <input type="number" class="num-input" v-model.trim="storeClassFilters.openedMonthsMax" placeholder="max"
+            @keydown.enter="searchStoreClassifications" />
         </div>
         <button class="btn btn-sm btn-ghost" @click="resetStoreClassFilters">重置筛选</button>
       </div>
@@ -973,23 +925,28 @@ onMounted(() => {
               <th>分类方式</th>
               <th>公司信息</th>
               <th>店铺链接</th>
-              <th class="th-sortable" @click="toggleStoreClassSort('skuCount')" :title="storeClassFilters.sortBy === 'skuCount' ? '当前:按采集数降序,点击切回默认' : '点击按采集数降序'">
+              <th class="th-sortable" @click="toggleStoreClassSort('skuCount')"
+                :title="storeClassFilters.sortBy === 'skuCount' ? '当前:按采集数降序,点击切回默认' : '点击按采集数降序'">
                 采集 SKU 数
                 <span class="sort-indicator">{{ storeClassFilters.sortBy === 'skuCount' ? '▼' : '' }}</span>
               </th>
-              <th class="th-sortable" @click="toggleStoreClassSort('ordersCount')" :title="storeClassFilters.sortBy === 'ordersCount' ? '当前:按订单数降序,点击切回默认' : '点击按订单数降序'">
+              <th class="th-sortable" @click="toggleStoreClassSort('ordersCount')"
+                :title="storeClassFilters.sortBy === 'ordersCount' ? '当前:按订单数降序,点击切回默认' : '点击按订单数降序'">
                 订单数
                 <span class="sort-indicator">{{ storeClassFilters.sortBy === 'ordersCount' ? '▼' : '' }}</span>
               </th>
-              <th class="th-sortable" @click="toggleStoreClassSort('reviewsCount')" :title="storeClassFilters.sortBy === 'reviewsCount' ? '当前:按评论数降序,点击切回默认' : '点击按评论数降序'">
+              <th class="th-sortable" @click="toggleStoreClassSort('reviewsCount')"
+                :title="storeClassFilters.sortBy === 'reviewsCount' ? '当前:按评论数降序,点击切回默认' : '点击按评论数降序'">
                 评论数
                 <span class="sort-indicator">{{ storeClassFilters.sortBy === 'reviewsCount' ? '▼' : '' }}</span>
               </th>
-              <th class="th-sortable" @click="toggleStoreClassSort('rating')" :title="storeClassFilters.sortBy === 'rating' ? '当前:按评分降序,点击切回默认' : '点击按评分降序'">
+              <th class="th-sortable" @click="toggleStoreClassSort('rating')"
+                :title="storeClassFilters.sortBy === 'rating' ? '当前:按评分降序,点击切回默认' : '点击按评分降序'">
                 评分
                 <span class="sort-indicator">{{ storeClassFilters.sortBy === 'rating' ? '▼' : '' }}</span>
               </th>
-              <th class="th-sortable" @click="toggleStoreClassSort('openedMonths')" :title="storeClassFilters.sortBy === 'openedMonths' ? '当前:按开业时长降序,点击切回默认' : '点击按开业时长降序'">
+              <th class="th-sortable" @click="toggleStoreClassSort('openedMonths')"
+                :title="storeClassFilters.sortBy === 'openedMonths' ? '当前:按开业时长降序,点击切回默认' : '点击按开业时长降序'">
                 开业时长
                 <span class="sort-indicator">{{ storeClassFilters.sortBy === 'openedMonths' ? '▼' : '' }}</span>
               </th>
@@ -1012,7 +969,8 @@ onMounted(() => {
               <td>{{ sc.classifiedBy || '—' }}</td>
               <td>{{ sc.companyInfo?.companyName || '—' }}</td>
               <td>
-                <a v-if="storeUrl(sc)" :href="storeUrl(sc)" target="_blank" rel="noopener noreferrer" class="table-link" :title="storeUrl(sc)">
+                <a v-if="storeUrl(sc)" :href="storeUrl(sc)" target="_blank" rel="noopener noreferrer" class="table-link"
+                  :title="storeUrl(sc)">
                   访问店铺
                 </a>
                 <template v-else>—</template>
@@ -1024,37 +982,31 @@ onMounted(() => {
               <td>{{ sc.openedMonths != null ? sc.openedMonths + ' 月' : '—' }}</td>
               <td class="col-time">{{ fmtTime(sc.lastSeenAt) }}</td>
               <td class="row-actions">
-                <button class="btn btn-sm btn-primary" :disabled="!sc.sellerId" @click="updateStoreClass(sc.sellerId || sc._id, { isMainlandChina: true })">
+                <button class="btn btn-sm btn-primary" :disabled="!sc.sellerId"
+                  @click="updateStoreClass(sc.sellerId || sc._id, { isMainlandChina: true })">
                   标记中国
                 </button>
-                <button class="btn btn-sm btn-ghost" :disabled="!sc.sellerId" @click="updateStoreClass(sc.sellerId || sc._id, { isMainlandChina: false })">
+                <button class="btn btn-sm btn-ghost" :disabled="!sc.sellerId"
+                  @click="updateStoreClass(sc.sellerId || sc._id, { isMainlandChina: false })">
                   标记非中国
                 </button>
-                <button class="btn btn-sm btn-danger" :disabled="!sc.sellerId" @click="deleteStoreClass(sc.sellerId || sc._id, sc.sellerName || sc.sellerSlug)">删除</button>
+                <button class="btn btn-sm btn-danger" :disabled="!sc.sellerId"
+                  @click="deleteStoreClass(sc.sellerId || sc._id, sc.sellerName || sc.sellerSlug)">删除</button>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <AppPager
-        :modelValue="storeClassPager.current"
-        :total="storeClassPager.total"
-        :pageSize="storeClassPager.pageSize"
-        @update:modelValue="onStoreClassPageChange"
-      />
+      <AppPager :modelValue="storeClassPager.current" :total="storeClassPager.total"
+        :pageSize="storeClassPager.pageSize" @update:modelValue="onStoreClassPageChange" />
     </div>
 
     <!-- 店铺 SKU 关联 tab -->
     <div v-if="state.type === 'store-sku'" class="store-sku-tab">
       <div class="filter-bar">
-        <input
-          class="filter-input"
-          type="text"
-          v-model.trim="storeSkuFilters.keyword"
-          placeholder="SKU / 店铺名 / Slug / SellerId"
-          @keydown.enter="searchStoreSkus"
-        />
+        <input class="filter-input" type="text" v-model.trim="storeSkuFilters.keyword"
+          placeholder="SKU / 店铺名 / Slug / SellerId" @keydown.enter="searchStoreSkus" />
         <button class="btn btn-primary" @click="searchStoreSkus">查询</button>
       </div>
 
@@ -1099,12 +1051,8 @@ onMounted(() => {
         </table>
       </div>
 
-      <AppPager
-        :modelValue="storeSkuPager.current"
-        :total="storeSkuPager.total"
-        :pageSize="storeSkuPager.pageSize"
-        @update:modelValue="onStoreSkuPageChange"
-      />
+      <AppPager :modelValue="storeSkuPager.current" :total="storeSkuPager.total" :pageSize="storeSkuPager.pageSize"
+        @update:modelValue="onStoreSkuPageChange" />
     </div>
 
     <!-- 详情弹窗 -->
@@ -1146,25 +1094,19 @@ onMounted(() => {
       <div v-else-if="opiData" class="opi-preview">
         <div class="opi-sources-bar">
           <span class="opi-sources-label">缓存来源:</span>
-          <span
-            :class="opiSourceTag(opiSources?.search)"
-            :title="opiSourceLabel(opiSources?.search, 'Seller Portal /api/v1/search')"
-          >
+          <span :class="opiSourceTag(opiSources?.search)"
+            :title="opiSourceLabel(opiSources?.search, 'Seller Portal /api/v1/search')">
             search {{ opiSourceLabel(opiSources?.search, '✓') }}
           </span>
-          <span
-            :class="opiSourceTag(opiSources?.bundle)"
-            :title="opiSourceLabel(opiSources?.bundle, 'create-bundle-by-variant-id')"
-          >
+          <span :class="opiSourceTag(opiSources?.bundle)"
+            :title="opiSourceLabel(opiSources?.bundle, 'create-bundle-by-variant-id')">
             bundle {{ opiSourceLabel(opiSources?.bundle, '✓') }}
           </span>
           <span :class="opiSourceTag(opiSources?.card)" :title="opiSourceLabel(opiSources?.card, '商品卡 DOM')">
             商品卡 {{ opiSourceLabel(opiSources?.card, '✓') }}
           </span>
-          <span
-            :class="opiSourceTag(opiSources?.richMedia)"
-            :title="opiSourceLabel(opiSources?.richMedia, '富媒体缓存(合并 entrypoint+composer)')"
-          >
+          <span :class="opiSourceTag(opiSources?.richMedia)"
+            :title="opiSourceLabel(opiSources?.richMedia, '富媒体缓存(合并 entrypoint+composer)')">
             richMedia {{ opiSourceLabel(opiSources?.richMedia, '✓') }}
           </span>
           <span :class="opiSourceTag(opiSources?.detail)" :title="opiSourceLabel(opiSources?.detail, '详情页 DOM')">
@@ -1200,6 +1142,7 @@ onMounted(() => {
   gap: 0;
   padding: 0 24px 12px;
 }
+
 .cache-type-tab {
   padding: 8px 18px;
   border: 1px solid var(--border);
@@ -1209,13 +1152,16 @@ onMounted(() => {
   font-size: 13px;
   transition: all 0.15s;
 }
+
 .cache-type-tab:first-child {
   border-radius: 6px 0 0 6px;
 }
+
 .cache-type-tab:last-child {
   border-radius: 0 6px 6px 0;
   border-left: none;
 }
+
 .cache-type-tab.active {
   background: var(--primary);
   color: #fff;
@@ -1226,28 +1172,35 @@ onMounted(() => {
   font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
   font-size: 12px;
 }
+
 .sku-link {
   color: var(--primary);
   text-decoration: none;
 }
+
 .sku-link:hover {
   text-decoration: underline;
 }
+
 .table-link {
   color: var(--primary);
   text-decoration: none;
 }
+
 .table-link:hover {
   text-decoration: underline;
 }
+
 .th-sortable {
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
 }
+
 .th-sortable:hover {
   color: var(--primary);
 }
+
 .sort-indicator {
   font-size: 11px;
   color: var(--primary);
@@ -1259,28 +1212,35 @@ onMounted(() => {
 .overview-table td {
   text-align: center;
 }
+
 .overview-table .col-sku {
   text-align: left;
 }
+
 .overview-table .col-check {
   width: 36px;
   text-align: center;
 }
+
 .overview-table .col-check input[type='checkbox'] {
   margin: 0;
   cursor: pointer;
 }
+
 .tag-mute {
   background: #f3f4f6;
   color: #9ca3af;
 }
+
 .overview-table .row-actions {
   text-align: center;
 }
+
 .cell-clickable {
   cursor: pointer;
   transition: background 0.15s;
 }
+
 .cell-clickable:hover {
   background: #f9fafb;
 }
@@ -1291,27 +1251,33 @@ onMounted(() => {
   flex-direction: column;
   gap: 16px;
 }
+
 .cache-detail-meta {
   padding: 12px;
   background: #f9fafb;
   border-radius: 6px;
   font-size: 13px;
 }
+
 .cache-detail-meta .meta-header {
   font-weight: 600;
   margin-bottom: 8px;
   color: var(--text);
 }
+
 .cache-detail-meta .meta-item {
   margin: 2px 0;
 }
+
 .cache-detail-meta b {
   color: var(--muted);
   font-weight: 500;
 }
+
 .cache-detail-data .json-block {
   margin-bottom: 16px;
 }
+
 .cache-detail-data .json-block h3 {
   margin-bottom: 8px;
   padding-bottom: 4px;
@@ -1322,6 +1288,7 @@ onMounted(() => {
   background: #fef2f2;
   color: #b91c1c;
 }
+
 .tag-ok {
   background: #ecfdf5;
   color: #047857;
@@ -1333,6 +1300,7 @@ onMounted(() => {
   flex-direction: column;
   gap: 16px;
 }
+
 .opi-sources-bar {
   display: flex;
   flex-wrap: wrap;
@@ -1343,15 +1311,18 @@ onMounted(() => {
   border-radius: 6px;
   font-size: 12px;
 }
+
 .opi-sources-label {
   color: var(--muted);
   margin-right: 4px;
 }
-.opi-sources-bar > span:not(.opi-sources-label) {
+
+.opi-sources-bar>span:not(.opi-sources-label) {
   padding: 2px 8px;
   border-radius: 4px;
   font-weight: 500;
 }
+
 .opi-field-summary {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -1361,19 +1332,23 @@ onMounted(() => {
   border-radius: 6px;
   font-size: 13px;
 }
+
 .opi-field-summary b {
   color: var(--muted);
   font-weight: 500;
 }
+
 .opi-json-section h3 {
   margin-bottom: 8px;
 }
+
 .opi-error {
   padding: 12px;
   background: #fef2f2;
   border-radius: 6px;
   color: #b91c1c;
 }
+
 .opi-error .opi-sources {
   display: flex;
   flex-wrap: wrap;
@@ -1381,7 +1356,8 @@ onMounted(() => {
   margin-top: 8px;
   font-size: 12px;
 }
-.opi-error .opi-sources > span {
+
+.opi-error .opi-sources>span {
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -1402,6 +1378,7 @@ onMounted(() => {
   background: #dbeafe;
   color: #1d4ed8;
 }
+
 .badge-non-mainland-china {
   display: inline-block;
   padding: 2px 8px;
@@ -1411,6 +1388,7 @@ onMounted(() => {
   background: #fef3c7;
   color: #b45309;
 }
+
 .badge-pending {
   display: inline-block;
   padding: 2px 8px;
@@ -1431,17 +1409,20 @@ onMounted(() => {
   margin-bottom: 8px;
   border-bottom: 1px dashed var(--border);
 }
+
 .filter-group {
   display: flex;
   align-items: center;
   gap: 4px;
   font-size: 13px;
 }
+
 .filter-group label {
   color: var(--muted);
   white-space: nowrap;
   margin-right: 2px;
 }
+
 .filter-group .num-input {
   width: 76px;
   padding: 4px 6px;
@@ -1450,10 +1431,12 @@ onMounted(() => {
   border-radius: 4px;
   background: #fff;
 }
+
 .filter-group .num-input:focus {
   outline: none;
   border-color: var(--primary);
 }
+
 .filter-group .dash {
   color: var(--muted);
   font-size: 12px;
