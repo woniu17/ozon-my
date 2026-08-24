@@ -432,6 +432,11 @@ const opiData = ref(null);
 const opiSources = ref(null);
 const opiError = ref('');
 const opiTitle = computed(() => `OPI 预览 · ${opiSku.value}`);
+// 字段对照标签页:五路原始数据 + 纯 search 归一化 + 属性名字典
+const opiRaw = ref(null);
+const opiSearchSv = ref(null);
+const opiAttrDict = ref({});
+const opiTab = ref('json'); // 'json' | 'compare'
 
 // OPI 预览并发序号:用户快速切换不同 SKU 时,旧请求响应应被忽略
 let openOpiReqId = 0;
@@ -443,12 +448,19 @@ async function openOpiPreview(sku) {
   opiData.value = null;
   opiSources.value = null;
   opiError.value = '';
+  opiRaw.value = null;
+  opiSearchSv.value = null;
+  opiAttrDict.value = {};
+  opiTab.value = 'json';
   try {
     const r = await getOpiPreview(sku);
     if (myId !== openOpiReqId) return; // 已被新请求取代,丢弃旧响应
     opiData.value = r?.item || null;
     opiSources.value = r?.sources || null;
     opiError.value = r?.error || '';
+    opiRaw.value = r?.raw || null;
+    opiSearchSv.value = r?.searchSv || null;
+    opiAttrDict.value = r?.attrDict || {};
   } catch (err) {
     if (myId !== openOpiReqId) return;
     opiError.value = err.message || String(err);
@@ -456,6 +468,275 @@ async function openOpiPreview(sku) {
     if (myId === openOpiReqId) opiLoading.value = false;
   }
 }
+
+// ── 字段对照(跟卖上架数据来源逐字段展示) ─────────────────
+// 行结构: { groupHeader?: string, label, sub, sources: [{tag, display, selected, state, force}], final, note, state }
+//   sources.state: 'ok' | 'diff'(与选中值不一致) | 'empty'(无值) | 'strike'(被覆盖/过滤)
+//   行 state: 'ok' | 'warn'(存在不一致) | 'mute'(不发送/被过滤)
+
+// 值格式化:文本截断,数组显示 张数/首项
+function fcText(v, max = 80) {
+  if (v == null || v === '') return '';
+  const s = String(v);
+  return s.length > max ? `${s.slice(0, max)}…(${s.length}字)` : s;
+}
+function fcArr(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return '';
+  const first = String(arr[0] || '');
+  const firstShort = first.length > 50 ? `${first.slice(0, 50)}…` : first;
+  return `${arr.length} 项 · ${firstShort}`;
+}
+// 全等比较(文本 ===;数组按元素全等)
+function fcEq(a, b) {
+  const sa = Array.isArray(a) ? a.map(String).join('\u0001') : String(a ?? '');
+  const sb = Array.isArray(b) ? b.map(String).join('\u0001') : String(b ?? '');
+  return sa === sb;
+}
+// 候选来源标记:选中 = 第一个非空;与选中值不一致的非空来源标 diff
+function fcMark(cands) {
+  const picked = cands.findIndex((c) => !c.isEmpty);
+  const pickedVal = picked >= 0 ? cands[picked].value : null;
+  return cands.map((c, i) => ({
+    ...c,
+    selected: i === picked,
+    state: c.isEmpty ? 'empty' : i === picked || fcEq(c.value, pickedVal) ? 'ok' : 'diff',
+  }));
+}
+function fcRow(label, sub, cands, final, note = '', rowState = 'ok') {
+  const sources = fcMark(cands);
+  const hasDiff = sources.some((s) => s.state === 'diff');
+  return {
+    label, sub, sources, final, note,
+    state: hasDiff ? 'warn' : rowState,
+  };
+}
+
+// transformItemForPortal 的 SKIP_ATTR_IDS(同后端 prepare-bundle.js)
+const FC_SKIP_ATTR_IDS = new Set([4194, 4195, 4497, 9454, 9455, 9456, 23536]);
+// 上架时强制注入的属性(buildListingMessage,_forcedAttributes)
+const FC_FORCED_ATTRS = {
+  85: { display: 'Нет бренда (dict 126745801)', note: '上架时强制注入' },
+  9024: { display: '= offer_id', note: '上架时强制注入' },
+  9048: { display: '时间戳36进制', note: '上架时强制注入' },
+};
+
+// bundle 扁平属性值 → 展示文本(values 数组含 dictionary_value_id)
+function fcBundleAttrVal(ba) {
+  if (!Array.isArray(ba?.values)) return '';
+  return ba.values
+    .map((v) => (v.dictionary_value_id ? `${v.value} (dict ${v.dictionary_value_id})` : String(v.value ?? '')))
+    .filter(Boolean)
+    .join(' | ');
+}
+// search 归一化属性值 → 展示文本
+function fcSearchAttrVal(sa) {
+  if (!sa) return '';
+  if (Array.isArray(sa.collection)) return fcArr(sa.collection);
+  return fcText(sa.value);
+}
+
+const fieldCompareRows = computed(() => {
+  const raw = opiRaw.value;
+  if (!raw) return [];
+  const bundle = raw.bundleData || {};
+  const card = raw.cardData || {};
+  const detail = raw.detailData || {};
+  const rm = raw.richMediaData || {};
+  const sv = opiSearchSv.value || {};
+  const opi = opiData.value || {};
+  const rows = [];
+
+  // ── A 组:顶层多来源字段(兜底链与后端 buildSynthesizedFromCache 一致) ──
+  rows.push({ groupHeader: 'A · 顶层多来源字段' });
+
+  const bAttr = (id) => (Array.isArray(bundle.attributes) ? bundle.attributes.find((a) => String(a.attribute_id || a.id) === id) : null);
+  const sAttr = (id) => (Array.isArray(sv.attributes) ? sv.attributes.find((a) => String(a.key) === id) : null);
+  const rmGallery = rm.gallery?.length ? rm.gallery : rm.fields?.images || [];
+
+  // 商品名:bundle.4180 → search.4180 → detail.title → card.name
+  rows.push(fcRow('商品名', 'name', [
+    { tag: 'bundle.4180', value: bAttr('4180')?.values?.[0]?.value || '' },
+    { tag: 'search.4180', value: sAttr('4180')?.value || '' },
+    { tag: 'detail.title', value: detail.title || '' },
+    { tag: 'card.name', value: card.name || '' },
+  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value) })), fcText(opi.name, 50)));
+
+  // 售价基数:detail.price → card.price(最终价由模板公式组装时重算,此处只展示基数)
+  rows.push(fcRow('售价基数', 'price', [
+    { tag: 'detail.price', value: detail.price ?? '' },
+    { tag: 'card.price', value: card.price ?? '' },
+  ].map((c) => ({ ...c, isEmpty: c.value === '' || c.value == null, display: String(c.value ?? '') })),
+    String(detail.price ?? card.price ?? ''), '模板公式组装时重算,此处不展示最终价'));
+
+  // 划线价基数:detail.originalPrice
+  rows.push(fcRow('划线价基数', 'old_price', [
+    { tag: 'detail.originalPrice', value: detail.originalPrice ?? '' },
+  ].map((c) => ({ ...c, isEmpty: c.value === '' || c.value == null, display: String(c.value ?? '') })),
+    String(detail.originalPrice ?? ''), '组装时按售价×oldPriceA% 重算'));
+
+  // 主图:bundle.primary_image → rm.gallery[0] → detail.images[0] → card.image
+  rows.push(fcRow('主图', 'primary_image', [
+    { tag: 'bundle', value: bundle.primary_image || '' },
+    { tag: 'rm.gallery[0]', value: rmGallery[0] || '' },
+    { tag: 'detail.images[0]', value: detail.images?.[0] || '' },
+    { tag: 'card.image', value: card.image || '' },
+  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value, 60) })), fcText(opi.primary_image, 60)));
+
+  // 图片组:bundle.images → rm.gallery[1:] → detail.images
+  const imgB = Array.isArray(bundle.images) ? bundle.images : [];
+  const imgRm = rmGallery.length > 1 ? rmGallery.slice(1) : [];
+  const imgD = Array.isArray(detail.images) ? detail.images : [];
+  rows.push(fcRow('图片组', 'images', [
+    { tag: 'bundle', value: imgB },
+    { tag: 'rm.gallery[1:]', value: imgRm },
+    { tag: 'detail.images', value: imgD },
+  ].map((c) => ({ ...c, isEmpty: !c.value.length, display: fcArr(c.value) })),
+    fcArr(opi.images), '可按模板 shuffle_non_primary 打乱'));
+
+  // 描述 4191:bundle.4191 → rm.description → detail.description
+  const descB = bAttr('4191')?.values?.[0]?.value || '';
+  rows.push(fcRow('描述', 'attr 4191', [
+    { tag: 'bundle.4191', value: descB },
+    { tag: 'rm.description', value: rm.description || '' },
+    { tag: 'detail.desc', value: detail.description || '' },
+  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value) })), fcText(descB, 60)));
+
+  // 物理参数:bundle 顶层(缺失兜底 100)
+  for (const [label, key, unit] of [['重量', 'weight', 'g'], ['长', 'depth', 'mm'], ['宽', 'width', 'mm'], ['高', 'height', 'mm']]) {
+    const v = bundle[key];
+    rows.push(fcRow(label, key, [
+      { tag: 'bundle', value: v ?? '' },
+    ].map((c) => ({ ...c, isEmpty: c.value === '' || c.value == null, display: String(c.value ?? '') })),
+      v != null && Number(v) > 0 ? `${Math.round(Number(v))} ${unit}` : `100 ${unit}(兜底)`, '缺失时兜底 100'));
+  }
+
+  // type_id:search.description_type_dict_value(sv.description_category_id 实为 type_id) → bundle.type_id
+  const tidS = sv.description_category_id || '';
+  const tidB = bundle.type_id ?? '';
+  rows.push(fcRow('类型 ID', 'type_id', [
+    { tag: 'search.dict_value', value: tidS },
+    { tag: 'bundle.type_id', value: tidB },
+  ].map((c) => ({ ...c, isEmpty: c.value === '' || c.value == null, display: String(c.value ?? '') })), String(opi.type_id ?? '')));
+
+  // description_category_id:search.categories level=3 → bundle → 最深层
+  const cats = Array.isArray(sv.categories) ? sv.categories : [];
+  const lvl3 = cats.find((c) => Number(c.level) === 3 && c.id);
+  const deepest = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
+  rows.push(fcRow('类目 ID', 'description_category_id', [
+    { tag: 'search.lvl3', value: lvl3?.id ?? '' },
+    { tag: 'bundle.desc_cat_id', value: bundle.description_category_id ?? '' },
+    { tag: 'search.最深层', value: deepest?.id ?? '' },
+  ].map((c, i) => ({
+    ...c,
+    isEmpty: c.value === '' || c.value == null,
+    display: c.value ? `${c.value} (level ${i === 0 ? 3 : i === 2 ? deepest?.level : '?'})` : '',
+  })), String(opi.description_category_id ?? ''), 'OPI 字典要求 level_3_id'));
+
+  // barcode:search.barcodes[0] → bundle.barcode(不发送)
+  const bcS = sv._searchMeta?.barcodes?.[0] || '';
+  const bcB = bundle.barcode || '';
+  rows.push(fcRow('条码', 'barcode', [
+    { tag: 'search.barcodes[0]', value: bcS },
+    { tag: 'bundle.barcode', value: bcB },
+  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value, 30) })),
+    '不发送', 'toOpiItem 已注释,不上送 GTIN', 'mute'));
+
+  // 视频:rm.mp4(默认 skip 不发送)
+  rows.push(fcRow('视频', 'video_url', [
+    { tag: 'rm.mp4', value: rm.mp4 || '' },
+  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value, 60) })),
+    '不发送', 'videoMode=skip 默认置空', 'mute'));
+
+  // ── B 组:强制注入 / 生成字段 ──
+  rows.push({ groupHeader: 'B · 强制注入 / 生成字段' });
+
+  // offer_id:预览态为 SKU+sku,上架时为 {SKU}-{MMDD}-qx
+  rows.push({
+    label: 'offer_id', sub: '生成',
+    sources: [{ tag: '生成', display: `上架时 {SKU}-{MMDD}-qx`, selected: true, state: 'ok', force: true }],
+    final: opi.offer_id || '', note: '预览态占位,上架时按日期生成', state: 'ok',
+  });
+  // 币种/税率
+  rows.push({
+    label: '币种 / 税率', sub: 'currency_code / vat',
+    sources: [
+      { tag: '店铺配置', display: opi.currency_code || 'RUB', selected: true, state: 'ok', force: true },
+      { tag: '常量', display: 'vat 0', selected: true, state: 'ok', force: true },
+    ],
+    final: `${opi.currency_code || 'RUB'} / ${opi.vat ?? '0'}`, note: '', state: 'ok',
+  });
+  // 富内容 11254:rm.richContent 强制注入 _forcedAttributes
+  const rcLen = rm.richContent ? String(rm.richContent).length : 0;
+  rows.push({
+    label: '富内容', sub: 'attr 11254',
+    sources: [{ tag: '强制(rm)', display: rcLen ? `${rcLen} 字符` : '', selected: true, state: rcLen ? 'ok' : 'empty', force: true }],
+    final: rcLen ? '注入 _forcedAttributes' : '无', note: '跳过白名单,覆盖同 id 属性', state: 'ok',
+  });
+
+  // ── C 组:attributes 全量对照 ──
+  const attrIds = new Set();
+  if (Array.isArray(bundle.attributes)) {
+    for (const a of bundle.attributes) {
+      if (a.complex_id && Number(a.complex_id) !== 0) continue;
+      const id = String(a.attribute_id || a.id || '');
+      if (id) attrIds.add(id);
+    }
+  }
+  if (Array.isArray(sv.attributes)) for (const a of sv.attributes) if (a.key) attrIds.add(String(a.key));
+  if (Array.isArray(opi.attributes)) for (const a of opi.attributes) if (a.id) attrIds.add(String(a.id));
+  for (const id of Object.keys(FC_FORCED_ATTRS)) attrIds.add(id);
+
+  rows.push({ groupHeader: `C · attributes 全量对照(${attrIds.size} 个)` });
+
+  const opiAttr = (id) => (Array.isArray(opi.attributes) ? opi.attributes.find((a) => String(a.id) === id) : null);
+  for (const id of [...attrIds].sort((a, b) => Number(a) - Number(b))) {
+    const attrName = opiAttrDict.value?.[id]?.name || '';
+    const ba = bAttr(id);
+    const sa = sAttr(id);
+    const bVal = ba ? fcBundleAttrVal(ba) : '';
+    const sVal = fcSearchAttrVal(sa);
+    const isSkip = FC_SKIP_ATTR_IDS.has(Number(id));
+    const forced = FC_FORCED_ATTRS[Number(id)];
+    const finalAttr = opiAttr(id);
+    const finalVal = finalAttr
+      ? finalAttr.values.map((v) => (v.dictionary_value_id ? `${v.value} (dict ${v.dictionary_value_id})` : String(v.value ?? ''))).filter(Boolean).join(' | ')
+      : '';
+
+    const cands = [];
+    if (forced) {
+      cands.push({ tag: '强制', value: forced.display, isEmpty: false, display: forced.display, force: true });
+      if (bVal) cands.push({ tag: 'bundle', value: bVal, isEmpty: false, display: bVal });
+      if (sVal) cands.push({ tag: 'search', value: sVal, isEmpty: false, display: sVal });
+      // 强制行:非强制来源全部 strike(被覆盖)
+      const marked = cands.map((c, i) => ({ ...c, selected: i === 0, state: i === 0 ? 'ok' : 'strike' }));
+      rows.push({
+        label: id, sub: attrName || 'ID ' + id,
+        sources: marked,
+        final: finalVal || forced.display,
+        note: forced.note, state: 'ok',
+      });
+      continue;
+    }
+    if (isSkip) {
+      const c = [];
+      if (bVal) c.push({ tag: 'bundle', value: bVal, isEmpty: false, display: bVal, selected: false, state: 'strike' });
+      if (sVal) c.push({ tag: 'search', value: sVal, isEmpty: false, display: sVal, selected: false, state: 'strike' });
+      if (c.length === 0) c.push({ tag: 'bundle/search', value: '', isEmpty: true, display: '—', selected: false, state: 'strike' });
+      rows.push({
+        label: id, sub: attrName || 'ID ' + id,
+        sources: c,
+        final: 'SKIP_ATTR_IDS 过滤', note: '避免重复字段错误,不上送', state: 'mute',
+      });
+      continue;
+    }
+    // 常规属性:bundle 优先(含 dict id,最权威),search 兜底
+    cands.push({ tag: 'bundle', value: bVal, isEmpty: !bVal, display: bVal || '' });
+    cands.push({ tag: 'search', value: sVal, isEmpty: !sVal, display: sVal || '' });
+    rows.push(fcRow(id, attrName || 'ID ' + id, cands, finalVal, finalVal ? '' : '未进入最终 payload'));
+  }
+
+  return rows;
+});
 
 function opiSourceTag(hit) {
   return hit ? 'tag-ok' : 'tag-mute';
@@ -1091,7 +1372,7 @@ onMounted(() => {
           <span :class="opiSourceTag(opiSources.detail)">详情页</span>
         </div>
       </div>
-      <div v-else-if="opiData" class="opi-preview">
+      <div v-else-if="opiData || opiRaw" class="opi-preview">
         <div class="opi-sources-bar">
           <span class="opi-sources-label">缓存来源:</span>
           <span :class="opiSourceTag(opiSources?.search)"
@@ -1113,22 +1394,74 @@ onMounted(() => {
             详情页 {{ opiSourceLabel(opiSources?.detail, '✓') }}
           </span>
         </div>
-        <div class="opi-field-summary">
-          <div><b>name:</b> {{ opiData.name || '—' }}</div>
-          <div><b>offer_id:</b> {{ opiData.offer_id || '—' }}</div>
-          <div><b>price:</b> {{ opiData.price || '—' }}</div>
-          <div><b>images:</b> {{ opiData.images?.length || 0 }} 张</div>
-          <div><b>attributes:</b> {{ opiData.attributes?.length || 0 }} 个</div>
-          <div><b>complex_attributes:</b> {{ opiData.complex_attributes?.length || 0 }} 组</div>
-          <div v-if="opiData.weight"><b>weight:</b> {{ opiData.weight }} {{ opiData.weight_unit }}</div>
-          <div v-if="opiData.type_id"><b>type_id:</b> {{ opiData.type_id }}</div>
-          <div v-if="opiData.description_category_id">
-            <b>description_category_id:</b> {{ opiData.description_category_id }}
-          </div>
+        <div class="opi-tabs">
+          <button type="button" :class="['opi-tab', opiTab === 'json' && 'active']" @click="opiTab = 'json'">
+            OPI v3 JSON
+          </button>
+          <button type="button" :class="['opi-tab', opiTab === 'compare' && 'active']" @click="opiTab = 'compare'">
+            字段对照
+          </button>
         </div>
-        <div class="opi-json-section">
-          <h3>OPI v3 JSON</h3>
-          <JsonTree :data="opiData" :default-expand-level="2" root-key="item" />
+        <template v-if="opiTab === 'json'">
+          <div class="opi-field-summary">
+            <div><b>name:</b> {{ opiData?.name || '—' }}</div>
+            <div><b>offer_id:</b> {{ opiData?.offer_id || '—' }}</div>
+            <div><b>price:</b> {{ opiData?.price || '—' }}</div>
+            <div><b>images:</b> {{ opiData?.images?.length || 0 }} 张</div>
+            <div><b>attributes:</b> {{ opiData?.attributes?.length || 0 }} 个</div>
+            <div><b>complex_attributes:</b> {{ opiData?.complex_attributes?.length || 0 }} 组</div>
+            <div v-if="opiData?.weight"><b>weight:</b> {{ opiData.weight }} {{ opiData.weight_unit }}</div>
+            <div v-if="opiData?.type_id"><b>type_id:</b> {{ opiData.type_id }}</div>
+            <div v-if="opiData?.description_category_id">
+              <b>description_category_id:</b> {{ opiData.description_category_id }}
+            </div>
+            <div v-if="!opiData" class="fc-note">缓存数据不完整(partial),无法合成 OPI — 请查看"字段对照"标签页确认缺失来源</div>
+          </div>
+          <div v-if="opiData" class="opi-json-section">
+            <h3>OPI v3 JSON</h3>
+            <JsonTree :data="opiData" :default-expand-level="2" root-key="item" />
+          </div>
+        </template>
+        <div v-else class="field-compare">
+          <div class="fc-legend">
+            <span class="fc-key"><span class="fc-dot fc-dot-ok"></span>✓ 选中来源</span>
+            <span class="fc-key"><span class="fc-dot fc-dot-warn"></span>来源值不一致(全等比较)</span>
+            <span class="fc-key"><span class="fc-dot fc-dot-brand"></span>强制注入 / 生成</span>
+            <span class="fc-key"><span class="fc-dot fc-dot-mute"></span>缺失 / 被过滤</span>
+          </div>
+          <table class="fc-table">
+            <thead>
+              <tr>
+                <th class="fc-th-field">字段</th>
+                <th>数据来源(按优先级)</th>
+                <th class="fc-th-final">最终值(OPI)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-for="(row, idx) in fieldCompareRows" :key="idx">
+                <tr v-if="row.groupHeader" class="fc-group">
+                  <td colspan="3">{{ row.groupHeader }}</td>
+                </tr>
+                <tr v-else :class="{ 'fc-warn': row.state === 'warn', 'fc-mute': row.state === 'mute' }">
+                  <td class="fc-field">
+                    {{ row.label }}
+                    <small>{{ row.sub }}</small>
+                  </td>
+                  <td class="fc-src">
+                    <div v-for="(s, i) in row.sources" :key="i" class="fc-src-row">
+                      <span :class="s.selected ? 'fc-check' : 'fc-nocheck'">{{ s.selected ? '✓' : '—' }}</span>
+                      <span :class="['fc-tag', s.selected && 'sel', s.force && 'strong']">{{ s.tag }}</span>
+                      <span :class="['fc-val', s.state]">{{ s.display || '—' }}</span>
+                    </div>
+                  </td>
+                  <td class="fc-final">
+                    {{ row.final || '—' }}
+                    <small v-if="row.note" class="fc-note">{{ row.note }}</small>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
         </div>
       </div>
       <p v-else class="muted">无数据</p>
@@ -1299,6 +1632,208 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* OPI 弹窗标签页(OPI v3 JSON / 字段对照) */
+.opi-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.opi-tab {
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.15s;
+}
+
+.opi-tab.active {
+  color: var(--primary);
+  background: #f0f4ff;
+  border-color: var(--border);
+}
+
+.opi-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--primary);
+  border-radius: 999px;
+}
+
+/* ── 字段对照(跟卖上架数据来源逐字段展示) ── */
+.field-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.fc-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.fc-dot-ok { background: #1dc981; }
+.fc-dot-warn { background: #efaa17; }
+.fc-dot-brand { background: var(--primary); }
+.fc-dot-mute { background: #a1a1aa; }
+
+.fc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.fc-table th {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.fc-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.fc-th-field { width: 120px; }
+.fc-th-final { width: 180px; }
+
+.fc-field {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.fc-field small {
+  display: block;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.fc-group td {
+  background: #f3f4f6;
+  color: var(--muted);
+  font-weight: 500;
+  padding: 4px 8px;
+}
+
+.fc-src {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fc-src-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fc-check {
+  color: #1dc981;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.fc-nocheck {
+  color: var(--muted);
+  opacity: 0.4;
+  flex-shrink: 0;
+}
+
+.fc-tag {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: #f3f4f6;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.fc-tag.sel {
+  background: #f0f4ff;
+  color: #1a1759;
+}
+
+.fc-tag.strong {
+  background: #f0f4ff;
+  color: #1a1759;
+  border: 1px solid var(--primary);
+}
+
+.fc-val {
+  font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
+  min-width: 0;
+}
+
+.fc-val.diff {
+  color: #b45309;
+  font-weight: 500;
+}
+
+.fc-val.empty {
+  color: var(--muted);
+}
+
+.fc-val.strike {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.fc-final {
+  font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.fc-note {
+  display: block;
+  font-size: 11px;
+  color: #b45309;
+  font-weight: 400;
+}
+
+.fc-warn td {
+  background: #fffbeb;
+}
+
+.fc-mute td {
+  opacity: 0.6;
 }
 
 .opi-sources-bar {

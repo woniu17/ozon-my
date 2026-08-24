@@ -16,7 +16,7 @@ import { getDaos } from '../db/adapter.js';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
-import { composeSvShape } from '../services/compose-sv-shape.js';
+import { composeSvShape, normalizeSearchVariantToSv } from '../services/compose-sv-shape.js';
 import {
   resolveAttrWhitelist,
   injectRichContentAttr,
@@ -1198,6 +1198,8 @@ export async function buildSynthesizedFromCache(sku, storeId) {
     opiItem,
     attrDict,
     raw: { bundleData, searchData, cardData, richMediaData, detailData },
+    // 纯 /search 归一化结果(未 merge bundle),供前端"字段对照"区分 search 来源值
+    searchSv: normalizeSearchVariantToSv(searchRaw),
   };
 }
 
@@ -1212,7 +1214,15 @@ router.get('/admin/api/cache/opi-preview/:sku', async (req, res, next) => {
     if (r.error) {
       return res.json(ok({ item: null, sources: r.sources, error: r.error }));
     }
-    return res.json(ok({ item: r.opiItem, sources: r.sources, portalItem: r.portalItem }));
+    // raw/searchSv/attrDict 供前端"字段对照"标签页:五路原始数据 + 纯 search 归一化 + 属性名字典
+    return res.json(ok({
+      item: r.opiItem,
+      sources: r.sources,
+      portalItem: r.portalItem,
+      raw: r.raw || null,
+      searchSv: r.searchSv || null,
+      attrDict: r.attrDict || {},
+    }));
   } catch (e) {
     logger.warn({ err: e.message }, '[cache] opi-preview failed');
     next(e);
