@@ -29,9 +29,11 @@ const daos = await getDaos();
  * - typeId: 来自 qx-ozon normalizeSearchVariantToSv 把 /api/v1/search 的 description_type_dict_value
  *   映射成 sv.description_category_id(字段名误用,实际值是 type_id)。
  *   也兼容 bundleItem.type_id(部分数据源有真实 type_id)。
- * - descriptionCategoryId: OPI 字典接口要求 level_3_id,优先取 sv.categories 中 level=3 的类目,
- *   fallback 到 bundleItem.description_category_id(注意:该值有时是 level_4,不保证正确),
- *   再 fallback 到 sv.categories 最深层。
+ * - descriptionCategoryId: OPI 字典接口要求 level_3_id,唯一来源是 sv.categories 中 level=3 的类目。
+ *   不再用 bundleItem.description_category_id / sv.categories 最深层作 fallback:
+ *   两者均为 level 4 叶子(2026-08 全量验证 13,908 条 100% 相等且都是 level 4),
+ *   传给 OPI 字典接口会 400 "category with level_3_id=xxx is not found";
+ *   历史 11,372 个 OPI 请求中 fallback 触发次数为 0(有 search 的记录 lvl3 100% 可用)。
  *
  * @param {object} item
  * @returns {{ typeId: number, descriptionCategoryId: number }}
@@ -41,18 +43,11 @@ export function extractCategoryIds(item) {
   const bundleItem = sv?._bundleItem || null;
   const cats = Array.isArray(sv?.categories) ? sv.categories : [];
   const lvl3Cat = cats.find((c) => c.id && Number(c.level) === 3);
-  const deepestCat = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
   // typeId 优先取 sv.description_category_id(实际是 type_id,来自 description_type_dict_value);
   // fallback 到 bundleItem.type_id(部分数据源有)
   const typeId = Number(sv?.description_category_id) || Number(bundleItem?.type_id) || 0;
-  // descriptionCategoryId 优先取 sv.categories 中 level=3 的类目(OPI 字典要求 level_3_id);
-  // fallback 到 bundleItem.description_category_id(可能是 level_4,不保证,但聊胜于无);
-  // 再 fallback 到 sv.categories 最深层
-  const descriptionCategoryId =
-    Number(lvl3Cat?.id) ||
-    Number(bundleItem?.description_category_id) ||
-    Number(deepestCat?.id) ||
-    0;
+  // descriptionCategoryId 唯一来源:sv.categories 中 level=3 的类目(OPI 字典要求 level_3_id)
+  const descriptionCategoryId = Number(lvl3Cat?.id) || 0;
   return { typeId, descriptionCategoryId };
 }
 

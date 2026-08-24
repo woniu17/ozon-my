@@ -618,19 +618,25 @@ const fieldCompareRows = computed(() => {
     { tag: 'bundle.type_id', value: tidB },
   ].map((c) => ({ ...c, isEmpty: c.value === '' || c.value == null, display: String(c.value ?? '') })), String(opi.type_id ?? '')));
 
-  // description_category_id:search.categories level=3 → bundle → 最深层
+  // description_category_id:唯一来源 search.categories level=3(bundle/最深层是 level 4 叶子,不采用)
   const cats = Array.isArray(sv.categories) ? sv.categories : [];
   const lvl3 = cats.find((c) => Number(c.level) === 3 && c.id);
   const deepest = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
-  rows.push(fcRow('类目 ID', 'description_category_id', [
-    { tag: 'search.lvl3', value: lvl3?.id ?? '', lvl: 3 },
-    { tag: 'bundle.desc_cat_id', value: bundle.description_category_id ?? '', lvl: deepest?.level },
-    { tag: 'search.最深层', value: deepest?.id ?? '', lvl: deepest?.level },
-  ].map((c) => ({
-    ...c,
-    isEmpty: c.value === '' || c.value == null,
-    display: c.value ? `${c.value} (level ${c.lvl ?? '?'})` : '',
-  })), String(opi.description_category_id ?? ''), 'OPI 字典要求 level_3_id;bundle 实为 level 4 叶子'));
+  {
+    const picked = lvl3?.id ?? '';
+    const bCat = bundle.description_category_id ?? '';
+    rows.push({
+      label: '类目 ID', sub: 'description_category_id',
+      sources: [
+        { tag: 'search.lvl3', value: picked, isEmpty: !picked, display: picked ? `${picked} (level 3)` : '', selected: !!picked, state: picked ? 'ok' : 'empty' },
+        // 参考信息:bundle 的 level 4 叶子(与 search 最深层恒等),不进 payload
+        { tag: 'bundle.desc_cat_id', value: bCat, isEmpty: !bCat, display: bCat ? `${bCat} (level ${deepest?.level ?? 4} 叶子)` : '', selected: false, state: 'strike' },
+      ],
+      final: String(opi.description_category_id ?? ''),
+      note: '唯一来源 search.lvl3;level 4 叶子会导致字典接口 400',
+      state: 'ok',
+    });
+  }
 
   // barcode:search.barcodes[0] → bundle.barcode(不发送)
   const bcS = sv._searchMeta?.barcodes?.[0] || '';
