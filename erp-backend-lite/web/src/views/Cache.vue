@@ -623,14 +623,14 @@ const fieldCompareRows = computed(() => {
   const lvl3 = cats.find((c) => Number(c.level) === 3 && c.id);
   const deepest = cats.filter((c) => c.id).sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0];
   rows.push(fcRow('类目 ID', 'description_category_id', [
-    { tag: 'search.lvl3', value: lvl3?.id ?? '' },
-    { tag: 'bundle.desc_cat_id', value: bundle.description_category_id ?? '' },
-    { tag: 'search.最深层', value: deepest?.id ?? '' },
-  ].map((c, i) => ({
+    { tag: 'search.lvl3', value: lvl3?.id ?? '', lvl: 3 },
+    { tag: 'bundle.desc_cat_id', value: bundle.description_category_id ?? '', lvl: deepest?.level },
+    { tag: 'search.最深层', value: deepest?.id ?? '', lvl: deepest?.level },
+  ].map((c) => ({
     ...c,
     isEmpty: c.value === '' || c.value == null,
-    display: c.value ? `${c.value} (level ${i === 0 ? 3 : i === 2 ? deepest?.level : '?'})` : '',
-  })), String(opi.description_category_id ?? ''), 'OPI 字典要求 level_3_id'));
+    display: c.value ? `${c.value} (level ${c.lvl ?? '?'})` : '',
+  })), String(opi.description_category_id ?? ''), 'OPI 字典要求 level_3_id;bundle 实为 level 4 叶子'));
 
   // barcode:search.barcodes[0] → bundle.barcode(不发送)
   const bcS = sv._searchMeta?.barcodes?.[0] || '';
