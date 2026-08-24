@@ -551,6 +551,7 @@ const fieldCompareRows = computed(() => {
 
   const bAttr = (id) => (Array.isArray(bundle.attributes) ? bundle.attributes.find((a) => String(a.attribute_id || a.id) === id) : null);
   const sAttr = (id) => (Array.isArray(sv.attributes) ? sv.attributes.find((a) => String(a.key) === id) : null);
+  const opiAttrById = (id) => (Array.isArray(opi.attributes) ? opi.attributes.find((a) => String(a.id) === id) : null);
   const rmGallery = rm.gallery?.length ? rm.gallery : rm.fields?.images || [];
 
   // 商品名:bundle.4180 → search.4180 → detail.title → card.name
@@ -593,13 +594,22 @@ const fieldCompareRows = computed(() => {
   ].map((c) => ({ ...c, isEmpty: !c.value.length, display: fcArr(c.value) })),
     fcArr(opi.images), '可按模板 shuffle_non_primary 打乱'));
 
-  // 描述 4191:bundle.4191 → rm.description → detail.description
-  const descB = bAttr('4191')?.values?.[0]?.value || '';
-  rows.push(fcRow('描述', 'attr 4191', [
-    { tag: 'bundle.4191', value: descB },
-    { tag: 'rm.description', value: rm.description || '' },
-    { tag: 'detail.desc', value: detail.description || '' },
-  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value) })), fcText(descB, 60)));
+  // 描述 4191 实际优先级(与 transformItemForPortal 5.2a→5.2b→5.2c 一致):
+  //   bundle.4191 → search.4191(compose merge;实测 /search 从不返回 description,恒空)
+  //   → rm.description → detail.description(5.2c scraped_description 注入)
+  {
+    const descB = bAttr('4191')?.values?.[0]?.value || '';
+    const descFinalAttr = opiAttrById('4191');
+    const descFinal = descFinalAttr
+      ? descFinalAttr.values.map((v) => String(v.value ?? '')).filter(Boolean).join(' | ')
+      : '';
+    rows.push(fcRow('描述', 'attr 4191', [
+      { tag: 'bundle.4191', value: descB },
+      { tag: 'search.4191', value: sAttr('4191')?.value || '' },
+      { tag: 'rm.description', value: rm.description || '' },
+      { tag: 'detail.desc', value: detail.description || '' },
+    ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value) })), fcText(descFinal, 60)));
+  }
 
   // 物理参数:bundle 顶层(缺失兜底 100)
   for (const [label, key, unit] of [['重量', 'weight', 'g'], ['长', 'depth', 'mm'], ['宽', 'width', 'mm'], ['高', 'height', 'mm']]) {
@@ -694,7 +704,7 @@ const fieldCompareRows = computed(() => {
 
   rows.push({ groupHeader: `C · attributes 全量对照(${attrIds.size} 个)` });
 
-  const opiAttr = (id) => (Array.isArray(opi.attributes) ? opi.attributes.find((a) => String(a.id) === id) : null);
+  const opiAttr = opiAttrById;
   for (const id of [...attrIds].sort((a, b) => Number(a) - Number(b))) {
     const attrName = opiAttrDict.value?.[id]?.name || '';
     const ba = bAttr(id);
@@ -733,6 +743,19 @@ const fieldCompareRows = computed(() => {
         sources: c,
         final: 'SKIP_ATTR_IDS 过滤', note: '避免重复字段错误,不上送', state: 'mute',
       });
+      continue;
+    }
+    // 4191 特殊:bundle/search 都缺失时由 5.2c scraped_description 注入(rm → detail),
+    // 把注入来源也列为候选,避免最终值"来历不明"
+    if (id === '4191') {
+      const rmDesc = rm.description || '';
+      const detDesc = detail.description || '';
+      rows.push(fcRow(id, attrName || 'ID ' + id, [
+        { tag: 'bundle', value: bVal, isEmpty: !bVal, display: fcText(bVal) },
+        { tag: 'search', value: sVal, isEmpty: !sVal, display: fcText(sVal) },
+        { tag: 'rm.description', value: rmDesc, isEmpty: !rmDesc, display: fcText(rmDesc) },
+        { tag: 'detail.desc', value: detDesc, isEmpty: !detDesc, display: fcText(detDesc) },
+      ], fcText(finalVal, 100), 'bundle/search 缺失时走 5.2c 注入(scraped_description: rm→detail)'));
       continue;
     }
     // 常规属性:bundle 优先(含 dict id,最权威),search 兜底
