@@ -474,8 +474,8 @@ async function openOpiPreview(sku) {
 //   sources.state: 'ok' | 'diff'(与选中值不一致) | 'empty'(无值) | 'strike'(被覆盖/过滤)
 //   行 state: 'ok' | 'warn'(存在不一致) | 'mute'(不发送/被过滤)
 
-// 值格式化:文本截断,数组显示 张数/首项
-function fcText(v, max = 80) {
+// 值格式化:文本截断(弹窗已加宽,阈值放宽),数组显示 张数/首项
+function fcText(v, max = 160) {
   if (v == null || v === '') return '';
   const s = String(v);
   return s.length > max ? `${s.slice(0, max)}…(${s.length}字)` : s;
@@ -483,7 +483,7 @@ function fcText(v, max = 80) {
 function fcArr(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return '';
   const first = String(arr[0] || '');
-  const firstShort = first.length > 50 ? `${first.slice(0, 50)}…` : first;
+  const firstShort = first.length > 90 ? `${first.slice(0, 90)}…` : first;
   return `${arr.length} 项 · ${firstShort}`;
 }
 // 全等比较(文本 ===;数组按元素全等)
@@ -560,7 +560,7 @@ const fieldCompareRows = computed(() => {
     { tag: 'search.4180', value: sAttr('4180')?.value || '' },
     { tag: 'detail.title', value: detail.title || '' },
     { tag: 'card.name', value: card.name || '' },
-  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value) })), fcText(opi.name, 50)));
+  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value) })), fcText(opi.name, 120)));
 
   // 售价基数:detail.price → card.price(最终价由模板公式组装时重算,此处只展示基数)
   rows.push(fcRow('售价基数', 'price', [
@@ -581,7 +581,7 @@ const fieldCompareRows = computed(() => {
     { tag: 'rm.gallery[0]', value: rmGallery[0] || '' },
     { tag: 'detail.images[0]', value: detail.images?.[0] || '' },
     { tag: 'card.image', value: card.image || '' },
-  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value, 60) })), fcText(opi.primary_image, 60)));
+  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value, 200) })), fcText(opi.primary_image, 200)));
 
   // 图片组:bundle.images → rm.gallery[1:] → detail.images
   const imgB = Array.isArray(bundle.images) ? bundle.images : [];
@@ -608,7 +608,7 @@ const fieldCompareRows = computed(() => {
       { tag: 'search.4191', value: sAttr('4191')?.value || '' },
       { tag: 'rm.description', value: rm.description || '' },
       { tag: 'detail.desc', value: detail.description || '' },
-    ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value) })), fcText(descFinal, 60)));
+    ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value) })), fcText(descFinal, 200)));
   }
 
   // 物理参数:bundle 顶层(缺失兜底 100)
@@ -660,7 +660,7 @@ const fieldCompareRows = computed(() => {
   // 视频:rm.mp4(默认 skip 不发送)
   rows.push(fcRow('视频', 'video_url', [
     { tag: 'rm.mp4', value: rm.mp4 || '' },
-  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value, 60) })),
+  ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value, 200) })),
     '不发送', 'videoMode=skip 默认置空', 'mute'));
 
   // ── B 组:强制注入 / 生成字段 ──
@@ -755,7 +755,7 @@ const fieldCompareRows = computed(() => {
         { tag: 'search', value: sVal, isEmpty: !sVal, display: fcText(sVal) },
         { tag: 'rm.description', value: rmDesc, isEmpty: !rmDesc, display: fcText(rmDesc) },
         { tag: 'detail.desc', value: detDesc, isEmpty: !detDesc, display: fcText(detDesc) },
-      ], fcText(finalVal, 100), 'bundle/search 缺失时走 5.2c 注入(scraped_description: rm→detail)'));
+      ], fcText(finalVal, 300), 'bundle/search 缺失时走 5.2c 注入(scraped_description: rm→detail)'));
       continue;
     }
     // 常规属性:bundle 优先(含 dict id,最权威),search 兜底
@@ -1388,7 +1388,7 @@ onMounted(() => {
     </AppModal>
 
     <!-- OPI 预览弹窗 -->
-    <AppModal :open="opiOpen" :title="opiTitle" size="lg" @update:open="opiOpen = $event">
+    <AppModal :open="opiOpen" :title="opiTitle" size="lg" class="opi-modal" @update:open="opiOpen = $event">
       <p v-if="opiLoading" class="muted">加载中…</p>
       <div v-else-if="opiError" class="opi-error">
         <p>⚠️ {{ opiError }}</p>
@@ -1663,6 +1663,11 @@ onMounted(() => {
   gap: 16px;
 }
 
+/* 弹窗加宽:自适应 + 1280px 上限(字段对照的 URL/长描述需要更大展示空间) */
+.opi-modal :deep(.modal-card) {
+  width: min(1280px, calc(100vw - 64px));
+}
+
 /* OPI 弹窗标签页(OPI v3 JSON / 字段对照) */
 .opi-tabs {
   display: flex;
@@ -1754,8 +1759,8 @@ onMounted(() => {
   vertical-align: top;
 }
 
-.fc-th-field { width: 120px; }
-.fc-th-final { width: 180px; }
+.fc-th-field { width: min(140px, 14vw); }
+.fc-th-final { width: min(280px, 24vw); }
 
 .fc-field {
   font-weight: 500;
@@ -1780,6 +1785,9 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* 来源列吃满剩余宽度,长 URL/描述尽量单行展示 */
+  width: 100%;
+  min-width: 0;
 }
 
 .fc-src-row {
