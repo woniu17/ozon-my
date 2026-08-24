@@ -39,7 +39,10 @@
     if (!raw) return false; // 本来就空 → 交给上层 falsy 处理,不算"占位"
     const cleaned = stripDescriptionUiChrome(raw);
     if (!cleaned) return true; // 剥掉按钮文案后什么都不剩 → 纯 UI 噪声
-    return DESCRIPTION_LOAD_FAIL_RE.test(cleaned.slice(0, 120));
+    // 全量匹配:加载失败关键词无论出现在开头还是末尾都是占位 —— 与 ERP 侧
+    // description-quality.js 同口径(原仅看前 120 字,SKU 4379583208 标题粘 117 字
+    // 把关键词顶出窗口漏判)。
+    return DESCRIPTION_LOAD_FAIL_RE.test(cleaned);
   }
 
   function extractRichContentText(value, max) {
@@ -88,6 +91,10 @@
       'feedbacks',
       'hashtags',
       'tags',
+      // webDescription widget 的 UI 文案容器:lexemes.errorMessage(「Не удалось загрузить статью.»
+      // 加载失败占位)与 richAnnotationType(「HTML」)—— 兜底拼接混入即成脏描述(SKU 4379583208 实测坑)。
+      'lexemes',
+      'richAnnotationType',
     ]);
     const out = [];
     let total = 0;
@@ -147,7 +154,9 @@
       if (text) return text;
     }
 
-    const directKeys = ['description', 'text', 'content', 'html', 'value'];
+    // richAnnotation:webDescription widget 的真描述字段(richAnnotationType 标 HTML/纯文本)。
+    // richKeys 里是 richAnnotationJson(带 Json 后缀,走 JSON 解析),纯文本字段走本路径。
+    const directKeys = ['description', 'text', 'content', 'html', 'value', 'richAnnotation'];
     for (const key of directKeys) {
       const raw = value[key];
       const richText = extractRichContentText(raw, maxChars);

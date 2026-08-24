@@ -259,4 +259,43 @@ assert.strictEqual(
   );
 }
 
+// ── webDescription widget(SKU 4379583208 实测坑)──
+// richAnnotation(真描述)+ lexemes.errorMessage(加载失败占位)+ richAnnotationType
+// 三者混在同一个 widget 对象里。旧逻辑 directKeys 没有 richAnnotation,兜底全对象
+// 遍历把三块拼一起成脏描述,且"Не удалось загрузить"从第 118 字开始、滑出前 120 字
+// 窗口漏判占位。修复后:directKeys 直读 richAnnotation 返回干净真描述。
+{
+  const webDescriptionWidget = JSON.stringify({
+    richAnnotation:
+      'Развивающая игрушка-каталка для малышей 1+, с ручкой "Вертолетик" (синяя), для детей от 1 года, сделано в России',
+    richAnnotationType: 'HTML',
+    lexemes: {
+      errorMessage: 'Не удалось загрузить статью.',
+      externalDescriptionText: 'Читать далее',
+      showAllText: 'Показать полностью',
+    },
+    clickableLinksEnabled: true,
+    params: {
+      anchor: 'section-description',
+      descriptionMode: 'full',
+      title: 'Описание',
+      tabTitleRichAnnotation: 'О товаре',
+      tabTitleRichContent: 'Обзор товара',
+    },
+  });
+
+  assert.strictEqual(
+    extractDescriptionText(webDescriptionWidget),
+    'Развивающая игрушка-каталка для малышей 1+, с ручкой "Вертолетик" (синяя), для детей от 1 года, сделано в России'
+  );
+}
+
+// 占位关键词在末尾(长真描述/长标题粘占位)也要命中 —— 全量匹配,不看前 120 字。
+assert.strictEqual(
+  isPlaceholderDescriptionText(
+    'Развивающая игрушка-каталка для малышей 1+, с ручкой "Вертолетик" (синяя), для детей от 1 года, сделано в России HTML Не удалось загрузить статью.'
+  ),
+  true
+);
+
 console.log('follow-sell content copy test passed');
