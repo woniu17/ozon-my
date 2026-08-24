@@ -77,7 +77,10 @@ export function transformItemForPortal(item, options = {}) {
 
   // 5.1 images: [{file_name, default}] → ["url1", "url2", ...]
   // v3 schema: images 是 string[](URL 数组),primary_image 单独传
-  // ⚠️ OPI v3 要求 primary_image 不能与 images 数组中的任一图片重复
+  // ⚠️ OPI v3 要求 primary_image 不能与 images 数组中的任一图片重复。
+  // 上游组装可能把主图同时放进 default 位和普通位(cache.js 的 detail.images
+  // 全量兜底不 slice;插件 message.items 同理),此处统一在转换出口剔除,
+  // 保证约束恒成立(2026-08 实测:历史 240 个 item 主图重复,Ozon 容忍但违反规范)
   const rawImgObjs = Array.isArray(item.images) ? item.images : [];
   let primaryImg = '';
   const rawImages = [];
@@ -90,7 +93,7 @@ export function transformItemForPortal(item, options = {}) {
       rawImages.push(url);
     }
   }
-  const images = rawImages;
+  const images = primaryImg ? rawImages.filter((u) => u !== primaryImg) : rawImages;
 
   // 5.2 attributes: 优先从 bundleItem 提取 v3 标准格式(含 dictionary_value_id)
   // 23536: 用户要求过滤(2026-07),覆盖采集箱 opi-preview / 上架预览 profile / 一键提交三处

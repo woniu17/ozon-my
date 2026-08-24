@@ -583,7 +583,8 @@ const fieldCompareRows = computed(() => {
     { tag: 'card.image', value: card.image || '' },
   ].map((c) => ({ ...c, isEmpty: !c.value, display: fcText(c.value, 200) })), fcText(opi.primary_image, 200)));
 
-  // 图片组:bundle.images → rm.gallery[1:] → detail.images
+  // 图片组:bundle.images → rm.gallery[1:] → detail.images(注意:detail 兜底是全量数组含主图,
+  // 转换出口 transformItemForPortal 5.1 会剔除与 primary 重复的项,保证 OPI v3 约束)
   const imgB = Array.isArray(bundle.images) ? bundle.images : [];
   const imgRm = rmGallery.length > 1 ? rmGallery.slice(1) : [];
   const imgD = Array.isArray(detail.images) ? detail.images : [];
@@ -592,7 +593,7 @@ const fieldCompareRows = computed(() => {
     { tag: 'rm.gallery[1:]', value: imgRm },
     { tag: 'detail.images', value: imgD },
   ].map((c) => ({ ...c, isEmpty: !c.value.length, display: fcArr(c.value) })),
-    fcArr(opi.images), '可按模板 shuffle_non_primary 打乱'));
+    fcArr(opi.images), 'detail 兜底含主图,转换时剔除重复;上架可按模板 shuffle 打乱'));
 
   // 描述 4191 实际优先级(与 transformItemForPortal 5.2a→5.2b→5.2c 一致):
   //   bundle.4191 → search.4191(compose merge;实测 /search 从不返回 description,恒空)
@@ -756,6 +757,23 @@ const fieldCompareRows = computed(() => {
         { tag: 'rm.description', value: rmDesc, isEmpty: !rmDesc, display: fcText(rmDesc) },
         { tag: 'detail.desc', value: detDesc, isEmpty: !detDesc, display: fcText(detDesc) },
       ], fcText(finalVal, 300), 'bundle/search 缺失时走 5.2c 注入(scraped_description: rm→detail)'));
+      continue;
+    }
+    // 11254 富内容:search/bundle 接口都不返回,唯一来源是 richMedia 缓存(强制注入 _forcedAttributes,
+    // 跳过白名单、覆盖同 id 属性)——预览合成(opi-item-builder.injectRichContentAttr)与上架补全同通路
+    if (id === '11254') {
+      const rc = rm.richContent ? String(rm.richContent) : '';
+      rows.push({
+        label: id, sub: attrName || 'ID ' + id,
+        sources: [
+          { tag: 'rm.richContent', value: rc, isEmpty: !rc, display: rc ? `${rc.length} 字符(JSON)` : '', selected: !!rc, state: rc ? 'ok' : 'empty', force: true },
+          { tag: 'bundle', value: bVal, isEmpty: !bVal, display: fcText(bVal) },
+          { tag: 'search', value: sVal, isEmpty: !sVal, display: fcText(sVal) },
+        ].map((c, i) => (i === 0 ? c : { ...c, selected: false, state: c.isEmpty ? 'empty' : 'strike' })),
+        final: finalVal ? fcText(finalVal, 300) : '无',
+        note: '强制注入 _forcedAttributes,跳过白名单',
+        state: 'ok',
+      });
       continue;
     }
     // 常规属性:bundle 优先(含 dict id,最权威),search 兜底
