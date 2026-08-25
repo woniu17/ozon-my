@@ -243,6 +243,22 @@
       }
     };
 
+    // 端点耗时:PDP 页面导航上报(新建/重载共用;complete 判定为 500ms 轮询,粒度可接受)
+    const _reportPdpNav = (sku, startedAt, durationMs, ok, errorKind) => {
+      try {
+        this.endpointMetricAdd?.({
+          endpoint: 'www.page.pdp-nav',
+          method: 'GET',
+          ts: startedAt,
+          durationMs,
+          statusCode: null,
+          ok,
+          errorKind: errorKind || null,
+          sku: sku || null,
+        });
+      } catch { /* 静默 */ }
+    };
+
     // 核心实现(串行锁内执行)
     const _doEnsureBuyerTab = async (sku, timeoutMs) => {
       if (!sku) throw new Error('ensureBuyerTab: sku required');
@@ -266,10 +282,18 @@
             (shouldReload ? ` → 重载到 sku=${sku}` : ' (不重载)')
           );
           if (shouldReload) {
-            await chrome.tabs.update(existingTab.id, { url: pdpUrl });
-            const reloaded = await _waitForBuyerTabComplete(existingTab.id, timeoutMs);
-            await _saveBuyerTabState({ tabId: existingTab.id, callCount: newCount, lastSku: sku });
-            return reloaded;
+            const navStart = new Date().toISOString();
+            const navT0 = Date.now();
+            try {
+              await chrome.tabs.update(existingTab.id, { url: pdpUrl });
+              const reloaded = await _waitForBuyerTabComplete(existingTab.id, timeoutMs);
+              _reportPdpNav(sku, navStart, Date.now() - navT0, true, null);
+              await _saveBuyerTabState({ tabId: existingTab.id, callCount: newCount, lastSku: sku });
+              return reloaded;
+            } catch (e) {
+              _reportPdpNav(sku, navStart, Date.now() - navT0, false, 'NAV_FAILED');
+              throw e;
+            }
           }
           await _saveBuyerTabState({ tabId: existingTab.id, callCount: newCount, lastSku: sku });
           return existingTab;
@@ -282,10 +306,18 @@
 
       // ── 新建分支 ──
       console.log(`[ensureBuyerTab] 新建专用 tab, sku=${sku}`);
-      const created = await chrome.tabs.create({ url: pdpUrl, active: false, pinned: true });
-      const ready = await _waitForBuyerTabComplete(created.id, timeoutMs);
-      await _saveBuyerTabState({ tabId: created.id, callCount: 1, lastSku: sku });
-      return ready;
+      const navStart = new Date().toISOString();
+      const navT0 = Date.now();
+      try {
+        const created = await chrome.tabs.create({ url: pdpUrl, active: false, pinned: true });
+        const ready = await _waitForBuyerTabComplete(created.id, timeoutMs);
+        _reportPdpNav(sku, navStart, Date.now() - navT0, true, null);
+        await _saveBuyerTabState({ tabId: created.id, callCount: 1, lastSku: sku });
+        return ready;
+      } catch (e) {
+        _reportPdpNav(sku, navStart, Date.now() - navT0, false, 'NAV_FAILED');
+        throw e;
+      }
     };
 
     // 对外接口(串行锁包装,确保 callCount 精确累加)

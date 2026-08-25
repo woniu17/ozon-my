@@ -688,6 +688,38 @@ async function warmup(page) {
   return title;
 }
 
+// ── 店铺页导航 + 耗时埋点(纯 goto 耗时,不含后续 3s 反爬等待) ──
+async function gotoSellerPage(page, sellerId) {
+  const ts = new Date().toISOString();
+  const t0 = Date.now();
+  try {
+    const resp = await page.goto(`https://www.ozon.ru/seller/${sellerId}/`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 25000,
+    });
+    addMetric({
+      endpoint: 'www.page.seller-nav',
+      sellerId: String(sellerId),
+      ts,
+      durationMs: Date.now() - t0,
+      statusCode: resp?.status() ?? null,
+      ok: (resp?.status() ?? 200) < 400,
+    });
+    return resp;
+  } catch (e) {
+    addMetric({
+      endpoint: 'www.page.seller-nav',
+      sellerId: String(sellerId),
+      ts,
+      durationMs: Date.now() - t0,
+      statusCode: null,
+      ok: false,
+      errorKind: 'NAV_FAILED',
+    });
+    throw e;
+  }
+}
+
 // ── Node 侧单店翻页循环(state 跨熔断持久) ───────────────────
 async function collectStore(page, store, state) {
   while (state.nextPagePath && !interrupted) {
@@ -866,10 +898,7 @@ async function main() {
     // 导航店铺页(在店铺页上下文 fetch 才是真实用户行为 — 项目铁律)
     let navResp = null;
     try {
-      navResp = await page.goto(`https://www.ozon.ru/seller/${store.sellerId}/`, {
-        waitUntil: 'domcontentloaded',
-        timeout: 25000,
-      });
+      navResp = await gotoSellerPage(page, store.sellerId);
       await page.waitForTimeout(3000); // 反爬挑战 + __NUXT__ 挂载
     } catch (e) {
       console.log(`    导航失败: ${e.message}`);
@@ -947,10 +976,7 @@ async function main() {
       // 恢复:重新 warmup 刷 cookie → 重新导航店铺页 → 从断点续采
       try {
         await warmup(page);
-        await page.goto(`https://www.ozon.ru/seller/${store.sellerId}/`, {
-          waitUntil: 'domcontentloaded',
-          timeout: 25000,
-        });
+        await gotoSellerPage(page, store.sellerId);
         await page.waitForTimeout(3000);
       } catch (e) {
         console.log(`    恢复导航失败: ${e.message}`);

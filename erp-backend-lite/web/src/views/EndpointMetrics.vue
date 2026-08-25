@@ -19,6 +19,21 @@ const series = ref([]);
 const stats = ref([]);
 const total = ref(0);
 const dims = reactive({ endpoints: [], machines: [], profiles: [], ips: [], scripts: [] });
+
+// 端点 code → 中文别名(展示用;未命中回退原 code)
+const ENDPOINT_ALIASES = {
+  'www.entrypoint.product': '商品详情 entrypoint',
+  'www.composer.product': '商品详情 composer',
+  'www.composer.offers-modal': '报价弹窗 composer',
+  'seller.analytics.v3': '卖家分析 v3',
+  'seller.search': '卖家搜索',
+  'seller.create-bundle': '创建捆绑',
+  'www.entrypoint.seller-list': '店铺商品列表',
+  'www.entrypoint.shop-info': '店铺信息',
+  'www.page.seller-nav': '店铺页导航',
+  'www.page.pdp-nav': '详情页导航',
+};
+const epName = (ep) => ENDPOINT_ALIASES[ep] || ep;
 const filters = reactive({
   endpoints: [], // 空数组 = 全部
   machines: [],
@@ -204,7 +219,7 @@ onMounted(() => {
           :class="{ off: hidden.has(ep) }"
           @click="toggleHidden(ep)"
         >
-          <span class="dot" :style="{ background: colorOf(ep) }"></span>{{ ep }}
+          <span class="dot" :style="{ background: colorOf(ep) }"></span>{{ epName(ep) }}
         </button>
       </div>
       <svg :viewBox="`0 0 ${W} ${H}`" class="chart" role="img" aria-label="端点耗时时间轴(p95 实线 / p50 虚线)">
@@ -241,7 +256,7 @@ onMounted(() => {
       </thead>
       <tbody>
         <tr v-for="s in stats" :key="s.endpoint">
-          <td><span class="dot" :style="{ background: colorOf(s.endpoint) }"></span>{{ s.endpoint }}</td>
+          <td :title="s.endpoint"><span class="dot" :style="{ background: colorOf(s.endpoint) }"></span>{{ epName(s.endpoint) }}</td>
           <td>{{ s.total }}</td>
           <td>{{ fmtMs(s.p50) }}</td>
           <td>{{ fmtMs(s.p95) }}</td>

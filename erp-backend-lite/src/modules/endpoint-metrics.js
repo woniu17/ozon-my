@@ -25,6 +25,8 @@ const ENDPOINT_CODES = new Set([
   'seller.create-bundle',
   'www.entrypoint.seller-list',
   'www.entrypoint.shop-info',
+  'www.page.seller-nav',
+  'www.page.pdp-nav',
 ]);
 const SCRIPT_CODES = new Set(['deep', 'shallow', 'backfill', 'plugin']);
 const BATCH_LIMIT = 200;
