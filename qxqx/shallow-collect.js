@@ -76,6 +76,18 @@ function numOrNull(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// ── 日志时间戳(console.log/warn/error 统一加 [YYYY-MM-DD HH:mm:ss] 前缀) ──
+const fmtTs = (d = new Date()) => {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+// 当前时间 + 等待 ms 的预计时刻(用于"下一次执行时间"提示)
+const fmtNext = (waitMs) => fmtTs(new Date(Date.now() + waitMs));
+for (const level of ['log', 'warn', 'error']) {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => orig(`[${fmtTs()}]`, ...args);
+}
+
 // ── 配置 ─────────────────────────────────────────────────────
 const cfg = {
   // ERP 连接与鉴权(与后端 SERVICE_API_KEY 同值)
@@ -117,6 +129,9 @@ const cfg = {
   headless: process.env.HEADLESS !== '0',
   pageIntervalMinMs: Number(process.env.PAGE_INTERVAL_MIN_MS) || 10000,
   pageIntervalMaxMs: Number(process.env.PAGE_INTERVAL_MAX_MS) || 15000,
+  // 店铺间隔(独立于页间隔;未配置时回退页间隔值,保持旧行为)
+  storeIntervalMinMs: numOrNull(process.env.STORE_INTERVAL_MIN_MS) ?? (Number(process.env.PAGE_INTERVAL_MIN_MS) || 10000),
+  storeIntervalMaxMs: numOrNull(process.env.STORE_INTERVAL_MAX_MS) ?? (Number(process.env.PAGE_INTERVAL_MAX_MS) || 15000),
   requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS) || 15000,
   maxEmptyPages: Number(process.env.MAX_EMPTY_PAGES) || 3,
   maxErrors: Number(process.env.MAX_ERRORS) || 3,
@@ -142,6 +157,10 @@ const cfg = {
 // 配置校验
 if (cfg.pageIntervalMinMs > cfg.pageIntervalMaxMs) {
   console.error(`[配置错误] PAGE_INTERVAL_MIN_MS(${cfg.pageIntervalMinMs}) > MAX(${cfg.pageIntervalMaxMs})`);
+  process.exit(1);
+}
+if (cfg.storeIntervalMinMs > cfg.storeIntervalMaxMs) {
+  console.error(`[配置错误] STORE_INTERVAL_MIN_MS(${cfg.storeIntervalMinMs}) > MAX(${cfg.storeIntervalMaxMs})`);
   process.exit(1);
 }
 if (!cfg.erpApiKey) {
@@ -754,8 +773,10 @@ async function collectStore(page, store, state) {
       return { outcome: 'done', skuCount: state.seenSkus.size, passedCount, pages: state.pages };
     }
 
-    // ★ 页间节流:10-15s 随机(反爬拟人化)
-    await sleep(randInt(cfg.pageIntervalMinMs, cfg.pageIntervalMaxMs));
+    // ★ 页间节流:10-15s 随机(反爬拟人化;输出下一次执行时间)
+    const pageWaitMs = randInt(cfg.pageIntervalMinMs, cfg.pageIntervalMaxMs);
+    console.log(`    下一页预计 ${fmtNext(pageWaitMs)}(等待 ${Math.round(pageWaitMs / 1000)}s)`);
+    await sleep(pageWaitMs);
   }
   // interrupted:不标记 done(已写页已落库,重跑时该店重新采集会重复写日志,
   // 但浅度日志按 SKU+时间追加是正常语义,可接受)
@@ -769,6 +790,7 @@ async function main() {
   console.log(`Profile:   ${cfg.profileDir}`);
   console.log(`无头:      ${cfg.headless}  干跑: ${cfg.dryRun}`);
   console.log(`页间隔:    ${cfg.pageIntervalMinMs}-${cfg.pageIntervalMaxMs}ms 随机`);
+  console.log(`店铺间隔:  ${cfg.storeIntervalMinMs}-${cfg.storeIntervalMaxMs}ms 随机${process.env.STORE_INTERVAL_MIN_MS == null && process.env.STORE_INTERVAL_MAX_MS == null ? '(未配置,回退页间隔)' : ''}`);
   console.log(`熔断等待:  ${cfg.circuitBreakerWaitMs}ms(退避系数 ${cfg.circuitBreakerBackoff})`);
   console.log(`SKU过滤:   仅有评论=${cfg.skuOnlyWithRating}, 价格=[${cfg.skuPriceMin ?? '-'},${cfg.skuPriceMax ?? '-'}], 评论数=[${cfg.skuRatingMin ?? '-'},${cfg.skuRatingMax ?? '-'}]`);
   console.log(`SKU逐条日志: ${cfg.logSku ? '开启(LOG_SKU=1)' : '关闭'}`);
@@ -915,7 +937,7 @@ async function main() {
       }
       const waitMs = Math.round(cfg.circuitBreakerWaitMs * (cfg.circuitBreakerBackoff ** (breakCount - 1)));
       console.log(`    熔断(#${breakCount}): ${result.error}`);
-      console.log(`    等待 ${Math.round(waitMs / 1000)}s 后断点续采(已采 ${state.seenSkus.size} SKU / ${state.pages} 页)...`);
+      console.log(`    等待 ${Math.round(waitMs / 1000)}s 后断点续采,预计 ${fmtNext(waitMs)}(已采 ${state.seenSkus.size} SKU / ${state.pages} 页)...`);
       const waitStart = Date.now();
       while (Date.now() - waitStart < waitMs && !interrupted) {
         await sleep(1000);
@@ -938,9 +960,11 @@ async function main() {
       // state.nextPagePath / seenSkus 保留 → 断点续采,不重复不漏采
     }
 
-    // 店铺间隔(与页间隔同款随机,更拟人)
+    // 店铺间隔(独立配置,未配置时与页间隔同款随机;输出下一次执行时间)
     if (i < stores.length - 1 && !interrupted) {
-      await sleep(randInt(cfg.pageIntervalMinMs, cfg.pageIntervalMaxMs));
+      const storeWaitMs = randInt(cfg.storeIntervalMinMs, cfg.storeIntervalMaxMs);
+      console.log(`  下一店预计 ${fmtNext(storeWaitMs)}(等待 ${Math.round(storeWaitMs / 1000)}s)`);
+      await sleep(storeWaitMs);
     }
   }
 
