@@ -22,12 +22,12 @@ const dims = reactive({ endpoints: [], machines: [], profiles: [], ips: [], scri
 
 // 端点 code → 中文别名(展示用;未命中回退原 code)
 const ENDPOINT_ALIASES = {
-  'www.entrypoint.product': '商品详情 entrypoint',
-  'www.composer.product': '商品详情 composer',
-  'www.composer.offers-modal': '报价弹窗 composer',
-  'seller.analytics.v3': '卖家分析 v3',
-  'seller.search': '卖家搜索',
-  'seller.create-bundle': '创建捆绑',
+  'www.entrypoint.product': '商品详情Entrypoint',
+  'www.composer.product': '商品详情Composer',
+  'www.composer.offers-modal': '跟卖列表',
+  'seller.analytics.v3': '市场数据',
+  'seller.search': '跟卖Search',
+  'seller.create-bundle': '跟卖Bundle',
   'www.entrypoint.seller-list': '店铺商品列表',
   'www.entrypoint.shop-info': '店铺信息',
   'www.page.seller-nav': '店铺页导航',
@@ -175,13 +175,8 @@ onMounted(() => {
     <!-- 筛选栏 -->
     <div class="filters">
       <div class="range-group">
-        <button
-          v-for="(r, i) in RANGES"
-          :key="r.label"
-          class="range-btn"
-          :class="{ active: rangeIdx === i }"
-          @click="setRange(i)"
-        >
+        <button v-for="(r, i) in RANGES" :key="r.label" class="range-btn" :class="{ active: rangeIdx === i }"
+          @click="setRange(i)">
           {{ r.label }}
         </button>
       </div>
@@ -212,13 +207,8 @@ onMounted(() => {
     <!-- SVG 时间轴 -->
     <div v-if="endpointsAll.length" class="chart-wrap">
       <div class="legend">
-        <button
-          v-for="ep in [...new Set(series.map((s) => s.endpoint))].sort()"
-          :key="ep"
-          class="legend-item"
-          :class="{ off: hidden.has(ep) }"
-          @click="toggleHidden(ep)"
-        >
+        <button v-for="ep in [...new Set(series.map((s) => s.endpoint))].sort()" :key="ep" class="legend-item"
+          :class="{ off: hidden.has(ep) }" @click="toggleHidden(ep)">
           <span class="dot" :style="{ background: colorOf(ep) }"></span>{{ epName(ep) }}
         </button>
       </div>
@@ -235,7 +225,8 @@ onMounted(() => {
         <!-- 每端点:p95 实线 + p50 虚线 -->
         <g v-for="ep in endpointsAll" :key="ep">
           <path :d="pathOf(ep, 'p95')" fill="none" :stroke="colorOf(ep)" stroke-width="2" />
-          <path :d="pathOf(ep, 'p50')" fill="none" :stroke="colorOf(ep)" stroke-width="1" stroke-dasharray="4 3" opacity="0.5" />
+          <path :d="pathOf(ep, 'p50')" fill="none" :stroke="colorOf(ep)" stroke-width="1" stroke-dasharray="4 3"
+            opacity="0.5" />
         </g>
         <line :x1="M.left" :x2="W - M.right" :y1="M.top + plotH" :y2="M.top + plotH" class="axis" />
       </svg>
@@ -256,7 +247,8 @@ onMounted(() => {
       </thead>
       <tbody>
         <tr v-for="s in stats" :key="s.endpoint">
-          <td :title="s.endpoint"><span class="dot" :style="{ background: colorOf(s.endpoint) }"></span>{{ epName(s.endpoint) }}</td>
+          <td :title="s.endpoint"><span class="dot" :style="{ background: colorOf(s.endpoint) }"></span>{{
+            epName(s.endpoint) }}</td>
           <td>{{ s.total }}</td>
           <td>{{ fmtMs(s.p50) }}</td>
           <td>{{ fmtMs(s.p95) }}</td>
@@ -269,37 +261,162 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page { padding: 16px; max-width: 1080px; margin: 0 auto; }
-h2 { margin: 0 0 12px; font-size: 18px; }
-.empty-hint { color: #888; }
-.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
-.range-group { display: flex; gap: 4px; }
-.range-btn, .apply-btn {
-  padding: 4px 10px; border: 1px solid #d1d5db; border-radius: 4px;
-  background: #fff; cursor: pointer; font-size: 12px;
+.page {
+  padding: 16px;
+  max-width: 1080px;
+  margin: 0 auto;
 }
-.range-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
-.sel { padding: 4px 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 12px; max-width: 160px; }
-.sel.multi { height: 60px; }
-.total { color: #666; font-size: 12px; }
-.error { color: #dc2626; }
-.loading { color: #888; }
-.chart-wrap { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: #fff; }
-.legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.empty-hint {
+  color: #888;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.range-group {
+  display: flex;
+  gap: 4px;
+}
+
+.range-btn,
+.apply-btn {
+  padding: 4px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.range-btn.active {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+
+.sel {
+  padding: 4px 6px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 12px;
+  max-width: 160px;
+}
+
+.sel.multi {
+  height: 60px;
+}
+
+.total {
+  color: #666;
+  font-size: 12px;
+}
+
+.error {
+  color: #dc2626;
+}
+
+.loading {
+  color: #888;
+}
+
+.chart-wrap {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
 .legend-item {
-  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
-  border: 1px solid #e5e7eb; border-radius: 12px; background: #fff;
-  cursor: pointer; font-size: 11px; color: #374151;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  color: #374151;
 }
-.legend-item.off { opacity: 0.35; text-decoration: line-through; }
-.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; }
-.chart { width: 100%; height: auto; display: block; }
-.grid { stroke: #f3f4f6; stroke-width: 1; }
-.axis { stroke: #d1d5db; }
-.tick { font-size: 10px; fill: #9ca3af; }
-.chart-hint { color: #9ca3af; font-size: 11px; margin: 4px 0 0; }
-.stats-table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
-.stats-table th, .stats-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #f3f4f6; }
-.stats-table th { color: #6b7280; font-weight: 500; }
-.err-high { color: #dc2626; font-weight: 600; }
+
+.legend-item.off {
+  opacity: 0.35;
+  text-decoration: line-through;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 4px;
+}
+
+.chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.grid {
+  stroke: #f3f4f6;
+  stroke-width: 1;
+}
+
+.axis {
+  stroke: #d1d5db;
+}
+
+.tick {
+  font-size: 10px;
+  fill: #9ca3af;
+}
+
+.chart-hint {
+  color: #9ca3af;
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 16px;
+  font-size: 13px;
+}
+
+.stats-table th,
+.stats-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.stats-table th {
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.err-high {
+  color: #dc2626;
+  font-weight: 600;
+}
 </style>
