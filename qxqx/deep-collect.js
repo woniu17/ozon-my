@@ -272,6 +272,8 @@ const erp = {
   getQueueStats: () => erpFetch('GET', '/admin/api/collect-queue/stats'),
   // 类目黑名单列表
   getFilteredCategories: () => erpFetch('GET', '/admin/api/filtered-categories'),
+  // 类目/类型中文名批量查询(body: { descCatIds, typeIds })
+  getCategoryNames: (body) => erpFetch('POST', '/admin/api/filtered-categories/category-names-batch', body),
 };
 
 // ── 纯函数(移植自插件,Node 侧执行) ──────────────────────────
@@ -1136,20 +1138,63 @@ function summarizeMarketStats(d) {
     ` 浏览=${fmtNum(d.views)} 加购率=${pct(d.convToCartPdp ?? d.pdpToCartConversion)} DRR=${pct(d.drr)}`
   );
 }
-// search:变体ID/三级类目/价格(类目过滤与变体定位核心)
+// ── 类目/类型中文名(ERP 类目树批量查询,进程内缓存;失败/未命中降级显示 ID) ──
+const catNameById = new Map(); // descriptionCategoryId -> 中文名('' = 已查无)
+const typeNameById = new Map(); // typeId -> 中文名('' = 已查无)
+async function ensureCategoryNames(descCatIds = [], typeIds = []) {
+  const dc = [...new Set(descCatIds.map(Number).filter((v) => Number.isFinite(v) && v > 0 && !catNameById.has(v)))];
+  const ti = [...new Set(typeIds.map(Number).filter((v) => Number.isFinite(v) && v > 0 && !typeNameById.has(v)))];
+  if (dc.length === 0 && ti.length === 0) return;
+  try {
+    const r = await erp.getCategoryNames({ descCatIds: dc, typeIds: ti });
+    for (const it of r?.data?.items || []) catNameById.set(Number(it.descriptionCategoryId), it.categoryName || '');
+    for (const it of r?.data?.typeItems || []) typeNameById.set(Number(it.typeId), it.typeName || '');
+    // 未命中的标记为 ''(进程内不再重复查询)
+    for (const id of dc) if (!catNameById.has(id)) catNameById.set(id, '');
+    for (const id of ti) if (!typeNameById.has(id)) typeNameById.set(id, '');
+  } catch { /* ERP 异常:降级显示 ID,下次再查 */ }
+}
+// 名(ID) 标签;无名只显示 ID
+function labelWithId(name, id) {
+  const n = String(name || '').trim();
+  return n ? `${fmtStr(n, 24)}(${id})` : String(id);
+}
+// search/bundle 摘要所需的类目/类型 ID 集合(用于批量查中文名)
+function displayCatIds(searchVariant, bundleData) {
+  const descCatIds = [];
+  const typeIds = [];
+  const cat =
+    searchVariant && Array.isArray(searchVariant.categories)
+      ? searchVariant.categories.find((c) => Number(c.level) === 3)
+      : null;
+  if (cat) descCatIds.push(Number(cat.id));
+  const ti = Number(searchVariant?.description_type_dict_value);
+  if (Number.isFinite(ti) && ti > 0) typeIds.push(ti);
+  const bDci = Number(bundleData?.description_category_id);
+  if (Number.isFinite(bDci) && bDci > 0) descCatIds.push(bDci);
+  return { descCatIds, typeIds };
+}
+
+// search:三级类目名/ID + 类型名/ID(类目过滤与变体定位核心)
 function summarizeSearch(v) {
   if (!v) return '无数据';
   const cat = Array.isArray(v.categories) ? v.categories.find((c) => Number(c.level) === 3) : null;
-  const catLabel = cat ? (cat.name ? `${fmtStr(cat.name, 24)}(${cat.id})` : String(cat.id)) : '-';
-  const price = parsePriceNum(v.price);
-  return `variant=${v.variant_id ?? '-'} 类目=${catLabel}` + (price != null ? ` 价格=${fmtNum(price)}` : '');
+  const catLabel = cat ? labelWithId(catNameById.get(Number(cat.id)) || cat.name, cat.id) : '-';
+  const ti = Number(v.description_type_dict_value);
+  const typeLabel =
+    Number.isFinite(ti) && ti > 0 ? labelWithId(v.description_type_name || typeNameById.get(ti), ti) : '-';
+  return `类目=${catLabel} 类型=${typeLabel}`;
 }
-// bundle:属性数/重量/尺寸(超轻小件判定与上架属性核心)
-function summarizeBundle(b) {
+// bundle:属性数/重量/尺寸/类目/类型(超轻小件判定与上架属性核心)
+// 类型取自 search variant(bundle 接口不返回 type_id);类目用 bundle 自身 description_category_id
+function summarizeBundle(b, sv) {
   if (!b) return '无数据';
   const attrs = Array.isArray(b.attributes) ? b.attributes.length : 0;
   const dim = [b.depth, b.width, b.height].map((x) => fmtNum(x)).join('×');
-  return `属性=${attrs}个 重量=${fmtNum(b.weight)}g 尺寸=${dim}mm 类目ID=${b.description_category_id ?? '-'}/类型ID=${b.type_id ?? '-'}`;
+  const cat = labelWithId(catNameById.get(Number(b.description_category_id)), b.description_category_id);
+  const ti = Number(sv?.description_type_dict_value);
+  const type = Number.isFinite(ti) && ti > 0 ? labelWithId(sv.description_type_name || typeNameById.get(ti), ti) : '-';
+  return `属性=${attrs}个 重量=${fmtNum(b.weight)}g 尺寸=${dim}mm 类目=${cat} 类型=${type}`;
 }
 // richMedia:视频/富文本/描述/标签/图片(跟卖素材核心)
 function summarizeRichMedia(d) {
@@ -1382,13 +1427,18 @@ async function doAutoCollect(task, filterMap) {
 
     // 关键数据日志:缓存命中的部分(真采部分在各自采集点输出)
     if (cfg.logData) {
+      // search/bundle 摘要需显示类目/类型中文名:先批量查 ERP 类目树(命中缓存则零请求)
+      if (byType.search.hit || byType.bundle.hit) {
+        const ids = displayCatIds(byType.search.hit ? searchItems[0] : null, byType.bundle.hit ? attrR?.bundleData : null);
+        await ensureCategoryNames(ids.descCatIds, ids.typeIds);
+      }
       if (domR?.card) logDataLine('card(缓存)', summarizeCard(domR.card));
       if (domR?.detail) logDataLine('detail(缓存)', summarizeDetail(domR.detail));
       if (richR?.data) logDataLine('richMedia(缓存)', summarizeRichMedia(richR.data));
       if (msR?.data && byType.marketStats.hit) logDataLine('marketStats(缓存)', summarizeMarketStats(msR.data));
       if (fsR?.data) logDataLine('followSell(缓存)', summarizeFollowSell(fsR.data));
       if (byType.search.hit) logDataLine(`search(缓存,${searchItems.length}变体)`, summarizeSearch(searchItems[0]));
-      if (byType.bundle.hit) logDataLine('bundle(缓存)', summarizeBundle(attrR?.bundleData));
+      if (byType.bundle.hit) logDataLine('bundle(缓存)', summarizeBundle(attrR?.bundleData, byType.search.hit ? searchItems[0] : null));
     }
 
     // ── Step 3:marketStats 真调(门控A前置) ──
@@ -1439,6 +1489,8 @@ async function doAutoCollect(task, filterMap) {
           if (!cfg.dryRun) await erp.setAttributeCache(sku, 'search', { items: rawVariants });
           searchVariant = rawVariants[0];
           byType.search.hit = true;
+          const ids = displayCatIds(searchVariant, null);
+          await ensureCategoryNames(ids.descCatIds, ids.typeIds);
           logDataLine(`search(真采,${rawVariants.length}变体)`, summarizeSearch(searchVariant));
         }
         // HTTP 200 但无 variants(永久性):不标 error → 门控B no-search-data
@@ -1462,7 +1514,9 @@ async function doAutoCollect(task, filterMap) {
             if (!cfg.dryRun) await erp.setAttributeCache(sku, 'bundle', item, bu.data?.bundle_id || null);
             bundleDataRef = item;
             byType.bundle.hit = true;
-            logDataLine('bundle(真采)', summarizeBundle(bundleDataRef));
+            const ids = displayCatIds(searchVariant, item);
+            await ensureCategoryNames(ids.descCatIds, ids.typeIds);
+            logDataLine('bundle(真采)', summarizeBundle(bundleDataRef, searchVariant));
           }
           // item 为 null(HTTP 200 无数据,永久性):不标 error → 门控C non-ultra-light
         }
