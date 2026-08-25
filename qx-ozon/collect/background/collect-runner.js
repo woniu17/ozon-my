@@ -431,7 +431,12 @@
         const stored = await sw.getStorage([sw.STORAGE_KEYS.token]);
         const token = stored[sw.STORAGE_KEYS.token];
         const resp = await sw.apiRequest('GET', `${url}/admin/api/filtered-categories`, null, token);
-        const items = Array.isArray(resp?.items) ? resp.items : [];
+        // ERP 统一 ok() 包装:{ok:true, data:{items}}(裸 items 兼容旧后端)
+        const items = Array.isArray(resp?.data?.items)
+          ? resp.data.items
+          : Array.isArray(resp?.items)
+            ? resp.items
+            : [];
         const map = new Map();
         for (const it of items) {
           const descCatId = Number(it.descriptionCategoryId);
@@ -441,7 +446,12 @@
           map.get(descCatId).add(typeId);
         }
         _filteredCategoriesCache = { map, expiresAt: Date.now() + _FILTERED_CATEGORIES_TTL };
-        console.log(`[category-filter] 黑名单加载成功,共 ${map.size} 个类目`);
+        if (map.size === 0) {
+          // 空名单大概率异常(响应结构变化/后端数据丢失),warn 提示避免门控B静默失效
+          console.warn('[category-filter] 黑名单加载成功但为 0 条(检查后端 /admin/api/filtered-categories 返回结构)');
+        } else {
+          console.log(`[category-filter] 黑名单加载成功,共 ${map.size} 个类目`);
+        }
         return map;
       } catch (e) {
         console.warn('[category-filter] 黑名单加载失败:', e?.message || e);
