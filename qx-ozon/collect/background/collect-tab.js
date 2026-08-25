@@ -1835,6 +1835,11 @@
         const reasons = [];
         for (const tab of orderedTabs) {
           if (!tab.id) continue;
+          // loading 中的 tab 注入必然失败(cannot be injected while loading),跳过并记录
+          if (tab.status && tab.status !== 'complete') {
+            reasons.push(`tab${tab.id}:loading`);
+            continue;
+          }
           let injected;
           try {
             await _sellerPortalGate();
@@ -1844,6 +1849,9 @@
               args: [sku, mPeriod],
             });
           } catch (e) {
+            // 打出真实注入错误(权限/错误页/tab 已关等),reasons 保持短标记
+            // 避免长 message 意外命中下方 session/antibot 正则改变分类行为
+            console.warn(`[_fetchMarketStatsDirect] tab${tab.id} inject failed:`, e?.message || e);
             reasons.push(`tab${tab.id}:inject_err`);
             continue;
           }
