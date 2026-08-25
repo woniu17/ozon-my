@@ -23,7 +23,7 @@
   globalThis.__jzCollect.setupMetrics = function () {
     const sw = this._sw;
 
-    const FLUSH_SIZE = 20;
+    const FLUSH_SIZE = 5;
     const BATCH_LIMIT = 200; // 与后端 batch 接口单批上限一致
     const BUF_CAP = 400; // 持久化缓冲上限(2 批),超出丢最旧
     const IP_PROBE_INTERVAL_MS = 30 * 60 * 1000;

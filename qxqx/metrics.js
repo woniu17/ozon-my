@@ -14,7 +14,7 @@
 import { hostname } from 'node:os';
 import path from 'node:path';
 
-const FLUSH_SIZE = 20;       // 满 20 条触发上报
+const FLUSH_SIZE = 5;        // 满 5 条触发上报
 const FLUSH_INTERVAL_MS = 30_000; // 定时上报
 const IP_PROBE_INTERVAL_MS = 30 * 60_000; // 出口 IP 刷新
 const BATCH_LIMIT = 200;     // 与后端 batch 接口单批上限一致
