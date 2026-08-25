@@ -248,6 +248,31 @@ function attributeFetchedAt(it) {
   return max ? new Date(max).toISOString() : null;
 }
 
+// 简短时间:今天 HH:mm;今年 MM-DD HH:mm;更早 YY-MM-DD
+function fmtShortTime(t) {
+  if (!t) return '';
+  const d = new Date(t);
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return hm;
+  const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  if (d.getFullYear() === now.getFullYear()) return `${md} ${hm}`;
+  return `${String(d.getFullYear()).slice(2)}-${md}`;
+}
+
+// 统一获取各 type 的抓取时间(徽章下方小字展示用)
+function fetchedAtOf(it, type) {
+  if (type === 'dom') return domFetchedAt(it);
+  if (type === 'attribute') return attributeFetchedAt(it);
+  if (type === 'richMedia') return it.richMedia?.fetchedAt || null;
+  if (type === 'marketStats') return it.marketStats?.fetchedAt || null;
+  if (type === 'followSell') return it.followSell?.fetchedAt || null;
+  return null;
+}
+
 function isStale(it, type) {
   // overview 矩阵:marketStats 基于 fetchedAt 超过 24h 判定 stale
   if (type === 'marketStats') {
@@ -314,10 +339,20 @@ function hitBadgeText(it, type) {
   return '✓';
 }
 function hitBadgeTitle(it, type) {
+  if (type === 'dom') {
+    const parts = [];
+    if (it.card?.fetchedAt) parts.push(`card ${fmtTime(it.card.fetchedAt)}`);
+    if (it.detail?.fetchedAt) parts.push(`detail ${fmtTime(it.detail.fetchedAt)}`);
+    return parts.length ? `抓取于 ${parts.join('\n')}` : '';
+  }
+  if (type === 'attribute') {
+    const parts = [];
+    if (it.search?.fetchedAt) parts.push(`search ${fmtTime(it.search.fetchedAt)}`);
+    if (it.bundle?.fetchedAt) parts.push(`bundle ${fmtTime(it.bundle.fetchedAt)}`);
+    return parts.length ? `抓取于 ${parts.join('\n')}` : '';
+  }
   let fetchedAt = null;
-  if (type === 'dom') fetchedAt = domFetchedAt(it);
-  else if (type === 'attribute') fetchedAt = attributeFetchedAt(it);
-  else if (type === 'richMedia') fetchedAt = it.richMedia?.fetchedAt;
+  if (type === 'richMedia') fetchedAt = it.richMedia?.fetchedAt;
   else if (type === 'marketStats') fetchedAt = it.marketStats?.fetchedAt;
   else if (type === 'followSell') fetchedAt = it.followSell?.fetchedAt;
   return fetchedAt ? `抓取于 ${fmtTime(fetchedAt)}` : '';
@@ -1154,21 +1189,10 @@ onMounted(() => {
                   {{ it.sku }}
                 </a>
               </td>
-              <td class="cell-clickable" :title="hitBadgeTitle(it, 'dom')" @click="openDetail(it, 'dom')">
-                <span :class="hitBadgeClass(it, 'dom')">{{ hitBadgeText(it, 'dom') }}</span>
-              </td>
-              <td class="cell-clickable" :title="hitBadgeTitle(it, 'attribute')" @click="openDetail(it, 'attribute')">
-                <span :class="hitBadgeClass(it, 'attribute')">{{ hitBadgeText(it, 'attribute') }}</span>
-              </td>
-              <td class="cell-clickable" :title="hitBadgeTitle(it, 'richMedia')" @click="openDetail(it, 'richMedia')">
-                <span :class="hitBadgeClass(it, 'richMedia')">{{ hitBadgeText(it, 'richMedia') }}</span>
-              </td>
-              <td class="cell-clickable" :title="hitBadgeTitle(it, 'marketStats')"
-                @click="openDetail(it, 'marketStats')">
-                <span :class="hitBadgeClass(it, 'marketStats')">{{ hitBadgeText(it, 'marketStats') }}</span>
-              </td>
-              <td class="cell-clickable" :title="hitBadgeTitle(it, 'followSell')" @click="openDetail(it, 'followSell')">
-                <span :class="hitBadgeClass(it, 'followSell')">{{ hitBadgeText(it, 'followSell') }}</span>
+              <td v-for="t in ['dom', 'attribute', 'richMedia', 'marketStats', 'followSell']" :key="t"
+                class="cell-clickable" :title="hitBadgeTitle(it, t)" @click="openDetail(it, t)">
+                <span :class="hitBadgeClass(it, t)">{{ hitBadgeText(it, t) }}</span>
+                <div v-if="fetchedAtOf(it, t)" class="cell-fetched-at">{{ fmtShortTime(fetchedAtOf(it, t)) }}</div>
               </td>
               <td class="row-actions">
                 <button class="btn btn-sm btn-primary" @click="openOpiPreview(it.sku)">OPI 预览</button>
@@ -1623,6 +1647,15 @@ onMounted(() => {
 
 .cell-clickable:hover {
   background: #f9fafb;
+}
+
+/* 徽章下方的抓取时间小字 */
+.cell-fetched-at {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
 }
 
 /* 详情弹窗 */
