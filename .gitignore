@@ -3,6 +3,7 @@ fonts
 set.txt
 set_secret*
 tempdata
+*.lock
 .env
 logs
 hello.txt

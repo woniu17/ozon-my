@@ -712,7 +712,7 @@ export const indexDao = {
         `SELECT sku, card_hit, card_fetched_at, detail_hit, detail_fetched_at,
                 search_hit, search_fetched_at, bundle_hit, bundle_fetched_at,
                 rich_media_hit, rich_media_fetched_at,
-                market_stats_hit, market_stats_fetched_at,
+                market_stats_hit, market_stats_fetched_at, market_stats_empty,
                 follow_sell_hit, follow_sell_fetched_at,
                 hit_count, last_fetched_at, listed
          FROM ozon_cache_index ${whereClause}

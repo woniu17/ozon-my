@@ -335,6 +335,8 @@ function hitBadgeText(it, type) {
     fetchedAt = it.followSell?.fetchedAt;
   }
   if (!hit) return '—';
+  // marketStats __empty 空标记:打钩的同时显示"无数据"(采集成功但 Ozon 接口无数据)
+  if (type === 'marketStats' && it.marketStats?.empty) return stale ? '过期·无数据' : '✓ 无数据';
   if (stale) return '过期';
   return '✓';
 }
@@ -355,6 +357,8 @@ function hitBadgeTitle(it, type) {
   if (type === 'richMedia') fetchedAt = it.richMedia?.fetchedAt;
   else if (type === 'marketStats') fetchedAt = it.marketStats?.fetchedAt;
   else if (type === 'followSell') fetchedAt = it.followSell?.fetchedAt;
+  if (type === 'marketStats' && it.marketStats?.empty)
+    return `${fetchedAt ? `抓取于 ${fmtTime(fetchedAt)}\n` : ''}__empty 空标记:采集成功但 Ozon 接口无数据`;
   return fetchedAt ? `抓取于 ${fmtTime(fetchedAt)}` : '';
 }
 
@@ -1421,7 +1425,8 @@ onMounted(() => {
         <div class="cache-detail-data">
           <div v-for="(node, i) in detailJsonNodes()" :key="i" class="json-block">
             <h3>{{ node.key }}</h3>
-            <JsonTree :data="node.data" :default-expand-level="2" :root-key="node.key" />
+            <p v-if="node.isEmpty" class="muted">无</p>
+            <JsonTree v-else :data="node.data" :default-expand-level="2" :root-key="node.key" />
           </div>
           <p v-if="!detailJsonNodes().length" class="muted">无数据</p>
         </div>
@@ -1784,10 +1789,21 @@ onMounted(() => {
   display: inline-block;
 }
 
-.fc-dot-ok { background: #1dc981; }
-.fc-dot-warn { background: #efaa17; }
-.fc-dot-brand { background: var(--primary); }
-.fc-dot-mute { background: #a1a1aa; }
+.fc-dot-ok {
+  background: #1dc981;
+}
+
+.fc-dot-warn {
+  background: #efaa17;
+}
+
+.fc-dot-brand {
+  background: var(--primary);
+}
+
+.fc-dot-mute {
+  background: #a1a1aa;
+}
 
 .fc-table {
   width: 100%;
@@ -1810,8 +1826,13 @@ onMounted(() => {
   vertical-align: top;
 }
 
-.fc-th-field { width: min(140px, 14vw); }
-.fc-th-final { width: min(280px, 24vw); }
+.fc-th-field {
+  width: min(140px, 14vw);
+}
+
+.fc-th-final {
+  width: min(280px, 24vw);
+}
 
 .fc-field {
   font-weight: 500;

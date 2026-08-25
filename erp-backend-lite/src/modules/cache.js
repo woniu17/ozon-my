@@ -936,6 +936,8 @@ router.get('/admin/api/cache/overview', async (req, res, next) => {
           ? {
               fetchedAt: r.market_stats_fetched_at,
               stale: mkStale(r.market_stats_fetched_at, MARKET_STATS_STALE_MS),
+              // __empty 空标记:采集成功但 Ozon 接口无数据,前端徽章显示"✓ 无数据"
+              empty: !!r.market_stats_empty,
             }
           : null,
         followSell: r.follow_sell_hit
