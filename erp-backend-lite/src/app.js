@@ -24,6 +24,7 @@ import batchUploadRoutes from './modules/batch-upload.js';
 import cacheRoutes from './modules/cache.js';
 import collectQueueRoutes from './modules/collect-queue.js';
 import categoryFilterRoutes from './modules/category-filter.js';
+import endpointMetricsRoutes, { startEndpointMetricsRetention, stopEndpointMetricsRetention } from './modules/endpoint-metrics.js';
 import { auditLog } from './middleware/audit.js';
 import { startImportStatusPoller } from './services/import-status-poller.js';
 import { startQueueCleanupPoller } from './services/queue-cleanup-poller.js';
@@ -135,6 +136,7 @@ app.use(batchUploadRoutes);
 app.use(cacheRoutes);
 app.use(collectQueueRoutes);
 app.use(categoryFilterRoutes);
+app.use(endpointMetricsRoutes);
 app.use(imageRefreshRoutes);
 app.use(stockRefreshRoutes);
 app.use(productUpdateRoutes);
@@ -181,6 +183,8 @@ const server = app.listen(config.port, () => {
   // 商品归档任务调度器(2026-08):每 5s 扫描,同店铺批量≤100/请求,调 /v1/product/archive
   //   响应只返回整体布尔,整批要么全成功要么全失败
   startProductArchivePoller();
+  // 端点耗时监控保留期清理(2026-08):启动 10min 后首次,此后每日清理超期 metrics
+  startEndpointMetricsRetention();
 });
 
 // 优雅退出
@@ -194,6 +198,7 @@ function shutdown(signal) {
   stopStockRefreshPoller();
   stopProductUpdatePoller();
   stopProductArchivePoller();
+  stopEndpointMetricsRetention();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);

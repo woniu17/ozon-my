@@ -34,6 +34,7 @@ const tabs = [
   { key: '/shallow-collect-logs', label: '浅度采集日志' },
   { key: '/collect-queue', label: '采集队列' },
   { key: '/category-filter', label: '类目过滤' },
+  { key: '/endpoint-metrics', label: '端点耗时' },
 ];
 
 // 当前激活的 Tab(用 route.path 匹配)

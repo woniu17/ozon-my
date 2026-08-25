@@ -46,6 +46,7 @@ import { launchPersistentContext } from 'cloakbrowser';
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { initMetrics, addMetric, finalizeMetrics } from './metrics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -589,6 +590,12 @@ const FETCH_PAGE_FN = async ({ path, timeoutMs }) => {
     return pathname + '?' + search;
   };
 
+  // 端点耗时埋点(www.entrypoint.seller-list):声明在 try 外,catch 亦可上报
+  const __t0 = performance.now();
+  const __timing = () => ({
+    startedAt: new Date(Date.now() - (performance.now() - __t0)).toISOString(),
+    durationMs: Math.round(performance.now() - __t0),
+  });
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs || 15000);
@@ -602,7 +609,7 @@ const FETCH_PAGE_FN = async ({ path, timeoutMs }) => {
     } finally {
       clearTimeout(timer);
     }
-    if (!resp.ok) return { error: `HTTP ${resp.status}`, status: resp.status };
+    if (!resp.ok) return { error: `HTTP ${resp.status}`, status: resp.status, __timing: __timing() };
     const data = await resp.json();
     const { items, nextPage, sellerId } = parseEntryResponse(data);
     const cards = [];
@@ -615,9 +622,15 @@ const FETCH_PAGE_FN = async ({ path, timeoutMs }) => {
       nextPage: nextPage || null,
       sellerId: sellerId ? String(sellerId) : null,
       error: null,
+      status: resp.status,
+      __timing: __timing(),
     };
   } catch (e) {
-    return { error: String(e?.message || e) };
+    return {
+      error: e?.name === 'AbortError' ? 'AbortError: timeout' : String(e?.message || e),
+      __timing: __timing(),
+      __errorKind: e?.name === 'AbortError' ? 'TIMEOUT' : 'NET_' + String(e?.message || 'e').slice(0, 36),
+    };
   }
 };
 
@@ -663,6 +676,19 @@ async function collectStore(page, store, state) {
       path: state.nextPagePath,
       timeoutMs: cfg.requestTimeoutMs,
     });
+
+    // 端点耗时上报(www.entrypoint.seller-list;sellerId 优先取页面响应内的,兜底 store 配置)
+    if (r?.__timing) {
+      addMetric({
+        endpoint: 'www.entrypoint.seller-list',
+        sellerId: r.sellerId || String(store?.sellerId || ''),
+        durationMs: r.__timing.durationMs,
+        ts: r.__timing.startedAt,
+        statusCode: r.status ?? null,
+        ok: !r.error,
+        errorKind: r.error ? r.__errorKind || 'HTTP_' + r.status : null,
+      });
+    }
 
     // 错误分类与熔断判定
     if (r.error) {
@@ -768,6 +794,7 @@ async function main() {
     console.log('\n[中断] 收到 SIGINT,正在保存进度并退出...');
     try { saveProgress(progress); } catch { /* 忽略 */ }
     releaseLock();
+    finalizeMetrics().catch(() => {}); // 非阻塞 flush,尽力而为
     browser?.close?.().finally(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000);
   });
@@ -782,6 +809,9 @@ async function main() {
     releaseLock();
     process.exit(1);
   }
+
+  // 1.5 端点耗时监控初始化(缓冲 + 30s 定时上报 + 出口 IP 探测;失败自动禁用不阻断)
+  initMetrics({ script: 'shallow', erpBaseUrl: cfg.erpBaseUrl, erpApiKey: cfg.erpApiKey, profileDir: cfg.profileDir });
 
   // 2. 启动浏览器(launchBrowser 返回工作页:复用会话恢复的第 1 个标签页)
   console.log('\n[2/5] 启动 stealth 浏览器...');
@@ -925,6 +955,8 @@ async function main() {
 
   saveProgress(progress);
   await browser.close();
+  // 端点耗时监控:退出前 flush 尽力而为
+  try { await finalizeMetrics(); } catch { /* 忽略 */ }
   releaseLock();
 }
 

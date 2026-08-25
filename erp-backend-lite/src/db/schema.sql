@@ -810,3 +810,33 @@ CREATE TABLE IF NOT EXISTS export_task_items (
 CREATE INDEX IF NOT EXISTS idx_eti_task ON export_task_items(task_id, seq);
 -- 注:idx_ci_exported(ozon_cache_index.exported)由 db/index.js 的 migrateExportFields 创建
 -- (旧库 CREATE TABLE IF NOT EXISTS 不更新表结构,需先 ALTER TABLE 补列再建索引)
+
+-- ── Ozon 端点访问耗时监控(2026-08) ──────────────────────────
+-- qxqx 三脚本(deep/shallow/backfill)对 8 个 Ozon 内部端点的每次 fetch 耗时埋点
+-- 维度:客户端出口 IP(client_ip)+ 脚本运行机器(machine_id)+ 浏览器 profile(profile_id)
+-- 通道:脚本缓冲后批量 POST /admin/api/endpoint-metrics/batch(x-api-key 鉴权)
+-- 保留:每日定时清理,默认 30 天(env METRICS_RETENTION_DAYS)
+-- 端点 code 为稳定枚举(与 URL 解耦,Ozon 改 URL 不影响历史数据):
+--   www.entrypoint.product / www.composer.product / www.composer.offers-modal
+--   seller.analytics.v3 / seller.search / seller.create-bundle
+--   www.entrypoint.seller-list / www.entrypoint.shop-info
+CREATE TABLE IF NOT EXISTS ozon_endpoint_metrics (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts           TEXT NOT NULL,             -- ISO8601 请求发起时间(浏览器侧计时起点)
+  endpoint     TEXT NOT NULL,             -- 稳定枚举 code
+  domain       TEXT NOT NULL DEFAULT 'www', -- 'www' | 'seller'
+  method       TEXT DEFAULT 'GET',
+  script       TEXT NOT NULL,             -- 'deep' | 'shallow' | 'backfill'
+  sku          TEXT,                      -- deep 部分端点有
+  seller_id    TEXT,                      -- shallow/backfill 有
+  status_code  INTEGER,                   -- HTTP 状态码(网络失败为 NULL)
+  duration_ms  INTEGER NOT NULL,
+  ok           INTEGER NOT NULL DEFAULT 1, -- 业务成功(2xx 且解析出数据)
+  error_kind   TEXT,                      -- 'HTTP_403'|'HTTP_429'|'TIMEOUT'|'NET_*'|'PARSE_FAIL'|'ANTIBOT'
+  machine_id   TEXT NOT NULL,
+  client_ip    TEXT,
+  profile_id   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_epm_ts          ON ozon_endpoint_metrics(ts);
+CREATE INDEX IF NOT EXISTS idx_epm_endpoint_ts ON ozon_endpoint_metrics(endpoint, ts);
+CREATE INDEX IF NOT EXISTS idx_epm_machine_ts  ON ozon_endpoint_metrics(machine_id, ts);

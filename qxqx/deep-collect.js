@@ -32,6 +32,7 @@ import { launchPersistentContext } from 'cloakbrowser';
 import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { initMetrics, addMetric, finalizeMetrics } from './metrics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -378,6 +379,12 @@ function bundleUsable(attrR) {
 const PORTAL_FETCH_FN = async (p) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), p.timeoutMs || 30000);
+  // 端点耗时埋点:t0 记在 fetch 之前(未发 fetch 的提前 return 不带 timing,Node 侧不上报)
+  let __t0 = 0;
+  const __timing = () =>
+    __t0
+      ? { startedAt: new Date(Date.now() - (performance.now() - __t0)).toISOString(), durationMs: Math.round(performance.now() - __t0) }
+      : null;
   try {
     let companyId = '';
     if (p.needCompanyId) {
@@ -395,6 +402,7 @@ const PORTAL_FETCH_FN = async (p) => {
     if (p.needCompanyId === 'header') headers['x-o3-company-id'] = companyId;
     let body = p.body || null;
     if (p.needCompanyId === 'body' && body) body = { ...body, company_id: companyId };
+    __t0 = performance.now();
     const resp = await fetch(p.path, {
       method: p.method || 'POST',
       credentials: 'include',
@@ -403,22 +411,22 @@ const PORTAL_FETCH_FN = async (p) => {
       signal: controller.signal,
     });
     clearTimeout(timer);
-    if (!resp.ok) return { ok: false, reason: 'HTTP_' + resp.status, status: resp.status };
+    if (!resp.ok) return { ok: false, reason: 'HTTP_' + resp.status, status: resp.status, __timing: __timing() };
     // 重定向到登录页(会话过期):fetch 自动跟随,resp.redirected + url 判定
     if (resp.redirected && /\/(signin|login|auth|registration)/i.test(resp.url || '')) {
-      return { ok: false, reason: 'AUTH_REQUIRED' };
+      return { ok: false, reason: 'AUTH_REQUIRED', status: resp.status, __timing: __timing() };
     }
     let data;
     try {
       data = await resp.json();
     } catch {
-      return { ok: false, reason: 'PARSE_FAIL' };
+      return { ok: false, reason: 'PARSE_FAIL', status: resp.status, __timing: __timing() };
     }
-    return { ok: true, status: resp.status, data };
+    return { ok: true, status: resp.status, data, __timing: __timing() };
   } catch (e) {
     clearTimeout(timer);
-    if (e?.name === 'AbortError') return { ok: false, reason: 'TIMEOUT' };
-    return { ok: false, reason: 'NET_' + String(e?.message || 'error').slice(0, 60) };
+    if (e?.name === 'AbortError') return { ok: false, reason: 'TIMEOUT', __timing: __timing() };
+    return { ok: false, reason: 'NET_' + String(e?.message || 'error').slice(0, 60), __timing: __timing() };
   }
 };
 
@@ -722,11 +730,14 @@ const PDP_MEDIA_FN = async ({ relPath, timeoutMs }) => {
   const composerWidgetStates = {};
   const failReasons = [];
   const hitEndpoints = [];
+  // 端点耗时埋点:每个 endpoint fetch 单独计时(epName → Node 侧 code 映射上报)
+  const __timings = [];
   for (let endpointIndex = 0; endpointIndex < endpointQueue.length; endpointIndex += 1) {
     const url = endpointQueue[endpointIndex];
     const epName = url.includes('entrypoint-api') ? 'entrypoint' : 'composer';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const __t0 = performance.now();
     try {
       const resp = await fetch(url, {
         credentials: 'include',
@@ -734,6 +745,13 @@ const PDP_MEDIA_FN = async ({ relPath, timeoutMs }) => {
         signal: controller.signal,
       });
       clearTimeout(timer);
+      __timings.push({
+        epName,
+        startedAt: new Date(Date.now() - (performance.now() - __t0)).toISOString(),
+        durationMs: Math.round(performance.now() - __t0),
+        status: resp.status,
+        ok: resp.ok,
+      });
       if (!resp.ok) {
         failReasons.push(`${epName}:HTTP_${resp.status}`);
         continue;
@@ -766,6 +784,14 @@ const PDP_MEDIA_FN = async ({ relPath, timeoutMs }) => {
       if (mp4 && richContent && (richContentHasText || endpointIndex + 1 >= endpointQueue.length)) break;
     } catch (e) {
       clearTimeout(timer);
+      __timings.push({
+        epName,
+        startedAt: new Date(Date.now() - (performance.now() - __t0)).toISOString(),
+        durationMs: Math.round(performance.now() - __t0),
+        status: null,
+        ok: false,
+        reason: e?.name === 'AbortError' ? 'TIMEOUT' : 'NET_' + String(e?.message || 'error').slice(0, 40),
+      });
       const reason =
         e?.name === 'AbortError' ? `${epName}:TIMEOUT` : `${epName}:NET_${(e?.message || 'error').slice(0, 60)}`;
       failReasons.push(reason);
@@ -860,12 +886,14 @@ const PDP_MEDIA_FN = async ({ relPath, timeoutMs }) => {
         hitEndpoints,
         fields,
         filteredStates,
+        __timings,
       }
     : {
         ok: false,
         anyOk: false,
         error: 'all endpoints failed',
         failReasons: failReasons.length ? failReasons.join('|') : 'NO_REQUEST_ATTEMPTED',
+        __timings,
       };
 };
 
@@ -879,6 +907,12 @@ const FOLLOW_SELL_MODAL_FN = async (p) => {
   }
   const fsController = new AbortController();
   const fsTimer = setTimeout(() => fsController.abort(), timeout);
+  // 端点耗时埋点(www.composer.offers-modal)
+  const fsT0 = performance.now();
+  const fsTiming = () => ({
+    startedAt: new Date(Date.now() - (performance.now() - fsT0)).toISOString(),
+    durationMs: Math.round(performance.now() - fsT0),
+  });
   try {
     const inner = `/modal/otherOffersFromSellers?product_id=${fsSku}`;
     const fsUrl = `/api/composer-api.bx/page/json/v2?url=${encodeURIComponent(inner)}`;
@@ -893,20 +927,20 @@ const FOLLOW_SELL_MODAL_FN = async (p) => {
     });
     clearTimeout(fsTimer);
     if (!fsResp.ok) {
-      return { ok: false, followSellData: null, errorReason: 'HTTP_' + fsResp.status };
+      return { ok: false, followSellData: null, errorReason: 'HTTP_' + fsResp.status, status: fsResp.status, __timing: fsTiming() };
     }
     const fsData = await fsResp.json();
     const fsStates = fsData && fsData.widgetStates ? fsData.widgetStates : {};
     const wslKey = Object.keys(fsStates).find((k) => k.startsWith('webSellerList'));
     if (!wslKey) {
-      return { ok: true, followSellData: { count: 0, sellers: [], source: 'no-sellers' } };
+      return { ok: true, followSellData: { count: 0, sellers: [], source: 'no-sellers' }, status: fsResp.status, __timing: fsTiming() };
     }
     let wsl = fsStates[wslKey];
     if (typeof wsl === 'string') {
       try {
         wsl = JSON.parse(wsl);
       } catch {
-        return { ok: true, followSellData: { count: 0, sellers: [], source: 'parse-fail' } };
+        return { ok: true, followSellData: { count: 0, sellers: [], source: 'parse-fail' }, status: fsResp.status, __timing: fsTiming() };
       }
     }
     const rawSellers = Array.isArray(wsl?.sellers) ? wsl.sellers : [];
@@ -934,11 +968,11 @@ const FOLLOW_SELL_MODAL_FN = async (p) => {
       };
     };
     const sellers = rawSellers.map(normSeller).filter(Boolean);
-    return { ok: true, followSellData: { count: rawSellers.length, sellers, source: 'modal' } };
+    return { ok: true, followSellData: { count: rawSellers.length, sellers, source: 'modal' }, status: fsResp.status, __timing: fsTiming() };
   } catch (e) {
     clearTimeout(fsTimer);
     const reason = e?.name === 'AbortError' ? 'TIMEOUT' : 'NET_' + (e?.message || 'error').slice(0, 60);
-    return { ok: false, followSellData: null, errorReason: reason };
+    return { ok: false, followSellData: null, errorReason: reason, __timing: fsTiming() };
   }
 };
 
@@ -1277,6 +1311,20 @@ async function portalFetch(kind, sku, variantId) {
   } catch (e) {
     return { transient: true, reason: 'EVAL_EXC:' + String(e?.message || e).slice(0, 60) };
   }
+  // 端点耗时上报(kind → code:marketStats=seller.analytics.v3 / search=seller.search / bundle=seller.create-bundle)
+  const kindCode = { marketStats: 'seller.analytics.v3', search: 'seller.search', bundle: 'seller.create-bundle' }[kind];
+  if (kindCode && r?.__timing) {
+    addMetric({
+      endpoint: kindCode,
+      method: 'POST',
+      sku,
+      durationMs: r.__timing.durationMs,
+      ts: r.__timing.startedAt,
+      statusCode: r.status ?? null,
+      ok: r.ok === true,
+      errorKind: r.ok === true ? null : String(r.reason || '').slice(0, 40),
+    });
+  }
   if (r?.ok) return { ok: true, data: r.data };
   const reason = String(r?.reason || 'UNKNOWN');
   if (reason === 'NO_COMPANY_ID' || reason === 'AUTH_REQUIRED' || reason === 'HTTP_401') {
@@ -1501,6 +1549,32 @@ async function doAutoCollect(task, filterMap) {
       const mediaRes = mediaSettled.status === 'fulfilled' ? mediaSettled.value : null;
       const fsRes = fsSettled.status === 'fulfilled' ? fsSettled.value : null;
       const jsonldRes = jsonldSettled.status === 'fulfilled' ? jsonldSettled.value : { ok: false, data: null };
+
+      // 端点耗时上报:richMedia 端点队列(epName → code)+ followSell modal
+      if (Array.isArray(mediaRes?.__timings)) {
+        for (const tm of mediaRes.__timings) {
+          addMetric({
+            endpoint: tm.epName === 'entrypoint' ? 'www.entrypoint.product' : 'www.composer.product',
+            sku,
+            durationMs: tm.durationMs,
+            ts: tm.startedAt,
+            statusCode: tm.status ?? null,
+            ok: tm.ok === true,
+            errorKind: tm.ok === true ? null : tm.reason || 'HTTP_' + tm.status,
+          });
+        }
+      }
+      if (fsRes?.__timing) {
+        addMetric({
+          endpoint: 'www.composer.offers-modal',
+          sku,
+          durationMs: fsRes.__timing.durationMs,
+          ts: fsRes.__timing.startedAt,
+          statusCode: fsRes.status ?? null,
+          ok: fsRes.ok === true,
+          errorKind: fsRes.ok === true ? null : String(fsRes.errorReason || '').slice(0, 40),
+        });
+      }
 
       // evaluate 异常 → 临时失败(设计 §7.1);HTTP 403/429 全失败 → ANTIBOT 熔断
       if (!mediaRes) return partial('buyer-page-failed', 'MEDIA_EVAL_EXC');
@@ -1732,7 +1806,12 @@ async function loadFilterMap() {
       if (!map.has(descCatId)) map.set(descCatId, new Set());
       map.get(descCatId).add(typeId);
     }
-    console.log(`[启动] 类目黑名单加载成功:${map.size} 个类目`);
+    if (map.size === 0) {
+      // 空名单大概率异常(响应结构变化/后端数据丢失),warn 提示避免门控B静默失效
+      console.warn('[启动] 类目黑名单加载成功但为 0 条(检查后端 /admin/api/filtered-categories 返回结构)');
+    } else {
+      console.log(`[启动] 类目黑名单加载成功:${map.size} 个类目`);
+    }
     return map;
   } catch (e) {
     // 加载失败 → 空 Map(不阻断采集,等同门控B关闭;对齐插件降级语义)
@@ -1791,6 +1870,9 @@ async function main() {
       throw e;
     }
     console.log('[1/4] ERP 连通正常,x-api-key 校验通过');
+
+    // 1.5 端点耗时监控初始化(缓冲 + 30s 定时上报 + 出口 IP 探测;失败自动禁用不阻断)
+    initMetrics({ script: 'deep', erpBaseUrl: cfg.erpBaseUrl, erpApiKey: cfg.erpApiKey, profileDir: cfg.profileDir });
 
     // 2. 类目黑名单预加载
     filterMap = await loadFilterMap();
@@ -1925,6 +2007,8 @@ async function main() {
     if (interrupted) console.log('  (被中断;partial 任务已在队尾,重跑即续采)');
 
     try { await browser?.close(); } catch { /* 忽略 */ }
+    // 端点耗时监控:退出前 flush 尽力而为(2s 内)
+    try { await finalizeMetrics(); } catch { /* 忽略 */ }
     releaseFileLock(profileLock);
     releaseFileLock(cfg.lockFile);
   }

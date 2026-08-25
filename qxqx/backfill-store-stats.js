@@ -19,8 +19,27 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { initMetrics, addMetric, finalizeMetrics } from './metrics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ── .env 加载(与 deep/shallow 同款;端点耗时监控需要 ERP_BASE_URL/ERP_API_KEY) ──
+function loadDotEnv(file) {
+  if (!existsSync(file)) return;
+  for (const line of readFileSync(file, 'utf-8').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const eq = t.indexOf('=');
+    if (eq <= 0) continue;
+    const key = t.slice(0, eq).trim();
+    let val = t.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = val;
+  }
+}
+loadDotEnv(path.join(__dirname, '.env'));
 
 // ── 配置 ─────────────────────────────────────────────────────
 const DB_PATH = process.env.DB_PATH || path.resolve(__dirname, '../erp-backend-lite/data/erp.db');
@@ -101,14 +120,31 @@ function saveProgress(progress) {
 const EXTRACT_STATS_FN = async (sellerId) => {
   const innerUrl = `/modal/shop-in-shop-info?seller_id=${sellerId}&page_changed=true`;
   const url = `/api/entrypoint-api.bx/page/json/v2?url=${encodeURIComponent(innerUrl)}`;
-  const resp = await fetch(url, {
-    credentials: 'include',
-    headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
+  // 端点耗时埋点(www.entrypoint.shop-info)
+  const __t0 = performance.now();
+  const __timing = () => ({
+    startedAt: new Date(Date.now() - (performance.now() - __t0)).toISOString(),
+    durationMs: Math.round(performance.now() - __t0),
   });
-  if (!resp.ok) return { error: `HTTP ${resp.status}` };
+  let resp;
+  try {
+    resp = await fetch(url, {
+      credentials: 'include',
+      headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
+    });
+  } catch (e) {
+    return {
+      error: String(e?.message || e),
+      sellerId: null,
+      stats: null,
+      __timing: __timing(),
+      __errorKind: e?.name === 'AbortError' ? 'TIMEOUT' : 'NET_' + String(e?.message || 'e').slice(0, 36),
+    };
+  }
+  if (!resp.ok) return { error: `HTTP ${resp.status}`, status: resp.status, __timing: __timing() };
   const json = await resp.json();
   const ws = json.widgetStates;
-  if (!ws) return { error: 'no widgetStates' };
+  if (!ws) return { error: 'no widgetStates', status: resp.status, __timing: __timing() };
 
   // 找 cellList widget(键名前缀 cellList-,值是 JSON 字符串需二次 parse)
   let cellList = null;
@@ -117,7 +153,7 @@ const EXTRACT_STATS_FN = async (sellerId) => {
     try { cellList = JSON.parse(ws[key]); } catch {}
     if (cellList) break;
   }
-  if (!cellList || !Array.isArray(cellList.cells)) return { error: 'no cells' };
+  if (!cellList || !Array.isArray(cellList.cells)) return { error: 'no cells', status: resp.status, __timing: __timing() };
 
   // 解析俄语格式数字,兼容 K(тысяча/千)和 M(миллион/百万)后缀
   // 例:"455" → 455;"13,2 K" → 13200;"1,5 M" → 1500000
@@ -169,7 +205,7 @@ const EXTRACT_STATS_FN = async (sellerId) => {
         break;
     }
   }
-  return { sellerId, stats, error: null };
+  return { sellerId, stats, error: null, status: resp.status, __timing: __timing() };
 };
 
 // ── 主流程 ───────────────────────────────────────────────────
@@ -199,6 +235,14 @@ async function main() {
   }
 
   const page = restored[0] || (await browser.newPage());
+
+  // 端点耗时监控初始化(ERP key 未配置则自动禁用,不影响补全主流程)
+  initMetrics({
+    script: 'backfill',
+    erpBaseUrl: (process.env.ERP_BASE_URL || 'http://127.0.0.1:3001').replace(/\/$/, ''),
+    erpApiKey: process.env.ERP_API_KEY || '',
+    profileDir: PROFILE_DIR,
+  });
 
   // 先访问 ozon.ru 首页,让浏览器通过反爬验证 + 建立 cookie
   console.log('[1/4] 访问 ozon.ru 首页(通过反爬 + 建立 cookie)...');
@@ -252,6 +296,19 @@ async function main() {
       lastError = `nav/eval: ${e.message}`;
     }
 
+    // 端点耗时上报(www.entrypoint.shop-info;导航失败无 timing 不上报)
+    if (result?.__timing) {
+      addMetric({
+        endpoint: 'www.entrypoint.shop-info',
+        sellerId,
+        durationMs: result.__timing.durationMs,
+        ts: result.__timing.startedAt,
+        statusCode: result.status ?? null,
+        ok: !result.error,
+        errorKind: result.error ? result.__errorKind || 'HTTP_' + result.status || 'PARSE_FAIL' : null,
+      });
+    }
+
     if (result && !result.error) {
       updateStats(sellerId, result.stats);
       progress.done.push(sellerId);
@@ -292,6 +349,8 @@ async function main() {
 
   await browser.close();
   db.close();
+  // 端点耗时监控:退出前 flush 尽力而为
+  try { await finalizeMetrics(); } catch { /* 忽略 */ }
 }
 
 main().catch((e) => {
