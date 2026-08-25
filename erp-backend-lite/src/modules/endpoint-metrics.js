@@ -26,7 +26,7 @@ const ENDPOINT_CODES = new Set([
   'www.entrypoint.seller-list',
   'www.entrypoint.shop-info',
 ]);
-const SCRIPT_CODES = new Set(['deep', 'shallow', 'backfill']);
+const SCRIPT_CODES = new Set(['deep', 'shallow', 'backfill', 'plugin']);
 const BATCH_LIMIT = 200;
 
 // ── 单条 metric 白名单校验 + 归一 ─────────────────────────────

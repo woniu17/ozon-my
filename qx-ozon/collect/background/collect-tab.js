@@ -824,9 +824,13 @@
         const failReasons = [];
         // 所有命中的 endpoint 列表(诊断用,区分 entrypoint/composer 命中)
         const hitEndpoints = [];
+        // 端点耗时:每次 fetch 一条(SW 侧据此上报 www.entrypoint.product / www.composer.product)
+        const epTimings = [];
         for (let endpointIndex = 0; endpointIndex < endpointQueue.length; endpointIndex += 1) {
           const url = endpointQueue[endpointIndex];
           const epName = url.includes('entrypoint-api') ? 'entrypoint' : 'composer';
+          const epFullName2 = url.includes('entrypoint-api') ? 'entrypoint-api' : 'composer-api';
+          const t0 = Date.now();
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeout);
           try {
@@ -836,6 +840,13 @@
               signal: controller.signal,
             });
             clearTimeout(timer);
+            epTimings.push({
+              ep: epFullName2,
+              startedAt: new Date(t0).toISOString(),
+              durationMs: Date.now() - t0,
+              status: resp.status,
+              ok: resp.ok,
+            });
             if (!resp.ok) {
               failReasons.push(`${epName}:HTTP_${resp.status}`);
               continue;
@@ -877,6 +888,14 @@
             // 单个 endpoint 失败 → 试下一个。区分超时/网络错误
             const reason =
               e?.name === 'AbortError' ? `${epName}:TIMEOUT` : `${epName}:NET_${(e?.message || 'error').slice(0, 60)}`;
+            epTimings.push({
+              ep: epFullName2,
+              startedAt: new Date(t0).toISOString(),
+              durationMs: Date.now() - t0,
+              status: null,
+              ok: false,
+              err: reason,
+            });
             failReasons.push(reason);
           }
         }
@@ -896,11 +915,13 @@
             endpoint: hitEndpoint,
             hitEndpoints,
             composerWidgetStates,
+            timings: epTimings,
           }
           : {
             ok: false,
             error: 'all endpoints failed',
             failReasons: failReasons.length ? failReasons.join('|') : 'NO_REQUEST_ATTEMPTED',
+            timings: epTimings,
           };
       };
       // ── 子函数 2:fetchFollowSellModal(独立 followSell modal 抓取) ──
@@ -912,6 +933,7 @@
         if (!fsSku) {
           return { ok: false, followSellData: null, errorReason: 'NO_SKU' };
         }
+        const fsT0 = Date.now(); // 端点耗时(__timing 随结果回传 SW 侧上报)
         const fsController = new AbortController();
         const fsTimer = setTimeout(() => fsController.abort(), timeout);
         try {
@@ -927,24 +949,29 @@
             signal: fsController.signal,
           });
           clearTimeout(fsTimer);
+          const fsTiming = {
+            startedAt: new Date(fsT0).toISOString(),
+            durationMs: Date.now() - fsT0,
+            status: fsResp.status,
+          };
           if (!fsResp.ok) {
             // HTTP 非 200(403/5xx 等)视为失败,不写缓存(允许后续重试)
             console.warn('[fetchPdpBundle] followSell modal HTTP', fsResp.status, 'sku=', fsSku);
-            return { ok: false, followSellData: null, errorReason: 'HTTP_' + fsResp.status };
+            return { ok: false, followSellData: null, errorReason: 'HTTP_' + fsResp.status, __timing: fsTiming };
           }
           const fsData = await fsResp.json();
           const fsStates = fsData && fsData.widgetStates ? fsData.widgetStates : {};
           const wslKey = Object.keys(fsStates).find((k) => k.startsWith('webSellerList'));
           if (!wslKey) {
             // modal 正常加载但无 webSellerList widget — 零跟卖商品
-            return { ok: true, followSellData: { count: 0, sellers: [], source: 'no-sellers' } };
+            return { ok: true, followSellData: { count: 0, sellers: [], source: 'no-sellers' }, __timing: fsTiming };
           }
           let wsl = fsStates[wslKey];
           if (typeof wsl === 'string') {
             try {
               wsl = JSON.parse(wsl);
             } catch {
-              return { ok: true, followSellData: { count: 0, sellers: [], source: 'parse-fail' } };
+              return { ok: true, followSellData: { count: 0, sellers: [], source: 'parse-fail' }, __timing: fsTiming };
             }
           }
           const rawSellers = Array.isArray(wsl?.sellers) ? wsl.sellers : [];
@@ -982,12 +1009,22 @@
             };
           };
           const sellers = rawSellers.map(normSeller).filter(Boolean);
-          return { ok: true, followSellData: { count: rawSellers.length, sellers, source: 'modal' } };
+          return { ok: true, followSellData: { count: rawSellers.length, sellers, source: 'modal' }, __timing: fsTiming };
         } catch (e) {
           clearTimeout(fsTimer);
           // modal fetch 网络失败 / 超时 — 不写 no-sellers(允许后续重试)
           const reason = e?.name === 'AbortError' ? 'TIMEOUT' : 'NET_' + (e?.message || 'error').slice(0, 60);
-          return { ok: false, followSellData: null, errorReason: reason };
+          return {
+            ok: false,
+            followSellData: null,
+            errorReason: reason,
+            __timing: {
+              startedAt: new Date(fsT0).toISOString(),
+              durationMs: Date.now() - fsT0,
+              status: null,
+              errorKind: reason,
+            },
+          };
         }
       };
       try {
@@ -1030,6 +1067,37 @@
         ]);
         const mediaRes = mediaSettled.status === 'fulfilled' ? mediaSettled.value?.[0]?.result : null;
         const fsRes = fsSettled.status === 'fulfilled' ? fsSettled.value?.[0]?.result : null;
+
+        // ── 端点耗时上报(买家页 4 端点:entrypoint/composer PDP + offers-modal) ──
+        // 铁律:监控链路任何失败静默,不影响采集主流程
+        try {
+          if (Array.isArray(mediaRes?.timings)) {
+            for (const t of mediaRes.timings) {
+              this.endpointMetricAdd?.({
+                endpoint: t.ep === 'entrypoint-api' ? 'www.entrypoint.product' : 'www.composer.product',
+                method: 'GET',
+                ts: t.startedAt,
+                durationMs: t.durationMs,
+                statusCode: t.status ?? null,
+                ok: t.ok !== false,
+                errorKind: t.err || null,
+                sku: urlSku || null,
+              });
+            }
+          }
+          if (fsRes?.__timing) {
+            this.endpointMetricAdd?.({
+              endpoint: 'www.composer.offers-modal',
+              method: 'GET',
+              ts: fsRes.__timing.startedAt,
+              durationMs: fsRes.__timing.durationMs,
+              statusCode: fsRes.__timing.status ?? null,
+              ok: fsRes.ok !== false,
+              errorKind: fsRes.__timing.errorKind || fsRes.errorReason || null,
+              sku: urlSku || null,
+            });
+          }
+        } catch { /* 静默 */ }
 
         console.log(
           '[fetchPdpBundle] 并行结果:',
@@ -1231,6 +1299,38 @@
       return wait;
     };
 
+    // ── Ozon 端点耗时监控:portal path → 端点码 ────────────────────────────────
+    // 仅采集相关的 2 个 seller 端点(与 qxqx 脚本同口径);上架流程的 create-bundle
+    // (无 -by-variant-id 后缀)、seller-tree 等业务调用不计入采集耗时。
+    const _portalMetricCode = (path) => {
+      if (path === '/search') return 'seller.search';
+      if (String(path).includes('create-bundle-by-variant-id')) return 'seller.create-bundle';
+      return null;
+    };
+
+    // 统一上报:code 命中才记;timing={startedAt, durationMs, statusCode?, ok, errorKind?}
+    // sku 由调用方经 opts.metricSku 透传(fetchSellerPortal → 快路/executeScript/bridge)。
+    this._reportPortalMetric = (code, timing, sku) => {
+      if (!code || !timing || !Number.isFinite(Number(timing.durationMs))) return;
+      try {
+        this.endpointMetricAdd?.({
+          endpoint: code,
+          method: 'POST',
+          ts: timing.startedAt,
+          durationMs: timing.durationMs,
+          statusCode: timing.statusCode ?? null,
+          ok: timing.ok !== false,
+          errorKind:
+            timing.ok === false
+              ? timing.statusCode
+                ? 'HTTP_' + timing.statusCode
+                : timing.errorKind || 'PORTAL_ERR'
+              : null,
+          sku: sku || null,
+        });
+      } catch { /* 铁律:监控失败不影响采集 */ }
+    };
+
     // ── 跨域快路:在「当前/任意 ozon.ru 标签页」内直发 seller 门户请求 ──────────────
     // 实测(2026-06-14):www.ozon.ru 与 seller.ozon.ru 同属 .ozon.ru,sc_company_id /
     // 登录态 cookie 域级共享;只要满足 CORS「简单请求」(content-type:text/plain、
@@ -1274,6 +1374,13 @@
       // 注入 MAIN world 的跨域 fetch:严格只用 CORS-safelisted 头(content-type:text/plain),
       // company_id 已在 body 内。任何自定义头都会触发预检 → seller 不放行 → Failed to fetch。
       const doFetchXO = async (apiPath, reqBody, timeout, prefix, sellerOrigin) => {
+        const t0 = Date.now(); // 端点耗时(__timing 随结果回传 SW 侧上报)
+        const __timing = (status, errorKind) => ({
+          startedAt: new Date(t0).toISOString(),
+          durationMs: Date.now() - t0,
+          ...(status != null ? { status } : {}),
+          ...(errorKind ? { errorKind } : {}),
+        });
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeout);
         try {
@@ -1286,7 +1393,7 @@
           });
           clearTimeout(timer);
           if (resp.redirected && (resp.url.includes('/signin') || resp.url.includes('/login'))) {
-            return { ok: false, status: 401, code: 'AUTH_REDIRECT', error: 'Seller portal cookie已过期，请重新登录' };
+            return { ok: false, status: 401, code: 'AUTH_REDIRECT', error: 'Seller portal cookie已过期，请重新登录', __timing: __timing(401, 'AUTH_REDIRECT') };
           }
           if (!resp.ok) {
             const text = await resp.text().catch(() => '');
@@ -1300,13 +1407,14 @@
               status: resp.status,
               code: parsedCode,
               error: `Seller portal 请求失败 (${resp.status}): ${text.slice(0, 200)}`,
+              __timing: __timing(resp.status),
             };
           }
-          return { ok: true, data: await resp.json() };
+          return { ok: true, data: await resp.json(), __timing: __timing(resp.status) };
         } catch (e) {
           clearTimeout(timer);
-          if (e.name === 'AbortError') return { ok: false, error: `请求超时 (${timeout}ms)` };
-          return { ok: false, error: e.message || String(e) };
+          if (e.name === 'AbortError') return { ok: false, error: `请求超时 (${timeout}ms)`, __timing: __timing(null, 'TIMEOUT') };
+          return { ok: false, error: e.message || String(e), __timing: __timing(null, 'NET') };
         }
       };
 
@@ -1328,6 +1436,14 @@
         throw err;
       }
       const r = results?.[0]?.result;
+      // 端点耗时上报(跨域快路真调;seller-tab 老路在 fetchSellerPortal 各 strategy 内上报)
+      this._reportPortalMetric(
+        _portalMetricCode(path),
+        r?.__timing
+          ? { ...r.__timing, statusCode: r.__timing.status ?? null, ok: r.ok !== false }
+          : null,
+        opts.metricSku
+      );
       if (!r) {
         const e = new Error('ozon-tab executeScript 未返回结果');
         e.tabUnavailable = true;
@@ -1380,6 +1496,13 @@
 
       // 3. Try executeScript first (with hard timeout), fallback to bridge
       const doFetch = async (apiPath, reqBody, xCompanyId, timeout, prefix, pageTypeHdr, sellerOrigin) => {
+        const t0 = Date.now(); // 端点耗时(__timing 随结果回传 SW 侧上报)
+        const __timing = (status, errorKind) => ({
+          startedAt: new Date(t0).toISOString(),
+          durationMs: Date.now() - t0,
+          ...(status != null ? { status } : {}),
+          ...(errorKind ? { errorKind } : {}),
+        });
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeout);
         try {
@@ -1399,7 +1522,7 @@
           });
           clearTimeout(timer);
           if (resp.redirected && (resp.url.includes('/signin') || resp.url.includes('/login'))) {
-            return { ok: false, status: 401, code: 'AUTH_REDIRECT', error: 'Seller portal cookie已过期，请重新登录' };
+            return { ok: false, status: 401, code: 'AUTH_REDIRECT', error: 'Seller portal cookie已过期，请重新登录', __timing: __timing(401, 'AUTH_REDIRECT') };
           }
           if (!resp.ok) {
             const text = await resp.text().catch(() => '');
@@ -1416,13 +1539,14 @@
               status: resp.status,
               code: parsedCode,
               error: `Seller portal 请求失败 (${resp.status}): ${text.slice(0, 200)}`,
+              __timing: __timing(resp.status),
             };
           }
-          return { ok: true, data: await resp.json() };
+          return { ok: true, data: await resp.json(), __timing: __timing(resp.status) };
         } catch (e) {
           clearTimeout(timer);
-          if (e.name === 'AbortError') return { ok: false, error: `请求超时 (${timeout}ms)` };
-          return { ok: false, error: e.message || String(e) };
+          if (e.name === 'AbortError') return { ok: false, error: `请求超时 (${timeout}ms)`, __timing: __timing(null, 'TIMEOUT') };
+          return { ok: false, error: e.message || String(e), __timing: __timing(null, 'NET') };
         }
       };
 
@@ -1482,6 +1606,14 @@
           fn: async () => {
             const results = await tryExecuteScript();
             const r = results?.[0]?.result;
+            // 端点耗时上报(doFetch 注入函数回传 __timing;失败也记 ok:false)
+            this._reportPortalMetric(
+              _portalMetricCode(path),
+              r?.__timing
+                ? { ...r.__timing, statusCode: r.__timing.status ?? null, ok: r.ok !== false }
+                : null,
+              opts.metricSku
+            );
             if (!r) throw new Error('executeScript 未返回结果');
             if (!r.ok) throw makeStructuredError(r);
             return r.data;
@@ -1490,7 +1622,19 @@
         {
           name: 'bridge',
           fn: async () => {
+            const t0 = Date.now(); // bridge 无 __timing 回传,SW 侧计整段(含消息往返开销)
             const r = await tryBridge();
+            this._reportPortalMetric(
+              _portalMetricCode(path),
+              {
+                startedAt: new Date(t0).toISOString(),
+                durationMs: Date.now() - t0,
+                statusCode: typeof r?.status === 'number' ? r.status : null,
+                ok: r?.ok !== false,
+                errorKind: r && !r.ok && !r.status ? 'BRIDGE_' + (r.reason || 'ERR') : null,
+              },
+              opts.metricSku
+            );
             if (!r) throw new Error('bridge 返回错误');
             if (!r.ok) throw makeStructuredError(r);
             return r.data;
@@ -1597,6 +1741,7 @@
           timeoutMs: 30000,
           allowOzonTab: true,
           preferTabId: opts.preferTabId,
+          metricSku: String(sku), // 端点耗时上报维度
         }
       );
       console.log(`[fetchBundleByVariantId] L3 fetch sku=${sku} variantId=${variantId}`);
@@ -1651,6 +1796,7 @@
         const orderedTabs = [...sellerTabs].sort((a, b) => (isAuthUrl(a.url) ? 1 : 0 - (isAuthUrl(b.url) ? 1 : 0)));
 
         const injectFetch = async (sku, period) => {
+          const t0 = Date.now(); // 端点耗时(__timing 随结果回传 SW 侧上报)
           try {
             const cookies = document.cookie.split(';').map((c) => c.trim());
             const scCookie = cookies.find((c) => c.startsWith('sc_company_id='));
@@ -1673,11 +1819,16 @@
                 offset: '0',
               }),
             });
-            if (!resp.ok) return { ok: false, reason: `http_${resp.status}` };
+            const __timing = { startedAt: new Date(t0).toISOString(), durationMs: Date.now() - t0, status: resp.status };
+            if (!resp.ok) return { ok: false, reason: `http_${resp.status}`, __timing };
             const result = await resp.json();
-            return { ok: true, data: result?.items?.[0] || result?.data?.[0] || null };
+            return { ok: true, data: result?.items?.[0] || result?.data?.[0] || null, __timing };
           } catch (e) {
-            return { ok: false, reason: `exc_${(e && e.message) || 'unknown'}` };
+            return {
+              ok: false,
+              reason: `exc_${(e && e.message) || 'unknown'}`,
+              __timing: { startedAt: new Date(t0).toISOString(), durationMs: Date.now() - t0, status: null, errorKind: 'NET' },
+            };
           }
         };
 
@@ -1697,6 +1848,21 @@
             continue;
           }
           const r = injected?.[0]?.result;
+          // 端点耗时上报(seller.analytics.v3;失败也记 ok:false)
+          if (r?.__timing) {
+            try {
+              this.endpointMetricAdd?.({
+                endpoint: 'seller.analytics.v3',
+                method: 'POST',
+                ts: r.__timing.startedAt,
+                durationMs: r.__timing.durationMs,
+                statusCode: r.__timing.status ?? null,
+                ok: r.ok === true,
+                errorKind: r.ok === true ? null : r.reason || null,
+                sku: String(sku),
+              });
+            } catch { /* 静默 */ }
+          }
           if (r?.ok) {
             // HTTP 200 即采集成功:有数据 → 归一化;无数据 → 空标记(缓存后避免重复真调)
             return r.data ? normalizeMarketItem(r.data) : { __empty: true };
@@ -2024,7 +2190,7 @@
                     pagination: { limit: '50' },
                     is_copy_allowed: false,
                   },
-                  { urlPrefix: '/api/v1', pageType: 'products', timeoutMs: 30000, allowOzonTab: true }
+                  { urlPrefix: '/api/v1', pageType: 'products', timeoutMs: 30000, allowOzonTab: true, metricSku: String(sku) }
                 );
                 const rawVariants = Array.isArray(resp?.variants)
                   ? resp.variants

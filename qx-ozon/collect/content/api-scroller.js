@@ -216,7 +216,7 @@
     return pathname + '?' + search;
   }
 
-  async function _fetchEntryPage(path, timeoutMs) {
+  async function _fetchEntryPage(path, timeoutMs, sellerIdForMetric) {
     // 发送前重写 path 的 query 参数:
     //   - 去掉 sorting,加入 sorting=discount(强制按折扣排序)
     //   - 去掉 __rr(若存在)
@@ -227,6 +227,28 @@
     const url = ENTRYPOINT_API_BASE + rewritten;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 端点耗时埋点(www.entrypoint.seller-list;经 SW 'endpointMetric' 中继上报 ERP)
+    const t0 = Date.now();
+    let metricDone = false;
+    const reportMetric = (statusCode, ok, errorKind) => {
+      if (metricDone) return;
+      metricDone = true;
+      try {
+        chrome.runtime.sendMessage({
+          action: 'endpointMetric',
+          metric: {
+            endpoint: 'www.entrypoint.seller-list',
+            method: 'GET',
+            ts: new Date(t0).toISOString(),
+            durationMs: Date.now() - t0,
+            statusCode,
+            ok,
+            errorKind: errorKind || null,
+            sellerId: sellerIdForMetric || null,
+          },
+        });
+      } catch { /* SW 未唤醒等场景静默 */ }
+    };
     try {
       const res = await fetch(url, {
         credentials: 'include',
@@ -234,9 +256,15 @@
         headers: { Accept: 'application/json' },
       });
       if (!res.ok) {
+        reportMetric(res.status, false, 'HTTP_' + res.status);
         throw new Error(`HTTP ${res.status}`);
       }
-      return await res.json();
+      const data = await res.json();
+      reportMetric(res.status, true);
+      return data;
+    } catch (e) {
+      reportMetric(null, false, e?.name === 'AbortError' ? 'TIMEOUT' : 'NET');
+      throw e;
     } finally {
       clearTimeout(timer);
     }
@@ -422,7 +450,7 @@
         const pageStartTime = Date.now();
         try {
           this._setPhase('fetching');
-          const data = await _fetchEntryPage(this._nextPagePath, this.opts.requestTimeoutMs);
+          const data = await _fetchEntryPage(this._nextPagePath, this.opts.requestTimeoutMs, this._sellerId);
           const { items, nextPage, sellerId, page } = _parseEntryResponse(data);
 
           this._currentPage = page || this._currentPage + 1;

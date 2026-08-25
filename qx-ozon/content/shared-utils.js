@@ -47,6 +47,23 @@ if (!globalThis.__JZ_BRAND__) {
   if (window.__JZ_SHARED_UTILS_LOADED__) return;
   window.__JZ_SHARED_UTILS_LOADED__ = true;
 
+  // 端点耗时中继:MAIN world 的 seller-info-main.js(shop-info 埋点)不能访问
+  // chrome.runtime,经 window.postMessage 把 metric 交给本 ISOLATED world 转发 SW
+  // ('endpointMetric' action → collect-metrics.js 缓冲上报 ERP)。
+  try {
+    window.addEventListener('message', (event) => {
+      if (event.source !== window) return;
+      const d = event.data;
+      if (!d || d.type !== 'jz-endpoint-metric' || !d.metric) return;
+      try {
+        chrome.runtime.sendMessage({ action: 'endpointMetric', metric: d.metric }, () => {
+          // 消费 chrome.runtime.lastError 避免 SW 未唤醒时报 unchecked error
+          void chrome.runtime.lastError;
+        });
+      } catch { /* SW 未唤醒等场景静默 */ }
+    });
+  } catch { /* 容错:不阻断主流程 */ }
+
   // 调试标志:供 puppeteer 确认 shared-utils 已执行(ISOLATED world 不可被 page.evaluate 直接访问)
   document.documentElement.setAttribute('data-jz-shared-utils-loaded', 'true');
 

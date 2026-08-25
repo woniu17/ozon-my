@@ -346,12 +346,46 @@
       '/api/entrypoint-api.bx/page/json/v2?url=' +
       encodeURIComponent('/modal/shop-in-shop-info?seller_id=' + sellerId + '&page_changed=true');
 
-    const resp = await fetch(url, {
-      credentials: 'include',
-      headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
-    });
-    if (!resp.ok) throw new Error(`entrypoint-api http ${resp.status}`);
+    // 端点耗时埋点(www.entrypoint.shop-info;MAIN world 无 chrome.runtime,
+    // 经 window.postMessage 由 ISOLATED world 的 shared-utils.js 中继给 SW 上报 ERP)
+    const t0 = Date.now();
+    const reportMetric = (statusCode, ok, errorKind) => {
+      try {
+        window.postMessage(
+          {
+            type: 'jz-endpoint-metric',
+            metric: {
+              endpoint: 'www.entrypoint.shop-info',
+              method: 'GET',
+              ts: new Date(t0).toISOString(),
+              durationMs: Date.now() - t0,
+              statusCode,
+              ok,
+              errorKind: errorKind || null,
+              sellerId: String(sellerId || '') || null,
+            },
+          },
+          '*'
+        );
+      } catch { /* 静默 */ }
+    };
+
+    let resp;
+    try {
+      resp = await fetch(url, {
+        credentials: 'include',
+        headers: { 'x-o3-app-name': 'dweb_client', accept: 'application/json' },
+      });
+    } catch (e) {
+      reportMetric(null, false, e?.name === 'AbortError' ? 'TIMEOUT' : 'NET');
+      throw e;
+    }
+    if (!resp.ok) {
+      reportMetric(resp.status, false, 'HTTP_' + resp.status);
+      throw new Error(`entrypoint-api http ${resp.status}`);
+    }
     const json = await resp.json();
+    reportMetric(resp.status, true);
 
     const widgetStates = json?.widgetStates;
     if (!widgetStates || typeof widgetStates !== 'object') {

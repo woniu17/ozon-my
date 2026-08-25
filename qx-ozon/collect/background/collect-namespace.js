@@ -54,7 +54,7 @@
     // ── 初始化入口 ──
     init(sw) {
       this._sw = sw;
-      const setups = [this.setupCache, this.setupConfig, this.setupRunner, this.setupQueue, this.setupTab];
+      const setups = [this.setupCache, this.setupConfig, this.setupRunner, this.setupQueue, this.setupTab, this.setupMetrics];
       for (const setup of setups) {
         if (typeof setup === 'function') {
           try {

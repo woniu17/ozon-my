@@ -79,6 +79,7 @@ try {
     '../collect/background/collect-config.js',
     '../collect/background/collect-runner.js',
     '../collect/background/collect-queue.js',
+    '../collect/background/collect-metrics.js',
     '../collect/background/collect-tab.js'
   );
 } catch (e) {
@@ -2937,6 +2938,18 @@ try {
             return { ok: false, error: e?.message || String(e) };
           }
         }
+        case 'endpointMetric': {
+          // Ozon 端点耗时上报(content script 中继):api-scroller.js(ISOLATED 直发)
+          // 与 seller-info-main.js(MAIN world → shared-utils.js postMessage 中继)。
+          // 入参: { metric: { endpoint, method, ts, durationMs, statusCode, ok, errorKind, sku, sellerId } }
+          // fire-and-forget,缓冲满 20 条或 1 分钟 alarm 由 collect-metrics.js 自动上报 ERP。
+          try {
+            __jzCollect.endpointMetricAdd(message.metric);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+          }
+        }
         case 'domCacheDelete': {
           // forceRefresh 时清 dom 缓存(同时清 card + detail)。
           try {
@@ -3477,8 +3490,8 @@ try {
             if (_resumeMeta.consumePaused) {
               await _saveQueueMeta({ consumePaused: false });
               console.log('[Queue] autoCollectSetConfig: consumePaused reset (深度采集开启或 paused 解除)');
-            }
-            sw.maybeStartConsume();
+          }
+          _maybeStartConsume();
           }
           // 推送 configChanged 通知面板/popup(fire-and-forget,无监听者不报错)
           chrome.runtime.sendMessage({ type: 'configChanged', config: _acFiltered }).catch(() => { });
@@ -4248,6 +4261,7 @@ try {
                 timeoutMs: 30000,
                 allowOzonTab: true,
                 preferTabId: senderTabId,
+                metricSku: String(sku), // 端点耗时上报维度
               }
             );
             // /api/v1/search 返回字段是 `variants`，且 shape 跟 sv 不同
@@ -4470,6 +4484,7 @@ try {
                     timeoutMs: 30000,
                     allowOzonTab: true,
                     preferTabId: senderTabId,
+                    metricSku: String(sku), // 端点耗时上报维度
                   }
                 );
                 console.log(`[searchVariants] fetch search sku=${sku}`);
