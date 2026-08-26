@@ -71,10 +71,12 @@
       // 价格: priceV2.price 数组,PRICE=售价,ORIGINAL_PRICE=划线价
       if (st.type === 'priceV2' && Array.isArray(st.priceV2?.price)) {
         for (const p of st.priceV2.price) {
-          const m = String(p.text || '').match(/([\d.,]+)/);
+          // 先去空白再匹配:俄文千位分隔符是空格("1 945,66 ₽"),
+          // 否则 [\d.,]+ 会在首个数字后截断,把 1945.66 解析成 1
+          const m = String(p.text || '').replace(/[\s\u00A0\u202F]/g, '').match(/([\d.,]+)/);
           if (!m) continue;
-          // "18,60 ¥" → 18.60 (俄文逗号小数点)
-          const n = parseFloat(m[1].replace(/\s/g, '').replace(',', '.'));
+          // "18,60¥" → 18.60 (俄文逗号小数点)
+          const n = parseFloat(m[1].replace(',', '.'));
           if (!isFinite(n)) continue;
           if (p.textStyle === 'PRICE') price = n;
           else if (p.textStyle === 'ORIGINAL_PRICE') originalPrice = n;
