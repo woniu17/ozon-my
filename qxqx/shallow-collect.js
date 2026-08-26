@@ -411,6 +411,7 @@ async function flushLogs(logs, store) {
         sellerId: String(store.sellerId),
         name: s.name ?? null,
         price: s.price != null ? Number(s.price) : null,
+        currency: s.currency ?? null,
         ratingCount: s.ratingCount != null ? Number(s.ratingCount) : null,
         imageUrl: s.imageUrl ?? null,
         passesFilter: s.passesFilter,
@@ -431,9 +432,10 @@ async function flushLogs(logs, store) {
           url: s.url || '',
           name: s.name || '',
           price: s.price != null ? Number(s.price) : null,
+          currency: s.currency ?? null,
           image: s.imageUrl || '',
           ratingCount: s.ratingCount ?? null,
-          source: 'api',
+          source: 'headless-api', // 区分插件写的 'api'(脚本=无头 API 直取)
         })
       );
     }
@@ -512,6 +514,7 @@ const FETCH_PAGE_FN = async ({ path, timeoutMs }) => {
     let name = '';
     let price = null;
     let originalPrice = null;
+    let currency = null;
     let rating = null;
     let ratingCount = null;
 
@@ -531,6 +534,11 @@ const FETCH_PAGE_FN = async ({ path, timeoutMs }) => {
           if (!isFinite(n)) continue;
           if (p.textStyle === 'PRICE') price = n;
           else if (p.textStyle === 'ORIGINAL_PRICE') originalPrice = n;
+          // 货币符号:取价格文本中首个币种符号("1 945,66 ₽"→"₽","13,55 ¥"→"¥")
+          if (!currency) {
+            const cm = String(p.text || '').match(/Br|[₽¥₸$€]/);
+            if (cm) currency = cm[0];
+          }
         }
       }
       // 评分 + 评论数: labelListV2.items 中找特定 icon
@@ -565,6 +573,7 @@ const FETCH_PAGE_FN = async ({ path, timeoutMs }) => {
       name,
       price,
       originalPrice,
+      currency,
       rating,
       ratingCount,
       imageUrl,
@@ -783,6 +792,7 @@ async function collectStore(page, store, state) {
         sku: skuStr,
         name: card.name,
         price: card.price,
+        currency: card.currency ?? null,
         ratingCount: card.ratingCount,
         imageUrl: card.imageUrl,
         url: card.url,

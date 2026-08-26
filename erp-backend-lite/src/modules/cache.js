@@ -1603,7 +1603,7 @@ router.get('/admin/api/shallow-collect/logs/:sku', async (req, res, next) => {
 });
 
 // POST /admin/api/shallow-collect/log — 写入一条浅度采集日志(SW 调用,JWT 鉴权)
-// body: { sku, sellerSlug, sellerId, name, price, ratingCount, imageUrl,
+// body: { sku, sellerSlug, sellerId, name, price, currency, ratingCount, imageUrl,
 //         passesFilter, skipReason, source, collectedAt }
 router.post('/admin/api/shallow-collect/log', async (req, res, next) => {
   try {
@@ -1617,6 +1617,7 @@ router.post('/admin/api/shallow-collect/log', async (req, res, next) => {
       sellerId: body.sellerId != null ? String(body.sellerId) : null,
       name: body.name != null ? String(body.name) : null,
       price: body.price != null ? Number(body.price) : null,
+      currency: body.currency != null ? String(body.currency) : null,
       ratingCount: body.ratingCount != null ? Number(body.ratingCount) : null,
       imageUrl: body.imageUrl != null ? String(body.imageUrl) : null,
       passesFilter: !!body.passesFilter,

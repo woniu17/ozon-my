@@ -54,12 +54,13 @@
    * 字段对齐 ozon-data-panel.js 的 __jzExtractCardInfo:
    *   sku / name / price / imageUrl / ratingCount
    * 扩展字段(原 DOM 采集没有,API 独有):
-   *   originalPrice / rating / url
+   *   originalPrice / currency / rating / url
    */
   function _extractCardFromItem(item) {
     let name = '';
     let price = null;
     let originalPrice = null;
+    let currency = null;
     let rating = null;
     let ratingCount = null;
 
@@ -80,6 +81,11 @@
           if (!isFinite(n)) continue;
           if (p.textStyle === 'PRICE') price = n;
           else if (p.textStyle === 'ORIGINAL_PRICE') originalPrice = n;
+          // 货币符号:取价格文本中首个币种符号("1 945,66 ₽"→"₽","13,55 ¥"→"¥")
+          if (!currency) {
+            const cm = String(p.text || '').match(/Br|[₽¥₸$€]/);
+            if (cm) currency = cm[0];
+          }
         }
       }
       // 评分 + 评论数: labelListV2.items 中找特定 icon
@@ -119,6 +125,7 @@
       name,
       price,
       originalPrice,
+      currency,
       rating,
       ratingCount,
       imageUrl,

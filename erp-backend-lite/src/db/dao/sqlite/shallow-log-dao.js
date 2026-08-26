@@ -150,7 +150,7 @@ export const shallowCollectLogDao = {
 
     const items = db
       .prepare(
-        `SELECT sku, sellerSlug, sellerId, name, price, ratingCount, imageUrl,
+        `SELECT sku, sellerSlug, sellerId, name, price, currency, ratingCount, imageUrl,
                 passesFilter, skipReason, source, collectedAt
          FROM ozon_shallow_collect_log ${where}
          ORDER BY collectedAt DESC LIMIT ? OFFSET ?`
@@ -171,7 +171,7 @@ export const shallowCollectLogDao = {
   async findBySku(sku) {
     const items = db
       .prepare(
-        `SELECT sku, sellerSlug, sellerId, name, price, ratingCount, imageUrl,
+        `SELECT sku, sellerSlug, sellerId, name, price, currency, ratingCount, imageUrl,
                 passesFilter, skipReason, source, collectedAt
          FROM ozon_shallow_collect_log WHERE sku = ?
          ORDER BY collectedAt DESC`
@@ -186,9 +186,9 @@ export const shallowCollectLogDao = {
     const r = db
       .prepare(
         `INSERT INTO ozon_shallow_collect_log
-         (sku, sellerSlug, sellerId, name, price, ratingCount, imageUrl,
+         (sku, sellerSlug, sellerId, name, price, currency, ratingCount, imageUrl,
           passesFilter, skipReason, source, collectedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         String(doc.sku),
@@ -196,6 +196,7 @@ export const shallowCollectLogDao = {
         doc.sellerId ?? null,
         doc.name ?? null,
         doc.price != null ? Number(doc.price) : null,
+        doc.currency ?? null,
         doc.ratingCount != null ? Number(doc.ratingCount) : null,
         doc.imageUrl ?? null,
         doc.passesFilter ? 1 : 0,

@@ -425,11 +425,12 @@ CREATE TABLE IF NOT EXISTS ozon_shallow_collect_log (
   sellerId       TEXT,
   name           TEXT,
   price          REAL,              -- 可空(卡片未提取到价格)
+  currency       TEXT,              -- 货币符号('₽'|'¥'|'₸'|'$'|'€'|'Br'),可空
   ratingCount    INTEGER,           -- 可空
   imageUrl       TEXT,
   passesFilter   INTEGER NOT NULL,  -- 0=过滤不通过(略过) | 1=通过(已写 card 缓存并入队)
   skipReason     TEXT,              -- 'no-rating'|'price-below-min'|'price-above-max'|'price-invalid'|'rating-below-min'|'rating-above-max'|NULL
-  source         TEXT,              -- 'api-scroller' | 'dom-scroller' | 'shop-page' | 'pdp'
+  source         TEXT,              -- 'api-scroller' | 'dom-scroller' | 'shop-page' | 'pdp' | 'headless-api'
   collectedAt    TEXT NOT NULL      -- ISO8601
 );
 CREATE INDEX IF NOT EXISTS idx_shallow_log_sku_time        ON ozon_shallow_collect_log(sku, collectedAt DESC);
