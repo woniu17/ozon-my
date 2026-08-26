@@ -17,7 +17,12 @@
 //   - 本脚本:每店翻页拉取全部 SKU(价格/评论过滤 + 浅度日志)
 //   - backfill 熔断即终止;本脚本熔断后等待 CIRCUIT_BREAKER_WAIT_MS 再断点续采
 //
-// 用法: node shallow-collect.js
+// 用法:
+//   node shallow-collect.js                           # 常规批量(按 .env 配置)
+//   node shallow-collect.js 3072947                   # 指定采集单店
+//   node shallow-collect.js 3072947 1234567           # 指定多店(空格/逗号分隔均可)
+//   指定模式语义:逐店 keyword 直查(不做全量分页);绕过 progress.done 去重
+//   (已采过也强制重采)、绕过店铺数值过滤与 STORE_LIMIT;SKU 4 道过滤仍生效
 // 可选环境变量(见 .env,命令行/env 优先于 .env):
 // Linux/macOS(bash):
 //   STORE_LIMIT=1 DRY_RUN=1 node shallow-collect.js   # 单店干跑
@@ -88,6 +93,21 @@ for (const level of ['log', 'warn', 'error']) {
   console[level] = (...args) => orig(`[${fmtTs()}]`, ...args);
 }
 
+// ── CLI 参数:指定采集店铺(最高优先级,覆盖 STORE_SELLER_IDS) ──
+// 仅接受纯数字 sellerId,空格/逗号分隔;传错直接报错退出,不静默回退批量模式
+const rawCliArgs = process.argv
+  .slice(2)
+  .join(',')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const invalidCliArgs = rawCliArgs.filter((s) => !/^\d+$/.test(s));
+if (invalidCliArgs.length > 0) {
+  console.error(`[参数错误] 无法识别: ${invalidCliArgs.join(' ')}(仅接受纯数字 sellerId,空格或逗号分隔)`);
+  process.exit(1);
+}
+const cliSellerIds = [...new Set(rawCliArgs)];
+
 // ── 配置 ─────────────────────────────────────────────────────
 const cfg = {
   // ERP 连接与鉴权(与后端 SERVICE_API_KEY 同值)
@@ -101,8 +121,13 @@ const cfg = {
   lockFile: path.join(__dirname, '.shallow-collect.lock'),
 
   // 店铺过滤
-  storeSellerIds: (process.env.STORE_SELLER_IDS || '')
-    .split(',').map((s) => s.trim()).filter(Boolean),
+  // CLI 指定模式:逐店 keyword 直查,绕过 progress.done 去重(强制重采)、
+  // 店铺数值过滤与 STORE_LIMIT;SKU 4 道过滤仍生效
+  explicitStoreMode: cliSellerIds.length > 0,
+  storeSellerIds: cliSellerIds.length > 0
+    ? cliSellerIds
+    : (process.env.STORE_SELLER_IDS || '')
+        .split(',').map((s) => s.trim()).filter(Boolean),
   storeOnlyMainlandChina: process.env.STORE_ONLY_MAINLAND_CHINA !== '0',
   storeLimit: Number(process.env.STORE_LIMIT) || 0, // 0=不限制
   storeSort: process.env.STORE_SORT || 'lastSeenAt',
@@ -328,6 +353,27 @@ const erp = {
 // 过滤条件尽量下推 ERP(isMainlandChina/数值范围/排序);
 // sellerIds 白名单(ERP 不支持)与 sellerId 纯数字校验在客户端过滤
 async function loadStores(progress) {
+  // CLI 指定模式:逐店 keyword 直查(keyword 匹配 sellerName/sellerSlug/sellerId,
+  // 客户端按 sellerId 精确对齐);不做全量分页、绕过 done 去重/数值过滤/storeLimit
+  if (cfg.explicitStoreMode) {
+    const stores = [];
+    for (const sellerId of cfg.storeSellerIds) {
+      const q = new URLSearchParams({ keyword: sellerId, currentPage: '1', pageSize: '200' });
+      const r = await erp.getStoresPage(q.toString());
+      const items = Array.isArray(r.items) ? r.items : [];
+      const hit = items.find((it) => String(it.sellerId || it._id || '') === sellerId);
+      if (hit) {
+        stores.push({ sellerId, sellerSlug: hit.sellerSlug ?? null });
+      } else {
+        // 不在店铺分类表(未 backfill/新店):仍按无 slug 采集,sellerSlug 记 null
+        console.warn(`    [指定模式] sellerId=${sellerId} 不在店铺分类表,sellerSlug 记 null`);
+        stores.push({ sellerId, sellerSlug: null });
+      }
+    }
+    console.log(`[指定模式] 目标店铺 ${stores.length} 个: ${cfg.storeSellerIds.join(', ')}`);
+    return stores;
+  }
+
   const q = new URLSearchParams();
   if (cfg.storeSellerIds.length === 0 && cfg.storeOnlyMainlandChina) {
     q.set('isMainlandChina', 'true');
@@ -887,8 +933,12 @@ async function main() {
   // 3. 查询待采店铺
   console.log('\n[3/5] 查询待采店铺...');
   const stores = await loadStores(progress);
-  const doneCount = Object.keys(progress.done).length;
-  console.log(`[3/5] 累计已完成 ${doneCount} 个,本批待处理 ${stores.length} 个`);
+  if (cfg.explicitStoreMode) {
+    console.log(`[3/5] 指定模式:${stores.length} 个目标店铺(强制重采,不受 done 去重限制)`);
+  } else {
+    const doneCount = Object.keys(progress.done).length;
+    console.log(`[3/5] 累计已完成 ${doneCount} 个,本批待处理 ${stores.length} 个`);
+  }
   if (stores.length === 0) {
     console.log('\n全部完成,无需处理。');
     await browser.close();
