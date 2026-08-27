@@ -235,8 +235,9 @@ router.post('/admin/api/price-watch/report', (req, res, next) => {
 
 // ── GET /admin/api/price-watch/list ─────────────────────────
 // 每 SKU 最新一条快照(MAX(id) 代理最新,自增 id 与时间单调一致)
-// query: ?currentPage=1&pageSize=20&storeId=&position=&keyword=&gapPctMin=&gapPctMax=
+// query: ?currentPage=1&pageSize=20&storeId=&position=&keyword=&offerId=&gapPctMin=&gapPctMax=
 //   position: 'cheapest'(有优势) | 'behind'(无优势) | 'no-follow'(无跟卖)
+//   offerId: 模糊匹配我的 Offer ID(product_data_cache.data.offer_id,如 "3977979978-0802-qx")
 router.get('/admin/api/price-watch/list', (req, res, next) => {
   try {
     const current = Math.max(1, Number(req.query.currentPage) || 1);
@@ -252,6 +253,11 @@ router.get('/admin/api/price-watch/list', (req, res, next) => {
       where.push('(s.sku LIKE ? OR s.sellers LIKE ?)');
       const kw = '%' + String(req.query.keyword) + '%';
       params.push(kw, kw);
+    }
+    if (req.query.offerId) {
+      // 模糊匹配:支持输入原SKU(3977979978)或完整 Offer ID(3977979978-0802-qx)
+      where.push("json_extract(p.data, '$.offer_id') LIKE ?");
+      params.push('%' + String(req.query.offerId) + '%');
     }
     if (req.query.position === 'cheapest') {
       where.push("s.is_cheapest = 1");
@@ -274,6 +280,7 @@ router.get('/admin/api/price-watch/list', (req, res, next) => {
       .prepare(
         `SELECT COUNT(*) AS n FROM price_watch_snapshots s
          JOIN (SELECT sku, MAX(id) AS mid FROM price_watch_snapshots GROUP BY sku) t ON s.id = t.mid
+         LEFT JOIN product_data_cache p ON p.sku = s.sku
          ${whereSql}`
       )
       .get(...params).n;

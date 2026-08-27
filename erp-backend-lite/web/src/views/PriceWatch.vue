@@ -31,6 +31,7 @@ const filters = reactive({
   storeId: '',
   position: '', // '' | 'cheapest' | 'behind' | 'no-follow'
   keyword: '',
+  offerId: '',
   gapPctMin: '',
   gapPctMax: '',
 });
@@ -67,6 +68,7 @@ async function loadList() {
       storeId: filters.storeId,
       position: filters.position,
       keyword: filters.keyword.trim(),
+      offerId: filters.offerId.trim(),
       gapPctMin: filters.gapPctMin,
       gapPctMax: filters.gapPctMax,
     });
@@ -318,6 +320,13 @@ onMounted(() => {
           type="text"
           v-model.trim="filters.keyword"
           placeholder="SKU / 卖家名"
+          @keydown.enter="search"
+        />
+        <input
+          class="filter-input"
+          type="text"
+          v-model.trim="filters.offerId"
+          placeholder="Offer ID(模糊,如 3977979978)"
           @keydown.enter="search"
         />
         <input class="filter-input num" type="number" v-model.trim="filters.gapPctMin" placeholder="价差% ≥" @keydown.enter="search" />
