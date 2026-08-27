@@ -23,13 +23,23 @@ const router = Router();
 const BATCH_LIMIT = 100;
 
 // ── 价格文本解析:"1 990 ₽" → 1990 ─────────────────────────
-// 跟卖 modal 存储的 price 为原始对象(cardPrice.price 文本)或字符串,取首个数字段
+// 跟卖 modal 存储的 price 为原始对象,已知两种形态:
+//   {cardPrice:{price:"65,29 ¥"}} 常规卡片价;{originalPrice:"657,01 ¥",price:"657,01 ¥"} 无卡片价(顶层字符串)
+// 兜底链中仅接受字符串/数字,防止嵌套对象被 String() 成 "[object Object]"
+const _plain = (v) => (typeof v === 'string' || typeof v === 'number' ? String(v) : null);
 export function parsePriceText(raw) {
   if (raw == null) return null;
   const text =
-    typeof raw === 'object'
-      ? String(raw?.cardPrice?.price ?? raw?.cardPrice?.text ?? raw?.cardPrice ?? raw?.text ?? '')
-      : String(raw);
+    _plain(raw) ??
+    (typeof raw === 'object'
+      ? _plain(raw?.cardPrice?.price) ??
+        _plain(raw?.cardPrice?.text) ??
+        _plain(raw?.cardPrice) ??
+        _plain(raw?.text) ??
+        _plain(raw?.price) ??
+        _plain(raw?.originalPrice) ??
+        ''
+      : '');
   const m = text.replace(/\s|\u00A0/g, '').match(/(\d+(?:[.,]\d+)?)/);
   if (!m) return null;
   const n = Number(m[1].replace(',', '.'));

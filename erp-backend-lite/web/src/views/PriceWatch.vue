@@ -119,24 +119,42 @@ async function toggleExpand(row) {
 
 // ── 展示工具 ───────────────────────────────────────────────
 // 价格数字解析(与后端 parsePriceText 同规则:"1 990 ₽" → 1990)
+// price 原始对象已知两种形态:{cardPrice:{price:"65,29 ¥"}} 与 {originalPrice:"657,01 ¥",price:"657,01 ¥"}
+const _plain = (v) => (typeof v === 'string' || typeof v === 'number' ? String(v) : null);
 function parsePrice(raw) {
   if (raw == null) return null;
-  const text = typeof raw === 'object' ? String(raw.text ?? '') : String(raw);
+  const text =
+    _plain(raw) ??
+    (typeof raw === 'object'
+      ? _plain(raw.cardPrice?.price) ??
+        _plain(raw.cardPrice?.text) ??
+        _plain(raw.cardPrice) ??
+        _plain(raw.text) ??
+        _plain(raw.price) ??
+        _plain(raw.originalPrice) ??
+        ''
+      : '');
   const m = text.replace(/\s|\u00A0/g, '').match(/(\d+(?:[.,]\d+)?)/);
   if (!m) return null;
   const n = Number(m[1].replace(',', '.'));
   return Number.isFinite(n) ? n : null;
 }
 
-// 卖家报价展示文本(price 对象 → 文本)
+// 卖家报价展示文本(price 对象 → 文本),解析不出任何字段时返回 '—' 而非 "[object Object]"
 function sellerPriceText(s) {
   const raw = s?.price;
   if (raw == null) return '—';
-  if (typeof raw === 'object') {
-    const t = raw.cardPrice?.price ?? raw.cardPrice?.text ?? raw.text;
-    if (t != null) return String(t);
-  }
-  return String(raw);
+  const text =
+    _plain(raw) ??
+    (typeof raw === 'object'
+      ? _plain(raw.cardPrice?.price) ??
+        _plain(raw.cardPrice?.text) ??
+        _plain(raw.cardPrice) ??
+        _plain(raw.text) ??
+        _plain(raw.price) ??
+        _plain(raw.originalPrice)
+      : null);
+  return text != null ? text : '—';
 }
 
 // 明细卖家按价格升序(解析失败的排尾部)
