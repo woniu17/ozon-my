@@ -164,10 +164,23 @@ function baseSkuFromOfferId(offerId) {
   return m ? m[1] : '';
 }
 
-// 明细卖家按价格升序(解析失败的排尾部)
-function sortedSellers() {
-  const list = detail.value?.latest?.sellers || [];
-  return [...list].sort((a, b) => {
+// 明细卖家列表:插入"我的报价"行后按价格升序(方便查看我在跟卖中的位置)
+// row 为列表行(含 my_price/offer_id/store_id),解析失败的卖家排尾部
+function sortedSellers(row) {
+  const list = [...(detail.value?.latest?.sellers || [])];
+  if (row && row.my_price != null) {
+    list.push({
+      name: storeLabel(row.store_id) + '(我)',
+      price: { cardPrice: { price: String(row.my_price) } },
+      sku: row.offer_id || row.sku,
+      id: '',
+      link: '',
+      productLink: '',
+      logoImageUrl: '',
+      __self: true,
+    });
+  }
+  return list.sort((a, b) => {
     const pa = parsePrice(a.price);
     const pb = parsePrice(b.price);
     if (pa == null && pb == null) return 0;
@@ -175,6 +188,14 @@ function sortedSellers() {
     if (pb == null) return -1;
     return pa - pb;
   });
+}
+
+// 行高亮:我的报价行(绿) / 被跟卖源商品行(原SKU 与我的 Offer ID 同源,黄)
+function sellerRowCls(s, row) {
+  if (s.__self) return 'self-row';
+  const base = baseSkuFromOfferId(row?.offer_id);
+  if (base && baseSkuFromOfferId(s.sku) === base) return 'source-row';
+  return '';
 }
 
 function fmtNum(v, digits = 2) {
@@ -378,29 +399,28 @@ onMounted(() => {
                   </div>
                   <!-- 跟卖明细 -->
                   <template v-else>
-                    <div class="expand-title">跟卖卖家明细(按价格升序,共 {{ detail.latest?.sellers?.length || 0 }} 家)</div>
+                    <div class="expand-title">
+                      跟卖卖家明细(按报价升序,含我的报价,共 {{ sortedSellers(row).length }} 行)
+                      <span class="legend"><span class="lg lg-self">我的报价</span><span class="lg lg-source">被跟卖源商品</span></span>
+                    </div>
                     <table class="data-table seller-table">
                       <thead>
                         <tr>
                           <th>#</th>
                           <th>卖家</th>
-                          <th>报价</th>
-                          <th>店铺 SKU</th>
-                          <th>原 SKU</th>
+                          <th>SKU</th>
                           <th>卖家 ID</th>
                           <th>链接</th>
                         </tr>
                       </thead>
                       <tbody>
-                        <tr v-for="(s, i) in sortedSellers()" :key="(s.id || s.sku || i) + '-' + i">
+                        <tr v-for="(s, i) in sortedSellers(row)" :key="(s.id || s.sku || i) + '-' + i" :class="sellerRowCls(s, row)">
                           <td>{{ i + 1 }}</td>
                           <td class="col-seller">
                             <img v-if="s.logoImageUrl" :src="s.logoImageUrl" class="seller-logo" alt="" loading="lazy" />
                             {{ s.name || '—' }}
                           </td>
-                          <td class="price-min">{{ sellerPriceText(s) }}</td>
                           <td class="hl-sku">{{ s.sku || '—' }}</td>
-                          <td class="hl-sku">{{ baseSkuFromOfferId(s.sku) || '—' }}</td>
                           <td class="col-sku">{{ s.id || '—' }}</td>
                           <td>
                             <a v-if="s.productLink || s.link" :href="s.productLink || s.link" target="_blank" rel="noopener noreferrer">打开</a>
@@ -715,6 +735,49 @@ onMounted(() => {
   background: #eff6ff;
   border-radius: 4px;
   padding: 1px 6px;
+}
+
+/* 我的报价行(绿) / 被跟卖源商品行(黄) */
+.seller-table tr.self-row td {
+  background: #dcfce7;
+  color: #14532d;
+  font-weight: 600;
+}
+
+.seller-table tr.source-row td {
+  background: #fef3c7;
+  color: #78350f;
+  font-weight: 600;
+}
+
+.seller-table tr.self-row td.hl-sku,
+.seller-table tr.source-row td.hl-sku {
+  background: transparent;
+  color: inherit;
+}
+
+/* 图例 */
+.legend {
+  margin-left: 12px;
+  font-weight: 400;
+}
+
+.lg {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  margin-right: 6px;
+}
+
+.lg-self {
+  background: #dcfce7;
+  color: #14532d;
+}
+
+.lg-source {
+  background: #fef3c7;
+  color: #78350f;
 }
 
 .hist-table td {
