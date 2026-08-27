@@ -157,6 +157,13 @@ function sellerPriceText(s) {
   return text != null ? text : '—';
 }
 
+// 从 Offer ID 提取原SKU:"3977979978-0802-qx" → "3977979978"(首个 "-" 前的数字段)
+function baseSkuFromOfferId(offerId) {
+  if (!offerId) return '';
+  const m = String(offerId).match(/^(\d+)/);
+  return m ? m[1] : '';
+}
+
 // 明细卖家按价格升序(解析失败的排尾部)
 function sortedSellers() {
   const list = detail.value?.latest?.sellers || [];
@@ -378,7 +385,8 @@ onMounted(() => {
                           <th>#</th>
                           <th>卖家</th>
                           <th>报价</th>
-                          <th>报价 SKU</th>
+                          <th>店铺 SKU</th>
+                          <th>原 SKU</th>
                           <th>卖家 ID</th>
                           <th>链接</th>
                         </tr>
@@ -391,7 +399,8 @@ onMounted(() => {
                             {{ s.name || '—' }}
                           </td>
                           <td class="price-min">{{ sellerPriceText(s) }}</td>
-                          <td class="col-sku">{{ s.sku || '—' }}</td>
+                          <td class="hl-sku">{{ s.sku || '—' }}</td>
+                          <td class="hl-sku">{{ baseSkuFromOfferId(s.sku) || '—' }}</td>
                           <td class="col-sku">{{ s.id || '—' }}</td>
                           <td>
                             <a v-if="s.productLink || s.link" :href="s.productLink || s.link" target="_blank" rel="noopener noreferrer">打开</a>
@@ -695,6 +704,17 @@ onMounted(() => {
   border-radius: 3px;
   vertical-align: -3px;
   margin-right: 4px;
+}
+
+/* 店铺SKU/原SKU 高亮 */
+.hl-sku {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-radius: 4px;
+  padding: 1px 6px;
 }
 
 .hist-table td {
