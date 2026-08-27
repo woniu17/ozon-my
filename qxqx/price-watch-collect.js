@@ -97,6 +97,18 @@ if (!cfg.erpApiKey) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const randInt = (min, max) => Math.round(min + Math.random() * (max - min));
 
+// 日志时间戳(console.log/warn/error 统一加 [YYYY-MM-DD HH:mm:ss] 前缀,与浅采同款)
+const fmtTs = (d = new Date()) => {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+// 当前时间 + 等待 ms 的预计时刻(用于"下一次执行时间"提示)
+const fmtNext = (waitMs) => fmtTs(new Date(Date.now() + waitMs));
+for (const level of ['log', 'warn', 'error']) {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => orig(`[${fmtTs()}]`, ...args);
+}
+
 let interrupted = false;
 
 // ── 单实例锁 + profile 跨脚本锁 ──────────────────────────────
@@ -310,6 +322,25 @@ async function launchBrowser() {
   }
 }
 
+// buyer 域登录态探测:ozon.ru cookie 中含 session/auth/sc_/user 类凭证即视为已登录
+// httpOnly cookie 页面内 document.cookie 读不到,须用 ctx.cookies();
+// 价格监控只需"访问过"的 cookie 降低 403 概率,无登录态仅警告不退出
+async function probeBuyerAuth() {
+  try {
+    const cookies = await browser.cookies();
+    const authCookies = (cookies || []).filter(
+      (c) => /ozon\.ru$/.test(String(c.domain || '').replace(/^\./, '')) && /session|auth|token|sc_|user/i.test(c.name)
+    );
+    if (authCookies.length > 0) {
+      console.log(`[warmup] buyer 登录态正常(凭证 cookie ${authCookies.length} 个: ${authCookies.map((c) => c.name).slice(0, 5).join(', ')})`);
+    } else {
+      console.warn('[warmup] buyer 无登录态 cookie(仅有访客 cookie)——采集可用,但 403 概率升高;如频繁被拦可人工登录 www.ozon.ru 到 profile');
+    }
+  } catch (e) {
+    console.warn(`[warmup] 登录态探测失败(不影响采集): ${e?.message || e}`);
+  }
+}
+
 // warmup:过反爬挑战 + 刷新 cookie(价格监控无需 seller 登录态)
 async function warmup() {
   await buyerPage.goto('https://www.ozon.ru/', {
@@ -329,6 +360,7 @@ async function warmup() {
     title = await buyerPage.title().catch(() => '');
     if (isChallengeTitle(title)) throw new Error('ANTIBOT: challenge persists');
   }
+  await probeBuyerAuth();
 }
 
 // ── 单 SKU 采集 ──────────────────────────────────────────────
@@ -528,7 +560,7 @@ async function main() {
           console.error(`[ANTIBOT] 已触发 ${stats.antibot} 次,退出(剩余 SKU 下次运行继续)`);
           break;
         }
-        console.warn(`[ANTIBOT] 触发反爬,熔断 ${Math.round(cfg.antibotWaitMs / 1000)}s...`);
+        console.warn(`[ANTIBOT] 触发反爬,熔断 ${Math.round(cfg.antibotWaitMs / 1000)}s,预计恢复 ${fmtNext(cfg.antibotWaitMs)}`);
         const deadline = Date.now() + cfg.antibotWaitMs;
         while (Date.now() < deadline && !interrupted) await sleep(1000);
         if (interrupted) break;
@@ -539,8 +571,12 @@ async function main() {
         }
       }
 
-      // SKU 间隔节流
-      if (!interrupted) await sleep(randInt(cfg.skuIntervalMinMs, cfg.skuIntervalMaxMs));
+      // SKU 间隔节流(输出下一次采集时间;最后一个 SKU 无需等待)
+      if (!interrupted && idx < tasks.length - 1) {
+        const waitMs = randInt(cfg.skuIntervalMinMs, cfg.skuIntervalMaxMs);
+        console.log(`    下一SKU预计 ${fmtNext(waitMs)}(等待 ${Math.round(waitMs / 1000)}s)`);
+        await sleep(waitMs);
+      }
     }
 
     // 尾批上报

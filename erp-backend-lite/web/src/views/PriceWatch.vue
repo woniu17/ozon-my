@@ -237,16 +237,21 @@ function badge(row) {
 }
 
 // vs 中位数箭头
+// 与中位价的价差(现算):显示金额+百分比,带方向箭头
 function vsMedianMark(row) {
-  if (row.vs_median === 'above') return '▲ 高于中位';
-  if (row.vs_median === 'below') return '▼ 低于中位';
-  if (row.vs_median === 'equal') return '＝ 持平';
-  return '—';
+  if (row.my_price == null || row.median_price == null) return '—';
+  const gap = Math.round((row.my_price - row.median_price) * 100) / 100;
+  const pct = row.median_price > 0 ? Math.round((gap / row.median_price) * 1000) / 10 : null;
+  const arrow = gap > 0 ? '▲' : gap < 0 ? '▼' : '＝';
+  const sign = gap > 0 ? '+' : '';
+  const pctText = pct != null ? `(${sign}${fmtNum(pct, 1)}%)` : '';
+  return `${arrow} ${sign}${fmtNum(gap)} ${pctText}`.trim();
 }
 
 function vsMedianCls(row) {
-  if (row.vs_median === 'above') return 'vs-above';
-  if (row.vs_median === 'below') return 'vs-below';
+  if (row.my_price == null || row.median_price == null) return 'vs-equal';
+  if (row.my_price > row.median_price) return 'vs-above';
+  if (row.my_price < row.median_price) return 'vs-below';
   return 'vs-equal';
 }
 
@@ -344,7 +349,7 @@ onMounted(() => {
             <th>中位价</th>
             <th>我的排名</th>
             <th>价差(vs最低)</th>
-            <th>vs 中位价</th>
+            <th>与中位价的价差</th>
             <th>状态</th>
             <th class="col-time">快照时间</th>
           </tr>
