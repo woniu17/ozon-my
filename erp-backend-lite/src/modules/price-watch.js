@@ -271,9 +271,11 @@ router.get('/admin/api/price-watch/list', (req, res, next) => {
       .prepare(
         `SELECT s.id, s.sku, s.store_id, s.my_price, s.seller_count, s.min_price, s.median_price,
                 s.avg_price, s.my_rank, s.is_cheapest, s.gap_abs, s.gap_pct, s.vs_median,
-                s.status, s.error_reason, s.price_fetched_at, s.fetched_at
+                s.status, s.error_reason, s.price_fetched_at, s.fetched_at,
+                json_extract(p.data, '$.offer_id') AS offer_id
          FROM price_watch_snapshots s
          JOIN (SELECT sku, MAX(id) AS mid FROM price_watch_snapshots GROUP BY sku) t ON s.id = t.mid
+         LEFT JOIN product_data_cache p ON p.sku = s.sku
          ${whereSql}
          ORDER BY s.fetched_at DESC
          LIMIT ? OFFSET ?`

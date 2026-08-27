@@ -290,6 +290,7 @@ onMounted(() => {
           <tr>
             <th class="col-expand"></th>
             <th class="col-sku">SKU</th>
+            <th>Offer ID</th>
             <th>店铺</th>
             <th>我的价</th>
             <th>跟卖数</th>
@@ -304,14 +305,15 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="!items.length">
-            <td colspan="12" class="empty">
+            <td colspan="13" class="empty">
               {{ loading ? '加载中…' : '暂无快照数据——在 qxqx 目录运行 node price-watch-collect.js 采集' }}
             </td>
           </tr>
           <template v-for="row in items" :key="row.sku">
-            <tr :class="{ 'row-open': expandedSku === row.sku }" @click="toggleExpand(row)">
-              <td class="col-expand">{{ expandedSku === row.sku ? '▾' : '▸' }}</td>
+            <tr :class="{ 'row-open': expandedSku === row.sku }">
+              <td class="col-expand" @click="toggleExpand(row)" title="展开/收起详情">{{ expandedSku === row.sku ? '▾' : '▸' }}</td>
               <td class="col-sku">{{ row.sku }}</td>
+              <td class="col-sku">{{ row.offer_id || '—' }}</td>
               <td class="col-store">{{ storeLabel(row.store_id) }}</td>
               <td>
                 <span :class="{ 'price-stale': isPriceStale(row) }">{{ fmtNum(row.my_price) }}</span>
@@ -338,7 +340,7 @@ onMounted(() => {
               <td class="col-time">{{ fmtTime(row.fetched_at) }}</td>
             </tr>
             <tr v-if="expandedSku === row.sku" class="expand-row">
-              <td colspan="12">
+              <td colspan="13">
                 <div v-if="expandLoading" class="expand-loading">明细加载中…</div>
                 <template v-else-if="detail">
                   <!-- 采集失败原因 -->
@@ -419,7 +421,7 @@ onMounted(() => {
     </div>
 
     <div class="footer-bar">
-      <span class="footer-info">共 {{ pager.total }} 个 SKU(点击行展开跟卖明细)</span>
+      <span class="footer-info">共 {{ pager.total }} 个 SKU(点击行首 ▸ 展开跟卖明细)</span>
       <AppPager
         :modelValue="pager.current"
         :total="pager.total"
@@ -539,7 +541,7 @@ onMounted(() => {
 }
 
 .pw-table tbody tr {
-  cursor: pointer;
+  cursor: default;
 }
 
 .row-open {
@@ -549,6 +551,8 @@ onMounted(() => {
 .col-expand {
   width: 24px;
   color: var(--text-secondary, #9ca3af);
+  cursor: pointer;
+  user-select: none;
 }
 
 .col-sku {
