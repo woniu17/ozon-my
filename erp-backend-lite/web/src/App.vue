@@ -35,6 +35,7 @@ const tabs = [
   { key: '/collect-queue', label: '采集队列' },
   { key: '/category-filter', label: '类目过滤' },
   { key: '/endpoint-metrics', label: '端点耗时' },
+  { key: '/price-watch', label: '价格优势' },
 ];
 
 // 当前激活的 Tab(用 route.path 匹配)

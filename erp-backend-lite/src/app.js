@@ -25,6 +25,7 @@ import cacheRoutes from './modules/cache.js';
 import collectQueueRoutes from './modules/collect-queue.js';
 import categoryFilterRoutes from './modules/category-filter.js';
 import endpointMetricsRoutes, { startEndpointMetricsRetention, stopEndpointMetricsRetention } from './modules/endpoint-metrics.js';
+import priceWatchRoutes, { startPriceWatchRetention, stopPriceWatchRetention } from './modules/price-watch.js';
 import { auditLog } from './middleware/audit.js';
 import { startImportStatusPoller } from './services/import-status-poller.js';
 import { startQueueCleanupPoller } from './services/queue-cleanup-poller.js';
@@ -137,6 +138,7 @@ app.use(cacheRoutes);
 app.use(collectQueueRoutes);
 app.use(categoryFilterRoutes);
 app.use(endpointMetricsRoutes);
+app.use(priceWatchRoutes);
 app.use(imageRefreshRoutes);
 app.use(stockRefreshRoutes);
 app.use(productUpdateRoutes);
@@ -185,6 +187,8 @@ const server = app.listen(config.port, () => {
   startProductArchivePoller();
   // 端点耗时监控保留期清理(2026-08):启动 10min 后首次,此后每日清理超期 metrics
   startEndpointMetricsRetention();
+  // 价格优势监控快照保留期清理(2026-08):启动 10min 后首次,此后每日清理超期快照
+  startPriceWatchRetention();
 });
 
 // 优雅退出
@@ -199,6 +203,7 @@ function shutdown(signal) {
   stopProductUpdatePoller();
   stopProductArchivePoller();
   stopEndpointMetricsRetention();
+  stopPriceWatchRetention();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);

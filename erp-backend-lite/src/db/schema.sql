@@ -841,3 +841,32 @@ CREATE TABLE IF NOT EXISTS ozon_endpoint_metrics (
 CREATE INDEX IF NOT EXISTS idx_epm_ts          ON ozon_endpoint_metrics(ts);
 CREATE INDEX IF NOT EXISTS idx_epm_endpoint_ts ON ozon_endpoint_metrics(endpoint, ts);
 CREATE INDEX IF NOT EXISTS idx_epm_machine_ts  ON ozon_endpoint_metrics(machine_id, ts);
+
+-- ── 价格优势监控(2026-08) ──────────────────────────────────
+-- qxqx/price-watch-collect.js 在买家页抓取我的 SKU 的跟卖列表(otherOffersFromSellers),
+-- 与 product_data_cache 中我的价格对比,判断是否有价格优势
+-- 任务为派生视图(无队列表):GET tasks 实时从 product_data_cache 计算,24h 成功去重
+-- 保留:每日定时清理,默认 30 天(env PRICE_WATCH_RETENTION_DAYS)
+CREATE TABLE IF NOT EXISTS price_watch_snapshots (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  sku              TEXT NOT NULL,
+  store_id         TEXT,                -- 归属店铺(product_data_cache.store_id)
+  my_price         REAL,                -- 我的现价(上报时从缓存读取)
+  seller_count     INTEGER,             -- 跟卖卖家数(全部报价,不剔除自店)
+  min_price        REAL,                -- 跟卖最低价(数字解析后)
+  median_price     REAL,                -- 跟卖报价中位数(偶数个取中间两值均值)
+  avg_price        REAL,                -- 跟卖均价
+  my_rank          INTEGER,             -- 我的价格在全部报价(含自店)中的排名(1=最低)
+  is_cheapest      INTEGER,             -- 1=我的价 <= 全场最低价
+  gap_abs          REAL,                -- 我的价 - 跟卖最低价
+  gap_pct          REAL,                -- 差值百分比(相对跟卖最低价)
+  vs_median        TEXT,                -- 'above' | 'below' | 'equal'
+  sellers          TEXT,                -- 完整 sellers JSON(前端展开明细)
+  status           TEXT NOT NULL,       -- 'ok' | 'empty' | 'error'
+  error_reason     TEXT,
+  price_fetched_at TEXT,                -- 我的价格对应的 product_data_cache.fetched_at(滞后提示用)
+  fetched_at       TEXT NOT NULL        -- 快照采集时间(ISO8601)
+);
+CREATE INDEX IF NOT EXISTS idx_pws_sku_time ON price_watch_snapshots(sku, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pws_time     ON price_watch_snapshots(fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pws_store    ON price_watch_snapshots(store_id, fetched_at DESC);

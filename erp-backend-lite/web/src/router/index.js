@@ -23,6 +23,7 @@ import ShallowCollectLogs from '../views/ShallowCollectLogs.vue';
 import CollectQueue from '../views/CollectQueue.vue';
 import CategoryFilter from '../views/CategoryFilter.vue';
 import EndpointMetrics from '../views/EndpointMetrics.vue';
+import PriceWatch from '../views/PriceWatch.vue';
 import { useAuthStore } from '../stores/auth.js';
 
 // 路由配置 + JWT 守卫
@@ -58,6 +59,7 @@ const router = createRouter({
     { path: '/collect-queue', name: 'collect-queue', component: CollectQueue, meta: { title: '采集队列' } },
     { path: '/category-filter', name: 'category-filter', component: CategoryFilter, meta: { title: '类目过滤' } },
     { path: '/endpoint-metrics', name: 'endpoint-metrics', component: EndpointMetrics, meta: { title: '端点耗时' } },
+    { path: '/price-watch', name: 'price-watch', component: PriceWatch, meta: { title: '价格优势' } },
     { path: '/batch-upload/:batchNo', name: 'batch-upload-detail', component: () => import('../views/BatchUploadDetail.vue'), meta: { title: '批次详情' } },
     { path: '/image-refresh/:localTaskId', name: 'image-refresh-detail', component: () => import('../views/ImageRefreshDetail.vue'), meta: { title: '图片更新详情' } },
     { path: '/stock-refresh/:localTaskId', name: 'stock-refresh-detail', component: () => import('../views/StockRefreshDetail.vue'), meta: { title: '库存更新详情' } },
