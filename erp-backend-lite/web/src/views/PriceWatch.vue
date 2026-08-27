@@ -165,17 +165,17 @@ function baseSkuFromOfferId(offerId) {
 }
 
 // 明细卖家列表:插入"我的报价"行后按价格升序(方便查看我在跟卖中的位置)
-// row 为列表行(含 my_price/offer_id/store_id),解析失败的卖家排尾部
+// row 为列表行(含 my_price/sku/offer_id/store_id),解析失败的卖家排尾部
 function sortedSellers(row) {
   const list = [...(detail.value?.latest?.sellers || [])];
   if (row && row.my_price != null) {
     list.push({
       name: storeLabel(row.store_id) + '(我)',
       price: { cardPrice: { price: String(row.my_price) } },
-      sku: row.offer_id || row.sku,
+      sku: String(row.sku),
       id: '',
       link: '',
-      productLink: '',
+      productLink: `https://www.ozon.ru/product/${row.sku}`,
       logoImageUrl: '',
       __self: true,
     });
@@ -409,8 +409,9 @@ onMounted(() => {
                           <th>#</th>
                           <th>卖家</th>
                           <th>SKU</th>
+                          <th>价格</th>
                           <th>卖家 ID</th>
-                          <th>链接</th>
+                          <th>商品连接</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -421,6 +422,7 @@ onMounted(() => {
                             {{ s.name || '—' }}
                           </td>
                           <td class="hl-sku">{{ s.sku || '—' }}</td>
+                          <td class="price-min">{{ sellerPriceText(s) }}</td>
                           <td class="col-sku">{{ s.id || '—' }}</td>
                           <td>
                             <a v-if="s.productLink || s.link" :href="s.productLink || s.link" target="_blank" rel="noopener noreferrer">打开</a>
