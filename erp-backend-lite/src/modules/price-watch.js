@@ -96,12 +96,17 @@ function computeMetrics(myPrice, sellers) {
 
 // ── GET /admin/api/price-watch/tasks ────────────────────────
 // query: ?limit=100&force=1&storeId=
+//   limit=0 表示不限(全量);其余值钳制在 [1,500]
 //   仅取 saleable 商品(is_created=1 且 has_stock=1,买家页才有有效报价)
 //   24h 内已有 status='ok'/'empty' 快照的 SKU 跳过(force=1 忽略去重)
 //   按 product_data_cache.fetched_at 升序(价格缓存最旧的优先,多轮运行自然轮转)
 router.get('/admin/api/price-watch/tasks', (req, res, next) => {
   try {
-    const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
+    const rawLimit = Number(req.query.limit);
+    // 0=不限(不加 LIMIT);未配置/非法值=100;正数钳制 [1,500]
+    const limit = !Number.isFinite(rawLimit) || rawLimit < 0 ? 100 : rawLimit;
+    const unbounded = limit === 0;
+    const boundedLimit = unbounded ? -1 : Math.min(500, Math.max(1, limit));
     const force = req.query.force === '1' || req.query.force === 'true';
     const storeId = String(req.query.storeId || '').trim();
 
@@ -126,9 +131,9 @@ router.get('/admin/api/price-watch/tasks', (req, res, next) => {
         `SELECT sku, store_id, fetched_at, data FROM product_data_cache
          WHERE ${where.join(' AND ')}
          ORDER BY fetched_at ASC
-         LIMIT ?`
+         ${unbounded ? '' : 'LIMIT ?'}`
       )
-      .all(...params, limit);
+      .all(...(unbounded ? params : [...params, boundedLimit]));
 
     const items = rows.map((r) => {
       let data = null;

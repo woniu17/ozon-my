@@ -10,13 +10,15 @@
 // 跟卖抓取注入函数移植自 deep-collect.js FOLLOW_SELL_MODAL_FN(原 collect-tab.js L911-992)。
 //
 // 用法: node price-watch-collect.js
-// 可选环境变量(见 .env):
+// 可选环境变量(见 .env;调优类变量加 PW_ 前缀,避免与深采同名变量互相覆盖):
+//   分批采集:PW_TASK_LIMIT 总上限(0=不限) / PW_BATCH_SIZE 每批个数(≤500) /
+//            PW_BATCH_INTERVAL_MIN/MAX_MS 批间随机等待;批内 SKU 间隔 PW_SKU_INTERVAL_*
 // Linux/macOS(bash):
-//   TASK_LIMIT=10 DRY_RUN=1 node price-watch-collect.js   # 小批量干跑
-//   TASK_LIMIT=10 node price-watch-collect.js             # 小批量落库
+//   PW_TASK_LIMIT=10 DRY_RUN=1 node price-watch-collect.js   # 小批量干跑
+//   PW_TASK_LIMIT=10 node price-watch-collect.js             # 小批量落库
 // Windows(PowerShell;注意 $env: 会话内持久,常驻前先清残留):
-//   $env:TASK_LIMIT='10'; $env:DRY_RUN='1'; node price-watch-collect.js
-//   Remove-Item Env:TASK_LIMIT,Env:DRY_RUN -ErrorAction SilentlyContinue
+//   $env:PW_TASK_LIMIT='10'; $env:DRY_RUN='1'; node price-watch-collect.js
+//   Remove-Item Env:PW_TASK_LIMIT,Env:DRY_RUN -ErrorAction SilentlyContinue
 // 前置:ERP 后端已启动且两侧 .env 配置了相同的 SERVICE_API_KEY / ERP_API_KEY;
 //       profile(.ozon-profile)已访问过 ozon.ru 建立 cookie(无需 seller 登录态,
 //       但与深采共用 profile 时保持登录无害)。
@@ -47,6 +49,13 @@ function loadDotEnv(file) {
 }
 loadDotEnv(path.join(__dirname, '.env'));
 
+// 数值型 env 读取:未配置/非法值用默认;显式配置 0 保留为 0(如 PW_TASK_LIMIT=0 表示不限)
+function numEnv(key, def) {
+  const v = process.env[key];
+  if (v == null || v === '' || !Number.isFinite(Number(v))) return def;
+  return Number(v);
+}
+
 // ── 配置 ─────────────────────────────────────────────────────
 const cfg = {
   erpBaseUrl: (process.env.ERP_BASE_URL || 'http://127.0.0.1:3001').replace(/\/$/, ''),
@@ -57,19 +66,24 @@ const cfg = {
   profileDir: path.resolve(__dirname, process.env.PROFILE_DIR || '.ozon-profile'),
   lockFile: path.join(__dirname, '.price-watch.lock'),
 
-  // 任务:一轮领多少 SKU(0=不限,一次领完);FORCE=1 忽略 24h 去重
-  taskLimit: Number(process.env.TASK_LIMIT) || 100,
+  // 任务:总上限(0=不限,跑完整个待采集合);FORCE=1 忽略 24h 去重强制重采
+  // PW_ 前缀:与深采 TASK_LIMIT 解耦(.env 同文件重复键后值覆盖前值,曾互相干扰)
+  taskLimit: numEnv('PW_TASK_LIMIT', 100),
+  // 分批:每批领取 SKU 数(≤500,后端钳制);批间随机等待,降低连续批量访问的指纹
+  batchSize: numEnv('PW_BATCH_SIZE', 100),
+  batchIntervalMinMs: numEnv('PW_BATCH_INTERVAL_MIN_MS', 120000),
+  batchIntervalMaxMs: numEnv('PW_BATCH_INTERVAL_MAX_MS', 300000),
   force: process.env.FORCE === '1',
   storeFilter: process.env.STORE_FILTER || '', // 仅采指定 storeId(空=全部店铺)
   dryRun: process.env.DRY_RUN === '1',
   logSku: process.env.LOG_SKU === '1',
 
-  // 节流(反爬拟人化,价格监控比深采轻,间隔可短些)
-  skuIntervalMinMs: Number(process.env.SKU_INTERVAL_MIN_MS) || 3000,
-  skuIntervalMaxMs: Number(process.env.SKU_INTERVAL_MAX_MS) || 8000,
+  // 节流(反爬拟人化,价格监控比深采轻,间隔可短些;PW_ 前缀与深采解耦)
+  skuIntervalMinMs: Number(process.env.PW_SKU_INTERVAL_MIN_MS) || 3000,
+  skuIntervalMaxMs: Number(process.env.PW_SKU_INTERVAL_MAX_MS) || 8000,
 
-  // 熔断/恢复
-  antibotWaitMs: Number(process.env.ANTIBOT_WAIT_MS) || 600000,
+  // 熔断/恢复(PW_ 前缀与深采解耦)
+  antibotWaitMs: Number(process.env.PW_ANTIBOT_WAIT_MS) || 600000,
   challengeWaitMs: Number(process.env.CHALLENGE_WAIT_MS) || 15000,
   // 连续 antibot 上限(价格监控非关键链路,达到即退出,下次再跑)
   antibotMax: Number(process.env.ANTIBOT_MAX) || 3,
@@ -85,7 +99,7 @@ const cfg = {
 };
 
 if (cfg.skuIntervalMinMs > cfg.skuIntervalMaxMs) {
-  console.error(`[配置错误] SKU_INTERVAL_MIN_MS(${cfg.skuIntervalMinMs}) > MAX(${cfg.skuIntervalMaxMs})`);
+  console.error(`[配置错误] PW_SKU_INTERVAL_MIN_MS(${cfg.skuIntervalMinMs}) > MAX(${cfg.skuIntervalMaxMs})`);
   process.exit(1);
 }
 if (!cfg.erpApiKey) {
@@ -455,7 +469,8 @@ async function main() {
   console.log('=== 价格优势监控采集(ERP API 数据通道) ===');
   console.log(`ERP:       ${cfg.erpBaseUrl}`);
   console.log(`Profile:   ${cfg.profileDir}`);
-  console.log(`无头:      ${cfg.headless}  干跑: ${cfg.dryRun}  任务上限: ${cfg.taskLimit}`);
+  console.log(`无头:      ${cfg.headless}  干跑: ${cfg.dryRun}  任务上限: ${cfg.taskLimit === 0 ? '不限' : cfg.taskLimit}`);
+  console.log(`批次:      每批 ${cfg.batchSize} 个,批间 ${Math.round(cfg.batchIntervalMinMs / 1000)}-${Math.round(cfg.batchIntervalMaxMs / 1000)}s 随机`);
   console.log(`SKU间隔:   ${cfg.skuIntervalMinMs}-${cfg.skuIntervalMaxMs}ms 随机  强制重采: ${cfg.force}`);
 
   acquireFileLock(cfg.lockFile, 'price-watch');
@@ -493,88 +508,115 @@ async function main() {
     }
     console.log('[1/4] ERP 连通正常,x-api-key 校验通过');
 
-    // 2. 领取任务(派生视图:product_data_cache 实时计算,24h 成功去重)
-    const taskQ = new URLSearchParams({ limit: String(cfg.taskLimit) });
-    if (cfg.force) taskQ.set('force', '1');
-    if (cfg.storeFilter) taskQ.set('storeId', cfg.storeFilter);
-    const tasksResp = await erpFetch('GET', '/admin/api/price-watch/tasks?' + taskQ.toString());
-    const tasks = tasksResp?.items || [];
-    console.log(`\n[2/4] 领取任务:${tasks.length} 个 SKU`);
-    if (!tasks.length) {
-      console.log('[退出] 无待采 SKU(全部已采或缓存为空;FORCE=1 可强制重采)');
-      return;
-    }
-    // 各店铺价格缓存新鲜度提醒(过旧会误判优势)
-    for (const s of tasksResp?.syncInfo || []) {
-      const ageH = s.lastSyncAt ? Math.round((Date.now() - Date.parse(s.lastSyncAt)) / 3600000) : null;
-      const flag = ageH != null && ageH > 48 ? ' ⚠ 价格缓存超过48h,建议先同步商品' : '';
-      console.log(`    ${s.storeId || '(未归属)'}: ${s.skuCount} SKU,缓存 ${s.lastSyncAt || '无'}${flag}`);
-    }
-
     // 端点耗时监控初始化(script 码 price-watch,白名单已注册)
     initMetrics({ script: 'price-watch', erpBaseUrl: cfg.erpBaseUrl, erpApiKey: cfg.erpApiKey, profileDir: cfg.profileDir });
 
-    // 3. 启动浏览器 + warmup
-    console.log('\n[3/4] 启动 stealth 浏览器...');
+    // 2. 启动浏览器 + warmup
+    console.log('\n[2/4] 启动 stealth 浏览器...');
     await launchBrowser();
     await warmup();
-    console.log('[3/4] warmup 完成,买家页 cookie 就绪');
+    console.log('[2/4] warmup 完成,买家页 cookie 就绪');
 
-    // 4. 主循环(单页模型:只有 buyerPage)
-    console.log('\n[4/4] 开始采集...');
+    // 3. 分批领取 + 采集(每批 PW_BATCH_SIZE 个,批间随机间隔;
+    //    后端 24h 成功去重保证下一批领到的是未采 SKU,天然续传)
+    console.log('\n[3/4] 开始采集...');
     const pending = [];
-    for (const [idx, task] of tasks.entries()) {
-      if (interrupted) break;
+    let fetchedTotal = 0;
+    let stopAll = false; // ANTIBOT 连续超限等致命情形,跳出全部批次
+    let batchNo = 0;
 
-      const elapsed = Math.round((Date.now() - startTime) / 1000);
-      console.log(`\n[#${stats.processed + 1}] sku=${task.sku} myPrice=${task.myPrice ?? '-'} (${elapsed}s)`);
+    while (!interrupted && !stopAll) {
+      // 本批领取数:批次大小 ∩ 总上限余量
+      const remaining = cfg.taskLimit === 0
+        ? cfg.batchSize
+        : Math.min(cfg.batchSize, cfg.taskLimit - fetchedTotal);
+      if (remaining <= 0) break;
 
-      const r = await collectOne(task);
-      stats.processed++;
-      if (r.status === 'ok') {
-        const cnt = r.item.followSellData?.count ?? 0;
-        if (cnt > 0) stats.ok++;
-        else stats.empty++;
-        if (cfg.logSku) {
-          const sellers = r.item.followSellData?.sellers || [];
-          const prices = sellers.map((s) => s?.price?.cardPrice?.price ?? '').filter(Boolean).slice(0, 5);
-          console.log(`      跟卖 ${cnt} 家  价样: ${prices.join(' | ') || '—'}`);
-        }
-      } else {
-        stats.error++;
-        console.log(`    失败: ${r.item.errorReason}`);
+      const taskQ = new URLSearchParams({ limit: String(remaining) });
+      if (cfg.force) taskQ.set('force', '1');
+      if (cfg.storeFilter) taskQ.set('storeId', cfg.storeFilter);
+      const tasksResp = await erpFetch('GET', '/admin/api/price-watch/tasks?' + taskQ.toString());
+      const tasks = tasksResp?.items || [];
+      batchNo++;
+      if (!tasks.length) {
+        console.log(`\n[批次${batchNo}] 无待采 SKU(全部已采或缓存为空;FORCE=1 可强制重采)`);
+        break;
       }
-      pending.push(r.item);
+      fetchedTotal += tasks.length;
+      console.log(`\n[批次${batchNo}] 领取 ${tasks.length} 个(累计 ${fetchedTotal}${cfg.taskLimit > 0 ? '/' + cfg.taskLimit : ',不限'})`);
 
-      // 批量上报
-      if (pending.length >= cfg.reportBatchSize) {
-        await reportBatch(pending.splice(0));
+      // 各店铺价格缓存新鲜度提醒(过旧会误判优势;每批都提示,提醒同步)
+      for (const s of tasksResp?.syncInfo || []) {
+        const ageH = s.lastSyncAt ? Math.round((Date.now() - Date.parse(s.lastSyncAt)) / 3600000) : null;
+        const flag = ageH != null && ageH > 48 ? ' ⚠ 价格缓存超过48h,建议先同步商品' : '';
+        console.log(`    ${s.storeId || '(未归属)'}: ${s.skuCount} SKU,缓存 ${s.lastSyncAt || '无'}${flag}`);
       }
 
-      // ANTIBOT 信号处理:等待熔断窗口后 warmup;连续超限退出(价格监控可下次再跑)
-      // 已是最后一个任务时跳过等待(等完也无事可做)
-      const hasMore = idx < tasks.length - 1;
-      if (r.signal === 'ANTIBOT' && !interrupted && hasMore) {
-        stats.antibot++;
-        if (stats.antibot >= cfg.antibotMax) {
-          console.error(`[ANTIBOT] 已触发 ${stats.antibot} 次,退出(剩余 SKU 下次运行继续)`);
-          break;
-        }
-        console.warn(`[ANTIBOT] 触发反爬,熔断 ${Math.round(cfg.antibotWaitMs / 1000)}s,预计恢复 ${fmtNext(cfg.antibotWaitMs)}`);
-        const deadline = Date.now() + cfg.antibotWaitMs;
-        while (Date.now() < deadline && !interrupted) await sleep(1000);
+      // 本批满额且未达总上限 → 大概率还有后续批次(影响 ANTIBOT 等待与批间节流)
+      const expectMore = tasks.length === remaining
+        && (cfg.taskLimit === 0 || fetchedTotal < cfg.taskLimit);
+
+      for (const [idx, task] of tasks.entries()) {
         if (interrupted) break;
-        try {
-          await warmup();
-        } catch (e) {
-          console.warn('[ANTIBOT] 恢复 warmup 失败:', e?.message || e);
+
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        console.log(`\n[#${stats.processed + 1}] sku=${task.sku} myPrice=${task.myPrice ?? '-'} (${elapsed}s)`);
+
+        const r = await collectOne(task);
+        stats.processed++;
+        if (r.status === 'ok') {
+          const cnt = r.item.followSellData?.count ?? 0;
+          if (cnt > 0) stats.ok++;
+          else stats.empty++;
+          if (cfg.logSku) {
+            const sellers = r.item.followSellData?.sellers || [];
+            const prices = sellers.map((s) => s?.price?.cardPrice?.price ?? '').filter(Boolean).slice(0, 5);
+            console.log(`      跟卖 ${cnt} 家  价样: ${prices.join(' | ') || '—'}`);
+          }
+        } else {
+          stats.error++;
+          console.log(`    失败: ${r.item.errorReason}`);
+        }
+        pending.push(r.item);
+
+        // 批量上报
+        if (pending.length >= cfg.reportBatchSize) {
+          await reportBatch(pending.splice(0));
+        }
+
+        // ANTIBOT 信号处理:等待熔断窗口后 warmup;连续超限退出(价格监控可下次再跑)
+        // 本批最后一个 SKU 但后续还有批次时,同样需要熔断等待
+        const hasMore = idx < tasks.length - 1 || expectMore;
+        if (r.signal === 'ANTIBOT' && !interrupted && hasMore) {
+          stats.antibot++;
+          if (stats.antibot >= cfg.antibotMax) {
+            console.error(`[ANTIBOT] 已触发 ${stats.antibot} 次,退出(剩余 SKU 下次运行继续)`);
+            stopAll = true;
+            break;
+          }
+          console.warn(`[ANTIBOT] 触发反爬,熔断 ${Math.round(cfg.antibotWaitMs / 1000)}s,预计恢复 ${fmtNext(cfg.antibotWaitMs)}`);
+          const deadline = Date.now() + cfg.antibotWaitMs;
+          while (Date.now() < deadline && !interrupted) await sleep(1000);
+          if (interrupted) break;
+          try {
+            await warmup();
+          } catch (e) {
+            console.warn('[ANTIBOT] 恢复 warmup 失败:', e?.message || e);
+          }
+        }
+
+        // SKU 间隔节流(输出下一次采集时间;批内最后一个 SKU 交给批间间隔,不重复等)
+        if (!interrupted && idx < tasks.length - 1) {
+          const waitMs = randInt(cfg.skuIntervalMinMs, cfg.skuIntervalMaxMs);
+          console.log(`    下一SKU预计 ${fmtNext(waitMs)}(等待 ${Math.round(waitMs / 1000)}s)`);
+          await sleep(waitMs);
         }
       }
 
-      // SKU 间隔节流(输出下一次采集时间;最后一个 SKU 无需等待)
-      if (!interrupted && idx < tasks.length - 1) {
-        const waitMs = randInt(cfg.skuIntervalMinMs, cfg.skuIntervalMaxMs);
-        console.log(`    下一SKU预计 ${fmtNext(waitMs)}(等待 ${Math.round(waitMs / 1000)}s)`);
+      // 批间随机间隔(仅当大概率还有下一批且未中断/未熔断退出)
+      if (expectMore && !interrupted && !stopAll) {
+        const waitMs = randInt(cfg.batchIntervalMinMs, cfg.batchIntervalMaxMs);
+        console.log(`\n[批次间隔] 批次${batchNo} 完成,等待 ${Math.round(waitMs / 1000)}s,批次${batchNo + 1} 预计 ${fmtNext(waitMs)}`);
         await sleep(waitMs);
       }
     }
