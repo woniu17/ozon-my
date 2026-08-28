@@ -13,6 +13,9 @@
 // 可选环境变量(见 .env;调优类变量加 PW_ 前缀,避免与深采同名变量互相覆盖):
 //   分批采集:PW_TASK_LIMIT 总上限(0=不限) / PW_BATCH_SIZE 每批个数(≤500) /
 //            PW_BATCH_INTERVAL_MIN/MAX_MS 批间随机等待;批内 SKU 间隔 PW_SKU_INTERVAL_*
+//   多实例:  直接多开即可(不同机器,或同机各自 PROFILE_DIR)。任务领取走 POST claim
+//            原子抢占(ERP 侧 claims 表),同一 SKU 不会被两个实例采;
+//            实例退出自动 release,崩溃未释放的靠 PW_CLAIM_TTL_MIN 过期回池
 // Linux/macOS(bash):
 //   PW_TASK_LIMIT=10 DRY_RUN=1 node price-watch-collect.js   # 小批量干跑
 //   PW_TASK_LIMIT=10 node price-watch-collect.js             # 小批量落库
@@ -25,6 +28,7 @@
 
 import { launchPersistentContext } from 'cloakbrowser';
 import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initMetrics, addMetric, finalizeMetrics } from './metrics.js';
@@ -64,7 +68,6 @@ const cfg = {
   erpFailMax: Number(process.env.ERP_FAIL_MAX) || 5,
 
   profileDir: path.resolve(__dirname, process.env.PROFILE_DIR || '.ozon-profile'),
-  lockFile: path.join(__dirname, '.price-watch.lock'),
 
   // 任务:总上限(0=不限,跑完整个待采集合);FORCE=1 忽略 24h 去重强制重采
   // PW_ 前缀:与深采 TASK_LIMIT 解耦(.env 同文件重复键后值覆盖前值,曾互相干扰)
@@ -73,6 +76,8 @@ const cfg = {
   batchSize: numEnv('PW_BATCH_SIZE', 100),
   batchIntervalMinMs: numEnv('PW_BATCH_INTERVAL_MIN_MS', 120000),
   batchIntervalMaxMs: numEnv('PW_BATCH_INTERVAL_MAX_MS', 300000),
+  // 领取锁 TTL(分钟):claim 过期前其他实例不可领同一 SKU;须覆盖整批耗时+熔断余量
+  claimTtlMin: numEnv('PW_CLAIM_TTL_MIN', 120),
   force: process.env.FORCE === '1',
   storeFilter: process.env.STORE_FILTER || '', // 仅采指定 storeId(空=全部店铺)
   dryRun: process.env.DRY_RUN === '1',
@@ -97,6 +102,9 @@ const cfg = {
 
   headless: process.env.HEADLESS !== '0',
 };
+
+// 多实例身份:claim/release/report 凭此标识;同机多实例共用同一 ERP 各自领取
+const instanceId = `pw-${os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 12)}-${process.pid}-${Math.random().toString(36).slice(2, 6)}`;
 
 if (cfg.skuIntervalMinMs > cfg.skuIntervalMaxMs) {
   console.error(`[配置错误] PW_SKU_INTERVAL_MIN_MS(${cfg.skuIntervalMinMs}) > MAX(${cfg.skuIntervalMaxMs})`);
@@ -460,7 +468,7 @@ async function reportBatch(items) {
     console.log(`[干跑] 跳过上报 ${items.length} 条`);
     return;
   }
-  const r = await erpFetch('POST', '/admin/api/price-watch/report', { items });
+  const r = await erpFetch('POST', '/admin/api/price-watch/report', { instanceId, items });
   console.log(`[上报] ${items.length} 条 → inserted=${r?.inserted} skipped=${r?.skipped}`);
 }
 
@@ -468,13 +476,14 @@ async function reportBatch(items) {
 async function main() {
   console.log('=== 价格优势监控采集(ERP API 数据通道) ===');
   console.log(`ERP:       ${cfg.erpBaseUrl}`);
+  console.log(`实例:      ${instanceId}(claim 抢占式领取,多实例可并行)`);
   console.log(`Profile:   ${cfg.profileDir}`);
   console.log(`无头:      ${cfg.headless}  干跑: ${cfg.dryRun}  任务上限: ${cfg.taskLimit === 0 ? '不限' : cfg.taskLimit}`);
-  console.log(`批次:      每批 ${cfg.batchSize} 个,批间 ${Math.round(cfg.batchIntervalMinMs / 1000)}-${Math.round(cfg.batchIntervalMaxMs / 1000)}s 随机`);
+  console.log(`批次:      每批 ${cfg.batchSize} 个,批间 ${Math.round(cfg.batchIntervalMinMs / 1000)}-${Math.round(cfg.batchIntervalMaxMs / 1000)}s 随机,claim TTL ${cfg.claimTtlMin}min`);
   console.log(`SKU间隔:   ${cfg.skuIntervalMinMs}-${cfg.skuIntervalMaxMs}ms 随机  强制重采: ${cfg.force}`);
 
-  acquireFileLock(cfg.lockFile, 'price-watch');
-  // profile 跨脚本锁(与浅采/深采共用 profile 时互斥)
+  // 多实例模式:不再持有脚本级单实例锁(允许并行);profile 目录锁仍互斥
+  // (同机多实例需各自 PROFILE_DIR;跨机器天然独立)
   mkdirSync(cfg.profileDir, { recursive: true });
   const profileLock = path.join(cfg.profileDir, 'browser.lock');
   acquireFileLock(profileLock, 'profile(另一采集进程)');
@@ -517,8 +526,8 @@ async function main() {
     await warmup();
     console.log('[2/4] warmup 完成,买家页 cookie 就绪');
 
-    // 3. 分批领取 + 采集(每批 PW_BATCH_SIZE 个,批间随机间隔;
-    //    后端 24h 成功去重保证下一批领到的是未采 SKU,天然续传)
+    // 3. 分批原子领取 + 采集(POST claim 抢占,多实例互不重复;
+    //    24h 成功去重兜底;claim TTL 过期自动回池)
     console.log('\n[3/4] 开始采集...');
     const pending = [];
     let fetchedTotal = 0;
@@ -532,18 +541,19 @@ async function main() {
         : Math.min(cfg.batchSize, cfg.taskLimit - fetchedTotal);
       if (remaining <= 0) break;
 
-      const taskQ = new URLSearchParams({ limit: String(remaining) });
-      if (cfg.force) taskQ.set('force', '1');
-      if (cfg.storeFilter) taskQ.set('storeId', cfg.storeFilter);
-      const tasksResp = await erpFetch('GET', '/admin/api/price-watch/tasks?' + taskQ.toString());
+      const claimBody = { instanceId, count: remaining, claimTtlMin: cfg.claimTtlMin };
+      if (cfg.force) claimBody.force = '1';
+      if (cfg.storeFilter) claimBody.storeId = cfg.storeFilter;
+      const tasksResp = await erpFetch('POST', '/admin/api/price-watch/claim', claimBody);
       const tasks = tasksResp?.items || [];
       batchNo++;
       if (!tasks.length) {
-        console.log(`\n[批次${batchNo}] 无待采 SKU(全部已采或缓存为空;FORCE=1 可强制重采)`);
+        console.log(`\n[批次${batchNo}] 无待采 SKU(全部已采/被领或缓存为空;FORCE=1 可强制重采)`);
         break;
       }
       fetchedTotal += tasks.length;
-      console.log(`\n[批次${batchNo}] 领取 ${tasks.length} 个(累计 ${fetchedTotal}${cfg.taskLimit > 0 ? '/' + cfg.taskLimit : ',不限'})`);
+      const contested = remaining - tasks.length;
+      console.log(`\n[批次${batchNo}] 领取 ${tasks.length} 个(累计 ${fetchedTotal}${cfg.taskLimit > 0 ? '/' + cfg.taskLimit : ',不限'}${contested > 0 ? `,${contested} 个被其他实例抢走` : ''})`);
 
       // 各店铺价格缓存新鲜度提醒(过旧会误判优势;每批都提示,提醒同步)
       for (const s of tasksResp?.syncInfo || []) {
@@ -631,10 +641,17 @@ async function main() {
     console.log(`  耗时: ${Math.round((Date.now() - startTime) / 1000)}s`);
     if (interrupted) console.log('  (被中断;已采 SKU 已上报,未采 SKU 下次运行自动续上)');
 
+    // 释放本实例剩余 claims(中断/熔断退出时未上报的任务立即回池;
+    // 释放失败无害:TTL 过期后自动回池)
+    if (!cfg.dryRun) {
+      try {
+        const r = await erpFetch('POST', '/admin/api/price-watch/release', { instanceId });
+        if (r?.released > 0) console.log(`  释放未完成 claims: ${r.released} 个(已回池)`);
+      } catch { /* 忽略 */ }
+    }
     try { await browser?.close(); } catch { /* 忽略 */ }
     try { await finalizeMetrics(); } catch { /* 忽略 */ }
     releaseFileLock(profileLock);
-    releaseFileLock(cfg.lockFile);
   }
 }
 
@@ -642,6 +659,5 @@ main().catch((e) => {
   console.error('\n致命错误:', e);
   try { browser?.close?.(); } catch { /* 忽略 */ }
   try { releaseFileLock(path.join(cfg.profileDir, 'browser.lock')); } catch { /* 忽略 */ }
-  try { releaseFileLock(cfg.lockFile); } catch { /* 忽略 */ }
   process.exit(1);
 });

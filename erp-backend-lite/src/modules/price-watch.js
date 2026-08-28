@@ -96,10 +96,7 @@ function computeMetrics(myPrice, sellers) {
 
 // ── GET /admin/api/price-watch/tasks ────────────────────────
 // query: ?limit=100&force=1&storeId=
-//   limit=0 表示不限(全量);其余值钳制在 [1,500]
-//   仅取 saleable 商品(is_created=1 且 has_stock=1,买家页才有有效报价)
-//   24h 内已有 status='ok'/'empty' 快照的 SKU 跳过(force=1 忽略去重)
-//   按 product_data_cache.fetched_at 升序(价格缓存最旧的优先,多轮运行自然轮转)
+//   仅查看待采任务(派生实时计算,不产生领取记录);多实例执行请用 POST claim
 router.get('/admin/api/price-watch/tasks', (req, res, next) => {
   try {
     const rawLimit = Number(req.query.limit);
@@ -160,15 +157,127 @@ router.get('/admin/api/price-watch/tasks', (req, res, next) => {
   }
 });
 
+// ── POST /admin/api/price-watch/claim ───────────────────────
+// 多实例原子领取:body { instanceId, count, storeId?, force?, claimTtlMin? }
+// 流程(单事务):清过期 claims → SELECT 候选(派生条件+24h去重+排除在持 claims)
+//   → 逐条 INSERT OR IGNORE(主键冲突=被他人抢走,跳过)→ 返回实际领到的
+// TTL:默认 120min(整批 100 个×35s≈1h + 熔断余量);实例崩溃未释放的过期自动回池
+router.post('/admin/api/price-watch/claim', (req, res, next) => {
+  try {
+    const instanceId = String(req.body?.instanceId || '').trim().slice(0, 64);
+    if (!instanceId) {
+      return res.status(400).json({ ok: false, error: 'instanceId 不能为空' });
+    }
+    const count = Math.min(500, Math.max(1, Number(req.body?.count) || 100));
+    const force = req.body?.force === '1' || req.body?.force === true;
+    const claimTtlMin = Math.min(1440, Math.max(10, Number(req.body?.claimTtlMin) || 120));
+    const storeId = String(req.body?.storeId || '').trim();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + claimTtlMin * 60000).toISOString();
+
+    const where = [
+      "COALESCE(json_extract(data, '$.statuses.is_created'), 0) = 1",
+      "COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 1",
+    ];
+    const params = [];
+    if (storeId) {
+      where.push('store_id = ?');
+      params.push(storeId);
+    }
+    if (!force) {
+      where.push(
+        `sku NOT IN (SELECT sku FROM price_watch_snapshots
+                     WHERE status IN ('ok', 'empty')
+                       AND fetched_at > datetime('now', '-1 day'))`
+      );
+    }
+    // 排除其他实例在持(未过期)的任务;自己的旧 claim 也排除(防重复领取未完成的)
+    where.push('sku NOT IN (SELECT sku FROM price_watch_claims WHERE expires_at > ?)');
+    params.push(now.toISOString());
+
+    const claimStmt = db.prepare(
+      'INSERT OR IGNORE INTO price_watch_claims (sku, instance_id, claimed_at, expires_at) VALUES (?, ?, ?, ?)'
+    );
+    const claimed = [];
+    db.exec('BEGIN');
+    try {
+      // 顺带清理过期 claims(回池)
+      db.prepare('DELETE FROM price_watch_claims WHERE expires_at <= ?').run(now.toISOString());
+      // 多取 2 倍候选:部分会被并发实例抢走(INSERT 失败),保证尽量领满
+      const candidates = db
+        .prepare(
+          `SELECT sku, store_id, fetched_at, data FROM product_data_cache
+           WHERE ${where.join(' AND ')}
+           ORDER BY fetched_at ASC
+           LIMIT ?`
+        )
+        .all(...params, count * 2);
+      for (const r of candidates) {
+        if (claimed.length >= count) break;
+        const ret = claimStmt.run(r.sku, instanceId, now.toISOString(), expiresAt);
+        if (ret.changes === 1) claimed.push(r);
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+
+    const items = claimed.map((r) => {
+      let data = null;
+      try { data = JSON.parse(r.data); } catch { /* 容错:data 损坏时价格置空 */ }
+      return {
+        sku: r.sku,
+        storeId: r.store_id || '',
+        name: data?.name || '',
+        myPrice: extractMyPrice(data),
+        priceFetchedAt: r.fetched_at,
+      };
+    });
+    const syncInfo = db
+      .prepare(
+        `SELECT store_id AS storeId, MAX(fetched_at) AS lastSyncAt, COUNT(*) AS skuCount
+         FROM product_data_cache GROUP BY store_id`
+      )
+      .all();
+    return res.json(ok({ items, syncInfo, expiresAt, poolDrained: items.length < count }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[price-watch] claim failed');
+    next(e);
+  }
+});
+
+// ── POST /admin/api/price-watch/release ─────────────────────
+// 实例退出时释放自己全部在持 claims(正常收尾/SIGINT/熔断退出;崩溃场景靠 TTL 过期回池)
+// body: { instanceId }
+router.post('/admin/api/price-watch/release', (req, res, next) => {
+  try {
+    const instanceId = String(req.body?.instanceId || '').trim().slice(0, 64);
+    if (!instanceId) {
+      return res.status(400).json({ ok: false, error: 'instanceId 不能为空' });
+    }
+    const ret = db.prepare('DELETE FROM price_watch_claims WHERE instance_id = ?').run(instanceId);
+    return res.json(ok({ released: ret.changes }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[price-watch] release failed');
+    next(e);
+  }
+});
+
 // ── POST /admin/api/price-watch/report ──────────────────────
-// body: { items: [{ sku, fetchedAt, ok, errorReason?, followSellData?: { count, sellers, source } }] }
+// body: { instanceId?, items: [{ sku, fetchedAt, ok, errorReason?, followSellData?: { count, sellers, source } }] }
 // 服务端写入时从 product_data_cache 实时读我的价格并计算对比指标(不信任脚本侧价格)
+// 带 instanceId 时:上报成功的 SKU 同事务释放其 claim(立即可被其他流程查询/池回收)
 router.post('/admin/api/price-watch/report', (req, res, next) => {
   try {
     const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, BATCH_LIMIT) : [];
     if (items.length === 0) {
       return res.status(400).json({ ok: false, error: 'items 不能为空' });
     }
+    const instanceId = String(req.body?.instanceId || '').trim().slice(0, 64);
+    const releaseStmt = db.prepare(
+      'DELETE FROM price_watch_claims WHERE sku = ? AND instance_id = ?'
+    );
     const insertStmt = db.prepare(
       `INSERT INTO price_watch_snapshots
         (sku, store_id, my_price, seller_count, min_price, median_price, avg_price,
@@ -225,6 +334,7 @@ router.post('/admin/api/price-watch/report', (req, res, next) => {
           );
         }
         inserted++;
+        if (instanceId) releaseStmt.run(sku, instanceId);
       }
       db.exec('COMMIT');
     } catch (e) {
@@ -366,7 +476,15 @@ router.get('/admin/api/price-watch/stats', (req, res, next) => {
          FROM product_data_cache GROUP BY store_id`
       )
       .all();
-    return res.json(ok({ dist, syncInfo }));
+    // 多实例领取概况(在持 claims 分布;过期未释放的靠 TTL 回池)
+    const claims = db
+      .prepare(
+        `SELECT instance_id AS instanceId, COUNT(*) AS holding,
+                MIN(claimed_at) AS since, MIN(expires_at) AS earliestExpiry
+         FROM price_watch_claims GROUP BY instance_id ORDER BY holding DESC`
+      )
+      .all();
+    return res.json(ok({ dist, syncInfo, claims }));
   } catch (e) {
     logger.warn({ err: e.message }, '[price-watch] stats failed');
     next(e);

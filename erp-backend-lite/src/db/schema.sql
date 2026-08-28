@@ -870,3 +870,13 @@ CREATE TABLE IF NOT EXISTS price_watch_snapshots (
 CREATE INDEX IF NOT EXISTS idx_pws_sku_time ON price_watch_snapshots(sku, fetched_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pws_time     ON price_watch_snapshots(fetched_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pws_store    ON price_watch_snapshots(store_id, fetched_at DESC);
+
+-- 多实例任务领取锁:一个 SKU 同一时刻只能被一个实例持有(主键原子抢占);
+-- report 成功/实例 release 释放;实例崩溃未释放的靠 expires_at 过期自动回池
+CREATE TABLE IF NOT EXISTS price_watch_claims (
+  sku          TEXT PRIMARY KEY,
+  instance_id  TEXT NOT NULL,        -- 领取实例(pw-<host>-<pid>-<rand>)
+  claimed_at   TEXT NOT NULL,        -- 领取时间(ISO8601)
+  expires_at   TEXT NOT NULL         -- 过期时间(默认领取+120min;过期可被重新领取)
+);
+CREATE INDEX IF NOT EXISTS idx_pwc_instance ON price_watch_claims(instance_id);
