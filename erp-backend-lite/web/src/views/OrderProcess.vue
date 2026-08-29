@@ -378,17 +378,25 @@ function operateTag(pkg) {
   return o;
 }
 
-// 剩余发货倒计时(cutoff = shipment_date)
+// 每秒刷新的当前时间(驱动剩发倒计时秒级跳动)
+const nowTs = ref(Date.now());
+
+// 剩余发货倒计时(cutoff = shipment_date,精确到秒,依赖 nowTs 每秒重算)
 function countdown(pkg) {
   if (!pkg.shipmentDate) return null;
   const end = new Date(pkg.shipmentDate).getTime();
   if (isNaN(end)) return null;
-  const diff = end - Date.now();
+  const diff = end - nowTs.value;
   const abs = Math.abs(diff);
   const days = Math.floor(abs / 86400000);
   const hours = Math.floor((abs % 86400000) / 3600000);
   const mins = Math.floor((abs % 3600000) / 60000);
-  const text = days > 0 ? `${days}天${hours}时` : hours > 0 ? `${hours}时${mins}分` : `${mins}分`;
+  const secs = Math.floor((abs % 60000) / 1000);
+  const text = days > 0
+    ? `${days}天${hours}小时${mins}分${secs}秒`
+    : hours > 0
+      ? `${hours}小时${mins}分${secs}秒`
+      : `${mins}分${secs}秒`;
   return { overdue: diff < 0, text };
 }
 
@@ -412,14 +420,17 @@ const detailItems = computed(() => detail.value?.items || []);
 const detailLinks = computed(() => detail.value?.purchaseLinks || []);
 
 let statusTimer = null;
+let tickTimer = null;
 onMounted(() => {
   loadTabs();
   loadList();
   loadSyncStatus();
   statusTimer = setInterval(loadSyncStatus, 30_000);
+  tickTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
 });
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer);
+  if (tickTimer) clearInterval(tickTimer);
 });
 </script>
 
@@ -507,6 +518,7 @@ onUnmounted(() => {
         <thead>
           <tr>
             <th class="col-product">产品信息</th>
+            <th class="col-qty">数量</th>
             <th class="col-order">订单信息</th>
             <th class="col-amount">金额(利润)</th>
             <th class="col-purchase">采购信息</th>
@@ -516,7 +528,7 @@ onUnmounted(() => {
         </thead>
         <tbody>
           <tr v-if="!rows.length">
-            <td colspan="6" class="empty">{{ loading ? '加载中…' : (globalSearch.active ? '全局搜索未命中包裹' : '暂无订单(点击右上角「同步订单」拉取 Ozon 订单)') }}</td>
+            <td colspan="7" class="empty">{{ loading ? '加载中…' : (globalSearch.active ? '全局搜索未命中包裹' : '暂无订单(点击右上角「同步订单」拉取 Ozon 订单)') }}</td>
           </tr>
           <tr v-for="pkg in rows" :key="pkg.id" class="pkg-row">
             <td class="col-product">
@@ -527,9 +539,14 @@ onUnmounted(() => {
                 <div class="product-main">
                   <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ it.title || '—' }}</a>
                   <div v-else class="product-title">{{ it.title || '—' }}</div>
-                  <div class="product-sub">SKU {{ it.offerId }} × {{ it.quantity }} · {{ fmtMoney(it.price) }}</div>
+                  <div class="product-sub">Offer ID：{{ it.offerId }}</div>
+                  <div class="product-sub">产品单价：{{ fmtMoney(it.price) }}</div>
                 </div>
               </div>
+              <div v-if="!pkg.items?.length" class="muted">—</div>
+            </td>
+            <td class="col-qty">
+              <div v-for="(it, i) in pkg.items" :key="i" class="qty-line" :class="{ 'qty-multi': it.quantity > 1 }">× {{ it.quantity }}</div>
               <div v-if="!pkg.items?.length" class="muted">—</div>
             </td>
             <td class="col-order">
@@ -572,9 +589,10 @@ onUnmounted(() => {
                 <span :class="purchaseTag(pkg).cls" style="margin-left: 4px">{{ purchaseTag(pkg).label }}</span>
                 <span v-if="arrivedTag(pkg)" :class="arrivedTag(pkg).cls" style="margin-left: 4px">{{ arrivedTag(pkg).label }}</span>
               </div>
-              <div class="sub muted">下单 {{ fmtTime(pkg.inProcessAt) }}</div>
+              <div class="sub muted">下单：{{ fmtTime(pkg.inProcessAt) }}</div>
+              <div v-if="pkg.shipmentDate && !pkg.isShipped" class="sub muted">最迟：{{ fmtTime(pkg.shipmentDate) }}</div>
               <div v-if="countdown(pkg) && !pkg.isShipped" class="sub" :class="countdown(pkg).overdue ? 'overdue' : 'countdown'">
-                {{ countdown(pkg).overdue ? '已超时 ' : '剩发 ' }}{{ countdown(pkg).text }}
+                {{ countdown(pkg).overdue ? '已超时：' : '剩发：' }}{{ countdown(pkg).text }}
               </div>
               <div v-if="pkg.isShipped" class="sub muted">已交运 {{ fmtTime(pkg.shippedAt) }}</div>
             </td>
@@ -957,6 +975,26 @@ a.product-title:hover {
   white-space: nowrap;
   font-size: 11px;
   color: var(--text-secondary, #9ca3af);
+}
+
+/* 产品数量列(与产品信息列行间距对齐);数量>1 红色加粗提示采购量 */
+.col-qty {
+  min-width: 48px;
+  max-width: 60px;
+  white-space: nowrap;
+}
+
+.qty-line + .qty-line {
+  margin-top: 6px;
+}
+
+.qty-line {
+  line-height: 70px; /* 与 70×70 产品图垂直对齐 */
+}
+
+.qty-multi {
+  color: #dc2626;
+  font-weight: 700;
 }
 
 .col-order {
