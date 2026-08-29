@@ -49,15 +49,19 @@
 
 * ✅ Ozon FBS（含 rFBS 跨境）订单同步、状态跟踪
 
-* ✅ 采购单手工录入 / 购物车半自动下单 / 关联管理
+* ✅ 采购录入与关联管理：**唯一入口为「提交代打包」**（两种录入模式：快递单号 / 1688采购单号自动补全）
 
 * ✅ 采购物流轨迹同步（国内段）
 
 * ✅ 妙手「订单处理」「采购记录」两页面的复刻
 
+* ❌ 妙手「代发采购」弹窗（1688同款推荐/一键关联/去采购）
+
+* ❌ 妙手「合并采购(1688)」批量聚合下单
+
 * ❌ 妙手「扫描分拣/扫描发货」「货代管理」「Ozon发运单」组包预报（二期）
 
-* ❌ 1688 自动下单/自动付款（妙手依赖其自研浏览器扩展与1688深度授权，复刻采用半自动购物车方案）
+* ❌ 1688 自动下单/自动付款（复刻仅做单号回填与信息补全，不在系统内下单）
 
 ***
 
@@ -269,6 +273,8 @@ Ozon订单 platformOrderSn ──1:1──> opOrderId ──1:N──> opOrderPa
 
 ### 2.3 代发采购弹窗（单包裹采购入口）
 
+> ⚠️ 复刻不纳入（见§1.3），以下仅作妙手调研记录，采购录入统一走「提交代打包」。
+
 点击行内「代发采购」：
 
 ```
@@ -294,6 +300,8 @@ Ozon订单 platformOrderSn ──1:1──> opOrderId ──1:N──> opOrderPa
 * **自动同步采购金额=是**：采购单创建后自动把实付金额回写到订单成本
 
 ### 2.4 合并采购弹窗（批量聚合采购）
+
+> ⚠️ 复刻不纳入（见§1.3），以下仅作妙手调研记录。
 
 全选订单 →「合并采购(1688)」：
 
@@ -405,7 +413,7 @@ Ozon订单 platformOrderSn ──1:1──> opOrderId ──1:N──> opOrderPa
 **为什么以「包裹」为中心**（而非直接订单↔采购单）：
 
 1. Ozon 一张订单可能因分仓拆成多个 posting（`parent_posting_number`），妙手拆成多包裹分别发货
-2. 多张 Ozon 订单的相同产品可合并成一张 1688 采购单（合并采购），成本均分——需要中间层拆账
+2. 多张 Ozon 订单可复用同一张 1688 采购单（一单多关联，实测见§7.1），金额需按关联行分摊——需要中间层拆账
 3. 包裹承载全部操作状态（打单、交运、发货），是页面tab的分流单元
 
 ***
@@ -531,7 +539,7 @@ CREATE TABLE IF NOT EXISTS purchase_order (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   purchase_sn         TEXT,                     -- 上家采购单号(1688:5127660720062029909 / 拼多多:260829-...)
   platform            TEXT NOT NULL,            -- 1688 / pdd / taobao
-  purchase_channel    TEXT DEFAULT 'manual',    -- manual(手工录入) / cart_1688(购物车) / miaoshou_like(代下单)
+  purchase_channel    TEXT DEFAULT 'manual',    -- manual(模式一手工) / 1688_order(模式二单号补全)
   -- 采购账号与上家
   buyer_account       TEXT,                     -- 清祥17
   seller_name         TEXT,                     -- 深圳市嘉龙盛电子有限公司
@@ -557,8 +565,7 @@ CREATE TABLE IF NOT EXISTS purchase_order (
   logistics_no        TEXT,                     -- 韵达435332472136948
   last_trace_at       TEXT,                     -- 最新轨迹时间(异常监控用)
   last_trace_desc     TEXT,
-  -- 采购备注/留言
-  buyer_message       TEXT,                     -- 给商家留言(合并采购)
+  -- 采购备注
   note                TEXT,
   gmt_create          TEXT,
   gmt_modified        TEXT,
@@ -577,8 +584,8 @@ CREATE TABLE IF NOT EXISTS purchase_order_link (
   purchase_order_id   INTEGER NOT NULL REFERENCES purchase_order(id),
   package_id          INTEGER NOT NULL REFERENCES package(id),
   ozon_order_item_id  INTEGER REFERENCES ozon_order_item(id),  -- 可空:包裹级关联(未到行)
-  -- 成本均摊结果（合并采购拆账落点）
-  allocated_amount    REAL DEFAULT 0,           -- 均摊采购金额(含运费)
+  -- 成本分摊结果（一单多关联拆账落点）
+  allocated_amount    REAL DEFAULT 0,           -- 分摊采购金额(含运费)
   allocated_shipping  REAL DEFAULT 0,
   quantity            INTEGER DEFAULT 0,
   gmt_create          TEXT,
@@ -589,7 +596,9 @@ CREATE INDEX IF NOT EXISTS idx_pol_pkg ON purchase_order_link(package_id);
 
 > 设计说明：妙手用 `relateOpOrderItemIds[]` 表达行级关联，本设计拆成独立桥表并增加 `allocated_amount` 均摊列，使「一张采购单服务多包裹」的拆账有明确落点；包裹级/行级关联通过 `ozon_order_item_id` 可空列兼容。
 
-#### `supplier_product` — 货源映射（一键关联的落地）
+#### `supplier_product` — 货源映射（1688采购补全自动积累）
+
+> 数据来源：模式二保存时1688订单详情拉取的 `sourceItemId/sourceSkuId/sourceTitle` 等字段自动落库（见§7.1），无需独立维护入口。用途：采购单展示1688商品图/标题/规格、为后续选品与复购提供数据。
 
 ```sql
 CREATE TABLE IF NOT EXISTS supplier_product (
@@ -598,18 +607,17 @@ CREATE TABLE IF NOT EXISTS supplier_product (
   offer_id            TEXT,                     -- Ozon offer_id（可空=按SKU）
   ozon_sku            INTEGER,
   platform            TEXT NOT NULL,            -- 1688/pdd/taobao
-  source_url          TEXT NOT NULL,            -- https://detail.1688.com/offer/997687875219.html
-  source_item_id      TEXT,                     -- 1688 offerId
+  source_url          TEXT,                     -- https://detail.1688.com/offer/997687875219.html
+  source_item_id      TEXT,                     -- 1688 offerId(采购补全自动写入)
   title               TEXT,
   spec_mapping        TEXT,                     -- {"Цвет товара:белый":"白色","...":"规格映射JSON"}
   price_range         TEXT,                     -- "0.5~0.5"
   recent_sales_30d    INTEGER,
   repurchase_rate     REAL,
-  is_primary          INTEGER DEFAULT 1,        -- 主推货源(自动带出)
   enabled             INTEGER DEFAULT 1,
   gmt_create          TEXT,
   gmt_modified        TEXT,
-  UNIQUE(store_id, COALESCE(offer_id,''), source_url)
+  UNIQUE(store_id, COALESCE(offer_id,''), source_item_id)
 );
 ```
 
@@ -671,11 +679,11 @@ CREATE TABLE IF NOT EXISTS sync_cursor (
 | `logisticsNo`                        | `package.logistics_no`                                  | Ozon跟踪号（`tracking_number`）                                |
 | `appPurchaseStatus 0/2`              | `package.purchase_status none/partial/complete`         | 由 link 表聚合计算                                              |
 | `itemCostDetail.purchaseAmount`      | `ozon_order_item.purchase_amount`                       | 采购均摊回写                                                    |
-| `purchaseOrderSn`                    | `purchase_order.purchase_sn`                            | 1688订单号（人工/购物车回填）                                         |
+| `purchaseOrderSn`                    | `purchase_order.purchase_sn`                            | 模式二录入（模式一无单号）                                             |
 | `purchaseOrderPayment`               | `purchase_order.payment_amount`                         | 人工/自动同步                                                   |
 | `headLogisticsNo`                    | `purchase_order.logistics_no`                           | 采购物流同步                                                    |
 | `relateOpOrderItemIds`               | `purchase_order_link`                                   | 关联操作落库                                                    |
-| `supplierGoodsSku`（一键关联）             | `supplier_product`                                      | 关联货源链接                                                    |
+| `sourceItemId/SkuId/Title`（采购补全）     | `supplier_product`                                      | 模式二保存时自动落库                                                |
 | 关联状态 已关联/已取消                         | `purchase_order.link_status`                            | 取消关联操作                                                    |
 
 ***
@@ -725,7 +733,7 @@ Ozon同步 → [wait_process 待处理]                             │
 
 * `package.purchase_status`：`SELECT count(link)>0` → partial/complete（对照订单行需采数量）
 
-* 筛选标签「未配对SKU」：`ozon_order_item` 无 `supplier_product` 映射且无 link
+* 筛选标签「未配对SKU」：`ozon_order_item` 无 `purchase_order_link` 关联（即未录入采购）
 
 * 「缺货/部分缺货」：采购中上家反馈库存不足（人工标记或1688库存接口）
 
@@ -804,61 +812,23 @@ for store of 启用FBS同步的店铺:
 
 ## 7. 核心功能流程
 
-### 7.1 采购发起（三条路径）
+### 7.1 采购录入与关联（唯一入口：提交代打包）
 
-#### 路径A：代发采购（单包裹，主流程）
-
-```
-入口: 订单行 [代发采购]
-1. 弹窗展示: 包裹号/产品规格/数量 + 已关联货源(supplier_product自动带出)
-2. 货源选择:
-   a. 已有映射 → 直接展示绑定链接
-   b. 无映射 → 展示"1688同款推荐"(见下方货源推荐) → [一键关联]/[去采购]
-3. 用户在1688完成下单(链接下单或购物车)
-4. 回填采购单: 1688订单号 + 实付金额 + (可选)物流单号
-   → 创建 purchase_order + purchase_order_link
-   → 回写 ozon_order_item.purchase_amount
-   → package.purchase_status = complete
-```
-
-**1688同款推荐（MVP实现）**：复用项目已有的 1688 能力（`MY/content/1688-image-search.js`、`alibaba-1688.js`、`cn-source-scraper.js`），以产品图或标题搜索1688同款，返回商品/价格区间/30天销量/复购率供选择。二期可缓存至 `supplier_product`。
-
-#### 路径B：合并采购（批量，降运费）
-
-```
-入口: 勾选多订单 → [合并采购(1688)]
-1. 聚合分组: 按 supplier_product.seller / 货源链接 → 供货商分组
-   未匹配货源的产品 → "以下产品无法采购"区 + [一键移除]
-2. 每组生成预览: 平台产品×数量 vs 1688采购产品
-3. 用户跳转1688购物车统一下单(妙手采购方式之一)
-4. 回填整张采购单(一个1688订单号)
-5. ★成本均分算法:
-   for link in 该采购单关联的所有 ozon_order_item:
-     alloc = purchase.payment_amount * item.qty / total_qty   (按数量均摊)
-     ozon_order_item.purchase_amount += alloc
-   (妙手规则: "下单付款后，会将采购该产品的成本均分至多个平台订单中")
-6. 限制校验: 供货商≤100、每供货商SKU≤50
-```
-
-#### 路径C：采购记录页手工补录
-
-适合已人工在拼多多/淘宝下单的场景：`采购单号+平台+金额+关联包裹` 一步录入，立即建立 link 与金额回写。
-
-#### 路径D：提交代打包（2026-08-29 实测补全，待处理tab行内操作）
+> 2026-08-29 妙手实测补全。采购录入不做代发采购/合并采购/独立补录页，统一收敛到「提交代打包」一个弹窗、两种录入模式。
 
 **入口**：待处理tab行内 `[提交代打包]` 按钮（每个包裹一个）。
 
-**弹窗结构**：
+#### 弹窗结构（两种模式共用骨架）
 
 ```
 ┌ 提交代打包 ─────────────────────────────────────────────┐
-│ 推荐使用妙手1688采购下单功能...（营销位）                    │
 │ 选择服务商: [不使用货代 ▾]  添加货代                        │
 │ 录入方式: ○录入快递单号  ●录入采购信息（自动同步快递单号）     │
 │ ┌ 订单产品 ──────────────────────────────────┐          │
 │ │ [图] x1 产品名  产品规格: 产品颜色：白色        │          │
-│ │ 采购金额(CNY): [9.9__]                      │          │
-│ │ 快递单号: [SF1234567890123__]  物流公司: [顺丰速运__] │      │
+│ │ 采购金额(CNY): [___]  (模式二可留空,走自动同步)  │          │
+│ │ ── 模式一: 快递单号+物流公司 ────────────────  │          │
+│ │ ── 模式二: 下单平台1688+采购单号+账号 ────────── │          │
 │ │ [添加]  (一行产品填完可再加一行)              │          │
 │ └────────────────────────────────────────────┘          │
 │ ⚠ 由于您选择了不使用货代，包裹采购信息将不会推送给货代        │
@@ -866,13 +836,56 @@ for store of 启用FBS同步的店铺:
 └────────────────────────────────────────────────────────┘
 ```
 
-* **录入方式二选一**：`录入快递单号`（只填单号，无金额） / `录入采购信息`（金额+单号，自动同步轨迹）
+#### 模式一：录入快递单号（radio `other`，适合拼多多/淘宝/已发货补登）
+
+表单：`采购金额 + 快递单号 + 物流公司`。
 
 * **校验**：只填金额不填单号 → 提示"此订单出货信息填写不完整，请完善出货信息后再保存"（快递单号必填）
 
-* **无货代模式**：不推送货代（自发货流程）
+* **提交后**：`purchase_order` 创建（`platform=other` 手工，因有快递单号状态视为已发货）；`package.head_logistics_no/company` 回填、`purchase_status=complete`
 
-**提交API链（实测捕获）**：
+* 本质是"采购单极简录入"——不要求上家采购单号，`金额+国内快递单号` 即完成采购关联与出货登记
+
+#### 模式二：录入采购信息（radio `platform`，1688单号自动补全）
+
+表单切换为：
+
+```
+采购金额(CNY): [___]        ← 可留空(自动同步)
+自动同步采购金额: ●是 ○否
+下单平台: 1688 [登录]
+采购单号:   [填1688订单号]  ← ★ 触发自动补全
+采购账号:   [自动带出,可编辑]
+卖家账号:   [自动带出,可编辑]
+```
+
+填单号时"产品实付"框自动变为 `0.00` 占位（表示金额由系统同步而非手填）。
+
+**实测补全链路**（填入 `5127660720062029909` 后点保存）：
+
+1. 提交 `manualRelateOrderPackagePurchaseOrders`，body 中 `purchasePlatform: "1688"`、采购单号、`isAutoRsyncPurchasePayment=1`（金额留空）
+2. **后端拿单号实时调1688开放接口**拉取订单详情并落库，自动补全字段：
+
+| 补全字段                       | 实测值                                                         | 说明                |
+| -------------------------- | ----------------------------------------------------------- | ----------------- |
+| `purchaseOrderPayment`     | 12.80                                                       | 1688实付金额          |
+| `purchaseOrderBuyer`       | 清祥17                                                        | 采购账号（1688登录态）     |
+| `purchaseOrderSeller`      | 深圳市嘉龙盛电子有限公司                                                | 上家                |
+| `purchaseOrderStatus`      | wait\_send                                                  | 1688订单状态          |
+| `purchaseOrderStartTime`   | 2026-08-29 12:56:45                                         | 1688下单时间          |
+| `purchaseOrderFullAddress` | 福建 厦门 …菜鸟驿站                                                 | 1688收货地址          |
+| `purchaseOrderDetailUrl`   | trade.1688.com/order/new\_step\_order\_detail.htm?orderId=… | 订单直链              |
+| `sourceItemId`             | 1007720689392                                               | ★1688商品ID（货源映射积累） |
+| `sourceSkuId`              | 6169636091410                                               | ★1688 SKU ID      |
+| `sourceTitle`              | 迷你版20W30W…数字功放板 502L                                        | 1688商品标题          |
+| `sourceSkuSubName`         | 单功放板                                                        | 1688规格名           |
+| `sourceUnitPrice`          | 13.80                                                       | 1688单价            |
+| `sourcePicUrl`             | cbu01.alicdn.com/…                                          | 1688商品图           |
+| `gmtLastRsync`             | 2026-08-29 18:12:00                                         | 同步时间戳             |
+
+1. 保存后包裹 `appPurchaseStatus=2`、产品行 `itemCostDetail.purchaseAmount` 自动回写
+
+#### 提交API链（实测捕获，两模式共用）
 
 ```
 1. POST /api/order/purchase/getOpOrderPackAddedServiceList   (opOrderId) 弹窗打开时加载
@@ -892,83 +905,42 @@ for store of 启用FBS同步的店铺:
     "opOrderItemIdAndPurchaseOrderInfoMap": {    // ★ 按产品行录入
       "2212382575": {                            // opOrderItemId
         "purchaseOrderPackages": [{
-          "purchaseOrderLogisticsName": "顺丰速运",   // 物流公司
-          "purchaseOrderWaybillCode": "SF1234567890123" // 快递单号
+          "purchaseOrderLogisticsName": "顺丰速运",   // 物流公司(模式一)
+          "purchaseOrderWaybillCode": "SF1234567890123" // 快递单号(模式一)
         }],
         "forwarderId": "0",
         "forwarderInfo": { "purchaseUrl": "" },   // 货源链接(货代模式用)
         "appNote": "",
-        "itemPurchaseAmount": "9.9",              // ★ 采购金额(CNY)
+        "itemPurchaseAmount": "9.9",              // 采购金额(模式一;模式二留空走同步)
         "isAutoRsyncPurchasePayment": "0",        // 自动同步实付
         "forwarderNote": "",
         "isAlibbOfficialService": "0",
-        "purchasePlatform": "other"               // ★ other=手工(非1688渠道)
+        "purchasePlatform": "other"               // ★ other=模式一 / "1688"=模式二
       }
     }
   }]
 }
 ```
 
-**提交后效果（实测）**：
+模式二时追加 `purchaseOrderSn`（1688单号）字段，`purchasePlatform="1688"`，`itemPurchaseAmount` 留空。
 
-* `purchase_order` 创建（platform=other手工，状态视为已发货——因有快递单号）
+**提交后流转**：`checkPackagesIsAutoMoveWaitShip` 判定后，出货信息齐备的包裹自动从待处理 → 待打单发货。
 
-* `package.head_logistics_no/company` 回填、`purchase_status=complete`
-
-* `checkPackagesIsAutoMoveWaitShip` 判定后包裹可能自动从待处理 → 待打单发货（出货信息齐备即流转）
-
-**复刻要点**：路径D本质是"采购单极简录入"——不要求上家采购单号，只需金额+国内快递单号即可完成关联与出货登记。适合淘宝/拼多多等无法自动同步的平台。与路径C互补：C补完整采购单号，D快速登记出货。
-
-#### 路径D2：录入采购信息（1688单号自动补全，2026-08-29 实测补全链路）
-
-"提交代打包"弹窗切换到 **录入采购信息（自动同步快递单号）** 模式（radio `platform`）后，表单变为：
-
-```
-采购金额(CNY): [___]        ← 可留空
-自动同步采购金额: ●是 ○否
-采购信息
-下单平台: 1688 [登录]
-采购单号:   [填1688订单号]  ← ★ 触发自动补全
-采购账号:   [自动带出]
-卖家账号:   [自动带出]
-```
-
-**实测补全链路**（填入 `5127660720062029909` 后点保存）：
-
-1. 提交 `manualRelateOrderPackagePurchaseOrders`，body 中 `purchasePlatform: "1688"`、采购单号、`isAutoRsyncPurchasePayment=1`（金额留空）
-2. **后端拿单号实时调1688开放接口**拉取订单详情并落库，自动补全字段：
-
-| 补全字段                       | 实测值                                                         | 说明            |
-| -------------------------- | ----------------------------------------------------------- | ------------- |
-| `purchaseOrderPayment`     | 12.80                                                       | 1688实付金额      |
-| `purchaseOrderBuyer`       | 清祥17                                                        | 采购账号（1688登录态） |
-| `purchaseOrderSeller`      | 深圳市嘉龙盛电子有限公司                                                | 上家            |
-| `purchaseOrderStatus`      | wait\_send                                                  | 1688订单状态      |
-| `purchaseOrderStartTime`   | 2026-08-29 12:56:45                                         | 1688下单时间      |
-| `purchaseOrderFullAddress` | 福建 厦门 …菜鸟驿站                                                 | 1688收货地址      |
-| `purchaseOrderDetailUrl`   | trade.1688.com/order/new\_step\_order\_detail.htm?orderId=… | 订单直链          |
-| `sourceItemId`             | 1007720689392                                               | ★1688商品ID     |
-| `sourceSkuId`              | 6169636091410                                               | ★1688 SKU ID  |
-| `sourceTitle`              | 迷你版20W30W…数字功放板 502L                                        | 1688商品标题      |
-| `sourceSkuSubName`         | 单功放板                                                        | 1688规格名       |
-| `sourceUnitPrice`          | 13.80                                                       | 1688单价        |
-| `sourcePicUrl`             | cbu01.alicdn.com/…                                          | 1688商品图       |
-| `gmtLastRsync`             | 2026-08-29 18:12:00                                         | 同步时间戳         |
-
-1. 保存后包裹 `appPurchaseStatus=2`、产品行 `itemCostDetail.purchaseAmount` 自动回写
-2. 弹窗填单号时"产品实付"框自动变为 `0.00` 占位（表示金额由系统同步而非手填）
-
-**关键发现**：
+#### 关键发现（实测）
 
 * **一单多关联**：同一1688采购单可被关联到多个包裹——实测 `5127660720062029909` 同时关联 YQL006蓝牙音箱订单 `22612735-0197-1`（原）与 YQL003砂轮订单 `0204256053-0026-1`（新提交），关联状态均为 `relateStatus: "normal"`。这是**复用已有采购单**的场景：上家一个包裹发多个订单或采购多件分发的场景
 
-* **双渠道双记录**：同一1688单号在采购记录中存在两条记录——`platform: "1688"`（手工关联，purchaseOrderFilterId=21793890）与 `platform: "ali1688"`（渠道名"1688妙手"，自动同步，purchaseOrderFilterId=21824473）。印证采购记录页"1688"与"1688妙手"两个tab的来源
+* **双渠道双记录**：同一1688单号在采购记录中存在两条记录——`platform: "1688"`（手工关联）与 `platform: "ali1688"`（渠道名"1688妙手"，自动同步）。印证采购记录页"1688"与"1688妙手"两个tab的来源
 
 * `sourceItemId`（1688商品ID）正是 §4.2 `supplier_product.source_item_id` 的数据来源——采购补全顺手完成了货源映射积累
 
 * 采购账号/卖家账号输入框是**可编辑的筛选字段**（留空=自动带出全部），非必填
 
-**复刻要点**：1688侧需一个"按订单号查订单详情"的能力（1688开放平台 `alibaba.trade.get.buyerView` 或浏览器采集），补全落库动作在保存事务内完成：先 upsert purchase\_order（拉1688详情），再建 link，再回写金额。
+**复刻要点**：
+
+1. 1688侧需一个"按订单号查订单详情"的能力（1688开放平台 `alibaba.trade.get.buyerView` 或浏览器采集），补全落库动作在保存事务内完成：先 upsert purchase\_order（拉1688详情），再建 link，再回写金额
+2. 一单多关联时金额按关联行分配（`purchase_order_link.allocated_amount`），实测样本见附录B
+3. 模式一落 `platform=other`，模式二落 `platform=1688`，与采购记录页筛选口径一致
 
 ### 7.2 采购单与订单关联（关联管理）
 
@@ -1006,7 +978,7 @@ for store of 启用FBS同步的店铺:
 
 ```
 数据源优先级:
-1. 1688: 订单详情接口返回物流单号+公司 (代下单渠道可自动)
+1. 1688: 订单详情接口返回物流单号+公司（模式二已关联的单自动获取）
 2. 快递100/快递鸟通用查询 API (国内快递轨迹, 拼多多/淘宝单)
 3. 人工粘贴轨迹(兜底)
 
@@ -1046,9 +1018,9 @@ for store of 启用FBS同步的店铺:
 | 快捷筛选  | 未采购/已采购、未配对SKU、即将延迟/已延迟、有买家留言                           | P0  |
 | 搜索    | 全局模糊（包裹号/订单号/采购单号/物流单号）+ 订单号/平台SKU批量精确                  | P0  |
 | 列表    | 产品(图/标题/规格/单价/平台SKU)·金额组(订单/实付/结算/采购/利润)·收件人·包裹物流·时间倒计时 | P0  |
-| 行操作   | 代发采购、详情、移入待打单、取消关联                                      | P0  |
-| 行操作   | 提交代打包、打印面单、搁置、取消订单                                      | P1  |
-| 批量    | 合并采购(1688)、同步上家物流、导出                                    | P1  |
+| 行操作   | **提交代打包（模式一/二）**、详情、取消关联                                | P0  |
+| 行操作   | 打印面单、搁置、移入待打单、取消订单                                      | P1  |
+| 批量    | 同步上家物流、导出                                               | P1  |
 | 详情弹窗  | 产品行+采购关联+报关信息+操作日志                                      | P0  |
 | 详情弹窗  | 报关编辑、买家地址、物流方式对比                                        | P2  |
 
@@ -1062,7 +1034,7 @@ for store of 启用FBS同步的店铺:
 | 物流   | 头程轨迹卡片(最新轨迹+查看完整)                     | P1  |
 | 批量   | 批量付款标记、催发、导出、同步上家物流                   | P1  |
 | 异常面板 | 三类异常计数+点击过滤                           | P1  |
-| 操作   | 取消关联/重新关联、手工补录采购单                     | P0  |
+| 操作   | 取消关联/重新关联                             | P0  |
 
 ### 9.3 API设计（`erp-backend-lite/src/modules/order-process.js` + `purchase.js`）
 
@@ -1070,8 +1042,7 @@ for store of 启用FBS同步的店铺:
 POST /api/order-process/list            -- 包裹列表(tab+筛选+分页, 聚合采购状态)
 GET  /api/order-process/:id/detail      -- 详情(产品行+links+报关+轨迹)
 POST /api/order-sync/run                -- 手动触发Ozon同步
-POST /api/purchase/create               -- 创建采购单(路径A/C: 单号+金额+关联包裹ids)
-POST /api/purchase/merge-preview        -- 合并采购预览(供货商分组+均摊模拟)
+POST /api/purchase/submit-pack         -- 提交代打包(模式一/二, 含1688单号自动补全)
 POST /api/purchase/:id/unlink|relink    -- 取消/重新关联
 POST /api/purchase/:id/status           -- 状态推进(付款/发货/签收)
 POST /api/purchase/logistics-sync       -- 同步上家物流
@@ -1091,7 +1062,7 @@ GET  /api/purchase/abnormal-count       -- 异常计数
 | `services/ozon-opi.js`          | 扩展 `postingFbsUnfulfilledList()` / `postingFbsList()` / `postingFbsGet()` / `postingFbsPackageLabel()`，复用超时重试 |
 | `web` Vue框架                     | AppTabs/AppModal/AppPager/AppToast 组件直接复用，新增两个views+router                                                    |
 | `ozon-webhook`                  | `order-new`/`state-changed` handler 落库事件 → 触发即时同步（保留轮询兜底）                                                     |
-| `qxqx/.env` 采集脚本模式              | 1688购物车/订单同步脚本同款环境（ERP\_BASE\_URL/ERP\_API\_KEY）                                                              |
+| `qxqx/.env` 采集脚本模式              | 1688订单详情拉取/物流同步脚本同款环境（ERP\_BASE\_URL/ERP\_API\_KEY）                                                           |
 | MongoDB（如有历史选型）                 | 仅轨迹/原始JSON归档可选；主关联数据用SQLite保证事务                                                                               |
 
 ***
@@ -1103,24 +1074,23 @@ GET  /api/purchase/abnormal-count       -- 异常计数
 1. 建表（§4.2 六张核心表）
 2. Ozon订单同步任务（`/v4/posting/fbs/unfulfilled/list` 增量）
 3. 订单处理页只读版：Tab+列表+详情+倒计时
-4. 手工补录采购单（路径C）+ link + 金额回写 + 利润列
+4. 提交代打包**模式一**（金额+快递单号）+ link + 金额回写 + 利润列
 
-**验收**：订单自动同步、手工补录1688单号后列表正确展示采购金额与预估利润。
+**验收**：订单自动同步；模式一录入后列表正确展示采购金额与预估利润，包裹自动流转待打单发货。
 
-### Phase 2 — 采购工作流
+### Phase 2 — 采购补全与记录页
 
-1. 代发采购弹窗 + 货源映射（supplier\_product 一键关联）
-2. 合并采购预览 + 成本均分
-3. 采购记录页完整版（Tab/搜索/关联状态/取消关联）
-4. 头程物流同步（1688优先）+ 三类异常监控 + 飞书通知
+1. 提交代打包**模式二**：1688采购单号自动补全（拉取订单详情落库+金额自动同步）
+2. 采购记录页完整版（Tab/搜索/关联状态/取消关联/1688货源信息展示）
+3. 头程物流同步（1688优先）+ 三类异常监控 + 飞书通知
 
-**验收**：合并采购3张订单→1张1688单，成本均分正确；轨迹停滞24h触发通知。
+**验收**：填1688单号保存后实付/上家/采购账号/货源图自动补全；轨迹停滞24h触发通知。
 
 ### Phase 3 — 发货执行与体验完善
 
 1. 打印面单（`/v2/posting/fbs/package-label`）
 2. 报关信息维护 + Ozon requirements 提示（`products_requiring_country/gtd`）
-3. 1688同款推荐（复用图搜能力）、批量付款、催发
+3. 批量付款、催发
 4. 历史订单归档、导出Excel（复用 `export-excel.js`）
 
 ***
@@ -1144,7 +1114,7 @@ GET  /api/purchase/abnormal-count       -- 异常计数
 
 * Ozon订单 `22612735-0197-1`（店铺YQL006）↔ 包裹 `MS20260829121626015` ↔ 1688采购单 `5127660720062029909`（上家：深圳市嘉龙盛电子，实付12.80，SKU 4823859913-0818-qx）
 
-* 多对一样本：1688单 `5127395654065010728`（锯片×3）同时关联包裹 `MS20260829021743112`（×1）与 `MS20260829021743131`（×2）→ 验证成本均分
+* 多对一样本：1688单 `5127395654065010728`（锯片×3）同时关联包裹 `MS20260829021743112`（×1）与 `MS20260829021743131`（×2）→ 验证一单多关联分摊
 
 * 拼多多采购单格式：`260829-516906094883751`（账号PCC01）
 
