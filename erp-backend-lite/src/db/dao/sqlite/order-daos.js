@@ -306,9 +306,14 @@ const TAB_STATUS = {
 
 /**
  * 包裹分页列表(联订单+采购聚合)
- * filters: { tab, keyword, storeId, purchaseStatus, arrived, page, pageSize }
+ * filters: { tab, keyword, storeId, purchaseStatus, arrived, page, pageSize,
+ *            globalKeyword, globalMode }
  *  - purchaseStatus: '' | 'none' | 'purchased'(采购筛选)
  *  - arrived: '' | '0' | '1'(到货筛选,仅提示标记)
+ *  - globalKeyword: 全局搜索关键词(跨所有状态,忽略 tab;妙手 appPackageTab=isolation 等价)
+ *  - globalMode: 'ss' 模糊(LIKE,默认) | 'eq' 精确(全值)
+ *    匹配字段: 订单号(posting_number,即Ozon运单号)/包裹号/平台SKU(offer_id)/SKU/
+ *             采购单号/采购物流单号/Ozon运单号
  */
 function listPackages(filters = {}) {
   const page = Math.max(1, Number(filters.page) || 1);
@@ -316,14 +321,38 @@ function listPackages(filters = {}) {
   const where = [];
   const params = [];
 
-  const tab = filters.tab || 'waitProcess';
-  if (tab === 'ignored') {
-    where.push('p.is_ignored = 1');
+  const globalKw = filters.globalKeyword ? String(filters.globalKeyword).trim() : '';
+  const globalMode = filters.globalMode === 'eq' ? 'eq' : 'ss';
+
+  if (globalKw) {
+    // ── 全局搜索:忽略 tab,跨所有状态(含搁置)检索 7 类单号字段 ──
+    where.push('1 = 1');
+    const op = globalMode === 'eq' ? '= ?' : 'LIKE ?';
+    const val = globalMode === 'eq' ? globalKw : `%${globalKw}%`;
+    where.push(`(
+      o.posting_number ${op}
+      OR p.package_no ${op}
+      OR p.logistics_no ${op}
+      OR EXISTS (SELECT 1 FROM op_ozon_order_item oi
+                 WHERE oi.ozon_order_id = o.id
+                   AND (oi.offer_id ${op} OR CAST(oi.sku AS TEXT) ${op}))
+      OR EXISTS (SELECT 1 FROM op_purchase_order po
+                 JOIN op_purchase_link pl ON pl.purchase_order_id = po.id
+                 WHERE pl.package_id = p.id
+                   AND (po.purchase_sn ${op} OR po.logistics_no ${op}))
+    )`);
+    // 7 个占位符:posting_number/package_no/logistics_no/offer_id/sku/purchase_sn/po.logistics_no
+    params.push(val, val, val, val, val, val, val);
   } else {
-    where.push('p.is_ignored = 0');
-    const sts = TAB_STATUS[tab] || TAB_STATUS.waitProcess;
-    where.push(`p.operate_status IN (${sts.map(() => '?').join(',')})`);
-    params.push(...sts);
+    const tab = filters.tab || 'waitProcess';
+    if (tab === 'ignored') {
+      where.push('p.is_ignored = 1');
+    } else {
+      where.push('p.is_ignored = 0');
+      const sts = TAB_STATUS[tab] || TAB_STATUS.waitProcess;
+      where.push(`p.operate_status IN (${sts.map(() => '?').join(',')})`);
+      params.push(...sts);
+    }
   }
   if (filters.storeId) {
     where.push('o.store_id = ?');
@@ -375,6 +404,8 @@ function listPackages(filters = {}) {
     total,
     page,
     pageSize,
+    globalSearch: !!globalKw,   // 前端据此显示"全局搜索"提示条
+    globalKeyword: globalKw,
     packages: rows.map(rowToPackage),
   };
 }

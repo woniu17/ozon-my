@@ -48,6 +48,7 @@ router.get('/admin/api/order-process/tabs', (_req, res) => {
 
 // ── 包裹列表 ────────────────────────────────────────────────
 // query: tab / keyword / storeId / purchaseStatus / arrived / page / pageSize
+//        / globalKeyword / globalMode(eq|ss) —— 全局搜索:跨所有状态检索(§9.1.1)
 router.get('/admin/api/order-process/list', (req, res, next) => {
   try {
     const q = req.query;
@@ -57,6 +58,8 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       storeId: q.storeId,
       purchaseStatus: q.purchaseStatus,
       arrived: q.arrived,
+      globalKeyword: q.globalKeyword,
+      globalMode: q.globalMode,
       page: q.page,
       pageSize: q.pageSize,
     });

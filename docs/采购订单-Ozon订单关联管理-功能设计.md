@@ -1088,13 +1088,65 @@ for store of 启用FBS同步的店铺:
 | ----- | ------------------------------------------------------------- | --- |
 | Tab页签 | 待处理(未采购)/待打单发货/交运/已发货/已搁置 + 实时计数                              | P0  |
 | 快捷筛选  | 未采购/已采购、**等收货/已到货(可打包)**、未配对SKU、即将延迟/已延迟、有买家留言                | P0  |
-| 搜索    | 全局模糊（包裹号/订单号/采购单号/物流单号）+ 订单号/平台SKU批量精确                        | P0  |
+| 搜索    | **全局搜索**(跨所有状态,详见§9.1.1)                                      | P0  |
 | 列表    | 产品(图/标题/规格/单价/平台SKU)·金额组(订单/实付/结算/采购/利润)·收件人·采购物流(最新轨迹)·时间倒计时 | P0  |
 | 行操作   | **提交采购信息（模式A/B）**、详情、取消关联                                     | P0  |
 | 行操作   | 打印面单、搁置、取消订单                                                  | P1  |
 | 批量    | 同步采购物流、导出                                                     | P1  |
 | 详情弹窗  | 产品行+采购关联+报关信息+操作日志                                            | P0  |
 | 详情弹窗  | 报关编辑、买家地址、物流方式对比                                              | P2  |
+
+#### 9.1.1 全局搜索（2026-08-29 妙手实测）
+
+**功能形态**：页面右上单个输入框 + 匹配模式下拉（模糊匹配/精确匹配），跨所有 Tab 状态检索。
+
+**搜索字段**（一个关键词自动识别类型）：包裹号 / 订单号 / 运单号(logisticsNo) / 采购单号 / 采购物流单号(headLogisticsNo) / 平台SKU(offerId) / SKU。
+
+**实测机制（妙手** **`searchOrderPackageList`）**：
+
+```
+全局搜索触发 → appPackageTab=isolation(隔离模式,忽略当前Tab) + 关键词按字段分发:
+  订单号/包裹号 → platformOrderSns / appPackageNos + Rp 参数(eq精确/ss模糊)
+  SKU/offer_id → platformItemNum + platformItemNumRp
+  采购单号     → purchaseOrderSn + purchaseOrderSnRp
+  采购物流单号 → purchaseLogisticsKeyword + purchaseLogisticsKeywordRp
+
+Rp 匹配模式: eq=精确(完整值) / ss=模糊(LIKE %kw%)
+实测: 模糊 '0138153'(订单号前缀) → total=1 命中 0138153659-0175-1
+     精确 '4248992373-0814-qx'(offer_id) → total=1 命中
+     模糊 'MS202608'(包裹号前缀) → total=3
+```
+
+**搜索结果浮层**（isolation 命中当前 Tab 之外的包裹时）：
+
+* 列表主体显示"暂无数据"，弹"搜索结果"浮层
+
+* 浮层逐条展示：**状态标签(已发货/已关闭等) + 包裹号 + 订单号 + \[前往]按钮**（点击跳转到该包裹所在 Tab 并定位）
+
+* 实测：搜 `MS2026082` 前缀 → "在订单管理中查询到 110 个关联包裹"，浮层分页展示（10条/页）
+
+**复刻实现方案**（本系统 `GET /admin/api/order-process/list` 扩展）：
+
+```
+filters.globalKeyword + filters.globalMode(eq|ss)
+SQL(单查询,OR 联合,忽略 tab 条件):
+  WHERE (tab 条件被替换为 is_ignored=0 任意状态)
+    AND (
+      o.posting_number <mode> :kw        -- 订单号(posting_number 即"运单号"两者同值)
+      OR p.package_no <mode> :kw         -- 包裹号
+      OR oi.offer_id <mode> :kw          -- 平台SKU
+      OR CAST(oi.sku AS TEXT) <mode> :kw -- SKU
+      OR po.purchase_sn <mode> :kw       -- 采购单号
+      OR po.logistics_no <mode> :kw      -- 采购物流单号
+      OR p.logistics_no <mode> :kw       -- Ozon运单号
+    )
+mode: ss → LIKE '%kw%' / eq → = kw
+返回结构不变(包裹+items+purchaseLinks),前端:
+  - 命中即渲染主列表(不分tab),行上显示其所属状态标签
+  - 顶栏显示"全局搜索:N 个包裹"提示 + 清除按钮
+```
+
+> 与妙手差异：妙手用浮层+跳转是因为其列表绑定 tab；本系统列表查询与 tab 解耦，全局搜索直接渲染主列表更简洁（含状态列区分）。
 
 ### 9.2 采购记录页（`PurchaseRecords.vue`）
 

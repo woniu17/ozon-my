@@ -8,7 +8,8 @@ export function getOrderTabs() {
 }
 
 // 包裹分页列表
-// params: { tab, keyword, storeId, purchaseStatus, arrived, page, pageSize }
+// params: { tab, keyword, storeId, purchaseStatus, arrived, page, pageSize,
+//           globalKeyword, globalMode }  globalMode: 'ss'模糊 | 'eq'精确
 export function getOrderList(params) {
   return request.get('/admin/api/order-process/list', params);
 }

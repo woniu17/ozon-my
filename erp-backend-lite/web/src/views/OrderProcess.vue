@@ -36,6 +36,15 @@ const filters = reactive({
   arrived: '',        // '' | '0' | '1'
 });
 
+// ── 全局搜索(跨所有状态,§9.1.1)─────────────────────────
+const globalSearch = reactive({
+  keyword: '',
+  mode: 'ss',        // 'ss' 模糊 | 'eq' 精确
+  active: false,     // 处于全局搜索模式(有关键词且已触发)
+  total: 0,          // 全局命中数
+});
+const globalSearchBar = ref(null);
+
 const pager = reactive({ current: 1, total: 0, pageSize: 20 });
 const loading = ref(false);
 const rows = ref([]);
@@ -84,14 +93,18 @@ async function loadTabs() {
 async function loadList() {
   loading.value = true;
   try {
+    const isGlobal = globalSearch.active && globalSearch.keyword.trim();
     const data = await getOrderList({
       tab: activeTab.value,
       keyword: filters.keyword.trim(),
       purchaseStatus: filters.purchaseStatus,
       arrived: filters.arrived,
+      globalKeyword: isGlobal ? globalSearch.keyword.trim() : '',
+      globalMode: globalSearch.mode,
       page: pager.current,
       pageSize: pager.pageSize,
     });
+    globalSearch.total = isGlobal ? (data?.total || 0) : 0;
     rows.value = data?.packages || [];
     pager.total = data?.total || 0;
   } catch (err) {
@@ -113,6 +126,8 @@ async function loadSyncStatus() {
 function switchTab(key) {
   if (activeTab.value === key) return;
   activeTab.value = key;
+  // 全局搜索模式下切 tab = 退出全局模式回到该 tab 视图
+  if (globalSearch.active) clearGlobalSearch(false);
   pager.current = 1;
   loadList();
 }
@@ -120,6 +135,28 @@ function switchTab(key) {
 function search() {
   pager.current = 1;
   loadList();
+}
+
+// ── 全局搜索触发/清除 ───────────────────────────────────
+function doGlobalSearch() {
+  const kw = globalSearch.keyword.trim();
+  if (!kw) {
+    if (globalSearch.active) clearGlobalSearch();
+    return;
+  }
+  globalSearch.active = true;
+  pager.current = 1;
+  loadList();
+}
+
+function clearGlobalSearch(reload = true) {
+  globalSearch.keyword = '';
+  globalSearch.active = false;
+  globalSearch.total = 0;
+  if (reload) {
+    pager.current = 1;
+    loadList();
+  }
 }
 
 function onPageChange(p) {
@@ -311,6 +348,19 @@ function poStatus(s) {
   return PO_STATUS_LABELS[s] || s || '—';
 }
 
+// 包裹操作状态标签(全局搜索结果行显示所属状态)
+const OPERATE_LABELS = {
+  wait_process: { label: '待处理', cls: 'tag-warn' },
+  wait_ship: { label: '待打单发货', cls: 'tag-info' },
+  ship_success: { label: '交运', cls: 'tag-info' },
+  wait_receiver_confirm: { label: '已发货', cls: 'tag-ok' },
+  cancelled: { label: '已取消', cls: 'tag-err' },
+};
+function operateTag(pkg) {
+  const o = OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus, cls: 'tag-mute' };
+  return o;
+}
+
 // 剩余发货倒计时(cutoff = shipment_date)
 function countdown(pkg) {
   if (!pkg.shipmentDate) return null;
@@ -371,6 +421,27 @@ onUnmounted(() => {
         <span class="tab-count">{{ tabCounts[t.key] ?? 0 }}</span>
       </button>
       <div class="sync-area">
+        <div class="global-search-bar" v-if="!globalSearch.active">
+          <select v-model="globalSearch.mode" class="filter-input mode-select" title="匹配模式">
+            <option value="ss">模糊匹配</option>
+            <option value="eq">精确匹配</option>
+          </select>
+          <input
+            ref="globalSearchBar"
+            class="filter-input global-kw-input"
+            type="text"
+            v-model.trim="globalSearch.keyword"
+            placeholder="全局搜索:包裹号/订单号/运单号/采购单号/采购物流单号/SKU"
+            title="跨所有状态搜索订单"
+            @keydown.enter="doGlobalSearch"
+          />
+          <button class="btn btn-primary" @click="doGlobalSearch">搜索</button>
+        </div>
+        <div class="global-search-hint" v-else>
+          <span class="tag tag-info">全局搜索</span>
+          <span>命中 <b>{{ globalSearch.total }}</b> 个包裹(全部状态)</span>
+          <button class="btn btn-ghost btn-sm" @click="clearGlobalSearch()">退出搜索</button>
+        </div>
         <span v-if="syncInfo.cursors?.length" class="sync-info" :title="syncInfo.cursors.map(c => `${c.storeId}: ${c.lastError || c.lastRunAt}`).join('\n')">
           最近同步 {{ fmtTime(syncInfo.cursors[0]?.lastRunAt) }}
         </span>
@@ -378,6 +449,12 @@ onUnmounted(() => {
           {{ syncing ? '同步中…' : '同步订单' }}
         </button>
       </div>
+    </div>
+
+    <!-- 全局搜索模式提示条 -->
+    <div v-if="globalSearch.active" class="global-banner">
+      全局搜索「{{ globalSearch.keyword }}」({{ globalSearch.mode === 'eq' ? '精确' : '模糊' }}):跨所有状态命中 {{ globalSearch.total }} 个包裹 · 当前第 {{ pager.current }} 页
+      <button class="btn btn-ghost btn-sm" @click="clearGlobalSearch()">清除</button>
     </div>
 
     <!-- 工具栏 -->
@@ -422,7 +499,7 @@ onUnmounted(() => {
         </thead>
         <tbody>
           <tr v-if="!rows.length">
-            <td colspan="6" class="empty">{{ loading ? '加载中…' : '暂无订单(点击右上角「同步订单」拉取 Ozon 订单)' }}</td>
+            <td colspan="6" class="empty">{{ loading ? '加载中…' : (globalSearch.active ? '全局搜索未命中包裹' : '暂无订单(点击右上角「同步订单」拉取 Ozon 订单)') }}</td>
           </tr>
           <tr v-for="pkg in rows" :key="pkg.id" class="pkg-row">
             <td class="col-product">
@@ -471,6 +548,8 @@ onUnmounted(() => {
             </td>
             <td class="col-status">
               <div>
+                <!-- 全局搜索模式:显示包裹所属操作状态(跨tab辨识) -->
+                <span v-if="globalSearch.active" class="tag" :class="operateTag(pkg).cls" style="margin-right: 4px" title="包裹所属状态">{{ operateTag(pkg).label }}</span>
                 <span class="tag" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'">{{ ozonStatus(pkg.ozonStatus) }}</span>
                 <span :class="purchaseTag(pkg).cls" style="margin-left: 4px">{{ purchaseTag(pkg).label }}</span>
                 <span v-if="arrivedTag(pkg)" :class="arrivedTag(pkg).cls" style="margin-left: 4px">{{ arrivedTag(pkg).label }}</span>
@@ -721,11 +800,49 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .sync-info {
   font-size: 12px;
   color: var(--text-secondary, #6b7280);
+}
+
+/* 全局搜索栏 */
+.global-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mode-select {
+  width: 96px;
+}
+
+.global-kw-input {
+  width: 320px;
+}
+
+.global-search-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-primary, #374151);
+}
+
+/* 全局搜索模式提示条 */
+.global-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin-bottom: 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #1d4ed8;
 }
 
 /* 工具栏 */
@@ -880,6 +997,7 @@ a.product-title:hover {
 .tag-ok { background: #dcfce7; color: #16a34a; }
 .tag-err { background: #fee2e2; color: #ef4444; }
 .tag-warn { background: #fef3c7; color: #f59e0b; }
+.tag-info { background: #dbeafe; color: #2563eb; }
 .tag-mute { background: #f3f4f6; color: #6b7280; }
 
 .empty {
