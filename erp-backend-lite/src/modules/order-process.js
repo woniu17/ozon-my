@@ -158,6 +158,18 @@ router.post('/admin/api/order-process/unlink', (req, res, next) => {
   }
 });
 
+// ── 退回待处理(取消全部采购关联,回流未采购)──────────────
+router.post('/admin/api/order-process/revert', (req, res, next) => {
+  try {
+    const packageId = Number(req.body?.packageId);
+    if (!packageId) return res.status(400).json({ ok: false, message: 'packageId 必填' });
+    orderPackageDao.revertToWaitProcess(packageId);
+    res.json(ok({ packageId }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ── 搁置/恢复 ───────────────────────────────────────────────
 router.post('/admin/api/order-process/ignore', (req, res, next) => {
   try {

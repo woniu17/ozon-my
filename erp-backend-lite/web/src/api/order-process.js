@@ -29,6 +29,11 @@ export function unlinkPurchase(purchaseOrderId, packageId) {
   return request.post('/admin/api/order-process/unlink', { purchaseOrderId, packageId });
 }
 
+// 退回待处理(取消全部采购关联,回流未采购)
+export function revertPackage(packageId) {
+  return request.post('/admin/api/order-process/revert', { packageId });
+}
+
 // 搁置/恢复包裹
 export function ignorePackage(packageId, ignored) {
   return request.post('/admin/api/order-process/ignore', { packageId, ignored });

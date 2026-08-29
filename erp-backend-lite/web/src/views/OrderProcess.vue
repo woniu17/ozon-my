@@ -7,7 +7,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
-  submitPurchase, unlinkPurchase, ignorePackage, markPrinted,
+  submitPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted,
   runSync, getSyncStatus,
 } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
@@ -283,6 +283,23 @@ async function onPrinted(pkg) {
   try {
     await markPrinted(pkg.id);
     show('已标记打印面单,流转交运', 'success');
+    loadTabs();
+    loadList();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  }
+}
+
+// 退回待处理:取消全部采购关联并回流未采购(方案A语义:待处理=未采购)
+async function onRevert(pkg) {
+  const n = pkg.purchaseLinks?.length || 0;
+  if (!(await confirmStore.ask({
+    message: `确认将包裹 ${pkg.packageNo} 退回待处理?将取消全部 ${n} 条采购关联(冲回采购金额 ${fmtMoney(pkg.totalPurchaseAmount)}),包裹回到未采购状态`,
+    danger: true,
+  }))) return;
+  try {
+    await revertPackage(pkg.id);
+    show('已退回待处理', 'success');
     loadTabs();
     loadList();
   } catch (err) {
@@ -576,6 +593,12 @@ onUnmounted(() => {
                   title="标记已打印Ozon面单,流转交运"
                   @click="onPrinted(pkg)"
                 >打单交运</button>
+                <button
+                  v-if="pkg.operateStatus === 'wait_ship'"
+                  class="btn btn-danger btn-sm"
+                  title="取消全部采购关联,退回未采购"
+                  @click="onRevert(pkg)"
+                >退回待处理</button>
                 <button
                   v-for="l in pkg.purchaseLinks"
                   :key="'un' + l.id"
@@ -912,7 +935,9 @@ onUnmounted(() => {
 }
 
 .product-title {
-  max-width: 260px;
+  /* display:block 关键:<a> 默认 inline,ellipsis/max-width 对 inline 无效会导致长名称溢出覆盖 */
+  display: block;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -925,6 +950,11 @@ a.product-title:hover {
 }
 
 .product-sub {
+  display: block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--text-secondary, #9ca3af);
 }

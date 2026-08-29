@@ -709,6 +709,56 @@ function unlinkPurchase(purchaseOrderId, packageId) {
   });
 }
 
+/** 退回待处理:仅 wait_ship 可退;取消该包裹全部采购关联(冲回产品行金额/数量)
+ *  并重置采购聚合(金额/国内物流/到货标记),回流 wait_process(维持方案A语义:待处理=未采购)
+ */
+function revertToWaitProcess(packageId) {
+  const pkg = db.prepare(`SELECT * FROM op_package WHERE id = ?`).get(packageId);
+  if (!pkg) throw new Error(`包裹不存在: ${packageId}`);
+  if (pkg.operate_status !== 'wait_ship') {
+    throw new Error('仅「待打单发货」状态的包裹可退回待处理');
+  }
+  const now = nowIso();
+  runInTx(() => {
+    // 1) 冲回产品行金额/数量,删除该包裹全部关联
+    const links = db
+      .prepare(`SELECT * FROM op_purchase_link WHERE package_id = ?`)
+      .all(packageId);
+    const updItem = db.prepare(
+      `UPDATE op_ozon_order_item SET purchase_amount = MAX(0, purchase_amount - ?), purchase_num = MAX(0, purchase_num - ?), gmt_modified = ? WHERE id = ?`
+    );
+    for (const l of links) {
+      updItem.run(l.allocated_amount, l.quantity, now, l.ozon_order_item_id);
+    }
+    db.prepare(`DELETE FROM op_purchase_link WHERE package_id = ?`).run(packageId);
+    // 2) 关联的采购单无剩余关联 → unlinked
+    for (const poId of new Set(links.map((l) => l.purchase_order_id))) {
+      const rest = db
+        .prepare(`SELECT COUNT(*) AS n FROM op_purchase_link WHERE purchase_order_id = ?`)
+        .get(poId).n;
+      if (rest === 0) {
+        db.prepare(`UPDATE op_purchase_order SET link_status = 'unlinked', gmt_modified = ? WHERE id = ?`).run(
+          now,
+          poId
+        );
+      }
+    }
+    // 3) 包裹回流 + 重置采购聚合
+    db.prepare(
+      `UPDATE op_package SET
+        operate_status = 'wait_process',
+        purchase_status = 'none',
+        total_purchase_amount = 0,
+        head_logistics_no = NULL,
+        head_logistics_company = NULL,
+        head_shipped_at = NULL,
+        arrived_at = NULL,
+        gmt_modified = ?
+       WHERE id = ?`
+    ).run(now, packageId);
+  });
+}
+
 /** 搁置/恢复 */
 function setIgnored(packageId, ignored) {
   db.prepare(`UPDATE op_package SET is_ignored = ?, gmt_modified = ? WHERE id = ?`).run(
@@ -741,6 +791,7 @@ export const orderPackageDao = {
   getPackageDetail,
   submitPurchase,
   unlinkPurchase,
+  revertToWaitProcess,
   setIgnored,
   markWaybillPrinted,
 };
