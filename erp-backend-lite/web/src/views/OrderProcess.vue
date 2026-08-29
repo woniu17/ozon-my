@@ -995,6 +995,7 @@ a.product-title:hover {
 .qty-multi {
   color: #dc2626;
   font-weight: 700;
+  font-size: 2em;
 }
 
 .col-order {
