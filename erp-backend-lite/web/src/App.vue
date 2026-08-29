@@ -13,6 +13,7 @@ const route = useRoute();
 // 导航 Tab 列表
 const tabs = [
   { key: '/admin', label: '首页统计' },
+  { key: '/order-process', label: '订单处理' },
   { key: '/stores', label: '店铺管理' },
   { key: '/listings', label: '上架记录' },
   { key: '/collect-box-v2', label: '采集箱' },

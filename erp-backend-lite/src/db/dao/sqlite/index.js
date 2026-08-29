@@ -8,6 +8,7 @@ import { autoCollectLogDao } from './log-dao.js';
 import { shallowCollectLogDao } from './shallow-log-dao.js';
 import { storeClassificationDao, storeSkuDao } from './store-daos.js';
 import { collectQueueTasksDao, collectQueueOpsDao } from './queue-daos.js';
+import { orderPackageDao, setStoreNameMap } from './order-daos.js';
 import { startTtlCleaner } from './ttl-cleaner.js';
 
 /**
@@ -46,5 +47,7 @@ export async function createSqliteDaos() {
     storeSkuDao,
     collectQueueTasksDao,
     collectQueueOpsDao,
+    // 订单处理(2026-08)
+    orderPackageDao,
   };
 }

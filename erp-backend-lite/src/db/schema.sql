@@ -880,3 +880,178 @@ CREATE TABLE IF NOT EXISTS price_watch_claims (
   expires_at   TEXT NOT NULL         -- 过期时间(默认领取+120min;过期可被重新领取)
 );
 CREATE INDEX IF NOT EXISTS idx_pwc_instance ON price_watch_claims(instance_id);
+
+-- ── 订单处理:采购订单与Ozon FBS订单关联(2026-08,个人自发货模式) ──
+-- 设计文档: docs/采购订单-Ozon订单关联管理-功能设计.md
+-- 个人模式:上家收货人=卖家本人,无货代;提交采购信息即流转待打单发货
+
+-- Ozon 平台订单(posting 同步落地;一个 posting = 一个包裹)
+CREATE TABLE IF NOT EXISTS op_ozon_order (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id              TEXT NOT NULL,           -- 店铺 id(对应 stores.json)
+  posting_number        TEXT NOT NULL,           -- Ozon posting_number ★同步主键(拆单后 -N 序号)
+  order_id              INTEGER,                 -- Ozon order_id
+  order_number          TEXT,
+  parent_posting_number TEXT,                    -- 母件号(拆单:子件指向母件,空=母件/未拆)
+  status                TEXT,                    -- awaiting_packaging / awaiting_deliver / delivering / delivered / cancelled ...
+  substatus             TEXT,
+  in_process_at         TEXT,                    -- 下单时间
+  shipment_date         TEXT,                    -- cutoff 最晚发货时间(倒计时源)
+  delivering_date       TEXT,                    -- 交物流时间
+  currency              TEXT DEFAULT 'CNY',
+  order_amount          REAL DEFAULT 0,          -- 订单金额(products[].price.amount×qty 求和,店铺币种)
+  buyer_id              TEXT,
+  buyer_name            TEXT,
+  buyer_city            TEXT,
+  delivery_method_name  TEXT,                    -- ABT Economy Extra Small ...
+  warehouse_name        TEXT,                    -- 厦门006
+  tpl_integration_type  TEXT,
+  is_express            INTEGER DEFAULT 0,
+  cancellation_json     TEXT,                    -- 取消原因快照
+  raw_json              TEXT,                    -- API 原始响应(审计/补字段)
+  first_synced_at       TEXT,
+  last_synced_at        TEXT,
+  gmt_create            TEXT,
+  gmt_modified          TEXT,
+  UNIQUE(store_id, posting_number)
+);
+CREATE INDEX IF NOT EXISTS idx_opoo_status ON op_ozon_order(status);
+CREATE INDEX IF NOT EXISTS idx_opoo_store_time ON op_ozon_order(store_id, in_process_at DESC);
+
+-- Ozon 订单产品行
+CREATE TABLE IF NOT EXISTS op_ozon_order_item (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  ozon_order_id   INTEGER NOT NULL REFERENCES op_ozon_order(id),
+  sku             INTEGER,                      -- products[].sku
+  offer_id        TEXT,                         -- products[].offer_id ★采购匹配键
+  title           TEXT,
+  quantity        INTEGER NOT NULL DEFAULT 1,
+  price           REAL,                         -- 单价(products[].price.amount,CNY)
+  currency_code   TEXT,
+  purchase_amount REAL DEFAULT 0,               -- 采购金额回写(分摊后)
+  purchase_num    INTEGER DEFAULT 0,            -- 已采数量
+  gmt_create      TEXT,
+  gmt_modified    TEXT,
+  UNIQUE(ozon_order_id, sku, offer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_opoi_offer ON op_ozon_order_item(offer_id);
+
+-- 包裹(采购/收货/发货操作单元,妙手 opOrderPackage 等价物)
+CREATE TABLE IF NOT EXISTS op_package (
+  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  package_no              TEXT NOT NULL UNIQUE, -- MS+yyMMddHHmmss+rand 自生成
+  ozon_order_id           INTEGER NOT NULL REFERENCES op_ozon_order(id),
+  store_id                TEXT NOT NULL,
+  operate_status          TEXT NOT NULL DEFAULT 'wait_process', -- wait_process/wait_ship/ship_success/wait_receiver_confirm/cancelled
+  purchase_status         TEXT NOT NULL DEFAULT 'none',         -- none/partial/complete
+  is_shipped              INTEGER DEFAULT 0,
+  -- Ozon 国际段物流(我发货后)
+  logistics_no            TEXT,                 -- Ozon 跟踪号(=posting_number)
+  logistics_company       TEXT,
+  waybill_printed_at      TEXT,
+  -- 国内物流(上家→我,到货判断依据)
+  head_logistics_no       TEXT,
+  head_logistics_company  TEXT,
+  head_shipped_at         TEXT,
+  arrived_at              TEXT,                 -- 到货时间(采购单全部签收时回填,仅提示不阻塞打单)
+  -- 聚合
+  total_purchase_amount   REAL DEFAULT 0,       -- 关联采购金额合计(冗余加速列表)
+  last_delivery_at        TEXT,                 -- 最晚发货(冗余自 shipment_date)
+  shipped_at              TEXT,
+  delivered_at            TEXT,
+  is_ignored              INTEGER DEFAULT 0,    -- 搁置
+  note                    TEXT,
+  gmt_create              TEXT,
+  gmt_modified            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_op_pkg_operate ON op_package(operate_status);
+CREATE INDEX IF NOT EXISTS idx_op_pkg_order ON op_package(ozon_order_id);
+CREATE INDEX IF NOT EXISTS idx_op_pkg_purchase ON op_package(purchase_status);
+
+-- 采购订单(1688/拼多多/淘宝)
+CREATE TABLE IF NOT EXISTS op_purchase_order (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  purchase_sn       TEXT,                       -- 上家采购单号(1688:512766... / 拼多多:260829-...;模式B无单号为 NULL)
+  platform          TEXT NOT NULL DEFAULT 'other', -- 1688 / yangkeduo / taobao / other
+  purchase_channel  TEXT DEFAULT 'manual',      -- manual(模式B手填) / platform_order(模式A单号补全)
+  buyer_account     TEXT,                       -- 我的采购账号(清祥17/PCC01)
+  seller_name       TEXT,                       -- 上家
+  currency          TEXT DEFAULT 'CNY',
+  payment_amount    REAL DEFAULT 0,             -- 实付(商品+运费)
+  goods_amount      REAL DEFAULT 0,
+  shipping_amount   REAL DEFAULT 0,
+  status            TEXT NOT NULL DEFAULT 'wait_send', -- wait_pay/wait_send/shipped/part_shipped/signed/finished/closed
+  pay_at            TEXT,
+  send_at           TEXT,                       -- 上家发货时间
+  signed_at         TEXT,                       -- 我签收时间
+  link_status       TEXT NOT NULL DEFAULT 'linked',   -- linked/unlinked(取消关联)
+  auto_sync_amount  INTEGER DEFAULT 1,
+  logistics_company TEXT,
+  logistics_no      TEXT,
+  last_trace_at     TEXT,
+  last_trace_desc   TEXT,
+  note              TEXT,
+  gmt_create        TEXT,
+  gmt_modified      TEXT,
+  UNIQUE(platform, purchase_sn)
+);
+CREATE INDEX IF NOT EXISTS idx_op_po_status ON op_purchase_order(status);
+CREATE INDEX IF NOT EXISTS idx_op_po_logno ON op_purchase_order(logistics_no);
+
+-- 采购单↔包裹↔产品行 关联(多对多桥表,一单多关联分摊落点)
+CREATE TABLE IF NOT EXISTS op_purchase_link (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  purchase_order_id INTEGER NOT NULL REFERENCES op_purchase_order(id),
+  package_id        INTEGER NOT NULL REFERENCES op_package(id),
+  ozon_order_item_id INTEGER REFERENCES op_ozon_order_item(id), -- 可空=包裹级关联
+  allocated_amount  REAL DEFAULT 0,             -- 分摊采购金额
+  quantity          INTEGER DEFAULT 0,
+  gmt_create        TEXT,
+  UNIQUE(purchase_order_id, package_id, ozon_order_item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_op_pl_pkg ON op_purchase_link(package_id);
+CREATE INDEX IF NOT EXISTS idx_op_pl_item ON op_purchase_link(ozon_order_item_id);
+
+-- 货源映射(模式A保存时1688订单详情自动积累)
+CREATE TABLE IF NOT EXISTS op_supplier_product (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id        TEXT NOT NULL,
+  offer_id        TEXT,                         -- Ozon offer_id(可空=按SKU)
+  ozon_sku        INTEGER,
+  platform        TEXT NOT NULL DEFAULT '1688',
+  source_url      TEXT,
+  source_item_id  TEXT,                         -- 1688 商品ID(采购补全自动写入)
+  title           TEXT,
+  spec_mapping    TEXT,                         -- 规格映射 JSON
+  enabled         INTEGER DEFAULT 1,
+  gmt_create      TEXT,
+  gmt_modified    TEXT
+);
+-- 表级 UNIQUE 不允许表达式,用表达式唯一索引(offer_id 空串归一)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_op_sp_offer_source
+  ON op_supplier_product(store_id, COALESCE(offer_id, ''), source_item_id);
+
+-- 国内物流轨迹(上家→我)
+CREATE TABLE IF NOT EXISTS op_logistics_trace (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  purchase_order_id INTEGER REFERENCES op_purchase_order(id),
+  logistics_no      TEXT NOT NULL,
+  company           TEXT,
+  trace_at          TEXT,
+  description       TEXT,
+  raw_json          TEXT,
+  gmt_create        TEXT,
+  UNIQUE(logistics_no, trace_at, description)
+);
+
+-- 订单同步游标/状态(每店铺一行,记录最近同步结果)
+CREATE TABLE IF NOT EXISTS op_sync_cursor (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id    TEXT NOT NULL,
+  sync_type   TEXT NOT NULL,                    -- orders
+  last_run_at TEXT,
+  last_count  INTEGER DEFAULT 0,
+  last_error  TEXT,
+  UNIQUE(store_id, sync_type)
+);
+

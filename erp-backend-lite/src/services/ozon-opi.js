@@ -437,6 +437,44 @@ export function productPicturesInfo(store, productIds) {
   return call(store, '/v2/product/pictures/info', { product_id: arr });
 }
 
+// ── FBS 订单 posting 系列(2026-08,订单处理)──────────────────
+// 实测结构(2026-08-29,详见设计文档附录C):
+//   - 响应形如 { result: { postings, cursor, has_next, count } },兼容顶层直接返回
+//   - products[].price 为对象 {amount:"35.22",currency:"CNY"}(非 v3 文档的字符串)
+//   - financial_data.products[].payout/commission 未妥投时恒为 0,预估佣金需自算
+//   - posting_number 为主键(拆单后 -N 序号),customer.customer_id = 单号前缀
+//   - unfulfilled 返回"未妥投全集"(含 delivering),不只待处理
+
+// /v4/posting/fbs/unfulfilled/list —— 未妥投货件列表(主增量源)
+// cutoff 窗口:按卖家需完成备货的时间过滤;覆盖 awaiting_packaging → delivering 全部未妥投单
+// 请求: { filter: { cutoff_from, cutoff_to }, cursor, limit, with }
+// 响应: { result: { postings, cursor, has_next, count } }
+// 注:v4 实测 limit 上限 100(传 1000 报 Request validation error)
+export function postingFbsUnfulfilledList(store, { cutoffFrom, cutoffTo, cursor, limit = 100 } = {}) {
+  const body = {
+    filter: { cutoff_from: cutoffFrom, cutoff_to: cutoffTo },
+    limit,
+    with: { analytics_data: true, financial_data: true },
+  };
+  if (cursor) body.cursor = cursor;
+  return call(store, '/v4/posting/fbs/unfulfilled/list', body);
+}
+
+// /v4/posting/fbs/list —— 货件列表(历史回补/状态校准,含 delivered/cancelled 终态)
+// since/to 按 in_process_at(下单时间)过滤,窗口 ≤1 年
+// 请求: { dir, filter: { since, to }, cursor, limit, with }
+// 响应: { result: { postings, cursor, has_next } }(无 count)
+export function postingFbsList(store, { since, to, cursor, limit = 100 } = {}) {
+  const body = {
+    dir: 'DESC',
+    filter: { since, to },
+    limit,
+    with: { analytics_data: true, financial_data: true },
+  };
+  if (cursor) body.cursor = cursor;
+  return call(store, '/v4/posting/fbs/list', body);
+}
+
 // ── 商品归档任务(2026-08)─────────────────────────────────────
 // /v1/product/archive —— 将商品归档(批量)
 // OPI 限制:单请求 ≤100 个 product_id
