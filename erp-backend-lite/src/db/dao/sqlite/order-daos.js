@@ -227,10 +227,12 @@ function applyOzonStatus(packageId, ozonStatus, { deliveringDate, shipmentDate }
       sets.push('delivered_at = ?');
       vals.push(now);
     }
-  } else if (ozonStatus === 'awaiting_deliver' || ozonStatus === 'arbitration') {
-    advanceTo('wait_ship');
   }
-  // awaiting_packaging / awaiting_approve / awaiting_registration → 维持(不回退已采购/已打单状态)
+  // ★ 方案A(2026-08-29):Ozon状态联动不再推进 wait_ship ——
+  //   await_ship 流转的唯一入口是「提交采购信息」(submitPurchase),
+  //   待处理=未采购、待打单发货=已采购待打单 的语义由采购动作驱动,Ozon状态仅供展示。
+  //   同步仅推进: delivering/delivered → wait_receiver_confirm(已发货),cancelled → cancelled。
+  // awaiting_packaging / awaiting_approve / awaiting_registration / awaiting_deliver / arbitration → 维持当前操作状态
 
   if (shipmentDate) {
     sets.push('last_delivery_at = ?');

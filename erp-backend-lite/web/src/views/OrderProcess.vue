@@ -550,7 +550,8 @@ onUnmounted(() => {
               <div>
                 <!-- 全局搜索模式:显示包裹所属操作状态(跨tab辨识) -->
                 <span v-if="globalSearch.active" class="tag" :class="operateTag(pkg).cls" style="margin-right: 4px" title="包裹所属状态">{{ operateTag(pkg).label }}</span>
-                <span class="tag" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'">{{ ozonStatus(pkg.ozonStatus) }}</span>
+                <!-- Ozon状态展示原始值(如 awaiting_deliver),中文释义放悬浮提示 -->
+                <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="ozonStatus(pkg.ozonStatus) + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus || '—' }}</span>
                 <span :class="purchaseTag(pkg).cls" style="margin-left: 4px">{{ purchaseTag(pkg).label }}</span>
                 <span v-if="arrivedTag(pkg)" :class="arrivedTag(pkg).cls" style="margin-left: 4px">{{ arrivedTag(pkg).label }}</span>
               </div>
@@ -685,7 +686,7 @@ onUnmounted(() => {
           <div><span class="dl">Ozon订单</span><span class="mono">{{ detail.package.postingNumber }}</span></div>
           <div><span class="dl">订单号</span>{{ detail.package.orderNumber }}</div>
           <div><span class="dl">店铺</span>{{ detail.package.storeName }}</div>
-          <div><span class="dl">Ozon状态</span>{{ ozonStatus(detail.package.ozonStatus) }}</div>
+          <div><span class="dl">Ozon状态</span><span class="mono" :title="ozonStatus(detail.package.ozonStatus)">{{ detail.package.ozonStatus || '—' }}{{ detail.package.substatus ? ' · ' + detail.package.substatus : '' }}</span></div>
           <div><span class="dl">买家</span>{{ detail.package.buyerName || '—' }}</div>
           <div><span class="dl">配送方式</span>{{ detail.package.deliveryMethod || '—' }}</div>
           <div><span class="dl">发货仓库</span>{{ detail.package.warehouse || '—' }}</div>
