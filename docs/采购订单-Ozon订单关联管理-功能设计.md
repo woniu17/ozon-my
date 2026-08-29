@@ -768,15 +768,19 @@ for store of 启用FBS同步的店铺:
   更新 sync_cursor
 ```
 
-**字段抽取要点**：
+**字段抽取要点（2026-08-29 实测核实，详见附录C）**：
 
-* 金额：`with.financial_data=true` → `financial_data.products[].payout/customer_price`；店铺币种统一折CNY（复用现有 `exchange_rate` 思路）
-
-* 发货倒计时：`shipment_date`（费率变更临界）与 `tariffication` 配套展示
-
-* 买家信息：`customer.name`、`analytics_data.city/region`（v4列表不返回电话，详情接口 `/v3/posting/fbs/get` 补）
-
-* 取消：`cancellation.cancel_reason/cancellation_type` → 展示并联动包裹取消
+- **价格结构（v4与文档有差异）**：`products[].price` 是对象 `{amount:"35.22", currency:"CNY"}`（非v3文档的字符串）；`financial_data.products[].price` 是数字；`customer_price` 为 `{amount:"439", currency:"RUB"}` 对象（买家视角卢布价）
+- **payout=0 陷阱**：未妥投订单 `financial_data.products[].payout` 恒为 0、`commission` 也为 0——真实结算数据事后才有。**预估结算/佣金必须自算**：`预估佣金 = price × 店铺配置佣金率(如16%)`，`预估结算 = price - 预估佣金`（与妙手"平台佣金 CNY 4.44 估"口径一致）
+- **拆单实证**：`90292829-0048-1/-2/-3` 同属 `order_id=37892760605` —— 一张订单拆成3个posting，`posting_number` 末段 `-N` 即拆分序号。**一个 posting = 一个包裹**，直接验证了 §3 的 1:N 订单→包裹模型
+- **buyer_id 规律**：`customer.customer_id` = posting_number 前缀（如 `0164557276-0053-1` → `164557276`），与妙手 `buyerId` 完全一致
+- **时间语义**：`in_process_at` = 妙手"下单时间"（实测 `07:04:02Z` ↔ 妙手 `15:04:02` UTC+8 吻合）；`shipment_date` = cutoff发货倒计时；`delivering_date` = 交物流时间
+- **fbs/list 的 since/to 按 `in_process_at` 过滤**（实测返回条目的 in_process_at 全部落在窗口内），适合按天下单增量
+- **unfulfilled 含 delivering**：`/v4/posting/fbs/unfulfilled/list` 返回"未妥投"而非"未处理"——首个条目即 `status=delivering`（08-21下单仍在途）。要只取待处理需传 `filter.statuses: ["awaiting_packaging","awaiting_approve","awaiting_registration"]`
+- **买家电话**：v4列表 `customer.phone` 恒为 `""`，真实电话需 `/v3/posting/fbs/get`（`addressee.phone`）
+- **barcodes 为 null**：`with.barcodes=true` 时未打单货件仍返回 null（面单条码在打单后才生成），打单链路走 `/v2/posting/fbs/package-label`
+- **products 额外字段**：`weight`(0.3)、`product_color`、`is_blr_traceable`、`is_marketplace_buyout`、`imei[]`
+- 取消：`cancellation.cancel_reason/cancellation_type` → 展示并联动包裹取消
 
 ### 6.3 现有资产复用
 
@@ -1002,9 +1006,104 @@ GET  /api/purchase/abnormal-count       -- 异常计数
 
 ## 附录B：实测样本（调试用）
 
-* Ozon订单 `22612735-0197-1`（店铺YQL006）↔ 包裹 `MS20260829121626015` ↔ 1688采购单 `5127660720062029909`（上家：深圳市嘉龙盛电子，实付12.80，SKU 4823859913-0818-qx）
+- Ozon订单 `22612735-0197-1`（店铺YQL006）↔ 包裹 `MS20260829121626015` ↔ 1688采购单 `5127660720062029909`（上家：深圳市嘉龙盛电子，实付12.80，SKU 4823859913-0818-qx）
+- 多对一样本：1688单 `5127395654065010728`（锯片×3）同时关联包裹 `MS20260829021743112`（×1）与 `MS20260829021743131`（×2）→ 验证成本均分
+- 拼多多采购单格式：`260829-516906094883751`（账号PCC01）
 
-* 多对一样本：1688单 `5127395654065010728`（锯片×3）同时关联包裹 `MS20260829021743112`（×1）与 `MS20260829021743131`（×2）→ 验证成本均分
+## 附录C：Ozon v4接口实测结构核对（2026-08-29）
 
-* 拼多多采购单格式：`260829-516906094883751`（账号PCC01）
+> 凭证：`ozon-webhook/src/config/stores.json`（YQL04 clientId=4173939、YQL06 clientId=4174037）
+> 请求体与响应均为原始实测，与 `05-FBS订单与配送.md` 文档逐字段核对。
+
+### C.1 请求样本
+
+```jsonc
+// /v4/posting/fbs/unfulfilled/list（cutoff过滤，注意返回的是"未妥投"全集）
+{ "filter": { "cutoff_from": "2026-08-26T00:00:00Z", "cutoff_to": "2026-09-10T00:00:00Z" },
+  "limit": 5, "with": { "analytics_data": true, "financial_data": true, "barcodes": true } }
+// 响应: HTTP 200, { result: { count: 21, has_next: true, cursor: "eyJ...", postings: [...] } }
+
+// /v4/posting/fbs/list（since/to 按 in_process_at 过滤 = 下单时间窗口）
+{ "dir": "DESC", "filter": { "since": "2026-08-26T00:00:00Z", "to": "2026-08-30T00:00:00Z" },
+  "limit": 5, "with": { ... } }
+// 响应: { result: { has_next: true, cursor: "eyJ...", postings: [...] } }  ← 无count
+```
+
+### C.2 posting完整字段清单（实测46键，两接口结构一致）
+
+```
+posting_number, order_id, order_number, pickup_code_verified_at, status, substatus,
+delivery_method, delivery_schema("fbs"), tracking_number, tpl_integration_type("aggregator"),
+in_process_at, shipment_date, shipment_date_without_delay, optional, cancellation, customer,
+products, addressee, barcodes, analytics_data, destination_place_id, destination_place_name,
+financial_data, is_express, legal_info, quantum_id, require_blr_traceable_attrs, requirements,
+tariffication, external_order{is_external,platform_name}, volume_weight, is_click_and_collect,
+delivering_date, is_multibox, multi_box_qty, is_presortable, prr_option, parent_posting_number,
+available_actions, tariffication_steps, container_sort_type, container, integration_type_flow,
+sorting_center, received_at_sorting_center
+```
+
+文档未记载、实测新增的关键字段：`delivery_schema`、`external_order`、`volume_weight`、`is_multibox`/`multi_box_qty`（多箱包裹）、`is_click_and_collect`、`sorting_center`、`integration_type_flow`、`quantum_id`、`require_blr_traceable_attrs`、`pickup_code_verified_at`
+
+### C.3 实测样本（YQL06，0164557276-0053-1）
+
+```jsonc
+{
+  "posting_number": "0164557276-0053-1",
+  "order_id": 38418224572,
+  "order_number": "0164557276-0053",
+  "status": "delivering", "substatus": "posting_on_way_to_city",
+  "delivery_method": { "id": 34052153, "name": "ABT Economy Extra Small Xiamen 03 PUDO",
+    "warehouse_id": 1020005008464080, "warehouse": "厦门006",       // =stores.json warehouse_id ✓
+    "tpl_provider_id": 1065, "tpl_provider": "ABT Economy Extra Small" },
+  "tracking_number": "0164557276-0053-1",                            // =posting_number
+  "tpl_integration_type": "aggregator", "delivery_schema": "fbs",
+  "in_process_at": "2026-08-21T07:42:19Z",                           // 下单时间
+  "shipment_date": "2026-08-26T09:00:00Z",                           // cutoff
+  "delivering_date": "2026-08-24T08:01:10Z",                         // 交物流时间
+  "customer": { "customer_id": 164557276, "name": "Юнона Бучнева", "phone": "",
+    "address": { "address_tail": "Москва, Россия", "city": "Москва", "country": "Россия",
+      "region": "", "district": "", "zip_code": "", "pvz_code": 0 } },
+  "products": [{
+    "offer_id": "4456106117-0814-qx",        // ★ 妙手platformItemNum同源
+    "sku": 5462125811,                        // ★ 妙手platformItemId同源
+    "quantity": 1, "weight": 0.3, "product_color": "черный",
+    "price": { "amount": "35.22", "currency": "CNY" },   // ★ 对象而非字符串
+    "name": "Горшок для цветов большой объем 25 см..."
+  }],
+  "analytics_data": { "warehouse": "厦门006", "city": "Москва", "delivery_type": "PVZ",
+    "payment_type_group_name": "Кредитная карта", "is_premium": false,
+    "delivery_date_begin": "2026-09-07T14:01:00Z", "delivery_date_end": "2026-09-18T14:01:00Z" },
+  "financial_data": {
+    "cluster_from": "Китай", "cluster_to": "Москва, МО и Дальние регионы",
+    "products": [{ "product_id": 5462125811, "price": 35.22, "old_price": 35.22,
+      "payout": 0,                                  // ★ 未妥投恒为0
+      "customer_price": { "amount": "439", "currency": "RUB" },
+      "commission": { "amount": 0, "percent": 0, "currency": "RUB" },  // ★ 同样为0
+      "quantity": 1, "actions": ["Системная виртуальная скидка селлера Россия (CNY)", ...] }]
+  },
+  "barcodes": null,                       // with.barcodes=true仍为null（打单后生成）
+  "requirements": { "products_requiring_gtd": [], "products_requiring_country": [], ... },
+  "cancellation": { "cancel_reason_id": 0, "cancel_reason": "", "cancellation_type": "" },
+  "is_multibox": false, "multi_box_qty": 1, "volume_weight": 0.3,
+  "available_actions": ["click_track_number"],
+  "received_at_sorting_center": "1970-01-01T00:00:00Z"   // 占位值
+}
+```
+
+### C.4 与妙手字段核对结论（闭环验证）
+
+| 妙手字段 | Ozon实测字段 | 核对结果 |
+|---|---|---|
+| `platformOrderSn` 0173332501-1424-1 | `posting_number`（YQL04 fbs/list近3天命中同单） | ✅ |
+| 下单时间 2026-08-29 15:04:02 | `in_process_at` 2026-08-29T07:04:02Z | ✅ UTC+8换算吻合 |
+| `platformPackageStatus` awaiting_deliver | `status` awaiting_deliver | ✅ |
+| `logisticsNo` = 订单号 | `tracking_number` = posting_number | ✅ |
+| `buyerId` 78345175 | `customer.customer_id`（=posting_number前缀） | ✅ |
+| `platformItemId` 6010934464 | `products[].sku` | ✅ |
+| `platformItemNum` 4823859913-0818-qx | `products[].offer_id` | ✅ |
+| 仓库 厦门006/厦门004 | `delivery_method.warehouse` + warehouse_id与stores.json一致 | ✅ |
+| 预估结算 27.75-4.44佣金估 | `payout/commission` API均为0 → 需自算（price×佣金率） | ⚠️ 口径差异已记入§6.2 |
+
+**拆单实证**：YQL04 返回 `90292829-0048-1 / -0048-2 / -0048-3` 三个posting同属 `order_id=37892760605`——一单拆三包裹，`posting_number` 尾段`-N`即拆分序号，`parent_posting_number` 为空串。同步任务必须以 `posting_number`（而非order_id）为主键upsert。
 
