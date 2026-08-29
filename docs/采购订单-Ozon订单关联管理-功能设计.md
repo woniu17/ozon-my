@@ -844,6 +844,132 @@ for store of 启用FBS同步的店铺:
 
 适合已人工在拼多多/淘宝下单的场景：`采购单号+平台+金额+关联包裹` 一步录入，立即建立 link 与金额回写。
 
+#### 路径D：提交代打包（2026-08-29 实测补全，待处理tab行内操作）
+
+**入口**：待处理tab行内 `[提交代打包]` 按钮（每个包裹一个）。
+
+**弹窗结构**：
+
+```
+┌ 提交代打包 ─────────────────────────────────────────────┐
+│ 推荐使用妙手1688采购下单功能...（营销位）                    │
+│ 选择服务商: [不使用货代 ▾]  添加货代                        │
+│ 录入方式: ○录入快递单号  ●录入采购信息（自动同步快递单号）     │
+│ ┌ 订单产品 ──────────────────────────────────┐          │
+│ │ [图] x1 产品名  产品规格: 产品颜色：白色        │          │
+│ │ 采购金额(CNY): [9.9__]                      │          │
+│ │ 快递单号: [SF1234567890123__]  物流公司: [顺丰速运__] │      │
+│ │ [添加]  (一行产品填完可再加一行)              │          │
+│ └────────────────────────────────────────────┘          │
+│ ⚠ 由于您选择了不使用货代，包裹采购信息将不会推送给货代        │
+│                              [取 消] [保存]              │
+└────────────────────────────────────────────────────────┘
+```
+
+* **录入方式二选一**：`录入快递单号`（只填单号，无金额） / `录入采购信息`（金额+单号，自动同步轨迹）
+
+* **校验**：只填金额不填单号 → 提示"此订单出货信息填写不完整，请完善出货信息后再保存"（快递单号必填）
+
+* **无货代模式**：不推送货代（自发货流程）
+
+**提交API链（实测捕获）**：
+
+```
+1. POST /api/order/purchase/getOpOrderPackAddedServiceList   (opOrderId) 弹窗打开时加载
+2. POST /api/order/purchase/saveOpOrderPackAddedServiceList  (opOrderId) 保存附加服务
+3. POST /api/order/purchase/manualRelateOrderPackagePurchaseOrders  ★核心
+4. POST /api/order/package/checkPackagesIsAutoMoveWaitShip   (opOrderPackageIds) 检查是否自动流转
+5. 列表刷新（searchOrderPackageList + 配套批量接口）
+```
+
+**核心请求体（form-urlencoded，`purchaseOrderInfoList`** **数组）**：
+
+```jsonc
+{
+  "purchaseOrderInfoList": [{
+    "opOrderPackageId": "1819535566",           // 包裹
+    "forwarderId": "0",                          // 货代(0=不使用)
+    "opOrderItemIdAndPurchaseOrderInfoMap": {    // ★ 按产品行录入
+      "2212382575": {                            // opOrderItemId
+        "purchaseOrderPackages": [{
+          "purchaseOrderLogisticsName": "顺丰速运",   // 物流公司
+          "purchaseOrderWaybillCode": "SF1234567890123" // 快递单号
+        }],
+        "forwarderId": "0",
+        "forwarderInfo": { "purchaseUrl": "" },   // 货源链接(货代模式用)
+        "appNote": "",
+        "itemPurchaseAmount": "9.9",              // ★ 采购金额(CNY)
+        "isAutoRsyncPurchasePayment": "0",        // 自动同步实付
+        "forwarderNote": "",
+        "isAlibbOfficialService": "0",
+        "purchasePlatform": "other"               // ★ other=手工(非1688渠道)
+      }
+    }
+  }]
+}
+```
+
+**提交后效果（实测）**：
+
+* `purchase_order` 创建（platform=other手工，状态视为已发货——因有快递单号）
+
+* `package.head_logistics_no/company` 回填、`purchase_status=complete`
+
+* `checkPackagesIsAutoMoveWaitShip` 判定后包裹可能自动从待处理 → 待打单发货（出货信息齐备即流转）
+
+**复刻要点**：路径D本质是"采购单极简录入"——不要求上家采购单号，只需金额+国内快递单号即可完成关联与出货登记。适合淘宝/拼多多等无法自动同步的平台。与路径C互补：C补完整采购单号，D快速登记出货。
+
+#### 路径D2：录入采购信息（1688单号自动补全，2026-08-29 实测补全链路）
+
+"提交代打包"弹窗切换到 **录入采购信息（自动同步快递单号）** 模式（radio `platform`）后，表单变为：
+
+```
+采购金额(CNY): [___]        ← 可留空
+自动同步采购金额: ●是 ○否
+采购信息
+下单平台: 1688 [登录]
+采购单号:   [填1688订单号]  ← ★ 触发自动补全
+采购账号:   [自动带出]
+卖家账号:   [自动带出]
+```
+
+**实测补全链路**（填入 `5127660720062029909` 后点保存）：
+
+1. 提交 `manualRelateOrderPackagePurchaseOrders`，body 中 `purchasePlatform: "1688"`、采购单号、`isAutoRsyncPurchasePayment=1`（金额留空）
+2. **后端拿单号实时调1688开放接口**拉取订单详情并落库，自动补全字段：
+
+| 补全字段                       | 实测值                                                         | 说明            |
+| -------------------------- | ----------------------------------------------------------- | ------------- |
+| `purchaseOrderPayment`     | 12.80                                                       | 1688实付金额      |
+| `purchaseOrderBuyer`       | 清祥17                                                        | 采购账号（1688登录态） |
+| `purchaseOrderSeller`      | 深圳市嘉龙盛电子有限公司                                                | 上家            |
+| `purchaseOrderStatus`      | wait\_send                                                  | 1688订单状态      |
+| `purchaseOrderStartTime`   | 2026-08-29 12:56:45                                         | 1688下单时间      |
+| `purchaseOrderFullAddress` | 福建 厦门 …菜鸟驿站                                                 | 1688收货地址      |
+| `purchaseOrderDetailUrl`   | trade.1688.com/order/new\_step\_order\_detail.htm?orderId=… | 订单直链          |
+| `sourceItemId`             | 1007720689392                                               | ★1688商品ID     |
+| `sourceSkuId`              | 6169636091410                                               | ★1688 SKU ID  |
+| `sourceTitle`              | 迷你版20W30W…数字功放板 502L                                        | 1688商品标题      |
+| `sourceSkuSubName`         | 单功放板                                                        | 1688规格名       |
+| `sourceUnitPrice`          | 13.80                                                       | 1688单价        |
+| `sourcePicUrl`             | cbu01.alicdn.com/…                                          | 1688商品图       |
+| `gmtLastRsync`             | 2026-08-29 18:12:00                                         | 同步时间戳         |
+
+1. 保存后包裹 `appPurchaseStatus=2`、产品行 `itemCostDetail.purchaseAmount` 自动回写
+2. 弹窗填单号时"产品实付"框自动变为 `0.00` 占位（表示金额由系统同步而非手填）
+
+**关键发现**：
+
+* **一单多关联**：同一1688采购单可被关联到多个包裹——实测 `5127660720062029909` 同时关联 YQL006蓝牙音箱订单 `22612735-0197-1`（原）与 YQL003砂轮订单 `0204256053-0026-1`（新提交），关联状态均为 `relateStatus: "normal"`。这是**复用已有采购单**的场景：上家一个包裹发多个订单或采购多件分发的场景
+
+* **双渠道双记录**：同一1688单号在采购记录中存在两条记录——`platform: "1688"`（手工关联，purchaseOrderFilterId=21793890）与 `platform: "ali1688"`（渠道名"1688妙手"，自动同步，purchaseOrderFilterId=21824473）。印证采购记录页"1688"与"1688妙手"两个tab的来源
+
+* `sourceItemId`（1688商品ID）正是 §4.2 `supplier_product.source_item_id` 的数据来源——采购补全顺手完成了货源映射积累
+
+* 采购账号/卖家账号输入框是**可编辑的筛选字段**（留空=自动带出全部），非必填
+
+**复刻要点**：1688侧需一个"按订单号查订单详情"的能力（1688开放平台 `alibaba.trade.get.buyerView` 或浏览器采集），补全落库动作在保存事务内完成：先 upsert purchase\_order（拉1688详情），再建 link，再回写金额。
+
 ### 7.2 采购单与订单关联（关联管理）
 
 ```
