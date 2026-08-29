@@ -770,17 +770,27 @@ for store of 启用FBS同步的店铺:
 
 **字段抽取要点（2026-08-29 实测核实，详见附录C）**：
 
-- **价格结构（v4与文档有差异）**：`products[].price` 是对象 `{amount:"35.22", currency:"CNY"}`（非v3文档的字符串）；`financial_data.products[].price` 是数字；`customer_price` 为 `{amount:"439", currency:"RUB"}` 对象（买家视角卢布价）
-- **payout=0 陷阱**：未妥投订单 `financial_data.products[].payout` 恒为 0、`commission` 也为 0——真实结算数据事后才有。**预估结算/佣金必须自算**：`预估佣金 = price × 店铺配置佣金率(如16%)`，`预估结算 = price - 预估佣金`（与妙手"平台佣金 CNY 4.44 估"口径一致）
-- **拆单实证**：`90292829-0048-1/-2/-3` 同属 `order_id=37892760605` —— 一张订单拆成3个posting，`posting_number` 末段 `-N` 即拆分序号。**一个 posting = 一个包裹**，直接验证了 §3 的 1:N 订单→包裹模型
-- **buyer_id 规律**：`customer.customer_id` = posting_number 前缀（如 `0164557276-0053-1` → `164557276`），与妙手 `buyerId` 完全一致
-- **时间语义**：`in_process_at` = 妙手"下单时间"（实测 `07:04:02Z` ↔ 妙手 `15:04:02` UTC+8 吻合）；`shipment_date` = cutoff发货倒计时；`delivering_date` = 交物流时间
-- **fbs/list 的 since/to 按 `in_process_at` 过滤**（实测返回条目的 in_process_at 全部落在窗口内），适合按天下单增量
-- **unfulfilled 含 delivering**：`/v4/posting/fbs/unfulfilled/list` 返回"未妥投"而非"未处理"——首个条目即 `status=delivering`（08-21下单仍在途）。要只取待处理需传 `filter.statuses: ["awaiting_packaging","awaiting_approve","awaiting_registration"]`
-- **买家电话**：v4列表 `customer.phone` 恒为 `""`，真实电话需 `/v3/posting/fbs/get`（`addressee.phone`）
-- **barcodes 为 null**：`with.barcodes=true` 时未打单货件仍返回 null（面单条码在打单后才生成），打单链路走 `/v2/posting/fbs/package-label`
-- **products 额外字段**：`weight`(0.3)、`product_color`、`is_blr_traceable`、`is_marketplace_buyout`、`imei[]`
-- 取消：`cancellation.cancel_reason/cancellation_type` → 展示并联动包裹取消
+* **价格结构（v4与文档有差异）**：`products[].price` 是对象 `{amount:"35.22", currency:"CNY"}`（非v3文档的字符串）；`financial_data.products[].price` 是数字；`customer_price` 为 `{amount:"439", currency:"RUB"}` 对象（买家视角卢布价）
+
+* **payout=0 陷阱**：未妥投订单 `financial_data.products[].payout` 恒为 0、`commission` 也为 0——真实结算数据事后才有。**预估结算/佣金必须自算**：`预估佣金 = price × 店铺配置佣金率(如16%)`，`预估结算 = price - 预估佣金`（与妙手"平台佣金 CNY 4.44 估"口径一致）
+
+* **拆单实证**：`90292829-0048-1/-2/-3` 同属 `order_id=37892760605` —— 一张订单拆成3个posting，`posting_number` 末段 `-N` 即拆分序号。**一个 posting = 一个包裹**，直接验证了 §3 的 1:N 订单→包裹模型
+
+* **buyer\_id 规律**：`customer.customer_id` = posting\_number 前缀（如 `0164557276-0053-1` → `164557276`），与妙手 `buyerId` 完全一致
+
+* **时间语义**：`in_process_at` = 妙手"下单时间"（实测 `07:04:02Z` ↔ 妙手 `15:04:02` UTC+8 吻合）；`shipment_date` = cutoff发货倒计时；`delivering_date` = 交物流时间
+
+* **fbs/list 的 since/to 按** **`in_process_at`** **过滤**（实测返回条目的 in\_process\_at 全部落在窗口内），适合按天下单增量
+
+* **unfulfilled 含 delivering**：`/v4/posting/fbs/unfulfilled/list` 返回"未妥投"而非"未处理"——首个条目即 `status=delivering`（08-21下单仍在途）。要只取待处理需传 `filter.statuses: ["awaiting_packaging","awaiting_approve","awaiting_registration"]`
+
+* **买家电话**：v4列表 `customer.phone` 恒为 `""`，真实电话需 `/v3/posting/fbs/get`（`addressee.phone`）
+
+* **barcodes 为 null**：`with.barcodes=true` 时未打单货件仍返回 null（面单条码在打单后才生成），打单链路走 `/v2/posting/fbs/package-label`
+
+* **products 额外字段**：`weight`(0.3)、`product_color`、`is_blr_traceable`、`is_marketplace_buyout`、`imei[]`
+
+* 取消：`cancellation.cancel_reason/cancellation_type` → 展示并联动包裹取消
 
 ### 6.3 现有资产复用
 
@@ -1006,9 +1016,11 @@ GET  /api/purchase/abnormal-count       -- 异常计数
 
 ## 附录B：实测样本（调试用）
 
-- Ozon订单 `22612735-0197-1`（店铺YQL006）↔ 包裹 `MS20260829121626015` ↔ 1688采购单 `5127660720062029909`（上家：深圳市嘉龙盛电子，实付12.80，SKU 4823859913-0818-qx）
-- 多对一样本：1688单 `5127395654065010728`（锯片×3）同时关联包裹 `MS20260829021743112`（×1）与 `MS20260829021743131`（×2）→ 验证成本均分
-- 拼多多采购单格式：`260829-516906094883751`（账号PCC01）
+* Ozon订单 `22612735-0197-1`（店铺YQL006）↔ 包裹 `MS20260829121626015` ↔ 1688采购单 `5127660720062029909`（上家：深圳市嘉龙盛电子，实付12.80，SKU 4823859913-0818-qx）
+
+* 多对一样本：1688单 `5127395654065010728`（锯片×3）同时关联包裹 `MS20260829021743112`（×1）与 `MS20260829021743131`（×2）→ 验证成本均分
+
+* 拼多多采购单格式：`260829-516906094883751`（账号PCC01）
 
 ## 附录C：Ozon v4接口实测结构核对（2026-08-29）
 
@@ -1093,17 +1105,37 @@ sorting_center, received_at_sorting_center
 
 ### C.4 与妙手字段核对结论（闭环验证）
 
-| 妙手字段 | Ozon实测字段 | 核对结果 |
-|---|---|---|
-| `platformOrderSn` 0173332501-1424-1 | `posting_number`（YQL04 fbs/list近3天命中同单） | ✅ |
-| 下单时间 2026-08-29 15:04:02 | `in_process_at` 2026-08-29T07:04:02Z | ✅ UTC+8换算吻合 |
-| `platformPackageStatus` awaiting_deliver | `status` awaiting_deliver | ✅ |
-| `logisticsNo` = 订单号 | `tracking_number` = posting_number | ✅ |
-| `buyerId` 78345175 | `customer.customer_id`（=posting_number前缀） | ✅ |
-| `platformItemId` 6010934464 | `products[].sku` | ✅ |
-| `platformItemNum` 4823859913-0818-qx | `products[].offer_id` | ✅ |
-| 仓库 厦门006/厦门004 | `delivery_method.warehouse` + warehouse_id与stores.json一致 | ✅ |
-| 预估结算 27.75-4.44佣金估 | `payout/commission` API均为0 → 需自算（price×佣金率） | ⚠️ 口径差异已记入§6.2 |
+| 妙手字段                                      | Ozon实测字段                                                  | 核对结果           |
+| ----------------------------------------- | --------------------------------------------------------- | -------------- |
+| `platformOrderSn` 0173332501-1424-1       | `posting_number`（YQL04 fbs/list近3天命中同单）                   | ✅              |
+| 下单时间 2026-08-29 15:04:02                  | `in_process_at` 2026-08-29T07:04:02Z                      | ✅ UTC+8换算吻合    |
+| `platformPackageStatus` awaiting\_deliver | `status` awaiting\_deliver                                | ✅              |
+| `logisticsNo` = 订单号                       | `tracking_number` = posting\_number                       | ✅              |
+| `buyerId` 78345175                        | `customer.customer_id`（=posting\_number前缀）                | ✅              |
+| `platformItemId` 6010934464               | `products[].sku`                                          | ✅              |
+| `platformItemNum` 4823859913-0818-qx      | `products[].offer_id`                                     | ✅              |
+| 仓库 厦门006/厦门004                            | `delivery_method.warehouse` + warehouse\_id与stores.json一致 | ✅              |
+| 预估结算 27.75-4.44佣金估                        | `payout/commission` API均为0 → 需自算（price×佣金率）               | ⚠️ 口径差异已记入§6.2 |
 
-**拆单实证**：YQL04 返回 `90292829-0048-1 / -0048-2 / -0048-3` 三个posting同属 `order_id=37892760605`——一单拆三包裹，`posting_number` 尾段`-N`即拆分序号，`parent_posting_number` 为空串。同步任务必须以 `posting_number`（而非order_id）为主键upsert。
+**拆单实证**：YQL04 返回 `90292829-0048-1 / -0048-2 / -0048-3` 三个posting同属 `order_id=37892760605`——一单拆三包裹，`posting_number` 尾段`-N`即拆分序号，`parent_posting_number` 为空串。同步任务必须以 `posting_number`（而非order\_id）为主键upsert。
+
+**父子拆单实证（YQL06，2026-08-29深查）**：订单 `0105259411-0854`（order\_id=38844960403，买家Владимир Варивода，下单2026-08-25）下仅有两个货件 `-0854-2` 与 `-0854-3`，**无 -1**（推测原始 -1 拆分后被重编号为 -2）：
+
+| 字段                      | -0854-2（母件）                                                    | -0854-3（子件）                   |
+| ----------------------- | -------------------------------------------------------------- | ----------------------------- |
+| `parent_posting_number` | `""`（空）                                                        | `"0105259411-0854-2"` ★指向母件   |
+| `related_postings`      | `["0105259411-0854-3"]`                                        | `["0105259411-0854-2"]`（双向互引） |
+| products                | SKU 5311201790 ×1（E27灯头座，offer\_id 4233380115-0802-qx，单价18.55） | **完全相同** SKU×1                |
+| 时间线                     | in\_process/shipment/delivering 三时间完全一致                        | 同左                            |
+| tracking\_number        | =自身posting\_number（独立包裹独立跟踪）                                   | 同左                            |
+
+要点：
+
+* 买家下单同一SKU数量2，拆成 1+1 两个包裹分别发货（对应 `/v4/posting/fbs/ship` 传2个packages的场景）
+
+* **`parent_posting_number`** **构成母子树**：母件为空、子件指向母件；`related_postings` 提供兄弟互引——同步时二者都应落库，用于"同订单拆包裹"聚合展示
+
+* **采购数量核算必须跨包裹求和**：该订单需采数量 = 两个posting的quantity之和(2)，不能只看单包裹——否则采购下单会少买
+
+* 查询全量货件：`/v4/posting/fbs/list` 传 `filter.order_numbers:["0105259411-0854"]` 可按订单号反查所有包裹
 
