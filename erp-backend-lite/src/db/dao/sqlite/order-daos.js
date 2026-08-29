@@ -49,7 +49,10 @@ function genPackageNo() {
 
 // ── 订单同步落库 ─────────────────────────────────────────────
 
-/** upsert Ozon 订单(posting)→ 返回订单 id */
+/** upsert Ozon 订单(posting)→ 返回订单 id
+ *  注意:ON CONFLICT DO UPDATE 路径下 lastInsertRowid 不可靠(可能为 0/陈旧值),
+ *  统一 upsert 后按唯一键 SELECT 反查真实 id,否则后续子表 INSERT 触发 FK 失败
+ */
 function upsertOrder(storeId, p) {
   const now = nowIso();
   const products = Array.isArray(p.products) ? p.products : [];
@@ -61,7 +64,7 @@ function upsertOrder(storeId, p) {
     orderAmount += amount * (Number(pr.quantity) || 1);
   }
   const dm = p.delivery_method || {};
-  const row = db
+  db
     .prepare(
       `INSERT INTO op_ozon_order (
         store_id, posting_number, order_id, order_number, parent_posting_number,
@@ -119,15 +122,10 @@ function upsertOrder(storeId, p) {
       now,
       now
     );
-  if (row.changes > 0 && Number.isInteger(row.lastInsertRowid)) {
-    // INSERT 命中:返回新 id
-    return Number(row.lastInsertRowid);
-  }
-  // ON CONFLICT 更新:反查 id
   const found = db
     .prepare(`SELECT id FROM op_ozon_order WHERE store_id = ? AND posting_number = ?`)
     .get(storeId, String(p.posting_number || ''));
-  return found ? found.id : Number(row.lastInsertRowid);
+  return found.id;
 }
 
 /** 同步产品行:upsert by (order, sku, offer_id);删除 Ozon 侧已不存在的行(保留 purchase_amount) */
@@ -424,24 +422,54 @@ function rowToPackage(r) {
   };
 }
 
-/** 批量取产品行(按订单 id 列表) */
+/** 批量取产品行(按订单 id 列表)
+ *  LEFT JOIN product_data_cache(现有商品缓存,OPI /v3/product/info 同步)
+ *  取 Ozon CDN 直链图片:primary_image[0] 优先,images[0] 兜底(均为 ir-20.ozonstatic.cn 直链)
+ */
 function getItemsByOrderIds(orderIds) {
   if (!orderIds.length) return [];
   const ph = orderIds.map(() => '?').join(',');
   const rows = db
-    .prepare(`SELECT * FROM op_ozon_order_item WHERE ozon_order_id IN (${ph}) ORDER BY id`)
+    .prepare(
+      `SELECT oi.*,
+              COALESCE(
+                json_extract(p.data, '$.primary_image[0]'),
+                json_extract(p.data, '$.images[0]')
+              ) AS pic_url,
+              json_extract(p.data, '$.name') AS cached_name
+       FROM op_ozon_order_item oi
+       LEFT JOIN product_data_cache p ON p.sku = CAST(oi.sku AS TEXT)
+       WHERE oi.ozon_order_id IN (${ph})
+       ORDER BY oi.id`
+    )
     .all(...orderIds);
   return rows.map((r) => ({
     id: r.id,
     ozonOrderId: r.ozon_order_id,
     sku: r.sku,
     offerId: r.offer_id,
-    title: r.title,
+    title: r.cached_name || r.title,
     quantity: r.quantity,
     price: r.price,
+    picUrl: r.pic_url || null,
+    pdpUrl: r.sku ? `https://ozon.ru/context/detail/id/${r.sku}` : null,
     purchaseAmount: r.purchase_amount,
     purchaseNum: r.purchase_num,
   }));
+}
+
+/** 找出某店铺订单产品行中未命中商品缓存的 SKU(同步服务回源用) */
+function findUncachedSkus(storeId) {
+  return db
+    .prepare(
+      `SELECT DISTINCT oi.sku FROM op_ozon_order_item oi
+       JOIN op_ozon_order o ON o.id = oi.ozon_order_id
+       WHERE o.store_id = ? AND oi.sku IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM product_data_cache p WHERE p.sku = CAST(oi.sku AS TEXT))`
+    )
+    .all(storeId)
+    .map((r) => Number(r.sku))
+    .filter((n) => Number.isInteger(n) && n > 0);
 }
 
 /** 批量取采购关联+采购单(按包裹 id 列表) */
@@ -675,6 +703,7 @@ export const orderPackageDao = {
   tabCounts,
   listPackages,
   getItemsByOrderIds,
+  findUncachedSkus,
   getPurchasesByPackageIds,
   getPackageDetail,
   submitPurchase,

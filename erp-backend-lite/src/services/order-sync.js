@@ -8,8 +8,9 @@
 // 手动触发 POST /admin/api/order-process/sync-run(与定时互斥,同一时刻仅一个同步在跑)
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
-import { postingFbsUnfulfilledList, postingFbsList } from './ozon-opi.js';
+import { postingFbsUnfulfilledList, postingFbsList, productInfoListV3 } from './ozon-opi.js';
 import { orderPackageDao, setStoreNameMap } from '../db/dao/sqlite/order-daos.js';
+import { db } from '../db/index.js';
 
 const INTERVAL_MIN = Math.max(1, Number(process.env.ORDER_SYNC_INTERVAL_MIN) || 5);
 const FIRST_DELAY_MS = 10_000;
@@ -48,6 +49,38 @@ async function fetchAll(store, fn, onPage) {
   return total;
 }
 
+// 回源未命中商品缓存的订单 SKU(图片/标题来自 product_data_cache,MISS 时按需拉取)
+// 复用 admin.js 商品同步的 upsert 语义(ON CONFLICT 保留 description_quality)
+const INFO_BATCH = 300;
+
+async function backfillProductCache(store) {
+  const skus = orderPackageDao.findUncachedSkus(store.id);
+  if (!skus.length) return 0;
+  const upsert = db.prepare(
+    `INSERT INTO product_data_cache (sku, data, store_id, fetched_at) VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(sku) DO UPDATE SET data=excluded.data, store_id=excluded.store_id, fetched_at=excluded.fetched_at`
+  );
+  let filled = 0;
+  for (let i = 0; i < skus.length; i += INFO_BATCH) {
+    const batch = skus.slice(i, i + INFO_BATCH);
+    try {
+      const resp = await productInfoListV3(store, { skus: batch });
+      const items = resp?.result?.items || resp?.items || [];
+      for (const it of items) {
+        if (!it?.sku) continue;
+        upsert.run(String(it.sku), JSON.stringify(it), store.id);
+        filled++;
+      }
+    } catch (e) {
+      logger.warn({ storeId: store.id, err: e?.message }, '[order-sync] 商品缓存回源批次失败,跳过');
+    }
+  }
+  if (filled > 0) {
+    logger.info({ storeId: store.id, filled, missed: skus.length }, '[order-sync] 商品缓存回源完成');
+  }
+  return filled;
+}
+
 async function syncStore(store) {
   const now = new Date();
   const since60 = iso(new Date(now.getTime() - 60 * 86400_000));
@@ -65,6 +98,9 @@ async function syncStore(store) {
   count += await fetchAll(store, (cursor) =>
     postingFbsList(store, { since: since30, to: iso(now), cursor })
   , (p) => orderPackageDao.syncPosting(store.id, p));
+
+  // 3) 订单 SKU 未命中商品缓存的回源(图片/完整标题)
+  await backfillProductCache(store);
 
   orderPackageDao.updateSyncCursor(store.id, { count });
   return count;

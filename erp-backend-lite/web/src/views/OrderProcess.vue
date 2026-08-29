@@ -173,6 +173,8 @@ function openPurchase(pkg) {
     title: it.title,
     quantity: it.quantity,
     amount: '',
+    picUrl: it.picUrl,
+    pdpUrl: it.pdpUrl,
   }));
   purchaseOpen.value = true;
 }
@@ -425,8 +427,14 @@ onUnmounted(() => {
           <tr v-for="pkg in rows" :key="pkg.id" class="pkg-row">
             <td class="col-product">
               <div v-for="(it, i) in pkg.items" :key="i" class="product-item">
-                <div class="product-title">{{ it.title || '—' }}</div>
-                <div class="product-sub">SKU {{ it.offerId }} × {{ it.quantity }} · {{ fmtMoney(it.price) }}</div>
+                <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box" :title="it.title || '查看Ozon商品'">
+                  <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
+                </a>
+                <div class="product-main">
+                  <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ it.title || '—' }}</a>
+                  <div v-else class="product-title">{{ it.title || '—' }}</div>
+                  <div class="product-sub">SKU {{ it.offerId }} × {{ it.quantity }} · {{ fmtMoney(it.price) }}</div>
+                </div>
               </div>
               <div v-if="!pkg.items?.length" class="muted">—</div>
             </td>
@@ -548,7 +556,7 @@ onUnmounted(() => {
         <table class="data-table item-table">
           <thead>
             <tr>
-              <th>产品</th>
+              <th style="width: 260px">产品</th>
               <th>数量</th>
               <th>售价</th>
               <th>已采金额</th>
@@ -557,9 +565,16 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <tr v-for="it in purchaseForm.items" :key="it.itemId">
-              <td class="col-product">
-                <div class="product-title">{{ it.title || '—' }}</div>
-                <div class="product-sub">SKU {{ it.offerId }}</div>
+              <td>
+                <div class="product-item">
+                  <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box">
+                    <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
+                  </a>
+                  <div class="product-main">
+                    <div class="product-title">{{ it.title || '—' }}</div>
+                    <div class="product-sub">SKU {{ it.offerId }}</div>
+                  </div>
+                </div>
               </td>
               <td>× {{ it.quantity }}</td>
               <td>{{ fmtMoney(it.price) }}</td>
@@ -606,13 +621,20 @@ onUnmounted(() => {
         <div class="detail-section">订单产品</div>
         <table class="data-table item-table">
           <thead>
-            <tr><th>产品</th><th>数量</th><th>售价</th><th>已采数量</th><th>采购金额(回写)</th></tr>
+            <tr><th style="width: 260px">产品</th><th>数量</th><th>售价</th><th>已采数量</th><th>采购金额(回写)</th></tr>
           </thead>
           <tbody>
             <tr v-for="it in detailItems" :key="it.id">
-              <td class="col-product">
-                <div class="product-title">{{ it.title || '—' }}</div>
-                <div class="product-sub">SKU {{ it.offerId }}</div>
+              <td>
+                <div class="product-item">
+                  <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box">
+                    <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
+                  </a>
+                  <div class="product-main">
+                    <div class="product-title">{{ it.title || '—' }}</div>
+                    <div class="product-sub">SKU {{ it.offerId }}</div>
+                  </div>
+                </div>
               </td>
               <td>× {{ it.quantity }}</td>
               <td>{{ fmtMoney(it.price) }}</td>
@@ -739,12 +761,49 @@ onUnmounted(() => {
   margin-top: 6px;
 }
 
+/* 商品图(Ozon CDN 直链,70×70,与妙手列表缩略图同尺寸) */
+.product-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.product-img-box {
+  flex: 0 0 70px;
+  width: 70px;
+  height: 70px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f9fafb;
+}
+
+.product-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.product-main {
+  flex: 1;
+  min-width: 0;
+}
+
 .product-title {
   max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+
+a.product-title:hover {
+  color: #2563eb;
 }
 
 .product-sub {
