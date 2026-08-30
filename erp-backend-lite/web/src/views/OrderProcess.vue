@@ -4,7 +4,7 @@
 // 设计文档: docs/采购订单-Ozon订单关联管理-功能设计.md
 // 核心流程:买家Ozon下单 → 我采购(提交采购信息→直接流转待打单发货) → 上家发货给我
 //          → 轨迹签收=到货(标记提示) → 我自行打包打面单 → 交运 → 妥投回款
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
   submitPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted,
@@ -193,6 +193,9 @@ function pollSyncDone() {
 }
 
 // ── 采购录入 ───────────────────────────────────────────
+// 采购弹窗内嵌订单导入区的平台 tab
+const importTab = ref('pdd'); // 'pdd' | 'ali' | 'tb'
+
 function openPurchase(pkg) {
   purchaseForm.packageId = pkg.id;
   purchaseForm.packageNo = pkg.packageNo;
@@ -213,8 +216,101 @@ function openPurchase(pkg) {
     picUrl: it.picUrl,
     pdpUrl: it.pdpUrl,
   }));
+  // 清空三平台选中,重置到拼多多 tab 并自动加载
+  pddSelected.value = [];
+  aliSelected.value = [];
+  tbSelected.value = [];
+  importTab.value = 'pdd';
   purchaseOpen.value = true;
+  loadPddOrders();
 }
+
+// ── 采购弹窗内嵌订单导入区(统一三平台)──────────────
+// 当前平台的状态子 tab
+const importSubTab = computed({
+  get: () => (importTab.value === 'pdd' ? pddTab.value : importTab.value === 'ali' ? aliTab.value : tbTab.value),
+  set: (v) => {
+    if (importTab.value === 'pdd') pddTab.value = v;
+    else if (importTab.value === 'ali') aliTab.value = v;
+    else tbTab.value = v;
+  },
+});
+const importSubTabs = computed(() => {
+  if (importTab.value === 'pdd') return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
+  return [{ key: 'all', label: '全部' }, { key: 'unshipped', label: '待发货' }, { key: 'unreceived', label: '待收货' }];
+});
+
+// 当前平台的 orders / loading / error / selected
+const importOrders = computed(() => importTab.value === 'pdd' ? pddOrders.value : importTab.value === 'ali' ? aliOrders.value : tbOrders.value);
+const importLoading = computed(() => importTab.value === 'pdd' ? pddLoading.value : importTab.value === 'ali' ? aliLoading.value : tbLoading.value);
+const importError = computed(() => importTab.value === 'pdd' ? pddError.value : importTab.value === 'ali' ? aliError.value : tbError.value);
+
+// 统一选中模型:当前平台的 selected ref
+const importSelected = computed({
+  get: () => importTab.value === 'pdd' ? pddSelected.value : importTab.value === 'ali' ? aliSelected.value : tbSelected.value,
+  set: (v) => {
+    if (importTab.value === 'pdd') pddSelected.value = v;
+    else if (importTab.value === 'ali') aliSelected.value = v;
+    else tbSelected.value = v;
+  },
+});
+
+// 跨三平台合并的已选订单(用于下方展示)
+const allSelectedOrders = computed(() => {
+  const sel = (orders, selected) => orders.filter((o) => selected.includes(o.orderSn));
+  return [
+    ...sel(pddOrders.value, pddSelected.value).map((o) => ({ ...o, _platform: 'yangkeduo' })),
+    ...sel(aliOrders.value, aliSelected.value).map((o) => ({ ...o, _platform: '1688' })),
+    ...sel(tbOrders.value, tbSelected.value).map((o) => ({ ...o, _platform: 'taobao' })),
+  ];
+});
+const allSelectedTotal = computed(() =>
+  allSelectedOrders.value.reduce((s, o) => s + Number(o.amount || 0), 0).toFixed(2));
+
+function switchImportTab(t) {
+  if (importTab.value === t || importLoading.value) return;
+  importTab.value = t;
+  if (t === 'pdd' && !pddOrders.value.length && !pddLoading.value) loadPddOrders();
+  else if (t === 'ali' && !aliOrders.value.length && !aliLoading.value) loadAliOrders();
+  else if (t === 'tb' && !tbOrders.value.length && !tbLoading.value) loadTbOrders();
+}
+
+function switchImportSubTab(t) {
+  importSubTab.value = t;
+  if (importTab.value === 'pdd') loadPddOrders();
+  else if (importTab.value === 'ali') loadAliOrders();
+  else loadTbOrders();
+}
+
+function isImportCancelled(o) {
+  return /取消|关闭/.test(o.statusPrompt || '') || /close|cancel/i.test(o.status || '');
+}
+
+function platformLabelByVal(v) { return PLATFORMS.find((p) => p.value === v)?.label || v; }
+
+/** 从下方选中区移除一单 */
+function removeSelectedOrder(platform, orderSn) {
+  if (platform === 'yangkeduo') pddSelected.value = pddSelected.value.filter((s) => s !== orderSn);
+  else if (platform === '1688') aliSelected.value = aliSelected.value.filter((s) => s !== orderSn);
+  else tbSelected.value = tbSelected.value.filter((s) => s !== orderSn);
+}
+
+/** 选中订单变化时自动回填 purchaseForm(无需手动点按钮) */
+watch(allSelectedOrders, (sel) => {
+  if (!sel.length) return;
+  const first = sel[0];
+  purchaseForm.platform = first._platform;
+  purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
+  const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
+  purchaseForm.sellerName = sellers.join(',');
+  purchaseForm.paymentAmount = allSelectedTotal.value;
+  const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
+  purchaseForm.logisticsNo = tracks.join(',');
+  purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
+  if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
+    purchaseForm.items[0].amount = sel[0].amount;
+  }
+}, { deep: true });
 
 async function savePurchase() {
   if (purchaseSaving.value) return;
@@ -360,6 +456,195 @@ function applyPddSelection() {
   }
   pddDialogOpen.value = false;
   show(`已导入 ${sel.length} 个拼多多订单(金额 ¥${pddTotal.value}),请核对后保存`, 'success');
+}
+
+// ── 1688订单导入(miaoshou-helper 扩展桥接)────────────
+// 协议:window.postMessage(source='erp-ali') ⇄ erp-bridge.js ⇄ background.js → 1688 mtop dataline
+const ALI_NS = 'erp-ali';
+const aliDialogOpen = ref(false);
+const aliLoading = ref(false);
+const aliError = ref('');
+const aliOrders = ref([]);          // 精简后的 1688 订单列表
+const aliTab = ref('all');          // 'all' | 'unshipped' | 'unreceived'
+const aliSelected = ref([]);        // 已勾选的 orderSn
+const aliBridgeReady = ref(false);  // 是否检测到扩展桥接
+let aliReqSeq = 0;
+const aliPending = new Map();       // reqId -> resolve
+
+function aliRequest(payload) {
+  return new Promise((resolve) => {
+    const reqId = ++aliReqSeq;
+    // 1688 需签名+可能一次 token 轮换重试,超时放宽到 20s
+    const timer = setTimeout(() => {
+      aliPending.delete(reqId);
+      resolve({ ok: false, error: '请求超时:请确认 miaoshou-helper 扩展已启用并已重新加载(扩展更新后需刷新本页)' });
+    }, 20_000);
+    aliPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
+    window.postMessage({ source: ALI_NS, type: 'ALI_GET_ORDERS', reqId, payload }, window.location.origin);
+  });
+}
+
+function onAliMessage(ev) {
+  if (ev.source !== window || !ev.data || ev.data.source !== ALI_NS) return;
+  if (ev.data.type === 'ALI_PONG') { aliBridgeReady.value = true; return; }
+  if (ev.data.type === 'ALI_ORDERS_RESULT') {
+    const cb = aliPending.get(ev.data.reqId);
+    if (cb) { aliPending.delete(ev.data.reqId); cb(ev.data.data); }
+  }
+}
+
+function aliPing() {
+  window.postMessage({ source: ALI_NS, type: 'ALI_PING' }, window.location.origin);
+}
+
+async function loadAliOrders() {
+  aliLoading.value = true;
+  aliError.value = '';
+  aliSelected.value = [];
+  try {
+    const resp = await aliRequest({ tab: aliTab.value, size: 30 });
+    if (!resp.ok) throw new Error(resp.error || '获取订单失败');
+    aliOrders.value = resp.orders || [];
+  } catch (err) {
+    aliError.value = err.message || String(err);
+    aliOrders.value = [];
+  } finally {
+    aliLoading.value = false;
+  }
+}
+
+async function openAliDialog() {
+  aliDialogOpen.value = true;
+  await loadAliOrders();
+}
+
+function switchAliTab(t) {
+  if (aliTab.value === t || aliLoading.value) return;
+  aliTab.value = t;
+  loadAliOrders();
+}
+
+function isAliCancelled(o) {
+  return /取消|关闭/.test(o.statusPrompt || '') || /close|cancel/i.test(o.status || '');
+}
+
+const aliSelectedOrders = computed(() =>
+  aliOrders.value.filter((o) => aliSelected.value.includes(o.orderSn)));
+const aliTotal = computed(() =>
+  aliSelectedOrders.value.reduce((s, o) => s + Number(o.amount || 0), 0).toFixed(2));
+
+/** 导入选中的 1688 订单回填采购表单 */
+function applyAliSelection() {
+  const sel = aliSelectedOrders.value;
+  if (!sel.length) return;
+  purchaseForm.platform = '1688';
+  purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
+  const sellers = [...new Set(sel.map((o) => o.sellerName).filter(Boolean))];
+  purchaseForm.sellerName = sellers.join(',');
+  purchaseForm.paymentAmount = aliTotal.value;
+  const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
+  purchaseForm.logisticsNo = tracks.join(',');
+  purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
+  // 单订单+单商品行时自动填行金额,其余场景保持手动填写
+  if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
+    purchaseForm.items[0].amount = sel[0].amount;
+  }
+  aliDialogOpen.value = false;
+  show(`已导入 ${sel.length} 个1688订单(金额 ¥${aliTotal.value}),请核对后保存`, 'success');
+}
+
+// ── 淘宝订单导入(miaoshou-helper 扩展桥接)────────────
+// 协议:window.postMessage(source='erp-tb') ⇄ erp-bridge.js ⇄ background.js → 淘宝 mtop queryboughtlistV2
+const TB_NS = 'erp-tb';
+const tbDialogOpen = ref(false);
+const tbLoading = ref(false);
+const tbError = ref('');
+const tbOrders = ref([]);          // 精简后的淘宝订单列表
+const tbTab = ref('all');          // 'all' | 'unshipped' | 'unreceived'
+const tbSelected = ref([]);        // 已勾选的 orderSn
+const tbBridgeReady = ref(false);  // 是否检测到扩展桥接
+let tbReqSeq = 0;
+const tbPending = new Map();       // reqId -> resolve
+
+function tbRequest(payload) {
+  return new Promise((resolve) => {
+    const reqId = ++tbReqSeq;
+    const timer = setTimeout(() => {
+      tbPending.delete(reqId);
+      resolve({ ok: false, error: '请求超时:请确认 miaoshou-helper 扩展已启用并已重新加载(扩展更新后需刷新本页)' });
+    }, 20_000);
+    tbPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
+    window.postMessage({ source: TB_NS, type: 'TB_GET_ORDERS', reqId, payload }, window.location.origin);
+  });
+}
+
+function onTbMessage(ev) {
+  if (ev.source !== window || !ev.data || ev.data.source !== TB_NS) return;
+  if (ev.data.type === 'TB_PONG') { tbBridgeReady.value = true; return; }
+  if (ev.data.type === 'TB_ORDERS_RESULT') {
+    const cb = tbPending.get(ev.data.reqId);
+    if (cb) { tbPending.delete(ev.data.reqId); cb(ev.data.data); }
+  }
+}
+
+function tbPing() {
+  window.postMessage({ source: TB_NS, type: 'TB_PING' }, window.location.origin);
+}
+
+async function loadTbOrders() {
+  tbLoading.value = true;
+  tbError.value = '';
+  tbSelected.value = [];
+  try {
+    const resp = await tbRequest({ tab: tbTab.value });
+    if (!resp.ok) throw new Error(resp.error || '获取订单失败');
+    tbOrders.value = resp.orders || [];
+  } catch (err) {
+    tbError.value = err.message || String(err);
+    tbOrders.value = [];
+  } finally {
+    tbLoading.value = false;
+  }
+}
+
+async function openTbDialog() {
+  tbDialogOpen.value = true;
+  await loadTbOrders();
+}
+
+function switchTbTab(t) {
+  if (tbTab.value === t || tbLoading.value) return;
+  tbTab.value = t;
+  loadTbOrders();
+}
+
+function isTbCancelled(o) {
+  return /关闭|取消|退款成功/.test(o.statusPrompt || '');
+}
+
+const tbSelectedOrders = computed(() =>
+  tbOrders.value.filter((o) => tbSelected.value.includes(o.orderSn)));
+const tbTotal = computed(() =>
+  tbSelectedOrders.value.reduce((s, o) => s + Number(o.amount || 0), 0).toFixed(2));
+
+/** 导入选中的淘宝订单回填采购表单 */
+function applyTbSelection() {
+  const sel = tbSelectedOrders.value;
+  if (!sel.length) return;
+  purchaseForm.platform = 'taobao';
+  purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
+  const sellers = [...new Set(sel.map((o) => o.sellerName).filter(Boolean))];
+  purchaseForm.sellerName = sellers.join(',');
+  purchaseForm.paymentAmount = tbTotal.value;
+  const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
+  purchaseForm.logisticsNo = tracks.join(',');
+  purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
+  // 单订单+单商品行时自动填行金额,其余场景保持手动填写
+  if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
+    purchaseForm.items[0].amount = sel[0].amount;
+  }
+  tbDialogOpen.value = false;
+  show(`已导入 ${sel.length} 个淘宝订单(金额 ¥${tbTotal.value}),请核对后保存`, 'success');
 }
 
 // ── 行操作 ─────────────────────────────────────────────
@@ -537,14 +822,20 @@ onMounted(() => {
   loadSyncStatus();
   statusTimer = setInterval(loadSyncStatus, 30_000);
   tickTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
-  // 拼多多导入桥接:监听扩展回包 + 主动探测(扩展公告可能早于本页挂载)
+  // 拼多多/1688/淘宝导入桥接:监听扩展回包 + 主动探测(扩展公告可能早于本页挂载)
   window.addEventListener('message', onPddMessage);
   pddPing();
+  window.addEventListener('message', onAliMessage);
+  aliPing();
+  window.addEventListener('message', onTbMessage);
+  tbPing();
 });
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer);
   if (tickTimer) clearInterval(tickTimer);
   window.removeEventListener('message', onPddMessage);
+  window.removeEventListener('message', onAliMessage);
+  window.removeEventListener('message', onTbMessage);
 });
 </script>
 
@@ -760,42 +1051,99 @@ onUnmounted(() => {
     <!-- 提交采购信息弹窗(模式B) -->
     <AppModal :open="purchaseOpen" :title="`提交采购信息 · ${purchaseForm.packageNo}`" size="lg" @update:open="purchaseOpen = $event">
       <div class="purchase-form">
-        <div class="form-row">
-          <label>采购单号</label>
-          <input v-model.trim="purchaseForm.purchaseSn" class="filter-input" placeholder="1688/拼多多订单号(可留空)" />
-          <label>采购平台</label>
-          <select v-model="purchaseForm.platform" class="filter-input">
-            <option v-for="p in PLATFORMS" :key="p.value" :value="p.value">{{ p.label }}</option>
-          </select>
-        </div>
-        <div v-if="purchaseForm.platform === 'yangkeduo'" class="form-row pdd-import-row">
-          <label></label>
-          <div class="pdd-import-cell">
-            <button class="btn btn-ghost btn-sm" @click="openPddDialog">从拼多多导入订单</button>
-            <span v-if="!pddBridgeReady" class="pdd-bridge-warn" title="需要安装/启用 miaoshou-helper 扩展,并保持浏览器已登录拼多多">
-              未检测到助手扩展
-            </span>
-          </div>
-        </div>
-        <div class="form-row">
-          <label>采购账号</label>
-          <input v-model.trim="purchaseForm.buyerAccount" class="filter-input" placeholder="如 清祥17 / PCC01(可留空)" />
-          <label>上家名称</label>
-          <input v-model.trim="purchaseForm.sellerName" class="filter-input" placeholder="如 深圳市嘉龙盛(可留空)" />
-        </div>
-        <div class="form-row">
-          <label>实付合计</label>
-          <input v-model.trim="purchaseForm.paymentAmount" class="filter-input" placeholder="可留空(按行金额计)" />
-          <label>备注</label>
-          <input v-model.trim="purchaseForm.note" class="filter-input" placeholder="可留空" />
-        </div>
-        <div class="form-row">
-          <label>国内快递单号</label>
-          <input v-model.trim="purchaseForm.logisticsNo" class="filter-input" placeholder="上家发货单号(填了视为已发货)" />
-          <label>物流公司</label>
-          <input v-model.trim="purchaseForm.logisticsCompany" class="filter-input" placeholder="如 顺丰/韵达/极兔" />
+        <!-- 平台 tab:拼多多 / 1688 / 淘宝 / 手动录入 -->
+        <div class="import-platform-tabs">
+          <button class="pdd-tab" :class="{ active: importTab === 'pdd' }" @click="switchImportTab('pdd')">拼多多</button>
+          <button class="pdd-tab" :class="{ active: importTab === 'ali' }" @click="switchImportTab('ali')">1688</button>
+          <button class="pdd-tab" :class="{ active: importTab === 'tb' }" @click="switchImportTab('tb')">淘宝</button>
+          <button class="pdd-tab" :class="{ active: importTab === 'manual' }" @click="importTab = 'manual'">手动录入</button>
+          <span v-if="importTab !== 'manual' && (!pddBridgeReady || !aliBridgeReady || !tbBridgeReady)" class="pdd-bridge-warn" title="需要安装/启用 miaoshou-helper 扩展">未检测到助手扩展</span>
         </div>
 
+        <!-- 手动录入 tab -->
+        <div v-if="importTab === 'manual'" class="manual-input-section">
+          <div class="form-row">
+            <label>采购金额</label>
+            <input v-model.trim="purchaseForm.paymentAmount" class="filter-input" placeholder="如 29.21" />
+            <label>采购平台</label>
+            <select v-model="purchaseForm.platform" class="filter-input">
+              <option v-for="p in PLATFORMS" :key="p.value" :value="p.value">{{ p.label }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>国内快递单号</label>
+            <input v-model.trim="purchaseForm.logisticsNo" class="filter-input" placeholder="上家发货单号(填了视为已发货)" />
+            <label>物流公司</label>
+            <input v-model.trim="purchaseForm.logisticsCompany" class="filter-input" placeholder="如 顺丰/韵达/极兔" />
+          </div>
+        </div>
+
+        <!-- 平台订单 tab -->
+        <div v-else class="import-section">
+          <div class="pdd-toolbar">
+            <div class="pdd-tabs">
+              <button v-for="st in importSubTabs" :key="st.key" class="pdd-tab" :class="{ active: importSubTab === st.key }" @click="switchImportSubTab(st.key)">{{ st.label }}</button>
+            </div>
+            <button class="btn btn-ghost btn-sm" :disabled="importLoading" @click="importTab === 'pdd' ? loadPddOrders() : importTab === 'ali' ? loadAliOrders() : loadTbOrders()">刷新</button>
+          </div>
+
+          <div v-if="importLoading" class="empty">加载中…</div>
+          <div v-else-if="importError" class="pdd-error">{{ importError }}</div>
+          <div v-else-if="!importOrders.length" class="empty">没有查询到订单</div>
+          <div v-else class="pdd-list">
+            <label
+              v-for="o in importOrders"
+              :key="o.orderSn"
+              class="pdd-item"
+              :class="{ disabled: isImportCancelled(o), selected: importSelected.includes(o.orderSn) }"
+            >
+              <input
+                type="checkbox"
+                :value="o.orderSn"
+                :disabled="isImportCancelled(o)"
+                v-model="importSelected"
+              />
+              <img
+                v-if="o.goods[0]?.thumbUrl"
+                :src="o.goods[0].thumbUrl"
+                class="pdd-thumb"
+                loading="lazy"
+                referrerpolicy="no-referrer"
+                alt=""
+              />
+              <div v-else class="pdd-thumb pdd-thumb-empty"></div>
+              <div class="pdd-info">
+                <div class="pdd-goods" :title="o.goods[0]?.goodsName">
+                  {{ o.goods[0]?.goodsName || '—' }}
+                  <span v-if="o.goods.length > 1" class="pdd-more">等{{ o.goods.length }}件商品</span>
+                </div>
+                <div class="pdd-meta">
+                  <span class="pdd-mall">{{ o.mallName || o.sellerName || '—' }}</span>
+                  <span class="pdd-amount">¥{{ o.amount }}</span>
+                  <span>{{ importTab === 'pdd' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—') }}</span>
+                  <span class="tag" :class="isImportCancelled(o) ? 'tag-mute' : 'tag-info'">{{ o.statusPrompt || '—' }}</span>
+                </div>
+                <div class="pdd-sn mono">
+                  {{ o.orderSn }}<template v-if="o.trackingNumber"> · {{ o.trackingNumber }}</template>
+                </div>
+              </div>
+            </label>
+          </div>
+
+          <!-- 已选订单展示区(跨平台合并) -->
+          <div v-if="allSelectedOrders.length" class="selected-orders">
+            <div class="selected-orders-title">已选 {{ allSelectedOrders.length }} 单 · 合计 ¥{{ allSelectedTotal }}</div>
+            <div v-for="o in allSelectedOrders" :key="o._platform + o.orderSn" class="selected-order-item">
+              <span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span>
+              <span class="selected-order-goods" :title="o.goods[0]?.goodsName">{{ o.goods[0]?.goodsName || '—' }}</span>
+              <span class="pdd-amount">¥{{ o.amount }}</span>
+              <span class="selected-order-sn mono">{{ o.orderSn }}</span>
+              <button class="btn btn-ghost btn-sm" @click="removeSelectedOrder(o._platform, o.orderSn)">✕</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 采购金额(按行填写) -->
         <div class="form-section-title">订单产品 · 采购金额(按行填写)</div>
         <table class="data-table item-table">
           <thead>
@@ -803,7 +1151,6 @@ onUnmounted(() => {
               <th style="width: 260px">产品</th>
               <th>数量</th>
               <th>售价</th>
-              <th>已采金额</th>
               <th style="width: 140px">本次采购金额</th>
             </tr>
           </thead>
@@ -822,13 +1169,20 @@ onUnmounted(() => {
               </td>
               <td>× {{ it.quantity }}</td>
               <td>{{ fmtMoney(it.price) }}</td>
-              <td class="muted">—</td>
               <td>
                 <input v-model.trim="it.amount" class="filter-input amount-input" placeholder="0.00" />
               </td>
             </tr>
           </tbody>
         </table>
+
+        <!-- 物流信息(平台导入自动填,手动录入在此输入) -->
+        <div v-if="importTab !== 'manual'" class="form-row" style="margin-top: 12px">
+          <label>国内快递单号</label>
+          <input v-model.trim="purchaseForm.logisticsNo" class="filter-input" placeholder="上家发货单号(填了视为已发货)" />
+          <label>物流公司</label>
+          <input v-model.trim="purchaseForm.logisticsCompany" class="filter-input" placeholder="如 顺丰/韵达/极兔" />
+        </div>
 
         <div class="form-tip">
           提交后包裹将直接流转到「待打单发货」;国内快递单号可留空后续补录。个人自发货模式:无货代,收货人为你本人。
@@ -838,70 +1192,6 @@ onUnmounted(() => {
           <button class="btn btn-primary" :disabled="purchaseSaving" @click="savePurchase">
             {{ purchaseSaving ? '保存中…' : '保 存' }}
           </button>
-        </div>
-      </div>
-    </AppModal>
-
-    <!-- 拼多多订单选择弹窗(二级,数据来自 miaoshou-helper 扩展桥接) -->
-    <AppModal :open="pddDialogOpen" title="选择拼多多订单" size="lg" @update:open="pddDialogOpen = $event">
-      <div class="pdd-dialog">
-        <div class="pdd-toolbar">
-          <div class="pdd-tabs">
-            <button class="pdd-tab" :class="{ active: pddTab === 'all' }" @click="switchPddTab('all')">全部</button>
-            <button class="pdd-tab" :class="{ active: pddTab === 'unreceived' }" @click="switchPddTab('unreceived')">待收货</button>
-          </div>
-          <button class="btn btn-ghost btn-sm" :disabled="pddLoading" @click="loadPddOrders">刷新</button>
-        </div>
-
-        <div v-if="pddLoading" class="empty">加载中…</div>
-        <div v-else-if="pddError" class="pdd-error">{{ pddError }}</div>
-        <div v-else-if="!pddOrders.length" class="empty">没有查询到订单</div>
-        <div v-else class="pdd-list">
-          <label
-            v-for="o in pddOrders"
-            :key="o.orderSn"
-            class="pdd-item"
-            :class="{ disabled: isPddCancelled(o), selected: pddSelected.includes(o.orderSn) }"
-          >
-            <input
-              type="checkbox"
-              :value="o.orderSn"
-              :disabled="isPddCancelled(o)"
-              v-model="pddSelected"
-            />
-            <img
-              v-if="o.goods[0]?.thumbUrl"
-              :src="o.goods[0].thumbUrl"
-              class="pdd-thumb"
-              loading="lazy"
-              referrerpolicy="no-referrer"
-              alt=""
-            />
-            <div v-else class="pdd-thumb pdd-thumb-empty"></div>
-            <div class="pdd-info">
-              <div class="pdd-goods" :title="o.goods[0]?.goodsName">
-                {{ o.goods[0]?.goodsName || '—' }}
-                <span v-if="o.goods.length > 1" class="pdd-more">等{{ o.goods.length }}件商品</span>
-              </div>
-              <div class="pdd-meta">
-                <span class="pdd-mall">{{ o.mallName || '—' }}</span>
-                <span class="pdd-amount">¥{{ o.amount }}</span>
-                <span>{{ fmtTime(o.orderTime * 1000) }}</span>
-                <span class="tag" :class="isPddCancelled(o) ? 'tag-mute' : 'tag-info'">{{ o.statusPrompt || '—' }}</span>
-              </div>
-              <div class="pdd-sn mono">
-                {{ o.orderSn }}<template v-if="o.trackingNumber"> · {{ o.trackingNumber }}</template>
-              </div>
-            </div>
-          </label>
-        </div>
-
-        <div class="pdd-footer">
-          <span class="pdd-footer-info">已选 {{ pddSelected.length }} 单 · 合计 ¥{{ pddTotal }}</span>
-          <div class="form-actions">
-            <button class="btn btn-ghost" @click="pddDialogOpen = false">取 消</button>
-            <button class="btn btn-primary" :disabled="!pddSelected.length" @click="applyPddSelection">导入所选</button>
-          </div>
         </div>
       </div>
     </AppModal>
@@ -1336,6 +1626,52 @@ a.product-title:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 采购弹窗内嵌订单导入区 */
+.import-section {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border, #e8e8e8);
+}
+.manual-input-section {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border, #e8e8e8);
+}
+.import-platform-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.selected-orders {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--bg-soft, #f5f5f5);
+  border-radius: 6px;
+}
+.selected-orders-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.selected-order-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.selected-order-goods {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selected-order-sn {
+  font-size: 11px;
+  color: var(--text-muted, #999);
 }
 
 .pdd-bridge-warn {
