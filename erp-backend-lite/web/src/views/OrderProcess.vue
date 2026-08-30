@@ -225,93 +225,6 @@ function openPurchase(pkg) {
   loadPddOrders();
 }
 
-// ── 采购弹窗内嵌订单导入区(统一三平台)──────────────
-// 当前平台的状态子 tab
-const importSubTab = computed({
-  get: () => (importTab.value === 'pdd' ? pddTab.value : importTab.value === 'ali' ? aliTab.value : tbTab.value),
-  set: (v) => {
-    if (importTab.value === 'pdd') pddTab.value = v;
-    else if (importTab.value === 'ali') aliTab.value = v;
-    else tbTab.value = v;
-  },
-});
-const importSubTabs = computed(() => {
-  if (importTab.value === 'pdd') return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
-  return [{ key: 'all', label: '全部' }, { key: 'unshipped', label: '待发货' }, { key: 'unreceived', label: '待收货' }];
-});
-
-// 当前平台的 orders / loading / error / selected
-const importOrders = computed(() => importTab.value === 'pdd' ? pddOrders.value : importTab.value === 'ali' ? aliOrders.value : tbOrders.value);
-const importLoading = computed(() => importTab.value === 'pdd' ? pddLoading.value : importTab.value === 'ali' ? aliLoading.value : tbLoading.value);
-const importError = computed(() => importTab.value === 'pdd' ? pddError.value : importTab.value === 'ali' ? aliError.value : tbError.value);
-
-// 统一选中模型:当前平台的 selected ref
-const importSelected = computed({
-  get: () => importTab.value === 'pdd' ? pddSelected.value : importTab.value === 'ali' ? aliSelected.value : tbSelected.value,
-  set: (v) => {
-    if (importTab.value === 'pdd') pddSelected.value = v;
-    else if (importTab.value === 'ali') aliSelected.value = v;
-    else tbSelected.value = v;
-  },
-});
-
-// 跨三平台合并的已选订单(用于下方展示)
-const allSelectedOrders = computed(() => {
-  const sel = (orders, selected) => orders.filter((o) => selected.includes(o.orderSn));
-  return [
-    ...sel(pddOrders.value, pddSelected.value).map((o) => ({ ...o, _platform: 'yangkeduo' })),
-    ...sel(aliOrders.value, aliSelected.value).map((o) => ({ ...o, _platform: '1688' })),
-    ...sel(tbOrders.value, tbSelected.value).map((o) => ({ ...o, _platform: 'taobao' })),
-  ];
-});
-const allSelectedTotal = computed(() =>
-  allSelectedOrders.value.reduce((s, o) => s + Number(o.amount || 0), 0).toFixed(2));
-
-function switchImportTab(t) {
-  if (importTab.value === t || importLoading.value) return;
-  importTab.value = t;
-  if (t === 'pdd' && !pddOrders.value.length && !pddLoading.value) loadPddOrders();
-  else if (t === 'ali' && !aliOrders.value.length && !aliLoading.value) loadAliOrders();
-  else if (t === 'tb' && !tbOrders.value.length && !tbLoading.value) loadTbOrders();
-}
-
-function switchImportSubTab(t) {
-  importSubTab.value = t;
-  if (importTab.value === 'pdd') loadPddOrders();
-  else if (importTab.value === 'ali') loadAliOrders();
-  else loadTbOrders();
-}
-
-function isImportCancelled(o) {
-  return /取消|关闭/.test(o.statusPrompt || '') || /close|cancel/i.test(o.status || '');
-}
-
-function platformLabelByVal(v) { return PLATFORMS.find((p) => p.value === v)?.label || v; }
-
-/** 从下方选中区移除一单 */
-function removeSelectedOrder(platform, orderSn) {
-  if (platform === 'yangkeduo') pddSelected.value = pddSelected.value.filter((s) => s !== orderSn);
-  else if (platform === '1688') aliSelected.value = aliSelected.value.filter((s) => s !== orderSn);
-  else tbSelected.value = tbSelected.value.filter((s) => s !== orderSn);
-}
-
-/** 选中订单变化时自动回填 purchaseForm(无需手动点按钮) */
-watch(allSelectedOrders, (sel) => {
-  if (!sel.length) return;
-  const first = sel[0];
-  purchaseForm.platform = first._platform;
-  purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
-  const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
-  purchaseForm.sellerName = sellers.join(',');
-  purchaseForm.paymentAmount = allSelectedTotal.value;
-  const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
-  purchaseForm.logisticsNo = tracks.join(',');
-  purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
-  if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
-    purchaseForm.items[0].amount = sel[0].amount;
-  }
-}, { deep: true });
-
 async function savePurchase() {
   if (purchaseSaving.value) return;
   const items = purchaseForm.items
@@ -646,6 +559,93 @@ function applyTbSelection() {
   tbDialogOpen.value = false;
   show(`已导入 ${sel.length} 个淘宝订单(金额 ¥${tbTotal.value}),请核对后保存`, 'success');
 }
+
+// ── 采购弹窗内嵌订单导入区(统一三平台,放在 PDD/ALI/TB 声明之后)──
+// 当前平台的状态子 tab
+const importSubTab = computed({
+  get: () => (importTab.value === 'pdd' ? pddTab.value : importTab.value === 'ali' ? aliTab.value : tbTab.value),
+  set: (v) => {
+    if (importTab.value === 'pdd') pddTab.value = v;
+    else if (importTab.value === 'ali') aliTab.value = v;
+    else tbTab.value = v;
+  },
+});
+const importSubTabs = computed(() => {
+  if (importTab.value === 'pdd') return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
+  return [{ key: 'all', label: '全部' }, { key: 'unshipped', label: '待发货' }, { key: 'unreceived', label: '待收货' }];
+});
+
+// 当前平台的 orders / loading / error / selected
+const importOrders = computed(() => importTab.value === 'pdd' ? pddOrders.value : importTab.value === 'ali' ? aliOrders.value : tbOrders.value);
+const importLoading = computed(() => importTab.value === 'pdd' ? pddLoading.value : importTab.value === 'ali' ? aliLoading.value : tbLoading.value);
+const importError = computed(() => importTab.value === 'pdd' ? pddError.value : importTab.value === 'ali' ? aliError.value : tbError.value);
+
+// 统一选中模型:当前平台的 selected ref
+const importSelected = computed({
+  get: () => importTab.value === 'pdd' ? pddSelected.value : importTab.value === 'ali' ? aliSelected.value : tbSelected.value,
+  set: (v) => {
+    if (importTab.value === 'pdd') pddSelected.value = v;
+    else if (importTab.value === 'ali') aliSelected.value = v;
+    else tbSelected.value = v;
+  },
+});
+
+// 跨三平台合并的已选订单(用于下方展示)
+const allSelectedOrders = computed(() => {
+  const sel = (orders, selected) => orders.filter((o) => selected.includes(o.orderSn));
+  return [
+    ...sel(pddOrders.value, pddSelected.value).map((o) => ({ ...o, _platform: 'yangkeduo' })),
+    ...sel(aliOrders.value, aliSelected.value).map((o) => ({ ...o, _platform: '1688' })),
+    ...sel(tbOrders.value, tbSelected.value).map((o) => ({ ...o, _platform: 'taobao' })),
+  ];
+});
+const allSelectedTotal = computed(() =>
+  allSelectedOrders.value.reduce((s, o) => s + Number(o.amount || 0), 0).toFixed(2));
+
+function switchImportTab(t) {
+  if (importTab.value === t || importLoading.value) return;
+  importTab.value = t;
+  if (t === 'pdd' && !pddOrders.value.length && !pddLoading.value) loadPddOrders();
+  else if (t === 'ali' && !aliOrders.value.length && !aliLoading.value) loadAliOrders();
+  else if (t === 'tb' && !tbOrders.value.length && !tbLoading.value) loadTbOrders();
+}
+
+function switchImportSubTab(t) {
+  importSubTab.value = t;
+  if (importTab.value === 'pdd') loadPddOrders();
+  else if (importTab.value === 'ali') loadAliOrders();
+  else loadTbOrders();
+}
+
+function isImportCancelled(o) {
+  return /取消|关闭/.test(o.statusPrompt || '') || /close|cancel/i.test(o.status || '');
+}
+
+function platformLabelByVal(v) { return PLATFORMS.find((p) => p.value === v)?.label || v; }
+
+/** 从下方选中区移除一单 */
+function removeSelectedOrder(platform, orderSn) {
+  if (platform === 'yangkeduo') pddSelected.value = pddSelected.value.filter((s) => s !== orderSn);
+  else if (platform === '1688') aliSelected.value = aliSelected.value.filter((s) => s !== orderSn);
+  else tbSelected.value = tbSelected.value.filter((s) => s !== orderSn);
+}
+
+/** 选中订单变化时自动回填 purchaseForm(无需手动点按钮) */
+watch(allSelectedOrders, (sel) => {
+  if (!sel.length) return;
+  const first = sel[0];
+  purchaseForm.platform = first._platform;
+  purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
+  const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
+  purchaseForm.sellerName = sellers.join(',');
+  purchaseForm.paymentAmount = allSelectedTotal.value;
+  const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
+  purchaseForm.logisticsNo = tracks.join(',');
+  purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
+  if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
+    purchaseForm.items[0].amount = sel[0].amount;
+  }
+}, { deep: true });
 
 // ── 行操作 ─────────────────────────────────────────────
 async function onUnlink(pkg, link) {
