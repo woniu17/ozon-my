@@ -1,3 +1,10 @@
+<script>
+// 模块级弹窗打开栈:嵌套弹窗场景下,Esc 只关闭栈顶(最后打开)的弹窗。
+// 注意必须放普通 <script> 块(script setup 每个实例都会执行,数组会退化为实例级)
+const openStack = [];
+let modalSeq = 0;
+</script>
+
 <script setup>
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue';
 
@@ -13,6 +20,8 @@ const cardRef = ref(null);
 // 打开前记录触发元素,关闭后恢复焦点
 let lastFocused = null;
 
+const myId = ++modalSeq;
+
 const close = () => emit('update:open', false);
 
 // focus trap + Esc 关闭 + 焦点恢复(2026-07 可访问性修复)
@@ -20,6 +29,7 @@ watch(
   () => props.open,
   async (isOpen) => {
     if (isOpen) {
+      openStack.push(myId);
       lastFocused = document.activeElement;
       await nextTick();
       // 聚焦到卡片内首个可聚焦元素(优先关闭按钮)
@@ -30,6 +40,8 @@ watch(
       }
       document.addEventListener('keydown', onKeydown, true);
     } else {
+      const idx = openStack.indexOf(myId);
+      if (idx >= 0) openStack.splice(idx, 1);
       document.removeEventListener('keydown', onKeydown, true);
       if (lastFocused && typeof lastFocused.focus === 'function') {
         lastFocused.focus();
@@ -40,6 +52,8 @@ watch(
 
 function onKeydown(e) {
   if (e.key === 'Escape') {
+    // 非栈顶弹窗不响应(嵌套场景:仅关闭最上层的弹窗)
+    if (openStack[openStack.length - 1] !== myId) return;
     e.preventDefault();
     close();
     return;

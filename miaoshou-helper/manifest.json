@@ -1,14 +1,21 @@
 {
   "manifest_version": 3,
   "name": "我的妙手助手",
-  "version": "1.0.0",
-  "description": "在 ERP 91miaoshou 订单页面中识别并突出展示质检单（订单号以 02131 或 024785 开头）",
+  "version": "1.1.0",
+  "description": "ERP 订单页质检单高亮 + 拼多多订单导入代理(个人 ERP 采购弹窗拉取拼多多最近订单)",
   "permissions": [
-    "storage"
+    "storage",
+    "cookies"
   ],
   "host_permissions": [
-    "https://erp.91miaoshou.com/*"
+    "https://erp.91miaoshou.com/*",
+    "https://*.yangkeduo.com/*",
+    "https://yochylin.com/*",
+    "http://localhost:5173/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_title": "我的妙手助手 - 设置",
     "default_popup": "popup.html",
@@ -35,6 +42,16 @@
         "content.css"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://yochylin.com/admin*",
+        "http://localhost:5173/admin*"
+      ],
+      "js": [
+        "erp-bridge.js"
+      ],
+      "run_at": "document_start"
     }
   ]
 }

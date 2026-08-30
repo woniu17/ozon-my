@@ -252,6 +252,116 @@ async function savePurchase() {
   }
 }
 
+// ── 拼多多订单导入(miaoshou-helper 扩展桥接)──────────
+// 协议:window.postMessage(source='erp-pdd') ⇄ erp-bridge.js ⇄ background.js → PDD order_list_v4
+const PDD_NS = 'erp-pdd';
+const pddDialogOpen = ref(false);
+const pddLoading = ref(false);
+const pddError = ref('');
+const pddOrders = ref([]);          // 精简后的 PDD 订单列表
+const pddTab = ref('all');          // 'all' | 'unreceived'
+const pddSelected = ref([]);        // 已勾选的 orderSn
+const pddBridgeReady = ref(false);  // 是否检测到扩展桥接
+let pddReqSeq = 0;
+const pddPending = new Map();       // reqId -> resolve
+
+function pddRequest(payload) {
+  return new Promise((resolve) => {
+    const reqId = ++pddReqSeq;
+    const timer = setTimeout(() => {
+      pddPending.delete(reqId);
+      resolve({ ok: false, error: '请求超时:请确认 miaoshou-helper 扩展已启用并已重新加载(扩展更新后需刷新本页)' });
+    }, 10_000);
+    pddPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
+    window.postMessage({ source: PDD_NS, type: 'PDD_GET_ORDERS', reqId, payload }, window.location.origin);
+  });
+}
+
+function onPddMessage(ev) {
+  if (ev.source !== window || !ev.data || ev.data.source !== PDD_NS) return;
+  if (ev.data.type === 'PDD_PONG') { pddBridgeReady.value = true; return; }
+  if (ev.data.type === 'PDD_ORDERS_RESULT') {
+    const cb = pddPending.get(ev.data.reqId);
+    if (cb) { pddPending.delete(ev.data.reqId); cb(ev.data.data); }
+  }
+}
+
+function pddPing() {
+  window.postMessage({ source: PDD_NS, type: 'PDD_PING' }, window.location.origin);
+}
+
+async function loadPddOrders() {
+  pddLoading.value = true;
+  pddError.value = '';
+  pddSelected.value = [];
+  try {
+    const resp = await pddRequest({ tab: pddTab.value, size: 30 });
+    if (!resp.ok) throw new Error(resp.error || '获取订单失败');
+    pddOrders.value = resp.orders || [];
+  } catch (err) {
+    pddError.value = err.message || String(err);
+    pddOrders.value = [];
+  } finally {
+    pddLoading.value = false;
+  }
+}
+
+async function openPddDialog() {
+  pddDialogOpen.value = true;
+  await loadPddOrders();
+}
+
+function switchPddTab(t) {
+  if (pddTab.value === t || pddLoading.value) return;
+  pddTab.value = t;
+  loadPddOrders();
+}
+
+function isPddCancelled(o) {
+  return /取消/.test(o.statusPrompt || '');
+}
+
+const pddSelectedOrders = computed(() =>
+  pddOrders.value.filter((o) => pddSelected.value.includes(o.orderSn)));
+const pddTotal = computed(() =>
+  pddSelectedOrders.value.reduce((s, o) => s + Number(o.amount || 0), 0).toFixed(2));
+
+// 快递单号前缀 → 物流公司(启发式推断,仅预填,可手改)
+const COURIER_RULES = [
+  [/^YT/, '圆通速递'],
+  [/^SF/, '顺丰速运'],
+  [/^JT/, '极兔速递'],
+  [/^77/, '申通快递'],
+  [/^75|^78/, '中通快递'],
+  [/^JD/, '京东物流'],
+  [/^EMS|^98/, '邮政快递'],
+];
+function inferCourier(no) {
+  if (!no) return '';
+  const hit = COURIER_RULES.find(([re]) => re.test(no));
+  return hit ? hit[1] : '';
+}
+
+/** 导入选中的 PDD 订单回填采购表单 */
+function applyPddSelection() {
+  const sel = pddSelectedOrders.value;
+  if (!sel.length) return;
+  purchaseForm.platform = 'yangkeduo';
+  purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
+  const malls = [...new Set(sel.map((o) => o.mallName).filter(Boolean))];
+  purchaseForm.sellerName = malls.join(',');
+  purchaseForm.paymentAmount = pddTotal.value;
+  const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
+  purchaseForm.logisticsNo = tracks.join(',');
+  purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
+  // 单订单+单商品行时自动填行金额,其余场景保持手动填写
+  if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
+    purchaseForm.items[0].amount = sel[0].amount;
+  }
+  pddDialogOpen.value = false;
+  show(`已导入 ${sel.length} 个拼多多订单(金额 ¥${pddTotal.value}),请核对后保存`, 'success');
+}
+
 // ── 行操作 ─────────────────────────────────────────────
 async function onUnlink(pkg, link) {
   if (!(await confirmStore.ask({
@@ -427,10 +537,14 @@ onMounted(() => {
   loadSyncStatus();
   statusTimer = setInterval(loadSyncStatus, 30_000);
   tickTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
+  // 拼多多导入桥接:监听扩展回包 + 主动探测(扩展公告可能早于本页挂载)
+  window.addEventListener('message', onPddMessage);
+  pddPing();
 });
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer);
   if (tickTimer) clearInterval(tickTimer);
+  window.removeEventListener('message', onPddMessage);
 });
 </script>
 
@@ -654,6 +768,15 @@ onUnmounted(() => {
             <option v-for="p in PLATFORMS" :key="p.value" :value="p.value">{{ p.label }}</option>
           </select>
         </div>
+        <div v-if="purchaseForm.platform === 'yangkeduo'" class="form-row pdd-import-row">
+          <label></label>
+          <div class="pdd-import-cell">
+            <button class="btn btn-ghost btn-sm" @click="openPddDialog">从拼多多导入订单</button>
+            <span v-if="!pddBridgeReady" class="pdd-bridge-warn" title="需要安装/启用 miaoshou-helper 扩展,并保持浏览器已登录拼多多">
+              未检测到助手扩展
+            </span>
+          </div>
+        </div>
         <div class="form-row">
           <label>采购账号</label>
           <input v-model.trim="purchaseForm.buyerAccount" class="filter-input" placeholder="如 清祥17 / PCC01(可留空)" />
@@ -715,6 +838,70 @@ onUnmounted(() => {
           <button class="btn btn-primary" :disabled="purchaseSaving" @click="savePurchase">
             {{ purchaseSaving ? '保存中…' : '保 存' }}
           </button>
+        </div>
+      </div>
+    </AppModal>
+
+    <!-- 拼多多订单选择弹窗(二级,数据来自 miaoshou-helper 扩展桥接) -->
+    <AppModal :open="pddDialogOpen" title="选择拼多多订单" size="lg" @update:open="pddDialogOpen = $event">
+      <div class="pdd-dialog">
+        <div class="pdd-toolbar">
+          <div class="pdd-tabs">
+            <button class="pdd-tab" :class="{ active: pddTab === 'all' }" @click="switchPddTab('all')">全部</button>
+            <button class="pdd-tab" :class="{ active: pddTab === 'unreceived' }" @click="switchPddTab('unreceived')">待收货</button>
+          </div>
+          <button class="btn btn-ghost btn-sm" :disabled="pddLoading" @click="loadPddOrders">刷新</button>
+        </div>
+
+        <div v-if="pddLoading" class="empty">加载中…</div>
+        <div v-else-if="pddError" class="pdd-error">{{ pddError }}</div>
+        <div v-else-if="!pddOrders.length" class="empty">没有查询到订单</div>
+        <div v-else class="pdd-list">
+          <label
+            v-for="o in pddOrders"
+            :key="o.orderSn"
+            class="pdd-item"
+            :class="{ disabled: isPddCancelled(o), selected: pddSelected.includes(o.orderSn) }"
+          >
+            <input
+              type="checkbox"
+              :value="o.orderSn"
+              :disabled="isPddCancelled(o)"
+              v-model="pddSelected"
+            />
+            <img
+              v-if="o.goods[0]?.thumbUrl"
+              :src="o.goods[0].thumbUrl"
+              class="pdd-thumb"
+              loading="lazy"
+              referrerpolicy="no-referrer"
+              alt=""
+            />
+            <div v-else class="pdd-thumb pdd-thumb-empty"></div>
+            <div class="pdd-info">
+              <div class="pdd-goods" :title="o.goods[0]?.goodsName">
+                {{ o.goods[0]?.goodsName || '—' }}
+                <span v-if="o.goods.length > 1" class="pdd-more">等{{ o.goods.length }}件商品</span>
+              </div>
+              <div class="pdd-meta">
+                <span class="pdd-mall">{{ o.mallName || '—' }}</span>
+                <span class="pdd-amount">¥{{ o.amount }}</span>
+                <span>{{ fmtTime(o.orderTime * 1000) }}</span>
+                <span class="tag" :class="isPddCancelled(o) ? 'tag-mute' : 'tag-info'">{{ o.statusPrompt || '—' }}</span>
+              </div>
+              <div class="pdd-sn mono">
+                {{ o.orderSn }}<template v-if="o.trackingNumber"> · {{ o.trackingNumber }}</template>
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <div class="pdd-footer">
+          <span class="pdd-footer-info">已选 {{ pddSelected.length }} 单 · 合计 ¥{{ pddTotal }}</span>
+          <div class="form-actions">
+            <button class="btn btn-ghost" @click="pddDialogOpen = false">取 消</button>
+            <button class="btn btn-primary" :disabled="!pddSelected.length" @click="applyPddSelection">导入所选</button>
+          </div>
         </div>
       </div>
     </AppModal>
@@ -1137,6 +1324,178 @@ a.product-title:hover {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* 拼多多订单导入 */
+.pdd-import-row {
+  grid-template-columns: 90px 1fr;
+  margin-top: -4px;
+}
+
+.pdd-import-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pdd-bridge-warn {
+  font-size: 11px;
+  color: #f59e0b;
+}
+
+.pdd-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 200px;
+}
+
+.pdd-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pdd-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.pdd-tab {
+  padding: 4px 14px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 6px;
+  background: var(--bg-card, #fff);
+  color: var(--text-primary, #374151);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pdd-tab.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.pdd-error {
+  padding: 14px 12px;
+  border-radius: 6px;
+  background: #fee2e2;
+  color: #dc2626;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.pdd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.pdd-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.pdd-item:hover {
+  background: #f9fafb;
+}
+
+.pdd-item.selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.pdd-item.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pdd-item input[type='checkbox'] {
+  margin-top: 22px;
+  flex: 0 0 auto;
+}
+
+.pdd-thumb {
+  flex: 0 0 56px;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.pdd-thumb-empty {
+  background: #f3f4f6;
+}
+
+.pdd-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.pdd-goods {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdd-more {
+  font-weight: 400;
+  color: var(--text-secondary, #9ca3af);
+}
+
+.pdd-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.pdd-mall {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdd-amount {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.pdd-sn {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-secondary, #9ca3af);
+}
+
+.pdd-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border, #e5e7eb);
+}
+
+.pdd-footer-info {
+  font-size: 12px;
+  color: var(--text-primary, #374151);
 }
 
 /* 详情 */
