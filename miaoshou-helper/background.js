@@ -399,6 +399,76 @@ async function fetchTaobaoOrders({ tab = 'all' } = {}) {
   throw lastErr || new Error('TB_BAD_RESPONSE');
 }
 
+// ── 妙手 ERP 订单提取 ─────────────────────────────────────
+// 在妙手历史订单页 content script(ms-orders-extract.js)中翻页提取
+// 设计文档: docs/妙手订单数据提取-功能设计.md
+async function fetchMiaoshouOrders({ maxPages } = {}) {
+  // 查找已打开的妙手历史订单页
+  const tabs = await chrome.tabs.query({ url: 'https://erp.91miaoshou.com/order/package/all*' });
+  let msTab = tabs[0];
+  if (!msTab) {
+    // 没找到,自动打开一个隐藏标签页(不激活)
+    msTab = await chrome.tabs.create({
+      url: 'https://erp.91miaoshou.com/order/package/all?appPackageTab=all',
+      active: false,
+    });
+    // 等待页面加载 + content script 注入
+    await new Promise((r) => setTimeout(r, 8000));
+  }
+  // 通过 chrome.tabs.sendMessage 转发到 content script
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(
+      msTab.id,
+      { type: 'MS_EXTRACT_ORDERS', payload: { maxPages } },
+      (resp) => {
+        if (chrome.runtime.lastError) {
+          resolve({
+            ok: false,
+            error: `妙手页面桥接失败:${chrome.runtime.lastError.message}。请手动打开妙手历史订单页后重试`,
+          });
+        } else {
+          resolve(resp || { ok: false, error: '妙手页面无响应' });
+        }
+      }
+    );
+  });
+}
+
+// ── ERP 页面 tab 登记(妙手提取事件转发目标)──────────────
+// content script 收不到 chrome.runtime.sendMessage 广播(只达扩展自身页面),
+// 必须用 chrome.tabs.sendMessage 触达。erp-bridge 发 MS_GET_ORDERS 时登记
+// 其所在 tab,MS_PROGRESS/BATCH/DONE/ERROR 事件按登记列表转发。
+// 存 chrome.storage.session,防 MV3 service worker 空闲重启后丢失。
+async function getErpTabIds() {
+  try {
+    const v = await chrome.storage.session.get('msErpTabIds');
+    return v.msErpTabIds || [];
+  } catch { return []; }
+}
+async function addErpTabId(tabId) {
+  try {
+    const ids = await getErpTabIds();
+    if (!ids.includes(tabId)) {
+      ids.push(tabId);
+      await chrome.storage.session.set({ msErpTabIds: ids });
+    }
+  } catch { /* ignore */ }
+}
+async function forwardMsEventToErpTabs(msg) {
+  const ids = await getErpTabIds();
+  for (const id of ids) {
+    try {
+      await chrome.tabs.sendMessage(id, msg);
+    } catch {
+      // tab 已关闭或未注入 erp-bridge,清理失效登记
+      try {
+        const rest = (await getErpTabIds()).filter((i) => i !== id);
+        await chrome.storage.session.set({ msErpTabIds: rest });
+      } catch { /* ignore */ }
+    }
+  }
+}
+
 // ── 消息路由(erp-bridge.js 中继转发)────────────────
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg) return false;
@@ -419,6 +489,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then((orders) => sendResponse({ ok: true, orders }))
       .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
     return true; // 异步 sendResponse
+  }
+  if (msg.type === 'MS_GET_ORDERS') {
+    // 登记 ERP 页面 tab(content script 只能经 tabs.sendMessage 触达,
+    // 后续 MS_PROGRESS/MS_BATCH/MS_DONE/MS_ERROR 事件转发到此 tab)
+    if (_sender.tab?.id != null) addErpTabId(_sender.tab.id);
+    fetchMiaoshouOrders(msg.payload || {})
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
+    return true; // 异步 sendResponse
+  }
+  // 妙手提取进度/批次上报(content script → background → 转发给 erp-bridge 所在 tab)
+  // 注意:runtime.sendMessage 广播到不了 content script,必须 tabs.sendMessage
+  // MS_BATCH: 每页一批订单;MS_DONE/MS_ERROR: 结束/失败;MS_PROGRESS: 翻页进度
+  if (msg.type === 'MS_PROGRESS' || msg.type === 'MS_BATCH' || msg.type === 'MS_DONE' || msg.type === 'MS_ERROR') {
+    forwardMsEventToErpTabs(msg);
+    return false;
   }
   return false;
 });

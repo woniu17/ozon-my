@@ -47,6 +47,15 @@
     },
     {
       "matches": [
+        "https://erp.91miaoshou.com/order/package/all*"
+      ],
+      "js": [
+        "ms-orders-extract.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://yochylin.com/admin*",
         "http://localhost:5173/admin*",
         "http://localhost:3001/admin*"

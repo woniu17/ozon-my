@@ -89,7 +89,7 @@ if (config.imageHostMode === 'remote' || config.imageHostMode === 'self') {
 const app = express();
 
 // 基础中间件
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cdnBuster);
 app.use(requestLog);

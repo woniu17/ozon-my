@@ -5,6 +5,7 @@
 // 核心流程:买家Ozon下单 → 我采购(提交采购信息→直接流转待打单发货) → 上家发货给我
 //          → 轨迹签收=到货(标记提示) → 我自行打包打面单 → 交运 → 妥投回款
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
+import { useRoute } from 'vue-router';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
   submitPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted,
@@ -47,8 +48,9 @@ const CANCEL_INITIATOR_OPTIONS = [
   { value: 'seller', label: '卖家取消' },
 ];
 // 取消原因 reason_id → 中文释义(实测 TOP,其他直接显示俄文原文)
+// 992/994:Ozon 发起的质检单取消,不代表商品不通过(只是平台抽检流程导致订单取消)
 const CANCEL_REASON_LABELS = {
-  992: '商品描述不符(Ozon抽检)',
+  992: 'Ozon质检单',
   79: '客户拒收:商品不合适',
   578: '客户拒收:商品不合适',
   505: '客户取消:期限不合适',
@@ -64,7 +66,7 @@ const CANCEL_REASON_LABELS = {
   586: '客户拒收:错发商品',
   20: '客户拒收:缺件',
   512: '无法送达',
-  994: '商品描述不符(Ozon抽检)',
+  994: 'Ozon质检单',
 };
 
 // ── 全局搜索(跨所有状态,§9.1.1)─────────────────────────
@@ -1059,9 +1061,18 @@ const detailLinks = computed(() => detail.value?.purchaseLinks || []);
 
 let statusTimer = null;
 let tickTimer = null;
+const route = useRoute();
 onMounted(() => {
   loadTabs();
-  loadList();
+  // 外页跳入带 kw(如妙手订单页"本地包裹"按钮):预填关键词走全局搜索
+  const kw = route.query.kw;
+  if (kw) {
+    globalSearch.keyword = String(kw);
+    globalSearch.mode = 'eq';
+    doGlobalSearch();
+  } else {
+    loadList();
+  }
   loadSyncStatus();
   loadProgress();
   // 同步在跑时高频轮询进度,空闲时低频刷新 cursors
@@ -2431,4 +2442,5 @@ a.product-title:hover {
   color: var(--text-secondary, #9ca3af);
   white-space: nowrap;
 }
+
 </style>

@@ -19,6 +19,7 @@
     'erp-pdd': { ping: 'PDD_PING', pong: 'PDD_PONG', get: 'PDD_GET_ORDERS', result: 'PDD_ORDERS_RESULT' },
     'erp-ali': { ping: 'ALI_PING', pong: 'ALI_PONG', get: 'ALI_GET_ORDERS', result: 'ALI_ORDERS_RESULT' },
     'erp-tb': { ping: 'TB_PING', pong: 'TB_PONG', get: 'TB_GET_ORDERS', result: 'TB_ORDERS_RESULT' },
+    'erp-ms': { ping: 'MS_PING', pong: 'MS_PONG', get: 'MS_GET_ORDERS', result: 'MS_ORDERS_RESULT' },
   };
   const post = (msg) => window.postMessage(msg, window.location.origin);
 
@@ -46,5 +47,15 @@
   Object.keys(ROUTES).forEach((ns) => post({ source: ns, type: ROUTES[ns].pong }));
   window.addEventListener('load', () => {
     Object.keys(ROUTES).forEach((ns) => post({ source: ns, type: ROUTES[ns].pong }));
+  });
+
+  // 妙手提取进度/批次转发:background → content script → 页面
+  // content script(ms-orders-extract.js)上报 MS_PROGRESS(翻页进度)/
+  // MS_BATCH(每页一批订单)/MS_DONE/MS_ERROR 给 background 广播,
+  // 本脚本收到后 postMessage 转发给页面
+  chrome.runtime.onMessage.addListener((msg, _sender, _sendResponse) => {
+    if (!msg || !/^MS_(PROGRESS|BATCH|DONE|ERROR)$/.test(msg.type)) return false;
+    post({ source: 'erp-ms', ...msg });
+    return false; // 不需要 sendResponse
   });
 })();

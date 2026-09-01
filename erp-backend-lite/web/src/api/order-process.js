@@ -72,3 +72,29 @@ export function getSyncProgress() {
 export function dismissSyncProgress() {
   return request.post('/admin/api/order-process/sync-progress/dismiss');
 }
+
+// ════════════════════════════════════════════════════════════════
+// 妙手 ERP 订单数据(2026-09,独立新表)
+// 数据来源:miaoshou-helper 插件从妙手历史订单页提取
+// ════════════════════════════════════════════════════════════════
+
+// 从妙手同步(插件提取后 POST 到此接口,批量 upsert 到 miaoshou_* 表)
+export function syncFromMiaoshou(orders) {
+  return request.post('/admin/api/order-process/sync-from-miaoshou', { orders });
+}
+
+// 妙手订单列表(分页,关联本地 op_package)
+// params: { page, pageSize, shopNick, keyword, operateStatus, localLinked }
+export function getMiaoshouList(params) {
+  return request.get('/admin/api/order-process/miaoshou-list', params);
+}
+
+// 妙手订单状态 tab 计数(按 operate_status 分组,附本地关联数)
+export function getMiaoshouTabs() {
+  return request.get('/admin/api/order-process/miaoshou-tabs');
+}
+
+// 妙手订单详情(含采购单列表)
+export function getMiaoshouDetail(id) {
+  return request.get('/admin/api/order-process/miaoshou-detail/' + encodeURIComponent(id));
+}

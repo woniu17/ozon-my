@@ -1055,3 +1055,66 @@ CREATE TABLE IF NOT EXISTS op_sync_cursor (
   UNIQUE(store_id, sync_type)
 );
 
+-- ════════════════════════════════════════════════════════════════
+-- 妙手 ERP 订单数据(2026-09,独立新表,与 op_* 分离)
+-- 通过 miaoshou-helper 插件从妙手历史订单页提取,保留妙手原始快照
+-- 设计文档: docs/妙手订单数据提取-功能设计.md
+-- ════════════════════════════════════════════════════════════════
+
+-- 妙手订单包裹(主表,一行一包裹)
+CREATE TABLE IF NOT EXISTS miaoshou_package (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_order_package_id TEXT UNIQUE NOT NULL,  -- 妙手包裹内部 ID(同步主键)
+  app_package_no      TEXT,                   -- MS20260827... 妙手包裹号
+  posting_number      TEXT,                   -- Ozon posting_number
+  shop_id             TEXT,                   -- 妙手店铺 ID
+  shop_nick           TEXT,                   -- 店铺名 YQL001
+  platform            TEXT DEFAULT 'ozon',
+  platform_order_sn   TEXT,                   -- Ozon 订单号
+  order_amount        REAL,                   -- 订单金额
+  currency            TEXT DEFAULT 'CNY',
+  buyer_name          TEXT,                   -- 买家姓名
+  buyer_country       TEXT,
+  gmt_order_start     TEXT,                   -- 下单时间
+  weighing_weight     REAL,                   -- 称重重量(g)
+  note                TEXT,                   -- 本地备注(appNote)
+  operate_status      TEXT,                   -- 妙手操作状态(原值)
+  purchase_status     TEXT,                   -- 妙手采购状态(原值)
+  logistics_no        TEXT,                   -- Ozon 跟踪号
+  logistics_company   TEXT,
+  gmt_create          TEXT,                   -- 妙手创建时间
+  gmt_modified        TEXT,                   -- 妙手修改时间
+  gmt_delivery        TEXT,                   -- 发货时间
+  raw_json            TEXT,                   -- 主列表 API 原始响应(审计/补字段)
+  synced_at           TEXT NOT NULL,          -- 本次同步时间
+  updated_at          TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ms_pkg_posting ON miaoshou_package(posting_number);
+CREATE INDEX IF NOT EXISTS idx_ms_pkg_shop    ON miaoshou_package(shop_nick);
+CREATE INDEX IF NOT EXISTS idx_ms_pkg_synced  ON miaoshou_package(synced_at DESC);
+
+-- 妙手采购订单(子表,一行一采购单,关联主表)
+CREATE TABLE IF NOT EXISTS miaoshou_purchase (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  miaoshou_package_id   INTEGER NOT NULL REFERENCES miaoshou_package(id),
+  purchase_order_id     TEXT,                   -- 妙手采购单内部 ID
+  purchase_sn           TEXT,                   -- 采购单号(1688/拼多多)
+  platform              TEXT NOT NULL,          -- 1688/yangkeduo/taobao
+  buyer_account         TEXT,                   -- 采购账号 清祥17/PCC01
+  seller_name           TEXT,                   -- 上家卖家
+  payment_amount        REAL DEFAULT 0,          -- 采购金额
+  currency              TEXT DEFAULT 'CNY',
+  status                TEXT,                    -- has_send/has_sign(原值)
+  purchase_start_time   TEXT,                    -- 采购时间
+  send_at               TEXT,                    -- 上家发货时间
+  logistics_company     TEXT,                    -- 国内物流商
+  logistics_no          TEXT,                    -- 国内物流单号
+  last_trace            TEXT,                    -- 最新物流轨迹
+  raw_json              TEXT,
+  synced_at             TEXT NOT NULL,
+  updated_at            TEXT DEFAULT (datetime('now')),
+  UNIQUE(platform, purchase_sn)                 -- 防重复
+);
+CREATE INDEX IF NOT EXISTS idx_ms_pur_pkg ON miaoshou_purchase(miaoshou_package_id);
+CREATE INDEX IF NOT EXISTS idx_ms_pur_sn ON miaoshou_purchase(purchase_sn);
+

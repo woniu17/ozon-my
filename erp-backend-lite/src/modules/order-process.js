@@ -19,6 +19,7 @@ import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
+import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
 import { runOrderSyncNow, runSyncAllList, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
 
 const router = Router();
@@ -254,6 +255,65 @@ router.get('/admin/api/order-process/sync-progress', (_req, res) => {
 // 仅在 active=false 时可清空;同步进行中调用返回 cleared=false
 router.post('/admin/api/order-process/sync-progress/dismiss', (_req, res) => {
   res.json(ok(clearSyncProgress()));
+});
+
+// ════════════════════════════════════════════════════════════════
+// 妙手 ERP 订单数据(2026-09,独立新表)
+// 数据来源:miaoshou-helper 插件从妙手历史订单页提取
+// ════════════════════════════════════════════════════════════════
+
+// ── 从妙手同步(插件提取后 POST 到此接口)──────────────────
+// body: { orders: [...] }  — 来自插件 ms-orders-extract.js 的精简数据
+router.post('/admin/api/order-process/sync-from-miaoshou', (req, res, next) => {
+  try {
+    const orders = req.body?.orders;
+    if (!Array.isArray(orders) || !orders.length) {
+      return res.status(400).json({ ok: false, message: 'orders 数组必填' });
+    }
+    const result = upsertMiaoshouOrders(orders);
+    logger.info(result, '[order-process] 妙手数据入库完成');
+    res.json(ok(result));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 妙手订单列表(分页,关联本地 op_package)────────────────
+router.get('/admin/api/order-process/miaoshou-list', (req, res, next) => {
+  try {
+    const data = listMiaoshouPackages({
+      page: req.query.page,
+      pageSize: req.query.pageSize,
+      shopNick: req.query.shopNick,
+      keyword: req.query.keyword,
+      operateStatus: req.query.operateStatus,
+      localLinked: req.query.localLinked,
+    });
+    res.json(ok(data));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 妙手订单状态 tab 计数(按 operate_status 分组)─────────
+router.get('/admin/api/order-process/miaoshou-tabs', (_req, res, next) => {
+  try {
+    res.json(ok(countMiaoshouTabs()));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 妙手订单详情(含采购单列表)──────────────────────────
+router.get('/admin/api/order-process/miaoshou-detail/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const detail = getMiaoshouPackageDetail(id);
+    if (!detail) return res.status(404).json({ ok: false, message: '妙手订单不存在' });
+    res.json(ok(detail));
+  } catch (e) {
+    next(e);
+  }
 });
 
 export default router;
