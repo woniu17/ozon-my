@@ -8,7 +8,7 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
   submitPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted,
-  runSync, getSyncStatus,
+  runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
 } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
@@ -19,11 +19,15 @@ const { show } = useToast();
 const confirmStore = useConfirmStore();
 
 // ── Tab 页签(operate_status 分流)─────────────────────────
+// 全部:跨所有状态(含搁置);已发货=已交运未妥投;已完成=已妥投(财务数据完整)
 const TABS = [
+  { key: 'all', label: '全部' },
   { key: 'waitProcess', label: '待处理' },
   { key: 'waitShip', label: '待打单发货' },
   { key: 'shipSuccess', label: '交运' },
   { key: 'waitReceiverConfirm', label: '已发货' },
+  { key: 'completed', label: '已完成' },
+  { key: 'cancelled', label: '已取消' },
   { key: 'ignored', label: '已搁置' },
 ];
 const activeTab = ref('waitProcess');
@@ -34,7 +38,34 @@ const filters = reactive({
   keyword: '',
   purchaseStatus: '', // '' | 'none' | 'purchased'
   arrived: '',        // '' | '0' | '1'
+  cancelInitiator: '',  // '' | 'client' | 'ozon' | 'seller'(仅已取消 tab 用)
 });
+// 取消发起者选项(与 Ozon cancellation_type 对应)
+const CANCEL_INITIATOR_OPTIONS = [
+  { value: 'client', label: '客户取消' },
+  { value: 'ozon', label: 'Ozon 取消' },
+  { value: 'seller', label: '卖家取消' },
+];
+// 取消原因 reason_id → 中文释义(实测 TOP,其他直接显示俄文原文)
+const CANCEL_REASON_LABELS = {
+  992: '商品描述不符(Ozon抽检)',
+  79: '客户拒收:商品不合适',
+  578: '客户拒收:商品不合适',
+  505: '客户取消:期限不合适',
+  506: '客户取消:发现更便宜',
+  504: '客户取消',
+  508: '客户取消',
+  710: '客户取消',
+  502: '客户取消',
+  537: '客户未取货',
+  665: '客户未取货',
+  686: '卖家未按时发货',
+  402: '卖家取消:其他',
+  586: '客户拒收:错发商品',
+  20: '客户拒收:缺件',
+  512: '无法送达',
+  994: '商品描述不符(Ozon抽检)',
+};
 
 // ── 全局搜索(跨所有状态,§9.1.1)─────────────────────────
 const globalSearch = reactive({
@@ -80,6 +111,76 @@ const detail = ref(null);
 // ── 同步状态 ───────────────────────────────────────────
 const syncInfo = ref({ syncing: false, cursors: [] });
 const syncing = ref(false);
+// 详细进度(替代纯布尔 syncing,展示店铺数/当前店/已拉订单数/耗时)
+const progress = ref({
+  active: false,
+  type: '',            // 'incremental' | 'all-list'
+  totalStores: 0,
+  doneStores: 0,
+  currentStoreId: '',
+  currentStoreName: '',
+  currentPhase: '',
+  currentPage: 0,
+  postingsPulled: 0,
+  startedAt: null,
+  elapsedMs: 0,
+  message: '',
+  finishedAt: null,    // ISOString 完成时间(null=未结束)
+  errorCount: 0,
+  failures: [],        // [{ storeId, storeName, phase, page, error, stack }] 失败详情
+});
+// 是否展开失败详情(默认折叠,失败数>0 时自动展开)
+const showFailures = ref(false);
+
+// ── 全量同步弹窗 ───────────────────────────────────────
+const syncAllOpen = ref(false);
+const syncAllSubmitting = ref(false);
+// 快捷选项(今天/7天/30天/90天),点击自动填充下方起止日期
+const QUICK_OPTIONS = [
+  { days: 1, label: '今天' },
+  { days: 7, label: '近 7 天' },
+  { days: 30, label: '近 30 天' },
+  { days: 90, label: '近 90 天' },
+];
+// 当前选中的快捷天数(null 表示已手动改日期,无快捷选中)
+const syncAllQuick = ref(30);
+// 起止日期 YYYY-MM-DD(本地),默认近 30 天
+const syncAllSince = ref('');
+const syncAllTo = ref('');
+
+function todayStr() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function daysAgoStr(n) {
+  const d = new Date(Date.now() - n * 86400_000);
+  const pad = (n2) => String(n2).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+// 将本地日期(YYYY-MM-DD)转 ISO 字符串(UTC)
+// 起始日期按 00:00:00 本地时间 → 转 UTC;结束日期按 23:59:59 本地时间 → 转 UTC
+function localDateToIsoStart(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+function localDateToIsoEnd(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(`${dateStr}T23:59:59`);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+// 点击快捷选项:自动填充起止日期
+function applyQuickOption(days) {
+  syncAllQuick.value = days;
+  syncAllSince.value = daysAgoStr(days);
+  syncAllTo.value = todayStr();
+}
+// 手动改日期时清除快捷选中态
+function onSinceInput() { syncAllQuick.value = null; }
+function onToInput() { syncAllQuick.value = null; }
 
 // ── 数据加载 ───────────────────────────────────────────
 async function loadTabs() {
@@ -99,6 +200,7 @@ async function loadList() {
       keyword: filters.keyword.trim(),
       purchaseStatus: filters.purchaseStatus,
       arrived: filters.arrived,
+      cancelInitiator: activeTab.value === 'cancelled' ? filters.cancelInitiator : '',
       globalKeyword: isGlobal ? globalSearch.keyword.trim() : '',
       globalMode: globalSearch.mode,
       page: pager.current,
@@ -123,9 +225,19 @@ async function loadSyncStatus() {
   } catch { /* 静默 */ }
 }
 
+async function loadProgress() {
+  try {
+    const p = await getSyncProgress();
+    progress.value = p || progress.value;
+    syncing.value = !!(p?.active || p?.syncing);
+  } catch { /* 静默 */ }
+}
+
 function switchTab(key) {
   if (activeTab.value === key) return;
   activeTab.value = key;
+  // 切 tab 时清空"取消发起者"筛选(仅已取消 tab 有意义)
+  if (key !== 'cancelled') filters.cancelInitiator = '';
   // 全局搜索模式下切 tab = 退出全局模式回到该 tab 视图
   if (globalSearch.active) clearGlobalSearch(false);
   pager.current = 1;
@@ -164,32 +276,135 @@ function onPageChange(p) {
   loadList();
 }
 
+// 触发增量同步(双接口:unfulfilled + list)
 async function triggerSync() {
   if (syncing.value) {
     show('同步已在进行中,请稍候', 'info');
     return;
   }
+  // 清除上次的 dismissed 标记,允许显示新进度
+  progress.value = { ...progress.value, dismissed: false, finishedAt: null };
   syncing.value = true;
   try {
     await runSync();
-    show('同步已启动(约需 1-2 分钟),稍后刷新查看', 'success');
-    // 轮询同步状态,完成后刷新列表
-    setTimeout(pollSyncDone, 5000);
+    show('增量同步已启动(约需 1-2 分钟),完成后自动刷新', 'success');
+    setTimeout(pollProgress, 2000);
   } catch (err) {
     show(err.message || String(err), 'error');
     syncing.value = false;
   }
 }
 
-function pollSyncDone() {
-  loadSyncStatus();
-  if (syncInfo.value?.syncing) {
-    setTimeout(pollSyncDone, 5000);
+// 打开全量同步弹窗
+function openSyncAllDialog() {
+  if (syncing.value) {
+    show('同步已在进行中,请稍候', 'info');
+    return;
+  }
+  // 默认快捷近 30 天,自动填好起止日期
+  syncAllQuick.value = 30;
+  syncAllSince.value = daysAgoStr(30);
+  syncAllTo.value = todayStr();
+  syncAllOpen.value = true;
+}
+
+// 触发全量同步(/v4/posting/fbs/list)
+async function triggerSyncAllList() {
+  if (syncing.value) {
+    show('同步已在进行中,请稍候', 'info');
+    return;
+  }
+  const sinceIso = localDateToIsoStart(syncAllSince.value);
+  const toIso = localDateToIsoEnd(syncAllTo.value);
+  if (!sinceIso || !toIso) {
+    show('请正确选择起始和结束日期', 'error');
+    return;
+  }
+  if (new Date(sinceIso) > new Date(toIso)) {
+    show('起始日期不能晚于结束日期', 'error');
+    return;
+  }
+  const opts = { since: sinceIso, to: toIso };
+  syncAllSubmitting.value = true;
+  try {
+    // 清除上次的 dismissed 标记,允许显示新进度
+    progress.value = { ...progress.value, dismissed: false, finishedAt: null };
+    await runSyncAllList(opts);
+    syncAllOpen.value = false;
+    show('全量同步已启动(覆盖所有状态含 delivered/cancelled),完成后自动刷新', 'success');
+    setTimeout(pollProgress, 2000);
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    syncAllSubmitting.value = false;
+  }
+}
+
+// 轮询详细进度,完成后保留进度条等用户关闭,仅刷新数据
+function pollProgress() {
+  loadProgress();
+  if (progress.value?.active) {
+    // 进行中:继续轮询
+    setTimeout(pollProgress, 1500);
   } else {
+    // 已完成(syncing=false):停止轮询,但进度条保留显示等用户关闭
     syncing.value = false;
+    // 有失败时自动展开失败列表,便于查看错误
+    if (progress.value?.errorCount > 0) showFailures.value = true;
     loadTabs();
     loadList();
+    loadSyncStatus();
   }
+}
+
+// 进度计算属性:用于 UI 展示
+const progressPct = computed(() => {
+  const p = progress.value;
+  if (!p?.totalStores) return 0;
+  // 完成态固定 100%
+  if (p?.finishedAt) return 100;
+  return Math.min(100, Math.round((p.doneStores / p.totalStores) * 100));
+});
+const progressPhaseLabel = computed(() => {
+  const ph = progress.value?.currentPhase;
+  if (ph === 'unfulfilled') return '未妥投接口';
+  if (ph === 'list') return '全量list接口';
+  if (ph === 'cache-backfill') return '商品缓存回源';
+  return '';
+});
+const progressTypeLabel = computed(() =>
+  progress.value?.type === 'all-list' ? '全量同步(/v4/posting/fbs/list)' : '增量同步(双接口)'
+);
+const progressFinished = computed(() => !!progress.value?.finishedAt);
+// 是否展示进度条:进行中 或 已结束未关闭
+const showProgressBar = computed(() =>
+  (progress.value?.active || progress.value?.finishedAt) && !progress.value?.dismissed
+);
+function fmtElapsed(ms) {
+  if (!ms || ms < 0) return '0s';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m${r}s`;
+}
+
+// 用户点击关闭按钮:后端清空 progress,前端本地标记 dismissed 兜底
+async function dismissProgress() {
+  // 同步进行中不允许关闭
+  if (progress.value?.active || syncing.value) {
+    show('同步进行中,无法关闭进度条', 'info');
+    return;
+  }
+  // 本地立即隐藏(避免等 API 返回才消失)
+  progress.value = { ...progress.value, dismissed: true };
+  try {
+    await dismissSyncProgress();
+  } catch { /* 静默 */ }
+  // 关闭后刷新数据(同步结束 → 列表/Tab 应已更新)
+  loadTabs();
+  loadList();
+  loadSyncStatus();
 }
 
 // ── 采购录入 ───────────────────────────────────────────
@@ -773,6 +988,34 @@ function operateTag(pkg) {
   return o;
 }
 
+// 取消原因展示:reason_id 优先中文释义,否则俄文原文(可悬浮看 reason_id)
+function cancelReasonLabel(pkg) {
+  if (!pkg?.cancellationType) return null;
+  const rid = pkg.cancelReasonId;
+  const zh = CANCEL_REASON_LABELS[rid];
+  return {
+    initiator: pkg.cancellationType,  // client/ozon/seller
+    text: zh || pkg.cancelReason || '取消',
+    rid: rid || null,
+    afterShip: pkg.cancelledAfterShip,
+    affectRating: pkg.affectCancellationRating,
+    isZh: !!zh,
+    rawRu: pkg.cancelReason,
+  };
+}
+// 取消发起者标签样式(seller 红色更显著,client 黄,ozon 灰)
+function cancelInitiatorTagCls(type) {
+  if (type === 'seller') return 'tag-err';
+  if (type === 'client') return 'tag-warn';
+  return 'tag-mute';
+}
+function cancelInitiatorShort(type) {
+  if (type === 'seller') return '卖家';
+  if (type === 'client') return '客户';
+  if (type === 'ozon') return 'Ozon';
+  return '?';
+}
+
 // 每秒刷新的当前时间(驱动剩发倒计时秒级跳动)
 const nowTs = ref(Date.now());
 
@@ -820,7 +1063,12 @@ onMounted(() => {
   loadTabs();
   loadList();
   loadSyncStatus();
-  statusTimer = setInterval(loadSyncStatus, 30_000);
+  loadProgress();
+  // 同步在跑时高频轮询进度,空闲时低频刷新 cursors
+  statusTimer = setInterval(() => {
+    if (progress.value?.active || syncing.value) loadProgress();
+    else loadSyncStatus();
+  }, 5_000);
   tickTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
   // 拼多多/1688/淘宝导入桥接:监听扩展回包 + 主动探测(扩展公告可能早于本页挂载)
   window.addEventListener('message', onPddMessage);
@@ -875,12 +1123,53 @@ onUnmounted(() => {
           <span>命中 <b>{{ globalSearch.total }}</b> 个包裹(全部状态)</span>
           <button class="btn btn-ghost btn-sm" @click="clearGlobalSearch()">退出搜索</button>
         </div>
-        <span v-if="syncInfo.cursors?.length" class="sync-info" :title="syncInfo.cursors.map(c => `${c.storeId}: ${c.lastError || c.lastRunAt}`).join('\n')">
+        <span v-if="syncInfo.cursors?.length && !syncing" class="sync-info" :title="syncInfo.cursors.map(c => `${c.storeId}: ${c.lastError || c.lastRunAt}`).join('\n')">
           最近同步 {{ fmtTime(syncInfo.cursors[0]?.lastRunAt) }}
         </span>
-        <button class="btn btn-ghost" :disabled="syncing" @click="triggerSync">
-          {{ syncing ? '同步中…' : '同步订单' }}
+        <button class="btn btn-ghost" :disabled="syncing" @click="triggerSync" title="增量同步:unfulfilled [now-14d, now+14d] + list [now-60d, now],双接口">
+          {{ syncing ? '同步中…' : '同步进行中订单' }}
         </button>
+        <button class="btn btn-ghost" :disabled="syncing" @click="openSyncAllDialog" title="全量同步:仅 /v4/posting/fbs/list,覆盖所有状态含 delivered/cancelled 终态,可选时间范围">
+          同步所有订单
+        </button>
+      </div>
+    </div>
+
+    <!-- 同步进度条(进行中或已完成未关闭) -->
+    <div v-if="showProgressBar" class="sync-progress-bar" :class="{ 'sync-progress-finished': progressFinished }">
+      <div class="sync-progress-header">
+        <span class="tag" :class="progressFinished ? (progress.errorCount > 0 ? 'tag-warn' : 'tag-ok') : 'tag-info'">
+          {{ progressFinished ? (progress.errorCount > 0 ? `完成(${progress.errorCount}店失败)` : '完成') : progressTypeLabel }}
+        </span>
+        <span class="sync-progress-text">
+          店铺 <b>{{ progress.doneStores || 0 }}/{{ progress.totalStores || 0 }}</b>
+          <template v-if="!progressFinished && progress.currentStoreName"> · 当前 {{ progress.currentStoreName }}</template>
+          <template v-if="!progressFinished && progressPhaseLabel"> · {{ progressPhaseLabel }}第 {{ progress.currentPage + 1 }} 页</template>
+          · 已拉 <b>{{ progress.postingsPulled || 0 }}</b> 单
+          · 用时 {{ fmtElapsed(progress.elapsedMs) }}
+        </span>
+        <button v-if="progressFinished" class="btn btn-ghost btn-sm sync-progress-close" @click="dismissProgress" title="关闭进度条">✕</button>
+      </div>
+      <div class="sync-progress-track">
+        <div class="sync-progress-fill" :class="{ 'sync-progress-fill-done': progressFinished }" :style="{ width: progressPct + '%' }"></div>
+      </div>
+      <div v-if="progress.message" class="sync-progress-msg">{{ progress.message }}</div>
+
+      <!-- 失败店铺列表(可展开) -->
+      <div v-if="progress.failures?.length" class="sync-failures">
+        <button class="sync-failures-toggle" @click="showFailures = !showFailures">
+          {{ showFailures ? '▼' : '▶' }} 失败 {{ progress.failures.length }} 店:{{ progress.failures.map(f => f.storeName).join(', ') }}
+        </button>
+        <div v-if="showFailures" class="sync-failures-list">
+          <div v-for="(f, i) in progress.failures" :key="i" class="sync-failure-item">
+            <div class="sync-failure-head">
+              <b>{{ f.storeName }}</b>
+              <span class="muted">{{ f.phase || '?' }}第 {{ (f.page || 0) + 1 }} 页</span>
+            </div>
+            <div class="sync-failure-error">{{ f.error }}</div>
+            <div v-if="f.stack" class="sync-failure-stack">{{ f.stack }}</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -909,6 +1198,11 @@ onUnmounted(() => {
           <option value="">全部到货</option>
           <option value="0">等收货</option>
           <option value="1">已到货</option>
+        </select>
+        <!-- 取消发起者筛选(仅已取消 tab 显示) -->
+        <select v-if="activeTab === 'cancelled'" v-model="filters.cancelInitiator" class="filter-input" @change="search">
+          <option value="">全部发起者</option>
+          <option v-for="opt in CANCEL_INITIATOR_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
         <button class="btn btn-primary" @click="search">查询</button>
         <button class="btn btn-ghost" :disabled="loading" @click="loadList">
@@ -994,6 +1288,15 @@ onUnmounted(() => {
                 <span :class="purchaseTag(pkg).cls" style="margin-left: 4px">{{ purchaseTag(pkg).label }}</span>
                 <span v-if="arrivedTag(pkg)" :class="arrivedTag(pkg).cls" style="margin-left: 4px">{{ arrivedTag(pkg).label }}</span>
               </div>
+              <!-- 取消原因细分标签(仅 cancelled 状态订单显示) -->
+              <div v-if="pkg.ozonStatus === 'cancelled' && cancelReasonLabel(pkg)" class="sub cancel-reason-line">
+                <span class="tag" :class="cancelInitiatorTagCls(cancelReasonLabel(pkg).initiator)">{{ cancelInitiatorShort(cancelReasonLabel(pkg).initiator) }}</span>
+                <span class="cancel-reason-text" :title="cancelReasonLabel(pkg).rawRu + (cancelReasonLabel(pkg).rid ? ' (#' + cancelReasonLabel(pkg).rid + ')' : '')">
+                  {{ cancelReasonLabel(pkg).text }}<template v-if="cancelReasonLabel(pkg).rid && !cancelReasonLabel(pkg).isZh"> #{{ cancelReasonLabel(pkg).rid }}</template>
+                </span>
+                <span v-if="cancelReasonLabel(pkg).afterShip" class="tag tag-mute" title="装运后取消">装运后</span>
+                <span v-if="cancelReasonLabel(pkg).affectRating" class="tag tag-err" title="影响排行">影响排行</span>
+              </div>
               <div class="sub muted">下单：{{ fmtTime(pkg.inProcessAt) }}</div>
               <div v-if="pkg.shipmentDate && !pkg.isShipped" class="sub muted">最迟：{{ fmtTime(pkg.shipmentDate) }}</div>
               <div v-if="countdown(pkg) && !pkg.isShipped" class="sub" :class="countdown(pkg).overdue ? 'overdue' : 'countdown'">
@@ -1047,6 +1350,48 @@ onUnmounted(() => {
         @update:modelValue="onPageChange"
       />
     </div>
+
+    <!-- 同步所有订单弹窗(/v4/posting/fbs/list 全量) -->
+    <AppModal :open="syncAllOpen" title="同步所有订单 · /v4/posting/fbs/list" size="md" @update:open="syncAllOpen = $event">
+      <div class="sync-all-form">
+        <div class="sync-all-tip">
+          调用 <code>/v4/posting/fbs/list</code> 拉取指定时间段所有订单(含 delivered/cancelled 终态),适合历史回补/状态校准。
+          <br />同步进行中其他同步按钮会自动禁用(并发保护)。
+        </div>
+
+        <!-- 快捷选项(点击自动填充下方起止日期) -->
+        <div class="sync-all-section-label">快捷选项</div>
+        <div class="sync-all-quick">
+          <button
+            v-for="opt in QUICK_OPTIONS"
+            :key="opt.days"
+            class="pdd-tab"
+            :class="{ active: syncAllQuick === opt.days }"
+            @click="applyQuickOption(opt.days)"
+          >{{ opt.label }}</button>
+        </div>
+
+        <!-- 起止日期(默认填好,可直接编辑) -->
+        <div class="sync-all-section-label">时间段</div>
+        <div class="sync-all-dates">
+          <div class="sync-all-date-row">
+            <label>起始</label>
+            <input type="date" v-model="syncAllSince" class="filter-input" @input="onSinceInput" />
+          </div>
+          <div class="sync-all-date-row">
+            <label>结束</label>
+            <input type="date" v-model="syncAllTo" class="filter-input" @input="onToInput" />
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-ghost" @click="syncAllOpen = false">取 消</button>
+          <button class="btn btn-primary" :disabled="syncAllSubmitting" @click="triggerSyncAllList">
+            {{ syncAllSubmitting ? '启动中…' : '开始同步' }}
+          </button>
+        </div>
+      </div>
+    </AppModal>
 
     <!-- 提交采购信息弹窗(模式B) -->
     <AppModal :open="purchaseOpen" :title="`提交采购信息 · ${purchaseForm.packageNo}`" size="lg" @update:open="purchaseOpen = $event">
@@ -1216,6 +1561,19 @@ onUnmounted(() => {
           <div><span class="dl">预估利润</span>{{ fmtMoney(detail.package.profit?.profit) }}</div>
         </div>
 
+        <!-- 取消原因详情(仅已取消订单显示) -->
+        <div v-if="detail.package.ozonStatus === 'cancelled' && cancelReasonLabel(detail.package)" class="detail-section cancel-detail">
+          <div class="detail-section-title">取消原因 <span class="tag" :class="cancelInitiatorTagCls(cancelReasonLabel(detail.package).initiator)">{{ cancelInitiatorShort(cancelReasonLabel(detail.package).initiator) }}</span></div>
+          <div class="cancel-detail-grid">
+            <div><span class="dl">原因 ID</span><span class="mono">#{{ detail.package.cancelReasonId || '—' }}</span></div>
+            <div><span class="dl">中文释义</span>{{ cancelReasonLabel(detail.package).isZh ? cancelReasonLabel(detail.package).text : '—' }}</div>
+            <div class="cancel-detail-raw"><span class="dl">俄文原文</span>{{ detail.package.cancelReason || '—' }}</div>
+            <div><span class="dl">发起者</span>{{ detail.package.cancellationInitiator || '—' }}({{ cancelInitiatorShort(detail.package.cancellationType) }})</div>
+            <div><span class="dl">装运后取消</span>{{ detail.package.cancelledAfterShip ? '是' : '否' }}</div>
+            <div><span class="dl">影响排行</span>{{ detail.package.affectCancellationRating ? '是' : '否' }}</div>
+          </div>
+        </div>
+
         <div class="detail-section">订单产品</div>
         <table class="data-table item-table">
           <thead>
@@ -1325,6 +1683,163 @@ onUnmounted(() => {
 .sync-info {
   font-size: 12px;
   color: var(--text-secondary, #6b7280);
+}
+
+/* 同步进度条 */
+.sync-progress-bar {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+}
+.sync-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #1d4ed8;
+  flex-wrap: wrap;
+}
+.sync-progress-text {
+  flex: 1;
+  min-width: 0;
+}
+.sync-progress-track {
+  margin-top: 6px;
+  height: 6px;
+  background: #dbeafe;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.sync-progress-fill {
+  height: 100%;
+  background: #2563eb;
+  transition: width 0.5s ease;
+}
+/* 完成态:进度条变绿(有失败保持原色由 tag-warn 提示) */
+.sync-progress-fill-done {
+  background: #16a34a;
+}
+.sync-progress-finished .sync-progress-track {
+  background: #dcfce7;
+}
+.sync-progress-close {
+  margin-left: auto;
+  padding: 0 6px;
+  font-size: 14px;
+  line-height: 1;
+}
+.sync-progress-msg {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
+}
+
+/* 失败店铺列表 */
+.sync-failures {
+  margin-top: 8px;
+  border-top: 1px dashed #fca5a5;
+  padding-top: 6px;
+}
+.sync-failures-toggle {
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  color: #dc2626;
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: left;
+}
+.sync-failures-toggle:hover {
+  text-decoration: underline;
+}
+.sync-failures-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sync-failure-item {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.sync-failure-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #991b1b;
+  margin-bottom: 2px;
+}
+.sync-failure-error {
+  color: #7f1d1d;
+  word-break: break-all;
+  font-family: ui-monospace, monospace;
+}
+.sync-failure-stack {
+  margin-top: 4px;
+  color: #6b7280;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+/* 同步所有订单弹窗 */
+.sync-all-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sync-all-tip {
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  background: #f9fafb;
+  border-radius: 6px;
+  padding: 8px 10px;
+  line-height: 1.6;
+}
+.sync-all-tip code {
+  font-family: ui-monospace, monospace;
+  background: #eef2ff;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #4338ca;
+}
+.sync-all-section-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary, #6b7280);
+  margin-top: 4px;
+}
+.sync-all-quick {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sync-all-dates {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sync-all-date-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 200px;
+}
+.sync-all-date-row label {
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  white-space: nowrap;
+}
+.sync-all-date-row input {
+  flex: 1;
+  min-width: 0;
 }
 
 /* 全局搜索栏 */
@@ -1854,6 +2369,50 @@ a.product-title:hover {
   margin-top: 14px;
   padding-top: 8px;
   border-top: 1px solid var(--border, #e5e7eb);
+}
+
+/* 取消原因行(列表) */
+.cancel-reason-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+}
+.cancel-reason-text {
+  font-size: 11px;
+  color: #991b1b;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 取消原因详情(详情弹窗) */
+.detail-section-title {
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cancel-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px 20px;
+  font-size: 12px;
+}
+.cancel-detail-raw {
+  grid-column: 1 / -1;
+}
+.cancel-detail-raw .dl {
+  display: inline-block;
+  min-width: 72px;
+  color: var(--text-secondary, #6b7280);
+  vertical-align: top;
+}
+.cancel-detail-raw {
+  color: #7f1d1d;
+  font-family: ui-monospace, monospace;
 }
 
 .trace-list {

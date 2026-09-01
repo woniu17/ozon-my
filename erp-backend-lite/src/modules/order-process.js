@@ -10,14 +10,16 @@
 //   POST /admin/api/order-process/unlink          取消采购关联(冲回金额)
 //   POST /admin/api/order-process/ignore          搁置/恢复包裹
 //   POST /admin/api/order-process/print-label     标记已打印面单(流转交运)
-//   POST /admin/api/order-process/sync-run        手动触发 Ozon 订单同步
-//   GET  /admin/api/order-process/sync-status     各店铺最近同步状态
+//   POST /admin/api/order-process/sync-run        手动触发 Ozon 订单增量同步(双接口)
+//   POST /admin/api/order-process/sync-all-list  手动触发 /v4/posting/fbs/list 全量同步
+//   GET  /admin/api/order-process/sync-status    各店铺最近同步状态
+//   GET  /admin/api/order-process/sync-progress  实时同步进度(店铺数/已处理/已拉订单数)
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
-import { runOrderSyncNow, isSyncing } from '../services/order-sync.js';
+import { runOrderSyncNow, runSyncAllList, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
 
 const router = Router();
 
@@ -47,7 +49,7 @@ router.get('/admin/api/order-process/tabs', (_req, res) => {
 });
 
 // ── 包裹列表 ────────────────────────────────────────────────
-// query: tab / keyword / storeId / purchaseStatus / arrived / page / pageSize
+// query: tab / keyword / storeId / purchaseStatus / arrived / cancelInitiator / page / pageSize
 //        / globalKeyword / globalMode(eq|ss) —— 全局搜索:跨所有状态检索(§9.1.1)
 router.get('/admin/api/order-process/list', (req, res, next) => {
   try {
@@ -58,6 +60,7 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       storeId: q.storeId,
       purchaseStatus: q.purchaseStatus,
       arrived: q.arrived,
+      cancelInitiator: q.cancelInitiator, // client/ozon/seller(仅 cancelled tab 用)
       globalKeyword: q.globalKeyword,
       globalMode: q.globalMode,
       page: q.page,
@@ -194,7 +197,7 @@ router.post('/admin/api/order-process/print-label', (req, res, next) => {
   }
 });
 
-// ── 手动触发同步 ────────────────────────────────────────────
+// ── 手动触发增量同步(双接口:unfulfilled + list)──────────────
 router.post('/admin/api/order-process/sync-run', async (req, res, next) => {
   try {
     if (isSyncing()) {
@@ -202,17 +205,55 @@ router.post('/admin/api/order-process/sync-run', async (req, res, next) => {
     }
     // 异步执行,立即返回(同步全店铺可能耗时数分钟)
     runOrderSyncNow()
-      .then((r) => logger.info({ stores: r.stores?.length, durationMs: r.durationMs }, '[order-process] 手动同步完成'))
-      .catch((e) => logger.error({ err: e?.message }, '[order-process] 手动同步失败'));
-    res.json(ok({ started: true }));
+      .then((r) => logger.info({ stores: r.stores?.length, durationMs: r.durationMs }, '[order-process] 增量同步完成'))
+      .catch((e) => logger.error({ err: e?.message }, '[order-process] 增量同步失败'));
+    res.json(ok({ started: true, type: 'incremental' }));
   } catch (e) {
     next(e);
   }
 });
 
-// ── 同步状态 ────────────────────────────────────────────────
+// ── 手动触发全量同步(仅 /v4/posting/fbs/list)──────────────
+// body:
+//   { sinceDays: 1|7|30|90 }                —— 快捷天数,后端计算 since
+//   { since: ISO, to: ISO }                  —— 自定义起止(优先级高于 sinceDays)
+// 时区:since/to 按 ISO 字符串直传;sinceDays 由后端按当前 UTC 计算
+router.post('/admin/api/order-process/sync-all-list', async (req, res, next) => {
+  try {
+    if (isSyncing()) {
+      return res.json(ok({ skipped: true, reason: '同步已在进行中' }));
+    }
+    const b = req.body || {};
+    const hasCustom = !!(b.since && b.to);
+    const sinceDays = Number(b.sinceDays);
+    if (!hasCustom && (!Number.isInteger(sinceDays) || sinceDays < 1 || sinceDays > 365)) {
+      return res.status(400).json({ ok: false, message: '请提供 sinceDays(1-365) 或 since/to 时间段' });
+    }
+    const opts = hasCustom ? { since: String(b.since), to: String(b.to) } : { sinceDays };
+    runSyncAllList(opts)
+      .then((r) => logger.info({ stores: r.stores?.length, durationMs: r.durationMs, since: r.since, to: r.to }, '[order-process] 全量list同步完成'))
+      .catch((e) => logger.error({ err: e?.message }, '[order-process] 全量list同步失败'));
+    res.json(ok({ started: true, type: 'all-list', ...opts }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 同步状态(布尔 + cursors,轻量)─────────────────────────
 router.get('/admin/api/order-process/sync-status', (_req, res) => {
   res.json(ok({ syncing: isSyncing(), cursors: orderPackageDao.getSyncCursors() }));
+});
+
+// ── 同步进度(详细:店铺数/当前店/页/已拉订单数/耗时)──────
+// 前端每秒轮询,驱动进度条更新;完成后保留 finishedAt,前端展示完成态+关闭按钮
+router.get('/admin/api/order-process/sync-progress', (_req, res) => {
+  res.json(ok(getSyncProgress()));
+});
+
+// ── 关闭已完成进度(用户点关闭按钮触发)──────────────────
+// 仅在 active=false 时可清空;同步进行中调用返回 cleared=false
+router.post('/admin/api/order-process/sync-progress/dismiss', (_req, res) => {
+  res.json(ok(clearSyncProgress()));
 });
 
 export default router;

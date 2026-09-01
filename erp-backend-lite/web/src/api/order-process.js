@@ -8,8 +8,9 @@ export function getOrderTabs() {
 }
 
 // 包裹分页列表
-// params: { tab, keyword, storeId, purchaseStatus, arrived, page, pageSize,
+// params: { tab, keyword, storeId, purchaseStatus, arrived, cancelInitiator, page, pageSize,
 //           globalKeyword, globalMode }  globalMode: 'ss'模糊 | 'eq'精确
+// cancelInitiator: 'client' | 'ozon' | 'seller'(仅 cancelled tab 用,按取消发起者筛选)
 export function getOrderList(params) {
   return request.get('/admin/api/order-process/list', params);
 }
@@ -44,12 +45,30 @@ export function markPrinted(packageId) {
   return request.post('/admin/api/order-process/print-label', { packageId });
 }
 
-// 手动触发 Ozon 订单同步(异步,立即返回)
+// 手动触发 Ozon 订单增量同步(双接口:unfulfilled + list;异步立即返回)
 export function runSync() {
   return request.post('/admin/api/order-process/sync-run');
 }
 
-// 各店铺最近同步状态
+// 手动触发全量同步(仅 /v4/posting/fbs/list;覆盖所有状态含 delivered/cancelled)
+// opts:
+//   { sinceDays: 1|7|30|90 }            快捷天数
+//   { since: ISO, to: ISO }             自定义起止时间(优先级高于 sinceDays)
+export function runSyncAllList(opts = {}) {
+  return request.post('/admin/api/order-process/sync-all-list', opts);
+}
+
+// 各店铺最近同步状态(轻量:布尔 + cursors)
 export function getSyncStatus() {
   return request.get('/admin/api/order-process/sync-status');
+}
+
+// 实时同步进度(详细:店铺数/当前店/页/已拉订单数/耗时)
+export function getSyncProgress() {
+  return request.get('/admin/api/order-process/sync-progress');
+}
+
+// 关闭已完成进度(用户点关闭按钮触发;同步进行中调用返回 cleared=false)
+export function dismissSyncProgress() {
+  return request.post('/admin/api/order-process/sync-progress/dismiss');
 }

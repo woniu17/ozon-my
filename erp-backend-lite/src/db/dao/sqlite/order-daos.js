@@ -276,22 +276,39 @@ function getSyncCursors() {
 
 // ── 列表查询 ─────────────────────────────────────────────────
 
-/** Tab 计数(页面页签) */
+/** Tab 计数(页面页签)
+ *  拆分(2026-09):wait_receiver_confirm 按 delivered_at 是否为空再拆为
+ *    - waitReceiverConfirm: 已交运未妥投(delivered_at IS NULL)
+ *    - completed: 已妥投=已完成(delivered_at IS NOT NULL,财务数据已完整)
+ *  新增 all:全部订单(含 ignored 搁置)
+ */
 function tabCounts() {
   const rows = db
     .prepare(
-      `SELECT operate_status AS st, COUNT(*) AS n FROM op_package WHERE is_ignored = 0 GROUP BY operate_status`
+      `SELECT
+        CASE
+          WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NOT NULL THEN 'completed'
+          WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NULL THEN 'wait_receiver_confirm'
+          ELSE operate_status
+        END AS bucket,
+        COUNT(*) AS n
+       FROM op_package WHERE is_ignored = 0
+       GROUP BY bucket`
     )
     .all();
-  const map = Object.fromEntries(rows.map((r) => [r.st, r.n]));
+  const map = Object.fromEntries(rows.map((r) => [r.bucket, r.n]));
   const ignored = db
     .prepare(`SELECT COUNT(*) AS n FROM op_package WHERE is_ignored = 1`)
     .get().n;
+  const active = (map.wait_process || 0) + (map.wait_ship || 0) + (map.ship_success || 0)
+    + (map.wait_receiver_confirm || 0) + (map.completed || 0) + (map.cancelled || 0);
   return {
+    all: active + ignored,
     waitProcess: map.wait_process || 0,
     waitShip: map.wait_ship || 0,
     shipSuccess: map.ship_success || 0,
     waitReceiverConfirm: map.wait_receiver_confirm || 0,
+    completed: map.completed || 0,
     cancelled: map.cancelled || 0,
     ignored,
   };
@@ -301,9 +318,11 @@ const TAB_STATUS = {
   waitProcess: ['wait_process'],
   waitShip: ['wait_ship'],
   shipSuccess: ['ship_success'],
-  waitReceiverConfirm: ['wait_receiver_confirm'],
+  waitReceiverConfirm: ['wait_receiver_confirm'], // 列表查询时再叠加 delivered_at IS NULL
+  completed: ['wait_receiver_confirm'],             // 列表查询时再叠加 delivered_at IS NOT NULL
   cancelled: ['cancelled'],
   ignored: null, // is_ignored = 1
+  all: null,     // 全部(含 ignored)
 };
 
 /**
@@ -349,6 +368,17 @@ function listPackages(filters = {}) {
     const tab = filters.tab || 'waitProcess';
     if (tab === 'ignored') {
       where.push('p.is_ignored = 1');
+    } else if (tab === 'all') {
+      // 全部:不加 is_ignored/operate_status 过滤,涵盖搁置与所有状态
+      where.push('1 = 1');
+    } else if (tab === 'completed') {
+      // 已完成=已妥投:wait_receiver_confirm + delivered_at 有值
+      where.push('p.is_ignored = 0');
+      where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL");
+    } else if (tab === 'waitReceiverConfirm') {
+      // 已发货=已交运未妥投:wait_receiver_confirm + delivered_at 为空
+      where.push('p.is_ignored = 0');
+      where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NULL");
     } else {
       where.push('p.is_ignored = 0');
       const sts = TAB_STATUS[tab] || TAB_STATUS.waitProcess;
@@ -369,6 +399,12 @@ function listPackages(filters = {}) {
     where.push('p.arrived_at IS NOT NULL');
   } else if (filters.arrived === '0') {
     where.push('p.arrived_at IS NULL');
+  }
+  // 取消发起者筛选(仅 cancelled tab 有意义):前端传 client/ozon/seller
+  // 用 cancellation_type(英文枚举)精确匹配,比 cancellation_initiator(俄文)更稳定
+  if (filters.cancelInitiator && ['client', 'ozon', 'seller'].includes(filters.cancelInitiator)) {
+    where.push(`json_extract(o.cancellation_json, '$.cancellation_type') = ?`);
+    params.push(filters.cancelInitiator);
   }
   if (filters.keyword) {
     const kw = `%${filters.keyword.trim()}%`;
@@ -393,7 +429,8 @@ function listPackages(filters = {}) {
     .prepare(
       `SELECT p.*, o.posting_number, o.order_number, o.order_id AS ozon_api_order_id, o.parent_posting_number,
               o.status AS ozon_status, o.substatus, o.in_process_at, o.shipment_date, o.delivering_date,
-              o.order_amount, o.buyer_name, o.buyer_city, o.delivery_method_name, o.warehouse_name, o.store_id
+              o.order_amount, o.buyer_name, o.buyer_city, o.delivery_method_name, o.warehouse_name, o.store_id,
+              o.cancellation_json
        FROM op_package p
        JOIN op_ozon_order o ON o.id = p.ozon_order_id
        ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -419,6 +456,13 @@ export function setStoreNameMap(map) {
 }
 
 function rowToPackage(r) {
+  // 解析 cancellation_json → 结构化字段(便于前端列表展示取消原因)
+  // cancellation 对象含:cancellation_type(client/ozon/seller) / cancellation_initiator(俄文)
+  //   / cancel_reason_id / cancel_reason / cancelled_after_ship / affect_cancellation_rating
+  let cancellation = null;
+  if (r.cancellation_json) {
+    try { cancellation = JSON.parse(r.cancellation_json); } catch { /* 兼容脏数据 */ }
+  }
   return {
     id: r.id,
     packageNo: r.package_no,
@@ -452,6 +496,14 @@ function rowToPackage(r) {
     totalPurchaseAmount: r.total_purchase_amount,
     waybillPrintedAt: r.waybill_printed_at,
     note: r.note,
+    // ─ 取消细分状态(cancellation_json 解析,仅 cancelled 状态订单有) ─
+    cancellation,
+    cancellationType: cancellation?.cancellation_type || null,        // 'client' | 'ozon' | 'seller'
+    cancellationInitiator: cancellation?.cancellation_initiator || null, // 俄文发起者
+    cancelReasonId: cancellation?.cancel_reason_id || null,
+    cancelReason: cancellation?.cancel_reason || null,                 // 俄文原因描述
+    cancelledAfterShip: cancellation?.cancelled_after_ship ?? null,
+    affectCancellationRating: cancellation?.affect_cancellation_rating ?? null,
   };
 }
 
@@ -547,7 +599,8 @@ function getPackageDetail(packageId) {
     .prepare(
       `SELECT p.*, o.posting_number, o.order_number, o.parent_posting_number, o.status AS ozon_status,
               o.substatus, o.in_process_at, o.shipment_date, o.delivering_date, o.order_amount,
-              o.buyer_name, o.buyer_city, o.delivery_method_name, o.warehouse_name, o.store_id
+              o.buyer_name, o.buyer_city, o.delivery_method_name, o.warehouse_name, o.store_id,
+              o.cancellation_json
        FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id WHERE p.id = ?`
     )
     .get(packageId);
