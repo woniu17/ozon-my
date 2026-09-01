@@ -13,14 +13,17 @@ import AppPager from '../components/AppPager.vue';
 const { show } = useToast();
 const router = useRouter();
 
-// ── 状态 Tab(operate_status 分流,值域与本地 op_package 一致)──
+// ── 状态 Tab(按妙手自身 tab 分组 appPackageTab,与妙手历史订单页一致)──
+// 注意:不能用操作状态(operate_status)分类——如 wait_audit 会同时出现在
+// 待处理与已关闭(取消/退款)两个 tab 里,导致取消单错分(2026-09-01 排查结论)
 const TABS = [
   { key: 'all', label: '全部' },
-  { key: 'wait_process', label: '待处理' },
-  { key: 'wait_ship', label: '待打单发货' },
-  { key: 'ship_success', label: '交运' },
-  { key: 'wait_receiver_confirm', label: '已发货' },
-  { key: 'cancelled', label: '已取消' },
+  { key: 'waitProcess', label: '待处理' },
+  { key: 'waitShip', label: '待打单发货' },
+  { key: 'submitPlatform', label: '交运' },
+  { key: 'waitReceiverConfirm', label: '已发货' },
+  { key: 'closed', label: '已关闭' },
+  { key: 'isolation', label: '已搁置' },
 ];
 const activeTab = ref('all');
 const tabCounts = ref({});
@@ -126,7 +129,7 @@ function queueMsBatch(orders) {
 
 // 收尾:等最后一批入库完成,汇总提示并刷新
 async function finishMsSync(err) {
-  await msBatchChain.catch(() => {});
+  await msBatchChain.catch(() => { });
   msExtracting.value = false;
   const summary = `已入库 ${msTotals.packages} 个包裹/${msTotals.purchases} 个采购单`;
   if (err) {
@@ -185,7 +188,7 @@ async function loadList() {
       pageSize: pager.pageSize,
       keyword: filters.keyword.trim(),
       shopNick: filters.shopNick.trim(),
-      operateStatus: activeTab.value === 'all' ? '' : activeTab.value,
+      appPackageTab: activeTab.value === 'all' ? '' : activeTab.value,
       localLinked: filters.localLinked,
     });
     rows.value = data?.packages || [];
@@ -254,9 +257,23 @@ function fmtWeight(g) {
   return `${Number(g).toFixed(0)} g`;
 }
 
-// 操作状态标签(值域与本地 operate_status 一致)
+// 妙手 tab 状态标签(与妙手历史订单页 tab 一致)
+const MS_TAB_LABELS = {
+  waitProcess: { label: '待处理', cls: 'tag-warn' },
+  waitShip: { label: '待打单发货', cls: 'tag-info' },
+  submitPlatform: { label: '交运', cls: 'tag-info' },
+  waitReceiverConfirm: { label: '已发货', cls: 'tag-ok' },
+  closed: { label: '已关闭', cls: 'tag-mute' },
+  isolation: { label: '已搁置', cls: 'tag-err' },
+};
+function tabTag(row) {
+  return MS_TAB_LABELS[row.app_package_tab] || { label: row.app_package_tab || '—', cls: 'tag-mute' };
+}
+
+// 操作状态标签(operate_status 仅作辅助展示,不用于 tab 分类)
 const OPERATE_LABELS = {
   wait_process: { label: '待处理', cls: 'tag-warn' },
+  wait_audit: { label: '待审核', cls: 'tag-warn' },
   wait_ship: { label: '待打单发货', cls: 'tag-info' },
   ship_success: { label: '交运', cls: 'tag-info' },
   wait_receiver_confirm: { label: '已发货', cls: 'tag-ok' },
@@ -266,11 +283,16 @@ function operateTag(row) {
   return OPERATE_LABELS[row.operate_status] || { label: row.operate_status || '—', cls: 'tag-mute' };
 }
 
-// 采购状态(appPurchaseStatus:none/purchased)
+// 采购状态(appPurchaseStatus 原值:0=未采购 1=部分采购 2=已采购)
+const PURCHASE_STATUS_LABELS = {
+  0: { cls: 'tag tag-mute', label: '未采购' },
+  1: { cls: 'tag tag-warn', label: '部分采购' },
+  2: { cls: 'tag tag-ok', label: '已采购' },
+};
 function purchaseTag(row) {
-  if (row.purchase_status === 'none') return { cls: 'tag tag-mute', label: '未采购' };
-  if (row.purchase_status) return { cls: 'tag tag-ok', label: '已采购' };
-  return { cls: 'tag tag-mute', label: '—' };
+  const hit = PURCHASE_STATUS_LABELS[row.purchase_status];
+  if (hit) return hit;
+  return { cls: 'tag tag-mute', label: row.purchase_status || '—' };
 }
 
 const PLATFORM_LABELS = {
@@ -283,17 +305,27 @@ function platformLabel(p) {
   return PLATFORM_LABELS[p] || p || '—';
 }
 
+// 采购单状态(妙手原值:wait_send/has_send/has_sign/finished/cancel)
 const PO_STATUS_LABELS = {
   wait_pay: '待付款',
   wait_send: '待发货',
-  shipped: '已发货',
-  part_shipped: '部分发货',
-  signed: '已签收',
+  has_send: '已发货',
+  has_sign: '已签收',
   finished: '已完成',
+  cancel: '已取消',
   closed: '已关闭',
 };
 function poStatus(s) {
   return PO_STATUS_LABELS[s] || s || '—';
+}
+
+// 采购单状态标签色
+function poTagCls(s) {
+  if (s === 'finished' || s === 'has_sign') return 'tag-ok';
+  if (s === 'cancel') return 'tag-err';
+  if (s === 'wait_send' || s === 'wait_pay') return 'tag-warn';
+  if (s === 'has_send') return 'tag-info';
+  return 'tag-mute';
 }
 
 onMounted(() => {
@@ -313,13 +345,8 @@ onUnmounted(() => {
   <div class="miaoshou-orders-page">
     <!-- 状态 Tab + 同步入口 -->
     <div class="tabs-bar">
-      <button
-        v-for="t in TABS"
-        :key="t.key"
-        class="tab-btn"
-        :class="{ active: activeTab === t.key }"
-        @click="switchTab(t.key)"
-      >
+      <button v-for="t in TABS" :key="t.key" class="tab-btn" :class="{ active: activeTab === t.key }"
+        @click="switchTab(t.key)">
         {{ t.label }}
         <span class="tab-count">{{ tabCounts[t.key] ?? 0 }}</span>
       </button>
@@ -327,8 +354,10 @@ onUnmounted(() => {
         <span class="sync-info" title="本地关联 = Ozon 单号已匹配本地订单处理包裹">
           已关联本地 {{ tabCounts.linked ?? 0 }} / 未关联 {{ tabCounts.unlinked ?? 0 }}
         </span>
-        <button class="btn btn-ghost" :disabled="msExtracting" @click="triggerMiaoshouSync" title="从妙手ERP历史订单页提取采购信息/称重重量/本地备注,需先打开妙手订单页并登录">
-          {{ msExtracting ? `妙手提取中…(第${msProgress.page}页/${msProgress.count}单${msProgress.saved ? ',已入库' + msProgress.saved : ''})` : '从妙手同步' }}
+        <button class="btn btn-ghost" :disabled="msExtracting" @click="triggerMiaoshouSync"
+          title="从妙手ERP历史订单页提取采购信息/称重重量/本地备注,需先打开妙手订单页并登录">
+          {{ msExtracting ? `妙手提取中…(第${msProgress.page}页/${msProgress.count}单${msProgress.saved ? ',已入库' +
+            msProgress.saved : ''})` : '从妙手同步' }}
         </button>
         <span v-if="msResult" class="ms-result-badge tag tag-ok" title="妙手数据入库结果">
           妙手 {{ msResult.packages }}包裹/{{ msResult.purchases }}采购单
@@ -339,20 +368,10 @@ onUnmounted(() => {
     <!-- 工具栏 -->
     <div class="toolbar">
       <div class="filter-bar">
-        <input
-          class="filter-input kw-input"
-          type="text"
-          v-model.trim="filters.keyword"
-          placeholder="Ozon单号/妙手包裹号/备注"
-          @keydown.enter="search"
-        />
-        <input
-          class="filter-input"
-          type="text"
-          v-model.trim="filters.shopNick"
-          placeholder="店铺昵称"
-          @keydown.enter="search"
-        />
+        <input class="filter-input kw-input" type="text" v-model.trim="filters.keyword" placeholder="Ozon单号/妙手包裹号/备注"
+          @keydown.enter="search" />
+        <input class="filter-input" type="text" v-model.trim="filters.shopNick" placeholder="店铺昵称"
+          @keydown.enter="search" />
         <select v-model="filters.localLinked" class="filter-input" @change="search">
           <option value="">全部关联</option>
           <option value="1">已关联本地</option>
@@ -370,10 +389,11 @@ onUnmounted(() => {
       <table class="data-table">
         <thead>
           <tr>
+            <th class="col-product">产品信息</th>
+            <th class="col-qty">数量</th>
             <th>包裹/订单</th>
             <th>店铺/买家</th>
-            <th>金额</th>
-            <th>称重</th>
+            <th>金额/称重</th>
             <th>采购</th>
             <th>状态/时间</th>
             <th>备注</th>
@@ -382,28 +402,61 @@ onUnmounted(() => {
         </thead>
         <tbody>
           <tr v-if="!rows.length">
-            <td colspan="8" class="empty">{{ loading ? '加载中…' : '暂无妙手订单(点击右上角「从妙手同步」提取妙手历史订单)' }}</td>
+            <td colspan="9" class="empty">{{ loading ? '加载中…' : '暂无妙手订单(点击右上角「从妙手同步」提取妙手历史订单)' }}</td>
           </tr>
           <tr v-for="row in rows" :key="row.id">
+            <td class="col-product">
+              <div v-for="(it, i) in row.items" :key="i" class="product-item">
+                <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box"
+                  :title="it.title || '查看Ozon商品'">
+                  <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
+                </a>
+                <div class="product-main">
+                  <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title"
+                    :title="it.title || ''">{{ it.title || '—' }}</a>
+                  <div v-else class="product-title" :title="it.title || ''">{{ it.title || '—' }}</div>
+                  <div class="product-sub" :title="it.skuSubName || it.sku || ''">SKU:{{ it.sku || '—' }}</div>
+                  <div class="product-sub" :title="it.skuSubName || ''">{{ it.skuSubName || '—' }}</div>
+                  <div class="product-sub">单价 {{ fmtMoney(it.price) }}</div>
+                </div>
+              </div>
+              <div v-if="!row.items?.length" class="muted">—</div>
+            </td>
+            <td class="col-qty">
+              <div v-for="(it, i) in row.items" :key="i" class="qty-line" :class="{ 'qty-multi': it.quantity > 1 }">× {{
+                it.quantity }}</div>
+              <div v-if="!row.items?.length" class="muted">—</div>
+            </td>
             <td>
               <div class="mono">{{ row.posting_number || '—' }}</div>
               <div class="sub muted">妙手包裹 {{ row.app_package_no || '—' }}</div>
             </td>
             <td>
               <div>{{ row.shop_nick || '—' }}</div>
-              <div class="sub muted">{{ row.buyer_name || '—' }}{{ row.buyer_country ? ' · ' + row.buyer_country : '' }}</div>
+              <div class="sub muted">{{ row.buyer_name || '—' }}{{ row.buyer_country ? ' · ' + row.buyer_country : '' }}
+              </div>
             </td>
-            <td>{{ fmtMoney(row.order_amount) }}</td>
-            <td>{{ fmtWeight(row.weighing_weight) }}</td>
+            <td>
+              <div>{{ fmtMoney(row.order_amount) }}</div>
+              <div class="sub muted">{{ fmtWeight(row.weighing_weight) }}</div>
+            </td>
             <td>
               <span :class="purchaseTag(row).cls">{{ purchaseTag(row).label }}</span>
               <div class="sub muted">{{ row.purchase_count || 0 }} 个采购单</div>
             </td>
             <td>
               <div>
-                <span class="tag" :class="operateTag(row).cls">{{ operateTag(row).label }}</span>
+                <span class="tag" :class="tabTag(row).cls">{{ tabTag(row).label }}</span>
+                <span v-if="row.platform_package_status === 'cancelled'" class="tag tag-err"
+                  :title="row.app_package_status_text || '平台订单已取消'">
+                  平台已取消{{ row.app_package_status_text ? ' · ' + row.app_package_status_text : '' }}
+                </span>
                 <span v-if="row.local_pkg_id" class="tag tag-info" title="Ozon 单号已匹配本地订单包裹">已关联本地</span>
                 <span v-else class="tag tag-mute" title="本地订单处理中未找到该 Ozon 单号">未关联</span>
+              </div>
+              <div class="sub muted">操作:{{ operateTag(row).label }}<template
+                  v-if="row.app_package_status_text && row.platform_package_status !== 'cancelled'"> · {{
+                    row.app_package_status_text }}</template>
               </div>
               <div class="sub muted">下单 {{ fmtTime(row.gmt_order_start) }}</div>
               <div class="sub muted">同步 {{ fmtTime(row.synced_at) }}</div>
@@ -412,12 +465,8 @@ onUnmounted(() => {
             <td>
               <div class="action-group">
                 <button class="btn btn-ghost btn-sm" @click="openDetail(row)">详情</button>
-                <button
-                  v-if="row.local_pkg_id"
-                  class="btn btn-ghost btn-sm"
-                  title="跳转订单处理页查看本地包裹"
-                  @click="gotoLocalPackage(row.posting_number)"
-                >本地包裹</button>
+                <button v-if="row.local_pkg_id" class="btn btn-ghost btn-sm" title="跳转订单处理页查看本地包裹"
+                  @click="gotoLocalPackage(row.posting_number)">本地包裹</button>
               </div>
             </td>
           </tr>
@@ -427,30 +476,37 @@ onUnmounted(() => {
 
     <div class="footer-bar">
       <span class="footer-info">共 {{ pager.total }} 个包裹</span>
-      <AppPager
-        :modelValue="pager.current"
-        :total="pager.total"
-        :pageSize="pager.pageSize"
-        @update:modelValue="onPageChange"
-      />
+      <AppPager :modelValue="pager.current" :total="pager.total" :pageSize="pager.pageSize"
+        @update:modelValue="onPageChange" />
     </div>
 
     <!-- 妙手订单详情弹窗(独立 miaoshou_* 表数据) -->
-    <AppModal :open="detailOpen" :title="detail?.package ? `妙手订单详情 · ${detail.package.posting_number || detail.package.app_package_no || ''}` : '妙手订单详情'" size="lg" @update:open="detailOpen = $event">
+    <AppModal :open="detailOpen"
+      :title="detail?.package ? `妙手订单详情 · ${detail.package.posting_number || detail.package.app_package_no || ''}` : '妙手订单详情'"
+      size="lg" @update:open="detailOpen = $event">
       <div v-if="detailLoading" class="empty">加载中…</div>
       <div v-else-if="detail" class="detail-body">
         <div class="detail-grid">
           <div><span class="dl">Ozon单号</span><span class="mono">{{ detail.package.posting_number || '—' }}</span></div>
           <div><span class="dl">妙手包裹号</span><span class="mono">{{ detail.package.app_package_no || '—' }}</span></div>
           <div><span class="dl">店铺</span>{{ detail.package.shop_nick || '—' }}</div>
-          <div><span class="dl">买家</span>{{ detail.package.buyer_name || '—' }}{{ detail.package.buyer_country ? ' · ' + detail.package.buyer_country : '' }}</div>
+          <div><span class="dl">买家</span>{{ detail.package.buyer_name || '—' }}{{ detail.package.buyer_country ? ' · ' +
+            detail.package.buyer_country : '' }}</div>
           <div><span class="dl">订单金额</span>{{ fmtMoney(detail.package.order_amount) }}</div>
           <div><span class="dl">称重重量</span>{{ fmtWeight(detail.package.weighing_weight) }}</div>
+          <div><span class="dl">妙手状态</span>
+            <span class="tag" :class="tabTag(detail.package).cls">{{ tabTag(detail.package).label }}</span>
+            <span v-if="detail.package.platform_package_status === 'cancelled'" class="tag tag-err">平台已取消</span>
+            <span v-if="detail.package.app_package_status_text" class="sub muted">{{
+              detail.package.app_package_status_text
+              }}</span>
+          </div>
           <div><span class="dl">本地备注</span>{{ detail.package.note || '—' }}</div>
           <div><span class="dl">本地关联</span>
             <template v-if="detail.package.local_pkg_id">
               <span class="tag tag-info">已关联本地包裹 #{{ detail.package.local_pkg_id }}</span>
-              <button class="btn btn-ghost btn-sm" style="margin-left: 6px" @click="gotoLocalPackage(detail.package.posting_number)">查看本地包裹</button>
+              <button class="btn btn-ghost btn-sm" style="margin-left: 6px"
+                @click="gotoLocalPackage(detail.package.posting_number)">查看本地包裹</button>
             </template>
             <span v-else class="muted">未匹配本地订单</span>
           </div>
@@ -458,17 +514,53 @@ onUnmounted(() => {
           <div><span class="dl">同步时间</span>{{ fmtTime(detail.package.synced_at) }}</div>
         </div>
 
+        <div class="detail-section">商品({{ detail.package.items?.length || 0 }})</div>
+        <div v-if="detail.package.items?.length" class="detail-products">
+          <div v-for="(it, i) in detail.package.items" :key="i" class="product-item">
+            <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box"
+              :title="it.title || '查看Ozon商品'">
+              <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
+            </a>
+            <div class="product-main">
+              <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title"
+                :title="it.title || ''">{{ it.title || '—' }}</a>
+              <div v-else class="product-title" :title="it.title || ''">{{ it.title || '—' }}</div>
+              <div class="product-sub" :title="it.skuSubName || ''">SKU:{{ it.sku || '—' }}{{ it.skuSubName ? ' · ' +
+                it.skuSubName : '' }}</div>
+              <div class="product-sub">单价 {{ fmtMoney(it.price) }} × {{ it.quantity }}</div>
+            </div>
+          </div>
+        </div>
+        <div v-else class="muted">无商品信息(重新从妙手同步可补充)</div>
+
         <div class="detail-section">采购单({{ detail.purchases?.length || 0 }})</div>
         <table v-if="detail.purchases?.length" class="data-table item-table">
           <thead>
-            <tr><th>采购单号</th><th>平台</th><th>状态</th><th>金额</th><th>买手/上家</th><th>采购时间/发货时间</th><th>国内物流</th></tr>
+            <tr>
+              <th>采购单号</th>
+              <th>平台</th>
+              <th>状态</th>
+              <th>金额/商品</th>
+              <th>买手/上家</th>
+              <th>采购时间/发货时间</th>
+              <th>国内物流</th>
+            </tr>
           </thead>
           <tbody>
             <tr v-for="po in detail.purchases" :key="po.id">
-              <td class="mono">{{ po.purchase_sn || '#' + po.purchase_order_id }}</td>
-              <td>{{ platformLabel(po.platform) }}</td>
-              <td>{{ poStatus(po.status) }}</td>
-              <td>{{ fmtMoney(po.payment_amount) }}</td>
+              <td>
+                <a v-if="po.detail_url" :href="po.detail_url" target="_blank" rel="noopener" class="mono po-link"
+                  :title="po.detail_url">{{ po.purchase_sn || '#' + po.purchase_order_id }}</a>
+                <span v-else class="mono">{{ po.purchase_sn || '#' + po.purchase_order_id }}</span>
+              </td>
+              <td>{{ po.platform_name || platformLabel(po.platform) }}</td>
+              <td><span class="tag" :class="poTagCls(po.status)">{{ poStatus(po.status) }}</span></td>
+              <td>
+                <div>{{ fmtMoney(po.payment_amount) }}</div>
+                <div v-for="(pi, j) in po.items" :key="j" class="sub muted po-item-line" :title="pi.title || ''">
+                  {{ pi.title || '采购商品' }} · ¥{{ pi.price ?? '—' }} × {{ pi.num }}
+                </div>
+              </td>
               <td>
                 <div>{{ po.buyer_account || '—' }}</div>
                 <div class="sub muted">{{ po.seller_name || '—' }}</div>
@@ -571,11 +663,30 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-.tag-ok { background: #dcfce7; color: #16a34a; }
-.tag-err { background: #fee2e2; color: #ef4444; }
-.tag-warn { background: #fef3c7; color: #f59e0b; }
-.tag-info { background: #dbeafe; color: #2563eb; }
-.tag-mute { background: #f3f4f6; color: #6b7280; }
+.tag-ok {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.tag-err {
+  background: #fee2e2;
+  color: #ef4444;
+}
+
+.tag-warn {
+  background: #fef3c7;
+  color: #f59e0b;
+}
+
+.tag-info {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.tag-mute {
+  background: #f3f4f6;
+  color: #6b7280;
+}
 
 .empty {
   text-align: center;
@@ -637,5 +748,118 @@ onUnmounted(() => {
   white-space: nowrap;
   font-size: 12px;
   color: var(--text-secondary, #6b7280);
+}
+
+/* ── 产品信息列(对齐订单处理页)── */
+.col-product {
+  min-width: 220px;
+  max-width: 280px;
+}
+
+.product-item+.product-item {
+  margin-top: 6px;
+}
+
+/* 商品图(Ozon CDN 直链,70×70,与订单处理页同尺寸) */
+.product-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.product-img-box {
+  flex: 0 0 70px;
+  width: 70px;
+  height: 70px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f9fafb;
+}
+
+.product-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.product-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.product-title {
+  /* display:block 关键:<a> 默认 inline,ellipsis/max-width 对 inline 无效会导致长名称溢出 */
+  display: block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+
+a.product-title:hover {
+  color: #2563eb;
+}
+
+.product-sub {
+  display: block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-secondary, #9ca3af);
+}
+
+/* 产品数量列(与产品信息列行间距对齐);数量>1 红色加粗提示采购量 */
+.col-qty {
+  min-width: 48px;
+  max-width: 60px;
+  white-space: nowrap;
+}
+
+.qty-line+.qty-line {
+  margin-top: 6px;
+}
+
+.qty-line {
+  line-height: 70px;
+  /* 与 70×70 产品图垂直对齐 */
+}
+
+.qty-multi {
+  color: #dc2626;
+  font-weight: 700;
+  font-size: 2em;
+}
+
+/* 详情弹窗商品区 */
+.detail-products {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 详情采购单号链接 */
+.po-link {
+  color: #2563eb;
+}
+
+.po-link:hover {
+  text-decoration: underline;
+}
+
+.po-item-line {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

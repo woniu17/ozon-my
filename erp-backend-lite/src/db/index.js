@@ -85,6 +85,42 @@ async function ensureMigrations() {
   }
   // collect_box_v2 表已废弃(改为以 cardCache 为基准的缓存视图),清理旧表
   dropLegacyCollectBoxV2(db);
+  // 2026-09: 妙手订单表补列(商品信息 JSON / 采购平台名 / 采购链接 / 采购商品 JSON)
+  const msPkgCols = db.prepare(`PRAGMA table_info(miaoshou_package)`).all();
+  if (msPkgCols.length > 0 && !msPkgCols.some((c) => c.name === 'items_json')) {
+    db.exec(`ALTER TABLE miaoshou_package ADD COLUMN items_json TEXT`);
+    console.log('[db] migration: added column miaoshou_package.items_json');
+  }
+  // 2026-09: 妙手 tab 分组/平台状态(取消单归类修正:操作状态会分散在多个 tab)
+  if (msPkgCols.length > 0) {
+    if (!msPkgCols.some((c) => c.name === 'app_package_tab')) {
+      db.exec(`ALTER TABLE miaoshou_package ADD COLUMN app_package_tab TEXT`);
+      console.log('[db] migration: added column miaoshou_package.app_package_tab');
+    }
+    if (!msPkgCols.some((c) => c.name === 'platform_package_status')) {
+      db.exec(`ALTER TABLE miaoshou_package ADD COLUMN platform_package_status TEXT`);
+      console.log('[db] migration: added column miaoshou_package.platform_package_status');
+    }
+    if (!msPkgCols.some((c) => c.name === 'app_package_status_text')) {
+      db.exec(`ALTER TABLE miaoshou_package ADD COLUMN app_package_status_text TEXT`);
+      console.log('[db] migration: added column miaoshou_package.app_package_status_text');
+    }
+  }
+  const msPurCols = db.prepare(`PRAGMA table_info(miaoshou_purchase)`).all();
+  if (msPurCols.length > 0) {
+    if (!msPurCols.some((c) => c.name === 'platform_name')) {
+      db.exec(`ALTER TABLE miaoshou_purchase ADD COLUMN platform_name TEXT`);
+      console.log('[db] migration: added column miaoshou_purchase.platform_name');
+    }
+    if (!msPurCols.some((c) => c.name === 'detail_url')) {
+      db.exec(`ALTER TABLE miaoshou_purchase ADD COLUMN detail_url TEXT`);
+      console.log('[db] migration: added column miaoshou_purchase.detail_url');
+    }
+    if (!msPurCols.some((c) => c.name === 'items_json')) {
+      db.exec(`ALTER TABLE miaoshou_purchase ADD COLUMN items_json TEXT`);
+      console.log('[db] migration: added column miaoshou_purchase.items_json');
+    }
+  }
   // collect_queue_tasks:增加 duration 列(SW result 接口上报任务耗时)
   const taskCols = db.prepare(`PRAGMA table_info(collect_queue_tasks)`).all();
   if (!taskCols.some((c) => c.name === 'duration')) {

@@ -286,7 +286,7 @@ router.get('/admin/api/order-process/miaoshou-list', (req, res, next) => {
       pageSize: req.query.pageSize,
       shopNick: req.query.shopNick,
       keyword: req.query.keyword,
-      operateStatus: req.query.operateStatus,
+      appPackageTab: req.query.appPackageTab,
       localLinked: req.query.localLinked,
     });
     res.json(ok(data));

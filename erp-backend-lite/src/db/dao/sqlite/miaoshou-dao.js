@@ -44,9 +44,10 @@ export function upsertMiaoshouOrders(records) {
           op_order_package_id, app_package_no, posting_number, shop_id, shop_nick,
           platform, platform_order_sn, order_amount, buyer_name, buyer_country,
           gmt_order_start, weighing_weight, note, operate_status, purchase_status,
+          app_package_tab, platform_package_status, app_package_status_text,
           logistics_no, logistics_company, gmt_create, gmt_modified, gmt_delivery,
-          raw_json, synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          items_json, raw_json, synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(op_order_package_id) DO UPDATE SET
           app_package_no=excluded.app_package_no,
           posting_number=excluded.posting_number,
@@ -61,11 +62,15 @@ export function upsertMiaoshouOrders(records) {
           note=excluded.note,
           operate_status=excluded.operate_status,
           purchase_status=excluded.purchase_status,
+          app_package_tab=excluded.app_package_tab,
+          platform_package_status=excluded.platform_package_status,
+          app_package_status_text=excluded.app_package_status_text,
           logistics_no=excluded.logistics_no,
           logistics_company=excluded.logistics_company,
           gmt_create=excluded.gmt_create,
           gmt_modified=excluded.gmt_modified,
           gmt_delivery=excluded.gmt_delivery,
+          items_json=excluded.items_json,
           raw_json=excluded.raw_json,
           synced_at=excluded.synced_at,
           updated_at=datetime('now')`
@@ -85,11 +90,15 @@ export function upsertMiaoshouOrders(records) {
         r.note || null,
         r.operateStatus || null,
         r.purchaseStatus || null,
+        r.appPackageTab || null,
+        r.platformPackageStatus || null,
+        r.appPackageStatusText || null,
         r.logisticsNo || null,
         r.logisticsCompany || null,
         r.gmtCreate || null,
         r.gmtModified || null,
         r.gmtDelivery || null,
+        r.items?.length ? JSON.stringify(r.items) : null,
         r.raw ? JSON.stringify(r.raw) : null,
         now
       );
@@ -106,13 +115,16 @@ export function upsertMiaoshouOrders(records) {
         db.prepare(
           `INSERT INTO miaoshou_purchase (
             miaoshou_package_id, purchase_order_id, purchase_sn, platform,
+            platform_name, detail_url,
             buyer_account, seller_name, payment_amount, currency, status,
             purchase_start_time, send_at, logistics_company, logistics_no,
-            last_trace, raw_json, synced_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            last_trace, items_json, raw_json, synced_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(platform, purchase_sn) DO UPDATE SET
             miaoshou_package_id=excluded.miaoshou_package_id,
             purchase_order_id=excluded.purchase_order_id,
+            platform_name=excluded.platform_name,
+            detail_url=excluded.detail_url,
             buyer_account=excluded.buyer_account,
             seller_name=excluded.seller_name,
             payment_amount=excluded.payment_amount,
@@ -122,6 +134,7 @@ export function upsertMiaoshouOrders(records) {
             logistics_company=excluded.logistics_company,
             logistics_no=excluded.logistics_no,
             last_trace=excluded.last_trace,
+            items_json=excluded.items_json,
             raw_json=excluded.raw_json,
             synced_at=excluded.synced_at,
             updated_at=datetime('now')`
@@ -130,6 +143,8 @@ export function upsertMiaoshouOrders(records) {
           po.purchaseOrderId || null,
           po.purchaseSn,
           po.platform,
+          po.platformName || null,
+          po.detailUrl || null,
           po.buyerAccount || null,
           po.sellerName || null,
           po.paymentAmount != null ? Number(po.paymentAmount) : 0,
@@ -140,6 +155,7 @@ export function upsertMiaoshouOrders(records) {
           po.logisticsCompany || null,
           po.logisticsNo || null,
           po.lastTrace || null,
+          po.items?.length ? JSON.stringify(po.items) : null,
           po.raw ? JSON.stringify(po.raw) : null,
           now
         );
@@ -175,10 +191,11 @@ export function listMiaoshouPackages(filters = {}) {
     const kw = `%${filters.keyword}%`;
     vals.push(kw, kw, kw);
   }
-  // 状态 tab 筛选(operate_status 值域与本地 op_package 一致)
-  if (filters.operateStatus) {
-    where.push('mp.operate_status = ?');
-    vals.push(filters.operateStatus);
+  // 状态 tab 筛选(按妙手自身 tab 分组 appPackageTab:waitProcess/waitShip/submitPlatform/
+  // waitReceiverConfirm/closed/isolation;操作状态 operate_status 会分散在多个 tab,不能用于分类)
+  if (filters.appPackageTab) {
+    where.push('mp.app_package_tab = ?');
+    vals.push(filters.appPackageTab);
   }
   // 本地关联筛选:'1' 已关联本地 op_package,'0' 未关联
   if (filters.localLinked === '1') where.push(LOCAL_PKG_EXISTS);
@@ -201,16 +218,26 @@ export function listMiaoshouPackages(filters = {}) {
     )
     .all(...vals, pageSize, offset);
 
-  return { packages: rows, total, page, pageSize };
+  return { packages: rows.map(parsePackageRow), total, page, pageSize };
+}
+
+// items_json → items 数组(前端产品信息展示)
+function parsePackageRow(row) {
+  if (!row) return row;
+  let items = [];
+  if (row.items_json) {
+    try { items = JSON.parse(row.items_json) || []; } catch { items = []; }
+  }
+  return { ...row, items_json: undefined, items };
 }
 
 /**
- * 状态 tab 计数(按 operate_status 分组,附总数与本地关联数)
- * 值域:wait_process/wait_ship/ship_success/wait_receiver_confirm/cancelled
+ * 状态 tab 计数(按妙手自身 tab 分组 app_package_tab,附总数与本地关联数)
+ * 值域:waitProcess/waitShip/submitPlatform/waitReceiverConfirm/closed/isolation
  */
 export function countMiaoshouTabs() {
-  const byStatus = db
-    .prepare(`SELECT operate_status AS s, COUNT(*) AS n FROM miaoshou_package GROUP BY operate_status`)
+  const byTab = db
+    .prepare(`SELECT app_package_tab AS s, COUNT(*) AS n FROM miaoshou_package GROUP BY app_package_tab`)
     .all();
   const linked = db
     .prepare(`SELECT COUNT(*) AS n FROM miaoshou_package mp WHERE ${LOCAL_PKG_EXISTS}`)
@@ -221,16 +248,18 @@ export function countMiaoshouTabs() {
     all: total,
     waitProcess: 0,
     waitShip: 0,
-    shipSuccess: 0,
+    submitPlatform: 0,
     waitReceiverConfirm: 0,
-    cancelled: 0,
+    closed: 0,
+    isolation: 0,
   };
-  for (const r of byStatus) {
-    if (r.s === 'wait_process') counts.waitProcess = r.n;
-    else if (r.s === 'wait_ship') counts.waitShip = r.n;
-    else if (r.s === 'ship_success') counts.shipSuccess = r.n;
-    else if (r.s === 'wait_receiver_confirm') counts.waitReceiverConfirm = r.n;
-    else if (r.s === 'cancelled') counts.cancelled = r.n;
+  for (const r of byTab) {
+    if (r.s === 'waitProcess') counts.waitProcess = r.n;
+    else if (r.s === 'waitShip') counts.waitShip = r.n;
+    else if (r.s === 'submitPlatform') counts.submitPlatform = r.n;
+    else if (r.s === 'waitReceiverConfirm') counts.waitReceiverConfirm = r.n;
+    else if (r.s === 'closed') counts.closed = r.n;
+    else if (r.s === 'isolation') counts.isolation = r.n;
   }
   counts.linked = linked;
   counts.unlinked = total - linked;
@@ -254,7 +283,14 @@ export function getMiaoshouPackageDetail(id) {
     .prepare(
       `SELECT * FROM miaoshou_purchase WHERE miaoshou_package_id = ? ORDER BY synced_at DESC`
     )
-    .all(id);
+    .all(id)
+    .map((po) => {
+      let items = [];
+      if (po.items_json) {
+        try { items = JSON.parse(po.items_json) || []; } catch { items = []; }
+      }
+      return { ...po, items_json: undefined, items };
+    });
 
-  return { package: pkg, purchases };
+  return { package: parsePackageRow(pkg), purchases };
 }

@@ -162,11 +162,28 @@
       note: pkg.appNote || null,
       operateStatus: pkg.appPackageOperateStatus || null,
       purchaseStatus: pkg.appPurchaseStatus || null,
+      // ★妙手自身 tab 分组值(waitProcess/waitShip/submitPlatform/waitReceiverConfirm/closed/isolation)
+      // 操作状态(appPackageOperateStatus)会分散在多个 tab(如 wait_audit 同时出现在待处理与已关闭),
+      // tab 分类必须用 appPackageTab
+      appPackageTab: pkg.appPackageTab || null,
+      platformPackageStatus: pkg.platformPackageStatus || null,   // cancelled/...
+      appPackageStatusText: pkg.appPackageStatusText || null,    // 已退款/...
       logisticsNo: pkg.logisticsNo || null,
       logisticsCompany: pkg.logisticsCompany || null,
       gmtCreate: pkg.gmtCreate || null,
       gmtModified: pkg.gmtModified || null,
       gmtDelivery: pkg.gmtDelivery || null,
+      // ── 商品信息(pkg.items 按 opOrderItemId 键的对象,对齐订单处理页产品展示)──
+      items: Object.values(pkg.items || {}).map((it) => ({
+        title: it.title || null,
+        skuSubName: it.skuSubName || null,
+        sku: it.platformOuterSkuId || it.platformItemNum || null,
+        quantity: parseInt(it.quantity, 10) || 1,
+        price: it.discountedPrice != null ? parseFloat(it.discountedPrice)
+          : (it.originalPrice != null ? parseFloat(it.originalPrice) : null),
+        picUrl: it.originalPicUrl || it.picUrl || null, // 优先 Ozon CDN 直链
+        pdpUrl: it.url || null,
+      })),
       // raw 字段不传(减小 payload,避免 413;审计可随时从妙手重新提取)
       // ── 子表 miaoshou_purchase ──
       purchases: purchaseOrders.map((po) => {
@@ -175,9 +192,16 @@
           purchaseOrderId: po.purchaseOrderId,
           purchaseSn: po.purchaseOrderSn,
           platform: po.purchasePlatform,
+          platformName: po.purchasePlatformName || null,
+          detailUrl: po.purchaseOrderDetailUrl || null,
           buyerAccount: po.purchaseOrderBuyer,
           sellerName: po.purchaseOrderSeller,
           paymentAmount: po.purchaseOrderPayment ? parseFloat(po.purchaseOrderPayment) : 0,
+          items: (po.items || []).map((pi) => ({
+            title: pi.purchaseOrderItemTitle || null,
+            price: pi.purchasePrice != null ? parseFloat(pi.purchasePrice) : null,
+            num: parseInt(pi.purchaseNum, 10) || 1,
+          })),
           status: po.purchaseOrderStatus,
           purchaseStartTime: po.purchaseOrderStartTime,
           sendAt: po.purchaseOrderSendTime,

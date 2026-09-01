@@ -1079,12 +1079,16 @@ CREATE TABLE IF NOT EXISTS miaoshou_package (
   weighing_weight     REAL,                   -- 称重重量(g)
   note                TEXT,                   -- 本地备注(appNote)
   operate_status      TEXT,                   -- 妙手操作状态(原值)
+  app_package_tab     TEXT,                   -- 妙手 tab 分组(waitProcess/waitShip/submitPlatform/waitReceiverConfirm/closed/isolation)
+  platform_package_status TEXT,               -- 平台包裹状态(cancelled/...)
+  app_package_status_text TEXT,               -- 妙手状态文案(已退款/...)
   purchase_status     TEXT,                   -- 妙手采购状态(原值)
   logistics_no        TEXT,                   -- Ozon 跟踪号
   logistics_company   TEXT,
   gmt_create          TEXT,                   -- 妙手创建时间
   gmt_modified        TEXT,                   -- 妙手修改时间
-  gmt_delivery        TEXT,                   -- 发货时间
+  gmt_delivery          TEXT,                   -- 发货时间
+  items_json            TEXT,                   -- 商品信息 JSON(图/标题/SKU/数量/单价,对齐订单处理页展示)
   raw_json            TEXT,                   -- 主列表 API 原始响应(审计/补字段)
   synced_at           TEXT NOT NULL,          -- 本次同步时间
   updated_at          TEXT DEFAULT (datetime('now'))
@@ -1100,10 +1104,13 @@ CREATE TABLE IF NOT EXISTS miaoshou_purchase (
   purchase_order_id     TEXT,                   -- 妙手采购单内部 ID
   purchase_sn           TEXT,                   -- 采购单号(1688/拼多多)
   platform              TEXT NOT NULL,          -- 1688/yangkeduo/taobao
+  platform_name         TEXT,                   -- 平台中文名(拼多多/1688/淘宝)
+  detail_url            TEXT,                   -- 采购平台订单详情链接
   buyer_account         TEXT,                   -- 采购账号 清祥17/PCC01
   seller_name           TEXT,                   -- 上家卖家
   payment_amount        REAL DEFAULT 0,          -- 采购金额
   currency              TEXT DEFAULT 'CNY',
+  items_json            TEXT,                   -- 采购商品 JSON(标题/单价/数量)
   status                TEXT,                    -- has_send/has_sign(原值)
   purchase_start_time   TEXT,                    -- 采购时间
   send_at               TEXT,                    -- 上家发货时间
