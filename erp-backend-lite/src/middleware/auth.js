@@ -16,8 +16,12 @@ const PUBLIC_PATHS = new Set([
   '/admin/api/image-host/process-batch',
 ]);
 
+// 前缀放行:面单打印短链(菜鸟打印组件拉取,HMAC 令牌自校验,见 order-process.js)
+const PUBLIC_PATH_PREFIXES = ['/print/waybill/'];
+
 function isPublic(path) {
   if (PUBLIC_PATHS.has(path)) return true;
+  if (PUBLIC_PATH_PREFIXES.some((p) => path.startsWith(p))) return true;
   // SW 内部轮询接口,SW 可能没有有效 token(扩展重载后 token 可能过期)
   if (path === '/admin/api/collect-queue/ops/pending') return true;
   if (path.startsWith('/admin/api/collect-queue/ops/') && path.endsWith('/processed')) return true;

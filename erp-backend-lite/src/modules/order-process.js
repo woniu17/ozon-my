@@ -15,6 +15,7 @@
 //   GET  /admin/api/order-process/sync-status    各店铺最近同步状态
 //   GET  /admin/api/order-process/sync-progress  实时同步进度(店铺数/已处理/已拉订单数)
 import { Router } from 'express';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
@@ -202,10 +203,11 @@ router.post('/admin/api/order-process/print-label', (req, res, next) => {
 });
 
 // ── 获取 Ozon 面单 PDF(打印标签)────────────────────────
-// body: { packageIds: number[](≤20,须同店铺), refresh?: boolean }
+// body: { packageIds: number[](≤20,须同店铺), refresh?: boolean, mode?: 'stream'|'url' }
 // 行为:文件缓存优先,未命中调 Ozon /v2/posting/fbs/package-label 并落缓存
-// 返回:application/pdf;错误(400/409)返回 JSON envelope
-// 注:拉取成功不自动流转状态,前端确认打印后走 print-label 标记交运
+// 返回:mode=stream(默认)→ application/pdf;mode=url → { url, expiresIn }(供菜鸟打印组件拉取)
+// 注:url 模式返回带 HMAC 签名的 10 分钟短时公开链接(见 GET /print/waybill/:token)
+// 注:拉取成功不自动流转状态,前端打印成功后走 print-label 标记交运
 router.post('/admin/api/order-process/package-label', async (req, res, next) => {
   try {
     const b = req.body || {};
@@ -225,42 +227,88 @@ router.post('/admin/api/order-process/package-label', async (req, res, next) => 
     const postingNumbers = rows.map((r) => r.postingNumber);
 
     // 缓存优先(refresh=true 时强制重拉)
+    let pdf = null;
     if (!b.refresh) {
-      const cached = getWaybill(storeId, postingNumbers);
-      if (cached) {
+      pdf = getWaybill(storeId, postingNumbers);
+      if (pdf) {
         logger.info({ storeId, postings: postingNumbers.length, cacheHit: true }, '[package-label] 缓存命中');
-        return sendPdf(res, postingNumbers.length, cached);
       }
     }
 
-    const store = (config.loadStores() || []).find((s) => s.id === storeId);
-    if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
-    const started = Date.now();
-    let pdf;
-    try {
-      pdf = (await packageLabel(store, postingNumbers)).buffer;
-    } catch (e) {
-      const msg = e?.message || '';
-      // Ozon 装配后 45-60s 才能出标签,未就绪返回 409 让前端引导重试
-      if (/aren't ready/i.test(msg)) {
-        return res.status(409).json({ ok: false, code: 'LABEL_NOT_READY', message: '面单尚未就绪(Ozon 装配后需 45-60 秒),请稍后重试' });
+    if (!pdf) {
+      const store = (config.loadStores() || []).find((s) => s.id === storeId);
+      if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
+      const started = Date.now();
+      try {
+        pdf = (await packageLabel(store, postingNumbers)).buffer;
+      } catch (e) {
+        const msg = e?.message || '';
+        // Ozon 装配后 45-60s 才能出标签,未就绪返回 409 让前端引导重试
+        if (/aren't ready/i.test(msg)) {
+          return res.status(409).json({ ok: false, code: 'LABEL_NOT_READY', message: '面单尚未就绪(Ozon 装配后需 45-60 秒),请稍后重试' });
+        }
+        // Ozon 限制:仅 awaiting_deliver(待发货)状态货件可打印标签(实测 delivering/已取消等会报 INVALID_ARGUMENT)
+        if (/INVALID_ARGUMENT/i.test(msg)) {
+          return res.status(409).json({ ok: false, code: 'LABEL_NOT_AVAILABLE', message: 'Ozon 拒绝生成面单:仅"待发货(awaiting_deliver)"状态的订单可打印面单' });
+        }
+        throw e;
       }
-      // Ozon 限制:仅 awaiting_deliver(待发货)状态货件可打印标签(实测 delivering/已取消等会报 INVALID_ARGUMENT)
-      if (/INVALID_ARGUMENT/i.test(msg)) {
-        return res.status(409).json({ ok: false, code: 'LABEL_NOT_AVAILABLE', message: 'Ozon 拒绝生成面单:仅"待发货(awaiting_deliver)"状态的订单可打印面单' });
-      }
-      throw e;
+      setWaybill(storeId, postingNumbers, pdf);
+      logger.info(
+        { storeId, postings: postingNumbers.length, cacheHit: false, durationMs: Date.now() - started },
+        '[package-label] Ozon 拉取成功'
+      );
     }
-    setWaybill(storeId, postingNumbers, pdf);
-    logger.info(
-      { storeId, postings: postingNumbers.length, cacheHit: false, durationMs: Date.now() - started },
-      '[package-label] Ozon 拉取成功'
-    );
+
+    if (b.mode === 'url') {
+      // 生成短时签名链接,供菜鸟打印组件(本地进程,无 JWT)直接 GET 拉取 PDF
+      const token = signWaybillToken({ storeId, postings: postingNumbers, exp: Date.now() + WAYBILL_URL_TTL_MS });
+      const base = `${req.protocol}://${req.get('host')}`;
+      return res.json(ok({ url: `${base}/print/waybill/${token}`, expiresIn: WAYBILL_URL_TTL_MS / 1000 }));
+    }
     sendPdf(res, postingNumbers.length, pdf);
   } catch (e) {
     next(e);
   }
 });
+
+// ── 面单公开链接(菜鸟打印组件拉取用)──────────────────────
+// 组件是本地进程,无法带 Authorization;用 HMAC 签名 + 10 分钟过期的令牌保护
+// (路径已在 auth.js PUBLIC_PATHS 前缀放行)
+router.get('/print/waybill/:token', (req, res, next) => {
+  try {
+    const p = verifyWaybillToken(req.params.token);
+    if (!p) return res.status(403).json({ ok: false, message: '面单链接无效或已过期,请重新打印' });
+    const pdf = getWaybill(p.storeId, p.postings);
+    if (!pdf) return res.status(404).json({ ok: false, message: '面单缓存不存在,请重新打印' });
+    sendPdf(res, p.postings.length, pdf);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 面单短链令牌:HMAC-SHA256(jwtSecret 复用),payload 含店铺/货件/过期时间
+const WAYBILL_URL_TTL_MS = 10 * 60_000;
+function signWaybillToken(payload) {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = createHmac('sha256', config.jwtSecret).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+function verifyWaybillToken(token) {
+  const [body, sig] = String(token || '').split('.');
+  if (!body || !sig) return null;
+  const expect = createHmac('sha256', config.jwtSecret).update(body).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expect);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!Array.isArray(p.postings) || !p.storeId || Date.now() > p.exp) return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
 
 function sendPdf(res, n, buffer) {
   res.setHeader('Content-Type', 'application/pdf');

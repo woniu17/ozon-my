@@ -15,6 +15,7 @@ import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
 import AppModal from '../components/AppModal.vue';
 import AppPager from '../components/AppPager.vue';
+import { pickLabelPrinter, printLabelImage, previewLabelImage } from '../api/print-agent.js';
 
 const { show } = useToast();
 const confirmStore = useConfirmStore();
@@ -902,11 +903,12 @@ async function onPrinted(pkg) {
   }
 }
 
-// ── 打印 Ozon 面单(D1:隐藏 iframe + contentWindow.print() 一键弹打印)──
-// 流程:拉 PDF(后端缓存优先)→ iframe 加载后自动弹系统打印框 →
-//       打印框关闭后确认流转交运(取消则保持 wait_ship,可重复打印)
+// ── 打印 Ozon 面单(菜鸟打印组件 CNPL 模板静默打印,iframe 兜底)──
+// 主路径:拉 PDF(后端缓存优先)→ pdfjs 转 PNG → CNPL 图片模板(70×130 纸,宽 70 等比缩放)
+//         → 组件静默出纸 → wait_ship 自动流转交运;ship_success 补打状态不变
+// 兜底:组件未启动/连接失败 → 隐藏 iframe + contentWindow.print() 浏览器打印框 + 人工确认流转
 const printingId = ref(0); // 正在打印的包裹 id(按钮 loading)
-let printFrame = null;      // 当前打印用隐藏 iframe(复用,避免每次重建)
+let printFrame = null;     // 兜底打印用隐藏 iframe(复用,避免每次重建)
 
 function printBlobViaIframe(blob) {
   return new Promise((resolve, reject) => {
@@ -941,24 +943,74 @@ function printBlobViaIframe(blob) {
   });
 }
 
+// 兜底路径:浏览器打印框(打印框关闭后人工确认流转)
+async function printLabelViaBrowser(pkg) {
+  const blob = await fetchPackageLabel([pkg.id]);
+  await printBlobViaIframe(blob);
+  if (pkg.operateStatus === 'ship_success') {
+    show('面单已重新打印(交运订单,状态不变)', 'success');
+    return;
+  }
+  if (await confirmStore.ask({
+    message: `包裹 ${pkg.packageNo} 的面单打印框已关闭,确认流转交运?(未实际打印可取消,稍后重打)`,
+  })) {
+    await markPrinted(pkg.id);
+    show('面单已打印,流转交运', 'success');
+    loadTabs();
+    loadList();
+  }
+}
+
+// 主路径:组件静默打印;wait_ship 出纸后自动流转交运,ship_success 补打状态不变
 async function onPrintLabel(pkg) {
   if (printingId.value) return;
   printingId.value = pkg.id;
+  const isReprint = pkg.operateStatus === 'ship_success';
   try {
     const blob = await fetchPackageLabel([pkg.id]);
-    await printBlobViaIframe(blob);
-    if (await confirmStore.ask({
-      message: `包裹 ${pkg.packageNo} 的面单打印框已关闭,确认流转交运?(未实际打印可取消,稍后重打)`,
-    })) {
-      await markPrinted(pkg.id);
-      show('面单已打印,流转交运', 'success');
-      loadTabs();
-      loadList();
+    const printer = await pickLabelPrinter();
+    await printLabelImage(blob, pkg.logisticsNo || String(pkg.id), printer);
+    if (isReprint) {
+      show('面单已重新打印(交运订单,状态不变)', 'success');
+      return;
     }
+    await markPrinted(pkg.id);
+    show('面单已静默打印,流转交运', 'success');
+    loadTabs();
+    loadList();
+  } catch (err) {
+    const msg = err?.message || String(err);
+    if (/菜鸟打印组件/.test(msg)) {
+      // 组件不可用 → 回退浏览器打印框
+      show(`${msg},改用浏览器打印框`, 'warn');
+      try {
+        await printLabelViaBrowser(pkg);
+      } catch (e2) {
+        show(e2.message || String(e2), 'error');
+      }
+    } else {
+      show(msg, 'error');
+    }
+  } finally {
+    printingId.value = 0;
+  }
+}
+
+// ── 无纸预览(验证 CNPL 模板渲染效果,不出纸不流转状态)──
+const labelPreview = reactive({ open: false, url: '', loading: 0 });
+
+async function onPreviewLabel(pkg) {
+  if (labelPreview.loading) return;
+  labelPreview.loading = pkg.id;
+  try {
+    const blob = await fetchPackageLabel([pkg.id]);
+    const url = await previewLabelImage(blob, pkg.logisticsNo || String(pkg.id));
+    labelPreview.url = url;
+    labelPreview.open = true;
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
-    printingId.value = 0;
+    labelPreview.loading = 0;
   }
 }
 
@@ -1390,12 +1442,19 @@ onUnmounted(() => {
                 <button v-else class="btn btn-ghost btn-sm" @click="openPurchase(pkg)">追加采购</button>
                 <button class="btn btn-ghost btn-sm" @click="openDetail(pkg)">详情</button>
                 <button
-                  v-if="pkg.operateStatus === 'wait_ship'"
+                  v-if="pkg.operateStatus === 'wait_ship' || pkg.operateStatus === 'ship_success'"
                   class="btn btn-primary btn-sm"
                   :disabled="printingId === pkg.id"
-                  :title="printingId === pkg.id ? '面单获取中…' : '拉取 Ozon 面单 PDF 并弹出打印框,打印后流转交运'"
+                  :title="printingId === pkg.id ? '面单打印中…' : pkg.operateStatus === 'ship_success' ? '重新打印该包裹的 Ozon 面单(缓存秒出)' : '拉取 Ozon 面单并静默打印(菜鸟打印组件),出纸后自动流转交运'"
                   @click="onPrintLabel(pkg)"
                 >{{ printingId === pkg.id ? '打印中…' : '打印面单' }}</button>
+                <button
+                  v-if="pkg.operateStatus === 'wait_ship' || pkg.operateStatus === 'ship_success'"
+                  class="btn btn-ghost btn-sm"
+                  :disabled="labelPreview.loading === pkg.id"
+                  title="无纸预览:组件按 CNPL 模板渲染面单效果,不出纸、不流转状态"
+                  @click="onPreviewLabel(pkg)"
+                >{{ labelPreview.loading === pkg.id ? '渲染中…' : '预览' }}</button>
                 <button
                   v-if="pkg.operateStatus === 'wait_ship'"
                   class="btn btn-ghost btn-sm"
@@ -1472,6 +1531,17 @@ onUnmounted(() => {
           <button class="btn btn-primary" :disabled="syncAllSubmitting" @click="triggerSyncAllList">
             {{ syncAllSubmitting ? '启动中…' : '开始同步' }}
           </button>
+        </div>
+      </div>
+    </AppModal>
+
+    <!-- 面单预览弹窗(无纸验证 CNPL 模板渲染效果,不出纸不流转状态) -->
+    <AppModal :open="labelPreview.open" title="面单预览(CNPL 模板渲染 · 70×130mm)" @update:open="labelPreview.open = $event">
+      <div class="label-preview-body">
+        <img v-if="labelPreview.url" :src="labelPreview.url" alt="面单预览" class="label-preview-img" />
+        <div class="label-preview-tip">
+          组件按 CNPL 模板(label-image.xml)渲染:面单图片宽 70mm 等比缩放、顶部对齐,预览即实际出纸版式。
+          出纸时会按 70×130mm 标签纸打印,预览不消耗纸张、不流转订单状态。
         </div>
       </div>
     </AppModal>
@@ -2513,6 +2583,24 @@ a.product-title:hover {
 .trace-time {
   color: var(--text-secondary, #9ca3af);
   white-space: nowrap;
+}
+
+/* 面单预览弹窗(无纸验证 CNPL 模板渲染) */
+.label-preview-body {
+  text-align: center;
+}
+.label-preview-img {
+  max-width: 100%;
+  max-height: 70vh;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 4px;
+  background: #fff;
+}
+.label-preview-tip {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary, #9ca3af);
 }
 
 </style>
