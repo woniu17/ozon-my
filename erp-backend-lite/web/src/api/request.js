@@ -80,3 +80,33 @@ export function put(path, body) {
 export function del(path) {
   return request(path, { method: 'DELETE' });
 }
+
+// 二进制响应版 POST:成功返回 Blob(如 PDF 面单);失败解析 JSON envelope 抛 message
+// 复用 token 注入 / 续期 / 401 登出逻辑
+export async function postBlob(path, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) });
+
+  const refreshed = res.headers.get('X-Refreshed-Token');
+  if (refreshed) localStorage.setItem(TOKEN_KEY, refreshed);
+
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    window.dispatchEvent(new CustomEvent('auth:logout'));
+    throw new Error('登录已过期,请重新登录');
+  }
+
+  if (!res.ok) {
+    let data = null;
+    try {
+      data = await res.json();
+    } catch (_) {
+      /* 非 JSON 响应体 */
+    }
+    throw new Error(data?.message || data?.error || '请求失败 (' + res.status + ')');
+  }
+  return res.blob();
+}

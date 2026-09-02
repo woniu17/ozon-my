@@ -8,7 +8,7 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
-  submitPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted,
+  submitPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
 } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
@@ -902,6 +902,66 @@ async function onPrinted(pkg) {
   }
 }
 
+// ── 打印 Ozon 面单(D1:隐藏 iframe + contentWindow.print() 一键弹打印)──
+// 流程:拉 PDF(后端缓存优先)→ iframe 加载后自动弹系统打印框 →
+//       打印框关闭后确认流转交运(取消则保持 wait_ship,可重复打印)
+const printingId = ref(0); // 正在打印的包裹 id(按钮 loading)
+let printFrame = null;      // 当前打印用隐藏 iframe(复用,避免每次重建)
+
+function printBlobViaIframe(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    if (!printFrame) {
+      printFrame = document.createElement('iframe');
+      printFrame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+      document.body.appendChild(printFrame);
+    }
+    const frame = printFrame;
+    const cleanup = () => {
+      frame.onload = null;
+      // 延时释放 objectURL,给 PDF 渲染留时间
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    };
+    frame.onload = () => {
+      try {
+        const win = frame.contentWindow;
+        // 打印框关闭(打印完成/取消)后 resolve
+        win.onafterprint = () => { cleanup(); resolve(); };
+        win.focus();
+        win.print();
+        // 兜底:onafterprint 未触发(部分浏览器)时,print() 同步返回后延时 resolve
+        setTimeout(() => { cleanup(); resolve(); }, 3_000);
+      } catch (e) {
+        cleanup();
+        reject(e);
+      }
+    };
+    frame.onerror = () => { cleanup(); reject(new Error('面单加载失败')); };
+    frame.src = url;
+  });
+}
+
+async function onPrintLabel(pkg) {
+  if (printingId.value) return;
+  printingId.value = pkg.id;
+  try {
+    const blob = await fetchPackageLabel([pkg.id]);
+    await printBlobViaIframe(blob);
+    if (await confirmStore.ask({
+      message: `包裹 ${pkg.packageNo} 的面单打印框已关闭,确认流转交运?(未实际打印可取消,稍后重打)`,
+    })) {
+      await markPrinted(pkg.id);
+      show('面单已打印,流转交运', 'success');
+      loadTabs();
+      loadList();
+    }
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    printingId.value = 0;
+  }
+}
+
 // 退回待处理:取消全部采购关联并回流未采购(方案A语义:待处理=未采购)
 async function onRevert(pkg) {
   const n = pkg.purchaseLinks?.length || 0;
@@ -1095,6 +1155,10 @@ onUnmounted(() => {
   window.removeEventListener('message', onPddMessage);
   window.removeEventListener('message', onAliMessage);
   window.removeEventListener('message', onTbMessage);
+  if (printFrame) {
+    printFrame.remove();
+    printFrame = null;
+  }
 });
 </script>
 
@@ -1309,8 +1373,9 @@ onUnmounted(() => {
                 <span v-if="cancelReasonLabel(pkg).affectRating" class="tag tag-err" title="影响排行">影响排行</span>
               </div>
               <div class="sub muted">下单：{{ fmtTime(pkg.inProcessAt) }}</div>
-              <div v-if="pkg.shipmentDate && !pkg.isShipped" class="sub muted">最迟：{{ fmtTime(pkg.shipmentDate) }}</div>
-              <div v-if="countdown(pkg) && !pkg.isShipped" class="sub" :class="countdown(pkg).overdue ? 'overdue' : 'countdown'">
+              <!-- 已取消订单不再展示最迟/剩发/已超时(取消后无发货义务,倒计时无意义) -->
+              <div v-if="pkg.shipmentDate && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub muted">最迟：{{ fmtTime(pkg.shipmentDate) }}</div>
+              <div v-if="countdown(pkg) && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub" :class="countdown(pkg).overdue ? 'overdue' : 'countdown'">
                 {{ countdown(pkg).overdue ? '已超时：' : '剩发：' }}{{ countdown(pkg).text }}
               </div>
               <div v-if="pkg.isShipped" class="sub muted">已交运 {{ fmtTime(pkg.shippedAt) }}</div>
@@ -1326,10 +1391,17 @@ onUnmounted(() => {
                 <button class="btn btn-ghost btn-sm" @click="openDetail(pkg)">详情</button>
                 <button
                   v-if="pkg.operateStatus === 'wait_ship'"
+                  class="btn btn-primary btn-sm"
+                  :disabled="printingId === pkg.id"
+                  :title="printingId === pkg.id ? '面单获取中…' : '拉取 Ozon 面单 PDF 并弹出打印框,打印后流转交运'"
+                  @click="onPrintLabel(pkg)"
+                >{{ printingId === pkg.id ? '打印中…' : '打印面单' }}</button>
+                <button
+                  v-if="pkg.operateStatus === 'wait_ship'"
                   class="btn btn-ghost btn-sm"
-                  title="标记已打印Ozon面单,流转交运"
+                  title="不拉取面单,仅标记已打印并流转交运(补录场景)"
                   @click="onPrinted(pkg)"
-                >打单交运</button>
+                >仅标记交运</button>
                 <button
                   v-if="pkg.operateStatus === 'wait_ship'"
                   class="btn btn-danger btn-sm"

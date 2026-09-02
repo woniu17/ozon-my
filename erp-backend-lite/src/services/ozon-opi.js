@@ -54,6 +54,60 @@ async function call(store, path, body, { method = 'POST', timeoutMs = DEFAULT_TI
   }
 }
 
+// 二进制响应版 call:返回 { buffer, contentType }
+// 供 /v2/posting/fbs/package-label(面单 PDF)等非 JSON 接口使用
+// 认证/超时/错误映射与 call() 保持一致,差异:响应按 arrayBuffer 读取
+async function callRaw(store, path, body, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  if (!store?.sync_credentials?.clientId || !store?.sync_credentials?.apiKey) {
+    throw new ApiError(ErrorCode.AUTH_REQUIRED, `店铺 ${store?.id} 未配置 sync_credentials.clientId/apiKey`);
+  }
+  const url = `${BASE}${path}`;
+  try {
+    const res = await request(url, {
+      method: 'POST',
+      headers: {
+        'Client-Id': store.sync_credentials.clientId,
+        'Api-Key': store.sync_credentials.apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      headersTimeout: timeoutMs,
+      bodyTimeout: timeoutMs,
+    });
+    if (res.statusCode >= 400) {
+      const text = await res.body.text();
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = { raw: text };
+      }
+      logger.warn({ url, status: res.statusCode, body: parsed }, 'OPI non-2xx(raw)');
+      throw new ApiError(ErrorCode.NETWORK_ERROR, `OPI ${path} 返回 ${res.statusCode}: ${parsed?.message || text}`, {
+        details: { httpStatus: res.statusCode, body: parsed },
+      });
+    }
+    const contentType = res.headers['content-type'] || '';
+    const buffer = Buffer.from(await res.body.arrayBuffer());
+    // 防 CDN/网关拦截返回 HTML 错误页:校验响应确为二进制
+    if (contentType && !/pdf|octet-stream/i.test(contentType) && buffer.length > 0 && buffer[0] !== 0x25 /* % */) {
+      logger.warn({ url, contentType, size: buffer.length }, 'OPI raw 非预期 Content-Type');
+      throw new ApiError(ErrorCode.NETWORK_ERROR, `OPI ${path} 返回非 PDF 内容(Content-Type: ${contentType})`);
+    }
+    return { buffer, contentType };
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    if (e.name === 'ConnectTimeoutError') {
+      throw new ApiError(ErrorCode.TIMEOUT, `OPI ${path} 连接超时`, { details: { kind: 'connect_timeout' } });
+    }
+    if (e.name === 'HeadersTimeoutError' || e.name === 'BodyTimeoutError') {
+      throw new ApiError(ErrorCode.TIMEOUT, `OPI ${path} 请求超时`);
+    }
+    logger.warn({ url, err: e?.message }, 'OPI network error(raw)');
+    throw new ApiError(ErrorCode.NETWORK_ERROR, `OPI ${path} 网络错: ${e?.message || e}`);
+  }
+}
+
 // /v3/product/import —— 创建商品(官方 API 跟卖)
 // OPI v3 proto 必填字段(参考 docs/ozon-api/01-商品管理.md):
 //   - items[].type_id: integer > 0,商品类型 ID(可从 /v1/description-category/tree 获取)
@@ -473,6 +527,14 @@ export function postingFbsList(store, { since, to, cursor, limit = 100 } = {}) {
   };
   if (cursor) body.cursor = cursor;
   return call(store, '/v4/posting/fbs/list', body);
+}
+
+// /v2/posting/fbs/package-label —— 打印标签(面单 PDF)
+// 请求: { posting_number: string[] }(单次 ≤20,任一货件出错整批失败)
+// 响应: PDF 二进制流(非 JSON,走 callRaw)
+// 注:装配完成后 45-60s 才可拉;未就绪时 Ozon 报 "The next postings aren't ready"
+export function packageLabel(store, postingNumbers) {
+  return callRaw(store, '/v2/posting/fbs/package-label', { posting_number: postingNumbers });
 }
 
 // ── 商品归档任务(2026-08)─────────────────────────────────────

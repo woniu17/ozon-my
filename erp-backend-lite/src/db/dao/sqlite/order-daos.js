@@ -832,6 +832,19 @@ function markWaybillPrinted(packageId) {
   ).run(now, now, packageId);
 }
 
+/** 批量取包裹的 posting_number + store_id(打印 Ozon 面单用) */
+function getPackagePostings(packageIds) {
+  if (!packageIds.length) return [];
+  const ph = packageIds.map(() => '?').join(',');
+  return db
+    .prepare(
+      `SELECT p.id AS packageId, o.posting_number AS postingNumber, o.store_id AS storeId
+       FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id
+       WHERE p.id IN (${ph})`
+    )
+    .all(...packageIds);
+}
+
 export const orderPackageDao = {
   syncPosting,
   updateSyncCursor,
@@ -847,4 +860,5 @@ export const orderPackageDao = {
   revertToWaitProcess,
   setIgnored,
   markWaybillPrinted,
+  getPackagePostings,
 };

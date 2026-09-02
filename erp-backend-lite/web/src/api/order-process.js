@@ -45,6 +45,12 @@ export function markPrinted(packageId) {
   return request.post('/admin/api/order-process/print-label', { packageId });
 }
 
+// 获取 Ozon 面单 PDF(返回 Blob);单包裹调用,packageIds 长度为 1;refresh=true 忽略缓存
+// 后端缓存优先,未命中调 Ozon /v2/posting/fbs/package-label
+export function fetchPackageLabel(packageIds, refresh = false) {
+  return request.postBlob('/admin/api/order-process/package-label', { packageIds, refresh });
+}
+
 // 手动触发 Ozon 订单增量同步(双接口:unfulfilled + list;异步立即返回)
 export function runSync() {
   return request.post('/admin/api/order-process/sync-run');

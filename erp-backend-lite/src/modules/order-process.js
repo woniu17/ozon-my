@@ -18,9 +18,12 @@ import { Router } from 'express';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
+import config from '../config/index.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
 import { runOrderSyncNow, runSyncAllList, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
+import { packageLabel } from '../services/ozon-opi.js';
+import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 
 const router = Router();
 
@@ -197,6 +200,73 @@ router.post('/admin/api/order-process/print-label', (req, res, next) => {
     next(e);
   }
 });
+
+// ── 获取 Ozon 面单 PDF(打印标签)────────────────────────
+// body: { packageIds: number[](≤20,须同店铺), refresh?: boolean }
+// 行为:文件缓存优先,未命中调 Ozon /v2/posting/fbs/package-label 并落缓存
+// 返回:application/pdf;错误(400/409)返回 JSON envelope
+// 注:拉取成功不自动流转状态,前端确认打印后走 print-label 标记交运
+router.post('/admin/api/order-process/package-label', async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const ids = Array.isArray(b.packageIds) ? b.packageIds.map(Number).filter(Number.isInteger) : [];
+    if (ids.length === 0) return res.status(400).json({ ok: false, message: 'packageIds 必填' });
+    if (ids.length > 20) return res.status(400).json({ ok: false, message: '单次最多 20 个包裹(Ozon 上限)' });
+    const rows = orderPackageDao.getPackagePostings(ids);
+    if (rows.length !== ids.length) {
+      const found = new Set(rows.map((r) => r.packageId));
+      return res.status(400).json({ ok: false, message: `包裹不存在: ${ids.filter((i) => !found.has(i)).join(', ')}` });
+    }
+    const storeIds = [...new Set(rows.map((r) => r.storeId))];
+    if (storeIds.length > 1) {
+      return res.status(400).json({ ok: false, message: '不支持跨店铺混打,请逐个包裹打印' });
+    }
+    const storeId = storeIds[0];
+    const postingNumbers = rows.map((r) => r.postingNumber);
+
+    // 缓存优先(refresh=true 时强制重拉)
+    if (!b.refresh) {
+      const cached = getWaybill(storeId, postingNumbers);
+      if (cached) {
+        logger.info({ storeId, postings: postingNumbers.length, cacheHit: true }, '[package-label] 缓存命中');
+        return sendPdf(res, postingNumbers.length, cached);
+      }
+    }
+
+    const store = (config.loadStores() || []).find((s) => s.id === storeId);
+    if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
+    const started = Date.now();
+    let pdf;
+    try {
+      pdf = (await packageLabel(store, postingNumbers)).buffer;
+    } catch (e) {
+      const msg = e?.message || '';
+      // Ozon 装配后 45-60s 才能出标签,未就绪返回 409 让前端引导重试
+      if (/aren't ready/i.test(msg)) {
+        return res.status(409).json({ ok: false, code: 'LABEL_NOT_READY', message: '面单尚未就绪(Ozon 装配后需 45-60 秒),请稍后重试' });
+      }
+      // Ozon 限制:仅 awaiting_deliver(待发货)状态货件可打印标签(实测 delivering/已取消等会报 INVALID_ARGUMENT)
+      if (/INVALID_ARGUMENT/i.test(msg)) {
+        return res.status(409).json({ ok: false, code: 'LABEL_NOT_AVAILABLE', message: 'Ozon 拒绝生成面单:仅"待发货(awaiting_deliver)"状态的订单可打印面单' });
+      }
+      throw e;
+    }
+    setWaybill(storeId, postingNumbers, pdf);
+    logger.info(
+      { storeId, postings: postingNumbers.length, cacheHit: false, durationMs: Date.now() - started },
+      '[package-label] Ozon 拉取成功'
+    );
+    sendPdf(res, postingNumbers.length, pdf);
+  } catch (e) {
+    next(e);
+  }
+});
+
+function sendPdf(res, n, buffer) {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="waybill-${n}.pdf"`);
+  res.end(buffer);
+}
 
 // ── 手动触发增量同步(双接口:unfulfilled + list)──────────────
 router.post('/admin/api/order-process/sync-run', async (req, res, next) => {
