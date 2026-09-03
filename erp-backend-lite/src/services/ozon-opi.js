@@ -537,6 +537,32 @@ export function packageLabel(store, postingNumbers) {
   return callRaw(store, '/v2/posting/fbs/package-label', { posting_number: postingNumbers });
 }
 
+// ── 财务应计(2026-09)─────────────────────────────────────────
+// /v1/finance/accrual/postings —— 按货件查应计项目
+// 请求: { posting_numbers: string[] }(实测单批 200 可行,~470ms)
+// 响应: { posting_accruals: [{ posting_number, accruals: [{
+//   type_id, accrued:{amount,currency}, seller_price:{amount,currency}|null,
+//   sku, quantity, accrual_date }] }] }
+// 注:
+//   - 只返回 type_id,名称需 /v1/finance/accrual/types 字典翻译(124 种)
+//   - 应计滞后:妥投后 2-3 周才生成;空 accruals 需留重试窗口
+//   - 秒级限流(429 code=8),调用方需节流 ~300ms + 退避
+export function financeAccrualPostings(store, postingNumbers) {
+  const arr = (Array.isArray(postingNumbers) ? postingNumbers : [postingNumbers]).filter(Boolean);
+  if (arr.length === 0) {
+    throw new Error('posting_numbers 不能为空');
+  }
+  return call(store, '/v1/finance/accrual/postings', { posting_numbers: arr });
+}
+
+// /v1/finance/accrual/types —— 应计项目类型字典
+// 请求: {} (空对象)
+// 响应: { accrual_types: [{ id, name, description }] }(顶层无 result 包裹)
+// 建议缓存到 app_config 复用(全店一致,跨重启有效)
+export function financeAccrualTypes(store) {
+  return call(store, '/v1/finance/accrual/types', {});
+}
+
 // ── 商品归档任务(2026-08)─────────────────────────────────────
 // /v1/product/archive —— 将商品归档(批量)
 // OPI 限制:单请求 ≤100 个 product_id

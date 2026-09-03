@@ -121,6 +121,23 @@ async function ensureMigrations() {
       console.log('[db] migration: added column miaoshou_purchase.items_json');
     }
   }
+  // 2026-09: op_package 应计冗余列(应计合计/销售收入合计/最近拉取时间)
+  // NULL 语义:accrual_total NULL=拉过但 Ozon 尚未生成应计(24h 重试窗口)
+  const opPkgCols = db.prepare(`PRAGMA table_info(op_package)`).all();
+  if (opPkgCols.length > 0) {
+    if (!opPkgCols.some((c) => c.name === 'accrual_total')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN accrual_total REAL`);
+      console.log('[db] migration: added column op_package.accrual_total');
+    }
+    if (!opPkgCols.some((c) => c.name === 'accrual_sale_total')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN accrual_sale_total REAL`);
+      console.log('[db] migration: added column op_package.accrual_sale_total');
+    }
+    if (!opPkgCols.some((c) => c.name === 'accrual_synced_at')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN accrual_synced_at TEXT`);
+      console.log('[db] migration: added column op_package.accrual_synced_at');
+    }
+  }
   // collect_queue_tasks:增加 duration 列(SW result 接口上报任务耗时)
   const taskCols = db.prepare(`PRAGMA table_info(collect_queue_tasks)`).all();
   if (!taskCols.some((c) => c.name === 'duration')) {

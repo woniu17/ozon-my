@@ -6,6 +6,7 @@
 // 同步主键:op_order_package_id(妙手包裹内部 ID)
 // 采购单去重:UNIQUE(platform, purchase_sn)
 import { db } from '../../index.js';
+import { getAccrualsByPackageIds } from './accrual-dao.js';
 
 function nowIso() {
   return new Date().toISOString();
@@ -210,6 +211,10 @@ export function listMiaoshouPackages(filters = {}) {
     .prepare(
       `SELECT mp.*,
         (SELECT op.id FROM op_package op WHERE op.logistics_no = mp.posting_number) AS local_pkg_id,
+        (SELECT op.accrual_total FROM op_package op WHERE op.logistics_no = mp.posting_number) AS accrual_total,
+        (SELECT op.accrual_sale_total FROM op_package op WHERE op.logistics_no = mp.posting_number) AS accrual_sale_total,
+        (SELECT op.total_purchase_amount FROM op_package op WHERE op.logistics_no = mp.posting_number) AS total_purchase_amount,
+        (SELECT o.status FROM op_package op JOIN op_ozon_order o ON o.id = op.ozon_order_id WHERE op.logistics_no = mp.posting_number) AS local_ozon_status,
         (SELECT COUNT(*) FROM miaoshou_purchase pur WHERE pur.miaoshou_package_id = mp.id) AS purchase_count
        FROM miaoshou_package mp
        ${whereSql}
@@ -233,7 +238,7 @@ function parsePackageRow(row) {
 
 /**
  * 状态 tab 计数(按妙手自身 tab 分组 app_package_tab,附总数与本地关联数)
- * 值域:waitProcess/waitShip/submitPlatform/waitReceiverConfirm/closed/isolation
+ * 值域:waitProcess/waitShip/submitPlatform/waitReceiverConfirm/finished/closed/isolation
  */
 export function countMiaoshouTabs() {
   const byTab = db
@@ -258,6 +263,7 @@ export function countMiaoshouTabs() {
     else if (r.s === 'waitShip') counts.waitShip = r.n;
     else if (r.s === 'submitPlatform') counts.submitPlatform = r.n;
     else if (r.s === 'waitReceiverConfirm') counts.waitReceiverConfirm = r.n;
+    else if (r.s === 'finished') counts.finished = r.n;
     else if (r.s === 'closed') counts.closed = r.n;
     else if (r.s === 'isolation') counts.isolation = r.n;
   }
@@ -273,7 +279,9 @@ export function getMiaoshouPackageDetail(id) {
   const pkg = db
     .prepare(
       `SELECT mp.*,
-        (SELECT op.id FROM op_package op WHERE op.logistics_no = mp.posting_number) AS local_pkg_id
+        (SELECT op.id FROM op_package op WHERE op.logistics_no = mp.posting_number) AS local_pkg_id,
+        (SELECT op.accrual_total FROM op_package op WHERE op.logistics_no = mp.posting_number) AS accrual_total,
+        (SELECT op.accrual_sale_total FROM op_package op WHERE op.logistics_no = mp.posting_number) AS accrual_sale_total
        FROM miaoshou_package mp WHERE mp.id = ?`
     )
     .get(id);
@@ -292,5 +300,11 @@ export function getMiaoshouPackageDetail(id) {
       return { ...po, items_json: undefined, items };
     });
 
-  return { package: parsePackageRow(pkg), purchases };
+  // 本地关联包裹的应计明细(存在 local_pkg_id 时)
+  let accruals = [];
+  if (pkg.local_pkg_id) {
+    accruals = getAccrualsByPackageIds([pkg.local_pkg_id]);
+  }
+
+  return { package: parsePackageRow(pkg), purchases, accruals };
 }

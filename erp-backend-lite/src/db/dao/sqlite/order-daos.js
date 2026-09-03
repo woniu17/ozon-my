@@ -494,6 +494,9 @@ function rowToPackage(r) {
     headLogisticsCompany: r.head_logistics_company,
     arrivedAt: r.arrived_at,
     totalPurchaseAmount: r.total_purchase_amount,
+    accrualTotal: r.accrual_total != null ? Number(r.accrual_total) : null,
+    accrualSaleTotal: r.accrual_sale_total != null ? Number(r.accrual_sale_total) : null,
+    accrualSyncedAt: r.accrual_synced_at,
     waybillPrintedAt: r.waybill_printed_at,
     note: r.note,
     // ─ 取消细分状态(cancellation_json 解析,仅 cancelled 状态订单有) ─

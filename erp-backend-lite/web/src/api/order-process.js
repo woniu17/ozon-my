@@ -80,6 +80,29 @@ export function dismissSyncProgress() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// Ozon 应计项目(2026-09,已完成/已取消货件的财务应计)
+// ════════════════════════════════════════════════════════════════
+
+// 手动触发应计同步
+// body:
+//   {}                                     增量待拉(与定时同步同一清单)
+//   { mode: 'backfill', sinceDays: 210 }  存量回补
+//   { mode: 'packages', packageIds: [1] }  单包裹刷新(详情弹窗"刷新应计")
+export function runAccrualSync(body = {}) {
+  return request.post('/admin/api/order-process/accrual-sync', body);
+}
+
+// 读取 RUB→CNY 汇率(null=未配置)
+export function getRubRate() {
+  return request.get('/admin/api/order-process/rub-rate');
+}
+
+// 更新 RUB→CNY 汇率
+export function setRubRate(rate) {
+  return request.post('/admin/api/order-process/rub-rate', { rate });
+}
+
+// ════════════════════════════════════════════════════════════════
 // 妙手 ERP 订单数据(2026-09,独立新表)
 // 数据来源:miaoshou-helper 插件从妙手历史订单页提取
 // ════════════════════════════════════════════════════════════════

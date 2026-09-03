@@ -22,9 +22,10 @@ import logger from '../middleware/log.js';
 import config from '../config/index.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
-import { runOrderSyncNow, runSyncAllList, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
+import { runOrderSyncNow, runSyncAllList, runAccrualSync, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
 import { packageLabel } from '../services/ozon-opi.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
+import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
 
 const router = Router();
 
@@ -32,19 +33,97 @@ const router = Router();
 // 后续可挂 app_config 按店铺配置
 const DEFAULT_COMMISSION_RATE = 0.16;
 
-// 计算列表行的利润指标(对齐妙手金额列:订单金额/预估佣金/采购金额/预估利润/利润率)
+// 解析 RUB→CNY 汇率(app_config 优先,.env 兜底)
+function resolveRubCnyRate() {
+  const fromConfig = getRubCnyRate();
+  if (fromConfig) return fromConfig;
+  if (config.rubCnyRateFallback > 0) {
+    return { rate: config.rubCnyRateFallback, updatedAt: null, source: 'env' };
+  }
+  return null;
+}
+
+// 应计类型分组常量(列表金额列拆分:代理佣金/国际配送/其它)
+const TYPE_AGENT_FEE = 66;   // RfbsGlobalAgentFee 代理佣金
+const TYPE_DELIVERY = 67;    // RfbsGlobalDelivery 国际配送
+
+/** 为一批包裹构建应计 CNY 分组(列表行注入 pkg.accrual)
+ *  typeSums: getAccrualTypeSumsByPackageIds 结果(RUB)
+ *  返回 Map<packageId, accrual>;accrual.totalRub 为 null 的包裹不入 Map(拉过但空)
+ *  结构: { rate, agentFee, delivery, others, total, sale, payout,  // CNY
+ *          agentFeeRub, deliveryRub, othersRub, totalRub, saleRub } // RUB 原值(悬浮展示)
+ */
+function buildAccrualBreakdown(packages, typeSums, rate) {
+  const byPkg = new Map();
+  for (const t of typeSums) {
+    if (!byPkg.has(t.packageId)) byPkg.set(t.packageId, new Map());
+    byPkg.get(t.packageId).set(t.typeId, t.sum);
+  }
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const out = new Map();
+  for (const pkg of packages) {
+    if (pkg.accrualTotal == null || !rate) continue;
+    const m = byPkg.get(pkg.id) || new Map();
+    const agentRub = m.get(TYPE_AGENT_FEE) || 0;
+    const deliveryRub = m.get(TYPE_DELIVERY) || 0;
+    const totalRub = Number(pkg.accrualTotal) || 0;
+    const saleRub = Number(pkg.accrualSaleTotal) || 0;
+    const othersRub = round2(totalRub - agentRub - deliveryRub);
+    out.set(pkg.id, {
+      rate,
+      agentFee: round2(agentRub * rate),
+      delivery: round2(deliveryRub * rate),
+      others: round2(othersRub * rate),
+      total: round2(totalRub * rate),
+      sale: round2(saleRub * rate),
+      payout: round2((saleRub + totalRub) * rate),
+      agentFeeRub: round2(agentRub),
+      deliveryRub: round2(deliveryRub),
+      othersRub,
+      totalRub: round2(totalRub),
+      saleRub: round2(saleRub),
+    });
+  }
+  return out;
+}
+
+// 计算列表行的利润指标(金额列:订单金额/采购金额/代理佣金/国际配送/其它费用/利润)
+// 双口径(2026-09):有真实应计(已完成/已取消且 accrual_total 非空)用真实口径,否则预估口径
+//   真实口径: 利润 = (销售+应计合计)×汇率 − 采购;estimated=false(前端显示"实")
+//   预估口径: 佣金 = orderAmount × 0.16;estimated=true(前端显示"估")
 function computeProfit(pkg) {
   const orderAmount = Number(pkg.orderAmount) || 0;
   const purchase = Number(pkg.totalPurchaseAmount) || 0;
-  const commission = Math.round(orderAmount * DEFAULT_COMMISSION_RATE * 100) / 100;
-  const escrow = Math.round((orderAmount - commission) * 100) / 100;
-  const profit = Math.round((escrow - purchase) * 100) / 100;
+  const round2 = (n) => Math.round(n * 100) / 100;
+
+  // 真实应计口径(列表路由已注入 pkg.accrual CNY 分组)
+  const a = pkg.accrual;
+  if (a?.rate && a.payout != null) {
+    const profit = round2(a.payout - purchase);
+    return {
+      estimated: false,
+      // 佣金兼容字段:非配送类扣款合计(代理佣金+其它)×
+      commission: round2(a.agentFee + a.others),
+      escrow: a.payout,
+      profit,
+      profitRateCost: purchase > 0 ? round2((profit / purchase) * 1000) / 10 : null,
+      profitRateSale: orderAmount > 0 ? round2((profit / orderAmount) * 1000) / 10 : null,
+      rubRate: a.rate,
+      payoutRub: round2(a.saleRub + a.totalRub),
+    };
+  }
+
+  // 预估口径(无应计/未妥投,现状不变)
+  const commission = round2(orderAmount * DEFAULT_COMMISSION_RATE);
+  const escrow = round2(orderAmount - commission);
+  const profit = round2(escrow - purchase);
   return {
     commission,
     escrow,
     profit,
-    profitRateCost: purchase > 0 ? Math.round((profit / purchase) * 1000) / 10 : null,
-    profitRateSale: orderAmount > 0 ? Math.round((profit / orderAmount) * 1000) / 10 : null,
+    profitRateCost: purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null,
+    profitRateSale: orderAmount > 0 ? Math.round((profit / orderAmount) * 10000) / 100 : null,
+    estimated: true,
   };
 }
 
@@ -71,11 +150,17 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       page: q.page,
       pageSize: q.pageSize,
     });
-    // 聚合产品行 + 采购关联
+    // 聚合产品行 + 采购关联 + 应计 CNY 分组
     const orderIds = data.packages.map((p) => p.ozonOrderId);
     const items = orderPackageDao.getItemsByOrderIds(orderIds);
     const pkgIds = data.packages.map((p) => p.id);
     const { links } = orderPackageDao.getPurchasesByPackageIds(pkgIds);
+    const rateInfo = resolveRubCnyRate();
+    const accrualMap = buildAccrualBreakdown(
+      data.packages,
+      getAccrualTypeSumsByPackageIds(pkgIds),
+      rateInfo?.rate
+    );
     const itemsByOrder = new Map();
     for (const it of items) {
       if (!itemsByOrder.has(it.ozonOrderId)) itemsByOrder.set(it.ozonOrderId, []);
@@ -89,8 +174,10 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
     for (const pkg of data.packages) {
       pkg.items = itemsByOrder.get(pkg.ozonOrderId) || [];
       pkg.purchaseLinks = linksByPkg.get(pkg.id) || [];
+      if (accrualMap.has(pkg.id)) pkg.accrual = accrualMap.get(pkg.id);
       pkg.profit = computeProfit(pkg);
     }
+    data.rubRate = rateInfo;
     res.json(ok(data));
   } catch (e) {
     next(e);
@@ -98,11 +185,24 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
 });
 
 // ── 包裹详情 ────────────────────────────────────────────────
+// 响应追加 accruals(应计明细,含 CNY 换算字段)+ accrual(CNY 分组)+ rubRate(汇率)
 router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const detail = orderPackageDao.getPackageDetail(id);
     if (!detail) return res.status(404).json({ ok: false, message: '包裹不存在' });
+    const rateInfo = resolveRubCnyRate();
+    const rate = rateInfo?.rate;
+    // 明细行附 CNY 换算(amountCny/sellerPriceCny;RUB 原值保留在 amount/sellerPrice)
+    detail.accruals = getAccrualsByPackageIds([id]).map((a) => ({
+      ...a,
+      amountCny: rate != null ? Math.round((Number(a.amount) || 0) * rate * 100) / 100 : null,
+      sellerPriceCny: rate != null && a.sellerPrice != null
+        ? Math.round(Number(a.sellerPrice) * rate * 100) / 100 : null,
+    }));
+    const accrualMap = buildAccrualBreakdown([detail.package], getAccrualTypeSumsByPackageIds([id]), rate);
+    if (accrualMap.has(id)) detail.package.accrual = accrualMap.get(id);
+    detail.rubRate = rateInfo;
     detail.package.profit = computeProfit(detail.package);
     res.json(ok(detail));
   } catch (e) {
@@ -369,10 +469,66 @@ router.get('/admin/api/order-process/sync-progress', (_req, res) => {
   res.json(ok(getSyncProgress()));
 });
 
-// ── 关闭已完成进度(用户点关闭按钮触发)──────────────────
+// ── 关闭已完成进度(用户点关闭按钮触发)──────────────────────
 // 仅在 active=false 时可清空;同步进行中调用返回 cleared=false
 router.post('/admin/api/order-process/sync-progress/dismiss', (_req, res) => {
   res.json(ok(clearSyncProgress()));
+});
+
+// ── 手动触发应计同步 ────────────────────────────────────────
+// body:
+//   { mode: 'backfill', sinceDays: 210 }  —— 存量回补(窗口内全部已完成/已取消)
+//   { mode: 'packages', packageIds: [1,2] } —— 单包裹刷新(详情弹窗"刷新应计"按钮)
+//   {}                                     —— 增量待拉(与定时同步同一清单逻辑)
+// 注:与订单同步互不阻塞;单店铺失败不影响其余店铺
+router.post('/admin/api/order-process/accrual-sync', async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const mode = ['pending', 'backfill', 'packages'].includes(b.mode) ? b.mode : 'pending';
+    if (mode === 'backfill') {
+      const d = Number(b.sinceDays);
+      if (!Number.isInteger(d) || d < 1 || d > 365) {
+        return res.status(400).json({ ok: false, message: 'backfill 模式需提供 sinceDays(1-365)' });
+      }
+    }
+    if (mode === 'packages') {
+      const ids = Array.isArray(b.packageIds) ? b.packageIds.map(Number).filter(Number.isInteger) : [];
+      if (ids.length === 0) {
+        return res.status(400).json({ ok: false, message: 'packages 模式需提供 packageIds' });
+      }
+    }
+    const r = await runAccrualSync({
+      mode,
+      sinceDays: b.sinceDays,
+      packageIds: b.packageIds,
+      storeId: b.storeId,
+    });
+    logger.info({ mode: r.mode, totalPackages: r.totalPackages, totalAccrualRows: r.totalAccrualRows }, '[order-process] 应计同步完成');
+    res.json(ok(r));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── RUB→CNY 汇率(读/写)─────────────────────────────────────
+// GET  → { rate, updatedAt, source } | null(未配置)
+// POST → body: { rate: number } 写 app_config.rub_cny_rate
+router.get('/admin/api/order-process/rub-rate', (_req, res) => {
+  res.json(ok(resolveRubCnyRate()));
+});
+
+router.post('/admin/api/order-process/rub-rate', (req, res, next) => {
+  try {
+    const rate = Number(req.body?.rate);
+    if (!(rate > 0)) {
+      return res.status(400).json({ ok: false, message: 'rate 必须为正数' });
+    }
+    const r = setRubCnyRate(rate);
+    logger.info({ rate: r.rate }, '[order-process] RUB→CNY 汇率已更新');
+    res.json(ok(r));
+  } catch (e) {
+    next(e);
+  }
 });
 
 // ════════════════════════════════════════════════════════════════
@@ -396,7 +552,7 @@ router.post('/admin/api/order-process/sync-from-miaoshou', (req, res, next) => {
   }
 });
 
-// ── 妙手订单列表(分页,关联本地 op_package)────────────────
+// ── 妙手订单列表(分页,关联本地 op_package,含应计合计)─────
 router.get('/admin/api/order-process/miaoshou-list', (req, res, next) => {
   try {
     const data = listMiaoshouPackages({
@@ -407,6 +563,29 @@ router.get('/admin/api/order-process/miaoshou-list', (req, res, next) => {
       appPackageTab: req.query.appPackageTab,
       localLinked: req.query.localLinked,
     });
+    data.rubRate = resolveRubCnyRate();
+    // 金额列六行注入(对齐订单处理页):已关联本地的行带出采购金额/应计 CNY 分组/利润
+    const linked = data.packages.filter((p) => p.local_pkg_id);
+    if (linked.length) {
+      const localIds = linked.map((p) => p.local_pkg_id);
+      const accrualMap = buildAccrualBreakdown(
+        linked.map((p) => ({
+          id: p.local_pkg_id,
+          accrualTotal: p.accrual_total != null ? Number(p.accrual_total) : null,
+          accrualSaleTotal: p.accrual_sale_total != null ? Number(p.accrual_sale_total) : null,
+        })),
+        getAccrualTypeSumsByPackageIds(localIds),
+        data.rubRate?.rate
+      );
+      for (const p of linked) {
+        if (accrualMap.has(p.local_pkg_id)) p.accrual = accrualMap.get(p.local_pkg_id);
+        p.profit = computeProfit({
+          orderAmount: p.order_amount,
+          totalPurchaseAmount: p.total_purchase_amount,
+          accrual: p.accrual,
+        });
+      }
+    }
     res.json(ok(data));
   } catch (e) {
     next(e);
@@ -422,12 +601,13 @@ router.get('/admin/api/order-process/miaoshou-tabs', (_req, res, next) => {
   }
 });
 
-// ── 妙手订单详情(含采购单列表)──────────────────────────
+// ── 妙手订单详情(含采购单列表 + 本地关联包裹应计明细)─────
 router.get('/admin/api/order-process/miaoshou-detail/:id', (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const detail = getMiaoshouPackageDetail(id);
     if (!detail) return res.status(404).json({ ok: false, message: '妙手订单不存在' });
+    detail.rubRate = resolveRubCnyRate();
     res.json(ok(detail));
   } catch (e) {
     next(e);

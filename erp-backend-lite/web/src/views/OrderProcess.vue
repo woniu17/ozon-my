@@ -10,6 +10,7 @@ import {
   getOrderTabs, getOrderList, getOrderDetail,
   submitPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
+  runAccrualSync, getRubRate, setRubRate,
 } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
@@ -212,6 +213,7 @@ async function loadList() {
     globalSearch.total = isGlobal ? (data?.total || 0) : 0;
     rows.value = data?.packages || [];
     pager.total = data?.total || 0;
+    rubRate.value = data?.rubRate || null;
   } catch (err) {
     show(err.message || String(err), 'error');
     rows.value = [];
@@ -1045,6 +1047,123 @@ async function openDetail(pkg) {
   }
 }
 
+// ── 应计项目(2026-09,已完成/已取消货件的 Ozon 财务应计)─────
+// 汇率:列表响应附带 rubRate(每次 loadList 同步刷新);未配置时真实口径自动回退预估
+const rubRate = ref(null);
+const accrualRefreshing = ref(0); // 正在刷新应计的包裹 id
+
+function fmtRub(n) {
+  if (n == null) return '—';
+  return Number(n).toFixed(2) + ' ₽';
+}
+
+// 金额列六行悬浮提示(真实口径显示 RUB 原值换算明细)
+function agentFeeTitle(pkg) {
+  if (pkg.accrual) return `代理佣金(RfbsGlobalAgentFee)实扣 ${fmtRub(pkg.accrual.agentFeeRub)} × 汇率 ${pkg.accrual.rate}`;
+  return '无应计数据,按订单金额 × 16% 预估';
+}
+function deliveryTitle(pkg) {
+  if (pkg.accrual) return `国际配送(RfbsGlobalDelivery)实扣 ${fmtRub(pkg.accrual.deliveryRub)} × 汇率 ${pkg.accrual.rate}`;
+  return '无应计数据(未妥投或 Ozon 未生成)';
+}
+function othersTitle(pkg) {
+  if (pkg.accrual) return `其它费用(销售佣金/星星商品/逆向物流等)${fmtRub(pkg.accrual.othersRub)} × 汇率 ${pkg.accrual.rate}`;
+  return '无应计数据(未妥投或 Ozon 未生成)';
+}
+
+function profitLabel(pkg) {
+  return pkg.profit?.estimated === false ? '利润实' : '预估利润';
+}
+// 利润悬浮:真实口径显示汇率与回款换算
+function profitTitle(pkg) {
+  const p = pkg.profit;
+  if (!p) return '';
+  if (p.estimated === false) {
+    return `回款 ${fmtRub(p.payoutRub)} × 汇率 ${p.rubRate} = ¥${p.escrow?.toFixed(2)}`;
+  }
+  return '按 16% 预估佣金计算(无应计数据或未妥投)';
+}
+
+// 详情弹窗"刷新应计"按钮:单包裹重拉应计(拉到过数据后新应计如逆向物流的兜底入口)
+async function onRefreshAccrual(pkg) {
+  if (accrualRefreshing.value) return;
+  accrualRefreshing.value = pkg.id;
+  try {
+    const r = await runAccrualSync({ mode: 'packages', packageIds: [pkg.id] });
+    if (r?.stores?.length && !r.stores[0].ok) {
+      throw new Error(r.stores[0].error || '刷新失败');
+    }
+    show(`应计已刷新(${r?.totalAccrualRows ?? 0} 条明细)`, 'success');
+    // 重新拉详情 + 列表(冗余合计已更新)
+    await openDetail(pkg);
+    loadList();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    accrualRefreshing.value = 0;
+  }
+}
+
+// ── 汇率管理 ──────────────────────────────────────────────
+const rateDialogOpen = ref(false);
+const rateSaving = ref(false);
+const rateInput = ref('');
+
+function openRateDialog() {
+  rateInput.value = rubRate.value?.rate != null ? String(rubRate.value.rate) : '';
+  rateDialogOpen.value = true;
+}
+
+async function saveRate() {
+  const rate = Number(rateInput.value);
+  if (!(rate > 0)) {
+    show('汇率必须为正数(如 0.082,即 1 RUB = 0.082 CNY)', 'error');
+    return;
+  }
+  rateSaving.value = true;
+  try {
+    const r = await setRubRate(rate);
+    rubRate.value = r;
+    rateDialogOpen.value = false;
+    show(`汇率已更新:1 RUB = ${r.rate} CNY`, 'success');
+    loadList(); // 利润换算口径刷新
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    rateSaving.value = false;
+  }
+}
+
+// 详情应计区块:明细行(类型中文优先,悬浮英文名)
+const detailAccruals = computed(() => detail.value?.accruals || []);
+// 详情应计合计行:回款 = 销售 + 应计(已换算 CNY;悬浮显示 RUB 原值)
+const detailAccrualSummary = computed(() => {
+  const pkg = detail.value?.package;
+  if (!pkg || pkg.accrualTotal == null) return null;
+  const a = pkg.accrual; // 后端注入的 CNY 分组(无汇率时为 undefined)
+  const rate = detail.value?.rubRate?.rate;
+  if (a?.rate) {
+    return {
+      saleRub: a.saleRub, totalRub: a.totalRub,
+      payoutRub: Math.round((a.saleRub + a.totalRub) * 100) / 100,
+      saleCny: a.sale, totalCny: a.total, payoutCny: a.payout,
+      rate: a.rate,
+    };
+  }
+  // 无汇率兜底:前端按 rate(可能 null)换算
+  const payoutRub = (pkg.accrualSaleTotal || 0) + (pkg.accrualTotal || 0);
+  return {
+    saleRub: pkg.accrualSaleTotal,
+    totalRub: pkg.accrualTotal,
+    payoutRub: Math.round(payoutRub * 100) / 100,
+    saleCny: rate != null ? Math.round((pkg.accrualSaleTotal || 0) * rate * 100) / 100 : null,
+    totalCny: rate != null ? Math.round((pkg.accrualTotal || 0) * rate * 100) / 100 : null,
+    payoutCny: rate ? Math.round(payoutRub * rate * 100) / 100 : null,
+    rate,
+    syncedAt: pkg.accrualSyncedAt,
+  };
+});
+
 // ── 展示工具 ───────────────────────────────────────────
 function fmtMoney(n) {
   if (n == null) return '—';
@@ -1335,6 +1454,9 @@ onUnmounted(() => {
         <button class="btn btn-ghost" :disabled="loading" @click="loadList">
           {{ loading ? '加载中…' : '刷新' }}
         </button>
+        <button class="btn btn-ghost" @click="openRateDialog" title="RUB→CNY 汇率:已完成订单真实应计利润换算用">
+          汇率 {{ rubRate?.rate ?? '未设置' }}
+        </button>
       </div>
     </div>
 
@@ -1385,11 +1507,16 @@ onUnmounted(() => {
             </td>
             <td class="col-amount">
               <div>订单 {{ fmtMoney(pkg.orderAmount) }}</div>
-              <div class="sub muted">佣金估 {{ fmtMoney(pkg.profit?.commission) }}</div>
               <div>采购 <span :class="{ 'muted': !pkg.totalPurchaseAmount }">{{ fmtMoney(pkg.totalPurchaseAmount) }}</span></div>
-              <div :class="pkg.profit?.profit > 0 ? 'profit-pos' : 'profit-neg'">
-                利润 {{ fmtMoney(pkg.profit?.profit) }}
-                <span v-if="pkg.profit?.profitRateSale != null" class="sub">({{ pkg.profit.profitRateSale }}%)</span>
+              <!-- 代理佣金:有应计=66 类型实扣换算;无=16% 预估(标"估") -->
+              <div class="sub muted" :title="agentFeeTitle(pkg)">{{ pkg.accrual ? '代理佣金' : '代理佣金(估)' }} {{ fmtMoney(pkg.accrual?.agentFee ?? pkg.profit?.commission) }}</div>
+              <!-- 国际配送:仅真实应计口径有值 -->
+              <div class="sub muted" :title="deliveryTitle(pkg)">国际配送 {{ pkg.accrual ? fmtMoney(pkg.accrual.delivery) : '—' }}</div>
+              <!-- 其它费用:销售佣金/星星商品/逆向物流等,= 应计合计 − 代理 − 配送 -->
+              <div class="sub muted" :title="othersTitle(pkg)">其它费用 {{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</div>
+              <div :class="pkg.profit?.profit > 0 ? 'profit-pos' : 'profit-neg'" :title="profitTitle(pkg)">
+                {{ profitLabel(pkg) }} {{ fmtMoney(pkg.profit?.profit) }}
+                <span v-if="pkg.profit?.profitRateSale != null" class="sub">({{ Number(pkg.profit.profitRateSale).toFixed(2) }}%)</span>
               </div>
             </td>
             <td class="col-purchase">
@@ -1542,6 +1669,27 @@ onUnmounted(() => {
         <div class="label-preview-tip">
           组件按 CNPL 模板(label-image.xml)渲染:面单图片宽 70mm 等比缩放、顶部对齐,预览即实际出纸版式。
           出纸时会按 70×130mm 标签纸打印,预览不消耗纸张、不流转订单状态。
+        </div>
+      </div>
+    </AppModal>
+
+    <!-- 汇率设置弹窗(RUB→CNY,真实应计利润换算) -->
+    <AppModal :open="rateDialogOpen" title="RUB → CNY 汇率设置" @update:open="rateDialogOpen = $event">
+      <div class="rate-form">
+        <div class="sync-all-tip">
+          已完成/已取消订单的「真实口径利润」用应计数据(RUB)换算:回款 RUB × 汇率 = CNY。
+          <br />未配置汇率时自动回退 16% 预估口径(显示"估")。
+        </div>
+        <div class="sync-all-date-row">
+          <label>汇率</label>
+          <input v-model.trim="rateInput" class="filter-input" placeholder="如 0.082(1 RUB = 0.082 CNY)" />
+        </div>
+        <div v-if="rubRate?.updatedAt" class="muted rate-updated-at">上次更新:{{ fmtTime(rubRate.updatedAt) }}</div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" @click="rateDialogOpen = false">取 消</button>
+          <button class="btn btn-primary" :disabled="rateSaving" @click="saveRate">
+            {{ rateSaving ? '保存中…' : '保 存' }}
+          </button>
         </div>
       </div>
     </AppModal>
@@ -1709,9 +1857,9 @@ onUnmounted(() => {
           <div><span class="dl">下单时间</span>{{ fmtTime(detail.package.inProcessAt) }}</div>
           <div><span class="dl">最晚发货</span>{{ fmtTime(detail.package.shipmentDate) }}</div>
           <div><span class="dl">订单金额</span>{{ fmtMoney(detail.package.orderAmount) }}</div>
-          <div><span class="dl">佣金估</span>{{ fmtMoney(detail.package.profit?.commission) }}</div>
+          <div><span class="dl">代理佣金</span>{{ fmtMoney(detail.package.accrual?.agentFee ?? detail.package.profit?.commission) }}<span v-if="!detail.package.accrual" class="muted">(估)</span></div>
           <div><span class="dl">采购合计</span>{{ fmtMoney(detail.package.totalPurchaseAmount) }}</div>
-          <div><span class="dl">预估利润</span>{{ fmtMoney(detail.package.profit?.profit) }}</div>
+          <div :title="profitTitle(detail.package)"><span class="dl">{{ profitLabel(detail.package) }}</span>{{ fmtMoney(detail.package.profit?.profit) }}</div>
         </div>
 
         <!-- 取消原因详情(仅已取消订单显示) -->
@@ -1752,6 +1900,47 @@ onUnmounted(() => {
             </tr>
           </tbody>
         </table>
+
+        <!-- Ozon 应计明细(已完成/已取消货件有数据;真实财务扣款,RUB) -->
+        <div class="detail-section">
+          <div class="detail-section-title">
+            Ozon 应计明细
+            <span v-if="detailAccrualSummary" class="tag tag-info" title="真实应计口径:回款=销售+应计,经汇率换算">真实口径</span>
+            <span v-else class="tag tag-mute" title="未妥投或 Ozon 尚未生成应计(妥投后 2-3 周生成)">无应计数据</span>
+            <button
+              v-if="detail.package.ozonStatus === 'delivered' || detail.package.ozonStatus === 'cancelled' || detail.package.ozonStatus === 'not_accepted'"
+              class="btn btn-ghost btn-sm"
+              :disabled="accrualRefreshing === detail.package.id"
+              :title="'重拉该货件的 Ozon 应计(取消后新增逆向物流等费用的兜底入口)· 上次拉取: ' + (detail.package.accrualSyncedAt ? fmtTime(detail.package.accrualSyncedAt) : '从未')"
+              @click="onRefreshAccrual(detail.package)"
+            >{{ accrualRefreshing === detail.package.id ? '刷新中…' : '刷新应计' }}</button>
+          </div>
+          <template v-if="detailAccruals.length">
+            <table class="data-table item-table accrual-table">
+              <thead>
+                <tr><th>应计类型</th><th>金额(¥)</th><th>单价(¥)</th><th>数量</th><th>SKU</th><th>应计日期</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="a in detailAccruals" :key="a.id">
+                  <td><span :title="a.typeDescCn || a.typeName">{{ a.typeNameCn || a.typeName || a.typeId }}</span></td>
+                  <td class="accrual-neg" :title="fmtRub(a.amount)">{{ fmtMoney(a.amountCny) }}</td>
+                  <td :title="a.sellerPrice != null ? fmtRub(a.sellerPrice) : ''">{{ a.sellerPriceCny != null ? fmtMoney(a.sellerPriceCny) : '—' }}</td>
+                  <td>{{ a.quantity ?? '—' }}</td>
+                  <td class="mono">{{ a.sku || '—' }}</td>
+                  <td>{{ a.accrualDate || '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="detailAccrualSummary" class="accrual-summary">
+              <span :title="fmtRub(detailAccrualSummary.saleRub)">销售收入 {{ fmtMoney(detailAccrualSummary.saleCny) }}</span>
+              <span :title="fmtRub(detailAccrualSummary.totalRub)">应计合计 <b class="accrual-neg">{{ fmtMoney(detailAccrualSummary.totalCny) }}</b></span>
+              <span :title="fmtRub(detailAccrualSummary.payoutRub)">回款 {{ fmtMoney(detailAccrualSummary.payoutCny) }}</span>
+              <span v-if="detailAccrualSummary.rate" class="muted">汇率 {{ detailAccrualSummary.rate }}</span>
+              <span v-else class="muted">(未配置汇率,无法换算 CNY)</span>
+            </div>
+          </template>
+          <div v-else class="muted">该货件暂无应计明细{{ detail.package.accrualSyncedAt ? '(Ozon 尚未生成,妥投后 2-3 周生成,可稍后点「刷新应计」)' : '' }}</div>
+        </div>
 
         <div class="detail-section">采购关联</div>
         <table v-if="detailLinks.length" class="data-table item-table">
@@ -2602,5 +2791,44 @@ a.product-title:hover {
   line-height: 1.6;
   color: var(--text-secondary, #9ca3af);
 }
+
+/* ── 应计项目(2026-09)────────────────────────────────── */
+/* 应计扣款金额:红字(RUB,负数) */
+.accrual-neg {
+  color: #dc2626;
+}
+
+/* 应计明细表 */
+.accrual-table td {
+  padding: 6px 8px;
+}
+
+/* 应计合计行:销售收入/应计合计/回款/换算 */
+.accrual-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.accrual-payout-cny {
+  color: #16a34a;
+  font-weight: 700;
+}
+
+/* 汇率设置弹窗 */
+.rate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rate-updated-at {
+  font-size: 11px;
+}
+
 
 </style>

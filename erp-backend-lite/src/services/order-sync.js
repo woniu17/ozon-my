@@ -13,13 +13,20 @@
 // 进度查询 GET  /admin/api/order-process/sync-progress
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
-import { postingFbsUnfulfilledList, postingFbsList, productInfoListV3 } from './ozon-opi.js';
+import { postingFbsUnfulfilledList, postingFbsList, productInfoListV3, financeAccrualPostings, financeAccrualTypes } from './ozon-opi.js';
 import { orderPackageDao, setStoreNameMap } from '../db/dao/sqlite/order-daos.js';
+import { getAccrualTypes, findPendingAccrualPostings, findBackfillAccrualPostings, findAccrualPostingsByPackageIds, replaceAccruals } from '../db/dao/sqlite/accrual-dao.js';
 import { db } from '../db/index.js';
 
 const INTERVAL_MIN = Math.max(1, Number(process.env.ORDER_SYNC_INTERVAL_MIN) || 5);
 const FIRST_DELAY_MS = 10_000;
 const MAX_PAGES = 50; // 单接口单店铺翻页上限(防失控)
+
+// ── 应计同步参数(实测验证)─────────────────────────────────────
+const ACCRUAL_BATCH = 200;        // 应计接口单批货件数(实测 200 可行)
+const ACCRUAL_THROTTLE_MS = 300; // 批间节流(接口秒级限流 429 code=8)
+const ACCRUAL_MAX_RETRY = 3;     // 429/网络错退避重试上限
+const ACCRUAL_LIMIT_PER_ROUND = 400; // 每店铺每轮待拉上限(防单轮过载)
 
 let timer = null;
 let syncing = false;
@@ -109,6 +116,32 @@ export function clearSyncProgress() {
 
 export function isSyncing() {
   return syncing;
+}
+
+/** 手动触发应计同步(路由层调用,与订单同步互不阻塞)
+ *  mode: 'pending'(增量待拉,默认) | 'backfill'(存量回补,sinceDays 窗口)
+ *       | 'packages'(单包裹刷新,packageIds)
+ */
+export async function runAccrualSync({ mode = 'pending', sinceDays, packageIds, storeId } = {}) {
+  const stores = config.loadStores() || [];
+  const eligible = (storeId ? stores.filter((s) => s.id === storeId) : stores)
+    .filter((s) => s?.sync_credentials?.clientId);
+  if (eligible.length === 0) return { stores: [], totalPackages: 0, totalAccrualRows: 0 };
+  const results = [];
+  let totalPackages = 0;
+  let totalAccrualRows = 0;
+  for (const store of eligible) {
+    try {
+      const r = await syncAccruals(store, { mode, sinceDays, packageIds });
+      results.push({ storeId: store.id, storeName: store.name, ok: true, ...r });
+      totalPackages += r.packages;
+      totalAccrualRows += r.accrualRows;
+    } catch (e) {
+      results.push({ storeId: store.id, storeName: store.name, ok: false, error: e?.message || String(e) });
+      logger.warn({ storeId: store.id, err: e?.message }, '[accrual-sync] 店铺应计同步失败');
+    }
+  }
+  return { stores: results, totalPackages, totalAccrualRows };
 }
 
 // v4 响应兼容:{ result: { postings, cursor, has_next } } 或顶层直接返回
@@ -205,8 +238,73 @@ async function syncStore(store) {
   if (progress.active) progress.currentPhase = 'cache-backfill';
   await backfillProductCache(store);
 
+  // 4) 应计同步(已完成/已取消货件,失败不阻塞订单同步)
+  if (progress.active) progress.currentPhase = 'accrual';
+  try {
+    await syncAccruals(store);
+  } catch (e) {
+    logger.warn({ storeId: store.id, err: e?.message }, '[order-sync] 应计同步失败(不影响订单同步)');
+  }
+
   orderPackageDao.updateSyncCursor(store.id, { count });
   return count;
+}
+
+// ── 应计同步(阶段4)───────────────────────────────────────────
+// 拉取已完成/已取消货件的 Ozon 应计项目(/v1/finance/accrual/postings)
+// 待拉条件见 accrual-dao.findPendingAccrualPostings:
+//   从未拉过 | 拉过但空(24h 重试)| 下单 90 天内
+// 429 限流:300ms 节流 + 指数退避(实测验证);单店铺失败仅记 failures 不阻塞
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function callAccrualWithRetry(store, postingNumbers) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= ACCRUAL_MAX_RETRY; attempt++) {
+    try {
+      return await financeAccrualPostings(store, postingNumbers);
+    } catch (e) {
+      lastErr = e;
+      // 429 限流 / 网络错 / 超时:退避后重试;其余(4xx 参数错)直接放弃
+      const retryable = /429|rate limit|network|timeout|网络错/i.test(e?.message || '');
+      if (!retryable || attempt === ACCRUAL_MAX_RETRY) throw e;
+      await sleep(1500 * (attempt + 1));
+    }
+  }
+  throw lastErr;
+}
+
+async function syncAccruals(store, { mode = 'pending', sinceDays, packageIds } = {}) {
+  // 待拉清单:pending(增量,默认)/ backfill(存量回补)/ packages(单包裹刷新)
+  let pending;
+  if (mode === 'packages') {
+    // 限定本店铺:防止用他店凭据拉同一包裹(返回空应计,覆盖清空已有数据)
+    pending = findAccrualPostingsByPackageIds(store.id, packageIds || []);
+  } else if (mode === 'backfill') {
+    pending = findBackfillAccrualPostings(store.id, sinceDays, 2000);
+  } else {
+    pending = findPendingAccrualPostings(store.id, ACCRUAL_LIMIT_PER_ROUND);
+  }
+  if (pending.length === 0) return { packages: 0, accrualRows: 0 };
+
+  // 类型字典(缓存命中不调 OPI)
+  const typeMap = await getAccrualTypes(() => financeAccrualTypes(store));
+
+  const postingMap = new Map(pending.map((r) => [r.postingNumber, r.packageId]));
+  let packages = 0;
+  let accrualRows = 0;
+  for (let i = 0; i < pending.length; i += ACCRUAL_BATCH) {
+    const batch = pending.slice(i, i + ACCRUAL_BATCH).map((r) => r.postingNumber);
+    const resp = await callAccrualWithRetry(store, batch);
+    const r = replaceAccruals(store.id, resp?.posting_accruals || [], postingMap, typeMap);
+    packages += r.packages;
+    accrualRows += r.accrualRows;
+    if (i + ACCRUAL_BATCH < pending.length) await sleep(ACCRUAL_THROTTLE_MS);
+  }
+  logger.info(
+    { storeId: store.id, packages, accrualRows, mode, pending: pending.length },
+    '[order-sync] 应计同步完成'
+  );
+  return { packages, accrualRows };
 }
 
 // 单接口全量同步(/v4/posting/fbs/list)——历史回补/状态校准

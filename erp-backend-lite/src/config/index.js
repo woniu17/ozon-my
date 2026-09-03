@@ -50,6 +50,8 @@ const config = {
   // 服务间 API Key(2026-08):无头采集脚本(deep-collect.js)等服务调用方
   // 经 x-api-key 头鉴权(非 JWT,永久有效);未配置时不启用该通道
   serviceApiKey: process.env.SERVICE_API_KEY || '',
+  // RUB→CNY 汇率兜底(2026-09,应计利润换算);app_config.rub_cny_rate 优先
+  rubCnyRateFallback: Number(process.env.RUB_CNY_RATE) || 0,
 };
 
 export default config;

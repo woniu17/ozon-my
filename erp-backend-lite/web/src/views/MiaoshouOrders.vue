@@ -3,7 +3,7 @@
 // 数据来源:miaoshou-helper 插件从妙手 ERP 历史订单页提取,存独立 miaoshou_* 表(只读镜像)
 // 用途:查妙手侧采购信息/称重重量/本地备注;经 posting_number 关联本地 op_package
 // 页面设计对齐 OrderProcess.vue:状态 Tab(operate_status 分流)+ 筛选 + 分页列表 + 详情弹窗
-import { ref, reactive, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { getMiaoshouList, getMiaoshouTabs, getMiaoshouDetail, syncFromMiaoshou } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
@@ -193,6 +193,7 @@ async function loadList() {
     });
     rows.value = data?.packages || [];
     pager.total = data?.total || 0;
+    rubRate.value = data?.rubRate || null;
   } catch (err) {
     show(err.message || String(err), 'error');
     rows.value = [];
@@ -262,7 +263,8 @@ const MS_TAB_LABELS = {
   waitProcess: { label: '待处理', cls: 'tag-warn' },
   waitShip: { label: '待打单发货', cls: 'tag-info' },
   submitPlatform: { label: '交运', cls: 'tag-info' },
-  waitReceiverConfirm: { label: '已发货', cls: 'tag-ok' },
+  waitReceiverConfirm: { label: '已发货', cls: 'tag-info' },
+  finished: { label: '已完成', cls: 'tag-ok' },
   closed: { label: '已关闭', cls: 'tag-mute' },
   isolation: { label: '已搁置', cls: 'tag-err' },
 };
@@ -327,6 +329,74 @@ function poTagCls(s) {
   if (s === 'has_send') return 'tag-info';
   return 'tag-mute';
 }
+
+// ── 应计项目(2026-09,经本地关联包裹带出;RUB 一律换算 CNY 展示)──
+const rubRate = ref(null); // 列表响应附带,loadList 刷新
+
+function fmtRub(n) {
+  if (n == null) return '—';
+  return Number(n).toFixed(2) + ' ₽';
+}
+
+// RUB → CNY(无汇率返回 null,显示 —)
+function rubToCny(rub) {
+  if (rub == null || !rubRate.value?.rate) return null;
+  return Math.round(Number(rub) * rubRate.value.rate * 100) / 100;
+}
+
+// ── 金额列六行辅助(对齐订单处理页;数据经本地关联包裹注入)──
+// 金额列六行悬浮提示(真实口径显示 RUB 原值换算明细;未关联本地行无数据)
+function agentFeeTitle(row) {
+  if (!row.local_pkg_id) return '未关联本地订单,无应计数据';
+  if (row.accrual) return `代理佣金(RfbsGlobalAgentFee)实扣 ${fmtRub(row.accrual.agentFeeRub)} × 汇率 ${row.accrual.rate}`;
+  return '无应计数据,按订单金额 × 16% 预估';
+}
+function deliveryTitle(row) {
+  if (!row.local_pkg_id) return '未关联本地订单,无应计数据';
+  if (row.accrual) return `国际配送(RfbsGlobalDelivery)实扣 ${fmtRub(row.accrual.deliveryRub)} × 汇率 ${row.accrual.rate}`;
+  return '无应计数据(未妥投或 Ozon 未生成)';
+}
+function othersTitle(row) {
+  if (!row.local_pkg_id) return '未关联本地订单,无应计数据';
+  if (row.accrual) return `其它费用(销售佣金/星星商品/逆向物流等)${fmtRub(row.accrual.othersRub)} × 汇率 ${row.accrual.rate}`;
+  return '无应计数据(未妥投或 Ozon 未生成)';
+}
+function profitLabel(row) {
+  return row.profit?.estimated === false ? '利润实' : '预估利润';
+}
+// 利润悬浮:真实口径显示汇率与回款换算
+function profitTitle(row) {
+  const p = row.profit;
+  if (!p) return '未关联本地订单';
+  if (p.estimated === false) {
+    return `回款 ${fmtRub(p.payoutRub)} × 汇率 ${p.rubRate} = ¥${p.escrow?.toFixed(2)}`;
+  }
+  return '按 16% 预估佣金计算(无应计数据或未妥投)';
+}
+
+// 详情应计:明细行(附 CNY 换算)+ 合计(仅已关联本地的行)
+const detailAccruals = computed(() =>
+  (detail.value?.accruals || []).map((a) => ({
+    ...a,
+    amountCny: rubToCny(a.amount),
+    sellerPriceCny: a.sellerPrice != null ? rubToCny(a.sellerPrice) : null,
+  }))
+);
+const detailAccrualSummary = computed(() => {
+  const p = detail.value?.package;
+  if (!p || p.accrual_total == null || !p.local_pkg_id) return null;
+  const rate = detail.value?.rubRate?.rate || rubRate.value?.rate;
+  const payoutRub = (p.accrual_sale_total || 0) + (p.accrual_total || 0);
+  return {
+    saleRub: p.accrual_sale_total,
+    totalRub: p.accrual_total,
+    payoutRub: Math.round(payoutRub * 100) / 100,
+    saleCny: rubToCny(p.accrual_sale_total),
+    totalCny: rubToCny(p.accrual_total),
+    payoutCny: rate ? Math.round(payoutRub * rate * 100) / 100 : null,
+    rate,
+  };
+});
 
 onMounted(() => {
   loadTabs();
@@ -436,8 +506,19 @@ onUnmounted(() => {
               <div class="sub muted">{{ row.buyer_name || '—' }}{{ row.buyer_country ? ' · ' + row.buyer_country : '' }}
               </div>
             </td>
-            <td>
-              <div>{{ fmtMoney(row.order_amount) }}</div>
+            <td class="col-amount">
+              <!-- 金额列六行(对齐订单处理页;数据经本地关联包裹注入,未关联本地行其余显示 —) -->
+              <div>订单 {{ fmtMoney(row.order_amount) }}</div>
+              <div>采购 <span :class="{ muted: !row.total_purchase_amount }">{{ fmtMoney(row.total_purchase_amount) }}</span></div>
+              <div class="sub muted" :title="agentFeeTitle(row)">{{ row.local_pkg_id && !row.accrual ? '代理佣金(估)' : '代理佣金' }}
+                {{ row.local_pkg_id ? fmtMoney(row.accrual?.agentFee ?? row.profit?.commission) : '—' }}</div>
+              <div class="sub muted" :title="deliveryTitle(row)">国际配送 {{ row.accrual ? fmtMoney(row.accrual.delivery) : '—' }}</div>
+              <div class="sub muted" :title="othersTitle(row)">其它费用 {{ row.accrual ? fmtMoney(row.accrual.others) : '—' }}</div>
+              <div v-if="row.profit" :class="row.profit.profit > 0 ? 'profit-pos' : 'profit-neg'" :title="profitTitle(row)">
+                {{ profitLabel(row) }} {{ fmtMoney(row.profit.profit) }}
+                <span v-if="row.profit.profitRateSale != null" class="sub">({{ Number(row.profit.profitRateSale).toFixed(2) }}%)</span>
+              </div>
+              <div v-else class="sub muted">利润 —</div>
               <div class="sub muted">{{ fmtWeight(row.weighing_weight) }}</div>
             </td>
             <td>
@@ -451,6 +532,9 @@ onUnmounted(() => {
                   :title="row.app_package_status_text || '平台订单已取消'">
                   平台已取消{{ row.app_package_status_text ? ' · ' + row.app_package_status_text : '' }}
                 </span>
+                <!-- 本地 Ozon 状态已妥投但妙手 tab 仍在已发货(平台状态滞后)时提示 -->
+                <span v-if="row.local_ozon_status === 'delivered' && row.app_package_tab !== 'finished'" class="tag tag-ok"
+                  title="本地订单同步:Ozon 货件已妥投(妙手平台状态滞后)">Ozon已妥投</span>
                 <span v-if="row.local_pkg_id" class="tag tag-info" title="Ozon 单号已匹配本地订单包裹">已关联本地</span>
                 <span v-else class="tag tag-mute" title="本地订单处理中未找到该 Ozon 单号">未关联</span>
               </div>
@@ -578,6 +662,37 @@ onUnmounted(() => {
           </tbody>
         </table>
         <div v-else class="muted">无采购单</div>
+
+        <!-- Ozon 应计明细(经本地关联包裹带出,真实财务扣款,RUB) -->
+        <div class="detail-section">Ozon 应计明细</div>
+        <template v-if="detail.package.local_pkg_id">
+          <template v-if="detailAccruals.length">
+            <table class="data-table item-table accrual-table">
+              <thead>
+                <tr><th>应计类型</th><th>金额(¥)</th><th>单价(¥)</th><th>数量</th><th>SKU</th><th>应计日期</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="a in detailAccruals" :key="a.id">
+                  <td><span :title="a.typeDescCn || a.typeName">{{ a.typeNameCn || a.typeName || a.typeId }}</span></td>
+                  <td class="accrual-neg" :title="fmtRub(a.amount)">{{ fmtMoney(a.amountCny) }}</td>
+                  <td :title="a.sellerPrice != null ? fmtRub(a.sellerPrice) : ''">{{ a.sellerPriceCny != null ? fmtMoney(a.sellerPriceCny) : '—' }}</td>
+                  <td>{{ a.quantity ?? '—' }}</td>
+                  <td class="mono">{{ a.sku || '—' }}</td>
+                  <td>{{ a.accrualDate || '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="detailAccrualSummary" class="accrual-summary">
+              <span :title="fmtRub(detailAccrualSummary.saleRub)">销售收入 {{ fmtMoney(detailAccrualSummary.saleCny) }}</span>
+              <span :title="fmtRub(detailAccrualSummary.totalRub)">应计合计 <b class="accrual-neg">{{ fmtMoney(detailAccrualSummary.totalCny) }}</b></span>
+              <span :title="fmtRub(detailAccrualSummary.payoutRub)">回款 {{ fmtMoney(detailAccrualSummary.payoutCny) }}</span>
+              <span v-if="detailAccrualSummary.rate" class="muted">汇率 {{ detailAccrualSummary.rate }}</span>
+              <span v-else class="muted">(未配置汇率)</span>
+            </div>
+          </template>
+          <div v-else class="muted">本地关联包裹暂无应计明细(未妥投或 Ozon 尚未生成,可到订单处理页详情刷新)</div>
+        </template>
+        <div v-else class="muted">未关联本地订单,无应计数据(需先在订单处理页同步到该 Ozon 单号)</div>
       </div>
     </AppModal>
   </div>
@@ -686,6 +801,47 @@ onUnmounted(() => {
 .tag-mute {
   background: #f3f4f6;
   color: #6b7280;
+}
+
+/* ── 应计项目(2026-09)────────────────────────────────── */
+/* 应计扣款金额:红字(RUB,负数) */
+.accrual-neg {
+  color: #dc2626;
+}
+
+/* ── 金额列六行(对齐订单处理页)── */
+.col-amount {
+  min-width: 120px;
+}
+
+.profit-pos {
+  color: #16a34a;
+}
+
+.profit-neg {
+  color: #ef4444;
+}
+
+/* 应计明细表 */
+.accrual-table td {
+  padding: 6px 8px;
+}
+
+/* 应计合计行:销售收入/应计合计/回款/换算 */
+.accrual-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.accrual-payout-cny {
+  color: #16a34a;
+  font-weight: 700;
 }
 
 .empty {

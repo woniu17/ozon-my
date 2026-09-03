@@ -1,0 +1,270 @@
+{
+  "range": {
+    "since": "2026-02-01T00:00:00.000Z",
+    "to": "2026-09-03T23:59:59.000Z"
+  },
+  "totalPostings": 957,
+  "postingsWithAccruals": 566,
+  "types": [
+    {
+      "type_id": 69,
+      "name": "SaleCommission",
+      "description": "Вознаграждение за продажу",
+      "accrualCount": 570,
+      "postingCount": 558,
+      "skuCount": 263,
+      "amounts": {
+        "RUB": -24862.829999999998
+      }
+    },
+    {
+      "type_id": 66,
+      "name": "RfbsGlobalAgentFee",
+      "description": "Агентское вознаграждение Ozon",
+      "accrualCount": 563,
+      "postingCount": 563,
+      "skuCount": 0,
+      "amounts": {
+        "RUB": -8589.86
+      }
+    },
+    {
+      "type_id": 67,
+      "name": "RfbsGlobalDelivery",
+      "description": "Услуги международной доставки",
+      "accrualCount": 563,
+      "postingCount": 563,
+      "skuCount": 0,
+      "amounts": {
+        "RUB": -55958.82000000004
+      }
+    },
+    {
+      "type_id": 74,
+      "name": "StarsMembership",
+      "description": "Звёздные товары",
+      "accrualCount": 46,
+      "postingCount": 46,
+      "skuCount": 32,
+      "amounts": {
+        "RUB": -310.4000000000001
+      }
+    },
+    {
+      "type_id": 59,
+      "name": "ReturnFlowLogistic",
+      "description": "Обратная логистика",
+      "accrualCount": 5,
+      "postingCount": 5,
+      "skuCount": 4,
+      "amounts": {
+        "RUB": -371.05
+      }
+    },
+    {
+      "type_id": 93,
+      "name": "DefectFineErrors",
+      "description": "Превышение индекса ошибок",
+      "accrualCount": 3,
+      "postingCount": 3,
+      "skuCount": 0,
+      "amounts": {
+        "RUB": -33.129999999999995
+      }
+    },
+    {
+      "type_id": 6,
+      "name": "Cancellation",
+      "description": "Обработка отменённых и невостребованных товаров",
+      "accrualCount": 2,
+      "postingCount": 2,
+      "skuCount": 2,
+      "amounts": {
+        "RUB": 0
+      }
+    }
+  ],
+  "perStore": {
+    "YQL01": {
+      "postings": 198,
+      "postingsWithAccruals": 110,
+      "byType": {
+        "66": {
+          "count": 110,
+          "sum": -1686.76,
+          "name": "RfbsGlobalAgentFee"
+        },
+        "67": {
+          "count": 110,
+          "sum": -10068.32,
+          "name": "RfbsGlobalDelivery"
+        },
+        "69": {
+          "count": 111,
+          "sum": -4663.59,
+          "name": "SaleCommission"
+        },
+        "74": {
+          "count": 17,
+          "sum": -124.26,
+          "name": "StarsMembership"
+        }
+      }
+    },
+    "YQL02": {
+      "postings": 200,
+      "postingsWithAccruals": 138,
+      "byType": {
+        "6": {
+          "count": 2,
+          "sum": 0,
+          "name": "Cancellation"
+        },
+        "59": {
+          "count": 2,
+          "sum": -124.05,
+          "name": "ReturnFlowLogistic"
+        },
+        "66": {
+          "count": 138,
+          "sum": -2078.74,
+          "name": "RfbsGlobalAgentFee"
+        },
+        "67": {
+          "count": 138,
+          "sum": -12517.999999999996,
+          "name": "RfbsGlobalDelivery"
+        },
+        "69": {
+          "count": 140,
+          "sum": -5446.250000000002,
+          "name": "SaleCommission"
+        },
+        "74": {
+          "count": 8,
+          "sum": -30.739999999999995,
+          "name": "StarsMembership"
+        }
+      }
+    },
+    "YQL03": {
+      "postings": 154,
+      "postingsWithAccruals": 84,
+      "byType": {
+        "66": {
+          "count": 82,
+          "sum": -1235.44,
+          "name": "RfbsGlobalAgentFee"
+        },
+        "67": {
+          "count": 82,
+          "sum": -8386.839999999998,
+          "name": "RfbsGlobalDelivery"
+        },
+        "69": {
+          "count": 84,
+          "sum": -3553.780000000001,
+          "name": "SaleCommission"
+        },
+        "74": {
+          "count": 4,
+          "sum": -21.97,
+          "name": "StarsMembership"
+        },
+        "93": {
+          "count": 2,
+          "sum": -11.52,
+          "name": "DefectFineErrors"
+        }
+      }
+    },
+    "YQL04": {
+      "postings": 118,
+      "postingsWithAccruals": 61,
+      "byType": {
+        "66": {
+          "count": 61,
+          "sum": -958.9000000000001,
+          "name": "RfbsGlobalAgentFee"
+        },
+        "67": {
+          "count": 61,
+          "sum": -7334.739999999999,
+          "name": "RfbsGlobalDelivery"
+        },
+        "69": {
+          "count": 61,
+          "sum": -3446.4699999999993,
+          "name": "SaleCommission"
+        },
+        "74": {
+          "count": 2,
+          "sum": -30.23,
+          "name": "StarsMembership"
+        }
+      }
+    },
+    "YQL05": {
+      "postings": 96,
+      "postingsWithAccruals": 58,
+      "byType": {
+        "59": {
+          "count": 3,
+          "sum": -247,
+          "name": "ReturnFlowLogistic"
+        },
+        "66": {
+          "count": 58,
+          "sum": -893.02,
+          "name": "RfbsGlobalAgentFee"
+        },
+        "67": {
+          "count": 58,
+          "sum": -4777.809999999999,
+          "name": "RfbsGlobalDelivery"
+        },
+        "69": {
+          "count": 59,
+          "sum": -2231.27,
+          "name": "SaleCommission"
+        },
+        "74": {
+          "count": 8,
+          "sum": -42.93,
+          "name": "StarsMembership"
+        }
+      }
+    },
+    "YQL06": {
+      "postings": 191,
+      "postingsWithAccruals": 115,
+      "byType": {
+        "66": {
+          "count": 114,
+          "sum": -1737,
+          "name": "RfbsGlobalAgentFee"
+        },
+        "67": {
+          "count": 114,
+          "sum": -12873.110000000004,
+          "name": "RfbsGlobalDelivery"
+        },
+        "69": {
+          "count": 115,
+          "sum": -5521.4699999999975,
+          "name": "SaleCommission"
+        },
+        "74": {
+          "count": 7,
+          "sum": -60.269999999999996,
+          "name": "StarsMembership"
+        },
+        "93": {
+          "count": 1,
+          "sum": -21.61,
+          "name": "DefectFineErrors"
+        }
+      }
+    }
+  }
+}

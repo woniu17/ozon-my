@@ -1056,6 +1056,32 @@ CREATE TABLE IF NOT EXISTS op_sync_cursor (
 );
 
 -- ════════════════════════════════════════════════════════════════
+-- Ozon 应计项目(2026-09,财务应计明细)
+-- 来源:POST /v1/finance/accrual/postings(已完成/已取消货件)
+-- 设计文档: docs/Ozon应计项目同步-功能设计.md
+-- op_package 冗余列 accrual_total/accrual_sale_total/accrual_synced_at
+-- 由 ensureMigrations 轻量迁移补充
+-- ════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS op_accrual (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id        TEXT NOT NULL,
+  posting_number  TEXT NOT NULL,
+  package_id      INTEGER REFERENCES op_package(id),
+  type_id         INTEGER NOT NULL,              -- Ozon 应计类型 ID(66/67/69...)
+  type_name       TEXT,                         -- 字典翻译冗余(RfbsGlobalAgentFee...)
+  amount          REAL DEFAULT 0,               -- 应计金额(负数=扣款,RUB)
+  currency        TEXT DEFAULT 'RUB',
+  seller_price     REAL,                        -- 单价(销售佣金行携带,其余 NULL)
+  sku             INTEGER,
+  quantity        INTEGER,
+  accrual_date    TEXT,                         -- 应计日期(YYYY-MM-DD)
+  synced_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_op_acc_pkg ON op_accrual(package_id);
+CREATE INDEX IF NOT EXISTS idx_op_acc_posting ON op_accrual(posting_number);
+
+-- ════════════════════════════════════════════════════════════════
 -- 妙手 ERP 订单数据(2026-09,独立新表,与 op_* 分离)
 -- 通过 miaoshou-helper 插件从妙手历史订单页提取,保留妙手原始快照
 -- 设计文档: docs/妙手订单数据提取-功能设计.md
