@@ -653,31 +653,46 @@ function submitPurchase({
   const status = logisticsNo ? 'shipped' : 'wait_send';
 
   const poId = runInTx(() => {
-    // 1) 创建采购单
-    const poId = Number(
-      db
-        .prepare(
-          `INSERT INTO op_purchase_order (purchase_sn, platform, purchase_channel, buyer_account, seller_name,
+    // 1) upsert 采购单(拼单场景:同采购单号复用,不新建)
+    // ON CONFLICT(platform, purchase_sn) DO UPDATE:复用已存在采购单 id
+    // payment_amount/goods_amount 用 CASE 保护:新值>0 才覆盖,避免拼单第二次提交时误清零
+    // purchase_channel 不在 UPDATE 列表,保留原值(模式A platform_order 不被覆盖成 manual)
+    // 边界:platform='other' + purchaseSn=null 时 SQLite NULL 不参与 UNIQUE,每次新建(符合手工单预期)
+    const poRes = db
+      .prepare(
+        `INSERT INTO op_purchase_order (purchase_sn, platform, purchase_channel, buyer_account, seller_name,
             payment_amount, goods_amount, status, pay_at, send_at, logistics_company, logistics_no, note, gmt_create, gmt_modified)
-           VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          purchaseSn || null,
-          platform,
-          buyerAccount,
-          sellerName,
-          Math.round((Number(paymentAmount) || 0) * 100) / 100,
-          Math.round((Number(paymentAmount) || 0) * 100) / 100,
-          status,
-          now,
-          logisticsNo ? sendAt || now : null,
-          logisticsCompany,
-          logisticsNo,
-          note,
-          now,
-          now
-        ).lastInsertRowid
-    );
+           VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(platform, purchase_sn) DO UPDATE SET
+            buyer_account = COALESCE(excluded.buyer_account, op_purchase_order.buyer_account),
+            seller_name = COALESCE(excluded.seller_name, op_purchase_order.seller_name),
+            payment_amount = CASE WHEN excluded.payment_amount > 0 THEN excluded.payment_amount ELSE op_purchase_order.payment_amount END,
+            goods_amount = CASE WHEN excluded.goods_amount > 0 THEN excluded.goods_amount ELSE op_purchase_order.goods_amount END,
+            status = excluded.status,
+            send_at = COALESCE(excluded.send_at, op_purchase_order.send_at),
+            logistics_company = COALESCE(excluded.logistics_company, op_purchase_order.logistics_company),
+            logistics_no = COALESCE(excluded.logistics_no, op_purchase_order.logistics_no),
+            note = COALESCE(excluded.note, op_purchase_order.note),
+            gmt_modified = excluded.gmt_modified
+           RETURNING id`
+      )
+      .get(
+        purchaseSn || null,
+        platform,
+        buyerAccount,
+        sellerName,
+        Math.round((Number(paymentAmount) || 0) * 100) / 100,
+        Math.round((Number(paymentAmount) || 0) * 100) / 100,
+        status,
+        now,
+        logisticsNo ? sendAt || now : null,
+        logisticsCompany,
+        logisticsNo,
+        note,
+        now,
+        now
+      );
+    const poId = Number(poRes?.id ?? db.prepare(`SELECT id FROM op_purchase_order WHERE platform=? AND purchase_sn=?`).get(platform, purchaseSn).id);
 
     // 2) 建关联(link) + 回写产品行采购金额
     const updItem = db.prepare(
@@ -848,6 +863,37 @@ function getPackagePostings(packageIds) {
     .all(...packageIds);
 }
 
+/** 按采购单号查询已关联包裹(拼单提示用) */
+function lookupPurchase(platform, purchaseSn) {
+  const po = db
+    .prepare(
+      `SELECT id, purchase_sn, platform, payment_amount, status
+       FROM op_purchase_order WHERE platform = ? AND purchase_sn = ?`
+    )
+    .get(platform, purchaseSn);
+  if (!po) return { exists: false };
+  const linkedPackages = db
+    .prepare(
+      `SELECT pl.package_id, p.package_no, o.posting_number,
+              SUM(pl.allocated_amount) AS allocated_amount
+       FROM op_purchase_link pl
+       JOIN op_package p ON p.id = pl.package_id
+       JOIN op_ozon_order o ON o.id = p.ozon_order_id
+       WHERE pl.purchase_order_id = ?
+       GROUP BY pl.package_id
+       ORDER BY pl.package_id`
+    )
+    .all(po.id);
+  return {
+    exists: true,
+    purchaseOrderId: po.id,
+    purchaseSn: po.purchase_sn,
+    paymentAmount: po.payment_amount,
+    status: po.status,
+    linkedPackages,
+  };
+}
+
 export const orderPackageDao = {
   syncPosting,
   updateSyncCursor,
@@ -864,4 +910,5 @@ export const orderPackageDao = {
   setIgnored,
   markWaybillPrinted,
   getPackagePostings,
+  lookupPurchase,
 };

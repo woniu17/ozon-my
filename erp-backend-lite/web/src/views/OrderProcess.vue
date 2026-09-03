@@ -8,7 +8,7 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
-  submitPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
+  submitPurchase, lookupPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
   runAccrualSync, getRubRate, setRubRate,
 } from '../api/order-process.js';
@@ -455,6 +455,28 @@ async function savePurchase() {
   if (!hasAmount && !hasNo) {
     show('请至少填写采购金额或国内快递单号', 'error');
     return;
+  }
+  // 拼单检测:platform≠other 且 purchaseSn 非空时,查询采购单是否已关联其他包裹
+  const sn = purchaseForm.purchaseSn.trim();
+  if (purchaseForm.platform !== 'other' && sn) {
+    try {
+      const r = await lookupPurchase(purchaseForm.platform, sn);
+      if (r.exists && r.linkedPackages?.length) {
+        const sum = r.linkedPackages.reduce((s, p) => s + (Number(p.allocated_amount) || 0), 0);
+        const lines = r.linkedPackages
+          .map((p) => `  · ${p.package_no} (${p.posting_number}) 分摊 ${fmtMoney(p.allocated_amount)}`)
+          .join('\n');
+        const ok = await confirmStore.ask({
+          message: `采购单 ${sn} 已关联 ${r.linkedPackages.length} 个包裹(分摊合计 ${fmtMoney(sum)}):\n${lines}\n\n本次将追加关联到当前包裹 ${purchaseForm.packageNo},请确认下方分摊金额无误。`,
+          confirmText: '追加关联',
+          danger: true,
+        });
+        if (!ok) return;
+      }
+    } catch (e) {
+      // lookup 失败不阻塞提交
+      console.warn('lookupPurchase failed', e);
+    }
   }
   purchaseSaving.value = true;
   try {

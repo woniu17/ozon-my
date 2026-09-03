@@ -25,6 +25,11 @@ export function submitPurchase(body) {
   return request.post('/admin/api/order-process/purchase', body);
 }
 
+// 查询采购单是否已存在 + 已关联包裹(拼单提交前提示)
+export function lookupPurchase(platform, purchaseSn) {
+  return request.get('/admin/api/order-process/purchase/lookup', { platform, purchaseSn });
+}
+
 // 取消采购关联(冲回产品行金额)
 export function unlinkPurchase(purchaseOrderId, packageId) {
   return request.post('/admin/api/order-process/unlink', { purchaseOrderId, packageId });

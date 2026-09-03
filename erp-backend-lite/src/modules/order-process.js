@@ -6,6 +6,7 @@
 //   GET  /admin/api/order-process/tabs            Tab 计数(待处理/待打单发货/交运/已发货/已搁置)
 //   GET  /admin/api/order-process/list            包裹分页列表(tab+筛选+关键词)
 //   GET  /admin/api/order-process/detail/:id      包裹详情(产品行+采购关联+轨迹)
+//   GET  /admin/api/order-process/purchase/lookup 查询采购单已关联包裹(拼单提示)
 //   POST /admin/api/order-process/purchase        提交采购信息(模式B:金额+国内快递单号)
 //   POST /admin/api/order-process/unlink          取消采购关联(冲回金额)
 //   POST /admin/api/order-process/ignore          搁置/恢复包裹
@@ -220,6 +221,19 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
     detail.rubRate = rateInfo;
     detail.package.profit = computeProfit(detail.package, detail.package.operateStatus === 'cancelled');
     res.json(ok(detail));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 查询采购单已关联包裹(拼单提交前提示用)─────────────────
+router.get('/admin/api/order-process/purchase/lookup', (req, res, next) => {
+  try {
+    const { platform, purchaseSn } = req.query;
+    if (!platform || !purchaseSn) {
+      return res.status(400).json({ ok: false, message: 'platform/purchaseSn 必填' });
+    }
+    res.json(ok(orderPackageDao.lookupPurchase(platform, purchaseSn)));
   } catch (e) {
     next(e);
   }
