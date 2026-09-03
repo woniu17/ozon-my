@@ -91,7 +91,8 @@ function buildAccrualBreakdown(packages, typeSums, rate) {
 // 双口径(2026-09):有真实应计(已完成/已取消且 accrual_total 非空)用真实口径,否则预估口径
 //   真实口径: 利润 = (销售+应计合计)×汇率 − 采购;estimated=false(前端显示"实")
 //   预估口径: 佣金 = orderAmount × 0.16;estimated=true(前端显示"估")
-function computeProfit(pkg) {
+// 已取消(2026-09-03):无订单收入,佣金不估算(应计无佣金即 0),利润 = −采购(无采购/应计则为 0)
+function computeProfit(pkg, cancelled = false) {
   const orderAmount = Number(pkg.orderAmount) || 0;
   const purchase = Number(pkg.totalPurchaseAmount) || 0;
   const round2 = (n) => Math.round(n * 100) / 100;
@@ -106,10 +107,24 @@ function computeProfit(pkg) {
       commission: round2(a.agentFee + a.others),
       escrow: a.payout,
       profit,
-      profitRateCost: purchase > 0 ? round2((profit / purchase) * 1000) / 10 : null,
-      profitRateSale: orderAmount > 0 ? round2((profit / orderAmount) * 1000) / 10 : null,
+      // 已取消订单收入为 0,利润率无意义不显示
+      profitRateCost: cancelled ? null : (purchase > 0 ? round2((profit / purchase) * 1000) / 10 : null),
+      profitRateSale: cancelled ? null : (orderAmount > 0 ? round2((profit / orderAmount) * 1000) / 10 : null),
       rubRate: a.rate,
       payoutRub: round2(a.saleRub + a.totalRub),
+    };
+  }
+
+  // 已取消/已关闭(无应计):无收入,佣金/配送/其它均 0,利润 = −采购
+  if (cancelled) {
+    return {
+      commission: 0,
+      escrow: 0,
+      profit: round2(-purchase),
+      profitRateCost: null,
+      profitRateSale: null,
+      estimated: true,
+      cancelled: true,
     };
   }
 
@@ -175,7 +190,7 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       pkg.items = itemsByOrder.get(pkg.ozonOrderId) || [];
       pkg.purchaseLinks = linksByPkg.get(pkg.id) || [];
       if (accrualMap.has(pkg.id)) pkg.accrual = accrualMap.get(pkg.id);
-      pkg.profit = computeProfit(pkg);
+      pkg.profit = computeProfit(pkg, pkg.operateStatus === 'cancelled');
     }
     data.rubRate = rateInfo;
     res.json(ok(data));
@@ -203,7 +218,7 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
     const accrualMap = buildAccrualBreakdown([detail.package], getAccrualTypeSumsByPackageIds([id]), rate);
     if (accrualMap.has(id)) detail.package.accrual = accrualMap.get(id);
     detail.rubRate = rateInfo;
-    detail.package.profit = computeProfit(detail.package);
+    detail.package.profit = computeProfit(detail.package, detail.package.operateStatus === 'cancelled');
     res.json(ok(detail));
   } catch (e) {
     next(e);
@@ -564,7 +579,8 @@ router.get('/admin/api/order-process/miaoshou-list', (req, res, next) => {
       localLinked: req.query.localLinked,
     });
     data.rubRate = resolveRubCnyRate();
-    // 金额列六行注入(对齐订单处理页):已关联本地的行带出采购金额/应计 CNY 分组/利润
+    // 金额列六行注入(对齐订单处理页):已关联本地的行带出应计 CNY 分组/利润
+    // 采购金额用妙手侧采购单合计(真实采购支出),无妙手采购单时回退本地录入
     const linked = data.packages.filter((p) => p.local_pkg_id);
     if (linked.length) {
       const localIds = linked.map((p) => p.local_pkg_id);
@@ -579,12 +595,20 @@ router.get('/admin/api/order-process/miaoshou-list', (req, res, next) => {
       );
       for (const p of linked) {
         if (accrualMap.has(p.local_pkg_id)) p.accrual = accrualMap.get(p.local_pkg_id);
-        p.profit = computeProfit({
-          orderAmount: p.order_amount,
-          totalPurchaseAmount: p.total_purchase_amount,
-          accrual: p.accrual,
-        });
       }
+    }
+    for (const p of data.packages) {
+      // 采购金额兜底链:妙手采购单合计 → 妙手算好的采购价(orderPackageAmountDetail.CNYPurchasePrice)→ 本地录入
+      // (手工单 other 平台采购单 payment 恒 null,须靠包裹级 purchase_amount 兜底)
+      const msSum = p.ms_purchase_amount != null ? Number(p.ms_purchase_amount) : null;
+      p.purchase_amount = msSum > 0
+        ? msSum
+        : (p.purchase_amount != null ? Number(p.purchase_amount) : (Number(p.total_purchase_amount) || 0));
+      p.profit = computeProfit({
+        orderAmount: p.order_amount,
+        totalPurchaseAmount: p.purchase_amount,
+        accrual: p.accrual,
+      }, p.app_package_tab === 'closed' || p.platform_package_status === 'cancelled');
     }
     res.json(ok(data));
   } catch (e) {

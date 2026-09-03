@@ -46,9 +46,9 @@ export function upsertMiaoshouOrders(records) {
           platform, platform_order_sn, order_amount, buyer_name, buyer_country,
           gmt_order_start, weighing_weight, note, operate_status, purchase_status,
           app_package_tab, platform_package_status, app_package_status_text,
-          logistics_no, logistics_company, gmt_create, gmt_modified, gmt_delivery,
+          purchase_amount, logistics_no, logistics_company, gmt_create, gmt_modified, gmt_delivery,
           items_json, raw_json, synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(op_order_package_id) DO UPDATE SET
           app_package_no=excluded.app_package_no,
           posting_number=excluded.posting_number,
@@ -66,6 +66,7 @@ export function upsertMiaoshouOrders(records) {
           app_package_tab=excluded.app_package_tab,
           platform_package_status=excluded.platform_package_status,
           app_package_status_text=excluded.app_package_status_text,
+          purchase_amount=excluded.purchase_amount,
           logistics_no=excluded.logistics_no,
           logistics_company=excluded.logistics_company,
           gmt_create=excluded.gmt_create,
@@ -94,6 +95,7 @@ export function upsertMiaoshouOrders(records) {
         r.appPackageTab || null,
         r.platformPackageStatus || null,
         r.appPackageStatusText || null,
+        r.purchaseAmount != null ? Number(r.purchaseAmount) : null,
         r.logisticsNo || null,
         r.logisticsCompany || null,
         r.gmtCreate || null,
@@ -214,6 +216,7 @@ export function listMiaoshouPackages(filters = {}) {
         (SELECT op.accrual_total FROM op_package op WHERE op.logistics_no = mp.posting_number) AS accrual_total,
         (SELECT op.accrual_sale_total FROM op_package op WHERE op.logistics_no = mp.posting_number) AS accrual_sale_total,
         (SELECT op.total_purchase_amount FROM op_package op WHERE op.logistics_no = mp.posting_number) AS total_purchase_amount,
+        (SELECT SUM(pur.payment_amount) FROM miaoshou_purchase pur WHERE pur.miaoshou_package_id = mp.id) AS ms_purchase_amount,
         (SELECT o.status FROM op_package op JOIN op_ozon_order o ON o.id = op.ozon_order_id WHERE op.logistics_no = mp.posting_number) AS local_ozon_status,
         (SELECT COUNT(*) FROM miaoshou_purchase pur WHERE pur.miaoshou_package_id = mp.id) AS purchase_count
        FROM miaoshou_package mp

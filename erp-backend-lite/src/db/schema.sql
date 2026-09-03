@@ -1108,6 +1108,7 @@ CREATE TABLE IF NOT EXISTS miaoshou_package (
   app_package_tab     TEXT,                   -- 妙手 tab 分组(waitProcess/waitShip/submitPlatform/waitReceiverConfirm/closed/isolation)
   platform_package_status TEXT,               -- 平台包裹状态(cancelled/...)
   app_package_status_text TEXT,               -- 妙手状态文案(已退款/...)
+  purchase_amount     REAL,                   -- 妙手算好的采购金额 CNY(orderPackageAmountDetail.CNYPurchasePrice)
   purchase_status     TEXT,                   -- 妙手采购状态(原值)
   logistics_no        TEXT,                   -- Ozon 跟踪号
   logistics_company   TEXT,

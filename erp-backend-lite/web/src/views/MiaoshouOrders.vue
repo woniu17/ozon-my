@@ -22,6 +22,7 @@ const TABS = [
   { key: 'waitShip', label: '待打单发货' },
   { key: 'submitPlatform', label: '交运' },
   { key: 'waitReceiverConfirm', label: '已发货' },
+  { key: 'finished', label: '已完成' },
   { key: 'closed', label: '已关闭' },
   { key: 'isolation', label: '已搁置' },
 ];
@@ -344,33 +345,37 @@ function rubToCny(rub) {
   return Math.round(Number(rub) * rubRate.value.rate * 100) / 100;
 }
 
-// ── 金额列六行辅助(对齐订单处理页;数据经本地关联包裹注入)──
-// 金额列六行悬浮提示(真实口径显示 RUB 原值换算明细;未关联本地行无数据)
+// ── 金额列六行辅助(对齐订单处理页;采购金额=妙手侧采购单合计)──
+// 已关闭/已取消订单:无收入,不估算佣金
+function isCancelledRow(row) {
+  return row.app_package_tab === 'closed' || row.platform_package_status === 'cancelled';
+}
+// 金额列六行悬浮提示(真实口径显示 RUB 原值换算明细)
 function agentFeeTitle(row) {
-  if (!row.local_pkg_id) return '未关联本地订单,无应计数据';
   if (row.accrual) return `代理佣金(RfbsGlobalAgentFee)实扣 ${fmtRub(row.accrual.agentFeeRub)} × 汇率 ${row.accrual.rate}`;
+  if (isCancelledRow(row)) return '已关闭/取消订单:无佣金扣款(不估算)';
   return '无应计数据,按订单金额 × 16% 预估';
 }
 function deliveryTitle(row) {
-  if (!row.local_pkg_id) return '未关联本地订单,无应计数据';
   if (row.accrual) return `国际配送(RfbsGlobalDelivery)实扣 ${fmtRub(row.accrual.deliveryRub)} × 汇率 ${row.accrual.rate}`;
   return '无应计数据(未妥投或 Ozon 未生成)';
 }
 function othersTitle(row) {
-  if (!row.local_pkg_id) return '未关联本地订单,无应计数据';
   if (row.accrual) return `其它费用(销售佣金/星星商品/逆向物流等)${fmtRub(row.accrual.othersRub)} × 汇率 ${row.accrual.rate}`;
   return '无应计数据(未妥投或 Ozon 未生成)';
 }
 function profitLabel(row) {
+  if (row.profit?.cancelled) return '利润';
   return row.profit?.estimated === false ? '利润实' : '预估利润';
 }
 // 利润悬浮:真实口径显示汇率与回款换算
 function profitTitle(row) {
   const p = row.profit;
-  if (!p) return '未关联本地订单';
+  if (!p) return '';
   if (p.estimated === false) {
     return `回款 ${fmtRub(p.payoutRub)} × 汇率 ${p.rubRate} = ¥${p.escrow?.toFixed(2)}`;
   }
+  if (p.cancelled) return '已关闭/取消订单:无订单收入,利润 = −采购金额(无采购/其它应计为 0)';
   return '按 16% 预估佣金计算(无应计数据或未妥投)';
 }
 
@@ -507,18 +512,18 @@ onUnmounted(() => {
               </div>
             </td>
             <td class="col-amount">
-              <!-- 金额列六行(对齐订单处理页;数据经本地关联包裹注入,未关联本地行其余显示 —) -->
+              <!-- 金额列六行(对齐订单处理页;采购金额=妙手侧采购单合计,应计经本地关联包裹注入) -->
               <div>订单 {{ fmtMoney(row.order_amount) }}</div>
-              <div>采购 <span :class="{ muted: !row.total_purchase_amount }">{{ fmtMoney(row.total_purchase_amount) }}</span></div>
-              <div class="sub muted" :title="agentFeeTitle(row)">{{ row.local_pkg_id && !row.accrual ? '代理佣金(估)' : '代理佣金' }}
-                {{ row.local_pkg_id ? fmtMoney(row.accrual?.agentFee ?? row.profit?.commission) : '—' }}</div>
+              <div>采购 <span :class="{ muted: !row.purchase_amount }">{{ fmtMoney(row.purchase_amount) }}</span></div>
+              <!-- 代理佣金:有应计=实扣换算;已关闭/取消=0(不估算);其余=16% 预估(标"估") -->
+              <div class="sub muted" :title="agentFeeTitle(row)">{{ row.accrual || isCancelledRow(row) ? '代理佣金' : '代理佣金(估)' }}
+                {{ fmtMoney(row.accrual?.agentFee ?? row.profit?.commission) }}</div>
               <div class="sub muted" :title="deliveryTitle(row)">国际配送 {{ row.accrual ? fmtMoney(row.accrual.delivery) : '—' }}</div>
               <div class="sub muted" :title="othersTitle(row)">其它费用 {{ row.accrual ? fmtMoney(row.accrual.others) : '—' }}</div>
-              <div v-if="row.profit" :class="row.profit.profit > 0 ? 'profit-pos' : 'profit-neg'" :title="profitTitle(row)">
-                {{ profitLabel(row) }} {{ fmtMoney(row.profit.profit) }}
-                <span v-if="row.profit.profitRateSale != null" class="sub">({{ Number(row.profit.profitRateSale).toFixed(2) }}%)</span>
+              <div :class="row.profit?.profit > 0 ? 'profit-pos' : (row.profit?.profit < 0 ? 'profit-neg' : 'muted')" :title="profitTitle(row)">
+                {{ profitLabel(row) }} {{ fmtMoney(row.profit?.profit) }}
+                <span v-if="row.profit?.profitRateSale != null" class="sub">({{ Number(row.profit.profitRateSale).toFixed(2) }}%)</span>
               </div>
-              <div v-else class="sub muted">利润 —</div>
               <div class="sub muted">{{ fmtWeight(row.weighing_weight) }}</div>
             </td>
             <td>
@@ -812,6 +817,7 @@ onUnmounted(() => {
 /* ── 金额列六行(对齐订单处理页)── */
 .col-amount {
   min-width: 120px;
+  text-align: right;
 }
 
 .profit-pos {

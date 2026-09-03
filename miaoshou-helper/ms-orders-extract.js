@@ -168,6 +168,11 @@
       appPackageTab: pkg.appPackageTab || null,
       platformPackageStatus: pkg.platformPackageStatus || null,   // cancelled/...
       appPackageStatusText: pkg.appPackageStatusText || null,    // 已退款/...
+      // ★妙手算好的采购金额(CNY,来自 orderPackageAmountDetail.CNYPurchasePrice)
+      // outbound 接口的手工单(other 平台)purchaseOrderPayment 恒为 null,此字段可兜底
+      purchaseAmount: pkg.orderPackageAmountDetail?.CNYPurchasePrice != null
+        ? parseFloat(pkg.orderPackageAmountDetail.CNYPurchasePrice)
+        : null,
       logisticsNo: pkg.logisticsNo || null,
       logisticsCompany: pkg.logisticsCompany || null,
       gmtCreate: pkg.gmtCreate || null,

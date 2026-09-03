@@ -1058,8 +1058,13 @@ function fmtRub(n) {
 }
 
 // 金额列六行悬浮提示(真实口径显示 RUB 原值换算明细)
+// 已取消订单:无收入,不估算佣金
+function isCancelled(pkg) {
+  return pkg.operateStatus === 'cancelled';
+}
 function agentFeeTitle(pkg) {
   if (pkg.accrual) return `代理佣金(RfbsGlobalAgentFee)实扣 ${fmtRub(pkg.accrual.agentFeeRub)} × 汇率 ${pkg.accrual.rate}`;
+  if (isCancelled(pkg)) return '已取消订单:无佣金扣款(不估算)';
   return '无应计数据,按订单金额 × 16% 预估';
 }
 function deliveryTitle(pkg) {
@@ -1072,6 +1077,7 @@ function othersTitle(pkg) {
 }
 
 function profitLabel(pkg) {
+  if (pkg.profit?.cancelled) return '利润';
   return pkg.profit?.estimated === false ? '利润实' : '预估利润';
 }
 // 利润悬浮:真实口径显示汇率与回款换算
@@ -1081,6 +1087,7 @@ function profitTitle(pkg) {
   if (p.estimated === false) {
     return `回款 ${fmtRub(p.payoutRub)} × 汇率 ${p.rubRate} = ¥${p.escrow?.toFixed(2)}`;
   }
+  if (p.cancelled) return '已取消订单:无订单收入,利润 = −采购金额(无采购/其它应计为 0)';
   return '按 16% 预估佣金计算(无应计数据或未妥投)';
 }
 
@@ -1508,13 +1515,13 @@ onUnmounted(() => {
             <td class="col-amount">
               <div>订单 {{ fmtMoney(pkg.orderAmount) }}</div>
               <div>采购 <span :class="{ 'muted': !pkg.totalPurchaseAmount }">{{ fmtMoney(pkg.totalPurchaseAmount) }}</span></div>
-              <!-- 代理佣金:有应计=66 类型实扣换算;无=16% 预估(标"估") -->
-              <div class="sub muted" :title="agentFeeTitle(pkg)">{{ pkg.accrual ? '代理佣金' : '代理佣金(估)' }} {{ fmtMoney(pkg.accrual?.agentFee ?? pkg.profit?.commission) }}</div>
+              <!-- 代理佣金:有应计=66 类型实扣换算;已取消=0(不估算);其余=16% 预估(标"估") -->
+              <div class="sub muted" :title="agentFeeTitle(pkg)">{{ pkg.accrual || isCancelled(pkg) ? '代理佣金' : '代理佣金(估)' }} {{ fmtMoney(pkg.accrual?.agentFee ?? pkg.profit?.commission) }}</div>
               <!-- 国际配送:仅真实应计口径有值 -->
               <div class="sub muted" :title="deliveryTitle(pkg)">国际配送 {{ pkg.accrual ? fmtMoney(pkg.accrual.delivery) : '—' }}</div>
               <!-- 其它费用:销售佣金/星星商品/逆向物流等,= 应计合计 − 代理 − 配送 -->
               <div class="sub muted" :title="othersTitle(pkg)">其它费用 {{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</div>
-              <div :class="pkg.profit?.profit > 0 ? 'profit-pos' : 'profit-neg'" :title="profitTitle(pkg)">
+              <div :class="pkg.profit?.profit > 0 ? 'profit-pos' : (pkg.profit?.profit < 0 ? 'profit-neg' : 'muted')" :title="profitTitle(pkg)">
                 {{ profitLabel(pkg) }} {{ fmtMoney(pkg.profit?.profit) }}
                 <span v-if="pkg.profit?.profitRateSale != null" class="sub">({{ Number(pkg.profit.profitRateSale).toFixed(2) }}%)</span>
               </div>
@@ -2338,6 +2345,7 @@ a.product-title:hover {
 
 .col-amount {
   min-width: 120px;
+  text-align: right;
 }
 
 .col-purchase {

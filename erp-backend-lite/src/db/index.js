@@ -105,6 +105,10 @@ async function ensureMigrations() {
       db.exec(`ALTER TABLE miaoshou_package ADD COLUMN app_package_status_text TEXT`);
       console.log('[db] migration: added column miaoshou_package.app_package_status_text');
     }
+    if (!msPkgCols.some((c) => c.name === 'purchase_amount')) {
+      db.exec(`ALTER TABLE miaoshou_package ADD COLUMN purchase_amount REAL`);
+      console.log('[db] migration: added column miaoshou_package.purchase_amount');
+    }
   }
   const msPurCols = db.prepare(`PRAGMA table_info(miaoshou_purchase)`).all();
   if (msPurCols.length > 0) {
