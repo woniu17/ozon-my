@@ -125,6 +125,35 @@ async function ensureMigrations() {
       console.log('[db] migration: added column miaoshou_purchase.items_json');
     }
   }
+  // 2026-09: 妙手包裹 ↔ 采购单 多对多关联中间表
+  // 旧库可能没有此表(schema.sql 早于 ensureMigrations 执行,但旧库的 schema.sql 是旧版本),
+  // 新库由 schema.sql 直接 CREATE。本块幂等:存在则跳过 CREATE,但回填每次都会执行(INSERT OR IGNORE 幂等)。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS miaoshou_package_purchase_map (
+      package_id  INTEGER NOT NULL REFERENCES miaoshou_package(id) ON DELETE CASCADE,
+      purchase_id INTEGER NOT NULL REFERENCES miaoshou_purchase(id) ON DELETE CASCADE,
+      synced_at   TEXT NOT NULL,
+      PRIMARY KEY (package_id, purchase_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ms_map_pur ON miaoshou_package_purchase_map(purchase_id);
+  `);
+  // 一次性回填:把 miaoshou_purchase 现存的 miaoshou_package_id(legacy 列)作为一条关联写入中间表。
+  // 让历史包裹(原本被 ON CONFLICT 覆盖丢失)的"最后赢家"包裹保留关联;
+  // 被覆盖丢失的关联需要重新从妙手同步一次才能补回(upsert 已改造为新逻辑)。
+  // 幂等:已有相同 (package_id, purchase_id) 的行会被 INSERT OR IGNORE 跳过。
+  const backfill = db
+    .prepare(
+      `INSERT OR IGNORE INTO miaoshou_package_purchase_map (package_id, purchase_id, synced_at)
+       SELECT miaoshou_package_id, id, COALESCE(synced_at, datetime('now'))
+       FROM miaoshou_purchase
+       WHERE miaoshou_package_id IS NOT NULL`
+    )
+    .run();
+  if (backfill.changes > 0) {
+    console.log(
+      `[db] migration: backfilled ${backfill.changes} rows into miaoshou_package_purchase_map from legacy column`
+    );
+  }
   // 2026-09: op_package 应计冗余列(应计合计/销售收入合计/最近拉取时间)
   // NULL 语义:accrual_total NULL=拉过但 Ozon 尚未生成应计(24h 重试窗口)
   const opPkgCols = db.prepare(`PRAGMA table_info(op_package)`).all();

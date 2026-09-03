@@ -213,6 +213,12 @@
           logisticsCompany: pkg0.purchaseOrderLogisticsName || null,
           logisticsNo: pkg0.purchaseOrderWaybillCode || null,
           lastTrace: pkg0.lastLogisticsTrace || null,
+          // ★保留 po 完整结构(2026-09-03):用于设计 N:M 分摊算法。
+          //   关键字段:purchaseOrderPackages[](可能含包裹级 SKU 数量明细)、
+          //   items[](采购单级 SKU 单价/数量)。写入 miaoshou_purchase.raw_json,审计后定算法。
+          //   注意 payload:妙手 outbound 单次最多 20 包裹,每包采购单数有限,体积可控;
+          //   如触发 413 再精简(只保留 purchaseOrderPackages + items,丢弃其余字段)。
+          raw: po,
         };
       }),
     };

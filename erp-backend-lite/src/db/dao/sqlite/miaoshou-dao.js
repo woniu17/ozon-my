@@ -112,10 +112,13 @@ export function upsertMiaoshouOrders(records) {
         .prepare(`SELECT id FROM miaoshou_package WHERE op_order_package_id = ?`)
         .get(String(r.opOrderPackageId));
 
-      // 子表 upsert 采购单
+      // 子表 upsert 采购单 + 多对多关联
+      // 2026-09 修复:采购单按 UNIQUE(platform, purchase_sn) 去重,只更新采购单自身字段;
+      // 不再 update miaoshou_package_id(原 ON CONFLICT 会让后入库包裹抢走关联,
+      // 拼单场景下另一个包裹会丢采购单)。关联关系全部走中间表 miaoshou_package_purchase_map。
       for (const po of r.purchases || []) {
         if (!po.purchaseSn || !po.platform) continue; // 缺唯一键的跳过
-        db.prepare(
+        const purRes = db.prepare(
           `INSERT INTO miaoshou_purchase (
             miaoshou_package_id, purchase_order_id, purchase_sn, platform,
             platform_name, detail_url,
@@ -124,7 +127,6 @@ export function upsertMiaoshouOrders(records) {
             last_trace, items_json, raw_json, synced_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(platform, purchase_sn) DO UPDATE SET
-            miaoshou_package_id=excluded.miaoshou_package_id,
             purchase_order_id=excluded.purchase_order_id,
             platform_name=excluded.platform_name,
             detail_url=excluded.detail_url,
@@ -140,9 +142,10 @@ export function upsertMiaoshouOrders(records) {
             items_json=excluded.items_json,
             raw_json=excluded.raw_json,
             synced_at=excluded.synced_at,
-            updated_at=datetime('now')`
-        ).run(
-          pkgRow.id,
+            updated_at=datetime('now')
+          RETURNING id`
+        ).get(
+          pkgRow.id,                      // 兼容:首次插入时填,后续 ON CONFLICT 路径不更新此列
           po.purchaseOrderId || null,
           po.purchaseSn,
           po.platform,
@@ -162,6 +165,16 @@ export function upsertMiaoshouOrders(records) {
           po.raw ? JSON.stringify(po.raw) : null,
           now
         );
+        // RETURNING id 兼容 INSERT 与 ON CONFLICT 两条路径,取出真实采购单 id
+        const purchaseId = purRes?.id
+          ?? db.prepare(`SELECT id FROM miaoshou_purchase WHERE platform=? AND purchase_sn=?`).get(po.platform, po.purchaseSn).id;
+        // 中间表 upsert(package_id, purchase_id) — 多对多关联
+        db.prepare(
+          `INSERT INTO miaoshou_package_purchase_map (package_id, purchase_id, synced_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(package_id, purchase_id) DO UPDATE SET
+             synced_at=excluded.synced_at`
+        ).run(pkgRow.id, purchaseId, now);
         purUpserted++;
       }
     }
@@ -216,9 +229,14 @@ export function listMiaoshouPackages(filters = {}) {
         (SELECT op.accrual_total FROM op_package op WHERE op.logistics_no = mp.posting_number) AS accrual_total,
         (SELECT op.accrual_sale_total FROM op_package op WHERE op.logistics_no = mp.posting_number) AS accrual_sale_total,
         (SELECT op.total_purchase_amount FROM op_package op WHERE op.logistics_no = mp.posting_number) AS total_purchase_amount,
-        (SELECT SUM(pur.payment_amount) FROM miaoshou_purchase pur WHERE pur.miaoshou_package_id = mp.id) AS ms_purchase_amount,
+        -- 采购金额分摊:每个采购单按"该采购单关联的包裹数"均摊后求和,避免全连接重复
+        -- 单采购单→单包裹: payment_amount/1 = payment_amount (不变)
+        -- 单采购单→N包裹(拼单): payment_amount/N,每包得1/N,合计不超 payment_amount
+        -- M采购单全连接N包裹: 每包得 SUM(payment_amount)/N,合计=SUM(不重复)
+        (SELECT SUM(pur.payment_amount * 1.0 / (SELECT COUNT(*) FROM miaoshou_package_purchase_map m2 WHERE m2.purchase_id = pur.id))
+         FROM miaoshou_purchase pur JOIN miaoshou_package_purchase_map m ON m.purchase_id = pur.id WHERE m.package_id = mp.id) AS ms_purchase_amount,
         (SELECT o.status FROM op_package op JOIN op_ozon_order o ON o.id = op.ozon_order_id WHERE op.logistics_no = mp.posting_number) AS local_ozon_status,
-        (SELECT COUNT(*) FROM miaoshou_purchase pur WHERE pur.miaoshou_package_id = mp.id) AS purchase_count
+        (SELECT COUNT(*) FROM miaoshou_package_purchase_map m WHERE m.package_id = mp.id) AS purchase_count
        FROM miaoshou_package mp
        ${whereSql}
        ORDER BY mp.synced_at DESC
@@ -292,7 +310,11 @@ export function getMiaoshouPackageDetail(id) {
 
   const purchases = db
     .prepare(
-      `SELECT * FROM miaoshou_purchase WHERE miaoshou_package_id = ? ORDER BY synced_at DESC`
+      `SELECT pur.*, m.synced_at AS map_synced_at
+       FROM miaoshou_purchase pur
+       JOIN miaoshou_package_purchase_map m ON m.purchase_id = pur.id
+       WHERE m.package_id = ?
+       ORDER BY m.synced_at DESC`
     )
     .all(id)
     .map((po) => {

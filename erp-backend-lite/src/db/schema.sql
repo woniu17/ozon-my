@@ -1152,3 +1152,16 @@ CREATE TABLE IF NOT EXISTS miaoshou_purchase (
 CREATE INDEX IF NOT EXISTS idx_ms_pur_pkg ON miaoshou_purchase(miaoshou_package_id);
 CREATE INDEX IF NOT EXISTS idx_ms_pur_sn ON miaoshou_purchase(purchase_sn);
 
+-- 妙手包裹 ↔ 采购单 多对多关联表(2026-09)
+-- 根因修复:一个拼多多/1688 采购单可能拆分对应多个妙手包裹(拼单场景),
+-- 原设计在 miaoshou_purchase.miaoshou_package_id 上加 UNIQUE(platform, purchase_sn)
+-- + ON CONFLICT DO UPDATE SET miaoshou_package_id 会导致后入库包裹覆盖前者的关联。
+-- 此中间表表达多对多关系;miaoshou_purchase.miaoshou_package_id 列保留但不再依赖。
+CREATE TABLE IF NOT EXISTS miaoshou_package_purchase_map (
+  package_id  INTEGER NOT NULL REFERENCES miaoshou_package(id) ON DELETE CASCADE,
+  purchase_id INTEGER NOT NULL REFERENCES miaoshou_purchase(id) ON DELETE CASCADE,
+  synced_at   TEXT NOT NULL,
+  PRIMARY KEY (package_id, purchase_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ms_map_pur ON miaoshou_package_purchase_map(purchase_id);
+

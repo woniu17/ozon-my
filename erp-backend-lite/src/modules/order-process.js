@@ -598,12 +598,14 @@ router.get('/admin/api/order-process/miaoshou-list', (req, res, next) => {
       }
     }
     for (const p of data.packages) {
-      // 采购金额兜底链:妙手采购单合计 → 妙手算好的采购价(orderPackageAmountDetail.CNYPurchasePrice)→ 本地录入
-      // (手工单 other 平台采购单 payment 恒 null,须靠包裹级 purchase_amount 兜底)
-      const msSum = p.ms_purchase_amount != null ? Number(p.ms_purchase_amount) : null;
-      p.purchase_amount = msSum > 0
-        ? msSum
-        : (p.purchase_amount != null ? Number(p.purchase_amount) : (Number(p.total_purchase_amount) || 0));
+      // 采购金额兜底链:分摊值(每采购单按关联包裹数均摊,避免全连接重复) → 妙手包裹级 purchase_amount → 本地录入
+      // (拼单 1对N:分摊值=payment/N,合计不重复;妙手值有时偏低如4包3单场景)
+      // (手工单 other 无采购单关联,须靠妙手 purchase_amount 兜底)
+      const msShared = p.ms_purchase_amount != null ? Number(p.ms_purchase_amount) : null;
+      const pkgAmount = p.purchase_amount != null ? Number(p.purchase_amount) : null;
+      p.purchase_amount = msShared > 0
+        ? msShared
+        : (pkgAmount > 0 ? pkgAmount : (Number(p.total_purchase_amount) || 0));
       p.profit = computeProfit({
         orderAmount: p.order_amount,
         totalPurchaseAmount: p.purchase_amount,
