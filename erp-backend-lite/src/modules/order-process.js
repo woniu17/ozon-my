@@ -108,8 +108,8 @@ function computeProfit(pkg, cancelled = false) {
       escrow: a.payout,
       profit,
       // 已取消订单收入为 0,利润率无意义不显示
-      profitRateCost: cancelled ? null : (purchase > 0 ? round2((profit / purchase) * 1000) / 10 : null),
-      profitRateSale: cancelled ? null : (orderAmount > 0 ? round2((profit / orderAmount) * 1000) / 10 : null),
+      profitRateCost: cancelled ? null : (purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null),
+      profitRateSale: cancelled ? null : (orderAmount > 0 ? Math.round((profit / orderAmount) * 10000) / 100 : null),
       rubRate: a.rate,
       payoutRub: round2(a.saleRub + a.totalRub),
     };

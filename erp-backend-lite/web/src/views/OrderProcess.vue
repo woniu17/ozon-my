@@ -1177,6 +1177,12 @@ function fmtMoney(n) {
   return '¥' + Number(n).toFixed(2);
 }
 
+// 利润率格式化:null 返回 —;后端 computeProfit 已 ×10000/100 转为百分数(如 23.45)
+function fmtRate(n) {
+  if (n == null) return '—';
+  return Number(n).toFixed(2) + '%';
+}
+
 function fmtTime(t) {
   if (!t) return '—';
   const d = new Date(t);
@@ -1513,18 +1519,21 @@ onUnmounted(() => {
               <div class="sub muted">{{ pkg.buyerName || '—' }} {{ pkg.buyerCity ? '· ' + pkg.buyerCity : '' }}</div>
             </td>
             <td class="col-amount">
-              <div>订单 {{ fmtMoney(pkg.orderAmount) }}</div>
-              <div>采购 <span :class="{ 'muted': !pkg.totalPurchaseAmount }">{{ fmtMoney(pkg.totalPurchaseAmount) }}</span></div>
+              <!-- 金额列:名称左对齐、数字右对齐(amt-row flex);利润率单独两行 -->
+              <div class="amt-row"><span class="amt-name">订单</span><span class="amt-val">{{ fmtMoney(pkg.orderAmount) }}</span></div>
+              <div class="amt-row"><span class="amt-name">采购</span><span class="amt-val" :class="{ muted: !pkg.totalPurchaseAmount }">{{ fmtMoney(pkg.totalPurchaseAmount) }}</span></div>
               <!-- 代理佣金:有应计=66 类型实扣换算;已取消=0(不估算);其余=16% 预估(标"估") -->
-              <div class="sub muted" :title="agentFeeTitle(pkg)">{{ pkg.accrual || isCancelled(pkg) ? '代理佣金' : '代理佣金(估)' }} {{ fmtMoney(pkg.accrual?.agentFee ?? pkg.profit?.commission) }}</div>
+              <div class="amt-row sub muted" :title="agentFeeTitle(pkg)"><span class="amt-name">{{ pkg.accrual || isCancelled(pkg) ? '代理佣金' : '代理佣金(估)' }}</span><span class="amt-val">{{ fmtMoney(pkg.accrual?.agentFee ?? pkg.profit?.commission) }}</span></div>
               <!-- 国际配送:仅真实应计口径有值 -->
-              <div class="sub muted" :title="deliveryTitle(pkg)">国际配送 {{ pkg.accrual ? fmtMoney(pkg.accrual.delivery) : '—' }}</div>
+              <div class="amt-row sub muted" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送</span><span class="amt-val">{{ pkg.accrual ? fmtMoney(pkg.accrual.delivery) : '—' }}</span></div>
               <!-- 其它费用:销售佣金/星星商品/逆向物流等,= 应计合计 − 代理 − 配送 -->
-              <div class="sub muted" :title="othersTitle(pkg)">其它费用 {{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</div>
-              <div :class="pkg.profit?.profit > 0 ? 'profit-pos' : (pkg.profit?.profit < 0 ? 'profit-neg' : 'muted')" :title="profitTitle(pkg)">
-                {{ profitLabel(pkg) }} {{ fmtMoney(pkg.profit?.profit) }}
-                <span v-if="pkg.profit?.profitRateSale != null" class="sub">({{ Number(pkg.profit.profitRateSale).toFixed(2) }}%)</span>
+              <div class="amt-row sub muted" :title="othersTitle(pkg)"><span class="amt-name">其它费用</span><span class="amt-val">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</span></div>
+              <div class="amt-row" :title="profitTitle(pkg)">
+                <span class="amt-name sub">{{ profitLabel(pkg) }}</span>
+                <span class="amt-val" :class="pkg.profit?.profit > 0 ? 'profit-pos' : (pkg.profit?.profit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(pkg.profit?.profit) }}</span>
               </div>
+              <div class="amt-row sub muted" title="销售利润率 = 利润 / 订单金额"><span class="amt-name">销售利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateSale) }}</span></div>
+              <div class="amt-row sub muted" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateCost) }}</span></div>
             </td>
             <td class="col-purchase">
               <div v-if="!pkg.purchaseLinks?.length" class="muted">未录入</div>
@@ -2344,8 +2353,18 @@ a.product-title:hover {
 }
 
 .col-amount {
-  min-width: 120px;
-  text-align: right;
+  min-width: 150px;
+}
+
+/* 金额列行:名称左对齐、数字右对齐 */
+.amt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.amt-row .amt-val {
+  white-space: nowrap;
 }
 
 .col-purchase {
