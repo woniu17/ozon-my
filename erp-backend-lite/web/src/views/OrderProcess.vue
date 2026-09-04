@@ -98,8 +98,12 @@ const purchaseForm = reactive({
   logisticsCompany: '',
   logisticsNo: '',
   note: '',
+  allocMode: 'manual', // 'manual'=手动填金额, 'auto'=按quantity加权自动分摊
   items: [], // [{ itemId, offerId, title, quantity, amount }]
 });
+// auto 模式拼单预览:查询已关联包裹信息(含数量,用于加权分摊预览)
+const lookupResult = ref(null);
+const lookupLoading = ref(false);
 const PLATFORMS = [
   { value: 'other', label: '手工(其他)' },
   { value: '1688', label: '1688' },
@@ -427,6 +431,8 @@ function openPurchase(pkg) {
   purchaseForm.logisticsCompany = '';
   purchaseForm.logisticsNo = '';
   purchaseForm.note = '';
+  purchaseForm.allocMode = 'manual';
+  lookupResult.value = null;
   purchaseForm.items = (pkg.items || []).map((it) => ({
     itemId: it.id,
     offerId: it.offerId,
@@ -445,29 +451,80 @@ function openPurchase(pkg) {
   loadPddOrders();
 }
 
+// ── auto 模式:查询采购单已关联包裹(含数量,用于加权分摊预览) ──
+async function refreshLookup() {
+  const sn = purchaseForm.purchaseSn.trim();
+  if (purchaseForm.platform === 'other' || !sn) {
+    lookupResult.value = null;
+    return;
+  }
+  lookupLoading.value = true;
+  try {
+    const r = await lookupPurchase(purchaseForm.platform, sn);
+    lookupResult.value = r.exists ? r : null;
+  } catch (e) {
+    console.warn('lookupPurchase failed', e);
+    lookupResult.value = null;
+  } finally {
+    lookupLoading.value = false;
+  }
+}
+
+// auto 模式分摊预览计算
+// 公式:每行分摊 = (该行 quantity / Σ所有 auto 关联 quantity) × paymentAmount
+// Σ = 已关联 auto 包裹的数量合计 + 当前包裹各行的数量合计
+const autoPreview = computed(() => {
+  if (purchaseForm.allocMode !== 'auto') return null;
+  const payment = Number(purchaseForm.paymentAmount) || 0;
+  const currentQty = purchaseForm.items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+  // 已关联的 auto 模式包裹数量合计(manual 模式关联不参与加权)
+  const existingAutoQty = (lookupResult.value?.linkedPackages || [])
+    .filter((p) => (p.alloc_modes || '').includes('auto'))
+    .reduce((s, p) => s + (Number(p.quantity) || 0), 0);
+  const sumQty = currentQty + existingAutoQty;
+  if (sumQty === 0) return { items: [], sumQty: 0, payment, currentQty, existingAutoQty };
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const items = purchaseForm.items.map((it) => ({
+    ...it,
+    previewAmount: round2((Number(it.quantity) || 0) * payment / sumQty),
+  }));
+  return { items, sumQty, payment, currentQty, existingAutoQty };
+});
+
+// 切换 allocMode 或输入 purchaseSn 时自动刷新 lookup
+watch(() => purchaseForm.allocMode, (mode) => {
+  if (mode === 'auto') refreshLookup();
+});
+watch(() => purchaseForm.purchaseSn, () => {
+  if (purchaseForm.allocMode === 'auto') refreshLookup();
+});
+
 async function savePurchase() {
   if (purchaseSaving.value) return;
+  const isAuto = purchaseForm.allocMode === 'auto';
   const items = purchaseForm.items
     .map((it) => ({ itemId: it.itemId, amount: Number(it.amount) || 0, quantity: it.quantity }))
     .filter((it) => it.itemId);
-  const hasAmount = items.some((it) => it.amount > 0);
+  // auto 模式:校验 paymentAmount;manual 模式:校验每行 amount
+  const hasAmount = isAuto ? Number(purchaseForm.paymentAmount) > 0 : items.some((it) => it.amount > 0);
   const hasNo = !!purchaseForm.logisticsNo.trim();
   if (!hasAmount && !hasNo) {
-    show('请至少填写采购金额或国内快递单号', 'error');
+    show(isAuto ? '请填写采购总额(按数量自动分摊)' : '请至少填写采购金额或国内快递单号', 'error');
     return;
   }
   // 拼单检测:platform≠other 且 purchaseSn 非空时,查询采购单是否已关联其他包裹
+  // auto 模式下已有 lookupResult(manual 模式实时查询)
   const sn = purchaseForm.purchaseSn.trim();
   if (purchaseForm.platform !== 'other' && sn) {
     try {
-      const r = await lookupPurchase(purchaseForm.platform, sn);
-      if (r.exists && r.linkedPackages?.length) {
+      const r = lookupResult.value || await lookupPurchase(purchaseForm.platform, sn);
+      if (r?.exists && r.linkedPackages?.length) {
         const sum = r.linkedPackages.reduce((s, p) => s + (Number(p.allocated_amount) || 0), 0);
         const lines = r.linkedPackages
-          .map((p) => `  · ${p.package_no} (${p.posting_number}) 分摊 ${fmtMoney(p.allocated_amount)}`)
+          .map((p) => `  · ${p.package_no} (${p.posting_number}) 数量${p.quantity||0} 分摊 ${fmtMoney(p.allocated_amount)}`)
           .join('\n');
         const ok = await confirmStore.ask({
-          message: `采购单 ${sn} 已关联 ${r.linkedPackages.length} 个包裹(分摊合计 ${fmtMoney(sum)}):\n${lines}\n\n本次将追加关联到当前包裹 ${purchaseForm.packageNo},请确认下方分摊金额无误。`,
+          message: `采购单 ${sn} 已关联 ${r.linkedPackages.length} 个包裹(分摊合计 ${fmtMoney(sum)}):\n${lines}\n\n本次将追加关联到当前包裹 ${purchaseForm.packageNo}${isAuto ? '(auto 模式:已关联包裹的分摊金额将按数量重新加权计算)' : ''}。`,
           confirmText: '追加关联',
           danger: true,
         });
@@ -491,6 +548,7 @@ async function savePurchase() {
       logisticsNo: hasNo ? purchaseForm.logisticsNo.trim() : null,
       note: purchaseForm.note.trim() || null,
       items,
+      allocMode: isAuto ? 'auto' : 'manual',
     });
     show('采购信息已提交,包裹已流转到待打单发货', 'success');
     purchaseOpen.value = false;
@@ -1828,18 +1886,45 @@ onUnmounted(() => {
         </div>
 
         <!-- 采购金额(按行填写) -->
-        <div class="form-section-title">订单产品 · 采购金额(按行填写)</div>
+        <!-- 分摊模式切换:手动填金额 / 按数量自动分摊 -->
+        <div class="alloc-mode-row">
+          <span class="form-section-title" style="margin: 0">订单产品 · 采购金额</span>
+          <div class="alloc-mode-toggle">
+            <button class="alloc-btn" :class="{ active: purchaseForm.allocMode === 'manual' }" @click="purchaseForm.allocMode = 'manual'">手动填写</button>
+            <button class="alloc-btn" :class="{ active: purchaseForm.allocMode === 'auto' }" @click="purchaseForm.allocMode = 'auto'">按数量自动分摊</button>
+          </div>
+        </div>
+
+        <!-- auto 模式:总额输入 + 分摊预览 -->
+        <div v-if="purchaseForm.allocMode === 'auto'" class="auto-alloc-section">
+          <div class="form-row">
+            <label>采购总额</label>
+            <input v-model.trim="purchaseForm.paymentAmount" class="filter-input" placeholder="采购单总金额(如 29.21)" />
+            <span v-if="lookupLoading" class="alloc-hint">查询已关联包裹…</span>
+          </div>
+          <div v-if="autoPreview && autoPreview.sumQty > 0" class="alloc-preview-info">
+            <span class="alloc-hint">
+              总数量 {{ autoPreview.sumQty }}(当前 {{ autoPreview.currentQty }}
+              <template v-if="autoPreview.existingAutoQty > 0">+ 已关联 auto {{ autoPreview.existingAutoQty }}</template>)
+              · 每行分摊 = (数量 ÷ {{ autoPreview.sumQty }}) × {{ fmtMoney(autoPreview.payment) }}
+            </span>
+          </div>
+          <div v-if="autoPreview && lookupResult?.linkedPackages?.length" class="alloc-linked-warn">
+            已关联 {{ lookupResult.linkedPackages.length }} 个包裹(auto 模式提交后,已关联 auto 包裹的分摊金额将按数量重新加权计算)
+          </div>
+        </div>
+
         <table class="data-table item-table">
           <thead>
             <tr>
               <th style="width: 260px">产品</th>
               <th>数量</th>
               <th>售价</th>
-              <th style="width: 140px">本次采购金额</th>
+              <th style="width: 140px">{{ purchaseForm.allocMode === 'auto' ? '自动分摊金额' : '本次采购金额' }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="it in purchaseForm.items" :key="it.itemId">
+            <tr v-for="(it, idx) in purchaseForm.items" :key="it.itemId">
               <td>
                 <div class="product-item">
                   <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box">
@@ -1854,7 +1939,12 @@ onUnmounted(() => {
               <td>× {{ it.quantity }}</td>
               <td>{{ fmtMoney(it.price) }}</td>
               <td>
-                <input v-model.trim="it.amount" class="filter-input amount-input" placeholder="0.00" />
+                <!-- manual 模式:可编辑输入 -->
+                <input v-if="purchaseForm.allocMode === 'manual'" v-model.trim="it.amount" class="filter-input amount-input" placeholder="0.00" />
+                <!-- auto 模式:只读预览 -->
+                <span v-else class="alloc-amount-display">
+                  {{ autoPreview && autoPreview.items[idx] ? fmtMoney(autoPreview.items[idx].previewAmount) : '—' }}
+                </span>
               </td>
             </tr>
           </tbody>
@@ -2877,6 +2967,54 @@ a.product-title:hover {
 }
 .rate-updated-at {
   font-size: 11px;
+}
+
+/* 分摊模式切换(auto/manual) */
+.alloc-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 0 8px;
+}
+.alloc-mode-toggle {
+  display: inline-flex;
+  gap: 4px;
+}
+.alloc-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border-color, #d0d5dd);
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-secondary, #667085);
+}
+.alloc-btn.active {
+  background: var(--primary, #2563eb);
+  color: #fff;
+  border-color: var(--primary, #2563eb);
+}
+.auto-alloc-section {
+  margin-bottom: 8px;
+}
+.alloc-preview-info {
+  margin: 4px 0 8px;
+}
+.alloc-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #667085);
+}
+.alloc-linked-warn {
+  font-size: 12px;
+  color: #b54708;
+  background: #fef3c7;
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin: 4px 0 8px;
+}
+.alloc-amount-display {
+  font-weight: 600;
+  color: var(--primary, #2563eb);
 }
 
 

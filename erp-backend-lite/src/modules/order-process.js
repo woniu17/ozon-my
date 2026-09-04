@@ -243,7 +243,8 @@ router.get('/admin/api/order-process/purchase/lookup', (req, res, next) => {
 // body: {
 //   packageId, platform?, purchaseSn?, paymentAmount?, logisticsCompany?, logisticsNo?,
 //   buyerAccount?, sellerName?, note?,
-//   items: [{ itemId, amount, quantity }]
+//   items: [{ itemId, amount, quantity }],
+//   allocMode?: 'manual' | 'auto'  —— manual=手动填金额, auto=按quantity加权自动分摊
 // }
 // 提交即流转:包裹 wait_process → wait_ship(直接待打单发货)
 router.post('/admin/api/order-process/purchase', (req, res, next) => {
@@ -255,8 +256,9 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
     if (items.length === 0) {
       return res.status(400).json({ ok: false, message: '至少填写一行采购金额' });
     }
-    // 校验:金额与快递单号至少有一项(全空无意义)
-    const hasAmount = items.some((it) => Number(it.amount) > 0);
+    const isAuto = b.allocMode === 'auto';
+    // 校验:auto 模式看 paymentAmount(总额按数量加权分摊);manual 看每行 amount
+    const hasAmount = isAuto ? Number(b.paymentAmount) > 0 : items.some((it) => Number(it.amount) > 0);
     const hasLogisticsNo = !!b.logisticsNo;
     if (!hasAmount && !hasLogisticsNo) {
       return res.status(400).json({ ok: false, message: '请填写采购金额或国内快递单号' });
@@ -272,8 +274,9 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
       sellerName: b.sellerName || null,
       note: b.note || null,
       items,
+      allocMode: isAuto ? 'auto' : 'manual',
     });
-    logger.info({ packageId, purchaseOrderId: r.purchaseOrderId }, '[order-process] 采购信息已提交');
+    logger.info({ packageId, purchaseOrderId: r.purchaseOrderId, allocMode: isAuto ? 'auto' : 'manual' }, '[order-process] 采购信息已提交');
     res.json(ok(r));
   } catch (e) {
     next(e);
@@ -612,14 +615,27 @@ router.get('/admin/api/order-process/miaoshou-list', (req, res, next) => {
       }
     }
     for (const p of data.packages) {
-      // 采购金额兜底链:分摊值(每采购单按关联包裹数均摊,避免全连接重复) → 妙手包裹级 purchase_amount → 本地录入
-      // (拼单 1对N:分摊值=payment/N,合计不重复;妙手值有时偏低如4包3单场景)
-      // (手工单 other 无采购单关联,须靠妙手 purchase_amount 兜底)
+      // 采购金额兜底链(2026-09-04 修订):
+      // 1. ms_has_manual(有isAuto=0采购单,用券场景)→ 妙手包裹级(用户已手动纠正)
+      // 2. ms_purchase_amount(quantity 加权分摊值) > 0 → 加权分摊(isAuto=1,多采购单场景)
+      // 3. 妙手包裹级 purchase_amount(手工单 payment=0,或加权分摊为空时回退)
+      // 4. 本地录入 total_purchase_amount(最终兜底)
+      const hasManual = Number(p.ms_has_manual) > 0;
       const msShared = p.ms_purchase_amount != null ? Number(p.ms_purchase_amount) : null;
       const pkgAmount = p.purchase_amount != null ? Number(p.purchase_amount) : null;
-      p.purchase_amount = msShared > 0
-        ? msShared
-        : (pkgAmount > 0 ? pkgAmount : (Number(p.total_purchase_amount) || 0));
+      if (hasManual && pkgAmount > 0) {
+        // 用券场景(isAuto=0):妙手包裹级已被用户手动纠正,可信
+        p.purchase_amount = pkgAmount;
+      } else if (msShared > 0) {
+        // 自动同步(isAuto=1):用 quantity 加权分摊
+        p.purchase_amount = msShared;
+      } else if (pkgAmount > 0) {
+        // 兜底:妙手包裹级(手工单或加权分摊为空)
+        p.purchase_amount = pkgAmount;
+      } else {
+        // 最终兜底:本地录入
+        p.purchase_amount = Number(p.total_purchase_amount) || 0;
+      }
       p.profit = computeProfit({
         orderAmount: p.order_amount,
         totalPurchaseAmount: p.purchase_amount,

@@ -40,6 +40,8 @@ export function upsertMiaoshouOrders(records) {
       if (!r.opOrderPackageId) continue; // 缺主键的记录跳过
 
       // 主表 upsert by op_order_package_id
+      // quantity 从 items 数组提取(订单商品数量,用于采购金额加权分摊)
+      const quantity = (r.items || []).reduce((sum, it) => sum + (Number(it.quantity) || 0), 0);
       db.prepare(
         `INSERT INTO miaoshou_package (
           op_order_package_id, app_package_no, posting_number, shop_id, shop_nick,
@@ -47,8 +49,8 @@ export function upsertMiaoshouOrders(records) {
           gmt_order_start, weighing_weight, note, operate_status, purchase_status,
           app_package_tab, platform_package_status, app_package_status_text,
           purchase_amount, logistics_no, logistics_company, gmt_create, gmt_modified, gmt_delivery,
-          items_json, raw_json, synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          items_json, quantity, raw_json, synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(op_order_package_id) DO UPDATE SET
           app_package_no=excluded.app_package_no,
           posting_number=excluded.posting_number,
@@ -73,6 +75,7 @@ export function upsertMiaoshouOrders(records) {
           gmt_modified=excluded.gmt_modified,
           gmt_delivery=excluded.gmt_delivery,
           items_json=excluded.items_json,
+          quantity=excluded.quantity,
           raw_json=excluded.raw_json,
           synced_at=excluded.synced_at,
           updated_at=datetime('now')`
@@ -102,6 +105,7 @@ export function upsertMiaoshouOrders(records) {
         r.gmtModified || null,
         r.gmtDelivery || null,
         r.items?.length ? JSON.stringify(r.items) : null,
+        quantity,
         r.raw ? JSON.stringify(r.raw) : null,
         now
       );
@@ -116,6 +120,8 @@ export function upsertMiaoshouOrders(records) {
       // 2026-09 修复:采购单按 UNIQUE(platform, purchase_sn) 去重,只更新采购单自身字段;
       // 不再 update miaoshou_package_id(原 ON CONFLICT 会让后入库包裹抢走关联,
       // 拼单场景下另一个包裹会丢采购单)。关联关系全部走中间表 miaoshou_package_purchase_map。
+      // 2026-09-04 修复:对比删除妙手侧已不存在的关联(只增不删导致已取消的关联残留)
+      const returnedPurchaseIds = [];
       for (const po of r.purchases || []) {
         if (!po.purchaseSn || !po.platform) continue; // 缺唯一键的跳过
         const purRes = db.prepare(
@@ -124,8 +130,8 @@ export function upsertMiaoshouOrders(records) {
             platform_name, detail_url,
             buyer_account, seller_name, payment_amount, currency, status,
             purchase_start_time, send_at, logistics_company, logistics_no,
-            last_trace, items_json, raw_json, synced_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            last_trace, items_json, raw_json, is_auto_rsync, synced_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(platform, purchase_sn) DO UPDATE SET
             purchase_order_id=excluded.purchase_order_id,
             platform_name=excluded.platform_name,
@@ -141,6 +147,7 @@ export function upsertMiaoshouOrders(records) {
             last_trace=excluded.last_trace,
             items_json=excluded.items_json,
             raw_json=excluded.raw_json,
+            is_auto_rsync=excluded.is_auto_rsync,
             synced_at=excluded.synced_at,
             updated_at=datetime('now')
           RETURNING id`
@@ -163,19 +170,34 @@ export function upsertMiaoshouOrders(records) {
           po.lastTrace || null,
           po.items?.length ? JSON.stringify(po.items) : null,
           po.raw ? JSON.stringify(po.raw) : null,
+          po.raw?.isAutoRsyncPurchasePayment === '1' || po.raw?.isAutoRsyncPurchasePayment === 1 ? 1 : 0,
           now
         );
         // RETURNING id 兼容 INSERT 与 ON CONFLICT 两条路径,取出真实采购单 id
         const purchaseId = purRes?.id
           ?? db.prepare(`SELECT id FROM miaoshou_purchase WHERE platform=? AND purchase_sn=?`).get(po.platform, po.purchaseSn).id;
         // 中间表 upsert(package_id, purchase_id) — 多对多关联
+        // raw_json 存该包裹采集此采购单时的原始 JSON(每个包裹视角不同,如 platformOrderSn/opOrderPackageId)
         db.prepare(
-          `INSERT INTO miaoshou_package_purchase_map (package_id, purchase_id, synced_at)
-           VALUES (?, ?, ?)
+          `INSERT INTO miaoshou_package_purchase_map (package_id, purchase_id, raw_json, synced_at)
+           VALUES (?, ?, ?, ?)
            ON CONFLICT(package_id, purchase_id) DO UPDATE SET
+             raw_json=excluded.raw_json,
              synced_at=excluded.synced_at`
-        ).run(pkgRow.id, purchaseId, now);
+        ).run(pkgRow.id, purchaseId, po.raw ? JSON.stringify(po.raw) : null, now);
+        returnedPurchaseIds.push(purchaseId);
         purUpserted++;
+      }
+      // 对比删除:删除本地有但妙手侧已不存在的关联(妙手侧取消关联后,重新同步可感知并清除)
+      if (returnedPurchaseIds.length > 0) {
+        const placeholders = returnedPurchaseIds.map(() => '?').join(',');
+        const delRes = db.prepare(
+          `DELETE FROM miaoshou_package_purchase_map
+           WHERE package_id = ? AND purchase_id NOT IN (${placeholders})`
+        ).run(pkgRow.id, ...returnedPurchaseIds);
+        if (delRes.changes > 0) {
+          console.log(`[miaoshou-dao] 包裹 ${r.appPackageNo} 清理 ${delRes.changes} 个妙手侧已删除的采购单关联`);
+        }
       }
     }
 
@@ -229,12 +251,22 @@ export function listMiaoshouPackages(filters = {}) {
         (SELECT op.accrual_total FROM op_package op WHERE op.logistics_no = mp.posting_number) AS accrual_total,
         (SELECT op.accrual_sale_total FROM op_package op WHERE op.logistics_no = mp.posting_number) AS accrual_sale_total,
         (SELECT op.total_purchase_amount FROM op_package op WHERE op.logistics_no = mp.posting_number) AS total_purchase_amount,
-        -- 采购金额分摊:每个采购单按"该采购单关联的包裹数"均摊后求和,避免全连接重复
-        -- 单采购单→单包裹: payment_amount/1 = payment_amount (不变)
-        -- 单采购单→N包裹(拼单): payment_amount/N,每包得1/N,合计不超 payment_amount
-        -- M采购单全连接N包裹: 每包得 SUM(payment_amount)/N,合计=SUM(不重复)
-        (SELECT SUM(pur.payment_amount * 1.0 / (SELECT COUNT(*) FROM miaoshou_package_purchase_map m2 WHERE m2.purchase_id = pur.id))
-         FROM miaoshou_purchase pur JOIN miaoshou_package_purchase_map m ON m.purchase_id = pur.id WHERE m.package_id = mp.id) AS ms_purchase_amount,
+        -- 采购金额分摊:用 quantity(订单商品数量)加权,比均摊更精确
+        -- 每个采购单:该包裹 quantity × payment_amount / Σ(所有关联包裹 quantity)
+        -- purchaseNum=quantity(来自订单商品数量),D场景3/2→68.7/45.8精确分摊
+        -- quantity 都=1时退化为均摊(G场景),不影响总额
+        -- NULLIF 防除0(quantity 全0时返回 NULL,兜底链回退)
+        (SELECT SUM(pur.payment_amount * 1.0 * mp.quantity / NULLIF(
+          (SELECT SUM(mp3.quantity) FROM miaoshou_package_purchase_map m2
+           JOIN miaoshou_package mp3 ON mp3.id = m2.package_id
+           WHERE m2.purchase_id = pur.id), 0))
+         FROM miaoshou_purchase pur
+         JOIN miaoshou_package_purchase_map m ON m.purchase_id = pur.id
+         WHERE m.package_id = mp.id) AS ms_purchase_amount,
+        -- 是否有非自动同步(isAuto=0)的采购单:用券场景,妙手包裹级已被用户手动纠正,可信
+        (SELECT COUNT(*) FROM miaoshou_purchase pur
+         JOIN miaoshou_package_purchase_map m ON m.purchase_id = pur.id
+         WHERE m.package_id = mp.id AND pur.is_auto_rsync = 0) AS ms_has_manual,
         (SELECT o.status FROM op_package op JOIN op_ozon_order o ON o.id = op.ozon_order_id WHERE op.logistics_no = mp.posting_number) AS local_ozon_status,
         (SELECT COUNT(*) FROM miaoshou_package_purchase_map m WHERE m.package_id = mp.id) AS purchase_count
        FROM miaoshou_package mp

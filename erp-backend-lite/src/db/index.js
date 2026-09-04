@@ -132,11 +132,18 @@ async function ensureMigrations() {
     CREATE TABLE IF NOT EXISTS miaoshou_package_purchase_map (
       package_id  INTEGER NOT NULL REFERENCES miaoshou_package(id) ON DELETE CASCADE,
       purchase_id INTEGER NOT NULL REFERENCES miaoshou_purchase(id) ON DELETE CASCADE,
+      raw_json    TEXT,
       synced_at   TEXT NOT NULL,
       PRIMARY KEY (package_id, purchase_id)
     );
     CREATE INDEX IF NOT EXISTS idx_ms_map_pur ON miaoshou_package_purchase_map(purchase_id);
   `);
+  // 2026-09-04: 旧库补 raw_json 列(CREATE TABLE IF NOT EXISTS 不会更新已存在的表结构)
+  const mapCols = db.prepare(`PRAGMA table_info(miaoshou_package_purchase_map)`).all();
+  if (mapCols.length > 0 && !mapCols.some((c) => c.name === 'raw_json')) {
+    db.exec(`ALTER TABLE miaoshou_package_purchase_map ADD COLUMN raw_json TEXT`);
+    console.log('[db] migration: added column miaoshou_package_purchase_map.raw_json');
+  }
   // 一次性回填:把 miaoshou_purchase 现存的 miaoshou_package_id(legacy 列)作为一条关联写入中间表。
   // 让历史包裹(原本被 ON CONFLICT 覆盖丢失)的"最后赢家"包裹保留关联;
   // 被覆盖丢失的关联需要重新从妙手同步一次才能补回(upsert 已改造为新逻辑)。
@@ -154,6 +161,56 @@ async function ensureMigrations() {
       `[db] migration: backfilled ${backfill.changes} rows into miaoshou_package_purchase_map from legacy column`
     );
   }
+  // 2026-09-04: miaoshou_package.quantity 订单商品数量(从 items_json 提取,用于采购金额加权分摊)
+  {
+    const cols = db.prepare(`PRAGMA table_info(miaoshou_package)`).all();
+    if (cols.length > 0 && !cols.some((c) => c.name === 'quantity')) {
+      db.exec(`ALTER TABLE miaoshou_package ADD COLUMN quantity INTEGER DEFAULT 0`);
+      console.log('[db] migration: added column miaoshou_package.quantity');
+    }
+    // 回填 quantity:从 items_json 提取 quantity 之和
+    const qtyRows = db
+      .prepare(`SELECT id, items_json FROM miaoshou_package WHERE items_json IS NOT NULL AND length(items_json) > 0 AND (quantity IS NULL OR quantity = 0)`)
+      .all();
+    for (const r of qtyRows) {
+      try {
+        const items = JSON.parse(r.items_json);
+        if (Array.isArray(items)) {
+          const qty = items.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0);
+          if (qty > 0) {
+            db.prepare(`UPDATE miaoshou_package SET quantity = ? WHERE id = ?`).run(qty, r.id);
+          }
+        }
+      } catch {}
+    }
+    if (qtyRows.length > 0) {
+      console.log(`[db] backfill: updated quantity for ${qtyRows.length} miaoshou_package rows`);
+    }
+  }
+  // 2026-09-04: miaoshou_purchase.is_auto_rsync 是否自动同步采购金额(1=自动,0=用券需手动纠正)
+  const msPurCols2 = db.prepare(`PRAGMA table_info(miaoshou_purchase)`).all();
+  if (msPurCols2.length > 0 && !msPurCols2.some((c) => c.name === 'is_auto_rsync')) {
+    db.exec(`ALTER TABLE miaoshou_purchase ADD COLUMN is_auto_rsync INTEGER DEFAULT 1`);
+    console.log('[db] migration: added column miaoshou_purchase.is_auto_rsync');
+    // 回填:从 raw_json 提取 isAutoRsyncPurchasePayment
+    const autoRows = db
+      .prepare(`SELECT id, raw_json FROM miaoshou_purchase WHERE raw_json IS NOT NULL AND length(raw_json) > 0`)
+      .all();
+    for (const r of autoRows) {
+      try {
+        const raw = JSON.parse(r.raw_json);
+        const isAuto = raw.isAutoRsyncPurchasePayment;
+        if (isAuto != null) {
+          db.prepare(`UPDATE miaoshou_purchase SET is_auto_rsync = ? WHERE id = ?`).run(
+            isAuto === '1' || isAuto === 1 ? 1 : 0, r.id
+          );
+        }
+      } catch {}
+    }
+    if (autoRows.length > 0) {
+      console.log(`[db] backfill: updated is_auto_rsync for ${autoRows.length} miaoshou_purchase rows`);
+    }
+  }
   // 2026-09: op_package 应计冗余列(应计合计/销售收入合计/最近拉取时间)
   // NULL 语义:accrual_total NULL=拉过但 Ozon 尚未生成应计(24h 重试窗口)
   const opPkgCols = db.prepare(`PRAGMA table_info(op_package)`).all();
@@ -169,6 +226,29 @@ async function ensureMigrations() {
     if (!opPkgCols.some((c) => c.name === 'accrual_synced_at')) {
       db.exec(`ALTER TABLE op_package ADD COLUMN accrual_synced_at TEXT`);
       console.log('[db] migration: added column op_package.accrual_synced_at');
+    }
+  }
+  // 2026-09-04: op_purchase_link.alloc_mode 分摊模式(manual=手动填金额,auto=按数量自动分摊)
+  {
+    const plCols = db.prepare(`PRAGMA table_info(op_purchase_link)`).all();
+    if (plCols.length > 0 && !plCols.some((c) => c.name === 'alloc_mode')) {
+      db.exec(`ALTER TABLE op_purchase_link ADD COLUMN alloc_mode TEXT DEFAULT 'manual'`);
+      console.log('[db] migration: added column op_purchase_link.alloc_mode');
+    }
+    // 回填 alloc_mode='manual'(旧数据都是手动模式)
+    db.exec(`UPDATE op_purchase_link SET alloc_mode='manual' WHERE alloc_mode IS NULL`);
+    // 回填 quantity(若空,从 op_ozon_order_item.quantity 取)
+    const qtyRows = db.prepare(`
+      SELECT pl.id, oi.quantity
+      FROM op_purchase_link pl
+      JOIN op_ozon_order_item oi ON oi.id = pl.ozon_order_item_id
+      WHERE (pl.quantity IS NULL OR pl.quantity = 0) AND oi.quantity IS NOT NULL AND oi.quantity > 0
+    `).all();
+    for (const r of qtyRows) {
+      db.prepare(`UPDATE op_purchase_link SET quantity = ? WHERE id = ?`).run(r.quantity, r.id);
+    }
+    if (qtyRows.length > 0) {
+      console.log(`[db] backfill: updated quantity for ${qtyRows.length} op_purchase_link rows`);
     }
   }
   // collect_queue_tasks:增加 duration 列(SW result 接口上报任务耗时)

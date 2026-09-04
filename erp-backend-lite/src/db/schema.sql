@@ -1006,6 +1006,7 @@ CREATE TABLE IF NOT EXISTS op_purchase_link (
   ozon_order_item_id INTEGER REFERENCES op_ozon_order_item(id), -- 可空=包裹级关联
   allocated_amount  REAL DEFAULT 0,             -- 分摊采购金额
   quantity          INTEGER DEFAULT 0,
+  alloc_mode        TEXT DEFAULT 'manual',     -- 分摊模式:manual=手动填金额,auto=按数量自动分摊
   gmt_create        TEXT,
   UNIQUE(purchase_order_id, package_id, ozon_order_item_id)
 );
@@ -1116,6 +1117,7 @@ CREATE TABLE IF NOT EXISTS miaoshou_package (
   gmt_modified        TEXT,                   -- 妙手修改时间
   gmt_delivery          TEXT,                   -- 发货时间
   items_json            TEXT,                   -- 商品信息 JSON(图/标题/SKU/数量/单价,对齐订单处理页展示)
+  quantity              INTEGER DEFAULT 0,     -- 订单商品数量(从 items_json 提取,用于采购金额加权分摊)
   raw_json            TEXT,                   -- 主列表 API 原始响应(审计/补字段)
   synced_at           TEXT NOT NULL,          -- 本次同步时间
   updated_at          TEXT DEFAULT (datetime('now'))
@@ -1145,6 +1147,7 @@ CREATE TABLE IF NOT EXISTS miaoshou_purchase (
   logistics_no          TEXT,                    -- 国内物流单号
   last_trace            TEXT,                    -- 最新物流轨迹
   raw_json              TEXT,
+  is_auto_rsync        INTEGER DEFAULT 1,     -- 是否自动同步采购金额(1=自动,0=用券需手动纠正,影响分摊取值)
   synced_at             TEXT NOT NULL,
   updated_at            TEXT DEFAULT (datetime('now')),
   UNIQUE(platform, purchase_sn)                 -- 防重复
@@ -1157,9 +1160,11 @@ CREATE INDEX IF NOT EXISTS idx_ms_pur_sn ON miaoshou_purchase(purchase_sn);
 -- 原设计在 miaoshou_purchase.miaoshou_package_id 上加 UNIQUE(platform, purchase_sn)
 -- + ON CONFLICT DO UPDATE SET miaoshou_package_id 会导致后入库包裹覆盖前者的关联。
 -- 此中间表表达多对多关系;miaoshou_purchase.miaoshou_package_id 列保留但不再依赖。
+-- raw_json 存该包裹采集此采购单时的原始 JSON(每个包裹视角不同,如 platformOrderSn/opOrderPackageId)
 CREATE TABLE IF NOT EXISTS miaoshou_package_purchase_map (
   package_id  INTEGER NOT NULL REFERENCES miaoshou_package(id) ON DELETE CASCADE,
   purchase_id INTEGER NOT NULL REFERENCES miaoshou_purchase(id) ON DELETE CASCADE,
+  raw_json    TEXT,
   synced_at   TEXT NOT NULL,
   PRIMARY KEY (package_id, purchase_id)
 );
