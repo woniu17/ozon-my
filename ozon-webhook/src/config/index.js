@@ -28,8 +28,10 @@ const config = {
   ipWhitelistEnabled: String(process.env.IP_WHITELIST_ENABLED ?? 'true') === 'true',
 
   // 飞书机器人(订单相关通知推送),留空则跳过
+  // 货件取消走独立机器人,新订单/货件状态变更走另一机器人
   feishu: {
-    webhookUrl: process.env.FEISHU_WEBHOOK_URL || '',
+    webhookUrlCancel: process.env.FEISHU_WEBHOOK_URL_CANCEL || '',
+    webhookUrlNew: process.env.FEISHU_WEBHOOK_URL_NEW || '',
   },
 
   // Poller

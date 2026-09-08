@@ -1,5 +1,6 @@
 // Webhook 接收端点:POST /webhook/ozon
-// 5 秒内必须返回;只做"鉴权→落库→回 200",真正业务由 poller 异步处理
+// 5 秒内必须返回;只做"鉴权→回 200",raw_payload 落 ozon_push_events 表用 setImmediate 异步执行
+// 真正业务(handler 更新 ozon_postings / OPI 回拉 / 推飞书)由 poller 异步消费
 import Router from '@koa/router';
 import config from '../config/index.js';
 import { insertEvent } from '../db/dao/event-dao.js';
@@ -39,25 +40,34 @@ router.post('/webhook/ozon', async (ctx) => {
     return;
   }
 
-  // 落库(命中重复直接返回 200,避免 Ozon 重试计数)
+  // 提取索引字段 + 序列化 raw_payload(避免异步执行时 payload 被后续中间件修改)
   const fields = extractIndexFields(messageType, payload);
-  const result = insertEvent({
-    message_type: messageType,
-    idempotency_key: idempotencyKey,
-    seller_id: fields.seller_id,
-    posting_number: fields.posting_number,
-    product_id: fields.product_id,
-    sku: fields.sku,
-    chat_id: fields.chat_id,
-    order_number: fields.order_number,
-    raw_payload: JSON.stringify(payload),
+  const rawPayload = JSON.stringify(payload);
+
+  // 异步落库:不 await,失败仅记录日志,不影响 200 响应
+  // 风险:服务进程在 setImmediate 触发前崩溃会导致事件丢失(Ozon 已收到 200 不会重试)
+  setImmediate(() => {
+    try {
+      const result = insertEvent({
+        message_type: messageType,
+        idempotency_key: idempotencyKey,
+        seller_id: fields.seller_id,
+        posting_number: fields.posting_number,
+        product_id: fields.product_id,
+        sku: fields.sku,
+        chat_id: fields.chat_id,
+        order_number: fields.order_number,
+        raw_payload: rawPayload,
+      });
+      if (!result.inserted) {
+        logger.info({ messageType, idempotencyKey }, '重复推送,幂等返回(异步落库)');
+      }
+    } catch (err) {
+      logger.error({ err, messageType, idempotencyKey }, '异步落库失败:事件可能丢失');
+    }
   });
 
-  if (!result.inserted) {
-    logger.info({ messageType, idempotencyKey }, '重复推送,幂等返回');
-  }
-
-  // 立即返回 200,不等 poller 处理
+  // 立即返回 200,不等落库完成
   ctx.body = { result: true };
 });
 

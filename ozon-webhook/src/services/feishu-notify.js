@@ -19,12 +19,12 @@ function formatSeller(sellerId) {
 /**
  * 发送飞书文本消息(自动追加来源标识)
  * @param {string} text 消息内容
+ * @param {string} url 飞书机器人 webhook URL,留空则跳过
  * @returns {Promise<boolean>} 是否发送成功
  */
-export async function sendFeishuText(text) {
-  const url = config.feishu.webhookUrl;
+export async function sendFeishuText(text, url) {
   if (!url) {
-    logger.warn('feishu-notify: 未配置 FEISHU_WEBHOOK_URL,跳过推送');
+    logger.warn('feishu-notify: 未配置 webhook URL,跳过推送');
     return false;
   }
   try {
@@ -104,5 +104,12 @@ export async function notifyPostingEvent(messageType, payload) {
     extra,
   ].filter(Boolean).join('\n');
 
-  await sendFeishuText(text);
+  // 按消息类型路由到不同飞书机器人:
+  // TYPE_POSTING_CANCELLED → 货件取消机器人
+  // TYPE_NEW_POSTING / TYPE_STATE_CHANGED → 新订单/货件机器人
+  const url = messageType === 'TYPE_POSTING_CANCELLED'
+    ? config.feishu.webhookUrlCancel
+    : config.feishu.webhookUrlNew;
+
+  await sendFeishuText(text, url);
 }
