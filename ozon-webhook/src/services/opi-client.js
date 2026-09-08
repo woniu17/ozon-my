@@ -1,5 +1,5 @@
 // OPI 客户端:回拉订单详情(TYPE_NEW_POSTING 用)
-// 封装 /v3/posting/fbs/get
+// 封装 /v3/posting/fbs/get、/v4/posting/fbs/unfulfilled/list
 // 多店铺凭据:从 payload.seller_id 路由到对应 store.sync_credentials
 // 项目记忆约定:OPI 连接超时使用 { details: { kind: 'connect_timeout' } } 抛 AppError 触发重试
 import { request } from 'undici';
@@ -7,7 +7,8 @@ import config from '../config/index.js';
 import { AppError } from '../middleware/error.js';
 import logger from '../middleware/log.js';
 
-const REQUEST_TIMEOUT_MS = 10000; // 10s,OPI 单请求超时
+// OPI 单请求超时:headers/body 各 30s,覆盖列表接口(/v4/unfulfilled/list)单页 100 条数据传输 + 解析时间
+const REQUEST_TIMEOUT_MS = 30000;
 const MAX_RETRY = 2; // 偶发抖动重试 2 次
 
 async function opiRequest(store, path, body) {
@@ -23,8 +24,6 @@ async function opiRequest(store, path, body) {
   let lastErr = null;
 
   for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
       const resp = await request(url, {
         method: 'POST',
@@ -34,7 +33,10 @@ async function opiRequest(store, path, body) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        // undici 原生超时:headersTimeout 控制首字节,bodyTimeout 控制整体 body 读取
+        // 比 AbortController 更精确,不会误杀慢响应(JSON 解析与分块传输不会计入超时)
+        headersTimeout: REQUEST_TIMEOUT_MS,
+        bodyTimeout: REQUEST_TIMEOUT_MS,
       });
 
       if (resp.statusCode >= 500) {
@@ -57,15 +59,22 @@ async function opiRequest(store, path, body) {
       }
       return await resp.body.json();
     } catch (err) {
+      // undici 超时抛 HeadersTimeoutError / BodyTimeoutError / ConnectTimeoutError
       // 连接超时/中止:按项目记忆用 connect_timeout 标识触发上层重试
-      if (err.name === 'AbortError' || err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT') {
+      const isTimeoutErr = err.name === 'HeadersTimeoutError'
+        || err.name === 'BodyTimeoutError'
+        || err.name === 'ConnectTimeoutError'
+        || err.name === 'AbortError'
+        || err.code === 'ECONNRESET'
+        || err.code === 'ETIMEDOUT';
+      if (isTimeoutErr) {
         lastErr = new AppError({
           status: 504,
           code: 'ERROR_UNKNOWN',
           message: `OPI 连接超时: ${err.message}`,
           details: { kind: 'connect_timeout' },
         });
-        logger.warn({ storeId: store.id, path, attempt, err: err.message }, 'OPI 连接超时,重试');
+        logger.warn({ storeId: store.id, path, attempt, errName: err.name, err: err.message }, 'OPI 连接超时,重试');
         continue;
       }
       // AppError 直接抛出(让 poller 决定重试)
@@ -76,8 +85,6 @@ async function opiRequest(store, path, body) {
         continue;
       }
       throw err;
-    } finally {
-      clearTimeout(timer);
     }
   }
   throw lastErr || new AppError({ status: 504, code: 'ERROR_UNKNOWN', message: 'OPI 重试上限' });

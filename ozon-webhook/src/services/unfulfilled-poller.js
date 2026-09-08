@@ -80,6 +80,7 @@ function extractSaleAmountRub(posting) {
 /**
  * 单店翻页拉取未妥投货件,返回 postings 数组
  * 同时返回"当日下单"的 postings 子集,用于销售汇总
+ * 翻页中途失败:返回已拉到的部分数据(不丢),仅记录 warn 日志
  */
 async function fetchStorePostings(store) {
   const now = new Date();
@@ -112,10 +113,15 @@ async function fetchStorePostings(store) {
       }
     } while (cursor);
   } catch (err) {
-    logger.warn({ storeId: store.id, err: err.message }, 'unfulfilled-poller: 拉取失败,跳过该店');
-    return { all: [], today: [] };
+    // 翻页中途失败:保留已拉到的部分数据(可能是前几页),今日统计部分可信
+    // 不抛出,让上层用部分数据继续聚合
+    logger.warn(
+      { storeId: store.id, pages, got: all.length, todayGot: todayPostings.length, err: err.message },
+      'unfulfilled-poller: 翻页中途失败,保留已拉到的部分数据',
+    );
+    return { all, today: todayPostings, partial: true };
   }
-  return { all, today: todayPostings };
+  return { all, today: todayPostings, partial: false };
 }
 
 /**
