@@ -9,6 +9,7 @@ import { ipWhitelist } from './middleware/ip-whitelist.js';
 import { errorHandler } from './middleware/error.js';
 import webhookRoutes from './modules/webhook.js';
 import { startEventPoller, stopEventPoller } from './services/event-poller.js';
+import { startUnfulfilledPoller, stopUnfulfilledPoller } from './services/unfulfilled-poller.js';
 import { loadStores, getStoresMeta } from './services/store-loader.js';
 
 // 初始化 DB schema
@@ -45,12 +46,15 @@ const server = app.listen(config.port, () => {
   );
   // 启动 Event Poller(异步消费已落库事件)
   startEventPoller();
+  // 启动 Unfulfilled Poller(每2分钟兜底扫描 /v4/posting/fbs/unfulfilled/list 发现漏推货件)
+  startUnfulfilledPoller();
 });
 
 // 优雅退出
 function shutdown(signal) {
   logger.info({ signal }, '收到退出信号,正在关闭...');
   stopEventPoller();
+  stopUnfulfilledPoller();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);

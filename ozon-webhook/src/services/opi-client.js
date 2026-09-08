@@ -96,3 +96,25 @@ export async function getPostingDetail(store, postingNumber) {
   });
   return data?.result ?? null;
 }
+
+/**
+ * 拉取 FBS 未妥投货件列表(主增量源)
+ * POST /v4/posting/fbs/unfulfilled/list
+ * @param {object} store 店铺对象
+ * @param {object} opts
+ * @param {string} [opts.cutoffFrom] ISO 截止备货起始时间
+ * @param {string} [opts.cutoffTo]   ISO 截止备货结束时间
+ * @param {string} [opts.cursor]     分页游标
+ * @param {number} [opts.limit=100]  每页数量(实测上限 100)
+ * @returns {Promise<{postings:Array, cursor:string, has_next:boolean, count:number}>}
+ */
+export async function postingFbsUnfulfilledList(store, { cutoffFrom, cutoffTo, cursor, limit = 100 } = {}) {
+  const body = {
+    filter: { cutoff_from: cutoffFrom, cutoff_to: cutoffTo },
+    limit,
+    with: { analytics_data: true, financial_data: true },
+  };
+  if (cursor) body.cursor = cursor;
+  const data = await opiRequest(store, '/v4/posting/fbs/unfulfilled/list', body);
+  return data?.result ?? { postings: [], cursor: '', has_next: false, count: 0 };
+}

@@ -113,3 +113,46 @@ export async function notifyPostingEvent(messageType, payload) {
 
   await sendFeishuText(text, url);
 }
+
+/**
+ * 推送"unfulfilled-poller 发现的新货件"通知到飞书
+ * 复用 TYPE_NEW_POSTING 内容格式,并追加当日各店铺销售汇总
+ * @param {object} store  店铺对象
+ * @param {object} posting OPI /v4/posting/fbs/unfulfilled/list 返回的单条 posting
+ * @param {string} todaySummaryLines 当日销售汇总文本块(由 unfulfilled-poller 构造)
+ */
+export async function notifyNewPostingDiscovered(store, posting, todaySummaryLines) {
+  const postingNumber = posting.posting_number ?? '-';
+  const sellerId = Number(store.company_id);
+  const sellerName = store.name ?? String(sellerId);
+  const isQc = typeof postingNumber === 'string'
+    && (postingNumber.startsWith('02131') || postingNumber.startsWith('024785'));
+
+  // 02131/024785 开头的货件号为质检单,其余为新订单
+  // 标题加 [兜底] 前缀,与 Ozon 实时推送区分,方便运营识别漏推场景
+  const title = `[兜底${isQc ? '新质检单' : '新订单'}] [${sellerName}] [${postingNumber}]`;
+  const products = Array.isArray(posting.products) ? posting.products : [];
+  const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
+
+  const links = [...new Set(
+    products
+      .filter((p) => p.sku != null)
+      .map((p) => `https://www.ozon.ru/product/${p.sku}`),
+  )];
+
+  const text = [
+    title,
+    `货件号: ${postingNumber}`,
+    `卖家: ${formatSeller(sellerId)}`,
+    `处理时间: ${posting.in_process_at ?? '-'}`,
+    `商品SKU数: ${products.length}`,
+    `商品总件数: ${totalQty}`,
+    links.length ? `商品链接:\n${links.join('\n')}` : null,
+    posting.tracking_number ? `跟踪号: ${posting.tracking_number}` : null,
+    '', // 空行分隔
+    todaySummaryLines,
+  ].filter((v) => v !== null).join('\n');
+
+  // 新订单/货件机器人
+  await sendFeishuText(text, config.feishu.webhookUrlNew);
+}
