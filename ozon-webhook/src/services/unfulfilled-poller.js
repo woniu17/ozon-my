@@ -279,18 +279,27 @@ function loadKnownPostingsFromDb(sellerId) {
 /**
  * 构造"当日各店铺销售汇总"文本块
  * 金额直接显示 CNY(OPI 返回的金额本身就是人民币,无需换算)
+ * 订单数前导空格对齐到 2 位,金额整数部分前导空格对齐到 4 位(小数固定 2 位)
  * @param {Map<number, {storeName, sellerId, orderCount, saleCny}>} bySeller
  * @param {{orderCount, saleCny}} total
  * @returns {string}
  */
 function buildTodaySummaryLines(bySeller, total) {
+  // 订单数最多2位,前导空格对齐:" 1" / "10"
+  const padOrder = (n) => String(n).padStart(2, ' ');
+  // 金额整数部分最多4位,前导空格对齐,小数固定2位:"  25.00" / "1000.00"
+  const padAmount = (cny) => {
+    const fixed = Number(cny).toFixed(2);
+    const [intPart, decPart] = fixed.split('.');
+    return `${intPart.padStart(4, ' ')}.${decPart}`;
+  };
   const lines = [];
   lines.push('—— 当日各店铺销售汇总(Asia/Shanghai)——');
   const sorted = Array.from(bySeller.values()).sort((a, b) => a.sellerId - b.sellerId);
   for (const it of sorted) {
-    lines.push(`• ${it.storeName}: 订单 ${it.orderCount} 单 / 销售金额 ${it.saleCny.toFixed(2)} CNY`);
+    lines.push(`• ${it.storeName}: 订单 ${padOrder(it.orderCount)} 单 / 销售金额 ${padAmount(it.saleCny)} CNY`);
   }
-  lines.push(`合计:订单 ${total.orderCount} 单 / 销售金额 ${total.saleCny.toFixed(2)} CNY`);
+  lines.push(`合计:订单 ${padOrder(total.orderCount)} 单 / 销售金额 ${padAmount(total.saleCny)} CNY`);
   return lines.join('\n');
 }
 
