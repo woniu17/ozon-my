@@ -116,7 +116,7 @@ export async function notifyPostingEvent(messageType, payload) {
 
 /**
  * 推送"unfulfilled-poller 发现的新货件"通知到飞书
- * 复用 TYPE_NEW_POSTING 内容格式,并追加当日各店铺销售汇总
+ * 格式与 notifyPostingEvent 的 TYPE_NEW_POSTING 完全一致,仅在末尾标注"(兜底通知)"
  * @param {object} store  店铺对象
  * @param {object} posting OPI /v4/posting/fbs/unfulfilled/list 返回的单条 posting
  * @param {string} todaySummaryLines 当日销售汇总文本块(由 unfulfilled-poller 构造)
@@ -129,8 +129,8 @@ export async function notifyNewPostingDiscovered(store, posting, todaySummaryLin
     && (postingNumber.startsWith('02131') || postingNumber.startsWith('024785'));
 
   // 02131/024785 开头的货件号为质检单,其余为新订单
-  // 标题加 [兜底] 前缀,与 Ozon 实时推送区分,方便运营识别漏推场景
-  const title = `[兜底${isQc ? '新质检单' : '新订单'}] [${sellerName}] [${postingNumber}]`;
+  // 标题与 notifyPostingEvent TYPE_NEW_POSTING 完全一致,便于运营统一识别
+  const title = `[${isQc ? '新质检单' : '新订单'}] [${sellerName}] [${postingNumber}]`;
   const products = Array.isArray(posting.products) ? posting.products : [];
   const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
 
@@ -151,6 +151,7 @@ export async function notifyNewPostingDiscovered(store, posting, todaySummaryLin
     posting.tracking_number ? `跟踪号: ${posting.tracking_number}` : null,
     '', // 空行分隔
     todaySummaryLines,
+    '(兜底通知)', // 末行标注,与 Ozon 实时推送区分
   ].filter((v) => v !== null).join('\n');
 
   // 新订单/货件机器人

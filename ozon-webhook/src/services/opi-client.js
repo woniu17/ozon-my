@@ -8,7 +8,10 @@ import { AppError } from '../middleware/error.js';
 import logger from '../middleware/log.js';
 
 // OPI 单请求超时:headers/body 各 30s,覆盖列表接口(/v4/unfulfilled/list)单页 100 条数据传输 + 解析时间
+// undici 的 headersTimeout/bodyTimeout 在"对端半开连接"场景可能不触发,
+// 必须用 AbortController 兜底,否则 tick 会无限卡住
 const REQUEST_TIMEOUT_MS = 30000;
+const ABORT_TIMEOUT_MS = 35000;  // AbortController 兜底,比 headersTimeout 晚 5s 触发,优先让 undici 精确超时
 const MAX_RETRY = 2; // 偶发抖动重试 2 次
 
 async function opiRequest(store, path, body) {
@@ -24,6 +27,8 @@ async function opiRequest(store, path, body) {
   let lastErr = null;
 
   for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ABORT_TIMEOUT_MS);
     try {
       const resp = await request(url, {
         method: 'POST',
@@ -33,10 +38,12 @@ async function opiRequest(store, path, body) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
-        // undici 原生超时:headersTimeout 控制首字节,bodyTimeout 控制整体 body 读取
-        // 比 AbortController 更精确,不会误杀慢响应(JSON 解析与分块传输不会计入超时)
+        // 1) undici 原生超时(精确):headersTimeout 控制首字节,bodyTimeout 控制整体 body 读取
         headersTimeout: REQUEST_TIMEOUT_MS,
         bodyTimeout: REQUEST_TIMEOUT_MS,
+        // 2) AbortController 兜底:对端半开连接时,undici 内部超时不触发,
+        //    AbortController 在 35s 强制中断整个请求,防止 tick 无限卡住
+        signal: controller.signal,
       });
 
       if (resp.statusCode >= 500) {
@@ -60,7 +67,8 @@ async function opiRequest(store, path, body) {
       return await resp.body.json();
     } catch (err) {
       // undici 超时抛 HeadersTimeoutError / BodyTimeoutError / ConnectTimeoutError
-      // 连接超时/中止:按项目记忆用 connect_timeout 标识触发上层重试
+      // AbortController 触发抛 AbortError("This operation was aborted")
+      // 连接重置抛 ECONNRESET / ETIMEDOUT
       const isTimeoutErr = err.name === 'HeadersTimeoutError'
         || err.name === 'BodyTimeoutError'
         || err.name === 'ConnectTimeoutError'
@@ -85,6 +93,8 @@ async function opiRequest(store, path, body) {
         continue;
       }
       throw err;
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw lastErr || new AppError({ status: 504, code: 'ERROR_UNKNOWN', message: 'OPI 重试上限' });
@@ -123,5 +133,9 @@ export async function postingFbsUnfulfilledList(store, { cutoffFrom, cutoffTo, c
   };
   if (cursor) body.cursor = cursor;
   const data = await opiRequest(store, '/v4/posting/fbs/unfulfilled/list', body);
-  return data?.result ?? { postings: [], cursor: '', has_next: false, count: 0 };
+  // Ozon /v4/posting/fbs/unfulfilled/list 实测顶层直接是 {postings, cursor, has_next, count},
+  // 不带 result 包裹(与 Swagger 文档不一致)
+  // 兼容两种:优先取 data.result,否则用 data 自身
+  const result = data?.result ?? data;
+  return result ?? { postings: [], cursor: '', has_next: false, count: 0 };
 }

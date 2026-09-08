@@ -33,29 +33,39 @@ function iso(date) {
 }
 
 /**
- * 计算"今日 0 点(Asia/Shanghai)"对应的 UTC ISO
- * Ozon 的 in_process_at 是莫斯科时间 ISO 字符串,直接按字符串切片比对当日
- * 这里用 Shanghai 时区是因为运营按中国时区统计"当天"
+ * 计算"今日 0 点(Asia/Shanghai)"对应的日期串 YYYY-MM-DD
+ * 用于与 in_process_at(UTC ISO)转 Asia/Shanghai 后比对
  */
 function getTodayShDateStr() {
-  const now = new Date();
-  const shParts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(now);
-  const y = shParts.find(p => p.type === 'year').value;
-  const m = shParts.find(p => p.type === 'month').value;
-  const d = shParts.find(p => p.type === 'day').value;
-  return `${y}-${m}-${d}`; // YYYY-MM-DD
+  return getShDateStr(new Date());
 }
 
 /**
- * 从 posting 中提取销售金额(RUB)
+ * 把任意时间(Date 或 ISO 串)按 Asia/Shanghai 时区格式化为 YYYY-MM-DD
+ * in_process_at 是 UTC ISO 字符串(如 "2026-09-08T16:14:02Z"),
+ * 直接 slice(0,10) 取到的是 UTC 日期,不是北京时间日期
+ * (UTC 16:14 = 北京 00:14,应算次日)
+ */
+function getShDateStr(input) {
+  const d = input instanceof Date ? input : new Date(input);
+  if (isNaN(d.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(d);
+  const y = parts.find(p => p.type === 'year').value;
+  const m = parts.find(p => p.type === 'month').value;
+  const day = parts.find(p => p.type === 'day').value;
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * 从 posting 中提取销售金额(CNY,OPI 返回的金额本身就是人民币)
  * 优先 financial_data.posting_totals.price.amount
  * 兜底 financial_data.products[].payout.amount 之和
  * 再兜底 products[].price.amount 之和
  */
-function extractSaleAmountRub(posting) {
+function extractSaleAmountCny(posting) {
   const fd = posting.financial_data || {};
   // 1) posting_totals.price(整单金额)
   const total = fd.posting_totals?.price?.amount;
@@ -99,9 +109,8 @@ async function fetchStorePostings(store) {
       const postings = Array.isArray(resp?.postings) ? resp.postings : [];
       for (const p of postings) {
         all.push(p);
-        // 当日订单判定:in_process_at 字符串前 10 位(YYYY-MM-DD)等于今日
-        const inProcessAt = p?.in_process_at || '';
-        if (inProcessAt.slice(0, 10) === todayStr) {
+        // 当日订单判定:in_process_at 是 UTC ISO,需转 Asia/Shanghai 后比对日期
+        if (getShDateStr(p?.in_process_at) === todayStr) {
           todayPostings.push(p);
         }
       }
@@ -177,22 +186,18 @@ async function tick() {
       return;
     }
 
-    // 跨店聚合:今日订单统计
-    // Map<seller_id, { storeName, orderCount, saleRub }>
+    // 跨店聚合:今日订单统计(OPI 返回金额本身就是 CNY)
+    // Map<seller_id, { storeName, orderCount, saleCny }>
     const todayBySeller = new Map();
-    // 当日所有店总和
-    const todayTotal = { orderCount: 0, saleRub: 0 };
-    // 收集本轮新货件(按发现顺序)
+    const todayTotal = { orderCount: 0, saleCny: 0 };
     const newFindings = [];
 
     for (const store of stores) {
       const { all, today } = await fetchStorePostings(store);
       if (all.length === 0) continue;
 
-      // 比对已知 posting_number,识别新发现
       let known = knownPostingsByStore.get(store.id);
       if (!known) {
-        // 首轮:从 DB 初始化已知集合,把当前 DB 已存在的视为已知,本轮不重复推送
         known = loadKnownPostingsFromDb(store.company_id);
         knownPostingsByStore.set(store.id, known);
       }
@@ -205,7 +210,6 @@ async function tick() {
         }
       }
 
-      // 新货件落库 + 推送飞书
       for (const p of newPostings) {
         persistNewPosting(store, p);
         newFindings.push({ store, posting: p });
@@ -215,15 +219,15 @@ async function tick() {
       const sellerId = Number(store.company_id);
       let agg = todayBySeller.get(sellerId);
       if (!agg) {
-        agg = { storeName: store.name, sellerId, orderCount: 0, saleRub: 0 };
+        agg = { storeName: store.name, sellerId, orderCount: 0, saleCny: 0 };
         todayBySeller.set(sellerId, agg);
       }
       for (const p of today) {
         agg.orderCount++;
-        agg.saleRub += extractSaleAmountRub(p);
+        agg.saleCny += extractSaleAmountCny(p);
       }
       todayTotal.orderCount += today.length;
-      todayTotal.saleRub += today.reduce((s, p) => s + extractSaleAmountRub(p), 0);
+      todayTotal.saleCny += today.reduce((s, p) => s + extractSaleAmountCny(p), 0);
 
       if (newPostings.length > 0) {
         logger.info(
@@ -242,9 +246,12 @@ async function tick() {
           logger.warn({ err: err.message, postingNumber: posting.posting_number }, 'unfulfilled-poller: 飞书通知失败'),
         );
       }
-      logger.info({ totalNew: newFindings.length }, 'unfulfilled-poller: 本轮新货件通知已发送');
+      logger.info({ totalNew: newFindings.length, todayTotal }, 'unfulfilled-poller: 本轮新货件通知已发送');
     } else {
-      logger.debug('unfulfilled-poller: 本轮无新货件');
+      logger.info(
+        { todayTotal, todayBySeller: Array.from(todayBySeller.values()) },
+        'unfulfilled-poller: 本轮无新货件(汇总仍统计)',
+      );
     }
   } catch (err) {
     logger.error({ err }, 'unfulfilled-poller: tick 异常');
@@ -271,19 +278,19 @@ function loadKnownPostingsFromDb(sellerId) {
 
 /**
  * 构造"当日各店铺销售汇总"文本块
- * @param {Map<number, {storeName, sellerId, orderCount, saleRub}>} bySeller
- * @param {{orderCount, saleRub}} total
+ * 金额直接显示 CNY(OPI 返回的金额本身就是人民币,无需换算)
+ * @param {Map<number, {storeName, sellerId, orderCount, saleCny}>} bySeller
+ * @param {{orderCount, saleCny}} total
  * @returns {string}
  */
 function buildTodaySummaryLines(bySeller, total) {
   const lines = [];
   lines.push('—— 当日各店铺销售汇总(Asia/Shanghai)——');
-  // 按 seller_id 排序保证输出稳定
   const sorted = Array.from(bySeller.values()).sort((a, b) => a.sellerId - b.sellerId);
   for (const it of sorted) {
-    lines.push(`• ${it.storeName}: 订单 ${it.orderCount} 单 / 销售金额 ${it.saleRub.toFixed(2)} RUB`);
+    lines.push(`• ${it.storeName}: 订单 ${it.orderCount} 单 / 销售金额 ${it.saleCny.toFixed(2)} CNY`);
   }
-  lines.push(`合计:订单 ${total.orderCount} 单 / 销售金额 ${total.saleRub.toFixed(2)} RUB`);
+  lines.push(`合计:订单 ${total.orderCount} 单 / 销售金额 ${total.saleCny.toFixed(2)} CNY`);
   return lines.join('\n');
 }
 
