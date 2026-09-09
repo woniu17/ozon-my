@@ -653,8 +653,18 @@ onUnmounted(() => {
               <td><span class="tag" :class="poTagCls(po.status)">{{ poStatus(po.status) }}</span></td>
               <td>
                 <div>{{ fmtMoney(po.payment_amount) }}</div>
-                <div v-for="(pi, j) in po.items" :key="j" class="sub muted po-item-line" :title="pi.title || ''">
-                  {{ pi.title || '采购商品' }} · ¥{{ pi.price ?? '—' }} × {{ pi.num }}
+                <div v-for="(pi, j) in po.items" :key="j" class="po-item-line">
+                  <img v-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
+                    referrerpolicy="no-referrer" loading="lazy" class="po-item-img" alt=""
+                    :title="pi.goodsName || pi.title || '采购商品'" />
+                  <div class="po-item-info">
+                    <div class="po-item-title" :title="pi.goodsName || pi.title || ''">
+                      {{ pi.goodsName || pi.title || '采购商品' }}
+                    </div>
+                    <div class="po-item-sub muted">
+                      <span v-if="pi.spec">{{ pi.spec }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}
+                    </div>
+                  </div>
                 </div>
               </td>
               <td>
@@ -1035,9 +1045,39 @@ a.product-title:hover {
 }
 
 .po-item-line {
-  max-width: 200px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--border-color, #eee);
+}
+.po-item-line:last-child {
+  border-bottom: none;
+}
+.po-item-img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  flex: 0 0 48px;
+}
+.po-item-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.po-item-title {
+  font-size: 12px;
+  line-height: 1.3;
+  max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.po-item-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  margin-top: 2px;
 }
 </style>

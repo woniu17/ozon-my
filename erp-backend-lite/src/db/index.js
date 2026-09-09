@@ -270,6 +270,27 @@ async function ensureMigrations() {
       console.log(`[db] backfill: updated quantity for ${qtyRows.length} op_purchase_link rows`);
     }
   }
+  // 2026-09: op_purchase_order.items_json 采购单商品图/规格/数量(订单处理页"补全采购订单信息"写入)
+  // 与妙手表分离:补全入口在订单处理页,数据应归属本地 op_purchase_order,而非妙手镜像
+  {
+    const poCols = db.prepare(`PRAGMA table_info(op_purchase_order)`).all();
+    if (poCols.length > 0 && !poCols.some((c) => c.name === 'items_json')) {
+      db.exec(`ALTER TABLE op_purchase_order ADD COLUMN items_json TEXT`);
+      console.log('[db] migration: added column op_purchase_order.items_json');
+      // 一次性回填:把已存在于 miaoshou_purchase.items_json 的商品数据按 (platform, purchase_sn) 复制过来
+      // 仅回填 op_purchase_order.items_json 为空的行,避免覆盖后续新采集的数据
+      db.exec(`
+        UPDATE op_purchase_order
+        SET items_json = (SELECT ms.items_json FROM miaoshou_purchase ms
+                          WHERE ms.platform = op_purchase_order.platform
+                            AND ms.purchase_sn = op_purchase_order.purchase_sn
+                            AND ms.items_json IS NOT NULL AND length(ms.items_json) > 0)
+        WHERE (items_json IS NULL OR length(items_json) = 0)
+          AND purchase_sn IS NOT NULL AND length(purchase_sn) > 0
+      `);
+      console.log('[db] backfill: copied items_json from miaoshou_purchase to op_purchase_order');
+    }
+  }
   // collect_queue_tasks:增加 duration 列(SW result 接口上报任务耗时)
   const taskCols = db.prepare(`PRAGMA table_info(collect_queue_tasks)`).all();
   if (!taskCols.some((c) => c.name === 'duration')) {

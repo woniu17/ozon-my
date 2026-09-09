@@ -5,8 +5,10 @@
  * 协议(window.postMessage,source 标识命名空间):
  *  页面 → 扩展: { source:'erp-pdd', type:'PDD_PING', reqId }            探测桥接可用
  *  页面 → 扩展: { source:'erp-pdd', type:'PDD_GET_ORDERS', reqId, payload:{tab,size} }
+ *  页面 → 扩展: { source:'erp-pdd', type:'PDD_SEARCH_ORDER', reqId, payload:{orderSn} }
  *  扩展 → 页面: { source:'erp-pdd', type:'PDD_PONG', reqId }
  *  扩展 → 页面: { source:'erp-pdd', type:'PDD_ORDERS_RESULT', reqId, data:{ok,orders|error} }
+ *  扩展 → 页面: { source:'erp-pdd', type:'PDD_SEARCH_RESULT', reqId, data:{ok,result|error} }
  *
  * 1688 同构,source 换成 'erp-ali',消息类型为 ALI_PING/ALI_PONG/ALI_GET_ORDERS/ALI_ORDERS_RESULT。
  * 淘宝同构,source 换成 'erp-tb',消息类型为 TB_PING/TB_PONG/TB_GET_ORDERS/TB_ORDERS_RESULT。
@@ -15,10 +17,11 @@
   'use strict';
 
   // 命名空间 → 消息类型路由(新增平台在此登记即可)
+  // search/searchResult:按采购单号精确搜索(补全商品图/数量),pdd/ali/tb 均已启用
   const ROUTES = {
-    'erp-pdd': { ping: 'PDD_PING', pong: 'PDD_PONG', get: 'PDD_GET_ORDERS', result: 'PDD_ORDERS_RESULT' },
-    'erp-ali': { ping: 'ALI_PING', pong: 'ALI_PONG', get: 'ALI_GET_ORDERS', result: 'ALI_ORDERS_RESULT' },
-    'erp-tb': { ping: 'TB_PING', pong: 'TB_PONG', get: 'TB_GET_ORDERS', result: 'TB_ORDERS_RESULT' },
+    'erp-pdd': { ping: 'PDD_PING', pong: 'PDD_PONG', get: 'PDD_GET_ORDERS', result: 'PDD_ORDERS_RESULT', search: 'PDD_SEARCH_ORDER', searchResult: 'PDD_SEARCH_RESULT' },
+    'erp-ali': { ping: 'ALI_PING', pong: 'ALI_PONG', get: 'ALI_GET_ORDERS', result: 'ALI_ORDERS_RESULT', search: 'ALI_SEARCH_ORDER', searchResult: 'ALI_SEARCH_RESULT' },
+    'erp-tb': { ping: 'TB_PING', pong: 'TB_PONG', get: 'TB_GET_ORDERS', result: 'TB_ORDERS_RESULT', search: 'TB_SEARCH_ORDER', searchResult: 'TB_SEARCH_RESULT' },
     'erp-ms': { ping: 'MS_PING', pong: 'MS_PONG', get: 'MS_GET_ORDERS', result: 'MS_ORDERS_RESULT' },
   };
   const post = (msg) => window.postMessage(msg, window.location.origin);
@@ -39,6 +42,16 @@
           ? { ok: false, error: chrome.runtime.lastError.message }
           : (resp || { ok: false, error: '扩展后台无响应' });
         post({ source: ns, type: route.result, reqId, data });
+      });
+      return;
+    }
+    if (route.search && type === route.search) {
+      // 按采购单号精确搜索(补全商品图/数量)
+      chrome.runtime.sendMessage({ type, payload }, (resp) => {
+        const data = chrome.runtime.lastError
+          ? { ok: false, error: chrome.runtime.lastError.message }
+          : (resp || { ok: false, error: '扩展后台无响应' });
+        post({ source: ns, type: route.searchResult, reqId, data });
       });
     }
   });

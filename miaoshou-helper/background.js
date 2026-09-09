@@ -105,6 +105,65 @@ async function fetchPddOrders({ tab = 'all', size = 30 } = {}) {
   return normalizeOrders(data);
 }
 
+/**
+ * 按订单号精确搜索拼多多订单(2026-09 实测 order_list_search_v4):
+ *  - type:"search" + key_word + scene:"order_list_h5" 三件套必需
+ *  - 不依赖 anti_content,仅靠浏览器登录 Cookie(credentials include)
+ *  - 返回 orders[] 精确匹配 1 条,含 order_goods[].thumb_url(商品图) + goods_number(数量)
+ *  - 用于补全妙手采购单缺失的商品图片/数量字段
+ */
+async function searchPddOrder(orderSn) {
+  if (!orderSn) throw new Error('PDD_SEARCH: orderSn required');
+  const pdduid = await getPdduid();
+  const url = pdduid
+    ? `https://mobile.yangkeduo.com/proxy/api/api/aristotle/order_list_search_v4?pdduid=${encodeURIComponent(pdduid)}`
+    : 'https://mobile.yangkeduo.com/proxy/api/api/aristotle/order_list_search_v4';
+  const body = {
+    type: 'search',
+    key_word: String(orderSn),
+    size: 10,
+    page: 1,
+    pay_channel_list: [],
+    // MV3 service worker 里 navigator.userAgent 可能受限,用兜底字符串
+    // 接口主验证靠 Cookie,UA 仅作占位
+    userAgent: (typeof navigator !== 'undefined' && navigator.userAgent) || 'Mozilla/5.0',
+    scene: 'order_list_h5',
+  };
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new Error(`PDD_SEARCH_NETWORK: ${err && err.message ? err.message : err}`);
+  }
+  if (resp.status === 401 || resp.status === 403) {
+    throw new Error('PDD_SEARCH_AUTH_REQUIRED: 拼多多登录态失效,请在浏览器中重新登录 mobile.yangkeduo.com');
+  }
+  if (!resp.ok) throw new Error(`PDD_SEARCH_HTTP_${resp.status}`);
+  const data = await resp.json();
+  const orders = (data && Array.isArray(data.orders)) ? data.orders : [];
+  if (!orders.length) return null; // 没找到
+  const o = orders[0];
+  return {
+    orderSn: o.order_sn || '',
+    orderAmount: toYuan(o.order_amount),
+    orderTime: o.order_time || 0,
+    statusPrompt: o.order_status_prompt || '',
+    trackingNumber: o.tracking_number || '',
+    goods: (o.order_goods || []).map((g) => ({
+      goodsName: g.goods_name || '',
+      spec: g.spec || '',
+      price: toYuan(g.goods_price),
+      number: g.goods_number || 1,
+      thumbUrl: g.thumb_url || '',
+    })),
+  };
+}
+
 // ── 1688 ───────────────────────────────────────────────
 const ALI_API = 'https://h5api.m.1688.com/h5/mtop.1688.trading.dataline.service/1.0/';
 const ALI_APP_KEY = '12574478';
@@ -291,6 +350,36 @@ async function fetch1688Orders({ tab = 'all', size = 30 } = {}) {
   });
 }
 
+/**
+ * 按订单号精确搜索 1688 订单(补全商品图/数量)
+ * 与 fetch1688Orders 同样通过 content script 在页面上下文发请求,
+ * 消息类型 ALI_SEARCH_ORDER_IN_PAGE,返回结构对齐 searchPddOrder
+ */
+async function searchAliOrder(orderSn) {
+  if (!orderSn) throw new Error('ALI_SEARCH: orderSn required');
+  const tabs = await chrome.tabs.query({ url: 'https://air.1688.com/app/ctf-page/trade-order-list/*' });
+  let aliTab = tabs.find((t) => t.url && t.url.includes('buyer-order-list'));
+  if (!aliTab) {
+    aliTab = await chrome.tabs.create({
+      url: 'https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?page=1&pageSize=10',
+      active: false,
+    });
+    await new Promise((r) => setTimeout(r, 8000));
+  }
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(aliTab.id, {
+      type: 'ALI_SEARCH_ORDER_IN_PAGE',
+      payload: { orderSn },
+    }, (resp) => {
+      if (chrome.runtime.lastError) {
+        resolve({ ok: false, error: `1688页面桥接失败:${chrome.runtime.lastError.message}。请手动打开 1688 订单页后重试` });
+      } else {
+        resolve(resp || { ok: false, error: '1688页面无响应' });
+      }
+    });
+  });
+}
+
 // ── 淘宝 ───────────────────────────────────────────────
 const TB_API = 'https://h5api.m.taobao.com/h5/mtop.taobao.order.queryboughtlistv2/1.0/';
 const TB_APP_KEY = '12574478';
@@ -399,6 +488,90 @@ async function fetchTaobaoOrders({ tab = 'all' } = {}) {
   throw lastErr || new Error('TB_BAD_RESPONSE');
 }
 
+/**
+ * 按订单号精确搜索淘宝订单(补全商品图/数量)
+ * 与列表接口同一个 mtop API,仅 data 字段差异:
+ *   OrderType: 'OrderSearch'(列表为 'OrderList')
+ *   condition: 加 wordType='3' + wordTerm/showText/itemTitle=订单号
+ * 返回结构对齐 searchPddOrder/searchAliOrder: { orderSn, goods, ... }
+ */
+async function searchTaobaoOrder(orderSn) {
+  if (!orderSn) throw new Error('TB_SEARCH: orderSn required');
+  const sn = String(orderSn);
+  const data = JSON.stringify({
+    tabCode: 'all',
+    page: 1,
+    OrderType: 'OrderSearch',
+    appName: 'tborder',
+    appVersion: '3.0',
+    condition: JSON.stringify({
+      directRouteToTm2Scene: '1',
+      wordType: '3',
+      wordTerm: sn,
+      showText: sn,
+      itemTitle: sn,
+      orderFilterExtParam: '{}',
+    }),
+    __needlessClearProtocol__: true,
+  });
+  let lastErr = null;
+  // token 失败时服务器轮换 _m_h5_tk cookie,重取后重签(最多 2 次)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await getTbToken();
+    const t = String(Date.now());
+    const sign = md5(`${token}&${t}&${TB_APP_KEY}&${data}`);
+    const body = new URLSearchParams({
+      jsv: '2.7.2', appKey: TB_APP_KEY, t, sign, v: '1.0',
+      ecode: '1', timeout: '8000', dataType: 'json', valueType: 'original',
+      ttid: '1@tbwang_windows_1.0.0#pc', needLogin: 'true',
+      type: 'originaljson', isHttps: '1', needRetry: 'true',
+      api: 'mtop.taobao.order.queryboughtlistV2',
+      __customTag__: 'boughtList_all_OrderSearch',
+      preventFallback: 'true', data,
+    }).toString();
+    let resp;
+    try {
+      resp = await fetch(TB_API, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+    } catch (err) {
+      throw new Error(`TB_SEARCH_NETWORK: ${err && err.message ? err.message : err}`);
+    }
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error('TB_AUTH_REQUIRED: 淘宝登录态失效,请在浏览器中重新登录淘宝');
+    }
+    if (!resp.ok) throw new Error(`TB_SEARCH_HTTP_${resp.status}`);
+    const json = await resp.json().catch(() => null);
+    if (!json) throw new Error('TB_SEARCH_BAD_RESPONSE: 接口返回异常(可能触发风控)');
+    const ret = (Array.isArray(json.ret) && json.ret[0]) || '';
+    if (/^FAIL_SYS_TOKEN_EMPTY|^FAIL_SYS_ILLEGAL_ACCESS/.test(ret)) {
+      lastErr = new Error(`TB_${ret}: 请确认浏览器已登录淘宝并刷新一次订单页`);
+      continue;
+    }
+    if (/^FAIL_SYS_USER_VALIDATE/.test(ret)) {
+      throw new Error('TB_VALIDATE: 淘宝风控拦截,请打开淘宝订单页过验证后重试');
+    }
+    if (!/^SUCCESS/.test(ret)) throw new Error(`TB_SEARCH_${ret || 'BAD_RESPONSE'}`);
+    if (!json.data || !json.data.data) return null; // 无数据
+    const orders = normalizeTaobaoOrders(json.data);
+    if (!orders.length) return null; // 没找到
+    const o = orders[0];
+    // 对齐 searchPddOrder/searchAliOrder 返回结构
+    return {
+      orderSn: o.orderSn,
+      orderAmount: o.amount,
+      orderTime: o.orderTime,
+      statusPrompt: o.statusPrompt,
+      trackingNumber: o.trackingNumber,
+      goods: o.goods,
+    };
+  }
+  throw lastErr || new Error('TB_SEARCH_BAD_RESPONSE');
+}
+
 // ── 妙手 ERP 订单提取 ─────────────────────────────────────
 // 在妙手历史订单页 content script(ms-orders-extract.js)中翻页提取
 // 设计文档: docs/妙手订单数据提取-功能设计.md
@@ -478,8 +651,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
     return true; // 异步 sendResponse
   }
+  if (msg.type === 'PDD_SEARCH_ORDER') {
+    // 按采购单号精确搜索,补全商品图/数量字段
+    searchPddOrder(msg.payload && msg.payload.orderSn)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
+    return true; // 异步 sendResponse
+  }
   if (msg.type === 'ALI_GET_ORDERS') {
     fetch1688Orders(msg.payload || {})
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
+    return true; // 异步 sendResponse
+  }
+  if (msg.type === 'ALI_SEARCH_ORDER') {
+    // 按采购单号精确搜索,补全商品图/数量字段
+    searchAliOrder(msg.payload && msg.payload.orderSn)
       .then((result) => sendResponse(result))
       .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
     return true; // 异步 sendResponse
@@ -487,6 +674,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'TB_GET_ORDERS') {
     fetchTaobaoOrders(msg.payload || {})
       .then((orders) => sendResponse({ ok: true, orders }))
+      .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
+    return true; // 异步 sendResponse
+  }
+  if (msg.type === 'TB_SEARCH_ORDER') {
+    // 按采购单号精确搜索,补全商品图/数量字段
+    searchTaobaoOrder(msg.payload && msg.payload.orderSn)
+      .then((result) => sendResponse({ ok: true, result }))
       .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
     return true; // 异步 sendResponse
   }

@@ -384,3 +384,7 @@ export function getMiaoshouPackageDetail(id) {
 
   return { package: parsePackageRow(pkg), purchases, accruals };
 }
+
+// 注:补全采购订单商品信息(enrichPurchaseItems)已移至 order-daos.js
+// 原因:补全入口在订单处理页面,数据应归属本地 op_purchase_order 表,而非妙手镜像表
+// 妙手侧的 items_json 仍保留由妙手同步流程写入,补全流程不再写妙手表

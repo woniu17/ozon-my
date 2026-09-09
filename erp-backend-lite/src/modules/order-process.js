@@ -688,4 +688,32 @@ router.post('/admin/api/order-process/sync-ms-to-local', (req, res, next) => {
   }
 });
 
+// 补全采购订单商品信息(目前仅支持拼多多,后续可扩展到 1688/淘宝)
+// body: { items: [{ purchaseSn, platform, goods: [{goodsName, spec, price, number, thumbUrl}] }] }
+// 前端调用插件 searchPddOrder(orderSn) 拿到商品图+数量后批量推送
+router.post('/admin/api/order-process/enrich-purchase-items', (req, res, next) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) return res.json(ok({ updated: 0, skipped: 0 }));
+    const result = orderPackageDao.enrichPurchaseItems(items);
+    logger.info(result, '[order-process] 补全采购订单商品信息完成');
+    res.json(ok(result));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 待补全采购订单列表(items_json 为空的所有采购单,不限当前页)
+// 供前端"补全采购订单信息"按钮拉取全量待补全清单,串行+限速逐个搜索
+// query: ?platform=yangkeduo(可选,按平台过滤)
+router.get('/admin/api/order-process/pending-purchases', (req, res, next) => {
+  try {
+    const platform = req.query.platform || '';
+    const list = orderPackageDao.listPendingPurchases(platform || null);
+    res.json(ok(list));
+  } catch (e) {
+    next(e);
+  }
+});
+
 export default router;

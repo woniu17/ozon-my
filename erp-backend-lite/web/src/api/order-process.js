@@ -139,3 +139,15 @@ export function syncMsToLocal(packageIds) {
   const body = Array.isArray(packageIds) && packageIds.length > 0 ? { packageIds } : {};
   return request.post('/admin/api/order-process/sync-ms-to-local', body);
 }
+
+// 补全采购订单商品信息(目前仅支持拼多多)
+// body: { items: [{ purchaseSn, platform, goods: [{goodsName, spec, price, number, thumbUrl}] }] }
+export function enrichPurchaseItems(items) {
+  return request.post('/admin/api/order-process/enrich-purchase-items', { items });
+}
+
+// 待补全采购订单列表(items_json 为空的所有采购单,不限当前页)
+// query: ?platform=yangkeduo(可选,按平台过滤)
+export function listPendingPurchases(platform) {
+  return request.get('/admin/api/order-process/pending-purchases', platform ? { platform } : {});
+}

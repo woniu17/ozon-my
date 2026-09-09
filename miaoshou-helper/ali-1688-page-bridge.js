@@ -161,12 +161,89 @@
     throw lastErr || new Error('ALI_BAD_RESPONSE');
   }
 
+  /**
+   * 按订单号精确搜索(补全商品图/数量字段)
+   * 与列表接口同一个 mtop API,仅 param 多 word 字段(订单号)
+   * 返回结构对齐 searchPddOrder: { orderSn, goods[], ... }
+   */
+  async function searchAliOrderInPage(orderSn) {
+    if (!orderSn) throw new Error('ALI_SEARCH: orderSn required');
+    const param = { page: 1, pageSize: 20, word: String(orderSn) };
+    const data = JSON.stringify({
+      serviceId: 'OrderListDataLineService.buyerOrderList',
+      param: JSON.stringify(param),
+    });
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const token = getAliToken();
+      const t = String(Date.now());
+      const sign = md5(`${token}&${t}&${ALI_APP_KEY}&${data}`);
+      const body = new URLSearchParams({
+        jsv: '2.7.4', appKey: ALI_APP_KEY, t, sign,
+        ecode: '1', type: 'json', valueType: 'string',
+        api: 'mtop.1688.trading.dataline.service', v: '1.0',
+        dataType: 'json', timeout: '20000', data,
+      }).toString();
+      let resp;
+      try {
+        resp = await fetch(ALI_API, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body,
+        });
+      } catch (err) {
+        throw new Error(`ALI_SEARCH_NETWORK: ${err && err.message ? err.message : err}`);
+      }
+      if (resp.status === 401 || resp.status === 403)
+        throw new Error('ALI_AUTH_REQUIRED: 1688登录态失效,请在浏览器中重新登录 1688');
+      if (!resp.ok) throw new Error(`ALI_SEARCH_HTTP_${resp.status}`);
+      const json = await resp.json().catch(() => null);
+      if (!json) throw new Error('ALI_SEARCH_BAD_RESPONSE: 接口返回异常(可能触发风控)');
+      const ret = (Array.isArray(json.ret) && json.ret[0]) || '';
+      if (/^FAIL_SYS_TOKEN_EMPTY|^FAIL_SYS_ILLEGAL_ACCESS/.test(ret)) {
+        lastErr = new Error(`ALI_${ret}: 请确认浏览器已登录 1688 并刷新一次订单页`);
+        continue;
+      }
+      if (/^FAIL_SYS_USER_VALIDATE/.test(ret))
+        throw new Error('ALI_VALIDATE: 1688风控拦截,请打开 1688 订单页过验证后重试');
+      if (!/^SUCCESS/.test(ret)) throw new Error(`ALI_SEARCH_${ret || 'BAD_RESPONSE'}`);
+      const resultStr = json.data && json.data.data && json.data.data.result;
+      if (typeof resultStr !== 'string') return null; // 无数据
+      let inner;
+      try { inner = JSON.parse(resultStr); } catch { return null; }
+      const orders = (inner.data && Array.isArray(inner.data.data)) ? inner.data.data : [];
+      if (!orders.length) return null; // 没找到
+      const o = orders[0];
+      const normalized = normalize1688Order(o);
+      // 对齐 searchPddOrder 返回结构
+      return {
+        orderSn: normalized.orderSn,
+        orderAmount: normalized.amount,
+        orderTime: normalized.orderTime,
+        statusPrompt: normalized.statusPrompt,
+        trackingNumber: normalized.trackingNumber,
+        goods: normalized.goods,
+      };
+    }
+    throw lastErr || new Error('ALI_SEARCH_BAD_RESPONSE');
+  }
+
   // 监听来自 background.js 的消息
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (!msg || msg.type !== 'ALI_GET_ORDERS_IN_PAGE') return false;
-    fetch1688OrdersInPage(msg.payload || {})
-      .then((orders) => sendResponse({ ok: true, orders }))
-      .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
-    return true; // 异步 sendResponse
+    if (!msg) return false;
+    if (msg.type === 'ALI_GET_ORDERS_IN_PAGE') {
+      fetch1688OrdersInPage(msg.payload || {})
+        .then((orders) => sendResponse({ ok: true, orders }))
+        .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
+      return true; // 异步 sendResponse
+    }
+    if (msg.type === 'ALI_SEARCH_ORDER_IN_PAGE') {
+      searchAliOrderInPage(msg.payload && msg.payload.orderSn)
+        .then((result) => sendResponse({ ok: true, result }))
+        .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
+      return true; // 异步 sendResponse
+    }
+    return false;
   });
 })();

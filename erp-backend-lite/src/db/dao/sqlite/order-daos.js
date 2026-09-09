@@ -439,13 +439,24 @@ function listPackages(filters = {}) {
     )
     .all(...params, pageSize, (page - 1) * pageSize);
 
+  // 批量取采购关联(供前端列表显示 + 补全采购订单信息批量操作)
+  const pkgRows = rows.map(rowToPackage);
+  if (pkgRows.length) {
+    const allLinks = getPurchasesByPackageIds(pkgRows.map((p) => p.id)).links;
+    const linksByPkg = new Map();
+    for (const l of allLinks) {
+      if (!linksByPkg.has(l.packageId)) linksByPkg.set(l.packageId, []);
+      linksByPkg.get(l.packageId).push(l);
+    }
+    for (const p of pkgRows) p.purchaseLinks = linksByPkg.get(p.id) || [];
+  }
   return {
     total,
     page,
     pageSize,
     globalSearch: !!globalKw,   // 前端据此显示"全局搜索"提示条
     globalKeyword: globalKw,
-    packages: rows.map(rowToPackage),
+    packages: pkgRows,
   };
 }
 
@@ -572,33 +583,113 @@ function getPurchasesByPackageIds(packageIds) {
     .prepare(
       `SELECT pl.*, po.purchase_sn, po.platform, po.status AS po_status, po.payment_amount,
               po.seller_name, po.buyer_account, po.logistics_company AS po_logistics_company,
-              po.logistics_no AS po_logistics_no, po.link_status
+              po.logistics_no AS po_logistics_no, po.link_status, po.items_json AS po_items_json
        FROM op_purchase_link pl
        JOIN op_purchase_order po ON po.id = pl.purchase_order_id
        WHERE pl.package_id IN (${ph})`
     )
     .all(...packageIds);
   return {
-    links: links.map((l) => ({
-      id: l.id,
-      purchaseOrderId: l.purchase_order_id,
-      packageId: l.package_id,
-      ozonOrderItemId: l.ozon_order_item_id,
-      allocatedAmount: l.allocated_amount,
-      quantity: l.quantity,
-      allocMode: l.alloc_mode || 'manual',
-      purchaseSn: l.purchase_sn,
-      platform: l.platform,
-      poStatus: l.po_status,
-      paymentAmount: l.payment_amount,
-      sellerName: l.seller_name,
-      buyerAccount: l.buyer_account,
-      poLogisticsCompany: l.po_logistics_company,
-      poLogisticsNo: l.po_logistics_no,
-      linkStatus: l.link_status,
-    })),
+    links: links.map((l) => {
+      // 解析采购单商品图/规格/数量(订单处理页"补全采购订单信息"写入)
+      let items = [];
+      if (l.po_items_json) {
+        try { items = JSON.parse(l.po_items_json) || []; } catch { items = []; }
+      }
+      return {
+        id: l.id,
+        purchaseOrderId: l.purchase_order_id,
+        packageId: l.package_id,
+        ozonOrderItemId: l.ozon_order_item_id,
+        allocatedAmount: l.allocated_amount,
+        quantity: l.quantity,
+        allocMode: l.alloc_mode || 'manual',
+        purchaseSn: l.purchase_sn,
+        platform: l.platform,
+        poStatus: l.po_status,
+        paymentAmount: l.payment_amount,
+        sellerName: l.seller_name,
+        buyerAccount: l.buyer_account,
+        poLogisticsCompany: l.po_logistics_company,
+        poLogisticsNo: l.po_logistics_no,
+        linkStatus: l.link_status,
+        items,
+      };
+    }),
     purchases: [],
   };
+}
+
+/**
+ * 列出所有商品信息不完整(items_json 为空 或 不含 thumbUrl)的采购单,供前端"补全采购订单信息"批量搜索
+ * 范围:所有平台(不限拼多多),前端按平台分派到对应插件搜索函数
+ * 排除:手工单(purchase_sn IS NULL,无单号无法搜索);已补全(items_json 含 thumbUrl)的跳过
+ * 注:妙手回填的 items_json 格式为 {title,price,num}(无图),仍需补全;只有含 thumbUrl 的才算真正补全
+ * @param {string} [platform]  可选,按平台过滤(如 'yangkeduo')
+ * @returns {Array<{id, purchaseSn, platform, status}>}
+ */
+export function listPendingPurchases(platform) {
+  const where = [
+    `link_status = 'linked'`,
+    `purchase_sn IS NOT NULL AND length(purchase_sn) > 0`,
+    // 待补全条件:items_json 为空,或不含 thumbUrl(妙手回填的 {title,price,num} 也算待补全)
+    `(items_json IS NULL OR length(items_json) = 0 OR items_json NOT LIKE '%thumbUrl%')`,
+  ];
+  const params = [];
+  if (platform) { where.push(`platform = ?`); params.push(platform); }
+  return db
+    .prepare(
+      `SELECT id, purchase_sn AS purchaseSn, platform, status
+       FROM op_purchase_order
+       WHERE ${where.join(' AND ')}
+       ORDER BY gmt_modified DESC
+       LIMIT 2000`
+    )
+    .all(...params);
+}
+
+/**
+ * 补全采购订单商品信息(订单处理页"补全采购订单信息"按钮调用)
+ * 前端调插件 searchPddOrder(orderSn) 拿到 {goods:[{goodsName,spec,price,number,thumbUrl}]}
+ * 后端按 (platform, purchase_sn) 批量更新 op_purchase_order.items_json
+ * 覆盖策略:有 thumbUrl 才覆盖(空值不动),避免清空已有数据
+ */
+export function enrichPurchaseItems(items) {
+  const now = nowIso();
+  const stmt = db.prepare(
+    `UPDATE op_purchase_order
+     SET items_json = ?,
+         gmt_modified = ?
+     WHERE platform = ? AND purchase_sn = ?`
+  );
+  let updated = 0;
+  let skipped = 0;
+  const errors = [];
+  for (const it of items) {
+    try {
+      const platform = it.platform || 'yangkeduo'; // 默认拼多多
+      const sn = it.purchaseSn;
+      if (!sn) { skipped++; continue; }
+      // 过滤出有 thumbUrl 的商品(没图的跳过,不覆盖已有数据)
+      const goods = (Array.isArray(it.goods) ? it.goods : [])
+        .filter((g) => g && g.thumbUrl)
+        .map((g) => ({
+          goodsName: g.goodsName || '',
+          spec: g.spec || '',
+          price: g.price,
+          number: g.number || 1,
+          thumbUrl: g.thumbUrl,
+        }));
+      if (!goods.length) { skipped++; continue; }
+      const itemsJson = JSON.stringify(goods);
+      const res = stmt.run(itemsJson, now, platform, sn);
+      if (res.changes > 0) updated++;
+      else skipped++;
+    } catch (e) {
+      errors.push({ purchaseSn: it.purchaseSn, error: String(e.message || e) });
+    }
+  }
+  return { updated, skipped, errors };
 }
 
 /** 包裹详情(产品行+采购关联+轨迹) */
@@ -1195,4 +1286,6 @@ export const orderPackageDao = {
   getPackagePostings,
   lookupPurchase,
   syncFromMiaoshou,
+  enrichPurchaseItems,
+  listPendingPurchases,
 };

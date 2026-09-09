@@ -12,6 +12,8 @@ import {
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
   runAccrualSync, getRubRate, setRubRate,
   syncMsToLocal,
+  enrichPurchaseItems,
+  listPendingPurchases,
 } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
@@ -338,6 +340,158 @@ async function onSyncMsToLocal() {
   }
 }
 
+// 补全采购订单商品信息(支持拼多多+1688)
+// 逻辑:后端 listPendingPurchases 返回所有 items_json 不含 thumbUrl 的采购单(不限当前页),
+//      串行+限速(2s/单,失败退避到 5s)逐个调插件搜索接口(PDD_SEARCH_ORDER / ALI_SEARCH_ORDER),
+//      每 10 条一批推送后端,避免一次性大 payload;连续失败 3 次中止防反爬
+const enrichingItems = ref(false);
+let enrichStopFlag = false;
+const enrichProgress = reactive({ total: 0, done: 0, found: 0, notFound: 0, failed: 0, updated: 0, current: '', platform: '' });
+const ENRICH_INTERVAL_MS = 2000;   // 正常每单间隔 2s
+const ENRICH_BACKOFF_MS = 5000;     // 失败后下次间隔延长到 5s
+const ENRICH_MAX_CONSEC_FAIL = 3;   // 连续失败 3 次中止
+const ENRICH_BATCH_SIZE = 10;       // 每 10 条推送一次后端
+function enrichStop() { enrichStopFlag = true; }
+async function onEnrichPurchaseItems() {
+  if (enrichingItems.value) return;
+  // 拉取全部待补全采购单(拼多多+1688+淘宝,不限当前页)
+  let pending = [];
+  const platforms = [];
+  try {
+    const [pddResp, aliResp, tbResp] = await Promise.all([
+      listPendingPurchases('yangkeduo'),
+      listPendingPurchases('1688'),
+      listPendingPurchases('taobao'),
+    ]);
+    const pddList = (pddResp?.data || pddResp || []).map((p) => ({ ...p, _platform: 'yangkeduo' }));
+    const aliList = (aliResp?.data || aliResp || []).map((p) => ({ ...p, _platform: '1688' }));
+    const tbList = (tbResp?.data || tbResp || []).map((p) => ({ ...p, _platform: 'taobao' }));
+    pending = [...pddList, ...aliList, ...tbList];
+    if (pddList.length) platforms.push('拼多多');
+    if (aliList.length) platforms.push('1688');
+    if (tbList.length) platforms.push('淘宝');
+  } catch (e) {
+    show('拉取待补全列表失败:' + (e.message || e), 'error');
+    return;
+  }
+  if (!pending.length) {
+    show('无待补全的采购单(全部已补全或无单号)', 'info');
+    return;
+  }
+  // 检查对应平台桥接是否就绪
+  const needPdd = pending.some((p) => p._platform === 'yangkeduo');
+  const needAli = pending.some((p) => p._platform === '1688');
+  const needTb = pending.some((p) => p._platform === 'taobao');
+  if (needPdd && !pddBridgeReady.value) {
+    show('拼多多补全需要扩展桥接就绪(已登录 mobile.yangkeduo.com)', 'warning');
+    return;
+  }
+  if (needAli && !aliBridgeReady.value) {
+    show('1688补全需要扩展桥接就绪(已登录 air.1688.com)', 'warning');
+    return;
+  }
+  if (needTb && !tbBridgeReady.value) {
+    show('淘宝补全需要扩展桥接就绪(已登录 buyertrade.taobao.com)', 'warning');
+    return;
+  }
+  if (!await confirmStore.ask({
+    title: '补全采购订单信息',
+    message: `检测到 ${pending.length} 条待补全采购单(${platforms.join('+')},全量,不限当前页)。\n将逐个搜索补全商品图/数量,每单间隔 ${ENRICH_INTERVAL_MS / 1000}s 限速,连续失败 ${ENRICH_MAX_CONSEC_FAIL} 次自动中止。\n此操作需要在 Edge 浏览器中已登录对应平台,且扩展已启用。\n\n是否继续?`,
+    confirmText: '开始补全',
+  })) return;
+  enrichingItems.value = true;
+  enrichStopFlag = false;
+  Object.assign(enrichProgress, { total: pending.length, done: 0, found: 0, notFound: 0, failed: 0, updated: 0, current: pending[0]?.purchaseSn || '', platform: platforms.join('+') });
+  const items = [];
+  let consecFail = 0;
+  let lastErr = '';
+  try {
+    let i = 0;
+    for (const p of pending) {
+      if (enrichStopFlag) break;
+      i++;
+      enrichProgress.done = i;
+      enrichProgress.current = p.purchaseSn || '';
+      // 按平台路由到对应的搜索函数
+      const platformKey = p._platform; // 'yangkeduo' | '1688' | 'taobao'
+      const searchFn = platformKey === '1688' ? aliSearch
+        : platformKey === 'taobao' ? tbSearch
+        : pddSearch;
+      let ok = false;
+      try {
+        const resp = await searchFn(p.purchaseSn);
+        if (resp?.ok && resp.result && Array.isArray(resp.result.goods) && resp.result.goods.length) {
+          items.push({
+            purchaseSn: p.purchaseSn,
+            platform: platformKey,
+            goods: resp.result.goods.map((g) => ({
+              goodsName: g.goodsName || '',
+              spec: g.spec || '',
+              price: g.price,
+              number: g.number || 1,
+              thumbUrl: g.thumbUrl || '',
+            })),
+          });
+          enrichProgress.found++;
+          ok = true;
+        } else {
+          enrichProgress.notFound++;
+        }
+      } catch (e) {
+        enrichProgress.failed++;
+        lastErr = e.message || String(e);
+      }
+      // 连续失败计数:成功重置,失败累加;达阈值中止防反爬
+      if (ok) consecFail = 0;
+      else {
+        consecFail++;
+        if (consecFail >= ENRICH_MAX_CONSEC_FAIL) {
+          show(`连续 ${ENRICH_MAX_CONSEC_FAIL} 次失败,已中止(可能触发反爬或登录失效)。最后错误:${lastErr}`, 'warning');
+          break;
+        }
+      }
+      // 每 10 条一批推送后端(避免一次性大 payload + 中途中断不丢已采集数据)
+      if (items.length >= ENRICH_BATCH_SIZE) {
+        await flushEnrichBatch(items);
+      }
+      // 限速:正常 2s,失败后退避 5s;最后一单不等
+      if (i < pending.length && !enrichStopFlag) {
+        const delay = ok ? ENRICH_INTERVAL_MS : ENRICH_BACKOFF_MS;
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    // 收尾:刷剩余未入库的批次
+    if (items.length) await flushEnrichBatch(items);
+    // 汇总
+    let msg = `补全完成:已更新 ${enrichProgress.updated} 条`;
+    if (enrichProgress.notFound > 0) msg += `,未找到 ${enrichProgress.notFound} 条`;
+    if (enrichProgress.failed > 0) msg += `,失败 ${enrichProgress.failed} 条`;
+    if (enrichStopFlag) msg += '(已中止)';
+    show(msg, enrichProgress.failed > 0 ? 'warning' : 'success');
+    await loadList();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    enrichingItems.value = false;
+    enrichProgress.current = '';
+    enrichProgress.platform = '';
+  }
+}
+// 推送一批到后端并清空缓冲
+async function flushEnrichBatch(items) {
+  if (!items.length) return;
+  const batch = items.splice(0, items.length);
+  try {
+    const resp = await enrichPurchaseItems(batch);
+    const data = resp?.data || resp || {};
+    enrichProgress.updated += data.updated || 0;
+  } catch (e) {
+    // 入库失败:把本批塞回 items 末尾,下轮重试一次(若已到末尾则丢弃)
+    items.push(...batch);
+    show('入库批次失败:' + (e.message || e), 'error');
+  }
+}
+
 // 打开全量同步弹窗
 function openSyncAllDialog() {
   if (syncing.value) {
@@ -627,6 +781,23 @@ function onPddMessage(ev) {
     const cb = pddPending.get(ev.data.reqId);
     if (cb) { pddPending.delete(ev.data.reqId); cb(ev.data.data); }
   }
+  if (ev.data.type === 'PDD_SEARCH_RESULT') {
+    const cb = pddPending.get(ev.data.reqId);
+    if (cb) { pddPending.delete(ev.data.reqId); cb(ev.data.data); }
+  }
+}
+
+// 按采购单号精确搜索(补全商品图+数量,仅拼多多)
+function pddSearch(orderSn) {
+  return new Promise((resolve) => {
+    const reqId = ++pddReqSeq;
+    const timer = setTimeout(() => {
+      pddPending.delete(reqId);
+      resolve({ ok: false, error: '搜索超时:请确认扩展已启用并已登录 mobile.yangkeduo.com' });
+    }, 15_000);
+    pddPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
+    window.postMessage({ source: PDD_NS, type: 'PDD_SEARCH_ORDER', reqId, payload: { orderSn } }, window.location.origin);
+  });
 }
 
 function pddPing() {
@@ -738,6 +909,23 @@ function onAliMessage(ev) {
     const cb = aliPending.get(ev.data.reqId);
     if (cb) { aliPending.delete(ev.data.reqId); cb(ev.data.data); }
   }
+  if (ev.data.type === 'ALI_SEARCH_RESULT') {
+    const cb = aliPending.get(ev.data.reqId);
+    if (cb) { aliPending.delete(ev.data.reqId); cb(ev.data.data); }
+  }
+}
+
+// 按采购单号精确搜索 1688 订单(补全商品图+数量)
+function aliSearch(orderSn) {
+  return new Promise((resolve) => {
+    const reqId = ++aliReqSeq;
+    const timer = setTimeout(() => {
+      aliPending.delete(reqId);
+      resolve({ ok: false, error: '搜索超时:请确认扩展已启用并已登录 1688(air.1688.com)' });
+    }, 20_000);
+    aliPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
+    window.postMessage({ source: ALI_NS, type: 'ALI_SEARCH_ORDER', reqId, payload: { orderSn } }, window.location.origin);
+  });
 }
 
 function aliPing() {
@@ -832,6 +1020,23 @@ function onTbMessage(ev) {
     const cb = tbPending.get(ev.data.reqId);
     if (cb) { tbPending.delete(ev.data.reqId); cb(ev.data.data); }
   }
+  if (ev.data.type === 'TB_SEARCH_RESULT') {
+    const cb = tbPending.get(ev.data.reqId);
+    if (cb) { tbPending.delete(ev.data.reqId); cb(ev.data.data); }
+  }
+}
+
+// 按采购单号精确搜索淘宝订单(补全商品图+数量)
+function tbSearch(orderSn) {
+  return new Promise((resolve) => {
+    const reqId = ++tbReqSeq;
+    const timer = setTimeout(() => {
+      tbPending.delete(reqId);
+      resolve({ ok: false, error: '搜索超时:请确认扩展已启用并已登录淘宝(h5api.m.taobao.com)' });
+    }, 20_000);
+    tbPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
+    window.postMessage({ source: TB_NS, type: 'TB_SEARCH_ORDER', reqId, payload: { orderSn } }, window.location.origin);
+  });
 }
 
 function tbPing() {
@@ -1508,6 +1713,22 @@ onUnmounted(() => {
         <button class="btn btn-ghost" :disabled="syncingMs" @click="onSyncMsToLocal" title="从妙手同步:把妙手订单的重量/备注/采购金额/采购订单详情同步到本地">
           {{ syncingMs ? '妙手同步中…' : '从妙手同步' }}
         </button>
+        <button class="btn btn-ghost" :disabled="enrichingItems || syncingMs" @click="onEnrichPurchaseItems" title="补全采购订单信息:拉取全量待补全清单(拼多多+1688+淘宝),串行限速搜索补全商品图/数量,连续失败3次自动中止">
+          {{ enrichingItems ? '补全中…' : '补全采购订单信息' }}
+        </button>
+        <button v-if="enrichingItems" class="btn btn-danger" @click="enrichStop" title="中止当前补全任务(已采集未入库的批次会收尾入库)">中止</button>
+      </div>
+      <div v-if="enrichingItems" class="enrich-progress-bar">
+        <span class="tag tag-info">补全中</span>
+        <span class="enrich-progress-text">
+          {{ enrichProgress.done }}/{{ enrichProgress.total }}
+          <template v-if="enrichProgress.platform"> · {{ enrichProgress.platform }}</template>
+          · 找到 <b>{{ enrichProgress.found }}</b>
+          · 未找到 <b>{{ enrichProgress.notFound }}</b>
+          · 失败 <b>{{ enrichProgress.failed }}</b>
+          · 已入库 <b>{{ enrichProgress.updated }}</b>
+          <template v-if="enrichProgress.current"> · 当前 {{ enrichProgress.current }}</template>
+        </span>
       </div>
     </div>
 
@@ -1655,14 +1876,29 @@ onUnmounted(() => {
             <td class="col-purchase">
               <div v-if="!pkg.purchaseLinks?.length" class="muted">未录入</div>
               <div v-for="l in pkg.purchaseLinks" :key="l.id" class="purchase-item">
-                <div>
+                <div class="purchase-head">
                   <span class="tag tag-ok">已关联</span>
-                  {{ platformLabel(l.platform) }}
                   <span class="mono">{{ l.purchaseSn || '#' + l.id }}</span>
+                  <span class="muted">{{ platformLabel(l.platform) }}</span>
                 </div>
-                <div class="sub muted">
-                  {{ poStatus(l.poStatus) }} · {{ fmtMoney(l.allocatedAmount) }}
-                  <template v-if="l.poLogisticsNo">· {{ l.poLogisticsCompany }} {{ l.poLogisticsNo }}</template>
+                <div class="purchase-meta sub muted">
+                  {{ poStatus(l.poStatus) }} · 采购金额 {{ fmtMoney(l.allocatedAmount) }}<template v-if="l.sellerName"> · {{ l.sellerName }}</template>
+                </div>
+                <div v-for="(pi, j) in l.items" :key="j" class="purchase-goods">
+                  <img v-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
+                    referrerpolicy="no-referrer" loading="lazy" class="purchase-goods-img" alt=""
+                    :title="pi.goodsName || pi.title || '采购商品'" />
+                  <div class="purchase-goods-main">
+                    <div class="purchase-goods-title" :title="pi.goodsName || pi.title || ''">
+                      {{ pi.goodsName || pi.title || '采购商品' }}
+                    </div>
+                    <div class="purchase-goods-sub muted">
+                      <span v-if="pi.spec">{{ pi.spec }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}
+                    </div>
+                  </div>
+                </div>
+                <div v-if="l.poLogisticsNo" class="sub muted">
+                  {{ l.poLogisticsCompany }} {{ l.poLogisticsNo }}
                 </div>
               </div>
             </td>
@@ -2110,14 +2346,29 @@ onUnmounted(() => {
         <div class="detail-section">采购关联</div>
         <table v-if="detailLinks.length" class="data-table item-table">
           <thead>
-            <tr><th>采购单</th><th>平台</th><th>状态</th><th>金额</th><th>上家</th><th>国内物流</th><th>操作</th></tr>
+            <tr><th>采购单</th><th>平台</th><th>状态</th><th>金额/商品</th><th>上家</th><th>国内物流</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-for="l in detailLinks" :key="l.id">
               <td class="mono">{{ l.purchaseSn || '#' + l.purchaseOrderId }}</td>
               <td>{{ platformLabel(l.platform) }}</td>
               <td>{{ poStatus(l.poStatus) }}</td>
-              <td>{{ fmtMoney(l.allocatedAmount) }}</td>
+              <td>
+                <div>{{ fmtMoney(l.allocatedAmount) }}</div>
+                <div v-for="(pi, j) in l.items" :key="j" class="po-item-line">
+                  <img v-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
+                    referrerpolicy="no-referrer" loading="lazy" class="po-item-img" alt=""
+                    :title="pi.goodsName || pi.title || '采购商品'" />
+                  <div class="po-item-info">
+                    <div class="po-item-title" :title="pi.goodsName || pi.title || ''">
+                      {{ pi.goodsName || pi.title || '采购商品' }}
+                    </div>
+                    <div class="po-item-sub muted">
+                      <span v-if="pi.spec">{{ pi.spec }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}
+                    </div>
+                  </div>
+                </div>
+              </td>
               <td>{{ l.sellerName || '—' }}</td>
               <td>{{ l.poLogisticsCompany }} {{ l.poLogisticsNo || '' }}</td>
               <td>
@@ -2517,7 +2768,53 @@ a.product-title:hover {
 }
 
 .col-purchase {
-  min-width: 180px;
+  min-width: 220px;
+  max-width: 280px;
+}
+
+/* 采购信息列:参考产品信息列 product-item 结构,展示采购商品图/名称/规格/价格×数量 */
+.purchase-item + .purchase-item {
+  margin-top: 6px;
+}
+.purchase-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.purchase-meta {
+  margin-top: 2px;
+}
+.purchase-goods {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 4px;
+}
+.purchase-goods-img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 4px;
+  flex: 0 0 48px;
+}
+.purchase-goods-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.purchase-goods-title {
+  font-size: 12px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.purchase-goods-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  margin-top: 2px;
 }
 
 .col-status {
@@ -3052,6 +3349,62 @@ a.product-title:hover {
 .alloc-amount-display {
   font-weight: 600;
   color: var(--primary, #2563eb);
+}
+
+/* 详情弹窗采购关联表:商品图+规格+数量(数据来源 op_purchase_order.items_json,由"补全采购订单信息"按钮写入) */
+.po-item-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px dashed var(--border-color, #eee);
+  margin-top: 4px;
+}
+.po-item-line:first-of-type {
+  border-top: none;
+  margin-top: 4px;
+}
+.po-item-img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  flex: 0 0 48px;
+}
+.po-item-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.po-item-title {
+  font-size: 12px;
+  line-height: 1.3;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.po-item-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  margin-top: 2px;
+}
+
+/* 补全采购订单信息进度条 */
+.enrich-progress-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  margin-top: 6px;
+  background: var(--bg-soft, #f9fafb);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.enrich-progress-text {
+  color: var(--text-secondary, #6b7280);
 }
 
 
