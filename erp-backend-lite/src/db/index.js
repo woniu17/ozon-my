@@ -464,6 +464,35 @@ async function ensureMigrations() {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sc_orders ON ozon_store_classification(orders_count DESC)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sc_rating ON ozon_store_classification(rating DESC)`);
   // isChinese → isMainlandChina 列重命名已在 ensureMigrations 开头执行
+
+  // 2026-09-10: op_purchase_link 去重 + 唯一索引修复
+  // 问题:UNIQUE(purchase_order_id, package_id, ozon_order_item_id) 中 NULL 不参与查重,
+  //      导致包裹级关联(ozon_order_item_id IS NULL)每次妙手同步都重复插入
+  // 修复:1) 删除存量重复行(保留最小 id);2) 建基于 COALESCE 表达式的唯一索引
+  {
+    // 删除重复行:同一 (purchase_order_id, package_id, COALESCE(ozon_order_item_id, 0)) 只保留最小 id
+    const dupCount = db.prepare(`
+      SELECT COUNT(*) AS n FROM op_purchase_link
+      WHERE id NOT IN (
+        SELECT MIN(id) FROM op_purchase_link
+        GROUP BY purchase_order_id, package_id, COALESCE(ozon_order_item_id, 0)
+      )
+    `).get();
+    if (dupCount.n > 0) {
+      db.exec(`
+        DELETE FROM op_purchase_link
+        WHERE id NOT IN (
+          SELECT MIN(id) FROM op_purchase_link
+          GROUP BY purchase_order_id, package_id, COALESCE(ozon_order_item_id, 0)
+        )
+      `);
+      console.log(`[db] migration: removed ${dupCount.n} duplicate op_purchase_link rows`);
+    }
+    // 建唯一索引:COALESCE 让 NULL 变 0,参与唯一约束
+    // DROP 旧的表级 UNIQUE 约束(如果有);SQLite 3.8+ 支持表达式索引
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_op_pl_unique ON op_purchase_link(purchase_order_id, package_id, COALESCE(ozon_order_item_id, 0))`);
+    console.log('[db] migration: created UNIQUE index op_purchase_link(purchase_order_id, package_id, COALESCE(ozon_order_item_id, 0))');
+  }
 }
 
 // 一次性回填 ozon_cache_index.has_rich_content

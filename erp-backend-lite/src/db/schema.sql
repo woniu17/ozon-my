@@ -1007,9 +1007,10 @@ CREATE TABLE IF NOT EXISTS op_purchase_link (
   allocated_amount  REAL DEFAULT 0,             -- 分摊采购金额
   quantity          INTEGER DEFAULT 0,
   alloc_mode        TEXT DEFAULT 'manual',     -- 分摊模式:manual=手动填金额,auto=按数量自动分摊
-  gmt_create        TEXT,
-  UNIQUE(purchase_order_id, package_id, ozon_order_item_id)
+  gmt_create        TEXT
 );
+-- 唯一约束:COALESCE 让 NULL(包裹级关联)变 0,参与唯一约束,防止重复插入
+CREATE UNIQUE INDEX IF NOT EXISTS idx_op_pl_unique ON op_purchase_link(purchase_order_id, package_id, COALESCE(ozon_order_item_id, 0));
 CREATE INDEX IF NOT EXISTS idx_op_pl_pkg ON op_purchase_link(package_id);
 CREATE INDEX IF NOT EXISTS idx_op_pl_item ON op_purchase_link(ozon_order_item_id);
 
