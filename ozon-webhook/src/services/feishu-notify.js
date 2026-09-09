@@ -194,11 +194,12 @@ export async function notifyPostingEvent(messageType, payload) {
       const sellerName = store ? store.name : String(sellerId);
       const isQc = typeof postingNumber === 'string'
         && (postingNumber.startsWith('02131') || postingNumber.startsWith('024785'));
-      title = `[${isQc ? '新质检单' : '新订单'}] [${sellerName}] [${postingNumber}]`;
+      title = `[${isQc ? '质检' : ''}] [${sellerName}] [${postingNumber}]`;
       timeField = ['处理时间', payload.in_process_at ?? '-'];
       const products = Array.isArray(payload.products) ? payload.products : [];
       const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
-      extra = `\n商品SKU数: ${products.length}\n商品总件数: ${totalQty}`;
+      const saleCny = extractSaleAmountCny(payload);
+      extra = `\n商品SKU数: ${products.length}\n商品总件数: ${totalQty}\n销售金额: ${saleCny.toFixed(2)} CNY`;
       // 商品链接去重后逐行列出
       const links = [...new Set(
         products
@@ -277,6 +278,7 @@ export async function notifyNewPostingDiscovered(store, posting, todaySummaryLin
   const title = `[${isQc ? '新质检单' : '新订单'}] [${sellerName}] [${postingNumber}]`;
   const products = Array.isArray(posting.products) ? posting.products : [];
   const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
+  const saleCny = extractSaleAmountCny(posting);
 
   const links = [...new Set(
     products
@@ -291,6 +293,7 @@ export async function notifyNewPostingDiscovered(store, posting, todaySummaryLin
     `处理时间: ${posting.in_process_at ?? '-'}`,
     `商品SKU数: ${products.length}`,
     `商品总件数: ${totalQty}`,
+    `销售金额: ${saleCny.toFixed(2)} CNY`,
     links.length ? `商品链接:\n${links.join('\n')}` : null,
     posting.tracking_number ? `跟踪号: ${posting.tracking_number}` : null,
     '', // 空行分隔
