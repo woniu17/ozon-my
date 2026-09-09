@@ -3,7 +3,134 @@
 // 仅用于 FBS/rFBS 货件级通知(TYPE_NEW_POSTING/POSTING_CANCELLED/STATE_CHANGED)
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
-import { getStoreBySellerId } from './store-loader.js';
+import { getStoreBySellerId, listStores } from './store-loader.js';
+import { getDb } from '../db/index.js';
+
+/**
+ * 从 posting / payload 中提取销售金额(OPI 返回的金额本身就是 CNY)
+ * 优先 financial_data.posting_totals.price.amount
+ * 兜底 financial_data.products[].payout.amount 之和
+ * 再兜底 products[].price.amount 之和
+ * 被 new-posting.js / unfulfilled-poller.js 落库时复用
+ */
+export function extractSaleAmountCny(posting) {
+  if (!posting) return 0;
+  const fd = posting.financial_data || {};
+  const total = fd.posting_totals?.price?.amount;
+  if (total != null) return Number(total) || 0;
+  if (Array.isArray(fd.products)) {
+    const sum = fd.products.reduce((s, p) => s + (Number(p?.payout?.amount) || 0), 0);
+    if (sum > 0) return sum;
+  }
+  if (Array.isArray(posting.products)) {
+    const sum = posting.products.reduce((s, p) => {
+      const price = p?.price;
+      const v = typeof price === 'object' ? price?.amount : price;
+      return s + (Number(v) || 0);
+    }, 0);
+    if (sum > 0) return sum;
+  }
+  return 0;
+}
+
+/**
+ * 计算"今日(Asia/Shanghai)"对应的 UTC ISO 范围 [start, end)
+ * 用于从 DB 按当日过滤订单(in_process_at 是 UTC ISO)
+ */
+function getTodayUtcRange() {
+  const now = new Date();
+  // 今日北京 00:00 对应的 UTC
+  const shOffset = 8 * 3600_000; // Asia/Shanghai = UTC+8
+  // 计算"北京今日 00:00"的 UTC 时间戳
+  const nowShTs = now.getTime() + shOffset;
+  const startOfDayShTs = Math.floor(nowShTs / 86400_000) * 86400_000;
+  const startUtcTs = startOfDayShTs - shOffset;
+  const endUtcTs = startUtcTs + 86400_000;
+  return {
+    start: new Date(startUtcTs).toISOString(),
+    end: new Date(endUtcTs).toISOString(),
+  };
+}
+
+/**
+ * 从 DB 查询当日各店铺销售汇总(订单数 + 销售金额 CNY)
+ * 用于飞书通知,避免每次都调 OPI 聚合
+ * @returns {{bySeller: Map<number, {storeName, sellerId, orderCount, saleCny}>, total: {orderCount, saleCny}, ready: boolean}}
+ *   ready: DB 里是否已有 sale_amount_cny>0 的当日记录(兜底 poller 是否已回填)
+ *   false 表示金额尚未回填,调用方应提示"汇总信息还未拉取"
+ */
+export function buildTodaySummaryFromDb() {
+  const { start, end } = getTodayUtcRange();
+  const db = getDb();
+  // 按 seller_id 聚合当日订单数和金额
+  const rows = db.prepare(`
+    SELECT seller_id, COUNT(*) AS order_count, COALESCE(SUM(sale_amount_cny), 0) AS sale_cny
+    FROM ozon_postings
+    WHERE in_process_at IS NOT NULL
+      AND in_process_at >= ? AND in_process_at < ?
+    GROUP BY seller_id
+    ORDER BY seller_id
+  `).all(start, end);
+
+  // 检查是否有任何 sale_amount_cny>0 的记录(兜底 poller 是否已回填)
+  const ready = rows.some(r => Number(r.sale_cny) > 0);
+
+  const stores = listStores();
+  const storeMap = new Map(stores.map(s => [Number(s.company_id), s]));
+
+  const bySeller = new Map();
+  let totalOrder = 0;
+  let totalSale = 0;
+
+  // 确保所有店铺都出现(即使 0 单,保持汇总对齐)
+  for (const s of stores) {
+    const sellerId = Number(s.company_id);
+    bySeller.set(sellerId, { storeName: s.name, sellerId, orderCount: 0, saleCny: 0 });
+  }
+  for (const r of rows) {
+    const sellerId = Number(r.seller_id);
+    const store = storeMap.get(sellerId);
+    const storeName = store?.name ?? String(sellerId);
+    bySeller.set(sellerId, {
+      storeName,
+      sellerId,
+      orderCount: r.order_count,
+      saleCny: Number(r.sale_cny) || 0,
+    });
+    totalOrder += r.order_count;
+    totalSale += Number(r.sale_cny) || 0;
+  }
+
+  return {
+    bySeller,
+    total: { orderCount: totalOrder, saleCny: totalSale },
+    ready,
+  };
+}
+
+/**
+ * 构造"当日各店铺销售汇总"文本块
+ * 订单数前导空格对齐到 2 位,金额整数部分前导空格对齐到 4 位(小数固定 2 位)
+ * @param {Map<number, {storeName, sellerId, orderCount, saleCny}>} bySeller
+ * @param {{orderCount, saleCny}} total
+ * @returns {string}
+ */
+export function buildTodaySummaryLines(bySeller, total) {
+  const padOrder = (n) => String(n).padStart(2, ' ');
+  const padAmount = (cny) => {
+    const fixed = Number(cny).toFixed(2);
+    const [intPart, decPart] = fixed.split('.');
+    return `${intPart.padStart(4, ' ')}.${decPart}`;
+  };
+  const lines = [];
+  lines.push('—— 当日各店铺销售汇总(Asia/Shanghai)——');
+  const sorted = Array.from(bySeller.values()).sort((a, b) => a.sellerId - b.sellerId);
+  for (const it of sorted) {
+    lines.push(`• ${it.storeName}: 订单 ${padOrder(it.orderCount)} 单 / 销售金额 ${padAmount(it.saleCny)} CNY`);
+  }
+  lines.push(`合计:订单 ${padOrder(total.orderCount)} 单 / 销售金额 ${padAmount(total.saleCny)} CNY`);
+  return lines.join('\n');
+}
 
 /**
  * 将 seller_id 反查为可读格式:昵称(ID),如 YQL01(3891653)
@@ -59,6 +186,7 @@ export async function notifyPostingEvent(messageType, payload) {
   let title;
   let timeField;
   let extra = '';
+  let summaryLines = null;
   switch (messageType) {
     case 'TYPE_NEW_POSTING': {
       // 02131/024785 开头的货件号为质检单,其余为新订单
@@ -79,6 +207,18 @@ export async function notifyPostingEvent(messageType, payload) {
       )];
       if (links.length) extra += `\n商品链接:\n${links.join('\n')}`;
       if (payload.tracking_number) extra += `\n跟踪号: ${payload.tracking_number}`;
+      // 落库已完成,从 DB 查当日各店铺汇总(含本条新货件)
+      // ready=false 表示兜底 poller 还没回填金额,提示"汇总信息还未拉取"
+      try {
+        const { bySeller, total, ready } = buildTodaySummaryFromDb();
+        if (ready) {
+          summaryLines = buildTodaySummaryLines(bySeller, total);
+        } else {
+          summaryLines = '(汇总信息还未拉取,稍后由兜底通知补全)';
+        }
+      } catch (err) {
+        logger.warn({ err: err.message }, 'feishu-notify: 查询当日汇总失败,跳过汇总');
+      }
       break;
     }
     case 'TYPE_POSTING_CANCELLED':
@@ -102,7 +242,9 @@ export async function notifyPostingEvent(messageType, payload) {
     `卖家: ${formatSeller(sellerId)}`,
     `${timeField[0]}: ${timeField[1]}`,
     extra,
-  ].filter(Boolean).join('\n');
+    summaryLines ? '' : null, // 空行分隔
+    summaryLines,
+  ].filter((v) => v !== null).join('\n');
 
   // 按消息类型路由到不同飞书机器人:
   // TYPE_POSTING_CANCELLED → 货件取消机器人

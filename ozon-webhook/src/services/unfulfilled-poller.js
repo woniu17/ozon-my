@@ -10,7 +10,7 @@ import config from '../config/index.js';
 import { getDb } from '../db/index.js';
 import { postingFbsUnfulfilledList } from './opi-client.js';
 import { listStores, getStoreBySellerId } from './store-loader.js';
-import { notifyNewPostingDiscovered } from './feishu-notify.js';
+import { notifyNewPostingDiscovered, extractSaleAmountCny, buildTodaySummaryFromDb, buildTodaySummaryLines } from './feishu-notify.js';
 import logger from '../middleware/log.js';
 
 const POLLER_INTERVAL_MS = 2 * 60 * 1000; // 2 分钟
@@ -33,14 +33,6 @@ function iso(date) {
 }
 
 /**
- * 计算"今日 0 点(Asia/Shanghai)"对应的日期串 YYYY-MM-DD
- * 用于与 in_process_at(UTC ISO)转 Asia/Shanghai 后比对
- */
-function getTodayShDateStr() {
-  return getShDateStr(new Date());
-}
-
-/**
  * 把任意时间(Date 或 ISO 串)按 Asia/Shanghai 时区格式化为 YYYY-MM-DD
  * in_process_at 是 UTC ISO 字符串(如 "2026-09-08T16:14:02Z"),
  * 直接 slice(0,10) 取到的是 UTC 日期,不是北京时间日期
@@ -60,36 +52,7 @@ function getShDateStr(input) {
 }
 
 /**
- * 从 posting 中提取销售金额(CNY,OPI 返回的金额本身就是人民币)
- * 优先 financial_data.posting_totals.price.amount
- * 兜底 financial_data.products[].payout.amount 之和
- * 再兜底 products[].price.amount 之和
- */
-function extractSaleAmountCny(posting) {
-  const fd = posting.financial_data || {};
-  // 1) posting_totals.price(整单金额)
-  const total = fd.posting_totals?.price?.amount;
-  if (total != null) return Number(total) || 0;
-  // 2) products[].payout 之和
-  if (Array.isArray(fd.products)) {
-    const sum = fd.products.reduce((s, p) => s + (Number(p?.payout?.amount) || 0), 0);
-    if (sum > 0) return sum;
-  }
-  // 3) products[].price 之和(顶层)
-  if (Array.isArray(posting.products)) {
-    const sum = posting.products.reduce((s, p) => {
-      const price = p?.price;
-      const v = typeof price === 'object' ? price?.amount : price;
-      return s + (Number(v) || 0);
-    }, 0);
-    if (sum > 0) return sum;
-  }
-  return 0;
-}
-
-/**
- * 单店翻页拉取未妥投货件,返回 postings 数组
- * 同时返回"当日下单"的 postings 子集,用于销售汇总
+ * 单店翻页拉取未妥投货件,返回 postings 数组 + 当日子集
  * 翻页中途失败:返回已拉到的部分数据(不丢),仅记录 warn 日志
  */
 async function fetchStorePostings(store) {
@@ -98,7 +61,7 @@ async function fetchStorePostings(store) {
   const cutoffTo = iso(new Date(now.getTime() + CUTOFF_WINDOW_DAYS * 86400_000));
 
   const all = [];
-  const todayStr = getTodayShDateStr();
+  const todayStr = getShDateStr(new Date());
   const todayPostings = [];
   let cursor;
   let pages = 0;
@@ -122,8 +85,7 @@ async function fetchStorePostings(store) {
       }
     } while (cursor);
   } catch (err) {
-    // 翻页中途失败:保留已拉到的部分数据(可能是前几页),今日统计部分可信
-    // 不抛出,让上层用部分数据继续聚合
+    // 翻页中途失败:保留已拉到的部分数据(可能是前几页)
     logger.warn(
       { storeId: store.id, pages, got: all.length, todayGot: todayPostings.length, err: err.message },
       'unfulfilled-poller: 翻页中途失败,保留已拉到的部分数据',
@@ -131,6 +93,28 @@ async function fetchStorePostings(store) {
     return { all, today: todayPostings, partial: true };
   }
   return { all, today: todayPostings, partial: false };
+}
+
+/**
+ * 回填当日货件金额到 DB
+ * 对每个 posting,如果提取到的金额 > 0,upsert 到 ozon_postings.sale_amount_cny
+ * 保证 buildTodaySummaryFromDb 查到的金额是准的(旧记录由兜底 poller 每轮刷新)
+ */
+function backfillSaleAmount(todayPostings) {
+  if (!todayPostings || todayPostings.length === 0) return;
+  const db = getDb();
+  const stmt = db.prepare(`
+    UPDATE ozon_postings
+    SET sale_amount_cny = CASE WHEN ? > 0 THEN ? ELSE sale_amount_cny END
+    WHERE posting_number = ? AND (sale_amount_cny = 0 OR sale_amount_cny IS NULL)
+  `);
+  for (const p of todayPostings) {
+    if (!p.posting_number) continue;
+    const cny = extractSaleAmountCny(p);
+    if (cny > 0) {
+      stmt.run(cny, cny, p.posting_number);
+    }
+  }
 }
 
 /**
@@ -142,16 +126,18 @@ function persistNewPosting(store, posting) {
   const now = new Date().toISOString();
   const postingNumber = posting.posting_number;
   const productsJson = JSON.stringify(posting.products ?? []);
+  const saleAmountCny = extractSaleAmountCny(posting);
   try {
     db.prepare(`
       INSERT INTO ozon_postings
         (posting_number, seller_id, warehouse_id, status, products_json, in_process_at, shipment_date,
          delivery_date_begin, delivery_date_end, tracking_number, is_express, tpl_integration_type,
-         first_received_at, last_received_at, raw_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+         first_received_at, last_received_at, raw_count, sale_amount_cny)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
       ON CONFLICT(posting_number) DO UPDATE SET
         last_received_at=excluded.last_received_at,
-        raw_count=ozon_postings.raw_count + 1
+        raw_count=ozon_postings.raw_count + 1,
+        sale_amount_cny=CASE WHEN excluded.sale_amount_cny > 0 THEN excluded.sale_amount_cny ELSE ozon_postings.sale_amount_cny END
     `).run(
       postingNumber,
       posting.seller_id ?? store.company_id,
@@ -167,6 +153,7 @@ function persistNewPosting(store, posting) {
       posting.tpl_integration_type ?? null,
       now,
       now,
+      saleAmountCny,
     );
   } catch (err) {
     logger.warn({ postingNumber, err: err.message }, 'unfulfilled-poller: 落库失败');
@@ -186,21 +173,16 @@ async function tick() {
       return;
     }
 
-    // 跨店聚合:今日订单统计(OPI 返回金额本身就是 CNY)
-    // Map<seller_id, { storeName, orderCount, saleCny }>
-    const todayBySeller = new Map();
-    const todayTotal = { orderCount: 0, saleCny: 0 };
     const newFindings = [];
 
     for (const store of stores) {
       const { all, today } = await fetchStorePostings(store);
       if (all.length === 0) continue;
 
-      let known = knownPostingsByStore.get(store.id);
-      if (!known) {
-        known = loadKnownPostingsFromDb(store.company_id);
-        knownPostingsByStore.set(store.id, known);
-      }
+      // 每轮从 DB 刷新 known 集合:避免 Ozon 实时推送落库的货件被误判为新货件重复推送
+      const known = loadKnownPostingsFromDb(store.company_id);
+      knownPostingsByStore.set(store.id, known);
+
       const newPostings = [];
       for (const p of all) {
         if (!p.posting_number) continue;
@@ -215,19 +197,9 @@ async function tick() {
         newFindings.push({ store, posting: p });
       }
 
-      // 聚合今日统计(不论新发现与否,只要 in_process_at 是今天)
-      const sellerId = Number(store.company_id);
-      let agg = todayBySeller.get(sellerId);
-      if (!agg) {
-        agg = { storeName: store.name, sellerId, orderCount: 0, saleCny: 0 };
-        todayBySeller.set(sellerId, agg);
-      }
-      for (const p of today) {
-        agg.orderCount++;
-        agg.saleCny += extractSaleAmountCny(p);
-      }
-      todayTotal.orderCount += today.length;
-      todayTotal.saleCny += today.reduce((s, p) => s + extractSaleAmountCny(p), 0);
+      // 回填当日货件金额到 DB:旧记录 sale_amount_cny=0 的会被补上
+      // 保证 Ozon 实时推送时 buildTodaySummaryFromDb 查到的金额是准的
+      backfillSaleAmount(today);
 
       if (newPostings.length > 0) {
         logger.info(
@@ -237,21 +209,19 @@ async function tick() {
       }
     }
 
-    // 推送飞书:每条新货件单独推送,带当日全店汇总
+    // 推送飞书:每条新货件单独推送,带当日全店汇总(从 DB 查询,含刚落库+回填的新货件)
     if (newFindings.length > 0) {
-      // 构造当日汇总文本(只算一次,所有新货件通知复用)
-      const todayLines = buildTodaySummaryLines(todayBySeller, todayTotal);
+      const { bySeller, total } = buildTodaySummaryFromDb();
+      const todayLines = buildTodaySummaryLines(bySeller, total);
       for (const { store, posting } of newFindings) {
         await notifyNewPostingDiscovered(store, posting, todayLines).catch(err =>
           logger.warn({ err: err.message, postingNumber: posting.posting_number }, 'unfulfilled-poller: 飞书通知失败'),
         );
       }
-      logger.info({ totalNew: newFindings.length, todayTotal }, 'unfulfilled-poller: 本轮新货件通知已发送');
+      logger.info({ totalNew: newFindings.length, todayTotal: total }, 'unfulfilled-poller: 本轮新货件通知已发送');
     } else {
-      logger.info(
-        { todayTotal, todayBySeller: Array.from(todayBySeller.values()) },
-        'unfulfilled-poller: 本轮无新货件(汇总仍统计)',
-      );
+      const { total } = buildTodaySummaryFromDb();
+      logger.info({ todayTotal: total }, 'unfulfilled-poller: 本轮无新货件(汇总仍统计)');
     }
   } catch (err) {
     logger.error({ err }, 'unfulfilled-poller: tick 异常');
@@ -274,33 +244,6 @@ function loadKnownPostingsFromDb(sellerId) {
     logger.warn({ sellerId, err: err.message }, 'unfulfilled-poller: 加载已知 posting 失败,视为空集');
   }
   return set;
-}
-
-/**
- * 构造"当日各店铺销售汇总"文本块
- * 金额直接显示 CNY(OPI 返回的金额本身就是人民币,无需换算)
- * 订单数前导空格对齐到 2 位,金额整数部分前导空格对齐到 4 位(小数固定 2 位)
- * @param {Map<number, {storeName, sellerId, orderCount, saleCny}>} bySeller
- * @param {{orderCount, saleCny}} total
- * @returns {string}
- */
-function buildTodaySummaryLines(bySeller, total) {
-  // 订单数最多2位,前导空格对齐:" 1" / "10"
-  const padOrder = (n) => String(n).padStart(2, ' ');
-  // 金额整数部分最多4位,前导空格对齐,小数固定2位:"  25.00" / "1000.00"
-  const padAmount = (cny) => {
-    const fixed = Number(cny).toFixed(2);
-    const [intPart, decPart] = fixed.split('.');
-    return `${intPart.padStart(4, ' ')}.${decPart}`;
-  };
-  const lines = [];
-  lines.push('—— 当日各店铺销售汇总(Asia/Shanghai)——');
-  const sorted = Array.from(bySeller.values()).sort((a, b) => a.sellerId - b.sellerId);
-  for (const it of sorted) {
-    lines.push(`• ${it.storeName}: 订单 ${padOrder(it.orderCount)} 单 / 销售金额 ${padAmount(it.saleCny)} CNY`);
-  }
-  lines.push(`合计:订单 ${padOrder(total.orderCount)} 单 / 销售金额 ${padAmount(total.saleCny)} CNY`);
-  return lines.join('\n');
 }
 
 export function startUnfulfilledPoller() {

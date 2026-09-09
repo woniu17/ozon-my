@@ -44,6 +44,7 @@ function runMigrations(db) {
     { table: 'ozon_postings', column: 'posting_type', type: "TEXT NOT NULL DEFAULT 'fbs'", index: 'idx_postings_type' },
     { table: 'ozon_postings', column: 'creation_date', type: 'TEXT', index: null },
     { table: 'ozon_postings', column: 'cancel_date', type: 'TEXT', index: null },
+    { table: 'ozon_postings', column: 'sale_amount_cny', type: 'REAL DEFAULT 0', index: null },
   ];
   for (const m of migrations) {
     const cols = db.prepare(`PRAGMA table_info(${m.table})`).all();

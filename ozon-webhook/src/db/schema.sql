@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS ozon_postings (
   cancel_date TEXT,                           -- FBO 货件取消时间
   raw_count INTEGER DEFAULT 1,
   first_received_at TEXT,
-  last_received_at TEXT
+  last_received_at TEXT,
+  sale_amount_cny REAL DEFAULT 0     -- 销售金额(OPI 返回的金额本身就是 CNY)
 );
 
 CREATE INDEX IF NOT EXISTS idx_postings_status ON ozon_postings(status);

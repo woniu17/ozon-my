@@ -5,7 +5,7 @@
 import { getDb } from '../db/index.js';
 import { getPostingDetail } from '../services/opi-client.js';
 import { getStoreBySellerId } from '../services/store-loader.js';
-import { notifyPostingEvent } from '../services/feishu-notify.js';
+import { notifyPostingEvent, extractSaleAmountCny } from '../services/feishu-notify.js';
 import logger from '../middleware/log.js';
 
 export default async function newPostingHandler(payload, ctx) {
@@ -23,7 +23,8 @@ export default async function newPostingHandler(payload, ctx) {
 
   // 推送已含字段,但 in_process_at 可能空 -> 调 OPI 补全(需匹配到店铺)
   let fullPayload = payload;
-  if (!payload.in_process_at) {
+  let saleAmountCny = 0;
+  if (!payload.in_process_at || !payload.financial_data) {
     if (!store) {
       logger.warn({ postingNumber, sellerId }, '未匹配到店铺,seller_id 无法回拉 OPI,降级用推送原字段');
     } else {
@@ -31,13 +32,19 @@ export default async function newPostingHandler(payload, ctx) {
         const detail = await getPostingDetail(store, postingNumber);
         fullPayload = {
           ...payload,
-          in_process_at: detail?.in_process_at ?? null,
+          in_process_at: detail?.in_process_at ?? payload.in_process_at,
           shipment_date: detail?.shipment_date ?? payload.shipment_date,
+          financial_data: detail?.financial_data ?? payload.financial_data,
+          products: detail?.products ?? payload.products,
         };
+        saleAmountCny = extractSaleAmountCny(detail ?? payload);
       } catch (err) {
         logger.warn({ postingNumber, sellerId, err: err.message }, 'OPI 回拉失败,降级用推送原始字段');
+        saleAmountCny = extractSaleAmountCny(payload);
       }
     }
+  } else {
+    saleAmountCny = extractSaleAmountCny(payload);
   }
 
   const productsJson = JSON.stringify(fullPayload.products ?? []);
@@ -45,8 +52,8 @@ export default async function newPostingHandler(payload, ctx) {
     INSERT INTO ozon_postings
       (posting_number, seller_id, warehouse_id, status, products_json, in_process_at, shipment_date,
        delivery_date_begin, delivery_date_end, tracking_number, is_express, tpl_integration_type,
-       first_received_at, last_received_at, raw_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+       first_received_at, last_received_at, raw_count, sale_amount_cny)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
     ON CONFLICT(posting_number) DO UPDATE SET
       seller_id=excluded.seller_id,
       warehouse_id=excluded.warehouse_id,
@@ -60,7 +67,8 @@ export default async function newPostingHandler(payload, ctx) {
       is_express=excluded.is_express,
       tpl_integration_type=excluded.tpl_integration_type,
       last_received_at=excluded.last_received_at,
-      raw_count=ozon_postings.raw_count + 1
+      raw_count=ozon_postings.raw_count + 1,
+      sale_amount_cny=CASE WHEN excluded.sale_amount_cny > 0 THEN excluded.sale_amount_cny ELSE ozon_postings.sale_amount_cny END
   `);
   stmt.run(
     postingNumber,
@@ -77,10 +85,11 @@ export default async function newPostingHandler(payload, ctx) {
     fullPayload.tpl_integration_type ?? null,
     existing?.first_received_at ?? now,
     now,
+    saleAmountCny,
   );
 
   logger.info(
-    { postingNumber, sellerId, storeMatched: !!store, storeId: store?.id },
+    { postingNumber, sellerId, storeMatched: !!store, storeId: store?.id, saleAmountCny },
     'NEW_POSTING 落库',
   );
 
