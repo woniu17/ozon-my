@@ -112,6 +112,8 @@ function onCancel() {
   white-space: pre-wrap;
   word-break: break-all;
   line-height: 1.6;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 .modal-footer {
   display: flex;

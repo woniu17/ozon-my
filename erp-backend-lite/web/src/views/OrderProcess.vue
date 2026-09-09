@@ -352,6 +352,31 @@ const ENRICH_BACKOFF_MS = 5000;     // 失败后下次间隔延长到 5s
 const ENRICH_MAX_CONSEC_FAIL = 3;   // 连续失败 3 次中止
 const ENRICH_BATCH_SIZE = 10;       // 每 10 条推送一次后端
 function enrichStop() { enrichStopFlag = true; }
+
+// 构建补全确认弹窗的 message:展示按平台分组的采购订单号列表(前 20 条 + 更多提示)
+function buildEnrichConfirmMessage(pending, platforms) {
+  const platformLabels = { yangkeduo: '拼多多', '1688': '1688', taobao: '淘宝' };
+  const lines = [];
+  lines.push(`检测到 ${pending.length} 条待补全采购单(${platforms.join('+')},全量,不限当前页)。`);
+  lines.push(`将逐个搜索补全商品图/数量,每单间隔 ${ENRICH_INTERVAL_MS / 1000}s 限速,连续失败 ${ENRICH_MAX_CONSEC_FAIL} 次自动中止。`);
+  lines.push('此操作需要在 Edge 浏览器中已登录对应平台,且扩展已启用。');
+  lines.push('');
+  lines.push('── 待补全采购订单号 ──');
+  // 按平台分组展示
+  const MAX_SHOW = 20; // 每平台最多展示前 20 条
+  for (const plat of ['yangkeduo', '1688', 'taobao']) {
+    const group = pending.filter((p) => p._platform === plat);
+    if (!group.length) continue;
+    const label = platformLabels[plat] || plat;
+    lines.push(`【${label}】${group.length} 条:`);
+    const shown = group.slice(0, MAX_SHOW);
+    for (const p of shown) lines.push(`  ${p.purchaseSn || '(无单号)'}`);
+    if (group.length > MAX_SHOW) lines.push(`  ... 还有 ${group.length - MAX_SHOW} 条`);
+  }
+  lines.push('');
+  lines.push('是否继续?');
+  return lines.join('\n');
+}
 async function onEnrichPurchaseItems() {
   if (enrichingItems.value) return;
   // 拉取全部待补全采购单(拼多多+1688+淘宝,不限当前页)
@@ -396,7 +421,7 @@ async function onEnrichPurchaseItems() {
   }
   if (!await confirmStore.ask({
     title: '补全采购订单信息',
-    message: `检测到 ${pending.length} 条待补全采购单(${platforms.join('+')},全量,不限当前页)。\n将逐个搜索补全商品图/数量,每单间隔 ${ENRICH_INTERVAL_MS / 1000}s 限速,连续失败 ${ENRICH_MAX_CONSEC_FAIL} 次自动中止。\n此操作需要在 Edge 浏览器中已登录对应平台,且扩展已启用。\n\n是否继续?`,
+    message: buildEnrichConfirmMessage(pending, platforms),
     confirmText: '开始补全',
   })) return;
   enrichingItems.value = true;
