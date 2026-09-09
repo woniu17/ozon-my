@@ -12,6 +12,19 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+// 从本地备注(note)中提取重量(g)
+// 匹配 "100g"/"123克"/"100 g"/"12.5克" 等格式;
+// 用负向 lookbehind/lookahead 排除 "kg"/"mg"/"grams" 等误匹配;
+// 备注中无重量信息时返回 null,由调用方回退到称重值。
+const WEIGHT_RE = /(\d+(?:\.\d+)?)\s*(?<![a-zA-Z])(g|克)(?![a-zA-Z])/i;
+function extractWeightFromNote(note) {
+  if (!note || typeof note !== 'string') return null;
+  const m = note.match(WEIGHT_RE);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 // node:sqlite(DatabaseSync) 无 db.transaction(),用显式事务
 function runInTx(fn) {
   db.exec('BEGIN');
@@ -42,6 +55,12 @@ export function upsertMiaoshouOrders(records) {
       // 主表 upsert by op_order_package_id
       // quantity 从 items 数组提取(订单商品数量,用于采购金额加权分摊)
       const quantity = (r.items || []).reduce((sum, it) => sum + (Number(it.quantity) || 0), 0);
+      // 重量优先取备注中提取的值(如 "100g"/"123克"),否则回退到称重值
+      const weightFromNote = extractWeightFromNote(r.note);
+      const finalWeight = weightFromNote != null
+        ? weightFromNote
+        : (r.weighingWeight != null ? Number(r.weighingWeight) : null);
+
       db.prepare(
         `INSERT INTO miaoshou_package (
           op_order_package_id, app_package_no, posting_number, shop_id, shop_nick,
@@ -91,7 +110,7 @@ export function upsertMiaoshouOrders(records) {
         r.buyerName || null,
         r.buyerCountry || null,
         r.gmtOrderStart || null,
-        r.weighingWeight != null ? Number(r.weighingWeight) : null,
+        finalWeight,
         r.note || null,
         r.operateStatus || null,
         r.purchaseStatus || null,
