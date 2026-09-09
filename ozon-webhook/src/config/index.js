@@ -29,10 +29,12 @@ const config = {
 
   // 飞书机器人(订单相关通知推送),留空则跳过
   // 货件取消走独立机器人,新订单/货件状态变更走另一机器人
+  // 揽收(posting_on_way_to_city)走独立机器人
   feishu: {
     webhookUrlDefault: process.env.FEISHU_WEBHOOK_URL_DEFAULT || '',
     webhookUrlCancel: process.env.FEISHU_WEBHOOK_URL_CANCEL || '',
     webhookUrlNew: process.env.FEISHU_WEBHOOK_URL_NEW || '',
+    webhookUrlPickup: process.env.FEISHU_WEBHOOK_URL_PICKUP || '',
   },
 
   // Poller

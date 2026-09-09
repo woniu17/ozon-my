@@ -180,6 +180,11 @@ export async function sendFeishuText(text, url) {
  * @param {object} payload Ozon 推送原始 payload
  */
 export async function notifyPostingEvent(messageType, payload) {
+  // 揽收(STATE_CHANGED + new_state=posting_on_way_to_city)走独立机器人 + 带当日揽收统计
+  if (messageType === 'TYPE_STATE_CHANGED' && payload.new_state === 'posting_on_way_to_city') {
+    return notifyPostingPickedUp(payload);
+  }
+
   const postingNumber = payload.posting_number ?? '-';
   const sellerId = payload.seller_id ?? '-';
 
@@ -303,4 +308,102 @@ export async function notifyNewPostingDiscovered(store, posting, todaySummaryLin
 
   // 新订单/货件机器人
   await sendFeishuText(text, config.feishu.webhookUrlNew);
+}
+
+/**
+ * 从 DB 查询当日各店铺揽收统计(按 last_received_at 当日 + status=posting_on_way_to_city 近似)
+ * 揽收时间用 ozon_postings.last_received_at 近似(STATE_CHANGED 落库时间)
+ * 注意:同一货件后续状态变更会覆盖 last_received_at,可能导致漏统计;
+ * 但揽收通常是一日内的终态之一,且本函数专为"刚收到揽收推送"场景设计,容差可接受
+ * @returns {{bySeller: Map<number, {storeName, sellerId, pickupCount}>, total: number}}
+ */
+export function buildTodayPickupSummaryFromDb() {
+  const { start, end } = getTodayUtcRange();
+  const db = getDb();
+  // 当日 last_received_at 且当前状态为揽收的货件数
+  const rows = db.prepare(`
+    SELECT seller_id, COUNT(*) AS pickup_count
+    FROM ozon_postings
+    WHERE status = 'posting_on_way_to_city'
+      AND last_received_at IS NOT NULL
+      AND last_received_at >= ? AND last_received_at < ?
+    GROUP BY seller_id
+    ORDER BY seller_id
+  `).all(start, end);
+
+  const stores = listStores();
+  const bySeller = new Map();
+  let total = 0;
+
+  // 确保所有店铺都出现(即使 0 单)
+  for (const s of stores) {
+    const sellerId = Number(s.company_id);
+    bySeller.set(sellerId, { storeName: s.name, sellerId, pickupCount: 0 });
+  }
+  for (const r of rows) {
+    const sellerId = Number(r.seller_id);
+    const store = stores.find(s => Number(s.company_id) === sellerId);
+    const storeName = store?.name ?? String(sellerId);
+    bySeller.set(sellerId, {
+      storeName,
+      sellerId,
+      pickupCount: r.pickup_count,
+    });
+    total += r.pickup_count;
+  }
+
+  return { bySeller, total };
+}
+
+/**
+ * 构造"当日各店铺揽收统计"文本块
+ * 揽收数前导空格对齐到 2 位
+ * @param {Map<number, {storeName, sellerId, pickupCount}>} bySeller
+ * @param {number} total
+ * @returns {string}
+ */
+export function buildTodayPickupSummaryLines(bySeller, total) {
+  const padCount = (n) => String(n).padStart(2, ' ');
+  const lines = [];
+  lines.push('—— 当日各店铺揽收统计(Asia/Shanghai)——');
+  const sorted = Array.from(bySeller.values()).sort((a, b) => a.sellerId - b.sellerId);
+  for (const it of sorted) {
+    lines.push(`• ${it.storeName}: 揽收 ${padCount(it.pickupCount)} 单`);
+  }
+  lines.push(`合计:揽收 ${padCount(total)} 单`);
+  return lines.join('\n');
+}
+
+/**
+ * 推送"揽收通知"(STATE_CHANGED + new_state=posting_on_way_to_city)到飞书
+ * 走独立机器人,带当日各店铺揽收统计(从 DB 查询,含本条新揽收)
+ * @param {object} payload Ozon 推送原始 payload
+ */
+export async function notifyPostingPickedUp(payload) {
+  const postingNumber = payload.posting_number ?? '-';
+  const sellerId = payload.seller_id ?? '-';
+  const store = getStoreBySellerId(sellerId);
+  const sellerName = store ? store.name : String(sellerId);
+
+  const title = `[揽收] [${sellerName}] [${postingNumber}]`;
+  let pickupLines = null;
+  try {
+    const { bySeller, total } = buildTodayPickupSummaryFromDb();
+    pickupLines = buildTodayPickupSummaryLines(bySeller, total);
+  } catch (err) {
+    logger.warn({ err: err.message }, 'feishu-notify: 查询当日揽收统计失败,跳过统计');
+  }
+
+  const text = [
+    title,
+    `货件号: ${postingNumber}`,
+    `卖家: ${formatSeller(sellerId)}`,
+    `变更时间: ${payload.changed_state_date ?? '-'}`,
+    `新状态: ${payload.new_state ?? '-'}`,
+    payload.old_state ? `旧状态: ${payload.old_state}` : null,
+    pickupLines ? '' : null,
+    pickupLines,
+  ].filter((v) => v !== null).join('\n');
+
+  await sendFeishuText(text, config.feishu.webhookUrlPickup);
 }
