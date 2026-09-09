@@ -106,8 +106,9 @@ export function findPendingAccrualPostings(storeId, limit = 400) {
          AND o.status IN ('delivered', 'cancelled', 'not_accepted')
          AND (
            p.accrual_synced_at IS NULL
-           OR (p.accrual_total IS NULL
-               AND p.accrual_synced_at < datetime('now', '-24 hours'))
+           -- 24h 前拉过的重拉:Ozon 应计分批返回,首次可能只返回部分类型
+           -- (如只有 SaleCommission 而缺 AgentFee/Delivery),需重拉确认完整
+           OR p.accrual_synced_at < datetime('now', '-24 hours')
          )
          AND o.in_process_at > datetime('now', '-90 days')
        ORDER BY o.in_process_at DESC
