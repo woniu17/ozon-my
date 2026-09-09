@@ -251,7 +251,9 @@ export async function notifyPostingEvent(messageType, payload) {
   // TYPE_NEW_POSTING / TYPE_STATE_CHANGED → 新订单/货件机器人
   const url = messageType === 'TYPE_POSTING_CANCELLED'
     ? config.feishu.webhookUrlCancel
-    : config.feishu.webhookUrlNew;
+    : messageType === 'TYPE_NEW_POSTING'
+      ? config.feishu.webhookUrlNew
+      : config.feishu.webhookUrlDefault;
 
   await sendFeishuText(text, url);
 }
