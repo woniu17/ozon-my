@@ -194,7 +194,7 @@ export async function notifyPostingEvent(messageType, payload) {
       const sellerName = store ? store.name : String(sellerId);
       const isQc = typeof postingNumber === 'string'
         && (postingNumber.startsWith('02131') || postingNumber.startsWith('024785'));
-      title = `[${isQc ? '质检' : ''}] [${sellerName}] [${postingNumber}]`;
+      title = `${isQc ? '[质检]' : ''} [${sellerName}] [${postingNumber}]`;
       timeField = ['处理时间', payload.in_process_at ?? '-'];
       const products = Array.isArray(payload.products) ? payload.products : [];
       const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
