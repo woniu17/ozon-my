@@ -94,7 +94,11 @@ export async function getAccrualTypes(fetcher) {
 }
 
 /** 待拉应计货件清单(每店铺每轮限量,防单轮过载)
- *  条件:已完成/已取消 + (从未拉过 | 拉过但空且距上次 24h+) + 下单 90 天内
+ *  条件:已完成/已取消 + 下单 90 天内,且满足以下之一:
+ *    1) 从未拉过
+ *    2) 拉过但空(accrual_total IS NULL,24h 重试,防 Ozon 滞后生成)
+ *    3) 拉到过但缺关键类型(type 66 代理佣金/67 国际配送,不受 24h 限制)
+ *       Ozon 应计分批返回,首次可能只返回 SaleCommission,需重拉补全
  */
 export function findPendingAccrualPostings(storeId, limit = 400) {
   return db
@@ -105,13 +109,23 @@ export function findPendingAccrualPostings(storeId, limit = 400) {
        WHERE o.store_id = ?
          AND o.status IN ('delivered', 'cancelled', 'not_accepted')
          AND (
+           -- 1) 从未拉过
            p.accrual_synced_at IS NULL
-           -- 24h 前拉过的重拉:Ozon 应计分批返回,首次可能只返回部分类型
-           -- (如只有 SaleCommission 而缺 AgentFee/Delivery),需重拉确认完整
-           OR p.accrual_synced_at < datetime('now', '-24 hours')
+           -- 2) 拉过但空(24h 重试,防 Ozon 滞后生成)
+           OR (p.accrual_total IS NULL AND p.accrual_synced_at < datetime('now', '-24 hours'))
+           -- 3) 拉到过应计但缺关键类型(type 66 代理佣金/67 国际配送)
+           --    Ozon 应计分批返回,首次可能只返回 SaleCommission,需重拉补全
+           --    不受 24h 限制:只要缺关键类型就重拉,确保应计完整
+           OR (
+             p.accrual_total IS NOT NULL
+             AND p.id NOT IN (SELECT package_id FROM op_accrual WHERE type_id IN (66, 67))
+           )
          )
          AND o.in_process_at > datetime('now', '-90 days')
-       ORDER BY o.in_process_at DESC
+       -- 优先级:从未拉过的(IS NULL) → 空应计(24h) → 缺类型;同优先级内按下单时间倒序
+       ORDER BY (p.accrual_synced_at IS NULL) DESC,
+                (p.accrual_total IS NULL) DESC,
+                o.in_process_at DESC
        LIMIT ?`
     )
     .all(storeId, Number(limit) || 400);

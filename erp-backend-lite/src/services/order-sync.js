@@ -241,7 +241,8 @@ async function syncStore(store) {
   // 4) 应计同步(已完成/已取消货件,失败不阻塞订单同步)
   if (progress.active) progress.currentPhase = 'accrual';
   try {
-    await syncAccruals(store);
+    // 全量同步场景:提高单轮上限到 2000(默认 400),避免老订单排不上
+    await syncAccruals(store, { limit: 2000 });
   } catch (e) {
     logger.warn({ storeId: store.id, err: e?.message }, '[order-sync] 应计同步失败(不影响订单同步)');
   }
@@ -273,7 +274,7 @@ async function callAccrualWithRetry(store, postingNumbers) {
   throw lastErr;
 }
 
-async function syncAccruals(store, { mode = 'pending', sinceDays, packageIds } = {}) {
+async function syncAccruals(store, { mode = 'pending', sinceDays, packageIds, limit } = {}) {
   // 待拉清单:pending(增量,默认)/ backfill(存量回补)/ packages(单包裹刷新)
   let pending;
   if (mode === 'packages') {
@@ -282,7 +283,7 @@ async function syncAccruals(store, { mode = 'pending', sinceDays, packageIds } =
   } else if (mode === 'backfill') {
     pending = findBackfillAccrualPostings(store.id, sinceDays, 2000);
   } else {
-    pending = findPendingAccrualPostings(store.id, ACCRUAL_LIMIT_PER_ROUND);
+    pending = findPendingAccrualPostings(store.id, limit || ACCRUAL_LIMIT_PER_ROUND);
   }
   if (pending.length === 0) return { packages: 0, accrualRows: 0 };
 
@@ -357,6 +358,19 @@ export async function runSyncAllList({ sinceDays, since, to } = {}) {
       logger.warn({ storeId: store.id, err: e?.message, stack: e?.stack }, '[order-sync-all] 店铺同步失败');
     }
     progress.doneStores++;
+  }
+  // 全量同步后追加应计同步(与 syncStore 第4阶段一致)
+  // 注:runSyncAllList 原先只拉订单不拉应计,导致已完成订单的代理佣金/国际配送等缺失
+  progress.currentPhase = 'accrual';
+  progress.message = '应计项目同步中(已完成/已取消货件)...';
+  for (const store of eligible) {
+    try {
+      // 全量同步场景:提高单轮上限到 2000(默认 400),避免老订单排不上
+      const r = await syncAccruals(store, { limit: 2000 });
+      logger.info({ storeId: store.id, ...r }, '[order-sync-all] 应计同步完成');
+    } catch (e) {
+      logger.warn({ storeId: store.id, err: e?.message }, '[order-sync-all] 应计同步失败(不影响订单同步)');
+    }
   }
   // 完成:保留进度数据,置 active=false + finishedAt,等用户手动关闭
   progress.active = false;
