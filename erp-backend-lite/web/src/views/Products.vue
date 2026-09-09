@@ -5,7 +5,8 @@ import {
   getProducts,
   getProductDetail,
   syncProducts,
-  syncProductDescriptions,
+  syncProductDetails,
+  setProductWeight,
   getSyncProgress,
   deleteProduct as deleteProductApi,
   deleteProductsBatch,
@@ -70,10 +71,10 @@ const deletingId = ref('');
 // 同步状态:从 Ozon 拉取店铺商品写入本地缓存
 const syncing = ref(false);
 const syncLabel = ref('同步店铺商品');
-// 描述同步状态:批量拉取 /v1/product/info/description 并计算描述质量标记
-// 复用 syncing 进度面板(syncProgressMap 按 storeId + phase=desc-* 上报)
-const syncingDesc = ref(false);
-const syncDescLabel = ref('同步描述');
+// 详情同步状态:两阶段拉属性(/v4)+描述(/v1)并计算质量
+// 复用 syncing 进度面板(syncProgressMap 按 storeId + phase=details-* 上报)
+const syncingDetails = ref(false);
+const syncDetailsLabel = ref('同步详情');
 // 同步进度:各店铺实时进度列表(轮询 GET /sync-progress 填充)
 const syncProgressItems = ref([]);
 let syncProgressTimer = null;
@@ -401,29 +402,29 @@ async function syncStoreProducts() {
   }
 }
 
-// 同步描述:批量拉取 /v1/product/info/description,计算描述质量标记(占位/按钮污染)
-// 复用进度面板(syncProgressMap phase=desc-*);需先「同步店铺商品」拿到商品列表后才有意义
-async function syncDescriptions() {
+// 同步详情:串行两阶段拉取 /v4/product/info/attributes(重量/尺寸) + /v1/product/info/description(描述+质量)
+// 复用进度面板(syncProgressMap phase=details-*);需先「同步店铺商品」拿到商品列表后才有意义
+async function syncDetails() {
   const storeId = state.filters.storeId;
   const targets = storeId
     ? [{ id: storeId, name: storeName(storeId) }]
     : (storesStore.list || []).map((s) => ({ id: s.id, name: s.name || s.id }));
 
   if (targets.length === 0) {
-    show('没有可同步描述的店铺', 'error');
+    show('没有可同步详情的店铺', 'error');
     return;
   }
 
   const scopeText = storeId ? `店铺「${storeName(storeId)}」` : `全部 ${targets.length} 个店铺`;
   if (
     !(await confirmStore.ask({
-      message: `确认拉取 ${scopeText} 的商品描述并计算描述质量?大店铺需逐条调用接口,耗时较长。将统一重新拉取全部商品描述(不判断本地是否已有)。`,
+      message: `确认拉取 ${scopeText} 的商品详情(属性+描述)?将分两阶段:先批量拉属性(含重量/尺寸),再逐条拉描述并计算质量,大店铺耗时较长。`,
     }))
   ) {
     return;
   }
 
-  syncingDesc.value = true;
+  syncingDetails.value = true;
   // 立即初始化进度面板:所有店铺显示"等待中"
   syncProgressItems.value = targets.map((t) => ({
     storeId: t.id,
@@ -443,9 +444,9 @@ async function syncDescriptions() {
       return (async () => {
         if (i > 0) await new Promise((r) => setTimeout(r, i * STORE_INTERVAL_MS));
         try {
-          await syncProductDescriptions(t.id, true); // 立即返回 accepted
+          await syncProductDetails(t.id, true); // 立即返回 accepted
         } catch (err) {
-          show(`店铺 ${t.name} 描述同步失败: ${err.message || String(err)}`, 'error');
+          show(`店铺 ${t.name} 详情同步失败: ${err.message || String(err)}`, 'error');
           const idx = syncProgressItems.value.findIndex((p) => p.storeId === t.id);
           if (idx >= 0) {
             const cur = syncProgressItems.value[idx];
@@ -461,7 +462,7 @@ async function syncDescriptions() {
       })();
     });
 
-    syncDescLabel.value = storeId ? '描述同步中…' : `描述同步中 (并行 ${targets.length} 个店铺)`;
+    syncDetailsLabel.value = storeId ? '详情同步中…' : `详情同步中 (并行 ${targets.length} 个店铺)`;
 
     await Promise.all(launchPromises);
     await waitForSyncComplete(targetIds);
@@ -480,7 +481,7 @@ async function syncDescriptions() {
       totalTotal += p.total ?? 0;
       totalFailed += p.failedBatches ?? 0;
     }
-    const summary = `描述同步完成:${totalSynced}/${totalTotal}${
+    const summary = `详情同步完成:${totalSynced}/${totalTotal}${
       failedStores > 0 ? `,失败 ${failedStores} 个店铺` : ''
     }${totalFailed > 0 ? `,${totalFailed} 条拉取失败(见日志)` : ''}`;
     show(summary, failedStores > 0 || totalFailed > 0 ? 'error' : 'success');
@@ -489,8 +490,8 @@ async function syncDescriptions() {
     stopProgressPolling();
     stopElapsedTimer();
     syncFinished.value = true;
-    syncingDesc.value = false;
-    syncDescLabel.value = '同步描述';
+    syncingDetails.value = false;
+    syncDetailsLabel.value = '同步详情';
   }
 }
 
@@ -578,6 +579,40 @@ function toggleSelectAll() {
     const existing = new Set(selectedSkus.value);
     for (const r of state.items) existing.add(r.sku);
     selectedSkus.value = [...existing];
+  }
+}
+// 设置本系统重量(change 事件触发,失焦或回车后调用后端)
+//   输入空值 -> 视为清除(回退用 Ozon 重量)
+//   输入非数字或负数 -> 不调用后端,提示错误
+async function onWeightChange(it, event) {
+  const raw = String(event.target.value || '').trim();
+  if (raw === '') {
+    if (it.customWeightG == null) return; // 本就为空,无变化
+    try {
+      await setProductWeight(it.sku, null);
+      it.customWeightG = null;
+      show(`已清除 ${it.sku} 的本系统重量,回退用 Ozon 重量`, 'success');
+    } catch (err) {
+      show(`清除重量失败: ${err.message || String(err)}`, 'error');
+    }
+    return;
+  }
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 0) {
+    show('重量必须为非负数字', 'error');
+    // 还原输入框为已有值
+    event.target.value = it.customWeightG != null ? String(it.customWeightG) : '';
+    return;
+  }
+  if (it.customWeightG === v) return; // 无变化
+  try {
+    await setProductWeight(it.sku, v);
+    it.customWeightG = v;
+    show(`已设置 ${it.sku} 本系统重量 ${v}g`, 'success');
+  } catch (err) {
+    show(`设置重量失败: ${err.message || String(err)}`, 'error');
+    // 还原输入框
+    event.target.value = it.customWeightG != null ? String(it.customWeightG) : '';
   }
 }
 // 单条更新图片:详情弹窗「图片」分组触发
@@ -941,18 +976,18 @@ onMounted(() => {
   <div>
     <div class="toolbar">
       <h2>商品列表</h2>
-      <button class="btn btn-primary" :disabled="syncing || syncingDesc" @click="syncStoreProducts">
+      <button class="btn btn-primary" :disabled="syncing || syncingDetails" @click="syncStoreProducts">
         {{ syncLabel }}
       </button>
       <button
         class="btn btn-primary"
-        :disabled="syncing || syncingDesc"
-        :title="'批量拉取商品描述并计算描述质量(占位/按钮污染),用于「描述状态」筛选'"
-        @click="syncDescriptions"
+        :disabled="syncing || syncingDetails"
+        :title="'批量拉取商品属性(重量/尺寸)与描述并计算描述质量,用于「描述状态」筛选'"
+        @click="syncDetails"
       >
-        {{ syncDescLabel }}
+        {{ syncDetailsLabel }}
       </button>
-      <button class="btn btn-ghost" :disabled="state.loading || syncing || syncingDesc" @click="loadList">
+      <button class="btn btn-ghost" :disabled="state.loading || syncing || syncingDetails" @click="loadList">
         {{ state.loading ? '刷新中…' : '刷新' }}
       </button>
     </div>
@@ -1087,15 +1122,12 @@ onMounted(() => {
 
     <div class="table-wrap">
       <table class="data-table" aria-label="商品列表">
-        <caption class="sr-only">商品数据缓存列表,含 SKU、Offer ID、商品链接、源商品链接、名称、店铺、状态、库存、图片与操作</caption>
+        <caption class="sr-only">商品数据缓存列表,含商品(主图/名称/SKU/Offer ID/源商品链接)、重量、店铺、状态、库存、图片状态与操作</caption>
         <thead>
           <tr>
             <th style="width:32px"><input type="checkbox" :checked="allSelected" aria-label="全选当前页" @change="toggleSelectAll" /></th>
-            <th>SKU</th>
-            <th style="width:140px">Offer ID</th>
-            <th style="width:90px">商品链接</th>
-            <th style="width:90px">源商品链接</th>
-            <th style="width:160px">名称</th>
+            <th style="width:280px" class="col-product-th">商品</th>
+            <th style="width:170px" class="col-weight-th" title="Ozon 后台重量(来自 /v4/product/info/attributes)+本系统重量(可在下方输入框设置,覆盖 Ozon 重量参与订单/采购分摊)">重量</th>
             <th>店铺</th>
             <th>状态</th>
             <th>库存</th>
@@ -1106,46 +1138,77 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="12" class="muted" style="padding: 24px; text-align: center">加载中…</td>
+            <td colspan="9" class="muted" style="padding: 24px; text-align: center">加载中…</td>
           </tr>
           <tr v-else-if="!state.items.length">
-            <td colspan="12" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
+            <td colspan="9" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
           </tr>
           <tr v-for="it in state.items" :key="it.sku">
             <td><input type="checkbox" :checked="isSelected(it.sku)" :aria-label="`选择 SKU ${it.sku}`" @change="toggleSelect(it.sku)" /></td>
-            <td>{{ it.sku }}</td>
-            <td>{{ it.offerId || '—' }}</td>
-            <td>
-              <a v-if="ozonProductUrl(firstNumericId(it.sku))"
-                 :href="ozonProductUrl(firstNumericId(it.sku))"
-                 target="_blank" rel="noopener noreferrer"
-                 :title="ozonProductUrl(firstNumericId(it.sku))">商品</a>
-              <span v-else>—</span>
+            <td class="col-product">
+              <div class="product-item">
+                <a v-if="it.image && ozonProductUrl(firstNumericId(it.sku))"
+                   :href="ozonProductUrl(firstNumericId(it.sku))"
+                   target="_blank" rel="noopener noreferrer"
+                   :title="it.name || '查看 Ozon 商品页'"
+                   class="product-img-box">
+                  <img :src="it.image" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
+                </a>
+                <span v-else class="product-img-box product-img-empty" :title="it.image ? '无商品页链接' : '无主图'">—</span>
+                <div class="product-main">
+                  <a v-if="ozonProductUrl(firstNumericId(it.sku))"
+                     :href="ozonProductUrl(firstNumericId(it.sku))"
+                     target="_blank" rel="noopener noreferrer"
+                     class="product-title"
+                     :title="it.name || ''">{{ it.name || '—' }}</a>
+                  <div v-else class="product-title" :title="it.name || ''">{{ it.name || '—' }}</div>
+                  <div class="product-sub">SKU：{{ it.sku }}</div>
+                  <div class="product-sub">Offer ID：{{ it.offerId || '—' }}</div>
+                  <div class="product-sub">
+                    源商品：
+                    <a v-if="ozonProductUrl(firstNumericId(it.offerId))"
+                       :href="ozonProductUrl(firstNumericId(it.offerId))"
+                       target="_blank" rel="noopener noreferrer"
+                       :title="ozonProductUrl(firstNumericId(it.offerId))">{{ firstNumericId(it.offerId) || '—' }}</a>
+                    <span v-else>—</span>
+                  </div>
+                  <span
+                    v-if="it.descriptionQuality === 0"
+                    class="dq-tag dq-tag-warn"
+                    title="商品描述为空(未填写或无描述)"
+                  >无描述</span>
+                  <span
+                    v-else-if="it.descriptionQuality === 1"
+                    class="dq-tag dq-tag-danger"
+                    title="描述是加载失败占位文案(如「Не удалось загрузить」),需重新填写"
+                  >占位</span>
+                  <span
+                    v-else-if="it.descriptionQuality === 2"
+                    class="dq-tag dq-tag-warn"
+                    title="描述末尾粘有按钮文案(如「Читать далее」),源数据需清洗"
+                  >需清洗</span>
+                </div>
+              </div>
             </td>
-            <td>
-              <a v-if="ozonProductUrl(firstNumericId(it.offerId))"
-                 :href="ozonProductUrl(firstNumericId(it.offerId))"
-                 target="_blank" rel="noopener noreferrer"
-                 :title="ozonProductUrl(firstNumericId(it.offerId))">源商品</a>
-              <span v-else>—</span>
-            </td>
-            <td style="max-width:160px">
-              <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="it.name">{{ it.name || '—' }}</div>
-              <span
-                v-if="it.descriptionQuality === 0"
-                class="dq-tag dq-tag-warn"
-                title="商品描述为空(未填写或无描述)"
-              >无描述</span>
-              <span
-                v-else-if="it.descriptionQuality === 1"
-                class="dq-tag dq-tag-danger"
-                title="描述是加载失败占位文案(如「Не удалось загрузить」),需重新填写"
-              >占位</span>
-              <span
-                v-else-if="it.descriptionQuality === 2"
-                class="dq-tag dq-tag-warn"
-                title="描述末尾粘有按钮文案(如「Читать далее」),源数据需清洗"
-              >需清洗</span>
+            <td class="col-weight">
+              <div class="weight-row weight-ozon" :title="it.weightG != null ? `Ozon 后台重量 ${it.weightG}g${it.dimSumMm != null ? `,三边和 ${it.dimSumMm}mm` : ''}` : '未同步商品属性(点击「同步详情」拉取)'">
+                <span class="weight-label">Ozon</span>
+                <span class="weight-value">{{ it.weightG != null ? it.weightG + 'g' : '—' }}</span>
+              </div>
+              <div class="weight-row weight-custom" :title="'本系统重量,可手动设置,覆盖 Ozon 重量参与订单/采购分摊'">
+                <span class="weight-label">本系统</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  class="weight-input"
+                  :value="it.customWeightG ?? ''"
+                  :placeholder="it.weightG != null ? it.weightG : '0'"
+                  @change="onWeightChange(it, $event)"
+                  @keydown.enter.prevent="($event) => $event.target.blur()"
+                />
+                <span class="weight-unit">g</span>
+              </div>
             </td>
             <td>{{ storeName(it.storeId) }}</td>
             <td>
@@ -1282,5 +1345,123 @@ onMounted(() => {
 .dq-tag-danger {
   background: #fff1f0;
   color: #cf1322;
+}
+
+/* 商品列(参考订单处理页面 .col-product/.product-item 同款布局) */
+/* table-layout:fixed 让 th width 真正约束 td,避免内容把列撑宽 */
+.data-table {
+  table-layout: fixed;
+}
+.col-product {
+  width: 280px;
+  min-width: 0;
+}
+.product-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  width: 100%;
+}
+/* 商品主图缩略图(Ozon CDN 直链,70×70) */
+.product-img-box {
+  flex: 0 0 70px;
+  width: 70px;
+  height: 70px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f9fafb;
+  text-decoration: none;
+}
+a.product-img-box:hover {
+  border-color: var(--primary, #2563eb);
+}
+.product-img-empty {
+  color: #9ca3af;
+  font-size: 12px;
+}
+.product-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.product-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+/* 名称(链接到 Ozon 商品页,<a> 默认 inline,需 display:block 才能触发 ellipsis) */
+.product-title {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+a.product-title:hover {
+  color: #2563eb;
+}
+/* 子行:SKU / Offer ID / 源商品链接 */
+.product-sub {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-secondary, #9ca3af);
+}
+
+/* 重量列:Ozon 后台 + 本系统(可编辑),双行紧凑布局 */
+.col-weight {
+  vertical-align: middle;
+}
+.weight-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  width: 100%;
+}
+.weight-row + .weight-row {
+  margin-top: 4px;
+}
+.weight-label {
+  flex: 0 0 32px;
+  font-size: 10px;
+  color: var(--text-secondary, #9ca3af);
+}
+.weight-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+/* 输入框宽度适配 4 位数字:数字 12px ~7px × 4 = 28px + 上下键 spinner ~16px + padding 12px ≈ 60px */
+.weight-input {
+  flex: 0 0 60px;
+  width: 60px;
+  padding: 2px 6px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 3px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.weight-input:focus {
+  outline: none;
+  border-color: var(--primary, #2563eb);
+}
+.weight-unit {
+  flex: 0 0 12px;
+  font-size: 11px;
+  color: var(--text-secondary, #9ca3af);
 }
 </style>

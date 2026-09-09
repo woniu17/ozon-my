@@ -11,6 +11,7 @@ import {
   submitPurchase, lookupPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
   runAccrualSync, getRubRate, setRubRate,
+  syncMsToLocal,
 } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
@@ -119,6 +120,7 @@ const detail = ref(null);
 // ── 同步状态 ───────────────────────────────────────────
 const syncInfo = ref({ syncing: false, cursors: [] });
 const syncing = ref(false);
+const syncingMs = ref(false);
 // 详细进度(替代纯布尔 syncing,展示店铺数/当前店/已拉订单数/耗时)
 const progress = ref({
   active: false,
@@ -301,6 +303,38 @@ async function triggerSync() {
   } catch (err) {
     show(err.message || String(err), 'error');
     syncing.value = false;
+  }
+}
+
+// 从妙手同步到本地订单(重量/备注/采购金额/采购订单详情)
+// 有勾选行时同步勾选的,无勾选时同步当前筛选全部
+async function onSyncMsToLocal() {
+  if (syncingMs.value) return;
+  const selectedRows = rows.value.filter((r) => r._checked);
+  const isPartial = selectedRows.length > 0;
+  const scopeLabel = isPartial ? `勾选的 ${selectedRows.length} 条` : '当前筛选全部(以 logistics_no 关联妙手)';
+  if (!await confirmStore.ask({
+    message: `将把妙手订单的重量/备注/采购金额/采购订单详情同步到本地,范围:${scopeLabel}。妙手备注将覆盖本地备注;有采购单关联的待处理订单将自动推进到待打单发货。确认继续?`,
+    confirmText: '开始同步',
+    danger: true,
+  })) return;
+  syncingMs.value = true;
+  try {
+    const packageIds = isPartial ? selectedRows.map((r) => r.id) : null;
+    const resp = await syncMsToLocal(packageIds);
+    const data = resp?.data || resp || {};
+    const { synced = 0, skipped = 0, purchases = 0, advanced = 0, errors = [] } = data;
+    let msg = `已同步 ${synced} 条(采购单 ${purchases} 条`;
+    if (advanced > 0) msg += `,推进待打单 ${advanced} 条`;
+    if (skipped > 0) msg += `,跳过 ${skipped} 条(无妙手匹配)`;
+    msg += ')';
+    if (errors.length > 0) msg += `,失败 ${errors.length} 条`;
+    show(msg, errors.length > 0 ? 'warning' : 'success');
+    await loadList();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    syncingMs.value = false;
   }
 }
 
@@ -1470,6 +1504,9 @@ onUnmounted(() => {
         </button>
         <button class="btn btn-ghost" :disabled="syncing" @click="openSyncAllDialog" title="全量同步:仅 /v4/posting/fbs/list,覆盖所有状态含 delivered/cancelled 终态,可选时间范围">
           同步所有订单
+        </button>
+        <button class="btn btn-ghost" :disabled="syncingMs" @click="onSyncMsToLocal" title="从妙手同步:把妙手订单的重量/备注/采购金额/采购订单详情同步到本地">
+          {{ syncingMs ? '妙手同步中…' : '从妙手同步' }}
         </button>
       </div>
     </div>

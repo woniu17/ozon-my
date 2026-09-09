@@ -497,6 +497,10 @@ function rowToPackage(r) {
     accrualTotal: r.accrual_total != null ? Number(r.accrual_total) : null,
     accrualSaleTotal: r.accrual_sale_total != null ? Number(r.accrual_sale_total) : null,
     accrualSyncedAt: r.accrual_synced_at,
+    // 从妙手同步过来的重量/妙手口径采购金额/同步时间(冗余列,与本地体系并存)
+    weight: r.weight != null ? Number(r.weight) : null,
+    msPurchaseAmount: r.ms_purchase_amount != null ? Number(r.ms_purchase_amount) : null,
+    msSyncedAt: r.ms_synced_at,
     waybillPrintedAt: r.waybill_printed_at,
     note: r.note,
     // ─ 取消细分状态(cancellation_json 解析,仅 cancelled 状态订单有) ─
@@ -979,6 +983,200 @@ function lookupPurchase(platform, purchaseSn) {
   };
 }
 
+/**
+ * 从妙手同步:把妙手订单的重量/备注/妙手口径采购金额/采购订单信息同步到本地 op_package + op_purchase_order
+ * @param {Object} opts
+ * @param {number[]} [opts.packageIds]  限定同步的 op_package.id 列表(不传=同步 logistics_no 非空的全部)
+ * @returns {{ synced: number, skipped: number, purchases: number, errors: string[] }}
+ *
+ * 关联键:op_package.logistics_no = miaoshou_package.posting_number
+ * 覆盖策略:
+ *   - weight/note/ms_purchase_amount:妙手值覆盖本地(NULL 不覆盖,保留本地已有)
+ *   - op_purchase_order:ON CONFLICT(platform, purchase_sn) DO UPDATE,payment_amount 用 CASE 保护
+ *   - op_purchase_link:INSERT OR IGNORE(已 unlinked 的 link_status 不会被重新 linked)
+ * 平台映射:天猫(tmall)→ 淘宝(taobao),其它直接映射
+ */
+function syncFromMiaoshou({ packageIds } = {}) {
+  // 1) 选取本地包裹(有 logistics_no,可按 packageIds 限定)
+  const idFilter = Array.isArray(packageIds) && packageIds.length > 0;
+  const pkgs = idFilter
+    ? db.prepare(`SELECT id, logistics_no FROM op_package WHERE id IN (${packageIds.map(() => '?').join(',')}) AND logistics_no IS NOT NULL`).all(...packageIds)
+    : db.prepare(`SELECT id, logistics_no FROM op_package WHERE logistics_no IS NOT NULL`).all();
+  if (pkgs.length === 0) return { synced: 0, skipped: 0, purchases: 0, errors: [] };
+
+  // 2) JOIN 妙手包裹 by posting_number = logistics_no
+  const logisticsNos = pkgs.map((p) => p.logistics_no);
+  const msRows = db.prepare(
+    `SELECT mp.id AS ms_pkg_id, mp.posting_number, mp.weighing_weight, mp.note, mp.purchase_amount AS ms_purchase_amount,
+            mp.quantity AS ms_quantity
+     FROM miaoshou_package mp
+     WHERE mp.posting_number IN (${logisticsNos.map(() => '?').join(',')})`
+  ).all(...logisticsNos);
+  const msMap = new Map(msRows.map((r) => [r.posting_number, r]));
+
+  // 3) 预编译语句
+  const updPkg = db.prepare(
+    `UPDATE op_package
+       SET weight = COALESCE(?, weight),
+           note = COALESCE(?, note),
+           ms_purchase_amount = COALESCE(?, ms_purchase_amount),
+           ms_synced_at = ?,
+           gmt_modified = ?
+     WHERE id = ?`
+  );
+  // 妙手采购单 upsert:天猫(tmall)→ 淘宝(taobao),其它直接映射
+  // payment_amount 用 CASE 保护(>0 才覆盖,对齐 submitPurchase 的拼单保护)
+  // status 枚举翻译:has_send→shipped, has_sign→signed, 其它→wait_send
+  const upsertPo = db.prepare(
+    `INSERT INTO op_purchase_order (purchase_sn, platform, purchase_channel, buyer_account, seller_name,
+        payment_amount, goods_amount, status, pay_at, send_at, logistics_company, logistics_no,
+        last_trace_desc, note, gmt_create, gmt_modified)
+     VALUES (?, ?, 'platform_order', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(platform, purchase_sn) DO UPDATE SET
+        buyer_account = COALESCE(excluded.buyer_account, op_purchase_order.buyer_account),
+        seller_name = COALESCE(excluded.seller_name, op_purchase_order.seller_name),
+        payment_amount = CASE WHEN excluded.payment_amount > 0 THEN excluded.payment_amount ELSE op_purchase_order.payment_amount END,
+        goods_amount = CASE WHEN excluded.goods_amount > 0 THEN excluded.goods_amount ELSE op_purchase_order.goods_amount END,
+        status = excluded.status,
+        send_at = COALESCE(excluded.send_at, op_purchase_order.send_at),
+        logistics_company = COALESCE(excluded.logistics_company, op_purchase_order.logistics_company),
+        logistics_no = COALESCE(excluded.logistics_no, op_purchase_order.logistics_no),
+        last_trace_desc = COALESCE(excluded.last_trace_desc, op_purchase_order.last_trace_desc),
+        note = COALESCE(excluded.note, op_purchase_order.note),
+        gmt_modified = excluded.gmt_modified
+     RETURNING id`
+  );
+  const insLink = db.prepare(
+    `INSERT OR IGNORE INTO op_purchase_link (purchase_order_id, package_id, allocated_amount, quantity, alloc_mode, gmt_create)
+     VALUES (?, ?, 0, ?, 'auto', ?)`
+  );
+  // 查询妙手采购单(通过中间表 miaoshou_package_purchase_map)
+  const getMsPurchases = db.prepare(
+    `SELECT pur.purchase_sn, pur.platform, pur.buyer_account, pur.seller_name, pur.payment_amount,
+            pur.status, pur.purchase_start_time, pur.send_at, pur.logistics_company, pur.logistics_no,
+            pur.last_trace, pur.is_auto_rsync, map.raw_json
+     FROM miaoshou_package_purchase_map map
+     JOIN miaoshou_purchase pur ON pur.id = map.purchase_id
+     WHERE map.package_id = ?`
+  );
+  // 状态推进:有采购单关联时,把 wait_process → wait_ship(对齐 submitPurchase 的 pkgSetSql)
+  // 只前进不回退:CASE WHEN operate_status='wait_process' THEN 'wait_ship' ELSE operate_status END
+  // 头程物流信息(国内快递单号/公司/发货时间)用 COALESCE 覆盖(空值不覆盖本地已有)
+  const advanceStatus = db.prepare(
+    `UPDATE op_package
+       SET head_logistics_no = COALESCE(?, head_logistics_no),
+           head_logistics_company = COALESCE(?, head_logistics_company),
+           head_shipped_at = COALESCE(?, head_shipped_at),
+           purchase_status = 'complete',
+           operate_status = CASE WHEN operate_status = 'wait_process' THEN 'wait_ship' ELSE operate_status END,
+           gmt_modified = ?
+     WHERE id = ?`
+  );
+
+  let synced = 0;
+  let skipped = 0;
+  let purchases = 0;
+  let advanced = 0; // 状态推进的包裹数(wait_process → wait_ship)
+  const errors = [];
+
+  for (const p of pkgs) {
+    const ms = msMap.get(p.logistics_no);
+    if (!ms) {
+      skipped++;
+      continue;
+    }
+    try {
+      const now = nowIso();
+      // a) 更新本地 op_package 的重量/备注/妙手口径采购金额
+      updPkg.run(
+        ms.weighing_weight != null ? Number(ms.weighing_weight) : null,
+        ms.note != null ? String(ms.note) : null,
+        ms.ms_purchase_amount != null ? Number(ms.ms_purchase_amount) : null,
+        now, now, p.id
+      );
+      // b) 同步妙手采购单到本地 op_purchase_order + op_purchase_link
+      const msPurchases = getMsPurchases.all(ms.ms_pkg_id);
+      let hasPurchaseLink = false; // 是否成功关联了至少一条采购单
+      let headLogisticsNo = null;  // 头程单号(取最后一条有 logistics_no 的采购单)
+      let headLogisticsCompany = null;
+      let headSendAt = null;
+      for (const pur of msPurchases) {
+        if (!pur.purchase_sn || !pur.platform) continue; // 缺关键字段跳过
+        // 平台映射:天猫 → 淘宝(用户要求统一为淘宝)
+        const localPlatform = pur.platform === 'tmall' ? 'taobao' : pur.platform;
+        // status 枚举翻译:妙手 has_send/has_sign → 本地 shipped/signed
+        let localStatus = 'wait_send';
+        if (pur.status === 'has_send') localStatus = 'shipped';
+        else if (pur.status === 'has_sign') localStatus = 'signed';
+        // 拼多多采购单号可能含特殊字符,统一 String
+        const poId = upsertPo.get(
+          String(pur.purchase_sn),
+          localPlatform,
+          pur.buyer_account || null,
+          pur.seller_name || null,
+          Math.round((Number(pur.payment_amount) || 0) * 100) / 100,
+          Math.round((Number(pur.payment_amount) || 0) * 100) / 100,
+          localStatus,
+          pur.purchase_start_time || null,
+          pur.send_at || null,
+          pur.logistics_company || null,
+          pur.logistics_no || null,
+          pur.last_trace || null,
+          null, // 不覆盖本地 note
+          now, now
+        )?.id;
+        if (poId == null) {
+          errors.push(`upsert 采购单失败:${pur.purchase_sn}`);
+          continue;
+        }
+        // 关联表 INSERT OR IGNORE(已 unlinked 的 link_status 不受影响)
+        // quantity 取妙手包裹的 quantity(订单商品数量,用于 auto 模式加权分摊)
+        const qty = Number(ms.ms_quantity) || 0;
+        insLink.run(poId, p.id, qty, now);
+        purchases++;
+        hasPurchaseLink = true;
+        // 记录头程物流信息(有 logistics_no 的采购单覆盖前面的)
+        if (pur.logistics_no) {
+          headLogisticsNo = pur.logistics_no;
+          headLogisticsCompany = pur.logistics_company || null;
+          headSendAt = pur.send_at || now;
+        }
+      }
+      // c) 如果有关联采购单,推进状态 wait_process → wait_ship(对齐 submitPurchase 逻辑)
+      //    有采购信息即视为"已提交采购",包裹应进入待打单发货
+      if (hasPurchaseLink) {
+        advanceStatus.run(headLogisticsNo, headLogisticsCompany, headSendAt, now, p.id);
+        advanced++;
+      }
+      synced++;
+    } catch (err) {
+      errors.push(`包裹 ${p.id}(${p.logistics_no}): ${err.message}`);
+    }
+  }
+
+  // c) 重算所有受影响包裹的 auto 分摊金额(按 quantity 加权)
+  //    复用 reallocateAutoLinks,需先收集受影响的 purchase_order_id
+  if (synced > 0) {
+    const affectedPoIds = new Set();
+    for (const p of pkgs) {
+      const ms = msMap.get(p.logistics_no);
+      if (!ms) continue;
+      const msPurchases = getMsPurchases.all(ms.ms_pkg_id);
+      for (const pur of msPurchases) {
+        if (!pur.purchase_sn || !pur.platform) continue;
+        const localPlatform = pur.platform === 'tmall' ? 'taobao' : pur.platform;
+        const poRow = db.prepare(`SELECT id FROM op_purchase_order WHERE platform = ? AND purchase_sn = ?`).get(localPlatform, String(pur.purchase_sn));
+        if (poRow) affectedPoIds.add(poRow.id);
+      }
+    }
+    for (const poId of affectedPoIds) {
+      try { reallocateAutoLinks(poId); } catch (err) { errors.push(`reallocate po#${poId}: ${err.message}`); }
+    }
+  }
+
+  return { synced, skipped, purchases, advanced, errors };
+}
+
 export const orderPackageDao = {
   syncPosting,
   updateSyncCursor,
@@ -996,4 +1194,5 @@ export const orderPackageDao = {
   markWaybillPrinted,
   getPackagePostings,
   lookupPurchase,
+  syncFromMiaoshou,
 };

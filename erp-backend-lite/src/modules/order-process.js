@@ -670,4 +670,22 @@ router.get('/admin/api/order-process/miaoshou-detail/:id', (req, res, next) => {
   }
 });
 
+// ── 从妙手同步到本地订单 ─────────────────────────────────────
+// 把妙手订单的重量/备注/妙手口径采购金额/采购订单详情同步到本地 op_package + op_purchase_order
+// 关联键:op_package.logistics_no = miaoshou_package.posting_number
+// 平台映射:天猫(tmall)→ 淘宝(taobao),其它直接映射
+// 请求体(可选):{ packageIds: [1,2,3] }  不传 = 同步 logistics_no 非空的全部
+router.post('/admin/api/order-process/sync-ms-to-local', (req, res, next) => {
+  try {
+    const packageIds = Array.isArray(req.body?.packageIds)
+      ? req.body.packageIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
+      : [];
+    const result = orderPackageDao.syncFromMiaoshou({ packageIds });
+    logger.info({ ...result, errors: result.errors?.slice(0, 5) }, '[order-process] 从妙手同步到本地完成');
+    res.json(ok(result));
+  } catch (e) {
+    next(e);
+  }
+});
+
 export default router;

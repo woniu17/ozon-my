@@ -22,6 +22,19 @@ export function syncProductDescriptions(storeId, force = false) {
   return request.post('/admin/api/products/sync-descriptions?' + q);
 }
 
+// 「同步详情」:串行两阶段 —— 1) /v4/product/info/attributes 批量拉属性(重量/尺寸)
+//   2) /v1/product/info/description 逐个拉描述 + 描述质量
+// force=1 时强制重拉,默认增量(只处理 attributes_data 或 description_data 任一缺失的 SKU)
+export function syncProductDetails(storeId, force = false) {
+  const q = 'storeId=' + encodeURIComponent(storeId) + (force ? '&force=1' : '');
+  return request.post('/admin/api/products/sync-details?' + q);
+}
+
+// 设置本系统重量(克):weightG 为 null 时清除本系统重量,回退用 Ozon 后台重量
+export function setProductWeight(sku, weightG) {
+  return request.put('/admin/api/products/' + encodeURIComponent(sku) + '/weight', { weightG });
+}
+
 // 查询所有店铺的同步进度(轮询用)
 export function getSyncProgress() {
   return request.get('/admin/api/products/sync-progress');

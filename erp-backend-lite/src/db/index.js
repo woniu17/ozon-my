@@ -47,6 +47,12 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE product_data_cache ADD COLUMN store_id TEXT`);
     console.log('[db] migration: added column product_data_cache.store_id');
   }
+  // product_data_cache.custom_weight_g:本系统重量(克),用户在商品列表页面手动设置
+  // 与 Ozon 后台重量(weight_g/json_extract attributes_data.weight)并存,供订单/采购分摊参考
+  if (!cols.some((c) => c.name === 'custom_weight_g')) {
+    db.exec(`ALTER TABLE product_data_cache ADD COLUMN custom_weight_g REAL`);
+    console.log('[db] migration: added column product_data_cache.custom_weight_g');
+  }
   // product_data_cache.description_quality:描述质量分级,用于商品列表"描述状态"过滤
   // 0=空 1=占位 2=按钮污染 3=正常(同步时由 classifyDescriptionQuality 计算)
   let addedProductDescQuality = false;
@@ -226,6 +232,19 @@ async function ensureMigrations() {
     if (!opPkgCols.some((c) => c.name === 'accrual_synced_at')) {
       db.exec(`ALTER TABLE op_package ADD COLUMN accrual_synced_at TEXT`);
       console.log('[db] migration: added column op_package.accrual_synced_at');
+    }
+    // 2026-09: 从妙手同步过来的重量/采购金额/同步时间(冗余列,与本地体系并存)
+    if (!opPkgCols.some((c) => c.name === 'weight')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN weight REAL`);
+      console.log('[db] migration: added column op_package.weight');
+    }
+    if (!opPkgCols.some((c) => c.name === 'ms_purchase_amount')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN ms_purchase_amount REAL`);
+      console.log('[db] migration: added column op_package.ms_purchase_amount');
+    }
+    if (!opPkgCols.some((c) => c.name === 'ms_synced_at')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN ms_synced_at TEXT`);
+      console.log('[db] migration: added column op_package.ms_synced_at');
     }
   }
   // 2026-09-04: op_purchase_link.alloc_mode 分摊模式(manual=手动填金额,auto=按数量自动分摊)

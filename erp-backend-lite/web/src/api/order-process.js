@@ -132,3 +132,10 @@ export function getMiaoshouTabs() {
 export function getMiaoshouDetail(id) {
   return request.get('/admin/api/order-process/miaoshou-detail/' + encodeURIComponent(id));
 }
+
+// 从妙手同步到本地订单(重量/备注/妙手口径采购金额/采购订单详情)
+// body: { packageIds?: number[] }  不传 = 同步当前筛选全部(logistics_no 非空的)
+export function syncMsToLocal(packageIds) {
+  const body = Array.isArray(packageIds) && packageIds.length > 0 ? { packageIds } : {};
+  return request.post('/admin/api/order-process/sync-ms-to-local', body);
+}

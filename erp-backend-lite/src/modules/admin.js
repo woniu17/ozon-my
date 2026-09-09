@@ -768,13 +768,14 @@ router.get('/admin/api/products', (req, res, next) => {
 
     const where = [];
     const params = [];
+    // 注意:商品列表查询 LEFT JOIN ozon_cache_index 后,where 中的列名需加 p. 前缀避免歧义
     if (req.query.keyword) {
-      where.push('(sku LIKE ? OR data LIKE ?)');
+      where.push('(p.sku LIKE ? OR p.data LIKE ?)');
       const kw = '%' + String(req.query.keyword) + '%';
       params.push(kw, kw);
     }
     if (req.query.storeId) {
-      where.push('store_id = ?');
+      where.push('p.store_id = ?');
       params.push(String(req.query.storeId));
     }
     // hasStock 筛选:基于 data.stocks.has_stock(布尔)
@@ -783,12 +784,12 @@ router.get('/admin/api/products', (req, res, next) => {
     // SQLite json_extract 把 true/false 解析为 1/0,用 COALESCE 兜底空值
     if (req.query.hasStock === '1' || req.query.hasStock === '0') {
       const v = Number(req.query.hasStock);
-      where.push("COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = ?");
+      where.push("COALESCE(json_extract(p.data, '$.stocks.has_stock'), 0) = ?");
       params.push(v);
     }
     // 状态筛选:OPI /v3/product/info/list 的状态嵌套在 statuses.status 字段
     if (req.query.status) {
-      where.push("json_extract(data, '$.statuses.status') = ?");
+      where.push("json_extract(p.data, '$.statuses.status') = ?");
       params.push(String(req.query.status));
     }
     // 简化状态筛选(2026-07):基于 is_created + moderate + validation + has_stock 计算 5 类
@@ -808,17 +809,17 @@ router.get('/admin/api/products', (req, res, next) => {
       // SQL CASE 表达式:与后端 computeProductStatus 保持一致
       productStatusWhere =
         ` AND (CASE
-            WHEN json_extract(data, '$.statuses.is_created') = 0
+            WHEN json_extract(p.data, '$.statuses.is_created') = 0
               THEN 'pending_creation'
-            WHEN COALESCE(json_extract(data, '$.statuses.moderate_status'), '') = 'declined'
-                 OR json_extract(data, '$.statuses.validation_status') = 'fail'
-                 OR json_extract(data, '$.statuses.status') = 'unmatched'
+            WHEN COALESCE(json_extract(p.data, '$.statuses.moderate_status'), '') = 'declined'
+                 OR json_extract(p.data, '$.statuses.validation_status') = 'fail'
+                 OR json_extract(p.data, '$.statuses.status') = 'unmatched'
               THEN 'rejected'
-            WHEN json_extract(data, '$.statuses.is_created') = 1
-                 AND COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 1
+            WHEN json_extract(p.data, '$.statuses.is_created') = 1
+                 AND COALESCE(json_extract(p.data, '$.stocks.has_stock'), 0) = 1
               THEN 'saleable'
-            WHEN json_extract(data, '$.statuses.is_created') = 1
-                 AND COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 0
+            WHEN json_extract(p.data, '$.statuses.is_created') = 1
+                 AND COALESCE(json_extract(p.data, '$.stocks.has_stock'), 0) = 0
               THEN 'created_no_stock'
             ELSE 'other'
            END) = ?`;
@@ -827,7 +828,7 @@ router.get('/admin/api/products', (req, res, next) => {
     //   OPI 返回的 errors[].code 命中以下任一即视为图片有问题
     if (req.query.imageIssue === '1' || req.query.imageIssue === 'true') {
       where.push(
-        `EXISTS (SELECT 1 FROM json_each(data, '$.errors')
+        `EXISTS (SELECT 1 FROM json_each(p.data, '$.errors')
                  WHERE json_each.value->>'$.code' IN
                    ('primary_image_load_failed','pics_http_error',
                     'some_image_failed','all_image_failed','warning_all_image_failed'))`
@@ -846,13 +847,13 @@ router.get('/admin/api/products', (req, res, next) => {
           .map((v) => parseInt(v, 10))
           .filter((v) => Number.isInteger(v) && v >= 0 && v <= 3);
         if (vals.length) {
-          where.push(`description_quality IN (${vals.map(() => '?').join(',')})`);
+          where.push(`p.description_quality IN (${vals.map(() => '?').join(',')})`);
           params.push(...vals);
         }
       } else {
         const v = parseInt(descriptionQuality, 10);
         if (Number.isInteger(v) && v >= 0 && v <= 3) {
-          where.push('description_quality = ?');
+          where.push('p.description_quality = ?');
           params.push(v);
         }
       }
@@ -875,12 +876,13 @@ router.get('/admin/api/products', (req, res, next) => {
       const idRows = db
         .prepare(
           `SELECT
-             sku,
-             COALESCE(json_extract(data, '$.product_id'), json_extract(data, '$.id')) AS productId,
-             store_id AS storeId,
-             COALESCE(json_extract(data, '$.offer_id'), json_extract(data, '$.sku'), sku) AS offerId
-           FROM product_data_cache ${fullWhereSql}
-           ORDER BY fetched_at DESC`
+             p.sku,
+             COALESCE(json_extract(p.data, '$.product_id'), json_extract(p.data, '$.id')) AS productId,
+             p.store_id AS storeId,
+             COALESCE(json_extract(p.data, '$.offer_id'), json_extract(p.data, '$.sku'), p.sku) AS offerId
+           FROM product_data_cache p
+           ${fullWhereSql}
+           ORDER BY p.fetched_at DESC`
         )
         .all(...params);
       const items = idRows
@@ -891,10 +893,17 @@ router.get('/admin/api/products', (req, res, next) => {
 
     const rows = db
       .prepare(
-        `SELECT sku, data, store_id, description_quality, fetched_at FROM product_data_cache ${fullWhereSql} ORDER BY fetched_at DESC LIMIT ? OFFSET ?`
+        `SELECT p.sku, p.data, p.store_id, p.description_quality, p.fetched_at, p.custom_weight_g,
+                json_extract(a.attributes_data, '$.weight') AS weight_g,
+                json_extract(a.attributes_data, '$.depth') AS depth_mm,
+                json_extract(a.attributes_data, '$.width') AS width_mm,
+                json_extract(a.attributes_data, '$.height') AS height_mm
+         FROM product_data_cache p
+         LEFT JOIN product_attributes_cache a ON a.sku = p.sku
+         ${fullWhereSql} ORDER BY p.fetched_at DESC LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, offset);
-    const total = db.prepare(`SELECT COUNT(*) as n FROM product_data_cache ${fullWhereSql}`).get(...params).n;
+    const total = db.prepare(`SELECT COUNT(*) as n FROM product_data_cache p ${fullWhereSql}`).get(...params).n;
 
     // statusCounts:各状态数量统计(口径 A:排除 productStatus 筛选,保留其他基础筛选)
     // 用 baseWhereSql(不含 productStatus),一条 GROUP BY SQL 查询全部 5 类状态计数
@@ -902,21 +911,22 @@ router.get('/admin/api/products', (req, res, next) => {
     const countRows = db
       .prepare(
         `SELECT (CASE
-            WHEN json_extract(data, '$.statuses.is_created') = 0
+            WHEN json_extract(p.data, '$.statuses.is_created') = 0
               THEN 'pending_creation'
-            WHEN COALESCE(json_extract(data, '$.statuses.moderate_status'), '') = 'declined'
-                 OR json_extract(data, '$.statuses.validation_status') = 'fail'
-                 OR json_extract(data, '$.statuses.status') = 'unmatched'
+            WHEN COALESCE(json_extract(p.data, '$.statuses.moderate_status'), '') = 'declined'
+                 OR json_extract(p.data, '$.statuses.validation_status') = 'fail'
+                 OR json_extract(p.data, '$.statuses.status') = 'unmatched'
               THEN 'rejected'
-            WHEN json_extract(data, '$.statuses.is_created') = 1
-                 AND COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 1
+            WHEN json_extract(p.data, '$.statuses.is_created') = 1
+                 AND COALESCE(json_extract(p.data, '$.stocks.has_stock'), 0) = 1
               THEN 'saleable'
-            WHEN json_extract(data, '$.statuses.is_created') = 1
-                 AND COALESCE(json_extract(data, '$.stocks.has_stock'), 0) = 0
+            WHEN json_extract(p.data, '$.statuses.is_created') = 1
+                 AND COALESCE(json_extract(p.data, '$.stocks.has_stock'), 0) = 0
               THEN 'created_no_stock'
             ELSE 'other'
            END) AS ps, COUNT(*) AS n
-         FROM product_data_cache ${baseWhereSql}
+         FROM product_data_cache p
+         ${baseWhereSql}
          GROUP BY ps`
       )
       .all(...params.slice(0, params.length - (req.query.productStatus ? 1 : 0)));
@@ -941,6 +951,16 @@ router.get('/admin/api/products', (req, res, next) => {
             fetchedAt: r.fetched_at,
             // 描述质量:0=空 1=占位 2=按钮污染 3=正常(同步时预计算,前端用于标签+筛选)
             descriptionQuality: Number(r.description_quality) || 0,
+            // 重量(克):来自 product_attributes_cache.attributes_data 顶层 weight 字段
+            // 「同步详情」阶段1(/v4/product/info/attributes)写入;无值时为 null,前端显示 —
+            weightG: r.weight_g != null ? Number(r.weight_g) : null,
+            // 本系统重量(克):用户在商品列表页面手动设置,覆盖 Ozon 后台重量参与订单/采购分摊
+            customWeightG: r.custom_weight_g != null ? Number(r.custom_weight_g) : null,
+            // 三边之和(毫米):depth + width + height(三者均>0 才有效,否则 null)
+            dimSumMm: (
+              r.depth_mm != null && r.width_mm != null && r.height_mm != null &&
+              Number(r.depth_mm) > 0 && Number(r.width_mm) > 0 && Number(r.height_mm) > 0
+            ) ? Number(r.depth_mm) + Number(r.width_mm) + Number(r.height_mm) : null,
             // 简化商品状态(2026-07):6 类用户可理解状态,前端展示与筛选主用此字段
             // 原始 statuses.* 仍保留在 _raw 中供详情页查看
             productStatus: computeProductStatus(data),
@@ -1307,6 +1327,196 @@ router.post('/admin/api/products/sync-descriptions', (req, res) => {
   });
 });
 
+// ════════════════════════════════════════════════════════════════
+// 「同步详情」:同一按钮串行两阶段
+//   phase: details-attr  —— 批量 /v4/product/info/attributes(重量/尺寸,优先)
+//   phase: details-desc  —— 逐个 /v1/product/info/description(描述+质量)
+// 两阶段共用 syncProgressMap(phase=details-*),失败不中断
+// 增量:force=0 时只处理 attributes_data 或 description_data 任一缺失的 SKU
+// ════════════════════════════════════════════════════════════════
+async function runStoreSyncDetails(store, storeId, force) {
+  const startedAt = Date.now();
+  setProgress(storeId, { status: 'running', phase: 'details-init', synced: 0, total: 0, failedBatches: 0, startedAt, message: '初始化详情同步' });
+  try {
+    // 选取待同步商品:force=0 跳过 attributes_data 与 description_data 都已存在的
+    let rows;
+    if (force) {
+      rows = db
+        .prepare(`SELECT sku, data FROM product_data_cache WHERE store_id = ? ORDER BY fetched_at DESC`)
+        .all(storeId);
+    } else {
+      rows = db
+        .prepare(
+          `SELECT p.sku AS sku, p.data AS data FROM product_data_cache p
+           LEFT JOIN product_attributes_cache a ON a.sku = p.sku
+           WHERE p.store_id = ? AND (a.attributes_data IS NULL OR a.description_data IS NULL)
+           ORDER BY p.fetched_at DESC`
+        )
+        .all(storeId);
+    }
+    const total = rows.length;
+    if (total === 0) {
+      finalizeProgress(storeId, 'done', { phase: 'details-done', synced: 0, total: 0, failedBatches: 0, durationMs: Date.now() - startedAt, message: '无待同步详情的商品' });
+      return { syncedAttr: 0, syncedDesc: 0, total: 0, failedAttr: 0, failedDesc: 0, durationMs: Date.now() - startedAt };
+    }
+
+    // 预编译语句
+    const getExistingAttr = db.prepare(`SELECT attributes_data, description_data FROM product_attributes_cache WHERE sku = ?`);
+    const upsertAttr = db.prepare(
+      `INSERT INTO product_attributes_cache (sku, attributes_data, description_data, fetched_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(sku) DO UPDATE SET
+         attributes_data=excluded.attributes_data,
+         fetched_at=excluded.fetched_at`
+    );
+    const upsertDesc = db.prepare(
+      `INSERT INTO product_attributes_cache (sku, attributes_data, description_data, fetched_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(sku) DO UPDATE SET
+         description_data=excluded.description_data,
+         fetched_at=excluded.fetched_at`
+    );
+    const updQuality = db.prepare(`UPDATE product_data_cache SET description_quality = ? WHERE sku = ?`);
+
+    // ── 阶段 1:/v4/product/info/attributes 批量拉取 ───────────
+    // 写入 product_attributes_cache.attributes_data(单 item 顶层含 weight/depth/width/height)
+    // 列表查询通过 json_extract(a.attributes_data, '$.weight') 提取,无需冗余列
+    setProgress(storeId, { phase: 'details-attr', synced: 0, total, failedBatches: 0, message: `拉属性 0/${total}` });
+
+    let syncedAttr = 0;
+    let failedAttr = 0;
+    const ATTR_BATCH = 100;
+    const attrErrors = [];
+
+    // 按是否已有 attributes_data 切分(增量场景下减少无效调用)
+    const todoAttr = force
+      ? rows
+      : rows.filter((r) => {
+          const existing = getExistingAttr.get(r.sku);
+          return !existing?.attributes_data;
+        });
+
+    for (let i = 0; i < todoAttr.length; i += ATTR_BATCH) {
+      const batch = todoAttr.slice(i, i + ATTR_BATCH);
+      // 从 product_data_cache.data 提取 product_id
+      const pidMap = new Map();
+      for (const r of batch) {
+        const data = safeParseJson(r.data) || {};
+        const pid = data.product_id || data.id;
+        if (pid != null && Number(pid) > 0) pidMap.set(Number(pid), r.sku);
+      }
+      if (pidMap.size === 0) {
+        failedAttr += batch.length;
+        continue;
+      }
+      try {
+        const resp = await opi.productInfoAttributes(store, { product_id: [...pidMap.keys()] });
+        const items = resp?.result || resp?.items || [];
+        for (const it of items) {
+          const sku = pidMap.get(Number(it.product_id || it.id)) || pidMap.get(Number(it.id));
+          if (!sku) continue;
+          // 保留已有 description_data
+          const existing = getExistingAttr.get(sku);
+          const descData = existing?.description_data ?? null;
+          upsertAttr.run(sku, JSON.stringify(it), descData, new Date().toISOString());
+          syncedAttr++;
+        }
+      } catch (e) {
+        failedAttr += batch.length;
+        attrErrors.push({ batchStart: i, errMessage: e?.message ?? String(e) });
+        logger.warn({ storeId, batchStart: i, batchSize: batch.length, errMessage: e?.message ?? String(e) }, '[sync-details] 属性批次失败,跳过');
+      }
+      setProgress(storeId, { synced: syncedAttr, total, failedBatches: failedAttr, message: `拉属性 ${Math.min(i + ATTR_BATCH, todoAttr.length)}/${todoAttr.length}` });
+      // 429 限流节流
+      await new Promise((r) => setTimeout(r, 300));
+    }
+
+    // ── 阶段 2:/v1/product/info/description 逐条拉取 ───────────
+    setProgress(storeId, { phase: 'details-desc', synced: 0, total, failedBatches: 0, message: `拉描述 0/${total}` });
+
+    let syncedDesc = 0;
+    let failedDesc = 0;
+    const CONCURRENCY = 4;
+    let cursor = 0;
+    const descTodo = force
+      ? rows
+      : rows.filter((r) => {
+          const existing = getExistingAttr.get(r.sku);
+          return !existing?.description_data;
+        });
+    const descTotal = descTodo.length;
+
+    async function worker() {
+      while (cursor < descTotal) {
+        const idx = cursor++;
+        const r = descTodo[idx];
+        const data = safeParseJson(r.data) || {};
+        const pid = data.product_id || data.id;
+        const offerId = data.offer_id;
+        let descBody;
+        if (pid != null && Number(pid) > 0) {
+          descBody = { product_id: Number(pid) };
+        } else if (offerId) {
+          descBody = { offer_id: String(offerId) };
+        } else {
+          failedDesc++;
+          continue;
+        }
+        try {
+          const descResp = await opi.productInfoDescription(store, descBody);
+          const descText = descResp?.description ?? descResp?.result?.description ?? '';
+          const existing = getExistingAttr.get(r.sku);
+          const attrsData = existing?.attributes_data ?? '{}';
+          upsertDesc.run(r.sku, attrsData, JSON.stringify(descResp || {}), new Date().toISOString());
+          updQuality.run(classifyDescriptionQuality(descText), r.sku);
+          syncedDesc++;
+        } catch (e) {
+          failedDesc++;
+          logger.warn({ storeId, sku: r.sku, errMessage: e?.message ?? String(e) }, '[sync-details] 描述单条失败,跳过');
+        }
+        if ((syncedDesc + failedDesc) % 10 === 0 || idx === descTotal - 1) {
+          setProgress(storeId, { synced: syncedDesc, total: descTotal, failedBatches: failedDesc, message: `拉描述 ${syncedDesc + failedDesc}/${descTotal}(成功${syncedDesc})` });
+        }
+      }
+    }
+    const workers = Array.from({ length: Math.min(CONCURRENCY, descTotal) }, () => worker());
+    await Promise.all(workers);
+
+    const durationMs = Date.now() - startedAt;
+    logger.info({ storeId, total, syncedAttr, syncedDesc, failedAttr, failedDesc, durationMs }, '[sync-details] 详情同步完成');
+    finalizeProgress(storeId, 'done', {
+      phase: 'details-done',
+      synced: syncedAttr + syncedDesc,
+      total,
+      failedBatches: failedAttr + failedDesc,
+      durationMs,
+      message: `完成:属性${syncedAttr}/${todoAttr.length},描述${syncedDesc}/${descTodo.length}${(failedAttr + failedDesc) ? `,失败${failedAttr + failedDesc}` : ''}`
+    });
+    return { syncedAttr, syncedDesc, total, failedAttr, failedDesc, durationMs };
+  } catch (err) {
+    finalizeProgress(storeId, 'error', { phase: 'details-error', message: err.message });
+    return { error: err.message };
+  }
+}
+
+// POST /admin/api/products/sync-details —— 立即返回 202,详情同步在后台异步执行
+router.post('/admin/api/products/sync-details', (req, res) => {
+  const storeId = req.query.storeId ? String(req.query.storeId) : '';
+  if (!storeId) {
+    return res.status(400).json({ code: 1, message: '需要 storeId 参数' });
+  }
+  const force = req.query.force === '1' || req.query.force === 'true';
+  const stores = readStores();
+  const store = stores.find((s) => s.id === storeId);
+  if (!store) {
+    return res.status(404).json({ code: 1, message: `店铺不存在: ${storeId}` });
+  }
+
+  res.json(ok({ accepted: true, storeId, message: '详情同步已启动' }));
+
+  runStoreSyncDetails(store, storeId, force).catch((err) => {
+    logger.error({ storeId, errMessage: err?.message ?? String(err) }, '[sync-details] 异步同步未捕获异常(不应到达)');
+  });
+});
+
 // GET /admin/api/products/:sku —— 单条商品完整数据(JSON)
 router.get('/admin/api/products/:sku', (req, res, next) => {
   try {
@@ -1341,6 +1551,36 @@ router.delete('/admin/api/products/:sku', (req, res, next) => {
     res.json(ok({ sku, deleted: del.changes }));
   } catch (e) {
     next(e);
+  }
+});
+
+// PUT /admin/api/products/:sku/weight —— 设置本系统重量(克)
+// 请求体: { weightG: number|null }  weightG 为 null 时清除本系统重量,回退用 Ozon 后台重量
+// 响应: { sku, customWeightG }
+router.put('/admin/api/products/:sku/weight', (req, res, next) => {
+  try {
+    const sku = String(req.params.sku || '').trim();
+    if (!sku) {
+      return res.status(400).json({ code: 1, message: '需要 sku 参数' });
+    }
+    const raw = req.body?.weightG;
+    let weightG = null;
+    if (raw !== null && raw !== undefined && raw !== '') {
+      const v = Number(raw);
+      if (!Number.isFinite(v) || v < 0) {
+        return res.status(400).json({ code: 1, message: 'weightG 必须为非负数字或 null' });
+      }
+      weightG = v;
+    }
+    const result = db
+      .prepare(`UPDATE product_data_cache SET custom_weight_g = ? WHERE sku = ?`)
+      .run(weightG, sku);
+    if (result.changes === 0) {
+      return res.status(404).json({ code: 1, message: `SKU 不存在: ${sku}` });
+    }
+    res.json(ok({ sku, customWeightG: weightG }));
+  } catch (err) {
+    next(err);
   }
 });
 
