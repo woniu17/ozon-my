@@ -280,7 +280,7 @@ export async function notifyNewPostingDiscovered(store, posting, todaySummaryLin
 
   // 02131/024785 开头的货件号为质检单,其余为新订单
   // 标题与 notifyPostingEvent TYPE_NEW_POSTING 完全一致,便于运营统一识别
-  const title = `[${isQc ? '新质检单' : '新订单'}] [${sellerName}] [${postingNumber}]`;
+  const title = `${isQc ? '[质检]' : ''} [${sellerName}] [${postingNumber}]`;
   const products = Array.isArray(posting.products) ? posting.products : [];
   const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
   const saleCny = extractSaleAmountCny(posting);
