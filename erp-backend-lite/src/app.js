@@ -39,6 +39,7 @@ import { startImageRefreshPoller, stopImageRefreshPoller } from './services/imag
 import { startStockRefreshPoller, stopStockRefreshPoller } from './services/stock-refresh-poller.js';
 import { startProductUpdatePoller, stopProductUpdatePoller } from './services/product-update-poller.js';
 import { startProductArchivePoller, stopProductArchivePoller } from './services/product-archive-poller.js';
+import { startProductSyncCron, stopProductSyncCron } from './services/product-sync-cron.js';
 import imageRefreshRoutes from './modules/image-refresh.js';
 import stockRefreshRoutes from './modules/stock-refresh.js';
 import productUpdateRoutes from './modules/product-update.js';
@@ -194,6 +195,8 @@ const server = app.listen(config.port, () => {
   startEndpointMetricsRetention();
   // 价格优势监控快照保留期清理(2026-08):启动 10min 后首次,此后每日清理超期快照
   startPriceWatchRetention();
+  // 商品定时同步(2026-09):每8小时(0点/8点/16点)静默同步所有店铺商品+详情,串行避免限流
+  startProductSyncCron();
 });
 
 // 优雅退出
@@ -210,6 +213,7 @@ function shutdown(signal) {
   stopProductArchivePoller();
   stopEndpointMetricsRetention();
   stopPriceWatchRetention();
+  stopProductSyncCron();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);

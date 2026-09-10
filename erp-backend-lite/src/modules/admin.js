@@ -1919,4 +1919,7 @@ router.get('/admin/api/meta/status', (req, res, next) => {
   }
 });
 
+// 导出供定时任务复用(2026-09:每8小时自动同步商品+详情)
+export { readStores, runStoreSync, runStoreSyncDescriptions };
+
 export default router;
