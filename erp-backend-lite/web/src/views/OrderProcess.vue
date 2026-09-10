@@ -668,6 +668,8 @@ async function dismissProgress() {
 // ── 采购录入 ───────────────────────────────────────────
 // 采购弹窗内嵌订单导入区的平台 tab
 const importTab = ref('pdd'); // 'pdd' | 'ali' | 'tb'
+// 已有采购单恢复态:打开弹窗时从 pkg.purchaseLinks 按采购单分组重建,显示在"已选订单"区,可逐单删除
+const restoredPurchases = ref([]);
 
 function openPurchase(pkg) {
   purchaseForm.packageId = pkg.id;
@@ -691,62 +693,45 @@ function openPurchase(pkg) {
     picUrl: it.picUrl,
     pdpUrl: it.pdpUrl,
   }));
-  // 已有采购信息:加载第一个采购单回填表单(按 purchaseOrderId 分组取第一组)
-  if (pkg.purchaseLinks?.length) {
-    const firstPurId = pkg.purchaseLinks[0].purchaseOrderId;
-    const links = pkg.purchaseLinks.filter((l) => l.purchaseOrderId === firstPurId);
-    const first = links[0];
-    purchaseForm.platform = first.platform || 'other';
-    purchaseForm.purchaseSn = first.purchaseSn || '';
-    purchaseForm.buyerAccount = first.buyerAccount || '';
-    purchaseForm.sellerName = first.sellerName || '';
-    purchaseForm.paymentAmount = first.paymentAmount != null ? String(first.paymentAmount) : '';
-    purchaseForm.logisticsNo = first.poLogisticsNo || '';
-    purchaseForm.logisticsCompany = first.poLogisticsCompany || '';
-    // 已有采购:默认 manual 模式,显示已分摊金额(可编辑)
-    purchaseForm.allocMode = 'manual';
-    // 按 itemId 匹配填入已分摊金额
-    // ozonOrderItemId 为 null 时(auto 模式),按 quantity 加权分摊 allocatedAmount
-    const itemMatched = new Set();
-    for (const it of purchaseForm.items) {
-      const link = links.find((l) => l.ozonOrderItemId === it.itemId && l.allocatedAmount != null);
-      if (link) {
-        it.amount = String(link.allocatedAmount);
-        itemMatched.add(it.itemId);
-      }
-    }
-    // 未匹配的 items:从 ozonOrderItemId=null 的 link 按 quantity 加权分摊
-    const nullLinks = links.filter((l) => l.ozonOrderItemId == null && l.allocatedAmount != null);
-    const unmatched = purchaseForm.items.filter((it) => !itemMatched.has(it.itemId));
-    if (nullLinks.length && unmatched.length) {
-      const total = nullLinks.reduce((s, l) => s + (Number(l.allocatedAmount) || 0), 0);
-      const sumQty = unmatched.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
-      if (total > 0 && sumQty > 0) {
-        let allocated = 0;
-        for (let i = 0; i < unmatched.length; i++) {
-          const q = Number(unmatched[i].quantity) || 0;
-          if (i === unmatched.length - 1) {
-            unmatched[i].amount = (Math.round((total - allocated) * 100) / 100).toString();
-          } else {
-            const a = Math.round((total * q / sumQty) * 100) / 100;
-            unmatched[i].amount = a.toString();
-            allocated += a;
-          }
-        }
-      }
-    }
-    // 已有采购:切到手动录入 tab(显示物流输入框,预填已有值),不触发 switchImportTab 避免清空
-    pddSelected.value = [];
-    aliSelected.value = [];
-    tbSelected.value = [];
-    importTab.value = 'manual';
-    purchaseOpen.value = true;
-    return;
-  }
-  // 无采购信息:清空三平台选中,重置到拼多多 tab 并自动加载
   pddSelected.value = [];
   aliSelected.value = [];
   tbSelected.value = [];
+  // 已有采购信息:恢复成"已选中"状态(按采购单分组重建)——可继续勾选追加平台订单,也可逐单删除已有采购
+  if (pkg.purchaseLinks?.length) {
+    const byPo = new Map();
+    for (const l of pkg.purchaseLinks) {
+      if (!byPo.has(l.purchaseOrderId)) byPo.set(l.purchaseOrderId, []);
+      byPo.get(l.purchaseOrderId).push(l);
+    }
+    restoredPurchases.value = [...byPo.values()].map((links) => {
+      const first = links[0];
+      return {
+        purchaseOrderId: first.purchaseOrderId,
+        platform: first.platform || 'other',
+        orderSn: first.purchaseSn || '',
+        amount: first.paymentAmount != null ? Number(first.paymentAmount) : 0,
+        // 本包裹的分摊合计(拼单时 < 采购单总额,删除时冲回的就是这个数)
+        allocated: links.reduce((s, l) => s + (Number(l.allocatedAmount) || 0), 0),
+        sellerName: first.sellerName || '',
+        trackingNumber: first.poLogisticsNo || '',
+        goods: first.items || [],
+        _platform: first.platform || 'other',
+        _existing: true,
+      };
+    });
+    purchaseForm.platform = restoredPurchases.value[0].platform;
+    // 表单为空(已有采购不入表单),保持 auto:新勾选订单按数量自动分摊金额,无需逐行填写
+    purchaseForm.allocMode = 'auto';
+    const p = purchaseForm.platform;
+    importTab.value = p === 'yangkeduo' ? 'pdd' : p === '1688' ? 'ali' : p === 'taobao' ? 'tb' : 'manual';
+    purchaseOpen.value = true;
+    if (importTab.value === 'pdd') loadPddOrders();
+    else if (importTab.value === 'ali') loadAliOrders();
+    else if (importTab.value === 'tb') loadTbOrders();
+    return;
+  }
+  restoredPurchases.value = [];
+  // 无采购信息:重置到拼多多 tab 并自动加载
   importTab.value = 'pdd';
   purchaseOpen.value = true;
   loadPddOrders();
@@ -796,9 +781,9 @@ const autoPreview = computed(() => {
 watch(() => purchaseForm.allocMode, (mode) => {
   if (mode === 'auto') refreshLookup();
   else {
-    // 切到 manual:从已选采购订单合计(allSelectedTotal)按数量加权分摊到各产品行
-    // 不依赖 paymentAmount(可能被 watch 链时序影响),直接用 allSelectedTotal 确保多选时用合计
-    const total = Number(allSelectedTotal.value) || 0;
+    // 切到 manual:从已选采购订单合计(newSelectedTotal,不含已有采购恢复项)按数量加权分摊到各产品行
+    // 不依赖 paymentAmount(可能被 watch 链时序影响),直接用合计确保多选时用合计
+    const total = Number(newSelectedTotal.value) || 0;
     if (total <= 0) return;
     const items = purchaseForm.items || [];
     const sumQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
@@ -1271,17 +1256,38 @@ const importSelected = computed({
   },
 });
 
-// 跨三平台合并的已选订单(用于下方展示)
+// 已有采购单的 SN 键集合(逗号拼接的 SN 拆开),用于平台列表里标记"已关联"并禁止重复勾选
+const restoredSnKeys = computed(() => {
+  const s = new Set();
+  for (const r of restoredPurchases.value) {
+    for (const part of String(r.orderSn || '').split(',')) {
+      const p = part.trim();
+      if (p) s.add(`${r.platform}:${p}`);
+    }
+  }
+  return s;
+});
+
+// 跨三平台合并的已选订单(用于下方展示):已有采购恢复项排在最前 + 新勾选的平台订单
 const allSelectedOrders = computed(() => {
-  const sel = (orders, selected) => orders.filter((o) => selected.includes(o.orderSn));
+  const sel = (orders, selected, platform) =>
+    orders
+      .filter((o) => selected.includes(o.orderSn) && !restoredSnKeys.value.has(`${platform}:${o.orderSn}`))
+      .map((o) => ({ ...o, _platform: platform }));
   return [
-    ...sel(pddOrders.value, pddSelected.value).map((o) => ({ ...o, _platform: 'yangkeduo' })),
-    ...sel(aliOrders.value, aliSelected.value).map((o) => ({ ...o, _platform: '1688' })),
-    ...sel(tbOrders.value, tbSelected.value).map((o) => ({ ...o, _platform: 'taobao' })),
+    ...restoredPurchases.value,
+    ...sel(pddOrders.value, pddSelected.value, 'yangkeduo'),
+    ...sel(aliOrders.value, aliSelected.value, '1688'),
+    ...sel(tbOrders.value, tbSelected.value, 'taobao'),
   ];
 });
 const allSelectedTotal = computed(() =>
-  allSelectedOrders.value.reduce((s, o) => s + Number(o.amount || 0), 0).toFixed(2));
+  allSelectedOrders.value.reduce((s, o) => s + (Number(o.amount) || 0), 0).toFixed(2));
+
+// 新勾选的订单(不含已有采购恢复项):提交时只入库新增部分,避免已有采购重复累加
+const newSelectedOrders = computed(() => allSelectedOrders.value.filter((o) => !o._existing));
+const newSelectedTotal = computed(() =>
+  newSelectedOrders.value.reduce((s, o) => s + (Number(o.amount) || 0), 0).toFixed(2));
 
 function switchImportTab(t) {
   if (importTab.value === t || importLoading.value) return;
@@ -1342,15 +1348,41 @@ function removeSelectedOrder(platform, orderSn) {
   else tbSelected.value = tbSelected.value.filter((s) => s !== orderSn);
 }
 
-/** 选中订单变化时自动回填 purchaseForm(无需手动点按钮) */
-watch(allSelectedOrders, (sel) => {
+/** 删除一条已有采购关联(冲回该采购分摊金额,对齐详情弹窗的"取消关联") */
+async function removeRestoredPurchase(po) {
+  const label = po.orderSn || `#${po.purchaseOrderId}`;
+  if (!(await confirmStore.ask({
+    message: `确认删除已有采购单 ${label} 与包裹 ${purchaseForm.packageNo} 的关联?将冲回本包裹分摊的采购金额(${fmtMoney(po.allocated)})`,
+    danger: true,
+  }))) return;
+  try {
+    await unlinkPurchase(po.purchaseOrderId, purchaseForm.packageId);
+    restoredPurchases.value = restoredPurchases.value.filter((r) => r.purchaseOrderId !== po.purchaseOrderId);
+    show('已删除该采购关联', 'success');
+    loadTabs();
+    loadList();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  }
+}
+
+// 当前 importTab 对应的平台值(用于 restoredSnKeys 匹配)
+const importTabPlatform = computed(() =>
+  importTab.value === 'pdd' ? 'yangkeduo' : importTab.value === 'ali' ? '1688' : 'taobao');
+/** 平台列表行是否已在已有采购关联中(禁止重复勾选,避免重复入库) */
+function isRestoredLinked(o) {
+  return restoredSnKeys.value.has(`${importTabPlatform.value}:${o.orderSn}`);
+}
+
+/** 新勾选订单变化时自动回填 purchaseForm(无需手动点按钮;已有采购恢复项不参与,避免重复入库) */
+watch(newSelectedOrders, (sel) => {
   if (!sel.length) return;
   const first = sel[0];
   purchaseForm.platform = first._platform;
   purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
   const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
   purchaseForm.sellerName = sellers.join(',');
-  purchaseForm.paymentAmount = allSelectedTotal.value;
+  purchaseForm.paymentAmount = newSelectedTotal.value;
   const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
   purchaseForm.logisticsNo = tracks.join(',');
   purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
@@ -2245,12 +2277,6 @@ onUnmounted(() => {
                   title="取消全部采购关联,退回未采购"
                   @click="onRevert(pkg)"
                 >退回待处理</button>
-                <button
-                  v-for="l in pkg.purchaseLinks"
-                  :key="'un' + l.id"
-                  class="btn btn-danger btn-sm"
-                  @click="onUnlink(pkg, l)"
-                >取消关联</button>
                 <button class="btn btn-ghost btn-sm" @click="onIgnore(pkg, !pkg.isIgnored)">
                   {{ pkg.isIgnored ? '恢复' : '搁置' }}
                 </button>
@@ -2409,26 +2435,40 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 已选采购订单区(固定在产品下方):平台/订单号/下单时间/金额 -->
+        <!-- 已选采购订单区(固定在产品下方):平台/订单号/下单时间/金额(含已有采购恢复项) -->
         <div v-if="allSelectedOrders.length" class="selected-orders">
-          <div class="selected-orders-title">已选 {{ allSelectedOrders.length }} 单 · 合计 ¥{{ allSelectedTotal }}</div>
+          <div class="selected-orders-title">
+            已选 {{ allSelectedOrders.length }} 单 · 合计 ¥{{ allSelectedTotal }}
+            <span v-if="restoredPurchases.length" class="selected-orders-sub">含已有采购 {{ restoredPurchases.length }} 单;勾选新订单后点「保存」追加,已有单可单独删除</span>
+          </div>
           <table class="data-table selected-orders-table">
             <thead>
               <tr>
-                <th style="width: 70px">平台</th>
+                <th style="width: 110px">平台</th>
                 <th>订单号</th>
                 <th style="width: 160px">下单时间</th>
                 <th style="width: 100px">金额</th>
-                <th style="width: 40px"></th>
+                <th style="width: 60px"></th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="o in allSelectedOrders" :key="o._platform + o.orderSn">
-                <td><span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span></td>
-                <td class="mono">{{ o.orderSn }}</td>
-                <td>{{ importTab === 'pdd' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—') }}</td>
+              <tr v-for="o in allSelectedOrders" :key="o._existing ? 'ex-' + o.purchaseOrderId : o._platform + o.orderSn">
+                <td>
+                  <span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span>
+                  <span v-if="o._existing" class="tag tag-warn" title="打开弹窗时恢复的已有采购关联">已有</span>
+                </td>
+                <td class="mono">{{ o.orderSn || '(手工单)' }}</td>
+                <td>{{ o._existing ? '—' : (importTab === 'pdd' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—')) }}</td>
                 <td class="pdd-amount">¥{{ o.amount }}</td>
-                <td><button class="btn btn-ghost btn-sm" @click="removeSelectedOrder(o._platform, o.orderSn)">✕</button></td>
+                <td>
+                  <button
+                    v-if="o._existing"
+                    class="btn btn-danger btn-sm"
+                    title="删除该已有采购关联并冲回采购金额"
+                    @click="removeRestoredPurchase(o)"
+                  >删除</button>
+                  <button v-else class="btn btn-ghost btn-sm" @click="removeSelectedOrder(o._platform, o.orderSn)">✕</button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -2460,12 +2500,13 @@ onUnmounted(() => {
               v-for="o in importOrders"
               :key="o.orderSn"
               class="pdd-item"
-              :class="{ disabled: isImportCancelled(o), selected: importSelected.includes(o.orderSn) }"
+              :class="{ disabled: isImportCancelled(o), selected: importSelected.includes(o.orderSn) || isRestoredLinked(o) }"
+              :title="isRestoredLinked(o) ? '该订单已在已有采购关联中,如需删除请到上方已选区点「删除」' : ''"
             >
               <input
                 type="checkbox"
                 :value="o.orderSn"
-                :disabled="isImportCancelled(o)"
+                :disabled="isImportCancelled(o) || isRestoredLinked(o)"
                 v-model="importSelected"
               />
               <img
@@ -2487,6 +2528,7 @@ onUnmounted(() => {
                   <span class="pdd-amount">¥{{ o.amount }}</span>
                   <span>{{ importTab === 'pdd' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—') }}</span>
                   <span class="tag" :class="isImportCancelled(o) ? 'tag-mute' : 'tag-info'">{{ o.statusPrompt || '—' }}</span>
+                  <span v-if="isRestoredLinked(o)" class="tag tag-warn">已关联</span>
                 </div>
                 <div class="pdd-sn mono">
                   {{ o.orderSn }}<template v-if="o.trackingNumber"> · {{ o.trackingNumber }}</template>
@@ -3303,6 +3345,12 @@ a.product-title:hover {
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 6px;
+}
+.selected-orders-sub {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted, #9ca3af);
 }
 .selected-order-item {
   display: flex;
