@@ -32,7 +32,8 @@ const TABS = [
   { key: 'waitShip', label: '待打单发货' },
   { key: 'shipSuccess', label: '交运' },
   { key: 'waitReceiverConfirm', label: '已发货' },
-  { key: 'completed', label: '已完成' },
+  { key: 'signed', label: '已签收' },
+  { key: 'settled', label: '已结算' },
   { key: 'cancelled', label: '已取消' },
   { key: 'ignored', label: '已搁置' },
 ];

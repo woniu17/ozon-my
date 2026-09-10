@@ -279,7 +279,8 @@ function getSyncCursors() {
 /** Tab 计数(页面页签)
  *  拆分(2026-09):wait_receiver_confirm 按 delivered_at 是否为空再拆为
  *    - waitReceiverConfirm: 已交运未妥投(delivered_at IS NULL)
- *    - completed: 已妥投=已完成(delivered_at IS NOT NULL,财务数据已完整)
+ *    - signed: 已妥投但应计不完整(缺代理佣金66或国际配送67)
+ *    - settled: 已妥投且应计完整(同时有66和67)
  *  新增 all:全部订单(含 ignored 搁置)
  */
 function tabCounts() {
@@ -287,7 +288,10 @@ function tabCounts() {
     .prepare(
       `SELECT
         CASE
-          WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NOT NULL THEN 'completed'
+          WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NOT NULL
+               AND id IN (SELECT package_id FROM op_accrual WHERE type_id = 66)
+               AND id IN (SELECT package_id FROM op_accrual WHERE type_id = 67) THEN 'settled'
+          WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NOT NULL THEN 'signed'
           WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NULL THEN 'wait_receiver_confirm'
           ELSE operate_status
         END AS bucket,
@@ -301,14 +305,15 @@ function tabCounts() {
     .prepare(`SELECT COUNT(*) AS n FROM op_package WHERE is_ignored = 1`)
     .get().n;
   const active = (map.wait_process || 0) + (map.wait_ship || 0) + (map.ship_success || 0)
-    + (map.wait_receiver_confirm || 0) + (map.completed || 0) + (map.cancelled || 0);
+    + (map.wait_receiver_confirm || 0) + (map.signed || 0) + (map.settled || 0) + (map.cancelled || 0);
   return {
     all: active + ignored,
     waitProcess: map.wait_process || 0,
     waitShip: map.wait_ship || 0,
     shipSuccess: map.ship_success || 0,
     waitReceiverConfirm: map.wait_receiver_confirm || 0,
-    completed: map.completed || 0,
+    signed: map.signed || 0,
+    settled: map.settled || 0,
     cancelled: map.cancelled || 0,
     ignored,
   };
@@ -319,7 +324,8 @@ const TAB_STATUS = {
   waitShip: ['wait_ship'],
   shipSuccess: ['ship_success'],
   waitReceiverConfirm: ['wait_receiver_confirm'], // 列表查询时再叠加 delivered_at IS NULL
-  completed: ['wait_receiver_confirm'],             // 列表查询时再叠加 delivered_at IS NOT NULL
+  signed: ['wait_receiver_confirm'],              // 列表查询时再叠加 delivered_at IS NOT NULL + 应计缺 66/67
+  settled: ['wait_receiver_confirm'],             // 列表查询时再叠加 delivered_at IS NOT NULL + 应计有 66 AND 67
   cancelled: ['cancelled'],
   ignored: null, // is_ignored = 1
   all: null,     // 全部(含 ignored)
@@ -371,10 +377,20 @@ function listPackages(filters = {}) {
     } else if (tab === 'all') {
       // 全部:不加 is_ignored/operate_status 过滤,涵盖搁置与所有状态
       where.push('1 = 1');
-    } else if (tab === 'completed') {
-      // 已完成=已妥投:wait_receiver_confirm + delivered_at 有值
+    } else if (tab === 'signed') {
+      // 已签收=已妥投但应计不完整(缺代理佣金66或国际配送67)
       where.push('p.is_ignored = 0');
       where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL");
+      where.push(`NOT (
+        EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 66)
+        AND EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 67)
+      )`);
+    } else if (tab === 'settled') {
+      // 已结算=已妥投且应计完整(同时有代理佣金66和国际配送67)
+      where.push('p.is_ignored = 0');
+      where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL");
+      where.push(`EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 66)
+        AND EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 67)`);
     } else if (tab === 'waitReceiverConfirm') {
       // 已发货=已交运未妥投:wait_receiver_confirm + delivered_at 为空
       where.push('p.is_ignored = 0');
