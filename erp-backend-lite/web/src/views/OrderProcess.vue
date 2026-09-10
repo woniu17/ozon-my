@@ -2019,13 +2019,13 @@ onUnmounted(() => {
               <!-- 重量(估):由实际配送费反推(整数 g) -->
               <div class="amt-row sub muted" :title="weightTitle(pkg)"><span class="amt-name">重量(估)</span><span class="amt-val" :class="{ muted: pkg.accrual?.derivedWeight == null }">{{ pkg.accrual?.derivedWeight != null ? pkg.accrual.derivedWeight + 'g' : '—' }}</span></div>
               <!-- 其它费用:销售佣金/星星商品/逆向物流等,= 应计合计 − 代理 − 配送 -->
-              <div class="amt-row sub muted" :title="othersTitle(pkg)"><span class="amt-name">其它费用</span><span class="amt-val">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</span></div>
+              <div class="amt-row sub" :title="othersTitle(pkg)"><span class="amt-name">其它费用</span><span class="amt-val" :class="{ muted: !pkg.accrual }">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</span></div>
               <div class="amt-row" :title="profitTitle(pkg)">
                 <span class="amt-name sub">{{ profitLabel(pkg) }}</span>
                 <span class="amt-val" :class="pkg.profit?.profit > 0 ? 'profit-pos' : (pkg.profit?.profit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(pkg.profit?.profit) }}</span>
               </div>
-              <div class="amt-row sub muted" title="销售利润率 = 利润 / 订单金额"><span class="amt-name">销售利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateSale) }}</span></div>
-              <div class="amt-row sub muted" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateCost) }}</span></div>
+              <div class="amt-row sub" title="销售利润率 = 利润 / 订单金额"><span class="amt-name">销售利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateSale) }}</span></div>
+              <div class="amt-row sub" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateCost) }}</span></div>
             </td>
             <td class="col-purchase">
               <div v-if="!pkg.purchaseLinks?.length" class="muted">未录入</div>

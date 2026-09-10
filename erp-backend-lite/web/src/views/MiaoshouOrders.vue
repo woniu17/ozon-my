@@ -547,13 +547,13 @@ onUnmounted(() => {
               <div class="amt-row sub" :title="weightTitle(row)"><span class="amt-name">重量(称)</span><span class="amt-val" :class="{ muted: row.weightG == null }">{{ row.weightG != null ? Math.floor(row.weightG) + 'g' : '—' }}</span></div>
               <!-- 重量(估):由实际配送费反推(整数 g) -->
               <div class="amt-row sub muted" :title="weightTitle(row)"><span class="amt-name">重量(估)</span><span class="amt-val" :class="{ muted: row.accrual?.derivedWeight == null }">{{ row.accrual?.derivedWeight != null ? row.accrual.derivedWeight + 'g' : '—' }}</span></div>
-              <div class="amt-row sub muted" :title="othersTitle(row)"><span class="amt-name">其它费用</span><span class="amt-val">{{ row.accrual ? fmtMoney(row.accrual.others) : '—' }}</span></div>
+              <div class="amt-row sub" :title="othersTitle(row)"><span class="amt-name">其它费用</span><span class="amt-val" :class="{ muted: !row.accrual }">{{ row.accrual ? fmtMoney(row.accrual.others) : '—' }}</span></div>
               <div class="amt-row" :title="profitTitle(row)">
                 <span class="amt-name sub">{{ profitLabel(row) }}</span>
                 <span class="amt-val" :class="row.profit?.profit > 0 ? 'profit-pos' : (row.profit?.profit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(row.profit?.profit) }}</span>
               </div>
-              <div class="amt-row sub muted" title="销售利润率 = 利润 / 订单金额"><span class="amt-name">销售利润率</span><span class="amt-val">{{ fmtRate(row.profit?.profitRateSale) }}</span></div>
-              <div class="amt-row sub muted" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(row.profit?.profitRateCost) }}</span></div>
+              <div class="amt-row sub" title="销售利润率 = 利润 / 订单金额"><span class="amt-name">销售利润率</span><span class="amt-val">{{ fmtRate(row.profit?.profitRateSale) }}</span></div>
+              <div class="amt-row sub" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(row.profit?.profitRateCost) }}</span></div>
               <div class="amt-row sub muted"><span class="amt-name">称重</span><span class="amt-val">{{ fmtWeight(row.weighing_weight) }}</span></div>
             </td>
             <td>
