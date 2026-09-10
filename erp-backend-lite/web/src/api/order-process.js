@@ -15,6 +15,12 @@ export function getOrderList(params) {
   return request.get('/admin/api/order-process/list', params);
 }
 
+// Tab 聚合统计(当前 Tab+筛选全集不分页,分两组:已结算/已采购未结算)
+// params 同 getOrderList(除不接 page/pageSize)
+export function getOrderSummary(params) {
+  return request.get('/admin/api/order-process/summary', params);
+}
+
 // 包裹详情(产品行+采购关联+轨迹)
 export function getOrderDetail(packageId) {
   return request.get('/admin/api/order-process/detail/' + encodeURIComponent(packageId));
@@ -95,6 +101,14 @@ export function dismissSyncProgress() {
 //   { mode: 'packages', packageIds: [1] }  单包裹刷新(详情弹窗"刷新应计")
 export function runAccrualSync(body = {}) {
   return request.post('/admin/api/order-process/accrual-sync', body);
+}
+
+// 单订单强制同步(列表行"同步"按钮)
+// 流程:Ozon /v3/posting/fbs/get 拉最新订单状态 + 强拉应计项目(均无时间窗口限制)
+// body: { packageId: number }
+// 返回 { postingNumber, orderSynced, accrualRows, statusBefore, statusAfter }
+export function syncPackage(packageId) {
+  return request.post('/admin/api/order-process/sync-package', { packageId });
 }
 
 // 读取 RUB→CNY 汇率(null=未配置)

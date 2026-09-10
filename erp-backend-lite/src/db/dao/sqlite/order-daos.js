@@ -342,9 +342,7 @@ const TAB_STATUS = {
  *    匹配字段: 订单号(posting_number,即Ozon运单号)/包裹号/平台SKU(offer_id)/SKU/
  *             采购单号/采购物流单号/Ozon运单号
  */
-function listPackages(filters = {}) {
-  const page = Math.max(1, Number(filters.page) || 1);
-  const pageSize = Math.min(100, Math.max(1, Number(filters.pageSize) || 20));
+function buildPackageWhere(filters = {}) {
   const where = [];
   const params = [];
 
@@ -435,6 +433,14 @@ function listPackages(filters = {}) {
     params.push(kw, kw, kw, kw, kw, kw, kw, kw);
   }
 
+  return { where, params, globalSearch: !!globalKw, globalKeyword: globalKw };
+}
+
+function listPackages(filters = {}) {
+  const page = Math.max(1, Number(filters.page) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(filters.pageSize) || 20));
+  const { where, params, globalSearch, globalKeyword } = buildPackageWhere(filters);
+
   const total = db
     .prepare(
       `SELECT COUNT(*) AS n FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`
@@ -470,9 +476,58 @@ function listPackages(filters = {}) {
     total,
     page,
     pageSize,
-    globalSearch: !!globalKw,   // 前端据此显示"全局搜索"提示条
-    globalKeyword: globalKw,
+    globalSearch,   // 前端据此显示"全局搜索"提示条
+    globalKeyword,
     packages: pkgRows,
+  };
+}
+
+/**
+ * 聚合统计(按当前 Tab+筛选的全集,不分页)
+ *  返回精简字段行(供 /summary 路由业务层循环 computeProfit 用),含截断信息
+ *  LIMIT 20000 防极端场景阻塞 event loop
+ */
+function aggregatePackages(filters = {}) {
+  const { where, params } = buildPackageWhere(filters);
+  const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+  const total = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id ${whereClause}`
+    )
+    .get(...params).n;
+
+  const AGG_LIMIT = 20000;
+  const rows = db
+    .prepare(
+      `SELECT p.id, p.operate_status, p.purchase_status, p.delivered_at, p.is_ignored,
+              p.total_purchase_amount, p.accrual_total, p.accrual_sale_total,
+              o.order_amount, o.store_id
+       FROM op_package p
+       JOIN op_ozon_order o ON o.id = p.ozon_order_id
+       ${whereClause}
+       ORDER BY p.id
+       LIMIT ?`
+    )
+    .all(...params, AGG_LIMIT);
+
+  const packages = rows.map((r) => ({
+    id: r.id,
+    operateStatus: r.operate_status,
+    purchaseStatus: r.purchase_status,
+    deliveredAt: r.delivered_at,
+    isIgnored: !!r.is_ignored,
+    orderAmount: Number(r.order_amount) || 0,
+    totalPurchaseAmount: Number(r.total_purchase_amount) || 0,
+    accrualTotal: r.accrual_total != null ? Number(r.accrual_total) : null,
+    accrualSaleTotal: r.accrual_sale_total != null ? Number(r.accrual_sale_total) : null,
+  }));
+
+  return {
+    packages,
+    total,
+    truncated: total > AGG_LIMIT,
+    truncatedAt: total > AGG_LIMIT ? AGG_LIMIT : null,
   };
 }
 
@@ -644,6 +699,42 @@ function getPurchasesByPackageIds(packageIds) {
  * @param {string} [platform]  可选,按平台过滤(如 'yangkeduo')
  * @returns {Array<{id, purchaseSn, platform, status}>}
  */
+/** 批量查包裹重量(g,用于国际配送费公式 3.37 + 0.0281 × weight_g)
+ *  优先级:1) 妙手称重(miaoshou_package.weighing_weight,by posting_number)
+ *          2) Ozon SKU 重量按数量加权(ozon_cache_index.weight_g × op_ozon_order_item.quantity 求和)
+ *  返回 Map<packageId, { weightG, source: 'miaoshou'|'ozon_sku' }>
+ *  无重量数据的包裹不入 Map(让 computeProfit 走兜底分支)
+ */
+function getWeightsByPackageIds(packageIds) {
+  if (!packageIds || !packageIds.length) return new Map();
+  const ph = packageIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT p.id AS packageId,
+              mp.weighing_weight AS msWeight,
+              (SELECT SUM(oi.quantity * CAST(oci.weight_g AS REAL))
+               FROM op_ozon_order_item oi
+               LEFT JOIN ozon_cache_index oci ON oci.sku = CAST(oi.sku AS TEXT)
+               WHERE oi.ozon_order_id = p.ozon_order_id) AS skuWeight
+         FROM op_package p
+         LEFT JOIN miaoshou_package mp ON mp.posting_number = p.logistics_no
+         WHERE p.id IN (${ph})`
+    )
+    .all(...packageIds);
+  const out = new Map();
+  for (const r of rows) {
+    const ms = r.msWeight != null ? Number(r.msWeight) : null;
+    const sku = r.skuWeight != null ? Number(r.skuWeight) : null;
+    if (ms != null && ms > 0) {
+      out.set(r.packageId, { weightG: ms, source: 'miaoshou' });
+    } else if (sku != null && sku > 0) {
+      out.set(r.packageId, { weightG: sku, source: 'ozon_sku' });
+    }
+    // 全部缺失 → 不入 Map,computeProfit 走 weightMissing 兜底
+  }
+  return out;
+}
+
 export function listPendingPurchases(platform) {
   const where = [
     `link_status = 'linked'`,
@@ -1298,6 +1389,8 @@ export const orderPackageDao = {
   getSyncCursors,
   tabCounts,
   listPackages,
+  aggregatePackages,
+  getWeightsByPackageIds,
   getItemsByOrderIds,
   findUncachedSkus,
   getPurchasesByPackageIds,

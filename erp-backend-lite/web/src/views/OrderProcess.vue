@@ -14,6 +14,8 @@ import {
   syncMsToLocal,
   enrichPurchaseItems,
   listPendingPurchases,
+  getOrderSummary,
+  syncPackage,
 } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
@@ -87,6 +89,33 @@ const globalSearchBar = ref(null);
 const pager = reactive({ current: 1, total: 0, pageSize: 20 });
 const loading = ref(false);
 const rows = ref([]);
+
+// ── Tab 聚合统计(已结算/已采购未结算两组,全集不分页)──────
+const summary = ref(null);
+const summaryLoading = ref(false);
+const summaryError = ref(null);
+let summaryReqId = 0;
+let lastSummaryParams = null;
+const summaryEmpty = computed(() => summary.value && summary.value.totalOrders === 0);
+const summaryEmptyHint = computed(() =>
+  activeTab.value === 'cancelled' ? '已取消订单不参与利润汇总' : '当前 Tab 无已结算/已采购未结算订单'
+);
+async function loadSummary(params) {
+  const reqId = ++summaryReqId;
+  lastSummaryParams = params;
+  summaryLoading.value = true;
+  summaryError.value = null;
+  try {
+    const data = await getOrderSummary(params);
+    if (reqId !== summaryReqId) return;  // 旧响应丢弃,防快速切 Tab 覆盖
+    summary.value = data;
+  } catch (err) {
+    if (reqId !== summaryReqId) return;
+    summaryError.value = err.message || String(err);
+  } finally {
+    if (reqId === summaryReqId) summaryLoading.value = false;
+  }
+}
 
 // ── 采购录入弹窗(模式B)────────────────────────────────
 const purchaseOpen = ref(false);
@@ -206,19 +235,25 @@ async function loadTabs() {
 
 async function loadList() {
   loading.value = true;
+  const isGlobal = globalSearch.active && globalSearch.keyword.trim();
+  const listParams = {
+    tab: activeTab.value,
+    keyword: filters.keyword.trim(),
+    purchaseStatus: filters.purchaseStatus,
+    arrived: filters.arrived,
+    cancelInitiator: activeTab.value === 'cancelled' ? filters.cancelInitiator : '',
+    globalKeyword: isGlobal ? globalSearch.keyword.trim() : '',
+    globalMode: globalSearch.mode,
+    page: pager.current,
+    pageSize: pager.pageSize,
+  };
+  // Tab 聚合统计并行触发(独立 loading/error 态,不阻塞列表主路径)
+  const summaryParams = { ...listParams };
+  delete summaryParams.page;
+  delete summaryParams.pageSize;
+  loadSummary(summaryParams);
   try {
-    const isGlobal = globalSearch.active && globalSearch.keyword.trim();
-    const data = await getOrderList({
-      tab: activeTab.value,
-      keyword: filters.keyword.trim(),
-      purchaseStatus: filters.purchaseStatus,
-      arrived: filters.arrived,
-      cancelInitiator: activeTab.value === 'cancelled' ? filters.cancelInitiator : '',
-      globalKeyword: isGlobal ? globalSearch.keyword.trim() : '',
-      globalMode: globalSearch.mode,
-      page: pager.current,
-      pageSize: pager.pageSize,
-    });
+    const data = await getOrderList(listParams);
     globalSearch.total = isGlobal ? (data?.total || 0) : 0;
     rows.value = data?.packages || [];
     pager.total = data?.total || 0;
@@ -1257,6 +1292,31 @@ async function onPrinted(pkg) {
 const printingId = ref(0); // 正在打印的包裹 id(按钮 loading)
 let printFrame = null;     // 兜底打印用隐藏 iframe(复用,避免每次重建)
 
+// 单订单强制同步(列表行"同步"按钮):走 /v3/posting/fbs/get 拉最新状态 + 强拉应计,无时间窗口限制
+const syncingPkgId = ref(0); // 正在同步的包裹 id(按钮 loading)
+async function onSyncPackage(pkg) {
+  if (syncingPkgId.value) return;
+  syncingPkgId.value = pkg.id;
+  try {
+    const r = await syncPackage(pkg.id);
+    const parts = [`订单${r.orderSynced ? '已同步' : '未更新'}`];
+    if (r.accrualRows != null) parts.push(`应计 ${r.accrualRows} 行`);
+    if (r.statusBefore && r.statusAfter) {
+      const before = `${r.statusBefore.ozon}/${r.statusBefore.operate}`;
+      const after = `${r.statusAfter.ozon}/${r.statusAfter.operate}`;
+      if (before !== after) parts.push(`状态 ${before} → ${after}`);
+    }
+    show(`同步完成:${parts.join(' · ')}`, 'success');
+    // 刷新当前页 + 计数 + 汇总(状态或应计可能变化)
+    await loadList();
+    await loadTabs();
+  } catch (err) {
+    show(`同步失败:${err.message || String(err)}`, 'error');
+  } finally {
+    syncingPkgId.value = 0;
+  }
+}
+
 function printBlobViaIframe(blob) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
@@ -1413,8 +1473,24 @@ function agentFeeTitle(pkg) {
   return '无应计数据,按订单金额 × 16% 预估';
 }
 function deliveryTitle(pkg) {
-  if (pkg.accrual) return `国际配送(RfbsGlobalDelivery)实扣 ${fmtRub(pkg.accrual.deliveryRub)} × 汇率 ${pkg.accrual.rate}`;
+  const real = pkg.accrual?.delivery;
+  const est = pkg.profit?.delivery;
+  const parts = [];
+  if (real != null) parts.push(`实扣 ${fmtRub(pkg.accrual.deliveryRub)} × 汇率 ${pkg.accrual.rate} = ¥${real}`);
+  if (est != null) parts.push(`估按公式 3.37 + 0.0281 × ${pkg.profit.weightG}g = ¥${est}`);
+  if (parts.length) return `国际配送 ${parts.join(' | ')}`;
+  if (pkg.profit?.weightMissing) return '无重量数据(妙手未称重 + SKU 未缓存),配送费隐含在 16% 代理佣金预估内';
   return '无应计数据(未妥投或 Ozon 未生成)';
+}
+// 重量悬浮:实际重量(妙手称重/Ozon SKU)+ 推导重量(由实际配送费反推)
+function weightTitle(pkg) {
+  const actual = pkg.weightG;
+  const derived = pkg.accrual?.derivedWeight;
+  const parts = [];
+  if (actual != null) parts.push(`实际 ${actual}g(${pkg.weightSource === 'miaoshou' ? '妙手称重' : 'Ozon SKU 加权'})`);
+  if (derived != null) parts.push(`推导 ${derived}g(由实际配送费反推)`);
+  if (parts.length) return `商品重量 ${parts.join(' | ')}`;
+  return '无重量数据(妙手未称重 + SKU 未缓存)';
 }
 function othersTitle(pkg) {
   if (pkg.accrual) return `其它费用(销售佣金/星星商品/逆向物流等)${fmtRub(pkg.accrual.othersRub)} × 汇率 ${pkg.accrual.rate}`;
@@ -1837,6 +1913,52 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- Tab 聚合统计(已结算/已采购未结算两组,全集不分页) -->
+    <div class="summary-bar" v-if="summary?.truncated">
+      <span class="tag tag-warn">仅统计前 {{ summary.truncatedAt }} 单(共 {{ summary.totalUnfiltered }}),请缩小筛选</span>
+    </div>
+    <div class="summary-bar summary-loading" v-else-if="summaryLoading && !summary">
+      <span class="muted">统计中…</span>
+    </div>
+    <div class="summary-bar summary-error" v-else-if="summaryError">
+      <span class="muted">统计失败:{{ summaryError }}</span>
+      <button class="btn btn-ghost btn-sm" @click="loadSummary(lastSummaryParams)">重试</button>
+    </div>
+    <div class="summary-bar summary-empty" v-else-if="summaryEmpty" v-show="!summaryLoading">
+      <span class="muted">{{ summaryEmptyHint }}</span>
+    </div>
+    <div class="summary-bar" v-else-if="summary" v-show="!summaryLoading">
+      <div class="summary-card summary-settled">
+        <div class="summary-head">
+          <span class="summary-title">已结算</span>
+          <span class="tag tag-ok">{{ summary.settled.orderCount }} 单</span>
+          <span v-if="summary.settled.estimated" class="muted">（估）</span>
+          <span v-else class="muted">（实）</span>
+        </div>
+        <div class="summary-metrics">
+          <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.settled.totalOrderAmount) }}</span></span>
+          <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.settled.totalPurchaseAmount) }}</span></span>
+          <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.settled.totalProfit > 0 ? 'profit-pos' : (summary.settled.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.settled.totalProfit) }}</span></span>
+          <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.settled.profitRateSale) }}</span></span>
+          <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.settled.profitRateCost) }}</span></span>
+        </div>
+      </div>
+      <div class="summary-card summary-pending">
+        <div class="summary-head">
+          <span class="summary-title">已采购未结算</span>
+          <span class="tag tag-warn">{{ summary.pendingSettled.orderCount }} 单</span>
+          <span class="muted">（估）</span>
+        </div>
+        <div class="summary-metrics">
+          <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.pendingSettled.totalOrderAmount) }}</span></span>
+          <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.pendingSettled.totalPurchaseAmount) }}</span></span>
+          <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.pendingSettled.totalProfit > 0 ? 'profit-pos' : (summary.pendingSettled.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.pendingSettled.totalProfit) }}</span></span>
+          <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.pendingSettled.profitRateSale) }}</span></span>
+          <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.pendingSettled.profitRateCost) }}</span></span>
+        </div>
+      </div>
+    </div>
+
     <!-- 列表 -->
     <div class="table-wrap">
       <table class="data-table pkg-table">
@@ -1888,8 +2010,14 @@ onUnmounted(() => {
               <div class="amt-row"><span class="amt-name">采购</span><span class="amt-val" :class="{ muted: !pkg.totalPurchaseAmount }">{{ fmtMoney(pkg.totalPurchaseAmount) }}</span></div>
               <!-- 代理佣金:有应计=66 类型实扣换算;已取消=0(不估算);其余=16% 预估(标"估") -->
               <div class="amt-row sub muted" :title="agentFeeTitle(pkg)"><span class="amt-name">{{ pkg.accrual || isCancelled(pkg) ? '代理佣金' : '代理佣金(估)' }}</span><span class="amt-val">{{ fmtMoney(pkg.accrual?.agentFee ?? pkg.profit?.commission) }}</span></div>
-              <!-- 国际配送:仅真实应计口径有值 -->
-              <div class="amt-row sub muted" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送</span><span class="amt-val">{{ pkg.accrual ? fmtMoney(pkg.accrual.delivery) : '—' }}</span></div>
+              <!-- 国际配送(实际):应计 type 67 -->
+              <div class="amt-row sub" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送</span><span class="amt-val" :class="{ muted: pkg.accrual?.delivery == null }">{{ pkg.accrual?.delivery != null ? fmtMoney(pkg.accrual.delivery) : '—' }}</span></div>
+              <!-- 国际配送(估):公式 3.37 + 0.0281 × weight_g 估算 -->
+              <div class="amt-row sub muted" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送(估)</span><span class="amt-val" :class="{ muted: pkg.profit?.delivery == null }">{{ pkg.profit?.delivery != null ? fmtMoney(pkg.profit.delivery) : '—' }}</span></div>
+              <!-- 重量(称):妙手称重 / Ozon SKU 加权(整数 g) -->
+              <div class="amt-row sub" :title="weightTitle(pkg)"><span class="amt-name">重量(称)</span><span class="amt-val" :class="{ muted: pkg.weightG == null }">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span></div>
+              <!-- 重量(估):由实际配送费反推(整数 g) -->
+              <div class="amt-row sub muted" :title="weightTitle(pkg)"><span class="amt-name">重量(估)</span><span class="amt-val" :class="{ muted: pkg.accrual?.derivedWeight == null }">{{ pkg.accrual?.derivedWeight != null ? pkg.accrual.derivedWeight + 'g' : '—' }}</span></div>
               <!-- 其它费用:销售佣金/星星商品/逆向物流等,= 应计合计 − 代理 − 配送 -->
               <div class="amt-row sub muted" :title="othersTitle(pkg)"><span class="amt-name">其它费用</span><span class="amt-val">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</span></div>
               <div class="amt-row" :title="profitTitle(pkg)">
@@ -1963,6 +2091,12 @@ onUnmounted(() => {
                 >提交采购信息</button>
                 <button v-else class="btn btn-ghost btn-sm" @click="openPurchase(pkg)">追加采购</button>
                 <button class="btn btn-ghost btn-sm" @click="openDetail(pkg)">详情</button>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  :disabled="syncingPkgId === pkg.id"
+                  :title="syncingPkgId === pkg.id ? '同步中…' : '按单号直查 Ozon 拉最新订单状态 + 强制拉应计项目(无时间窗口限制)'"
+                  @click="onSyncPackage(pkg)"
+                >{{ syncingPkgId === pkg.id ? '同步中…' : '同步' }}</button>
                 <button
                   v-if="pkg.operateStatus === 'wait_ship' || pkg.operateStatus === 'ship_success'"
                   class="btn btn-primary btn-sm"
@@ -2902,6 +3036,59 @@ a.product-title:hover {
 .tag-warn { background: #fef3c7; color: #f59e0b; }
 .tag-info { background: #dbeafe; color: #2563eb; }
 .tag-mute { background: #f3f4f6; color: #6b7280; }
+
+/* ── Tab 聚合统计(已结算/已采购未结算两组,全集不分页)── */
+.summary-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.summary-bar.summary-loading,
+.summary-bar.summary-error,
+.summary-bar.summary-empty {
+  padding: 6px 12px;
+  font-size: 12px;
+  align-items: center;
+}
+.summary-card {
+  flex: 1;
+  min-width: 280px;
+  padding: 8px 12px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  background: #f9fafb;
+}
+.summary-settled { border-left: 3px solid #16a34a; }
+.summary-pending { border-left: 3px solid #f59e0b; }
+.summary-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.summary-title { color: var(--text-primary, #111827); }
+.summary-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 12px;
+}
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.metric-label {
+  color: var(--text-secondary, #6b7280);
+  font-size: 11px;
+}
+.metric-val {
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
 
 .empty {
   text-align: center;

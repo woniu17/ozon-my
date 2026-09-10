@@ -13,7 +13,7 @@
 // 进度查询 GET  /admin/api/order-process/sync-progress
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
-import { postingFbsUnfulfilledList, postingFbsList, productInfoListV3, financeAccrualPostings, financeAccrualTypes } from './ozon-opi.js';
+import { postingFbsUnfulfilledList, postingFbsList, postingFbsGet, productInfoListV3, financeAccrualPostings, financeAccrualTypes } from './ozon-opi.js';
 import { orderPackageDao, setStoreNameMap } from '../db/dao/sqlite/order-daos.js';
 import { getAccrualTypes, findPendingAccrualPostings, findBackfillAccrualPostings, findAccrualPostingsByPackageIds, replaceAccruals } from '../db/dao/sqlite/accrual-dao.js';
 import { db } from '../db/index.js';
@@ -383,6 +383,87 @@ export async function runSyncAllList({ sinceDays, since, to } = {}) {
 }
 
 /** 立即执行一轮全店铺增量同步(手动触发/定时共用;并发保护) */
+// ── 单订单强制同步(用户点击"同步"按钮触发)─────────────────────
+// 不受时间窗口限制:按单号直查 Ozon /v3/posting/fbs/get
+// 同时强拉应计项目(走 findAccrualPostingsByPackageIds,无 24h 限制)
+// 返回 { ok, postingNumber, storeId, orderSynced, accrualRows, statusBefore, statusAfter }
+export async function syncSinglePackage(packageId) {
+  if (!Number.isInteger(Number(packageId)) || Number(packageId) <= 0) {
+    throw new Error('packageId 必须为正整数');
+  }
+  // 查 DB 拿 posting_number + store_id + 当前状态(供前后对比)
+  const row = db
+    .prepare(
+      `SELECT p.id, o.posting_number AS postingNumber, o.store_id AS storeId,
+              o.status AS ozonStatusBefore, p.operate_status AS operateStatusBefore
+       FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id
+       WHERE p.id = ?`
+    )
+    .get(Number(packageId));
+  if (!row || !row.postingNumber || !row.storeId) {
+    throw new Error(`未找到 packageId=${packageId} 对应的订单或店铺`);
+  }
+
+  const stores = config.loadStores() || [];
+  const store = stores.find((s) => s.id === row.storeId);
+  if (!store || !store?.sync_credentials?.clientId) {
+    throw new Error(`店铺 ${row.storeId} 未配置 sync_credentials,无法直连 Ozon`);
+  }
+
+  // 1) 拉订单最新数据(/v3/posting/fbs/get 按 posting_number 单查,无时间窗口)
+  //    响应结构:{ result: {...posting...} }(与 list 单 posting 一致)
+  const resp = await postingFbsGet(store, row.postingNumber);
+  const posting = resp?.result;
+  let orderSynced = false;
+  if (posting && posting.posting_number) {
+    const r = orderPackageDao.syncPosting(store.id, posting);
+    orderSynced = true;
+    logger.info(
+      { packageId: row.id, postingNumber: row.postingNumber, orderId: r.orderId, packageId: r.packageId },
+      '[order-sync] 单订单同步完成'
+    );
+  } else {
+    logger.warn({ packageId: row.id, postingNumber: row.postingNumber, resp }, '[order-sync] Ozon 返回空 posting');
+  }
+
+  // 2) 强制拉应计项目(走 findAccrualPostingsByPackageIds,无 24h 限制)
+  //    syncAccruals 内部含 429 限流退避,失败不阻塞流程
+  let accrualRows = 0;
+  let accrualErr = null;
+  try {
+    const r = await syncAccruals(store, { mode: 'packages', packageIds: [row.id] });
+    accrualRows = r.accrualRows || 0;
+  } catch (e) {
+    accrualErr = e?.message || String(e);
+    logger.warn({ packageId: row.id, err: accrualErr }, '[order-sync] 单订单应计同步失败(状态同步已成功)');
+  }
+
+  // 查最新状态(供前后对比)
+  const after = db
+    .prepare(
+      `SELECT o.status AS ozonStatusAfter, p.operate_status AS operateStatusAfter,
+              p.accrual_total, p.accrual_synced_at
+       FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id
+       WHERE p.id = ?`
+    )
+    .get(row.id);
+
+  return {
+    ok: true,
+    packageId: row.id,
+    postingNumber: row.postingNumber,
+    storeId: row.storeId,
+    orderSynced,
+    accrualRows,
+    accrualError: accrualErr,
+    statusBefore: { ozon: row.ozonStatusBefore, operate: row.operateStatusBefore },
+    statusAfter: after
+      ? { ozon: after.ozonStatusAfter, operate: after.operateStatusAfter,
+          accrualTotal: after.accrual_total, accrualSyncedAt: after.accrual_synced_at }
+      : null,
+  };
+}
+
 export async function runOrderSyncNow() {
   if (syncing) {
     return { skipped: true, reason: '同步已在进行中' };

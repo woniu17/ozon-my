@@ -23,7 +23,7 @@ import logger from '../middleware/log.js';
 import config from '../config/index.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
-import { runOrderSyncNow, runSyncAllList, runAccrualSync, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
+import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
 import { packageLabel } from '../services/ozon-opi.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
@@ -33,6 +33,9 @@ const router = Router();
 // 预估佣金率(实测 payout/commission 未妥投恒为 0,需自算;对齐妙手"平台佣金 XX 估"口径)
 // 后续可挂 app_config 按店铺配置
 const DEFAULT_COMMISSION_RATE = 0.16;
+// 国际配送费公式(2026-09):delivery_cny = 3.37 + 0.0281 × weight_g(单位 CNY,对齐 Ozon type 67)
+const DELIVERY_BASE_CNY = 3.37;
+const DELIVERY_PER_G_CNY = 0.0281;
 
 // 解析 RUB→CNY 汇率(app_config 优先,.env 兜底)
 function resolveRubCnyRate() {
@@ -52,7 +55,8 @@ const TYPE_DELIVERY = 67;    // RfbsGlobalDelivery 国际配送
  *  typeSums: getAccrualTypeSumsByPackageIds 结果(RUB)
  *  返回 Map<packageId, accrual>;accrual.totalRub 为 null 的包裹不入 Map(拉过但空)
  *  结构: { rate, agentFee, delivery, others, total, sale, payout,  // CNY
- *          agentFeeRub, deliveryRub, othersRub, totalRub, saleRub } // RUB 原值(悬浮展示)
+ *          agentFeeRub, deliveryRub, othersRub, totalRub, saleRub,  // RUB 原值(悬浮展示)
+ *          derivedWeight }                                          // 由实际配送费反推的重量(g)
  */
 function buildAccrualBreakdown(packages, typeSums, rate) {
   const byPkg = new Map();
@@ -70,10 +74,16 @@ function buildAccrualBreakdown(packages, typeSums, rate) {
     const totalRub = Number(pkg.accrualTotal) || 0;
     const saleRub = Number(pkg.accrualSaleTotal) || 0;
     const othersRub = round2(totalRub - agentRub - deliveryRub);
+    // 由实际配送费(CNY)反推商品重量:weight = (|delivery| - 3.37) / 0.0281(整数 g)
+    const deliveryCny = round2(deliveryRub * rate);
+    const deliveryAbs = Math.abs(deliveryCny);
+    const derivedWeight = deliveryAbs > DELIVERY_BASE_CNY
+      ? Math.floor((deliveryAbs - DELIVERY_BASE_CNY) / DELIVERY_PER_G_CNY)
+      : null;
     out.set(pkg.id, {
       rate,
       agentFee: round2(agentRub * rate),
-      delivery: round2(deliveryRub * rate),
+      delivery: deliveryCny,
       others: round2(othersRub * rate),
       total: round2(totalRub * rate),
       sale: round2(saleRub * rate),
@@ -83,6 +93,7 @@ function buildAccrualBreakdown(packages, typeSums, rate) {
       othersRub,
       totalRub: round2(totalRub),
       saleRub: round2(saleRub),
+      derivedWeight,
     });
   }
   return out;
@@ -93,7 +104,7 @@ function buildAccrualBreakdown(packages, typeSums, rate) {
 //   真实口径: 利润 = (销售+应计合计)×汇率 − 采购;estimated=false(前端显示"实")
 //   预估口径: 佣金 = orderAmount × 0.16;estimated=true(前端显示"估")
 // 已取消(2026-09-03):无订单收入,佣金不估算(应计无佣金即 0),利润 = −采购(无采购/应计则为 0)
-function computeProfit(pkg, cancelled = false) {
+function computeProfit(pkg, cancelled = false, rate = null) {
   const orderAmount = Number(pkg.orderAmount) || 0;
   const purchase = Number(pkg.totalPurchaseAmount) || 0;
   const round2 = (n) => Math.round(n * 100) / 100;
@@ -102,12 +113,19 @@ function computeProfit(pkg, cancelled = false) {
   const a = pkg.accrual;
   if (a?.rate && a.payout != null) {
     const profit = round2(a.payout - purchase);
+    // 同时计算公式估算的配送费(基于实际重量,供前端对比展示)
+    const w = pkg.weightG != null ? Number(pkg.weightG) : null;
+    const deliveryEst = w != null ? round2(DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * w) : null;
     return {
       estimated: false,
       // 佣金兼容字段:非配送类扣款合计(代理佣金+其它)×
       commission: round2(a.agentFee + a.others),
       escrow: a.payout,
       profit,
+      // 公式估算的配送费(基于实际重量,仅展示用,不参与利润计算)
+      delivery: deliveryEst,
+      weightG: w,
+      weightSource: pkg.weightSource || null,
       // 已取消订单收入为 0,利润率无意义不显示
       profitRateCost: cancelled ? null : (purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null),
       profitRateSale: cancelled ? null : (orderAmount > 0 ? Math.round((profit / orderAmount) * 10000) / 100 : null),
@@ -129,8 +147,30 @@ function computeProfit(pkg, cancelled = false) {
     };
   }
 
-  // 预估口径(无应计/未妥投,现状不变)
+  // 预估口径:无真实应计。代理佣金恒 16%;国际配送按重量公式估算(公式单位 CNY,需重量)
+  // 无重量时回退到原 16% 打包口径(delivery 隐含在 16% 内,保守低估)
   const commission = round2(orderAmount * DEFAULT_COMMISSION_RATE);
+  const weightG = pkg.weightG != null ? Number(pkg.weightG) : null;
+
+  if (weightG != null) {
+    // 新口径:配送费独立扣减(公式 3.37 + 0.0281 × weight_g,单位 CNY)
+    const delivery = round2(DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * weightG);
+    const escrow = round2(orderAmount - commission - delivery);
+    const profit = round2(escrow - purchase);
+    return {
+      commission,
+      delivery,
+      escrow,
+      profit,
+      profitRateCost: purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null,
+      profitRateSale: orderAmount > 0 ? Math.round((profit / orderAmount) * 10000) / 100 : null,
+      estimated: true,
+      weightG,
+      weightSource: pkg.weightSource || null,
+    };
+  }
+
+  // 兜底:无重量,回退原 16% 打包口径(delivery 隐含在 16% 内)
   const escrow = round2(orderAmount - commission);
   const profit = round2(escrow - purchase);
   return {
@@ -140,6 +180,7 @@ function computeProfit(pkg, cancelled = false) {
     profitRateCost: purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null,
     profitRateSale: orderAmount > 0 ? Math.round((profit / orderAmount) * 10000) / 100 : null,
     estimated: true,
+    weightMissing: true,
   };
 }
 
@@ -177,6 +218,8 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       getAccrualTypeSumsByPackageIds(pkgIds),
       rateInfo?.rate
     );
+    // 批量查包裹重量(供 computeProfit 走国际配送公式 3.37 + 0.0281 × weight_g)
+    const weightMap = orderPackageDao.getWeightsByPackageIds(pkgIds);
     const itemsByOrder = new Map();
     for (const it of items) {
       if (!itemsByOrder.has(it.ozonOrderId)) itemsByOrder.set(it.ozonOrderId, []);
@@ -191,10 +234,111 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       pkg.items = itemsByOrder.get(pkg.ozonOrderId) || [];
       pkg.purchaseLinks = linksByPkg.get(pkg.id) || [];
       if (accrualMap.has(pkg.id)) pkg.accrual = accrualMap.get(pkg.id);
-      pkg.profit = computeProfit(pkg, pkg.operateStatus === 'cancelled');
+      if (weightMap.has(pkg.id)) {
+        pkg.weightG = weightMap.get(pkg.id).weightG;
+        pkg.weightSource = weightMap.get(pkg.id).source;
+      }
+      pkg.profit = computeProfit(pkg, pkg.operateStatus === 'cancelled', rateInfo?.rate);
     }
     data.rubRate = rateInfo;
     res.json(ok(data));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── Tab 聚合统计(当前 Tab+筛选全集不分页,分两组:已结算/已采购未结算)─────
+// query 同 /list(除不接 page/pageSize)
+// 已结算组:delivered 且应计同时含 type 66 和 67(真实口径)
+// 已采购未结算组:已采购(purchase_status != 'none')且不满足已结算且非已取消(预估口径)
+// 已取消订单排除两组(利润=−采购、利润率无意义),单独计数
+router.get('/admin/api/order-process/summary', (req, res, next) => {
+  try {
+    const q = req.query;
+    const data = orderPackageDao.aggregatePackages({
+      tab: q.tab,
+      keyword: q.keyword,
+      storeId: q.storeId,
+      purchaseStatus: q.purchaseStatus,
+      arrived: q.arrived,
+      cancelInitiator: q.cancelInitiator,
+      globalKeyword: q.globalKeyword,
+      globalMode: q.globalMode,
+    });
+    const pkgs = data.packages;
+    const pkgIds = pkgs.map((p) => p.id);
+    const rateInfo = resolveRubCnyRate();
+    const rate = rateInfo?.rate;
+    // 调一次 typeSums,既给 buildAccrualBreakdown 用,也用于构造 has66/has67 集合
+    const typeSums = getAccrualTypeSumsByPackageIds(pkgIds);
+    const accrualMap = buildAccrualBreakdown(pkgs, typeSums, rate);
+    // 批量查包裹重量(供 computeProfit 走国际配送公式 3.37 + 0.0281 × weight_g)
+    const weightMap = orderPackageDao.getWeightsByPackageIds(pkgIds);
+    const has66 = new Set();
+    const has67 = new Set();
+    for (const t of typeSums) {
+      if (t.typeId === TYPE_AGENT_FEE) has66.add(t.packageId);
+      else if (t.typeId === TYPE_DELIVERY) has67.add(t.packageId);
+    }
+    for (const pkg of pkgs) {
+      if (accrualMap.has(pkg.id)) pkg.accrual = accrualMap.get(pkg.id);
+      if (weightMap.has(pkg.id)) {
+        pkg.weightG = weightMap.get(pkg.id).weightG;
+        pkg.weightSource = weightMap.get(pkg.id).source;
+      }
+      pkg.profit = computeProfit(pkg, pkg.operateStatus === 'cancelled', rate);
+    }
+
+    const round2 = (n) => Math.round(n * 100) / 100;
+    const settled = { orderCount: 0, totalOrderAmount: 0, totalPurchaseAmount: 0, totalProfit: 0, profitRateSale: null, profitRateCost: null, estimated: !rate };
+    const pendingSettled = { orderCount: 0, totalOrderAmount: 0, totalPurchaseAmount: 0, totalProfit: 0, profitRateSale: null, profitRateCost: null, estimated: true };
+    let cancelledCount = 0;
+
+    for (const pkg of pkgs) {
+      const isCancelled = pkg.operateStatus === 'cancelled';
+      if (isCancelled) { cancelledCount++; continue; }
+
+      const isSettled = pkg.operateStatus === 'wait_receiver_confirm'
+        && pkg.deliveredAt != null
+        && has66.has(pkg.id) && has67.has(pkg.id);
+
+      if (isSettled) {
+        settled.orderCount++;
+        settled.totalOrderAmount += pkg.orderAmount;
+        settled.totalPurchaseAmount += pkg.totalPurchaseAmount;
+        settled.totalProfit += pkg.profit.profit;
+        if (pkg.profit.estimated) settled.estimated = true;
+      } else if (pkg.purchaseStatus !== 'none') {
+        // 已采购未结算(含未妥投的已采购订单,符合用户原话语义)
+        pendingSettled.orderCount++;
+        pendingSettled.totalOrderAmount += pkg.orderAmount;
+        pendingSettled.totalPurchaseAmount += pkg.totalPurchaseAmount;
+        pendingSettled.totalProfit += pkg.profit.profit;
+      }
+    }
+
+    settled.totalOrderAmount = round2(settled.totalOrderAmount);
+    settled.totalPurchaseAmount = round2(settled.totalPurchaseAmount);
+    settled.totalProfit = round2(settled.totalProfit);
+    settled.profitRateSale = settled.totalOrderAmount > 0 ? Math.round((settled.totalProfit / settled.totalOrderAmount) * 10000) / 100 : null;
+    settled.profitRateCost = settled.totalPurchaseAmount > 0 ? Math.round((settled.totalProfit / settled.totalPurchaseAmount) * 10000) / 100 : null;
+
+    pendingSettled.totalOrderAmount = round2(pendingSettled.totalOrderAmount);
+    pendingSettled.totalPurchaseAmount = round2(pendingSettled.totalPurchaseAmount);
+    pendingSettled.totalProfit = round2(pendingSettled.totalProfit);
+    pendingSettled.profitRateSale = pendingSettled.totalOrderAmount > 0 ? Math.round((pendingSettled.totalProfit / pendingSettled.totalOrderAmount) * 10000) / 100 : null;
+    pendingSettled.profitRateCost = pendingSettled.totalPurchaseAmount > 0 ? Math.round((pendingSettled.totalProfit / pendingSettled.totalPurchaseAmount) * 10000) / 100 : null;
+
+    res.json(ok({
+      settled,
+      pendingSettled,
+      totalOrders: settled.orderCount + pendingSettled.orderCount + cancelledCount,
+      cancelledCount,
+      truncated: data.truncated,
+      truncatedAt: data.truncatedAt,
+      totalUnfiltered: data.truncated ? data.total : null,
+      rubRate: rateInfo,
+    }));
   } catch (e) {
     next(e);
   }
@@ -218,8 +362,14 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
     }));
     const accrualMap = buildAccrualBreakdown([detail.package], getAccrualTypeSumsByPackageIds([id]), rate);
     if (accrualMap.has(id)) detail.package.accrual = accrualMap.get(id);
+    // 注入包裹重量(供 computeProfit 走国际配送公式 3.37 + 0.0281 × weight_g)
+    const weightMap = orderPackageDao.getWeightsByPackageIds([id]);
+    if (weightMap.has(id)) {
+      detail.package.weightG = weightMap.get(id).weightG;
+      detail.package.weightSource = weightMap.get(id).source;
+    }
     detail.rubRate = rateInfo;
-    detail.package.profit = computeProfit(detail.package, detail.package.operateStatus === 'cancelled');
+    detail.package.profit = computeProfit(detail.package, detail.package.operateStatus === 'cancelled', rate);
     res.json(ok(detail));
   } catch (e) {
     next(e);
@@ -549,6 +699,31 @@ router.get('/admin/api/order-process/rub-rate', (_req, res) => {
   res.json(ok(resolveRubCnyRate()));
 });
 
+// ── 单订单强制同步(用户点击"同步"按钮触发)─────────────────────
+// POST body: { packageId: number }
+// 流程:/v3/posting/fbs/get 拉最新订单状态(无时间窗口限制) + 强拉应计项目(无 24h 限制)
+// 返回 { ok, postingNumber, orderSynced, accrualRows, statusBefore, statusAfter }
+router.post('/admin/api/order-process/sync-package', async (req, res, next) => {
+  try {
+    const id = Number(req.body?.packageId);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ ok: false, message: 'packageId 必须为正整数' });
+    }
+    const r = await syncSinglePackage(id);
+    logger.info(
+      { packageId: id, postingNumber: r.postingNumber, orderSynced: r.orderSynced, accrualRows: r.accrualRows },
+      '[order-process] 单订单同步完成'
+    );
+    res.json(ok(r));
+  } catch (e) {
+    // 友好错误:店铺未配置凭据 / 单号不存在 / Ozon 接口错
+    const msg = e?.message || String(e);
+    const status = /未配置|未找到|必须为/.test(msg) ? 400 : 502;
+    logger.warn({ err: msg, packageId: req.body?.packageId }, '[order-process] 单订单同步失败');
+    res.status(status).json({ ok: false, message: msg });
+  }
+});
+
 router.post('/admin/api/order-process/rub-rate', (req, res, next) => {
   try {
     const rate = Number(req.body?.rate);
@@ -636,11 +811,20 @@ router.get('/admin/api/order-process/miaoshou-list', (req, res, next) => {
         // 最终兜底:本地录入
         p.purchase_amount = Number(p.total_purchase_amount) || 0;
       }
+      // 用妙手称重作为 weightG(优先级 1,妙手路径无需查 ozon_cache_index)
+      const msWeight = p.weighing_weight != null ? Number(p.weighing_weight) : null;
+      if (msWeight != null && msWeight > 0) {
+        p.weightG = msWeight;
+        p.weightSource = 'miaoshou';
+      }
       p.profit = computeProfit({
         orderAmount: p.order_amount,
         totalPurchaseAmount: p.purchase_amount,
         accrual: p.accrual,
-      }, p.app_package_tab === 'closed' || p.platform_package_status === 'cancelled');
+        weightG: p.weightG,
+        weightSource: p.weightSource,
+      }, p.app_package_tab === 'closed' || p.platform_package_status === 'cancelled',
+      data.rubRate?.rate);
     }
     res.json(ok(data));
   } catch (e) {

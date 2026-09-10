@@ -529,6 +529,18 @@ export function postingFbsList(store, { since, to, cursor, limit = 100 } = {}) {
   return call(store, '/v4/posting/fbs/list', body);
 }
 
+// /v3/posting/fbs/get —— 按单号查单订单详情(强制同步用,不受时间窗口限制)
+// 请求: { posting_number: string, with: { analytics_data, financial_data } }
+// 响应: { result: {...posting... } }(与 list 中的单个 posting 结构一致,可直接喂 syncPosting)
+// 注:比 list 翻页精准,无需限定 since/to 窗口;适合"用户点击同步"场景
+export function postingFbsGet(store, postingNumber) {
+  if (!postingNumber) throw new Error('posting_number 不能为空');
+  return call(store, '/v3/posting/fbs/get', {
+    posting_number: postingNumber,
+    with: { analytics_data: true, financial_data: true },
+  });
+}
+
 // /v2/posting/fbs/package-label —— 打印标签(面单 PDF)
 // 请求: { posting_number: string[] }(单次 ≤20,任一货件出错整批失败)
 // 响应: PDF 二进制流(非 JSON,走 callRaw)

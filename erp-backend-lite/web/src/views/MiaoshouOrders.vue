@@ -363,8 +363,24 @@ function agentFeeTitle(row) {
   return '无应计数据,按订单金额 × 16% 预估';
 }
 function deliveryTitle(row) {
-  if (row.accrual) return `国际配送(RfbsGlobalDelivery)实扣 ${fmtRub(row.accrual.deliveryRub)} × 汇率 ${row.accrual.rate}`;
+  const real = row.accrual?.delivery;
+  const est = row.profit?.delivery;
+  const parts = [];
+  if (real != null) parts.push(`实扣 ${fmtRub(row.accrual.deliveryRub)} × 汇率 ${row.accrual.rate} = ¥${real}`);
+  if (est != null) parts.push(`估按公式 3.37 + 0.0281 × ${row.profit.weightG}g = ¥${est}`);
+  if (parts.length) return `国际配送 ${parts.join(' | ')}`;
+  if (row.profit?.weightMissing) return '无重量数据(妙手未称重 + SKU 未缓存),配送费隐含在 16% 代理佣金预估内';
   return '无应计数据(未妥投或 Ozon 未生成)';
+}
+// 重量悬浮:实际重量(妙手称重/Ozon SKU)+ 推导重量(由实际配送费反推)
+function weightTitle(row) {
+  const actual = row.weightG;
+  const derived = row.accrual?.derivedWeight;
+  const parts = [];
+  if (actual != null) parts.push(`实际 ${actual}g(${row.weightSource === 'miaoshou' ? '妙手称重' : 'Ozon SKU 加权'})`);
+  if (derived != null) parts.push(`推导 ${derived}g(由实际配送费反推)`);
+  if (parts.length) return `商品重量 ${parts.join(' | ')}`;
+  return '无重量数据(妙手未称重 + SKU 未缓存)';
 }
 function othersTitle(row) {
   if (row.accrual) return `其它费用(销售佣金/星星商品/逆向物流等)${fmtRub(row.accrual.othersRub)} × 汇率 ${row.accrual.rate}`;
@@ -523,7 +539,14 @@ onUnmounted(() => {
               <div class="amt-row"><span class="amt-name">采购</span><span class="amt-val" :class="{ muted: !row.purchase_amount }">{{ fmtMoney(row.purchase_amount) }}</span></div>
               <!-- 代理佣金:有应计=实扣换算;已关闭/取消=0(不估算);其余=16% 预估(标"估") -->
               <div class="amt-row sub muted" :title="agentFeeTitle(row)"><span class="amt-name">{{ row.accrual || isCancelledRow(row) ? '代理佣金' : '代理佣金(估)' }}</span><span class="amt-val">{{ fmtMoney(row.accrual?.agentFee ?? row.profit?.commission) }}</span></div>
-              <div class="amt-row sub muted" :title="deliveryTitle(row)"><span class="amt-name">国际配送</span><span class="amt-val">{{ row.accrual ? fmtMoney(row.accrual.delivery) : '—' }}</span></div>
+              <!-- 国际配送(实际):应计 type 67 -->
+              <div class="amt-row sub" :title="deliveryTitle(row)"><span class="amt-name">国际配送</span><span class="amt-val" :class="{ muted: row.accrual?.delivery == null }">{{ row.accrual?.delivery != null ? fmtMoney(row.accrual.delivery) : '—' }}</span></div>
+              <!-- 国际配送(估):公式 3.37 + 0.0281 × weight_g 估算 -->
+              <div class="amt-row sub muted" :title="deliveryTitle(row)"><span class="amt-name">国际配送(估)</span><span class="amt-val" :class="{ muted: row.profit?.delivery == null }">{{ row.profit?.delivery != null ? fmtMoney(row.profit.delivery) : '—' }}</span></div>
+              <!-- 重量(称):妙手称重 / Ozon SKU 加权(整数 g) -->
+              <div class="amt-row sub" :title="weightTitle(row)"><span class="amt-name">重量(称)</span><span class="amt-val" :class="{ muted: row.weightG == null }">{{ row.weightG != null ? Math.floor(row.weightG) + 'g' : '—' }}</span></div>
+              <!-- 重量(估):由实际配送费反推(整数 g) -->
+              <div class="amt-row sub muted" :title="weightTitle(row)"><span class="amt-name">重量(估)</span><span class="amt-val" :class="{ muted: row.accrual?.derivedWeight == null }">{{ row.accrual?.derivedWeight != null ? row.accrual.derivedWeight + 'g' : '—' }}</span></div>
               <div class="amt-row sub muted" :title="othersTitle(row)"><span class="amt-name">其它费用</span><span class="amt-val">{{ row.accrual ? fmtMoney(row.accrual.others) : '—' }}</span></div>
               <div class="amt-row" :title="profitTitle(row)">
                 <span class="amt-name sub">{{ profitLabel(row) }}</span>
