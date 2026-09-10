@@ -131,7 +131,7 @@ const purchaseForm = reactive({
   logisticsCompany: '',
   logisticsNo: '',
   note: '',
-  allocMode: 'manual', // 'manual'=手动填金额, 'auto'=按quantity加权自动分摊
+  allocMode: 'auto', // 'auto'=勾选自动填写金额, 'manual'=取消勾选手动填写
   items: [], // [{ itemId, offerId, title, quantity, amount }]
 });
 // auto 模式拼单预览:查询已关联包裹信息(含数量,用于加权分摊预览)
@@ -680,7 +680,7 @@ function openPurchase(pkg) {
   purchaseForm.logisticsCompany = '';
   purchaseForm.logisticsNo = '';
   purchaseForm.note = '';
-  purchaseForm.allocMode = 'manual';
+  purchaseForm.allocMode = 'auto';
   lookupResult.value = null;
   purchaseForm.items = (pkg.items || []).map((it) => ({
     itemId: it.id,
@@ -691,7 +691,59 @@ function openPurchase(pkg) {
     picUrl: it.picUrl,
     pdpUrl: it.pdpUrl,
   }));
-  // 清空三平台选中,重置到拼多多 tab 并自动加载
+  // 已有采购信息:加载第一个采购单回填表单(按 purchaseOrderId 分组取第一组)
+  if (pkg.purchaseLinks?.length) {
+    const firstPurId = pkg.purchaseLinks[0].purchaseOrderId;
+    const links = pkg.purchaseLinks.filter((l) => l.purchaseOrderId === firstPurId);
+    const first = links[0];
+    purchaseForm.platform = first.platform || 'other';
+    purchaseForm.purchaseSn = first.purchaseSn || '';
+    purchaseForm.buyerAccount = first.buyerAccount || '';
+    purchaseForm.sellerName = first.sellerName || '';
+    purchaseForm.paymentAmount = first.paymentAmount != null ? String(first.paymentAmount) : '';
+    purchaseForm.logisticsNo = first.poLogisticsNo || '';
+    purchaseForm.logisticsCompany = first.poLogisticsCompany || '';
+    // 已有采购:默认 manual 模式,显示已分摊金额(可编辑)
+    purchaseForm.allocMode = 'manual';
+    // 按 itemId 匹配填入已分摊金额
+    // ozonOrderItemId 为 null 时(auto 模式),按 quantity 加权分摊 allocatedAmount
+    const itemMatched = new Set();
+    for (const it of purchaseForm.items) {
+      const link = links.find((l) => l.ozonOrderItemId === it.itemId && l.allocatedAmount != null);
+      if (link) {
+        it.amount = String(link.allocatedAmount);
+        itemMatched.add(it.itemId);
+      }
+    }
+    // 未匹配的 items:从 ozonOrderItemId=null 的 link 按 quantity 加权分摊
+    const nullLinks = links.filter((l) => l.ozonOrderItemId == null && l.allocatedAmount != null);
+    const unmatched = purchaseForm.items.filter((it) => !itemMatched.has(it.itemId));
+    if (nullLinks.length && unmatched.length) {
+      const total = nullLinks.reduce((s, l) => s + (Number(l.allocatedAmount) || 0), 0);
+      const sumQty = unmatched.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+      if (total > 0 && sumQty > 0) {
+        let allocated = 0;
+        for (let i = 0; i < unmatched.length; i++) {
+          const q = Number(unmatched[i].quantity) || 0;
+          if (i === unmatched.length - 1) {
+            unmatched[i].amount = (Math.round((total - allocated) * 100) / 100).toString();
+          } else {
+            const a = Math.round((total * q / sumQty) * 100) / 100;
+            unmatched[i].amount = a.toString();
+            allocated += a;
+          }
+        }
+      }
+    }
+    // 已有采购:切到手动录入 tab(显示物流输入框,预填已有值),不触发 switchImportTab 避免清空
+    pddSelected.value = [];
+    aliSelected.value = [];
+    tbSelected.value = [];
+    importTab.value = 'manual';
+    purchaseOpen.value = true;
+    return;
+  }
+  // 无采购信息:清空三平台选中,重置到拼多多 tab 并自动加载
   pddSelected.value = [];
   aliSelected.value = [];
   tbSelected.value = [];
@@ -743,9 +795,38 @@ const autoPreview = computed(() => {
 // 切换 allocMode 或输入 purchaseSn 时自动刷新 lookup
 watch(() => purchaseForm.allocMode, (mode) => {
   if (mode === 'auto') refreshLookup();
+  else {
+    // 切到 manual:从已选采购订单合计(allSelectedTotal)按数量加权分摊到各产品行
+    // 不依赖 paymentAmount(可能被 watch 链时序影响),直接用 allSelectedTotal 确保多选时用合计
+    const total = Number(allSelectedTotal.value) || 0;
+    if (total <= 0) return;
+    const items = purchaseForm.items || [];
+    const sumQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+    if (sumQty <= 0) return;
+    let allocated = 0;
+    for (let i = 0; i < items.length; i++) {
+      const q = Number(items[i].quantity) || 0;
+      if (i === items.length - 1) {
+        items[i].amount = (Math.round((total - allocated) * 100) / 100).toString();
+      } else {
+        const a = Math.round((total * q / sumQty) * 100) / 100;
+        items[i].amount = a.toString();
+        allocated += a;
+      }
+    }
+  }
 });
 watch(() => purchaseForm.purchaseSn, () => {
   if (purchaseForm.allocMode === 'auto') refreshLookup();
+});
+// auto 模式分摊预览变化时,把分摊值同步到 it.amount,确保切换到 manual 时保留已分摊数值
+watch(autoPreview, (pv) => {
+  if (!pv || !pv.items) return;
+  pv.items.forEach((it, idx) => {
+    if (purchaseForm.items[idx] && it.previewAmount != null) {
+      purchaseForm.items[idx].amount = String(it.previewAmount);
+    }
+  });
 });
 
 async function savePurchase() {
@@ -1205,6 +1286,16 @@ const allSelectedTotal = computed(() =>
 function switchImportTab(t) {
   if (importTab.value === t || importLoading.value) return;
   importTab.value = t;
+  if (t === 'manual') {
+    // 切到手动录入:清空选中的平台采购订单,平台改为其它
+    pddSelected.value = [];
+    aliSelected.value = [];
+    tbSelected.value = [];
+    purchaseForm.platform = 'other';
+    purchaseForm.purchaseSn = '';
+    purchaseForm.sellerName = '';
+    return;
+  }
   if (t === 'pdd' && !pddOrders.value.length && !pddLoading.value) loadPddOrders();
   else if (t === 'ali' && !aliOrders.value.length && !aliLoading.value) loadAliOrders();
   else if (t === 'tb' && !tbOrders.value.length && !tbLoading.value) loadTbOrders();
@@ -2258,7 +2349,13 @@ onUnmounted(() => {
     <AppModal :open="purchaseOpen" :title="`采购 · ${purchaseForm.packageNo}`" size="lg" @update:open="purchaseOpen = $event">
       <div class="purchase-form">
         <!-- ① 最上方:订单产品(只读展示,采购金额从第②块同步显示上来) -->
-        <div class="form-section-title">订单产品</div>
+        <div class="prod-title-row">
+          <span class="form-section-title" style="margin: 0">订单产品</span>
+          <label class="alloc-checkbox">
+            <input type="checkbox" :checked="purchaseForm.allocMode === 'auto'" @change="purchaseForm.allocMode = $event.target.checked ? 'auto' : 'manual'" />
+            <span>自动填写金额</span>
+          </label>
+        </div>
         <table class="data-table item-table">
           <thead>
             <tr>
@@ -2284,27 +2381,17 @@ onUnmounted(() => {
               <td>× {{ it.quantity }}</td>
               <td>{{ fmtMoney(it.price) }}</td>
               <td>
-                <!-- 采购金额从第②块同步显示(manual 模式来自 it.amount,auto 模式来自分摊预览) -->
-                <span class="alloc-amount-display">
-                  {{ purchaseForm.allocMode === 'manual'
-                    ? (it.amount ? '¥' + it.amount : '—')
-                    : (autoPreview && autoPreview.items[idx] ? fmtMoney(autoPreview.items[idx].previewAmount) : '—') }}
+                <!-- auto 模式:只读显示分摊预览;manual 模式:可输入(保留已分摊数值) -->
+                <span v-if="purchaseForm.allocMode === 'auto'" class="alloc-amount-display">
+                  {{ autoPreview && autoPreview.items[idx] ? fmtMoney(autoPreview.items[idx].previewAmount) : '—' }}
                 </span>
+                <input v-else v-model.trim="it.amount" class="filter-input amount-input" placeholder="0.00" />
               </td>
             </tr>
           </tbody>
         </table>
 
-        <!-- ② 中间:采购金额 + 物流信息 + 已选订单 -->
-        <div class="alloc-mode-row">
-          <span class="form-section-title" style="margin: 0">采购金额</span>
-          <div class="alloc-mode-toggle">
-            <button class="alloc-btn" :class="{ active: purchaseForm.allocMode === 'manual' }" @click="purchaseForm.allocMode = 'manual'">手动填写</button>
-            <button class="alloc-btn" :class="{ active: purchaseForm.allocMode === 'auto' }" @click="purchaseForm.allocMode = 'auto'">按数量自动分摊</button>
-          </div>
-        </div>
-
-        <!-- 手动录入 tab:只有金额输入(manual 模式在产品行 input) -->
+        <!-- 手动录入 tab:金额 + 快递单号 + 物流公司 -->
         <div v-if="importTab === 'manual'" class="manual-input-section">
           <div class="form-row">
             <label>采购金额</label>
@@ -2314,80 +2401,37 @@ onUnmounted(() => {
               <option v-for="p in PLATFORMS" :key="p.value" :value="p.value">{{ p.label }}</option>
             </select>
           </div>
-        </div>
-
-        <!-- auto 模式:总额输入 + 分摊预览 -->
-        <div v-if="purchaseForm.allocMode === 'auto'" class="auto-alloc-section">
           <div class="form-row">
-            <label>采购总额</label>
-            <input v-model.trim="purchaseForm.paymentAmount" class="filter-input" placeholder="采购单总金额(如 29.21)" />
-            <span v-if="lookupLoading" class="alloc-hint">查询已关联包裹…</span>
-          </div>
-          <div v-if="autoPreview && autoPreview.sumQty > 0" class="alloc-preview-info">
-            <span class="alloc-hint">
-              总数量 {{ autoPreview.sumQty }}(当前 {{ autoPreview.currentQty }}
-              <template v-if="autoPreview.existingAutoQty > 0">+ 已关联 auto {{ autoPreview.existingAutoQty }}</template>)
-              · 每行分摊 = (数量 ÷ {{ autoPreview.sumQty }}) × {{ fmtMoney(autoPreview.payment) }}
-            </span>
-          </div>
-          <div v-if="autoPreview && lookupResult?.linkedPackages?.length" class="alloc-linked-warn">
-            已关联 {{ lookupResult.linkedPackages.length }} 个包裹(auto 模式提交后,已关联 auto 包裹的分摊金额将按数量重新加权计算)
+            <label>快递单号</label>
+            <input v-model.trim="purchaseForm.logisticsNo" class="filter-input" placeholder="上家发货单号(填了视为已发货)" />
+            <label>物流公司</label>
+            <input v-model.trim="purchaseForm.logisticsCompany" class="filter-input" placeholder="如 顺丰/韵达/极兔" />
           </div>
         </div>
 
-        <!-- manual 模式:逐行填写金额 -->
-        <div v-if="purchaseForm.allocMode === 'manual' && importTab !== 'manual'" class="manual-alloc-hint">
-          <span class="alloc-hint">在下方产品行输入框填写各产品采购金额</span>
-        </div>
-
-        <!-- manual 模式:逐行输入表格(与第①块只读展示区分,这里是可编辑区) -->
-        <table v-if="purchaseForm.allocMode === 'manual' && importTab !== 'manual'" class="data-table item-table manual-alloc-table">
-          <thead>
-            <tr>
-              <th style="width: 260px">产品</th>
-              <th>数量</th>
-              <th style="width: 140px">本次采购金额</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="it in purchaseForm.items" :key="it.itemId">
-              <td>
-                <div class="product-item">
-                  <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box">
-                    <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
-                  </a>
-                  <div class="product-main">
-                    <div class="product-title">{{ it.title || '—' }}</div>
-                    <div class="product-sub">SKU {{ it.offerId }}</div>
-                  </div>
-                </div>
-              </td>
-              <td>× {{ it.quantity }}</td>
-              <td>
-                <input v-model.trim="it.amount" class="filter-input amount-input" placeholder="0.00" />
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <!-- 已选采购订单区(固定在产品下方) -->
+        <!-- 已选采购订单区(固定在产品下方):平台/订单号/下单时间/金额 -->
         <div v-if="allSelectedOrders.length" class="selected-orders">
           <div class="selected-orders-title">已选 {{ allSelectedOrders.length }} 单 · 合计 ¥{{ allSelectedTotal }}</div>
-          <div v-for="o in allSelectedOrders" :key="o._platform + o.orderSn" class="selected-order-item">
-            <span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span>
-            <span class="selected-order-goods" :title="o.goods[0]?.goodsName">{{ o.goods[0]?.goodsName || '—' }}</span>
-            <span class="pdd-amount">¥{{ o.amount }}</span>
-            <span class="selected-order-sn mono">{{ o.orderSn }}</span>
-            <button class="btn btn-ghost btn-sm" @click="removeSelectedOrder(o._platform, o.orderSn)">✕</button>
-          </div>
-        </div>
-
-        <!-- 物流信息(中间区) -->
-        <div class="form-row" style="margin-top: 12px">
-          <label>国内快递单号</label>
-          <input v-model.trim="purchaseForm.logisticsNo" class="filter-input" placeholder="上家发货单号(填了视为已发货)" />
-          <label>物流公司</label>
-          <input v-model.trim="purchaseForm.logisticsCompany" class="filter-input" placeholder="如 顺丰/韵达/极兔" />
+          <table class="data-table selected-orders-table">
+            <thead>
+              <tr>
+                <th style="width: 70px">平台</th>
+                <th>订单号</th>
+                <th style="width: 160px">下单时间</th>
+                <th style="width: 100px">金额</th>
+                <th style="width: 40px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="o in allSelectedOrders" :key="o._platform + o.orderSn">
+                <td><span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span></td>
+                <td class="mono">{{ o.orderSn }}</td>
+                <td>{{ importTab === 'pdd' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—') }}</td>
+                <td class="pdd-amount">¥{{ o.amount }}</td>
+                <td><button class="btn btn-ghost btn-sm" @click="removeSelectedOrder(o._platform, o.orderSn)">✕</button></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
 
         <!-- ③ 最下方:采购平台列表 -->
@@ -2395,7 +2439,7 @@ onUnmounted(() => {
           <button class="pdd-tab" :class="{ active: importTab === 'pdd' }" @click="switchImportTab('pdd')">拼多多</button>
           <button class="pdd-tab" :class="{ active: importTab === 'ali' }" @click="switchImportTab('ali')">1688</button>
           <button class="pdd-tab" :class="{ active: importTab === 'tb' }" @click="switchImportTab('tb')">淘宝</button>
-          <button class="pdd-tab" :class="{ active: importTab === 'manual' }" @click="importTab = 'manual'">手动录入</button>
+          <button class="pdd-tab" :class="{ active: importTab === 'manual' }" @click="switchImportTab('manual')">手动录入</button>
           <span v-if="importTab !== 'manual' && (!pddBridgeReady || !aliBridgeReady || !tbBridgeReady)" class="pdd-bridge-warn" title="需要安装/启用 miaoshou-helper 扩展">未检测到助手扩展</span>
         </div>
 
@@ -3581,26 +3625,27 @@ a.product-title:hover {
 .alloc-mode-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   margin: 12px 0 8px;
 }
-.alloc-mode-toggle {
-  display: inline-flex;
-  gap: 4px;
+.prod-title-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 12px 0 8px;
 }
-.alloc-btn {
-  padding: 4px 12px;
-  font-size: 12px;
-  border: 1px solid var(--border-color, #d0d5dd);
-  background: transparent;
-  border-radius: 4px;
+.alloc-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   cursor: pointer;
+  user-select: none;
+  font-size: 13px;
   color: var(--text-secondary, #667085);
 }
-.alloc-btn.active {
-  background: var(--primary, #2563eb);
-  color: #fff;
-  border-color: var(--primary, #2563eb);
+.alloc-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
 }
 .auto-alloc-section {
   margin-bottom: 8px;
