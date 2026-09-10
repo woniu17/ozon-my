@@ -811,11 +811,18 @@ router.get('/admin/api/order-process/miaoshou-list', (req, res, next) => {
         // 最终兜底:本地录入
         p.purchase_amount = Number(p.total_purchase_amount) || 0;
       }
-      // 用妙手称重作为 weightG(优先级 1,妙手路径无需查 ozon_cache_index)
+      // 重量来源优先级:1)妙手称重 2)系统自定义 3)Ozon后台同步(与订单处理页一致)
       const msWeight = p.weighing_weight != null ? Number(p.weighing_weight) : null;
       if (msWeight != null && msWeight > 0) {
         p.weightG = msWeight;
         p.weightSource = 'miaoshou';
+      } else {
+        // 妙手称重缺失,回退查 product_data_cache.custom_weight_g + product_attributes_cache
+        const wMap = orderPackageDao.getWeightsByPackageIds([p.id]);
+        if (wMap.has(p.id)) {
+          p.weightG = wMap.get(p.id).weightG;
+          p.weightSource = wMap.get(p.id).source;
+        }
       }
       p.profit = computeProfit({
         orderAmount: p.order_amount,

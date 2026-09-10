@@ -700,22 +700,35 @@ function getPurchasesByPackageIds(packageIds) {
  * @returns {Array<{id, purchaseSn, platform, status}>}
  */
 /** 批量查包裹重量(g,用于国际配送费公式 3.37 + 0.0281 × weight_g)
- *  优先级:1) 妙手称重(miaoshou_package.weighing_weight,by posting_number)
- *          2) Ozon SKU 重量按数量加权(ozon_cache_index.weight_g × op_ozon_order_item.quantity 求和)
- *  返回 Map<packageId, { weightG, source: 'miaoshou'|'ozon_sku' }>
+ *  优先级(从高到低):
+ *    1) 订单称重(miaoshou_package.weighing_weight,by posting_number)
+ *    2) 系统自定义重量(product_data_cache.custom_weight_g,按 quantity 加权)
+ *    3) Ozon 后台同步重量(product_attributes_cache.attributes_data.weight,按 quantity 加权)
+ *  返回 Map<packageId, { weightG, source: 'miaoshou'|'system'|'ozon' }>
  *  无重量数据的包裹不入 Map(让 computeProfit 走兜底分支)
  */
 function getWeightsByPackageIds(packageIds) {
   if (!packageIds || !packageIds.length) return new Map();
   const ph = packageIds.map(() => '?').join(',');
+  // 重量来源(优先级从高到低):
+  //   1. 订单称重(miaoshou_package.weighing_weight) → source='miaoshou'
+  //   2. 系统自定义重量(product_data_cache.custom_weight_g) → source='system'
+  //   3. Ozon 后台同步重量(product_attributes_cache.attributes_data.weight,按 quantity 加权) → source='ozon'
+  // 注:原实现误用 ozon_cache_index.weight_g(采集表,商品列表不写此字段),实际重量在 product_attributes_cache
   const rows = db
     .prepare(
       `SELECT p.id AS packageId,
               mp.weighing_weight AS msWeight,
-              (SELECT SUM(oi.quantity * CAST(oci.weight_g AS REAL))
+              (SELECT SUM(oi.quantity * CAST(pdc.custom_weight_g AS REAL))
                FROM op_ozon_order_item oi
-               LEFT JOIN ozon_cache_index oci ON oci.sku = CAST(oi.sku AS TEXT)
-               WHERE oi.ozon_order_id = p.ozon_order_id) AS skuWeight
+               LEFT JOIN product_data_cache pdc ON pdc.sku = CAST(oi.sku AS TEXT)
+               WHERE oi.ozon_order_id = p.ozon_order_id
+                 AND pdc.custom_weight_g IS NOT NULL) AS systemWeight,
+              (SELECT SUM(oi.quantity * CAST(json_extract(a.attributes_data, '$.weight') AS REAL))
+               FROM op_ozon_order_item oi
+               LEFT JOIN product_attributes_cache a ON a.sku = CAST(oi.sku AS TEXT)
+               WHERE oi.ozon_order_id = p.ozon_order_id
+                 AND json_extract(a.attributes_data, '$.weight') IS NOT NULL) AS ozonWeight
          FROM op_package p
          LEFT JOIN miaoshou_package mp ON mp.posting_number = p.logistics_no
          WHERE p.id IN (${ph})`
@@ -724,11 +737,14 @@ function getWeightsByPackageIds(packageIds) {
   const out = new Map();
   for (const r of rows) {
     const ms = r.msWeight != null ? Number(r.msWeight) : null;
-    const sku = r.skuWeight != null ? Number(r.skuWeight) : null;
+    const sys = r.systemWeight != null ? Number(r.systemWeight) : null;
+    const oz = r.ozonWeight != null ? Number(r.ozonWeight) : null;
     if (ms != null && ms > 0) {
       out.set(r.packageId, { weightG: ms, source: 'miaoshou' });
-    } else if (sku != null && sku > 0) {
-      out.set(r.packageId, { weightG: sku, source: 'ozon_sku' });
+    } else if (sys != null && sys > 0) {
+      out.set(r.packageId, { weightG: sys, source: 'system' });
+    } else if (oz != null && oz > 0) {
+      out.set(r.packageId, { weightG: oz, source: 'ozon' });
     }
     // 全部缺失 → 不入 Map,computeProfit 走 weightMissing 兜底
   }
