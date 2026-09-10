@@ -1199,14 +1199,22 @@ function syncFromMiaoshou({ packageIds } = {}) {
         let localStatus = 'wait_send';
         if (pur.status === 'has_send') localStatus = 'shipped';
         else if (pur.status === 'has_sign') localStatus = 'signed';
+        // 采购金额:妙手采购单 payment_amount(0 表示手工单未填),回退妙手包裹级 purchase_amount
+        // 手工单(isAuto=0,platform=other)在妙手侧 purchaseOrderPayment=null,
+        // 但妙手包裹级 purchase_amount 有值(用户在妙手称重/结算时填的),作兜底
+        const purAmount = (Number(pur.payment_amount) > 0)
+          ? Math.round(Number(pur.payment_amount) * 100) / 100
+          : (ms.ms_purchase_amount != null && Number(ms.ms_purchase_amount) > 0
+              ? Math.round(Number(ms.ms_purchase_amount) * 100) / 100
+              : 0);
         // 拼多多采购单号可能含特殊字符,统一 String
         const poId = upsertPo.get(
           String(pur.purchase_sn),
           localPlatform,
           pur.buyer_account || null,
           pur.seller_name || null,
-          Math.round((Number(pur.payment_amount) || 0) * 100) / 100,
-          Math.round((Number(pur.payment_amount) || 0) * 100) / 100,
+          purAmount,
+          purAmount,
           localStatus,
           pur.purchase_start_time || null,
           pur.send_at || null,
