@@ -57,6 +57,7 @@ const currentFilters = computed(() => {
     hasStock: q.fHasStock || '',
     imageIssue: q.fImageIssue || '',
     descriptionQuality: q.fDescriptionQuality || '',
+    filteredCategory: q.fFilteredCategory || '',
   };
 });
 

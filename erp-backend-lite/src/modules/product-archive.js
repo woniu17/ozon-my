@@ -44,7 +44,7 @@ function expandProductsToItems(products) {
 
 // filters 模式:后端直接根据筛选条件展开为 items 列表
 // 复用 admin.js GET /admin/api/products 的筛选 SQL 逻辑(简化版,无 idsOnly 二次请求)
-// 支持的筛选条件与商品列表页一致:storeId/keyword/productStatus/hasStock/imageIssue/descriptionQuality
+// 支持的筛选条件与商品列表页一致:storeId/keyword/productStatus/hasStock/imageIssue/descriptionQuality/filteredCategory
 function expandFiltersToItems(filters) {
   const f = filters || {};
   const where = [];
@@ -124,6 +124,16 @@ function expandFiltersToItems(filters) {
         params.push(v);
       }
     }
+  }
+
+  // 类目过滤筛选(2026-09):与商品列表页 filteredCategory 同语义
+  // (本函数查询无表别名,与 admin.js 版本仅差 json_extract 不带 p. 前缀)
+  if (f.filteredCategory === '1' || f.filteredCategory === '0') {
+    const cond =
+      `SELECT 1 FROM ozon_filtered_categories fc
+        WHERE fc.description_category_id = json_extract(data, '$.description_category_id')
+          AND (fc.type_id = 0 OR fc.type_id = json_extract(data, '$.type_id'))`;
+    where.push(f.filteredCategory === '1' ? `EXISTS (${cond})` : `NOT EXISTS (${cond})`);
   }
 
   const baseWhereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';

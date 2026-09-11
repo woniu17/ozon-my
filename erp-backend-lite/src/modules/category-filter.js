@@ -41,7 +41,8 @@ const CATEGORY_NAMES_CACHE_TTL = 5 * 60 * 1000;
 // 取第一个 store 的类目树,DFS 构建 descriptionCategoryId -> categoryName + typeId -> typeName 映射
 // OPI 类目树叶子节点(倒数第二层 children)含 type_id + type_name,即"商品类型"
 // 失败时返回空 Map(不阻断主流程,前端会回退显示 ID)
-async function getCategoryNameMaps() {
+// 2026-09:导出供 admin.js 商品列表换类目/类型中文名复用
+export async function getCategoryNameMaps() {
   const hit = _categoryNamesCache;
   if (hit && hit.expiresAt > Date.now()) {
     return { categoryNameMap: hit.categoryNameMap, typeNameMap: hit.typeNameMap };

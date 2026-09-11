@@ -47,6 +47,7 @@ const state = reactive({
     hasStock: '', // '' 全部 | '1' 有库存 | '0' 无库存
     imageIssue: '',
     descriptionQuality: '', // 描述状态:'' 全部 | '0' 空 | '1' 占位 | '2' 按钮污染 | '3' 正常 | '1,2' 需清洗
+    filteredCategory: '', // 类目过滤(2026-09):'' 全部 | '1' 仅已过滤类目 | '0' 排除已过滤类目(类目过滤页面维护的黑名单)
   },
 });
 
@@ -207,6 +208,7 @@ async function loadList() {
       hasStock: state.filters.hasStock,
       imageIssue: state.filters.imageIssue,
       descriptionQuality: state.filters.descriptionQuality,
+      filteredCategory: state.filters.filteredCategory,
     });
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -239,6 +241,7 @@ function buildQueryFromState() {
   if (f.hasStock) q.hasStock = f.hasStock;
   if (f.imageIssue) q.imageIssue = f.imageIssue;
   if (f.descriptionQuality) q.descriptionQuality = f.descriptionQuality;
+  if (f.filteredCategory) q.filteredCategory = f.filteredCategory;
   if (state.page && state.page > 1) q.page = String(state.page);
   return q;
 }
@@ -276,6 +279,10 @@ function loadFromUrl() {
     if (/^[0-9]+(,[0-9]+)*$/.test(q.descriptionQuality)) {
       state.filters.descriptionQuality = q.descriptionQuality;
     }
+  }
+  // 类目过滤:'' 全部 | '1' 仅已过滤 | '0' 排除已过滤
+  if (q.filteredCategory === '0' || q.filteredCategory === '1') {
+    state.filters.filteredCategory = q.filteredCategory;
   }
   if (q.page) {
     const n = parseInt(q.page, 10);
@@ -532,6 +539,7 @@ function openDetailCompare(item) {
   if (f.hasStock) query.fHasStock = f.hasStock;
   if (f.imageIssue) query.fImageIssue = f.imageIssue;
   if (f.descriptionQuality) query.fDescriptionQuality = f.descriptionQuality;
+  if (f.filteredCategory) query.fFilteredCategory = f.filteredCategory;
   router.push({ name: 'product-detail', params: { sku: item.sku }, query });
 }
 
@@ -735,6 +743,7 @@ async function openFilteredBatch(type) {
       hasStock: state.filters.hasStock,
       imageIssue: state.filters.imageIssue,
       descriptionQuality: state.filters.descriptionQuality,
+      filteredCategory: state.filters.filteredCategory,
       idsOnly: 1,
     });
     const products = (data?.items || []).filter((p) => p.productId);
@@ -802,6 +811,7 @@ function openFilteredArchive() {
       hasStock: f.hasStock,
       imageIssue: f.imageIssue,
       descriptionQuality: f.descriptionQuality,
+      filteredCategory: f.filteredCategory,
     },
     filterCount: state.total,
   };
@@ -1070,6 +1080,16 @@ onMounted(() => {
         <option value="3">描述有效</option>
         <option value="1,2">需清洗</option>
       </select>
+      <select
+        class="filter-select"
+        v-model="state.filters.filteredCategory"
+        title="按类目过滤黑名单筛选(黑名单在「类目过滤」页面维护)"
+        @change="search"
+      >
+        <option value="">全部类目</option>
+        <option value="1">仅已过滤类目</option>
+        <option value="0">排除已过滤类目</option>
+      </select>
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
@@ -1172,6 +1192,10 @@ onMounted(() => {
                        :title="ozonProductUrl(firstNumericId(it.offerId))">{{ firstNumericId(it.offerId) || '—' }}</a>
                     <span v-else>—</span>
                   </div>
+                  <div
+                    class="product-sub"
+                    :title="`description_category_id: ${it.descriptionCategoryId ?? '—'} / type_id: ${it.typeId ?? '—'}`"
+                  >类目：{{ it.categoryName || it.descriptionCategoryId || '—' }} / 类型：{{ it.typeName || it.typeId || '—' }}</div>
                   <span
                     v-if="it.descriptionQuality === 0"
                     class="dq-tag dq-tag-warn"
@@ -1187,6 +1211,11 @@ onMounted(() => {
                     class="dq-tag dq-tag-warn"
                     title="描述末尾粘有按钮文案(如「Читать далее」),源数据需清洗"
                   >需清洗</span>
+                  <span
+                    v-if="it.categoryFiltered"
+                    class="dq-tag dq-tag-danger"
+                    title="该商品类目在类目过滤黑名单中(「类目过滤」页面维护)"
+                  >已过滤</span>
                 </div>
               </div>
             </td>

@@ -14,6 +14,7 @@ import * as opi from '../services/ozon-opi.js';
 import * as metaDao from '../db/dao/sqlite/meta-dao.js';
 import logger from '../middleware/log.js';
 import { classifyDescriptionQuality } from '../utils/description-quality.js';
+import { getCategoryNameMaps } from './category-filter.js';
 
 const router = Router();
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -758,9 +759,10 @@ function extractStatusErrors(data) {
 }
 
 // GET /admin/api/products —— 商品数据缓存列表(支持 keyword 模糊搜 sku / data)
-// query: ?currentPage=1&pageSize=20&keyword=&idsOnly=1
+// query: ?currentPage=1&pageSize=20&keyword=&idsOnly=1&filteredCategory=
 //   idsOnly=1 时跳过分页,返回全量精简列表(仅 productId/storeId/offerId),供"按筛选批量更新"使用
-router.get('/admin/api/products', (req, res, next) => {
+//   filteredCategory: '' 全部 | '1' 仅已过滤类目 | '0' 排除已过滤类目(基于 ozon_filtered_categories)
+router.get('/admin/api/products', async (req, res, next) => {
   try {
     const current = Math.max(1, Number(req.query.currentPage) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
@@ -798,7 +800,7 @@ router.get('/admin/api/products', (req, res, next) => {
     // (is_created=0 优先,与 Ozon 后台"未创建"显示一致;rejected 仅针对已创建被拒的商品)
     // 2026-07:合并 in_review/unknown → other(方案 B 彻底合并)
     // 注意:productStatus 筛选单独维护,不 push 到 where 数组
-    //   where 数组仅含基础筛选(keyword/storeId/hasStock/status/imageIssue),
+    //   where 数组仅含基础筛选(keyword/storeId/hasStock/status/imageIssue/descriptionQuality/filteredCategory),
     //   用于 statusCounts 查询(口径 A:统计各状态数量时排除 productStatus 筛选)
     // productStatus 参数必须最后 push:fullWhereSql 中 productStatus 占位符在末尾,
     //   早于 descriptionQuality 等 where 内筛选参数 push 会造成绑定错位
@@ -858,6 +860,18 @@ router.get('/admin/api/products', (req, res, next) => {
         }
       }
     }
+    // 类目过滤筛选(2026-09):基于 ozon_filtered_categories 黑名单(类目过滤页面维护)
+    //   filteredCategory=1 -> 仅显示类目在黑名单中的商品
+    //   filteredCategory=0 -> 排除类目在黑名单中的商品
+    // 黑名单语义与采集箱一致:(descCatId, type_id=0) 按类目单维度过滤(该类目所有类型);
+    // (descCatId, type_id>0) 精确到类型。商品 data.type_id 为 NULL 时不匹配精确类型条目。
+    if (req.query.filteredCategory === '1' || req.query.filteredCategory === '0') {
+      const cond =
+        `SELECT 1 FROM ozon_filtered_categories fc
+          WHERE fc.description_category_id = json_extract(p.data, '$.description_category_id')
+            AND (fc.type_id = 0 OR fc.type_id = json_extract(p.data, '$.type_id'))`;
+      where.push(req.query.filteredCategory === '1' ? `EXISTS (${cond})` : `NOT EXISTS (${cond})`);
+    }
     // productStatus 参数最后 push,与 fullWhereSql 中占位符顺序一致
     // (baseWhereSql 基础筛选占位符在前,productStatus 占位符在末尾)
     if (productStatusParam !== null) {
@@ -889,6 +903,31 @@ router.get('/admin/api/products', (req, res, next) => {
         .filter((r) => r.productId)
         .map((r) => ({ sku: r.sku, productId: String(r.productId), storeId: r.storeId || '', offerId: r.offerId || '' }));
       return res.json(ok({ items, total: items.length }));
+    }
+
+    // 类目/类型中文名(2026-09):从类目树(ZH_HANS,L1/L2 缓存)换算,失败时为空 Map 前端回退显示 ID
+    // 同时加载类目过滤黑名单集合,用于行级"已过滤"标记(与 filteredCategory SQL 筛选同语义)
+    const { categoryNameMap, typeNameMap } = await getCategoryNameMaps();
+    const filteredCatRows = db
+      .prepare('SELECT description_category_id, type_id FROM ozon_filtered_categories')
+      .all();
+    // type_id=0:按类目单维度(该类目所有类型);type_id>0:精确到"类目:类型"
+    const filteredCatOnlySet = new Set(
+      filteredCatRows
+        .filter((r) => !r.type_id || Number(r.type_id) === 0)
+        .map((r) => Number(r.description_category_id))
+    );
+    const filteredCatTypeSet = new Set(
+      filteredCatRows
+        .filter((r) => Number(r.type_id) > 0)
+        .map((r) => `${Number(r.description_category_id)}:${Number(r.type_id)}`)
+    );
+    function isCategoryFiltered(catId, typeId) {
+      const cid = Number(catId);
+      if (!Number.isFinite(cid) || cid <= 0) return false;
+      if (filteredCatOnlySet.has(cid)) return true;
+      const tid = Number(typeId);
+      return Number.isFinite(tid) && tid > 0 && filteredCatTypeSet.has(`${cid}:${tid}`);
     }
 
     const rows = db
@@ -951,6 +990,14 @@ router.get('/admin/api/products', (req, res, next) => {
             fetchedAt: r.fetched_at,
             // 描述质量:0=空 1=占位 2=按钮污染 3=正常(同步时预计算,前端用于标签+筛选)
             descriptionQuality: Number(r.description_quality) || 0,
+            // 类目/类型(2026-09):OPI /v3 原始 ID + 类目树(ZH_HANS)换算的中文名
+            // 名称缺失(树未拉取/无此节点)时前端回退显示 ID
+            descriptionCategoryId: data.description_category_id ?? null,
+            typeId: data.type_id ?? null,
+            categoryName: categoryNameMap.get(Number(data.description_category_id)) || '',
+            typeName: typeNameMap.get(Number(data.type_id)) || '',
+            // 类目是否在过滤黑名单(2026-09):行级"已过滤"标记,语义与 filteredCategory 筛选一致
+            categoryFiltered: isCategoryFiltered(data.description_category_id, data.type_id),
             // 重量(克):来自 product_attributes_cache.attributes_data 顶层 weight 字段
             // 「同步详情」阶段1(/v4/product/info/attributes)写入;无值时为 null,前端显示 —
             weightG: r.weight_g != null ? Number(r.weight_g) : null,
