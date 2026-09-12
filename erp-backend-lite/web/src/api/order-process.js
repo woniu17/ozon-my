@@ -168,11 +168,14 @@ export function listPendingPurchases(platform) {
 
 // ════════════════════════════════════════════════════════════════
 // 平台订单获取(2026-09,后端 cloakbrowser 直取,替代 miaoshou-helper 扩展桥)
-// 后端经 .linqx-profile 浏览器页面上下文取数,响应结构与插件返回逐字段一致
+// 2026-09-13 多账号:后端按平台配置多买手账号 profile,列表接口带 account 指定,
+// 搜索接口后端跨账号(前端无感知)
 // ════════════════════════════════════════════════════════════════
 
 // 平台订单列表
-// platform: 'pdd' | 'ali1688' | 'taobao';params: { tab: 'all'|'unshipped'|'unreceived', size }
+// platform: 'pdd' | 'ali1688' | 'taobao'
+// params: { tab: 'all'|'unshipped'|'unreceived', size, account }
+//   account: 账号别名(如 linqx/chenlin),不传=主账号;订单行带 account 来源标注
 // 返回 { orders } 字段与插件 GET_ORDERS 一致(orderSn/amount/goods[].thumbUrl 等)
 export function getPlatformOrders(platform, params) {
   return request.get('/admin/api/platform-orders/' + encodeURIComponent(platform), params);
@@ -183,8 +186,9 @@ export function searchPlatformOrder(platform, orderSn) {
   return request.get('/admin/api/platform-orders/' + encodeURIComponent(platform) + '/search', { orderSn });
 }
 
-// 浏览器运行态 + 各平台登录态探测(替代原扩展 PING/PONG)
-// 返回 { state, pid, lastActiveAt, profileDir, platforms: { pdd/ali1688/taobao: { login, hint? } } }
+// 浏览器运行态 + 各平台×账号登录态探测(替代原扩展 PING/PONG)
+// 返回 { state, browsers: { <账号>: {state,pid,profileDir} },
+//        platforms: { pdd/ali1688/taobao: { accounts: { <账号>: { login, cookieNames? } } } } }
 export function getPlatformOrdersStatus() {
   return request.get('/admin/api/platform-orders/status');
 }

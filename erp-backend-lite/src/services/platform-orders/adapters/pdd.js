@@ -63,24 +63,33 @@ function normalizeSearchOrder(o) {
   };
 }
 
-/** 页面上下文 fetch(单参数对象;credentials include 自动带登录 cookie + referer) */
+/** 页面上下文 fetch(单参数对象;credentials include 自动带登录 cookie + referer)
+ *  25s AbortController 超时:防风控挂起烧 60s 任务超时(同 page-fetch.js) */
 async function fetchInPage(page, url, body) {
   const r = await page.evaluate(async (arg) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), arg.timeoutMs);
     try {
       const resp = await fetch(arg.url, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(arg.body),
+        signal: ctrl.signal,
       });
       let json = null;
       try { json = await resp.json(); } catch { /* 非 JSON 响应 */ }
       return { status: resp.status, httpOk: resp.ok, json };
     } catch (e) {
-      return { networkError: String((e && e.message) || e) };
+      return { networkError: String((e && e.message) || e), aborted: e && e.name === 'AbortError' };
+    } finally {
+      clearTimeout(timer);
     }
-  }, { url, body });
+  }, { url, body, timeoutMs: 25 * 1000 });
   if (r && r.networkError) {
+    if (r.aborted) {
+      throw new ApiError('BROWSER_ERROR', '拼多多页面请求 25s 无响应(疑似风控挂起),请运行 qxqx 的 persistent 登录并人工过验证后重试', { status: 502 });
+    }
     throw new ApiError('BROWSER_ERROR', `页面 fetch 网络错误: ${r.networkError}`, { status: 502 });
   }
   return r || {};
@@ -112,9 +121,9 @@ function mapResponse(r, prefix) {
   return r.json;
 }
 
-/** 订单列表;返回 { orders }(精简结构,字段与插件一致) */
-async function listPddOrders({ tab = 'all', size = 30 } = {}) {
-  return withPage('pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
+/** 订单列表;返回 { orders }(精简结构,字段与插件一致;订单行带 account 标注) */
+async function listPddOrders({ tab = 'all', size = 30, account } = {}) {
+  return withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
     const pdduid = await getPdduid(page);
     const url = pdduid ? `${PDD_API}?pdduid=${encodeURIComponent(pdduid)}` : PDD_API;
     const body = {
@@ -133,33 +142,53 @@ async function listPddOrders({ tab = 'all', size = 30 } = {}) {
     if (!Array.isArray(data.orders)) {
       throw new ApiError('BROWSER_ERROR', 'PDD_BAD_RESPONSE: 接口返回异常(可能触发风控)', { status: 502 });
     }
-    return { orders: normalizeOrders(data) };
+    return { orders: normalizeOrders(data).map((o) => ({ ...o, account })) };
   });
 }
 
-/** 按订单号精确搜索(补全商品图/数量);未找到返回 { result: null } */
-async function searchPddOrder(orderSn) {
-  return withPage('pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
-    const pdduid = await getPdduid(page);
-    const url = pdduid
-      ? `${PDD_SEARCH_API}?pdduid=${encodeURIComponent(pdduid)}`
-      : PDD_SEARCH_API;
-    const body = {
-      type: 'search',
-      key_word: String(orderSn),
-      size: 10,
-      page: 1,
-      pay_channel_list: [],
-      // 接口主验证靠 Cookie,UA 仅作占位(对齐插件注释)
-      userAgent: 'Mozilla/5.0',
-      scene: 'order_list_h5',
-    };
-    const r = await fetchInPage(page, url, body);
-    const data = mapResponse(r, 'PDD_SEARCH');
-    const orders = (data && Array.isArray(data.orders)) ? data.orders : [];
-    if (!orders.length) return { result: null };
-    return { result: normalizeSearchOrder(orders[0]) };
-  });
+/** 按订单号精确搜索(补全商品图/数量);未找到返回 { result: null }
+ *  多账号(2026-09-13):逐账号尝试,命中即返回;登录失效/风控不中断(记录后试下一账号),
+ *  全部账号登录态失败才抛 AUTH_REQUIRED;账号正常但无命中 → { result: null } */
+async function searchPddOrder(orderSn, accounts = []) {
+  const errs = [];
+  for (const account of accounts) {
+    let r;
+    try {
+      r = await withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
+        const pdduid = await getPdduid(page);
+        const url = pdduid
+          ? `${PDD_SEARCH_API}?pdduid=${encodeURIComponent(pdduid)}`
+          : PDD_SEARCH_API;
+        const body = {
+          type: 'search',
+          key_word: String(orderSn),
+          size: 10,
+          page: 1,
+          pay_channel_list: [],
+          // 接口主验证靠 Cookie,UA 仅作占位(对齐插件注释)
+          userAgent: 'Mozilla/5.0',
+          scene: 'order_list_h5',
+        };
+        const resp = await fetchInPage(page, url, body);
+        const data = mapResponse(resp, 'PDD_SEARCH');
+        const orders = (data && Array.isArray(data.orders)) ? data.orders : [];
+        if (!orders.length) return { result: null };
+        return { result: normalizeSearchOrder(orders[0]) };
+      });
+    } catch (e) {
+      // 该账号登录失效/风控:记录后继续下一账号(单号可能在别的账号)
+      if (e instanceof ApiError && (e.code === ErrorCode.AUTH_REQUIRED || e.code === 'RISK_VALIDATE')) {
+        errs.push(`[${account}] ${e.message}`);
+        continue;
+      }
+      throw e; // 浏览器/网络级错误直接抛
+    }
+    if (r && r.result) return { result: { ...r.result, account } };
+  }
+  if (errs.length) {
+    throw new ApiError(ErrorCode.AUTH_REQUIRED, `拼多多全部账号搜索失败:\n${errs.join('\n')}`);
+  }
+  return { result: null }; // 所有账号正常,单号不存在
 }
 
 export { listPddOrders, searchPddOrder };

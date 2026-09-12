@@ -443,20 +443,24 @@ async function onEnrichPurchaseItems() {
     return;
   }
   // 检查对应平台登录态(后端浏览器 cookie 探测,替代原扩展桥就绪检查)
-  // 'yes' 仅代表登录 cookie 存在,session 真实失效由请求时的 AUTH_REQUIRED 提示兜底
+  // 'yes' 仅代表登录 cookie 存在,session 真实失效由请求时的 AUTH_REQUIRED 提示兜底;
+  // 多账号:平台任一账号非明确 'no' 即放行(搜索后端会跨账号)
+  const platformAnyLogin = (platformVal) => importAccountTabs.value
+    .filter((t) => PLATFORM_TAB_META[t.platform]?.platformVal === platformVal)
+    .some((t) => platformLogin[`${t.platform}:${t.account}`] !== 'no');
   const needPdd = pending.some((p) => p._platform === 'yangkeduo');
   const needAli = pending.some((p) => p._platform === '1688');
   const needTb = pending.some((p) => p._platform === 'taobao');
-  if (needPdd && platformLogin.pdd === 'no') {
-    show('拼多多补全需要先登录:请运行 qxqx 的 persistent 登录拼多多后重试', 'warning');
+  if (needPdd && !platformAnyLogin('yangkeduo')) {
+    show('拼多多补全需要先登录:请运行 qxqx 的 persistent(账号参数)登录拼多多后重试', 'warning');
     return;
   }
-  if (needAli && platformLogin.ali1688 === 'no') {
-    show('1688补全需要先登录:请运行 qxqx 的 persistent 登录1688后重试', 'warning');
+  if (needAli && !platformAnyLogin('1688')) {
+    show('1688补全需要先登录:请运行 qxqx 的 persistent(账号参数)登录1688后重试', 'warning');
     return;
   }
-  if (needTb && platformLogin.taobao === 'no') {
-    show('淘宝补全需要先登录:请运行 qxqx 的 persistent 登录淘宝后重试', 'warning');
+  if (needTb && !platformAnyLogin('taobao')) {
+    show('淘宝补全需要先登录:请运行 qxqx 的 persistent(账号参数)登录淘宝后重试', 'warning');
     return;
   }
   if (!await confirmStore.ask({
@@ -477,14 +481,13 @@ async function onEnrichPurchaseItems() {
       i++;
       enrichProgress.done = i;
       enrichProgress.current = p.purchaseSn || '';
-      // 按平台路由到对应的搜索函数
-      const platformKey = p._platform; // 'yangkeduo' | '1688' | 'taobao'
-      const searchFn = platformKey === '1688' ? aliSearch
-        : platformKey === 'taobao' ? tbSearch
-        : pddSearch;
+      // 按平台路由到后端搜索(后端跨该平台全部账号依次搜)
+      // platformKey 为入库平台值 'yangkeduo'|'1688'|'taobao',转为请求平台键
+      const platformKey = p._platform;
+      const reqPlatform = platformKey === '1688' ? 'ali1688' : platformKey;
       let ok = false;
       try {
-        const resp = await searchFn(p.purchaseSn);
+        const resp = await platformSearchReq(reqPlatform, p.purchaseSn);
         if (resp?.ok && resp.result && Array.isArray(resp.result.goods) && resp.result.goods.length) {
           items.push({
             purchaseSn: p.purchaseSn,
@@ -672,10 +675,17 @@ async function dismissProgress() {
 }
 
 // ── 采购录入 ───────────────────────────────────────────
-// 采购弹窗内嵌订单导入区的平台 tab
-const importTab = ref('pdd'); // 'pdd' | 'ali' | 'tb'
+// 采购弹窗内嵌订单导入区的平台×账号 tab key
+// 'pdd' | 'ali:linqx' | 'ali:chenlin' | 'taobao' | 'manual'(多账号平台带账号后缀,单账号平台保持裸键)
+const importTab = ref('pdd');
 // 已有采购单恢复态:打开弹窗时从 pkg.purchaseLinks 按采购单分组重建,显示在"已选订单"区,可逐单删除
 const restoredPurchases = ref([]);
+
+/** 平台值(入库的 yangkeduo/1688/taobao)→ 首个匹配的账号 tab key(用于打开弹窗恢复) */
+function tabKeyForPlatform(platformVal) {
+  const hit = importAccountTabs.value.find((t) => PLATFORM_TAB_META[t.platform]?.platformVal === platformVal);
+  return hit ? hit.key : 'manual';
+}
 
 function openPurchase(pkg) {
   purchaseForm.packageId = pkg.id;
@@ -699,9 +709,11 @@ function openPurchase(pkg) {
     picUrl: it.picUrl,
     pdpUrl: it.pdpUrl,
   }));
-  pddSelected.value = [];
-  aliSelected.value = [];
-  tbSelected.value = [];
+  // 清空所有账号 tab 的勾选(懒建的 store 可能不存在,容错跳过)
+  for (const tabDef of importAccountTabs.value) {
+    const st = importStores[tabDef.key];
+    if (st) st.selected = [];
+  }
   // 已有采购信息:恢复成"已选中"状态(按采购单分组重建)——可继续勾选追加平台订单,也可逐单删除已有采购
   if (pkg.purchaseLinks?.length) {
     const byPo = new Map();
@@ -728,19 +740,16 @@ function openPurchase(pkg) {
     purchaseForm.platform = restoredPurchases.value[0].platform;
     // 表单为空(已有采购不入表单),保持 auto:新勾选订单按数量自动分摊金额,无需逐行填写
     purchaseForm.allocMode = 'auto';
-    const p = purchaseForm.platform;
-    importTab.value = p === 'yangkeduo' ? 'pdd' : p === '1688' ? 'ali' : p === 'taobao' ? 'tb' : 'manual';
+    importTab.value = tabKeyForPlatform(purchaseForm.platform);
     purchaseOpen.value = true;
-    if (importTab.value === 'pdd') loadPddOrders();
-    else if (importTab.value === 'ali') loadAliOrders();
-    else if (importTab.value === 'tb') loadTbOrders();
+    if (importTab.value !== 'manual') loadOrders(importTab.value);
     return;
   }
   restoredPurchases.value = [];
   // 无采购信息:重置到拼多多 tab 并自动加载
   importTab.value = 'pdd';
   purchaseOpen.value = true;
-  loadPddOrders();
+  loadOrders('pdd');
 }
 
 // ── auto 模式:查询采购单已关联包裹(含数量,用于加权分摊预览) ──
@@ -882,8 +891,8 @@ async function savePurchase() {
   }
 }
 
-// ── 平台订单获取(ERP 后端 cloakbrowser 直取,2026-09 M3)─────
-// 协议:GET /admin/api/platform-orders/:platform(/search);后端在 .linqx-profile 浏览器
+// ── 平台订单获取(ERP 后端 cloakbrowser 直取,2026-09 M3;2026-09-13 多账号)─────
+// 协议:GET /admin/api/platform-orders/:platform(/search);后端在对应账号 profile 浏览器
 // 页面上下文取数,错误已映射为 AUTH_REQUIRED/RISK_VALIDATE 等友好 message。
 // 这里包装回插件时代的 {ok, orders|result|error} 形状,下游 load*/补全链路零改动
 async function platformOrdersReq(platform, payload) {
@@ -895,7 +904,8 @@ async function platformOrdersReq(platform, payload) {
   }
 }
 
-// 按采购单号精确搜索;未找到返回 {ok:true, result:null}(与插件搜索语义一致)
+// 按采购单号精确搜索(后端跨该平台全部账号依次搜,前端无感知);
+// 未找到返回 {ok:true, result:null}(与插件搜索语义一致)
 async function platformSearchReq(platform, orderSn) {
   try {
     const data = await searchPlatformOrder(platform, orderSn);
@@ -905,90 +915,90 @@ async function platformSearchReq(platform, orderSn) {
   }
 }
 
+// ── 多账号 tab 配置(来自后端 /status 的账号列表)──────────
+// 单账号平台 key 与旧值一致('pdd'/'taobao');多账号平台展开为 'ali:linqx'/'ali:chenlin'
+const PLATFORM_TAB_META = {
+  pdd: { prefix: 'pdd', platformVal: 'yangkeduo', label: '拼多多', platformReq: 'pdd' },
+  ali1688: { prefix: 'ali', platformVal: '1688', label: '1688', platformReq: 'ali1688' },
+  taobao: { prefix: 'taobao', platformVal: 'taobao', label: '淘宝', platformReq: 'taobao' },
+};
+// 默认(后端 /status 未返回时):三平台各一个主账号,行为与 M3 完全一致
+const importAccountTabs = ref([
+  { key: 'pdd', platform: 'pdd', account: 'linqx', label: '拼多多' },
+  { key: 'ali:linqx', platform: 'ali1688', account: 'linqx', label: '1688·linqx' },
+  { key: 'taobao', platform: 'taobao', account: 'linqx', label: '淘宝' },
+]);
+
+/** 按 /status 返回的各平台账号列表展开 tab 配置 */
+function rebuildAccountTabs(platforms) {
+  const tabs = [];
+  for (const [platform, meta] of Object.entries(PLATFORM_TAB_META)) {
+    const accounts = Object.keys(platforms?.[platform]?.accounts || {});
+    if (!accounts.length) continue; // 后端未配置该平台 → 保留默认(下面兜底)
+    const multi = accounts.length > 1;
+    for (const account of accounts) {
+      tabs.push({
+        key: multi ? `${meta.prefix}:${account}` : meta.prefix,
+        platform, account,
+        label: multi ? `${meta.label}·${account}` : meta.label,
+      });
+    }
+  }
+  if (tabs.length) {
+    // 当前 importTab 指向的 tab 被新配置淘汰时,归位到第一个平台 tab
+    if (!tabs.some((t) => t.key === importTab.value) && importTab.value !== 'manual') {
+      importTab.value = tabs[0].key;
+    }
+    importAccountTabs.value = tabs;
+  }
+}
+
 // 后端浏览器登录态探测(替代原扩展 PING/PONG):'yes' | 'no' | 'unknown'
+// 键为 `${platform}:${account}` 复合键
 // 注意 'yes' 仅代表登录 cookie 存在,session 真实失效由请求时的 AUTH_REQUIRED 提示兜底
-const platformLogin = reactive({ pdd: 'unknown', ali1688: 'unknown', taobao: 'unknown' });
+const platformLogin = reactive({});
 async function loadPlatformStatus() {
   try {
     const data = await getPlatformOrdersStatus();
-    for (const [k, v] of Object.entries(data.platforms || {})) {
-      platformLogin[k] = v?.login || 'unknown';
+    rebuildAccountTabs(data.platforms || {});
+    for (const [plat, info] of Object.entries(data.platforms || {})) {
+      for (const [account, v] of Object.entries(info?.accounts || {})) {
+        platformLogin[`${plat}:${account}`] = v?.login || 'unknown';
+      }
     }
   } catch { /* 静默:探测失败不阻塞主流程 */ }
 }
 
-// ── 拼多多订单导入(ERP 后端直取)──────────────────
-const pddLoading = ref(false);
-const pddError = ref('');
-const pddOrders = ref([]);          // 精简后的 PDD 订单列表
-const pddTab = ref('all');          // 'all' | 'unreceived'
-const pddSelected = ref([]);        // 已勾选的 orderSn
-// 按采购单号精确搜索(补全商品图+数量,走后端浏览器)
-const pddSearch = (orderSn) => platformSearchReq('pdd', orderSn);
-
-async function loadPddOrders() {
-  pddLoading.value = true;
-  pddError.value = '';
-  pddSelected.value = [];
-  try {
-    const resp = await platformOrdersReq('pdd', { tab: pddTab.value, size: 30 });
-    if (!resp.ok) throw new Error(resp.error || '获取订单失败');
-    pddOrders.value = resp.orders || [];
-  } catch (err) {
-    pddError.value = err.message || String(err);
-    pddOrders.value = [];
-  } finally {
-    pddLoading.value = false;
+// ── 统一订单导入 store(按 tabKey 分账号存储,切 tab 互不影响)──
+// importStores: tabKey → { orders, loading, error, tab, selected }
+const importStores = reactive({});
+function storeFor(key) {
+  if (!importStores[key]) {
+    importStores[key] = { orders: [], loading: false, error: '', tab: 'all', selected: [] };
   }
+  return importStores[key];
 }
 
-// ── 1688订单导入(ERP 后端直取)────────────────────
-const aliLoading = ref(false);
-const aliError = ref('');
-const aliOrders = ref([]);          // 精简后的 1688 订单列表
-const aliTab = ref('all');          // 'all' | 'unshipped' | 'unreceived'
-const aliSelected = ref([]);        // 已勾选的 orderSn
-// 按采购单号精确搜索 1688 订单(补全商品图+数量,走后端浏览器)
-const aliSearch = (orderSn) => platformSearchReq('ali1688', orderSn);
+/** 当前平台 tab 定义(manual 时返回 null) */
+const currentTabDef = computed(() => importAccountTabs.value.find((t) => t.key === importTab.value) || null);
 
-async function loadAliOrders() {
-  aliLoading.value = true;
-  aliError.value = '';
-  aliSelected.value = [];
+/** 拉取指定 tab 的订单(懒建 store;account 由 tab 配置透传) */
+async function loadOrders(tabKey) {
+  const def = importAccountTabs.value.find((t) => t.key === tabKey);
+  if (!def) return;
+  const st = storeFor(tabKey);
+  st.loading = true;
+  st.error = '';
+  st.selected = [];
   try {
-    const resp = await platformOrdersReq('ali1688', { tab: aliTab.value, size: 30 });
+    const resp = await platformOrdersReq(def.platform, { tab: st.tab, size: 30, account: def.account });
     if (!resp.ok) throw new Error(resp.error || '获取订单失败');
-    aliOrders.value = resp.orders || [];
+    st.orders = resp.orders || [];
   } catch (err) {
-    aliError.value = err.message || String(err);
-    aliOrders.value = [];
+    st.error = err.message || String(err);
+    st.orders = [];
   } finally {
-    aliLoading.value = false;
-  }
-}
-
-// ── 淘宝订单导入(ERP 后端直取)────────────────────
-const tbLoading = ref(false);
-const tbError = ref('');
-const tbOrders = ref([]);          // 精简后的淘宝订单列表
-const tbTab = ref('all');          // 'all' | 'unshipped' | 'unreceived'
-const tbSelected = ref([]);        // 已勾选的 orderSn
-// 按采购单号精确搜索淘宝订单(补全商品图+数量,走后端浏览器)
-const tbSearch = (orderSn) => platformSearchReq('taobao', orderSn);
-
-async function loadTbOrders() {
-  tbLoading.value = true;
-  tbError.value = '';
-  tbSelected.value = [];
-  try {
-    const resp = await platformOrdersReq('taobao', { tab: tbTab.value, size: 30 });
-    if (!resp.ok) throw new Error(resp.error || '获取订单失败');
-    tbOrders.value = resp.orders || [];
-  } catch (err) {
-    tbError.value = err.message || String(err);
-    tbOrders.value = [];
-  } finally {
-    tbLoading.value = false;
+    st.loading = false;
   }
 }
 
@@ -1008,41 +1018,34 @@ function inferCourier(no) {
   return hit ? hit[1] : '';
 }
 
-// ── 采购弹窗内嵌订单导入区(统一三平台,放在 PDD/ALI/TB 声明之后)──
+// ── 采购弹窗内嵌订单导入区(统一账号 store 模型,2026-09-13 多账号)──
+// 当前 tab 的 store(懒建保证响应性;manual 时返回空 store,模板不渲染)
+const currentStore = computed(() => storeFor(importTab.value));
 // 当前平台的状态子 tab
 const importSubTab = computed({
-  get: () => (importTab.value === 'pdd' ? pddTab.value : importTab.value === 'ali' ? aliTab.value : tbTab.value),
-  set: (v) => {
-    if (importTab.value === 'pdd') pddTab.value = v;
-    else if (importTab.value === 'ali') aliTab.value = v;
-    else tbTab.value = v;
-  },
+  get: () => currentStore.value.tab,
+  set: (v) => { currentStore.value.tab = v; },
 });
 const importSubTabs = computed(() => {
-  if (importTab.value === 'pdd') return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
+  if ((currentTabDef.value?.platform || '') === 'pdd') return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
   return [{ key: 'all', label: '全部' }, { key: 'unshipped', label: '待发货' }, { key: 'unreceived', label: '待收货' }];
 });
 
-// 当前导入 tab 对应的后端平台键/中文名/登录态(导入区登录提示用)
-const currentPlatformKey = computed(() =>
-  importTab.value === 'pdd' ? 'pdd' : importTab.value === 'ali' ? 'ali1688' : 'taobao');
-const currentPlatformName = computed(() =>
-  importTab.value === 'pdd' ? '拼多多' : importTab.value === 'ali' ? '1688' : '淘宝');
-const currentPlatformLogin = computed(() => platformLogin[currentPlatformKey.value] || 'unknown');
+// 当前导入 tab 对应的平台中文名/登录态(导入区登录提示用)
+// 登录态为复合键 `${platform}:${account}`;'yes' 仅代表 cookie 存在,真实失效由 AUTH_REQUIRED 兜底
+const currentPlatformName = computed(() => currentTabDef.value?.label || '');
+const currentPlatformLogin = computed(() => {
+  const d = currentTabDef.value;
+  return d ? (platformLogin[`${d.platform}:${d.account}`] || 'unknown') : 'unknown';
+});
 
-// 当前平台的 orders / loading / error / selected
-const importOrders = computed(() => importTab.value === 'pdd' ? pddOrders.value : importTab.value === 'ali' ? aliOrders.value : tbOrders.value);
-const importLoading = computed(() => importTab.value === 'pdd' ? pddLoading.value : importTab.value === 'ali' ? aliLoading.value : tbLoading.value);
-const importError = computed(() => importTab.value === 'pdd' ? pddError.value : importTab.value === 'ali' ? aliError.value : tbError.value);
-
-// 统一选中模型:当前平台的 selected ref
+// 当前 tab 的 orders / loading / error / selected
+const importOrders = computed(() => currentStore.value.orders);
+const importLoading = computed(() => currentStore.value.loading);
+const importError = computed(() => currentStore.value.error);
 const importSelected = computed({
-  get: () => importTab.value === 'pdd' ? pddSelected.value : importTab.value === 'ali' ? aliSelected.value : tbSelected.value,
-  set: (v) => {
-    if (importTab.value === 'pdd') pddSelected.value = v;
-    else if (importTab.value === 'ali') aliSelected.value = v;
-    else tbSelected.value = v;
-  },
+  get: () => currentStore.value.selected,
+  set: (v) => { currentStore.value.selected = v; },
 });
 
 // 已有采购单的 SN 键集合(逗号拼接的 SN 拆开),用于平台列表里标记"已关联"并禁止重复勾选
@@ -1057,18 +1060,19 @@ const restoredSnKeys = computed(() => {
   return s;
 });
 
-// 跨三平台合并的已选订单(用于下方展示):已有采购恢复项排在最前 + 新勾选的平台订单
+// 跨平台×账号合并的已选订单(用于下方展示):已有采购恢复项排在最前 + 新勾选的平台订单
 const allSelectedOrders = computed(() => {
-  const sel = (orders, selected, platform) =>
-    orders
-      .filter((o) => selected.includes(o.orderSn) && !restoredSnKeys.value.has(`${platform}:${o.orderSn}`))
-      .map((o) => ({ ...o, _platform: platform }));
-  return [
-    ...restoredPurchases.value,
-    ...sel(pddOrders.value, pddSelected.value, 'yangkeduo'),
-    ...sel(aliOrders.value, aliSelected.value, '1688'),
-    ...sel(tbOrders.value, tbSelected.value, 'taobao'),
-  ];
+  const sel = [];
+  for (const t of importAccountTabs.value) {
+    const st = importStores[t.key];
+    if (!st) continue;
+    for (const o of st.orders) {
+      if (st.selected.includes(o.orderSn) && !restoredSnKeys.value.has(`${PLATFORM_TAB_META[t.platform]?.platformVal}:${o.orderSn}`)) {
+        sel.push({ ...o, _platform: PLATFORM_TAB_META[t.platform]?.platformVal, _account: t.account });
+      }
+    }
+  }
+  return [...restoredPurchases.value, ...sel];
 });
 const allSelectedTotal = computed(() =>
   allSelectedOrders.value.reduce((s, o) => s + (Number(o.amount) || 0), 0).toFixed(2));
@@ -1082,25 +1086,23 @@ function switchImportTab(t) {
   if (importTab.value === t || importLoading.value) return;
   importTab.value = t;
   if (t === 'manual') {
-    // 切到手动录入:清空选中的平台采购订单,平台改为其它
-    pddSelected.value = [];
-    aliSelected.value = [];
-    tbSelected.value = [];
+    // 切到手动录入:清空全部账号已勾选的平台采购订单,平台改为其它
+    for (const tabDef of importAccountTabs.value) {
+      const st = importStores[tabDef.key];
+      if (st) st.selected = [];
+    }
     purchaseForm.platform = 'other';
     purchaseForm.purchaseSn = '';
     purchaseForm.sellerName = '';
     return;
   }
-  if (t === 'pdd' && !pddOrders.value.length && !pddLoading.value) loadPddOrders();
-  else if (t === 'ali' && !aliOrders.value.length && !aliLoading.value) loadAliOrders();
-  else if (t === 'tb' && !tbOrders.value.length && !tbLoading.value) loadTbOrders();
+  const st = storeFor(t);
+  if (!st.orders.length && !st.loading) loadOrders(t);
 }
 
 function switchImportSubTab(t) {
   importSubTab.value = t;
-  if (importTab.value === 'pdd') loadPddOrders();
-  else if (importTab.value === 'ali') loadAliOrders();
-  else loadTbOrders();
+  if (importTab.value !== 'manual') loadOrders(importTab.value);
 }
 
 // 手动录入 tab:输入金额后均摊到各产品行(同步显示到上方第①块)
@@ -1130,11 +1132,13 @@ function isImportCancelled(o) {
 
 function platformLabelByVal(v) { return PLATFORMS.find((p) => p.value === v)?.label || v; }
 
-/** 从下方选中区移除一单 */
-function removeSelectedOrder(platform, orderSn) {
-  if (platform === 'yangkeduo') pddSelected.value = pddSelected.value.filter((s) => s !== orderSn);
-  else if (platform === '1688') aliSelected.value = aliSelected.value.filter((s) => s !== orderSn);
-  else tbSelected.value = tbSelected.value.filter((s) => s !== orderSn);
+/** 从下方选中区移除一单(同平台可能有多个账号 tab,遍历清掉对应勾选) */
+function removeSelectedOrder(platformVal, orderSn) {
+  for (const t of importAccountTabs.value) {
+    if (PLATFORM_TAB_META[t.platform]?.platformVal !== platformVal) continue;
+    const st = importStores[t.key];
+    if (st) st.selected = st.selected.filter((s) => s !== orderSn);
+  }
 }
 
 /** 删除一条已有采购关联(冲回该采购分摊金额,对齐详情弹窗的"取消关联") */
@@ -1156,8 +1160,7 @@ async function removeRestoredPurchase(po) {
 }
 
 // 当前 importTab 对应的平台值(用于 restoredSnKeys 匹配)
-const importTabPlatform = computed(() =>
-  importTab.value === 'pdd' ? 'yangkeduo' : importTab.value === 'ali' ? '1688' : 'taobao');
+const importTabPlatform = computed(() => PLATFORM_TAB_META[currentTabDef.value?.platform]?.platformVal || '');
 /** 平台列表行是否已在已有采购关联中(禁止重复勾选,避免重复入库) */
 function isRestoredLinked(o) {
   return restoredSnKeys.value.has(`${importTabPlatform.value}:${o.orderSn}`);
@@ -2242,13 +2245,14 @@ onUnmounted(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="o in allSelectedOrders" :key="o._existing ? 'ex-' + o.purchaseOrderId : o._platform + o.orderSn">
+              <tr v-for="o in allSelectedOrders" :key="o._existing ? 'ex-' + o.purchaseOrderId : o._platform + ':' + (o._account || '') + ':' + o.orderSn">
                 <td>
                   <span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span>
+                  <span v-if="o._account" class="tag tag-mute" title="买手账号">{{ o._account }}</span>
                   <span v-if="o._existing" class="tag tag-warn" title="打开弹窗时恢复的已有采购关联">已有</span>
                 </td>
                 <td class="mono">{{ o.orderSn || '(手工单)' }}</td>
-                <td>{{ o._existing ? '—' : (importTab === 'pdd' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—')) }}</td>
+                <td>{{ o._existing ? '—' : (o._platform === 'yangkeduo' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—')) }}</td>
                 <td class="pdd-amount">¥{{ o.amount }}</td>
                 <td>
                   <button
@@ -2264,13 +2268,17 @@ onUnmounted(() => {
           </table>
         </div>
 
-        <!-- ③ 最下方:采购平台列表 -->
+        <!-- ③ 最下方:采购平台×账号列表 -->
         <div class="import-platform-tabs">
-          <button class="pdd-tab" :class="{ active: importTab === 'pdd' }" @click="switchImportTab('pdd')">拼多多</button>
-          <button class="pdd-tab" :class="{ active: importTab === 'ali' }" @click="switchImportTab('ali')">1688</button>
-          <button class="pdd-tab" :class="{ active: importTab === 'tb' }" @click="switchImportTab('tb')">淘宝</button>
+          <button
+            v-for="t in importAccountTabs"
+            :key="t.key"
+            class="pdd-tab"
+            :class="{ active: importTab === t.key }"
+            @click="switchImportTab(t.key)"
+          >{{ t.label }}</button>
           <button class="pdd-tab" :class="{ active: importTab === 'manual' }" @click="switchImportTab('manual')">手动录入</button>
-          <span v-if="importTab !== 'manual' && currentPlatformLogin === 'no'" class="pdd-bridge-warn" title="后端未检测到该平台登录态,请运行 qxqx 的 persistent 登录对应平台">未检测到{{ currentPlatformName }}登录态</span>
+          <span v-if="importTab !== 'manual' && currentPlatformLogin === 'no'" class="pdd-bridge-warn" title="后端未检测到该账号登录态,请运行 qxqx 的 persistent(带账号参数)登录对应平台">未检测到{{ currentPlatformName }}登录态</span>
         </div>
 
         <!-- 平台订单列表(非手动录入) -->
@@ -2279,7 +2287,7 @@ onUnmounted(() => {
             <div class="pdd-tabs">
               <button v-for="st in importSubTabs" :key="st.key" class="pdd-tab" :class="{ active: importSubTab === st.key }" @click="switchImportSubTab(st.key)">{{ st.label }}</button>
             </div>
-            <button class="btn btn-ghost btn-sm" :disabled="importLoading" @click="importTab === 'pdd' ? loadPddOrders() : importTab === 'ali' ? loadAliOrders() : loadTbOrders()">刷新</button>
+            <button class="btn btn-ghost btn-sm" :disabled="importLoading" @click="loadOrders(importTab)">刷新</button>
           </div>
 
           <div v-if="importLoading" class="empty">加载中…</div>
@@ -2316,7 +2324,7 @@ onUnmounted(() => {
                 <div class="pdd-meta">
                   <span class="pdd-mall">{{ o.mallName || o.sellerName || '—' }}</span>
                   <span class="pdd-amount">¥{{ o.amount }}</span>
-                  <span>{{ importTab === 'pdd' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—') }}</span>
+                  <span>{{ o._platform === 'yangkeduo' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—') }}</span>
                   <span class="tag" :class="isImportCancelled(o) ? 'tag-mute' : 'tag-info'">{{ o.statusPrompt || '—' }}</span>
                   <span v-if="isRestoredLinked(o)" class="tag tag-warn">已关联</span>
                 </div>

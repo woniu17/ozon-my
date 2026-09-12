@@ -53,8 +53,21 @@ const config = {
   // RUB→CNY 汇率兜底(2026-09,应计利润换算);app_config.rub_cny_rate 优先
   rubCnyRateFallback: Number(process.env.RUB_CNY_RATE) || 0,
   // 平台订单获取(2026-09,采购弹框三平台订单迁后端):cloakbrowser 生命周期配置
+  // 多账号(2026-09-13):账号别名→profile 目录映射 + 平台→账号列表(第一个为主账号)
   // profile 与 qxqx/persistent.js(手动登录)共用,经 Chromium 单实例互斥
-  platformProfileDir: process.env.PLATFORM_PROFILE_DIR || join(__dirname, '../../../qxqx/.linqx-profile'),
+  platformProfiles: (() => {
+    const m = { linqx: process.env.PLATFORM_PROFILE_LINQX || process.env.PLATFORM_PROFILE_DIR || join(__dirname, '../../../qxqx/.linqx-profile') };
+    if (process.env.PLATFORM_PROFILE_CHENLIN) m.chenlin = process.env.PLATFORM_PROFILE_CHENLIN;
+    return m;
+  })(),
+  platformAccounts: (() => {
+    const parse = (v, fallback) => String(v || fallback).split(',').map((s) => s.trim()).filter(Boolean);
+    return {
+      pdd: parse(process.env.PLATFORM_ACCOUNTS_PDD, 'linqx'),
+      ali1688: parse(process.env.PLATFORM_ACCOUNTS_ALI1688, process.env.PLATFORM_PROFILE_CHENLIN ? 'linqx,chenlin' : 'linqx'),
+      taobao: parse(process.env.PLATFORM_ACCOUNTS_TAOBAO, 'linqx'),
+    };
+  })(),
   platformBrowserHeadless: process.env.PLATFORM_BROWSER_HEADLESS !== '0',
   platformBrowserIdleMs: Number(process.env.PLATFORM_BROWSER_IDLE_MS) || 10 * 60 * 1000,
   platformOrderTimeoutMs: Number(process.env.PLATFORM_ORDER_TIMEOUT_MS) || 60 * 1000,

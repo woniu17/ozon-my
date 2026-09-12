@@ -116,9 +116,9 @@ async function callTaobaoMtop(page, data, customTag, searchMode = false) {
   throw lastErr;
 }
 
-/** 订单列表;返回 { orders }(精简结构,字段与插件一致) */
-async function listTaobaoOrders({ tab = 'all' } = {}) {
-  return withPage('taobao', TB_ENTRY, TB_ORIGIN, async (page) => {
+/** 订单列表;返回 { orders }(精简结构,字段与插件一致;订单行带 account 标注) */
+async function listTaobaoOrders({ tab = 'all', account } = {}) {
+  return withPage(account, 'taobao', TB_ENTRY, TB_ORIGIN, async (page) => {
     const tabCode = TB_TAB_CODE[tab] || 'all';
     const data = JSON.stringify({
       tabCode,
@@ -133,13 +133,13 @@ async function listTaobaoOrders({ tab = 'all' } = {}) {
     if (!json.data || !json.data.data) {
       throw new ApiError('BROWSER_ERROR', 'TB_BAD_RESPONSE: 响应缺少订单数据', { status: 502 });
     }
-    return { orders: normalizeTaobaoOrders(json.data) };
+    return { orders: normalizeTaobaoOrders(json.data).map((o) => ({ ...o, account })) };
   });
 }
 
-/** 按订单号精确搜索(补全商品图/数量);未找到返回 { result: null } */
-async function searchTaobaoOrder(orderSn) {
-  return withPage('taobao', TB_ENTRY, TB_ORIGIN, async (page) => {
+/** 单账号搜索实现;无命中返回 null(不抛错) */
+async function searchTaobaoInAccount(orderSn, account) {
+  return withPage(account, 'taobao', TB_ENTRY, TB_ORIGIN, async (page) => {
     const sn = String(orderSn || '');
     const data = JSON.stringify({
       tabCode: 'all',
@@ -158,22 +158,45 @@ async function searchTaobaoOrder(orderSn) {
       __needlessClearProtocol__: true,
     });
     const json = await callTaobaoMtop(page, data, 'boughtList_all_OrderSearch', true);
-    if (!json.data || !json.data.data) return { result: null }; // 无数据
+    if (!json.data || !json.data.data) return null; // 无数据
     const orders = normalizeTaobaoOrders(json.data);
-    if (!orders.length) return { result: null }; // 没找到
+    if (!orders.length) return null; // 没找到
     const o = orders[0];
     // 对齐插件 searchTaobaoOrder 返回结构(与 searchPddOrder/searchAliOrder 一致)
     return {
-      result: {
-        orderSn: o.orderSn,
-        orderAmount: o.amount,
-        orderTime: o.orderTime,
-        statusPrompt: o.statusPrompt,
-        trackingNumber: o.trackingNumber,
-        goods: o.goods,
-      },
+      orderSn: o.orderSn,
+      orderAmount: o.amount,
+      orderTime: o.orderTime,
+      statusPrompt: o.statusPrompt,
+      trackingNumber: o.trackingNumber,
+      goods: o.goods,
     };
   });
+}
+
+/** 按订单号精确搜索(补全商品图/数量);未找到返回 { result: null }
+ *  多账号(2026-09-13):逐账号尝试,命中即返回;登录失效/风控不中断(记录后试下一账号),
+ *  全部账号登录态失败才抛 AUTH_REQUIRED;账号正常但无命中 → { result: null } */
+async function searchTaobaoOrder(orderSn, accounts = []) {
+  const errs = [];
+  for (const account of accounts) {
+    let result;
+    try {
+      result = await searchTaobaoInAccount(orderSn, account);
+    } catch (e) {
+      // 该账号登录失效/风控:记录后继续下一账号(单号可能在别的账号)
+      if (e instanceof ApiError && (e.code === ErrorCode.AUTH_REQUIRED || e.code === 'RISK_VALIDATE')) {
+        errs.push(`[${account}] ${e.message}`);
+        continue;
+      }
+      throw e; // 浏览器/网络级错误直接抛
+    }
+    if (result) return { result: { ...result, account } };
+  }
+  if (errs.length) {
+    throw new ApiError(ErrorCode.AUTH_REQUIRED, `淘宝全部账号搜索失败:\n${errs.join('\n')}`);
+  }
+  return { result: null }; // 所有账号正常,单号不存在
 }
 
 export { listTaobaoOrders, searchTaobaoOrder };

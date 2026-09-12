@@ -111,36 +111,59 @@ async function call1688Mtop(page, param, searchMode = false) {
   throw lastErr;
 }
 
-/** 订单列表;返回 { orders }(精简结构,字段与插件一致) */
-async function listAli1688Orders({ tab = 'all', size = 30 } = {}) {
-  return withPage('ali1688', ALI_ENTRY, ALI_ORIGIN, async (page) => {
+/** 订单列表;返回 { orders }(精简结构,字段与插件一致;订单行带 account 标注) */
+async function listAli1688Orders({ tab = 'all', size = 30, account } = {}) {
+  return withPage(account, 'ali1688', ALI_ENTRY, ALI_ORIGIN, async (page) => {
     const param = { page: 1, pageSize: Math.min(Number(size) || 30, 50) };
     const st = ALI_TRADE_STATUS[tab];
     if (st) param.tradeStatus = st;
     const orders = await call1688Mtop(page, param);
-    return { orders: orders.map(normalize1688Order) };
+    return { orders: orders.map((o) => ({ ...normalize1688Order(o), account })) };
   }, { settleMs: ALI_SETTLE_MS });
 }
 
-/** 按订单号精确搜索(补全商品图/数量);未找到返回 { result: null } */
-async function searchAliOrder(orderSn) {
-  return withPage('ali1688', ALI_ENTRY, ALI_ORIGIN, async (page) => {
+/** 单账号搜索实现;无命中返回 null(不抛错) */
+async function searchAliInAccount(orderSn, account) {
+  return withPage(account, 'ali1688', ALI_ENTRY, ALI_ORIGIN, async (page) => {
     const param = { page: 1, pageSize: 20, word: String(orderSn || '') };
     const orders = await call1688Mtop(page, param, true);
-    if (!orders || !orders.length) return { result: null };
+    if (!orders || !orders.length) return null;
     const n = normalize1688Order(orders[0]);
     // 对齐插件 searchAliOrder 返回结构(与 searchPddOrder 一致)
     return {
-      result: {
-        orderSn: n.orderSn,
-        orderAmount: n.amount,
-        orderTime: n.orderTime,
-        statusPrompt: n.statusPrompt,
-        trackingNumber: n.trackingNumber,
-        goods: n.goods,
-      },
+      orderSn: n.orderSn,
+      orderAmount: n.amount,
+      orderTime: n.orderTime,
+      statusPrompt: n.statusPrompt,
+      trackingNumber: n.trackingNumber,
+      goods: n.goods,
     };
   }, { settleMs: ALI_SETTLE_MS });
+}
+
+/** 按订单号精确搜索(补全商品图/数量);未找到返回 { result: null }
+ *  多账号(2026-09-13):逐账号尝试,命中即返回;登录失效/风控不中断(记录后试下一账号),
+ *  全部账号登录态失败才抛 AUTH_REQUIRED;账号正常但无命中 → { result: null } */
+async function searchAliOrder(orderSn, accounts = []) {
+  const errs = [];
+  for (const account of accounts) {
+    let result;
+    try {
+      result = await searchAliInAccount(orderSn, account);
+    } catch (e) {
+      // 该账号登录失效/风控:记录后继续下一账号(单号可能在别的账号)
+      if (e instanceof ApiError && (e.code === ErrorCode.AUTH_REQUIRED || e.code === 'RISK_VALIDATE')) {
+        errs.push(`[${account}] ${e.message}`);
+        continue;
+      }
+      throw e; // 浏览器/网络级错误直接抛
+    }
+    if (result) return { result: { ...result, account } };
+  }
+  if (errs.length) {
+    throw new ApiError(ErrorCode.AUTH_REQUIRED, `1688全部账号搜索失败:\n${errs.join('\n')}`);
+  }
+  return { result: null }; // 所有账号正常,单号不存在
 }
 
 export { listAli1688Orders, searchAliOrder };
