@@ -733,6 +733,8 @@ function openPurchase(pkg) {
         // 本包裹的分摊合计(拼单时 < 采购单总额,删除时冲回的就是这个数)
         allocated: links.reduce((s, l) => s + (Number(l.allocatedAmount) || 0), 0),
         sellerName: first.sellerName || '',
+        buyerUsername: first.buyerAccount || '',
+        buyerUserId: first.buyerUserId || '',
         trackingNumber: first.poLogisticsNo || '',
         goods: first.items || [],
         _platform: first.platform || 'other',
@@ -997,6 +999,10 @@ async function loadOrders(tabKey) {
     const resp = await platformOrdersReq(def.platform, { tab: st.tab, size: 30, account: def.account });
     if (!resp.ok) throw new Error(resp.error || '获取订单失败');
     st.orders = resp.orders || [];
+    // tab 标签增强:多账号 tab 用真实平台用户名替换内部别名(1688·linqx → 1688·清祥17)
+    // (内部别名仍用于 API account 参数与选中键,label 仅展示;/status 刷新后重新加载订单时会再增强)
+    const uname = st.orders.find((o) => o.buyerUsername)?.buyerUsername;
+    if (uname && def.label.includes('·')) def.label = `${def.label.split('·')[0]}·${uname}`;
   } catch (err) {
     st.error = err.message || String(err);
     st.orders = [];
@@ -2256,7 +2262,7 @@ onUnmounted(() => {
               <tr v-for="o in allSelectedOrders" :key="o._existing ? 'ex-' + o.purchaseOrderId : o._platform + ':' + (o._account || '') + ':' + o.orderSn">
                 <td>
                   <span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span>
-                  <span v-if="o._account" class="tag tag-mute" title="买手账号">{{ o._account }}</span>
+                  <span v-if="o.buyerUsername || o._account" class="tag tag-mute" :title="o.buyerUserId ? `买手账号 ${o.buyerUsername}(平台ID ${o.buyerUserId})` : '买手账号'">{{ o.buyerUsername || o._account }}</span>
                   <span v-if="o._existing" class="tag tag-warn" title="打开弹窗时恢复的已有采购关联">已有</span>
                 </td>
                 <td class="mono">{{ o.orderSn || '(手工单)' }}</td>
