@@ -11,12 +11,69 @@
 // 再 page.evaluate 单参数对象执行 fetch(与插件 SW 裸 fetch 相比是能力超集)
 
 import { ApiError, ErrorCode } from '../../../utils/error-codes.js';
-import { withPage, readBuyerIdentity } from '../browser-manager.js';
+import { withPage } from '../browser-manager.js';
 
 const PDD_API = 'https://mobile.yangkeduo.com/proxy/api/api/aristotle/order_list_v4';
 const PDD_SEARCH_API = 'https://mobile.yangkeduo.com/proxy/api/api/aristotle/order_list_search_v4';
 const PDD_ENTRY = 'https://mobile.yangkeduo.com/';
 const PDD_ORIGIN = 'https://mobile.yangkeduo.com';
+// 个人中心页路径(同源 fetch 用相对路径,自动带 cookie+referer;不导航避免触发反爬标记)
+const PDD_PERSONAL_PATH = '/personal.html';
+
+// PDD 买家身份缓存(账号→{ userId, username }):昵称极少变化,进程生命周期内缓存,命中零开销
+// 数据源:personal.html 内联 <script> 中的 window.rawData={stores:{store:{userInfo:{uid,nickname}}}}
+//   (Edge 实测 uid="7509708455"/nickname="PCC01",uid 与 cookie pdd_user_id 一致)
+// 注意:2026-09-13 实测 page.goto(personal.html) 会触发 PDD 反爬标记 → 后续订单 API 全 424
+//       改用同源 fetch 拿 HTML 后正则解析:无导航事件、不破坏页面 context
+const pddIdentityCache = new Map();
+
+/** 同源 fetch /personal.html → HTML 解析 window.rawData → userInfo.nickname
+ *  在订单页上下文执行(credentials include 自动带登录 cookie + referer)
+ *  失败兜底:返回 { userId, username: '' }(不抛错,身份缺失不阻塞订单)
+ *  调用时机:订单 fetch 之后(身份逻辑绝不干扰订单请求主路径) */
+async function fetchPddNickname(page, account, userId) {
+  let username = '';
+  try {
+    const u = await page.evaluate(async (path) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15 * 1000);
+      try {
+        const resp = await fetch(path, { credentials: 'include' });
+        if (!resp.ok) return null;
+        const html = await resp.text();
+        // 个人中心 SSR 数据岛:inline <script> 含 `window.rawData={...}`
+        const marker = 'window.rawData=';
+        const start = html.indexOf(marker);
+        if (start === -1) return null;
+        // 从 marker 后的 `{` 开始按括号深度找平衡闭合(跳过字符串内的 {}/")
+        let i = start + marker.length;
+        if (html[i] !== '{') return null;
+        let depth = 0, end = -1, inStr = false, esc = false;
+        for (let j = i; j < html.length; j++) {
+          const c = html[j];
+          if (esc) { esc = false; continue; }
+          if (c === '\\') { esc = true; continue; }
+          if (c === '"') { inStr = !inStr; continue; }
+          if (inStr) continue;
+          if (c === '{') depth++;
+          else if (c === '}') { depth--; if (depth === 0) { end = j; break; } }
+        }
+        if (end === -1) return null;
+        const data = JSON.parse(html.slice(i, end + 1));
+        const info = data && data.stores && data.stores.store && data.stores.store.userInfo;
+        return info ? { uid: String(info.uid || ''), nickname: String(info.nickname || '') } : null;
+      } catch { return null; }
+      finally { clearTimeout(timer); }
+    }, PDD_PERSONAL_PATH);
+    if (u && u.nickname) {
+      username = u.nickname;
+      if (/^\d+$/.test(u.uid)) userId = u.uid; // SSR uid 与 cookie 一致,双源校验
+    }
+  } catch { /* 同源 fetch 失败:身份留空,不阻塞 */ }
+  const id = { userId: userId || '', username };
+  if (username) pddIdentityCache.set(account, id);
+  return id;
+}
 
 function toYuan(fen) {
   return (Number(fen || 0) / 100).toFixed(2);
@@ -122,10 +179,12 @@ function mapResponse(r, prefix) {
 }
 
 /** 订单列表;返回 { orders }(精简结构,字段与插件一致;订单行带 account 标注)
- *  buyer 身份:响应无买家字段、无用户名 cookie,仅 pdd_user_id(userId;用户名留空) */
+ *  buyer 身份:cookie pdd_user_id + personal.html SSR 昵称(账号级缓存,miss 时订单
+ *  fetch 完成后导航读取——身份逻辑绝不干扰订单请求主路径) */
 async function listPddOrders({ tab = 'all', size = 30, account } = {}) {
   return withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
-    const pdduid = await getPdduid(page);
+    const cached = pddIdentityCache.get(account);
+    const pdduid = (cached && cached.userId) || (await getPdduid(page));
     const url = pdduid ? `${PDD_API}?pdduid=${encodeURIComponent(pdduid)}` : PDD_API;
     const body = {
       type: tab === 'unreceived' ? 'unreceived' : 'all',
@@ -143,13 +202,15 @@ async function listPddOrders({ tab = 'all', size = 30, account } = {}) {
     if (!Array.isArray(data.orders)) {
       throw new ApiError('BROWSER_ERROR', 'PDD_BAD_RESPONSE: 接口返回异常(可能触发风控)', { status: 502 });
     }
-    const id = await readBuyerIdentity(page, 'https://mobile.yangkeduo.com/');
+    const orders = normalizeOrders(data).map((o) => ({ ...o, account }));
+    // 身份读取放订单之后:缓存命中零开销;miss 时同源 fetch /personal.html 解析 SSR
+    // (HTML 内 window.rawData.stores.store.userInfo.nickname);身份失败不阻塞订单
+    const id = cached || (await fetchPddNickname(page, account, pdduid));
     return {
-      orders: normalizeOrders(data).map((o) => ({
+      orders: orders.map((o) => ({
         ...o,
         buyerUserId: id.userId,
         buyerUsername: id.username,
-        account,
       })),
     };
   });

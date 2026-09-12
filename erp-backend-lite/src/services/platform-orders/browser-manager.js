@@ -35,8 +35,9 @@ const PUNISH_COOLDOWN_MS = 5 * 60 * 1000;  // RISK_VALIDATE 后账号×平台冷
 // 来源(实测):
 //  - 1688/淘宝(阿里系):unb=数字用户ID(两平台同一ID);lid/__cn_logon_id__=用户名;
 //    tracknick/_nk_ 可能是 "\uXXXX" 转义字面量,需解码
-//  - 拼多多:pdd_user_id=用户ID;用户名无 cookie 来源(留空,订单响应亦无买家字段)
-// 1688 订单响应逐单自带 buyerInfo(更权威),cookie 值作兜底;淘宝/PDD 以 cookie 为主源
+//  - 拼多多:pdd_user_id=用户ID;用户名走 pdd.js 的 ensurePddIdentity
+//    (personal.html SSR userInfo.nickname,账号级缓存,不走本函数)
+// 1688 订单响应逐单自带 buyerInfo(更权威),cookie 值作兜底;淘宝以 cookie 为主源
 async function readBuyerIdentity(page, domain) {
   const cs = await page.context().cookies(domain);
   const get = (n) => (cs.find((c) => c.name === n) || {}).value || '';
