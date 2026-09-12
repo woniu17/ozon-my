@@ -44,7 +44,7 @@ function expandProductsToItems(products) {
 
 // filters 模式:后端直接根据筛选条件展开为 items 列表
 // 复用 admin.js GET /admin/api/products 的筛选 SQL 逻辑(简化版,无 idsOnly 二次请求)
-// 支持的筛选条件与商品列表页一致:storeId/keyword/productStatus/hasStock/imageIssue/descriptionQuality/filteredCategory
+// 支持的筛选条件与商品列表页一致:storeId/keyword/productStatus/hasStock/imageIssue/descriptionQuality/filteredCategory/hasSales
 function expandFiltersToItems(filters) {
   const f = filters || {};
   const where = [];
@@ -136,10 +136,25 @@ function expandFiltersToItems(filters) {
     where.push(f.filteredCategory === '1' ? `EXISTS (${cond})` : `NOT EXISTS (${cond})`);
   }
 
+  // 销量筛选(2026-09):与商品列表页 hasSales 同语义(有效销量,排除 cancelled)
+  // 条件引用销量子查询别名 s,下方查询拼入 salesJoin
+  if (f.hasSales === '1' || f.hasSales === '0') {
+    where.push(f.hasSales === '1' ? 'COALESCE(s.qty_all, 0) > 0' : 'COALESCE(s.qty_all, 0) = 0');
+  }
+
   const baseWhereSql = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
   const fullWhereSql = baseWhereSql
     ? baseWhereSql + productStatusWhere
     : (productStatusWhere ? 'WHERE 1=1' + productStatusWhere : '');
+
+  // 销量聚合 JOIN(2026-09):与 admin.js 商品列表同口径(本表无别名,子查询 ON 直引 product_data_cache.sku)
+  const salesJoin = `LEFT JOIN (
+       SELECT oi.sku, SUM(oi.quantity) AS qty_all
+       FROM op_ozon_order_item oi
+       JOIN op_ozon_order o ON o.id = oi.ozon_order_id
+       WHERE o.status != 'cancelled'
+       GROUP BY oi.sku
+     ) s ON s.sku = product_data_cache.sku`;
 
   const rows = db
     .prepare(
@@ -147,7 +162,7 @@ function expandFiltersToItems(filters) {
          COALESCE(json_extract(data, '$.product_id'), json_extract(data, '$.id')) AS productId,
          store_id AS storeId,
          COALESCE(json_extract(data, '$.offer_id'), json_extract(data, '$.sku'), sku) AS offerId
-       FROM product_data_cache ${fullWhereSql}
+       FROM product_data_cache ${salesJoin} ${fullWhereSql}
        ORDER BY fetched_at DESC`
     )
     .all(...params);

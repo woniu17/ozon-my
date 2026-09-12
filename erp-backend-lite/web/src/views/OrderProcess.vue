@@ -5,6 +5,7 @@
 // 核心流程:买家Ozon下单 → 我采购(提交采购信息→直接流转待打单发货) → 上家发货给我
 //          → 轨迹签收=到货(标记提示) → 我自行打包打面单 → 交运 → 妥投回款
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
+import { parseUtcDate } from '../utils/time.js';
 import { useRoute } from 'vue-router';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
@@ -1766,6 +1767,15 @@ function fmtTime(t) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// SQLite datetime('now') UTC 字段专用(如 app_config.updated_at);
+// 妙手/1688 等国内平台北京时间字符串不能走本函数(会被误加 8h),继续用上面的 fmtTime
+function fmtUtcTime(t) {
+  const d = parseUtcDate(t);
+  if (!d) return '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 const OZON_STATUS_LABELS = {
   awaiting_registration: '等待登记',
   awaiting_approve: '等待确认',
@@ -2361,7 +2371,7 @@ onUnmounted(() => {
           <label>汇率</label>
           <input v-model.trim="rateInput" class="filter-input" placeholder="如 0.082(1 RUB = 0.082 CNY)" />
         </div>
-        <div v-if="rubRate?.updatedAt" class="muted rate-updated-at">上次更新:{{ fmtTime(rubRate.updatedAt) }}</div>
+        <div v-if="rubRate?.updatedAt" class="muted rate-updated-at">上次更新:{{ fmtUtcTime(rubRate.updatedAt) }}</div>
         <div class="form-actions">
           <button class="btn btn-ghost" @click="rateDialogOpen = false">取 消</button>
           <button class="btn btn-primary" :disabled="rateSaving" @click="saveRate">

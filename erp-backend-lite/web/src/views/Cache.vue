@@ -1,5 +1,6 @@
 <script setup>
 import { reactive, ref, computed, onMounted, watch } from 'vue';
+import { parseUtcDate } from '../utils/time.js';
 import { useRoute, useRouter } from 'vue-router';
 import {
   getCacheOverview,
@@ -219,10 +220,10 @@ async function deleteByFilter() {
 }
 
 // ── 渲染辅助 ───────────────────────────────────────────────
+// 各 fetchedAt/lastSeenAt 为 UTC(ISO 或 SQLite datetime('now') 格式),统一解析后按北京时间展示
 function fmtTime(t) {
-  if (!t) return '—';
-  const d = new Date(t);
-  if (isNaN(d.getTime())) return '—';
+  const d = parseUtcDate(t);
+  if (!d) return '—';
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }

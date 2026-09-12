@@ -1,5 +1,6 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue';
+import { parseUtcDate } from '../utils/time.js';
 import {
   getListingTemplates,
   createListingTemplate,
@@ -169,6 +170,14 @@ async function load() {
   }
 }
 
+// updatedAt 为 SQLite datetime('now') UTC,解析后按北京时间展示
+function fmtUtcTime(t) {
+  const d = parseUtcDate(t);
+  if (!d) return '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 // 水印模板 id → name 映射(用于列表展示)
 function watermarkName(id) {
   const idNum = Number(id);
@@ -224,7 +233,7 @@ onMounted(load);
             <span>划线价:{{ t.config?.oldPriceA ?? '—' }}%</span>
             <span>最低价:售价 − {{ t.config?.minPriceB ?? '—' }}</span>
           </td>
-          <td class="muted">{{ t.updatedAt }}</td>
+          <td class="muted">{{ fmtUtcTime(t.updatedAt) }}</td>
           <td class="actions">
             <button v-if="!t.isDefault" class="btn btn-sm btn-ghost" @click="setDefault(t)">设为默认</button>
             <button

@@ -4,6 +4,7 @@
 // 5 项对比卡:①图片 ②字段概览 ③描述 ④富内容(#11254) ⑤所有属性
 // 导航:前端拉 idsOnly 全量 SKU 列表 + sessionStorage 缓存,支持按当前筛选跨页上一个/下一个
 import { reactive, ref, computed, watch, onMounted } from 'vue';
+import { parseUtcDate } from '../utils/time.js';
 import { useRoute, useRouter } from 'vue-router';
 import { getProducts, getProductDetail, getProductAttributes } from '../api/products.js';
 import { getSkuProfile } from '../api/collect-box-v2.js';
@@ -58,6 +59,10 @@ const currentFilters = computed(() => {
     imageIssue: q.fImageIssue || '',
     descriptionQuality: q.fDescriptionQuality || '',
     filteredCategory: q.fFilteredCategory || '',
+    hasSales: q.fHasSales || '',
+    // 排序(2026-09):导航列表与商品列表同序(销量排序时上一个/下一个按销量序)
+    sortBy: q.fSortBy || '',
+    sortDir: q.fSortDir === 'asc' ? 'asc' : 'desc',
   };
 });
 
@@ -193,6 +198,13 @@ function goBack() {
 }
 
 // ── 已上架商品字段提取 ────────────────────────────────────
+// fetched_at 为 SQLite datetime('now') UTC,解析后按北京时间展示
+function fmtTime(t) {
+  const d = parseUtcDate(t);
+  if (!d) return '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 // data: OPI /v3/product/info/list 返回的单个 item(字符串数组 images,标量字段)
 const listedData = computed(() => state.listed?.data || {});
 // /v4 响应 result[0]:weight/depth/width/height/type_id/description_category_id 等顶层字段(权威来源)
@@ -540,7 +552,7 @@ onMounted(() => {
     <div v-if="!state.loading && !state.error" class="pdc-src-bar">
       <span class="pdc-src-chip">
         已上架 · <b>{{ listedSourceLabel }}</b>
-        <template v-if="listed.fetchedAt"> · {{ listed.fetchedAt.slice(0, 16).replace('T', ' ') }}</template>
+        <template v-if="listed.fetchedAt"> · {{ fmtTime(listed.fetchedAt) }}</template>
       </span>
       <span class="pdc-src-chip" :class="{ 'pdc-src-warn': state.profileError }">
         源商品 · <b>{{ sourceSourceLabel }}</b>

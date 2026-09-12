@@ -1,5 +1,6 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue';
+import { parseUtcDate } from '../utils/time.js';
 import {
   getWatermarkTemplates,
   createWatermarkTemplate,
@@ -221,6 +222,14 @@ async function copyId(tpl) {
   }
 }
 
+// updatedAt 为 SQLite datetime('now') UTC,解析后按北京时间展示
+function fmtUtcTime(t) {
+  const d = parseUtcDate(t);
+  if (!d) return '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 // 列表展示用的 config 摘要
 function configSummary(cfg) {
   if (!cfg || !cfg.type) return '—';
@@ -296,7 +305,7 @@ onMounted(load);
             <span v-if="t.isDefault" class="badge badge-success">默认</span>
             <span v-else class="muted">—</span>
           </td>
-          <td class="muted">{{ t.updatedAt }}</td>
+          <td class="muted">{{ fmtUtcTime(t.updatedAt) }}</td>
           <td class="actions">
             <button class="btn btn-sm btn-ghost" @click="copyId(t)" title="复制 ID">复制 ID</button>
             <button v-if="!t.isDefault" class="btn btn-sm btn-ghost" @click="setDefault(t)">设为默认</button>

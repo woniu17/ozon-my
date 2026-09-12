@@ -4,6 +4,7 @@
 // 上架预览中"一键提交"按钮置灰。
 // 主键 = (descriptionCategoryId, typeId) 组合,两者一起唯一确定一个类目节点
 import { ref, reactive, computed, onMounted } from 'vue';
+import { parseUtcDate } from '../utils/time.js';
 import {
   getFilteredCategories,
   getAvailableCategories,
@@ -205,10 +206,10 @@ async function removeItem(item) {
 }
 
 // ── 工具函数 ───────────────────────────────────────────────
+// createdAt 为 SQLite datetime('now') UTC,解析后按北京时间展示
 function fmtTime(t) {
-  if (!t) return '—';
-  const d = new Date(t);
-  if (isNaN(d.getTime())) return '—';
+  const d = parseUtcDate(t);
+  if (!d) return '—';
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

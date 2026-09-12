@@ -759,9 +759,11 @@ function extractStatusErrors(data) {
 }
 
 // GET /admin/api/products —— 商品数据缓存列表(支持 keyword 模糊搜 sku / data)
-// query: ?currentPage=1&pageSize=20&keyword=&idsOnly=1&filteredCategory=
+// query: ?currentPage=1&pageSize=20&keyword=&idsOnly=1&filteredCategory=&hasSales=&sortBy=&sortDir=
 //   idsOnly=1 时跳过分页,返回全量精简列表(仅 productId/storeId/offerId),供"按筛选批量更新"使用
 //   filteredCategory: '' 全部 | '1' 仅已过滤类目 | '0' 排除已过滤类目(基于 ozon_filtered_categories)
+//   hasSales(2026-09): '' 全部 | '1' 有销量 | '0' 无销量(基于有效销量,排除 cancelled 订单)
+//   sortBy(2026-09): '' 默认更新时间 | salesQty 按销量;sortDir: desc(默认)/asc
 router.get('/admin/api/products', async (req, res, next) => {
   try {
     const current = Math.max(1, Number(req.query.currentPage) || 1);
@@ -872,6 +874,14 @@ router.get('/admin/api/products', async (req, res, next) => {
             AND (fc.type_id = 0 OR fc.type_id = json_extract(p.data, '$.type_id'))`;
       where.push(req.query.filteredCategory === '1' ? `EXISTS (${cond})` : `NOT EXISTS (${cond})`);
     }
+    // 销量筛选(2026-09):基于有效销量(排除 cancelled 订单,口径与展示一致)
+    //   hasSales=1 -> 仅显示有销量商品 | hasSales=0 -> 仅显示无销量商品
+    // 条件引用销量子查询别名 s,salesJoin 会拼进全部 4 条查询(列表/total/idsOnly/statusCounts)
+    if (req.query.hasSales === '1' || req.query.hasSales === '0') {
+      where.push(
+        req.query.hasSales === '1' ? 'COALESCE(s.qty_all, 0) > 0' : 'COALESCE(s.qty_all, 0) = 0'
+      );
+    }
     // productStatus 参数最后 push,与 fullWhereSql 中占位符顺序一致
     // (baseWhereSql 基础筛选占位符在前,productStatus 占位符在末尾)
     if (productStatusParam !== null) {
@@ -884,8 +894,38 @@ router.get('/admin/api/products', async (req, res, next) => {
       ? baseWhereSql + productStatusWhere
       : (productStatusWhere ? 'WHERE 1=1' + productStatusWhere : '');
 
+    // 销量聚合 JOIN(2026-09):op_ozon_order_item × op_ozon_order 按订单商品行求和
+    // 口径:有效销量 = status != 'cancelled'(已确认口径);时间基准 in_process_at(下单时间)
+    //   qty_all=全部有效销量(件) | qty_30d=近30天下单销量 | orders_all=订单数 | last_at=最后售出
+    // sku 在订单与商品表均全局唯一(Ozon 平台 SKU),跨店铺聚合天然正确
+    // 数据量小(1.3k 订单行,实测聚合 6ms),无需物化统计表,实时聚合即可
+    const salesJoin = `LEFT JOIN (
+         SELECT oi.sku,
+                SUM(oi.quantity) AS qty_all,
+                SUM(CASE WHEN datetime(o.in_process_at) >= datetime('now', '-30 day')
+                         THEN oi.quantity ELSE 0 END) AS qty_30d,
+                COUNT(DISTINCT oi.ozon_order_id) AS orders_all,
+                MAX(o.in_process_at) AS last_at
+         FROM op_ozon_order_item oi
+         JOIN op_ozon_order o ON o.id = oi.ozon_order_id
+         WHERE o.status != 'cancelled'
+         GROUP BY oi.sku
+       ) s ON s.sku = p.sku`;
+
+    // 排序(2026-09):'' 默认 fetched_at DESC | salesQty 按销量(全部为主键,近30天为次键)
+    // 白名单校验防 SQL 注入;sortDir 仅 salesQty 生效
+    const sortBy = req.query.sortBy === 'salesQty' ? 'salesQty' : '';
+    const sortDir = req.query.sortDir === 'asc' ? 'asc' : 'desc';
+    const orderBySql =
+      sortBy === 'salesQty'
+        ? sortDir === 'asc'
+          ? 'ORDER BY COALESCE(s.qty_all, 0) ASC, COALESCE(s.qty_30d, 0) ASC, p.fetched_at DESC'
+          : 'ORDER BY COALESCE(s.qty_all, 0) DESC, COALESCE(s.qty_30d, 0) DESC, p.fetched_at DESC'
+        : 'ORDER BY p.fetched_at DESC';
+
     // idsOnly 模式:跳过分页,只返回 productId/storeId/offerId 精简列表
     // 用于"按当前筛选批量更新图片/库存"场景,避免拉取完整 data JSON
+    // 含 salesJoin(hasSales 筛选引用 s.qty_all)+ orderBySql(详情对比页导航顺序与列表一致)
     if (req.query.idsOnly === '1' || req.query.idsOnly === 'true') {
       const idRows = db
         .prepare(
@@ -895,8 +935,9 @@ router.get('/admin/api/products', async (req, res, next) => {
              p.store_id AS storeId,
              COALESCE(json_extract(p.data, '$.offer_id'), json_extract(p.data, '$.sku'), p.sku) AS offerId
            FROM product_data_cache p
+           ${salesJoin}
            ${fullWhereSql}
-           ORDER BY p.fetched_at DESC`
+           ${orderBySql}`
         )
         .all(...params);
       const items = idRows
@@ -933,16 +974,23 @@ router.get('/admin/api/products', async (req, res, next) => {
     const rows = db
       .prepare(
         `SELECT p.sku, p.data, p.store_id, p.description_quality, p.fetched_at, p.custom_weight_g,
+                COALESCE(s.qty_all, 0) AS qty_all,
+                COALESCE(s.qty_30d, 0) AS qty_30d,
+                s.orders_all,
+                s.last_at,
                 json_extract(a.attributes_data, '$.weight') AS weight_g,
                 json_extract(a.attributes_data, '$.depth') AS depth_mm,
                 json_extract(a.attributes_data, '$.width') AS width_mm,
                 json_extract(a.attributes_data, '$.height') AS height_mm
          FROM product_data_cache p
          LEFT JOIN product_attributes_cache a ON a.sku = p.sku
-         ${fullWhereSql} ORDER BY p.fetched_at DESC LIMIT ? OFFSET ?`
+         ${salesJoin}
+         ${fullWhereSql} ${orderBySql} LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, offset);
-    const total = db.prepare(`SELECT COUNT(*) as n FROM product_data_cache p ${fullWhereSql}`).get(...params).n;
+    const total = db
+      .prepare(`SELECT COUNT(*) as n FROM product_data_cache p ${salesJoin} ${fullWhereSql}`)
+      .get(...params).n;
 
     // statusCounts:各状态数量统计(口径 A:排除 productStatus 筛选,保留其他基础筛选)
     // 用 baseWhereSql(不含 productStatus),一条 GROUP BY SQL 查询全部 5 类状态计数
@@ -965,6 +1013,7 @@ router.get('/admin/api/products', async (req, res, next) => {
             ELSE 'other'
            END) AS ps, COUNT(*) AS n
          FROM product_data_cache p
+         ${salesJoin}
          ${baseWhereSql}
          GROUP BY ps`
       )
@@ -998,6 +1047,12 @@ router.get('/admin/api/products', async (req, res, next) => {
             typeName: typeNameMap.get(Number(data.type_id)) || '',
             // 类目是否在过滤黑名单(2026-09):行级"已过滤"标记,语义与 filteredCategory 筛选一致
             categoryFiltered: isCategoryFiltered(data.description_category_id, data.type_id),
+            // 销量(2026-09):有效口径(排除 cancelled 订单)件数
+            //   salesQty=全部有效销量 | salesQty30d=近30天下单销量 | salesOrders=订单数 | lastSoldAt=最后售出
+            salesQty: Number(r.qty_all) || 0,
+            salesQty30d: Number(r.qty_30d) || 0,
+            salesOrders: Number(r.orders_all) || 0,
+            lastSoldAt: r.last_at || null,
             // 重量(克):来自 product_attributes_cache.attributes_data 顶层 weight 字段
             // 「同步详情」阶段1(/v4/product/info/attributes)写入;无值时为 null,前端显示 —
             weightG: r.weight_g != null ? Number(r.weight_g) : null,
@@ -1125,6 +1180,7 @@ async function runStoreSync(store, storeId) {
     // 耗时拆分(用于定位同步瓶颈:list/info/db/delete)
     let listMs = 0, infoMs = 0, dbMs = 0, pages = 0;
     let failedBatches = 0; // info 接口批次失败数(504 等),记录后跳过不中断同步
+    let skippedArchived = 0; // 已归档商品数(is_archived=true,2026-09:不同步归档商品,跳过写入)
 
     // 循环拉取商品列表(游标分页),批量拉详情后写入 product_data_cache
     // limit 与 INFO_BATCH_SIZE 都固定为 300(1:1),不再展示批次,只展示"第x/总y页"
@@ -1196,11 +1252,17 @@ async function runStoreSync(store, storeId) {
           for (const item of infoItems) {
             const sku = String(item.sku || item.id || '');
             if (!sku) continue;
+            // 2026-09 不同步归档商品:is_archived=true 的跳过写入
+            // 跳过后 fetched_at 不刷新,被下方"全量替换清理"删除 → 归档商品自动从本地缓存移除
+            if (item.is_archived === true) {
+              skippedArchived++;
+              continue;
+            }
             stmt.run(sku, JSON.stringify(item), storeId);
             synced++;
           }
           dbMs += Date.now() - __td;
-          setProgress(storeId, { synced });
+          setProgress(storeId, { synced, skippedArchived });
         }
       }
 
@@ -1208,7 +1270,7 @@ async function runStoreSync(store, storeId) {
       if (items.length < limit) break; // 最后一页
     }
 
-    // 全量替换:删除该店铺本次同步未刷新的旧记录(Ozon 端已不存在的商品)
+    // 全量替换:删除该店铺本次同步未刷新的旧记录(Ozon 端已不存在的商品 + 已归档被跳过的商品)
     // 同步成功到达此处才执行删除,中途异常不删旧数据(失败安全)
     setProgress(storeId, { phase: 'delete', message: `清理旧记录` });
     const __tdel = Date.now();
@@ -1219,11 +1281,11 @@ async function runStoreSync(store, storeId) {
 
     const durationMs = Date.now() - startedAt;
     logger.info(
-      { storeId, total, synced, removed, pages, failedBatches, listMs, infoMs, dbMs, delMs, totalMs: durationMs },
+      { storeId, total, synced, skippedArchived, removed, pages, failedBatches, listMs, infoMs, dbMs, delMs, totalMs: durationMs },
       '[sync-profile] 同步耗时拆分'
     );
-    finalizeProgress(storeId, 'done', { phase: 'done', page: pages, total, synced, removed, failedBatches, durationMs, message: `完成:写入${synced}/${total},清理${removed}` });
-    return { synced, total, removed, failedBatches, durationMs };
+    finalizeProgress(storeId, 'done', { phase: 'done', page: pages, total, synced, skippedArchived, removed, failedBatches, durationMs, message: `完成:写入${synced}/${total},跳过${skippedArchived}归档,清理${removed}` });
+    return { synced, total, skippedArchived, removed, failedBatches, durationMs };
   } catch (err) {
     finalizeProgress(storeId, 'error', { phase: 'error', message: err.message });
     return { error: err.message };

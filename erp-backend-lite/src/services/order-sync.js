@@ -200,6 +200,9 @@ async function backfillProductCache(store) {
       const items = resp?.result?.items || resp?.items || [];
       for (const it of items) {
         if (!it?.sku) continue;
+        // 2026-09 不同步归档商品:is_archived=true 跳过写入(与商品同步 runStoreSync 同语义)
+        // 归档商品(多为已售罄下架,offer 带 -sold 后缀)不回填缓存,订单页图片/标题走 LEFT JOIN 降级
+        if (it.is_archived === true) continue;
         upsert.run(String(it.sku), JSON.stringify(it), store.id);
         filled++;
       }

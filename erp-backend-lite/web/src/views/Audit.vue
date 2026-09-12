@@ -1,5 +1,6 @@
 <script setup>
 import { reactive, onMounted } from 'vue';
+import { parseUtcDate } from '../utils/time.js';
 import { getAuditLogs } from '../api/audit.js';
 import { useToast } from '../components/useToast.js';
 import AppPager from '../components/AppPager.vue';
@@ -82,9 +83,12 @@ function actionLabel(action) {
   return AUDIT_ACTION_LABEL[action] || action || '—';
 }
 
+// created_at 为 SQLite datetime('now') UTC,解析后按北京时间展示
 function fmtTime(t) {
-  if (!t) return '—';
-  return String(t).replace('T', ' ').slice(0, 19);
+  const d = parseUtcDate(t);
+  if (!d) return '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 // detail 后端返回为对象,统一序列化为字符串(与原 admin.js 一致)

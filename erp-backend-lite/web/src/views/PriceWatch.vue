@@ -3,6 +3,7 @@
 // 数据来源:qxqx/price-watch-collect.js 定期采集上报的快照(price_watch_snapshots)
 // 任务为派生视图,本页只读;采集入口:qxqx 目录 node price-watch-collect.js
 import { ref, reactive, onMounted } from 'vue';
+import { parseUtcDate } from '../utils/time.js';
 import { getPriceWatchStats, getPriceWatchList, getPriceWatchDetail } from '../api/price-watch.js';
 import { getStores } from '../api/stores.js';
 import { useToast } from '../components/useToast.js';
@@ -210,10 +211,10 @@ function fmtInt(v) {
   return String(v);
 }
 
+// lastSyncAt 为 SQLite datetime('now') UTC、快照 fetched_at 为 ISO 时间,统一解析后按北京时间展示
 function fmtTime(t) {
-  if (!t) return '—';
-  const d = new Date(t);
-  if (isNaN(d.getTime())) return String(t);
+  const d = parseUtcDate(t);
+  if (!d) return '—';
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

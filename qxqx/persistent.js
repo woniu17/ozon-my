@@ -6,7 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 持久化用户数据目录：cookie / localStorage / 登录态会保存在这里
 // 复用同一路径再次启动即可恢复状态
-const userDataDir = path.join(__dirname, '.ozon-profile');
+const userDataDir = path.join(__dirname, '.linqx-profile');
 
 const ctx = await launchPersistentContext({
   userDataDir,

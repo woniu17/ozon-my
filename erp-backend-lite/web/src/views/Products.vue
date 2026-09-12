@@ -1,5 +1,6 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue';
+import { parseUtcDate } from '../utils/time.js';
 import { useRouter, useRoute } from 'vue-router';
 import {
   getProducts,
@@ -37,6 +38,9 @@ const state = reactive({
   loading: false,
   page: 1,
   pageSize: 20,
+  // 排序(2026-09):'' 默认更新时间 | 'salesQty' 按销量(全部为主键,近30天次键)
+  sortBy: '',
+  sortDir: 'desc',
   // 各状态数量(口径 A:排除 productStatus 筛选,后端返回)
   // { all, saleable, created_no_stock, pending_creation, rejected, other }
   statusCounts: { all: 0, saleable: 0, created_no_stock: 0, pending_creation: 0, rejected: 0, other: 0 },
@@ -48,6 +52,7 @@ const state = reactive({
     imageIssue: '',
     descriptionQuality: '', // 描述状态:'' 全部 | '0' 空 | '1' 占位 | '2' 按钮污染 | '3' 正常 | '1,2' 需清洗
     filteredCategory: '', // 类目过滤(2026-09):'' 全部 | '1' 仅已过滤类目 | '0' 排除已过滤类目(类目过滤页面维护的黑名单)
+    hasSales: '', // 销量(2026-09):'' 全部 | '1' 有销量 | '0' 无销量(有效口径,排除已取消订单)
   },
 });
 
@@ -209,6 +214,9 @@ async function loadList() {
       imageIssue: state.filters.imageIssue,
       descriptionQuality: state.filters.descriptionQuality,
       filteredCategory: state.filters.filteredCategory,
+      hasSales: state.filters.hasSales,
+      sortBy: state.sortBy,
+      sortDir: state.sortDir,
     });
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -242,6 +250,11 @@ function buildQueryFromState() {
   if (f.imageIssue) q.imageIssue = f.imageIssue;
   if (f.descriptionQuality) q.descriptionQuality = f.descriptionQuality;
   if (f.filteredCategory) q.filteredCategory = f.filteredCategory;
+  if (f.hasSales) q.hasSales = f.hasSales;
+  if (state.sortBy) {
+    q.sortBy = state.sortBy;
+    if (state.sortDir === 'asc') q.sortDir = 'asc';
+  }
   if (state.page && state.page > 1) q.page = String(state.page);
   return q;
 }
@@ -284,6 +297,15 @@ function loadFromUrl() {
   if (q.filteredCategory === '0' || q.filteredCategory === '1') {
     state.filters.filteredCategory = q.filteredCategory;
   }
+  // 销量:'' 全部 | '1' 有销量 | '0' 无销量
+  if (q.hasSales === '0' || q.hasSales === '1') {
+    state.filters.hasSales = q.hasSales;
+  }
+  // 排序:'' 默认 | salesQty 按销量(白名单校验防恶意 URL)
+  if (q.sortBy === 'salesQty') {
+    state.sortBy = 'salesQty';
+    state.sortDir = q.sortDir === 'asc' ? 'asc' : 'desc';
+  }
   if (q.page) {
     const n = parseInt(q.page, 10);
     if (!Number.isNaN(n) && n >= 1) state.page = n;
@@ -292,7 +314,7 @@ function loadFromUrl() {
   syncUrlPending = false;
 }
 
-// watch filters + page → debounce 写入 URL
+// watch filters + page + 排序 → debounce 写入 URL
 watch(
   () => state.filters,
   () => syncToUrl(),
@@ -302,6 +324,26 @@ watch(
   () => state.page,
   () => syncToUrl()
 );
+watch(
+  () => [state.sortBy, state.sortDir],
+  () => syncToUrl()
+);
+
+// 销量列头点击排序(2026-09):三态循环 默认(更新时间)→销量降序→销量升序→回默认
+// 主排序键=全部销量,次键=近30天;每次切换重置回第 1 页
+function toggleSalesSort() {
+  if (state.sortBy !== 'salesQty') {
+    state.sortBy = 'salesQty';
+    state.sortDir = 'desc';
+  } else if (state.sortDir === 'desc') {
+    state.sortDir = 'asc';
+  } else {
+    state.sortBy = '';
+    state.sortDir = 'desc';
+  }
+  state.page = 1;
+  loadList();
+}
 
 // 查询:重置到第 1 页后加载
 function search() {
@@ -382,6 +424,7 @@ async function syncStoreProducts() {
     let totalRemoved = 0;
     let failed = 0;
     let totalFailedBatches = 0;
+    let totalSkippedArchived = 0; // 不同步归档商品(2026-09):is_archived=true 跳过写入,清理时移除
     for (const p of syncProgressItems.value) {
       if (!targetIds.has(p.storeId)) continue;
       if (p.status === 'error') {
@@ -392,9 +435,11 @@ async function syncStoreProducts() {
       totalTotal += p.total ?? 0;
       totalRemoved += p.removed ?? 0;
       totalFailedBatches += p.failedBatches ?? 0;
+      totalSkippedArchived += p.skippedArchived ?? 0;
     }
     const summary = `同步完成:写入 ${totalSynced}/${totalTotal} 条,清理 ${totalRemoved} 条已下架${
-      failed > 0 ? `,失败 ${failed} 个店铺` : ''
+      totalSkippedArchived > 0 ? `,跳过 ${totalSkippedArchived} 个已归档` : ''
+    }${failed > 0 ? `,失败 ${failed} 个店铺` : ''
     }${totalFailedBatches > 0 ? `,${totalFailedBatches} 批详情拉取失败(见日志)` : ''}`;
     show(summary, failed > 0 || totalFailedBatches > 0 ? 'error' : 'success');
     state.page = 1;
@@ -540,6 +585,11 @@ function openDetailCompare(item) {
   if (f.imageIssue) query.fImageIssue = f.imageIssue;
   if (f.descriptionQuality) query.fDescriptionQuality = f.descriptionQuality;
   if (f.filteredCategory) query.fFilteredCategory = f.filteredCategory;
+  if (f.hasSales) query.fHasSales = f.hasSales;
+  if (state.sortBy) {
+    query.fSortBy = state.sortBy;
+    if (state.sortDir === 'asc') query.fSortDir = 'asc';
+  }
   router.push({ name: 'product-detail', params: { sku: item.sku }, query });
 }
 
@@ -549,9 +599,12 @@ function storeName(storeId) {
   return s?.name || storeId || '—';
 }
 
+// fetched_at 为 SQLite datetime('now') UTC、lastSoldAt 为 Ozon ISO 时间,统一解析后按北京时间展示
 function fmtTime(t) {
-  if (!t) return '—';
-  return String(t).replace('T', ' ').slice(0, 19);
+  const d = parseUtcDate(t);
+  if (!d) return '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 // 从 SKU/Offer ID 字符串提取首段纯数字 ID(如 4739085792-0812-qx → 4739085792)
@@ -744,6 +797,7 @@ async function openFilteredBatch(type) {
       imageIssue: state.filters.imageIssue,
       descriptionQuality: state.filters.descriptionQuality,
       filteredCategory: state.filters.filteredCategory,
+      hasSales: state.filters.hasSales,
       idsOnly: 1,
     });
     const products = (data?.items || []).filter((p) => p.productId);
@@ -812,6 +866,7 @@ function openFilteredArchive() {
       imageIssue: f.imageIssue,
       descriptionQuality: f.descriptionQuality,
       filteredCategory: f.filteredCategory,
+      hasSales: f.hasSales,
     },
     filterCount: state.total,
   };
@@ -1090,6 +1145,16 @@ onMounted(() => {
         <option value="1">仅已过滤类目</option>
         <option value="0">排除已过滤类目</option>
       </select>
+      <select
+        class="filter-select"
+        v-model="state.filters.hasSales"
+        title="按销量筛选(有效口径,排除已取消订单)"
+        @change="search"
+      >
+        <option value="">全部销量</option>
+        <option value="1">有销量</option>
+        <option value="0">无销量</option>
+      </select>
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
@@ -1142,12 +1207,18 @@ onMounted(() => {
 
     <div class="table-wrap">
       <table class="data-table" aria-label="商品列表">
-        <caption class="sr-only">商品数据缓存列表,含商品(主图/名称/SKU/Offer ID/源商品链接)、重量、店铺、状态、库存、图片状态与操作</caption>
+        <caption class="sr-only">商品数据缓存列表,含商品(主图/名称/SKU/Offer ID/源商品链接/类目类型)、重量、销量、店铺、状态、库存、图片状态与操作</caption>
         <thead>
           <tr>
             <th style="width:32px"><input type="checkbox" :checked="allSelected" aria-label="全选当前页" @change="toggleSelectAll" /></th>
             <th style="width:280px" class="col-product-th">商品</th>
             <th style="width:170px" class="col-weight-th" title="Ozon 后台重量(来自 /v4/product/info/attributes)+本系统重量(可在下方输入框设置,覆盖 Ozon 重量参与订单/采购分摊)">重量</th>
+            <th
+              style="width:90px"
+              class="col-sales-th"
+              title="有效销量(排除已取消订单)。点击列头切换排序:默认(更新时间)→销量降序→销量升序"
+              @click="toggleSalesSort"
+            >销量<span v-if="state.sortBy === 'salesQty'" class="sort-ind">{{ state.sortDir === 'desc' ? '▼' : '▲' }}</span></th>
             <th>店铺</th>
             <th>状态</th>
             <th>库存</th>
@@ -1158,10 +1229,10 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="9" class="muted" style="padding: 24px; text-align: center">加载中…</td>
+            <td colspan="10" class="muted" style="padding: 24px; text-align: center">加载中…</td>
           </tr>
           <tr v-else-if="!state.items.length">
-            <td colspan="9" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
+            <td colspan="10" class="empty">暂无商品数据(插件查询过的商品会自动缓存到这里)</td>
           </tr>
           <tr v-for="it in state.items" :key="it.sku">
             <td><input type="checkbox" :checked="isSelected(it.sku)" :aria-label="`选择 SKU ${it.sku}`" @change="toggleSelect(it.sku)" /></td>
@@ -1237,6 +1308,21 @@ onMounted(() => {
                   @keydown.enter.prevent="($event) => $event.target.blur()"
                 />
                 <span class="weight-unit">g</span>
+              </div>
+            </td>
+            <td
+              class="col-sales"
+              :title="it.salesQty
+                ? `全部销量 ${it.salesQty} 件 / ${it.salesOrders} 单,近30天 ${it.salesQty30d} 件,最后售出 ${fmtTime(it.lastSoldAt)}`
+                : '无销量(排除已取消订单的有效口径)'"
+            >
+              <div class="sales-row">
+                <span class="sales-label">30天</span>
+                <span class="sales-value" :class="{ 'sales-zero': !it.salesQty30d }">{{ it.salesQty30d || '—' }}</span>
+              </div>
+              <div class="sales-row">
+                <span class="sales-label">全部</span>
+                <span class="sales-value" :class="{ 'sales-zero': !it.salesQty }">{{ it.salesQty || '—' }}</span>
               </div>
             </td>
             <td>{{ storeName(it.storeId) }}</td>
@@ -1492,5 +1578,48 @@ a.product-title:hover {
   flex: 0 0 12px;
   font-size: 11px;
   color: var(--text-secondary, #9ca3af);
+}
+
+/* 销量列(2026-09):近30天/全部两行紧凑布局,样式对齐重量列 */
+.col-sales {
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+.sales-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  width: 100%;
+}
+.sales-row + .sales-row {
+  margin-top: 4px;
+}
+.sales-label {
+  flex: 0 0 34px;
+  font-size: 10px;
+  color: var(--text-secondary, #9ca3af);
+}
+.sales-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+}
+/* 无销量显示灰色 —(与订单列表空值口径一致) */
+.sales-zero {
+  color: var(--text-secondary, #9ca3af);
+}
+/* 销量列头可点击排序:三态循环 默认→降→升 */
+.col-sales-th {
+  cursor: pointer;
+  user-select: none;
+}
+.col-sales-th:hover {
+  color: var(--primary, #2563eb);
+}
+.sort-ind {
+  font-size: 10px;
+  margin-left: 2px;
 }
 </style>
