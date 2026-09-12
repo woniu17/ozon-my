@@ -52,6 +52,12 @@ const config = {
   serviceApiKey: process.env.SERVICE_API_KEY || '',
   // RUB→CNY 汇率兜底(2026-09,应计利润换算);app_config.rub_cny_rate 优先
   rubCnyRateFallback: Number(process.env.RUB_CNY_RATE) || 0,
+  // 平台订单获取(2026-09,采购弹框三平台订单迁后端):cloakbrowser 生命周期配置
+  // profile 与 qxqx/persistent.js(手动登录)共用,经 Chromium 单实例互斥
+  platformProfileDir: process.env.PLATFORM_PROFILE_DIR || join(__dirname, '../../../qxqx/.linqx-profile'),
+  platformBrowserHeadless: process.env.PLATFORM_BROWSER_HEADLESS !== '0',
+  platformBrowserIdleMs: Number(process.env.PLATFORM_BROWSER_IDLE_MS) || 10 * 60 * 1000,
+  platformOrderTimeoutMs: Number(process.env.PLATFORM_ORDER_TIMEOUT_MS) || 60 * 1000,
 };
 
 export default config;

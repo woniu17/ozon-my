@@ -17,6 +17,7 @@ import {
   listPendingPurchases,
   getOrderSummary,
   syncPackage,
+  getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus,
 } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
@@ -377,9 +378,10 @@ async function onSyncMsToLocal() {
   }
 }
 
-// 补全采购订单商品信息(支持拼多多+1688)
+// 补全采购订单商品信息(支持拼多多+1688+淘宝)
 // 逻辑:后端 listPendingPurchases 返回所有 items_json 不含 thumbUrl 的采购单(不限当前页),
-//      串行+限速(2s/单,失败退避到 5s)逐个调插件搜索接口(PDD_SEARCH_ORDER / ALI_SEARCH_ORDER),
+//      串行+限速(2s/单,失败退避到 5s)逐个调后端平台订单搜索接口
+//      (/admin/api/platform-orders/:platform/search,cloakbrowser 直取),
 //      每 10 条一批推送后端,避免一次性大 payload;连续失败 3 次中止防反爬
 const enrichingItems = ref(false);
 let enrichStopFlag = false;
@@ -396,7 +398,7 @@ function buildEnrichConfirmMessage(pending, platforms) {
   const lines = [];
   lines.push(`检测到 ${pending.length} 条待补全采购单(${platforms.join('+')},全量,不限当前页)。`);
   lines.push(`将逐个搜索补全商品图/数量,每单间隔 ${ENRICH_INTERVAL_MS / 1000}s 限速,连续失败 ${ENRICH_MAX_CONSEC_FAIL} 次自动中止。`);
-  lines.push('此操作需要在 Edge 浏览器中已登录对应平台,且扩展已启用。');
+  lines.push('此操作由 ERP 后端浏览器取数,需在 qxqx 的 persistent 中已登录对应平台。');
   lines.push('');
   lines.push('── 待补全采购订单号 ──');
   // 按平台分组展示
@@ -440,20 +442,21 @@ async function onEnrichPurchaseItems() {
     show('无待补全的采购单(全部已补全或无单号)', 'info');
     return;
   }
-  // 检查对应平台桥接是否就绪
+  // 检查对应平台登录态(后端浏览器 cookie 探测,替代原扩展桥就绪检查)
+  // 'yes' 仅代表登录 cookie 存在,session 真实失效由请求时的 AUTH_REQUIRED 提示兜底
   const needPdd = pending.some((p) => p._platform === 'yangkeduo');
   const needAli = pending.some((p) => p._platform === '1688');
   const needTb = pending.some((p) => p._platform === 'taobao');
-  if (needPdd && !pddBridgeReady.value) {
-    show('拼多多补全需要扩展桥接就绪(已登录 mobile.yangkeduo.com)', 'warning');
+  if (needPdd && platformLogin.pdd === 'no') {
+    show('拼多多补全需要先登录:请运行 qxqx 的 persistent 登录拼多多后重试', 'warning');
     return;
   }
-  if (needAli && !aliBridgeReady.value) {
-    show('1688补全需要扩展桥接就绪(已登录 air.1688.com)', 'warning');
+  if (needAli && platformLogin.ali1688 === 'no') {
+    show('1688补全需要先登录:请运行 qxqx 的 persistent 登录1688后重试', 'warning');
     return;
   }
-  if (needTb && !tbBridgeReady.value) {
-    show('淘宝补全需要扩展桥接就绪(已登录 buyertrade.taobao.com)', 'warning');
+  if (needTb && platformLogin.taobao === 'no') {
+    show('淘宝补全需要先登录:请运行 qxqx 的 persistent 登录淘宝后重试', 'warning');
     return;
   }
   if (!await confirmStore.ask({
@@ -498,6 +501,8 @@ async function onEnrichPurchaseItems() {
           ok = true;
         } else {
           enrichProgress.notFound++;
+          // 超时/登录失效等 {ok:false} 响应也记录错误文案,供连续失败中止提示引用
+          if (resp && resp.error) lastErr = resp.error;
         }
       } catch (e) {
         enrichProgress.failed++;
@@ -877,67 +882,56 @@ async function savePurchase() {
   }
 }
 
-// ── 拼多多订单导入(miaoshou-helper 扩展桥接)──────────
-// 协议:window.postMessage(source='erp-pdd') ⇄ erp-bridge.js ⇄ background.js → PDD order_list_v4
-const PDD_NS = 'erp-pdd';
-const pddDialogOpen = ref(false);
+// ── 平台订单获取(ERP 后端 cloakbrowser 直取,2026-09 M3)─────
+// 协议:GET /admin/api/platform-orders/:platform(/search);后端在 .linqx-profile 浏览器
+// 页面上下文取数,错误已映射为 AUTH_REQUIRED/RISK_VALIDATE 等友好 message。
+// 这里包装回插件时代的 {ok, orders|result|error} 形状,下游 load*/补全链路零改动
+async function platformOrdersReq(platform, payload) {
+  try {
+    const data = await getPlatformOrders(platform, payload);
+    return { ok: true, orders: data.orders || [] };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+// 按采购单号精确搜索;未找到返回 {ok:true, result:null}(与插件搜索语义一致)
+async function platformSearchReq(platform, orderSn) {
+  try {
+    const data = await searchPlatformOrder(platform, orderSn);
+    return { ok: true, result: data.result };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+// 后端浏览器登录态探测(替代原扩展 PING/PONG):'yes' | 'no' | 'unknown'
+// 注意 'yes' 仅代表登录 cookie 存在,session 真实失效由请求时的 AUTH_REQUIRED 提示兜底
+const platformLogin = reactive({ pdd: 'unknown', ali1688: 'unknown', taobao: 'unknown' });
+async function loadPlatformStatus() {
+  try {
+    const data = await getPlatformOrdersStatus();
+    for (const [k, v] of Object.entries(data.platforms || {})) {
+      platformLogin[k] = v?.login || 'unknown';
+    }
+  } catch { /* 静默:探测失败不阻塞主流程 */ }
+}
+
+// ── 拼多多订单导入(ERP 后端直取)──────────────────
 const pddLoading = ref(false);
 const pddError = ref('');
 const pddOrders = ref([]);          // 精简后的 PDD 订单列表
 const pddTab = ref('all');          // 'all' | 'unreceived'
 const pddSelected = ref([]);        // 已勾选的 orderSn
-const pddBridgeReady = ref(false);  // 是否检测到扩展桥接
-let pddReqSeq = 0;
-const pddPending = new Map();       // reqId -> resolve
-
-function pddRequest(payload) {
-  return new Promise((resolve) => {
-    const reqId = ++pddReqSeq;
-    const timer = setTimeout(() => {
-      pddPending.delete(reqId);
-      resolve({ ok: false, error: '请求超时:请确认 miaoshou-helper 扩展已启用并已重新加载(扩展更新后需刷新本页)' });
-    }, 10_000);
-    pddPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
-    window.postMessage({ source: PDD_NS, type: 'PDD_GET_ORDERS', reqId, payload }, window.location.origin);
-  });
-}
-
-function onPddMessage(ev) {
-  if (ev.source !== window || !ev.data || ev.data.source !== PDD_NS) return;
-  if (ev.data.type === 'PDD_PONG') { pddBridgeReady.value = true; return; }
-  if (ev.data.type === 'PDD_ORDERS_RESULT') {
-    const cb = pddPending.get(ev.data.reqId);
-    if (cb) { pddPending.delete(ev.data.reqId); cb(ev.data.data); }
-  }
-  if (ev.data.type === 'PDD_SEARCH_RESULT') {
-    const cb = pddPending.get(ev.data.reqId);
-    if (cb) { pddPending.delete(ev.data.reqId); cb(ev.data.data); }
-  }
-}
-
-// 按采购单号精确搜索(补全商品图+数量,仅拼多多)
-function pddSearch(orderSn) {
-  return new Promise((resolve) => {
-    const reqId = ++pddReqSeq;
-    const timer = setTimeout(() => {
-      pddPending.delete(reqId);
-      resolve({ ok: false, error: '搜索超时:请确认扩展已启用并已登录 mobile.yangkeduo.com' });
-    }, 15_000);
-    pddPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
-    window.postMessage({ source: PDD_NS, type: 'PDD_SEARCH_ORDER', reqId, payload: { orderSn } }, window.location.origin);
-  });
-}
-
-function pddPing() {
-  window.postMessage({ source: PDD_NS, type: 'PDD_PING' }, window.location.origin);
-}
+// 按采购单号精确搜索(补全商品图+数量,走后端浏览器)
+const pddSearch = (orderSn) => platformSearchReq('pdd', orderSn);
 
 async function loadPddOrders() {
   pddLoading.value = true;
   pddError.value = '';
   pddSelected.value = [];
   try {
-    const resp = await pddRequest({ tab: pddTab.value, size: 30 });
+    const resp = await platformOrdersReq('pdd', { tab: pddTab.value, size: 30 });
     if (!resp.ok) throw new Error(resp.error || '获取订单失败');
     pddOrders.value = resp.orders || [];
   } catch (err) {
@@ -948,25 +942,55 @@ async function loadPddOrders() {
   }
 }
 
-async function openPddDialog() {
-  pddDialogOpen.value = true;
-  await loadPddOrders();
+// ── 1688订单导入(ERP 后端直取)────────────────────
+const aliLoading = ref(false);
+const aliError = ref('');
+const aliOrders = ref([]);          // 精简后的 1688 订单列表
+const aliTab = ref('all');          // 'all' | 'unshipped' | 'unreceived'
+const aliSelected = ref([]);        // 已勾选的 orderSn
+// 按采购单号精确搜索 1688 订单(补全商品图+数量,走后端浏览器)
+const aliSearch = (orderSn) => platformSearchReq('ali1688', orderSn);
+
+async function loadAliOrders() {
+  aliLoading.value = true;
+  aliError.value = '';
+  aliSelected.value = [];
+  try {
+    const resp = await platformOrdersReq('ali1688', { tab: aliTab.value, size: 30 });
+    if (!resp.ok) throw new Error(resp.error || '获取订单失败');
+    aliOrders.value = resp.orders || [];
+  } catch (err) {
+    aliError.value = err.message || String(err);
+    aliOrders.value = [];
+  } finally {
+    aliLoading.value = false;
+  }
 }
 
-function switchPddTab(t) {
-  if (pddTab.value === t || pddLoading.value) return;
-  pddTab.value = t;
-  loadPddOrders();
-}
+// ── 淘宝订单导入(ERP 后端直取)────────────────────
+const tbLoading = ref(false);
+const tbError = ref('');
+const tbOrders = ref([]);          // 精简后的淘宝订单列表
+const tbTab = ref('all');          // 'all' | 'unshipped' | 'unreceived'
+const tbSelected = ref([]);        // 已勾选的 orderSn
+// 按采购单号精确搜索淘宝订单(补全商品图+数量,走后端浏览器)
+const tbSearch = (orderSn) => platformSearchReq('taobao', orderSn);
 
-function isPddCancelled(o) {
-  return /取消/.test(o.statusPrompt || '');
+async function loadTbOrders() {
+  tbLoading.value = true;
+  tbError.value = '';
+  tbSelected.value = [];
+  try {
+    const resp = await platformOrdersReq('taobao', { tab: tbTab.value, size: 30 });
+    if (!resp.ok) throw new Error(resp.error || '获取订单失败');
+    tbOrders.value = resp.orders || [];
+  } catch (err) {
+    tbError.value = err.message || String(err);
+    tbOrders.value = [];
+  } finally {
+    tbLoading.value = false;
+  }
 }
-
-const pddSelectedOrders = computed(() =>
-  pddOrders.value.filter((o) => pddSelected.value.includes(o.orderSn)));
-const pddTotal = computed(() =>
-  pddSelectedOrders.value.reduce((s, o) => s + Number(o.amount || 0), 0).toFixed(2));
 
 // 快递单号前缀 → 物流公司(启发式推断,仅预填,可手改)
 const COURIER_RULES = [
@@ -984,249 +1008,6 @@ function inferCourier(no) {
   return hit ? hit[1] : '';
 }
 
-/** 导入选中的 PDD 订单回填采购表单 */
-function applyPddSelection() {
-  const sel = pddSelectedOrders.value;
-  if (!sel.length) return;
-  purchaseForm.platform = 'yangkeduo';
-  purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
-  const malls = [...new Set(sel.map((o) => o.mallName).filter(Boolean))];
-  purchaseForm.sellerName = malls.join(',');
-  purchaseForm.paymentAmount = pddTotal.value;
-  const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
-  purchaseForm.logisticsNo = tracks.join(',');
-  purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
-  // 单订单+单商品行时自动填行金额,其余场景保持手动填写
-  if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
-    purchaseForm.items[0].amount = sel[0].amount;
-  }
-  pddDialogOpen.value = false;
-  show(`已导入 ${sel.length} 个拼多多订单(金额 ¥${pddTotal.value}),请核对后保存`, 'success');
-}
-
-// ── 1688订单导入(miaoshou-helper 扩展桥接)────────────
-// 协议:window.postMessage(source='erp-ali') ⇄ erp-bridge.js ⇄ background.js → 1688 mtop dataline
-const ALI_NS = 'erp-ali';
-const aliDialogOpen = ref(false);
-const aliLoading = ref(false);
-const aliError = ref('');
-const aliOrders = ref([]);          // 精简后的 1688 订单列表
-const aliTab = ref('all');          // 'all' | 'unshipped' | 'unreceived'
-const aliSelected = ref([]);        // 已勾选的 orderSn
-const aliBridgeReady = ref(false);  // 是否检测到扩展桥接
-let aliReqSeq = 0;
-const aliPending = new Map();       // reqId -> resolve
-
-function aliRequest(payload) {
-  return new Promise((resolve) => {
-    const reqId = ++aliReqSeq;
-    // 1688 需签名+可能一次 token 轮换重试,超时放宽到 20s
-    const timer = setTimeout(() => {
-      aliPending.delete(reqId);
-      resolve({ ok: false, error: '请求超时:请确认 miaoshou-helper 扩展已启用并已重新加载(扩展更新后需刷新本页)' });
-    }, 20_000);
-    aliPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
-    window.postMessage({ source: ALI_NS, type: 'ALI_GET_ORDERS', reqId, payload }, window.location.origin);
-  });
-}
-
-function onAliMessage(ev) {
-  if (ev.source !== window || !ev.data || ev.data.source !== ALI_NS) return;
-  if (ev.data.type === 'ALI_PONG') { aliBridgeReady.value = true; return; }
-  if (ev.data.type === 'ALI_ORDERS_RESULT') {
-    const cb = aliPending.get(ev.data.reqId);
-    if (cb) { aliPending.delete(ev.data.reqId); cb(ev.data.data); }
-  }
-  if (ev.data.type === 'ALI_SEARCH_RESULT') {
-    const cb = aliPending.get(ev.data.reqId);
-    if (cb) { aliPending.delete(ev.data.reqId); cb(ev.data.data); }
-  }
-}
-
-// 按采购单号精确搜索 1688 订单(补全商品图+数量)
-function aliSearch(orderSn) {
-  return new Promise((resolve) => {
-    const reqId = ++aliReqSeq;
-    const timer = setTimeout(() => {
-      aliPending.delete(reqId);
-      resolve({ ok: false, error: '搜索超时:请确认扩展已启用并已登录 1688(air.1688.com)' });
-    }, 20_000);
-    aliPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
-    window.postMessage({ source: ALI_NS, type: 'ALI_SEARCH_ORDER', reqId, payload: { orderSn } }, window.location.origin);
-  });
-}
-
-function aliPing() {
-  window.postMessage({ source: ALI_NS, type: 'ALI_PING' }, window.location.origin);
-}
-
-async function loadAliOrders() {
-  aliLoading.value = true;
-  aliError.value = '';
-  aliSelected.value = [];
-  try {
-    const resp = await aliRequest({ tab: aliTab.value, size: 30 });
-    if (!resp.ok) throw new Error(resp.error || '获取订单失败');
-    aliOrders.value = resp.orders || [];
-  } catch (err) {
-    aliError.value = err.message || String(err);
-    aliOrders.value = [];
-  } finally {
-    aliLoading.value = false;
-  }
-}
-
-async function openAliDialog() {
-  aliDialogOpen.value = true;
-  await loadAliOrders();
-}
-
-function switchAliTab(t) {
-  if (aliTab.value === t || aliLoading.value) return;
-  aliTab.value = t;
-  loadAliOrders();
-}
-
-function isAliCancelled(o) {
-  return /取消|关闭/.test(o.statusPrompt || '') || /close|cancel/i.test(o.status || '');
-}
-
-const aliSelectedOrders = computed(() =>
-  aliOrders.value.filter((o) => aliSelected.value.includes(o.orderSn)));
-const aliTotal = computed(() =>
-  aliSelectedOrders.value.reduce((s, o) => s + Number(o.amount || 0), 0).toFixed(2));
-
-/** 导入选中的 1688 订单回填采购表单 */
-function applyAliSelection() {
-  const sel = aliSelectedOrders.value;
-  if (!sel.length) return;
-  purchaseForm.platform = '1688';
-  purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
-  const sellers = [...new Set(sel.map((o) => o.sellerName).filter(Boolean))];
-  purchaseForm.sellerName = sellers.join(',');
-  purchaseForm.paymentAmount = aliTotal.value;
-  const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
-  purchaseForm.logisticsNo = tracks.join(',');
-  purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
-  // 单订单+单商品行时自动填行金额,其余场景保持手动填写
-  if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
-    purchaseForm.items[0].amount = sel[0].amount;
-  }
-  aliDialogOpen.value = false;
-  show(`已导入 ${sel.length} 个1688订单(金额 ¥${aliTotal.value}),请核对后保存`, 'success');
-}
-
-// ── 淘宝订单导入(miaoshou-helper 扩展桥接)────────────
-// 协议:window.postMessage(source='erp-tb') ⇄ erp-bridge.js ⇄ background.js → 淘宝 mtop queryboughtlistV2
-const TB_NS = 'erp-tb';
-const tbDialogOpen = ref(false);
-const tbLoading = ref(false);
-const tbError = ref('');
-const tbOrders = ref([]);          // 精简后的淘宝订单列表
-const tbTab = ref('all');          // 'all' | 'unshipped' | 'unreceived'
-const tbSelected = ref([]);        // 已勾选的 orderSn
-const tbBridgeReady = ref(false);  // 是否检测到扩展桥接
-let tbReqSeq = 0;
-const tbPending = new Map();       // reqId -> resolve
-
-function tbRequest(payload) {
-  return new Promise((resolve) => {
-    const reqId = ++tbReqSeq;
-    const timer = setTimeout(() => {
-      tbPending.delete(reqId);
-      resolve({ ok: false, error: '请求超时:请确认 miaoshou-helper 扩展已启用并已重新加载(扩展更新后需刷新本页)' });
-    }, 20_000);
-    tbPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
-    window.postMessage({ source: TB_NS, type: 'TB_GET_ORDERS', reqId, payload }, window.location.origin);
-  });
-}
-
-function onTbMessage(ev) {
-  if (ev.source !== window || !ev.data || ev.data.source !== TB_NS) return;
-  if (ev.data.type === 'TB_PONG') { tbBridgeReady.value = true; return; }
-  if (ev.data.type === 'TB_ORDERS_RESULT') {
-    const cb = tbPending.get(ev.data.reqId);
-    if (cb) { tbPending.delete(ev.data.reqId); cb(ev.data.data); }
-  }
-  if (ev.data.type === 'TB_SEARCH_RESULT') {
-    const cb = tbPending.get(ev.data.reqId);
-    if (cb) { tbPending.delete(ev.data.reqId); cb(ev.data.data); }
-  }
-}
-
-// 按采购单号精确搜索淘宝订单(补全商品图+数量)
-function tbSearch(orderSn) {
-  return new Promise((resolve) => {
-    const reqId = ++tbReqSeq;
-    const timer = setTimeout(() => {
-      tbPending.delete(reqId);
-      resolve({ ok: false, error: '搜索超时:请确认扩展已启用并已登录淘宝(h5api.m.taobao.com)' });
-    }, 20_000);
-    tbPending.set(reqId, (data) => { clearTimeout(timer); resolve(data); });
-    window.postMessage({ source: TB_NS, type: 'TB_SEARCH_ORDER', reqId, payload: { orderSn } }, window.location.origin);
-  });
-}
-
-function tbPing() {
-  window.postMessage({ source: TB_NS, type: 'TB_PING' }, window.location.origin);
-}
-
-async function loadTbOrders() {
-  tbLoading.value = true;
-  tbError.value = '';
-  tbSelected.value = [];
-  try {
-    const resp = await tbRequest({ tab: tbTab.value });
-    if (!resp.ok) throw new Error(resp.error || '获取订单失败');
-    tbOrders.value = resp.orders || [];
-  } catch (err) {
-    tbError.value = err.message || String(err);
-    tbOrders.value = [];
-  } finally {
-    tbLoading.value = false;
-  }
-}
-
-async function openTbDialog() {
-  tbDialogOpen.value = true;
-  await loadTbOrders();
-}
-
-function switchTbTab(t) {
-  if (tbTab.value === t || tbLoading.value) return;
-  tbTab.value = t;
-  loadTbOrders();
-}
-
-function isTbCancelled(o) {
-  return /关闭|取消|退款成功/.test(o.statusPrompt || '');
-}
-
-const tbSelectedOrders = computed(() =>
-  tbOrders.value.filter((o) => tbSelected.value.includes(o.orderSn)));
-const tbTotal = computed(() =>
-  tbSelectedOrders.value.reduce((s, o) => s + Number(o.amount || 0), 0).toFixed(2));
-
-/** 导入选中的淘宝订单回填采购表单 */
-function applyTbSelection() {
-  const sel = tbSelectedOrders.value;
-  if (!sel.length) return;
-  purchaseForm.platform = 'taobao';
-  purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
-  const sellers = [...new Set(sel.map((o) => o.sellerName).filter(Boolean))];
-  purchaseForm.sellerName = sellers.join(',');
-  purchaseForm.paymentAmount = tbTotal.value;
-  const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
-  purchaseForm.logisticsNo = tracks.join(',');
-  purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
-  // 单订单+单商品行时自动填行金额,其余场景保持手动填写
-  if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
-    purchaseForm.items[0].amount = sel[0].amount;
-  }
-  tbDialogOpen.value = false;
-  show(`已导入 ${sel.length} 个淘宝订单(金额 ¥${tbTotal.value}),请核对后保存`, 'success');
-}
-
 // ── 采购弹窗内嵌订单导入区(统一三平台,放在 PDD/ALI/TB 声明之后)──
 // 当前平台的状态子 tab
 const importSubTab = computed({
@@ -1241,6 +1022,13 @@ const importSubTabs = computed(() => {
   if (importTab.value === 'pdd') return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
   return [{ key: 'all', label: '全部' }, { key: 'unshipped', label: '待发货' }, { key: 'unreceived', label: '待收货' }];
 });
+
+// 当前导入 tab 对应的后端平台键/中文名/登录态(导入区登录提示用)
+const currentPlatformKey = computed(() =>
+  importTab.value === 'pdd' ? 'pdd' : importTab.value === 'ali' ? 'ali1688' : 'taobao');
+const currentPlatformName = computed(() =>
+  importTab.value === 'pdd' ? '拼多多' : importTab.value === 'ali' ? '1688' : '淘宝');
+const currentPlatformLogin = computed(() => platformLogin[currentPlatformKey.value] || 'unknown');
 
 // 当前平台的 orders / loading / error / selected
 const importOrders = computed(() => importTab.value === 'pdd' ? pddOrders.value : importTab.value === 'ali' ? aliOrders.value : tbOrders.value);
@@ -1910,20 +1698,12 @@ onMounted(() => {
     else loadSyncStatus();
   }, 5_000);
   tickTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
-  // 拼多多/1688/淘宝导入桥接:监听扩展回包 + 主动探测(扩展公告可能早于本页挂载)
-  window.addEventListener('message', onPddMessage);
-  pddPing();
-  window.addEventListener('message', onAliMessage);
-  aliPing();
-  window.addEventListener('message', onTbMessage);
-  tbPing();
+  // 平台订单登录态探测(后端 cloakbrowser,替代原扩展 PING/PONG)
+  loadPlatformStatus();
 });
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer);
   if (tickTimer) clearInterval(tickTimer);
-  window.removeEventListener('message', onPddMessage);
-  window.removeEventListener('message', onAliMessage);
-  window.removeEventListener('message', onTbMessage);
   if (printFrame) {
     printFrame.remove();
     printFrame = null;
@@ -2490,7 +2270,7 @@ onUnmounted(() => {
           <button class="pdd-tab" :class="{ active: importTab === 'ali' }" @click="switchImportTab('ali')">1688</button>
           <button class="pdd-tab" :class="{ active: importTab === 'tb' }" @click="switchImportTab('tb')">淘宝</button>
           <button class="pdd-tab" :class="{ active: importTab === 'manual' }" @click="switchImportTab('manual')">手动录入</button>
-          <span v-if="importTab !== 'manual' && (!pddBridgeReady || !aliBridgeReady || !tbBridgeReady)" class="pdd-bridge-warn" title="需要安装/启用 miaoshou-helper 扩展">未检测到助手扩展</span>
+          <span v-if="importTab !== 'manual' && currentPlatformLogin === 'no'" class="pdd-bridge-warn" title="后端未检测到该平台登录态,请运行 qxqx 的 persistent 登录对应平台">未检测到{{ currentPlatformName }}登录态</span>
         </div>
 
         <!-- 平台订单列表(非手动录入) -->
@@ -3383,13 +3163,6 @@ a.product-title:hover {
 .pdd-bridge-warn {
   font-size: 11px;
   color: #f59e0b;
-}
-
-.pdd-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 200px;
 }
 
 .pdd-toolbar {

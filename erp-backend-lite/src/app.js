@@ -45,6 +45,8 @@ import stockRefreshRoutes from './modules/stock-refresh.js';
 import productUpdateRoutes from './modules/product-update.js';
 import productArchiveRoutes from './modules/product-archive.js';
 import exportExcelRoutes from './modules/export-excel.js';
+import platformOrdersRoutes from './modules/platform-orders.js';
+import { stopPlatformOrders } from './services/platform-orders/browser-manager.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -148,6 +150,7 @@ app.use(stockRefreshRoutes);
 app.use(productUpdateRoutes);
 app.use(productArchiveRoutes);
 app.use(exportExcelRoutes);
+app.use(platformOrdersRoutes);
 
 // 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
 if (config.featureFlags?.proxy_collect) {
@@ -200,7 +203,7 @@ const server = app.listen(config.port, () => {
 });
 
 // 优雅退出
-function shutdown(signal) {
+async function shutdown(signal) {
   logger.info({ signal }, '收到退出信号,正在关闭...');
   stopStockSync();
   stopIndexSync();
@@ -214,6 +217,8 @@ function shutdown(signal) {
   stopEndpointMetricsRetention();
   stopPriceWatchRetention();
   stopProductSyncCron();
+  // 平台订单(2026-09):关闭 cloakbrowser + 释放 profile 锁
+  await stopPlatformOrders();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);
