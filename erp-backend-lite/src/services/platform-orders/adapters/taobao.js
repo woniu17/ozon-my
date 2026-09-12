@@ -105,7 +105,7 @@ async function callTaobaoMtop(page, data, customTag, searchMode = false) {
       lastErr = new ApiError(ErrorCode.AUTH_REQUIRED, `淘宝 mtop token 失效(${ret}),请运行 qxqx 的 persistent 登录淘宝并刷新一次订单页后重试`);
       continue;
     }
-    if (/^FAIL_SYS_USER_VALIDATE/.test(ret)) {
+    if (/^FAIL_SYS_USER_VALIDATE|^RGV587_ERROR/.test(ret)) {
       throw new ApiError('RISK_VALIDATE', '淘宝风控拦截,请运行 qxqx 的 persistent 打开淘宝订单页人工过验证后重试', { status: 409 });
     }
     if (!/^SUCCESS/.test(ret)) {

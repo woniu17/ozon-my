@@ -91,7 +91,9 @@ async function call1688Mtop(page, param, searchMode = false) {
       lastErr = new ApiError(ErrorCode.AUTH_REQUIRED, `1688 mtop token 失效(${ret}),请运行 qxqx 的 persistent 登录 1688 并刷新一次订单页后重试`);
       continue;
     }
-    if (/^FAIL_SYS_USER_VALIDATE/.test(ret)) {
+    // RGV587_ERROR 是 baxia 的另一个 punish 码(参考 get-shop-product mtopClient isPunished),
+    // 缺它时会落到兜底 BROWSER_ERROR,前端看不到"去过滑块"指引
+    if (/^FAIL_SYS_USER_VALIDATE|^RGV587_ERROR/.test(ret)) {
       throw new ApiError('RISK_VALIDATE', '1688风控拦截(baxia),请运行 qxqx 的 persistent 打开 1688 订单页人工过验证后重试', { status: 409 });
     }
     if (!/^SUCCESS/.test(ret)) {

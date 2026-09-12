@@ -156,7 +156,7 @@ const importAccounts = ref([]);           // 来自 /status 的账号 tab 配置
 | persistent.js 与服务抢同一 profile | 低 | 锁文件按 profile 独立，PROFILE_LOCKED 精确到账号 |
 | 某账号登录失效阻塞补全 | 中 | 跨账号搜索不中断（记错误继续）；全部失效才报 AUTH_REQUIRED 并列出各账号状态 |
 | 前端 importTab 重构引入回归 | 中 | 保持 {ok,...} 响应形状与入库字段不变；浏览器端到端回归三平台 tab/勾选/导入 |
-| 1688 baxia 风控（**验证期实际发生**） | 中 | 挂起式拦截原会烧满 60s 任务超时并整浏览器回收；已加页面内 fetch 25s AbortController 超时（page-fetch.js/pdd.js fetchInPage），快速失败为 BROWSER_ERROR 带人工过验证指引；FAIL_SYS_USER_VALIDATE 快速路径返回 RISK_VALIDATE(409)。解除方式：persistent.js 有头打开 1688 订单页人工过滑块（风控标记按 IP/账号持久，跨浏览器重启保留，人工过验证即清） |
+| 1688 baxia 风控（**验证期实际发生**） | 中 | 三层防御（2026-09-13 对照 get-shop-product/mtopClient.js 加固）：① 快速失败——页面内 fetch 25s AbortController 超时（page-fetch.js/pdd.js），挂起式拦截不再烧 60s 任务超时；② 账号级最小请求间隔 3s（browser-manager.js，队列内串行等待，实测背靠背 2.84s）——连续快速 mtop 请求是 baxia 行为风控典型信号；③ 风控熔断——RISK_VALIDATE 后账号×平台冷却 5 分钟（1688 被拦不连累同账号拼多多），期间快速失败防加深惩罚，重启后端清零、成功请求自动解除；punish 码检测补齐 RGV587_ERROR（原来只查 FAIL_SYS_USER_VALIDATE）。解除方式：persistent.js 有头打开订单页人工过滑块 |
 | 任务超时错误语义 | 低 | withPage 超时改抛 ApiError TIMEOUT(408)（原为 500 INTERNAL_ERROR），前端可按 code 区分"偶发慢"与"系统性挂起" |
 
 ## 7. 任务分解
@@ -184,3 +184,9 @@ const importAccounts = ref([]);           // 来自 /status 的账号 tab 配置
   linqx 需在其窗口手动访问 1688 订单页过验证；过完关窗，ERP 前端硬刷新后即可加载订单
 - 前端加载超时的原排查结论"冷启动慢需延 120s 超时"**已证伪**：冷启动仅 2-3s，
   根因是 baxia；PLATFORM_ORDER_TIMEOUT_MS=60s 维持不变
+- ✅ 风控解除后全链路恢复：用户过完滑块后，chenlin 1688 订单 5.2s（冷启动）/ 0.6s（复用）
+  正常返回，多账号功能端到端打通
+- ✅ 行为层加固验证（2026-09-13 对照 get-shop-product mtopClient）：3s 节流实测生效
+  （pdd 背靠背第 2 次 2.84s）；熔断代码部署（RGV587_ERROR 补齐检测）；成功请求自动解除冷却
+- 备注：mtop 协议层（签名/token 轮换）与参考实现逐项等价，无需改动；ERP 参数放 POST body
+  （插件时代同款）而非原生 URL-query 形态，网关可接受，暂不调整

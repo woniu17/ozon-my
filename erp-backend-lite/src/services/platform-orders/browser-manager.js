@@ -26,6 +26,11 @@ import logger from '../../middleware/log.js';
 import { ApiError, ErrorCode } from '../../utils/error-codes.js';
 import { SerialQueue, withTimeout } from './queue.js';
 
+// ── 行为层防风控(2026-09-13,对齐 get-shop-product mtopClient 节流/熔断策略)──
+// baxia 行为风控的典型信号是连续快速 mtop 请求;参考项目页间隔 5s、触发 punish 即停
+const MIN_REQUEST_INTERVAL_MS = 3 * 1000;  // 账号级最小请求间隔(队列内串行等待)
+const PUNISH_COOLDOWN_MS = 5 * 60 * 1000;  // RISK_VALIDATE 后账号×平台冷却期
+
 // ── 单账号管理器(工厂) ──────────────────────────────────
 // profileName:账号别名(如 linqx/chenlin);profileDir:对应 userDataDir
 function createBrowserManager(profileName, profileDir) {
@@ -39,6 +44,8 @@ function createBrowserManager(profileName, profileDir) {
   let launchPromise = null;       // 并发 ensure 单飞
   let closedByUs = false;         // 区分主动关闭与意外断开
   let lastActiveAt = 0;           // 最近一次任务完成时间
+  let lastRequestAt = 0;          // 最近一次任务开始时间(账号级节流基准)
+  const punishedUntil = new Map(); // platform → 冷却截止 ts(账号×平台粒度风控熔断)
 
   // ── PID 锁(防本服务双实例;死进程残留自动覆盖) ──────────
   function isPidAlive(pid) {
@@ -171,12 +178,26 @@ function createBrowserManager(profileName, profileDir) {
   /** 串行执行一个平台订单任务:排队 → 确保浏览器就绪 → fn(page) → 空闲重排 */
   async function withPage(platform, entryUrl, originPrefix, fn, opts = {}) {
     return queue.run(async () => {
+      // 风控熔断:冷却期内快速失败,不再发请求(风控期间继续打会加深惩罚);
+      // 重启后端清零;过完滑块后的首次成功请求自动解除
+      const until = punishedUntil.get(platform) || 0;
+      if (Date.now() < until) {
+        const waitMin = Math.ceil((until - Date.now()) / 60000);
+        throw new ApiError('RISK_VALIDATE', `${profileName} 的 ${platform} 处于风控冷却期(约${waitMin}分钟后自动解除)。请先用 persistent 过滑块,过完后等冷却结束或重启后端清零`, { status: 409 });
+      }
       clearTimeout(idleTimer);
       try {
+        // 账号级最小请求间隔:队列内串行等待,避免连续快速 mtop 请求(baxia 行为特征)
+        const elapsed = Date.now() - lastRequestAt;
+        if (lastRequestAt && elapsed < MIN_REQUEST_INTERVAL_MS) {
+          await new Promise((r) => setTimeout(r, MIN_REQUEST_INTERVAL_MS - elapsed));
+        }
+        lastRequestAt = Date.now();
         const c = await ensureContext();
         const page = await ensurePage(c, platform, entryUrl, originPrefix, opts.settleMs || 0);
         const result = await withTimeout(fn(page), config.platformOrderTimeoutMs, '平台订单任务');
         lastActiveAt = Date.now();
+        punishedUntil.delete(platform); // 成功即解除(风控已过)
         scheduleIdle();
         return result;
       } catch (e) {
@@ -186,6 +207,11 @@ function createBrowserManager(profileName, profileDir) {
           await closeInternal(isTimeout ? '任务超时回收' : '浏览器已断开').catch(() => {});
         } else {
           scheduleIdle(); // 浏览器健康(如 AUTH_REQUIRED),保留复用
+        }
+        // 风控熔断:登记该平台冷却期(账号×平台粒度,1688 被拦不连累同账号拼多多)
+        if (e && e.code === 'RISK_VALIDATE') {
+          punishedUntil.set(platform, Date.now() + PUNISH_COOLDOWN_MS);
+          logger.warn({ account: profileName, platform, cooldownMs: PUNISH_COOLDOWN_MS }, '[platform-orders] 触发平台风控,进入冷却期');
         }
         // 超时映射为 TIMEOUT(408) 错误码(对齐路由文档;否则是 500 INTERNAL_ERROR)
         if (isTimeout) {
