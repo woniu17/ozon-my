@@ -14,7 +14,7 @@
 // 签名在 Node 侧用 node:crypto(与页面注入 JS MD5 结果一致,免注入源码)
 
 import { ApiError, ErrorCode } from '../../../utils/error-codes.js';
-import { withPage } from '../browser-manager.js';
+import { withPage, readBuyerIdentity } from '../browser-manager.js';
 import { mtopSign, tokenFromCookies } from '../mtop-sign.js';
 import { postFormInPage } from '../page-fetch.js';
 
@@ -31,10 +31,13 @@ function toYuan(fen) {
   return (Number(fen || 0) / 100).toFixed(2);
 }
 
-/** 瘦身为 ERP 前端需要的精简结构(与插件 normalize1688Order 逐字段一致,与 PDD 结构对齐) */
+/** 瘦身为 ERP 前端需要的精简结构(与插件 normalize1688Order 逐字段一致,与 PDD 结构对齐)
+ *  buyerUserId/buyerUsername 取自订单响应 buyerInfo(2026-09-13 实测每单自带;
+ *  落库到 op_purchase_order.buyer_user_id / buyer_account) */
 function normalize1688Order(o) {
   const entries = Array.isArray(o.orderEntries) ? o.orderEntries : [];
   const tracks = entries.map((e) => e.entryExtension && e.entryExtension.trackingNo).filter(Boolean);
+  const bi = o.buyerInfo || {};
   return {
     orderSn: o.idStr || o.id || '',
     status: o.status || '',
@@ -43,6 +46,8 @@ function normalize1688Order(o) {
     trackingNumber: tracks[0] || '',
     orderTime: o.gmtCreate || '',
     sellerName: (o.sellerInfo && (o.sellerInfo.loginId || o.sellerInfo.companyName)) || '',
+    buyerUserId: bi.userId || '',
+    buyerUsername: bi.loginId || bi.nick || '',
     goods: entries.map((e) => ({
       goodsName: e.productName || '',
       spec: ((e.specInfo && e.specInfo.specItems) || []).map((i) => `${i.specName}:${i.specValue}`).join(' '),
@@ -113,14 +118,26 @@ async function call1688Mtop(page, param, searchMode = false) {
   throw lastErr;
 }
 
-/** 订单列表;返回 { orders }(精简结构,字段与插件一致;订单行带 account 标注) */
+/** 订单列表;返回 { orders }(精简结构,字段与插件一致;订单行带 account 标注)
+ *  buyer 身份:buyerInfo 优先,cookie(unb/_nk_)兜底(实测两者一致) */
 async function listAli1688Orders({ tab = 'all', size = 30, account } = {}) {
   return withPage(account, 'ali1688', ALI_ENTRY, ALI_ORIGIN, async (page) => {
     const param = { page: 1, pageSize: Math.min(Number(size) || 30, 50) };
     const st = ALI_TRADE_STATUS[tab];
     if (st) param.tradeStatus = st;
     const orders = await call1688Mtop(page, param);
-    return { orders: orders.map((o) => ({ ...normalize1688Order(o), account })) };
+    const id = await readBuyerIdentity(page, 'https://air.1688.com/');
+    return {
+      orders: orders.map((o) => {
+        const n = normalize1688Order(o);
+        return {
+          ...n,
+          buyerUserId: n.buyerUserId || id.userId,
+          buyerUsername: n.buyerUsername || id.username,
+          account,
+        };
+      }),
+    };
   }, { settleMs: ALI_SETTLE_MS });
 }
 

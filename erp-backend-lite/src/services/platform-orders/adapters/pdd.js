@@ -11,7 +11,7 @@
 // 再 page.evaluate 单参数对象执行 fetch(与插件 SW 裸 fetch 相比是能力超集)
 
 import { ApiError, ErrorCode } from '../../../utils/error-codes.js';
-import { withPage } from '../browser-manager.js';
+import { withPage, readBuyerIdentity } from '../browser-manager.js';
 
 const PDD_API = 'https://mobile.yangkeduo.com/proxy/api/api/aristotle/order_list_v4';
 const PDD_SEARCH_API = 'https://mobile.yangkeduo.com/proxy/api/api/aristotle/order_list_search_v4';
@@ -121,7 +121,8 @@ function mapResponse(r, prefix) {
   return r.json;
 }
 
-/** 订单列表;返回 { orders }(精简结构,字段与插件一致;订单行带 account 标注) */
+/** 订单列表;返回 { orders }(精简结构,字段与插件一致;订单行带 account 标注)
+ *  buyer 身份:响应无买家字段、无用户名 cookie,仅 pdd_user_id(userId;用户名留空) */
 async function listPddOrders({ tab = 'all', size = 30, account } = {}) {
   return withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
     const pdduid = await getPdduid(page);
@@ -142,7 +143,15 @@ async function listPddOrders({ tab = 'all', size = 30, account } = {}) {
     if (!Array.isArray(data.orders)) {
       throw new ApiError('BROWSER_ERROR', 'PDD_BAD_RESPONSE: 接口返回异常(可能触发风控)', { status: 502 });
     }
-    return { orders: normalizeOrders(data).map((o) => ({ ...o, account })) };
+    const id = await readBuyerIdentity(page, 'https://mobile.yangkeduo.com/');
+    return {
+      orders: normalizeOrders(data).map((o) => ({
+        ...o,
+        buyerUserId: id.userId,
+        buyerUsername: id.username,
+        account,
+      })),
+    };
   });
 }
 

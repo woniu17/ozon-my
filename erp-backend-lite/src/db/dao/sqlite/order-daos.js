@@ -653,7 +653,7 @@ function getPurchasesByPackageIds(packageIds) {
   const links = db
     .prepare(
       `SELECT pl.*, po.purchase_sn, po.platform, po.status AS po_status, po.payment_amount,
-              po.seller_name, po.buyer_account, po.logistics_company AS po_logistics_company,
+              po.seller_name, po.buyer_account, po.buyer_user_id, po.logistics_company AS po_logistics_company,
               po.logistics_no AS po_logistics_no, po.link_status, po.items_json AS po_items_json
        FROM op_purchase_link pl
        JOIN op_purchase_order po ON po.id = pl.purchase_order_id
@@ -681,6 +681,7 @@ function getPurchasesByPackageIds(packageIds) {
         paymentAmount: l.payment_amount,
         sellerName: l.seller_name,
         buyerAccount: l.buyer_account,
+        buyerUserId: l.buyer_user_id,
         poLogisticsCompany: l.po_logistics_company,
         poLogisticsNo: l.po_logistics_no,
         linkStatus: l.link_status,
@@ -905,6 +906,7 @@ function submitPurchase({
   platform = 'other',
   purchaseSn = null,
   buyerAccount = null,
+  buyerUserId = null,
   sellerName = null,
   paymentAmount = 0,
   logisticsCompany = null,
@@ -932,11 +934,12 @@ function submitPurchase({
     // 边界:platform='other' + purchaseSn=null 时 SQLite NULL 不参与 UNIQUE,每次新建(符合手工单预期)
     const poRes = db
       .prepare(
-        `INSERT INTO op_purchase_order (purchase_sn, platform, purchase_channel, buyer_account, seller_name,
+        `INSERT INTO op_purchase_order (purchase_sn, platform, purchase_channel, buyer_account, buyer_user_id, seller_name,
             payment_amount, goods_amount, status, pay_at, send_at, logistics_company, logistics_no, note, gmt_create, gmt_modified)
-           VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(platform, purchase_sn) DO UPDATE SET
             buyer_account = COALESCE(excluded.buyer_account, op_purchase_order.buyer_account),
+            buyer_user_id = COALESCE(excluded.buyer_user_id, op_purchase_order.buyer_user_id),
             seller_name = COALESCE(excluded.seller_name, op_purchase_order.seller_name),
             payment_amount = CASE WHEN excluded.payment_amount > 0 THEN excluded.payment_amount ELSE op_purchase_order.payment_amount END,
             goods_amount = CASE WHEN excluded.goods_amount > 0 THEN excluded.goods_amount ELSE op_purchase_order.goods_amount END,
@@ -952,6 +955,7 @@ function submitPurchase({
         purchaseSn || null,
         platform,
         buyerAccount,
+        buyerUserId,
         sellerName,
         Math.round((Number(paymentAmount) || 0) * 100) / 100,
         Math.round((Number(paymentAmount) || 0) * 100) / 100,

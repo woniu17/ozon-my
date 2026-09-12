@@ -128,6 +128,7 @@ const purchaseForm = reactive({
   platform: 'other',
   purchaseSn: '',
   buyerAccount: '',
+  buyerUserId: '',   // 平台用户ID(导入平台订单自动附带;非表单项,随提交透传)
   sellerName: '',
   paymentAmount: '',
   logisticsCompany: '',
@@ -693,6 +694,7 @@ function openPurchase(pkg) {
   purchaseForm.platform = 'other';
   purchaseForm.purchaseSn = '';
   purchaseForm.buyerAccount = '';
+  purchaseForm.buyerUserId = '';
   purchaseForm.sellerName = '';
   purchaseForm.paymentAmount = '';
   purchaseForm.logisticsCompany = '';
@@ -872,6 +874,7 @@ async function savePurchase() {
       platform: purchaseForm.platform,
       purchaseSn: purchaseForm.purchaseSn.trim() || null,
       buyerAccount: purchaseForm.buyerAccount.trim() || null,
+      buyerUserId: purchaseForm.buyerUserId.trim() || null,
       sellerName: purchaseForm.sellerName.trim() || null,
       paymentAmount: Number(purchaseForm.paymentAmount) || null,
       logisticsCompany: purchaseForm.logisticsCompany.trim() || null,
@@ -1174,6 +1177,11 @@ watch(newSelectedOrders, (sel) => {
   purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
   const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
   purchaseForm.sellerName = sellers.join(',');
+  // 买家身份:用户名自动回填到采购账号(手填可覆盖);平台用户ID随提交落库
+  const buyerNames = [...new Set(sel.map((o) => o.buyerUsername).filter(Boolean))];
+  purchaseForm.buyerAccount = buyerNames.join(',');
+  const buyerIds = [...new Set(sel.map((o) => o.buyerUserId).filter(Boolean))];
+  purchaseForm.buyerUserId = buyerIds.join(',');
   purchaseForm.paymentAmount = newSelectedTotal.value;
   const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
   purchaseForm.logisticsNo = tracks.join(',');
@@ -1983,7 +1991,7 @@ onUnmounted(() => {
                   <span class="muted">{{ platformLabel(l.platform) }}</span>
                 </div>
                 <div class="purchase-meta sub muted">
-                  {{ poStatus(l.poStatus) }} · 采购金额 {{ fmtMoney(l.allocatedAmount) }}<template v-if="l.sellerName"> · {{ l.sellerName }}</template>
+                  {{ poStatus(l.poStatus) }} · 采购金额 {{ fmtMoney(l.allocatedAmount) }}<template v-if="l.sellerName"> · {{ l.sellerName }}</template><template v-if="l.buyerAccount"> · 买:{{ l.buyerAccount }}</template>
                 </div>
                 <div v-for="(pi, j) in l.items" :key="j" class="purchase-goods">
                   <img v-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
@@ -2474,7 +2482,12 @@ onUnmounted(() => {
                   </div>
                 </div>
               </td>
-              <td>{{ l.sellerName || '—' }}</td>
+              <td>
+                <div>{{ l.sellerName || '—' }}</div>
+                <div v-if="l.buyerAccount || l.buyerUserId" class="muted" style="font-size: 11px;">
+                  买:{{ l.buyerAccount || '—' }}<template v-if="l.buyerUserId">(#{{ l.buyerUserId }})</template>
+                </div>
+              </td>
               <td>{{ l.poLogisticsCompany }} {{ l.poLogisticsNo || '' }}</td>
               <td>
                 <button class="btn btn-danger btn-sm" @click="onUnlink(detail.package, l)">取消关联</button>

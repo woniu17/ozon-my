@@ -31,6 +31,25 @@ import { SerialQueue, withTimeout } from './queue.js';
 const MIN_REQUEST_INTERVAL_MS = 3 * 1000;  // 账号级最小请求间隔(队列内串行等待)
 const PUNISH_COOLDOWN_MS = 5 * 60 * 1000;  // RISK_VALIDATE 后账号×平台冷却期
 
+// ── 买家账号身份(2026-09-13,采购单自动记平台用户ID/用户名)────────────
+// 来源(实测):
+//  - 1688/淘宝(阿里系):unb=数字用户ID(两平台同一ID);lid/__cn_logon_id__=用户名;
+//    tracknick/_nk_ 可能是 "\uXXXX" 转义字面量,需解码
+//  - 拼多多:pdd_user_id=用户ID;用户名无 cookie 来源(留空,订单响应亦无买家字段)
+// 1688 订单响应逐单自带 buyerInfo(更权威),cookie 值作兜底;淘宝/PDD 以 cookie 为主源
+async function readBuyerIdentity(page, domain) {
+  const cs = await page.context().cookies(domain);
+  const get = (n) => (cs.find((c) => c.name === n) || {}).value || '';
+  // lid 是 percent-encoded UTF-8(实测淘宝 %E6%B8%85%E7%A5%A517);tracknick/_nk_ 是 "\uXXXX" 转义字面量
+  const decPct = (s) => { try { return decodeURIComponent(s); } catch { return String(s); } };
+  const decUni = (s) =>
+    String(s || '').replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+  return {
+    userId: get('unb') || get('pdd_user_id') || '',
+    username: decPct(get('lid')) || get('__cn_logon_id__') || decUni(decPct(get('tracknick'))) || decUni(decPct(get('_nk_'))) || '',
+  };
+}
+
 // ── 单账号管理器(工厂) ──────────────────────────────────
 // profileName:账号别名(如 linqx/chenlin);profileDir:对应 userDataDir
 function createBrowserManager(profileName, profileDir) {
@@ -296,4 +315,4 @@ async function stopPlatformOrders() {
   await Promise.all([...managers.values()].map((m) => m.stop())).catch(() => {});
 }
 
-export { withPage, status, getCookieState, stopPlatformOrders };
+export { withPage, status, getCookieState, stopPlatformOrders, readBuyerIdentity };

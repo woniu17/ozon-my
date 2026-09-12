@@ -297,6 +297,14 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE collect_queue_tasks ADD COLUMN duration INTEGER`);
     console.log('[db] migration: added column collect_queue_tasks.duration');
   }
+  // 2026-09-13: op_purchase_order.buyer_user_id 平台用户ID(导入平台订单自动附带)
+  {
+    const poCols2 = db.prepare(`PRAGMA table_info(op_purchase_order)`).all();
+    if (poCols2.length > 0 && !poCols2.some((c) => c.name === 'buyer_user_id')) {
+      db.exec(`ALTER TABLE op_purchase_order ADD COLUMN buyer_user_id TEXT`);
+      console.log('[db] migration: added column op_purchase_order.buyer_user_id');
+    }
+  }
   // collect_queue_tasks:增加 force_refresh 列(1=强制重新采集,SW 消费时传 forceRefresh=true)
   // 旧库(CREATE TABLE IF NOT EXISTS 不会更新旧表结构)需 ALTER TABLE 补列
   if (!taskCols.some((c) => c.name === 'forceRefresh')) {

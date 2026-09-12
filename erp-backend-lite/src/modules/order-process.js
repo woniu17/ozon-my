@@ -421,6 +421,7 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
       logisticsCompany: b.logisticsCompany || null,
       logisticsNo: b.logisticsNo || null,
       buyerAccount: b.buyerAccount || null,
+      buyerUserId: b.buyerUserId || null,
       sellerName: b.sellerName || null,
       note: b.note || null,
       items,

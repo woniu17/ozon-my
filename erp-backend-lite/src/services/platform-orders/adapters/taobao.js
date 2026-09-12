@@ -13,7 +13,7 @@
 // 登录 cookie 照常携带);插件 SW 裸 fetch 无 referer/origin 亦可行,说明网关不强校验 referer
 
 import { ApiError, ErrorCode } from '../../../utils/error-codes.js';
-import { withPage } from '../browser-manager.js';
+import { withPage, readBuyerIdentity } from '../browser-manager.js';
 import { mtopSign, tokenFromCookies } from '../mtop-sign.js';
 import { postFormInPage } from '../page-fetch.js';
 
@@ -116,7 +116,9 @@ async function callTaobaoMtop(page, data, customTag, searchMode = false) {
   throw lastErr;
 }
 
-/** 订单列表;返回 { orders }(精简结构,字段与插件一致;订单行带 account 标注) */
+/** 订单列表;返回 { orders }(卡片组件聚合还原;订单行带 account 标注)
+ *  淘宝响应无买家字段(卡片全为渲染结构),buyer 身份取 cookies unb/tracknick
+ *  (与 1688 同一阿里系数字ID;实测 unb=658750087 与 1688 一致) */
 async function listTaobaoOrders({ tab = 'all', account } = {}) {
   return withPage(account, 'taobao', TB_ENTRY, TB_ORIGIN, async (page) => {
     const tabCode = TB_TAB_CODE[tab] || 'all';
@@ -133,7 +135,15 @@ async function listTaobaoOrders({ tab = 'all', account } = {}) {
     if (!json.data || !json.data.data) {
       throw new ApiError('BROWSER_ERROR', 'TB_BAD_RESPONSE: 响应缺少订单数据', { status: 502 });
     }
-    return { orders: normalizeTaobaoOrders(json.data).map((o) => ({ ...o, account })) };
+    const id = await readBuyerIdentity(page, 'https://www.taobao.com/');
+    return {
+      orders: normalizeTaobaoOrders(json.data).map((o) => ({
+        ...o,
+        buyerUserId: id.userId,
+        buyerUsername: id.username,
+        account,
+      })),
+    };
   });
 }
 

@@ -974,7 +974,8 @@ CREATE TABLE IF NOT EXISTS op_purchase_order (
   purchase_sn       TEXT,                       -- 上家采购单号(1688:512766... / 拼多多:260829-...;模式B无单号为 NULL)
   platform          TEXT NOT NULL DEFAULT 'other', -- 1688 / yangkeduo / taobao / other
   purchase_channel  TEXT DEFAULT 'manual',      -- manual(模式B手填) / platform_order(模式A单号补全)
-  buyer_account     TEXT,                       -- 我的采购账号(清祥17/PCC01)
+  buyer_account     TEXT,                       -- 我的采购账号(平台用户名:清祥17/atenlin3;导入平台订单时自动回填,可手改)
+  buyer_user_id     TEXT,                       -- 平台用户ID(1688/淘宝:unb 同一阿里系ID;拼多多:pdd_user_id;导入订单时自动附带)
   seller_name       TEXT,                       -- 上家
   currency          TEXT DEFAULT 'CNY',
   payment_amount    REAL DEFAULT 0,             -- 实付(商品+运费)
