@@ -485,7 +485,11 @@ async function onEnrichPurchaseItems() {
       // 按平台路由到后端搜索(后端跨该平台全部账号依次搜)
       // platformKey 为入库平台值 'yangkeduo'|'1688'|'taobao',转为请求平台键
       const platformKey = p._platform;
-      const reqPlatform = platformKey === '1688' ? 'ali1688' : platformKey;
+      // 数据库 platform 值(yangkeduo/1688/taobao)→ API platform key(pdd/ali1688/taobao)
+      // 修复(2026-09-13):原仅转 1688→ali1688 漏 yangkeduo→pdd,导致 PDD 搜索全 404
+      const reqPlatform = platformKey === 'yangkeduo' ? 'pdd'
+                        : platformKey === '1688' ? 'ali1688'
+                        : platformKey;
       let ok = false;
       try {
         const resp = await platformSearchReq(reqPlatform, p.purchaseSn);
