@@ -5,6 +5,7 @@ import config from '../config/index.js';
 import logger from '../middleware/log.js';
 import { getStoreBySellerId, listStores } from './store-loader.js';
 import { getDb } from '../db/index.js';
+import { PUSH_ABSORBING } from './status-map.js';
 
 /**
  * 从 posting / payload 中提取销售金额(OPI 返回的金额本身就是 CNY)
@@ -55,22 +56,28 @@ function getTodayUtcRange() {
 /**
  * 从 DB 查询当日各店铺销售汇总(订单数 + 销售金额 CNY)
  * 用于飞书通知,避免每次都调 OPI 聚合
- * @returns {{bySeller: Map<number, {storeName, sellerId, orderCount, saleCny}>, total: {orderCount, saleCny}, ready: boolean}}
+ * @returns {{bySeller: Map<number, {storeName, sellerId, orderCount, saleCny}>, total: {orderCount, saleCny, validOrderCount, validSaleCny}, ready: boolean}}
  *   ready: DB 里是否已有 sale_amount_cny>0 的当日记录(兜底 poller 是否已回填)
  *   false 表示金额尚未回填,调用方应提示"汇总信息还未拉取"
+ *   valid* :剔除取消类吸收态(PUSH_ABSORBING)后的单量/金额
  */
 export function buildTodaySummaryFromDb() {
   const { start, end } = getTodayUtcRange();
   const db = getDb();
-  // 按 seller_id 聚合当日订单数和金额
+  // 按 seller_id 聚合当日订单数和金额;valid_* 剔除取消类吸收态
+  const cancelPh = Array.from(PUSH_ABSORBING, () => '?').join(',');
   const rows = db.prepare(`
-    SELECT seller_id, COUNT(*) AS order_count, COALESCE(SUM(sale_amount_cny), 0) AS sale_cny
+    SELECT seller_id,
+      COUNT(*) AS order_count,
+      COALESCE(SUM(sale_amount_cny), 0) AS sale_cny,
+      SUM(CASE WHEN status IN (${cancelPh}) THEN 0 ELSE 1 END) AS valid_count,
+      COALESCE(SUM(CASE WHEN status IN (${cancelPh}) THEN 0 ELSE sale_amount_cny END), 0) AS valid_cny
     FROM ozon_postings
     WHERE in_process_at IS NOT NULL
       AND in_process_at >= ? AND in_process_at < ?
     GROUP BY seller_id
     ORDER BY seller_id
-  `).all(start, end);
+  `).all(...PUSH_ABSORBING, ...PUSH_ABSORBING, start, end);
 
   // 检查是否有任何 sale_amount_cny>0 的记录(兜底 poller 是否已回填)
   const ready = rows.some(r => Number(r.sale_cny) > 0);
@@ -81,6 +88,8 @@ export function buildTodaySummaryFromDb() {
   const bySeller = new Map();
   let totalOrder = 0;
   let totalSale = 0;
+  let totalValidOrder = 0;
+  let totalValidSale = 0;
 
   // 确保所有店铺都出现(即使 0 单,保持汇总对齐)
   for (const s of stores) {
@@ -99,11 +108,18 @@ export function buildTodaySummaryFromDb() {
     });
     totalOrder += r.order_count;
     totalSale += Number(r.sale_cny) || 0;
+    totalValidOrder += Number(r.valid_count) || 0;
+    totalValidSale += Number(r.valid_cny) || 0;
   }
 
   return {
     bySeller,
-    total: { orderCount: totalOrder, saleCny: totalSale },
+    total: {
+      orderCount: totalOrder,
+      saleCny: totalSale,
+      validOrderCount: totalValidOrder,   // 剔除取消后的单量
+      validSaleCny: totalValidSale,       // 剔除取消后的销售金额
+    },
     ready,
   };
 }
@@ -111,8 +127,10 @@ export function buildTodaySummaryFromDb() {
 /**
  * 构造"当日各店铺销售汇总"文本块
  * 订单数前导空格对齐到 2 位,金额整数部分前导空格对齐到 4 位(小数固定 2 位)
+ * 合计行带客单价(销售金额/订单数);末行"剔除取消"统计取消类吸收态之外的
+ * 单量/销售金额/客单价(取消单在通知送达时可能尚未发生,两行差异随时点变化)
  * @param {Map<number, {storeName, sellerId, orderCount, saleCny}>} bySeller
- * @param {{orderCount, saleCny}} total
+ * @param {{orderCount, saleCny, validOrderCount, validSaleCny}} total
  * @returns {string}
  */
 export function buildTodaySummaryLines(bySeller, total) {
@@ -122,13 +140,16 @@ export function buildTodaySummaryLines(bySeller, total) {
     const [intPart, decPart] = fixed.split('.');
     return `${intPart.padStart(4, ' ')}.${decPart}`;
   };
+  // 客单价:单量 0 时无意义,显示 —
+  const fmtAov = (count, cny) => (count > 0 ? padAmount(cny / count) : '—');
   const lines = [];
   lines.push('—— 当日各店铺销售汇总(Asia/Shanghai)——');
   const sorted = Array.from(bySeller.values()).sort((a, b) => a.sellerId - b.sellerId);
   for (const it of sorted) {
     lines.push(`• ${it.storeName}: 订单 ${padOrder(it.orderCount)} 单 / 销售金额 ${padAmount(it.saleCny)} CNY`);
   }
-  lines.push(`合计:订单 ${padOrder(total.orderCount)} 单 / 销售金额 ${padAmount(total.saleCny)} CNY`);
+  lines.push(`合计:订单 ${padOrder(total.orderCount)} 单 / 销售金额 ${padAmount(total.saleCny)} CNY / 客单价 ${fmtAov(total.orderCount, total.saleCny)} CNY`);
+  lines.push(`剔除取消:订单 ${padOrder(total.validOrderCount)} 单 / 销售金额 ${padAmount(total.validSaleCny)} CNY / 客单价 ${fmtAov(total.validOrderCount, total.validSaleCny)} CNY`);
   return lines.join('\n');
 }
 
