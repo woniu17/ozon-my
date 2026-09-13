@@ -11,6 +11,8 @@
 //   POST /admin/api/order-process/unlink          取消采购关联(冲回金额)
 //   POST /admin/api/order-process/ignore          搁置/恢复包裹
 //   POST /admin/api/order-process/print-label     标记已打印面单(流转交运)
+//   POST /admin/api/order-process/scan-ship/submit   扫描发货:提交重量(权威状态校验,仅 wait_ship 落库)
+//   GET  /admin/api/order-process/scan-ship/records  扫描发货:发货记录(今日/昨日,北京时间日界)
 //   POST /admin/api/order-process/sync-run        手动触发 Ozon 订单增量同步(双接口)
 //   POST /admin/api/order-process/sync-all-list  手动触发 /v4/posting/fbs/list 全量同步
 //   GET  /admin/api/order-process/sync-status    各店铺最近同步状态
@@ -480,6 +482,101 @@ router.post('/admin/api/order-process/print-label', (req, res, next) => {
     if (!packageId) return res.status(400).json({ ok: false, message: 'packageId 必填' });
     orderPackageDao.markWaybillPrinted(packageId);
     res.json(ok({ packageId }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 扫描发货(2026-09,设计文档: docs/扫描发货-功能设计.md)──
+//   POST /admin/api/order-process/scan-ship/submit    提交发货重量(权威状态校验,仅 wait_ship 落库)
+//   GET  /admin/api/order-process/scan-ship/records   发货记录(今日/昨日,北京时间日界)
+
+// 非待打单发货状态的拦截提示(前端横幅直接展示)
+const SHIP_BLOCK_MESSAGES = {
+  wait_process: '订单状态问题:待处理(未采购),请先提交采购信息',
+  ship_success: '订单状态问题:已交运',
+  wait_receiver_confirm: '订单状态问题:已发货(已交运)',
+  cancelled: '订单状态问题:订单已取消',
+};
+
+// 北京时间日界 → UTC 区间:北京 00:00 = UTC 前一日 16:00
+// 返回 { startAt, endAt } UTC ISO 字符串,区间 [startAt, endAt)
+function beijingDayRangeUtc(day) {
+  const bjNow = new Date(Date.now() + 8 * 3600_000);
+  let start = Date.UTC(bjNow.getUTCFullYear(), bjNow.getUTCMonth(), bjNow.getUTCDate()) - 8 * 3600_000;
+  if (day === 'yesterday') start -= 86400_000;
+  return { startAt: new Date(start).toISOString(), endAt: new Date(start + 86400_000).toISOString() };
+}
+
+// 提交发货重量:按 DB 当前状态权威判定 canShip
+// body: { packageId, weightG }  weightG: 正整数克 1~50000
+// canShip=true  → 重量已落库,前端继续拉面单打印并 markPrinted 交运
+// canShip=false → 不写重量不流转,message 返回拦截原因
+router.post('/admin/api/order-process/scan-ship/submit', (req, res, next) => {
+  try {
+    const packageId = Number(req.body?.packageId);
+    const weightG = Number(req.body?.weightG);
+    if (!Number.isInteger(packageId) || packageId <= 0) {
+      return res.status(400).json({ ok: false, message: 'packageId 必填' });
+    }
+    if (!Number.isInteger(weightG) || weightG < 1 || weightG > 50000) {
+      return res.status(400).json({ ok: false, message: 'weightG 必须为 1~50000 的整数(克)' });
+    }
+    const r = orderPackageDao.scanShipSubmit(packageId, weightG);
+    if (!r.found) return res.status(404).json({ ok: false, message: '包裹不存在' });
+    const message = r.canShip
+      ? ''
+      : r.isIgnored
+        ? '订单状态问题:已搁置'
+        : SHIP_BLOCK_MESSAGES[r.operateStatus] || `订单状态问题:${r.operateStatus}`;
+    res.json(
+      ok({
+        canShip: r.canShip,
+        operateStatus: r.operateStatus,
+        isIgnored: r.isIgnored,
+        waybillPrintedAt: r.waybillPrintedAt,
+        message,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 发货记录:今日/昨日已交运包裹(按 waybill_printed_at 北京时间日界切分,倒序分页)
+// query: day=today|yesterday(默认 today), page(默认1), pageSize(默认20,≤100)
+// 响应含:items(产品行)/purchaseLinks/weightG+weightSource(富化同 /list)
+router.get('/admin/api/order-process/scan-ship/records', (req, res, next) => {
+  try {
+    const q = req.query || {};
+    const day = q.day === 'yesterday' ? 'yesterday' : 'today';
+    const { startAt, endAt } = beijingDayRangeUtc(day);
+    const data = orderPackageDao.listShippedPackages({
+      startAt,
+      endAt,
+      page: q.page,
+      pageSize: q.pageSize,
+    });
+    // 富化产品行 + 重量(与 /list 相同的聚合口径)
+    const orderIds = data.packages.map((p) => p.ozonOrderId);
+    const items = orderIds.length ? orderPackageDao.getItemsByOrderIds(orderIds) : [];
+    const itemsByOrder = new Map();
+    for (const it of items) {
+      if (!itemsByOrder.has(it.ozonOrderId)) itemsByOrder.set(it.ozonOrderId, []);
+      itemsByOrder.get(it.ozonOrderId).push(it);
+    }
+    const weightMap = orderPackageDao.getWeightsByPackageIds(data.packages.map((p) => p.id));
+    for (const pkg of data.packages) {
+      pkg.items = itemsByOrder.get(pkg.ozonOrderId) || [];
+      const w = weightMap.get(pkg.id);
+      if (w) {
+        pkg.weightG = w.weightG;
+        pkg.weightSource = w.source;
+      }
+    }
+    data.day = day;
+    data.range = { startAt, endAt };
+    res.json(ok(data));
   } catch (e) {
     next(e);
   }

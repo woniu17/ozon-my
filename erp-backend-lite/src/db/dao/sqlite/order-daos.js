@@ -702,23 +702,26 @@ function getPurchasesByPackageIds(packageIds) {
  */
 /** 批量查包裹重量(g,用于国际配送费公式 3.37 + 0.0281 × weight_g)
  *  优先级(从高到低):
- *    1) 订单称重(miaoshou_package.weighing_weight,by posting_number)
- *    2) 系统自定义重量(product_data_cache.custom_weight_g,按 quantity 加权)
- *    3) Ozon 后台同步重量(product_attributes_cache.attributes_data.weight,按 quantity 加权)
- *  返回 Map<packageId, { weightG, source: 'miaoshou'|'system'|'ozon' }>
+ *    1) 发货重量(op_package.weight,扫描发货录入/妙手同步写入,同一概念同一字段)
+ *    2) 妙手称重(miaoshou_package.weighing_weight,by posting_number,ms-to-local 未同步过的兜底)
+ *    3) 系统自定义重量(product_data_cache.custom_weight_g,按 quantity 加权)
+ *    4) Ozon 后台同步重量(product_attributes_cache.attributes_data.weight,按 quantity 加权)
+ *  返回 Map<packageId, { weightG, source: 'ship'|'miaoshou'|'system'|'ozon' }>
  *  无重量数据的包裹不入 Map(让 computeProfit 走兜底分支)
  */
 function getWeightsByPackageIds(packageIds) {
   if (!packageIds || !packageIds.length) return new Map();
   const ph = packageIds.map(() => '?').join(',');
   // 重量来源(优先级从高到低):
-  //   1. 订单称重(miaoshou_package.weighing_weight) → source='miaoshou'
-  //   2. 系统自定义重量(product_data_cache.custom_weight_g) → source='system'
-  //   3. Ozon 后台同步重量(product_attributes_cache.attributes_data.weight,按 quantity 加权) → source='ozon'
+  //   1. 发货重量(op_package.weight,扫描发货/妙手同步共用) → source='ship'
+  //   2. 妙手称重(miaoshou_package.weighing_weight) → source='miaoshou'
+  //   3. 系统自定义重量(product_data_cache.custom_weight_g) → source='system'
+  //   4. Ozon 后台同步重量(product_attributes_cache.attributes_data.weight,按 quantity 加权) → source='ozon'
   // 注:原实现误用 ozon_cache_index.weight_g(采集表,商品列表不写此字段),实际重量在 product_attributes_cache
   const rows = db
     .prepare(
       `SELECT p.id AS packageId,
+              p.weight AS pkgWeight,
               mp.weighing_weight AS msWeight,
               (SELECT SUM(oi.quantity * CAST(pdc.custom_weight_g AS REAL))
                FROM op_ozon_order_item oi
@@ -737,10 +740,13 @@ function getWeightsByPackageIds(packageIds) {
     .all(...packageIds);
   const out = new Map();
   for (const r of rows) {
+    const ship = r.pkgWeight != null ? Number(r.pkgWeight) : null;
     const ms = r.msWeight != null ? Number(r.msWeight) : null;
     const sys = r.systemWeight != null ? Number(r.systemWeight) : null;
     const oz = r.ozonWeight != null ? Number(r.ozonWeight) : null;
-    if (ms != null && ms > 0) {
+    if (ship != null && ship > 0) {
+      out.set(r.packageId, { weightG: ship, source: 'ship' });
+    } else if (ms != null && ms > 0) {
       out.set(r.packageId, { weightG: ms, source: 'miaoshou' });
     } else if (sys != null && sys > 0) {
       out.set(r.packageId, { weightG: sys, source: 'system' });
@@ -1166,6 +1172,74 @@ function getPackagePostings(packageIds) {
     .all(...packageIds);
 }
 
+/** 扫描发货提交:按 DB 当前状态权威校验,仅 wait_ship 且未搁置时写入发货重量
+ *  op_package.weight 即发货重量唯一载体(扫描录入/妙手同步共用,2026-09-13 确认)
+ *  @returns {{ found: false } | { found: true, canShip, operateStatus, isIgnored, waybillPrintedAt }}
+ */
+function scanShipSubmit(packageId, weightG) {
+  const row = db
+    .prepare(`SELECT operate_status, is_ignored, waybill_printed_at FROM op_package WHERE id = ?`)
+    .get(packageId);
+  if (!row) return { found: false };
+  const isIgnored = !!row.is_ignored;
+  const canShip = row.operate_status === 'wait_ship' && !isIgnored;
+  if (canShip) {
+    db.prepare(`UPDATE op_package SET weight = ?, gmt_modified = ? WHERE id = ?`).run(
+      weightG, nowIso(), packageId
+    );
+  }
+  return {
+    found: true,
+    canShip,
+    operateStatus: row.operate_status,
+    isIgnored,
+    waybillPrintedAt: row.waybill_printed_at || null,
+  };
+}
+
+/** 发货记录:按 waybill_printed_at UTC 区间查已交运包裹(扫描发货页右侧栏)
+ *  @param {Object} filters { startAt, endAt, page, pageSize }
+ *  startAt/endAt 为 UTC ISO 字符串,区间 [startAt, endAt);按交运时间倒序
+ *  采购关联已聚合进 purchaseLinks(每包裹);items/weights 由路由层富化
+ */
+function listShippedPackages({ startAt, endAt, page, pageSize } = {}) {
+  const pageNo = Math.max(1, Number(page) || 1);
+  const size = Math.min(100, Math.max(1, Number(pageSize) || 20));
+  const where = `p.waybill_printed_at IS NOT NULL AND p.waybill_printed_at >= ? AND p.waybill_printed_at < ?`;
+  const params = [startAt, endAt];
+  const total = db
+    .prepare(
+      `SELECT COUNT(*) AS n
+       FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id
+       WHERE ${where}`
+    )
+    .get(...params).n;
+  const rows = db
+    .prepare(
+      `SELECT p.*, o.posting_number, o.order_number, o.order_id AS ozon_api_order_id, o.parent_posting_number,
+              o.status AS ozon_status, o.substatus, o.in_process_at, o.shipment_date,
+              o.delivering_date, o.order_amount, o.buyer_name, o.buyer_city,
+              o.delivery_method_name, o.warehouse_name, o.store_id, o.cancellation_json
+       FROM op_package p
+       JOIN op_ozon_order o ON o.id = p.ozon_order_id
+       WHERE ${where}
+       ORDER BY p.waybill_printed_at DESC
+       LIMIT ? OFFSET ?`
+    )
+    .all(...params, size, (pageNo - 1) * size);
+  const packages = rows.map(rowToPackage);
+  if (packages.length) {
+    const links = getPurchasesByPackageIds(packages.map((p) => p.id)).links;
+    const linksByPkg = new Map();
+    for (const l of links) {
+      if (!linksByPkg.has(l.packageId)) linksByPkg.set(l.packageId, []);
+      linksByPkg.get(l.packageId).push(l);
+    }
+    for (const p of packages) p.purchaseLinks = linksByPkg.get(p.id) || [];
+  }
+  return { total, page: pageNo, pageSize: size, packages };
+}
+
 /** 按采购单号查询已关联包裹(拼单提示 + auto 分摊预览用)
  *  返回每个已关联包裹的: 分摊金额合计、数量合计、alloc_mode 列表(auto 预览重算用)
  */
@@ -1233,9 +1307,14 @@ function syncFromMiaoshou({ packageIds } = {}) {
   const msMap = new Map(msRows.map((r) => [r.posting_number, r]));
 
   // 3) 预编译语句
+  // weight 交运锁(2026-09-13):发货重量一经交运(waybill_printed_at 非空)且已有值即锁定,
+  // 妙手同步不再覆盖(本系统替代妙手 ERP,扫描发货录入的实物秤重优先);未交运或本地为空时正常覆盖
   const updPkg = db.prepare(
     `UPDATE op_package
-       SET weight = COALESCE(?, weight),
+       SET weight = CASE
+             WHEN waybill_printed_at IS NOT NULL AND weight IS NOT NULL THEN weight
+             ELSE COALESCE(?, weight)
+           END,
            note = COALESCE(?, note),
            ms_purchase_amount = COALESCE(?, ms_purchase_amount),
            ms_synced_at = ?,
@@ -1421,6 +1500,8 @@ export const orderPackageDao = {
   setIgnored,
   markWaybillPrinted,
   getPackagePostings,
+  scanShipSubmit,
+  listShippedPackages,
   lookupPurchase,
   syncFromMiaoshou,
   enrichPurchaseItems,

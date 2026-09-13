@@ -1439,6 +1439,7 @@ function deliveryTitle(pkg) {
 // 重量悬浮:实际重量(妙手称重/Ozon SKU)+ 推导重量(由实际配送费反推)
 // 重量来源标签:miaoshou=订单称重,system=系统维护,ozon=Ozon后台同步
 function weightLabel(pkg) {
+  if (pkg.weightSource === 'ship') return '重量(称)';
   if (pkg.weightSource === 'miaoshou') return '重量(订单)';
   if (pkg.weightSource === 'system') return '重量(系统)';
   if (pkg.weightSource === 'ozon') return '重量(ozon)';
@@ -1448,7 +1449,8 @@ function weightTitle(pkg) {
   const actual = pkg.weightG;
   const derived = pkg.accrual?.derivedWeight;
   const parts = [];
-  const srcLabel = pkg.weightSource === 'miaoshou' ? '订单称重'
+  const srcLabel = pkg.weightSource === 'ship' ? '发货称重'
+    : pkg.weightSource === 'miaoshou' ? '订单称重'
     : pkg.weightSource === 'system' ? '系统维护'
     : pkg.weightSource === 'ozon' ? 'Ozon后台同步' : '未知';
   if (actual != null) parts.push(`实际 ${actual}g(${srcLabel})`);

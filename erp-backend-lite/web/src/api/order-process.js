@@ -56,6 +56,25 @@ export function markPrinted(packageId) {
   return request.post('/admin/api/order-process/print-label', { packageId });
 }
 
+// ════════════════════════════════════════════════════════════════
+// 扫描发货(2026-09,设计文档: docs/扫描发货-功能设计.md)
+// 扫采购快递单号/采购单号/Ozon单号 → 录重量 → wait_ship 自动打面单交运
+// ════════════════════════════════════════════════════════════════
+
+// 提交发货重量(服务端权威状态校验,仅 wait_ship 落库)
+// body: { packageId, weightG }  weightG: 正整数克 1~50000
+// 返回 { canShip, operateStatus, isIgnored, waybillPrintedAt, message }
+// canShip=true → 前端继续 fetchPackageLabel + printLabelImage + markPrinted
+export function scanShipSubmit(packageId, weightG) {
+  return request.post('/admin/api/order-process/scan-ship/submit', { packageId, weightG });
+}
+
+// 发货记录(今日/昨日已交运包裹,北京时间日界,倒序分页)
+// params: { day: 'today'|'yesterday', page, pageSize }
+export function getScanShipRecords(params) {
+  return request.get('/admin/api/order-process/scan-ship/records', params);
+}
+
 // 获取 Ozon 面单 PDF(返回 Blob);单包裹调用,packageIds 长度为 1;refresh=true 忽略缓存
 // 后端缓存优先,未命中调 Ozon /v2/posting/fbs/package-label
 export function fetchPackageLabel(packageIds, refresh = false) {
