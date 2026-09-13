@@ -1448,6 +1448,8 @@ async function runStoreSyncDetails(store, storeId, force) {
   setProgress(storeId, { status: 'running', phase: 'details-init', synced: 0, total: 0, failedBatches: 0, startedAt, message: '初始化详情同步' });
   try {
     // 选取待同步商品:force=0 跳过 attributes_data 与 description_data 都已存在的
+    // (2026-09-13 修复:'{}' 是描述同步写入的占位符、'{"result"' 是旧版单条刷新误存的整包响应,
+    //  两者都无顶层 weight 字段,须视为缺失,否则增量属性永不回填、列表重量一直显示 —)
     let rows;
     if (force) {
       rows = db
@@ -1458,7 +1460,10 @@ async function runStoreSyncDetails(store, storeId, force) {
         .prepare(
           `SELECT p.sku AS sku, p.data AS data FROM product_data_cache p
            LEFT JOIN product_attributes_cache a ON a.sku = p.sku
-           WHERE p.store_id = ? AND (a.attributes_data IS NULL OR a.description_data IS NULL)
+           WHERE p.store_id = ? AND (
+             a.attributes_data IS NULL OR a.attributes_data = '{}' OR a.attributes_data LIKE '{"result"%'
+             OR a.description_data IS NULL
+           )
            ORDER BY p.fetched_at DESC`
         )
         .all(storeId);
@@ -1496,11 +1501,12 @@ async function runStoreSyncDetails(store, storeId, force) {
     const attrErrors = [];
 
     // 按是否已有 attributes_data 切分(增量场景下减少无效调用)
+    // '{}' 占位符与 '{"result"' 整包响应视为缺失(与上面行选择 SQL 同语义)
     const todoAttr = force
       ? rows
       : rows.filter((r) => {
-          const existing = getExistingAttr.get(r.sku);
-          return !existing?.attributes_data;
+          const attr = getExistingAttr.get(r.sku)?.attributes_data;
+          return !attr || attr === '{}' || attr.startsWith('{"result"');
         });
 
     for (let i = 0; i < todoAttr.length; i += ATTR_BATCH) {
@@ -1816,9 +1822,13 @@ router.get('/admin/api/products/:sku/attributes', async (req, res, next) => {
       ]);
 
       const fetchedAt = new Date().toISOString();
+      // /v4 响应为 {result:[item]};DB 统一存单个 item(顶层含 weight/depth/width/height),
+      // 与批量同步(runStoreSyncDetails 阶段1)格式一致——列表/订单重量 json_extract($.weight) 依赖顶层字段
+      // (2026-09-13 修复:原存整包响应导致该 SKU 列表重量丢失)
+      const attrItem = attributesRes?.result?.[0] ?? attributesRes?.items?.[0] ?? {};
       db.prepare(
         `INSERT OR REPLACE INTO product_attributes_cache (sku, attributes_data, description_data, fetched_at) VALUES (?, ?, ?, ?)`
-      ).run(sku, JSON.stringify(attributesRes || {}), JSON.stringify(descriptionRes || {}), fetchedAt);
+      ).run(sku, JSON.stringify(attrItem), JSON.stringify(descriptionRes || {}), fetchedAt);
 
       // 懒计算描述质量:描述拉取成功后,同步回写 product_data_cache.description_quality
       // 使商品列表的「描述状态」筛选对该商品即时生效(无需单独「同步描述」)
@@ -1829,7 +1839,7 @@ router.get('/admin/api/products/:sku/attributes', async (req, res, next) => {
       );
 
       const payload = {
-        attributes: attributesRes || {},
+        attributes: attrItem,
         description: descriptionRes || {},
         fetchedAt,
       };
@@ -2029,6 +2039,6 @@ router.get('/admin/api/meta/status', (req, res, next) => {
 });
 
 // 导出供定时任务复用(2026-09:每8小时自动同步商品+详情)
-export { readStores, runStoreSync, runStoreSyncDescriptions };
+export { readStores, runStoreSync, runStoreSyncDescriptions, runStoreSyncDetails };
 
 export default router;

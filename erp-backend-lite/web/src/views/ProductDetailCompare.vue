@@ -207,11 +207,13 @@ function fmtTime(t) {
 }
 // data: OPI /v3/product/info/list 返回的单个 item(字符串数组 images,标量字段)
 const listedData = computed(() => state.listed?.data || {});
-// /v4 响应 result[0]:weight/depth/width/height/type_id/description_category_id 等顶层字段(权威来源)
-// /v3 的 data 不含这些字段,必须从 /v4 响应取
+// /v4 数据:weight/depth/width/height/type_id/description_category_id 等顶层字段(权威来源)
+// /v3 的 data 不含这些字段,必须从 /v4 数据取
+// (2026-09-13 兼容:后端缓存统一存单个 item;旧数据/内存缓存可能是整包 {result:[item]})
 const listedV4 = computed(() => {
-  const r = state.attrRes?.attributes?.result;
-  return Array.isArray(r) ? r[0] || {} : {};
+  const a = state.attrRes?.attributes;
+  const r = a?.result;
+  return (Array.isArray(r) ? r[0] : a) || {};
 });
 // 已上架属性数组:/v4 响应 result[0].attributes,每项 {attribute_id, complex_id, values:[{value}]}
 const listedAttrItems = computed(() => {

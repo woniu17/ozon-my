@@ -1,7 +1,9 @@
 // 商品定时同步(2026-09):每 8 小时(0点/8点/16点)自动同步所有店铺商品+详情
 // 模式:沿用现有 poller 模式(setInterval + .unref())
 // 串行执行避免 Ozon 限流;全程静默,结果只写日志
-import { readStores, runStoreSync, runStoreSyncDescriptions } from '../modules/admin.js';
+// (2026-09-13 修复:改用 runStoreSyncDetails 两阶段(属性+描述)——原只跑描述同步,
+//  新商品属性永远是 '{}' 占位,列表重量/尺寸缺失)
+import { readStores, runStoreSync, runStoreSyncDetails } from '../modules/admin.js';
 import logger from '../middleware/log.js';
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 每 5 分钟检查一次
@@ -69,14 +71,14 @@ async function runSyncCycle() {
     }
   }
 
-  // 阶段2:串行同步所有店铺详情(force=false 增量,只拉未缓存的)
+  // 阶段2:串行同步所有店铺详情(force=false 增量:属性 '{}' 占位/整包响应/缺失 + 描述缺失)
   let detailsOk = 0, detailsFail = 0;
   for (const s of stores) {
     const storeId = s.id;
     const storeName = s.name || storeId;
     const t0 = Date.now();
     try {
-      await runStoreSyncDescriptions(s, storeId, false);
+      await runStoreSyncDetails(s, storeId, false);
       detailsOk++;
       logger.info(
         { storeId, storeName, durationMs: Date.now() - t0 },
