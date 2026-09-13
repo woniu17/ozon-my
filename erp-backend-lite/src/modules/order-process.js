@@ -295,10 +295,13 @@ router.get('/admin/api/order-process/summary', (req, res, next) => {
     const settled = { orderCount: 0, totalOrderAmount: 0, totalPurchaseAmount: 0, totalProfit: 0, profitRateSale: null, profitRateCost: null, estimated: !rate };
     const pendingSettled = { orderCount: 0, totalOrderAmount: 0, totalPurchaseAmount: 0, totalProfit: 0, profitRateSale: null, profitRateCost: null, estimated: true };
     let cancelledCount = 0;
+    let returnedCount = 0;
 
     for (const pkg of pkgs) {
       const isCancelled = pkg.operateStatus === 'cancelled';
       if (isCancelled) { cancelledCount++; continue; }
+      // 已退货订单不参与"已成功/已采购未结算"两组汇总(与 Tab 口径一致,前端单独提示)
+      if (pkg.isReturned) { returnedCount++; continue; }
 
       const isSettled = pkg.operateStatus === 'wait_receiver_confirm'
         && pkg.deliveredAt != null
@@ -334,7 +337,8 @@ router.get('/admin/api/order-process/summary', (req, res, next) => {
     res.json(ok({
       settled,
       pendingSettled,
-      totalOrders: settled.orderCount + pendingSettled.orderCount + cancelledCount,
+      returnedCount,
+      totalOrders: settled.orderCount + pendingSettled.orderCount + cancelledCount + returnedCount,
       cancelledCount,
       truncated: data.truncated,
       truncatedAt: data.truncatedAt,

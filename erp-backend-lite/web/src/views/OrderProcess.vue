@@ -29,7 +29,8 @@ const { show } = useToast();
 const confirmStore = useConfirmStore();
 
 // ── Tab 页签(operate_status 分流)─────────────────────────
-// 全部:跨所有状态(含搁置);已发货=已交运未妥投;已完成=已妥投(财务数据完整)
+// 全部:跨所有状态(含搁置);已发货=已交运未妥投;已成功=已妥投且应计完整
+// 已退货:妥投后买家退货退款(is_returned,来自 /v2/returns/rfbs/list)
 const TABS = [
   { key: 'all', label: '全部' },
   { key: 'waitProcess', label: '待处理' },
@@ -37,7 +38,8 @@ const TABS = [
   { key: 'shipSuccess', label: '交运' },
   { key: 'waitReceiverConfirm', label: '已发货' },
   { key: 'signed', label: '已签收' },
-  { key: 'settled', label: '已结算' },
+  { key: 'settled', label: '已成功' },
+  { key: 'returned', label: '已退货' },
   { key: 'cancelled', label: '已取消' },
   { key: 'ignored', label: '已搁置' },
 ];
@@ -92,7 +94,7 @@ const pager = reactive({ current: 1, total: 0, pageSize: 20 });
 const loading = ref(false);
 const rows = ref([]);
 
-// ── Tab 聚合统计(已结算/已采购未结算两组,全集不分页)──────
+// ── Tab 聚合统计(已成功/已采购未结算两组,全集不分页)──────
 const summary = ref(null);
 const summaryLoading = ref(false);
 const summaryError = ref(null);
@@ -100,7 +102,9 @@ let summaryReqId = 0;
 let lastSummaryParams = null;
 const summaryEmpty = computed(() => summary.value && summary.value.totalOrders === 0);
 const summaryEmptyHint = computed(() =>
-  activeTab.value === 'cancelled' ? '已取消订单不参与利润汇总' : '当前 Tab 无已结算/已采购未结算订单'
+  activeTab.value === 'cancelled' ? '已取消订单不参与利润汇总'
+  : activeTab.value === 'returned' ? '已退货订单不参与利润汇总'
+  : '当前 Tab 无已成功/已采购未结算订单'
 );
 async function loadSummary(params) {
   const reqId = ++summaryReqId;
@@ -1630,6 +1634,27 @@ function operateTag(pkg) {
   return o;
 }
 
+// rFBS 退货状态中文释义(/v2/returns/rfbs/list state.state → 中文;未知值回退俄文 state_name)
+// 实测出现的值(2026-09 全量):Utilizing/Utilized/UtilizedByOzon/MoneyReturned/ArrivedAtWarehouse/
+//   PartialCompensationReturnedByOzon
+const RETURN_STATE_LABELS = {
+  Utilized: '已销毁',
+  UtilizedByOzon: 'Ozon销毁',
+  Utilizing: '销毁中',
+  ArrivedAtWarehouse: '已到退货仓',
+  MoneyReturned: '已退款',
+  PartialCompensationReturnedByOzon: 'Ozon部分赔付',
+  WaitingShipment: '待寄回',
+  Shipping: '退货运输中',
+  ReturnedToSeller: '已退回卖家',
+  MoneyReturning: '退款中',
+  OnSellerApproval: '待卖家审核',
+};
+function returnStateLabel(pkg) {
+  if (!pkg?.isReturned) return null;
+  return RETURN_STATE_LABELS[pkg.returnState] || pkg.returnStateName || pkg.returnState || '退货中';
+}
+
 // 取消原因展示:reason_id 优先中文释义,否则俄文原文(可悬浮看 reason_id)
 function cancelReasonLabel(pkg) {
   if (!pkg?.cancellationType) return null;
@@ -1897,7 +1922,7 @@ onUnmounted(() => {
     <div class="summary-bar" v-else-if="summary" v-show="!summaryLoading">
       <div class="summary-card summary-settled">
         <div class="summary-head">
-          <span class="summary-title">已结算</span>
+          <span class="summary-title">已成功</span>
           <span class="tag tag-ok">{{ summary.settled.orderCount }} 单</span>
           <span v-if="summary.settled.estimated" class="muted">（估）</span>
           <span v-else class="muted">（实）</span>
@@ -1923,6 +1948,10 @@ onUnmounted(() => {
           <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.pendingSettled.profitRateSale) }}</span></span>
           <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.pendingSettled.profitRateCost) }}</span></span>
         </div>
+      </div>
+      <div v-if="summary.returnedCount > 0" class="summary-returned-note" title="妥投后买家退货退款,不计入以上两组汇总">
+        <span class="tag tag-err">已退货</span>
+        <span>{{ summary.returnedCount }} 单(不计入以上汇总)</span>
       </div>
     </div>
 
@@ -2040,6 +2069,12 @@ onUnmounted(() => {
                 </span>
                 <span v-if="cancelReasonLabel(pkg).afterShip" class="tag tag-mute" title="装运后取消">装运后</span>
                 <span v-if="cancelReasonLabel(pkg).affectRating" class="tag tag-err" title="影响排行">影响排行</span>
+              </div>
+              <!-- 退货信息行(仅 is_returned 订单显示:妥投后买家退货退款) -->
+              <div v-if="pkg.isReturned" class="sub cancel-reason-line">
+                <span class="tag tag-err" title="妥投后买家申请退货退款(销售冲回,配送/佣金等费用不返还)">已退货</span>
+                <span class="cancel-reason-text" :title="pkg.returnState || ''">{{ returnStateLabel(pkg) }}</span>
+                <span v-if="pkg.returnAt" class="tag tag-mute" title="买家发起退货时间">{{ fmtTime(pkg.returnAt) }}</span>
               </div>
               <div class="sub muted">下单：{{ fmtTime(pkg.inProcessAt) }}</div>
               <!-- 已取消订单不再展示最迟/剩发/已超时(取消后无发货义务,倒计时无意义) -->
@@ -3031,6 +3066,19 @@ a.product-title:hover {
 }
 .summary-settled { border-left: 3px solid #16a34a; }
 .summary-pending { border-left: 3px solid #f59e0b; }
+/* 已退货计数提示(不参与两组汇总,仅计数展示) */
+.summary-returned-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary, #6b7280);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-left: 3px solid #dc2626;
+  background: #fef2f2;
+  border-radius: 4px;
+  align-self: flex-start;
+}
 .summary-head {
   display: flex;
   align-items: center;

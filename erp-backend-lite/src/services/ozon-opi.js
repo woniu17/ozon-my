@@ -575,6 +575,20 @@ export function financeAccrualTypes(store) {
   return call(store, '/v1/finance/accrual/types', {});
 }
 
+// ── rFBS 退货(2026-09)──────────────────────────────────────────
+// /v2/returns/rfbs/list —— 买家退货列表(rFBS=真实 FBS 退货,妥投后售后)
+// 请求: { limit, offset }(limit ≤1000;实测 filter 不生效,全量拉取即可)
+// 响应: { returns: [{ return_id, return_number, posting_number, order_number,
+//   created_at, product: { sku, offer_id, name, price, currency },
+//   state: { state, state_name, group_state, money_return_state_name } }] }
+// 注:
+//   - posting 接口(/v4/posting/fbs/*)不含退货信息,退货是独立售后域
+//   - 退货不改 posting 状态(仍 delivered);财务上表现为应计负冲(sale_total 归零)
+//   - 低值商品多为 UtilizedByOzon(Ozon 直接销毁不回寄)
+export function rfbsReturnsList(store, { limit = 1000, offset = 0 } = {}) {
+  return call(store, '/v2/returns/rfbs/list', { limit, offset });
+}
+
 // ── 商品归档任务(2026-08)─────────────────────────────────────
 // /v1/product/archive —— 将商品归档(批量)
 // OPI 限制:单请求 ≤100 个 product_id

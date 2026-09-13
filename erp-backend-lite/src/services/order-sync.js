@@ -13,7 +13,7 @@
 // 进度查询 GET  /admin/api/order-process/sync-progress
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
-import { postingFbsUnfulfilledList, postingFbsList, postingFbsGet, productInfoListV3, financeAccrualPostings, financeAccrualTypes } from './ozon-opi.js';
+import { postingFbsUnfulfilledList, postingFbsList, postingFbsGet, productInfoListV3, financeAccrualPostings, financeAccrualTypes, rfbsReturnsList } from './ozon-opi.js';
 import { orderPackageDao, setStoreNameMap } from '../db/dao/sqlite/order-daos.js';
 import { getAccrualTypes, findPendingAccrualPostings, findBackfillAccrualPostings, findAccrualPostingsByPackageIds, replaceAccruals } from '../db/dao/sqlite/accrual-dao.js';
 import { db } from '../db/index.js';
@@ -250,8 +250,42 @@ async function syncStore(store) {
     logger.warn({ storeId: store.id, err: e?.message }, '[order-sync] 应计同步失败(不影响订单同步)');
   }
 
+  // 5) rFBS 退货同步(2026-09-13,妥投后买家退货退款,标记 op_package.is_returned)
+  if (progress.active) progress.currentPhase = 'returns';
+  try {
+    await syncReturns(store);
+  } catch (e) {
+    logger.warn({ storeId: store.id, err: e?.message }, '[order-sync] 退货同步失败(不影响订单同步)');
+  }
+
   orderPackageDao.updateSyncCursor(store.id, { count });
   return count;
+}
+
+// ── rFBS 退货同步(阶段5)──────────────────────────────────────
+// 全量拉取店铺退货列表(/v2/returns/rfbs/list,实测 filter 不生效)
+// 退货量级小(数十条/半年),每轮全量 upsert;标记/重置逻辑见 order-daos.upsertRfbsReturns
+const RETURNS_PAGE_LIMIT = 1000;
+const RETURNS_MAX_PAGES = 20;
+
+async function syncReturns(store) {
+  let offset = 0;
+  let all = [];
+  for (let page = 0; page < RETURNS_MAX_PAGES; page++) {
+    const resp = await rfbsReturnsList(store, { limit: RETURNS_PAGE_LIMIT, offset });
+    const batch = resp?.returns || [];
+    all = all.concat(batch);
+    if (batch.length < RETURNS_PAGE_LIMIT) break;
+    offset += RETURNS_PAGE_LIMIT;
+  }
+  const r = orderPackageDao.upsertRfbsReturns(store.id, all);
+  if (r.returns > 0 || r.marked > 0 || r.reset > 0) {
+    logger.info(
+      { storeId: store.id, returns: r.returns, marked: r.marked, reset: r.reset },
+      '[order-sync] rFBS 退货同步完成'
+    );
+  }
+  return r;
 }
 
 // ── 应计同步(阶段4)───────────────────────────────────────────
@@ -439,6 +473,13 @@ export async function syncSinglePackage(packageId) {
   } catch (e) {
     accrualErr = e?.message || String(e);
     logger.warn({ packageId: row.id, err: accrualErr }, '[order-sync] 单订单应计同步失败(状态同步已成功)');
+  }
+
+  // 3) 刷新退货标记(/v2/returns/rfbs/list 无单号过滤,全量拉取,量级小;失败不阻塞)
+  try {
+    await syncReturns(store);
+  } catch (e) {
+    logger.warn({ packageId: row.id, err: e?.message }, '[order-sync] 单订单退货同步失败(状态同步已成功)');
   }
 
   // 查最新状态(供前后对比)

@@ -274,6 +274,88 @@ function getSyncCursors() {
     .all();
 }
 
+// ── rFBS 退货同步落库(2026-09)────────────────────────────────
+// 退货状态判定:state/group_state 含 cancel|reject → 退货被驳回(销售成立,不标记)
+//   其余(退货运输中/已销毁/已退款)→ is_returned=1,前端归入"已退货" Tab
+const RETURN_REJECTED_RE = /cancel|reject/i;
+function isActiveReturn(r) {
+  const st = `${r?.state?.state || ''}|${r?.state?.group_state || ''}`;
+  return !RETURN_REJECTED_RE.test(st);
+}
+
+/**
+ * rFBS 退货列表落库(全量 upsert,来自 /v2/returns/rfbs/list)
+ * 1. op_return 逐条 upsert(return_id 主键)
+ * 2. op_package 退货标记:按 store_id + logistics_no(posting_number)匹配包裹
+ *    - 有生效退货 → is_returned=1 + 最新退货状态 + 最早退货时间
+ *    - 已标记但当前列表无生效退货 → 重置(退货被驳回/撤销,销售成立)
+ */
+function upsertRfbsReturns(storeId, returns) {
+  const list = Array.isArray(returns) ? returns : [];
+  const now = nowIso();
+  return runInTx(() => {
+    const upsert = db.prepare(`
+      INSERT INTO op_return (return_id, store_id, posting_number, order_number, return_number,
+        sku, offer_id, product_name, price, currency, state, state_name, group_state,
+        money_return_state_name, created_at, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(return_id) DO UPDATE SET
+        posting_number=excluded.posting_number, order_number=excluded.order_number,
+        return_number=excluded.return_number, sku=excluded.sku, offer_id=excluded.offer_id,
+        product_name=excluded.product_name, price=excluded.price, currency=excluded.currency,
+        state=excluded.state, state_name=excluded.state_name, group_state=excluded.group_state,
+        money_return_state_name=excluded.money_return_state_name,
+        created_at=excluded.created_at, synced_at=excluded.synced_at
+    `);
+    for (const r of list) {
+      const st = r.state || {};
+      upsert.run(
+        r.return_id, storeId, r.posting_number || null, r.order_number || null,
+        r.return_number || null, r.product?.sku ?? null, r.product?.offer_id || null,
+        r.product?.name || null, r.product?.price ?? null, r.product?.currency || null,
+        st.state || null, st.state_name || null, st.group_state || null,
+        st.money_return_state_name || null, r.created_at || null, now
+      );
+    }
+    // 按 posting 聚合生效退货:取最新 created_at 的 state、最早 created_at 为 return_at
+    const byPosting = new Map();
+    for (const r of list) {
+      if (!r.posting_number || !isActiveReturn(r)) continue;
+      const ca = r.created_at || '';
+      const cur = byPosting.get(r.posting_number);
+      if (!cur) {
+        byPosting.set(r.posting_number, { state: r.state || {}, latestAt: ca, earliestAt: ca });
+      } else {
+        if (ca > cur.latestAt) { cur.latestAt = ca; cur.state = r.state || {}; }
+        if (ca && (!cur.earliestAt || ca < cur.earliestAt)) cur.earliestAt = ca;
+      }
+    }
+    const mark = db.prepare(`
+      UPDATE op_package SET is_returned = 1, return_state = ?, return_state_name = ?,
+        return_at = ?, gmt_modified = ?
+      WHERE store_id = ? AND logistics_no = ?
+    `);
+    let marked = 0;
+    for (const [posting, agg] of byPosting) {
+      marked += mark.run(
+        agg.state.state || null, agg.state.state_name || null,
+        agg.earliestAt || null, now, storeId, posting
+      ).changes;
+    }
+    // 重置:本店铺已标记但当前无生效退货的包裹(退货被驳回/撤销)
+    const activePostings = [...byPosting.keys()];
+    const notIn = activePostings.length
+      ? `AND logistics_no NOT IN (${activePostings.map(() => '?').join(',')})` : '';
+    const reset = db.prepare(`
+      UPDATE op_package SET is_returned = 0, return_state = NULL, return_state_name = NULL,
+        return_at = NULL, gmt_modified = ?
+      WHERE is_returned = 1 AND store_id = ? ${notIn}
+    `);
+    const resetR = reset.run(now, storeId, ...activePostings);
+    return { returns: list.length, marked, reset: resetR.changes };
+  });
+}
+
 // ── 列表查询 ─────────────────────────────────────────────────
 
 /** Tab 计数(页面页签)
@@ -281,6 +363,7 @@ function getSyncCursors() {
  *    - waitReceiverConfirm: 已交运未妥投(delivered_at IS NULL)
  *    - signed: 已妥投但应计不完整(缺代理佣金66或国际配送67)
  *    - settled: 已妥投且应计完整(同时有66和67)
+ *  拆分(2026-09-13):妥投后退货(is_returned=1)独立成 returned 桶,不再计入 signed/settled
  *  新增 all:全部订单(含 ignored 搁置)
  */
 function tabCounts() {
@@ -288,6 +371,7 @@ function tabCounts() {
     .prepare(
       `SELECT
         CASE
+          WHEN operate_status = 'wait_receiver_confirm' AND is_returned = 1 THEN 'returned'
           WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NOT NULL
                AND id IN (SELECT package_id FROM op_accrual WHERE type_id = 66)
                AND id IN (SELECT package_id FROM op_accrual WHERE type_id = 67) THEN 'settled'
@@ -305,7 +389,8 @@ function tabCounts() {
     .prepare(`SELECT COUNT(*) AS n FROM op_package WHERE is_ignored = 1`)
     .get().n;
   const active = (map.wait_process || 0) + (map.wait_ship || 0) + (map.ship_success || 0)
-    + (map.wait_receiver_confirm || 0) + (map.signed || 0) + (map.settled || 0) + (map.cancelled || 0);
+    + (map.wait_receiver_confirm || 0) + (map.signed || 0) + (map.settled || 0)
+    + (map.returned || 0) + (map.cancelled || 0);
   return {
     all: active + ignored,
     waitProcess: map.wait_process || 0,
@@ -314,6 +399,7 @@ function tabCounts() {
     waitReceiverConfirm: map.wait_receiver_confirm || 0,
     signed: map.signed || 0,
     settled: map.settled || 0,
+    returned: map.returned || 0,
     cancelled: map.cancelled || 0,
     ignored,
   };
@@ -323,9 +409,10 @@ const TAB_STATUS = {
   waitProcess: ['wait_process'],
   waitShip: ['wait_ship'],
   shipSuccess: ['ship_success'],
-  waitReceiverConfirm: ['wait_receiver_confirm'], // 列表查询时再叠加 delivered_at IS NULL
-  signed: ['wait_receiver_confirm'],              // 列表查询时再叠加 delivered_at IS NOT NULL + 应计缺 66/67
-  settled: ['wait_receiver_confirm'],             // 列表查询时再叠加 delivered_at IS NOT NULL + 应计有 66 AND 67
+  waitReceiverConfirm: ['wait_receiver_confirm'], // 列表查询时再叠加 delivered_at IS NULL + 未退货
+  signed: ['wait_receiver_confirm'],              // 列表查询时再叠加 delivered_at IS NOT NULL + 应计缺 66/67 + 未退货
+  settled: ['wait_receiver_confirm'],             // 列表查询时再叠加 delivered_at IS NOT NULL + 应计有 66 AND 67 + 未退货
+  returned: null,                                 // is_returned = 1(列表查询分支单独处理)
   cancelled: ['cancelled'],
   ignored: null, // is_ignored = 1
   all: null,     // 全部(含 ignored)
@@ -375,18 +462,22 @@ function buildPackageWhere(filters = {}) {
     } else if (tab === 'all') {
       // 全部:不加 is_ignored/operate_status 过滤,涵盖搁置与所有状态
       where.push('1 = 1');
-    } else if (tab === 'signed') {
-      // 已签收=已妥投但应计不完整(缺代理佣金66或国际配送67)
+    } else if (tab === 'returned') {
+      // 已退货=妥投后买家退货退款(is_returned=1,来自 /v2/returns/rfbs/list)
       where.push('p.is_ignored = 0');
-      where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL");
+      where.push("p.is_returned = 1 AND p.operate_status = 'wait_receiver_confirm'");
+    } else if (tab === 'signed') {
+      // 已签收=已妥投但应计不完整(缺代理佣金66或国际配送67),不含已退货
+      where.push('p.is_ignored = 0');
+      where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL AND p.is_returned = 0");
       where.push(`NOT (
         EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 66)
         AND EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 67)
       )`);
     } else if (tab === 'settled') {
-      // 已结算=已妥投且应计完整(同时有代理佣金66和国际配送67)
+      // 已成功=已妥投且应计完整(同时有代理佣金66和国际配送67),不含已退货
       where.push('p.is_ignored = 0');
-      where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL");
+      where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL AND p.is_returned = 0");
       where.push(`EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 66)
         AND EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 67)`);
     } else if (tab === 'waitReceiverConfirm') {
@@ -500,7 +591,7 @@ function aggregatePackages(filters = {}) {
   const AGG_LIMIT = 20000;
   const rows = db
     .prepare(
-      `SELECT p.id, p.operate_status, p.purchase_status, p.delivered_at, p.is_ignored,
+      `SELECT p.id, p.operate_status, p.purchase_status, p.delivered_at, p.is_ignored, p.is_returned,
               p.total_purchase_amount, p.accrual_total, p.accrual_sale_total,
               o.order_amount, o.store_id
        FROM op_package p
@@ -517,6 +608,7 @@ function aggregatePackages(filters = {}) {
     purchaseStatus: r.purchase_status,
     deliveredAt: r.delivered_at,
     isIgnored: !!r.is_ignored,
+    isReturned: !!r.is_returned,
     orderAmount: Number(r.order_amount) || 0,
     totalPurchaseAmount: Number(r.total_purchase_amount) || 0,
     accrualTotal: r.accrual_total != null ? Number(r.accrual_total) : null,
@@ -583,6 +675,11 @@ function rowToPackage(r) {
     weight: r.weight != null ? Number(r.weight) : null,
     msPurchaseAmount: r.ms_purchase_amount != null ? Number(r.ms_purchase_amount) : null,
     msSyncedAt: r.ms_synced_at,
+    // ─ rFBS 退货标记(/v2/returns/rfbs/list 同步回写) ─
+    isReturned: !!r.is_returned,
+    returnState: r.return_state,
+    returnStateName: r.return_state_name,
+    returnAt: r.return_at,
     waybillPrintedAt: r.waybill_printed_at,
     note: r.note,
     // ─ 取消细分状态(cancellation_json 解析,仅 cancelled 状态订单有) ─
@@ -1479,6 +1576,30 @@ function syncFromMiaoshou({ packageIds } = {}) {
     }
   }
 
+  // d) 用券场景覆盖(2026-09-13 修复):包裹有 isAuto=0(不自动同步采购金额)的采购单且
+  //    妙手包裹级 purchase_amount > 0 时,采购金额以妙手包裹级为准(用户已在妙手手动纠正)。
+  //    reallocate 的采购单分摊口径在用券场景失真(券后实付 ≠ 采购成本,如 19.9 券后实付 9.9),
+  //    对齐妙手订单页 miaoshou-list 的 ms_has_manual 兜底链(2026-09-04 修订)
+  if (synced > 0) {
+    const pkgIdSet = new Set(pkgs.map((p) => p.id));
+    const manualRows = db.prepare(
+      `SELECT op.id AS pkg_id, mp.purchase_amount AS ms_pkg_amount
+       FROM op_package op
+       JOIN miaoshou_package mp ON mp.posting_number = op.logistics_no
+       WHERE mp.purchase_amount IS NOT NULL AND mp.purchase_amount > 0
+         AND EXISTS (
+           SELECT 1 FROM miaoshou_package_purchase_map m
+           JOIN miaoshou_purchase pur ON pur.id = m.purchase_id
+           WHERE m.package_id = mp.id AND pur.is_auto_rsync = 0
+         )`
+    ).all();
+    const updTotal = db.prepare(`UPDATE op_package SET total_purchase_amount = ?, gmt_modified = ? WHERE id = ?`);
+    for (const r of manualRows) {
+      if (!pkgIdSet.has(r.pkg_id)) continue;
+      updTotal.run(Math.round(Number(r.ms_pkg_amount) * 100) / 100, nowIso(), r.pkg_id);
+    }
+  }
+
   return { synced, skipped, purchases, advanced, errors };
 }
 
@@ -1487,6 +1608,7 @@ export const orderPackageDao = {
   updateSyncCursor,
   getSyncCursors,
   tabCounts,
+  upsertRfbsReturns,
   listPackages,
   aggregatePackages,
   getWeightsByPackageIds,

@@ -246,7 +246,46 @@ async function ensureMigrations() {
       db.exec(`ALTER TABLE op_package ADD COLUMN ms_synced_at TEXT`);
       console.log('[db] migration: added column op_package.ms_synced_at');
     }
+    // 2026-09-13: rFBS 退货标记(妥投后买家退货退款,来自 /v2/returns/rfbs/list)
+    if (!opPkgCols.some((c) => c.name === 'is_returned')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN is_returned INTEGER DEFAULT 0`);
+      console.log('[db] migration: added column op_package.is_returned');
+    }
+    if (!opPkgCols.some((c) => c.name === 'return_state')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN return_state TEXT`);
+      console.log('[db] migration: added column op_package.return_state');
+    }
+    if (!opPkgCols.some((c) => c.name === 'return_state_name')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN return_state_name TEXT`);
+      console.log('[db] migration: added column op_package.return_state_name');
+    }
+    if (!opPkgCols.some((c) => c.name === 'return_at')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN return_at TEXT`);
+      console.log('[db] migration: added column op_package.return_at');
+    }
   }
+  // 2026-09-13: rFBS 退货明细表(op_return,退货原始记录,包裹级标记 op_package.is_returned 由同步回写)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS op_return (
+      return_id    INTEGER PRIMARY KEY,
+      store_id     TEXT NOT NULL,
+      posting_number TEXT,
+      order_number TEXT,
+      return_number TEXT,
+      sku          INTEGER,
+      offer_id     TEXT,
+      product_name TEXT,
+      price        REAL,
+      currency     TEXT,
+      state        TEXT,
+      state_name   TEXT,
+      group_state  TEXT,
+      money_return_state_name TEXT,
+      created_at   TEXT,
+      synced_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_op_return_posting ON op_return(posting_number);
+  `);
   // 2026-09-04: op_purchase_link.alloc_mode 分摊模式(manual=手动填金额,auto=按数量自动分摊)
   {
     const plCols = db.prepare(`PRAGMA table_info(op_purchase_link)`).all();

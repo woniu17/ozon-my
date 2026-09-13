@@ -229,7 +229,7 @@ export async function notifyPostingEvent(messageType, payload) {
     case 'TYPE_POSTING_CANCELLED':
       title = '[货件取消] Ozon 推送';
       timeField = ['取消时间', payload.changed_state_date ?? '-'];
-      extra = `\n旧状态: ${payload.old_state ?? '-'}\n取消原因: ${payload.reason?.message ?? '-'}`;
+      extra = `\n旧状态: ${payload.old_state ?? '-'}\n取消原因: ${formatCancelReason(payload.reason?.message) ?? '-'}`;
       break;
     case 'TYPE_STATE_CHANGED':
       title = '[货件状态变更] Ozon 推送';
@@ -423,6 +423,56 @@ function formatInitiator(initiator) {
 }
 
 /**
+ * 取消原因俄语→中文翻译(实时取消推送 + cancel-scanner 兜底通知共用)
+ * Ozon 返回俄语文本(如 "Покупатель отменил заказ"),常见原因映射中文;未收录原样返回,不丢失信息
+ * 归一化:ё→е(Ozon 部分原因返回 е 变体)
+ */
+const CANCEL_REASON_CN = {
+  'Покупатель отменил заказ': '买家取消了订单',
+  'Покупатель попросил отменить заказ': '买家要求取消订单',
+  'Покупатель отменил заказ из-за долгой доставки': '买家因配送太慢取消订单',
+  'Не успели передать в службу доставки': '未及时移交物流',
+  'Истек срок резервирования товара': '商品预留期已过',
+  'Ошибка при резервировании товара': '商品预留出错',
+  'Товар потерялся на складе': '商品在仓库丢失',
+  'Отправление не принято службой доставки': '物流未接收货件',
+  'Отправление не вручено в срок': '货件未按时投递',
+  'Отправление утеряно службой доставки': '货件被物流丢失',
+  'Покупатель не забрал отправление в срок': '买家未按时取货',
+  'Не удалось связаться с получателем': '无法联系收件人',
+  'Получатель отказался от отправления': '收件人拒收货件',
+  'Отправление повреждено': '货件破损',
+  'Отменено продавцом': '卖家取消',
+};
+
+// "Покупатель отказался при вручении: <子原因>" 拒收前缀系列
+const REFUSAL_PREFIX_RE = /^Покупатель отказался при вручении:?\s*(.*)$/;
+const REFUSAL_REASON_CN = {
+  'недоволен качеством товара': '对商品质量不满意',
+  'передумал': '改变主意',
+  'не устраивает цена': '对价格不满意',
+  'нашел аналогичный товар дешевле': '找到更便宜的同类商品',
+  'товар не подошел': '商品不合适',
+  'не соответствует описанию': '与描述不符',
+  'не заказывал данный товар': '未订购该商品',
+  'не подходит размер / фасон / габариты': '尺寸/款式/大小不合适',
+  'цвет / фасон / комплектация не соответствует описанию': '颜色/款式/配置与描述不符',
+  'не соответствует заказанному товару': '与所订商品不符',
+};
+
+function formatCancelReason(reason) {
+  if (reason == null) return null;
+  const norm = String(reason).replace(/ё/g, 'е').trim();
+  if (CANCEL_REASON_CN[norm]) return CANCEL_REASON_CN[norm];
+  const m = norm.match(REFUSAL_PREFIX_RE);
+  if (m) {
+    const sub = m[1].trim();
+    return `买家拒收${sub ? `：${REFUSAL_REASON_CN[sub] ?? sub}` : ''}`;
+  }
+  return String(reason); // 未收录的俄语/英语原因原样返回
+}
+
+/**
  * 推送"unfulfilled-poller 发现的揽收"兜底通知到飞书
  * 格式与 notifyPostingPickedUp(实时揽收推送)一致,末行标注"(兜底通知)"
  * @param {object} store   店铺对象
@@ -471,7 +521,7 @@ export async function notifyCancelDiscovered(store, posting, oldStatus) {
     `卖家: ${formatSeller(sellerId)}`,
     `取消时间: ${new Date().toISOString()}`,
     oldStatus ? `旧状态: ${oldStatus}` : null,
-    cancel.cancel_reason ? `取消原因: ${cancel.cancel_reason}` : null,
+    cancel.cancel_reason ? `取消原因: ${formatCancelReason(cancel.cancel_reason)}` : null,
     cancel.cancellation_initiator ? `取消发起方: ${formatInitiator(cancel.cancellation_initiator)}` : null,
     '(兜底通知)', // 末行标注,与 Ozon 实时推送区分
   ].filter((v) => v !== null).join('\n');
