@@ -185,4 +185,4 @@ async function searchAliOrder(orderSn, accounts = []) {
   return { result: null }; // 所有账号正常,单号不存在
 }
 
-export { listAli1688Orders, searchAliOrder };
+export { listAli1688Orders, searchAliOrder, searchAliInAccount };

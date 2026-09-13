@@ -24,10 +24,55 @@ import { ok } from '../utils/response.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { status as browserStatus, getCookieState } from '../services/platform-orders/browser-manager.js';
 import { listPddOrders, searchPddOrder } from '../services/platform-orders/adapters/pdd.js';
-import { listAli1688Orders, searchAliOrder } from '../services/platform-orders/adapters/ali1688.js';
+import {
+  listAli1688Orders as listAliViaBrowser,
+  searchAliInAccount as searchAliViaBrowser,
+} from '../services/platform-orders/adapters/ali1688.js';
+import {
+  hasAliOpenApiToken,
+  listAli1688OpenApiOrders,
+  searchAliOpenApiInAccount,
+} from '../services/platform-orders/adapters/ali1688-openapi.js';
 import { listTaobaoOrders, searchTaobaoOrder } from '../services/platform-orders/adapters/taobao.js';
 
 const router = Router();
+
+// ── 1688 双适配器路由(2026-09-13)────────────────────────────
+// 已配官方 API token 的账号走 openapi(无风控),未配的回落浏览器 mtop;
+// 输出结构两版逐字段一致,前端零感知
+
+/** 列表:按账号 token 有无分流 */
+async function listAli1688Orders({ tab, size, account }) {
+  if (hasAliOpenApiToken(account)) return listAli1688OpenApiOrders({ tab, size, account });
+  return listAliViaBrowser({ tab, size, account });
+}
+
+/** 搜索:跨账号聚合(官方 API 账号优先,浏览器账号兜底);
+ *  语义与浏览器版 searchAliOrder 一致:命中即返;登录失效/风控记录后试下一账号;
+ *  全部账号登录态失败才抛 AUTH_REQUIRED */
+async function searchAliOrder(orderSn, accounts = []) {
+  const errs = [];
+  for (const account of accounts) {
+    let result;
+    try {
+      result = hasAliOpenApiToken(account)
+        ? await searchAliOpenApiInAccount(orderSn, account)
+        : await searchAliViaBrowser(orderSn, account);
+    } catch (e) {
+      // 该账号登录失效/风控:记录后继续下一账号(单号可能在别的账号)
+      if (e instanceof ApiError && (e.code === ErrorCode.AUTH_REQUIRED || e.code === 'RISK_VALIDATE')) {
+        errs.push(`[${account}${hasAliOpenApiToken(account) ? ':api' : ':browser'}] ${e.message}`);
+        continue;
+      }
+      throw e; // 网络/系统级错误直接抛
+    }
+    if (result) return { result: { ...result, account } };
+  }
+  if (errs.length) {
+    throw new ApiError(ErrorCode.AUTH_REQUIRED, `1688全部账号搜索失败:\n${errs.join('\n')}`);
+  }
+  return { result: null }; // 所有账号正常,单号不存在
+}
 
 const PLATFORMS = new Map([
   ['pdd', { list: listPddOrders, search: searchPddOrder }],
@@ -76,6 +121,11 @@ router.get('/admin/api/platform-orders/status', async (_req, res, next) => {
     for (const [name, probe] of LOGIN_PROBES) {
       const accounts = {};
       for (const account of config.platformAccounts[name] || []) {
+        // 1688 官方 API 账号:token 即登录态,免浏览器探测(不触发冷启动)
+        if (name === 'ali1688' && hasAliOpenApiToken(account)) {
+          accounts[account] = { login: 'yes', source: 'openapi' };
+          continue;
+        }
         const cookies = await getCookieState(account, probe.url);
         accounts[account] = cookies === null
           ? { login: 'unknown', hint: '浏览器未运行,首次订单请求会冷启动' }

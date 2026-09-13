@@ -1,0 +1,246 @@
+// 1688 官方开放平台 API 适配器(2026-09-13,替换 cloakbrowser mtop 链路)
+//
+// 背景:mtop 页面链路双账号均被 baxia 风控(RISK_VALIDATE/滑块/session 被踢),
+// 官方 API 无风控、结构化 JSON、支持增量与精确查;本适配器与浏览器版
+// (ali1688.js)输出结构逐字段一致,前端零改动。
+//
+// 凭据(.env):ALI1688_APP_KEY / ALI1688_APP_SECRET + 每账号
+// ALI1688_TOKEN_LINQX / ALI1688_TOKEN_CHENLIN(OAuth 授权 access_token);
+// 已配 token 的账号走本适配器,未配的回落浏览器适配器(platform-orders.js 路由)
+//
+// 接口(均实测):
+//   1/com.alibaba.trade/alibaba.trade.getBuyerOrderList     订单列表(不含物流)
+//   1/com.alibaba.trade/alibaba.trade.get.buyerView         订单详情(单号精确查)
+//   1/com.alibaba.logistics/alibaba.trade.getLogisticsInfos.buyerView  物流单号
+//
+// 实测坑(重要):
+//   - 绝不传 bizTypes:trade_general,trade_assure 只覆盖老订单类型,新类型
+//     订单会被过滤成 0(2026-09-13 实测近 3 月 635 单被过滤成 0)
+//   - 19 位订单号 JSON.parse 丢精度,必须 safeParse 预处理;baseInfo.idOfStr
+//     是原生字符串单号,优先取它
+//   - isHis 必须 'true'/'false' 字符串(布尔 false 会被当空值丢弃)
+//   - orderIds 参数过滤无效(返回全量第一页),精确查用 buyerView
+//   - token 失效 = HTTP 401 + error_code "401"(Request need user authorized)
+//   - 时间 "yyyyMMddHHmmssSSS+0800" → 转北京时间字符串展示(不过 parseUtcDate)
+//   - 金额 totalAmount 单位是元(对比 mtop sumPayment 是分)
+//
+// token 生命周期:access_token 有效期有限(约 15 天),当前无 refresh_token,
+// 过期后需重新 OAuth 授权并更新 .env;401 时返回 AUTH_REQUIRED 提示
+
+import crypto from 'node:crypto';
+import config from '../../../config/index.js';
+import { ApiError, ErrorCode } from '../../../utils/error-codes.js';
+
+const GW = 'https://gw.open.1688.com/openapi';
+const API_ORDER_LIST = '1/com.alibaba.trade/alibaba.trade.getBuyerOrderList';
+const API_ORDER_DETAIL = '1/com.alibaba.trade/alibaba.trade.get.buyerView';
+const API_LOGISTICS = '1/com.alibaba.logistics/alibaba.trade.getLogisticsInfos.buyerView';
+
+// tab → orderStatus(与浏览器版 ALI_TRADE_STATUS 一致)
+const TAB_STATUS = { all: '', unshipped: 'waitsellersend', unreceived: 'waitbuyerreceive' };
+
+// 状态 → 中文(前端按 /取消|关闭/ 判定已取消,terminated 必须含"取消")
+const STATUS_PROMPTS = {
+  waitbuyerpay: '等待付款',
+  waitsellersend: '待发货',
+  waitbuyerreceive: '已发货',
+  confirm_goods: '已收货',
+  success: '交易成功',
+  cancel: '已取消',
+  terminated: '已取消(终止)',
+};
+
+// 这些状态可能有物流单号(已发货);待付款/待发货/取消的不查物流
+const SHIPPED_STATUSES = new Set(['waitbuyerreceive', 'confirm_goods', 'success']);
+
+// 物流批量查询并发(实测 7 并发 220ms,1688 QPS 配额宽松)
+const LOGISTICS_CONCURRENCY = 8;
+const REQUEST_TIMEOUT_MS = 20000;
+
+/** 账号是否有官方 API token(决定路由到本适配器还是浏览器适配器) */
+function hasAliOpenApiToken(account) {
+  return Boolean(config.ali1688OpenApi.tokens[account]);
+}
+
+/** HMAC-SHA1 签名(复刻 buyer-sdk base.py,与 SDK 逐字节一致) */
+function aopSign(urlPath, params, secret) {
+  const joined = Object.entries(params)
+    .map(([k, v]) => String(k) + String(v))
+    .sort()
+    .join('');
+  return crypto.createHmac('sha1', secret)
+    .update(urlPath + joined, 'utf8')
+    .digest('hex')
+    .toUpperCase();
+}
+
+/** 16 位以上长整型转字符串防 JSON.parse 丢精度(订单号/skuID 等) */
+function safeParse(raw) {
+  return JSON.parse(String(raw).replace(/"(\w+)":\s*(\d{16,})([,\}])/g, '"$1":"$2"$3'));
+}
+
+/** "20260913132224000+0800" → "2026-09-13 13:22:24"(北京时间字符串,前端直接展示) */
+function fmtTime(t) {
+  const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/.exec(String(t || ''));
+  return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : String(t || '');
+}
+
+/**
+ * 调用 1688 开放平台 API(POST form-urlencoded)
+ * @throws ApiError AUTH_REQUIRED(token 失效/缺失) / RATE_LIMITED(限流) / BROWSER_ERROR(其它)
+ */
+async function callOpenApi(apiUri, account, extraParams = {}) {
+  const { appKey, appSecret, tokens } = config.ali1688OpenApi;
+  if (!appKey || !appSecret) {
+    throw new ApiError('BROWSER_ERROR', '1688官方API未配置(检查 .env ALI1688_APP_KEY/APP_SECRET)', { status: 500 });
+  }
+  const token = tokens[account];
+  if (!token) {
+    throw new ApiError(ErrorCode.AUTH_REQUIRED, `账号 ${account} 未配置 1688 官方API token(.env ALI1688_TOKEN_${String(account).toUpperCase()})`);
+  }
+  const urlPath = `param2/${apiUri}/${appKey}`;
+  const params = { access_token: token, ...extraParams };
+  params._aop_signature = aopSign(urlPath, params, appSecret);
+
+  let resp;
+  try {
+    resp = await fetch(`${GW}/${urlPath}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(params).toString(),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (e) {
+    if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+      throw new ApiError(ErrorCode.TIMEOUT, `1688官方API请求超时(${apiUri})`);
+    }
+    throw new ApiError('BROWSER_ERROR', `1688官方API网络异常: ${e.message}`, { status: 502 });
+  }
+
+  const raw = await resp.text();
+  let json;
+  try { json = safeParse(raw); } catch {
+    throw new ApiError('BROWSER_ERROR', `1688官方API响应异常(${resp.status}): ${raw.slice(0, 200)}`, { status: 502 });
+  }
+  if (resp.status === 401 || json.error_code === '401') {
+    throw new ApiError(
+      ErrorCode.AUTH_REQUIRED,
+      `1688官方API token 失效(账号 ${account}),请重新 OAuth 授权并更新 .env ALI1688_TOKEN_${String(account).toUpperCase()} 后 pm2 restart erp`
+    );
+  }
+  if (!resp.ok) {
+    // 429/限流等按 RATE_LIMITED,其余归 BROWSER_ERROR(对齐浏览器版错误族)
+    const code = json.error_code || String(resp.status);
+    const msg = json.error_message || json.exception || raw.slice(0, 200);
+    if (resp.status === 429 || /rate|limit|流量/i.test(String(msg))) {
+      throw new ApiError(ErrorCode.RATE_LIMITED, `1688官方API限流(${code}): ${msg}`);
+    }
+    throw new ApiError('BROWSER_ERROR', `1688官方API错误(${code}): ${msg}`, { status: 502 });
+  }
+  return json;
+}
+
+/** 官方订单 → ERP 精简结构(与浏览器版 normalize1688Order 逐字段对齐)
+ *  trackingNumber 由 fillLogistics 回填 */
+function normalizeOpenApiOrder(o, account) {
+  const b = o.baseInfo || {};
+  const entries = Array.isArray(o.productItems) ? o.productItems : [];
+  return {
+    orderSn: b.idOfStr || String(b.id || ''),
+    status: b.status || '',
+    statusPrompt: STATUS_PROMPTS[b.status] || b.status || '',
+    amount: Number(b.totalAmount || 0).toFixed(2), // 单位:元
+    trackingNumber: '',
+    orderTime: fmtTime(b.createTime),
+    sellerName: b.sellerLoginId || (b.sellerContact && b.sellerContact.companyName) || '',
+    buyerUserId: b.buyerUserId ? String(b.buyerUserId) : '',
+    buyerUsername: b.buyerLoginId || '',
+    account,
+    goods: entries.map((e) => ({
+      goodsName: e.name || '',
+      spec: (Array.isArray(e.skuInfos) ? e.skuInfos : []).map((s) => `${s.name}:${s.value}`).join(' '),
+      price: Number(e.price || 0).toFixed(2),
+      number: Number(e.quantity || 1),
+      thumbUrl: String((e.productImgUrl || [])[0] || '').replace(/^http:/, 'https:'),
+    })),
+  };
+}
+
+/** 批量查物流单号并回填(trackingNumber 取第一个物流包,对齐 mtop tracks[0]);
+ *  单号查失败不阻塞列表(留空) */
+async function fillLogistics(orders, account) {
+  const targets = orders.filter((o) => SHIPPED_STATUSES.has(o.status) && o.orderSn);
+  if (!targets.length) return;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < targets.length) {
+      const t = targets[cursor++];
+      try {
+        const r = await callOpenApi(API_LOGISTICS, account, {
+          orderId: t.orderSn, fields: 'logisticsBillNo', webSite: '1688',
+        });
+        const packs = Array.isArray(r.result) ? r.result : [];
+        t.trackingNumber = String((packs[0] && packs[0].logisticsBillNo) || '');
+      } catch (e) {
+        // 物流查询单笔失败不影响订单列表(留空,不抛错)
+        console.warn(`[ali1688-openapi] 物流查询失败 ${t.orderSn}: ${e.message}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(LOGISTICS_CONCURRENCY, targets.length) }, worker));
+}
+
+/** 订单列表;返回 { orders }(结构/字段与浏览器版一致,前端零改动)
+ *  不传时间窗口:isHis=false 即最近 3 个月,首页 30 条(前端只用第一页) */
+async function listAli1688OpenApiOrders({ tab = 'all', size = 30, account } = {}) {
+  const params = { isHis: 'false', page: '1', pageSize: String(Math.min(Number(size) || 30, 50)) };
+  const st = TAB_STATUS[tab];
+  if (st) params.orderStatus = st; // all 不传 orderStatus = 全部状态(含已取消)
+  const json = await callOpenApi(API_ORDER_LIST, account, params);
+  const raw = Array.isArray(json.result) ? json.result : [];
+  const orders = raw.map((o) => normalizeOpenApiOrder(o, account));
+  await fillLogistics(orders, account);
+  return { orders };
+}
+
+/** 单账号按订单号精确搜索(buyerView);未找到/业务错误返回 null,token 失效抛 AUTH_REQUIRED */
+async function searchAliOpenApiInAccount(orderSn, account) {
+  let json;
+  try {
+    json = await callOpenApi(API_ORDER_DETAIL, account, {
+      webSite: '1688',
+      orderId: String(orderSn || ''),
+      includeFields: 'baseInfo,productItems',
+    });
+  } catch (e) {
+    if (e instanceof ApiError && e.code === ErrorCode.AUTH_REQUIRED) throw e;
+    // 订单不存在/不属于该账号等业务错误 → 视为无命中(对齐浏览器版 searchMode 语义)
+    console.warn(`[ali1688-openapi] 搜索 ${orderSn}(账号 ${account})无结果: ${e.message}`);
+    return null;
+  }
+  const detail = json && json.result;
+  if (!detail || !detail.baseInfo) return null;
+  const n = normalizeOpenApiOrder(detail, account);
+  // 对齐浏览器版 searchAliOrder 返回结构
+  const result = {
+    orderSn: n.orderSn,
+    orderAmount: n.amount,
+    orderTime: n.orderTime,
+    statusPrompt: n.statusPrompt,
+    trackingNumber: n.trackingNumber,
+    goods: n.goods,
+  };
+  // 详情补物流单号(单次调用)
+  if (SHIPPED_STATUSES.has(n.status)) {
+    try {
+      const r = await callOpenApi(API_LOGISTICS, account, {
+        orderId: n.orderSn, fields: 'logisticsBillNo', webSite: '1688',
+      });
+      const packs = Array.isArray(r.result) ? r.result : [];
+      result.trackingNumber = String((packs[0] && packs[0].logisticsBillNo) || '');
+    } catch { /* 留空 */ }
+  }
+  return result;
+}
+
+export { hasAliOpenApiToken, listAli1688OpenApiOrders, searchAliOpenApiInAccount };

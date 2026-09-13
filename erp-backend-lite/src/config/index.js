@@ -71,6 +71,19 @@ const config = {
   platformBrowserHeadless: process.env.PLATFORM_BROWSER_HEADLESS !== '0',
   platformBrowserIdleMs: Number(process.env.PLATFORM_BROWSER_IDLE_MS) || 10 * 60 * 1000,
   platformOrderTimeoutMs: Number(process.env.PLATFORM_ORDER_TIMEOUT_MS) || 60 * 1000,
+  // 1688 官方开放平台 API(2026-09-13,替换 cloakbrowser mtop 链路)
+  // 已配 token 的账号走官方 API(无风控),未配的回落浏览器 mtop 适配器;
+  // token 来自 OAuth 授权,过期(401)需重新授权更新 .env 后重启
+  ali1688OpenApi: {
+    appKey: process.env.ALI1688_APP_KEY || '',
+    appSecret: process.env.ALI1688_APP_SECRET || '',
+    // 账号名 = env 变量后缀小写:ALI1688_TOKEN_LINQX → tokens.linqx
+    tokens: Object.fromEntries(
+      Object.entries(process.env)
+        .filter(([k]) => k.startsWith('ALI1688_TOKEN_') && k.length > 'ALI1688_TOKEN_'.length)
+        .map(([k, v]) => [k.slice('ALI1688_TOKEN_'.length).toLowerCase(), v])
+    ),
+  },
 };
 
 export default config;
