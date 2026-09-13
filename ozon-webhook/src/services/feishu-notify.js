@@ -176,15 +176,14 @@ export async function sendFeishuText(text, url) {
 
 /**
  * 推送货件级通知到飞书
+ * 揽收路由说明(2026-09-13 调整):STATE_CHANGED 的揽收判定不再由本函数内嵌
+ * (原:精确匹配 new_state=posting_on_way_to_city 转 notifyPostingPickedUp),
+ * 改由 state-changed.js handler 按"首次达到揽收级 + pickup_at 去重"决策后定向调用
+ * notifyPostingPickedUp / notifyPostingEvent(设计决策 D1,避免重复推送与漏报窗口)
  * @param {string} messageType TYPE_NEW_POSTING / TYPE_POSTING_CANCELLED / TYPE_STATE_CHANGED
  * @param {object} payload Ozon 推送原始 payload
  */
 export async function notifyPostingEvent(messageType, payload) {
-  // 揽收(STATE_CHANGED + new_state=posting_on_way_to_city)走独立机器人 + 带当日揽收统计
-  if (messageType === 'TYPE_STATE_CHANGED' && payload.new_state === 'posting_on_way_to_city') {
-    return notifyPostingPickedUp(payload);
-  }
-
   const postingNumber = payload.posting_number ?? '-';
   const sellerId = payload.seller_id ?? '-';
 
@@ -311,22 +310,20 @@ export async function notifyNewPostingDiscovered(store, posting, todaySummaryLin
 }
 
 /**
- * 从 DB 查询当日各店铺揽收统计(按 last_received_at 当日 + status=posting_on_way_to_city 近似)
- * 揽收时间用 ozon_postings.last_received_at 近似(STATE_CHANGED 落库时间)
- * 注意:同一货件后续状态变更会覆盖 last_received_at,可能导致漏统计;
- * 但揽收通常是一日内的终态之一,且本函数专为"刚收到揽收推送"场景设计,容差可接受
+ * 从 DB 查询当日各店铺揽收统计
+ * 口径(2026-09-13 修正):按 pickup_at 当日计数——pickup_at 是首次达到揽收级的时间,
+ * 由 webhook handler(实时推送)与 unfulfilled-poller(兜底)共同维护,
+ * 不受后续状态变更覆盖影响;旧口径(status=posting_on_way_to_city)会被后续状态覆盖导致漏计
  * @returns {{bySeller: Map<number, {storeName, sellerId, pickupCount}>, total: number}}
  */
 export function buildTodayPickupSummaryFromDb() {
   const { start, end } = getTodayUtcRange();
   const db = getDb();
-  // 当日 last_received_at 且当前状态为揽收的货件数
   const rows = db.prepare(`
     SELECT seller_id, COUNT(*) AS pickup_count
     FROM ozon_postings
-    WHERE status = 'posting_on_way_to_city'
-      AND last_received_at IS NOT NULL
-      AND last_received_at >= ? AND last_received_at < ?
+    WHERE pickup_at IS NOT NULL
+      AND pickup_at >= ? AND pickup_at < ?
     GROUP BY seller_id
     ORDER BY seller_id
   `).all(start, end);
@@ -406,4 +403,78 @@ export async function notifyPostingPickedUp(payload) {
   ].filter((v) => v !== null).join('\n');
 
   await sendFeishuText(text, config.feishu.webhookUrlPickup);
+}
+
+/**
+ * 取消发起方翻译(取消兜底通知用)
+ * API 实测返回俄语(Клиент),swagger 枚举为英语(Client),统一映射中文,未知原样返回
+ */
+const INITIATOR_CN = {
+  'Клиент': '买家', 'Client': '买家', 'Customer': '买家',
+  'Продавец': '卖家', 'Seller': '卖家',
+  'Ozon': 'Ozon',
+  'Система': '系统', 'System': '系统',
+  'Доставка': '物流', 'Delivery': '物流',
+};
+
+function formatInitiator(initiator) {
+  if (initiator == null) return '-';
+  return INITIATOR_CN[String(initiator)] ?? String(initiator);
+}
+
+/**
+ * 推送"unfulfilled-poller 发现的揽收"兜底通知到飞书
+ * 格式与 notifyPostingPickedUp(实时揽收推送)一致,末行标注"(兜底通知)"
+ * @param {object} store   店铺对象
+ * @param {object} posting OPI /v4/posting/fbs/unfulfilled/list 返回的单条 posting
+ * @param {string} mappedState 映射后的推送模型状态(如 posting_on_way_to_city)
+ * @param {string|null} oldStatus 更新前的 DB 状态(新发现货件为 null)
+ * @param {string|null} pickupLines 当日揽收统计文本块(由 unfulfilled-poller 构造)
+ */
+export async function notifyPickupDiscovered(store, posting, mappedState, oldStatus, pickupLines) {
+  const postingNumber = posting.posting_number ?? '-';
+  const sellerId = Number(store.company_id);
+  const sellerName = store.name ?? String(sellerId);
+
+  const title = `[揽收] [${sellerName}] [${postingNumber}]`;
+  const text = [
+    title,
+    `货件号: ${postingNumber}`,
+    `卖家: ${formatSeller(sellerId)}`,
+    `变更时间: ${new Date().toISOString()}`,
+    `新状态: ${mappedState ?? '-'}`,
+    oldStatus ? `旧状态: ${oldStatus}` : null,
+    pickupLines ? '' : null,
+    pickupLines,
+    '(兜底通知)', // 末行标注,与 Ozon 实时推送区分
+  ].filter((v) => v !== null).join('\n');
+
+  await sendFeishuText(text, config.feishu.webhookUrlPickup);
+}
+
+/**
+ * 推送"cancel-scanner 发现的货件取消"兜底通知到飞书
+ * 格式与实时取消通知(TYPE_POSTING_CANCELLED)一致,末行标注"(兜底通知)";
+ * 额外携带取消发起方(实时推送无此字段)
+ * @param {object} store   店铺对象
+ * @param {object} posting OPI /v4/posting/fbs/list 返回的单条 posting(status=cancelled/not_accepted)
+ * @param {string|null} oldStatus 更新前的 DB 状态(新发现货件为 null)
+ */
+export async function notifyCancelDiscovered(store, posting, oldStatus) {
+  const postingNumber = posting.posting_number ?? '-';
+  const sellerId = Number(store.company_id);
+  const cancel = posting.cancellation ?? {};
+
+  const text = [
+    '[货件取消]',
+    `货件号: ${postingNumber}`,
+    `卖家: ${formatSeller(sellerId)}`,
+    `取消时间: ${new Date().toISOString()}`,
+    oldStatus ? `旧状态: ${oldStatus}` : null,
+    cancel.cancel_reason ? `取消原因: ${cancel.cancel_reason}` : null,
+    cancel.cancellation_initiator ? `取消发起方: ${formatInitiator(cancel.cancellation_initiator)}` : null,
+    '(兜底通知)', // 末行标注,与 Ozon 实时推送区分
+  ].filter((v) => v !== null).join('\n');
+
+  await sendFeishuText(text, config.feishu.webhookUrlCancel);
 }

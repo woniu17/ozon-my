@@ -45,6 +45,8 @@ function runMigrations(db) {
     { table: 'ozon_postings', column: 'creation_date', type: 'TEXT', index: null },
     { table: 'ozon_postings', column: 'cancel_date', type: 'TEXT', index: null },
     { table: 'ozon_postings', column: 'sale_amount_cny', type: 'REAL DEFAULT 0', index: null },
+    { table: 'ozon_postings', column: 'pickup_at', type: 'TEXT', index: null },
+    { table: 'ozon_postings', column: 'cancel_initiator', type: 'TEXT', index: null },
   ];
   for (const m of migrations) {
     const cols = db.prepare(`PRAGMA table_info(${m.table})`).all();
@@ -57,6 +59,22 @@ function runMigrations(db) {
     if (m.index) {
       db.exec(`CREATE INDEX IF NOT EXISTS ${m.index} ON ${m.table}(${m.column})`);
     }
+  }
+
+  // 一次性回填(幂等):存量揽收行(status=posting_on_way_to_city)补 pickup_at,
+  // 用 last_received_at 近似揽收时间,衔接揽收统计新口径(pickup_at 当日计数)
+  try {
+    const r = db.prepare(`
+      UPDATE ozon_postings SET pickup_at = last_received_at
+      WHERE status = 'posting_on_way_to_city'
+        AND pickup_at IS NULL
+        AND last_received_at IS NOT NULL
+    `).run();
+    if (r.changes > 0) {
+      logger.info({ changes: r.changes }, 'migration: 回填 pickup_at(存量揽收行)');
+    }
+  } catch (err) {
+    logger.warn({ err: err.message }, 'migration: 回填 pickup_at 失败');
   }
 }
 

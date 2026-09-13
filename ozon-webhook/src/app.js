@@ -10,6 +10,7 @@ import { errorHandler } from './middleware/error.js';
 import webhookRoutes from './modules/webhook.js';
 import { startEventPoller, stopEventPoller } from './services/event-poller.js';
 import { startUnfulfilledPoller, stopUnfulfilledPoller } from './services/unfulfilled-poller.js';
+import { startCancelScanner, stopCancelScanner } from './services/cancel-scanner.js';
 import { loadStores, getStoresMeta } from './services/store-loader.js';
 
 // 初始化 DB schema
@@ -48,6 +49,8 @@ const server = app.listen(config.port, () => {
   startEventPoller();
   // 启动 Unfulfilled Poller(每2分钟兜底扫描 /v4/posting/fbs/unfulfilled/list 发现漏推货件)
   startUnfulfilledPoller();
+  // 启动 Cancel Scanner(每10分钟兜底扫描 /v4/posting/fbs/list cancelled 发现漏推取消,方案C)
+  startCancelScanner();
 });
 
 // 优雅退出
@@ -55,6 +58,7 @@ function shutdown(signal) {
   logger.info({ signal }, '收到退出信号,正在关闭...');
   stopEventPoller();
   stopUnfulfilledPoller();
+  stopCancelScanner();
   server.close(() => {
     logger.info('已关闭');
     process.exit(0);

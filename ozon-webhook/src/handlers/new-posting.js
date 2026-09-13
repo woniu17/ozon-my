@@ -57,7 +57,9 @@ export default async function newPostingHandler(payload, ctx) {
     ON CONFLICT(posting_number) DO UPDATE SET
       seller_id=excluded.seller_id,
       warehouse_id=excluded.warehouse_id,
-      status=excluded.status,
+      -- 终态保护:同号晚到的 NEW_POSTING(如取消推送先到)不得把已推进/已取消的状态
+      -- 回退为 posting_created;仅 DB 状态为空时才写入初始状态
+      status=COALESCE(ozon_postings.status, excluded.status),
       products_json=excluded.products_json,
       in_process_at=COALESCE(excluded.in_process_at, ozon_postings.in_process_at),
       shipment_date=COALESCE(excluded.shipment_date, ozon_postings.shipment_date),

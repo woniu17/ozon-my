@@ -139,3 +139,33 @@ export async function postingFbsUnfulfilledList(store, { cutoffFrom, cutoffTo, c
   const result = data?.result ?? data;
   return result ?? { postings: [], cursor: '', has_next: false, count: 0 };
 }
+
+/**
+ * 拉取 FBS 货件列表(取消兜底扫描用,cancel-scanner)
+ * POST /v4/posting/fbs/list
+ * M0 实测(2026-09-13):cancelled 货件不出现在 unfulfilled list(4 店 12 单 0/12 在列),
+ * 本接口 statuses=['cancelled'] 可精确拉取已取消货件(含完整 cancellation 对象),
+ * 且 last_changed_status_date 支持按状态变更时间做增量过滤
+ * @param {object} store 店铺对象
+ * @param {object} opts
+ * @param {string} opts.since            ISO 下单时间窗口起(in_process_at,必填)
+ * @param {string} opts.to               ISO 下单时间窗口止(必填)
+ * @param {string[]} [opts.statuses]     状态过滤(cancelled / not_accepted 等)
+ * @param {string} [opts.lastChangedFrom] 状态变更时间窗口起(增量用)
+ * @param {string} [opts.lastChangedTo]   状态变更时间窗口止
+ * @param {string} [opts.cursor]          分页游标
+ * @param {number} [opts.limit=100]       每页数量(上限 100)
+ * @returns {Promise<{postings:Array, cursor:string, has_next:boolean}>}
+ */
+export async function postingFbsList(store, { since, to, statuses, lastChangedFrom, lastChangedTo, cursor, limit = 100 } = {}) {
+  const filter = { since, to };
+  if (statuses?.length) filter.statuses = statuses;
+  if (lastChangedFrom || lastChangedTo) {
+    filter.last_changed_status_date = { from: lastChangedFrom, to: lastChangedTo };
+  }
+  const body = { dir: 'DESC', filter, limit };
+  if (cursor) body.cursor = cursor;
+  const data = await opiRequest(store, '/v4/posting/fbs/list', body);
+  const result = data?.result ?? data;
+  return result ?? { postings: [], cursor: '', has_next: false };
+}
