@@ -642,9 +642,243 @@ async function forwardMsEventToErpTabs(msg) {
   }
 }
 
+// ── PDD 登录同步(2026-09-14,登录权威源=用户日常浏览器)──────
+// 拼多多单点登录:cloakbrowser 登录会被用户浏览器登录互踢。
+// 方案:用户只在日常浏览器登录 PDD,本扩展把 cookie 同步给 ERP 后台,
+//       后端注入 cloakbrowser(ERP 侧永不登录)。
+// 链路:popup → PDD_POPUP_SYNC → 采 cookie → tabs.sendMessage(ERP_BRIDGE_REQUEST)
+//       → erp-bridge(content script)→ ERP 页面 → POST /platform-orders/pdd-sync-cookies(JWT)
+//       → 结果经 ERP_BRIDGE_RESPONSE 回传 → sendResponse 回 popup
+// 设计文档: docs/PDD登录同步-概要设计.md §4.2
+
+// 2026-09-14 实测 PDD 已弃用 PDDAccessToken cookie,会话仅靠 pdd_user_id + 其余
+// 会话 cookie(api_uid/pdd_vds 等),Apollo API 亦仅需 Cookie 会话,无需 AccessToken 头
+const PDD_REQUIRED_COOKIES = ['pdd_user_id'];
+// ERP 页面 origin(erp-bridge content script 所在;tabs.query url 匹配需 host 权限)
+const ERP_TAB_URL_PATTERNS = [
+  'http://localhost:3001/admin*',
+  'http://localhost:5173/admin*',
+  'https://yochylin.com/admin*',
+];
+
+/** PDD 域判定(yangkeduo.com / pinduoduo.com 及子域) */
+function isPddDomain(domain) {
+  return /(^|\.)(yangkeduo\.com|pinduoduo\.com)$/i.test((domain || '').replace(/^\./, ''));
+}
+
+/** PDD 关键会话 cookie 名(逐名 get 兜底用,与页面 document.cookie 实测清单对齐) */
+const PDD_SESSION_COOKIE_NAMES = [
+  'pdd_user_id', 'pdd_user_uin', 'pdd_vds', 'api_uid', '_nano_fp',
+  'njrpl', 'dilx', 'webp', 'avif', 'jrpl', 'PDDAccessToken',
+];
+
+/** 采集 PDD 会话 cookie(三路查询合并 + 逐名 get 兜底)
+ *  2026-09-14 Edge 153 实测:getAll 的 url/domain 过滤只返回旧登录遗留的
+ *  jrpl/PDDAccessToken 两条,当前登录的 9 条(pdd_user_id/pdd_vds 等)全部
+ *  漏掉;而 cookies.get({url,name}) 逐名查询能拿到。故四路合并:
+ *  1) domain 过滤(域前导点 cookie)
+ *  2) url 过滤(host-only cookie)
+ *  3) getAll({}) 全量 + 本地 PDD 域过滤(绕过过滤实现怪癖)
+ *  4) 关键名逐名 get 补漏(实测唯一稳定拿到当前会话的途径)
+ *  同键(name|domain|path)后写入者覆盖先写入者 → 逐名 get 的活会话值优先 */
+async function getPddCookies() {
+  const [byDomain, byUrl, allAll] = await Promise.all([
+    chrome.cookies.getAll({ domain: 'yangkeduo.com' }),
+    chrome.cookies.getAll({ url: 'https://mobile.yangkeduo.com/' }),
+    chrome.cookies.getAll({}).catch(() => []),
+  ]);
+  const byName = [];
+  for (const n of PDD_SESSION_COOKIE_NAMES) {
+    try {
+      const c = await chrome.cookies.get({ url: 'https://mobile.yangkeduo.com/', name: n });
+      if (c) byName.push(c);
+    } catch { /* ignore */ }
+  }
+  const merged = [
+    ...byDomain,
+    ...byUrl,
+    ...(allAll || []).filter((c) => c && isPddDomain(c.domain)),
+    ...byName,
+  ];
+  const map = new Map(); // name|domain|path → cookie
+  for (const c of merged) {
+    if (!c) continue;
+    map.set(`${c.name}|${c.domain}|${c.path}`, c);
+  }
+  return [...map.values()];
+}
+
+/** 读浏览器 PDD 登录态(必需 cookie 存在性 + 昵称探测;探测失败不阻塞)
+ *  2026-09-14 PDD 已弃用 PDDAccessToken,会话仅靠 Cookie;Apollo user/me
+ *  仅需 Cookie 会话(credentials:include),无需 AccessToken 头 */
+async function getPddLoginState() {
+  const all = await getPddCookies();
+  const get = (n) => (all.find((c) => c.name === n) || {}).value || '';
+  const uid = get('pdd_user_id');
+  if (!uid) return { loggedIn: false };
+  // 昵称:apollo user/me(妙手插件同款;失败留空)
+  let nickname = '';
+  try {
+    const resp = await fetch(
+      `https://mobile.yangkeduo.com/proxy/api/api/apollo/v3/user/me?pdduid=${encodeURIComponent(uid)}`,
+      { credentials: 'include' }
+    );
+    if (resp.ok) {
+      const j = await resp.json().catch(() => null);
+      nickname = (j && (j.nickname || (j.user_info && j.user_info.nickname))) || '';
+    }
+  } catch { /* ignore */ }
+  return { loggedIn: true, uid, nickname };
+}
+
+/** 页面桥请求(reqId 关联应答;挂起回调放模块级 Map,SW 存活期内有效) */
+const pendingBridgeRequests = new Map(); // reqId → resolve
+let bridgeSeq = 1;
+
+/** 向 ERP 页面(erq-bridge 所在 tab)发桥请求,等应答 */
+async function requestErpPage(requestType, payload, timeoutMs = 20 * 1000) {
+  const tabs = await chrome.tabs.query({ url: ERP_TAB_URL_PATTERNS });
+  if (!tabs.length) {
+    return { ok: false, error: '未找到打开的 ERP 页面,请先打开 ERP 订单处理页' };
+  }
+  const reqId = `pddsync-${Date.now()}-${bridgeSeq++}`;
+  const promise = new Promise((resolve) => {
+    pendingBridgeRequests.set(reqId, resolve);
+    setTimeout(() => {
+      if (pendingBridgeRequests.has(reqId)) {
+        pendingBridgeRequests.delete(reqId);
+        resolve({ ok: false, error: 'ERP 页面响应超时' });
+      }
+    }, timeoutMs).unref?.();
+  });
+  // 逐 tab 广播(多开时第一个应答者胜出)
+  for (const t of tabs) {
+    try {
+      await chrome.tabs.sendMessage(t.id, { type: 'ERP_BRIDGE_REQUEST', reqId, requestType, payload });
+    } catch { /* 该 tab 无 erp-bridge(如刚加载),试下一个 */ }
+  }
+  return promise;
+}
+
+/** ERP 账号列表(供 popup 下拉;页面桥获取 + storage.local 缓存兜底) */
+async function getErpAccounts() {
+  const r = await requestErpPage('PDD_GET_ACCOUNTS', null, 10 * 1000);
+  if (r?.ok && Array.isArray(r.accounts) && r.accounts.length) {
+    await chrome.storage.local.set({ pddErpAccounts: r.accounts }).catch(() => {});
+    return { accounts: r.accounts };
+  }
+  // ERP 页面未开:用上次缓存
+  const v = await chrome.storage.local.get('pddErpAccounts').catch(() => ({}));
+  const cached = v.pddErpAccounts || [];
+  if (cached.length) return { accounts: cached, cached: true };
+  return { accounts: [], error: r?.error || '请先打开 ERP 页面(账号列表来自 ERP)' };
+}
+
+/** 执行 PDD cookie 同步(采 cookie → ERP 页面桥 → 后端) */
+async function syncPddCookiesToErp(account) {
+  if (!account) return { ok: false, error: '请选择要同步的 ERP 账号' };
+  const all = await getPddCookies();
+  const names = new Set(all.map((c) => c && c.name));
+  const missing = PDD_REQUIRED_COOKIES.filter((n) => !names.has(n));
+  if (missing.length) {
+    return { ok: false, error: `拼多多未登录(缺 ${missing.join(', ')}),请先在本浏览器登录 mobile.yangkeduo.com` };
+  }
+  const uid = (all.find((c) => c.name === 'pdd_user_id') || {}).value || '';
+  return requestErpPage('PDD_SYNC_COOKIES', { account, uid, cookies: all });
+}
+
 // ── 消息路由(erp-bridge.js 中继转发)────────────────
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg) return false;
+  if (msg.type === 'PDD_DEBUG') {
+    // 调试:返回 cookie 查询与权限的完整诊断(排查"未登录"误报)
+    (async () => {
+      const diag = { sw: 'alive', ua: navigator.userAgent };
+      try {
+        diag.permHost = await chrome.permissions.contains({ origins: ['https://*.yangkeduo.com/*'] });
+      } catch (e) { diag.permHost = 'ERR:' + e.message; }
+      try {
+        const byDomain = await chrome.cookies.getAll({ domain: 'yangkeduo.com' });
+        diag.byDomain = { count: byDomain.length, names: byDomain.map((c) => c.name) };
+      } catch (e) { diag.byDomain = 'ERR:' + e.message; }
+      try {
+        const byUrl = await chrome.cookies.getAll({ url: 'https://mobile.yangkeduo.com/' });
+        diag.byUrl = { count: byUrl.length, names: byUrl.map((c) => c.name), detail: byUrl.map((c) => ({ name: c.name, domain: c.domain })) };
+      } catch (e) { diag.byUrl = 'ERR:' + e.message; }
+      // 分区 cookie(CHIPS)假设验证:带 partitionKey 的查询
+      try {
+        const part = await chrome.cookies.getAll({ url: 'https://mobile.yangkeduo.com/', partitionKey: { topLevelSite: 'https://mobile.yangkeduo.com' } });
+        diag.byUrlPartitioned = { count: part.length, names: part.map((c) => c.name) };
+      } catch (e) { diag.byUrlPartitioned = 'ERR:' + e.message; }
+      try {
+        const partAny = await chrome.cookies.getAll({ url: 'https://mobile.yangkeduo.com/', partitionKey: {} });
+        diag.byUrlPartitionAny = { count: partAny.length, names: partAny.map((c) => c.name) };
+      } catch (e) { diag.byUrlPartitionAny = 'ERR:' + e.message; }
+      try {
+        const g = await chrome.cookies.get({ url: 'https://mobile.yangkeduo.com/', name: 'pdd_user_id' });
+        diag.getPddUserIdPlain = g ? { domain: g.domain, partitionKey: g.partitionKey || null } : null;
+      } catch (e) { diag.getPddUserIdPlain = 'ERR:' + e.message; }
+      try {
+        const gp = await chrome.cookies.get({ url: 'https://mobile.yangkeduo.com/', name: 'pdd_user_id', partitionKey: { topLevelSite: 'https://mobile.yangkeduo.com' } });
+        diag.getPddUserIdPartitioned = gp ? { domain: gp.domain, value: gp.value } : null;
+      } catch (e) { diag.getPddUserIdPartitioned = 'ERR:' + e.message; }
+      try {
+        diag.loginState = await getPddLoginState();
+      } catch (e) { diag.loginState = 'ERR:' + e.message; }
+      // 诊断增强(2026-09-14):getAll url 过滤漏 cookie 根因排查
+      // A. 全量 getAll({}) 本地过滤 yangkeduo/pinduoduo(绕过 url/domain 过滤)
+      try {
+        const allAll = await chrome.cookies.getAll({});
+        diag.allTotal = allAll.length;
+        diag.allYkd = allAll
+          .filter((c) => /yangkeduo|pinduoduo/.test(c.domain || ''))
+          .map((c) => ({ name: c.name, domain: c.domain, path: c.path, hostOnly: !!c.hostOnly, httpOnly: !!c.httpOnly, secure: !!c.secure, sameSite: c.sameSite, session: !!c.session, exp: c.expirationDate || null, pk: c.partitionKey || null }));
+      } catch (e) { diag.allYkd = 'ERR:' + e.message; }
+      // B. 逐名 get 完整属性(对照 A,验证 get 与 getAll 行为差异)
+      try {
+        const names = ['api_uid', '_nano_fp', 'njrpl', 'dilx', 'webp', 'avif', 'pdd_user_id', 'pdd_user_uin', 'pdd_vds', 'jrpl', 'PDDAccessToken'];
+        diag.getByNames = {};
+        for (const n of names) {
+          const c = await chrome.cookies.get({ url: 'https://mobile.yangkeduo.com/', name: n });
+          diag.getByNames[n] = c
+            ? { domain: c.domain, path: c.path, hostOnly: !!c.hostOnly, httpOnly: !!c.httpOnly, secure: !!c.secure, sameSite: c.sameSite, session: !!c.session, exp: c.expirationDate || null, pk: c.partitionKey || null, vlen: (c.value || '').length }
+            : null;
+        }
+      } catch (e) { diag.getByNames = 'ERR:' + e.message; }
+      sendResponse(diag);
+    })();
+    return true;
+  }
+  if (msg.type === 'PDD_LOGIN_STATE') {
+    // popup 打开时探测浏览器 PDD 登录态
+    getPddLoginState()
+      .then((st) => sendResponse(st))
+      .catch((err) => sendResponse({ loggedIn: false, error: String(err && err.message ? err.message : err) }));
+    return true; // 异步 sendResponse
+  }
+  if (msg.type === 'PDD_GET_ACCOUNTS') {
+    // popup 账号下拉数据(ERP 页面桥 + 缓存兜底)
+    getErpAccounts()
+      .then((r) => sendResponse(r))
+      .catch((err) => sendResponse({ accounts: [], error: String(err && err.message ? err.message : err) }));
+    return true;
+  }
+  if (msg.type === 'PDD_POPUP_SYNC') {
+    // 同步浏览器 PDD cookie 到 ERP 后台(经 ERP 页面桥)
+    syncPddCookiesToErp(msg.payload && msg.payload.account)
+      .then((r) => sendResponse(r || { ok: false, error: '同步无响应' }))
+      .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
+    return true;
+  }
+  if (msg.type === 'ERP_BRIDGE_RESPONSE') {
+    // erp-bridge 转发的页面应答(关联挂起的桥请求)
+    const resolve = pendingBridgeRequests.get(msg.reqId);
+    if (resolve) {
+      pendingBridgeRequests.delete(msg.reqId);
+      resolve(msg.data || { ok: false, error: '页面无应答数据' });
+    }
+    return false;
+  }
   if (msg.type === 'PDD_GET_ORDERS') {
     fetchPddOrders(msg.payload || {})
       .then((orders) => sendResponse({ ok: true, orders }))

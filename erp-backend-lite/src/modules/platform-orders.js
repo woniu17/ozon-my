@@ -22,7 +22,8 @@ import { Router } from 'express';
 import config from '../config/index.js';
 import { ok } from '../utils/response.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
-import { status as browserStatus, getCookieState } from '../services/platform-orders/browser-manager.js';
+import { status as browserStatus, getCookieState, applyPddCookies } from '../services/platform-orders/browser-manager.js';
+import { savePddCookies, readPddCookies, readPddCookieMeta } from '../services/platform-orders/pdd-cookie-store.js';
 import { listPddOrders, searchPddOrder } from '../services/platform-orders/adapters/pdd.js';
 import {
   listAli1688Orders as listAliViaBrowser,
@@ -81,12 +82,12 @@ const PLATFORMS = new Map([
 ]);
 
 // 平台登录态探测表(浏览器运行中才探测;未运行返回 unknown 不触发冷启动)
-// 2026-09 实测 .linqx-profile 的真实登录标记(与插件侧文档注释有出入):
-//  pdd: PDDAccessToken/pdd_user_id(实际无 pdd_user_uid cookie,会话照样有效)
+// 2026-09-14 实测 PDD 已弃用 PDDAccessToken cookie,会话仅靠 pdd_user_id +
+// 其余会话 cookie(api_uid/pdd_vds 等);任一命中即视为已登录
 //  ali1688/taobao: _m_h5_tk(mtop token)+ 平台登录 cookie 任一命中即视为已登录
 //  注意 'yes' 仅代表 cookie 存在,session 真实失效由请求时的 AUTH_REQUIRED 兜底
 const LOGIN_PROBES = new Map([
-  ['pdd', { url: 'https://mobile.yangkeduo.com/', cookies: ['PDDAccessToken', 'pdd_user_uid', 'pdd_user_id'] }],
+  ['pdd', { url: 'https://mobile.yangkeduo.com/', cookies: ['pdd_user_uid', 'pdd_user_id'] }],
   ['ali1688', { url: 'https://air.1688.com/', cookies: ['_m_h5_tk', '__cn_logon__'] }],
   ['taobao', { url: 'https://h5api.m.taobao.com/', cookies: ['_m_h5_tk', 'tracknick'] }],
 ]);
@@ -113,6 +114,27 @@ function resolveAccount(platform, accountParam) {
   return account;
 }
 
+// ── POST /pdd-sync-cookies:插件同步 PDD 登录 cookie(2026-09-14)──
+// 链路:插件 popup → background(tabs.sendMessage)→ erp-bridge → ERP 前端(JWT)→ 本路由
+// 职责:app_config 持久化 + 运行中浏览器即时注入(未启动则下次冷启动自动注入)
+// 设计文档: docs/PDD登录同步-概要设计.md §4.5
+router.post('/admin/api/platform-orders/pdd-sync-cookies', async (req, res, next) => {
+  try {
+    const account = resolveAccount('pdd', req.body?.account);
+    const saved = savePddCookies(account, req.body);
+    // 注入运行中浏览器(未运行返回 false,下次冷启动 doLaunch 自动注入)
+    let injected = false;
+    try {
+      const stored = readPddCookies(account);
+      injected = await applyPddCookies(account, stored?.cookies || []);
+    } catch (e) {
+      // 注入失败(如 addCookies 参数异常)不影响持久化,返回 injected:false 由前端提示
+      injected = false;
+    }
+    res.json(ok({ ...saved, injected }));
+  } catch (e) { next(e); }
+});
+
 // ── GET /status:全部账号浏览器运行态 + 各平台×账号登录态 ─
 router.get('/admin/api/platform-orders/status', async (_req, res, next) => {
   try {
@@ -127,13 +149,19 @@ router.get('/admin/api/platform-orders/status', async (_req, res, next) => {
           continue;
         }
         const cookies = await getCookieState(account, probe.url);
-        accounts[account] = cookies === null
-          ? { login: 'unknown', hint: '浏览器未运行,首次订单请求会冷启动' }
-          : {
-            // cookieNames 仅名称不含值,用于登录标记诊断(探测 cookie 名与真实会话可能不一致)
-            login: cookies.some((c) => probe.cookies.includes(c.name)) ? 'yes' : 'no',
-            cookieNames: cookies.map((c) => c.name),
-          };
+        if (cookies === null) {
+          // PDD:浏览器未运行时报告插件同步状态(有同步记录=可拉单,冷启动自动注入)
+          const pddMeta = name === 'pdd' ? readPddCookieMeta(account) : null;
+          accounts[account] = pddMeta
+            ? { login: 'yes', source: 'plugin-synced', cookieSyncedAt: pddMeta.syncedAt, uid: pddMeta.uid }
+            : { login: 'unknown', hint: '浏览器未运行,首次订单请求会冷启动' };
+          continue;
+        }
+        accounts[account] = {
+          // cookieNames 仅名称不含值,用于登录标记诊断(探测 cookie 名与真实会话可能不一致)
+          login: cookies.some((c) => probe.cookies.includes(c.name)) ? 'yes' : 'no',
+          cookieNames: cookies.map((c) => c.name),
+        };
       }
       platforms[name] = { accounts };
     }

@@ -17,7 +17,7 @@ import {
   listPendingPurchases,
   getOrderSummary,
   syncPackage,
-  getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus,
+  getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus, syncPddCookies,
 } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
@@ -982,6 +982,43 @@ async function loadPlatformStatus() {
   } catch { /* 静默:探测失败不阻塞主流程 */ }
 }
 
+// ── PDD 登录同步页面桥(2026-09-14)────────────────────────────
+// 链路:插件 popup → background → erp-bridge(content script)
+//       → window.postMessage(此处)→ 调后端 API(JWT)→ 结果回传
+// 消息(source:'erp-pdd-sync'):
+//   入: { type:'PDD_SYNC_COOKIES', reqId, payload:{account, uid, cookies[]} }
+//       { type:'PDD_GET_ACCOUNTS', reqId }
+//   出: { type:'PDD_SYNC_COOKIES_RESULT'|'PDD_GET_ACCOUNTS_RESULT', reqId, data:{ok,...} }
+// 设计文档: docs/PDD登录同步-概要设计.md §4.4
+const PDD_SYNC_NS = 'erp-pdd-sync';
+function postToPddSyncBridge(type, reqId, data) {
+  window.postMessage({ source: PDD_SYNC_NS, type, reqId, data }, window.location.origin);
+}
+async function onPddSyncBridgeMessage(ev) {
+  if (ev.source !== window || !ev.data || ev.data.source !== PDD_SYNC_NS) return;
+  const { type, reqId, payload } = ev.data;
+  try {
+    if (type === 'PDD_SYNC_COOKIES') {
+      const data = await syncPddCookies({
+        account: payload?.account,
+        uid: payload?.uid,
+        cookies: payload?.cookies || [],
+      });
+      postToPddSyncBridge('PDD_SYNC_COOKIES_RESULT', reqId, { ok: true, data });
+      // 同步成功后刷新登录态展示(status 会显示 plugin-synced)
+      loadPlatformStatus();
+    } else if (type === 'PDD_GET_ACCOUNTS') {
+      const accounts = importAccountTabs.value
+        .filter((t) => t.platform === 'pdd')
+        .map((t) => t.account);
+      postToPddSyncBridge('PDD_GET_ACCOUNTS_RESULT', reqId, { ok: true, accounts });
+    }
+  } catch (e) {
+    // 后端错误(如账号不存在/cookie 不完整):回传给插件 popup 展示
+    postToPddSyncBridge(`${type}_RESULT`, reqId, { ok: false, error: e?.message || String(e) });
+  }
+}
+
 // ── 统一订单导入 store(按 tabKey 分账号存储,切 tab 互不影响)──
 // importStores: tabKey → { orders, loading, error, tab, selected }
 const importStores = reactive({});
@@ -1748,10 +1785,13 @@ onMounted(() => {
   tickTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
   // 平台订单登录态探测(后端 cloakbrowser,替代原扩展 PING/PONG)
   loadPlatformStatus();
+  // PDD 登录同步页面桥(插件 popup 同步 cookie 的接入口)
+  window.addEventListener('message', onPddSyncBridgeMessage);
 });
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer);
   if (tickTimer) clearInterval(tickTimer);
+  window.removeEventListener('message', onPddSyncBridgeMessage);
   if (printFrame) {
     printFrame.remove();
     printFrame = null;

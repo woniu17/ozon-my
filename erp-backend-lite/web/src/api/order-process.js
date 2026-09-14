@@ -211,3 +211,11 @@ export function searchPlatformOrder(platform, orderSn) {
 export function getPlatformOrdersStatus() {
   return request.get('/admin/api/platform-orders/status');
 }
+
+// 拼多多登录 cookie 同步(2026-09-14,PDD 登录同步)
+// 链路:插件 popup 采集浏览器 cookie → ERP 页面桥 → 本接口(JWT)
+// body: { account, uid, cookies[] }(cookies 为 chrome.cookies 原始结构)
+// 返回 { account, uid, cookieCount, syncedAt, injected }
+export function syncPddCookies(body) {
+  return request.post('/admin/api/platform-orders/pdd-sync-cookies', body);
+}

@@ -72,3 +72,54 @@
     return false; // 不需要 sendResponse
   });
 })();
+
+// ── PDD 登录同步双向桥(2026-09-14)──────────────────────────
+// 独立 IIFE,不与上方 ROUTES 协议耦合。
+// background → 页面:chrome.tabs.sendMessage({type:'ERP_BRIDGE_REQUEST', reqId, requestType, payload})
+//   → 本脚本 postMessage {source:'erp-pdd-sync', type:<requestType>, reqId, payload} 到页面,
+//     并立即 sendResponse({delivered:true}) 关闭 tabs 通道(真实应答走下行)
+// 页面 → background:postMessage {source:'erp-pdd-sync', type:'*_RESULT', reqId, data}
+//   → 本脚本 chrome.runtime.sendMessage({type:'ERP_BRIDGE_RESPONSE', reqId, data})
+//     → background 用 reqId 关联挂起的桥请求
+// 页面侧处理逻辑见 ERP 前端 OrderProcess.vue 的 PDD 登录同步页面桥
+(function () {
+  'use strict';
+  const SYNC_NS = 'erp-pdd-sync';
+
+  // background → 页面(经 tabs.sendMessage 触达)
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (!msg || msg.type !== 'ERP_BRIDGE_REQUEST' || !msg.reqId) return false;
+    window.postMessage(
+      { source: SYNC_NS, type: msg.requestType, reqId: msg.reqId, payload: msg.payload },
+      window.location.origin
+    );
+    sendResponse({ delivered: true }); // 送达即关通道;应答走 ERP_BRIDGE_RESPONSE
+    return false;
+  });
+
+  // 页面 → background(应答)
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window || !ev.data || ev.data.source !== SYNC_NS) return;
+    const t = String(ev.data.type || '');
+    if (!/_RESULT$/.test(t) || !ev.data.reqId) return;
+    chrome.runtime.sendMessage({
+      type: 'ERP_BRIDGE_RESPONSE',
+      reqId: ev.data.reqId,
+      data: ev.data.data,
+    });
+  });
+
+  // 调试入口(临时):页面 postMessage {source:'erp-pdd-debug', type:'PDD_DEBUG_RUN'}
+  // → 转发 SW 的 PDD_DEBUG → 结果 postMessage {source:'erp-pdd-debug', type:'PDD_DEBUG_RESULT'} 回页面
+  const DEBUG_NS = 'erp-pdd-debug';
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window || !ev.data || ev.data.source !== DEBUG_NS) return;
+    if (ev.data.type !== 'PDD_DEBUG_RUN') return;
+    chrome.runtime.sendMessage({ type: 'PDD_DEBUG' }, (resp) => {
+      const data = chrome.runtime.lastError
+        ? { sw: 'error', error: chrome.runtime.lastError.message }
+        : (resp || { sw: 'no-response' });
+      window.postMessage({ source: DEBUG_NS, type: 'PDD_DEBUG_RESULT', data }, window.location.origin);
+    });
+  });
+})();

@@ -164,10 +164,11 @@ async function getPdduid(page) {
   } catch { return ''; }
 }
 
-/** 统一错误映射(与插件错误文案语义对齐) */
+/** 统一错误映射(与插件错误文案语义对齐)
+ *  2026-09-14 PDD 登录同步:登录权威源=用户日常浏览器,恢复路径改为插件同步 */
 function mapResponse(r, prefix) {
   if (r.status === 401 || r.status === 403) {
-    throw new ApiError(ErrorCode.AUTH_REQUIRED, '拼多多登录态失效,请运行 qxqx 的 persistent 登录 mobile.yangkeduo.com 后重试');
+    throw new ApiError(ErrorCode.AUTH_REQUIRED, '拼多多登录态失效,请在常用浏览器登录 mobile.yangkeduo.com 后,点击妙手助手插件的『同步登录到 ERP』按钮');
   }
   if (!r.httpOk) {
     throw new ApiError('BROWSER_ERROR', `${prefix}_HTTP_${r.status}: 拼多多接口返回异常`, { status: 502 });

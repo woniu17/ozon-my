@@ -25,6 +25,7 @@ import config from '../../config/index.js';
 import logger from '../../middleware/log.js';
 import { ApiError, ErrorCode } from '../../utils/error-codes.js';
 import { SerialQueue, withTimeout } from './queue.js';
+import { readPddCookies } from './pdd-cookie-store.js';
 
 // ── 行为层防风控(2026-09-13,对齐 get-shop-product mtopClient 节流/熔断策略)──
 // baxia 行为风控的典型信号是连续快速 mtop 请求;参考项目页间隔 5s、触发 punish 即停
@@ -108,6 +109,19 @@ function createBrowserManager(profileName, profileDir) {
       for (const p of restored.slice(1)) await p.close().catch(() => {});
       c.on('close', onContextClosed);
       ctx = c;
+      // 冷启动注入:插件同步的 PDD cookies(PDD 登录同步,ERP 侧永不登录)
+      try {
+        const saved = readPddCookies(profileName);
+        if (saved?.cookies?.length) {
+          await c.addCookies(saved.cookies);
+          logger.info(
+            { account: profileName, cookieCount: saved.cookies.length, syncedAt: saved.syncedAt },
+            '[platform-orders] 已注入插件同步的 PDD cookies(冷启动)'
+          );
+        }
+      } catch (e) {
+        logger.warn({ account: profileName, err: e?.message }, '[platform-orders] PDD cookies 冷启动注入失败(不阻塞启动)');
+      }
       logger.info(
         { account: profileName, profile: profileDir, headless: config.platformBrowserHeadless, restoredTabs: restored.length },
         '[platform-orders] cloakbrowser 已启动(懒启动)'
@@ -259,12 +273,26 @@ function createBrowserManager(profileName, profileDir) {
     try { return await ctx.cookies(url); } catch { return null; }
   }
 
+  /** 注入已映射的 PDD cookies(playwright 结构;浏览器运行中即时生效)
+   *  注入后关闭缓存的 pdd 载体页(旧页面持有旧会话上下文,下次 ensurePage 重建)
+   *  @returns {Promise<boolean>} 是否已注入(false=浏览器未运行,启动时会自动注入) */
+  async function applyPddCookies(mappedCookies) {
+    if (!ctx || (ctx.isClosed?.() ?? false)) return false;
+    await ctx.addCookies(mappedCookies);
+    const p = pages.get('pdd');
+    if (p && !p.isClosed()) {
+      pages.delete('pdd');
+      await p.close().catch(() => {});
+    }
+    return true;
+  }
+
   /** 关闭浏览器 + 清锁 */
   async function stop() {
     await closeInternal('进程退出').catch(() => {});
   }
 
-  return { withPage, status, getCookieState, stop };
+  return { withPage, status, getCookieState, applyPddCookies, stop };
 }
 
 // ── 账号注册表(模块级,按需懒实例化) ─────────────────────
@@ -311,9 +339,15 @@ async function getCookieState(account, url) {
   return managerFor(account).getCookieState(url);
 }
 
+/** 向指定账号浏览器注入已映射的 PDD cookies(运行中即时生效;未运行返回 false)
+ *  供 pdd-sync-cookies 路由用;cookie 持久化在 pdd-cookie-store,冷启动自动注入 */
+async function applyPddCookies(account, mappedCookies) {
+  return managerFor(account).applyPddCookies(mappedCookies);
+}
+
 /** 进程退出钩子(app.js shutdown 调用):关闭全部账号浏览器 + 清锁 */
 async function stopPlatformOrders() {
   await Promise.all([...managers.values()].map((m) => m.stop())).catch(() => {});
 }
 
-export { withPage, status, getCookieState, stopPlatformOrders, readBuyerIdentity };
+export { withPage, status, getCookieState, applyPddCookies, stopPlatformOrders, readBuyerIdentity };

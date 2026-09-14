@@ -3,22 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ERP 质检单高亮 - 设置</title>
+    <title>我的妙手助手</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <header class="header">
-      <h1>ERP 质检单高亮</h1>
-      <p class="subtitle">订单号以任一前缀开头即为质检单</p>
+      <h1>我的妙手助手</h1>
+      <p class="subtitle">质检单高亮 · 订单导入代理 · 拼多多登录同步</p>
     </header>
 
     <section class="section">
       <label class="label">质检单前缀</label>
-      <p class="hint">每行一个前缀，留空保存将恢复默认（02131、024785）</p>
+      <p class="hint">订单号以任一前缀开头即为质检单,每行一个,留空恢复默认</p>
       <textarea
         id="prefixes"
         class="textarea"
-        rows="6"
+        rows="4"
         placeholder="02131&#10;024785"
         spellcheck="false"
       ></textarea>
@@ -27,12 +27,26 @@
         <button id="save" class="btn btn-primary">保存</button>
         <button id="reset" class="btn btn-ghost">恢复默认</button>
       </div>
-
-      <div id="toast" class="toast" hidden></div>
     </section>
 
+    <section class="section pdd-sync">
+      <label class="label">拼多多登录同步</label>
+      <p class="hint">把本浏览器的拼多多登录态同步给 ERP 后台(拼多多单点登录,ERP 侧永不登录)</p>
+      <div id="pdd-login-state" class="pdd-login-state">检测中…</div>
+      <div class="pdd-account-row">
+        <span class="pdd-account-label">同步到账号</span>
+        <select id="pdd-account" class="select"></select>
+      </div>
+      <div class="actions">
+        <button id="pdd-sync" class="btn btn-primary" disabled>同步登录到 ERP</button>
+      </div>
+      <p class="hint" id="pdd-accounts-hint"></p>
+    </section>
+
+    <div id="toast" class="toast" hidden></div>
+
     <footer class="footer">
-      <div>匹配页面：</div>
+      <div>质检单匹配:</div>
       <code>erp.91miaoshou.com/order/package/index*</code>
     </footer>
 
