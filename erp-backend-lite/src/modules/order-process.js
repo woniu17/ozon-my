@@ -29,6 +29,7 @@ import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isS
 import { packageLabel } from '../services/ozon-opi.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
+import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
 
 const router = Router();
 
@@ -189,6 +190,13 @@ function computeProfit(pkg, cancelled = false, rate = null) {
 // ── Tab 计数 ────────────────────────────────────────────────
 router.get('/admin/api/order-process/tabs', (_req, res) => {
   res.json(ok(orderPackageDao.tabCounts()));
+});
+
+// ── 待导出状态(采购信息跨机文件同步徽标)──────────────────────
+// 本机跑过导出脚本(app_config mode=secondary)才激活;
+// count = 上次导出后发生过人工操作(采购/称重/交运/搁置)的包裹数(提示性信号)
+router.get('/admin/api/order-process/pending-export', (_req, res) => {
+  res.json(ok(getPendingExportState()));
 });
 
 // ── 包裹列表 ────────────────────────────────────────────────

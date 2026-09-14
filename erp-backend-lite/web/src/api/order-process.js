@@ -220,3 +220,13 @@ export function getPlatformOrdersStatus() {
 export function syncPddCookies(body) {
   return request.post('/admin/api/platform-orders/pdd-sync-cookies', body);
 }
+
+// ════════════════════════════════════════════════════════════════
+// 采购信息跨机文件同步(2026-09,scripts/export|import|diff-purchase-sync.mjs)
+// ════════════════════════════════════════════════════════════════
+
+// 待导出状态(徽标):本机跑过导出脚本才激活
+// 返回 { active, count, lastExportAt }
+export function getPendingExportState() {
+  return request.get('/admin/api/order-process/pending-export');
+}

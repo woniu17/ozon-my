@@ -344,6 +344,28 @@ async function ensureMigrations() {
       console.log('[db] migration: added column op_purchase_order.buyer_user_id');
     }
   }
+  // 2026-09-14: op_purchase_order.sync_uuid 跨机同步稳定标识
+  // 手工采购单(purchase_sn 为 NULL)没有自然判重键,跨机导出/导入时靠 sync_uuid 识别"同一条采购单"
+  // 有单号的采购单仍以 (platform, purchase_sn) 为准,sync_uuid 仅作兜底
+  {
+    const poCols3 = db.prepare(`PRAGMA table_info(op_purchase_order)`).all();
+    if (poCols3.length > 0 && !poCols3.some((c) => c.name === 'sync_uuid')) {
+      db.exec(`ALTER TABLE op_purchase_order ADD COLUMN sync_uuid TEXT`);
+      console.log('[db] migration: added column op_purchase_order.sync_uuid');
+      // 一次性回填:存量行生成 UUID(标准 8-4-4-4-12 格式,variant 位不严格,仅保证唯一)
+      db.exec(`
+        UPDATE op_purchase_order
+        SET sync_uuid = lower(
+          hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-' || hex(randomblob(2)) || '-' ||
+          hex(randomblob(2)) || '-' || hex(randomblob(6))
+        )
+        WHERE sync_uuid IS NULL OR sync_uuid = ''
+      `);
+      const filled = db.prepare(`SELECT COUNT(*) AS n FROM op_purchase_order WHERE sync_uuid IS NOT NULL`).get().n;
+      console.log(`[db] migration: backfilled sync_uuid for ${filled} op_purchase_order rows`);
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_op_po_syncuuid ON op_purchase_order(sync_uuid)`);
+  }
   // collect_queue_tasks:增加 force_refresh 列(1=强制重新采集,SW 消费时传 forceRefresh=true)
   // 旧库(CREATE TABLE IF NOT EXISTS 不会更新旧表结构)需 ALTER TABLE 补列
   if (!taskCols.some((c) => c.name === 'forceRefresh')) {

@@ -986,6 +986,7 @@ CREATE TABLE IF NOT EXISTS op_purchase_order (
   send_at           TEXT,                       -- 上家发货时间
   signed_at         TEXT,                       -- 我签收时间
   link_status       TEXT NOT NULL DEFAULT 'linked',   -- linked/unlinked(取消关联)
+  sync_uuid         TEXT,                       -- 跨机同步稳定标识(purchase_sn 为空的手工单判重键;录入时生成,导入时复用)
   auto_sync_amount  INTEGER DEFAULT 1,
   logistics_company TEXT,
   logistics_no      TEXT,
@@ -998,6 +999,7 @@ CREATE TABLE IF NOT EXISTS op_purchase_order (
 );
 CREATE INDEX IF NOT EXISTS idx_op_po_status ON op_purchase_order(status);
 CREATE INDEX IF NOT EXISTS idx_op_po_logno ON op_purchase_order(logistics_no);
+CREATE INDEX IF NOT EXISTS idx_op_po_syncuuid ON op_purchase_order(sync_uuid);
 
 -- 采购单↔包裹↔产品行 关联(多对多桥表,一单多关联分摊落点)
 CREATE TABLE IF NOT EXISTS op_purchase_link (

@@ -4,6 +4,7 @@
 //   - operate_status 只前进不回退(采购提交/打单/Ozon状态联动均为事件驱动推进)
 //   - purchase_amount 回写在 ozon_order_item 上(取消关联时冲回)
 //   - 提交采购信息 → 包裹直接流转 wait_ship(到货进度以 arrived_at 标记展示,不阻塞)
+import { randomUUID } from 'node:crypto';
 import { db } from '../../index.js';
 
 // operate_status 前进序( cancelled 独立,任意状态可进 )
@@ -1036,12 +1037,13 @@ function submitPurchase({
     // ON CONFLICT(platform, purchase_sn) DO UPDATE:复用已存在采购单 id
     // payment_amount/goods_amount 用 CASE 保护:新值>0 才覆盖,避免拼单第二次提交时误清零
     // purchase_channel 不在 UPDATE 列表,保留原值(模式A platform_order 不被覆盖成 manual)
+    // sync_uuid 冲突时保留原值(跨机同步判重键,不随提交变化)
     // 边界:platform='other' + purchaseSn=null 时 SQLite NULL 不参与 UNIQUE,每次新建(符合手工单预期)
     const poRes = db
       .prepare(
         `INSERT INTO op_purchase_order (purchase_sn, platform, purchase_channel, buyer_account, buyer_user_id, seller_name,
-            payment_amount, goods_amount, status, pay_at, send_at, logistics_company, logistics_no, note, gmt_create, gmt_modified)
-           VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            payment_amount, goods_amount, status, pay_at, send_at, logistics_company, logistics_no, note, sync_uuid, gmt_create, gmt_modified)
+           VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(platform, purchase_sn) DO UPDATE SET
             buyer_account = COALESCE(excluded.buyer_account, op_purchase_order.buyer_account),
             buyer_user_id = COALESCE(excluded.buyer_user_id, op_purchase_order.buyer_user_id),
@@ -1070,6 +1072,7 @@ function submitPurchase({
         logisticsCompany,
         logisticsNo,
         note,
+        randomUUID(),
         now,
         now
       );
@@ -1466,11 +1469,12 @@ function syncFromMiaoshou({ packageIds } = {}) {
   // payment_amount 用 CASE 保护(>0 才覆盖,对齐 submitPurchase 的拼单保护)
   // status 枚举翻译:has_send→shipped, has_sign→signed, 其它→wait_send
   // link_status 冲突时强制回 'linked'(同步即重建关联;清除步骤可能刚把它置为 unlinked)
+  // sync_uuid 仅 INSERT 时生成,冲突时保留原值(跨机同步判重键)
   const upsertPo = db.prepare(
     `INSERT INTO op_purchase_order (purchase_sn, platform, purchase_channel, buyer_account, seller_name,
         payment_amount, goods_amount, status, pay_at, send_at, logistics_company, logistics_no,
-        last_trace_desc, note, gmt_create, gmt_modified)
-     VALUES (?, ?, 'platform_order', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        last_trace_desc, note, sync_uuid, gmt_create, gmt_modified)
+     VALUES (?, ?, 'platform_order', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(platform, purchase_sn) DO UPDATE SET
         buyer_account = COALESCE(excluded.buyer_account, op_purchase_order.buyer_account),
         seller_name = COALESCE(excluded.seller_name, op_purchase_order.seller_name),
@@ -1576,6 +1580,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
             pur.logistics_no || null,
             pur.last_trace || null,
             null, // 不覆盖本地 note
+            randomUUID(),
             now, now
           )?.id;
           if (poId == null) {

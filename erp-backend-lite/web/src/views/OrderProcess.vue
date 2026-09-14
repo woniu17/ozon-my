@@ -18,6 +18,7 @@ import {
   getOrderSummary,
   syncPackage,
   getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus, syncPddCookies,
+  getPendingExportState,
 } from '../api/order-process.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
@@ -160,6 +161,18 @@ const detail = ref(null);
 const syncInfo = ref({ syncing: false, cursors: [] });
 const syncing = ref(false);
 const syncingMs = ref(false);
+
+// ── 待导出徽标(采购信息跨机文件同步)─────────────────────
+// 本机跑过 scripts/export-purchase-sync.mjs 才激活(active=true);
+// count = 上次导出后有采购/称重/交运/搁置变更的包裹数(提示性,提醒把数据导出给服务器)
+const pendingExport = ref({ active: false, count: 0, lastExportAt: null });
+async function loadPendingExport() {
+  try {
+    const resp = await getPendingExportState();
+    pendingExport.value = resp?.data || resp || { active: false, count: 0 };
+  } catch { /* 静默:徽标失败不影响页面 */ }
+}
+
 // 详细进度(替代纯布尔 syncing,展示店铺数/当前店/已拉订单数/耗时)
 const progress = ref({
   active: false,
@@ -1778,10 +1791,14 @@ onMounted(() => {
   }
   loadSyncStatus();
   loadProgress();
-  // 同步在跑时高频轮询进度,空闲时低频刷新 cursors
+  loadPendingExport();
+  // 同步在跑时高频轮询进度,空闲时低频刷新 cursors(顺带刷新待导出徽标)
   statusTimer = setInterval(() => {
     if (progress.value?.active || syncing.value) loadProgress();
-    else loadSyncStatus();
+    else {
+      loadSyncStatus();
+      loadPendingExport();
+    }
   }, 5_000);
   tickTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
   // 平台订单登录态探测(后端 cloakbrowser,替代原扩展 PING/PONG)
@@ -1839,6 +1856,11 @@ onUnmounted(() => {
         <span v-if="syncInfo.cursors?.length && !syncing" class="sync-info" :title="syncInfo.cursors.map(c => `${c.storeId}: ${c.lastError || c.lastRunAt}`).join('\n')">
           最近同步 {{ fmtTime(syncInfo.cursors[0]?.lastRunAt) }}
         </span>
+        <span
+          v-if="pendingExport.active && pendingExport.count > 0"
+          class="tag tag-warn"
+          :title="`上次导出(${pendingExport.lastExportAt || '未知'})后有 ${pendingExport.count} 个包裹发生了采购/称重/交运/搁置变更,记得运行导出脚本同步到服务器:node scripts/export-purchase-sync.mjs`"
+        >待导出 {{ pendingExport.count }}</span>
         <button class="btn btn-ghost" :disabled="syncing" @click="triggerSync" title="增量同步:unfulfilled [now-14d, now+14d] + list [now-60d, now],双接口">
           {{ syncing ? '同步中…' : '同步进行中订单' }}
         </button>
