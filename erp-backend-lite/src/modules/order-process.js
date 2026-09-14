@@ -237,8 +237,14 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       pkg.purchaseLinks = linksByPkg.get(pkg.id) || [];
       if (accrualMap.has(pkg.id)) pkg.accrual = accrualMap.get(pkg.id);
       if (weightMap.has(pkg.id)) {
-        pkg.weightG = weightMap.get(pkg.id).weightG;
-        pkg.weightSource = weightMap.get(pkg.id).source;
+        const w = weightMap.get(pkg.id);
+        pkg.weightG = w.weightG;
+        pkg.weightSource = w.source;
+        pkg.ozonWeightG = w.ozonWeightG ?? null;
+        pkg.systemWeightG = w.systemWeightG ?? null;
+      } else {
+        pkg.ozonWeightG = null;
+        pkg.systemWeightG = null;
       }
       pkg.profit = computeProfit(pkg, pkg.operateStatus === 'cancelled', rateInfo?.rate);
     }

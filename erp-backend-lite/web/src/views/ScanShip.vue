@@ -48,6 +48,27 @@ const records = reactive({
 });
 
 // ── 展示工具(对齐 OrderProcess)──────────────────────────
+// 点击复制到剪贴板(货件号/SKU/OfferID)
+async function copyText(val, label) {
+  if (val == null || val === '') return;
+  const s = String(val);
+  try {
+    await navigator.clipboard.writeText(s);
+    show(`${label}已复制:${s}`, 'success');
+  } catch {
+    // 降级:http 环境无 clipboard API
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+    show(`${label}已复制:${s}`, 'success');
+  }
+}
+
 const PLATFORMS = [
   { value: 'other', label: '手工(其他)' },
   { value: '1688', label: '1688' },
@@ -77,12 +98,6 @@ function fmtTime(t) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
-function fmtHm(t) {
-  const d = new Date(t);
-  if (isNaN(d.getTime())) return '—';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 function operateTag(pkg) {
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus, cls: 'tag-mute' };
 }
@@ -101,13 +116,7 @@ function blockReason(pkg) {
     default: return pkg.operateStatus;
   }
 }
-// 重量参考提示(placeholder,不自动填充——强制人工读秤)
-function weightPlaceholder(pkg) {
-  if (pkg.weightG != null) {
-    return `参考:${Math.floor(pkg.weightG)}g(${WEIGHT_SOURCE_LABELS[pkg.weightSource] || '未知来源'})`;
-  }
-  return '输入称重重量';
-}
+// 重量校验提示等见 onSubmitShip;输入框不带参考文案(强制人工读秤)
 
 // ── 搜索 ─────────────────────────────────────────────────
 async function doSearch() {
@@ -302,6 +311,7 @@ async function loadRecords() {
     });
     records.rows = data?.packages || [];
     records.pager.total = data?.total || 0;
+    counts[records.tab] = data?.total || 0;
   } catch (err) {
     show(err.message || String(err), 'error');
     records.rows = [];
@@ -309,6 +319,19 @@ async function loadRecords() {
   } finally {
     records.loading = false;
   }
+}
+
+// 今日/昨日计数独立维护(角标互不影响;轻量请求只取 total)
+const counts = reactive({ today: null, yesterday: null });
+async function loadCount(day) {
+  try {
+    const data = await getScanShipRecords({ day, page: 1, pageSize: 1 });
+    counts[day] = data?.total || 0;
+  } catch { /* 静默 */ }
+}
+function loadCounts() {
+  loadCount('today');
+  loadCount('yesterday');
 }
 
 function switchRecordTab(key) {
@@ -323,7 +346,7 @@ function onRecordPage(page) {
   loadRecords();
 }
 
-// 发货成功后静默刷新(不抢焦点)
+// 发货成功后静默刷新(不抢焦点;计数同步更新)
 async function refreshRecords() {
   try {
     const data = await getScanShipRecords({
@@ -333,7 +356,9 @@ async function refreshRecords() {
     });
     records.rows = data?.packages || [];
     records.pager.total = data?.total || 0;
+    counts[records.tab] = data?.total || 0;
   } catch { /* 静默 */ }
+  loadCounts();
 }
 
 // 记录行 Ozon 单号 → 跳订单处理页全局搜索(复用妙手订单页"本地包裹"跳转模式)
@@ -345,6 +370,7 @@ function jumpToOrderProcess(pkg) {
 onMounted(() => {
   focusScan();
   loadRecords();
+  loadCounts();
   // 菜鸟组件探测(仅状态展示,失败不阻塞——打印时 pickLabelPrinter 会再连)
   getAgentPrinters()
     .then(() => { agentOnline.value = true; })
@@ -412,20 +438,26 @@ onMounted(() => {
           <div class="pkg-grid">
             <!-- 左列:订单信息 + 商品信息 -->
             <div class="pkg-left">
-              <div class="pkg-head">
-                <span class="mono pkg-posting">{{ pkg.postingNumber }}</span>
-                <span v-if="pkg.parentId" class="tag tag-mute" title="拆单子件">子件</span>
-                <span class="tag" :class="operateTag(pkg).cls">{{ operateTag(pkg).label }}</span>
-                <span class="muted pkg-store">{{ pkg.storeName }}</span>
+              <!-- 订单信息(三行,黑色):①店铺+货件号(点击复制)+状态 ②下单时间 ③订单金额 -->
+              <div class="pkg-order">
+                <div class="order-line order-line1">
+                  <span class="order-store">{{ pkg.storeName }}</span>
+                  <span class="mono order-posting">{{ pkg.postingNumber }}</span>
+                  <button
+                    class="copy-btn"
+                    title="复制货件号"
+                    @click.stop="copyText(pkg.postingNumber, '货件号')"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" /></svg>
+                  </button>
+                  <span v-if="pkg.parentId" class="tag tag-mute" title="拆单子件">子件</span>
+                  <span class="tag" :class="operateTag(pkg).cls">{{ operateTag(pkg).label }}</span>
+                </div>
+                <div class="order-line">下单 {{ fmtTime(pkg.inProcessAt) }}</div>
+                <div class="order-line">订单金额 {{ fmtMoney(pkg.orderAmount) }}</div>
               </div>
 
-              <!-- 订单信息 -->
-              <div class="pkg-meta sub muted">
-                {{ pkg.orderNumber }} · {{ pkg.buyerName || '—' }}{{ pkg.buyerCity ? ' · ' + pkg.buyerCity : '' }}
-                · 订单金额 {{ fmtMoney(pkg.orderAmount) }} · 下单 {{ fmtTime(pkg.inProcessAt) }}
-              </div>
-
-              <!-- 商品信息(无标题:SKU/OfferID/单价/数量;图 70x70 悬浮放大) -->
+              <!-- 商品信息(SKU/OfferID 可点击复制,数量独立右列) -->
               <div class="pkg-products">
                 <div v-for="(it, i) in pkg.items" :key="i" class="product-item">
                   <div class="img-hover-wrap">
@@ -436,11 +468,29 @@ onMounted(() => {
                   <div class="product-main">
                     <div class="product-line">
                       <span class="mono">SKU:{{ it.sku ?? '—' }}</span>
-                      <span class="mono">Offer ID:{{ it.offerId ?? '—' }}</span>
-                      <span>单价 {{ fmtMoney(it.price) }}</span>
-                      <span class="qty" :class="{ 'qty-multi': it.quantity > 1 }">× {{ it.quantity }}</span>
+                      <button
+                        v-if="it.sku != null"
+                        class="copy-btn"
+                        title="复制SKU"
+                        @click.stop="copyText(it.sku, 'SKU')"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" /></svg>
+                      </button>
                     </div>
+                    <div class="product-line">
+                      <span class="mono">Offer ID:{{ it.offerId ?? '—' }}</span>
+                      <button
+                        v-if="it.offerId != null"
+                        class="copy-btn"
+                        title="复制Offer ID"
+                        @click.stop="copyText(it.offerId, 'Offer ID')"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" /></svg>
+                      </button>
+                    </div>
+                    <div class="product-line">单价 {{ fmtMoney(it.price) }}</div>
                   </div>
+                  <div class="product-qty" :class="{ 'qty-multi': it.quantity > 1 }">× {{ it.quantity }}</div>
                 </div>
                 <div v-if="!pkg.items?.length" class="muted">—</div>
               </div>
@@ -462,13 +512,28 @@ onMounted(() => {
                   </div>
                   <div class="purchase-info">
                     <div class="purchase-line">
-                      <span class="tag tag-ok">已关联</span>
-                      <span class="mono">{{ l.purchaseSn || '#' + l.id }}</span>
                       <span class="muted">{{ platformLabel(l.platform) }}</span>
+                      <span class="mono">{{ l.purchaseSn || '#' + l.id }}</span>
+                      <button
+                        v-if="l.purchaseSn"
+                        class="copy-btn"
+                        title="复制采购订单号"
+                        @click.stop="copyText(l.purchaseSn, '采购订单号')"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" /></svg>
+                      </button>
                     </div>
                     <div class="purchase-line sub muted">采购账号:{{ l.buyerAccount || '—' }}</div>
                     <div class="purchase-line sub muted">
                       物流:{{ l.poLogisticsNo ? `${l.poLogisticsCompany || ''} ${l.poLogisticsNo}`.trim() : '—' }}
+                      <button
+                        v-if="l.poLogisticsNo"
+                        class="copy-btn"
+                        title="复制快递单号"
+                        @click.stop="copyText(l.poLogisticsNo, '快递单号')"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" /></svg>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -479,6 +544,8 @@ onMounted(() => {
           <!-- 操作条 -->
           <div class="pkg-actions">
             <template v-if="canShipCard(pkg)">
+              <span class="ref-weight" title="Ozon后台同步重量(按数量加权求和)">Ozon后台 {{ pkg.ozonWeightG != null ? Math.floor(pkg.ozonWeightG) + 'g' : '—' }}</span>
+              <span class="ref-weight" title="本系统维护重量">本系统 {{ pkg.systemWeightG != null ? Math.floor(pkg.systemWeightG) + 'g' : '—' }}</span>
               <label class="weight-label" :for="'weight-' + pkg.id">重量(g)</label>
               <input
                 :id="'weight-' + pkg.id"
@@ -489,7 +556,6 @@ onMounted(() => {
                 type="text"
                 inputmode="numeric"
                 autocomplete="off"
-                :placeholder="weightPlaceholder(pkg)"
                 :disabled="selectedId !== pkg.id || printingPkgId === pkg.id"
                 :aria-describedby="weightErrors[pkg.id] ? 'weight-err-' + pkg.id : undefined"
                 @keydown.enter="onSubmitShip(pkg)"
@@ -535,7 +601,7 @@ onMounted(() => {
               @click="switchRecordTab(t.key)"
             >
               {{ t.label }}
-              <span class="tab-count">{{ records.pager.total }}</span>
+              <span v-if="counts[t.key] != null" class="tab-count">{{ counts[t.key] }}</span>
             </button>
           </div>
           <button class="btn btn-ghost btn-sm" :disabled="records.loading" @click="loadRecords" title="刷新发货记录">
@@ -547,28 +613,51 @@ onMounted(() => {
           {{ records.loading ? '加载中…' : (records.tab === 'today' ? '今日暂无发货记录' : '昨日暂无发货记录') }}
         </div>
 
+        <!-- 记录行:第一列图片(70x70 悬浮放大) + 第二列三行(货件号+复制/称重重量/打印发货时间) -->
         <div
           v-for="p in records.rows"
           :key="p.id"
           class="record-row"
-          title="点击 Ozon 单号跳转订单处理页全局搜索"
         >
-          <span class="record-time mono">{{ fmtHm(p.waybillPrintedAt) }}</span>
-          <img
-            v-if="p.items?.[0]?.picUrl"
-            :src="p.items[0].picUrl"
-            referrerpolicy="no-referrer"
-            loading="lazy"
-            class="record-thumb"
-            alt=""
-          />
-          <div class="record-main">
-            <span class="link mono record-posting" @click="jumpToOrderProcess(p)">{{ p.postingNumber }}</span>
-            <div class="record-title sub" :title="p.items?.[0]?.title || ''">{{ p.items?.[0]?.title || '—' }}</div>
+          <div class="img-hover-wrap">
+            <img
+              v-if="p.items?.[0]?.picUrl"
+              :src="p.items[0].picUrl"
+              referrerpolicy="no-referrer"
+              loading="lazy"
+              class="record-thumb"
+              alt=""
+            />
+            <div v-else class="record-thumb thumb-empty">—</div>
+            <img
+              v-if="p.items?.[0]?.picUrl"
+              :src="p.items[0].picUrl"
+              referrerpolicy="no-referrer"
+              class="img-preview"
+              alt=""
+            />
           </div>
-          <span class="record-weight mono" :title="WEIGHT_SOURCE_LABELS[p.weightSource] || ''">
-            {{ p.weightG != null ? Math.floor(p.weightG) + 'g' : '—' }}
-          </span>
+          <div class="record-main">
+            <div class="record-line1">
+              <span class="record-store">{{ p.storeName }}</span>
+              <span
+                class="link mono record-posting"
+                title="点击跳转订单处理页全局搜索"
+                @click="jumpToOrderProcess(p)"
+              >{{ p.postingNumber }}</span>
+              <button
+                class="copy-btn"
+                title="复制货件号"
+                @click.stop="copyText(p.postingNumber, '货件号')"
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" /></svg>
+              </button>
+            </div>
+            <div class="record-line" :title="WEIGHT_SOURCE_LABELS[p.weightSource] || ''">
+              称重 {{ p.weightG != null ? Math.floor(p.weightG) + 'g' : '—' }}
+            </div>
+            <div class="record-line">打印发货 {{ fmtTime(p.waybillPrintedAt) }}</div>
+          </div>
         </div>
 
         <AppPager
@@ -738,21 +827,89 @@ onMounted(() => {
   cursor: default;
 }
 
-.pkg-head {
+/* 订单信息(三行,黑色字体) */
+.pkg-order {
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.order-line {
+  font-size: 13px;
+  color: var(--text);
+}
+.order-line1 {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
-.pkg-posting {
-  font-size: 16px;
+.order-store {
+  font-size: 14px;
+  font-weight: 600;
+}
+.order-posting {
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.3px;
 }
-.pkg-store {
-  font-size: 12px;
-}
 
+.pkg-products {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.product-item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.product-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.product-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+/* 数量独立右列:字体加大,>1 时红色 */
+.product-qty {
+  margin-left: auto;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.qty-multi {
+  color: var(--danger);
+}
+/* 复制按钮 */
+.copy-btn {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.copy-btn:hover {
+  color: var(--primary);
+  background: #eff6ff;
+}
+.copy-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35);
+}
 /* 两列布局:左=订单+商品 / 右=采购 */
 .pkg-grid {
   display: grid;
@@ -782,41 +939,6 @@ onMounted(() => {
     border-top: 1px dashed var(--border);
     padding-top: 10px;
   }
-}
-
-.pkg-meta {
-  margin-top: 6px;
-}
-
-.pkg-products {
-  margin-top: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.product-item {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-.product-main {
-  min-width: 0;
-}
-.product-line {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 13px;
-}
-.qty {
-  font-weight: 600;
-  color: var(--text);
-}
-/* 数量>1:字体加大、红色 */
-.qty-multi {
-  color: var(--danger);
-  font-size: 18px;
-  font-weight: 700;
 }
 
 /* 70x70 缩略图 + 悬浮放大预览 */
@@ -904,6 +1026,14 @@ onMounted(() => {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px dashed var(--border);
+}
+/* 参考重量(Ozon后台/本系统,未设置显示—) */
+.ref-weight {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  cursor: help;
 }
 .weight-label {
   font-size: 13px;
@@ -1011,18 +1141,13 @@ onMounted(() => {
 }
 .record-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 10px;
   padding: 8px 2px;
   border-bottom: 1px solid #f3f4f6;
 }
 .record-row:last-of-type {
   border-bottom: none;
-}
-.record-time {
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
 }
 .record-thumb {
   width: 70px;
@@ -1036,21 +1161,28 @@ onMounted(() => {
 .record-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
 }
-.record-posting {
-  font-size: 12px;
+.record-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
-.record-title {
+.record-store {
   font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.record-weight {
-  font-size: 12px;
+  font-weight: 600;
   color: var(--text);
   white-space: nowrap;
+}
+.record-posting {
+  font-size: 13px;
+}
+.record-line {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .mono {

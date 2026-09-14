@@ -839,16 +839,18 @@ function getWeightsByPackageIds(packageIds) {
   for (const r of rows) {
     const ship = r.pkgWeight != null ? Number(r.pkgWeight) : null;
     const ms = r.msWeight != null ? Number(r.msWeight) : null;
-    const sys = r.systemWeight != null ? Number(r.systemWeight) : null;
-    const oz = r.ozonWeight != null ? Number(r.ozonWeight) : null;
+    const sys = r.systemWeight != null && r.systemWeight > 0 ? Number(r.systemWeight) : null;
+    const oz = r.ozonWeight != null && r.ozonWeight > 0 ? Number(r.ozonWeight) : null;
+    // 独立重量字段(扫描发货页操作条展示:Ozon后台/本系统,未设置为 null)
+    const extras = { systemWeightG: sys, ozonWeightG: oz };
     if (ship != null && ship > 0) {
-      out.set(r.packageId, { weightG: ship, source: 'ship' });
+      out.set(r.packageId, { weightG: ship, source: 'ship', ...extras });
     } else if (ms != null && ms > 0) {
-      out.set(r.packageId, { weightG: ms, source: 'miaoshou' });
-    } else if (sys != null && sys > 0) {
-      out.set(r.packageId, { weightG: sys, source: 'system' });
-    } else if (oz != null && oz > 0) {
-      out.set(r.packageId, { weightG: oz, source: 'ozon' });
+      out.set(r.packageId, { weightG: ms, source: 'miaoshou', ...extras });
+    } else if (sys != null) {
+      out.set(r.packageId, { weightG: sys, source: 'system', ...extras });
+    } else if (oz != null) {
+      out.set(r.packageId, { weightG: oz, source: 'ozon', ...extras });
     }
     // 全部缺失 → 不入 Map,computeProfit 走 weightMissing 兜底
   }
