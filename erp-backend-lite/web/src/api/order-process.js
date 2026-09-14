@@ -167,6 +167,7 @@ export function getMiaoshouDetail(id) {
 }
 
 // 从妙手同步到本地订单(重量/备注/妙手口径采购金额/采购订单详情)
+// 妙手侧有采购信息的订单会先清空本地采购信息再以妙手数据重新写入
 // body: { packageIds?: number[] }  不传 = 同步当前筛选全部(logistics_no 非空的)
 export function syncMsToLocal(packageIds) {
   const body = Array.isArray(packageIds) && packageIds.length > 0 ? { packageIds } : {};

@@ -359,7 +359,7 @@ async function onSyncMsToLocal() {
   const isPartial = selectedRows.length > 0;
   const scopeLabel = isPartial ? `勾选的 ${selectedRows.length} 条` : '当前筛选全部(以 logistics_no 关联妙手)';
   if (!await confirmStore.ask({
-    message: `将把妙手订单的重量/备注/采购金额/采购订单详情同步到本地,范围:${scopeLabel}。妙手备注将覆盖本地备注;有采购单关联的待处理订单将自动推进到待打单发货。确认继续?`,
+    message: `将把妙手订单的重量/备注/采购金额/采购订单详情同步到本地,范围:${scopeLabel}。妙手侧已有采购信息的订单,会先清空本地已录入的采购信息(采购单关联/金额/国内物流单号),再以妙手数据为准重新写入;妙手侧无采购信息的订单保留本地已有。妙手备注将覆盖本地备注;有采购单关联的待处理订单将自动推进到待打单发货。确认继续?`,
     confirmText: '开始同步',
     danger: true,
   })) return;
@@ -368,8 +368,9 @@ async function onSyncMsToLocal() {
     const packageIds = isPartial ? selectedRows.map((r) => r.id) : null;
     const resp = await syncMsToLocal(packageIds);
     const data = resp?.data || resp || {};
-    const { synced = 0, skipped = 0, purchases = 0, advanced = 0, errors = [] } = data;
+    const { synced = 0, skipped = 0, purchases = 0, advanced = 0, cleared = 0, errors = [] } = data;
     let msg = `已同步 ${synced} 条(采购单 ${purchases} 条`;
+    if (cleared > 0) msg += `,清除旧采购信息 ${cleared} 条`;
     if (advanced > 0) msg += `,推进待打单 ${advanced} 条`;
     if (skipped > 0) msg += `,跳过 ${skipped} 条(无妙手匹配)`;
     msg += ')';
