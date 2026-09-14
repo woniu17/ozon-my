@@ -9,7 +9,7 @@ import { parseUtcDate } from '../utils/time.js';
 import { useRoute } from 'vue-router';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
-  submitPurchase, lookupPurchase, unlinkPurchase, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
+  submitPurchase, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
   runAccrualSync, getRubRate, setRubRate,
   syncMsToLocal,
@@ -864,8 +864,33 @@ async function savePurchase() {
   // auto 模式:校验 paymentAmount;manual 模式:校验每行 amount
   const hasAmount = isAuto ? Number(purchaseForm.paymentAmount) > 0 : items.some((it) => it.amount > 0);
   const hasNo = !!purchaseForm.logisticsNo.trim();
-  if (!hasAmount && !hasNo) {
-    show(isAuto ? '请填写采购总额(按数量自动分摊)' : '请至少填写采购金额或国内快递单号', 'error');
+  // 新勾选的平台订单也算有新采购(订单金额可能为 0)
+  const hasNew = hasAmount || hasNo || newSelectedOrders.value.length > 0;
+  if (!hasNew) {
+    // 空表单保存 = 清空采购信息
+    // - 已有采购未删除 → 二次确认后一键清空(冲回全部关联)
+    // - 已有采购已逐单删除(或本就没有) → 直接清残留聚合(采购状态/头程物流)
+    if (restoredPurchases.value.length) {
+      const allocatedSum = restoredPurchases.value.reduce((s, r) => s + (Number(r.allocated) || 0), 0);
+      const okClear = await confirmStore.ask({
+        message: `未填写新采购信息。是否清空包裹 ${purchaseForm.packageNo} 已有的 ${restoredPurchases.value.length} 单采购关联?将冲回全部分摊金额(${fmtMoney(allocatedSum)})`,
+        confirmText: '清空',
+        danger: true,
+      });
+      if (!okClear) return;
+    }
+    purchaseSaving.value = true;
+    try {
+      const r = await clearPurchaseInfo(purchaseForm.packageId);
+      show(r?.hadPurchase ? '采购信息已清空' : '未提交采购信息', 'success');
+      purchaseOpen.value = false;
+      loadTabs();
+      loadList();
+    } catch (err) {
+      show(err.message || String(err), 'error');
+    } finally {
+      purchaseSaving.value = false;
+    }
     return;
   }
   // 拼单检测:platform≠other 且 purchaseSn 非空时,查询采购单是否已关联其他包裹
@@ -2350,7 +2375,7 @@ onUnmounted(() => {
         <div v-if="allSelectedOrders.length" class="selected-orders">
           <div class="selected-orders-title">
             已选 {{ allSelectedOrders.length }} 单 · 合计 ¥{{ allSelectedTotal }}
-            <span v-if="restoredPurchases.length" class="selected-orders-sub">含已有采购 {{ restoredPurchases.length }} 单;勾选新订单后点「保存」追加,已有单可单独删除</span>
+            <span v-if="restoredPurchases.length" class="selected-orders-sub">含已有采购 {{ restoredPurchases.length }} 单;勾选新订单后点「保存」追加;已有单可单独删除,或清空后点「保存」一键清空</span>
           </div>
           <table class="data-table selected-orders-table">
             <thead>
@@ -2455,7 +2480,7 @@ onUnmounted(() => {
         </div>
 
         <div class="form-tip">
-          提交后包裹将直接流转到「待打单发货」;国内快递单号可留空后续补录。个人自发货模式:无货代,收货人为你本人。
+          提交后包裹将直接流转到「待打单发货」;国内快递单号可留空后续补录。清空所有采购后点「保存」即清空该包裹采购信息(状态不变)。个人自发货模式:无货代,收货人为你本人。
         </div>
         <div class="form-actions">
           <button class="btn btn-ghost" @click="purchaseOpen = false">取 消</button>

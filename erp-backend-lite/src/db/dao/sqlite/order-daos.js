@@ -1241,6 +1241,40 @@ function revertToWaitProcess(packageId) {
   });
 }
 
+/** 清空包裹全部采购信息(采购弹窗"空表单保存"入口,2026-09-14)
+ *  复用 clearPackagePurchaseInfo(妙手同步同款清除语义),并补齐其不触碰的
+ *  purchase_status/头程物流/总额残留(逐单"取消关联"不清头程物流,这里统一归零)
+ *  不回退 operate_status(对齐取消关联语义;回流待处理走 revertToWaitProcess)
+ * @returns {{ cleared: number, hadPurchase: boolean }} cleared=删除的关联行数;hadPurchase=清前是否有任何采购信息
+ */
+function clearAllPurchase(packageId) {
+  const pkg = db.prepare(`SELECT * FROM op_package WHERE id = ?`).get(packageId);
+  if (!pkg) throw new Error(`包裹不存在: ${packageId}`);
+  if (pkg.operate_status === 'cancelled') throw new Error('包裹已取消,不能操作');
+  if (pkg.is_ignored) throw new Error('包裹已搁置,请先恢复');
+  const now = nowIso();
+  return runInTx(() => {
+    const hadPurchase =
+      db.prepare(`SELECT 1 AS x FROM op_purchase_link WHERE package_id = ? LIMIT 1`).get(packageId) != null ||
+      (Number(pkg.total_purchase_amount) || 0) !== 0 ||
+      pkg.purchase_status !== 'none' ||
+      pkg.head_logistics_no != null;
+    const cleared = clearPackagePurchaseInfo(packageId, now);
+    // 归零残留聚合(clearPackagePurchaseInfo 无关联时提前返回,这些列不会被清)
+    db.prepare(
+      `UPDATE op_package SET
+          total_purchase_amount = 0,
+          purchase_status = 'none',
+          head_logistics_no = NULL,
+          head_logistics_company = NULL,
+          head_shipped_at = NULL,
+          gmt_modified = ?
+       WHERE id = ?`
+    ).run(now, packageId);
+    return { cleared, hadPurchase };
+  });
+}
+
 /** 搁置/恢复 */
 function setIgnored(packageId, ignored) {
   db.prepare(`UPDATE op_package SET is_ignored = ?, gmt_modified = ? WHERE id = ?`).run(
@@ -1676,6 +1710,7 @@ export const orderPackageDao = {
   submitPurchase,
   unlinkPurchase,
   revertToWaitProcess,
+  clearAllPurchase,
   setIgnored,
   markWaybillPrinted,
   getPackagePostings,

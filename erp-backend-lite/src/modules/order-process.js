@@ -454,6 +454,21 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
   }
 });
 
+// ── 清空采购信息(采购弹窗空表单保存:冲回全部关联+聚合/头程物流归零)──
+// body: { packageId }
+// 返回 { cleared, hadPurchase };不回退 operate_status(回流待处理走 /revert)
+router.post('/admin/api/order-process/purchase/clear', (req, res, next) => {
+  try {
+    const packageId = Number(req.body?.packageId);
+    if (!packageId) return res.status(400).json({ ok: false, message: 'packageId 必填' });
+    const r = orderPackageDao.clearAllPurchase(packageId);
+    logger.info({ packageId, ...r }, '[order-process] 采购信息已清空');
+    res.json(ok(r));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ── 取消采购关联 ────────────────────────────────────────────
 router.post('/admin/api/order-process/unlink', (req, res, next) => {
   try {

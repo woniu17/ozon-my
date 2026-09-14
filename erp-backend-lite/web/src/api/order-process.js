@@ -31,6 +31,12 @@ export function submitPurchase(body) {
   return request.post('/admin/api/order-process/purchase', body);
 }
 
+// 清空采购信息(采购弹窗空表单保存:冲回全部关联,聚合/头程物流归零;不回退状态)
+// 返回 { cleared, hadPurchase }
+export function clearPurchaseInfo(packageId) {
+  return request.post('/admin/api/order-process/purchase/clear', { packageId });
+}
+
 // 查询采购单是否已存在 + 已关联包裹(拼单提交前提示)
 export function lookupPurchase(platform, purchaseSn) {
   return request.get('/admin/api/order-process/purchase/lookup', { platform, purchaseSn });
