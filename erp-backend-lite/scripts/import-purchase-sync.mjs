@@ -22,7 +22,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DRY_RUN = process.argv.includes('--dry-run');
-const fileArg = process.argv.find((a) => !a.startsWith('--') && a !== process.argv[1]);
+// 注意:必须从 argv[2] 起找(跳过 argv[0]=node 可执行文件 / argv[1]=脚本路径);
+// 之前用全量 find 会命中 node 二进制本身,Linux 上读出 ELF 报"is not valid JSON"
+const fileArg = process.argv.slice(2).find((a) => !a.startsWith('--'));
 if (!fileArg) {
   console.error('用法: node scripts/import-purchase-sync.mjs <导出文件.json> [--dry-run]');
   process.exit(2);
@@ -33,6 +35,15 @@ try {
   data = JSON.parse(readFileSync(fileArg, 'utf-8'));
 } catch (e) {
   console.error(`读取/解析文件失败: ${e.message}`);
+  // 打印文件头,便于定位"传错/损坏"类问题(如 ELF = Linux 可执行文件,非 JSON)
+  try {
+    const buf = readFileSync(fileArg);
+    const head = buf.subarray(0, 8).toString('latin1');
+    console.error(`文件 ${fileArg}: ${buf.length} 字节,开头内容 = ${JSON.stringify(head)}`);
+    if (buf[0] === 0x7f && head.startsWith('ELF')) {
+      console.error('这是 Linux 可执行文件(ELF),不是 JSON——文件没传对,请重新拷贝本机导出的 JSON 文件');
+    }
+  } catch { /* ignore */ }
   process.exit(2);
 }
 
