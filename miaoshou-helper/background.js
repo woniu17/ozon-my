@@ -659,7 +659,37 @@ const ERP_TAB_URL_PATTERNS = [
   'http://localhost:3001/admin*',
   'http://localhost:5173/admin*',
   'https://yochylin.com/admin*',
+  'https://yochylin.com:17443/admin*',
+  'https://2.tencent.yochylin.com:17443/admin*',
 ];
+
+// ── ERP 后端选择(2026-09-15,参考 qx-ozon ERP_BACKEND_CANDIDATES)──
+// 妙手助手经"ERP 页面桥"与后端通信(页面持 JWT),选中后端 = 只向该 origin
+// 的 erp-bridge 页面发桥请求;'auto' 保持广播全部已打开 ERP 页面(旧行为)。
+// 选择持久化在 chrome.storage.local[ERP_BACKEND_STORAGE_KEY]。
+const ERP_BACKEND_CANDIDATES = [
+  { label: '自动（第一个应答的已打开 ERP 页面）', url: 'auto' },
+  { label: '本地 (localhost:3001)', url: 'http://localhost:3001' },
+  { label: '本地 dev (localhost:5173)', url: 'http://localhost:5173' },
+  { label: '远程 (2.tencent.yochylin.com)', url: 'https://2.tencent.yochylin.com:17443' },
+  { label: '远程 (yochylin.com)', url: 'https://yochylin.com:17443' },
+  { label: '远程 (yochylin.com 443)', url: 'https://yochylin.com' },
+];
+const ERP_BACKEND_STORAGE_KEY = 'erpBackendChoice';
+
+/** 读当前 ERP 后端选择('auto'=未选/自动) */
+async function getErpBackendChoice() {
+  const v = await chrome.storage.local.get(ERP_BACKEND_STORAGE_KEY).catch(() => ({}));
+  const choice = v && v[ERP_BACKEND_STORAGE_KEY];
+  return choice && ERP_BACKEND_CANDIDATES.some((c) => c.url === choice) ? choice : 'auto';
+}
+
+/** 本次桥请求要查询的 tab 模式列表(选中具体后端时只查该 origin) */
+async function getErpTabPatterns() {
+  const choice = await getErpBackendChoice();
+  if (choice !== 'auto') return [choice + '/admin*'];
+  return ERP_TAB_URL_PATTERNS;
+}
 
 /** PDD 域判定(yangkeduo.com / pinduoduo.com 及子域) */
 function isPddDomain(domain) {
@@ -737,9 +767,17 @@ let bridgeSeq = 1;
 
 /** 向 ERP 页面(erq-bridge 所在 tab)发桥请求,等应答 */
 async function requestErpPage(requestType, payload, timeoutMs = 20 * 1000) {
-  const tabs = await chrome.tabs.query({ url: ERP_TAB_URL_PATTERNS });
+  const patterns = await getErpTabPatterns();
+  const tabs = await chrome.tabs.query({ url: patterns });
   if (!tabs.length) {
-    return { ok: false, error: '未找到打开的 ERP 页面,请先打开 ERP 订单处理页' };
+    // 指定了后端时明确提示,避免误以为要开别的 ERP
+    const where = patterns.length === 1 ? `(${patterns[0].replace('/admin*', '')})` : '';
+    return {
+      ok: false,
+      error: where
+        ? `未打开所选后端的 ERP 页面${where},请先打开其订单处理页或切回"自动"`
+        : '未找到打开的 ERP 页面,请先打开 ERP 订单处理页',
+    };
   }
   const reqId = `pddsync-${Date.now()}-${bridgeSeq++}`;
   const promise = new Promise((resolve) => {
@@ -760,16 +798,18 @@ async function requestErpPage(requestType, payload, timeoutMs = 20 * 1000) {
   return promise;
 }
 
-/** ERP 账号列表(供 popup 下拉;页面桥获取 + storage.local 缓存兜底) */
+/** ERP 账号列表(供 popup 下拉;页面桥获取 + storage.local 缓存兜底,按后端隔离缓存) */
 async function getErpAccounts() {
+  const scope = await getErpBackendChoice();
+  const cacheKey = `pddErpAccounts:${scope}`;
   const r = await requestErpPage('PDD_GET_ACCOUNTS', null, 10 * 1000);
   if (r?.ok && Array.isArray(r.accounts) && r.accounts.length) {
-    await chrome.storage.local.set({ pddErpAccounts: r.accounts }).catch(() => {});
+    await chrome.storage.local.set({ [cacheKey]: r.accounts }).catch(() => {});
     return { accounts: r.accounts };
   }
   // ERP 页面未开:用上次缓存
-  const v = await chrome.storage.local.get('pddErpAccounts').catch(() => ({}));
-  const cached = v.pddErpAccounts || [];
+  const v = await chrome.storage.local.get(cacheKey).catch(() => ({}));
+  const cached = v[cacheKey] || [];
   if (cached.length) return { accounts: cached, cached: true };
   return { accounts: [], error: r?.error || '请先打开 ERP 页面(账号列表来自 ERP)' };
 }
@@ -846,6 +886,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
       } catch (e) { diag.getByNames = 'ERR:' + e.message; }
       sendResponse(diag);
+    })();
+    return true;
+  }
+  if (msg.type === 'GET_ERP_BACKENDS') {
+    // popup 渲染后端下拉:候选列表 + 当前选择
+    (async () => {
+      const selected = await getErpBackendChoice();
+      sendResponse({ ok: true, candidates: ERP_BACKEND_CANDIDATES, selected });
+    })();
+    return true;
+  }
+  if (msg.type === 'SET_ERP_BACKEND') {
+    // popup 切换后端:校验候选 + 持久化(桥请求/账号缓存即刻按新选择走)
+    (async () => {
+      const url = msg.url;
+      if (!ERP_BACKEND_CANDIDATES.some((c) => c.url === url)) {
+        sendResponse({ ok: false, error: '无效的 ERP 后端地址' });
+        return;
+      }
+      await chrome.storage.local.set({ [ERP_BACKEND_STORAGE_KEY]: url }).catch(() => {});
+      sendResponse({ ok: true, selected: url });
     })();
     return true;
   }

@@ -64,6 +64,7 @@
 
   // ── 拼多多登录同步 ─────────────────────────────────────
   const $state = document.getElementById('pdd-login-state');
+  const $backend = document.getElementById('erp-backend');
   const $account = document.getElementById('pdd-account');
   const $accountsHint = document.getElementById('pdd-accounts-hint');
   const $syncBtn = document.getElementById('pdd-sync');
@@ -83,7 +84,33 @@
     });
   }
 
+  // ── ERP 后端选择(参考 qx-ozon;选中后端 = 桥请求只发该后端的 ERP 页面)──
+  async function initBackendSelect() {
+    const r = await sendMsg({ type: 'GET_ERP_BACKENDS' });
+    if (!r || !r.ok || !Array.isArray(r.candidates)) return;
+    $backend.innerHTML = '';
+    for (const c of r.candidates) {
+      const opt = document.createElement('option');
+      opt.value = c.url;
+      opt.textContent = c.label;
+      if (c.url === r.selected) opt.selected = true;
+      $backend.appendChild(opt);
+    }
+  }
+
+  $backend.addEventListener('change', async () => {
+    const r = await sendMsg({ type: 'SET_ERP_BACKEND', url: $backend.value });
+    if (!r || !r.ok) {
+      showToast('切换失败：' + ((r && r.error) || '未知错误'), true);
+      await initBackendSelect(); // 回滚显示到实际生效值
+      return;
+    }
+    showToast('已切换 ERP 后端');
+    await refreshAccounts(); // 账号列表来自新后端,立即重拉
+  });
+
   async function initPddSync() {
+    await initBackendSelect();
     // 1) 登录态探测
     const st = await sendMsg({ type: 'PDD_LOGIN_STATE' });
     if (st && st.loggedIn) {
@@ -97,6 +124,10 @@
       return; // 未登录时不拉账号(同步按钮保持禁用)
     }
     // 2) 账号列表(ERP 页面桥 + 缓存)
+    await refreshAccounts();
+  }
+
+  async function refreshAccounts() {
     const acc = await sendMsg({ type: 'PDD_GET_ACCOUNTS' });
     const accounts = (acc && acc.accounts) || [];
     if (accounts.length) {
@@ -110,7 +141,7 @@
       // 记忆上次选择
       const v = await chrome.storage.local.get(ACCOUNT_KEY).catch(() => ({}));
       if (v[ACCOUNT_KEY] && accounts.includes(v[ACCOUNT_KEY])) $account.value = v[ACCOUNT_KEY];
-      $accountsHint.textContent = acc.cached ? '账号列表来自缓存(打开 ERP 页面可刷新)' : '';
+      $accountsHint.textContent = acc.cached ? '账号列表来自缓存(打开所选后端的 ERP 页面可刷新)' : '';
       $syncBtn.disabled = false;
     } else {
       $accountsHint.textContent = (acc && acc.error) || '获取账号列表失败';
