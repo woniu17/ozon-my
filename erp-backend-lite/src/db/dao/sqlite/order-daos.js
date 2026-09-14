@@ -33,7 +33,9 @@ function runInTx(fn) {
   }
 }
 
-// 包裹号:MS + yyMMddHHmmss + 3位随机(对齐妙手 MS20260829... 格式)
+// 包裹号:MS + yyMMddHHmmss + 6位随机(对齐妙手 MS20260829... 格式)
+// 随机 6 位(100万):全量同步实测同秒最多创建 68 个包裹,3 位随机生日碰撞概率 >90%
+// 必撞 UNIQUE(2026-09-15 全量回补 5/6 店失败根因);6 位后碰撞概率 ~0.002%
 function genPackageNo() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
@@ -44,7 +46,7 @@ function genPackageNo() {
     pad(d.getHours()) +
     pad(d.getMinutes()) +
     pad(d.getSeconds());
-  const rand = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+  const rand = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
   return `MS${ts}${rand}`;
 }
 
@@ -173,21 +175,28 @@ function ensurePackage(ozonOrderId, storeId, posting) {
     .get(ozonOrderId);
   if (found) return found.id;
   const now = nowIso();
-  const r = db
-    .prepare(
-      `INSERT INTO op_package (package_no, ozon_order_id, store_id, operate_status, logistics_no, last_delivery_at, gmt_create, gmt_modified)
-       VALUES (?, ?, ?, 'wait_process', ?, ?, ?, ?)`
-    )
-    .run(
-      genPackageNo(),
-      ozonOrderId,
-      storeId,
-      String(posting.posting_number || ''),
-      posting.shipment_date || null,
-      now,
-      now
-    );
-  return Number(r.lastInsertRowid);
+  const ins = db.prepare(
+    `INSERT INTO op_package (package_no, ozon_order_id, store_id, operate_status, logistics_no, last_delivery_at, gmt_create, gmt_modified)
+     VALUES (?, ?, ?, 'wait_process', ?, ?, ?, ?)`
+  );
+  // UNIQUE(package_no) 冲突兜底:重新生成重试(6 位随机下极罕见,防御极端批量)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const r = ins.run(
+        genPackageNo(),
+        ozonOrderId,
+        storeId,
+        String(posting.posting_number || ''),
+        posting.shipment_date || null,
+        now,
+        now
+      );
+      return Number(r.lastInsertRowid);
+    } catch (e) {
+      if (!/UNIQUE constraint failed: op_package\.package_no/.test(String(e?.message))) throw e;
+    }
+  }
+  throw new Error('package_no 生成冲突重试次数耗尽');
 }
 
 /** Ozon 状态联动(只前进,不回退;cancelled 任意状态可进) */
