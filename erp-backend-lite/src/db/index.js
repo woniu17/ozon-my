@@ -34,6 +34,25 @@ export async function initSchema() {
     db.exec(`ALTER TABLE ozon_store_classification_legacy RENAME COLUMN isChinese TO isMainlandChina`);
     console.log('[db] migration: renamed column ozon_store_classification_legacy.isChinese → isMainlandChina');
   }
+  // 2026-09-14: op_purchase_order.sync_uuid 补列必须在 exec(schema.sql) 之前执行,
+  // 因为 schema.sql 的 CREATE INDEX idx_op_po_syncuuid 引用该列,旧库需先 ALTER 才能创建索引。
+  // sync_uuid 是跨机同步稳定标识:手工采购单(purchase_sn 为 NULL)没有自然判重键,
+  // 导出/导入时靠它识别"同一条采购单";有单号的仍以 (platform, purchase_sn) 为准,此为兜底
+  const _poSyncUuidPre = db.prepare(`PRAGMA table_info(op_purchase_order)`).all();
+  if (_poSyncUuidPre.length > 0 && !_poSyncUuidPre.some((c) => c.name === 'sync_uuid')) {
+    db.exec(`ALTER TABLE op_purchase_order ADD COLUMN sync_uuid TEXT`);
+    // 一次性回填:存量行生成 UUID(标准 8-4-4-4-12 格式,variant 位不严格,仅保证唯一)
+    db.exec(`
+      UPDATE op_purchase_order
+      SET sync_uuid = lower(
+        hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-' || hex(randomblob(2)) || '-' ||
+        hex(randomblob(2)) || '-' || hex(randomblob(6))
+      )
+      WHERE sync_uuid IS NULL OR sync_uuid = ''
+    `);
+    const _filledUuid = db.prepare(`SELECT COUNT(*) AS n FROM op_purchase_order WHERE sync_uuid IS NOT NULL`).get().n;
+    console.log(`[db] migration: added column op_purchase_order.sync_uuid, backfilled ${_filledUuid} rows`);
+  }
   const sql = readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(sql);
   await ensureMigrations();
@@ -343,28 +362,6 @@ async function ensureMigrations() {
       db.exec(`ALTER TABLE op_purchase_order ADD COLUMN buyer_user_id TEXT`);
       console.log('[db] migration: added column op_purchase_order.buyer_user_id');
     }
-  }
-  // 2026-09-14: op_purchase_order.sync_uuid 跨机同步稳定标识
-  // 手工采购单(purchase_sn 为 NULL)没有自然判重键,跨机导出/导入时靠 sync_uuid 识别"同一条采购单"
-  // 有单号的采购单仍以 (platform, purchase_sn) 为准,sync_uuid 仅作兜底
-  {
-    const poCols3 = db.prepare(`PRAGMA table_info(op_purchase_order)`).all();
-    if (poCols3.length > 0 && !poCols3.some((c) => c.name === 'sync_uuid')) {
-      db.exec(`ALTER TABLE op_purchase_order ADD COLUMN sync_uuid TEXT`);
-      console.log('[db] migration: added column op_purchase_order.sync_uuid');
-      // 一次性回填:存量行生成 UUID(标准 8-4-4-4-12 格式,variant 位不严格,仅保证唯一)
-      db.exec(`
-        UPDATE op_purchase_order
-        SET sync_uuid = lower(
-          hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-' || hex(randomblob(2)) || '-' ||
-          hex(randomblob(2)) || '-' || hex(randomblob(6))
-        )
-        WHERE sync_uuid IS NULL OR sync_uuid = ''
-      `);
-      const filled = db.prepare(`SELECT COUNT(*) AS n FROM op_purchase_order WHERE sync_uuid IS NOT NULL`).get().n;
-      console.log(`[db] migration: backfilled sync_uuid for ${filled} op_purchase_order rows`);
-    }
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_op_po_syncuuid ON op_purchase_order(sync_uuid)`);
   }
   // collect_queue_tasks:增加 force_refresh 列(1=强制重新采集,SW 消费时传 forceRefresh=true)
   // 旧库(CREATE TABLE IF NOT EXISTS 不会更新旧表结构)需 ALTER TABLE 补列
