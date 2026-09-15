@@ -117,9 +117,14 @@ app.use((req, res, next) => {
 });
 
 // 静态资源(管理后台页面 HTML/JS/CSS,无需鉴权即可访问;敏感数据由 API 鉴权保护)
-app.use(express.static(PUBLIC_DIR));
+// 统一 no-cache(每次协商,ETag 命中回 304):浏览器对无 Cache-Control 的 HTML 会做
+// 启发式强缓存,导致部署后 admin.html 仍引用旧 hash 的 JS,新代码不生效(2026-09-15 实测)
+app.use(express.static(PUBLIC_DIR, { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 // /admin 便捷入口 → admin.html
-app.get('/admin', (_req, res) => res.sendFile(join(PUBLIC_DIR, 'admin.html')));
+app.get('/admin', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.sendFile(join(PUBLIC_DIR, 'admin.html'));
+});
 
 // 鉴权(放行 /health、/auth/login-password 等)
 app.use(authMiddleware);
