@@ -1,13 +1,16 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!-- CNPL(菜鸟打印组件 1.5.3.0)图片模板:70x130mm 标签整张贴 Ozon 面单图
-     数据绑定:_data.img = PNG dataURL;_data.h = 等比图高 mm(前端按宽 70mm 折算,见 print-agent.js printLabelImage)
-     2026-09-15 重建:原手动维护文件已删除,按官方自定义模板协议(docId=107014)重写 -->
-<layouts>
-  <page width="70" height="130" padding="0" margin="0" indexNum="0">
-    <layout>
-      <image xmlns="" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="IMAGE" top="0" left="0" width="70" height="${_data.h}">
-        <data>${_data.img}</data>
-      </image>
-    </layout>
-  </page>
-</layouts>
+     数据绑定:_data.img = PNG dataURL;_data.h = 等比图高 mm(前端按宽 70mm 折算,见 print-agent.js)
+     官方 LPML 格式:根 <page>(cainiao 命名空间) + layout 容器 + image 元素,变量语法 <%=_data.xxx%>
+     2026-09-15 重建:原手动维护文件已删除;首版 <layouts> 根 + ${} 语法组件不认(rendered code 60 → completeFailure),按官方规范重写 -->
+<page xmlns="http://cloudprint.cainiao.com/print"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://cloudprint.cainiao.com/print http://cloudprint-docs-resource.oss-cn-shanghai.aliyuncs.com/lpml_schema.xsd"
+      xmlns:editor="http://cloudprint.cainiao.com/schema/editor"
+      width="70" height="130">
+  <layout left="0" top="0" width="70" height="129" style="zIndex:1;overflow:visible;">
+    <image>
+      <![CDATA[<%=_data.img%>]]>
+    </image>
+  </layout>
+</page>

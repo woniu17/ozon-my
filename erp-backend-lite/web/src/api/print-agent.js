@@ -139,11 +139,13 @@ async function pdfToPng(blob) {
 
 // CNPL 图片模板任务内容(明文 data:img=PNG dataURL,h=图高 mm;documentID 自定义模板需保证唯一,用运单号)
 // 模板经组件拉取 ${location.origin}/cnpl/label-image.xml,模板内用 _data.img/_data.h 取值
+// URL 必须带时间戳:组件按 URL 缓存模板,不带参数会读到旧缓存(2026-09-15 实测:改模板后不加参数
+// 依旧 completeFailure,加 ?t= 后立即生效;模板仅 1KB,每次下载 ~34ms 可忽略)
 function buildImageContents(dataUrl, hMm, documentId) {
   return [
     {
       documentID: String(documentId),
-      contents: [{ templateURL: `${location.origin}/cnpl/label-image.xml`, data: { img: dataUrl, h: hMm } }],
+      contents: [{ templateURL: `${location.origin}/cnpl/label-image.xml?t=${Date.now()}`, data: { img: dataUrl, h: hMm } }],
     },
   ];
 }
