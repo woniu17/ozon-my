@@ -10,7 +10,7 @@ import { useRoute } from 'vue-router';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
   submitPurchase, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
-  updatePackageMeta, listPackageTags,
+  updatePackageMeta, listPackageTags, updateTagOrder,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
   runAccrualSync, getRubRate, setRubRate,
   syncMsToLocal,
@@ -108,8 +108,8 @@ let summaryReqId = 0;
 let lastSummaryParams = null;
 const summaryEmpty = computed(() => summary.value && summary.value.totalOrders === 0);
 const summaryEmptyHint = computed(() =>
-  activeTab.value === 'cancelled' ? '已取消订单不参与利润汇总'
-  : activeTab.value === 'returned' ? '已退货订单不参与利润汇总'
+  activeTab.value === 'cancelled' ? '当前 Tab 无已取消订单'
+  : activeTab.value === 'returned' ? '当前 Tab 无已退货订单'
   : '当前 Tab 无已成功/已采购未结算订单'
 );
 async function loadSummary(params) {
@@ -323,6 +323,21 @@ function switchTab(key) {
 function search() {
   pager.current = 1;
   loadList();
+}
+
+// 已取消卡片:点击细分 chip(买家/Ozon/卖家)→ 切到已取消 tab 并应用对应发起者筛选
+function applyCancelInitiatorFilter(initiator) {
+  if (globalSearch.active) clearGlobalSearch(false);
+  activeTab.value = 'cancelled';
+  filters.cancelInitiator = initiator;
+  pager.current = 1;
+  loadList();
+}
+
+// 比率百分比(保留2位):part/total,分母为0显示 —;用于整体卡的退货率/取消率
+function ratePct(part, total) {
+  if (!total) return '—';
+  return (Math.round((part / total) * 10000) / 100) + '%';
 }
 
 // ── 全局搜索触发/清除 ───────────────────────────────────
@@ -1318,19 +1333,46 @@ async function onIgnore(pkg, ignored) {
 // ── 备注/标签行内编辑(2026-09-15 重设计:去弹窗,子行即编辑面)──────────────
 // 本地标签存 op_package.tags(逗号分隔),妙手同步不覆盖;
 // 本地备注存 op_package.note,妙手同步 COALESCE 覆盖(妙手有值时以妙手为准)
-// 交互:标签 chip 名=点击筛选(再点取消)/×=移除/＋=原位输入(回车/逗号添加,IME 安全);
+// 交互:标签 chip 名=点击筛选(再点取消)/×=移除/＋=弹出选择面板(搜索/列表选择/新建);
 //      备注点击文本进入编辑,blur/Ctrl+Enter 保存,Esc 取消;乐观更新+失败回滚
-const tagEdit = reactive({ pkgId: null, input: '' });
+// 标签颜色(2026-09-15 v4):按标签名 hash 分配 8 色板,同名永远同色;
+// 标签顺序(2026-09-15 v4):全局顺序(后端 op_tag_order),下拉/面板/订单 chip 三处一致
+const tagEdit = reactive({ pkgId: null, search: '', sortMode: false });
 const noteEdit = reactive({ pkgId: null, draft: '', saving: false });
 
-// 标签:打开/关闭原位输入(同一时刻仅一行打开)
-function openTagInput(pkg) {
-  tagEdit.pkgId = pkg.id;
-  tagEdit.input = '';
+// 标签 → 颜色类:8 色板循环,hash 稳定(同名同色,跨订单/跨面板一致)
+function tagColorClass(name) {
+  let h = 0;
+  for (const ch of String(name)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return 'tag-c' + (h % 8);
 }
-function closeTagInput() {
+
+// 标签全局顺序索引(tagOptions 顺序即全局顺序);未知标签排最后按字典序
+const tagOrderIndex = computed(() => {
+  const m = new Map();
+  (tagOptions.value || []).forEach((t, i) => m.set(t.name, i));
+  return m;
+});
+// 订单 chip 按全局顺序排序展示(与下拉/选择面板一致)
+function sortTagsByOrder(tags) {
+  const idx = tagOrderIndex.value;
+  return [...(tags || [])].sort((a, b) => {
+    const ia = idx.has(a) ? idx.get(a) : 9999;
+    const ib = idx.has(b) ? idx.get(b) : 9999;
+    return ia - ib || a.localeCompare(b, 'zh');
+  });
+}
+
+// 选择面板:打开(同一时刻仅一行)
+function openTagPicker(pkg) {
+  tagEdit.pkgId = pkg.id;
+  tagEdit.search = '';
+  tagEdit.sortMode = false;
+}
+function closeTagPicker() {
   tagEdit.pkgId = null;
-  tagEdit.input = '';
+  tagEdit.search = '';
+  tagEdit.sortMode = false;
 }
 
 // 标签:持久化(乐观更新,失败回滚并提示)
@@ -1340,57 +1382,81 @@ async function persistTags(pkg, nextTags) {
   try {
     const updated = await updatePackageMeta(pkg.id, { tags: nextTags });
     pkg.tags = updated.tags || [];
-    loadTagOptions(); // 标签集合变化,刷新筛选下拉与联想
+    loadTagOptions(); // 标签集合变化,刷新筛选下拉与选择面板
   } catch (err) {
     pkg.tags = prev;
     show(err.message || String(err), 'error');
   }
 }
 
-// 标签:从输入框解析(逗号/空格分隔批量,去重),解析后清空输入但保持输入框开启便于连续录入
-function addTagsFromInput(pkg) {
-  const names = tagEdit.input
-    .split(/[,，\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .filter((t) => !(pkg.tags || []).includes(t));
-  tagEdit.input = '';
-  if (names.length) persistTags(pkg, [...(pkg.tags || []), ...names]);
+// 选择面板:列表项 = tagOptions 按全局序,支持搜索过滤(不区分大小写);已含的显示勾选态
+function tagPickerOptions(pkg) {
+  const kw = tagEdit.search.trim().toLowerCase();
+  const own = new Set(pkg.tags || []);
+  return (tagOptions.value || [])
+    .filter((t) => !kw || t.name.toLowerCase().includes(kw))
+    .map((t) => ({ ...t, own: own.has(t.name) }));
 }
+const tagPickerHasExact = (pkg) =>
+  (pkg.tags || []).includes(tagEdit.search.trim()) ||
+  (tagOptions.value || []).some((t) => t.name === tagEdit.search.trim());
 
-// 标签:键盘处理(isComposing 守卫:中文输入法组词中的回车/逗号不触发)
-function onTagKeydown(e, pkg) {
-  if (e.isComposing) return;
-  if (e.key === 'Enter' || e.key === ',' || e.key === '，') {
-    e.preventDefault();
-    addTagsFromInput(pkg);
-  } else if (e.key === 'Escape') {
-    e.preventDefault();
-    closeTagInput();
+// 选择面板:点列表项 toggle(已含→移除,未含→添加;面板保持开启便于连续选择)
+function toggleTag(pkg, name) {
+  if (tagEdit.sortMode) return; // 排序模式下不 toggle,只排序
+  if ((pkg.tags || []).includes(name)) {
+    persistTags(pkg, pkg.tags.filter((x) => x !== name));
+  } else {
+    persistTags(pkg, [...(pkg.tags || []), name]);
   }
 }
-// 标签:失焦时若有未提交文本则补提交,随后关闭输入框
-function onTagBlur(pkg) {
-  if (tagEdit.input.trim()) addTagsFromInput(pkg);
-  if (tagEdit.pkgId === pkg.id) tagEdit.pkgId = null;
+
+// 选择面板:搜索框回车 = 选中精确/首个匹配,或新建;Esc 关闭(isComposing 守卫)
+function onTagSearchKeydown(e, pkg) {
+  if (e.isComposing) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeTagPicker();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const kw = tagEdit.search.trim();
+    if (!kw) return;
+    const opts = tagPickerOptions(pkg);
+    const hit = opts.find((t) => t.name === kw) || opts[0];
+    if (hit) {
+      toggleTag(pkg, hit.name);
+      tagEdit.search = '';
+    } else {
+      persistTags(pkg, [...(pkg.tags || []), kw]);
+      tagEdit.search = '';
+    }
+  }
 }
 
-// 标签:已有标签快捷选择(添加区展示用)——排除该订单已有标签,最多 8 个避免撑爆行
-function quickTagOptions(pkg) {
-  const own = new Set(pkg.tags || []);
-  return tagOptions.value
-    .map((t) => t.name)
-    .filter((n) => !own.has(n))
-    .slice(0, 8);
-}
-
-// 标签:快捷添加单个已有标签(与输入框回车添加同一持久化路径)
-function addTag(pkg, t) {
-  if (!(pkg.tags || []).includes(t)) persistTags(pkg, [...(pkg.tags || []), t]);
+// 排序模式:上移/下移(乐观更新顺序,PUT 全量,失败回滚)
+async function moveTagOrder(name, dir) {
+  const list = tagOptions.value.map((t) => ({ ...t }));
+  const i = list.findIndex((t) => t.name === name);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  const prev = tagOptions.value;
+  tagOptions.value = list; // 乐观:面板/下拉/chip 立即生效
+  try {
+    await updateTagOrder(list.map((t) => t.name));
+  } catch (err) {
+    tagOptions.value = prev;
+    show(err.message || String(err), 'error');
+  }
 }
 
 function removeTag(pkg, t) {
   persistTags(pkg, (pkg.tags || []).filter((x) => x !== t));
+}
+
+// 选择面板:document 点击关闭(面板自身 @click.stop 拦截冒泡)
+function onDocClickCloseTagPicker() {
+  if (tagEdit.pkgId != null) closeTagPicker();
 }
 
 // 标签:点击 chip 名=按此标签筛选(再点同一标签取消)
@@ -1956,11 +2022,14 @@ onMounted(() => {
   loadPlatformStatus();
   // PDD 登录同步页面桥(插件 popup 同步 cookie 的接入口)
   window.addEventListener('message', onPddSyncBridgeMessage);
+  // 标签选择面板:点面板外任意处关闭(2026-09-15 v4)
+  document.addEventListener('click', onDocClickCloseTagPicker);
 });
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer);
   if (tickTimer) clearInterval(tickTimer);
   window.removeEventListener('message', onPddSyncBridgeMessage);
+  document.removeEventListener('click', onDocClickCloseTagPicker);
   if (printFrame) {
     printFrame.remove();
     printFrame = null;
@@ -2145,38 +2214,96 @@ onUnmounted(() => {
       <span class="muted">{{ summaryEmptyHint }}</span>
     </div>
     <div class="summary-bar" v-else-if="summary" v-show="!summaryLoading">
-      <div class="summary-card summary-settled">
-        <div class="summary-head">
-          <span class="summary-title">已成功</span>
-          <span class="tag tag-ok">{{ summary.settled.orderCount }} 单</span>
-          <span v-if="summary.settled.estimated" class="muted">（估）</span>
-          <span v-else class="muted">（实）</span>
-        </div>
-        <div class="summary-metrics">
-          <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.settled.totalOrderAmount) }}</span></span>
-          <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.settled.totalPurchaseAmount) }}</span></span>
-          <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.settled.totalProfit > 0 ? 'profit-pos' : (summary.settled.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.settled.totalProfit) }}</span></span>
-          <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.settled.profitRateSale) }}</span></span>
-          <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.settled.profitRateCost) }}</span></span>
-        </div>
-      </div>
-      <div class="summary-card summary-pending">
-        <div class="summary-head">
-          <span class="summary-title">已采购未结算</span>
-          <span class="tag tag-warn">{{ summary.pendingSettled.orderCount }} 单</span>
-          <span class="muted">（估）</span>
-        </div>
-        <div class="summary-metrics">
-          <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.pendingSettled.totalOrderAmount) }}</span></span>
-          <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.pendingSettled.totalPurchaseAmount) }}</span></span>
-          <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.pendingSettled.totalProfit > 0 ? 'profit-pos' : (summary.pendingSettled.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.pendingSettled.totalProfit) }}</span></span>
-          <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.pendingSettled.profitRateSale) }}</span></span>
-          <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.pendingSettled.profitRateCost) }}</span></span>
+      <!-- 双列布局:左列=在途(已采购未结算);右列=终态(第1行整体合计,第2行成功/取消/退货) -->
+      <div class="summary-col summary-col-pending">
+        <div class="summary-card summary-pending">
+          <div class="summary-head">
+            <span class="summary-title">已采购未结算</span>
+            <span class="tag tag-warn">{{ summary.pendingSettled.orderCount }} 单</span>
+            <span class="muted">（估）</span>
+          </div>
+          <div class="summary-metrics summary-metrics-col">
+            <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.pendingSettled.totalOrderAmount) }}</span></span>
+            <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.pendingSettled.totalPurchaseAmount) }}</span></span>
+            <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.pendingSettled.totalProfit > 0 ? 'profit-pos' : (summary.pendingSettled.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.pendingSettled.totalProfit) }}</span></span>
+            <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.pendingSettled.profitRateSale) }}</span></span>
+            <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.pendingSettled.profitRateCost) }}</span></span>
+          </div>
         </div>
       </div>
-      <div v-if="summary.returnedCount > 0" class="summary-returned-note" title="妥投后买家退货退款,不计入以上两组汇总">
-        <span class="tag tag-err">已退货</span>
-        <span>{{ summary.returnedCount }} 单(不计入以上汇总)</span>
+      <div class="summary-col summary-col-final">
+        <!-- 第1行:整体(终态合计):已成功+已取消+已退货,不含在途的已采购未结算 -->
+        <div v-if="summary.overall && summary.overall.orderCount > 0" class="summary-card summary-overall" title="已成功+已取消+已退货 三组终态订单合计;不含已采购未结算(在途);退货率/取消率分母均为终态总单数">
+          <div class="summary-head">
+            <span class="summary-title">整体合计</span>
+            <span class="tag">{{ summary.overall.orderCount }} 单</span>
+            <span class="muted">（成功 {{ summary.settled.orderCount }} + 取消 {{ summary.cancelledCount }} + 退货 {{ summary.returnedCount }}）</span>
+          </div>
+          <div class="summary-metrics">
+            <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.overall.totalOrderAmount) }}</span></span>
+            <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.overall.totalPurchaseAmount) }}</span></span>
+            <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.overall.totalProfit > 0 ? 'profit-pos' : (summary.overall.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.overall.totalProfit) }}</span></span>
+            <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.overall.profitRateSale) }}</span></span>
+            <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.overall.profitRateCost) }}</span></span>
+            <span class="metric"><span class="metric-label">退货率</span><span class="metric-val">{{ ratePct(summary.returnedCount, summary.overall.orderCount) }}</span></span>
+            <span class="metric"><span class="metric-label">取消率</span><span class="metric-val">{{ ratePct(summary.cancelledCount, summary.overall.orderCount) }}</span></span>
+          </div>
+          <!-- 取消率细分:按取消发起者,分母均为终态总单数 -->
+          <div class="summary-rate-breakdown">
+            <span>买家取消率 <b>{{ ratePct(summary.cancelled.byInitiator.client, summary.overall.orderCount) }}</b></span>
+            <span>Ozon取消率 <b>{{ ratePct(summary.cancelled.byInitiator.ozon, summary.overall.orderCount) }}</b><span v-if="summary.cancelled.ozonQualityInspection > 0" class="rate-sub">(质检单率 {{ ratePct(summary.cancelled.ozonQualityInspection, summary.overall.orderCount) }})</span></span>
+            <span>卖家取消率 <b>{{ ratePct(summary.cancelled.byInitiator.seller, summary.overall.orderCount) }}</b></span>
+          </div>
+        </div>
+        <!-- 第2行:已成功 / 已取消 / 已退货 -->
+        <div class="summary-row">
+          <div class="summary-card summary-settled">
+            <div class="summary-head">
+              <span class="summary-title">已成功</span>
+              <span class="tag tag-ok">{{ summary.settled.orderCount }} 单</span>
+            </div>
+            <div class="summary-metrics">
+              <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.settled.totalOrderAmount) }}</span></span>
+              <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.settled.totalPurchaseAmount) }}</span></span>
+              <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.settled.totalProfit > 0 ? 'profit-pos' : (summary.settled.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.settled.totalProfit) }}</span></span>
+              <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.settled.profitRateSale) }}</span></span>
+              <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.settled.profitRateCost) }}</span></span>
+            </div>
+          </div>
+          <div v-if="summary.cancelledCount > 0" class="summary-card summary-cancelled" title="取消订单无收入:利润=−采购(无应计)或应计退款口径(有应计);订单总额为原下单金额,未实际收款">
+            <div class="summary-head">
+              <span class="summary-title">已取消</span>
+              <span class="tag tag-err">{{ summary.cancelledCount }} 单</span>
+            </div>
+            <div class="summary-metrics">
+              <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val muted">{{ fmtMoney(summary.cancelled.totalOrderAmount) }}</span></span>
+              <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.cancelled.totalPurchaseAmount) }}</span></span>
+              <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.cancelled.totalProfit > 0 ? 'profit-pos' : (summary.cancelled.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.cancelled.totalProfit) }}</span></span>
+            </div>
+            <!-- 取消发起者细分:买家/Ozon(含质检单)/卖家;点击可跳转对应筛选 -->
+            <div class="summary-cancel-breakdown">
+              <button class="cancel-chip" title="买家取消的订单" @click="applyCancelInitiatorFilter('client')">买家取消 {{ summary.cancelled.byInitiator.client }}</button>
+              <button class="cancel-chip" title="Ozon 取消的订单(质检单=抽检流程,不代表商品不通过)" @click="applyCancelInitiatorFilter('ozon')">
+                Ozon 取消 {{ summary.cancelled.byInitiator.ozon }}<span v-if="summary.cancelled.ozonQualityInspection > 0" class="cancel-chip-sub">(质检单 {{ summary.cancelled.ozonQualityInspection }})</span>
+              </button>
+              <button class="cancel-chip" title="卖家取消的订单" @click="applyCancelInitiatorFilter('seller')">卖家取消 {{ summary.cancelled.byInitiator.seller }}</button>
+              <span v-if="summary.cancelled.byInitiator.unknown > 0" class="muted">未分类 {{ summary.cancelled.byInitiator.unknown }}</span>
+            </div>
+          </div>
+          <div v-if="summary.returnedCount > 0" class="summary-card summary-returned" title="妥投后买家退货退款,按行内同口径利润单独汇总,不计入已成功/已采购未结算两组">
+            <div class="summary-head">
+              <span class="summary-title">已退货</span>
+              <span class="tag tag-err">{{ summary.returnedCount }} 单</span>
+            </div>
+            <div class="summary-metrics">
+              <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.returned.totalOrderAmount) }}</span></span>
+              <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.returned.totalPurchaseAmount) }}</span></span>
+              <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.returned.totalProfit > 0 ? 'profit-pos' : (summary.returned.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.returned.totalProfit) }}</span></span>
+              <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.returned.profitRateSale) }}</span></span>
+              <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.returned.profitRateCost) }}</span></span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2200,10 +2327,10 @@ onUnmounted(() => {
           </tr>
           <!-- 每订单固定 3 行:标签行(上) → 主行 → 备注行(下),空态也常驻(2026-09-15 v2) -->
           <template v-for="pkg in rows" :key="pkg.id">
-          <!-- 标签行:本地标签 chip(名=点击筛选/×悬停移除;妙手旗帜同步时并入 tags,统一展示) + 添加区(快捷选已有) -->
+          <!-- 标签行:本地标签 chip(名=点击筛选/×悬停移除,按全局顺序+稳定配色;妙手旗帜同步时并入 tags) + 选择面板 -->
           <tr class="pkg-subrow pkg-tags-row">
             <td colspan="7">
-              <span v-for="t in pkg.tags" :key="t" class="pkg-tag" :class="{ 'pkg-tag-on': filters.tag === t }">
+              <span v-for="t in sortTagsByOrder(pkg.tags)" :key="t" class="pkg-tag" :class="[tagColorClass(t), { 'pkg-tag-on': filters.tag === t }]">
                 <button
                   class="pkg-tag-name"
                   :title="filters.tag === t ? '点击取消此标签筛选' : '点击按此标签筛选'"
@@ -2211,28 +2338,53 @@ onUnmounted(() => {
                 >{{ t }}</button>
                 <button class="pkg-tag-x" :aria-label="'移除标签 ' + t" title="移除标签" @click="removeTag(pkg, t)">×</button>
               </span>
-              <!-- 添加区:输入框(回车/逗号新建) + 已有标签快捷选择(点击即加,方便复用) -->
-              <!-- 妙手旗帜已并入 tags 统一展示(2026-09-15 v3),不再单独渲染 -->
+              <!-- 选择面板(2026-09-15 v4):搜索+列表选择(点击 toggle,可多选)+新建+排序模式;替代原平铺快捷 chips -->
               <template v-if="tagEdit.pkgId === pkg.id">
-                <input
-                  :ref="(el) => { if (el) el.focus() }"
-                  v-model="tagEdit.input"
-                  class="pkg-tag-input"
-                  list="pkg-tag-options"
-                  placeholder="输入标签,回车/逗号添加"
-                  @keydown="onTagKeydown($event, pkg)"
-                  @blur="onTagBlur(pkg)"
-                />
-                <button
-                  v-for="opt in quickTagOptions(pkg)"
-                  :key="'q-' + opt"
-                  class="pkg-tag pkg-tag-quick"
-                  :title="'添加已有标签:' + opt"
-                  @mousedown.prevent
-                  @click="addTag(pkg, opt)"
-                >＋{{ opt }}</button>
+                <div class="pkg-tag-pop" @click.stop>
+                  <input
+                    :ref="(el) => { if (el) el.focus() }"
+                    v-model="tagEdit.search"
+                    class="pkg-tag-pop-search"
+                    placeholder="搜索或新建标签,回车确认"
+                    @keydown="onTagSearchKeydown($event, pkg)"
+                  />
+                  <div class="pkg-tag-pop-list">
+                    <div
+                      v-for="(opt, oi) in tagPickerOptions(pkg)"
+                      :key="opt.name"
+                      class="pkg-tag-pop-item"
+                      :class="{ own: opt.own, 'sort-mode': tagEdit.sortMode }"
+                      :title="tagEdit.sortMode ? '使用箭头调整标签顺序(全局生效)' : (opt.own ? '点击移除该标签' : '点击添加该标签')"
+                      @mousedown.prevent
+                      @click="toggleTag(pkg, opt.name)"
+                    >
+                      <span class="pkg-tag-dot" :class="tagColorClass(opt.name)"></span>
+                      <span class="pkg-tag-pop-name">{{ opt.name }}</span>
+                      <span class="pkg-tag-pop-cnt">{{ opt.count }}</span>
+                      <template v-if="tagEdit.sortMode">
+                        <button class="pkg-tag-sort-btn" :disabled="oi === 0" title="上移" @click.stop="moveTagOrder(opt.name, -1)">↑</button>
+                        <button class="pkg-tag-sort-btn" :disabled="oi === tagPickerOptions(pkg).length - 1" title="下移" @click.stop="moveTagOrder(opt.name, 1)">↓</button>
+                      </template>
+                      <span v-else-if="opt.own" class="pkg-tag-pop-check">✓</span>
+                    </div>
+                    <div
+                      v-if="tagEdit.search.trim() && !tagPickerHasExact(pkg)"
+                      class="pkg-tag-pop-item pkg-tag-pop-new"
+                      :title="'新建标签:' + tagEdit.search.trim()"
+                      @mousedown.prevent
+                      @click="persistTags(pkg, [...(pkg.tags || []), tagEdit.search.trim()]); tagEdit.search = ''"
+                    >＋ 新建“{{ tagEdit.search.trim() }}”</div>
+                    <div v-if="!tagPickerOptions(pkg).length && !tagEdit.search.trim()" class="pkg-tag-pop-empty">暂无标签,输入名称回车新建</div>
+                  </div>
+                  <div class="pkg-tag-pop-foot">
+                    <button class="pkg-tag-sort-toggle" :class="{ on: tagEdit.sortMode }" @mousedown.prevent @click="tagEdit.sortMode = !tagEdit.sortMode">
+                      {{ tagEdit.sortMode ? '完成排序' : '排序' }}
+                    </button>
+                    <span class="pkg-tag-pop-hint">{{ tagEdit.sortMode ? '箭头调整顺序,全局生效(下拉/chip 同步)' : '点击选择可多选,已选✓再点移除' }}</span>
+                  </div>
+                </div>
               </template>
-              <button v-else class="pkg-tag pkg-tag-add" title="添加标签(可输入新建,或点击已有标签快捷添加)" @click="openTagInput(pkg)">＋ 标签</button>
+              <button v-else class="pkg-tag pkg-tag-add" title="添加标签(搜索选择已有,或输入新建)" @click.stop="openTagPicker(pkg)">＋ 标签</button>
             </td>
           </tr>
             <tr class="pkg-row">
@@ -2438,11 +2590,6 @@ onUnmounted(() => {
         @update:modelValue="onPageChange"
       />
     </div>
-
-    <!-- 标签输入联想(原生 datalist:已有标签自动补全,保证命名一致) -->
-    <datalist id="pkg-tag-options">
-      <option v-for="t in tagOptions" :key="t.name" :value="t.name" />
-    </datalist>
 
     <!-- 同步所有订单弹窗(/v4/posting/fbs/list 全量) -->
     <AppModal :open="syncAllOpen" title="同步所有订单 · /v4/posting/fbs/list" size="md" @update:open="syncAllOpen = $event">
@@ -3376,7 +3523,9 @@ a.product-title:hover {
 }
 .pkg-note-row.is-editing td { align-items: flex-start; }
 
-/* ── 本地标签 chip:名=筛选 / ×=移除(悬停浮现);妙手旗帜同步时并入 tags 统一展示 ── */
+/* ── 本地标签 chip:名=筛选 / ×=移除(悬停浮现);妙手旗帜同步时并入 tags 统一展示 ──
+   v4(2026-09-15):8 色板循环,按 tag 名 hash 稳定分配,同名永远同色;
+   色板变量(--tag-bg/--tag-fg/--tag-hover/--tag-dot)由 .tag-c0~.tag-c7 提供 */
 .pkg-tag {
   display: inline-flex;
   align-items: center;
@@ -3384,14 +3533,14 @@ a.product-title:hover {
   border-radius: 5px;
   font-size: 11px;
   font-weight: 600;
-  background: #e0e7ff;    /* 靛蓝:本地标签 */
-  color: #4338ca;
+  background: var(--tag-bg, #e0e7ff);
+  color: var(--tag-fg, #4338ca);
   max-width: 220px;
   overflow: hidden;
   white-space: nowrap;
   transition: background .12s ease, box-shadow .12s ease;
 }
-.pkg-tag:hover { background: #c7d2fe; }
+.pkg-tag:hover { background: var(--tag-hover, #c7d2fe); }
 .pkg-tag-name {
   border: none;
   background: transparent;
@@ -3417,10 +3566,9 @@ a.product-title:hover {
 }
 .pkg-tag:hover .pkg-tag-x { opacity: .55; }
 .pkg-tag-x:hover { opacity: 1; }
-/* 当前筛选中的标签:靛蓝描边环 */
+/* 当前筛选中的标签:用 chip 自身色作描边环,适配任意配色 */
 .pkg-tag-on {
-  background: #c7d2fe;
-  box-shadow: 0 0 0 2px #a5b4fc;
+  box-shadow: 0 0 0 2px var(--tag-dot, #a5b4fc);
 }
 /* ＋ 添加标签 ghost chip */
 .pkg-tag-add {
@@ -3437,17 +3585,151 @@ a.product-title:hover {
   cursor: pointer;
 }
 .pkg-tag-add:hover { background: #e0e7ff; border-style: solid; }
-/* 原位标签输入框 */
-.pkg-tag-input {
-  margin: 0 2px;
-  padding: 2px 7px;
-  font-size: 11px;
-  width: 180px;
-  border: 1px solid #a5b4fc;
-  border-radius: 5px;
-  outline: none;
+
+/* ── 8 色板:同名同色(hash 稳定,跨订单/跨面板一致)──
+   chip:浅底深字 + hover 浅一档;dot:纯色实心(选择面板圆点) */
+.pkg-tag.tag-c0, .pkg-tag-dot.tag-c0 { --tag-bg:#e0e7ff; --tag-fg:#4338ca; --tag-hover:#c7d2fe; --tag-dot:#6366f1; }
+.pkg-tag.tag-c1, .pkg-tag-dot.tag-c1 { --tag-bg:#d1fae5; --tag-fg:#065f46; --tag-hover:#a7f3d0; --tag-dot:#10b981; }
+.pkg-tag.tag-c2, .pkg-tag-dot.tag-c2 { --tag-bg:#fef3c7; --tag-fg:#92400e; --tag-hover:#fde68a; --tag-dot:#f59e0b; }
+.pkg-tag.tag-c3, .pkg-tag-dot.tag-c3 { --tag-bg:#ffe4e6; --tag-fg:#9f1239; --tag-hover:#fecdd3; --tag-dot:#f43f5e; }
+.pkg-tag.tag-c4, .pkg-tag-dot.tag-c4 { --tag-bg:#e0f2fe; --tag-fg:#075985; --tag-hover:#bae6fd; --tag-dot:#0ea5e9; }
+.pkg-tag.tag-c5, .pkg-tag-dot.tag-c5 { --tag-bg:#ede9fe; --tag-fg:#5b21b6; --tag-hover:#ddd6fe; --tag-dot:#8b5cf6; }
+.pkg-tag.tag-c6, .pkg-tag-dot.tag-c6 { --tag-bg:#fce7f3; --tag-fg:#9d174d; --tag-hover:#fbcfe8; --tag-dot:#ec4899; }
+.pkg-tag.tag-c7, .pkg-tag-dot.tag-c7 { --tag-bg:#ccfbf1; --tag-fg:#115e59; --tag-hover:#99f6e4; --tag-dot:#14b8a6; }
+/* dot 实心圆:用色板纯色,继承 --tag-dot */
+.pkg-tag-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tag-dot, #6366f1);
+  flex: none;
+}
+
+/* ── 标签选择面板(替代原 datalist/快捷 chip;搜索+列表选择+新建+排序)── */
+.pkg-tag-pop {
+  display: inline-block;
+  vertical-align: top;
+  margin: 1px 0 1px 2px;
+  width: 280px;
+  max-width: calc(100vw - 64px);
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
   background: #fff;
-  box-shadow: 0 0 0 2px #e0e7ff;
+  box-shadow: 0 8px 24px rgba(30, 41, 59, 0.18);
+  z-index: 20;
+  overflow: hidden;
+}
+.pkg-tag-pop-search {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  border: none;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fbff;
+  color: #1f2937;
+  outline: none;
+}
+.pkg-tag-pop-search:focus { background: #fff; border-bottom-color: #a5b4fc; }
+.pkg-tag-pop-list {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.pkg-tag-pop-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #1f2937;
+  cursor: pointer;
+  user-select: none;
+}
+.pkg-tag-pop-item:hover { background: #f1f5f9; }
+.pkg-tag-pop-item.own { color: #4338ca; background: #f5f7ff; }
+.pkg-tag-pop-item.own:hover { background: #e0e7ff; }
+.pkg-tag-pop-item.sort-mode { cursor: default; }
+.pkg-tag-pop-item.sort-mode:hover { background: transparent; }
+.pkg-tag-pop-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pkg-tag-pop-cnt {
+  flex: none;
+  font-size: 11px;
+  color: #9ca3af;
+  font-weight: 600;
+}
+.pkg-tag-pop-check {
+  flex: none;
+  color: #4338ca;
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
+}
+.pkg-tag-sort-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #fff;
+  color: #4338ca;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pkg-tag-sort-btn:hover:not(:disabled) { background: #e0e7ff; border-color: #a5b4fc; }
+.pkg-tag-sort-btn:disabled { opacity: .35; cursor: not-allowed; }
+.pkg-tag-pop-new {
+  color: #16a34a;
+  font-weight: 600;
+  border-top: 1px dashed #e5e7eb;
+}
+.pkg-tag-pop-new:hover { background: #f0fdf4; color: #15803d; }
+.pkg-tag-pop-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: #9ca3af;
+  text-align: center;
+}
+.pkg-tag-pop-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid #e5e7eb;
+  background: #f9fbff;
+}
+.pkg-tag-sort-toggle {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid #c7d2fe;
+  border-radius: 4px;
+  background: #fff;
+  color: #4338ca;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pkg-tag-sort-toggle:hover { background: #e0e7ff; }
+.pkg-tag-sort-toggle.on { background: #4338ca; color: #fff; border-color: #4338ca; }
+.pkg-tag-pop-hint {
+  font-size: 11px;
+  color: #9ca3af;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── 备注行内编辑 ── */
@@ -3488,21 +3770,6 @@ a.product-title:hover {
   cursor: pointer;
 }
 .pkg-note-add:hover { background: #fef3c7; border-style: solid; }
-/* 已有标签快捷选择 chip(添加区,灰底靛字,与正式 chip 区分) */
-.pkg-tag-quick {
-  display: inline-flex;
-  align-items: center;
-  margin: 1px 2px 1px 0;
-  padding: 1px 7px;
-  border: 1px dashed #c7d2fe;
-  border-radius: 5px;
-  background: #fff;
-  color: #6366f1;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.pkg-tag-quick:hover { background: #e0e7ff; border-style: solid; }
 
 /* ── Tab 聚合统计(已结算/已采购未结算两组,全集不分页)── */
 .summary-bar {
@@ -3528,19 +3795,33 @@ a.product-title:hover {
 }
 .summary-settled { border-left: 3px solid #16a34a; }
 .summary-pending { border-left: 3px solid #f59e0b; }
-/* 已退货计数提示(不参与两组汇总,仅计数展示) */
-.summary-returned-note {
+/* 已取消/已退货卡片(2026-09-15):红色系描边,与两组主卡区分 */
+.summary-cancelled { border-left: 3px solid #dc2626; background: #fef2f2; }
+.summary-returned { border-left: 3px solid #dc2626; background: #fef2f2; }
+/* 整体合计卡片(2026-09-15):靛蓝描边,已成功+已取消+已退货终态合计 */
+.summary-overall { border-left: 3px solid #4f46e5; background: #eef2ff; }
+/* 已取消卡片:发起者细分行(买家/Ozon/卖家,点击跳转筛选) */
+.summary-cancel-breakdown {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  color: var(--text-secondary, #6b7280);
-  font-size: 12px;
-  padding: 6px 10px;
-  border-left: 3px solid #dc2626;
-  background: #fef2f2;
-  border-radius: 4px;
-  align-self: flex-start;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #fecaca;
 }
+.cancel-chip {
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  background: #fff;
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.cancel-chip:hover { background: #fee2e2; border-color: #fca5a5; }
+.cancel-chip-sub { font-weight: 400; opacity: .8; }
 .summary-head {
   display: flex;
   align-items: center;
@@ -3568,6 +3849,45 @@ a.product-title:hover {
 .metric-val {
   font-weight: 600;
   color: var(--text-primary, #111827);
+}
+/* 汇总区双列布局(2026-09-15):左列=在途(已采购未结算,纵向指标),右列=终态(整体合计行 + 成功/取消/退货行) */
+.summary-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.summary-col-pending { flex: 0 0 240px; }
+.summary-col-pending .summary-card { flex: 1; }
+.summary-col-final { flex: 1 1 560px; min-width: 0; }
+.summary-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.summary-row .summary-card { flex: 1 1 200px; }
+/* 左列(在途)指标纵向排列 */
+.summary-metrics-col {
+  flex-direction: column;
+  gap: 8px;
+}
+/* 整体卡:取消率细分行(买家/Ozon/卖家,分母=终态总单数) */
+.summary-rate-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #c7d2fe;
+  color: #4338ca;
+  font-size: 11px;
+}
+.summary-rate-breakdown b { font-size: 12px; }
+.rate-sub { opacity: .8; font-weight: 400; }
+/* 窄屏:双列降级为单列堆叠 */
+@media (max-width: 900px) {
+  .summary-col-pending { flex: 1 1 100%; }
+  .summary-col-final { flex: 1 1 100%; }
 }
 
 .empty {

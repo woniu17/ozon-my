@@ -150,6 +150,20 @@ function computeProfit(pkg, cancelled = false, rate = null) {
     };
   }
 
+  // 已退货且无真实应计(2026-09-15):退货货款必然被 Ozon 全额扣回(应计可能尚未同步),
+  // 不做乐观预估(按正常销售估算会虚高),按确定性规则 利润=−采购;退货商品一律销毁,无残值
+  if (pkg.isReturned) {
+    return {
+      commission: 0,
+      escrow: 0,
+      profit: round2(-purchase),
+      profitRateCost: null,
+      profitRateSale: null,
+      estimated: true,
+      returned: true,
+    };
+  }
+
   // 预估口径:无真实应计。代理佣金恒 16%;国际配送按重量公式估算(公式单位 CNY,需重量)
   // 无重量时回退到原 16% 打包口径(delivery 隐含在 16% 内,保守低估)
   const commission = round2(orderAmount * DEFAULT_COMMISSION_RATE);
@@ -202,6 +216,20 @@ router.get('/admin/api/order-process/pending-export', (_req, res) => {
 // ── 已用标签列表(筛选下拉,2026-09-15)──────────────────────
 router.get('/admin/api/order-process/tags', (_req, res) => {
   res.json(ok(orderPackageDao.listPackageTags()));
+});
+
+// ── 设置标签全局顺序(2026-09-15 v4)────────────────────────
+// body: { names: string[] } 全量覆盖,索引即顺序;
+// 影响:筛选下拉/选择面板/订单 chip 展示顺序(三者一致)
+router.put('/admin/api/order-process/tags-order', (req, res, next) => {
+  try {
+    const names = req.body?.names;
+    if (!Array.isArray(names) || names.length === 0) {
+      return res.status(400).json({ ok: false, message: 'names 必须为非空数组' });
+    }
+    const n = orderPackageDao.setTagOrder(names);
+    res.json(ok({ count: n }));
+  } catch (e) { next(e); }
 });
 
 // ── 包裹列表 ────────────────────────────────────────────────
@@ -270,11 +298,12 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
   }
 });
 
-// ── Tab 聚合统计(当前 Tab+筛选全集不分页,分两组:已结算/已采购未结算)─────
+// ── Tab 聚合统计(当前 Tab+筛选全集不分页,分四组:已结算/已采购未结算/已取消/已退货)─────
 // query 同 /list(除不接 page/pageSize)
 // 已结算组:delivered 且应计同时含 type 66 和 67(真实口径)
 // 已采购未结算组:已采购(purchase_status != 'none')且不满足已结算且非已取消(预估口径)
-// 已取消订单排除两组(利润=−采购、利润率无意义),单独计数
+// 已取消组(2026-09-15):利润=−采购(无应计)或应计退款口径,利润率无意义不计算
+// 已退货组(2026-09-15):妥投后退货退款,按行内同口径利润单独汇总
 router.get('/admin/api/order-process/summary', (req, res, next) => {
   try {
     const q = req.query;
@@ -317,14 +346,49 @@ router.get('/admin/api/order-process/summary', (req, res, next) => {
     const round2 = (n) => Math.round(n * 100) / 100;
     const settled = { orderCount: 0, totalOrderAmount: 0, totalPurchaseAmount: 0, totalProfit: 0, profitRateSale: null, profitRateCost: null, estimated: !rate };
     const pendingSettled = { orderCount: 0, totalOrderAmount: 0, totalPurchaseAmount: 0, totalProfit: 0, profitRateSale: null, profitRateCost: null, estimated: true };
+    // 已取消(2026-09-15):利润=−采购(无应计)或应计退款口径(有应计),利润率无意义不计算
+    // byInitiator:按取消发起者细分(client/ozon/seller/unknown);ozonQualityInspection:ozon 取消中质检单(992/994)
+    const cancelled = {
+      orderCount: 0, totalOrderAmount: 0, totalPurchaseAmount: 0, totalProfit: 0, estimated: !rate,
+      byInitiator: { client: 0, ozon: 0, seller: 0, unknown: 0 },
+      ozonQualityInspection: 0,
+    };
+    // 已退货(2026-09-15):妥投后退货退款,按行内同口径利润单独汇总
+    const returned = { orderCount: 0, totalOrderAmount: 0, totalPurchaseAmount: 0, totalProfit: 0, profitRateSale: null, profitRateCost: null, estimated: !rate };
     let cancelledCount = 0;
     let returnedCount = 0;
 
     for (const pkg of pkgs) {
       const isCancelled = pkg.operateStatus === 'cancelled';
-      if (isCancelled) { cancelledCount++; continue; }
-      // 已退货订单不参与"已成功/已采购未结算"两组汇总(与 Tab 口径一致,前端单独提示)
-      if (pkg.isReturned) { returnedCount++; continue; }
+      if (isCancelled) {
+        cancelledCount++;
+        cancelled.orderCount++;
+        cancelled.totalOrderAmount += pkg.orderAmount;
+        cancelled.totalPurchaseAmount += pkg.totalPurchaseAmount;
+        cancelled.totalProfit += pkg.profit.profit;
+        if (pkg.profit.estimated) cancelled.estimated = true;
+        // 细分:按取消发起者计数;ozon 取消中质检单(992/994)单独计数
+        const init = pkg.cancellationType;
+        if (init === 'client' || init === 'ozon' || init === 'seller') {
+          cancelled.byInitiator[init]++;
+          if (init === 'ozon' && (pkg.cancelReasonId === 992 || pkg.cancelReasonId === 994)) {
+            cancelled.ozonQualityInspection++;
+          }
+        } else {
+          cancelled.byInitiator.unknown++;
+        }
+        continue;
+      }
+      // 已退货订单不参与"已成功/已采购未结算"两组汇总(与 Tab 口径一致,单独成组)
+      if (pkg.isReturned) {
+        returnedCount++;
+        returned.orderCount++;
+        returned.totalOrderAmount += pkg.orderAmount;
+        returned.totalPurchaseAmount += pkg.totalPurchaseAmount;
+        returned.totalProfit += pkg.profit.profit;
+        if (pkg.profit.estimated) returned.estimated = true;
+        continue;
+      }
 
       const isSettled = pkg.operateStatus === 'wait_receiver_confirm'
         && pkg.deliveredAt != null
@@ -357,9 +421,34 @@ router.get('/admin/api/order-process/summary', (req, res, next) => {
     pendingSettled.profitRateSale = pendingSettled.totalOrderAmount > 0 ? Math.round((pendingSettled.totalProfit / pendingSettled.totalOrderAmount) * 10000) / 100 : null;
     pendingSettled.profitRateCost = pendingSettled.totalPurchaseAmount > 0 ? Math.round((pendingSettled.totalProfit / pendingSettled.totalPurchaseAmount) * 10000) / 100 : null;
 
+    cancelled.totalOrderAmount = round2(cancelled.totalOrderAmount);
+    cancelled.totalPurchaseAmount = round2(cancelled.totalPurchaseAmount);
+    cancelled.totalProfit = round2(cancelled.totalProfit);
+
+    returned.totalOrderAmount = round2(returned.totalOrderAmount);
+    returned.totalPurchaseAmount = round2(returned.totalPurchaseAmount);
+    returned.totalProfit = round2(returned.totalProfit);
+    returned.profitRateSale = returned.totalOrderAmount > 0 ? Math.round((returned.totalProfit / returned.totalOrderAmount) * 10000) / 100 : null;
+    returned.profitRateCost = returned.totalPurchaseAmount > 0 ? Math.round((returned.totalProfit / returned.totalPurchaseAmount) * 10000) / 100 : null;
+
+    // 整体(终态合计,2026-09-15):已成功 + 已取消 + 已退货 三组之和
+    // 不含"已采购未结算"(在途,未到终态);利润率按合计算,估/实取任一估则估
+    const overall = {
+      orderCount: settled.orderCount + cancelled.orderCount + returned.orderCount,
+      totalOrderAmount: round2(settled.totalOrderAmount + cancelled.totalOrderAmount + returned.totalOrderAmount),
+      totalPurchaseAmount: round2(settled.totalPurchaseAmount + cancelled.totalPurchaseAmount + returned.totalPurchaseAmount),
+      totalProfit: round2(settled.totalProfit + cancelled.totalProfit + returned.totalProfit),
+      estimated: (settled.orderCount > 0 && settled.estimated) || (cancelled.orderCount > 0 && cancelled.estimated) || (returned.orderCount > 0 && returned.estimated),
+    };
+    overall.profitRateSale = overall.totalOrderAmount > 0 ? Math.round((overall.totalProfit / overall.totalOrderAmount) * 10000) / 100 : null;
+    overall.profitRateCost = overall.totalPurchaseAmount > 0 ? Math.round((overall.totalProfit / overall.totalPurchaseAmount) * 10000) / 100 : null;
+
     res.json(ok({
+      overall,
       settled,
       pendingSettled,
+      cancelled,
+      returned,
       returnedCount,
       totalOrders: settled.orderCount + pendingSettled.orderCount + cancelledCount + returnedCount,
       cancelledCount,

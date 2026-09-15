@@ -1191,6 +1191,12 @@ function migrateMiaoshouTagFields(db) {
       db.exec(`ALTER TABLE op_package ADD COLUMN ms_flag_remarks TEXT`);
       console.log('[db] migration: added column op_package.ms_flag_remarks');
     }
+    // 2026-09-15 v4: 标签全局顺序表(筛选下拉/选择面板/订单 chip 三处共用同一顺序)
+    db.exec(`CREATE TABLE IF NOT EXISTS op_tag_order (
+      tag_name   TEXT PRIMARY KEY,
+      sort_no    INTEGER NOT NULL,
+      gmt_create TEXT
+    )`);
     // 2026-09-15 v3: 存量妙手旗帜(ms_flag_remarks)并入本地标签(tags),统一筛选/编辑
     // 一次性迁移(标记表防重复):用户手动删除同步标签后,重启不得复活;
     // 之后主动"从妙手同步"时由 syncFromMiaoshou 的幂等合并负责以妙手为准

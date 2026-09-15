@@ -558,7 +558,9 @@ function buildPackageWhere(filters = {}) {
 }
 
 /** 已用标签列表+计数(2026-09-15,tags 逗号分隔 → 拆分聚合,供筛选下拉)
- * 妙手旗帜已并入 tags(2026-09-15 v3),无需单独分组 */
+ * 妙手旗帜已并入 tags(2026-09-15 v3),无需单独分组
+ * 顺序(2026-09-15 v4):op_tag_order 自定义序优先(sort_no 升序),未设序的按 count desc/name 排后
+ * 返回顺序 = 全局标签顺序(筛选下拉/选择面板/订单 chip 展示共用) */
 function listPackageTags() {
   const rows = db
     .prepare(`SELECT tags FROM op_package WHERE tags IS NOT NULL AND tags != ''`)
@@ -569,9 +571,32 @@ function listPackageTags() {
       counter.set(t, (counter.get(t) || 0) + 1);
     }
   }
-  return [...counter.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh'));
+  const orderMap = new Map(
+    db.prepare(`SELECT tag_name, sort_no FROM op_tag_order`).all().map((r) => [r.tag_name, r.sort_no])
+  );
+  const ordered = [...counter.entries()]
+    .map(([name, count]) => ({ name, count, sortNo: orderMap.has(name) ? orderMap.get(name) : null }))
+    .sort((a, b) => {
+      if (a.sortNo !== null && b.sortNo !== null) return a.sortNo - b.sortNo;
+      if (a.sortNo !== null) return -1; // 有序的排前
+      if (b.sortNo !== null) return 1;
+      return b.count - a.count || a.name.localeCompare(b.name, 'zh'); // 未设序的按用量排后
+    });
+  return ordered.map(({ name, count }) => ({ name, count }));
+}
+
+/** 设置标签全局顺序(2026-09-15 v4):全量覆盖,数组索引即 sort_no
+ * 顺序影响:筛选下拉/选择面板列表/订单 chip 展示(三者一致);计数排序仅对未设序标签生效 */
+function setTagOrder(names) {
+  const list = [...new Set((names || []).map((s) => String(s).trim()).filter(Boolean))];
+  const now = new Date().toISOString();
+  const insert = db.prepare(`INSERT INTO op_tag_order (tag_name, sort_no, gmt_create) VALUES (?, ?, ?)
+    ON CONFLICT(tag_name) DO UPDATE SET sort_no = excluded.sort_no`);
+  runInTx(() => {
+    db.prepare(`DELETE FROM op_tag_order`).run();
+    list.forEach((name, i) => insert.run(name, i, now));
+  });
+  return list.length;
 }
 
 function listPackages(filters = {}) {
@@ -640,7 +665,9 @@ function aggregatePackages(filters = {}) {
     .prepare(
       `SELECT p.id, p.operate_status, p.purchase_status, p.delivered_at, p.is_ignored, p.is_returned,
               p.total_purchase_amount, p.accrual_total, p.accrual_sale_total,
-              o.order_amount, o.store_id
+              o.order_amount, o.store_id,
+              json_extract(o.cancellation_json, '$.cancellation_type') AS cancellation_type,
+              json_extract(o.cancellation_json, '$.cancel_reason_id') AS cancel_reason_id
        FROM op_package p
        JOIN op_ozon_order o ON o.id = p.ozon_order_id
        ${whereClause}
@@ -660,6 +687,8 @@ function aggregatePackages(filters = {}) {
     totalPurchaseAmount: Number(r.total_purchase_amount) || 0,
     accrualTotal: r.accrual_total != null ? Number(r.accrual_total) : null,
     accrualSaleTotal: r.accrual_sale_total != null ? Number(r.accrual_sale_total) : null,
+    cancellationType: r.cancellation_type || null,   // 'client'|'ozon'|'seller'(取消细分统计用)
+    cancelReasonId: r.cancel_reason_id != null ? Number(r.cancel_reason_id) : null, // 992/994=Ozon质检单
   }));
 
   return {
@@ -1350,8 +1379,12 @@ function updatePackageMeta(packageId, meta = {}) {
     vals.push(meta.note || null);
   }
   if (meta.tags !== undefined) {
+    // 写入前去重(保留首次出现顺序,trim+去空),杜绝历史/竞态引入的重复 tag
+    const cleanTags = Array.isArray(meta.tags)
+      ? [...new Set(meta.tags.map((t) => String(t).trim()).filter(Boolean))]
+      : [];
     sets.push('tags = ?');
-    vals.push(Array.isArray(meta.tags) ? meta.tags.map((t) => String(t).trim()).filter(Boolean).join(',') || null : null);
+    vals.push(cleanTags.join(',') || null);
   }
   if (sets.length) {
     sets.push('gmt_modified = ?');
@@ -1665,9 +1698,12 @@ function syncFromMiaoshou({ packageIds } = {}) {
         now, now, p.id
       );
       // a2) 妙手旗帜并入本地标签(统一筛选/编辑;幂等不重复)
+      // ms_flag_remarks 可能含多个旗帜(逗号分隔,如"补采购,完成发货"),拆分后逐个并入
       if (ms.ms_flag_remarks && String(ms.ms_flag_remarks).trim()) {
-        const flag = String(ms.ms_flag_remarks).trim();
-        mergeFlagToTags.run(flag, `%,${flag},%`, flag, p.id);
+        const flags = String(ms.ms_flag_remarks).split(',').map((s) => s.trim()).filter(Boolean);
+        for (const flag of flags) {
+          mergeFlagToTags.run(flag, `%,${flag},%`, flag, p.id);
+        }
       }
       // b) 同步妙手采购单到本地 op_purchase_order + op_purchase_link(事务包裹:清除+写入原子)
       const msPurchases = getMsPurchases.all(ms.ms_pkg_id);
@@ -1810,6 +1846,7 @@ export const orderPackageDao = {
   setIgnored,
   updatePackageMeta,
   listPackageTags,
+  setTagOrder,
   markWaybillPrinted,
   getPackagePostings,
   scanShipSubmit,

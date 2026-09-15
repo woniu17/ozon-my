@@ -63,9 +63,14 @@ export function updatePackageMeta(packageId, body) {
   return request.post('/admin/api/order-process/package-meta', { packageId, ...body });
 }
 
-// 已用标签列表(筛选下拉,2026-09-15)→ [{ name, count }]
+// 已用标签列表(筛选下拉,2026-09-15)→ [{ name, count }](顺序=全局标签顺序)
 export function listPackageTags() {
   return request.get('/admin/api/order-process/tags');
+}
+
+// 设置标签全局顺序(2026-09-15 v4)body: { names: string[] }(全量,索引即顺序)
+export function updateTagOrder(names) {
+  return request.put('/admin/api/order-process/tags-order', { names });
 }
 
 // 标记已打印面单(流转交运)
