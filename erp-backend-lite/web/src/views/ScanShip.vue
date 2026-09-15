@@ -3,7 +3,8 @@
 // 打包发货场景:扫采购快递单号/采购单号/Ozon单号 → 全局搜索定位包裹 → 录入实物重量
 // → wait_ship 自动打印面单并流转交运;非 wait_ship 提示状态问题不动状态
 // 键盘流:扫描框 Enter=搜索 → 重量框 Enter=发货 → 终态自动回焦扫描框(扫码枪零鼠标作业)
-// 2026-09-15:卡片显示利润(估/实+销售/成本利润率),打印发货后按称重重算;交运后可更正重量
+// 2026-09-15:商品/采购信息下方公式化展示订单金额+利润计算过程(估/实+销售/成本利润率),
+//            打印发货后按称重重算;交运后可更正重量;发货记录列表可滚动
 import { ref, reactive, computed, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import {
@@ -133,6 +134,49 @@ function recomputeProfitByWeight(pkg, g) {
   p.weightG = g;
   p.weightSource = 'ship';
   delete p.weightMissing;
+}
+
+// 利润计算过程(公式化展示,口径对齐后端 computeProfit):
+//   预估口径:利润(估) = 订单金额 − 佣金(订单×16%) − 国际配送(3.37+0.0281×g) − 采购
+//   真实口径:利润(实) = 打款(应计净额) − 采购
+//   已取消/已退货:利润 = −采购(无销售收入/货款全额扣回)
+function profitCalc(pkg) {
+  const n2 = (n) => (n == null ? '—' : Number(n).toFixed(2));
+  const p = pkg.profit;
+  const orderAmount = Number(pkg.orderAmount) || 0;
+  const purchase = Number(pkg.totalPurchaseAmount) || 0;
+  if (!p) return { estimated: true, main: '利润:—(无计算数据)', rates: null };
+  const saleRate = orderAmount > 0
+    ? `销售利润率 = ${n2(p.profit)} ÷ ${n2(orderAmount)} = ${fmtRate(p.profitRateSale)}`
+    : '销售利润率 = —(无订单金额)';
+  const costRate = purchase > 0
+    ? `成本利润率 = ${n2(p.profit)} ÷ ${n2(purchase)} = ${fmtRate(p.profitRateCost)}`
+    : '成本利润率 = —(无采购金额)';
+  if (p.estimated === false) {
+    return {
+      estimated: false,
+      main: `利润(实) = 打款 ${n2(p.escrow)} − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}`,
+      rates: `${saleRate} · ${costRate}`,
+    };
+  }
+  if (p.cancelled) {
+    return { estimated: true, main: `利润 = −采购 ${n2(purchase)} = ${fmtMoney(p.profit)}(已取消,无销售收入)`, rates: null };
+  }
+  if (p.returned) {
+    return { estimated: true, main: `利润 = −采购 ${n2(purchase)} = ${fmtMoney(p.profit)}(已退货,货款被全额扣回)`, rates: null };
+  }
+  if (p.delivery != null) {
+    return {
+      estimated: true,
+      main: `利润(估) = 订单 ${n2(orderAmount)} − 佣金 ${n2(p.commission)}(订单×16%) − 国际配送 ${n2(p.delivery)}(3.37+0.0281×${Math.floor(p.weightG ?? 0)}g) − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}`,
+      rates: `${saleRate} · ${costRate}`,
+    };
+  }
+  return {
+    estimated: true,
+    main: `利润(估) = 订单 ${n2(orderAmount)} − 佣金 ${n2(p.commission)}(订单×16%,配送隐含) − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}(无重量,配送未单独估算)`,
+    rates: `${saleRate} · ${costRate}`,
+  };
 }
 function fmtTime(t) {
   if (!t) return '—';
@@ -538,21 +582,6 @@ onMounted(() => {
                   <span class="tag" :class="operateTag(pkg).cls">{{ operateTag(pkg).label }}</span>
                 </div>
                 <div class="order-line">下单 {{ fmtTime(pkg.inProcessAt) }}</div>
-                <div class="order-line">订单金额 {{ fmtMoney(pkg.orderAmount) }}</div>
-                <!-- 利润行:数据源 /list 注入的 pkg.profit(估=预估口径/实=真实应计口径) -->
-                <div
-                  class="order-line order-profit"
-                  title="利润 = 订单金额 − 16%佣金 − 国际配送 − 采购(预估口径,配送按重量公式估算);真实应计口径为 打款 − 采购"
-                >
-                  <span>利润</span>
-                  <span
-                    class="profit-val"
-                    :class="pkg.profit?.profit > 0 ? 'profit-pos' : pkg.profit?.profit < 0 ? 'profit-neg' : 'muted'"
-                  >{{ fmtMoney(pkg.profit?.profit) }}</span>
-                  <span class="tag" :class="profitEstimated(pkg) ? 'tag-warn' : 'tag-ok'" title="估=预估口径 / 实=真实应计口径">{{ profitEstimated(pkg) ? '估' : '实' }}</span>
-                  <span title="销售利润率 = 利润 / 订单金额">销售 {{ fmtRate(pkg.profit?.profitRateSale) }}</span>
-                  <span title="成本利润率 = 利润 / 采购金额">成本 {{ fmtRate(pkg.profit?.profitRateCost) }}</span>
-                </div>
               </div>
 
               <!-- 商品信息(SKU/OfferID 可点击复制,数量独立右列) -->
@@ -644,6 +673,23 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- 金额与利润计算(商品/采购信息下方整行,公式化展示计算过程) -->
+          <div class="profit-block">
+            <div class="profit-row profit-head">
+              <span class="profit-label">订单金额 <b class="mono">{{ fmtMoney(pkg.orderAmount) }}</b></span>
+              <span class="tag" :class="profitEstimated(pkg) ? 'tag-warn' : 'tag-ok'" title="估=预估口径 / 实=真实应计口径">{{ profitEstimated(pkg) ? '估' : '实' }}</span>
+              <span class="profit-final">
+                利润
+                <b
+                  class="mono"
+                  :class="pkg.profit?.profit > 0 ? 'profit-pos' : pkg.profit?.profit < 0 ? 'profit-neg' : 'muted'"
+                >{{ fmtMoney(pkg.profit?.profit) }}</b>
+              </span>
+            </div>
+            <div class="profit-row mono formula">{{ profitCalc(pkg).main }}</div>
+            <div v-if="profitCalc(pkg).rates" class="profit-row mono formula sub">{{ profitCalc(pkg).rates }}</div>
           </div>
 
           <!-- 操作条 -->
@@ -748,54 +794,57 @@ onMounted(() => {
           </button>
         </div>
 
-        <div v-if="!records.rows.length" class="empty records-empty">
-          {{ records.loading ? '加载中…' : (records.tab === 'today' ? '今日暂无发货记录' : '昨日暂无发货记录') }}
-        </div>
-
-        <!-- 记录行:第一列图片(70x70 悬浮放大) + 第二列三行(货件号+复制/称重重量/打印发货时间) -->
-        <div
-          v-for="p in records.rows"
-          :key="p.id"
-          class="record-row"
-        >
-          <div class="img-hover-wrap">
-            <img
-              v-if="p.items?.[0]?.picUrl"
-              :src="p.items[0].picUrl"
-              referrerpolicy="no-referrer"
-              loading="lazy"
-              class="record-thumb"
-              alt=""
-            />
-            <div v-else class="record-thumb thumb-empty">—</div>
-            <img
-              v-if="p.items?.[0]?.picUrl"
-              :src="p.items[0].picUrl"
-              referrerpolicy="no-referrer"
-              class="img-preview"
-              alt=""
-            />
+        <!-- 记录列表(可滚动区域) -->
+        <div class="records-list">
+          <div v-if="!records.rows.length" class="empty records-empty">
+            {{ records.loading ? '加载中…' : (records.tab === 'today' ? '今日暂无发货记录' : '昨日暂无发货记录') }}
           </div>
-          <div class="record-main">
-            <div class="record-line1">
-              <span class="record-store">{{ p.storeName }}</span>
-              <span
-                class="link mono record-posting"
-                title="点击跳转订单处理页全局搜索"
-                @click="jumpToOrderProcess(p)"
-              >{{ p.postingNumber }}</span>
-              <button
-                class="copy-btn"
-                title="复制货件号"
-                @click.stop="copyText(p.postingNumber, '货件号')"
-              >
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" /></svg>
-              </button>
+
+          <!-- 记录行:第一列图片(70x70 悬浮放大) + 第二列三行(货件号+复制/称重重量/打印发货时间) -->
+          <div
+            v-for="p in records.rows"
+            :key="p.id"
+            class="record-row"
+          >
+            <div class="img-hover-wrap">
+              <img
+                v-if="p.items?.[0]?.picUrl"
+                :src="p.items[0].picUrl"
+                referrerpolicy="no-referrer"
+                loading="lazy"
+                class="record-thumb"
+                alt=""
+              />
+              <div v-else class="record-thumb thumb-empty">—</div>
+              <img
+                v-if="p.items?.[0]?.picUrl"
+                :src="p.items[0].picUrl"
+                referrerpolicy="no-referrer"
+                class="img-preview"
+                alt=""
+              />
             </div>
-            <div class="record-line" :title="WEIGHT_SOURCE_LABELS[p.weightSource] || ''">
-              称重 {{ p.weightG != null ? Math.floor(p.weightG) + 'g' : '—' }}
+            <div class="record-main">
+              <div class="record-line1">
+                <span class="record-store">{{ p.storeName }}</span>
+                <span
+                  class="link mono record-posting"
+                  title="点击跳转订单处理页全局搜索"
+                  @click="jumpToOrderProcess(p)"
+                >{{ p.postingNumber }}</span>
+                <button
+                  class="copy-btn"
+                  title="复制货件号"
+                  @click.stop="copyText(p.postingNumber, '货件号')"
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" /></svg>
+                </button>
+              </div>
+              <div class="record-line" :title="WEIGHT_SOURCE_LABELS[p.weightSource] || ''">
+                称重 {{ p.weightG != null ? Math.floor(p.weightG) + 'g' : '—' }}
+              </div>
+              <div class="record-line">打印发货 {{ fmtTime(p.waybillPrintedAt) }}</div>
             </div>
-            <div class="record-line">打印发货 {{ fmtTime(p.waybillPrintedAt) }}</div>
           </div>
         </div>
 
@@ -992,16 +1041,48 @@ onMounted(() => {
   font-weight: 600;
   letter-spacing: 0.3px;
 }
-/* 利润行:金额+估/实+两档利润率 */
-.order-profit {
+/* 金额与利润计算块(商品/采购信息下方整行):首行订单金额+利润,次行公式,末行利润率 */
+.profit-block {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: #fafbfc;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.profit-row {
+  min-width: 0;
+}
+.profit-head {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--text);
+}
+.profit-label b {
+  font-size: 14px;
+}
+.profit-final {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
-.profit-val {
-  font-weight: 600;
+.profit-final b {
+  font-size: 16px;
+}
+.formula {
+  font-size: 12.5px;
+  color: var(--text);
+  word-break: break-all;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
 }
 .profit-pos {
   color: var(--success);
@@ -1034,7 +1115,7 @@ onMounted(() => {
   gap: 6px;
   font-size: 13px;
 }
-/* 数量独立右列:字体加大,>1 时红色 */
+/* 数量独立右列:字体加大,>1 时红色(2026-09-15:>1 字号翻倍至 40px 加粗) */
 .product-qty {
   margin-left: auto;
   font-size: 20px;
@@ -1045,6 +1126,8 @@ onMounted(() => {
 }
 .qty-multi {
   color: var(--danger);
+  font-size: 40px;
+  font-weight: 800;
 }
 /* 复制按钮 */
 .copy-btn {
@@ -1300,6 +1383,13 @@ onMounted(() => {
 .records-empty {
   padding: 28px 0;
   font-size: 13px;
+}
+/* 记录列表滚动区(2026-09-15):限高内部滚动,分页器固定底部不随滚动 */
+.records-list {
+  max-height: calc(100vh - 240px);
+  min-height: 120px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .record-row {
   display: flex;
