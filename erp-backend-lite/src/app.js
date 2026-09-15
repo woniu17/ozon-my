@@ -176,7 +176,8 @@ const server = app.listen(config.port, () => {
   startImportStatusPoller();
   // 启动采集队列终态清理器:每 5 分钟清理 success/skipped 任务,保留最新 500 条
   startQueueCleanupPoller();
-  // 订单处理(2026-08):Ozon FBS 订单同步,启动 10s 后首跑,此后每 5 分钟(ORDER_SYNC_INTERVAL_MIN)
+  // 订单处理(2026-08):Ozon FBS 订单同步三级节奏(2026-09-16)
+  //   fast 每5分钟(未完成订单7天窗口) / mid 每8小时(近90天) / slow 每24小时(近365天)
   startOrderSync();
   // 启动库存自动同步:每 5 分钟扫描 imported 未设库存的 items,调 OPI /v2/products/stocks
   // 失败重试 5 次(约 25 分钟)后放弃

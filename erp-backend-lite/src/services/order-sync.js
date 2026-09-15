@@ -1,14 +1,18 @@
 // Ozon FBS 订单同步服务(2026-08,订单处理)
 // 设计文档 §6:双接口增量同步,upsert by (store_id, posting_number)
-//   1) /v4/posting/fbs/unfulfilled/list — 未妥投全集(含 delivering),cutoff 窗口 [now-14d, now+14d]
-//   2) /v4/posting/fbs/list — 近 60 天下单全集(含 delivered/cancelled 终态,校准包裹状态)
+//   1) /v4/posting/fbs/unfulfilled/list — 未妥投全集(含 delivering),cutoff 窗口
+//   2) /v4/posting/fbs/list — 按下单时间窗口的全集(含 delivered/cancelled 终态,校准包裹状态)
 // 新增手动单接口全量同步(2026-09):runSyncAllList 仅调 /v4/posting/fbs/list
 //   - 支持快捷 sinceDays(今天/7天/30天/90天) 或自定义 since/to 时间段
 //   - 用于历史回补/状态校准,覆盖所有状态含 delivered/cancelled 终态
 // 状态联动:DAO applyOzonStatus(只前进;cancelled 任意时刻可进)
 //
-// 调度:启动 10s 后首跑,此后每 ORDER_SYNC_INTERVAL_MIN(默认 5)分钟;
-// 手动触发 POST /admin/api/order-process/sync-run(增量,与定时互斥)
+// 调度(2026-09-16 三级节奏,共用 syncing 互斥):
+//   fast  每 5 分钟:未完成订单(unfulfilled cutoff 7 天窗口) + 应计 + 退货
+//   mid   每 8 小时:近 90 天订单全集(list,补终态) + 应计 + 退货
+//   slow  每 24 小时:近 365 天订单全集(list,全年兜底) + 应计 + 退货
+// slow 轮耗时长,期间 fast 触发会 skipped(未完成订单延迟一档,可接受)
+// 手动触发 POST /admin/api/order-process/sync-run(body.level 可选 fast|mid|slow,默认 fast)
 //          POST /admin/api/order-process/sync-all-list(全量,仅list)
 // 进度查询 GET  /admin/api/order-process/sync-progress
 import config from '../config/index.js';
@@ -18,9 +22,18 @@ import { orderPackageDao, setStoreNameMap } from '../db/dao/sqlite/order-daos.js
 import { getAccrualTypes, findPendingAccrualPostings, findBackfillAccrualPostings, findAccrualPostingsByPackageIds, replaceAccruals } from '../db/dao/sqlite/accrual-dao.js';
 import { db } from '../db/index.js';
 
-const INTERVAL_MIN = Math.max(1, Number(process.env.ORDER_SYNC_INTERVAL_MIN) || 5);
+// ── 三级同步节奏(2026-09-16)─────────────────────────────────
+const FAST_INTERVAL_MIN = Math.max(1, Number(process.env.ORDER_SYNC_INTERVAL_MIN) || 5); // fast 轮间隔(分钟)
+const MID_INTERVAL_MS = 8 * 3600_000;   // mid 轮间隔(8 小时)
+const SLOW_INTERVAL_MS = 24 * 3600_000; // slow 轮间隔(24 小时)
 const FIRST_DELAY_MS = 10_000;
 const MAX_PAGES = 50; // 单接口单店铺翻页上限(防失控)
+// 各级窗口:unfulfilledDays=未完成订单 cutoff 窗口天数(0=跳过);listDays=list 下单窗口天数(0=跳过)
+const SYNC_LEVELS = {
+  fast: { unfulfilledDays: 7, listDays: 0, label: '5分钟·未完成订单(7天)' },
+  mid: { unfulfilledDays: 0, listDays: 90, label: '8小时·近90天订单' },
+  slow: { unfulfilledDays: 0, listDays: 365, label: '24小时·近365天订单' },
+};
 
 // ── 应计同步参数(实测验证)─────────────────────────────────────
 const ACCRUAL_BATCH = 200;        // 应计接口单批货件数(实测 200 可行)
@@ -28,7 +41,9 @@ const ACCRUAL_THROTTLE_MS = 300; // 批间节流(接口秒级限流 429 code=8)
 const ACCRUAL_MAX_RETRY = 3;     // 429/网络错退避重试上限
 const ACCRUAL_LIMIT_PER_ROUND = 400; // 每店铺每轮待拉上限(防单轮过载)
 
-let timer = null;
+let fastTimer = null;
+let midTimer = null;
+let slowTimer = null;
 let syncing = false;
 
 // ── 进度机制(模块级状态,前端轮询 GET /sync-progress 读取)─────
@@ -216,26 +231,31 @@ async function backfillProductCache(store) {
   return filled;
 }
 
-async function syncStore(store) {
-  // 增量同步窗口(2026-09 调整):
-  //   unfulfilled cutoff [now-14d, now+14d] —— 未妥投全集聚焦近14天备货
-  //   list since/to  [now-60d, now]         —— 近60天下单全集(补 delivered/cancelled 终态)
+async function syncStore(store, { unfulfilledDays = SYNC_LEVELS.fast.unfulfilledDays, listDays = 0 } = {}) {
+  // 三级节奏窗口(2026-09-16):
+  //   fast(每5分钟): unfulfilled cutoff [now-7d, now+14d] —— 未完成订单
+  //   mid(每8小时):  list [now-90d, now] —— 近3个月订单全集(补 delivered/cancelled 终态)
+  //   slow(每24小时): list [now-365d, now] —— 近1年订单全集(全年兜底)
+  // list 按下单时间过滤且含所有状态,天然覆盖未完成订单;mid/slow 轮跳过 unfulfilled
   const now = new Date();
-  const since14 = iso(new Date(now.getTime() - 14 * 86400_000));
-  const to14 = iso(new Date(now.getTime() + 14 * 86400_000));
-  const since60 = iso(new Date(now.getTime() - 60 * 86400_000));
-
   let count = 0;
 
-  // 1) 未妥投全集
-  count += await fetchAll(store, (cursor) =>
-    postingFbsUnfulfilledList(store, { cutoffFrom: since14, cutoffTo: to14, cursor })
-  , (p) => orderPackageDao.syncPosting(store.id, p), 'unfulfilled');
+  // 1) 未完成订单全集(fast 轮)
+  if (unfulfilledDays > 0) {
+    const cutoffFrom = iso(new Date(now.getTime() - unfulfilledDays * 86400_000));
+    const cutoffTo = iso(new Date(now.getTime() + 14 * 86400_000));
+    count += await fetchAll(store, (cursor) =>
+      postingFbsUnfulfilledList(store, { cutoffFrom, cutoffTo, cursor })
+    , (p) => orderPackageDao.syncPosting(store.id, p), 'unfulfilled');
+  }
 
-  // 2) 近 60 天下单全集(补终态:delivered/cancelled)
-  count += await fetchAll(store, (cursor) =>
-    postingFbsList(store, { since: since60, to: iso(now), cursor })
-  , (p) => orderPackageDao.syncPosting(store.id, p), 'list');
+  // 2) 订单全集(mid/slow 轮,补终态)
+  if (listDays > 0) {
+    const sinceList = iso(new Date(now.getTime() - listDays * 86400_000));
+    count += await fetchAll(store, (cursor) =>
+      postingFbsList(store, { since: sinceList, to: iso(now), cursor })
+    , (p) => orderPackageDao.syncPosting(store.id, p), 'list');
+  }
 
   // 3) 订单 SKU 未命中商品缓存的回源(图片/完整标题)
   if (progress.active) progress.currentPhase = 'cache-backfill';
@@ -508,10 +528,11 @@ export async function syncSinglePackage(packageId) {
   };
 }
 
-export async function runOrderSyncNow() {
+export async function runOrderSyncNow({ level = 'fast' } = {}) {
   if (syncing) {
     return { skipped: true, reason: '同步已在进行中' };
   }
+  const cfg = SYNC_LEVELS[level] || SYNC_LEVELS.fast;
   syncing = true;
   const started = Date.now();
   const stores = config.loadStores() || [];
@@ -519,22 +540,22 @@ export async function runOrderSyncNow() {
   setStoreNameMap(new Map(stores.map((s) => [s.id, s.name || s.id])));
   const eligible = stores.filter((s) => s?.sync_credentials?.clientId);
   resetProgress('incremental', eligible.length);
-  progress.message = `准备增量同步 ${eligible.length} 个店铺`;
+  progress.message = `准备同步 ${eligible.length} 个店铺(${cfg.label})`;
   const results = [];
   for (const store of eligible) {
     progress.currentStoreId = store.id;
     progress.currentStoreName = store.name || store.id;
-    progress.message = `增量同步店铺 ${progress.currentStoreName} (${progress.doneStores + 1}/${eligible.length})`;
+    progress.message = `同步店铺 ${progress.currentStoreName} (${progress.doneStores + 1}/${eligible.length}, ${cfg.label})`;
     try {
-      const n = await syncStore(store);
+      const n = await syncStore(store, cfg);
       results.push({ storeId: store.id, storeName: store.name, count: n, ok: true });
-      logger.info({ storeId: store.id, count: n }, '[order-sync] 店铺同步完成');
+      logger.info({ level, storeId: store.id, count: n }, '[order-sync] 店铺同步完成');
     } catch (e) {
       orderPackageDao.updateSyncCursor(store.id, { error: e?.message || String(e) });
       results.push({ storeId: store.id, storeName: store.name, ok: false, error: e?.message || String(e) });
       progress.errorCount++;
       recordFailure(store, { error: e?.message || String(e), stack: e?.stack?.split('\n').slice(0, 3).join(' | ') });
-      logger.warn({ storeId: store.id, err: e?.message, stack: e?.stack }, '[order-sync] 店铺同步失败');
+      logger.warn({ level, storeId: store.id, err: e?.message, stack: e?.stack }, '[order-sync] 店铺同步失败');
     }
     progress.doneStores++;
   }
@@ -542,35 +563,48 @@ export async function runOrderSyncNow() {
   progress.active = false;
   progress.finishedAt = new Date().toISOString();
   const errPart = progress.errorCount > 0 ? `,失败 ${progress.errorCount} 店` : '';
-  progress.message = `完成 ${eligible.length} 个店铺,共拉取 ${progress.postingsPulled} 个订单${errPart}`;
+  progress.message = `完成 ${eligible.length} 个店铺(${cfg.label}),共拉取 ${progress.postingsPulled} 个订单${errPart}`;
   syncing = false;
   const durationMs = Date.now() - started;
   return {
     skipped: false,
+    level,
     durationMs,
     stores: results,
   };
 }
 
 export function startOrderSync() {
-  if (timer) return;
+  if (fastTimer) return;
   // 首跑前注入店铺名映射(定时轮次会刷新)
   const stores = config.loadStores() || [];
   setStoreNameMap(new Map(stores.map((s) => [s.id, s.name || s.id])));
   setTimeout(() => {
-    runOrderSyncNow().catch((e) => logger.error({ err: e?.message }, '[order-sync] 首次同步异常'));
+    runOrderSyncNow({ level: 'fast' }).catch((e) => logger.error({ err: e?.message }, '[order-sync] 首次同步异常'));
   }, FIRST_DELAY_MS).unref();
-  timer = setInterval(
-    () => runOrderSyncNow().catch((e) => logger.error({ err: e?.message }, '[order-sync] 定时同步异常')),
-    INTERVAL_MIN * 60_000
+  // 三级节奏:fast 每5分钟(未完成订单) / mid 每8小时(近90天) / slow 每24小时(近365天)
+  fastTimer = setInterval(
+    () => runOrderSyncNow({ level: 'fast' }).catch((e) => logger.error({ err: e?.message }, '[order-sync] fast 轮同步异常')),
+    FAST_INTERVAL_MIN * 60_000
   );
-  logger.info({ intervalMin: INTERVAL_MIN }, '[order-sync] 订单同步调度已启动');
+  midTimer = setInterval(
+    () => runOrderSyncNow({ level: 'mid' }).catch((e) => logger.error({ err: e?.message }, '[order-sync] mid 轮同步异常')),
+    MID_INTERVAL_MS
+  );
+  slowTimer = setInterval(
+    () => runOrderSyncNow({ level: 'slow' }).catch((e) => logger.error({ err: e?.message }, '[order-sync] slow 轮同步异常')),
+    SLOW_INTERVAL_MS
+  );
+  logger.info(
+    { fastMin: FAST_INTERVAL_MIN, midHours: MID_INTERVAL_MS / 3600_000, slowHours: SLOW_INTERVAL_MS / 3600_000 },
+    '[order-sync] 订单同步调度已启动(三级节奏:fast/mid/slow)'
+  );
 }
 
 export function stopOrderSync() {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-    logger.info('[order-sync] 订单同步调度已停止');
+  for (const t of [fastTimer, midTimer, slowTimer]) {
+    if (t) clearInterval(t);
   }
+  fastTimer = midTimer = slowTimer = null;
+  logger.info('[order-sync] 订单同步调度已停止');
 }

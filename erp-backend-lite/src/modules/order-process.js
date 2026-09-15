@@ -888,11 +888,13 @@ router.post('/admin/api/order-process/sync-run', async (req, res, next) => {
     if (isSyncing()) {
       return res.json(ok({ skipped: true, reason: '同步已在进行中' }));
     }
+    // body.level 可选 fast(默认,未完成订单7天)|mid(近90天)|slow(近365天),与定时三级节奏同窗口
+    const level = ['fast', 'mid', 'slow'].includes(req.body?.level) ? req.body.level : 'fast';
     // 异步执行,立即返回(同步全店铺可能耗时数分钟)
-    runOrderSyncNow()
-      .then((r) => logger.info({ stores: r.stores?.length, durationMs: r.durationMs }, '[order-process] 增量同步完成'))
+    runOrderSyncNow({ level })
+      .then((r) => logger.info({ level, stores: r.stores?.length, durationMs: r.durationMs }, '[order-process] 增量同步完成'))
       .catch((e) => logger.error({ err: e?.message }, '[order-process] 增量同步失败'));
-    res.json(ok({ started: true, type: 'incremental' }));
+    res.json(ok({ started: true, type: 'incremental', level }));
   } catch (e) {
     next(e);
   }
