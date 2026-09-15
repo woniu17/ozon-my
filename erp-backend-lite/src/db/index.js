@@ -1191,6 +1191,30 @@ function migrateMiaoshouTagFields(db) {
       db.exec(`ALTER TABLE op_package ADD COLUMN ms_flag_remarks TEXT`);
       console.log('[db] migration: added column op_package.ms_flag_remarks');
     }
+    // 2026-09-15 v3: 存量妙手旗帜(ms_flag_remarks)并入本地标签(tags),统一筛选/编辑
+    // 一次性迁移(标记表防重复):用户手动删除同步标签后,重启不得复活;
+    // 之后主动"从妙手同步"时由 syncFromMiaoshou 的幂等合并负责以妙手为准
+    db.exec(`CREATE TABLE IF NOT EXISTS schema_migration_flags (key TEXT PRIMARY KEY, done_at TEXT NOT NULL)`);
+    const MIGRATION_KEY = 'ms_flags_merged_into_tags_20260915';
+    if (!db.prepare(`SELECT 1 FROM schema_migration_flags WHERE key = ?`).get(MIGRATION_KEY)) {
+      const rows = db
+        .prepare(`SELECT id, tags, ms_flag_remarks FROM op_package WHERE ms_flag_remarks IS NOT NULL AND ms_flag_remarks != ''`)
+        .all();
+      if (rows.length > 0) {
+        const upd = db.prepare(`UPDATE op_package SET tags = ? WHERE id = ?`);
+        let merged = 0;
+        for (const r of rows) {
+          const flag = String(r.ms_flag_remarks).trim();
+          const existing = String(r.tags || '').split(',').map((s) => s.trim()).filter(Boolean);
+          if (flag && !existing.includes(flag)) {
+            upd.run([...existing, flag].join(','), r.id);
+            merged++;
+          }
+        }
+        if (merged > 0) console.log(`[db] migration: merged ${merged} ms flag remarks into op_package.tags`);
+      }
+      db.prepare(`INSERT INTO schema_migration_flags (key, done_at) VALUES (?, ?)`).run(MIGRATION_KEY, new Date().toISOString());
+    }
   }
 }
 

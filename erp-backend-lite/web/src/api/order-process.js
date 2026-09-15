@@ -63,6 +63,11 @@ export function updatePackageMeta(packageId, body) {
   return request.post('/admin/api/order-process/package-meta', { packageId, ...body });
 }
 
+// 已用标签列表(筛选下拉,2026-09-15)→ [{ name, count }]
+export function listPackageTags() {
+  return request.get('/admin/api/order-process/tags');
+}
+
 // 标记已打印面单(流转交运)
 export function markPrinted(packageId) {
   return request.post('/admin/api/order-process/print-label', { packageId });

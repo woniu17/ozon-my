@@ -199,6 +199,11 @@ router.get('/admin/api/order-process/pending-export', (_req, res) => {
   res.json(ok(getPendingExportState()));
 });
 
+// ── 已用标签列表(筛选下拉,2026-09-15)──────────────────────
+router.get('/admin/api/order-process/tags', (_req, res) => {
+  res.json(ok(orderPackageDao.listPackageTags()));
+});
+
 // ── 包裹列表 ────────────────────────────────────────────────
 // query: tab / keyword / storeId / purchaseStatus / arrived / cancelInitiator / page / pageSize
 //        / globalKeyword / globalMode(eq|ss) —— 全局搜索:跨所有状态检索(§9.1.1)
@@ -211,6 +216,7 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       storeId: q.storeId,
       purchaseStatus: q.purchaseStatus,
       noteFilter: q.noteFilter, // ''|'has'|'none' 备注筛选(2026-09-15)
+      tag: q.tag,               // 标签名精确筛选(2026-09-15)
       arrived: q.arrived,
       cancelInitiator: q.cancelInitiator, // client/ozon/seller(仅 cancelled tab 用)
       globalKeyword: q.globalKeyword,
@@ -278,6 +284,7 @@ router.get('/admin/api/order-process/summary', (req, res, next) => {
       storeId: q.storeId,
       purchaseStatus: q.purchaseStatus,
       noteFilter: q.noteFilter,
+      tag: q.tag,
       arrived: q.arrived,
       cancelInitiator: q.cancelInitiator,
       globalKeyword: q.globalKeyword,

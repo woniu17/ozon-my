@@ -10,7 +10,7 @@ import { useRoute } from 'vue-router';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
   submitPurchase, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
-  updatePackageMeta,
+  updatePackageMeta, listPackageTags,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
   runAccrualSync, getRubRate, setRubRate,
   syncMsToLocal,
@@ -53,9 +53,12 @@ const filters = reactive({
   keyword: '',
   purchaseStatus: '', // '' | 'none' | 'purchased' | 'multi'(多条采购) | 'manual'(手工采购)
   noteFilter: '',     // '' | 'has' | 'none' 备注筛选(2026-09-15)
+  tag: '',            // 标签筛选:标签名精确匹配(2026-09-15)
   arrived: '',        // '' | '0' | '1'
   cancelInitiator: '',  // '' | 'client' | 'ozon' | 'seller'(仅已取消 tab 用)
 });
+// 已用标签选项(筛选下拉):[{ name, count }](2026-09-15)
+const tagOptions = ref([]);
 // 取消发起者选项(与 Ozon cancellation_type 对应)
 const CANCEL_INITIATOR_OPTIONS = [
   { value: 'client', label: '客户取消' },
@@ -263,6 +266,7 @@ async function loadList() {
     keyword: filters.keyword.trim(),
     purchaseStatus: filters.purchaseStatus,
     noteFilter: filters.noteFilter,
+    tag: filters.tag,
     arrived: filters.arrived,
     cancelInitiator: activeTab.value === 'cancelled' ? filters.cancelInitiator : '',
     globalKeyword: isGlobal ? globalSearch.keyword.trim() : '',
@@ -375,7 +379,7 @@ async function onSyncMsToLocal() {
   const isPartial = selectedRows.length > 0;
   const scopeLabel = isPartial ? `勾选的 ${selectedRows.length} 条` : '当前筛选全部(以 logistics_no 关联妙手)';
   if (!await confirmStore.ask({
-    message: `将把妙手订单的重量/备注/旗帜备注/采购金额/采购订单详情同步到本地,范围:${scopeLabel}。妙手侧已有采购信息的订单,会先清空本地已录入的采购信息(采购单关联/金额/国内物流单号),再以妙手数据为准重新写入;妙手侧无采购信息的订单保留本地已有。妙手备注将覆盖本地备注(本地标签不受影响);有采购单关联的待处理订单将自动推进到待打单发货。确认继续?`,
+    message: `将把妙手订单的重量/备注/旗帜备注/采购金额/采购订单详情同步到本地,范围:${scopeLabel}。妙手侧已有采购信息的订单,会先清空本地已录入的采购信息(采购单关联/金额/国内物流单号),再以妙手数据为准重新写入;妙手侧无采购信息的订单保留本地已有。妙手备注将覆盖本地备注;妙手旗帜备注将作为本地标签写入(已有同名标签不重复);有采购单关联的待处理订单将自动推进到待打单发货。确认继续?`,
     confirmText: '开始同步',
     danger: true,
   })) return;
@@ -1311,58 +1315,122 @@ async function onIgnore(pkg, ignored) {
   }
 }
 
-// ── 备注/标签编辑(2026-09-15)────────────────────────────
+// ── 备注/标签行内编辑(2026-09-15 重设计:去弹窗,子行即编辑面)──────────────
 // 本地标签存 op_package.tags(逗号分隔),妙手同步不覆盖;
 // 本地备注存 op_package.note,妙手同步 COALESCE 覆盖(妙手有值时以妙手为准)
-const metaEdit = reactive({
-  open: false,
-  saving: false,
-  packageId: null,
-  postingNumber: '',
-  note: '',
-  tags: [],
-  tagInput: '',
-});
-function openMetaEdit(pkg) {
-  metaEdit.packageId = pkg.id;
-  metaEdit.postingNumber = pkg.postingNumber || '';
-  metaEdit.note = pkg.note || '';
-  metaEdit.tags = Array.isArray(pkg.tags) ? [...pkg.tags] : [];
-  metaEdit.tagInput = '';
-  metaEdit.open = true;
+// 交互:标签 chip 名=点击筛选(再点取消)/×=移除/＋=原位输入(回车/逗号添加,IME 安全);
+//      备注点击文本进入编辑,blur/Ctrl+Enter 保存,Esc 取消;乐观更新+失败回滚
+const tagEdit = reactive({ pkgId: null, input: '' });
+const noteEdit = reactive({ pkgId: null, draft: '', saving: false });
+
+// 标签:打开/关闭原位输入(同一时刻仅一行打开)
+function openTagInput(pkg) {
+  tagEdit.pkgId = pkg.id;
+  tagEdit.input = '';
 }
-function removeMetaTag(i) {
-  metaEdit.tags.splice(i, 1);
+function closeTagInput() {
+  tagEdit.pkgId = null;
+  tagEdit.input = '';
 }
-function addMetaTag() {
-  const v = metaEdit.tagInput.trim();
-  if (!v) return;
-  // 支持逗号/空格分隔批量输入;去重
-  for (const t of v.split(/[,，\s]+/).filter(Boolean)) {
-    if (!metaEdit.tags.includes(t)) metaEdit.tags.push(t);
-  }
-  metaEdit.tagInput = '';
-}
-async function saveMeta() {
-  metaEdit.saving = true;
+
+// 标签:持久化(乐观更新,失败回滚并提示)
+async function persistTags(pkg, nextTags) {
+  const prev = pkg.tags || [];
+  pkg.tags = nextTags;
   try {
-    const updated = await updatePackageMeta(metaEdit.packageId, {
-      note: metaEdit.note,
-      tags: metaEdit.tags,
-    });
-    // 就地更新行数据(不重拉列表,保持滚动位置)
-    const row = rows.value.find((r) => r.id === metaEdit.packageId);
-    if (row) {
-      row.note = updated.note;
-      row.tags = updated.tags || [];
-    }
-    metaEdit.open = false;
-    show('备注/标签已保存', 'success');
+    const updated = await updatePackageMeta(pkg.id, { tags: nextTags });
+    pkg.tags = updated.tags || [];
+    loadTagOptions(); // 标签集合变化,刷新筛选下拉与联想
+  } catch (err) {
+    pkg.tags = prev;
+    show(err.message || String(err), 'error');
+  }
+}
+
+// 标签:从输入框解析(逗号/空格分隔批量,去重),解析后清空输入但保持输入框开启便于连续录入
+function addTagsFromInput(pkg) {
+  const names = tagEdit.input
+    .split(/[,，\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((t) => !(pkg.tags || []).includes(t));
+  tagEdit.input = '';
+  if (names.length) persistTags(pkg, [...(pkg.tags || []), ...names]);
+}
+
+// 标签:键盘处理(isComposing 守卫:中文输入法组词中的回车/逗号不触发)
+function onTagKeydown(e, pkg) {
+  if (e.isComposing) return;
+  if (e.key === 'Enter' || e.key === ',' || e.key === '，') {
+    e.preventDefault();
+    addTagsFromInput(pkg);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeTagInput();
+  }
+}
+// 标签:失焦时若有未提交文本则补提交,随后关闭输入框
+function onTagBlur(pkg) {
+  if (tagEdit.input.trim()) addTagsFromInput(pkg);
+  if (tagEdit.pkgId === pkg.id) tagEdit.pkgId = null;
+}
+
+// 标签:已有标签快捷选择(添加区展示用)——排除该订单已有标签,最多 8 个避免撑爆行
+function quickTagOptions(pkg) {
+  const own = new Set(pkg.tags || []);
+  return tagOptions.value
+    .map((t) => t.name)
+    .filter((n) => !own.has(n))
+    .slice(0, 8);
+}
+
+// 标签:快捷添加单个已有标签(与输入框回车添加同一持久化路径)
+function addTag(pkg, t) {
+  if (!(pkg.tags || []).includes(t)) persistTags(pkg, [...(pkg.tags || []), t]);
+}
+
+function removeTag(pkg, t) {
+  persistTags(pkg, (pkg.tags || []).filter((x) => x !== t));
+}
+
+// 标签:点击 chip 名=按此标签筛选(再点同一标签取消)
+function applyTagFilter(t) {
+  filters.tag = filters.tag === t ? '' : t;
+  search();
+}
+
+// 备注:进入/退出编辑
+function startNoteEdit(pkg) {
+  noteEdit.pkgId = pkg.id;
+  noteEdit.draft = pkg.note || '';
+  noteEdit.saving = false;
+}
+function onNoteEsc(e) {
+  if (e.isComposing) return;
+  noteEdit.pkgId = null;
+}
+async function saveNote(pkg) {
+  if (noteEdit.pkgId !== pkg.id || noteEdit.saving) return;
+  const v = noteEdit.draft.trim();
+  if (v === (pkg.note || '')) { noteEdit.pkgId = null; return; } // 无变化直接收起
+  noteEdit.saving = true;
+  try {
+    const updated = await updatePackageMeta(pkg.id, { note: v });
+    pkg.note = updated.note;
+    noteEdit.pkgId = null;
+    show('备注已保存', 'success');
   } catch (err) {
     show(err.message || String(err), 'error');
-  } finally {
-    metaEdit.saving = false;
+    noteEdit.saving = false;
   }
+}
+
+// 拉取已用标签选项(筛选下拉);静默失败不打扰
+async function loadTagOptions() {
+  try {
+    const list = await listPackageTags();
+    tagOptions.value = Array.isArray(list) ? list : [];
+  } catch { /* 静默 */ }
 }
 
 async function onPrinted(pkg) {
@@ -1862,6 +1930,7 @@ let tickTimer = null;
 const route = useRoute();
 onMounted(() => {
   loadTabs();
+  loadTagOptions(); // 标签筛选下拉选项(2026-09-15)
   // 外页跳入带 kw(如妙手订单页"本地包裹"按钮):预填关键词走全局搜索
   const kw = route.query.kw;
   if (kw) {
@@ -2037,6 +2106,10 @@ onUnmounted(() => {
           <option value="has">有备注</option>
           <option value="none">无备注</option>
         </select>
+        <select v-model="filters.tag" class="filter-input" :disabled="!tagOptions.length" @change="search">
+          <option value="">{{ tagOptions.length ? '全部标签' : '暂无标签' }}</option>
+          <option v-for="t in tagOptions" :key="t.name" :value="t.name">{{ t.name }} ({{ t.count }})</option>
+        </select>
         <select v-model="filters.arrived" class="filter-input" @change="search">
           <option value="">全部到货</option>
           <option value="0">等收货</option>
@@ -2125,7 +2198,44 @@ onUnmounted(() => {
           <tr v-if="!rows.length">
             <td colspan="7" class="empty">{{ loading ? '加载中…' : (globalSearch.active ? '全局搜索未命中包裹' : '暂无订单(点击右上角「同步订单」拉取 Ozon 订单)') }}</td>
           </tr>
-          <tr v-for="pkg in rows" :key="pkg.id" class="pkg-row">
+          <!-- 每订单固定 3 行:标签行(上) → 主行 → 备注行(下),空态也常驻(2026-09-15 v2) -->
+          <template v-for="pkg in rows" :key="pkg.id">
+          <!-- 标签行:本地标签 chip(名=点击筛选/×悬停移除;妙手旗帜同步时并入 tags,统一展示) + 添加区(快捷选已有) -->
+          <tr class="pkg-subrow pkg-tags-row">
+            <td colspan="7">
+              <span v-for="t in pkg.tags" :key="t" class="pkg-tag" :class="{ 'pkg-tag-on': filters.tag === t }">
+                <button
+                  class="pkg-tag-name"
+                  :title="filters.tag === t ? '点击取消此标签筛选' : '点击按此标签筛选'"
+                  @click="applyTagFilter(t)"
+                >{{ t }}</button>
+                <button class="pkg-tag-x" :aria-label="'移除标签 ' + t" title="移除标签" @click="removeTag(pkg, t)">×</button>
+              </span>
+              <!-- 添加区:输入框(回车/逗号新建) + 已有标签快捷选择(点击即加,方便复用) -->
+              <!-- 妙手旗帜已并入 tags 统一展示(2026-09-15 v3),不再单独渲染 -->
+              <template v-if="tagEdit.pkgId === pkg.id">
+                <input
+                  :ref="(el) => { if (el) el.focus() }"
+                  v-model="tagEdit.input"
+                  class="pkg-tag-input"
+                  list="pkg-tag-options"
+                  placeholder="输入标签,回车/逗号添加"
+                  @keydown="onTagKeydown($event, pkg)"
+                  @blur="onTagBlur(pkg)"
+                />
+                <button
+                  v-for="opt in quickTagOptions(pkg)"
+                  :key="'q-' + opt"
+                  class="pkg-tag pkg-tag-quick"
+                  :title="'添加已有标签:' + opt"
+                  @mousedown.prevent
+                  @click="addTag(pkg, opt)"
+                >＋{{ opt }}</button>
+              </template>
+              <button v-else class="pkg-tag pkg-tag-add" title="添加标签(可输入新建,或点击已有标签快捷添加)" @click="openTagInput(pkg)">＋ 标签</button>
+            </td>
+          </tr>
+            <tr class="pkg-row">
             <td class="col-product">
               <div v-for="(it, i) in pkg.items" :key="i" class="product-item">
                 <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box" :title="it.title || '查看Ozon商品'">
@@ -2151,13 +2261,6 @@ onUnmounted(() => {
                 {{ pkg.storeName }} · {{ pkg.orderNumber }}
               </div>
               <div class="sub muted">{{ pkg.buyerName || '—' }} {{ pkg.buyerCity ? '· ' + pkg.buyerCity : '' }}</div>
-              <!-- 标签(本地可编辑)+ 妙手旗帜备注(同步只读) + 备注(2026-09-15) -->
-              <div v-if="pkg.tags?.length || pkg.msFlagRemarks" class="sub pkg-tag-row">
-                <span v-for="t in pkg.tags" :key="t" class="pkg-tag" :title="'本地标签:' + t">{{ t }}</span>
-                <span v-if="pkg.msFlagRemarks" class="pkg-tag pkg-tag-ms" title="妙手旗帜备注(从妙手同步,只读)">旗:{{ pkg.msFlagRemarks }}</span>
-              </div>
-              <div v-if="pkg.note" class="sub pkg-note" :title="pkg.note">备注:{{ pkg.note }}</div>
-              <a class="pkg-meta-edit" title="编辑本地备注与标签" @click="openMetaEdit(pkg)">＋备注/标签</a>
             </td>
             <td class="col-amount">
               <!-- 金额列:名称左对齐、数字右对齐(amt-row flex);利润率单独两行 -->
@@ -2289,7 +2392,39 @@ onUnmounted(() => {
                 </button>
               </div>
             </td>
-          </tr>
+            </tr>
+            <!-- 备注行:点击进入行内编辑,blur/Ctrl+Enter 保存,Esc 取消;空态常驻"＋备注"按钮(2026-09-15 v2) -->
+            <tr
+              class="pkg-subrow pkg-note-row"
+              :class="{ 'is-editing': noteEdit.pkgId === pkg.id }"
+            >
+              <td colspan="7">
+                <span class="pkg-note-label">{{ noteEdit.pkgId === pkg.id ? (noteEdit.saving ? '保存中' : '编辑中') : '备注' }}</span>
+                <textarea
+                  v-if="noteEdit.pkgId === pkg.id"
+                  :ref="(el) => { if (el) el.focus() }"
+                  v-model="noteEdit.draft"
+                  class="pkg-note-input"
+                  rows="2"
+                  :disabled="noteEdit.saving"
+                  placeholder="备注(如采购说明、异常情况…),Ctrl+Enter 保存 / Esc 取消"
+                  @keydown.esc="onNoteEsc"
+                  @keydown.ctrl.enter.prevent="saveNote(pkg)"
+                  @blur="saveNote(pkg)"
+                ></textarea>
+                <span
+                  v-else-if="pkg.note"
+                  class="pkg-note-text"
+                  role="button"
+                  tabindex="0"
+                  title="点击编辑备注"
+                  @click="startNoteEdit(pkg)"
+                  @keydown.enter="startNoteEdit(pkg)"
+                >{{ pkg.note }}</span>
+                <button v-else class="pkg-note-add" title="添加备注" @click="startNoteEdit(pkg)">＋ 备注</button>
+              </td>
+            </tr>
+          </template>
         </tbody>
       </table>
     </div>
@@ -2303,6 +2438,11 @@ onUnmounted(() => {
         @update:modelValue="onPageChange"
       />
     </div>
+
+    <!-- 标签输入联想(原生 datalist:已有标签自动补全,保证命名一致) -->
+    <datalist id="pkg-tag-options">
+      <option v-for="t in tagOptions" :key="t.name" :value="t.name" />
+    </datalist>
 
     <!-- 同步所有订单弹窗(/v4/posting/fbs/list 全量) -->
     <AppModal :open="syncAllOpen" title="同步所有订单 · /v4/posting/fbs/list" size="md" @update:open="syncAllOpen = $event">
@@ -2373,36 +2513,6 @@ onUnmounted(() => {
           <button class="btn btn-ghost" @click="rateDialogOpen = false">取 消</button>
           <button class="btn btn-primary" :disabled="rateSaving" @click="saveRate">
             {{ rateSaving ? '保存中…' : '保 存' }}
-          </button>
-        </div>
-      </div>
-    </AppModal>
-
-    <!-- 备注/标签编辑弹窗(2026-09-15) -->
-    <AppModal :open="metaEdit.open" :title="`备注与标签 · ${metaEdit.postingNumber}`" @update:open="metaEdit.open = $event">
-      <div class="meta-form">
-        <div class="sync-all-tip">
-          本地备注/标签仅保存在本系统。注意:下次「从妙手同步」时,若妙手侧有备注会覆盖本地备注(标签不受影响)。
-        </div>
-        <div class="sync-all-section-label">标签</div>
-        <div class="meta-tags-box">
-          <span v-for="(t, i) in metaEdit.tags" :key="t" class="pkg-tag pkg-tag-edit">
-            {{ t }}
-            <a class="tag-remove" title="移除" @click="removeMetaTag(i)">×</a>
-          </span>
-          <input
-            v-model.trim="metaEdit.tagInput"
-            class="filter-input meta-tag-input"
-            placeholder="输入后回车添加(支持逗号分隔)"
-            @keydown.enter.prevent="addMetaTag"
-          />
-        </div>
-        <div class="sync-all-section-label">备注</div>
-        <textarea v-model="metaEdit.note" class="meta-note-input" rows="3" placeholder="本地备注(如采购说明、异常情况…)" />
-        <div class="form-actions">
-          <button class="btn btn-ghost" @click="metaEdit.open = false">取 消</button>
-          <button class="btn btn-primary" :disabled="metaEdit.saving" @click="saveMeta">
-            {{ metaEdit.saving ? '保存中…' : '保 存' }}
           </button>
         </div>
       </div>
@@ -3231,83 +3341,168 @@ a.product-title:hover {
 .tag-info { background: #dbeafe; color: #2563eb; }
 .tag-mute { background: #f3f4f6; color: #6b7280; }
 
-/* ── 订单列:本地标签/妙手旗帜备注/备注(2026-09-15)── */
-.pkg-tag-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 3px;
+/* ── 订单子行:标签行(上,浅靛)/备注行(下,浅琥珀)(2026-09-15 重设计:行内编辑)── */
+.pkg-subrow td {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-bottom: none;
 }
-.pkg-tag {
+.pkg-tags-row td {
+  background: #f5f7ff;
+  border-top: 1px solid #e5e7eb;
+}
+.pkg-note-row td {
+  background: #fffbeb;
+  color: #92400e;
+  border-bottom: 1px solid #e5e7eb;
+  word-break: break-all;
+}
+.pkg-note-label {
+  flex: none;
   display: inline-block;
-  padding: 1px 6px;
+  margin-right: 8px;
+  padding: 0 6px;
   border-radius: 4px;
+  background: #fde68a;
+  color: #92400e;
+  font-size: 11px;
+  font-weight: 600;
+}
+/* 备注行内容横排:标签 chip 与文本/输入框对齐 */
+.pkg-note-row td {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.pkg-note-row.is-editing td { align-items: flex-start; }
+
+/* ── 本地标签 chip:名=筛选 / ×=移除(悬停浮现);妙手旗帜同步时并入 tags 统一展示 ── */
+.pkg-tag {
+  display: inline-flex;
+  align-items: center;
+  margin: 1px 2px 1px 0;
+  border-radius: 5px;
   font-size: 11px;
   font-weight: 600;
   background: #e0e7ff;    /* 靛蓝:本地标签 */
   color: #4338ca;
-  max-width: 160px;
+  max-width: 220px;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: background .12s ease, box-shadow .12s ease;
+}
+.pkg-tag:hover { background: #c7d2fe; }
+.pkg-tag-name {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  padding: 2px 4px 2px 7px;
+  cursor: pointer;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.pkg-tag-ms {
-  background: #fef3c7;    /* 琥珀:妙手旗帜备注(同步只读) */
-  color: #b45309;
+.pkg-tag-name:hover { text-decoration: underline; text-underline-offset: 2px; }
+.pkg-tag-x {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 2px 6px 2px 0;
+  cursor: pointer;
+  opacity: 0;
+  line-height: 1;
 }
-.pkg-tag-edit {
+.pkg-tag:hover .pkg-tag-x { opacity: .55; }
+.pkg-tag-x:hover { opacity: 1; }
+/* 当前筛选中的标签:靛蓝描边环 */
+.pkg-tag-on {
+  background: #c7d2fe;
+  box-shadow: 0 0 0 2px #a5b4fc;
+}
+/* ＋ 添加标签 ghost chip */
+.pkg-tag-add {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-}
-.tag-remove {
-  cursor: pointer;
-  color: inherit;
-  opacity: 0.6;
-  font-weight: 700;
-  padding: 0 1px;
-}
-.tag-remove:hover { opacity: 1; }
-.pkg-note {
-  color: #b45309;
-  word-break: break-all;
-}
-.pkg-meta-edit {
-  display: inline-block;
-  margin-top: 3px;
+  margin: 1px 2px 1px 0;
+  padding: 1px 7px;
+  border: 1px dashed #c7d2fe;
+  border-radius: 5px;
+  background: transparent;
+  color: #818cf8;
   font-size: 11px;
-  color: var(--text-secondary, #9ca3af);
+  font-weight: 600;
   cursor: pointer;
-  user-select: none;
 }
-.pkg-meta-edit:hover { color: #2563eb; }
+.pkg-tag-add:hover { background: #e0e7ff; border-style: solid; }
+/* 原位标签输入框 */
+.pkg-tag-input {
+  margin: 0 2px;
+  padding: 2px 7px;
+  font-size: 11px;
+  width: 180px;
+  border: 1px solid #a5b4fc;
+  border-radius: 5px;
+  outline: none;
+  background: #fff;
+  box-shadow: 0 0 0 2px #e0e7ff;
+}
 
-/* ── 备注/标签编辑弹窗 ── */
-.meta-tags-box {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  padding: 8px;
-  border: 1px solid var(--border-color, #e5e7eb);
-  border-radius: 6px;
-  min-height: 38px;
-}
-.meta-tag-input {
+/* ── 备注行内编辑 ── */
+.pkg-note-row:hover td { background: #fef3c7; }
+.pkg-note-text {
+  cursor: text;
+  white-space: pre-wrap;
+  min-width: 0;
   flex: 1;
-  min-width: 160px;
+}
+.pkg-note-row:hover .pkg-note-text {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.pkg-note-input {
+  flex: 1;
   margin: 0;
-}
-.meta-note-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px;
-  border: 1px solid var(--border-color, #e5e7eb);
-  border-radius: 6px;
-  font-size: 13px;
-  resize: vertical;
+  padding: 4px 8px;
+  font-size: 12px;
   font-family: inherit;
+  border: 1px solid #fcd34d;
+  border-radius: 5px;
+  background: #fff;
+  color: #1f2937;
+  resize: vertical;
+  outline: none;
 }
+
+/* ── 空态常驻按钮(2026-09-15 v2:标签/备注行空态也常驻展示)── */
+.pkg-note-add {
+  border: 1px dashed #fcd34d;
+  border-radius: 5px;
+  background: transparent;
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.pkg-note-add:hover { background: #fef3c7; border-style: solid; }
+/* 已有标签快捷选择 chip(添加区,灰底靛字,与正式 chip 区分) */
+.pkg-tag-quick {
+  display: inline-flex;
+  align-items: center;
+  margin: 1px 2px 1px 0;
+  padding: 1px 7px;
+  border: 1px dashed #c7d2fe;
+  border-radius: 5px;
+  background: #fff;
+  color: #6366f1;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pkg-tag-quick:hover { background: #e0e7ff; border-style: solid; }
 
 /* ── Tab 聚合统计(已结算/已采购未结算两组,全集不分页)── */
 .summary-bar {

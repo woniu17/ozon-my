@@ -523,6 +523,13 @@ function buildPackageWhere(filters = {}) {
   } else if (filters.noteFilter === 'none') {
     where.push(`(p.note IS NULL OR p.note = '')`);
   }
+  // 标签筛选(2026-09-15):tags 逗号分隔存储,精确匹配单个标签
+  // SQLite 无 FIND_IN_SET,用 (','||tags||',') LIKE '%,tag,%' 精确匹配避免子串误中
+  // 妙手旗帜已并入 tags(2026-09-15 v3),统一走此筛选
+  if (filters.tag) {
+    where.push(`(',' || p.tags || ',') LIKE ?`);
+    params.push(`%,${String(filters.tag).trim()},%`);
+  }
   if (filters.arrived === '1') {
     where.push('p.arrived_at IS NOT NULL');
   } else if (filters.arrived === '0') {
@@ -548,6 +555,23 @@ function buildPackageWhere(filters = {}) {
   }
 
   return { where, params, globalSearch: !!globalKw, globalKeyword: globalKw };
+}
+
+/** 已用标签列表+计数(2026-09-15,tags 逗号分隔 → 拆分聚合,供筛选下拉)
+ * 妙手旗帜已并入 tags(2026-09-15 v3),无需单独分组 */
+function listPackageTags() {
+  const rows = db
+    .prepare(`SELECT tags FROM op_package WHERE tags IS NOT NULL AND tags != ''`)
+    .all();
+  const counter = new Map();
+  for (const r of rows) {
+    for (const t of String(r.tags).split(',').map((s) => s.trim()).filter(Boolean)) {
+      counter.set(t, (counter.get(t) || 0) + 1);
+    }
+  }
+  return [...counter.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh'));
 }
 
 function listPackages(filters = {}) {
@@ -1605,6 +1629,18 @@ function syncFromMiaoshou({ packageIds } = {}) {
      WHERE id = ?`
   );
 
+  // 妙手旗帜并入本地标签(2026-09-15 v3):flag_remarks 作为 tags 之一写入,统一展示/筛选/编辑
+  // 幂等:tags 已含该值时保持原样(重复同步不重复添加);ms_flag_remarks 字段保留作溯源
+  const mergeFlagToTags = db.prepare(
+    `UPDATE op_package
+        SET tags = CASE
+              WHEN tags IS NULL OR tags = '' THEN ?
+              WHEN (',' || tags || ',') LIKE ? THEN tags
+              ELSE tags || ',' || ?
+            END
+      WHERE id = ?`
+  );
+
   let synced = 0;
   let skipped = 0;
   let purchases = 0;
@@ -1628,6 +1664,11 @@ function syncFromMiaoshou({ packageIds } = {}) {
         ms.ms_flag_remarks != null ? String(ms.ms_flag_remarks) : null,
         now, now, p.id
       );
+      // a2) 妙手旗帜并入本地标签(统一筛选/编辑;幂等不重复)
+      if (ms.ms_flag_remarks && String(ms.ms_flag_remarks).trim()) {
+        const flag = String(ms.ms_flag_remarks).trim();
+        mergeFlagToTags.run(flag, `%,${flag},%`, flag, p.id);
+      }
       // b) 同步妙手采购单到本地 op_purchase_order + op_purchase_link(事务包裹:清除+写入原子)
       const msPurchases = getMsPurchases.all(ms.ms_pkg_id);
       const hasMsPurchase = msPurchases.some((pur) => pur.purchase_sn && pur.platform);
@@ -1768,6 +1809,7 @@ export const orderPackageDao = {
   clearAllPurchase,
   setIgnored,
   updatePackageMeta,
+  listPackageTags,
   markWaybillPrinted,
   getPackagePostings,
   scanShipSubmit,
