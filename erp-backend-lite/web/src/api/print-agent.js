@@ -5,6 +5,10 @@
 // 预览链路:同上但 task.preview=true,组件只渲染不出纸;1.5.x 组件先回裸 ack(仅 status:success),
 //          渲染完成后才发第二条 print 响应(responses[].urls / previewImage 在第二条里,2026-09 实测)
 
+// pdfjs worker 经 vite ?url 打包为带 hash 的静态资产:
+// 不再依赖手动拷贝 src/public/pdfjs/(该目录被 .gitignore 忽略,服务器拉不到,2026-09-15 实测踩坑)
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
 let ws = null;                 // 长连接(复用)
 let connecting = null;         // 连接中的 promise(防并发重连)
 const reqWaiters = new Map();  // requestID → 响应 handler(是否消费由 handler 自决,preview 需等第二条)
@@ -115,11 +119,11 @@ export async function pickLabelPrinter() {
   return defaultPrinter;
 }
 
-// PDF 第 1 页 → PNG dataURL(pdfjs;worker 走后端静态 /pdfjs/pdf.worker.min.mjs)
+// PDF 第 1 页 → PNG dataURL(pdfjs;worker 走 vite 打包的带 hash 资产,见文件头 import)
 // 目标宽 1100px,条码足够清晰
 async function pdfToPng(blob) {
   const pdfjs = await import('pdfjs-dist');
-  pdfjs.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.mjs';
+  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   const page = await (await pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise).getPage(1);
   const scale = 1100 / page.getViewport({ scale: 1 }).width;
   const viewport = page.getViewport({ scale });

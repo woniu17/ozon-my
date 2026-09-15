@@ -32,7 +32,10 @@ export default defineConfig({
       },
       output: {
         entryFileNames: '[name]-[hash].js',
-        assetFileNames: '[name]-[hash].css',
+        // 按扩展名保留后缀:?url 导入的资产(如 pdfjs worker .mjs)不能统一 .css,
+        // 否则 MIME type 错误导致 worker 加载失败(2026-09-15 实测)
+        assetFileNames: (assetInfo) =>
+          assetInfo.name && assetInfo.name.endsWith('.css') ? '[name]-[hash].css' : '[name]-[hash].[ext]',
       },
     },
   },
