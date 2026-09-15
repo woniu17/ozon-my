@@ -120,20 +120,34 @@ export async function pickLabelPrinter() {
 }
 
 // PDF 第 1 页 → PNG dataURL(pdfjs;worker 走 vite 打包的带 hash 资产,见文件头 import)
-// 目标宽 1100px,条码足够清晰
-async function pdfToPng(blob) {
+// 画布固定按标签纸比例(70:129,宽 1100px)创建,PDF 内容等比 contain 缩放(水平居中/顶部对齐),
+// 多余区域白底补齐 → 组件把图拉伸填满 70×129mm layout 时长宽比与原 PDF 完全一致,零变形
+// (2026-09-15:此前画布按 PDF 原比例,layout 拉伸到 129mm 导致 ~2-5% 纵向拉伸,QR 码定位点变椭圆)
+async function pdfToPng(blob, widthMm = 70, pageHm = 129) {
   const pdfjs = await import('pdfjs-dist');
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   const page = await (await pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise).getPage(1);
-  const scale = 1100 / page.getViewport({ scale: 1 }).width;
+  const base = page.getViewport({ scale: 1 });
+  const canvasW = 1100; // 目标宽 1100px,条码足够清晰
+  const canvasH = Math.round((canvasW * pageHm) / widthMm); // 画布高按标签纸比例固定
+  // contain:按宽适配 vs 按高适配,取缩放较小者(PDF 比标签瘦长时按高缩,留左右白边)
+  const scale = Math.min(canvasW / base.width, canvasH / base.height);
   const viewport = page.getViewport({ scale });
   const canvas = document.createElement('canvas');
-  canvas.width = Math.ceil(viewport.width);
-  canvas.height = Math.ceil(viewport.height);
+  canvas.width = canvasW;
+  canvas.height = canvasH;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff'; // PDF 透明底铺白
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  const offsetX = Math.round((canvasW - viewport.width) / 2); // 水平居中
+  if (offsetX > 0) {
+    ctx.save();
+    ctx.translate(offsetX, 0);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    ctx.restore();
+  } else {
+    await page.render({ canvasContext: ctx, viewport }).promise;
+  }
   return { dataUrl: canvas.toDataURL('image/png'), w: canvas.width, h: canvas.height };
 }
 
@@ -154,7 +168,7 @@ function buildImageContents(dataUrl, hMm, documentId) {
 // 终态判定兼容两代协议:0.x notifyPrintResult 用 taskStatus(printed/failed);
 // 1.5.x notifyDocResult/notifyTaskResult 用 status(printed/completeSuccess/failed/completeFailed)
 export async function printLabelImage(blob, documentId, printer = '', widthMm = 70) {
-  const { dataUrl, w, h } = await pdfToPng(blob);
+  const { dataUrl, w, h } = await pdfToPng(blob, widthMm);
   const hMm = Math.round((widthMm * h) / w * 10) / 10;
   const sock = await connectAgent();
   const taskID = genId();
@@ -209,7 +223,7 @@ function extractPreviewUrl(msg) {
 //   → ③第二条 print 响应(带 responses[].urls/previewImage)→ ④notifyTaskResult(completeSuccess)
 // 故 reqWaiters 收到裸 ack 不能消费,须等第二条;taskWaiters 兜底接收渲染失败通知
 export async function previewLabelImage(blob, documentId, widthMm = 70) {
-  const { dataUrl, w, h } = await pdfToPng(blob);
+  const { dataUrl, w, h } = await pdfToPng(blob, widthMm);
   const hMm = Math.round((widthMm * h) / w * 10) / 10;
   const sock = await connectAgent();
   const reqId = genId();
