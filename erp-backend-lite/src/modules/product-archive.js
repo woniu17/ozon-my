@@ -51,7 +51,8 @@ function expandFiltersToItems(filters) {
   const params = [];
 
   if (f.keyword) {
-    where.push('(sku LIKE ? OR data LIKE ?)');
+    // 无别名表 + salesJoin 子查询 s 含 sku 列,裸 sku 会报 ambiguous column(2026-09-15 修复)
+    where.push('(product_data_cache.sku LIKE ? OR product_data_cache.data LIKE ?)');
     const kw = '%' + String(f.keyword) + '%';
     params.push(kw, kw);
   }
@@ -161,7 +162,7 @@ function expandFiltersToItems(filters) {
       `SELECT
          COALESCE(json_extract(data, '$.product_id'), json_extract(data, '$.id')) AS productId,
          store_id AS storeId,
-         COALESCE(json_extract(data, '$.offer_id'), json_extract(data, '$.sku'), sku) AS offerId
+         COALESCE(json_extract(data, '$.offer_id'), json_extract(data, '$.sku'), product_data_cache.sku) AS offerId
        FROM product_data_cache ${salesJoin} ${fullWhereSql}
        ORDER BY fetched_at DESC`
     )
