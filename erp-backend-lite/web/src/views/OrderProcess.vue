@@ -18,6 +18,7 @@ import {
   listPendingPurchases,
   getOrderSummary,
   syncPackage,
+  shipPackage,
   getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus, syncPddCookies,
   getPendingExportState,
 } from '../api/order-process.js';
@@ -1542,6 +1543,30 @@ async function onSyncPackage(pkg) {
   }
 }
 
+// 备货(列表行"备货"按钮,2026-09-15):Ozon /v4/posting/fbs/ship 搜集订单(不拆分)
+// 打面单前置动作:Ozon awaiting_packaging → awaiting_registration(待注册面单)
+const shippingPkgId = ref(0); // 正在备货的包裹 id(按钮 loading)
+async function onShipPackage(pkg) {
+  if (shippingPkgId.value) return;
+  if (!confirm(`确认备货 ${pkg.logisticsNo}?\n将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。`)) return;
+  shippingPkgId.value = pkg.id;
+  try {
+    const r = await shipPackage(pkg.id);
+    show(
+      r.alreadyShipped
+        ? `该订单已备货过(Ozon 状态 ${r.ozonStatus}),无需重复操作`
+        : `备货成功:${pkg.logisticsNo} 已确认货件(Ozon 状态 → ${r.ozonStatus}),可打印面单`,
+      'success'
+    );
+    await loadList();
+    await loadTabs();
+  } catch (err) {
+    show(`备货失败:${err.message || String(err)}`, 'error');
+  } finally {
+    shippingPkgId.value = 0;
+  }
+}
+
 function printBlobViaIframe(blob) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
@@ -2513,6 +2538,14 @@ onUnmounted(() => {
                   :title="syncingPkgId === pkg.id ? '同步中…' : '按单号直查 Ozon 拉最新订单状态 + 强制拉应计项目(无时间窗口限制)'"
                   @click="onSyncPackage(pkg)"
                 >{{ syncingPkgId === pkg.id ? '同步中…' : '同步' }}</button>
+                <!-- 备货(2026-09-15):Ozon /v4/posting/fbs/ship 搜集订单(不拆分);只看 Ozon 待备货状态,与本地采购进度无关 -->
+                <button
+                  v-if="(pkg.operateStatus === 'wait_process' || pkg.operateStatus === 'wait_ship') && pkg.ozonStatus === 'awaiting_packaging'"
+                  class="btn btn-ghost btn-sm"
+                  :disabled="shippingPkgId === pkg.id"
+                  :title="shippingPkgId === pkg.id ? '备货中…' : '向 Ozon 确认全部商品为一个货件(不拆分),备货后方可打印面单'"
+                  @click="onShipPackage(pkg)"
+                >{{ shippingPkgId === pkg.id ? '备货中…' : '备货' }}</button>
                 <button
                   v-if="pkg.operateStatus === 'wait_ship' || pkg.operateStatus === 'ship_success'"
                   class="btn btn-primary btn-sm"

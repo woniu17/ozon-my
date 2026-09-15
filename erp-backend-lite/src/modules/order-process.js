@@ -11,6 +11,7 @@
 //   POST /admin/api/order-process/unlink          取消采购关联(冲回金额)
 //   POST /admin/api/order-process/ignore          搁置/恢复包裹
 //   POST /admin/api/order-process/print-label     标记已打印面单(流转交运)
+//   POST /admin/api/order-process/ship            备货(Ozon /v4/posting/fbs/ship 搜集订单,不拆分)
 //   POST /admin/api/order-process/scan-ship/submit   扫描发货:提交重量(权威状态校验,仅 wait_ship 落库)
 //   GET  /admin/api/order-process/scan-ship/records  扫描发货:发货记录(今日/昨日,北京时间日界)
 //   POST /admin/api/order-process/sync-run        手动触发 Ozon 订单增量同步(双接口)
@@ -26,7 +27,7 @@ import config from '../config/index.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
 import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
-import { packageLabel } from '../services/ozon-opi.js';
+import { packageLabel, postingFbsGet, postingFbsShip } from '../services/ozon-opi.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
 import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
@@ -979,6 +980,104 @@ router.post('/admin/api/order-process/sync-package', async (req, res, next) => {
     const status = /未配置|未找到|必须为/.test(msg) ? 400 : 502;
     logger.warn({ err: msg, packageId: req.body?.packageId }, '[order-process] 单订单同步失败');
     res.status(status).json({ ok: false, message: msg });
+  }
+});
+
+// ── 备货(2026-09-15)─────────────────────────────────────────
+// POST body: { packageId: number }
+// 调 Ozon /v4/posting/fbs/ship 搜集订单(不拆分:单 package 含全部商品),UI 名"备货"
+// 实测结论(测试货件 52800136-0155-1):
+//   1. products[].product_id 传 posting products[].sku 的值;
+//      用 /v3/product/info/list 按 sku 反查的商品主 id 会报 UNKNOWN_PRODUCT_DEFINED
+//   2. HTTP 200 不代表备货成功,须再 get 校验:状态离开 awaiting_packaging 且 substatus≠ship_failed
+//      (实测成功后状态 awaiting_packaging → awaiting_registration 待注册面单)
+//   3. 仅 Ozon awaiting_packaging 可备货;awaiting_registration/awaiting_deliver 视为已备货(幂等)
+// 前置:本地 operate_status 为 wait_process/wait_ship(备货只看 Ozon 状态,与本地采购进度无关)且未搁置
+router.post('/admin/api/order-process/ship', async (req, res, next) => {
+  try {
+    const packageId = Number(req.body?.packageId);
+    if (!Number.isInteger(packageId) || packageId <= 0) {
+      return res.status(400).json({ ok: false, message: 'packageId 必须为正整数' });
+    }
+    const row = db
+      .prepare(
+        `SELECT p.id, p.operate_status AS operateStatus, p.is_ignored AS isIgnored,
+                o.posting_number AS postingNumber, o.store_id AS storeId
+         FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id
+         WHERE p.id = ?`
+      )
+      .get(packageId);
+    if (!row || !row.postingNumber || !row.storeId) {
+      return res.status(404).json({ ok: false, message: `未找到 packageId=${packageId} 对应的订单` });
+    }
+    if (row.isIgnored) {
+      return res.status(400).json({ ok: false, message: '包裹已搁置,不能备货' });
+    }
+    // 备货只依赖 Ozon 侧状态(awaiting_packaging),与本地采购进度无关:
+    // 待处理(wait_process,未采购)与待打单(wait_ship,已采购)均可提前备货
+    if (row.operateStatus !== 'wait_ship' && row.operateStatus !== 'wait_process') {
+      return res.status(400).json({
+        ok: false,
+        message: `订单状态 ${row.operateStatus} 不可备货(仅待处理/待打单发货可备货)`,
+      });
+    }
+    const store = (config.loadStores() || []).find((s) => s.id === row.storeId);
+    if (!store || !store?.sync_credentials?.clientId) {
+      return res.status(400).json({ ok: false, message: `店铺 ${row.storeId} 未配置 sync_credentials,无法直连 Ozon` });
+    }
+
+    // 1) 实时拉取 Ozon 状态(不用本地缓存,防过期)
+    const g1 = await postingFbsGet(store, row.postingNumber);
+    const p1 = g1?.result;
+    const ozonStatus = p1?.status || '';
+    // 已备货态:幂等返回(不再调 ship)
+    if (ozonStatus === 'awaiting_registration' || ozonStatus === 'awaiting_deliver') {
+      orderPackageDao.syncPosting(store.id, p1); // 顺带校准本地状态
+      return res.json(ok({ alreadyShipped: true, ozonStatus, substatus: p1?.substatus || null }));
+    }
+    if (ozonStatus !== 'awaiting_packaging') {
+      return res.status(400).json({
+        ok: false,
+        message:
+          ozonStatus === 'cancelled'
+            ? 'Ozon 订单已取消,不能备货'
+            : `Ozon 当前状态 ${ozonStatus || '(未知)'} 不可备货(仅待备货状态可操作)`,
+      });
+    }
+
+    // 2) 构造商品清单:product_id 传 posting 的 sku 值(实测口径)
+    const products = (p1?.products || [])
+      .map((x) => ({ product_id: x.sku ? Number(x.sku) : null, quantity: Number(x.quantity) || 1 }))
+      .filter((x) => x.product_id);
+    if (!products.length) {
+      return res.status(400).json({ ok: false, message: '订单商品清单为空(缺少 sku),无法备货' });
+    }
+
+    // 3) 调 ship(不拆分:单 package 全部商品)
+    await postingFbsShip(store, row.postingNumber, products);
+
+    // 4) get 校验(200 不代表成功)
+    const g2 = await postingFbsGet(store, row.postingNumber);
+    const p2 = g2?.result;
+    const newStatus = p2?.status || '';
+    const newSub = p2?.substatus || '';
+    if (newSub === 'ship_failed' || newStatus === 'awaiting_packaging') {
+      logger.warn({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 备货未生效');
+      return res.status(502).json({
+        ok: false,
+        message: `备货未生效(Ozon 状态仍为 ${newStatus}${newSub ? '/' + newSub : ''}),请稍后重试或检查商品清单`,
+      });
+    }
+
+    // 5) 成功:同步最新 posting 落库(校准本地 Ozon 状态)
+    orderPackageDao.syncPosting(store.id, p2);
+    logger.info({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 备货成功');
+    res.json(ok({ alreadyShipped: false, ozonStatus: newStatus, substatus: newSub || null }));
+  } catch (e) {
+    const msg = e?.message || String(e);
+    const status = /必填|必须为|未配置|不能|不可|尚未/.test(msg) ? 400 : 502;
+    logger.warn({ err: msg, packageId: req.body?.packageId }, '[order-process] 备货失败');
+    res.status(status).json({ ok: false, message: `Ozon 备货失败:${msg}` });
   }
 });
 

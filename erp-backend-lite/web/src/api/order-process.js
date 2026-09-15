@@ -152,6 +152,13 @@ export function syncPackage(packageId) {
   return request.post('/admin/api/order-process/sync-package', { packageId });
 }
 
+// 备货(列表行"备货"按钮):Ozon /v4/posting/fbs/ship 搜集订单(不拆分,单包裹全部商品)
+// 前置:本地 wait_ship + Ozon awaiting_packaging;已备货态幂等返回 alreadyShipped=true
+// 返回 { alreadyShipped, ozonStatus, substatus }
+export function shipPackage(packageId) {
+  return request.post('/admin/api/order-process/ship', { packageId });
+}
+
 // 读取 RUB→CNY 汇率(null=未配置)
 export function getRubRate() {
   return request.get('/admin/api/order-process/rub-rate');

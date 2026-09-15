@@ -541,6 +541,26 @@ export function postingFbsGet(store, postingNumber) {
   });
 }
 
+// /v4/posting/fbs/ship —— 搜集订单(备货,第4方案,2026-09-15)
+// 不拆分:packages 只传一个对象,包含全部商品
+// 请求: { posting_number, packages: [{ products: [{ product_id, quantity }] }] }
+// 响应: { result: {...} };HTTP 200 不代表备货成功,必须再调 /v3/posting/fbs/get 校验:
+//   - status = awaiting_deliver → 备货成功
+//   - substatus = ship_failed → 备货失败,需重新备货
+// 注:products[].product_id 必须是 Ozon 系统 product_id;posting 响应里可能不带,
+//     需用 /v3/product/info/list 按 offer_id 反查(items[].id)
+export function postingFbsShip(store, postingNumber, products) {
+  if (!postingNumber) throw new Error('posting_number 不能为空');
+  const list = (Array.isArray(products) ? products : [])
+    .filter((p) => p && p.product_id && Number(p.quantity) > 0)
+    .map((p) => ({ product_id: Number(p.product_id), quantity: Number(p.quantity) }));
+  if (!list.length) throw new Error('products 不能为空(需含 product_id 和 quantity)');
+  return call(store, '/v4/posting/fbs/ship', {
+    posting_number: postingNumber,
+    packages: [{ products: list }],
+  });
+}
+
 // /v2/posting/fbs/package-label —— 打印标签(面单 PDF)
 // 请求: { posting_number: string[] }(单次 ≤20,任一货件出错整批失败)
 // 响应: PDF 二进制流(非 JSON,走 callRaw)
