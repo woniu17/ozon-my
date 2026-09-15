@@ -509,6 +509,19 @@ function buildPackageWhere(filters = {}) {
     where.push("p.purchase_status = 'none'");
   } else if (filters.purchaseStatus === 'purchased') {
     where.push("p.purchase_status != 'none'");
+  } else if (filters.purchaseStatus === 'multi') {
+    // 多条采购:关联 ≥2 个采购单(拼单场景,按 op_purchase_link 计数)
+    where.push(`p.id IN (SELECT pl.package_id FROM op_purchase_link pl GROUP BY pl.package_id HAVING COUNT(*) >= 2)`);
+  } else if (filters.purchaseStatus === 'manual') {
+    // 手工采购:存在手工录入的采购单(purchase_channel='manual',模式B;区别于平台订单导入的 'platform_order')
+    where.push(`EXISTS (SELECT 1 FROM op_purchase_order po JOIN op_purchase_link pl ON pl.purchase_order_id = po.id
+                 WHERE pl.package_id = p.id AND po.purchase_channel = 'manual')`);
+  }
+  // 备注筛选(2026-09-15):has=有备注(本地或妙手同步的 note);none=无备注
+  if (filters.noteFilter === 'has') {
+    where.push(`p.note IS NOT NULL AND p.note != ''`);
+  } else if (filters.noteFilter === 'none') {
+    where.push(`(p.note IS NULL OR p.note = '')`);
   }
   if (filters.arrived === '1') {
     where.push('p.arrived_at IS NOT NULL');
@@ -692,6 +705,9 @@ function rowToPackage(r) {
     returnAt: r.return_at,
     waybillPrintedAt: r.waybill_printed_at,
     note: r.note,
+    // ─ 本地标签(逗号分隔 → 数组)+ 妙手旗帜备注(同步展示,2026-09-15) ─
+    tags: r.tags ? String(r.tags).split(',').map((t) => t.trim()).filter(Boolean) : [],
+    msFlagRemarks: r.ms_flag_remarks,
     // ─ 取消细分状态(cancellation_json 解析,仅 cancelled 状态订单有) ─
     cancellation,
     cancellationType: cancellation?.cancellation_type || null,        // 'client' | 'ozon' | 'seller'
@@ -1293,6 +1309,34 @@ function setIgnored(packageId, ignored) {
   );
 }
 
+/** 更新包裹本地备注/标签(2026-09-15)
+ * @param {number} packageId
+ * @param {{ note?: string|null, tags?: string[] }} meta
+ *   - note:传 undefined 不动;传 null/'' 清空
+ *   - tags:传 undefined 不动;数组(空数组清空),存逗号分隔
+ * 返回更新后的 { note, tags }
+ */
+function updatePackageMeta(packageId, meta = {}) {
+  const pkg = db.prepare(`SELECT id FROM op_package WHERE id = ?`).get(packageId);
+  if (!pkg) return null;
+  const sets = [];
+  const vals = [];
+  if (meta.note !== undefined) {
+    sets.push('note = ?');
+    vals.push(meta.note || null);
+  }
+  if (meta.tags !== undefined) {
+    sets.push('tags = ?');
+    vals.push(Array.isArray(meta.tags) ? meta.tags.map((t) => String(t).trim()).filter(Boolean).join(',') || null : null);
+  }
+  if (sets.length) {
+    sets.push('gmt_modified = ?');
+    vals.push(nowIso());
+    db.prepare(`UPDATE op_package SET ${sets.join(', ')} WHERE id = ?`).run(...vals, packageId);
+  }
+  return db.prepare(`SELECT note, tags FROM op_package WHERE id = ?`).get(packageId);
+}
+
 /** 标记已打印面单(交运) */
 function markWaybillPrinted(packageId) {
   const now = nowIso();
@@ -1487,7 +1531,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
   const logisticsNos = pkgs.map((p) => p.logistics_no);
   const msRows = db.prepare(
     `SELECT mp.id AS ms_pkg_id, mp.posting_number, mp.weighing_weight, mp.note, mp.purchase_amount AS ms_purchase_amount,
-            mp.quantity AS ms_quantity
+            mp.flag_remarks AS ms_flag_remarks, mp.quantity AS ms_quantity
      FROM miaoshou_package mp
      WHERE mp.posting_number IN (${logisticsNos.map(() => '?').join(',')})`
   ).all(...logisticsNos);
@@ -1504,6 +1548,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
            END,
            note = COALESCE(?, note),
            ms_purchase_amount = COALESCE(?, ms_purchase_amount),
+           ms_flag_remarks = COALESCE(?, ms_flag_remarks),
            ms_synced_at = ?,
            gmt_modified = ?
      WHERE id = ?`
@@ -1575,11 +1620,12 @@ function syncFromMiaoshou({ packageIds } = {}) {
     }
     try {
       const now = nowIso();
-      // a) 更新本地 op_package 的重量/备注/妙手口径采购金额
+      // a) 更新本地 op_package 的重量/备注/妙手口径采购金额/妙手旗帜备注
       updPkg.run(
         ms.weighing_weight != null ? Number(ms.weighing_weight) : null,
         ms.note != null ? String(ms.note) : null,
         ms.ms_purchase_amount != null ? Number(ms.ms_purchase_amount) : null,
+        ms.ms_flag_remarks != null ? String(ms.ms_flag_remarks) : null,
         now, now, p.id
       );
       // b) 同步妙手采购单到本地 op_purchase_order + op_purchase_link(事务包裹:清除+写入原子)
@@ -1721,6 +1767,7 @@ export const orderPackageDao = {
   revertToWaitProcess,
   clearAllPurchase,
   setIgnored,
+  updatePackageMeta,
   markWaybillPrinted,
   getPackagePostings,
   scanShipSubmit,

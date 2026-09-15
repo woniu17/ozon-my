@@ -65,11 +65,13 @@ export function upsertMiaoshouOrders(records) {
         `INSERT INTO miaoshou_package (
           op_order_package_id, app_package_no, posting_number, shop_id, shop_nick,
           platform, platform_order_sn, order_amount, buyer_name, buyer_country,
-          gmt_order_start, weighing_weight, note, operate_status, purchase_status,
+          gmt_order_start, weighing_weight, note, flag_remarks, flags_json, tag_map_json,
+          buyer_message, seller_note,
+          operate_status, purchase_status,
           app_package_tab, platform_package_status, app_package_status_text,
           purchase_amount, logistics_no, logistics_company, gmt_create, gmt_modified, gmt_delivery,
           items_json, quantity, raw_json, synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(op_order_package_id) DO UPDATE SET
           app_package_no=excluded.app_package_no,
           posting_number=excluded.posting_number,
@@ -82,6 +84,11 @@ export function upsertMiaoshouOrders(records) {
           gmt_order_start=excluded.gmt_order_start,
           weighing_weight=excluded.weighing_weight,
           note=excluded.note,
+          flag_remarks=excluded.flag_remarks,
+          flags_json=excluded.flags_json,
+          tag_map_json=excluded.tag_map_json,
+          buyer_message=excluded.buyer_message,
+          seller_note=excluded.seller_note,
           operate_status=excluded.operate_status,
           purchase_status=excluded.purchase_status,
           app_package_tab=excluded.app_package_tab,
@@ -112,6 +119,12 @@ export function upsertMiaoshouOrders(records) {
         r.gmtOrderStart || null,
         finalWeight,
         r.note || null,
+        // 旗帜/标签/留言(2026-09-15;旧插件版本未提取时为 null,重同步即回填)
+        r.flagRemarks || null,
+        r.flags != null ? JSON.stringify(r.flags) : null,
+        r.tagMap != null ? JSON.stringify(r.tagMap) : null,
+        r.buyerMessage || null,
+        r.sellerNote || null,
         r.operateStatus || null,
         r.purchaseStatus || null,
         r.appPackageTab || null,
@@ -244,9 +257,10 @@ export function listMiaoshouPackages(filters = {}) {
     vals.push(filters.shopNick);
   }
   if (filters.keyword) {
-    where.push('(mp.posting_number LIKE ? OR mp.app_package_no LIKE ? OR mp.note LIKE ?)');
+    // 2026-09-15:关键词搜索覆盖旗帜备注(采购归属标记 "linrh-1688" 等)
+    where.push('(mp.posting_number LIKE ? OR mp.app_package_no LIKE ? OR mp.note LIKE ? OR mp.flag_remarks LIKE ?)');
     const kw = `%${filters.keyword}%`;
-    vals.push(kw, kw, kw);
+    vals.push(kw, kw, kw, kw);
   }
   // 状态 tab 筛选(按妙手自身 tab 分组 appPackageTab:waitProcess/waitShip/submitPlatform/
   // waitReceiverConfirm/closed/isolation;操作状态 operate_status 会分散在多个 tab,不能用于分类)

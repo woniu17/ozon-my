@@ -57,6 +57,12 @@ export function ignorePackage(packageId, ignored) {
   return request.post('/admin/api/order-process/ignore', { packageId, ignored });
 }
 
+// 更新包裹本地备注/标签(2026-09-15)
+// body: { packageId, note?, tags? } 不传的字段不动;note 传 null/'' 清空;tags 传空数组清空
+export function updatePackageMeta(packageId, body) {
+  return request.post('/admin/api/order-process/package-meta', { packageId, ...body });
+}
+
 // 标记已打印面单(流转交运)
 export function markPrinted(packageId) {
   return request.post('/admin/api/order-process/print-label', { packageId });

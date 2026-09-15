@@ -429,6 +429,8 @@ async function ensureMigrations() {
   migrateAutoCollectLogReason(db);
   // P2-2: 批量均衡上架 — batch_upload_tasks / batch_upload_items 补列(多店铺分配 + 顺序执行 + 速度控制)
   migrateBatchUploadTables(db);
+  // 2026-09-15: 妙手旗帜/标签/留言 + 订单处理本地标签备注 — 补列(见 migrateMiaoshouTagFields)
+  migrateMiaoshouTagFields(db);
   // 2026-07: watermark_templates.name UNIQUE 索引(旧库 schema 没有 UNIQUE,需补建)
   // 若已存在重名行,迁移前先去重(保留最早 id),再建 UNIQUE 索引
   const wmCols = db.prepare(`PRAGMA table_info(watermark_templates)`).all();
@@ -1156,6 +1158,39 @@ function migrateAutoCollectLogReason(db) {
   if (logCols.length > 0 && !logCols.some((c) => c.name === 'reason')) {
     db.exec(`ALTER TABLE ozon_auto_collect_log ADD COLUMN reason TEXT`);
     console.log('[db] migration: added column ozon_auto_collect_log.reason');
+  }
+}
+
+// 2026-09-15: 妙手旗帜/标签/留言 + 订单处理本地标签备注 — 三表补列
+// 1) miaoshou_package: flag_remarks/flags_json/tag_map_json/buyer_message/seller_note(插件新提取字段)
+// 2) op_package: tags(本地标签,逗号分隔)/ms_flag_remarks(妙手旗帜备注同步展示)
+// 新库由 schema.sql CREATE TABLE IF NOT EXISTS 直接建好,此函数幂等跳过
+function migrateMiaoshouTagFields(db) {
+  const msCols = db.prepare(`PRAGMA table_info(miaoshou_package)`).all();
+  if (msCols.length > 0) {
+    for (const [col, ddl] of [
+      ['flag_remarks', `ALTER TABLE miaoshou_package ADD COLUMN flag_remarks TEXT`],
+      ['flags_json', `ALTER TABLE miaoshou_package ADD COLUMN flags_json TEXT`],
+      ['tag_map_json', `ALTER TABLE miaoshou_package ADD COLUMN tag_map_json TEXT`],
+      ['buyer_message', `ALTER TABLE miaoshou_package ADD COLUMN buyer_message TEXT`],
+      ['seller_note', `ALTER TABLE miaoshou_package ADD COLUMN seller_note TEXT`],
+    ]) {
+      if (!msCols.some((c) => c.name === col)) {
+        db.exec(ddl);
+        console.log(`[db] migration: added column miaoshou_package.${col}`);
+      }
+    }
+  }
+  const pkgCols = db.prepare(`PRAGMA table_info(op_package)`).all();
+  if (pkgCols.length > 0) {
+    if (!pkgCols.some((c) => c.name === 'tags')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN tags TEXT`);
+      console.log('[db] migration: added column op_package.tags');
+    }
+    if (!pkgCols.some((c) => c.name === 'ms_flag_remarks')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN ms_flag_remarks TEXT`);
+      console.log('[db] migration: added column op_package.ms_flag_remarks');
+    }
   }
 }
 

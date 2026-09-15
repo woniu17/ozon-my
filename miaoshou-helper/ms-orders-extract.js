@@ -160,6 +160,14 @@
       // ★称重重量 + 本地备注
       weighingWeight: pkg.packageWeighingWeight ? parseFloat(pkg.packageWeighingWeight) : null,
       note: pkg.appNote || null,
+      // ★旗帜/标签/留言(2026-09-15):flags=旗帜ID数组,flagRemarks=旗帜备注
+      //   (操作员打标记,如 "linrh-1688" 标记采购归属);tagMap=系统标签
+      //   (如 fulfillmentType);buyerMessage/sellerNote=买家留言/卖家备注
+      flagRemarks: pkg.flagRemarks || null,
+      flags: Array.isArray(pkg.flags) ? pkg.flags : null,
+      tagMap: pkg.tagFieldAndValueMap || null,
+      buyerMessage: oi.buyerMessage || null,
+      sellerNote: oi.sellerNote || null,
       operateStatus: pkg.appPackageOperateStatus || null,
       purchaseStatus: pkg.appPurchaseStatus || null,
       // ★妙手自身 tab 分组值(waitProcess/waitShip/submitPlatform/waitReceiverConfirm/closed/isolation)

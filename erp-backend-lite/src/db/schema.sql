@@ -960,7 +960,9 @@ CREATE TABLE IF NOT EXISTS op_package (
   shipped_at              TEXT,
   delivered_at            TEXT,
   is_ignored              INTEGER DEFAULT 0,    -- 搁置
-  note                    TEXT,
+  note                    TEXT,                 -- 本地备注(妙手同步 COALESCE 覆盖,也可本地编辑)
+  tags                    TEXT,                 -- 本地标签(逗号分隔,本地编辑,妙手不覆盖)
+  ms_flag_remarks         TEXT,                 -- 妙手旗帜备注(从 miaoshou_package.flag_remarks 同步,只读展示)
   gmt_create              TEXT,
   gmt_modified            TEXT
 );
@@ -1109,6 +1111,11 @@ CREATE TABLE IF NOT EXISTS miaoshou_package (
   gmt_order_start     TEXT,                   -- 下单时间
   weighing_weight     REAL,                   -- 称重重量(g)
   note                TEXT,                   -- 本地备注(appNote)
+  flag_remarks        TEXT,                   -- 妙手旗帜备注(操作员标记,如 "linrh-1688" 采购归属)
+  flags_json          TEXT,                   -- 妙手旗帜 ID 数组 JSON
+  tag_map_json        TEXT,                   -- 妙手系统标签 JSON(如 fulfillmentType)
+  buyer_message       TEXT,                   -- 买家留言
+  seller_note         TEXT,                   -- 卖家备注
   operate_status      TEXT,                   -- 妙手操作状态(原值)
   app_package_tab     TEXT,                   -- 妙手 tab 分组(waitProcess/waitShip/submitPlatform/waitReceiverConfirm/closed/isolation)
   platform_package_status TEXT,               -- 平台包裹状态(cancelled/...)

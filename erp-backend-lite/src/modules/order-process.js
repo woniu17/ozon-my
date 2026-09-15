@@ -210,6 +210,7 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       keyword: q.keyword,
       storeId: q.storeId,
       purchaseStatus: q.purchaseStatus,
+      noteFilter: q.noteFilter, // ''|'has'|'none' 备注筛选(2026-09-15)
       arrived: q.arrived,
       cancelInitiator: q.cancelInitiator, // client/ozon/seller(仅 cancelled tab 用)
       globalKeyword: q.globalKeyword,
@@ -276,6 +277,7 @@ router.get('/admin/api/order-process/summary', (req, res, next) => {
       keyword: q.keyword,
       storeId: q.storeId,
       purchaseStatus: q.purchaseStatus,
+      noteFilter: q.noteFilter,
       arrived: q.arrived,
       cancelInitiator: q.cancelInitiator,
       globalKeyword: q.globalKeyword,
@@ -503,6 +505,35 @@ router.post('/admin/api/order-process/ignore', (req, res, next) => {
     if (!packageId) return res.status(400).json({ ok: false, message: 'packageId 必填' });
     orderPackageDao.setIgnored(packageId, !!req.body?.ignored);
     res.json(ok({ packageId, ignored: !!req.body?.ignored }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 更新本地备注/标签(2026-09-15)─────────────────────────
+// body: { packageId, note?: string|null, tags?: string[] }
+// note/tags 不传的字段不动;note 传 null/'' 清空;tags 传空数组清空
+router.post('/admin/api/order-process/package-meta', (req, res, next) => {
+  try {
+    const packageId = Number(req.body?.packageId);
+    if (!packageId) return res.status(400).json({ ok: false, message: 'packageId 必填' });
+    const { note, tags } = req.body || {};
+    if (note === undefined && tags === undefined) {
+      return res.status(400).json({ ok: false, message: 'note/tags 至少传一个' });
+    }
+    if (tags !== undefined && !Array.isArray(tags)) {
+      return res.status(400).json({ ok: false, message: 'tags 须为数组' });
+    }
+    const updated = orderPackageDao.updatePackageMeta(packageId, {
+      note: typeof note === 'string' ? note : note === null ? '' : undefined,
+      tags,
+    });
+    if (!updated) return res.status(404).json({ ok: false, message: '包裹不存在' });
+    res.json(ok({
+      packageId,
+      note: updated.note,
+      tags: updated.tags ? updated.tags.split(',').filter(Boolean) : [],
+    }));
   } catch (e) {
     next(e);
   }

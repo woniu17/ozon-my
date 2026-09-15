@@ -590,7 +590,11 @@ onUnmounted(() => {
               <div class="sub muted">下单 {{ fmtTime(row.gmt_order_start) }}</div>
               <div class="sub muted">同步 {{ fmtTime(row.synced_at) }}</div>
             </td>
-            <td class="ms-note-cell" :title="row.note || ''">{{ row.note || '—' }}</td>
+            <td class="ms-note-cell">
+              <div v-if="row.flag_remarks" class="ms-flag-remarks" title="妙手旗帜备注(操作员标记,如采购归属)">旗:{{ row.flag_remarks }}</div>
+              <div :title="row.note || ''">{{ row.note || (row.flag_remarks ? '' : '—') }}</div>
+              <div v-if="row.buyer_message" class="ms-buyer-message" title="买家留言">买家:{{ row.buyer_message }}</div>
+            </td>
             <td>
               <div class="action-group">
                 <button class="btn btn-ghost btn-sm" @click="openDetail(row)">详情</button>
@@ -631,6 +635,12 @@ onUnmounted(() => {
               }}</span>
           </div>
           <div><span class="dl">本地备注</span>{{ detail.package.note || '—' }}</div>
+          <div><span class="dl">旗帜备注</span>
+            <span v-if="detail.package.flag_remarks" class="tag tag-warn" :title="'妙手旗帜备注(操作员标记)'">{{ detail.package.flag_remarks }}</span>
+            <span v-else class="muted">—</span>
+          </div>
+          <div v-if="detail.package.buyer_message"><span class="dl">买家留言</span>{{ detail.package.buyer_message }}</div>
+          <div v-if="detail.package.seller_note"><span class="dl">卖家备注</span>{{ detail.package.seller_note }}</div>
           <div><span class="dl">本地关联</span>
             <template v-if="detail.package.local_pkg_id">
               <span class="tag tag-info">已关联本地包裹 #{{ detail.package.local_pkg_id }}</span>
@@ -969,6 +979,15 @@ onUnmounted(() => {
   white-space: nowrap;
   font-size: 12px;
   color: var(--text-secondary, #6b7280);
+}
+
+/* 旗帜备注(琥珀,同订单处理页 pkg-tag-ms 配色)/买家留言(红) */
+.ms-flag-remarks {
+  color: #b45309;
+  font-weight: 600;
+}
+.ms-buyer-message {
+  color: #dc2626;
 }
 
 /* ── 产品信息列(对齐订单处理页)── */
