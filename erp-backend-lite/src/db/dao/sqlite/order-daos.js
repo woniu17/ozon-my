@@ -1473,7 +1473,8 @@ function scanShipCorrectWeight(packageId, weightG) {
  */
 function listShippedPackages({ startAt, endAt, page, pageSize } = {}) {
   const pageNo = Math.max(1, Number(page) || 1);
-  const size = Math.min(100, Math.max(1, Number(pageSize) || 20));
+  // 上限 500:扫描发货记录不分页,前端一次拉全量滚动浏览(2026-09-16)
+  const size = Math.min(500, Math.max(1, Number(pageSize) || 20));
   const where = `p.waybill_printed_at IS NOT NULL AND p.waybill_printed_at >= ? AND p.waybill_printed_at < ?`;
   const params = [startAt, endAt];
   const total = db

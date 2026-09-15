@@ -729,8 +729,8 @@ router.post('/admin/api/order-process/scan-ship/correct-weight', (req, res, next
   }
 });
 
-// 发货记录:今日/昨日已交运包裹(按 waybill_printed_at 北京时间日界切分,倒序分页)
-// query: day=today|yesterday(默认 today), page(默认1), pageSize(默认20,≤100)
+// 发货记录:今日/昨日已交运包裹(按 waybill_printed_at 北京时间日界切分,倒序)
+// query: day=today|yesterday(默认 today), page(默认1), pageSize(默认20,≤500;前端不分页一次拉全量)
 // 响应含:items(产品行)/purchaseLinks/weightG+weightSource(富化同 /list)
 router.get('/admin/api/order-process/scan-ship/records', (req, res, next) => {
   try {

@@ -13,7 +13,6 @@ import {
 import { pickLabelPrinter, printLabelImage, getAgentPrinters } from '../api/print-agent.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
-import AppPager from '../components/AppPager.vue';
 
 const { show } = useToast();
 const confirmStore = useConfirmStore();
@@ -50,7 +49,8 @@ const records = reactive({
   tab: 'today',
   loading: false,
   rows: [],
-  pager: { current: 1, total: 0, pageSize: 20 },
+  total: 0,
+  pageSize: 500, // 不分页:一次拉全量,列表内部滚动浏览
 });
 
 // ── 展示工具(对齐 OrderProcess)──────────────────────────
@@ -434,16 +434,16 @@ async function loadRecords() {
   try {
     const data = await getScanShipRecords({
       day: records.tab,
-      page: records.pager.current,
-      pageSize: records.pager.pageSize,
+      page: 1,
+      pageSize: records.pageSize,
     });
     records.rows = data?.packages || [];
-    records.pager.total = data?.total || 0;
+    records.total = data?.total || 0;
     counts[records.tab] = data?.total || 0;
   } catch (err) {
     show(err.message || String(err), 'error');
     records.rows = [];
-    records.pager.total = 0;
+    records.total = 0;
   } finally {
     records.loading = false;
   }
@@ -465,12 +465,6 @@ function loadCounts() {
 function switchRecordTab(key) {
   if (records.tab === key) return;
   records.tab = key;
-  records.pager.current = 1;
-  loadRecords();
-}
-
-function onRecordPage(page) {
-  records.pager.current = page;
   loadRecords();
 }
 
@@ -479,11 +473,11 @@ async function refreshRecords() {
   try {
     const data = await getScanShipRecords({
       day: records.tab,
-      page: records.pager.current,
-      pageSize: records.pager.pageSize,
+      page: 1,
+      pageSize: records.pageSize,
     });
     records.rows = data?.packages || [];
-    records.pager.total = data?.total || 0;
+    records.total = data?.total || 0;
     counts[records.tab] = data?.total || 0;
   } catch { /* 静默 */ }
   loadCounts();
@@ -847,14 +841,6 @@ onMounted(() => {
             </div>
           </div>
         </div>
-
-        <AppPager
-          v-if="records.pager.total > records.pager.pageSize"
-          :modelValue="records.pager.current"
-          :total="records.pager.total"
-          :pageSize="records.pager.pageSize"
-          @update:modelValue="onRecordPage"
-        />
       </aside>
     </div>
   </div>
@@ -1384,9 +1370,9 @@ onMounted(() => {
   padding: 28px 0;
   font-size: 13px;
 }
-/* 记录列表滚动区(2026-09-15):限高内部滚动,分页器固定底部不随滚动 */
+/* 记录列表滚动区(2026-09-16):不分页一次拉全量,限高内部滚动 */
 .records-list {
-  max-height: calc(100vh - 240px);
+  max-height: 380px;
   min-height: 120px;
   overflow-y: auto;
   overscroll-behavior: contain;
