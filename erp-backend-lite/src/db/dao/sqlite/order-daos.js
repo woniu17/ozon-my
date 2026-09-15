@@ -1443,6 +1443,29 @@ function scanShipSubmit(packageId, weightG) {
   };
 }
 
+/** 扫描发货更正重量:交运后(waybill_printed_at 非空)人工修正发货重量
+ *  与妙手同步的"交运锁定"约束不同——锁定仅针对同步任务自动覆盖,人工更正是显式操作,允许写
+ *  @returns {{ found: false } | { found: true, shipped, operateStatus, oldWeightG }}
+ */
+function scanShipCorrectWeight(packageId, weightG) {
+  const row = db
+    .prepare(`SELECT operate_status, waybill_printed_at, weight FROM op_package WHERE id = ?`)
+    .get(packageId);
+  if (!row) return { found: false };
+  const shipped = row.waybill_printed_at != null;
+  if (shipped) {
+    db.prepare(`UPDATE op_package SET weight = ?, gmt_modified = ? WHERE id = ?`).run(
+      weightG, nowIso(), packageId
+    );
+  }
+  return {
+    found: true,
+    shipped,
+    operateStatus: row.operate_status,
+    oldWeightG: row.weight != null ? Number(row.weight) : null,
+  };
+}
+
 /** 发货记录:按 waybill_printed_at UTC 区间查已交运包裹(扫描发货页右侧栏)
  *  @param {Object} filters { startAt, endAt, page, pageSize }
  *  startAt/endAt 为 UTC ISO 字符串,区间 [startAt, endAt);按交运时间倒序
@@ -1850,6 +1873,7 @@ export const orderPackageDao = {
   markWaybillPrinted,
   getPackagePostings,
   scanShipSubmit,
+  scanShipCorrectWeight,
   listShippedPackages,
   lookupPurchase,
   syncFromMiaoshou,

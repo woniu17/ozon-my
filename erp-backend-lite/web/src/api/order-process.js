@@ -91,6 +91,13 @@ export function scanShipSubmit(packageId, weightG) {
   return request.post('/admin/api/order-process/scan-ship/submit', { packageId, weightG });
 }
 
+// 更正重量(交运后人工修正发货重量;仅更新 weight,不改状态/交运时间)
+// body: { packageId, weightG }  weightG: 正整数克 1~50000
+// 返回 { updated, oldWeightG, weightG }
+export function correctShipWeight(packageId, weightG) {
+  return request.post('/admin/api/order-process/scan-ship/correct-weight', { packageId, weightG });
+}
+
 // 发货记录(今日/昨日已交运包裹,北京时间日界,倒序分页)
 // params: { day: 'today'|'yesterday', page, pageSize }
 export function getScanShipRecords(params) {

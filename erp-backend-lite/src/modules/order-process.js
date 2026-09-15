@@ -13,6 +13,7 @@
 //   POST /admin/api/order-process/print-label     标记已打印面单(流转交运)
 //   POST /admin/api/order-process/ship            备货(Ozon /v4/posting/fbs/ship 搜集订单,不拆分)
 //   POST /admin/api/order-process/scan-ship/submit   扫描发货:提交重量(权威状态校验,仅 wait_ship 落库)
+//   POST /admin/api/order-process/scan-ship/correct-weight  扫描发货:交运后更正重量(仅更新 weight)
 //   GET  /admin/api/order-process/scan-ship/records  扫描发货:发货记录(今日/昨日,北京时间日界)
 //   POST /admin/api/order-process/sync-run        手动触发 Ozon 订单增量同步(双接口)
 //   POST /admin/api/order-process/sync-all-list  手动触发 /v4/posting/fbs/list 全量同步
@@ -699,6 +700,30 @@ router.post('/admin/api/order-process/scan-ship/submit', (req, res, next) => {
         message,
       })
     );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 更正重量:交运后(打印发货后)人工修正发货重量
+// 仅更新 op_package.weight,不改交运时间/状态;利润中国际配送(估)随之按新重量变化
+// body: { packageId, weightG }  weightG: 正整数克 1~50000
+router.post('/admin/api/order-process/scan-ship/correct-weight', (req, res, next) => {
+  try {
+    const packageId = Number(req.body?.packageId);
+    const weightG = Number(req.body?.weightG);
+    if (!Number.isInteger(packageId) || packageId <= 0) {
+      return res.status(400).json({ ok: false, message: 'packageId 必填' });
+    }
+    if (!Number.isInteger(weightG) || weightG < 1 || weightG > 50000) {
+      return res.status(400).json({ ok: false, message: 'weightG 必须为 1~50000 的整数(克)' });
+    }
+    const r = orderPackageDao.scanShipCorrectWeight(packageId, weightG);
+    if (!r.found) return res.status(404).json({ ok: false, message: '包裹不存在' });
+    if (!r.shipped) {
+      return res.status(400).json({ ok: false, message: '仅已交运(打印发货后)的包裹可更正重量' });
+    }
+    res.json(ok({ updated: true, oldWeightG: r.oldWeightG, weightG }));
   } catch (e) {
     next(e);
   }

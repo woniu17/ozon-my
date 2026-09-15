@@ -3,10 +3,11 @@
 // 打包发货场景:扫采购快递单号/采购单号/Ozon单号 → 全局搜索定位包裹 → 录入实物重量
 // → wait_ship 自动打印面单并流转交运;非 wait_ship 提示状态问题不动状态
 // 键盘流:扫描框 Enter=搜索 → 重量框 Enter=发货 → 终态自动回焦扫描框(扫码枪零鼠标作业)
+// 2026-09-15:卡片显示利润(估/实+销售/成本利润率),打印发货后按称重重算;交运后可更正重量
 import { ref, reactive, computed, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-  getOrderList, scanShipSubmit, getScanShipRecords, fetchPackageLabel, markPrinted,
+  getOrderList, scanShipSubmit, correctShipWeight, getScanShipRecords, fetchPackageLabel, markPrinted,
 } from '../api/order-process.js';
 import { pickLabelPrinter, printLabelImage, getAgentPrinters } from '../api/print-agent.js';
 import { useToast } from '../components/useToast.js';
@@ -27,6 +28,7 @@ const printingPkgId = ref(0);     // 打印互斥(与 OrderProcess printingId �
 const retryPkgIds = ref(new Set()); // 重量已保存但打印失败的包裹(重试只走打印+流转)
 const agentOnline = ref(null);    // 菜鸟组件探测:null=探测中 true/false
 const weightEls = {};             // 动态 ref:重量输入框(pkgId → el)
+const correctEls = {};            // 动态 ref:更正重量输入框(pkgId → el)
 
 // 结果横幅(aria-live 播报;内容保留至下一次搜索)
 const banner = reactive({ type: '', text: '' }); // type: 'ok'|'err'|'info'
@@ -34,6 +36,9 @@ const banner = reactive({ type: '', text: '' }); // type: 'ok'|'err'|'info'
 // 重量输入值与错误(pkgId → string / error message)
 const weightValues = reactive({});
 const weightErrors = reactive({});
+
+// ── 更正重量(交运后人工修正,2026-09)──────────────────────
+const correct = reactive({ pkgId: 0, value: '', err: '', saving: false });
 
 // ── 发货记录(右侧栏)──────────────────────────────────────
 const RECORD_TABS = [
@@ -90,6 +95,44 @@ function platformLabel(p) {
 function fmtMoney(n) {
   if (n == null) return '—';
   return '¥' + Number(n).toFixed(2);
+}
+// 利润率格式化:null 返回 —;后端 computeProfit 已 ×10000/100 转为百分数(如 23.45)
+function fmtRate(n) {
+  if (n == null) return '—';
+  return Number(n).toFixed(2) + '%';
+}
+
+// ── 利润(2026-09):数据源 /list 注入的 pkg.profit(后端 computeProfit 双口径)──
+// 估/实标记与 OrderProcess 金额列同源:estimated=false 真实应计,否则预估
+function profitEstimated(pkg) {
+  return pkg.profit ? pkg.profit.estimated !== false : true;
+}
+
+// 打印发货/更正重量后,按新重量本地重算利润(预估口径,公式与后端 computeProfit 一致)
+// 真实应计口径(estimated=false)/已取消/已退货的利润不随重量变化,不重算
+const EST_COMMISSION_RATE = 0.16;   // 预估佣金率(对齐后端 DEFAULT_COMMISSION_RATE)
+const DELIVERY_BASE_CNY = 3.37;     // 国际配送费公式(对齐后端)
+const DELIVERY_PER_G_CNY = 0.0281;
+function recomputeProfitByWeight(pkg, g) {
+  const p = pkg.profit;
+  if (!p || p.estimated === false || p.cancelled || p.returned) return;
+  const orderAmount = Number(pkg.orderAmount) || 0;
+  const purchase = Number(pkg.totalPurchaseAmount) || 0;
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const commission = round2(orderAmount * EST_COMMISSION_RATE);
+  const delivery = round2(DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * g);
+  const escrow = round2(orderAmount - commission - delivery);
+  const profit = round2(escrow - purchase);
+  p.commission = commission;
+  p.delivery = delivery;
+  p.escrow = escrow;
+  p.profit = profit;
+  p.profitRateCost = purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null;
+  p.profitRateSale = orderAmount > 0 ? Math.round((profit / orderAmount) * 10000) / 100 : null;
+  p.estimated = true;
+  p.weightG = g;
+  p.weightSource = 'ship';
+  delete p.weightMissing;
 }
 function fmtTime(t) {
   if (!t) return '—';
@@ -226,6 +269,8 @@ async function onSubmitShip(pkg) {
     pkg.operateStatus = 'ship_success';
     pkg.weightG = g;
     pkg.weightSource = 'ship';
+    // 打印发货后按称重重量重算利润(预估口径,国际配送费随重量变化)
+    recomputeProfitByWeight(pkg, g);
     retryPkgIds.value.delete(pkg.id);
     refreshRecords();
     focusScan();
@@ -297,6 +342,45 @@ async function onReprint(pkg) {
     focusScan();
   } finally {
     printingPkgId.value = 0;
+  }
+}
+
+// ── 更正重量(已交运卡片:人工修正发货重量,利润随之重算)──
+function onStartCorrect(pkg) {
+  correct.pkgId = pkg.id;
+  correct.value = pkg.weightG != null ? String(Math.floor(pkg.weightG)) : '';
+  correct.err = '';
+  nextTick(() => correctEls[pkg.id]?.focus());
+}
+function onCancelCorrect() {
+  correct.pkgId = 0;
+  correct.err = '';
+}
+async function onSubmitCorrect(pkg) {
+  if (correct.saving) return;
+  const raw = String(correct.value).trim();
+  const g = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(g) || g < 1 || g > 50000) {
+    correct.err = '重量须为 1~50000 的整数(克)';
+    correctEls[pkg.id]?.focus();
+    return;
+  }
+  correct.saving = true;
+  try {
+    await correctShipWeight(pkg.id, g);
+    pkg.weightG = g;
+    pkg.weightSource = 'ship';
+    // 更正重量后本地重算利润(预估口径,国际配送费随重量变化)
+    recomputeProfitByWeight(pkg, g);
+    banner.type = 'ok';
+    banner.text = `✓ ${pkg.postingNumber} 重量已更正为 ${g}g`;
+    correct.pkgId = 0;
+    correct.err = '';
+    refreshRecords();
+  } catch (err) {
+    correct.err = err?.message || String(err);
+  } finally {
+    correct.saving = false;
   }
 }
 
@@ -455,14 +539,28 @@ onMounted(() => {
                 </div>
                 <div class="order-line">下单 {{ fmtTime(pkg.inProcessAt) }}</div>
                 <div class="order-line">订单金额 {{ fmtMoney(pkg.orderAmount) }}</div>
+                <!-- 利润行:数据源 /list 注入的 pkg.profit(估=预估口径/实=真实应计口径) -->
+                <div
+                  class="order-line order-profit"
+                  title="利润 = 订单金额 − 16%佣金 − 国际配送 − 采购(预估口径,配送按重量公式估算);真实应计口径为 打款 − 采购"
+                >
+                  <span>利润</span>
+                  <span
+                    class="profit-val"
+                    :class="pkg.profit?.profit > 0 ? 'profit-pos' : pkg.profit?.profit < 0 ? 'profit-neg' : 'muted'"
+                  >{{ fmtMoney(pkg.profit?.profit) }}</span>
+                  <span class="tag" :class="profitEstimated(pkg) ? 'tag-warn' : 'tag-ok'" title="估=预估口径 / 实=真实应计口径">{{ profitEstimated(pkg) ? '估' : '实' }}</span>
+                  <span title="销售利润率 = 利润 / 订单金额">销售 {{ fmtRate(pkg.profit?.profitRateSale) }}</span>
+                  <span title="成本利润率 = 利润 / 采购金额">成本 {{ fmtRate(pkg.profit?.profitRateCost) }}</span>
+                </div>
               </div>
 
               <!-- 商品信息(SKU/OfferID 可点击复制,数量独立右列) -->
               <div class="pkg-products">
                 <div v-for="(it, i) in pkg.items" :key="i" class="product-item">
                   <div class="img-hover-wrap">
-                    <img v-if="it.picUrl" :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb70" alt="" />
-                    <div v-else class="thumb70 thumb-empty">—</div>
+                    <img v-if="it.picUrl" :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb140" alt="" />
+                    <div v-else class="thumb140 thumb-empty">—</div>
                     <img v-if="it.picUrl" :src="it.picUrl" referrerpolicy="no-referrer" class="img-preview" alt="" />
                   </div>
                   <div class="product-main">
@@ -504,10 +602,10 @@ onMounted(() => {
                 <div v-for="l in pkg.purchaseLinks" :key="l.id" class="purchase-item">
                   <div class="purchase-imgs">
                     <div v-for="(pi, j) in (l.items || []).slice(0, 3)" :key="j" class="img-hover-wrap">
-                      <img :src="pi.thumbUrl || pi.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb70" alt="" />
+                      <img :src="pi.thumbUrl || pi.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb140" alt="" />
                       <img :src="pi.thumbUrl || pi.picUrl" referrerpolicy="no-referrer" class="img-preview" alt="" />
                     </div>
-                    <span v-if="!l.items?.length" class="thumb70 thumb-empty">—</span>
+                    <span v-if="!l.items?.length" class="thumb140 thumb-empty">—</span>
                     <span v-if="l.items?.length > 3" class="muted sub purchase-more">+{{ l.items.length - 3 }}</span>
                   </div>
                   <div class="purchase-info">
@@ -524,6 +622,13 @@ onMounted(() => {
                       </button>
                     </div>
                     <div class="purchase-line sub muted">采购账号:{{ l.buyerAccount || '—' }}</div>
+                    <!-- 采购金额:分摊到本包裹的金额(口径同 OrderProcess;利润计算即用此口径) -->
+                    <div
+                      class="purchase-line sub muted"
+                      :title="Number(l.paymentAmount) > 0 && Number(l.paymentAmount) !== Number(l.allocatedAmount)
+                        ? `本包裹分摊 ¥${Number(l.allocatedAmount ?? 0).toFixed(2)}(采购单整单 ¥${Number(l.paymentAmount).toFixed(2)},拼单按数量分摊)`
+                        : '本包裹采购分摊金额'"
+                    >采购金额:{{ fmtMoney(l.allocatedAmount) }}</div>
                     <div class="purchase-line sub muted">
                       物流:{{ l.poLogisticsNo ? `${l.poLogisticsCompany || ''} ${l.poLogisticsNo}`.trim() : '—' }}
                       <button
@@ -572,6 +677,37 @@ onMounted(() => {
             </template>
             <template v-else-if="pkg.operateStatus === 'ship_success'">
               <span class="tag tag-ok">已交运 {{ fmtTime(pkg.shippedAt || pkg.waybillPrintedAt) }}</span>
+              <span class="ref-weight" :title="WEIGHT_SOURCE_LABELS[pkg.weightSource] || ''">称重 {{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span>
+              <!-- 更正重量:打印发货后人工修正(内联输入,Enter 保存 / Esc 取消) -->
+              <template v-if="correct.pkgId === pkg.id">
+                <input
+                  :ref="(el) => (correctEls[pkg.id] = el)"
+                  v-model="correct.value"
+                  class="weight-input correct-input"
+                  :class="{ 'weight-invalid': correct.err }"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  :aria-label="'更正重量(克)-' + pkg.postingNumber"
+                  @keydown.enter="onSubmitCorrect(pkg)"
+                  @keydown.escape="onCancelCorrect"
+                  @input="correct.err = ''"
+                />
+                <button
+                  class="btn btn-primary btn-sm"
+                  :disabled="correct.saving"
+                  @click.stop="onSubmitCorrect(pkg)"
+                >{{ correct.saving ? '保存中…' : '保存更正' }}</button>
+                <button class="btn btn-ghost btn-sm" @click.stop="onCancelCorrect">取消</button>
+              </template>
+              <template v-else>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  :disabled="printingPkgId !== 0"
+                  title="打印发货后人工修正发货重量,利润(估)随之更新"
+                  @click.stop="onStartCorrect(pkg)"
+                >更正重量</button>
+              </template>
               <button
                 class="btn btn-ghost btn-sm"
                 :disabled="printingPkgId !== 0"
@@ -585,6 +721,9 @@ onMounted(() => {
           </div>
           <div v-if="weightErrors[pkg.id]" :id="'weight-err-' + pkg.id" class="error-text weight-err">
             {{ weightErrors[pkg.id] }}
+          </div>
+          <div v-if="correct.pkgId === pkg.id && correct.err" class="error-text weight-err">
+            {{ correct.err }}
           </div>
         </div>
       </section>
@@ -853,6 +992,23 @@ onMounted(() => {
   font-weight: 600;
   letter-spacing: 0.3px;
 }
+/* 利润行:金额+估/实+两档利润率 */
+.order-profit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+}
+.profit-val {
+  font-weight: 600;
+}
+.profit-pos {
+  color: var(--success);
+}
+.profit-neg {
+  color: var(--danger);
+}
 
 .pkg-products {
   margin-top: 10px;
@@ -941,10 +1097,10 @@ onMounted(() => {
   }
 }
 
-/* 70x70 缩略图 + 悬浮放大预览 */
-.thumb70 {
-  width: 70px;
-  height: 70px;
+/* 140x140 缩略图(商品图/采购图,2026-09 要求) + 悬浮放大预览 */
+.thumb140 {
+  width: 140px;
+  height: 140px;
   object-fit: cover;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -998,7 +1154,7 @@ onMounted(() => {
   gap: 6px;
   flex-wrap: wrap;
   flex-shrink: 0;
-  max-width: 230px;
+  max-width: 300px; /* 2 列 140 图(140×2+6) */
 }
 .purchase-more {
   align-self: center;
@@ -1068,6 +1224,12 @@ onMounted(() => {
 }
 .weight-input.weight-invalid {
   border-color: var(--danger);
+}
+/* 更正重量输入框(已交运卡片内联,略窄) */
+.correct-input {
+  width: 120px;
+  height: 34px;
+  font-size: 15px;
 }
 .weight-err {
   margin: 6px 0 0;
