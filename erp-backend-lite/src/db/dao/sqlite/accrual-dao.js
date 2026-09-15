@@ -94,11 +94,17 @@ export async function getAccrualTypes(fetcher) {
 }
 
 /** 待拉应计货件清单(每店铺每轮限量,防单轮过载)
- *  条件:已完成/已取消 + 下单 90 天内,且满足以下之一:
+ *  条件:已完成/已取消 + 下单 365 天内,且满足以下之一:
  *    1) 从未拉过
  *    2) 拉过但空(accrual_total IS NULL,24h 重试,防 Ozon 滞后生成)
  *    3) 拉到过但缺关键类型(type 66 代理佣金/67 国际配送,不受 24h 限制)
  *       Ozon 应计分批返回,首次可能只返回 SaleCommission,需重拉补全
+ *  窗口 365 天(2026-09-16,原 90 天):
+ *    历史订单全量回补导入时,老单(如下单 6 个月后才入库)会被 90 天窗口
+ *    永久排除在队列外,应计永远拉不到,卡死在"已采购未结算"不进"已成功"。
+ *    放宽到 365 天对齐 backfill 上限;已拉且 66/67 齐全的单不会重复进队列,
+ *    放宽窗口只影响"从未拉过"的老单,由每 5 分钟定时轮自动消化(每轮 2000/店)。
+ *    实测 Ozon /v1/finance/accrual/postings 对数月前的老 posting 照常返回应计。
  */
 export function findPendingAccrualPostings(storeId, limit = 400) {
   return db
@@ -121,7 +127,7 @@ export function findPendingAccrualPostings(storeId, limit = 400) {
              AND p.id NOT IN (SELECT package_id FROM op_accrual WHERE type_id IN (66, 67))
            )
          )
-         AND o.in_process_at > datetime('now', '-90 days')
+         AND o.in_process_at > datetime('now', '-365 days')
        -- 优先级:从未拉过的(IS NULL) → 空应计(24h) → 缺类型;同优先级内按下单时间倒序
        ORDER BY (p.accrual_synced_at IS NULL) DESC,
                 (p.accrual_total IS NULL) DESC,
