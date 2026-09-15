@@ -466,6 +466,12 @@ const CANCEL_REASON_CN = {
   'Отменено продавцом': '卖家取消',
   'Не соответствует требованиям перевозчика': '不符合承运商要求',
   'Отправление не прошло таможенное оформление': '货件未通过海关清关',
+  // 以下为 ERP 库实际出现过的补充(2026-09-15,按真实订单 cancellation_json 提取)
+  'Не удалось доставить заказ': '无法配送订单',
+  'Покупатель не забрал заказ': '买家未取货',
+  'Вы не отгрузили заказ вовремя': '您未按时发货',
+  'Вы отменили заказ': '您取消了订单',
+  'Проверка товара на соответствие описанию в карточке': 'Ozon质检：核对商品与描述是否相符',
 };
 
 // "Покупатель отказался при вручении: <子原因>" 拒收前缀系列
@@ -481,9 +487,19 @@ const REFUSAL_REASON_CN = {
   'не подходит размер / фасон / габариты': '尺寸/款式/大小不合适',
   'цвет / фасон / комплектация не соответствует описанию': '颜色/款式/配置与描述不符',
   'не соответствует заказанному товару': '与所订商品不符',
+  // ERP 库实际出现过的补充(2026-09-15)
+  'неполная комплектация': '商品配件不全',
+  'в заказе не тот товар': '订单中的商品不对',
 };
 
-function formatCancelReason(reason) {
+// "Покупатель отменил заказ: <子原因>" 买家取消前缀系列
+const BUYER_CANCEL_PREFIX_RE = /^Покупатель отменил заказ:?\s*(.*)$/;
+const BUYER_CANCEL_REASON_CN = {
+  'не устроил срок доставки': '配送时效不满意',
+  'нашел дешевле': '找到更便宜的',
+};
+
+export function formatCancelReason(reason) {
   if (reason == null) return null;
   const norm = String(reason).replace(/ё/g, 'е').trim();
   if (CANCEL_REASON_CN[norm]) return CANCEL_REASON_CN[norm];
@@ -491,6 +507,11 @@ function formatCancelReason(reason) {
   if (m) {
     const sub = m[1].trim();
     return `买家拒收${sub ? `：${REFUSAL_REASON_CN[sub] ?? sub}` : ''}`;
+  }
+  const c = norm.match(BUYER_CANCEL_PREFIX_RE);
+  if (c) {
+    const sub = c[1].trim();
+    return `买家取消订单${sub ? `：${BUYER_CANCEL_REASON_CN[sub] ?? sub}` : ''}`;
   }
   return String(reason); // 未收录的俄语/英语原因原样返回
 }
