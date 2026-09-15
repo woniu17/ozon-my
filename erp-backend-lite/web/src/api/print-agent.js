@@ -1,5 +1,5 @@
 // 菜鸟打印组件 WebSocket 客户端(官方协议 docId=107014,实测组件 1.5.3.0)
-// 组件为本机常驻进程:http 页面连 ws://127.0.0.1:13528,https 页面连 wss://127.0.0.1:13529
+// 组件为本机常驻进程:http 页面连 ws://127.0.0.1:13528,https 页面连 wss://localhost:13529(证书原因见 wsUrl)
 // 打印链路:Ozon 面单 PDF → pdfjs 前端渲染为 PNG → CNPL 图片模板(/cnpl/label-image.xml)
 //          → 组件把图片按 70×130mm 标签纸排版(宽 70 等比缩放,顶部对齐)
 // 预览链路:同上但 task.preview=true,组件只渲染不出纸;1.5.x 组件先回裸 ack(仅 status:success),
@@ -15,7 +15,9 @@ const taskWaiters = new Map(); // taskID → 任务通知 handler(打印进度/�
 const NOTIFY_CMDS = new Set(['notifyPrintResult', 'notifyDocResult', 'notifyTaskResult']);
 
 function wsUrl() {
-  return location.protocol === 'https:' ? 'wss://127.0.0.1:13529' : 'ws://127.0.0.1:13528';
+  // wss 必须用 localhost 而非 127.0.0.1:组件的自签名证书只签给 localhost(无 127.0.0.1 的 IP SAN),
+  // Edge 校验 wss 证书时 127.0.0.1 握手直接失败(close 1006,2026-09-15 实测);ws 明文不校验证书,127.0.0.1 不受影响
+  return location.protocol === 'https:' ? 'wss://localhost:13529' : 'ws://127.0.0.1:13528';
 }
 
 function genId() {
