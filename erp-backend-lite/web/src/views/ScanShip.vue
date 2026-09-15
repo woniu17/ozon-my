@@ -517,6 +517,7 @@ onMounted(() => {
           aria-label="扫描输入"
           placeholder="扫描/输入 采购快递单号 · 采购单号 · Ozon订单号"
           :readonly="searching"
+          @focus="$event.target.select()"
           @keydown.enter="doSearch"
           @keydown="onScanKeydown"
         />
@@ -703,6 +704,7 @@ onMounted(() => {
                 autocomplete="off"
                 :disabled="selectedId !== pkg.id || printingPkgId === pkg.id"
                 :aria-describedby="weightErrors[pkg.id] ? 'weight-err-' + pkg.id : undefined"
+                @focus="$event.target.select()"
                 @keydown.enter="onSubmitShip(pkg)"
                 @input="weightErrors[pkg.id] = ''"
               />
@@ -729,6 +731,7 @@ onMounted(() => {
                   inputmode="numeric"
                   autocomplete="off"
                   :aria-label="'更正重量(克)-' + pkg.postingNumber"
+                  @focus="$event.target.select()"
                   @keydown.enter="onSubmitCorrect(pkg)"
                   @keydown.escape="onCancelCorrect"
                   @input="correct.err = ''"
