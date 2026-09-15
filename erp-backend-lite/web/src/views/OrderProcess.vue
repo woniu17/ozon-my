@@ -1082,11 +1082,12 @@ async function onPddSyncBridgeMessage(ev) {
 }
 
 // ── 统一订单导入 store(按 tabKey 分账号存储,切 tab 互不影响)──
-// importStores: tabKey → { orders, loading, error, tab, selected }
+// importStores: tabKey → { orders, loading, error, tab, selected, searched }
+// searched:订单号搜索命中的订单(置顶展示;刷新列表不丢,勾选随列表刷新保留)
 const importStores = reactive({});
 function storeFor(key) {
   if (!importStores[key]) {
-    importStores[key] = { orders: [], loading: false, error: '', tab: 'all', selected: [] };
+    importStores[key] = { orders: [], loading: false, error: '', tab: 'all', selected: [], searched: [] };
   }
   return importStores[key];
 }
@@ -1101,7 +1102,9 @@ async function loadOrders(tabKey) {
   const st = storeFor(tabKey);
   st.loading = true;
   st.error = '';
-  st.selected = [];
+  // 列表勾选清空;搜索命中的订单是显式操作结果,保留其勾选
+  const keepSn = new Set(st.searched.map((o) => o.orderSn));
+  st.selected = st.selected.filter((s) => keepSn.has(s));
   try {
     const resp = await platformOrdersReq(def.platform, { tab: st.tab, size: 30, account: def.account });
     if (!resp.ok) throw new Error(resp.error || '获取订单失败');
@@ -1155,8 +1158,12 @@ const currentPlatformLogin = computed(() => {
   return d ? (platformLogin[`${d.platform}:${d.account}`] || 'unknown') : 'unknown';
 });
 
-// 当前 tab 的 orders / loading / error / selected
-const importOrders = computed(() => currentStore.value.orders);
+// 当前 tab 的 orders(搜索命中置顶去重)/ loading / error / selected
+const importOrders = computed(() => {
+  const st = currentStore.value;
+  const inList = new Set(st.orders.map((o) => o.orderSn));
+  return [...st.searched.filter((o) => !inList.has(o.orderSn)), ...st.orders];
+});
 const importLoading = computed(() => currentStore.value.loading);
 const importError = computed(() => currentStore.value.error);
 const importSelected = computed({
@@ -1182,7 +1189,7 @@ const allSelectedOrders = computed(() => {
   for (const t of importAccountTabs.value) {
     const st = importStores[t.key];
     if (!st) continue;
-    for (const o of st.orders) {
+    for (const o of [...(st.searched || []), ...st.orders]) {
       if (st.selected.includes(o.orderSn) && !restoredSnKeys.value.has(`${PLATFORM_TAB_META[t.platform]?.platformVal}:${o.orderSn}`)) {
         sel.push({ ...o, _platform: PLATFORM_TAB_META[t.platform]?.platformVal, _account: t.account });
       }
@@ -1201,6 +1208,8 @@ const newSelectedTotal = computed(() =>
 function switchImportTab(t) {
   if (importTab.value === t || importLoading.value) return;
   importTab.value = t;
+  importSearch.keyword = '';
+  importSearch.error = '';
   if (t === 'manual') {
     // 切到手动录入:清空全部账号已勾选的平台采购订单,平台改为其它
     for (const tabDef of importAccountTabs.value) {
@@ -1219,6 +1228,36 @@ function switchImportTab(t) {
 function switchImportSubTab(t) {
   importSubTab.value = t;
   if (importTab.value !== 'manual') loadOrders(importTab.value);
+}
+
+// ── 1688 订单号搜索(2026-09-16,先支持 1688;后端跨全部 1688 账号聚合搜索)──
+// 命中的订单置顶插入当前 tab 列表并自动勾选;后端返回结构与列表订单逐字段一致
+const importSearch = reactive({ keyword: '', loading: false, error: '' });
+const isAliTab = computed(() => currentTabDef.value?.platform === 'ali1688');
+async function onSearchImportOrder() {
+  const sn = importSearch.keyword.trim();
+  if (!sn || importSearch.loading) return;
+  importSearch.loading = true;
+  importSearch.error = '';
+  try {
+    const data = await searchPlatformOrder('ali1688', sn);
+    const found = data?.result || null;
+    if (!found?.orderSn) {
+      importSearch.error = `未找到订单 ${sn}(单号不存在,或不属于已配置的 1688 账号)`;
+      return;
+    }
+    const st = currentStore.value;
+    // 置顶插入搜索区(去重),并自动勾选(已取消/已关联的不勾)
+    st.searched = [found, ...st.searched.filter((o) => o.orderSn !== found.orderSn)];
+    if (!isImportCancelled(found) && !isRestoredLinked(found) && !st.selected.includes(found.orderSn)) {
+      st.selected.push(found.orderSn);
+    }
+    show(`已找到 1688 订单 ${found.orderSn}(¥${found.amount})`, 'success');
+  } catch (e) {
+    importSearch.error = e?.message || String(e);
+  } finally {
+    importSearch.loading = false;
+  }
 }
 
 // 手动录入 tab:输入金额后均摊到各产品行(同步显示到上方第①块)
@@ -2821,8 +2860,24 @@ onUnmounted(() => {
             <div class="pdd-tabs">
               <button v-for="st in importSubTabs" :key="st.key" class="pdd-tab" :class="{ active: importSubTab === st.key }" @click="switchImportSubTab(st.key)">{{ st.label }}</button>
             </div>
+            <!-- 1688 订单号搜索(2026-09-16 先支持 1688;后端跨全部账号搜) -->
+            <div v-if="isAliTab" class="pdd-search">
+              <input
+                v-model.trim="importSearch.keyword"
+                class="filter-input pdd-search-input"
+                type="text"
+                placeholder="输入 1688 订单号搜索"
+                :disabled="importSearch.loading"
+                @focus="$event.target.select()"
+                @keydown.enter="onSearchImportOrder"
+              />
+              <button class="btn btn-ghost btn-sm" :disabled="importSearch.loading || !importSearch.keyword" @click="onSearchImportOrder">
+                {{ importSearch.loading ? '搜索中…' : '搜索' }}
+              </button>
+            </div>
             <button class="btn btn-ghost btn-sm" :disabled="importLoading" @click="loadOrders(importTab)">刷新</button>
           </div>
+          <div v-if="importSearch.error" class="pdd-error">{{ importSearch.error }}</div>
 
           <div v-if="importLoading" class="empty">加载中…</div>
           <div v-else-if="importError" class="pdd-error">{{ importError }}</div>
@@ -4066,6 +4121,18 @@ a.product-title:hover {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+/* 1688 订单号搜索区(工具栏中部) */
+.pdd-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  margin-right: 8px;
+}
+.pdd-search-input {
+  width: 230px;
 }
 
 .pdd-tabs {
