@@ -63,8 +63,15 @@
   $reset.addEventListener('click', reset);
 
   // ── 拼多多登录同步 ─────────────────────────────────────
+  // 2026-09-15 起直连 ERP 后端:popup 登录(手机号+密码→JWT)后,
+  // 账号列表/cookie 同步均由 background 直接 fetch 后端 API,无需打开 ERP 页面
   const $state = document.getElementById('pdd-login-state');
   const $backend = document.getElementById('erp-backend');
+  const $erpAuthState = document.getElementById('erp-auth-state');
+  const $erpLoginRow = document.getElementById('erp-login-row');
+  const $erpPhone = document.getElementById('erp-phone');
+  const $erpPassword = document.getElementById('erp-password');
+  const $erpLoginBtn = document.getElementById('erp-login-btn');
   const $account = document.getElementById('pdd-account');
   const $accountsHint = document.getElementById('pdd-accounts-hint');
   const $syncBtn = document.getElementById('pdd-sync');
@@ -84,7 +91,7 @@
     });
   }
 
-  // ── ERP 后端选择(参考 qx-ozon;选中后端 = 桥请求只发该后端的 ERP 页面)──
+  // ── ERP 后端选择(参考 qx-ozon;选中后端 = API 直连该地址)──
   async function initBackendSelect() {
     const r = await sendMsg({ type: 'GET_ERP_BACKENDS' });
     if (!r || !r.ok || !Array.isArray(r.candidates)) return;
@@ -98,6 +105,46 @@
     }
   }
 
+  /** 刷新 ERP 登录态展示(未登录时显示登录表单) */
+  async function refreshErpAuth() {
+    const r = await sendMsg({ type: 'ERP_AUTH_STATE' });
+    if (r && r.ok && r.loggedIn) {
+      const who = (r.user && (r.user.phone || r.user.username)) || '已登录';
+      $erpAuthState.textContent = `ERP 已登录：${who}`;
+      $erpAuthState.className = 'pdd-login-state ok';
+      $erpLoginRow.hidden = true;
+    } else {
+      $erpAuthState.textContent = `ERP 未登录(${(r && r.backend) || '未知后端'})`;
+      $erpAuthState.className = 'pdd-login-state err';
+      $erpLoginRow.hidden = false;
+    }
+  }
+
+  $erpLoginBtn.addEventListener('click', async () => {
+    const phoneNumber = ($erpPhone.value || '').trim();
+    const password = $erpPassword.value || '';
+    if (!phoneNumber || !password) {
+      showToast('请输入 ERP 手机号和密码', true);
+      return;
+    }
+    $erpLoginBtn.disabled = true;
+    $erpLoginBtn.textContent = '登录中…';
+    try {
+      const r = await sendMsg({ type: 'ERP_LOGIN', phoneNumber, password });
+      if (r && r.ok) {
+        $erpPassword.value = '';
+        showToast('ERP 登录成功');
+        await refreshErpAuth();
+        await refreshAccounts(); // 登录后立即拉账号列表
+      } else {
+        showToast('登录失败：' + ((r && r.error) || '未知错误'), true);
+      }
+    } finally {
+      $erpLoginBtn.disabled = false;
+      $erpLoginBtn.textContent = '登录';
+    }
+  });
+
   $backend.addEventListener('change', async () => {
     const r = await sendMsg({ type: 'SET_ERP_BACKEND', url: $backend.value });
     if (!r || !r.ok) {
@@ -106,12 +153,15 @@
       return;
     }
     showToast('已切换 ERP 后端');
-    await refreshAccounts(); // 账号列表来自新后端,立即重拉
+    // 登录态/账号列表按后端隔离,切换后都要重查
+    await refreshErpAuth();
+    await refreshAccounts();
   });
 
   async function initPddSync() {
     await initBackendSelect();
-    // 1) 登录态探测
+    await refreshErpAuth();
+    // 拼多多登录态探测(与 ERP 登录态独立)
     const st = await sendMsg({ type: 'PDD_LOGIN_STATE' });
     if (st && st.loggedIn) {
       const who = st.nickname ? `${st.nickname} (${st.uid})` : st.uid;
@@ -123,7 +173,7 @@
       $syncBtn.disabled = true;
       return; // 未登录时不拉账号(同步按钮保持禁用)
     }
-    // 2) 账号列表(ERP 页面桥 + 缓存)
+    // 账号列表(直连 status 接口 + 缓存)
     await refreshAccounts();
   }
 
@@ -141,7 +191,7 @@
       // 记忆上次选择
       const v = await chrome.storage.local.get(ACCOUNT_KEY).catch(() => ({}));
       if (v[ACCOUNT_KEY] && accounts.includes(v[ACCOUNT_KEY])) $account.value = v[ACCOUNT_KEY];
-      $accountsHint.textContent = acc.cached ? '账号列表来自缓存(打开所选后端的 ERP 页面可刷新)' : '';
+      $accountsHint.textContent = acc.cached ? '账号列表来自缓存(ERP 登录后可刷新)' : '';
       $syncBtn.disabled = false;
     } else {
       $accountsHint.textContent = (acc && acc.error) || '获取账号列表失败';
@@ -167,6 +217,8 @@
         showToast(`已同步到 ${d.account || account}(${d.cookieCount || '?'} 条 cookie${d.injected ? ',已注入运行中浏览器' : ',下次拉单自动生效'})`);
       } else {
         showToast('同步失败：' + ((r && r.error) || '未知错误'), true);
+        // token 过期:唤出登录表单
+        if (r && r.authRequired) await refreshErpAuth();
       }
     } finally {
       syncing = false;

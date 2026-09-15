@@ -646,49 +646,97 @@ async function forwardMsEventToErpTabs(msg) {
 // 拼多多单点登录:cloakbrowser 登录会被用户浏览器登录互踢。
 // 方案:用户只在日常浏览器登录 PDD,本扩展把 cookie 同步给 ERP 后台,
 //       后端注入 cloakbrowser(ERP 侧永不登录)。
-// 链路:popup → PDD_POPUP_SYNC → 采 cookie → tabs.sendMessage(ERP_BRIDGE_REQUEST)
-//       → erp-bridge(content script)→ ERP 页面 → POST /platform-orders/pdd-sync-cookies(JWT)
-//       → 结果经 ERP_BRIDGE_RESPONSE 回传 → sendResponse 回 popup
+// 链路(2026-09-15 起直连):popup → PDD_POPUP_SYNC → 采 cookie
+//       → fetch ERP 后端 /admin/api/platform-orders/pdd-sync-cookies(JWT)
+//       → 结果回 popup(不再经 ERP 页面桥,无需打开 ERP 页面)
 // 设计文档: docs/PDD登录同步-概要设计.md §4.2
 
 // 2026-09-14 实测 PDD 已弃用 PDDAccessToken cookie,会话仅靠 pdd_user_id + 其余
 // 会话 cookie(api_uid/pdd_vds 等),Apollo API 亦仅需 Cookie 会话,无需 AccessToken 头
 const PDD_REQUIRED_COOKIES = ['pdd_user_id'];
-// ERP 页面 origin(erp-bridge content script 所在;tabs.query url 匹配需 host 权限)
-const ERP_TAB_URL_PATTERNS = [
-  'http://localhost:3001/admin*',
-  'http://localhost:5173/admin*',
-  'https://yochylin.com/admin*',
-  'https://yochylin.com:17443/admin*',
-  'https://2.tencent.yochylin.com:17443/admin*',
-];
-
-// ── ERP 后端选择(2026-09-15,参考 qx-ozon ERP_BACKEND_CANDIDATES)──
-// 妙手助手经"ERP 页面桥"与后端通信(页面持 JWT),选中后端 = 只向该 origin
-// 的 erp-bridge 页面发桥请求;'auto' 保持广播全部已打开 ERP 页面(旧行为)。
-// 选择持久化在 chrome.storage.local[ERP_BACKEND_STORAGE_KEY]。
+// ── ERP 后端直连(2026-09-15,参考 qx-ozon;替代原"ERP 页面桥"同步链路)──
+// 直连 = popup 用 ERP 手机号+密码登录拿 JWT(按后端地址隔离存 storage.local),
+// 账号列表/cookie 同步改 fetch 后端 API,不再要求 ERP 页面在本浏览器打开。
+// 桥链路(erp-bridge)保留给 ERP 采购弹窗拉单(页面 → 扩展方向,不受影响)。
 const ERP_BACKEND_CANDIDATES = [
-  { label: '自动（第一个应答的已打开 ERP 页面）', url: 'auto' },
   { label: '本地 (localhost:3001)', url: 'http://localhost:3001' },
-  { label: '本地 dev (localhost:5173)', url: 'http://localhost:5173' },
   { label: '远程 (2.tencent.yochylin.com)', url: 'https://2.tencent.yochylin.com:17443' },
   { label: '远程 (yochylin.com)', url: 'https://yochylin.com:17443' },
-  { label: '远程 (yochylin.com 443)', url: 'https://yochylin.com' },
 ];
+const ERP_BACKEND_DEFAULT = ERP_BACKEND_CANDIDATES[0].url;
 const ERP_BACKEND_STORAGE_KEY = 'erpBackendChoice';
+const ERP_AUTH_STORAGE_KEY = 'erpDirectAuth'; // { [backendUrl]: { token, user } }
 
-/** 读当前 ERP 后端选择('auto'=未选/自动) */
+/** 读当前 ERP 后端选择(默认本地 3001) */
 async function getErpBackendChoice() {
   const v = await chrome.storage.local.get(ERP_BACKEND_STORAGE_KEY).catch(() => ({}));
   const choice = v && v[ERP_BACKEND_STORAGE_KEY];
-  return choice && ERP_BACKEND_CANDIDATES.some((c) => c.url === choice) ? choice : 'auto';
+  return choice && ERP_BACKEND_CANDIDATES.some((c) => c.url === choice) ? choice : ERP_BACKEND_DEFAULT;
 }
 
-/** 本次桥请求要查询的 tab 模式列表(选中具体后端时只查该 origin) */
-async function getErpTabPatterns() {
-  const choice = await getErpBackendChoice();
-  if (choice !== 'auto') return [choice + '/admin*'];
-  return ERP_TAB_URL_PATTERNS;
+/** 读指定后端已存登录态(token+user;未登录返回 null) */
+async function getErpAuth(backendUrl) {
+  const v = await chrome.storage.local.get(ERP_AUTH_STORAGE_KEY).catch(() => ({}));
+  return (v && v[ERP_AUTH_STORAGE_KEY] && v[ERP_AUTH_STORAGE_KEY][backendUrl]) || null;
+}
+
+/** 写指定后端登录态(合并保留其他后端) */
+async function setErpAuth(backendUrl, auth) {
+  const v = await chrome.storage.local.get(ERP_AUTH_STORAGE_KEY).catch(() => ({}));
+  const all = (v && v[ERP_AUTH_STORAGE_KEY]) || {};
+  if (auth) all[backendUrl] = auth;
+  else delete all[backendUrl];
+  await chrome.storage.local.set({ [ERP_AUTH_STORAGE_KEY]: all }).catch(() => {});
+}
+
+/** 直连 ERP 后端 API(Bearer + X-Refreshed-Token 滑动续期)
+ *  @returns {ok:true,data} | {ok:false,authRequired?,error} */
+async function erpApi(path, { method = 'GET', body } = {}) {
+  const backend = await getErpBackendChoice();
+  const auth = await getErpAuth(backend);
+  const headers = { 'Content-Type': 'application/json' };
+  if (auth && auth.token) headers.Authorization = 'Bearer ' + auth.token;
+  let resp;
+  try {
+    resp = await fetch(backend + path, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (e) {
+    return { ok: false, error: `无法连接 ${backend}(${e && e.message ? e.message : e})` };
+  }
+  // 滑动续期:后端在 token 剩余有效期 < 50% 时重签下发
+  const refreshed = resp.headers.get('X-Refreshed-Token');
+  if (refreshed && auth) await setErpAuth(backend, { ...auth, token: refreshed });
+  if (resp.status === 401) return { ok: false, authRequired: true, error: 'ERP 登录已过期,请重新登录' };
+  let j = null;
+  try { j = await resp.json(); } catch { /* 非 JSON 响应体 */ }
+  if (!resp.ok) return { ok: false, error: (j && (j.message || j.error)) || `HTTP ${resp.status}` };
+  if (j && j.ok === true) return { ok: true, data: j.data };
+  return { ok: true, data: j };
+}
+
+/** ERP 登录(手机号+密码 → JWT,存当前后端;个人版单用户) */
+async function erpLogin(phoneNumber, password) {
+  if (!phoneNumber || !password) return { ok: false, error: '请输入手机号和密码' };
+  const backend = await getErpBackendChoice();
+  let resp;
+  try {
+    resp = await fetch(backend + '/auth/login-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber, password }),
+    });
+  } catch (e) {
+    return { ok: false, error: `无法连接 ${backend}(${e && e.message ? e.message : e})` };
+  }
+  let j = null;
+  try { j = await resp.json(); } catch { /* 非 JSON 响应体 */ }
+  if (!resp.ok) return { ok: false, error: (j && (j.message || j.error)) || `登录失败 (HTTP ${resp.status})` };
+  if (!j || !j.accessToken) return { ok: false, error: '登录响应缺少 accessToken' };
+  await setErpAuth(backend, { token: j.accessToken, user: j.user || null });
+  return { ok: true, user: j.user || null };
 }
 
 /** PDD 域判定(yangkeduo.com / pinduoduo.com 及子域) */
@@ -761,60 +809,26 @@ async function getPddLoginState() {
   return { loggedIn: true, uid, nickname };
 }
 
-/** 页面桥请求(reqId 关联应答;挂起回调放模块级 Map,SW 存活期内有效) */
-const pendingBridgeRequests = new Map(); // reqId → resolve
-let bridgeSeq = 1;
-
-/** 向 ERP 页面(erq-bridge 所在 tab)发桥请求,等应答 */
-async function requestErpPage(requestType, payload, timeoutMs = 20 * 1000) {
-  const patterns = await getErpTabPatterns();
-  const tabs = await chrome.tabs.query({ url: patterns });
-  if (!tabs.length) {
-    // 指定了后端时明确提示,避免误以为要开别的 ERP
-    const where = patterns.length === 1 ? `(${patterns[0].replace('/admin*', '')})` : '';
-    return {
-      ok: false,
-      error: where
-        ? `未打开所选后端的 ERP 页面${where},请先打开其订单处理页或切回"自动"`
-        : '未找到打开的 ERP 页面,请先打开 ERP 订单处理页',
-    };
-  }
-  const reqId = `pddsync-${Date.now()}-${bridgeSeq++}`;
-  const promise = new Promise((resolve) => {
-    pendingBridgeRequests.set(reqId, resolve);
-    setTimeout(() => {
-      if (pendingBridgeRequests.has(reqId)) {
-        pendingBridgeRequests.delete(reqId);
-        resolve({ ok: false, error: 'ERP 页面响应超时' });
-      }
-    }, timeoutMs).unref?.();
-  });
-  // 逐 tab 广播(多开时第一个应答者胜出)
-  for (const t of tabs) {
-    try {
-      await chrome.tabs.sendMessage(t.id, { type: 'ERP_BRIDGE_REQUEST', reqId, requestType, payload });
-    } catch { /* 该 tab 无 erp-bridge(如刚加载),试下一个 */ }
-  }
-  return promise;
-}
-
-/** ERP 账号列表(供 popup 下拉;页面桥获取 + storage.local 缓存兜底,按后端隔离缓存) */
+/** ERP 账号列表(直连 status 接口取 platforms.pdd.accounts;storage 缓存兜底,按后端隔离) */
 async function getErpAccounts() {
   const scope = await getErpBackendChoice();
   const cacheKey = `pddErpAccounts:${scope}`;
-  const r = await requestErpPage('PDD_GET_ACCOUNTS', null, 10 * 1000);
-  if (r?.ok && Array.isArray(r.accounts) && r.accounts.length) {
-    await chrome.storage.local.set({ [cacheKey]: r.accounts }).catch(() => {});
-    return { accounts: r.accounts };
+  const r = await erpApi('/admin/api/platform-orders/status');
+  if (r.ok) {
+    const accounts = Object.keys((r.data && r.data.platforms && r.data.platforms.pdd && r.data.platforms.pdd.accounts) || {});
+    if (accounts.length) {
+      await chrome.storage.local.set({ [cacheKey]: accounts }).catch(() => {});
+      return { accounts };
+    }
   }
-  // ERP 页面未开:用上次缓存
+  // 接口失败/未配置账号:用上次缓存
   const v = await chrome.storage.local.get(cacheKey).catch(() => ({}));
   const cached = v[cacheKey] || [];
   if (cached.length) return { accounts: cached, cached: true };
-  return { accounts: [], error: r?.error || '请先打开 ERP 页面(账号列表来自 ERP)' };
+  return { accounts: [], error: r.error || 'ERP 未配置 PDD 账号' };
 }
 
-/** 执行 PDD cookie 同步(采 cookie → ERP 页面桥 → 后端) */
+/** 执行 PDD cookie 同步(采 cookie → 直连后端注入) */
 async function syncPddCookiesToErp(account) {
   if (!account) return { ok: false, error: '请选择要同步的 ERP 账号' };
   const all = await getPddCookies();
@@ -824,7 +838,10 @@ async function syncPddCookiesToErp(account) {
     return { ok: false, error: `拼多多未登录(缺 ${missing.join(', ')}),请先在本浏览器登录 mobile.yangkeduo.com` };
   }
   const uid = (all.find((c) => c.name === 'pdd_user_id') || {}).value || '';
-  return requestErpPage('PDD_SYNC_COOKIES', { account, uid, cookies: all });
+  return erpApi('/admin/api/platform-orders/pdd-sync-cookies', {
+    method: 'POST',
+    body: { account, uid, cookies: all },
+  });
 }
 
 // ── 消息路由(erp-bridge.js 中继转发)────────────────
@@ -898,7 +915,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg.type === 'SET_ERP_BACKEND') {
-    // popup 切换后端:校验候选 + 持久化(桥请求/账号缓存即刻按新选择走)
+    // popup 切换后端:校验候选 + 持久化(API 请求/登录态/账号缓存即刻按新选择走)
     (async () => {
       const url = msg.url;
       if (!ERP_BACKEND_CANDIDATES.some((c) => c.url === url)) {
@@ -907,6 +924,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
       await chrome.storage.local.set({ [ERP_BACKEND_STORAGE_KEY]: url }).catch(() => {});
       sendResponse({ ok: true, selected: url });
+    })();
+    return true;
+  }
+  if (msg.type === 'ERP_LOGIN') {
+    // popup 登录当前后端(手机号+密码 → JWT 按后端隔离存储)
+    erpLogin(msg.phoneNumber, msg.password)
+      .then((r) => sendResponse(r || { ok: false, error: '登录无响应' }))
+      .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
+    return true;
+  }
+  if (msg.type === 'ERP_LOGOUT') {
+    // 清当前后端登录态
+    (async () => {
+      await setErpAuth(await getErpBackendChoice(), null);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+  if (msg.type === 'ERP_AUTH_STATE') {
+    // popup 登录态展示:当前后端是否已存 token(真实有效性由 API 调用兜底)
+    (async () => {
+      const backend = await getErpBackendChoice();
+      const auth = await getErpAuth(backend);
+      sendResponse({ ok: true, backend, loggedIn: !!(auth && auth.token), user: (auth && auth.user) || null });
     })();
     return true;
   }
@@ -930,15 +971,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then((r) => sendResponse(r || { ok: false, error: '同步无响应' }))
       .catch((err) => sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }));
     return true;
-  }
-  if (msg.type === 'ERP_BRIDGE_RESPONSE') {
-    // erp-bridge 转发的页面应答(关联挂起的桥请求)
-    const resolve = pendingBridgeRequests.get(msg.reqId);
-    if (resolve) {
-      pendingBridgeRequests.delete(msg.reqId);
-      resolve(msg.data || { ok: false, error: '页面无应答数据' });
-    }
-    return false;
   }
   if (msg.type === 'PDD_GET_ORDERS') {
     fetchPddOrders(msg.payload || {})

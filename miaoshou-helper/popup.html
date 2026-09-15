@@ -32,11 +32,17 @@
     <section class="section pdd-sync">
       <label class="label">拼多多登录同步</label>
       <p class="hint">把本浏览器的拼多多登录态同步给 ERP 后台(拼多多单点登录,ERP 侧永不登录)</p>
-      <div id="pdd-login-state" class="pdd-login-state">检测中…</div>
       <div class="pdd-account-row">
         <span class="pdd-account-label">ERP 后端</span>
         <select id="erp-backend" class="select"></select>
       </div>
+      <div id="erp-auth-state" class="pdd-login-state">检测中…</div>
+      <div class="erp-login-row" id="erp-login-row" hidden>
+        <input id="erp-phone" class="input" placeholder="ERP 手机号" autocomplete="off" />
+        <input id="erp-password" class="input" type="password" placeholder="密码" />
+        <button id="erp-login-btn" class="btn btn-primary">登录</button>
+      </div>
+      <div id="pdd-login-state" class="pdd-login-state">检测中…</div>
       <div class="pdd-account-row">
         <span class="pdd-account-label">同步到账号</span>
         <select id="pdd-account" class="select"></select>

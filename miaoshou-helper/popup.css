@@ -203,3 +203,39 @@ body {
 .select:focus {
   border-color: #d4380d;
 }
+
+/* ── ERP 直连登录行(2026-09-15)───────────────────────── */
+.erp-login-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.erp-login-row .input {
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 13px;
+  color: #262626;
+  background: #fff;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.erp-login-row .input:focus {
+  border-color: #d4380d;
+}
+
+#erp-phone {
+  flex: 0 0 96px;
+}
+
+#erp-password {
+  flex: 1;
+}
+
+#erp-login-btn {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+}
