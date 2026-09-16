@@ -24,7 +24,7 @@ import { ok } from '../utils/response.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { status as browserStatus, getCookieState, applyPddCookies } from '../services/platform-orders/browser-manager.js';
 import { savePddCookies, readPddCookies, readPddCookieMeta } from '../services/platform-orders/pdd-cookie-store.js';
-import { listPddOrders, searchPddOrder } from '../services/platform-orders/adapters/pdd.js';
+import { listPddOrders, searchPddOrder, getPddTrace } from '../services/platform-orders/adapters/pdd.js';
 import {
   listAli1688Orders as listAliViaBrowser,
   searchAliInAccount as searchAliViaBrowser,
@@ -199,6 +199,25 @@ router.get('/admin/api/platform-orders/:platform', async (req, res, next) => {
     const size = Number.isFinite(sizeRaw) && sizeRaw > 0 ? Math.min(sizeRaw, 50) : 30;
     const account = resolveAccount(platform, req.query.account);
     const result = await getAdapter(platform).list({ tab, size, account });
+    res.json(ok(result));
+  } catch (e) { next(e); }
+});
+
+// 物流轨迹查询(pdd:goods_express 同源 API,浏览器上下文;2026-09-16)
+// 供采购物流轮询器与前端手动刷新使用;order_sn+tracking_number 必填
+router.get('/admin/api/platform-orders/:platform/trace', async (req, res, next) => {
+  try {
+    const platform = String(req.params.platform);
+    const orderSn = String(req.query.order_sn || '').trim();
+    const trackingNumber = String(req.query.tracking_number || '').trim();
+    if (!orderSn || !trackingNumber) {
+      throw new ApiError('BROWSER_ERROR', 'order_sn 与 tracking_number 必填', { status: 400 });
+    }
+    if (platform !== 'pdd') {
+      throw new ApiError(ErrorCode.ResourceNotFound || 'ResourceNotFound', `不支持的平台: ${platform}(当前仅 pdd)`, { status: 404 });
+    }
+    const account = resolveAccount(platform, req.query.account);
+    const result = await getPddTrace(orderSn, trackingNumber, account);
     res.json(ok(result));
   } catch (e) { next(e); }
 });

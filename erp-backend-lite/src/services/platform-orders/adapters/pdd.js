@@ -264,4 +264,49 @@ async function searchPddOrder(orderSn, accounts = []) {
   return { result: null }; // 所有账号正常,单号不存在
 }
 
-export { listPddOrders, searchPddOrder };
+/** 买家版物流轨迹(goods_express H5 同源 API:GET api/express/shipping/track,2026-09-16)
+ *  浏览器页面上下文调用(credentials include 自动带登录 cookie;实测直接 curl 该 API 会被风控,
+ *  必须在 mobile.yangkeduo.com 页面 context 内发起)
+ *  返回 { steps: [{acceptTime, remark}](最新在前,与1688买家版轨迹口径一致), raw } */
+async function getPddTrace(orderSn, trackingNumber, account) {
+  return withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
+    const r = await page.evaluate(async (arg) => {
+      const qs = new URLSearchParams({
+        order_sn: arg.orderSn, tracking_number: arg.trackingNumber, query_type: '1',
+      }).toString();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 20000);
+      try {
+        const resp = await fetch(`https://mobile.yangkeduo.com/proxy/api/api/express/shipping/track?${qs}`, {
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+          signal: ctrl.signal,
+        });
+        let json = null;
+        try { json = await resp.json(); } catch { /* 非 JSON */ }
+        return { status: resp.status, httpOk: resp.ok, json };
+      } catch (e) {
+        return { networkError: String((e && e.message) || e), aborted: e && e.name === 'AbortError' };
+      } finally {
+        clearTimeout(timer);
+      }
+    }, { orderSn, trackingNumber });
+    if (r && r.networkError) {
+      throw new ApiError('BROWSER_ERROR', `拼多多轨迹请求网络错误: ${r.networkError}`, { status: 502 });
+    }
+    mapResponse(r, 'PDD_TRACE');
+    const result = (r.json && r.json.result) || {};
+    const ship = result.shipping || result;
+    const rawSteps = ship.track_list || ship.trace_list || ship.tracking_list || ship.steps || [];
+    const steps = rawSteps
+      .map((s) => ({
+        acceptTime: s.time || s.node_time || s.accept_time || s.show_time || s.ctime || '',
+        remark: s.desc || s.node_desc || s.remark || s.text || '',
+      }))
+      .filter((s) => s.remark || s.acceptTime);
+    steps.sort((a, b) => String(b.acceptTime).localeCompare(String(a.acceptTime)));
+    return { steps, raw: result };
+  });
+}
+
+export { listPddOrders, searchPddOrder, getPddTrace };
