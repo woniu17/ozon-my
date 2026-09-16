@@ -309,8 +309,10 @@ async function getPddTrace(orderSn, trackingNumber, account) {
             text: (document.body && document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 200),
             scripts: document.scripts.length,
           };
-          try { if (window.rawData) out.rawData = JSON.stringify(window.rawData).slice(0, 1600); } catch { /* 序列化失败 */ }
-          try { if (window.__INITIAL_STATE__) out.initState = JSON.stringify(window.__INITIAL_STATE__).slice(0, 600); } catch { /* 序列化失败 */ }
+          try {
+            const td = window.rawData && window.rawData.store && window.rawData.store.traceData;
+            if (td) out.traceData = JSON.stringify(td).slice(0, 4000);
+          } catch { /* 序列化失败 */ }
           return JSON.stringify(out);
         }).catch((e) => `evaluate失败: ${e.message}`);
       }
