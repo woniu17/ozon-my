@@ -276,7 +276,7 @@ async function getPddTrace(orderSn, trackingNumber, account) {
     const tab = await page.context().newPage();
     let payload = null;
     let httpStatus = 0;
-    // 诊断:记录页面发起的全部 API 请求(轨迹请求缺失时定位页面状态)
+    // 诊断:记录页面发起的全部 XHR 请求(轨迹请求缺失时定位页面状态)
     const apiUrls = [];
     const handler = (resp) => {
       const u = resp.url();
@@ -291,20 +291,30 @@ async function getPddTrace(orderSn, trackingNumber, account) {
     };
     tab.on('response', handler);
     let finalUrl = '';
+    let domInfo = '';
     try {
-      await tab.goto(url, { waitUntil: 'domcontentloaded', timeout: 30 * 1000 });
-      // 页面加载后异步发轨迹请求,轮询等待响应(最多 20s)
-      const deadline = Date.now() + 20 * 1000;
+      await tab.goto(url, { waitUntil: 'load', timeout: 30 * 1000 });
+      // 轨迹请求由页面主组件挂载后异步发出(需先加载 React bundle),等待最多 25s
+      // (withPage 任务总超时 60s,goto+等待预算需收敛在 55s 内)
+      const deadline = Date.now() + 25 * 1000;
       while (!payload && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 500));
       }
       finalUrl = tab.url();
+      if (!payload) {
+        // DOM 诊断:标题/可见文本/脚本数,判断页面渲染到什么程度
+        domInfo = await tab.evaluate(() => JSON.stringify({
+          title: document.title,
+          text: (document.body && document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 200),
+          scripts: document.scripts.length,
+        })).catch((e) => `evaluate失败: ${e.message}`);
+      }
     } finally {
       tab.removeListener('response', handler);
       await tab.close().catch(() => {});
     }
     if (!payload) {
-      throw new ApiError('BROWSER_ERROR', `PDD_TRACE_NO_RESPONSE: 轨迹页未返回数据(HTTP ${httpStatus};pageUrl=${finalUrl};api=${JSON.stringify(apiUrls.slice(0, 15))})`, { status: 502 });
+      throw new ApiError('BROWSER_ERROR', `PDD_TRACE_NO_RESPONSE: 轨迹页未返回数据(HTTP ${httpStatus};pageUrl=${finalUrl};dom=${domInfo};api=${JSON.stringify(apiUrls.slice(0, 15))})`, { status: 502 });
     }
     // 平台错误码(如 9990=风控/参数缺失,401 未登录)
     if (payload.error_code === 401 || payload.error_code === 403) {
