@@ -2538,9 +2538,12 @@ onUnmounted(() => {
             <tr class="pkg-row">
             <td class="col-product">
               <div v-for="(it, i) in pkg.items" :key="i" class="product-item">
-                <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box" :title="it.title || '查看Ozon商品'">
-                  <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
-                </a>
+                <div v-if="it.picUrl" class="img-hover-wrap">
+                  <a :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box" :title="it.title || '查看Ozon商品'">
+                    <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
+                  </a>
+                  <img class="img-preview" :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                </div>
                 <div class="product-main">
                   <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ it.title || '—' }}</a>
                   <div v-else class="product-title">{{ it.title || '—' }}</div>
@@ -2604,14 +2607,17 @@ onUnmounted(() => {
                   {{ poStatus(l.poStatus) }} · 采购金额 {{ fmtMoney(l.allocatedAmount) }}<template v-if="l.sellerName"> · {{ l.sellerName }}</template><template v-if="l.buyerAccount"> · 买:{{ l.buyerAccount }}</template>
                 </div>
                 <div v-for="(pi, j) in l.items" :key="j" class="purchase-goods">
-                  <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="goods-link">
-                    <img v-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
+                  <div v-if="pi.thumbUrl || pi.picUrl" class="img-hover-wrap">
+                    <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="goods-link">
+                      <img :src="pi.thumbUrl || pi.picUrl"
+                        referrerpolicy="no-referrer" loading="lazy" class="purchase-goods-img" alt=""
+                        :title="pi.goodsName || pi.title || '采购商品'" />
+                    </a>
+                    <img v-else :src="pi.thumbUrl || pi.picUrl"
                       referrerpolicy="no-referrer" loading="lazy" class="purchase-goods-img" alt=""
                       :title="pi.goodsName || pi.title || '采购商品'" />
-                  </a>
-                  <img v-else-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
-                    referrerpolicy="no-referrer" loading="lazy" class="purchase-goods-img" alt=""
-                    :title="pi.goodsName || pi.title || '采购商品'" />
+                    <img class="img-preview" :src="pi.thumbUrl || pi.picUrl" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                  </div>
                   <div class="purchase-goods-main">
                     <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="goods-link purchase-goods-title" :title="pi.goodsName || pi.title || ''">
                       {{ pi.goodsName || pi.title || '采购商品' }}
@@ -3488,9 +3494,9 @@ onUnmounted(() => {
 }
 
 .product-img-box {
-  flex: 0 0 70px;
-  width: 70px;
-  height: 70px;
+  flex: 0 0 120px;
+  width: 120px;
+  height: 120px;
   border: 1px solid var(--border, #e5e7eb);
   border-radius: 6px;
   overflow: hidden;
@@ -3598,12 +3604,12 @@ a.product-title:hover {
   margin-top: 4px;
 }
 .purchase-goods-img {
-  width: 48px;
-  height: 48px;
+  width: 120px;
+  height: 120px;
   object-fit: contain;
   border: 1px solid var(--border, #e5e7eb);
   border-radius: 4px;
-  flex: 0 0 48px;
+  flex: 0 0 120px;
 }
 .purchase-goods-main {
   flex: 1 1 auto;
@@ -3662,6 +3668,33 @@ a.product-title:hover {
   font-size: 11px;
   line-height: 1.3;
   margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 图片悬浮大图预览(订单商品/采购商品 120px;hover 居中放大 280px,复用 ScanShip 方案) */
+.img-hover-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.img-preview {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 280px;
+  height: 280px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  z-index: 30;
+  pointer-events: none;
+}
+.img-hover-wrap:hover .img-preview {
+  display: block;
 }
 
 .col-status {
