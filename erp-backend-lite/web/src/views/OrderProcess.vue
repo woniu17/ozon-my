@@ -2069,6 +2069,17 @@ function goodsDetailUrl(platform, goodsId) {
   return '';
 }
 
+/** 采购订单详情页链接(平台 + 采购单号拼 URL;单号缺失返回空)
+ *  1688: 买家订单列表带搜索词(支持逗号分隔多单号) | 拼多多: 订单详情页
+ */
+function orderDetailUrl(platform, purchaseSn) {
+  const sn = String(purchaseSn || '').trim();
+  if (!sn) return '';
+  if (platform === '1688') return `https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=${encodeURIComponent(sn)}`;
+  if (platform === 'yangkeduo') return `https://mobile.yangkeduo.com/order.html?order_sn=${encodeURIComponent(sn)}`;
+  return '';
+}
+
 // 弹窗里展示的产品行(含已回写采购金额)
 const detailItems = computed(() => detail.value?.items || []);
 const detailLinks = computed(() => detail.value?.purchaseLinks || []);
@@ -2524,7 +2535,8 @@ onUnmounted(() => {
               <div v-for="l in pkg.purchaseLinks" :key="l.id" class="purchase-item">
                 <div class="purchase-head">
                   <span class="tag tag-ok">已关联</span>
-                  <span class="mono">{{ l.purchaseSn || '#' + l.id }}</span>
+                  <a v-if="orderDetailUrl(l.platform, l.purchaseSn)" :href="orderDetailUrl(l.platform, l.purchaseSn)" target="_blank" rel="noopener" class="mono order-link" :title="'打开' + platformLabel(l.platform) + '订单详情'">{{ l.purchaseSn }}</a>
+                  <span v-else class="mono">{{ l.purchaseSn || '#' + l.id }}</span>
                   <span class="muted">{{ platformLabel(l.platform) }}</span>
                 </div>
                 <div class="purchase-meta sub muted">
@@ -3070,7 +3082,10 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <tr v-for="l in detailLinks" :key="l.id">
-              <td class="mono">{{ l.purchaseSn || '#' + l.purchaseOrderId }}</td>
+              <td class="mono">
+                <a v-if="orderDetailUrl(l.platform, l.purchaseSn)" :href="orderDetailUrl(l.platform, l.purchaseSn)" target="_blank" rel="noopener" class="order-link" :title="'打开' + platformLabel(l.platform) + '订单详情'">{{ l.purchaseSn || '#' + l.purchaseOrderId }}</a>
+                <template v-else>{{ l.purchaseSn || '#' + l.purchaseOrderId }}</template>
+              </td>
               <td>{{ platformLabel(l.platform) }}</td>
               <td>{{ poStatus(l.poStatus) }}</td>
               <td>
@@ -3545,6 +3560,15 @@ a.product-title:hover {
   min-width: 0;
 }
 .goods-link:hover {
+  text-decoration: underline;
+}
+
+/* 采购订单详情页链接(单号;蓝色示意可点) */
+.order-link {
+  text-decoration: none;
+  color: #3b82f6;
+}
+.order-link:hover {
   text-decoration: underline;
 }
 
