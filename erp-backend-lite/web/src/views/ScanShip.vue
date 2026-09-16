@@ -612,11 +612,8 @@ onMounted(() => {
           :aria-current="selectedId === pkg.id ? 'true' : undefined"
           @click="selectCard(pkg)"
         >
-          <div class="pkg-grid">
-            <!-- 左列:订单信息 + 商品信息 -->
-            <div class="pkg-left">
-              <!-- 订单信息(三行,黑色):①店铺+货件号(点击复制)+状态 ②下单时间 ③订单金额 -->
-              <div class="pkg-order">
+          <!-- 订单级信息(横贯整行,2026-09-17 布局):店铺/货件号/状态/下单时间/最迟发货时间/标签/备注 -->
+          <div class="pkg-order">
                 <div class="order-line order-line1">
                   <span class="order-store">{{ pkg.storeName }}</span>
                   <span class="mono order-posting">{{ pkg.postingNumber }}</span>
@@ -645,6 +642,10 @@ onMounted(() => {
                 <div v-if="pkg.note" class="order-note" :title="pkg.note">备注:{{ pkg.note }}</div>
               </div>
 
+          <div class="pkg-grid">
+            <!-- 左列:产品信息 / 右列:采购信息(2026-09-17 布局调整) -->
+            <div class="pkg-left">
+              <div class="pkg-left-label">产品信息</div>
               <!-- 商品信息(SKU/OfferID 可点击复制,数量独立右列) -->
               <div class="pkg-products">
                 <div v-for="(it, i) in pkg.items" :key="i" class="product-item">
@@ -1094,6 +1095,10 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  /* 2026-09-17 布局:订单级信息横贯卡片顶部,与下方 产品/采购 两列虚线分隔 */
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 10px;
 }
 .order-line {
   font-size: 13px;
@@ -1220,7 +1225,6 @@ onMounted(() => {
 }
 
 .pkg-products {
-  margin-top: 10px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1292,6 +1296,12 @@ onMounted(() => {
   padding-left: 14px;
 }
 .pkg-right-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+/* 左列"产品信息"标签(2026-09-17 布局:与右列"采购信息"对称) */
+.pkg-left-label {
   font-size: 12px;
   color: var(--muted);
   margin-bottom: 8px;
