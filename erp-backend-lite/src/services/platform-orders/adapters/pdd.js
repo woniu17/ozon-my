@@ -302,12 +302,17 @@ async function getPddTrace(orderSn, trackingNumber, account) {
       }
       finalUrl = tab.url();
       if (!payload) {
-        // DOM 诊断:标题/可见文本/脚本数,判断页面渲染到什么程度
-        domInfo = await tab.evaluate(() => JSON.stringify({
-          title: document.title,
-          text: (document.body && document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 200),
-          scripts: document.scripts.length,
-        })).catch((e) => `evaluate失败: ${e.message}`);
+        // DOM 诊断:标题/可见文本/脚本数 + SSR 数据岛摘要,判断页面渲染到什么程度
+        domInfo = await tab.evaluate(() => {
+          const out = {
+            title: document.title,
+            text: (document.body && document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 200),
+            scripts: document.scripts.length,
+          };
+          try { if (window.rawData) out.rawData = JSON.stringify(window.rawData).slice(0, 1600); } catch { /* 序列化失败 */ }
+          try { if (window.__INITIAL_STATE__) out.initState = JSON.stringify(window.__INITIAL_STATE__).slice(0, 600); } catch { /* 序列化失败 */ }
+          return JSON.stringify(out);
+        }).catch((e) => `evaluate失败: ${e.message}`);
       }
     } finally {
       tab.removeListener('response', handler);
