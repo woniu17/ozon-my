@@ -3102,7 +3102,9 @@ onUnmounted(() => {
               <tr v-for="o in allSelectedOrders" :key="o._existing ? 'ex-' + o.purchaseOrderId : o._platform + ':' + (o._account || '') + ':' + o.orderSn">
                 <td>
                   <span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span>
-                  <span v-if="o.buyerUsername || o._account" class="tag tag-mute" :title="o.buyerUserId ? `买手账号 ${o.buyerUsername}(平台ID ${o.buyerUserId})` : '买手账号'">{{ o.buyerUsername || o._account }}</span>
+                  <!-- 买家账号显示优先级(2026-09-17):归一账号名(account=搜索命中/openapi 自带,_account=tab 账号)
+                       > 平台原始登录名(tb537642872 之类仅 title 里参考);_existing 恢复项 buyerUsername 已是 DB 归一名 -->
+                  <span v-if="o.account || o.buyerUsername || o._account" class="tag tag-mute" :title="o.buyerUserId ? `买手账号 ${o.account || o._account || o.buyerUsername}(平台登录名 ${o.buyerUsername},平台ID ${o.buyerUserId})` : '买手账号'">{{ o.account || o._account || o.buyerUsername }}</span>
                   <span v-if="o._existing" class="tag tag-warn" title="打开弹窗时恢复的已有采购关联">已有</span>
                 </td>
                 <td class="mono">{{ o.orderSn || '(手工单)' }}</td>
