@@ -1246,12 +1246,16 @@ const restoredSnKeys = computed(() => {
 });
 
 // 跨平台×账号合并的已选订单(用于下方展示):已有采购恢复项排在最前 + 新勾选的平台订单
+// 同 SN 去重与显示列表(importOrders)同口径(2026-09-17 修复):搜索命中若已存在于当前账号列表,
+// 以列表版为准(字段同源完整)——否则同一单在已选区出现两条(搜索版缺 amount 字段显示空金额)
 const allSelectedOrders = computed(() => {
   const sel = [];
   for (const t of importAccountTabs.value) {
     const st = importStores[t.key];
     if (!st) continue;
-    for (const o of [...(st.searched || []), ...st.orders]) {
+    const inList = new Set((st.orders || []).map((o) => o.orderSn));
+    const merged = [...(st.searched || []).filter((x) => !inList.has(x.orderSn)), ...(st.orders || [])];
+    for (const o of merged) {
       if (st.selected.includes(o.orderSn) && !restoredSnKeys.value.has(`${PLATFORM_TAB_META[t.platform]?.platformVal}:${o.orderSn}`)) {
         sel.push({ ...o, _platform: PLATFORM_TAB_META[t.platform]?.platformVal, _account: t.account });
       }
@@ -1309,8 +1313,11 @@ async function onSearchImportOrder() {
       return;
     }
     const st = currentStore.value;
+    // 字段规范化(2026-09-17):搜索接口返回 orderAmount,前端表格/保存逻辑用 amount——
+    // 缺失会导致已选区金额空、保存采购金额算成 0
+    const hit = { ...found, amount: found.orderAmount ?? found.amount ?? 0 };
     // 置顶插入搜索区(去重),并自动勾选(已取消/已关联的不勾)
-    st.searched = [found, ...st.searched.filter((o) => o.orderSn !== found.orderSn)];
+    st.searched = [hit, ...st.searched.filter((o) => o.orderSn !== found.orderSn)];
     if (!isImportCancelled(found) && !isRestoredLinked(found) && !st.selected.includes(found.orderSn)) {
       st.selected.push(found.orderSn);
     }
@@ -3386,7 +3393,8 @@ onUnmounted(() => {
 <style scoped>
 .order-process-page {
   padding: 16px;
-  max-width: 1400px;
+  /* 2026-09-17:去掉 1400px 上限——产品/采购列各 500px,列 min-width 合计约 1560px,
+     1400 上限导致表格必然横向滚动;放开后宽屏(≥1600px)全列同屏展示 */
   margin: 0 auto;
 }
 
