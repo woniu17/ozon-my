@@ -158,6 +158,7 @@ function normalizeOpenApiOrder(o, account) {
     account,
     goods: entries.map((e) => ({
       goodsName: e.name || '',
+      goodsId: String(e.productID || e.offerId || ''), // 商品ID(=offerId),拼详情页 detail.1688.com/offer/{id}.html
       spec: (Array.isArray(e.skuInfos) ? e.skuInfos : []).map((s) => `${s.name}:${s.value}`).join(' '),
       price: Number(e.price || 0).toFixed(2),
       number: Number(e.quantity || 1),

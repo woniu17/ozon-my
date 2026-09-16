@@ -2056,6 +2056,19 @@ function platformLabel(p) {
   return PLATFORMS.find((x) => x.value === p)?.label || p || '—';
 }
 
+/** 采购商品详情页链接(平台 + 商品ID 拼 URL;ID 缺失/非数字返回空,不加链接)
+ *  1688: detail.1688.com/offer/{id}.html | 拼多多: mobile.yangkeduo.com/goods.html?goods_id={id}
+ *  淘宝: item.taobao.com/item.htm?id={id}
+ */
+function goodsDetailUrl(platform, goodsId) {
+  const id = String(goodsId || '').trim();
+  if (!id || !/^\d+$/.test(id)) return '';
+  if (platform === '1688') return `https://detail.1688.com/offer/${id}.html`;
+  if (platform === 'yangkeduo') return `https://mobile.yangkeduo.com/goods.html?goods_id=${id}`;
+  if (platform === 'taobao') return `https://item.taobao.com/item.htm?id=${id}`;
+  return '';
+}
+
 // 弹窗里展示的产品行(含已回写采购金额)
 const detailItems = computed(() => detail.value?.items || []);
 const detailLinks = computed(() => detail.value?.purchaseLinks || []);
@@ -2518,11 +2531,19 @@ onUnmounted(() => {
                   {{ poStatus(l.poStatus) }} · 采购金额 {{ fmtMoney(l.allocatedAmount) }}<template v-if="l.sellerName"> · {{ l.sellerName }}</template><template v-if="l.buyerAccount"> · 买:{{ l.buyerAccount }}</template>
                 </div>
                 <div v-for="(pi, j) in l.items" :key="j" class="purchase-goods">
-                  <img v-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
+                  <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="goods-link">
+                    <img v-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
+                      referrerpolicy="no-referrer" loading="lazy" class="purchase-goods-img" alt=""
+                      :title="pi.goodsName || pi.title || '采购商品'" />
+                  </a>
+                  <img v-else-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
                     referrerpolicy="no-referrer" loading="lazy" class="purchase-goods-img" alt=""
                     :title="pi.goodsName || pi.title || '采购商品'" />
                   <div class="purchase-goods-main">
-                    <div class="purchase-goods-title" :title="pi.goodsName || pi.title || ''">
+                    <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="goods-link purchase-goods-title" :title="pi.goodsName || pi.title || ''">
+                      {{ pi.goodsName || pi.title || '采购商品' }}
+                    </a>
+                    <div v-else class="purchase-goods-title" :title="pi.goodsName || pi.title || ''">
                       {{ pi.goodsName || pi.title || '采购商品' }}
                     </div>
                     <div class="purchase-goods-sub muted">
@@ -3055,11 +3076,19 @@ onUnmounted(() => {
               <td>
                 <div>{{ fmtMoney(l.allocatedAmount) }}</div>
                 <div v-for="(pi, j) in l.items" :key="j" class="po-item-line">
-                  <img v-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
+                  <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="goods-link">
+                    <img v-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
+                      referrerpolicy="no-referrer" loading="lazy" class="po-item-img" alt=""
+                      :title="pi.goodsName || pi.title || '采购商品'" />
+                  </a>
+                  <img v-else-if="pi.thumbUrl || pi.picUrl" :src="pi.thumbUrl || pi.picUrl"
                     referrerpolicy="no-referrer" loading="lazy" class="po-item-img" alt=""
                     :title="pi.goodsName || pi.title || '采购商品'" />
                   <div class="po-item-info">
-                    <div class="po-item-title" :title="pi.goodsName || pi.title || ''">
+                    <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="goods-link po-item-title" :title="pi.goodsName || pi.title || ''">
+                      {{ pi.goodsName || pi.title || '采购商品' }}
+                    </a>
+                    <div v-else class="po-item-title" :title="pi.goodsName || pi.title || ''">
                       {{ pi.goodsName || pi.title || '采购商品' }}
                     </div>
                     <div class="po-item-sub muted">
@@ -3508,6 +3537,17 @@ a.product-title:hover {
   min-width: 0;
   overflow: hidden;
 }
+/* 采购商品详情页链接(图片/标题;悬停下划线示意可点) */
+.goods-link {
+  text-decoration: none;
+  color: inherit;
+  display: inline-flex;
+  min-width: 0;
+}
+.goods-link:hover {
+  text-decoration: underline;
+}
+
 .purchase-goods-title {
   font-size: 12px;
   line-height: 1.3;

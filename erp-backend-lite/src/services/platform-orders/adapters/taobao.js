@@ -48,10 +48,11 @@ function normalizeTaobaoOrders(data) {
       .map((k) => (((components[k] || {}).fields || {}).item || {}))
       .map((f) => ({
         goodsName: f.title || '',
+        goodsId: String(f.itemId || ''), // 商品ID,拼详情页 item.taobao.com/item.htm?id={id}
         spec: f.skuText || '',
         price: stripYuan(f.priceInfo && f.priceInfo.actualTotalFee),
         number: Number(f.quantity || 1),
-        thumbUrl: (f.pic || '').replace(/^\/\//, 'https://'),
+        thumbUrl: (f.pic || '').replace(/^\/\//, 'https:'),
       }));
     return {
       orderSn: shop.orderId || oid,

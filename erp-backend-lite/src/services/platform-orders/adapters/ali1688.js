@@ -50,6 +50,7 @@ function normalize1688Order(o) {
     buyerUsername: bi.loginId || bi.nick || '',
     goods: entries.map((e) => ({
       goodsName: e.productName || '',
+      goodsId: String(e.productID || e.offerId || ''), // 商品ID(=offerId),拼详情页 detail.1688.com/offer/{id}.html
       spec: ((e.specInfo && e.specInfo.specItems) || []).map((i) => `${i.specName}:${i.specValue}`).join(' '),
       price: toYuan(e.price),
       number: Number((e.quantity && (e.quantity.realAmountStr || e.quantity.calAmount)) || 1),

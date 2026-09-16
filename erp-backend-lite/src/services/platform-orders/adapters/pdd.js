@@ -94,6 +94,7 @@ function normalizeOrders(data) {
     mallName: (o.mall && o.mall.mall_name) || '',
     goods: (o.order_goods || []).map((g) => ({
       goodsName: g.goods_name || '',
+      goodsId: String(g.goods_id || ''), // 商品ID,拼详情页 mobile.yangkeduo.com/goods.html?goods_id={id}
       spec: g.spec || '',
       price: toYuan(g.goods_price),
       number: g.goods_number || 1,
@@ -112,6 +113,7 @@ function normalizeSearchOrder(o) {
     trackingNumber: o.tracking_number || '',
     goods: (o.order_goods || []).map((g) => ({
       goodsName: g.goods_name || '',
+      goodsId: String(g.goods_id || ''), // 商品ID,拼详情页 mobile.yangkeduo.com/goods.html?goods_id={id}
       spec: g.spec || '',
       price: toYuan(g.goods_price),
       number: g.goods_number || 1,
