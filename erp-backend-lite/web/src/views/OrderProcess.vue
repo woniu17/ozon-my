@@ -2088,6 +2088,25 @@ function trackingSearchUrl(company, trackingNo) {
   return `https://www.baidu.com/s?wd=${encodeURIComponent(kw)}`;
 }
 
+/** 复制文本到剪贴板(降级兼容 http 环境) */
+async function copyText(val, label) {
+  const s = String(val || '').trim();
+  if (!s) return;
+  try {
+    await navigator.clipboard.writeText(s);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+  show(`${label}已复制:${s}`, 'success');
+}
+
 // 弹窗里展示的产品行(含已回写采购金额)
 const detailItems = computed(() => detail.value?.items || []);
 const detailLinks = computed(() => detail.value?.purchaseLinks || []);
@@ -2542,10 +2561,15 @@ onUnmounted(() => {
               <div v-if="!pkg.purchaseLinks?.length" class="muted">未录入</div>
               <div v-for="l in pkg.purchaseLinks" :key="l.id" class="purchase-item">
                 <div class="purchase-head">
-                  <span class="tag tag-ok">已关联</span>
-                  <a v-if="orderDetailUrl(l.platform, l.purchaseSn)" :href="orderDetailUrl(l.platform, l.purchaseSn)" target="_blank" rel="noopener" class="mono order-link" :title="'打开' + platformLabel(l.platform) + '订单详情'">{{ l.purchaseSn }}</a>
-                  <span v-else class="mono">{{ l.purchaseSn || '#' + l.id }}</span>
                   <span class="muted">{{ platformLabel(l.platform) }}</span>
+                  <template v-if="l.purchaseSn">
+                    <a v-if="orderDetailUrl(l.platform, l.purchaseSn)" :href="orderDetailUrl(l.platform, l.purchaseSn)" target="_blank" rel="noopener" class="mono order-link" :title="'打开' + platformLabel(l.platform) + '订单详情'">{{ l.purchaseSn }}</a>
+                    <span v-else class="mono">{{ l.purchaseSn }}</span>
+                    <button class="copy-btn" title="复制采购单号" @click.stop="copyText(l.purchaseSn, '采购单号')">
+                      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </template>
+                  <span v-else class="mono">#{{ l.id }}</span>
                 </div>
                 <div class="purchase-meta sub muted">
                   {{ poStatus(l.poStatus) }} · 采购金额 {{ fmtMoney(l.allocatedAmount) }}<template v-if="l.sellerName"> · {{ l.sellerName }}</template><template v-if="l.buyerAccount"> · 买:{{ l.buyerAccount }}</template>
@@ -3579,6 +3603,27 @@ a.product-title:hover {
 }
 .order-link:hover {
   text-decoration: underline;
+}
+
+/* 复制小图标按钮(采购单号旁) */
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  vertical-align: middle;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+.copy-btn:hover {
+  color: #3b82f6;
+  background: #eff6ff;
 }
 
 .purchase-goods-title {
