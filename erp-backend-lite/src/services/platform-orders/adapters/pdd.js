@@ -276,25 +276,35 @@ async function getPddTrace(orderSn, trackingNumber, account) {
     const tab = await page.context().newPage();
     let payload = null;
     let httpStatus = 0;
+    // 诊断:记录页面发起的全部 API 请求(轨迹请求缺失时定位页面状态)
+    const apiUrls = [];
     const handler = (resp) => {
-      if (!resp.url().includes('api/express/shipping/track')) return;
+      const u = resp.url();
+      try {
+        if (/yangkeduo\.com|pddpic\.com/.test(u) && resp.request().resourceType() === 'xhr') {
+          apiUrls.push(`${resp.status()} ${resp.request().method()} ${u.slice(0, 160)}`);
+        }
+      } catch { /* 已关闭 */ }
+      if (!u.includes('express/shipping/track')) return;
       httpStatus = resp.status();
       resp.json().then((j) => { payload = j; }).catch(() => { /* 非 JSON */ });
     };
     tab.on('response', handler);
+    let finalUrl = '';
     try {
       await tab.goto(url, { waitUntil: 'domcontentloaded', timeout: 30 * 1000 });
-      // 页面加载后异步发轨迹请求,轮询等待响应(最多 15s)
-      const deadline = Date.now() + 15 * 1000;
+      // 页面加载后异步发轨迹请求,轮询等待响应(最多 20s)
+      const deadline = Date.now() + 20 * 1000;
       while (!payload && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 500));
       }
+      finalUrl = tab.url();
     } finally {
       tab.removeListener('response', handler);
       await tab.close().catch(() => {});
     }
     if (!payload) {
-      throw new ApiError('BROWSER_ERROR', `PDD_TRACE_NO_RESPONSE: 轨迹页未返回数据(HTTP ${httpStatus},可能未登录/触发风控/页面改版)`, { status: 502 });
+      throw new ApiError('BROWSER_ERROR', `PDD_TRACE_NO_RESPONSE: 轨迹页未返回数据(HTTP ${httpStatus};pageUrl=${finalUrl};api=${JSON.stringify(apiUrls.slice(0, 15))})`, { status: 502 });
     }
     // 平台错误码(如 9990=风控/参数缺失,401 未登录)
     if (payload.error_code === 401 || payload.error_code === 403) {
