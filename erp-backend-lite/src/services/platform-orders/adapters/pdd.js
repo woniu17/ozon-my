@@ -305,7 +305,7 @@ async function getPddTrace(orderSn, trackingNumber, account) {
       }))
       .filter((s) => s.remark || s.acceptTime);
     steps.sort((a, b) => String(b.acceptTime).localeCompare(String(a.acceptTime)));
-    return { steps, raw: result };
+    return { steps, raw: r.json };
   });
 }
 
