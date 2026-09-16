@@ -222,6 +222,18 @@ export function listPendingPurchases(platform) {
   return request.get('/admin/api/order-process/pending-purchases', platform ? { platform } : {});
 }
 
+// 手动同步采购物流信息(补单号+1688轨迹+拼多多轨迹,与每小时定时轮同逻辑互斥)
+// 返回 { started, status };后台异步执行,进度用下面的轮询接口
+export function syncPurchaseLogistics() {
+  return request.post('/admin/api/order-process/sync-purchase-logistics');
+}
+
+// 采购物流同步进度轮询
+// 返回 { running, phase: 'A'|'B'|'C', progress: {done,total}, result, error }
+export function getPurchaseLogisticsProgress() {
+  return request.get('/admin/api/order-process/sync-purchase-logistics');
+}
+
 // ════════════════════════════════════════════════════════════════
 // 平台订单获取(2026-09,后端 cloakbrowser 直取,替代 miaoshou-helper 扩展桥)
 // 2026-09-13 多账号:后端按平台配置多买手账号 profile,列表接口带 account 指定,

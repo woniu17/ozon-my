@@ -28,6 +28,7 @@ import config from '../config/index.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
 import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
+import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus } from '../services/purchase-logistics-poller.js';
 import { packageLabel, postingFbsGet, postingFbsShip } from '../services/ozon-opi.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
@@ -1328,9 +1329,23 @@ router.get('/admin/api/order-process/pending-purchases', (req, res, next) => {
     const platform = req.query.platform || '';
     const list = orderPackageDao.listPendingPurchases(platform || null);
     res.json(ok(list));
-  } catch (e) {
-    next(e);
-  }
+  } catch (e) { next(e); }
+});
+
+// 手动同步采购物流信息(2026-09-17,前端"同步采购物流信息"按钮)
+// 与每小时定时轮同逻辑互斥:补物流单号(1688)+拉完整轨迹(1688官方API+拼多多goods_express)
+// POST 启动(后台异步执行,立即返回);GET 查询进度(前端3s轮询)
+router.post('/admin/api/order-process/sync-purchase-logistics', (_req, res, next) => {
+  try {
+    const r = triggerPurchaseLogisticsSync();
+    res.json(ok({ started: r.started, status: r.status }));
+  } catch (e) { next(e); }
+});
+
+router.get('/admin/api/order-process/sync-purchase-logistics', (_req, res, next) => {
+  try {
+    res.json(ok(getPurchaseLogisticsStatus()));
+  } catch (e) { next(e); }
 });
 
 export default router;

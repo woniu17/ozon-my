@@ -27,6 +27,18 @@ const MAX_AGE_DAYS = 90; // 超过 90 天的旧单不再尝试(多半已死单)
 let timer = null;
 let running = false;
 
+// ── 手动触发与状态(前端"同步采购物流信息"按钮,2026-09-17) ──────
+// 与定时轮共用 running 互斥;状态对象供前端轮询进度(3s 间隔)
+const manualStatus = {
+  running: false,        // 本轮进行中(定时轮或手动触发)
+  startedAt: null,
+  finishedAt: null,
+  phase: '',             // A=补单号 B=1688轨迹 C=PDD轨迹
+  progress: { done: 0, total: 0 }, // 当前阶段进度
+  result: null,          // { phaseA, phaseB, phaseC }
+  error: null,
+};
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** 阶段A:补物流单号+公司(未发货单返回空单号自然跳过) */
@@ -41,9 +53,11 @@ async function phaseFillLogistics() {
      LIMIT ?`
   ).all(`-${MAX_AGE_DAYS} days`, MAX_PER_ROUND);
   if (!rows.length) return { scanned: 0, filled: 0, skippedNoAccount: 0 };
+  manualStatus.progress = { done: 0, total: rows.length };
 
   let filled = 0, skippedNoAccount = 0, consecutive = 0;
   for (const r of rows) {
+    manualStatus.progress.done++;
     if (!hasAliOpenApiToken(r.buyer_account)) { skippedNoAccount++; continue; }
     try {
       const info = await getLogisticsForOrder(r.purchase_sn, r.buyer_account);
@@ -86,9 +100,11 @@ async function phaseFetchTrace() {
      LIMIT ?`
   ).all(MAX_PER_ROUND);
   if (!rows.length) return { scanned: 0, updated: 0, skippedNoAccount: 0 };
+  manualStatus.progress = { done: 0, total: rows.length };
 
   let updated = 0, skippedNoAccount = 0, consecutive = 0;
   for (const r of rows) {
+    manualStatus.progress.done++;
     if (!hasAliOpenApiToken(r.buyer_account)) { skippedNoAccount++; continue; }
     try {
       const { steps } = await getTraceForOrder(r.purchase_sn, r.buyer_account);
@@ -133,11 +149,13 @@ async function phaseFetchPddTrace() {
      LIMIT ?`
   ).all(MAX_PER_ROUND);
   if (!rows.length) return { scanned: 0, updated: 0, signed: 0, skippedNoAccount: 0 };
+  manualStatus.progress = { done: 0, total: rows.length };
 
   // PDD 账号解析:buyer_account 不在白名单(空/历史脏值)时回落主账号
   const pddAccounts = config.platformAccounts.pdd || [];
   let updated = 0, signedCount = 0, skippedNoAccount = 0, consecutive = 0;
   for (const r of rows) {
+    manualStatus.progress.done++;
     const account = pddAccounts.includes(r.buyer_account) ? r.buyer_account : pddAccounts[0];
     if (!account) { skippedNoAccount++; continue; }
     try {
@@ -181,25 +199,59 @@ async function phaseFetchPddTrace() {
 }
 
 async function runOnce() {
+  manualStatus.phase = 'A';
   const a = await phaseFillLogistics();
+  manualStatus.phase = 'B';
   const b = await phaseFetchTrace();
+  manualStatus.phase = 'C';
   const c = await phaseFetchPddTrace();
-  logger.info({ phaseA: a, phaseB: b, phaseC: c }, '[purchase-logistics-poller] 本轮完成');
+  const result = { phaseA: a, phaseB: b, phaseC: c };
+  logger.info(result, '[purchase-logistics-poller] 本轮完成');
+  return result;
+}
+
+// ── 手动触发入口(launchRound/trigger/status,2026-09-17) ──────
+
+/** 启动一轮(定时/手动共用 running 互斥);已在跑返回 false */
+function launchRound() {
+  if (running) return false;
+  running = true;
+  manualStatus.running = true;
+  manualStatus.startedAt = new Date().toISOString();
+  manualStatus.finishedAt = null;
+  manualStatus.result = null;
+  manualStatus.error = null;
+  manualStatus.progress = { done: 0, total: 0 };
+  runOnce()
+    .then((r) => { manualStatus.result = r; })
+    .catch((e) => {
+      manualStatus.error = String(e.message || e);
+      logger.error({ err: manualStatus.error }, '[purchase-logistics-poller] 轮询异常');
+    })
+    .finally(() => {
+      manualStatus.running = false;
+      manualStatus.phase = '';
+      manualStatus.finishedAt = new Date().toISOString();
+      running = false;
+    });
+  return true;
+}
+
+/** 手动触发一轮(前端按钮);已在跑(定时或手动)返回 started:false */
+function triggerPurchaseLogisticsSync() {
+  const started = launchRound();
+  return { started, status: getPurchaseLogisticsStatus() };
+}
+
+/** 轮询进度查询 */
+function getPurchaseLogisticsStatus() {
+  return { ...manualStatus, progress: { ...manualStatus.progress } };
 }
 
 function startPurchaseLogisticsPoller() {
   if (timer) return;
-  timer = setInterval(() => {
-    if (running) return;
-    running = true;
-    runOnce().catch((e) => logger.error({ err: e.message }, '[purchase-logistics-poller] 轮询异常'))
-      .finally(() => { running = false; });
-  }, POLL_INTERVAL_MS);
-  setTimeout(() => {
-    running = true;
-    runOnce().catch((e) => logger.error({ err: e.message }, '[purchase-logistics-poller] 首轮异常'))
-      .finally(() => { running = false; });
-  }, FIRST_SCAN_DELAY_MS);
+  timer = setInterval(() => { launchRound(); }, POLL_INTERVAL_MS);
+  setTimeout(() => { launchRound(); }, FIRST_SCAN_DELAY_MS);
   logger.info('[purchase-logistics-poller] 启动(每小时:补物流单号+拉完整轨迹)');
 }
 
@@ -207,4 +259,4 @@ function stopPurchaseLogisticsPoller() {
   if (timer) { clearInterval(timer); timer = null; }
 }
 
-export { startPurchaseLogisticsPoller, stopPurchaseLogisticsPoller };
+export { startPurchaseLogisticsPoller, stopPurchaseLogisticsPoller, triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus };

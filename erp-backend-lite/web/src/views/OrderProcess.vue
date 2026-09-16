@@ -16,6 +16,7 @@ import {
   syncMsToLocal,
   enrichPurchaseItems,
   listPendingPurchases,
+  syncPurchaseLogistics, getPurchaseLogisticsProgress,
   getOrderSummary,
   syncPackage,
   shipPackage,
@@ -607,6 +608,64 @@ async function flushEnrichBatch(items) {
     items.push(...batch);
     show('入库批次失败:' + (e.message || e), 'error');
   }
+}
+
+// ── 同步采购物流信息(手动触发后台一轮,2026-09-17) ──────────────
+// 后端与每小时定时轮同逻辑互斥:补物流单号(1688)+拉轨迹(1688官方API+拼多多goods_express);
+// POST 启动后 3s 轮询进度,完成 toast 汇总并刷新列表
+const syncingLogistics = ref(false);
+const logisticsProgress = reactive({ phase: '', done: 0, total: 0 });
+let logisticsTimer = null;
+const LOGISTICS_PHASE_LABEL = { A: '补物流单号', B: '拉1688轨迹', C: '拉拼多多轨迹' };
+
+async function onSyncPurchaseLogistics() {
+  if (syncingLogistics.value) return;
+  try {
+    const resp = await syncPurchaseLogistics();
+    const data = resp?.data || resp || {};
+    if (data.started === false) {
+      show('采购物流同步已在进行中(定时轮或手动),展示进度如下', 'info');
+    } else {
+      show('采购物流同步已启动:补单号 + 1688/拼多多轨迹(每阶段上限100单)', 'success');
+    }
+    const st = data.status || {};
+    Object.assign(logisticsProgress, { phase: st.phase || '', done: st.progress?.done || 0, total: st.progress?.total || 0 });
+    syncingLogistics.value = true;
+    startLogisticsPolling();
+  } catch (e) {
+    show('启动采购物流同步失败:' + (e.message || e), 'error');
+  }
+}
+
+function startLogisticsPolling() {
+  if (logisticsTimer) clearInterval(logisticsTimer);
+  logisticsTimer = setInterval(async () => {
+    try {
+      const resp = await getPurchaseLogisticsProgress();
+      const st = resp?.data || resp;
+      if (!st) return;
+      logisticsProgress.phase = st.phase || '';
+      logisticsProgress.done = st.progress?.done || 0;
+      logisticsProgress.total = st.progress?.total || 0;
+      if (!st.running) {
+        clearInterval(logisticsTimer);
+        logisticsTimer = null;
+        syncingLogistics.value = false;
+        if (st.error) {
+          show('采购物流同步异常:' + st.error, 'error');
+        } else if (st.result) {
+          const r = st.result;
+          const parts = [
+            `补单号 ${r.phaseA?.filled ?? 0}/${r.phaseA?.scanned ?? 0}`,
+            `1688轨迹 ${r.phaseB?.updated ?? 0}/${r.phaseB?.scanned ?? 0}`,
+            `PDD轨迹 ${r.phaseC?.updated ?? 0}/${r.phaseC?.scanned ?? 0}`,
+          ];
+          show(`物流同步完成:${parts.join(', ')}`, 'success');
+        }
+        await loadList();
+      }
+    } catch { /* 网络闪断:继续轮询 */ }
+  }, 3000);
 }
 
 // 打开全量同步弹窗
@@ -2165,6 +2224,15 @@ onMounted(() => {
   tickTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
   // 平台订单登录态探测(后端 cloakbrowser,替代原扩展 PING/PONG)
   loadPlatformStatus();
+  // 采购物流轮若正在跑(定时轮/他页触发),恢复进度轮询态(2026-09-17)
+  getPurchaseLogisticsProgress().then((resp) => {
+    const st = resp?.data || resp;
+    if (st?.running) {
+      syncingLogistics.value = true;
+      Object.assign(logisticsProgress, { phase: st.phase || '', done: st.progress?.done || 0, total: st.progress?.total || 0 });
+      startLogisticsPolling();
+    }
+  }).catch(() => { /* 静默 */ });
   // PDD 登录同步页面桥(插件 popup 同步 cookie 的接入口)
   window.addEventListener('message', onPddSyncBridgeMessage);
   // 标签选择面板:点面板外任意处关闭(2026-09-15 v4)
@@ -2173,6 +2241,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer);
   if (tickTimer) clearInterval(tickTimer);
+  if (logisticsTimer) clearInterval(logisticsTimer);
   window.removeEventListener('message', onPddSyncBridgeMessage);
   document.removeEventListener('click', onDocClickCloseTagPicker);
   if (printFrame) {
@@ -2239,6 +2308,16 @@ onUnmounted(() => {
           {{ enrichingItems ? '补全中…' : '补全采购订单信息' }}
         </button>
         <button v-if="enrichingItems" class="btn btn-danger" @click="enrichStop" title="中止当前补全任务(已采集未入库的批次会收尾入库)">中止</button>
+        <button class="btn btn-ghost" :disabled="syncingLogistics" @click="onSyncPurchaseLogistics" title="同步采购物流信息:补物流单号(1688)+拉完整轨迹(1688官方API+拼多多),与每小时定时轮同逻辑互斥,单轮每阶段上限100单">
+          {{ syncingLogistics ? '物流同步中…' : '同步采购物流信息' }}
+        </button>
+      </div>
+      <div v-if="syncingLogistics" class="enrich-progress-bar">
+        <span class="tag tag-info">物流同步</span>
+        <span class="enrich-progress-text">
+          {{ LOGISTICS_PHASE_LABEL[logisticsProgress.phase] || '准备中' }}
+          <template v-if="logisticsProgress.total"> · {{ logisticsProgress.done }}/{{ logisticsProgress.total }}</template>
+        </span>
       </div>
       <div v-if="enrichingItems" class="enrich-progress-bar">
         <span class="tag tag-info">补全中</span>
