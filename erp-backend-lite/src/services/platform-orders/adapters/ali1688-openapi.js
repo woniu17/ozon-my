@@ -255,4 +255,32 @@ async function searchAliOpenApiInAccount(orderSn, account) {
   return result;
 }
 
-export { hasAliOpenApiToken, listAli1688OpenApiOrders, searchAliOpenApiInAccount };
+/** 买家版物流轨迹 API(2026-09-16 实测可用:返回 logisticsSteps[] 节点=acceptTime+remark;
+ *  已签收较久的单可能返回 errorMessage"该订单没有物流跟踪信息" → 视为无轨迹) */
+const API_TRACE = '1/com.alibaba.logistics/alibaba.trade.getLogisticsTraceInfo.buyerView';
+
+/** 单笔查物流单号+公司(采购物流补全轮询用)
+ *  未发货单实测返回 HTTP 200 + success:false(错误码 500_2"订单尚未发货",无 result)→ logisticsNo 为空,调用方跳过 */
+async function getLogisticsForOrder(orderSn, account) {
+  const r = await callOpenApi(API_LOGISTICS, account, {
+    orderId: String(orderSn), fields: 'company,logisticsBillNo', webSite: '1688',
+  });
+  const packs = Array.isArray(r.result) ? r.result : [];
+  return {
+    logisticsNo: String((packs[0] && packs[0].logisticsBillNo) || ''),
+    logisticsCompany: pickLogisticsCompany(packs),
+    logisticsStatus: String((packs[0] && packs[0].status) || ''),
+  };
+}
+
+/** 单笔查物流轨迹(完整节点,多物流包 steps 合并,按时间倒序=最新在前)
+ *  @returns {{ steps: Array<{acceptTime, remark}>, raw: Array }} */
+async function getTraceForOrder(orderSn, account) {
+  const r = await callOpenApi(API_TRACE, account, { orderId: String(orderSn), webSite: '1688' });
+  const traces = Array.isArray(r.logisticsTrace) ? r.logisticsTrace : [];
+  const steps = traces.flatMap((t) => (Array.isArray(t.logisticsSteps) ? t.logisticsSteps : []));
+  steps.sort((a, b) => String(b.acceptTime || '').localeCompare(String(a.acceptTime || '')));
+  return { steps, raw: traces };
+}
+
+export { hasAliOpenApiToken, listAli1688OpenApiOrders, searchAliOpenApiInAccount, getLogisticsForOrder, getTraceForOrder };

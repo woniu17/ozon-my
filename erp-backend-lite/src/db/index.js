@@ -349,6 +349,14 @@ async function ensureMigrations() {
       console.log('[db] backfill: copied items_json from miaoshou_purchase to op_purchase_order');
     }
   }
+  // 2026-09-16: op_purchase_order.trace_json 完整物流轨迹节点(1688买家版API定时拉取,采购物流补全轮询器写入)
+  {
+    const poColsT = db.prepare(`PRAGMA table_info(op_purchase_order)`).all();
+    if (poColsT.length > 0 && !poColsT.some((c) => c.name === 'trace_json')) {
+      db.exec(`ALTER TABLE op_purchase_order ADD COLUMN trace_json TEXT`);
+      console.log('[db] migration: added column op_purchase_order.trace_json');
+    }
+  }
   // collect_queue_tasks:增加 duration 列(SW result 接口上报任务耗时)
   const taskCols = db.prepare(`PRAGMA table_info(collect_queue_tasks)`).all();
   if (!taskCols.some((c) => c.name === 'duration')) {

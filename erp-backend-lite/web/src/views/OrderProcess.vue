@@ -1415,6 +1415,15 @@ function isQcPosting(sn) {
   const s = String(sn || '');
   return s.startsWith('02131') || s.startsWith('024785');
 }
+// 采购物流轨迹展开状态(link.id → bool)与解析(trace_json = [{acceptTime, remark}] 最新在前)
+const traceOpen = reactive({});
+function parseTraceSteps(l) {
+  if (!l || !l.traceJson) return [];
+  try {
+    const arr = JSON.parse(l.traceJson);
+    return Array.isArray(arr) ? arr.filter((s) => s && (s.remark || s.acceptTime)) : [];
+  } catch { return []; }
+}
 
 // 选择面板:打开(同一时刻仅一行)
 function openTagPicker(pkg) {
@@ -2630,9 +2639,19 @@ onUnmounted(() => {
                     </div>
                   </div>
                 </div>
-                <div v-if="l.poLogisticsNo" class="sub">
+                <div v-if="l.poLogisticsNo" class="sub po-logistics-line" :title="l.lastTraceDesc || ''">
                   {{ l.poLogisticsCompany }}
                   <a :href="trackingSearchUrl(l.poLogisticsCompany, l.poLogisticsNo)" target="_blank" rel="noopener" class="order-link" title="百度搜索物流状态">{{ l.poLogisticsNo }}</a>
+                  <button v-if="parseTraceSteps(l).length" class="trace-toggle" @click.stop="traceOpen[l.id] = !traceOpen[l.id]">
+                    {{ traceOpen[l.id] ? '收起' : '轨迹' + parseTraceSteps(l).length + '条' }}
+                  </button>
+                </div>
+                <!-- 完整物流轨迹(1688买家版API/妙手,最新在前) -->
+                <div v-if="traceOpen[l.id] && parseTraceSteps(l).length" class="trace-box">
+                  <div v-for="(s, k) in parseTraceSteps(l)" :key="k" class="trace-step">
+                    <span class="trace-time mono">{{ s.acceptTime }}</span>
+                    <span class="trace-remark">{{ s.remark }}</span>
+                  </div>
                 </div>
               </div>
             </td>
@@ -3806,6 +3825,52 @@ a.product-title:hover {
   font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
+}
+/* 采购物流行:轨迹展开按钮 + 完整轨迹面板(最新在前,限高滚动) */
+.po-logistics-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.trace-toggle {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid #c7d2fe;
+  border-radius: 4px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.trace-toggle:hover {
+  background: #e0e7ff;
+}
+.trace-box {
+  margin-top: 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fafafa;
+  padding: 6px 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trace-step {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.trace-time {
+  flex: none;
+  color: #6b7280;
+}
+.trace-remark {
+  color: #111827;
+  word-break: break-all;
 }
 .pkg-tags-meta-line .copy-btn {
   flex: none;

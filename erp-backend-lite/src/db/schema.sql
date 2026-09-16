@@ -994,6 +994,7 @@ CREATE TABLE IF NOT EXISTS op_purchase_order (
   logistics_no      TEXT,
   last_trace_at     TEXT,
   last_trace_desc   TEXT,
+  trace_json        TEXT,                       -- 完整物流轨迹节点(1688买家版API/妙手,[{acceptTime,remark}] 最新在前)
   note              TEXT,
   gmt_create        TEXT,
   gmt_modified      TEXT,

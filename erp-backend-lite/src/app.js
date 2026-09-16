@@ -40,6 +40,7 @@ import { startStockRefreshPoller, stopStockRefreshPoller } from './services/stoc
 import { startProductUpdatePoller, stopProductUpdatePoller } from './services/product-update-poller.js';
 import { startProductArchivePoller, stopProductArchivePoller } from './services/product-archive-poller.js';
 import { startProductSyncCron, stopProductSyncCron } from './services/product-sync-cron.js';
+import { startPurchaseLogisticsPoller, stopPurchaseLogisticsPoller } from './services/purchase-logistics-poller.js';
 import imageRefreshRoutes from './modules/image-refresh.js';
 import stockRefreshRoutes from './modules/stock-refresh.js';
 import productUpdateRoutes from './modules/product-update.js';
@@ -206,6 +207,9 @@ const server = app.listen(config.port, () => {
   startPriceWatchRetention();
   // 商品定时同步(2026-09):每8小时(0点/8点/16点)静默同步所有店铺商品+详情,串行避免限流
   startProductSyncCron();
+  // 采购物流补全(2026-09-16):每小时补全 1688 采购单物流单号(未发货时关联入库的遗留空值)
+  //   + 拉取完整物流轨迹(买家版API)写 trace_json/last_trace_*
+  startPurchaseLogisticsPoller();
 });
 
 // 优雅退出
@@ -223,6 +227,7 @@ async function shutdown(signal) {
   stopEndpointMetricsRetention();
   stopPriceWatchRetention();
   stopProductSyncCron();
+  stopPurchaseLogisticsPoller();
   // 平台订单(2026-09):关闭 cloakbrowser + 释放 profile 锁
   await stopPlatformOrders();
   server.close(() => {
