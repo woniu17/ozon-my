@@ -1332,8 +1332,9 @@ watch(newSelectedOrders, (sel) => {
   purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
   const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
   purchaseForm.sellerName = sellers.join(',');
-  // 买家身份:用户名自动回填到采购账号(手填可覆盖);平台用户ID随提交落库
-  const buyerNames = [...new Set(sel.map((o) => o.buyerUsername).filter(Boolean))];
+  // 买家身份:采购账号统一用配置账号名(PLATFORM_ACCOUNTS_*,如 linqx/chenlin/linrh/yefu),
+  // 平台登录名(tb537642872 之类)仅作无 account 时兜底;平台用户ID随提交落库
+  const buyerNames = [...new Set(sel.map((o) => o.account || o.buyerUsername).filter(Boolean))];
   purchaseForm.buyerAccount = buyerNames.join(',');
   const buyerIds = [...new Set(sel.map((o) => o.buyerUserId).filter(Boolean))];
   purchaseForm.buyerUserId = buyerIds.join(',');

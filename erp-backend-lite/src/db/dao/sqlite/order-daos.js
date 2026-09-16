@@ -1607,6 +1607,16 @@ function clearPackagePurchaseInfo(packageId, now) {
  *   - op_purchase_link:INSERT OR IGNORE;upsert 冲突时 link_status 强制回 'linked'(同步即重建关联)
  * 平台映射:天猫(tmall)→ 淘宝(taobao),其它直接映射
  */
+// 1688/淘宝 平台登录名 → 配置账号名(PLATFORM_ACCOUNTS_ALI1688/TAOBAO;实测映射 2026-09-16:
+// linqx=清祥17 buyerUserId 658750087(淘宝 unb 同值)/ chenlin=atenlin3 / linrh=tb537642872 / yefu=tb4467638421)
+// 采购买家(buyer_account)统一落库/展示为配置账号名;拼多多买家(PCC01/YQL001)与其它平台不翻译
+const ALI_LOGIN_TO_ACCOUNT = { 清祥17: 'linqx', atenlin3: 'chenlin', tb537642872: 'linrh', tb4467638421: 'yefu' };
+/** 采购买家账号归一:平台登录名翻译成配置账号名(1688/淘宝);其它原样 */
+function normalizeBuyerAccount(platform, buyerAccount) {
+  if (!buyerAccount) return buyerAccount;
+  if (platform !== '1688' && platform !== 'taobao') return buyerAccount;
+  return ALI_LOGIN_TO_ACCOUNT[buyerAccount] || buyerAccount;
+}
 function syncFromMiaoshou({ packageIds } = {}) {
   // 1) 选取本地包裹(有 logistics_no,可按 packageIds 限定)
   const idFilter = Array.isArray(packageIds) && packageIds.length > 0;
@@ -1766,7 +1776,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
           const poId = upsertPo.get(
             String(pur.purchase_sn),
             localPlatform,
-            pur.buyer_account || null,
+            normalizeBuyerAccount(localPlatform, pur.buyer_account) || null,
             pur.seller_name || null,
             purAmount,
             purAmount,
