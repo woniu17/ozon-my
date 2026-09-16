@@ -1609,11 +1609,13 @@ function clearPackagePurchaseInfo(packageId, now) {
  */
 // 1688/淘宝 平台登录名 → 配置账号名(PLATFORM_ACCOUNTS_ALI1688/TAOBAO;实测映射 2026-09-16:
 // linqx=清祥17 buyerUserId 658750087(淘宝 unb 同值)/ chenlin=atenlin3 / linrh=tb537642872 / yefu=tb4467638421)
-// 采购买家(buyer_account)统一落库/展示为配置账号名;拼多多买家(PCC01/YQL001)与其它平台不翻译
+// 采购买家(buyer_account)统一落库/展示为配置账号名(PLATFORM_ACCOUNTS_*)
 const ALI_LOGIN_TO_ACCOUNT = { 清祥17: 'linqx', atenlin3: 'chenlin', tb537642872: 'linrh', tb4467638421: 'yefu' };
-/** 采购买家账号归一:平台登录名翻译成配置账号名(1688/淘宝);其它原样 */
+/** 采购买家账号归一:平台登录名翻译成配置账号名;其它原样
+ *  1688/淘宝:按映射表;拼多多:PLATFORM_ACCOUNTS_PDD=linqx 单账号,PCC01/YQL001 等一律 linqx */
 function normalizeBuyerAccount(platform, buyerAccount) {
   if (!buyerAccount) return buyerAccount;
+  if (platform === 'yangkeduo') return 'linqx';
   if (platform !== '1688' && platform !== 'taobao') return buyerAccount;
   return ALI_LOGIN_TO_ACCOUNT[buyerAccount] || buyerAccount;
 }
