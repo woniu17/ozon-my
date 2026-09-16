@@ -2080,6 +2080,14 @@ function orderDetailUrl(platform, purchaseSn) {
   return '';
 }
 
+/** 国内快递单号物流查询链接(百度按"快递公司 单号"搜索;公司缺失只搜单号) */
+function trackingSearchUrl(company, trackingNo) {
+  const no = String(trackingNo || '').trim();
+  if (!no) return '';
+  const kw = `${String(company || '').trim()} ${no}`.trim();
+  return `https://www.baidu.com/s?wd=${encodeURIComponent(kw)}`;
+}
+
 // 弹窗里展示的产品行(含已回写采购金额)
 const detailItems = computed(() => detail.value?.items || []);
 const detailLinks = computed(() => detail.value?.purchaseLinks || []);
@@ -2564,7 +2572,8 @@ onUnmounted(() => {
                   </div>
                 </div>
                 <div v-if="l.poLogisticsNo" class="sub muted">
-                  {{ l.poLogisticsCompany }} {{ l.poLogisticsNo }}
+                  {{ l.poLogisticsCompany }}
+                  <a :href="trackingSearchUrl(l.poLogisticsCompany, l.poLogisticsNo)" target="_blank" rel="noopener" class="order-link" title="百度搜索物流状态">{{ l.poLogisticsNo }}</a>
                 </div>
               </div>
             </td>
@@ -3118,7 +3127,7 @@ onUnmounted(() => {
                   买:{{ l.buyerAccount || '—' }}<template v-if="l.buyerUserId">(#{{ l.buyerUserId }})</template>
                 </div>
               </td>
-              <td>{{ l.poLogisticsCompany }} {{ l.poLogisticsNo || '' }}</td>
+              <td>{{ l.poLogisticsCompany }} <a v-if="l.poLogisticsNo" :href="trackingSearchUrl(l.poLogisticsCompany, l.poLogisticsNo)" target="_blank" rel="noopener" class="order-link" title="百度搜索物流状态">{{ l.poLogisticsNo }}</a></td>
               <td>
                 <button class="btn btn-danger btn-sm" @click="onUnlink(detail.package, l)">取消关联</button>
               </td>
