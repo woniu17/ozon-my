@@ -2594,8 +2594,8 @@ onUnmounted(() => {
           <tr>
             <th class="col-product">产品信息</th>
             <th class="col-qty">数量</th>
-            <th class="col-amount">金额(利润)</th>
             <th class="col-purchase">采购信息</th>
+            <th class="col-amount">金额(利润)</th>
             <th class="col-status">状态/时间</th>
             <th class="col-actions">操作</th>
           </tr>
@@ -2710,29 +2710,6 @@ onUnmounted(() => {
               <div v-for="(it, i) in pkg.items" :key="i" class="qty-line" :class="{ 'qty-multi': it.quantity > 1 }">× {{ it.quantity }}</div>
               <div v-if="!pkg.items?.length" class="muted">—</div>
             </td>
-            <td class="col-amount">
-              <!-- 金额列:名称左对齐、数字右对齐(amt-row flex);利润率单独两行 -->
-              <div class="amt-row"><span class="amt-name">订单</span><span class="amt-val">{{ fmtMoney(pkg.orderAmount) }}</span></div>
-              <div class="amt-row"><span class="amt-name">采购</span><span class="amt-val" :class="{ muted: !pkg.totalPurchaseAmount }">{{ fmtMoney(pkg.totalPurchaseAmount) }}</span></div>
-              <!-- 代理佣金:有应计=66 类型实扣换算;已取消=0(不估算);其余=16% 预估(标"估") -->
-              <div class="amt-row sub muted" :title="agentFeeTitle(pkg)"><span class="amt-name">{{ pkg.accrual || isCancelled(pkg) ? '代理佣金' : '代理佣金(估)' }}</span><span class="amt-val">{{ fmtMoney(pkg.accrual?.agentFee ?? pkg.profit?.commission) }}</span></div>
-              <!-- 国际配送(实际):应计 type 67 -->
-              <div class="amt-row sub" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送</span><span class="amt-val" :class="{ muted: pkg.accrual?.delivery == null }">{{ pkg.accrual?.delivery != null ? fmtMoney(pkg.accrual.delivery) : '—' }}</span></div>
-              <!-- 国际配送(估):公式 3.37 + 0.0281 × weight_g 估算 -->
-              <div class="amt-row sub muted" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送(估)</span><span class="amt-val" :class="{ muted: pkg.profit?.delivery == null }">{{ pkg.profit?.delivery != null ? fmtMoney(pkg.profit.delivery) : '—' }}</span></div>
-              <!-- 重量(实际):来源=订单称重 或 Ozon后台同步SKU加权(整数 g) -->
-              <div class="amt-row sub" :title="weightTitle(pkg)"><span class="amt-name">{{ weightLabel(pkg) }}</span><span class="amt-val" :class="{ muted: pkg.weightG == null }">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span></div>
-              <!-- 重量(估):由实际配送费反推(整数 g) -->
-              <div class="amt-row sub muted" :title="weightTitle(pkg)"><span class="amt-name">重量(估)</span><span class="amt-val" :class="{ muted: pkg.accrual?.derivedWeight == null }">{{ pkg.accrual?.derivedWeight != null ? pkg.accrual.derivedWeight + 'g' : '—' }}</span></div>
-              <!-- 其它费用:销售佣金/星星商品/逆向物流等,= 应计合计 − 代理 − 配送 -->
-              <div class="amt-row sub" :title="othersTitle(pkg)"><span class="amt-name">其它费用</span><span class="amt-val" :class="{ muted: !pkg.accrual }">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</span></div>
-              <div class="amt-row" :title="profitTitle(pkg)">
-                <span class="amt-name sub">{{ profitLabel(pkg) }}</span>
-                <span class="amt-val" :class="pkg.profit?.profit > 0 ? 'profit-pos' : (pkg.profit?.profit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(pkg.profit?.profit) }}</span>
-              </div>
-              <div class="amt-row sub" title="销售利润率 = 利润 / 订单金额"><span class="amt-name">销售利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateSale) }}</span></div>
-              <div class="amt-row sub" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateCost) }}</span></div>
-            </td>
             <td class="col-purchase">
               <div v-if="!pkg.purchaseLinks?.length" class="muted">未录入</div>
               <div v-for="l in pkg.purchaseLinks" :key="l.id" class="purchase-item">
@@ -2789,6 +2766,29 @@ onUnmounted(() => {
                   </div>
                 </div>
               </div>
+            </td>
+            <td class="col-amount">
+              <!-- 金额列:名称左对齐、数字右对齐(amt-row flex);利润率单独两行 -->
+              <div class="amt-row"><span class="amt-name">订单</span><span class="amt-val">{{ fmtMoney(pkg.orderAmount) }}</span></div>
+              <div class="amt-row"><span class="amt-name">采购</span><span class="amt-val" :class="{ muted: !pkg.totalPurchaseAmount }">{{ fmtMoney(pkg.totalPurchaseAmount) }}</span></div>
+              <!-- 代理佣金:有应计=66 类型实扣换算;已取消=0(不估算);其余=16% 预估(标"估") -->
+              <div class="amt-row sub muted" :title="agentFeeTitle(pkg)"><span class="amt-name">{{ pkg.accrual || isCancelled(pkg) ? '代理佣金' : '代理佣金(估)' }}</span><span class="amt-val">{{ fmtMoney(pkg.accrual?.agentFee ?? pkg.profit?.commission) }}</span></div>
+              <!-- 国际配送(实际):应计 type 67 -->
+              <div class="amt-row sub" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送</span><span class="amt-val" :class="{ muted: pkg.accrual?.delivery == null }">{{ pkg.accrual?.delivery != null ? fmtMoney(pkg.accrual.delivery) : '—' }}</span></div>
+              <!-- 国际配送(估):公式 3.37 + 0.0281 × weight_g 估算 -->
+              <div class="amt-row sub muted" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送(估)</span><span class="amt-val" :class="{ muted: pkg.profit?.delivery == null }">{{ pkg.profit?.delivery != null ? fmtMoney(pkg.profit.delivery) : '—' }}</span></div>
+              <!-- 重量(实际):来源=订单称重 或 Ozon后台同步SKU加权(整数 g) -->
+              <div class="amt-row sub" :title="weightTitle(pkg)"><span class="amt-name">{{ weightLabel(pkg) }}</span><span class="amt-val" :class="{ muted: pkg.weightG == null }">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span></div>
+              <!-- 重量(估):由实际配送费反推(整数 g) -->
+              <div class="amt-row sub muted" :title="weightTitle(pkg)"><span class="amt-name">重量(估)</span><span class="amt-val" :class="{ muted: pkg.accrual?.derivedWeight == null }">{{ pkg.accrual?.derivedWeight != null ? pkg.accrual.derivedWeight + 'g' : '—' }}</span></div>
+              <!-- 其它费用:销售佣金/星星商品/逆向物流等,= 应计合计 − 代理 − 配送 -->
+              <div class="amt-row sub" :title="othersTitle(pkg)"><span class="amt-name">其它费用</span><span class="amt-val" :class="{ muted: !pkg.accrual }">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</span></div>
+              <div class="amt-row" :title="profitTitle(pkg)">
+                <span class="amt-name sub">{{ profitLabel(pkg) }}</span>
+                <span class="amt-val" :class="pkg.profit?.profit > 0 ? 'profit-pos' : (pkg.profit?.profit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(pkg.profit?.profit) }}</span>
+              </div>
+              <div class="amt-row sub" title="销售利润率 = 利润 / 订单金额"><span class="amt-name">销售利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateSale) }}</span></div>
+              <div class="amt-row sub" title="成本利润率 = 利润 / 采购金额"><span class="amt-name">成本利润率</span><span class="amt-val">{{ fmtRate(pkg.profit?.profitRateCost) }}</span></div>
             </td>
             <td class="col-status">
               <div>
@@ -3647,8 +3647,8 @@ onUnmounted(() => {
 }
 
 .col-product {
-  min-width: 220px;
-  max-width: 280px;
+  min-width: 380px;
+  max-width: 380px;
 }
 
 .product-item + .product-item {
@@ -3749,8 +3749,8 @@ a.product-title:hover {
 }
 
 .col-purchase {
-  min-width: 220px;
-  max-width: 280px;
+  min-width: 380px;
+  max-width: 380px;
 }
 
 /* 采购信息列:参考产品信息列 product-item 结构,展示采购商品图/名称/规格/价格×数量 */
