@@ -1173,10 +1173,8 @@ async function loadOrders(tabKey) {
     const resp = await platformOrdersReq(def.platform, { tab: st.tab, size: 30, account: def.account });
     if (!resp.ok) throw new Error(resp.error || '获取订单失败');
     st.orders = resp.orders || [];
-    // tab 标签增强:多账号 tab 用真实平台用户名替换内部别名(1688·linqx → 1688·清祥17)
-    // (内部别名仍用于 API account 参数与选中键,label 仅展示;/status 刷新后重新加载订单时会再增强)
-    const uname = st.orders.find((o) => o.buyerUsername)?.buyerUsername;
-    if (uname && def.label.includes('·')) def.label = `${def.label.split('·')[0]}·${uname}`;
+    // tab 标签固定用配置别名(PLATFORM_ACCOUNTS_*,如 linrh);不再用订单 buyerUsername 增强——
+    // 2026-09-17 用户确认统一别名口径,原增强会把 linrh 替换成平台登录名 tb537642872(仅该账号订单带 loginId)
   } catch (err) {
     st.error = err.message || String(err);
     st.orders = [];
