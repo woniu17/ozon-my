@@ -616,7 +616,7 @@ async function flushEnrichBatch(items) {
 const syncingLogistics = ref(false);
 const logisticsProgress = reactive({ phase: '', done: 0, total: 0 });
 let logisticsTimer = null;
-const LOGISTICS_PHASE_LABEL = { A: '补物流单号', B: '拉1688轨迹', C: '拉拼多多轨迹' };
+const LOGISTICS_PHASE_LABEL = { 'fill-ali': '补1688单号', 'fill-pdd': '补拼多多单号', 'trace-ali': '拉1688轨迹', 'trace-pdd': '拉拼多多轨迹' };
 
 async function onSyncPurchaseLogistics() {
   if (syncingLogistics.value) return;
@@ -656,7 +656,8 @@ function startLogisticsPolling() {
         } else if (st.result) {
           const r = st.result;
           const parts = [
-            `补单号 ${r.phaseA?.filled ?? 0}/${r.phaseA?.scanned ?? 0}`,
+            `1688单号 ${r.phaseA?.filled ?? 0}/${r.phaseA?.scanned ?? 0}`,
+            `PDD单号 ${r.phaseApdd?.filled ?? 0}/${r.phaseApdd?.scanned ?? 0}`,
             `1688轨迹 ${r.phaseB?.updated ?? 0}/${r.phaseB?.scanned ?? 0}`,
             `PDD轨迹 ${r.phaseC?.updated ?? 0}/${r.phaseC?.scanned ?? 0}`,
           ];

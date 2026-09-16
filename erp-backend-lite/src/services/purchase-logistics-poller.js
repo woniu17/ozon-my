@@ -4,6 +4,9 @@
 // 职责:
 //   阶段A 补物流单号(1688 官方 API):扫"有单号+无物流+未取消+90天内"的 1688 采购单
 //     → getLogisticsInfos 回填单号+公司(未发货单返回空单号,静默跳过,下轮再试)
+//   阶段A-PDD 补物流单号(拼多多,浏览器):同条件扫 yangkeduo 采购单 → 按单号
+//     精确搜索(order_list_search_v4),发货单自带 tracking_number 回填;
+//     单号回填后同轮的阶段C 即可拉到轨迹
 //   阶段B 拉完整轨迹(1688 官方 API):扫"有物流单号+未签收+轨迹超1小时未更新"的 1688 采购单
 //     → getLogisticsTraceInfo.buyerView 写 trace_json(完整节点)+ last_trace_at/last_trace_desc(与妙手口径一致)
 //   阶段C 拉完整轨迹(拼多多,浏览器):同阶段B 扫描条件的 yangkeduo 采购单 → goods_express
@@ -14,7 +17,7 @@
 import { db } from '../db/index.js';
 import config from '../config/index.js';
 import { getLogisticsForOrder, getTraceForOrder, hasAliOpenApiToken } from './platform-orders/adapters/ali1688-openapi.js';
-import { getPddTrace } from './platform-orders/adapters/pdd.js';
+import { getPddTrace, searchPddOrder } from './platform-orders/adapters/pdd.js';
 import logger from '../middleware/log.js';
 
 const POLL_INTERVAL_MS = 60 * 60 * 1000; // 每小时
@@ -33,9 +36,9 @@ const manualStatus = {
   running: false,        // 本轮进行中(定时轮或手动触发)
   startedAt: null,
   finishedAt: null,
-  phase: '',             // A=补单号 B=1688轨迹 C=PDD轨迹
+  phase: '',             // fill-ali/fill-pdd/trace-ali/trace-pdd
   progress: { done: 0, total: 0 }, // 当前阶段进度
-  result: null,          // { phaseA, phaseB, phaseC }
+  result: null,          // { phaseA, phaseApdd, phaseB, phaseC }
   error: null,
 };
 
@@ -79,6 +82,59 @@ async function phaseFillLogistics() {
       logger.warn({ purchaseSn: r.purchase_sn, err: e.message }, '[purchase-logistics-poller] 阶段A:单笔查询失败');
       if (consecutive >= MAX_CONSECUTIVE_FAILURES) {
         logger.warn('[purchase-logistics-poller] 阶段A:连续失败达阈值,本轮中止');
+        break;
+      }
+    }
+    await sleep(REQUEST_INTERVAL_MS);
+  }
+  return { scanned: rows.length, filled, skippedNoAccount };
+}
+
+/** 阶段A-PDD:补拼多多物流单号(order_list_search_v4 按单号精确搜索,发货单自带 tracking_number)
+ *  PDD 采购单在关联入库时若尚未发货则无单号,平台发货后靠本阶段回填;
+ *  单号回填后同轮的阶段C(trace-pdd)即可拉到轨迹(扫描条件含 logistics_no 非空) */
+async function phaseFillPddLogistics() {
+  const rows = db.prepare(
+    `SELECT id, purchase_sn, buyer_account FROM op_purchase_order
+     WHERE platform = 'yangkeduo' AND link_status = 'linked'
+       AND purchase_sn IS NOT NULL AND length(purchase_sn) > 0
+       AND (logistics_no IS NULL OR length(logistics_no) = 0)
+       AND status NOT IN ('closed')
+       AND (gmt_create IS NULL OR gmt_create >= datetime('now', ?))
+     ORDER BY gmt_create DESC
+     LIMIT ?`
+  ).all(`-${MAX_AGE_DAYS} days`, MAX_PER_ROUND);
+  if (!rows.length) return { scanned: 0, filled: 0, skippedNoAccount: 0 };
+  manualStatus.progress = { done: 0, total: rows.length };
+
+  const pddAccounts = config.platformAccounts.pdd || [];
+  let filled = 0, skippedNoAccount = 0, consecutive = 0;
+  for (const r of rows) {
+    manualStatus.progress.done++;
+    const account = pddAccounts.includes(r.buyer_account) ? r.buyer_account : pddAccounts[0];
+    if (!account) { skippedNoAccount++; continue; }
+    try {
+      const r2 = await searchPddOrder(r.purchase_sn, [account]);
+      const order = r2 && r2.result;
+      if (order && order.trackingNumber) {
+        db.prepare(
+          `UPDATE op_purchase_order
+           SET logistics_no = ?,
+               status = CASE WHEN status IN ('wait_send', 'wait_pay') THEN 'shipped' ELSE status END,
+               gmt_modified = ?
+           WHERE id = ?`
+        ).run(order.trackingNumber, new Date().toISOString(), r.id);
+        filled++;
+        logger.info({ purchaseSn: r.purchase_sn, logisticsNo: order.trackingNumber },
+          '[purchase-logistics-poller] 阶段A-PDD:回填物流单号');
+      }
+      // 未发货(单里无单号)静默跳过,下轮再试
+      consecutive = 0;
+    } catch (e) {
+      consecutive++;
+      logger.warn({ purchaseSn: r.purchase_sn, err: e.message }, '[purchase-logistics-poller] 阶段A-PDD:单笔搜索失败');
+      if (consecutive >= MAX_CONSECUTIVE_FAILURES) {
+        logger.warn('[purchase-logistics-poller] 阶段A-PDD:连续失败达阈值,本轮中止');
         break;
       }
     }
@@ -199,13 +255,15 @@ async function phaseFetchPddTrace() {
 }
 
 async function runOnce() {
-  manualStatus.phase = 'A';
+  manualStatus.phase = 'fill-ali';
   const a = await phaseFillLogistics();
-  manualStatus.phase = 'B';
+  manualStatus.phase = 'fill-pdd';
+  const ap = await phaseFillPddLogistics();
+  manualStatus.phase = 'trace-ali';
   const b = await phaseFetchTrace();
-  manualStatus.phase = 'C';
+  manualStatus.phase = 'trace-pdd';
   const c = await phaseFetchPddTrace();
-  const result = { phaseA: a, phaseB: b, phaseC: c };
+  const result = { phaseA: a, phaseApdd: ap, phaseB: b, phaseC: c };
   logger.info(result, '[purchase-logistics-poller] 本轮完成');
   return result;
 }
