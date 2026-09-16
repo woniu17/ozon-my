@@ -264,80 +264,54 @@ async function searchPddOrder(orderSn, accounts = []) {
   return { result: null }; // 所有账号正常,单号不存在
 }
 
-/** 买家版物流轨迹(goods_express H5,2026-09-16)
- *  方案:独立标签页真实导航 goods_express.html?order_sn=&tracking_number=,
- *  page.on('response') 拦截 api/express/shipping/track 响应——该 API 需页面自身
- *  生成 antiContent(H5 异步 chunk),裸 fetch 实测 9990,必须让页面自己发请求;
+/** 买家版物流轨迹(goods_express H5 SSR,2026-09-16)
+ *  方案:独立标签页打开 goods_express.html?order_sn=&tracking_number=,直接读
+ *  SSR 数据岛 window.rawData.store.traceData.shipping(含 shippingName 与 traces[] 节点)。
+ *  实测该页为服务端渲染,轨迹数据内联在 HTML 中,无轨迹 XHR;直连轨迹 API 需页面
+ *  生成 antiContent(裸 fetch 返回 9990),故以读数据岛为准,domcontentloaded 即可用
+ *  (与 fetchPddNickname 读 personal.html rawData 同一模式);
  *  独立标签页用完即关,不污染订单列表主页面(context 内 cookie 共享,登录态天然可用)
- *  返回 { steps: [{acceptTime, remark}](最新在前,与1688买家版轨迹口径一致), raw } */
+ *  返回 { steps: [{acceptTime, remark}](最新在前,与1688买家版轨迹口径一致), shippingName, raw } */
 async function getPddTrace(orderSn, trackingNumber, account) {
   return withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
     const url = `${PDD_ORIGIN}/goods_express.html?order_sn=${encodeURIComponent(orderSn)}&tracking_number=${encodeURIComponent(trackingNumber)}`;
     const tab = await page.context().newPage();
-    let payload = null;
-    let httpStatus = 0;
-    // 诊断:记录页面发起的全部 XHR 请求(轨迹请求缺失时定位页面状态)
-    const apiUrls = [];
-    const handler = (resp) => {
-      const u = resp.url();
-      try {
-        if (/yangkeduo\.com|pddpic\.com/.test(u) && resp.request().resourceType() === 'xhr') {
-          apiUrls.push(`${resp.status()} ${resp.request().method()} ${u.slice(0, 160)}`);
-        }
-      } catch { /* 已关闭 */ }
-      if (!u.includes('express/shipping/track')) return;
-      httpStatus = resp.status();
-      resp.json().then((j) => { payload = j; }).catch(() => { /* 非 JSON */ });
-    };
-    tab.on('response', handler);
+    let ship = null;
     let finalUrl = '';
-    let domInfo = '';
+    let pageText = '';
     try {
-      await tab.goto(url, { waitUntil: 'load', timeout: 30 * 1000 });
-      // 轨迹请求由页面主组件挂载后异步发出(需先加载 React bundle),等待最多 25s
-      // (withPage 任务总超时 60s,goto+等待预算需收敛在 55s 内)
-      const deadline = Date.now() + 25 * 1000;
-      while (!payload && Date.now() < deadline) {
+      await tab.goto(url, { waitUntil: 'domcontentloaded', timeout: 30 * 1000 });
+      // rawData 内联脚本 domcontentloaded 即就绪;留 10s 重试余量覆盖极慢加载
+      const deadline = Date.now() + 10 * 1000;
+      while (Date.now() < deadline) {
+        ship = await tab.evaluate(() => {
+          const td = window.rawData && window.rawData.store && window.rawData.store.traceData;
+          return (td && td.shipping) || null;
+        }).catch(() => null);
+        if (ship) break;
         await new Promise((r) => setTimeout(r, 500));
       }
       finalUrl = tab.url();
-      if (!payload) {
-        // DOM 诊断:标题/可见文本/脚本数 + SSR 数据岛摘要,判断页面渲染到什么程度
-        domInfo = await tab.evaluate(() => {
-          const out = {
-            title: document.title,
-            text: (document.body && document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 200),
-            scripts: document.scripts.length,
-          };
-          try {
-            const td = window.rawData && window.rawData.store && window.rawData.store.traceData;
-            if (td) out.traceData = JSON.stringify(td).slice(0, 4000);
-          } catch { /* 序列化失败 */ }
-          return JSON.stringify(out);
-        }).catch((e) => `evaluate失败: ${e.message}`);
+      if (!ship) {
+        pageText = await tab.evaluate(() => (document.body && document.body.innerText || '')
+          .replace(/\s+/g, ' ').slice(0, 150)).catch(() => '');
       }
     } finally {
-      tab.removeListener('response', handler);
       await tab.close().catch(() => {});
     }
-    if (!payload) {
-      throw new ApiError('BROWSER_ERROR', `PDD_TRACE_NO_RESPONSE: 轨迹页未返回数据(HTTP ${httpStatus};pageUrl=${finalUrl};dom=${domInfo};api=${JSON.stringify(apiUrls.slice(0, 15))})`, { status: 502 });
+    if (!ship) {
+      if (/登录|login/i.test(pageText)) {
+        throw new ApiError(ErrorCode.AUTH_REQUIRED, '拼多多登录态失效,请在常用浏览器登录 mobile.yangkeduo.com 后,点击妙手助手插件的『同步登录到 ERP』按钮');
+      }
+      throw new ApiError('BROWSER_ERROR', `PDD_TRACE_NO_DATA: 轨迹页无 SSR 数据(pageUrl=${finalUrl};text=${pageText})`, { status: 502 });
     }
-    // 平台错误码(如 9990=风控/参数缺失,401 未登录)
-    if (payload.error_code === 401 || payload.error_code === 403) {
-      throw new ApiError(ErrorCode.AUTH_REQUIRED, '拼多多登录态失效,请在常用浏览器登录 mobile.yangkeduo.com 后,点击妙手助手插件的『同步登录到 ERP』按钮');
-    }
-    const result = (payload && payload.result) || {};
-    const ship = result.shipping || result;
-    const rawSteps = ship.track_list || ship.trace_list || ship.tracking_list || ship.steps || [];
+    // traces[] → {acceptTime, remark}(time=时间,info=节点描述),最新在前
+    const rawSteps = Array.isArray(ship.traces) ? ship.traces : [];
     const steps = rawSteps
-      .map((s) => ({
-        acceptTime: s.time || s.node_time || s.accept_time || s.show_time || s.ctime || '',
-        remark: s.desc || s.node_desc || s.remark || s.text || '',
-      }))
+      .map((t) => ({ acceptTime: t.time || t.displayTime || '', remark: t.info || '' }))
       .filter((s) => s.remark || s.acceptTime);
     steps.sort((a, b) => String(b.acceptTime).localeCompare(String(a.acceptTime)));
-    return { steps, raw: payload };
+    return { steps, shippingName: ship.shippingName || '', raw: { shipping: ship } };
   });
 }
 
