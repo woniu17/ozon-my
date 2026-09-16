@@ -2107,6 +2107,14 @@ async function copyText(val, label) {
   show(`${label}已复制:${s}`, 'success');
 }
 
+/** 时间戳 → 中文周几(如"周三");无效时间返回空串 */
+function weekdayCN(t) {
+  if (!t) return '';
+  const d = new Date(t);
+  if (isNaN(d.getTime())) return '';
+  return '周' + ['日', '一', '二', '三', '四', '五', '六'][d.getDay()];
+}
+
 // 弹窗里展示的产品行(含已回写采购金额)
 const detailItems = computed(() => detail.value?.items || []);
 const detailLinks = computed(() => detail.value?.purchaseLinks || []);
@@ -2516,7 +2524,16 @@ onUnmounted(() => {
                 <div class="product-main">
                   <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ it.title || '—' }}</a>
                   <div v-else class="product-title">{{ it.title || '—' }}</div>
-                  <div class="product-sub">Offer ID：{{ it.offerId }}</div>
+                  <div class="product-sub" v-if="it.sku">SKU：{{ it.sku }}
+                    <button class="copy-btn" title="复制SKU" @click.stop="copyText(it.sku, 'SKU')">
+                      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </div>
+                  <div class="product-sub">Offer ID：{{ it.offerId }}
+                    <button class="copy-btn" title="复制Offer ID" @click.stop="copyText(it.offerId, 'Offer ID')">
+                      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </div>
                   <div class="product-sub">产品单价：{{ fmtMoney(it.price) }}</div>
                 </div>
               </div>
@@ -2527,7 +2544,11 @@ onUnmounted(() => {
               <div v-if="!pkg.items?.length" class="muted">—</div>
             </td>
             <td class="col-order">
-              <div class="mono">{{ pkg.postingNumber }}</div>
+              <div class="mono">{{ pkg.postingNumber }}
+                <button class="copy-btn" title="复制货件号" @click.stop="copyText(pkg.postingNumber, '货件号')">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                </button>
+              </div>
               <div class="sub">
                 <span v-if="pkg.parentId" class="tag tag-mute" title="拆单子件">子件</span>
                 {{ pkg.storeName }} · {{ pkg.orderNumber }}
@@ -2561,7 +2582,7 @@ onUnmounted(() => {
               <div v-if="!pkg.purchaseLinks?.length" class="muted">未录入</div>
               <div v-for="l in pkg.purchaseLinks" :key="l.id" class="purchase-item">
                 <div class="purchase-head">
-                  <span class="muted">{{ platformLabel(l.platform) }}</span>
+                  <span>{{ platformLabel(l.platform) }}</span>
                   <template v-if="l.purchaseSn">
                     <a v-if="orderDetailUrl(l.platform, l.purchaseSn)" :href="orderDetailUrl(l.platform, l.purchaseSn)" target="_blank" rel="noopener" class="mono order-link" :title="'打开' + platformLabel(l.platform) + '订单详情'">{{ l.purchaseSn }}</a>
                     <span v-else class="mono">{{ l.purchaseSn }}</span>
@@ -2571,7 +2592,7 @@ onUnmounted(() => {
                   </template>
                   <span v-else class="mono">#{{ l.id }}</span>
                 </div>
-                <div class="purchase-meta sub muted">
+                <div class="purchase-meta sub">
                   {{ poStatus(l.poStatus) }} · 采购金额 {{ fmtMoney(l.allocatedAmount) }}<template v-if="l.sellerName"> · {{ l.sellerName }}</template><template v-if="l.buyerAccount"> · 买:{{ l.buyerAccount }}</template>
                 </div>
                 <div v-for="(pi, j) in l.items" :key="j" class="purchase-goods">
@@ -2590,12 +2611,12 @@ onUnmounted(() => {
                     <div v-else class="purchase-goods-title" :title="pi.goodsName || pi.title || ''">
                       {{ pi.goodsName || pi.title || '采购商品' }}
                     </div>
-                    <div class="purchase-goods-sub muted">
+                    <div class="purchase-goods-sub">
                       <span v-if="pi.spec">{{ pi.spec }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}
                     </div>
                   </div>
                 </div>
-                <div v-if="l.poLogisticsNo" class="sub muted">
+                <div v-if="l.poLogisticsNo" class="sub">
                   {{ l.poLogisticsCompany }}
                   <a :href="trackingSearchUrl(l.poLogisticsCompany, l.poLogisticsNo)" target="_blank" rel="noopener" class="order-link" title="百度搜索物流状态">{{ l.poLogisticsNo }}</a>
                 </div>
@@ -2625,9 +2646,9 @@ onUnmounted(() => {
                 <span class="cancel-reason-text" :title="pkg.returnState || ''">{{ returnStateLabel(pkg) }}</span>
                 <span v-if="pkg.returnAt" class="tag tag-mute" title="买家发起退货时间">{{ fmtTime(pkg.returnAt) }}</span>
               </div>
-              <div class="sub muted">下单：{{ fmtTime(pkg.inProcessAt) }}</div>
+              <div class="sub">下单：{{ fmtTime(pkg.inProcessAt) }}<template v-if="weekdayCN(pkg.inProcessAt)">（{{ weekdayCN(pkg.inProcessAt) }}）</template></div>
               <!-- 已取消订单不再展示最迟/剩发/已超时(取消后无发货义务,倒计时无意义) -->
-              <div v-if="pkg.shipmentDate && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub muted">最迟：{{ fmtTime(pkg.shipmentDate) }}</div>
+              <div v-if="pkg.shipmentDate && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub">最迟：{{ fmtTime(pkg.shipmentDate) }}<template v-if="weekdayCN(pkg.shipmentDate)">（{{ weekdayCN(pkg.shipmentDate) }}）</template></div>
               <div v-if="countdown(pkg) && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub" :class="countdown(pkg).overdue ? 'overdue' : 'countdown'">
                 {{ countdown(pkg).overdue ? '已超时：' : '剩发：' }}{{ countdown(pkg).text }}
               </div>
@@ -3505,7 +3526,7 @@ a.product-title:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  color: var(--text-secondary, #9ca3af);
+  color: var(--text-primary, #111827);
 }
 
 /* 产品数量列(与产品信息列行间距对齐);数量>1 红色加粗提示采购量 */
