@@ -234,6 +234,14 @@ export function getPurchaseLogisticsProgress() {
   return request.get('/admin/api/order-process/sync-purchase-logistics');
 }
 
+// 单包裹同步采购物流(列表行"同步采购物流"按钮,2026-09-17)
+// 范围:该包裹全部关联采购单;1688补单号+拉轨迹、拼多多补单号+拉轨迹;淘宝/手工单不支持
+// 强制刷新(不受1小时窗口限制),与定时轮不互斥;同步等待返回
+// 返回 { orders, results: [{purchaseSn, platform, action, detail}] }
+export function syncPackagePurchaseLogistics(packageId) {
+  return request.post('/admin/api/order-process/sync-package-purchase-logistics', { packageId });
+}
+
 // ════════════════════════════════════════════════════════════════
 // 平台订单获取(2026-09,后端 cloakbrowser 直取,替代 miaoshou-helper 扩展桥)
 // 2026-09-13 多账号:后端按平台配置多买手账号 profile,列表接口带 account 指定,

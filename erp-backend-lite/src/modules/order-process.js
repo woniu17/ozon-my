@@ -28,7 +28,7 @@ import config from '../config/index.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
 import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
-import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus } from '../services/purchase-logistics-poller.js';
+import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus, syncPurchaseLogisticsForPackage } from '../services/purchase-logistics-poller.js';
 import { packageLabel, postingFbsGet, postingFbsShip } from '../services/ozon-opi.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
@@ -1346,6 +1346,28 @@ router.get('/admin/api/order-process/sync-purchase-logistics', (_req, res, next)
   try {
     res.json(ok(getPurchaseLogisticsStatus()));
   } catch (e) { next(e); }
+});
+
+// ── 单包裹同步采购物流(列表行"同步采购物流"按钮,2026-09-17)──────────
+// POST body: { packageId: number }
+// 范围:该包裹全部关联采购单;1688 官方API补单号+拉轨迹、拼多多搜索补单号+浏览器拉轨迹;
+// 淘宝/手工单暂不支持(结果里 skip 说明)。强制刷新:不受定时轮的 1 小时窗口限制;
+// 与定时轮不互斥(浏览器操作经 SerialQueue 串行,写入幂等)。
+// 返回 { orders, results: [{purchaseSn, platform, action, detail}] }
+router.post('/admin/api/order-process/sync-package-purchase-logistics', async (req, res, next) => {
+  try {
+    const id = Number(req.body?.packageId);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ ok: false, message: 'packageId 必须为正整数' });
+    }
+    const r = await syncPurchaseLogisticsForPackage(id);
+    logger.info({ packageId: id, orders: r.orders, results: r.results }, '[order-process] 单包裹采购物流同步完成');
+    res.json(ok(r));
+  } catch (e) {
+    const msg = e?.message || String(e);
+    logger.warn({ err: msg, packageId: req.body?.packageId }, '[order-process] 单包裹采购物流同步失败');
+    res.status(502).json({ ok: false, message: msg });
+  }
 });
 
 export default router;

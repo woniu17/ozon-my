@@ -315,4 +315,122 @@ function stopPurchaseLogisticsPoller() {
   if (timer) { clearInterval(timer); timer = null; }
 }
 
-export { startPurchaseLogisticsPoller, stopPurchaseLogisticsPoller, triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus };
+// ── 单包裹同步采购物流(列表行"同步采购物流"按钮,2026-09-17)──────────
+// 范围:该包裹全部关联采购单(linked);强制刷新:不受 last_trace_at 1小时窗口/90天年龄限制
+// 与定时轮不互斥:浏览器操作经 withPage SerialQueue 天然串行,写入幂等(同字段最新覆盖)
+
+/** 轨迹落库(trace_json/last_trace_at/last_trace_desc;shippingName 非空时回填缺失公司名)
+ *  无轨迹节点时仅推进 last_trace_at 避免定时轮空转;返回 toast 友好的结果描述 */
+function writeTraceRow(id, steps, shippingName = '') {
+  if (!steps.length) {
+    db.prepare(`UPDATE op_purchase_order SET last_trace_at = datetime('now', 'localtime') WHERE id = ?`).run(id);
+    return '暂无轨迹(未揽收)';
+  }
+  const latest = steps[0];
+  db.prepare(
+    `UPDATE op_purchase_order
+     SET trace_json = ?, last_trace_at = ?, last_trace_desc = ?,
+         logistics_company = CASE WHEN ? != '' AND (logistics_company IS NULL OR logistics_company = '')
+                                  THEN ? ELSE logistics_company END,
+         gmt_modified = ?
+     WHERE id = ?`
+  ).run(
+    JSON.stringify(steps), latest.acceptTime || null, String(latest.remark || '').slice(0, 500),
+    shippingName || '', shippingName || '',
+    new Date().toISOString(), id
+  );
+  return `轨迹${steps.length}条`;
+}
+
+/** 补物流单号落库(回填单号/公司,wait_send/wait_pay 升级 shipped);返回是否补到 */
+function writeFilledLogisticsNo(id, logisticsNo, logisticsCompany) {
+  db.prepare(
+    `UPDATE op_purchase_order
+     SET logistics_no = ?, logistics_company = ?,
+         status = CASE WHEN status IN ('wait_send', 'wait_pay') THEN 'shipped' ELSE status END,
+         gmt_modified = ?
+     WHERE id = ?`
+  ).run(logisticsNo, logisticsCompany || null, new Date().toISOString(), id);
+}
+
+/** 单包裹同步采购物流
+ *  1688:补单号(缺时 getLogisticsForOrder)→ 拉轨迹(getTraceForOrder)
+ *  拼多多:补单号(缺时 searchPddOrder)→ 拉轨迹(getPddTrace,顺带回填缺失公司名)
+ *  淘宝/手工单:暂无可用接口,计入 skip
+ *  @returns {{ orders: number, results: Array<{purchaseSn, platform, action, detail}> }} */
+async function syncPurchaseLogisticsForPackage(packageId) {
+  const orders = db.prepare(
+    `SELECT po.id, po.purchase_sn AS purchaseSn, po.platform, po.buyer_account AS buyerAccount,
+            po.logistics_no AS logisticsNo, po.status
+     FROM op_purchase_link pl
+     JOIN op_purchase_order po ON po.id = pl.purchase_order_id
+     WHERE pl.package_id = ? AND po.link_status = 'linked'
+     ORDER BY po.id`
+  ).all(packageId);
+  if (!orders.length) return { orders: 0, results: [] };
+
+  const pddAccounts = config.platformAccounts.pdd || [];
+  const results = [];
+  for (const o of orders) {
+    if (!o.purchaseSn) {
+      results.push({ purchaseSn: '', platform: o.platform, action: 'skip', detail: '手工单无采购单号' });
+      continue;
+    }
+    if (o.status === 'closed') {
+      results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '采购单已取消' });
+      continue;
+    }
+    try {
+      let filled = false;
+      if (o.platform === '1688') {
+        if (!hasAliOpenApiToken(o.buyerAccount)) {
+          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '买手账号未配置1688开放接口' });
+          continue;
+        }
+        if (!o.logisticsNo) {
+          const info = await getLogisticsForOrder(o.purchaseSn, o.buyerAccount);
+          if (info.logisticsNo) {
+            writeFilledLogisticsNo(o.id, info.logisticsNo, info.logisticsCompany);
+            o.logisticsNo = info.logisticsNo;
+            filled = true;
+          }
+        }
+        if (!o.logisticsNo) {
+          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'fill', detail: '暂无物流单号(可能未发货)' });
+        } else {
+          const { steps } = await getTraceForOrder(o.purchaseSn, o.buyerAccount);
+          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + writeTraceRow(o.id, steps) });
+        }
+      } else if (o.platform === 'yangkeduo') {
+        const account = pddAccounts.includes(o.buyerAccount) ? o.buyerAccount : pddAccounts[0];
+        if (!account) {
+          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '未配置拼多多账号' });
+          continue;
+        }
+        if (!o.logisticsNo) {
+          const r2 = await searchPddOrder(o.purchaseSn, [account]);
+          const order = r2 && r2.result;
+          if (order && order.trackingNumber) {
+            writeFilledLogisticsNo(o.id, order.trackingNumber, '');
+            o.logisticsNo = order.trackingNumber;
+            filled = true;
+          }
+        }
+        if (!o.logisticsNo) {
+          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'fill', detail: '暂无物流单号(可能未发货)' });
+        } else {
+          const { steps, shippingName } = await getPddTrace(o.purchaseSn, o.logisticsNo, account);
+          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + writeTraceRow(o.id, steps, shippingName) });
+        }
+      } else {
+        results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '该平台暂不支持物流同步' });
+      }
+    } catch (e) {
+      results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'error', detail: String(e.message || e).slice(0, 60) });
+    }
+    await sleep(REQUEST_INTERVAL_MS);
+  }
+  return { orders: orders.length, results };
+}
+
+export { startPurchaseLogisticsPoller, stopPurchaseLogisticsPoller, triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus, syncPurchaseLogisticsForPackage };

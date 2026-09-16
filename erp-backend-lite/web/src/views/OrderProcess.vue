@@ -17,6 +17,7 @@ import {
   enrichPurchaseItems,
   listPendingPurchases,
   syncPurchaseLogistics, getPurchaseLogisticsProgress,
+  syncPackagePurchaseLogistics,
   getOrderSummary,
   syncPackage,
   shipPackage,
@@ -1412,6 +1413,22 @@ watch(newSelectedOrders, (sel) => {
 }, { deep: true });
 
 // ── 行操作 ─────────────────────────────────────────────
+// 行"更多"操作菜单(2026-09-17):主操作列只留 备货/同步订单/同步采购物流,
+// 次要操作(采购/详情/打印面单/预览/仅标记交运/退回待处理/搁置)收进 fixed 定位菜单
+// fixed 定位:脱离 .data-table overflow:hidden / .table-wrap overflow 裁剪
+const rowMore = reactive({ pkgId: null, top: 0, left: 0 });
+function toggleRowMore(e, pkg) {
+  if (rowMore.pkgId === pkg.id) { closeRowMore(); return; }
+  const rect = e.currentTarget.getBoundingClientRect();
+  const MENU_W = 150, EST_H = 230; // 菜单最大 7 项的估算尺寸
+  let top = rect.bottom + 4;
+  if (top + EST_H > window.innerHeight) top = Math.max(8, rect.top - EST_H - 4);
+  Object.assign(rowMore, { pkgId: pkg.id, top, left: Math.max(8, rect.right - MENU_W) });
+}
+function closeRowMore() {
+  rowMore.pkgId = null;
+}
+
 async function onUnlink(pkg, link) {
   if (!(await confirmStore.ask({
     message: `确认取消采购单 ${link.purchaseSn || link.id} 与包裹 ${pkg.packageNo} 的关联?将冲回该采购金额(${fmtMoney(link.allocatedAmount)})`,
@@ -1579,6 +1596,12 @@ function removeTag(pkg, t) {
 // 选择面板:document 点击关闭(面板自身 @click.stop 拦截冒泡)
 function onDocClickCloseTagPicker() {
   if (tagEdit.pkgId != null) closeTagPicker();
+  if (rowMore.pkgId != null) closeRowMore(); // 行"更多"菜单:点外部关闭
+}
+
+// 行"更多"菜单:滚动时关闭(fixed 定位不随滚动移动,关掉最稳)
+function onDocScrollCloseRowMore() {
+  if (rowMore.pkgId != null) closeRowMore();
 }
 
 // 标签:点击 chip 名=按此标签筛选(再点同一标签取消)
@@ -1639,7 +1662,7 @@ async function onPrinted(pkg) {
 const printingId = ref(0); // 正在打印的包裹 id(按钮 loading)
 let printFrame = null;     // 兜底打印用隐藏 iframe(复用,避免每次重建)
 
-// 单订单强制同步(列表行"同步"按钮):走 /v3/posting/fbs/get 拉最新状态 + 强拉应计,无时间窗口限制
+// 单订单强制同步(列表行"同步订单"按钮):走 /v3/posting/fbs/get 拉最新状态 + 强拉应计,无时间窗口限制
 const syncingPkgId = ref(0); // 正在同步的包裹 id(按钮 loading)
 async function onSyncPackage(pkg) {
   if (syncingPkgId.value) return;
@@ -1661,6 +1684,35 @@ async function onSyncPackage(pkg) {
     show(`同步失败:${err.message || String(err)}`, 'error');
   } finally {
     syncingPkgId.value = 0;
+  }
+}
+
+// 单包裹同步采购物流(列表行"同步采购物流"按钮,2026-09-17)
+// 范围:该包裹全部关联采购单——补物流单号(1688官方API/拼多多搜索)+拉最新轨迹;
+// 与顶栏全局按钮互补:全局走后台整轮(每小时同逻辑),本按钮即时同步当前包裹
+const logisticsPkgId = ref(0); // 正在同步采购物流的包裹 id(按钮 loading)
+const PLATFORM_SHORT = { '1688': '1688', yangkeduo: '拼多多', taobao: '淘宝', other: '手工' };
+async function onSyncPackageLogistics(pkg) {
+  if (logisticsPkgId.value) return;
+  logisticsPkgId.value = pkg.id;
+  try {
+    const r = await syncPackagePurchaseLogistics(pkg.id);
+    if (!r || !r.orders) {
+      show('该包裹无关联采购单,无需同步', 'info');
+      return;
+    }
+    const parts = (r.results || []).map((x) => {
+      const pf = PLATFORM_SHORT[x.platform] || x.platform || '?';
+      const sn = x.purchaseSn ? `…${String(x.purchaseSn).slice(-6)}` : '';
+      return `${pf}${sn} ${x.detail || ''}`;
+    });
+    const hasErr = (r.results || []).some((x) => x.action === 'error');
+    show(`采购物流同步完成(${r.orders}单):${parts.join(' · ')}`, hasErr ? 'warning' : 'success');
+    await loadList();
+  } catch (err) {
+    show(`采购物流同步失败:${err.message || String(err)}`, 'error');
+  } finally {
+    logisticsPkgId.value = 0;
   }
 }
 
@@ -2236,8 +2288,10 @@ onMounted(() => {
   }).catch(() => { /* 静默 */ });
   // PDD 登录同步页面桥(插件 popup 同步 cookie 的接入口)
   window.addEventListener('message', onPddSyncBridgeMessage);
-  // 标签选择面板:点面板外任意处关闭(2026-09-15 v4)
+  // 标签选择面板:点面板外任意处关闭(2026-09-15 v4);行"更多"菜单同策略
   document.addEventListener('click', onDocClickCloseTagPicker);
+  // 行"更多"菜单:任意滚动(含 table-wrap 内部滚动,capture 捕获)即关闭
+  window.addEventListener('scroll', onDocScrollCloseRowMore, true);
 });
 onUnmounted(() => {
   if (statusTimer) clearInterval(statusTimer);
@@ -2245,6 +2299,7 @@ onUnmounted(() => {
   if (logisticsTimer) clearInterval(logisticsTimer);
   window.removeEventListener('message', onPddSyncBridgeMessage);
   document.removeEventListener('click', onDocClickCloseTagPicker);
+  window.removeEventListener('scroll', onDocScrollCloseRowMore, true);
   if (printFrame) {
     printFrame.remove();
     printFrame = null;
@@ -2769,20 +2824,7 @@ onUnmounted(() => {
             </td>
             <td class="col-actions">
               <div class="action-group">
-                <button
-                  v-if="pkg.operateStatus === 'wait_process' || pkg.purchaseStatus === 'none'"
-                  class="btn btn-primary btn-sm"
-                  @click="openPurchase(pkg)"
-                >采购</button>
-                <button v-else class="btn btn-ghost btn-sm" @click="openPurchase(pkg)">采购</button>
-                <button class="btn btn-ghost btn-sm" @click="openDetail(pkg)">详情</button>
-                <button
-                  class="btn btn-ghost btn-sm"
-                  :disabled="syncingPkgId === pkg.id"
-                  :title="syncingPkgId === pkg.id ? '同步中…' : '按单号直查 Ozon 拉最新订单状态 + 强制拉应计项目(无时间窗口限制)'"
-                  @click="onSyncPackage(pkg)"
-                >{{ syncingPkgId === pkg.id ? '同步中…' : '同步' }}</button>
-                <!-- 备货(2026-09-15):Ozon /v4/posting/fbs/ship 搜集订单(不拆分);只看 Ozon 待备货状态,与本地采购进度无关 -->
+                <!-- 主操作(2026-09-17):备货 / 同步订单 / 同步采购物流;次要操作收进"更多"菜单 -->
                 <button
                   v-if="(pkg.operateStatus === 'wait_process' || pkg.operateStatus === 'wait_ship') && pkg.ozonStatus === 'awaiting_packaging'"
                   class="btn btn-ghost btn-sm"
@@ -2791,32 +2833,60 @@ onUnmounted(() => {
                   @click="onShipPackage(pkg)"
                 >{{ shippingPkgId === pkg.id ? '备货中…' : '备货' }}</button>
                 <button
+                  class="btn btn-ghost btn-sm"
+                  :disabled="syncingPkgId === pkg.id"
+                  :title="syncingPkgId === pkg.id ? '同步中…' : '按单号直查 Ozon 拉最新订单状态 + 强制拉应计项目(无时间窗口限制)'"
+                  @click="onSyncPackage(pkg)"
+                >{{ syncingPkgId === pkg.id ? '同步中…' : '同步订单' }}</button>
+                <!-- 同步采购物流(2026-09-17):该包裹全部关联采购单补单号+拉最新轨迹(强制刷新) -->
+                <button
+                  v-if="pkg.purchaseLinks?.length"
+                  class="btn btn-ghost btn-sm"
+                  :disabled="logisticsPkgId === pkg.id"
+                  :title="logisticsPkgId === pkg.id ? '采购物流同步中…' : '该包裹全部关联采购单:补物流单号(1688/拼多多)+拉最新轨迹,强制刷新(不受1小时窗口限制)'"
+                  @click="onSyncPackageLogistics(pkg)"
+                >{{ logisticsPkgId === pkg.id ? '物流同步中…' : '同步采购物流' }}</button>
+                <!-- 更多:次要操作下拉(采购/详情/打印面单/预览面单/仅标记交运/退回待处理/搁置) -->
+                <div class="row-more">
+                  <button class="btn btn-ghost btn-sm" title="更多操作" @click.stop="toggleRowMore($event, pkg)">更多<span class="row-more-caret">▾</span></button>
+                </div>
+              </div>
+              <!-- 更多菜单(fixed 定位,脱离表格 overflow 裁剪;点外部/滚动关闭,项点击后即关) -->
+              <div v-if="rowMore.pkgId === pkg.id" class="row-more-pop" :style="{ top: rowMore.top + 'px', left: rowMore.left + 'px' }" @click.stop>
+                <button
+                  class="row-more-item"
+                  :class="{ 'row-more-item-strong': pkg.operateStatus === 'wait_process' || pkg.purchaseStatus === 'none' }"
+                  title="录入/编辑采购信息"
+                  @click="closeRowMore(); openPurchase(pkg)"
+                >采购</button>
+                <button class="row-more-item" title="订单详情(产品行+采购关联+轨迹)" @click="closeRowMore(); openDetail(pkg)">详情</button>
+                <button
                   v-if="pkg.operateStatus === 'wait_ship' || pkg.operateStatus === 'ship_success'"
-                  class="btn btn-primary btn-sm"
+                  class="row-more-item"
                   :disabled="printingId === pkg.id"
                   :title="printingId === pkg.id ? '面单打印中…' : pkg.operateStatus === 'ship_success' ? '重新打印该包裹的 Ozon 面单(缓存秒出)' : '拉取 Ozon 面单并静默打印(菜鸟打印组件),出纸后自动流转交运'"
-                  @click="onPrintLabel(pkg)"
+                  @click="closeRowMore(); onPrintLabel(pkg)"
                 >{{ printingId === pkg.id ? '打印中…' : '打印面单' }}</button>
                 <button
                   v-if="pkg.operateStatus === 'wait_ship' || pkg.operateStatus === 'ship_success'"
-                  class="btn btn-ghost btn-sm"
+                  class="row-more-item"
                   :disabled="labelPreview.loading === pkg.id"
                   title="无纸预览:组件按 CNPL 模板渲染面单效果,不出纸、不流转状态"
-                  @click="onPreviewLabel(pkg)"
-                >{{ labelPreview.loading === pkg.id ? '渲染中…' : '预览' }}</button>
+                  @click="closeRowMore(); onPreviewLabel(pkg)"
+                >{{ labelPreview.loading === pkg.id ? '渲染中…' : '预览面单' }}</button>
                 <button
                   v-if="pkg.operateStatus === 'wait_ship'"
-                  class="btn btn-ghost btn-sm"
+                  class="row-more-item"
                   title="不拉取面单,仅标记已打印并流转交运(补录场景)"
-                  @click="onPrinted(pkg)"
+                  @click="closeRowMore(); onPrinted(pkg)"
                 >仅标记交运</button>
                 <button
                   v-if="pkg.operateStatus === 'wait_ship'"
-                  class="btn btn-danger btn-sm"
+                  class="row-more-item row-more-item-danger"
                   title="取消全部采购关联,退回未采购"
-                  @click="onRevert(pkg)"
+                  @click="closeRowMore(); onRevert(pkg)"
                 >退回待处理</button>
-                <button class="btn btn-ghost btn-sm" @click="onIgnore(pkg, !pkg.isIgnored)">
+                <button class="row-more-item" :title="pkg.isIgnored ? '恢复搁置的包裹' : '暂不处理该包裹'" @click="closeRowMore(); onIgnore(pkg, !pkg.isIgnored)">
                   {{ pkg.isIgnored ? '恢复' : '搁置' }}
                 </button>
               </div>
@@ -3810,6 +3880,46 @@ a.product-title:hover {
   gap: 4px;
   align-items: flex-start;
 }
+
+/* ── 行"更多"操作菜单(2026-09-17)──────────────────────────
+ * 主操作列只留 备货/同步订单/同步采购物流,次要操作收进本菜单;
+ * fixed 定位:脱离 .data-table overflow:hidden / .table-wrap overflow 裁剪 */
+.row-more {
+  display: flex;
+}
+.row-more-caret {
+  margin-left: 3px;
+  font-size: 10px;
+}
+.row-more-pop {
+  position: fixed;
+  min-width: 150px;
+  background: #fff;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(30, 41, 59, 0.18);
+  z-index: 60;
+  padding: 4px 0;
+}
+.row-more-item {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  color: #1f2937;
+  background: none;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+}
+.row-more-item:hover { background: #f1f5f9; }
+.row-more-item:disabled { color: #9ca3af; cursor: default; background: none; }
+.row-more-item-strong { color: #4338ca; font-weight: 700; }
+.row-more-item-strong:hover { background: #e0e7ff; }
+.row-more-item-danger { color: #dc2626; }
+.row-more-item-danger:hover { background: #fee2e2; }
 
 .mono {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
