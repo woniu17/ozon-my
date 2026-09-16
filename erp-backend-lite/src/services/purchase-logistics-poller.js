@@ -152,7 +152,7 @@ async function phaseFetchTrace() {
        AND logistics_no IS NOT NULL AND length(logistics_no) > 0
        AND status IN ('wait_send', 'shipped', 'part_shipped')
        AND (last_trace_at IS NULL OR last_trace_at < datetime('now', 'localtime', '-1 hour'))
-     ORDER BY (last_trace_at IS NULL) DESC, last_trace_at ASC
+     ORDER BY (last_trace_at IS NULL) DESC, gmt_modified DESC
      LIMIT ?`
   ).all(MAX_PER_ROUND);
   if (!rows.length) return { scanned: 0, updated: 0, skippedNoAccount: 0 };
@@ -201,7 +201,7 @@ async function phaseFetchPddTrace() {
        AND logistics_no IS NOT NULL AND length(logistics_no) > 0
        AND status IN ('wait_send', 'shipped', 'part_shipped')
        AND (last_trace_at IS NULL OR last_trace_at < datetime('now', 'localtime', '-1 hour'))
-     ORDER BY (last_trace_at IS NULL) DESC, last_trace_at ASC
+     ORDER BY (last_trace_at IS NULL) DESC, gmt_modified DESC
      LIMIT ?`
   ).all(MAX_PER_ROUND);
   if (!rows.length) return { scanned: 0, updated: 0, signed: 0, skippedNoAccount: 0 };
