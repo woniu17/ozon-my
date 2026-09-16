@@ -948,8 +948,10 @@ export function listPendingPurchases(platform) {
     `link_status = 'linked'`,
     `purchase_sn IS NOT NULL AND length(purchase_sn) > 0`,
     // 待补全条件:items_json 为空,或不含 thumbUrl(妙手回填的 {title,price,num} 也算待补全),
-    // 或不含 goodsId(2026-09-16 前补全的存量单无商品ID,重新拉一次即可获得详情页链接)
-    `(items_json IS NULL OR length(items_json) = 0 OR items_json NOT LIKE '%thumbUrl%' OR items_json NOT LIKE '%goodsId%')`,
+    // 或不含 goodsId,或 goodsId 键存在但值为空串/null(2026-09-17 修复:存量 1145 单 goodsId="" 含键名,
+    // NOT LIKE '%goodsId%' 误判为已齐全永不进队列;补全重跑即可获得商品详情页链接)
+    `(items_json IS NULL OR length(items_json) = 0 OR items_json NOT LIKE '%thumbUrl%' OR items_json NOT LIKE '%goodsId%'
+      OR items_json LIKE '%"goodsId":""%' OR items_json LIKE '%"goodsId":null%')`,
   ];
   const params = [];
   if (platform) { where.push(`platform = ?`); params.push(platform); }
