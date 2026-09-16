@@ -204,6 +204,35 @@ function fmtTime(t) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+// ── 最迟发货时间与剩余时间(2026-09-17,数据源 op_package.last_delivery_at 冗余自 Ozon shipment_date)──
+// 颜色分级:已超时=红加粗 / <24h=红 / <48h=橙 / 其余默认灰
+function shipRemainCls(pkg) {
+  if (!pkg.lastDeliveryAt) return '';
+  const t = new Date(pkg.lastDeliveryAt).getTime();
+  if (isNaN(t)) return '';
+  const ms = t - Date.now();
+  if (ms <= 0) return 'remain-over';
+  if (ms < 24 * 3600 * 1000) return 'remain-urg';
+  if (ms < 48 * 3600 * 1000) return 'remain-warn';
+  return '';
+}
+function fmtRemain(pkg) {
+  if (!pkg.lastDeliveryAt) return '';
+  const t = new Date(pkg.lastDeliveryAt).getTime();
+  if (isNaN(t)) return '';
+  const diff = t - Date.now();
+  const neg = diff < 0;
+  let s = Math.floor(Math.abs(diff) / 1000);
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60);
+  const body = d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${m}分`;
+  return neg ? `已超时${body}` : `剩${body}`;
+}
+// 采购商品数量合计(items_json 各商品 number 求和;无明细返回 0)
+function poGoodsCount(l) {
+  return (l.items || []).reduce((s, i) => s + Number(i.number || i.num || 1), 0);
+}
 function operateTag(pkg) {
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus, cls: 'tag-mute' };
 }
@@ -595,7 +624,13 @@ onMounted(() => {
                   <span v-if="pkg.parentId" class="tag tag-mute" title="拆单子件">子件</span>
                   <span class="tag" :class="operateTag(pkg).cls">{{ operateTag(pkg).label }}</span>
                 </div>
-                <div class="order-line">下单 {{ fmtTime(pkg.inProcessAt) }}</div>
+                <div class="order-line">
+                  下单 {{ fmtTime(pkg.inProcessAt) }}
+                  <template v-if="pkg.lastDeliveryAt">
+                    · 最迟发货 {{ fmtTime(pkg.lastDeliveryAt) }}
+                    <span class="ship-remain" :class="shipRemainCls(pkg)" :title="'Ozon 最迟发货时间(shipment_date)'">{{ fmtRemain(pkg) }}</span>
+                  </template>
+                </div>
               </div>
 
               <!-- 商品信息(SKU/OfferID 可点击复制,数量独立右列) -->
@@ -611,7 +646,8 @@ onMounted(() => {
                   </div>
                   <div class="product-main">
                     <div class="product-line">
-                      <span class="mono">SKU:{{ it.sku ?? '—' }}</span>
+                      <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="mono sku-link" title="打开Ozon商品详情页" @click.stop>SKU:{{ it.sku ?? '—' }}</a>
+                      <span v-else class="mono">SKU:{{ it.sku ?? '—' }}</span>
                       <button
                         v-if="it.sku != null"
                         class="copy-btn"
@@ -679,7 +715,9 @@ onMounted(() => {
                         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" /></svg>
                       </button>
                     </div>
-                    <div class="purchase-line sub muted">采购账号:{{ l.buyerAccount || '—' }}</div>
+                    <div class="purchase-line sub muted">采购买家:{{ l.buyerAccount || '—' }}<template v-if="poGoodsCount(l)"> · 数量 ×{{ poGoodsCount(l) }}</template></div>
+                    <!-- 采购时间:优先采购单支付时间(pay_at),无则入库时间(gmt_create) -->
+                    <div class="purchase-line sub muted" title="优先采购单支付时间,无则本地入库时间">采购时间:{{ fmtTime(l.poPayAt || l.poGmtCreate) }}</div>
                     <!-- 采购金额:分摊到本包裹的金额(口径同 OrderProcess;利润计算即用此口径) -->
                     <div
                       class="purchase-line sub muted"
@@ -1049,6 +1087,20 @@ onMounted(() => {
   font-size: 13px;
   color: var(--text);
 }
+/* 最迟发货剩余时间(2026-09-17):已超时=红加粗 / <24h=红 / <48h=橙 */
+.ship-remain {
+  font-weight: 600;
+}
+.ship-remain.remain-warn {
+  color: #d97706;
+}
+.ship-remain.remain-urg {
+  color: #dc2626;
+}
+.ship-remain.remain-over {
+  color: #dc2626;
+  font-weight: 700;
+}
 .order-line1 {
   display: flex;
   align-items: center;
@@ -1240,12 +1292,20 @@ onMounted(() => {
 .order-link:hover {
   text-decoration: underline;
 }
+/* SKU 链接(Ozon 商品详情页;2026-09-17) */
+.sku-link {
+  text-decoration: none;
+  color: #3b82f6;
+}
+.sku-link:hover {
+  text-decoration: underline;
+}
 .img-preview {
   display: none;
   position: absolute;
-  left: 50%;
+  left: calc(100% + 8px);
   top: 50%;
-  transform: translate(-50%, -50%);
+  transform: translateY(-50%);
   width: 280px;
   height: 280px;
   object-fit: contain;

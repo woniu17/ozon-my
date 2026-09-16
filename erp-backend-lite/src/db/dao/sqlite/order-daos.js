@@ -831,7 +831,8 @@ function getPurchasesByPackageIds(packageIds) {
       `SELECT pl.*, po.purchase_sn, po.platform, po.status AS po_status, po.payment_amount,
               po.seller_name, po.buyer_account, po.buyer_user_id, po.logistics_company AS po_logistics_company,
               po.logistics_no AS po_logistics_no, po.link_status, po.items_json AS po_items_json,
-              po.last_trace_at AS po_last_trace_at, po.last_trace_desc AS po_last_trace_desc, po.trace_json AS po_trace_json
+              po.last_trace_at AS po_last_trace_at, po.last_trace_desc AS po_last_trace_desc, po.trace_json AS po_trace_json,
+              po.pay_at AS po_pay_at, po.gmt_create AS po_gmt_create
        FROM op_purchase_link pl
        JOIN op_purchase_order po ON po.id = pl.purchase_order_id
        WHERE pl.package_id IN (${ph})`
@@ -861,6 +862,8 @@ function getPurchasesByPackageIds(packageIds) {
         buyerUserId: l.buyer_user_id,
         poLogisticsCompany: l.po_logistics_company,
         poLogisticsNo: l.po_logistics_no,
+        poPayAt: l.po_pay_at,
+        poGmtCreate: l.po_gmt_create,
         lastTraceAt: l.po_last_trace_at,
         lastTraceDesc: l.po_last_trace_desc,
         traceJson: l.po_trace_json,

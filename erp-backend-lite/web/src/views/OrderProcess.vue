@@ -2185,6 +2185,12 @@ function platformLabel(p) {
   return PLATFORMS.find((x) => x.value === p)?.label || p || '—';
 }
 
+/** 采购商品标题/规格最多显示 20 字(超出截断加…,全文悬浮 title 查看,2026-09-17) */
+function clip20(v) {
+  const s = String(v ?? '').trim();
+  return s.length > 20 ? s.slice(0, 20) + '…' : s;
+}
+
 /** 采购商品详情页链接(平台 + 商品ID 拼 URL;ID 缺失/非数字返回空,不加链接)
  *  1688: detail.1688.com/offer/{id}.html | 拼多多: mobile.yangkeduo.com/goods.html?goods_id={id}
  *  淘宝: item.taobao.com/item.htm?id={id}
@@ -2741,13 +2747,13 @@ onUnmounted(() => {
                   </div>
                   <div class="purchase-goods-main">
                     <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="goods-link purchase-goods-title" :title="pi.goodsName || pi.title || ''">
-                      {{ pi.goodsName || pi.title || '采购商品' }}
+                      {{ clip20(pi.goodsName || pi.title || '采购商品') }}
                     </a>
                     <div v-else class="purchase-goods-title" :title="pi.goodsName || pi.title || ''">
-                      {{ pi.goodsName || pi.title || '采购商品' }}
+                      {{ clip20(pi.goodsName || pi.title || '采购商品') }}
                     </div>
                     <div class="purchase-goods-sub">
-                      <span v-if="pi.spec">{{ pi.spec }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}
+                      <span v-if="pi.spec" :title="pi.spec">{{ clip20(pi.spec) }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}
                     </div>
                   </div>
                 </div>
@@ -3647,8 +3653,8 @@ onUnmounted(() => {
 }
 
 .col-product {
-  min-width: 380px;
-  max-width: 380px;
+  min-width: 500px;
+  max-width: 500px;
 }
 
 .product-item + .product-item {
@@ -3749,8 +3755,8 @@ a.product-title:hover {
 }
 
 .col-purchase {
-  min-width: 380px;
-  max-width: 380px;
+  min-width: 500px;
+  max-width: 500px;
 }
 
 /* 采购信息列:参考产品信息列 product-item 结构,展示采购商品图/名称/规格/价格×数量 */
@@ -3841,7 +3847,7 @@ a.product-title:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 图片悬浮大图预览(订单商品/采购商品 120px;hover 居中放大 280px,复用 ScanShip 方案) */
+/* 图片悬浮大图预览(订单商品/采购商品 120px;hover 在原图右侧放大 280px,2026-09-17) */
 .img-hover-wrap {
   position: relative;
   flex-shrink: 0;
@@ -3849,9 +3855,9 @@ a.product-title:hover {
 .img-preview {
   display: none;
   position: absolute;
-  left: 50%;
+  left: calc(100% + 8px);
   top: 50%;
-  transform: translate(-50%, -50%);
+  transform: translateY(-50%);
   width: 280px;
   height: 280px;
   object-fit: contain;
