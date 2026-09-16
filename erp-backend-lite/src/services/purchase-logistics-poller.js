@@ -10,8 +10,8 @@
 //   阶段B 拉完整轨迹(1688 官方 API):扫"有物流单号+未签收+轨迹超1小时未更新"的 1688 采购单
 //     → getLogisticsTraceInfo.buyerView 写 trace_json(完整节点)+ last_trace_at/last_trace_desc(与妙手口径一致)
 //   阶段C 拉完整轨迹(拼多多,浏览器):同阶段B 扫描条件的 yangkeduo 采购单 → goods_express
-//     SSR 数据岛直读(裸 fetch 需 antiContent 会 9990);顺带回填缺失的物流公司,
-//     shippingStatus=20(已签收)时升级本地 status='signed'
+//     SSR 数据岛直读(裸 fetch 需 antiContent 会 9990);顺带回填缺失的物流公司
+//     (不做签收升级:shippingStatus 枚举不可靠,在途/已签收都可能为 20)
 //   妙手同步的采购单轨迹仍由妙手侧更新;本轮询器同字段写入,双路并存最新覆盖。
 // 限速:请求间隔 2s,连续失败 3 次中止本轮(防触发反爬/雪崩);单轮每阶段上限 100 单。
 import { db } from '../db/index.js';
@@ -191,8 +191,9 @@ async function phaseFetchTrace() {
 }
 
 /** 阶段C:拼多多拉完整轨迹(浏览器 goods_express SSR;有单号+未签收+1小时内没拉过的)
- *  与阶段B 同口径(trace_json/last_trace_at/last_trace_desc);额外:
- *  物流公司缺失时回填 shippingName,shippingStatus=20 时升级 status='signed'(已签收) */
+ *  与阶段B 同口径(trace_json/last_trace_at/last_trace_desc);物流公司缺失时回填 shippingName。
+ *  不做签收升级:traceData.shippingStatus 枚举不可靠(实测在途/已签收都可能为 20),
+ *  是否签收以轨迹节点文本为准(前端展开可见) */
 async function phaseFetchPddTrace() {
   const rows = db.prepare(
     `SELECT id, purchase_sn, logistics_no, buyer_account FROM op_purchase_order
@@ -204,37 +205,34 @@ async function phaseFetchPddTrace() {
      ORDER BY (last_trace_at IS NULL) DESC, gmt_modified DESC
      LIMIT ?`
   ).all(MAX_PER_ROUND);
-  if (!rows.length) return { scanned: 0, updated: 0, signed: 0, skippedNoAccount: 0 };
+  if (!rows.length) return { scanned: 0, updated: 0, skippedNoAccount: 0 };
   manualStatus.progress = { done: 0, total: rows.length };
 
   // PDD 账号解析:buyer_account 不在白名单(空/历史脏值)时回落主账号
   const pddAccounts = config.platformAccounts.pdd || [];
-  let updated = 0, signedCount = 0, skippedNoAccount = 0, consecutive = 0;
+  let updated = 0, skippedNoAccount = 0, consecutive = 0;
   for (const r of rows) {
     manualStatus.progress.done++;
     const account = pddAccounts.includes(r.buyer_account) ? r.buyer_account : pddAccounts[0];
     if (!account) { skippedNoAccount++; continue; }
     try {
-      const { steps, shippingName, raw } = await getPddTrace(r.purchase_sn, r.logistics_no, account);
+      const { steps, shippingName } = await getPddTrace(r.purchase_sn, r.logistics_no, account);
       if (steps.length) {
         const latest = steps[0];
-        const isSigned = raw && raw.shipping && raw.shipping.shippingStatus === 20;
         db.prepare(
           `UPDATE op_purchase_order
            SET trace_json = ?, last_trace_at = ?, last_trace_desc = ?,
                logistics_company = CASE WHEN (logistics_company IS NULL OR logistics_company = '') AND ? != ''
                                         THEN ? ELSE logistics_company END,
-               status = CASE WHEN ? THEN 'signed' ELSE status END,
                gmt_modified = ?
            WHERE id = ?`
         ).run(
           JSON.stringify(steps), latest.acceptTime || null, String(latest.remark || '').slice(0, 500),
           shippingName || '', shippingName || '',
-          isSigned ? 1 : 0, new Date().toISOString(), r.id
+          new Date().toISOString(), r.id
         );
         updated++;
-        if (isSigned) signedCount++;
-        logger.info({ purchaseSn: r.purchase_sn, steps: steps.length, shippingName, signed: !!isSigned },
+        logger.info({ purchaseSn: r.purchase_sn, steps: steps.length, shippingName },
           '[purchase-logistics-poller] 阶段C:拉取PDD轨迹');
       } else {
         // 无轨迹(刚发货未揽收/老单):推进 last_trace_at 避免空转
@@ -251,7 +249,7 @@ async function phaseFetchPddTrace() {
     }
     await sleep(REQUEST_INTERVAL_MS);
   }
-  return { scanned: rows.length, updated, signed: signedCount, skippedNoAccount };
+  return { scanned: rows.length, updated, skippedNoAccount };
 }
 
 async function runOnce() {
