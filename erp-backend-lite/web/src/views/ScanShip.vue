@@ -233,6 +233,12 @@ function fmtRemain(pkg) {
 function poGoodsCount(l) {
   return (l.items || []).reduce((s, i) => s + Number(i.number || i.num || 1), 0);
 }
+// 标签配色(2026-09-17):与订单处理页同口径——标签名 hash 稳定分配 tag-c0~7,同名永远同色
+function tagColorClass(name) {
+  let h = 0;
+  for (const ch of String(name)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return 'tag-c' + (h % 8);
+}
 function operateTag(pkg) {
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus, cls: 'tag-mute' };
 }
@@ -631,6 +637,12 @@ onMounted(() => {
                     <span class="ship-remain" :class="shipRemainCls(pkg)" :title="'Ozon 最迟发货时间(shipment_date)'">{{ fmtRemain(pkg) }}</span>
                   </template>
                 </div>
+                <!-- 订单标签(只读;与订单处理页同 8 色 hash 口径,2026-09-17) -->
+                <div v-if="pkg.tags && pkg.tags.length" class="order-tags">
+                  <span v-for="t in pkg.tags" :key="t" class="ship-tag" :class="tagColorClass(t)">{{ t }}</span>
+                </div>
+                <!-- 订单备注(只读;本地录入或妙手同步;单行省略,悬浮看全文) -->
+                <div v-if="pkg.note" class="order-note" :title="pkg.note">备注:{{ pkg.note }}</div>
               </div>
 
               <!-- 商品信息(SKU/OfferID 可点击复制,数量独立右列) -->
@@ -1100,6 +1112,47 @@ onMounted(() => {
 .ship-remain.remain-over {
   color: #dc2626;
   font-weight: 700;
+}
+/* ── 订单标签(只读;与订单处理页同 8 色 hash 口径,2026-09-17)── */
+.order-tags {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.ship-tag {
+  margin: 1px 4px 1px 0;
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  max-width: 220px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: var(--tag-bg, #e0e7ff);
+  color: var(--tag-fg, #4338ca);
+}
+.ship-tag.tag-c0 { --tag-bg: #e0e7ff; --tag-fg: #4338ca; }
+.ship-tag.tag-c1 { --tag-bg: #d1fae5; --tag-fg: #065f46; }
+.ship-tag.tag-c2 { --tag-bg: #fef3c7; --tag-fg: #92400e; }
+.ship-tag.tag-c3 { --tag-bg: #ffe4e6; --tag-fg: #9f1239; }
+.ship-tag.tag-c4 { --tag-bg: #e0f2fe; --tag-fg: #075985; }
+.ship-tag.tag-c5 { --tag-bg: #ede9fe; --tag-fg: #5b21b6; }
+.ship-tag.tag-c6 { --tag-bg: #fce7f3; --tag-fg: #9d174d; }
+.ship-tag.tag-c7 { --tag-bg: #ccfbf1; --tag-fg: #115e59; }
+/* 订单备注(只读;本地录入或妙手同步;单行省略,悬浮看全文) */
+.order-note {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #92400e;
+  background: #fde68a;
+  border-radius: 5px;
+  padding: 2px 8px;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .order-line1 {
   display: flex;
