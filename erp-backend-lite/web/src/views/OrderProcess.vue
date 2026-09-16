@@ -1410,6 +1410,11 @@ function sortTagsByOrder(tags) {
     return ia - ib || a.localeCompare(b, 'zh');
   });
 }
+// 质检单货件号(02131/024785 开头):标签行第一列显著展示 + "质检单"标记
+function isQcPosting(sn) {
+  const s = String(sn || '');
+  return s.startsWith('02131') || s.startsWith('024785');
+}
 
 // 选择面板:打开(同一时刻仅一行)
 function openTagPicker(pkg) {
@@ -2462,7 +2467,11 @@ onUnmounted(() => {
             <td colspan="2" class="pkg-tags-meta">
               <div class="pkg-tags-meta-line">
                 <span class="pkg-tags-store" :title="pkg.storeName">{{ pkg.storeName }}</span>
-                <span class="mono">{{ pkg.postingNumber }}</span>
+                <template v-if="isQcPosting(pkg.postingNumber)">
+                  <span class="pkg-qc-badge" title="质检单货件(02131/024785 开头)">质检单</span>
+                  <span class="mono qc-posting" title="质检单货件号">{{ pkg.postingNumber }}</span>
+                </template>
+                <span v-else class="mono">{{ pkg.postingNumber }}</span>
                 <button class="copy-btn" title="复制货件号" @click.stop="copyText(pkg.postingNumber, '货件号')">
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 </button>
@@ -3738,13 +3747,32 @@ a.product-title:hover {
   white-space: nowrap;
 }
 .pkg-tags-store {
-  color: #6b7280;
+  color: #374151;
+  font-weight: 700;
+  font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 1;
 }
+/* 质检单货件号(02131/024785 开头):红色加粗显著展示 */
 .pkg-tags-meta-line .mono {
   flex: none;
+}
+.pkg-tags-meta-line .qc-posting {
+  font-weight: 700;
+  font-size: 14px;
+  color: #dc2626;
+}
+.pkg-qc-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 .pkg-tags-meta-line .copy-btn {
   flex: none;
