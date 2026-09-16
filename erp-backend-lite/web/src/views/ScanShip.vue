@@ -90,6 +90,25 @@ const OPERATE_LABELS = {
 };
 const WEIGHT_SOURCE_LABELS = { ship: '发货称重', miaoshou: '订单称重', system: '系统维护', ozon: 'Ozon后台同步' };
 
+/** 采购商品详情页链接(对齐 OrderProcess:平台 + 商品ID 拼 URL;ID 缺失/非数字返回空) */
+function goodsDetailUrl(platform, goodsId) {
+  const id = String(goodsId || '').trim();
+  if (!id || !/^\d+$/.test(id)) return '';
+  if (platform === '1688') return `https://detail.1688.com/offer/${id}.html`;
+  if (platform === 'yangkeduo') return `https://mobile.yangkeduo.com/goods.html?goods_id=${id}`;
+  if (platform === 'taobao') return `https://item.taobao.com/item.htm?id=${id}`;
+  return '';
+}
+
+/** 采购订单详情页链接(平台 + 采购单号拼 URL;单号缺失返回空) */
+function orderDetailUrl(platform, purchaseSn) {
+  const sn = String(purchaseSn || '').trim();
+  if (!sn) return '';
+  if (platform === '1688') return `https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=${encodeURIComponent(sn)}`;
+  if (platform === 'yangkeduo') return `https://mobile.yangkeduo.com/order.html?order_sn=${encodeURIComponent(sn)}`;
+  return '';
+}
+
 function platformLabel(p) {
   return PLATFORMS.find((x) => x.value === p)?.label || p || '—';
 }
@@ -583,7 +602,10 @@ onMounted(() => {
               <div class="pkg-products">
                 <div v-for="(it, i) in pkg.items" :key="i" class="product-item">
                   <div class="img-hover-wrap">
-                    <img v-if="it.picUrl" :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb140" alt="" />
+                    <a v-if="it.picUrl && it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="img-link" title="打开Ozon商品详情页" @click.stop>
+                      <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb140" alt="" />
+                    </a>
+                    <img v-else-if="it.picUrl" :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb140" alt="" />
                     <div v-else class="thumb140 thumb-empty">—</div>
                     <img v-if="it.picUrl" :src="it.picUrl" referrerpolicy="no-referrer" class="img-preview" alt="" />
                   </div>
@@ -626,7 +648,10 @@ onMounted(() => {
                 <div v-for="l in pkg.purchaseLinks" :key="l.id" class="purchase-item">
                   <div class="purchase-imgs">
                     <div v-for="(pi, j) in (l.items || []).slice(0, 3)" :key="j" class="img-hover-wrap">
-                      <img :src="pi.thumbUrl || pi.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb140" alt="" />
+                      <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="img-link" :title="'打开' + platformLabel(l.platform) + '商品详情页'" @click.stop>
+                        <img :src="pi.thumbUrl || pi.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb140" alt="" />
+                      </a>
+                      <img v-else :src="pi.thumbUrl || pi.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb140" alt="" />
                       <img :src="pi.thumbUrl || pi.picUrl" referrerpolicy="no-referrer" class="img-preview" alt="" />
                     </div>
                     <span v-if="!l.items?.length" class="thumb140 thumb-empty">—</span>
@@ -635,7 +660,16 @@ onMounted(() => {
                   <div class="purchase-info">
                     <div class="purchase-line">
                       <span class="muted">{{ platformLabel(l.platform) }}</span>
-                      <span class="mono">{{ l.purchaseSn || '#' + l.id }}</span>
+                      <a
+                        v-if="orderDetailUrl(l.platform, l.purchaseSn)"
+                        :href="orderDetailUrl(l.platform, l.purchaseSn)"
+                        target="_blank"
+                        rel="noopener"
+                        class="mono order-link"
+                        :title="'打开' + platformLabel(l.platform) + '订单详情'"
+                        @click.stop
+                      >{{ l.purchaseSn }}</a>
+                      <span v-else class="mono">{{ l.purchaseSn || '#' + l.id }}</span>
                       <button
                         v-if="l.purchaseSn"
                         class="copy-btn"
@@ -1190,6 +1224,21 @@ onMounted(() => {
 .img-hover-wrap {
   position: relative;
   flex-shrink: 0;
+}
+/* 图片详情页链接(订单商品/采购商品;a 包裹 img,inline-flex 保住 140px 方图布局) */
+.img-link {
+  text-decoration: none;
+  color: inherit;
+  display: inline-flex;
+  min-width: 0;
+}
+/* 采购订单详情页链接(单号;蓝色示意可点,口径同 OrderProcess) */
+.order-link {
+  text-decoration: none;
+  color: #3b82f6;
+}
+.order-link:hover {
+  text-decoration: underline;
 }
 .img-preview {
   display: none;
