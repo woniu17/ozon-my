@@ -1130,7 +1130,7 @@ const COURIER_RULES = [
   [/^SF/, '顺丰速运'],
   [/^JT/, '极兔速递'],
   [/^77/, '申通快递'],
-  [/^75|^78/, '中通快递'],
+  [/^75|^78|^79/, '中通快递'],
   [/^JD/, '京东物流'],
   [/^EMS|^98/, '邮政快递'],
 ];
@@ -1340,7 +1340,9 @@ watch(newSelectedOrders, (sel) => {
   purchaseForm.paymentAmount = newSelectedTotal.value;
   const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
   purchaseForm.logisticsNo = tracks.join(',');
-  purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
+  // 物流公司:平台真实公司名优先(1688 openapi logisticsCompanyName),无则按单号前缀推断兜底
+  const companies = [...new Set(sel.map((o) => o.logisticsCompany).filter(Boolean))];
+  purchaseForm.logisticsCompany = companies.join(',') || (tracks.length ? inferCourier(tracks[0]) : '');
   // 平台订单商品(图片/数量/规格)随表单携带,保存时直接写入 items_json(免事后补全)
   purchaseForm.platformGoods = sel.flatMap((o) => o.goods || []);
   if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {

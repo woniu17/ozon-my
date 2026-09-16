@@ -11,7 +11,7 @@
 // 接口(均实测):
 //   1/com.alibaba.trade/alibaba.trade.getBuyerOrderList     订单列表(不含物流)
 //   1/com.alibaba.trade/alibaba.trade.get.buyerView         订单详情(单号精确查)
-//   1/com.alibaba.logistics/alibaba.trade.getLogisticsInfos.buyerView  物流单号
+//   1/com.alibaba.logistics/alibaba.trade.getLogisticsInfos.buyerView  物流单号+公司名
 //
 // 实测坑(重要):
 //   - 绝不传 bizTypes:trade_general,trade_assure 只覆盖老订单类型,新类型
@@ -151,6 +151,7 @@ function normalizeOpenApiOrder(o, account) {
     statusPrompt: STATUS_PROMPTS[b.status] || b.status || '',
     amount: Number(b.totalAmount || 0).toFixed(2), // 单位:元
     trackingNumber: '',
+    logisticsCompany: '', // 物流公司名(fillLogistics 回填,优先于前端按单号前缀推断)
     orderTime: fmtTime(b.createTime),
     sellerName: b.sellerLoginId || (b.sellerContact && b.sellerContact.companyName) || '',
     buyerUserId: b.buyerUserId ? String(b.buyerUserId) : '',
@@ -167,8 +168,15 @@ function normalizeOpenApiOrder(o, account) {
   };
 }
 
+/** 物流包数组 → 公司名(取第一个包;"中通快递(ZTO)"去英文括号后缀 → "中通快递",
+ *  与前端 inferCourier 口径一致;2026-09-16 实测 getLogisticsInfos 返回 logisticsCompanyName) */
+function pickLogisticsCompany(packs) {
+  const name = String((packs[0] && packs[0].logisticsCompanyName) || '');
+  return name.replace(/\s*[（(][A-Za-z]+[)）]\s*$/, '').trim();
+}
+
 /** 批量查物流单号并回填(trackingNumber 取第一个物流包,对齐 mtop tracks[0]);
- *  单号查失败不阻塞列表(留空) */
+ *  公司名同源回填(单号查失败不阻塞列表,留空) */
 async function fillLogistics(orders, account) {
   const targets = orders.filter((o) => SHIPPED_STATUSES.has(o.status) && o.orderSn);
   if (!targets.length) return;
@@ -178,10 +186,11 @@ async function fillLogistics(orders, account) {
       const t = targets[cursor++];
       try {
         const r = await callOpenApi(API_LOGISTICS, account, {
-          orderId: t.orderSn, fields: 'logisticsBillNo', webSite: '1688',
+          orderId: t.orderSn, fields: 'company,logisticsBillNo', webSite: '1688',
         });
         const packs = Array.isArray(r.result) ? r.result : [];
         t.trackingNumber = String((packs[0] && packs[0].logisticsBillNo) || '');
+        t.logisticsCompany = pickLogisticsCompany(packs);
       } catch (e) {
         // 物流查询单笔失败不影响订单列表(留空,不抛错)
         console.warn(`[ali1688-openapi] 物流查询失败 ${t.orderSn}: ${e.message}`);
@@ -229,16 +238,18 @@ async function searchAliOpenApiInAccount(orderSn, account) {
     orderTime: n.orderTime,
     statusPrompt: n.statusPrompt,
     trackingNumber: n.trackingNumber,
+    logisticsCompany: n.logisticsCompany,
     goods: n.goods,
   };
-  // 详情补物流单号(单次调用)
+  // 详情补物流单号+公司名(单次调用)
   if (SHIPPED_STATUSES.has(n.status)) {
     try {
       const r = await callOpenApi(API_LOGISTICS, account, {
-        orderId: n.orderSn, fields: 'logisticsBillNo', webSite: '1688',
+        orderId: n.orderSn, fields: 'company,logisticsBillNo', webSite: '1688',
       });
       const packs = Array.isArray(r.result) ? r.result : [];
       result.trackingNumber = String((packs[0] && packs[0].logisticsBillNo) || '');
+      result.logisticsCompany = pickLogisticsCompany(packs);
     } catch { /* 留空 */ }
   }
   return result;
