@@ -983,6 +983,7 @@ export function enrichPurchaseItems(items) {
         .filter((g) => g && g.thumbUrl)
         .map((g) => ({
           goodsName: g.goodsName || '',
+          goodsId: g.goodsId || '', // 商品ID(1688 offerId/拼多多 goodsId/淘宝 itemId),拼详情页链接用
           spec: g.spec || '',
           price: g.price,
           number: g.number || 1,
