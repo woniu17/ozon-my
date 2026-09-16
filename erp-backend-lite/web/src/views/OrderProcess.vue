@@ -147,6 +147,7 @@ const purchaseForm = reactive({
   note: '',
   allocMode: 'auto', // 'auto'=勾选自动填写金额, 'manual'=取消勾选手动填写
   items: [], // [{ itemId, offerId, title, quantity, amount }]
+  platformGoods: [], // 选中平台订单的商品(图片/数量/规格),随提交写入 items_json,免事后补全
 });
 // auto 模式拼单预览:查询已关联包裹信息(含数量,用于加权分摊预览)
 const lookupResult = ref(null);
@@ -746,6 +747,7 @@ function openPurchase(pkg) {
   purchaseForm.logisticsNo = '';
   purchaseForm.note = '';
   purchaseForm.allocMode = 'auto';
+  purchaseForm.platformGoods = [];
   lookupResult.value = null;
   purchaseForm.items = (pkg.items || []).map((it) => ({
     itemId: it.id,
@@ -953,6 +955,7 @@ async function savePurchase() {
       logisticsNo: hasNo ? purchaseForm.logisticsNo.trim() : null,
       note: purchaseForm.note.trim() || null,
       items,
+      platformGoods: purchaseForm.platformGoods,
       allocMode: isAuto ? 'auto' : 'manual',
     });
     show('采购信息已提交,包裹已流转到待打单发货', 'success');
@@ -1338,6 +1341,8 @@ watch(newSelectedOrders, (sel) => {
   const tracks = sel.map((o) => o.trackingNumber).filter(Boolean);
   purchaseForm.logisticsNo = tracks.join(',');
   purchaseForm.logisticsCompany = tracks.length ? inferCourier(tracks[0]) : '';
+  // 平台订单商品(图片/数量/规格)随表单携带,保存时直接写入 items_json(免事后补全)
+  purchaseForm.platformGoods = sel.flatMap((o) => o.goods || []);
   if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
     purchaseForm.items[0].amount = sel[0].amount;
   }

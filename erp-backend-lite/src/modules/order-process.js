@@ -32,6 +32,10 @@ import { packageLabel, postingFbsGet, postingFbsShip } from '../services/ozon-op
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
 import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
+// 采购单自动补全用平台搜索(跨账号,按单号拉订单详情含 goods)
+import { searchAliOrder } from './platform-orders.js';
+import { searchPddOrder } from '../services/platform-orders/adapters/pdd.js';
+import { searchTaobaoOrder } from '../services/platform-orders/adapters/taobao.js';
 
 const router = Router();
 
@@ -514,9 +518,38 @@ router.get('/admin/api/order-process/purchase/lookup', (req, res, next) => {
 //   packageId, platform?, purchaseSn?, paymentAmount?, logisticsCompany?, logisticsNo?,
 //   buyerAccount?, sellerName?, note?,
 //   items: [{ itemId, amount, quantity }],
+//   platformGoods?: [{ goodsName, spec, price, number, thumbUrl }] —— 平台订单商品(导入勾选携带),直接写入 items_json
 //   allocMode?: 'manual' | 'auto'  —— manual=手动填金额, auto=按quantity加权自动分摊
 // }
 // 提交即流转:包裹 wait_process → wait_ship(直接待打单发货)
+// 保存后兜底:手填单号(无 platformGoods)且平台单号单一时,异步搜索详情自动补全 items_json
+
+// 采购单自动补全(2026-09-16):按单号跨账号搜索平台订单详情,goods 含 thumbUrl 时写入 items_json
+// 场景:模式B手填单号保存时无商品信息,后台异步拉详情补全,免手动"补全采购订单信息"
+// 失败仅记日志不阻塞流程(浏览器未开/登录失效时用户可手动补全兜底)
+const AUTO_ENRICH_SEARCH = {
+  '1688': (orderSn, accounts) => searchAliOrder(orderSn, accounts),
+  yangkeduo: (orderSn, accounts) => searchPddOrder(orderSn, accounts),
+  taobao: (orderSn, accounts) => searchTaobaoOrder(orderSn, accounts),
+};
+async function autoEnrichPurchase(dbPlatform, orderSn) {
+  try {
+    const po = db
+      .prepare(`SELECT id, items_json FROM op_purchase_order WHERE platform = ? AND purchase_sn = ?`)
+      .get(dbPlatform, orderSn);
+    if (!po || (po.items_json && po.items_json.includes('thumbUrl'))) return; // 已有图,无需补全
+    const searchFn = AUTO_ENRICH_SEARCH[dbPlatform];
+    const accounts = config.platformAccounts[{ '1688': 'ali1688', yangkeduo: 'pdd', taobao: 'taobao' }[dbPlatform]] || [];
+    if (!searchFn || !accounts.length) return;
+    const { result } = await searchFn(orderSn, accounts);
+    if (!result?.goods?.length) return;
+    const r = orderPackageDao.enrichPurchaseItems([{ platform: dbPlatform, purchaseSn: orderSn, goods: result.goods }]);
+    if (r.updated > 0) logger.info({ platform: dbPlatform, purchaseSn: orderSn, goods: result.goods.length }, '[order-process] 采购单自动补全完成');
+  } catch (e) {
+    logger.warn({ platform: dbPlatform, purchaseSn: orderSn, err: e?.message }, '[order-process] 采购单自动补全失败(可手动补全兜底)');
+  }
+}
+
 router.post('/admin/api/order-process/purchase', (req, res, next) => {
   try {
     const b = req.body || {};
@@ -533,6 +566,9 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
     if (!hasAmount && !hasLogisticsNo) {
       return res.status(400).json({ ok: false, message: '请填写采购金额或国内快递单号' });
     }
+    // 平台订单商品:过滤出有 thumbUrl 的(与 enrichPurchaseItems 口径一致),序列化后随 upsert 写入
+    const goodsArr = (Array.isArray(b.platformGoods) ? b.platformGoods : []).filter((g) => g && g.thumbUrl);
+    const itemsJson = goodsArr.length ? JSON.stringify(goodsArr) : null;
     const r = orderPackageDao.submitPurchase({
       packageId,
       platform: b.platform || 'other',
@@ -545,9 +581,15 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
       sellerName: b.sellerName || null,
       note: b.note || null,
       items,
+      itemsJson,
       allocMode: isAuto ? 'auto' : 'manual',
     });
-    logger.info({ packageId, purchaseOrderId: r.purchaseOrderId, allocMode: isAuto ? 'auto' : 'manual' }, '[order-process] 采购信息已提交');
+    // 异步自动补全:无 goods 写入(手填)且是可搜索平台的单一单号时,后台拉详情
+    const sn = String(b.purchaseSn || '').trim();
+    if (!goodsArr.length && AUTO_ENRICH_SEARCH[b.platform] && sn && !sn.includes(',')) {
+      setImmediate(() => autoEnrichPurchase(b.platform, sn));
+    }
+    logger.info({ packageId, purchaseOrderId: r.purchaseOrderId, allocMode: isAuto ? 'auto' : 'manual', goodsSaved: goodsArr.length }, '[order-process] 采购信息已提交');
     res.json(ok(r));
   } catch (e) {
     next(e);

@@ -1098,6 +1098,7 @@ function submitPurchase({
   sendAt = null,
   note = null,
   items = [],
+  itemsJson = null, // 平台订单商品 JSON([{goodsName,spec,price,number,thumbUrl}]);有 thumbUrl 才写入
   allocMode = 'manual',
 }) {
   const pkg = db.prepare(`SELECT * FROM op_package WHERE id = ?`).get(packageId);
@@ -1114,14 +1115,15 @@ function submitPurchase({
     // 1) upsert 采购单(拼单场景:同采购单号复用,不新建)
     // ON CONFLICT(platform, purchase_sn) DO UPDATE:复用已存在采购单 id
     // payment_amount/goods_amount 用 CASE 保护:新值>0 才覆盖,避免拼单第二次提交时误清零
+    // items_json 用 CASE 保护:新值含 thumbUrl 才覆盖(导入平台订单带图;手填无图不动已有)
     // purchase_channel 不在 UPDATE 列表,保留原值(模式A platform_order 不被覆盖成 manual)
     // sync_uuid 冲突时保留原值(跨机同步判重键,不随提交变化)
     // 边界:platform='other' + purchaseSn=null 时 SQLite NULL 不参与 UNIQUE,每次新建(符合手工单预期)
     const poRes = db
       .prepare(
         `INSERT INTO op_purchase_order (purchase_sn, platform, purchase_channel, buyer_account, buyer_user_id, seller_name,
-            payment_amount, goods_amount, status, pay_at, send_at, logistics_company, logistics_no, note, sync_uuid, gmt_create, gmt_modified)
-           VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            payment_amount, goods_amount, status, pay_at, send_at, logistics_company, logistics_no, note, sync_uuid, gmt_create, gmt_modified, items_json)
+           VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(platform, purchase_sn) DO UPDATE SET
             buyer_account = COALESCE(excluded.buyer_account, op_purchase_order.buyer_account),
             buyer_user_id = COALESCE(excluded.buyer_user_id, op_purchase_order.buyer_user_id),
@@ -1133,7 +1135,9 @@ function submitPurchase({
             logistics_company = COALESCE(excluded.logistics_company, op_purchase_order.logistics_company),
             logistics_no = COALESCE(excluded.logistics_no, op_purchase_order.logistics_no),
             note = COALESCE(excluded.note, op_purchase_order.note),
-            gmt_modified = excluded.gmt_modified
+            gmt_modified = excluded.gmt_modified,
+            items_json = CASE WHEN excluded.items_json IS NOT NULL AND excluded.items_json LIKE '%thumbUrl%'
+                              THEN excluded.items_json ELSE op_purchase_order.items_json END
            RETURNING id`
       )
       .get(
@@ -1152,7 +1156,8 @@ function submitPurchase({
         note,
         randomUUID(),
         now,
-        now
+        now,
+        itemsJson
       );
     const poId = Number(poRes?.id ?? db.prepare(`SELECT id FROM op_purchase_order WHERE platform=? AND purchase_sn=?`).get(platform, purchaseSn).id);
 

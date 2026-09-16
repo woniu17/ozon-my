@@ -50,8 +50,9 @@ async function listAli1688Orders({ tab, size, account }) {
 
 /** 搜索:跨账号聚合(官方 API 账号优先,浏览器账号兜底);
  *  语义与浏览器版 searchAliOrder 一致:命中即返;登录失效/风控记录后试下一账号;
- *  全部账号登录态失败才抛 AUTH_REQUIRED */
-async function searchAliOrder(orderSn, accounts = []) {
+ *  全部账号登录态失败才抛 AUTH_REQUIRED
+ *  (export 供 order-process 采购单自动补全复用,2026-09-16) */
+export async function searchAliOrder(orderSn, accounts = []) {
   const errs = [];
   for (const account of accounts) {
     let result;
