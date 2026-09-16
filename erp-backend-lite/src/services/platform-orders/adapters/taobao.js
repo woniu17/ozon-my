@@ -33,6 +33,20 @@ function stripYuan(s) {
   return String(s || '').replace(/[^\d.]/g, '') || '0';
 }
 
+/** 商品图 URL 归一化(2026-09-17 实测踩坑):
+ *  mtop queryboughtlistV2 的 pic 字段返回格式不固定,至少三种:
+ *  ① "//img.alicdn.com/..." 协议相对 → 补 https:
+ *  ② "https:img.alicdn.com/..." 缺 //(序列化怪癖) → 补 //,否则前端 img src 畸形
+ *  ③ "https://img.alicdn.com/..." 正常 → 原样
+ *  统一入口归一化,顺带 http→https 强制 */
+function normalizeTaobaoPic(p) {
+  let s = String(p || '').trim();
+  if (!s) return '';
+  if (s.startsWith('//')) return 'https:' + s;
+  if (/^https?:[^/]/.test(s)) return s.replace(/^(https?):/, '$1://'); // 缺 // 的畸形
+  return s.replace(/^http:\/\//, 'https://');
+}
+
 /** 卡片化组件聚合还原订单(与插件 normalizeTaobaoOrders 逐字段一致,与 PDD/1688 结构对齐) */
 function normalizeTaobaoOrders(data) {
   const components = (data && data.data) || {};
@@ -52,7 +66,7 @@ function normalizeTaobaoOrders(data) {
         spec: f.skuText || '',
         price: stripYuan(f.priceInfo && f.priceInfo.actualTotalFee),
         number: Number(f.quantity || 1),
-        thumbUrl: (f.pic || '').replace(/^\/\//, 'https:'),
+        thumbUrl: normalizeTaobaoPic(f.pic),
       }));
     return {
       orderSn: shop.orderId || oid,

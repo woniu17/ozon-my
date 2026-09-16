@@ -967,6 +967,17 @@ export function listPendingPurchases(platform) {
  * 后端按 (platform, purchase_sn) 批量更新 op_purchase_order.items_json
  * 覆盖策略:有 thumbUrl 才覆盖(空值不动),避免清空已有数据
  */
+
+/** 商品图 URL 防御归一化(2026-09-17):淘宝 mtop pic 曾出现 "https:img..."(缺//)与
+ *  "//img..."(协议相对)畸形格式直落库,写入前统一修正;跨平台通用兜底 */
+function normalizeThumbUrl(u) {
+  let s = String(u || '').trim();
+  if (!s) return s;
+  if (s.startsWith('//')) return 'https:' + s;
+  if (/^https?:[^/]/.test(s)) return s.replace(/^(https?):/, '$1://');
+  return s.replace(/^http:\/\//, 'https://');
+}
+
 export function enrichPurchaseItems(items) {
   const now = nowIso();
   const stmt = db.prepare(
@@ -992,7 +1003,7 @@ export function enrichPurchaseItems(items) {
           spec: g.spec || '',
           price: g.price,
           number: g.number || 1,
-          thumbUrl: g.thumbUrl,
+          thumbUrl: normalizeThumbUrl(g.thumbUrl),
         }));
       if (!goods.length) { skipped++; continue; }
       const itemsJson = JSON.stringify(goods);
