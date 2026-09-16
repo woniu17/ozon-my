@@ -626,7 +626,11 @@ onMounted(() => {
                   </button>
                   <span v-if="pkg.parentId" class="tag tag-mute" title="拆单子件">子件</span>
                   <span class="tag" :class="operateTag(pkg).cls">{{ operateTag(pkg).label }}</span>
+                  <!-- 订单标签(只读;与货件号同一行,2026-09-17;同 8 色 hash 口径) -->
+                  <span v-for="t in pkg.tags" :key="t" class="ship-tag" :class="tagColorClass(t)">{{ t }}</span>
                 </div>
+                <!-- 订单备注(只读;本地录入或妙手同步;单行省略,悬浮看全文;货件号行下一行,2026-09-17) -->
+                <div v-if="pkg.note" class="order-note" :title="pkg.note">备注:{{ pkg.note }}</div>
                 <div class="order-line">
                   下单 {{ fmtTime(pkg.inProcessAt) }}
                   <template v-if="pkg.lastDeliveryAt">
@@ -634,12 +638,6 @@ onMounted(() => {
                     <span class="ship-remain" :class="shipRemainCls(pkg)" :title="'Ozon 最迟发货时间(shipment_date)'">{{ fmtRemain(pkg) }}</span>
                   </template>
                 </div>
-                <!-- 订单标签(只读;与订单处理页同 8 色 hash 口径,2026-09-17) -->
-                <div v-if="pkg.tags && pkg.tags.length" class="order-tags">
-                  <span v-for="t in pkg.tags" :key="t" class="ship-tag" :class="tagColorClass(t)">{{ t }}</span>
-                </div>
-                <!-- 订单备注(只读;本地录入或妙手同步;单行省略,悬浮看全文) -->
-                <div v-if="pkg.note" class="order-note" :title="pkg.note">备注:{{ pkg.note }}</div>
               </div>
 
           <div class="pkg-grid">
@@ -1118,12 +1116,7 @@ onMounted(() => {
   color: #dc2626;
   font-weight: 700;
 }
-/* ── 订单标签(只读;与订单处理页同 8 色 hash 口径,2026-09-17)── */
-.order-tags {
-  display: flex;
-  flex-wrap: wrap;
-  margin-top: 4px;
-}
+/* ── 订单标签 chip(只读;与货件号同行,2026-09-17;与订单处理页同 8 色 hash 口径)── */
 .ship-tag {
   margin: 1px 4px 1px 0;
   padding: 1px 7px;
