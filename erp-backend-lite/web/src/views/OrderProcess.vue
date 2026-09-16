@@ -2445,7 +2445,6 @@ onUnmounted(() => {
           <tr>
             <th class="col-product">产品信息</th>
             <th class="col-qty">数量</th>
-            <th class="col-order">订单信息</th>
             <th class="col-amount">金额(利润)</th>
             <th class="col-purchase">采购信息</th>
             <th class="col-status">状态/时间</th>
@@ -2454,13 +2453,22 @@ onUnmounted(() => {
         </thead>
         <tbody>
           <tr v-if="!rows.length">
-            <td colspan="7" class="empty">{{ loading ? '加载中…' : (globalSearch.active ? '全局搜索未命中包裹' : '暂无订单(点击右上角「同步订单」拉取 Ozon 订单)') }}</td>
+            <td colspan="6" class="empty">{{ loading ? '加载中…' : (globalSearch.active ? '全局搜索未命中包裹' : '暂无订单(点击右上角「同步订单」拉取 Ozon 订单)') }}</td>
           </tr>
           <!-- 每订单固定 3 行:标签行(上) → 主行 → 备注行(下),空态也常驻(2026-09-15 v2) -->
           <template v-for="pkg in rows" :key="pkg.id">
-          <!-- 标签行:本地标签 chip(名=点击筛选/×悬停移除,按全局顺序+稳定配色;妙手旗帜同步时并入 tags) + 选择面板 -->
+          <!-- 标签行分两列(2026-09-16:订单信息列取消,店铺名+货件号+复制上移到第一列):第一列=店铺+货件号+复制,第二列=标签 + 选择面板 -->
           <tr class="pkg-subrow pkg-tags-row">
-            <td colspan="7">
+            <td colspan="2" class="pkg-tags-meta">
+              <div class="pkg-tags-meta-line">
+                <span class="pkg-tags-store" :title="pkg.storeName">{{ pkg.storeName }}</span>
+                <span class="mono">{{ pkg.postingNumber }}</span>
+                <button class="copy-btn" title="复制货件号" @click.stop="copyText(pkg.postingNumber, '货件号')">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                </button>
+              </div>
+            </td>
+            <td colspan="4">
               <span v-for="t in sortTagsByOrder(pkg.tags)" :key="t" class="pkg-tag" :class="[tagColorClass(t), { 'pkg-tag-on': filters.tag === t }]">
                 <button
                   class="pkg-tag-name"
@@ -2545,18 +2553,6 @@ onUnmounted(() => {
             <td class="col-qty">
               <div v-for="(it, i) in pkg.items" :key="i" class="qty-line" :class="{ 'qty-multi': it.quantity > 1 }">× {{ it.quantity }}</div>
               <div v-if="!pkg.items?.length" class="muted">—</div>
-            </td>
-            <td class="col-order">
-              <div class="mono">{{ pkg.postingNumber }}
-                <button class="copy-btn" title="复制货件号" @click.stop="copyText(pkg.postingNumber, '货件号')">
-                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                </button>
-              </div>
-              <div class="sub">
-                <span v-if="pkg.parentId" class="tag tag-mute" title="拆单子件">子件</span>
-                {{ pkg.storeName }} · {{ pkg.orderNumber }}
-              </div>
-              <div class="sub muted">{{ pkg.buyerName || '—' }} {{ pkg.buyerCity ? '· ' + pkg.buyerCity : '' }}</div>
             </td>
             <td class="col-amount">
               <!-- 金额列:名称左对齐、数字右对齐(amt-row flex);利润率单独两行 -->
@@ -2717,7 +2713,7 @@ onUnmounted(() => {
               class="pkg-subrow pkg-note-row"
               :class="{ 'is-editing': noteEdit.pkgId === pkg.id }"
             >
-              <td colspan="7">
+              <td colspan="6">
                 <span class="pkg-note-label">{{ noteEdit.pkgId === pkg.id ? (noteEdit.saving ? '保存中' : '编辑中') : '备注' }}</span>
                 <textarea
                   v-if="noteEdit.pkgId === pkg.id"
@@ -3553,10 +3549,6 @@ a.product-title:hover {
   font-size: 2em;
 }
 
-.col-order {
-  min-width: 170px;
-}
-
 .col-amount {
   min-width: 150px;
 }
@@ -3732,6 +3724,30 @@ a.product-title:hover {
 .pkg-tags-row td {
   background: #f5f7ff;
   border-top: 1px solid #e5e7eb;
+}
+/* 标签行第一列(2026-09-16 订单信息列取消):店铺名+货件号+复制小图标,与右侧标签用细分隔线区分 */
+.pkg-tags-row td.pkg-tags-meta {
+  border-right: 1px solid #e5e7eb;
+}
+.pkg-tags-meta-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.pkg-tags-store {
+  color: #6b7280;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+}
+.pkg-tags-meta-line .mono {
+  flex: none;
+}
+.pkg-tags-meta-line .copy-btn {
+  flex: none;
 }
 .pkg-note-row td {
   background: #fffbeb;
