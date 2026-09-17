@@ -1141,6 +1141,9 @@ function submitPurchase({
     // purchase_channel 不在 UPDATE 列表,保留原值(模式A platform_order 不被覆盖成 manual)
     // sync_uuid 冲突时保留原值(跨机同步判重键,不随提交变化)
     // 边界:platform='other' + purchaseSn=null 时 SQLite NULL 不参与 UNIQUE,每次新建(符合手工单预期)
+    // link_status 冲突时强制回 'linked'(2026-09-17 修复:删除关联后再重新保存,link 重建但
+    // 状态不回写,仍为 unlinked——采购弹窗显示正常,但补全队列/单包裹物流同步等筛
+    // link_status='linked' 的查询全部漏掉,对齐妙手同步 upsert 的同款处理)
     const poRes = db
       .prepare(
         `INSERT INTO op_purchase_order (purchase_sn, platform, purchase_channel, buyer_account, buyer_user_id, seller_name,
@@ -1159,7 +1162,8 @@ function submitPurchase({
             note = COALESCE(excluded.note, op_purchase_order.note),
             gmt_modified = excluded.gmt_modified,
             items_json = CASE WHEN excluded.items_json IS NOT NULL AND excluded.items_json LIKE '%thumbUrl%'
-                              THEN excluded.items_json ELSE op_purchase_order.items_json END
+                              THEN excluded.items_json ELSE op_purchase_order.items_json END,
+            link_status = 'linked'
            RETURNING id`
       )
       .get(
