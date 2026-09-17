@@ -1743,16 +1743,25 @@ async function onSyncPackageLogistics(pkg) {
 const shippingPkgId = ref(0); // 正在备货的包裹 id(按钮 loading)
 async function onShipPackage(pkg) {
   if (shippingPkgId.value) return;
-  if (!confirm(`确认备货 ${pkg.logisticsNo}?\n将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。`)) return;
+  // 确认弹窗(2026-09-17):单件商品(总数量=1)直接备货,两件以上才弹窗确认
+  const totalQty = (pkg.items || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+  if (totalQty > 1) {
+    if (!confirm(`确认备货 ${pkg.logisticsNo}?\n该货件共 ${totalQty} 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。`)) return;
+  }
   shippingPkgId.value = pkg.id;
   try {
     const r = await shipPackage(pkg.id);
-    show(
-      r.alreadyShipped
-        ? `该订单已备货过(Ozon 状态 ${r.ozonStatus}),无需重复操作`
-        : `备货成功:${pkg.logisticsNo} 已确认货件(Ozon 状态 → ${r.ozonStatus}),可打印面单`,
-      'success'
-    );
+    if (r.pending) {
+      // Ozon 状态变更中(后端已轮询~15s仍未生效):软成功提示,本地等同步校准
+      show(`备货指令已提交:${pkg.logisticsNo} Ozon 状态变更中(通常数十秒内),稍后点「同步订单」或等自动同步校准`, 'success');
+    } else {
+      show(
+        r.alreadyShipped
+          ? `该订单已备货过(Ozon 状态 ${r.ozonStatus}),无需重复操作`
+          : `备货成功:${pkg.logisticsNo} 已确认货件(Ozon 状态 → ${r.ozonStatus}),可打印面单`,
+        'success'
+      );
+    }
     await loadList();
     await loadTabs();
   } catch (err) {

@@ -1126,17 +1126,32 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     // 3) 调 ship(不拆分:单 package 全部商品)
     await postingFbsShip(store, row.postingNumber, products);
 
-    // 4) get 校验(200 不代表成功)
-    const g2 = await postingFbsGet(store, row.postingNumber);
-    const p2 = g2?.result;
-    const newStatus = p2?.status || '';
-    const newSub = p2?.substatus || '';
-    if (newSub === 'ship_failed' || newStatus === 'awaiting_packaging') {
-      logger.warn({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 备货未生效');
+    // 4) 轮询 get 校验(200 不代表成功;Ozon 状态变更是异步的,实测常需数十秒,
+    //    2026-09-17 由单次校验改为最多 5 次 × 3s ≈15s,期间状态离开 awaiting_packaging 即生效)
+    let p2 = null;
+    let newStatus = '';
+    let newSub = '';
+    for (let i = 0; i < 5; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 3000));
+      const g2 = await postingFbsGet(store, row.postingNumber);
+      p2 = g2?.result;
+      newStatus = p2?.status || '';
+      newSub = p2?.substatus || '';
+      if (newSub === 'ship_failed') break;
+      if (newStatus !== 'awaiting_packaging') break; // 已离开待备货 → 生效
+    }
+    if (newSub === 'ship_failed') {
+      logger.warn({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 备货失败(ship_failed)');
       return res.status(502).json({
         ok: false,
-        message: `备货未生效(Ozon 状态仍为 ${newStatus}${newSub ? '/' + newSub : ''}),请稍后重试或检查商品清单`,
+        message: `备货失败:Ozon 返回 ship_failed,请检查商品清单(SKU/数量)或稍后重试`,
       });
+    }
+    if (newStatus === 'awaiting_packaging') {
+      // 指令已受理但 Ozon 状态尚未变更(异步延迟):不再误报失败,返回软成功;
+      // 本地状态不动,由订单同步(fast 轮/手动同步)自动校准
+      logger.warn({ packageId, postingNumber: row.postingNumber }, '[order-process] 备货指令已提交,Ozon 状态变更中');
+      return res.json(ok({ pending: true, ozonStatus: newStatus, substatus: newSub || null }));
     }
 
     // 5) 成功:同步最新 posting 落库(校准本地 Ozon 状态)
