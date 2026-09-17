@@ -1,0 +1,302 @@
+// 价格管理(2026-09,商品维度定价基准)
+// 设计文档: docs/价格管理-概要设计.md
+// 职责:
+//   - 手动同步 Ozon 价格(v5 prices + v3 反查 sku)落 op_product_price_cache
+//   - 商品列表:售价/采购价/重量 → 预估利润/利润率(共享 profit-estimator,全 CNY)
+//   - 维护 product_data_cache.custom_purchase_price / custom_weight_g
+//   - 单品改价(/v1/product/import/prices,price + old_price×2 + min_price,限频+日志+30s回读)
+import { Router } from 'express';
+import config from '../config/index.js';
+import { ok } from '../utils/response.js';
+import logger from '../middleware/log.js';
+import * as priceDao from '../db/dao/sqlite/price-dao.js';
+import { productInfoPricesV5, productInfoListV3, productImportPrices } from '../services/ozon-opi.js';
+import {
+  DEFAULT_COMMISSION_RATE,
+  DELIVERY_BASE_CNY,
+  DELIVERY_PER_G_CNY,
+  suggestPrice,
+} from '../services/profit-estimator.js';
+
+const router = Router();
+
+// DAO SQL 内联公式参数(与 profit-estimator 单点一致)
+const ESTIMATOR_PARAMS = {
+  commissionRate: DEFAULT_COMMISSION_RATE,
+  deliveryBase: DELIVERY_BASE_CNY,
+  deliveryPerGram: DELIVERY_PER_G_CNY,
+};
+
+// Ozon 限频:每商品每小时改价 ≤10 次
+const PRICE_UPDATE_HOURLY_LIMIT = 10;
+// 改价提交后延迟回读校验(价格生效是异步的,参考备货轮询经验)
+const PRICE_REREAD_DELAY_MS = 30_000;
+
+function resolveStore(storeId) {
+  return (config.loadStores() || []).find((s) => s.id === storeId) || null;
+}
+
+// ── 价格同步(手动):v5 prices(游标) → v3 反查 sku → 落缓存 ──
+router.post('/admin/api/price-manage/prices/sync', async (req, res, next) => {
+  try {
+    const { storeId } = req.body || {};
+    const store = resolveStore(storeId);
+    if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在或未配置凭据` });
+
+    const started = Date.now();
+    const syncedAt = new Date().toISOString();
+    const v5Items = [];
+    let cursor = null;
+    let pages = 0;
+    // 游标分页拉全量(limit 1000,安全上限 20 页)
+    do {
+      const resp = await productInfoPricesV5(store, { cursor });
+      const items = resp?.items || [];
+      v5Items.push(...items);
+      cursor = resp?.cursor || null;
+      pages++;
+      if (pages > 20) {
+        logger.warn({ storeId, pages }, '[price-sync] 超过 20 页安全上限,提前终止');
+        break;
+      }
+    } while (cursor);
+
+    // product_id → sku 映射:优先复用缓存已有映射(product_id 永不变),仅未知 product_id 走 v3
+    const productIds = [...new Set(v5Items.map((it) => it.product_id).filter(Boolean))];
+    const mapping = priceDao.getKnownProductIdMap(productIds); // productId → { sku, name, image }
+    const unknown = productIds.filter((id) => !mapping.has(id));
+    for (let i = 0; i < unknown.length; i += 1000) {
+      const batch = unknown.slice(i, i + 1000);
+      const v3 = await productInfoListV3(store, { productIds: batch });
+      for (const it of v3?.items || []) {
+        const sku = it.sources?.[0]?.sku;
+        if (sku) mapping.set(it.product_id, { sku: String(sku), name: it.name || null, image: it.images?.[0] || null });
+      }
+    }
+
+    // 组装落库行(仅能映射到 sku 的商品)
+    const rows = [];
+    for (const it of v5Items) {
+      const m = mapping.get(it.product_id);
+      if (!m) continue;
+      rows.push({
+        sku: m.sku,
+        storeId: store.id,
+        productId: it.product_id,
+        offerId: it.offer_id ?? null,
+        price: it.price?.price ?? null,
+        oldPrice: it.price?.old_price ?? null,
+        minPrice: it.price?.min_price ?? null,
+        currencyCode: it.price?.currency_code || 'CNY',
+        salesPercentFbs: it.commissions?.sales_percent_fbs ?? null,
+        marketMinPriceRub: it.price_indexes?.ozon_index_data?.min_price ?? null,
+        priceIndexColor: it.price_indexes?.color_index ?? null,
+        name: m.name,
+        image: m.image,
+        rawJson: JSON.stringify(it),
+        syncedAt,
+      });
+    }
+    const count = priceDao.upsertPriceCacheRows(rows);
+    const durationMs = Date.now() - started;
+    logger.info({ storeId, v5Total: v5Items.length, mapped: rows.length, pages, durationMs }, '[price-sync] 同步完成');
+    res.json(ok({ storeId, count, v5Total: v5Items.length, unmapped: v5Items.length - rows.length, pages, durationMs }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 店铺分布(页面店铺 tab) ──
+router.get('/admin/api/price-manage/stores', (_req, res) => {
+  res.json(ok(priceDao.priceCacheStores()));
+});
+
+// ── 商品列表(筛选/排序/分页) ──
+router.get('/admin/api/price-manage/list', (req, res) => {
+  const q = req.query;
+  res.json(ok(priceDao.listPriceProducts({
+    storeId: q.storeId || undefined,
+    keyword: (q.keyword || '').trim() || undefined,
+    purchaseSet: ['set', 'unset'].includes(q.purchaseSet) ? q.purchaseSet : undefined,
+    weightSet: ['set', 'unset'].includes(q.weightSet) ? q.weightSet : undefined,
+    profitRateMin: q.profitRateMin || undefined,
+    profitRateMax: q.profitRateMax || undefined,
+    sort: q.sort || undefined,
+    dir: q.dir || undefined,
+    page: q.page || 1,
+    pageSize: q.pageSize || 20,
+    ...ESTIMATOR_PARAMS,
+  })));
+});
+
+// ── 顶部统计条 ──
+router.get('/admin/api/price-manage/summary', (_req, res) => {
+  res.json(ok(priceDao.priceManageSummary(ESTIMATOR_PARAMS)));
+});
+
+// ── 维护采购价/重量(写 product_data_cache 自定义列) ──
+router.put('/admin/api/price-manage/sku/:sku', (req, res, next) => {
+  try {
+    const { sku } = req.params;
+    const { purchasePrice, weightG } = req.body || {};
+    if (purchasePrice === undefined && weightG === undefined) {
+      return res.status(400).json({ ok: false, message: '未提供要更新的字段(purchasePrice/weightG)' });
+    }
+    const r = priceDao.setSkuCustoms(sku, { purchasePrice, weightG });
+    if (r.updated === 0) {
+      return res.status(404).json({ ok: false, message: `SKU ${sku} 无本地商品记录(需先在商品列表同步该商品)` });
+    }
+    res.json(ok(r));
+  } catch (e) {
+    if (/必须为/.test(e?.message || '')) return res.status(400).json({ ok: false, message: e.message });
+    next(e);
+  }
+});
+
+// ── SKU 历史订单(展开行,最新在前) ──
+router.get('/admin/api/price-manage/sku/:sku/orders', (req, res) => {
+  const { sku } = req.params;
+  const limit = Number(req.query.limit) || 20;
+  res.json(ok(priceDao.skuOrderList(sku, limit)));
+});
+
+// ── 单品改价 ──
+// body: { sku, newPrice, targetRate? }(targetRate 0.4=40% 成本利润率;缺省=手动改价)
+// 改价参数(用户确认 2026-09-18):price=新价,old_price=新价×2,min_price=新价,currency_code='CNY'
+router.post('/admin/api/price-manage/price-update', async (req, res, next) => {
+  try {
+    const { sku, newPrice, targetRate } = req.body || {};
+    const cache = priceDao.getPriceCacheBySku(sku);
+    if (!cache) return res.status(404).json({ ok: false, message: `SKU ${sku} 不在价格缓存中,请先同步价格` });
+    if (!cache.product_id) return res.status(400).json({ ok: false, message: '该商品缺少 product_id,无法改价' });
+
+    const price = Number(newPrice);
+    if (!Number.isFinite(price) || price <= 0) {
+      return res.status(400).json({ ok: false, message: 'newPrice 必须为正数' });
+    }
+
+    // 服务端二次校验:目标定价场景重算建议价,偏差 >0.05 拒绝(防前端公式漂移)
+    let source = 'manual';
+    if (targetRate != null && targetRate !== '') {
+      const pdc = priceDao.getSkuCustoms(sku);
+      const suggested = suggestPrice({
+        purchaseCny: pdc?.custom_purchase_price,
+        weightG: pdc?.weight_g,
+        targetRate: Number(targetRate),
+      });
+      if (suggested == null) {
+        return res.status(400).json({ ok: false, message: '目标定价需先维护采购价与重量' });
+      }
+      if (Math.abs(price - suggested) > 0.05) {
+        return res.status(400).json({ ok: false, message: `新价与服务端建议价不一致(建议 ¥${suggested}),请刷新后重试` });
+      }
+      source = 'target';
+    }
+
+    // Ozon 限频:每商品每小时 ≤10 次
+    const since = new Date(Date.now() - 3600_000).toISOString();
+    const recent = priceDao.countPriceChangesSince(sku, since);
+    if (recent >= PRICE_UPDATE_HOURLY_LIMIT) {
+      return res.status(429).json({ ok: false, code: 'RATE_LIMITED', message: `该商品 1 小时内已改价 ${recent} 次(Ozon 上限 10 次),请稍后再试` });
+    }
+
+    const store = resolveStore(cache.store_id);
+    if (!store) return res.status(400).json({ ok: false, message: `店铺 ${cache.store_id} 不存在或未配置凭据` });
+
+    const oldPrice = cache.price;
+    const oldOldPrice = cache.old_price;
+    const payload = {
+      productId: cache.product_id,
+      price,
+      oldPrice: Math.round(price * 2 * 100) / 100,
+      minPrice: price,
+      currencyCode: cache.currency_code || 'CNY',
+    };
+    const resp = await productImportPrices(store, payload);
+    // HTTP 200 不代表成功:校验 result[].updated(响应可能为 {result:[...]} 或平铺)
+    const item = resp?.result?.[0] ?? resp;
+    if (item?.updated !== true) {
+      const errMsg = item?.errors?.map((e) => `${e.code}:${e.message}`).join('; ') || 'Ozon 未确认 updated=true';
+      logger.warn({ sku, productId: cache.product_id, errors: item?.errors }, '[price-update] Ozon 拒绝改价');
+      return res.status(502).json({ ok: false, code: 'OZON_REJECTED', message: `Ozon 改价未成功: ${errMsg}` });
+    }
+
+    // 落日志(限频依据+审计)
+    priceDao.insertPriceChangeLog({
+      storeId: cache.store_id,
+      sku,
+      productId: cache.product_id,
+      oldPrice,
+      newPrice: price,
+      oldOldPrice,
+      currencyCode: payload.currencyCode,
+      targetRate: targetRate != null && targetRate !== '' ? Number(targetRate) : null,
+      source,
+    });
+    // 乐观更新本地缓存(30s 后回读校准,价格生效是异步的)
+    priceDao.upsertPriceCacheRows([{
+      sku,
+      storeId: cache.store_id,
+      productId: cache.product_id,
+      offerId: cache.offer_id,
+      price,
+      oldPrice: payload.oldPrice,
+      minPrice: payload.minPrice,
+      currencyCode: payload.currencyCode,
+      salesPercentFbs: cache.sales_percent_fbs,
+      marketMinPriceRub: cache.market_min_price_rub,
+      priceIndexColor: cache.price_index_color,
+      name: null, // null 保留原值
+      image: null,
+      rawJson: null,
+      syncedAt: new Date().toISOString(),
+    }]);
+    schedulePriceReread(store, cache.product_id, sku, price);
+
+    logger.info({ sku, productId: cache.product_id, oldPrice, newPrice: price, source }, '[price-update] 改价已提交');
+    res.json(ok({ sku, oldPrice, newPrice: price, oldPriceNew: payload.oldPrice, submitted: true, note: '价格生效为异步,30秒后自动回读校准' }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 延迟回读:30s 后按 product_id 拉 v5 校验价格真正生效,并以 Ozon 值校准缓存
+function schedulePriceReread(store, productId, sku, submittedPrice) {
+  const timer = setTimeout(async () => {
+    try {
+      const resp = await productInfoPricesV5(store, { productIds: [productId] });
+      const it = resp?.items?.find((x) => x.product_id === productId);
+      if (!it) return;
+      const actual = it.price?.price;
+      const row = priceDao.getPriceCacheBySku(sku);
+      if (!row) return;
+      priceDao.upsertPriceCacheRows([{
+        sku,
+        storeId: row.store_id,
+        productId: row.product_id,
+        offerId: it.offer_id ?? row.offer_id,
+        price: actual ?? null,
+        oldPrice: it.price?.old_price ?? null,
+        minPrice: it.price?.min_price ?? null,
+        currencyCode: it.price?.currency_code || row.currency_code,
+        salesPercentFbs: it.commissions?.sales_percent_fbs ?? null,
+        marketMinPriceRub: it.price_indexes?.ozon_index_data?.min_price ?? null,
+        priceIndexColor: it.price_indexes?.color_index ?? null,
+        name: null,
+        image: null,
+        rawJson: JSON.stringify(it),
+        syncedAt: new Date().toISOString(),
+      }]);
+      if (actual != null && Math.abs(actual - submittedPrice) > 0.01) {
+        logger.warn({ sku, productId, submittedPrice, actual }, '[price-update] 回读价格与提交值不一致(可能被 Ozon 规则调整或促销改写)');
+      } else {
+        logger.info({ sku, productId, actual }, '[price-update] 回读校验通过');
+      }
+    } catch (e) {
+      logger.warn({ sku, productId, err: e?.message }, '[price-update] 回读校验失败(忽略,缓存保持提交值)');
+    }
+  }, PRICE_REREAD_DELAY_MS);
+  timer.unref?.();
+}
+
+export default router;

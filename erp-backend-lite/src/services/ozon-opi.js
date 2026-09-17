@@ -609,6 +609,46 @@ export function rfbsReturnsList(store, { limit = 1000, offset = 0 } = {}) {
   return call(store, '/v2/returns/rfbs/list', { limit, offset });
 }
 
+// ── 价格管理(2026-09,docs/价格管理-概要设计.md)─────────────────
+// /v5/product/info/prices —— 商品价格信息(手动同步,游标分页)
+// 请求: { filter: { visibility: 'ALL' }, limit, cursor }
+// 响应: { cursor, items: [{ product_id, offer_id, price: { price, old_price, min_price,
+//   currency_code, ... }, commissions: { sales_percent_fbs, ... },
+//   price_indexes: { ozon_index_data: { min_price, min_price_currency }, color_index } }], total }
+// 实测(2026-09-18 YQL01):
+//   - limit 1000 可用(约 2200 商品 ≈ 3 页)
+//   - currency_code='CNY'(跨境结算账户),全链路无需汇率换算
+//   - 无 SKU 字段,需配合 /v3/product/info/list 按 product_id 反查 sources[].sku
+export function productInfoPricesV5(store, { cursor, visibility = 'ALL', limit = 1000, productIds } = {}) {
+  const filter = productIds?.length ? { product_id: productIds.map(String) } : { visibility };
+  const body = { filter, limit };
+  if (cursor) body.cursor = cursor;
+  return call(store, '/v5/product/info/prices', body);
+}
+
+// /v1/product/import/prices —— 更新价格(单品)
+// 请求: { prices: [{ product_id, price, old_price, min_price, currency_code }] }
+// 响应: { result: [{ product_id, updated, errors: [...] }] }
+// 注:
+//   - 限频:每商品每小时 ≤10 次(调用方按 op_price_change_log 自查)
+//   - 同时传 offer_id/product_id 时 Ozon 优先 offer_id;offer_id 可被修改,
+//     统一只传 product_id(稳定标识,用户确认 2026-09-18)
+//   - HTTP 200 不代表成功,需校验 result[].updated === true
+//   - 价格生效是异步的,提交后需回读 v5 校验
+export function productImportPrices(store, { productId, price, oldPrice, minPrice, currencyCode = 'CNY' }) {
+  if (!productId) throw new Error('product_id 不能为空');
+  if (!(Number(price) > 0)) throw new Error('price 必须为正数');
+  return call(store, '/v1/product/import/prices', {
+    prices: [{
+      product_id: Number(productId),
+      price: String(price),
+      old_price: String(oldPrice ?? 0),
+      min_price: String(minPrice ?? price),
+      currency_code: currencyCode,
+    }],
+  });
+}
+
 // ── 商品归档任务(2026-08)─────────────────────────────────────
 // /v1/product/archive —— 将商品归档(批量)
 // OPI 限制:单请求 ≤100 个 product_id

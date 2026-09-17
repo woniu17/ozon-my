@@ -64,6 +64,7 @@ const router = createRouter({
     { path: '/endpoint-metrics', name: 'endpoint-metrics', component: EndpointMetrics, meta: { title: '端点耗时' } },
     { path: '/price-watch', name: 'price-watch', component: PriceWatch, meta: { title: '价格优势' } },
     { path: '/order-process', name: 'order-process', component: OrderProcess, meta: { title: '订单处理' } },
+    { path: '/price-manage', name: 'price-manage', component: () => import('../views/PriceManage.vue'), meta: { title: '价格管理' } },
     { path: '/scan-ship', name: 'scan-ship', component: ScanShip, meta: { title: '扫描发货' } },
     { path: '/miaoshou-orders', name: 'miaoshou-orders', component: MiaoshouOrders, meta: { title: '妙手订单' } },
     { path: '/batch-upload/:batchNo', name: 'batch-upload-detail', component: () => import('../views/BatchUploadDetail.vue'), meta: { title: '批次详情' } },

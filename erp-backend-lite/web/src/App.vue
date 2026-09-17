@@ -14,6 +14,7 @@ const route = useRoute();
 const tabs = [
   { key: '/admin', label: '首页统计' },
   { key: '/order-process', label: '订单处理' },
+  { key: '/price-manage', label: '价格管理' },
   { key: '/scan-ship', label: '扫描发货' },
   { key: '/miaoshou-orders', label: '妙手订单' },
   { key: '/stores', label: '店铺管理' },

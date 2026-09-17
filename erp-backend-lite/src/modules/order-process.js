@@ -33,6 +33,11 @@ import { packageLabel, postingFbsGet, postingFbsShip } from '../services/ozon-op
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
 import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
+import {
+  DELIVERY_BASE_CNY,
+  DELIVERY_PER_G_CNY,
+  estimateProfit,
+} from '../services/profit-estimator.js';
 // 采购单自动补全用平台搜索(跨账号,按单号拉订单详情含 goods)
 import { searchAliOrder } from './platform-orders.js';
 import { searchPddOrder } from '../services/platform-orders/adapters/pdd.js';
@@ -40,12 +45,9 @@ import { searchTaobaoOrder } from '../services/platform-orders/adapters/taobao.j
 
 const router = Router();
 
-// 预估佣金率(实测 payout/commission 未妥投恒为 0,需自算;对齐妙手"平台佣金 XX 估"口径)
-// 后续可挂 app_config 按店铺配置
-const DEFAULT_COMMISSION_RATE = 0.16;
-// 国际配送费公式(2026-09):delivery_cny = 3.37 + 0.0281 × weight_g(单位 CNY,对齐 Ozon type 67)
-const DELIVERY_BASE_CNY = 3.37;
-const DELIVERY_PER_G_CNY = 0.0281;
+// 预估佣金率/国际配送公式常量已抽取至 services/profit-estimator.js(2026-09-18,与价格管理页单点维护)
+// 预估佣金率 16%(实测 payout/commission 未妥投恒为 0,需自算;对齐妙手"平台佣金 XX 估"口径)
+// 国际配送费公式:delivery_cny = 3.37 + 0.0281 × weight_g(对齐 Ozon type 67)
 
 // 解析 RUB→CNY 汇率(app_config 优先,.env 兜底)
 function resolveRubCnyRate() {
@@ -171,41 +173,14 @@ function computeProfit(pkg, cancelled = false, rate = null) {
     };
   }
 
-  // 预估口径:无真实应计。代理佣金恒 16%;国际配送按重量公式估算(公式单位 CNY,需重量)
-  // 无重量时回退到原 16% 打包口径(delivery 隐含在 16% 内,保守低估)
-  const commission = round2(orderAmount * DEFAULT_COMMISSION_RATE);
-  const weightG = pkg.weightG != null ? Number(pkg.weightG) : null;
-
-  if (weightG != null) {
-    // 新口径:配送费独立扣减(公式 3.37 + 0.0281 × weight_g,单位 CNY)
-    const delivery = round2(DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * weightG);
-    const escrow = round2(orderAmount - commission - delivery);
-    const profit = round2(escrow - purchase);
-    return {
-      commission,
-      delivery,
-      escrow,
-      profit,
-      profitRateCost: purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null,
-      profitRateSale: orderAmount > 0 ? Math.round((profit / orderAmount) * 10000) / 100 : null,
-      estimated: true,
-      weightG,
-      weightSource: pkg.weightSource || null,
-    };
-  }
-
-  // 兜底:无重量,回退原 16% 打包口径(delivery 隐含在 16% 内)
-  const escrow = round2(orderAmount - commission);
-  const profit = round2(escrow - purchase);
-  return {
-    commission,
-    escrow,
-    profit,
-    profitRateCost: purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null,
-    profitRateSale: orderAmount > 0 ? Math.round((profit / orderAmount) * 10000) / 100 : null,
-    estimated: true,
-    weightMissing: true,
-  };
+  // 预估口径(2026-09-18 抽取为共享 profit-estimator,与价格管理页单点维护):
+  // 佣金 16%;配送独立扣减(3.37 + 0.0281×weight_g,CNY);无重量回退 16% 打包口径
+  const est = estimateProfit({
+    amountCny: orderAmount,
+    purchaseCny: purchase,
+    weightG: pkg.weightG != null ? Number(pkg.weightG) : null,
+  });
+  return { ...est, weightSource: pkg.weightSource || null };
 }
 
 // ── Tab 计数 ────────────────────────────────────────────────

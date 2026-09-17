@@ -1090,6 +1090,46 @@ CREATE INDEX IF NOT EXISTS idx_op_acc_pkg ON op_accrual(package_id);
 CREATE INDEX IF NOT EXISTS idx_op_acc_posting ON op_accrual(posting_number);
 
 -- ════════════════════════════════════════════════════════════════
+-- 价格管理(2026-09,设计文档: docs/价格管理-概要设计.md)
+-- ════════════════════════════════════════════════════════════════
+
+-- Ozon 价格缓存(手动同步 /v5/product/info/prices + /v3/product/info/list 反查 sku)
+CREATE TABLE IF NOT EXISTS op_product_price_cache (
+  sku                    TEXT PRIMARY KEY,    -- Ozon SKU(全局唯一,不可变,用户确认)
+  store_id               TEXT NOT NULL,
+  product_id             INTEGER,             -- 改价 API 用 product_id(稳定标识)
+  offer_id               TEXT,                -- 仅存档参考,不作关联键(可被修改)
+  price                  REAL,                -- 现售价(CNY,实测结算币种)
+  old_price              REAL,                -- 划线价(CNY)
+  min_price              REAL,                -- 促销最低价(CNY)
+  currency_code          TEXT DEFAULT 'CNY',
+  sales_percent_fbs      REAL,                -- v5 commissions 实际 FBS 佣金率(%,参考展示)
+  market_min_price_rub   REAL,                -- v5 price_indexes 市场最低价(RUB,参考展示)
+  price_index_color      TEXT,                -- 'RED'/'GREEN'/...(价格竞争力指示)
+  name                   TEXT,                -- v3 商品名(冗余,列表直显)
+  image                  TEXT,                -- v3 首图(列表直显)
+  raw_json               TEXT,                -- v5 原始 item
+  synced_at              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_op_ppc_store ON op_product_price_cache(store_id);
+
+-- 价格变更日志(审计 + Ozon 每商品每小时改价≤10次的限频依据)
+CREATE TABLE IF NOT EXISTS op_price_change_log (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id      TEXT NOT NULL,
+  sku           TEXT NOT NULL,
+  product_id    INTEGER,
+  old_price     REAL,                         -- 改前售价
+  new_price     REAL,                         -- 改后售价
+  old_old_price REAL,                         -- 改前划线价
+  currency_code TEXT DEFAULT 'CNY',
+  target_rate   REAL,                         -- 目标成本利润率(%),手动改价为 NULL
+  source        TEXT,                         -- 'target' 目标定价 | 'manual' 手动
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_price_change_sku ON op_price_change_log(sku, created_at);
+
+-- ════════════════════════════════════════════════════════════════
 -- 妙手 ERP 订单数据(2026-09,独立新表,与 op_* 分离)
 -- 通过 miaoshou-helper 插件从妙手历史订单页提取,保留妙手原始快照
 -- 设计文档: docs/妙手订单数据提取-功能设计.md

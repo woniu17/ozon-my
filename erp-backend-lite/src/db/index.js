@@ -78,6 +78,16 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE product_data_cache ADD COLUMN custom_weight_g REAL`);
     console.log('[db] migration: added column product_data_cache.custom_weight_g');
   }
+  // product_data_cache.custom_purchase_price:本系统采购价(CNY),价格管理页维护
+  // 与订单实际采购金额相互独立,作为商品维度定价基准(2026-09-18,docs/价格管理-概要设计.md)
+  if (!cols.some((c) => c.name === 'custom_purchase_price')) {
+    db.exec(`ALTER TABLE product_data_cache ADD COLUMN custom_purchase_price REAL`);
+    console.log('[db] migration: added column product_data_cache.custom_purchase_price');
+  }
+  if (!cols.some((c) => c.name === 'custom_purchase_price_at')) {
+    db.exec(`ALTER TABLE product_data_cache ADD COLUMN custom_purchase_price_at TEXT`);
+    console.log('[db] migration: added column product_data_cache.custom_purchase_price_at');
+  }
   // product_data_cache.description_quality:描述质量分级,用于商品列表"描述状态"过滤
   // 0=空 1=占位 2=按钮污染 3=正常(同步时由 classifyDescriptionQuality 计算)
   let addedProductDescQuality = false;
