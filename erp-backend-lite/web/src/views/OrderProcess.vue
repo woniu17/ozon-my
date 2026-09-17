@@ -277,8 +277,8 @@ async function loadList() {
     page: pager.current,
     pageSize: pager.pageSize,
   };
-  // 订单金额统计并行触发(2026-09-18:全量订单口径,不传 tab/筛选;独立 loading/error 态,不阻塞列表主路径)
-  loadSummary({});
+  // 订单金额统计并行触发(2026-09-18:全量订单口径,tab='all' 走后端"全部"分支(1=1),不随当前tab/筛选变化)
+  loadSummary({ tab: 'all' });
   try {
     const data = await getOrderList(listParams);
     globalSearch.total = isGlobal ? (data?.total || 0) : 0;

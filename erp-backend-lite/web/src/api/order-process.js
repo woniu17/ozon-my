@@ -15,7 +15,7 @@ export function getOrderList(params) {
   return request.get('/admin/api/order-process/list', params);
 }
 
-// 订单金额统计(2026-09-18 起前端全量调用不传参;后端仍支持 getOrderList 的 tab/筛选参数)
+// 订单金额统计(2026-09-18 起前端固定传 tab='all' 全量口径,不随页面 tab/筛选变化)
 export function getOrderSummary(params) {
   return request.get('/admin/api/order-process/summary', params);
 }
