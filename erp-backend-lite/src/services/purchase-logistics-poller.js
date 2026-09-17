@@ -1,4 +1,4 @@
-// 采购物流补全轮询器(2026-09-16,每小时)
+// 采购物流补全轮询器(2026-09-16;2026-09-17 起每 12 小时,降低 1688 API 配额消耗)
 // 背景:1688 采购单在"未发货"状态关联入库时拿不到物流信息(API 对未发货单返回空),
 //   且弹窗导入(模式A/B)的单不在妙手同步覆盖范围内,物流字段会一直空着。
 // 职责:
@@ -20,7 +20,7 @@ import { getLogisticsForOrder, getTraceForOrder, hasAliOpenApiToken } from './pl
 import { getPddTrace, searchPddOrder } from './platform-orders/adapters/pdd.js';
 import logger from '../middleware/log.js';
 
-const POLL_INTERVAL_MS = 60 * 60 * 1000; // 每小时
+const POLL_INTERVAL_MS = 12 * 60 * 60 * 1000; // 每 12 小时
 const FIRST_SCAN_DELAY_MS = 30 * 1000;
 const REQUEST_INTERVAL_MS = 2000; // 对齐补全采购信息的限速节奏
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -308,7 +308,7 @@ function startPurchaseLogisticsPoller() {
   if (timer) return;
   timer = setInterval(() => { launchRound(); }, POLL_INTERVAL_MS);
   setTimeout(() => { launchRound(); }, FIRST_SCAN_DELAY_MS);
-  logger.info('[purchase-logistics-poller] 启动(每小时:补物流单号+拉完整轨迹)');
+  logger.info('[purchase-logistics-poller] 启动(每 12 小时:补物流单号+拉完整轨迹)');
 }
 
 function stopPurchaseLogisticsPoller() {
