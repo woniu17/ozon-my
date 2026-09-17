@@ -1,7 +1,7 @@
 <script setup>
 // 价格管理(2026-09,商品维度定价基准)
 // 设计文档: docs/价格管理-概要设计.md
-// 数据流:手动同步 Ozon 价格(v5+v3 反查 sku)→ 缓存;维护采购价/重量(product_data_cache)
+// 数据流:手动同步 Ozon 价格(本地 product_id 映射 + v5 批量并发)→ 缓存;维护采购价/重量(product_data_cache)
 //        → 服务端按共享公式算利润/利润率 → 目标成本利润率反推建议价 → 单品改价(限频/日志/30s回读)
 // 公式口径与订单处理页一致(profit-estimator.js 单点维护):佣金16% + 配送 3.37+0.0281×重量,全 CNY
 import { ref, computed, onMounted } from 'vue';
@@ -9,6 +9,7 @@ import {
   syncPrices, getPriceStores, getPriceList, getPriceSummary,
   setSkuCustoms, getSkuOrders, updatePrice,
 } from '../api/price-manage.js';
+import { getStores } from '../api/stores.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
 import AppPager from '../components/AppPager.vue';
@@ -54,12 +55,15 @@ const rateChoice = ref({});        // sku → 目标利润率(10~50)
 const updatingSku = ref('');
 
 // ── 加载 ────────────────────────────────────────────────
+// 店铺 tab = 配置店铺(常驻,首次同步前也能选店触发同步) + 缓存统计(count/最近同步)
 async function loadStores(keepActive = false) {
   try {
-    stores.value = await getPriceStores();
-    if (!keepActive) {
-      activeStoreId.value = stores.value[0]?.storeId || '';
-    }
+    const [cacheStores, cfgStores] = await Promise.all([getPriceStores(), getStores()]);
+    const byId = new Map((cacheStores || []).map((s) => [s.storeId, s]));
+    stores.value = (cfgStores || []).map(
+      (s) => byId.get(s.id) || { storeId: s.id, count: 0, lastSyncedAt: null }
+    );
+    if (!keepActive) activeStoreId.value = '';
   } catch (e) {
     show(e.message || '店铺分布加载失败', 'error');
   }
@@ -104,9 +108,9 @@ async function syncNow() {
   const targets = activeStoreId.value
     ? [activeStoreId.value]
     : stores.value.map((s) => s.storeId).filter(Boolean);
-  if (!targets.length) { show('价格缓存为空,请先选择店铺同步', 'error'); return; }
+  if (!targets.length) { show('无可用店铺', 'error'); return; }
   if (!(await confirmStore.ask({
-    message: `同步 ${targets.length} 个店铺的 Ozon 价格(v5 prices 全量拉取${targets.length > 1 ? ',顺序执行' : ''})?`,
+    message: `同步 ${targets.length} 个店铺的 Ozon 价格(按本地商品分批并发拉取${targets.length > 1 ? ',店铺间顺序执行,约需数分钟' : ''})?`,
   }))) return;
   syncing.value = true;
   try {
@@ -114,7 +118,9 @@ async function syncNow() {
     for (const storeId of targets) {
       const r = await syncPrices(storeId);
       total += r.count || 0;
-      show(`店铺 ${storeId}:同步 ${r.count} 个商品价格(未映射 ${r.unmapped})`, 'success');
+      if (r.note) { show(`店铺 ${storeId}:${r.note}`, 'error'); continue; }
+      const failTip = r.failedBatches ? `,${r.failedBatches} 个批次失败` : '';
+      show(`店铺 ${storeId}:同步 ${r.count}/${r.localTotal} 个商品价格${failTip}`, r.failedBatches ? 'error' : 'success');
     }
     await loadStores(true);
     await refreshAll();

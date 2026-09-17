@@ -61,20 +61,19 @@ export function getPriceCacheBySku(sku) {
   return db.prepare(`SELECT * FROM op_product_price_cache WHERE sku = ?`).get(String(sku)) || null;
 }
 
-// 已知 product_id → sku/name/image 映射(product_id 永不变,同步时免重复调 v3)
-export function getKnownProductIdMap(productIds) {
-  if (!productIds || !productIds.length) return new Map();
-  const out = new Map();
-  const BATCH = 500;
-  for (let i = 0; i < productIds.length; i += BATCH) {
-    const batch = productIds.slice(i, i + BATCH);
-    const ph = batch.map(() => '?').join(',');
-    const rows = db
-      .prepare(`SELECT product_id, sku, name, image FROM op_product_price_cache WHERE product_id IN (${ph})`)
-      .all(...batch);
-    for (const r of rows) out.set(r.product_id, { sku: r.sku, name: r.name, image: r.image });
-  }
-  return out;
+// 本地 product_id → sku/name/image 映射(同步映射源,零 API 调用)
+// product_data_cache.data 即 v3 商品对象:$.id = product_id,$.images[0] = 首图
+// 实测六店铺 13071 商品 100% 有 $.id,可完全替代 v3 反查
+export function getLocalProductIdMap(storeId) {
+  return db
+    .prepare(
+      `SELECT CAST(json_extract(data, '$.id') AS INTEGER) AS pid, sku,
+              json_extract(data, '$.name') AS name,
+              json_extract(data, '$.images[0]') AS image
+       FROM product_data_cache
+       WHERE store_id = ? AND json_extract(data, '$.id') IS NOT NULL`
+    )
+    .all(storeId);
 }
 
 // SKU 自定义值(改价校验用):采购价 + 重量(custom_weight_g > attributes 兜底)

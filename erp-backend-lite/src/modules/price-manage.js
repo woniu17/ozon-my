@@ -1,7 +1,7 @@
 // 价格管理(2026-09,商品维度定价基准)
 // 设计文档: docs/价格管理-概要设计.md
 // 职责:
-//   - 手动同步 Ozon 价格(v5 prices + v3 反查 sku)落 op_product_price_cache
+//   - 手动同步 Ozon 价格(本地 product_id 映射 + v5 按 id 批量并发拉取)落 op_product_price_cache
 //   - 商品列表:售价/采购价/重量 → 预估利润/利润率(共享 profit-estimator,全 CNY)
 //   - 维护 product_data_cache.custom_purchase_price / custom_weight_g
 //   - 单品改价(/v1/product/import/prices,price + old_price×2 + min_price,限频+日志+30s回读)
@@ -10,7 +10,7 @@ import config from '../config/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import * as priceDao from '../db/dao/sqlite/price-dao.js';
-import { productInfoPricesV5, productInfoListV3, productImportPrices } from '../services/ozon-opi.js';
+import { productInfoPricesV5, productImportPrices } from '../services/ozon-opi.js';
 import {
   DEFAULT_COMMISSION_RATE,
   DELIVERY_BASE_CNY,
@@ -36,7 +36,12 @@ function resolveStore(storeId) {
   return (config.loadStores() || []).find((s) => s.id === storeId) || null;
 }
 
-// ── 价格同步(手动):v5 prices(游标) → v3 反查 sku → 落缓存 ──
+// v5 批量拉取参数(实测 2026-09-18:per-item 成本恒定 ~86ms,limit=1000 单页 87s 导致同步挂起;
+// 200/批 × 并发4 全店约 1 分钟,且单请求远低于 undici 60s 超时)
+const SYNC_BATCH_SIZE = 200;
+const SYNC_CONCURRENCY = 4;
+
+// ── 价格同步(手动):本地 product_id 映射 → v5 按 id 批量并发拉 → 落缓存 ──
 router.post('/admin/api/price-manage/prices/sync', async (req, res, next) => {
   try {
     const { storeId } = req.body || {};
@@ -45,39 +50,45 @@ router.post('/admin/api/price-manage/prices/sync', async (req, res, next) => {
 
     const started = Date.now();
     const syncedAt = new Date().toISOString();
-    const v5Items = [];
-    let cursor = null;
-    let pages = 0;
-    // 游标分页拉全量(limit 1000,安全上限 20 页)
-    do {
-      const resp = await productInfoPricesV5(store, { cursor });
-      const items = resp?.items || [];
-      v5Items.push(...items);
-      cursor = resp?.cursor || null;
-      pages++;
-      if (pages > 20) {
-        logger.warn({ storeId, pages }, '[price-sync] 超过 20 页安全上限,提前终止');
-        break;
-      }
-    } while (cursor);
 
-    // product_id → sku 映射:优先复用缓存已有映射(product_id 永不变),仅未知 product_id 走 v3
-    const productIds = [...new Set(v5Items.map((it) => it.product_id).filter(Boolean))];
-    const mapping = priceDao.getKnownProductIdMap(productIds); // productId → { sku, name, image }
-    const unknown = productIds.filter((id) => !mapping.has(id));
-    for (let i = 0; i < unknown.length; i += 1000) {
-      const batch = unknown.slice(i, i + 1000);
-      const v3 = await productInfoListV3(store, { productIds: batch });
-      for (const it of v3?.items || []) {
-        const sku = it.sources?.[0]?.sku;
-        if (sku) mapping.set(it.product_id, { sku: String(sku), name: it.name || null, image: it.images?.[0] || null });
-      }
+    // 映射源:本地 product_data_cache(data JSON 的 $.id 即 product_id),零 API 调用
+    // 语义:价格管理面向本系统商品;不在本地商品缓存的商品不参与(也无采购价/重量可维护)
+    const local = priceDao.getLocalProductIdMap(store.id);
+    if (!local.length) {
+      return res.json(ok({
+        storeId, count: 0, localTotal: 0, fetched: 0, failedBatches: 0, unmapped: 0,
+        durationMs: Date.now() - started,
+        note: '该店铺本地无商品记录,请先在商品列表同步商品后再同步价格',
+      }));
     }
 
-    // 组装落库行(仅能映射到 sku 的商品)
+    // 并发拉 v5:按本地 product_id 分批(失败批次计数,不中断整体)
+    const queue = [...local];
+    const v5Items = [];
+    let failedBatches = 0;
+    const worker = async () => {
+      while (queue.length) {
+        const batch = queue.splice(0, SYNC_BATCH_SIZE);
+        try {
+          const resp = await productInfoPricesV5(store, {
+            productIds: batch.map((x) => x.pid),
+            limit: batch.length,
+          });
+          v5Items.push(...(resp?.items || []));
+        } catch (e) {
+          failedBatches++;
+          logger.warn({ storeId, batchSize: batch.length, err: e?.message }, '[price-sync] 批次拉取失败');
+        }
+      }
+    };
+    const workers = Array.from({ length: Math.min(SYNC_CONCURRENCY, Math.ceil(local.length / SYNC_BATCH_SIZE)) }, worker);
+    await Promise.all(workers);
+
+    // 组装落库行(仅能映射到本地 sku 的商品)
+    const map = new Map(local.map((x) => [x.pid, x]));
     const rows = [];
     for (const it of v5Items) {
-      const m = mapping.get(it.product_id);
+      const m = map.get(it.product_id);
       if (!m) continue;
       rows.push({
         sku: m.sku,
@@ -99,8 +110,15 @@ router.post('/admin/api/price-manage/prices/sync', async (req, res, next) => {
     }
     const count = priceDao.upsertPriceCacheRows(rows);
     const durationMs = Date.now() - started;
-    logger.info({ storeId, v5Total: v5Items.length, mapped: rows.length, pages, durationMs }, '[price-sync] 同步完成');
-    res.json(ok({ storeId, count, v5Total: v5Items.length, unmapped: v5Items.length - rows.length, pages, durationMs }));
+    logger.info({ storeId, localTotal: local.length, fetched: v5Items.length, mapped: rows.length, failedBatches, durationMs }, '[price-sync] 同步完成');
+    res.json(ok({
+      storeId, count,
+      localTotal: local.length,
+      fetched: v5Items.length,
+      unmapped: local.length - rows.length,
+      failedBatches,
+      durationMs,
+    }));
   } catch (e) {
     next(e);
   }
