@@ -86,7 +86,7 @@ onBeforeUnmount(() => {
     <button class="modal-mask" aria-label="关闭对话框" @click="close" tabindex="-1"></button>
     <div
       class="modal-card"
-      :class="{ 'modal-lg': size === 'lg' }"
+      :class="{ 'modal-lg': size === 'lg', 'modal-xl': size === 'xl' }"
       ref="cardRef"
       tabindex="-1"
     >

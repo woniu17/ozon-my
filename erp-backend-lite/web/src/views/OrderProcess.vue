@@ -3056,9 +3056,115 @@ onUnmounted(() => {
       </div>
     </AppModal>
 
-    <!-- 提交采购信息弹窗(模式B) -->
-    <AppModal :open="purchaseOpen" :title="`采购 · ${purchaseForm.packageNo}`" size="lg" @update:open="purchaseOpen = $event">
-      <div class="purchase-form">
+    <!-- 提交采购信息弹窗(模式B):两列布局(左=采购平台列表,右=订单信息+已选采购单,2026-09-17) -->
+    <AppModal :open="purchaseOpen" :title="`采购 · ${purchaseForm.packageNo}`" size="xl" @update:open="purchaseOpen = $event">
+      <div class="purchase-form purchase-form-cols">
+        <!-- 左列:各采购平台列表(账号tabs + 平台订单列表/手动录入) -->
+        <div class="purchase-col-left">
+          <div class="import-platform-tabs">
+            <button
+              v-for="t in importAccountTabs"
+              :key="t.key"
+              class="pdd-tab"
+              :class="{ active: importTab === t.key }"
+              @click="switchImportTab(t.key)"
+            >{{ t.label }}</button>
+            <button class="pdd-tab" :class="{ active: importTab === 'manual' }" @click="switchImportTab('manual')">手动录入</button>
+            <span v-if="importTab !== 'manual' && currentPlatformLogin === 'no'" class="pdd-bridge-warn" title="后端未检测到该账号登录态,请运行 qxqx 的 persistent(带账号参数)登录对应平台">未检测到{{ currentPlatformName }}登录态</span>
+          </div>
+
+          <!-- 平台订单列表(非手动录入) -->
+          <div v-if="importTab !== 'manual'" class="import-section">
+            <div class="pdd-toolbar">
+              <div class="pdd-tabs">
+                <button v-for="st in importSubTabs" :key="st.key" class="pdd-tab" :class="{ active: importSubTab === st.key }" @click="switchImportSubTab(st.key)">{{ st.label }}</button>
+              </div>
+              <!-- 1688 订单号搜索(2026-09-16 先支持 1688;后端跨全部账号搜) -->
+              <div v-if="isAliTab" class="pdd-search">
+                <input
+                  v-model.trim="importSearch.keyword"
+                  class="filter-input pdd-search-input"
+                  type="text"
+                  placeholder="输入 1688 订单号搜索"
+                  :disabled="importSearch.loading"
+                  @focus="$event.target.select()"
+                  @keydown.enter="onSearchImportOrder"
+                />
+                <button class="btn btn-ghost btn-sm" :disabled="importSearch.loading || !importSearch.keyword" @click="onSearchImportOrder">
+                  {{ importSearch.loading ? '搜索中…' : '搜索' }}
+                </button>
+              </div>
+              <button class="btn btn-ghost btn-sm" :disabled="importLoading" @click="loadOrders(importTab)">刷新</button>
+            </div>
+            <div v-if="importSearch.error" class="pdd-error">{{ importSearch.error }}</div>
+
+            <div v-if="importLoading" class="empty">加载中…</div>
+            <div v-else-if="importError" class="pdd-error">{{ importError }}</div>
+            <div v-else-if="!importOrders.length" class="empty">没有查询到订单</div>
+            <div v-else class="pdd-list">
+              <label
+                v-for="o in importOrders"
+                :key="o.orderSn"
+                class="pdd-item"
+                :class="{ disabled: isImportCancelled(o), selected: importSelected.includes(o.orderSn) || isRestoredLinked(o) }"
+                :title="isRestoredLinked(o) ? '该订单已在已有采购关联中,如需删除请到右侧已选区点「删除」' : ''"
+              >
+                <input
+                  type="checkbox"
+                  :value="o.orderSn"
+                  :disabled="isImportCancelled(o) || isRestoredLinked(o)"
+                  v-model="importSelected"
+                />
+                <img
+                  v-if="o.goods[0]?.thumbUrl"
+                  :src="o.goods[0].thumbUrl"
+                  class="pdd-thumb"
+                  loading="lazy"
+                  referrerpolicy="no-referrer"
+                  alt=""
+                />
+                <div v-else class="pdd-thumb pdd-thumb-empty"></div>
+                <div class="pdd-info">
+                  <div class="pdd-goods" :title="o.goods[0]?.goodsName">
+                    {{ o.goods[0]?.goodsName || '—' }}
+                    <span v-if="o.goods.length > 1" class="pdd-more">等{{ o.goods.length }}件商品</span>
+                  </div>
+                  <div class="pdd-meta">
+                    <span class="pdd-mall">{{ o.mallName || o.sellerName || '—' }}</span>
+                    <span class="pdd-amount">¥{{ o.amount }}</span>
+                    <span>{{ o._platform === 'yangkeduo' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—') }}</span>
+                    <span class="tag" :class="isImportCancelled(o) ? 'tag-mute' : 'tag-info'">{{ o.statusPrompt || '—' }}</span>
+                    <span v-if="isRestoredLinked(o)" class="tag tag-warn">已关联</span>
+                  </div>
+                  <div class="pdd-sn mono">
+                    {{ o.orderSn }}<template v-if="o.trackingNumber"> · {{ o.trackingNumber }}</template>
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- 手动录入 tab:金额 + 快递单号 + 物流公司(左列,与平台列表同位) -->
+          <div v-if="importTab === 'manual'" class="manual-input-section">
+            <div class="form-row">
+              <label>采购金额</label>
+              <input v-model.trim="purchaseForm.paymentAmount" class="filter-input" placeholder="如 29.21(填了均摊到各产品行)" @input="syncManualAmount" />
+              <label>采购平台</label>
+              <select v-model="purchaseForm.platform" class="filter-input">
+                <option v-for="p in PLATFORMS" :key="p.value" :value="p.value">{{ p.label }}</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>快递单号</label>
+              <input v-model.trim="purchaseForm.logisticsNo" class="filter-input" placeholder="上家发货单号(填了视为已发货)" />
+              <label>物流公司</label>
+              <input v-model.trim="purchaseForm.logisticsCompany" class="filter-input" placeholder="如 顺丰/韵达/极兔" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 右列:订单信息(产品表) + 已选采购订单 -->
+        <div class="purchase-col-right">
         <!-- ① 最上方:订单产品(只读展示,采购金额从第②块同步显示上来) -->
         <div class="prod-title-row">
           <span class="form-section-title" style="margin: 0">订单产品</span>
@@ -3102,24 +3208,6 @@ onUnmounted(() => {
           </tbody>
         </table>
 
-        <!-- 手动录入 tab:金额 + 快递单号 + 物流公司 -->
-        <div v-if="importTab === 'manual'" class="manual-input-section">
-          <div class="form-row">
-            <label>采购金额</label>
-            <input v-model.trim="purchaseForm.paymentAmount" class="filter-input" placeholder="如 29.21(填了均摊到各产品行)" @input="syncManualAmount" />
-            <label>采购平台</label>
-            <select v-model="purchaseForm.platform" class="filter-input">
-              <option v-for="p in PLATFORMS" :key="p.value" :value="p.value">{{ p.label }}</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>快递单号</label>
-            <input v-model.trim="purchaseForm.logisticsNo" class="filter-input" placeholder="上家发货单号(填了视为已发货)" />
-            <label>物流公司</label>
-            <input v-model.trim="purchaseForm.logisticsCompany" class="filter-input" placeholder="如 顺丰/韵达/极兔" />
-          </div>
-        </div>
-
         <!-- 已选采购订单区(固定在产品下方):平台/订单号/下单时间/金额(含已有采购恢复项) -->
         <div v-if="allSelectedOrders.length" class="selected-orders">
           <div class="selected-orders-title">
@@ -3161,91 +3249,10 @@ onUnmounted(() => {
             </tbody>
           </table>
         </div>
+        </div><!-- /右列 purchase-col-right -->
 
-        <!-- ③ 最下方:采购平台×账号列表 -->
-        <div class="import-platform-tabs">
-          <button
-            v-for="t in importAccountTabs"
-            :key="t.key"
-            class="pdd-tab"
-            :class="{ active: importTab === t.key }"
-            @click="switchImportTab(t.key)"
-          >{{ t.label }}</button>
-          <button class="pdd-tab" :class="{ active: importTab === 'manual' }" @click="switchImportTab('manual')">手动录入</button>
-          <span v-if="importTab !== 'manual' && currentPlatformLogin === 'no'" class="pdd-bridge-warn" title="后端未检测到该账号登录态,请运行 qxqx 的 persistent(带账号参数)登录对应平台">未检测到{{ currentPlatformName }}登录态</span>
-        </div>
-
-        <!-- 平台订单列表(非手动录入) -->
-        <div v-if="importTab !== 'manual'" class="import-section">
-          <div class="pdd-toolbar">
-            <div class="pdd-tabs">
-              <button v-for="st in importSubTabs" :key="st.key" class="pdd-tab" :class="{ active: importSubTab === st.key }" @click="switchImportSubTab(st.key)">{{ st.label }}</button>
-            </div>
-            <!-- 1688 订单号搜索(2026-09-16 先支持 1688;后端跨全部账号搜) -->
-            <div v-if="isAliTab" class="pdd-search">
-              <input
-                v-model.trim="importSearch.keyword"
-                class="filter-input pdd-search-input"
-                type="text"
-                placeholder="输入 1688 订单号搜索"
-                :disabled="importSearch.loading"
-                @focus="$event.target.select()"
-                @keydown.enter="onSearchImportOrder"
-              />
-              <button class="btn btn-ghost btn-sm" :disabled="importSearch.loading || !importSearch.keyword" @click="onSearchImportOrder">
-                {{ importSearch.loading ? '搜索中…' : '搜索' }}
-              </button>
-            </div>
-            <button class="btn btn-ghost btn-sm" :disabled="importLoading" @click="loadOrders(importTab)">刷新</button>
-          </div>
-          <div v-if="importSearch.error" class="pdd-error">{{ importSearch.error }}</div>
-
-          <div v-if="importLoading" class="empty">加载中…</div>
-          <div v-else-if="importError" class="pdd-error">{{ importError }}</div>
-          <div v-else-if="!importOrders.length" class="empty">没有查询到订单</div>
-          <div v-else class="pdd-list">
-            <label
-              v-for="o in importOrders"
-              :key="o.orderSn"
-              class="pdd-item"
-              :class="{ disabled: isImportCancelled(o), selected: importSelected.includes(o.orderSn) || isRestoredLinked(o) }"
-              :title="isRestoredLinked(o) ? '该订单已在已有采购关联中,如需删除请到上方已选区点「删除」' : ''"
-            >
-              <input
-                type="checkbox"
-                :value="o.orderSn"
-                :disabled="isImportCancelled(o) || isRestoredLinked(o)"
-                v-model="importSelected"
-              />
-              <img
-                v-if="o.goods[0]?.thumbUrl"
-                :src="o.goods[0].thumbUrl"
-                class="pdd-thumb"
-                loading="lazy"
-                referrerpolicy="no-referrer"
-                alt=""
-              />
-              <div v-else class="pdd-thumb pdd-thumb-empty"></div>
-              <div class="pdd-info">
-                <div class="pdd-goods" :title="o.goods[0]?.goodsName">
-                  {{ o.goods[0]?.goodsName || '—' }}
-                  <span v-if="o.goods.length > 1" class="pdd-more">等{{ o.goods.length }}件商品</span>
-                </div>
-                <div class="pdd-meta">
-                  <span class="pdd-mall">{{ o.mallName || o.sellerName || '—' }}</span>
-                  <span class="pdd-amount">¥{{ o.amount }}</span>
-                  <span>{{ o._platform === 'yangkeduo' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—') }}</span>
-                  <span class="tag" :class="isImportCancelled(o) ? 'tag-mute' : 'tag-info'">{{ o.statusPrompt || '—' }}</span>
-                  <span v-if="isRestoredLinked(o)" class="tag tag-warn">已关联</span>
-                </div>
-                <div class="pdd-sn mono">
-                  {{ o.orderSn }}<template v-if="o.trackingNumber"> · {{ o.trackingNumber }}</template>
-                </div>
-              </div>
-            </label>
-          </div>
-        </div>
-
+        <!-- 底部通栏:提示 + 操作 -->
+        <div class="purchase-form-footer">
         <div class="form-tip">
           提交后包裹将直接流转到「待打单发货」;国内快递单号可留空后续补录。清空所有采购后点「保存」即清空该包裹采购信息(状态不变)。个人自发货模式:无货代,收货人为你本人。
         </div>
@@ -3255,6 +3262,7 @@ onUnmounted(() => {
             {{ purchaseSaving ? '保存中…' : '保 存' }}
           </button>
         </div>
+        </div><!-- /purchase-form-footer -->
       </div>
     </AppModal>
 
@@ -4557,6 +4565,44 @@ a.product-title:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+/* 两列布局(2026-09-17):左=采购平台列表,右=订单信息+已选采购单;底部通栏放提示/操作 */
+.purchase-form-cols {
+  display: grid;
+  grid-template-columns: minmax(360px, 46%) minmax(340px, 1fr);
+  gap: 0 20px;
+  align-items: start;
+}
+.purchase-col-left {
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  padding-right: 20px;
+}
+/* 左列列表区独立滚动,避免长列表撑爆弹窗 */
+.purchase-col-left .import-section {
+  margin-bottom: 0;
+}
+.purchase-col-right {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.purchase-form-footer {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+@media (max-width: 1100px) {
+  .purchase-form-cols {
+    grid-template-columns: 1fr;
+  }
+  .purchase-col-left {
+    border-right: none;
+    padding-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+  }
 }
 
 .form-row {

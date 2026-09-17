@@ -455,6 +455,10 @@ h3 {
 .modal-lg {
   width: 720px;
 }
+/* 超宽弹窗(2026-09-17):采购弹窗两列布局(左平台列表/右订单+已选) */
+.modal-xl {
+  width: min(1200px, 96vw);
+}
 .modal-header {
   display: flex;
   align-items: center;
