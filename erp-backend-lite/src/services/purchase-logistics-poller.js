@@ -272,6 +272,7 @@ async function runOnce() {
 function launchRound() {
   if (running) return false;
   running = true;
+  writeLastRunAt(new Date()); // 记录执行时刻(定时/手动均记),重启后不足周期不重跑
   manualStatus.running = true;
   manualStatus.startedAt = new Date().toISOString();
   manualStatus.finishedAt = null;
@@ -304,11 +305,46 @@ function getPurchaseLogisticsStatus() {
   return { ...manualStatus, progress: { ...manualStatus.progress } };
 }
 
+// ── 执行时间持久化(app_config,2026-09-17):记住上次执行时刻,
+//    服务重启后不足一个周期不重跑,只等剩余时间,避免 pm2 restart/部署即扫一轮──
+const STATE_KEY = 'purchase_logistics_last_run_at';
+
+function readLastRunAt() {
+  try {
+    const row = db.prepare(`SELECT value FROM app_config WHERE key = ?`).get(STATE_KEY);
+    if (!row) return null;
+    const at = new Date(JSON.parse(row.value).at);
+    return Number.isNaN(at.getTime()) ? null : at;
+  } catch { return null; }
+}
+
+function writeLastRunAt(d) {
+  try {
+    db.prepare(
+      `INSERT INTO app_config (key, value, scope, description, updated_at)
+       VALUES (?, ?, 'erp', '采购物流轮询器上次执行时间(重启后不足周期不重跑)', datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = datetime('now')`
+    ).run(STATE_KEY, JSON.stringify({ at: d.toISOString() }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[purchase-logistics-poller] 记录执行时间失败(不影响本轮)');
+  }
+}
+
 function startPurchaseLogisticsPoller() {
   if (timer) return;
+  const last = readLastRunAt();
+  const elapsed = last ? Date.now() - last.getTime() : Infinity;
+  const firstDelay = elapsed >= POLL_INTERVAL_MS
+    ? FIRST_SCAN_DELAY_MS
+    : POLL_INTERVAL_MS - elapsed;
   timer = setInterval(() => { launchRound(); }, POLL_INTERVAL_MS);
-  setTimeout(() => { launchRound(); }, FIRST_SCAN_DELAY_MS);
-  logger.info('[purchase-logistics-poller] 启动(每 12 小时:补物流单号+拉完整轨迹)');
+  setTimeout(() => { launchRound(); }, firstDelay);
+  logger.info(last
+    ? { lastRunAt: last.toISOString(), nextRunInMin: Math.round(firstDelay / 60000) }
+    : {},
+    `[purchase-logistics-poller] 启动(每 12 小时:补物流单号+拉完整轨迹;${last ? '距上次执行不足周期,等待剩余时间' : '无执行记录,30秒后首轮'})`);
 }
 
 function stopPurchaseLogisticsPoller() {
