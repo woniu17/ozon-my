@@ -366,6 +366,18 @@ function clearGlobalSearch(reload = true) {
   }
 }
 
+// 点击 SKU(2026-09-17):页内导航到全局搜索该 SKU 的相关订单(跨所有状态,精确匹配)
+async function searchBySku(sku) {
+  const kw = String(sku || '').trim();
+  if (!kw) return;
+  globalSearch.keyword = kw;
+  globalSearch.mode = 'eq';
+  globalSearch.active = true;
+  pager.current = 1;
+  await loadList();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function onPageChange(p) {
   pager.current = p;
   loadList();
@@ -2702,7 +2714,7 @@ onUnmounted(() => {
                 <div class="product-main">
                   <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ it.title || '—' }}</a>
                   <div v-else class="product-title">{{ it.title || '—' }}</div>
-                  <div class="product-sub" v-if="it.sku">SKU：{{ it.sku }}
+                  <div class="product-sub" v-if="it.sku">SKU：<a class="order-link sku-link" href="javascript:void(0)" title="点击全局搜索该 SKU 的相关订单(跨所有状态,精确匹配)" @click.stop="searchBySku(it.sku)">{{ it.sku }}</a>
                     <button class="copy-btn" title="复制SKU" @click.stop="copyText(it.sku, 'SKU')">
                       <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                     </button>
@@ -2835,7 +2847,13 @@ onUnmounted(() => {
             </td>
             <td class="col-actions">
               <div class="action-group">
-                <!-- 主操作(2026-09-17):备货 / 同步订单 / 同步采购物流;次要操作收进"更多"菜单 -->
+                <!-- 主操作(2026-09-17 v2):待处理tab=采购/备货/同步订单/更多;其它tab=备货/同步订单/同步采购物流/更多 -->
+                <button
+                  v-if="activeTab === 'waitProcess'"
+                  class="btn btn-primary btn-sm"
+                  title="录入/编辑采购信息(该包裹的采购单关联)"
+                  @click="openPurchase(pkg)"
+                >采购</button>
                 <button
                   v-if="(pkg.operateStatus === 'wait_process' || pkg.operateStatus === 'wait_ship') && pkg.ozonStatus === 'awaiting_packaging'"
                   class="btn btn-ghost btn-sm"
@@ -2849,9 +2867,9 @@ onUnmounted(() => {
                   :title="syncingPkgId === pkg.id ? '同步中…' : '按单号直查 Ozon 拉最新订单状态 + 强制拉应计项目(无时间窗口限制)'"
                   @click="onSyncPackage(pkg)"
                 >{{ syncingPkgId === pkg.id ? '同步中…' : '同步订单' }}</button>
-                <!-- 同步采购物流(2026-09-17):该包裹全部关联采购单补单号+拉最新轨迹(强制刷新) -->
+                <!-- 同步采购物流(2026-09-17):待处理tab收进"更多"菜单,其它tab主列直显 -->
                 <button
-                  v-if="pkg.purchaseLinks?.length"
+                  v-if="pkg.purchaseLinks?.length && activeTab !== 'waitProcess'"
                   class="btn btn-ghost btn-sm"
                   :disabled="logisticsPkgId === pkg.id"
                   :title="logisticsPkgId === pkg.id ? '采购物流同步中…' : '该包裹全部关联采购单:补物流单号(1688/拼多多)+拉最新轨迹,强制刷新(不受1小时窗口限制)'"
@@ -2864,12 +2882,22 @@ onUnmounted(() => {
               </div>
               <!-- 更多菜单(fixed 定位,脱离表格 overflow 裁剪;点外部/滚动关闭,项点击后即关) -->
               <div v-if="rowMore.pkgId === pkg.id" class="row-more-pop" :style="{ top: rowMore.top + 'px', left: rowMore.left + 'px' }" @click.stop>
+                <!-- 采购:待处理tab已提升为主按钮,仅其它tab留在菜单 -->
                 <button
+                  v-if="activeTab !== 'waitProcess'"
                   class="row-more-item"
                   :class="{ 'row-more-item-strong': pkg.operateStatus === 'wait_process' || pkg.purchaseStatus === 'none' }"
                   title="录入/编辑采购信息"
                   @click="closeRowMore(); openPurchase(pkg)"
                 >采购</button>
+                <!-- 同步采购物流:待处理tab时从主列收进菜单(2026-09-17 v2) -->
+                <button
+                  v-if="activeTab === 'waitProcess' && pkg.purchaseLinks?.length"
+                  class="row-more-item"
+                  :disabled="logisticsPkgId === pkg.id"
+                  :title="logisticsPkgId === pkg.id ? '采购物流同步中…' : '该包裹全部关联采购单:补物流单号(1688/拼多多)+拉最新轨迹,强制刷新'"
+                  @click="closeRowMore(); onSyncPackageLogistics(pkg)"
+                >{{ logisticsPkgId === pkg.id ? '物流同步中…' : '同步采购物流' }}</button>
                 <button class="row-more-item" title="订单详情(产品行+采购关联+轨迹)" @click="closeRowMore(); openDetail(pkg)">详情</button>
                 <button
                   v-if="pkg.operateStatus === 'wait_ship' || pkg.operateStatus === 'ship_success'"
@@ -3660,6 +3688,26 @@ onUnmounted(() => {
   padding: 10px 8px;
 }
 
+/* ── 大字号(2026-09-17):产品/采购/金额/状态/操作列主体字体 ×1.5;数量列保持原样 ── */
+.pkg-row td {
+  font-size: 19.5px; /* 原 .data-table 13px × 1.5 */
+}
+.pkg-row .col-qty {
+  font-size: 13px; /* 数量列未点名,保持原样(含 .qty-multi 2em 原比例) */
+}
+.pkg-row .sub {
+  font-size: 16.5px; /* 原 11px:下单/最迟/剩发/费率等次行 */
+}
+.pkg-row .mono {
+  font-size: 18px; /* 原 12px:主行内 Ozon 状态等 mono 文本 */
+}
+.pkg-row .btn-sm {
+  font-size: 18px; /* 原 12px:操作按钮 */
+}
+.pkg-row .tag {
+  font-size: 18px; /* 原 12px:状态/采购/到货徽章 */
+}
+
 .col-product {
   min-width: 500px;
   max-width: 500px;
@@ -3704,7 +3752,7 @@ onUnmounted(() => {
 .product-title {
   /* display:block 关键:<a> 默认 inline,ellipsis/max-width 对 inline 无效会导致长名称溢出覆盖 */
   display: block;
-  max-width: 200px;
+  max-width: 300px; /* 2026-09-17:字体放大1.5倍后同步放宽(原200px) */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3718,11 +3766,11 @@ a.product-title:hover {
 
 .product-sub {
   display: block;
-  max-width: 200px;
+  max-width: 300px; /* 2026-09-17:字体放大1.5倍后同步放宽(原200px),减少省略 */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 16.5px; /* 2026-09-17:11px × 1.5 */
   color: var(--text-primary, #111827);
 }
 
@@ -3841,14 +3889,14 @@ a.product-title:hover {
 }
 
 .purchase-goods-title {
-  font-size: 12px;
+  font-size: 18px; /* 2026-09-17:12px × 1.5 */
   line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .purchase-goods-sub {
-  font-size: 11px;
+  font-size: 16.5px; /* 2026-09-17:11px × 1.5 */
   line-height: 1.3;
   margin-top: 2px;
   overflow: hidden;
@@ -4005,7 +4053,7 @@ a.product-title:hover {
 .pkg-tags-store {
   color: #374151;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 21px; /* 2026-09-17:14px × 1.5(店铺名) */
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 1;
@@ -4013,10 +4061,11 @@ a.product-title:hover {
 /* 质检单货件号(02131/024785 开头):红色加粗显著展示 */
 .pkg-tags-meta-line .mono {
   flex: none;
+  font-size: 18px; /* 2026-09-17:12px × 1.5(货件号) */
 }
 .pkg-tags-meta-line .qc-posting {
   font-weight: 700;
-  font-size: 14px;
+  font-size: 21px; /* 2026-09-17:14px × 1.5(质检单货件号) */
   color: #dc2626;
 }
 .pkg-qc-badge {
