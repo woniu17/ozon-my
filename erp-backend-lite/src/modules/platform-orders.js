@@ -179,7 +179,12 @@ router.get('/admin/api/platform-orders/:platform/search', async (req, res, next)
     }
     const platform = String(req.params.platform);
     getAdapter(platform);
-    const accounts = config.platformAccounts[platform] || [];
+    // 2026-09-17 支持指定账号只搜该账号(采购弹窗按当前tab账号搜索,省API调用);
+    // 不传 account 保持跨全部账号的原行为
+    const accountParam = String(req.query.account || '').trim();
+    const accounts = accountParam
+      ? [resolveAccount(platform, accountParam)]
+      : (config.platformAccounts[platform] || []);
     if (!accounts.length) {
       throw new ApiError('BROWSER_ERROR', `平台 ${platform} 未配置任何账号(检查 .env PLATFORM_ACCOUNTS_*)`, { status: 500 });
     }

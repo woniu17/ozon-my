@@ -590,6 +590,15 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
     if (!goodsArr.length && AUTO_ENRICH_SEARCH[b.platform] && sn && !sn.includes(',')) {
       setImmediate(() => autoEnrichPurchase(b.platform, sn));
     }
+    // 保存后异步补查物流(2026-09-17):采购弹窗列表已不再逐单查物流(1688限流主因),
+    // 勾选保存为采购订单后统一补一次(1688补单号+拉轨迹/PDD搜索+轨迹,限速2s/单)
+    setImmediate(async () => {
+      try {
+        await syncPurchaseLogisticsForPackage(packageId);
+      } catch (e) {
+        logger.warn({ packageId, err: e.message }, '[order-process] 保存后补查采购物流失败');
+      }
+    });
     logger.info({ packageId, purchaseOrderId: r.purchaseOrderId, allocMode: isAuto ? 'auto' : 'manual', goodsSaved: goodsArr.length }, '[order-process] 采购信息已提交');
     res.json(ok(r));
   } catch (e) {

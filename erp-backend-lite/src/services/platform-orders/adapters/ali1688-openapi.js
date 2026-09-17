@@ -50,11 +50,6 @@ const STATUS_PROMPTS = {
   terminated: '已取消(终止)',
 };
 
-// 这些状态可能有物流单号(已发货);待付款/待发货/取消的不查物流
-const SHIPPED_STATUSES = new Set(['waitbuyerreceive', 'confirm_goods', 'success']);
-
-// 物流批量查询并发(实测 7 并发 220ms,1688 QPS 配额宽松)
-const LOGISTICS_CONCURRENCY = 8;
 const REQUEST_TIMEOUT_MS = 20000;
 
 /** 账号是否有官方 API token(决定路由到本适配器还是浏览器适配器) */
@@ -141,7 +136,8 @@ async function callOpenApi(apiUri, account, extraParams = {}) {
 }
 
 /** 官方订单 → ERP 精简结构(与浏览器版 normalize1688Order 逐字段对齐)
- *  trackingNumber 由 fillLogistics 回填 */
+ *  trackingNumber/logisticsCompany 恒空串(2026-09-17 限流治理:列表/搜索不再逐单查物流,
+ *  保存为采购订单后由 syncPurchaseLogisticsForPackage 统一补查回填) */
 function normalizeOpenApiOrder(o, account) {
   const b = o.baseInfo || {};
   const entries = Array.isArray(o.productItems) ? o.productItems : [];
@@ -151,7 +147,7 @@ function normalizeOpenApiOrder(o, account) {
     statusPrompt: STATUS_PROMPTS[b.status] || b.status || '',
     amount: Number(b.totalAmount || 0).toFixed(2), // 单位:元
     trackingNumber: '',
-    logisticsCompany: '', // 物流公司名(fillLogistics 回填,优先于前端按单号前缀推断)
+    logisticsCompany: '', // 物流公司名(采购订单保存后统一补查回填,优先于前端按单号前缀推断)
     orderTime: fmtTime(b.createTime),
     sellerName: b.sellerLoginId || (b.sellerContact && b.sellerContact.companyName) || '',
     buyerUserId: b.buyerUserId ? String(b.buyerUserId) : '',
@@ -175,33 +171,10 @@ function pickLogisticsCompany(packs) {
   return name.replace(/\s*[（(][A-Za-z]+[)）]\s*$/, '').trim();
 }
 
-/** 批量查物流单号并回填(trackingNumber 取第一个物流包,对齐 mtop tracks[0]);
- *  公司名同源回填(单号查失败不阻塞列表,留空) */
-async function fillLogistics(orders, account) {
-  const targets = orders.filter((o) => SHIPPED_STATUSES.has(o.status) && o.orderSn);
-  if (!targets.length) return;
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < targets.length) {
-      const t = targets[cursor++];
-      try {
-        const r = await callOpenApi(API_LOGISTICS, account, {
-          orderId: t.orderSn, fields: 'company,logisticsBillNo', webSite: '1688',
-        });
-        const packs = Array.isArray(r.result) ? r.result : [];
-        t.trackingNumber = String((packs[0] && packs[0].logisticsBillNo) || '');
-        t.logisticsCompany = pickLogisticsCompany(packs);
-      } catch (e) {
-        // 物流查询单笔失败不影响订单列表(留空,不抛错)
-        console.warn(`[ali1688-openapi] 物流查询失败 ${t.orderSn}: ${e.message}`);
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(LOGISTICS_CONCURRENCY, targets.length) }, worker));
-}
-
 /** 订单列表;返回 { orders }(结构/字段与浏览器版一致,前端零改动)
- *  不传时间窗口:isHis=false 即最近 3 个月,首页 30 条(前端只用第一页) */
+ *  不传时间窗口:isHis=false 即最近 3 个月,首页 30 条(前端只用第一页)
+ *  2026-09-17 不再逐单补物流单号(8并发×30单曾打爆 gw.QosAppFrequencyLimit 限流);
+ *  物流单号改由采购订单保存后 syncPurchaseLogisticsForPackage 统一补查 */
 async function listAli1688OpenApiOrders({ tab = 'all', size = 30, account } = {}) {
   const params = { isHis: 'false', page: '1', pageSize: String(Math.min(Number(size) || 30, 50)) };
   const st = TAB_STATUS[tab];
@@ -209,7 +182,6 @@ async function listAli1688OpenApiOrders({ tab = 'all', size = 30, account } = {}
   const json = await callOpenApi(API_ORDER_LIST, account, params);
   const raw = Array.isArray(json.result) ? json.result : [];
   const orders = raw.map((o) => normalizeOpenApiOrder(o, account));
-  await fillLogistics(orders, account);
   return { orders };
 }
 
@@ -232,26 +204,15 @@ async function searchAliOpenApiInAccount(orderSn, account) {
   if (!detail || !detail.baseInfo) return null;
   const n = normalizeOpenApiOrder(detail, account);
   // 对齐浏览器版 searchAliOrder 返回结构
+  // (物流单号不再随查:2026-09-17 限流治理,保存为采购订单后统一补查)
   const result = {
     orderSn: n.orderSn,
     orderAmount: n.amount,
     orderTime: n.orderTime,
     statusPrompt: n.statusPrompt,
-    trackingNumber: n.trackingNumber,
-    logisticsCompany: n.logisticsCompany,
+    trackingNumber: '',
     goods: n.goods,
   };
-  // 详情补物流单号+公司名(单次调用)
-  if (SHIPPED_STATUSES.has(n.status)) {
-    try {
-      const r = await callOpenApi(API_LOGISTICS, account, {
-        orderId: n.orderSn, fields: 'company,logisticsBillNo', webSite: '1688',
-      });
-      const packs = Array.isArray(r.result) ? r.result : [];
-      result.trackingNumber = String((packs[0] && packs[0].logisticsBillNo) || '');
-      result.logisticsCompany = pickLogisticsCompany(packs);
-    } catch { /* 留空 */ }
-  }
   return result;
 }
 

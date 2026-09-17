@@ -258,8 +258,11 @@ export function getPlatformOrders(platform, params) {
 }
 
 // 按采购单号精确搜索(补全商品图/数量);未找到返回 { result: null }
-export function searchPlatformOrder(platform, orderSn) {
-  return request.get('/admin/api/platform-orders/' + encodeURIComponent(platform) + '/search', { orderSn });
+// account(可选):只搜该账号(2026-09-17 采购弹窗按当前tab账号搜索,省API调用);不传=跨全部账号
+export function searchPlatformOrder(platform, orderSn, account) {
+  const query = { orderSn };
+  if (account) query.account = account;
+  return request.get('/admin/api/platform-orders/' + encodeURIComponent(platform) + '/search', query);
 }
 
 // 浏览器运行态 + 各平台×账号登录态探测(替代原扩展 PING/PONG)

@@ -1308,7 +1308,7 @@ function switchImportSubTab(t) {
   if (importTab.value !== 'manual') loadOrders(importTab.value);
 }
 
-// ── 1688 订单号搜索(2026-09-16,先支持 1688;后端跨全部 1688 账号聚合搜索)──
+// ── 1688 订单号搜索(2026-09-16;2026-09-17 只搜当前tab所属账号,省API调用)──
 // 命中的订单置顶插入当前 tab 列表并自动勾选;后端返回结构与列表订单逐字段一致
 const importSearch = reactive({ keyword: '', loading: false, error: '' });
 const isAliTab = computed(() => currentTabDef.value?.platform === 'ali1688');
@@ -1318,10 +1318,10 @@ async function onSearchImportOrder() {
   importSearch.loading = true;
   importSearch.error = '';
   try {
-    const data = await searchPlatformOrder('ali1688', sn);
+    const data = await searchPlatformOrder('ali1688', sn, currentTabDef.value?.account);
     const found = data?.result || null;
     if (!found?.orderSn) {
-      importSearch.error = `未找到订单 ${sn}(单号不存在,或不属于已配置的 1688 账号)`;
+      importSearch.error = `未找到订单 ${sn}(单号不存在,或不属于当前账号 ${currentTabDef.value?.account || '—'})`;
       return;
     }
     const st = currentStore.value;
