@@ -15,8 +15,7 @@ export function getOrderList(params) {
   return request.get('/admin/api/order-process/list', params);
 }
 
-// Tab 聚合统计(当前 Tab+筛选全集不分页,分两组:已结算/已采购未结算)
-// params 同 getOrderList(除不接 page/pageSize)
+// 订单金额统计(2026-09-18 起前端全量调用不传参;后端仍支持 getOrderList 的 tab/筛选参数)
 export function getOrderSummary(params) {
   return request.get('/admin/api/order-process/summary', params);
 }

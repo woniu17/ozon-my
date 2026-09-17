@@ -103,7 +103,7 @@ const pager = reactive({ current: 1, total: 0, pageSize: 20 });
 const loading = ref(false);
 const rows = ref([]);
 
-// ── Tab 聚合统计(已成功/已采购未结算两组,全集不分页)──────
+// ── 订单金额统计(全量订单口径,不随 tab/筛选变化,2026-09-18)──────
 const summary = ref(null);
 const summaryLoading = ref(false);
 const summaryError = ref(null);
@@ -112,11 +112,8 @@ let lastSummaryParams = null;
 // 明细三卡(已成功/已取消/已退货)默认折叠,点击"展开明细"切换(2026-09-18)
 const summaryDetailOpen = ref(false);
 const summaryEmpty = computed(() => summary.value && summary.value.totalOrders === 0);
-const summaryEmptyHint = computed(() =>
-  activeTab.value === 'cancelled' ? '当前 Tab 无已取消订单'
-  : activeTab.value === 'returned' ? '当前 Tab 无已退货订单'
-  : '当前 Tab 无已成功/已采购未结算订单'
-);
+// 全量统计空态提示(不再随 tab 变化)
+const summaryEmptyHint = '暂无订单数据,同步订单后展示统计';
 async function loadSummary(params) {
   const reqId = ++summaryReqId;
   lastSummaryParams = params;
@@ -280,11 +277,8 @@ async function loadList() {
     page: pager.current,
     pageSize: pager.pageSize,
   };
-  // Tab 聚合统计并行触发(独立 loading/error 态,不阻塞列表主路径)
-  const summaryParams = { ...listParams };
-  delete summaryParams.page;
-  delete summaryParams.pageSize;
-  loadSummary(summaryParams);
+  // 订单金额统计并行触发(2026-09-18:全量订单口径,不传 tab/筛选;独立 loading/error 态,不阻塞列表主路径)
+  loadSummary({});
   try {
     const data = await getOrderList(listParams);
     globalSearch.total = isGlobal ? (data?.total || 0) : 0;
@@ -2463,9 +2457,9 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Tab 聚合统计(2026-09-18:移至订单tab上一行;默认只展示已采购未结算+整体合计上下两行,已成功/已取消/已退货明细默认折叠) -->
+    <!-- 订单金额统计(2026-09-18:移至订单tab上一行;全量订单口径不随tab/筛选变化;默认只展示已采购未结算+整体合计两行,已成功/已取消/已退货明细默认折叠) -->
     <div class="summary-bar" v-if="summary?.truncated">
-      <span class="tag tag-warn">仅统计前 {{ summary.truncatedAt }} 单(共 {{ summary.totalUnfiltered }}),请缩小筛选</span>
+      <span class="tag tag-warn">仅统计前 {{ summary.truncatedAt }} 单(共 {{ summary.totalUnfiltered }})</span>
     </div>
     <div class="summary-bar summary-loading" v-else-if="summaryLoading && !summary">
       <span class="muted">统计中…</span>
