@@ -1518,6 +1518,11 @@ function parseTraceSteps(l) {
     return Array.isArray(arr) ? arr.filter((s) => s && (s.remark || s.acceptTime)) : [];
   } catch { return []; }
 }
+// 轨迹可见条数(2026-09-17):默认仅最新一条,点"更多"展开全部(最新在前)
+function visibleTraceSteps(l) {
+  const steps = parseTraceSteps(l);
+  return traceOpen[l.id] ? steps : steps.slice(0, 1);
+}
 
 // 选择面板:打开(同一时刻仅一行)
 function openTagPicker(pkg) {
@@ -2777,13 +2782,13 @@ onUnmounted(() => {
                 <div v-if="l.poLogisticsNo" class="sub po-logistics-line" :title="l.lastTraceDesc || ''">
                   {{ l.poLogisticsCompany }}
                   <a :href="trackingSearchUrl(l.poLogisticsCompany, l.poLogisticsNo)" target="_blank" rel="noopener" class="order-link" title="百度搜索物流状态">{{ l.poLogisticsNo }}</a>
-                  <button v-if="parseTraceSteps(l).length" class="trace-toggle" @click.stop="traceOpen[l.id] = !traceOpen[l.id]">
-                    {{ traceOpen[l.id] ? '收起' : '轨迹' + parseTraceSteps(l).length + '条' }}
+                  <button v-if="parseTraceSteps(l).length > 1" class="trace-toggle" :title="'共' + parseTraceSteps(l).length + '条轨迹'" @click.stop="traceOpen[l.id] = !traceOpen[l.id]">
+                    {{ traceOpen[l.id] ? '收起' : '更多' }}
                   </button>
                 </div>
-                <!-- 完整物流轨迹(1688买家版API/妙手,最新在前) -->
-                <div v-if="traceOpen[l.id] && parseTraceSteps(l).length" class="trace-box">
-                  <div v-for="(s, k) in parseTraceSteps(l)" :key="k" class="trace-step">
+                <!-- 物流轨迹(1688买家版API/妙手,最新在前):默认仅最新一条,点"更多"展开其余(2026-09-17) -->
+                <div v-if="parseTraceSteps(l).length" class="trace-box trace-box-collapsed">
+                  <div v-for="(s, k) in visibleTraceSteps(l)" :key="k" class="trace-step">
                     <span class="trace-time mono">{{ s.acceptTime }}</span>
                     <span class="trace-remark">{{ s.remark }}</span>
                   </div>
@@ -4110,6 +4115,14 @@ a.product-title:hover {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+/* 折叠态(默认仅最新一条,2026-09-17):无边框无底色,融入正文 */
+.trace-box-collapsed {
+  border: none;
+  background: none;
+  padding: 0;
+  max-height: none;
+  overflow: visible;
 }
 .trace-step {
   display: flex;
