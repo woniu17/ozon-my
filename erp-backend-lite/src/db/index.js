@@ -15,7 +15,9 @@ if (!existsSync(DATA_DIR)) {
   mkdirSync(DATA_DIR, { recursive: true });
 }
 
-export const db = new DatabaseSync(DB_PATH);
+// allowUnknownNamedParameters:同一查询复用参数对象时(如 listPriceProducts 的 COUNT/SELECT 共用 args),
+// 允许绑定 SQL 中未出现的命名参数键,避免 "Unknown named parameter" 报错
+export const db = new DatabaseSync(DB_PATH, { allowUnknownNamedParameters: true });
 db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
 
