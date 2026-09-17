@@ -2423,21 +2423,7 @@ onUnmounted(() => {
       </span>
     </div>
 
-    <!-- Tab 页签 -->
-    <div class="tabs-bar">
-      <button
-        v-for="t in TABS"
-        :key="t.key"
-        class="tab-btn"
-        :class="{ active: activeTab === t.key }"
-        @click="switchTab(t.key)"
-      >
-        {{ t.label }}
-        <span class="tab-count">{{ tabCounts[t.key] ?? 0 }}</span>
-      </button>
-    </div>
-
-    <!-- 同步进度条(进行中或已完成未关闭) -->
+    <!-- 同步进度条(进行中或已完成未关闭,2026-09-18:移至订单tab上一行) -->
     <div v-if="showProgressBar" class="sync-progress-bar" :class="{ 'sync-progress-finished': progressFinished }">
       <div class="sync-progress-header">
         <span class="tag" :class="progressFinished ? (progress.errorCount > 0 ? 'tag-warn' : 'tag-ok') : 'tag-info'">
@@ -2473,6 +2459,20 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Tab 页签 -->
+    <div class="tabs-bar">
+      <button
+        v-for="t in TABS"
+        :key="t.key"
+        class="tab-btn"
+        :class="{ active: activeTab === t.key }"
+        @click="switchTab(t.key)"
+      >
+        {{ t.label }}
+        <span class="tab-count">{{ tabCounts[t.key] ?? 0 }}</span>
+      </button>
     </div>
 
     <!-- 全局搜索模式提示条 -->
