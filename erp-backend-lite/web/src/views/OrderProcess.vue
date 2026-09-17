@@ -2355,6 +2355,74 @@ onUnmounted(() => {
 
 <template>
   <div class="order-process-page">
+    <!-- 同步与搜索操作行(2026-09-18:移至订单tab上一行) -->
+    <div class="sync-area">
+      <div class="global-search-bar" v-if="!globalSearch.active">
+        <select v-model="globalSearch.mode" class="filter-input mode-select" title="匹配模式">
+          <option value="ss">模糊匹配</option>
+          <option value="eq">精确匹配</option>
+        </select>
+        <input
+          ref="globalSearchBar"
+          class="filter-input global-kw-input"
+          type="text"
+          v-model.trim="globalSearch.keyword"
+          placeholder="全局搜索:包裹号/订单号/运单号/采购单号/采购物流单号/SKU"
+          title="跨所有状态搜索订单"
+          @keydown.enter="doGlobalSearch"
+        />
+        <button class="btn btn-primary" @click="doGlobalSearch">搜索</button>
+      </div>
+      <div class="global-search-hint" v-else>
+        <span class="tag tag-info">全局搜索</span>
+        <span>命中 <b>{{ globalSearch.total }}</b> 个包裹(全部状态)</span>
+        <button class="btn btn-ghost btn-sm" @click="clearGlobalSearch()">退出搜索</button>
+      </div>
+      <span v-if="syncInfo.cursors?.length && !syncing" class="sync-info" :title="syncInfo.cursors.map(c => `${c.storeId}: ${c.lastError || c.lastRunAt}`).join('\n')">
+        最近同步 {{ fmtTime(syncInfo.cursors[0]?.lastRunAt) }}
+      </span>
+      <span
+        v-if="pendingExport.active && pendingExport.count > 0"
+        class="tag tag-warn"
+        :title="`上次导出(${pendingExport.lastExportAt || '未知'})后有 ${pendingExport.count} 个包裹发生了采购/称重/交运/搁置变更,记得运行导出脚本同步到服务器:node scripts/export-purchase-sync.mjs`"
+      >待导出 {{ pendingExport.count }}</span>
+      <button class="btn btn-ghost" :disabled="syncing" @click="triggerSync" title="增量同步:unfulfilled [now-14d, now+14d] + list [now-60d, now],双接口">
+        {{ syncing ? '同步中…' : '同步进行中订单' }}
+      </button>
+      <button class="btn btn-ghost" :disabled="syncing" @click="openSyncAllDialog" title="全量同步:仅 /v4/posting/fbs/list,覆盖所有状态含 delivered/cancelled 终态,可选时间范围">
+        同步所有订单
+      </button>
+      <button class="btn btn-ghost" :disabled="syncingMs" @click="onSyncMsToLocal" title="从妙手同步:把妙手订单的重量/备注/采购金额/采购订单详情同步到本地">
+        {{ syncingMs ? '妙手同步中…' : '从妙手同步' }}
+      </button>
+      <button class="btn btn-ghost" :disabled="enrichingItems || syncingMs" @click="onEnrichPurchaseItems" title="补全采购订单信息:拉取全量待补全清单(拼多多+1688+淘宝),串行限速搜索补全商品图/数量,连续失败3次自动中止">
+        {{ enrichingItems ? '补全中…' : '补全采购订单信息' }}
+      </button>
+      <button v-if="enrichingItems" class="btn btn-danger" @click="enrichStop" title="中止当前补全任务(已采集未入库的批次会收尾入库)">中止</button>
+      <button class="btn btn-ghost" :disabled="syncingLogistics" @click="onSyncPurchaseLogistics" title="同步采购物流信息:补物流单号(1688)+拉完整轨迹(1688官方API+拼多多),与每小时定时轮同逻辑互斥,单轮每阶段上限100单">
+        {{ syncingLogistics ? '物流同步中…' : '同步采购物流信息' }}
+      </button>
+    </div>
+    <div v-if="syncingLogistics" class="enrich-progress-bar">
+      <span class="tag tag-info">物流同步</span>
+      <span class="enrich-progress-text">
+        {{ LOGISTICS_PHASE_LABEL[logisticsProgress.phase] || '准备中' }}
+        <template v-if="logisticsProgress.total"> · {{ logisticsProgress.done }}/{{ logisticsProgress.total }}</template>
+      </span>
+    </div>
+    <div v-if="enrichingItems" class="enrich-progress-bar">
+      <span class="tag tag-info">补全中</span>
+      <span class="enrich-progress-text">
+        {{ enrichProgress.done }}/{{ enrichProgress.total }}
+        <template v-if="enrichProgress.platform"> · {{ enrichProgress.platform }}</template>
+        · 找到 <b>{{ enrichProgress.found }}</b>
+        · 未找到 <b>{{ enrichProgress.notFound }}</b>
+        · 失败 <b>{{ enrichProgress.failed }}</b>
+        · 已入库 <b>{{ enrichProgress.updated }}</b>
+        <template v-if="enrichProgress.current"> · 当前 {{ enrichProgress.current }}</template>
+      </span>
+    </div>
+
     <!-- Tab 页签 -->
     <div class="tabs-bar">
       <button
@@ -2367,72 +2435,6 @@ onUnmounted(() => {
         {{ t.label }}
         <span class="tab-count">{{ tabCounts[t.key] ?? 0 }}</span>
       </button>
-      <div class="sync-area">
-        <div class="global-search-bar" v-if="!globalSearch.active">
-          <select v-model="globalSearch.mode" class="filter-input mode-select" title="匹配模式">
-            <option value="ss">模糊匹配</option>
-            <option value="eq">精确匹配</option>
-          </select>
-          <input
-            ref="globalSearchBar"
-            class="filter-input global-kw-input"
-            type="text"
-            v-model.trim="globalSearch.keyword"
-            placeholder="全局搜索:包裹号/订单号/运单号/采购单号/采购物流单号/SKU"
-            title="跨所有状态搜索订单"
-            @keydown.enter="doGlobalSearch"
-          />
-          <button class="btn btn-primary" @click="doGlobalSearch">搜索</button>
-        </div>
-        <div class="global-search-hint" v-else>
-          <span class="tag tag-info">全局搜索</span>
-          <span>命中 <b>{{ globalSearch.total }}</b> 个包裹(全部状态)</span>
-          <button class="btn btn-ghost btn-sm" @click="clearGlobalSearch()">退出搜索</button>
-        </div>
-        <span v-if="syncInfo.cursors?.length && !syncing" class="sync-info" :title="syncInfo.cursors.map(c => `${c.storeId}: ${c.lastError || c.lastRunAt}`).join('\n')">
-          最近同步 {{ fmtTime(syncInfo.cursors[0]?.lastRunAt) }}
-        </span>
-        <span
-          v-if="pendingExport.active && pendingExport.count > 0"
-          class="tag tag-warn"
-          :title="`上次导出(${pendingExport.lastExportAt || '未知'})后有 ${pendingExport.count} 个包裹发生了采购/称重/交运/搁置变更,记得运行导出脚本同步到服务器:node scripts/export-purchase-sync.mjs`"
-        >待导出 {{ pendingExport.count }}</span>
-        <button class="btn btn-ghost" :disabled="syncing" @click="triggerSync" title="增量同步:unfulfilled [now-14d, now+14d] + list [now-60d, now],双接口">
-          {{ syncing ? '同步中…' : '同步进行中订单' }}
-        </button>
-        <button class="btn btn-ghost" :disabled="syncing" @click="openSyncAllDialog" title="全量同步:仅 /v4/posting/fbs/list,覆盖所有状态含 delivered/cancelled 终态,可选时间范围">
-          同步所有订单
-        </button>
-        <button class="btn btn-ghost" :disabled="syncingMs" @click="onSyncMsToLocal" title="从妙手同步:把妙手订单的重量/备注/采购金额/采购订单详情同步到本地">
-          {{ syncingMs ? '妙手同步中…' : '从妙手同步' }}
-        </button>
-        <button class="btn btn-ghost" :disabled="enrichingItems || syncingMs" @click="onEnrichPurchaseItems" title="补全采购订单信息:拉取全量待补全清单(拼多多+1688+淘宝),串行限速搜索补全商品图/数量,连续失败3次自动中止">
-          {{ enrichingItems ? '补全中…' : '补全采购订单信息' }}
-        </button>
-        <button v-if="enrichingItems" class="btn btn-danger" @click="enrichStop" title="中止当前补全任务(已采集未入库的批次会收尾入库)">中止</button>
-        <button class="btn btn-ghost" :disabled="syncingLogistics" @click="onSyncPurchaseLogistics" title="同步采购物流信息:补物流单号(1688)+拉完整轨迹(1688官方API+拼多多),与每小时定时轮同逻辑互斥,单轮每阶段上限100单">
-          {{ syncingLogistics ? '物流同步中…' : '同步采购物流信息' }}
-        </button>
-      </div>
-      <div v-if="syncingLogistics" class="enrich-progress-bar">
-        <span class="tag tag-info">物流同步</span>
-        <span class="enrich-progress-text">
-          {{ LOGISTICS_PHASE_LABEL[logisticsProgress.phase] || '准备中' }}
-          <template v-if="logisticsProgress.total"> · {{ logisticsProgress.done }}/{{ logisticsProgress.total }}</template>
-        </span>
-      </div>
-      <div v-if="enrichingItems" class="enrich-progress-bar">
-        <span class="tag tag-info">补全中</span>
-        <span class="enrich-progress-text">
-          {{ enrichProgress.done }}/{{ enrichProgress.total }}
-          <template v-if="enrichProgress.platform"> · {{ enrichProgress.platform }}</template>
-          · 找到 <b>{{ enrichProgress.found }}</b>
-          · 未找到 <b>{{ enrichProgress.notFound }}</b>
-          · 失败 <b>{{ enrichProgress.failed }}</b>
-          · 已入库 <b>{{ enrichProgress.updated }}</b>
-          <template v-if="enrichProgress.current"> · 当前 {{ enrichProgress.current }}</template>
-        </span>
-      </div>
     </div>
 
     <!-- 同步进度条(进行中或已完成未关闭) -->
@@ -3489,11 +3491,12 @@ onUnmounted(() => {
 }
 
 .sync-area {
-  margin-left: auto;
+  /* 2026-09-18:自 tabs-bar 内移出独立成行(置于订单tab上一行),不再右贴 */
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-bottom: 10px;
 }
 
 .sync-info {
@@ -5141,6 +5144,8 @@ a.product-title:hover {
   gap: 8px;
   padding: 4px 8px;
   margin-top: 6px;
+  /* 2026-09-18:随操作行移至 tabs 上方,与订单tab行拉开距离 */
+  margin-bottom: 8px;
   background: var(--bg-soft, #f9fafb);
   border: 1px solid var(--border, #e5e7eb);
   border-radius: 4px;
