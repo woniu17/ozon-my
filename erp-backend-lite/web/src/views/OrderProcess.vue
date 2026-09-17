@@ -1233,10 +1233,14 @@ const currentPlatformLogin = computed(() => {
 });
 
 // 当前 tab 的 orders(搜索命中置顶去重)/ loading / error / selected
+// 注入 _platform(入库平台值)供模板按平台区分渲染(PDD orderTime 为秒级数字需 ×1000 格式化,
+// 2026-09-17 修复:多账号重构后列表区 o._platform 判断失效,PDD 列表时间显示成原始数字)
 const importOrders = computed(() => {
   const st = currentStore.value;
+  const plat = PLATFORM_TAB_META[currentTabDef.value?.platform]?.platformVal || '';
   const inList = new Set(st.orders.map((o) => o.orderSn));
-  return [...st.searched.filter((o) => !inList.has(o.orderSn)), ...st.orders];
+  const wrap = (o) => (o._platform === plat ? o : { ...o, _platform: plat });
+  return [...st.searched.filter((o) => !inList.has(o.orderSn)).map(wrap), ...st.orders.map(wrap)];
 });
 const importLoading = computed(() => currentStore.value.loading);
 const importError = computed(() => currentStore.value.error);
@@ -1308,20 +1312,25 @@ function switchImportSubTab(t) {
   if (importTab.value !== 'manual') loadOrders(importTab.value);
 }
 
-// ── 1688 订单号搜索(2026-09-16;2026-09-17 只搜当前tab所属账号,省API调用)──
+// ── 订单号搜索(2026-09-16 先支持 1688;2026-09-17 扩展拼多多 + 只搜当前tab所属账号,省API调用)──
 // 命中的订单置顶插入当前 tab 列表并自动勾选;后端返回结构与列表订单逐字段一致
 const importSearch = reactive({ keyword: '', loading: false, error: '' });
-const isAliTab = computed(() => currentTabDef.value?.platform === 'ali1688');
+// 支持订单号搜索的平台(1688 官方API buyerView / PDD order_list_search_v4)
+const SEARCHABLE_PLATFORMS = ['ali1688', 'pdd'];
+const isSearchableTab = computed(() => SEARCHABLE_PLATFORMS.includes(currentTabDef.value?.platform));
+const searchPlaceholder = computed(() =>
+  (currentTabDef.value?.platform === 'pdd' ? '输入拼多多订单号搜索' : '输入 1688 订单号搜索'));
 async function onSearchImportOrder() {
   const sn = importSearch.keyword.trim();
-  if (!sn || importSearch.loading) return;
+  if (!sn || importSearch.loading || !currentTabDef.value) return;
+  const platLabel = currentTabDef.value.label || '平台';
   importSearch.loading = true;
   importSearch.error = '';
   try {
-    const data = await searchPlatformOrder('ali1688', sn, currentTabDef.value?.account);
+    const data = await searchPlatformOrder(currentTabDef.value.platform, sn, currentTabDef.value.account);
     const found = data?.result || null;
     if (!found?.orderSn) {
-      importSearch.error = `未找到订单 ${sn}(单号不存在,或不属于当前账号 ${currentTabDef.value?.account || '—'})`;
+      importSearch.error = `未找到订单 ${sn}(单号不存在,或不属于当前账号 ${currentTabDef.value.account || '—'})`;
       return;
     }
     const st = currentStore.value;
@@ -1333,7 +1342,7 @@ async function onSearchImportOrder() {
     if (!isImportCancelled(found) && !isRestoredLinked(found) && !st.selected.includes(found.orderSn)) {
       st.selected.push(found.orderSn);
     }
-    show(`已找到 1688 订单 ${found.orderSn}(¥${found.amount})`, 'success');
+    show(`已找到 ${platLabel}订单 ${found.orderSn}(¥${found.amount})`, 'success');
   } catch (e) {
     importSearch.error = e?.message || String(e);
   } finally {
@@ -3088,13 +3097,13 @@ onUnmounted(() => {
               <div class="pdd-tabs">
                 <button v-for="st in importSubTabs" :key="st.key" class="pdd-tab" :class="{ active: importSubTab === st.key }" @click="switchImportSubTab(st.key)">{{ st.label }}</button>
               </div>
-              <!-- 1688 订单号搜索(2026-09-16 先支持 1688;后端跨全部账号搜) -->
-              <div v-if="isAliTab" class="pdd-search">
+              <!-- 订单号搜索(2026-09-16 先支持 1688;2026-09-17 扩展拼多多;只搜当前tab账号) -->
+              <div v-if="isSearchableTab" class="pdd-search">
                 <input
                   v-model.trim="importSearch.keyword"
                   class="filter-input pdd-search-input"
                   type="text"
-                  placeholder="输入 1688 订单号搜索"
+                  :placeholder="searchPlaceholder"
                   :disabled="importSearch.loading"
                   @focus="$event.target.select()"
                   @keydown.enter="onSearchImportOrder"
