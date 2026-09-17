@@ -4672,10 +4672,21 @@ a.product-title:hover {
   border-bottom: 1px solid var(--border, #e8e8e8);
 }
 .import-platform-tabs {
-  display: flex;
-  align-items: center;
+  /* 多列排布(2026-09-17):grid 每行最多4个tab,超出自动换行(账号tab会越加越多) */
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
   margin-bottom: 8px;
+}
+/* 登录态警告横跨整行 */
+.import-platform-tabs .pdd-bridge-warn {
+  grid-column: 1 / -1;
+}
+/* 单格内超长账号名省略,不撑破格 */
+.import-platform-tabs .pdd-tab {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .selected-orders {
   margin-top: 8px;
