@@ -8,9 +8,11 @@
 // 状态联动:DAO applyOzonStatus(只前进;cancelled 任意时刻可进)
 //
 // 调度(2026-09-16 三级节奏,共用 syncing 互斥):
-//   fast  每 5 分钟:未完成订单(unfulfilled cutoff 7 天窗口) + 应计 + 退货
+//   fast  每 2 分钟:未完成订单(unfulfilled cutoff 未来 14 天窗口) + 应计 + 退货
 //   mid   每 8 小时:近 90 天订单全集(list,补终态) + 应计 + 退货
 //   slow  每 24 小时:近 365 天订单全集(list,全年兜底) + 应计 + 退货
+// (2026-09-17 webhook 整合:fast 提频到 2 分钟且 cutoff 窗口不再回看;
+//  已过 cutoff 的在途单状态由 STATE_CHANGED 推送秒级联动 + mid 轮 8 小时兜底)
 // slow 轮耗时长,期间 fast 触发会 skipped(未完成订单延迟一档,可接受)
 // 手动触发 POST /admin/api/order-process/sync-run(body.level 可选 fast|mid|slow,默认 fast)
 //          POST /admin/api/order-process/sync-all-list(全量,仅list)
@@ -23,16 +25,16 @@ import { getAccrualTypes, findPendingAccrualPostings, findBackfillAccrualPosting
 import { db } from '../db/index.js';
 
 // ── 三级同步节奏(2026-09-16)─────────────────────────────────
-const FAST_INTERVAL_MIN = Math.max(1, Number(process.env.ORDER_SYNC_INTERVAL_MIN) || 5); // fast 轮间隔(分钟)
+const FAST_INTERVAL_MIN = Math.max(1, Number(process.env.ORDER_SYNC_INTERVAL_MIN) || 2); // fast 轮间隔(分钟,2026-09-17 5→2)
 const MID_INTERVAL_MS = 8 * 3600_000;   // mid 轮间隔(8 小时)
 const SLOW_INTERVAL_MS = 24 * 3600_000; // slow 轮间隔(24 小时)
 const FIRST_DELAY_MS = 10_000;
 const MAX_PAGES = 50; // 单接口单店铺翻页上限(防失控)
-// 各级窗口:unfulfilledDays=未完成订单 cutoff 窗口天数(0=跳过);listDays=list 下单窗口天数(0=跳过)
+// 各级窗口:unfulfilledDays=未完成订单 cutoff 向前回看天数(null=跳过该接口,0=从 now 起);listDays=list 下单窗口天数(0=跳过)
 const SYNC_LEVELS = {
-  fast: { unfulfilledDays: 7, listDays: 0, label: '5分钟·未完成订单(7天)' },
-  mid: { unfulfilledDays: 0, listDays: 90, label: '8小时·近90天订单' },
-  slow: { unfulfilledDays: 0, listDays: 365, label: '24小时·近365天订单' },
+  fast: { unfulfilledDays: 0, listDays: 0, label: '2分钟·未完成订单(cutoff未来14天)' },
+  mid: { unfulfilledDays: null, listDays: 90, label: '8小时·近90天订单' },
+  slow: { unfulfilledDays: null, listDays: 365, label: '24小时·近365天订单' },
 };
 
 // ── 应计同步参数(实测验证)─────────────────────────────────────
@@ -232,16 +234,16 @@ async function backfillProductCache(store) {
 }
 
 async function syncStore(store, { unfulfilledDays = SYNC_LEVELS.fast.unfulfilledDays, listDays = 0 } = {}) {
-  // 三级节奏窗口(2026-09-16):
-  //   fast(每5分钟): unfulfilled cutoff [now-7d, now+14d] —— 未完成订单
+  // 三级节奏窗口(2026-09-16,2026-09-17 fast 调整):
+  //   fast(每2分钟): unfulfilled cutoff [now, now+14d] —— 未完成订单(不回看,已过cutoff的在途单由推送+mid兜底)
   //   mid(每8小时):  list [now-90d, now] —— 近3个月订单全集(补 delivered/cancelled 终态)
   //   slow(每24小时): list [now-365d, now] —— 近1年订单全集(全年兜底)
   // list 按下单时间过滤且含所有状态,天然覆盖未完成订单;mid/slow 轮跳过 unfulfilled
   const now = new Date();
   let count = 0;
 
-  // 1) 未完成订单全集(fast 轮)
-  if (unfulfilledDays > 0) {
+  // 1) 未完成订单全集(fast 轮;unfulfilledDays=null 跳过,0=从 now 起)
+  if (unfulfilledDays != null) {
     const cutoffFrom = iso(new Date(now.getTime() - unfulfilledDays * 86400_000));
     const cutoffTo = iso(new Date(now.getTime() + 14 * 86400_000));
     count += await fetchAll(store, (cursor) =>
@@ -582,7 +584,7 @@ export function startOrderSync() {
   setTimeout(() => {
     runOrderSyncNow({ level: 'fast' }).catch((e) => logger.error({ err: e?.message }, '[order-sync] 首次同步异常'));
   }, FIRST_DELAY_MS).unref();
-  // 三级节奏:fast 每5分钟(未完成订单) / mid 每8小时(近90天) / slow 每24小时(近365天)
+  // 三级节奏:fast 每2分钟(未完成订单) / mid 每8小时(近90天) / slow 每24小时(近365天)
   fastTimer = setInterval(
     () => runOrderSyncNow({ level: 'fast' }).catch((e) => logger.error({ err: e?.message }, '[order-sync] fast 轮同步异常')),
     FAST_INTERVAL_MIN * 60_000

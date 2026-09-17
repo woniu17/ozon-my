@@ -17,7 +17,8 @@ const PUBLIC_PATHS = new Set([
 ]);
 
 // 前缀放行:面单打印短链(菜鸟打印组件拉取,HMAC 令牌自校验,见 order-process.js)
-const PUBLIC_PATH_PREFIXES = ['/print/waybill/'];
+// /webhook/:Ozon 平台推送(2026-09-17 自 ozon-webhook 并入;IP 白名单在 webhook router 内自鉴)
+const PUBLIC_PATH_PREFIXES = ['/print/waybill/', '/webhook/'];
 
 function isPublic(path) {
   if (PUBLIC_PATHS.has(path)) return true;

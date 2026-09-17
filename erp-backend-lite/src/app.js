@@ -27,6 +27,7 @@ import categoryFilterRoutes from './modules/category-filter.js';
 import endpointMetricsRoutes, { startEndpointMetricsRetention, stopEndpointMetricsRetention } from './modules/endpoint-metrics.js';
 import priceWatchRoutes, { startPriceWatchRetention, stopPriceWatchRetention } from './modules/price-watch.js';
 import orderProcessRoutes from './modules/order-process.js';
+import webhookRoutes from './modules/webhook.js';
 import { auditLog } from './middleware/audit.js';
 import { startImportStatusPoller } from './services/import-status-poller.js';
 import { startQueueCleanupPoller } from './services/queue-cleanup-poller.js';
@@ -41,6 +42,7 @@ import { startProductUpdatePoller, stopProductUpdatePoller } from './services/pr
 import { startProductArchivePoller, stopProductArchivePoller } from './services/product-archive-poller.js';
 import { startProductSyncCron, stopProductSyncCron } from './services/product-sync-cron.js';
 import { startPurchaseLogisticsPoller, stopPurchaseLogisticsPoller } from './services/purchase-logistics-poller.js';
+import { startEventPoller, stopEventPoller } from './services/webhook/event-poller.js';
 import imageRefreshRoutes from './modules/image-refresh.js';
 import stockRefreshRoutes from './modules/stock-refresh.js';
 import productUpdateRoutes from './modules/product-update.js';
@@ -128,6 +130,10 @@ app.get('/admin', (_req, res) => {
 });
 
 // 鉴权(放行 /health、/auth/login-password 等)
+// ── Ozon Webhook 推送(2026-09-17 自 ozon-webhook 并入)──────────
+// 挂在 authMiddleware 之前:免 JWT,IP 白名单在 router 内部自鉴(POST /webhook/ozon)
+// auth.js 的 PUBLIC_PATH_PREFIXES 已加 '/webhook/' 前缀(双保险)
+app.use(webhookRoutes);
 app.use(authMiddleware);
 app.use(tokenRefreshInjector);
 // 审计日志(记录关键写操作,需在鉴权之后以获取 operator)
@@ -177,8 +183,8 @@ const server = app.listen(config.port, () => {
   startImportStatusPoller();
   // 启动采集队列终态清理器:每 5 分钟清理 success/skipped 任务,保留最新 500 条
   startQueueCleanupPoller();
-  // 订单处理(2026-08):Ozon FBS 订单同步三级节奏(2026-09-16)
-  //   fast 每5分钟(未完成订单7天窗口) / mid 每8小时(近90天) / slow 每24小时(近365天)
+  // 订单处理(2026-08):Ozon FBS 订单同步三级节奏(2026-09-16,fast 2026-09-17 提频)
+  //   fast 每2分钟(未完成订单,cutoff未来14天窗口) / mid 每8小时(近90天) / slow 每24小时(近365天)
   startOrderSync();
   // 启动库存自动同步:每 5 分钟扫描 imported 未设库存的 items,调 OPI /v2/products/stocks
   // 失败重试 5 次(约 25 分钟)后放弃
@@ -210,6 +216,8 @@ const server = app.listen(config.port, () => {
   // 采购物流补全(2026-09-16):每小时补全 1688 采购单物流单号(未发货时关联入库的遗留空值)
   //   + 拉取完整物流轨迹(买家版API)写 trace_json/last_trace_*
   startPurchaseLogisticsPoller();
+  // Webhook 事件消费(2026-09-17 自 ozon-webhook 并入):每 2s 消费 ozon_push_events pending 事件
+  startEventPoller();
 });
 
 // 优雅退出
@@ -228,6 +236,7 @@ async function shutdown(signal) {
   stopPriceWatchRetention();
   stopProductSyncCron();
   stopPurchaseLogisticsPoller();
+  stopEventPoller();
   // 平台订单(2026-09):关闭 cloakbrowser + 释放 profile 锁
   await stopPlatformOrders();
   server.close(() => {

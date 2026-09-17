@@ -1895,6 +1895,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
 
 export const orderPackageDao = {
   syncPosting,
+  applyOzonStatus,
   updateSyncCursor,
   getSyncCursors,
   tabCounts,

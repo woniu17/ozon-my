@@ -19,6 +19,12 @@ export const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
 
+// getDb():webhook 迁入代码(event-dao/handlers)沿用的取库方式
+// 与本文件顶部直接 const db = 同一实例;初始化顺序由模块加载保证(app 启动即 open)
+export function getDb() {
+  return db;
+}
+
 // 初始化 schema
 export async function initSchema() {
   // 2026-07: isChinese → isMainlandChina 列重命名必须在 exec(schema.sql) 之前执行,

@@ -32,6 +32,9 @@ const config = {
   userPhone: process.env.USER_PHONE || '13800138000',
   userPassword: process.env.USER_PASSWORD || '', // bcrypt hash
   ozonOpiBaseUrl: process.env.OZON_OPI_BASE_URL || 'https://api-seller.ozon.ru',
+  // 服务身份(webhook PING 响应/飞书通知署名用,2026-09-17 随 ozon-webhook 并入)
+  appName: process.env.APP_NAME || 'ozon-erp',
+  appVersion: process.env.APP_VERSION || '2.0.0',
   logLevel: process.env.LOG_LEVEL || 'info',
   jwtExpiresIn: '7d',
   // 滑动续期:剩余有效期小于总有效期的 50% 时重签
@@ -83,6 +86,26 @@ const config = {
         .filter(([k]) => k.startsWith('ALI1688_TOKEN_') && k.length > 'ALI1688_TOKEN_'.length)
         .map(([k, v]) => [k.slice('ALI1688_TOKEN_'.length).toLowerCase(), v])
     ),
+  },
+  // Ozon Webhook 推送(2026-09-17 自 ozon-webhook 服务并入)
+  // env 变量名沿用原 ozon-webhook 约定,服务器 .env 平移即可
+  webhook: {
+    ipWhitelistEnabled: String(process.env.IP_WHITELIST_ENABLED ?? 'true') === 'true',
+    // Ozon 官方推送源 3 段 CIDR
+    ozonPushCidrs: ['195.34.21.0/24', '185.73.192.0/22', '91.223.93.0/24'],
+    // 事件消费 poller 节奏
+    poller: {
+      intervalMs: Number(process.env.POLLER_INTERVAL_MS) || 2000,
+      concurrency: Number(process.env.POLLER_CONCURRENCY) || 1,
+      maxRetry: Number(process.env.POLLER_MAX_RETRY) || 5,
+    },
+  },
+  // 飞书通知(决策⑤:本地不配 URL=不通知;服务器实例配置后启用)
+  feishu: {
+    webhookUrlDefault: process.env.FEISHU_WEBHOOK_URL_DEFAULT || '',
+    webhookUrlCancel: process.env.FEISHU_WEBHOOK_URL_CANCEL || '',
+    webhookUrlNew: process.env.FEISHU_WEBHOOK_URL_NEW || '',
+    webhookUrlPickup: process.env.FEISHU_WEBHOOK_URL_PICKUP || '',
   },
 };
 
