@@ -231,16 +231,19 @@ export function setSkuCustoms(sku, { purchasePrice, weightG } = {}) {
 }
 
 // ── 订单回填(采购价/重量默认值) ─────────────────────────
-// 用"最新一个有采购的订单"回填未维护的 custom_purchase_price / custom_weight_g(只填 NULL,不覆盖已维护值)
-//   采购价 = 该订单单件参考采购(行分摊采购额/行数量 → 包裹采购总额/包裹总数量,与 skuOrderList 同口径)
-//   重量   = 该订单包裹称重(op_package.weight,兜底 miaoshou_package.weighing_weight)÷ 包裹总数量,
-//            仅当订单为单一 SKU(多 SKU 包裹的重量无法按件归属,跳过)
+// 回填未维护的 custom_purchase_price / custom_weight_g(只填 NULL,不覆盖已维护值),两值独立取源:
+//   采购价 = 最新一个有采购的订单,单件参考采购(行分摊采购额/行数量 → 包裹采购总额/包裹总数量,与 skuOrderList 同口径)
+//   重量   = 最近一个"单一 SKU 且有称重"的订单,包裹称重(op_package.weight,兜底 miaoshou_package.weighing_weight)÷ 包裹总数量
+//            (2026-09-18 与采购价解耦:原实现两值同源"最新有采购订单",该订单未发货无称重时
+//             重量回填被挡在 rn=1,旧的有称重订单永远排不上,只能一直回退 Ozon 同步重量;
+//             现重量不受采购/发货状态影响,独立往前找有称重的单;多 SKU 包裹重量无法按件归属,跳过)
 // 触发:每次价格同步后执行(幂等,已维护的商品不受影响)
 export function backfillCustomsFromOrders() {
-  const rows = db
+  // 采购价候选:最新一个有采购的订单
+  const purchases = db
     .prepare(
       `WITH tq AS (
-         SELECT ozon_order_id, SUM(quantity) AS total_qty, COUNT(DISTINCT sku) AS sku_kinds
+         SELECT ozon_order_id, SUM(quantity) AS total_qty
          FROM op_ozon_order_item GROUP BY ozon_order_id
        ),
        cand AS (
@@ -249,9 +252,27 @@ export function backfillCustomsFromOrders() {
                            THEN oi.purchase_amount / oi.quantity
                            WHEN p.total_purchase_amount > 0 AND tq.total_qty > 0
                            THEN p.total_purchase_amount / tq.total_qty END, 2) AS unit_purchase,
-                CASE WHEN tq.sku_kinds = 1 AND tq.total_qty > 0
-                          AND COALESCE(p.weight, mp.weighing_weight) > 0
-                     THEN ROUND(COALESCE(p.weight, mp.weighing_weight) / tq.total_qty, 2) END AS unit_weight,
+                ROW_NUMBER() OVER (PARTITION BY oi.sku ORDER BY o.in_process_at DESC, o.id DESC, oi.id DESC) AS rn
+         FROM op_ozon_order_item oi
+         JOIN op_ozon_order o ON o.id = oi.ozon_order_id
+         JOIN op_package p ON p.ozon_order_id = o.id
+         JOIN tq ON tq.ozon_order_id = o.id
+         WHERE p.operate_status != 'cancelled'
+           AND (oi.purchase_amount > 0 OR p.total_purchase_amount > 0)
+       )
+       SELECT sku, unit_purchase FROM cand WHERE rn = 1 AND unit_purchase IS NOT NULL`
+    )
+    .all();
+  // 重量候选:最近一个单一SKU且有称重的订单(与采购解耦,不限有采购)
+  const weights = db
+    .prepare(
+      `WITH tq AS (
+         SELECT ozon_order_id, SUM(quantity) AS total_qty, COUNT(DISTINCT sku) AS sku_kinds
+         FROM op_ozon_order_item GROUP BY ozon_order_id
+       ),
+       cand AS (
+         SELECT oi.sku AS sku,
+                ROUND(COALESCE(p.weight, mp.weighing_weight) / tq.total_qty, 2) AS unit_weight,
                 ROW_NUMBER() OVER (PARTITION BY oi.sku ORDER BY o.in_process_at DESC, o.id DESC, oi.id DESC) AS rn
          FROM op_ozon_order_item oi
          JOIN op_ozon_order o ON o.id = oi.ozon_order_id
@@ -259,12 +280,20 @@ export function backfillCustomsFromOrders() {
          LEFT JOIN miaoshou_package mp ON mp.posting_number = p.logistics_no
          JOIN tq ON tq.ozon_order_id = o.id
          WHERE p.operate_status != 'cancelled'
-           AND (oi.purchase_amount > 0 OR p.total_purchase_amount > 0)
+           AND tq.sku_kinds = 1 AND tq.total_qty > 0
+           AND COALESCE(p.weight, mp.weighing_weight) > 0
        )
-       SELECT sku, unit_purchase, unit_weight FROM cand
-       WHERE rn = 1 AND (unit_purchase IS NOT NULL OR unit_weight IS NOT NULL)`
+       SELECT sku, unit_weight FROM cand WHERE rn = 1`
     )
     .all();
+  const rows = new Map(); // sku -> { unit_purchase?, unit_weight? }
+  for (const r of purchases) rows.set(String(r.sku), { unit_purchase: r.unit_purchase });
+  for (const r of weights) {
+    const k = String(r.sku);
+    const cur = rows.get(k) || {};
+    cur.unit_weight = r.unit_weight;
+    rows.set(k, cur);
+  }
   let purchase = 0;
   let weight = 0;
   const now = nowIso();
@@ -277,16 +306,16 @@ export function backfillCustomsFromOrders() {
   );
   db.exec('BEGIN');
   try {
-    for (const r of rows) {
-      if (r.unit_purchase != null) purchase += upP.run(r.unit_purchase, now, String(r.sku)).changes;
-      if (r.unit_weight != null && r.unit_weight > 0) weight += upW.run(r.unit_weight, String(r.sku)).changes;
+    for (const [sku, r] of rows) {
+      if (r.unit_purchase != null) purchase += upP.run(r.unit_purchase, now, sku).changes;
+      if (r.unit_weight != null && r.unit_weight > 0) weight += upW.run(r.unit_weight, sku).changes;
     }
     db.exec('COMMIT');
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch { /* ignore */ }
     throw e;
   }
-  return { skus: rows.length, purchase, weight };
+  return { skus: rows.size, purchase, weight };
 }
 
 // ── SKU 历史订单(展开行) ──
