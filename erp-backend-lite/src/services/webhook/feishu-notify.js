@@ -164,6 +164,90 @@ function formatSeller(sellerId) {
   return `${store.name}(${store.company_id})`;
 }
 
+// ── 商品明细块(2026-09-18:通知增加 SKU/OfferID/单价/重量/商品链接)────
+// products 来源:①NEW_POSTING 推送(含 OPI 回拉补全,自带 dimensions.weight/CNY 单价)
+//              ②CANCELLED/STATE_CHANGED/揽收推送无商品 → 查 ozon_postings.products_json
+// 链接统一 /context/detail/id/{sku} 口径(与价格管理页/订单处理页一致)
+
+/** 解析单价:兼容字符串("19.0000")/数字/对象({amount}) */
+function parseProductPrice(p) {
+  if (p == null) return null;
+  const raw = typeof p.price === 'object' ? p.price?.amount : p.price;
+  const v = raw != null ? Number(raw) : NaN;
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/** 从本地库批量查商品重量(g):custom_weight_g 优先,attributes_cache.weight 兜底(价格管理页同口径) */
+function lookupLocalWeights(skus) {
+  const db = getDb();
+  const ph = skus.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT CAST(pdc.sku AS TEXT) AS sku,
+           COALESCE(pdc.custom_weight_g, json_extract(pac.attributes_data, '$.weight')) AS weight_g
+    FROM product_data_cache pdc
+    LEFT JOIN product_attributes_cache pac ON pac.sku = pdc.sku
+    WHERE pdc.sku IN (${ph})
+  `).all(...skus.map(String));
+  const m = new Map();
+  for (const r of rows) {
+    const g = r.weight_g != null ? Number(r.weight_g) : NaN;
+    if (Number.isFinite(g) && g > 0) m.set(r.sku, g);
+  }
+  return m;
+}
+
+/**
+ * 构造商品明细文本块(每 SKU 一条:SKU/OfferID/数量/单价/重量/链接)
+ * 重量优先级:推送 dimensions.weight(OPI 商品档案) > 本地维护/同步重量 > —
+ * @param {Array} products 推送 products[](可能为空,返回 null)
+ * @returns {string|null}
+ */
+function buildProductLines(products) {
+  if (!Array.isArray(products) || products.length === 0) return null;
+  const parsed = products
+    .filter((p) => p?.sku != null)
+    .map((p) => {
+      const dimWeight = Number(p.dimensions?.weight);
+      return {
+        sku: String(p.sku),
+        offerId: p.offer_id ?? null,
+        qty: p.quantity ?? 1,
+        price: parseProductPrice(p),
+        ccy: p.currency_code || 'CNY',
+        weightG: Number.isFinite(dimWeight) && dimWeight > 0 ? dimWeight : null,
+      };
+    });
+  if (parsed.length === 0) return null;
+  // 推送缺重量的 SKU 批量查本地兜底
+  const needLocal = parsed.filter((x) => x.weightG == null).map((x) => x.sku);
+  let localW = new Map();
+  if (needLocal.length) {
+    try { localW = lookupLocalWeights(needLocal); } catch { /* 查询失败省略重量 */ }
+  }
+  const lines = ['商品明细:'];
+  for (const x of parsed) {
+    const weightG = x.weightG ?? localW.get(x.sku) ?? null;
+    lines.push(`• SKU: ${x.sku}${x.offerId ? ` | OfferID: ${x.offerId}` : ''} | 数量: ${x.qty}`);
+    lines.push(`  单价: ${x.price != null ? x.price.toFixed(2) : '—'} ${x.ccy} | 重量: ${weightG != null ? `${Math.round(weightG)}g` : '—'}`);
+    lines.push(`  https://ozon.ru/context/detail/id/${x.sku}`);
+  }
+  return lines.join('\n');
+}
+
+/** 从 ozon_postings.products_json 取商品明细(取消/状态变化/揽收推送无商品字段) */
+function loadProductsFromDb(postingNumber) {
+  try {
+    const row = getDb()
+      .prepare('SELECT products_json FROM ozon_postings WHERE posting_number = ?')
+      .get(postingNumber);
+    if (!row?.products_json) return null;
+    const arr = JSON.parse(row.products_json);
+    return Array.isArray(arr) && arr.length ? arr : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 发送飞书文本消息(自动追加来源标识)
  * @param {string} text 消息内容
@@ -225,13 +309,9 @@ export async function notifyPostingEvent(messageType, payload) {
       const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
       const saleCny = extractSaleAmountCny(payload);
       extra = `\n商品SKU数: ${products.length}\n商品总件数: ${totalQty}\n销售金额: ${saleCny.toFixed(2)} CNY`;
-      // 商品链接去重后逐行列出
-      const links = [...new Set(
-        products
-          .filter((p) => p.sku != null)
-          .map((p) => `https://www.ozon.ru/product/${p.sku}`),
-      )];
-      if (links.length) extra += `\n商品链接:\n${links.join('\n')}`;
+      // 商品明细块:SKU/OfferID/数量/单价/重量/链接(推送 products,OPI 回拉后自带完整字段)
+      const productLines = buildProductLines(products);
+      if (productLines) extra += `\n${productLines}`;
       if (payload.tracking_number) extra += `\n跟踪号: ${payload.tracking_number}`;
       // 落库已完成,从 DB 查当日各店铺汇总(含本条新货件)
       // ready=false 表示兜底 poller 还没回填金额,提示"汇总信息还未拉取"
@@ -247,16 +327,26 @@ export async function notifyPostingEvent(messageType, payload) {
       }
       break;
     }
-    case 'TYPE_POSTING_CANCELLED':
+    case 'TYPE_POSTING_CANCELLED': {
       title = '[货件取消] Ozon 推送';
       timeField = ['取消时间', payload.changed_state_date ?? '-'];
       extra = `\n旧状态: ${payload.old_state ?? '-'}\n取消原因: ${formatCancelReason(payload.reason?.message) ?? '-'}`;
+      // 取消推送无商品字段 → 查 ozon_postings.products_json(NEW_POSTING 落库时已存)
+      const cancelProducts = loadProductsFromDb(postingNumber);
+      const cancelLines = buildProductLines(cancelProducts);
+      if (cancelLines) extra += `\n${cancelLines}`;
       break;
-    case 'TYPE_STATE_CHANGED':
+    }
+    case 'TYPE_STATE_CHANGED': {
       title = '[货件状态变更] Ozon 推送';
       timeField = ['变更时间', payload.changed_state_date ?? '-'];
       extra = `\n新状态: ${payload.new_state ?? '-'}`;
+      // 状态变化推送无商品字段 → 查 ozon_postings.products_json
+      const changedProducts = loadProductsFromDb(postingNumber);
+      const changedLines = buildProductLines(changedProducts);
+      if (changedLines) extra += `\n${changedLines}`;
       break;
+    }
     default:
       title = `[${messageType}] Ozon 推送`;
       timeField = ['时间', new Date().toISOString()];
@@ -282,52 +372,6 @@ export async function notifyPostingEvent(messageType, payload) {
       : config.feishu.webhookUrlDefault;
 
   await sendFeishuText(text, url);
-}
-
-/**
- * 推送"unfulfilled-poller 发现的新货件"通知到飞书
- * 格式与 notifyPostingEvent 的 TYPE_NEW_POSTING 完全一致,仅在末尾标注"(兜底通知)"
- * @param {object} store  店铺对象
- * @param {object} posting OPI /v4/posting/fbs/unfulfilled/list 返回的单条 posting
- * @param {string} todaySummaryLines 当日销售汇总文本块(由 unfulfilled-poller 构造)
- */
-export async function notifyNewPostingDiscovered(store, posting, todaySummaryLines) {
-  const postingNumber = posting.posting_number ?? '-';
-  const sellerId = Number(store.company_id);
-  const sellerName = store.name ?? String(sellerId);
-  const isQc = typeof postingNumber === 'string'
-    && (postingNumber.startsWith('02131') || postingNumber.startsWith('024785'));
-
-  // 02131/024785 开头的货件号为质检单,其余为新订单
-  // 标题与 notifyPostingEvent TYPE_NEW_POSTING 完全一致,便于运营统一识别
-  const title = `${isQc ? '[质检]' : ''} [${sellerName}] [${postingNumber}]`;
-  const products = Array.isArray(posting.products) ? posting.products : [];
-  const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
-  const saleCny = extractSaleAmountCny(posting);
-
-  const links = [...new Set(
-    products
-      .filter((p) => p.sku != null)
-      .map((p) => `https://www.ozon.ru/product/${p.sku}`),
-  )];
-
-  const text = [
-    title,
-    `货件号: ${postingNumber}`,
-    `卖家: ${formatSeller(sellerId)}`,
-    `处理时间: ${posting.in_process_at ?? '-'}`,
-    `商品SKU数: ${products.length}`,
-    `商品总件数: ${totalQty}`,
-    `销售金额: ${saleCny.toFixed(2)} CNY`,
-    links.length ? `商品链接:\n${links.join('\n')}` : null,
-    posting.tracking_number ? `跟踪号: ${posting.tracking_number}` : null,
-    '', // 空行分隔
-    todaySummaryLines,
-    '(兜底通知)', // 末行标注,与 Ozon 实时推送区分
-  ].filter((v) => v !== null).join('\n');
-
-  // 新订单/货件机器人
-  await sendFeishuText(text, config.feishu.webhookUrlNew);
 }
 
 /**
@@ -419,6 +463,8 @@ export async function notifyPostingPickedUp(payload) {
     `变更时间: ${payload.changed_state_date ?? '-'}`,
     `新状态: ${payload.new_state ?? '-'}`,
     payload.old_state ? `旧状态: ${payload.old_state}` : null,
+    // 揽收推送无商品字段 → 查 ozon_postings.products_json
+    buildProductLines(loadProductsFromDb(postingNumber)),
     pickupLines ? '' : null,
     pickupLines,
   ].filter((v) => v !== null).join('\n');
@@ -427,24 +473,7 @@ export async function notifyPostingPickedUp(payload) {
 }
 
 /**
- * 取消发起方翻译(取消兜底通知用)
- * API 实测返回俄语(Клиент),swagger 枚举为英语(Client),统一映射中文,未知原样返回
- */
-const INITIATOR_CN = {
-  'Клиент': '买家', 'Client': '买家', 'Customer': '买家',
-  'Продавец': '卖家', 'Seller': '卖家',
-  'Ozon': 'Ozon',
-  'Система': '系统', 'System': '系统',
-  'Доставка': '物流', 'Delivery': '物流',
-};
-
-function formatInitiator(initiator) {
-  if (initiator == null) return '-';
-  return INITIATOR_CN[String(initiator)] ?? String(initiator);
-}
-
-/**
- * 取消原因俄语→中文翻译(实时取消推送 + cancel-scanner 兜底通知共用)
+ * 取消原因俄语→中文翻译(实时取消推送用)
  * Ozon 返回俄语文本(如 "Покупатель отменил заказ"),常见原因映射中文;未收录原样返回,不丢失信息
  * 归一化:ё→е(Ozon 部分原因返回 е 变体)
  */
@@ -514,61 +543,4 @@ export function formatCancelReason(reason) {
     return `买家取消订单${sub ? `：${BUYER_CANCEL_REASON_CN[sub] ?? sub}` : ''}`;
   }
   return String(reason); // 未收录的俄语/英语原因原样返回
-}
-
-/**
- * 推送"unfulfilled-poller 发现的揽收"兜底通知到飞书
- * 格式与 notifyPostingPickedUp(实时揽收推送)一致,末行标注"(兜底通知)"
- * @param {object} store   店铺对象
- * @param {object} posting OPI /v4/posting/fbs/unfulfilled/list 返回的单条 posting
- * @param {string} mappedState 映射后的推送模型状态(如 posting_on_way_to_city)
- * @param {string|null} oldStatus 更新前的 DB 状态(新发现货件为 null)
- * @param {string|null} pickupLines 当日揽收统计文本块(由 unfulfilled-poller 构造)
- */
-export async function notifyPickupDiscovered(store, posting, mappedState, oldStatus, pickupLines) {
-  const postingNumber = posting.posting_number ?? '-';
-  const sellerId = Number(store.company_id);
-  const sellerName = store.name ?? String(sellerId);
-
-  const title = `[揽收] [${sellerName}] [${postingNumber}]`;
-  const text = [
-    title,
-    `货件号: ${postingNumber}`,
-    `卖家: ${formatSeller(sellerId)}`,
-    `变更时间: ${new Date().toISOString()}`,
-    `新状态: ${mappedState ?? '-'}`,
-    oldStatus ? `旧状态: ${oldStatus}` : null,
-    pickupLines ? '' : null,
-    pickupLines,
-    '(兜底通知)', // 末行标注,与 Ozon 实时推送区分
-  ].filter((v) => v !== null).join('\n');
-
-  await sendFeishuText(text, config.feishu.webhookUrlPickup);
-}
-
-/**
- * 推送"cancel-scanner 发现的货件取消"兜底通知到飞书
- * 格式与实时取消通知(TYPE_POSTING_CANCELLED)一致,末行标注"(兜底通知)";
- * 额外携带取消发起方(实时推送无此字段)
- * @param {object} store   店铺对象
- * @param {object} posting OPI /v4/posting/fbs/list 返回的单条 posting(status=cancelled/not_accepted)
- * @param {string|null} oldStatus 更新前的 DB 状态(新发现货件为 null)
- */
-export async function notifyCancelDiscovered(store, posting, oldStatus) {
-  const postingNumber = posting.posting_number ?? '-';
-  const sellerId = Number(store.company_id);
-  const cancel = posting.cancellation ?? {};
-
-  const text = [
-    '[货件取消]',
-    `货件号: ${postingNumber}`,
-    `卖家: ${formatSeller(sellerId)}`,
-    `取消时间: ${new Date().toISOString()}`,
-    oldStatus ? `旧状态: ${oldStatus}` : null,
-    cancel.cancel_reason ? `取消原因: ${formatCancelReason(cancel.cancel_reason)}` : null,
-    cancel.cancellation_initiator ? `取消发起方: ${formatInitiator(cancel.cancellation_initiator)}` : null,
-    '(兜底通知)', // 末行标注,与 Ozon 实时推送区分
-  ].filter((v) => v !== null).join('\n');
-
-  await sendFeishuText(text, config.feishu.webhookUrlCancel);
 }
