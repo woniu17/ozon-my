@@ -474,7 +474,7 @@ onMounted(async () => {
                     <thead>
                       <tr>
                         <th>订单号</th><th>下单时间</th><th>状态</th><th>数量</th>
-                        <th>单价</th><th>包裹采购合计</th><th>单件采购价格</th><th>称重重量</th><th></th>
+                        <th>单价</th><th>包裹采购合计</th><th>包裹称重重量</th><th>单件采购价格</th><th>单件称重重量</th><th></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -488,8 +488,9 @@ onMounted(async () => {
                         <td>{{ o.quantity }}</td>
                         <td>{{ fmtMoney(o.unit_price) }}</td>
                         <td>{{ fmtMoney(o.total_purchase_amount) }}</td>
-                        <td>{{ fmtMoney(o.unit_ref_purchase) }}</td>
                         <td>{{ o.pkg_weigh_weight != null ? o.pkg_weigh_weight + ' g' : '—' }}</td>
+                        <td>{{ fmtMoney(o.unit_ref_purchase) }}</td>
+                        <td>{{ o.unit_weigh_weight != null ? o.unit_weigh_weight + ' g' : '—' }}</td>
                         <td>
                           <button v-if="o.unit_ref_purchase != null" class="btn-link" @click="adoptOrderPrice(row, o)">以此单回填</button>
                         </td>

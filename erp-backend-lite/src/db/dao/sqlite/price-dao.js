@@ -301,20 +301,25 @@ export function skuOrderList(sku, limit = 20) {
               oi.quantity, oi.price AS unit_price,
               oi.purchase_amount AS item_purchase_amount,
               p.total_purchase_amount,
-              (SELECT SUM(quantity) FROM op_ozon_order_item WHERE ozon_order_id = o.id) AS pkg_total_qty,
-              -- 称重重量(g):发货扫描重量,兜底妙手称重(包裹级)
+              tq.total_qty AS pkg_total_qty,
+              -- 包裹称重重量(g):发货扫描重量,兜底妙手称重(包裹级)
               COALESCE(p.weight, mp.weighing_weight) AS pkg_weigh_weight,
+              -- 单件称重重量(g):仅单一 SKU 包裹可按件拆分(包裹称重 ÷ 包裹总数量)
+              CASE WHEN tq.sku_kinds = 1 AND tq.total_qty > 0 AND COALESCE(p.weight, mp.weighing_weight) > 0
+                   THEN ROUND(COALESCE(p.weight, mp.weighing_weight) / tq.total_qty, 2) END AS unit_weigh_weight,
               -- 单件采购价格:行分摊采购额/行数量 → 包裹采购总额/包裹总数量 → NULL
               CASE
                 WHEN oi.purchase_amount > 0 AND oi.quantity > 0 THEN ROUND(oi.purchase_amount / oi.quantity, 2)
-                WHEN p.total_purchase_amount > 0 AND (SELECT SUM(quantity) FROM op_ozon_order_item WHERE ozon_order_id = o.id) > 0
-                  THEN ROUND(p.total_purchase_amount / (SELECT SUM(quantity) FROM op_ozon_order_item WHERE ozon_order_id = o.id), 2)
+                WHEN p.total_purchase_amount > 0 AND tq.total_qty > 0
+                  THEN ROUND(p.total_purchase_amount / tq.total_qty, 2)
                 ELSE NULL
               END AS unit_ref_purchase
        FROM op_ozon_order_item oi
        JOIN op_ozon_order o ON o.id = oi.ozon_order_id
        JOIN op_package p ON p.ozon_order_id = o.id
        LEFT JOIN miaoshou_package mp ON mp.posting_number = p.logistics_no
+       JOIN (SELECT ozon_order_id, SUM(quantity) AS total_qty, COUNT(DISTINCT sku) AS sku_kinds
+             FROM op_ozon_order_item GROUP BY ozon_order_id) tq ON tq.ozon_order_id = o.id
        WHERE oi.sku = ?
        ORDER BY o.in_process_at DESC
        LIMIT ?`
