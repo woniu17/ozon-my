@@ -106,6 +106,10 @@ const config = {
     webhookUrlCancel: process.env.FEISHU_WEBHOOK_URL_CANCEL || '',
     webhookUrlNew: process.env.FEISHU_WEBHOOK_URL_NEW || '',
     webhookUrlPickup: process.env.FEISHU_WEBHOOK_URL_PICKUP || '',
+    // 状态变更分机器人(2026-09-18):签收/待取件/备货,未配 URL 回退 default 机器人
+    webhookUrlReceived: process.env.FEISHU_WEBHOOK_URL_RECEIVED || '',
+    webhookUrlPickupPoint: process.env.FEISHU_WEBHOOK_URL_PICKUP_POINT || '',
+    webhookUrlStocking: process.env.FEISHU_WEBHOOK_URL_STOCKING || '',
   },
 };
 

@@ -338,9 +338,14 @@ export async function notifyPostingEvent(messageType, payload) {
       break;
     }
     case 'TYPE_STATE_CHANGED': {
-      title = '[货件状态变更] Ozon 推送';
+      const ns = payload.new_state ?? '';
+      // 按状态细分标题(2026-09-18 分机器人路由:签收/待取件/备货)
+      title = ns === 'posting_received' ? '[货件签收] Ozon 推送'
+        : ns === 'posting_in_pickup_point' ? '[货件待取件] Ozon 推送'
+        : (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') ? '[货件备货] Ozon 推送'
+        : '[货件状态变更] Ozon 推送';
       timeField = ['变更时间', payload.changed_state_date ?? '-'];
-      extra = `\n新状态: ${payload.new_state ?? '-'}`;
+      extra = `\n新状态: ${ns || '-'}`;
       // 状态变化推送无商品字段 → 查 ozon_postings.products_json
       const changedProducts = loadProductsFromDb(postingNumber);
       const changedLines = buildProductLines(changedProducts);
@@ -364,12 +369,29 @@ export async function notifyPostingEvent(messageType, payload) {
 
   // 按消息类型路由到不同飞书机器人:
   // TYPE_POSTING_CANCELLED → 货件取消机器人
-  // TYPE_NEW_POSTING / TYPE_STATE_CHANGED → 新订单/货件机器人
-  const url = messageType === 'TYPE_POSTING_CANCELLED'
-    ? config.feishu.webhookUrlCancel
-    : messageType === 'TYPE_NEW_POSTING'
-      ? config.feishu.webhookUrlNew
-      : config.feishu.webhookUrlDefault;
+  // TYPE_NEW_POSTING → 新订单机器人
+  // TYPE_STATE_CHANGED → 按状态分路由(2026-09-18):
+  //   posting_received 签收 / posting_in_pickup_point 待取件 /
+  //   posting_awaiting_registration|awaiting_deliver 备货 / 其它 状态变更默认机器人;
+  //   posting_transferring_to_delivery 不通知(转运在途无运营动作)
+  let url;
+  if (messageType === 'TYPE_POSTING_CANCELLED') {
+    url = config.feishu.webhookUrlCancel;
+  } else if (messageType === 'TYPE_NEW_POSTING') {
+    url = config.feishu.webhookUrlNew;
+  } else if (messageType === 'TYPE_STATE_CHANGED') {
+    const ns = payload.new_state ?? '';
+    if (ns === 'posting_transferring_to_delivery') {
+      logger.info({ postingNumber, newState: ns }, 'feishu-notify: transferring_to_delivery 跳过通知');
+      return false;
+    }
+    url = ns === 'posting_received' ? config.feishu.webhookUrlReceived
+      : ns === 'posting_in_pickup_point' ? config.feishu.webhookUrlPickupPoint
+        : (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') ? config.feishu.webhookUrlStocking
+          : config.feishu.webhookUrlDefault;
+  } else {
+    url = config.feishu.webhookUrlDefault;
+  }
 
   await sendFeishuText(text, url);
 }
