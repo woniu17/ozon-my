@@ -21,7 +21,7 @@ const confirmStore = useConfirmStore();
 const COMMISSION_RATE = 0.16;
 const DELIVERY_BASE_CNY = 3.37;
 const DELIVERY_PER_G_CNY = 0.0281;
-const TARGET_RATES = [20, 30, 40, 50, 60]; // 按成本利润率定价选项(%)
+const TARGET_RATES = [20, 30, 40, 50]; // 按成本利润率定价选项(%)
 const DEFAULT_TARGET_RATE = 20;             // 默认选中 20%
 
 const SORTS = [
@@ -248,13 +248,14 @@ function suggestedPrice(row) {
 
 // 调整利润:按选中目标率定价后的利润/销售利润率(成本利润率恒等于目标率)
 // 数学关系:建议价 = (采购×(1+r)+配送)/(1-佣金率) → 利润 = 采购×r
+// 注意:返回的 rate 均为百分数刻度(与后端 profit_rate_* 一致,fmtRate 直接展示)
 function adjustedProfit(row) {
   const price = suggestedPrice(row);
   if (price == null) return null;
-  const rate = selRate(row) / 100;
+  const ratePct = selRate(row);
   const purchase = Number(row.custom_purchase_price);
-  const profit = purchase * rate;
-  return { profit, saleRate: profit / price, costRate: rate, price };
+  const profit = purchase * (ratePct / 100);
+  return { profit, saleRate: (profit / price) * 100, costRate: ratePct, price };
 }
 
 function canTarget(row) {
@@ -488,20 +489,41 @@ onMounted(async () => {
                 <span v-else class="sub">—</span>
               </td>
               <td class="col-target">
-                <div class="rate-opts">
-                  <button
-                    v-for="r in TARGET_RATES" :key="r" type="button" class="rate-opt"
-                    :class="{ active: selRate(row) === r }"
-                    :disabled="!canTarget(row)"
-                    :title="canTarget(row) ? `按 ${r}% 成本利润率定价` : '需先维护采购价与重量'"
-                    @click="rateChoice[row.sku] = r"
-                  >{{ r }}%</button>
-                </div>
-                <div v-if="canTarget(row)" class="target-act">
-                  <span class="suggest" :title="`按 ${selRate(row)}% 成本利润率的建议售价`">¥{{ suggestedPrice(row) }}</span>
-                  <button class="btn btn-sm btn-primary" :disabled="updatingSku === row.sku" @click="applyTargetPrice(row)">
-                    {{ updatingSku === row.sku ? '提交中' : '改价' }}
-                  </button>
+                <div
+                  class="target-grid"
+                  :title="canTarget(row) ? `按 ${selRate(row)}% 成本利润率定价` : '需先维护采购价与重量'"
+                >
+                  <!-- 子列1:调整后价格/划线价格/最低价 -->
+                  <div class="tg-prices">
+                    <div class="tg-line">
+                      <span class="tg-label">调整后价格</span>
+                      <b class="suggest">{{ suggestedPrice(row) != null ? '¥' + suggestedPrice(row) : '—' }}</b>
+                    </div>
+                    <div class="tg-line">
+                      <span class="tg-label">划线价格</span>
+                      <span>{{ suggestedPrice(row) != null ? '¥' + (Math.round(suggestedPrice(row) * 2 * 100) / 100) : '—' }}</span>
+                    </div>
+                    <div class="tg-line">
+                      <span class="tg-label">最低价</span>
+                      <span>{{ suggestedPrice(row) != null ? '¥' + suggestedPrice(row) : '—' }}</span>
+                    </div>
+                  </div>
+                  <!-- 子列2:目标率选项(竖排) -->
+                  <div class="tg-rates">
+                    <button
+                      v-for="r in TARGET_RATES" :key="r" type="button" class="rate-opt"
+                      :class="{ active: selRate(row) === r }"
+                      :disabled="!canTarget(row)"
+                      @click="rateChoice[row.sku] = r"
+                    >{{ r }}%</button>
+                  </div>
+                  <!-- 子列3:改价按钮 -->
+                  <div class="tg-act">
+                    <button
+                      v-if="canTarget(row)" class="btn btn-sm btn-primary"
+                      :disabled="updatingSku === row.sku" @click="applyTargetPrice(row)"
+                    >{{ updatingSku === row.sku ? '提交中' : '改价' }}</button>
+                  </div>
                 </div>
               </td>
             </tr>
@@ -651,7 +673,7 @@ onMounted(async () => {
 
 /* 表格 */
 .pm-table-wrap { position: relative; overflow-x: auto; background: var(--bg-card, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 8px; }
-.pm-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1280px; }
+.pm-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1600px; }
 .pm-table thead th {
   text-align: left; padding: 8px 10px;
   background: var(--bg, #f9fafb);
@@ -754,18 +776,21 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .cell-input:hover { border-color: var(--border, #d1d5db); background: var(--bg-card, #fff); }
 .cell-input:focus { outline: none; border-color: var(--tag-fg, #4338ca); background: var(--bg-card, #fff); }
 
-/* 目标定价 */
-/* 按成本利润率定价:率选项按钮组 + 建议价/改价 */
-.rate-opts { display: flex; gap: 4px; flex-wrap: wrap; }
+/* 按成本利润率定价:三子列(价格×目标率×改价按钮) */
+.target-grid { display: flex; align-items: center; gap: 14px; white-space: nowrap; }
+.tg-prices { display: flex; flex-direction: column; gap: 2px; }
+.tg-line { font-size: 12px; }
+.tg-label { display: inline-block; color: var(--text-secondary, #6b7280); margin-right: 6px; min-width: 5em; }
+.tg-rates { display: flex; flex-direction: column; gap: 3px; }
+.tg-act { display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .rate-opt {
-  padding: 2px 7px; font-size: 11px; line-height: 1.4; border: 1px solid var(--border, #d1d5db);
+  padding: 1px 10px; font-size: 11px; line-height: 1.5; border: 1px solid var(--border, #d1d5db);
   border-radius: 4px; background: var(--bg-card, #fff); color: var(--text-secondary, #6b7280); cursor: pointer;
 }
 .rate-opt:hover:not(:disabled) { border-color: #4338ca; color: #4338ca; }
 .rate-opt.active { background: #4338ca; border-color: #4338ca; color: #fff; font-weight: 600; }
 .rate-opt:disabled { opacity: .45; cursor: not-allowed; }
-.target-act { display: flex; align-items: center; margin-top: 4px; }
-.suggest { font-weight: 600; color: #4338ca; margin-right: 6px; }
+.suggest { font-weight: 600; color: #4338ca; }
 
 /* 利润列(当前/调整):三行紧凑 */
 .col-profit div { line-height: 1.5; }
