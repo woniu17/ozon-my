@@ -187,6 +187,11 @@ async function saveCell(row, field) {
   try {
     await setSkuCustoms(row.sku, body);
     show('已保存', 'success');
+    // 保存成功立即把新值写回本地行对象再清缓冲:
+    // 否则 refreshAll 期间 loading 触发的旧 rows 重渲染会把 editVal 缓冲重新初始化为旧值,
+    // 新 rows 到达后缓冲已存在,输入框和利润列就停留在旧值(需刷新页面才恢复)
+    if (field === 'purchase') row.custom_purchase_price = body.purchasePrice;
+    else row.custom_weight = body.weightG;
     delete editBuf[row.sku];
     await refreshAll();
   } catch (e) {
