@@ -156,6 +156,55 @@ export function buildTodaySummaryLines(bySeller, total) {
 }
 
 /**
+ * 构造"当日到达指定状态"各店铺汇总文本块(签收/待取件/备货通知尾部,2026-09-18)
+ * 参考当日销售汇总格式:按店铺 单量/销售金额 + 合计
+ * 数据源:ozon_push_events 当日 STATE_CHANGED 且 new_state 命中(DISTINCT 货件去重,
+ *        防同状态重复推送重复计数),金额取 ozon_postings.sale_amount_cny
+ * 注:货件后续离开该状态(如取件点→签收)不影响"当日到达过"口径
+ * @param {string[]} newStates 推送模型状态名(可多个,签收含 posting_delivered 同义)
+ * @param {string} label 汇总标签(签收/待取件/备货)
+ * @returns {string|null} 无命中返回 null
+ */
+function buildTodayStateSummaryLines(newStates, label) {
+  const { start, end } = getTodayUtcRange();
+  const likePh = newStates.map(() => 'raw_payload LIKE ?').join(' OR ');
+  const patterns = newStates.map((s) => `%"new_state":"${s}"%`);
+  const rows = getDb().prepare(`
+    SELECT p.seller_id, COUNT(*) AS n, COALESCE(SUM(p.sale_amount_cny), 0) AS amount
+    FROM ozon_postings p
+    WHERE p.posting_number IN (
+      SELECT DISTINCT e.posting_number FROM ozon_push_events e
+      WHERE e.message_type = 'TYPE_STATE_CHANGED'
+        AND e.received_at >= ? AND e.received_at < ?
+        AND e.posting_number IS NOT NULL
+        AND (${likePh})
+    )
+    GROUP BY p.seller_id
+    ORDER BY p.seller_id
+  `).all(start, end, ...patterns);
+  if (rows.length === 0) return null;
+  const stores = listStores();
+  const storeMap = new Map(stores.map((s) => [Number(s.company_id), s]));
+  const padOrder = (n) => String(n).padStart(2, ' ');
+  const padAmount = (cny) => {
+    const fixed = Number(cny).toFixed(2);
+    const [i, d] = fixed.split('.');
+    return `${i.padStart(4, ' ')}.${d}`;
+  };
+  const lines = [`—— 当日各店铺${label}汇总(Asia/Shanghai)——`];
+  let tn = 0;
+  let ta = 0;
+  for (const r of rows) {
+    const name = storeMap.get(Number(r.seller_id))?.name ?? String(r.seller_id);
+    lines.push(`• ${name}: ${padOrder(r.n)} 单 / 销售金额 ${padAmount(r.amount)} CNY`);
+    tn += r.n;
+    ta += Number(r.amount) || 0;
+  }
+  lines.push(`合计:${padOrder(tn)} 单 / 销售金额 ${padAmount(ta)} CNY`);
+  return lines.join('\n');
+}
+
+/**
  * 将 seller_id 反查为可读格式:昵称(ID),如 YQL01(3891653)
  * 未匹配时退化为纯 ID
  */
@@ -352,6 +401,14 @@ export async function notifyPostingEvent(messageType, payload) {
       const changedProducts = loadProductsFromDb(postingNumber);
       const changedLines = buildProductLines(changedProducts);
       if (changedLines) extra += `\n${changedLines}`;
+      // 当日状态汇总(签收/待取件/备货,参考新订单当日销售汇总格式)
+      if (ns === 'posting_received') {
+        summaryLines = buildTodayStateSummaryLines(['posting_received', 'posting_delivered'], '签收');
+      } else if (ns === 'posting_in_pickup_point') {
+        summaryLines = buildTodayStateSummaryLines(['posting_in_pickup_point'], '待取件');
+      } else if (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') {
+        summaryLines = buildTodayStateSummaryLines(['posting_awaiting_registration', 'awaiting_deliver'], '备货');
+      }
       break;
     }
     default:
