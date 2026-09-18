@@ -2665,6 +2665,9 @@ onUnmounted(() => {
                   <span class="mono qc-posting" title="质检单货件号">{{ pkg.postingNumber }}</span>
                 </template>
                 <span v-else class="mono">{{ pkg.postingNumber }}</span>
+                <!-- 拆单徽标:子件悬浮显示母件号;母件提示已拆出子件(2026-09-18) -->
+                <span v-if="pkg.parentId" class="pkg-split-badge pkg-split-child" :title="`拆单子件(母件 ${pkg.parentId})`">子件</span>
+                <span v-else-if="pkg.hasChildren" class="pkg-split-badge pkg-split-mother" title="拆单母件(已拆出子件货件)">母件</span>
                 <button class="copy-btn" title="复制货件号" @click.stop="copyText(pkg.postingNumber, '货件号')">
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 </button>
@@ -4115,6 +4118,26 @@ a.product-title:hover {
   font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+/* 拆单母件/子件徽标(2026-09-18):子件琥珀、母件靛蓝 */
+.pkg-split-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.pkg-split-child {
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  color: #92400e;
+}
+.pkg-split-mother {
+  background: #e0e7ff;
+  border: 1px solid #c7d2fe;
+  color: #3730a3;
 }
 /* 采购物流行:轨迹展开按钮 + 完整轨迹面板(最新在前,限高滚动) */
 .po-logistics-line {

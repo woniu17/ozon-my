@@ -289,8 +289,10 @@ function resolveItemId(orderId, sku, offerId) {
   return row ? Number(row.id) : undefined; // undefined = 找不到对应产品行
 }
 
-/** 关联行绝对重算:包裹聚合 + 产品行金额/数量(幂等的关键,不做增量拷贝) */
-function recomputeAggregates(packageId, itemIds) {
+/** 关联行绝对重算:包裹聚合 + 产品行金额/数量(幂等的关键,不做增量拷贝)
+ *  2026-09-18 导出供 order-daos 拆单采购迁移复用(本模块仅依赖 node:crypto + db,无循环引用)
+ */
+export function recomputeAggregates(packageId, itemIds) {
   const now = nowIso();
   const agg = db
     .prepare(

@@ -917,6 +917,8 @@ CREATE TABLE IF NOT EXISTS op_ozon_order (
 );
 CREATE INDEX IF NOT EXISTS idx_opoo_status ON op_ozon_order(status);
 CREATE INDEX IF NOT EXISTS idx_opoo_store_time ON op_ozon_order(store_id, in_process_at DESC);
+-- 拆单子件反查母件(拆单采购迁移 reconcile 的触发检查,2026-09-18)
+CREATE INDEX IF NOT EXISTS idx_opoo_parent ON op_ozon_order(store_id, parent_posting_number);
 
 -- Ozon 订单产品行
 CREATE TABLE IF NOT EXISTS op_ozon_order_item (

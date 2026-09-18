@@ -6,6 +6,7 @@
 //   - 提交采购信息 → 包裹直接流转 wait_ship(到货进度以 arrived_at 标记展示,不阻塞)
 import { randomUUID } from 'node:crypto';
 import { db } from '../../index.js';
+import { recomputeAggregates } from './purchase-sync-dao.js';
 
 // operate_status 前进序( cancelled 独立,任意状态可进 )
 const OPERATE_RANK = {
@@ -263,7 +264,217 @@ function syncPosting(storeId, p) {
     deliveringDate: p.delivering_date,
     shipmentDate: p.shipment_date,
   });
+  // 拆单对账:子件到达 / 母件被触碰且有子件 → 自动迁移采购关联(幂等,失败不影响同步)
+  reconcileSplitForPosting(storeId, String(p.posting_number || ''));
   return { orderId, packageId };
+}
+
+// ── 拆单采购关联迁移(2026-09-18)─────────────────────────────
+// 设计文档: docs/拆单采购迁移-概要设计.md
+// Ozon 拆单:母件 item 数量减少(如 2→1),同时新增子件货件(parent_posting_number 指向母件)。
+// 已关联的采购全部留在母件 → 母件多采、子件缺采、采购状态与利润失真。
+// 迁移规则(对每个子件 × 共同 SKU):
+//   movable(母件富余)= 母件该 SKU 关联数量 − item.quantity
+//   deficit(子件缺口)= 子件 item.quantity − 子件该 SKU 已关联数量
+//   k = min(movable, deficit),按 FIFO(link.id 升序)从母件关联行逐行拆:
+//   - 金额按数量比例分摊到分、余数归母件,总数量/总金额守恒
+//   - 子件建行级关联(同采购单+item 已有则累加)
+// 安全边界:单一 SKU 包裹的包裹级关联触碰时顺带升级为行级(修正 item 已采不计数);
+//   多 SKU + 包裹级关联无法判定归属 SKU / 母件搁置 → 不自动,子件 note 提示转人工;
+//   子件已采足 deficit=0 自然跳过;幂等可重入(movable/deficit 收敛为 0)。
+
+function insertSplitAudit(action, storeId, target, detail) {
+  db.prepare(
+    `INSERT INTO audit_logs (action, target, store_id, operator, detail, ip) VALUES (?, ?, ?, 'system', ?, NULL)`
+  ).run(action, target, storeId, JSON.stringify(detail));
+}
+
+/** 对单个货件执行拆单对账(同步落库后调用,幂等):
+ *  触发 A:该货件是子件(有 parent) → 对账其母件
+ *  触发 B:该货件是母件(有子件指向它) → 对账自身
+ *  两条件可同时成立(子件再拆孙件时逐级向上收敛),时序颠倒由双触发互补
+ */
+function reconcileSplitForPosting(storeId, postingNumber) {
+  try {
+    const o = db.prepare(
+      `SELECT id, posting_number, parent_posting_number FROM op_ozon_order WHERE store_id = ? AND posting_number = ?`
+    ).get(storeId, postingNumber);
+    if (!o) return;
+    if (o.parent_posting_number && o.parent_posting_number !== o.posting_number) {
+      const parent = db.prepare(
+        `SELECT id, posting_number FROM op_ozon_order WHERE store_id = ? AND posting_number = ?`
+      ).get(storeId, o.parent_posting_number);
+      if (parent) reconcileMother(storeId, parent);
+    }
+    const hasChild = db.prepare(
+      `SELECT 1 AS x FROM op_ozon_order WHERE store_id = ? AND parent_posting_number = ? LIMIT 1`
+    ).get(storeId, o.posting_number);
+    if (hasChild) reconcileMother(storeId, o);
+  } catch (e) {
+    // 迁移失败不阻断同步主流程(下一轮同步幂等重试)
+    console.error('[reconcile-split] 拆单采购迁移失败:', postingNumber, e?.message || e);
+  }
+}
+
+/** 以母件为单位执行迁移(核心算法,内部事务,幂等) */
+function reconcileMother(storeId, mother) {
+  const pkg = db.prepare(`SELECT id, is_ignored FROM op_package WHERE ozon_order_id = ?`).get(mother.id);
+  if (!pkg || pkg.is_ignored) return { migrated: 0, upgraded: 0 };
+  const children = db.prepare(
+    `SELECT id, posting_number FROM op_ozon_order WHERE store_id = ? AND parent_posting_number = ?`
+  ).all(storeId, mother.posting_number);
+  if (!children.length) return { migrated: 0, upgraded: 0 };
+
+  return runInTx(() => {
+    const items = db.prepare(
+      `SELECT id, sku, offer_id, quantity FROM op_ozon_order_item WHERE ozon_order_id = ?`
+    ).all(mother.id);
+    const links = db.prepare(
+      `SELECT * FROM op_purchase_link WHERE package_id = ? ORDER BY id`
+    ).all(pkg.id);
+    const audit = { mother: mother.posting_number, upgraded: [], moves: [], manualNotes: [] };
+
+    // ── 包裹级关联处理(设计 §4.5)──
+    // 单一 SKU 包裹 → 顺带升级为行级;多 SKU + 包裹级 → 整体跳过转人工
+    const packageLevel = links.filter((l) => l.ozon_order_item_id == null);
+    let needManual = false;
+    if (packageLevel.length) {
+      if (items.length === 1) {
+        const itemId = items[0].id;
+        for (const pl of packageLevel) {
+          // 同采购单已有行级关联 → 合并累加后删包裹级行(避免表达式唯一索引冲突)
+          const rowLevel = db.prepare(
+            `SELECT id FROM op_purchase_link WHERE purchase_order_id = ? AND package_id = ? AND ozon_order_item_id = ?`
+          ).get(pl.purchase_order_id, pkg.id, itemId);
+          if (rowLevel) {
+            db.prepare(
+              `UPDATE op_purchase_link SET allocated_amount = allocated_amount + ?, quantity = quantity + ? WHERE id = ?`
+            ).run(pl.allocated_amount, pl.quantity, rowLevel.id);
+            db.prepare(`DELETE FROM op_purchase_link WHERE id = ?`).run(pl.id);
+          } else {
+            db.prepare(`UPDATE op_purchase_link SET ozon_order_item_id = ? WHERE id = ?`).run(itemId, pl.id);
+          }
+          audit.upgraded.push({ purchaseOrderId: pl.purchase_order_id, quantity: pl.quantity, amount: pl.allocated_amount });
+        }
+      } else {
+        needManual = true;
+      }
+    }
+
+    if (needManual) {
+      for (const c of children) {
+        db.prepare(
+          `UPDATE op_package SET note = CASE WHEN note IS NULL OR note = '' THEN ? ELSE note || char(10) || ? END, gmt_modified = ?
+           WHERE ozon_order_id = ?`
+        ).run('拆单采购需人工迁移', '拆单采购需人工迁移', nowIso(), c.id);
+        audit.manualNotes.push(c.posting_number);
+      }
+      insertSplitAudit('order.splitPurchaseManual', storeId, mother.posting_number, audit);
+      return { migrated: 0, upgraded: 0, manual: true };
+    }
+
+    // ── 数量迁移(设计 §4.1-4.4)──
+    // 母件关联行按 item 分组(升级后重读;内存中随拆行同步扣减,多子件迭代时 movable 收敛)
+    const freshLinks = db.prepare(`SELECT * FROM op_purchase_link WHERE package_id = ? ORDER BY id`).all(pkg.id);
+    const linksByItem = new Map();
+    for (const l of freshLinks) {
+      if (l.ozon_order_item_id == null) continue;
+      if (!linksByItem.has(l.ozon_order_item_id)) linksByItem.set(l.ozon_order_item_id, []);
+      linksByItem.get(l.ozon_order_item_id).push(l);
+    }
+    const motherItemByKey = new Map(items.map((it) => [`${it.sku}\u0000${it.offer_id}`, it]));
+    let touched = false;
+
+    for (const child of children) {
+      const childPkg = db.prepare(`SELECT id, is_ignored FROM op_package WHERE ozon_order_id = ?`).get(child.id);
+      if (!childPkg || childPkg.is_ignored) continue;
+      const childItems = db.prepare(
+        `SELECT id, sku, offer_id, quantity FROM op_ozon_order_item WHERE ozon_order_id = ?`
+      ).all(child.id);
+      // 子件多 SKU + 包裹级关联:缺口无法定位 SKU,跳过该子件转人工
+      const childHasPackageLevel = db.prepare(
+        `SELECT 1 AS x FROM op_purchase_link WHERE package_id = ? AND ozon_order_item_id IS NULL LIMIT 1`
+      ).get(childPkg.id);
+      if (childHasPackageLevel && childItems.length > 1) {
+        db.prepare(
+          `UPDATE op_package SET note = CASE WHEN note IS NULL OR note = '' THEN ? ELSE note || char(10) || ? END, gmt_modified = ?
+           WHERE id = ?`
+        ).run('拆单采购需人工迁移', '拆单采购需人工迁移', nowIso(), childPkg.id);
+        audit.manualNotes.push(child.posting_number);
+        continue;
+      }
+
+      for (const cit of childItems) {
+        const mItem = motherItemByKey.get(`${cit.sku}\u0000${cit.offer_id}`);
+        if (!mItem) continue;
+        const mLinks = linksByItem.get(mItem.id) || [];
+        const movable = mLinks.reduce((s, l) => s + l.quantity, 0) - mItem.quantity;
+        if (movable <= 0) continue;
+        // 子件已关联数量:单一 SKU 子件含包裹级(全部关联);多 SKU 子件仅行级
+        const cLinkedRow = db.prepare(
+          `SELECT COALESCE(SUM(quantity), 0) AS q FROM op_purchase_link
+           WHERE package_id = ? AND (ozon_order_item_id = ? OR (ozon_order_item_id IS NULL AND ? = 1))`
+        ).get(childPkg.id, cit.id, childItems.length === 1 ? 1 : 0);
+        const deficit = cit.quantity - cLinkedRow.q;
+        const k = Math.min(movable, deficit);
+        if (k <= 0) continue;
+
+        // FIFO 从母件关联行逐行拆
+        let remain = k;
+        for (const ml of mLinks) {
+          if (remain <= 0 || ml.quantity <= 0) break;
+          const take = Math.min(remain, ml.quantity);
+          const amount =
+            take === ml.quantity
+              ? ml.allocated_amount
+              : Math.round((ml.allocated_amount * take * 100) / ml.quantity) / 100;
+          // 子件建行级关联(同采购单+item 已有 → 累加)
+          const existing = db.prepare(
+            `SELECT id FROM op_purchase_link WHERE purchase_order_id = ? AND package_id = ? AND ozon_order_item_id = ?`
+          ).get(ml.purchase_order_id, childPkg.id, cit.id);
+          if (existing) {
+            db.prepare(
+              `UPDATE op_purchase_link SET allocated_amount = allocated_amount + ?, quantity = quantity + ? WHERE id = ?`
+            ).run(amount, take, existing.id);
+          } else {
+            db.prepare(
+              `INSERT INTO op_purchase_link (purchase_order_id, package_id, ozon_order_item_id, allocated_amount, quantity, alloc_mode, gmt_create)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`
+            ).run(ml.purchase_order_id, childPkg.id, cit.id, amount, take, ml.alloc_mode || 'manual', nowIso());
+          }
+          // 母件行扣减(整行取尽则删)
+          if (take === ml.quantity) {
+            db.prepare(`DELETE FROM op_purchase_link WHERE id = ?`).run(ml.id);
+          } else {
+            db.prepare(
+              `UPDATE op_purchase_link SET quantity = quantity - ?, allocated_amount = allocated_amount - ? WHERE id = ?`
+            ).run(take, amount, ml.id);
+          }
+          ml.quantity -= take;
+          ml.allocated_amount = Math.round((ml.allocated_amount - amount) * 100) / 100;
+          remain -= take;
+          audit.moves.push({
+            child: child.posting_number, sku: cit.sku,
+            purchaseOrderId: ml.purchase_order_id, quantity: take, amount,
+          });
+          touched = true;
+        }
+      }
+    }
+
+    // ── 聚合重算 + 留痕(母件 + 全部子件;升级/迁移均影响 item 已采)──
+    if (audit.upgraded.length || touched || audit.manualNotes.length) {
+      recomputeAggregates(pkg.id, items.map((i) => i.id));
+      for (const c of children) {
+        const cp = db.prepare(`SELECT id FROM op_package WHERE ozon_order_id = ?`).get(c.id);
+        if (!cp) continue;
+        const cItems = db.prepare(`SELECT id FROM op_ozon_order_item WHERE ozon_order_id = ?`).all(c.id);
+        recomputeAggregates(cp.id, cItems.map((i) => i.id));
+      }
+      insertSplitAudit('order.splitPurchaseMigrate', storeId, mother.posting_number, audit);
+    }
+    return { migrated: audit.moves.length, upgraded: audit.upgraded.length, manual: audit.manualNotes.length > 0 };
+  });
 }
 
 /** 更新同步游标 */
@@ -615,7 +826,8 @@ function listPackages(filters = {}) {
       `SELECT p.*, o.posting_number, o.order_number, o.order_id AS ozon_api_order_id, o.parent_posting_number,
               o.status AS ozon_status, o.substatus, o.in_process_at, o.shipment_date, o.delivering_date,
               o.order_amount, o.buyer_name, o.buyer_city, o.delivery_method_name, o.warehouse_name, o.store_id,
-              o.cancellation_json
+              o.cancellation_json,
+              EXISTS(SELECT 1 FROM op_ozon_order c WHERE c.store_id = o.store_id AND c.parent_posting_number = o.posting_number) AS has_children
        FROM op_package p
        JOIN op_ozon_order o ON o.id = p.ozon_order_id
        ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -721,6 +933,7 @@ function rowToPackage(r) {
     postingNumber: r.posting_number,
     orderNumber: r.order_number,
     parentId: r.parent_posting_number,
+    hasChildren: !!r.has_children, // 拆单母件(有子件指向它);与 parentId 组合展示「母件/子件」徽标
     // ★ 本地订单 id(p.ozon_order_id 外键,产品行查询键;注意不是 o.order_id 的 Ozon API 数字 id)
     ozonOrderId: r.ozon_order_id,
     ozonApiOrderId: r.ozon_api_order_id,
@@ -1895,6 +2108,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
 
 export const orderPackageDao = {
   syncPosting,
+  reconcileSplitForPosting,
   applyOzonStatus,
   updateSyncCursor,
   getSyncCursors,
