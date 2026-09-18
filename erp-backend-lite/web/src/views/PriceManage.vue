@@ -36,8 +36,15 @@ const SORTS = [
 ];
 
 // ── 状态 ────────────────────────────────────────────────
+// 筛选/排序/店铺选择持久化(localStorage,记住上一次选择)
+const VIEW_STATE_KEY = 'pm_view_state';
+function loadViewState() {
+  try { return JSON.parse(localStorage.getItem(VIEW_STATE_KEY)) || {}; } catch { return {}; }
+}
+const savedView = loadViewState();
+
 const stores = ref([]);            // [{storeId, count, lastSyncedAt}]
-const activeStoreId = ref('');     // '' = 全部店铺
+const activeStoreId = ref(savedView.activeStoreId || '');     // '' = 全部店铺
 const summary = ref(null);
 const rows = ref([]);
 const loading = ref(false);
@@ -45,9 +52,21 @@ const syncing = ref(false);
 const pager = ref({ current: 1, total: 0, pageSize: 20 });
 const filters = ref({
   keyword: '', purchaseSet: '', weightSet: '', profitRateMin: '', profitRateMax: '',
+  ...(savedView.filters || {}),
 });
-const sortKey = ref('profitRateCost');
-const sortDir = ref('asc');        // 默认升序:最亏的排最前
+const sortKey = ref(SORTS.some((s) => s.key === savedView.sortKey) ? savedView.sortKey : 'profitRateCost');
+const sortDir = ref(savedView.sortDir === 'desc' ? 'desc' : 'asc'); // 默认升序:最亏的排最前
+
+function persistViewState() {
+  try {
+    localStorage.setItem(VIEW_STATE_KEY, JSON.stringify({
+      activeStoreId: activeStoreId.value,
+      filters: filters.value,
+      sortKey: sortKey.value,
+      sortDir: sortDir.value,
+    }));
+  } catch { /* 隐私模式等场景忽略 */ }
+}
 const expanded = ref(new Set());   // 展开的 sku
 const ordersMap = ref({});         // sku → 历史订单列表
 const ordersLoading = ref({});
@@ -64,6 +83,10 @@ async function loadStores(keepActive = false) {
       (s) => byId.get(s.id) || { storeId: s.id, count: 0, lastSyncedAt: null }
     );
     if (!keepActive) activeStoreId.value = '';
+    // 记住的店铺已不存在(被删除)时回退全部
+    else if (activeStoreId.value && !stores.value.some((s) => s.storeId === activeStoreId.value)) {
+      activeStoreId.value = '';
+    }
   } catch (e) {
     show(e.message || '店铺分布加载失败', 'error');
   }
@@ -255,16 +278,19 @@ async function applyTargetPrice(row) {
   }
 }
 
-// ── 筛选/排序/分页 ──
+// ── 筛选/排序/分页(变更即持久化) ──
 function onFilterChange() {
   pager.value.current = 1;
+  persistViewState();
   loadList();
 }
 function toggleSortDir() {
   sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc';
+  persistViewState();
   loadList();
 }
 function onSortChange() {
+  persistViewState();
   loadList();
 }
 function onPageChange(p) {
@@ -275,6 +301,7 @@ function switchStore(storeId) {
   activeStoreId.value = storeId;
   pager.value.current = 1;
   expanded.value = new Set();
+  persistViewState();
   loadList();
 }
 
@@ -290,8 +317,27 @@ const OPERATE_TEXT = {
   wait_receiver_confirm: '已发货', cancelled: '已取消',
 };
 
+/** 复制文本到剪贴板(降级兼容 http 环境,与订单处理页同款) */
+async function copyText(val, label) {
+  const s = String(val || '').trim();
+  if (!s) return;
+  try {
+    await navigator.clipboard.writeText(s);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+  show(`${label}已复制:${s}`, 'success');
+}
+
 onMounted(async () => {
-  await loadStores();
+  await loadStores(true); // keepActive:恢复记住的店铺选择
   await refreshAll();
 });
 </script>
@@ -371,14 +417,28 @@ onMounted(async () => {
               </td>
               <td class="col-product">
                 <div class="prod">
-                  <img v-if="row.image" :src="row.image" class="prod-img" loading="lazy" referrerpolicy="no-referrer" />
-                  <div v-else class="prod-img prod-img-empty">无图</div>
+                  <div v-if="row.image" class="img-hover-wrap">
+                    <div class="product-img-box">
+                      <img :src="row.image" class="product-img" loading="lazy" referrerpolicy="no-referrer" alt="" />
+                    </div>
+                    <img class="img-preview" :src="row.image" loading="lazy" referrerpolicy="no-referrer" alt="" />
+                  </div>
+                  <div v-else class="product-img-box prod-img-empty">无图</div>
                   <div class="prod-info">
                     <div class="prod-name" :title="row.name || ''">{{ row.name || '(未同步名称)' }}</div>
                     <div class="prod-sku">
-                      SKU {{ row.sku }}
+                      SKU：{{ row.sku }}
+                      <button class="copy-btn" title="复制SKU" @click.stop="copyText(row.sku, 'SKU')">
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                      </button>
                       <span v-if="row.price_index_color === 'RED'" class="tag tag-warn" title="Ozon 价格指数偏红:价格高于市场">市场红</span>
                       <span v-if="row.sales_percent_fbs != null" class="tag" :title="`v5 实际 FBS 佣金率 ${row.sales_percent_fbs}%`">佣金{{ row.sales_percent_fbs }}%</span>
+                    </div>
+                    <div v-if="row.offer_id" class="prod-sku">
+                      Offer ID：{{ row.offer_id }}
+                      <button class="copy-btn" title="复制Offer ID" @click.stop="copyText(row.offer_id, 'Offer ID')">
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -586,7 +646,7 @@ onMounted(async () => {
 
 .col-expand { width: 28px; cursor: pointer; text-align: center; color: var(--text-secondary, #9ca3af); }
 .col-num { text-align: right; white-space: nowrap; }
-.col-product { min-width: 300px; }
+.col-product { min-width: 360px; }
 .col-target { min-width: 230px; white-space: nowrap; }
 
 .pos { color: #047857; }
@@ -601,12 +661,60 @@ onMounted(async () => {
 .tag-warn { background: #fef3c7; color: #b45309; }
 
 /* 商品列 */
-.prod { display: flex; gap: 8px; align-items: center; }
-.prod-img { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border, #e5e7eb); flex-shrink: 0; }
+.prod { display: flex; gap: 8px; align-items: flex-start; }
+/* 商品图(与订单处理页同款:120×120 缩略图 + hover 右侧 280 大图预览) */
+.img-hover-wrap { position: relative; flex-shrink: 0; }
+.product-img-box {
+  flex: 0 0 120px;
+  width: 120px;
+  height: 120px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f9fafb;
+}
+.product-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.img-preview {
+  display: none;
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 280px;
+  height: 280px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  z-index: 30;
+  pointer-events: none;
+}
+.img-hover-wrap:hover .img-preview { display: block; }
 .prod-img-empty {
   display: flex; align-items: center; justify-content: center;
   font-size: 11px; color: var(--text-secondary, #9ca3af); background: var(--bg, #f3f4f6);
 }
+/* 复制小图标(与订单处理页同款) */
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  vertical-align: middle;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+.copy-btn:hover { color: #3b82f6; background: #eff6ff; }
 .prod-info { min-width: 0; }
 .prod-name {
   font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;

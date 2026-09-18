@@ -109,14 +109,17 @@ router.post('/admin/api/price-manage/prices/sync', async (req, res, next) => {
       });
     }
     const count = priceDao.upsertPriceCacheRows(rows);
+    // 同步后回填:有订单的商品用"最新一个有采购的订单"填默认采购价/称重重量(只填未维护的)
+    const backfill = priceDao.backfillCustomsFromOrders();
     const durationMs = Date.now() - started;
-    logger.info({ storeId, localTotal: local.length, fetched: v5Items.length, mapped: rows.length, failedBatches, durationMs }, '[price-sync] 同步完成');
+    logger.info({ storeId, localTotal: local.length, fetched: v5Items.length, mapped: rows.length, failedBatches, backfill, durationMs }, '[price-sync] 同步完成');
     res.json(ok({
       storeId, count,
       localTotal: local.length,
       fetched: v5Items.length,
       unmapped: local.length - rows.length,
       failedBatches,
+      backfill,
       durationMs,
     }));
   } catch (e) {

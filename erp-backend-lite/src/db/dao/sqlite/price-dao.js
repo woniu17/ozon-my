@@ -229,6 +229,65 @@ export function setSkuCustoms(sku, { purchasePrice, weightG } = {}) {
   return { updated: r.changes };
 }
 
+// ── 订单回填(采购价/重量默认值) ─────────────────────────
+// 用"最新一个有采购的订单"回填未维护的 custom_purchase_price / custom_weight_g(只填 NULL,不覆盖已维护值)
+//   采购价 = 该订单单件参考采购(行分摊采购额/行数量 → 包裹采购总额/包裹总数量,与 skuOrderList 同口径)
+//   重量   = 该订单包裹称重(op_package.weight,兜底 miaoshou_package.weighing_weight)÷ 包裹总数量,
+//            仅当订单为单一 SKU(多 SKU 包裹的重量无法按件归属,跳过)
+// 触发:每次价格同步后执行(幂等,已维护的商品不受影响)
+export function backfillCustomsFromOrders() {
+  const rows = db
+    .prepare(
+      `WITH tq AS (
+         SELECT ozon_order_id, SUM(quantity) AS total_qty, COUNT(DISTINCT sku) AS sku_kinds
+         FROM op_ozon_order_item GROUP BY ozon_order_id
+       ),
+       cand AS (
+         SELECT oi.sku AS sku,
+                ROUND(CASE WHEN oi.purchase_amount > 0 AND oi.quantity > 0
+                           THEN oi.purchase_amount / oi.quantity
+                           WHEN p.total_purchase_amount > 0 AND tq.total_qty > 0
+                           THEN p.total_purchase_amount / tq.total_qty END, 2) AS unit_purchase,
+                CASE WHEN tq.sku_kinds = 1 AND tq.total_qty > 0
+                          AND COALESCE(p.weight, mp.weighing_weight) > 0
+                     THEN ROUND(COALESCE(p.weight, mp.weighing_weight) / tq.total_qty, 2) END AS unit_weight,
+                ROW_NUMBER() OVER (PARTITION BY oi.sku ORDER BY o.in_process_at DESC, o.id DESC, oi.id DESC) AS rn
+         FROM op_ozon_order_item oi
+         JOIN op_ozon_order o ON o.id = oi.ozon_order_id
+         JOIN op_package p ON p.ozon_order_id = o.id
+         LEFT JOIN miaoshou_package mp ON mp.posting_number = p.logistics_no
+         JOIN tq ON tq.ozon_order_id = o.id
+         WHERE p.operate_status != 'cancelled'
+           AND (oi.purchase_amount > 0 OR p.total_purchase_amount > 0)
+       )
+       SELECT sku, unit_purchase, unit_weight FROM cand
+       WHERE rn = 1 AND (unit_purchase IS NOT NULL OR unit_weight IS NOT NULL)`
+    )
+    .all();
+  let purchase = 0;
+  let weight = 0;
+  const now = nowIso();
+  const upP = db.prepare(
+    `UPDATE product_data_cache SET custom_purchase_price = ?, custom_purchase_price_at = ?
+     WHERE sku = ? AND custom_purchase_price IS NULL`
+  );
+  const upW = db.prepare(
+    `UPDATE product_data_cache SET custom_weight_g = ? WHERE sku = ? AND custom_weight_g IS NULL`
+  );
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      if (r.unit_purchase != null) purchase += upP.run(r.unit_purchase, now, String(r.sku)).changes;
+      if (r.unit_weight != null && r.unit_weight > 0) weight += upW.run(r.unit_weight, String(r.sku)).changes;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+    throw e;
+  }
+  return { skus: rows.length, purchase, weight };
+}
+
 // ── SKU 历史订单(展开行) ──
 
 export function skuOrderList(sku, limit = 20) {
