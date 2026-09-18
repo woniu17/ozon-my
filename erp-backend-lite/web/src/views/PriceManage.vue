@@ -624,7 +624,7 @@ onMounted(async () => {
 <style scoped>
 .pm-page {
   padding: 16px;
-  max-width: 1560px;
+  /* 与订单处理页同款:去掉 1560px 上限,宽屏下表格(≥1900px)全列同屏展示,不横向滚动 */
   margin: 0 auto;
   color: var(--text-primary, #374151);
 }
