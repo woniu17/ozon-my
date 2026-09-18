@@ -21,12 +21,13 @@ const confirmStore = useConfirmStore();
 const COMMISSION_RATE = 0.16;
 const DELIVERY_BASE_CNY = 3.37;
 const DELIVERY_PER_G_CNY = 0.0281;
-const TARGET_RATES = [10, 20, 30, 40, 50]; // 目标成本利润率选项(%)
+const TARGET_RATES = [20, 30, 40, 50, 60]; // 按成本利润率定价选项(%)
+const DEFAULT_TARGET_RATE = 20;             // 默认选中 20%
 
 const SORTS = [
   { key: 'profitRateCost', label: '成本利润率' },
   { key: 'profitRateSale', label: '销售利润率' },
-  { key: 'profit', label: '预估利润' },
+  { key: 'profit', label: '当前利润' },
   { key: 'price', label: '售价' },
   { key: 'sales90', label: '90天销量' },
   { key: 'purchase', label: '采购价' },
@@ -69,8 +70,10 @@ function persistViewState() {
 const expanded = ref(new Set());   // 展开的 sku
 const ordersMap = ref({});         // sku → 历史订单列表
 const ordersLoading = ref({});
-const rateChoice = ref({});        // sku → 目标利润率(10~50)
+const rateChoice = ref({});        // sku → 目标成本利润率(20~60,未选默认20)
 const updatingSku = ref('');
+const storeNameMap = ref({});                                     // 店铺 id → 名称
+const storeName = (storeId) => storeNameMap.value[storeId] || storeId || '—';
 
 // ── 加载 ────────────────────────────────────────────────
 // 店铺 tab = 配置店铺(常驻,首次同步前也能选店触发同步) + 缓存统计(count/最近同步)
@@ -80,6 +83,10 @@ async function loadStores(keepActive = false) {
     const byId = new Map((cacheStores || []).map((s) => [s.storeId, s]));
     stores.value = (cfgStores || []).map(
       (s) => byId.get(s.id) || { storeId: s.id, count: 0, lastSyncedAt: null }
+    );
+    // 店铺 id → 名称映射(如 YQL01),用于 tabs 与商品行展示
+    storeNameMap.value = Object.fromEntries(
+      (cfgStores || []).map((s) => [s.id, s.name || s.id])
     );
     if (!keepActive) activeStoreId.value = '';
     // 记住的店铺已不存在(被删除)时回退全部
@@ -224,10 +231,14 @@ async function adoptOrderPrice(row, o) {
   }
 }
 
-// ── 目标定价 ──
+// ── 按成本利润率定价 ──
+// 当前行选中的目标率(未选时默认 20%)
+function selRate(row) {
+  return rateChoice.value[row.sku] || DEFAULT_TARGET_RATE;
+}
+
 function suggestedPrice(row) {
-  const rate = rateChoice.value[row.sku];
-  if (!rate) return null;
+  const rate = selRate(row);
   const purchase = Number(row.custom_purchase_price);
   const w = Number(row.weight_g);
   if (!(purchase > 0) || !(w > 0)) return null;
@@ -235,14 +246,25 @@ function suggestedPrice(row) {
   return Math.round(((purchase * (1 + rate / 100) + delivery) / (1 - COMMISSION_RATE)) * 100) / 100;
 }
 
+// 调整利润:按选中目标率定价后的利润/销售利润率(成本利润率恒等于目标率)
+// 数学关系:建议价 = (采购×(1+r)+配送)/(1-佣金率) → 利润 = 采购×r
+function adjustedProfit(row) {
+  const price = suggestedPrice(row);
+  if (price == null) return null;
+  const rate = selRate(row) / 100;
+  const purchase = Number(row.custom_purchase_price);
+  const profit = purchase * rate;
+  return { profit, saleRate: profit / price, costRate: rate, price };
+}
+
 function canTarget(row) {
   return Number(row.custom_purchase_price) > 0 && Number(row.weight_g) > 0;
 }
 
 async function applyTargetPrice(row) {
-  const rate = rateChoice.value[row.sku];
+  const rate = selRate(row);
   const newPrice = suggestedPrice(row);
-  if (!rate || newPrice == null) return;
+  if (newPrice == null) return;
   const old = row.price;
   const delta = old != null ? Math.round(((newPrice - old) / old) * 1000) / 10 : null;
   if (!(await confirmStore.ask({
@@ -340,8 +362,9 @@ onMounted(async () => {
         <button
           v-for="s in stores" :key="s.storeId"
           class="store-tab" :class="{ active: activeStoreId === s.storeId }"
+          :title="s.storeId"
           @click="switchStore(s.storeId)"
-        >{{ s.storeId }} ({{ s.count }})</button>
+        >{{ storeName(s.storeId) }} ({{ s.count }})</button>
       </div>
       <button class="btn btn-primary" :disabled="syncing" @click="syncNow">
         {{ syncing ? '同步中…' : '同步 Ozon 价格' }}
@@ -390,11 +413,10 @@ onMounted(async () => {
             <th class="col-num">90天销量</th>
             <th class="col-num">采购价(本系统)</th>
             <th class="col-num">重量(g)</th>
-            <th class="col-num">配送费</th>
-            <th class="col-num">预估利润</th>
-            <th class="col-num">销售利润率</th>
-            <th class="col-num">成本利润率</th>
-            <th class="col-target">目标定价</th>
+            <th class="col-num">国际物流费</th>
+            <th class="col-num">当前利润</th>
+            <th class="col-num">调整利润</th>
+            <th class="col-target">按成本利润率定价</th>
           </tr>
         </thead>
         <tbody>
@@ -415,6 +437,7 @@ onMounted(async () => {
                   <div class="prod-info">
                     <a v-if="row.name" :href="pdpUrl(row)" target="_blank" rel="noopener" class="prod-name" :title="row.name">{{ row.name }}</a>
                     <div v-else class="prod-name">(未同步名称)</div>
+                    <div class="prod-sku">{{ storeName(row.store_id) }}</div>
                     <div class="prod-sku">
                       SKU：{{ row.sku }}
                       <button class="copy-btn" title="复制SKU" @click.stop="copyText(row.sku, 'SKU')">
@@ -449,30 +472,42 @@ onMounted(async () => {
                   :placeholder="row.weight_g != null ? String(row.weight_g) + '(oz)' : '—'" />
               </td>
               <td class="col-num">{{ row.weight_g != null ? fmtMoney(3.37 + 0.0281 * row.weight_g) : '—' }}</td>
-              <td class="col-num" :class="rateClass(row.profit_cny)">{{ fmtMoney(row.profit_cny) }}<span v-if="row.profit_cny != null" class="sub">估</span></td>
-              <td class="col-num" :class="rateClass(row.profit_rate_sale)">{{ fmtRate(row.profit_rate_sale) }}</td>
-              <td class="col-num" :class="rateClass(row.profit_rate_cost)">{{ fmtRate(row.profit_rate_cost) }}</td>
+              <!-- 当前利润:利润/销售利润率/成本利润率 三行合一 -->
+              <td class="col-num col-profit">
+                <div :class="rateClass(row.profit_cny)">{{ fmtMoney(row.profit_cny) }}<span v-if="row.profit_cny != null" class="sub">估</span></div>
+                <div class="sub" :class="rateClass(row.profit_rate_sale)">销售 {{ fmtRate(row.profit_rate_sale) }}</div>
+                <div class="sub" :class="rateClass(row.profit_rate_cost)">成本 {{ fmtRate(row.profit_rate_cost) }}</div>
+              </td>
+              <!-- 调整利润:按选中目标率定价后的利润(选中目标率即时刷新) -->
+              <td class="col-num col-profit" :title="canTarget(row) ? `按 ${selRate(row)}% 成本利润率定价后的利润` : '需先维护采购价与重量'">
+                <template v-if="adjustedProfit(row) != null">
+                  <div :class="rateClass(adjustedProfit(row).profit)">{{ fmtMoney(adjustedProfit(row).profit) }}</div>
+                  <div class="sub" :class="rateClass(adjustedProfit(row).saleRate)">销售 {{ fmtRate(adjustedProfit(row).saleRate) }}</div>
+                  <div class="sub" :class="rateClass(adjustedProfit(row).costRate)">成本 {{ fmtRate(adjustedProfit(row).costRate) }}</div>
+                </template>
+                <span v-else class="sub">—</span>
+              </td>
               <td class="col-target">
-                <select
-                  class="input input-target" :value="rateChoice[row.sku] || ''"
-                  :disabled="!canTarget(row)"
-                  :title="canTarget(row) ? '' : '需先维护采购价与重量'"
-                  @change="rateChoice[row.sku] = Number($event.target.value) || ''"
-                >
-                  <option value="">目标率…</option>
-                  <option v-for="r in TARGET_RATES" :key="r" :value="r">{{ r }}%</option>
-                </select>
-                <template v-if="suggestedPrice(row) != null">
-                  <span class="suggest">¥{{ suggestedPrice(row) }}</span>
+                <div class="rate-opts">
+                  <button
+                    v-for="r in TARGET_RATES" :key="r" type="button" class="rate-opt"
+                    :class="{ active: selRate(row) === r }"
+                    :disabled="!canTarget(row)"
+                    :title="canTarget(row) ? `按 ${r}% 成本利润率定价` : '需先维护采购价与重量'"
+                    @click="rateChoice[row.sku] = r"
+                  >{{ r }}%</button>
+                </div>
+                <div v-if="canTarget(row)" class="target-act">
+                  <span class="suggest" :title="`按 ${selRate(row)}% 成本利润率的建议售价`">¥{{ suggestedPrice(row) }}</span>
                   <button class="btn btn-sm btn-primary" :disabled="updatingSku === row.sku" @click="applyTargetPrice(row)">
                     {{ updatingSku === row.sku ? '提交中' : '改价' }}
                   </button>
-                </template>
+                </div>
               </td>
             </tr>
             <!-- 展开行:历史订单 -->
             <tr v-if="expanded.has(row.sku)" class="row-orders">
-              <td :colspan="11">
+              <td :colspan="10">
                 <div v-if="ordersLoading[row.sku]" class="orders-loading">加载历史订单…</div>
                 <template v-else-if="(ordersMap[row.sku] || []).length">
                   <div class="orders-title">历史订单(最新 {{ ordersMap[row.sku].length }} 条)</div>
@@ -509,7 +544,7 @@ onMounted(async () => {
             </tr>
           </template>
           <tr v-if="!loading && rows.length === 0">
-            <td :colspan="12" class="empty-tip">
+            <td :colspan="10" class="empty-tip">
               暂无数据{{ stores.length === 0 ? ',请先点击右上角「同步 Ozon 价格」' : '' }}
             </td>
           </tr>
@@ -707,7 +742,8 @@ onMounted(async () => {
 /* 名称为链接时 */
 a.prod-name { text-decoration: none; display: block; }
 a.prod-name:hover { color: #4338ca; text-decoration: underline; }
-.prod-sku { font-size: 11px; color: var(--text-secondary, #9ca3af); margin-top: 2px; }
+/* 店铺名/SKU/OfferID:黑色字体(与名称区分层级) */
+.prod-sku { font-size: 11px; color: var(--text-primary, #111827); margin-top: 2px; }
 
 /* 单元格输入 */
 .cell-input {
@@ -719,8 +755,20 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .cell-input:focus { outline: none; border-color: var(--tag-fg, #4338ca); background: var(--bg-card, #fff); }
 
 /* 目标定价 */
-.input-target { width: 86px; padding: 3px 6px; }
-.suggest { font-weight: 600; color: #4338ca; margin: 0 6px; }
+/* 按成本利润率定价:率选项按钮组 + 建议价/改价 */
+.rate-opts { display: flex; gap: 4px; flex-wrap: wrap; }
+.rate-opt {
+  padding: 2px 7px; font-size: 11px; line-height: 1.4; border: 1px solid var(--border, #d1d5db);
+  border-radius: 4px; background: var(--bg-card, #fff); color: var(--text-secondary, #6b7280); cursor: pointer;
+}
+.rate-opt:hover:not(:disabled) { border-color: #4338ca; color: #4338ca; }
+.rate-opt.active { background: #4338ca; border-color: #4338ca; color: #fff; font-weight: 600; }
+.rate-opt:disabled { opacity: .45; cursor: not-allowed; }
+.target-act { display: flex; align-items: center; margin-top: 4px; }
+.suggest { font-weight: 600; color: #4338ca; margin-right: 6px; }
+
+/* 利润列(当前/调整):三行紧凑 */
+.col-profit div { line-height: 1.5; }
 
 /* 展开订单行 */
 .row-orders > td { background: var(--bg, #f9fafb); padding: 10px 14px; }
