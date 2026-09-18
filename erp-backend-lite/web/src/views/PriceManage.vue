@@ -246,16 +246,53 @@ function suggestedPrice(row) {
   return Math.round(((purchase * (1 + rate / 100) + delivery) / (1 - COMMISSION_RATE)) * 100) / 100;
 }
 
-// 调整利润:按选中目标率定价后的利润/销售利润率(成本利润率恒等于目标率)
-// 数学关系:建议价 = (采购×(1+r)+配送)/(1-佣金率) → 利润 = 采购×r
-// 注意:返回的 rate 均为百分数刻度(与后端 profit_rate_* 一致,fmtRate 直接展示)
+// 当前利润明细:与后端 listPriceProducts PROFIT 口径完全一致
+// 利润 = 售价×(1−佣金率) − 国际物流费(无重量按0,回退打包口径) − 采购价
+function currentBreakdown(row) {
+  const price = row.price != null ? Number(row.price) : null;
+  const purchase = row.custom_purchase_price != null ? Number(row.custom_purchase_price) : null;
+  if (price == null || purchase == null) return null;
+  const w = row.weight_g != null ? Number(row.weight_g) : null;
+  const commission = Math.round(price * COMMISSION_RATE * 100) / 100;
+  const delivery = w != null ? Math.round((DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * w) * 100) / 100 : 0;
+  const profit = Math.round((price - commission - delivery - purchase) * 100) / 100;
+  return {
+    price, commission, delivery, profit,
+    saleRate: price > 0 ? Math.round((profit / price) * 10000) / 100 : null,
+    costRate: purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null,
+  };
+}
+
+// 调整利润明细:按选中目标率定价后的完整口径
+// 数学关系:建议价 = (采购×(1+r)+配送)/(1−佣金率) → 利润 = 采购×r
+// rate 均为百分数刻度(与后端 profit_rate_* 一致,fmtRate 直接展示)
 function adjustedProfit(row) {
   const price = suggestedPrice(row);
   if (price == null) return null;
   const ratePct = selRate(row);
   const purchase = Number(row.custom_purchase_price);
-  const profit = purchase * (ratePct / 100);
-  return { profit, saleRate: (profit / price) * 100, costRate: ratePct, price };
+  const w = Number(row.weight_g);
+  const commission = Math.round(price * COMMISSION_RATE * 100) / 100;
+  const delivery = Math.round((DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * w) * 100) / 100;
+  const profit = Math.round(purchase * (ratePct / 100) * 100) / 100;
+  return {
+    price, commission, delivery, profit,
+    saleRate: Math.round((profit / price) * 10000) / 100,
+    costRate: ratePct,
+  };
+}
+
+// 明细 → 展示行(当前/调整两列共用)
+function breakdownRows(bd) {
+  if (!bd) return null;
+  return [
+    { k: '销售价格', v: fmtMoney(bd.price) },
+    { k: 'ozon佣金', v: fmtMoney(bd.commission) },
+    { k: '国际物流费', v: fmtMoney(bd.delivery) },
+    { k: '利润', v: fmtMoney(bd.profit), cls: rateClass(bd.profit) },
+    { k: '销售利润率', v: fmtRate(bd.saleRate), cls: rateClass(bd.saleRate) },
+    { k: '成本利润率', v: fmtRate(bd.costRate), cls: rateClass(bd.costRate) },
+  ];
 }
 
 function canTarget(row) {
@@ -414,7 +451,6 @@ onMounted(async () => {
             <th class="col-num">90天销量</th>
             <th class="col-num">采购价(本系统)</th>
             <th class="col-num">重量(g)</th>
-            <th class="col-num">国际物流费</th>
             <th class="col-num">当前利润</th>
             <th class="col-num">调整利润</th>
             <th class="col-target">按成本利润率定价</th>
@@ -472,19 +508,21 @@ onMounted(async () => {
                   @blur="saveCell(row, 'weight')" @keyup.enter="$event.target.blur()"
                   :placeholder="row.weight_g != null ? String(row.weight_g) + '(oz)' : '—'" />
               </td>
-              <td class="col-num">{{ row.weight_g != null ? fmtMoney(3.37 + 0.0281 * row.weight_g) : '—' }}</td>
-              <!-- 当前利润:利润/销售利润率/成本利润率 三行合一 -->
-              <td class="col-num col-profit">
-                <div :class="rateClass(row.profit_cny)">{{ fmtMoney(row.profit_cny) }}<span v-if="row.profit_cny != null" class="sub">估</span></div>
-                <div class="sub" :class="rateClass(row.profit_rate_sale)">销售 {{ fmtRate(row.profit_rate_sale) }}</div>
-                <div class="sub" :class="rateClass(row.profit_rate_cost)">成本 {{ fmtRate(row.profit_rate_cost) }}</div>
+              <!-- 当前利润明细:销售价格/ozon佣金/国际物流费/利润/销售利润率/成本利润率 -->
+              <td class="col-num col-profit" title="单件口径:售价 − 佣金16% − 国际物流费 − 采购价">
+                <template v-if="breakdownRows(currentBreakdown(row))">
+                  <div v-for="l in breakdownRows(currentBreakdown(row))" :key="l.k" class="bl" :class="l.cls">
+                    <span class="bl-k">{{ l.k }}</span><span>{{ l.v }}</span>
+                  </div>
+                </template>
+                <span v-else class="sub">—</span>
               </td>
-              <!-- 调整利润:按选中目标率定价后的利润(选中目标率即时刷新) -->
-              <td class="col-num col-profit" :title="canTarget(row) ? `按 ${selRate(row)}% 成本利润率定价后的利润` : '需先维护采购价与重量'">
-                <template v-if="adjustedProfit(row) != null">
-                  <div :class="rateClass(adjustedProfit(row).profit)">{{ fmtMoney(adjustedProfit(row).profit) }}</div>
-                  <div class="sub" :class="rateClass(adjustedProfit(row).saleRate)">销售 {{ fmtRate(adjustedProfit(row).saleRate) }}</div>
-                  <div class="sub" :class="rateClass(adjustedProfit(row).costRate)">成本 {{ fmtRate(adjustedProfit(row).costRate) }}</div>
+              <!-- 调整利润明细:按选中目标率定价后的完整口径 -->
+              <td class="col-num col-profit" :title="canTarget(row) ? `按 ${selRate(row)}% 成本利润率定价后的口径` : '需先维护采购价与重量'">
+                <template v-if="breakdownRows(adjustedProfit(row))">
+                  <div v-for="l in breakdownRows(adjustedProfit(row))" :key="l.k" class="bl" :class="l.cls">
+                    <span class="bl-k">{{ l.k }}</span><span>{{ l.v }}</span>
+                  </div>
                 </template>
                 <span v-else class="sub">—</span>
               </td>
@@ -529,7 +567,7 @@ onMounted(async () => {
             </tr>
             <!-- 展开行:历史订单 -->
             <tr v-if="expanded.has(row.sku)" class="row-orders">
-              <td :colspan="10">
+              <td :colspan="9">
                 <div v-if="ordersLoading[row.sku]" class="orders-loading">加载历史订单…</div>
                 <template v-else-if="(ordersMap[row.sku] || []).length">
                   <div class="orders-title">历史订单(最新 {{ ordersMap[row.sku].length }} 条)</div>
@@ -566,7 +604,7 @@ onMounted(async () => {
             </tr>
           </template>
           <tr v-if="!loading && rows.length === 0">
-            <td :colspan="10" class="empty-tip">
+            <td :colspan="9" class="empty-tip">
               暂无数据{{ stores.length === 0 ? ',请先点击右上角「同步 Ozon 价格」' : '' }}
             </td>
           </tr>
@@ -792,8 +830,9 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .rate-opt:disabled { opacity: .45; cursor: not-allowed; }
 .suggest { font-weight: 600; color: #4338ca; }
 
-/* 利润列(当前/调整):三行紧凑 */
-.col-profit div { line-height: 1.5; }
+/* 利润明细列(当前/调整):键值两栏对齐 */
+.bl { display: flex; justify-content: space-between; gap: 10px; line-height: 1.55; white-space: nowrap; min-width: 132px; }
+.bl-k { color: var(--text-secondary, #6b7280); }
 
 /* 展开订单行 */
 .row-orders > td { background: var(--bg, #f9fafb); padding: 10px 14px; }
