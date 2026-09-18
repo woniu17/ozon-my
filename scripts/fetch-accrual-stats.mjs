@@ -13,7 +13,7 @@ const TO = '2026-09-03T23:59:59.000Z';
 const CHUNK = 200; // 应计接口单批货件数(实测 198 可行)
 
 const stores = JSON.parse(
-  readFileSync(join(__dirname, '..', 'ozon-webhook', 'src', 'config', 'stores.json'), 'utf8'),
+  readFileSync(join(__dirname, '..', 'erp-backend-lite', 'src', 'config', 'stores.json'), 'utf8'),
 );
 
 const headers = (store) => ({
