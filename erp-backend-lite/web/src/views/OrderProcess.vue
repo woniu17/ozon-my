@@ -796,6 +796,8 @@ async function dismissProgress() {
 const importTab = ref('pdd');
 // 已有采购单恢复态:打开弹窗时从 pkg.purchaseLinks 按采购单分组重建,显示在"已选订单"区,可逐单删除
 const restoredPurchases = ref([]);
+// 已标记删除的已有采购单 id 集合(点 ✕ 标记,点「保存」时才真正冲回;再点「恢复」可撤销,交互与新选订单一致)
+const removedPurchaseIds = ref(new Set());
 
 /** 平台值(入库的 yangkeduo/1688/taobao)→ 首个匹配的账号 tab key(用于打开弹窗恢复) */
 function tabKeyForPlatform(platformVal) {
@@ -818,6 +820,7 @@ function openPurchase(pkg) {
   purchaseForm.allocMode = 'auto';
   purchaseForm.platformGoods = [];
   lookupResult.value = null;
+  removedPurchaseIds.value = new Set();
   purchaseForm.items = (pkg.items || []).map((it) => ({
     itemId: it.id,
     offerId: it.offerId,
@@ -960,14 +963,36 @@ async function savePurchase() {
   const hasNo = !!purchaseForm.logisticsNo.trim();
   // 新勾选的平台订单也算有新采购(订单金额可能为 0)
   const hasNew = hasAmount || hasNo || newSelectedOrders.value.length > 0;
+  // ✕ 标记删除的已有采购:点「保存」时才真正冲回(先冲回再提交,保证聚合正确)
+  const removedIds = [...removedPurchaseIds.value];
+  // 未标记删除的已有采购(清空确认的判断口径)
+  const remainingRestored = restoredPurchases.value.filter((r) => !removedPurchaseIds.value.has(r.purchaseOrderId));
   if (!hasNew) {
+    if (removedIds.length) {
+      // 仅删除已有单、无新采购:逐单冲回后关闭(未标记的已有采购保留)
+      purchaseSaving.value = true;
+      try {
+        for (const id of removedIds) await unlinkPurchase(id, purchaseForm.packageId);
+        // 全部删光:清残留聚合(采购状态/头程物流),对齐原"逐单删光后保存"语义
+        if (!remainingRestored.length) await clearPurchaseInfo(purchaseForm.packageId);
+        show(`已删除 ${removedIds.length} 单采购关联`, 'success');
+        purchaseOpen.value = false;
+        loadTabs();
+        loadList();
+      } catch (err) {
+        show(err.message || String(err), 'error');
+      } finally {
+        purchaseSaving.value = false;
+      }
+      return;
+    }
     // 空表单保存 = 清空采购信息
     // - 已有采购未删除 → 二次确认后一键清空(冲回全部关联)
     // - 已有采购已逐单删除(或本就没有) → 直接清残留聚合(采购状态/头程物流)
-    if (restoredPurchases.value.length) {
-      const allocatedSum = restoredPurchases.value.reduce((s, r) => s + (Number(r.allocated) || 0), 0);
+    if (remainingRestored.length) {
+      const allocatedSum = remainingRestored.reduce((s, r) => s + (Number(r.allocated) || 0), 0);
       const okClear = await confirmStore.ask({
-        message: `未填写新采购信息。是否清空包裹 ${purchaseForm.packageNo} 已有的 ${restoredPurchases.value.length} 单采购关联?将冲回全部分摊金额(${fmtMoney(allocatedSum)})`,
+        message: `未填写新采购信息。是否清空包裹 ${purchaseForm.packageNo} 已有的 ${remainingRestored.length} 单采购关联?将冲回全部分摊金额(${fmtMoney(allocatedSum)})`,
         confirmText: '清空',
         danger: true,
       });
@@ -1012,6 +1037,8 @@ async function savePurchase() {
   }
   purchaseSaving.value = true;
   try {
+    // 先冲回 ✕ 标记删除的已有采购,再提交新采购(顺序执行保证聚合正确)
+    for (const id of removedIds) await unlinkPurchase(id, purchaseForm.packageId);
     await submitPurchase({
       packageId: purchaseForm.packageId,
       platform: purchaseForm.platform,
@@ -1273,10 +1300,16 @@ const allSelectedOrders = computed(() => {
       }
     }
   }
+  // 已有采购恢复项排在最前(✕ 标记删除的保留显示,模板加删除线)+ 新勾选的平台订单
   return [...restoredPurchases.value, ...sel];
 });
+// 计数/合计排除 ✕ 标记删除的已有单(删除未生效前不算在已选里)
+const keptSelectedCount = computed(() =>
+  allSelectedOrders.value.filter((o) => !(o._existing && removedPurchaseIds.value.has(o.purchaseOrderId))).length);
 const allSelectedTotal = computed(() =>
-  allSelectedOrders.value.reduce((s, o) => s + (Number(o.amount) || 0), 0).toFixed(2));
+  allSelectedOrders.value
+    .filter((o) => !(o._existing && removedPurchaseIds.value.has(o.purchaseOrderId)))
+    .reduce((s, o) => s + (Number(o.amount) || 0), 0).toFixed(2));
 
 // 新勾选的订单(不含已有采购恢复项):提交时只入库新增部分,避免已有采购重复累加
 const newSelectedOrders = computed(() => allSelectedOrders.value.filter((o) => !o._existing));
@@ -1382,22 +1415,12 @@ function removeSelectedOrder(platformVal, orderSn) {
   }
 }
 
-/** 删除一条已有采购关联(冲回该采购分摊金额,对齐详情弹窗的"取消关联") */
-async function removeRestoredPurchase(po) {
-  const label = po.orderSn || `#${po.purchaseOrderId}`;
-  if (!(await confirmStore.ask({
-    message: `确认删除已有采购单 ${label} 与包裹 ${purchaseForm.packageNo} 的关联?将冲回本包裹分摊的采购金额(${fmtMoney(po.allocated)})`,
-    danger: true,
-  }))) return;
-  try {
-    await unlinkPurchase(po.purchaseOrderId, purchaseForm.packageId);
-    restoredPurchases.value = restoredPurchases.value.filter((r) => r.purchaseOrderId !== po.purchaseOrderId);
-    show('已删除该采购关联', 'success');
-    loadTabs();
-    loadList();
-  } catch (err) {
-    show(err.message || String(err), 'error');
-  }
+/** 标记/撤销删除一条已有采购关联(✕ 按钮;点「保存」时才真正冲回,与新选订单的移除交互一致) */
+function toggleRemovedPurchase(po) {
+  const s = new Set(removedPurchaseIds.value);
+  if (s.has(po.purchaseOrderId)) s.delete(po.purchaseOrderId);
+  else s.add(po.purchaseOrderId);
+  removedPurchaseIds.value = s;
 }
 
 // 当前 importTab 对应的平台值(用于 restoredSnKeys 匹配)
@@ -3237,8 +3260,8 @@ onUnmounted(() => {
         <!-- 已选采购订单区(固定在产品下方):平台/订单号/下单时间/金额(含已有采购恢复项) -->
         <div v-if="allSelectedOrders.length" class="selected-orders">
           <div class="selected-orders-title">
-            已选 {{ allSelectedOrders.length }} 单 · 合计 ¥{{ allSelectedTotal }}
-            <span v-if="restoredPurchases.length" class="selected-orders-sub">含已有采购 {{ restoredPurchases.length }} 单;勾选新订单后点「保存」追加;已有单可单独删除,或清空后点「保存」一键清空</span>
+            已选 {{ keptSelectedCount }} 单 · 合计 ¥{{ allSelectedTotal }}
+            <span v-if="restoredPurchases.length" class="selected-orders-sub">已有采购点 ✕ 标记删除,点「保存」生效(可点「恢复」撤销);勾选新订单后点「保存」追加</span>
           </div>
           <table class="data-table selected-orders-table">
             <thead>
@@ -3251,7 +3274,11 @@ onUnmounted(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="o in allSelectedOrders" :key="o._existing ? 'ex-' + o.purchaseOrderId : o._platform + ':' + (o._account || '') + ':' + o.orderSn">
+              <tr
+                v-for="o in allSelectedOrders"
+                :key="o._existing ? 'ex-' + o.purchaseOrderId : o._platform + ':' + (o._account || '') + ':' + o.orderSn"
+                :class="{ 'removed-mark': o._existing && removedPurchaseIds.has(o.purchaseOrderId) }"
+              >
                 <td>
                   <span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span>
                   <!-- 买家账号显示优先级(2026-09-17):归一账号名(account=搜索命中/openapi 自带,_account=tab 账号)
@@ -3263,12 +3290,13 @@ onUnmounted(() => {
                 <td>{{ o._existing ? '—' : (o._platform === 'yangkeduo' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—')) }}</td>
                 <td class="pdd-amount">¥{{ o.amount }}</td>
                 <td>
+                  <!-- 已有单:✕ 标记删除(点「保存」才冲回),再点「恢复」撤销;新选单:✕ 取消勾选 -->
                   <button
                     v-if="o._existing"
-                    class="btn btn-danger btn-sm"
-                    title="删除该已有采购关联并冲回采购金额"
-                    @click="removeRestoredPurchase(o)"
-                  >删除</button>
+                    class="btn btn-ghost btn-sm removed-toggle"
+                    :title="removedPurchaseIds.has(o.purchaseOrderId) ? '撤销删除(点「保存」前可恢复)' : '标记删除该已有采购,点「保存」后冲回分摊金额'"
+                    @click="toggleRemovedPurchase(o)"
+                  >{{ removedPurchaseIds.has(o.purchaseOrderId) ? '恢复' : '✕' }}</button>
                   <button v-else class="btn btn-ghost btn-sm" @click="removeSelectedOrder(o._platform, o.orderSn)">✕</button>
                 </td>
               </tr>
@@ -4741,6 +4769,15 @@ a.product-title:hover {
   font-size: 12px;
   font-weight: 400;
   color: var(--text-muted, #9ca3af);
+}
+/* 已有采购单 ✕ 标记删除态:整行删除线+变灰(按钮排除,保持可点「恢复」) */
+.selected-orders-table tr.removed-mark td {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+.selected-orders-table tr.removed-mark td .removed-toggle {
+  text-decoration: none;
+  color: #b45309;
 }
 .selected-order-item {
   display: flex;
