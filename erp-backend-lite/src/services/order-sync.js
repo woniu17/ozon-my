@@ -561,6 +561,16 @@ export async function runOrderSyncNow({ level = 'fast' } = {}) {
     }
     progress.doneStores++;
   }
+  // mid/slow 轮收尾:已取消货件对账(订单状态已 cancelled 但包裹 operate_status 未跟上的批量推进)
+  // 漏网场景:搁置期间错过状态联动、fast 轮 cutoff 不回看的过期单长期无人触碰
+  if (cfg.listDays > 0) {
+    try {
+      const fixed = orderPackageDao.reconcileCancelledPackages();
+      if (fixed > 0) logger.info({ level, fixed }, '[order-sync] 已取消货件对账:批量推进到已取消');
+    } catch (e) {
+      logger.warn({ level, err: e?.message }, '[order-sync] 已取消货件对账失败');
+    }
+  }
   // 完成:保留进度数据,置 active=false + finishedAt,等用户手动关闭
   progress.active = false;
   progress.finishedAt = new Date().toISOString();

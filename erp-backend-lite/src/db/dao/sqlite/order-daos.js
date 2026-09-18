@@ -1604,6 +1604,39 @@ function setIgnored(packageId, ignored) {
     nowIso(),
     packageId
   );
+  // 恢复搁置时补一次 Ozon 状态联动:搁置期间同步不推进(applyOzonStatus 跳过 is_ignored 包裹),
+  // 恢复后按订单最新状态即时补齐(如已取消 → 直接进已取消 tab,不等下一轮 mid 轮对账)
+  if (!ignored) {
+    const o = db
+      .prepare(
+        `SELECT o.status, o.delivering_date, o.shipment_date
+         FROM op_ozon_order o JOIN op_package p ON p.ozon_order_id = o.id WHERE p.id = ?`
+      )
+      .get(packageId);
+    if (o?.status) {
+      applyOzonStatus(packageId, o.status, {
+        deliveringDate: o.delivering_date,
+        shipmentDate: o.shipment_date,
+      });
+    }
+  }
+}
+
+/** 已取消货件对账(2026-09-18):订单状态已是 cancelled/not_accepted 但包裹 operate_status 未跟上的,
+ *  批量推进到已取消 tab。漏网场景:搁置期间同步不推进(applyOzonStatus 跳过 is_ignored)、
+ *  fast 轮 cutoff 不回看导致过期单长期无人触碰。幂等,无匹配行时零成本。 */
+function reconcileCancelledPackages() {
+  const r = db
+    .prepare(
+      `UPDATE op_package SET operate_status = 'cancelled', gmt_modified = ?
+       WHERE is_ignored = 0
+         AND operate_status != 'cancelled'
+         AND ozon_order_id IN (
+           SELECT id FROM op_ozon_order WHERE status IN ('cancelled', 'not_accepted')
+         )`
+    )
+    .run(nowIso());
+  return Number(r.changes);
 }
 
 /** 更新包裹本地备注/标签(2026-09-15)
@@ -2109,6 +2142,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
 export const orderPackageDao = {
   syncPosting,
   reconcileSplitForPosting,
+  reconcileCancelledPackages,
   applyOzonStatus,
   updateSyncCursor,
   getSyncCursors,
