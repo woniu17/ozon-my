@@ -22,7 +22,7 @@ const COMMISSION_RATE = 0.16;
 const DELIVERY_BASE_CNY = 3.37;
 const DELIVERY_PER_G_CNY = 0.0281;
 const TARGET_RATES = [20, 30, 40, 50]; // 按成本利润率定价选项(%)
-const DEFAULT_TARGET_RATE = 20;             // 默认选中 20%
+const DEFAULT_TARGET_RATE = 40;             // 默认选中 40%
 
 const SORTS = [
   { key: 'profitRateCost', label: '成本利润率' },
@@ -243,7 +243,8 @@ function suggestedPrice(row) {
   const w = Number(row.weight_g);
   if (!(purchase > 0) || !(w > 0)) return null;
   const delivery = DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * w;
-  return Math.round(((purchase * (1 + rate / 100) + delivery) / (1 - COMMISSION_RATE)) * 100) / 100;
+  // 向上取整到整数元(展示与提交同口径,后端校验同步取整)
+  return Math.ceil((purchase * (1 + rate / 100) + delivery) / (1 - COMMISSION_RATE));
 }
 
 // 当前利润明细:与后端 listPriceProducts PROFIT 口径完全一致
@@ -263,22 +264,21 @@ function currentBreakdown(row) {
   };
 }
 
-// 调整利润明细:按选中目标率定价后的完整口径
-// 数学关系:建议价 = (采购×(1+r)+配送)/(1−佣金率) → 利润 = 采购×r
+// 调整利润明细:按选中目标率定价(建议价向上取整)后的真实口径
+// 取整后利润 = 建议价 − 佣金 − 配送 − 采购(略高于 采购×r)
 // rate 均为百分数刻度(与后端 profit_rate_* 一致,fmtRate 直接展示)
 function adjustedProfit(row) {
   const price = suggestedPrice(row);
   if (price == null) return null;
-  const ratePct = selRate(row);
   const purchase = Number(row.custom_purchase_price);
   const w = Number(row.weight_g);
   const commission = Math.round(price * COMMISSION_RATE * 100) / 100;
   const delivery = Math.round((DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * w) * 100) / 100;
-  const profit = Math.round(purchase * (ratePct / 100) * 100) / 100;
+  const profit = Math.round((price - commission - delivery - purchase) * 100) / 100;
   return {
     price, commission, delivery, profit,
     saleRate: Math.round((profit / price) * 10000) / 100,
-    costRate: ratePct,
+    costRate: purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null,
   };
 }
 
@@ -478,7 +478,7 @@ onMounted(async () => {
                     <div class="prod-sku">
                       SKU：{{ row.sku }}
                       <button class="copy-btn" title="复制SKU" @click.stop="copyText(row.sku, 'SKU')">
-                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                       </button>
                       <span v-if="row.price_index_color === 'RED'" class="tag tag-warn" title="Ozon 价格指数偏红:价格高于市场">市场红</span>
                       <span v-if="row.sales_percent_fbs != null" class="tag" :title="`v5 实际 FBS 佣金率 ${row.sales_percent_fbs}%`">佣金{{ row.sales_percent_fbs }}%</span>
@@ -486,7 +486,7 @@ onMounted(async () => {
                     <div v-if="row.offer_id" class="prod-sku">
                       Offer ID：{{ row.offer_id }}
                       <button class="copy-btn" title="复制Offer ID" @click.stop="copyText(row.offer_id, 'Offer ID')">
-                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                       </button>
                     </div>
                   </div>
@@ -531,15 +531,15 @@ onMounted(async () => {
                   class="target-grid"
                   :title="canTarget(row) ? `按 ${selRate(row)}% 成本利润率定价` : '需先维护采购价与重量'"
                 >
-                  <!-- 子列1:调整后价格/划线价格/最低价 -->
+                  <!-- 子列1:销售价格/划线价格/最低价 -->
                   <div class="tg-prices">
                     <div class="tg-line">
-                      <span class="tg-label">调整后价格</span>
+                      <span class="tg-label">销售价格</span>
                       <b class="suggest">{{ suggestedPrice(row) != null ? '¥' + suggestedPrice(row) : '—' }}</b>
                     </div>
                     <div class="tg-line">
                       <span class="tg-label">划线价格</span>
-                      <span>{{ suggestedPrice(row) != null ? '¥' + (Math.round(suggestedPrice(row) * 2 * 100) / 100) : '—' }}</span>
+                      <span>{{ suggestedPrice(row) != null ? '¥' + suggestedPrice(row) * 2 : '—' }}</span>
                     </div>
                     <div class="tg-line">
                       <span class="tg-label">最低价</span>
@@ -711,7 +711,12 @@ onMounted(async () => {
 
 /* 表格 */
 .pm-table-wrap { position: relative; overflow-x: auto; background: var(--bg-card, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 8px; }
-.pm-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1600px; }
+/* 表格整体:字体放大 1.4 倍(13→18px),内部小号字同步放大 */
+.pm-table { width: 100%; border-collapse: collapse; font-size: 18px; min-width: 1900px; }
+.pm-table .sub { font-size: 15px; }
+.pm-table .mono { font-size: 17px; }
+.pm-table .tag { font-size: 15px; }
+.pm-table .btn-sm { font-size: 17px; }
 .pm-table thead th {
   text-align: left; padding: 8px 10px;
   background: var(--bg, #f9fafb);
@@ -775,7 +780,7 @@ onMounted(async () => {
 .img-hover-wrap:hover .img-preview { display: block; }
 .prod-img-empty {
   display: flex; align-items: center; justify-content: center;
-  font-size: 11px; color: var(--text-secondary, #9ca3af); background: var(--bg, #f3f4f6);
+  font-size: 15px; color: var(--text-secondary, #9ca3af); background: var(--bg, #f3f4f6);
 }
 /* 复制小图标(与订单处理页同款) */
 .copy-btn {
@@ -803,13 +808,13 @@ onMounted(async () => {
 a.prod-name { text-decoration: none; display: block; }
 a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 /* 店铺名/SKU/OfferID:黑色字体(与名称区分层级) */
-.prod-sku { font-size: 11px; color: var(--text-primary, #111827); margin-top: 2px; }
+.prod-sku { font-size: 15px; color: var(--text-primary, #111827); margin-top: 3px; }
 
 /* 单元格输入 */
 .cell-input {
   width: 84px; padding: 3px 6px; text-align: right;
   border: 1px solid transparent; border-radius: 4px; background: transparent;
-  font-size: 13px; color: var(--text-primary, #374151);
+  font-size: 18px; color: var(--text-primary, #374151);
 }
 .cell-input:hover { border-color: var(--border, #d1d5db); background: var(--bg-card, #fff); }
 .cell-input:focus { outline: none; border-color: var(--tag-fg, #4338ca); background: var(--bg-card, #fff); }
@@ -817,12 +822,12 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 /* 按成本利润率定价:三子列(价格×目标率×改价按钮) */
 .target-grid { display: flex; align-items: center; gap: 14px; white-space: nowrap; }
 .tg-prices { display: flex; flex-direction: column; gap: 2px; }
-.tg-line { font-size: 12px; }
+.tg-line { font-size: 17px; }
 .tg-label { display: inline-block; color: var(--text-secondary, #6b7280); margin-right: 6px; min-width: 5em; }
 .tg-rates { display: flex; flex-direction: column; gap: 3px; }
 .tg-act { display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .rate-opt {
-  padding: 1px 10px; font-size: 11px; line-height: 1.5; border: 1px solid var(--border, #d1d5db);
+  padding: 1px 10px; font-size: 15px; line-height: 1.5; border: 1px solid var(--border, #d1d5db);
   border-radius: 4px; background: var(--bg-card, #fff); color: var(--text-secondary, #6b7280); cursor: pointer;
 }
 .rate-opt:hover:not(:disabled) { border-color: #4338ca; color: #4338ca; }
@@ -836,14 +841,14 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 
 /* 展开订单行 */
 .row-orders > td { background: var(--bg, #f9fafb); padding: 10px 14px; }
-.orders-title { font-size: 12px; color: var(--text-secondary, #6b7280); margin-bottom: 6px; }
-.orders-table { width: 100%; border-collapse: collapse; font-size: 12px; background: var(--bg-card, #fff); }
+.orders-title { font-size: 17px; color: var(--text-secondary, #6b7280); margin-bottom: 6px; }
+.orders-table { width: 100%; border-collapse: collapse; font-size: 17px; background: var(--bg-card, #fff); }
 .orders-table th {
   text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border, #e5e7eb);
   color: var(--text-secondary, #6b7280); font-weight: 500; white-space: nowrap;
 }
 .orders-table td { padding: 4px 8px; border-bottom: 1px solid var(--border, #f3f4f6); }
-.orders-loading, .orders-empty { font-size: 12px; color: var(--text-secondary, #9ca3af); padding: 8px 0; }
+.orders-loading, .orders-empty { font-size: 17px; color: var(--text-secondary, #9ca3af); padding: 8px 0; }
 
 .empty-tip { text-align: center; padding: 40px 0; color: var(--text-secondary, #9ca3af); }
 .loading-mask { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.6); font-size: 13px; color: var(--text-secondary, #6b7280); }

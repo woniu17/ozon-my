@@ -208,8 +208,10 @@ router.post('/admin/api/price-manage/price-update', async (req, res, next) => {
       if (suggested == null) {
         return res.status(400).json({ ok: false, message: '目标定价需先维护采购价与重量' });
       }
-      if (Math.abs(price - suggested) > 0.05) {
-        return res.status(400).json({ ok: false, message: `新价与服务端建议价不一致(建议 ¥${suggested}),请刷新后重试` });
+      // 与前端同口径:建议价向上取整到整数元
+      const suggestedCeil = Math.ceil(suggested);
+      if (Math.abs(price - suggestedCeil) > 0.05) {
+        return res.status(400).json({ ok: false, message: `新价与服务端建议价不一致(建议 ¥${suggestedCeil}),请刷新后重试` });
       }
       source = 'target';
     }
