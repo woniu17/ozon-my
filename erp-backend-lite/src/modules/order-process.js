@@ -59,15 +59,16 @@ function resolveRubCnyRate() {
   return null;
 }
 
-// 应计类型分组常量(列表金额列拆分:代理佣金/国际配送/其它)
-const TYPE_AGENT_FEE = 66;   // RfbsGlobalAgentFee 代理佣金
+// 应计类型分组常量(列表金额列拆分:销售佣金/国际配送/其它[含代理佣金])
+const TYPE_AGENT_FEE = 66;   // RfbsGlobalAgentFee 代理佣金(2026-09-18 起并入其它费用展示)
+const TYPE_SALE_FEE = 69;    // SaleCommission 销售佣金
 const TYPE_DELIVERY = 67;    // RfbsGlobalDelivery 国际配送
 
 /** 为一批包裹构建应计 CNY 分组(列表行注入 pkg.accrual)
  *  typeSums: getAccrualTypeSumsByPackageIds 结果(RUB)
  *  返回 Map<packageId, accrual>;accrual.totalRub 为 null 的包裹不入 Map(拉过但空)
- *  结构: { rate, agentFee, delivery, others, total, sale, payout,  // CNY
- *          agentFeeRub, deliveryRub, othersRub, totalRub, saleRub,  // RUB 原值(悬浮展示)
+ *  结构: { rate, saleFee, agentFee, delivery, others, total, sale, payout,  // CNY
+ *          saleFeeRub, agentFeeRub, deliveryRub, othersRub, totalRub, saleRub,  // RUB 原值(悬浮展示)
  *          derivedWeight }                                          // 由实际配送费反推的重量(g)
  */
 function buildAccrualBreakdown(packages, typeSums, rate) {
@@ -82,10 +83,12 @@ function buildAccrualBreakdown(packages, typeSums, rate) {
     if (pkg.accrualTotal == null || !rate) continue;
     const m = byPkg.get(pkg.id) || new Map();
     const agentRub = m.get(TYPE_AGENT_FEE) || 0;
+    const saleFeeRub = m.get(TYPE_SALE_FEE) || 0;
     const deliveryRub = m.get(TYPE_DELIVERY) || 0;
     const totalRub = Number(pkg.accrualTotal) || 0;
     const saleRub = Number(pkg.accrualSaleTotal) || 0;
-    const othersRub = round2(totalRub - agentRub - deliveryRub);
+    // 其它费用 = 应计合计 − 销售佣金(69) − 国际配送(67);代理佣金(66)并入其它展示
+    const othersRub = round2(totalRub - saleFeeRub - deliveryRub);
     // 由实际配送费(CNY)反推商品重量:weight = (|delivery| - 3.37) / 0.0281(整数 g)
     const deliveryCny = round2(deliveryRub * rate);
     const deliveryAbs = Math.abs(deliveryCny);
@@ -94,12 +97,14 @@ function buildAccrualBreakdown(packages, typeSums, rate) {
       : null;
     out.set(pkg.id, {
       rate,
+      saleFee: round2(saleFeeRub * rate),
       agentFee: round2(agentRub * rate),
       delivery: deliveryCny,
       others: round2(othersRub * rate),
       total: round2(totalRub * rate),
       sale: round2(saleRub * rate),
       payout: round2((saleRub + totalRub) * rate),
+      saleFeeRub: round2(saleFeeRub),
       agentFeeRub: round2(agentRub),
       deliveryRub: round2(deliveryRub),
       othersRub,
@@ -130,8 +135,8 @@ function computeProfit(pkg, cancelled = false, rate = null) {
     const deliveryEst = w != null ? round2(DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * w) : null;
     return {
       estimated: false,
-      // 佣金兼容字段:非配送类扣款合计(代理佣金+其它)×
-      commission: round2(a.agentFee + a.others),
+      // 佣金兼容字段:非配送类扣款合计(销售佣金+代理佣金+其它;others 已含 66,勿再加 agentFee)
+      commission: round2(a.total - a.delivery),
       escrow: a.payout,
       profit,
       // 公式估算的配送费(基于实际重量,仅展示用,不参与利润计算)

@@ -357,10 +357,10 @@ function isCancelledRow(row) {
   return row.app_package_tab === 'closed' || row.platform_package_status === 'cancelled';
 }
 // 金额列六行悬浮提示(真实口径显示 RUB 原值换算明细)
-function agentFeeTitle(row) {
-  if (row.accrual) return `代理佣金(RfbsGlobalAgentFee)实扣 ${fmtRub(row.accrual.agentFeeRub)} × 汇率 ${row.accrual.rate}`;
-  if (isCancelledRow(row)) return '已关闭/取消订单:无佣金扣款(不估算)';
-  return '无应计数据,按订单金额 × 16% 预估';
+function saleFeeTitle(row) {
+  if (row.accrual) return `销售佣金(SaleCommission)实扣 ${fmtRub(row.accrual.saleFeeRub)} × 汇率 ${row.accrual.rate}`;
+  if (isCancelledRow(row)) return '已关闭/取消订单:无销售佣金扣款';
+  return '无应计数据(未妥投或 Ozon 未生成),不估算';
 }
 function deliveryTitle(row) {
   const real = row.accrual?.delivery;
@@ -393,7 +393,7 @@ function weightTitle(row) {
   return '无重量数据(订单未称重 + 系统未配置 + Ozon SKU 未缓存)';
 }
 function othersTitle(row) {
-  if (row.accrual) return `其它费用(销售佣金/星星商品/逆向物流等)${fmtRub(row.accrual.othersRub)} × 汇率 ${row.accrual.rate}`;
+  if (row.accrual) return `其它费用(代理佣金/星星商品/逆向物流等)${fmtRub(row.accrual.othersRub)} × 汇率 ${row.accrual.rate}`;
   return '无应计数据(未妥投或 Ozon 未生成)';
 }
 function profitLabel(row) {
@@ -547,8 +547,8 @@ onUnmounted(() => {
               <!-- 金额列:名称左对齐、数字右对齐(amt-row flex);利润率单独两行;采购金额=妙手侧采购单合计 -->
               <div class="amt-row"><span class="amt-name">订单</span><span class="amt-val">{{ fmtMoney(row.order_amount) }}</span></div>
               <div class="amt-row"><span class="amt-name">采购</span><span class="amt-val" :class="{ muted: !row.purchase_amount }">{{ fmtMoney(row.purchase_amount) }}</span></div>
-              <!-- 代理佣金:有应计=实扣换算;已关闭/取消=0(不估算);其余=16% 预估(标"估") -->
-              <div class="amt-row sub muted" :title="agentFeeTitle(row)"><span class="amt-name">{{ row.accrual || isCancelledRow(row) ? '代理佣金' : '代理佣金(估)' }}</span><span class="amt-val">{{ fmtMoney(row.accrual?.agentFee ?? row.profit?.commission) }}</span></div>
+              <!-- 销售佣金:应计 type 69 SaleCommission 实扣换算;无应计不估算(代理佣金已并入其它费用) -->
+              <div class="amt-row sub" :title="saleFeeTitle(row)"><span class="amt-name">销售佣金</span><span class="amt-val" :class="{ muted: row.accrual?.saleFee == null }">{{ row.accrual?.saleFee != null ? fmtMoney(row.accrual.saleFee) : '—' }}</span></div>
               <!-- 国际配送(实际):应计 type 67 -->
               <div class="amt-row sub" :title="deliveryTitle(row)"><span class="amt-name">国际配送</span><span class="amt-val" :class="{ muted: row.accrual?.delivery == null }">{{ row.accrual?.delivery != null ? fmtMoney(row.accrual.delivery) : '—' }}</span></div>
               <!-- 国际配送(估):公式 3.37 + 0.0281 × weight_g 估算 -->
