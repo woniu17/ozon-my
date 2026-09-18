@@ -29,8 +29,7 @@ const SORTS = [
   { key: 'profit', label: '预估利润' },
   { key: 'price', label: '售价' },
   { key: 'sales90', label: '90天销量' },
-  { key: 'refPurchase', label: '参考采购价' },
-  { key: 'customPurchase', label: '采购价' },
+  { key: 'purchase', label: '采购价' },
   { key: 'weight', label: '重量' },
   { key: 'syncedAt', label: '最近同步' },
 ];
@@ -182,21 +181,6 @@ async function saveCell(row, field) {
     await setSkuCustoms(row.sku, body);
     show('已保存', 'success');
     delete editBuf[row.sku];
-    await refreshAll();
-  } catch (e) {
-    show(e.message || '保存失败', 'error');
-  }
-}
-
-// ── 参考采购价一键采用 ──
-async function adoptRefPrice(row) {
-  if (row.ref_purchase_price == null) return;
-  if (!(await confirmStore.ask({
-    message: `采用近90天实际采购加权均价 ¥${row.ref_purchase_price} 作为 SKU ${row.sku} 的采购价?`,
-  }))) return;
-  try {
-    await setSkuCustoms(row.sku, { purchasePrice: Number(row.ref_purchase_price) });
-    show('已采用参考采购价', 'success');
     await refreshAll();
   } catch (e) {
     show(e.message || '保存失败', 'error');
@@ -400,7 +384,6 @@ onMounted(async () => {
             <th class="col-num">售价</th>
             <th class="col-num">90天销量</th>
             <th class="col-num">采购价(本系统)</th>
-            <th class="col-num">参考采购价</th>
             <th class="col-num">重量(g)</th>
             <th class="col-num">配送费</th>
             <th class="col-num">预估利润</th>
@@ -453,13 +436,6 @@ onMounted(async () => {
                   placeholder="—" />
               </td>
               <td class="col-num">
-                <template v-if="row.ref_purchase_price != null">
-                  <span class="ref-price" title="近90天实际采购加权均价">¥{{ row.ref_purchase_price }}</span>
-                  <button v-if="row.custom_purchase_price == null" class="btn-link" @click="adoptRefPrice(row)">采用</button>
-                </template>
-                <span v-else class="sub">—</span>
-              </td>
-              <td class="col-num">
                 <input
                   class="cell-input" :value="editVal(row, 'weight')"
                   @input="editBuf[row.sku].weight = $event.target.value"
@@ -490,7 +466,7 @@ onMounted(async () => {
             </tr>
             <!-- 展开行:历史订单 -->
             <tr v-if="expanded.has(row.sku)" class="row-orders">
-              <td :colspan="12">
+              <td :colspan="11">
                 <div v-if="ordersLoading[row.sku]" class="orders-loading">加载历史订单…</div>
                 <template v-else-if="(ordersMap[row.sku] || []).length">
                   <div class="orders-title">历史订单(最新 {{ ordersMap[row.sku].length }} 条)</div>
@@ -498,7 +474,7 @@ onMounted(async () => {
                     <thead>
                       <tr>
                         <th>订单号</th><th>下单时间</th><th>状态</th><th>数量</th>
-                        <th>单价</th><th>单件参考采购</th><th>包裹采购合计</th><th></th>
+                        <th>单价</th><th>包裹采购合计</th><th>单件采购价格</th><th>称重重量</th><th></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -511,8 +487,9 @@ onMounted(async () => {
                         </td>
                         <td>{{ o.quantity }}</td>
                         <td>{{ fmtMoney(o.unit_price) }}</td>
-                        <td>{{ fmtMoney(o.unit_ref_purchase) }}</td>
                         <td>{{ fmtMoney(o.total_purchase_amount) }}</td>
+                        <td>{{ fmtMoney(o.unit_ref_purchase) }}</td>
+                        <td>{{ o.pkg_weigh_weight != null ? o.pkg_weigh_weight + ' g' : '—' }}</td>
                         <td>
                           <button v-if="o.unit_ref_purchase != null" class="btn-link" @click="adoptOrderPrice(row, o)">以此单回填</button>
                         </td>
@@ -730,8 +707,6 @@ onMounted(async () => {
 }
 .cell-input:hover { border-color: var(--border, #d1d5db); background: var(--bg-card, #fff); }
 .cell-input:focus { outline: none; border-color: var(--tag-fg, #4338ca); background: var(--bg-card, #fff); }
-
-.ref-price { color: #b45309; }
 
 /* 目标定价 */
 .input-target { width: 86px; padding: 3px 6px; }
