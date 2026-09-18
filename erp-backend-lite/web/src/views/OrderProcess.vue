@@ -1931,6 +1931,12 @@ function agentFeeTitle(pkg) {
   if (isCancelled(pkg)) return '已取消订单:无佣金扣款(不估算)';
   return '无应计数据,按订单金额 × 16% 预估';
 }
+// 代理佣金占订单金额百分比(实扣或预估口径与上一行佣金一致;无佣金或订单金额为 0 显示 —)
+function agentFeePct(pkg) {
+  const fee = pkg.accrual?.agentFee ?? pkg.profit?.commission;
+  if (fee == null || !pkg.orderAmount) return '—';
+  return ((fee / pkg.orderAmount) * 100).toFixed(1) + '%';
+}
 function deliveryTitle(pkg) {
   const real = pkg.accrual?.delivery;
   const est = pkg.profit?.delivery;
@@ -2816,6 +2822,8 @@ onUnmounted(() => {
               <div class="amt-row"><span class="amt-name">采购</span><span class="amt-val" :class="{ muted: !pkg.totalPurchaseAmount }">{{ fmtMoney(pkg.totalPurchaseAmount) }}</span></div>
               <!-- 代理佣金:有应计=66 类型实扣换算;已取消=0(不估算);其余=16% 预估(标"估") -->
               <div class="amt-row sub muted" :title="agentFeeTitle(pkg)"><span class="amt-name">{{ pkg.accrual || isCancelled(pkg) ? '代理佣金' : '代理佣金(估)' }}</span><span class="amt-val">{{ fmtMoney(pkg.accrual?.agentFee ?? pkg.profit?.commission) }}</span></div>
+              <!-- 代理佣金占订单金额百分比(口径与上一行佣金一致:实扣优先,否则16%预估) -->
+              <div class="amt-row sub muted" :title="'代理佣金 ÷ 订单金额 × 100%'"><span class="amt-name">佣金占比</span><span class="amt-val">{{ agentFeePct(pkg) }}</span></div>
               <!-- 国际配送(实际):应计 type 67 -->
               <div class="amt-row sub" :title="deliveryTitle(pkg)"><span class="amt-name">国际配送</span><span class="amt-val" :class="{ muted: pkg.accrual?.delivery == null }">{{ pkg.accrual?.delivery != null ? fmtMoney(pkg.accrual.delivery) : '—' }}</span></div>
               <!-- 国际配送(估):公式 3.37 + 0.0281 × weight_g 估算 -->
@@ -3296,7 +3304,7 @@ onUnmounted(() => {
           <div><span class="dl">下单时间</span>{{ fmtTime(detail.package.inProcessAt) }}</div>
           <div><span class="dl">最晚发货</span>{{ fmtTime(detail.package.shipmentDate) }}</div>
           <div><span class="dl">订单金额</span>{{ fmtMoney(detail.package.orderAmount) }}</div>
-          <div><span class="dl">代理佣金</span>{{ fmtMoney(detail.package.accrual?.agentFee ?? detail.package.profit?.commission) }}<span v-if="!detail.package.accrual" class="muted">(估)</span></div>
+          <div><span class="dl">代理佣金</span>{{ fmtMoney(detail.package.accrual?.agentFee ?? detail.package.profit?.commission) }}<span v-if="!detail.package.accrual" class="muted">(估)</span> <span class="muted">({{ agentFeePct(detail.package) }})</span></div>
           <div><span class="dl">采购合计</span>{{ fmtMoney(detail.package.totalPurchaseAmount) }}</div>
           <div :title="profitTitle(detail.package)"><span class="dl">{{ profitLabel(detail.package) }}</span>{{ fmtMoney(detail.package.profit?.profit) }}</div>
         </div>
