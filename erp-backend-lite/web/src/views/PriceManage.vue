@@ -301,6 +301,11 @@ const OPERATE_TEXT = {
   wait_receiver_confirm: '已发货', cancelled: '已取消',
 };
 
+/** Ozon 商品详情页链接(与订单处理页同款) */
+function pdpUrl(row) {
+  return row?.sku ? `https://ozon.ru/context/detail/id/${row.sku}` : null;
+}
+
 /** 复制文本到剪贴板(降级兼容 http 环境,与订单处理页同款) */
 async function copyText(val, label) {
   const s = String(val || '').trim();
@@ -401,14 +406,15 @@ onMounted(async () => {
               <td class="col-product">
                 <div class="prod">
                   <div v-if="row.image" class="img-hover-wrap">
-                    <div class="product-img-box">
+                    <a :href="pdpUrl(row)" target="_blank" rel="noopener" class="product-img-box" :title="row.name || '查看Ozon商品'">
                       <img :src="row.image" class="product-img" loading="lazy" referrerpolicy="no-referrer" alt="" />
-                    </div>
+                    </a>
                     <img class="img-preview" :src="row.image" loading="lazy" referrerpolicy="no-referrer" alt="" />
                   </div>
                   <div v-else class="product-img-box prod-img-empty">无图</div>
                   <div class="prod-info">
-                    <div class="prod-name" :title="row.name || ''">{{ row.name || '(未同步名称)' }}</div>
+                    <a v-if="row.name" :href="pdpUrl(row)" target="_blank" rel="noopener" class="prod-name" :title="row.name">{{ row.name }}</a>
+                    <div v-else class="prod-name">(未同步名称)</div>
                     <div class="prod-sku">
                       SKU：{{ row.sku }}
                       <button class="copy-btn" title="复制SKU" @click.stop="copyText(row.sku, 'SKU')">
@@ -698,6 +704,9 @@ onMounted(async () => {
   font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;
   color: var(--text-primary, #111827);
 }
+/* 名称为链接时 */
+a.prod-name { text-decoration: none; display: block; }
+a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .prod-sku { font-size: 11px; color: var(--text-secondary, #9ca3af); margin-top: 2px; }
 
 /* 单元格输入 */

@@ -62,14 +62,15 @@ export function getPriceCacheBySku(sku) {
 }
 
 // 本地 product_id → sku/name/image 映射(同步映射源,零 API 调用)
-// product_data_cache.data 即 v3 商品对象:$.id = product_id,$.images[0] = 首图
+// product_data_cache.data 即 v3 商品对象:$.id = product_id
+// 图片与订单页同口径:primary_image[0] 优先,images[0] 兜底(主图≠images 首图,实测有差异)
 // 实测六店铺 13071 商品 100% 有 $.id,可完全替代 v3 反查
 export function getLocalProductIdMap(storeId) {
   return db
     .prepare(
       `SELECT CAST(json_extract(data, '$.id') AS INTEGER) AS pid, sku,
               json_extract(data, '$.name') AS name,
-              json_extract(data, '$.images[0]') AS image
+              COALESCE(json_extract(data, '$.primary_image[0]'), json_extract(data, '$.images[0]')) AS image
        FROM product_data_cache
        WHERE store_id = ? AND json_extract(data, '$.id') IS NOT NULL`
     )
