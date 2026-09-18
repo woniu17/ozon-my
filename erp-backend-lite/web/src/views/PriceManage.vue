@@ -448,9 +448,9 @@ onMounted(async () => {
             <th class="col-expand"></th>
             <th class="col-product">商品</th>
             <th class="col-num">售价</th>
-            <th class="col-num">90天销量</th>
-            <th class="col-num">采购价(本系统)</th>
-            <th class="col-num">重量(g)</th>
+            <th class="col-num col-sales">90天销量</th>
+            <th class="col-num col-purchase">采购价(本系统)</th>
+            <th class="col-num col-weight">重量(g)</th>
             <th class="col-num">当前利润</th>
             <th class="col-num">调整利润</th>
             <th class="col-target">按成本利润率定价</th>
@@ -493,15 +493,18 @@ onMounted(async () => {
                 </div>
               </td>
               <td class="col-num">{{ fmtMoney(row.price) }}<div v-if="row.old_price" class="sub">划线 ¥{{ row.old_price }}</div></td>
-              <td class="col-num">{{ row.sales90 ?? 0 }}</td>
-              <td class="col-num">
-                <input
-                  class="cell-input" :value="editVal(row, 'purchase')"
-                  @input="editBuf[row.sku].purchase = $event.target.value"
-                  @blur="saveCell(row, 'purchase')" @keyup.enter="$event.target.blur()"
-                  placeholder="—" />
+              <td class="col-num col-sales">{{ row.sales90 ?? 0 }}</td>
+              <td class="col-num col-purchase">
+                <div class="price-cell">
+                  <span class="yen">¥</span>
+                  <input
+                    class="cell-input" :value="editVal(row, 'purchase')"
+                    @input="editBuf[row.sku].purchase = $event.target.value"
+                    @blur="saveCell(row, 'purchase')" @keyup.enter="$event.target.blur()"
+                    placeholder="—" />
+                </div>
               </td>
-              <td class="col-num">
+              <td class="col-num col-weight">
                 <input
                   class="cell-input" :value="editVal(row, 'weight')"
                   @input="editBuf[row.sku].weight = $event.target.value"
@@ -733,6 +736,14 @@ onMounted(async () => {
 /* 商品列定宽:防止 auto 布局把表格富余空间全塞给本列(内容约 380px,实测曾被撑到 722px) */
 .col-product { min-width: 360px; width: 450px; }
 .col-target { min-width: 230px; white-space: nowrap; }
+/* 窄列:90天销量/采购价/重量 定宽压缩(约原宽一半,受表头文字下限保护) */
+.col-sales { width: 110px; }
+.col-purchase { width: 150px; }
+.col-weight { width: 100px; }
+/* 采购价输入:¥ 前缀 + 收窄输入框 */
+.price-cell { display: inline-flex; align-items: center; gap: 3px; }
+.price-cell .cell-input { width: 64px; text-align: right; }
+.yen { color: var(--text-secondary, #6b7280); }
 
 .pos { color: #047857; }
 .neg { color: #dc2626; }
