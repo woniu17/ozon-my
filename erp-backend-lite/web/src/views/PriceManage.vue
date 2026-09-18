@@ -447,7 +447,7 @@ onMounted(async () => {
           <tr>
             <th class="col-expand"></th>
             <th class="col-product">商品</th>
-            <th class="col-num">售价</th>
+            <th class="col-num col-price">售价</th>
             <th class="col-num col-sales">90天销量</th>
             <th class="col-num col-purchase">采购价(本系统)</th>
             <th class="col-num col-weight">重量(g)</th>
@@ -492,7 +492,7 @@ onMounted(async () => {
                   </div>
                 </div>
               </td>
-              <td class="col-num">{{ fmtMoney(row.price) }}<div v-if="row.old_price" class="sub">划线 ¥{{ row.old_price }}</div></td>
+              <td class="col-num col-price">{{ fmtMoney(row.price) }}<div v-if="row.old_price" class="sub">划线 ¥{{ row.old_price }}</div></td>
               <td class="col-num col-sales">{{ row.sales90 ?? 0 }}</td>
               <td class="col-num col-purchase">
                 <div class="price-cell">
@@ -736,14 +736,15 @@ onMounted(async () => {
 /* 商品列定宽:防止 auto 布局把表格富余空间全塞给本列(内容约 380px,实测曾被撑到 722px) */
 .col-product { min-width: 360px; width: 450px; }
 .col-target { min-width: 230px; white-space: nowrap; }
-/* 窄列:90天销量/采购价/重量 定宽压缩(约原宽一半,受表头文字下限保护) */
+/* 窄列:售价/90天销量/采购价/重量 定宽压缩(约原宽一半,受表头文字下限保护) */
+.col-price { width: 115px; }
 .col-sales { width: 110px; }
 .col-purchase { width: 150px; }
 .col-weight { width: 100px; }
-/* 采购价输入:¥ 前缀 + 收窄输入框 */
-.price-cell { display: inline-flex; align-items: center; gap: 3px; }
-.price-cell .cell-input { width: 64px; text-align: right; }
-.yen { color: var(--text-secondary, #6b7280); }
+/* 采购价输入:¥ 内嵌输入框左侧,与数字同框(视觉上 ¥12.36 一体) */
+.price-cell { position: relative; display: inline-block; }
+.price-cell .yen { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-secondary, #6b7280); pointer-events: none; }
+.price-cell .cell-input { width: 86px; padding-left: 24px; text-align: right; }
 
 .pos { color: #047857; }
 .neg { color: #dc2626; }
