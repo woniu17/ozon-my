@@ -170,7 +170,13 @@ function buildTodayStateSummaryLines(newStates, label) {
   const likePh = newStates.map(() => 'raw_payload LIKE ?').join(' OR ');
   const patterns = newStates.map((s) => `%"new_state":"${s}"%`);
   const rows = getDb().prepare(`
-    SELECT p.seller_id, COUNT(*) AS n, COALESCE(SUM(p.sale_amount_cny), 0) AS amount
+    SELECT p.seller_id, COUNT(*) AS n,
+      COALESCE(SUM(CASE
+        WHEN p.sale_amount_cny > 0 THEN p.sale_amount_cny
+        ELSE COALESCE((SELECT o.order_amount FROM op_ozon_order o
+                       WHERE o.posting_number = p.posting_number AND o.currency = 'CNY'
+                       ORDER BY o.order_amount DESC LIMIT 1), 0)
+      END), 0) AS amount
     FROM ozon_postings p
     WHERE p.posting_number IN (
       SELECT DISTINCT e.posting_number FROM ozon_push_events e
@@ -293,7 +299,25 @@ function loadProductsFromDb(postingNumber) {
       .get(postingNumber);
     if (!row?.products_json) return null;
     const arr = JSON.parse(row.products_json);
-    return Array.isArray(arr) && arr.length ? arr : null;
+    if (!Array.isArray(arr) || !arr.length) return null;
+    // 单价兜底(2026-09-19):NEW_POSTING 时 OPI 回拉失败会落「无 price」的原始推送形态,
+    // 从 erp 订单表(op_ozon_order_item,CNY 单价)回填,避免通知明细单价显示 —
+    const hasMissingPrice = arr.some((p) => !(typeof p?.price === 'object' ? p?.price?.amount : p?.price));
+    if (hasMissingPrice) {
+      const items = getDb().prepare(
+        `SELECT oi.sku, oi.price FROM op_ozon_order o
+         JOIN op_ozon_order_item oi ON oi.ozon_order_id = o.id
+         WHERE o.posting_number = ? AND o.currency = 'CNY' AND oi.price IS NOT NULL`
+      ).all(postingNumber);
+      const priceMap = new Map(items.map((it) => [String(it.sku), it.price]));
+      for (const p of arr) {
+        const cur = typeof p?.price === 'object' ? p?.price?.amount : p?.price;
+        if (!cur && priceMap.has(String(p.sku))) {
+          p.price = { amount: priceMap.get(String(p.sku)), currency_code: 'CNY' };
+        }
+      }
+    }
+    return arr;
   } catch {
     return null;
   }
