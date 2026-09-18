@@ -9,10 +9,11 @@ import { PUSH_ABSORBING } from './status-map.js';
 
 /**
  * 从 posting / payload 中提取销售金额(OPI 返回的金额本身就是 CNY)
- * 优先 financial_data.posting_totals.price.amount
- * 兜底 financial_data.products[].payout.amount 之和
- * 再兜底 products[].price.amount 之和
+ * 优先 financial_data.posting_totals.price.amount(订单总额)
+ * 兜底 financial_data.products[].payout.amount × quantity 之和
+ * 再兜底 products[].price × quantity 之和
  * 被 new-posting.js / unfulfilled-poller.js 落库时复用
+ * (2026-09-18 修复:第二/三级兜底此前漏乘 quantity,多件订单金额只算了单件价)
  */
 export function extractSaleAmountCny(posting) {
   if (!posting) return 0;
@@ -20,14 +21,15 @@ export function extractSaleAmountCny(posting) {
   const total = fd.posting_totals?.price?.amount;
   if (total != null) return Number(total) || 0;
   if (Array.isArray(fd.products)) {
-    const sum = fd.products.reduce((s, p) => s + (Number(p?.payout?.amount) || 0), 0);
+    const sum = fd.products.reduce(
+      (s, p) => s + (Number(p?.payout?.amount) || 0) * (Number(p?.quantity) || 1), 0);
     if (sum > 0) return sum;
   }
   if (Array.isArray(posting.products)) {
     const sum = posting.products.reduce((s, p) => {
       const price = p?.price;
       const v = typeof price === 'object' ? price?.amount : price;
-      return s + (Number(v) || 0);
+      return s + (Number(v) || 0) * (Number(p?.quantity) || 1);
     }, 0);
     if (sum > 0) return sum;
   }
