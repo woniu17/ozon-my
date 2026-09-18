@@ -730,7 +730,8 @@ onMounted(async () => {
 
 .col-expand { width: 28px; cursor: pointer; text-align: center; color: var(--text-secondary, #9ca3af); }
 .col-num { text-align: right; white-space: nowrap; }
-.col-product { min-width: 360px; }
+/* 商品列定宽:防止 auto 布局把表格富余空间全塞给本列(内容约 380px,实测曾被撑到 722px) */
+.col-product { min-width: 360px; width: 450px; }
 .col-target { min-width: 230px; white-space: nowrap; }
 
 .pos { color: #047857; }
@@ -823,7 +824,7 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .target-grid { display: flex; align-items: center; gap: 14px; white-space: nowrap; }
 .tg-prices { display: flex; flex-direction: column; gap: 2px; }
 .tg-line { font-size: 17px; }
-.tg-label { display: inline-block; color: var(--text-secondary, #6b7280); margin-right: 6px; min-width: 5em; }
+.tg-label { display: inline-block; color: var(--text-secondary, #6b7280); margin-right: 6px; }
 .tg-rates { display: flex; flex-direction: column; gap: 3px; }
 .tg-act { display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .rate-opt {
