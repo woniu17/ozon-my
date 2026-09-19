@@ -9,14 +9,9 @@
       <view class="head-sub">{{ items.length }} 个商品行 · 采购合计 {{ fmtMoney(pkg.totalPurchaseAmount) }}</view>
     </view>
 
-    <!-- Step2:平台订单选择 -->
+    <!-- Step2:平台订单选择(从主视图「+ 从平台订单选择」进入) -->
     <view v-if="step === 'select'">
       <view class="card">
-        <!-- 已有采购入口(2026-09-19:进页直接展示平台订单,已有采购收进此入口条) -->
-        <view v-if="groups.length" class="linked-entry" @click="step = 'manage'">
-          <text>已有采购 {{ groups.length }} 单 · 改分摊/删除</text>
-          <text class="linked-entry-arrow">›</text>
-        </view>
         <view class="section-title">选择平台订单</view>
         <!-- 平台×账号 tabs(多账号展开,与 web 端一致) -->
         <scroll-view class="plat-tabs" scroll-x :show-scrollbar="false">
@@ -99,7 +94,7 @@
           <text class="sel-count">已选 {{ selCount }} 单</text>
           <text class="sel-total">合计 ¥{{ newSelectedTotal }}</text>
         </view>
-        <button class="abtn ghost" @click="uni.navigateBack()">返回</button>
+        <button class="abtn ghost" @click="step = 'manage'">返回</button>
         <button class="abtn primary" :disabled="!selCount" @click="goStep3">下一步</button>
       </view>
     </view>
@@ -149,9 +144,9 @@
           </view>
         </template>
 
-        <!-- manual:手填各产品行金额 -->
+        <!-- manual:手填各产品行金额(适用于优惠券/额外成本导致实际采购价与订单金额不符) -->
         <template v-else>
-          <view class="tip">各产品行分摊金额已按数量预填,可自行修改。</view>
+          <view class="tip">采购使用了优惠券或存在其他成本、实际采购价与订单金额不符时,在各行填写实际分摊金额(已按数量预填)。</view>
           <view v-for="(it, i) in manualItems" :key="i" class="alloc-row">
             <image v-if="it.picUrl" class="alloc-img" :src="it.picUrl" mode="aspectFill" />
             <view v-else class="alloc-img"></view>
@@ -176,54 +171,22 @@
         </view>
       </view>
       <view class="action-bar">
-        <button class="abtn ghost" @click="step = 'select'">返回</button>
-        <button class="abtn white" :disabled="submitting" @click="doSubmit()">
-          {{ submitting ? '提交中…' : '仅保存' }}
-        </button>
-        <button class="abtn primary" :disabled="submitting || !canShipAfterSave" @click="doSubmit(true)">
-          {{ submitting ? '处理中…' : '保存并备货' }}
-        </button>
+        <button class="abtn ghost" @click="step = 'manage'">返回</button>
+        <button class="abtn primary" @click="collectAdd">确认</button>
       </view>
     </view>
 
-    <!-- 改分摊编辑模式 -->
-    <view v-else-if="allocEditing">
-      <view class="card">
-        <view class="section-title">修改分摊金额</view>
-        <view class="tip">
-          自己指定各商品行分摊到本包裹的金额。保存只修改已有采购单的分摊金额,不会新增采购单。
-        </view>
-        <view v-for="(it, i) in allocItems" :key="i" class="alloc-row">
-          <image v-if="it.picUrl" class="alloc-img" :src="it.picUrl" mode="aspectFill" />
-          <view v-else class="alloc-img"></view>
-          <view class="alloc-main">
-            <view class="alloc-title">{{ it.title || '—' }}</view>
-            <view class="alloc-sub">SKU {{ it.sku || '—' }} ×{{ it.quantity }}</view>
-            <view class="alloc-input-wrap">
-              <text class="rmb">¥</text>
-              <input class="alloc-input" type="digit" v-model="it.amount" placeholder="0.00" />
-            </view>
-          </view>
-        </view>
-        <view class="alloc-sum">
-          合计:<text class="alloc-sum-num">¥{{ allocTotal.toFixed(2) }}</text>
-        </view>
-      </view>
-      <view class="action-bar">
-        <button class="abtn ghost" @click="exitAllocEdit">取消</button>
-        <button class="abtn primary" :disabled="saving" @click="saveAlloc">
-          {{ saving ? '保存中…' : '保存修改' }}
-        </button>
-      </view>
-    </view>
-
-    <!-- 默认视图:已有采购管理(2026-09-19:进页直接展示平台订单,本视图经「已有采购」入口进入) -->
+    <!-- 默认视图:采购管理(已有采购直接展示,删除为暂存标记,统一保存落地) -->
     <view v-else>
-      <view class="back-bar" @click="enterSelect">‹ 返回平台订单</view>
       <view class="card">
         <view class="section-title">已有采购({{ groups.length }})</view>
-        <view v-if="!groups.length" class="muted-line">尚无采购关联</view>
-        <view v-for="g in groups" :key="g.purchaseOrderId" class="po">
+        <view v-if="!groups.length && !pendingAdd" class="muted-line">尚无采购关联,可从平台订单选择新增</view>
+        <view
+          v-for="g in groups"
+          :key="g.purchaseOrderId"
+          class="po"
+          :class="{ removing: pendingRemoves.includes(g.purchaseOrderId) }"
+        >
           <view class="po-head">
             <text class="po-platform">{{ platformLabel(g.platform) }}</text>
             <text class="po-sn">{{ g.purchaseSn || '#' + g.purchaseOrderId }}</text>
@@ -252,10 +215,43 @@
             <text class="po-logi-no">{{ g.poLogisticsNo }}</text>
           </view>
           <view class="po-actions">
-            <button class="mini-btn" @click="enterAllocEdit">改分摊</button>
-            <button class="mini-btn danger" :disabled="removing" @click="removeGroup(g)">删除</button>
+            <button v-if="!pendingRemoves.includes(g.purchaseOrderId)" class="mini-btn danger" @click="toggleRemove(g)">删除</button>
+            <button v-else class="mini-btn" @click="toggleRemove(g)">恢复</button>
           </view>
         </view>
+      </view>
+
+      <!-- 待新增采购(Step3 确认后暂存,保存时落地) -->
+      <view v-if="pendingAdd" class="card">
+        <view class="section-title">待新增采购</view>
+        <view class="po pending-add">
+          <view class="po-head">
+            <text class="po-platform">{{ platformLabel(pendingAdd.body.platform) }}</text>
+            <text class="po-sn">{{ pendingAdd.body.purchaseSn || '(无单号)' }}</text>
+            <text class="badge-new">新增</text>
+          </view>
+          <view class="po-meta">
+            <text class="po-amt">¥{{ Number(pendingAdd.body.paymentAmount || 0).toFixed(2) }}</text>
+            <text class="po-meta-item">{{ pendingAdd.body.allocMode === 'auto' ? '自动 · 按数量分摊' : '手动指定价格' }}</text>
+          </view>
+          <view class="po-actions">
+            <button class="mini-btn danger" @click="discardAdd">移除</button>
+          </view>
+        </view>
+      </view>
+
+      <view class="card">
+        <view class="add-entry" @click="enterSelect">+ 从平台订单选择</view>
+        <view class="tip-inline">手动指定价格:采购用了优惠券或有其他成本、实际采购价与平台订单金额不符时使用。</view>
+      </view>
+
+      <view class="action-bar">
+        <button class="abtn white" :disabled="saving || !dirty" @click="doSave()">
+          {{ saving ? '保存中…' : '保 存' }}
+        </button>
+        <button class="abtn primary" :disabled="saving || !dirty || !canShipAfterSave" @click="doSave(true)">
+          {{ saving ? '处理中…' : '保存并备货' }}
+        </button>
       </view>
     </view>
   </view>
@@ -270,7 +266,6 @@ import { ref, reactive, computed } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import {
   getOrderDetail,
-  updatePurchaseAlloc,
   unlinkPurchase,
   clearPurchaseInfo,
   submitPurchase,
@@ -288,9 +283,12 @@ const items = ref([]);
 const links = ref([]);
 const loadError = ref('');
 const saving = ref(false);
-const removing = ref(false);
-const allocEditing = ref(false);
-const allocItems = ref([]);
+// 暂存变更(统一保存落地,2026-09-19):
+//   pendingRemoves: 标记删除的已有采购单 purchaseOrderId
+//   pendingAdd: Step3 确认的新增采购(存 submitPurchase body + 拼单 lookup 结果)
+const pendingRemoves = ref([]);
+const pendingAdd = ref(null);
+const dirty = computed(() => pendingRemoves.value.length > 0 || !!pendingAdd.value);
 
 // ── 标签映射(与详情页/ web 端同步)────────────────────────
 const PLATFORM_LABELS = {
@@ -342,10 +340,6 @@ const groups = computed(() => {
   });
 });
 
-const allocTotal = computed(() =>
-  allocItems.value.reduce((s, it) => s + (Number(it.amount) || 0), 0)
-);
-
 // ── 数据加载 ────────────────────────────────────────────────
 async function loadDetail() {
   loadError.value = '';
@@ -365,99 +359,11 @@ function notifyRefresh() {
   uni.$emit('orders-refresh');
 }
 
-// ── 改分摊(语义与 web 端 5893fbf 一致)────────────────────
-// 进入编辑:已有采购的分摊金额按产品行回填,作为手改起点
-function enterAllocEdit() {
-  const linkByItem = new Map();
-  for (const l of links.value) {
-    const iid = l.ozonOrderItemId;
-    linkByItem.set(iid, (linkByItem.get(iid) || 0) + (Number(l.allocatedAmount) || 0));
-  }
-  allocItems.value = items.value.map((it) => ({
-    itemId: it.id,
-    title: it.title,
-    sku: it.sku,
-    picUrl: it.picUrl,
-    quantity: it.quantity,
-    amount:
-      linkByItem.has(it.id)
-        ? String(Math.round(linkByItem.get(it.id) * 100) / 100)
-        : '',
-  }));
-  allocEditing.value = true;
-}
-
-function exitAllocEdit() {
-  allocEditing.value = false;
-  allocItems.value = [];
-}
-
-// 保存:修改已有采购单分摊到本包裹的金额(不新增采购单)
-function saveAlloc() {
-  if (saving.value) return;
-  const list = allocItems.value
-    .map((it) => ({ itemId: it.itemId, amount: Number(it.amount) || 0 }))
-    .filter((it) => it.itemId);
-  if (!list.some((it) => it.amount > 0)) {
-    uni.showToast({ title: '请至少填写一行分摊金额', icon: 'none' });
-    return;
-  }
-  const totalAmount = list.reduce((s, it) => s + it.amount, 0);
-  const oldAlloc = groups.value.reduce((s, g) => s + g.allocated, 0);
-  const pos = groups.value.map((g) => g.purchaseSn || '(手工单)').join('、');
-  uni.showModal({
-    title: '修改分摊金额',
-    content:
-      '将已有采购单 ' + pos + ' 分摊到本包裹的金额修改为 ¥' +
-      totalAmount.toFixed(2) + '(当前 ¥' + oldAlloc.toFixed(2) + ')?\n不会新增采购单。',
-    confirmText: '修改',
-    success: async (res) => {
-      if (!res.confirm) return;
-      saving.value = true;
-      try {
-        const r = await updatePurchaseAlloc({ packageId: packageId.value, items: list });
-        uni.showToast({
-          title: '已修改分摊 ¥' + (Number(r?.total) || totalAmount).toFixed(2),
-          icon: 'none',
-        });
-        notifyRefresh();
-        // 返回详情页(详情页 onShow 会自动刷新)
-        setTimeout(() => uni.navigateBack(), 600);
-      } catch (e) {
-        /* 错误 toast 已由 request.js 统一弹出 */
-      } finally {
-        saving.value = false;
-      }
-    },
-  });
-}
-
-// ── 删除采购关联 ────────────────────────────────────────────
-function removeGroup(g) {
-  if (removing.value) return;
-  uni.showModal({
-    title: '删除采购关联',
-    content:
-      '删除 ' + (g.purchaseSn || '#' + g.purchaseOrderId) + ' 与本包裹的关联?\n将冲回该单分摊到本包裹的金额(' + fmtMoney(g.allocated) + ')。',
-    confirmText: '删除',
-    success: async (res) => {
-      if (!res.confirm) return;
-      removing.value = true;
-      try {
-        await unlinkPurchase(g.purchaseOrderId, packageId.value);
-        // 全部删光:清残留聚合(采购状态/头程物流),对齐 web 端"逐单删光后保存"语义
-        const remaining = groups.value.filter((x) => x.purchaseOrderId !== g.purchaseOrderId);
-        if (!remaining.length) await clearPurchaseInfo(packageId.value);
-        uni.showToast({ title: '已删除采购关联', icon: 'none' });
-        notifyRefresh();
-        await loadDetail();
-      } catch (e) {
-        /* 已 toast */
-      } finally {
-        removing.value = false;
-      }
-    },
-  });
+// ── 删除标记(暂存,保存时统一落地)─────────────────────────
+function toggleRemove(g) {
+  const i = pendingRemoves.value.indexOf(g.purchaseOrderId);
+  if (i >= 0) pendingRemoves.value.splice(i, 1);
+  else pendingRemoves.value.push(g.purchaseOrderId);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -470,7 +376,7 @@ const PLATFORM_TAB_META = {
   taobao: { platformVal: 'taobao', label: '淘宝' },
 };
 
-const step = ref('select'); // select=选平台订单(默认,进页直接展示) | manage=管理已有采购
+const step = ref('manage'); // manage=采购管理(默认) | select=选平台订单 | confirm=分摊确认
 // 默认 tabs(/status 未返回时兜底,与 web 端一致)
 const platTabs = ref([
   { key: 'pdd', platform: 'pdd', account: 'linqx', label: '拼多多' },
@@ -679,7 +585,6 @@ const allocMode = ref('auto'); // 'auto' 按数量加权 | 'manual' 手动指定
 const manualItems = ref([]); // manual 模式各产品行金额(切模式时按数量加权预填)
 const lookupResult = ref(null); // 拼单查询结果(单单有效;多单拼接查询查不到则忽略)
 const logisticsInput = ref(''); // 国内快递单号(选填,预填平台单号)
-const submitting = ref(false);
 
 const step3Sel = computed(() => newSelectedOrders.value);
 const step3Sn = computed(() => step3Sel.value.map((o) => o.orderSn).join(','));
@@ -759,10 +664,10 @@ async function goStep3() {
   }
 }
 
-// 提交采购(与 web 端 savePurchase 正常提交分支对齐)
-// withShip=true:保存成功后立即备货(「保存并备货」按钮)
-async function doSubmit(withShip = false) {
-  if (submitting.value) return;
+// ════════════════════════════════════════════════════════════
+// Step3 确认 → 暂存新增采购(不落库,回主视图统一保存)
+// ════════════════════════════════════════════════════════════
+function collectAdd() {
   const isAuto = allocMode.value === 'auto';
   const sel = step3Sel.value;
   if (!sel.length) return;
@@ -776,40 +681,17 @@ async function doSubmit(withShip = false) {
     uni.showToast({ title: '请至少填写一行分摊金额', icon: 'none' });
     return;
   }
-  // 拼单检测:进入 Step3 已查过的复用;查到已关联包裹需确认追加
-  const platform = step3Platform.value;
-  const sn = step3Sn.value;
-  if (platform !== 'other' && sn) {
-    try {
-      const r = lookupResult.value || (await lookupPurchase(platform, sn));
-      if (r?.exists && r.linkedPackages?.length) {
-        const confirmed = await new Promise((resolve) => {
-          uni.showModal({
-            title: '拼单提示',
-            content:
-              '采购单已关联 ' + r.linkedPackages.length + ' 个包裹,本次将追加关联到本包裹' +
-              (isAuto ? '(auto 模式:已关联包裹分摊金额将按数量重新加权)' : '') + '。是否继续?',
-            confirmText: '追加关联',
-            success: (res) => resolve(!!res.confirm),
-          });
-        });
-        if (!confirmed) return;
-      }
-    } catch (e) {
-      /* lookup 失败不阻塞提交 */
-    }
-  }
-  submitting.value = true;
-  try {
-    // 表单回填口径与 web 端 watch(newSelectedOrders) 一致
-    const snList = sel.map((o) => o.orderSn);
-    const buyerAccounts = [...new Set(sel.map((o) => o.account || o._account || o.buyerUsername).filter(Boolean))];
-    const buyerIds = [...new Set(sel.map((o) => o.buyerUserId).filter(Boolean))];
-    const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
-    const companies = [...new Set(sel.map((o) => o.logisticsCompany).filter(Boolean))];
-    await submitPurchase({
+  // 表单回填口径与 web 端 watch(newSelectedOrders) 一致
+  const snList = sel.map((o) => o.orderSn);
+  const buyerAccounts = [...new Set(sel.map((o) => o.account || o._account || o.buyerUsername).filter(Boolean))];
+  const buyerIds = [...new Set(sel.map((o) => o.buyerUserId).filter(Boolean))];
+  const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
+  const companies = [...new Set(sel.map((o) => o.logisticsCompany).filter(Boolean))];
+  pendingAdd.value = {
+    lookup: lookupResult.value,
+    body: {
       packageId: packageId.value,
-      platform,
+      platform: step3Platform.value,
       purchaseSn: snList.join(',') || null,
       buyerAccount: buyerAccounts.join(',') || null,
       buyerUserId: buyerIds.join(',') || null,
@@ -821,9 +703,67 @@ async function doSubmit(withShip = false) {
       items: itemsArg,
       platformGoods: sel.flatMap((o) => o.goods || []),
       allocMode: isAuto ? 'auto' : 'manual',
-    });
-    uni.showToast({ title: '已提交,流转待打单发货', icon: 'none' });
-    // 保存并备货:提交成功后向 Ozon 确认货件(多件二次确认,单件直接备货)
+    },
+  };
+  // 清空勾选(重新进入选择时从头开始;再次确认将替换待新增)
+  for (const t of platTabs.value) {
+    const st = stores[t.key];
+    if (st) st.selected = [];
+  }
+  step.value = 'manage';
+  uni.showToast({ title: '已暂存,请点击保存落地', icon: 'none' });
+}
+
+// 移除暂存的新增
+function discardAdd() {
+  pendingAdd.value = null;
+}
+
+// ════════════════════════════════════════════════════════════
+// 统一保存:删除标记落地 + 新增采购落地(与 web 端 savePurchase 语义对齐)
+// withShip=true: 保存成功后立即备货(「保存并备货」按钮)
+// ════════════════════════════════════════════════════════════
+async function doSave(withShip = false) {
+  if (saving.value || !dirty.value) return;
+  // 拼单确认(纯前端,先于任何落库;取消则中止整个保存)
+  const add = pendingAdd.value;
+  if (add && add.body.platform !== 'other' && add.body.purchaseSn) {
+    try {
+      const r = add.lookup || (await lookupPurchase(add.body.platform, add.body.purchaseSn));
+      if (r?.exists && r.linkedPackages?.length) {
+        const confirmed = await new Promise((resolve) => {
+          uni.showModal({
+            title: '拼单提示',
+            content:
+              '采购单已关联 ' + r.linkedPackages.length + ' 个包裹,本次将追加关联到本包裹' +
+              (add.body.allocMode === 'auto' ? '(auto 模式:已关联包裹分摊金额将按数量重新加权)' : '') + '。是否继续?',
+            confirmText: '追加关联',
+            success: (res) => resolve(!!res.confirm),
+          });
+        });
+        if (!confirmed) return;
+      }
+    } catch (e) {
+      /* lookup 失败不阻塞保存 */
+    }
+  }
+  saving.value = true;
+  try {
+    // 1) 删除标记落地(逐单冲回)
+    for (const g of groups.value) {
+      if (pendingRemoves.value.includes(g.purchaseOrderId)) {
+        await unlinkPurchase(g.purchaseOrderId, packageId.value);
+      }
+    }
+    // 全部删光且无新增:清残留聚合(采购状态/头程物流)
+    const allRemoved =
+      groups.value.length > 0 &&
+      groups.value.every((g) => pendingRemoves.value.includes(g.purchaseOrderId));
+    if (allRemoved && !add) await clearPurchaseInfo(packageId.value);
+    // 2) 新增采购落地
+    if (add) await submitPurchase(add.body);
+    uni.showToast({ title: '采购已保存', icon: 'none' });
+    // 保存并备货:保存成功后向 Ozon 确认货件(多件二次确认,单件直接备货)
     if (withShip && canShipAfterSave.value) await shipAfterSave();
     notifyRefresh();
     // 返回详情页(onShow 自动刷新)
@@ -831,7 +771,7 @@ async function doSubmit(withShip = false) {
   } catch (e) {
     /* 错误 toast 已由 request.js 统一弹出 */
   } finally {
-    submitting.value = false;
+    saving.value = false;
   }
 }
 
@@ -881,10 +821,8 @@ async function shipAfterSave() {
 
 onLoad((opts) => {
   packageId.value = String((opts && opts.id) || '');
-  loadDetail().then(() => {
-    // 进页默认展示平台订单:初始化平台 tabs/登录态/首屏订单
-    if (pkg.value) enterSelect();
-  });
+  // 默认停留管理视图(已有采购直接展示);平台 tabs/登录态在首次进入选择视图时初始化
+  loadDetail();
 });
 </script>
 
@@ -933,31 +871,42 @@ onLoad((opts) => {
   margin-bottom: 16rpx;
 }
 
-/* 已有采购入口条(平台订单视图顶部,点击进入管理) */
-.linked-entry {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+/* 删除标记态(暂存,保存落地前灰化提示) */
+.po.removing {
+  opacity: 0.55;
+}
+
+.po.removing .po-sn {
+  text-decoration: line-through;
+}
+
+/* 待新增采购徽标 */
+.badge-new {
+  margin-left: auto;
+  font-size: 20rpx;
+  color: #00b42a;
+  background: #e8ffea;
+  border-radius: 999rpx;
+  padding: 4rpx 14rpx;
+}
+
+/* 从平台订单选择入口 */
+.add-entry {
+  text-align: center;
+  height: 84rpx;
+  line-height: 84rpx;
+  font-size: 27rpx;
+  border-radius: 14rpx;
   background: #f0f5ff;
-  border: 2rpx solid #a8ccff;
-  border-radius: 12rpx;
-  padding: 16rpx 20rpx;
-  font-size: 26rpx;
+  border: 2rpx dashed #a8ccff;
   color: #165dff;
-  margin-bottom: 16rpx;
 }
 
-.linked-entry-arrow {
-  font-size: 32rpx;
-  line-height: 1;
-}
-
-/* 管理视图顶部返回条 */
-.back-bar {
-  display: inline-block;
-  font-size: 26rpx;
-  color: #165dff;
-  padding: 8rpx 0 16rpx;
+.tip-inline {
+  margin-top: 14rpx;
+  font-size: 21rpx;
+  color: #a6abb3;
+  line-height: 1.5;
 }
 
 .muted-line {
@@ -1183,22 +1132,6 @@ onLoad((opts) => {
 
 .mini-btn[disabled] {
   opacity: 0.6;
-}
-
-/* ── 新增采购入口 ── */
-.add-btn {
-  width: 100%;
-  height: 84rpx;
-  line-height: 84rpx;
-  font-size: 27rpx;
-  border-radius: 14rpx;
-  background: #f7f8fa;
-  color: #4e5969;
-  margin-top: 16rpx;
-}
-
-.add-btn::after {
-  border: none;
 }
 
 /* ── Step2 平台订单选择 ── */
