@@ -906,7 +906,7 @@ async function refreshLookup() {
 }
 
 // auto 模式分摊预览计算
-// 公式:每行分摊 = (该行 quantity / Σ所有 auto 关联 quantity) × paymentAmount
+// 公式:每行金额 = 未删除已有采购的行分摊合计 + (该行 quantity / Σ auto 关联 quantity) × paymentAmount
 // Σ = 已关联 auto 包裹的数量合计 + 当前包裹各行的数量合计
 const autoPreview = computed(() => {
   if (purchaseForm.allocMode !== 'auto') return null;
@@ -919,25 +919,26 @@ const autoPreview = computed(() => {
   const sumQty = currentQty + existingAutoQty;
   if (sumQty === 0) return { items: [], sumQty: 0, payment, currentQty, existingAutoQty };
   const round2 = (n) => Math.round(n * 100) / 100;
-  // 无新采购金额(纯已有采购恢复态):回显已有 link 的行级分摊,与已选区金额保持一致
-  // (不参与加权计算;✕ 标记删除的已有采购不回显)
-  if (payment <= 0) {
-    const linkByItem = new Map();
-    for (const r of restoredPurchases.value) {
-      if (removedPurchaseIds.value.has(r.purchaseOrderId)) continue;
-      for (const l of r._links || []) {
-        linkByItem.set(l.itemId, (linkByItem.get(l.itemId) || 0) + (Number(l.allocatedAmount) || 0));
-      }
+  // 未删除的已有采购按行分摊合计(✕ 标记删除的不算)
+  const linkByItem = new Map();
+  for (const r of restoredPurchases.value) {
+    if (removedPurchaseIds.value.has(r.purchaseOrderId)) continue;
+    for (const l of r._links || []) {
+      linkByItem.set(l.itemId, (linkByItem.get(l.itemId) || 0) + (Number(l.allocatedAmount) || 0));
     }
+  }
+  if (payment <= 0) {
     const restoreItems = purchaseForm.items.map((it) => ({
       ...it,
       previewAmount: round2(linkByItem.get(it.itemId) || 0),
     }));
     return { items: restoreItems, sumQty, payment, currentQty, existingAutoQty };
   }
+  // 2026-09-19 修复:勾选新订单时,行金额 = 已有采购分摊 + 新采购按数量加权分摊
+  // (此前只显示新采购部分,把已有分摊顶掉了,勾选/取消订单时金额变化不符合预期)
   const items = purchaseForm.items.map((it) => ({
     ...it,
-    previewAmount: round2((Number(it.quantity) || 0) * payment / sumQty),
+    previewAmount: round2((linkByItem.get(it.itemId) || 0) + (Number(it.quantity) || 0) * payment / sumQty),
   }));
   return { items, sumQty, payment, currentQty, existingAutoQty };
 });
@@ -1484,7 +1485,20 @@ function isRestoredLinked(o) {
 
 /** 新勾选订单变化时自动回填 purchaseForm(无需手动点按钮;已有采购恢复项不参与,避免重复入库) */
 watch(newSelectedOrders, (sel) => {
-  if (!sel.length) return;
+  // 2026-09-19 修复:全部取消勾选时清空随勾选自动回填的字段——
+  // 此前直接 return,残留已取消订单的金额/单号,auto 分摊预览不回落、保存还会误提交
+  if (!sel.length) {
+    purchaseForm.purchaseSn = '';
+    purchaseForm.buyerAccount = '';
+    purchaseForm.buyerUserId = '';
+    purchaseForm.sellerName = '';
+    purchaseForm.paymentAmount = '';
+    purchaseForm.logisticsNo = '';
+    purchaseForm.logisticsCompany = '';
+    purchaseForm.platformGoods = [];
+    purchaseForm.platform = restoredPurchases.value[0]?.platform || 'other';
+    return;
+  }
   const first = sel[0];
   purchaseForm.platform = first._platform;
   purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
