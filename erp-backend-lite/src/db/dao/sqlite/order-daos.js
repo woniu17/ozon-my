@@ -724,9 +724,11 @@ function buildPackageWhere(filters = {}) {
     // 多条采购:关联 ≥2 个采购单(拼单场景,按 op_purchase_link 计数)
     where.push(`p.id IN (SELECT pl.package_id FROM op_purchase_link pl GROUP BY pl.package_id HAVING COUNT(*) >= 2)`);
   } else if (filters.purchaseStatus === 'manual') {
-    // 手工采购:存在手工录入的采购单(purchase_channel='manual',模式B;区别于平台订单导入的 'platform_order')
+    // 手工采购:存在无采购单号的手工录入单(模式B,页面显示"(手工单)")
+    // 2026-09-19 修正:原按 purchase_channel='manual' 筛,但 submitPurchase 一律写 'manual',
+    // 从平台订单选择导入的单也被误标,导致筛选混入大量平台采购单;改按"无单号"口径(与页面 (手工单) 显示一致)
     where.push(`EXISTS (SELECT 1 FROM op_purchase_order po JOIN op_purchase_link pl ON pl.purchase_order_id = po.id
-                 WHERE pl.package_id = p.id AND po.purchase_channel = 'manual')`);
+                 WHERE pl.package_id = p.id AND (po.purchase_sn IS NULL OR TRIM(po.purchase_sn) = ''))`);
   }
   // 备注筛选(2026-09-15):has=有备注(本地或妙手同步的 note);none=无备注
   if (filters.noteFilter === 'has') {
