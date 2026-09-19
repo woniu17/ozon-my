@@ -65,7 +65,7 @@
             <view class="prod-title">{{ it.title || '—' }}</view>
             <view class="prod-sub">
               <text v-if="it.sku" class="sku" @click.stop="searchBySku(it.sku)">{{ it.sku }}</text>
-              <text class="qty">×{{ it.quantity }}</text>
+              <text class="qty" :class="{ 'qty-multi': (Number(it.quantity) || 0) > 1 }">×{{ it.quantity }}</text>
             </view>
           </view>
           <view class="prod-price">{{ fmtMoney(it.price) }}</view>
@@ -520,6 +520,14 @@ onReachBottom(async () => {
   color: #86909c;
   display: flex;
   align-items: center;
+}
+
+/* 数量>1:红色加大加粗(与 web 端 qty-multi 同口径) */
+.qty-multi {
+  color: #dc2626;
+  font-weight: 700;
+  font-size: 32rpx;
+  line-height: 1;
 }
 
 .sku {
