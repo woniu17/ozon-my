@@ -2901,9 +2901,10 @@ onUnmounted(() => {
             </td>
             <td class="col-actions">
               <div class="action-group">
-                <!-- 主操作(2026-09-17 v2):待处理tab=采购/备货/同步订单/更多;其它tab=备货/同步订单/同步采购物流/更多 -->
+                <!-- 主操作(2026-09-17 v2):待处理=采购/备货/同步订单/更多;其它=备货/同步订单/同步采购物流/更多 -->
+                <!-- 2026-09-19:改为按行级 operateStatus 判断(全局搜索结果跨状态,按钮应随每行自身状态展示) -->
                 <button
-                  v-if="activeTab === 'waitProcess'"
+                  v-if="pkg.operateStatus === 'wait_process'"
                   class="btn btn-primary btn-sm"
                   title="录入/编辑采购信息(该包裹的采购单关联)"
                   @click="openPurchase(pkg)"
@@ -2921,9 +2922,9 @@ onUnmounted(() => {
                   :title="syncingPkgId === pkg.id ? '同步中…' : '按单号直查 Ozon 拉最新订单状态 + 强制拉应计项目(无时间窗口限制)'"
                   @click="onSyncPackage(pkg)"
                 >{{ syncingPkgId === pkg.id ? '同步中…' : '同步订单' }}</button>
-                <!-- 同步采购物流(2026-09-17):待处理tab收进"更多"菜单,其它tab主列直显 -->
+                <!-- 同步采购物流(2026-09-17):待处理行收进"更多"菜单,其它行主列直显(2026-09-19 行级判断) -->
                 <button
-                  v-if="pkg.purchaseLinks?.length && activeTab !== 'waitProcess'"
+                  v-if="pkg.purchaseLinks?.length && pkg.operateStatus !== 'wait_process'"
                   class="btn btn-ghost btn-sm"
                   :disabled="logisticsPkgId === pkg.id"
                   :title="logisticsPkgId === pkg.id ? '采购物流同步中…' : '该包裹全部关联采购单:补物流单号(1688/拼多多)+拉最新轨迹,强制刷新(不受1小时窗口限制)'"
@@ -2936,17 +2937,17 @@ onUnmounted(() => {
               </div>
               <!-- 更多菜单(fixed 定位,脱离表格 overflow 裁剪;点外部/滚动关闭,项点击后即关) -->
               <div v-if="rowMore.pkgId === pkg.id" class="row-more-pop" :style="{ top: rowMore.top + 'px', left: rowMore.left + 'px' }" @click.stop>
-                <!-- 采购:待处理tab已提升为主按钮,仅其它tab留在菜单 -->
+                <!-- 采购:待处理行已提升为主按钮,仅其它行留在菜单(2026-09-19 行级判断) -->
                 <button
-                  v-if="activeTab !== 'waitProcess'"
+                  v-if="pkg.operateStatus !== 'wait_process'"
                   class="row-more-item"
                   :class="{ 'row-more-item-strong': pkg.operateStatus === 'wait_process' || pkg.purchaseStatus === 'none' }"
                   title="录入/编辑采购信息"
                   @click="closeRowMore(); openPurchase(pkg)"
                 >采购</button>
-                <!-- 同步采购物流:待处理tab时从主列收进菜单(2026-09-17 v2) -->
+                <!-- 同步采购物流:待处理行时从主列收进菜单(2026-09-17 v2,2026-09-19 行级判断) -->
                 <button
-                  v-if="activeTab === 'waitProcess' && pkg.purchaseLinks?.length"
+                  v-if="pkg.operateStatus === 'wait_process' && pkg.purchaseLinks?.length"
                   class="row-more-item"
                   :disabled="logisticsPkgId === pkg.id"
                   :title="logisticsPkgId === pkg.id ? '采购物流同步中…' : '该包裹全部关联采购单:补物流单号(1688/拼多多)+拉最新轨迹,强制刷新'"
