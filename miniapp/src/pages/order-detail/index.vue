@@ -116,13 +116,11 @@
       </view>
     </view>
 
-    <!-- 底部操作条(显隐规则与 web 端 831ecb6 行级判断一致) -->
+    <!-- 底部操作条(显隐规则与 web 端 831ecb6 行级判断一致;顺序:同步订单→备货→采购/编辑采购→同步采购物流) -->
     <view class="action-bar">
-      <button
-        v-if="pkg.operateStatus === 'wait_process'"
-        class="abtn primary"
-        @click="onPurchase"
-      >采购</button>
+      <button class="abtn ghost" :disabled="syncing" @click="onSync">
+        {{ syncing ? '同步中…' : '同步订单' }}
+      </button>
       <button
         v-if="canShip"
         class="abtn"
@@ -130,9 +128,11 @@
         :disabled="shipping"
         @click="onShip"
       >{{ shipping ? '备货中…' : '备货' }}</button>
-      <button class="abtn ghost" :disabled="syncing" @click="onSync">
-        {{ syncing ? '同步中…' : '同步订单' }}
-      </button>
+      <button
+        v-if="pkg.operateStatus === 'wait_process'"
+        class="abtn primary"
+        @click="onPurchase"
+      >采购</button>
       <button
         v-if="links.length && pkg.operateStatus !== 'wait_process'"
         class="abtn ghost"
