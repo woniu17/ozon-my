@@ -805,7 +805,16 @@ function tabKeyForPlatform(platformVal) {
   return hit ? hit.key : 'pdd';
 }
 
+// 采购弹窗打开时的原始行(「保存并备货」用:备货需要行级 operateStatus/ozonStatus/items/货件号)
+const purchaseRowCtx = ref(null);
+// 保存后可备货:未交运未取消且 Ozon 侧待打包(与列表行备货按钮同口径)
+const canShipAfterSave = computed(() => {
+  const p = purchaseRowCtx.value;
+  return !!p && (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_ship') && p.ozonStatus === 'awaiting_packaging';
+});
+
 function openPurchase(pkg) {
+  purchaseRowCtx.value = pkg;
   purchaseForm.packageId = pkg.id;
   purchaseForm.packageNo = pkg.packageNo;
   purchaseForm.platform = 'other';
@@ -967,7 +976,8 @@ watch(autoPreview, (pv) => {
   });
 });
 
-async function savePurchase() {
+// 保存采购;withShip=true 为「保存并备货」:保存成功且可备货时立即向 Ozon 确认货件
+async function savePurchase(withShip = false) {
   if (purchaseSaving.value) return;
   const isAuto = purchaseForm.allocMode === 'auto';
   const items = purchaseForm.items
@@ -1049,6 +1059,8 @@ async function savePurchase() {
       purchaseOpen.value = false;
       loadTabs();
       loadList();
+      // 保存并备货:改分摊后包裹仍可备货时立即确认货件(onShipPackage 含多件确认与幂等处理)
+      if (withShip && canShipAfterSave.value) await onShipPackage(purchaseRowCtx.value);
     } catch (err) {
       show(err.message || String(err), 'error');
     } finally {
@@ -1101,6 +1113,8 @@ async function savePurchase() {
     purchaseOpen.value = false;
     loadTabs();
     loadList();
+    // 保存并备货:提交成功后立即向 Ozon 确认货件(onShipPackage 含多件确认与幂等处理)
+    if (withShip && canShipAfterSave.value) await onShipPackage(purchaseRowCtx.value);
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
@@ -3316,7 +3330,13 @@ onUnmounted(() => {
         </div>
         <div class="form-actions">
           <button class="btn btn-ghost" @click="purchaseOpen = false">取 消</button>
-          <button class="btn btn-primary" :disabled="purchaseSaving" @click="savePurchase">
+          <button
+            class="btn btn-ghost"
+            :disabled="purchaseSaving || !canShipAfterSave"
+            :title="canShipAfterSave ? '保存采购后立即向 Ozon 确认货件(多件商品将二次确认)' : '当前包裹已备货或已取消,不可备货'"
+            @click="savePurchase(true)"
+          >{{ purchaseSaving ? '处理中…' : '保存并备货' }}</button>
+          <button class="btn btn-primary" :disabled="purchaseSaving" @click="savePurchase(false)">
             {{ purchaseSaving ? '保存中…' : '保 存' }}
           </button>
         </div>

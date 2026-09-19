@@ -172,8 +172,11 @@
       </view>
       <view class="action-bar">
         <button class="abtn ghost" @click="step = 'select'">返回</button>
-        <button class="abtn primary" :disabled="submitting" @click="doSubmit">
-          {{ submitting ? '提交中…' : '提交' }}
+        <button class="abtn primary" :disabled="submitting || !canShipAfterSave" @click="doSubmit(true)">
+          {{ submitting ? '处理中…' : '保存并备货' }}
+        </button>
+        <button class="abtn ghost" :disabled="submitting" @click="doSubmit()">
+          {{ submitting ? '提交中…' : '仅保存' }}
         </button>
       </view>
     </view>
@@ -272,6 +275,7 @@ import {
   clearPurchaseInfo,
   submitPurchase,
   lookupPurchase,
+  shipPackage,
   getPlatformOrders,
   searchPlatformOrder,
   getPlatformOrdersStatus,
@@ -756,7 +760,8 @@ async function goStep3() {
 }
 
 // 提交采购(与 web 端 savePurchase 正常提交分支对齐)
-async function doSubmit() {
+// withShip=true:保存成功后立即备货(「保存并备货」按钮)
+async function doSubmit(withShip = false) {
   if (submitting.value) return;
   const isAuto = allocMode.value === 'auto';
   const sel = step3Sel.value;
@@ -818,6 +823,8 @@ async function doSubmit() {
       allocMode: isAuto ? 'auto' : 'manual',
     });
     uni.showToast({ title: '已提交,流转待打单发货', icon: 'none' });
+    // 保存并备货:提交成功后向 Ozon 确认货件(多件二次确认,单件直接备货)
+    if (withShip && canShipAfterSave.value) await shipAfterSave();
     notifyRefresh();
     // 返回详情页(onShow 自动刷新)
     setTimeout(() => uni.navigateBack(), 600);
@@ -826,6 +833,50 @@ async function doSubmit() {
   } finally {
     submitting.value = false;
   }
+}
+
+// 保存后可备货:未交运未取消且 Ozon 侧待打包(与 web 端备货按钮同口径)
+const canShipAfterSave = computed(() => {
+  const p = pkg.value;
+  return (
+    !!p &&
+    (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_ship') &&
+    p.ozonStatus === 'awaiting_packaging'
+  );
+});
+
+// 备货(与详情页 onShip 同口径:存在数量≥2 的商品二次确认,单件直接备货)
+async function shipAfterSave() {
+  const multiQty = items.value.some((it) => (Number(it.quantity) || 0) >= 2);
+  const qty = items.value.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+  const doShip = async () => {
+    try {
+      const r = await shipPackage(packageId.value);
+      uni.showToast({
+        title: r?.pending
+          ? '备货指令已提交,Ozon 状态变更中'
+          : r?.alreadyShipped
+            ? '该包裹已备货过'
+            : '备货成功',
+        icon: 'none',
+      });
+    } catch (e) {
+      /* 备货失败不影响已保存的采购;toast 已由 request.js 弹出 */
+    }
+  };
+  if (!multiQty) return doShip();
+  return new Promise((resolve) => {
+    uni.showModal({
+      title: '备货确认',
+      content:
+        '货件 ' + (pkg.value?.postingNumber || '') + '\n含数量≥2的商品(共 ' + qty + ' 件),将向 Ozon 确认全部商品为一个货件(不拆分)。',
+      confirmText: '备货',
+      success: async (res) => {
+        if (res.confirm) await doShip();
+        resolve();
+      },
+    });
+  });
 }
 
 onLoad((opts) => {
