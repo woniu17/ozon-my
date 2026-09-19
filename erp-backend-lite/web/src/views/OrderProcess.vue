@@ -3239,6 +3239,10 @@ onUnmounted(() => {
             <span>自动填写金额</span>
           </label>
         </div>
+        <!-- manual 模式用途说明(与 H5 端一致):优惠券/其他成本导致实际采购价与订单金额不符 -->
+        <div v-if="purchaseForm.allocMode === 'manual'" class="alloc-edit-hint">
+          采购使用了优惠券或存在其他成本、实际采购价与订单金额不符时,在各行填写实际分摊金额(已按数量预填)。
+        </div>
         <div v-if="allocEditHint" class="alloc-edit-hint">{{ allocEditHint }}</div>
         <table class="data-table item-table">
           <thead>
