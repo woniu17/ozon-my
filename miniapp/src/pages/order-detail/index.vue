@@ -275,24 +275,21 @@ function notifyListRefresh() {
   uni.$emit('orders-refresh');
 }
 
-function osLabel(s) {
-  return OPERATE_LABELS[s]?.label || s || '';
-}
-
 // 同步订单:按单号直查 Ozon 拉最新状态 + 强拉应计(无时间窗口限制)
+// toast 口径与 web 端 onSyncPackage 一致:订单/应计/状态流转(statusX 为 {ozon, operate} 对象)
 async function onSync() {
   if (syncing.value) return;
   syncing.value = true;
   try {
     const r = await syncPackage(packageId.value);
-    const changed = r?.statusBefore && r?.statusAfter && r.statusBefore !== r.statusAfter;
-    uni.showToast({
-      title: changed
-        ? '同步完成:' + osLabel(r.statusBefore) + ' → ' + osLabel(r.statusAfter)
-        : '同步完成',
-      icon: 'none',
-      duration: 2500,
-    });
+    const parts = ['订单' + (r?.orderSynced ? '已同步' : '未更新')];
+    if (r?.accrualRows != null) parts.push('应计 ' + r.accrualRows + ' 行');
+    if (r?.statusBefore && r?.statusAfter) {
+      const before = r.statusBefore.ozon + '/' + r.statusBefore.operate;
+      const after = r.statusAfter.ozon + '/' + r.statusAfter.operate;
+      if (before !== after) parts.push('状态 ' + before + ' → ' + after);
+    }
+    uni.showToast({ title: '同步完成:' + parts.join(' · '), icon: 'none', duration: 2500 });
     await loadDetail();
     notifyListRefresh();
   } catch (e) {
