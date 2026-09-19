@@ -3,4 +3,4 @@
 //   - 微信开发者工具:详情 → 本地设置 → 勾选「不校验合法域名、web-view(业务域名)、TLS 版本以及 HTTPS 证书」
 //   - 真机预览:手机打开开发版 → 右上角胶囊 → 开发调试,开启后同样跳过域名校验
 // 备案 + 云反代就绪后切换为备案域名(443 端口),见 docs/微信小程序订单处理-功能设计.md §4
-export const BASE_URL = 'https://2.tencent.yochylin.com:17443';
+export const BASE_URL = 'https://yochylin.com:17443';
