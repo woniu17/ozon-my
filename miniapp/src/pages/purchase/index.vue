@@ -9,8 +9,98 @@
       <view class="head-sub">{{ items.length }} 个商品行 · 采购合计 {{ fmtMoney(pkg.totalPurchaseAmount) }}</view>
     </view>
 
+    <!-- Step2:平台订单选择 -->
+    <view v-if="step === 'select'">
+      <view class="card">
+        <view class="section-title">选择平台订单</view>
+        <!-- 平台×账号 tabs(多账号展开,与 web 端一致) -->
+        <scroll-view class="plat-tabs" scroll-x :show-scrollbar="false">
+          <view class="plat-tabs-inner">
+            <view
+              v-for="t in platTabs"
+              :key="t.key"
+              class="plat-tab"
+              :class="{ on: activeTabKey === t.key }"
+              @click="switchPlatTab(t.key)"
+            >{{ t.label }}</view>
+          </view>
+        </scroll-view>
+
+        <!-- 登录态警示:恢复登录需在服务器/电脑端操作 -->
+        <view v-if="curPlatLogin !== 'yes'" class="login-warn">
+          {{ curTabDef ? curTabDef.label : '当前平台' }}未检测到登录态,可能拉不到订单。恢复登录需在服务器/电脑端操作。
+        </view>
+
+        <!-- 状态子 tab + 刷新 -->
+        <view class="subtabs">
+          <view
+            v-for="sb in subTabs"
+            :key="sb.key"
+            class="subtab"
+            :class="{ on: curStore.tab === sb.key }"
+            @click="switchSubTab(sb.key)"
+          >{{ sb.label }}</view>
+          <view class="subtab refresh" @click="refreshOrders">刷新</view>
+        </view>
+
+        <!-- 按单号精确搜索(跨账号) -->
+        <view class="imp-search">
+          <input
+            class="imp-search-input"
+            v-model="searchKeyword"
+            placeholder="按采购单号精确搜索(跨账号)"
+            confirm-type="search"
+            @confirm="doSearch"
+          />
+        </view>
+
+        <!-- 订单列表 -->
+        <view v-if="curStore.loading" class="muted-line pad">加载中…</view>
+        <view v-else-if="curStore.error" class="err-line pad">{{ curStore.error }}</view>
+        <view v-else-if="!impOrders.length" class="muted-line pad">暂无订单(可尝试刷新或搜索)</view>
+        <view
+          v-for="o in impOrders"
+          :key="o.orderSn"
+          class="po-order"
+          :class="{ sel: curStore.selected.includes(o.orderSn), disabled: isRestoredLinked(o) }"
+          @click="toggleSelect(o)"
+        >
+          <view class="po-check">{{ curStore.selected.includes(o.orderSn) ? '☑' : '☐' }}</view>
+          <image
+            v-if="o.goods && o.goods[0] && o.goods[0].thumbUrl"
+            class="po-order-img"
+            :src="o.goods[0].thumbUrl"
+            mode="aspectFill"
+            lazy-load
+          />
+          <view v-else class="po-order-img"></view>
+          <view class="po-order-main">
+            <view class="po-order-title">
+              {{ (o.goods && o.goods[0] && o.goods[0].goodsName) || '—' }}<text v-if="o.goods && o.goods.length > 1" class="po-more"> 等{{ o.goods.length }}件商品</text>
+            </view>
+            <view class="po-order-meta">
+              <text class="po-order-amt">¥{{ o.amount }}</text>
+              <text class="po-order-time">{{ fmtOrderTime(o) }}</text>
+            </view>
+            <view class="po-order-sn">{{ o.orderSn }}<text v-if="o.trackingNumber"> · {{ o.trackingNumber }}</text></view>
+          </view>
+          <text v-if="isRestoredLinked(o)" class="restored-badge">已关联</text>
+        </view>
+      </view>
+
+      <!-- 底部条:已选统计 + 返回/下一步 -->
+      <view class="action-bar">
+        <view class="sel-info">
+          <text class="sel-count">已选 {{ selCount }} 单</text>
+          <text class="sel-total">合计 ¥{{ newSelectedTotal }}</text>
+        </view>
+        <button class="abtn ghost" @click="step = 'manage'">返回</button>
+        <button class="abtn primary" :disabled="!selCount" @click="goStep3">下一步</button>
+      </view>
+    </view>
+
     <!-- 改分摊编辑模式 -->
-    <view v-if="allocEditing">
+    <view v-else-if="allocEditing">
       <view class="card">
         <view class="section-title">修改分摊金额</view>
         <view class="tip">
@@ -83,7 +173,7 @@
       <!-- 新增采购(任务 5-6 实现) -->
       <view class="card">
         <view class="section-title">新增采购</view>
-        <button class="add-btn" @click="comingSoon">+ 从平台订单选择</button>
+        <button class="add-btn" @click="enterSelect">+ 从平台订单选择</button>
         <button class="add-btn" @click="comingSoon">+ 手动录入采购单号</button>
       </view>
     </view>
@@ -95,13 +185,16 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, reactive, computed } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import {
   getOrderDetail,
   updatePurchaseAlloc,
   unlinkPurchase,
   clearPurchaseInfo,
+  getPlatformOrders,
+  searchPlatformOrder,
+  getPlatformOrdersStatus,
 } from '../../api/order.js';
 import { fmtMoney } from '../../utils/fmt.js';
 
@@ -283,9 +376,226 @@ function removeGroup(g) {
   });
 }
 
-// 新增采购入口(任务 5-6 实现)
+// 新增采购入口(任务 6 实现)
 function comingSoon() {
-  uni.showToast({ title: '平台订单选择为任务 5-6 内容', icon: 'none' });
+  uni.showToast({ title: '手动录入为任务 6 内容', icon: 'none' });
+}
+
+// ════════════════════════════════════════════════════════════
+// Step2:平台订单选择(与 web 端 OrderProcess.vue 同构,2026-09-13 多账号模型)
+// ════════════════════════════════════════════════════════════
+// 平台 tab 元数据:platform(请求用)→ platformVal(入库平台值)/label
+const PLATFORM_TAB_META = {
+  pdd: { platformVal: 'yangkeduo', label: '拼多多' },
+  ali1688: { platformVal: '1688', label: '1688' },
+  taobao: { platformVal: 'taobao', label: '淘宝' },
+};
+
+const step = ref('manage'); // manage=管理已有采购 | select=选平台订单
+// 默认 tabs(/status 未返回时兜底,与 web 端一致)
+const platTabs = ref([
+  { key: 'pdd', platform: 'pdd', account: 'linqx', label: '拼多多' },
+  { key: 'ali:linqx', platform: 'ali1688', account: 'linqx', label: '1688·linqx' },
+  { key: 'taobao', platform: 'taobao', account: 'linqx', label: '淘宝' },
+]);
+const platLogin = reactive({}); // `${platform}:${account}` → 'yes'|'no'|'unknown'
+const stores = reactive({});    // tabKey → { orders, loading, error, tab, selected, searched }
+const activeTabKey = ref('');
+const searchKeyword = ref('');
+
+function storeFor(key) {
+  if (!stores[key]) {
+    stores[key] = { orders: [], loading: false, error: '', tab: 'all', selected: [], searched: [] };
+  }
+  return stores[key];
+}
+
+const curTabDef = computed(() => platTabs.value.find((t) => t.key === activeTabKey.value) || null);
+const curStore = computed(() => storeFor(activeTabKey.value));
+const curPlatLogin = computed(() => {
+  const d = curTabDef.value;
+  return d ? platLogin[d.platform + ':' + d.account] || 'unknown' : 'unknown';
+});
+
+// 状态子 tab(pdd 无"待发货",与 web 端一致)
+const subTabs = computed(() => {
+  if ((curTabDef.value?.platform || '') === 'pdd') {
+    return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
+  }
+  return [{ key: 'all', label: '全部' }, { key: 'unshipped', label: '待发货' }, { key: 'unreceived', label: '待收货' }];
+});
+
+// 已有采购单的 SN 键集合(逗号拼接的 SN 拆开),平台列表里标记"已关联"并禁止重复勾选
+const restoredSnKeys = computed(() => {
+  const s = new Set();
+  for (const g of groups.value) {
+    for (const part of String(g.purchaseSn || '').split(',')) {
+      const p = part.trim();
+      if (p) s.add(g.platform + ':' + p);
+    }
+  }
+  return s;
+});
+
+function isRestoredLinked(o) {
+  const plat = PLATFORM_TAB_META[curTabDef.value?.platform]?.platformVal || '';
+  return restoredSnKeys.value.has(plat + ':' + o.orderSn);
+}
+
+// 当前 tab 订单(搜索命中置顶去重;注入 _platform 入库平台值)
+const impOrders = computed(() => {
+  const st = curStore.value;
+  const plat = PLATFORM_TAB_META[curTabDef.value?.platform]?.platformVal || '';
+  const inList = new Set(st.orders.map((o) => o.orderSn));
+  const wrap = (o) => (o._platform === plat ? o : { ...o, _platform: plat });
+  return [...st.searched.filter((o) => !inList.has(o.orderSn)).map(wrap), ...st.orders.map(wrap)];
+});
+
+// 跨平台×账号合并的新勾选订单(排除已关联单);提交时只入库新增部分
+const newSelectedOrders = computed(() => {
+  const sel = [];
+  for (const t of platTabs.value) {
+    const st = stores[t.key];
+    if (!st) continue;
+    const inList = new Set((st.orders || []).map((o) => o.orderSn));
+    const merged = [...(st.searched || []).filter((x) => !inList.has(x.orderSn)), ...(st.orders || [])];
+    for (const o of merged) {
+      if (
+        st.selected.includes(o.orderSn) &&
+        !restoredSnKeys.value.has((PLATFORM_TAB_META[t.platform]?.platformVal || '') + ':' + o.orderSn)
+      ) {
+        sel.push({ ...o, _platform: PLATFORM_TAB_META[t.platform]?.platformVal, _account: t.account });
+      }
+    }
+  }
+  return sel;
+});
+const selCount = computed(() => newSelectedOrders.value.length);
+const newSelectedTotal = computed(() =>
+  newSelectedOrders.value.reduce((s, o) => s + (Number(o.amount) || 0), 0).toFixed(2)
+);
+
+// 浏览器登录态探测 + 按账号展开平台 tabs(与 web 端 rebuildAccountTabs 一致)
+async function loadPlatformStatus() {
+  try {
+    const data = await getPlatformOrdersStatus();
+    const tabs = [];
+    for (const [platform, meta] of Object.entries(PLATFORM_TAB_META)) {
+      const accounts = Object.keys(data?.platforms?.[platform]?.accounts || {});
+      if (!accounts.length) continue; // 后端未配置该平台 → 保留默认
+      const multi = accounts.length > 1;
+      for (const account of accounts) {
+        const prefix = platform === 'ali1688' ? 'ali' : platform;
+        tabs.push({
+          key: multi ? prefix + ':' + account : prefix,
+          platform,
+          account,
+          label: multi ? meta.label + '·' + account : meta.label,
+        });
+      }
+    }
+    if (tabs.length) {
+      platTabs.value = tabs;
+      if (!tabs.some((t) => t.key === activeTabKey.value)) activeTabKey.value = tabs[0].key;
+    }
+    for (const [plat, info] of Object.entries(data?.platforms || {})) {
+      for (const [account, v] of Object.entries(info?.accounts || {})) {
+        platLogin[plat + ':' + account] = v?.login || 'unknown';
+      }
+    }
+  } catch (e) {
+    /* 静默:探测失败不阻塞主流程 */
+  }
+}
+
+// 拉取指定 tab 的订单(懒建 store;刷新列表保留搜索命中单的勾选)
+async function loadOrders(tabKey) {
+  const def = platTabs.value.find((t) => t.key === tabKey);
+  if (!def) return;
+  const st = storeFor(tabKey);
+  st.loading = true;
+  st.error = '';
+  const keepSn = new Set(st.searched.map((o) => o.orderSn));
+  st.selected = st.selected.filter((s) => keepSn.has(s));
+  try {
+    const data = await getPlatformOrders(def.platform, { tab: st.tab, size: 30, account: def.account });
+    st.orders = data?.orders || [];
+  } catch (e) {
+    st.error = e.message || '获取订单失败';
+    st.orders = [];
+  } finally {
+    st.loading = false;
+  }
+}
+
+function enterSelect() {
+  step.value = 'select';
+  if (!activeTabKey.value) activeTabKey.value = platTabs.value[0]?.key || '';
+  if (!Object.keys(platLogin).length) loadPlatformStatus();
+  const st = storeFor(activeTabKey.value);
+  if (!st.orders.length && !st.loading) loadOrders(activeTabKey.value);
+}
+
+function switchPlatTab(key) {
+  if (activeTabKey.value === key || curStore.value.loading) return;
+  activeTabKey.value = key;
+  searchKeyword.value = '';
+  const st = storeFor(key);
+  if (!st.orders.length && !st.loading) loadOrders(key);
+}
+
+function switchSubTab(t) {
+  if (curStore.value.tab === t || curStore.value.loading) return;
+  curStore.value.tab = t;
+  loadOrders(activeTabKey.value);
+}
+
+function refreshOrders() {
+  loadOrders(activeTabKey.value);
+}
+
+// 按采购单号精确搜索(后端跨账号);命中置顶且刷新列表不丢
+async function doSearch() {
+  const kw = searchKeyword.value.trim();
+  const def = curTabDef.value;
+  if (!kw || !def) return;
+  const st = curStore.value;
+  st.loading = true;
+  st.error = '';
+  try {
+    const data = await searchPlatformOrder(def.platform, kw);
+    const hit = data?.result;
+    if (hit) {
+      st.searched = [hit, ...st.searched.filter((o) => o.orderSn !== hit.orderSn)];
+    } else {
+      uni.showToast({ title: '未找到该采购单号', icon: 'none' });
+    }
+  } catch (e) {
+    st.error = e.message || '搜索失败';
+  } finally {
+    st.loading = false;
+  }
+}
+
+function toggleSelect(o) {
+  if (isRestoredLinked(o)) return;
+  const st = curStore.value;
+  const i = st.selected.indexOf(o.orderSn);
+  if (i >= 0) st.selected.splice(i, 1);
+  else st.selected.push(o.orderSn);
+}
+
+// 平台订单时间:PDD(yangkeduo)为秒级数字需 ×1000;1688/淘宝为字符串
+function fmtOrderTime(o) {
+  const t = o.orderTime;
+  if (t == null || t === '') return '—';
+  if (o._platform === 'yangkeduo') return fmtTime(Number(t) * 1000);
+  return String(t).replace('T', ' ').slice(0, 16);
+}
+
+// Step3:分摊确认与提交(任务 6 实现)
+function goStep3() {
+  uni.showToast({ title: '分摊确认与提交为任务 6 内容', icon: 'none' });
 }
 
 onLoad((opts) => {
@@ -578,6 +888,204 @@ onLoad((opts) => {
 
 .add-btn::after {
   border: none;
+}
+
+/* ── Step2 平台订单选择 ── */
+.plat-tabs {
+  white-space: nowrap;
+  margin-bottom: 16rpx;
+}
+
+.plat-tabs-inner {
+  display: inline-flex;
+}
+
+.plat-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 10rpx 24rpx;
+  margin-right: 12rpx;
+  border-radius: 12rpx;
+  background: #f2f3f5;
+  font-size: 25rpx;
+  color: #4e5969;
+  flex-shrink: 0;
+}
+
+.plat-tab.on {
+  background: #165dff;
+  color: #ffffff;
+}
+
+.login-warn {
+  font-size: 22rpx;
+  color: #d97706;
+  background: #fff7e6;
+  border-radius: 10rpx;
+  padding: 12rpx 16rpx;
+  margin-bottom: 16rpx;
+  line-height: 1.5;
+}
+
+.subtabs {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.subtab {
+  font-size: 24rpx;
+  color: #4e5969;
+  padding: 8rpx 22rpx;
+  border-radius: 999rpx;
+  background: #f2f3f5;
+  margin-right: 12rpx;
+}
+
+.subtab.on {
+  background: #eef4ff;
+  color: #165dff;
+  font-weight: 600;
+}
+
+.subtab.refresh {
+  margin-left: auto;
+  margin-right: 0;
+  color: #165dff;
+  background: #eef4ff;
+}
+
+.imp-search {
+  margin-bottom: 8rpx;
+}
+
+.imp-search-input {
+  background: #f7f8fa;
+  border-radius: 12rpx;
+  height: 68rpx;
+  line-height: 68rpx;
+  padding: 0 24rpx;
+  font-size: 25rpx;
+}
+
+.pad {
+  padding: 24rpx 0;
+}
+
+.err-line {
+  font-size: 23rpx;
+  color: #f53f3f;
+  line-height: 1.5;
+}
+
+.po-order {
+  display: flex;
+  align-items: center;
+  padding: 16rpx 8rpx;
+  border-bottom: 1rpx solid #f7f8fa;
+  border-radius: 8rpx;
+}
+
+.po-order.disabled {
+  opacity: 0.55;
+}
+
+.po-order.sel {
+  background: #f0f7ff;
+}
+
+.po-check {
+  font-size: 36rpx;
+  color: #c9cdd4;
+  margin-right: 14rpx;
+  line-height: 1;
+}
+
+.po-order.sel .po-check {
+  color: #165dff;
+}
+
+.po-order-img {
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 10rpx;
+  background: #f2f3f5;
+  flex-shrink: 0;
+}
+
+.po-order-main {
+  flex: 1;
+  margin-left: 14rpx;
+  overflow: hidden;
+}
+
+.po-order-title {
+  font-size: 25rpx;
+  color: #1f2329;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.po-more {
+  font-size: 21rpx;
+  color: #86909c;
+}
+
+.po-order-meta {
+  margin-top: 4rpx;
+  display: flex;
+  align-items: center;
+}
+
+.po-order-amt {
+  font-size: 24rpx;
+  color: #f53f3f;
+  margin-right: 16rpx;
+}
+
+.po-order-time {
+  font-size: 21rpx;
+  color: #a6abb3;
+}
+
+.po-order-sn {
+  margin-top: 4rpx;
+  font-size: 21rpx;
+  color: #86909c;
+  font-family: 'Courier New', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.restored-badge {
+  flex-shrink: 0;
+  font-size: 20rpx;
+  color: #86909c;
+  background: #f2f3f5;
+  border-radius: 999rpx;
+  padding: 4rpx 14rpx;
+  margin-left: 10rpx;
+}
+
+.sel-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  margin-right: 8rpx;
+}
+
+.sel-count {
+  font-size: 23rpx;
+  color: #4e5969;
+}
+
+.sel-total {
+  font-size: 27rpx;
+  color: #1f2329;
+  font-weight: 600;
 }
 
 /* ── 底部操作条 ── */
