@@ -131,7 +131,7 @@
         <!-- auto:只读加权预览 -->
         <template v-if="allocMode === 'auto'">
           <view class="tip">
-            订单合计 ¥{{ newSelectedTotal }} 按商品数量加权分摊到各产品行{{ autoPreview.existingAutoQty ? '(加权总数 ' + autoPreview.sumQty + ' 件 = 本包裹 ' + autoPreview.currentQty + ' + 已关联 ' + autoPreview.existingAutoQty + ')' : '' }}。
+            各产品行金额 = 已有采购分摊 + 新订单 ¥{{ newSelectedTotal }} 按数量加权分摊{{ autoPreview.existingAutoQty ? '(加权总数 ' + autoPreview.sumQty + ' 件 = 本包裹 ' + autoPreview.currentQty + ' + 已关联 ' + autoPreview.existingAutoQty + ')' : '' }}。
           </view>
           <view v-for="(it, i) in autoPreview.rows" :key="i" class="alloc-row">
             <image v-if="it.picUrl" class="alloc-img" :src="it.picUrl" mode="aspectFill" />
@@ -595,7 +595,7 @@ const manualTotal = computed(() =>
 );
 
 // auto 模式加权预览(与 web 端 autoPreview 同构)
-// 公式:每行分摊 = (该行 quantity / Σauto 关联 quantity) × 订单合计
+// 公式:每行金额 = 未删除已有采购的行分摊合计 + (该行 quantity / Σauto 关联 quantity) × 订单合计
 // Σ = 本包裹各行数量 + lookup 已关联 auto 模式包裹的数量(manual 关联不参与加权)
 const autoPreview = computed(() => {
   const payment = Number(newSelectedTotal.value) || 0;
@@ -605,13 +605,23 @@ const autoPreview = computed(() => {
     .reduce((s, p) => s + (Number(p.quantity) || 0), 0);
   const sumQty = currentQty + existingAutoQty;
   const round2 = (n) => Math.round(n * 100) / 100;
+  // 未删除已有采购按产品行分摊合计(2026-09-19 与 web 端同步修复:
+  // 此前只显示新订单加权分摊,把已有分摊顶掉了,与保存后行金额口径不一致)
+  const keptByItem = new Map();
+  for (const l of links.value) {
+    if (pendingRemoves.value.includes(l.purchaseOrderId)) continue;
+    keptByItem.set(l.ozonOrderItemId, (keptByItem.get(l.ozonOrderItemId) || 0) + (Number(l.allocatedAmount) || 0));
+  }
   const rows = items.value.map((it) => ({
     itemId: it.id,
     title: it.title,
     sku: it.sku,
     picUrl: it.picUrl,
     quantity: it.quantity,
-    previewAmount: sumQty ? round2(((Number(it.quantity) || 0) * payment) / sumQty) : 0,
+    previewAmount: round2(
+      (keptByItem.get(it.id) || 0) +
+      (sumQty ? ((Number(it.quantity) || 0) * payment) / sumQty : 0)
+    ),
   }));
   return { rows, sumQty, payment, currentQty, existingAutoQty };
 });
