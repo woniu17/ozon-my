@@ -17,6 +17,14 @@
         },
         "usingComponents" : true
     },
+    /* H5:部署到 erp 静态目录 /miniapp/ 子路径,手机浏览器直接访问 */
+    "h5" : {
+        "title" : "Ozon ERP",
+        "router" : {
+            "mode" : "hash",
+            "base" : "/miniapp/"
+        }
+    },
     "uniStatistics" : {
         "enable" : false
     },
