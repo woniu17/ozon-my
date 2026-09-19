@@ -99,6 +99,85 @@
       </view>
     </view>
 
+    <!-- Step3:分摊确认 + 提交 -->
+    <view v-else-if="step === 'confirm'">
+      <view class="card">
+        <view class="section-title">分摊确认</view>
+
+        <!-- 已选订单摘要 -->
+        <view class="sum-box">
+          <view class="sum-line">
+            <text class="po-platform">{{ platformLabel(step3Platform) }}</text>
+            <text class="sum-count">已选 {{ selCount }} 单</text>
+            <text class="sum-total">¥{{ newSelectedTotal }}</text>
+          </view>
+          <view class="sum-sns">{{ step3Sn }}</view>
+          <!-- 拼单提示(lookup 查到已关联包裹时) -->
+          <view v-if="lookupResult && lookupResult.linkedPackages && lookupResult.linkedPackages.length" class="lookup-tip">
+            采购单已关联 {{ lookupResult.linkedPackages.length }} 个包裹,本次为追加关联;auto 模式下已关联 auto 包裹的 {{ autoPreview.existingAutoQty }} 件将参与加权分摊。
+          </view>
+        </view>
+
+        <!-- 分摊模式切换 -->
+        <view class="mode-switch">
+          <view class="mode-btn" :class="{ on: allocMode === 'auto' }" @click="switchAllocMode('auto')">
+            自动·按数量
+          </view>
+          <view class="mode-btn" :class="{ on: allocMode === 'manual' }" @click="switchAllocMode('manual')">
+            手动指定
+          </view>
+        </view>
+
+        <!-- auto:只读加权预览 -->
+        <template v-if="allocMode === 'auto'">
+          <view class="tip">
+            订单合计 ¥{{ newSelectedTotal }} 按商品数量加权分摊到各产品行{{ autoPreview.existingAutoQty ? '(加权总数 ' + autoPreview.sumQty + ' 件 = 本包裹 ' + autoPreview.currentQty + ' + 已关联 ' + autoPreview.existingAutoQty + ')' : '' }}。
+          </view>
+          <view v-for="(it, i) in autoPreview.rows" :key="i" class="alloc-row">
+            <image v-if="it.picUrl" class="alloc-img" :src="it.picUrl" mode="aspectFill" />
+            <view v-else class="alloc-img"></view>
+            <view class="alloc-main">
+              <view class="alloc-title">{{ it.title || '—' }}</view>
+              <view class="alloc-sub">SKU {{ it.sku || '—' }} ×{{ it.quantity }}</view>
+              <view class="alloc-amount">¥{{ it.previewAmount.toFixed(2) }}</view>
+            </view>
+          </view>
+        </template>
+
+        <!-- manual:手填各产品行金额 -->
+        <template v-else>
+          <view class="tip">各产品行分摊金额已按数量预填,可自行修改。</view>
+          <view v-for="(it, i) in manualItems" :key="i" class="alloc-row">
+            <image v-if="it.picUrl" class="alloc-img" :src="it.picUrl" mode="aspectFill" />
+            <view v-else class="alloc-img"></view>
+            <view class="alloc-main">
+              <view class="alloc-title">{{ it.title || '—' }}</view>
+              <view class="alloc-sub">SKU {{ it.sku || '—' }} ×{{ it.quantity }}</view>
+              <view class="alloc-input-wrap">
+                <text class="rmb">¥</text>
+                <input class="alloc-input" type="digit" v-model="it.amount" placeholder="0.00" />
+              </view>
+            </view>
+          </view>
+          <view class="alloc-sum">
+            合计:<text class="alloc-sum-num">¥{{ manualTotal.toFixed(2) }}</text>
+          </view>
+        </template>
+
+        <!-- 国内快递单号(选填,预填平台单号) -->
+        <view class="field">
+          <text class="field-label">国内快递单号(选填)</text>
+          <input class="field-input" v-model="logisticsInput" placeholder="多个用英文逗号分隔,留空待同步补全" />
+        </view>
+      </view>
+      <view class="action-bar">
+        <button class="abtn ghost" @click="step = 'select'">返回</button>
+        <button class="abtn primary" :disabled="submitting" @click="doSubmit">
+          {{ submitting ? '提交中…' : '提交' }}
+        </button>
+      </view>
+    </view>
+
     <!-- 改分摊编辑模式 -->
     <view v-else-if="allocEditing">
       <view class="card">
@@ -192,11 +271,13 @@ import {
   updatePurchaseAlloc,
   unlinkPurchase,
   clearPurchaseInfo,
+  submitPurchase,
+  lookupPurchase,
   getPlatformOrders,
   searchPlatformOrder,
   getPlatformOrdersStatus,
 } from '../../api/order.js';
-import { fmtMoney } from '../../utils/fmt.js';
+import { fmtMoney, fmtTime } from '../../utils/fmt.js';
 
 const packageId = ref('');
 const pkg = ref(null);
@@ -593,9 +674,164 @@ function fmtOrderTime(o) {
   return String(t).replace('T', ' ').slice(0, 16);
 }
 
-// Step3:分摊确认与提交(任务 6 实现)
-function goStep3() {
-  uni.showToast({ title: '分摊确认与提交为任务 6 内容', icon: 'none' });
+// ════════════════════════════════════════════════════════════
+// Step3:分摊确认 + 提交(与 web 端 savePurchase 语义对齐,5893fbf)
+// ════════════════════════════════════════════════════════════
+const allocMode = ref('auto'); // 'auto' 按数量加权 | 'manual' 手动指定
+const manualItems = ref([]); // manual 模式各产品行金额(切模式时按数量加权预填)
+const lookupResult = ref(null); // 拼单查询结果(单单有效;多单拼接查询查不到则忽略)
+const logisticsInput = ref(''); // 国内快递单号(选填,预填平台单号)
+const submitting = ref(false);
+
+const step3Sel = computed(() => newSelectedOrders.value);
+const step3Sn = computed(() => step3Sel.value.map((o) => o.orderSn).join(','));
+const step3Platform = computed(() => step3Sel.value[0]?._platform || 'other');
+
+const manualTotal = computed(() =>
+  manualItems.value.reduce((s, it) => s + (Number(it.amount) || 0), 0)
+);
+
+// auto 模式加权预览(与 web 端 autoPreview 同构)
+// 公式:每行分摊 = (该行 quantity / Σauto 关联 quantity) × 订单合计
+// Σ = 本包裹各行数量 + lookup 已关联 auto 模式包裹的数量(manual 关联不参与加权)
+const autoPreview = computed(() => {
+  const payment = Number(newSelectedTotal.value) || 0;
+  const currentQty = items.value.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+  const existingAutoQty = (lookupResult.value?.linkedPackages || [])
+    .filter((p) => (p.alloc_modes || '').includes('auto'))
+    .reduce((s, p) => s + (Number(p.quantity) || 0), 0);
+  const sumQty = currentQty + existingAutoQty;
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const rows = items.value.map((it) => ({
+    itemId: it.id,
+    title: it.title,
+    sku: it.sku,
+    picUrl: it.picUrl,
+    quantity: it.quantity,
+    previewAmount: sumQty ? round2(((Number(it.quantity) || 0) * payment) / sumQty) : 0,
+  }));
+  return { rows, sumQty, payment, currentQty, existingAutoQty };
+});
+
+function switchAllocMode(m) {
+  if (allocMode.value === m) return;
+  allocMode.value = m;
+  if (m === 'manual') {
+    // 从订单合计按数量加权预填(最后一行兜底差额,与 web 端切模式逻辑一致)
+    const total = Number(newSelectedTotal.value) || 0;
+    const list = items.value;
+    const sumQty = list.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+    let allocated = 0;
+    manualItems.value = list.map((it, i) => {
+      let a;
+      if (i === list.length - 1) a = Math.round((total - allocated) * 100) / 100;
+      else {
+        a = sumQty ? Math.round(((total * (Number(it.quantity) || 0)) / sumQty) * 100) / 100 : 0;
+        allocated += a;
+      }
+      return {
+        itemId: it.id,
+        title: it.title,
+        sku: it.sku,
+        picUrl: it.picUrl,
+        quantity: it.quantity,
+        amount: String(a),
+      };
+    });
+  }
+}
+
+// 进入 Step3:重置状态 + 预填快递单号 + 拼单探测
+async function goStep3() {
+  if (!selCount.value) return;
+  step.value = 'confirm';
+  allocMode.value = 'auto';
+  manualItems.value = [];
+  lookupResult.value = null;
+  const tracks = [...new Set(step3Sel.value.map((o) => o.trackingNumber).filter(Boolean))];
+  logisticsInput.value = tracks.join(',');
+  const sn = step3Sn.value;
+  if (step3Platform.value !== 'other' && sn) {
+    try {
+      const r = await lookupPurchase(step3Platform.value, sn);
+      if (r?.exists) lookupResult.value = r;
+    } catch (e) {
+      /* 探测失败不阻塞,提交前还会再查一次 */
+    }
+  }
+}
+
+// 提交采购(与 web 端 savePurchase 正常提交分支对齐)
+async function doSubmit() {
+  if (submitting.value) return;
+  const isAuto = allocMode.value === 'auto';
+  const sel = step3Sel.value;
+  if (!sel.length) return;
+  // 产品行分摊:auto 用加权预览值,manual 用手填值
+  const itemsArg = (isAuto ? autoPreview.value.rows : manualItems.value).map((it) => ({
+    itemId: it.itemId,
+    amount: Number(it.amount ?? it.previewAmount) || 0,
+    quantity: it.quantity,
+  }));
+  if (!isAuto && !itemsArg.some((it) => it.amount > 0)) {
+    uni.showToast({ title: '请至少填写一行分摊金额', icon: 'none' });
+    return;
+  }
+  // 拼单检测:进入 Step3 已查过的复用;查到已关联包裹需确认追加
+  const platform = step3Platform.value;
+  const sn = step3Sn.value;
+  if (platform !== 'other' && sn) {
+    try {
+      const r = lookupResult.value || (await lookupPurchase(platform, sn));
+      if (r?.exists && r.linkedPackages?.length) {
+        const confirmed = await new Promise((resolve) => {
+          uni.showModal({
+            title: '拼单提示',
+            content:
+              '采购单已关联 ' + r.linkedPackages.length + ' 个包裹,本次将追加关联到本包裹' +
+              (isAuto ? '(auto 模式:已关联包裹分摊金额将按数量重新加权)' : '') + '。是否继续?',
+            confirmText: '追加关联',
+            success: (res) => resolve(!!res.confirm),
+          });
+        });
+        if (!confirmed) return;
+      }
+    } catch (e) {
+      /* lookup 失败不阻塞提交 */
+    }
+  }
+  submitting.value = true;
+  try {
+    // 表单回填口径与 web 端 watch(newSelectedOrders) 一致
+    const snList = sel.map((o) => o.orderSn);
+    const buyerAccounts = [...new Set(sel.map((o) => o.account || o._account || o.buyerUsername).filter(Boolean))];
+    const buyerIds = [...new Set(sel.map((o) => o.buyerUserId).filter(Boolean))];
+    const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
+    const companies = [...new Set(sel.map((o) => o.logisticsCompany).filter(Boolean))];
+    await submitPurchase({
+      packageId: packageId.value,
+      platform,
+      purchaseSn: snList.join(',') || null,
+      buyerAccount: buyerAccounts.join(',') || null,
+      buyerUserId: buyerIds.join(',') || null,
+      sellerName: sellers.join(',') || null,
+      paymentAmount: Number(newSelectedTotal.value) || null,
+      logisticsCompany: companies.join(',') || null,
+      logisticsNo: logisticsInput.value.trim() || null,
+      note: null,
+      items: itemsArg,
+      platformGoods: sel.flatMap((o) => o.goods || []),
+      allocMode: isAuto ? 'auto' : 'manual',
+    });
+    uni.showToast({ title: '已提交,流转待打单发货', icon: 'none' });
+    notifyRefresh();
+    // 返回详情页(onShow 自动刷新)
+    setTimeout(() => uni.navigateBack(), 600);
+  } catch (e) {
+    /* 错误 toast 已由 request.js 统一弹出 */
+  } finally {
+    submitting.value = false;
+  }
 }
 
 onLoad((opts) => {
@@ -1086,6 +1322,103 @@ onLoad((opts) => {
   font-size: 27rpx;
   color: #1f2329;
   font-weight: 600;
+}
+
+/* ── Step3 分摊确认 ── */
+.sum-box {
+  background: #f7f8fa;
+  border-radius: 12rpx;
+  padding: 18rpx 20rpx;
+  margin-bottom: 20rpx;
+}
+
+.sum-line {
+  display: flex;
+  align-items: center;
+}
+
+.sum-count {
+  margin-left: 16rpx;
+  font-size: 24rpx;
+  color: #4e5969;
+}
+
+.sum-total {
+  margin-left: auto;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #f53f3f;
+}
+
+.sum-sns {
+  margin-top: 10rpx;
+  font-size: 21rpx;
+  color: #86909c;
+  font-family: 'Courier New', monospace;
+  word-break: break-all;
+  line-height: 1.6;
+}
+
+.lookup-tip {
+  margin-top: 12rpx;
+  font-size: 21rpx;
+  color: #d97706;
+  background: #fff7e6;
+  border-radius: 8rpx;
+  padding: 10rpx 14rpx;
+  line-height: 1.5;
+}
+
+.mode-switch {
+  display: flex;
+  background: #f2f3f5;
+  border-radius: 14rpx;
+  padding: 6rpx;
+  margin-bottom: 20rpx;
+}
+
+.mode-btn {
+  flex: 1;
+  text-align: center;
+  font-size: 25rpx;
+  color: #4e5969;
+  padding: 14rpx 0;
+  border-radius: 10rpx;
+}
+
+.mode-btn.on {
+  background: #ffffff;
+  color: #165dff;
+  font-weight: 600;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.08);
+}
+
+.alloc-amount {
+  margin-top: 12rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #1f2329;
+  text-align: right;
+}
+
+.field {
+  margin-top: 24rpx;
+}
+
+.field-label {
+  font-size: 24rpx;
+  color: #4e5969;
+  display: block;
+  margin-bottom: 12rpx;
+}
+
+.field-input {
+  background: #f7f8fa;
+  border-radius: 12rpx;
+  height: 72rpx;
+  line-height: 72rpx;
+  padding: 0 24rpx;
+  font-size: 25rpx;
 }
 
 /* ── 底部操作条 ── */
