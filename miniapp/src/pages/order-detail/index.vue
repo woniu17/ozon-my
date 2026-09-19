@@ -45,7 +45,7 @@
         />
         <view v-else class="prod-img"></view>
         <view class="prod-main">
-          <view class="prod-title">{{ it.title || '—' }}</view>
+          <view class="prod-title" :class="{ link: it.sku }" @click="openGoodsPage(it.sku)">{{ it.title || '—' }}</view>
           <view class="prod-sub"><text v-if="it.sku">SKU {{ it.sku }}</text></view>
           <view class="prod-sub"><text>OfferID {{ it.offerId || '—' }}</text></view>
           <view class="prod-sub"><text>单价 {{ fmtMoney(it.price) }}</text></view>
@@ -130,7 +130,7 @@
         {{ syncing ? '同步中…' : '同步订单' }}
       </button>
       <button
-        v-if="links.length && pkg.operateStatus !== 'wait_process'"
+        v-if="links.length && pkg.operateStatus !== 'wait_process' && pkg.operateStatus !== 'cancelled'"
         class="abtn ghost"
         @click="onPurchase"
       >编辑采购</button>
@@ -236,6 +236,22 @@ function openOrderPage(platform, purchaseSn) {
   uni.setClipboardData({
     data: url,
     success: () => uni.showToast({ title: '订单页链接已复制,请在浏览器打开', icon: 'none' }),
+  });
+  // #endif
+}
+
+// Ozon 商品详情页链接(与价格管理页口径一致:/context/detail/id/{sku};H5 新标签,小程序复制链接)
+function openGoodsPage(sku) {
+  const s = String(sku || '').trim();
+  if (!s) return;
+  const url = `https://ozon.ru/context/detail/id/${s}`;
+  // #ifdef H5
+  window.open(url, '_blank');
+  // #endif
+  // #ifdef MP-WEIXIN
+  uni.setClipboardData({
+    data: url,
+    success: () => uni.showToast({ title: '商品页链接已复制,请在浏览器打开', icon: 'none' }),
   });
   // #endif
 }

@@ -211,6 +211,8 @@
 
     <!-- 默认视图:已有采购 + 新增入口 -->
     <view v-else>
+      <!-- 已取消包裹:采购信息只读(2026-09-19,与终态语义一致) -->
+      <view v-if="isCancelled" class="cancel-banner">包裹已取消,采购信息只读</view>
       <view class="card">
         <view class="section-title">已有采购({{ groups.length }})</view>
         <view v-if="!groups.length" class="muted-line">尚无采购关联</view>
@@ -242,15 +244,15 @@
             <text class="po-logi-company">{{ g.poLogisticsCompany }}</text>
             <text class="po-logi-no">{{ g.poLogisticsNo }}</text>
           </view>
-          <view class="po-actions">
+          <view v-if="!isCancelled" class="po-actions">
             <button class="mini-btn" @click="enterAllocEdit">改分摊</button>
             <button class="mini-btn danger" :disabled="removing" @click="removeGroup(g)">删除</button>
           </view>
         </view>
       </view>
 
-      <!-- 新增采购(任务 5-6 实现) -->
-      <view class="card">
+      <!-- 新增采购(任务 5-6 实现;已取消包裹隐藏) -->
+      <view v-if="!isCancelled" class="card">
         <view class="section-title">新增采购</view>
         <button class="add-btn" @click="enterSelect">+ 从平台订单选择</button>
         <button class="add-btn" @click="comingSoon">+ 手动录入采购单号</button>
@@ -342,6 +344,9 @@ const groups = computed(() => {
 const allocTotal = computed(() =>
   allocItems.value.reduce((s, it) => s + (Number(it.amount) || 0), 0)
 );
+
+// 已取消包裹:采购信息只读(2026-09-19)
+const isCancelled = computed(() => pkg.value?.operateStatus === 'cancelled');
 
 // ── 数据加载 ────────────────────────────────────────────────
 async function loadDetail() {
@@ -888,6 +893,17 @@ onLoad((opts) => {
 .muted-line {
   font-size: 24rpx;
   color: #a6abb3;
+}
+
+/* 已取消包裹只读提示条 */
+.cancel-banner {
+  margin-bottom: 20rpx;
+  padding: 16rpx 24rpx;
+  font-size: 24rpx;
+  color: #d4380d;
+  background: #fff2e8;
+  border: 1rpx solid #ffbb96;
+  border-radius: 12rpx;
 }
 
 .tip {
