@@ -122,7 +122,12 @@
         {{ syncing ? '同步中…' : '同步订单' }}
       </button>
       <button
-        v-if="pkg.purchaseLinks && pkg.purchaseLinks.length && pkg.operateStatus !== 'wait_process'"
+        v-if="links.length && pkg.operateStatus !== 'wait_process'"
+        class="abtn ghost"
+        @click="onPurchase"
+      >编辑采购</button>
+      <button
+        v-if="links.length && pkg.operateStatus !== 'wait_process'"
         class="abtn ghost"
         :disabled="logisticsSyncing"
         @click="onSyncLogistics"
@@ -137,7 +142,7 @@
 
 <script setup>
 import { ref, computed } from 'vue';
-import { onLoad } from '@dcloudio/uni-app';
+import { onLoad, onShow } from '@dcloudio/uni-app';
 import { getOrderDetail, syncPackage, shipPackage, syncPackagePurchaseLogistics } from '../../api/order.js';
 import { fmtMoney, fmtTime } from '../../utils/fmt.js';
 
@@ -340,9 +345,9 @@ async function onSyncLogistics() {
   }
 }
 
-// 采购弹层(任务4-6 实现,先占位)
+// 打开采购页(待处理=新增采购;非待处理=管理已有采购:改分摊/删除,任务4)
 function onPurchase() {
-  uni.showToast({ title: '采购弹层为任务 4-6 内容', icon: 'none' });
+  uni.navigateTo({ url: '/pages/purchase/index?id=' + packageId.value });
 }
 
 function previewImg(url) {
@@ -353,6 +358,11 @@ function previewImg(url) {
 onLoad((opts) => {
   packageId.value = String((opts && opts.id) || '');
   loadDetail();
+});
+
+// 从采购页返回时刷新详情(改分摊/删除会改变采购关联与金额)
+onShow(() => {
+  if (pkg.value) loadDetail();
 });
 </script>
 

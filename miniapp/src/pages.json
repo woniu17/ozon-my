@@ -20,6 +20,12 @@
 			"style": {
 				"navigationBarTitleText": "订单详情"
 			}
+		},
+		{
+			"path": "pages/purchase/index",
+			"style": {
+				"navigationBarTitleText": "采购处理"
+			}
 		}
 	],
 	"globalStyle": {
