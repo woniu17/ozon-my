@@ -94,7 +94,7 @@
 
 <script setup>
 import { ref } from 'vue';
-import { onLoad, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app';
+import { onLoad, onUnload, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app';
 import { getOrderTabs, getOrderList } from '../../api/order.js';
 import { fmtMoney } from '../../utils/fmt.js';
 
@@ -215,13 +215,24 @@ function goDetail(pkg) {
   uni.navigateTo({ url: '/pages/order-detail/index?id=' + pkg.id });
 }
 
+// 详情页操作(备货/同步)成功后通知刷新(tab 计数 + 列表重置第 1 页)
+function onOrdersRefresh() {
+  loadTabs();
+  reload().catch(() => {});
+}
+
 onLoad(async () => {
+  uni.$on('orders-refresh', onOrdersRefresh);
   loadTabs();
   try {
     await reload();
   } catch (e) {
     /* 首屏失败已 toast */
   }
+});
+
+onUnload(() => {
+  uni.$off('orders-refresh', onOrdersRefresh);
 });
 
 // 下拉刷新:tabs 计数 + 列表重置第 1 页
