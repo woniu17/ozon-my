@@ -154,6 +154,7 @@ export function listPriceProducts(params) {
     customPurchase: `pdc.custom_purchase_price`,
     weight: WEIGHT,
     syncedAt: `c.synced_at`,
+    lastPurchased: `agg.last_purchased_at`,
   };
   const sortExpr = SORTS[sort] || SORTS.profitRateCost;
   const direction = dir === 'desc' ? 'DESC' : 'ASC';
@@ -164,10 +165,12 @@ export function listPriceProducts(params) {
     LEFT JOIN product_attributes_cache pac ON pac.sku = c.sku
     LEFT JOIN (
       -- 90天销量(剔除已取消)+ 参考采购价(有分摊采购金额的行,采购额/数量加权)
+      --   + 最新采购订单时间(有采购分摊的行,最近一笔下单时间,页面排序用)
       SELECT CAST(oi.sku AS TEXT) AS sku,
              SUM(CASE WHEN o.in_process_at >= @since90 THEN oi.quantity ELSE 0 END) AS sales90,
              SUM(CASE WHEN oi.purchase_amount > 0 THEN oi.purchase_amount ELSE 0 END)
-               / NULLIF(SUM(CASE WHEN oi.purchase_amount > 0 THEN oi.quantity ELSE 0 END), 0) AS ref_purchase_price
+               / NULLIF(SUM(CASE WHEN oi.purchase_amount > 0 THEN oi.quantity ELSE 0 END), 0) AS ref_purchase_price,
+             MAX(CASE WHEN oi.purchase_amount > 0 THEN o.in_process_at END) AS last_purchased_at
       FROM op_ozon_order_item oi
       JOIN op_ozon_order o ON o.id = oi.ozon_order_id
       JOIN op_package p ON p.ozon_order_id = o.id
@@ -184,7 +187,7 @@ export function listPriceProducts(params) {
       pdc.custom_purchase_price, pdc.custom_purchase_price_at,
       pdc.custom_weight_g AS custom_weight,
       ${WEIGHT} AS weight_g,
-      agg.sales90, agg.ref_purchase_price,
+      agg.sales90, agg.ref_purchase_price, agg.last_purchased_at,
       ${PROFIT} AS profit_cny,
       ${RATE_COST} AS profit_rate_cost,
       ${RATE_SALE} AS profit_rate_sale`;

@@ -33,6 +33,7 @@ const SORTS = [
   { key: 'purchase', label: '采购价' },
   { key: 'weight', label: '重量' },
   { key: 'syncedAt', label: '最近同步' },
+  { key: 'lastPurchased', label: '最新采购订单' },
 ];
 
 // ── 状态 ────────────────────────────────────────────────
@@ -339,6 +340,8 @@ function toggleSortDir() {
   loadList();
 }
 function onSortChange() {
+  // 「最新采购订单」天然看最近:选中时若仍为升序自动转降序(用户手动切回仍生效)
+  if (sortKey.value === 'lastPurchased' && sortDir.value === 'asc') sortDir.value = 'desc';
   persistViewState();
   loadList();
 }
