@@ -6,6 +6,7 @@ import { getDb } from '../../../db/index.js';
 import { getPostingDetail } from '../opi-client.js';
 import { getStoreBySellerId } from '../store-map.js';
 import { notifyPostingEvent, extractSaleAmountCny } from '../feishu-notify.js';
+import { orderPackageDao } from '../../../db/dao/sqlite/order-daos.js';
 import logger from '../../../middleware/log.js';
 
 export default async function newPostingHandler(payload, ctx) {
@@ -24,12 +25,14 @@ export default async function newPostingHandler(payload, ctx) {
   // 推送已含字段,但 in_process_at 可能空 -> 调 OPI 补全(需匹配到店铺)
   let fullPayload = payload;
   let saleAmountCny = 0;
+  let opiDetail = null; // OPI 回拉原始返回(API 完整结构,联动建业务订单用)
   if (!payload.in_process_at || !payload.financial_data) {
     if (!store) {
       logger.warn({ postingNumber, sellerId }, '未匹配到店铺,seller_id 无法回拉 OPI,降级用推送原字段');
     } else {
       try {
         const detail = await getPostingDetail(store, postingNumber);
+        opiDetail = detail;
         fullPayload = {
           ...payload,
           in_process_at: detail?.in_process_at ?? payload.in_process_at,
@@ -94,6 +97,22 @@ export default async function newPostingHandler(payload, ctx) {
     { postingNumber, sellerId, storeMatched: !!store, storeId: store?.id, saleAmountCny },
     'NEW_POSTING 落库',
   );
+
+  // NEW_POSTING 联动建业务订单(2026-09-19):webhook 即时建 op_package,通知到即可见
+  // 之前仅落 ozon_postings(通知数据源),op_package 靠 2 分钟 fast 轮询补建,存在可见延迟
+  // 仅 OPI 回拉成功时联动(detail 为 /v3/get 完整 API 结构,与轮询 posting 同源);
+  // 失败/降级场景跳过,由 fast 轮询兜底;syncPosting 幂等,轮询重复执行无副作用
+  if (store && opiDetail) {
+    try {
+      const r = orderPackageDao.syncPosting(store.id, opiDetail);
+      logger.info(
+        { postingNumber, storeId: store.id, orderId: r.orderId, packageId: r.packageId },
+        'NEW_POSTING 联动建业务订单',
+      );
+    } catch (err) {
+      logger.warn({ postingNumber, err: err?.message }, 'NEW_POSTING 联动建单失败,等待 fast 轮询兜底');
+    }
+  }
 
   // 推送飞书(失败不影响落库结果)
   await notifyPostingEvent('TYPE_NEW_POSTING', fullPayload).catch(err =>
