@@ -9,7 +9,16 @@
 		{
 			"path": "pages/orders/index",
 			"style": {
-				"navigationBarTitleText": "订单处理"
+				"navigationBarTitleText": "订单处理",
+				"enablePullDownRefresh": true,
+				"backgroundTextStyle": "dark",
+				"onReachBottomDistance": 100
+			}
+		},
+		{
+			"path": "pages/order-detail/index",
+			"style": {
+				"navigationBarTitleText": "订单详情"
 			}
 		}
 	],
