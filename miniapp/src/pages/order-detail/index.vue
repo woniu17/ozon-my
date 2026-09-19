@@ -130,7 +130,7 @@
         {{ syncing ? '同步中…' : '同步订单' }}
       </button>
       <button
-        v-if="links.length && pkg.operateStatus !== 'wait_process' && pkg.operateStatus !== 'cancelled'"
+        v-if="links.length && pkg.operateStatus !== 'wait_process'"
         class="abtn ghost"
         @click="onPurchase"
       >编辑采购</button>
