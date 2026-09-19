@@ -919,6 +919,22 @@ const autoPreview = computed(() => {
   const sumQty = currentQty + existingAutoQty;
   if (sumQty === 0) return { items: [], sumQty: 0, payment, currentQty, existingAutoQty };
   const round2 = (n) => Math.round(n * 100) / 100;
+  // 无新采购金额(纯已有采购恢复态):回显已有 link 的行级分摊,与已选区金额保持一致
+  // (不参与加权计算;✕ 标记删除的已有采购不回显)
+  if (payment <= 0) {
+    const linkByItem = new Map();
+    for (const r of restoredPurchases.value) {
+      if (removedPurchaseIds.value.has(r.purchaseOrderId)) continue;
+      for (const l of r._links || []) {
+        linkByItem.set(l.itemId, (linkByItem.get(l.itemId) || 0) + (Number(l.allocatedAmount) || 0));
+      }
+    }
+    const restoreItems = purchaseForm.items.map((it) => ({
+      ...it,
+      previewAmount: round2(linkByItem.get(it.itemId) || 0),
+    }));
+    return { items: restoreItems, sumQty, payment, currentQty, existingAutoQty };
+  }
   const items = purchaseForm.items.map((it) => ({
     ...it,
     previewAmount: round2((Number(it.quantity) || 0) * payment / sumQty),
