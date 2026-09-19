@@ -359,28 +359,31 @@ async function onSync() {
 }
 
 // 备货:向 Ozon 确认全部商品为一个货件(不拆分);已备货幂等返回 alreadyShipped
+// 仅当存在数量≥2的商品时二次确认(防多件误发);全部单件直接备货
 function onShip() {
   if (shipping.value) return;
+  const multiQty = items.value.some((it) => (Number(it.quantity) || 0) >= 2);
   const qty = items.value.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+  const doShip = async () => {
+    shipping.value = true;
+    try {
+      const r = await shipPackage(packageId.value);
+      uni.showToast({ title: r?.alreadyShipped ? '该包裹已备货过' : '备货成功', icon: 'none' });
+      await loadDetail();
+      notifyListRefresh();
+    } catch (e) {
+      /* 已 toast */
+    } finally {
+      shipping.value = false;
+    }
+  };
+  if (!multiQty) return doShip();
   uni.showModal({
     title: '备货确认',
     content:
-      '货件 ' + pkg.value.postingNumber + '\n共 ' + qty + ' 件商品,将向 Ozon 确认全部商品为一个货件(不拆分)。',
+      '货件 ' + pkg.value.postingNumber + '\n含数量≥2的商品(共 ' + qty + ' 件),将向 Ozon 确认全部商品为一个货件(不拆分)。',
     confirmText: '备货',
-    success: async (res) => {
-      if (!res.confirm) return;
-      shipping.value = true;
-      try {
-        const r = await shipPackage(packageId.value);
-        uni.showToast({ title: r?.alreadyShipped ? '该包裹已备货过' : '备货成功', icon: 'none' });
-        await loadDetail();
-        notifyListRefresh();
-      } catch (e) {
-        /* 已 toast */
-      } finally {
-        shipping.value = false;
-      }
-    },
+    success: (res) => res.confirm && doShip(),
   });
 }
 
