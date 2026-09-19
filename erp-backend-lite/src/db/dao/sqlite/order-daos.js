@@ -1338,7 +1338,7 @@ function submitPurchase({
 }) {
   const pkg = db.prepare(`SELECT * FROM op_package WHERE id = ?`).get(packageId);
   if (!pkg) throw new Error(`包裹不存在: ${packageId}`);
-  if (pkg.operate_status === 'cancelled') throw new Error('包裹已取消,不能提交采购');
+  // 已取消包裹允许提交采购(2026-09-19 需求:取消单利润=−采购,采购信息需可管理)
   if (pkg.is_ignored) throw new Error('包裹已搁置,请先恢复');
 
   const now = nowIso();
@@ -1490,7 +1490,7 @@ function submitPurchase({
 function updatePurchaseAlloc({ packageId, items }) {
   const pkg = db.prepare(`SELECT * FROM op_package WHERE id = ?`).get(packageId);
   if (!pkg) throw new Error(`包裹不存在: ${packageId}`);
-  if (pkg.operate_status === 'cancelled') throw new Error('包裹已取消,不能修改采购');
+  // 已取消包裹允许修改分摊(2026-09-19 需求:取消单利润=−采购,分摊金额需可修正)
   if (pkg.is_ignored) throw new Error('包裹已搁置,请先恢复');
 
   const now = nowIso();
@@ -1659,7 +1659,7 @@ function revertToWaitProcess(packageId) {
 function clearAllPurchase(packageId) {
   const pkg = db.prepare(`SELECT * FROM op_package WHERE id = ?`).get(packageId);
   if (!pkg) throw new Error(`包裹不存在: ${packageId}`);
-  if (pkg.operate_status === 'cancelled') throw new Error('包裹已取消,不能操作');
+  // 已取消包裹允许清空采购(2026-09-19 需求:取消单采购信息需可管理)
   if (pkg.is_ignored) throw new Error('包裹已搁置,请先恢复');
   const now = nowIso();
   return runInTx(() => {
