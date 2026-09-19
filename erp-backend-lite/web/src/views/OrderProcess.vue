@@ -791,8 +791,8 @@ async function dismissProgress() {
 }
 
 // ── 采购录入 ───────────────────────────────────────────
-// 采购弹窗内嵌订单导入区的平台×账号 tab key
-// 'pdd' | 'ali:linqx' | 'ali:chenlin' | 'taobao' | 'manual'(多账号平台带账号后缀,单账号平台保持裸键)
+// 采购弹窗内嵌订单导入区的平台×账号 tab key(手动录入 tab 已随手工单下线移除)
+// 'pdd' | 'ali:linqx' | 'ali:chenlin' | 'taobao'(多账号平台带账号后缀,单账号平台保持裸键)
 const importTab = ref('pdd');
 // 已有采购单恢复态:打开弹窗时从 pkg.purchaseLinks 按采购单分组重建,显示在"已选订单"区,可逐单删除
 const restoredPurchases = ref([]);
@@ -802,7 +802,7 @@ const removedPurchaseIds = ref(new Set());
 /** 平台值(入库的 yangkeduo/1688/taobao)→ 首个匹配的账号 tab key(用于打开弹窗恢复) */
 function tabKeyForPlatform(platformVal) {
   const hit = importAccountTabs.value.find((t) => PLATFORM_TAB_META[t.platform]?.platformVal === platformVal);
-  return hit ? hit.key : 'manual';
+  return hit ? hit.key : 'pdd';
 }
 
 function openPurchase(pkg) {
@@ -867,7 +867,7 @@ function openPurchase(pkg) {
     purchaseForm.allocMode = 'auto';
     importTab.value = tabKeyForPlatform(purchaseForm.platform);
     purchaseOpen.value = true;
-    if (importTab.value !== 'manual') loadOrders(importTab.value);
+    loadOrders(importTab.value);
     return;
   }
   restoredPurchases.value = [];
@@ -1163,7 +1163,7 @@ function rebuildAccountTabs(platforms) {
   }
   if (tabs.length) {
     // 当前 importTab 指向的 tab 被新配置淘汰时,归位到第一个平台 tab
-    if (!tabs.some((t) => t.key === importTab.value) && importTab.value !== 'manual') {
+    if (!tabs.some((t) => t.key === importTab.value)) {
       importTab.value = tabs[0].key;
     }
     importAccountTabs.value = tabs;
@@ -1375,24 +1375,13 @@ function switchImportTab(t) {
   importTab.value = t;
   importSearch.keyword = '';
   importSearch.error = '';
-  if (t === 'manual') {
-    // 切到手动录入:清空全部账号已勾选的平台采购订单,平台改为其它
-    for (const tabDef of importAccountTabs.value) {
-      const st = importStores[tabDef.key];
-      if (st) st.selected = [];
-    }
-    purchaseForm.platform = 'other';
-    purchaseForm.purchaseSn = '';
-    purchaseForm.sellerName = '';
-    return;
-  }
   const st = storeFor(t);
   if (!st.orders.length && !st.loading) loadOrders(t);
 }
 
 function switchImportSubTab(t) {
   importSubTab.value = t;
-  if (importTab.value !== 'manual') loadOrders(importTab.value);
+  loadOrders(importTab.value);
 }
 
 // ── 订单号搜索(2026-09-16 先支持 1688;2026-09-17 扩展拼多多 + 只搜当前tab所属账号,省API调用)──
@@ -1430,27 +1419,6 @@ async function onSearchImportOrder() {
     importSearch.error = e?.message || String(e);
   } finally {
     importSearch.loading = false;
-  }
-}
-
-// 手动录入 tab:输入金额后均摊到各产品行(同步显示到上方第①块)
-function syncManualAmount() {
-  const total = Number(purchaseForm.value.paymentAmount);
-  if (!total || !isFinite(total) || total <= 0) return;
-  const items = purchaseForm.value.items || [];
-  const sumQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
-  if (sumQty <= 0) return;
-  // 按数量加权均摊,末行吸收尾差
-  let allocated = 0;
-  for (let i = 0; i < items.length; i++) {
-    const q = Number(items[i].quantity) || 0;
-    if (i === items.length - 1) {
-      items[i].amount = (Math.round((total - allocated) * 100) / 100).toString();
-    } else {
-      const a = Math.round((total * q / sumQty) * 100) / 100;
-      items[i].amount = a.toString();
-      allocated += a;
-    }
   }
 }
 
@@ -3172,12 +3140,11 @@ onUnmounted(() => {
               :class="{ active: importTab === t.key }"
               @click="switchImportTab(t.key)"
             >{{ t.label }}</button>
-            <button class="pdd-tab" :class="{ active: importTab === 'manual' }" @click="switchImportTab('manual')">手动录入</button>
-            <span v-if="importTab !== 'manual' && currentPlatformLogin === 'no'" class="pdd-bridge-warn" title="后端未检测到该账号登录态,请运行 qxqx 的 persistent(带账号参数)登录对应平台">未检测到{{ currentPlatformName }}登录态</span>
+            <span v-if="currentPlatformLogin === 'no'" class="pdd-bridge-warn" title="后端未检测到该账号登录态,请运行 qxqx 的 persistent(带账号参数)登录对应平台">未检测到{{ currentPlatformName }}登录态</span>
           </div>
 
-          <!-- 平台订单列表(非手动录入) -->
-          <div v-if="importTab !== 'manual'" class="import-section">
+          <!-- 平台订单列表 -->
+          <div class="import-section">
             <div class="pdd-toolbar">
               <div class="pdd-tabs">
                 <button v-for="st in importSubTabs" :key="st.key" class="pdd-tab" :class="{ active: importSubTab === st.key }" @click="switchImportSubTab(st.key)">{{ st.label }}</button>
@@ -3244,24 +3211,6 @@ onUnmounted(() => {
                   </div>
                 </div>
               </label>
-            </div>
-          </div>
-
-          <!-- 手动录入 tab:金额 + 快递单号 + 物流公司(左列,与平台列表同位) -->
-          <div v-if="importTab === 'manual'" class="manual-input-section">
-            <div class="form-row">
-              <label>采购金额</label>
-              <input v-model.trim="purchaseForm.paymentAmount" class="filter-input" placeholder="如 29.21(填了均摊到各产品行)" @input="syncManualAmount" />
-              <label>采购平台</label>
-              <select v-model="purchaseForm.platform" class="filter-input">
-                <option v-for="p in PLATFORMS" :key="p.value" :value="p.value">{{ p.label }}</option>
-              </select>
-            </div>
-            <div class="form-row">
-              <label>快递单号</label>
-              <input v-model.trim="purchaseForm.logisticsNo" class="filter-input" placeholder="上家发货单号(填了视为已发货)" />
-              <label>物流公司</label>
-              <input v-model.trim="purchaseForm.logisticsCompany" class="filter-input" placeholder="如 顺丰/韵达/极兔" />
             </div>
           </div>
         </div>
