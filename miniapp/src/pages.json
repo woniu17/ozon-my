@@ -1,0 +1,22 @@
+{
+	"pages": [
+		{
+			"path": "pages/login/index",
+			"style": {
+				"navigationBarTitleText": "登录"
+			}
+		},
+		{
+			"path": "pages/orders/index",
+			"style": {
+				"navigationBarTitleText": "订单处理"
+			}
+		}
+	],
+	"globalStyle": {
+		"navigationBarTextStyle": "black",
+		"navigationBarTitleText": "Ozon ERP",
+		"navigationBarBackgroundColor": "#ffffff",
+		"backgroundColor": "#f5f6f7"
+	}
+}
