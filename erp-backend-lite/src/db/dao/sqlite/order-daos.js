@@ -1320,7 +1320,6 @@ function reallocateAutoLinks(poId) {
 // 触发: 提交采购 / 改分摊 / 扫描发货称重 后
 // ════════════════════════════════════════════════════════════════
 export function backfillProductCache(packageId) {
-  const db = getDb();
   // 包裹的全部商品 SKU
   const skus = db
     .prepare(
