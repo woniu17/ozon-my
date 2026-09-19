@@ -574,6 +574,15 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
     if (!goodsArr.length && AUTO_ENRICH_SEARCH[b.platform] && sn && !sn.includes(',')) {
       setImmediate(() => autoEnrichPurchase(b.platform, sn));
     }
+    // 回填本系统维护的采购价/重量(仅空值时,有值不动;2026-09-19)
+    try {
+      const bf = orderPackageDao.backfillProductCache(packageId);
+      if (bf.purchaseFilled || bf.weightFilled) {
+        logger.info({ packageId, ...bf }, '[order-process] 自动回填采购价/重量');
+      }
+    } catch (e) {
+      logger.warn({ packageId, err: e.message }, '[order-process] 回填采购价/重量失败');
+    }
     // 保存后异步补查物流(2026-09-17):采购弹窗列表已不再逐单查物流(1688限流主因),
     // 勾选保存为采购订单后统一补一次(1688补单号+拉轨迹/PDD搜索+轨迹,限速2s/单)
     setImmediate(async () => {
@@ -600,6 +609,15 @@ router.post('/admin/api/order-process/purchase-alloc', (req, res, next) => {
     if (!packageId) return res.status(400).json({ ok: false, message: 'packageId 必填' });
     if (!items.length) return res.status(400).json({ ok: false, message: '至少填写一行采购金额' });
     const r = orderPackageDao.updatePurchaseAlloc({ packageId, items });
+    // 回填本系统维护的采购价(仅空值时,有值不动;2026-09-19)
+    try {
+      const bf = orderPackageDao.backfillProductCache(packageId);
+      if (bf.purchaseFilled || bf.weightFilled) {
+        logger.info({ packageId, ...bf }, '[order-process] 自动回填采购价/重量(改分摊)');
+      }
+    } catch (e) {
+      logger.warn({ packageId, err: e.message }, '[order-process] 回填采购价/重量失败(改分摊)');
+    }
     logger.info({ packageId, ...r }, '[order-process] 采购分摊金额已修改');
     res.json(ok(r));
   } catch (e) {
@@ -739,6 +757,15 @@ router.post('/admin/api/order-process/scan-ship/submit', (req, res, next) => {
     }
     const r = orderPackageDao.scanShipSubmit(packageId, weightG);
     if (!r.found) return res.status(404).json({ ok: false, message: '包裹不存在' });
+    // 称重落库后回填维护重量(仅空值时,有值不动;2026-09-19)
+    try {
+      const bf = orderPackageDao.backfillProductCache(packageId);
+      if (bf.weightFilled || bf.purchaseFilled) {
+        logger.info({ packageId, ...bf }, '[order-process] 自动回填采购价/重量(称重)');
+      }
+    } catch (e) {
+      logger.warn({ packageId, err: e.message }, '[order-process] 回填采购价/重量失败(称重)');
+    }
     const message = r.canShip
       ? ''
       : r.isIgnored

@@ -1311,6 +1311,76 @@ function reallocateAutoLinks(poId) {
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// 回填本系统维护的采购价/重量(2026-09-19)
+// 规则:product_data_cache.custom_purchase_price / custom_weight_g
+//   为空时自动填充,已有值永不覆盖(手动维护优先)
+//   采购价 ← 该 SKU 最新一笔有采购订单行的分摊单价(purchase_amount/quantity)
+//   重量   ← 该 SKU 最新已称重"单SKU包裹"的单件重量(weight/包裹总数量)
+// 触发: 提交采购 / 改分摊 / 扫描发货称重 后
+// ════════════════════════════════════════════════════════════════
+export function backfillProductCache(packageId) {
+  const db = getDb();
+  // 包裹的全部商品 SKU
+  const skus = db
+    .prepare(
+      `SELECT DISTINCT CAST(oi.sku AS TEXT) AS sku
+       FROM op_ozon_order_item oi
+       WHERE oi.ozon_order_id = (SELECT ozon_order_id FROM op_package WHERE id = ?)`
+    )
+    .all(packageId)
+    .map((r) => r.sku)
+    .filter(Boolean);
+  if (!skus.length) return { purchaseFilled: 0, weightFilled: 0 };
+
+  const LATEST_UNIT_PRICE = `
+    SELECT oi.purchase_amount * 1.0 / oi.quantity AS unit_price
+    FROM op_ozon_order_item oi
+    JOIN op_ozon_order o ON o.id = oi.ozon_order_id
+    WHERE CAST(oi.sku AS TEXT) = ? AND oi.purchase_amount > 0 AND oi.quantity > 0
+    ORDER BY o.in_process_at DESC
+    LIMIT 1`;
+  const LATEST_UNIT_WEIGHT = `
+    SELECT p.weight * 1.0 / (
+      SELECT SUM(oi2.quantity) FROM op_ozon_order_item oi2
+      WHERE oi2.ozon_order_id = p.ozon_order_id AND CAST(oi2.sku AS TEXT) = ?
+    ) AS unit_weight
+    FROM op_package p
+    WHERE p.weight IS NOT NULL AND p.weight > 0
+      AND (SELECT COUNT(DISTINCT oi3.sku) FROM op_ozon_order_item oi3
+           WHERE oi3.ozon_order_id = p.ozon_order_id) = 1
+      AND EXISTS (SELECT 1 FROM op_ozon_order_item oi4
+                  WHERE oi4.ozon_order_id = p.ozon_order_id AND CAST(oi4.sku AS TEXT) = ?)
+    ORDER BY p.id DESC
+    LIMIT 1`;
+
+  let purchaseFilled = 0;
+  let weightFilled = 0;
+  for (const sku of skus) {
+    const price = db.prepare(LATEST_UNIT_PRICE).get(sku);
+    if (price && price.unit_price != null) {
+      const r = db
+        .prepare(
+          `UPDATE product_data_cache SET custom_purchase_price = ?, custom_purchase_price_at = datetime('now')
+           WHERE sku = ? AND custom_purchase_price IS NULL`
+        )
+        .run(price.unit_price, sku);
+      purchaseFilled += r.changes;
+    }
+    const weight = db.prepare(LATEST_UNIT_WEIGHT).get(sku, sku);
+    if (weight && weight.unit_weight != null) {
+      const r = db
+        .prepare(
+          `UPDATE product_data_cache SET custom_weight_g = ?
+           WHERE sku = ? AND custom_weight_g IS NULL`
+        )
+        .run(Math.round(weight.unit_weight), sku);
+      weightFilled += r.changes;
+    }
+  }
+  return { purchaseFilled, weightFilled };
+}
+
 /**
  * 提交采购信息(模式B:金额+国内快递单号;模式A:上家单号,P2 实现自动补全)
  * items: [{ itemId, amount, quantity }]
