@@ -62,7 +62,15 @@
       <view v-for="l in links" :key="l.id" class="po">
         <view class="po-head">
           <text class="po-platform">{{ platformLabel(l.platform) }}</text>
-          <text class="po-sn">{{ l.purchaseSn || '#' + l.purchaseOrderId }}</text>
+          <view class="po-sn-wrap">
+            <text
+              v-if="orderDetailUrl(l.platform, l.purchaseSn)"
+              class="po-sn link"
+              @click="openOrderPage(l.platform, l.purchaseSn)"
+            >{{ l.purchaseSn }}</text>
+            <text v-else class="po-sn">{{ l.purchaseSn || '#' + l.purchaseOrderId }}</text>
+            <text v-if="l.purchaseSn" class="copy-tag" @click.stop="copyText(l.purchaseSn, '采购单号')">复制</text>
+          </view>
           <text class="po-status">{{ poStatusLabel(l.poStatus) }}</text>
         </view>
         <view class="po-meta">
@@ -87,7 +95,7 @@
         </view>
         <view v-if="l.poLogisticsNo" class="po-logi">
           <text class="po-logi-company">{{ l.poLogisticsCompany }}</text>
-          <text class="po-logi-no">{{ l.poLogisticsNo }}</text>
+          <text class="po-logi-no link" @click="copyText(l.poLogisticsNo, '快递单号')">{{ l.poLogisticsNo }}</text>
         </view>
       </view>
     </view>
@@ -195,6 +203,41 @@ const PO_STATUS_LABELS = {
 };
 function poStatusLabel(s) {
   return PO_STATUS_LABELS[s] || s || '—';
+}
+
+// ── 采购单号/快递单号交互(与 web 端 orderDetailUrl/copyText 对齐)──
+// 采购订单详情页链接:1688 买家订单列表带搜索词 | 拼多多订单详情页(单号缺失返回空)
+function orderDetailUrl(platform, purchaseSn) {
+  const sn = String(purchaseSn || '').trim();
+  if (!sn) return '';
+  if (platform === '1688') return `https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=${encodeURIComponent(sn)}`;
+  if (platform === 'yangkeduo') return `https://mobile.yangkeduo.com/order.html?order_sn=${encodeURIComponent(sn)}`;
+  return '';
+}
+
+// 复制文本到剪贴板(uni API,H5/小程序通用)
+function copyText(val, label) {
+  const s = String(val || '').trim();
+  if (!s) return;
+  uni.setClipboardData({
+    data: s,
+    success: () => uni.showToast({ title: (label || '') + '已复制', icon: 'none' }),
+  });
+}
+
+// 打开采购平台订单详情页(H5 新标签打开;小程序无外链能力,复制链接提示浏览器打开)
+function openOrderPage(platform, purchaseSn) {
+  const url = orderDetailUrl(platform, purchaseSn);
+  if (!url) return;
+  // #ifdef H5
+  window.open(url, '_blank');
+  // #endif
+  // #ifdef MP-WEIXIN
+  uni.setClipboardData({
+    data: url,
+    success: () => uni.showToast({ title: '订单页链接已复制,请在浏览器打开', icon: 'none' }),
+  });
+  // #endif
 }
 
 // rFBS 退货状态中文释义(与 web 端同步)
@@ -568,6 +611,31 @@ onShow(() => {
   font-size: 24rpx;
   color: #1f2329;
   font-family: 'Courier New', monospace;
+}
+
+/* 采购单号/快递单号可交互:蓝色链接样式 */
+.link {
+  color: #296ef6;
+  text-decoration: underline;
+}
+
+.po-sn-wrap {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 复制小标签 */
+.copy-tag {
+  flex-shrink: 0;
+  margin-left: 12rpx;
+  padding: 2rpx 12rpx;
+  font-size: 20rpx;
+  color: #666;
+  border: 1rpx solid #d5d9e0;
+  border-radius: 8rpx;
+  background: #f7f8fa;
 }
 
 .po-status {
