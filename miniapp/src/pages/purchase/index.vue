@@ -12,6 +12,11 @@
     <!-- Step2:平台订单选择 -->
     <view v-if="step === 'select'">
       <view class="card">
+        <!-- 已有采购入口(2026-09-19:进页直接展示平台订单,已有采购收进此入口条) -->
+        <view v-if="groups.length" class="linked-entry" @click="step = 'manage'">
+          <text>已有采购 {{ groups.length }} 单 · 改分摊/删除</text>
+          <text class="linked-entry-arrow">›</text>
+        </view>
         <view class="section-title">选择平台订单</view>
         <!-- 平台×账号 tabs(多账号展开,与 web 端一致) -->
         <scroll-view class="plat-tabs" scroll-x :show-scrollbar="false">
@@ -94,7 +99,7 @@
           <text class="sel-count">已选 {{ selCount }} 单</text>
           <text class="sel-total">合计 ¥{{ newSelectedTotal }}</text>
         </view>
-        <button class="abtn ghost" @click="step = 'manage'">返回</button>
+        <button class="abtn ghost" @click="uni.navigateBack()">返回</button>
         <button class="abtn primary" :disabled="!selCount" @click="goStep3">下一步</button>
       </view>
     </view>
@@ -212,8 +217,9 @@
       </view>
     </view>
 
-    <!-- 默认视图:已有采购 + 新增入口(已取消包裹同样可修改:取消单利润=−采购,分摊需可修正) -->
+    <!-- 默认视图:已有采购管理(2026-09-19:进页直接展示平台订单,本视图经「已有采购」入口进入) -->
     <view v-else>
+      <view class="back-bar" @click="enterSelect">‹ 返回平台订单</view>
       <view class="card">
         <view class="section-title">已有采购({{ groups.length }})</view>
         <view v-if="!groups.length" class="muted-line">尚无采购关联</view>
@@ -250,12 +256,6 @@
             <button class="mini-btn danger" :disabled="removing" @click="removeGroup(g)">删除</button>
           </view>
         </view>
-      </view>
-
-      <!-- 新增采购(任务 5-6 实现;手工单/手动录入入口已下线,仅平台订单选择) -->
-      <view class="card">
-        <view class="section-title">新增采购</view>
-        <button class="add-btn" @click="enterSelect">+ 从平台订单选择</button>
       </view>
     </view>
   </view>
@@ -470,7 +470,7 @@ const PLATFORM_TAB_META = {
   taobao: { platformVal: 'taobao', label: '淘宝' },
 };
 
-const step = ref('manage'); // manage=管理已有采购 | select=选平台订单
+const step = ref('select'); // select=选平台订单(默认,进页直接展示) | manage=管理已有采购
 // 默认 tabs(/status 未返回时兜底,与 web 端一致)
 const platTabs = ref([
   { key: 'pdd', platform: 'pdd', account: 'linqx', label: '拼多多' },
@@ -881,7 +881,10 @@ async function shipAfterSave() {
 
 onLoad((opts) => {
   packageId.value = String((opts && opts.id) || '');
-  loadDetail();
+  loadDetail().then(() => {
+    // 进页默认展示平台订单:初始化平台 tabs/登录态/首屏订单
+    if (pkg.value) enterSelect();
+  });
 });
 </script>
 
@@ -928,6 +931,33 @@ onLoad((opts) => {
   font-weight: 600;
   color: #1f2329;
   margin-bottom: 16rpx;
+}
+
+/* 已有采购入口条(平台订单视图顶部,点击进入管理) */
+.linked-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f0f5ff;
+  border: 2rpx solid #a8ccff;
+  border-radius: 12rpx;
+  padding: 16rpx 20rpx;
+  font-size: 26rpx;
+  color: #165dff;
+  margin-bottom: 16rpx;
+}
+
+.linked-entry-arrow {
+  font-size: 32rpx;
+  line-height: 1;
+}
+
+/* 管理视图顶部返回条 */
+.back-bar {
+  display: inline-block;
+  font-size: 26rpx;
+  color: #165dff;
+  padding: 8rpx 0 16rpx;
 }
 
 .muted-line {
