@@ -594,8 +594,8 @@ onShow(() => {
 }
 
 .prod-img {
-  width: 110rpx;
-  height: 110rpx;
+  width: 180rpx;
+  height: 180rpx;
   border-radius: 12rpx;
   background: #f2f3f5;
   flex-shrink: 0;

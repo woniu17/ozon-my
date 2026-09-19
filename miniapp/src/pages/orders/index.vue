@@ -493,8 +493,8 @@ onReachBottom(async () => {
 }
 
 .prod-img {
-  width: 96rpx;
-  height: 96rpx;
+  width: 140rpx;
+  height: 140rpx;
   border-radius: 12rpx;
   background: #f2f3f5;
   flex-shrink: 0;
