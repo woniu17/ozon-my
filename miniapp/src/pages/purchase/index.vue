@@ -249,11 +249,10 @@
         </view>
       </view>
 
-      <!-- 新增采购(任务 5-6 实现) -->
+      <!-- 新增采购(任务 5-6 实现;手工单/手动录入入口已下线,仅平台订单选择) -->
       <view class="card">
         <view class="section-title">新增采购</view>
         <button class="add-btn" @click="enterSelect">+ 从平台订单选择</button>
-        <button class="add-btn" @click="comingSoon">+ 手动录入采购单号</button>
       </view>
     </view>
   </view>
@@ -455,11 +454,6 @@ function removeGroup(g) {
       }
     },
   });
-}
-
-// 新增采购入口(任务 6 实现)
-function comingSoon() {
-  uni.showToast({ title: '手动录入为任务 6 内容', icon: 'none' });
 }
 
 // ════════════════════════════════════════════════════════════

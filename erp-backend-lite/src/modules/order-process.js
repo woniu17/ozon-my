@@ -547,6 +547,10 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
     if (!hasAmount && !hasLogisticsNo) {
       return res.status(400).json({ ok: false, message: '请填写采购金额或国内快递单号' });
     }
+    // 2026-09-19 手工单(无单号)下线:新建提交必须携带采购单号,防止再产生 platform=other+无单号的空壳手工单
+    if (!String(b.purchaseSn || '').trim()) {
+      return res.status(400).json({ ok: false, message: '请填写采购单号或从平台订单选择(已不支持无单号手工单)' });
+    }
     // 平台订单商品:过滤出有 thumbUrl 的(与 enrichPurchaseItems 口径一致),序列化后随 upsert 写入
     const goodsArr = (Array.isArray(b.platformGoods) ? b.platformGoods : []).filter((g) => g && g.thumbUrl);
     const itemsJson = goodsArr.length ? JSON.stringify(goodsArr) : null;
