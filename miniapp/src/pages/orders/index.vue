@@ -44,7 +44,11 @@
       <view v-for="pkg in rows" :key="pkg.id" class="card" @click="goDetail(pkg)">
         <view class="card-head">
           <text class="store">{{ pkg.storeName }}</text>
-          <text class="posting">{{ pkg.postingNumber }}</text>
+          <template v-if="isQcPosting(pkg.postingNumber)">
+            <text class="qc-badge">质检单</text>
+            <text class="posting qc">{{ pkg.postingNumber }}</text>
+          </template>
+          <text v-else class="posting">{{ pkg.postingNumber }}</text>
           <text v-if="pkg.parentId" class="split-badge child">子件</text>
           <text v-else-if="pkg.hasChildren" class="split-badge mother">母件</text>
           <text class="op-tag" :class="'op-' + opTag(pkg).cls">{{ opTag(pkg).label }}</text>
@@ -55,7 +59,7 @@
         </view>
 
         <view v-for="(it, i) in pkg.items" :key="i" class="prod">
-          <image v-if="it.picUrl" class="prod-img" :src="it.picUrl" mode="aspectFill" lazy-load />
+          <image v-if="it.picUrl" class="prod-img" :src="it.picUrl" mode="aspectFill" lazy-load @click.stop="previewImg(pkg, it)" />
           <view v-else class="prod-img"></view>
           <view class="prod-main">
             <view class="prod-title">{{ it.title || '—' }}</view>
@@ -213,6 +217,19 @@ function searchBySku(sku) {
 
 function goDetail(pkg) {
   uni.navigateTo({ url: '/pages/order-detail/index?id=' + pkg.id });
+}
+
+// 质检单货件号(02131/024785 开头,与 web 端 isQcPosting 同口径):红色徽标 + 红色加粗货件号
+function isQcPosting(sn) {
+  const s = String(sn || '');
+  return s.startsWith('02131') || s.startsWith('024785');
+}
+
+// 点击商品图:预览大图(该包裹全部商品图可左右切换)
+function previewImg(pkg, it) {
+  const urls = (pkg.items || []).map((x) => x.picUrl).filter(Boolean);
+  if (!urls.length) return;
+  uni.previewImage({ current: it.picUrl, urls });
 }
 
 // 详情页操作(备货/同步)成功后通知刷新(tab 计数 + 列表重置第 1 页)
@@ -384,6 +401,24 @@ onReachBottom(async () => {
   font-size: 24rpx;
   color: #1f2329;
   font-family: 'Courier New', monospace;
+}
+
+/* 质检单货件号(02131/024785 开头):红色加粗显著展示 */
+.posting.qc {
+  color: #d93026;
+  font-weight: 700;
+}
+
+.qc-badge {
+  flex-shrink: 0;
+  font-size: 20rpx;
+  color: #d93026;
+  border: 2rpx solid #d93026;
+  border-radius: 6rpx;
+  padding: 0 8rpx;
+  line-height: 34rpx;
+  margin-right: 8rpx;
+  font-weight: 700;
 }
 
 .split-badge {
