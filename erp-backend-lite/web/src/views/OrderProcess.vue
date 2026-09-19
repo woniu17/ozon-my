@@ -1012,9 +1012,22 @@ async function savePurchase() {
     }
     return;
   }
+  const sn = purchaseForm.purchaseSn.trim();
+  // manual 模式防护(2026-09-19):无单号、无新勾选平台订单,但已有采购时,
+  // 表单金额只会作为一笔新的手工采购追加,不会修改已有采购单金额——大概率是想改已有单的金额,弹确认防误建
+  // (案例:包裹已有采购单,取消自动填写金额改填 12 保存,误建了一笔无单号手工单)
+  if (!isAuto && !sn && newSelectedOrders.value.length === 0 && remainingRestored.length > 0) {
+    const totalAmount = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+    const pos = remainingRestored.map((r) => r.orderSn || '(手工单)').join('、');
+    const ok = await confirmStore.ask({
+      message: `未填写采购单号,也未勾选新的平台订单。本次提交将新增一笔手工采购(¥${totalAmount.toFixed(2)}),不会修改已有采购单 ${pos} 的金额。\n如需修改已有采购单金额,请先将其标记删除(✕)后按新金额重新录入。是否仍要新增手工采购?`,
+      confirmText: '新增手工采购',
+      danger: true,
+    });
+    if (!ok) return;
+  }
   // 拼单检测:platform≠other 且 purchaseSn 非空时,查询采购单是否已关联其他包裹
   // auto 模式下已有 lookupResult(manual 模式实时查询)
-  const sn = purchaseForm.purchaseSn.trim();
   if (purchaseForm.platform !== 'other' && sn) {
     try {
       const r = lookupResult.value || await lookupPurchase(purchaseForm.platform, sn);
