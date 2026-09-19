@@ -30,6 +30,12 @@ export function submitPurchase(body) {
   return request.post('/admin/api/order-process/purchase', body);
 }
 
+// 修改已有采购的分摊金额(采购弹窗取消「自动填写金额」后手填保存)
+// 不新增采购单,只更新已有 link 的分摊金额;body: { packageId, items: [{ itemId, amount }] }
+export function updatePurchaseAlloc(body) {
+  return request.post('/admin/api/order-process/purchase-alloc', body);
+}
+
 // 清空采购信息(采购弹窗空表单保存:冲回全部关联,聚合/头程物流归零;不回退状态)
 // 返回 { cleared, hadPurchase }
 export function clearPurchaseInfo(packageId) {

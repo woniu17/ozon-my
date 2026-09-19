@@ -9,7 +9,7 @@ import { parseUtcDate } from '../utils/time.js';
 import { useRoute } from 'vue-router';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
-  submitPurchase, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
+  submitPurchase, updatePurchaseAlloc, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   updatePackageMeta, listPackageTags, updateTagOrder,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
   runAccrualSync, getRubRate, setRubRate,
@@ -858,6 +858,8 @@ function openPurchase(pkg) {
         goods: first.items || [],
         _platform: first.platform || 'other',
         _existing: true,
+        // 行级 link(2026-09-19):切 manual 模式时按行回填当前分摊金额,作为手改起点
+        _links: links.map((l) => ({ itemId: l.ozonOrderItemId, allocatedAmount: Number(l.allocatedAmount) || 0 })),
       };
     });
     purchaseForm.platform = restoredPurchases.value[0].platform;
@@ -922,8 +924,21 @@ watch(() => purchaseForm.allocMode, (mode) => {
     // 切到 manual:从已选采购订单合计(newSelectedTotal,不含已有采购恢复项)按数量加权分摊到各产品行
     // 不依赖 paymentAmount(可能被 watch 链时序影响),直接用合计确保多选时用合计
     const total = Number(newSelectedTotal.value) || 0;
-    if (total <= 0) return;
     const items = purchaseForm.items || [];
+    if (total <= 0) {
+      // 无新勾选订单:已有采购的分摊金额按行回填,作为手改起点(2026-09-19,
+      // 取消自动填写金额后手填保存 = 修改已有采购单的分摊金额,不再误建手工单)
+      const linkByItem = new Map();
+      for (const r of restoredPurchases.value) {
+        for (const l of r._links || []) {
+          linkByItem.set(l.itemId, (linkByItem.get(l.itemId) || 0) + l.allocatedAmount);
+        }
+      }
+      for (const it of items) {
+        if (linkByItem.has(it.itemId)) it.amount = String(Math.round(linkByItem.get(it.itemId) * 100) / 100);
+      }
+      return;
+    }
     const sumQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
     if (sumQty <= 0) return;
     let allocated = 0;
@@ -1013,18 +1028,33 @@ async function savePurchase() {
     return;
   }
   const sn = purchaseForm.purchaseSn.trim();
-  // manual 模式防护(2026-09-19):无单号、无新勾选平台订单,但已有采购时,
-  // 表单金额只会作为一笔新的手工采购追加,不会修改已有采购单金额——大概率是想改已有单的金额,弹确认防误建
-  // (案例:包裹已有采购单,取消自动填写金额改填 12 保存,误建了一笔无单号手工单)
+  // manual 模式 + 无单号 + 无新勾选 + 有已有采购 = 修改已有采购单的分摊金额(2026-09-19 语义重构)
+  // 取消「自动填写金额」后手填保存,意图是不用采购订单的平台金额、自己指定分摊金额——
+  // 直接更新已有 link 的 allocated_amount,不新增任何采购单
   if (!isAuto && !sn && newSelectedOrders.value.length === 0 && remainingRestored.length > 0) {
     const totalAmount = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+    const oldAlloc = remainingRestored.reduce((s, r) => s + (Number(r.allocated) || 0), 0);
     const pos = remainingRestored.map((r) => r.orderSn || '(手工单)').join('、');
     const ok = await confirmStore.ask({
-      message: `未填写采购单号,也未勾选新的平台订单。本次提交将新增一笔手工采购(¥${totalAmount.toFixed(2)}),不会修改已有采购单 ${pos} 的金额。\n如需修改已有采购单金额,请先将其标记删除(✕)后按新金额重新录入。是否仍要新增手工采购?`,
-      confirmText: '新增手工采购',
-      danger: true,
+      message: `将已有采购单 ${pos} 分摊到本包裹的金额修改为 ¥${totalAmount.toFixed(2)}(当前 ¥${oldAlloc.toFixed(2)})?\n不会新增采购单。`,
+      confirmText: '修改分摊金额',
     });
     if (!ok) return;
+    purchaseSaving.value = true;
+    try {
+      // 先冲回 ✕ 标记删除的已有采购(删除某单与改另一单分摊可并存)
+      for (const id of removedIds) await unlinkPurchase(id, purchaseForm.packageId);
+      const r = await updatePurchaseAlloc({ packageId: purchaseForm.packageId, items });
+      show(`已修改采购分摊金额(¥${(Number(r?.total) || totalAmount).toFixed(2)})`, 'success');
+      purchaseOpen.value = false;
+      loadTabs();
+      loadList();
+    } catch (err) {
+      show(err.message || String(err), 'error');
+    } finally {
+      purchaseSaving.value = false;
+    }
+    return;
   }
   // 拼单检测:platform≠other 且 purchaseSn 非空时,查询采购单是否已关联其他包裹
   // auto 模式下已有 lookupResult(manual 模式实时查询)
@@ -1328,6 +1358,17 @@ const allSelectedTotal = computed(() =>
 const newSelectedOrders = computed(() => allSelectedOrders.value.filter((o) => !o._existing));
 const newSelectedTotal = computed(() =>
   newSelectedOrders.value.reduce((s, o) => s + (Number(o.amount) || 0), 0).toFixed(2));
+
+// manual 模式改分摊提示(2026-09-19):无单号、无新勾选、有未删除的已有采购时,
+// 手填金额的语义是"修改已有采购单分摊到本包裹的金额",弹窗显式提示避免误解
+const allocEditHint = computed(() => {
+  if (purchaseForm.allocMode !== 'manual') return '';
+  if (purchaseForm.purchaseSn.trim() || newSelectedOrders.value.length > 0) return '';
+  const kept = restoredPurchases.value.filter((r) => !removedPurchaseIds.value.has(r.purchaseOrderId));
+  if (!kept.length) return '';
+  const pos = kept.map((r) => r.orderSn || '(手工单)').join('、');
+  return `手填金额将更新已有采购单 ${pos} 分摊到本包裹的金额,不会新增采购单`;
+});
 
 function switchImportTab(t) {
   if (importTab.value === t || importLoading.value) return;
@@ -3236,6 +3277,7 @@ onUnmounted(() => {
             <span>自动填写金额</span>
           </label>
         </div>
+        <div v-if="allocEditHint" class="alloc-edit-hint">{{ allocEditHint }}</div>
         <table class="data-table item-table">
           <thead>
             <tr>
@@ -5140,6 +5182,16 @@ a.product-title:hover {
   width: 16px;
   height: 16px;
   cursor: pointer;
+}
+/* manual 模式改分摊提示(2026-09-19) */
+.alloc-edit-hint {
+  margin: 6px 0;
+  font-size: 12px;
+  color: #b54708;
+  background: #fffaeb;
+  border: 1px solid #fec84b;
+  border-radius: 6px;
+  padding: 5px 10px;
 }
 .auto-alloc-section {
   margin-bottom: 8px;

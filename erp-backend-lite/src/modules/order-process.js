@@ -586,6 +586,23 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
   }
 });
 
+// ── 修改已有采购的分摊金额(采购弹窗取消「自动填写金额」后手填保存)──
+// body: { packageId, items: [{ itemId, amount }] }
+// 语义:不新增采购单,只更新已有 link 的 allocated_amount;行级归属唯一才可修改
+router.post('/admin/api/order-process/purchase-alloc', (req, res, next) => {
+  try {
+    const packageId = Number(req.body?.packageId);
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!packageId) return res.status(400).json({ ok: false, message: 'packageId 必填' });
+    if (!items.length) return res.status(400).json({ ok: false, message: '至少填写一行采购金额' });
+    const r = orderPackageDao.updatePurchaseAlloc({ packageId, items });
+    logger.info({ packageId, ...r }, '[order-process] 采购分摊金额已修改');
+    res.json(ok(r));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ── 清空采购信息(采购弹窗空表单保存:冲回全部关联+聚合/头程物流归零)──
 // body: { packageId }
 // 返回 { cleared, hadPurchase };不回退 operate_status(回流待处理走 /revert)

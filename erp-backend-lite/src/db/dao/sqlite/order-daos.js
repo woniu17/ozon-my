@@ -1432,29 +1432,116 @@ function submitPurchase({
       // 重算该采购单所有 auto 关联的分摊金额(含已关联的其他包裹)
       reallocateAutoLinks(poId);
     } else {
-      // manual: 手动填金额,增量累加
-      const updItem = db.prepare(
-        `UPDATE op_ozon_order_item SET purchase_amount = purchase_amount + ?, purchase_num = purchase_num + ?, gmt_modified = ? WHERE id = ?`
-      );
+      // manual: 手动指定分摊金额(2026-09-19 语义重构)
+      // 同 (po,package,item) 已有关联 → 覆盖金额/数量(重复提交=覆盖,对齐妙手与 auto 模式绝对重算语义)
+      // item/package 聚合从 links SUM 绝对重算,消除增量累加导致的虚增
+      const affectedItems = new Set();
       let total = 0;
       for (const it of items) {
         const amount = Math.round((Number(it.amount) || 0) * 100) / 100;
         const qty = Number(it.quantity) || 0;
         if (!it.itemId) continue;
-        updItem.run(amount, qty, now, it.itemId);
-        insLink.run(poId, packageId, it.itemId, amount, qty, 'manual', now);
+        const exist = db
+          .prepare(`SELECT id FROM op_purchase_link WHERE purchase_order_id = ? AND package_id = ? AND ozon_order_item_id = ?`)
+          .get(poId, packageId, it.itemId);
+        if (exist) {
+          db.prepare(`UPDATE op_purchase_link SET allocated_amount = ?, quantity = ?, alloc_mode = 'manual' WHERE id = ?`)
+            .run(amount, qty, exist.id);
+        } else {
+          insLink.run(poId, packageId, it.itemId, amount, qty, 'manual', now);
+        }
+        affectedItems.add(it.itemId);
         total += amount;
       }
-      // 包裹聚合:采购金额合计 + 采购状态 + 国内物流 + 直接待打单发货
-      //    同包裹重复提交=累加(妙手实测为覆盖语义,但个人模式以累加更直观;取消关联可冲回)
-      db.prepare(`UPDATE op_package SET total_purchase_amount = total_purchase_amount + ?, ${pkgSetSql} WHERE id = ?`)
-        .run(total, logisticsNo, logisticsCompany, logisticsNo ? sendAt || now : null, now, packageId);
+      // 产品行聚合绝对重算(该 item 全部 links 的分摊/数量合计)
+      const aggItem = db.prepare(
+        `SELECT COALESCE(SUM(allocated_amount),0) AS amt, COALESCE(SUM(quantity),0) AS qty FROM op_purchase_link WHERE ozon_order_item_id = ?`
+      );
+      for (const itemId of affectedItems) {
+        const a = aggItem.get(itemId);
+        db.prepare(`UPDATE op_ozon_order_item SET purchase_amount = ?, purchase_num = ?, gmt_modified = ? WHERE id = ?`)
+          .run(Math.round(a.amt * 100) / 100, a.qty, now, itemId);
+      }
+      // 包裹聚合绝对重算 + 采购状态 + 国内物流 + 直接待打单发货
+      const aggPkg = db
+        .prepare(`SELECT COALESCE(SUM(allocated_amount),0) AS total FROM op_purchase_link WHERE package_id = ?`)
+        .get(packageId);
+      db.prepare(`UPDATE op_package SET total_purchase_amount = ?, ${pkgSetSql} WHERE id = ?`)
+        .run(Math.round(aggPkg.total * 100) / 100, logisticsNo, logisticsCompany, logisticsNo ? sendAt || now : null, now, packageId);
+      // 采购单金额跟随用户指定值(手填金额即实际采购成本,覆盖平台标称值;auto 模式提交平台金额仍会覆盖回来)
+      if (total > 0) {
+        db.prepare(`UPDATE op_purchase_order SET payment_amount = ?, goods_amount = ?, gmt_modified = ? WHERE id = ?`)
+          .run(Math.round(total * 100) / 100, Math.round(total * 100) / 100, now, poId);
+      }
     }
 
     return poId;
   });
 
   return { purchaseOrderId: poId, packageId };
+}
+
+/**
+ * 修改已有采购关联的分摊金额(2026-09-19:采购弹窗取消「自动填写金额」后手填保存的真正语义)
+ * items: [{ itemId, amount }] —— amount 为该行新的分摊金额(amount<=0 的行跳过)
+ * 语义:不新增采购单,只把已有 (po,package,item) link 的 allocated_amount 改为手填值;
+ *       该行在本包裹必须只有一单已有采购(归属唯一),多单归属报错请逐单处理
+ */
+function updatePurchaseAlloc({ packageId, items }) {
+  const pkg = db.prepare(`SELECT * FROM op_package WHERE id = ?`).get(packageId);
+  if (!pkg) throw new Error(`包裹不存在: ${packageId}`);
+  if (pkg.operate_status === 'cancelled') throw new Error('包裹已取消,不能修改采购');
+  if (pkg.is_ignored) throw new Error('包裹已搁置,请先恢复');
+
+  const now = nowIso();
+  const affectedPos = new Set();
+  const affectedItems = new Set();
+  let total = 0;
+
+  runInTx(() => {
+    for (const it of items) {
+      const amount = Math.round((Number(it.amount) || 0) * 100) / 100;
+      if (!it.itemId || !(amount > 0)) continue;
+      const links = db
+        .prepare(`SELECT id, purchase_order_id FROM op_purchase_link WHERE package_id = ? AND ozon_order_item_id = ?`)
+        .all(packageId, it.itemId);
+      if (!links.length) throw new Error(`存在无已有采购关联的产品行,无法修改分摊金额(如需新增采购请勾选平台订单或填写采购单号)`);
+      if (links.length > 1) throw new Error(`有产品行在本包裹关联了 ${links.length} 单采购,无法确定修改哪一单,请逐单删除后重录`);
+      // 置为 manual:该行金额此后为手动指定,不再被 reallocateAutoLinks 按平台金额加权覆盖
+      db.prepare(`UPDATE op_purchase_link SET allocated_amount = ?, alloc_mode = 'manual' WHERE id = ?`)
+        .run(amount, links[0].id);
+      affectedPos.add(links[0].purchase_order_id);
+      affectedItems.add(it.itemId);
+      total += amount;
+    }
+    if (!affectedItems.size) throw new Error('未填写任何要修改的金额');
+
+    // 产品行聚合绝对重算(该 item 全部 links 的分摊/数量合计)
+    const aggItem = db.prepare(
+      `SELECT COALESCE(SUM(allocated_amount),0) AS amt, COALESCE(SUM(quantity),0) AS qty FROM op_purchase_link WHERE ozon_order_item_id = ?`
+    );
+    for (const itemId of affectedItems) {
+      const a = aggItem.get(itemId);
+      db.prepare(`UPDATE op_ozon_order_item SET purchase_amount = ?, purchase_num = ?, gmt_modified = ? WHERE id = ?`)
+        .run(Math.round(a.amt * 100) / 100, a.qty, now, itemId);
+    }
+    // 包裹聚合绝对重算
+    const aggPkg = db
+      .prepare(`SELECT COALESCE(SUM(allocated_amount),0) AS total FROM op_purchase_link WHERE package_id = ?`)
+      .get(packageId);
+    db.prepare(`UPDATE op_package SET total_purchase_amount = ?, gmt_modified = ? WHERE id = ?`)
+      .run(Math.round(aggPkg.total * 100) / 100, now, packageId);
+    // 涉及的采购单金额跟随用户指定值(手填金额即实际采购成本)
+    for (const poId of affectedPos) {
+      const poTotal = db
+        .prepare(`SELECT COALESCE(SUM(allocated_amount),0) AS total FROM op_purchase_link WHERE purchase_order_id = ?`)
+        .get(poId);
+      db.prepare(`UPDATE op_purchase_order SET payment_amount = ?, goods_amount = ?, gmt_modified = ? WHERE id = ?`)
+        .run(Math.round(poTotal.total * 100) / 100, Math.round(poTotal.total * 100) / 100, now, poId);
+    }
+  });
+
+  return { packageId, updatedItems: affectedItems.size, total: Math.round(total * 100) / 100 };
 }
 
 /** 取消关联:冲回产品行金额 + 删除 link;采购单无剩余关联时置 unlinked
@@ -2156,6 +2243,7 @@ export const orderPackageDao = {
   getPurchasesByPackageIds,
   getPackageDetail,
   submitPurchase,
+  updatePurchaseAlloc,
   unlinkPurchase,
   revertToWaitProcess,
   clearAllPurchase,
