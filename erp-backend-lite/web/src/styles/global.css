@@ -248,6 +248,15 @@ h3 {
 .btn-ghost:hover:not(:disabled) {
   background: #f3f4f6;
 }
+/* 白底蓝字描边(2026-09-19:采购弹窗「保存并备货」) */
+.btn-outline-blue {
+  background: #fff;
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.btn-outline-blue:hover:not(:disabled) {
+  background: #f0f5ff;
+}
 .btn-danger {
   background: #fff;
   border-color: var(--border);

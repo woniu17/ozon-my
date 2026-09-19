@@ -3330,15 +3330,15 @@ onUnmounted(() => {
         </div>
         <div class="form-actions">
           <button class="btn btn-ghost" @click="purchaseOpen = false">取 消</button>
+          <button class="btn btn-primary" :disabled="purchaseSaving" @click="savePurchase(false)">
+            {{ purchaseSaving ? '保存中…' : '保 存' }}
+          </button>
           <button
-            class="btn btn-ghost"
+            class="btn btn-outline-blue"
             :disabled="purchaseSaving || !canShipAfterSave"
             :title="canShipAfterSave ? '保存采购后立即向 Ozon 确认货件(多件商品将二次确认)' : '当前包裹已备货或已取消,不可备货'"
             @click="savePurchase(true)"
           >{{ purchaseSaving ? '处理中…' : '保存并备货' }}</button>
-          <button class="btn btn-primary" :disabled="purchaseSaving" @click="savePurchase(false)">
-            {{ purchaseSaving ? '保存中…' : '保 存' }}
-          </button>
         </div>
         </div><!-- /purchase-form-footer -->
       </div>

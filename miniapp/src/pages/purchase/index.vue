@@ -177,11 +177,11 @@
       </view>
       <view class="action-bar">
         <button class="abtn ghost" @click="step = 'select'">返回</button>
-        <button class="abtn primary" :disabled="submitting || !canShipAfterSave" @click="doSubmit(true)">
-          {{ submitting ? '处理中…' : '保存并备货' }}
-        </button>
         <button class="abtn ghost" :disabled="submitting" @click="doSubmit()">
           {{ submitting ? '提交中…' : '仅保存' }}
+        </button>
+        <button class="abtn outline-blue" :disabled="submitting || !canShipAfterSave" @click="doSubmit(true)">
+          {{ submitting ? '处理中…' : '保存并备货' }}
         </button>
       </view>
     </view>
@@ -1528,6 +1528,13 @@ onLoad((opts) => {
 .abtn.primary {
   background: #165dff;
   color: #ffffff;
+}
+
+/* 白底蓝字描边(2026-09-19:「保存并备货」) */
+.abtn.outline-blue {
+  background: #ffffff;
+  color: #165dff;
+  border: 2rpx solid #165dff;
 }
 
 .abtn[disabled] {
