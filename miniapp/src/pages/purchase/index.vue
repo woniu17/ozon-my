@@ -6,7 +6,7 @@
         <text class="store">{{ pkg.storeName }}</text>
         <text class="posting">{{ pkg.postingNumber }}</text>
       </view>
-      <view class="head-sub">{{ items.length }} 个商品行 · 采购合计 {{ fmtMoney(pkg.totalPurchaseAmount) }}</view>
+      <view class="head-sub">{{ items.length }} 个商品行 · 采购合计 {{ fmtMoney(profitTotal.alloc) }}</view>
     </view>
 
     <!-- Step2:平台订单选择(从主视图「+ 从平台订单选择」进入) -->
@@ -255,7 +255,7 @@
         </view>
       </view>
 
-      <!-- 利润预估与一键调价(分摊=未删除已有采购的行分摊;口径同价格管理单件) -->
+      <!-- 利润预估与一键调价(分摊=将保存口径:含待新增采购暂存;口径同价格管理单件) -->
       <view v-if="profitRows.length" class="card">
         <view class="section-title">利润预估与调价</view>
         <view class="tip-inline">佣金 16% + 国际配送 ¥3.37+0.0281/g;调整的是该 SKU 上架价,只影响后续新订单。</view>
@@ -532,12 +532,20 @@ function calcProfit(it, alloc) {
   };
 }
 
-// manage 视图:每行有效分摊 = 未删除已有采购的行分摊合计
+// manage 视图:每行有效分摊(与将保存口径一致)
+// 有 pendingAdd(待新增采购暂存)时直接用其分摊值——auto 模式下它已是"未删除已有 + 新增加权"的行总额;
+// 否则 = 未删除已有采购的行分摊合计
 const profitRows = computed(() => {
   const keptByItem = new Map();
-  for (const l of links.value) {
-    if (pendingRemoves.value.includes(l.purchaseOrderId)) continue;
-    keptByItem.set(l.ozonOrderItemId, (keptByItem.get(l.ozonOrderItemId) || 0) + (Number(l.allocatedAmount) || 0));
+  if (pendingAdd.value) {
+    for (const it of pendingAdd.value.body.items || []) {
+      keptByItem.set(it.itemId, (keptByItem.get(it.itemId) || 0) + (Number(it.amount) || 0));
+    }
+  } else {
+    for (const l of links.value) {
+      if (pendingRemoves.value.includes(l.purchaseOrderId)) continue;
+      keptByItem.set(l.ozonOrderItemId, (keptByItem.get(l.ozonOrderItemId) || 0) + (Number(l.allocatedAmount) || 0));
+    }
   }
   return items.value.map((it) => {
     const alloc = Math.round((keptByItem.get(it.id) || 0) * 100) / 100;
