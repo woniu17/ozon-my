@@ -36,6 +36,12 @@ export function updatePrice(body) {
   return request('/admin/api/price-manage/price-update', { method: 'POST', body });
 }
 
+// 批量 SKU 定价信息(订单处理页采购弹窗:利润预估 + 一键调价)
+// skus: number[]/string[] → [{ sku, inCache, price, oldPrice, minPrice, storeId, hasProductId, weightG, customPurchasePrice }]
+export function getSkusInfo(skus) {
+  return request('/admin/api/price-manage/skus-info' + buildQueryStr({ skus: skus.join(',') }));
+}
+
 // query string(跳过空值,与 request.js buildQuery 同规则)
 function buildQueryStr(params) {
   if (!params || typeof params !== 'object') return '';

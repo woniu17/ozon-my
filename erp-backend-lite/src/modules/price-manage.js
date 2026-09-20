@@ -181,6 +181,38 @@ router.get('/admin/api/price-manage/sku/:sku/orders', (req, res) => {
   res.json(ok(priceDao.skuOrderList(sku, limit)));
 });
 
+// ── 批量 SKU 定价信息(订单处理页采购弹窗:利润预估 + 一键调价,2026-09-20)──
+// GET /admin/api/price-manage/skus-info?skus=111,222
+// 返回 [{ sku, inCache, price, oldPrice, minPrice, storeId, hasProductId, weightG, customPurchasePrice }]
+// weightG/customPurchasePrice 取自 product_data_cache SKU 自定义值(getSkuCustoms 同口径)
+router.get('/admin/api/price-manage/skus-info', (req, res, next) => {
+  try {
+    const skus = String(req.query.skus || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 50);
+    const out = skus.map((sku) => {
+      const cache = priceDao.getPriceCacheBySku(sku);
+      const customs = priceDao.getSkuCustoms(sku);
+      return {
+        sku: Number(sku),
+        inCache: !!cache,
+        price: cache?.price ?? null,
+        oldPrice: cache?.old_price ?? null,
+        minPrice: cache?.min_price ?? null,
+        storeId: cache?.store_id ?? null,
+        hasProductId: !!cache?.product_id,
+        weightG: customs?.weight_g ?? null,
+        customPurchasePrice: customs?.custom_purchase_price ?? null,
+      };
+    });
+    res.json(ok(out));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ── 单品改价 ──
 // body: { sku, newPrice, targetRate? }(targetRate 0.4=40% 成本利润率;缺省=手动改价)
 // 改价参数(用户确认 2026-09-18):price=新价,old_price=新价×2,min_price=新价,currency_code='CNY'

@@ -24,6 +24,7 @@ import {
   getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus, syncPddCookies,
   getPendingExportState,
 } from '../api/order-process.js';
+import { getSkusInfo, setSkuCustoms, updatePrice } from '../api/price-manage.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
 import AppModal from '../components/AppModal.vue';
@@ -899,12 +900,15 @@ function openPurchase(pkg) {
   purchaseForm.items = (pkg.items || []).map((it) => ({
     itemId: it.id,
     offerId: it.offerId,
+    sku: it.sku,
     title: it.title,
     quantity: it.quantity,
+    price: it.price,
     amount: '',
     picUrl: it.picUrl,
     pdpUrl: it.pdpUrl,
   }));
+  loadSkuPricing(purchaseForm.items);
   // 清空所有账号 tab 的勾选(懒建的 store 可能不存在,容错跳过)
   for (const tabDef of importAccountTabs.value) {
     const st = importStores[tabDef.key];
@@ -1581,6 +1585,110 @@ async function savePoLogistics() {
     show(err.message || String(err), 'error');
   } finally {
     poLogistics.saving = false;
+  }
+}
+
+// ── 利润预估与一键调价(2026-09-20,口径参考价格管理单件)──
+// 常量镜像 profit-estimator.js(服务端单点维护,前端预览;与 PriceManage.vue 同源同值)
+const PM_COMMISSION_RATE = 0.16;
+const PM_DELIVERY_BASE_CNY = 3.37;
+const PM_DELIVERY_PER_G_CNY = 0.0281;
+const PM_TARGET_RATES = [40, 50, 60, 70, 80, 90]; // 目标成本利润率选项(%)
+const PM_DEFAULT_RATE = 50;                        // 默认选中 50%
+
+// SKU 定价信息(sku → skus-info 行:现价/是否在价格缓存/重量/已维护采购价)
+const skuPricing = ref({});
+async function loadSkuPricing(items) {
+  const skus = [...new Set((items || purchaseForm.items || []).map((it) => it.sku).filter(Boolean))];
+  if (!skus.length) { skuPricing.value = {}; return; }
+  try {
+    const list = await getSkusInfo(skus);
+    const map = {};
+    for (const r of list || []) map[r.sku] = r;
+    skuPricing.value = map;
+  } catch (e) {
+    console.warn('[profit-est] skus-info failed', e);
+  }
+}
+
+// 每行目标率(sku → 40~90,未选默认 50)
+const poRateChoice = reactive({});
+function poRate(sku) { return poRateChoice[sku] || PM_DEFAULT_RATE; }
+
+// 单件口径配送费(有重量才可估;重量缺失返回 null,利润不扣配送)
+function poUnitDelivery(weightG) {
+  const w = Number(weightG);
+  if (!(w > 0)) return null;
+  return PM_DELIVERY_BASE_CNY + PM_DELIVERY_PER_G_CNY * w;
+}
+
+// 利润预估行(auto 预览/manual 输入实时联动:it.amount 两模式均同步有效分摊值)
+const profitRows = computed(() => purchaseForm.items.map((it) => {
+  const qty = Number(it.quantity) || 0;
+  const price = Number(it.price) || 0;    // 单价 CNY
+  const alloc = Number(it.amount) || 0;   // 行分摊(auto 预览同步到 amount)
+  const info = skuPricing.value[it.sku] || null;
+  const unitCost = qty > 0 ? alloc / qty : 0; // 单件采购价(调价成本基准)
+  const unitDelivery = poUnitDelivery(info?.weightG);
+  const revenue = price * qty;
+  const commission = revenue * PM_COMMISSION_RATE;
+  const delivery = unitDelivery != null ? unitDelivery * qty : null;
+  const profit = revenue - commission - (delivery || 0) - alloc;
+  const rate = poRate(it.sku);
+  // 建议价(单件口径,向上取整数元,与 price-update 服务端校验同口径)
+  const suggested = unitCost > 0 && unitDelivery != null
+    ? Math.ceil((unitCost * (1 + rate / 100) + unitDelivery) / (1 - PM_COMMISSION_RATE))
+    : null;
+  const canAdjust = !!(it.sku && unitCost > 0 && unitDelivery != null && info?.inCache && info?.hasProductId);
+  return {
+    itemId: it.itemId, sku: it.sku, title: it.title, picUrl: it.picUrl, pdpUrl: it.pdpUrl,
+    qty, price, alloc, revenue, commission, delivery, unitCost, rate,
+    profit: Math.round(profit * 100) / 100,
+    profitRateCost: alloc > 0 ? Math.round((profit / alloc) * 10000) / 100 : null,
+    suggested, canAdjust, listingPrice: info?.price ?? null,
+    missingWhy: !it.sku ? '订单商品缺 SKU'
+      : unitCost <= 0 ? '分摊金额为 0'
+      : unitDelivery == null ? 'SKU 未维护重量(价格管理)'
+      : !info?.inCache ? '不在价格缓存(先在价格管理同步价格)'
+      : !info?.hasProductId ? '商品缺少 product_id'
+      : '',
+  };
+}));
+
+// 预估合计(有任一行无重量则合计口径标注未扣配送)
+const profitTotal = computed(() => {
+  const alloc = profitRows.value.reduce((s, p) => s + p.alloc, 0);
+  const profit = profitRows.value.reduce((s, p) => s + p.profit, 0);
+  return {
+    alloc: Math.round(alloc * 100) / 100,
+    profit: Math.round(profit * 100) / 100,
+    allWeighted: profitRows.value.length > 0 && profitRows.value.every((p) => p.delivery != null),
+  };
+});
+
+// 一键调价:先同步成本基准(本单分摊单价)再走价格管理改价(服务端按基准复算校验)
+const adjustingSku = ref('');
+async function adjustSkuPrice(p) {
+  if (adjustingSku.value || p.suggested == null || !p.canAdjust) return;
+  const rate = poRate(p.sku);
+  const cur = p.listingPrice;
+  const okc = await confirmStore.ask({
+    message: `调整 SKU ${p.sku} 的上架价格?\n现价 ${cur != null ? '¥' + cur : '无'} → 新价 ¥${p.suggested}(目标成本利润率 ${rate}%,划线价将设为 ¥${p.suggested * 2})\n将同步更新该 SKU 成本基准:采购价 ¥${Math.round(p.unitCost * 100) / 100}\n只影响后续新订单,已下单包裹价格不变`,
+    confirmText: '调整价格',
+  });
+  if (!okc) return;
+  adjustingSku.value = p.sku;
+  try {
+    // 1) 成本基准 = 本单分摊单价(price-update 服务端按 SKU 维护采购价复算建议价的前提)
+    await setSkuCustoms(p.sku, { purchasePrice: Math.round(p.unitCost * 100) / 100 });
+    // 2) 目标率改价(限频/日志/30s 回读均复用价格管理链路)
+    await updatePrice({ sku: String(p.sku), newPrice: p.suggested, targetRate: rate / 100 });
+    show('改价已提交,30秒后自动回读校准', 'success');
+    await loadSkuPricing(); // 刷新现价显示
+  } catch (err) {
+    show(err.message || '调价失败', 'error');
+  } finally {
+    adjustingSku.value = '';
   }
 }
 
@@ -3426,6 +3534,75 @@ onUnmounted(() => {
           </tbody>
         </table>
 
+        <!-- 利润预估与调价(分摊金额实时联动;口径同价格管理单件:佣金16% + 配送3.37+0.0281/g) -->
+        <div v-if="profitRows.length" class="profit-est">
+          <div class="prod-title-row">
+            <span class="form-section-title" style="margin: 0">利润预估与调价</span>
+            <span class="profit-est-sub">调整的是该 SKU 上架价,只影响后续新订单</span>
+          </div>
+          <table class="data-table profit-table">
+            <thead>
+              <tr>
+                <th style="width: 220px">产品</th>
+                <th style="width: 90px">分摊</th>
+                <th style="width: 150px">预估利润</th>
+                <th style="width: 120px">目标率</th>
+                <th style="width: 100px">建议价</th>
+                <th style="width: 80px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in profitRows" :key="p.itemId">
+                <td>
+                  <div class="product-item">
+                    <a v-if="p.picUrl" :href="p.pdpUrl" target="_blank" rel="noopener" class="product-img-box">
+                      <img :src="p.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
+                    </a>
+                    <div class="product-main">
+                      <div class="product-title">{{ p.title || '—' }}</div>
+                      <div class="product-sub">SKU {{ p.sku || '—' }} ×{{ p.qty }}</div>
+                    </div>
+                  </div>
+                </td>
+                <td class="col-num">¥{{ p.alloc.toFixed(2) }}</td>
+                <td
+                  class="col-num"
+                  :title="`收入 ¥${(p.revenue).toFixed(2)} − 佣金 ¥${p.commission.toFixed(2)}${p.delivery != null ? ` − 配送 ¥${p.delivery.toFixed(2)}` : '(未维护重量,未扣配送)'} − 采购 ¥${p.alloc.toFixed(2)}`"
+                >
+                  <b :class="{ 'profit-neg': p.profit < 0 }">¥{{ p.profit.toFixed(2) }}</b>
+                  <span v-if="p.profitRateCost != null" class="profit-rate" :class="{ 'profit-neg': p.profit < 0 }">{{ p.profitRateCost.toFixed(1) }}%</span>
+                  <span v-if="p.delivery == null" class="muted">估</span>
+                </td>
+                <td>
+                  <select
+                    class="filter-input po-rate-select"
+                    :value="p.rate"
+                    :disabled="!p.canAdjust"
+                    @change="poRateChoice[p.sku] = Number($event.target.value)"
+                  >
+                    <option v-for="r in PM_TARGET_RATES" :key="r" :value="r">{{ r }}%</option>
+                  </select>
+                </td>
+                <td class="col-num">
+                  <span v-if="p.suggested != null" :title="p.listingPrice != null ? `现价 ¥${p.listingPrice}` : '无现价'">¥{{ p.suggested }}</span>
+                  <span v-else class="muted">—</span>
+                </td>
+                <td>
+                  <button
+                    class="btn btn-ghost btn-sm"
+                    :disabled="!p.canAdjust || adjustingSku === p.sku"
+                    :title="p.canAdjust ? `按 ${p.rate}% 成本利润率调整该 SKU 上架价` : p.missingWhy"
+                    @click="adjustSkuPrice(p)"
+                  >{{ adjustingSku === p.sku ? '调价中…' : '调价' }}</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="profit-total">
+            采购合计 <b>¥{{ profitTotal.alloc.toFixed(2) }}</b> · 预估利润合计 <b :class="{ 'profit-neg': profitTotal.profit < 0 }">¥{{ profitTotal.profit.toFixed(2) }}</b><span v-if="!profitTotal.allWeighted" class="muted">(部分行未扣配送)</span>
+          </div>
+        </div>
+
         <!-- 已选采购订单区(固定在产品下方):平台/订单号/下单时间/金额(含已有采购恢复项) -->
         <div v-if="allSelectedOrders.length" class="selected-orders">
           <div class="selected-orders-title">
@@ -5006,6 +5183,43 @@ a.product-title:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
   margin-right: 6px;
+}
+/* ── 利润预估与调价块(订单产品表下方,2026-09-20)── */
+.profit-est {
+  margin-top: 14px;
+}
+.profit-est-sub {
+  font-size: 12px;
+  color: #92400e;
+}
+.profit-table .product-title {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profit-rate {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 12px;
+  color: #047857;
+}
+.profit-rate.profit-neg {
+  color: #b91c1c;
+}
+.po-rate-select {
+  width: 72px;
+  padding: 4px 6px;
+}
+.profit-total {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.profit-total .profit-neg {
+  color: #b91c1c;
 }
 .selected-order-item {
   display: flex;

@@ -21,8 +21,8 @@ const confirmStore = useConfirmStore();
 const COMMISSION_RATE = 0.16;
 const DELIVERY_BASE_CNY = 3.37;
 const DELIVERY_PER_G_CNY = 0.0281;
-const TARGET_RATES = [20, 30, 40, 50]; // 按成本利润率定价选项(%)
-const DEFAULT_TARGET_RATE = 40;             // 默认选中 40%
+const TARGET_RATES = [40, 50, 60, 70, 80, 90]; // 按成本利润率定价选项(%)
+const DEFAULT_TARGET_RATE = 50;             // 默认选中 50%
 
 const SORTS = [
   { key: 'profitRateCost', label: '成本利润率' },
@@ -71,7 +71,7 @@ function persistViewState() {
 const expanded = ref(new Set());   // 展开的 sku
 const ordersMap = ref({});         // sku → 历史订单列表
 const ordersLoading = ref({});
-const rateChoice = ref({});        // sku → 目标成本利润率(20~60,未选默认20)
+const rateChoice = ref({});        // sku → 目标成本利润率(40~90,未选默认50)
 const updatingSku = ref('');
 const storeNameMap = ref({});                                     // 店铺 id → 名称
 const storeName = (storeId) => storeNameMap.value[storeId] || storeId || '—';
@@ -131,6 +131,11 @@ async function loadSummary() {
 
 async function refreshAll() {
   await Promise.all([loadList(), loadSummary()]);
+}
+
+// 手动刷新:重拉店铺缓存统计 + 当前筛选列表 + 统计条(不触发 Ozon 同步)
+async function refreshPage() {
+  await Promise.all([loadStores(true), loadList(), loadSummary()]);
 }
 
 // ── 同步价格(手动,当前店铺或全部店铺顺序同步) ──
@@ -238,7 +243,7 @@ async function adoptOrderPrice(row, o) {
 }
 
 // ── 按成本利润率定价 ──
-// 当前行选中的目标率(未选时默认 20%)
+// 当前行选中的目标率(未选时默认 50%)
 function selRate(row) {
   return rateChoice.value[row.sku] || DEFAULT_TARGET_RATE;
 }
@@ -412,6 +417,7 @@ onMounted(async () => {
           @click="switchStore(s.storeId)"
         >{{ storeName(s.storeId) }} ({{ s.count }})</button>
       </div>
+      <button class="btn" :disabled="loading || syncing" @click="refreshPage" title="重载列表与统计(不触发 Ozon 同步)">刷新</button>
       <button class="btn btn-primary" :disabled="syncing" @click="syncNow">
         {{ syncing ? '同步中…' : '同步 Ozon 价格' }}
       </button>

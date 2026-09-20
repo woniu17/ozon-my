@@ -164,6 +164,12 @@
           </view>
         </template>
 
+        <!-- 预估利润合计(本次分摊口径;提交后可在采购管理卡中按 SKU 一键调价) -->
+        <view class="pe-preview">
+          预估利润 <b :class="{ neg: step3Profit.profit < 0 }">¥{{ step3Profit.profit.toFixed(2) }}</b>
+          <text class="pe-preview-sub">按分摊 ¥{{ step3Profit.alloc.toFixed(2) }} 估算{{ step3Profit.allWeighted ? '' : ',部分行未扣配送' }}</text>
+        </view>
+
         <!-- 国内快递单号(选填,预填平台单号) -->
         <view class="field">
           <text class="field-label">国内快递单号(选填)</text>
@@ -249,6 +255,40 @@
         </view>
       </view>
 
+      <!-- 利润预估与一键调价(分摊=未删除已有采购的行分摊;口径同价格管理单件) -->
+      <view v-if="profitRows.length" class="card">
+        <view class="section-title">利润预估与调价</view>
+        <view class="tip-inline">佣金 16% + 国际配送 ¥3.37+0.0281/g;调整的是该 SKU 上架价,只影响后续新订单。</view>
+        <view v-for="p in profitRows" :key="p.itemId" class="pe-row">
+          <image v-if="p.picUrl" class="pe-img" :src="p.picUrl" mode="aspectFill" />
+          <view v-else class="pe-img"></view>
+          <view class="pe-main">
+            <view class="pe-title">{{ p.title || '—' }}</view>
+            <view class="pe-sub">SKU {{ p.sku || '—' }} ×{{ p.qty }} · 分摊 ¥{{ p.alloc.toFixed(2) }}</view>
+            <view class="pe-profit">
+              预估利润 <b :class="{ neg: p.profit < 0 }">¥{{ p.profit.toFixed(2) }}</b>
+              <text v-if="p.profitRateCost != null" class="pe-rate" :class="{ neg: p.profit < 0 }">{{ p.profitRateCost.toFixed(1) }}%</text>
+              <text v-if="p.delivery == null" class="pe-est">估</text>
+            </view>
+            <view class="pe-adj">
+              <picker mode="selector" :range="RATE_LABELS" @change="onRatePick(p, $event)">
+                <view class="pe-rate-chip">{{ p.rate }}%</view>
+              </picker>
+              <text class="pe-suggest" :class="{ off: p.suggested == null }">{{ p.suggested != null ? '建议价 ¥' + p.suggested : '建议价 —' }}</text>
+              <button
+                class="mini-btn primary"
+                :disabled="!p.canAdjust || adjustingSku === p.sku"
+                @click="adjustSkuPrice(p)"
+              >{{ adjustingSku === p.sku ? '调价中…' : '调价' }}</button>
+            </view>
+            <view v-if="!p.canAdjust" class="pe-why">{{ p.missingWhy }}</view>
+          </view>
+        </view>
+        <view class="pe-total">
+          采购合计 ¥{{ profitTotal.alloc.toFixed(2) }} · 预估利润合计 <b :class="{ neg: profitTotal.profit < 0 }">¥{{ profitTotal.profit.toFixed(2) }}</b>
+        </view>
+      </view>
+
       <!-- 待新增采购(Step3 确认后暂存,保存时落地) -->
       <view v-if="pendingAdd" class="card">
         <view class="section-title">待新增采购</view>
@@ -304,6 +344,7 @@ import {
   searchPlatformOrder,
   getPlatformOrdersStatus,
 } from '../../api/order.js';
+import { getSkusInfo, setSkuCustoms, updatePrice } from '../../api/price-manage.js';
 import { fmtMoney, fmtTime } from '../../utils/fmt.js';
 
 const packageId = ref('');
@@ -379,6 +420,7 @@ async function loadDetail() {
     items.value = d?.items || [];
     links.value = d?.purchaseLinks || [];
     if (!pkg.value) loadError.value = '包裹不存在';
+    loadSkuPricing(); // 利润预估/调价所需的 SKU 定价信息
   } catch (e) {
     loadError.value = e.message || '加载失败';
   }
@@ -438,6 +480,143 @@ async function saveLogi(g) {
   } finally {
     logiEdit.saving = false;
   }
+}
+
+// ════════════════════════════════════════════════════════════
+// 利润预估与一键调价(2026-09-20,口径同价格管理单件)
+// 常量镜像 profit-estimator.js(服务端单点维护,前端预览)
+// ════════════════════════════════════════════════════════════
+const PM_COMMISSION_RATE = 0.16;
+const PM_DELIVERY_BASE_CNY = 3.37;
+const PM_DELIVERY_PER_G_CNY = 0.0281;
+const RATE_OPTIONS = [40, 50, 60, 70, 80, 90]; // 目标成本利润率(%)
+const RATE_LABELS = RATE_OPTIONS.map((r) => r + '%');
+const DEFAULT_RATE = 50;
+
+const skuPricing = ref({});   // sku → 定价信息(现价/重量/缓存命中)
+const poRates = reactive({}); // sku → 目标率(未选默认 50%)
+const adjustingSku = ref('');
+
+async function loadSkuPricing() {
+  const skus = [...new Set(items.value.map((it) => it.sku).filter(Boolean))];
+  if (!skus.length) { skuPricing.value = {}; return; }
+  try {
+    const list = await getSkusInfo(skus);
+    const map = {};
+    for (const r of list || []) map[r.sku] = r;
+    skuPricing.value = map;
+  } catch (e) {
+    console.warn('[profit-est] skus-info failed', e);
+  }
+}
+
+function unitDeliveryOf(weightG) {
+  const w = Number(weightG);
+  if (!(w > 0)) return null;
+  return PM_DELIVERY_BASE_CNY + PM_DELIVERY_PER_G_CNY * w;
+}
+
+// 单行利润(单件口径:佣金 16% + 单件配送×数量;无重量不扣配送标"估")
+function calcProfit(it, alloc) {
+  const qty = Number(it.quantity) || 0;
+  const price = Number(it.price) || 0;
+  const unitDelivery = unitDeliveryOf(skuPricing.value[it.sku]?.weightG);
+  const revenue = price * qty;
+  const commission = revenue * PM_COMMISSION_RATE;
+  const delivery = unitDelivery != null ? unitDelivery * qty : null;
+  const profit = revenue - commission - (delivery || 0) - alloc;
+  return {
+    profit: Math.round(profit * 100) / 100,
+    profitRateCost: alloc > 0 ? Math.round((profit / alloc) * 10000) / 100 : null,
+    delivery,
+  };
+}
+
+// manage 视图:每行有效分摊 = 未删除已有采购的行分摊合计
+const profitRows = computed(() => {
+  const keptByItem = new Map();
+  for (const l of links.value) {
+    if (pendingRemoves.value.includes(l.purchaseOrderId)) continue;
+    keptByItem.set(l.ozonOrderItemId, (keptByItem.get(l.ozonOrderItemId) || 0) + (Number(l.allocatedAmount) || 0));
+  }
+  return items.value.map((it) => {
+    const alloc = Math.round((keptByItem.get(it.id) || 0) * 100) / 100;
+    const qty = Number(it.quantity) || 0;
+    const info = skuPricing.value[it.sku] || null;
+    const unitCost = qty > 0 ? alloc / qty : 0;
+    const unitDelivery = unitDeliveryOf(info?.weightG);
+    const rate = poRates[it.sku] || DEFAULT_RATE;
+    const base = calcProfit(it, alloc);
+    return {
+      itemId: it.id, sku: it.sku, title: it.title, picUrl: it.picUrl,
+      qty, alloc, rate, ...base,
+      listingPrice: info?.price ?? null,
+      suggested: unitCost > 0 && unitDelivery != null
+        ? Math.ceil((unitCost * (1 + rate / 100) + unitDelivery) / (1 - PM_COMMISSION_RATE))
+        : null,
+      unitCost,
+      canAdjust: !!(it.sku && unitCost > 0 && unitDelivery != null && info?.inCache && info?.hasProductId),
+      missingWhy: !it.sku ? '订单商品缺 SKU'
+        : unitCost <= 0 ? '分摊金额为 0'
+        : unitDelivery == null ? 'SKU 未维护重量(价格管理)'
+        : !info?.inCache ? '不在价格缓存'
+        : !info?.hasProductId ? '缺少 product_id'
+        : '',
+    };
+  });
+});
+
+const profitTotal = computed(() => ({
+  alloc: Math.round(profitRows.value.reduce((s, p) => s + p.alloc, 0) * 100) / 100,
+  profit: Math.round(profitRows.value.reduce((s, p) => s + p.profit, 0) * 100) / 100,
+}));
+
+// Step3 预览:按将保存的分摊(auto 预览/manual 手输)估合计利润
+const step3Profit = computed(() => {
+  const rows = allocMode.value === 'auto' ? autoPreview.value.rows : manualItems.value;
+  let profit = 0;
+  let allocSum = 0;
+  let allWeighted = true;
+  for (let i = 0; i < items.value.length; i++) {
+    const alloc = Number(rows[i]?.previewAmount ?? rows[i]?.amount) || 0;
+    allocSum += alloc;
+    const r = calcProfit(items.value[i], alloc);
+    if (r.delivery == null) allWeighted = false;
+    profit += r.profit;
+  }
+  return { alloc: Math.round(allocSum * 100) / 100, profit: Math.round(profit * 100) / 100, allWeighted };
+});
+
+function onRatePick(p, e) {
+  poRates[p.sku] = RATE_OPTIONS[Number(e.detail.value)];
+}
+
+// 一键调价:先同步成本基准(本单分摊单价)再走价格管理改价(服务端按基准复算校验)
+function adjustSkuPrice(p) {
+  if (adjustingSku.value || p.suggested == null || !p.canAdjust) return;
+  const rate = p.rate;
+  const cur = p.listingPrice;
+  uni.showModal({
+    title: `调整 SKU ${p.sku} 上架价格`,
+    content: `现价 ${cur != null ? '¥' + cur : '无'} → 新价 ¥${p.suggested}(目标成本利润率 ${rate}%,划线价 ¥${p.suggested * 2})\n将同步更新成本基准:采购价 ¥${Math.round(p.unitCost * 100) / 100}\n只影响后续新订单,已下单包裹价格不变`,
+    confirmText: '调整',
+    success: async (res) => {
+      if (!res.confirm) return;
+      adjustingSku.value = p.sku;
+      try {
+        // 1) 成本基准 = 本单分摊单价(price-update 服务端复算校验的前提)
+        await setSkuCustoms(p.sku, { purchasePrice: Math.round(p.unitCost * 100) / 100 });
+        // 2) 目标率改价(限频/日志/30s 回读均复用价格管理链路)
+        await updatePrice({ sku: String(p.sku), newPrice: p.suggested, targetRate: rate / 100 });
+        uni.showToast({ title: '改价已提交,30秒后回读校准', icon: 'none', duration: 2500 });
+        await loadSkuPricing(); // 刷新现价显示
+      } catch (e) {
+        /* 错误 toast 已由 request.js 统一弹出 */
+      } finally {
+        adjustingSku.value = '';
+      }
+    },
+  });
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1086,6 +1265,154 @@ onLoad((opts) => {
   font-size: 30rpx;
   font-weight: 600;
   color: #1f2329;
+}
+
+/* ── 利润预估与调价(Step3 预览 + 采购管理卡) ── */
+.pe-preview {
+  margin-top: 16rpx;
+  padding: 14rpx 18rpx;
+  background: #f7f8fa;
+  border-radius: 10rpx;
+  font-size: 25rpx;
+  color: #4e5969;
+  line-height: 1.6;
+}
+
+.pe-preview b {
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+.pe-preview-sub {
+  margin-left: 8rpx;
+  font-size: 22rpx;
+  color: #86909c;
+}
+
+.pe-row {
+  display: flex;
+  align-items: flex-start;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #f7f8fa;
+}
+
+.pe-row:last-of-type {
+  border-bottom: none;
+}
+
+.pe-img {
+  width: 96rpx;
+  height: 96rpx;
+  border-radius: 12rpx;
+  background: #f2f3f5;
+  flex-shrink: 0;
+}
+
+.pe-main {
+  flex: 1;
+  margin-left: 16rpx;
+  overflow: hidden;
+}
+
+.pe-title {
+  font-size: 25rpx;
+  color: #1f2329;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pe-sub {
+  margin-top: 4rpx;
+  font-size: 22rpx;
+  color: #86909c;
+}
+
+.pe-profit {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  color: #4e5969;
+}
+
+.pe-profit b {
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.pe-profit b,
+.pe-rate,
+.pe-preview b,
+.pe-total b {
+  color: #00b42a;
+}
+
+.pe-profit b.neg,
+.pe-rate.neg,
+.pe-preview b.neg,
+.pe-total b.neg {
+  color: #f53f3f;
+}
+
+.pe-rate {
+  margin-left: 12rpx;
+  font-size: 22rpx;
+  font-weight: 600;
+}
+
+.pe-est {
+  margin-left: 8rpx;
+  font-size: 20rpx;
+  color: #86909c;
+  border: 1rpx solid #e5e6eb;
+  border-radius: 6rpx;
+  padding: 0 8rpx;
+}
+
+.pe-adj {
+  margin-top: 12rpx;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pe-rate-chip {
+  font-size: 24rpx;
+  color: #4e5969;
+  background: #f2f3f5;
+  border-radius: 10rpx;
+  padding: 4rpx 20rpx;
+}
+
+.pe-suggest {
+  margin-left: 16rpx;
+  font-size: 24rpx;
+  color: #1f2329;
+  font-weight: 600;
+}
+
+.pe-suggest.off {
+  color: #a6abb3;
+  font-weight: 400;
+}
+
+.pe-why {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #ff7d00;
+}
+
+.pe-total {
+  margin-top: 16rpx;
+  padding: 14rpx 18rpx;
+  background: #f7f8fa;
+  border-radius: 10rpx;
+  font-size: 24rpx;
+  color: #4e5969;
+}
+
+.pe-total b {
+  font-size: 28rpx;
+  font-weight: 600;
 }
 
 /* ── 已有采购卡 ── */

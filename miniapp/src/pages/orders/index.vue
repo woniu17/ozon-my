@@ -37,6 +37,14 @@
           </view>
         </view>
       </scroll-view>
+
+      <!-- 排序(与 web 端同步):按 tab 动态显示可用排序键;各 tab 独立记忆 -->
+      <view class="sort-bar">
+        <picker mode="selector" :range="sortLabels" @change="onSortPick">
+          <view class="sort-chip">排序:{{ currentSortLabel }} ▾</view>
+        </picker>
+        <text class="sort-hint">揽收=国际物流商揽收,无此时间排最后</text>
+      </view>
     </view>
 
     <!-- 订单卡片流 -->
@@ -97,7 +105,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { onLoad, onUnload, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app';
 import { getOrderTabs, getOrderList } from '../../api/order.js';
 import { fmtMoney } from '../../utils/fmt.js';
@@ -129,6 +137,60 @@ const total = ref(0);
 const loading = ref(false);
 const loadingMore = ref(false);
 
+// ── 排序(与 web 端 OrderProcess.vue 同步,2026-09-20)──────────
+// key 对应后端 sortBy 白名单;delivering=揽收时间(国际物流商揽收)
+// 发货前取消的单无揽收时间,后端 NULLS LAST 排最后
+const SORT_OPTIONS = {
+  order_desc: { key: 'order', label: '下单时间 新→旧' },
+  order_asc: { key: 'order', label: '下单时间 旧→新' },
+  delivering_desc: { key: 'delivering', label: '揽收时间 新→旧' },
+  delivering_asc: { key: 'delivering', label: '揽收时间 旧→新' },
+  return_desc: { key: 'return', label: '退货时间 新→旧' },
+  return_asc: { key: 'return', label: '退货时间 旧→新' },
+  delivered_desc: { key: 'delivered', label: '签收时间 新→旧' },
+  delivered_asc: { key: 'delivered', label: '签收时间 旧→新' },
+};
+// 各 tab 可用排序键(与 web 端 TAB_SORT_KEYS 一致):
+// 揽收排序适用所有状态(除待处理/待打单/交运——货件尚未被物流商揽收)
+// 退货排序:已签收/已成功/已取消/已退货;签收排序:已签收/已成功(delivered_at 100% 覆盖)
+const TAB_SORT_KEYS = {
+  all: ['order', 'delivering'],
+  waitProcess: ['order'],
+  waitShip: ['order'],
+  shipSuccess: ['order'],
+  waitReceiverConfirm: ['order', 'delivering'],
+  signed: ['order', 'delivering', 'return', 'delivered'],
+  settled: ['order', 'delivering', 'return', 'delivered'],
+  returned: ['order', 'delivering', 'return'],
+  cancelled: ['order', 'delivering', 'return'],
+  ignored: ['order', 'delivering'],
+};
+// 各 tab 独立记住排序选择:切 tab 恢复该 tab 上次选择,storage 持久化
+const SORT_PREF_KEY = 'op_sort_pref_v1';
+let savedSortPref = {};
+try { savedSortPref = JSON.parse(uni.getStorageSync(SORT_PREF_KEY) || '{}') || {}; } catch (e) { /* 忽略损坏数据 */ }
+const tabSort = ref(savedSortPref);
+// 当前 tab 的排序值;保存值不可用(键被裁撤)时回退默认
+const currentSort = computed(() => {
+  const val = tabSort.value[activeTab.value];
+  const keys = TAB_SORT_KEYS[activeTab.value] || ['order'];
+  return val && SORT_OPTIONS[val] && keys.includes(SORT_OPTIONS[val].key) ? val : 'order_desc';
+});
+const currentSortLabel = computed(() => SORT_OPTIONS[currentSort.value].label);
+const sortLabels = computed(() => {
+  const keys = TAB_SORT_KEYS[activeTab.value] || ['order'];
+  return Object.entries(SORT_OPTIONS).filter(([, v]) => keys.includes(v.key)).map(([, v]) => v.label);
+});
+function onSortPick(e) {
+  const keys = TAB_SORT_KEYS[activeTab.value] || ['order'];
+  const opts = Object.entries(SORT_OPTIONS).filter(([, v]) => keys.includes(v.key));
+  const opt = opts[Number(e.detail.value)];
+  if (!opt) return;
+  tabSort.value = { ...tabSort.value, [activeTab.value]: opt[0] };
+  try { uni.setStorageSync(SORT_PREF_KEY, JSON.stringify(tabSort.value)); } catch (e2) { /* 存储满等异常忽略 */ }
+  reload().catch(() => {});
+}
+
 // 行级操作状态徽标(与 web 端 OPERATE_LABELS 同步;isReturned 优先显示退货)
 const OPERATE_LABELS = {
   wait_process: { label: '待处理', cls: 'warn' },
@@ -153,11 +215,15 @@ async function loadTabs() {
 async function loadList() {
   loading.value = true;
   const isGlobal = globalActive.value && keyword.value.trim();
+  // 排序值取当前 tab 记住的选择(与 web 端一致):order_desc → sortBy=order + sortOrder=desc
+  const [sortBy, sortOrder] = currentSort.value.split('_');
   try {
     const data = await getOrderList({
       tab: activeTab.value,
       globalKeyword: isGlobal ? keyword.value.trim() : '',
       globalMode: globalMode.value,
+      sortBy,
+      sortOrder,
       page: page.value,
       pageSize: PAGE_SIZE,
     });
@@ -368,6 +434,33 @@ onReachBottom(async () => {
   margin-left: 8rpx;
   font-size: 22rpx;
   opacity: 0.75;
+}
+
+/* ── 排序栏(与 web 端同步) ── */
+.sort-bar {
+  display: flex;
+  align-items: center;
+  margin-top: 12rpx;
+}
+
+.sort-chip {
+  display: inline-flex;
+  align-items: center;
+  background: #ffffff;
+  border-radius: 999rpx;
+  padding: 8rpx 22rpx;
+  font-size: 24rpx;
+  color: #4e5969;
+  flex-shrink: 0;
+}
+
+.sort-hint {
+  margin-left: 16rpx;
+  font-size: 20rpx;
+  color: #a6abb3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── 卡片流 ── */
