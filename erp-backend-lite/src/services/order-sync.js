@@ -23,6 +23,8 @@ import { postingFbsUnfulfilledList, postingFbsList, postingFbsGet, productInfoLi
 import { orderPackageDao, setStoreNameMap } from '../db/dao/sqlite/order-daos.js';
 import { getAccrualTypes, findPendingAccrualPostings, findBackfillAccrualPostings, findAccrualPostingsByPackageIds, replaceAccruals } from '../db/dao/sqlite/accrual-dao.js';
 import { db } from '../db/index.js';
+import { notifyPostingEvent, notifyPostingPickedUp } from './webhook/feishu-notify.js';
+import { apiToPush, pushRankOf } from './webhook/status-map.js';
 
 // ── 三级同步节奏(2026-09-16)─────────────────────────────────
 const FAST_INTERVAL_MIN = Math.max(1, Number(process.env.ORDER_SYNC_INTERVAL_MIN) || 2); // fast 轮间隔(分钟,2026-09-17 5→2)
@@ -30,9 +32,11 @@ const MID_INTERVAL_MS = 8 * 3600_000;   // mid 轮间隔(8 小时)
 const SLOW_INTERVAL_MS = 24 * 3600_000; // slow 轮间隔(24 小时)
 const FIRST_DELAY_MS = 10_000;
 const MAX_PAGES = 50; // 单接口单店铺翻页上限(防失控)
-// 各级窗口:unfulfilledDays=未完成订单 cutoff 向前回看天数(null=跳过该接口,0=从 now 起);listDays=list 下单窗口天数(0=跳过)
+// 各级窗口:unfulfilledDays=未完成订单 cutoff 向前回看天数(null=跳过该接口,0=从 now 起);listDays=list 下单窗口天数(0=跳过);listHours=fast 轮近效 list 小时窗口(签收兜底用)
 const SYNC_LEVELS = {
-  fast: { unfulfilledDays: 0, listDays: 0, label: '2分钟·未完成订单(cutoff未来14天)' },
+  // fast 加近 3h list(2026-09-20):delivered 会离开 unfulfilled 列表,
+  // 签收兜底通知需要 fast 轮也能看到签收状态(2 分钟级);近 3h 订单量小,1-2 页
+  fast: { unfulfilledDays: 0, listHours: 3, listDays: 0, label: '2分钟·未完成订单+近3小时状态校准' },
   mid: { unfulfilledDays: null, listDays: 90, label: '8小时·近90天订单' },
   slow: { unfulfilledDays: null, listDays: 365, label: '24小时·近365天订单' },
 };
@@ -173,6 +177,111 @@ function iso(d) {
   return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+// ── 飞书通知 API 兜底(2026-09-20)─────────────────────────────
+// 背景:Ozon 检测服务响应不及时会停推 webhook(如 11:02 停推后新订单无通知)。
+// 兜底:API 轮询同步落库后,对「webhook 链路未覆盖(ozon_postings 无记录)且未打标」
+//       的近 7 天订单补发通知,覆盖:新订单/揽收/到达取货点/签收。
+// 去重:op_ozon_order.feishu_*_notified_at 原子 claim(与 webhook 链路共用同一标记);
+//       webhook 正常时 ozon_postings 有记录 → 跳过兜底,通知仍由 webhook 负责。
+// 状态判定:v4 substatus 直接返回推送模型状态名(posting_received 等),
+//       缺失时用 status 映射(apiToPush);揽收=rank2-3 非取货点,签收=rank4。
+// 限频:模块级 promise chain 串行发送,避免触发飞书机器人频率限制。
+// 失败:释放标记,下轮 fast 同步(2 分钟)自动重试。
+const FEISHU_BACKFILL_MAX_AGE_DAYS = 7;
+let _feishuNotifyChain = Promise.resolve();
+
+/** 签收兜底取包裹 delivered_at(applyOzonStatus 首次观察到 delivered 的时刻,±2 分钟) */
+function lookupDeliveredAt(storeId, postingNumber) {
+  try {
+    const r = db
+      .prepare(
+        `SELECT p.delivered_at FROM op_package p
+         JOIN op_ozon_order o ON o.id = p.ozon_order_id
+         WHERE o.store_id = ? AND o.posting_number = ?`
+      )
+      .get(storeId, String(postingNumber || ''));
+    return r?.delivered_at ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 通用兜底发送入队:claim 成功后串行发送,失败释放标记下轮重试 */
+function enqueueFeishuBackfill(store, postingNumber, stateKey, cutoff, label, sender) {
+  if (!orderPackageDao.claimFeishuNotify(store.id, postingNumber, cutoff, stateKey)) return;
+  _feishuNotifyChain = _feishuNotifyChain.then(async () => {
+    try {
+      const ok = await sender();
+      if (ok === false) {
+        orderPackageDao.releaseFeishuNotify(store.id, postingNumber, stateKey);
+        logger.warn({ storeId: store.id, postingNumber, stateKey }, `[order-sync] 飞书兜底通知(${label})发送失败,下轮同步重试`);
+      } else {
+        logger.info({ storeId: store.id, postingNumber, stateKey }, `[order-sync] 飞书兜底通知(${label})已补发`);
+      }
+    } catch (e) {
+      orderPackageDao.releaseFeishuNotify(store.id, postingNumber, stateKey);
+      logger.warn({ storeId: store.id, postingNumber, stateKey, err: e?.message }, `[order-sync] 飞书兜底通知(${label})异常,下轮同步重试`);
+    }
+  });
+}
+
+function maybeBackfillFeishuNotify(store, posting) {
+  const postingNumber = posting?.posting_number;
+  if (!postingNumber || !store?.company_id) return;
+  // webhook 链路活着(ozon_postings 已有该货件)→ 通知由 webhook 负责,跳过兜底
+  if (orderPackageDao.hasWebhookPosting(postingNumber)) return;
+  const cutoff = iso(new Date(Date.now() - FEISHU_BACKFILL_MAX_AGE_DAYS * 86400_000));
+  const sellerId = Number(store.company_id);
+
+  // 1) 新订单(TYPE_NEW_POSTING):API 轮询 posting 与 webhook OPI 回拉同源,补 seller_id 即可复用通知逻辑
+  enqueueFeishuBackfill(store, postingNumber, 'new_order', cutoff, '新订单', () =>
+    notifyPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId })
+  );
+
+  // 2) 状态通知:substatus 优先(v4 直接返回推送模型状态名),否则 status 映射
+  const pushState = posting.substatus || apiToPush(posting.status);
+  if (!pushState) return;
+  const rank = pushRankOf(pushState);
+  const base = {
+    posting_number: postingNumber,
+    seller_id: sellerId,
+    changed_state_date: posting.delivering_date ?? null,
+  };
+  // 揽收(rank2-3,取货点单发):对齐 webhook isPickupLevelPush 语义,跳级到快递员等也按揽收通知
+  if (rank >= 2 && rank <= 3 && pushState !== 'posting_in_pickup_point') {
+    enqueueFeishuBackfill(store, postingNumber, 'pickup', cutoff, '揽收', () =>
+      notifyPostingPickedUp({ ...base, new_state: pushState, old_state: null })
+    );
+  }
+  // 到达取货点
+  if (pushState === 'posting_in_pickup_point') {
+    enqueueFeishuBackfill(store, postingNumber, 'pickup_point', cutoff, '到达取货点', () =>
+      notifyPostingEvent('TYPE_STATE_CHANGED', { ...base, new_state: pushState })
+    );
+  }
+  // 签收(rank4;签收时间用 op_package.delivered_at,API 无签收时间戳)
+  if (rank === 4) {
+    enqueueFeishuBackfill(store, postingNumber, 'received', cutoff, '签收', () =>
+      notifyPostingEvent('TYPE_STATE_CHANGED', {
+        ...base,
+        changed_state_date: lookupDeliveredAt(store.id, postingNumber),
+        new_state: pushState,
+      })
+    );
+  }
+}
+
+/** syncPosting 包装:落库后按需补发飞书通知(webhook 停推兜底) */
+function syncPostingWithNotify(store, p) {
+  const r = orderPackageDao.syncPosting(store.id, p);
+  try {
+    maybeBackfillFeishuNotify(store, p);
+  } catch (e) {
+    logger.warn({ storeId: store.id, err: e?.message }, '[order-sync] 飞书兜底通知检查失败(不影响同步)');
+  }
+  return r;
+}
+
 // 分页拉取一个接口,逐 posting 回调;实时更新 progress.currentPage/postingsPulled
 // phase: 'unfulfilled' | 'list'(用于进度展示当前阶段)
 async function fetchAll(store, fn, onPage, phase) {
@@ -233,9 +342,9 @@ async function backfillProductCache(store) {
   return filled;
 }
 
-async function syncStore(store, { unfulfilledDays = SYNC_LEVELS.fast.unfulfilledDays, listDays = 0 } = {}) {
-  // 三级节奏窗口(2026-09-16,2026-09-17 fast 调整):
-  //   fast(每2分钟): unfulfilled cutoff [now, now+14d] —— 未完成订单(不回看,已过cutoff的在途单由推送+mid兜底)
+async function syncStore(store, { unfulfilledDays = SYNC_LEVELS.fast.unfulfilledDays, listDays = 0, listHours = 0 } = {}) {
+  // 三级节奏窗口(2026-09-16,2026-09-17 fast 调整,2026-09-20 fast 加近效 list):
+  //   fast(每2分钟): unfulfilled cutoff [now, now+14d] + list [now-3h, now] —— 未完成订单 + 签收兜底
   //   mid(每8小时):  list [now-90d, now] —— 近3个月订单全集(补 delivered/cancelled 终态)
   //   slow(每24小时): list [now-365d, now] —— 近1年订单全集(全年兜底)
   // list 按下单时间过滤且含所有状态,天然覆盖未完成订单;mid/slow 轮跳过 unfulfilled
@@ -248,15 +357,19 @@ async function syncStore(store, { unfulfilledDays = SYNC_LEVELS.fast.unfulfilled
     const cutoffTo = iso(new Date(now.getTime() + 14 * 86400_000));
     count += await fetchAll(store, (cursor) =>
       postingFbsUnfulfilledList(store, { cutoffFrom, cutoffTo, cursor })
-    , (p) => orderPackageDao.syncPosting(store.id, p), 'unfulfilled');
+    , (p) => syncPostingWithNotify(store, p), 'unfulfilled');
   }
 
-  // 2) 订单全集(mid/slow 轮,补终态)
-  if (listDays > 0) {
-    const sinceList = iso(new Date(now.getTime() - listDays * 86400_000));
+  // 2) 订单全集(mid/slow 轮补终态;fast 轮近效 list 用于签收兜底)
+  //    delivered 离开 unfulfilled 列表,签收兜底通知需 fast 轮可见签收状态
+  const listSinceMs = listDays > 0
+    ? listDays * 86400_000
+    : (listHours > 0 ? listHours * 3600_000 : 0);
+  if (listSinceMs > 0) {
+    const sinceList = iso(new Date(now.getTime() - listSinceMs));
     count += await fetchAll(store, (cursor) =>
       postingFbsList(store, { since: sinceList, to: iso(now), cursor })
-    , (p) => orderPackageDao.syncPosting(store.id, p), 'list');
+    , (p) => syncPostingWithNotify(store, p), 'list');
   }
 
   // 3) 订单 SKU 未命中商品缓存的回源(图片/完整标题)
@@ -404,7 +517,7 @@ export async function runSyncAllList({ sinceDays, since, to } = {}) {
     try {
       const n = await fetchAll(store,
         (cursor) => postingFbsList(store, { since: sinceIso, to: toIso, cursor }),
-        (p) => orderPackageDao.syncPosting(store.id, p), 'list'
+        (p) => syncPostingWithNotify(store, p), 'list'
       );
       results.push({ storeId: store.id, storeName: store.name, count: n, ok: true });
       logger.info({ storeId: store.id, count: n, since: sinceIso, to: toIso }, '[order-sync-all] 店铺同步完成');
@@ -475,7 +588,7 @@ export async function syncSinglePackage(packageId) {
   const posting = resp?.result;
   let orderSynced = false;
   if (posting && posting.posting_number) {
-    const r = orderPackageDao.syncPosting(store.id, posting);
+    const r = syncPostingWithNotify(store, posting);
     orderSynced = true;
     logger.info(
       { packageId: row.id, postingNumber: row.postingNumber, orderId: r.orderId, packageId: r.packageId },

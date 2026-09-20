@@ -269,6 +269,75 @@ function syncPosting(storeId, p) {
   return { orderId, packageId };
 }
 
+// ── 飞书通知去重标记(2026-09-20,webhook 与 API 轮询兜底共用)────
+// 背景:Ozon 检测服务响应不及时会停推 webhook,新订单/揽收/取货点/签收无飞书通知;
+//      API 轮询同步(order-sync)对未通知的订单补发,webhook 链路正常发通知。
+// 标记列非空=已通知(或已被人领取),NULL=未通知。
+// stateKey: new_order(新订单)/pickup(揽收)/pickup_point(到达取货点)/received(签收)
+const FEISHU_NOTIFY_COLUMNS = {
+  new_order: 'feishu_notified_at',
+  pickup: 'feishu_pickup_notified_at',
+  pickup_point: 'feishu_pickup_point_notified_at',
+  received: 'feishu_received_notified_at',
+};
+
+/** webhook 链路存活检测:ozon_postings 有该货件记录=webhook 已处理过(通知由它负责) */
+function hasWebhookPosting(postingNumber) {
+  return !!db
+    .prepare(`SELECT 1 FROM ozon_postings WHERE posting_number = ?`)
+    .get(String(postingNumber || ''));
+}
+
+/** 飞书通知标记查询(webhook 发通知前防重复:API 兜底已发过的跳过) */
+function isFeishuNotified(storeId, postingNumber, stateKey = 'new_order') {
+  const col = FEISHU_NOTIFY_COLUMNS[stateKey];
+  if (!col) return true; // 未知 stateKey 保守视为已通知(跳过发送)
+  return !!db
+    .prepare(
+      `SELECT 1 FROM op_ozon_order
+       WHERE store_id = ? AND posting_number = ? AND ${col} IS NOT NULL`
+    )
+    .get(storeId, String(postingNumber || ''));
+}
+
+/** 原子领取通知权:未打标且下单时间 ≥ cutoff 才成功(防 mid/slow 轮回溯历史订单通知风暴) */
+function claimFeishuNotify(storeId, postingNumber, cutoffIso, stateKey = 'new_order') {
+  const col = FEISHU_NOTIFY_COLUMNS[stateKey];
+  if (!col) return false;
+  const r = db
+    .prepare(
+      `UPDATE op_ozon_order SET ${col} = ?
+       WHERE store_id = ? AND posting_number = ?
+         AND ${col} IS NULL AND in_process_at >= ?`
+    )
+    .run(new Date().toISOString(), storeId, String(postingNumber || ''), cutoffIso);
+  return r.changes > 0;
+}
+
+/** 释放通知标记(发送失败回滚,下轮 API 同步自动重试) */
+function releaseFeishuNotify(storeId, postingNumber, stateKey = 'new_order') {
+  const col = FEISHU_NOTIFY_COLUMNS[stateKey];
+  if (!col) return;
+  db
+    .prepare(
+      `UPDATE op_ozon_order SET ${col} = NULL
+       WHERE store_id = ? AND posting_number = ?`
+    )
+    .run(storeId, String(postingNumber || ''));
+}
+
+/** 打通知标记(webhook 链路发送成功后调用;订单行不存在时静默跳过) */
+function markFeishuNotified(storeId, postingNumber, stateKey = 'new_order') {
+  const col = FEISHU_NOTIFY_COLUMNS[stateKey];
+  if (!col) return;
+  db
+    .prepare(
+      `UPDATE op_ozon_order SET ${col} = ?
+       WHERE store_id = ? AND posting_number = ?`
+    )
+    .run(new Date().toISOString(), storeId, String(postingNumber || ''));
+}
+
 // ── 拆单采购关联迁移(2026-09-18)─────────────────────────────
 // 设计文档: docs/拆单采购迁移-概要设计.md
 // Ozon 拆单:母件 item 数量减少(如 2→1),同时新增子件货件(parent_posting_number 指向母件)。
@@ -807,10 +876,28 @@ function setTagOrder(names) {
   return list.length;
 }
 
+// ── 列表排序(2026-09-20)──────────────────────────────────────
+// sortBy 白名单:order=下单时间 | delivering=揽收时间 | return=退货时间 | delivered=签收时间(妥投)
+//   delivering 对应 o.delivering_date(国际物流商揽收时间),适用除待处理/待打单/交运外的所有状态
+//   发货前取消的单无揽收时间(NULLS LAST 排最后);return=货件退回/销毁处理时间
+//   delivered 对应 p.delivered_at(妥投时间),仅已签收/已成功 tab 用(100% 覆盖)
+const SORT_COLUMNS = {
+  order: 'o.in_process_at',
+  delivering: 'o.delivering_date',
+  return: 'p.return_at',
+  delivered: 'p.delivered_at',
+};
+
 function listPackages(filters = {}) {
   const page = Math.max(1, Number(filters.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(filters.pageSize) || 20));
   const { where, params, globalSearch, globalKeyword } = buildPackageWhere(filters);
+
+  // 排序键白名单防注入;到达/退货时间为 NULL 的(发货前取消/无退货)排最后;p.id 兜底保证稳定
+  const sortCol = SORT_COLUMNS[filters.sortBy] || SORT_COLUMNS.order;
+  const sortDir = String(filters.sortOrder).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const nulls = filters.sortBy in SORT_COLUMNS && filters.sortBy !== 'order' ? ' NULLS LAST' : '';
+  const orderBy = `${sortCol} ${sortDir}${nulls}, p.id DESC`;
 
   const total = db
     .prepare(
@@ -828,7 +915,7 @@ function listPackages(filters = {}) {
        FROM op_package p
        JOIN op_ozon_order o ON o.id = p.ozon_order_id
        ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-       ORDER BY o.in_process_at DESC
+       ORDER BY ${orderBy}
        LIMIT ? OFFSET ?`
     )
     .all(...params, pageSize, (page - 1) * pageSize);
@@ -941,6 +1028,7 @@ function rowToPackage(r) {
     isShipped: !!r.is_shipped,
     isIgnored: !!r.is_ignored,
     inProcessAt: r.in_process_at,
+    deliveringDate: r.delivering_date, // 揽收时间(国际物流商揽收,在途/妥投/在途取消单有值)
     shipmentDate: r.shipment_date,
     lastDeliveryAt: r.last_delivery_at,
     deliveredAt: r.delivered_at,
@@ -1608,6 +1696,57 @@ function updatePurchaseAlloc({ packageId, items }) {
   });
 
   return { packageId, updatedItems: affectedItems.size, total: Math.round(total * 100) / 100 };
+}
+
+/**
+ * 手动录入/修改采购单国内物流单号(2026-09-20,闲鱼等无物流接口平台)
+ * 场景:闲鱼列表接口不返回物流单号,卖家发货后用户从闲鱼订单/聊天中复制单号手动录入
+ * 语义:
+ *   - logisticsNo 必填,覆盖写入(支持逗号分隔多个,与弹窗导入口径一致)
+ *   - logisticsCompany 传了才覆盖(不传保留原值)
+ *   - 状态联动:wait_send/wait_pay → shipped(已有终态不动);send_at 首次有单号时补 now
+ *   - 包裹聚合:该采购单关联的全部包裹(拼单可多包裹)head_logistics_* 用 COALESCE 补值,
+ *     与 submitPurchase 的 pkgSetSql 同款(不覆盖包裹已有头程物流)
+ */
+function updatePurchaseLogistics({ purchaseOrderId, logisticsNo, logisticsCompany }) {
+  const po = db
+    .prepare(`SELECT id, logistics_no, send_at FROM op_purchase_order WHERE id = ?`)
+    .get(Number(purchaseOrderId));
+  if (!po) throw new Error(`采购单不存在: ${purchaseOrderId}`);
+  const no = String(logisticsNo || '').trim();
+  if (!no) throw new Error('物流单号不能为空');
+
+  const now = nowIso();
+  const company = logisticsCompany == null ? null : String(logisticsCompany).trim() || null;
+  let pkgIds = [];
+  runInTx(() => {
+    db.prepare(
+      `UPDATE op_purchase_order
+       SET logistics_no = ?,
+           logistics_company = CASE WHEN ? THEN ? ELSE logistics_company END,
+           status = CASE WHEN status IN ('wait_send', 'wait_pay') THEN 'shipped' ELSE status END,
+           send_at = COALESCE(send_at, ?),
+           gmt_modified = ?
+       WHERE id = ?`
+    ).run(no, company ? 1 : 0, company, now, now, po.id);
+    // 关联包裹的头程物流补值(仅空值时写入,不覆盖已有)
+    pkgIds = db
+      .prepare(`SELECT DISTINCT package_id FROM op_purchase_link WHERE purchase_order_id = ?`)
+      .all(po.id)
+      .map((r) => r.package_id);
+    if (pkgIds.length) {
+      const ph = pkgIds.map(() => '?').join(',');
+      db.prepare(
+        `UPDATE op_package SET
+           head_logistics_no = COALESCE(head_logistics_no, ?),
+           head_logistics_company = COALESCE(head_logistics_company, ?),
+           head_shipped_at = COALESCE(head_shipped_at, ?),
+           gmt_modified = ?
+         WHERE id IN (${ph})`
+      ).run(no, company, now, now, ...pkgIds);
+    }
+  });
+  return { purchaseOrderId: po.id, logisticsNo: no, logisticsCompany: company, packages: pkgIds.length };
 }
 
 /** 取消关联:冲回产品行金额 + 删除 link;采购单无剩余关联时置 unlinked
@@ -2294,6 +2433,11 @@ function syncFromMiaoshou({ packageIds } = {}) {
 
 export const orderPackageDao = {
   syncPosting,
+  hasWebhookPosting,
+  isFeishuNotified,
+  claimFeishuNotify,
+  releaseFeishuNotify,
+  markFeishuNotified,
   reconcileSplitForPosting,
   reconcileCancelledPackages,
   applyOzonStatus,
@@ -2310,6 +2454,7 @@ export const orderPackageDao = {
   getPackageDetail,
   submitPurchase,
   updatePurchaseAlloc,
+  updatePurchaseLogistics,
   unlinkPurchase,
   revertToWaitProcess,
   clearAllPurchase,

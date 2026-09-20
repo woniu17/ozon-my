@@ -210,9 +210,37 @@
               <view class="po-goods-sub">{{ pi.spec ? pi.spec + ' · ' : '' }}¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</view>
             </view>
           </view>
-          <view v-if="g.poLogisticsNo" class="po-logi">
-            <text class="po-logi-company">{{ g.poLogisticsCompany }}</text>
-            <text class="po-logi-no">{{ g.poLogisticsNo }}</text>
+          <!-- 国内物流:当前单号/未录入 + 录入/修改入口(闲鱼等无物流接口平台,即时生效) -->
+          <view class="po-logi-row">
+            <view v-if="g.poLogisticsNo" class="po-logi">
+              <text class="po-logi-company">{{ g.poLogisticsCompany }}</text>
+              <text class="po-logi-no">{{ g.poLogisticsNo }}</text>
+            </view>
+            <view v-else class="po-logi-empty">未录物流单号</view>
+            <button
+              v-if="!pendingRemoves.includes(g.purchaseOrderId)"
+              class="mini-btn"
+              @click="openLogiEdit(g)"
+            >{{ g.poLogisticsNo ? '修改' : '录入' }}</button>
+          </view>
+          <!-- 物流单号录入面板(单号 + 快递公司 picker,卡片内展开) -->
+          <view v-if="logiEdit.poId === g.purchaseOrderId" class="logi-edit">
+            <view class="logi-field">
+              <text class="logi-label">物流单号</text>
+              <input class="logi-input" v-model="logiEdit.no" placeholder="必填,多个用英文逗号分隔" />
+            </view>
+            <view class="logi-field">
+              <text class="logi-label">快递公司</text>
+              <picker mode="selector" :range="LOGI_COMPANY_RANGE" @change="onLogiCompanyPick">
+                <view class="logi-picker" :class="{ ph: !logiEdit.company }">{{ logiEdit.company || '选填,点击选择' }}</view>
+              </picker>
+            </view>
+            <view class="logi-actions">
+              <button class="mini-btn" @click="closeLogiEdit">取消</button>
+              <button class="mini-btn primary" :disabled="logiEdit.saving" @click="saveLogi(g)">
+                {{ logiEdit.saving ? '保存中…' : '保存' }}
+              </button>
+            </view>
           </view>
           <view class="po-actions">
             <button v-if="!pendingRemoves.includes(g.purchaseOrderId)" class="mini-btn danger" @click="toggleRemove(g)">删除</button>
@@ -270,6 +298,7 @@ import {
   clearPurchaseInfo,
   submitPurchase,
   lookupPurchase,
+  updatePurchaseLogistics,
   shipPackage,
   getPlatformOrders,
   searchPlatformOrder,
@@ -365,6 +394,50 @@ function toggleRemove(g) {
   const i = pendingRemoves.value.indexOf(g.purchaseOrderId);
   if (i >= 0) pendingRemoves.value.splice(i, 1);
   else pendingRemoves.value.push(g.purchaseOrderId);
+}
+
+// ════════════════════════════════════════════════════════════
+// 已有采购单手动录入/修改国内物流单号(2026-09-20,闲鱼等无物流接口平台)
+// 独立操作即时生效,不依赖底部「保存」;后端联动 wait_send→shipped
+// ════════════════════════════════════════════════════════════
+const LOGI_COMPANY_RANGE = ['(不填)', '顺丰速运', '中通快递', '圆通速递', '韵达快递', '申通快递', '极兔速递', '邮政快递包裹', '京东物流', '德邦物流', 'EMS'];
+const logiEdit = reactive({ poId: 0, no: '', company: '', saving: false });
+
+function openLogiEdit(g) {
+  logiEdit.poId = g.purchaseOrderId;
+  logiEdit.no = g.poLogisticsNo || '';
+  logiEdit.company = g.poLogisticsCompany || '';
+  logiEdit.saving = false;
+}
+function closeLogiEdit() {
+  logiEdit.poId = 0;
+}
+function onLogiCompanyPick(e) {
+  const i = Number(e.detail.value);
+  logiEdit.company = i === 0 ? '' : LOGI_COMPANY_RANGE[i];
+}
+async function saveLogi(g) {
+  if (logiEdit.saving) return;
+  const no = String(logiEdit.no || '').trim();
+  if (!no) {
+    uni.showToast({ title: '请填写物流单号', icon: 'none' });
+    return;
+  }
+  logiEdit.saving = true;
+  try {
+    await updatePurchaseLogistics({
+      purchaseOrderId: g.purchaseOrderId,
+      logisticsNo: no,
+      logisticsCompany: logiEdit.company.trim(),
+    });
+    uni.showToast({ title: '物流单号已保存', icon: 'none' });
+    closeLogiEdit();
+    await loadDetail(); // 已有采购展示刷新(状态联动已发货)
+  } catch (e) {
+    /* 错误 toast 已由 request.js 统一弹出 */
+  } finally {
+    logiEdit.saving = false;
+  }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1110,6 +1183,34 @@ onLoad((opts) => {
   background: #f7f8fa;
   border-radius: 8rpx;
   padding: 8rpx 14rpx;
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.po-logi-row {
+  margin-top: 12rpx;
+  display: flex;
+  align-items: center;
+}
+
+.po-logi-row .po-logi {
+  margin-top: 0;
+}
+
+.po-logi-empty {
+  flex: 1;
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  color: #a6abb3;
+  background: #f7f8fa;
+  border-radius: 8rpx;
+  padding: 8rpx 14rpx;
+}
+
+.po-logi-row .mini-btn {
+  margin: 0 0 0 16rpx;
+  flex-shrink: 0;
 }
 
 .po-logi-company {
@@ -1118,6 +1219,70 @@ onLoad((opts) => {
 
 .po-logi-no {
   font-family: 'Courier New', monospace;
+}
+
+/* ── 物流单号录入面板 ── */
+.logi-edit {
+  margin-top: 16rpx;
+  background: #f7f8fa;
+  border-radius: 12rpx;
+  padding: 18rpx 20rpx;
+}
+
+.logi-field {
+  display: flex;
+  align-items: center;
+}
+
+.logi-field + .logi-field {
+  margin-top: 16rpx;
+}
+
+.logi-label {
+  width: 130rpx;
+  font-size: 24rpx;
+  color: #4e5969;
+  flex-shrink: 0;
+}
+
+.logi-input {
+  flex: 1;
+  background: #ffffff;
+  border-radius: 10rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  padding: 0 20rpx;
+  font-size: 25rpx;
+}
+
+.logi-picker {
+  flex: 1;
+  background: #ffffff;
+  border-radius: 10rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  padding: 0 20rpx;
+  font-size: 25rpx;
+  color: #1f2329;
+}
+
+.logi-picker.ph {
+  color: #a6abb3;
+}
+
+.logi-actions {
+  margin-top: 20rpx;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.logi-actions .mini-btn {
+  margin: 0 0 0 16rpx;
+}
+
+.mini-btn.primary {
+  background: #165dff;
+  color: #ffffff;
 }
 
 .po-actions {

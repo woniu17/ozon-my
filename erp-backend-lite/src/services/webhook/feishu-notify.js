@@ -476,7 +476,8 @@ export async function notifyPostingEvent(messageType, payload) {
     url = config.feishu.webhookUrlDefault;
   }
 
-  await sendFeishuText(text, url);
+  // 返回发送结果(boolean):调用方(webhook 打标 / API 兜底释放标记)依赖此返回值
+  return await sendFeishuText(text, url);
 }
 
 /**
@@ -574,7 +575,8 @@ export async function notifyPostingPickedUp(payload) {
     pickupLines,
   ].filter((v) => v !== null).join('\n');
 
-  await sendFeishuText(text, config.feishu.webhookUrlPickup);
+  // 返回发送结果(boolean):调用方(webhook 打标 / API 兜底释放标记)依赖此返回值
+  return await sendFeishuText(text, config.feishu.webhookUrlPickup);
 }
 
 /**

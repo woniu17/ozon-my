@@ -115,7 +115,17 @@ export default async function newPostingHandler(payload, ctx) {
   }
 
   // 推送飞书(失败不影响落库结果)
-  await notifyPostingEvent('TYPE_NEW_POSTING', fullPayload).catch(err =>
-    logger.warn({ err: err.message }, 'NEW_POSTING 飞书通知失败'),
-  );
+  // 2026-09-20 通知去重:与 API 轮询兜底(order-sync)共用 op_ozon_order.feishu_notified_at 标记
+  //  - 已打标 → API 兜底已发过(webhook 停推期间的补发),跳过防重复
+  //  - 发送成功且订单行存在 → 打标;OPI 回拉失败无订单行时无法打标,
+  //    API 侧通过 ozon_postings 存在性检测跳过兜底,同样防重复
+  if (store && orderPackageDao.isFeishuNotified(store.id, postingNumber)) {
+    logger.info({ postingNumber, storeId: store.id }, 'NEW_POSTING 飞书通知已由 API 兜底发出,跳过推送');
+  } else {
+    const ok = await notifyPostingEvent('TYPE_NEW_POSTING', fullPayload).catch(err => {
+      logger.warn({ err: err.message }, 'NEW_POSTING 飞书通知失败');
+      return false;
+    });
+    if (store && ok) orderPackageDao.markFeishuNotified(store.id, postingNumber);
+  }
 }

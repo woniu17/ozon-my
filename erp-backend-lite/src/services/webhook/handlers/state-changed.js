@@ -8,6 +8,8 @@ import { getDb } from '../../../db/index.js';
 import { isPickupLevelPush, pushRankOf } from '../status-map.js';
 import { notifyPostingEvent, notifyPostingPickedUp } from '../feishu-notify.js';
 import { linkOzonOrder } from '../order-link.js';
+import { getStoreBySellerId } from '../store-map.js';
+import { orderPackageDao } from '../../../db/dao/sqlite/order-daos.js';
 import logger from '../../../middleware/log.js';
 
 export default async function stateChangedHandler(payload, ctx) {
@@ -55,9 +57,17 @@ export default async function stateChangedHandler(payload, ctx) {
     await linkOzonOrder(payload);
 
     // 推送飞书揽收通知(独立机器人,带当日揽收统计;失败不影响落库)
-    await notifyPostingPickedUp(payload).catch(err =>
-      logger.warn({ err: err.message }, 'STATE_CHANGED 揽收飞书通知失败'),
-    );
+    // 2026-09-20 通知去重:与 API 轮询兜底(order-sync)共用 feishu_pickup_notified_at 标记
+    const store = payload.seller_id != null ? getStoreBySellerId(payload.seller_id) : null;
+    if (store && orderPackageDao.isFeishuNotified(store.id, postingNumber, 'pickup')) {
+      logger.info({ postingNumber, storeId: store.id }, 'STATE_CHANGED 揽收通知已由 API 兜底发出,跳过推送');
+    } else {
+      const ok = await notifyPostingPickedUp(payload).catch(err => {
+        logger.warn({ err: err.message }, 'STATE_CHANGED 揽收飞书通知失败');
+        return false;
+      });
+      if (store && ok) orderPackageDao.markFeishuNotified(store.id, postingNumber, 'pickup');
+    }
     return;
   }
 
@@ -86,7 +96,18 @@ export default async function stateChangedHandler(payload, ctx) {
   await linkOzonOrder(payload);
 
   // 推送飞书(失败不影响落库结果)
-  await notifyPostingEvent('TYPE_STATE_CHANGED', payload).catch(err =>
-    logger.warn({ err: err.message }, 'STATE_CHANGED 飞书通知失败'),
-  );
+  // 2026-09-20 通知去重:取货点/签收与 API 轮询兜底共用 feishu_*_notified_at 标记
+  const stateKey = newState === 'posting_in_pickup_point' ? 'pickup_point'
+    : (newState === 'posting_received' || newState === 'posting_delivered') ? 'received'
+      : null;
+  const store = payload.seller_id != null ? getStoreBySellerId(payload.seller_id) : null;
+  if (stateKey && store && orderPackageDao.isFeishuNotified(store.id, postingNumber, stateKey)) {
+    logger.info({ postingNumber, storeId: store.id, stateKey }, 'STATE_CHANGED 通知已由 API 兜底发出,跳过推送');
+    return;
+  }
+  const ok = await notifyPostingEvent('TYPE_STATE_CHANGED', payload).catch(err => {
+    logger.warn({ err: err.message }, 'STATE_CHANGED 飞书通知失败');
+    return false;
+  });
+  if (stateKey && store && ok) orderPackageDao.markFeishuNotified(store.id, postingNumber, stateKey);
 }

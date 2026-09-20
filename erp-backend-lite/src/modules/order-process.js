@@ -223,6 +223,7 @@ router.put('/admin/api/order-process/tags-order', (req, res, next) => {
 // ── 包裹列表 ────────────────────────────────────────────────
 // query: tab / keyword / storeId / purchaseStatus / arrived / cancelInitiator / page / pageSize
 //        / globalKeyword / globalMode(eq|ss) —— 全局搜索:跨所有状态检索(§9.1.1)
+//        / sortBy(order|delivering|return) / sortOrder(desc|asc) —— 排序(2026-09-20)
 router.get('/admin/api/order-process/list', (req, res, next) => {
   try {
     const q = req.query;
@@ -237,6 +238,8 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       cancelInitiator: q.cancelInitiator, // client/ozon/seller(仅 cancelled tab 用)
       globalKeyword: q.globalKeyword,
       globalMode: q.globalMode,
+      sortBy: q.sortBy,         // order|delivering|return(2026-09-20)
+      sortOrder: q.sortOrder,   // desc|asc(2026-09-20)
       page: q.page,
       pageSize: q.pageSize,
     });
@@ -621,6 +624,28 @@ router.post('/admin/api/order-process/purchase-alloc', (req, res, next) => {
       logger.warn({ packageId, err: e.message }, '[order-process] 回填采购价/重量失败(改分摊)');
     }
     logger.info({ packageId, ...r }, '[order-process] 采购分摊金额已修改');
+    res.json(ok(r));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 手动录入/修改采购单国内物流单号(2026-09-20,闲鱼等无物流接口平台)──
+// body: { purchaseOrderId, logisticsNo, logisticsCompany? }
+// 闲鱼列表接口不返回物流单号,卖家发货后用户从闲鱼订单/聊天复制单号手动录入;
+// 状态联动 wait_send/wait_pay→shipped,关联包裹头程物流空值补齐;详见 DAO 注释
+router.post('/admin/api/order-process/purchase-logistics', (req, res, next) => {
+  try {
+    const purchaseOrderId = Number(req.body?.purchaseOrderId);
+    if (!Number.isInteger(purchaseOrderId) || purchaseOrderId <= 0) {
+      return res.status(400).json({ ok: false, message: 'purchaseOrderId 必填' });
+    }
+    const r = orderPackageDao.updatePurchaseLogistics({
+      purchaseOrderId,
+      logisticsNo: req.body?.logisticsNo,
+      logisticsCompany: req.body?.logisticsCompany,
+    });
+    logger.info({ ...r }, '[order-process] 采购单物流单号已录入');
     res.json(ok(r));
   } catch (e) {
     next(e);

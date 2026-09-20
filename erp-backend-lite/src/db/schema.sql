@@ -909,6 +909,10 @@ CREATE TABLE IF NOT EXISTS op_ozon_order (
   is_express            INTEGER DEFAULT 0,
   cancellation_json     TEXT,                    -- 取消原因快照
   raw_json              TEXT,                    -- API 原始响应(审计/补字段)
+  feishu_notified_at    TEXT,                    -- 新订单飞书通知去重标记(webhook/API 兜底补发成功时打时间戳,NULL=未通知)
+  feishu_pickup_notified_at        TEXT,         -- 揽收通知去重标记(同上模式)
+  feishu_pickup_point_notified_at  TEXT,         -- 到达取货点通知去重标记
+  feishu_received_notified_at      TEXT,         -- 签收通知去重标记
   first_synced_at       TEXT,
   last_synced_at        TEXT,
   gmt_create            TEXT,

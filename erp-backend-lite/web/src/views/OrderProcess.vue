@@ -9,7 +9,7 @@ import { parseUtcDate } from '../utils/time.js';
 import { useRoute } from 'vue-router';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
-  submitPurchase, updatePurchaseAlloc, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
+  submitPurchase, updatePurchaseAlloc, updatePurchaseLogistics, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   updatePackageMeta, listPackageTags, updateTagOrder,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
   runAccrualSync, getRubRate, setRubRate,
@@ -59,6 +59,57 @@ const filters = reactive({
   tag: '',            // 标签筛选:标签名精确匹配(2026-09-15)
   arrived: '',        // '' | '0' | '1'
   cancelInitiator: '',  // '' | 'client' | 'ozon' | 'seller'(仅已取消 tab 用)
+});
+// ── 排序选项(2026-09-20)────────────────────────────────────
+// key 对应后端 sortBy 白名单;delivering=揽收时间(国际物流商揽收)
+// 发货前取消的单无揽收时间,后端 NULLS LAST 排最后
+const SORT_OPTIONS = {
+  order_desc: { key: 'order', label: '下单时间 新→旧' },
+  order_asc: { key: 'order', label: '下单时间 旧→新' },
+  delivering_desc: { key: 'delivering', label: '揽收时间 新→旧' },
+  delivering_asc: { key: 'delivering', label: '揽收时间 旧→新' },
+  return_desc: { key: 'return', label: '退货时间 新→旧' },
+  return_asc: { key: 'return', label: '退货时间 旧→新' },
+  delivered_desc: { key: 'delivered', label: '签收时间 新→旧' },
+  delivered_asc: { key: 'delivered', label: '签收时间 旧→新' },
+};
+// 各 tab 可用排序键(2026-09-20 v3):
+// 揽收排序适用所有状态(除待处理/待打单/交运——货件尚未被物流商揽收)
+// 退货排序:已签收/已成功/已取消/已退货;签收排序:已签收/已成功(delivered_at 100% 覆盖)
+const TAB_SORT_KEYS = {
+  all: ['order', 'delivering'],
+  waitProcess: ['order'],
+  waitShip: ['order'],
+  shipSuccess: ['order'],
+  waitReceiverConfirm: ['order', 'delivering'],
+  signed: ['order', 'delivering', 'return', 'delivered'],
+  settled: ['order', 'delivering', 'return', 'delivered'],
+  returned: ['order', 'delivering', 'return'],
+  cancelled: ['order', 'delivering', 'return'],
+  ignored: ['order', 'delivering'],
+};
+const sortOptions = computed(() => {
+  const keys = TAB_SORT_KEYS[activeTab.value] || ['order'];
+  return Object.entries(SORT_OPTIONS)
+    .filter(([, v]) => keys.includes(v.key))
+    .map(([value, v]) => ({ value, label: v.label }));
+});
+// 各 tab 独立记住排序选择(2026-09-20):切 tab 恢复该 tab 上次选择,localStorage 持久化
+const SORT_PREF_KEY = 'op_sort_pref_v1';
+let savedSortPref = {};
+try { savedSortPref = JSON.parse(localStorage.getItem(SORT_PREF_KEY)) || {}; } catch { /* 忽略损坏数据 */ }
+const tabSort = reactive(savedSortPref);
+const currentSort = computed({
+  // 当前 tab 的排序值;保存值不可用(键被裁撤)时回退默认
+  get: () => {
+    const val = tabSort[activeTab.value];
+    const keys = TAB_SORT_KEYS[activeTab.value] || ['order'];
+    return val && SORT_OPTIONS[val] && keys.includes(SORT_OPTIONS[val].key) ? val : 'order_desc';
+  },
+  set: (v) => {
+    tabSort[activeTab.value] = v;
+    try { localStorage.setItem(SORT_PREF_KEY, JSON.stringify(tabSort)); } catch { /* 存储满等异常忽略 */ }
+  },
 });
 // 已用标签选项(筛选下拉):[{ name, count }](2026-09-15)
 const tagOptions = ref([]);
@@ -265,6 +316,9 @@ async function loadTabs() {
 async function loadList() {
   loading.value = true;
   const isGlobal = globalSearch.active && globalSearch.keyword.trim();
+  // 排序值取当前 tab 记住的选择(2026-09-20):order_desc → sortBy=order + sortOrder=desc
+  const sortVal = currentSort.value;
+  const [sortBy, sortOrder] = sortVal.split('_');
   const listParams = {
     tab: activeTab.value,
     keyword: filters.keyword.trim(),
@@ -275,6 +329,8 @@ async function loadList() {
     cancelInitiator: activeTab.value === 'cancelled' ? filters.cancelInitiator : '',
     globalKeyword: isGlobal ? globalSearch.keyword.trim() : '',
     globalMode: globalSearch.mode,
+    sortBy,
+    sortOrder,
     page: pager.current,
     pageSize: pager.pageSize,
   };
@@ -315,6 +371,7 @@ function switchTab(key) {
   activeTab.value = key;
   // 切 tab 时清空"取消发起者"筛选(仅已取消 tab 有意义)
   if (key !== 'cancelled') filters.cancelInitiator = '';
+  // 排序选择按 tab 独立记忆,currentSort 自动恢复该 tab 上次选择,无需重置(2026-09-20)
   // 全局搜索模式下切 tab = 退出全局模式回到该 tab 视图
   if (globalSearch.active) clearGlobalSearch(false);
   pager.current = 1;
@@ -873,6 +930,7 @@ function openPurchase(pkg) {
         buyerUsername: first.buyerAccount || '',
         buyerUserId: first.buyerUserId || '',
         trackingNumber: first.poLogisticsNo || '',
+        poLogisticsCompany: first.poLogisticsCompany || '',
         goods: first.items || [],
         _platform: first.platform || 'other',
         _existing: true,
@@ -1488,6 +1546,42 @@ function toggleRemovedPurchase(po) {
   if (s.has(po.purchaseOrderId)) s.delete(po.purchaseOrderId);
   else s.add(po.purchaseOrderId);
   removedPurchaseIds.value = s;
+}
+
+// ── 已有采购单手动录入/修改国内物流单号(2026-09-20,闲鱼等无物流接口平台)──
+// 采购弹窗「已选采购订单区」已有单行的独立操作:即时生效,不随弹窗「保存」
+// 后端联动:wait_send/wait_pay→shipped + 关联包裹头程物流空值补齐
+const COURIER_OPTIONS = ['顺丰速运', '中通快递', '圆通速递', '韵达快递', '申通快递', '极兔速递', '邮政快递包裹', '京东物流', '德邦物流', 'EMS'];
+const poLogistics = reactive({ open: false, saving: false, purchaseOrderId: 0, purchaseSn: '', no: '', company: '' });
+function openPoLogistics(o) {
+  poLogistics.purchaseOrderId = o.purchaseOrderId;
+  poLogistics.purchaseSn = o.orderSn || `#${o.purchaseOrderId}`;
+  poLogistics.no = o.trackingNumber || '';
+  poLogistics.company = o.poLogisticsCompany || '';
+  poLogistics.open = true;
+}
+async function savePoLogistics() {
+  if (poLogistics.saving) return;
+  const no = poLogistics.no.trim();
+  if (!no) { show('请填写物流单号', 'error'); return; }
+  poLogistics.saving = true;
+  try {
+    await updatePurchaseLogistics({
+      purchaseOrderId: poLogistics.purchaseOrderId,
+      logisticsNo: no,
+      logisticsCompany: poLogistics.company.trim(),
+    });
+    // 本地已有采购行同步显示(弹窗不关闭,可继续录其他单)
+    const r = restoredPurchases.value.find((x) => x.purchaseOrderId === poLogistics.purchaseOrderId);
+    if (r) { r.trackingNumber = no; r.poLogisticsCompany = poLogistics.company.trim(); }
+    show('物流单号已保存', 'success');
+    poLogistics.open = false;
+    loadList(); // 主列表展开行/详情的物流展示刷新
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    poLogistics.saving = false;
+  }
 }
 
 // 当前 importTab 对应的平台值(用于 restoredSnKeys 匹配)
@@ -2330,10 +2424,11 @@ function platformLabel(p) {
   return PLATFORMS.find((x) => x.value === p)?.label || p || '—';
 }
 
-/** 采购商品标题/规格最多显示 20 字(超出截断加…,全文悬浮 title 查看,2026-09-17) */
-function clip20(v) {
+/** 商品名/规格最多显示 30 字(超出截断加…,全文悬浮 title 查看;2026-09-17 原为20字,2026-09-20 v2 调为30) */
+function clip30(v) {
+  /* 2026-09-20 v2:产品/采购列恢复最宽500,商品名/规格超30字省略(完整内容悬浮title可看) */
   const s = String(v ?? '').trim();
-  return s.length > 20 ? s.slice(0, 20) + '…' : s;
+  return s.length > 30 ? s.slice(0, 30) + '…' : s;
 }
 
 /** 采购商品详情页链接(平台 + 商品ID 拼 URL;ID 缺失/非数字返回空,不加链接)
@@ -2724,6 +2819,10 @@ onUnmounted(() => {
           <option value="0">等收货</option>
           <option value="1">已到货</option>
         </select>
+        <!-- 排序(2026-09-20):按 tab 动态显示可用排序键;揽收排序适用所有状态(除待处理/待打单/交运);各 tab 独立记忆 -->
+        <select v-model="currentSort" class="filter-input" title="排序:揽收时间=国际物流商揽收时间(发货前取消的单无此时间,排最后)" @change="search">
+          <option v-for="o in sortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+        </select>
         <!-- 取消发起者筛选(仅已取消 tab 显示) -->
         <select v-if="activeTab === 'cancelled'" v-model="filters.cancelInitiator" class="filter-input" @change="search">
           <option value="">全部发起者</option>
@@ -2844,8 +2943,8 @@ onUnmounted(() => {
                   <img class="img-preview" :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" alt="" />
                 </div>
                 <div class="product-main">
-                  <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ it.title || '—' }}</a>
-                  <div v-else class="product-title">{{ it.title || '—' }}</div>
+                  <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ clip30(it.title) || '—' }}</a>
+                  <div v-else class="product-title">{{ clip30(it.title) || '—' }}</div>
                   <div class="product-sub" v-if="it.sku">SKU：<a class="order-link sku-link" href="javascript:void(0)" title="点击全局搜索该 SKU 的相关订单(跨所有状态,精确匹配)" @click.stop="searchBySku(it.sku)">{{ it.sku }}</a>
                     <button class="copy-btn" title="复制SKU" @click.stop="copyText(it.sku, 'SKU')">
                       <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -2896,13 +2995,13 @@ onUnmounted(() => {
                   </div>
                   <div class="purchase-goods-main">
                     <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="goods-link purchase-goods-title" :title="pi.goodsName || pi.title || ''">
-                      {{ clip20(pi.goodsName || pi.title || '采购商品') }}
+                      {{ clip30(pi.goodsName || pi.title || '采购商品') }}
                     </a>
                     <div v-else class="purchase-goods-title" :title="pi.goodsName || pi.title || ''">
-                      {{ clip20(pi.goodsName || pi.title || '采购商品') }}
+                      {{ clip30(pi.goodsName || pi.title || '采购商品') }}
                     </div>
                     <div class="purchase-goods-sub">
-                      <span v-if="pi.spec" :title="pi.spec">{{ clip20(pi.spec) }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}
+                      <span v-if="pi.spec" :title="pi.spec">{{ clip30(pi.spec) }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}
                     </div>
                   </div>
                 </div>
@@ -2965,12 +3064,12 @@ onUnmounted(() => {
                 <span v-if="cancelReasonLabel(pkg).afterShip" class="tag tag-mute" title="装运后取消">装运后</span>
                 <span v-if="cancelReasonLabel(pkg).affectRating" class="tag tag-err" title="影响排行">影响排行</span>
               </div>
-              <!-- 退货信息行(仅 is_returned 订单显示:妥投后买家退货退款) -->
+              <!-- 退货信息行(仅 is_returned 订单显示:妥投后买家退货退款/拒收取消后退回销毁) -->
               <div v-if="pkg.isReturned" class="sub cancel-reason-line">
                 <span class="tag tag-err" title="妥投后买家申请退货退款(销售冲回,配送/佣金等费用不返还)">已退货</span>
                 <span class="cancel-reason-text" :title="pkg.returnState || ''">{{ returnStateLabel(pkg) }}</span>
-                <span v-if="pkg.returnAt" class="tag tag-mute" title="买家发起退货时间">{{ fmtTime(pkg.returnAt) }}</span>
               </div>
+              <!-- 时间行固定顺序(2026-09-20 v2):下单→最迟→揽收→签收→退款,无值用 - 占位 -->
               <div class="sub">下单：{{ fmtTime(pkg.inProcessAt) }}<template v-if="weekdayCN(pkg.inProcessAt)">（{{ weekdayCN(pkg.inProcessAt) }}）</template></div>
               <!-- 已取消订单不再展示最迟/剩发/已超时(取消后无发货义务,倒计时无意义) -->
               <div v-if="pkg.shipmentDate && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub">最迟：{{ fmtTime(pkg.shipmentDate) }}<template v-if="weekdayCN(pkg.shipmentDate)">（{{ weekdayCN(pkg.shipmentDate) }}）</template></div>
@@ -2978,6 +3077,9 @@ onUnmounted(() => {
                 {{ countdown(pkg).overdue ? '已超时：' : '剩发：' }}{{ countdown(pkg).text }}
               </div>
               <div v-if="pkg.isShipped" class="sub muted">已交运 {{ fmtTime(pkg.shippedAt) }}</div>
+              <div class="sub">揽收：<template v-if="pkg.deliveringDate">{{ fmtTime(pkg.deliveringDate) }}<template v-if="weekdayCN(pkg.deliveringDate)">（{{ weekdayCN(pkg.deliveringDate) }}）</template></template><template v-else>-</template></div>
+              <div class="sub">签收：<template v-if="pkg.deliveredAt">{{ fmtTime(pkg.deliveredAt) }}<template v-if="weekdayCN(pkg.deliveredAt)">（{{ weekdayCN(pkg.deliveredAt) }}）</template></template><template v-else>-</template></div>
+              <div class="sub">退款：<template v-if="pkg.returnAt">{{ fmtTime(pkg.returnAt) }}<template v-if="weekdayCN(pkg.returnAt)">（{{ weekdayCN(pkg.returnAt) }}）</template></template><template v-else>-</template></div>
             </td>
             <td class="col-actions">
               <div class="action-group">
@@ -3337,6 +3439,7 @@ onUnmounted(() => {
                 <th>订单号</th>
                 <th style="width: 160px">下单时间</th>
                 <th style="width: 100px">金额</th>
+                <th style="width: 240px">国内物流</th>
                 <th style="width: 60px"></th>
               </tr>
             </thead>
@@ -3356,6 +3459,15 @@ onUnmounted(() => {
                 <td class="mono">{{ o.orderSn || '(手工单)' }}</td>
                 <td>{{ o._existing ? '—' : (o._platform === 'yangkeduo' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—')) }}</td>
                 <td class="pdd-amount">¥{{ o.amount }}</td>
+                <td>
+                  <!-- 已有单:当前单号 + 录入/修改入口(闲鱼等无物流接口平台的独立补录操作,即时生效) -->
+                  <template v-if="o._existing">
+                    <a v-if="o.trackingNumber" :href="trackingSearchUrl(o.poLogisticsCompany, o.trackingNumber)" target="_blank" rel="noopener" class="order-link mono po-logi-link" title="百度搜索物流状态">{{ o.trackingNumber }}</a>
+                    <span v-else class="muted">未录入</span>
+                    <button class="btn btn-ghost btn-sm" :title="o.trackingNumber ? '修改该采购单的国内物流单号' : '手动录入国内物流单号(闲鱼等平台接口拿不到单号时用)'" @click="openPoLogistics(o)">{{ o.trackingNumber ? '修改' : '录入' }}</button>
+                  </template>
+                  <template v-else><span class="muted" title="新勾选订单随「保存」时以平台单号/手填单号入库">—</span></template>
+                </td>
                 <td>
                   <!-- 已有单:✕ 标记删除(点「保存」才冲回),再点「恢复」撤销;新选单:✕ 取消勾选 -->
                   <button
@@ -3390,6 +3502,32 @@ onUnmounted(() => {
           >{{ purchaseSaving ? '处理中…' : '保存并备货' }}</button>
         </div>
         </div><!-- /purchase-form-footer -->
+      </div>
+    </AppModal>
+
+    <!-- 已有采购单物流单号录入弹窗(闲鱼等无物流接口平台,即时生效) -->
+    <AppModal :open="poLogistics.open" :title="`国内物流 · ${poLogistics.purchaseSn}`" @update:open="poLogistics.open = $event">
+      <div class="po-logi-form">
+        <div class="sync-all-tip">
+          闲鱼等平台的物流单号接口拿不到,从平台订单/聊天中复制后在此录入;保存后采购单流转「已发货」。
+        </div>
+        <div class="sync-all-date-row">
+          <label>物流单号</label>
+          <input v-model.trim="poLogistics.no" class="filter-input" placeholder="必填,多个用英文逗号分隔" />
+        </div>
+        <div class="sync-all-date-row">
+          <label>快递公司</label>
+          <input v-model.trim="poLogistics.company" class="filter-input" list="po-logi-couriers" placeholder="选填,留空保留原值" />
+          <datalist id="po-logi-couriers">
+            <option v-for="c in COURIER_OPTIONS" :key="c" :value="c" />
+          </datalist>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" @click="poLogistics.open = false">取 消</button>
+          <button class="btn btn-primary" :disabled="poLogistics.saving" @click="savePoLogistics">
+            {{ poLogistics.saving ? '保存中…' : '保 存' }}
+          </button>
+        </div>
       </div>
     </AppModal>
 
@@ -3850,6 +3988,7 @@ onUnmounted(() => {
 }
 
 .col-product {
+  /* 2026-09-20 v2:恢复最宽500(商品名/规格超30字省略,悬浮title看全名) */
   min-width: 500px;
   max-width: 500px;
 }
@@ -3887,13 +4026,13 @@ onUnmounted(() => {
 
 .product-main {
   flex: 1;
-  min-width: 0;
+  min-width: 0; /* 2026-09-20 v2:恢复,配合 ellipsis 截断 */
 }
 
 .product-title {
   /* display:block 关键:<a> 默认 inline,ellipsis/max-width 对 inline 无效会导致长名称溢出覆盖 */
+  /* 2026-09-20 v2:恢复 ellipsis 兜底(30字截断后仍超出列宽时省略),列最宽500 */
   display: block;
-  max-width: 300px; /* 2026-09-17:字体放大1.5倍后同步放宽(原200px) */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3907,7 +4046,7 @@ a.product-title:hover {
 
 .product-sub {
   display: block;
-  max-width: 300px; /* 2026-09-17:字体放大1.5倍后同步放宽(原200px),减少省略 */
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3937,7 +4076,15 @@ a.product-title:hover {
 }
 
 .col-amount {
-  min-width: 150px;
+  /* 2026-09-20:加宽保证"国际配送(估) ¥xxx.xx"等金额行不折行 */
+  min-width: 200px;
+  white-space: nowrap;
+}
+
+.col-purchase {
+  /* 2026-09-20 v2:恢复最宽500(商品名/规格超30字省略,悬浮title看全名) */
+  min-width: 500px;
+  max-width: 500px;
 }
 
 /* 金额列行:名称左对齐、数字右对齐 */
@@ -3951,11 +4098,6 @@ a.product-title:hover {
   white-space: nowrap;
 }
 
-.col-purchase {
-  min-width: 500px;
-  max-width: 500px;
-}
-
 /* 采购信息列:参考产品信息列 product-item 结构,展示采购商品图/名称/规格/价格×数量 */
 .purchase-item + .purchase-item {
   margin-top: 6px;
@@ -3964,10 +4106,13 @@ a.product-title:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap; /* 2026-09-20:采购单号一行不折行 */
 }
 .purchase-meta {
   margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden; /* 2026-09-20 v2:列最宽500,摘要超出省略 */
+  text-overflow: ellipsis;
 }
 .purchase-goods {
   display: flex;
@@ -3985,7 +4130,7 @@ a.product-title:hover {
 }
 .purchase-goods-main {
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: 0; /* 2026-09-20 v2:恢复,配合 ellipsis 截断 */
   overflow: hidden;
 }
 /* 采购商品详情页链接(图片/标题;悬停下划线示意可点) */
@@ -4034,7 +4179,7 @@ a.product-title:hover {
   line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: nowrap; /* 2026-09-20 v2:恢复 ellipsis,列最宽500 */
 }
 .purchase-goods-sub {
   font-size: 16.5px; /* 2026-09-17:11px × 1.5 */
@@ -4042,7 +4187,7 @@ a.product-title:hover {
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: nowrap; /* 2026-09-20 v2:恢复 ellipsis,列最宽500 */
 }
 /* 图片悬浮大图预览(订单商品/采购商品 120px;hover 在原图右侧放大 280px,2026-09-17) */
 .img-hover-wrap {
@@ -4070,11 +4215,14 @@ a.product-title:hover {
 }
 
 .col-status {
-  min-width: 140px;
+  /* 2026-09-20:加宽保证时间四行(下单/揽收/签收/退货)及取消原因行不折行 */
+  min-width: 250px;
+  white-space: nowrap;
 }
 
 .col-actions {
-  min-width: 160px;
+  /* 2026-09-20:加宽保证"同步采购物流"等操作按钮不折行 */
+  min-width: 180px;
 }
 
 .action-group {
@@ -4187,17 +4335,14 @@ a.product-title:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
-  overflow: hidden;
+  /* 2026-09-20:去 min-width:0+overflow:hidden,店铺名/货件号整行展示 */
   white-space: nowrap;
 }
 .pkg-tags-store {
   color: #374151;
   font-weight: 700;
   font-size: 21px; /* 2026-09-17:14px × 1.5(店铺名) */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex-shrink: 1;
+  /* 2026-09-20:去 ellipsis 截断 */
 }
 /* 质检单货件号(02131/024785 开头):红色加粗显著展示 */
 .pkg-tags-meta-line .mono {
@@ -4852,6 +4997,16 @@ a.product-title:hover {
   text-decoration: none;
   color: #b45309;
 }
+/* 国内物流列:单号过长截断(多单号逗号拼接时悬浮看全),录入按钮贴右侧 */
+.po-logi-link {
+  display: inline-block;
+  max-width: 150px;
+  vertical-align: bottom;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 6px;
+}
 .selected-order-item {
   display: flex;
   align-items: center;
@@ -5062,16 +5217,13 @@ a.product-title:hover {
   display: flex;
   align-items: center;
   gap: 4px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap; /* 2026-09-20:取消原因行不折行 */
   margin-top: 3px;
 }
 .cancel-reason-text {
   font-size: 11px;
   color: #991b1b;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 2026-09-20:去 max-width+ellipsis 截断,取消原因整行展示 */
 }
 
 /* 取消原因详情(详情弹窗) */

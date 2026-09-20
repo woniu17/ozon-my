@@ -48,6 +48,12 @@ export function updatePurchaseAlloc(body) {
   return request.post('/admin/api/order-process/purchase-alloc', body);
 }
 
+// 手动录入/修改采购单国内物流单号(闲鱼等无物流接口平台)
+// body: { purchaseOrderId, logisticsNo, logisticsCompany? };状态联动 wait_send→shipped
+export function updatePurchaseLogistics(body) {
+  return request.post('/admin/api/order-process/purchase-logistics', body);
+}
+
 // 清空采购信息(冲回全部关联;不回退状态)
 export function clearPurchaseInfo(packageId) {
   return request.post('/admin/api/order-process/purchase/clear', { packageId });

@@ -61,6 +61,28 @@ export async function initSchema() {
     const _filledUuid = db.prepare(`SELECT COUNT(*) AS n FROM op_purchase_order WHERE sync_uuid IS NOT NULL`).get().n;
     console.log(`[db] migration: added column op_purchase_order.sync_uuid, backfilled ${_filledUuid} rows`);
   }
+  // 2026-09-20: op_ozon_order 飞书通知去重标记列族
+  // feishu_notified_at(新订单)/pickup(揽收)/pickup_point(到达取货点)/received(签收)
+  // (webhook 通知成功/API 兜底补发成功时打时间戳;NULL=未通知)
+  // 必须在 exec(schema.sql) 之前执行,因为新装库 schema.sql 已含该列,旧库需先 ALTER
+  const _feishuNotifyCols = [
+    'feishu_notified_at',
+    'feishu_pickup_notified_at',
+    'feishu_pickup_point_notified_at',
+    'feishu_received_notified_at',
+  ];
+  const _orderFeishuNotifiedPre = db.prepare(`PRAGMA table_info(op_ozon_order)`).all();
+  for (const col of _feishuNotifyCols) {
+    if (_orderFeishuNotifiedPre.length > 0 && !_orderFeishuNotifiedPre.some((c) => c.name === col)) {
+      db.exec(`ALTER TABLE op_ozon_order ADD COLUMN ${col} TEXT`);
+      // 存量订单一律视为已通知(部署前的订单不回溯补发,防 mid/slow 轮通知风暴);
+      // 真正漏通知的订单(如 webhook 停推期间状态推进的)由人工清标记触发 API 兜底补发
+      db.exec(
+        `UPDATE op_ozon_order SET ${col} = COALESCE(first_synced_at, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`
+      );
+      console.log(`[db] migration: added column op_ozon_order.${col}, backfilled`);
+    }
+  }
   const sql = readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(sql);
   await ensureMigrations();
