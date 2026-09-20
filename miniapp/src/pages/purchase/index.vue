@@ -111,7 +111,9 @@
             <text class="sum-count">已选 {{ selCount }} 单</text>
             <text class="sum-total">¥{{ newSelectedTotal }}</text>
           </view>
-          <view class="sum-sns">{{ step3Sn }}</view>
+          <view class="sum-sns">
+            <view v-for="o in step3Sel" :key="o.orderSn" class="sum-sn">{{ o.orderSn }} · ¥{{ Number(o.amount || 0).toFixed(2) }}</view>
+          </view>
           <!-- 拼单提示(lookup 查到已关联包裹时) -->
           <view v-if="lookupResult && lookupResult.linkedPackages && lookupResult.linkedPackages.length" class="lookup-tip">
             采购单已关联 {{ lookupResult.linkedPackages.length }} 个包裹,本次为追加关联;auto 模式下已关联 auto 包裹的 {{ autoPreview.existingAutoQty }} 件将参与加权分摊。
@@ -333,14 +335,16 @@
       <view v-if="pendingAdd" class="card">
         <view class="section-title">待新增采购</view>
         <view class="po pending-add">
-          <view class="po-head">
+          <!-- 多笔订单逐笔展示(一笔订单=一个采购单),不再用顿号拼接 -->
+          <view v-for="od in pendingAdd.orders" :key="od.purchaseSn" class="po-head">
             <text class="po-platform">{{ platformLabel(pendingAdd.body.platform) }}</text>
-            <text class="po-sn">{{ pendingAdd.body.purchaseSn || '(无单号)' }}</text>
+            <text class="po-sn">{{ od.purchaseSn || '(无单号)' }}</text>
+            <text class="po-amt">¥{{ Number(od.paymentAmount || 0).toFixed(2) }}</text>
             <text class="badge-new">新增</text>
           </view>
           <view class="po-meta">
-            <text class="po-amt">¥{{ Number(pendingAdd.body.paymentAmount || 0).toFixed(2) }}</text>
-            <text class="po-meta-item">{{ pendingAdd.body.allocMode === 'auto' ? '自动 · 按数量分摊' : '手动指定价格' }}</text>
+            <text class="po-amt" v-if="pendingAdd.orders.length > 1">合计 ¥{{ Number(pendingAdd.body.paymentAmount || 0).toFixed(2) }}</text>
+            <text class="po-meta-item">{{ pendingAdd.orders.length > 1 ? pendingAdd.orders.length + ' 笔 · ' : '' }}{{ pendingAdd.body.allocMode === 'auto' ? '自动 · 按数量分摊' : '手动指定价格' }}</text>
           </view>
           <view class="po-actions">
             <button class="mini-btn danger" @click="discardAdd">移除</button>
@@ -2016,6 +2020,11 @@ onLoad((opts) => {
   font-family: 'Courier New', monospace;
   word-break: break-all;
   line-height: 1.6;
+}
+
+/* 已选订单逐笔单号行(多笔订单不再顿号拼接) */
+.sum-sn {
+  padding: 2rpx 0;
 }
 
 .lookup-tip {
