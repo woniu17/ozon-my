@@ -5,7 +5,21 @@ import config from '../../config/index.js';
 import logger from '../../middleware/log.js';
 import { getStoreBySellerId, listStores } from './store-map.js';
 import { getDb } from '../../db/index.js';
-import { PUSH_ABSORBING } from './status-map.js';
+
+/**
+ * 任意时间值 → 北京时间 "YYYY-MM-DD HH:mm:ss"
+ * UTC+8 固定数学偏移(与 getTodayUtcRange 同口径,不依赖服务器时区)
+ * 非法/空值:返回 '-' 或原样返回
+ */
+function fmtShTime(v) {
+  if (v == null || v === '') return '-';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v);
+  const t = new Date(d.getTime() + 8 * 3600_000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${t.getUTCFullYear()}-${p(t.getUTCMonth() + 1)}-${p(t.getUTCDate())} `
+    + `${p(t.getUTCHours())}:${p(t.getUTCMinutes())}:${p(t.getUTCSeconds())}`;
+}
 
 /**
  * 从 posting / payload 中提取销售金额(OPI 返回的金额本身就是 CNY)
@@ -58,34 +72,37 @@ function getTodayUtcRange() {
 /**
  * 从 DB 查询当日各店铺销售汇总(订单数 + 销售金额 CNY)
  * 用于飞书通知,避免每次都调 OPI 聚合
+ * 数据源 op_ozon_order:webhook(NEW_POSTING 联动建单)与 API 轮询(fast/mid)双链路均落此表,
+ * 比 ozon_postings(仅 webhook 落库)更全 —— webhook 停推期间轮询兜底发出的通知汇总也能算对
+ * (2026-09-20 修复:此前查 ozon_postings,webhook 停推时兜底通知的汇总不含新订单导致统计不变)
  * @returns {{bySeller: Map<number, {storeName, sellerId, orderCount, saleCny}>, total: {orderCount, saleCny, validOrderCount, validSaleCny}, ready: boolean}}
- *   ready: DB 里是否已有 sale_amount_cny>0 的当日记录(兜底 poller 是否已回填)
- *   false 表示金额尚未回填,调用方应提示"汇总信息还未拉取"
- *   valid* :剔除取消类吸收态(PUSH_ABSORBING)后的单量/金额
+ *   valid* :剔除取消类状态(API 模型,对应 PUSH_ABSORBING)后的单量/金额
  */
 export function buildTodaySummaryFromDb() {
   const { start, end } = getTodayUtcRange();
   const db = getDb();
-  // 按 seller_id 聚合当日订单数和金额;valid_* 剔除取消类吸收态
-  const cancelPh = Array.from(PUSH_ABSORBING, () => '?').join(',');
+  // 按 store_id 聚合当日订单数和金额;valid_* 剔除取消类吸收态
+  // op_ozon_order.status 为 Seller API 模型(cancelled/cancelled_from_split_pending/not_accepted)
+  const API_CANCELED = ['cancelled', 'cancelled_from_split_pending', 'not_accepted'];
+  const cancelPh = API_CANCELED.map(() => '?').join(',');
   const rows = db.prepare(`
-    SELECT seller_id,
+    SELECT store_id,
       COUNT(*) AS order_count,
-      COALESCE(SUM(sale_amount_cny), 0) AS sale_cny,
+      COALESCE(SUM(order_amount), 0) AS sale_cny,
       SUM(CASE WHEN status IN (${cancelPh}) THEN 0 ELSE 1 END) AS valid_count,
-      COALESCE(SUM(CASE WHEN status IN (${cancelPh}) THEN 0 ELSE sale_amount_cny END), 0) AS valid_cny
-    FROM ozon_postings
+      COALESCE(SUM(CASE WHEN status IN (${cancelPh}) THEN 0 ELSE order_amount END), 0) AS valid_cny
+    FROM op_ozon_order
     WHERE in_process_at IS NOT NULL
       AND in_process_at >= ? AND in_process_at < ?
-    GROUP BY seller_id
-    ORDER BY seller_id
-  `).all(...PUSH_ABSORBING, ...PUSH_ABSORBING, start, end);
+      AND currency = 'CNY'
+    GROUP BY store_id
+  `).all(...API_CANCELED, ...API_CANCELED, start, end);
 
-  // 检查是否有任何 sale_amount_cny>0 的记录(兜底 poller 是否已回填)
+  // 检查是否有任何金额>0 的记录
   const ready = rows.some(r => Number(r.sale_cny) > 0);
 
   const stores = listStores();
-  const storeMap = new Map(stores.map(s => [Number(s.company_id), s]));
+  const storeMap = new Map(stores.map(s => [s.id, s]));
 
   const bySeller = new Map();
   let totalOrder = 0;
@@ -99,9 +116,9 @@ export function buildTodaySummaryFromDb() {
     bySeller.set(sellerId, { storeName: s.name, sellerId, orderCount: 0, saleCny: 0 });
   }
   for (const r of rows) {
-    const sellerId = Number(r.seller_id);
-    const store = storeMap.get(sellerId);
-    const storeName = store?.name ?? String(sellerId);
+    const store = storeMap.get(r.store_id);
+    const sellerId = Number(store?.company_id ?? r.store_id);
+    const storeName = store?.name ?? String(r.store_id);
     bySeller.set(sellerId, {
       storeName,
       sellerId,
@@ -379,7 +396,7 @@ export async function notifyPostingEvent(messageType, payload) {
       const isQc = typeof postingNumber === 'string'
         && (postingNumber.startsWith('02131') || postingNumber.startsWith('024785'));
       title = `${isQc ? '[质检]' : ''} [${sellerName}] [${postingNumber}]`;
-      timeField = ['处理时间', payload.in_process_at ?? '-'];
+      timeField = ['处理时间', fmtShTime(payload.in_process_at)];
       const products = Array.isArray(payload.products) ? payload.products : [];
       const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
       const saleCny = extractSaleAmountCny(payload);
@@ -404,7 +421,7 @@ export async function notifyPostingEvent(messageType, payload) {
     }
     case 'TYPE_POSTING_CANCELLED': {
       title = '[货件取消] Ozon 推送';
-      timeField = ['取消时间', payload.changed_state_date ?? '-'];
+      timeField = ['取消时间', fmtShTime(payload.changed_state_date)];
       extra = `\n旧状态: ${payload.old_state ?? '-'}\n取消原因: ${formatCancelReason(payload.reason?.message) ?? '-'}`;
       // 取消推送无商品字段 → 查 ozon_postings.products_json(NEW_POSTING 落库时已存)
       const cancelProducts = loadProductsFromDb(postingNumber);
@@ -419,7 +436,7 @@ export async function notifyPostingEvent(messageType, payload) {
         : ns === 'posting_in_pickup_point' ? '[货件待取件] Ozon 推送'
         : (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') ? '[货件备货] Ozon 推送'
         : '[货件状态变更] Ozon 推送';
-      timeField = ['变更时间', payload.changed_state_date ?? '-'];
+      timeField = ['变更时间', fmtShTime(payload.changed_state_date)];
       extra = `\n新状态: ${ns || '-'}`;
       // 状态变化推送无商品字段 → 查 ozon_postings.products_json
       const changedProducts = loadProductsFromDb(postingNumber);
@@ -437,7 +454,7 @@ export async function notifyPostingEvent(messageType, payload) {
     }
     default:
       title = `[${messageType}] Ozon 推送`;
-      timeField = ['时间', new Date().toISOString()];
+      timeField = ['时间', fmtShTime(new Date().toISOString())];
   }
 
   const text = [
@@ -566,7 +583,7 @@ export async function notifyPostingPickedUp(payload) {
     title,
     `货件号: ${postingNumber}`,
     `卖家: ${formatSeller(sellerId)}`,
-    `变更时间: ${payload.changed_state_date ?? '-'}`,
+    `变更时间: ${fmtShTime(payload.changed_state_date)}`,
     `新状态: ${payload.new_state ?? '-'}`,
     payload.old_state ? `旧状态: ${payload.old_state}` : null,
     // 揽收推送无商品字段 → 查 ozon_postings.products_json
