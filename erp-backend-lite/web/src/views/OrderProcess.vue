@@ -158,6 +158,7 @@ const PLATFORMS = [
   { value: '1688', label: '1688' },
   { value: 'yangkeduo', label: '拼多多' },
   { value: 'taobao', label: '淘宝' },
+  { value: 'xianyu', label: '闲鱼' },
 ];
 
 // ── 详情弹窗 ───────────────────────────────────────────
@@ -447,7 +448,7 @@ function enrichStop() { enrichStopFlag = true; }
 
 // 构建补全确认弹窗的 message:展示按平台分组的采购订单号列表(前 20 条 + 更多提示)
 function buildEnrichConfirmMessage(pending, platforms) {
-  const platformLabels = { yangkeduo: '拼多多', '1688': '1688', taobao: '淘宝' };
+  const platformLabels = { yangkeduo: '拼多多', '1688': '1688', taobao: '淘宝', xianyu: '闲鱼' };
   const lines = [];
   lines.push(`检测到 ${pending.length} 条待补全采购单(${platforms.join('+')},全量,不限当前页)。`);
   lines.push(`将逐个搜索补全商品图/数量,每单间隔 ${ENRICH_INTERVAL_MS / 1000}s 限速,连续失败 ${ENRICH_MAX_CONSEC_FAIL} 次自动中止。`);
@@ -456,7 +457,7 @@ function buildEnrichConfirmMessage(pending, platforms) {
   lines.push('── 待补全采购订单号 ──');
   // 按平台分组展示
   const MAX_SHOW = 20; // 每平台最多展示前 20 条
-  for (const plat of ['yangkeduo', '1688', 'taobao']) {
+  for (const plat of ['yangkeduo', '1688', 'taobao', 'xianyu']) {
     const group = pending.filter((p) => p._platform === plat);
     if (!group.length) continue;
     const label = platformLabels[plat] || plat;
@@ -475,18 +476,21 @@ async function onEnrichPurchaseItems() {
   let pending = [];
   const platforms = [];
   try {
-    const [pddResp, aliResp, tbResp] = await Promise.all([
+    const [pddResp, aliResp, tbResp, xyResp] = await Promise.all([
       listPendingPurchases('yangkeduo'),
       listPendingPurchases('1688'),
       listPendingPurchases('taobao'),
+      listPendingPurchases('xianyu'),
     ]);
     const pddList = (pddResp?.data || pddResp || []).map((p) => ({ ...p, _platform: 'yangkeduo' }));
     const aliList = (aliResp?.data || aliResp || []).map((p) => ({ ...p, _platform: '1688' }));
     const tbList = (tbResp?.data || tbResp || []).map((p) => ({ ...p, _platform: 'taobao' }));
-    pending = [...pddList, ...aliList, ...tbList];
+    const xyList = (xyResp?.data || xyResp || []).map((p) => ({ ...p, _platform: 'xianyu' }));
+    pending = [...pddList, ...aliList, ...tbList, ...xyList];
     if (pddList.length) platforms.push('拼多多');
     if (aliList.length) platforms.push('1688');
     if (tbList.length) platforms.push('淘宝');
+    if (xyList.length) platforms.push('闲鱼');
   } catch (e) {
     show('拉取待补全列表失败:' + (e.message || e), 'error');
     return;
@@ -504,6 +508,7 @@ async function onEnrichPurchaseItems() {
   const needPdd = pending.some((p) => p._platform === 'yangkeduo');
   const needAli = pending.some((p) => p._platform === '1688');
   const needTb = pending.some((p) => p._platform === 'taobao');
+  const needXy = pending.some((p) => p._platform === 'xianyu');
   if (needPdd && !platformAnyLogin('yangkeduo')) {
     show('拼多多补全需要先登录:请运行 qxqx 的 persistent(账号参数)登录拼多多后重试', 'warning');
     return;
@@ -514,6 +519,10 @@ async function onEnrichPurchaseItems() {
   }
   if (needTb && !platformAnyLogin('taobao')) {
     show('淘宝补全需要先登录:请运行 qxqx 的 persistent(账号参数)登录淘宝后重试', 'warning');
+    return;
+  }
+  if (needXy && !platformAnyLogin('xianyu')) {
+    show('闲鱼补全需要先登录:请运行 qxqx 的 persistent(账号参数)登录闲鱼(goofish.com)后重试', 'warning');
     return;
   }
   if (!await confirmStore.ask({
@@ -1169,12 +1178,14 @@ const PLATFORM_TAB_META = {
   pdd: { prefix: 'pdd', platformVal: 'yangkeduo', label: '拼多多', platformReq: 'pdd' },
   ali1688: { prefix: 'ali', platformVal: '1688', label: '1688', platformReq: 'ali1688' },
   taobao: { prefix: 'taobao', platformVal: 'taobao', label: '淘宝', platformReq: 'taobao' },
+  xianyu: { prefix: 'xianyu', platformVal: 'xianyu', label: '闲鱼', platformReq: 'xianyu' },
 };
-// 默认(后端 /status 未返回时):三平台各一个主账号,行为与 M3 完全一致
+// 默认(后端 /status 未返回时):各平台一个主账号,行为与 M3 完全一致
 const importAccountTabs = ref([
   { key: 'pdd', platform: 'pdd', account: 'linqx', label: '拼多多' },
   { key: 'ali:linqx', platform: 'ali1688', account: 'linqx', label: '1688·linqx' },
   { key: 'taobao', platform: 'taobao', account: 'linqx', label: '淘宝' },
+  { key: 'xianyu', platform: 'xianyu', account: 'linqx', label: '闲鱼' },
 ]);
 
 /** 按 /status 返回的各平台账号列表展开 tab 配置 */
@@ -1317,7 +1328,10 @@ const importSubTab = computed({
   set: (v) => { currentStore.value.tab = v; },
 });
 const importSubTabs = computed(() => {
-  if ((currentTabDef.value?.platform || '') === 'pdd') return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
+  const p = currentTabDef.value?.platform || '';
+  if (p === 'pdd') return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
+  // 闲鱼列表接口 orderStatus 仅支持全量(其它值被服务端忽略),只留"全部"
+  if (p === 'xianyu') return [{ key: 'all', label: '全部' }];
   return [{ key: 'all', label: '全部' }, { key: 'unshipped', label: '待发货' }, { key: 'unreceived', label: '待收货' }];
 });
 
@@ -1807,7 +1821,7 @@ async function onSyncPackage(pkg) {
 // 范围:该包裹全部关联采购单——补物流单号(1688官方API/拼多多搜索)+拉最新轨迹;
 // 与顶栏全局按钮互补:全局走后台整轮(每小时同逻辑),本按钮即时同步当前包裹
 const logisticsPkgId = ref(0); // 正在同步采购物流的包裹 id(按钮 loading)
-const PLATFORM_SHORT = { '1688': '1688', yangkeduo: '拼多多', taobao: '淘宝', other: '手工' };
+const PLATFORM_SHORT = { '1688': '1688', yangkeduo: '拼多多', taobao: '淘宝', xianyu: '闲鱼', other: '手工' };
 async function onSyncPackageLogistics(pkg) {
   if (logisticsPkgId.value) return;
   logisticsPkgId.value = pkg.id;
@@ -2332,6 +2346,7 @@ function goodsDetailUrl(platform, goodsId) {
   if (platform === '1688') return `https://detail.1688.com/offer/${id}.html`;
   if (platform === 'yangkeduo') return `https://mobile.yangkeduo.com/goods.html?goods_id=${id}`;
   if (platform === 'taobao') return `https://item.taobao.com/item.htm?id=${id}`;
+  if (platform === 'xianyu') return `https://www.goofish.com/item?id=${id}`;
   return '';
 }
 

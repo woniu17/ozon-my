@@ -42,6 +42,7 @@ import {
 import { searchAliOrder } from './platform-orders.js';
 import { searchPddOrder } from '../services/platform-orders/adapters/pdd.js';
 import { searchTaobaoOrder } from '../services/platform-orders/adapters/taobao.js';
+import { searchXianyuOrder } from '../services/platform-orders/adapters/xianyu.js';
 
 const router = Router();
 
@@ -512,6 +513,7 @@ const AUTO_ENRICH_SEARCH = {
   '1688': (orderSn, accounts) => searchAliOrder(orderSn, accounts),
   yangkeduo: (orderSn, accounts) => searchPddOrder(orderSn, accounts),
   taobao: (orderSn, accounts) => searchTaobaoOrder(orderSn, accounts),
+  xianyu: (orderSn, accounts) => searchXianyuOrder(orderSn, accounts),
 };
 async function autoEnrichPurchase(dbPlatform, orderSn) {
   try {
@@ -520,7 +522,7 @@ async function autoEnrichPurchase(dbPlatform, orderSn) {
       .get(dbPlatform, orderSn);
     if (!po || (po.items_json && po.items_json.includes('thumbUrl'))) return; // 已有图,无需补全
     const searchFn = AUTO_ENRICH_SEARCH[dbPlatform];
-    const accounts = config.platformAccounts[{ '1688': 'ali1688', yangkeduo: 'pdd', taobao: 'taobao' }[dbPlatform]] || [];
+    const accounts = config.platformAccounts[{ '1688': 'ali1688', yangkeduo: 'pdd', taobao: 'taobao', xianyu: 'xianyu' }[dbPlatform]] || [];
     if (!searchFn || !accounts.length) return;
     const { result } = await searchFn(orderSn, accounts);
     if (!result?.goods?.length) return;

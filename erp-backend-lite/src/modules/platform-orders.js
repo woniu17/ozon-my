@@ -35,6 +35,7 @@ import {
   searchAliOpenApiInAccount,
 } from '../services/platform-orders/adapters/ali1688-openapi.js';
 import { listTaobaoOrders, searchTaobaoOrder } from '../services/platform-orders/adapters/taobao.js';
+import { listXianyuOrders, searchXianyuOrder } from '../services/platform-orders/adapters/xianyu.js';
 
 const router = Router();
 
@@ -80,6 +81,7 @@ const PLATFORMS = new Map([
   ['pdd', { list: listPddOrders, search: searchPddOrder }],
   ['ali1688', { list: listAli1688Orders, search: searchAliOrder }],
   ['taobao', { list: listTaobaoOrders, search: searchTaobaoOrder }],
+  ['xianyu', { list: listXianyuOrders, search: searchXianyuOrder }],
 ]);
 
 // 平台登录态探测表(浏览器运行中才探测;未运行返回 unknown 不触发冷启动)
@@ -91,12 +93,13 @@ const LOGIN_PROBES = new Map([
   ['pdd', { url: 'https://mobile.yangkeduo.com/', cookies: ['pdd_user_uid', 'pdd_user_id'] }],
   ['ali1688', { url: 'https://air.1688.com/', cookies: ['_m_h5_tk', '__cn_logon__'] }],
   ['taobao', { url: 'https://h5api.m.taobao.com/', cookies: ['_m_h5_tk', 'tracknick'] }],
+  ['xianyu', { url: 'https://www.goofish.com/', cookies: ['_m_h5_tk', 'unb'] }],
 ]);
 
 function getAdapter(platform) {
   const adapter = PLATFORMS.get(platform);
   if (!adapter) {
-    throw new ApiError(ErrorCode.RESOURCE_NOT_FOUND, `不支持的平台: ${platform}(仅 pdd/ali1688/taobao)`);
+    throw new ApiError(ErrorCode.RESOURCE_NOT_FOUND, `不支持的平台: ${platform}(仅 pdd/ali1688/taobao/xianyu)`);
   }
   return adapter;
 }

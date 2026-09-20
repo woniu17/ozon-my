@@ -69,6 +69,7 @@ const config = {
       pdd: parse(process.env.PLATFORM_ACCOUNTS_PDD, 'linqx'),
       ali1688: parse(process.env.PLATFORM_ACCOUNTS_ALI1688, process.env.PLATFORM_PROFILE_CHENLIN ? 'linqx,chenlin' : 'linqx'),
       taobao: parse(process.env.PLATFORM_ACCOUNTS_TAOBAO, 'linqx'),
+      xianyu: parse(process.env.PLATFORM_ACCOUNTS_XIANYU, 'linqx'),
     };
   })(),
   platformBrowserHeadless: process.env.PLATFORM_BROWSER_HEADLESS !== '0',

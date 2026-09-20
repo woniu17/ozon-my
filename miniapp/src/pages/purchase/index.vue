@@ -297,6 +297,7 @@ const PLATFORM_LABELS = {
   pdd: '拼多多',
   yangkeduo: '拼多多',
   taobao: '淘宝',
+  xianyu: '闲鱼',
   other: '手工(其他)',
 };
 function platformLabel(p) {
@@ -374,6 +375,7 @@ const PLATFORM_TAB_META = {
   pdd: { platformVal: 'yangkeduo', label: '拼多多' },
   ali1688: { platformVal: '1688', label: '1688' },
   taobao: { platformVal: 'taobao', label: '淘宝' },
+  xianyu: { platformVal: 'xianyu', label: '闲鱼' },
 };
 
 const step = ref('manage'); // manage=采购管理(默认) | select=选平台订单 | confirm=分摊确认
@@ -382,6 +384,7 @@ const platTabs = ref([
   { key: 'pdd', platform: 'pdd', account: 'linqx', label: '拼多多' },
   { key: 'ali:linqx', platform: 'ali1688', account: 'linqx', label: '1688·linqx' },
   { key: 'taobao', platform: 'taobao', account: 'linqx', label: '淘宝' },
+  { key: 'xianyu', platform: 'xianyu', account: 'linqx', label: '闲鱼' },
 ]);
 const platLogin = reactive({}); // `${platform}:${account}` → 'yes'|'no'|'unknown'
 const stores = reactive({});    // tabKey → { orders, loading, error, tab, selected, searched }
@@ -404,9 +407,12 @@ const curPlatLogin = computed(() => {
 
 // 状态子 tab(pdd 无"待发货",与 web 端一致)
 const subTabs = computed(() => {
-  if ((curTabDef.value?.platform || '') === 'pdd') {
+  const p = curTabDef.value?.platform || '';
+  if (p === 'pdd') {
     return [{ key: 'all', label: '全部' }, { key: 'unreceived', label: '待收货' }];
   }
+  // 闲鱼列表接口 orderStatus 仅支持全量,只留"全部"(与 web 端一致)
+  if (p === 'xianyu') return [{ key: 'all', label: '全部' }];
   return [{ key: 'all', label: '全部' }, { key: 'unshipped', label: '待发货' }, { key: 'unreceived', label: '待收货' }];
 });
 
