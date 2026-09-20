@@ -277,15 +277,15 @@
             <view class="po2-cmp-toggle" @click="toggleCmp(p.sku)">
               <text class="po2-cmp-caret">{{ cmpExpanded[p.sku] ? '▾' : '▸' }}</text>
               <text class="po2-cmp-title">单价调整</text>
-              <picker v-if="cmpExpanded[p.sku]" class="po2-rate-pick" mode="selector" :range="RATE_LABELS" @change="onRatePick(p, $event)">
+              <picker v-if="cmpExpanded[p.sku]" class="po2-rate-pick" mode="selector" :range="RATE_LABELS" :value="Math.max(0, RATE_OPTIONS.indexOf(p.rate))" @click.stop @change="onRatePick(p, $event)">
                 <view class="pe-rate-chip">{{ p.rate }}%</view>
               </picker>
               <button
                 v-if="cmpExpanded[p.sku]"
                 class="mini-btn primary"
                 :disabled="!p.canAdjust || adjustingSku === p.sku"
-                @click="adjustSkuPrice(p)"
-              >{{ adjustingSku === p.sku ? '调价中…' : '调价' }}</button>
+                @click.stop="adjustSkuPrice(p)"
+                >{{ adjustingSku === p.sku ? '调价中…' : '调价' }}</button>
             </view>
             <block v-if="cmpExpanded[p.sku]">
               <view class="po2-cmp-rows">
