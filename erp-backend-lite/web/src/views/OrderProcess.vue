@@ -1126,6 +1126,12 @@ async function savePurchase(withShip = false) {
     return;
   }
   const sn = purchaseForm.purchaseSn.trim();
+  // 2026-09-20 多单号防误粘:一次提交只允许一笔采购单号
+  // (多选平台订单曾把单号 join(',') 拼接提交,产生"单号A,单号B"的采购单,物流同步/单号查找全部失效)
+  if (/[,，;；\s]/.test(sn)) {
+    show('采购单号一次只能填写一笔(检测到多个单号或分隔符)，多笔平台订单请分次勾选保存', 'error');
+    return;
+  }
   // manual 模式 + 无单号 + 无新勾选 + 有已有采购 = 修改已有采购单的分摊金额(2026-09-19 语义重构)
   // 取消「自动填写金额」后手填保存,意图是不用采购订单的平台金额、自己指定分摊金额——
   // 直接更新已有 link 的 allocated_amount,不新增任何采购单

@@ -1007,6 +1007,12 @@ function collectAdd() {
   const isAuto = allocMode.value === 'auto';
   const sel = step3Sel.value;
   if (!sel.length) return;
+  // 2026-09-20 多单号防误粘:一次只允许勾选一笔平台订单
+  // (此前多选时单号 join(',') 拼接提交,产生"单号A,单号B"的采购单,物流同步/单号查找全部失效)
+  if (sel.length > 1) {
+    uni.showToast({ title: '一次只能选择一笔平台订单，多笔请分次添加', icon: 'none' });
+    return;
+  }
   // 产品行分摊:auto 用加权预览值,manual 用手填值
   const itemsArg = (isAuto ? autoPreview.value.rows : manualItems.value).map((it) => ({
     itemId: it.itemId,

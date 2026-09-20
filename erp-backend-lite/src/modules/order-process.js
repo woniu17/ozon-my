@@ -556,6 +556,12 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
     if (!String(b.purchaseSn || '').trim()) {
       return res.status(400).json({ ok: false, message: '请填写采购单号或从平台订单选择(已不支持无单号手工单)' });
     }
+    // 2026-09-20 多单号防误粘:一次提交只允许一个采购单号
+    // 实测事故:两个单号连逗号一起粘进输入框,系统按"一个单号"建单导致
+    // 单号拼接/物流同步失败/单号查找语义混乱(采购单 260915-216226916643751,260920-...)
+    if (/[,，;；\s]/.test(String(b.purchaseSn).trim())) {
+      return res.status(400).json({ ok: false, message: '采购单号一次只能填写一个(检测到分隔符或多个单号)，多个采购单请分次提交' });
+    }
     // 平台订单商品:过滤出有 thumbUrl 的(与 enrichPurchaseItems 口径一致),序列化后随 upsert 写入
     const goodsArr = (Array.isArray(b.platformGoods) ? b.platformGoods : []).filter((g) => g && g.thumbUrl);
     const itemsJson = goodsArr.length ? JSON.stringify(goodsArr) : null;
