@@ -1007,12 +1007,6 @@ function collectAdd() {
   const isAuto = allocMode.value === 'auto';
   const sel = step3Sel.value;
   if (!sel.length) return;
-  // 2026-09-20 多单号防误粘:一次只允许勾选一笔平台订单
-  // (此前多选时单号 join(',') 拼接提交,产生"单号A,单号B"的采购单,物流同步/单号查找全部失效)
-  if (sel.length > 1) {
-    uni.showToast({ title: '一次只能选择一笔平台订单，多笔请分次添加', icon: 'none' });
-    return;
-  }
   // 产品行分摊:auto 用加权预览值,manual 用手填值
   const itemsArg = (isAuto ? autoPreview.value.rows : manualItems.value).map((it) => ({
     itemId: it.itemId,
@@ -1023,29 +1017,39 @@ function collectAdd() {
     uni.showToast({ title: '请至少填写一行分摊金额', icon: 'none' });
     return;
   }
-  // 表单回填口径与 web 端 watch(newSelectedOrders) 一致
-  const snList = sel.map((o) => o.orderSn);
-  const buyerAccounts = [...new Set(sel.map((o) => o.account || o._account || o.buyerUsername).filter(Boolean))];
-  const buyerIds = [...new Set(sel.map((o) => o.buyerUserId).filter(Boolean))];
-  const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
-  const companies = [...new Set(sel.map((o) => o.logisticsCompany).filter(Boolean))];
+  // 每笔平台订单独立提交体(2026-09-20 修复:多选曾把单号 join(',') 拼成一个采购单提交,
+  // 产生"单号A,单号B"拼接 purchase_sn,物流同步/单号查找全部失效;现改为保存时逐单落库,
+  // 一笔平台订单=一个采购单,auto 模式由后端按数量加权重算各单分摊)
+  const manualTotal = sel.reduce((s, o) => s + (Number(o.amount) || 0), 0) || 1;
+  const orders = sel.map((o) => ({
+    purchaseSn: o.orderSn,
+    buyerAccount: o.account || o._account || o.buyerUsername || null,
+    buyerUserId: o.buyerUserId || null,
+    sellerName: o.mallName || o.sellerName || null,
+    paymentAmount: Number(o.amount) || 0,
+    logisticsCompany: o.logisticsCompany || null,
+    // 单笔:保留可编辑的物流输入框值;多笔:各单用自己的快递单号
+    logisticsNo: sel.length === 1 ? (logisticsInput.value.trim() || o.trackingNumber || null) : (o.trackingNumber || null),
+    platformGoods: o.goods || [],
+    // manual 模式:手填分摊按各单金额占比拆分;auto 模式金额为占位,后端按数量加权重算
+    items: isAuto
+      ? itemsArg
+      : itemsArg.map((it) => ({ ...it, amount: Math.round(((Number(it.amount) || 0) * ((Number(o.amount) || 0) / manualTotal)) * 100) / 100 })),
+  }));
   pendingAdd.value = {
     lookup: lookupResult.value,
+    // body 仅承载公共字段+展示(purchaseSn 用'、'连接仅供展示,落库走 orders)
     body: {
       packageId: packageId.value,
       platform: step3Platform.value,
-      purchaseSn: snList.join(',') || null,
-      buyerAccount: buyerAccounts.join(',') || null,
-      buyerUserId: buyerIds.join(',') || null,
-      sellerName: sellers.join(',') || null,
+      purchaseSn: sel.map((o) => o.orderSn).join('、') || null,
       paymentAmount: Number(newSelectedTotal.value) || null,
-      logisticsCompany: companies.join(',') || null,
       logisticsNo: logisticsInput.value.trim() || null,
       note: null,
       items: itemsArg,
-      platformGoods: sel.flatMap((o) => o.goods || []),
       allocMode: isAuto ? 'auto' : 'manual',
     },
+    orders,
   };
   // 清空勾选(重新进入选择时从头开始;再次确认将替换待新增)
   for (const t of platTabs.value) {
@@ -1067,17 +1071,29 @@ function discardAdd() {
 // ════════════════════════════════════════════════════════════
 async function doSave(withShip = false) {
   if (saving.value || !dirty.value) return;
-  // 拼单确认(纯前端,先于任何落库;取消则中止整个保存)
+  // 拼单确认(纯前端,先于任何落库;取消则中止整个保存;多单逐单查合并提示)
   const add = pendingAdd.value;
-  if (add && add.body.platform !== 'other' && add.body.purchaseSn) {
+  if (add && add.body.platform !== 'other' && add.orders?.length) {
     try {
-      const r = add.lookup || (await lookupPurchase(add.body.platform, add.body.purchaseSn));
-      if (r?.exists && r.linkedPackages?.length) {
+      let linkedCount = 0;
+      const firstLinked = [];
+      for (const od of add.orders) {
+        const r = add.orders.length === 1 && add.lookup
+          ? add.lookup
+          : await lookupPurchase(add.body.platform, od.purchaseSn);
+        if (r?.exists && r.linkedPackages?.length) {
+          linkedCount++;
+          for (const p of r.linkedPackages) {
+            if (!firstLinked.some((x) => x.package_no === p.package_no)) firstLinked.push(p);
+          }
+        }
+      }
+      if (linkedCount) {
         const confirmed = await new Promise((resolve) => {
           uni.showModal({
             title: '拼单提示',
             content:
-              '采购单已关联 ' + r.linkedPackages.length + ' 个包裹,本次将追加关联到本包裹' +
+              '本次 ' + add.orders.length + ' 笔采购单中有 ' + linkedCount + ' 笔已关联包裹(合计 ' + firstLinked.length + ' 个包裹),本次将追加关联到本包裹' +
               (add.body.allocMode === 'auto' ? '(auto 模式:已关联包裹分摊金额将按数量重新加权)' : '') + '。是否继续?',
             confirmText: '追加关联',
             success: (res) => resolve(!!res.confirm),
@@ -1102,9 +1118,13 @@ async function doSave(withShip = false) {
       groups.value.length > 0 &&
       groups.value.every((g) => pendingRemoves.value.includes(g.purchaseOrderId));
     if (allRemoved && !add) await clearPurchaseInfo(packageId.value);
-    // 2) 新增采购落地
-    if (add) await submitPurchase(add.body);
-    uni.showToast({ title: '采购已保存', icon: 'none' });
+    // 2) 新增采购落地:逐笔平台订单分别提交(一笔订单=一个采购单,杜绝单号拼接)
+    if (add && add.orders?.length) {
+      for (const od of add.orders) {
+        await submitPurchase({ ...add.body, ...od, purchaseSn: od.purchaseSn });
+      }
+    }
+    uni.showToast({ title: add?.orders?.length > 1 ? '已保存 ' + add.orders.length + ' 笔采购' : '采购已保存', icon: 'none' });
     // 保存并备货:保存成功后向 Ozon 确认货件(多件二次确认,单件直接备货)
     if (withShip && canShipAfterSave.value) await shipAfterSave();
     notifyRefresh();

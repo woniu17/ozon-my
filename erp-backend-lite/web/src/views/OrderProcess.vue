@@ -201,6 +201,7 @@ const purchaseForm = reactive({
   allocMode: 'auto', // 'auto'=勾选自动填写金额, 'manual'=取消勾选手动填写
   items: [], // [{ itemId, offerId, title, quantity, amount }]
   platformGoods: [], // 选中平台订单的商品(图片/数量/规格),随提交写入 items_json,免事后补全
+  selectedOrders: [], // 勾选的各笔平台订单独立提交体(多选时逐单落库,一笔订单=一个采购单)
 });
 // auto 模式拼单预览:查询已关联包裹信息(含数量,用于加权分摊预览)
 const lookupResult = ref(null);
@@ -958,6 +959,21 @@ function openPurchase(pkg) {
 }
 
 // ── auto 模式:查询采购单已关联包裹(含数量,用于加权分摊预览) ──
+/** 多选平台订单:逐单查询合并已关联包裹(同包裹去重) */
+async function lookupMerged(platform, orders) {
+  const merged = { exists: false, linkedPackages: [] };
+  for (const od of orders) {
+    const r = await lookupPurchase(platform, od.sn);
+    if (r?.exists) {
+      merged.exists = true;
+      for (const p of r.linkedPackages || []) {
+        if (!merged.linkedPackages.some((x) => x.package_no === p.package_no)) merged.linkedPackages.push(p);
+      }
+    }
+  }
+  return merged;
+}
+
 async function refreshLookup() {
   const sn = purchaseForm.purchaseSn.trim();
   if (purchaseForm.platform === 'other' || !sn) {
@@ -966,7 +982,10 @@ async function refreshLookup() {
   }
   lookupLoading.value = true;
   try {
-    const r = await lookupPurchase(purchaseForm.platform, sn);
+    const orders = purchaseForm.selectedOrders || [];
+    const r = orders.length > 1
+      ? await lookupMerged(purchaseForm.platform, orders)
+      : await lookupPurchase(purchaseForm.platform, orders.length === 1 ? orders[0].sn : sn);
     lookupResult.value = r.exists ? r : null;
   } catch (e) {
     console.warn('lookupPurchase failed', e);
@@ -974,6 +993,14 @@ async function refreshLookup() {
   } finally {
     lookupLoading.value = false;
   }
+}
+
+/** purchaseSn 逗号串是否与当前勾选的平台订单完全一致(合法多选,保存时逐单提交) */
+function isValidMultiSelected(sn) {
+  const orders = purchaseForm.selectedOrders || [];
+  if (orders.length < 2) return false;
+  const parts = sn.split(',').map((s) => s.trim()).filter(Boolean);
+  return parts.length === orders.length && parts.every((p) => orders.some((o) => o.sn === p));
 }
 
 // auto 模式分摊预览计算
@@ -1126,10 +1153,9 @@ async function savePurchase(withShip = false) {
     return;
   }
   const sn = purchaseForm.purchaseSn.trim();
-  // 2026-09-20 多单号防误粘:一次提交只允许一笔采购单号
-  // (多选平台订单曾把单号 join(',') 拼接提交,产生"单号A,单号B"的采购单,物流同步/单号查找全部失效)
-  if (/[,，;；\s]/.test(sn)) {
-    show('采购单号一次只能填写一笔(检测到多个单号或分隔符)，多笔平台订单请分次勾选保存', 'error');
+  // 2026-09-20 多单号防误粘:手填仅允许一笔单号;多选平台订单的拼接单号走逐单提交
+  if (/[,，;；\s]/.test(sn) && !isValidMultiSelected(sn)) {
+    show('采购单号一次只能填写一笔(检测到多个单号或分隔符)，多笔平台订单请在列表勾选后保存', 'error');
     return;
   }
   // manual 模式 + 无单号 + 无新勾选 + 有已有采购 = 修改已有采购单的分摊金额(2026-09-19 语义重构)
@@ -1163,17 +1189,21 @@ async function savePurchase(withShip = false) {
     return;
   }
   // 拼单检测:platform≠other 且 purchaseSn 非空时,查询采购单是否已关联其他包裹
-  // auto 模式下已有 lookupResult(manual 模式实时查询)
+  // auto 模式下已有 lookupResult(manual 模式实时查询);多选时逐单查询合并
+  const orders = purchaseForm.selectedOrders || [];
   if (purchaseForm.platform !== 'other' && sn) {
     try {
-      const r = lookupResult.value || await lookupPurchase(purchaseForm.platform, sn);
+      const r = lookupResult.value
+        || (orders.length > 1
+          ? await lookupMerged(purchaseForm.platform, orders)
+          : await lookupPurchase(purchaseForm.platform, orders.length === 1 ? orders[0].sn : sn));
       if (r?.exists && r.linkedPackages?.length) {
         const sum = r.linkedPackages.reduce((s, p) => s + (Number(p.allocated_amount) || 0), 0);
         const lines = r.linkedPackages
           .map((p) => `  · ${p.package_no} (${p.posting_number}) 数量${p.quantity||0} 分摊 ${fmtMoney(p.allocated_amount)}`)
           .join('\n');
         const ok = await confirmStore.ask({
-          message: `采购单 ${sn} 已关联 ${r.linkedPackages.length} 个包裹(分摊合计 ${fmtMoney(sum)}):\n${lines}\n\n本次将追加关联到当前包裹 ${purchaseForm.packageNo}${isAuto ? '(auto 模式:已关联包裹的分摊金额将按数量重新加权计算)' : ''}。`,
+          message: `采购单 ${orders.length > 1 ? orders.length + ' 笔' : sn} 已关联 ${r.linkedPackages.length} 个包裹(分摊合计 ${fmtMoney(sum)}):\n${lines}\n\n本次将追加关联到当前包裹 ${purchaseForm.packageNo}${isAuto ? '(auto 模式:已关联包裹的分摊金额将按数量重新加权计算)' : ''}。`,
           confirmText: '追加关联',
           danger: true,
         });
@@ -1188,22 +1218,48 @@ async function savePurchase(withShip = false) {
   try {
     // 先冲回 ✕ 标记删除的已有采购,再提交新采购(顺序执行保证聚合正确)
     for (const id of removedIds) await unlinkPurchase(id, purchaseForm.packageId);
-    await submitPurchase({
-      packageId: purchaseForm.packageId,
-      platform: purchaseForm.platform,
-      purchaseSn: purchaseForm.purchaseSn.trim() || null,
-      buyerAccount: purchaseForm.buyerAccount.trim() || null,
-      buyerUserId: purchaseForm.buyerUserId.trim() || null,
-      sellerName: purchaseForm.sellerName.trim() || null,
-      paymentAmount: Number(purchaseForm.paymentAmount) || null,
-      logisticsCompany: purchaseForm.logisticsCompany.trim() || null,
-      logisticsNo: hasNo ? purchaseForm.logisticsNo.trim() : null,
-      note: purchaseForm.note.trim() || null,
-      items,
-      platformGoods: purchaseForm.platformGoods,
-      allocMode: isAuto ? 'auto' : 'manual',
-    });
-    show('采购信息已提交,包裹已流转到待打单发货', 'success');
+    // 多笔平台订单:逐单提交(一笔订单=一个采购单,auto 由后端按数量加权重算各单分摊;
+    // manual 按各单金额占比拆分手填分摊)。单笔/手填走原单次提交。
+    if (orders.length > 1) {
+      const totalAmount = orders.reduce((s, o) => s + (o.paymentAmount || 0), 0) || 1;
+      for (const od of orders) {
+        await submitPurchase({
+          packageId: purchaseForm.packageId,
+          platform: purchaseForm.platform,
+          purchaseSn: od.sn,
+          buyerAccount: od.buyerAccount,
+          buyerUserId: od.buyerUserId,
+          sellerName: od.sellerName,
+          paymentAmount: od.paymentAmount || null,
+          logisticsCompany: od.logisticsCompany,
+          logisticsNo: od.logisticsNo,
+          note: purchaseForm.note.trim() || null,
+          items: isAuto
+            ? items
+            : items.map((it) => ({ ...it, amount: Math.round(((Number(it.amount) || 0) * ((od.paymentAmount || 0) / totalAmount)) * 100) / 100 })),
+          platformGoods: od.platformGoods,
+          allocMode: isAuto ? 'auto' : 'manual',
+        });
+      }
+      show(`已提交 ${orders.length} 笔采购,包裹已流转到待打单发货`, 'success');
+    } else {
+      await submitPurchase({
+        packageId: purchaseForm.packageId,
+        platform: purchaseForm.platform,
+        purchaseSn: purchaseForm.purchaseSn.trim() || null,
+        buyerAccount: purchaseForm.buyerAccount.trim() || null,
+        buyerUserId: purchaseForm.buyerUserId.trim() || null,
+        sellerName: purchaseForm.sellerName.trim() || null,
+        paymentAmount: Number(purchaseForm.paymentAmount) || null,
+        logisticsCompany: purchaseForm.logisticsCompany.trim() || null,
+        logisticsNo: hasNo ? purchaseForm.logisticsNo.trim() : null,
+        note: purchaseForm.note.trim() || null,
+        items,
+        platformGoods: purchaseForm.platformGoods,
+        allocMode: isAuto ? 'auto' : 'manual',
+      });
+      show('采购信息已提交,包裹已流转到待打单发货', 'success');
+    }
     purchaseOpen.value = false;
     loadTabs();
     loadList();
@@ -1736,12 +1792,24 @@ watch(newSelectedOrders, (sel) => {
     purchaseForm.logisticsNo = '';
     purchaseForm.logisticsCompany = '';
     purchaseForm.platformGoods = [];
+    purchaseForm.selectedOrders = [];
     purchaseForm.platform = restoredPurchases.value[0]?.platform || 'other';
     return;
   }
   const first = sel[0];
   purchaseForm.platform = first._platform;
   purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
+  // 每笔平台订单的独立提交体(多选保存时逐单落库,一笔订单=一个采购单,杜绝单号拼接)
+  purchaseForm.selectedOrders = sel.map((o) => ({
+    sn: o.orderSn,
+    buyerAccount: o.account || o.buyerUsername || null,
+    buyerUserId: o.buyerUserId || null,
+    sellerName: o.mallName || o.sellerName || null,
+    paymentAmount: Number(o.amount) || 0,
+    logisticsCompany: o.logisticsCompany || null,
+    logisticsNo: o.trackingNumber || null,
+    platformGoods: o.goods || [],
+  }));
   const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
   purchaseForm.sellerName = sellers.join(',');
   // 买家身份:采购账号统一用配置账号名(PLATFORM_ACCOUNTS_*,如 linqx/chenlin/linrh/yefu),
