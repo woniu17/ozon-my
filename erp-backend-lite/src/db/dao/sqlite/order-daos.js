@@ -2326,4 +2326,5 @@ export const orderPackageDao = {
   syncFromMiaoshou,
   enrichPurchaseItems,
   listPendingPurchases,
+  backfillProductCache,
 };
