@@ -2,6 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- 1688 商品图等外域图床有 Referer 防盗链(带本站 Referer 返回 403),图片请求不带 Referer 即可正常加载 -->
+    <meta name="referrer" content="no-referrer" />
     <script>
       var coverSupport = 'CSS' in window && typeof CSS.supports === 'function' && (CSS.supports('top: env(a)') ||
         CSS.supports('top: constant(a)'))

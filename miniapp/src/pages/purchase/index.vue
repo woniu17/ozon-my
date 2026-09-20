@@ -146,7 +146,6 @@
 
         <!-- manual:手填各产品行金额(适用于优惠券/额外成本导致实际采购价与订单金额不符) -->
         <template v-else>
-          <view class="tip">采购使用了优惠券或存在其他成本、实际采购价与订单金额不符时,在各行填写实际分摊金额(已按数量预填)。</view>
           <view v-for="(it, i) in manualItems" :key="i" class="alloc-row">
             <image v-if="it.picUrl" class="alloc-img" :src="it.picUrl" mode="aspectFill" />
             <view v-else class="alloc-img"></view>
@@ -255,37 +254,78 @@
         </view>
       </view>
 
-      <!-- 利润预估与一键调价(分摊=将保存口径:含待新增采购暂存;口径同价格管理单件) -->
+      <!-- 订单产品 + 单价调整(合并卡片,与 Web 端同布局:上=产品信息,下=折叠的调整对比;分摊=将保存口径) -->
       <view v-if="profitRows.length" class="card">
-        <view class="section-title">利润预估与调价</view>
-        <view class="tip-inline">佣金 16% + 国际配送 ¥3.37+0.0281/g;调整的是该 SKU 上架价,只影响后续新订单。</view>
-        <view v-for="p in profitRows" :key="p.itemId" class="pe-row">
-          <image v-if="p.picUrl" class="pe-img" :src="p.picUrl" mode="aspectFill" />
-          <view v-else class="pe-img"></view>
-          <view class="pe-main">
-            <view class="pe-title">{{ p.title || '—' }}</view>
-            <view class="pe-sub">SKU {{ p.sku || '—' }} ×{{ p.qty }} · 分摊 ¥{{ p.alloc.toFixed(2) }}</view>
-            <view class="pe-profit">
-              预估利润 <b :class="{ neg: p.profit < 0 }">¥{{ p.profit.toFixed(2) }}</b>
-              <text v-if="p.profitRateCost != null" class="pe-rate" :class="{ neg: p.profit < 0 }">{{ p.profitRateCost.toFixed(1) }}%</text>
-              <text v-if="p.delivery == null" class="pe-est">估</text>
+        <view v-for="p in profitRows" :key="p.itemId" class="po2-card">
+          <!-- 产品信息:图 | 名称+SKU/OfferID | 数量 | 售价/采购价 -->
+          <view class="po2-info">
+            <image v-if="p.picUrl" class="po2-img" :src="p.picUrl" mode="aspectFill" />
+            <view v-else class="po2-img"></view>
+            <view class="po2-main">
+              <view class="po2-name">{{ p.title && p.title.length > 15 ? p.title.slice(0, 15) + '…' : (p.title || '—') }}</view>
+              <view class="po2-code">{{ p.sku || '—' }}</view>
+              <view class="po2-code">{{ p.offerId || '—' }}</view>
             </view>
-            <view class="pe-adj">
-              <picker mode="selector" :range="RATE_LABELS" @change="onRatePick(p, $event)">
+            <view class="po2-qty">× {{ p.qty }}</view>
+            <view class="po2-prices">
+              <view class="po2-price-row"><text class="po2-price-label">售价</text><text class="po2-price-val">¥{{ (p.price * p.qty).toFixed(2) }}</text></view>
+              <view class="po2-price-row"><text class="po2-price-label">采购价</text><text class="po2-price-val">¥{{ p.alloc.toFixed(2) }}</text></view>
+            </view>
+          </view>
+          <!-- 单价调整(默认折叠,点击展开;单件口径) -->
+          <view class="po2-cmp">
+            <view class="po2-cmp-toggle" @click="toggleCmp(p.sku)">
+              <text class="po2-cmp-caret">{{ cmpExpanded[p.sku] ? '▾' : '▸' }}</text>
+              <text class="po2-cmp-title">单价调整</text>
+              <picker v-if="cmpExpanded[p.sku]" class="po2-rate-pick" mode="selector" :range="RATE_LABELS" @change="onRatePick(p, $event)">
                 <view class="pe-rate-chip">{{ p.rate }}%</view>
               </picker>
-              <text class="pe-suggest" :class="{ off: p.suggested == null }">{{ p.suggested != null ? '建议价 ¥' + p.suggested : '建议价 —' }}</text>
               <button
+                v-if="cmpExpanded[p.sku]"
                 class="mini-btn primary"
                 :disabled="!p.canAdjust || adjustingSku === p.sku"
                 @click="adjustSkuPrice(p)"
               >{{ adjustingSku === p.sku ? '调价中…' : '调价' }}</button>
             </view>
-            <view v-if="!p.canAdjust" class="pe-why">{{ p.missingWhy }}</view>
+            <block v-if="cmpExpanded[p.sku]">
+              <view class="po2-cmp-rows">
+                <view class="po2-cmp-tr">
+                  <text class="po2-cmp-label">销售单价</text>
+                  <text class="po2-cmp-old">{{ p.listingPrice != null ? p.listingPrice.toFixed(2) : '—' }}</text>
+                  <text class="po2-cmp-arrow">→</text>
+                  <text class="po2-cmp-new">{{ p.suggested != null ? p.suggested : '—' }}</text>
+                </view>
+                <view class="po2-cmp-tr">
+                  <text class="po2-cmp-label">ozon佣金</text>
+                  <text class="po2-cmp-old">{{ p.oldCommission != null ? p.oldCommission.toFixed(2) : '—' }}</text>
+                  <text class="po2-cmp-arrow">→</text>
+                  <text class="po2-cmp-new">{{ p.newCommission != null ? p.newCommission.toFixed(2) : '—' }}</text>
+                </view>
+                <view class="po2-cmp-tr">
+                  <text class="po2-cmp-label">国际物流费</text>
+                  <text class="po2-cmp-old">{{ p.unitDelivery != null ? p.unitDelivery.toFixed(2) : '—' }}</text>
+                  <text class="po2-cmp-arrow"></text>
+                  <text class="po2-cmp-new"></text>
+                </view>
+                <view class="po2-cmp-tr">
+                  <text class="po2-cmp-label">利润</text>
+                  <text class="po2-cmp-old" :class="{ neg: p.oldProfit < 0 }">{{ p.oldProfit != null ? p.oldProfit.toFixed(2) : '—' }}</text>
+                  <text class="po2-cmp-arrow">→</text>
+                  <text class="po2-cmp-new" :class="{ neg: p.newProfit < 0 }">{{ p.newProfit != null ? p.newProfit.toFixed(2) : '—' }}</text>
+                </view>
+                <view class="po2-cmp-tr">
+                  <text class="po2-cmp-label">成本利润率</text>
+                  <text class="po2-cmp-old" :class="{ neg: p.oldProfit < 0 }">{{ p.oldRateC != null ? (p.oldRateC * 100).toFixed(1) + '%' : '—' }}</text>
+                  <text class="po2-cmp-arrow">→</text>
+                  <text class="po2-cmp-new" :class="{ neg: p.newProfit < 0 }">{{ p.newRateC != null ? (p.newRateC * 100).toFixed(1) + '%' : '—' }}</text>
+                </view>
+              </view>
+              <view v-if="!p.canAdjust" class="pe-why">{{ p.missingWhy }}</view>
+            </block>
           </view>
         </view>
         <view class="pe-total">
-          采购合计 ¥{{ profitTotal.alloc.toFixed(2) }} · 预估利润合计 <b :class="{ neg: profitTotal.profit < 0 }">¥{{ profitTotal.profit.toFixed(2) }}</b>
+          采购合计 ¥{{ profitTotal.alloc.toFixed(2) }} · 预估利润合计 <b :class="{ neg: profitTotal.profit < 0 }">¥{{ profitTotal.profit.toFixed(2) }}</b><text v-if="profitTotal.rateC != null"> · 成本利润率 {{ profitTotal.rateC.toFixed(1) }}%</text>
         </view>
       </view>
 
@@ -550,19 +590,30 @@ const profitRows = computed(() => {
   return items.value.map((it) => {
     const alloc = Math.round((keptByItem.get(it.id) || 0) * 100) / 100;
     const qty = Number(it.quantity) || 0;
+    const price = Number(it.price) || 0;
     const info = skuPricing.value[it.sku] || null;
     const unitCost = qty > 0 ? alloc / qty : 0;
     const unitDelivery = unitDeliveryOf(info?.weightG);
     const rate = poRates[it.sku] || DEFAULT_RATE;
     const base = calcProfit(it, alloc);
+    const suggested = unitCost > 0 && unitDelivery != null
+      ? Math.ceil((unitCost * (1 + rate / 100) + unitDelivery) / (1 - PM_COMMISSION_RATE))
+      : null;
+    // 单价调整对比(单件口径,与 Web 端一致):调整前=当前上架价,调整后=建议价
+    const oldPrice = info?.price ?? null;
+    const oldCommission = oldPrice != null ? oldPrice * PM_COMMISSION_RATE : null;
+    const newCommission = suggested != null ? suggested * PM_COMMISSION_RATE : null;
+    const oldProfit = oldPrice != null && unitDelivery != null
+      ? Math.round((oldPrice * (1 - PM_COMMISSION_RATE) - unitDelivery - unitCost) * 100) / 100 : null;
+    const newProfit = suggested != null && unitDelivery != null
+      ? Math.round((suggested * (1 - PM_COMMISSION_RATE) - unitDelivery - unitCost) * 100) / 100 : null;
+    const oldRateC = oldProfit != null && unitCost > 0 ? Math.round((oldProfit / unitCost) * 1000) / 1000 : null;
+    const newRateC = newProfit != null && unitCost > 0 ? Math.round((newProfit / unitCost) * 1000) / 1000 : null;
     return {
-      itemId: it.id, sku: it.sku, title: it.title, picUrl: it.picUrl,
-      qty, alloc, rate, ...base,
-      listingPrice: info?.price ?? null,
-      suggested: unitCost > 0 && unitDelivery != null
-        ? Math.ceil((unitCost * (1 + rate / 100) + unitDelivery) / (1 - PM_COMMISSION_RATE))
-        : null,
-      unitCost,
+      itemId: it.id, sku: it.sku, offerId: it.offerId, title: it.title, picUrl: it.picUrl,
+      qty, price, alloc, rate, ...base,
+      listingPrice: oldPrice, suggested, unitCost, unitDelivery,
+      oldCommission, newCommission, oldProfit, newProfit, oldRateC, newRateC,
       canAdjust: !!(it.sku && unitCost > 0 && unitDelivery != null && info?.inCache && info?.hasProductId),
       missingWhy: !it.sku ? '订单商品缺 SKU'
         : unitCost <= 0 ? '分摊金额为 0'
@@ -574,10 +625,19 @@ const profitRows = computed(() => {
   });
 });
 
-const profitTotal = computed(() => ({
-  alloc: Math.round(profitRows.value.reduce((s, p) => s + p.alloc, 0) * 100) / 100,
-  profit: Math.round(profitRows.value.reduce((s, p) => s + p.profit, 0) * 100) / 100,
-}));
+const profitTotal = computed(() => {
+  const alloc = Math.round(profitRows.value.reduce((s, p) => s + p.alloc, 0) * 100) / 100;
+  const profit = Math.round(profitRows.value.reduce((s, p) => s + p.profit, 0) * 100) / 100;
+  return {
+    alloc,
+    profit,
+    rateC: alloc > 0 ? Math.round((profit / alloc) * 1000) / 10 : null, // 成本利润率%(1位小数)
+  };
+});
+
+// 单价调整折叠(默认收起,按 SKU 记忆展开状态)
+const cmpExpanded = reactive({});
+function toggleCmp(sku) { cmpExpanded[sku] = !cmpExpanded[sku]; }
 
 // Step3 预览:按将保存的分摊(auto 预览/manual 手输)估合计利润
 const step3Profit = computed(() => {
@@ -1297,90 +1357,151 @@ onLoad((opts) => {
   color: #86909c;
 }
 
-.pe-row {
+/* ── 产品卡片 + 单价调整(与 Web 端同布局:上=产品信息,下=折叠对比) ── */
+.po2-card {
+  border: 1rpx solid #e5e6eb;
+  border-radius: 16rpx;
+  padding: 18rpx 20rpx;
+  margin-bottom: 16rpx;
+  background: #fff;
+}
+.po2-info {
   display: flex;
   align-items: flex-start;
-  padding: 16rpx 0;
-  border-bottom: 1rpx solid #f7f8fa;
 }
-
-.pe-row:last-of-type {
-  border-bottom: none;
-}
-
-.pe-img {
+.po2-img {
   width: 96rpx;
   height: 96rpx;
   border-radius: 12rpx;
   background: #f2f3f5;
   flex-shrink: 0;
 }
-
-.pe-main {
+.po2-main {
   flex: 1;
+  min-width: 0;
   margin-left: 16rpx;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 4rpx;
 }
-
-.pe-title {
+.po2-name {
   font-size: 25rpx;
+  font-weight: 600;
   color: #1f2329;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-.pe-sub {
-  margin-top: 4rpx;
+.po2-code {
   font-size: 22rpx;
   color: #86909c;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-.pe-profit {
-  margin-top: 8rpx;
+/* 数量列(无标题,与产品名同行) */
+.po2-qty {
+  flex-shrink: 0;
+  margin-left: 12rpx;
+  line-height: 36rpx;
   font-size: 24rpx;
-  color: #4e5969;
+  color: #86909c;
+  font-variant-numeric: tabular-nums;
 }
-
-.pe-profit b {
-  font-size: 28rpx;
+/* 售价/采购价列(上下两行,金额右对齐小数对齐) */
+.po2-prices {
+  flex-shrink: 0;
+  margin-left: 12rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 4rpx;
+}
+.po2-price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8rpx;
+  font-size: 24rpx;
+}
+.po2-price-label {
+  width: 68rpx;
+  flex-shrink: 0;
+  color: #86909c;
+}
+.po2-price-val {
+  min-width: 130rpx;
+  text-align: right;
+  color: #1f2329;
+  font-variant-numeric: tabular-nums;
+}
+/* 单价调整(默认折叠,点击展开) */
+.po2-cmp {
+  margin-top: 16rpx;
+  padding-top: 14rpx;
+  border-top: 1rpx dashed #e5e6eb;
+}
+.po2-cmp-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+.po2-cmp-caret {
+  width: 28rpx;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+.po2-cmp-title {
+  font-size: 25rpx;
   font-weight: 600;
+  color: #1f2329;
+}
+.po2-rate-pick {
+  margin-left: auto;
+}
+.po2-cmp-rows {
+  margin-top: 8rpx;
+}
+.po2-cmp-tr {
+  display: flex;
+  align-items: baseline;
+  padding: 6rpx 0;
+  font-size: 24rpx;
+}
+.po2-cmp-label {
+  flex: 1;
+  color: #86909c;
+}
+.po2-cmp-old {
+  width: 150rpx;
+  text-align: right;
+  color: #4e5969;
+  font-variant-numeric: tabular-nums;
+}
+.po2-cmp-arrow {
+  width: 44rpx;
+  text-align: center;
+  color: #94a3b8;
+}
+.po2-cmp-new {
+  width: 150rpx;
+  text-align: right;
+  color: #1f2329;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.po2-cmp-old.neg,
+.po2-cmp-new.neg {
+  color: #f53f3f;
 }
 
-.pe-profit b,
-.pe-rate,
 .pe-preview b,
 .pe-total b {
   color: #00b42a;
 }
 
-.pe-profit b.neg,
-.pe-rate.neg,
 .pe-preview b.neg,
 .pe-total b.neg {
   color: #f53f3f;
-}
-
-.pe-rate {
-  margin-left: 12rpx;
-  font-size: 22rpx;
-  font-weight: 600;
-}
-
-.pe-est {
-  margin-left: 8rpx;
-  font-size: 20rpx;
-  color: #86909c;
-  border: 1rpx solid #e5e6eb;
-  border-radius: 6rpx;
-  padding: 0 8rpx;
-}
-
-.pe-adj {
-  margin-top: 12rpx;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
 }
 
 .pe-rate-chip {
@@ -1389,18 +1510,6 @@ onLoad((opts) => {
   background: #f2f3f5;
   border-radius: 10rpx;
   padding: 4rpx 20rpx;
-}
-
-.pe-suggest {
-  margin-left: 16rpx;
-  font-size: 24rpx;
-  color: #1f2329;
-  font-weight: 600;
-}
-
-.pe-suggest.off {
-  color: #a6abb3;
-  font-weight: 400;
 }
 
 .pe-why {

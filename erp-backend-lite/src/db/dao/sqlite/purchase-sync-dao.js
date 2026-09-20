@@ -275,9 +275,17 @@ function insertPo(imp, report) {
   return Number(r.id);
 }
 
-/** 按 (ozon_order_id, sku, offer_id) 解析产品行(sku/offerId 均空 = 包裹级关联 → null) */
+/** 按 (ozon_order_id, sku, offer_id) 解析产品行(sku/offerId 均空 = 包裹级关联 → 单 SKU 订单回退唯一行,多 SKU 返回 null) */
 function resolveItemId(orderId, sku, offerId) {
-  if (sku == null && offerId == null) return null; // 包裹级关联
+  if (sku == null && offerId == null) {
+    // 包裹级关联:订单恰好只有一个产品行时可精确定位,回退该行
+    // (2026-09-21:避免妙手同步再产生新的包裹级 link——订单处理页采购/利润/调价均按行级匹配,包裹级会读到分摊 0)
+    const only = db
+      .prepare(`SELECT id FROM op_ozon_order_item WHERE ozon_order_id = ?`)
+      .all(orderId);
+    if (only.length === 1) return Number(only[0].id);
+    return null; // 多 SKU 无法定位,保留包裹级(需人工迁移)
+  }
   const row = db
     .prepare(
       `SELECT id FROM op_ozon_order_item

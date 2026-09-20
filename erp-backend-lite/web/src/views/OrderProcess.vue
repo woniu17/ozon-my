@@ -1466,17 +1466,6 @@ const newSelectedOrders = computed(() => allSelectedOrders.value.filter((o) => !
 const newSelectedTotal = computed(() =>
   newSelectedOrders.value.reduce((s, o) => s + (Number(o.amount) || 0), 0).toFixed(2));
 
-// manual 模式改分摊提示(2026-09-19):无单号、无新勾选、有未删除的已有采购时,
-// 手填金额的语义是"修改已有采购单分摊到本包裹的金额",弹窗显式提示避免误解
-const allocEditHint = computed(() => {
-  if (purchaseForm.allocMode !== 'manual') return '';
-  if (purchaseForm.purchaseSn.trim() || newSelectedOrders.value.length > 0) return '';
-  const kept = restoredPurchases.value.filter((r) => !removedPurchaseIds.value.has(r.purchaseOrderId));
-  if (!kept.length) return '';
-  const pos = kept.map((r) => r.orderSn || '(手工单)').join('、');
-  return `手填金额将更新已有采购单 ${pos} 分摊到本包裹的金额,不会新增采购单`;
-});
-
 function switchImportTab(t) {
   if (importTab.value === t || importLoading.value) return;
   importTab.value = t;
@@ -1640,12 +1629,23 @@ const profitRows = computed(() => purchaseForm.items.map((it) => {
     ? Math.ceil((unitCost * (1 + rate / 100) + unitDelivery) / (1 - PM_COMMISSION_RATE))
     : null;
   const canAdjust = !!(it.sku && unitCost > 0 && unitDelivery != null && info?.inCache && info?.hasProductId);
+  // 调整对比(单件口径):调整前=当前上架价(listingPrice),调整后=建议价(suggested)
+  const oldPrice = info?.price ?? null;
+  const oldCommission = oldPrice != null ? oldPrice * PM_COMMISSION_RATE : null;
+  const newCommission = suggested != null ? suggested * PM_COMMISSION_RATE : null;
+  const oldProfit = oldPrice != null && unitDelivery != null
+    ? Math.round((oldPrice * (1 - PM_COMMISSION_RATE) - unitDelivery - unitCost) * 100) / 100 : null;
+  const newProfit = suggested != null && unitDelivery != null
+    ? Math.round((suggested * (1 - PM_COMMISSION_RATE) - unitDelivery - unitCost) * 100) / 100 : null;
+  const oldRateC = oldProfit != null && unitCost > 0 ? Math.round((oldProfit / unitCost) * 1000) / 1000 : null;
+  const newRateC = newProfit != null && unitCost > 0 ? Math.round((newProfit / unitCost) * 1000) / 1000 : null;
   return {
-    itemId: it.itemId, sku: it.sku, title: it.title, picUrl: it.picUrl, pdpUrl: it.pdpUrl,
+    itemId: it.itemId, sku: it.sku, offerId: it.offerId, title: it.title, picUrl: it.picUrl, pdpUrl: it.pdpUrl,
     qty, price, alloc, revenue, commission, delivery, unitCost, rate,
     profit: Math.round(profit * 100) / 100,
     profitRateCost: alloc > 0 ? Math.round((profit / alloc) * 10000) / 100 : null,
     suggested, canAdjust, listingPrice: info?.price ?? null,
+    unitDelivery, oldCommission, newCommission, oldProfit, newProfit, oldRateC, newRateC,
     missingWhy: !it.sku ? '订单商品缺 SKU'
       : unitCost <= 0 ? '分摊金额为 0'
       : unitDelivery == null ? 'SKU 未维护重量(价格管理)'
@@ -1662,9 +1662,27 @@ const profitTotal = computed(() => {
   return {
     alloc: Math.round(alloc * 100) / 100,
     profit: Math.round(profit * 100) / 100,
+    rateC: alloc > 0 ? Math.round((profit / alloc) * 1000) / 10 : null, // 成本利润率%(1位小数)
     allWeighted: profitRows.value.length > 0 && profitRows.value.every((p) => p.delivery != null),
   };
 });
+
+// manual 模式直接录入"行分摊金额"(该 SKU 全部数量的采购总额,与 H5 端一致)
+function amountDisplay(idx) {
+  const it = purchaseForm.items[idx];
+  const amt = Number(it?.amount) || 0;
+  return amt ? amt.toFixed(2) : '';
+}
+function onAmountInput(idx, ev) {
+  const it = purchaseForm.items[idx];
+  if (!it) return;
+  const v = Number(String(ev.target.value).replace(/[^\d.]/g, '')) || 0;
+  it.amount = String(Math.round(v * 100) / 100);
+}
+
+// 单价调整折叠(默认收起,按 SKU 记忆展开状态)
+const poCmpExpanded = reactive({});
+function togglePoCmp(sku) { poCmpExpanded[sku] = !poCmpExpanded[sku]; }
 
 // 一键调价:先同步成本基准(本单分摊单价)再走价格管理改价(服务端按基准复算校验)
 const adjustingSku = ref('');
@@ -3488,92 +3506,56 @@ onUnmounted(() => {
         <div class="purchase-col-right">
         <!-- ① 最上方:订单产品(只读展示,采购金额从第②块同步显示上来) -->
         <div class="prod-title-row">
-          <span class="form-section-title" style="margin: 0">订单产品</span>
           <label class="alloc-checkbox">
             <input type="checkbox" :checked="purchaseForm.allocMode === 'auto'" @change="purchaseForm.allocMode = $event.target.checked ? 'auto' : 'manual'" />
             <span>自动填写金额</span>
           </label>
         </div>
-        <!-- manual 模式用途说明(与 H5 端一致):优惠券/其他成本导致实际采购价与订单金额不符 -->
-        <div v-if="purchaseForm.allocMode === 'manual'" class="alloc-edit-hint">
-          采购使用了优惠券或存在其他成本、实际采购价与订单金额不符时,在各行填写实际分摊金额(已按数量预填)。
-        </div>
-        <div v-if="allocEditHint" class="alloc-edit-hint">{{ allocEditHint }}</div>
-        <table class="data-table item-table">
-          <thead>
-            <tr>
-              <th style="width: 260px">产品</th>
-              <th>数量</th>
-              <th>售价</th>
-              <th style="width: 140px">采购金额</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(it, idx) in purchaseForm.items" :key="it.itemId">
-              <td>
-                <div class="product-item">
-                  <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box">
-                    <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
-                  </a>
-                  <div class="product-main">
-                    <div class="product-title">{{ it.title || '—' }}</div>
-                    <div class="product-sub">SKU {{ it.offerId }}</div>
+        <!-- ① 订单产品 + 利润预估与调价(合并卡片:上=产品信息,下=调整对比;口径同价格管理单件) -->
+        <div v-if="profitRows.length" class="po-card-list">
+          <div v-for="(p, idx) in profitRows" :key="p.itemId" class="po-card">
+            <!-- 第一部分:产品信息(图片 + 名称/SKU/OfferID/数量/售价/采购价) -->
+            <div class="po-card-info">
+              <a v-if="p.picUrl" :href="p.pdpUrl" target="_blank" rel="noopener" class="po-card-img">
+                <img :src="p.picUrl" referrerpolicy="no-referrer" loading="lazy" alt="" />
+              </a>
+              <div v-else class="po-card-img po-card-img-empty"></div>
+              <div class="po-card-fields">
+                <!-- 中间:产品名 + SKU/OfferID 值(无标题) -->
+                <div class="pf-main">
+                  <div class="pf-row pf-name" :title="p.title">{{ p.title && p.title.length > 15 ? p.title.slice(0, 15) + '…' : (p.title || '—') }}</div>
+                  <div class="pf-row"><span class="pf-val mono">{{ p.sku || '—' }}</span></div>
+                  <div class="pf-row"><span class="pf-val mono">{{ p.offerId || '—' }}</span></div>
+                </div>
+                <!-- 第二列:数量(无标题,与产品名同行) -->
+                <div class="pf-qty">× {{ p.qty }}</div>
+                <!-- 第三列:售价/采购价(上下两行,金额右对齐) -->
+                <div class="pf-extra">
+                  <div class="pf-row"><span class="pf-label">售价</span><span class="pf-val">¥{{ (p.price * p.qty).toFixed(2) }}</span></div>
+                  <div class="pf-row">
+                    <span class="pf-label">采购价</span>
+                    <span v-if="purchaseForm.allocMode === 'auto'" class="pf-val">¥{{ p.alloc.toFixed(2) }}</span>
+                    <input
+                      v-else
+                      class="filter-input pf-cost-input"
+                      inputmode="decimal"
+                      :value="amountDisplay(idx)"
+                      placeholder="0.00"
+                      @input="onAmountInput(idx, $event)"
+                    />
                   </div>
                 </div>
-              </td>
-              <td>× {{ it.quantity }}</td>
-              <td>{{ fmtMoney(it.price) }}</td>
-              <td>
-                <!-- auto 模式:只读显示分摊预览;manual 模式:可输入(保留已分摊数值) -->
-                <span v-if="purchaseForm.allocMode === 'auto'" class="alloc-amount-display">
-                  {{ autoPreview && autoPreview.items[idx] ? fmtMoney(autoPreview.items[idx].previewAmount) : '—' }}
-                </span>
-                <input v-else v-model.trim="it.amount" class="filter-input amount-input" placeholder="0.00" />
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <!-- 利润预估与调价(分摊金额实时联动;口径同价格管理单件:佣金16% + 配送3.37+0.0281/g) -->
-        <div v-if="profitRows.length" class="profit-est">
-          <div class="prod-title-row">
-            <span class="form-section-title" style="margin: 0">利润预估与调价</span>
-            <span class="profit-est-sub">调整的是该 SKU 上架价,只影响后续新订单</span>
-          </div>
-          <table class="data-table profit-table">
-            <thead>
-              <tr>
-                <th style="width: 220px">产品</th>
-                <th style="width: 90px">分摊</th>
-                <th style="width: 150px">预估利润</th>
-                <th style="width: 120px">目标率</th>
-                <th style="width: 100px">建议价</th>
-                <th style="width: 80px"></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="p in profitRows" :key="p.itemId">
-                <td>
-                  <div class="product-item">
-                    <a v-if="p.picUrl" :href="p.pdpUrl" target="_blank" rel="noopener" class="product-img-box">
-                      <img :src="p.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
-                    </a>
-                    <div class="product-main">
-                      <div class="product-title">{{ p.title || '—' }}</div>
-                      <div class="product-sub">SKU {{ p.sku || '—' }} ×{{ p.qty }}</div>
-                    </div>
-                  </div>
-                </td>
-                <td class="col-num">¥{{ p.alloc.toFixed(2) }}</td>
-                <td
-                  class="col-num"
-                  :title="`收入 ¥${(p.revenue).toFixed(2)} − 佣金 ¥${p.commission.toFixed(2)}${p.delivery != null ? ` − 配送 ¥${p.delivery.toFixed(2)}` : '(未维护重量,未扣配送)'} − 采购 ¥${p.alloc.toFixed(2)}`"
-                >
-                  <b :class="{ 'profit-neg': p.profit < 0 }">¥{{ p.profit.toFixed(2) }}</b>
-                  <span v-if="p.profitRateCost != null" class="profit-rate" :class="{ 'profit-neg': p.profit < 0 }">{{ p.profitRateCost.toFixed(1) }}%</span>
-                  <span v-if="p.delivery == null" class="muted">估</span>
-                </td>
-                <td>
+              </div>
+            </div>
+            <!-- 第二部分:单价调整(默认折叠,点击展开;单件口径,数字右对齐) -->
+            <div class="po-card-cmp">
+              <div class="po-cmp-toggle">
+                <div class="po-cmp-toggle-left" @click="togglePoCmp(p.sku)">
+                  <span class="po-cmp-caret">{{ poCmpExpanded[p.sku] ? '▾' : '▸' }}</span>
+                  <span class="po-cmp-title">单价调整</span>
+                  <span class="profit-est-sub">调整的是该 SKU 上架价,只影响后续新订单</span>
+                </div>
+                <template v-if="poCmpExpanded[p.sku]">
                   <select
                     class="filter-input po-rate-select"
                     :value="p.rate"
@@ -3582,24 +3564,53 @@ onUnmounted(() => {
                   >
                     <option v-for="r in PM_TARGET_RATES" :key="r" :value="r">{{ r }}%</option>
                   </select>
-                </td>
-                <td class="col-num">
-                  <span v-if="p.suggested != null" :title="p.listingPrice != null ? `现价 ¥${p.listingPrice}` : '无现价'">¥{{ p.suggested }}</span>
-                  <span v-else class="muted">—</span>
-                </td>
-                <td>
                   <button
                     class="btn btn-ghost btn-sm"
                     :disabled="!p.canAdjust || adjustingSku === p.sku"
                     :title="p.canAdjust ? `按 ${p.rate}% 成本利润率调整该 SKU 上架价` : p.missingWhy"
                     @click="adjustSkuPrice(p)"
                   >{{ adjustingSku === p.sku ? '调价中…' : '调价' }}</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                </template>
+              </div>
+              <table v-if="poCmpExpanded[p.sku]" class="po-cmp-table">
+                <tbody>
+                  <tr>
+                    <td class="cmp-label">销售单价</td>
+                    <td class="cmp-old">{{ p.listingPrice != null ? p.listingPrice.toFixed(2) : '—' }}</td>
+                    <td class="cmp-arrow">→</td>
+                    <td class="cmp-new"><b v-if="p.suggested != null">{{ p.suggested.toFixed(2) }}</b><span v-else class="muted">—</span></td>
+                  </tr>
+                  <tr>
+                    <td class="cmp-label">ozon佣金</td>
+                    <td class="cmp-old">{{ p.oldCommission != null ? p.oldCommission.toFixed(2) : '—' }}</td>
+                    <td class="cmp-arrow">→</td>
+                    <td class="cmp-new">{{ p.newCommission != null ? p.newCommission.toFixed(2) : '—' }}</td>
+                  </tr>
+                  <tr>
+                    <td class="cmp-label">国际物流费<span v-if="p.unitDelivery == null" class="muted">(未维护重量,未扣)</span></td>
+                    <td class="cmp-old">{{ p.unitDelivery != null ? p.unitDelivery.toFixed(2) : '—' }}</td>
+                    <td class="cmp-arrow"></td>
+                    <td class="cmp-new"></td>
+                  </tr>
+                  <tr>
+                    <td class="cmp-label">利润</td>
+                    <td class="cmp-old"><b v-if="p.oldProfit != null" :class="{ 'profit-neg': p.oldProfit < 0 }">{{ p.oldProfit.toFixed(2) }}</b><span v-else class="muted">—</span></td>
+                    <td class="cmp-arrow">→</td>
+                    <td class="cmp-new"><b v-if="p.newProfit != null" :class="{ 'profit-neg': p.newProfit < 0 }">{{ p.newProfit.toFixed(2) }}</b><span v-else class="muted">—</span></td>
+                  </tr>
+                  <tr>
+                    <td class="cmp-label">成本利润率</td>
+                    <td class="cmp-old"><span v-if="p.oldRateC != null" :class="{ 'profit-neg': p.oldProfit < 0 }">{{ (p.oldRateC * 100).toFixed(1) }}%</span><span v-else class="muted">—</span></td>
+                    <td class="cmp-arrow">→</td>
+                    <td class="cmp-new"><span v-if="p.newRateC != null" :class="{ 'profit-neg': p.newProfit < 0 }">{{ (p.newRateC * 100).toFixed(1) }}%</span><span v-else class="muted">—</span></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-if="poCmpExpanded[p.sku] && p.missingWhy" class="po-why">{{ p.missingWhy }}</div>
+            </div>
+          </div>
           <div class="profit-total">
-            采购合计 <b>¥{{ profitTotal.alloc.toFixed(2) }}</b> · 预估利润合计 <b :class="{ 'profit-neg': profitTotal.profit < 0 }">¥{{ profitTotal.profit.toFixed(2) }}</b><span v-if="!profitTotal.allWeighted" class="muted">(部分行未扣配送)</span>
+            采购合计 <b>¥{{ profitTotal.alloc.toFixed(2) }}</b> · 预估利润合计 <b :class="{ 'profit-neg': profitTotal.profit < 0 }">¥{{ profitTotal.profit.toFixed(2) }}</b><template v-if="profitTotal.rateC != null"> · 成本利润率 <b :class="{ 'profit-neg': profitTotal.profit < 0 }">{{ profitTotal.rateC.toFixed(1) }}%</b></template><span v-if="!profitTotal.allWeighted" class="muted">(部分行未扣配送)</span>
           </div>
         </div>
 
@@ -3607,7 +3618,6 @@ onUnmounted(() => {
         <div v-if="allSelectedOrders.length" class="selected-orders">
           <div class="selected-orders-title">
             已选 {{ keptSelectedCount }} 单 · 合计 ¥{{ allSelectedTotal }}
-            <span v-if="restoredPurchases.length" class="selected-orders-sub">已有采购点 ✕ 标记删除,点「保存」生效(可点「恢复」撤销);勾选新订单后点「保存」追加</span>
           </div>
           <table class="data-table selected-orders-table">
             <thead>
@@ -5090,10 +5100,6 @@ a.product-title:hover {
   font-size: 12px;
 }
 
-.amount-input {
-  width: 120px;
-}
-
 .form-tip {
   font-size: 11px;
   color: var(--text-secondary, #9ca3af);
@@ -5159,12 +5165,6 @@ a.product-title:hover {
   font-weight: 600;
   margin-bottom: 6px;
 }
-.selected-orders-sub {
-  margin-left: 8px;
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--text-muted, #9ca3af);
-}
 /* 已有采购单 ✕ 标记删除态:整行删除线+变灰(按钮排除,保持可点「恢复」) */
 .selected-orders-table tr.removed-mark td {
   opacity: 0.5;
@@ -5184,32 +5184,190 @@ a.product-title:hover {
   white-space: nowrap;
   margin-right: 6px;
 }
-/* ── 利润预估与调价块(订单产品表下方,2026-09-20)── */
-.profit-est {
-  margin-top: 14px;
+/* ── 订单产品 + 调整对比 合并卡片(采购弹窗,2026-09-20)── */
+.po-card-list {
+  margin-top: 6px;
+}
+.po-card {
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+/* 第一部分:产品信息(左图右字段,每行一项) */
+.po-card-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.po-card-img {
+  display: block;
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  background: #f8fafc;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.po-card-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.po-card-fields {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  font-size: 12px;
+}
+/* 第二列:名称/SKU/OfferID/数量 */
+.pf-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* 第二列:数量(无标题,与产品名同行) */
+.pf-qty {
+  flex-shrink: 0;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary, #6b7280);
+  white-space: nowrap;
+}
+/* 第三列:售价/采购价(上下两行,不压缩) */
+.pf-extra {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* 金额右对齐:两行小数位垂直对齐 */
+.pf-extra .pf-val {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+}
+.pf-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 18px;
+}
+.pf-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pf-label {
+  width: 52px;
+  flex-shrink: 0;
+  color: var(--text-secondary, #6b7280);
+}
+.pf-val {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pf-cost-input {
+  width: 110px;
+  padding: 2px 6px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+/* 第二部分:表格式调整对比(旧值 -> 新值,数字列右对齐) */
+.po-card-cmp {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color, #e5e7eb);
+}
+/* 折叠头:左侧区域可点击展开/收起,展开时右侧显示目标率与调价按钮 */
+.po-cmp-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.po-cmp-toggle-left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.po-cmp-caret {
+  width: 14px;
+  flex-shrink: 0;
+  color: #94a3b8;
+}
+.po-cmp-title {
+  font-size: 13px;
+  font-weight: 600;
 }
 .profit-est-sub {
   font-size: 12px;
   color: #92400e;
-}
-.profit-table .product-title {
-  max-width: 150px;
+  flex: 1;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.profit-rate {
-  display: inline-block;
-  margin-left: 6px;
-  font-size: 12px;
-  color: #047857;
-}
-.profit-rate.profit-neg {
-  color: #b91c1c;
 }
 .po-rate-select {
-  width: 72px;
-  padding: 4px 6px;
+  width: 56px;
+  padding: 4px 4px;
+}
+.po-cmp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.po-cmp-table td {
+  padding: 3px 0;
+  vertical-align: middle;
+}
+.cmp-label {
+  width: 34%;
+  color: var(--text-secondary, #6b7280);
+  white-space: nowrap;
+}
+.cmp-old,
+.cmp-new {
+  width: 27%;
+  text-align: right;
+  white-space: nowrap;
+}
+.cmp-old {
+  color: #475569;
+}
+.cmp-new b {
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+}
+.cmp-arrow {
+  width: 32px;
+  text-align: center;
+  color: #94a3b8;
+}
+.po-why {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #fffbeb;
+  color: #b45309;
+  font-size: 12px;
 }
 .profit-total {
   margin-top: 8px;
@@ -5550,7 +5708,7 @@ a.product-title:hover {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin: 12px 0 8px;
+  margin: 0 0 4px;
 }
 .alloc-checkbox {
   display: inline-flex;
@@ -5565,16 +5723,6 @@ a.product-title:hover {
   width: 16px;
   height: 16px;
   cursor: pointer;
-}
-/* manual 模式改分摊提示(2026-09-19) */
-.alloc-edit-hint {
-  margin: 6px 0;
-  font-size: 12px;
-  color: #b54708;
-  background: #fffaeb;
-  border: 1px solid #fec84b;
-  border-radius: 6px;
-  padding: 5px 10px;
 }
 .auto-alloc-section {
   margin-bottom: 8px;
@@ -5594,11 +5742,6 @@ a.product-title:hover {
   border-radius: 4px;
   margin: 4px 0 8px;
 }
-.alloc-amount-display {
-  font-weight: 600;
-  color: var(--primary, #2563eb);
-}
-
 /* 详情弹窗采购关联表:商品图+规格+数量(数据来源 op_purchase_order.items_json,由"补全采购订单信息"按钮写入) */
 .po-item-line {
   display: flex;
