@@ -24,7 +24,7 @@ const POLL_INTERVAL_MS = 12 * 60 * 60 * 1000; // 每 12 小时
 const FIRST_SCAN_DELAY_MS = 30 * 1000;
 const REQUEST_INTERVAL_MS = 2000; // 对齐补全采购信息的限速节奏
 const MAX_CONSECUTIVE_FAILURES = 3;
-const MAX_PER_ROUND = 100;
+const MAX_PER_ROUND = 1000;
 const MAX_AGE_DAYS = 90; // 超过 90 天的旧单不再尝试(多半已死单)
 
 let timer = null;
