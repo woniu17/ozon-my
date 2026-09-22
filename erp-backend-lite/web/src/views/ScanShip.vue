@@ -26,6 +26,7 @@ const results = ref([]);          // 全局搜索命中的包裹(快照)
 const selectedId = ref(0);        // 当前选中卡片(多结果时唯一可操作的卡)
 const printingPkgId = ref(0);     // 打印互斥(与 OrderProcess printingId 同模式)
 const retryPkgIds = ref(new Set()); // 重量已保存但打印失败的包裹(重试只走打印+流转)
+const retryWeights = reactive({});  // pkgId → 已保存重量 g(重试成功后回填卡片,避免残留搜索时的旧重量)
 const agentOnline = ref(null);    // 菜鸟组件探测:null=探测中 true/false
 const weightEls = {};             // 动态 ref:重量输入框(pkgId → el)
 const correctEls = {};            // 动态 ref:更正重量输入框(pkgId → el)
@@ -267,6 +268,7 @@ async function doSearch() {
   results.value = [];
   selectedId.value = 0;
   retryPkgIds.value = new Set();
+  Object.keys(retryWeights).forEach((k) => delete retryWeights[k]);
   banner.type = 'info';
   banner.text = '搜索中…';
   try {
@@ -378,6 +380,7 @@ async function onSubmitShip(pkg) {
     if (submitted) {
       // 打印阶段失败:重量已保存,重试只走打印+流转(不再提交重量)
       retryPkgIds.value.add(pkg.id);
+      retryWeights[pkg.id] = g;
       banner.text = `${msg}(重量 ${g}g 已保存,点击「重试打印」继续)`;
     } else {
       // submit 本身失败(网络/5xx):重量未保存,直接重按 Enter 走全流程
@@ -411,6 +414,14 @@ async function onRetryPrint(pkg) {
     banner.type = 'ok';
     banner.text = `✓ 已交运 ${pkg.postingNumber} · 面单已打印`;
     pkg.operateStatus = 'ship_success';
+    // 回填已保存重量(卡片显示的仍是搜索时快照,不含提交的称重值)
+    const savedG = retryWeights[pkg.id];
+    if (savedG != null) {
+      pkg.weightG = savedG;
+      pkg.weightSource = 'ship';
+      recomputeProfitByWeight(pkg, savedG);
+      delete retryWeights[pkg.id];
+    }
     retryPkgIds.value.delete(pkg.id);
     refreshRecords();
     focusScan();

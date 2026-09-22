@@ -25,6 +25,7 @@ import CategoryFilter from '../views/CategoryFilter.vue';
 import EndpointMetrics from '../views/EndpointMetrics.vue';
 import PriceWatch from '../views/PriceWatch.vue';
 import OrderProcess from '../views/OrderProcess.vue';
+import OrderStats from '../views/OrderStats.vue';
 import ScanShip from '../views/ScanShip.vue';
 import MiaoshouOrders from '../views/MiaoshouOrders.vue';
 import { useAuthStore } from '../stores/auth.js';
@@ -64,6 +65,7 @@ const router = createRouter({
     { path: '/endpoint-metrics', name: 'endpoint-metrics', component: EndpointMetrics, meta: { title: '端点耗时' } },
     { path: '/price-watch', name: 'price-watch', component: PriceWatch, meta: { title: '价格优势' } },
     { path: '/order-process', name: 'order-process', component: OrderProcess, meta: { title: '订单处理' } },
+    { path: '/order-stats', name: 'order-stats', component: OrderStats, meta: { title: '订单统计' } },
     { path: '/price-manage', name: 'price-manage', component: () => import('../views/PriceManage.vue'), meta: { title: '价格管理' } },
     { path: '/scan-ship', name: 'scan-ship', component: ScanShip, meta: { title: '扫描发货' } },
     { path: '/miaoshou-orders', name: 'miaoshou-orders', component: MiaoshouOrders, meta: { title: '妙手订单' } },

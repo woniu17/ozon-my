@@ -44,8 +44,13 @@ const manualStatus = {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** 阶段A:补物流单号+公司(未发货单返回空单号自然跳过) */
+/** 阶段A:补物流单号+公司(未发货单返回空单号自然跳过)
+ *  2026-09-21:新增"单号变更检测"——已有单号但与 1688 最新不一致时覆盖,
+ *  适用于卖家换快递/改单号的场景。为控制 API 配额,仅对"在途且最近3天未拉轨迹"的单做比对。 */
+const NO_DIFF_CHECK_DAYS = 3; // 已有单号的在途单,每 3 天比对一次单号是否变更
+
 async function phaseFillLogistics() {
+  // 子阶段A1:补空单号
   const rows = db.prepare(
     `SELECT id, purchase_sn, buyer_account FROM op_purchase_order
      WHERE platform = '1688' AND link_status = 'linked'
@@ -55,7 +60,6 @@ async function phaseFillLogistics() {
        AND (gmt_create IS NULL OR gmt_create >= datetime('now', ?))
      LIMIT ?`
   ).all(`-${MAX_AGE_DAYS} days`, MAX_PER_ROUND);
-  if (!rows.length) return { scanned: 0, filled: 0, skippedNoAccount: 0 };
   manualStatus.progress = { done: 0, total: rows.length };
 
   let filled = 0, skippedNoAccount = 0, consecutive = 0;
@@ -74,20 +78,66 @@ async function phaseFillLogistics() {
         ).run(info.logisticsNo, info.logisticsCompany, new Date().toISOString(), r.id);
         filled++;
         logger.info({ purchaseSn: r.purchase_sn, logisticsNo: info.logisticsNo, company: info.logisticsCompany },
-          '[purchase-logistics-poller] 阶段A:回填物流单号');
+          '[purchase-logistics-poller] 阶段A1:回填物流单号');
       }
       consecutive = 0;
     } catch (e) {
       consecutive++;
-      logger.warn({ purchaseSn: r.purchase_sn, err: e.message }, '[purchase-logistics-poller] 阶段A:单笔查询失败');
+      logger.warn({ purchaseSn: r.purchase_sn, err: e.message }, '[purchase-logistics-poller] 阶段A1:单笔查询失败');
       if (consecutive >= MAX_CONSECUTIVE_FAILURES) {
-        logger.warn('[purchase-logistics-poller] 阶段A:连续失败达阈值,本轮中止');
+        logger.warn('[purchase-logistics-poller] 阶段A1:连续失败达阈值,本轮中止');
         break;
       }
     }
     await sleep(REQUEST_INTERVAL_MS);
   }
-  return { scanned: rows.length, filled, skippedNoAccount };
+
+  // 子阶段A2:检测已有单号是否变更(卖家换快递/改单号场景)
+  // 仅对"在途(未签收未关闭)+最近3天没拉过轨迹"的单做比对,控制 API 配额
+  const diffRows = db.prepare(
+    `SELECT id, purchase_sn, buyer_account, logistics_no AS logisticsNo FROM op_purchase_order
+     WHERE platform = '1688' AND link_status = 'linked'
+       AND purchase_sn IS NOT NULL AND length(purchase_sn) > 0
+       AND logistics_no IS NOT NULL AND length(logistics_no) > 0
+       AND status IN ('wait_send', 'shipped', 'part_shipped')
+       AND (last_trace_at IS NULL OR last_trace_at < datetime('now', ?))
+     LIMIT ?`
+  ).all(`-${NO_DIFF_CHECK_DAYS} days`, MAX_PER_ROUND);
+  let changed = 0;
+  if (diffRows.length) {
+    manualStatus.progress = { done: 0, total: diffRows.length };
+    for (const r of diffRows) {
+      manualStatus.progress.done++;
+      if (!hasAliOpenApiToken(r.buyer_account)) { skippedNoAccount++; continue; }
+      try {
+        const info = await getLogisticsForOrder(r.purchase_sn, r.buyer_account);
+        if (info.logisticsNo && info.logisticsNo !== r.logisticsNo) {
+          // 单号变更:覆盖新单号+公司,重置 last_trace_at 让阶段B 立即拉新轨迹
+          db.prepare(
+            `UPDATE op_purchase_order
+             SET logistics_no = ?, logistics_company = ?,
+                 last_trace_at = NULL,
+                 gmt_modified = ?
+             WHERE id = ?`
+          ).run(info.logisticsNo, info.logisticsCompany, new Date().toISOString(), r.id);
+          changed++;
+          logger.info({ purchaseSn: r.purchase_sn, oldNo: r.logisticsNo, newNo: info.logisticsNo, company: info.logisticsCompany },
+            '[purchase-logistics-poller] 阶段A2:检测到单号变更,已覆盖');
+        }
+        consecutive = 0;
+      } catch (e) {
+        consecutive++;
+        logger.warn({ purchaseSn: r.purchase_sn, err: e.message }, '[purchase-logistics-poller] 阶段A2:单笔查询失败');
+        if (consecutive >= MAX_CONSECUTIVE_FAILURES) {
+          logger.warn('[purchase-logistics-poller] 阶段A2:连续失败达阈值,本轮中止');
+          break;
+        }
+      }
+      await sleep(REQUEST_INTERVAL_MS);
+    }
+  }
+
+  return { scanned: rows.length, filled, changed, skippedNoAccount };
 }
 
 /** 阶段A-PDD:补拼多多物流单号(order_list_search_v4 按单号精确搜索,发货单自带 tracking_number)
@@ -143,15 +193,21 @@ async function phaseFillPddLogistics() {
   return { scanned: rows.length, filled, skippedNoAccount };
 }
 
-/** 阶段B:拉完整物流轨迹(有单号+未签收+1小时内没拉过的) */
+/** 阶段B:拉完整物流轨迹(有单号+1小时内没拉过的)
+ *  2026-09-21:放宽 status 条件,已签收单(last_trace_at IS NULL,即被阶段A2 重置)也会被扫到,
+ *  确保单号变更后新轨迹能及时写入。 */
 async function phaseFetchTrace() {
   const rows = db.prepare(
     `SELECT id, purchase_sn, buyer_account FROM op_purchase_order
      WHERE platform = '1688' AND link_status = 'linked'
        AND purchase_sn IS NOT NULL AND length(purchase_sn) > 0
        AND logistics_no IS NOT NULL AND length(logistics_no) > 0
-       AND status IN ('wait_send', 'shipped', 'part_shipped')
-       AND (last_trace_at IS NULL OR last_trace_at < datetime('now', 'localtime', '-1 hour'))
+       AND (
+         (status IN ('wait_send', 'shipped', 'part_shipped')
+          AND (last_trace_at IS NULL OR last_trace_at < datetime('now', 'localtime', '-1 hour')))
+         OR
+         (status = 'signed' AND last_trace_at IS NULL)
+       )
      ORDER BY (last_trace_at IS NULL) DESC, gmt_modified DESC
      LIMIT ?`
   ).all(MAX_PER_ROUND);
@@ -423,10 +479,20 @@ async function syncPurchaseLogisticsForPackage(packageId) {
           results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '买手账号未配置1688开放接口' });
           continue;
         }
-        if (!o.logisticsNo) {
-          const info = await getLogisticsForOrder(o.purchaseSn, o.buyerAccount);
-          if (info.logisticsNo) {
+        // 手动同步时总是先查 1688 最新单号:无则补,有则比对是否变更(卖家换快递场景)
+        const info = await getLogisticsForOrder(o.purchaseSn, o.buyerAccount);
+        if (info.logisticsNo) {
+          if (!o.logisticsNo) {
             writeFilledLogisticsNo(o.id, info.logisticsNo, info.logisticsCompany);
+            o.logisticsNo = info.logisticsNo;
+            filled = true;
+          } else if (info.logisticsNo !== o.logisticsNo) {
+            // 单号变更:覆盖新单号+公司,后续拉新单号的轨迹
+            db.prepare(
+              `UPDATE op_purchase_order SET logistics_no = ?, logistics_company = ?, gmt_modified = ? WHERE id = ?`
+            ).run(info.logisticsNo, info.logisticsCompany, new Date().toISOString(), o.id);
+            results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'update',
+              detail: `单号变更 ${o.logisticsNo} → ${info.logisticsNo}` });
             o.logisticsNo = info.logisticsNo;
             filled = true;
           }

@@ -19,19 +19,34 @@
         <text v-for="t in pkg.tags" :key="t" class="tag-chip">{{ t }}</text>
       </view>
 
-      <view class="info-grid">
-        <view class="info-item"><text class="k">订单号</text><text class="v">{{ pkg.orderNumber || '—' }}</text></view>
-        <view class="info-item"><text class="k">Ozon状态</text><text class="v">{{ pkg.ozonStatus || '—' }}{{ pkg.substatus ? ' · ' + pkg.substatus : '' }}</text></view>
-        <view class="info-item"><text class="k">买家</text><text class="v">{{ pkg.buyerName || '—' }}</text></view>
-        <view class="info-item"><text class="k">配送方式</text><text class="v">{{ pkg.deliveryMethod || '—' }}</text></view>
-        <view class="info-item"><text class="k">发货仓库</text><text class="v">{{ pkg.warehouse || '—' }}</text></view>
-        <view class="info-item"><text class="k">下单时间</text><text class="v">{{ fmtTime(pkg.inProcessAt) }}</text></view>
-        <view class="info-item"><text class="k">最晚发货</text><text class="v">{{ fmtTime(pkg.shipmentDate) }}</text></view>
-        <view class="info-item"><text class="k">重量</text><text class="v">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</text></view>
-        <view class="info-item"><text class="k">订单金额</text><text class="v strong">{{ fmtMoney(pkg.orderAmount) }}</text></view>
-        <view class="info-item"><text class="k">采购合计</text><text class="v">{{ fmtMoney(pkg.totalPurchaseAmount) }}</text></view>
-        <view v-if="pkg.isReturned" class="info-item"><text class="k">退货状态</text><text class="v">{{ returnState }}</text></view>
-        <view v-if="isCancelled && cancelReasonText" class="info-item info-full"><text class="k">取消原因</text><text class="v">{{ cancelReasonText }}</text></view>
+      <!-- 主信息:单列展示核心字段 -->
+      <view class="info-list">
+        <view class="info-row"><text class="k">Ozon状态</text><text class="v">{{ pkg.ozonStatus || '—' }}{{ pkg.substatus ? ' · ' + pkg.substatus : '' }}</text></view>
+        <view class="info-row"><text class="k">下单时间</text><text class="v">{{ fmtTime(pkg.inProcessAt) }}<text v-if="weekdayCN(pkg.inProcessAt)" class="weekday">（{{ weekdayCN(pkg.inProcessAt) }}）</text></text></view>
+        <view class="info-row"><text class="k">最晚发货</text><text class="v">{{ fmtTime(pkg.shipmentDate) }}<text v-if="weekdayCN(pkg.shipmentDate)" class="weekday">（{{ weekdayCN(pkg.shipmentDate) }}）</text></text></view>
+        <view v-if="showCountdown" class="info-row" :class="{ overdue: cd.overdue }">
+          <text class="k">{{ cd.overdue ? '已超时' : '剩发' }}</text>
+          <text class="v countdown" :class="{ overdue: cd.overdue }">{{ cd.text }}</text>
+        </view>
+        <view class="info-row"><text class="k">重量</text><text class="v">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</text></view>
+        <view class="info-row"><text class="k">订单金额</text><text class="v strong">{{ fmtMoney(pkg.orderAmount) }}</text></view>
+        <view class="info-row"><text class="k">采购合计</text><text class="v">{{ fmtMoney(pkg.totalPurchaseAmount) }}</text></view>
+      </view>
+
+      <!-- 其它信息:折叠 -->
+      <view class="info-more">
+        <view class="info-more-toggle" @click="infoOpen = !infoOpen">
+          <text>{{ infoOpen ? '收起其它信息' : '更多订单信息' }}</text>
+          <text class="info-more-arrow" :class="{ open: infoOpen }">›</text>
+        </view>
+        <view v-if="infoOpen" class="info-grid">
+          <view class="info-item"><text class="k">订单号</text><text class="v">{{ pkg.orderNumber || '—' }}</text></view>
+          <view class="info-item"><text class="k">买家</text><text class="v">{{ pkg.buyerName || '—' }}</text></view>
+          <view class="info-item"><text class="k">配送方式</text><text class="v">{{ pkg.deliveryMethod || '—' }}</text></view>
+          <view class="info-item"><text class="k">发货仓库</text><text class="v">{{ pkg.warehouse || '—' }}</text></view>
+          <view v-if="pkg.isReturned" class="info-item"><text class="k">退货状态</text><text class="v">{{ returnState }}</text></view>
+          <view v-if="isCancelled && cancelReasonText" class="info-item info-full"><text class="k">取消原因</text><text class="v">{{ cancelReasonText }}</text></view>
+        </view>
       </view>
     </view>
 
@@ -153,10 +168,10 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
-import { onLoad, onShow } from '@dcloudio/uni-app';
+import { ref, computed, onUnmounted } from 'vue';
+import { onLoad, onShow, onHide, onUnload } from '@dcloudio/uni-app';
 import { getOrderDetail, syncPackage, shipPackage, syncPackagePurchaseLogistics } from '../../api/order.js';
-import { fmtMoney, fmtTime } from '../../utils/fmt.js';
+import { fmtMoney, fmtTime, weekdayCN } from '../../utils/fmt.js';
 
 const packageId = ref('');
 const pkg = ref(null);
@@ -164,10 +179,55 @@ const items = ref([]);
 const links = ref([]);
 const traces = ref([]);
 const traceOpen = ref(false);
+const infoOpen = ref(false);
 const loadError = ref('');
 const syncing = ref(false);
 const shipping = ref(false);
 const logisticsSyncing = ref(false);
+
+// 每秒刷新的当前时间(驱动剩发倒计时秒级跳动,与 web 端 OrderProcess.vue 一致)
+const nowTs = ref(Date.now());
+let cdTimer = null;
+function startCdTimer() {
+  if (cdTimer) return;
+  cdTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
+}
+function stopCdTimer() {
+  if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
+}
+
+// 剩发倒计时仅在 待处理/待打单发货/交运 三态展示(其它状态无发货义务)
+const SHOW_COUNTDOWN_STATUSES = ['wait_process', 'wait_ship', 'ship_success'];
+const showCountdown = computed(() => {
+  const p = pkg.value;
+  if (!p) return false;
+  return !!p.shipmentDate && SHOW_COUNTDOWN_STATUSES.includes(p.operateStatus);
+});
+
+// 倒计时文本:cutoff = shipment_date,依赖 nowTs 每秒重算
+const cd = computed(() => {
+  const p = pkg.value;
+  if (!p || !p.shipmentDate) return { overdue: false, text: '—' };
+  const end = new Date(p.shipmentDate).getTime();
+  if (isNaN(end)) return { overdue: false, text: '—' };
+  const diff = end - nowTs.value;
+  const abs = Math.abs(diff);
+  const days = Math.floor(abs / 86400000);
+  const hours = Math.floor((abs % 86400000) / 3600000);
+  const mins = Math.floor((abs % 3600000) / 60000);
+  const secs = Math.floor((abs % 60000) / 1000);
+  const text = days > 0
+    ? `${days}天${hours}小时${mins}分${secs}秒`
+    : hours > 0
+      ? `${hours}小时${mins}分${secs}秒`
+      : `${mins}分${secs}秒`;
+  return { overdue: diff < 0, text };
+});
+
+onShow(() => startCdTimer());
+onHide(() => stopCdTimer());
+onUnload(() => stopCdTimer());
+onUnmounted(() => stopCdTimer());
 
 // ── 标签映射(与 web 端 OrderProcess.vue 同步)──────────────
 const OPERATE_LABELS = {
@@ -532,13 +592,82 @@ onShow(() => {
   margin-bottom: 8rpx;
 }
 
-/* 信息网格 */
-.info-grid {
-  display: flex;
-  flex-wrap: wrap;
+/* 主信息:单列展示 */
+.info-list {
   margin-top: 8rpx;
   padding-top: 16rpx;
   border-top: 1rpx solid #f2f3f5;
+}
+
+.info-row {
+  display: flex;
+  align-items: baseline;
+  padding: 10rpx 0;
+  border-bottom: 1rpx solid #f7f8fa;
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-row .k {
+  width: 160rpx;
+}
+
+.info-row .v {
+  flex: 1;
+  font-size: 26rpx;
+}
+
+/* 周几后缀(浅灰) */
+.weekday {
+  color: #86909c;
+  font-size: 24rpx;
+}
+
+/* 剩发倒计时 */
+.info-row .countdown {
+  color: #d97706;
+  font-variant-numeric: tabular-nums;
+}
+
+.info-row.overdue .v,
+.v.overdue {
+  color: #f53f3f;
+}
+
+/* 折叠区 */
+.info-more {
+  margin-top: 12rpx;
+  border-top: 1rpx solid #f7f8fa;
+  padding-top: 12rpx;
+}
+
+.info-more-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24rpx;
+  color: #165dff;
+  padding: 8rpx 0;
+}
+
+.info-more-arrow {
+  margin-left: 8rpx;
+  font-size: 26rpx;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+
+.info-more-arrow.open {
+  transform: rotate(90deg);
+}
+
+/* 信息网格(折叠区内部,保留双列) */
+.info-grid {
+  display: flex;
+  flex-wrap: wrap;
+  padding-top: 8rpx;
 }
 
 .info-item {

@@ -923,6 +923,8 @@ CREATE INDEX IF NOT EXISTS idx_opoo_status ON op_ozon_order(status);
 CREATE INDEX IF NOT EXISTS idx_opoo_store_time ON op_ozon_order(store_id, in_process_at DESC);
 -- 拆单子件反查母件(拆单采购迁移 reconcile 的触发检查,2026-09-18)
 CREATE INDEX IF NOT EXISTS idx_opoo_parent ON op_ozon_order(store_id, parent_posting_number);
+-- 揽收时间索引(订单统计页按 delivering_date 范围查询,2026-09-21)
+CREATE INDEX IF NOT EXISTS idx_opoo_delivering ON op_ozon_order(store_id, delivering_date DESC);
 
 -- Ozon 订单产品行
 CREATE TABLE IF NOT EXISTS op_ozon_order_item (
@@ -975,6 +977,9 @@ CREATE TABLE IF NOT EXISTS op_package (
 CREATE INDEX IF NOT EXISTS idx_op_pkg_operate ON op_package(operate_status);
 CREATE INDEX IF NOT EXISTS idx_op_pkg_order ON op_package(ozon_order_id);
 CREATE INDEX IF NOT EXISTS idx_op_pkg_purchase ON op_package(purchase_status);
+-- 签收/退货时间索引(订单统计页按 delivered_at/return_at 范围查询,2026-09-21)
+CREATE INDEX IF NOT EXISTS idx_op_pkg_delivered ON op_package(store_id, delivered_at DESC);
+CREATE INDEX IF NOT EXISTS idx_op_pkg_return   ON op_package(store_id, return_at DESC);
 
 -- 采购订单(1688/拼多多/淘宝)
 CREATE TABLE IF NOT EXISTS op_purchase_order (

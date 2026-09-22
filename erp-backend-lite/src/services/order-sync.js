@@ -34,9 +34,10 @@ const FIRST_DELAY_MS = 10_000;
 const MAX_PAGES = 50; // 单接口单店铺翻页上限(防失控)
 // 各级窗口:unfulfilledDays=未完成订单 cutoff 向前回看天数(null=跳过该接口,0=从 now 起);listDays=list 下单窗口天数(0=跳过);listHours=fast 轮近效 list 小时窗口(签收兜底用)
 const SYNC_LEVELS = {
-  // fast 加近 3h list(2026-09-20):delivered 会离开 unfulfilled 列表,
-  // 签收兜底通知需要 fast 轮也能看到签收状态(2 分钟级);近 3h 订单量小,1-2 页
-  fast: { unfulfilledDays: 0, listHours: 3, listDays: 0, label: '2分钟·未完成订单+近3小时状态校准' },
+  // fast 回看 7 天 + 近 3h list(2026-09-21):unfulfilled cutoff [now-7d, now+14d]
+  //   回看 7 天覆盖已过 cutoff 但未完成的订单(状态联动遗漏的滞后单);
+  //   delivered 会离开 unfulfilled 列表,签收兜底通知需 fast 轮可见签收状态(2 分钟级)
+  fast: { unfulfilledDays: 7, listHours: 3, listDays: 0, label: '2分钟·未完成订单(回看7天)+近3小时状态校准' },
   mid: { unfulfilledDays: null, listDays: 90, label: '8小时·近90天订单' },
   slow: { unfulfilledDays: null, listDays: 365, label: '24小时·近365天订单' },
 };
@@ -343,15 +344,15 @@ async function backfillProductCache(store) {
 }
 
 async function syncStore(store, { unfulfilledDays = SYNC_LEVELS.fast.unfulfilledDays, listDays = 0, listHours = 0 } = {}) {
-  // 三级节奏窗口(2026-09-16,2026-09-17 fast 调整,2026-09-20 fast 加近效 list):
-  //   fast(每2分钟): unfulfilled cutoff [now, now+14d] + list [now-3h, now] —— 未完成订单 + 签收兜底
+  // 三级节奏窗口(2026-09-16,2026-09-17 fast 调整,2026-09-20 fast 加近效 list,2026-09-21 fast 回看7天):
+  //   fast(每2分钟): unfulfilled cutoff [now-7d, now+14d] + list [now-3h, now] —— 未完成订单(含过期cutoff)+ 签收兜底
   //   mid(每8小时):  list [now-90d, now] —— 近3个月订单全集(补 delivered/cancelled 终态)
   //   slow(每24小时): list [now-365d, now] —— 近1年订单全集(全年兜底)
   // list 按下单时间过滤且含所有状态,天然覆盖未完成订单;mid/slow 轮跳过 unfulfilled
   const now = new Date();
   let count = 0;
 
-  // 1) 未完成订单全集(fast 轮;unfulfilledDays=null 跳过,0=从 now 起)
+  // 1) 未完成订单全集(fast 轮;unfulfilledDays=null 跳过,0=从 now 起,>0=向前回看 N 天)
   if (unfulfilledDays != null) {
     const cutoffFrom = iso(new Date(now.getTime() - unfulfilledDays * 86400_000));
     const cutoffTo = iso(new Date(now.getTime() + 14 * 86400_000));

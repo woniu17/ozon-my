@@ -90,6 +90,22 @@
             <text class="amt muted">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</text>
           </view>
         </view>
+
+        <!-- 时间行:待处理/待打单/交运 三态展示下单/最迟/剩发 -->
+        <view v-if="showShipCountdown(pkg)" class="time-row">
+          <view class="t-line">
+            <text class="t-k">下单</text>
+            <text class="t-v">{{ fmtTime(pkg.inProcessAt) }}<text v-if="weekdayCN(pkg.inProcessAt)" class="t-wd">（{{ weekdayCN(pkg.inProcessAt) }}）</text></text>
+          </view>
+          <view class="t-line">
+            <text class="t-k">最迟</text>
+            <text class="t-v">{{ fmtTime(pkg.shipmentDate) }}<text v-if="weekdayCN(pkg.shipmentDate)" class="t-wd">（{{ weekdayCN(pkg.shipmentDate) }}）</text></text>
+          </view>
+          <view class="t-line" :class="{ overdue: countdown(pkg).overdue }">
+            <text class="t-k">{{ countdown(pkg).overdue ? '已超时' : '剩发' }}</text>
+            <text class="t-v cd">{{ countdown(pkg).text }}</text>
+          </view>
+        </view>
       </view>
 
       <view v-if="loading && !rows.length" class="empty">加载中…</view>
@@ -105,10 +121,10 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
-import { onLoad, onUnload, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app';
+import { ref, computed, onUnmounted } from 'vue';
+import { onLoad, onUnload, onPullDownRefresh, onReachBottom, onShow, onHide } from '@dcloudio/uni-app';
 import { getOrderTabs, getOrderList } from '../../api/order.js';
-import { fmtMoney } from '../../utils/fmt.js';
+import { fmtMoney, fmtTime, weekdayCN } from '../../utils/fmt.js';
 
 // Tab 页签(与 web 端 OrderProcess.vue TABS 同步)
 const TABS = [
@@ -203,6 +219,45 @@ function opTag(pkg) {
   if (pkg.isReturned) return { label: '已退货', cls: 'err' };
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus || '—', cls: 'mute' };
 }
+
+// ── 剩发倒计时(与 order-detail/index.vue 同口径)──────────────
+// 仅在 待处理/待打单/交运 三态展示下单/最迟/剩发(其它状态无发货义务)
+const SHOW_COUNTDOWN_STATUSES = ['wait_process', 'wait_ship', 'ship_success'];
+function showShipCountdown(pkg) {
+  return !!pkg && !!pkg.shipmentDate && SHOW_COUNTDOWN_STATUSES.includes(pkg.operateStatus);
+}
+// 每秒刷新的当前时间(驱动所有卡片剩发倒计时秒级跳动)
+const nowTs = ref(Date.now());
+let cdTimer = null;
+function startCdTimer() {
+  if (cdTimer) return;
+  cdTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
+}
+function stopCdTimer() {
+  if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
+}
+// 倒计时文本:cutoff = shipment_date,依赖 nowTs 每秒重算
+function countdown(pkg) {
+  if (!pkg || !pkg.shipmentDate) return { overdue: false, text: '—' };
+  const end = new Date(pkg.shipmentDate).getTime();
+  if (isNaN(end)) return { overdue: false, text: '—' };
+  const diff = end - nowTs.value;
+  const abs = Math.abs(diff);
+  const days = Math.floor(abs / 86400000);
+  const hours = Math.floor((abs % 86400000) / 3600000);
+  const mins = Math.floor((abs % 3600000) / 60000);
+  const secs = Math.floor((abs % 60000) / 1000);
+  const text = days > 0
+    ? `${days}天${hours}小时${mins}分${secs}秒`
+    : hours > 0
+      ? `${hours}小时${mins}分${secs}秒`
+      : `${mins}分${secs}秒`;
+  return { overdue: diff < 0, text };
+}
+onShow(() => startCdTimer());
+onHide(() => stopCdTimer());
+onUnload(() => stopCdTimer());
+onUnmounted(() => stopCdTimer());
 
 async function loadTabs() {
   try {
@@ -681,6 +736,48 @@ onReachBottom(async () => {
 
 .muted {
   color: #a6abb3;
+}
+
+/* 时间行(待处理/待打单/交运 三态展示下单/最迟/剩发) */
+.time-row {
+  margin-top: 16rpx;
+  padding: 14rpx 18rpx;
+  background: #f7f8fa;
+  border-radius: 12rpx;
+}
+
+.t-line {
+  display: flex;
+  align-items: baseline;
+  padding: 4rpx 0;
+}
+
+.t-line.overdue .t-k,
+.t-line.overdue .t-v {
+  color: #f53f3f;
+}
+
+.t-k {
+  font-size: 22rpx;
+  color: #86909c;
+  width: 80rpx;
+  flex-shrink: 0;
+}
+
+.t-v {
+  flex: 1;
+  font-size: 24rpx;
+  color: #1f2329;
+  font-variant-numeric: tabular-nums;
+}
+
+.t-wd {
+  color: #86909c;
+  font-size: 22rpx;
+}
+
+.t-v.cd {
+  color: #d97706;
 }
 
 .empty {

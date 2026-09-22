@@ -20,3 +20,11 @@ export function fmtTime(v) {
     ' ' + p(d.getHours()) + ':' + p(d.getMinutes())
   );
 }
+
+// 时间戳 → 中文周几(如"周三");无效时间返回空串(与 web 端 weekdayCN 同口径)
+export function weekdayCN(t) {
+  if (!t) return '';
+  const d = new Date(t);
+  if (isNaN(d.getTime())) return '';
+  return '周' + ['日', '一', '二', '三', '四', '五', '六'][d.getDay()];
+}

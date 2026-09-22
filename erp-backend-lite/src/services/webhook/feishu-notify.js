@@ -173,7 +173,58 @@ export function buildTodaySummaryLines(bySeller, total) {
 }
 
 /**
- * 构造"当日到达指定状态"各店铺汇总文本块(签收/待取件/备货通知尾部,2026-09-18)
+ * 构造"当日签收"各店铺汇总文本块(2026-09-21 修正)
+ * 改查 op_package.delivered_at 当日非空——delivered_at 由 applyOzonStatus 在
+ * 状态升级到 delivered 时回填,webhook 联动(linkOzonOrder→applyOzonStatus)和
+ * API 同步(syncPosting→applyOzonStatus)双链路都写,与销售汇总同源
+ * 金额仍取 ozon_postings.sale_amount_cny(op_ozon_order.order_amount 兜底)
+ * @returns {string|null} 无命中返回 null
+ */
+function buildTodayReceivedSummaryLines() {
+  const { start, end } = getTodayUtcRange();
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT o.store_id, COUNT(*) AS n,
+      COALESCE(SUM(CASE
+        WHEN p.sale_amount_cny > 0 THEN p.sale_amount_cny
+        ELSE COALESCE((SELECT o2.order_amount FROM op_ozon_order o2
+                       WHERE o2.posting_number = p.posting_number AND o2.currency = 'CNY'
+                       ORDER BY o2.order_amount DESC LIMIT 1), 0)
+      END), 0) AS amount
+    FROM op_package pkg
+    JOIN op_ozon_order o ON o.id = pkg.ozon_order_id
+    LEFT JOIN ozon_postings p ON p.posting_number = o.posting_number
+    WHERE pkg.delivered_at IS NOT NULL
+      AND pkg.delivered_at >= ? AND pkg.delivered_at < ?
+      AND pkg.is_ignored = 0
+    GROUP BY o.store_id
+  `).all(start, end);
+  if (rows.length === 0) return null;
+  const stores = listStores();
+  const storeMap = new Map(stores.map(s => [s.id, s]));
+  const padOrder = (n) => String(n).padStart(2, ' ');
+  const padAmount = (cny) => {
+    const fixed = Number(cny).toFixed(2);
+    const [i, d] = fixed.split('.');
+    return `${i.padStart(4, ' ')}.${d}`;
+  };
+  const lines = [`—— 当日各店铺签收汇总(Asia/Shanghai)——`];
+  let tn = 0, ta = 0;
+  for (const r of rows) {
+    const store = storeMap.get(r.store_id);
+    const name = store?.name ?? String(r.store_id);
+    lines.push(`• ${name}: ${padOrder(r.n)} 单 / 销售金额 ${padAmount(r.amount)} CNY`);
+    tn += r.n;
+    ta += Number(r.amount) || 0;
+  }
+  lines.push(`合计:${padOrder(tn)} 单 / 销售金额 ${padAmount(ta)} CNY`);
+  return lines.join('\n');
+}
+
+/**
+ * 构造"当日到达指定状态"各店铺汇总文本块(待取件/备货通知尾部,2026-09-18)
+ * 注:仅覆盖 webhook 推送事件(ozon_push_events),API 兜底链路不计入。
+ *    2026-09-21:签收已切换到 op_package.delivered_at,此函数仅用于待取件/备货。
  * 参考当日销售汇总格式:按店铺 单量/销售金额 + 合计
  * 数据源:ozon_push_events 当日 STATE_CHANGED 且 new_state 命中(DISTINCT 货件去重,
  *        防同状态重复推送重复计数),金额取 ozon_postings.sale_amount_cny
@@ -443,8 +494,9 @@ export async function notifyPostingEvent(messageType, payload) {
       const changedLines = buildProductLines(changedProducts);
       if (changedLines) extra += `\n${changedLines}`;
       // 当日状态汇总(签收/待取件/备货,参考新订单当日销售汇总格式)
+      // 2026-09-21:签收改查 op_package.delivered_at(与销售汇总同源,覆盖 API 兜底)
       if (ns === 'posting_received') {
-        summaryLines = buildTodayStateSummaryLines(['posting_received', 'posting_delivered'], '签收');
+        summaryLines = buildTodayReceivedSummaryLines();
       } else if (ns === 'posting_in_pickup_point') {
         summaryLines = buildTodayStateSummaryLines(['posting_in_pickup_point'], '待取件');
       } else if (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') {
@@ -499,24 +551,29 @@ export async function notifyPostingEvent(messageType, payload) {
 
 /**
  * 从 DB 查询当日各店铺揽收统计
- * 口径(2026-09-13 修正):按 pickup_at 当日计数——pickup_at 是首次达到揽收级的时间,
- * 由 webhook handler(实时推送)与 unfulfilled-poller(兜底)共同维护,
- * 不受后续状态变更覆盖影响;旧口径(status=posting_on_way_to_city)会被后续状态覆盖导致漏计
+ * 口径(2026-09-21 修正):改查 op_ozon_order.delivering_date 当日非空——
+ *   op_ozon_order 是 webhook 联动(linkOzonOrder 在 rank 2~3 时写 delivering_date)
+ *   与 API 同步(applyOzonStatus→op_package.shipped_at)双链路共同维护的主表;
+ *   此前查 ozon_postings.pickup_at 在 webhook 停推走 API 兜底时漏统计
+ *   (兜底链路只发通知不写 ozon_postings,导致通知发出但统计为 0)
  * @returns {{bySeller: Map<number, {storeName, sellerId, pickupCount}>, total: number}}
  */
 export function buildTodayPickupSummaryFromDb() {
   const { start, end } = getTodayUtcRange();
   const db = getDb();
+  // 按 store_id 聚合(同 buildTodaySummaryFromDb 口径),JS 映射到 seller_id
+  // op_ozon_order.delivering_date 首次达到揽收级(rank 2~3)时由 linkOzonOrder 回填,
+  // 后续状态升级不会覆盖,无需 COALESCE
   const rows = db.prepare(`
-    SELECT seller_id, COUNT(*) AS pickup_count
-    FROM ozon_postings
-    WHERE pickup_at IS NOT NULL
-      AND pickup_at >= ? AND pickup_at < ?
-    GROUP BY seller_id
-    ORDER BY seller_id
+    SELECT store_id, COUNT(*) AS pickup_count
+    FROM op_ozon_order
+    WHERE delivering_date IS NOT NULL
+      AND delivering_date >= ? AND delivering_date < ?
+    GROUP BY store_id
   `).all(start, end);
 
   const stores = listStores();
+  const storeMap = new Map(stores.map(s => [s.id, s]));
   const bySeller = new Map();
   let total = 0;
 
@@ -526,9 +583,9 @@ export function buildTodayPickupSummaryFromDb() {
     bySeller.set(sellerId, { storeName: s.name, sellerId, pickupCount: 0 });
   }
   for (const r of rows) {
-    const sellerId = Number(r.seller_id);
-    const store = stores.find(s => Number(s.company_id) === sellerId);
-    const storeName = store?.name ?? String(sellerId);
+    const store = storeMap.get(r.store_id);
+    const sellerId = Number(store?.company_id ?? r.store_id);
+    const storeName = store?.name ?? String(r.store_id);
     bySeller.set(sellerId, {
       storeName,
       sellerId,
