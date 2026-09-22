@@ -28,6 +28,9 @@ const printingPkgId = ref(0);     // 打印互斥(与 OrderProcess printingId �
 const retryPkgIds = ref(new Set()); // 重量已保存但打印失败的包裹(重试只走打印+流转)
 const retryWeights = reactive({});  // pkgId → 已保存重量 g(重试成功后回填卡片,避免残留搜索时的旧重量)
 const agentOnline = ref(null);    // 菜鸟组件探测:null=探测中 true/false
+const printers = ref([]);         // 组件枚举的本机打印机名列表
+const defaultPrinter = ref('');   // 组件默认打印机
+const selectedPrinter = ref('');  // 当前指定打印机,''=组件默认(localStorage 记忆)
 const weightEls = {};             // 动态 ref:重量输入框(pkgId → el)
 const correctEls = {};            // 动态 ref:更正重量输入框(pkgId → el)
 
@@ -560,9 +563,32 @@ onMounted(() => {
   loadCounts();
   // 菜鸟组件探测(仅状态展示,失败不阻塞——打印时 pickLabelPrinter 会再连)
   getAgentPrinters()
-    .then(() => { agentOnline.value = true; })
+    .then(({ defaultPrinter: dp, printers: list }) => {
+      agentOnline.value = true;
+      defaultPrinter.value = dp || '';
+      printers.value = list || [];
+      // 恢复上次指定:记忆值仍在本机列表中才生效(打印机可能已被移除/重命名)
+      let saved = '';
+      try { saved = localStorage.getItem('erp:labelPrinter') || ''; } catch { /* noop */ }
+      if (saved && list.includes(saved)) {
+        selectedPrinter.value = saved;
+      } else {
+        selectedPrinter.value = '';
+        if (saved) {
+          try { localStorage.removeItem('erp:labelPrinter'); } catch { /* noop */ }
+        }
+      }
+    })
     .catch(() => { agentOnline.value = false; });
 });
+
+// 指定打印机:''=组件默认(清除记忆);pickLabelPrinter 优先读该记忆,打印链路无需改动
+function onPrinterChange() {
+  try {
+    if (selectedPrinter.value) localStorage.setItem('erp:labelPrinter', selectedPrinter.value);
+    else localStorage.removeItem('erp:labelPrinter');
+  } catch { /* noop */ }
+}
 </script>
 
 <template>
@@ -589,6 +615,19 @@ onMounted(() => {
         <button class="btn btn-primary scan-btn" :disabled="searching" @click="doSearch">
           {{ searching ? '搜索中…' : '搜索' }}
         </button>
+        <!-- 指定标签打印机(记住上次选择;''=组件默认) -->
+        <select
+          v-model="selectedPrinter"
+          class="filter-input printer-select"
+          :disabled="agentOnline !== true || !printers.length"
+          :title="agentOnline === true
+            ? (printers.length ? '标签打印机(记住上次选择)' : '未枚举到打印机')
+            : '打印组件未连接,无法选择打印机'"
+          @change="onPrinterChange"
+        >
+          <option value="">默认{{ defaultPrinter ? `(${defaultPrinter})` : '' }}</option>
+          <option v-for="p in printers" :key="p" :value="p">{{ p }}</option>
+        </select>
         <span
           class="agent-dot"
           :class="agentOnline === true ? 'on' : agentOnline === false ? 'off' : ''"
@@ -964,6 +1003,14 @@ onMounted(() => {
 }
 .scan-mode {
   min-width: 76px;
+}
+.printer-select {
+  max-width: 190px;
+  min-width: 96px;
+  font-size: 12px;
+  padding: 5px 6px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .scan-input {
   flex: 1;
