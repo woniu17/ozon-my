@@ -68,6 +68,9 @@ export function getPendingExportState() {
            OR p.weight IS NOT NULL
            OR p.waybill_printed_at IS NOT NULL
            OR p.is_ignored = 1
+           OR (p.note IS NOT NULL AND p.note != '')
+           OR (p.tags IS NOT NULL AND p.tags != '')
+           OR (p.head_logistics_no IS NOT NULL AND p.head_logistics_no != '')
          )`
     )
     .get(lastExportAt || '1970-01-01T00:00:00Z');
@@ -85,6 +88,7 @@ export function getPendingExportState() {
  *   packages: [{
  *     storeId, postingNumber, gmtModified,
  *     weight, waybillPrintedAt, ignored,
+ *     note, tags, headLogistics: { no, company, shippedAt },
  *     purchases: [{ platform, purchaseSn, syncUuid, ...采购单字段,
  *       links: [{ sku, offerId, allocatedAmount, quantity, allocMode }] }]
  *   }]
@@ -94,17 +98,23 @@ export function exportPurchaseSyncData({ machine } = {}) {
   // 1) 带人工操作痕迹的包裹
   const pkgs = db
     .prepare(
-      `SELECT p.id, p.store_id, o.posting_number, p.gmt_modified,
-              p.weight, p.waybill_printed_at, p.is_ignored
+      `SELECT p.id, o.store_id, o.posting_number, p.gmt_modified,
+              p.weight, p.waybill_printed_at, p.is_ignored,
+              p.note, p.tags, p.head_logistics_no, p.head_logistics_company, p.head_shipped_at
        FROM op_package p
        JOIN op_ozon_order o ON o.id = p.ozon_order_id
        WHERE EXISTS (SELECT 1 FROM op_purchase_link pl WHERE pl.package_id = p.id)
           OR p.weight IS NOT NULL
           OR p.waybill_printed_at IS NOT NULL
           OR p.is_ignored = 1
+          OR (p.note IS NOT NULL AND p.note != '')
+          OR (p.tags IS NOT NULL AND p.tags != '')
+          OR (p.head_logistics_no IS NOT NULL AND p.head_logistics_no != '')
        ORDER BY o.posting_number`
     )
     .all();
+  // store_id 取订单侧(2026-09-23:历史数据存在 package.store_id 与所属订单不一致的脏值,
+  // 导出/导入/diff 均按 (order.store_id, posting_number) 定位,用订单侧保证自然键可回查)
   if (!pkgs.length) {
     return { version: 1, exportedAt: nowIso(), machine: machine || null, packages: [] };
   }
@@ -175,6 +185,14 @@ export function exportPurchaseSyncData({ machine } = {}) {
     weight: p.weight ?? null,
     waybillPrintedAt: p.waybill_printed_at ?? null,
     ignored: !!p.is_ignored,
+    // 2026-09-23:人工编辑的备注/标签 + 头程物流(导入侧本机为空时回填;旧版文件无这些字段,自然跳过)
+    note: p.note ?? null,
+    tags: p.tags ?? null,
+    headLogistics: {
+      no: p.head_logistics_no ?? null,
+      company: p.head_logistics_company ?? null,
+      shippedAt: p.head_shipped_at ?? null,
+    },
     purchases: [...purchMap.values()].filter((e) => e.packageId === p.id).map(({ packageId, ...rest }) => rest),
   }));
 
@@ -225,8 +243,13 @@ function mergeExistingPo(po, imp, report) {
     updates.payment_amount = imp.paymentAmount;
     updates.goods_amount = imp.goodsAmount;
   }
-  // 状态:本地 wait_send 且导入已发货(填了国内单号)→ 推进
-  if (po.status === 'wait_send' && imp.status === 'shipped') updates.status = 'shipped';
+  // 状态:只进不退(wait_send/wait_pay→shipped→signed;closed 等终态不在表中,不会被覆盖)
+  // 2026-09-23:由单一 wait_send→shipped 扩展为 rank 推进,补齐 shipped→signed(签收状态跨机传导)
+  const statusRank = { wait_pay: 0, wait_send: 1, part_shipped: 2, shipped: 3, signed: 4 };
+  if (statusRank[po.status] !== undefined && statusRank[imp.status] !== undefined
+      && statusRank[imp.status] > statusRank[po.status]) {
+    updates.status = imp.status;
+  }
   // sync_uuid:本地缺失且导入有 → 回填(下次导出/判重可用)
   if (!po.sync_uuid && imp.syncUuid) updates.sync_uuid = imp.syncUuid;
 
@@ -337,7 +360,7 @@ export function importPurchaseSyncData(data, { dryRun = false } = {}) {
   const report = {
     dryRun,
     file: { exportedAt: data?.exportedAt, machine: data?.machine, packages: data?.packages?.length || 0 },
-    applied: { purchases: 0, purchaseUpdates: 0, links: 0, weights: 0, waybills: 0, ignores: 0 },
+    applied: { purchases: 0, purchaseUpdates: 0, links: 0, weights: 0, waybills: 0, ignores: 0, packageMeta: 0 },
     skipped: { packages: 0, items: 0, links: 0 },
     conflicts: [],
     errors: [],
@@ -472,6 +495,23 @@ function importOnePackage(pkgImp, report) {
     recomputeAggregates(pkg.id, touchedItems);
   }
 
+  // ── 包裹级字段:备注/标签/头程物流(2026-09-23 扩展,本机为空时回填)──
+  // 头程:文件包裹级字段直填;旧版文件(无 headLogistics)由上面"新 link 的采购单"推导兜底
+  const metaSets = [];
+  if (pkgImp.note && !pkg.note) metaSets.push(['note = ?', pkgImp.note]);
+  if (pkgImp.tags && !pkg.tags) metaSets.push(['tags = ?', pkgImp.tags]);
+  const hlImp = pkgImp.headLogistics || {};
+  if (hlImp.no && !pkg.head_logistics_no) {
+    metaSets.push(['head_logistics_no = ?', hlImp.no]);
+    if (hlImp.company && !pkg.head_logistics_company) metaSets.push(['head_logistics_company = ?', hlImp.company]);
+    if (hlImp.shippedAt && !pkg.head_shipped_at) metaSets.push(['head_shipped_at = ?', hlImp.shippedAt]);
+  }
+  if (metaSets.length) {
+    db.prepare(`UPDATE op_package SET ${metaSets.map((s) => s[0]).join(', ')}, gmt_modified = ? WHERE id = ?`)
+      .run(...metaSets.map((s) => s[1]), nowIso(), pkg.id);
+    report.applied.packageMeta++;
+  }
+
   // ── 包裹级字段:称重 / 交运 / 搁置 ──
   // 规则:本机为空 → 回填;两边都有且不同 → 文件更新时间较新才覆盖,否则记冲突
   if (pkgImp.weight != null && Number(pkgImp.weight) !== Number(pkg.weight)) {
@@ -595,6 +635,17 @@ export function diffPurchaseSyncAgainstDb(data) {
     }
     if (!!pkgImp.ignored !== !!pkg.is_ignored) {
       result.fieldMismatches.push(`${pkgImp.postingNumber} 搁置状态: 本机 ${pkg.is_ignored ? '已搁置' : '未搁置'} vs 文件 ${pkgImp.ignored ? '已搁置' : '未搁置'}`);
+    }
+    // 2026-09-23:备注/标签/头程物流(本机有值而文件不同/缺失 → 删库会丢,列出提示)
+    if (pkg.note && pkg.note !== (pkgImp.note ?? null)) {
+      result.fieldMismatches.push(`${pkgImp.postingNumber} 备注: 本机 "${pkg.note}" vs 文件 "${pkgImp.note ?? ''}"`);
+    }
+    if (pkg.tags && pkg.tags !== (pkgImp.tags ?? null)) {
+      result.fieldMismatches.push(`${pkgImp.postingNumber} 标签: 本机 "${pkg.tags}" vs 文件 "${pkgImp.tags ?? ''}"`);
+    }
+    const hlDiff = pkgImp.headLogistics?.no ?? null;
+    if (pkg.head_logistics_no && pkg.head_logistics_no !== hlDiff) {
+      result.fieldMismatches.push(`${pkgImp.postingNumber} 头程单号: 本机 ${pkg.head_logistics_no} vs 文件 ${hlDiff ?? '(无)'}`);
     }
   }
 
