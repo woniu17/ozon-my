@@ -265,16 +265,21 @@ async function searchPddOrder(orderSn, accounts = []) {
 }
 
 /** 买家版物流轨迹(goods_express H5 SSR,2026-09-16)
- *  方案:独立标签页打开 goods_express.html?order_sn=&tracking_number=,直接读
- *  SSR 数据岛 window.rawData.store.traceData.shipping(含 shippingName 与 traces[] 节点)。
+ *  方案:独立标签页打开 goods_express.html?order_sn=,直接读
+ *  SSR 数据岛 window.rawData.store.traceData.shipping(含 shippingName/trackingNumber 与 traces[] 节点)。
  *  实测该页为服务端渲染,轨迹数据内联在 HTML 中,无轨迹 XHR;直连轨迹 API 需页面
  *  生成 antiContent(裸 fetch 返回 9990),故以读数据岛为准,domcontentloaded 即可用
  *  (与 fetchPddNickname 读 personal.html rawData 同一模式);
  *  独立标签页用完即关,不污染订单列表主页面(context 内 cookie 共享,登录态天然可用)
- *  返回 { steps: [{acceptTime, remark}](最新在前,与1688买家版轨迹口径一致), shippingName, raw } */
+ *  2026-09-23:URL 不再传 tracking_number(对齐 PDD 前端 bundle:goods_express 只按
+ *  order_sn 打开)——页面返回订单"当前"物流(最新单号的轨迹+trackingNumber),卖家换
+ *  快递/单号录错时调用方可据 SSR 单号比对自愈;旧实现按库里单号过滤,错单号永远查
+ *  无轨迹且无法自愈。一单多包裹时页面默认渲染第一个包裹(采购场景基本单包裹,可接受)。
+ *  参数 trackingNumber 保留给调用方比对上下文,不再拼进 URL。
+ *  返回 { steps: [{acceptTime, remark}](最新在前,与1688买家版轨迹口径一致), shippingName, trackingNumber, raw } */
 async function getPddTrace(orderSn, trackingNumber, account) {
   return withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) => {
-    const url = `${PDD_ORIGIN}/goods_express.html?order_sn=${encodeURIComponent(orderSn)}&tracking_number=${encodeURIComponent(trackingNumber)}`;
+    const url = `${PDD_ORIGIN}/goods_express.html?order_sn=${encodeURIComponent(orderSn)}`;
     const tab = await page.context().newPage();
     let ship = null;
     let finalUrl = '';
@@ -311,7 +316,7 @@ async function getPddTrace(orderSn, trackingNumber, account) {
       .map((t) => ({ acceptTime: t.time || t.displayTime || '', remark: t.info || '' }))
       .filter((s) => s.remark || s.acceptTime);
     steps.sort((a, b) => String(b.acceptTime).localeCompare(String(a.acceptTime)));
-    return { steps, shippingName: ship.shippingName || '', raw: { shipping: ship } };
+    return { steps, shippingName: ship.shippingName || '', trackingNumber: ship.trackingNumber || '', raw: { shipping: ship } };
   });
 }
 

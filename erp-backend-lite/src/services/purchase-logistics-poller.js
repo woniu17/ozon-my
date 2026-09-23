@@ -12,6 +12,8 @@
 //   阶段C 拉完整轨迹(拼多多,浏览器):同阶段B 扫描条件的 yangkeduo 采购单 → goods_express
 //     SSR 数据岛直读(裸 fetch 需 antiContent 会 9990);顺带回填缺失的物流公司
 //     (不做签收升级:shippingStatus 枚举不可靠,在途/已签收都可能为 20)
+//     2026-09-23:页面只按 order_sn 查(不再传库里单号),返回订单"当前"物流+最新
+//     trackingNumber;SSR 单号与库里不一致时覆盖(卖家换快递/单号录错自愈)。
 //   妙手同步的采购单轨迹仍由妙手侧更新;本轮询器同字段写入,双路并存最新覆盖。
 // 限速:请求间隔 2s,连续失败 3 次中止本轮(防触发反爬/雪崩);单轮每阶段上限 100 单。
 // 阶段B-TB(2026-09-22):淘宝拉轨迹(buyertrade transit_step.do,按订单号查,响应自带单号/公司)
@@ -274,7 +276,14 @@ async function phaseFetchPddTrace() {
     const account = pddAccounts.includes(r.buyer_account) ? r.buyer_account : pddAccounts[0];
     if (!account) { skippedNoAccount++; continue; }
     try {
-      const { steps, shippingName } = await getPddTrace(r.purchase_sn, r.logistics_no, account);
+      const { steps, shippingName, trackingNumber } = await getPddTrace(r.purchase_sn, r.logistics_no, account);
+      // 单号核对(2026-09-23):页面按 order_sn 返回订单当前物流,SSR 自带最新单号;
+      // 与库里不一致(卖家换快递/单号录错)时覆盖,本轮轨迹即新单号的轨迹
+      if (trackingNumber && trackingNumber !== r.logistics_no) {
+        writeChangedLogisticsNo(r.id, trackingNumber, shippingName);
+        logger.info({ purchaseSn: r.purchase_sn, oldNo: r.logistics_no, newNo: trackingNumber },
+          '[purchase-logistics-poller] 阶段C:检测到PDD单号变更,已覆盖');
+      }
       if (steps.length) {
         const latest = steps[0];
         db.prepare(
@@ -335,9 +344,14 @@ async function phaseFetchTaobaoTrace() {
     if (!account) { skippedNoAccount++; continue; }
     try {
       const { steps, shippingName, expressId } = await getTaobaoTrace(r.purchase_sn, account);
-      // 轨迹响应自带快递单号:缺失时回填(顺带 wait_send → shipped)
+      // 轨迹响应自带快递单号:缺失时回填(顺带 wait_send → shipped);
+      // 已有但不一致(卖家换快递)时覆盖(2026-09-23)
       if (expressId && !r.logistics_no) {
         writeFilledLogisticsNo(r.id, expressId, shippingName);
+      } else if (expressId && expressId !== r.logistics_no) {
+        writeChangedLogisticsNo(r.id, expressId, shippingName);
+        logger.info({ purchaseSn: r.purchase_sn, oldNo: r.logistics_no, newNo: expressId },
+          '[purchase-logistics-poller] 阶段B-TB:检测到淘宝单号变更,已覆盖');
       }
       if (steps.length) {
         writeTraceRow(r.id, steps, shippingName);
@@ -501,6 +515,18 @@ function writeFilledLogisticsNo(id, logisticsNo, logisticsCompany) {
   ).run(logisticsNo, logisticsCompany || null, new Date().toISOString(), id);
 }
 
+/** 单号变更覆盖(2026-09-23,拉轨迹时按订单号核对出平台最新单号)
+ *  场景:卖家换快递/单号录错;公司仅在非空时覆盖(空则保旧值),不动 status */
+function writeChangedLogisticsNo(id, newNo, company) {
+  db.prepare(
+    `UPDATE op_purchase_order
+     SET logistics_no = ?,
+         logistics_company = CASE WHEN ? != '' THEN ? ELSE logistics_company END,
+         gmt_modified = ?
+     WHERE id = ?`
+  ).run(newNo, company || '', company || '', new Date().toISOString(), id);
+}
+
 /** 单包裹同步采购物流
  *  1688:补单号(缺时 getLogisticsForOrder)→ 拉轨迹(getTraceForOrder)
  *  拼多多:补单号(缺时 searchPddOrder)→ 拉轨迹(getPddTrace,顺带回填缺失公司名)
@@ -579,8 +605,15 @@ async function syncPurchaseLogisticsForPackage(packageId) {
         if (!o.logisticsNo) {
           results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'fill', detail: '暂无物流单号(可能未发货)' });
         } else {
-          const { steps, shippingName } = await getPddTrace(o.purchaseSn, o.logisticsNo, account);
-          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + writeTraceRow(o.id, steps, shippingName) });
+          const { steps, shippingName, trackingNumber } = await getPddTrace(o.purchaseSn, o.logisticsNo, account);
+          // 单号核对(2026-09-23):SSR 返回订单当前最新单号,不一致时覆盖(卖家换快递/单号录错)
+          let changedNo = '';
+          if (trackingNumber && trackingNumber !== o.logisticsNo) {
+            writeChangedLogisticsNo(o.id, trackingNumber, shippingName);
+            changedNo = `单号变更 ${o.logisticsNo} → ${trackingNumber},`;
+            o.logisticsNo = trackingNumber;
+          }
+          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + changedNo + writeTraceRow(o.id, steps, shippingName) });
         }
       } else if (o.platform === 'taobao') {
         // 淘宝(2026-09-22):transit_step 按订单号查询,无需先有快递单号;
@@ -591,12 +624,18 @@ async function syncPurchaseLogisticsForPackage(packageId) {
           continue;
         }
         const { steps, shippingName, expressId } = await getTaobaoTrace(o.purchaseSn, account);
+        let changedNo = '';
         if (expressId && !o.logisticsNo) {
           writeFilledLogisticsNo(o.id, expressId, shippingName);
           o.logisticsNo = expressId;
           filled = true;
+        } else if (expressId && expressId !== o.logisticsNo) {
+          // 单号核对(2026-09-23):响应自带最新单号,不一致时覆盖(卖家换快递)
+          writeChangedLogisticsNo(o.id, expressId, shippingName);
+          changedNo = `单号变更 ${o.logisticsNo} → ${expressId},`;
+          o.logisticsNo = expressId;
         }
-        results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + writeTraceRow(o.id, steps, shippingName) });
+        results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + changedNo + writeTraceRow(o.id, steps, shippingName) });
       } else {
         results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '该平台暂不支持物流同步' });
       }
