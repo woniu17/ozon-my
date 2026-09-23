@@ -30,6 +30,7 @@ import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaos
 import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
 import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus, syncPurchaseLogisticsForPackage } from '../services/purchase-logistics-poller.js';
 import { packageLabel, postingFbsGet, postingFbsShip } from '../services/ozon-opi.js';
+import { notifyPostingEvent } from '../services/webhook/feishu-notify.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
 import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
@@ -818,7 +819,7 @@ router.post('/admin/api/order-process/scan-ship/submit', (req, res, next) => {
   }
 });
 
-// 更正重量:交运后(打印发货后)人工修正发货重量
+// 更正重量:任意状态人工修正发货重量(2026-09-22 起解除"仅交运后"限制)
 // 仅更新 op_package.weight,不改交运时间/状态;利润中国际配送(估)随之按新重量变化
 // body: { packageId, weightG }  weightG: 正整数克 1~50000
 router.post('/admin/api/order-process/scan-ship/correct-weight', (req, res, next) => {
@@ -833,9 +834,6 @@ router.post('/admin/api/order-process/scan-ship/correct-weight', (req, res, next
     }
     const r = orderPackageDao.scanShipCorrectWeight(packageId, weightG);
     if (!r.found) return res.status(404).json({ ok: false, message: '包裹不存在' });
-    if (!r.shipped) {
-      return res.status(400).json({ ok: false, message: '仅已交运(打印发货后)的包裹可更正重量' });
-    }
     res.json(ok({ updated: true, oldWeightG: r.oldWeightG, weightG }));
   } catch (e) {
     next(e);
@@ -1227,6 +1225,23 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     // 5) 成功:同步最新 posting 落库(校准本地 Ozon 状态)
     orderPackageDao.syncPosting(store.id, p2);
     logger.info({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 备货成功');
+    // 6) 备货飞书通知(2026-09-22):备货动作本地直发,不再依赖 Ozon STATE_CHANGED 推送——
+    //    webhook 停推期间 71 单备货通知丢失的教训;与 webhook 链路共用 feishu_stocking_notified_at
+    //    去重(先发先标记)。异步发送不阻塞响应,失败不打标由 webhook/后续重备货幂等场景兜底
+    if (!orderPackageDao.isFeishuNotified(store.id, row.postingNumber, 'stocking')) {
+      Promise.resolve(
+        notifyPostingEvent('TYPE_STATE_CHANGED', {
+          posting_number: row.postingNumber,
+          seller_id: Number(store.company_id),
+          changed_state_date: new Date().toISOString(),
+          new_state: 'posting_awaiting_registration',
+        })
+      )
+        .then((sent) => {
+          if (sent) orderPackageDao.markFeishuNotified(store.id, row.postingNumber, 'stocking');
+        })
+        .catch((e) => logger.warn({ err: e?.message, postingNumber: row.postingNumber }, '[order-process] 备货通知发送失败'));
+    }
     res.json(ok({ alreadyShipped: false, ozonStatus: newStatus, substatus: newSub || null }));
   } catch (e) {
     const msg = e?.message || String(e);

@@ -131,7 +131,8 @@
       </view>
     </view>
 
-    <!-- 底部操作条(显隐规则与 web 端 831ecb6 行级判断一致;顺序:同步订单→备货→采购/编辑采购→同步采购物流) -->
+    <!-- 底部操作条(显隐规则与 web 端 831ecb6 行级判断一致;顺序:同步订单→备货→采购/编辑采购→同步采购物流)
+         2026-09-22:非待处理状态无论有无采购关联均可进入采购页(删除采购后可重新添加),文案随 links 动态 -->
     <view class="action-bar">
       <button class="abtn ghost" :disabled="syncing" @click="onSync">
         {{ syncing ? '同步中…' : '同步订单' }}
@@ -149,10 +150,10 @@
         @click="onPurchase"
       >采购</button>
       <button
-        v-if="links.length && pkg.operateStatus !== 'wait_process'"
+        v-if="pkg.operateStatus !== 'wait_process'"
         class="abtn ghost"
         @click="onPurchase"
-      >编辑采购</button>
+      >{{ links.length ? '编辑采购' : '添加采购' }}</button>
       <button
         v-if="links.length && pkg.operateStatus !== 'wait_process'"
         class="abtn ghost"

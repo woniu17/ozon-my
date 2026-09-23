@@ -229,15 +229,27 @@ function enqueueFeishuBackfill(store, postingNumber, stateKey, cutoff, label, se
 function maybeBackfillFeishuNotify(store, posting) {
   const postingNumber = posting?.posting_number;
   if (!postingNumber || !store?.company_id) return;
-  // webhook 链路活着(ozon_postings 已有该货件)→ 通知由 webhook 负责,跳过兜底
-  if (orderPackageDao.hasWebhookPosting(postingNumber)) return;
-  const cutoff = iso(new Date(Date.now() - FEISHU_BACKFILL_MAX_AGE_DAYS * 86400_000));
+  // 2026-09-22 修复1:不再按"ozon_postings 有该货件"短路(那只代表历史曾收到 webhook,如下单时;
+  // webhook 停推期间该短路会导致状态通知两边都不发)。双链路统一走 claim/mark DB 去重:
+  // webhook 活着会先发先标记 → 兜底 claim 失败自动跳过;webhook 停推 → 兜底全权负责。
+  // 2026-09-22 修复2:补发加 6h 状态变化窗口——存量老单的历史通知多由 webhook 发出过
+  //   (claim 机制 9/20 上线未回填其标记),无窗口会整段重发造成轰炸。正常滞后为分钟级
+  //   (fast 轮 2 分钟),6h 足够覆盖。
+  const BACKFILL_WINDOW_MS = 6 * 3600_000;
+  const now = Date.now();
+  const inWindow = (t) => {
+    const ms = Date.parse(t || '');
+    return !!ms && now - ms <= BACKFILL_WINDOW_MS;
+  };
+  const cutoff = iso(new Date(now - FEISHU_BACKFILL_MAX_AGE_DAYS * 86400_000));
   const sellerId = Number(store.company_id);
 
   // 1) 新订单(TYPE_NEW_POSTING):API 轮询 posting 与 webhook OPI 回拉同源,补 seller_id 即可复用通知逻辑
-  enqueueFeishuBackfill(store, postingNumber, 'new_order', cutoff, '新订单', () =>
-    notifyPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId })
-  );
+  if (inWindow(posting.in_process_at)) {
+    enqueueFeishuBackfill(store, postingNumber, 'new_order', cutoff, '新订单', () =>
+      notifyPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId })
+    );
+  }
 
   // 2) 状态通知:substatus 优先(v4 直接返回推送模型状态名),否则 status 映射
   const pushState = posting.substatus || apiToPush(posting.status);
@@ -249,24 +261,61 @@ function maybeBackfillFeishuNotify(store, posting) {
     changed_state_date: posting.delivering_date ?? null,
   };
   // 揽收(rank2-3,取货点单发):对齐 webhook isPickupLevelPush 语义,跳级到快递员等也按揽收通知
-  if (rank >= 2 && rank <= 3 && pushState !== 'posting_in_pickup_point') {
+  if (rank >= 2 && rank <= 3 && pushState !== 'posting_in_pickup_point' && inWindow(posting.delivering_date)) {
     enqueueFeishuBackfill(store, postingNumber, 'pickup', cutoff, '揽收', () =>
       notifyPostingPickedUp({ ...base, new_state: pushState, old_state: null })
     );
   }
-  // 到达取货点
+  // 到达取货点(2026-09-22 修复:此前用 delivering_date 判窗口,而到达取货点晚于揽收 1~3 天,
+  // 必超 6h 窗 → 该分支从未发出过通知(pp 标记全库为 0 的根因)。
+  // 现改用 pickup_point_at(首见取货点状态时刻,首次同步到时写)作为窗口时间源)
   if (pushState === 'posting_in_pickup_point') {
-    enqueueFeishuBackfill(store, postingNumber, 'pickup_point', cutoff, '到达取货点', () =>
-      notifyPostingEvent('TYPE_STATE_CHANGED', { ...base, new_state: pushState })
-    );
+    let firstSeenAt = null;
+    try {
+      firstSeenAt = db
+        .prepare(`SELECT pickup_point_at FROM op_ozon_order WHERE store_id = ? AND posting_number = ?`)
+        .get(store.id, postingNumber)?.pickup_point_at ?? null;
+      if (!firstSeenAt) {
+        firstSeenAt = new Date().toISOString();
+        db.prepare(`UPDATE op_ozon_order SET pickup_point_at = ? WHERE store_id = ? AND posting_number = ?`)
+          .run(firstSeenAt, store.id, postingNumber);
+      }
+    } catch { /* 字段缺失/写入失败按当前时刻处理,不影响通知 */
+      firstSeenAt = new Date().toISOString();
+    }
+    if (inWindow(firstSeenAt)) {
+      enqueueFeishuBackfill(store, postingNumber, 'pickup_point', cutoff, '到达取货点', () =>
+        notifyPostingEvent('TYPE_STATE_CHANGED', { ...base, changed_state_date: firstSeenAt, new_state: pushState })
+      );
+    }
   }
   // 签收(rank4;签收时间用 op_package.delivered_at,API 无签收时间戳)
   if (rank === 4) {
-    enqueueFeishuBackfill(store, postingNumber, 'received', cutoff, '签收', () =>
-      notifyPostingEvent('TYPE_STATE_CHANGED', {
+    const deliveredAt = lookupDeliveredAt(store.id, postingNumber);
+    if (inWindow(deliveredAt)) {
+      enqueueFeishuBackfill(store, postingNumber, 'received', cutoff, '签收', () =>
+        notifyPostingEvent('TYPE_STATE_CHANGED', {
+          ...base,
+          changed_state_date: deliveredAt,
+          new_state: pushState,
+        })
+      );
+    }
+  }
+  // 3) 取消(2026-09-22 补,rank9 吸收态):v4 cancellation 对象无时间戳,不加状态变化窗口——
+  //    防历史轰炸靠部署迁移(feishu_cancel_notified_at 列新增时存量 cancelled 单一律回填为已通知),
+  //    之后 claim 成功的都是新变为取消的单,claim/mark 去重保证只发一次。
+  //    发现延迟:fast 轮 listHours=3 覆盖"下单3h内取消"(买家取消多数在此),其余 mid 轮 8h 兜底。
+  //    (2026-09-22 排查实证:07971311-1166-1 由 API 轮询发现取消但无任何通知,webhook 推送丢失)
+  if (pushState === 'posting_canceled' || pushState === 'posting_not_in_sort_center') {
+    enqueueFeishuBackfill(store, postingNumber, 'cancel', cutoff, '取消', () =>
+      notifyPostingEvent('TYPE_POSTING_CANCELLED', {
         ...base,
-        changed_state_date: lookupDeliveredAt(store.id, postingNumber),
+        changed_state_date: null,
         new_state: pushState,
+        reason: posting.cancellation?.cancel_reason
+          ? { message: posting.cancellation.cancel_reason }
+          : null,
       })
     );
   }

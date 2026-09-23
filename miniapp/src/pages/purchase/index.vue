@@ -186,7 +186,15 @@
     <!-- 默认视图:采购管理(已有采购直接展示,删除为暂存标记,统一保存落地) -->
     <view v-else>
       <view class="card">
-        <view class="section-title">已有采购({{ groups.length }})</view>
+        <view class="section-head">
+          <view class="section-title">已有采购({{ groups.length }})</view>
+          <button
+            v-if="keptGroups.length"
+            class="mini-btn"
+            :disabled="!!pendingAdd"
+            @click="openAllocEdit"
+          >改分摊</button>
+        </view>
         <view v-if="!groups.length && !pendingAdd" class="muted-line">尚无采购关联,可从平台订单选择新增</view>
         <view
           v-for="g in groups"
@@ -252,6 +260,44 @@
           <view class="po-actions">
             <button v-if="!pendingRemoves.includes(g.purchaseOrderId)" class="mini-btn danger" @click="toggleRemove(g)">删除</button>
             <button v-else class="mini-btn" @click="toggleRemove(g)">恢复</button>
+          </view>
+        </view>
+
+        <!-- 改分摊面板(卡片内展开,交互同物流录入面板;确认后暂存,随底部「保存」落地) -->
+        <view v-if="allocEdit.open" class="alloc-edit">
+          <view class="tip">手动指定各产品行的采购分摊金额(优惠券/额外成本等实际采购价与订单金额不符时使用),不会新增采购单。</view>
+          <view v-for="r in allocEdit.rows" :key="r.itemId" class="alloc-row">
+            <image v-if="r.picUrl" class="alloc-img" :src="r.picUrl" mode="aspectFill" />
+            <view v-else class="alloc-img"></view>
+            <view class="alloc-main">
+              <view class="alloc-title">{{ r.title || '—' }}</view>
+              <view class="alloc-sub">SKU {{ r.sku || '—' }} ×{{ r.quantity }}</view>
+              <view class="alloc-input-wrap">
+                <text class="rmb">¥</text>
+                <input class="alloc-input" type="digit" v-model="r.amount" placeholder="0.00" />
+              </view>
+            </view>
+          </view>
+          <view class="alloc-sum">
+            合计:<text class="alloc-sum-num">¥{{ allocEditTotal.toFixed(2) }}</text>
+          </view>
+          <view class="logi-actions">
+            <button class="mini-btn" @click="allocEdit.open = false">取消</button>
+            <button class="mini-btn primary" @click="confirmAllocEdit">确认修改</button>
+          </view>
+        </view>
+      </view>
+
+      <!-- 待修改分摊(改分摊确认后暂存,保存时落地) -->
+      <view v-if="pendingAlloc" class="card">
+        <view class="section-title">待修改分摊</view>
+        <view class="po pending-add">
+          <view class="po-meta">
+            <text class="po-amt">合计 ¥{{ pendingAlloc.total.toFixed(2) }}</text>
+            <text class="po-meta-item">{{ pendingAlloc.items.length }} 个产品行分摊将更新,保存后生效</text>
+          </view>
+          <view class="po-actions">
+            <button class="mini-btn danger" @click="pendingAlloc = null">撤销</button>
           </view>
         </view>
       </view>
@@ -381,6 +427,7 @@ import {
   unlinkPurchase,
   clearPurchaseInfo,
   submitPurchase,
+  updatePurchaseAlloc,
   lookupPurchase,
   updatePurchaseLogistics,
   shipPackage,
@@ -400,9 +447,13 @@ const saving = ref(false);
 // 暂存变更(统一保存落地,2026-09-19):
 //   pendingRemoves: 标记删除的已有采购单 purchaseOrderId
 //   pendingAdd: Step3 确认的新增采购(存 submitPurchase body + 拼单 lookup 结果)
+//   pendingAlloc: 待修改的产品行分摊(改已有采购分摊,不新增采购单;2026-09-22)
 const pendingRemoves = ref([]);
 const pendingAdd = ref(null);
-const dirty = computed(() => pendingRemoves.value.length > 0 || !!pendingAdd.value);
+const pendingAlloc = ref(null);
+const dirty = computed(
+  () => pendingRemoves.value.length > 0 || !!pendingAdd.value || !!pendingAlloc.value
+);
 
 // ── 标签映射(与详情页/ web 端同步)────────────────────────
 const PLATFORM_LABELS = {
@@ -454,6 +505,59 @@ const groups = computed(() => {
     };
   });
 });
+
+// ════════════════════════════════════════════════════════════
+// 改分摊(2026-09-22,口径同 web 端 manual+无新单号=updatePurchaseAlloc):
+// 手动指定各产品行分摊金额(优惠券/额外成本等实际采购价与订单金额不符时使用),
+// 不新增采购单,只更新已有 link 的 allocated_amount;暂存后随「保存」统一落地
+// ════════════════════════════════════════════════════════════
+// 保留(未标记删除)的已有采购单
+const keptGroups = computed(() =>
+  groups.value.filter((g) => !pendingRemoves.value.includes(g.purchaseOrderId))
+);
+// 保留采购的行分摊合计:itemId → ¥(改分摊面板预填值,勿读 profitAlloc 避免反馈循环)
+function keptAllocByItem() {
+  const kept = new Map();
+  for (const l of links.value) {
+    if (pendingRemoves.value.includes(l.purchaseOrderId)) continue;
+    kept.set(l.ozonOrderItemId, (kept.get(l.ozonOrderItemId) || 0) + (Number(l.allocatedAmount) || 0));
+  }
+  return kept;
+}
+// 改分摊编辑面板(卡片内展开,交互同物流录入面板)
+const allocEdit = reactive({ open: false, rows: [] });
+const allocEditTotal = computed(() =>
+  Math.round(allocEdit.rows.reduce((s, r) => s + (Number(r.amount) || 0), 0) * 100) / 100
+);
+function openAllocEdit() {
+  if (pendingAdd.value) {
+    uni.showToast({ title: '请先保存待新增采购,再修改分摊', icon: 'none' });
+    return;
+  }
+  const kept = keptAllocByItem();
+  allocEdit.rows = items.value.map((it) => ({
+    itemId: it.id,
+    title: it.title,
+    sku: it.sku,
+    picUrl: it.picUrl,
+    quantity: it.quantity,
+    amount: String(Math.round((kept.get(it.id) || 0) * 100) / 100),
+  }));
+  allocEdit.open = true;
+}
+function confirmAllocEdit() {
+  const rows = allocEdit.rows.map((r) => ({ itemId: r.itemId, amount: Number(r.amount) || 0 }));
+  if (!rows.some((r) => r.amount > 0)) {
+    uni.showToast({ title: '请至少填写一行分摊金额', icon: 'none' });
+    return;
+  }
+  pendingAlloc.value = {
+    items: rows,
+    total: Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100) / 100,
+  };
+  allocEdit.open = false;
+  uni.showToast({ title: '已暂存,请点击保存落地', icon: 'none' });
+}
 
 // ── 数据加载 ────────────────────────────────────────────────
 async function loadDetail() {
@@ -578,11 +682,16 @@ function calcProfit(it, alloc) {
 
 // manage 视图:每行有效分摊(与将保存口径一致)
 // 有 pendingAdd(待新增采购暂存)时直接用其分摊值——auto 模式下它已是"未删除已有 + 新增加权"的行总额;
+// 有 pendingAlloc(待修改分摊)时用其行金额(改分摊与新增互斥,不会同时存在);
 // 否则 = 未删除已有采购的行分摊合计
 const profitRows = computed(() => {
   const keptByItem = new Map();
   if (pendingAdd.value) {
     for (const it of pendingAdd.value.body.items || []) {
+      keptByItem.set(it.itemId, (keptByItem.get(it.itemId) || 0) + (Number(it.amount) || 0));
+    }
+  } else if (pendingAlloc.value) {
+    for (const it of pendingAlloc.value.items) {
       keptByItem.set(it.itemId, (keptByItem.get(it.itemId) || 0) + (Number(it.amount) || 0));
     }
   } else {
@@ -1122,13 +1231,25 @@ async function doSave(withShip = false) {
       groups.value.length > 0 &&
       groups.value.every((g) => pendingRemoves.value.includes(g.purchaseOrderId));
     if (allRemoved && !add) await clearPurchaseInfo(packageId.value);
-    // 2) 新增采购落地:逐笔平台订单分别提交(一笔订单=一个采购单,杜绝单号拼接)
+    // 2) 改分摊落地(先冲回已删单,再整体更新保留 link 的行分摊;全删场景无保留单,跳过)
+    let allocUpdated = false;
+    if (pendingAlloc.value && !allRemoved) {
+      await updatePurchaseAlloc({ packageId: packageId.value, items: pendingAlloc.value.items });
+      allocUpdated = true;
+    }
+    // 3) 新增采购落地:逐笔平台订单分别提交(一笔订单=一个采购单,杜绝单号拼接)
     if (add && add.orders?.length) {
       for (const od of add.orders) {
         await submitPurchase({ ...add.body, ...od, purchaseSn: od.purchaseSn });
       }
     }
-    uni.showToast({ title: add?.orders?.length > 1 ? '已保存 ' + add.orders.length + ' 笔采购' : '采购已保存', icon: 'none' });
+    uni.showToast({
+      title: [
+        allocUpdated ? '分摊已修改' : '',
+        add?.orders?.length > 1 ? '已保存 ' + add.orders.length + ' 笔采购' : add ? '采购已保存' : '',
+      ].filter(Boolean).join(' · ') || '已保存',
+      icon: 'none',
+    });
     // 保存并备货:保存成功后向 Ozon 确认货件(多件二次确认,单件直接备货)
     if (withShip && canShipAfterSave.value) await shipAfterSave();
     notifyRefresh();
@@ -1235,6 +1356,29 @@ onLoad((opts) => {
   font-weight: 600;
   color: #1f2329;
   margin-bottom: 16rpx;
+}
+
+/* 标题行(标题+右侧操作按钮,改分摊入口) */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-head .section-title {
+  margin-bottom: 0;
+}
+
+.section-head + .muted-line,
+.section-head + .po {
+  margin-top: 16rpx;
+}
+
+/* 改分摊面板(已有采购卡片内展开) */
+.alloc-edit {
+  margin-top: 16rpx;
+  padding-top: 16rpx;
+  border-top: 1rpx solid #f2f3f5;
 }
 
 /* 删除标记态(暂存,保存落地前灰化提示) */

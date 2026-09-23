@@ -4,13 +4,15 @@
 // → wait_ship 自动打印面单并流转交运;非 wait_ship 提示状态问题不动状态
 // 键盘流:扫描框 Enter=搜索 → 重量框 Enter=发货 → 终态自动回焦扫描框(扫码枪零鼠标作业)
 // 2026-09-15:商品/采购信息下方公式化展示订单金额+利润计算过程(估/实+销售/成本利润率),
-//            打印发货后按称重重算;交运后可更正重量;发货记录列表可滚动
+//            打印发货后按称重重算;发货记录列表可滚动
+// 2026-09-22:任意状态均可人工更正重量(利润随之重估);产品行新增"单价调整"折叠块(口径同订单处理采购弹窗)
 import { ref, reactive, computed, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   getOrderList, scanShipSubmit, correctShipWeight, getScanShipRecords, fetchPackageLabel, markPrinted,
 } from '../api/order-process.js';
 import { pickLabelPrinter, printLabelImage, getAgentPrinters } from '../api/print-agent.js';
+import { getSkusInfo, setSkuCustoms, updatePrice } from '../api/price-manage.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
 
@@ -41,8 +43,19 @@ const banner = reactive({ type: '', text: '' }); // type: 'ok'|'err'|'info'
 const weightValues = reactive({});
 const weightErrors = reactive({});
 
-// ── 更正重量(交运后人工修正,2026-09)──────────────────────
+// ── 更正重量(人工修正发货重量,利润随之重算;2026-09-22 起任意状态可用)──
 const correct = reactive({ pkgId: 0, value: '', err: '', saving: false });
+
+// ── 单价调整(2026-09-22,口径同 OrderProcess 采购弹窗;调整该 SKU 上架价,只影响后续新订单)──
+const PM_COMMISSION_RATE = 0.16;   // 预估佣金率(对齐后端 computeProfit)
+const PM_DELIVERY_BASE_CNY = 3.37; // 国际配送费公式(对齐后端)
+const PM_DELIVERY_PER_G_CNY = 0.0281;
+const PM_TARGET_RATES = [40, 50, 60, 70, 80, 90]; // 目标成本利润率选项(%)
+const PM_DEFAULT_RATE = 50;        // 默认选中 50%
+const skuPricing = ref({});          // sku → 价格管理 skus-info 行(现价/weightG/inCache/hasProductId)
+const poCmpExpanded = reactive({});  // 单价调整折叠展开(pkgId:sku → bool)
+const poRateChoice = reactive({});   // 每行目标率(sku → 40~90,未选默认 50)
+const adjustingSku = ref('');
 
 // ── 发货记录(右侧栏)──────────────────────────────────────
 const RECORD_TABS = [
@@ -284,6 +297,8 @@ async function doSearch() {
       pageSize: 50,
     });
     results.value = data?.packages || [];
+    // 加载结果涉及 SKU 的定价信息(单价调整对比用;一次接口,sku 去重)
+    loadSkuPricing([...new Set(results.value.flatMap((p) => (p.items || []).map((it) => it.sku).filter(Boolean)))]);
     const n = results.value.length;
     if (n === 0) {
       banner.text = `未找到匹配订单「${kw}」`;
@@ -457,7 +472,7 @@ async function onReprint(pkg) {
   }
 }
 
-// ── 更正重量(已交运卡片:人工修正发货重量,利润随之重算)──
+// ── 更正重量(任意状态:人工修正发货重量,利润随之重算)──
 function onStartCorrect(pkg) {
   correct.pkgId = pkg.id;
   correct.value = pkg.weightG != null ? String(Math.floor(pkg.weightG)) : '';
@@ -493,6 +508,82 @@ async function onSubmitCorrect(pkg) {
     correct.err = err?.message || String(err);
   } finally {
     correct.saving = false;
+  }
+}
+
+// ── 单价调整(产品信息区,每个 SKU 折叠块;调整的是 Ozon 上架价)──
+function togglePoCmp(key) { poCmpExpanded[key] = !poCmpExpanded[key]; }
+async function loadSkuPricing(skus) {
+  if (!skus?.length) { skuPricing.value = {}; return; }
+  try {
+    const list = await getSkusInfo(skus);
+    const map = {};
+    for (const r of list || []) map[r.sku] = r;
+    skuPricing.value = map;
+  } catch (e) {
+    console.warn('[scan-ship] skus-info failed', e);
+  }
+}
+// 单件口径配送费(有重量才可估;重量缺失返回 null,利润不扣配送)
+function poUnitDelivery(weightG) {
+  const w = Number(weightG);
+  if (!(w > 0)) return null;
+  return PM_DELIVERY_BASE_CNY + PM_DELIVERY_PER_G_CNY * w;
+}
+// 调价对比行(单件口径,公式与 OrderProcess 采购弹窗 profitRows 一致)
+// unitCost = 行级采购分摊合计(items.purchaseAmount,后端从关联 link 重算维护) / 行数量
+function skuAdjustRow(pkg, it) {
+  const qty = Number(it.quantity) || 0;
+  const unitCost = qty > 0 ? (Number(it.purchaseAmount) || 0) / qty : 0;
+  const info = skuPricing.value[it.sku] || null;
+  const unitDelivery = poUnitDelivery(info?.weightG);
+  const rate = poRateChoice[it.sku] || PM_DEFAULT_RATE;
+  // 建议价(单件口径,向上取整数元,与 price-update 服务端校验同口径)
+  const suggested = unitCost > 0 && unitDelivery != null
+    ? Math.ceil((unitCost * (1 + rate / 100) + unitDelivery) / (1 - PM_COMMISSION_RATE))
+    : null;
+  const canAdjust = !!(it.sku && unitCost > 0 && unitDelivery != null && info?.inCache && info?.hasProductId);
+  const listingPrice = info?.price ?? null;
+  const oldCommission = listingPrice != null ? listingPrice * PM_COMMISSION_RATE : null;
+  const newCommission = suggested != null ? suggested * PM_COMMISSION_RATE : null;
+  const oldProfit = listingPrice != null && unitDelivery != null
+    ? Math.round((listingPrice * (1 - PM_COMMISSION_RATE) - unitDelivery - unitCost) * 100) / 100 : null;
+  const newProfit = suggested != null && unitDelivery != null
+    ? Math.round((suggested * (1 - PM_COMMISSION_RATE) - unitDelivery - unitCost) * 100) / 100 : null;
+  const oldRateC = oldProfit != null && unitCost > 0 ? Math.round((oldProfit / unitCost) * 1000) / 1000 : null;
+  const newRateC = newProfit != null && unitCost > 0 ? Math.round((newProfit / unitCost) * 1000) / 1000 : null;
+  return {
+    rate, unitCost, unitDelivery, suggested, canAdjust, listingPrice,
+    oldCommission, newCommission, oldProfit, newProfit, oldRateC, newRateC,
+    missingWhy: !it.sku ? '订单商品缺 SKU'
+      : unitCost <= 0 ? '行级采购分摊为 0(未采购或包裹级关联)'
+      : unitDelivery == null ? 'SKU 未维护重量(价格管理)'
+      : !info?.inCache ? '不在价格缓存(先在价格管理同步价格)'
+      : !info?.hasProductId ? '商品缺少 product_id'
+      : '',
+  };
+}
+// 一键调价:先同步成本基准(本单分摊单价)再走价格管理改价(服务端按基准复算校验)
+async function adjustSkuPrice(pkg, it) {
+  const r = skuAdjustRow(pkg, it);
+  if (adjustingSku.value || r.suggested == null || !r.canAdjust) return;
+  const okc = await confirmStore.ask({
+    message: `调整 SKU ${it.sku} 的上架价格?\n现价 ${r.listingPrice != null ? '¥' + r.listingPrice : '无'} → 新价 ¥${r.suggested}(目标成本利润率 ${r.rate}%,划线价将设为 ¥${r.suggested * 2})\n将同步更新该 SKU 成本基准:采购价 ¥${Math.round(r.unitCost * 100) / 100}\n只影响后续新订单,已下单包裹价格不变`,
+    confirmText: '调整价格',
+  });
+  if (!okc) return;
+  adjustingSku.value = it.sku;
+  try {
+    // 1) 成本基准 = 本单分摊单价(price-update 服务端按 SKU 维护采购价复算建议价的前提)
+    await setSkuCustoms(it.sku, { purchasePrice: Math.round(r.unitCost * 100) / 100 });
+    // 2) 目标率改价(限频/日志/30s 回读均复用价格管理链路)
+    await updatePrice({ sku: String(it.sku), newPrice: r.suggested, targetRate: r.rate / 100 });
+    show('改价已提交,30秒后自动回读校准', 'success');
+    await loadSkuPricing([it.sku]); // 刷新现价显示
+  } catch (err) {
+    show(err.message || '调价失败', 'error');
+  } finally {
+    adjustingSku.value = '';
   }
 }
 
@@ -696,7 +787,8 @@ function onPrinterChange() {
               <div class="pkg-left-label">产品信息</div>
               <!-- 商品信息(SKU/OfferID 可点击复制,数量独立右列) -->
               <div class="pkg-products">
-                <div v-for="(it, i) in pkg.items" :key="i" class="product-item">
+                <template v-for="(it, i) in pkg.items" :key="i">
+                <div class="product-item">
                   <div class="img-hover-wrap">
                     <a v-if="it.picUrl && it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="img-link" title="打开Ozon商品详情页" @click.stop>
                       <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="thumb140" alt="" />
@@ -733,6 +825,68 @@ function onPrinterChange() {
                   </div>
                   <div class="product-qty" :class="{ 'qty-multi': it.quantity > 1 }">× {{ it.quantity }}</div>
                 </div>
+                <!-- 单价调整(2026-09-22,默认折叠;调整该 SKU 上架价,口径同 OrderProcess 采购弹窗) -->
+                <div class="po-card-cmp">
+                  <div class="po-cmp-toggle">
+                    <div class="po-cmp-toggle-left" @click="togglePoCmp(pkg.id + ':' + it.sku)">
+                      <span class="po-cmp-caret">{{ poCmpExpanded[pkg.id + ':' + it.sku] ? '▾' : '▸' }}</span>
+                      <span class="po-cmp-title">单价调整</span>
+                      <span class="profit-est-sub">调整的是该 SKU 上架价,只影响后续新订单</span>
+                    </div>
+                    <template v-if="poCmpExpanded[pkg.id + ':' + it.sku]">
+                      <select
+                        class="filter-input po-rate-select"
+                        :value="poRateChoice[it.sku] || PM_DEFAULT_RATE"
+                        :disabled="!skuAdjustRow(pkg, it).canAdjust"
+                        @change="poRateChoice[it.sku] = Number($event.target.value)"
+                      >
+                        <option v-for="r in PM_TARGET_RATES" :key="r" :value="r">{{ r }}%</option>
+                      </select>
+                      <button
+                        class="btn btn-ghost btn-sm"
+                        :disabled="!skuAdjustRow(pkg, it).canAdjust || adjustingSku === it.sku"
+                        :title="skuAdjustRow(pkg, it).canAdjust ? `按 ${poRateChoice[it.sku] || PM_DEFAULT_RATE}% 成本利润率调整该 SKU 上架价` : skuAdjustRow(pkg, it).missingWhy"
+                        @click.stop="adjustSkuPrice(pkg, it)"
+                      >{{ adjustingSku === it.sku ? '调价中…' : '调价' }}</button>
+                    </template>
+                  </div>
+                  <table v-if="poCmpExpanded[pkg.id + ':' + it.sku]" class="po-cmp-table">
+                    <tbody>
+                      <tr>
+                        <td class="cmp-label">销售单价</td>
+                        <td class="cmp-old">{{ skuAdjustRow(pkg, it).listingPrice != null ? skuAdjustRow(pkg, it).listingPrice.toFixed(2) : '—' }}</td>
+                        <td class="cmp-arrow">→</td>
+                        <td class="cmp-new"><b v-if="skuAdjustRow(pkg, it).suggested != null">{{ skuAdjustRow(pkg, it).suggested.toFixed(2) }}</b><span v-else class="muted">—</span></td>
+                      </tr>
+                      <tr>
+                        <td class="cmp-label">ozon佣金</td>
+                        <td class="cmp-old">{{ skuAdjustRow(pkg, it).oldCommission != null ? skuAdjustRow(pkg, it).oldCommission.toFixed(2) : '—' }}</td>
+                        <td class="cmp-arrow">→</td>
+                        <td class="cmp-new">{{ skuAdjustRow(pkg, it).newCommission != null ? skuAdjustRow(pkg, it).newCommission.toFixed(2) : '—' }}</td>
+                      </tr>
+                      <tr>
+                        <td class="cmp-label">国际物流费<span v-if="skuAdjustRow(pkg, it).unitDelivery == null" class="muted">(未维护重量,未扣)</span></td>
+                        <td class="cmp-old">{{ skuAdjustRow(pkg, it).unitDelivery != null ? skuAdjustRow(pkg, it).unitDelivery.toFixed(2) : '—' }}</td>
+                        <td class="cmp-arrow"></td>
+                        <td class="cmp-new"></td>
+                      </tr>
+                      <tr>
+                        <td class="cmp-label">利润</td>
+                        <td class="cmp-old"><b v-if="skuAdjustRow(pkg, it).oldProfit != null" :class="{ 'profit-neg': skuAdjustRow(pkg, it).oldProfit < 0 }">{{ skuAdjustRow(pkg, it).oldProfit.toFixed(2) }}</b><span v-else class="muted">—</span></td>
+                        <td class="cmp-arrow">→</td>
+                        <td class="cmp-new"><b v-if="skuAdjustRow(pkg, it).newProfit != null" :class="{ 'profit-neg': skuAdjustRow(pkg, it).newProfit < 0 }">{{ skuAdjustRow(pkg, it).newProfit.toFixed(2) }}</b><span v-else class="muted">—</span></td>
+                      </tr>
+                      <tr>
+                        <td class="cmp-label">成本利润率</td>
+                        <td class="cmp-old"><span v-if="skuAdjustRow(pkg, it).oldRateC != null" :class="{ 'profit-neg': skuAdjustRow(pkg, it).oldProfit < 0 }">{{ (skuAdjustRow(pkg, it).oldRateC * 100).toFixed(1) }}%</span><span v-else class="muted">—</span></td>
+                        <td class="cmp-arrow">→</td>
+                        <td class="cmp-new"><span v-if="skuAdjustRow(pkg, it).newRateC != null" :class="{ 'profit-neg': skuAdjustRow(pkg, it).newProfit < 0 }">{{ (skuAdjustRow(pkg, it).newRateC * 100).toFixed(1) }}%</span><span v-else class="muted">—</span></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div v-if="poCmpExpanded[pkg.id + ':' + it.sku] && skuAdjustRow(pkg, it).missingWhy" class="po-why">{{ skuAdjustRow(pkg, it).missingWhy }}</div>
+                </div>
+                </template>
                 <div v-if="!pkg.items?.length" class="muted">—</div>
               </div>
             </div>
@@ -880,7 +1034,7 @@ function onPrinterChange() {
                 <button
                   class="btn btn-ghost btn-sm"
                   :disabled="printingPkgId !== 0"
-                  title="打印发货后人工修正发货重量,利润(估)随之更新"
+                  title="人工修正重量(任意状态可用),利润(估)随之更新"
                   @click.stop="onStartCorrect(pkg)"
                 >更正重量</button>
               </template>
@@ -893,6 +1047,38 @@ function onPrinterChange() {
             </template>
             <template v-else>
               <span class="tag tag-mute">{{ blockReason(pkg) }} · 不可发货</span>
+              <!-- 称重展示 + 更正重量(2026-09-22:任意状态均可人工修正重量,利润随之重算) -->
+              <span class="ref-weight" :title="WEIGHT_SOURCE_LABELS[pkg.weightSource] || ''">称重 {{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span>
+              <template v-if="correct.pkgId === pkg.id">
+                <input
+                  :ref="(el) => (correctEls[pkg.id] = el)"
+                  v-model="correct.value"
+                  class="weight-input correct-input"
+                  :class="{ 'weight-invalid': correct.err }"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  :aria-label="'更正重量(克)-' + pkg.postingNumber"
+                  @focus="$event.target.select()"
+                  @keydown.enter="onSubmitCorrect(pkg)"
+                  @keydown.escape="onCancelCorrect"
+                  @input="correct.err = ''"
+                />
+                <button
+                  class="btn btn-primary btn-sm"
+                  :disabled="correct.saving"
+                  @click.stop="onSubmitCorrect(pkg)"
+                >{{ correct.saving ? '保存中…' : '保存更正' }}</button>
+                <button class="btn btn-ghost btn-sm" @click.stop="onCancelCorrect">取消</button>
+              </template>
+              <template v-else>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  :disabled="printingPkgId !== 0"
+                  title="人工修正重量(任意状态可用),利润(估)随之更新"
+                  @click.stop="onStartCorrect(pkg)"
+                >更正重量</button>
+              </template>
             </template>
           </div>
           <div v-if="weightErrors[pkg.id]" :id="'weight-err-' + pkg.id" class="error-text weight-err">
@@ -1284,6 +1470,94 @@ function onPrinterChange() {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+/* ── 单价调整(2026-09-22,口径/样式对齐 OrderProcess 采购弹窗 po-cmp)── */
+.po-card-cmp {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: #fafbfc;
+}
+.po-cmp-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.po-cmp-toggle-left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.po-cmp-caret {
+  width: 14px;
+  flex-shrink: 0;
+  color: #94a3b8;
+}
+.po-cmp-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.profit-est-sub {
+  font-size: 12px;
+  color: #92400e;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.po-rate-select {
+  width: 64px;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.po-cmp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.po-cmp-table td {
+  padding: 3px 0;
+  vertical-align: middle;
+}
+.cmp-label {
+  width: 34%;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.cmp-old,
+.cmp-new {
+  width: 27%;
+  text-align: right;
+  white-space: nowrap;
+}
+.cmp-old {
+  color: #475569;
+}
+.cmp-new b {
+  font-weight: 600;
+  color: var(--text);
+}
+.cmp-arrow {
+  width: 32px;
+  text-align: center;
+  color: #94a3b8;
+}
+.po-why {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #fffbeb;
+  color: #b45309;
+  font-size: 12px;
 }
 .product-main {
   min-width: 0;

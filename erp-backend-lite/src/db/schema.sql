@@ -913,6 +913,9 @@ CREATE TABLE IF NOT EXISTS op_ozon_order (
   feishu_pickup_notified_at        TEXT,         -- 揽收通知去重标记(同上模式)
   feishu_pickup_point_notified_at  TEXT,         -- 到达取货点通知去重标记
   feishu_received_notified_at      TEXT,         -- 签收通知去重标记
+  feishu_stocking_notified_at      TEXT,         -- 备货通知去重标记(2026-09-22:备货动作本地发+webhook 双链路)
+  feishu_cancel_notified_at        TEXT,         -- 取消通知去重标记(2026-09-22:webhook+API 兜底双链路)
+  pickup_point_at                  TEXT,         -- 首见到达取货点时刻(substatus=posting_in_pickup_point 首次同步到时写,2026-09-22)
   first_synced_at       TEXT,
   last_synced_at        TEXT,
   gmt_create            TEXT,

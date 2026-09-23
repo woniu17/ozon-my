@@ -274,19 +274,16 @@ function syncPosting(storeId, p) {
 //      API 轮询同步(order-sync)对未通知的订单补发,webhook 链路正常发通知。
 // 标记列非空=已通知(或已被人领取),NULL=未通知。
 // stateKey: new_order(新订单)/pickup(揽收)/pickup_point(到达取货点)/received(签收)
+//          /stocking(备货,2026-09-22:备货动作本地发+webhook 双链路)
+//          /cancel(取消,2026-09-22:webhook+API 轮询兜底双链路)
 const FEISHU_NOTIFY_COLUMNS = {
   new_order: 'feishu_notified_at',
   pickup: 'feishu_pickup_notified_at',
   pickup_point: 'feishu_pickup_point_notified_at',
   received: 'feishu_received_notified_at',
+  stocking: 'feishu_stocking_notified_at',
+  cancel: 'feishu_cancel_notified_at',
 };
-
-/** webhook 链路存活检测:ozon_postings 有该货件记录=webhook 已处理过(通知由它负责) */
-function hasWebhookPosting(postingNumber) {
-  return !!db
-    .prepare(`SELECT 1 FROM ozon_postings WHERE posting_number = ?`)
-    .get(String(postingNumber || ''));
-}
 
 /** 飞书通知标记查询(webhook 发通知前防重复:API 兜底已发过的跳过) */
 function isFeishuNotified(storeId, postingNumber, stateKey = 'new_order') {
@@ -2012,7 +2009,7 @@ function scanShipSubmit(packageId, weightG) {
   };
 }
 
-/** 扫描发货更正重量:交运后(waybill_printed_at 非空)人工修正发货重量
+/** 扫描发货更正重量:任意状态人工修正发货重量(2026-09-22 起解除交运限制)
  *  与妙手同步的"交运锁定"约束不同——锁定仅针对同步任务自动覆盖,人工更正是显式操作,允许写
  *  @returns {{ found: false } | { found: true, shipped, operateStatus, oldWeightG }}
  */
@@ -2021,15 +2018,12 @@ function scanShipCorrectWeight(packageId, weightG) {
     .prepare(`SELECT operate_status, waybill_printed_at, weight FROM op_package WHERE id = ?`)
     .get(packageId);
   if (!row) return { found: false };
-  const shipped = row.waybill_printed_at != null;
-  if (shipped) {
-    db.prepare(`UPDATE op_package SET weight = ?, gmt_modified = ? WHERE id = ?`).run(
-      weightG, nowIso(), packageId
-    );
-  }
+  db.prepare(`UPDATE op_package SET weight = ?, gmt_modified = ? WHERE id = ?`).run(
+    weightG, nowIso(), packageId
+  );
   return {
     found: true,
-    shipped,
+    shipped: row.waybill_printed_at != null,
     operateStatus: row.operate_status,
     oldWeightG: row.weight != null ? Number(row.weight) : null,
   };
@@ -2433,7 +2427,6 @@ function syncFromMiaoshou({ packageIds } = {}) {
 
 export const orderPackageDao = {
   syncPosting,
-  hasWebhookPosting,
   isFeishuNotified,
   claimFeishuNotify,
   releaseFeishuNotify,

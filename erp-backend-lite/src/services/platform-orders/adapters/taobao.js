@@ -224,4 +224,36 @@ async function searchTaobaoOrder(orderSn, accounts = []) {
   return { result: null }; // 所有账号正常,单号不存在
 }
 
-export { listTaobaoOrders, searchTaobaoOrder };
+/** 拉取淘宝订单物流轨迹(2026-09-22,buyertrade transit_step.do)
+ *  接口特点:按订单号(bizOrderId)查询,无需先有快递单号;cookie 认证(credentials include),
+ *  无需 mtop 签名;响应为 GBK 编码(UTF-8 解码中文乱码,必须 TextDecoder('gbk'))
+ *  返回 { steps: [{acceptTime, remark}](最新在前,与1688/PDD口径一致), shippingName, expressId }
+ *  未发货/暂无轨迹返回 steps:[](不抛错,由调用方推进 last_trace_at 防空转) */
+async function getTaobaoTrace(orderSn, account) {
+  return withPage(account, 'taobao', TB_ENTRY, TB_ORIGIN, async (page) => {
+    const r = await page.evaluate(async (bizOrderId) => {
+      const resp = await fetch(
+        `https://buyertrade.taobao.com/trade/json/transit_step.do?bizOrderId=${bizOrderId}`,
+        { method: 'POST', credentials: 'include', headers: { accept: '*/*' } }
+      );
+      if (resp.status === 401 || resp.status === 403) return { authFail: true };
+      const text = new TextDecoder('gbk').decode(await resp.arrayBuffer());
+      try { return { json: JSON.parse(text) }; } catch { return { badJson: true, head: text.slice(0, 120) }; }
+    }, String(orderSn || ''));
+    if (r.authFail) {
+      throw new ApiError(ErrorCode.AUTH_REQUIRED, '淘宝登录态失效,请运行 qxqx 的 persistent 登录淘宝后重试');
+    }
+    if (r.badJson) {
+      // 非 JSON 响应(多为风控/登录跳转页)
+      throw new ApiError('BROWSER_ERROR', `TB_TRACE_BAD_RESPONSE: 轨迹接口返回异常(${r.head})`, { status: 502 });
+    }
+    const j = r.json;
+    if (!j || String(j.isSuccess) !== 'true' || !Array.isArray(j.address)) {
+      return { steps: [], shippingName: '', expressId: '' }; // 未发货/暂无轨迹
+    }
+    const steps = j.address.map((a) => ({ acceptTime: a.time || '', remark: a.place || '' }));
+    return { steps, shippingName: j.expressName || '', expressId: j.expressId || '' };
+  });
+}
+
+export { listTaobaoOrders, searchTaobaoOrder, getTaobaoTrace };

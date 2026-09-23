@@ -70,6 +70,8 @@ export async function initSchema() {
     'feishu_pickup_notified_at',
     'feishu_pickup_point_notified_at',
     'feishu_received_notified_at',
+    'feishu_stocking_notified_at',
+    'feishu_cancel_notified_at',
   ];
   const _orderFeishuNotifiedPre = db.prepare(`PRAGMA table_info(op_ozon_order)`).all();
   for (const col of _feishuNotifyCols) {
@@ -86,6 +88,17 @@ export async function initSchema() {
   const sql = readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(sql);
   await ensureMigrations();
+}
+
+// 2026-09-22: op_ozon_order.pickup_point_at(首见到达取货点时刻)——
+// 待取兜底通知的窗口时间源(到达取货点晚于揽收 1~3 天,用 delivering_date 判窗口必超窗);
+// 不回填:NULL=从未同步到取货点状态,首次同步到时由 order-sync 写入
+{
+  const _cols = db.prepare(`PRAGMA table_info(op_ozon_order)`).all().map((c) => c.name);
+  if (_cols.length > 0 && !_cols.includes('pickup_point_at')) {
+    db.exec(`ALTER TABLE op_ozon_order ADD COLUMN pickup_point_at TEXT`);
+    console.log('[db] migration: added column op_ozon_order.pickup_point_at');
+  }
 }
 
 // 轻量迁移:为已存在的表补列(CREATE TABLE IF NOT EXISTS 不会更新旧表结构)

@@ -18,6 +18,9 @@ const API_TO_PUSH = {
   acceptance_in_progress: 'posting_acceptance_in_progress',
   awaiting_deliver: 'posting_transferring_to_delivery',
   delivering: 'posting_on_way_to_city',
+  // delivered(2026-09-22 补):此前缺失导致 order-sync 签收兜底 pushState=null 提前 return,
+  // webhook 停推期间 21 单签收通知全部丢失;映射 posting_delivered(妥投,rank 4)
+  delivered: 'posting_delivered',
   arbitration: 'posting_in_arbitration',
   client_arbitration: 'posting_in_client_arbitration',
   driver_pickup: 'posting_driver_pick_up',

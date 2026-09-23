@@ -14,10 +14,12 @@
 //     (不做签收升级:shippingStatus 枚举不可靠,在途/已签收都可能为 20)
 //   妙手同步的采购单轨迹仍由妙手侧更新;本轮询器同字段写入,双路并存最新覆盖。
 // 限速:请求间隔 2s,连续失败 3 次中止本轮(防触发反爬/雪崩);单轮每阶段上限 100 单。
+// 阶段B-TB(2026-09-22):淘宝拉轨迹(buyertrade transit_step.do,按订单号查,响应自带单号/公司)
 import { db } from '../db/index.js';
 import config from '../config/index.js';
 import { getLogisticsForOrder, getTraceForOrder, hasAliOpenApiToken } from './platform-orders/adapters/ali1688-openapi.js';
 import { getPddTrace, searchPddOrder } from './platform-orders/adapters/pdd.js';
+import { getTaobaoTrace } from './platform-orders/adapters/taobao.js';
 import logger from '../middleware/log.js';
 
 const POLL_INTERVAL_MS = 12 * 60 * 60 * 1000; // 每 12 小时
@@ -308,6 +310,58 @@ async function phaseFetchPddTrace() {
   return { scanned: rows.length, updated, skippedNoAccount };
 }
 
+/** 阶段B-TB(2026-09-22):淘宝拉完整轨迹(buyertrade transit_step.do)
+ *  接口按订单号查询,无需先有快递单号;轨迹响应自带 expressId(快递单号)/expressName(公司),一并回填。
+ *  未发货/未揽收返回空轨迹 → 推进 last_trace_at 避免空转。
+ *  不做签收升级:是否签收以轨迹节点文本为准(与 PDD 口径一致,前端展开可见) */
+async function phaseFetchTaobaoTrace() {
+  const rows = db.prepare(
+    `SELECT id, purchase_sn, logistics_no, buyer_account FROM op_purchase_order
+     WHERE platform = 'taobao' AND link_status = 'linked'
+       AND purchase_sn IS NOT NULL AND length(purchase_sn) > 0
+       AND status IN ('wait_send', 'shipped', 'part_shipped')
+       AND (last_trace_at IS NULL OR last_trace_at < datetime('now', 'localtime', '-1 hour'))
+     ORDER BY (last_trace_at IS NULL) DESC, gmt_modified DESC
+     LIMIT ?`
+  ).all(MAX_PER_ROUND);
+  if (!rows.length) return { scanned: 0, updated: 0, skippedNoAccount: 0 };
+  manualStatus.progress = { done: 0, total: rows.length };
+
+  const taobaoAccounts = config.platformAccounts.taobao || [];
+  let updated = 0, skippedNoAccount = 0, consecutive = 0;
+  for (const r of rows) {
+    manualStatus.progress.done++;
+    const account = taobaoAccounts.includes(r.buyer_account) ? r.buyer_account : taobaoAccounts[0];
+    if (!account) { skippedNoAccount++; continue; }
+    try {
+      const { steps, shippingName, expressId } = await getTaobaoTrace(r.purchase_sn, account);
+      // 轨迹响应自带快递单号:缺失时回填(顺带 wait_send → shipped)
+      if (expressId && !r.logistics_no) {
+        writeFilledLogisticsNo(r.id, expressId, shippingName);
+      }
+      if (steps.length) {
+        writeTraceRow(r.id, steps, shippingName);
+        updated++;
+        logger.info({ purchaseSn: r.purchase_sn, steps: steps.length, shippingName, expressId },
+          '[purchase-logistics-poller] 阶段B-TB:拉取淘宝轨迹');
+      } else {
+        // 无轨迹(未发货/未揽收):推进 last_trace_at 避免空转
+        db.prepare(`UPDATE op_purchase_order SET last_trace_at = datetime('now', 'localtime') WHERE id = ?`).run(r.id);
+      }
+      consecutive = 0;
+    } catch (e) {
+      consecutive++;
+      logger.warn({ purchaseSn: r.purchase_sn, err: e.message }, '[purchase-logistics-poller] 阶段B-TB:轨迹查询失败');
+      if (consecutive >= MAX_CONSECUTIVE_FAILURES) {
+        logger.warn('[purchase-logistics-poller] 阶段B-TB:连续失败达阈值,本轮中止');
+        break;
+      }
+    }
+    await sleep(REQUEST_INTERVAL_MS);
+  }
+  return { scanned: rows.length, updated, skippedNoAccount };
+}
+
 async function runOnce() {
   manualStatus.phase = 'fill-ali';
   const a = await phaseFillLogistics();
@@ -317,7 +371,9 @@ async function runOnce() {
   const b = await phaseFetchTrace();
   manualStatus.phase = 'trace-pdd';
   const c = await phaseFetchPddTrace();
-  const result = { phaseA: a, phaseApdd: ap, phaseB: b, phaseC: c };
+  manualStatus.phase = 'trace-tb';
+  const tb = await phaseFetchTaobaoTrace();
+  const result = { phaseA: a, phaseApdd: ap, phaseB: b, phaseC: c, phaseTb: tb };
   logger.info(result, '[purchase-logistics-poller] 本轮完成');
   return result;
 }
@@ -448,7 +504,8 @@ function writeFilledLogisticsNo(id, logisticsNo, logisticsCompany) {
 /** 单包裹同步采购物流
  *  1688:补单号(缺时 getLogisticsForOrder)→ 拉轨迹(getTraceForOrder)
  *  拼多多:补单号(缺时 searchPddOrder)→ 拉轨迹(getPddTrace,顺带回填缺失公司名)
- *  淘宝/手工单:暂无可用接口,计入 skip
+ *  淘宝(2026-09-22):拉轨迹(getTaobaoTrace,按订单号查,顺带回填缺失单号/公司名)
+ *  其他平台/手工单:暂无可用接口,计入 skip
  *  @returns {{ orders: number, results: Array<{purchaseSn, platform, action, detail}> }} */
 async function syncPurchaseLogisticsForPackage(packageId) {
   const orders = db.prepare(
@@ -462,6 +519,7 @@ async function syncPurchaseLogisticsForPackage(packageId) {
   if (!orders.length) return { orders: 0, results: [] };
 
   const pddAccounts = config.platformAccounts.pdd || [];
+  const taobaoAccounts = config.platformAccounts.taobao || [];
   const results = [];
   for (const o of orders) {
     if (!o.purchaseSn) {
@@ -524,6 +582,21 @@ async function syncPurchaseLogisticsForPackage(packageId) {
           const { steps, shippingName } = await getPddTrace(o.purchaseSn, o.logisticsNo, account);
           results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + writeTraceRow(o.id, steps, shippingName) });
         }
+      } else if (o.platform === 'taobao') {
+        // 淘宝(2026-09-22):transit_step 按订单号查询,无需先有快递单号;
+        // 轨迹响应自带 expressId(单号)/expressName(公司),一并回填
+        const account = taobaoAccounts.includes(o.buyerAccount) ? o.buyerAccount : taobaoAccounts[0];
+        if (!account) {
+          results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '未配置淘宝账号' });
+          continue;
+        }
+        const { steps, shippingName, expressId } = await getTaobaoTrace(o.purchaseSn, account);
+        if (expressId && !o.logisticsNo) {
+          writeFilledLogisticsNo(o.id, expressId, shippingName);
+          o.logisticsNo = expressId;
+          filled = true;
+        }
+        results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'trace', detail: (filled ? '已补单号,' : '') + writeTraceRow(o.id, steps, shippingName) });
       } else {
         results.push({ purchaseSn: o.purchaseSn, platform: o.platform, action: 'skip', detail: '该平台暂不支持物流同步' });
       }

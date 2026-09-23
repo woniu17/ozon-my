@@ -2,6 +2,8 @@
 // 更新 ozon_postings 状态为 posting_canceled,记录取消原因 + 推送飞书
 import { getDb } from '../../../db/index.js';
 import { notifyPostingEvent } from '../feishu-notify.js';
+import { getStoreBySellerId } from '../store-map.js';
+import { orderPackageDao } from '../../../db/dao/sqlite/order-daos.js';
 import logger from '../../../middleware/log.js';
 
 export default async function postingCancelledHandler(payload, ctx) {
@@ -48,7 +50,15 @@ export default async function postingCancelledHandler(payload, ctx) {
   logger.info({ postingNumber, newState: payload.new_state }, 'POSTING_CANCELLED 落库');
 
   // 推送飞书(失败不影响落库结果)
-  await notifyPostingEvent('TYPE_POSTING_CANCELLED', payload).catch(err =>
-    logger.warn({ err: err.message }, 'POSTING_CANCELLED 飞书通知失败'),
-  );
+  // 2026-09-22 通知去重:与 API 轮询兜底(order-sync 取消分支)共用 feishu_cancel_notified_at
+  const store = payload.seller_id != null ? getStoreBySellerId(payload.seller_id) : null;
+  if (store && orderPackageDao.isFeishuNotified(store.id, postingNumber, 'cancel')) {
+    logger.info({ postingNumber, storeId: store.id }, 'POSTING_CANCELLED 通知已由 API 兜底发出,跳过推送');
+    return;
+  }
+  const ok = await notifyPostingEvent('TYPE_POSTING_CANCELLED', payload).catch(err => {
+    logger.warn({ err: err.message }, 'POSTING_CANCELLED 飞书通知失败');
+    return false;
+  });
+  if (store && ok) orderPackageDao.markFeishuNotified(store.id, postingNumber, 'cancel');
 }
