@@ -118,7 +118,11 @@ export function findPendingAccrualPostings(storeId, limit = 400) {
            -- 1) 从未拉过
            p.accrual_synced_at IS NULL
            -- 2) 拉过但空(24h 重试,防 Ozon 滞后生成)
-           OR (p.accrual_total IS NULL AND p.accrual_synced_at < datetime('now', '-24 hours'))
+           -- 注意:accrual_synced_at 存 ISO 格式(2026-09-23T00:42:00.000Z),
+           -- 而 datetime() 产出空格分隔格式(2026-09-22 00:42:00)。同日字符串比较时
+           -- 'T'(84) > ' '(32) 恒成立,导致 < 恒为 false,重试间隔被拉长到 24~48h。
+           -- 用 datetime() 包裹 ISO 列统一格式后再比较。
+           OR (p.accrual_total IS NULL AND datetime(p.accrual_synced_at) < datetime('now', '-24 hours'))
            -- 3) 拉到过应计但缺关键类型(type 66 代理佣金/67 国际配送)
            --    Ozon 应计分批返回,首次可能只返回 SaleCommission,需重拉补全
            --    不受 24h 限制:只要缺关键类型就重拉,确保应计完整
@@ -127,7 +131,7 @@ export function findPendingAccrualPostings(storeId, limit = 400) {
              AND p.id NOT IN (SELECT package_id FROM op_accrual WHERE type_id IN (66, 67))
            )
          )
-         AND o.in_process_at > datetime('now', '-365 days')
+         AND datetime(o.in_process_at) > datetime('now', '-365 days')
        -- 优先级:从未拉过的(IS NULL) → 空应计(24h) → 缺类型;同优先级内按下单时间倒序
        ORDER BY (p.accrual_synced_at IS NULL) DESC,
                 (p.accrual_total IS NULL) DESC,
@@ -147,7 +151,7 @@ export function findBackfillAccrualPostings(storeId, sinceDays, limit = 400) {
        JOIN op_ozon_order o ON o.id = p.ozon_order_id
        WHERE o.store_id = ?
          AND o.status IN ('delivered', 'cancelled', 'not_accepted')
-         AND o.in_process_at > datetime('now', ?)
+         AND datetime(o.in_process_at) > datetime('now', ?)
        ORDER BY o.in_process_at DESC
        LIMIT ?`
     )

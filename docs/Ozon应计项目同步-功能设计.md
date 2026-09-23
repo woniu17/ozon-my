@@ -113,9 +113,9 @@ WHERE o.store_id = ?
   AND (
     p.accrual_synced_at IS NULL                                        -- 从未拉过
     OR (p.accrual_total IS NULL
-        AND p.accrual_synced_at < datetime('now', '-24 hours'))       -- 拉过但空,24h 重试
-  )
-  AND o.in_process_at > datetime('now', '-90 days')                    -- 窗口外放弃
+        AND datetime(p.accrual_synced_at) < datetime('now', '-24 hours'))  -- 拉过但空,24h 重试
+  )                                                                       -- (accrual_synced_at 存 ISO 格式,需 datetime() 归一后比较)
+  AND datetime(o.in_process_at) > datetime('now', '-365 days')            -- 窗口外放弃
 ```
 
 **执行参数**:
