@@ -963,7 +963,8 @@ function openPurchase(pkg) {
 async function lookupMerged(platform, orders) {
   const merged = { exists: false, linkedPackages: [] };
   for (const od of orders) {
-    const r = await lookupPurchase(platform, od.sn);
+    // 每笔用各自平台查(2026-09-23:混合勾选时统一用第一笔平台会查错库)
+    const r = await lookupPurchase(od.platform || platform, od.sn);
     if (r?.exists) {
       merged.exists = true;
       for (const p of r.linkedPackages || []) {
@@ -1225,7 +1226,7 @@ async function savePurchase(withShip = false) {
       for (const od of orders) {
         await submitPurchase({
           packageId: purchaseForm.packageId,
-          platform: purchaseForm.platform,
+          platform: od.platform || purchaseForm.platform,
           purchaseSn: od.sn,
           buyerAccount: od.buyerAccount,
           buyerUserId: od.buyerUserId,
@@ -1800,8 +1801,11 @@ watch(newSelectedOrders, (sel) => {
   purchaseForm.platform = first._platform;
   purchaseForm.purchaseSn = sel.map((o) => o.orderSn).join(',');
   // 每笔平台订单的独立提交体(多选保存时逐单落库,一笔订单=一个采购单,杜绝单号拼接)
+  // platform 记录每笔自己的平台(2026-09-23 修复:跨平台混合勾选时此前统一用
+  // purchaseForm.platform=第一笔的平台,导致 1688 单被记成拼多多,物流同步/自动补全全走错平台)
   purchaseForm.selectedOrders = sel.map((o) => ({
     sn: o.orderSn,
+    platform: o._platform || null,
     buyerAccount: o.account || o.buyerUsername || null,
     buyerUserId: o.buyerUserId || null,
     sellerName: o.mallName || o.sellerName || null,
