@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS product_data_cache (
   data                TEXT NOT NULL,
   store_id            TEXT,
   description_quality INTEGER DEFAULT 0,  -- 描述质量:0=空 1=占位 2=按钮污染 3=正常(同步时由 classifyDescriptionQuality 计算)
+  custom_weight_g     REAL,               -- 自定义重量(克,本地覆盖采集值)
+  custom_purchase_price REAL,             -- 自定义采购价(本地覆盖采集值)
+  custom_purchase_price_at TEXT,           -- 自定义采购价更新时间
   fetched_at          TEXT DEFAULT (datetime('now'))
 );
 
@@ -974,6 +977,16 @@ CREATE TABLE IF NOT EXISTS op_package (
   note                    TEXT,                 -- 本地备注(妙手同步 COALESCE 覆盖,也可本地编辑)
   tags                    TEXT,                 -- 本地标签(逗号分隔,本地编辑,妙手不覆盖)
   ms_flag_remarks         TEXT,                 -- 妙手旗帜备注(从 miaoshou_package.flag_remarks 同步,只读展示)
+  weight                  REAL,                 -- 称重(kg,扫描发货称重录入)
+  ms_purchase_amount      REAL,                 -- 妙手侧采购金额(妙手同步口径)
+  ms_synced_at            TEXT,                 -- 妙手同步时间
+  accrual_total           REAL,                 -- 结算金额(妙手 accrual 同步)
+  accrual_sale_total      REAL,
+  accrual_synced_at       TEXT,
+  is_returned             INTEGER DEFAULT 0,    -- 退货(Ozon 退货同步回写)
+  return_state            TEXT,
+  return_state_name       TEXT,
+  return_at               TEXT,                 -- 退货时间(订单统计页按此范围查询)
   gmt_create              TEXT,
   gmt_modified            TEXT
 );
@@ -1009,6 +1022,7 @@ CREATE TABLE IF NOT EXISTS op_purchase_order (
   last_trace_at     TEXT,
   last_trace_desc   TEXT,
   trace_json        TEXT,                       -- 完整物流轨迹节点(1688买家版API/妙手,[{acceptTime,remark}] 最新在前)
+  items_json        TEXT,                       -- 采购商品行(平台订单导入/搜索补全,[{goodsName,spec,price,number,thumbUrl}])
   note              TEXT,
   gmt_create        TEXT,
   gmt_modified      TEXT,

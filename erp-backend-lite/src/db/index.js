@@ -1349,17 +1349,15 @@ function migrateBatchUploadTables(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_bui_status ON batch_upload_items(status)`);
 }
 
-// 直接运行时初始化(node src/db/index.js)
+// 模块加载时自动建表(2026-09-23 修复:新库直接 npm run dev 必崩——ESM 静态 import 链中
+// audit.js 等模块的顶层 db.prepare 先于 app.js 主体的 await initSchema() 执行,空库无表直接炸;
+// 此处顶层 await 保证任何 import db 的入口(服务/脚本)都在表结构就绪后才继续。initSchema 幂等,老库重复执行无副作用)
+await initSchema();
+
+// 直接运行时初始化(node src/db/index.js,即 npm run init-db;建表已在上方完成,仅打印确认)
 const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('db/index.js');
 if (isMain) {
-  initSchema()
-    .then(() => {
-      console.log('[db] schema initialized at', DB_PATH);
-      db.close();
-      process.exit(0);
-    })
-    .catch((e) => {
-      console.error('[db] schema init failed:', e);
-      process.exit(1);
-    });
+  console.log('[db] schema initialized at', DB_PATH);
+  db.close();
+  process.exit(0);
 }
