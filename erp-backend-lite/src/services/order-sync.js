@@ -191,7 +191,7 @@ function iso(d) {
 const FEISHU_BACKFILL_MAX_AGE_DAYS = 7;
 let _feishuNotifyChain = Promise.resolve();
 
-/** 签收兜底取包裹 delivered_at(applyOzonStatus 首次观察到 delivered 的时刻,±2 分钟) */
+/** 签收兜底取包裹 delivered_at(applyOzonStatus 写入:同步时刻/承诺送达窗口终点/退货时间三者取最小,2026-09-23) */
 function lookupDeliveredAt(storeId, postingNumber) {
   try {
     const r = db

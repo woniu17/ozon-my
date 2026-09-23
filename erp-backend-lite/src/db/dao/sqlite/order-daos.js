@@ -235,8 +235,24 @@ function applyOzonStatus(packageId, ozonStatus, { deliveringDate, shipmentDate }
       vals.push(deliveringDate || now);
     }
     if (ozonStatus === 'delivered' && !pkg.delivered_at) {
+      // 签收时间近似(2026-09-23):Ozon API 无签收时间戳,取三者最小值——
+      //   ① 同步时刻 now(正常单 fast 轮 2 分钟内即观察到 delivered,最准)
+      //   ② 承诺送达窗口终点 analytics_data.delivery_date_end(实测 100% 有值:
+      //      PVZ 1 小时窗口 / Courier 当日窗口;从订单 raw_json 提取,所有调用链路统一)
+      //   ③ 退货时间 return_at(已退货单签收必早于退货)
+      // 修复背景:此前直接用同步时刻,历史回补/已退货单会写出 delivered_at > return_at
+      // 的倒挂时间(2026-09-23 排查全库 17 单,delivered_at 全错写为同轮同步时刻)。
+      const ddEnd = db
+        .prepare(
+          `SELECT json_extract(raw_json, '$.analytics_data.delivery_date_end') AS v
+           FROM op_ozon_order WHERE id = ?`
+        )
+        .get(pkg.ozon_order_id)?.v;
+      const cands = [now];
+      if (ddEnd) cands.push(ddEnd);
+      if (pkg.return_at) cands.push(pkg.return_at);
       sets.push('delivered_at = ?');
-      vals.push(now);
+      vals.push(cands.reduce((min, x) => (x < min ? x : min)));
     }
   }
   // ★ 方案A(2026-08-29):Ozon状态联动不再推进 wait_ship ——
