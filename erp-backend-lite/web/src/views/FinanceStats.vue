@@ -769,10 +769,13 @@ onUnmounted(() => {
                           <tr v-for="it in o.items" :key="it.id">
                             <td class="ta-l">
                               <div class="product-item">
-                                <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box" title="打开 Ozon 商品页">
+                              <div v-if="it.picUrl" class="img-hover-wrap">
+                                <a :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box" :title="it.title || '查看Ozon商品'">
                                   <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
                                 </a>
-                                <div class="product-main">
+                                <img class="img-preview" :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                              </div>
+                              <div class="product-main">
                                   <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ it.title || '—' }}</a>
                                   <span v-else class="product-title" :title="it.title || ''">{{ it.title || '—' }}</span>
                                   <div class="product-sub">SKU {{ it.offerId }}</div>
@@ -1303,7 +1306,7 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 .goods-table .goods-col {
-  width: 340px;
+  width: 400px;
 }
 .product-item {
   display: flex;
@@ -1311,12 +1314,17 @@ onUnmounted(() => {
   align-items: flex-start;
   text-align: left;
 }
+/* 图片悬浮大图预览(与订单处理一致:120px 原图,hover 在右侧放大 280px) */
+.img-hover-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
 .product-img-box {
-  flex: 0 0 48px;
-  width: 48px;
-  height: 48px;
+  flex: 0 0 120px;
+  width: 120px;
+  height: 120px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -1327,6 +1335,25 @@ onUnmounted(() => {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  display: block;
+}
+.img-preview {
+  display: none;
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 280px;
+  height: 280px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  z-index: 30;
+  pointer-events: none;
+}
+.img-hover-wrap:hover .img-preview {
   display: block;
 }
 .product-main {
