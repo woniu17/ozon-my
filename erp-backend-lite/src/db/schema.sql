@@ -1117,6 +1117,33 @@ CREATE TABLE IF NOT EXISTS op_accrual (
 CREATE INDEX IF NOT EXISTS idx_op_acc_pkg ON op_accrual(package_id);
 CREATE INDEX IF NOT EXISTS idx_op_acc_posting ON op_accrual(posting_number);
 
+-- 应计收入侧明细(2026-09-24,数据源 /v1/finance/accrual/by-day POSTING 类别)
+-- postings 接口只返回费用侧(op_accrual);by-day 的 POSTING.commission 携带
+-- 销售收款明细(售价/结算/佣金/共同投资/奖金),是完整利润核算的收入侧数据
+-- 幂等:按 posting_number 先删后插;费用侧(acquiring 等)仍写 op_accrual
+CREATE TABLE IF NOT EXISTS op_accrual_income (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id        TEXT NOT NULL,
+  posting_number  TEXT NOT NULL,
+  package_id      INTEGER REFERENCES op_package(id),
+  accrual_date    TEXT,                         -- 应计发生日(YYYY-MM-DD,与 by-day.date 一致)
+  accrual_id      INTEGER,                      -- Ozon 应计条目全局唯一 ID
+  sku             INTEGER,
+  quantity        INTEGER,
+  seller_price    REAL,                         -- 卖家售价
+  sale_price      REAL,                         -- 销售价
+  sale_amount     REAL,                         -- 实际结算额
+  sale_commission REAL,                         -- 销售佣金(对应费用侧 type 69)
+  commission      REAL,                         -- 全口径佣金
+  coinvestment    REAL,                         -- 共同投资(平台补贴)
+  bonus           REAL,                         -- 奖金
+  detail_json     TEXT,                         -- 原始 commission 对象(含 ratio 等)
+  synced_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_op_acc_inc_pkg ON op_accrual_income(package_id);
+CREATE INDEX IF NOT EXISTS idx_op_acc_inc_posting ON op_accrual_income(posting_number);
+CREATE INDEX IF NOT EXISTS idx_op_acc_inc_date ON op_accrual_income(accrual_date);
+
 -- ════════════════════════════════════════════════════════════════
 -- 价格管理(2026-09,设计文档: docs/价格管理-概要设计.md)
 -- ════════════════════════════════════════════════════════════════

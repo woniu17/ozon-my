@@ -32,7 +32,8 @@ import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus, syncPurchaseL
 import { packageLabel, postingFbsGet, postingFbsShip } from '../services/ozon-opi.js';
 import { notifyPostingEvent } from '../services/webhook/feishu-notify.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
-import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
+import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate, getBydayStats } from '../db/dao/sqlite/accrual-dao.js';
+import { runAccrualByDaySync } from '../services/accrual-byday-sync.js';
 import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
 import {
   DELIVERY_BASE_CNY,
@@ -1083,6 +1084,37 @@ router.post('/admin/api/order-process/accrual-sync', async (req, res, next) => {
       storeId: b.storeId,
     });
     logger.info({ mode: r.mode, totalPackages: r.totalPackages, totalAccrualRows: r.totalAccrualRows }, '[order-process] 应计同步完成');
+    res.json(ok(r));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── by-day 应计同步(2026-09-24,主数据源)─────────────────────
+// POST body: { days?: number }  —— 手动触发一轮(默认 35 天窗口,1-120)
+// 定时任务每 24h 自动跑;此路由供部署后验证/按需补拉
+router.post('/admin/api/order-process/accrual-byday-sync', async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    let days = Number(b.days);
+    if (!Number.isInteger(days) || days < 1 || days > 120) days = 35;
+    const r = await runAccrualByDaySync({ days });
+    logger.info({ days, ...r }, '[order-process] by-day 应计同步完成');
+    res.json(ok(r));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET ?from=YYYY-MM-DD&to=YYYY-MM-DD&store_id= —— 费用类型分布 + 收入侧汇总(对账/报表)
+router.get('/admin/api/order-process/accrual-byday-stats', (req, res, next) => {
+  try {
+    const { from, to, store_id: storeId } = req.query || {};
+    const r = getBydayStats({
+      from: /^\d{4}-\d{2}-\d{2}$/.test(from || '') ? from : undefined,
+      to: /^\d{4}-\d{2}-\d{2}$/.test(to || '') ? to : undefined,
+      storeId: storeId || undefined,
+    });
     res.json(ok(r));
   } catch (e) {
     next(e);

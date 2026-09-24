@@ -429,15 +429,9 @@ async function syncStore(store, { unfulfilledDays = SYNC_LEVELS.fast.unfulfilled
   if (progress.active) progress.currentPhase = 'cache-backfill';
   await backfillProductCache(store);
 
-  // 4) 应计同步(已完成/已取消货件,失败不阻塞订单同步)
-  if (progress.active) progress.currentPhase = 'accrual';
-  try {
-    // 全量同步场景:提高单轮上限到 2000(默认 400),避免老订单排不上
-    await syncAccruals(store, { limit: 2000 });
-  } catch (e) {
-    logger.warn({ storeId: store.id, err: e?.message }, '[order-sync] 应计同步失败(不影响订单同步)');
-  }
-
+  // 4) 应计同步已迁移到 by-day 定时任务(2026-09-24,accrual-byday-sync.js):
+  //    postings 只返回费用侧且缺 Acquiring 等 8 种类型;by-day 数据更全。
+  //    手动链路(单订单同步按钮 / accrual-sync 路由)仍走 postings。
   // 5) rFBS 退货同步(2026-09-13,妥投后买家退货退款,标记 op_package.is_returned)
   if (progress.active) progress.currentPhase = 'returns';
   try {
@@ -602,19 +596,7 @@ export async function runSyncAllList({ sinceDays, since, to } = {}) {
     }
     progress.doneStores++;
   }
-  // 全量同步后追加应计同步(与 syncStore 第4阶段一致)
-  // 注:runSyncAllList 原先只拉订单不拉应计,导致已完成订单的代理佣金/国际配送等缺失
-  progress.currentPhase = 'accrual';
-  progress.message = '应计项目同步中(已完成/已取消货件)...';
-  for (const store of eligible) {
-    try {
-      // 全量同步场景:提高单轮上限到 2000(默认 400),避免老订单排不上
-      const r = await syncAccruals(store, { limit: 2000 });
-      logger.info({ storeId: store.id, ...r }, '[order-sync-all] 应计同步完成');
-    } catch (e) {
-      logger.warn({ storeId: store.id, err: e?.message }, '[order-sync-all] 应计同步失败(不影响订单同步)');
-    }
-  }
+  // 应计同步已迁移到 by-day 定时任务(2026-09-24,accrual-byday-sync.js),此处不再追加 postings 应计
   // 完成:保留进度数据,置 active=false + finishedAt,等用户手动关闭
   progress.active = false;
   progress.finishedAt = new Date().toISOString();

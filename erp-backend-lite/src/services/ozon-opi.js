@@ -595,6 +595,30 @@ export function financeAccrualTypes(store) {
   return call(store, '/v1/finance/accrual/types', {});
 }
 
+// /v1/finance/accrual/by-day —— 按日查应计(2026-09-24,定时主数据源)
+// 请求: { date: 'YYYY-MM-DD', last_id?: string }(date 不带时间部分;last_id 续页)
+// 响应: { accruals: [...], last_id }(顶层无 result 包裹;last_id 空=无更多页)
+//   accruals[] 按 accrued_category 分三类(与 postings 接口结构完全不同):
+//   - ITEM:      item_fees.fees[] → 每组 { sku, quantity, fees: [{ type_id, accrued }] }
+//   - NON_ITEM:  non_item_fee: { type_id, accrued }
+//   - POSTING:   posting.products[] → 每品 { sku, quantity,
+//                  commission: { seller_price, sale_price, sale_amount, sale_commission,
+//                                commission, coinvestment, bonus, ... }(收入侧),
+//                  delivery: { total_accrued, services: [{ type_id, accrued }] }(物流服务明细) }
+// 实测(2026-09-24,6 店铺 × 166 天 = 1014 次调用 0 错误):
+//   - date 与 postings 接口的 accrual_date 完全一致(1588 行零差异,无时区坑)
+//   - 费用类型 ⊇ postings(多 Acquiring/DefectFineModeration/Compensation 等 8 种)
+//   - POSTING.commission 是 postings 完全没有的收入侧明细
+//   - 秒级限流同 postings(429 code=8),调用方需节流 ~1s + 退避
+export function financeAccrualByDay(store, { date, lastId } = {}) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
+    throw new Error('date 必须为 YYYY-MM-DD 格式');
+  }
+  const body = { date };
+  if (lastId) body.last_id = lastId;
+  return call(store, '/v1/finance/accrual/by-day', body);
+}
+
 // ── rFBS 退货(2026-09)──────────────────────────────────────────
 // /v2/returns/rfbs/list —— 买家退货列表(rFBS=真实 FBS 退货,妥投后售后)
 // 请求: { limit, offset }(limit ≤1000;实测 filter 不生效,全量拉取即可)

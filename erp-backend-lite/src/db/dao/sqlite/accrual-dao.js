@@ -296,3 +296,192 @@ export function setRubCnyRate(rate) {
   writeConfigJson('rub_cny_rate', { rate: r, updatedAt: nowIso() }, 'RUB→CNY 汇率(应计利润换算)');
   return { rate: r, updatedAt: nowIso() };
 }
+
+// ════════════════════════════════════════════════════════════════
+// by-day 数据源(2026-09-24,/v1/finance/accrual/by-day 定时主源)
+// postings 只返回费用侧;by-day 费用类型 ⊇ postings(多 Acquiring 等 8 种)
+// 且 POSTING.commission 携带收入侧明细。设计:
+//   - 费用行(ITEM fees/NON_ITEM/delivery.services/sale_commission→type 69)
+//     写 op_accrual(按 posting_number 先删后插)——结算判定(66/67)、
+//     利润口径(accrual_total)、明细弹窗等现有读取方自动获得完整费用数据
+//   - 收入行(POSTING.commission)写 op_accrual_income(postings 完全没有)
+//   - 有 package 映射的货件回填 op_package.accrual_total/accrual_sale_total
+// ════════════════════════════════════════════════════════════════
+
+/** 展平 by-day 一天的 accruals 为 { fees: [...], incomes: [...] }
+ *  fees[]:    { typeId, sku, quantity, amount, currency, sellerPrice, accrualDate, accrualId, detail }
+ *  incomes[]: { sku, quantity, sellerPrice, salePrice, saleAmount, saleCommission, commission,
+ *               coinvestment, bonus, accrualDate, accrualId, detail }
+ */
+export function flattenByDayAccruals(accruals, date) {
+  const fees = [];
+  const incomes = [];
+  for (const a of accruals || []) {
+    const unit = a?.unit_number || null;
+    const accrualId = Number(a?.accrual_id) || null;
+    const cat = a?.accrued_category;
+    const push = (typeId, sku, qty, amount, sellerPrice, detail) => {
+      fees.push({
+        unit, typeId: Number(typeId) || 0, sku: sku ? Number(sku) : null,
+        quantity: qty != null ? Number(qty) : null, amount: Number(amount) || 0,
+        currency: 'RUB', sellerPrice: sellerPrice != null ? Number(sellerPrice) : null,
+        accrualDate: a?.date || date, accrualId, detail: detail ? JSON.stringify(detail) : null,
+      });
+    };
+    if (cat === 'ITEM') {
+      for (const g of a.item_fees?.fees || []) {
+        for (const f of g.fees || []) {
+          push(f.type_id, g.sku, g.quantity, f.accrued?.amount, null, f);
+        }
+      }
+    } else if (cat === 'NON_ITEM') {
+      const nf = a.non_item_fee;
+      if (nf) push(nf.type_id, null, null, nf.accrued?.amount, null, nf);
+    } else if (cat === 'POSTING') {
+      for (const p of a.posting?.products || []) {
+        const c = p.commission;
+        if (c) {
+          // sale_commission 与 postings 的 type 69 SaleCommission 等价,写费用行保持口径连续
+          push(69, p.sku, p.quantity, c.sale_commission?.amount ?? 0, c.seller_price?.amount ?? null, null);
+          incomes.push({
+            unit, sku: p.sku ? Number(p.sku) : null,
+            quantity: p.quantity != null ? Number(p.quantity) : null,
+            sellerPrice: num(c.seller_price?.amount), salePrice: num(c.sale_price?.amount),
+            saleAmount: num(c.sale_amount?.amount), saleCommission: num(c.sale_commission?.amount),
+            commission: num(c.commission?.amount), coinvestment: num(c.coinvestment?.amount),
+            bonus: num(c.bonus?.amount), accrualDate: a?.date || date, accrualId,
+            detail: JSON.stringify(c),
+          });
+        }
+        for (const s of p.delivery?.services || []) {
+          push(s.type_id, p.sku, p.quantity, s.accrued?.amount, null, s);
+        }
+      }
+    } else if (a.container_fees) {
+      // 未见实例,防御性落库:结构不明时仅 detail 供排查
+      const cf = a.container_fees;
+      push(cf.type_id ?? 0, null, null, cf.accrued?.amount ?? 0, null, cf);
+    }
+  }
+  return { fees, incomes };
+}
+
+function num(v) {
+  return v == null ? null : Number(v);
+}
+
+/** by-day 一天数据落库(按 posting_number+accrual_date 先删后插,双表)
+ *  删除范围必须带日期:同一货件的应计可能分布多天(如 05-22 收款 + 05-30 退货负冲),
+ *  仅按 posting_number 删会跨日期覆盖丢行;带日期后各天互不干扰,增量安全。
+ *  包裹冗余列按货件全量重算(跨所有日期),保证 accrual_total 完整。
+ *  accruals: by-day 响应的 accruals 数组;typeMap: getAccrualTypes() 的 Map
+ *  返回 { units, feeRows, incomeRows, packages }
+ */
+export function replaceAccrualsByDay(storeId, date, accruals, typeMap) {
+  const { fees, incomes } = flattenByDayAccruals(accruals, date);
+  const units = [...new Set([...fees, ...incomes].map((r) => r.unit).filter(Boolean))];
+  if (units.length === 0) return { units: 0, feeRows: 0, incomeRows: 0, packages: 0 };
+
+  // 货件号 → package_id 映射(经订单表关联,logistics_no 可能被人工改动不可靠)
+  const ph = units.map(() => '?').join(',');
+  const pkgRows = db
+    .prepare(
+      `SELECT o.posting_number AS pn, MIN(p.id) AS pid
+       FROM op_ozon_order o JOIN op_package p ON p.ozon_order_id = o.id
+       WHERE o.store_id = ? AND o.posting_number IN (${ph})
+       GROUP BY o.posting_number`
+    )
+    .all(storeId, ...units);
+  const pkgMap = new Map(pkgRows.map((r) => [r.pn, r.pid]));
+
+  const now = nowIso();
+  const insFee = db.prepare(
+    `INSERT INTO op_accrual (store_id, posting_number, package_id, type_id, type_name,
+      amount, currency, seller_price, sku, quantity, accrual_date, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const insInc = db.prepare(
+    `INSERT INTO op_accrual_income (store_id, posting_number, package_id, accrual_date, accrual_id,
+      sku, quantity, seller_price, sale_price, sale_amount, sale_commission, commission,
+      coinvestment, bonus, detail_json, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const updPkg = db.prepare(
+    `UPDATE op_package SET accrual_total = ?, accrual_sale_total = ?, accrual_synced_at = ?, gmt_modified = ? WHERE id = ?`
+  );
+  // 货件全量重算(跨所有日期):写入本日后,该货件在 op_accrual 的完整合计
+  const sumUnit = db.prepare(
+    `SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total,
+            COALESCE(SUM(CASE WHEN seller_price IS NOT NULL AND quantity IS NOT NULL THEN seller_price * quantity END), 0) AS saleTotal
+     FROM op_accrual WHERE posting_number = ?`
+  );
+
+  let pkgCount = 0;
+  runInTx(() => {
+    for (const unit of units) {
+      // 仅清本日该货件的行(跨日期行由各自日期的写入负责)
+      db.prepare(`DELETE FROM op_accrual WHERE posting_number = ? AND accrual_date = ?`).run(unit, date);
+      db.prepare(`DELETE FROM op_accrual_income WHERE posting_number = ? AND accrual_date = ?`).run(unit, date);
+      const packageId = pkgMap.get(unit) || null;
+      for (const f of fees) {
+        if (f.unit !== unit) continue;
+        const t = typeMap?.get(f.typeId);
+        insFee.run(
+          storeId, unit, packageId, f.typeId, t?.name || null, f.amount, f.currency,
+          f.sellerPrice, f.sku, f.quantity, f.accrualDate, now
+        );
+      }
+      for (const i of incomes) {
+        if (i.unit !== unit) continue;
+        insInc.run(
+          storeId, unit, packageId, i.accrualDate, i.accrualId, i.sku, i.quantity,
+          i.sellerPrice, i.salePrice, i.saleAmount, i.saleCommission, i.commission,
+          i.coinvestment, i.bonus, i.detail, now
+        );
+      }
+      if (packageId != null) {
+        const s = sumUnit.get(unit);
+        // 空应计语义沿用 postings:0 行明细时 accrual_total 存 NULL
+        updPkg.run(
+          s.c > 0 ? Math.round(s.total * 100) / 100 : null,
+          s.c > 0 ? Math.round(s.saleTotal * 100) / 100 : null,
+          now, now, packageId
+        );
+        pkgCount++;
+      }
+    }
+  });
+  return { units: units.length, feeRows: fees.length, incomeRows: incomes.length, packages: pkgCount };
+}
+
+/** by-day 覆盖统计(核对/报表用):窗口内费用类型分布 + 收入侧汇总 */
+export function getBydayStats({ from, to, storeId } = {}) {
+  const where = [];
+  const args = [];
+  if (from) { where.push('accrual_date >= ?'); args.push(from); }
+  if (to) { where.push('accrual_date <= ?'); args.push(to); }
+  if (storeId) { where.push('store_id = ?'); args.push(storeId); }
+  const cond = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const feeTypes = db
+    .prepare(
+      `SELECT type_id AS typeId, type_name AS typeName, COUNT(*) AS cnt, ROUND(SUM(amount), 2) AS sum
+       FROM op_accrual ${cond} GROUP BY type_id ORDER BY type_id`
+    )
+    .all(...args);
+  const income = db
+    .prepare(
+      `SELECT COUNT(*) AS rows, COUNT(DISTINCT posting_number) AS postings,
+              ROUND(SUM(seller_price * quantity), 2) AS sellerPrice,
+              ROUND(SUM(sale_amount * quantity), 2) AS saleAmount,
+              ROUND(SUM(sale_commission * quantity), 2) AS saleCommission,
+              ROUND(SUM(commission * quantity), 2) AS commission,
+              ROUND(SUM(coinvestment * quantity), 2) AS coinvestment,
+              ROUND(SUM(bonus * quantity), 2) AS bonus
+       FROM op_accrual_income ${cond}`
+    )
+    .get(...args);
+  const dates = db
+    .prepare(`SELECT MIN(accrual_date) AS from_, MAX(accrual_date) AS to_ FROM op_accrual ${cond}`)
+    .get(...args);
+  return { dates: { from: dates.from_, to: dates.to_ }, feeTypes, income };
+}
