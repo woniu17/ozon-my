@@ -243,6 +243,23 @@ export function replaceAccruals(storeId, postingAccruals, postingMap, typeMap) {
   return { packages: pkgCount, accrualRows: rowCount };
 }
 
+/** 真实应计口径门槛:终态包裹集合(已签收 delivered_at 非空 / 已取消)
+ *  by-day 主源下在途订单早期即产生 Acquiring 等订单级费用,accrual_total 非空但
+ *  收入侧(POSTING)尚未生成,payout≈纯负费用 → 利润≈-采购严重失真;
+ *  仅终态包裹可走真实口径,在途一律预估口径(对齐 findPendingAccrualPostings 的终态语义)
+ */
+export function getSettledEligiblePackageIds(packageIds) {
+  if (!packageIds || packageIds.length === 0) return new Set();
+  const ph = packageIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT id FROM op_package
+       WHERE id IN (${ph}) AND (operate_status = 'cancelled' OR delivered_at IS NOT NULL)`
+    )
+    .all(...packageIds);
+  return new Set(rows.map((r) => r.id));
+}
+
 /** 批量取应计按类型分组汇总(列表金额列拆分用:代理佣金66/国际配送67/其它)
  *  返回 [{ packageId, typeId, sum }](RUB)
  */

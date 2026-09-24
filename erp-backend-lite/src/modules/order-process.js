@@ -32,7 +32,7 @@ import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus, syncPurchaseL
 import { packageLabel, postingFbsGet, postingFbsShip } from '../services/ozon-opi.js';
 import { notifyPostingEvent } from '../services/webhook/feishu-notify.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
-import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate, getBydayStats } from '../db/dao/sqlite/accrual-dao.js';
+import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate, getBydayStats, getSettledEligiblePackageIds } from '../db/dao/sqlite/accrual-dao.js';
 import { runAccrualByDaySync } from '../services/accrual-byday-sync.js';
 import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
 import {
@@ -82,8 +82,13 @@ function buildAccrualBreakdown(packages, typeSums, rate) {
   }
   const round2 = (n) => Math.round(n * 100) / 100;
   const out = new Map();
+  // 终态门槛(2026-09-24):by-day 主源下在途订单早期即产生 Acquiring 等费用,
+  // accrual_total 非空但收入侧(POSTING)未生成 → payout≈纯负费用,利润≈-采购严重失真
+  // (postings 时代只对终态订单拉应计故无此问题)。仅签收/取消包裹走真实口径。
+  const eligible = getSettledEligiblePackageIds(packages.map((p) => p.id));
   for (const pkg of packages) {
     if (pkg.accrualTotal == null || !rate) continue;
+    if (!eligible.has(pkg.id)) continue;
     const m = byPkg.get(pkg.id) || new Map();
     const agentRub = m.get(TYPE_AGENT_FEE) || 0;
     const saleFeeRub = m.get(TYPE_SALE_FEE) || 0;
