@@ -214,6 +214,7 @@ function aggregateOrderGroup(group, t, storeIds, rate) {
     estimated: false, // 任一包裹为预估口径则 true
     accrualTypes: [],
     byCategory: group === 'settled' ? { success: 0, cancelled: 0, returned: 0 } : null,
+    byCategoryProfit: group === 'settled' ? { success: 0, cancelled: 0, returned: 0 } : null,
   };
   const pkgIdSet = new Set(pkgIds);
   for (const r of rows) {
@@ -225,7 +226,14 @@ function aggregateOrderGroup(group, t, storeIds, rate) {
     agg.totalProfit += p.profit;
     agg.totalPayout += p.payout;
     if (p.estimated) agg.estimated = true;
-    if (agg.byCategory) agg.byCategory[settledCategory(r)] += 1;
+    if (agg.byCategory) {
+      const cat = settledCategory(r);
+      agg.byCategory[cat] += 1;
+      agg.byCategoryProfit[cat] += p.profit;
+    }
+  }
+  if (agg.byCategoryProfit) {
+    for (const k of Object.keys(agg.byCategoryProfit)) agg.byCategoryProfit[k] = round2(agg.byCategoryProfit[k]);
   }
   agg.totalOrderAmount = round2(agg.totalOrderAmount);
   agg.totalPurchaseAmount = round2(agg.totalPurchaseAmount);
