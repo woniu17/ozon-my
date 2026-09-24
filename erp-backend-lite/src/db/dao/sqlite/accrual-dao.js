@@ -7,18 +7,29 @@
 import { db } from '../../index.js';
 
 // 常见应计类型中文映射(实测 6 店铺 99.6% 覆盖;其余类型回退英文名)
-const ACCRUAL_TYPE_CN = {
+// 2026-09-25 导出供 finance-stats 模块复用(按类型分组统计的展示名)
+export const ACCRUAL_TYPE_CN = {
+  1: '收单费',
   66: '代理佣金',
   67: '国际配送',
   69: '销售佣金',
   74: '星星商品',
   59: '逆向物流',
   93: '错误罚款',
+  89: '罚款',
+  32: '物流',
+  29: '尾程配送',
+  45: '取货点退货',
+  123: '平台连接服务',
+  122: '中介服务',
+  10: '赔付',
   6: '取消处理',
+  15: '处置',
 };
 
 // 常见应计类型中文说明(详情弹窗 tooltip 用)
 const ACCRUAL_TYPE_DESC_CN = {
+  1: '收单手续费(Acquiring,按买家支付订单收取)',
   66: 'Ozon 代理报酬(RfbsGlobalAgentFee)',
   67: '国际配送服务费(RfbsGlobalDelivery)',
   69: '销售佣金(SaleCommission)',

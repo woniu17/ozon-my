@@ -28,6 +28,7 @@ import endpointMetricsRoutes, { startEndpointMetricsRetention, stopEndpointMetri
 import priceWatchRoutes, { startPriceWatchRetention, stopPriceWatchRetention } from './modules/price-watch.js';
 import orderProcessRoutes from './modules/order-process.js';
 import orderStatsRoutes from './modules/order-stats.js';
+import financeStatsRoutes from './modules/finance-stats.js';
 import priceManageRoutes from './modules/price-manage.js';
 import webhookRoutes from './modules/webhook.js';
 import { auditLog } from './middleware/audit.js';
@@ -161,6 +162,7 @@ app.use(endpointMetricsRoutes);
 app.use(priceWatchRoutes);
 app.use(orderProcessRoutes);
 app.use(orderStatsRoutes);
+app.use(financeStatsRoutes);
 app.use(priceManageRoutes);
 app.use(imageRefreshRoutes);
 app.use(stockRefreshRoutes);
