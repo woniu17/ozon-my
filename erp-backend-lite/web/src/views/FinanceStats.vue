@@ -328,6 +328,22 @@ function pctOf(v, base) {
   if (!Number.isFinite(n) || !Number.isFinite(b) || b <= 0) return '—';
   return `${Math.round((Math.abs(n) / b) * 10000) / 100}%`;
 }
+// 组内应计项目明细金额之和(费用侧,¥)
+function accrualTotal(group) {
+  const g = summary.value?.[group];
+  if (!g?.accrualTypes?.length) return 0;
+  return Math.round(g.accrualTypes.reduce((s, t) => s + (Number(t.cny) || 0), 0) * 100) / 100;
+}
+// 汇总利润 = 已结算 + 已采购未结算(估) + 非订单应计
+function grandProfit() {
+  const s = summary.value;
+  if (!s) return null;
+  const sum =
+    (Number(s.settled.totalProfit) || 0) +
+    (Number(s.pending.totalProfit) || 0) +
+    (Number(s.nonOrder.totalCny) || 0);
+  return Math.round(sum * 100) / 100;
+}
 function rubRateText(r) {
   if (!r?.rate) return null;
   const d = parseUtcDate(r.updatedAt);
@@ -459,6 +475,11 @@ onUnmounted(() => {
             <div class="m-label">成本利润率</div>
             <div class="m-value">{{ fmtRate(summary.settled.profitRateCost) }}</div>
           </div>
+          <div class="metric" title="应计项目明细各类型金额之和(费用侧)">
+            <div class="m-label">应计项目汇总(¥)</div>
+            <div class="m-value" :class="profitClass(accrualTotal('settled'))">{{ fmtMoney(accrualTotal('settled')) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(accrualTotal('settled'), summary.settled.totalOrderAmount) }}</div>
+          </div>
           <div class="metric" title="已取消订单的利润合计(无真实应计按 −采购)">
             <div class="m-label">已取消负利润(¥)</div>
             <div class="m-value" :class="profitClass(catProfit('cancelled'))">{{ fmtMoney(catProfit('cancelled')) }}</div>
@@ -520,6 +541,16 @@ onUnmounted(() => {
             <div class="m-label">成本利润率</div>
             <div class="m-value">{{ fmtRate(summary.pending.profitRateCost) }}</div>
           </div>
+          <div class="metric" title="预估国际配送 = 3.37 + 0.0281 × 重量(g)">
+            <div class="m-label">国际配送(¥,估)</div>
+            <div class="m-value" :class="profitClass(-summary.pending.totalDelivery)">{{ fmtMoney(-summary.pending.totalDelivery) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(summary.pending.totalDelivery, summary.pending.totalOrderAmount) }}</div>
+          </div>
+          <div class="metric" title="预估销售佣金 = 订单金额 × 16%">
+            <div class="m-label">销售佣金(¥,估)</div>
+            <div class="m-value" :class="profitClass(-summary.pending.totalCommission)">{{ fmtMoney(-summary.pending.totalCommission) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(summary.pending.totalCommission, summary.pending.totalOrderAmount) }}</div>
+          </div>
         </div>
         <div class="accrual-block">
           <div class="accrual-title">已产生应计项目(在途订单已落库的费用,尚未计入预估利润)</div>
@@ -535,24 +566,35 @@ onUnmounted(() => {
       </section>
     </div>
 
-    <!-- ══ 非订单应计项目 ══ -->
+    <!-- ══ 汇总统计(已结算 + 已采购未结算 + 非订单应计)══ -->
     <section class="fin-section" v-if="summary">
       <header class="fin-head">
-        <h2>非订单应计项目</h2>
-        <span class="est-hint">未挂到货件的费用(罚款/逆向物流等),按应计日期统计</span>
+        <h2>汇总统计</h2>
+        <span class="est-hint">汇总利润 = 已结算订单利润 + 已采购未结算订单利润(估) + 非订单应计项目合计</span>
       </header>
       <div class="metric-grid">
-        <div class="metric">
-          <div class="m-label">笔数</div>
-          <div class="m-value">{{ fmtCount(summary.nonOrder.count) }}</div>
+        <div class="metric" title="已结算组利润合计(真实口径)">
+          <div class="m-label">已结算订单利润(¥)</div>
+          <div class="m-value" :class="profitClass(summary.settled.totalProfit)">{{ fmtMoney(summary.settled.totalProfit) }}</div>
+          <div class="m-sub">{{ fmtCount(summary.settled.orderCount) }}单</div>
         </div>
-        <div class="metric">
-          <div class="m-label">金额合计(¥)</div>
+        <div class="metric" title="已采购未结算组利润合计(预估口径)">
+          <div class="m-label">已采购未结算利润(¥,估)</div>
+          <div class="m-value" :class="profitClass(summary.pending.totalProfit)">{{ fmtMoney(summary.pending.totalProfit) }}</div>
+          <div class="m-sub">{{ fmtCount(summary.pending.orderCount) }}单</div>
+        </div>
+        <div class="metric" title="未挂到货件的费用合计(罚款/逆向物流等,按应计日期统计)">
+          <div class="m-label">非订单应计合计(¥)</div>
           <div class="m-value" :class="profitClass(summary.nonOrder.totalCny)">{{ fmtMoney(summary.nonOrder.totalCny) }}</div>
+          <div class="m-sub">{{ fmtCount(summary.nonOrder.count) }}笔</div>
+        </div>
+        <div class="metric" title="三组合计:已结算 + 已采购未结算(估) + 非订单应计">
+          <div class="m-label">汇总利润(¥)</div>
+          <div class="m-value" :class="profitClass(grandProfit())">{{ fmtMoney(grandProfit()) }}</div>
         </div>
       </div>
       <div class="accrual-block">
-        <div class="accrual-title">应计项目明细</div>
+        <div class="accrual-title">非订单应计项目明细(未挂到货件的费用,按应计日期统计)</div>
         <div class="type-tiles" v-if="summary.nonOrder.accrualTypes.length">
           <div class="type-tile" v-for="t in summary.nonOrder.accrualTypes" :key="t.typeId" :title="`${t.nameCn} #${t.typeId} · ${fmtCount(t.count)}笔`">
             <div class="tile-label">{{ t.nameCn }}<span class="type-id"> #{{ t.typeId }}</span></div>
