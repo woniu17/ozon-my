@@ -490,7 +490,9 @@ async function callAccrualWithRetry(store, postingNumbers) {
       // 429 限流 / 网络错 / 超时:退避后重试;其余(4xx 参数错)直接放弃
       const retryable = /429|rate limit|network|timeout|网络错/i.test(e?.message || '');
       if (!retryable || attempt === ACCRUAL_MAX_RETRY) throw e;
-      await sleep(1500 * (attempt + 1));
+      // 随机抖动:双实例共用同一 Ozon 凭据时,固定退避节奏会反复同时碰撞,
+      // 加 0~1000ms jitter 错开两实例的重试时刻
+      await sleep(1500 * (attempt + 1) + Math.floor(Math.random() * 1000));
     }
   }
   throw lastErr;
