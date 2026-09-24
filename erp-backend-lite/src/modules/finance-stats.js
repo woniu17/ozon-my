@@ -13,6 +13,7 @@
 //     from/to 缺省 = 全部时间;to 为排他日界(含 from 当日,不含 to 当日)
 //   GET /admin/api/finance-stats/orders?group=settled|pending&from&to&storeIds&tz&page&pageSize&keyword&category&typeId
 //     category=success|cancelled|returned(已结算组内分类筛选);typeId=应计类型筛选(方块点击联动)
+//     订单行含 items(产品行:图/标题/SKU/数量/售价/已采数量/采购金额,与订单处理详情同源)
 //   GET /admin/api/finance-stats/non-order-accruals?from&to&storeIds&page&pageSize
 //   GET /admin/api/finance-stats/order-months?tz=... —— 有订单的自然月列表(YYYY-MM 降序,月界按 tz 换算)
 // 金额币种:采购/订单金额 CNY;应计 RUB,按 app_config rub_cny_rate 换算 CNY
@@ -355,7 +356,7 @@ router.get('/admin/api/finance-stats/orders', (req, res, next) => {
     const total = db.prepare(`SELECT COUNT(*) AS n ${whereClause}`).get(...params).n;
     const rows = db
       .prepare(
-        `${PKG_SELECT} ${whereClause}
+        `${PKG_SELECT}, p.ozon_order_id ${whereClause}
          ORDER BY o.in_process_at DESC, p.id DESC
          LIMIT ? OFFSET ?`
       )
@@ -368,6 +369,16 @@ router.get('/admin/api/finance-stats/orders', (req, res, next) => {
     for (const ts of typeSums) {
       if (!byPkgTypes.has(ts.packageId)) byPkgTypes.set(ts.packageId, new Map());
       byPkgTypes.get(ts.packageId).set(ts.typeId, ts.sum);
+    }
+
+    // 商品信息(与订单处理详情同源 getItemsByOrderIds:缓存图/标题/SKU/数量/售价/已采数量/采购金额)
+    const itemsByOrder = new Map();
+    if (rows.length) {
+      const orderIds = [...new Set(rows.map((r) => r.ozon_order_id))];
+      for (const it of orderPackageDao.getItemsByOrderIds(orderIds)) {
+        if (!itemsByOrder.has(it.ozonOrderId)) itemsByOrder.set(it.ozonOrderId, []);
+        itemsByOrder.get(it.ozonOrderId).push(it);
+      }
     }
 
     const orders = rows.map((r) => {
@@ -389,6 +400,7 @@ router.get('/admin/api/finance-stats/orders', (req, res, next) => {
         orderAmount: round2(orderAmount),
         purchaseAmount: round2(purchase),
         weightG,
+        items: itemsByOrder.get(r.ozon_order_id) || [],
         estimated: p.estimated,
         category: group === 'settled' ? settledCategory(r) : null,
         payout: p.payout,

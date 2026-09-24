@@ -491,6 +491,21 @@ onUnmounted(() => {
             <div class="m-value">{{ fmtMoney(summary.settled.totalPurchaseAmount) }}</div>
             <div class="m-sub">占订单金额 {{ pctOf(summary.settled.totalPurchaseAmount, summary.settled.totalOrderAmount) }}</div>
           </div>
+          <div class="metric clickable" title="国际配送应计(type 67)合计,点击筛选订单" @click="applyTypeFilter(67, '国际配送', 'settled')">
+            <div class="m-label">国际配送(¥)</div>
+            <div class="m-value" :class="profitClass(typeSum('settled', 67))">{{ fmtMoney(typeSum('settled', 67)) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(typeSum('settled', 67), summary.settled.totalOrderAmount) }}</div>
+          </div>
+          <div class="metric clickable" title="销售佣金应计(type 69)合计,点击筛选订单" @click="applyTypeFilter(69, '销售佣金', 'settled')">
+            <div class="m-label">销售佣金(¥)</div>
+            <div class="m-value" :class="profitClass(typeSum('settled', 69))">{{ fmtMoney(typeSum('settled', 69)) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(typeSum('settled', 69), summary.settled.totalOrderAmount) }}</div>
+          </div>
+          <div class="metric" title="除国际配送/销售佣金外的应计合计">
+            <div class="m-label">其它应计项目汇总(¥)</div>
+            <div class="m-value" :class="profitClass(otherAccrualTotal('settled'))">{{ fmtMoney(otherAccrualTotal('settled')) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(otherAccrualTotal('settled'), summary.settled.totalOrderAmount) }}</div>
+          </div>
           <div class="metric" title="回款 =(销售收款 + 应计合计)× 汇率">
             <div class="m-label">回款(¥)</div>
             <div class="m-value">{{ fmtMoney(summary.settled.totalPayout) }}</div>
@@ -506,21 +521,6 @@ onUnmounted(() => {
           <div class="metric" title="成本利润率 = 利润 ÷ 采购成本">
             <div class="m-label">成本利润率</div>
             <div class="m-value">{{ fmtRate(summary.settled.profitRateCost) }}</div>
-          </div>
-          <div class="metric clickable" title="国际配送应计(type 67)合计,点击筛选订单" @click="applyTypeFilter(67, '国际配送', 'settled')">
-            <div class="m-label">国际配送(¥)</div>
-            <div class="m-value" :class="profitClass(typeSum('settled', 67))">{{ fmtMoney(typeSum('settled', 67)) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(typeSum('settled', 67), summary.settled.totalOrderAmount) }}</div>
-          </div>
-          <div class="metric clickable" title="销售佣金应计(type 69)合计,点击筛选订单" @click="applyTypeFilter(69, '销售佣金', 'settled')">
-            <div class="m-label">销售佣金(¥)</div>
-            <div class="m-value" :class="profitClass(typeSum('settled', 69))">{{ fmtMoney(typeSum('settled', 69)) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(typeSum('settled', 69), summary.settled.totalOrderAmount) }}</div>
-          </div>
-          <div class="metric" title="除国际配送/销售佣金外的应计合计">
-            <div class="m-label">其它应计项目汇总(¥)</div>
-            <div class="m-value" :class="profitClass(otherAccrualTotal('settled'))">{{ fmtMoney(otherAccrualTotal('settled')) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(otherAccrualTotal('settled'), summary.settled.totalOrderAmount) }}</div>
           </div>
           <div class="metric clickable" title="已取消订单的利润合计(无真实应计按 −采购),点击筛选订单" @click="applyCategoryFilter('cancelled', '已取消订单')">
             <div class="m-label">已取消负利润(¥)</div>
@@ -576,6 +576,11 @@ onUnmounted(() => {
             <div class="m-label">销售佣金(¥,估)</div>
             <div class="m-value" :class="profitClass(-summary.pending.totalCommission)">{{ fmtMoney(-summary.pending.totalCommission) }}</div>
             <div class="m-sub">占订单金额 {{ pctOf(summary.pending.totalCommission, summary.pending.totalOrderAmount) }}</div>
+          </div>
+          <div class="metric" title="在途订单已落库的其它应计费用合计(尚未计入预估利润)">
+            <div class="m-label">其它应计项目汇总(¥)</div>
+            <div class="m-value" :class="profitClass(otherAccrualTotal('pending'))">{{ fmtMoney(otherAccrualTotal('pending')) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(otherAccrualTotal('pending'), summary.pending.totalOrderAmount) }}</div>
           </div>
           <div class="metric" title="预收回款 = 订单金额 − 预估佣金 − 预估配送(在途)">
             <div class="m-label">回款(¥,估)</div>
@@ -732,6 +737,41 @@ onUnmounted(() => {
                     <div class="detail-item"><span class="d-label">妥投时间</span><span>{{ fmtDateTime(o.deliveredAt) }}</span></div>
                     <div class="detail-item"><span class="d-label">销售收款</span><span>{{ o.estimated ? '—' : '¥ ' + fmtMoney(o.accrual?.sale) }}</span></div>
                     <div class="detail-item"><span class="d-label">应计合计</span><span>{{ o.estimated ? '—' : '¥ ' + fmtMoney(o.accrual?.total) }}</span></div>
+                  </div>
+                  <div class="goods-block">
+                    <div class="accrual-title">商品信息</div>
+                    <table class="goods-table" v-if="o.items && o.items.length">
+                      <thead>
+                        <tr>
+                          <th class="ta-l goods-col">产品</th>
+                          <th>数量</th>
+                          <th>售价(¥)</th>
+                          <th>已采数量</th>
+                          <th>采购金额(¥,回写)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="it in o.items" :key="it.id">
+                          <td class="ta-l">
+                            <div class="product-item">
+                              <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box" title="打开 Ozon 商品页">
+                                <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
+                              </a>
+                              <div class="product-main">
+                                <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ it.title || '—' }}</a>
+                                <span v-else class="product-title" :title="it.title || ''">{{ it.title || '—' }}</span>
+                                <div class="product-sub">SKU {{ it.offerId }}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td>× {{ it.quantity }}</td>
+                          <td>{{ fmtMoney(it.price) }}</td>
+                          <td>{{ it.purchaseNum }}</td>
+                          <td>{{ fmtMoney(it.purchaseAmount) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <div v-else class="mini-empty">无产品行数据</div>
                   </div>
                   <div class="type-tiles inner" v-if="o.accrualTypes.length">
                     <div class="type-tile" v-for="t in o.accrualTypes" :key="t.typeId" :title="`${t.nameCn} #${t.typeId}`">
@@ -1192,6 +1232,79 @@ onUnmounted(() => {
 }
 .d-label {
   color: var(--muted);
+}
+/* ── 展开行商品信息(参考订单处理·订单产品)── */
+.goods-block {
+  margin: 4px 0 10px;
+}
+.goods-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.goods-table th {
+  background: #f9fafb;
+  padding: 6px 8px;
+  text-align: center;
+  font-weight: 500;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.goods-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #f3f4f6;
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.goods-table .goods-col {
+  width: 420px;
+}
+.product-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  text-align: left;
+}
+.product-img-box {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f9fafb;
+}
+.product-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.product-main {
+  min-width: 0;
+}
+.product-title {
+  display: block;
+  max-width: 330px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text);
+}
+a.product-title:hover {
+  color: #2563eb;
+}
+.product-sub {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
 }
 .empty-cell {
   padding: 32px 8px !important;
