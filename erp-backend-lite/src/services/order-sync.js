@@ -44,7 +44,7 @@ const SYNC_LEVELS = {
 
 // ── 应计同步参数(实测验证)─────────────────────────────────────
 const ACCRUAL_BATCH = 200;        // 应计接口单批货件数(实测 200 可行)
-const ACCRUAL_THROTTLE_MS = 300; // 批间节流(接口秒级限流 429 code=8)
+const ACCRUAL_THROTTLE_MS = 300; // 进程内全局节流:相邻两次调用开始时刻最小间隔(秒级限流 429 code=8)
 const ACCRUAL_MAX_RETRY = 3;     // 429/网络错退避重试上限
 const ACCRUAL_LIMIT_PER_ROUND = 400; // 每店铺每轮待拉上限(防单轮过载)
 
@@ -480,10 +480,26 @@ async function syncReturns(store) {
 // 429 限流:300ms 节流 + 指数退避(实测验证);单店铺失败仅记 failures 不阻塞
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ── 应计接口进程内全局节流(2026-09-24)──────────────────────────
+// 429 复盘:原批间 300ms 是「单次 syncAccruals 内部」的局部节流——
+// 每店第一批前不等待、跨店铺无间隔,且手动应计同步/单订单同步/定时轮可并发,
+// 多调用方的请求可在同一秒内密集发出,单实例也会撞秒级限额(429 code=8)。
+// 改为模块级全局节流:进程内任意两次调用开始时刻间隔 ≥ THROTTLE,
+// 跨店铺、跨链路统一排队(同 tick 并发到达时按预约槽位依次错开)。
+let _lastAccrualSlotAt = 0;
+function reserveAccrualSlot() {
+  const now = Date.now();
+  const slot = Math.max(now, _lastAccrualSlotAt + ACCRUAL_THROTTLE_MS);
+  _lastAccrualSlotAt = slot;
+  return slot;
+}
+
 async function callAccrualWithRetry(store, postingNumbers) {
   let lastErr = null;
   for (let attempt = 0; attempt <= ACCRUAL_MAX_RETRY; attempt++) {
     try {
+      const wait = reserveAccrualSlot() - Date.now();
+      if (wait > 0) await sleep(wait);
       return await financeAccrualPostings(store, postingNumbers);
     } catch (e) {
       lastErr = e;
@@ -519,11 +535,11 @@ async function syncAccruals(store, { mode = 'pending', sinceDays, packageIds, li
   let accrualRows = 0;
   for (let i = 0; i < pending.length; i += ACCRUAL_BATCH) {
     const batch = pending.slice(i, i + ACCRUAL_BATCH).map((r) => r.postingNumber);
+    // 批间不再单独 sleep:callAccrualWithRetry 内的全局节流已保证相邻调用间隔
     const resp = await callAccrualWithRetry(store, batch);
     const r = replaceAccruals(store.id, resp?.posting_accruals || [], postingMap, typeMap);
     packages += r.packages;
     accrualRows += r.accrualRows;
-    if (i + ACCRUAL_BATCH < pending.length) await sleep(ACCRUAL_THROTTLE_MS);
   }
   logger.info(
     { storeId: store.id, packages, accrualRows, mode, pending: pending.length },
