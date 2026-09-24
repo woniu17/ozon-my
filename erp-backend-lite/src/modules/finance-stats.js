@@ -11,7 +11,8 @@
 // 路由:
 //   GET /admin/api/finance-stats/summary?from=YYYY-MM-DD&to=YYYY-MM-DD&storeIds=a,b&tz=...
 //     from/to 缺省 = 全部时间;to 为排他日界(含 from 当日,不含 to 当日)
-//   GET /admin/api/finance-stats/orders?group=settled|pending&from&to&storeIds&tz&page&pageSize&keyword
+//   GET /admin/api/finance-stats/orders?group=settled|pending&from&to&storeIds&tz&page&pageSize&keyword&category&typeId
+//     category=success|cancelled|returned(已结算组内分类筛选);typeId=应计类型筛选(方块点击联动)
 //   GET /admin/api/finance-stats/non-order-accruals?from&to&storeIds&page&pageSize
 //   GET /admin/api/finance-stats/order-months?tz=... —— 有订单的自然月列表(YYYY-MM 降序,月界按 tz 换算)
 // 金额币种:采购/订单金额 CNY;应计 RUB,按 app_config rub_cny_rate 换算 CNY
@@ -334,6 +335,17 @@ router.get('/admin/api/finance-stats/orders', (req, res, next) => {
     const where = [buildGroupWhere(group)];
     const params = [];
     appendOrderFilters(where, params, t, storeIds);
+    // 方块点击筛选:已结算组内分类(已成功/已取消/已退款)
+    const category = ['success', 'cancelled', 'returned'].includes(req.query.category) ? req.query.category : null;
+    if (category === 'cancelled') where.push(`p.operate_status = 'cancelled'`);
+    else if (category === 'returned') where.push(`p.is_returned = 1 AND p.operate_status != 'cancelled'`); // 与展示分类一致:cancelled 优先
+    else if (category === 'success') where.push(SUCCESS_COND);
+    // 方块点击筛选:按应计类型(该包裹存在此类型的应计行)
+    const typeId = Number(req.query.typeId);
+    if (Number.isInteger(typeId) && typeId > 0) {
+      where.push(`EXISTS (SELECT 1 FROM op_accrual af WHERE af.package_id = p.id AND af.type_id = ?)`);
+      params.push(typeId);
+    }
     if (req.query.keyword) {
       where.push('o.posting_number LIKE ?');
       params.push(`%${String(req.query.keyword).trim()}%`);

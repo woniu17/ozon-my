@@ -6,7 +6,7 @@
 //   已采购未结算 —— 有采购且未达已成功(非取消/退货),按下单时间过滤,利润为预估口径
 //   非订单应计项目 —— package_id IS NULL 的应计行(罚款/逆向物流等),按应计日期过滤
 // 时间维度:全部 / 自然月(所有有订单的月份) / 近 7/14/30 天 / 自定义;时区北京/莫斯科
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import AppPager from '../components/AppPager.vue';
 import { parseUtcDate } from '../utils/time.js';
 import {
@@ -194,6 +194,9 @@ const ordersKeyword = ref('');
 const ordersData = ref(null);
 const ordersLoading = ref(false);
 const ordersError = ref(null);
+// 方块点击筛选:已取消/已退款分类 或 某一应计类型(联动订单详情列表)
+const orderFilter = ref(null); // { kind:'category', value:'cancelled', label:'已取消订单' } | { kind:'typeId', value:67, label:'国际配送 #67' }
+const ordersSectionEl = ref(null);
 const expandedRows = ref(new Set());
 let ordersReqId = 0;
 let keywordTimer = null;
@@ -206,6 +209,8 @@ async function loadOrders() {
     const p = { ...baseParams(), group: ordersGroup.value, page: ordersPage.value, pageSize: ORDERS_PAGE_SIZE };
     const kw = ordersKeyword.value.trim();
     if (kw) p.keyword = kw;
+    if (orderFilter.value?.kind === 'category' && ordersGroup.value === 'settled') p.category = orderFilter.value.value;
+    if (orderFilter.value?.kind === 'typeId') p.typeId = orderFilter.value.value;
     const r = await getFinanceOrders(p);
     if (myId !== ordersReqId) return;
     ordersData.value = r;
@@ -220,6 +225,27 @@ async function loadOrders() {
 function setOrdersGroup(g) {
   if (ordersGroup.value === g) return;
   ordersGroup.value = g;
+  ordersPage.value = 1;
+  orderFilter.value = null; // 切换分组清除方块筛选
+  loadOrders();
+}
+// 方块点击:应用筛选、切换到对应分组并滚动到订单列表
+function applyOrderFilter(filter, group) {
+  ordersGroup.value = group;
+  orderFilter.value = filter;
+  ordersPage.value = 1;
+  loadOrders();
+  nextTick(() => ordersSectionEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+}
+function applyCategoryFilter(cat, label) {
+  applyOrderFilter({ kind: 'category', value: cat, label }, 'settled');
+}
+function applyTypeFilter(typeId, nameCn, group) {
+  applyOrderFilter({ kind: 'typeId', value: typeId, label: `${nameCn} #${typeId}` }, group);
+}
+function clearOrderFilter() {
+  if (!orderFilter.value) return;
+  orderFilter.value = null;
   ordersPage.value = 1;
   loadOrders();
 }
@@ -328,11 +354,17 @@ function pctOf(v, base) {
   if (!Number.isFinite(n) || !Number.isFinite(b) || b <= 0) return '—';
   return `${Math.round((Math.abs(n) / b) * 10000) / 100}%`;
 }
-// 组内应计项目明细金额之和(费用侧,¥)
-function accrualTotal(group) {
-  const g = summary.value?.[group];
-  if (!g?.accrualTypes?.length) return 0;
-  return Math.round(g.accrualTypes.reduce((s, t) => s + (Number(t.cny) || 0), 0) * 100) / 100;
+// 组内应计类型提取:国际配送(67)/销售佣金(69)为独立方块,其余归「其它」
+const CORE_TYPE_IDS = [67, 69];
+function typeSum(group, typeId) {
+  const t = summary.value?.[group]?.accrualTypes?.find((x) => x.typeId === typeId);
+  return t ? t.cny : 0;
+}
+function otherAccrualTypes(group) {
+  return (summary.value?.[group]?.accrualTypes || []).filter((t) => !CORE_TYPE_IDS.includes(t.typeId));
+}
+function otherAccrualTotal(group) {
+  return Math.round(otherAccrualTypes(group).reduce((s, t) => s + (Number(t.cny) || 0), 0) * 100) / 100;
 }
 // 汇总利润 = 已结算 + 已采购未结算(估) + 非订单应计
 function grandProfit() {
@@ -475,32 +507,42 @@ onUnmounted(() => {
             <div class="m-label">成本利润率</div>
             <div class="m-value">{{ fmtRate(summary.settled.profitRateCost) }}</div>
           </div>
-          <div class="metric" title="应计项目明细各类型金额之和(费用侧)">
-            <div class="m-label">应计项目汇总(¥)</div>
-            <div class="m-value" :class="profitClass(accrualTotal('settled'))">{{ fmtMoney(accrualTotal('settled')) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(accrualTotal('settled'), summary.settled.totalOrderAmount) }}</div>
+          <div class="metric clickable" title="国际配送应计(type 67)合计,点击筛选订单" @click="applyTypeFilter(67, '国际配送', 'settled')">
+            <div class="m-label">国际配送(¥)</div>
+            <div class="m-value" :class="profitClass(typeSum('settled', 67))">{{ fmtMoney(typeSum('settled', 67)) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(typeSum('settled', 67), summary.settled.totalOrderAmount) }}</div>
           </div>
-          <div class="metric" title="已取消订单的利润合计(无真实应计按 −采购)">
+          <div class="metric clickable" title="销售佣金应计(type 69)合计,点击筛选订单" @click="applyTypeFilter(69, '销售佣金', 'settled')">
+            <div class="m-label">销售佣金(¥)</div>
+            <div class="m-value" :class="profitClass(typeSum('settled', 69))">{{ fmtMoney(typeSum('settled', 69)) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(typeSum('settled', 69), summary.settled.totalOrderAmount) }}</div>
+          </div>
+          <div class="metric" title="除国际配送/销售佣金外的应计合计">
+            <div class="m-label">其它应计项目汇总(¥)</div>
+            <div class="m-value" :class="profitClass(otherAccrualTotal('settled'))">{{ fmtMoney(otherAccrualTotal('settled')) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(otherAccrualTotal('settled'), summary.settled.totalOrderAmount) }}</div>
+          </div>
+          <div class="metric clickable" title="已取消订单的利润合计(无真实应计按 −采购),点击筛选订单" @click="applyCategoryFilter('cancelled', '已取消订单')">
             <div class="m-label">已取消负利润(¥)</div>
             <div class="m-value" :class="profitClass(catProfit('cancelled'))">{{ fmtMoney(catProfit('cancelled')) }}</div>
             <div class="m-sub">占订单金额 {{ pctOf(catProfit('cancelled'), summary.settled.totalOrderAmount) }}</div>
           </div>
-          <div class="metric" title="已退款(妥投后退货)订单的利润合计">
+          <div class="metric clickable" title="已退款(妥投后退货)订单的利润合计,点击筛选订单" @click="applyCategoryFilter('returned', '已退款订单')">
             <div class="m-label">退款负利润(¥)</div>
             <div class="m-value" :class="profitClass(catProfit('returned'))">{{ fmtMoney(catProfit('returned')) }}</div>
             <div class="m-sub">占订单金额 {{ pctOf(catProfit('returned'), summary.settled.totalOrderAmount) }}</div>
           </div>
         </div>
         <div class="accrual-block">
-          <div class="accrual-title">应计项目明细</div>
-          <div class="type-tiles" v-if="summary.settled.accrualTypes.length">
-            <div class="type-tile" v-for="t in summary.settled.accrualTypes" :key="t.typeId" :title="`${t.nameCn} #${t.typeId} · ${fmtCount(t.count)}笔`">
+          <div class="accrual-title">其它应计项目明细(除国际配送/销售佣金,点击方块筛选订单)</div>
+          <div class="type-tiles" v-if="otherAccrualTypes('settled').length">
+            <div class="type-tile clickable" v-for="t in otherAccrualTypes('settled')" :key="t.typeId" :title="`${t.nameCn} #${t.typeId} · ${fmtCount(t.count)}笔,点击筛选订单`" @click="applyTypeFilter(t.typeId, t.nameCn, 'settled')">
               <div class="tile-label">{{ t.nameCn }}<span class="type-id"> #{{ t.typeId }}</span></div>
               <div class="tile-value" :class="profitClass(t.cny)">{{ fmtMoney(t.cny) }}</div>
               <div class="tile-sub">{{ fmtCount(t.count) }}笔 · 占{{ pctOf(t.cny, summary.settled.totalOrderAmount) }}</div>
             </div>
           </div>
-          <div v-else class="mini-empty">该范围内无应计数据</div>
+          <div v-else class="mini-empty">该范围内无其它应计数据</div>
         </div>
       </section>
 
@@ -525,6 +567,16 @@ onUnmounted(() => {
             <div class="m-value">{{ fmtMoney(summary.pending.totalPurchaseAmount) }}</div>
             <div class="m-sub">占订单金额 {{ pctOf(summary.pending.totalPurchaseAmount, summary.pending.totalOrderAmount) }}</div>
           </div>
+          <div class="metric" title="预估国际配送 = 3.37 + 0.0281 × 重量(g)">
+            <div class="m-label">国际配送(¥,估)</div>
+            <div class="m-value" :class="profitClass(-summary.pending.totalDelivery)">{{ fmtMoney(-summary.pending.totalDelivery) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(summary.pending.totalDelivery, summary.pending.totalOrderAmount) }}</div>
+          </div>
+          <div class="metric" title="预估销售佣金 = 订单金额 × 16%">
+            <div class="m-label">销售佣金(¥,估)</div>
+            <div class="m-value" :class="profitClass(-summary.pending.totalCommission)">{{ fmtMoney(-summary.pending.totalCommission) }}</div>
+            <div class="m-sub">占订单金额 {{ pctOf(summary.pending.totalCommission, summary.pending.totalOrderAmount) }}</div>
+          </div>
           <div class="metric" title="预收回款 = 订单金额 − 预估佣金 − 预估配送(在途)">
             <div class="m-label">回款(¥,估)</div>
             <div class="m-value">{{ fmtMoney(summary.pending.totalPayout) }}</div>
@@ -541,27 +593,17 @@ onUnmounted(() => {
             <div class="m-label">成本利润率</div>
             <div class="m-value">{{ fmtRate(summary.pending.profitRateCost) }}</div>
           </div>
-          <div class="metric" title="预估国际配送 = 3.37 + 0.0281 × 重量(g)">
-            <div class="m-label">国际配送(¥,估)</div>
-            <div class="m-value" :class="profitClass(-summary.pending.totalDelivery)">{{ fmtMoney(-summary.pending.totalDelivery) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(summary.pending.totalDelivery, summary.pending.totalOrderAmount) }}</div>
-          </div>
-          <div class="metric" title="预估销售佣金 = 订单金额 × 16%">
-            <div class="m-label">销售佣金(¥,估)</div>
-            <div class="m-value" :class="profitClass(-summary.pending.totalCommission)">{{ fmtMoney(-summary.pending.totalCommission) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(summary.pending.totalCommission, summary.pending.totalOrderAmount) }}</div>
-          </div>
         </div>
         <div class="accrual-block">
-          <div class="accrual-title">已产生应计项目(在途订单已落库的费用,尚未计入预估利润)</div>
-          <div class="type-tiles" v-if="summary.pending.accrualTypes.length">
-            <div class="type-tile" v-for="t in summary.pending.accrualTypes" :key="t.typeId" :title="`${t.nameCn} #${t.typeId} · ${fmtCount(t.count)}笔`">
+          <div class="accrual-title">其它应计项目明细(在途订单已落库的其它费用,尚未计入预估利润;点击方块筛选订单)</div>
+          <div class="type-tiles" v-if="otherAccrualTypes('pending').length">
+            <div class="type-tile clickable" v-for="t in otherAccrualTypes('pending')" :key="t.typeId" :title="`${t.nameCn} #${t.typeId} · ${fmtCount(t.count)}笔,点击筛选订单`" @click="applyTypeFilter(t.typeId, t.nameCn, 'pending')">
               <div class="tile-label">{{ t.nameCn }}<span class="type-id"> #{{ t.typeId }}</span></div>
               <div class="tile-value" :class="profitClass(t.cny)">{{ fmtMoney(t.cny) }}</div>
               <div class="tile-sub">{{ fmtCount(t.count) }}笔 · 占{{ pctOf(t.cny, summary.pending.totalOrderAmount) }}</div>
             </div>
           </div>
-          <div v-else class="mini-empty">该范围内无应计数据</div>
+          <div v-else class="mini-empty">该范围内无其它应计数据</div>
         </div>
       </section>
     </div>
@@ -609,7 +651,7 @@ onUnmounted(() => {
     <div v-if="summaryLoading && !summary" class="empty">加载中…</div>
 
     <!-- ══ 订单详情列表 ══ -->
-    <section class="fin-section">
+    <section class="fin-section" ref="ordersSectionEl">
       <header class="fin-head">
         <h2>订单详情列表</h2>
         <div class="group-switch" role="group" aria-label="订单分组">
@@ -624,6 +666,10 @@ onUnmounted(() => {
             @click="setOrdersGroup('pending')"
           >已采购未结算</button>
         </div>
+        <span v-if="orderFilter" class="filter-chip" :title="`方块筛选:${orderFilter.label}`">
+          {{ orderFilter.label }}
+          <button class="chip-x" @click="clearOrderFilter" title="清除筛选">✕</button>
+        </span>
         <input
           class="filter-input kw-input"
           type="text"
@@ -1030,6 +1076,42 @@ onUnmounted(() => {
   margin-top: 2px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+/* 可点击方块(点击筛选订单列表) */
+.clickable {
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.clickable:hover {
+  border-color: #d1d5db;
+  background: #f3f4f6;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+/* 订单列表方块筛选 chip */
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+  white-space: nowrap;
+}
+.chip-x {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 50%;
+}
+.chip-x:hover {
+  background: rgba(37, 99, 235, 0.15);
 }
 .ta-l {
   text-align: left !important;
