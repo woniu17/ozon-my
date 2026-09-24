@@ -172,6 +172,15 @@ export function findAccrualPostingsByPackageIds(storeId, packageIds) {
     .all(storeId, ...packageIds);
 }
 
+// 包裹应计全量重算(按 package_id 汇总该包裹所有行,含 by-day 挂载的订单级费用;
+// 两链路共用,保证 accrual_total 口径一致)
+const sumPkgStmt = () =>
+  db.prepare(
+    `SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total,
+            COALESCE(SUM(CASE WHEN seller_price IS NOT NULL AND quantity IS NOT NULL THEN seller_price * quantity END), 0) AS saleTotal
+     FROM op_accrual WHERE package_id = ?`
+  );
+
 /**
  * 批量落库应计(每 posting 事务内全量替换)
  * postingAccruals: [{ posting_number, accruals: [...] }](OPI 原始响应)
@@ -186,6 +195,7 @@ export function replaceAccruals(storeId, postingAccruals, postingMap, typeMap) {
       amount, currency, seller_price, sku, quantity, accrual_date, synced_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
+  const sumPkg = sumPkgStmt();
   let pkgCount = 0;
   let rowCount = 0;
   for (const pa of postingAccruals || []) {
@@ -195,9 +205,9 @@ export function replaceAccruals(storeId, postingAccruals, postingMap, typeMap) {
     const accruals = Array.isArray(pa.accruals) ? pa.accruals : [];
 
     runInTx(() => {
-      db.prepare(`DELETE FROM op_accrual WHERE package_id = ?`).run(packageId);
-      let total = 0;
-      let saleTotal = 0;
+      // 只删本货件号的行:同包裹可能还挂有 by-day 订单级费用(Acquiring 等,
+      // posting_number 为两段式订单号),按 package_id 全删会误删
+      db.prepare(`DELETE FROM op_accrual WHERE package_id = ? AND posting_number = ?`).run(packageId, postingNumber);
       for (const ac of accruals) {
         const amount = Number(ac?.accrued?.amount ?? 0);
         const sellerPrice = ac?.seller_price ? Number(ac.seller_price.amount) || null : null;
@@ -218,14 +228,13 @@ export function replaceAccruals(storeId, postingAccruals, postingMap, typeMap) {
           ac?.accrual_date || null,
           now
         );
-        total += amount;
-        if (sellerPrice != null && qty) saleTotal += sellerPrice * qty;
       }
-      // 空应计:accrual_total 存 NULL(区别于"0 扣款"),24h 后重试
+      // 合计按包裹全量重算(含订单级费用行):拉到空但表里有其它行时保留真实合计
+      const s = sumPkg.get(packageId);
       db.prepare(
         `UPDATE op_package SET accrual_total = ?, accrual_sale_total = ?, accrual_synced_at = ?, gmt_modified = ? WHERE id = ?`
-      ).run(accruals.length > 0 ? Math.round(total * 100) / 100 : null,
-            accruals.length > 0 ? Math.round(saleTotal * 100) / 100 : null,
+      ).run(s.c > 0 ? Math.round(s.total * 100) / 100 : null,
+            s.c > 0 ? Math.round(s.saleTotal * 100) / 100 : null,
             now, now, packageId);
     });
     pkgCount++;
@@ -370,10 +379,15 @@ function num(v) {
   return v == null ? null : Number(v);
 }
 
-/** by-day 一天数据落库(按 posting_number+accrual_date 先删后插,双表)
+/** by-day 一天数据落库(按 store+posting_number+accrual_date 先删后插,双表)
  *  删除范围必须带日期:同一货件的应计可能分布多天(如 05-22 收款 + 05-30 退货负冲),
  *  仅按 posting_number 删会跨日期覆盖丢行;带日期后各天互不干扰,增量安全。
- *  包裹冗余列按货件全量重算(跨所有日期),保证 accrual_total 完整。
+ *  删除范围必须带店铺:同一买家跨店下单时 Ozon 分配同一订单号并拆成不同店铺的货件
+ *  (如订单 28633586-0268 → yql02 的 -1 + yql04 的 -3),订单级费用(Acquiring 等,
+ *  unit_number 为两段式订单号)两店各返回一笔独立应计,不带 store 会互相覆盖丢明细。
+ *  包裹映射:精确匹配货件号;两段式订单号(Acquiring/罚款按买家支付订单收取,不带
+ *  -N 后缀)精确匹配不到时按店铺限定前缀匹配该订单下的货件(挂 MIN(package_id))。
+ *  包裹冗余列按 package_id 全量重算(含订单级费用行,跨所有日期),保证 accrual_total 完整。
  *  accruals: by-day 响应的 accruals 数组;typeMap: getAccrualTypes() 的 Map
  *  返回 { units, feeRows, incomeRows, packages }
  */
@@ -393,6 +407,19 @@ export function replaceAccrualsByDay(storeId, date, accruals, typeMap) {
     )
     .all(storeId, ...units);
   const pkgMap = new Map(pkgRows.map((r) => [r.pn, r.pid]));
+  // 订单级费用兜底:两段式订单号精确匹配不到货件时,前缀匹配该订单在本店的货件
+  // (LIKE 无通配符注入风险:unit 为纯数字-数字格式;限定 store 防跨店误挂)
+  for (const u of units) {
+    if (pkgMap.has(u)) continue;
+    const r = db
+      .prepare(
+        `SELECT MIN(p.id) AS pid
+         FROM op_ozon_order o JOIN op_package p ON p.ozon_order_id = o.id
+         WHERE o.store_id = ? AND o.posting_number LIKE ? || '-%'`
+      )
+      .get(storeId, u);
+    if (r?.pid != null) pkgMap.set(u, r.pid);
+  }
 
   const now = nowIso();
   const insFee = db.prepare(
@@ -409,19 +436,15 @@ export function replaceAccrualsByDay(storeId, date, accruals, typeMap) {
   const updPkg = db.prepare(
     `UPDATE op_package SET accrual_total = ?, accrual_sale_total = ?, accrual_synced_at = ?, gmt_modified = ? WHERE id = ?`
   );
-  // 货件全量重算(跨所有日期):写入本日后,该货件在 op_accrual 的完整合计
-  const sumUnit = db.prepare(
-    `SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total,
-            COALESCE(SUM(CASE WHEN seller_price IS NOT NULL AND quantity IS NOT NULL THEN seller_price * quantity END), 0) AS saleTotal
-     FROM op_accrual WHERE posting_number = ?`
-  );
+  const sumPkg = sumPkgStmt();
 
   let pkgCount = 0;
   runInTx(() => {
+    const touched = new Set(); // 本日涉及的包裹,事务末统一重算冗余列
     for (const unit of units) {
-      // 仅清本日该货件的行(跨日期行由各自日期的写入负责)
-      db.prepare(`DELETE FROM op_accrual WHERE posting_number = ? AND accrual_date = ?`).run(unit, date);
-      db.prepare(`DELETE FROM op_accrual_income WHERE posting_number = ? AND accrual_date = ?`).run(unit, date);
+      // 仅清本店本日该货件的行(跨日期行由各自日期的写入负责;跨店订单级费用各店独立)
+      db.prepare(`DELETE FROM op_accrual WHERE store_id = ? AND posting_number = ? AND accrual_date = ?`).run(storeId, unit, date);
+      db.prepare(`DELETE FROM op_accrual_income WHERE store_id = ? AND posting_number = ? AND accrual_date = ?`).run(storeId, unit, date);
       const packageId = pkgMap.get(unit) || null;
       for (const f of fees) {
         if (f.unit !== unit) continue;
@@ -439,16 +462,19 @@ export function replaceAccrualsByDay(storeId, date, accruals, typeMap) {
           i.coinvestment, i.bonus, i.detail, now
         );
       }
-      if (packageId != null) {
-        const s = sumUnit.get(unit);
-        // 空应计语义沿用 postings:0 行明细时 accrual_total 存 NULL
-        updPkg.run(
-          s.c > 0 ? Math.round(s.total * 100) / 100 : null,
-          s.c > 0 ? Math.round(s.saleTotal * 100) / 100 : null,
-          now, now, packageId
-        );
-        pkgCount++;
-      }
+      if (packageId != null) touched.add(packageId);
+    }
+    // 包裹冗余列按 package_id 全量重算(含订单级费用行):同一包裹可能被货件级
+    // (三段式)与订单级(两段式)多个 unit 触发,统一在事务末重算保证最终一致
+    for (const packageId of touched) {
+      const s = sumPkg.get(packageId);
+      // 空应计语义沿用 postings:0 行明细时 accrual_total 存 NULL
+      updPkg.run(
+        s.c > 0 ? Math.round(s.total * 100) / 100 : null,
+        s.c > 0 ? Math.round(s.saleTotal * 100) / 100 : null,
+        now, now, packageId
+      );
+      pkgCount++;
     }
   });
   return { units: units.length, feeRows: fees.length, incomeRows: incomes.length, packages: pkgCount };
