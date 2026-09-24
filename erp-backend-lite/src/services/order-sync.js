@@ -44,7 +44,10 @@ const SYNC_LEVELS = {
 
 // ── 应计同步参数(实测验证)─────────────────────────────────────
 const ACCRUAL_BATCH = 200;        // 应计接口单批货件数(实测 200 可行)
-const ACCRUAL_THROTTLE_MS = 300; // 进程内全局节流:相邻两次调用开始时刻最小间隔(秒级限流 429 code=8)
+const ACCRUAL_THROTTLE_MS = 1000; // 进程内全局节流:相邻两次调用开始时刻最小间隔。
+// 2026-09-24 由 300 提到 1000:全局限额虽是 50 req/s(Client-Id),但该接口有
+// 独立方法级限额(无公开文档,实测 <3.3 req/s),300ms 间隔单实例仍偶发 429;
+// 应计量级极小(每轮 0~6 请求),1 req/s 无性能代价且稳落限额之下。
 const ACCRUAL_MAX_RETRY = 3;     // 429/网络错退避重试上限
 const ACCRUAL_LIMIT_PER_ROUND = 400; // 每店铺每轮待拉上限(防单轮过载)
 
