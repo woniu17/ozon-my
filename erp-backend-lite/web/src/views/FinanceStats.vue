@@ -196,6 +196,7 @@ const ordersLoading = ref(false);
 const ordersError = ref(null);
 // 方块点击筛选:已取消/已退款分类 或 某一应计类型(联动订单详情列表)
 const orderFilter = ref(null); // { kind:'category', value:'cancelled', label:'已取消订单' } | { kind:'typeId', value:67, label:'国际配送 #67' }
+const showZeroCancelled = ref(false); // 秒取消订单(已取消且采购/收款/应计全为0)默认隐藏,勾选后显示
 const ordersSectionEl = ref(null);
 const expandedRows = ref(new Set());
 let ordersReqId = 0;
@@ -211,6 +212,7 @@ async function loadOrders() {
     if (kw) p.keyword = kw;
     if (orderFilter.value?.kind === 'category' && ordersGroup.value === 'settled') p.category = orderFilter.value.value;
     if (orderFilter.value?.kind === 'typeId') p.typeId = orderFilter.value.value;
+    if (showZeroCancelled.value) p.showZeroCancelled = 1;
     const r = await getFinanceOrders(p);
     if (myId !== ordersReqId) return;
     ordersData.value = r;
@@ -259,6 +261,10 @@ function onKeywordInput() {
     ordersPage.value = 1;
     loadOrders();
   }, 400);
+}
+function onShowZeroCancelled() {
+  ordersPage.value = 1;
+  loadOrders();
 }
 function toggleExpand(id) {
   const s = new Set(expandedRows.value);
@@ -675,6 +681,14 @@ onUnmounted(() => {
           {{ orderFilter.label }}
           <button class="chip-x" @click="clearOrderFilter" title="清除筛选">✕</button>
         </span>
+        <label
+          v-if="ordersGroup === 'settled'"
+          class="zero-cancel-toggle"
+          title="秒取消订单:已取消且采购/销售收款/应计合计全为0(回款与利润为0,无财务影响);默认隐藏,勾选后显示"
+        >
+          <input type="checkbox" v-model="showZeroCancelled" @change="onShowZeroCancelled" />
+          显示秒取消
+        </label>
         <input
           class="filter-input kw-input"
           type="text"
@@ -738,49 +752,54 @@ onUnmounted(() => {
                     <div class="detail-item"><span class="d-label">销售收款</span><span>{{ o.estimated ? '—' : '¥ ' + fmtMoney(o.accrual?.sale) }}</span></div>
                     <div class="detail-item"><span class="d-label">应计合计</span><span>{{ o.estimated ? '—' : '¥ ' + fmtMoney(o.accrual?.total) }}</span></div>
                   </div>
-                  <div class="goods-block">
-                    <div class="accrual-title">商品信息</div>
-                    <table class="goods-table" v-if="o.items && o.items.length">
-                      <thead>
-                        <tr>
-                          <th class="ta-l goods-col">产品</th>
-                          <th>数量</th>
-                          <th>售价(¥)</th>
-                          <th>已采数量</th>
-                          <th>采购金额(¥,回写)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr v-for="it in o.items" :key="it.id">
-                          <td class="ta-l">
-                            <div class="product-item">
-                              <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box" title="打开 Ozon 商品页">
-                                <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
-                              </a>
-                              <div class="product-main">
-                                <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ it.title || '—' }}</a>
-                                <span v-else class="product-title" :title="it.title || ''">{{ it.title || '—' }}</span>
-                                <div class="product-sub">SKU {{ it.offerId }}</div>
+                  <div class="detail-cols">
+                    <div class="goods-block">
+                      <div class="accrual-title">商品信息</div>
+                      <table class="goods-table" v-if="o.items && o.items.length">
+                        <thead>
+                          <tr>
+                            <th class="ta-l goods-col">产品</th>
+                            <th>数量</th>
+                            <th>售价(¥)</th>
+                            <th>已采数量</th>
+                            <th>采购金额(¥,回写)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="it in o.items" :key="it.id">
+                            <td class="ta-l">
+                              <div class="product-item">
+                                <a v-if="it.picUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-img-box" title="打开 Ozon 商品页">
+                                  <img :src="it.picUrl" referrerpolicy="no-referrer" loading="lazy" class="product-img" alt="" />
+                                </a>
+                                <div class="product-main">
+                                  <a v-if="it.pdpUrl" :href="it.pdpUrl" target="_blank" rel="noopener" class="product-title" :title="it.title || ''">{{ it.title || '—' }}</a>
+                                  <span v-else class="product-title" :title="it.title || ''">{{ it.title || '—' }}</span>
+                                  <div class="product-sub">SKU {{ it.offerId }}</div>
+                                </div>
                               </div>
-                            </div>
-                          </td>
-                          <td>× {{ it.quantity }}</td>
-                          <td>{{ fmtMoney(it.price) }}</td>
-                          <td>{{ it.purchaseNum }}</td>
-                          <td>{{ fmtMoney(it.purchaseAmount) }}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                    <div v-else class="mini-empty">无产品行数据</div>
-                  </div>
-                  <div class="type-tiles inner" v-if="o.accrualTypes.length">
-                    <div class="type-tile" v-for="t in o.accrualTypes" :key="t.typeId" :title="`${t.nameCn} #${t.typeId}`">
-                      <div class="tile-label">{{ t.nameCn }}<span class="type-id"> #{{ t.typeId }}</span></div>
-                      <div class="tile-value" :class="profitClass(t.cny)">{{ fmtMoney(t.cny) }}</div>
-                      <div class="tile-sub">占{{ pctOf(t.cny, o.orderAmount) }}</div>
+                            </td>
+                            <td>× {{ it.quantity }}</td>
+                            <td>{{ fmtMoney(it.price) }}</td>
+                            <td>{{ it.purchaseNum }}</td>
+                            <td>{{ fmtMoney(it.purchaseAmount) }}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div v-else class="mini-empty">无产品行数据</div>
+                    </div>
+                    <div class="accrual-side">
+                      <div class="accrual-title">应计项目</div>
+                      <div class="type-tiles inner" v-if="o.accrualTypes.length">
+                        <div class="type-tile" v-for="t in o.accrualTypes" :key="t.typeId" :title="`${t.nameCn} #${t.typeId}`">
+                          <div class="tile-label">{{ t.nameCn }}<span class="type-id"> #{{ t.typeId }}</span></div>
+                          <div class="tile-value" :class="profitClass(t.cny)">{{ fmtMoney(t.cny) }}</div>
+                          <div class="tile-sub">占{{ pctOf(t.cny, o.orderAmount) }}</div>
+                        </div>
+                      </div>
+                      <div v-else class="mini-empty">该订单暂无已落库应计明细</div>
                     </div>
                   </div>
-                  <div v-else class="mini-empty">该订单暂无已落库应计明细</div>
                 </td>
               </tr>
             </template>
@@ -1153,6 +1172,20 @@ onUnmounted(() => {
 .chip-x:hover {
   background: rgba(37, 99, 235, 0.15);
 }
+/* 秒取消订单显示开关 */
+.zero-cancel-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+.zero-cancel-toggle:hover {
+  color: var(--text);
+}
 .ta-l {
   text-align: left !important;
 }
@@ -1233,7 +1266,18 @@ onUnmounted(() => {
 .d-label {
   color: var(--muted);
 }
-/* ── 展开行商品信息(参考订单处理·订单产品)── */
+/* ── 展开行商品信息(左) | 应计项目(右),参考订单处理·订单产品 ── */
+.detail-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 20px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .detail-cols {
+    grid-template-columns: 1fr;
+  }
+}
 .goods-block {
   margin: 4px 0 10px;
 }
@@ -1259,7 +1303,7 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 .goods-table .goods-col {
-  width: 420px;
+  width: 340px;
 }
 .product-item {
   display: flex;
@@ -1290,7 +1334,7 @@ onUnmounted(() => {
 }
 .product-title {
   display: block;
-  max-width: 330px;
+  max-width: 250px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

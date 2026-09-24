@@ -14,6 +14,7 @@
 //   GET /admin/api/finance-stats/orders?group=settled|pending&from&to&storeIds&tz&page&pageSize&keyword&category&typeId
 //     category=success|cancelled|returned(已结算组内分类筛选);typeId=应计类型筛选(方块点击联动)
 //     订单行含 items(产品行:图/标题/SKU/数量/售价/已采数量/采购金额,与订单处理详情同源)
+//     showZeroCancelled=1 显示秒取消订单(已取消且采购/收款/应计全为0,默认隐藏)
 //   GET /admin/api/finance-stats/non-order-accruals?from&to&storeIds&page&pageSize
 //   GET /admin/api/finance-stats/order-months?tz=... —— 有订单的自然月列表(YYYY-MM 降序,月界按 tz 换算)
 // 金额币种:采购/订单金额 CNY;应计 RUB,按 app_config rub_cny_rate 换算 CNY
@@ -350,6 +351,14 @@ router.get('/admin/api/finance-stats/orders', (req, res, next) => {
     if (req.query.keyword) {
       where.push('o.posting_number LIKE ?');
       params.push(`%${String(req.query.keyword).trim()}%`);
+    }
+    // 秒取消订单默认隐藏(已取消且采购/销售收款/应计合计均为0→回款与利润全为0,无财务影响);
+    // 有真实应计(如逆向物流负费用)或已采购的取消单保留;showZeroCancelled=1 时显示
+    if (req.query.showZeroCancelled !== '1') {
+      where.push(`NOT (p.operate_status = 'cancelled'
+        AND COALESCE(p.total_purchase_amount, 0) = 0
+        AND COALESCE(p.accrual_sale_total, 0) = 0
+        AND COALESCE(p.accrual_total, 0) = 0)`);
     }
     const whereClause = `FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id WHERE ${where.join(' AND ')}`;
 

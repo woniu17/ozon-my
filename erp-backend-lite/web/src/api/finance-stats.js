@@ -10,8 +10,10 @@ export function getFinanceSummary(params) {
 }
 
 // 订单详情列表(分页)
-// params: { group: 'settled'|'pending', from?, to?, storeIds?, tz?, page?, pageSize?, keyword? }
-// 返回 { group, total, page, pageSize, orders, rubRate }
+// params: { group: 'settled'|'pending', from?, to?, storeIds?, tz?, page?, pageSize?, keyword?,
+//           category?, typeId?, showZeroCancelled?: 1 }
+// showZeroCancelled 缺省时隐藏秒取消订单(已取消且采购/收款/应计全为0,无财务影响)
+// 返回 { group, total, page, pageSize, orders(含 items 产品行), rubRate }
 export function getFinanceOrders(params) {
   return request.get('/admin/api/finance-stats/orders', params);
 }
