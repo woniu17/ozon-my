@@ -14,7 +14,6 @@
 //   GET /admin/api/finance-stats/orders?group=settled|pending&from&to&storeIds&tz&page&pageSize&keyword&category&typeId
 //     category=success|cancelled|returned(已结算组内分类筛选);typeId=应计类型筛选(方块点击联动)
 //     订单行含 items(产品行:图/标题/SKU/数量/售价/已采数量/采购金额,与订单处理详情同源)
-//     showZeroCancelled=1 显示秒取消订单(已取消且采购/收款/应计全为0,默认隐藏)
 //   GET /admin/api/finance-stats/non-order-accruals?from&to&storeIds&page&pageSize
 //   GET /admin/api/finance-stats/order-months?tz=... —— 有订单的自然月列表(YYYY-MM 降序,月界按 tz 换算)
 // 金额币种:采购/订单金额 CNY;应计 RUB,按 app_config rub_cny_rate 换算 CNY
@@ -23,6 +22,9 @@
 //   有效回款 validPayout = 有正向 sp 订单的净回款(正负冲抵)= |采购|+|国际配送|+|销售佣金|+|其它应计|+|利润|
 //   无效回款 invalidPayout = 负向 sp 合计×汇率 − 无 sp 取消单订单金额(负值)
 //   销售利润率(已结算)= 利润 ÷ 有效回款(无有效销售回退订单金额基数)
+// 统计范围排除(三组订单侧 + 月份列表统一生效,汇总/明细/占比口径一致):
+//   秒取消订单 —— 已取消且采购/销售收款/应计合计均为 0(回款利润全 0,纯噪音)
+//   质检单 —— Ozon 平台抽检下单(货件号 02131/024785 开头),非真实客户订单
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
@@ -91,18 +93,31 @@ const SUCCESS_COND = `p.operate_status = 'wait_receiver_confirm' AND p.delivered
   AND EXISTS (SELECT 1 FROM op_accrual a66 WHERE a66.package_id = p.id AND a66.type_id = 66)
   AND EXISTS (SELECT 1 FROM op_accrual a67 WHERE a67.package_id = p.id AND a67.type_id = 67)`;
 
+// 统计范围排除条件(汇总/订单明细/月份列表统一引用):
+//   秒取消订单(已取消且采购/收款/应计全为0,无财务影响,原默认隐藏→现彻底移出统计范围)
+//   质检单(02131/024785 开头,Ozon 平台抽检下单,非真实客户订单;992/994 为质检流程取消原因,不在此列)
+const ZERO_CANCEL_COND = `(p.operate_status = 'cancelled'
+  AND COALESCE(p.total_purchase_amount, 0) = 0
+  AND COALESCE(p.accrual_sale_total, 0) = 0
+  AND COALESCE(p.accrual_total, 0) = 0)`;
+const QC_POSTING_COND = `(o.posting_number LIKE '02131%' OR o.posting_number LIKE '024785%')`;
+const SCOPE_EXCLUDE = `NOT ${ZERO_CANCEL_COND} AND NOT ${QC_POSTING_COND}`;
+
 /** 组 WHERE(不含时间/店铺过滤,由调用方拼接)
  *  settled:已结算(已成功 ∪ 已取消 ∪ 已退款);
  *  pending:已采购未结算(有采购 且 非已成功 且 非取消 且 非退货)
+ *  两组均排除秒取消订单与质检单(统计范围口径)
  */
 function buildGroupWhere(group) {
   if (group === 'settled') {
-    return `p.is_ignored = 0 AND ((${SUCCESS_COND}) OR p.operate_status = 'cancelled' OR p.is_returned = 1)`;
+    return `p.is_ignored = 0 AND ((${SUCCESS_COND}) OR p.operate_status = 'cancelled' OR p.is_returned = 1)
+      AND ${SCOPE_EXCLUDE}`;
   }
   return `p.is_ignored = 0 AND p.is_returned = 0
     AND p.operate_status != 'cancelled'
     AND p.purchase_status != 'none'
-    AND NOT (${SUCCESS_COND})`;
+    AND NOT (${SUCCESS_COND})
+    AND ${SCOPE_EXCLUDE}`;
 }
 
 /** 已结算组内分类(行级判定,供徽标与子计数) */
@@ -129,22 +144,26 @@ function appendOrderFilters(where, params, t, storeIds) {
 }
 
 /** 单包裹利润(对齐 order-process.js computeProfit 口径)
- *  真实口径:终态(已妥投/已取消)且 accrual_total 非空 → (销售+应计合计)×汇率 − 采购
+ *  真实口径:经济终态(已妥投/已取消/已退货)且 accrual_total 非空 → (销售+应计合计)×汇率 − 采购;
+ *  退货含未妥投退货(取货点拒收):逆向物流等费用为最终扣款,计入利润,
+ *  否则费用进方块而利润漏扣,破坏 |有效回款| = |采购|+|配送|+|佣金|+|其它应计|+|利润| 恒等式
+ *  返回值不逐行 round2 —— 聚合按未舍入值累加后统一舍入,避免 ~200 单的逐行舍入累积
+ *  破坏方块恒等式(明细行展示时再舍入)
  *  预估口径:佣金 = 订单金额×16%,配送 = 3.37 + 0.0281×weight_g(g)
  */
 function calcProfit(r, rate, weightG) {
   const orderAmount = Number(r.order_amount) || 0;
   const purchase = Number(r.total_purchase_amount) || 0;
-  const terminal = r.delivered_at != null || r.operate_status === 'cancelled';
+  const terminal = r.delivered_at != null || r.operate_status === 'cancelled' || r.is_returned;
   const accrualTotal = r.accrual_total != null ? Number(r.accrual_total) : null;
   if (terminal && accrualTotal != null && rate) {
     const saleRub = Number(r.accrual_sale_total) || 0;
     const payout = (saleRub + accrualTotal) * rate;
-    return { estimated: false, payout: round2(payout), profit: round2(payout - purchase) };
+    return { estimated: false, payout, profit: payout - purchase };
   }
   // 已取消/已退款且无真实应计 → 货款必然被扣回,商品销毁无残值,利润 = −采购(真实口径)
   if (r.operate_status === 'cancelled' || r.is_returned) {
-    return { estimated: false, payout: 0, profit: round2(-purchase) };
+    return { estimated: false, payout: 0, profit: -purchase };
   }
   const est = estimateProfit({ amountCny: orderAmount, purchaseCny: purchase, weightG });
   return { estimated: true, payout: est.escrow, profit: est.profit, commission: est.commission, delivery: est.delivery };
@@ -384,14 +403,7 @@ router.get('/admin/api/finance-stats/orders', (req, res, next) => {
       where.push('o.posting_number LIKE ?');
       params.push(`%${String(req.query.keyword).trim()}%`);
     }
-    // 秒取消订单默认隐藏(已取消且采购/销售收款/应计合计均为0→回款与利润全为0,无财务影响);
-    // 有真实应计(如逆向物流负费用)或已采购的取消单保留;showZeroCancelled=1 时显示
-    if (req.query.showZeroCancelled !== '1') {
-      where.push(`NOT (p.operate_status = 'cancelled'
-        AND COALESCE(p.total_purchase_amount, 0) = 0
-        AND COALESCE(p.accrual_sale_total, 0) = 0
-        AND COALESCE(p.accrual_total, 0) = 0)`);
-    }
+    // 秒取消订单与质检单已移出统计范围(buildGroupWhere 统一排除,与汇总口径一致)
     const whereClause = `FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id WHERE ${where.join(' AND ')}`;
 
     const total = db.prepare(`SELECT COUNT(*) AS n ${whereClause}`).get(...params).n;
@@ -444,8 +456,8 @@ router.get('/admin/api/finance-stats/orders', (req, res, next) => {
         items: itemsByOrder.get(r.ozon_order_id) || [],
         estimated: p.estimated,
         category: group === 'settled' ? settledCategory(r) : null,
-        payout: p.payout,
-        profit: p.profit,
+        payout: round2(p.payout), // calcProfit 返回未舍入值,明细行展示时舍入
+        profit: round2(p.profit),
         profitRateSale: orderAmount > 0 ? Math.round((p.profit / orderAmount) * 10000) / 100 : null,
         profitRateCost: purchase > 0 ? Math.round((p.profit / purchase) * 10000) / 100 : null,
         accrual: real ? buildAccrualCny(typeMap, accrualTotal, r.accrual_sale_total, rate) : null,
@@ -537,6 +549,7 @@ router.get('/admin/api/finance-stats/order-months', (req, res, next) => {
         `SELECT DISTINCT strftime('%Y-%m', o.in_process_at, ?) AS ym
          FROM op_ozon_order o JOIN op_package p ON p.ozon_order_id = o.id
          WHERE p.is_ignored = 0 AND o.in_process_at IS NOT NULL
+           AND NOT ${ZERO_CANCEL_COND} AND NOT ${QC_POSTING_COND}
          ORDER BY ym DESC`
       )
       .all(TZ_OFFSETS[tz]);

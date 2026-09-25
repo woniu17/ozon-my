@@ -5,6 +5,7 @@
 //             有真实应计走真实口径,无应计的取消/退款按 利润=−采购
 //   已采购未结算 —— 有采购且未达已成功(非取消/退货),按下单时间过滤,利润为预估口径
 //   非订单应计项目 —— package_id IS NULL 的应计行(罚款/逆向物流等),按应计日期过滤
+// 统计范围:不含秒取消订单(已取消且采购/收款/应计全为0)与质检单(02131/024785 开头)
 // 时间维度:全部 / 自然月(所有有订单的月份) / 近 7/14/30 天 / 自定义;时区北京/莫斯科
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import AppPager from '../components/AppPager.vue';
@@ -196,7 +197,6 @@ const ordersLoading = ref(false);
 const ordersError = ref(null);
 // 方块点击筛选:已取消/已退款分类 或 某一应计类型(联动订单详情列表)
 const orderFilter = ref(null); // { kind:'category', value:'cancelled', label:'已取消订单' } | { kind:'typeId', value:67, label:'国际配送 #67' }
-const showZeroCancelled = ref(false); // 秒取消订单(已取消且采购/收款/应计全为0)默认隐藏,勾选后显示
 const ordersSectionEl = ref(null);
 const expandedRows = ref(new Set());
 let ordersReqId = 0;
@@ -212,7 +212,6 @@ async function loadOrders() {
     if (kw) p.keyword = kw;
     if (orderFilter.value?.kind === 'category' && ordersGroup.value === 'settled') p.category = orderFilter.value.value;
     if (orderFilter.value?.kind === 'typeId') p.typeId = orderFilter.value.value;
-    if (showZeroCancelled.value) p.showZeroCancelled = 1;
     const r = await getFinanceOrders(p);
     if (myId !== ordersReqId) return;
     ordersData.value = r;
@@ -261,10 +260,6 @@ function onKeywordInput() {
     ordersPage.value = 1;
     loadOrders();
   }, 400);
-}
-function onShowZeroCancelled() {
-  ordersPage.value = 1;
-  loadOrders();
 }
 function toggleExpand(id) {
   const s = new Set(expandedRows.value);
@@ -364,6 +359,11 @@ function pctOf(v, base) {
 function settledPctBase() {
   const s = summary.value?.settled;
   return s?.grossPayout ?? s?.totalOrderAmount ?? 0;
+}
+// 已取消/退款负利润占比基数 = 有效回款(负利润为有效销售的损耗,衡量对真实回款的侵蚀)
+function settledValidPctBase() {
+  const s = summary.value?.settled;
+  return s?.validPayout ?? s?.totalOrderAmount ?? 0;
 }
 // 组内应计类型提取:国际配送(67)/销售佣金(69)为独立方块,其余归「其它」
 const CORE_TYPE_IDS = [67, 69];
@@ -472,7 +472,7 @@ onUnmounted(() => {
     <!-- 汇率 + 口径说明 -->
     <div class="meta-bar">
       <span v-if="rubRateText(summary?.rubRate)" class="meta-item">{{ rubRateText(summary.rubRate) }}</span>
-      <span class="meta-item muted">口径:已结算=已成功(妥投且应计含代理佣金/国际配送)+已取消+已退款,取消/退款无应计按利润=−采购;已采购未结算=有采购且未达已成功(非取消/退货)</span>
+      <span class="meta-item muted">口径:已结算=已成功(妥投且应计含代理佣金/国际配送)+已取消+已退款,取消/退款无应计按利润=−采购;已采购未结算=有采购且未达已成功(非取消/退货);统计范围不含秒取消订单与质检单(02131/024785)</span>
     </div>
 
     <div v-if="summaryError" class="error-bar">汇总加载失败:{{ summaryError }}</div>
@@ -496,10 +496,12 @@ onUnmounted(() => {
           <div class="metric" title="总回款 = 正向 seller_price 合计×汇率 + 无 sp 取消单订单金额 = |有效回款| + |无效回款|">
             <div class="m-label">总回款金额(¥)</div>
             <div class="m-value">{{ fmtMoney(summary.settled.grossPayout) }}</div>
+            <div class="m-sub">占总回款 {{ pctOf(summary.settled.grossPayout, settledPctBase()) }}</div>
           </div>
           <div class="metric" title="有效回款 = 有正向 seller_price 订单的净回款(正负冲抵)= |采购|+|国际配送|+|销售佣金|+|其它应计|+|利润|">
             <div class="m-label">有效回款金额(¥)</div>
             <div class="m-value">{{ fmtMoney(summary.settled.validPayout) }}</div>
+            <div class="m-sub">占总回款 {{ pctOf(summary.settled.validPayout, settledPctBase()) }}</div>
           </div>
           <div class="metric" title="无效回款 = 负向 seller_price(退货负冲)×汇率 − 无 sp 取消单订单金额(负值)">
             <div class="m-label">无效回款金额(¥)</div>
@@ -508,7 +510,7 @@ onUnmounted(() => {
           </div>
           <div class="metric">
             <div class="m-label">采购成本(¥)</div>
-            <div class="m-value">{{ fmtMoney(summary.settled.totalPurchaseAmount) }}</div>
+            <div class="m-value" :class="profitClass(-summary.settled.totalPurchaseAmount)">{{ fmtMoney(-summary.settled.totalPurchaseAmount) }}</div>
             <div class="m-sub">占总回款 {{ pctOf(summary.settled.totalPurchaseAmount, settledPctBase()) }}</div>
           </div>
           <div class="metric clickable" title="国际配送应计(type 67)合计,点击筛选订单" @click="applyTypeFilter(67, '国际配送', 'settled')">
@@ -546,12 +548,12 @@ onUnmounted(() => {
           <div class="metric clickable" title="已取消订单的利润合计(无真实应计按 −采购),点击筛选订单" @click="applyCategoryFilter('cancelled', '已取消订单')">
             <div class="m-label">已取消负利润(¥)</div>
             <div class="m-value" :class="profitClass(catProfit('cancelled'))">{{ fmtMoney(catProfit('cancelled')) }}</div>
-            <div class="m-sub">占总回款 {{ pctOf(catProfit('cancelled'), settledPctBase()) }}</div>
+            <div class="m-sub">占有效回款 {{ pctOf(catProfit('cancelled'), settledValidPctBase()) }}</div>
           </div>
           <div class="metric clickable" title="已退款(妥投后退货)订单的利润合计,点击筛选订单" @click="applyCategoryFilter('returned', '已退款订单')">
             <div class="m-label">退款负利润(¥)</div>
             <div class="m-value" :class="profitClass(catProfit('returned'))">{{ fmtMoney(catProfit('returned')) }}</div>
-            <div class="m-sub">占总回款 {{ pctOf(catProfit('returned'), settledPctBase()) }}</div>
+            <div class="m-sub">占有效回款 {{ pctOf(catProfit('returned'), settledValidPctBase()) }}</div>
           </div>
         </div>
         <div class="accrual-block">
@@ -585,7 +587,7 @@ onUnmounted(() => {
           </div>
           <div class="metric">
             <div class="m-label">采购成本(¥)</div>
-            <div class="m-value">{{ fmtMoney(summary.pending.totalPurchaseAmount) }}</div>
+            <div class="m-value" :class="profitClass(-summary.pending.totalPurchaseAmount)">{{ fmtMoney(-summary.pending.totalPurchaseAmount) }}</div>
             <div class="m-sub">占订单金额 {{ pctOf(summary.pending.totalPurchaseAmount, summary.pending.totalOrderAmount) }}</div>
           </div>
           <div class="metric" title="预估国际配送 = 3.37 + 0.0281 × 重量(g)">
@@ -696,14 +698,6 @@ onUnmounted(() => {
           {{ orderFilter.label }}
           <button class="chip-x" @click="clearOrderFilter" title="清除筛选">✕</button>
         </span>
-        <label
-          v-if="ordersGroup === 'settled'"
-          class="zero-cancel-toggle"
-          title="秒取消订单:已取消且采购/销售收款/应计合计全为0(回款与利润为0,无财务影响);默认隐藏,勾选后显示"
-        >
-          <input type="checkbox" v-model="showZeroCancelled" @change="onShowZeroCancelled" />
-          显示秒取消
-        </label>
         <input
           class="filter-input kw-input"
           type="text"
@@ -1189,20 +1183,6 @@ onUnmounted(() => {
 }
 .chip-x:hover {
   background: rgba(37, 99, 235, 0.15);
-}
-/* 秒取消订单显示开关 */
-.zero-cancel-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--muted);
-  cursor: pointer;
-  white-space: nowrap;
-  user-select: none;
-}
-.zero-cancel-toggle:hover {
-  color: var(--text);
 }
 .ta-l {
   text-align: left !important;

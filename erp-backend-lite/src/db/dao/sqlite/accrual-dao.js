@@ -259,13 +259,20 @@ export function replaceAccruals(storeId, postingAccruals, postingMap, typeMap) {
  *  收入侧(POSTING)尚未生成,payout≈纯负费用 → 利润≈-采购严重失真;
  *  仅终态包裹可走真实口径,在途一律预估口径(对齐 findPendingAccrualPostings 的终态语义)
  */
+/** 真实应计口径适用包裹(经济终态:已取消/已妥投/已退货)
+ *  终态门槛(2026-09-24):by-day 主源下在途订单早期即产生 Acquiring 等费用,accrual_total
+ *  非空但收入侧(POSTING)未生成 → payout≈纯负费用,利润≈-采购严重失真,故在途不走真实口径
+ *  增补 is_returned(2026-09-25):取货点拒收等未妥投退货无 delivered_at,但退货流程已终态,
+ *  逆向物流等费用为最终扣款,应计入利润;否则费用进财务统计方块而利润漏扣,
+ *  破坏 |有效回款|=|采购|+|配送|+|佣金|+|其它应计|+|利润| 恒等式
+ */
 export function getSettledEligiblePackageIds(packageIds) {
   if (!packageIds || packageIds.length === 0) return new Set();
   const ph = packageIds.map(() => '?').join(',');
   const rows = db
     .prepare(
       `SELECT id FROM op_package
-       WHERE id IN (${ph}) AND (operate_status = 'cancelled' OR delivered_at IS NOT NULL)`
+       WHERE id IN (${ph}) AND (operate_status = 'cancelled' OR delivered_at IS NOT NULL OR is_returned = 1)`
     )
     .all(...packageIds);
   return new Set(rows.map((r) => r.id));
