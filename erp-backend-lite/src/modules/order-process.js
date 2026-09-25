@@ -31,6 +31,7 @@ import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isS
 import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus, syncPurchaseLogisticsForPackage } from '../services/purchase-logistics-poller.js';
 import { packageLabel, postingFbsGet, postingFbsShip } from '../services/ozon-opi.js';
 import { notifyPostingEvent } from '../services/webhook/feishu-notify.js';
+import { translateCancelReason } from '../services/cancel-reason-i18n.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate, getBydayStats, getSettledEligiblePackageIds } from '../db/dao/sqlite/accrual-dao.js';
 import { runAccrualByDaySync } from '../services/accrual-byday-sync.js';
@@ -276,6 +277,7 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
     for (const pkg of data.packages) {
       pkg.items = itemsByOrder.get(pkg.ozonOrderId) || [];
       pkg.purchaseLinks = linksByPkg.get(pkg.id) || [];
+      pkg.cancelReasonCn = translateCancelReason(pkg.cancelReason); // 取消原因中文(未收录原样返回)
       if (accrualMap.has(pkg.id)) pkg.accrual = accrualMap.get(pkg.id);
       if (weightMap.has(pkg.id)) {
         const w = weightMap.get(pkg.id);

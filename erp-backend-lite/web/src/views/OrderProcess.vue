@@ -2563,11 +2563,12 @@ function returnStateLabel(pkg) {
   return RETURN_STATE_LABELS[pkg.returnState] || pkg.returnStateName || pkg.returnState || '退货中';
 }
 
-// 取消原因展示:reason_id 优先中文释义,否则俄文原文(可悬浮看 reason_id)
+// 取消原因展示:reason_id 优先中文释义 → 后端翻译 cancelReasonCn(俄文文本映射,含拒收/买家取消前缀系列) → 俄文原文
+// 悬浮可看俄文原文 + reason_id
 function cancelReasonLabel(pkg) {
   if (!pkg?.cancellationType) return null;
   const rid = pkg.cancelReasonId;
-  const zh = CANCEL_REASON_LABELS[rid];
+  const zh = CANCEL_REASON_LABELS[rid] || pkg.cancelReasonCn || null;
   return {
     initiator: pkg.cancellationType,  // client/ozon/seller
     text: zh || pkg.cancelReason || '取消',
