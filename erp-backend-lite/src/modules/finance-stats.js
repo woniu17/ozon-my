@@ -18,12 +18,17 @@
 //   GET /admin/api/finance-stats/non-order-accruals?from&to&storeIds&page&pageSize
 //   GET /admin/api/finance-stats/order-months?tz=... —— 有订单的自然月列表(YYYY-MM 降序,月界按 tz 换算)
 // 金额币种:采购/订单金额 CNY;应计 RUB,按 app_config rub_cny_rate 换算 CNY
+// 已结算组回款三分口径(seller_price 来自 by-day POSTING 佣金行,双写 op_accrual):
+//   总回款 grossPayout   = 正向 sp 合计×汇率 + 无 sp 取消单订单金额 = |有效| + |无效|
+//   有效回款 validPayout = 有正向 sp 订单的净回款(正负冲抵)= |采购|+|国际配送|+|销售佣金|+|其它应计|+|利润|
+//   无效回款 invalidPayout = 负向 sp 合计×汇率 − 无 sp 取消单订单金额(负值)
+//   销售利润率(已结算)= 利润 ÷ 有效回款(无有效销售回退订单金额基数)
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import { listStores } from '../services/webhook/store-map.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
-import { ACCRUAL_TYPE_CN, getAccrualTypeSumsByPackageIds, getRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
+import { ACCRUAL_TYPE_CN, getAccrualTypeSumsByPackageIds, getSellerPriceSumsByPackageIds, getRubCnyRate } from '../db/dao/sqlite/accrual-dao.js';
 import { estimateProfit } from '../services/profit-estimator.js';
 
 const router = Router();
@@ -242,13 +247,40 @@ function aggregateOrderGroup(group, t, storeIds, rate) {
   if (agg.byCategoryProfit) {
     for (const k of Object.keys(agg.byCategoryProfit)) agg.byCategoryProfit[k] = round2(agg.byCategoryProfit[k]);
   }
+  // ─ 回款三分口径(仅已结算组;取消单无 seller_price,退款单正负冲抵)──
+  //  总回款 grossPayout  = 正向 sp 合计×汇率 + 无 sp 取消单订单金额 = |有效| + |无效|
+  //  有效回款 validPayout = 有正向 sp 订单的净回款(正负冲抵)= |采购|+|国际配送|+|销售佣金|+|其它应计|+|利润|
+  //  无效回款 invalidPayout = 负向 sp 合计×汇率 − 无 sp 取消单订单金额(负值)
+  if (group === 'settled') {
+    const spSums = getSellerPriceSumsByPackageIds(pkgIds);
+    const posPkgIds = new Set(spSums.filter((s) => s.posRub > 0).map((s) => s.packageId));
+    let posRub = 0;
+    let negRub = 0;
+    let validRub = 0;
+    let noSpCancelledAmt = 0; // 无 sp 取消单的订单金额(CNY 挂牌价)
+    for (const s of spSums) {
+      if (!posPkgIds.has(s.packageId)) continue; // 负冲跟随原单,孤儿负行不重复计入
+      posRub += s.posRub;
+      negRub += s.negRub;
+    }
+    for (const r of rows) {
+      if (posPkgIds.has(r.id)) validRub += Number(r.accrual_sale_total) || 0;
+      else if (r.operate_status === 'cancelled') noSpCancelledAmt += Number(r.order_amount) || 0;
+    }
+    agg.grossPayout = rate ? round2(posRub * rate + noSpCancelledAmt) : null;
+    agg.validPayout = rate ? round2(validRub * rate) : null;
+    agg.invalidPayout = rate ? round2(negRub * rate - noSpCancelledAmt) : null;
+  }
   agg.totalCommission = round2(agg.totalCommission);
   agg.totalDelivery = round2(agg.totalDelivery);
   agg.totalOrderAmount = round2(agg.totalOrderAmount);
   agg.totalPurchaseAmount = round2(agg.totalPurchaseAmount);
   agg.totalProfit = round2(agg.totalProfit);
   agg.totalPayout = round2(agg.totalPayout);
-  agg.profitRateSale = agg.totalOrderAmount > 0 ? Math.round((agg.totalProfit / agg.totalOrderAmount) * 10000) / 100 : null;
+  // 销售利润率:已结算按 利润÷有效回款(真实销售利润率;无有效销售回退订单金额基数),
+  // 未结算按 利润÷订单金额(预估口径基数)
+  const saleBase = group === 'settled' ? (agg.validPayout > 0 ? agg.validPayout : agg.totalOrderAmount) : agg.totalOrderAmount;
+  agg.profitRateSale = saleBase > 0 ? Math.round((agg.totalProfit / saleBase) * 10000) / 100 : null;
   agg.profitRateCost = agg.totalPurchaseAmount > 0 ? Math.round((agg.totalProfit / agg.totalPurchaseAmount) * 10000) / 100 : null;
   agg.accrualTypes = rate ? typeRowsByPackage(typeSums, pkgIdSet, rate) : [];
   agg.truncated = rows.length === AGG_LIMIT;

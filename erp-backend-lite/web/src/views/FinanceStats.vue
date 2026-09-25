@@ -353,12 +353,17 @@ function profitClass(n) {
 function catProfit(cat) {
   return summary.value?.settled?.byCategoryProfit?.[cat] ?? null;
 }
-// 占订单金额百分比(绝对值口径;基数非正返回 —)
+// 占比百分比(绝对值口径;基数非正返回 —)
 function pctOf(v, base) {
   const n = Number(v);
   const b = Number(base);
   if (!Number.isFinite(n) || !Number.isFinite(b) || b <= 0) return '—';
   return `${Math.round((Math.abs(n) / b) * 10000) / 100}%`;
+}
+// 已结算组占比基数 = 总回款(正向 sp 合计 + 无 sp 取消单订单金额);汇率缺失时回退订单金额
+function settledPctBase() {
+  const s = summary.value?.settled;
+  return s?.grossPayout ?? s?.totalOrderAmount ?? 0;
 }
 // 组内应计类型提取:国际配送(67)/销售佣金(69)为独立方块,其余归「其它」
 const CORE_TYPE_IDS = [67, 69];
@@ -488,39 +493,49 @@ onUnmounted(() => {
             <div class="m-label">订单数</div>
             <div class="m-value">{{ fmtCount(summary.settled.orderCount) }}</div>
           </div>
-          <div class="metric">
-            <div class="m-label">订单金额(¥)</div>
-            <div class="m-value">{{ fmtMoney(summary.settled.totalOrderAmount) }}</div>
+          <div class="metric" title="总回款 = 正向 seller_price 合计×汇率 + 无 sp 取消单订单金额 = |有效回款| + |无效回款|">
+            <div class="m-label">总回款金额(¥)</div>
+            <div class="m-value">{{ fmtMoney(summary.settled.grossPayout) }}</div>
+          </div>
+          <div class="metric" title="有效回款 = 有正向 seller_price 订单的净回款(正负冲抵)= |采购|+|国际配送|+|销售佣金|+|其它应计|+|利润|">
+            <div class="m-label">有效回款金额(¥)</div>
+            <div class="m-value">{{ fmtMoney(summary.settled.validPayout) }}</div>
+          </div>
+          <div class="metric" title="无效回款 = 负向 seller_price(退货负冲)×汇率 − 无 sp 取消单订单金额(负值)">
+            <div class="m-label">无效回款金额(¥)</div>
+            <div class="m-value" :class="profitClass(summary.settled.invalidPayout)">{{ fmtMoney(summary.settled.invalidPayout) }}</div>
+            <div class="m-sub">占总回款 {{ pctOf(summary.settled.invalidPayout, settledPctBase()) }}</div>
           </div>
           <div class="metric">
             <div class="m-label">采购成本(¥)</div>
             <div class="m-value">{{ fmtMoney(summary.settled.totalPurchaseAmount) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(summary.settled.totalPurchaseAmount, summary.settled.totalOrderAmount) }}</div>
+            <div class="m-sub">占总回款 {{ pctOf(summary.settled.totalPurchaseAmount, settledPctBase()) }}</div>
           </div>
           <div class="metric clickable" title="国际配送应计(type 67)合计,点击筛选订单" @click="applyTypeFilter(67, '国际配送', 'settled')">
             <div class="m-label">国际配送(¥)</div>
             <div class="m-value" :class="profitClass(typeSum('settled', 67))">{{ fmtMoney(typeSum('settled', 67)) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(typeSum('settled', 67), summary.settled.totalOrderAmount) }}</div>
+            <div class="m-sub">占总回款 {{ pctOf(typeSum('settled', 67), settledPctBase()) }}</div>
           </div>
           <div class="metric clickable" title="销售佣金应计(type 69)合计,点击筛选订单" @click="applyTypeFilter(69, '销售佣金', 'settled')">
             <div class="m-label">销售佣金(¥)</div>
             <div class="m-value" :class="profitClass(typeSum('settled', 69))">{{ fmtMoney(typeSum('settled', 69)) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(typeSum('settled', 69), summary.settled.totalOrderAmount) }}</div>
+            <div class="m-sub">占总回款 {{ pctOf(typeSum('settled', 69), settledPctBase()) }}</div>
           </div>
           <div class="metric" title="除国际配送/销售佣金外的应计合计">
             <div class="m-label">其它应计项目汇总(¥)</div>
             <div class="m-value" :class="profitClass(otherAccrualTotal('settled'))">{{ fmtMoney(otherAccrualTotal('settled')) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(otherAccrualTotal('settled'), summary.settled.totalOrderAmount) }}</div>
+            <div class="m-sub">占总回款 {{ pctOf(otherAccrualTotal('settled'), settledPctBase()) }}</div>
           </div>
-          <div class="metric" title="回款 =(销售收款 + 应计合计)× 汇率">
+          <div class="metric" title="回款 =(销售收款 + 应计合计)× 汇率,Ozon 实际打款金额 = 有效回款 − 各项应计费用">
             <div class="m-label">回款(¥)</div>
             <div class="m-value">{{ fmtMoney(summary.settled.totalPayout) }}</div>
           </div>
           <div class="metric">
             <div class="m-label">利润(¥)</div>
             <div class="m-value" :class="profitClass(summary.settled.totalProfit)">{{ fmtMoney(summary.settled.totalProfit) }}</div>
+            <div class="m-sub">占总回款 {{ pctOf(summary.settled.totalProfit, settledPctBase()) }}</div>
           </div>
-          <div class="metric" title="销售利润率 = 利润 ÷ 订单金额">
+          <div class="metric" title="销售利润率 = 利润 ÷ 有效回款">
             <div class="m-label">销售利润率</div>
             <div class="m-value">{{ fmtRate(summary.settled.profitRateSale) }}</div>
           </div>
@@ -531,12 +546,12 @@ onUnmounted(() => {
           <div class="metric clickable" title="已取消订单的利润合计(无真实应计按 −采购),点击筛选订单" @click="applyCategoryFilter('cancelled', '已取消订单')">
             <div class="m-label">已取消负利润(¥)</div>
             <div class="m-value" :class="profitClass(catProfit('cancelled'))">{{ fmtMoney(catProfit('cancelled')) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(catProfit('cancelled'), summary.settled.totalOrderAmount) }}</div>
+            <div class="m-sub">占总回款 {{ pctOf(catProfit('cancelled'), settledPctBase()) }}</div>
           </div>
           <div class="metric clickable" title="已退款(妥投后退货)订单的利润合计,点击筛选订单" @click="applyCategoryFilter('returned', '已退款订单')">
             <div class="m-label">退款负利润(¥)</div>
             <div class="m-value" :class="profitClass(catProfit('returned'))">{{ fmtMoney(catProfit('returned')) }}</div>
-            <div class="m-sub">占订单金额 {{ pctOf(catProfit('returned'), summary.settled.totalOrderAmount) }}</div>
+            <div class="m-sub">占总回款 {{ pctOf(catProfit('returned'), settledPctBase()) }}</div>
           </div>
         </div>
         <div class="accrual-block">
@@ -545,7 +560,7 @@ onUnmounted(() => {
             <div class="type-tile clickable" v-for="t in otherAccrualTypes('settled')" :key="t.typeId" :title="`${t.nameCn} #${t.typeId} · ${fmtCount(t.count)}笔,点击筛选订单`" @click="applyTypeFilter(t.typeId, t.nameCn, 'settled')">
               <div class="tile-label">{{ t.nameCn }}<span class="type-id"> #{{ t.typeId }}</span></div>
               <div class="tile-value" :class="profitClass(t.cny)">{{ fmtMoney(t.cny) }}</div>
-              <div class="tile-sub">{{ fmtCount(t.count) }}笔 · 占{{ pctOf(t.cny, summary.settled.totalOrderAmount) }}</div>
+              <div class="tile-sub">{{ fmtCount(t.count) }}笔 · 占{{ pctOf(t.cny, settledPctBase()) }}</div>
             </div>
           </div>
           <div v-else class="mini-empty">该范围内无其它应计数据</div>

@@ -288,6 +288,26 @@ export function getAccrualTypeSumsByPackageIds(packageIds) {
     .map((r) => ({ packageId: r.packageId, typeId: r.typeId, sum: Number(r.sum) || 0 }));
 }
 
+/** 按包裹 id 汇总 seller_price 正/负行合计(回款三分口径:总回款 = |有效回款| + |无效回款|)
+ *  seller_price 来自 by-day POSTING 佣金行(双写进 op_accrual type 69 行):
+ *  正向 = 销售收入,负向 = 退货负冲;仅统计有正向行的包裹(负冲跟随原单,避免孤儿负行双算)
+ */
+export function getSellerPriceSumsByPackageIds(packageIds) {
+  if (!packageIds.length) return [];
+  const ph = packageIds.map(() => '?').join(',');
+  return db
+    .prepare(
+      `SELECT package_id AS packageId,
+              ROUND(SUM(CASE WHEN seller_price > 0 AND quantity IS NOT NULL THEN seller_price * quantity END), 2) AS posRub,
+              ROUND(SUM(CASE WHEN seller_price < 0 AND quantity IS NOT NULL THEN seller_price * quantity END), 2) AS negRub
+       FROM op_accrual
+       WHERE package_id IN (${ph}) AND seller_price IS NOT NULL
+       GROUP BY package_id`
+    )
+    .all(...packageIds)
+    .map((r) => ({ packageId: r.packageId, posRub: Number(r.posRub) || 0, negRub: Number(r.negRub) || 0 }));
+}
+
 /** 批量取应计明细(按包裹 id 列表,列表/详情用) */
 export function getAccrualsByPackageIds(packageIds) {
   if (!packageIds.length) return [];
