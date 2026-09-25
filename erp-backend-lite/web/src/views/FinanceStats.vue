@@ -5,7 +5,7 @@
 //             有真实应计走真实口径,无应计的取消/退款按 利润=−采购
 //   已采购未结算 —— 有采购且未达已成功(非取消/退货),按下单时间过滤,利润为预估口径
 //   非订单应计项目 —— package_id IS NULL 的应计行(罚款/逆向物流等),按应计日期过滤
-// 统计范围:不含秒取消订单(已取消且采购/收款/应计全为0)与质检单(02131/024785 开头)
+// 统计范围:不含秒取消订单(已取消且采购/收款/应计全为0)与质检单(取消原因 992/994)
 // 时间维度:全部 / 自然月(所有有订单的月份) / 近 7/14/30 天 / 自定义;时区北京/莫斯科
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import AppPager from '../components/AppPager.vue';
@@ -472,7 +472,7 @@ onUnmounted(() => {
     <!-- 汇率 + 口径说明 -->
     <div class="meta-bar">
       <span v-if="rubRateText(summary?.rubRate)" class="meta-item">{{ rubRateText(summary.rubRate) }}</span>
-      <span class="meta-item muted">口径:已结算=已成功(妥投且应计含代理佣金/国际配送)+已取消+已退款,取消/退款无应计按利润=−采购;已采购未结算=有采购且未达已成功(非取消/退货);统计范围不含秒取消订单与质检单(02131/024785)</span>
+      <span class="meta-item muted">口径:已结算=已成功(妥投且应计含代理佣金/国际配送)+已取消+已退款,取消/退款无应计按利润=−采购;已采购未结算=有采购且未达已成功(非取消/退货);统计范围不含秒取消订单与质检单(取消原因 992/994)</span>
     </div>
 
     <div v-if="summaryError" class="error-bar">汇总加载失败:{{ summaryError }}</div>

@@ -24,7 +24,7 @@
 //   销售利润率(已结算)= 利润 ÷ 有效回款(无有效销售回退订单金额基数)
 // 统计范围排除(三组订单侧 + 月份列表统一生效,汇总/明细/占比口径一致):
 //   秒取消订单 —— 已取消且采购/销售收款/应计合计均为 0(回款利润全 0,纯噪音)
-//   质检单 —— Ozon 平台抽检下单(货件号 02131/024785 开头),非真实客户订单
+//   质检单 —— Ozon 平台抽检下单,取消原因为 992/994(质检流程),非真实客户订单
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
@@ -95,13 +95,16 @@ const SUCCESS_COND = `p.operate_status = 'wait_receiver_confirm' AND p.delivered
 
 // 统计范围排除条件(汇总/订单明细/月份列表统一引用):
 //   秒取消订单(已取消且采购/收款/应计全为0,无财务影响,原默认隐藏→现彻底移出统计范围)
-//   质检单(02131/024785 开头,Ozon 平台抽检下单,非真实客户订单;992/994 为质检流程取消原因,不在此列)
+//   质检单(取消原因 992/994 = Ozon 质检流程取消,平台抽检下单非真实客户订单;
+//   货件号 02131/024785 前缀仅是粗略特征——有已妥投质检单被误杀(有真实应计)、
+//   也有不带前缀的质检取消单被漏掉,故按取消原因精确判定)
 const ZERO_CANCEL_COND = `(p.operate_status = 'cancelled'
   AND COALESCE(p.total_purchase_amount, 0) = 0
   AND COALESCE(p.accrual_sale_total, 0) = 0
   AND COALESCE(p.accrual_total, 0) = 0)`;
-const QC_POSTING_COND = `(o.posting_number LIKE '02131%' OR o.posting_number LIKE '024785%')`;
-const SCOPE_EXCLUDE = `NOT ${ZERO_CANCEL_COND} AND NOT ${QC_POSTING_COND}`;
+const QC_CANCEL_COND = `(p.operate_status = 'cancelled'
+  AND COALESCE(json_extract(o.cancellation_json, '$.cancel_reason_id'), 0) IN (992, 994))`;
+const SCOPE_EXCLUDE = `NOT ${ZERO_CANCEL_COND} AND NOT ${QC_CANCEL_COND}`;
 
 /** 组 WHERE(不含时间/店铺过滤,由调用方拼接)
  *  settled:已结算(已成功 ∪ 已取消 ∪ 已退款);
@@ -549,7 +552,7 @@ router.get('/admin/api/finance-stats/order-months', (req, res, next) => {
         `SELECT DISTINCT strftime('%Y-%m', o.in_process_at, ?) AS ym
          FROM op_ozon_order o JOIN op_package p ON p.ozon_order_id = o.id
          WHERE p.is_ignored = 0 AND o.in_process_at IS NOT NULL
-           AND NOT ${ZERO_CANCEL_COND} AND NOT ${QC_POSTING_COND}
+           AND NOT ${ZERO_CANCEL_COND} AND NOT ${QC_CANCEL_COND}
          ORDER BY ym DESC`
       )
       .all(TZ_OFFSETS[tz]);

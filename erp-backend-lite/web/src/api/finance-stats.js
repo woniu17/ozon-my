@@ -12,7 +12,7 @@ export function getFinanceSummary(params) {
 // 订单详情列表(分页)
 // params: { group: 'settled'|'pending', from?, to?, storeIds?, tz?, page?, pageSize?, keyword?,
 //           category?, typeId? }
-// 秒取消订单与质检单(02131/024785)已移出统计范围,列表与汇总口径一致
+// 秒取消订单与质检单(取消原因 992/994)已移出统计范围,列表与汇总口径一致
 // 返回 { group, total, page, pageSize, orders(含 items 产品行), rubRate }
 export function getFinanceOrders(params) {
   return request.get('/admin/api/finance-stats/orders', params);
