@@ -2,6 +2,7 @@
 // 扫描发货(2026-09,设计文档: docs/扫描发货-功能设计.md)
 // 打包发货场景:扫采购快递单号/采购单号/Ozon单号 → 全局搜索定位包裹 → 录入实物重量
 // → wait_ship 自动打印面单并流转交运;非 wait_ship 提示状态问题不动状态
+//            已交运(ship_success)/已发货(wait_receiver_confirm)均可重打面单(缓存秒出,不改状态)
 // 键盘流:扫描框 Enter=搜索 → 重量框 Enter=发货 → 终态自动回焦扫描框(扫码枪零鼠标作业)
 // 2026-09-15:商品/采购信息下方公式化展示订单金额+利润计算过程(估/实+销售/成本利润率),
 //            打印发货后按称重重算;发货记录列表可滚动
@@ -263,6 +264,10 @@ function operateTag(pkg) {
 function canShipCard(pkg) {
   return pkg.operateStatus === 'wait_ship' && !pkg.isIgnored;
 }
+// 已交运/已发货卡片可重打面单(2026-09-27:已发货亦开放;缓存秒出,不改状态)
+function canReprintCard(pkg) {
+  return pkg.operateStatus === 'ship_success' || pkg.operateStatus === 'wait_receiver_confirm';
+}
 // 非 wait_ship 卡片的拦截原因(置灰卡 + 横幅文案同源)
 function blockReason(pkg) {
   if (pkg.isIgnored) return '已搁置';
@@ -368,10 +373,10 @@ async function onSubmitShip(pkg) {
       // 非 wait_ship:不打印不改状态,横幅提示原因
       banner.type = 'err';
       banner.text = r.message || `订单状态问题:${r.operateStatus}`;
-      // 已交运:可选重打(缓存秒出,不改状态)
-      if (r.operateStatus === 'ship_success' && !r.isIgnored) {
+      // 已交运/已发货:可选重打(缓存秒出,不改状态)
+      if ((r.operateStatus === 'ship_success' || r.operateStatus === 'wait_receiver_confirm') && !r.isIgnored) {
         const ok = await confirmStore.ask({
-          message: `包裹 ${pkg.postingNumber} 已交运。面单丢失或打花?重新打印面单(不改状态)`,
+          message: `包裹 ${pkg.postingNumber} ${r.operateStatus === 'wait_receiver_confirm' ? '已发货' : '已交运'}。面单丢失或打花?重新打印面单(不改状态)`,
         });
         if (ok) await doPrint(pkg, { reprint: true });
       }
@@ -419,7 +424,7 @@ async function doPrint(pkg, { reprint }) {
     await markPrinted(pkg.id);
   } else {
     banner.type = 'ok';
-    banner.text = `面单已重新打印(交运订单,状态不变)`;
+    banner.text = `面单已重新打印(已交运/已发货订单,状态不变)`;
   }
 }
 
@@ -452,11 +457,11 @@ async function onRetryPrint(pkg) {
   }
 }
 
-// 已交运卡片的重打入口(拼单场景发完剩余卡片)
+// 已交运/已发货卡片的重打入口(拼单场景发完剩余卡片)
 async function onReprint(pkg) {
   if (printingPkgId.value) return;
   const ok = await confirmStore.ask({
-    message: `包裹 ${pkg.postingNumber} 已交运。面单丢失或打花?重新打印面单(不改状态)`,
+    message: `包裹 ${pkg.postingNumber} ${pkg.operateStatus === 'wait_receiver_confirm' ? '已发货' : '已交运'}。面单丢失或打花?重新打印面单(不改状态)`,
   });
   if (!ok) return;
   printingPkgId.value = pkg.id;
@@ -748,7 +753,7 @@ function onPrinterChange() {
           :class="{
             selected: selectedId === pkg.id,
             disabled: !canShipCard(pkg),
-            shipped: pkg.operateStatus === 'ship_success',
+            shipped: canReprintCard(pkg),
           }"
           :aria-current="selectedId === pkg.id ? 'true' : undefined"
           @click="selectCard(pkg)"
@@ -1004,8 +1009,8 @@ function onPrinterChange() {
                 {{ printingPkgId === pkg.id ? '打印中…' : retryPkgIds.has(pkg.id) ? '重试打印' : '打印并发货' }}
               </button>
             </template>
-            <template v-else-if="pkg.operateStatus === 'ship_success'">
-              <span class="tag tag-ok">已交运 {{ fmtTime(pkg.shippedAt || pkg.waybillPrintedAt) }}</span>
+            <template v-else-if="canReprintCard(pkg)">
+              <span class="tag tag-ok">{{ pkg.operateStatus === 'wait_receiver_confirm' ? '已发货' : '已交运' }} {{ fmtTime(pkg.shippedAt || pkg.waybillPrintedAt) }}</span>
               <span class="ref-weight" :title="WEIGHT_SOURCE_LABELS[pkg.weightSource] || ''">称重 {{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span>
               <!-- 更正重量:打印发货后人工修正(内联输入,Enter 保存 / Esc 取消) -->
               <template v-if="correct.pkgId === pkg.id">
