@@ -75,6 +75,64 @@ async function fetchPddNickname(page, account, userId) {
   return id;
 }
 
+/** 打开订单详情页(order.html)读取 window.rawData 优惠明细(2026-09-28)
+ *  与 getPddTrace 同模式:独立标签页导航到详情页,domcontentloaded 后轮询读取
+ *  JS 执行后的 window.rawData 对象(raw HTML 中 rawData 非对象字面量内联,同源
+ *  fetch 文本解析不可行;页面 JS 执行后成为可读对象),递归查找含
+ *  promotionDescription 的优惠明细项。
+ *  提取"月卡券"项金额(promotionAmount 如 "-¥10" → 1000 分);
+ *  失败兜底:返回 { monthlyCardCouponFen: 0, promotions: [] }(不抛错,优惠缺失不阻塞订单)
+ *  调用时机:搜索命中后补月卡券金额到 orderAmount(实付 + 月卡券 = 采购成本口径)
+ *  口径:月卡券是平台补贴,应计入采购成本;店铺券是商家让利,不计入 */
+async function fetchPddOrderDetail(page, orderSn) {
+  const url = `${PDD_ORIGIN}/order.html?order_sn=${encodeURIComponent(orderSn)}`;
+  const tab = await page.context().newPage();
+  let promotions = [];
+  try {
+    await tab.goto(url, { waitUntil: 'domcontentloaded', timeout: 30 * 1000 });
+    // rawData 由页面 JS 赋值,domcontentloaded 后轮询至就绪(留 10s 余量覆盖极慢加载);
+    // rawData 就绪但无优惠明细时再复读一次(防 hydration 迟到漏读),仍空则认定无优惠
+    const deadline = Date.now() + 10 * 1000;
+    let settled = false;
+    while (Date.now() < deadline) {
+      const found = await tab.evaluate(() => {
+        const rd = window.rawData;
+        if (!rd) return null;
+        const list = [];
+        (function walk(obj) {
+          if (!obj || typeof obj !== 'object') return;
+          if (Array.isArray(obj)) { obj.forEach(walk); return; }
+          if (typeof obj.promotionDescription === 'string') {
+            list.push({ promotionDescription: obj.promotionDescription, promotionAmount: obj.promotionAmount });
+          }
+          Object.values(obj).forEach((v) => { if (v && typeof v === 'object') walk(v); });
+        })(rd);
+        return list;
+      }).catch(() => null);
+      if (Array.isArray(found)) {
+        if (found.length > 0) { promotions = found; break; }
+        if (!settled) { settled = true; await new Promise((r) => setTimeout(r, 1000)); continue; }
+        break; // 复读仍无优惠明细:认定该订单无优惠
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  } catch { /* 导航失败:优惠缺失不阻塞订单 */ }
+  finally { await tab.close().catch(() => {}); }
+  // promotionAmount 形如 "-¥10"(字符串取 ¥ 数值)或分(数值),统一折成分
+  const result = { monthlyCardCouponFen: 0, promotions };
+  for (const p of promotions) {
+    if (!String(p.promotionDescription || '').includes('月卡券')) continue;
+    let fen = 0;
+    if (typeof p.promotionAmount === 'number') fen = Math.round(p.promotionAmount);
+    else {
+      const m = String(p.promotionAmount || '').match(/(\d+(?:\.\d+)?)/);
+      if (m) fen = Math.round(parseFloat(m[1]) * 100);
+    }
+    result.monthlyCardCouponFen += fen;
+  }
+  return result;
+}
+
 function toYuan(fen) {
   return (Number(fen || 0) / 100).toFixed(2);
 }
@@ -88,8 +146,8 @@ function normalizeOrders(data) {
     statusPrompt: o.order_status_prompt || '',
     payStatus: o.pay_status ?? 0,           // 0=未付 2=已付
     shippingStatus: o.shipping_status ?? 0, // 0=未发 1=已发
-    // 采购金额默认含优惠:order_amount(实付分)+ discount_amount(优惠分),还原商品原价作为采购成本口径
-    amount: toYuan((o.order_amount || 0) + (o.discount_amount || 0)),
+    // 采购金额=实付金额(月卡券等平台补贴在搜索场景由 fetchPddOrderDetail 补加;列表场景无明细,保持实付)
+    amount: toYuan(o.order_amount || 0),
     trackingNumber: o.tracking_number || '',
     orderTime: o.order_time || 0,
     mallName: (o.mall && o.mall.mall_name) || '',
@@ -108,8 +166,8 @@ function normalizeOrders(data) {
 function normalizeSearchOrder(o) {
   return {
     orderSn: o.order_sn || '',
-    // 采购金额默认含优惠:order_amount(实付分)+ discount_amount(优惠分),还原商品原价作为采购成本口径
-    orderAmount: toYuan((o.order_amount || 0) + (o.discount_amount || 0)),
+    // 采购金额=实付金额(月卡券由 searchPddOrder 调用 fetchPddOrderDetail 补加)
+    orderAmount: toYuan(o.order_amount || 0),
     orderTime: o.order_time || 0,
     statusPrompt: o.order_status_prompt || '',
     trackingNumber: o.tracking_number || '',
@@ -248,7 +306,16 @@ async function searchPddOrder(orderSn, accounts = []) {
         const data = mapResponse(resp, 'PDD_SEARCH');
         const orders = (data && Array.isArray(data.orders)) ? data.orders : [];
         if (!orders.length) return { result: null };
-        return { result: normalizeSearchOrder(orders[0]) };
+        const normalized = normalizeSearchOrder(orders[0]);
+        // 抓详情页补月卡券金额(搜索场景一次一单,可接受额外开销;失败兜底 monthlyCardCouponFen=0)
+        // 月卡券是平台补贴,应计入采购成本;店铺券是商家让利,不计入
+        const detail = await fetchPddOrderDetail(page, normalized.orderSn);
+        if (detail.monthlyCardCouponFen > 0) {
+          normalized.orderAmount = toYuan((orders[0].order_amount || 0) + detail.monthlyCardCouponFen);
+        }
+        normalized.monthlyCardCoupon = toYuan(detail.monthlyCardCouponFen);
+        normalized.promotions = detail.promotions;
+        return { result: normalized };
       });
     } catch (e) {
       // 该账号登录失效/风控:记录后继续下一账号(单号可能在别的账号)
@@ -322,4 +389,5 @@ async function getPddTrace(orderSn, trackingNumber, account) {
   });
 }
 
-export { listPddOrders, searchPddOrder, getPddTrace };
+export { listPddOrders, searchPddOrder, getPddTrace, fetchPddOrderDetail };
+
