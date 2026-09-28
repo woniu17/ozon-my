@@ -948,13 +948,11 @@ async function saveBatchLink() {
   const orders = purchaseForm.selectedOrders || [];
   if (!orders.length) { show('请先在左侧勾选至少一笔采购订单', 'error'); return; }
   if (!targets.length) { show('请至少保留一个目标包裹', 'error'); return; }
-  // 逐单查询已关联包裹:拼单确认提示 + 跳过"该单已在某目标包裹中"的组合(防止重复关联金额双算)
-  const linkedByOrder = new Map(); // sn -> Set(package_no)
+  // 逐单查询已关联包裹:拼单确认提示(重复提交=按当前金额更新采购单并重算全部分摊,后端幂等)
   const linkedLines = new Set();
   for (const od of orders) {
     try {
       const r = await lookupPurchase(od.platform || purchaseForm.platform, od.sn);
-      linkedByOrder.set(od.sn, new Set((r?.linkedPackages || []).map((p) => p.package_no)));
       for (const p of r?.linkedPackages || []) {
         linkedLines.add(`  · ${p.package_no} (${p.posting_number}) 数量${p.quantity || 0} 分摊 ${fmtMoney(p.allocated_amount)}`);
       }
@@ -962,36 +960,21 @@ async function saveBatchLink() {
       console.warn('lookupPurchase failed', e); // lookup 失败不阻塞提交
     }
   }
-  // 统计有效提交对(目标包裹未含该单的组合)
-  let pairs = 0;
-  let skippedPairs = 0;
-  for (const t of targets) {
-    for (const od of orders) {
-      if (linkedByOrder.get(od.sn)?.has(t.packageNo)) { skippedPairs++; continue; }
-      pairs++;
-    }
-  }
-  if (!pairs) {
-    show('所选采购订单均已关联到全部目标包裹,无需重复提交', 'info');
-    return;
-  }
   if (linkedLines.size) {
     const ok = await confirmStore.ask({
-      message: `部分采购订单已关联其它包裹:\n${[...linkedLines].join('\n')}\n\n本次将把 ${orders.length} 笔采购订单关联到 ${targets.length} 个目标包裹${skippedPairs ? `(${skippedPairs} 组已关联过的组合自动跳过)` : ''};已关联包裹的分摊金额将按数量重新加权计算。确认继续?`,
-      confirmText: '追加关联',
+      message: `以下采购订单已关联过包裹:\n${[...linkedLines].join('\n')}\n\n本次将把 ${orders.length} 笔采购订单关联到 ${targets.length} 个目标包裹;其中已关联过的组合按当前金额更新,全部包裹的分摊金额将按数量重新加权计算。确认继续?`,
+      confirmText: '关联/更新',
       danger: true,
     });
     if (!ok) return;
   }
   purchaseSaving.value = true;
   try {
-    let done = 0;
     for (const t of targets) {
       const items = (t.items || [])
         .map((it) => ({ itemId: it.id, amount: 0, quantity: it.quantity }))
         .filter((it) => it.itemId);
       for (const od of orders) {
-        if (linkedByOrder.get(od.sn)?.has(t.packageNo)) continue;
         await submitPurchase({
           packageId: t.id,
           platform: od.platform || purchaseForm.platform,
@@ -1007,17 +990,16 @@ async function saveBatchLink() {
           platformGoods: od.platformGoods,
           allocMode: 'auto',
         });
-        done++;
       }
     }
-    // 全部提交成功:清行勾选、关弹窗、刷新(中断重试时 lookup 会自动跳过已提交组合)
+    // 全部提交成功:清行勾选、关弹窗、刷新(后端幂等:中断后直接重试,已提交组合按当前金额重算)
     targets.forEach((t) => batchSel.value.delete(t.id));
     purchaseOpen.value = false;
     batchLinkMode.value = false;
     batchTargets.value = [];
     loadTabs();
     loadList();
-    show(`已提交 ${done} 组关联(${orders.length} 笔采购订单 × ${targets.length} 个包裹${skippedPairs ? `,跳过已关联 ${skippedPairs} 组` : ''})`, 'success');
+    show(`已关联 ${orders.length} 笔采购订单到 ${targets.length} 个包裹(分摊按数量加权)`, 'success');
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
@@ -3956,7 +3938,7 @@ onUnmounted(() => {
         <!-- 底部通栏:提示 + 操作 -->
         <div class="purchase-form-footer">
         <div class="form-tip">
-          <template v-if="batchLinkMode">已选采购订单将逐单关联到全部目标包裹;每个包裹流转到「待打单发货」,分摊金额由后端按各包裹商品数量加权重算;已在某包裹中的采购订单自动跳过,不会重复关联。</template>
+          <template v-if="batchLinkMode">已选采购订单将逐单关联到全部目标包裹;每个包裹流转到「待打单发货」,分摊金额由后端按各包裹商品数量加权重算;已关联过的组合按当前金额更新并重新加权,不会重复建关联、不会双算金额。</template>
           <template v-else>提交后包裹将直接流转到「待打单发货」;国内快递单号可留空后续补录。清空所有采购后点「保存」即清空该包裹采购信息(状态不变)。个人自发货模式:无货代,收货人为你本人。</template>
         </div>
         <div class="form-actions">

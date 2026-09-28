@@ -1584,14 +1584,17 @@ function submitPurchase({
 
     if (isAuto) {
       // auto: 插入 link(allocated_amount=0 占位),只累加 purchase_num
+      // 2026-09-28 修复:重复提交同一 (采购单,包裹,行) 时 link 被 IGNORE,采购数不能再累加
+      // ——重复提交语义 = 按新金额更新采购单并重算全部分摊(reallocateAutoLinks 绝对重算,天然幂等;
+      //   批量关联/单包裹重提交改金额均依赖此行为,payment_amount 的 upsert CASE(>0 才覆盖)承接金额变更)
       const updItemQty = db.prepare(
         `UPDATE op_ozon_order_item SET purchase_num = purchase_num + ?, gmt_modified = ? WHERE id = ?`
       );
       for (const it of items) {
         const qty = Number(it.quantity) || 0;
         if (!it.itemId) continue;
-        updItemQty.run(qty, now, it.itemId);
-        insLink.run(poId, packageId, it.itemId, 0, qty, 'auto', now);
+        const r = insLink.run(poId, packageId, it.itemId, 0, qty, 'auto', now);
+        if (r && r.changes) updItemQty.run(qty, now, it.itemId);
       }
       // 包裹状态更新(total_purchase_amount 由 reallocateAutoLinks 设绝对值,这里不增量)
       db.prepare(`UPDATE op_package SET ${pkgSetSql} WHERE id = ?`)
