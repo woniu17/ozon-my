@@ -45,12 +45,20 @@
           <text class="info-more-arrow" :class="{ open: infoOpen }">›</text>
         </view>
         <view v-if="infoOpen" class="info-grid">
-          <view class="info-item"><text class="k">订单号</text><text class="v">{{ pkg.orderNumber || '—' }}</text></view>
+          <!-- 金额信息(对齐 web 端 OrderProcess.vue 金额列) -->
+          <view class="info-item"><text class="k">销售佣金</text><text class="v">{{ pkg.accrual?.saleFee != null ? fmtMoney(pkg.accrual.saleFee) : '—' }}</text></view>
+          <view class="info-item"><text class="k">国际配送</text><text class="v">{{ pkg.accrual?.delivery != null ? fmtMoney(pkg.accrual.delivery) : '—' }}</text></view>
+          <view class="info-item"><text class="k">国际配送(估)</text><text class="v">{{ pkg.profit?.delivery != null ? fmtMoney(pkg.profit.delivery) : '—' }}</text></view>
+          <view class="info-item"><text class="k">其它费用</text><text class="v">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</text></view>
+          <view v-if="pkg.profit" class="info-item"><text class="k">{{ profitLabel(pkg) }}</text><text class="v" :class="profitClass(pkg)">{{ fmtMoney(pkg.profit.profit) }}</text></view>
+          <view v-if="pkg.profit?.profitRateSale != null" class="info-item"><text class="k">销售利润率</text><text class="v">{{ fmtRate(pkg.profit.profitRateSale) }}</text></view>
+          <view v-if="pkg.profit?.profitRateCost != null" class="info-item"><text class="k">成本利润率</text><text class="v">{{ fmtRate(pkg.profit.profitRateCost) }}</text></view>
+          <!-- 其他信息 -->
           <view class="info-item"><text class="k">买家</text><text class="v">{{ pkg.buyerName || '—' }}</text></view>
           <view class="info-item"><text class="k">配送方式</text><text class="v">{{ pkg.deliveryMethod || '—' }}</text></view>
           <view class="info-item"><text class="k">发货仓库</text><text class="v">{{ pkg.warehouse || '—' }}</text></view>
           <view v-if="pkg.isReturned" class="info-item"><text class="k">退货状态</text><text class="v">{{ returnState }}</text></view>
-          <view v-if="isCancelled && cancelReasonText" class="info-item info-full"><text class="k">取消原因</text><text class="v">{{ cancelReasonText }}</text></view>
+          <view v-if="isCancelled && cancelReasonText" class="info-item"><text class="k">取消原因</text><text class="v">{{ cancelReasonText }}</text></view>
         </view>
       </view>
     </view>
@@ -177,7 +185,7 @@
 import { ref, computed, onUnmounted } from 'vue';
 import { onLoad, onShow, onHide, onUnload } from '@dcloudio/uni-app';
 import { getOrderDetail, syncPackage, shipPackage, syncPackagePurchaseLogistics } from '../../api/order.js';
-import { fmtMoney, fmtTime, weekdayCN } from '../../utils/fmt.js';
+import { fmtMoney, fmtTime, fmtRate, weekdayCN } from '../../utils/fmt.js';
 
 const packageId = ref('');
 const pkg = ref(null);
@@ -289,6 +297,21 @@ function orderDetailUrl(platform, purchaseSn) {
   if (platform === '1688') return `https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=${encodeURIComponent(sn)}`;
   if (platform === 'yangkeduo') return `https://mobile.yangkeduo.com/order.html?order_sn=${encodeURIComponent(sn)}`;
   return '';
+}
+
+// 利润展示(与 web 端 OrderProcess.vue profitLabel 同口径)
+function profitLabel(p) {
+  const pr = p?.profit;
+  if (!pr) return '利润';
+  if (pr.cancelled) return '利润';
+  return pr.estimated === false ? '利润实' : '预估利润';
+}
+function profitClass(p) {
+  const v = p?.profit?.profit;
+  if (v == null) return 'muted';
+  if (v > 0) return 'profit-pos';
+  if (v < 0) return 'profit-neg';
+  return 'muted';
 }
 
 // 复制文本到剪贴板(uni API,H5/小程序通用)
@@ -699,13 +722,15 @@ onShow(() => {
 }
 
 .info-item {
-  width: 50%;
+  width: 100%;
   display: flex;
+  align-items: baseline;
   padding: 8rpx 0;
+  border-bottom: 1rpx solid #f7f8fa;
 }
 
-.info-full {
-  width: 100%;
+.info-item:last-child {
+  border-bottom: none;
 }
 
 .k {
@@ -721,6 +746,11 @@ onShow(() => {
   flex: 1;
   word-break: break-all;
 }
+
+/* 利润颜色:正绿/负红/零灰(与 orders 列表页同口径) */
+.v.profit-pos { color: #00b42a; }
+.v.profit-neg { color: #f53f3f; }
+.v.muted { color: #86909c; }
 
 .strong {
   font-weight: 600;
