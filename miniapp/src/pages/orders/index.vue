@@ -825,7 +825,7 @@ onReachBottom(async () => {
 .t-k {
   font-size: 22rpx;
   color: #86909c;
-  width: 80rpx;
+  width: 120rpx;
   flex-shrink: 0;
 }
 
