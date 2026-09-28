@@ -3,6 +3,9 @@
 //
 // 在 seller.ozon.ru 顶部店铺切换器中为每个店铺显示 YQLxx 昵称徽章：
 // - 顶栏当前店铺名前插入徽章（按 sc_company_id cookie 匹配）
+//   · 旧版页头: [data-onboarding-target="headerCompanyName"]
+//   · 新版页头(如退货页 /app/returns): [data-widget="header-controls"] 内
+//     第一个「首子元素为含文本 div」的按钮(语言/帮助按钮的子元素是 span)
 // - 下拉列表每个店铺行插入徽章、加宽下拉框、按 YQL01→06 顺序重排
 // 映射来源: erp-backend-lite/src/config/stores.json 的 company_id。
 // 选择器尽量使用稳定属性(data-onboarding-target、语义类名 label-400/
@@ -43,24 +46,7 @@
     });
   }
 
-  function _injectHeaderBadge() {
-    const header = document.querySelector(
-      '[data-onboarding-target="headerCompanyName"]'
-    );
-    if (!header) return;
-    // 找到直接包含店铺名的最深元素
-    let nameEl = null;
-    for (const el of header.querySelectorAll('div, span')) {
-      const hasDirectText = Array.from(el.childNodes).some(
-        (n) => n.nodeType === 3 && n.textContent.trim()
-      );
-      if (hasDirectText) {
-        nameEl = el;
-        break;
-      }
-    }
-    if (!nameEl) return;
-
+  function _applyHeaderBadge(nameEl) {
     const cid = document.cookie
       .split(';')
       .map((c) => c.trim())
@@ -76,6 +62,38 @@
     if (existing) existing.remove();
 
     nameEl.insertBefore(_createNickBadge(info.nick, info.color), nameEl.firstChild);
+  }
+
+  function _injectHeaderBadge() {
+    // 旧版页头: headerCompanyName 内找直接包含店铺名的最深元素
+    const header = document.querySelector(
+      '[data-onboarding-target="headerCompanyName"]'
+    );
+    if (header) {
+      for (const el of header.querySelectorAll('div, span')) {
+        const hasDirectText = Array.from(el.childNodes).some(
+          (n) => n.nodeType === 3 && n.textContent.trim()
+        );
+        if (hasDirectText) {
+          _applyHeaderBadge(el);
+          return;
+        }
+      }
+      return;
+    }
+
+    // 新版页头(如 /app/returns 退货页): 店铺名位于 header-controls 内
+    // 「首子元素为含文本 div」的按钮中(结构: button > div(店铺名) + span(箭头)，
+    // 语言 CH/帮助中心按钮的子元素是 span，天然排除)
+    const controls = document.querySelector('[data-widget="header-controls"]');
+    if (!controls) return;
+    for (const btn of controls.querySelectorAll('button')) {
+      const first = btn.firstElementChild;
+      if (!first || first.tagName !== 'DIV') continue;
+      if (!(first.textContent || '').trim()) continue;
+      _applyHeaderBadge(first);
+      return;
+    }
   }
 
   function _widenDropdown() {
