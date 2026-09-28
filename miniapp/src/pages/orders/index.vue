@@ -59,7 +59,11 @@
           <text v-else class="posting">{{ pkg.postingNumber }}</text>
           <text v-if="pkg.parentId" class="split-badge child">子件</text>
           <text v-else-if="pkg.hasChildren" class="split-badge mother">母件</text>
-          <text class="op-tag" :class="'op-' + opTag(pkg).cls">{{ opTag(pkg).label }}</text>
+          <view v-if="pkg.isIgnored" class="tag-group">
+            <text class="op-tag op-mute">搁置</text>
+            <text class="op-tag" :class="'op-' + opTag(pkg).cls">{{ opTag(pkg).label }}</text>
+          </view>
+          <text v-else class="op-tag" :class="'op-' + opTag(pkg).cls">{{ opTag(pkg).label }}</text>
         </view>
 
         <view v-if="pkg.tags && pkg.tags.length" class="tags-line">
@@ -616,6 +620,17 @@ onReachBottom(async () => {
 .op-mute {
   color: #86909c;
   background: #f2f3f5;
+}
+
+/* 搁置徽章与状态徽标并排显示(右侧) */
+.tag-group {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+.tag-group .op-tag {
+  margin-left: 0;
 }
 
 .tags-line {

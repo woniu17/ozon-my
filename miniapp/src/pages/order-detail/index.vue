@@ -4,7 +4,11 @@
     <view class="card">
       <view class="head-line">
         <text class="store">{{ pkg.storeName }}</text>
-        <text class="op-tag" :class="'op-' + opTag.cls">{{ opTag.label }}</text>
+        <view v-if="pkg.isIgnored" class="tag-group">
+          <text class="op-tag op-mute">搁置</text>
+          <text class="op-tag" :class="'op-' + opTag.cls">{{ opTag.label }}</text>
+        </view>
+        <text v-else class="op-tag" :class="'op-' + opTag.cls">{{ opTag.label }}</text>
       </view>
       <view class="head-line">
         <template v-if="isQcPosting(pkg.postingNumber)">
@@ -576,6 +580,16 @@ onShow(() => {
 .op-ok { color: #00b42a; background: #e8ffea; }
 .op-err { color: #f53f3f; background: #ffece8; }
 .op-mute { color: #86909c; background: #f2f3f5; }
+
+/* 搁置徽章与状态徽标并排显示 */
+.tag-group {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+.tag-group .op-tag {
+  margin-left: 0;
+}
 
 .tags-line {
   display: flex;
