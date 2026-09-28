@@ -3253,6 +3253,8 @@ onUnmounted(() => {
             </td>
             <td class="col-status">
               <div>
+                <!-- 搁置徽标(与 miniapp H5 同口径):isIgnored=true 时显示,提示该包裹被人工搁置 -->
+                <span v-if="pkg.isIgnored" class="tag tag-mute" style="margin-right: 4px" title="已搁置的包裹:不参与流转,可在「更多」菜单中恢复">搁置</span>
                 <!-- 全局搜索模式:显示包裹所属操作状态(跨tab辨识) -->
                 <span v-if="globalSearch.active" class="tag" :class="operateTag(pkg).cls" style="margin-right: 4px" title="包裹所属状态">{{ operateTag(pkg).label }}</span>
                 <!-- Ozon状态展示原始值(如 awaiting_deliver),中文释义放悬浮提示 -->
