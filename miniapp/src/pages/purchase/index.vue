@@ -988,9 +988,11 @@ async function doSearch() {
   st.error = '';
   try {
     const data = await searchPlatformOrder(def.platform, kw);
-    const hit = data?.result;
-    if (hit) {
-      st.searched = [hit, ...st.searched.filter((o) => o.orderSn !== hit.orderSn)];
+    const found = data?.result;
+    if (found) {
+      // 字段对齐:后端搜索返回 orderAmount,前端表格/保存逻辑用 amount(与 web 端 OrderProcess.vue 同口径)
+      const hit = { ...found, amount: found.orderAmount ?? found.amount ?? 0 };
+      st.searched = [hit, ...st.searched.filter((o) => o.orderSn !== found.orderSn)];
     } else {
       uni.showToast({ title: '未找到该采购单号', icon: 'none' });
     }
