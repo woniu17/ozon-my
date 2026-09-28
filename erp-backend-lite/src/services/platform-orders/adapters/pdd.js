@@ -12,7 +12,6 @@
 
 import { ApiError, ErrorCode } from '../../../utils/error-codes.js';
 import { withPage } from '../browser-manager.js';
-import { writeFileSync } from 'node:fs';
 
 const PDD_API = 'https://mobile.yangkeduo.com/proxy/api/api/aristotle/order_list_v4';
 const PDD_SEARCH_API = 'https://mobile.yangkeduo.com/proxy/api/api/aristotle/order_list_search_v4';
@@ -246,8 +245,6 @@ async function searchPddOrder(orderSn, accounts = []) {
         const resp = await fetchInPage(page, url, body);
         const data = mapResponse(resp, 'PDD_SEARCH');
         const orders = (data && Array.isArray(data.orders)) ? data.orders : [];
-        // 临时调试:dump 原始订单对象到 /tmp/pdd_raw_search.json(查月卡券优惠字段)
-        try { if (orders.length) writeFileSync('/tmp/pdd_raw_search.json', JSON.stringify(orders[0], null, 2)); } catch (e) { console.error('[PDD_RAW_DUMP]', e.message); }
         if (!orders.length) return { result: null };
         return { result: normalizeSearchOrder(orders[0]) };
       });
