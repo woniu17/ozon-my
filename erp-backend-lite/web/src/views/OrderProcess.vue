@@ -928,10 +928,12 @@ function openBatchPurchase() {
   lookupResult.value = null;
   restoredPurchases.value = [];
   removedPurchaseIds.value = new Set();
-  // 清空所有账号 tab 的勾选(懒建的 store 可能不存在,容错跳过)
+  // 清空所有账号 tab 的勾选与搜索聚焦(懒建的 store 可能不存在,容错跳过)
+  importSearch.keyword = '';
+  importSearch.error = '';
   for (const tabDef of importAccountTabs.value) {
     const st = importStores[tabDef.key];
-    if (st) st.selected = [];
+    if (st) { st.selected = []; st.searched = []; }
   }
   importTab.value = 'pdd';
   purchaseOpen.value = true;
@@ -1045,10 +1047,12 @@ function openPurchase(pkg) {
     pdpUrl: it.pdpUrl,
   }));
   loadSkuPricing(purchaseForm.items);
-  // 清空所有账号 tab 的勾选(懒建的 store 可能不存在,容错跳过)
+  // 清空所有账号 tab 的勾选与搜索聚焦(懒建的 store 可能不存在,容错跳过)
+  importSearch.keyword = '';
+  importSearch.error = '';
   for (const tabDef of importAccountTabs.value) {
     const st = importStores[tabDef.key];
-    if (st) st.selected = [];
+    if (st) { st.selected = []; st.searched = []; }
   }
   // 已有采购信息:恢复成"已选中"状态(按采购单分组重建)——可继续勾选追加平台订单,也可逐单删除已有采购
   if (pkg.purchaseLinks?.length) {
@@ -1600,9 +1604,13 @@ const currentPlatformLogin = computed(() => {
 const importOrders = computed(() => {
   const st = currentStore.value;
   const plat = PLATFORM_TAB_META[currentTabDef.value?.platform]?.platformVal || '';
-  const inList = new Set(st.orders.map((o) => o.orderSn));
   const wrap = (o) => (o._platform === plat ? o : { ...o, _platform: plat });
-  return [...st.searched.filter((o) => !inList.has(o.orderSn)).map(wrap), ...st.orders.map(wrap)];
+  // 2026-09-28 搜索聚焦:有搜索命中时只显示命中订单(多次搜索累积聚焦;同名单优先用列表版,字段完整)
+  if (st.searched.length) {
+    const bySn = new Map(st.orders.map((o) => [o.orderSn, o]));
+    return st.searched.map((o) => wrap(bySn.get(o.orderSn) || o));
+  }
+  return st.orders.map(wrap);
 });
 const importLoading = computed(() => currentStore.value.loading);
 const importError = computed(() => currentStore.value.error);
@@ -1708,6 +1716,14 @@ async function onSearchImportOrder() {
   } finally {
     importSearch.loading = false;
   }
+}
+
+// 清除搜索结果,恢复完整订单列表(搜索聚焦模式的退出入口)
+function clearImportSearch() {
+  const st = currentStore.value;
+  if (st) st.searched = [];
+  importSearch.keyword = '';
+  importSearch.error = '';
 }
 
 function isImportCancelled(o) {
@@ -3677,6 +3693,12 @@ onUnmounted(() => {
                 <button class="btn btn-ghost btn-sm" :disabled="importSearch.loading || !importSearch.keyword" @click="onSearchImportOrder">
                   {{ importSearch.loading ? '搜索中…' : '搜索' }}
                 </button>
+                <button
+                  v-if="currentStore.searched.length"
+                  class="btn btn-ghost btn-sm"
+                  title="清除搜索结果,恢复完整订单列表"
+                  @click="clearImportSearch"
+                >✕</button>
               </div>
               <button class="btn btn-ghost btn-sm" :disabled="importLoading" @click="loadOrders(importTab)">刷新</button>
             </div>
