@@ -88,7 +88,8 @@ function normalizeOrders(data) {
     statusPrompt: o.order_status_prompt || '',
     payStatus: o.pay_status ?? 0,           // 0=未付 2=已付
     shippingStatus: o.shipping_status ?? 0, // 0=未发 1=已发
-    amount: toYuan(o.order_amount),
+    // 采购金额默认含优惠:order_amount(实付分)+ discount_amount(优惠分),还原商品原价作为采购成本口径
+    amount: toYuan((o.order_amount || 0) + (o.discount_amount || 0)),
     trackingNumber: o.tracking_number || '',
     orderTime: o.order_time || 0,
     mallName: (o.mall && o.mall.mall_name) || '',
@@ -107,7 +108,8 @@ function normalizeOrders(data) {
 function normalizeSearchOrder(o) {
   return {
     orderSn: o.order_sn || '',
-    orderAmount: toYuan(o.order_amount),
+    // 采购金额默认含优惠:order_amount(实付分)+ discount_amount(优惠分),还原商品原价作为采购成本口径
+    orderAmount: toYuan((o.order_amount || 0) + (o.discount_amount || 0)),
     orderTime: o.order_time || 0,
     statusPrompt: o.order_status_prompt || '',
     trackingNumber: o.tracking_number || '',
