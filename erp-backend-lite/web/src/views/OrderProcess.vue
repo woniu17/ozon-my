@@ -881,17 +881,17 @@ const canShipAfterSave = computed(() => {
   return !!p && (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_ship') && p.ozonStatus === 'awaiting_packaging';
 });
 
-// ── 批量录采购(2026-09-28):勾选多个包裹,按列表顺序逐个打开采购弹窗,每个保存后自动进入下一个 ──
-// batchSel=勾选的包裹 id 集(语义是"待办":每处理完一个即移除,中断后残留勾选=未处理过的)
+// ── 批量录采购(2026-09-28 v2):勾选多个包裹 → 选好采购订单 → 一次性关联全部目标包裹 ──
+// batchSel=行勾选的包裹 id 集;批量关联模式下打开一个弹窗,把已选采购订单直接挂到所有目标包裹
 const batchSel = ref(new Set());
-// 批量队列(开启时的行对象快照,按列表顺序)与当前下标;batchIdx=-1 表示非批量模式
-const batchQueue = ref([]);
-const batchIdx = ref(-1);
-const batchActive = computed(() => batchIdx.value >= 0 && batchQueue.value.length > 0);
+// 弹窗处于批量关联模式(右列显示目标包裹清单,而非单个包裹的产品表)
+const batchLinkMode = ref(false);
+// 目标包裹行快照(打开时由行勾选生成,弹窗内可逐个移除)
+const batchTargets = ref([]);
 // 按钮计数只统计当前页可见的勾选行(其它 tab/搜索残留的 id 不参与批量)
 const checkedInPageCount = computed(() => rows.value.filter((r) => batchSel.value.has(r.id)).length);
-const purchaseTitle = computed(() => batchActive.value
-  ? `批量采购 ${batchIdx.value + 1}/${batchQueue.value.length} · ${purchaseForm.packageNo}`
+const purchaseTitle = computed(() => batchLinkMode.value
+  ? `批量录采购 · 关联 ${batchTargets.value.length} 个包裹`
   : `采购 · ${purchaseForm.packageNo}`);
 
 function toggleBatchCheck(pkg) {
@@ -903,44 +903,130 @@ function toggleCheckAll() {
   if (allRowsChecked.value) rows.value.forEach((r) => batchSel.value.delete(r.id));
   else rows.value.forEach((r) => batchSel.value.add(r.id));
 }
-function startBatchPurchase() {
-  if (purchaseOpen.value) return;
-  const queue = rows.value.filter((r) => batchSel.value.has(r.id));
-  if (!queue.length) return;
-  batchQueue.value = queue;
-  batchIdx.value = 0;
-  openPurchase(queue[0]);
+// 打开批量关联弹窗:目标=行勾选包裹;左侧平台订单勾选/搜索/优惠明细与单包裹弹窗完全共用
+function openBatchPurchase() {
+  const targets = rows.value.filter((r) => batchSel.value.has(r.id));
+  if (!targets.length || purchaseOpen.value) return;
+  batchLinkMode.value = true;
+  batchTargets.value = targets;
+  purchaseRowCtx.value = null;
+  purchaseForm.packageId = null;
+  purchaseForm.packageNo = '';
+  purchaseForm.platform = 'other';
+  purchaseForm.purchaseSn = '';
+  purchaseForm.buyerAccount = '';
+  purchaseForm.buyerUserId = '';
+  purchaseForm.sellerName = '';
+  purchaseForm.paymentAmount = '';
+  purchaseForm.logisticsCompany = '';
+  purchaseForm.logisticsNo = '';
+  purchaseForm.note = '';
+  purchaseForm.allocMode = 'auto';
+  purchaseForm.platformGoods = [];
+  purchaseForm.selectedOrders = [];
+  purchaseForm.items = [];
+  lookupResult.value = null;
+  restoredPurchases.value = [];
+  removedPurchaseIds.value = new Set();
+  // 清空所有账号 tab 的勾选(懒建的 store 可能不存在,容错跳过)
+  for (const tabDef of importAccountTabs.value) {
+    const st = importStores[tabDef.key];
+    if (st) st.selected = [];
+  }
+  importTab.value = 'pdd';
+  purchaseOpen.value = true;
+  loadOrders('pdd');
 }
-// 弹窗关闭(取消/✕)即终止批量;已保存的包裹已从 batchSel 移除,残留勾选=未处理的
-watch(purchaseOpen, (v) => { if (!v) { batchIdx.value = -1; batchQueue.value = []; } });
-// 批量模式下跳过当前包裹(不保存直接看下一个)
-function skipBatchCurrent() {
-  batchSel.value.delete(purchaseForm.packageId);
-  const next = batchQueue.value[batchIdx.value + 1];
-  if (next) {
-    batchIdx.value++;
-    openPurchase(next);
-  } else {
-    batchIdx.value = -1;
-    batchQueue.value = [];
+// 弹窗内移除一个目标包裹(行勾选保留,移除光后无法保存)
+function removeBatchTarget(t) {
+  batchTargets.value = batchTargets.value.filter((x) => x.id !== t.id);
+}
+// 保存关联:已选采购订单逐单挂到每个目标包裹(固定 auto 模式,后端按各包裹商品数量加权重算分摊)
+async function saveBatchLink() {
+  if (purchaseSaving.value) return;
+  const targets = batchTargets.value;
+  const orders = purchaseForm.selectedOrders || [];
+  if (!orders.length) { show('请先在左侧勾选至少一笔采购订单', 'error'); return; }
+  if (!targets.length) { show('请至少保留一个目标包裹', 'error'); return; }
+  // 逐单查询已关联包裹:拼单确认提示 + 跳过"该单已在某目标包裹中"的组合(防止重复关联金额双算)
+  const linkedByOrder = new Map(); // sn -> Set(package_no)
+  const linkedLines = new Set();
+  for (const od of orders) {
+    try {
+      const r = await lookupPurchase(od.platform || purchaseForm.platform, od.sn);
+      linkedByOrder.set(od.sn, new Set((r?.linkedPackages || []).map((p) => p.package_no)));
+      for (const p of r?.linkedPackages || []) {
+        linkedLines.add(`  · ${p.package_no} (${p.posting_number}) 数量${p.quantity || 0} 分摊 ${fmtMoney(p.allocated_amount)}`);
+      }
+    } catch (e) {
+      console.warn('lookupPurchase failed', e); // lookup 失败不阻塞提交
+    }
+  }
+  // 统计有效提交对(目标包裹未含该单的组合)
+  let pairs = 0;
+  let skippedPairs = 0;
+  for (const t of targets) {
+    for (const od of orders) {
+      if (linkedByOrder.get(od.sn)?.has(t.packageNo)) { skippedPairs++; continue; }
+      pairs++;
+    }
+  }
+  if (!pairs) {
+    show('所选采购订单均已关联到全部目标包裹,无需重复提交', 'info');
+    return;
+  }
+  if (linkedLines.size) {
+    const ok = await confirmStore.ask({
+      message: `部分采购订单已关联其它包裹:\n${[...linkedLines].join('\n')}\n\n本次将把 ${orders.length} 笔采购订单关联到 ${targets.length} 个目标包裹${skippedPairs ? `(${skippedPairs} 组已关联过的组合自动跳过)` : ''};已关联包裹的分摊金额将按数量重新加权计算。确认继续?`,
+      confirmText: '追加关联',
+      danger: true,
+    });
+    if (!ok) return;
+  }
+  purchaseSaving.value = true;
+  try {
+    let done = 0;
+    for (const t of targets) {
+      const items = (t.items || [])
+        .map((it) => ({ itemId: it.id, amount: 0, quantity: it.quantity }))
+        .filter((it) => it.itemId);
+      for (const od of orders) {
+        if (linkedByOrder.get(od.sn)?.has(t.packageNo)) continue;
+        await submitPurchase({
+          packageId: t.id,
+          platform: od.platform || purchaseForm.platform,
+          purchaseSn: od.sn,
+          buyerAccount: od.buyerAccount,
+          buyerUserId: od.buyerUserId,
+          sellerName: od.sellerName,
+          paymentAmount: od.paymentAmount || null,
+          logisticsCompany: od.logisticsCompany,
+          logisticsNo: od.logisticsNo,
+          note: purchaseForm.note.trim() || null,
+          items,
+          platformGoods: od.platformGoods,
+          allocMode: 'auto',
+        });
+        done++;
+      }
+    }
+    // 全部提交成功:清行勾选、关弹窗、刷新(中断重试时 lookup 会自动跳过已提交组合)
+    targets.forEach((t) => batchSel.value.delete(t.id));
     purchaseOpen.value = false;
-    show('已结束批量录采购', 'info');
+    batchLinkMode.value = false;
+    batchTargets.value = [];
+    loadTabs();
+    loadList();
+    show(`已提交 ${done} 组关联(${orders.length} 笔采购订单 × ${targets.length} 个包裹${skippedPairs ? `,跳过已关联 ${skippedPairs} 组` : ''})`, 'success');
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    purchaseSaving.value = false;
   }
 }
-// 保存成功后的收尾(四个保存分支共用):批量模式自动载入下一个包裹,否则关弹窗刷新
+// 保存成功后的收尾(单包裹四个保存分支共用):关弹窗+刷新+按需备货
 async function afterPurchaseSaved(withShip) {
   batchSel.value.delete(purchaseForm.packageId);
-  if (batchActive.value) {
-    const next = batchQueue.value[batchIdx.value + 1];
-    if (next) {
-      batchIdx.value++;
-      show(`进入下一个包裹 ${next.packageNo}(${batchIdx.value + 1}/${batchQueue.value.length})`, 'info');
-      openPurchase(next);
-      return;
-    }
-    batchIdx.value = -1;
-    batchQueue.value = [];
-  }
   purchaseOpen.value = false;
   loadTabs();
   loadList();
@@ -948,6 +1034,7 @@ async function afterPurchaseSaved(withShip) {
 }
 
 function openPurchase(pkg) {
+  batchLinkMode.value = false;
   purchaseRowCtx.value = pkg;
   purchaseForm.packageId = pkg.id;
   purchaseForm.packageNo = pkg.packageNo;
@@ -2939,7 +3026,7 @@ onUnmounted(() => {
       <button class="btn btn-ghost" :disabled="syncingLogistics" @click="onSyncPurchaseLogistics" title="同步采购物流信息:补物流单号(1688)+拉完整轨迹(1688官方API+拼多多),与每小时定时轮同逻辑互斥,单轮每阶段上限100单">
         {{ syncingLogistics ? '物流同步中…' : '同步采购物流信息' }}
       </button>
-      <button class="btn btn-primary" :disabled="!checkedInPageCount" @click="startBatchPurchase" title="批量录采购:按列表顺序逐个打开勾选包裹的采购弹窗,每个保存后自动进入下一个;点「取 消」终止批量,已处理的包裹自动取消勾选">
+      <button class="btn btn-primary" :disabled="!checkedInPageCount" @click="openBatchPurchase" title="批量录采购:打开弹窗后勾选采购订单,一次性关联到所有勾选的包裹(分摊金额按各包裹商品数量加权)">
         批量录采购{{ checkedInPageCount ? `(${checkedInPageCount})` : '' }}
       </button>
       <button v-if="rows.length" class="btn btn-ghost" @click="toggleCheckAll" :title="allRowsChecked ? '取消勾选本页全部包裹' : '勾选本页全部包裹'">
@@ -3208,7 +3295,7 @@ onUnmounted(() => {
                   type="checkbox"
                   class="pkg-check"
                   :checked="batchSel.has(pkg.id)"
-                  title="勾选多个包裹后,用顶部「批量录采购」按顺序逐个录入采购"
+                  title="勾选多个包裹后,用顶部「批量录采购」把采购订单一次性关联到这些包裹"
                   @change.stop="toggleBatchCheck(pkg)"
                 />
                 <span class="pkg-tags-store" :title="pkg.storeName">{{ pkg.storeName }}</span>
@@ -3731,14 +3818,29 @@ onUnmounted(() => {
         <!-- 右列:订单信息(产品表) + 已选采购订单 -->
         <div class="purchase-col-right">
         <!-- ① 最上方:订单产品(只读展示,采购金额从第②块同步显示上来) -->
-        <div class="prod-title-row">
+        <div v-if="!batchLinkMode" class="prod-title-row">
           <label class="alloc-checkbox">
             <input type="checkbox" :checked="purchaseForm.allocMode === 'auto'" @change="purchaseForm.allocMode = $event.target.checked ? 'auto' : 'manual'" />
             <span>自动填写金额</span>
           </label>
         </div>
+        <!-- 批量关联模式:目标包裹清单(已选采购订单将一次性挂到以下全部包裹;✕ 可移除) -->
+        <div v-if="batchLinkMode" class="batch-targets">
+          <div class="batch-targets-title">
+            目标包裹 <b>{{ batchTargets.length }}</b> 个 · 左侧勾选的采购订单将关联到以下全部包裹(分摊金额按各包裹商品数量加权自动计算)
+          </div>
+          <div class="batch-targets-list">
+            <div v-for="t in batchTargets" :key="t.id" class="batch-target">
+              <span class="mono batch-target-no">{{ t.postingNumber }}</span>
+              <span class="batch-target-store">{{ t.storeName }}</span>
+              <span class="tag" :class="t.purchaseStatus === 'none' ? 'tag-mute' : 'tag-ok'">{{ t.purchaseStatus === 'none' ? '未采购' : '已采购' }}</span>
+              <span class="batch-target-items" :title="(t.items || []).map((i) => i.sku).join('\n')">{{ (t.items || []).map((i) => i.sku).join('，') }}</span>
+              <button class="btn btn-ghost btn-sm" title="从目标包裹中移除" @click="removeBatchTarget(t)">✕</button>
+            </div>
+          </div>
+        </div>
         <!-- ① 订单产品 + 利润预估与调价(合并卡片:上=产品信息,下=调整对比;口径同价格管理单件) -->
-        <div v-if="profitRows.length" class="po-card-list">
+        <div v-if="!batchLinkMode && profitRows.length" class="po-card-list">
           <div v-for="(p, idx) in profitRows" :key="p.itemId" class="po-card">
             <!-- 第一部分:产品信息(图片 + 名称/SKU/OfferID/数量/售价/采购价) -->
             <div class="po-card-info">
@@ -3926,20 +4028,29 @@ onUnmounted(() => {
         <!-- 底部通栏:提示 + 操作 -->
         <div class="purchase-form-footer">
         <div class="form-tip">
-          提交后包裹将直接流转到「待打单发货」;国内快递单号可留空后续补录。清空所有采购后点「保存」即清空该包裹采购信息(状态不变)。个人自发货模式:无货代,收货人为你本人。
+          <template v-if="batchLinkMode">已选采购订单将逐单关联到全部目标包裹;每个包裹流转到「待打单发货」,分摊金额由后端按各包裹商品数量加权重算;已在某包裹中的采购订单自动跳过,不会重复关联。</template>
+          <template v-else>提交后包裹将直接流转到「待打单发货」;国内快递单号可留空后续补录。清空所有采购后点「保存」即清空该包裹采购信息(状态不变)。个人自发货模式:无货代,收货人为你本人。</template>
         </div>
         <div class="form-actions">
-          <button v-if="batchActive" class="btn btn-ghost" :disabled="purchaseSaving" @click="skipBatchCurrent" title="不保存当前包裹,直接进入下一个(当前包裹保持无采购)">跳过此包裹</button>
           <button class="btn btn-ghost" @click="purchaseOpen = false">取 消</button>
-          <button class="btn btn-ghost" :disabled="purchaseSaving" @click="savePurchase(false)">
-            {{ purchaseSaving ? '保存中…' : '保 存' }}
-          </button>
+          <template v-if="!batchLinkMode">
+            <button class="btn btn-ghost" :disabled="purchaseSaving" @click="savePurchase(false)">
+              {{ purchaseSaving ? '保存中…' : '保 存' }}
+            </button>
+            <button
+              class="btn btn-primary"
+              :disabled="purchaseSaving || !canShipAfterSave"
+              :title="canShipAfterSave ? '保存采购后立即向 Ozon 确认货件(多件商品将二次确认)' : '当前包裹已备货或已取消,不可备货'"
+              @click="savePurchase(true)"
+            >{{ purchaseSaving ? '处理中…' : '保存并备货' }}</button>
+          </template>
           <button
+            v-else
             class="btn btn-primary"
-            :disabled="purchaseSaving || !canShipAfterSave"
-            :title="canShipAfterSave ? '保存采购后立即向 Ozon 确认货件(多件商品将二次确认)' : '当前包裹已备货或已取消,不可备货'"
-            @click="savePurchase(true)"
-          >{{ purchaseSaving ? '处理中…' : '保存并备货' }}</button>
+            :disabled="purchaseSaving"
+            title="将左侧已选的采购订单逐单关联到全部目标包裹;分摊金额由后端按各包裹商品数量加权重算"
+            @click="saveBatchLink()"
+          >{{ purchaseSaving ? '关联中…' : `关联 ${batchTargets.length} 个包裹` }}</button>
         </div>
         </div><!-- /purchase-form-footer -->
       </div>
@@ -4791,6 +4902,53 @@ a.product-title:hover {
   height: 16px;
   cursor: pointer;
   accent-color: #2f6fed;
+}
+/* 批量录采购:目标包裹清单(右列,批量关联模式) */
+.batch-targets {
+  margin-bottom: 10px;
+}
+.batch-targets-title {
+  font-size: 13px;
+  color: #374151;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+}
+.batch-targets-list {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+.batch-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.batch-target:last-child {
+  border-bottom: none;
+}
+.batch-target-no {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.batch-target-store {
+  color: #6b7280;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.batch-target-items {
+  flex: 1;
+  min-width: 0;
+  color: #9ca3af;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* 质检单货件号(02131/024785 开头):红色加粗显著展示 */
 .pkg-tags-meta-line .mono {
