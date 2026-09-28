@@ -55,8 +55,9 @@
           <template v-if="isQcPosting(pkg.postingNumber)">
             <text class="qc-badge">质检单</text>
             <text class="posting qc">{{ pkg.postingNumber }}</text>
+            <text class="copy-btn" @click.stop="copyText(pkg.postingNumber, '货件号')"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></text>
           </template>
-          <text v-else class="posting">{{ pkg.postingNumber }}</text>
+          <text v-else class="posting">{{ pkg.postingNumber }}<text class="copy-btn" @click.stop="copyText(pkg.postingNumber, '货件号')"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></text></text>
           <text v-if="pkg.parentId" class="split-badge child">子件</text>
           <text v-else-if="pkg.hasChildren" class="split-badge mother">母件</text>
           <view v-if="pkg.isIgnored" class="tag-group">
@@ -250,6 +251,16 @@ const OPERATE_LABELS = {
 function opTag(pkg) {
   if (pkg.isReturned) return { label: '已退货', cls: 'err' };
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus || '—', cls: 'mute' };
+}
+
+// 复制文本到剪贴板(uni API,H5/小程序通用;与 order-detail/index.vue 同口径)
+function copyText(val, label) {
+  const s = String(val || '').trim();
+  if (!s) return;
+  uni.setClipboardData({
+    data: s,
+    success: () => uni.showToast({ title: (label || '') + '已复制', icon: 'none' }),
+  });
 }
 
 // ── 剩发倒计时(与 order-detail/index.vue 同口径)──────────────
@@ -610,6 +621,18 @@ onReachBottom(async () => {
   color: #d93026;
   font-weight: 700;
 }
+
+/* 复制小图标:紧贴货件号右侧,灰色点击区 */
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4rpx;
+  padding: 4rpx;
+  color: #86909c;
+  vertical-align: middle;
+}
+.copy-btn:active { color: #0064f9; }
 
 .qc-badge {
   flex-shrink: 0;
