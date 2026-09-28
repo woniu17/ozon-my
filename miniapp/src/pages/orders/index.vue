@@ -95,7 +95,7 @@
           </view>
         </view>
 
-        <!-- 时间行:待处理/待打单/交运 三态展示下单/最迟/剩发 -->
+        <!-- 时间行:待处理/待打单/交运 三态展示下单/最迟/剩发 + 待打单显示预估利润 -->
         <view v-if="showShipCountdown(pkg)" class="time-row">
           <view class="t-line">
             <text class="t-k">下单</text>
@@ -108,6 +108,34 @@
           <view class="t-line" :class="{ overdue: countdown(pkg).overdue }">
             <text class="t-k">{{ countdown(pkg).overdue ? '已超时' : '剩发' }}</text>
             <text class="t-v cd">{{ countdown(pkg).text }}</text>
+          </view>
+          <view v-if="pkg.operateStatus === 'wait_ship' && pkg.profit" class="t-line">
+            <text class="t-k">预估利润</text>
+            <text class="t-v" :class="profitClass(pkg)">{{ fmtMoney(pkg.profit.profit) }}</text>
+          </view>
+        </view>
+
+        <!-- 时间行:已发货/已签收/已成功/已退货 展示下单/揽收/签收/退货 + 利润 -->
+        <view v-else-if="showShipTimes(pkg)" class="time-row">
+          <view class="t-line">
+            <text class="t-k">下单</text>
+            <text class="t-v">{{ fmtTime(pkg.inProcessAt) }}<text v-if="weekdayCN(pkg.inProcessAt)" class="t-wd">（{{ weekdayCN(pkg.inProcessAt) }}）</text></text>
+          </view>
+          <view v-if="pkg.deliveringDate" class="t-line">
+            <text class="t-k">揽收</text>
+            <text class="t-v">{{ fmtTime(pkg.deliveringDate) }}<text v-if="weekdayCN(pkg.deliveringDate)" class="t-wd">（{{ weekdayCN(pkg.deliveringDate) }}）</text></text>
+          </view>
+          <view v-if="pkg.deliveredAt" class="t-line">
+            <text class="t-k">签收</text>
+            <text class="t-v">{{ fmtTime(pkg.deliveredAt) }}<text v-if="weekdayCN(pkg.deliveredAt)" class="t-wd">（{{ weekdayCN(pkg.deliveredAt) }}）</text></text>
+          </view>
+          <view v-if="pkg.returnAt" class="t-line">
+            <text class="t-k">退货</text>
+            <text class="t-v">{{ fmtTime(pkg.returnAt) }}<text v-if="weekdayCN(pkg.returnAt)" class="t-wd">（{{ weekdayCN(pkg.returnAt) }}）</text></text>
+          </view>
+          <view v-if="pkg.profit" class="t-line">
+            <text class="t-k">{{ profitLabel(pkg) }}</text>
+            <text class="t-v" :class="profitClass(pkg)">{{ fmtMoney(pkg.profit.profit) }}</text>
           </view>
         </view>
       </view>
@@ -229,6 +257,28 @@ function opTag(pkg) {
 const SHOW_COUNTDOWN_STATUSES = ['wait_process', 'wait_ship', 'ship_success'];
 function showShipCountdown(pkg) {
   return !!pkg && !!pkg.shipmentDate && SHOW_COUNTDOWN_STATUSES.includes(pkg.operateStatus);
+}
+
+// ── 已发货/已签收/已成功/已退货 时间行(下单/揽收/签收/退货 + 利润)──────
+const SHIP_TIMES_STATUSES = ['wait_receiver_confirm', 'signed', 'settled', 'returned'];
+function showShipTimes(pkg) {
+  return !!pkg && SHIP_TIMES_STATUSES.includes(pkg.operateStatus);
+}
+
+// ── 利润展示(与 web 端 OrderProcess.vue profitLabel/profitTitle 同口径)──
+// estimated=false → 真实应计口径;cancelled → 已取消无收入;否则按 16% 预估
+function profitLabel(pkg) {
+  const p = pkg.profit;
+  if (!p) return '利润';
+  if (p.cancelled) return '利润';
+  return p.estimated === false ? '利润实' : '预估利润';
+}
+function profitClass(pkg) {
+  const v = pkg.profit?.profit;
+  if (v == null) return 'muted';
+  if (v > 0) return 'profit-pos';
+  if (v < 0) return 'profit-neg';
+  return 'muted';
 }
 // 每秒刷新的当前时间(驱动所有卡片剩发倒计时秒级跳动)
 const nowTs = ref(Date.now());
@@ -794,6 +844,11 @@ onReachBottom(async () => {
 .t-v.cd {
   color: #d97706;
 }
+
+/* 利润颜色:正绿/负红/零灰 */
+.t-v.profit-pos { color: #00b42a; }
+.t-v.profit-neg { color: #f53f3f; }
+.t-v.muted { color: #86909c; }
 
 .empty {
   text-align: center;
