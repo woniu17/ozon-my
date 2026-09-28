@@ -9,7 +9,7 @@ import { parseUtcDate } from '../utils/time.js';
 import { useRoute } from 'vue-router';
 import {
   getOrderTabs, getOrderList, getOrderDetail,
-  submitPurchase, updatePurchaseAlloc, updatePurchaseLogistics, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
+  submitPurchase, updatePurchaseLogistics, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   updatePackageMeta, listPackageTags, updateTagOrder,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
   runAccrualSync, getRubRate, setRubRate,
@@ -198,7 +198,7 @@ const purchaseForm = reactive({
   logisticsCompany: '',
   logisticsNo: '',
   note: '',
-  allocMode: 'auto', // 'auto'=勾选自动填写金额, 'manual'=取消勾选手动填写
+  allocMode: 'auto', // 恒为 auto:分摊金额一律按数量加权自动算(2026-09-28 v3,手动仅限采购单价格层)
   items: [], // [{ itemId, offerId, title, quantity, amount }]
   platformGoods: [], // 选中平台订单的商品(图片/数量/规格),随提交写入 items_json,免事后补全
   selectedOrders: [], // 勾选的各笔平台订单独立提交体(多选时逐单落库,一笔订单=一个采购单)
@@ -1092,7 +1092,7 @@ function openPurchase(pkg) {
         goods: first.items || [],
         _platform: first.platform || 'other',
         _existing: true,
-        // 行级 link(2026-09-19):切 manual 模式时按行回填当前分摊金额,作为手改起点
+        // 行级 link:供 auto 分摊预览叠加已有采购的行分摊(勾新单时金额=已有分摊+新单加权)
         _links: links.map((l) => ({ itemId: l.ozonOrderItemId, allocatedAmount: Number(l.allocatedAmount) || 0 })),
       };
     });
@@ -1161,7 +1161,6 @@ function isValidMultiSelected(sn) {
 // 公式:每行金额 = 未删除已有采购的行分摊合计 + (该行 quantity / Σ auto 关联 quantity) × paymentAmount
 // Σ = 已关联 auto 包裹的数量合计 + 当前包裹各行的数量合计
 const autoPreview = computed(() => {
-  if (purchaseForm.allocMode !== 'auto') return null;
   const payment = Number(purchaseForm.paymentAmount) || 0;
   const currentQty = purchaseForm.items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
   // 已关联的 auto 模式包裹数量合计(manual 模式关联不参与加权)
@@ -1195,45 +1194,9 @@ const autoPreview = computed(() => {
   return { items, sumQty, payment, currentQty, existingAutoQty };
 });
 
-// 切换 allocMode 或输入 purchaseSn 时自动刷新 lookup
-watch(() => purchaseForm.allocMode, (mode) => {
-  if (mode === 'auto') refreshLookup();
-  else {
-    // 切到 manual:从已选采购订单合计(newSelectedTotal,不含已有采购恢复项)按数量加权分摊到各产品行
-    // 不依赖 paymentAmount(可能被 watch 链时序影响),直接用合计确保多选时用合计
-    const total = Number(newSelectedTotal.value) || 0;
-    const items = purchaseForm.items || [];
-    if (total <= 0) {
-      // 无新勾选订单:已有采购的分摊金额按行回填,作为手改起点(2026-09-19,
-      // 取消自动填写金额后手填保存 = 修改已有采购单的分摊金额,不再误建手工单)
-      const linkByItem = new Map();
-      for (const r of restoredPurchases.value) {
-        for (const l of r._links || []) {
-          linkByItem.set(l.itemId, (linkByItem.get(l.itemId) || 0) + l.allocatedAmount);
-        }
-      }
-      for (const it of items) {
-        if (linkByItem.has(it.itemId)) it.amount = String(Math.round(linkByItem.get(it.itemId) * 100) / 100);
-      }
-      return;
-    }
-    const sumQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
-    if (sumQty <= 0) return;
-    let allocated = 0;
-    for (let i = 0; i < items.length; i++) {
-      const q = Number(items[i].quantity) || 0;
-      if (i === items.length - 1) {
-        items[i].amount = (Math.round((total - allocated) * 100) / 100).toString();
-      } else {
-        const a = Math.round((total * q / sumQty) * 100) / 100;
-        items[i].amount = a.toString();
-        allocated += a;
-      }
-    }
-  }
-});
+// 输入 purchaseSn 时自动刷新 lookup(拼单检测)
 watch(() => purchaseForm.purchaseSn, () => {
-  if (purchaseForm.allocMode === 'auto') refreshLookup();
+  refreshLookup();
 });
 // auto 模式分摊预览变化时,把分摊值同步到 it.amount,确保切换到 manual 时保留已分摊数值
 watch(autoPreview, (pv) => {
@@ -1248,12 +1211,10 @@ watch(autoPreview, (pv) => {
 // 保存采购;withShip=true 为「保存并备货」:保存成功且可备货时立即向 Ozon 确认货件
 async function savePurchase(withShip = false) {
   if (purchaseSaving.value) return;
-  const isAuto = purchaseForm.allocMode === 'auto';
   const items = purchaseForm.items
     .map((it) => ({ itemId: it.itemId, amount: Number(it.amount) || 0, quantity: it.quantity }))
     .filter((it) => it.itemId);
-  // auto 模式:校验 paymentAmount;manual 模式:校验每行 amount
-  const hasAmount = isAuto ? Number(purchaseForm.paymentAmount) > 0 : items.some((it) => it.amount > 0);
+  const hasAmount = Number(purchaseForm.paymentAmount) > 0;
   const hasNo = !!purchaseForm.logisticsNo.trim();
   // 新勾选的平台订单也算有新采购(订单金额可能为 0)
   const hasNew = hasAmount || hasNo || newSelectedOrders.value.length > 0;
@@ -1308,34 +1269,7 @@ async function savePurchase(withShip = false) {
     show('采购单号一次只能填写一笔(检测到多个单号或分隔符)，多笔平台订单请在列表勾选后保存', 'error');
     return;
   }
-  // manual 模式 + 无单号 + 无新勾选 + 有已有采购 = 修改已有采购单的分摊金额(2026-09-19 语义重构)
-  // 取消「自动填写金额」后手填保存,意图是不用采购订单的平台金额、自己指定分摊金额——
-  // 直接更新已有 link 的 allocated_amount,不新增任何采购单
-  if (!isAuto && !sn && newSelectedOrders.value.length === 0 && remainingRestored.length > 0) {
-    const totalAmount = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
-    const oldAlloc = remainingRestored.reduce((s, r) => s + (Number(r.allocated) || 0), 0);
-    const pos = remainingRestored.map((r) => r.orderSn || '(手工单)').join('、');
-    const ok = await confirmStore.ask({
-      message: `将已有采购单 ${pos} 分摊到本包裹的金额修改为 ¥${totalAmount.toFixed(2)}(当前 ¥${oldAlloc.toFixed(2)})?\n不会新增采购单。`,
-      confirmText: '修改分摊金额',
-    });
-    if (!ok) return;
-    purchaseSaving.value = true;
-    try {
-      // 先冲回 ✕ 标记删除的已有采购(删除某单与改另一单分摊可并存)
-      for (const id of removedIds) await unlinkPurchase(id, purchaseForm.packageId);
-      const r = await updatePurchaseAlloc({ packageId: purchaseForm.packageId, items });
-      show(`已修改采购分摊金额(¥${(Number(r?.total) || totalAmount).toFixed(2)})`, 'success');
-      await afterPurchaseSaved(withShip);
-    } catch (err) {
-      show(err.message || String(err), 'error');
-    } finally {
-      purchaseSaving.value = false;
-    }
-    return;
-  }
   // 拼单检测:platform≠other 且 purchaseSn 非空时,查询采购单是否已关联其他包裹
-  // auto 模式下已有 lookupResult(manual 模式实时查询);多选时逐单查询合并
   const orders = purchaseForm.selectedOrders || [];
   if (purchaseForm.platform !== 'other' && sn) {
     try {
@@ -1349,7 +1283,7 @@ async function savePurchase(withShip = false) {
           .map((p) => `  · ${p.package_no} (${p.posting_number}) 数量${p.quantity||0} 分摊 ${fmtMoney(p.allocated_amount)}`)
           .join('\n');
         const ok = await confirmStore.ask({
-          message: `采购单 ${orders.length > 1 ? orders.length + ' 笔' : sn} 已关联 ${r.linkedPackages.length} 个包裹(分摊合计 ${fmtMoney(sum)}):\n${lines}\n\n本次将追加关联到当前包裹 ${purchaseForm.packageNo}${isAuto ? '(auto 模式:已关联包裹的分摊金额将按数量重新加权计算)' : ''}。`,
+          message: `采购单 ${orders.length > 1 ? orders.length + ' 笔' : sn} 已关联 ${r.linkedPackages.length} 个包裹(分摊合计 ${fmtMoney(sum)}):\n${lines}\n\n本次将追加关联到当前包裹 ${purchaseForm.packageNo}(auto 模式:已关联包裹的分摊金额将按数量重新加权计算)。`,
           confirmText: '追加关联',
           danger: true,
         });
@@ -1364,10 +1298,9 @@ async function savePurchase(withShip = false) {
   try {
     // 先冲回 ✕ 标记删除的已有采购,再提交新采购(顺序执行保证聚合正确)
     for (const id of removedIds) await unlinkPurchase(id, purchaseForm.packageId);
-    // 多笔平台订单:逐单提交(一笔订单=一个采购单,auto 由后端按数量加权重算各单分摊;
-    // manual 按各单金额占比拆分手填分摊)。单笔/手填走原单次提交。
+    // 多笔平台订单:逐单提交(一笔订单=一个采购单,auto 由后端按数量加权重算各单分摊)。
+    // 单笔/手填走原单次提交。订单金额可在已选区手动改(实际采购价格),分摊仍按数量加权。
     if (orders.length > 1) {
-      const totalAmount = orders.reduce((s, o) => s + (o.paymentAmount || 0), 0) || 1;
       for (const od of orders) {
         await submitPurchase({
           packageId: purchaseForm.packageId,
@@ -1380,11 +1313,9 @@ async function savePurchase(withShip = false) {
           logisticsCompany: od.logisticsCompany,
           logisticsNo: od.logisticsNo,
           note: purchaseForm.note.trim() || null,
-          items: isAuto
-            ? items
-            : items.map((it) => ({ ...it, amount: Math.round(((Number(it.amount) || 0) * ((od.paymentAmount || 0) / totalAmount)) * 100) / 100 })),
+          items,
           platformGoods: od.platformGoods,
-          allocMode: isAuto ? 'auto' : 'manual',
+          allocMode: 'auto',
         });
       }
       show(`已提交 ${orders.length} 笔采购,包裹已流转到待打单发货`, 'success');
@@ -1402,7 +1333,7 @@ async function savePurchase(withShip = false) {
         note: purchaseForm.note.trim() || null,
         items,
         platformGoods: purchaseForm.platformGoods,
-        allocMode: isAuto ? 'auto' : 'manual',
+        allocMode: 'auto',
       });
       show('采购信息已提交,包裹已流转到待打单发货', 'success');
     }
@@ -1588,8 +1519,10 @@ function normalizePddPromoOrder(o) {
   return n;
 }
 
-/** 按勾选状态重算订单有效金额:实付 + 勾选优惠合计(保留 2 位,与后端口径一致) */
+/** 按勾选状态重算订单有效金额:实付 + 勾选优惠合计(保留 2 位,与后端口径一致)
+ *  手动指定过采购价的订单不重算(以手改值为准) */
 function recalcPddAmount(src) {
+  if (src._amountManual) return;
   const base = Number(src.paidAmount ?? src.amount ?? 0) || 0;
   const add = (src.promotions || []).reduce((s, p) => s + (p.checked ? (Number(p.amount) || 0) : 0), 0);
   src.amount = (base + add).toFixed(2);
@@ -1944,17 +1877,16 @@ const profitTotal = computed(() => {
   };
 });
 
-// manual 模式直接录入"行分摊金额"(该 SKU 全部数量的采购总额,与 H5 端一致)
-function amountDisplay(idx) {
-  const it = purchaseForm.items[idx];
-  const amt = Number(it?.amount) || 0;
-  return amt ? amt.toFixed(2) : '';
-}
-function onAmountInput(idx, ev) {
-  const it = purchaseForm.items[idx];
-  if (!it) return;
-  const v = Number(String(ev.target.value).replace(/[^\d.]/g, '')) || 0;
-  it.amount = String(Math.round(v * 100) / 100);
+/** 手动指定某笔采购单的采购价格(2026-09-28 v3):回写源订单并打手动标记,
+ *  此后该笔的优惠勾选不再重算金额(以手改值为准);分摊仍走 auto 按数量加权。
+ *  自由输入不做格式强转(避免输入 "61." 被折回 "61"),提交时统一按 Number 解析 */
+function onOrderAmountInput(o, ev) {
+  const src = findSourceOrder(o._platform, o.orderSn);
+  const raw = String(ev.target.value).replace(/[^\d.]/g, '');
+  if (src) {
+    src._amountManual = true;
+    src.amount = raw;
+  }
 }
 
 // 单价调整折叠(默认收起,按 SKU 记忆展开状态)
@@ -3817,13 +3749,6 @@ onUnmounted(() => {
 
         <!-- 右列:订单信息(产品表) + 已选采购订单 -->
         <div class="purchase-col-right">
-        <!-- ① 最上方:订单产品(只读展示,采购金额从第②块同步显示上来) -->
-        <div v-if="!batchLinkMode" class="prod-title-row">
-          <label class="alloc-checkbox">
-            <input type="checkbox" :checked="purchaseForm.allocMode === 'auto'" @change="purchaseForm.allocMode = $event.target.checked ? 'auto' : 'manual'" />
-            <span>自动填写金额</span>
-          </label>
-        </div>
         <!-- 批量关联模式:目标包裹清单(已选采购订单将一次性挂到以下全部包裹;✕ 可移除) -->
         <div v-if="batchLinkMode" class="batch-targets">
           <div class="batch-targets-title">
@@ -3841,7 +3766,7 @@ onUnmounted(() => {
         </div>
         <!-- ① 订单产品 + 利润预估与调价(合并卡片:上=产品信息,下=调整对比;口径同价格管理单件) -->
         <div v-if="!batchLinkMode && profitRows.length" class="po-card-list">
-          <div v-for="(p, idx) in profitRows" :key="p.itemId" class="po-card">
+          <div v-for="p in profitRows" :key="p.itemId" class="po-card">
             <!-- 第一部分:产品信息(图片 + 名称/SKU/OfferID/数量/售价/采购价) -->
             <div class="po-card-info">
               <a v-if="p.picUrl" :href="p.pdpUrl" target="_blank" rel="noopener" class="po-card-img">
@@ -3862,15 +3787,7 @@ onUnmounted(() => {
                   <div class="pf-row"><span class="pf-label">售价</span><span class="pf-val">¥{{ (p.price * p.qty).toFixed(2) }}</span></div>
                   <div class="pf-row">
                     <span class="pf-label">采购价</span>
-                    <span v-if="purchaseForm.allocMode === 'auto'" class="pf-val">¥{{ p.alloc.toFixed(2) }}</span>
-                    <input
-                      v-else
-                      class="filter-input pf-cost-input"
-                      inputmode="decimal"
-                      :value="amountDisplay(idx)"
-                      placeholder="0.00"
-                      @input="onAmountInput(idx, $event)"
-                    />
+                    <span class="pf-val" title="分摊金额按数量加权自动计算(auto);整单采购价在下方已选订单区手动指定">¥{{ p.alloc.toFixed(2) }}</span>
                   </div>
                 </div>
               </div>
@@ -3973,7 +3890,18 @@ onUnmounted(() => {
                 </td>
                 <td class="mono">{{ o.orderSn || '(手工单)' }}</td>
                 <td>{{ o._existing ? '—' : (o._platform === 'yangkeduo' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—')) }}</td>
-                <td class="pdd-amount" :title="o._platform === 'yangkeduo' && (o.promotions || []).length ? `实付 ¥${o.paidAmount} + 勾选优惠` : ''">¥{{ o.amount }}</td>
+                <td class="pdd-amount">
+                  <!-- 新选单:金额可手改(实际采购价格;分摊仍按数量加权自动算);已有单只读 -->
+                  <input
+                    v-if="!o._existing"
+                    class="filter-input po-amt-edit"
+                    inputmode="decimal"
+                    :value="o.amount"
+                    :title="'默认=平台金额(实付+勾选优惠),可改为实际采购价格;各包裹/SKU 分摊仍按数量加权自动算' + (o._platform === 'yangkeduo' && (o.promotions || []).length ? `\n实付 ¥${o.paidAmount} + 勾选优惠` : '')"
+                    @input="onOrderAmountInput(o, $event)"
+                  />
+                  <span v-else>¥{{ o.amount }}</span>
+                </td>
                 <td>
                   <!-- 已有单:当前单号 + 录入/修改入口(闲鱼等无物流接口平台的独立补录操作,即时生效) -->
                   <template v-if="o._existing">
@@ -6011,6 +5939,12 @@ a.product-title:hover {
 .pdd-amount {
   color: #dc2626;
   font-weight: 700;
+}
+/* 已选订单区:采购单金额手改输入(实际采购价格;分摊仍按 auto 加权) */
+.po-amt-edit {
+  width: 86px;
+  text-align: right;
+  font-weight: 600;
 }
 
 .pdd-sn {
