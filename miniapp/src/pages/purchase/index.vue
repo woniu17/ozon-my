@@ -637,9 +637,9 @@ async function saveLogi(g) {
 const PM_COMMISSION_RATE = 0.16;
 const PM_DELIVERY_BASE_CNY = 3.37;
 const PM_DELIVERY_PER_G_CNY = 0.0281;
-const RATE_OPTIONS = [40, 50, 60, 70, 80, 90]; // 目标成本利润率(%)
+const RATE_OPTIONS = [50, 60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200]; // 目标成本利润率(%)
 const RATE_LABELS = RATE_OPTIONS.map((r) => r + '%');
-const DEFAULT_RATE = 50;
+const DEFAULT_RATE = 90;
 
 const skuPricing = ref({});   // sku → 定价信息(现价/重量/缓存命中)
 const poRates = reactive({}); // sku → 目标率(未选默认 50%)
