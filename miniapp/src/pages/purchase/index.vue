@@ -1,12 +1,21 @@
 <template>
-  <view class="page" v-if="pkg">
-    <!-- 顶部:包裹摘要 -->
+  <view class="page" v-if="pkg || batchMode">
+    <!-- 顶部:包裹摘要(单包裹) / 批量目标概览 -->
     <view class="card">
-      <view class="head-line">
-        <text class="store">{{ pkg.storeName }}</text>
-        <text class="posting">{{ pkg.postingNumber }}</text>
-      </view>
-      <view class="head-sub">{{ items.length }} 个商品行 · 采购合计 {{ fmtMoney(profitTotal.alloc) }}</view>
+      <template v-if="batchMode">
+        <view class="head-line">
+          <text class="store">批量录采购</text>
+          <text class="posting">{{ batchTargets.length }} 个目标包裹</text>
+        </view>
+        <view class="head-sub">勾选平台订单后一次性关联到全部目标包裹,分摊按各包裹商品数量自动加权</view>
+      </template>
+      <template v-else>
+        <view class="head-line">
+          <text class="store">{{ pkg.storeName }}</text>
+          <text class="posting">{{ pkg.postingNumber }}</text>
+        </view>
+        <view class="head-sub">{{ items.length }} 个商品行 · 采购合计 {{ fmtMoney(profitTotal.alloc) }}</view>
+      </template>
     </view>
 
     <!-- Step2:平台订单选择(从主视图「+ 从平台订单选择」进入) -->
@@ -43,7 +52,7 @@
           <view class="subtab refresh" @click="refreshOrders">刷新</view>
         </view>
 
-        <!-- 按单号精确搜索(跨账号) -->
+        <!-- 按单号精确搜索(跨账号);2026-09-28 聚焦模式:命中后只显示命中订单,✕ 清除恢复 -->
         <view class="imp-search">
           <input
             class="imp-search-input"
@@ -52,6 +61,7 @@
             confirm-type="search"
             @confirm="doSearch"
           />
+          <view v-if="curStore.searched.length" class="imp-search-clear" @click="clearSearch">✕</view>
         </view>
 
         <!-- 订单列表 -->
@@ -79,7 +89,16 @@
               {{ (o.goods && o.goods[0] && o.goods[0].goodsName) || '—' }}<text v-if="o.goods && o.goods.length > 1" class="po-more"> 等{{ o.goods.length }}件商品</text>
             </view>
             <view class="po-order-meta">
-              <text class="po-order-amt">¥{{ o.amount }}</text>
+              <!-- 已勾选单:金额可手改(实际采购价格;分摊仍按数量加权自动算);未勾选只读 -->
+              <input
+                v-if="curStore.selected.includes(o.orderSn) && !isRestoredLinked(o)"
+                class="po-amt-edit"
+                type="digit"
+                :value="o.amount"
+                @click.stop
+                @input="onOrderAmountInput(o, $event)"
+              />
+              <text v-else class="po-order-amt">¥{{ o.amount }}</text>
               <text class="po-order-time">{{ fmtOrderTime(o) }}</text>
             </view>
             <view class="po-order-sn">{{ o.orderSn }}<text v-if="o.trackingNumber"> · {{ o.trackingNumber }}</text></view>
@@ -119,15 +138,15 @@
           <text class="sel-count">已选 {{ selCount }} 单</text>
           <text class="sel-total">合计 ¥{{ newSelectedTotal }}</text>
         </view>
-        <button class="abtn ghost" @click="step = 'manage'">返回</button>
+        <button class="abtn ghost" @click="backFromSelect">返回</button>
         <button class="abtn primary" :disabled="!selCount" @click="goStep3">下一步</button>
       </view>
     </view>
 
-    <!-- Step3:分摊确认 + 提交 -->
+    <!-- Step3:分摊确认 + 提交(批量模式:目标包裹清单 + 批量关联) -->
     <view v-else-if="step === 'confirm'">
       <view class="card">
-        <view class="section-title">分摊确认</view>
+        <view class="section-title">{{ batchMode ? '批量关联确认' : '分摊确认' }}</view>
 
         <!-- 已选订单摘要 -->
         <view class="sum-box">
@@ -145,18 +164,20 @@
           </view>
         </view>
 
-        <!-- 分摊模式切换 -->
-        <view class="mode-switch">
-          <view class="mode-btn" :class="{ on: allocMode === 'auto' }" @click="switchAllocMode('auto')">
-            自动·按数量
+        <!-- 目标包裹(批量模式):已选采购订单将关联到以下全部包裹,可逐个移除 -->
+        <view v-if="batchMode" class="batch-targets">
+          <view class="bt-head">目标包裹 <b>{{ batchTargets.length }}</b> 个 · 分摊金额按各包裹商品数量自动加权</view>
+          <view v-for="t in batchTargets" :key="t.id" class="bt-row">
+            <text class="bt-store">{{ t.storeName }}</text>
+            <text class="bt-posting">{{ t.postingNumber }}</text>
+            <text class="bt-cnt">{{ (t.items || []).length }} 行</text>
+            <text class="bt-del" @click="removeBatchTarget(t)">✕</text>
           </view>
-          <view class="mode-btn" :class="{ on: allocMode === 'manual' }" @click="switchAllocMode('manual')">
-            手动指定
-          </view>
+          <view v-if="!batchTargets.length" class="bt-empty">已移除全部目标包裹,请返回上一页重新发起批量录采购</view>
         </view>
 
-        <!-- auto:只读加权预览 -->
-        <template v-if="allocMode === 'auto'">
+        <!-- auto 只读加权预览(2026-09-28 与 web 端同步:分摊恒按数量加权,手动改价在订单层) -->
+        <template v-if="!batchMode">
           <view class="tip">
             各产品行金额 = 已有采购分摊 + 新订单 ¥{{ newSelectedTotal }} 按数量加权分摊{{ autoPreview.existingAutoQty ? '(加权总数 ' + autoPreview.sumQty + ' 件 = 本包裹 ' + autoPreview.currentQty + ' + 已关联 ' + autoPreview.existingAutoQty + ')' : '' }}。
           </view>
@@ -170,41 +191,30 @@
             </view>
           </view>
         </template>
-
-        <!-- manual:手填各产品行金额(适用于优惠券/额外成本导致实际采购价与订单金额不符) -->
-        <template v-else>
-          <view v-for="(it, i) in manualItems" :key="i" class="alloc-row">
-            <image v-if="it.picUrl" class="alloc-img" :src="it.picUrl" mode="aspectFill" />
-            <view v-else class="alloc-img"></view>
-            <view class="alloc-main">
-              <view class="alloc-title">{{ it.title || '—' }}</view>
-              <view class="alloc-sub">SKU {{ it.sku || '—' }} ×{{ it.quantity }}</view>
-              <view class="alloc-input-wrap">
-                <text class="rmb">¥</text>
-                <input class="alloc-input" type="digit" v-model="it.amount" placeholder="0.00" />
-              </view>
-            </view>
-          </view>
-          <view class="alloc-sum">
-            合计:<text class="alloc-sum-num">¥{{ manualTotal.toFixed(2) }}</text>
-          </view>
-        </template>
+        <!-- 批量模式:分摊由后端按各包裹商品数量重算,无需逐行预览 -->
+        <view v-else class="tip">
+          各包裹的分摊金额由后端按其商品数量加权重算;已关联过的组合按当前金额更新,不会重复建关联、不会双算金额。
+        </view>
 
         <!-- 预估利润合计(本次分摊口径;提交后可在采购管理卡中按 SKU 一键调价) -->
-        <view class="pe-preview">
+        <view v-if="!batchMode" class="pe-preview">
           预估利润 <b :class="{ neg: step3Profit.profit < 0 }">¥{{ step3Profit.profit.toFixed(2) }}</b>
           <text class="pe-preview-sub">按分摊 ¥{{ step3Profit.alloc.toFixed(2) }} 估算{{ step3Profit.allWeighted ? '' : ',部分行未扣配送' }}</text>
         </view>
 
         <!-- 国内快递单号(选填,预填平台单号) -->
-        <view class="field">
+        <view v-if="!batchMode" class="field">
           <text class="field-label">国内快递单号(选填)</text>
           <input class="field-input" v-model="logisticsInput" placeholder="多个用英文逗号分隔,留空待同步补全" />
         </view>
       </view>
       <view class="action-bar">
-        <button class="abtn ghost" @click="step = 'manage'">返回</button>
-        <button class="abtn primary" @click="collectAdd">确认</button>
+        <button class="abtn ghost" @click="backFromConfirm">返回</button>
+        <button
+          class="abtn primary"
+          :disabled="saving || (batchMode && !batchTargets.length)"
+          @click="collectAdd"
+        >{{ batchMode ? '关联 ' + batchTargets.length + ' 个包裹' : '确认' }}</button>
       </view>
     </view>
 
@@ -213,12 +223,6 @@
       <view class="card">
         <view class="section-head">
           <view class="section-title">已有采购({{ groups.length }})</view>
-          <button
-            v-if="keptGroups.length"
-            class="mini-btn"
-            :disabled="!!pendingAdd"
-            @click="openAllocEdit"
-          >改分摊</button>
         </view>
         <view v-if="!groups.length && !pendingAdd" class="muted-line">尚无采购关联,可从平台订单选择新增</view>
         <view
@@ -288,43 +292,6 @@
           </view>
         </view>
 
-        <!-- 改分摊面板(卡片内展开,交互同物流录入面板;确认后暂存,随底部「保存」落地) -->
-        <view v-if="allocEdit.open" class="alloc-edit">
-          <view class="tip">手动指定各产品行的采购分摊金额(优惠券/额外成本等实际采购价与订单金额不符时使用),不会新增采购单。</view>
-          <view v-for="r in allocEdit.rows" :key="r.itemId" class="alloc-row">
-            <image v-if="r.picUrl" class="alloc-img" :src="r.picUrl" mode="aspectFill" />
-            <view v-else class="alloc-img"></view>
-            <view class="alloc-main">
-              <view class="alloc-title">{{ r.title || '—' }}</view>
-              <view class="alloc-sub">SKU {{ r.sku || '—' }} ×{{ r.quantity }}</view>
-              <view class="alloc-input-wrap">
-                <text class="rmb">¥</text>
-                <input class="alloc-input" type="digit" v-model="r.amount" placeholder="0.00" />
-              </view>
-            </view>
-          </view>
-          <view class="alloc-sum">
-            合计:<text class="alloc-sum-num">¥{{ allocEditTotal.toFixed(2) }}</text>
-          </view>
-          <view class="logi-actions">
-            <button class="mini-btn" @click="allocEdit.open = false">取消</button>
-            <button class="mini-btn primary" @click="confirmAllocEdit">确认修改</button>
-          </view>
-        </view>
-      </view>
-
-      <!-- 待修改分摊(改分摊确认后暂存,保存时落地) -->
-      <view v-if="pendingAlloc" class="card">
-        <view class="section-title">待修改分摊</view>
-        <view class="po pending-add">
-          <view class="po-meta">
-            <text class="po-amt">合计 ¥{{ pendingAlloc.total.toFixed(2) }}</text>
-            <text class="po-meta-item">{{ pendingAlloc.items.length }} 个产品行分摊将更新,保存后生效</text>
-          </view>
-          <view class="po-actions">
-            <button class="mini-btn danger" @click="pendingAlloc = null">撤销</button>
-          </view>
-        </view>
       </view>
 
       <!-- 订单产品 + 单价调整(合并卡片,与 Web 端同布局:上=产品信息,下=折叠的调整对比;分摊=将保存口径) -->
@@ -415,7 +382,7 @@
           </view>
           <view class="po-meta">
             <text class="po-amt" v-if="pendingAdd.orders.length > 1">合计 ¥{{ Number(pendingAdd.body.paymentAmount || 0).toFixed(2) }}</text>
-            <text class="po-meta-item">{{ pendingAdd.orders.length > 1 ? pendingAdd.orders.length + ' 笔 · ' : '' }}{{ pendingAdd.body.allocMode === 'auto' ? '自动 · 按数量分摊' : '手动指定价格' }}</text>
+            <text class="po-meta-item">{{ pendingAdd.orders.length > 1 ? pendingAdd.orders.length + ' 笔 · ' : '' }}自动 · 按数量分摊</text>
           </view>
           <view class="po-actions">
             <button class="mini-btn danger" @click="discardAdd">移除</button>
@@ -425,7 +392,7 @@
 
       <view class="card">
         <view class="add-entry" @click="enterSelect">+ 从平台订单选择</view>
-        <view class="tip-inline">手动指定价格:采购用了优惠券或有其他成本、实际采购价与平台订单金额不符时使用。</view>
+        <view class="tip-inline">订单金额可手改:勾选订单后直接改金额(实际采购价与平台金额不符时用),各包裹/SKU 分摊仍按数量自动加权。</view>
       </view>
 
       <view class="action-bar">
@@ -452,7 +419,6 @@ import {
   unlinkPurchase,
   clearPurchaseInfo,
   submitPurchase,
-  updatePurchaseAlloc,
   lookupPurchase,
   updatePurchaseLogistics,
   shipPackage,
@@ -473,13 +439,49 @@ const saving = ref(false);
 // 暂存变更(统一保存落地,2026-09-19):
 //   pendingRemoves: 标记删除的已有采购单 purchaseOrderId
 //   pendingAdd: Step3 确认的新增采购(存 submitPurchase body + 拼单 lookup 结果)
-//   pendingAlloc: 待修改的产品行分摊(改已有采购分摊,不新增采购单;2026-09-22)
 const pendingRemoves = ref([]);
 const pendingAdd = ref(null);
-const pendingAlloc = ref(null);
 const dirty = computed(
-  () => pendingRemoves.value.length > 0 || !!pendingAdd.value || !!pendingAlloc.value
+  () => pendingRemoves.value.length > 0 || !!pendingAdd.value
 );
+
+// ════════════════════════════════════════════════════════════
+// 批量录采购(2026-09-28 与 web 端 saveBatchLink 同步):
+// orders 列表勾选多个包裹进入,选好采购订单后一次性关联到全部目标包裹
+// ════════════════════════════════════════════════════════════
+const batchMode = ref(false);
+const batchTargets = ref([]); // {id, storeName, postingNumber, items}
+// 逐个拉取目标包裹详情(商品行用于后端 auto 加权重算)
+async function loadBatchTargets(ids) {
+  for (const id of ids) {
+    try {
+      const d = await getOrderDetail(id);
+      batchTargets.value.push({
+        id,
+        storeName: d?.package?.storeName || '',
+        postingNumber: d?.package?.postingNumber || '',
+        items: d?.items || [],
+      });
+    } catch (e) { /* 单个拉取失败跳过,不影响其余目标 */ }
+  }
+  if (!batchTargets.value.length) {
+    uni.showToast({ title: '目标包裹加载失败', icon: 'none' });
+    setTimeout(() => uni.navigateBack(), 800);
+  }
+}
+function removeBatchTarget(t) {
+  batchTargets.value = batchTargets.value.filter((x) => x.id !== t.id);
+}
+// select step 返回:批量模式退回列表页,单包裹回管理视图
+function backFromSelect() {
+  if (batchMode.value) uni.navigateBack();
+  else step.value = 'manage';
+}
+// confirm step 返回:批量模式回选单,单包裹回管理视图
+function backFromConfirm() {
+  if (batchMode.value) step.value = 'select';
+  else step.value = 'manage';
+}
 
 // ── 标签映射(与详情页/ web 端同步)────────────────────────
 const PLATFORM_LABELS = {
@@ -531,59 +533,6 @@ const groups = computed(() => {
     };
   });
 });
-
-// ════════════════════════════════════════════════════════════
-// 改分摊(2026-09-22,口径同 web 端 manual+无新单号=updatePurchaseAlloc):
-// 手动指定各产品行分摊金额(优惠券/额外成本等实际采购价与订单金额不符时使用),
-// 不新增采购单,只更新已有 link 的 allocated_amount;暂存后随「保存」统一落地
-// ════════════════════════════════════════════════════════════
-// 保留(未标记删除)的已有采购单
-const keptGroups = computed(() =>
-  groups.value.filter((g) => !pendingRemoves.value.includes(g.purchaseOrderId))
-);
-// 保留采购的行分摊合计:itemId → ¥(改分摊面板预填值,勿读 profitAlloc 避免反馈循环)
-function keptAllocByItem() {
-  const kept = new Map();
-  for (const l of links.value) {
-    if (pendingRemoves.value.includes(l.purchaseOrderId)) continue;
-    kept.set(l.ozonOrderItemId, (kept.get(l.ozonOrderItemId) || 0) + (Number(l.allocatedAmount) || 0));
-  }
-  return kept;
-}
-// 改分摊编辑面板(卡片内展开,交互同物流录入面板)
-const allocEdit = reactive({ open: false, rows: [] });
-const allocEditTotal = computed(() =>
-  Math.round(allocEdit.rows.reduce((s, r) => s + (Number(r.amount) || 0), 0) * 100) / 100
-);
-function openAllocEdit() {
-  if (pendingAdd.value) {
-    uni.showToast({ title: '请先保存待新增采购,再修改分摊', icon: 'none' });
-    return;
-  }
-  const kept = keptAllocByItem();
-  allocEdit.rows = items.value.map((it) => ({
-    itemId: it.id,
-    title: it.title,
-    sku: it.sku,
-    picUrl: it.picUrl,
-    quantity: it.quantity,
-    amount: String(Math.round((kept.get(it.id) || 0) * 100) / 100),
-  }));
-  allocEdit.open = true;
-}
-function confirmAllocEdit() {
-  const rows = allocEdit.rows.map((r) => ({ itemId: r.itemId, amount: Number(r.amount) || 0 }));
-  if (!rows.some((r) => r.amount > 0)) {
-    uni.showToast({ title: '请至少填写一行分摊金额', icon: 'none' });
-    return;
-  }
-  pendingAlloc.value = {
-    items: rows,
-    total: Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100) / 100,
-  };
-  allocEdit.open = false;
-  uni.showToast({ title: '已暂存,请点击保存落地', icon: 'none' });
-}
 
 // ── 数据加载 ────────────────────────────────────────────────
 async function loadDetail() {
@@ -708,16 +657,11 @@ function calcProfit(it, alloc) {
 
 // manage 视图:每行有效分摊(与将保存口径一致)
 // 有 pendingAdd(待新增采购暂存)时直接用其分摊值——auto 模式下它已是"未删除已有 + 新增加权"的行总额;
-// 有 pendingAlloc(待修改分摊)时用其行金额(改分摊与新增互斥,不会同时存在);
 // 否则 = 未删除已有采购的行分摊合计
 const profitRows = computed(() => {
   const keptByItem = new Map();
   if (pendingAdd.value) {
     for (const it of pendingAdd.value.body.items || []) {
-      keptByItem.set(it.itemId, (keptByItem.get(it.itemId) || 0) + (Number(it.amount) || 0));
-    }
-  } else if (pendingAlloc.value) {
-    for (const it of pendingAlloc.value.items) {
       keptByItem.set(it.itemId, (keptByItem.get(it.itemId) || 0) + (Number(it.amount) || 0));
     }
   } else {
@@ -778,9 +722,9 @@ const profitTotal = computed(() => {
 const cmpExpanded = reactive({});
 function toggleCmp(sku) { cmpExpanded[sku] = !cmpExpanded[sku]; }
 
-// Step3 预览:按将保存的分摊(auto 预览/manual 手输)估合计利润
+// Step3 预览:按将保存的分摊(auto 加权预览)估合计利润
 const step3Profit = computed(() => {
-  const rows = allocMode.value === 'auto' ? autoPreview.value.rows : manualItems.value;
+  const rows = autoPreview.value.rows;
   let profit = 0;
   let allocSum = 0;
   let allWeighted = true;
@@ -892,14 +836,24 @@ function isRestoredLinked(o) {
   return restoredSnKeys.value.has(plat + ':' + o.orderSn);
 }
 
-// 当前 tab 订单(搜索命中置顶去重;注入 _platform 入库平台值)
+// 当前 tab 订单(2026-09-28 搜索聚焦:有命中时只显示命中订单,✕ 清除恢复完整列表;注入 _platform)
 const impOrders = computed(() => {
   const st = curStore.value;
   const plat = PLATFORM_TAB_META[curTabDef.value?.platform]?.platformVal || '';
-  const inList = new Set(st.orders.map((o) => o.orderSn));
   const wrap = (o) => (o._platform === plat ? o : { ...o, _platform: plat });
-  return [...st.searched.filter((o) => !inList.has(o.orderSn)).map(wrap), ...st.orders.map(wrap)];
+  if (st.searched.length) {
+    const bySn = new Map(st.orders.map((o) => [o.orderSn, o]));
+    return st.searched.map((o) => wrap(bySn.get(o.orderSn) || o));
+  }
+  return st.orders.map(wrap);
 });
+
+// 清除搜索聚焦,恢复完整订单列表
+function clearSearch() {
+  const st = curStore.value;
+  if (st) st.searched = [];
+  searchKeyword.value = '';
+}
 
 // 跨平台×账号合并的新勾选订单(排除已关联单);提交时只入库新增部分
 const newSelectedOrders = computed(() => {
@@ -997,8 +951,9 @@ function normalizePddPromoOrder(o) {
   return n;
 }
 
-/** 按勾选状态重算订单有效金额:实付 + 勾选优惠合计 */
+/** 按勾选状态重算订单有效金额:实付 + 勾选优惠合计(手动指定过采购价的订单不重算,以手改值为准) */
 function recalcPddAmount(src) {
+  if (src._amountManual) return;
   const base = Number(src.paidAmount ?? src.amount ?? 0) || 0;
   const add = (src.promotions || []).reduce((s, p) => s + (p.checked ? (Number(p.amount) || 0) : 0), 0);
   src.amount = (base + add).toFixed(2);
@@ -1014,6 +969,18 @@ function findSourceOrder(platformVal, orderSn) {
     if (src) return src;
   }
   return null;
+}
+
+/** 手动指定某笔采购单的采购价格(2026-09-28,与 web 端同步):回写源订单并打手动标记,
+ *  此后该笔的优惠勾选不再重算金额(以手改值为准);分摊仍走 auto 按数量加权。
+ *  自由输入不做格式强转(避免输入 "61." 被折回 "61"),提交时统一按 Number 解析 */
+function onOrderAmountInput(o, ev) {
+  const src = findSourceOrder(o._platform, o.orderSn);
+  const raw = String(ev.detail.value).replace(/[^\d.]/g, '');
+  if (src) {
+    src._amountManual = true;
+    src.amount = raw;
+  }
 }
 
 /** 优惠条目点击切换勾选(拷贝与源单共享 promotions 对象):翻转勾选后重算源单金额
@@ -1054,6 +1021,12 @@ async function ensurePromoDetail(o) {
 
 function enterSelect() {
   step.value = 'select';
+  // 每次进入选单重置搜索聚焦(对齐 web 打开弹窗重置),从完整列表开始
+  for (const t of platTabs.value) {
+    const st = stores[t.key];
+    if (st) st.searched = [];
+  }
+  searchKeyword.value = '';
   if (!activeTabKey.value) activeTabKey.value = platTabs.value[0]?.key || '';
   if (!Object.keys(platLogin).length) loadPlatformStatus();
   const st = storeFor(activeTabKey.value);
@@ -1129,18 +1102,12 @@ function fmtOrderTime(o) {
 // ════════════════════════════════════════════════════════════
 // Step3:分摊确认 + 提交(与 web 端 savePurchase 语义对齐,5893fbf)
 // ════════════════════════════════════════════════════════════
-const allocMode = ref('auto'); // 'auto' 按数量加权 | 'manual' 手动指定
-const manualItems = ref([]); // manual 模式各产品行金额(切模式时按数量加权预填)
 const lookupResult = ref(null); // 拼单查询结果(单单有效;多单拼接查询查不到则忽略)
 const logisticsInput = ref(''); // 国内快递单号(选填,预填平台单号)
 
 const step3Sel = computed(() => newSelectedOrders.value);
 const step3Sn = computed(() => step3Sel.value.map((o) => o.orderSn).join(','));
 const step3Platform = computed(() => step3Sel.value[0]?._platform || 'other');
-
-const manualTotal = computed(() =>
-  manualItems.value.reduce((s, it) => s + (Number(it.amount) || 0), 0)
-);
 
 // auto 模式加权预览(与 web 端 autoPreview 同构)
 // 公式:每行金额 = 未删除已有采购的行分摊合计 + (该行 quantity / Σauto 关联 quantity) × 订单合计
@@ -1174,41 +1141,12 @@ const autoPreview = computed(() => {
   return { rows, sumQty, payment, currentQty, existingAutoQty };
 });
 
-function switchAllocMode(m) {
-  if (allocMode.value === m) return;
-  allocMode.value = m;
-  if (m === 'manual') {
-    // 从订单合计按数量加权预填(最后一行兜底差额,与 web 端切模式逻辑一致)
-    const total = Number(newSelectedTotal.value) || 0;
-    const list = items.value;
-    const sumQty = list.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
-    let allocated = 0;
-    manualItems.value = list.map((it, i) => {
-      let a;
-      if (i === list.length - 1) a = Math.round((total - allocated) * 100) / 100;
-      else {
-        a = sumQty ? Math.round(((total * (Number(it.quantity) || 0)) / sumQty) * 100) / 100 : 0;
-        allocated += a;
-      }
-      return {
-        itemId: it.id,
-        title: it.title,
-        sku: it.sku,
-        picUrl: it.picUrl,
-        quantity: it.quantity,
-        amount: String(a),
-      };
-    });
-  }
-}
-
-// 进入 Step3:重置状态 + 预填快递单号 + 拼单探测
+// 进入 Step3:重置状态 + 预填快递单号 + 拼单探测(批量模式无单包裹 lookup)
 async function goStep3() {
   if (!selCount.value) return;
   step.value = 'confirm';
-  allocMode.value = 'auto';
-  manualItems.value = [];
   lookupResult.value = null;
+  if (batchMode.value) return;
   const tracks = [...new Set(step3Sel.value.map((o) => o.trackingNumber).filter(Boolean))];
   logisticsInput.value = tracks.join(',');
   const sn = step3Sn.value;
@@ -1226,23 +1164,22 @@ async function goStep3() {
 // Step3 确认 → 暂存新增采购(不落库,回主视图统一保存)
 // ════════════════════════════════════════════════════════════
 function collectAdd() {
-  const isAuto = allocMode.value === 'auto';
   const sel = step3Sel.value;
   if (!sel.length) return;
-  // 产品行分摊:auto 用加权预览值,manual 用手填值
-  const itemsArg = (isAuto ? autoPreview.value.rows : manualItems.value).map((it) => ({
-    itemId: it.itemId,
-    amount: Number(it.amount ?? it.previewAmount) || 0,
-    quantity: it.quantity,
-  }));
-  if (!isAuto && !itemsArg.some((it) => it.amount > 0)) {
-    uni.showToast({ title: '请至少填写一行分摊金额', icon: 'none' });
+  // 批量模式:直接执行批量关联(无暂存,逐单提交后返回列表页)
+  if (batchMode.value) {
+    saveBatchLink(sel);
     return;
   }
+  // 产品行分摊:恒 auto 加权预览(手动改价在订单层,分摊按数量自动加权)
+  const itemsArg = autoPreview.value.rows.map((it) => ({
+    itemId: it.itemId,
+    amount: Number(it.previewAmount) || 0,
+    quantity: it.quantity,
+  }));
   // 每笔平台订单独立提交体(2026-09-20 修复:多选曾把单号 join(',') 拼成一个采购单提交,
   // 产生"单号A,单号B"拼接 purchase_sn,物流同步/单号查找全部失效;现改为保存时逐单落库,
   // 一笔平台订单=一个采购单,auto 模式由后端按数量加权重算各单分摊)
-  const manualTotal = sel.reduce((s, o) => s + (Number(o.amount) || 0), 0) || 1;
   const orders = sel.map((o) => ({
     purchaseSn: o.orderSn,
     buyerAccount: o.account || o._account || o.buyerUsername || null,
@@ -1253,10 +1190,8 @@ function collectAdd() {
     // 单笔:保留可编辑的物流输入框值;多笔:各单用自己的快递单号
     logisticsNo: sel.length === 1 ? (logisticsInput.value.trim() || o.trackingNumber || null) : (o.trackingNumber || null),
     platformGoods: o.goods || [],
-    // manual 模式:手填分摊按各单金额占比拆分;auto 模式金额为占位,后端按数量加权重算
-    items: isAuto
-      ? itemsArg
-      : itemsArg.map((it) => ({ ...it, amount: Math.round(((Number(it.amount) || 0) * ((Number(o.amount) || 0) / manualTotal)) * 100) / 100 })),
+    // auto 模式金额为占位,后端按数量加权重算
+    items: itemsArg,
   }));
   pendingAdd.value = {
     lookup: lookupResult.value,
@@ -1269,7 +1204,7 @@ function collectAdd() {
       logisticsNo: logisticsInput.value.trim() || null,
       note: null,
       items: itemsArg,
-      allocMode: isAuto ? 'auto' : 'manual',
+      allocMode: 'auto',
     },
     orders,
   };
@@ -1285,6 +1220,74 @@ function collectAdd() {
 // 移除暂存的新增
 function discardAdd() {
   pendingAdd.value = null;
+}
+
+// ════════════════════════════════════════════════════════════
+// 批量关联保存(2026-09-28,与 web 端 saveBatchLink 同步):
+// 已选采购订单逐单挂到每个目标包裹(固定 auto 模式,后端按各包裹商品数量加权重算分摊;
+// 后端幂等:重复提交=按当前金额更新并重新加权,不重复建关联、不双算金额)
+// ════════════════════════════════════════════════════════════
+async function saveBatchLink(sel) {
+  if (saving.value) return;
+  const targets = batchTargets.value;
+  if (!targets.length) {
+    uni.showToast({ title: '请至少保留一个目标包裹', icon: 'none' });
+    return;
+  }
+  // 逐单查询已关联包裹:拼单确认提示
+  const linkedLines = [];
+  for (const od of sel) {
+    try {
+      const r = await lookupPurchase(od._platform, od.orderSn);
+      for (const p of r?.linkedPackages || []) {
+        linkedLines.push('  · ' + p.package_no + ' (' + p.posting_number + ') 数量' + (p.quantity || 0) + ' 分摊 ' + fmtMoney(p.allocated_amount));
+      }
+    } catch (e) { /* lookup 失败不阻塞提交 */ }
+  }
+  if (linkedLines.length) {
+    const confirmed = await new Promise((resolve) => {
+      uni.showModal({
+        title: '已关联提示',
+        content:
+          '以下采购订单已关联过包裹:\n' + linkedLines.join('\n') + '\n\n本次将把 ' + sel.length + ' 笔采购订单关联到 ' + targets.length + ' 个目标包裹;其中已关联过的组合按当前金额更新,全部包裹的分摊金额将按数量重新加权计算。确认继续?',
+        confirmText: '关联/更新',
+        success: (res) => resolve(!!res.confirm),
+      });
+    });
+    if (!confirmed) return;
+  }
+  saving.value = true;
+  try {
+    for (const t of targets) {
+      const its = (t.items || [])
+        .map((it) => ({ itemId: it.id, amount: 0, quantity: it.quantity }))
+        .filter((it) => it.itemId);
+      for (const od of sel) {
+        await submitPurchase({
+          packageId: t.id,
+          platform: od._platform,
+          purchaseSn: od.orderSn,
+          buyerAccount: od.account || od._account || od.buyerUsername || null,
+          buyerUserId: od.buyerUserId || null,
+          sellerName: od.mallName || od.sellerName || null,
+          paymentAmount: Number(od.amount) || 0,
+          logisticsCompany: od.logisticsCompany || null,
+          logisticsNo: od.trackingNumber || null,
+          note: null,
+          items: its,
+          platformGoods: od.goods || [],
+          allocMode: 'auto',
+        });
+      }
+    }
+    uni.showToast({ title: '已关联 ' + sel.length + ' 笔采购到 ' + targets.length + ' 个包裹(分摊按数量加权)', icon: 'none' });
+    notifyRefresh();
+    setTimeout(() => uni.navigateBack(), 800);
+  } catch (e) {
+    /* 错误 toast 已由 request.js 统一弹出;后端幂等,中断后可直接重试 */
+  } finally {
+    saving.value = false;
+  }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1315,8 +1318,7 @@ async function doSave(withShip = false) {
           uni.showModal({
             title: '拼单提示',
             content:
-              '本次 ' + add.orders.length + ' 笔采购单中有 ' + linkedCount + ' 笔已关联包裹(合计 ' + firstLinked.length + ' 个包裹),本次将追加关联到本包裹' +
-              (add.body.allocMode === 'auto' ? '(auto 模式:已关联包裹分摊金额将按数量重新加权)' : '') + '。是否继续?',
+              '本次 ' + add.orders.length + ' 笔采购单中有 ' + linkedCount + ' 笔已关联包裹(合计 ' + firstLinked.length + ' 个包裹),本次将追加关联到本包裹(auto 模式:已关联包裹分摊金额将按数量重新加权)。是否继续?',
             confirmText: '追加关联',
             success: (res) => resolve(!!res.confirm),
           });
@@ -1340,23 +1342,14 @@ async function doSave(withShip = false) {
       groups.value.length > 0 &&
       groups.value.every((g) => pendingRemoves.value.includes(g.purchaseOrderId));
     if (allRemoved && !add) await clearPurchaseInfo(packageId.value);
-    // 2) 改分摊落地(先冲回已删单,再整体更新保留 link 的行分摊;全删场景无保留单,跳过)
-    let allocUpdated = false;
-    if (pendingAlloc.value && !allRemoved) {
-      await updatePurchaseAlloc({ packageId: packageId.value, items: pendingAlloc.value.items });
-      allocUpdated = true;
-    }
-    // 3) 新增采购落地:逐笔平台订单分别提交(一笔订单=一个采购单,杜绝单号拼接)
+    // 2) 新增采购落地:逐笔平台订单分别提交(一笔订单=一个采购单,杜绝单号拼接)
     if (add && add.orders?.length) {
       for (const od of add.orders) {
         await submitPurchase({ ...add.body, ...od, purchaseSn: od.purchaseSn });
       }
     }
     uni.showToast({
-      title: [
-        allocUpdated ? '分摊已修改' : '',
-        add?.orders?.length > 1 ? '已保存 ' + add.orders.length + ' 笔采购' : add ? '采购已保存' : '',
-      ].filter(Boolean).join(' · ') || '已保存',
+      title: add?.orders?.length > 1 ? '已保存 ' + add.orders.length + ' 笔采购' : add ? '采购已保存' : '已保存',
       icon: 'none',
     });
     // 保存并备货:保存成功后向 Ozon 确认货件(多件二次确认,单件直接备货)
@@ -1416,6 +1409,14 @@ async function shipAfterSave() {
 }
 
 onLoad((opts) => {
+  // 批量录采购:orders 列表勾选多个包裹进入(ids 逗号分隔),直接进选单 step
+  const ids = String((opts && opts.ids) || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (opts && opts.batch && ids.length) {
+    batchMode.value = true;
+    loadBatchTargets(ids);
+    enterSelect();
+    return;
+  }
   packageId.value = String((opts && opts.id) || '');
   // 默认停留管理视图(已有采购直接展示);平台 tabs/登录态在首次进入选择视图时初始化
   loadDetail();
@@ -1481,13 +1482,6 @@ onLoad((opts) => {
 .section-head + .muted-line,
 .section-head + .po {
   margin-top: 16rpx;
-}
-
-/* 改分摊面板(已有采购卡片内展开) */
-.alloc-edit {
-  margin-top: 16rpx;
-  padding-top: 16rpx;
-  border-top: 1rpx solid #f2f3f5;
 }
 
 /* 删除标记态(暂存,保存落地前灰化提示) */
@@ -1577,45 +1571,6 @@ onLoad((opts) => {
   margin-top: 4rpx;
   font-size: 22rpx;
   color: #86909c;
-}
-
-.alloc-input-wrap {
-  margin-top: 12rpx;
-  display: flex;
-  align-items: center;
-  border: 1rpx solid #e5e6eb;
-  border-radius: 10rpx;
-  padding: 0 16rpx;
-  height: 68rpx;
-  background: #ffffff;
-}
-
-.rmb {
-  font-size: 22rpx;
-  color: #a6abb3;
-  margin-right: 8rpx;
-}
-
-.alloc-input {
-  flex: 1;
-  font-size: 28rpx;
-  color: #1f2329;
-  height: 68rpx;
-  line-height: 68rpx;
-  text-align: right;
-}
-
-.alloc-sum {
-  margin-top: 16rpx;
-  text-align: right;
-  font-size: 25rpx;
-  color: #4e5969;
-}
-
-.alloc-sum-num {
-  font-size: 30rpx;
-  font-weight: 600;
-  color: #1f2329;
 }
 
 /* ── 利润预估与调价(Step3 预览 + 采购管理卡) ── */
@@ -2109,6 +2064,7 @@ onLoad((opts) => {
 
 .imp-search {
   margin-bottom: 8rpx;
+  position: relative;
 }
 
 .imp-search-input {
@@ -2116,8 +2072,24 @@ onLoad((opts) => {
   border-radius: 12rpx;
   height: 68rpx;
   line-height: 68rpx;
-  padding: 0 24rpx;
+  padding: 0 64rpx 0 24rpx;
   font-size: 25rpx;
+}
+
+/* 搜索聚焦清除按钮(有命中时显示) */
+.imp-search-clear {
+  position: absolute;
+  right: 16rpx;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36rpx;
+  height: 36rpx;
+  line-height: 36rpx;
+  text-align: center;
+  border-radius: 50%;
+  background: #c9cdd4;
+  color: #fff;
+  font-size: 20rpx;
 }
 
 .pad {
@@ -2194,6 +2166,21 @@ onLoad((opts) => {
   font-size: 24rpx;
   color: #f53f3f;
   margin-right: 16rpx;
+}
+
+/* 已勾选单:采购单金额手改输入(实际采购价格;分摊仍按 auto 加权) */
+.po-amt-edit {
+  width: 150rpx;
+  height: 44rpx;
+  line-height: 44rpx;
+  border: 1rpx solid #e5e6eb;
+  border-radius: 8rpx;
+  padding: 0 10rpx;
+  margin-right: 16rpx;
+  font-size: 24rpx;
+  color: #f53f3f;
+  font-weight: 600;
+  background: #fff;
 }
 
 .po-order-time {
@@ -2351,28 +2338,66 @@ onLoad((opts) => {
   line-height: 1.5;
 }
 
-.mode-switch {
-  display: flex;
-  background: #f2f3f5;
-  border-radius: 14rpx;
-  padding: 6rpx;
-  margin-bottom: 20rpx;
+/* 目标包裹清单(批量录采购,Step3 内) */
+.batch-targets {
+  margin-top: 16rpx;
+  border-top: 1rpx dashed #e5e6eb;
+  padding-top: 16rpx;
 }
 
-.mode-btn {
-  flex: 1;
-  text-align: center;
-  font-size: 25rpx;
+.bt-head {
+  font-size: 23rpx;
   color: #4e5969;
-  padding: 14rpx 0;
-  border-radius: 10rpx;
+  margin-bottom: 10rpx;
 }
 
-.mode-btn.on {
-  background: #ffffff;
+.bt-head b {
   color: #165dff;
-  font-weight: 600;
-  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.08);
+}
+
+.bt-row {
+  display: flex;
+  align-items: center;
+  padding: 10rpx 12rpx;
+  background: #f7f8fa;
+  border-radius: 10rpx;
+  margin-bottom: 8rpx;
+  font-size: 22rpx;
+}
+
+.bt-store {
+  color: #165dff;
+  margin-right: 12rpx;
+  flex-shrink: 0;
+}
+
+.bt-posting {
+  font-family: 'Courier New', monospace;
+  color: #1f2329;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bt-cnt {
+  color: #86909c;
+  font-size: 21rpx;
+  margin-right: 12rpx;
+  flex-shrink: 0;
+}
+
+.bt-del {
+  color: #f53f3f;
+  font-size: 26rpx;
+  padding: 0 8rpx;
+  flex-shrink: 0;
+}
+
+.bt-empty {
+  font-size: 22rpx;
+  color: #f53f3f;
+  padding: 8rpx 0;
 }
 
 .alloc-amount {

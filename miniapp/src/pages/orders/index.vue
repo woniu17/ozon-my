@@ -45,12 +45,24 @@
         </picker>
         <text class="sort-hint">揽收=国际物流商揽收,无此时间排最后</text>
       </view>
+
+      <!-- 批量录采购(2026-09-28 与 web 端同步):勾选包裹后进入批量关联页 -->
+      <view class="batch-bar">
+        <view class="batch-chk" @click="toggleSelAll">
+          <text>{{ allRowsChecked ? '☑' : '☐' }}</text>
+          <text>全选本页</text>
+        </view>
+        <button class="batch-btn" :disabled="!batchCount" @click="goBatchPurchase">
+          批量录采购{{ batchCount ? ' (' + batchCount + ')' : '' }}
+        </button>
+      </view>
     </view>
 
     <!-- 订单卡片流 -->
     <view class="list">
       <view v-for="pkg in rows" :key="pkg.id" class="card" @click="goDetail(pkg)">
         <view class="card-head">
+          <text class="row-chk" :class="{ on: batchSel.has(pkg.id) }" @click.stop="toggleBatchSel(pkg)">{{ batchSel.has(pkg.id) ? '☑' : '☐' }}</text>
           <text class="store">{{ pkg.storeName }}</text>
           <template v-if="isQcPosting(pkg.postingNumber)">
             <text class="qc-badge">质检单</text>
@@ -185,6 +197,27 @@ const page = ref(1);
 const total = ref(0);
 const loading = ref(false);
 const loadingMore = ref(false);
+
+// ── 批量录采购(2026-09-28 与 web 端同步):行勾选 + 全选本页 + 批量关联入口 ──
+const batchSel = ref(new Set());
+const batchCount = computed(() => rows.value.filter((r) => batchSel.value.has(r.id)).length);
+const allRowsChecked = computed(() => rows.value.length > 0 && rows.value.every((r) => batchSel.value.has(r.id)));
+function toggleBatchSel(pkg) {
+  const s = new Set(batchSel.value);
+  if (s.has(pkg.id)) s.delete(pkg.id);
+  else s.add(pkg.id);
+  batchSel.value = s;
+}
+function toggleSelAll() {
+  const s = new Set(batchSel.value);
+  if (allRowsChecked.value) rows.value.forEach((r) => s.delete(r.id));
+  else rows.value.forEach((r) => s.add(r.id));
+  batchSel.value = s;
+}
+function goBatchPurchase() {
+  if (!batchSel.value.size) return;
+  uni.navigateTo({ url: '/pages/purchase/index?batch=1&ids=' + [...batchSel.value].join(',') });
+}
 
 // ── 排序(与 web 端 OrderProcess.vue 同步,2026-09-20)──────────
 // key 对应后端 sortBy 白名单;delivering=揽收时间(国际物流商揽收)
@@ -561,6 +594,51 @@ onReachBottom(async () => {
   display: flex;
   align-items: center;
   margin-top: 12rpx;
+}
+
+/* 批量录采购条(全选本页 + 批量入口) */
+.batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12rpx;
+}
+
+.batch-chk {
+  display: inline-flex;
+  align-items: center;
+  background: #ffffff;
+  border-radius: 999rpx;
+  padding: 8rpx 22rpx;
+  font-size: 24rpx;
+  color: #4e5969;
+  gap: 8rpx;
+}
+
+.batch-btn {
+  background: #165dff;
+  color: #ffffff;
+  border-radius: 999rpx;
+  font-size: 24rpx;
+  line-height: 2;
+  padding: 0 26rpx;
+  margin: 0;
+}
+
+.batch-btn[disabled] {
+  background: #c9cdd4;
+  color: #ffffff;
+}
+
+.row-chk {
+  font-size: 30rpx;
+  color: #c9cdd4;
+  margin-right: 12rpx;
+  flex-shrink: 0;
+}
+
+.row-chk.on {
+  color: #165dff;
 }
 
 .sort-chip {
