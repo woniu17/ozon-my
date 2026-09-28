@@ -245,6 +245,10 @@ async function searchPddOrder(orderSn, accounts = []) {
         const resp = await fetchInPage(page, url, body);
         const data = mapResponse(resp, 'PDD_SEARCH');
         const orders = (data && Array.isArray(data.orders)) ? data.orders : [];
+        // 临时调试:dump 原始订单对象到 /tmp/pdd_raw_search.json(查月卡券优惠字段)
+        try {
+          if (orders.length) require('fs').writeFileSync('/tmp/pdd_raw_search.json', JSON.stringify(orders[0], null, 2));
+        } catch {}
         if (!orders.length) return { result: null };
         return { result: normalizeSearchOrder(orders[0]) };
       });
