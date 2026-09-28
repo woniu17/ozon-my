@@ -36,6 +36,7 @@
         <view class="info-row"><text class="k">重量</text><text class="v">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</text></view>
         <view class="info-row"><text class="k">订单金额</text><text class="v strong">{{ fmtMoney(pkg.orderAmount) }}</text></view>
         <view class="info-row"><text class="k">采购合计</text><text class="v">{{ fmtMoney(pkg.totalPurchaseAmount) }}</text></view>
+        <view v-if="pkg.profit" class="info-row"><text class="k">{{ profitLabel(pkg) }}</text><text class="v strong" :class="profitClass(pkg)">{{ fmtMoney(pkg.profit.profit) }}</text></view>
       </view>
 
       <!-- 其它信息:折叠 -->
@@ -50,7 +51,6 @@
           <view class="info-item"><text class="k">国际配送</text><text class="v">{{ pkg.accrual?.delivery != null ? fmtMoney(pkg.accrual.delivery) : '—' }}</text></view>
           <view class="info-item"><text class="k">国际配送(估)</text><text class="v">{{ pkg.profit?.delivery != null ? fmtMoney(pkg.profit.delivery) : '—' }}</text></view>
           <view class="info-item"><text class="k">其它费用</text><text class="v">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</text></view>
-          <view v-if="pkg.profit" class="info-item"><text class="k">{{ profitLabel(pkg) }}</text><text class="v" :class="profitClass(pkg)">{{ fmtMoney(pkg.profit.profit) }}</text></view>
           <view v-if="pkg.profit?.profitRateSale != null" class="info-item"><text class="k">销售利润率</text><text class="v">{{ fmtRate(pkg.profit.profitRateSale) }}</text></view>
           <view v-if="pkg.profit?.profitRateCost != null" class="info-item"><text class="k">成本利润率</text><text class="v">{{ fmtRate(pkg.profit.profitRateCost) }}</text></view>
           <!-- 其他信息 -->
