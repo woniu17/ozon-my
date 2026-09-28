@@ -24,7 +24,7 @@ import { ok } from '../utils/response.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { status as browserStatus, getCookieState, applyPddCookies } from '../services/platform-orders/browser-manager.js';
 import { savePddCookies, readPddCookies, readPddCookieMeta } from '../services/platform-orders/pdd-cookie-store.js';
-import { listPddOrders, searchPddOrder, getPddTrace } from '../services/platform-orders/adapters/pdd.js';
+import { listPddOrders, searchPddOrder, getPddTrace, fetchPddOrderPromotions } from '../services/platform-orders/adapters/pdd.js';
 import {
   listAli1688Orders as listAliViaBrowser,
   searchAliInAccount as searchAliViaBrowser,
@@ -170,6 +170,21 @@ router.get('/admin/api/platform-orders/status', async (_req, res, next) => {
       platforms[name] = { accounts };
     }
     res.json(ok({ ...bs, platforms }));
+  } catch (e) { next(e); }
+});
+
+// ── GET /pdd/promotions:PDD 订单优惠明细(2026-09-28,采购弹窗优惠勾选)──
+// 列表单初始只有 discount_amount 合计,前端勾选该单后调此接口拉详情页逐项明细
+// (月卡券/平台券/店铺券各自可勾选);只开详情页读 rawData,不查订单搜索接口
+router.get('/admin/api/platform-orders/pdd/promotions', async (req, res, next) => {
+  try {
+    const orderSn = String(req.query.orderSn || '').trim();
+    if (!orderSn) {
+      throw new ApiError(ErrorCode.VALIDATION_ERROR, '缺少 orderSn 查询参数');
+    }
+    const account = resolveAccount('pdd', req.query.account);
+    const result = await fetchPddOrderPromotions(orderSn, account);
+    res.json(ok(result));
   } catch (e) { next(e); }
 });
 

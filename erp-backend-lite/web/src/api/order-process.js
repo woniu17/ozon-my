@@ -276,6 +276,14 @@ export function searchPlatformOrder(platform, orderSn, account) {
   return request.get('/admin/api/platform-orders/' + encodeURIComponent(platform) + '/search', query);
 }
 
+// PDD 订单优惠明细(2026-09-28,采购弹窗优惠勾选)
+// 列表单勾选后按需拉取详情页逐项明细;返回 { promotions:[{description,amount}], promotionNotes }
+export function getPddPromotions(orderSn, account) {
+  const query = { orderSn };
+  if (account) query.account = account;
+  return request.get('/admin/api/platform-orders/pdd/promotions', query);
+}
+
 // 浏览器运行态 + 各平台×账号登录态探测(替代原扩展 PING/PONG)
 // 返回 { state, browsers: { <账号>: {state,pid,profileDir} },
 //        platforms: { pdd/ali1688/taobao: { accounts: { <账号>: { login, cookieNames? } } } } }

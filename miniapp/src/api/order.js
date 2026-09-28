@@ -83,6 +83,13 @@ export function searchPlatformOrder(platform, orderSn, account) {
   return request.get('/admin/api/platform-orders/' + encodeURIComponent(platform) + '/search', query);
 }
 
+// PDD 订单优惠明细(2026-09-28,采购页优惠勾选):列表单勾选后按需拉详情页逐项明细
+export function getPddPromotions(orderSn, account) {
+  const query = { orderSn };
+  if (account) query.account = account;
+  return request.get('/admin/api/platform-orders/pdd/promotions', query);
+}
+
 // 浏览器运行态 + 各平台×账号登录态探测(Step2 未登录警示)
 export function getPlatformOrdersStatus() {
   return request.get('/admin/api/platform-orders/status');

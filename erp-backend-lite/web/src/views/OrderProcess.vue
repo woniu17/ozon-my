@@ -21,7 +21,7 @@ import {
   getOrderSummary,
   syncPackage,
   shipPackage,
-  getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus, syncPddCookies,
+  getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus, syncPddCookies, getPddPromotions,
   getPendingExportState,
 } from '../api/order-process.js';
 import { getSkusInfo, setSkuCustoms, updatePrice } from '../api/price-manage.js';
@@ -1417,7 +1417,11 @@ async function loadOrders(tabKey) {
   try {
     const resp = await platformOrdersReq(def.platform, { tab: st.tab, size: 30, account: def.account });
     if (!resp.ok) throw new Error(resp.error || '获取订单失败');
-    st.orders = resp.orders || [];
+    // PDD 列表单:后端 amount 已是默认口径(实付+优惠合计);此处补伪优惠条目供勾选
+    // (lazy 标记=仅有合计无明细,勾选该单后 ensurePromoDetail 按需拉取逐项明细)
+    st.orders = def.platform === 'pdd'
+      ? (resp.orders || []).map((o) => normalizePddPromoOrder(o))
+      : (resp.orders || []);
     // tab 标签固定用配置别名(PLATFORM_ACCOUNTS_*,如 linrh);不再用订单 buyerUsername 增强——
     // 2026-09-17 用户确认统一别名口径,原增强会把 linrh 替换成平台登录名 tb537642872(仅该账号订单带 loginId)
   } catch (err) {
@@ -1425,6 +1429,72 @@ async function loadOrders(tabKey) {
     st.orders = [];
   } finally {
     st.loading = false;
+  }
+}
+
+// ── PDD 采购优惠勾选(2026-09-28)──────────────────────────────
+// 口径:采购金额默认=实付+全部优惠(默认全选),已选区可逐项取消某项/多项优惠;
+// 搜索单后端已带逐项明细 promotions,列表单初始仅有"优惠合计"伪条目(lazy 标记),
+// 勾选该单后 ensurePromoDetail 调 /pdd/promotions 按需拉详情页明细替换伪条目
+function normalizePddPromoOrder(o) {
+  const n = { ...o };
+  if (Array.isArray(n.promotions)) {
+    n.promotions = n.promotions.map((p) => ({ ...p, checked: true }));
+  } else {
+    const disc = Number(n.discountAmount) || 0;
+    n.promotions = disc > 0 ? [{ description: '优惠合计', amount: disc.toFixed(2), checked: true, lazy: true }] : [];
+  }
+  return n;
+}
+
+/** 按勾选状态重算订单有效金额:实付 + 勾选优惠合计(保留 2 位,与后端口径一致) */
+function recalcPddAmount(src) {
+  const base = Number(src.paidAmount ?? src.amount ?? 0) || 0;
+  const add = (src.promotions || []).reduce((s, p) => s + (p.checked ? (Number(p.amount) || 0) : 0), 0);
+  src.amount = (base + add).toFixed(2);
+}
+
+/** 已选区展示的是 store 订单的浅拷贝,勾选/明细回写需定位源订单对象 */
+function findSourceOrder(platformVal, orderSn) {
+  for (const t of importAccountTabs.value) {
+    if (PLATFORM_TAB_META[t.platform]?.platformVal !== platformVal) continue;
+    const st = importStores[t.key];
+    if (!st) continue;
+    const src = [...(st.searched || []), ...(st.orders || [])].find((o) => o.orderSn === orderSn);
+    if (src) return src;
+  }
+  return null;
+}
+
+/** 已选区优惠勾选变化(v-model 已写共享勾选态):重算源订单有效金额
+ *  合计(newSelectedTotal)/auto 分摊预览/提交体经既有 watch 自动联动 */
+function onPddPromoChange(o) {
+  const src = findSourceOrder(o._platform, o.orderSn);
+  if (src) recalcPddAmount(src);
+}
+
+// 已尝试过明细拉取的订单(成功/失败都算,防反复请求;失败保留"优惠合计"条目兜底)
+const promoDetailFetched = new Set();
+/** 列表单(伪"优惠合计"条目)被勾选后按需拉取详情页逐项优惠明细:
+ *  成功→替换伪条目(用户已手动取消过合计则新明细默认全不选,尊重其取消意图),失败→保留合计条目 */
+async function ensurePromoDetail(o) {
+  if (!o || promoDetailFetched.has(o.orderSn)) return;
+  if (!Array.isArray(o.promotions) || !o.promotions.some((p) => p.lazy)) return; // 搜索单已带明细
+  promoDetailFetched.add(o.orderSn);
+  const src = findSourceOrder(o._platform, o.orderSn);
+  if (src) src._promoLoading = true;
+  try {
+    const data = await getPddPromotions(o.orderSn, o._account);
+    const items = (data?.promotions || []).map((p) => ({ description: p.description, amount: p.amount, checked: true }));
+    if (src && items.length) {
+      const keepOff = src.promotions.some((p) => !p.checked); // 加载期间已手动取消→新明细默认全不选
+      src.promotions = items.map((p) => ({ ...p, checked: !keepOff }));
+      src.promotionNotes = data?.promotionNotes || [];
+      recalcPddAmount(src);
+    }
+  } catch { /* 拉取失败:保留"优惠合计"单条勾选兜底 */ }
+  finally {
+    if (src) { src._promoLoading = false; recalcPddAmount(src); }
   }
 }
 
@@ -1567,7 +1637,10 @@ async function onSearchImportOrder() {
     const st = currentStore.value;
     // 字段规范化(2026-09-17):搜索接口返回 orderAmount,前端表格/保存逻辑用 amount——
     // 缺失会导致已选区金额空、保存采购金额算成 0
-    const hit = { ...found, amount: found.orderAmount ?? found.amount ?? 0 };
+    // PDD 单(2026-09-28):归一化优惠勾选态(默认全选),amount=后端默认口径(实付+全部优惠)
+    const hit = currentTabDef.value.platform === 'pdd'
+      ? normalizePddPromoOrder({ ...found, amount: found.orderAmount ?? found.amount ?? 0 })
+      : { ...found, amount: found.orderAmount ?? found.amount ?? 0 };
     // 置顶插入搜索区(去重),并自动勾选(已取消/已关联的不勾)
     st.searched = [hit, ...st.searched.filter((o) => o.orderSn !== found.orderSn)];
     if (!isImportCancelled(found) && !isRestoredLinked(found) && !st.selected.includes(found.orderSn)) {
@@ -1832,6 +1905,10 @@ watch(newSelectedOrders, (sel) => {
   purchaseForm.platformGoods = sel.flatMap((o) => o.goods || []);
   if (sel.length === 1 && sel[0].goods.length === 1 && purchaseForm.items.length === 1) {
     purchaseForm.items[0].amount = sel[0].amount;
+  }
+  // PDD 列表单勾选后按需拉取优惠明细(搜索单已带明细/已尝试过则内部跳过)
+  for (const o of sel) {
+    if (o._platform === 'yangkeduo') ensurePromoDetail(o);
   }
 }, { deep: true });
 
@@ -3712,11 +3789,11 @@ onUnmounted(() => {
               </tr>
             </thead>
             <tbody>
-              <tr
+              <template
                 v-for="o in allSelectedOrders"
                 :key="o._existing ? 'ex-' + o.purchaseOrderId : o._platform + ':' + (o._account || '') + ':' + o.orderSn"
-                :class="{ 'removed-mark': o._existing && removedPurchaseIds.has(o.purchaseOrderId) }"
               >
+              <tr :class="{ 'removed-mark': o._existing && removedPurchaseIds.has(o.purchaseOrderId) }">
                 <td>
                   <span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span>
                   <!-- 买家账号显示优先级(2026-09-17):归一账号名(account=搜索命中/openapi 自带,_account=tab 账号)
@@ -3726,7 +3803,7 @@ onUnmounted(() => {
                 </td>
                 <td class="mono">{{ o.orderSn || '(手工单)' }}</td>
                 <td>{{ o._existing ? '—' : (o._platform === 'yangkeduo' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—')) }}</td>
-                <td class="pdd-amount">¥{{ o.amount }}</td>
+                <td class="pdd-amount" :title="o._platform === 'yangkeduo' && (o.promotions || []).length ? `实付 ¥${o.paidAmount} + 勾选优惠` : ''">¥{{ o.amount }}</td>
                 <td>
                   <!-- 已有单:当前单号 + 录入/修改入口(闲鱼等无物流接口平台的独立补录操作,即时生效) -->
                   <template v-if="o._existing">
@@ -3747,6 +3824,32 @@ onUnmounted(() => {
                   <button v-else class="btn btn-ghost btn-sm" @click="removeSelectedOrder(o._platform, o.orderSn)">✕</button>
                 </td>
               </tr>
+              <!-- PDD 新勾选单优惠勾选行(2026-09-28):默认全选计入采购金额,可逐项取消;
+                   列表单先显示"优惠合计",勾选后自动拉详情页逐项明细 -->
+              <tr
+                v-if="!o._existing && o._platform === 'yangkeduo' && ((o.promotions || []).length || o._promoLoading)"
+                class="promo-tr"
+              >
+                <td colspan="6">
+                  <div class="promo-chips">
+                    <span class="promo-chips-label" title="采购金额 = 实付 + 勾选优惠;取消勾选即从采购金额中剔除该项">优惠</span>
+                    <label
+                      v-for="(p, pi) in o.promotions"
+                      :key="pi"
+                      class="promo-chip"
+                      :class="{ off: !p.checked }"
+                      :title="p.lazy ? '列表仅有合计,明细加载后可逐项勾选' : '勾选=计入采购金额,取消=剔除'"
+                    >
+                      <input type="checkbox" v-model="p.checked" @change="onPddPromoChange(o)" />
+                      <span>{{ p.description }}</span>
+                      <span class="promo-chip-amt">+¥{{ p.amount }}</span>
+                    </label>
+                    <span v-if="o._promoLoading" class="promo-loading">优惠明细加载中…</span>
+                    <span v-if="o.promotionNotes && o.promotionNotes.length" class="promo-notes">活动:{{ o.promotionNotes.join('；') }}</span>
+                  </div>
+                </td>
+              </tr>
+              </template>
             </tbody>
           </table>
         </div>
@@ -5254,6 +5357,58 @@ a.product-title:hover {
 .selected-orders-table tr.removed-mark td .removed-toggle {
   text-decoration: none;
   color: #b45309;
+}
+/* PDD 优惠勾选子行(2026-09-28):主行下方浅底细行,chip 式复选框 */
+.selected-orders-table tr.promo-tr td {
+  padding: 0 8px 8px 12px;
+  background: var(--bg-soft, #fafafa);
+  border-top: none;
+}
+.promo-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.promo-chips-label {
+  color: var(--text-mute, #888);
+  flex: none;
+}
+.promo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--bg-soft, #eef6ee);
+  border: 1px solid #86efac;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  color: #166534;
+}
+.promo-chip input {
+  margin: 0;
+  accent-color: #16a34a;
+}
+.promo-chip.off {
+  background: var(--bg-soft, #f5f5f5);
+  border-color: var(--border-light, #ddd);
+  color: var(--text-mute, #999);
+  text-decoration: line-through;
+}
+.promo-chip-amt {
+  font-weight: 600;
+}
+.promo-loading {
+  color: var(--text-mute, #999);
+}
+.promo-notes {
+  color: var(--text-mute, #999);
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* 国内物流列:单号过长截断(多单号逗号拼接时悬浮看全),录入按钮贴右侧 */
 .po-logi-link {

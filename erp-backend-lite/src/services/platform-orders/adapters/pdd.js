@@ -79,11 +79,11 @@ async function fetchPddNickname(page, account, userId) {
  *  与 getPddTrace 同模式:独立标签页导航到详情页,domcontentloaded 后轮询读取
  *  JS 执行后的 window.rawData 对象(raw HTML 中 rawData 非对象字面量内联,同源
  *  fetch 文本解析不可行;页面 JS 执行后成为可读对象),递归查找含
- *  promotionDescription 的优惠明细项。
- *  提取"月卡券"项金额(promotionAmount 如 "-¥10" → 1000 分);
- *  失败兜底:返回 { monthlyCardCouponFen: 0, promotions: [] }(不抛错,优惠缺失不阻塞订单)
- *  调用时机:搜索命中后补月卡券金额到 orderAmount(实付 + 月卡券 = 采购成本口径)
- *  口径:月卡券是平台补贴,应计入采购成本;店铺券是商家让利,不计入 */
+ *  promotionDescription 的优惠明细项,cleanPromotions 清洗为金额条目+活动说明。
+ *  失败兜底:返回 { monthlyCardCouponFen: 0, promotions: [], promotionNotes: [] }
+ *  (不抛错,优惠缺失不阻塞订单)
+ *  调用时机:①搜索命中后返回逐项明细(采购金额默认=实付+全部优惠,前端按勾选增减);
+ *  ②fetchPddOrderPromotions 供采购弹窗列表单勾选后按需拉取明细 */
 async function fetchPddOrderDetail(page, orderSn) {
   const url = `${PDD_ORIGIN}/order.html?order_sn=${encodeURIComponent(orderSn)}`;
   const tab = await page.context().newPage();
@@ -119,18 +119,51 @@ async function fetchPddOrderDetail(page, orderSn) {
   } catch { /* 导航失败:优惠缺失不阻塞订单 */ }
   finally { await tab.close().catch(() => {}); }
   // promotionAmount 形如 "-¥10"(字符串取 ¥ 数值)或分(数值),统一折成分
-  const result = { monthlyCardCouponFen: 0, promotions };
-  for (const p of promotions) {
-    if (!String(p.promotionDescription || '').includes('月卡券')) continue;
+  const { items, notes, monthlyCardCouponFen } = cleanPromotions(promotions);
+  return {
+    monthlyCardCouponFen,          // 月卡券合计(分;兼容 probe/backfill 脚本)
+    promotions: items,             // 金额条目 [{description, amount(元)}],前端逐项勾选计入采购金额
+    promotionNotes: notes,         // 活动说明条目(无金额描述,仅展示)
+    rawPromotions: promotions,     // 原始条目(调试用)
+  };
+}
+
+/** 清洗优惠明细条目(2026-09-28,采购弹窗优惠勾选)
+ *  - 金额条目(promotionAmount 可解析,如"平台优惠:-¥5"/"店铺优惠:-¥0.14"/"平台优惠（月卡券）:-¥2")
+ *    → 真实优惠行,返回 items 供前端逐项勾选;明细合计与列表接口 discount_amount 一致(已验证)
+ *  - 描述条目(无金额,如"使用10元月卡无门槛券"/"多件多折活动减0.14元")→ 与金额条目是同一优惠的
+ *    两个展示位,金额以配对金额条目为准(不重复计算),描述归 notes 仅作活动说明展示
+ *  - 商品信息行("已购规格:xx"/"该规格拼单价:¥xx"/"已购数量:x"/"合计拼单价:¥xx")混在优惠区,过滤 */
+function cleanPromotions(rawList) {
+  const items = [];
+  const notes = [];
+  let monthlyCardCouponFen = 0;
+  for (const p of rawList || []) {
+    const desc = String(p.promotionDescription || '').trim();
+    if (!desc) continue;
+    if (/^(已购规格|已购数量|该规格|合计)/.test(desc)) continue; // 商品信息行,非优惠
     let fen = 0;
-    if (typeof p.promotionAmount === 'number') fen = Math.round(p.promotionAmount);
+    if (typeof p.promotionAmount === 'number') fen = Math.abs(Math.round(p.promotionAmount));
     else {
       const m = String(p.promotionAmount || '').match(/(\d+(?:\.\d+)?)/);
       if (m) fen = Math.round(parseFloat(m[1]) * 100);
     }
-    result.monthlyCardCouponFen += fen;
+    if (fen > 0) {
+      items.push({ description: desc, amount: toYuan(fen) });
+      if (desc.includes('月卡券')) monthlyCardCouponFen += fen;
+    } else {
+      notes.push(desc);
+    }
   }
-  return result;
+  return { items, notes, monthlyCardCouponFen };
+}
+
+/** 独立拉取订单优惠明细(2026-09-28,采购弹窗列表单勾选后按需调用)
+ *  不查订单搜索接口,只开详情页读 rawData;列表单初始只有 discount_amount 合计,
+ *  前端勾选该单后调此接口换取逐项明细(月卡券/店铺券/平台券各自可勾选) */
+async function fetchPddOrderPromotions(orderSn, account) {
+  return withPage(account, 'pdd', PDD_ENTRY, PDD_ORIGIN, async (page) =>
+    fetchPddOrderDetail(page, orderSn));
 }
 
 function toYuan(fen) {
@@ -146,8 +179,11 @@ function normalizeOrders(data) {
     statusPrompt: o.order_status_prompt || '',
     payStatus: o.pay_status ?? 0,           // 0=未付 2=已付
     shippingStatus: o.shipping_status ?? 0, // 0=未发 1=已发
-    // 采购金额=实付金额(月卡券等平台补贴在搜索场景由 fetchPddOrderDetail 补加;列表场景无明细,保持实付)
-    amount: toYuan(o.order_amount || 0),
+    // 采购金额默认口径=实付+优惠合计(discount_amount 已含月卡券/平台券/店铺券,与详情页明细求和一致);
+    // paidAmount=实付,discountAmount=优惠合计,前端逐项勾选优惠后据 paidAmount 重算
+    amount: toYuan((o.order_amount || 0) + (o.discount_amount || 0)),
+    paidAmount: toYuan(o.order_amount || 0),
+    discountAmount: toYuan(o.discount_amount || 0),
     trackingNumber: o.tracking_number || '',
     orderTime: o.order_time || 0,
     mallName: (o.mall && o.mall.mall_name) || '',
@@ -166,8 +202,9 @@ function normalizeOrders(data) {
 function normalizeSearchOrder(o) {
   return {
     orderSn: o.order_sn || '',
-    // 采购金额=实付金额(月卡券由 searchPddOrder 调用 fetchPddOrderDetail 补加)
+    // paidAmount=实付;orderAmount 由 searchPddOrder 按优惠明细重算为默认口径(实付+全部优惠)
     orderAmount: toYuan(o.order_amount || 0),
+    paidAmount: toYuan(o.order_amount || 0),
     orderTime: o.order_time || 0,
     statusPrompt: o.order_status_prompt || '',
     trackingNumber: o.tracking_number || '',
@@ -307,14 +344,13 @@ async function searchPddOrder(orderSn, accounts = []) {
         const orders = (data && Array.isArray(data.orders)) ? data.orders : [];
         if (!orders.length) return { result: null };
         const normalized = normalizeSearchOrder(orders[0]);
-        // 抓详情页补月卡券金额(搜索场景一次一单,可接受额外开销;失败兜底 monthlyCardCouponFen=0)
-        // 月卡券是平台补贴,应计入采购成本;店铺券是商家让利,不计入
+        // 抓详情页优惠明细(搜索场景一次一单,可接受额外开销;失败兜底空明细=保持实付)
+        // 采购金额默认口径=实付+全部优惠;promotions 逐项明细供前端勾选(默认全选,可取消某项/多项)
         const detail = await fetchPddOrderDetail(page, normalized.orderSn);
-        if (detail.monthlyCardCouponFen > 0) {
-          normalized.orderAmount = toYuan((orders[0].order_amount || 0) + detail.monthlyCardCouponFen);
-        }
-        normalized.monthlyCardCoupon = toYuan(detail.monthlyCardCouponFen);
-        normalized.promotions = detail.promotions;
+        normalized.promotions = detail.promotions;       // [{description, amount(元)}]
+        normalized.promotionNotes = detail.promotionNotes; // 活动说明(无金额描述条目)
+        const sumFen = detail.promotions.reduce((s, p) => s + Math.round(Number(p.amount) * 100), 0);
+        normalized.orderAmount = toYuan((orders[0].order_amount || 0) + sumFen);
         return { result: normalized };
       });
     } catch (e) {
@@ -389,5 +425,5 @@ async function getPddTrace(orderSn, trackingNumber, account) {
   });
 }
 
-export { listPddOrders, searchPddOrder, getPddTrace, fetchPddOrderDetail };
+export { listPddOrders, searchPddOrder, getPddTrace, fetchPddOrderDetail, fetchPddOrderPromotions };
 
