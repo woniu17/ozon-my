@@ -460,6 +460,7 @@ async function loadBatchTargets(ids) {
       batchTargets.value.push({
         id,
         storeName: d?.package?.storeName || '',
+        packageNo: d?.package?.packageNo || '',
         postingNumber: d?.package?.postingNumber || '',
         items: d?.items || [],
       });
@@ -1249,26 +1250,64 @@ async function saveBatchLink(sel) {
     uni.showToast({ title: '请至少保留一个目标包裹', icon: 'none' });
     return;
   }
-  // 逐单查询已关联包裹:拼单确认提示
-  const linkedLines = [];
+  // 逐单查询已关联包裹:拼单确认提示(按本次金额预览各包裹实际分摊)
+  const linkedByOd = new Map(); // od -> linkedPackages[](库内已关联)
   for (const od of sel) {
     try {
       const r = await lookupPurchase(od._platform, od.orderSn);
-      for (const p of r?.linkedPackages || []) {
-        linkedLines.push('  · ' + p.package_no + ' (' + p.posting_number + ') 数量' + (p.quantity || 0) + ' 分摊 ' + fmtMoney(p.allocated_amount));
-      }
+      if (r?.linkedPackages?.length) linkedByOd.set(od, r.linkedPackages);
     } catch (e) { /* lookup 失败不阻塞提交 */ }
   }
-  if (linkedLines.length) {
-    // 确认弹窗展示本次将提交的金额合计(lookup 行是库内历史分摊,仅供参照)
+  if (linkedByOd.size) {
+    // 涉及包裹 = 本次目标 ∪ 库内已关联(重算按采购单全量 link 加权,已关联的其它包裹同样被更新);
+    // 每笔采购单独立按数量加权:新分摊_od = 金额_od × qty_pkg / Σqty_od,包裹行显示跨单合计
     const amtSum = sel.reduce((s, od) => s + realtimeOrderAmount(od._platform, od.orderSn, od.amount), 0);
+    const oldAlloc = new Map(); // package_no -> 库内旧分摊合计(跨 od)
+    const postByPkg = new Map(); // package_no -> posting_number
+    for (const pkgs of linkedByOd.values()) {
+      for (const p of pkgs) {
+        oldAlloc.set(p.package_no, (oldAlloc.get(p.package_no) || 0) + (Number(p.allocated_amount) || 0));
+        postByPkg.set(p.package_no, p.posting_number);
+      }
+    }
+    const qtyByOd = new Map(); // od -> Map(package_no -> 参与加权的数量)
+    for (const od of sel) {
+      const q = new Map();
+      for (const t of targets) {
+        q.set(t.packageNo, (t.items || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0));
+      }
+      for (const p of linkedByOd.get(od) || []) {
+        if (!q.has(p.package_no)) q.set(p.package_no, Number(p.quantity) || 0); // 目标外的已关联包裹按库内数量参与加权
+      }
+      qtyByOd.set(od, q);
+    }
+    const newAlloc = new Map(); // package_no -> 新分摊合计(跨 od)
+    for (const od of sel) {
+      const q = qtyByOd.get(od) || new Map();
+      const total = [...q.values()].reduce((s, v) => s + v, 0);
+      if (!total) continue;
+      const amt = realtimeOrderAmount(od._platform, od.orderSn, od.amount) || 0;
+      for (const [no, qty] of q) newAlloc.set(no, (newAlloc.get(no) || 0) + (amt * qty) / total);
+    }
+    // 行序:本次目标包裹在前(含 新增/旧→新),库内其它已关联包裹在后
+    const targetQty = qtyByOd.get(sel[0]) || new Map();
+    const lines = targets.map((t) => {
+      const old = oldAlloc.get(t.packageNo);
+      const nv = newAlloc.get(t.packageNo) || 0;
+      const qty = targetQty.get(t.packageNo) || 0;
+      return '  · ' + t.packageNo + ' (' + t.postingNumber + ') 数量' + qty + ' 分摊 ' + (old != null ? fmtMoney(old) + ' → ' : '新增 ') + fmtMoney(nv);
+    });
+    for (const [no, post] of postByPkg) {
+      if (targets.some((t) => t.packageNo === no)) continue;
+      lines.push('  · ' + no + ' (' + post + ') 分摊 ' + fmtMoney(oldAlloc.get(no) || 0) + ' → ' + fmtMoney(newAlloc.get(no) || 0) + '(库内已关联,同步重算)');
+    }
     const confirmed = await new Promise((resolve) => {
       uni.showModal({
         title: '已关联提示',
         content:
-          '以下采购订单已关联过包裹(下方为库内当前分摊,仅供参照):\n' + linkedLines.join('\n') +
-          '\n\n本次将把 ' + sel.length + ' 笔采购订单(本次提交合计 ¥' + amtSum.toFixed(2) + ')关联到 ' + targets.length +
-          ' 个目标包裹;其中已关联过的组合按本次提交金额更新,全部包裹的分摊金额将按数量重新加权计算。确认继续?',
+          '以下采购订单已关联过包裹,本次提交合计 ¥' + amtSum.toFixed(2) + ';更新后各包裹实际分摊:\n' + lines.join('\n') +
+          '\n\n本次将把 ' + sel.length + ' 笔采购订单关联到 ' + targets.length +
+          ' 个目标包裹;全部关联包裹的分摊金额按数量重新加权计算。确认继续?',
         confirmText: '关联/更新',
         success: (res) => resolve(!!res.confirm),
       });
