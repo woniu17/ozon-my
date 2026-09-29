@@ -336,8 +336,6 @@ async function loadList() {
     page: pager.current,
     pageSize: pager.pageSize,
   };
-  // 订单金额统计并行触发(2026-09-18:全量订单口径,tab='all' 走后端"全部"分支(1=1),不随当前tab/筛选变化)
-  loadSummary({ tab: 'all' });
   try {
     const data = await getOrderList(listParams);
     globalSearch.total = isGlobal ? (data?.total || 0) : 0;
@@ -2966,6 +2964,8 @@ onUnmounted(() => {
   <div class="order-process-page">
     <!-- 同步与搜索操作行(2026-09-18:移至订单tab上一行) -->
     <div class="sync-area">
+      <!-- 第1行:全局搜索独立一行 -->
+      <div class="sync-row">
       <div class="global-search-bar" v-if="!globalSearch.active">
         <select v-model="globalSearch.mode" class="filter-input mode-select" title="匹配模式">
           <option value="ss">模糊匹配</option>
@@ -2987,6 +2987,9 @@ onUnmounted(() => {
         <span>命中 <b>{{ globalSearch.total }}</b> 个包裹(全部状态)</span>
         <button class="btn btn-ghost btn-sm" @click="clearGlobalSearch()">退出搜索</button>
       </div>
+      </div>
+      <!-- 第2行:同步/批量等操作按钮 -->
+      <div class="sync-row">
       <span v-if="syncInfo.cursors?.length && !syncing" class="sync-info" :title="syncInfo.cursors.map(c => `${c.storeId}: ${c.lastError || c.lastRunAt}`).join('\n')">
         最近同步 {{ fmtTime(syncInfo.cursors[0]?.lastRunAt) }}
       </span>
@@ -3017,6 +3020,7 @@ onUnmounted(() => {
       <button v-if="rows.length" class="btn btn-ghost" @click="toggleCheckAll" :title="allRowsChecked ? '取消勾选本页全部包裹' : '勾选本页全部包裹'">
         {{ allRowsChecked ? '取消全选' : '全选本页' }}
       </button>
+      </div>
     </div>
     <div v-if="syncingLogistics" class="enrich-progress-bar">
       <span class="tag tag-info">物流同步</span>
@@ -3071,113 +3075,6 @@ onUnmounted(() => {
             </div>
             <div class="sync-failure-error">{{ f.error }}</div>
             <div v-if="f.stack" class="sync-failure-stack">{{ f.stack }}</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 订单金额统计(2026-09-18:移至订单tab上一行;全量订单口径不随tab/筛选变化;默认只展示已采购未结算+整体合计两行,已成功/已取消/已退货明细默认折叠) -->
-    <div class="summary-bar" v-if="summary?.truncated">
-      <span class="tag tag-warn">仅统计前 {{ summary.truncatedAt }} 单(共 {{ summary.totalUnfiltered }})</span>
-    </div>
-    <div class="summary-bar summary-loading" v-else-if="summaryLoading && !summary">
-      <span class="muted">统计中…</span>
-    </div>
-    <div class="summary-bar summary-error" v-else-if="summaryError">
-      <span class="muted">统计失败:{{ summaryError }}</span>
-      <button class="btn btn-ghost btn-sm" @click="loadSummary(lastSummaryParams)">重试</button>
-    </div>
-    <div class="summary-bar summary-empty" v-else-if="summaryEmpty" v-show="!summaryLoading">
-      <span class="muted">{{ summaryEmptyHint }}</span>
-    </div>
-    <div class="summary-bar summary-stack" v-else-if="summary" v-show="!summaryLoading">
-      <!-- 第1行:已采购未结算(在途,估) -->
-      <div class="summary-card summary-pending">
-        <div class="summary-head">
-          <span class="summary-title">已采购未结算</span>
-          <span class="tag tag-warn">{{ summary.pendingSettled.orderCount }} 单</span>
-          <span class="muted">（估）</span>
-        </div>
-        <div class="summary-metrics">
-          <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.pendingSettled.totalOrderAmount) }}</span></span>
-          <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.pendingSettled.totalPurchaseAmount) }}</span></span>
-          <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.pendingSettled.totalProfit > 0 ? 'profit-pos' : (summary.pendingSettled.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.pendingSettled.totalProfit) }}</span></span>
-          <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.pendingSettled.profitRateSale) }}</span></span>
-          <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.pendingSettled.profitRateCost) }}</span></span>
-        </div>
-      </div>
-      <!-- 第2行:整体合计(终态:成功+取消+退货,不含在途) -->
-      <div v-if="summary.overall && summary.overall.orderCount > 0" class="summary-card summary-overall" title="已成功+已取消+已退货 三组终态订单合计;不含已采购未结算(在途);退货率/取消率分母均为终态总单数">
-        <div class="summary-head">
-          <span class="summary-title">整体合计</span>
-          <span class="tag">{{ summary.overall.orderCount }} 单</span>
-          <span class="muted">（成功 {{ summary.settled.orderCount }} + 取消 {{ summary.cancelledCount }} + 退货 {{ summary.returnedCount }}）</span>
-          <button class="btn btn-ghost btn-sm summary-detail-toggle" @click="summaryDetailOpen = !summaryDetailOpen" title="展开/收起已成功、已取消、已退货明细">
-            {{ summaryDetailOpen ? '收起明细 ▴' : '展开明细 ▾' }}
-          </button>
-        </div>
-        <div class="summary-metrics">
-          <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.overall.totalOrderAmount) }}</span></span>
-          <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.overall.totalPurchaseAmount) }}</span></span>
-          <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.overall.totalProfit > 0 ? 'profit-pos' : (summary.overall.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.overall.totalProfit) }}</span></span>
-          <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.overall.profitRateSale) }}</span></span>
-          <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.overall.profitRateCost) }}</span></span>
-          <span class="metric"><span class="metric-label">退货率</span><span class="metric-val">{{ ratePct(summary.returnedCount, summary.overall.orderCount) }}</span></span>
-          <span class="metric"><span class="metric-label">取消率</span><span class="metric-val">{{ ratePct(summary.cancelledCount, summary.overall.orderCount) }}</span></span>
-        </div>
-        <!-- 取消率细分:按取消发起者,分母均为终态总单数 -->
-        <div class="summary-rate-breakdown">
-          <span>买家取消率 <b>{{ ratePct(summary.cancelled.byInitiator.client, summary.overall.orderCount) }}</b></span>
-          <span>Ozon取消率 <b>{{ ratePct(summary.cancelled.byInitiator.ozon, summary.overall.orderCount) }}</b><span v-if="summary.cancelled.ozonQualityInspection > 0" class="rate-sub">(质检单率 {{ ratePct(summary.cancelled.ozonQualityInspection, summary.overall.orderCount) }})</span></span>
-          <span>卖家取消率 <b>{{ ratePct(summary.cancelled.byInitiator.seller, summary.overall.orderCount) }}</b></span>
-        </div>
-      </div>
-      <!-- 明细(默认折叠):已成功 / 已取消 / 已退货 -->
-      <div v-show="summaryDetailOpen" class="summary-row">
-        <div class="summary-card summary-settled">
-          <div class="summary-head">
-            <span class="summary-title">已成功</span>
-            <span class="tag tag-ok">{{ summary.settled.orderCount }} 单</span>
-          </div>
-          <div class="summary-metrics">
-            <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.settled.totalOrderAmount) }}</span></span>
-            <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.settled.totalPurchaseAmount) }}</span></span>
-            <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.settled.totalProfit > 0 ? 'profit-pos' : (summary.settled.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.settled.totalProfit) }}</span></span>
-            <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.settled.profitRateSale) }}</span></span>
-            <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.settled.profitRateCost) }}</span></span>
-          </div>
-        </div>
-        <div v-if="summary.cancelledCount > 0" class="summary-card summary-cancelled" title="取消订单无收入:利润=−采购(无应计)或应计退款口径(有应计);订单总额为原下单金额,未实际收款">
-          <div class="summary-head">
-            <span class="summary-title">已取消</span>
-            <span class="tag tag-err">{{ summary.cancelledCount }} 单</span>
-          </div>
-          <div class="summary-metrics">
-            <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val muted">{{ fmtMoney(summary.cancelled.totalOrderAmount) }}</span></span>
-            <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.cancelled.totalPurchaseAmount) }}</span></span>
-            <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.cancelled.totalProfit > 0 ? 'profit-pos' : (summary.cancelled.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.cancelled.totalProfit) }}</span></span>
-          </div>
-          <!-- 取消发起者细分:买家/Ozon(含质检单)/卖家;点击可跳转对应筛选 -->
-          <div class="summary-cancel-breakdown">
-            <button class="cancel-chip" title="买家取消的订单" @click="applyCancelInitiatorFilter('client')">买家取消 {{ summary.cancelled.byInitiator.client }}</button>
-            <button class="cancel-chip" title="Ozon 取消的订单(质检单=抽检流程,不代表商品不通过)" @click="applyCancelInitiatorFilter('ozon')">
-              Ozon 取消 {{ summary.cancelled.byInitiator.ozon }}<span v-if="summary.cancelled.ozonQualityInspection > 0" class="cancel-chip-sub">(质检单 {{ summary.cancelled.ozonQualityInspection }})</span>
-            </button>
-            <button class="cancel-chip" title="卖家取消的订单" @click="applyCancelInitiatorFilter('seller')">卖家取消 {{ summary.cancelled.byInitiator.seller }}</button>
-            <span v-if="summary.cancelled.byInitiator.unknown > 0" class="muted">未分类 {{ summary.cancelled.byInitiator.unknown }}</span>
-          </div>
-        </div>
-        <div v-if="summary.returnedCount > 0" class="summary-card summary-returned" title="妥投后买家退货退款,按行内同口径利润单独汇总,不计入已成功/已采购未结算两组">
-          <div class="summary-head">
-            <span class="summary-title">已退货</span>
-            <span class="tag tag-err">{{ summary.returnedCount }} 单</span>
-          </div>
-          <div class="summary-metrics">
-            <span class="metric"><span class="metric-label">订单总额</span><span class="metric-val">{{ fmtMoney(summary.returned.totalOrderAmount) }}</span></span>
-            <span class="metric"><span class="metric-label">采购总额</span><span class="metric-val">{{ fmtMoney(summary.returned.totalPurchaseAmount) }}</span></span>
-            <span class="metric"><span class="metric-label">利润总额</span><span class="metric-val" :class="summary.returned.totalProfit > 0 ? 'profit-pos' : (summary.returned.totalProfit < 0 ? 'profit-neg' : 'muted')">{{ fmtMoney(summary.returned.totalProfit) }}</span></span>
-            <span class="metric"><span class="metric-label">销售利润率</span><span class="metric-val">{{ fmtRate(summary.returned.profitRateSale) }}</span></span>
-            <span class="metric"><span class="metric-label">成本利润率</span><span class="metric-val">{{ fmtRate(summary.returned.profitRateCost) }}</span></span>
           </div>
         </div>
       </div>
@@ -4274,12 +4171,17 @@ onUnmounted(() => {
 }
 
 .sync-area {
-  /* 2026-09-18:自 tabs-bar 内移出独立成行(置于订单tab上一行),不再右贴 */
+  /* 2026-09-29:全局搜索独立一行,同步/批量操作按钮放第二行 */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.sync-area .sync-row {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
 }
 
 .sync-info {
@@ -4456,7 +4358,9 @@ onUnmounted(() => {
 }
 
 .global-kw-input {
-  width: 320px;
+  /* 2026-09-29:全局搜索独立一行,输入框占满行内剩余宽度 */
+  flex: 1;
+  min-width: 240px;
 }
 
 .global-search-hint {
