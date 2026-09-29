@@ -963,8 +963,10 @@ async function saveBatchLink() {
     }
   }
   if (linkedLines.size) {
+    // 确认弹窗展示本次将提交的金额合计(lookup 行是库内历史分摊,仅供参照)
+    const amtSum = orders.reduce((s, od) => s + (realtimeOrderAmount(od) || 0), 0);
     const ok = await confirmStore.ask({
-      message: `以下采购订单已关联过包裹:\n${[...linkedLines].join('\n')}\n\n本次将把 ${orders.length} 笔采购订单关联到 ${targets.length} 个目标包裹;其中已关联过的组合按当前金额更新,全部包裹的分摊金额将按数量重新加权计算。确认继续?`,
+      message: `以下采购订单已关联过包裹(下方为库内当前分摊,仅供参照):\n${[...linkedLines].join('\n')}\n\n本次将把 ${orders.length} 笔采购订单(本次提交合计 ¥${amtSum.toFixed(2)})关联到 ${targets.length} 个目标包裹;其中已关联过的组合按本次提交金额更新,全部包裹的分摊金额将按数量重新加权计算。确认继续?`,
       confirmText: '关联/更新',
       danger: true,
     });
@@ -984,7 +986,7 @@ async function saveBatchLink() {
           buyerAccount: od.buyerAccount,
           buyerUserId: od.buyerUserId,
           sellerName: od.sellerName,
-          paymentAmount: od.paymentAmount || null,
+          paymentAmount: realtimeOrderAmount(od),
           logisticsCompany: od.logisticsCompany,
           logisticsNo: od.logisticsNo,
           note: purchaseForm.note.trim() || null,
@@ -1295,7 +1297,7 @@ async function savePurchase(withShip = false) {
           buyerAccount: od.buyerAccount,
           buyerUserId: od.buyerUserId,
           sellerName: od.sellerName,
-          paymentAmount: od.paymentAmount || null,
+          paymentAmount: realtimeOrderAmount(od),
           logisticsCompany: od.logisticsCompany,
           logisticsNo: od.logisticsNo,
           note: purchaseForm.note.trim() || null,
@@ -1515,16 +1517,26 @@ function recalcPddAmount(src) {
   src.amount = (base + add).toFixed(2);
 }
 
-/** 已选区展示的是 store 订单的浅拷贝,勾选/明细回写需定位源订单对象 */
+/** 已选区展示的是 store 订单的浅拷贝,勾选/明细回写需定位源订单对象
+ *  2026-09-29 修复:查找顺序改为列表版优先,与 allSelectedOrders/importOrders 的
+ *  同名去重口径一致(此前 searched 优先——同名单同时存在于搜索区与列表时,展示/提交链
+ *  用列表版,手改金额却回写到搜索版,手改值被静默丢弃,提交仍是列表旧金额) */
 function findSourceOrder(platformVal, orderSn) {
   for (const t of importAccountTabs.value) {
     if (PLATFORM_TAB_META[t.platform]?.platformVal !== platformVal) continue;
     const st = importStores[t.key];
     if (!st) continue;
-    const src = [...(st.searched || []), ...(st.orders || [])].find((o) => o.orderSn === orderSn);
+    const src = [...(st.orders || []), ...(st.searched || [])].find((o) => o.orderSn === orderSn);
     if (src) return src;
   }
   return null;
+}
+
+/** 提交时实时读取订单金额(2026-09-29):手改值回写在源订单对象上,watch 快照可能滞后;
+ *  找不到源或实时值为 0 时回退快照金额(后端幂等语义:传 0/null 保持库内旧值) */
+function realtimeOrderAmount(od) {
+  const src = od ? findSourceOrder(od.platform, od.sn) : null;
+  return Number(src?.amount ?? od?.paymentAmount) || od?.paymentAmount || null;
 }
 
 /** 已选区优惠勾选变化(v-model 已写共享勾选态):重算源订单有效金额

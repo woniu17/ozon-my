@@ -960,16 +960,26 @@ function recalcPddAmount(src) {
   src.amount = (base + add).toFixed(2);
 }
 
-/** 列表/搜索区展示的是 store 订单的浅拷贝,勾选/明细回写需定位源订单对象 */
+/** 列表/搜索区展示的是 store 订单的浅拷贝,勾选/明细回写需定位源订单对象
+ *  2026-09-29 修复(与 web 端同步):查找顺序改为列表版优先,与 newSelectedOrders 的
+ *  同名去重口径一致(此前 searched 优先——同名单同时存在于搜索区与列表时,展示/提交链
+ *  用列表版,手改金额却回写到搜索版,手改值被静默丢弃,提交仍是列表旧金额) */
 function findSourceOrder(platformVal, orderSn) {
   for (const t of platTabs.value) {
     if ((PLATFORM_TAB_META[t.platform]?.platformVal || '') !== platformVal) continue;
     const st = stores[t.key];
     if (!st) continue;
-    const src = [...(st.searched || []), ...(st.orders || [])].find((x) => x.orderSn === orderSn);
+    const src = [...(st.orders || []), ...(st.searched || [])].find((x) => x.orderSn === orderSn);
     if (src) return src;
   }
   return null;
+}
+
+/** 提交时实时读取订单金额(2026-09-29,与 web 端同步):手改值回写在源订单对象上,
+ *  实时副本可能滞后;找不到源或实时值为 0 时回退传入的副本金额 */
+function realtimeOrderAmount(platformVal, orderSn, fallbackAmount) {
+  const src = findSourceOrder(platformVal, orderSn);
+  return Number(src?.amount ?? fallbackAmount) || Number(fallbackAmount) || 0;
 }
 
 /** 手动指定某笔采购单的采购价格(2026-09-28,与 web 端同步):回写源订单并打手动标记,
@@ -1189,7 +1199,8 @@ function collectAdd() {
     buyerAccount: o.account || o._account || o.buyerUsername || null,
     buyerUserId: o.buyerUserId || null,
     sellerName: o.mallName || o.sellerName || null,
-    paymentAmount: Number(o.amount) || 0,
+    // 提交时实时读源订单金额(手改值回写源对象,副本可能滞后)
+    paymentAmount: realtimeOrderAmount(o._platform, o.orderSn, o.amount),
     logisticsCompany: o.logisticsCompany || null,
     // 单笔:保留可编辑的物流输入框值;多笔:各单用自己的快递单号
     logisticsNo: sel.length === 1 ? (logisticsInput.value.trim() || o.trackingNumber || null) : (o.trackingNumber || null),
@@ -1249,11 +1260,15 @@ async function saveBatchLink(sel) {
     } catch (e) { /* lookup 失败不阻塞提交 */ }
   }
   if (linkedLines.length) {
+    // 确认弹窗展示本次将提交的金额合计(lookup 行是库内历史分摊,仅供参照)
+    const amtSum = sel.reduce((s, od) => s + realtimeOrderAmount(od._platform, od.orderSn, od.amount), 0);
     const confirmed = await new Promise((resolve) => {
       uni.showModal({
         title: '已关联提示',
         content:
-          '以下采购订单已关联过包裹:\n' + linkedLines.join('\n') + '\n\n本次将把 ' + sel.length + ' 笔采购订单关联到 ' + targets.length + ' 个目标包裹;其中已关联过的组合按当前金额更新,全部包裹的分摊金额将按数量重新加权计算。确认继续?',
+          '以下采购订单已关联过包裹(下方为库内当前分摊,仅供参照):\n' + linkedLines.join('\n') +
+          '\n\n本次将把 ' + sel.length + ' 笔采购订单(本次提交合计 ¥' + amtSum.toFixed(2) + ')关联到 ' + targets.length +
+          ' 个目标包裹;其中已关联过的组合按本次提交金额更新,全部包裹的分摊金额将按数量重新加权计算。确认继续?',
         confirmText: '关联/更新',
         success: (res) => resolve(!!res.confirm),
       });
@@ -1274,7 +1289,7 @@ async function saveBatchLink(sel) {
           buyerAccount: od.account || od._account || od.buyerUsername || null,
           buyerUserId: od.buyerUserId || null,
           sellerName: od.mallName || od.sellerName || null,
-          paymentAmount: Number(od.amount) || 0,
+          paymentAmount: realtimeOrderAmount(od._platform, od.orderSn, od.amount),
           logisticsCompany: od.logisticsCompany || null,
           logisticsNo: od.trackingNumber || null,
           note: null,
