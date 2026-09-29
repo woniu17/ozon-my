@@ -105,7 +105,7 @@
             <!-- PDD/1688 已勾选单优惠勾选(2026-09-28/09-29):默认全选计入采购金额,点击逐项取消;
                  PDD 列表单先显示"优惠合计"、1688 列表单先显示反推券额,勾选后自动拉官方明细 -->
             <view
-              v-if="curStore.selected.includes(o.orderSn) && (o._platform === 'yangkeduo' || o._platform === 'ali1688') && ((o.promotions && o.promotions.length) || o._promoLoading)"
+              v-if="curStore.selected.includes(o.orderSn) && (o._platform === 'yangkeduo' || o._platform === '1688') && ((o.promotions && o.promotions.length) || o._promoLoading)"
               class="po-promos"
               @click.stop
             >
@@ -1007,7 +1007,7 @@ async function ensurePromoDetail(o) {
   if (src) src._promoLoading = true;
   try {
     // 按平台分派:PDD 开详情页读 rawData,1688 调官方 buyerView(官方 couponFee/discount)
-    const data = o._platform === 'ali1688'
+    const data = o._platform === '1688'
       ? await getAli1688Promotions(o.orderSn, account)
       : await getPddPromotions(o.orderSn, account);
     const items = (data?.promotions || []).map((p) => ({ description: p.description, amount: p.amount, checked: true }));
@@ -1091,7 +1091,7 @@ function toggleSelect(o) {
   else {
     st.selected.push(o.orderSn);
     // PDD/1688 列表单:勾选后按需拉优惠明细(搜索单已带明细/已拉取过则内部跳过)
-    if (o._platform === 'yangkeduo' || o._platform === 'ali1688') ensurePromoDetail(o);
+    if (o._platform === 'yangkeduo' || o._platform === '1688') ensurePromoDetail(o);
   }
 }
 
