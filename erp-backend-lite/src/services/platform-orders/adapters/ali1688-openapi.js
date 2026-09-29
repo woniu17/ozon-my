@@ -137,15 +137,38 @@ async function callOpenApi(apiUri, account, extraParams = {}) {
 
 /** 官方订单 → ERP 精简结构(与浏览器版 normalize1688Order 逐字段对齐)
  *  trackingNumber/logisticsCompany 恒空串(2026-09-17 限流治理:列表/搜索不再逐单查物流,
- *  保存为采购订单后由 syncPurchaseLogisticsForPackage 统一补查回填) */
+ *  保存为采购订单后由 syncPurchaseLogisticsForPackage 统一补查回填)
+ *  优惠口径(2026-09-29,对齐 PDD:采购金额默认=实付+全部优惠,前端可逐项勾选):
+ *  - 实付 paidAmount = totalAmount(元,含运费,已扣优惠)
+ *  - 优惠 = couponFee(1688优惠券) + discount(渠道折扣);amount = 实付+全部优惠(=订单原价 payFee)
+ *  - buyerView(搜索/明细拉取)返回官方 couponFee;列表接口不返回该字段,
+ *    按总额恒等式(实付=货款+运费-券-折扣)反推券金额并打 lazy 标记,
+ *    前端勾选该单后调 /ali1688/promotions 拉详情确认明细并重算(对齐 PDD ensurePromoDetail 模式) */
 function normalizeOpenApiOrder(o, account) {
   const b = o.baseInfo || {};
   const entries = Array.isArray(o.productItems) ? o.productItems : [];
+  const paid = Number(b.totalAmount || 0);
+  const disc = Number(b.discount || 0);
+  let coupon;
+  let lazy = false;
+  if (b.couponFee != null) {
+    coupon = Number(b.couponFee || 0); // buyerView:官方券金额
+  } else {
+    // 列表接口:无 couponFee,按总额恒等式反推(货款+运费-折扣-实付)
+    const infer = Number(b.sumProductPayment || 0) + Number(b.shippingFee || 0) - disc - paid;
+    coupon = Math.round(Math.max(0, infer) * 100) / 100;
+    lazy = infer > 0.005 || disc > 0; // 有未知优惠才带伪条目(无优惠单零请求)
+  }
+  const promotions = [];
+  if (coupon > 0) promotions.push({ description: '1688优惠券', amount: coupon.toFixed(2), ...(lazy ? { lazy: true } : {}) });
+  if (disc > 0) promotions.push({ description: '渠道折扣', amount: disc.toFixed(2), ...(lazy ? { lazy: true } : {}) });
   return {
     orderSn: b.idOfStr || String(b.id || ''),
     status: b.status || '',
     statusPrompt: STATUS_PROMPTS[b.status] || b.status || '',
-    amount: Number(b.totalAmount || 0).toFixed(2), // 单位:元
+    amount: (paid + coupon + disc).toFixed(2), // 默认口径:实付+全部优惠
+    paidAmount: paid.toFixed(2), // 实付(优惠勾选重算的基数)
+    promotions,
     trackingNumber: '',
     logisticsCompany: '', // 物流公司名(采购订单保存后统一补查回填,优先于前端按单号前缀推断)
     orderTime: fmtTime(b.createTime),
@@ -162,6 +185,23 @@ function normalizeOpenApiOrder(o, account) {
       thumbUrl: String((e.productImgUrl || [])[0] || '').replace(/^http:/, 'https:'),
     })),
   };
+}
+
+/** 1688 订单优惠明细(lazy 拉取):buyerView 官方 couponFee/discount,
+ *  供前端替换列表反推的伪条目;结构对齐 fetchPddOrderPromotions */
+async function getAli1688Promotions(orderSn, account) {
+  const json = await callOpenApi(API_ORDER_DETAIL, account, {
+    webSite: '1688',
+    orderId: String(orderSn || ''),
+    includeFields: 'baseInfo,productItems,payInfo',
+  });
+  const b = (json && json.result && json.result.baseInfo) || {};
+  const coupon = Number(b.couponFee || 0);
+  const disc = Number(b.discount || 0);
+  const promotions = [];
+  if (coupon > 0) promotions.push({ description: '1688优惠券', amount: coupon.toFixed(2) });
+  if (disc > 0) promotions.push({ description: '渠道折扣', amount: disc.toFixed(2) });
+  return { paidAmount: Number(b.totalAmount || 0).toFixed(2), promotions };
 }
 
 /** 物流包数组 → 公司名(取第一个包;"中通快递(ZTO)"去英文括号后缀 → "中通快递",
@@ -192,7 +232,7 @@ async function searchAliOpenApiInAccount(orderSn, account) {
     json = await callOpenApi(API_ORDER_DETAIL, account, {
       webSite: '1688',
       orderId: String(orderSn || ''),
-      includeFields: 'baseInfo,productItems',
+      includeFields: 'baseInfo,productItems,payInfo',
     });
   } catch (e) {
     if (e instanceof ApiError && e.code === ErrorCode.AUTH_REQUIRED) throw e;
@@ -244,4 +284,4 @@ async function getTraceForOrder(orderSn, account) {
   return { steps, raw: traces };
 }
 
-export { hasAliOpenApiToken, listAli1688OpenApiOrders, searchAliOpenApiInAccount, getLogisticsForOrder, getTraceForOrder };
+export { hasAliOpenApiToken, listAli1688OpenApiOrders, searchAliOpenApiInAccount, getLogisticsForOrder, getTraceForOrder, getAli1688Promotions };

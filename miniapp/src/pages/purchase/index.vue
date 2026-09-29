@@ -102,10 +102,10 @@
               <text class="po-order-time">{{ fmtOrderTime(o) }}</text>
             </view>
             <view class="po-order-sn">{{ o.orderSn }}<text v-if="o.trackingNumber"> · {{ o.trackingNumber }}</text></view>
-            <!-- PDD 已勾选单优惠勾选(2026-09-28):默认全选计入采购金额,点击逐项取消;
-                 列表单先显示"优惠合计",勾选后自动拉详情页逐项明细 -->
+            <!-- PDD/1688 已勾选单优惠勾选(2026-09-28/09-29):默认全选计入采购金额,点击逐项取消;
+                 PDD 列表单先显示"优惠合计"、1688 列表单先显示反推券额,勾选后自动拉官方明细 -->
             <view
-              v-if="curStore.selected.includes(o.orderSn) && o._platform === 'yangkeduo' && ((o.promotions && o.promotions.length) || o._promoLoading)"
+              v-if="curStore.selected.includes(o.orderSn) && (o._platform === 'yangkeduo' || o._platform === 'ali1688') && ((o.promotions && o.promotions.length) || o._promoLoading)"
               class="po-promos"
               @click.stop
             >
@@ -426,6 +426,7 @@ import {
   searchPlatformOrder,
   getPlatformOrdersStatus,
   getPddPromotions,
+  getAli1688Promotions,
 } from '../../api/order.js';
 import { getSkusInfo, setSkuCustoms, updatePrice } from '../../api/price-manage.js';
 import { fmtMoney, fmtTime } from '../../utils/fmt.js';
@@ -923,9 +924,9 @@ async function loadOrders(tabKey) {
   st.selected = st.selected.filter((s) => keepSn.has(s));
   try {
     const data = await getPlatformOrders(def.platform, { tab: st.tab, size: 30, account: def.account });
-    // PDD 列表单(2026-09-28):后端 amount 已是默认口径(实付+优惠合计);
-    // 此处补伪优惠条目供勾选(lazy 标记=仅合计无明细,勾选后按需拉详情页逐项明细)
-    st.orders = def.platform === 'pdd'
+    // PDD/1688 列表单(2026-09-28/09-29):后端 amount 已是默认口径(实付+优惠);
+    // 此处补伪优惠条目供勾选(lazy 标记=仅合计/反推无明细,勾选后按需拉官方明细)
+    st.orders = ['pdd', 'ali1688'].includes(def.platform)
       ? (data?.orders || []).map((o) => normalizePddPromoOrder(o))
       : (data?.orders || []);
   } catch (e) {
@@ -1005,7 +1006,10 @@ async function ensurePromoDetail(o) {
   const account = o._account || curTabDef.value?.account;
   if (src) src._promoLoading = true;
   try {
-    const data = await getPddPromotions(o.orderSn, account);
+    // 按平台分派:PDD 开详情页读 rawData,1688 调官方 buyerView(官方 couponFee/discount)
+    const data = o._platform === 'ali1688'
+      ? await getAli1688Promotions(o.orderSn, account)
+      : await getPddPromotions(o.orderSn, account);
     const items = (data?.promotions || []).map((p) => ({ description: p.description, amount: p.amount, checked: true }));
     if (src && items.length) {
       const keepOff = src.promotions.some((p) => !p.checked);
@@ -1064,8 +1068,8 @@ async function doSearch() {
     const found = data?.result;
     if (found) {
       // 字段对齐:后端搜索返回 orderAmount,前端表格/保存逻辑用 amount(与 web 端 OrderProcess.vue 同口径)
-      // PDD 单(2026-09-28):归一化优惠勾选态(默认全选),amount=后端默认口径(实付+全部优惠)
-      const hit = def.platform === 'pdd'
+      // PDD/1688 单:归一化优惠勾选态(默认全选),amount=后端默认口径(实付+全部优惠)
+      const hit = ['pdd', 'ali1688'].includes(def.platform)
         ? normalizePddPromoOrder({ ...found, amount: found.orderAmount ?? found.amount ?? 0 })
         : { ...found, amount: found.orderAmount ?? found.amount ?? 0 };
       st.searched = [hit, ...st.searched.filter((o) => o.orderSn !== found.orderSn)];
@@ -1086,8 +1090,8 @@ function toggleSelect(o) {
   if (i >= 0) st.selected.splice(i, 1);
   else {
     st.selected.push(o.orderSn);
-    // PDD 列表单:勾选后按需拉优惠明细(搜索单已带明细/已拉取过则内部跳过)
-    if (o._platform === 'yangkeduo') ensurePromoDetail(o);
+    // PDD/1688 列表单:勾选后按需拉优惠明细(搜索单已带明细/已拉取过则内部跳过)
+    if (o._platform === 'yangkeduo' || o._platform === 'ali1688') ensurePromoDetail(o);
   }
 }
 

@@ -284,6 +284,15 @@ export function getPddPromotions(orderSn, account) {
   return request.get('/admin/api/platform-orders/pdd/promotions', query);
 }
 
+// 1688 订单优惠明细(2026-09-29,采购弹窗优惠勾选)
+// 列表单按总额恒等式反推伪条目(lazy),勾选后拉 buyerView 官方 couponFee/discount;
+// 返回 { paidAmount, promotions:[{description,amount}] }
+export function getAli1688Promotions(orderSn, account) {
+  const query = { orderSn };
+  if (account) query.account = account;
+  return request.get('/admin/api/platform-orders/ali1688/promotions', query);
+}
+
 // 浏览器运行态 + 各平台×账号登录态探测(替代原扩展 PING/PONG)
 // 返回 { state, browsers: { <账号>: {state,pid,profileDir} },
 //        platforms: { pdd/ali1688/taobao: { accounts: { <账号>: { login, cookieNames? } } } } }

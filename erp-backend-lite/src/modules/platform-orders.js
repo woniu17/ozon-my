@@ -33,6 +33,7 @@ import {
   hasAliOpenApiToken,
   listAli1688OpenApiOrders,
   searchAliOpenApiInAccount,
+  getAli1688Promotions,
 } from '../services/platform-orders/adapters/ali1688-openapi.js';
 import { listTaobaoOrders, searchTaobaoOrder } from '../services/platform-orders/adapters/taobao.js';
 import { listXianyuOrders, searchXianyuOrder } from '../services/platform-orders/adapters/xianyu.js';
@@ -184,6 +185,22 @@ router.get('/admin/api/platform-orders/pdd/promotions', async (req, res, next) =
     }
     const account = resolveAccount('pdd', req.query.account);
     const result = await fetchPddOrderPromotions(orderSn, account);
+    res.json(ok(result));
+  } catch (e) { next(e); }
+});
+
+// ── GET /ali1688/promotions:1688 订单优惠明细(2026-09-29,采购弹窗优惠勾选)──
+// 1688 列表接口不返回 couponFee,前端按总额恒等式反推伪条目(lazy 标记),
+// 勾选该单后调此接口拉 buyerView 官方 couponFee/discount 确认明细并重算金额;
+// 仅 OpenAPI 路径支持(浏览器 mtop 兜底链路无伪条目,不会请求此接口)
+router.get('/admin/api/platform-orders/ali1688/promotions', async (req, res, next) => {
+  try {
+    const orderSn = String(req.query.orderSn || '').trim();
+    if (!orderSn) {
+      throw new ApiError(ErrorCode.VALIDATION_ERROR, '缺少 orderSn 查询参数');
+    }
+    const account = resolveAccount('ali1688', req.query.account);
+    const result = await getAli1688Promotions(orderSn, account);
     res.json(ok(result));
   } catch (e) { next(e); }
 });

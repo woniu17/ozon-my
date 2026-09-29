@@ -90,6 +90,13 @@ export function getPddPromotions(orderSn, account) {
   return request.get('/admin/api/platform-orders/pdd/promotions', query);
 }
 
+// 1688 订单优惠明细(2026-09-29,采购页优惠勾选):列表伪条目勾选后拉 buyerView 官方券/折扣明细
+export function getAli1688Promotions(orderSn, account) {
+  const query = { orderSn };
+  if (account) query.account = account;
+  return request.get('/admin/api/platform-orders/ali1688/promotions', query);
+}
+
 // 浏览器运行态 + 各平台×账号登录态探测(Step2 未登录警示)
 export function getPlatformOrdersStatus() {
   return request.get('/admin/api/platform-orders/status');
