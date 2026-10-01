@@ -82,20 +82,22 @@ ssh root@2.tencent.yochylin.com 'chmod +x /root/code/ozon-webhook-proxy/bin/webh
 
 # 3. pm2（非登录 shell 里 pm2 不在 PATH，先补）
 ssh root@2.tencent.yochylin.com 'export PATH=$PATH:$(ls -d /root/.nvm/versions/node/*/bin | tail -1)
-  pm2 start /root/code/ozon-webhook-proxy/start.sh --name ozon-webhook-proxy \
+  pm2 start /root/code/ozon-webhook-proxy/start.sh --name msg \
     --interpreter bash --cwd /root/code/ozon-webhook-proxy
-  pm2 save'
+  # 应用名 2026-10-01 由 ozon-webhook-proxy 改为 msg(目录名/env 文件名不变,
+  # 日志在 /root/.pm2/logs/msg-{out,error}.log)
+  pm2 save'   # 必须:pm2-root 开机按 dump.pm2 resurrect,不 save 则重启机器后该服务不在
 ```
 
 验证与运维：
 
 ```bash
 curl -sk https://2.tencent.yochylin.com:17443/webhook/health | jq
-pm2 logs ozon-webhook-proxy --lines 50
-pm2 restart ozon-webhook-proxy          # 改 env 后直接 restart（start.sh 每次重新 source）
+pm2 logs msg --lines 50
+pm2 restart msg                         # 改 env 后直接 restart（start.sh 每次重新 source）
 ```
 
-回滚：`pm2 delete ozon-webhook-proxy`，nginx 那段 `location /webhook/` 注释掉 reload。
+回滚：`pm2 delete msg`，nginx 那段 `location /webhook/` 注释掉 reload。
 落盘目录保留，重启后续投。
 
 ## dead 目录手工重放
