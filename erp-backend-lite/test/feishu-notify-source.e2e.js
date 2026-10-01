@@ -17,7 +17,9 @@ process.env.ERP_DATA_DIR = TMP_DB_DIR;
 // db/config 在加载时就会 open 库、读 env，只能设完环境变量再动态 import
 const { initSchema } = await import('../src/db/index.js');
 const config = (await import('../src/config/index.js')).default;
-const { sendFeishuText, notifyPostingPickedUp } = await import('../src/services/webhook/feishu-notify.js');
+const { sendFeishuText, notifyPostingPickedUp, notifyPostingEvent } =
+  await import('../src/services/webhook/feishu-notify.js');
+const { getStoreBySellerId } = await import('../src/services/webhook/store-map.js');
 
 const sent = [];
 const realFetch = globalThis.fetch;
@@ -73,10 +75,50 @@ async function testNotifyForwardsSource() {
   console.log('✓ notifyPostingPickedUp: source 一路透传到文案尾部，机器人路由与空 URL 跳过不受影响');
 }
 
+async function testUnifiedTitles() {
+  config.feishu.webhookUrlCancel = 'https://fake.example/cancel';
+  config.feishu.webhookUrlDefault = 'https://fake.example/default';
+  config.feishu.webhookUrlNew = 'https://fake.example/new';
+  config.feishu.webhookUrlReceived = 'https://fake.example/received';
+
+  // 临时库里没有这些 seller_id → 店名退化成裸 id，用例把同样的退化口径算出来
+  const head = (sellerId, posting) =>
+    `[${getStoreBySellerId(sellerId)?.name ?? String(sellerId)}] [${posting}]`;
+
+  const cases = [
+    { args: ['TYPE_STATE_CHANGED', { posting_number: 'T-1', seller_id: 90001, new_state: 'posting_packing' }], expect: head(90001, 'T-1') },
+    { args: ['TYPE_STATE_CHANGED', { posting_number: 'T-2', seller_id: 90001, new_state: 'posting_received' }], expect: head(90001, 'T-2') },
+    { args: ['TYPE_POSTING_CANCELLED', { posting_number: 'T-3', seller_id: 90001 }], expect: head(90001, 'T-3') },
+    // 质检单保留 [质检] 标签(与新订单同群,是唯一区分)
+    { args: ['TYPE_NEW_POSTING', { posting_number: '02131000000001-1', seller_id: 90001, products: [] }], expect: `[质检] ${head(90001, '02131000000001-1')}` },
+    // 兜底分支保留类型码
+    { args: ['TYPE_UNKNOWN_PUSH', { posting_number: 'T-4', seller_id: 90001 }], expect: `${head(90001, 'T-4')} [TYPE_UNKNOWN_PUSH]` },
+  ];
+  for (const c of cases) {
+    sent.length = 0;
+    assert.equal(await notifyPostingEvent(...c.args, 'webhook'), true, `标题用例应发送成功: ${c.expect}`);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].text.split('\n')[0], c.expect, `首行标题不对: 实得 ${sent[0].text.split('\n')[0]}`);
+    assert.equal(/Ozon\s*推送/.test(sent[0].text), false, '文案里不应再出现 "Ozon 推送"');
+    assert.equal(/货件(取消|签收|待取件|备货|状态变更)/.test(sent[0].text.split('\n')[0]), false, '标题里不应再有状态标签');
+    assert.equal(footerOf(sent[0].text), `—— 来自 ${config.appName} · 消息推送`, '来源只能出现在尾部');
+  }
+
+  // 揽收通知同样只剩 [店名] [货件号]
+  const pickupUrl = 'https://fake.example/pickup';
+  config.feishu.webhookUrlPickup = pickupUrl;
+  sent.length = 0;
+  assert.equal(await notifyPostingPickedUp({ posting_number: 'T-5', seller_id: 90001 }, 'webhook'), true);
+  assert.equal(sent[0].text.split('\n')[0], head(90001, 'T-5'), '揽收标题不该再带 [揽收]');
+
+  console.log('✓ 标题统一为 [店名] [货件号]：状态/渠道交由机器人群名与消息尾部表达');
+}
+
 try {
   await initSchema();
   await testSourceLabels();
   await testNotifyForwardsSource();
+  await testUnifiedTitles();
   console.log('\n全部通过');
 } finally {
   globalThis.fetch = realFetch;

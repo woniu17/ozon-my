@@ -453,14 +453,16 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
   let timeField;
   let extra = '';
   let summaryLines = null;
+  // 通知标题统一 [店名] [货件号]:状态由机器人(群名)表达、触发渠道由消息尾部"—— 来自 …"表达,
+  // 标题只负责在群里一眼定位是哪一单
+  const sellerName = getStoreBySellerId(sellerId)?.name ?? String(sellerId);
+  const headTitle = `[${sellerName}] [${postingNumber}]`;
   switch (messageType) {
     case 'TYPE_NEW_POSTING': {
       // 02131/024785 开头的货件号为质检单,其余为新订单
-      const store = getStoreBySellerId(sellerId);
-      const sellerName = store ? store.name : String(sellerId);
       const isQc = typeof postingNumber === 'string'
         && (postingNumber.startsWith('02131') || postingNumber.startsWith('024785'));
-      title = `${isQc ? '[质检]' : ''} [${sellerName}] [${postingNumber}]`;
+      title = `${isQc ? '[质检] ' : ''}${headTitle}`;
       timeField = ['处理时间', fmtShTime(payload.in_process_at)];
       const products = Array.isArray(payload.products) ? payload.products : [];
       const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
@@ -485,7 +487,7 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
       break;
     }
     case 'TYPE_POSTING_CANCELLED': {
-      title = '[货件取消] Ozon 推送';
+      title = headTitle;
       timeField = ['取消时间', fmtShTime(payload.changed_state_date)];
       extra = `\n旧状态: ${payload.old_state ?? '-'}\n取消原因: ${formatCancelReason(payload.reason?.message) ?? '-'}`;
       // 取消推送无商品字段 → 查 ozon_postings.products_json(NEW_POSTING 落库时已存)
@@ -496,11 +498,8 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
     }
     case 'TYPE_STATE_CHANGED': {
       const ns = payload.new_state ?? '';
-      // 按状态细分标题(2026-09-18 分机器人路由:签收/待取件/备货)
-      title = ns === 'posting_received' ? '[货件签收] Ozon 推送'
-        : ns === 'posting_in_pickup_point' ? '[货件待取件] Ozon 推送'
-        : (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') ? '[货件备货] Ozon 推送'
-        : '[货件状态变更] Ozon 推送';
+      // 状态细分只影响机器人路由(2026-09-18:签收/待取件/备货分流),不再进标题
+      title = headTitle;
       timeField = ['变更时间', fmtShTime(payload.changed_state_date)];
       extra = `\n新状态: ${ns || '-'}`;
       // 状态变化推送无商品字段 → 查 ozon_postings.products_json
@@ -519,7 +518,8 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
       break;
     }
     default:
-      title = `[${messageType}] Ozon 推送`;
+      // 未知推送类型:同款式标题,末尾保留类型码便于排查
+      title = `${headTitle} [${messageType}]`;
       timeField = ['时间', fmtShTime(new Date().toISOString())];
   }
 
@@ -642,7 +642,8 @@ export async function notifyPostingPickedUp(payload, source = 'webhook') {
   const store = getStoreBySellerId(sellerId);
   const sellerName = store ? store.name : String(sellerId);
 
-  const title = `[揽收] [${sellerName}] [${postingNumber}]`;
+  // 与 notifyPostingEvent 同款标题:状态靠揽收群群名表达,标题只定位货件
+  const title = `[${sellerName}] [${postingNumber}]`;
   let pickupLines = null;
   try {
     const { bySeller, total } = buildTodayPickupSummaryFromDb();
