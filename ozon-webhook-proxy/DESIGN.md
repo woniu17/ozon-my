@@ -179,16 +179,17 @@ Ozon 的重投就变成 ERP 里的重复事件。`TestPayloadBigIntByteFidelity`
 | `DRAIN_TIMEOUT` | `10s` | 退出时等在途转发 |
 | `ALERT_CONSEC_FAIL` / `ALERT_STALE_AFTER` | `5` / `10m` | 告警阈值 |
 | `FEISHU_BOT_TOKEN` | 空 | 空则只打日志，不发外网 |
-| `PROXY_TOKEN` | 空 | 共享密钥，第二阶段与 ERP 同时启用 |
+| `PROXY_TOKEN` | 空 | 与 ERP 的共享密钥；生产两边均已配置并生效（2026-10-01） |
 
-## 8. 第二阶段（ERP 侧已实现，2026-10-01）
+## 8. 第二阶段（2026-10-01 已在生产启用）
 
-1. **共享密钥**（代理侧早就发了，ERP 侧 `ipWhitelist` 已加判定）：
+1. **共享密钥**（代理发、ERP 验，两侧 `ipWhitelist` 判定已上线）：
    ERP 配了 `PROXY_TOKEN` 后**只认 `X-Webhook-Proxy` 头**，不再看 `X-Forwarded-For` 的
    Ozon CIDR——那个头谁都能自造，冒充 `195.34.21.0/24` 并不困难。比对用
    `crypto.timingSafeEqual`（定长缓冲）。**没配 `PROXY_TOKEN` 时行为与原来完全一致**（只按 CIDR）。
-   启用顺序有讲究：**Ozon 回调 URL 还指向 ERP 时不能设这个变量**，否则 Ozon 的直推会全部 403；
-   要等回调 URL 切到本代理之后，两边同时填同一个密钥再重启。
+   启用/改值的顺序**必须先重启代理、再重启 ERP**：反过来的窗口里，代理发的请求还没带上（新）密钥，
+   ERP 已经只认头 → 403，而代理把 4xx 判成永久失败进 `dead/`，Ozon 那边早已拿到 200 不再重投，消息就丢了。
+   前提是 Ozon 的回调 URL 已指向本代理——直推 ERP 的流量会被全部 403。
    更彻底的做法是 ERP 侧 nginx 限制 17443 来源为 tencent 出口 IP，可与之并存。
 2. **`processing` 状态回收**（ERP 侧）：`claimPendingEvents` 现在写 `claimed_at`；
    poller 启动时把残留 `processing` 全部放回 pending（此刻本进程不可能有在途 handler），

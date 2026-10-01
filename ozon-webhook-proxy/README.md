@@ -119,6 +119,10 @@ ERP 一旦配了 `PROXY_TOKEN`，只带 XFF 的重放会被 403 —— 密钥头
 3. **payload 全程原始字节**：不要"顺手"在代理里做 JSON 解析再序列化，
    19 位 `product_id`/`sku` 会丢精度，ERP 的幂等键跟着变（`TestForwardPreservesBytesAndSourceIP` 守着这条）。
 4. **`TARGET_URL` 用 apex 域名 `yochylin.com`**，不要用 `nuc.yochylin.com`：证书 SAN 里没有它，TLS 校验会失败。
-5. **`PROXY_TOKEN` 什么时候能填**：ERP 侧已经支持（配了就只认 `X-Webhook-Proxy`，不再看 XFF）。
-   但 Ozon 的回调 URL 还在 ERP 上时**不能填**，否则 Ozon 直推全部 403；
-   等 URL 切到本代理，两边填同一个值再各自重启。见 DESIGN.md §8。
+5. **`PROXY_TOKEN` 已于 2026-10-01 两边启用**（Ozon 回调 URL 早已指向本代理，实时推送在跑）。
+   启用/改值的顺序**只能先代理后 ERP**：ERP 一旦配了密钥就只认 `X-Webhook-Proxy`，
+   而代理还没 reload 新值时发出的请求没这个头 → ERP 回 403 → 代理把 4xx 判成**永久失败进 `dead/`**
+   （Ozon 那边已经拿到 200，不会再重投，等于丢消息）。
+   两边 env 里是同一个 64 位 hex；代理 env `/root/code/ozon-webhook-proxy/ozon-webhook-proxy.env`，
+   ERP 侧 `/root/code/ozon-my/erp-backend-lite/.env`（改前备份 `.env.bak-token-20261001-111014`）。
+   验证方式（都不落库）：带对密钥 + `TYPE_PING` 应 200，伪造 `x-forwarded-for: 195.34.21.77` 但不带头应 403。见 DESIGN.md §8。
