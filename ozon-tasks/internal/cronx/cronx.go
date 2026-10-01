@@ -1,8 +1,14 @@
-// Package cronx 解析调度表达式并算出下一次触发时刻，支持两种写法：
+// Package cronx 解析调度表达式并算出下一次触发时刻，支持三种写法：
 //
 //	0 3 * * *        标准 5 段 cron（分 时 日 月 周），按本地时区的墙钟对齐
+//	0 0 3 * *        6 段带秒位（httpsrv 侧就是这种），秒位必须是 0
 //	@every 8h        固定间隔，d/h/m/s 人性化时长（与 .env 冷却期同一方言）
 //	@daily 等        常见别名，等价于对应的 cron
+//
+// 为什么要认 6 段：两个程序吃同一份 .env，JS 侧的默认排期 `0 0 */8 * * *` 就是 6 段。
+// 只认 5 段会让 Go 在配置完全没变的情况下悄悄退回 @every 节拍，触发点随启动时间漂，
+// 对拍时看起来像 Go 的 bug。秒位强制为 0 是因为这个任务一轮要几十秒到几分钟，
+// 亚分钟排期只会让同一班次自我重叠。
 //
 // 为什么用固定时刻而不是"跑完再等 N 小时"的节拍器：
 // 节拍器的触发点会随任务耗时不断漂移，凌晨低峰跑的维护任务会一天比一天晚，
@@ -121,10 +127,19 @@ func MustParse(spec string) Schedule {
 func parseCron(spec string) (*cronSpec, error) {
 	parts := strings.Fields(spec)
 	if len(parts) == 6 {
-		return nil, fmt.Errorf("调度表达式只支持 5 段（分 时 日 月 周），不接受秒位: %q", spec)
+		// 秒位只接受字面 0：本任务一轮就要几十秒到几分钟，亚分钟排期只会让同一班次自我重叠
+		if parts[0] != "0" {
+			return nil, fmt.Errorf("6 段表达式的秒位必须是 0，收到 %q: %s", parts[0], spec)
+		}
+		c, err := parseCron(strings.Join(parts[1:], " "))
+		if err != nil {
+			return nil, err
+		}
+		c.raw = spec // 回显保留原始写法：启动日志和 .env 上看到的一模一样，对拍不用换算
+		return c, nil
 	}
 	if len(parts) != 5 {
-		return nil, fmt.Errorf("调度表达式需要 5 段（分 时 日 月 周），收到 %d 段: %q", len(parts), spec)
+		return nil, fmt.Errorf("调度表达式需要 5 段（分 时 日 月 周），或 6 段且秒位为 0，收到 %d 段: %q", len(parts), spec)
 	}
 
 	c := &cronSpec{raw: spec}

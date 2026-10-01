@@ -418,3 +418,52 @@ func TestLoadAPIBaseURL(t *testing.T) {
 		}
 	}
 }
+
+// 总开关的方言必须和 httpsrv 逐字一致，而且两个键的缺省方向刻意相反：
+//   - OZON_TIMER_ENABLED：JS 用 `=== 'true'`，默认关。这里松一寸，就会出现
+//     "JS 侧已经关了、Go 侧照跑"，而两侧没有共享锁，那是最坏的双写状态。
+//   - OZON_ACTION_DEACTIVATE_ENABLED：JS 原本根本没这个开关（一直启用），
+//     缺省写成"关"就等于部署这段代码时把生产在跑的任务静默停掉。
+func TestEnabledSwitchDialectAndDefaults(t *testing.T) {
+	cases := []struct {
+		name           string
+		env            string
+		wantTimer      bool
+		wantDeactivate bool
+	}{
+		{"两个键都没配", "OZON_SHOPS=店一:1:k1", false, true},
+		{"显式 true", "OZON_TIMER_ENABLED=true\nOZON_ACTION_DEACTIVATE_ENABLED=true", true, true},
+		{"显式 false", "OZON_TIMER_ENABLED=true\nOZON_ACTION_DEACTIVATE_ENABLED=false", true, false},
+		{"TRUE 与 1 在 JS 方言里都不算开", "OZON_TIMER_ENABLED=TRUE\nOZON_ACTION_DEACTIVATE_ENABLED=1", false, true},
+		{"FALSE 不等于 false，仍算开", "OZON_ACTION_DEACTIVATE_ENABLED=FALSE", false, true},
+		{"两端留白算开", "OZON_TIMER_ENABLED= true ", true, true},
+	}
+	for _, c := range cases {
+		cfg, err := Load(writeFile(t, c.env))
+		if err != nil {
+			t.Fatalf("%s: Load 报错: %v", c.name, err)
+		}
+		if cfg.TimerEnabled != c.wantTimer || cfg.DeactivateEnabled != c.wantDeactivate {
+			t.Errorf("%s: 定时器=%v 活动移除=%v，期望 %v / %v",
+				c.name, cfg.TimerEnabled, cfg.DeactivateEnabled, c.wantTimer, c.wantDeactivate)
+		}
+	}
+}
+
+// 命令行/环境注入要能压过文件值：这是关掉总开关后临时手工跑一班的唯一出口，
+// 不该为了放行一次而改生产 .env。
+func TestEnabledSwitchOverriddenByProcessEnv(t *testing.T) {
+	t.Setenv("OZON_TIMER_ENABLED", "true")
+	path := writeFile(t, "OZON_SHOPS=店一:1:k1\nOZON_TIMER_ENABLED=false\nOZON_ACTION_DEACTIVATE_ENABLED=false")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load 报错: %v", err)
+	}
+	if !cfg.TimerEnabled {
+		t.Error("环境变量里的 true 应压过文件里的 false")
+	}
+	// 没被环境变量覆盖的键仍取文件值
+	if cfg.DeactivateEnabled {
+		t.Error("OZON_ACTION_DEACTIVATE_ENABLED 只写在文件里，应按文件的 false 关掉")
+	}
+}

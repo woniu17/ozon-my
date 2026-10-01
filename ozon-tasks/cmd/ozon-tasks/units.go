@@ -52,6 +52,22 @@ func buildUnits(cfg *config.Config, d *task.Deps, o options) ([]unit, error) {
 		return nil, fmt.Errorf("-shop 与 -group 不能同时使用")
 	}
 
+	// 总开关：被关掉的任务一个单元都不展开。切换期的关键护栏——JS 侧关掉的同时
+	// 这边必须同样不动，否则两侧会在没有共享锁的情况下同时写同一家店铺。
+	if wantTimer && !cfg.TimerEnabled {
+		logx.Infof("[定时器] 总开关未开启（JS 方言：OZON_TIMER_ENABLED 必须显式为 true），本次不生成调度单元。" +
+			"临时放行：命令行上 OZON_TIMER_ENABLED=true ozon-tasks ...")
+		wantTimer = false
+	}
+	if wantDeact && !cfg.DeactivateEnabled {
+		logx.Infof("[活动移除] 总开关已被 OZON_ACTION_DEACTIVATE_ENABLED=false 关掉，本次不生成调度单元。" +
+			"临时放行：命令行上 OZON_ACTION_DEACTIVATE_ENABLED=true ozon-tasks ...")
+		wantDeact = false
+	}
+	if !wantTimer && !wantDeact {
+		return nil, fmt.Errorf("-task %s 选中的任务全被总开关关掉了：查 OZON_TIMER_ENABLED（缺省关）与 OZON_ACTION_DEACTIVATE_ENABLED（缺省开）", o.task)
+	}
+
 	// -shop 用于"就先拿这一家试试"，这时不该顺带碰其他店
 	var manualShops []config.Shop
 	if o.shops != "" {
@@ -248,6 +264,7 @@ func printConfig(cfg *config.Config, o options) error {
 	fmt.Printf("并发/限速       : 跨店 %d 家并行，每店 %.2f req/s（突发 %d）\n",
 		cfg.TaskConcurrency, cfg.APIRPS, cfg.APIBurst)
 	fmt.Printf("租约/失败退避   : %v / %v\n", cfg.LeaseTTL, cfg.RetryBackoff)
+	fmt.Printf("总开关          : 定时器=%s 活动移除=%s\n", onOff(cfg.TimerEnabled), onOff(cfg.DeactivateEnabled))
 	fmt.Printf("feishu webhook : %s\n", maskedURL(cfg.OzonFeishuWebhook))
 	fmt.Printf("shops          : %d 家\n", len(cfg.Shops))
 	for _, s := range cfg.Shops {
@@ -289,6 +306,14 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// onOff 把开关印成中文。布尔直接印 true/false 在中文表头里读起来像出了错。
+func onOff(b bool) string {
+	if b {
+		return "开"
+	}
+	return "关"
 }
 
 // maskedURL webhook 末段就是密钥，只露前 12 字符够定位是哪台机器人了。

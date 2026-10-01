@@ -93,6 +93,17 @@ type Config struct {
 	TimerSchedule      string
 	DeactivateSchedule string
 
+	// 总开关。切到 Go 之后 JS 侧会被关掉，两边必须吃同一条开关，否则会出现
+	// "生产上以为已经关了，其实另一侧还在写店铺"——两个程序没有共享锁，这种状态最危险。
+	//
+	// 两个键的缺省方向刻意相反：
+	//   OZON_TIMER_ENABLED            沿用 JS 的历史语义：默认关，必须显式 =true 才跑
+	//   OZON_ACTION_DEACTIVATE_ENABLED 新增键。JS 侧历史上根本没有这个开关（一直启用），
+	//                                 所以缺省必须是"开"，否则部署这段代码本身就等于
+	//                                 在生产上静默停掉一个正在跑的任务。
+	TimerEnabled      bool
+	DeactivateEnabled bool
+
 	// 跑一轮的资源护栏。都是按进程算的上限，实际限速再按店拆（见 ozon.Limiter）。
 	TaskConcurrency int           // 同时在跑几家店
 	APIRPS          float64       // 每店每秒请求数，0 = 不限速（JS 侧的行为）
@@ -191,6 +202,12 @@ func Load(envPath string) (*Config, error) {
 	if err := validateSchedule("OZON_TIMER_SCHEDULE", timerSchedule); err != nil {
 		return nil, err
 	}
+	// 与 JS 的 `process.env.X === 'true'` 完全一致：只有字面 true 算开启，
+	// "TRUE"/"1"/"yes" 都算关。方言不一致会让同一份 .env 在两边给出相反的结论，
+	// 而这里出错的方向是"该关的没关"，比该跑的没跑危险得多。
+	timerEnabled := strings.TrimSpace(src.get("OZON_TIMER_ENABLED")) == "true"
+	deactivateEnabled := strings.TrimSpace(src.get("OZON_ACTION_DEACTIVATE_ENABLED")) != "false"
+
 	deactivateSchedule := strings.TrimSpace(src.get("OZON_ACTION_DEACTIVATE_SCHEDULE"))
 	if err := validateSchedule("OZON_ACTION_DEACTIVATE_SCHEDULE", deactivateSchedule); err != nil {
 		return nil, err
@@ -294,6 +311,8 @@ func Load(envPath string) (*Config, error) {
 		DeactivateCooldown: deactivateCooldown,
 		TimerSchedule:      timerSchedule,
 		DeactivateSchedule: deactivateSchedule,
+		TimerEnabled:       timerEnabled,
+		DeactivateEnabled:  deactivateEnabled,
 		TaskConcurrency:    concurrency,
 		APIRPS:             apiRPS,
 		APIBurst:           apiBurst,

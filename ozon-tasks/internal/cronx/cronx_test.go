@@ -190,11 +190,41 @@ func TestMonthAndYearRollover(t *testing.T) {
 	}
 }
 
+// httpsrv 侧的 OZON_TIMER_CRON 默认值就是 6 段带 0 秒位。两个程序吃同一份 .env 时，
+// Go 必须解出与 5 段写法完全相同的触发时刻，否则"配置没变、班次变了"会被当成 Go 的 bug。
+func TestSixFieldMatchesFiveField(t *testing.T) {
+	pairs := []struct{ six, five string }{
+		{"0 0 */8 * * *", "0 */8 * * *"},
+		{"0 30 2 * * *", "30 2 * * *"},
+		{"0 0 0 1 1 *", "0 0 1 1 *"},
+	}
+	froms := []time.Time{
+		at(2026, 10, 1, 9, 0),
+		at(2026, 10, 1, 15, 59),
+		at(2026, 10, 1, 16, 0),
+		at(2026, 12, 31, 23, 30),
+	}
+	for _, p := range pairs {
+		s6, s5 := must(t, p.six), must(t, p.five)
+		if got := s6.String(); got != p.six {
+			t.Errorf("%s 的 String() 回显成 %q，应保留原始写法（启动日志要和 .env 对得上）", p.six, got)
+		}
+		for _, from := range froms {
+			n6, n5 := s6.Next(from), s5.Next(from)
+			if !n6.Equal(n5) {
+				t.Errorf("%s Next(%s) = %s，与同义 5 段 %s 的 %s 不一致",
+					p.six, from.Format(time.RFC3339), n6.Format(time.RFC3339), p.five, n5.Format(time.RFC3339))
+			}
+		}
+	}
+}
+
 func TestParseRejectsBadSpecs(t *testing.T) {
 	bad := []string{
-		"* * * *",     // 段数不足
-		"* * * * * *", // 带秒位
-		"60 * * * *",  // 越界
+		"* * * *",        // 段数不足
+		"* * * * * *",    // 秒位不是 0
+		"30 0 */8 * * *", // 6 段但秒位非 0：亚分钟排期会自我重叠，必须拒绝
+		"60 * * * *",     // 越界
 		"* 24 * * *",
 		"* * 0 * *", // 日没有 0
 		"* * * 13 *",

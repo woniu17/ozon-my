@@ -23,6 +23,8 @@ func testConfig() *config.Config {
 		DeactivateCooldown: time.Hour,
 		LeaseTTL:           30 * time.Minute,
 		RetryBackoff:       10 * time.Minute,
+		TimerEnabled:       true,
+		DeactivateEnabled:  true,
 		TimerGroups: []config.Group{
 			{Name: "夜间", ShopNames: []string{"A"}, Schedule: "30 4 * * *"},
 			{Name: "跟全局", ShopNames: []string{"B"}},
@@ -71,6 +73,52 @@ func TestUnitsRejectBadSchedule(t *testing.T) {
 	cfg.TimerGroups = []config.Group{{Name: "坏排期", ShopNames: []string{"A"}, Schedule: "每天四点"}}
 	if _, err := buildUnits(cfg, deps(), options{task: "all"}); err == nil {
 		t.Error("config.Load 之外还有人能塞进非法排期，展开时必须再拦一次")
+	}
+}
+
+// 总开关必须在展开调度单元这一层生效，而不是只印在日志里：切流时 JS 侧被关掉，
+// Go 侧要能靠同一条 .env 独立决定动不动。关掉却仍然展开单元 = 照旧写店铺。
+func TestEnabledSwitchGatesUnits(t *testing.T) {
+	cases := []struct {
+		name       string
+		timer      bool
+		deactivate bool
+		task       string
+		wantSlots  string
+		wantErr    bool
+	}{
+		{"两个都开", true, true, "all", "ozon_timer_update_夜间 ozon_timer_update_跟全局 ozon_action_deactivate", false},
+		{"关定时器", false, true, "all", "ozon_action_deactivate", false},
+		{"关活动移除", true, false, "all", "ozon_timer_update_夜间 ozon_timer_update_跟全局", false},
+		{"两个都关 -task all", false, false, "all", "", true},
+		{"点名要定时器但被关", false, true, "timer", "", true},
+	}
+	for _, c := range cases {
+		cfg := testConfig()
+		cfg.TimerEnabled, cfg.DeactivateEnabled = c.timer, c.deactivate
+		units, err := buildUnits(cfg, deps(), options{task: c.task})
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("%s: 被总开关关掉的任务仍展开了 %d 个单元（%s）", c.name, len(units), slotList(units))
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: 展开失败: %v", c.name, err)
+		}
+		if got := strings.Join(slotList(units), " "); got != c.wantSlots {
+			t.Errorf("%s: 槽位 = %q，期望 %q", c.name, got, c.wantSlots)
+		}
+	}
+}
+
+// -shop 这条手工路径也必须过总开关：它是"就先拿这一家试试"的入口，
+// 一旦绕过开关，就等于有人把已经关掉的写路径又打开了。
+func TestEnabledSwitchAlsoGatesShopFlag(t *testing.T) {
+	cfg := testConfig()
+	cfg.TimerEnabled = false
+	if _, err := buildUnits(cfg, deps(), options{task: "timer", shops: "A"}); err == nil {
+		t.Error("-shop 手工指定也不该绕过总开关")
 	}
 }
 
