@@ -181,17 +181,26 @@ Ozon 的重投就变成 ERP 里的重复事件。`TestPayloadBigIntByteFidelity`
 | `FEISHU_BOT_TOKEN` | 空 | 空则只打日志，不发外网 |
 | `PROXY_TOKEN` | 空 | 共享密钥，第二阶段与 ERP 同时启用 |
 
-## 8. 第二阶段（与 ERP 一起改）
+## 8. 第二阶段（ERP 侧已实现，2026-10-01）
 
-1. **共享密钥**：代理带 `X-Webhook-Proxy: $PROXY_TOKEN`，ERP 在 `ipWhitelist` 前加一条
-   "头匹配则放行"。现在的 XFF 透传意味着**任何能连到 nuc 的人都能伪造 XFF 冒充 Ozon 网段**
-   写事件——和 ERP 今天的暴露面一样，不是代理引入的，但值得一起收掉。
-   更彻底的做法是 nginx 侧限制 17443 的来源为 tencent 出口 IP。
-2. **`processing` 状态回收**：ERP 的 `event-poller` 把事件置 `processing` 后崩溃，
-   该事件不会重投。代理这边已经尽力了（消息只在自己删除时才算投完），
-   需要 ERP 补一个 stale reclaim。
+1. **共享密钥**（代理侧早就发了，ERP 侧 `ipWhitelist` 已加判定）：
+   ERP 配了 `PROXY_TOKEN` 后**只认 `X-Webhook-Proxy` 头**，不再看 `X-Forwarded-For` 的
+   Ozon CIDR——那个头谁都能自造，冒充 `195.34.21.0/24` 并不困难。比对用
+   `crypto.timingSafeEqual`（定长缓冲）。**没配 `PROXY_TOKEN` 时行为与原来完全一致**（只按 CIDR）。
+   启用顺序有讲究：**Ozon 回调 URL 还指向 ERP 时不能设这个变量**，否则 Ozon 的直推会全部 403；
+   要等回调 URL 切到本代理之后，两边同时填同一个密钥再重启。
+   更彻底的做法是 ERP 侧 nginx 限制 17443 来源为 tencent 出口 IP，可与之并存。
+2. **`processing` 状态回收**（ERP 侧）：`claimPendingEvents` 现在写 `claimed_at`；
+   poller 启动时把残留 `processing` 全部放回 pending（此刻本进程不可能有在途 handler），
+   运行期每 60s 扫一次，`claimed_at` 超过 `POLLER_STALE_RECLAIM_MS`（默认 10min）的放回 pending
+   并 `retry_count+1`，所以有毒事件仍按 `POLLER_MAX_RETRY` 收敛到 dead，不会无限循环。
+   代价：真正跑超 10 分钟的 handler 会被重复处理一次——对秒级完成的 Ozon API 调用足够宽。
+   新列由 `initSchema()` 里的 `PRAGMA table_info` + `ALTER TABLE` 补，存量 `processing` 回填 `received_at`。
 3. **投递指标**：`/webhook/health` 已经吐了 `queue_depth`/`oldest_age_seconds`，
    可以接监控（现在只有飞书告警）。
+
+ERP 侧改动由 `erp-backend-lite/test/webhook-phase2.e2e.js` 验证（跑在 `ERP_DATA_DIR` 指的一次性空库里，
+不碰开发库事件）。
 
 ## 9. 测试覆盖
 

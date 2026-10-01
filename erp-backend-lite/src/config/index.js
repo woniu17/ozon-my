@@ -94,11 +94,19 @@ const config = {
     ipWhitelistEnabled: String(process.env.IP_WHITELIST_ENABLED ?? 'true') === 'true',
     // Ozon 官方推送源 3 段 CIDR
     ozonPushCidrs: ['195.34.21.0/24', '185.73.192.0/22', '91.223.93.0/24'],
+    // 与 ozon-webhook-proxy 的共享密钥(2026-10-01 第二阶段)
+    // 设置后 POST /webhook/ozon 只认 X-Webhook-Proxy 头,不再看源 IP:
+    // CIDR 判定基于 X-Forwarded-For,任何能连到本服务的人都能伪造它冒充 Ozon 网段。
+    // 留空=维持只按 CIDR 的老行为(Ozon 回调 URL 还没切到代理时必须留空)
+    proxyToken: process.env.PROXY_TOKEN || '',
     // 事件消费 poller 节奏
     poller: {
       intervalMs: Number(process.env.POLLER_INTERVAL_MS) || 2000,
       concurrency: Number(process.env.POLLER_CONCURRENCY) || 1,
       maxRetry: Number(process.env.POLLER_MAX_RETRY) || 5,
+      // processing 卡死回收窗口(2026-10-01):进程在 handler 中途崩溃时,
+      // 事件会永久停在 processing(poller 只捞 pending),超过这个窗口就放回 pending
+      staleReclaimMs: Number(process.env.POLLER_STALE_RECLAIM_MS) || 10 * 60 * 1000,
     },
   },
   // 飞书通知(决策⑤:本地不配 URL=不通知;服务器实例配置后启用)

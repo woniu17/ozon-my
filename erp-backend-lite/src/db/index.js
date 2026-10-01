@@ -6,7 +6,8 @@ import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { classifyDescriptionQuality } from '../utils/description-quality.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '..', '..', 'data');
+// ERP_DATA_DIR 给测试/多实例留出隔离目录的方式;不设时行为与原来完全一致
+const DATA_DIR = process.env.ERP_DATA_DIR || join(__dirname, '..', '..', 'data');
 const DB_PATH = join(DATA_DIR, 'erp.db');
 const SCHEMA_PATH = join(__dirname, 'schema.sql');
 
@@ -84,6 +85,17 @@ export async function initSchema() {
       );
       console.log(`[db] migration: added column op_ozon_order.${col}, backfilled`);
     }
+  }
+  // 2026-10-01: ozon_push_events.claimed_at 补列。
+  // poller 把事件置 processing 后如果进程崩溃,事件会永久停在 processing(claim 只捞 pending),
+  // claimed_at 记录上锁时间,stale reclaim 才能分辨"正在处理"和"卡死"。
+  // 存量 processing 行回填 received_at:它们都是历史孤儿,按接收时间判 stale 即可被回收。
+  const _evCols = db.prepare(`PRAGMA table_info(ozon_push_events)`).all();
+  if (_evCols.length > 0 && !_evCols.some((c) => c.name === 'claimed_at')) {
+    db.exec(`ALTER TABLE ozon_push_events ADD COLUMN claimed_at TEXT`);
+    db.exec(`UPDATE ozon_push_events SET claimed_at = received_at WHERE status = 'processing'`);
+    const _n = db.prepare(`SELECT COUNT(*) AS n FROM ozon_push_events WHERE status = 'processing'`).get().n;
+    console.log(`[db] migration: added column ozon_push_events.claimed_at, backfilled ${_n} processing rows`);
   }
   const sql = readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(sql);

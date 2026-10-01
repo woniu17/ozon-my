@@ -1,7 +1,9 @@
-// Ozon 推送源 IP 白名单中间件(2026-09-17 自 ozon-webhook 迁入,Express 化)
+// Ozon 推送来源鉴权中间件
 // 仅放行 Ozon 文档声明的 3 段 IP,拒绝其他来源
 // 挂载方式:webhook router 内部,只包 POST /webhook/ozon(见 modules/webhook.js)
 // 开发时设置 IP_WHITELIST_ENABLED=false 可关闭(本地 curl 调试)
+// 2026-10-01 第二阶段:配置 PROXY_TOKEN 后改为只认 ozon-webhook-proxy 的共享密钥头
+import { timingSafeEqual } from 'node:crypto';
 import config from '../config/index.js';
 import logger from './log.js';
 
@@ -32,10 +34,31 @@ function clientIp(req) {
   return req.socket?.remoteAddress || '';
 }
 
+// 共享密钥比对:定长缓冲 + timingSafeEqual,避免按字节短路比较泄漏长度/内容
+function tokenMatches(headerValue, secret) {
+  const got = typeof headerValue === 'string' ? headerValue : '';
+  const a = Buffer.from(got);
+  const b = Buffer.from(secret);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export function ipWhitelist(req, res, next) {
   if (!config.webhook.ipWhitelistEnabled) {
     return next();
   }
+
+  // 配了 PROXY_TOKEN 就只认它:CIDR 判定读的是 X-Forwarded-For 首段,
+  // 而 XFF 任何客户端都能自造,冒充 195.34.21.0/24 并不困难。
+  // 只有代理(2.tencent)持有密钥,来源才真正可验证。
+  // 注意:启用前必须确认 Ozon 的回调 URL 已指向代理,否则 Ozon 直推会全部 403。
+  if (config.webhook.proxyToken) {
+    if (tokenMatches(req.headers['x-webhook-proxy'], config.webhook.proxyToken)) {
+      return next();
+    }
+    logger.warn({ ip: clientIp(req), path: req.path }, '共享密钥缺失或不匹配,拒绝');
+    return res.status(403).json({ error: { code: 'ERROR_UNKNOWN', message: 'forbidden', details: null } });
+  }
+
   const ip = clientIp(req);
   const allowed = config.webhook.ozonPushCidrs.some(cidr => ipInCidr(ip, cidr));
   if (!allowed) {

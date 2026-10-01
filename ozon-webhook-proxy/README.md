@@ -105,9 +105,12 @@ pm2 restart ozon-webhook-proxy          # 改 env 后直接 restart（start.sh �
 ```bash
 cd /root/code/ozon-webhook-proxy/data/spool/dead
 cat xxx.json | jq -r '.payload' | \
-  curl -sk --data-binary @- -H 'content-type: application/json' \
-       -H 'x-forwarded-for: 195.34.21.77' https://yochylin.com:17443/webhook/ozon
+  curl -s --data-binary @- -H 'content-type: application/json' \
+       -H 'x-forwarded-for: 195.34.21.77' -H "x-webhook-proxy: $PROXY_TOKEN" \
+       https://yochylin.com:17443/webhook/ozon
 ```
+
+ERP 一旦配了 `PROXY_TOKEN`，只带 XFF 的重放会被 403 —— 密钥头必须一起带上（与代理 env 里同一个值）。
 
 ## 注意
 
@@ -116,4 +119,6 @@ cat xxx.json | jq -r '.payload' | \
 3. **payload 全程原始字节**：不要"顺手"在代理里做 JSON 解析再序列化，
    19 位 `product_id`/`sku` 会丢精度，ERP 的幂等键跟着变（`TestForwardPreservesBytesAndSourceIP` 守着这条）。
 4. **`TARGET_URL` 用 apex 域名 `yochylin.com`**，不要用 `nuc.yochylin.com`：证书 SAN 里没有它，TLS 校验会失败。
-5. 第一阶段 ERP 仍靠 XFF 判断来源，任何能连到 nuc 的人都能伪造 —— 与 ERP 一起收紧在第二阶段，见 DESIGN.md §8。
+5. **`PROXY_TOKEN` 什么时候能填**：ERP 侧已经支持（配了就只认 `X-Webhook-Proxy`，不再看 XFF）。
+   但 Ozon 的回调 URL 还在 ERP 上时**不能填**，否则 Ozon 直推全部 403；
+   等 URL 切到本代理，两边填同一个值再各自重启。见 DESIGN.md §8。

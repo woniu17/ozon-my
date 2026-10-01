@@ -47,13 +47,46 @@ export function claimPendingEvents(limit, maxRetry) {
       return [];
     }
     const ids = rows.map(r => r.id).join(',');
-    db.exec(`UPDATE ozon_push_events SET status='processing' WHERE id IN (${ids})`);
+    // claimed_at 是 processing 的"上锁时间",stale reclaim 靠它判断卡死(见 reclaimStaleProcessing)
+    db.prepare(`UPDATE ozon_push_events SET status='processing', claimed_at=? WHERE id IN (${ids})`)
+      .run(new Date().toISOString());
     db.exec('COMMIT');
     return rows;
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
   }
+}
+
+/**
+ * 启动时回收:把全部 processing 放回 pending
+ * 只有进程刚起来时调用——此刻本进程不可能有在途 handler,
+ * 残留的 processing 一定是上次崩溃留下的孤儿
+ */
+export function reclaimAllProcessing() {
+  const db = getDb();
+  const r = db.prepare(`
+    UPDATE ozon_push_events
+    SET status='pending', retry_count=retry_count+1, claimed_at=NULL
+    WHERE status='processing'
+  `).run();
+  return r.changes ?? 0;
+}
+
+/**
+ * 运行期回收:processing 且 claimed_at 超过 staleMs 的事件放回 pending
+ * 覆盖"进程没重启,但 handler 永久挂住/被 kill 掉一半"的情况。
+ * retry_count 一并 +1,让真正有毒的事件仍按 maxRetry 收敛到 dead,不会无限循环
+ */
+export function reclaimStaleProcessing(staleMs) {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - staleMs).toISOString();
+  const r = db.prepare(`
+    UPDATE ozon_push_events
+    SET status='pending', retry_count=retry_count+1, claimed_at=NULL
+    WHERE status='processing' AND (claimed_at IS NULL OR claimed_at < ?)
+  `).run(cutoff);
+  return r.changes ?? 0;
 }
 
 /**

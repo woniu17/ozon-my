@@ -1298,6 +1298,7 @@ CREATE TABLE IF NOT EXISTS ozon_push_events (
   retry_count INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
   received_at TEXT NOT NULL,
+  claimed_at TEXT,                            -- 进入 processing 的时刻,poller 据此回收卡死事件
   processed_at TEXT,
   UNIQUE(idempotency_key)
 );
