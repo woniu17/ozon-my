@@ -56,7 +56,7 @@ export default async function postingCancelledHandler(payload, ctx) {
     logger.info({ postingNumber, storeId: store.id }, 'POSTING_CANCELLED 通知已由 API 兜底发出,跳过推送');
     return;
   }
-  const ok = await notifyPostingEvent('TYPE_POSTING_CANCELLED', payload).catch(err => {
+  const ok = await notifyPostingEvent('TYPE_POSTING_CANCELLED', payload, 'webhook').catch(err => {
     logger.warn({ err: err.message }, 'POSTING_CANCELLED 飞书通知失败');
     return false;
   });

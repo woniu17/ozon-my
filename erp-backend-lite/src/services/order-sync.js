@@ -250,7 +250,7 @@ function maybeBackfillFeishuNotify(store, posting) {
   // 1) 新订单(TYPE_NEW_POSTING):API 轮询 posting 与 webhook OPI 回拉同源,补 seller_id 即可复用通知逻辑
   if (inWindow(posting.in_process_at)) {
     enqueueFeishuBackfill(store, postingNumber, 'new_order', cutoff, '新订单', () =>
-      notifyPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId })
+      notifyPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId }, 'polling')
     );
   }
 
@@ -266,7 +266,7 @@ function maybeBackfillFeishuNotify(store, posting) {
   // 揽收(rank2-3,取货点单发):对齐 webhook isPickupLevelPush 语义,跳级到快递员等也按揽收通知
   if (rank >= 2 && rank <= 3 && pushState !== 'posting_in_pickup_point' && inWindow(posting.delivering_date)) {
     enqueueFeishuBackfill(store, postingNumber, 'pickup', cutoff, '揽收', () =>
-      notifyPostingPickedUp({ ...base, new_state: pushState, old_state: null })
+      notifyPostingPickedUp({ ...base, new_state: pushState, old_state: null }, 'polling')
     );
   }
   // 到达取货点(2026-09-22 修复:此前用 delivering_date 判窗口,而到达取货点晚于揽收 1~3 天,
@@ -288,7 +288,7 @@ function maybeBackfillFeishuNotify(store, posting) {
     }
     if (inWindow(firstSeenAt)) {
       enqueueFeishuBackfill(store, postingNumber, 'pickup_point', cutoff, '到达取货点', () =>
-        notifyPostingEvent('TYPE_STATE_CHANGED', { ...base, changed_state_date: firstSeenAt, new_state: pushState })
+        notifyPostingEvent('TYPE_STATE_CHANGED', { ...base, changed_state_date: firstSeenAt, new_state: pushState }, 'polling')
       );
     }
   }
@@ -301,7 +301,7 @@ function maybeBackfillFeishuNotify(store, posting) {
           ...base,
           changed_state_date: deliveredAt,
           new_state: pushState,
-        })
+        }, 'polling')
       );
     }
   }
@@ -319,7 +319,7 @@ function maybeBackfillFeishuNotify(store, posting) {
         reason: posting.cancellation?.cancel_reason
           ? { message: posting.cancellation.cancel_reason }
           : null,
-      })
+      }, 'polling')
     );
   }
 }

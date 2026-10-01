@@ -122,7 +122,7 @@ export default async function newPostingHandler(payload, ctx) {
   if (store && orderPackageDao.isFeishuNotified(store.id, postingNumber)) {
     logger.info({ postingNumber, storeId: store.id }, 'NEW_POSTING 飞书通知已由 API 兜底发出,跳过推送');
   } else {
-    const ok = await notifyPostingEvent('TYPE_NEW_POSTING', fullPayload).catch(err => {
+    const ok = await notifyPostingEvent('TYPE_NEW_POSTING', fullPayload, 'webhook').catch(err => {
       logger.warn({ err: err.message }, 'NEW_POSTING 飞书通知失败');
       return false;
     });

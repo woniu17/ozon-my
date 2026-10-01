@@ -1274,7 +1274,7 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
           seller_id: Number(store.company_id),
           changed_state_date: new Date().toISOString(),
           new_state: 'posting_awaiting_registration',
-        })
+        }, 'manual')
       )
         .then((sent) => {
           if (sent) orderPackageDao.markFeishuNotified(store.id, row.postingNumber, 'stocking');

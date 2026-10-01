@@ -26,7 +26,7 @@ async function main() {
       seller_id: Number(store?.company_id ?? 0),
       changed_state_date: r.delivered_at,
       new_state: 'posting_received',
-    }).catch(() => false);
+    }, 'backfill').catch(() => false);
     if (ok) {
       db.prepare(`UPDATE op_ozon_order SET feishu_received_notified_at = ? WHERE store_id = ? AND posting_number = ?`)
         .run(new Date().toISOString(), r.store_id, r.posting_number);
@@ -53,7 +53,7 @@ async function main() {
       seller_id: Number(store?.company_id ?? 0),
       changed_state_date: r.delivering_date,
       new_state: 'posting_on_way_to_city',
-    }).catch(() => false);
+    }, 'backfill').catch(() => false);
     if (ok) {
       db.prepare(`UPDATE op_ozon_order SET feishu_pickup_notified_at = ? WHERE store_id = ? AND posting_number = ?`)
         .run(new Date().toISOString(), r.store_id, r.posting_number);

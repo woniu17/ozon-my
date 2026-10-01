@@ -392,19 +392,31 @@ function loadProductsFromDb(postingNumber) {
   }
 }
 
+// 通知触发来源标注。同一条货件的同一状态可能被"Ozon 推送"和"订单轮询兜底"两条链路各发一次
+// (去重靠 op_ozon_order.feishu_*_notified_at 先发先标记)，消息体又完全一致，
+// 运维排查"这条是谁发的"只能靠这个后缀。
+const NOTIFY_SOURCE_LABELS = {
+  webhook: '消息推送',
+  polling: '定时获取',
+  manual: '手动操作',
+  backfill: '运维补发',
+};
+
 /**
  * 发送飞书文本消息(自动追加来源标识)
  * @param {string} text 消息内容
  * @param {string} url 飞书机器人 webhook URL,留空则跳过
+ * @param {string} source 触发来源键(webhook/polling/manual/backfill),不认识的键按 webhook 显示
  * @returns {Promise<boolean>} 是否发送成功
  */
-export async function sendFeishuText(text, url) {
+export async function sendFeishuText(text, url, source = 'webhook') {
   if (!url) {
     logger.warn('feishu-notify: 未配置 webhook URL,跳过推送');
     return false;
   }
   try {
-    const fullText = `${text}\n—— 来自 ${config.appName}`;
+    const label = NOTIFY_SOURCE_LABELS[source] ?? NOTIFY_SOURCE_LABELS.webhook;
+    const fullText = `${text}\n—— 来自 ${config.appName} · ${label}`;
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -431,8 +443,9 @@ export async function sendFeishuText(text, url) {
  * notifyPostingPickedUp / notifyPostingEvent(设计决策 D1,避免重复推送与漏报窗口)
  * @param {string} messageType TYPE_NEW_POSTING / TYPE_POSTING_CANCELLED / TYPE_STATE_CHANGED
  * @param {object} payload Ozon 推送原始 payload
+ * @param {string} source 触发来源键,见 sendFeishuText
  */
-export async function notifyPostingEvent(messageType, payload) {
+export async function notifyPostingEvent(messageType, payload, source = 'webhook') {
   const postingNumber = payload.posting_number ?? '-';
   const sellerId = payload.seller_id ?? '-';
 
@@ -547,7 +560,7 @@ export async function notifyPostingEvent(messageType, payload) {
   }
 
   // 返回发送结果(boolean):调用方(webhook 打标 / API 兜底释放标记)依赖此返回值
-  return await sendFeishuText(text, url);
+  return await sendFeishuText(text, url, source);
 }
 
 /**
@@ -621,8 +634,9 @@ export function buildTodayPickupSummaryLines(bySeller, total) {
  * 推送"揽收通知"(STATE_CHANGED + new_state=posting_on_way_to_city)到飞书
  * 走独立机器人,带当日各店铺揽收统计(从 DB 查询,含本条新揽收)
  * @param {object} payload Ozon 推送原始 payload
+ * @param {string} source 触发来源键,见 sendFeishuText
  */
-export async function notifyPostingPickedUp(payload) {
+export async function notifyPostingPickedUp(payload, source = 'webhook') {
   const postingNumber = payload.posting_number ?? '-';
   const sellerId = payload.seller_id ?? '-';
   const store = getStoreBySellerId(sellerId);
@@ -651,7 +665,7 @@ export async function notifyPostingPickedUp(payload) {
   ].filter((v) => v !== null).join('\n');
 
   // 返回发送结果(boolean):调用方(webhook 打标 / API 兜底释放标记)依赖此返回值
-  return await sendFeishuText(text, config.feishu.webhookUrlPickup);
+  return await sendFeishuText(text, config.feishu.webhookUrlPickup, source);
 }
 
 /**

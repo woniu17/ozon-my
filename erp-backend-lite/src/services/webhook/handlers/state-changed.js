@@ -62,7 +62,7 @@ export default async function stateChangedHandler(payload, ctx) {
     if (store && orderPackageDao.isFeishuNotified(store.id, postingNumber, 'pickup')) {
       logger.info({ postingNumber, storeId: store.id }, 'STATE_CHANGED 揽收通知已由 API 兜底发出,跳过推送');
     } else {
-      const ok = await notifyPostingPickedUp(payload).catch(err => {
+      const ok = await notifyPostingPickedUp(payload, 'webhook').catch(err => {
         logger.warn({ err: err.message }, 'STATE_CHANGED 揽收飞书通知失败');
         return false;
       });
@@ -108,7 +108,7 @@ export default async function stateChangedHandler(payload, ctx) {
     logger.info({ postingNumber, storeId: store.id, stateKey }, 'STATE_CHANGED 通知已由 API 兜底发出,跳过推送');
     return;
   }
-  const ok = await notifyPostingEvent('TYPE_STATE_CHANGED', payload).catch(err => {
+  const ok = await notifyPostingEvent('TYPE_STATE_CHANGED', payload, 'webhook').catch(err => {
     logger.warn({ err: err.message }, 'STATE_CHANGED 飞书通知失败');
     return false;
   });
