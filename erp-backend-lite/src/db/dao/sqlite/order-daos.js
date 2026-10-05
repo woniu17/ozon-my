@@ -676,7 +676,6 @@ function tabCounts() {
         CASE
           WHEN operate_status = 'wait_receiver_confirm' AND is_returned = 1 THEN 'returned'
           WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NOT NULL
-               AND id IN (SELECT package_id FROM op_accrual WHERE type_id = 66)
                AND id IN (SELECT package_id FROM op_accrual WHERE type_id = 67) THEN 'settled'
           WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NOT NULL THEN 'signed'
           WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NULL THEN 'wait_receiver_confirm'
@@ -770,19 +769,16 @@ function buildPackageWhere(filters = {}) {
       where.push('p.is_ignored = 0');
       where.push("p.is_returned = 1 AND p.operate_status = 'wait_receiver_confirm'");
     } else if (tab === 'signed') {
-      // 已签收=已妥投但应计不完整(缺代理佣金66或国际配送67),不含已退货
+      // 已签收=已妥投但应计不完整(缺国际配送67),不含已退货
+      // 2026-10-05:代理费66非每单必收,仅以 67 判定应计完整
       where.push('p.is_ignored = 0');
       where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL AND p.is_returned = 0");
-      where.push(`NOT (
-        EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 66)
-        AND EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 67)
-      )`);
+      where.push(`NOT EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 67)`);
     } else if (tab === 'settled') {
-      // 已成功=已妥投且应计完整(同时有代理佣金66和国际配送67),不含已退货
+      // 已成功=已妥投且应计完整(有国际配送67;代理费66非必收),不含已退货
       where.push('p.is_ignored = 0');
       where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL AND p.is_returned = 0");
-      where.push(`EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 66)
-        AND EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 67)`);
+      where.push(`EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 67)`);
     } else if (tab === 'waitReceiverConfirm') {
       // 已发货=已交运未妥投:wait_receiver_confirm + delivered_at 为空
       where.push('p.is_ignored = 0');
