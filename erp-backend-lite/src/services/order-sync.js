@@ -337,9 +337,13 @@ function syncPostingWithNotify(store, p) {
 
 // 分页拉取一个接口,逐 posting 回调;实时更新 progress.currentPage/postingsPulled
 // phase: 'unfulfilled' | 'list'(用于进度展示当前阶段)
-async function fetchAll(store, fn, onPage, phase) {
+// collect: 可选 Set,收集本轮出现的 posting_number(消失检测比对用)
+// 返回 { total, truncated }:truncated=true 表示列表未拉全(翻到 MAX_PAGES 上限/响应异常),
+// 此时"消失检测"不可信(会把列表尾部误判为消失),调用方须跳过
+async function fetchAll(store, fn, onPage, phase, collect) {
   let cursor;
   let total = 0;
+  let truncated = false;
   if (progress.active) {
     progress.currentPhase = phase || '';
     progress.currentPage = 0;
@@ -348,16 +352,18 @@ async function fetchAll(store, fn, onPage, phase) {
     if (progress.active) progress.currentPage = page;
     const resp = await fn(cursor);
     const r = extractResult(resp);
-    if (!r) break;
+    if (!r) { truncated = true; break; } // 响应异常,列表完整性未知
     for (const p of r.postings || []) {
+      if (collect) collect.add(String(p.posting_number || ''));
       onPage(p);
       total++;
     }
     if (progress.active) progress.postingsPulled += (r.postings || []).length;
     if (!r.has_next || !r.cursor) break;
     cursor = r.cursor;
+    if (page === MAX_PAGES - 1) truncated = true; // 还有下一页但翻页到顶
   }
-  return total;
+  return { total, truncated };
 }
 
 // 回源未命中商品缓存的订单 SKU(图片/标题来自 product_data_cache,MISS 时按需拉取)
@@ -395,6 +401,68 @@ async function backfillProductCache(store) {
   return filled;
 }
 
+// ── 消失检测(2026-10-06)───────────────────────────────────────
+// 背景:订单取消/签收后会离开 unfulfilled 列表,fast 轮只能看到它"消失";
+// webhook 漏推取消/签收事件时(实测:0203607445-0028-1 买家取消后 webhook 无任何事件),
+// 状态只能等 8h mid 轮兜底。本检测把发现窗口缩到 fast 轮节奏(2 分钟级):
+//   候选 = 本地在册、Ozon 状态非终态(delivered/cancelled 之外)、cutoff 在本轮拉取窗口内
+//   消失 = 候选中未出现在本轮 unfulfilled 列表 → 按单号直查 postingFbsGet 确认真实状态
+// 防抖:同一单 1 小时内不重复查(内存 Map,重启即清);每店每轮上限 10 单;
+//      列表截断(truncated)时本轮跳过;单查结果走 syncPostingWithNotify,
+//      状态联动 + 飞书取消/签收兜底通知(claim 去重)自动触发
+const VANISH_CHECK_MAX_PER_STORE = 10;
+const VANISH_CHECK_BACKOFF_MS = 3600_000;
+const VANISH_CHECK_INTERVAL_MS = 1000;
+const _vanishCheckAt = new Map(); // `${storeId}:${postingNumber}` → 上次单查时刻
+
+async function detectVanishedUnfulfilled(store, pulled, cutoffFrom, cutoffTo) {
+  let candidates = [];
+  try {
+    candidates = orderPackageDao.findUnfulfilledCandidates(store.id, cutoffFrom, cutoffTo);
+  } catch (e) {
+    logger.warn({ storeId: store.id, err: e?.message }, '[order-sync] 消失检测:候选查询失败(跳过本轮)');
+    return 0;
+  }
+  const now = Date.now();
+  const missing = [];
+  for (const c of candidates) {
+    const key = `${store.id}:${c.postingNumber}`;
+    if (pulled.has(c.postingNumber)) {
+      _vanishCheckAt.delete(key); // 本轮仍在列表,清除防抖记录(下次消失可立即查)
+      continue;
+    }
+    if (now - (_vanishCheckAt.get(key) || 0) < VANISH_CHECK_BACKOFF_MS) continue;
+    missing.push({ ...c, key });
+  }
+  if (!missing.length) return 0;
+  const batch = missing.slice(0, VANISH_CHECK_MAX_PER_STORE);
+  let confirmed = 0;
+  for (const c of batch) {
+    _vanishCheckAt.set(c.key, now);
+    try {
+      const resp = await postingFbsGet(store, c.postingNumber);
+      const posting = resp?.result;
+      if (posting?.posting_number) {
+        syncPostingWithNotify(store, posting);
+        confirmed++;
+        logger.info(
+          { storeId: store.id, postingNumber: c.postingNumber, ozonStatus: posting.status },
+          '[order-sync] 消失检测:单查确认状态(原状态在册但已离开未完成列表)'
+        );
+      } else {
+        logger.warn({ storeId: store.id, postingNumber: c.postingNumber }, '[order-sync] 消失检测:Ozon 返回空 posting');
+      }
+    } catch (e) {
+      logger.warn({ storeId: store.id, postingNumber: c.postingNumber, err: e?.message }, '[order-sync] 消失检测:单查失败');
+    }
+    await sleep(VANISH_CHECK_INTERVAL_MS);
+  }
+  if (missing.length > batch.length) {
+    logger.info({ storeId: store.id, deferred: missing.length - batch.length }, '[order-sync] 消失检测:超单轮上限,剩余下轮再查');
+  }
+  return confirmed;
+}
+
 async function syncStore(store, { unfulfilledDays = SYNC_LEVELS.fast.unfulfilledDays, listDays = 0, listHours = 0 } = {}) {
   // 三级节奏窗口(2026-09-16,2026-09-17 fast 调整,2026-09-20 fast 加近效 list,2026-09-21 fast 回看7天):
   //   fast(每2分钟): unfulfilled cutoff [now-7d, now+14d] + list [now-3h, now] —— 未完成订单(含过期cutoff)+ 签收兜底
@@ -408,9 +476,17 @@ async function syncStore(store, { unfulfilledDays = SYNC_LEVELS.fast.unfulfilled
   if (unfulfilledDays != null) {
     const cutoffFrom = iso(new Date(now.getTime() - unfulfilledDays * 86400_000));
     const cutoffTo = iso(new Date(now.getTime() + 14 * 86400_000));
-    count += await fetchAll(store, (cursor) =>
+    const pulled = new Set();
+    const r1 = await fetchAll(store, (cursor) =>
       postingFbsUnfulfilledList(store, { cutoffFrom, cutoffTo, cursor })
-    , (p) => syncPostingWithNotify(store, p), 'unfulfilled');
+    , (p) => syncPostingWithNotify(store, p), 'unfulfilled', pulled);
+    count += r1.total;
+    // 1b) 消失检测:列表拉全的前提下,在册未完成订单消失 = 疑似取消/签收,单查确认
+    if (r1.truncated) {
+      logger.warn({ storeId: store.id }, '[order-sync] 消失检测:本轮列表被截断,跳过');
+    } else {
+      await detectVanishedUnfulfilled(store, pulled, cutoffFrom, cutoffTo);
+    }
   }
 
   // 2) 订单全集(mid/slow 轮补终态;fast 轮近效 list 用于签收兜底)
@@ -420,9 +496,10 @@ async function syncStore(store, { unfulfilledDays = SYNC_LEVELS.fast.unfulfilled
     : (listHours > 0 ? listHours * 3600_000 : 0);
   if (listSinceMs > 0) {
     const sinceList = iso(new Date(now.getTime() - listSinceMs));
-    count += await fetchAll(store, (cursor) =>
+    const r2 = await fetchAll(store, (cursor) =>
       postingFbsList(store, { since: sinceList, to: iso(now), cursor })
     , (p) => syncPostingWithNotify(store, p), 'list');
+    count += r2.total;
   }
 
   // 3) 订单 SKU 未命中商品缓存的回源(图片/完整标题)
@@ -580,13 +657,13 @@ export async function runSyncAllList({ sinceDays, since, to } = {}) {
     progress.currentPhase = 'list';
     progress.message = `同步店铺 ${progress.currentStoreName} (${progress.doneStores + 1}/${eligible.length})`;
     try {
-      const n = await fetchAll(store,
+      const r = await fetchAll(store,
         (cursor) => postingFbsList(store, { since: sinceIso, to: toIso, cursor }),
         (p) => syncPostingWithNotify(store, p), 'list'
       );
-      results.push({ storeId: store.id, storeName: store.name, count: n, ok: true });
-      logger.info({ storeId: store.id, count: n, since: sinceIso, to: toIso }, '[order-sync-all] 店铺同步完成');
-      orderPackageDao.updateSyncCursor(store.id, { count: n });
+      results.push({ storeId: store.id, storeName: store.name, count: r.total, ok: true });
+      logger.info({ storeId: store.id, count: r.total, since: sinceIso, to: toIso }, '[order-sync-all] 店铺同步完成');
+      orderPackageDao.updateSyncCursor(store.id, { count: r.total });
     } catch (e) {
       orderPackageDao.updateSyncCursor(store.id, { error: e?.message || String(e) });
       results.push({ storeId: store.id, storeName: store.name, ok: false, error: e?.message || String(e) });

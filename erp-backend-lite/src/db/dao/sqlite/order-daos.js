@@ -1250,6 +1250,23 @@ function getWeightsByPackageIds(packageIds) {
   return out;
 }
 
+/** 消失检测候选(2026-10-06):本店在册、Ozon 状态非终态、cutoff(shipment_date)在指定窗口内的订单
+ *  供 order-sync fast 轮检测"本轮 unfulfilled 列表中消失"的订单(取消/签收发现,webhook 漏推兜底);
+ *  窗口与 unfulfilled 拉取窗口一致,在途超窗老单天然排除不会被反复误查 */
+function findUnfulfilledCandidates(storeId, cutoffFrom, cutoffTo) {
+  return db
+    .prepare(
+      `SELECT p.id AS packageId, o.posting_number AS postingNumber, o.status AS ozonStatus
+       FROM op_package p
+       JOIN op_ozon_order o ON o.id = p.ozon_order_id
+       WHERE o.store_id = ?
+         AND o.posting_number IS NOT NULL AND o.posting_number != ''
+         AND o.status NOT IN ('cancelled', 'delivered')
+         AND o.shipment_date IS NOT NULL AND o.shipment_date >= ? AND o.shipment_date <= ?`
+    )
+    .all(storeId, cutoffFrom, cutoffTo);
+}
+
 export function listPendingPurchases(platform) {
   const where = [
     `link_status = 'linked'`,
@@ -2456,6 +2473,7 @@ export const orderPackageDao = {
   listPackages,
   aggregatePackages,
   getWeightsByPackageIds,
+  findUnfulfilledCandidates,
   getItemsByOrderIds,
   findUncachedSkus,
   getPurchasesByPackageIds,
