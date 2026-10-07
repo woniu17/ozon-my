@@ -745,14 +745,18 @@ func TestSweepResumesFromCursorAfterFailure(t *testing.T) {
 		t.Errorf("续跑刷了 %d 个定时器，期望 201", res.TimerSuccess)
 	}
 	after := f.bodiesFor("/v5/product/info/prices")
-	if len(after) != before+1 {
-		t.Errorf("续跑只该查一次价格，实际从 %d 次变成 %d 次", before, len(after))
+	newBodies := after[before:]
+	// 201 个商品按 200 一批拆成 2 次价格查询(2026-10-07 分批改造,防整页 1000 个超时)
+	if len(newBodies) != 2 {
+		t.Errorf("续跑应按 200 一批查 2 次价格，实际从 %d 次变成 %d 次", before, len(after))
 	}
-	if strings.Contains(after[len(after)-1], `"1000"`) {
-		t.Error("续跑还在重复查第一页最后一个商品的价格，游标没生效")
+	for _, b := range newBodies {
+		if strings.Contains(b, `"1000"`) {
+			t.Errorf("续跑还在重复查第一页最后一个商品的价格，游标没生效: %s", b)
+		}
 	}
-	if !strings.Contains(after[len(after)-1], `"1001"`) {
-		t.Errorf("续跑应查第 2 页商品: %s", after[len(after)-1])
+	if len(newBodies) > 0 && !strings.Contains(newBodies[0], `"1001"`) {
+		t.Errorf("续跑应查第 2 页商品: %s", newBodies[0])
 	}
 
 	// 完整跑完后游标必须收尾，否则下一班永远从旧断点起步
