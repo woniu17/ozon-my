@@ -639,6 +639,13 @@ func NotifyTimerResults(ctx context.Context, d *Deps, results []ShopTimerResult,
 	sb.WriteString(fmt.Sprintf("💰 最低价设置成功: %d\n", sum(func(r ShopTimerResult) int { return r.MinPrice.Set })))
 	sb.WriteString(fmt.Sprintf("⏭️ 最低价跳过(已有): %d\n", sum(func(r ShopTimerResult) int { return r.MinPrice.Skip })))
 	sb.WriteString(fmt.Sprintf("❌ 最低价设置失败: %d\n", sum(func(r ShopTimerResult) int { return r.MinPrice.Fail })))
+	// 未检查 = 总数 − 设置 − 跳过 − 失败(影子模式再减预计设置):
+	// 价格查询失败的批整批没查,之前直接从统计里消失,总数对不上账(2026-10-06/07 连续两天)
+	if missed := sum(func(r ShopTimerResult) int {
+		return r.MinPrice.Total - r.MinPrice.Set - r.MinPrice.Skip - r.MinPrice.Fail - r.MinPrice.Planned
+	}); missed > 0 {
+		sb.WriteString(fmt.Sprintf("⚠️ 最低价未检查(查询失败): %d\n", missed))
+	}
 	if planned := sum(func(r ShopTimerResult) int { return r.MinPrice.Planned }); planned > 0 {
 		sb.WriteString(fmt.Sprintf("🧪 最低价预计设置: %d\n", planned))
 	}

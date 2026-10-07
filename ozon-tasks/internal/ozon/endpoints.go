@@ -154,23 +154,43 @@ type priceInfoResp struct {
 	LastID string      `json:"last_id"`
 }
 
-// ListPrices 按 product_id 批量查价格。调用方负责每批不超过 1000 个。
+// ListPrices 按 product_id 批量查价格。内部按 200 个一批分次查询:
+// 一次 1000 个的请求 Ozon 侧要 15s+ 才吐完响应,连续两天整页超时(2026-10-06 漏 2000、
+// 10-07 漏 3000 个商品的价格检查,重试 5 次也救不回来);改小批量后单次几秒内返回。
+// 某批失败只丢那一批(记录错误继续其余批),返回"已拿到的部分 + 首个错误",
+// 调用方可继续处理成功部分,漏的下一班补。
 // filter.product_id 必须是字符串数组，传数字 Ozon 会直接 400。
+const priceQueryChunk = 200
+
 func (c *Client) ListPrices(ctx context.Context, productIDs []int64) ([]PriceInfo, error) {
-	ids := make([]string, 0, len(productIDs))
-	for _, id := range productIDs {
-		ids = append(ids, strconv.FormatInt(id, 10))
+	var all []PriceInfo
+	var firstErr error
+	for start := 0; start < len(productIDs); start += priceQueryChunk {
+		end := start + priceQueryChunk
+		if end > len(productIDs) {
+			end = len(productIDs)
+		}
+		chunk := productIDs[start:end]
+		ids := make([]string, 0, len(chunk))
+		for _, id := range chunk {
+			ids = append(ids, strconv.FormatInt(id, 10))
+		}
+		var resp priceInfoResp
+		filter := map[string]any{"product_id": ids}
+		if err := c.postRead(ctx, "/v5/product/info/prices", map[string]any{"filter": filter, "limit": len(chunk)}, &resp); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			logx.Errorf("[价格] 第 %d 批(%d 个商品)查询失败,跳过该批: %v", start/priceQueryChunk+1, len(chunk), err)
+			continue
+		}
+		// 显式 id 列表正常不会有下一页；真出现了说明这批漏查，必须喊出来而不是默默少处理
+		if resp.LastID != "" && len(resp.Items) >= len(chunk) {
+			logx.Errorf("[价格] 返回了游标 %q 但本批已取满 %d 条，可能有商品被漏掉", resp.LastID, len(resp.Items))
+		}
+		all = append(all, resp.Items...)
 	}
-	var resp priceInfoResp
-	filter := map[string]any{"product_id": ids}
-	if err := c.postRead(ctx, "/v5/product/info/prices", map[string]any{"filter": filter, "limit": 1000}, &resp); err != nil {
-		return nil, err
-	}
-	// 显式 id 列表 + limit 1000 正常不会有下一页；真出现了说明这批漏查，必须喊出来而不是默默少处理
-	if resp.LastID != "" && len(resp.Items) >= len(productIDs) {
-		logx.Errorf("[价格] 返回了游标 %q 但本批已取满 %d 条，可能有商品被漏掉", resp.LastID, len(resp.Items))
-	}
-	return resp.Items, nil
+	return all, firstErr
 }
 
 // PriceImportItem /v1/product/import/prices 的单条。
