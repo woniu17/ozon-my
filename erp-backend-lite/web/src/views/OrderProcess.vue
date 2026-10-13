@@ -1730,14 +1730,18 @@ function switchImportSubTab(t) {
   loadOrders(importTab.value);
 }
 
-// ── 订单号搜索(2026-09-16 先支持 1688;2026-09-17 扩展拼多多 + 只搜当前tab所属账号,省API调用)──
+// ── 订单号搜索(2026-09-16 先支持 1688;2026-09-17 扩展拼多多;2026-10-13 扩展淘宝)──
 // 命中的订单置顶插入当前 tab 列表并自动勾选;后端返回结构与列表订单逐字段一致
 const importSearch = reactive({ keyword: '', loading: false, error: '' });
-// 支持订单号搜索的平台(1688 官方API buyerView / PDD order_list_search_v4)
-const SEARCHABLE_PLATFORMS = ['ali1688', 'pdd'];
+// 支持订单号搜索的平台(1688 官方API buyerView / PDD order_list_search_v4 / 淘宝 h5api 买家订单)
+const SEARCHABLE_PLATFORMS = ['ali1688', 'pdd', 'taobao'];
 const isSearchableTab = computed(() => SEARCHABLE_PLATFORMS.includes(currentTabDef.value?.platform));
-const searchPlaceholder = computed(() =>
-  (currentTabDef.value?.platform === 'pdd' ? '输入拼多多订单号搜索' : '输入 1688 订单号搜索'));
+const searchPlaceholder = computed(() => {
+  const p = currentTabDef.value?.platform;
+  if (p === 'pdd') return '输入拼多多订单号搜索';
+  if (p === 'taobao') return '输入淘宝订单号搜索';
+  return '输入 1688 订单号搜索';
+});
 async function onSearchImportOrder() {
   const sn = importSearch.keyword.trim();
   if (!sn || importSearch.loading || !currentTabDef.value) return;
@@ -3632,7 +3636,7 @@ onUnmounted(() => {
               <div class="pdd-tabs">
                 <button v-for="st in importSubTabs" :key="st.key" class="pdd-tab" :class="{ active: importSubTab === st.key }" @click="switchImportSubTab(st.key)">{{ st.label }}</button>
               </div>
-              <!-- 订单号搜索(2026-09-16 先支持 1688;2026-09-17 扩展拼多多;只搜当前tab账号) -->
+              <!-- 订单号搜索(2026-09-16 先支持 1688;2026-09-17 扩展拼多多;2026-10-13 扩展淘宝;只搜当前tab账号) -->
               <div v-if="isSearchableTab" class="pdd-search">
                 <input
                   v-model.trim="importSearch.keyword"
