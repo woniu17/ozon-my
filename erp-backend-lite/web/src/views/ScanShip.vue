@@ -10,7 +10,7 @@
 import { ref, reactive, computed, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-  getOrderList, scanShipSubmit, correctShipWeight, getScanShipRecords, fetchPackageLabel, markPrinted,
+  getOrderList, scanShipSubmit, correctShipWeight, getScanShipRecords, fetchPackageLabel, markPrinted, shipPackage,
 } from '../api/order-process.js';
 import { pickLabelPrinter, printLabelImage, getAgentPrinters } from '../api/print-agent.js';
 import { getSkusInfo, setSkuCustoms, updatePrice } from '../api/price-manage.js';
@@ -28,6 +28,7 @@ const searching = ref(false);
 const results = ref([]);          // 全局搜索命中的包裹(快照)
 const selectedId = ref(0);        // 当前选中卡片(多结果时唯一可操作的卡)
 const printingPkgId = ref(0);     // 打印互斥(与 OrderProcess printingId 同模式)
+const shippingPkgId = ref(0);       // 备货互斥(与 OrderProcess shippingPkgId 同模式)
 const retryPkgIds = ref(new Set()); // 重量已保存但打印失败的包裹(重试只走打印+流转)
 const retryWeights = reactive({});  // pkgId → 已保存重量 g(重试成功后回填卡片,避免残留搜索时的旧重量)
 const agentOnline = ref(null);    // 菜鸟组件探测:null=探测中 true/false
@@ -268,6 +269,10 @@ function canShipCard(pkg) {
 function canReprintCard(pkg) {
   return pkg.operateStatus === 'ship_success' || pkg.operateStatus === 'wait_receiver_confirm';
 }
+// 未备货卡片可「备货」(同 OrderProcess 行按钮口径):Ozon 仍处于 awaiting_packaging 且未搁置
+function canShipPkg(pkg) {
+  return pkg.ozonStatus === 'awaiting_packaging' && !pkg.isIgnored && !!pkg.id;
+}
 // 非 wait_ship 卡片的拦截原因(置灰卡 + 横幅文案同源)
 function blockReason(pkg) {
   if (pkg.isIgnored) return '已搁置';
@@ -348,6 +353,40 @@ function onScanKeydown(e) {
     selectedId.value = 0;
     banner.type = '';
     banner.text = '';
+  }
+}
+
+// ── 备货(2026-10-13,同 OrderProcess 行按钮)──────────────
+// 扫到未备货(awaiting_packaging)的订单可直接向 Ozon 确认货件,无需跳转订单处理页
+async function onShipPackage(pkg) {
+  if (shippingPkgId.value) return;
+  // 单件商品(总数量=1)直接备货,两件以上弹窗确认(与 OrderProcess 同口径)
+  const totalQty = (pkg.items || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+  if (totalQty > 1) {
+    const ok = await confirmStore.ask({
+      message: `确认备货 ${pkg.postingNumber}?\n该货件共 ${totalQty} 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。`,
+      confirmText: '备货',
+    });
+    if (!ok) return;
+  }
+  shippingPkgId.value = pkg.id;
+  try {
+    const r = await shipPackage(pkg.id);
+    // 本地回填 Ozon 状态,「备货」按钮随之隐藏(等待自动同步校准亦可)
+    if (r.ozonStatus) pkg.ozonStatus = r.ozonStatus;
+    if (r.operateStatus) pkg.operateStatus = r.operateStatus;
+    if (r.pending) {
+      show(`备货指令已提交:${pkg.postingNumber} Ozon 状态变更中(通常数十秒内),可继续扫描`, 'success');
+      if (!r.ozonStatus) pkg.ozonStatus = 'awaiting_registration';
+    } else if (r.alreadyShipped) {
+      show(`该订单已备货过(Ozon 状态 ${r.ozonStatus || ''}),无需重复操作`, 'success');
+    } else {
+      show(`备货成功:${pkg.postingNumber} 已确认货件(Ozon 状态 → ${r.ozonStatus || 'awaiting_registration'}),可打印面单`, 'success');
+    }
+  } catch (err) {
+    show(`备货失败:${err.message || String(err)}`, 'error');
+  } finally {
+    shippingPkgId.value = 0;
   }
 }
 
@@ -1013,6 +1052,17 @@ function onPrinterChange() {
 
           <!-- 操作条 -->
           <div class="pkg-actions">
+            <!-- 备货(2026-10-13):扫到未备货(awaiting_packaging)订单可直接向 Ozon 确认货件 -->
+            <button
+              v-if="canShipPkg(pkg)"
+              class="btn btn-ghost btn-sm"
+              :disabled="shippingPkgId === pkg.id"
+              :title="shippingPkgId === pkg.id ? '备货中…' : '向 Ozon 确认全部商品为一个货件(不拆分),备货后方可打印面单'"
+              @click.stop="onShipPackage(pkg)"
+            >
+              <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 5L8 1.5 14.5 5V11L8 14.5 1.5 11V5z"/><path d="M1.5 5L8 8l6.5-3M8 8v6.5"/></svg>
+              {{ shippingPkgId === pkg.id ? '备货中…' : '备货' }}
+            </button>
             <template v-if="canShipCard(pkg)">
               <span class="ref-weight" title="Ozon后台同步重量(按数量加权求和)">Ozon后台 {{ pkg.ozonWeightG != null ? Math.floor(pkg.ozonWeightG) + 'g' : '—' }}</span>
               <span class="ref-weight" title="本系统维护重量">本系统 {{ pkg.systemWeightG != null ? Math.floor(pkg.systemWeightG) + 'g' : '—' }}</span>
