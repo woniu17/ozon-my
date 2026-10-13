@@ -18,6 +18,24 @@
       </template>
     </view>
 
+    <!-- 步骤条(2026-10-13):采购管理→选平台订单→分摊确认;已完成步骤可点回退,前进靠操作按钮 -->
+    <view class="steps">
+      <view class="step" :class="{ on: step === 'manage', done: step === 'select' || step === 'confirm' }" @click="goStep(0)">
+        <text class="step-dot">{{ step === 'select' || step === 'confirm' ? '✓' : '1' }}</text>
+        <text class="step-label">采购管理</text>
+      </view>
+      <view class="step-line" :class="{ done: step === 'confirm' }"></view>
+      <view class="step" :class="{ on: step === 'select', done: step === 'confirm' }" @click="goStep(1)">
+        <text class="step-dot">{{ step === 'confirm' ? '✓' : '2' }}</text>
+        <text class="step-label">选平台订单</text>
+      </view>
+      <view class="step-line" :class="{ done: false }"></view>
+      <view class="step" :class="{ on: step === 'confirm' }">
+        <text class="step-dot">3</text>
+        <text class="step-label">分摊确认</text>
+      </view>
+    </view>
+
     <!-- Step2:平台订单选择(从主视图「+ 从平台订单选择」进入) -->
     <view v-if="step === 'select'">
       <view class="card">
@@ -64,8 +82,16 @@
           <view v-if="curStore.searched.length" class="imp-search-clear" @click="clearSearch">✕</view>
         </view>
 
-        <!-- 订单列表 -->
-        <view v-if="curStore.loading" class="muted-line pad">加载中…</view>
+        <!-- 订单列表(2026-10-13:加载态用骨架行替代纯文本) -->
+        <view v-if="curStore.loading" class="po-skeleton">
+          <view v-for="n in 3" :key="n" class="po-skeleton-row">
+            <view class="po-skeleton-img"></view>
+            <view class="po-skeleton-lines">
+              <view class="po-skeleton-line"></view>
+              <view class="po-skeleton-line short"></view>
+            </view>
+          </view>
+        </view>
         <view v-else-if="curStore.error" class="err-line pad">{{ curStore.error }}</view>
         <view v-else-if="!impOrders.length" class="muted-line pad">暂无订单(可尝试刷新或搜索)</view>
         <view
@@ -75,7 +101,7 @@
           :class="{ sel: curStore.selected.includes(o.orderSn), disabled: isRestoredLinked(o) }"
           @click="toggleSelect(o)"
         >
-          <view class="po-check">{{ curStore.selected.includes(o.orderSn) ? '☑' : '☐' }}</view>
+          <view class="po-check" :class="{ on: curStore.selected.includes(o.orderSn) }"></view>
           <image
             v-if="o.goods && o.goods[0] && o.goods[0].thumbUrl"
             class="po-order-img"
@@ -199,6 +225,7 @@
         <!-- 预估利润合计(本次分摊口径;提交后可在采购管理卡中按 SKU 一键调价) -->
         <view v-if="!batchMode" class="pe-preview">
           预估利润 <b :class="{ neg: step3Profit.profit < 0 }">¥{{ step3Profit.profit.toFixed(2) }}</b>
+          <text v-if="step3Profit.rateC != null" class="pe-preview-rate" :class="{ neg: step3Profit.rateC < 0 }"> · 成本利润率 {{ step3Profit.rateC.toFixed(1) }}%</text>
           <text class="pe-preview-sub">按分摊 ¥{{ step3Profit.alloc.toFixed(2) }} 估算{{ step3Profit.allWeighted ? '' : ',部分行未扣配送' }}</text>
         </view>
 
@@ -307,9 +334,14 @@
               <view class="po2-code">{{ p.offerId || '—' }}</view>
             </view>
             <view class="po2-qty">× {{ p.qty }}</view>
+            <!-- 单件口径(2026-10-13):售价/采购/利润均按单件展示,右侧数量 ×qty 已在旁 -->
             <view class="po2-prices">
-              <view class="po2-price-row"><text class="po2-price-label">售价</text><text class="po2-price-val">¥{{ (p.price * p.qty).toFixed(2) }}</text></view>
-              <view class="po2-price-row"><text class="po2-price-label">采购价</text><text class="po2-price-val">¥{{ p.alloc.toFixed(2) }}</text></view>
+              <view class="po2-price-row"><text class="po2-price-label">单件售价</text><text class="po2-price-val">¥{{ p.price.toFixed(2) }}</text></view>
+              <view class="po2-price-row"><text class="po2-price-label">单件采购</text><text class="po2-price-val">¥{{ p.unitCost.toFixed(2) }}</text></view>
+              <view class="po2-price-row">
+                <text class="po2-price-label">单件利润</text>
+                <text class="po2-price-val" :class="p.qty > 0 ? (p.profit / p.qty >= 0 ? 'pos' : 'neg') : ''">{{ p.qty > 0 ? (p.profit / p.qty).toFixed(2) : '0.00' }}</text>
+              </view>
             </view>
           </view>
           <!-- 单价调整(默认折叠,点击展开;单件口径) -->
@@ -489,6 +521,15 @@ function backFromSelect() {
 function backFromConfirm() {
   if (batchMode.value) step.value = 'select';
   else step.value = 'manage';
+}
+// 步骤条回退(2026-10-13):仅已完成步骤可点;前进靠操作按钮
+function goStep(i) {
+  if (i === 0 && (step.value === 'select' || step.value === 'confirm')) {
+    if (batchMode.value) uni.navigateBack();
+    else step.value = 'manage';
+  } else if (i === 1 && step.value === 'confirm') {
+    step.value = 'select';
+  }
 }
 
 // ── 标签映射(与详情页/ web 端同步)────────────────────────
@@ -745,7 +786,12 @@ const step3Profit = computed(() => {
     if (r.delivery == null) allWeighted = false;
     profit += r.profit;
   }
-  return { alloc: Math.round(allocSum * 100) / 100, profit: Math.round(profit * 100) / 100, allWeighted };
+  return {
+    alloc: Math.round(allocSum * 100) / 100,
+    profit: Math.round(profit * 100) / 100,
+    allWeighted,
+    rateC: allocSum > 0 ? Math.round((profit / allocSum) * 1000) / 10 : null, // 成本利润率%(1位小数,2026-10-13)
+  };
 });
 
 function onRatePick(p, e) {
@@ -1529,6 +1575,63 @@ onLoad((opts) => {
   margin-bottom: 20rpx;
 }
 
+/* 步骤条(2026-10-13) */
+.steps {
+  display: flex;
+  align-items: center;
+  background: #ffffff;
+  border-radius: 18rpx;
+  padding: 20rpx 16rpx;
+  margin-bottom: 20rpx;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  flex-shrink: 0;
+}
+.step-dot {
+  width: 38rpx;
+  height: 38rpx;
+  border-radius: 50%;
+  background: #eef0f4;
+  color: #86909c;
+  font-size: 22rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+.step.on .step-dot {
+  background: #165dff;
+  color: #ffffff;
+}
+.step.done .step-dot {
+  background: #e8f3ff;
+  color: #165dff;
+}
+.step-label {
+  font-size: 23rpx;
+  color: #86909c;
+}
+.step.on .step-label {
+  color: #165dff;
+  font-weight: 600;
+}
+.step.done .step-label {
+  color: #165dff;
+}
+.step-line {
+  flex: 1;
+  height: 4rpx;
+  background: #eef0f4;
+  border-radius: 2rpx;
+  margin: 0 10rpx;
+}
+.step-line.done {
+  background: #165dff;
+}
+
 .head-line {
   display: flex;
   align-items: center;
@@ -1683,6 +1786,15 @@ onLoad((opts) => {
   font-weight: 600;
 }
 
+.pe-preview-rate {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #00b42a;
+}
+.pe-preview-rate.neg {
+  color: #f53f3f;
+}
+
 .pe-preview-sub {
   margin-left: 8rpx;
   font-size: 22rpx;
@@ -1765,6 +1877,14 @@ onLoad((opts) => {
   text-align: right;
   color: #1f2329;
   font-variant-numeric: tabular-nums;
+}
+.po2-price-val.pos {
+  color: #00b42a;
+  font-weight: 600;
+}
+.po2-price-val.neg {
+  color: #f53f3f;
+  font-weight: 600;
 }
 /* 单价调整(默认折叠,点击展开) */
 .po2-cmp {
@@ -2212,15 +2332,31 @@ onLoad((opts) => {
   background: #f0f7ff;
 }
 
+/* 勾选框(2026-10-13:CSS 圆角框+对勾,替代 ☑/☐ 文本字符) */
 .po-check {
-  font-size: 36rpx;
-  color: #c9cdd4;
+  width: 36rpx;
+  height: 36rpx;
+  border: 2rpx solid #c9cdd4;
+  border-radius: 10rpx;
+  background: #ffffff;
   margin-right: 14rpx;
-  line-height: 1;
+  flex-shrink: 0;
+  position: relative;
 }
-
-.po-order.sel .po-check {
-  color: #165dff;
+.po-check.on {
+  background: #165dff;
+  border-color: #165dff;
+}
+.po-check.on::after {
+  content: '';
+  position: absolute;
+  left: 10rpx;
+  top: 4rpx;
+  width: 13rpx;
+  height: 21rpx;
+  border: solid #ffffff;
+  border-width: 0 3rpx 3rpx 0;
+  transform: rotate(45deg);
 }
 
 .po-order-img {
@@ -2229,6 +2365,53 @@ onLoad((opts) => {
   border-radius: 10rpx;
   background: #f2f3f5;
   flex-shrink: 0;
+}
+
+/* 平台订单列表骨架行(2026-10-13) */
+.po-skeleton {
+  padding: 8rpx 2rpx;
+}
+.po-skeleton-row {
+  display: flex;
+  align-items: center;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #f7f8fa;
+}
+.po-skeleton-row:last-child {
+  border-bottom: none;
+}
+.po-skeleton-img {
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 10rpx;
+  flex-shrink: 0;
+  background: linear-gradient(90deg, #eef0f4 25%, #e2e8f0 37%, #eef0f4 63%);
+  background-size: 400% 100%;
+  animation: h5-skeleton-shimmer 1.4s ease infinite;
+}
+.po-skeleton-lines {
+  flex: 1;
+  margin-left: 16rpx;
+}
+.po-skeleton-line {
+  height: 22rpx;
+  border-radius: 6rpx;
+  background: linear-gradient(90deg, #eef0f4 25%, #e2e8f0 37%, #eef0f4 63%);
+  background-size: 400% 100%;
+  animation: h5-skeleton-shimmer 1.4s ease infinite;
+}
+.po-skeleton-line.short {
+  width: 60%;
+  margin-top: 12rpx;
+  height: 18rpx;
+}
+@keyframes h5-skeleton-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
 }
 
 .po-order-main {

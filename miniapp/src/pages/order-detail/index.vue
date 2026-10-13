@@ -19,24 +19,41 @@
         <text v-else class="posting">{{ pkg.postingNumber }}<text class="copy-btn" @click.stop="copyText(pkg.postingNumber, '货件号')"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></text></text>
         <text v-if="pkg.parentId" class="split-badge child">子件(母件 {{ pkg.parentId }})</text>
         <text v-else-if="pkg.hasChildren" class="split-badge mother">母件</text>
+        <!-- 剩发倒计时(2026-10-13:上移到头部右侧,超时红色醒目) -->
+        <text v-if="showCountdown" class="countdown-badge" :class="{ overdue: cd.overdue }">{{ cd.overdue ? '已超时 ' : '剩发 ' }}{{ cd.text }}</text>
       </view>
       <view v-if="pkg.tags && pkg.tags.length" class="tags-line">
         <text v-for="t in pkg.tags" :key="t" class="tag-chip">{{ t }}</text>
       </view>
 
-      <!-- 主信息:单列展示核心字段 -->
+      <!-- 利润概览条(2026-10-13:金额/采购/利润一屏可见,替代原 info-list 中的散行) -->
+      <view v-if="pkg.profit" class="profit-strip">
+        <view class="profit-cell">
+          <text class="profit-k">订单金额</text>
+          <text class="profit-v">¥{{ fmtMoney(pkg.orderAmount) }}</text>
+        </view>
+        <view class="profit-cell">
+          <text class="profit-k">采购合计</text>
+          <text class="profit-v">¥{{ fmtMoney(pkg.totalPurchaseAmount) }}</text>
+        </view>
+        <view class="profit-cell">
+          <text class="profit-k">{{ profitLabel(pkg) }}</text>
+          <text class="profit-v" :class="profitClass(pkg)">¥{{ fmtMoney(pkg.profit.profit) }}</text>
+        </view>
+        <view v-if="pkg.profit.profitRateCost != null" class="profit-cell">
+          <text class="profit-k">成本利润率</text>
+          <text class="profit-v" :class="pkg.profit.profitRateCost >= 0 ? 'profit-pos' : 'profit-neg'">{{ fmtRate(pkg.profit.profitRateCost) }}</text>
+        </view>
+      </view>
+
+      <!-- 主信息:单列展示核心字段(金额相关已上移利润概览条,此处留状态/时间/重量/佣金) -->
       <view class="info-list">
-        <view class="info-row"><text class="k">Ozon状态</text><text class="v">{{ pkg.ozonStatus || '—' }}{{ pkg.substatus ? ' · ' + pkg.substatus : '' }}</text></view>
+        <view class="info-row"><text class="k">Ozon状态</text><text class="v">{{ ozonStatusText }}{{ pkg.substatus ? ' · ' + pkg.substatus : '' }}</text></view>
         <view class="info-row"><text class="k">下单时间</text><text class="v">{{ fmtTime(pkg.inProcessAt) }}<text v-if="weekdayCN(pkg.inProcessAt)" class="weekday">（{{ weekdayCN(pkg.inProcessAt) }}）</text></text></view>
         <view class="info-row"><text class="k">最晚发货</text><text class="v">{{ fmtTime(pkg.shipmentDate) }}<text v-if="weekdayCN(pkg.shipmentDate)" class="weekday">（{{ weekdayCN(pkg.shipmentDate) }}）</text></text></view>
-        <view v-if="showCountdown" class="info-row" :class="{ overdue: cd.overdue }">
-          <text class="k">{{ cd.overdue ? '已超时' : '剩发' }}</text>
-          <text class="v countdown" :class="{ overdue: cd.overdue }">{{ cd.text }}</text>
-        </view>
         <view class="info-row"><text class="k">重量</text><text class="v">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</text></view>
-        <view class="info-row"><text class="k">订单金额</text><text class="v strong">{{ fmtMoney(pkg.orderAmount) }}</text></view>
-        <view class="info-row"><text class="k">采购合计</text><text class="v">{{ fmtMoney(pkg.totalPurchaseAmount) }}</text></view>
-        <view v-if="pkg.profit" class="info-row"><text class="k">{{ profitLabel(pkg) }}</text><text class="v strong" :class="profitClass(pkg)">{{ fmtMoney(pkg.profit.profit) }}</text></view>
+        <view class="info-row"><text class="k">销售佣金</text><text class="v">{{ pkg.accrual?.saleFee != null ? fmtMoney(pkg.accrual.saleFee) : '—' }}</text></view>
+        <view class="info-row"><text class="k">国际配送(估)</text><text class="v">{{ pkg.profit?.delivery != null ? fmtMoney(pkg.profit.delivery) : '—' }}</text></view>
       </view>
 
       <!-- 其它信息:折叠 -->
@@ -46,13 +63,9 @@
           <text class="info-more-arrow" :class="{ open: infoOpen }">›</text>
         </view>
         <view v-if="infoOpen" class="info-grid">
-          <!-- 金额信息(对齐 web 端 OrderProcess.vue 金额列) -->
-          <view class="info-item"><text class="k">销售佣金</text><text class="v">{{ pkg.accrual?.saleFee != null ? fmtMoney(pkg.accrual.saleFee) : '—' }}</text></view>
-          <view class="info-item"><text class="k">国际配送</text><text class="v">{{ pkg.accrual?.delivery != null ? fmtMoney(pkg.accrual.delivery) : '—' }}</text></view>
-          <view class="info-item"><text class="k">国际配送(估)</text><text class="v">{{ pkg.profit?.delivery != null ? fmtMoney(pkg.profit.delivery) : '—' }}</text></view>
+          <!-- 金额信息(2026-10-13:佣金/国际配送/成本利润率已上移主列表,折叠区保留其它) -->
           <view class="info-item"><text class="k">其它费用</text><text class="v">{{ pkg.accrual ? fmtMoney(pkg.accrual.others) : '—' }}</text></view>
           <view v-if="pkg.profit?.profitRateSale != null" class="info-item"><text class="k">销售利润率</text><text class="v">{{ fmtRate(pkg.profit.profitRateSale) }}</text></view>
-          <view v-if="pkg.profit?.profitRateCost != null" class="info-item"><text class="k">成本利润率</text><text class="v">{{ fmtRate(pkg.profit.profitRateCost) }}</text></view>
           <!-- 其他信息 -->
           <view class="info-item"><text class="k">买家</text><text class="v">{{ pkg.buyerName || '—' }}</text></view>
           <view class="info-item"><text class="k">配送方式</text><text class="v">{{ pkg.deliveryMethod || '—' }}</text></view>
@@ -80,7 +93,12 @@
           <view class="prod-title" :class="{ link: it.sku }" @click="openGoodsPage(it.sku)">{{ it.title || '—' }}</view>
           <view class="prod-sub"><text v-if="it.sku">SKU {{ it.sku }}</text></view>
           <view class="prod-sub"><text>OfferID {{ it.offerId || '—' }}</text></view>
-          <view class="prod-sub"><text>单价 {{ fmtMoney(it.price) }}</text></view>
+          <!-- 单件口径(2026-10-13):售价 + 采购分摊/件 + 毛利/件(未扣配送) -->
+          <view class="prod-sub">
+            <text>单价 {{ fmtMoney(it.price) }}</text>
+            <text v-if="unitCostOf(it) != null" class="prod-alloc"> · 采购 {{ fmtMoney(unitCostOf(it)) }}</text>
+            <text v-if="grossOf(it) != null" class="prod-gross" :class="grossOf(it) >= 0 ? 'profit-pos' : 'profit-neg'"> · 毛利/件 {{ fmtMoney(grossOf(it)) }}</text>
+          </view>
         </view>
         <view class="prod-qty">×{{ it.quantity }}</view>
       </view>
@@ -152,8 +170,7 @@
       </button>
       <button
         v-if="canShip"
-        class="abtn"
-        :class="{ primary: pkg.operateStatus === 'wait_ship' }"
+        class="abtn primary"
         :disabled="shipping"
         @click="onShip"
       >{{ shipping ? '备货中…' : '备货' }}</button>
@@ -258,6 +275,27 @@ const opTag = computed(() => {
   return OPERATE_LABELS[p.operateStatus] || { label: p.operateStatus || '—', cls: 'mute' };
 });
 
+// Ozon 原始状态中文释义(2026-10-13:主信息行不再裸显英文)
+const OZON_LABELS = {
+  awaiting_packaging: '待打包',
+  awaiting_registration: '待交运',
+  awaiting_deliver: '运输中',
+  delivering: '派送中',
+  delivered: '已送达',
+  cancelled: '已取消',
+  not_accepted: '未揽收',
+  returned_to_seller: '已退回',
+  partial_delivered: '部分送达',
+  driver_pickup: '司机已揽收',
+  at_warehouse: '已到仓',
+};
+const ozonStatusText = computed(() => {
+  const p = pkg.value;
+  const s = p?.ozonStatus;
+  if (!s) return '—';
+  return OZON_LABELS[s] || s;
+});
+
 // 质检单货件号(02131/024785 开头,与 web 端 isQcPosting 同口径):红色徽标 + 红色加粗货件号
 function isQcPosting(sn) {
   const s = String(sn || '');
@@ -312,6 +350,30 @@ function profitClass(p) {
   if (v > 0) return 'profit-pos';
   if (v < 0) return 'profit-neg';
   return 'muted';
+}
+
+// ── 商品行单件口径(2026-10-13:采购分摊按 itemId 聚合,与采购页一致)────────
+const allocByItem = computed(() => {
+  const map = {};
+  for (const l of links.value) {
+    const key = l.ozonOrderItemId ?? l.itemId;
+    if (key) map[key] = (map[key] || 0) + (Number(l.allocatedAmount) || 0);
+  }
+  return map;
+});
+// 单件采购分摊(元);无分摊返回 null
+function unitCostOf(it) {
+  const alloc = allocByItem.value[it.id] ?? allocByItem.value[it.itemId];
+  const qty = Number(it.quantity) || 0;
+  if (!alloc || !qty) return null;
+  return Math.round((alloc / qty) * 100) / 100;
+}
+// 单件毛利 = 售价×(1-16%佣金) - 单件采购(未扣国际配送,口径与采购页 pe-total 区分但直观)
+function grossOf(it) {
+  const unitCost = unitCostOf(it);
+  const price = Number(it.price) || 0;
+  if (unitCost == null || !price) return null;
+  return Math.round((price * (1 - 0.16) - unitCost) * 100) / 100;
 }
 
 // 复制文本到剪贴板(uni API,H5/小程序通用)
@@ -558,6 +620,25 @@ onShow(() => {
   font-family: 'Courier New', monospace;
 }
 
+/* 头部右侧剩发倒计时(2026-10-13):默认琥珀色,超时红色 */
+.countdown-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 20rpx;
+  color: #b45309;
+  background: #fff7e6;
+  border: 1rpx solid #f0d9a8;
+  border-radius: 999rpx;
+  padding: 4rpx 14rpx;
+  font-variant-numeric: tabular-nums;
+}
+.countdown-badge.overdue {
+  color: #d93026;
+  background: #ffece8;
+  border-color: #f5b5ae;
+  font-weight: 600;
+}
+
 /* 质检单货件号(02131/024785 开头):红色加粗显著展示 */
 .posting.qc {
   color: #d93026;
@@ -641,6 +722,36 @@ onShow(() => {
   border-radius: 999rpx;
   margin-right: 10rpx;
   margin-bottom: 8rpx;
+}
+
+/* 利润概览条(2026-10-13):订单金额/采购合计/利润/成本利润率 四列一屏可见 */
+.profit-strip {
+  display: flex;
+  margin-top: 16rpx;
+  background: #f7f9fc;
+  border-radius: 12rpx;
+  padding: 16rpx 12rpx;
+}
+.profit-cell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+.profit-cell + .profit-cell {
+  border-left: 1rpx solid #e8ebf0;
+}
+.profit-k {
+  font-size: 20rpx;
+  color: #86909c;
+}
+.profit-v {
+  margin-top: 4rpx;
+  font-size: 27rpx;
+  font-weight: 600;
+  color: #1f2329;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 主信息:单列展示 */
@@ -807,6 +918,12 @@ onShow(() => {
   margin-top: 4rpx;
   font-size: 22rpx;
   color: #86909c;
+}
+.prod-alloc {
+  color: #4e5969;
+}
+.prod-gross {
+  font-weight: 600;
 }
 
 .prod-qty {
