@@ -34,6 +34,22 @@
 				"enablePullDownRefresh": true,
 				"backgroundTextStyle": "dark"
 			}
+		},
+		{
+			"path": "pages/price-manage/index",
+			"style": {
+				"navigationBarTitleText": "价格管理",
+				"enablePullDownRefresh": true,
+				"backgroundTextStyle": "dark"
+			}
+		},
+		{
+			"path": "pages/stats/index",
+			"style": {
+				"navigationBarTitleText": "统计",
+				"enablePullDownRefresh": true,
+				"backgroundTextStyle": "dark"
+			}
 		}
 	],
 	"globalStyle": {
