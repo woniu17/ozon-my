@@ -69,6 +69,28 @@ export function unlinkPurchase(purchaseOrderId, packageId) {
   return request.post('/admin/api/order-process/unlink', { purchaseOrderId, packageId });
 }
 
+// ── 扫描发货(2026-10-13,自 web 端 order-process.js 移植)────────
+// 提交发货重量(服务端权威状态校验,仅 wait_ship 落库)
+export function scanShipSubmit(packageId, weightG) {
+  return request.post('/admin/api/order-process/scan-ship/submit', { packageId, weightG });
+}
+// 更正重量(交运后人工修正发货重量)
+export function correctShipWeight(packageId, weightG) {
+  return request.post('/admin/api/order-process/scan-ship/correct-weight', { packageId, weightG });
+}
+// 发货记录(今日/昨日已交运包裹)
+export function getScanShipRecords(params) {
+  return request.get('/admin/api/order-process/scan-ship/records', params);
+}
+// 获取 Ozon 面单(返回 { url, expiresIn },url 为 10 分钟短时公开链接,可直接打开)
+export function fetchPackageLabel(packageId) {
+  return request.post('/admin/api/order-process/package-label', { packageIds: [packageId] });
+}
+// 标记已打印面单(流转交运)
+export function markPrinted(packageId) {
+  return request.post('/admin/api/order-process/print-label', { packageId });
+}
+
 // ── 平台订单获取(cloakbrowser 直取)───────────────────────
 // platform: 'pdd' | 'ali1688' | 'taobao'
 // params: { tab: 'all'|'unshipped'|'unreceived', size, account }

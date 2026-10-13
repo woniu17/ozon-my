@@ -26,6 +26,14 @@
 			"style": {
 				"navigationBarTitleText": "采购处理"
 			}
+		},
+		{
+			"path": "pages/scan-ship/index",
+			"style": {
+				"navigationBarTitleText": "扫描发货",
+				"enablePullDownRefresh": true,
+				"backgroundTextStyle": "dark"
+			}
 		}
 	],
 	"globalStyle": {
