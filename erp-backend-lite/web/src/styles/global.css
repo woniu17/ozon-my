@@ -610,6 +610,35 @@ h3 {
   display: flex;
   flex-direction: column;
 }
+/* P2:弹窗入场动效(fade + scale 微上移) */
+.modal-mask {
+  animation: modal-mask-in 0.18s ease-out;
+}
+.modal-card {
+  animation: modal-card-in 0.2s ease-out;
+}
+@keyframes modal-mask-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modal-card-in {
+  from { opacity: 0; transform: scale(0.98) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+/* AppConfirm 关闭动画(配合 <Transition name="modal">) */
+.modal-leave-active {
+  transition: opacity 0.15s ease;
+}
+.modal-leave-active .modal-card {
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+.modal-leave-to {
+  opacity: 0;
+}
+.modal-leave-to .modal-card {
+  transform: scale(0.98);
+  opacity: 0;
+}
 .modal-lg {
   width: 720px;
 }
@@ -1372,6 +1401,12 @@ h3 {
   align-items: flex-end;
   gap: 12px;
   height: 200px;
+  /* P2:横向网格线(25% 一档) */
+  background-image: repeating-linear-gradient(
+    to top,
+    rgba(228, 232, 238, 0.65) 0 1px,
+    transparent 1px 25%
+  );
 }
 .dash-bar-col {
   flex: 1;
@@ -1393,6 +1428,17 @@ h3 {
   border-radius: 4px 4px 0 0;
   position: absolute;
   bottom: 0;
+  /* P2:柱状生长动画 */
+  animation: dash-bar-grow 0.5s ease-out backwards;
+  transition: filter 0.15s;
+}
+@keyframes dash-bar-grow {
+  from {
+    height: 0;
+  }
+}
+.dash-bar-col:hover .dash-bar {
+  filter: brightness(0.9);
 }
 .dash-bar-total {
   background: var(--info-bg);

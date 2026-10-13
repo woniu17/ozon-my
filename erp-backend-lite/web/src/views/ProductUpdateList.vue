@@ -168,7 +168,7 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-if="state.loading && !state.items.length">
-            <td colspan="10" class="muted" style="padding: 24px; text-align: center">加载中…</td>
+            <td colspan="10" style="padding: 0"><SkeletonTable :rows="4" :cols="9" /></td>
           </tr>
           <tr v-else-if="!state.items.length">
             <td colspan="10" class="empty">暂无商品信息更新任务</td>

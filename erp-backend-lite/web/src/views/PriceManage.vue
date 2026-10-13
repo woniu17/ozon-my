@@ -567,14 +567,17 @@ onMounted(async () => {
                       <span>{{ suggestedPrice(row) != null ? '¥' + suggestedPrice(row) : '—' }}</span>
                     </div>
                   </div>
-                  <!-- 子列2:目标率选项(竖排) -->
+                  <!-- 子列2:目标率选项(下拉,替代原12个竖排按钮) -->
                   <div class="tg-rates">
-                    <button
-                      v-for="r in TARGET_RATES" :key="r" type="button" class="rate-opt"
-                      :class="{ active: selRate(row) === r }"
+                    <select
+                      class="rate-select"
+                      :value="rateChoice[row.sku] ?? DEFAULT_TARGET_RATE"
                       :disabled="!canTarget(row)"
-                      @click="rateChoice[row.sku] = r"
-                    >{{ r }}%</button>
+                      :title="canTarget(row) ? '选择目标成本利润率,再点改价' : '需先维护采购价与重量'"
+                      @change="rateChoice[row.sku] = Number($event.target.value)"
+                    >
+                      <option v-for="r in TARGET_RATES" :key="r" :value="r">{{ r }}%</option>
+                    </select>
                   </div>
                   <!-- 子列3:改价按钮 -->
                   <div class="tg-act">
@@ -631,7 +634,7 @@ onMounted(async () => {
           </tr>
         </tbody>
       </table>
-      <div v-if="loading" class="loading-mask">加载中…</div>
+      <div v-if="loading" class="loading-mask"><SkeletonTable :rows="6" :cols="8" /></div>
     </div>
 
     <!-- 分页 -->
@@ -855,16 +858,17 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .tg-prices { display: flex; flex-direction: column; gap: 2px; }
 .tg-line { font-size: 17px; }
 .tg-label { display: inline-block; color: var(--text-secondary, #6b7280); margin-right: 6px; }
-.tg-rates { display: flex; flex-direction: column; gap: 3px; }
+.tg-rates { display: flex; }
 .tg-act { display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.rate-opt {
-  padding: 1px 10px; font-size: 15px; line-height: 1.5; border: 1px solid var(--border, #d1d5db);
-  border-radius: 4px; background: var(--bg-card, #fff); color: var(--text-secondary, #6b7280); cursor: pointer;
+.rate-select {
+  padding: 3px 8px; font-size: 13px; line-height: 1.5;
+  border: 1px solid var(--border, #e5e7eb); border-radius: 6px;
+  background: var(--bg-card, #fff); color: var(--text, #1f2937); cursor: pointer;
 }
-.rate-opt:hover:not(:disabled) { border-color: #4338ca; color: #4338ca; }
-.rate-opt.active { background: #4338ca; border-color: #4338ca; color: #fff; font-weight: 600; }
-.rate-opt:disabled { opacity: .45; cursor: not-allowed; }
-.suggest { font-weight: 600; color: #4338ca; }
+.rate-select:hover:not(:disabled) { border-color: var(--primary); }
+.rate-select:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25); }
+.rate-select:disabled { opacity: .5; cursor: not-allowed; }
+.suggest { font-weight: 600; color: var(--primary); }
 
 /* 利润明细列(当前/调整):键值两栏对齐 */
 .bl { display: flex; justify-content: space-between; gap: 10px; line-height: 1.55; white-space: nowrap; min-width: 132px; }
