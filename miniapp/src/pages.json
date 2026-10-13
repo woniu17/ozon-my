@@ -7,6 +7,12 @@
 			}
 		},
 		{
+			"path": "pages/home/index",
+			"style": {
+				"navigationBarTitleText": "工作台"
+			}
+		},
+		{
 			"path": "pages/orders/index",
 			"style": {
 				"navigationBarTitleText": "订单处理",

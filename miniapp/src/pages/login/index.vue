@@ -45,9 +45,9 @@ const password = ref('');
 const loading = ref(false);
 
 onLoad(() => {
-  // 已有 token 直接进入订单页(7 天有效 + 滑动续期)
+  // 已有 token 直接进入工作台(7 天有效 + 滑动续期)
   if (getToken()) {
-    uni.reLaunch({ url: '/pages/orders/index' });
+    uni.reLaunch({ url: '/pages/home/index' });
     return;
   }
   // 回填上次登录的手机号
@@ -68,7 +68,7 @@ async function doLogin() {
     const data = await post('/auth/login-password', { phoneNumber: p, password: pwd });
     setAuth(data.accessToken, data.user);
     uni.setStorageSync(PHONE_KEY, p);
-    uni.reLaunch({ url: '/pages/orders/index' });
+    uni.reLaunch({ url: '/pages/home/index' });
   } catch (e) {
     // 错误 toast 已由 request.js 统一弹出(如「手机号或密码错误」)
     password.value = '';
