@@ -59,6 +59,15 @@
 				"backgroundTextStyle": "dark",
 				"onReachBottomDistance": 100
 			}
+		},
+		{
+			"path": "pages/data-view/index",
+			"style": {
+				"navigationBarTitleText": "数据查看",
+				"enablePullDownRefresh": true,
+				"backgroundTextStyle": "dark",
+				"onReachBottomDistance": 100
+			}
 		}
 	],
 	"globalStyle": {
