@@ -55,7 +55,7 @@ const tabCounts = ref({});
 // ── 筛选 ───────────────────────────────────────────────
 const filters = reactive({
   keyword: '',
-  purchaseStatus: '', // '' | 'none' | 'purchased' | 'multi'(多条采购;手工单已下线,manual 选项移除)
+  purchaseStatus: '', // '' | 'none' | 'purchased' | 'multi' | 'other-platform'(其它采购平台)
   noteFilter: '',     // '' | 'has' | 'none' 备注筛选(2026-09-15)
   tag: '',            // 标签筛选:标签名精确匹配(2026-09-15)
   arrived: '',        // '' | '0' | '1'
@@ -3115,6 +3115,7 @@ onUnmounted(() => {
           <option value="none">未采购</option>
           <option value="purchased">已采购</option>
           <option value="multi" title="关联 ≥2 个采购单(拼单)">多条采购</option>
+          <option value="other-platform" title="采购单平台为 other(手工/电话微信下单等)">其它采购平台</option>
         </select>
         <select v-model="filters.noteFilter" class="filter-input" @change="search">
           <option value="">全部备注</option>

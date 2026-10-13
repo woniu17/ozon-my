@@ -724,7 +724,7 @@ const TAB_STATUS = {
  * 包裹分页列表(联订单+采购聚合)
  * filters: { tab, keyword, storeId, purchaseStatus, arrived, page, pageSize,
  *            globalKeyword, globalMode }
- *  - purchaseStatus: '' | 'none' | 'purchased'(采购筛选)
+ *  - purchaseStatus: '' | 'none' | 'purchased' | 'multi' | 'other-platform'(采购筛选)
  *  - arrived: '' | '0' | '1'(到货筛选,仅提示标记)
  *  - globalKeyword: 全局搜索关键词(跨所有状态,忽略 tab;妙手 appPackageTab=isolation 等价)
  *  - globalMode: 'ss' 模糊(LIKE,默认) | 'eq' 精确(全值)
@@ -801,6 +801,13 @@ function buildPackageWhere(filters = {}) {
   } else if (filters.purchaseStatus === 'multi') {
     // 多条采购:关联 ≥2 个采购单(拼单场景,按 op_purchase_link 计数)
     where.push(`p.id IN (SELECT pl.package_id FROM op_purchase_link pl GROUP BY pl.package_id HAVING COUNT(*) >= 2)`);
+  } else if (filters.purchaseStatus === 'other-platform') {
+    // 其它采购平台:关联的采购单 platform='other'(存量手工单/电话微信下单等,2026-10-13)
+    where.push(`p.id IN (
+      SELECT pl.package_id FROM op_purchase_link pl
+      JOIN op_purchase_order po ON po.id = pl.purchase_order_id
+      WHERE po.platform = 'other'
+    )`);
   }
   // 手工采购筛选(manual)已随手工单下线移除(2026-09-19):/purchase 路由已拒绝无单号提交,存量孤儿单已清理
   // 备注筛选(2026-09-15):has=有备注(本地或妙手同步的 note);none=无备注
