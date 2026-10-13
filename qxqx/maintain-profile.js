@@ -3,7 +3,7 @@
 // 共用 .ozon-profile(靠 browser.lock 跨脚本锁互斥)。
 // 本脚本打开持久化可见浏览器窗口,一次性打开两个站点,保证 profile 里两个站点都有登录态:
 //   - https://www.ozon.ru/   买家端:买家/访客 cookie(浅采/价监用,过反爬挑战,有登录态可降 403)
-//   - https://seller.ozon.ru/ 卖家中心:卖家登录态 sc_company_id 持久化(深采必需,需人工扫码)
+//   - https://seller.ozon.ru/app/dashboard/main  卖家中心:卖家登录态 sc_company_id 持久化(深采必需,需人工扫码)
 // 登录态随窗口关闭自动落盘,供三个采集脚本复用。
 //
 // 用法:
@@ -48,7 +48,7 @@ const TARGETS = [
   },
   {
     name: '卖家中心',
-    url: 'https://seller.ozon.ru/',
+    url: 'https://seller.ozon.ru/app/dashboard/main',
     desc: 'seller.ozon.ru 卖家登录态 sc_company_id(深采必需,人工扫码登录)',
   },
 ];
