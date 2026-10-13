@@ -62,7 +62,10 @@ const trendBars = computed(() => {
   <div>
     <div class="toolbar">
       <h2>首页统计</h2>
-      <button class="btn" :disabled="loading" @click="loadDashboard">刷新</button>
+      <button class="btn" :disabled="loading" @click="loadDashboard">
+        <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.88M13.5 2.5v3h-3"/></svg>
+        刷新
+      </button>
     </div>
 
     <div class="dash-cards">

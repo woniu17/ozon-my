@@ -21,8 +21,8 @@ const confirmStore = useConfirmStore();
 const COMMISSION_RATE = 0.16;
 const DELIVERY_BASE_CNY = 3.37;
 const DELIVERY_PER_G_CNY = 0.0281;
-const TARGET_RATES = [40, 50, 60, 70, 80, 90]; // 按成本利润率定价选项(%)
-const DEFAULT_TARGET_RATE = 50;             // 默认选中 50%
+const TARGET_RATES = [50, 60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200]; // 按成本利润率定价选项(%,与H5对齐)
+const DEFAULT_TARGET_RATE = 100;             // 默认选中 100%
 
 const SORTS = [
   { key: 'profitRateCost', label: '成本利润率' },
@@ -71,7 +71,7 @@ function persistViewState() {
 const expanded = ref(new Set());   // 展开的 sku
 const ordersMap = ref({});         // sku → 历史订单列表
 const ordersLoading = ref({});
-const rateChoice = ref({});        // sku → 目标成本利润率(40~90,未选默认50)
+const rateChoice = ref({});        // sku → 目标成本利润率(50~200,未选默认100,与H5对齐)
 const updatingSku = ref('');
 const storeNameMap = ref({});                                     // 店铺 id → 名称
 const storeName = (storeId) => storeNameMap.value[storeId] || storeId || '—';
@@ -417,8 +417,12 @@ onMounted(async () => {
           @click="switchStore(s.storeId)"
         >{{ storeName(s.storeId) }} ({{ s.count }})</button>
       </div>
-      <button class="btn" :disabled="loading || syncing" @click="refreshPage" title="重载列表与统计(不触发 Ozon 同步)">刷新</button>
+      <button class="btn" :disabled="loading || syncing" @click="refreshPage" title="重载列表与统计(不触发 Ozon 同步)">
+        <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.88M13.5 2.5v3h-3"/></svg>
+        刷新
+      </button>
       <button class="btn btn-primary" :disabled="syncing" @click="syncNow">
+        <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.88M13.5 2.5v3h-3"/></svg>
         {{ syncing ? '同步中…' : '同步 Ozon 价格' }}
       </button>
     </div>
@@ -718,16 +722,16 @@ onMounted(async () => {
   color: var(--text-primary, #374151);
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
-.btn-primary:hover:not(:disabled) { background: #4338ca; }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
 .btn-sm { padding: 2px 8px; font-size: 12px; }
 .btn-link {
-  border: none; background: none; color: #4f46e5; cursor: pointer;
+  border: none; background: none; color: var(--primary); cursor: pointer;
   font-size: 12px; padding: 0 2px; text-decoration: underline;
 }
 
 /* 表格 */
-.pm-table-wrap { position: relative; overflow-x: auto; background: var(--bg-card, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 8px; }
+.pm-table-wrap { position: relative; overflow: auto; max-height: 70vh; background: var(--bg-card, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 8px; }
 /* 表格整体:字体放大 1.4 倍(13→18px),内部小号字同步放大 */
 .pm-table { width: 100%; border-collapse: collapse; font-size: 18px; min-width: 1900px; }
 .pm-table .sub { font-size: 15px; }

@@ -1847,8 +1847,8 @@ async function savePoLogistics() {
 const PM_COMMISSION_RATE = 0.16;
 const PM_DELIVERY_BASE_CNY = 3.37;
 const PM_DELIVERY_PER_G_CNY = 0.0281;
-const PM_TARGET_RATES = [40, 50, 60, 70, 80, 90]; // 目标成本利润率选项(%)
-const PM_DEFAULT_RATE = 50;                        // 默认选中 50%
+const PM_TARGET_RATES = [50, 60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200]; // 目标成本利润率选项(%,与H5对齐)
+const PM_DEFAULT_RATE = 100;                        // 默认选中 100%
 
 // SKU 定价信息(sku → skus-info 行:现价/是否在价格缓存/重量/已维护采购价)
 const skuPricing = ref({});
@@ -1865,7 +1865,7 @@ async function loadSkuPricing(items) {
   }
 }
 
-// 每行目标率(sku → 40~90,未选默认 50)
+// 每行目标率(sku → 50~200,未选默认 100,与H5对齐)
 const poRateChoice = reactive({});
 function poRate(sku) { return poRateChoice[sku] || PM_DEFAULT_RATE; }
 
@@ -1910,6 +1910,8 @@ const profitRows = computed(() => purchaseForm.items.map((it) => {
     profit: Math.round(profit * 100) / 100,
     profitRateCost: alloc > 0 ? Math.round((profit / alloc) * 10000) / 100 : null,
     suggested, canAdjust, listingPrice: info?.price ?? null,
+    // 取整(手动改价模式):只需 SKU 在价格缓存且有 product_id,且当前有现价
+    canRoundUp: !!(it.sku && info?.inCache && info?.hasProductId && (info?.price ?? null) != null),
     unitDelivery, oldCommission, newCommission, oldProfit, newProfit, oldRateC, newRateC,
     missingWhy: !it.sku ? '订单商品缺 SKU'
       : unitCost <= 0 ? '分摊金额为 0'
@@ -1974,7 +1976,30 @@ async function adjustSkuPrice(p) {
   }
 }
 
-// 当前 importTab 对应的平台值(用于 restoredSnKeys 匹配)
+// 取整:将当前上架价向上取整到整数元(手动改价模式,不传 targetRate 即走手动链路)
+async function roundUpPrice(p) {
+  if (adjustingSku.value || !p.canRoundUp || p.listingPrice == null) return;
+  const rounded = Math.ceil(p.listingPrice);
+  if (rounded === p.listingPrice) {
+    show(`当前上架价已是整数 ¥${p.listingPrice.toFixed(2)},无需取整`, 'info');
+    return;
+  }
+  const okc = await confirmStore.ask({
+    message: `将 SKU ${p.sku} 的上架价向上取整?\n现价 ¥${p.listingPrice.toFixed(2)} → 新价 ¥${rounded.toFixed(2)}(划线价将设为 ¥${(rounded * 2).toFixed(2)})\n只影响后续新订单,已下单包裹价格不变`,
+    confirmText: '取整改价',
+  });
+  if (!okc) return;
+  adjustingSku.value = p.sku;
+  try {
+    await updatePrice({ sku: String(p.sku), newPrice: rounded });
+    show('取整已提交,30秒后自动回读校准', 'success');
+    await loadSkuPricing(); // 刷新现价显示
+  } catch (err) {
+    show(err.message || '取整失败', 'error');
+  } finally {
+    adjustingSku.value = '';
+  }
+}
 const importTabPlatform = computed(() => PLATFORM_TAB_META[currentTabDef.value?.platform]?.platformVal || '');
 /** 平台列表行是否已在已有采购关联中(禁止重复勾选,避免重复入库) */
 function isRestoredLinked(o) {
@@ -2984,7 +3009,10 @@ onUnmounted(() => {
           title="跨所有状态搜索订单"
           @keydown.enter="doGlobalSearch"
         />
-        <button class="btn btn-primary" @click="doGlobalSearch">搜索</button>
+        <button class="btn btn-primary" @click="doGlobalSearch">
+          <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
+          搜索
+        </button>
       </div>
       <div class="global-search-hint" v-else>
         <span class="tag tag-info">全局搜索</span>
@@ -3776,6 +3804,12 @@ onUnmounted(() => {
                     :title="p.canAdjust ? `按 ${p.rate}% 成本利润率调整该 SKU 上架价` : p.missingWhy"
                     @click="adjustSkuPrice(p)"
                   >{{ adjustingSku === p.sku ? '调价中…' : '调价' }}</button>
+                  <button
+                    class="btn btn-ghost btn-sm"
+                    :disabled="!p.canRoundUp || adjustingSku === p.sku"
+                    :title="p.canRoundUp ? `将当前上架价 ¥${p.listingPrice.toFixed(2)} 向上取整到整数元` : '该 SKU 不在价格缓存或缺少 product_id'"
+                    @click="roundUpPrice(p)"
+                  >取整</button>
                 </template>
               </div>
               <table v-if="poCmpExpanded[p.sku]" class="po-cmp-table">

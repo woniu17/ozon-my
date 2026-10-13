@@ -326,6 +326,12 @@
                 :disabled="!p.canAdjust || adjustingSku === p.sku"
                 @click.stop="adjustSkuPrice(p)"
                 >{{ adjustingSku === p.sku ? '调价中…' : '调价' }}</button>
+              <button
+                v-if="cmpExpanded[p.sku]"
+                class="mini-btn"
+                :disabled="!p.canRoundUp || adjustingSku === p.sku"
+                @click.stop="roundUpPrice(p)"
+                >取整</button>
             </view>
             <block v-if="cmpExpanded[p.sku]">
               <view class="po2-cmp-rows">
@@ -616,7 +622,7 @@ const PM_DELIVERY_BASE_CNY = 3.37;
 const PM_DELIVERY_PER_G_CNY = 0.0281;
 const RATE_OPTIONS = [50, 60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200]; // 目标成本利润率(%)
 const RATE_LABELS = RATE_OPTIONS.map((r) => r + '%');
-const DEFAULT_RATE = 90;
+const DEFAULT_RATE = 100;
 
 const skuPricing = ref({});   // sku → 定价信息(现价/重量/缓存命中)
 const poRates = reactive({}); // sku → 目标率(未选默认 50%)
@@ -700,6 +706,8 @@ const profitRows = computed(() => {
       listingPrice: oldPrice, suggested, unitCost, unitDelivery,
       oldCommission, newCommission, oldProfit, newProfit, oldRateC, newRateC,
       canAdjust: !!(it.sku && unitCost > 0 && unitDelivery != null && info?.inCache && info?.hasProductId),
+      // 取整(手动改价模式):只需 SKU 在价格缓存且有 product_id,且当前有现价
+      canRoundUp: !!(it.sku && info?.inCache && info?.hasProductId && (info?.price ?? null) != null),
       missingWhy: !it.sku ? '订单商品缺 SKU'
         : unitCost <= 0 ? '分摊金额为 0'
         : unitDelivery == null ? 'SKU 未维护重量(价格管理)'
@@ -762,6 +770,34 @@ function adjustSkuPrice(p) {
         // 2) 目标率改价(限频/日志/30s 回读均复用价格管理链路)
         await updatePrice({ sku: String(p.sku), newPrice: p.suggested, targetRate: rate / 100 });
         uni.showToast({ title: '改价已提交,30秒后回读校准', icon: 'none', duration: 2500 });
+        await loadSkuPricing(); // 刷新现价显示
+      } catch (e) {
+        /* 错误 toast 已由 request.js 统一弹出 */
+      } finally {
+        adjustingSku.value = '';
+      }
+    },
+  });
+}
+
+// 取整:将当前上架价向上取整到整数元(手动改价模式,不传 targetRate 即走手动链路)
+function roundUpPrice(p) {
+  if (adjustingSku.value || !p.canRoundUp || p.listingPrice == null) return;
+  const rounded = Math.ceil(p.listingPrice);
+  if (rounded === p.listingPrice) {
+    uni.showToast({ title: `已是整数 ¥${p.listingPrice.toFixed(2)}`, icon: 'none', duration: 2000 });
+    return;
+  }
+  uni.showModal({
+    title: `SKU ${p.sku} 取整`,
+    content: `将当前上架价向上取整?\n现价 ¥${p.listingPrice.toFixed(2)} → 新价 ¥${rounded.toFixed(2)}(划线价 ¥${(rounded * 2).toFixed(2)})\n只影响后续新订单,已下单包裹价格不变`,
+    confirmText: '取整改价',
+    success: async (res) => {
+      if (!res.confirm) return;
+      adjustingSku.value = p.sku;
+      try {
+        await updatePrice({ sku: String(p.sku), newPrice: rounded });
+        uni.showToast({ title: '取整已提交,30秒后回读校准', icon: 'none', duration: 2500 });
         await loadSkuPricing(); // 刷新现价显示
       } catch (e) {
         /* 错误 toast 已由 request.js 统一弹出 */

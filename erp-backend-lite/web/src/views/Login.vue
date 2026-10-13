@@ -60,6 +60,7 @@ const onSubmit = async () => {
       </label>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" :disabled="form.loading">
+          <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10m0 0L9 4m4 4l-4 4"/></svg>
           {{ form.loading ? '登录中…' : '登录' }}
         </button>
       </div>
