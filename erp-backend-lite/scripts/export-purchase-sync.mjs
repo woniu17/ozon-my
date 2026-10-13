@@ -52,7 +52,12 @@ const exported = {
   ...data,
 };
 
-const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+// 文件名时间戳用北京时间(Asia/Shanghai,UTC+8),便于人工按本地时间辨认备份;
+// 中国无夏令时,+8 偏移恒成立(与 data/ 默认输出、备份脚本命名保持一致)
+const ts = new Date(Date.now() + 8 * 3600 * 1000)
+  .toISOString()
+  .replace(/[-:T]/g, '')
+  .slice(0, 14);
 const out = OUT_PATH || join(__dirname, '..', 'data', `purchase-sync-export-${ts}.json`);
 writeFileSync(out, JSON.stringify(exported, null, 2), 'utf-8');
 markExported();

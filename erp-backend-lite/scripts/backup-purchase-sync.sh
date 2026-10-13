@@ -35,8 +35,8 @@ cd "$APP_DIR"
 
 log "==== 采购信息备份开始 (dir=$BACKUP_DIR, keep=${KEEP_DAYS}天, remote=${REMOTE_HOST}:${REMOTE_DIR}) ===="
 
-# 1) 导出(UTC 时间戳,与导出脚本默认命名一致)
-TS="$(date -u +%Y%m%d%H%M%S)"
+# 1) 导出(北京时间戳,与导出脚本文件名命名一致)
+TS="$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)"
 OUT="$BACKUP_DIR/purchase-sync-export-$TS.json"
 node scripts/export-purchase-sync.mjs --out "$OUT" | tee -a "$LOG_FILE"
 
