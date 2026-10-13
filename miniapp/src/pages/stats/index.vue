@@ -24,6 +24,39 @@
       </view>
     </scroll-view>
 
+    <!-- 财务统计专用筛选:自然月 / 自定义日期 / 店铺 -->
+    <template v-if="tab === 'finance'">
+      <scroll-view v-if="monthPresets.length" class="presets months" scroll-x :show-scrollbar="false">
+        <view class="presets-inner">
+          <view
+            v-for="mp in monthPresets"
+            :key="mp.key"
+            class="preset-chip month-chip"
+            :class="{ on: activePreset === mp.key }"
+            @click="applyMonth(mp)"
+          >{{ mp.label }}</view>
+        </view>
+      </scroll-view>
+
+      <view class="filter-bar">
+        <!-- 自定义日期 -->
+        <view class="date-range" :class="{ disabled: activePreset !== 'custom' }">
+          <picker mode="date" :value="fromDate" :disabled="activePreset !== 'custom'" @change="onFromDateChange">
+            <view class="date-box">{{ fromDate || '开始日期' }}</view>
+          </picker>
+          <text class="date-sep">~</text>
+          <picker mode="date" :value="toDate" :disabled="activePreset !== 'custom'" @change="onToDateChange">
+            <view class="date-box">{{ toDate || '结束日期' }}</view>
+          </picker>
+        </view>
+        <!-- 店铺筛选 -->
+        <view class="store-btn" @click="storePickerOpen = true">
+          <text>{{ storeSelectionLabel }}</text>
+          <text class="store-caret">▾</text>
+        </view>
+      </view>
+    </template>
+
     <view class="range-hint">{{ rangeHint }}</view>
     <view v-if="error" class="error-bar">{{ error }}</view>
 
@@ -79,17 +112,43 @@
           <view class="sc-count">{{ fmtCount(finance.settled.orderCount) }} 单</view>
           <view class="sc-money" :class="profitClass(finance.settled.totalProfit)">¥{{ fmtMoney(finance.settled.totalProfit) }}</view>
           <view class="sc-sub">销售利润率 {{ fmtRate(finance.settled.profitRateSale) }}</view>
+          <view class="sc-sub">采购成本 ¥{{ fmtMoney(-finance.settled.totalPurchaseAmount) }}</view>
+          <view class="sc-sub">回款 ¥{{ fmtMoney(finance.settled.totalPayout) }} · 成本利润率 {{ fmtRate(finance.settled.profitRateCost) }}</view>
         </view>
         <view class="summary-card s-pending">
           <view class="sc-head">🚚 在途预估利润{{ finance.pending.estimated ? '(估)' : '' }}</view>
           <view class="sc-count">{{ fmtCount(finance.pending.orderCount) }} 单</view>
           <view class="sc-money" :class="profitClass(finance.pending.totalProfit)">¥{{ fmtMoney(finance.pending.totalProfit) }}</view>
           <view class="sc-sub">订单 ¥{{ fmtMoney(finance.pending.totalOrderAmount) }}</view>
+          <view class="sc-sub">采购成本 ¥{{ fmtMoney(-finance.pending.totalPurchaseAmount) }}</view>
+          <view class="sc-sub">回款(估) ¥{{ fmtMoney(finance.pending.totalPayout) }}</view>
         </view>
         <view class="summary-card s-nonorder">
           <view class="sc-head">🧾 非订单应计</view>
           <view class="sc-money" :class="profitClass(finance.nonOrder.totalCny)">¥{{ fmtMoney(finance.nonOrder.totalCny) }}</view>
+          <view class="sc-sub">{{ fmtCount(finance.nonOrder.count) }} 笔</view>
           <view v-if="rubRate" class="sc-sub">卢布汇率 {{ rubRate }}</view>
+        </view>
+      </view>
+
+      <!-- 非订单应计明细 -->
+      <view class="card">
+        <view class="section-title">非订单应计明细</view>
+        <view v-if="noLoading && !noItems.length" class="empty small">加载中…</view>
+        <view v-else-if="!noItems.length" class="empty small">该范围内暂无非订单应计</view>
+        <view v-else>
+          <view v-for="it in noItems" :key="it.id" class="fin-row">
+            <view class="fin-row-head">
+              <text class="fin-posting">{{ it.nameCn }}<text v-if="it.typeId" class="type-id"> #{{ it.typeId }}</text></text>
+              <text class="fin-profit" :class="profitClass(it.cny)">{{ fmtMoney(it.cny) }}</text>
+            </view>
+            <view class="fin-row-sub">
+              <text>{{ it.accrualDate || '—' }}</text>
+              <text>{{ it.storeName || '' }}</text>
+              <text v-if="it.unitNumber">{{ it.unitNumber }}</text>
+            </view>
+          </view>
+          <view v-if="noItems.length < noTotal" class="load-more" @click="loadMoreNo">{{ noLoading ? '加载中…' : '加载更多' }}</view>
         </view>
       </view>
 
@@ -99,7 +158,7 @@
           <view class="fin-tab" :class="{ on: finGroup === 'settled' }" @click="setFinGroup('settled')">已结算</view>
           <view class="fin-tab" :class="{ on: finGroup === 'pending' }" @click="setFinGroup('pending')">在途</view>
         </view>
-        <view v-if="finLoading" class="empty small">加载中…</view>
+        <view v-if="finLoading && !finOrders.length" class="empty small">加载中…</view>
         <view v-else-if="!finOrders.length" class="empty small">暂无订单</view>
         <view v-else>
           <view v-for="o in finOrders" :key="o.packageId || o.id" class="fin-row">
@@ -111,20 +170,46 @@
             <view class="fin-row-sub">
               <text>订单 ¥{{ fmtMoney(o.orderAmount) }}</text>
               <text v-if="o.purchaseAmount != null">采购 ¥{{ fmtMoney(o.purchaseAmount) }}</text>
+              <text v-if="o.estimated" class="est-tag">估</text>
             </view>
           </view>
+          <view v-if="finOrders.length < finTotal" class="load-more" @click="loadMoreFin">{{ finLoading ? '加载中…' : '加载更多' }}</view>
         </view>
       </view>
     </template>
 
     <view v-if="loading" class="empty">加载中…</view>
+
+    <!-- 店铺多选弹层 -->
+    <view v-if="storePickerOpen" class="mask" @click="storePickerOpen = false">
+      <view class="store-panel" @click.stop>
+        <view class="store-panel-head">
+          <text>选择店铺</text>
+          <text class="store-panel-action" @click="selectAllStores">全选</text>
+        </view>
+        <scroll-view scroll-y class="store-panel-list">
+          <view v-for="s in allStores" :key="s.id" class="store-option" @click="toggleStore(s.id)">
+            <view class="check" :class="{ on: isStoreIncluded(s.id) }">{{ isStoreIncluded(s.id) ? '✓' : '' }}</view>
+            <text>{{ s.name }}</text>
+          </view>
+          <view v-if="!allStores.length" class="empty small">无店铺数据</view>
+        </scroll-view>
+      </view>
+    </view>
   </view>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue';
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
-import { getOrderStatsSummary, getFinanceSummary, getFinanceOrders } from '../../api/stats.js';
+import {
+  getOrderStatsSummary,
+  getFinanceSummary,
+  getFinanceOrders,
+  getNonOrderAccruals,
+  getOrderMonths,
+  getFinanceStores,
+} from '../../api/stats.js';
 
 const TZ_OPTIONS = [
   { value: 'Asia/Shanghai', label: '北京时间' },
@@ -142,7 +227,20 @@ const error = ref('');
 const finGroup = ref('settled');
 const finOrders = ref([]);
 const finLoading = ref(false);
+const finPage = ref(1);
+const finTotal = ref(0);
+const noItems = ref([]);
+const noLoading = ref(false);
+const noPage = ref(1);
+const noTotal = ref(0);
 const rubRate = ref('');
+// 店铺筛选
+const allStores = ref([]);
+const selectedStoreIds = ref(new Set());
+const storePickerOpen = ref(false);
+// 自然月快捷
+const monthPresets = ref([]);
+const PAGE_SIZE = 10;
 
 function pad(n) { return String(n).padStart(2, '0'); }
 function tzDate(now = new Date()) {
@@ -169,12 +267,14 @@ const ORDER_PRESETS = [
   { key: '30d', label: '近30日' },
   { key: 'thisMonth', label: '本月' },
 ];
-// 财务统计预设
+// 财务统计预设(对齐 web:全部/近7/14/30日/本月/自定义)
 const FIN_PRESETS = [
   { key: 'all', label: '全部' },
   { key: '7d', label: '近7日' },
+  { key: '14d', label: '近14日' },
   { key: '30d', label: '近30日' },
   { key: 'thisMonth', label: '本月' },
+  { key: 'custom', label: '自定义' },
 ];
 const presets = computed(() => (tab.value === 'order' ? ORDER_PRESETS : FIN_PRESETS));
 
@@ -184,7 +284,9 @@ function presetRange(key) {
     case 'all': return { from: '', to: '' };
     case 'today': return { from: todayStr, to: shiftLocalDays(1) };
     case 'yesterday': return { from: shiftLocalDays(-1), to: todayStr };
+    // 「近 N 日」= 含今天往前共 N 个自然日:from 取今天-(N-1),to 为明天(排他日界)
     case '7d': return { from: shiftLocalDays(-6), to: shiftLocalDays(1) };
+    case '14d': return { from: shiftLocalDays(-13), to: shiftLocalDays(1) };
     case '30d': return { from: shiftLocalDays(-29), to: shiftLocalDays(1) };
     case 'thisMonth': {
       const { y, m } = tzDate();
@@ -200,40 +302,116 @@ function rangeHint() {
 }
 const rangeHintText = computed(rangeHint);
 
+// 公共查询参数(店铺多选:空集合=全选)
+function baseParams() {
+  const p = {};
+  if (fromDate.value && toDate.value) { p.from = fromDate.value; p.to = toDate.value; }
+  p.tz = tz.value;
+  if (selectedStoreIds.value.size > 0) p.storeIds = [...selectedStoreIds.value].join(',');
+  return p;
+}
+
 function setTz(v) {
   if (tz.value === v) return;
   tz.value = v;
+  if (tab.value === 'finance') loadOrderMonths(); // 月界随时区变化,重新拉取有订单月份
   applyPreset(activePreset.value);
 }
 function applyPreset(key) {
   activePreset.value = key;
+  if (key === 'custom') {
+    // 自定义必须两端齐全才查询;只填一端视为未完成不触发
+    if (fromDate.value && toDate.value) loadData();
+    return;
+  }
   const r = presetRange(key);
   if (!r) return;
   fromDate.value = r.from;
   toDate.value = r.to;
   loadData();
 }
+function onFromDateChange(e) {
+  fromDate.value = e.detail.value;
+  activePreset.value = 'custom';
+  if (fromDate.value && toDate.value) loadData();
+}
+function onToDateChange(e) {
+  toDate.value = e.detail.value;
+  activePreset.value = 'custom';
+  if (fromDate.value && toDate.value) loadData();
+}
 function switchTab(t) {
   if (tab.value === t) return;
   tab.value = t;
-  // 切换时重置为各 tab 默认预设并加载
   applyPreset(t === 'order' ? 'today' : 'all');
 }
+
+// 自然月快捷
+async function loadOrderMonths() {
+  try {
+    const r = await getOrderMonths({ tz: tz.value });
+    const curY = tzDate().y;
+    monthPresets.value = (r?.months || []).map((ym) => {
+      const [y, m] = ym.split('-').map(Number);
+      return {
+        key: `month:${ym}`,
+        label: y === curY ? `${m}月` : `${y}年${m}月`,
+        from: firstOfMonth(y, m),
+        to: firstOfNextMonth(y, m),
+      };
+    });
+  } catch (e) {
+    monthPresets.value = [];
+  }
+}
+function applyMonth(mp) {
+  activePreset.value = mp.key;
+  fromDate.value = mp.from;
+  toDate.value = mp.to;
+  loadData();
+}
+
+// 店铺筛选
+async function loadStores() {
+  try {
+    const r = await getFinanceStores();
+    allStores.value = (r?.stores || []).filter((s) => s?.id && s?.name).map((s) => ({ id: s.id, name: s.name }));
+  } catch (e) {
+    allStores.value = [];
+  }
+}
+function isStoreIncluded(id) {
+  return selectedStoreIds.value.size === 0 || selectedStoreIds.value.has(id);
+}
+function toggleStore(id) {
+  const s = new Set(selectedStoreIds.value.size === 0 ? allStores.value.map((x) => x.id) : selectedStoreIds.value);
+  if (s.has(id)) s.delete(id); else s.add(id);
+  selectedStoreIds.value = s;
+  loadData();
+}
+function selectAllStores() {
+  selectedStoreIds.value = new Set();
+  storePickerOpen.value = false;
+  loadData();
+}
+const storeSelectionLabel = computed(() => {
+  const n = selectedStoreIds.value.size;
+  return n === 0 ? '全部店铺' : `已选 ${n}/${allStores.value.length}`;
+});
 
 async function loadData() {
   loading.value = true;
   error.value = '';
-  const params = {};
-  if (fromDate.value && toDate.value) { params.from = fromDate.value; params.to = toDate.value; }
-  params.tz = tz.value;
   try {
     if (tab.value === 'order') {
-      orderData.value = await getOrderStatsSummary(params);
+      orderData.value = await getOrderStatsSummary(baseParams());
     } else {
-      const r = await getFinanceSummary(params);
+      const r = await getFinanceSummary(baseParams());
       finance.value = r;
       rubRate.value = r?.rubRate ? `1₽=¥${Number(r.rubRate).toFixed(4)}` : '';
-      await loadFinOrders();
+      finPage.value = 1;
+      noPage.value = 1;
+      await Promise.all([loadFinOrders(true), loadNonOrder(true)]);
     }
   } catch (e) {
     error.value = e.message || String(e);
@@ -242,19 +420,20 @@ async function loadData() {
   }
 }
 
-async function loadFinOrders() {
+// 财务订单列表(分页,reset=true 时从第一页开始)
+async function loadFinOrders(reset = false) {
   finLoading.value = true;
-  const params = {};
-  if (fromDate.value && toDate.value) { params.from = fromDate.value; params.to = toDate.value; }
-  params.tz = tz.value;
-  params.group = finGroup.value;
-  params.page = 1;
-  params.pageSize = 10;
+  const page = reset ? 1 : finPage.value;
+  const params = { ...baseParams(), group: finGroup.value, page, pageSize: PAGE_SIZE };
   try {
     const r = await getFinanceOrders(params);
-    finOrders.value = r?.orders || [];
+    finTotal.value = r?.total || 0;
+    const list = r?.orders || [];
+    finOrders.value = reset ? list : [...finOrders.value, ...list];
+    finPage.value = page + 1;
   } catch (e) {
-    finOrders.value = [];
+    if (reset) finOrders.value = [];
+    finTotal.value = 0;
   } finally {
     finLoading.value = false;
   }
@@ -262,7 +441,34 @@ async function loadFinOrders() {
 function setFinGroup(g) {
   if (finGroup.value === g) return;
   finGroup.value = g;
-  loadFinOrders();
+  loadFinOrders(true);
+}
+function loadMoreFin() {
+  if (finLoading.value || finOrders.value.length >= finTotal.value) return;
+  loadFinOrders(false);
+}
+
+// 非订单应计明细(分页,reset=true 时从第一页开始)
+async function loadNonOrder(reset = false) {
+  noLoading.value = true;
+  const page = reset ? 1 : noPage.value;
+  const params = { ...baseParams(), page, pageSize: PAGE_SIZE };
+  try {
+    const r = await getNonOrderAccruals(params);
+    noTotal.value = r?.total || 0;
+    const list = r?.items || [];
+    noItems.value = reset ? list : [...noItems.value, ...list];
+    noPage.value = page + 1;
+  } catch (e) {
+    if (reset) noItems.value = [];
+    noTotal.value = 0;
+  } finally {
+    noLoading.value = false;
+  }
+}
+function loadMoreNo() {
+  if (noLoading.value || noItems.value.length >= noTotal.value) return;
+  loadNonOrder(false);
 }
 
 function fmtMoney(n) {
@@ -283,9 +489,11 @@ function profitClass(v) {
 
 onLoad(() => {
   applyPreset('today');
+  loadOrderMonths();
+  loadStores();
 });
 onPullDownRefresh(async () => {
-  await loadData();
+  await Promise.all([loadData(), loadOrderMonths(), loadStores()]);
   uni.stopPullDownRefresh();
 });
 </script>
@@ -358,6 +566,59 @@ onPullDownRefresh(async () => {
   color: #165dff;
   background: #eef4ff;
   font-weight: 600;
+}
+
+/* 自然月横滑 */
+.months {
+  margin-top: 8rpx;
+}
+.month-chip {
+  background: #f2f3f5;
+}
+
+/* 财务统计筛选栏:自定义日期 + 店铺 */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12rpx;
+  flex-wrap: wrap;
+  margin-top: 12rpx;
+}
+.date-range {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+.date-range.disabled {
+  opacity: 0.5;
+}
+.date-box {
+  font-size: 22rpx;
+  color: #4e5969;
+  background: #ffffff;
+  border-radius: 999rpx;
+  padding: 8rpx 18rpx;
+  border: 1rpx solid #e5e6eb;
+}
+.date-sep {
+  color: #86909c;
+  font-size: 22rpx;
+}
+.store-btn {
+  display: flex;
+  align-items: center;
+  font-size: 22rpx;
+  color: #4e5969;
+  background: #ffffff;
+  border-radius: 999rpx;
+  padding: 8rpx 18rpx;
+  border: 1rpx solid #e5e6eb;
+}
+.store-caret {
+  margin-left: 6rpx;
+  font-size: 18rpx;
+  color: #86909c;
 }
 
 .range-hint {
@@ -518,6 +779,86 @@ onPullDownRefresh(async () => {
   color: #86909c;
   display: flex;
   gap: 16rpx;
+  align-items: center;
+}
+.type-id {
+  color: #86909c;
+  font-size: 20rpx;
+  margin-left: 4rpx;
+}
+.est-tag {
+  font-size: 18rpx;
+  color: #d97706;
+  border: 1rpx solid #d97706;
+  border-radius: 6rpx;
+  padding: 0 6rpx;
+}
+
+/* 加载更多 */
+.load-more {
+  text-align: center;
+  color: #165dff;
+  font-size: 24rpx;
+  padding: 16rpx 0 4rpx;
+}
+
+/* 店铺多选弹层 */
+.mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 999;
+  display: flex;
+  align-items: flex-end;
+}
+.store-panel {
+  width: 100%;
+  background: #ffffff;
+  border-radius: 24rpx 24rpx 0 0;
+  padding: 24rpx 24rpx 40rpx;
+  box-sizing: border-box;
+}
+.store-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #1f2329;
+  margin-bottom: 16rpx;
+}
+.store-panel-action {
+  font-size: 24rpx;
+  color: #165dff;
+  font-weight: 500;
+}
+.store-panel-list {
+  max-height: 50vh;
+}
+.store-option {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 16rpx 4rpx;
+  font-size: 26rpx;
+  color: #1f2329;
+  border-bottom: 1rpx solid #f7f8fa;
+}
+.check {
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: 50%;
+  border: 2rpx solid #c9cdd4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24rpx;
+  color: #ffffff;
+  flex-shrink: 0;
+}
+.check.on {
+  background: #165dff;
+  border-color: #165dff;
 }
 
 .empty {
