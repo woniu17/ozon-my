@@ -35,7 +35,11 @@ const onLogout = () => {
           <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </svg>
       </button>
-      <h1>ERP 配置后台</h1>
+      <div class="brand">
+        <span class="brand-logo" aria-hidden="true">O</span>
+        <h1 class="brand-name">Ozon ERP</h1>
+        <span class="brand-env">生产</span>
+      </div>
       <span class="subtitle">店铺 / 上架 / 采集 / 商品</span>
     </div>
     <div class="topbar-right">

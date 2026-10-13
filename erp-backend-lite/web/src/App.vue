@@ -83,6 +83,16 @@ const navGroups = [
 // 拍平全部导航项,供当前页匹配使用
 const tabs = navGroups.flatMap((g) => g.items);
 
+// 每个导航分组的 SVG 图标路径(描边风格,与整体设计语言一致)
+const groupIcons = {
+  workbench: ['M1.5 8L8 2.5 14.5 8V14a.5.5 0 0 1-.5.5H9.5V10h-3v4.5H2a.5.5 0 0 1-.5-.5V8z'],
+  catalog: ['M1.5 5L8 1.5 14.5 5V11L8 14.5 1.5 11V5z', 'M1.5 5L8 8l6.5-3', 'M8 8v6.5'],
+  'price-order': ['M8.5 1.5L14.5 7.5 7.5 14.5 1.5 8.5 8.5 1.5z', 'M10.2 5.3a1 1 0 1 1-2 0 1 1 0 0 1 2 0z'],
+  tasks: ['M2.5 2.5h11v11h-11z', 'M5 8.5l2 2 4-4.5'],
+  'data-logs': ['M1.5 3.5C1.5 2.4 4.4 1.5 8 1.5s6.5.9 6.5 2-2.9 2-6.5 2-6.5-.9-6.5-2z', 'M1.5 8c0-1.1 2.9-2 6.5-2s6.5.9 6.5 2', 'M1.5 8v4.5c0 1.1 2.9 2 6.5 2s6.5-.9 6.5-2V8'],
+  settings: ['M4 21v-7M4 10V3', 'M12 21V12M12 8V3', 'M20 21v-5M20 12V3', 'M1 14h6', 'M9 8h6', 'M17 16h6'],
+};
+
 // 当前激活的导航项(用 route.path 匹配)
 const activeTab = computed(() => {
   const p = route.path;
@@ -153,8 +163,13 @@ watch(
           :aria-expanded="isGroupOpen(group.id)"
           @click="toggleGroup(group.id)"
         >
-          <span class="nav-group-caret" aria-hidden="true">›</span>
+          <span class="nav-group-icon" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path v-for="d in groupIcons[group.id]" :key="d" :d="d" />
+            </svg>
+          </span>
           <span class="nav-group-label">{{ group.label }}</span>
+          <span class="nav-group-caret" aria-hidden="true">›</span>
         </button>
         <ul v-show="isGroupOpen(group.id)" class="nav-group-list">
           <li v-for="item in group.items" :key="item.key">
