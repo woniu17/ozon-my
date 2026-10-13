@@ -68,6 +68,15 @@
 				"backgroundTextStyle": "dark",
 				"onReachBottomDistance": 100
 			}
+		},
+		{
+			"path": "pages/product-center/index",
+			"style": {
+				"navigationBarTitleText": "商品/采集箱",
+				"enablePullDownRefresh": true,
+				"backgroundTextStyle": "dark",
+				"onReachBottomDistance": 100
+			}
 		}
 	],
 	"globalStyle": {
