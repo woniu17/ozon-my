@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# 采购信息跨机同步 · 每日备份脚本(2026-10-13)
+# 采购信息跨机同步 · 每 30 分钟备份脚本(2026-10-13)
 #
 # 功能:
 #   1) 调用 scripts/export-purchase-sync.mjs 全量导出"带人工操作痕迹"的订单数据
 #      (有采购关联/有称重/已交运/已搁置的包裹),输出 JSON 到备份目录
-#   2) 调用 scripts/backup-sqlite.mjs 对 erp.db / collect.db 做一致性快照备份
-#      (VACUUM INTO,WAL 模式下也安全),同样纳入 rsync 同步
-#   3) 备份目录 /data/ozonerp,保留最近 7 天备份,自动清理更早文件
-#   4) rsync 将 /data/ozonerp 镜像同步到 2.tencent.yochylin.com 服务器同目录
+#   2) 备份目录 /data/ozonerp,保留最近 7 天备份,自动清理更早文件
+#   3) rsync 将 /data/ozonerp 镜像同步到 2.tencent.yochylin.com 服务器同目录
+#
+# 注意:数据库一致性快照备份(erp.db / collect.db)由 backup-sqlite-daily.sh
+#       每天 03:30 执行,本脚本不包含数据库快照逻辑。
 #
 # 用法:
 #   bash scripts/backup-purchase-sync.sh                    # 手动执行
@@ -16,7 +17,6 @@
 #
 # 可覆盖的环境变量:
 #   APP_DIR       ERP 后端目录(默认 /root/code/ozon-my/erp-backend-lite)
-#   DATA_DIR      SQLite 数据目录(默认 $APP_DIR/data)
 #   BACKUP_DIR    本地备份目录(默认 /data/ozonerp)
 #   REMOTE_HOST   远端服务器(默认 root@2.tencent.yochylin.com)
 #   REMOTE_DIR    远端备份目录(默认同 BACKUP_DIR)
@@ -25,9 +25,7 @@
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/root/code/ozon-my/erp-backend-lite}"
-DATA_DIR="${DATA_DIR:-$APP_DIR/data}"
 BACKUP_DIR="${BACKUP_DIR:-/data/ozonerp}"
-DB_BACKUP_DIR="$BACKUP_DIR/db"
 REMOTE_HOST="${REMOTE_HOST:-root@2.tencent.yochylin.com}"
 REMOTE_DIR="${REMOTE_DIR:-$BACKUP_DIR}"
 KEEP_DAYS="${KEEP_DAYS:-7}"
@@ -35,7 +33,7 @@ LOG_FILE="${LOG_FILE:-$BACKUP_DIR/backup.log}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] $*" | tee -a "$LOG_FILE"; }
 
-mkdir -p "$BACKUP_DIR" "$DB_BACKUP_DIR"
+mkdir -p "$BACKUP_DIR"
 cd "$APP_DIR"
 
 log "==== 采购信息备份开始 (dir=$BACKUP_DIR, keep=${KEEP_DAYS}天, remote=${REMOTE_HOST}:${REMOTE_DIR}) ===="
@@ -45,22 +43,12 @@ TS="$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)"
 OUT="$BACKUP_DIR/purchase-sync-export-$TS.json"
 node scripts/export-purchase-sync.mjs --out "$OUT" | tee -a "$LOG_FILE"
 
-# 2) SQLite 数据库一致性快照备份(erp.db + collect.db)
-log "备份 SQLite 数据库到 $DB_BACKUP_DIR"
-node scripts/backup-sqlite.mjs "$DATA_DIR/erp.db" "$DB_BACKUP_DIR/erp-$TS.db" | tee -a "$LOG_FILE"
-if [ -f "$DATA_DIR/collect.db" ]; then
-  node scripts/backup-sqlite.mjs "$DATA_DIR/collect.db" "$DB_BACKUP_DIR/collect-$TS.db" | tee -a "$LOG_FILE"
-else
-  log "collect.db 不存在,跳过采集库备份"
-fi
-
-# 3) 清理超过保留天数的备份
+# 2) 清理超过保留天数的备份
 log "清理 ${KEEP_DAYS} 天前的备份:"
 find "$BACKUP_DIR" -maxdepth 1 -type f -name 'purchase-sync-export-*.json' -mtime +"$KEEP_DAYS" -print -delete | tee -a "$LOG_FILE"
-find "$DB_BACKUP_DIR" -maxdepth 1 -type f \( -name 'erp-*.db' -o -name 'collect-*.db' \) -mtime +"$KEEP_DAYS" -print -delete | tee -a "$LOG_FILE"
 
-# 4) 同步到远端服务器(镜像模式:本地删除的旧备份在远端同步删除)
+# 3) 同步到远端服务器(镜像模式:本地删除的旧备份在远端同步删除)
 log "rsync 同步到 ${REMOTE_HOST}:${REMOTE_DIR}"
 rsync -avz --delete "$BACKUP_DIR/" "${REMOTE_HOST}:${REMOTE_DIR}/" | tee -a "$LOG_FILE"
 
-log "==== 采购信息备份完成 (文件: $(basename "$OUT"), db: erp-$TS.db / collect-$TS.db) ===="
+log "==== 采购信息备份完成 (文件: $(basename "$OUT")) ===="
