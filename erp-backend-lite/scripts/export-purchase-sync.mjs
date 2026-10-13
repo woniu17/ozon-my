@@ -40,9 +40,21 @@ const linkCount = data.packages.reduce(
   0
 );
 
+// 导出文件附带元数据(导出时间/机器/包裹/采购单/关联数量),便于备份留档与人工核对
+const exported = {
+  meta: {
+    exportedAt: new Date().toISOString(),
+    machine: os.hostname(),
+    packageCount: data.packages.length,
+    purchaseCount,
+    linkCount,
+  },
+  ...data,
+};
+
 const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
 const out = OUT_PATH || join(__dirname, '..', 'data', `purchase-sync-export-${ts}.json`);
-writeFileSync(out, JSON.stringify(data, null, 2), 'utf-8');
+writeFileSync(out, JSON.stringify(exported, null, 2), 'utf-8');
 markExported();
 
 console.log('═══ 采购信息导出完成 ═══');
