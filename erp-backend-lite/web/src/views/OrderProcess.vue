@@ -1758,9 +1758,9 @@ async function onSearchImportOrder() {
     const hit = ['pdd', 'ali1688'].includes(currentTabDef.value.platform)
       ? normalizePddPromoOrder({ ...found, amount: found.orderAmount ?? found.amount ?? 0 })
       : { ...found, amount: found.orderAmount ?? found.amount ?? 0 };
-    // 置顶插入搜索区(去重),并自动勾选(已取消/已关联的不勾)
+    // 置顶插入搜索区(去重),并自动勾选(已关联的不勾;已取消订单 2026-10-13 起允许选择采购)
     st.searched = [hit, ...st.searched.filter((o) => o.orderSn !== found.orderSn)];
-    if (!isImportCancelled(found) && !isRestoredLinked(found) && !st.selected.includes(found.orderSn)) {
+    if (!isRestoredLinked(found) && !st.selected.includes(found.orderSn)) {
       st.selected.push(found.orderSn);
     }
     show(`已找到 ${platLabel}订单 ${found.orderSn}(¥${found.amount})`, 'success');
@@ -3665,13 +3665,13 @@ onUnmounted(() => {
                 v-for="o in importOrders"
                 :key="o.orderSn"
                 class="pdd-item"
-                :class="{ disabled: isImportCancelled(o), selected: importSelected.includes(o.orderSn) || isRestoredLinked(o) }"
+                :class="{ selected: importSelected.includes(o.orderSn) || isRestoredLinked(o) }"
                 :title="isRestoredLinked(o) ? '该订单已在已有采购关联中,如需删除请到右侧已选区点「删除」' : ''"
               >
                 <input
                   type="checkbox"
                   :value="o.orderSn"
-                  :disabled="isImportCancelled(o) || isRestoredLinked(o)"
+                  :disabled="isRestoredLinked(o)"
                   v-model="importSelected"
                 />
                 <img
