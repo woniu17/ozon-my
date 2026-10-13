@@ -17,8 +17,27 @@ export function getFinanceSummary(params) {
 }
 
 // 财务订单列表(分页)
-// params: { group:'settled'|'pending', from?, to?, storeIds?, tz?, page?, pageSize?, keyword? }
+// params: { group:'settled'|'pending', from?, to?, storeIds?, tz?, page?, pageSize?, keyword?, category?, typeId? }
 // 返回 { group, total, page, pageSize, orders, rubRate }
 export function getFinanceOrders(params) {
   return request('/admin/api/finance-stats/orders', { method: 'GET', body: params });
+}
+
+// 非订单应计明细(package_id IS NULL,分页)
+// params: { from?, to?, storeIds?, page?, pageSize? }
+// 返回 { total, page, pageSize, items, rubRate }
+export function getNonOrderAccruals(params) {
+  return request('/admin/api/finance-stats/non-order-accruals', { method: 'GET', body: params });
+}
+
+// 有订单的自然月列表(YYYY-MM 降序;tz 影响月界换算)
+// params: { tz?: 'Asia/Shanghai'|'Europe/Moscow' }
+// 返回 { months: ['2026-09', '2026-08', ...] }
+export function getOrderMonths(params) {
+  return request('/admin/api/finance-stats/order-months', { method: 'GET', body: params });
+}
+
+// 可见店铺列表(财务统计店铺筛选,与订单统计同源)
+export function getFinanceStores() {
+  return request('/admin/api/order-stats/stores', { method: 'GET' });
 }

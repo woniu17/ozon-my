@@ -106,11 +106,11 @@
             <view class="fin-row-head">
               <text class="fin-posting">{{ o.postingNumber || o.packageId }}</text>
               <text class="fin-store">{{ o.storeName || '' }}</text>
-              <text class="fin-profit" :class="profitClass(o.totalProfit)">{{ fmtMoney(o.totalProfit) }}</text>
+              <text class="fin-profit" :class="profitClass(o.profit)">{{ fmtMoney(o.profit) }}</text>
             </view>
             <view class="fin-row-sub">
               <text>订单 ¥{{ fmtMoney(o.orderAmount) }}</text>
-              <text v-if="o.totalPurchaseAmount != null">采购 ¥{{ fmtMoney(o.totalPurchaseAmount) }}</text>
+              <text v-if="o.purchaseAmount != null">采购 ¥{{ fmtMoney(o.purchaseAmount) }}</text>
             </view>
           </view>
         </view>
@@ -184,8 +184,8 @@ function presetRange(key) {
     case 'all': return { from: '', to: '' };
     case 'today': return { from: todayStr, to: shiftLocalDays(1) };
     case 'yesterday': return { from: shiftLocalDays(-1), to: todayStr };
-    case '7d': return { from: shiftLocalDays(-7), to: shiftLocalDays(1) };
-    case '30d': return { from: shiftLocalDays(-30), to: shiftLocalDays(1) };
+    case '7d': return { from: shiftLocalDays(-6), to: shiftLocalDays(1) };
+    case '30d': return { from: shiftLocalDays(-29), to: shiftLocalDays(1) };
     case 'thisMonth': {
       const { y, m } = tzDate();
       return { from: firstOfMonth(y, m), to: shiftLocalDays(1) };

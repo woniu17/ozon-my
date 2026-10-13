@@ -66,9 +66,10 @@ function presetRange(key) {
   switch (key) {
     case 'today': return { from: todayStr, to: shiftLocalDays(1) };
     case 'yesterday': return { from: shiftLocalDays(-1), to: todayStr };
-    case '7d': return { from: shiftLocalDays(-7), to: shiftLocalDays(1) };
-    case '14d': return { from: shiftLocalDays(-14), to: shiftLocalDays(1) };
-    case '30d': return { from: shiftLocalDays(-30), to: shiftLocalDays(1) };
+    // 「近 N 日」= 含今天往前共 N 个自然日:from 取今天-(N-1),to 为明天(排他日界)
+    case '7d': return { from: shiftLocalDays(-6), to: shiftLocalDays(1) };
+    case '14d': return { from: shiftLocalDays(-13), to: shiftLocalDays(1) };
+    case '30d': return { from: shiftLocalDays(-29), to: shiftLocalDays(1) };
     case 'thisMonth': {
       const { y, m } = tzDate();
       return { from: firstOfMonth(y, m), to: shiftLocalDays(1) };
