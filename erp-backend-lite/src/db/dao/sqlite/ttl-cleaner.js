@@ -1,6 +1,6 @@
 // SQLite TTL 定时清理器:替代 MongoDB TTL 索引
 // 清理 collect_queue_ops 表中 processedAt 非 NULL 且超过 7 天的记录
-import { db } from '../../index.js';
+import { collectDb } from '../../collect-db.js';
 
 const TTL_INTERVAL_MS = 60 * 60 * 1000; // 每小时清理一次
 const TTL_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 保留 7 天
@@ -13,7 +13,7 @@ export function startTtlCleaner() {
   const clean = () => {
     try {
       const cutoff = new Date(Date.now() - TTL_RETENTION_MS).toISOString();
-      const r = db
+      const r = collectDb
         .prepare(`DELETE FROM collect_queue_ops WHERE processedAt IS NOT NULL AND processedAt < ?`)
         .run(cutoff);
       if (r.changes > 0) {

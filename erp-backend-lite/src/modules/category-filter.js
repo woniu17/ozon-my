@@ -13,7 +13,7 @@ import { Router } from 'express';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { db } from '../db/index.js';
+import { collectDb } from '../db/collect-db.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import * as opi from '../services/ozon-opi.js';
@@ -88,11 +88,42 @@ export async function getCategoryNameMaps() {
   }
 }
 
+// 跨库辅助:类目过滤黑名单在采集库(collect.db),商品列表在主库(erp.db),
+// 单条 SQL 无法跨库子查询,故导出内存化条件构建函数供 admin.js / product-archive.js 复用。
+// fcRows: collectDb 查询 ozon_filtered_categories 返回的行({description_category_id, type_id})
+// exprPrefix: 商品表别名前缀('p.' 或 '')
+// 返回 { sql, params } 或 null(黑名单为空)
+// 语义与旧 EXISTS 子查询一致:
+//   (type_id=0) 按类目单维度过滤(该类目所有类型)→ descCatId IN (...)
+//   (type_id>0) 精确到类型 → (descCatId = ? AND typeId = ?)
+export function buildFilteredCategoryCond(fcRows, exprPrefix = '') {
+  const catOnlyIds = new Set(
+    fcRows.filter((r) => !r.type_id || Number(r.type_id) === 0).map((r) => Number(r.description_category_id))
+  );
+  const exactPairs = fcRows
+    .filter((r) => Number(r.type_id) > 0)
+    .map((r) => [Number(r.description_category_id), Number(r.type_id)]);
+  const parts = [];
+  const catIds = [...catOnlyIds];
+  if (catIds.length) {
+    parts.push(
+      `json_extract(${exprPrefix}data, '$.description_category_id') IN (${catIds.map(() => '?').join(',')})`
+    );
+  }
+  for (const [dc, ty] of exactPairs) {
+    parts.push(
+      `(json_extract(${exprPrefix}data, '$.description_category_id') = ? AND json_extract(${exprPrefix}data, '$.type_id') = ?)`
+    );
+  }
+  if (!parts.length) return null;
+  return { sql: parts.join(' OR '), params: [...catIds, ...exactPairs.flat()] };
+}
+
 // GET /admin/api/filtered-categories
 // 返回 { items: [{ descriptionCategoryId, typeId, categoryName, typeName, createdAt }] }
 router.get('/admin/api/filtered-categories', (req, res, next) => {
   try {
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT description_category_id, type_id, category_name, type_name, created_at
          FROM ozon_filtered_categories
@@ -119,7 +150,7 @@ router.get('/admin/api/filtered-categories', (req, res, next) => {
 // 返回 { items: [{ descriptionCategoryId, typeId, categoryName, typeName, skuCount }] }
 router.get('/admin/api/filtered-categories/available', (req, res, next) => {
   try {
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT description_category_id,
                 COALESCE(type_id, 0) AS type_id,
@@ -155,7 +186,7 @@ router.get('/admin/api/filtered-categories/check/:descCatId/:typeId', (req, res,
     if (!Number.isFinite(descCatId) || descCatId <= 0) {
       return res.status(400).json({ ok: false, error: 'invalid descCatId' });
     }
-    const row = db
+    const row = collectDb
       .prepare(
         `SELECT 1 FROM ozon_filtered_categories
          WHERE description_category_id = ? AND type_id = ?`
@@ -179,7 +210,7 @@ router.get('/admin/api/filtered-categories/check-by-sku/:sku', (req, res, next) 
     if (!sku) {
       return res.status(400).json({ ok: false, error: 'invalid sku' });
     }
-    const ci = db
+    const ci = collectDb
       .prepare(
         `SELECT description_category_id, COALESCE(type_id, 0) AS type_id, category_name
          FROM ozon_cache_index WHERE sku = ?`
@@ -192,7 +223,7 @@ router.get('/admin/api/filtered-categories/check-by-sku/:sku', (req, res, next) 
     }
     const descCatId = Number(ci.description_category_id);
     const typeId = Number(ci.type_id) || 0;
-    const row = db
+    const row = collectDb
       .prepare(
         `SELECT 1 FROM ozon_filtered_categories
          WHERE description_category_id = ? AND type_id = ?`
@@ -260,7 +291,7 @@ router.post('/admin/api/filtered-categories', (req, res, next) => {
     if (!Number.isFinite(descriptionCategoryId) || descriptionCategoryId <= 0) {
       return res.status(400).json({ ok: false, error: 'invalid descriptionCategoryId' });
     }
-    db.prepare(
+    collectDb.prepare(
       `INSERT INTO ozon_filtered_categories
          (description_category_id, type_id, category_name, type_name, created_at)
        VALUES (?, ?, ?, ?, datetime('now'))
@@ -291,7 +322,7 @@ router.delete('/admin/api/filtered-categories/:descCatId/:typeId', (req, res, ne
     if (!Number.isFinite(descCatId) || descCatId <= 0) {
       return res.status(400).json({ ok: false, error: 'invalid descCatId' });
     }
-    const r = db
+    const r = collectDb
       .prepare(
         `DELETE FROM ozon_filtered_categories
          WHERE description_category_id = ? AND type_id = ?`

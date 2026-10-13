@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import NodeCache from 'node-cache';
 import { db } from '../db/index.js';
+import { collectDb } from '../db/collect-db.js';
 import config from '../config/index.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { ok } from '../utils/response.js';
@@ -14,7 +15,7 @@ import * as opi from '../services/ozon-opi.js';
 import * as metaDao from '../db/dao/sqlite/meta-dao.js';
 import logger from '../middleware/log.js';
 import { classifyDescriptionQuality } from '../utils/description-quality.js';
-import { getCategoryNameMaps } from './category-filter.js';
+import { getCategoryNameMaps, buildFilteredCategoryCond } from './category-filter.js';
 
 const router = Router();
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -104,7 +105,7 @@ router.get('/admin/api/stores', (_req, res, next) => {
   try {
     const stores = readStores();
     // 一次性按 listed_store_id 分组聚合,避免 N+1 查询
-    const countRows = db
+    const countRows = collectDb
       .prepare(
         `SELECT listed_store_id AS sid, COUNT(*) AS n
          FROM ozon_cache_index
@@ -868,11 +869,19 @@ router.get('/admin/api/products', async (req, res, next) => {
     // 黑名单语义与采集箱一致:(descCatId, type_id=0) 按类目单维度过滤(该类目所有类型);
     // (descCatId, type_id>0) 精确到类型。商品 data.type_id 为 NULL 时不匹配精确类型条目。
     if (req.query.filteredCategory === '1' || req.query.filteredCategory === '0') {
-      const cond =
-        `SELECT 1 FROM ozon_filtered_categories fc
-          WHERE fc.description_category_id = json_extract(p.data, '$.description_category_id')
-            AND (fc.type_id = 0 OR fc.type_id = json_extract(p.data, '$.type_id'))`;
-      where.push(req.query.filteredCategory === '1' ? `EXISTS (${cond})` : `NOT EXISTS (${cond})`);
+      // 黑名单在采集库(collect.db),商品表在主库(erp.db),单条 SQL 无法跨库子查询,
+      // 故加载黑名单到内存后用 IN / 等值条件构建(与旧 EXISTS 子查询同语义,见 buildFilteredCategoryCond)
+      const fcRows = collectDb
+        .prepare('SELECT description_category_id, type_id FROM ozon_filtered_categories')
+        .all();
+      const cond = buildFilteredCategoryCond(fcRows, 'p.');
+      if (cond) {
+        where.push(req.query.filteredCategory === '1' ? `(${cond.sql})` : `NOT (${cond.sql})`);
+        params.push(...cond.params);
+      } else if (req.query.filteredCategory === '1') {
+        // 黑名单为空时,"仅显示已过滤"恒为空
+        where.push('1 = 0');
+      }
     }
     // 销量筛选(2026-09):基于有效销量(排除 cancelled 订单,口径与展示一致)
     //   hasSales=1 -> 仅显示有销量商品 | hasSales=0 -> 仅显示无销量商品
@@ -949,7 +958,7 @@ router.get('/admin/api/products', async (req, res, next) => {
     // 类目/类型中文名(2026-09):从类目树(ZH_HANS,L1/L2 缓存)换算,失败时为空 Map 前端回退显示 ID
     // 同时加载类目过滤黑名单集合,用于行级"已过滤"标记(与 filteredCategory SQL 筛选同语义)
     const { categoryNameMap, typeNameMap } = await getCategoryNameMaps();
-    const filteredCatRows = db
+    const filteredCatRows = collectDb
       .prepare('SELECT description_category_id, type_id FROM ozon_filtered_categories')
       .all();
     // type_id=0:按类目单维度(该类目所有类型);type_id>0:精确到"类目:类型"
@@ -1883,7 +1892,7 @@ router.get('/admin/api/dashboard-stats', (_req, res, next) => {
     const todayRate = todayTotal > 0 ? Math.round((todaySuccess / todayTotal) * 1000) / 10 : 0;
 
     // 采集箱缓存数(collect_box_v2 与旧 ozon_card_cache 表均已废弃,改查 ozon_cache_index.card_hit=1,对齐 misc.js#status-counts)
-    const collectPending = db.prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index WHERE card_hit = 1`).get().n;
+    const collectPending = collectDb.prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index WHERE card_hit = 1`).get().n;
 
     // 商品缓存数
     const productCount = db.prepare(`SELECT COUNT(*) AS n FROM product_data_cache`).get().n;

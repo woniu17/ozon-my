@@ -1,7 +1,7 @@
 // SQLite 缓存 DAO 工厂:richMedia / marketStats / followSell 三类独立缓存共用,
 // 其余 4 类(dom/attribute/index)结构特殊,各自有专属 DAO 文件。
 // 日期统一用 new Date().toISOString() 写入(UTC, T 分隔,带 Z)
-import { db } from '../../index.js';
+import { collectDb } from '../../collect-db.js';
 import { indexDao } from './index-dao.js';
 
 /**
@@ -17,7 +17,7 @@ export function createCacheDao(table, opts = {}) {
   return {
     /** 按 SKU 查询,返回 { data, fetchedAt, ...extra } 或 { data: null } */
     async getBySku(sku) {
-      const row = db.prepare(`SELECT * FROM ${table} WHERE _id = ?`).get(sku);
+      const row = collectDb.prepare(`SELECT * FROM ${table} WHERE _id = ?`).get(sku);
       if (!row || !row.data) return { data: null };
       const result = {
         data: JSON.parse(row.data),
@@ -32,7 +32,7 @@ export function createCacheDao(table, opts = {}) {
 
     /** 全字段读取(admin detail/opi-preview 用) */
     async findById(sku) {
-      const row = db.prepare(`SELECT * FROM ${table} WHERE _id = ?`).get(sku);
+      const row = collectDb.prepare(`SELECT * FROM ${table} WHERE _id = ?`).get(sku);
       if (!row) return null;
       const doc = { _id: row._id, sku: row._id, data: JSON.parse(row.data), fetchedAt: row.fetchedAt };
       if (hasL2Synced) doc.l2Synced = !!row.l2Synced;
@@ -62,7 +62,7 @@ export function createCacheDao(table, opts = {}) {
       const updateCols = cols.filter((c) => c !== '_id');
       const setClause = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
       const placeholders = cols.map(() => '?').join(', ');
-      db.prepare(
+      collectDb.prepare(
         `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})
          ON CONFLICT(_id) DO UPDATE SET ${setClause}`
       ).run(...vals);
@@ -75,18 +75,18 @@ export function createCacheDao(table, opts = {}) {
     },
 
     async deleteBySku(sku) {
-      db.prepare(`DELETE FROM ${table} WHERE _id = ?`).run(sku);
+      collectDb.prepare(`DELETE FROM ${table} WHERE _id = ?`).run(sku);
     },
 
     /** 文档数(等价 estimatedDocumentCount) */
     async estimatedCount() {
-      return db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+      return collectDb.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
     },
 
     async countByQuery(_query = {}) {
       // SQLite 通用查询不支持 MongoDB query 对象,按需在子类实现
       // 这里仅支持空 query(全表计数)
-      return db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+      return collectDb.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
     },
 
     /** 分页列表(单类型 list 路由用) */
@@ -104,11 +104,11 @@ export function createCacheDao(table, opts = {}) {
       }
       const [items, total] = await Promise.all([
         Promise.resolve(
-          db.prepare(
+          collectDb.prepare(
             `SELECT ${cols.join(', ')} FROM ${table} ${where} ORDER BY fetchedAt DESC LIMIT ? OFFSET ?`
           ).all(...params, pageSize, skip)
         ),
-        Promise.resolve(db.prepare(`SELECT COUNT(*) AS n FROM ${table} ${where}`).get(...params).n),
+        Promise.resolve(collectDb.prepare(`SELECT COUNT(*) AS n FROM ${table} ${where}`).get(...params).n),
       ]);
       // 重塑为与 mongo 一致的字段名(sku 而非 _id)
       const reshaped = items.map((r) => ({ ...r, sku: r._id }));
@@ -125,7 +125,7 @@ export function createCacheDao(table, opts = {}) {
         where = 'WHERE _id LIKE ? COLLATE NOCASE';
         params.push(`%${keyword}%`);
       }
-      const items = db
+      const items = collectDb
         .prepare(`SELECT ${cols.join(', ')} FROM ${table} ${where}`)
         .all(...params);
       return items.map((r) => ({ ...r, sku: r._id }));
@@ -135,7 +135,7 @@ export function createCacheDao(table, opts = {}) {
     async findManyBySkuList(skus) {
       if (!skus.length) return [];
       const placeholders = skus.map(() => '?').join(', ');
-      const rows = db
+      const rows = collectDb
         .prepare(`SELECT * FROM ${table} WHERE _id IN (${placeholders})`)
         .all(...skus);
       return rows.map((r) => ({
@@ -148,7 +148,7 @@ export function createCacheDao(table, opts = {}) {
 
     /** 清空表 */
     async clearAll() {
-      const r = db.prepare(`DELETE FROM ${table}`).run();
+      const r = collectDb.prepare(`DELETE FROM ${table}`).run();
       return { deletedCount: r.changes };
     },
   };

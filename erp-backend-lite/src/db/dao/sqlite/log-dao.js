@@ -1,6 +1,6 @@
 // 采集日志 DAO(SQLite 实现):$facet 拆为 5 个独立 SELECT 并行执行
 // 关键:json_each(results) 展开 results 数组替代 $unwind
-import { db } from '../../index.js';
+import { collectDb } from '../../collect-db.js';
 
 const LOG_TYPES = ['card', 'detail', 'richMedia', 'search', 'bundle', 'marketStats', 'followSell'];
 const LOG_SOURCES = ['shop-page', 'pdp'];
@@ -27,29 +27,29 @@ export const autoCollectLogDao = {
 
     const [statusRows, typeRows, sourceRows, storeClassRows, totalRow] = await Promise.all([
       Promise.resolve(
-        db.prepare(
+        collectDb.prepare(
           `SELECT status AS _id, COUNT(*) AS count FROM ozon_auto_collect_log ${where} GROUP BY status`
         ).all(...params)
       ),
       Promise.resolve(
-        db.prepare(
+        collectDb.prepare(
           `SELECT json_extract(r.value, '$.type') AS _id, COUNT(*) AS count
            FROM ozon_auto_collect_log, json_each(results) AS r
            ${where} GROUP BY json_extract(r.value, '$.type')`
         ).all(...params)
       ),
       Promise.resolve(
-        db.prepare(
+        collectDb.prepare(
           `SELECT source AS _id, COUNT(*) AS count FROM ozon_auto_collect_log ${where} GROUP BY source`
         ).all(...params)
       ),
       Promise.resolve(
-        db.prepare(
+        collectDb.prepare(
           `SELECT storeClassified AS _id, COUNT(*) AS count FROM ozon_auto_collect_log ${where} GROUP BY storeClassified`
         ).all(...params)
       ),
       Promise.resolve(
-        db.prepare(`SELECT COUNT(*) AS count FROM ozon_auto_collect_log ${where}`).get(...params)
+        collectDb.prepare(`SELECT COUNT(*) AS count FROM ozon_auto_collect_log ${where}`).get(...params)
       ),
     ]);
 
@@ -113,14 +113,14 @@ export const autoCollectLogDao = {
     const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
     const skip = (page - 1) * pageSize;
 
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT sku, source, sellerSlug, sellerId, storeClassified, depth, status, reason, results, totalDuration, collectedAt
          FROM ozon_auto_collect_log ${where}
          ORDER BY collectedAt DESC LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, skip);
-    const total = db.prepare(`SELECT COUNT(*) AS n FROM ozon_auto_collect_log ${where}`).get(...params).n;
+    const total = collectDb.prepare(`SELECT COUNT(*) AS n FROM ozon_auto_collect_log ${where}`).get(...params).n;
     // results 字段反序列化
     const reshaped = items.map((r) => ({
       ...r,
@@ -131,7 +131,7 @@ export const autoCollectLogDao = {
 
   /** 按 SKU 查全量历史 */
   async findBySku(sku) {
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT sku, source, sellerSlug, sellerId, storeClassified, depth, status, reason, results, totalDuration, collectedAt
          FROM ozon_auto_collect_log WHERE sku = ?
@@ -147,7 +147,7 @@ export const autoCollectLogDao = {
   /** 插入一条日志 */
   async insert(doc) {
     const now = (doc.collectedAt || new Date()).toISOString();
-    const r = db
+    const r = collectDb
       .prepare(
         `INSERT INTO ozon_auto_collect_log
          (sku, source, sellerSlug, sellerId, storeClassified, depth, status, reason, results, totalDuration, collectedAt)
@@ -171,7 +171,7 @@ export const autoCollectLogDao = {
 
   /** 清空全部深度采集日志 */
   async clearAll() {
-    const r = db.prepare(`DELETE FROM ozon_auto_collect_log`).run();
+    const r = collectDb.prepare(`DELETE FROM ozon_auto_collect_log`).run();
     return { deletedCount: r.changes };
   },
 };

@@ -4,7 +4,7 @@
 //   2. ObjectId → INTEGER AUTOINCREMENT,markProcessed 用 Number 校验
 //   3. 'lastError.type' 嵌套字段用 json_extract(lastError, '$.type')
 //   4. TTL 由 ttl-cleaner.js 定时任务实现(7 天清理 processed ops)
-import { db } from '../../index.js';
+import { collectDb } from '../../collect-db.js';
 
 function parseJsonCol(row, col) {
   if (!row || row[col] === null || row[col] === undefined) return null;
@@ -50,7 +50,7 @@ const MAX_TASK_ATTEMPTS = 10;
 export const collectQueueTasksDao = {
   /** 聚合状态计数(SQLite 无需排除 __snapshot__,因为快照在独立表) */
   async aggregateStatusCounts() {
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT status AS _id, COUNT(*) AS count FROM collect_queue_tasks GROUP BY status`
       )
@@ -60,7 +60,7 @@ export const collectQueueTasksDao = {
 
   async countTodayByStatus(status, since) {
     const sinceIso = new Date(since).toISOString();
-    return db
+    return collectDb
       .prepare(
         `SELECT COUNT(*) AS n FROM collect_queue_tasks WHERE status = ? AND finishedAt >= ?`
       )
@@ -73,7 +73,7 @@ export const collectQueueTasksDao = {
    */
   async findLatestAntibotBlocked(since) {
     const sinceIso = new Date(since).toISOString();
-    const row = db
+    const row = collectDb
       .prepare(
         `SELECT finishedAt, lastError FROM collect_queue_tasks
          WHERE json_extract(lastError, '$.type') = 'antibot'
@@ -95,7 +95,7 @@ export const collectQueueTasksDao = {
   async countByErrorType(type, since) {
     if (since) {
       const sinceIso = new Date(since).toISOString();
-      return db
+      return collectDb
         .prepare(
           `SELECT COUNT(*) AS n FROM collect_queue_tasks
            WHERE json_extract(lastError, '$.type') = ?
@@ -103,7 +103,7 @@ export const collectQueueTasksDao = {
         )
         .get(type, sinceIso).n;
     }
-    return db
+    return collectDb
       .prepare(
         `SELECT COUNT(*) AS n FROM collect_queue_tasks
          WHERE json_extract(lastError, '$.type') = ?`
@@ -113,7 +113,7 @@ export const collectQueueTasksDao = {
 
   /** 读取快照(独立单行表) */
   async findSnapshot() {
-    const row = db
+    const row = collectDb
       .prepare(
         `SELECT pending, running, success, failed, syncedAt, consumePaused, lastConsumeAt FROM collect_queue_snapshot WHERE id = 1`
       )
@@ -139,7 +139,7 @@ export const collectQueueTasksDao = {
       params.push(filter.status);
     }
     const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
-    return db.prepare(`SELECT COUNT(*) AS n FROM collect_queue_tasks ${where}`).get(...params).n;
+    return collectDb.prepare(`SELECT COUNT(*) AS n FROM collect_queue_tasks ${where}`).get(...params).n;
   },
 
   async findList(filter = {}, page, pageSize, sort) {
@@ -161,7 +161,7 @@ export const collectQueueTasksDao = {
         .map(([col, dir]) => `${col} ${String(dir).toUpperCase() === 'ASC' ? 'ASC' : 'DESC'}`);
       if (parts.length) orderBy = `ORDER BY ${parts.join(', ')}`;
     }
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT * FROM collect_queue_tasks ${where} ${orderBy} LIMIT ? OFFSET ?`
       )
@@ -170,14 +170,14 @@ export const collectQueueTasksDao = {
   },
 
   async getBySku(sku) {
-    const row = db.prepare(`SELECT * FROM collect_queue_tasks WHERE sku = ?`).get(sku);
+    const row = collectDb.prepare(`SELECT * FROM collect_queue_tasks WHERE sku = ?`).get(sku);
     return reshapeTask(row);
   },
 
   async findBySkus(skus) {
     if (!skus.length) return [];
     const placeholders = skus.map(() => '?').join(', ');
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT sku, status, result, updatedAt FROM collect_queue_tasks WHERE sku IN (${placeholders})`
       )
@@ -192,7 +192,7 @@ export const collectQueueTasksDao = {
 
   async resetBySku(sku) {
     const now = new Date().toISOString();
-    const r = db
+    const r = collectDb
       .prepare(
         `UPDATE collect_queue_tasks
          SET status = 'pending', attempts = 0, lastError = NULL, updatedAt = ?
@@ -210,7 +210,7 @@ export const collectQueueTasksDao = {
    */
   async claimNextPending(now = new Date()) {
     const nowIso = now.toISOString();
-    const row = db
+    const row = collectDb
       .prepare(
         `UPDATE collect_queue_tasks
          SET status = 'running',
@@ -242,7 +242,7 @@ export const collectQueueTasksDao = {
     const nowIso = now.toISOString();
     // 1. 超过最大尝试次数的,标记 skipped(打破死循环)
     const failedErr = JSON.stringify({ type: 'MAX_ATTEMPTS_EXCEEDED', message: `exceeded ${MAX_TASK_ATTEMPTS} attempts, marked as skipped` });
-    const r1 = db
+    const r1 = collectDb
       .prepare(
         `UPDATE collect_queue_tasks
          SET status = 'skipped',
@@ -254,7 +254,7 @@ export const collectQueueTasksDao = {
       .run(failedErr, nowIso, nowIso, cutoffIso, MAX_TASK_ATTEMPTS);
     // 2. 未超过的,回 pending 等下次 claim
     const staleErr = JSON.stringify({ type: 'STALE', message: 'running timeout, reset by stale-reset' });
-    const r2 = db
+    const r2 = collectDb
       .prepare(
         `UPDATE collect_queue_tasks
          SET status = 'pending',
@@ -271,7 +271,7 @@ export const collectQueueTasksDao = {
    * 终态:success / skipped
    */
   async cleanupTerminalTasks(keepCount = 500) {
-    const cnt = db
+    const cnt = collectDb
       .prepare(
         `SELECT COUNT(*) AS n FROM collect_queue_tasks
          WHERE status IN ('success', 'skipped')`
@@ -280,7 +280,7 @@ export const collectQueueTasksDao = {
     if (cnt <= keepCount) return { deletedCount: 0, total: cnt };
 
     const toDelete = cnt - keepCount;
-    const r = db
+    const r = collectDb
       .prepare(
         `DELETE FROM collect_queue_tasks
          WHERE _id IN (
@@ -295,7 +295,7 @@ export const collectQueueTasksDao = {
   },
 
   async deleteBySku(sku) {
-    const r = db.prepare(`DELETE FROM collect_queue_tasks WHERE sku = ?`).run(sku);
+    const r = collectDb.prepare(`DELETE FROM collect_queue_tasks WHERE sku = ?`).run(sku);
     return { deletedCount: r.changes };
   },
 
@@ -303,7 +303,7 @@ export const collectQueueTasksDao = {
     if (!skus.length) return { matchedCount: 0, modifiedCount: 0 };
     const now = new Date().toISOString();
     const placeholders = skus.map(() => '?').join(', ');
-    const r = db
+    const r = collectDb
       .prepare(
         `UPDATE collect_queue_tasks
          SET status = 'pending', attempts = 0, lastError = NULL, updatedAt = ?
@@ -315,7 +315,7 @@ export const collectQueueTasksDao = {
 
   /** 清空 pending 任务(SQLite 无需排除 __snapshot__) */
   async deletePendingAll() {
-    const r = db.prepare(`DELETE FROM collect_queue_tasks WHERE status = 'pending'`).run();
+    const r = collectDb.prepare(`DELETE FROM collect_queue_tasks WHERE status = 'pending'`).run();
     return { deletedCount: r.changes };
   },
 
@@ -331,7 +331,7 @@ export const collectQueueTasksDao = {
       data.consumePaused === undefined ? null : data.consumePaused ? 1 : 0,
       data.lastConsumeAt ?? null,
     ];
-    db.prepare(
+    collectDb.prepare(
       `UPDATE collect_queue_snapshot
        SET pending = ?, running = ?, success = ?, failed = ?,
            syncedAt = ?, consumePaused = ?, lastConsumeAt = ?
@@ -360,7 +360,7 @@ export const collectQueueTasksDao = {
     cols.push('updatedAt = ?');
     vals.push(now);
     vals.push(sku);
-    const r = db
+    const r = collectDb
       .prepare(`UPDATE collect_queue_tasks SET ${cols.join(', ')} WHERE sku = ?`)
       .run(...vals);
     return { matchedCount: r.changes };
@@ -380,7 +380,7 @@ export const collectQueueTasksDao = {
     // 今日去重:24h 内有 success 任务则跳过(不更新已有任务,不新建)
     if (skipIfTodaySuccess) {
       const sinceIso = new Date(now.getTime() - 24 * 3600 * 1000).toISOString();
-      const todaySuccess = db
+      const todaySuccess = collectDb
         .prepare(
           `SELECT 1 FROM collect_queue_tasks
            WHERE sku = ? AND status = 'success' AND finishedAt >= ?`
@@ -392,7 +392,7 @@ export const collectQueueTasksDao = {
     }
 
     // 预查 sku 是否已存在(ON CONFLICT 无法可靠区分 INSERT/UPDATE:lastInsertRowid 在 UPDATE 时保留上次值)
-    const existed = !!db.prepare(`SELECT 1 FROM collect_queue_tasks WHERE sku = ?`).get(task.sku);
+    const existed = !!collectDb.prepare(`SELECT 1 FROM collect_queue_tasks WHERE sku = ?`).get(task.sku);
     const cols = [
       'sku', 'sellerSlug', 'sellerId', 'domInfo', 'status', 'attempts',
       'lastError', 'startedAt', 'finishedAt', 'steps', 'forceRefresh', 'createdAt', 'updatedAt',
@@ -417,7 +417,7 @@ export const collectQueueTasksDao = {
     const updateCols = cols.filter((c) => c !== 'sku');
     const setClause = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
     const placeholders = cols.map(() => '?').join(', ');
-    db
+    collectDb
       .prepare(
         `INSERT INTO collect_queue_tasks (${cols.join(', ')}) VALUES (${placeholders})
          ON CONFLICT(sku) DO UPDATE SET ${setClause}`
@@ -429,7 +429,7 @@ export const collectQueueTasksDao = {
 
 export const collectQueueOpsDao = {
   async findDedup(op, sku) {
-    const row = db
+    const row = collectDb
       .prepare(
         `SELECT * FROM collect_queue_ops WHERE op = ? AND sku = ? AND processed = 0 LIMIT 1`
       )
@@ -448,7 +448,7 @@ export const collectQueueOpsDao = {
 
   async insertOp(op, sku, params = {}) {
     const now = new Date().toISOString();
-    const r = db
+    const r = collectDb
       .prepare(
         `INSERT INTO collect_queue_ops (op, sku, params, ts, processed, processedAt)
          VALUES (?, ?, ?, ?, 0, NULL)`
@@ -459,28 +459,28 @@ export const collectQueueOpsDao = {
 
   async insertManyOps(docs) {
     const now = new Date().toISOString();
-    const stmt = db.prepare(
+    const stmt = collectDb.prepare(
       `INSERT INTO collect_queue_ops (op, sku, params, ts, processed, processedAt)
        VALUES (?, ?, ?, ?, 0, NULL)`
     );
     let insertedCount = 0;
     // 用事务批量插入
-    db.exec('BEGIN');
+    collectDb.exec('BEGIN');
     try {
       for (const d of docs) {
         stmt.run(d.op, d.sku ?? null, JSON.stringify(d.params || {}), d.ts ? new Date(d.ts).toISOString() : now);
         insertedCount++;
       }
-      db.exec('COMMIT');
+      collectDb.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
+      collectDb.exec('ROLLBACK');
       throw e;
     }
     return { insertedCount };
   },
 
   async findPendingOps(limit = 100) {
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT * FROM collect_queue_ops WHERE processed = 0 ORDER BY ts ASC LIMIT ?`
       )
@@ -501,7 +501,7 @@ export const collectQueueOpsDao = {
     const numId = Number(id);
     if (!Number.isInteger(numId) || numId <= 0) return { matchedCount: 0, modifiedCount: 0 };
     const now = new Date().toISOString();
-    const r = db
+    const r = collectDb
       .prepare(
         `UPDATE collect_queue_ops SET processed = 1, processedAt = ?
          WHERE _id = ? AND processed = 0`

@@ -3,7 +3,7 @@
 // 读取:bundleData 优先(含物理 attrs),searchData 兜底
 // 索引表同步:每次 upsert 后调用 indexDao.syncSku(sku)
 // 空属性 6h 重验:沿袭自 bundleDao,仅对 bundle_data 为空属性时记录 attrs_empty_verified_at
-import { db } from '../../index.js';
+import { collectDb } from '../../collect-db.js';
 import { indexDao } from './index-dao.js';
 
 const ATTRS_EMPTY_REVERIFY_MS = 6 * 60 * 60 * 1000;
@@ -20,7 +20,7 @@ function parseJson(s) {
 export const attributeDao = {
   /** 按 SKU 查询:返回 { searchData, bundleData, searchFetchedAt, bundleFetchedAt, bundleId, attrsEmptyVerifiedAt } */
   async getBySku(sku) {
-    const row = db
+    const row = collectDb
       .prepare(
         `SELECT search_data, search_fetched_at, bundle_data, bundle_fetched_at,
                 bundle_id, attrs_empty_verified_at
@@ -68,7 +68,7 @@ export const attributeDao = {
 
   /** 全字段读取(buildSynthesizedFromCache 用) */
   async findById(sku) {
-    const row = db
+    const row = collectDb
       .prepare(
         `SELECT _id, search_data, search_fetched_at, bundle_data, bundle_fetched_at,
                 bundle_id, attrs_empty_verified_at
@@ -94,7 +94,7 @@ export const attributeDao = {
   /** 只写 search 部分(不影响 bundle) */
   async upsertSearch(sku, searchData) {
     const now = new Date().toISOString();
-    db.prepare(
+    collectDb.prepare(
       `INSERT INTO ozon_attribute_cache (_id, search_data, search_fetched_at, updated_at)
        VALUES (?, ?, ?, datetime('now'))
        ON CONFLICT(_id) DO UPDATE SET
@@ -120,7 +120,7 @@ export const attributeDao = {
     const updateCols = cols.filter((c) => c !== '_id');
     const setClause = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
     const placeholders = cols.map(() => '?').join(', ');
-    db.prepare(
+    collectDb.prepare(
       `INSERT INTO ozon_attribute_cache (${cols.join(', ')}) VALUES (${placeholders})
        ON CONFLICT(_id) DO UPDATE SET ${setClause}, updated_at = datetime('now')`
     ).run(...vals);
@@ -135,14 +135,14 @@ export const attributeDao = {
   },
 
   async deleteBySku(sku) {
-    db.prepare(`DELETE FROM ozon_attribute_cache WHERE _id = ?`).run(sku);
+    collectDb.prepare(`DELETE FROM ozon_attribute_cache WHERE _id = ?`).run(sku);
     // 删除单表缓存后只重新聚合 ozon_cache_index(保留 listed/seller 等字段),
     // 不再调用 indexDao.deleteSku 删除整行(会导致 listed=1 被清零,深度采集后跟卖状态丢失)
     indexDao.syncSku(sku).catch(() => {});
   },
 
   async estimatedCount() {
-    return db
+    return collectDb
       .prepare(
         `SELECT COUNT(*) AS n FROM ozon_attribute_cache
          WHERE search_data IS NOT NULL OR bundle_data IS NOT NULL`
@@ -152,7 +152,7 @@ export const attributeDao = {
 
   /** 统计空属性文档数(bundle_data.attributes 为空) */
   async countEmptyAttrs() {
-    return db
+    return collectDb
       .prepare(
         `SELECT COUNT(*) AS n FROM ozon_attribute_cache
          WHERE json_array_length(bundle_data, '$.attributes') = 0`
@@ -163,7 +163,7 @@ export const attributeDao = {
   /** 统计过期空属性文档数 */
   async countStaleEmptyAttrs() {
     const cutoff = new Date(Date.now() - ATTRS_EMPTY_REVERIFY_MS).toISOString();
-    return db
+    return collectDb
       .prepare(
         `SELECT COUNT(*) AS n FROM ozon_attribute_cache
          WHERE json_array_length(bundle_data, '$.attributes') = 0
@@ -181,7 +181,7 @@ export const attributeDao = {
       where += ' AND _id LIKE ? COLLATE NOCASE';
       params.push(`%${keyword}%`);
     }
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT _id, search_fetched_at, bundle_fetched_at, bundle_id, attrs_empty_verified_at, bundle_data
          FROM ozon_attribute_cache ${where}
@@ -189,7 +189,7 @@ export const attributeDao = {
          LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, skip);
-    const total = db
+    const total = collectDb
       .prepare(`SELECT COUNT(*) AS n FROM ozon_attribute_cache ${where}`)
       .get(...params).n;
     const reshaped = items.map((r) => {
@@ -222,7 +222,7 @@ export const attributeDao = {
       where += ' AND _id LIKE ? COLLATE NOCASE';
       params.push(`%${keyword}%`);
     }
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT _id, search_fetched_at, bundle_fetched_at, bundle_id, attrs_empty_verified_at, bundle_data
          FROM ozon_attribute_cache ${where}`
@@ -253,7 +253,7 @@ export const attributeDao = {
   async findManyBySkuList(skus) {
     if (!skus.length) return [];
     const placeholders = skus.map(() => '?').join(', ');
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT _id, search_data, search_fetched_at, bundle_data, bundle_fetched_at,
                 bundle_id, attrs_empty_verified_at
@@ -276,7 +276,7 @@ export const attributeDao = {
   },
 
   async clearAll() {
-    const r = db.prepare(`DELETE FROM ozon_attribute_cache`).run();
+    const r = collectDb.prepare(`DELETE FROM ozon_attribute_cache`).run();
     return { deletedCount: r.changes };
   },
 };

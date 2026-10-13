@@ -3,7 +3,7 @@
 //      调用 syncSku(sku) 同步索引表;listed* 由 upsertTaskItems 即时写入
 // 查询:from-cache / overview 只查这一张表,过滤/排序/分页全在 SQL 完成
 // 全文搜索:走 ozon_cache_index_fts(FTS5 虚拟表),通过触发器自动同步
-import { db } from '../../index.js';
+import { collectDb } from '../../collect-db.js';
 import { composeSvShape } from '../../../services/compose-sv-shape.js';
 import { classifyDescriptionQuality } from '../../../utils/description-quality.js';
 
@@ -226,20 +226,20 @@ export const indexDao = {
    */
   async syncSku(sku) {
     const [dom, attr, rm, ms, fs] = await Promise.all([
-      db
+      collectDb
         .prepare(
           `SELECT card_data, card_fetched_at, detail_data, detail_fetched_at FROM ozon_dom_cache WHERE _id=?`
         )
         .get(sku),
-      db
+      collectDb
         .prepare(
           `SELECT search_data, search_fetched_at, bundle_data, bundle_fetched_at
            FROM ozon_attribute_cache WHERE _id=?`
         )
         .get(sku),
-      db.prepare(`SELECT data, fetchedAt FROM ozon_rich_media_cache WHERE _id=?`).get(sku),
-      db.prepare(`SELECT data, fetchedAt FROM ozon_market_stats_cache WHERE _id=?`).get(sku),
-      db.prepare(`SELECT data, fetchedAt FROM ozon_follow_sell_cache WHERE _id=?`).get(sku),
+      collectDb.prepare(`SELECT data, fetchedAt FROM ozon_rich_media_cache WHERE _id=?`).get(sku),
+      collectDb.prepare(`SELECT data, fetchedAt FROM ozon_market_stats_cache WHERE _id=?`).get(sku),
+      collectDb.prepare(`SELECT data, fetchedAt FROM ozon_follow_sell_cache WHERE _id=?`).get(sku),
     ]);
 
     // 命中位
@@ -393,7 +393,7 @@ export const indexDao = {
 
     // 全文搜索字段(name + sku + seller_name 会在定时任务里补 seller)
     // 这里先用现有 seller_name(可能为空)
-    const existing = db
+    const existing = collectDb
       .prepare(`SELECT seller_slug, seller_id, seller_name, listed FROM ozon_cache_index WHERE sku=?`)
       .get(sku);
     const sellerSlug = existing?.seller_slug || '';
@@ -402,7 +402,7 @@ export const indexDao = {
     const listed = existing?.listed || 0;
     const searchableText = [name, sku, sellerName].filter(Boolean).join(' ');
 
-    db.prepare(
+    collectDb.prepare(
       `INSERT INTO ozon_cache_index (
         sku, card_hit, card_fetched_at, detail_hit, detail_fetched_at,
         search_hit, search_fetched_at, bundle_hit, bundle_fetched_at,
@@ -498,7 +498,7 @@ export const indexDao = {
 
   /** 删除 SKU 索引行 */
   async deleteSku(sku) {
-    db.prepare(`DELETE FROM ozon_cache_index WHERE sku = ?`).run(sku);
+    collectDb.prepare(`DELETE FROM ozon_cache_index WHERE sku = ?`).run(sku);
   },
 
   /**
@@ -528,14 +528,14 @@ export const indexDao = {
     const { where, params } = buildFilterWhere(opts);
 
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT * FROM ozon_cache_index ${whereClause}
          ORDER BY last_fetched_at DESC NULLS LAST
          LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, skip);
-    const total = db
+    const total = collectDb
       .prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index ${whereClause}`)
       .get(...params).n;
     return { items, total };
@@ -549,7 +549,7 @@ export const indexDao = {
   async countByFilter(opts = {}) {
     const { where, params } = buildFilterWhere(opts);
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    return db.prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index ${whereClause}`).get(...params).n;
+    return collectDb.prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index ${whereClause}`).get(...params).n;
   },
 
   /**
@@ -561,7 +561,7 @@ export const indexDao = {
   async findListForAutoPick(opts = {}) {
     const { where, params } = buildFilterWhere(opts);
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT sku, seller_id, seller_slug, seller_name, price, price_value, rating_count,
                 name, primary_image, last_fetched_at,
@@ -603,7 +603,7 @@ export const indexDao = {
     // 强制只查未导出的(exported 筛选是导出面板入口用的,导出数据源永远排除已导出)
     const { where, params } = buildFilterWhere({ ...opts, exported: 'unexported' });
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT sku, seller_id, seller_slug, seller_name, name, price, price_value,
                 rating_count, market_stats_hit, market_stats_empty,
@@ -636,7 +636,7 @@ export const indexDao = {
   async markExported(skus, localTaskId) {
     if (!Array.isArray(skus) || skus.length === 0) return { refreshed: 0 };
     const tid = localTaskId || null;
-    const stmt = db.prepare(
+    const stmt = collectDb.prepare(
       `INSERT INTO ozon_cache_index (sku, exported, exported_at, export_task_id, updated_at)
        VALUES (?, 1, datetime('now'), ?, datetime('now'))
        ON CONFLICT(sku) DO UPDATE SET
@@ -646,15 +646,15 @@ export const indexDao = {
          updated_at = datetime('now')`
     );
     let refreshed = 0;
-    db.exec('BEGIN');
+    collectDb.exec('BEGIN');
     try {
       for (const sku of skus) {
         const r = stmt.run(sku, tid);
         refreshed += r.changes;
       }
-      db.exec('COMMIT');
+      collectDb.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
+      collectDb.exec('ROLLBACK');
       throw e;
     }
     return { refreshed };
@@ -669,7 +669,7 @@ export const indexDao = {
   async findListBySkus(skus) {
     if (!skus || skus.length === 0) return new Map();
     const placeholders = skus.map(() => '?').join(',');
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT sku, seller_id, seller_slug, name, price, primary_image, rating_count
          FROM ozon_cache_index WHERE sku IN (${placeholders})`
@@ -707,7 +707,7 @@ export const indexDao = {
       }
     }
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT sku, card_hit, card_fetched_at, detail_hit, detail_fetched_at,
                 search_hit, search_fetched_at, bundle_hit, bundle_fetched_at,
@@ -720,7 +720,7 @@ export const indexDao = {
          LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, skip);
-    const total = db
+    const total = collectDb
       .prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index ${whereClause}`)
       .get(...params).n;
     return { items, total };
@@ -733,7 +733,7 @@ export const indexDao = {
    */
   async refreshSellerInfo() {
     // total = 有 log 记录的 sku 数(用于统计,sellerId 非空)
-    const totalRow = db
+    const totalRow = collectDb
       .prepare(
         `SELECT COUNT(DISTINCT sku) AS n
          FROM ozon_auto_collect_log
@@ -741,7 +741,7 @@ export const indexDao = {
       )
       .get();
     const total = totalRow?.n || 0;
-    const result = db
+    const result = collectDb
       .prepare(
         `WITH latest_sellers AS (
            SELECT l.sku, l.sellerId, l.sellerSlug, sc.sellerName
@@ -789,7 +789,7 @@ export const indexDao = {
     // INSERT 提供所有列,ON CONFLICT DO UPDATE 处理已存在行
     // WHERE 子句:仅当 listed=0 或 store_id 与本次不同时才更新,避免幂等调用产生无意义写入
     // 用 IS NULL OR != 而非 IS NOT:避免 NULL <> 'x' 返回 NULL(falsy)导致漏更新
-    const stmt = db.prepare(
+    const stmt = collectDb.prepare(
       `INSERT INTO ozon_cache_index (sku, listed, listed_store_id, listed_at, listed_task_id, updated_at)
        VALUES (?, 1, ?, datetime('now'), ?, datetime('now'))
        ON CONFLICT(sku) DO UPDATE SET
@@ -803,15 +803,15 @@ export const indexDao = {
          OR ozon_cache_index.listed_store_id != excluded.listed_store_id`
     );
     let refreshed = 0;
-    db.exec('BEGIN');
+    collectDb.exec('BEGIN');
     try {
       for (const sku of skus) {
         const r = stmt.run(sku, sid, tid);
         refreshed += r.changes;
       }
-      db.exec('COMMIT');
+      collectDb.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
+      collectDb.exec('ROLLBACK');
       throw e;
     }
     return { refreshed };
@@ -820,29 +820,29 @@ export const indexDao = {
   /** 统计各类缓存文档数(供 dashboard 用) */
   async getCacheCounts() {
     const [dom, attr, rm, ms, fs] = await Promise.all([
-      db
+      collectDb
         .prepare(
           `SELECT COUNT(*) AS n FROM ozon_dom_cache WHERE card_data IS NOT NULL OR detail_data IS NOT NULL`
         )
         .get().n,
-      db
+      collectDb
         .prepare(
           `SELECT COUNT(*) AS n FROM ozon_attribute_cache WHERE search_data IS NOT NULL OR bundle_data IS NOT NULL`
         )
         .get().n,
-      db.prepare(`SELECT COUNT(*) AS n FROM ozon_rich_media_cache`).get().n,
-      db.prepare(`SELECT COUNT(*) AS n FROM ozon_market_stats_cache`).get().n,
-      db.prepare(`SELECT COUNT(*) AS n FROM ozon_follow_sell_cache`).get().n,
+      collectDb.prepare(`SELECT COUNT(*) AS n FROM ozon_rich_media_cache`).get().n,
+      collectDb.prepare(`SELECT COUNT(*) AS n FROM ozon_market_stats_cache`).get().n,
+      collectDb.prepare(`SELECT COUNT(*) AS n FROM ozon_follow_sell_cache`).get().n,
     ]);
     return { dom, attribute: attr, richMedia: rm, marketStats: ms, followSell: fs };
   },
 
   async estimatedCount() {
-    return db.prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index`).get().n;
+    return collectDb.prepare(`SELECT COUNT(*) AS n FROM ozon_cache_index`).get().n;
   },
 
   async clearAll() {
-    const r = db.prepare(`DELETE FROM ozon_cache_index`).run();
+    const r = collectDb.prepare(`DELETE FROM ozon_cache_index`).run();
     return { deletedCount: r.changes };
   },
 };

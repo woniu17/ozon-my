@@ -2,13 +2,13 @@
 // 2026-07 重构:主键改为 sellerId(稳定),sellerSlug 作为普通字段 + 索引(反查用)
 // 主查询入口 getBySellerId / findBySellerId 用 sellerId(走主键/索引),getBySlug 保留作为兼容方法(走 idx_sc_slug)
 // 关键:LIKE ? COLLATE NOCASE 替代 $regex+$options:'i'
-import { db } from '../../index.js';
+import { collectDb } from '../../collect-db.js';
 
 export const storeClassificationDao = {
   /** 按 sellerId 查询(新主键,_id = sellerId) */
   async getBySellerId(sellerId) {
     if (!sellerId) return null;
-    const row = db
+    const row = collectDb
       .prepare(`SELECT * FROM ozon_store_classification WHERE _id = ?`)
       .get(String(sellerId));
     if (!row) return null;
@@ -35,7 +35,7 @@ export const storeClassificationDao = {
    */
   async getBySlug(slug) {
     if (!slug) return null;
-    const rows = db
+    const rows = collectDb
       .prepare(`SELECT * FROM ozon_store_classification WHERE sellerSlug = ?`)
       .all(String(slug));
     if (!rows.length) return null;
@@ -98,7 +98,7 @@ export const storeClassificationDao = {
     const updateCols = cols.filter((c) => c !== '_id');
     const setClause = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
     const placeholders = cols.map(() => '?').join(', ');
-    db.prepare(
+    collectDb.prepare(
       `INSERT INTO ozon_store_classification (${cols.join(', ')}) VALUES (${placeholders})
        ON CONFLICT(_id) DO UPDATE SET ${setClause}`
     ).run(...vals);
@@ -149,14 +149,14 @@ export const storeClassificationDao = {
     const updateCols = cols.filter((c) => c !== '_id');
     const setClause = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
     const placeholders = cols.map(() => '?').join(', ');
-    db.prepare(
+    collectDb.prepare(
       `INSERT INTO ozon_store_classification_legacy (${cols.join(', ')}) VALUES (${placeholders})
        ON CONFLICT(_id) DO UPDATE SET ${setClause}`
     ).run(...vals);
   },
 
   async deleteBySellerId(sellerId) {
-    const r = db
+    const r = collectDb
       .prepare(`DELETE FROM ozon_store_classification WHERE _id = ?`)
       .run(String(sellerId));
     return { deletedCount: r.changes };
@@ -164,10 +164,10 @@ export const storeClassificationDao = {
 
   /** 删除 by slug(兼容方法,会同时清理新表 + legacy 表) */
   async deleteBySlug(slug) {
-    const r1 = db
+    const r1 = collectDb
       .prepare(`DELETE FROM ozon_store_classification WHERE sellerSlug = ?`)
       .run(String(slug));
-    const r2 = db
+    const r2 = collectDb
       .prepare(`DELETE FROM ozon_store_classification_legacy WHERE sellerSlug = ?`)
       .run(String(slug));
     return { deletedCount: r1.changes + r2.changes };
@@ -269,7 +269,7 @@ export const storeClassificationDao = {
         : joinSortCol
           ? `${joinSortCol} DESC NULLS LAST, sc.lastSeenAt DESC`
           : 'sc.lastSeenAt DESC';
-      const items = db
+      const items = collectDb
         .prepare(
           `SELECT sc.sellerId, sc.sellerSlug, sc.sellerName, sc.isMainlandChina, sc.classifiedBy,
                   sc.classifiedAt, sc.companyInfo, sc.lastSeenAt, sc.lastSeenUrl,
@@ -283,7 +283,7 @@ export const storeClassificationDao = {
            LIMIT ? OFFSET ?`
         )
         .all(...params, pageSize, skip);
-      const total = db
+      const total = collectDb
         .prepare(
           `SELECT COUNT(*) AS n
            FROM ozon_store_classification sc
@@ -324,7 +324,7 @@ export const storeClassificationDao = {
       ? `${sortCol} DESC NULLS LAST, lastSeenAt DESC`
       : 'lastSeenAt DESC';
 
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT sellerId, sellerSlug, sellerName, isMainlandChina, classifiedBy, classifiedAt,
                 companyInfo, lastSeenAt, lastSeenUrl,
@@ -333,7 +333,7 @@ export const storeClassificationDao = {
          ORDER BY ${orderBy} LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, skip);
-    const total = db
+    const total = collectDb
       .prepare(`SELECT COUNT(*) AS n FROM ozon_store_classification ${where}`)
       .get(...totalParams).n;
     const reshaped = items.map((r) => ({
@@ -351,7 +351,7 @@ export const storeClassificationDao = {
 
 export const storeSkuDao = {
   async getBySku(sku) {
-    const row = db.prepare(`SELECT * FROM ozon_store_sku WHERE _id = ?`).get(sku);
+    const row = collectDb.prepare(`SELECT * FROM ozon_store_sku WHERE _id = ?`).get(sku);
     if (!row) return null;
     return {
       ...row,
@@ -384,21 +384,21 @@ export const storeSkuDao = {
     const updateCols = cols.filter((c) => c !== '_id' && c !== 'firstSeenAt');
     const setClause = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
     const placeholders = cols.map(() => '?').join(', ');
-    db.prepare(
+    collectDb.prepare(
       `INSERT INTO ozon_store_sku (_id, ${cols.join(', ')}) VALUES (?, ${placeholders})
        ON CONFLICT(_id) DO UPDATE SET ${setClause}`
     ).run(sku, ...vals);
   },
 
   async deleteBySku(sku) {
-    const r = db.prepare(`DELETE FROM ozon_store_sku WHERE _id = ?`).run(sku);
+    const r = collectDb.prepare(`DELETE FROM ozon_store_sku WHERE _id = ?`).run(sku);
     return { deletedCount: r.changes };
   },
 
   /** 按 sellerId 查全量(走 idx_ss_seller_seen 索引) */
   async findBySellerId(sellerId) {
     if (!sellerId) return [];
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT * FROM ozon_store_sku WHERE sellerId = ? ORDER BY lastSeenAt DESC`
       )
@@ -417,7 +417,7 @@ export const storeSkuDao = {
   async countBySellerIds(sellerIds) {
     if (!Array.isArray(sellerIds) || sellerIds.length === 0) return {};
     const placeholders = sellerIds.map(() => '?').join(',');
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT sellerId, COUNT(*) AS n
          FROM ozon_store_sku
@@ -435,7 +435,7 @@ export const storeSkuDao = {
    */
   async findBySellerSlug(slug) {
     if (!slug) return [];
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT * FROM ozon_store_sku WHERE sellerSlug = ? ORDER BY lastSeenAt DESC`
       )
@@ -458,12 +458,12 @@ export const storeSkuDao = {
       params.push(kw, kw, kw, kw);
     }
     const skip = (page - 1) * pageSize;
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT * FROM ozon_store_sku ${where} ORDER BY lastSeenAt DESC LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, skip);
-    const total = db.prepare(`SELECT COUNT(*) AS n FROM ozon_store_sku ${where}`).get(...params).n;
+    const total = collectDb.prepare(`SELECT COUNT(*) AS n FROM ozon_store_sku ${where}`).get(...params).n;
     const reshaped = items.map((r) => ({
       ...r,
       sku: r._id,

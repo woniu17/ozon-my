@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { db } from '../db/index.js';
+import { collectDb } from '../db/collect-db.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { ok } from '../utils/response.js';
 import { distributeSkus, distributeSkusByStore, distributeSkusByStoreWithQuota, summarizeDistribution, autoPickBySeller } from '../services/batch-distributor.js';
@@ -149,7 +150,7 @@ function rowToItem(r) {
 function fetchSkuInfo(skus) {
   if (!skus.length) return new Map();
   const placeholders = skus.map(() => '?').join(',');
-  const rows = db
+  const rows = collectDb
     .prepare(
       `SELECT sku, seller_id, listed,
               card_hit, detail_hit, search_hit, bundle_hit, rich_media_hit, market_stats_hit, follow_sell_hit

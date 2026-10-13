@@ -1,6 +1,6 @@
 // 辅助路由:仓库 / 类目 / 健康检查 / 采集箱计数 / 扩展版本
 import { Router } from 'express';
-import { db } from '../db/index.js';
+import { collectDb } from '../db/collect-db.js';
 import { storeGuard } from '../middleware/store.js';
 import * as opi from '../services/ozon-opi.js';
 import logger from '../middleware/log.js';
@@ -71,7 +71,7 @@ router.get('/ozon/description-category/:typeId/attributes', storeGuard, async (r
 // collect_box_v2 与旧 ozon_card_cache 表均已废弃,改查 ozon_cache_index(card_hit=1 等价 cardCache)
 router.get('/ozon/collect-box-v2/status-counts', storeGuard, (req, res, next) => {
   try {
-    const total = db.prepare(`SELECT COUNT(*) as n FROM ozon_cache_index WHERE card_hit = 1`).get().n;
+    const total = collectDb.prepare(`SELECT COUNT(*) as n FROM ozon_cache_index WHERE card_hit = 1`).get().n;
     res.json({ total });
   } catch (e) {
     next(e);

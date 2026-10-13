@@ -3,7 +3,7 @@
 //   autoCollectLogDao(深度):记录 SW 实际执行采集流程后的结果(success/partial/failed/...+ results 数组)
 //   shallowCollectLogDao(浅度):记录店铺页扫描发现的每个 SKU + 是否通过过滤(无 results,无 status)
 // 用途:排查过滤效果(略过原因分布)+ 浅度采集统计
-import { db } from '../../index.js';
+import { collectDb } from '../../collect-db.js';
 
 const SHALLOW_SOURCES = ['api-scroller', 'dom-scroller', 'shop-page', 'pdp', 'headless-api'];
 const SHALLOW_SKIP_REASONS = [
@@ -43,31 +43,31 @@ export const shallowCollectLogDao = {
 
     const [totalRow, passRow, skipReasonRows, sourceRows, sellerRows] = await Promise.all([
       Promise.resolve(
-        db.prepare(`SELECT COUNT(*) AS count FROM ozon_shallow_collect_log ${where}`).get(...params)
+        collectDb.prepare(`SELECT COUNT(*) AS count FROM ozon_shallow_collect_log ${where}`).get(...params)
       ),
       Promise.resolve(
-        db
+        collectDb
           .prepare(
             `SELECT passesFilter, COUNT(*) AS count FROM ozon_shallow_collect_log ${where} GROUP BY passesFilter`
           )
           .all(...params)
       ),
       Promise.resolve(
-        db
+        collectDb
           .prepare(
             `SELECT skipReason AS _id, COUNT(*) AS count FROM ozon_shallow_collect_log ${where} GROUP BY skipReason`
           )
           .all(...params)
       ),
       Promise.resolve(
-        db
+        collectDb
           .prepare(
             `SELECT source AS _id, COUNT(*) AS count FROM ozon_shallow_collect_log ${where} GROUP BY source`
           )
           .all(...params)
       ),
       Promise.resolve(
-        db
+        collectDb
           .prepare(
             `SELECT sellerId AS _id, MAX(sellerSlug) AS sellerSlug, COUNT(*) AS count
              FROM ozon_shallow_collect_log ${where}
@@ -148,7 +148,7 @@ export const shallowCollectLogDao = {
     const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
     const skip = (page - 1) * pageSize;
 
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT sku, sellerSlug, sellerId, name, price, currency, ratingCount, imageUrl,
                 passesFilter, skipReason, source, collectedAt
@@ -156,7 +156,7 @@ export const shallowCollectLogDao = {
          ORDER BY collectedAt DESC LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, skip);
-    const total = db
+    const total = collectDb
       .prepare(`SELECT COUNT(*) AS n FROM ozon_shallow_collect_log ${where}`)
       .get(...params).n;
     // passesFilter 转 boolean 便于前端消费
@@ -169,7 +169,7 @@ export const shallowCollectLogDao = {
 
   /** 按 SKU 查全量历史 */
   async findBySku(sku) {
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT sku, sellerSlug, sellerId, name, price, currency, ratingCount, imageUrl,
                 passesFilter, skipReason, source, collectedAt
@@ -183,7 +183,7 @@ export const shallowCollectLogDao = {
   /** 插入一条日志 */
   async insert(doc) {
     const now = (doc.collectedAt || new Date()).toISOString();
-    const r = db
+    const r = collectDb
       .prepare(
         `INSERT INTO ozon_shallow_collect_log
          (sku, sellerSlug, sellerId, name, price, currency, ratingCount, imageUrl,
@@ -209,7 +209,7 @@ export const shallowCollectLogDao = {
 
   /** 清空全部浅度采集日志 */
   async clearAll() {
-    const r = db.prepare(`DELETE FROM ozon_shallow_collect_log`).run();
+    const r = collectDb.prepare(`DELETE FROM ozon_shallow_collect_log`).run();
     return { deletedCount: r.changes };
   },
 };

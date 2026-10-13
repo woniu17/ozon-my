@@ -7,6 +7,8 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
+import { collectDb } from '../db/collect-db.js';
+import { buildFilteredCategoryCond } from './category-filter.js';
 import { ok } from '../utils/response.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import logger from '../middleware/log.js';
@@ -129,12 +131,18 @@ function expandFiltersToItems(filters) {
 
   // 类目过滤筛选(2026-09):与商品列表页 filteredCategory 同语义
   // (本函数查询无表别名,与 admin.js 版本仅差 json_extract 不带 p. 前缀)
+  // 黑名单在采集库(collect.db),商品表在主库(erp.db),单条 SQL 无法跨库子查询,故内存化构建
   if (f.filteredCategory === '1' || f.filteredCategory === '0') {
-    const cond =
-      `SELECT 1 FROM ozon_filtered_categories fc
-        WHERE fc.description_category_id = json_extract(data, '$.description_category_id')
-          AND (fc.type_id = 0 OR fc.type_id = json_extract(data, '$.type_id'))`;
-    where.push(f.filteredCategory === '1' ? `EXISTS (${cond})` : `NOT EXISTS (${cond})`);
+    const fcRows = collectDb
+      .prepare('SELECT description_category_id, type_id FROM ozon_filtered_categories')
+      .all();
+    const cond = buildFilteredCategoryCond(fcRows, '');
+    if (cond) {
+      where.push(f.filteredCategory === '1' ? `(${cond.sql})` : `NOT (${cond.sql})`);
+      params.push(...cond.params);
+    } else if (f.filteredCategory === '1') {
+      where.push('1 = 0');
+    }
   }
 
   // 销量筛选(2026-09):与商品列表页 hasSales 同语义(有效销量,排除 cancelled)

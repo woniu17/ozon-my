@@ -14,6 +14,7 @@
 import { Router } from 'express';
 import { getDaos } from '../db/adapter.js';
 import { db } from '../db/index.js';
+import { collectDb } from '../db/collect-db.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import { composeSvShape, normalizeSearchVariantToSv } from '../services/compose-sv-shape.js';
@@ -367,7 +368,7 @@ router.post('/ozon/cache/status-batch', async (req, res, next) => {
     const placeholders = skus.map(() => '?').join(', ');
 
     // 5 类缓存各一次 SQL,IN 子句批量查
-    const domRows = db
+    const domRows = collectDb
       .prepare(
         `SELECT _id,
                 (card_data IS NOT NULL AND card_data != '') AS card_hit,
@@ -379,7 +380,7 @@ router.post('/ozon/cache/status-batch', async (req, res, next) => {
       if (result[r._id]) result[r._id].dom = !!(r.card_hit || r.detail_hit);
     }
 
-    const attrRows = db
+    const attrRows = collectDb
       .prepare(
         `SELECT _id,
                 (search_data IS NOT NULL AND search_data != '') AS search_hit,
@@ -391,7 +392,7 @@ router.post('/ozon/cache/status-batch', async (req, res, next) => {
       if (result[r._id]) result[r._id].attribute = !!(r.search_hit && r.bundle_hit);
     }
 
-    const richRows = db
+    const richRows = collectDb
       .prepare(
         `SELECT _id FROM ozon_rich_media_cache
          WHERE _id IN (${placeholders}) AND data IS NOT NULL AND data != ''`
@@ -399,7 +400,7 @@ router.post('/ozon/cache/status-batch', async (req, res, next) => {
       .all(...skus);
     for (const r of richRows) result[r._id].richMedia = true;
 
-    const marketRows = db
+    const marketRows = collectDb
       .prepare(
         `SELECT _id FROM ozon_market_stats_cache
          WHERE _id IN (${placeholders}) AND data IS NOT NULL AND data != ''`
@@ -407,7 +408,7 @@ router.post('/ozon/cache/status-batch', async (req, res, next) => {
       .all(...skus);
     for (const r of marketRows) result[r._id].marketStats = true;
 
-    const followRows = db
+    const followRows = collectDb
       .prepare(
         `SELECT _id FROM ozon_follow_sell_cache
          WHERE _id IN (${placeholders}) AND data IS NOT NULL AND data != ''`
@@ -672,7 +673,7 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
 router.get('/admin/api/collect-box-v2/sellers', async (_req, res, next) => {
   try {
     // 数据源:ozon_store_sku(店铺-SKU 关联表,记录每个 SKU 采集自哪个卖家)
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT sellerId,
                 MAX(sellerSlug) AS sellerSlug,    -- 同一 sellerId 取任一非空 slug
@@ -812,7 +813,7 @@ router.post('/admin/api/cache/skus/delete', async (req, res, next) => {
         // 检测 CJK:含 CJK 的 keyword 走 LIKE 路径(FTS5 unicode61 不分词中文)
         const hasCjk = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(keyword);
         if (hasCjk) {
-          rows = db
+          rows = collectDb
             .prepare(`SELECT sku FROM ozon_cache_index WHERE searchable_text LIKE ? COLLATE NOCASE`)
             .all(`%${keyword}%`)
             .map((r) => r.sku);
@@ -825,7 +826,7 @@ router.post('/admin/api/cache/skus/delete', async (req, res, next) => {
             .map((w) => `"${w}"*`)
             .join(' ');
           if (ftsExpr) {
-            rows = db
+            rows = collectDb
               .prepare(
                 `SELECT DISTINCT sku FROM ozon_cache_index
                  WHERE sku IN (SELECT sku FROM ozon_cache_index_fts WHERE ozon_cache_index_fts MATCH ?)`
@@ -833,7 +834,7 @@ router.post('/admin/api/cache/skus/delete', async (req, res, next) => {
               .all(ftsExpr)
               .map((r) => r.sku);
           } else {
-            rows = db
+            rows = collectDb
               .prepare(`SELECT sku FROM ozon_cache_index WHERE searchable_text LIKE ? COLLATE NOCASE`)
               .all(`%${keyword}%`)
               .map((r) => r.sku);
@@ -841,7 +842,7 @@ router.post('/admin/api/cache/skus/delete', async (req, res, next) => {
         }
       } else {
         // 无 keyword:删除全部
-        rows = db.prepare(`SELECT sku FROM ozon_cache_index`).all().map((r) => r.sku);
+        rows = collectDb.prepare(`SELECT sku FROM ozon_cache_index`).all().map((r) => r.sku);
       }
       targetSkus = rows.filter(Boolean);
     }

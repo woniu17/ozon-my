@@ -3,7 +3,7 @@
 // 读取:getBySku 返回 { card, detail, cardFetchedAt, detailFetchedAt }
 //      findById 同上,但字段名带 _id/sku
 // 索引表同步:每次 upsert 后调用 indexDao.syncSku(sku) 维护 ozon_cache_index
-import { db } from '../../index.js';
+import { collectDb } from '../../collect-db.js';
 import { indexDao } from './index-dao.js';
 
 function parseJson(s) {
@@ -18,7 +18,7 @@ function parseJson(s) {
 export const domDao = {
   /** 按 SKU 查询:返回 { card, detail, cardFetchedAt, detailFetchedAt } 或 null */
   async getBySku(sku) {
-    const row = db
+    const row = collectDb
       .prepare(
         `SELECT card_data, card_fetched_at, detail_data, detail_fetched_at
          FROM ozon_dom_cache WHERE _id = ?`
@@ -37,7 +37,7 @@ export const domDao = {
 
   /** 全字段读取(buildSynthesizedFromCache 用):返回 { _id, sku, card, detail, cardFetchedAt, detailFetchedAt } */
   async findById(sku) {
-    const row = db
+    const row = collectDb
       .prepare(
         `SELECT _id, card_data, card_fetched_at, detail_data, detail_fetched_at
          FROM ozon_dom_cache WHERE _id = ?`
@@ -57,7 +57,7 @@ export const domDao = {
   /** 只写 card 部分(不影响 detail) */
   async upsertCard(sku, cardData) {
     const now = new Date().toISOString();
-    db.prepare(
+    collectDb.prepare(
       `INSERT INTO ozon_dom_cache (_id, card_data, card_fetched_at, updated_at)
        VALUES (?, ?, ?, datetime('now'))
        ON CONFLICT(_id) DO UPDATE SET
@@ -74,7 +74,7 @@ export const domDao = {
   /** 只写 detail 部分(不影响 card) */
   async upsertDetail(sku, detailData) {
     const now = new Date().toISOString();
-    db.prepare(
+    collectDb.prepare(
       `INSERT INTO ozon_dom_cache (_id, detail_data, detail_fetched_at, updated_at)
        VALUES (?, ?, ?, datetime('now'))
        ON CONFLICT(_id) DO UPDATE SET
@@ -93,7 +93,7 @@ export const domDao = {
   },
 
   async deleteBySku(sku) {
-    db.prepare(`DELETE FROM ozon_dom_cache WHERE _id = ?`).run(sku);
+    collectDb.prepare(`DELETE FROM ozon_dom_cache WHERE _id = ?`).run(sku);
     // 删除单表缓存后只重新聚合 ozon_cache_index(保留 listed/seller 等字段),
     // 不再调用 indexDao.deleteSku 删除整行(会导致 listed=1 被清零,深度采集后跟卖状态丢失)
     indexDao.syncSku(sku).catch(() => {});
@@ -101,7 +101,7 @@ export const domDao = {
 
   /** 文档数(以 _id 存在为准,card_data 或 detail_data 任一非空) */
   async estimatedCount() {
-    return db
+    return collectDb
       .prepare(
         `SELECT COUNT(*) AS n FROM ozon_dom_cache
          WHERE card_data IS NOT NULL OR detail_data IS NOT NULL`
@@ -118,7 +118,7 @@ export const domDao = {
       where += ' AND _id LIKE ? COLLATE NOCASE';
       params.push(`%${keyword}%`);
     }
-    const items = db
+    const items = collectDb
       .prepare(
         `SELECT _id, card_fetched_at, detail_fetched_at
          FROM ozon_dom_cache ${where}
@@ -126,7 +126,7 @@ export const domDao = {
          LIMIT ? OFFSET ?`
       )
       .all(...params, pageSize, skip);
-    const total = db
+    const total = collectDb
       .prepare(`SELECT COUNT(*) AS n FROM ozon_dom_cache ${where}`)
       .get(...params).n;
     return {
@@ -148,7 +148,7 @@ export const domDao = {
       where += ' AND _id LIKE ? COLLATE NOCASE';
       params.push(`%${keyword}%`);
     }
-    const items = db
+    const items = collectDb
       .prepare(`SELECT _id, card_fetched_at, detail_fetched_at FROM ozon_dom_cache ${where}`)
       .all(...params);
     return items.map((r) => ({
@@ -163,7 +163,7 @@ export const domDao = {
   async findManyBySkuList(skus) {
     if (!skus.length) return [];
     const placeholders = skus.map(() => '?').join(', ');
-    const rows = db
+    const rows = collectDb
       .prepare(
         `SELECT _id, card_data, card_fetched_at, detail_data, detail_fetched_at
          FROM ozon_dom_cache WHERE _id IN (${placeholders})`
@@ -180,7 +180,7 @@ export const domDao = {
   },
 
   async clearAll() {
-    const r = db.prepare(`DELETE FROM ozon_dom_cache`).run();
+    const r = collectDb.prepare(`DELETE FROM ozon_dom_cache`).run();
     return { deletedCount: r.changes };
   },
 };
