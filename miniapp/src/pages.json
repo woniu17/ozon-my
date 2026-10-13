@@ -50,6 +50,15 @@
 				"enablePullDownRefresh": true,
 				"backgroundTextStyle": "dark"
 			}
+		},
+		{
+			"path": "pages/task-center/index",
+			"style": {
+				"navigationBarTitleText": "任务中心",
+				"enablePullDownRefresh": true,
+				"backgroundTextStyle": "dark",
+				"onReachBottomDistance": 100
+			}
 		}
 	],
 	"globalStyle": {
