@@ -528,8 +528,13 @@ class OrderDetailActivity : ComponentActivity() {
                     "pinduoduo://com.xunmeng.pinduoduo/order.html?order_sn=$enc",
                     "pinduoduo://"
                 ) to "https://mobile.yangkeduo.com/order.html?order_sn=$enc"
-            "1688", "alibaba", "阿里巴巴" ->
-                listOf("wireless1688://") to "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$enc"
+            "1688", "alibaba", "阿里巴巴" -> {
+                // 1688 真实唤起协议（从 qr.1688.com 分享落地页提取）：
+                // wireless1688://ma.m.1688.com/plugin?url=<编码的1688 H5 页面地址>
+                val h5Url = "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$enc"
+                val plugin = "wireless1688://ma.m.1688.com/plugin?url=" + Uri.encode(h5Url)
+                listOf(plugin, "wireless1688://") to h5Url
+            }
             "taobao", "淘宝" -> listOf("taobao://") to "https://s.taobao.com/search?q=$enc"
             "tmall", "天猫" -> listOf("tmall://") to "https://s.tmall.com/search?q=$enc"
             "douyin", "抖音", "抖音小店" -> listOf("snssdk1128://") to "https://www.douyin.com/search/$enc"
@@ -579,6 +584,7 @@ class OrderDetailActivity : ComponentActivity() {
                 "https://item.taobao.com/item.htm?id=1"
             )),
             Triple("1688", "com.alibaba.wireless", listOf(
+                "wireless1688://ma.m.1688.com/plugin?url=" + Uri.encode("https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$testSn"),
                 "wireless1688://",
                 "wireless1688://orderDetail?orderId=1",
                 "wireless1688://order/detail?orderId=1",
