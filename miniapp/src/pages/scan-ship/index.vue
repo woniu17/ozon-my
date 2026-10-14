@@ -211,6 +211,9 @@
         <text class="scan-close" @click="closeH5Scanner">✕</text>
       </view>
       <view id="scan-reader" class="scan-reader"></view>
+      <view class="scan-engine" :class="{ ok: barcodeDetectorSupported }">
+        识别引擎: {{ barcodeDetectorSupported ? 'BarcodeDetector 原生解码' : 'ZXing 兼容解码(不支持BarcodeDetector)' }}
+      </view>
       <view class="scan-tip">将快递单号 / 面单条码放入框内，自动识别并搜索</view>
     </view>
     <!-- #endif -->
@@ -253,6 +256,8 @@ const counts = reactive({ today: 0, yesterday: 0 });
 // H5:html5-qrcode(ZXing) 摄像头实时识别二维码/一维码,需 HTTPS 环境(浏览器安全限制)
 const scanVisible = ref(false);
 let h5Qr = null;
+// 是否支持浏览器原生 BarcodeDetector(Chrome/安卓支持,解码不阻塞主线程)
+const barcodeDetectorSupported = typeof window !== 'undefined' && 'BarcodeDetector' in window;
 function openH5Scanner() {
   scanVisible.value = true;
   nextTick(() => {
@@ -1154,10 +1159,20 @@ onPullDownRefresh(async () => {
   border-radius: 16rpx;
   object-fit: cover;
 }
+.scan-engine {
+  margin-top: 28rpx;
+  font-size: 22rpx;
+  color: #ffa940;
+  text-align: center;
+  padding: 0 60rpx;
+}
+.scan-engine.ok {
+  color: #52c41a;
+}
 .scan-tip {
   color: #cccccc;
   font-size: 24rpx;
-  margin-top: 48rpx;
+  margin-top: 20rpx;
   text-align: center;
   padding: 0 60rpx;
 }
