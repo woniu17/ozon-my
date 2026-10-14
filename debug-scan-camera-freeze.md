@@ -86,7 +86,7 @@ t(运行秒) / dt(采样间隔) / vis(后台) / rdy(readyState) / tf+Δ(totalVid
 
 ## 补充（2026-10-14）：原生安卓方案验证与实现
 - 结论：原生安卓可根治该卡顿。根因是浏览器/系统在约 30s 终止摄像头 MediaStream 轨道（`track ended`）；原生 App 用 CameraX 直接持有摄像头设备（Camera2），不存在浏览器轨道生命周期。
-- 已在 `android-scanner-demo/` 实现原生扫描发货 App（Kotlin + CameraX + ML Kit 离线识别 + OkHttp 对接 ERP API）：
+- 已在 `android-erp/` 实现原生扫描发货 App（Kotlin + CameraX + ML Kit 离线识别 + OkHttp 对接 ERP API）：
   - 登录（与电脑端 admin 同账号，token 本地持久化 + 滑动续期）
   - 扫码/搜索订单（快递单号 / 货件号 / SKU / 采购单号）
   - 订单卡片：产品/采购/利润展示、备货、录入重量提交发货、面单（浏览器打开）、更正重量
