@@ -540,7 +540,18 @@ class OrderDetailActivity : ComponentActivity() {
                 val plugin = "wireless1688://ma.m.1688.com/plugin?url=" + Uri.encode(h5Url)
                 listOf(plugin, "wireless1688://") to h5Url
             }
-            "taobao", "淘宝" -> listOf("taobao://") to "https://s.taobao.com/search?q=$enc"
+            "taobao", "淘宝" -> {
+                // 淘宝真实唤起协议（用户分享的淘宝订单详情链接）：
+                // dps://p?url=<编码的淘宝 H5 订单详情地址>
+                // 单号为长数字(淘宝订单号)时直接打开订单详情页；否则打开搜索页
+                val h5Url = if (enc.matches(Regex("\\d{10,}"))) {
+                    "https://h5.m.taobao.com/mlapp/odetail.html?orderId=$enc&bizOrderId=$enc"
+                } else {
+                    "https://s.taobao.com/search?q=$enc"
+                }
+                val plugin = "dps://p?url=" + Uri.encode(h5Url)
+                listOf(plugin, "taobao://", "tbopen://") to h5Url
+            }
             "tmall", "天猫" -> listOf("tmall://") to "https://s.tmall.com/search?q=$enc"
             "douyin", "抖音", "抖音小店" -> listOf("snssdk1128://") to "https://www.douyin.com/search/$enc"
             "amazon", "亚马逊" -> listOf("https://www.amazon.com/gp/your-account/order-details?orderID=$enc") to "https://www.amazon.com/gp/your-account/order-details?orderID=$enc"
@@ -567,6 +578,7 @@ class OrderDetailActivity : ComponentActivity() {
         val sb = StringBuilder()
         val testSn = "TEST123"
         val testOrderId = "5127855985039010728"
+        val testTaobaoOrderId = "5127527522039001546"
         val platforms = listOf(
             Triple("拼多多", "com.xunmeng.pinduoduo", listOf(
                 "pinduoduo://",
@@ -582,6 +594,7 @@ class OrderDetailActivity : ComponentActivity() {
                 "http://app.yangkeduo.com/universal-link?scheme=pinduoduo%3A%2F%2Fcom.xunmeng.pinduoduo%2Forder.html%3Forder_sn%3D$testSn"
             )),
             Triple("淘宝", "com.taobao.taobao", listOf(
+                "dps://p?url=" + Uri.encode("https://h5.m.taobao.com/mlapp/odetail.html?orderId=$testTaobaoOrderId&bizOrderId=$testTaobaoOrderId"),
                 "taobao://",
                 "taobao://item?id=1",
                 "taobao://tmall.com/item.htm?id=1",
