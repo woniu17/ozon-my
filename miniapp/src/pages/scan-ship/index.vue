@@ -18,41 +18,89 @@
     <!-- 搜索状态横幅 -->
     <view v-if="banner.text" class="banner" :class="'banner-' + banner.type">{{ banner.text }}</view>
 
-    <!-- 结果卡片流 -->
+    <!-- 结果卡片流(信息维度与 web 端 ScanShip 对齐) -->
     <view v-if="results.length" class="list">
       <view v-for="pkg in results" :key="pkg.id" class="card">
+        <!-- ── 订单级信息:店铺/货件号/子件/状态/复制 ── -->
         <view class="card-head">
           <text class="store">{{ pkg.storeName }}</text>
           <text class="posting">{{ pkg.postingNumber }}</text>
+          <text v-if="pkg.parentId" class="op-tag op-mute">子件</text>
           <text v-if="pkg.isIgnored" class="op-tag op-mute">搁置</text>
           <text v-else class="op-tag" :class="'op-' + opTag(pkg).cls">{{ opTag(pkg).label }}</text>
+          <text class="copy-link" @click.stop="copyText(pkg.postingNumber, '货件号')">复制</text>
         </view>
 
-        <view class="prod-row">
+        <!-- 订单标签(8色 hash 配色,同名同色) -->
+        <view v-if="pkg.tags && pkg.tags.length" class="tag-row">
+          <text v-for="t in pkg.tags" :key="t" class="ship-tag" :class="tagColorClass(t)">{{ t }}</text>
+        </view>
+
+        <!-- 备注(单行省略) -->
+        <view v-if="pkg.note" class="order-note">备注:{{ pkg.note }}</view>
+
+        <!-- 下单时间 / 最迟发货 / 剩余时间 -->
+        <view class="order-times">
+          <text>下单 {{ fmtTime(pkg.inProcessAt) }}</text>
+          <template v-if="pkg.lastDeliveryAt">
+            <text> · 最迟发货 {{ fmtTime(pkg.lastDeliveryAt) }}</text>
+            <text class="ship-remain" :class="shipRemainCls(pkg)">{{ fmtRemain(pkg) }}</text>
+          </template>
+        </view>
+
+        <!-- ── 产品信息 ── -->
+        <view class="section-label">产品信息</view>
+        <view v-for="(it, i) in pkg.items" :key="i" class="prod-row">
           <image v-if="it.picUrl" class="prod-img" :src="it.picUrl" mode="aspectFill" lazy-load />
           <view v-else class="prod-img"></view>
           <view class="prod-main">
             <view class="prod-title">{{ it.title || '—' }}</view>
             <view class="prod-sub">
-              <text v-if="it.sku" class="sku">{{ it.sku }}</text>
+              <text class="sku mono">SKU:{{ it.sku ?? '—' }}</text>
+              <text v-if="it.sku != null" class="copy-link" @click.stop="copyText(it.sku, 'SKU')">复制</text>
+            </view>
+            <view class="prod-sub">
+              <text class="mono">Offer ID:{{ it.offerId ?? '—' }}</text>
+              <text v-if="it.offerId != null" class="copy-link" @click.stop="copyText(it.offerId, 'Offer ID')">复制</text>
+            </view>
+            <view class="prod-sub">
+              <text>单价 {{ fmtMoney(it.price) }}</text>
               <text class="qty" :class="{ 'qty-multi': (Number(it.quantity) || 0) > 1 }">×{{ it.quantity }}</text>
             </view>
           </view>
-          <view class="prod-price">{{ fmtMoney(it.price) }}</view>
         </view>
+        <view v-if="!pkg.items?.length" class="muted small">—</view>
 
-        <view class="card-foot">
-          <text v-if="pkg.items && pkg.items.length" class="p-tag">{{ pkg.items.length }} 个商品行</text>
-          <text class="p-tag" :class="pkg.purchaseStatus === 'none' ? 'p-none' : 'p-ok'">
-            {{ pkg.purchaseStatus === 'none' ? '未采购' : '已采购' }}
-          </text>
-          <view class="foot-amts">
-            <text class="amt">金额 {{ fmtMoney(pkg.orderAmount) }}</text>
-            <text class="amt muted">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</text>
+        <!-- ── 采购信息 ── -->
+        <view class="section-label">采购信息</view>
+        <view v-if="!pkg.purchaseLinks?.length" class="muted small">未录入采购信息</view>
+        <view v-for="l in pkg.purchaseLinks" :key="l.id" class="purchase-block">
+          <view class="purchase-line">
+            <text class="platform">{{ platformLabel(l.platform) }}</text>
+            <text class="mono purchase-sn">{{ l.purchaseSn || '#' + l.id }}</text>
+            <text v-if="l.purchaseSn" class="copy-link" @click.stop="copyText(l.purchaseSn, '采购订单号')">复制</text>
+          </view>
+          <view class="purchase-line muted">采购买家:{{ l.buyerAccount || '—' }}<text v-if="poGoodsCount(l)"> · 数量 ×{{ poGoodsCount(l) }}</text></view>
+          <view class="purchase-line muted">采购时间:{{ fmtTime(l.poPayAt || l.poGmtCreate) }}</view>
+          <view class="purchase-line muted">采购金额:{{ fmtMoney(l.allocatedAmount) }}</view>
+          <view class="purchase-line muted">
+            物流:{{ logisticsLabel(l) }}
+            <text v-if="l.poLogisticsNo" class="copy-link" @click.stop="copyText(l.poLogisticsNo, '快递单号')">复制</text>
           </view>
         </view>
 
-        <!-- 操作区 -->
+        <!-- ── 金额与利润(公式化展示,对齐 web profit-block) ── -->
+        <view class="profit-block">
+          <view class="profit-head">
+            <text class="profit-label">订单金额 <text class="mono strong">{{ fmtMoney(pkg.orderAmount) }}</text></text>
+            <text class="est-tag" :class="profitEstimated(pkg) ? 'est-est' : 'est-real'">{{ profitEstimated(pkg) ? '估' : '实' }}</text>
+            <text class="profit-final">利润 <text class="mono strong" :class="profitClass(pkg.profit?.profit)">{{ fmtMoney(pkg.profit?.profit) }}</text></text>
+          </view>
+          <view class="formula">{{ profitCalc(pkg).main }}</view>
+          <view v-if="profitCalc(pkg).rates" class="formula sub">{{ profitCalc(pkg).rates }}</view>
+        </view>
+
+        <!-- ── 操作区 ── -->
         <view class="card-actions">
           <!-- 未备货:备货 -->
           <button
@@ -62,8 +110,12 @@
             @click.stop="onShipPackage(pkg)"
           >{{ shippingPkgId === pkg.id ? '备货中…' : '备货' }}</button>
 
-          <!-- 待打单:录重量 + 提交发货 + 面单 -->
+          <!-- 待打单:参考重量 + 录重量 + 提交发货 + 面单 -->
           <template v-if="canShipCard(pkg)">
+            <view class="weight-refs">
+              <text class="ref-weight">Ozon后台 {{ pkg.ozonWeightG != null ? Math.floor(pkg.ozonWeightG) + 'g' : '—' }}</text>
+              <text class="ref-weight">本系统 {{ pkg.systemWeightG != null ? Math.floor(pkg.systemWeightG) + 'g' : '—' }}</text>
+            </view>
             <view class="weight-box">
               <input
                 class="weight-input"
@@ -86,8 +138,9 @@
             <view v-if="weightErr[pkg.id]" class="field-err">{{ weightErr[pkg.id] }}</view>
           </template>
 
-          <!-- 已交运/已发货:面单 + 更正重量 -->
+          <!-- 已交运/已发货:称重 + 面单 + 更正重量 -->
           <template v-if="canReprintCard(pkg)">
+            <text class="ref-weight">称重 {{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</text>
             <button class="mini-btn" @click.stop="openLabel(pkg)">面单</button>
             <view class="weight-box">
               <input
@@ -108,8 +161,11 @@
             <view v-if="correctErr[pkg.id]" class="field-err">{{ correctErr[pkg.id] }}</view>
           </template>
 
-          <!-- 非可操作状态提示 -->
-          <text v-if="!canShipCard(pkg) && !canReprintCard(pkg) && !canShipPkg(pkg)" class="block-reason">{{ blockReason(pkg) }}</text>
+          <!-- 非可操作状态提示 + 称重 -->
+          <view v-if="!canShipCard(pkg) && !canReprintCard(pkg) && !canShipPkg(pkg)" class="block-wrap">
+            <text class="block-reason">{{ blockReason(pkg) }}</text>
+            <text v-if="pkg.weightG != null" class="ref-weight">称重 {{ Math.floor(pkg.weightG) + 'g' }}</text>
+          </view>
         </view>
       </view>
     </view>
@@ -123,6 +179,7 @@
     <view v-if="records.length" class="card records">
       <view class="section-title">今日已交运({{ records.length }})</view>
       <view v-for="r in records" :key="r.id" class="rec-row">
+        <text class="rec-store">{{ r.storeName }}</text>
         <text class="rec-posting">{{ r.postingNumber }}</text>
         <text class="rec-w">{{ r.weightG != null ? Math.floor(r.weightG) + 'g' : '—' }}</text>
         <text class="rec-time">{{ fmtTime(r.waybillPrintedAt || r.createdAt) }}</text>
@@ -137,7 +194,7 @@ import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
 import {
   getOrderList, shipPackage, scanShipSubmit, correctShipWeight, getScanShipRecords, fetchPackageLabel, markPrinted,
 } from '../../api/order.js';
-import { fmtMoney, fmtTime } from '../../utils/fmt.js';
+import { fmtMoney, fmtTime, fmtRate } from '../../utils/fmt.js';
 
 const keyword = ref('');
 const searching = ref(false);
@@ -152,13 +209,21 @@ const correctErr = reactive({});
 const records = ref([]);
 const banner = reactive({ type: '', text: '' });
 
+// ── 与 web 端 ScanShip 同口径的展示辅助 ──
 const OPERATE_LABELS = {
   wait_process: { label: '待处理', cls: 'warn' },
-  wait_ship: { label: '待打单', cls: 'info' },
+  wait_ship: { label: '待打单发货', cls: 'info' },
   ship_success: { label: '交运', cls: 'info' },
   wait_receiver_confirm: { label: '已发货', cls: 'ok' },
   cancelled: { label: '已取消', cls: 'err' },
 };
+const PLATFORMS = [
+  { value: 'other', label: '手工(其他)' },
+  { value: '1688', label: '1688' },
+  { value: 'yangkeduo', label: '拼多多' },
+  { value: 'taobao', label: '淘宝' },
+];
+
 function opTag(pkg) {
   if (pkg.isReturned) return { label: '已退货', cls: 'err' };
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus || '—', cls: 'mute' };
@@ -183,6 +248,102 @@ function blockReason(pkg) {
   }
 }
 
+// 复制(货件号/SKU/OfferID/采购单号/快递单号)
+function copyText(val, label) {
+  if (val == null || val === '') return;
+  uni.setClipboardData({
+    data: String(val),
+    success: () => uni.showToast({ title: `${label}已复制`, icon: 'none' }),
+  });
+}
+
+// 标签配色(与 web 端同 hash 口径:同名永远同色)
+function tagColorClass(name) {
+  let h = 0;
+  for (const ch of String(name)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return 'tag-c' + (h % 8);
+}
+function platformLabel(p) {
+  return PLATFORMS.find((x) => x.value === p)?.label || p || '—';
+}
+// 采购商品数量合计(items_json 各商品 number 求和)
+function poGoodsCount(l) {
+  return (l.items || []).reduce((s, i) => s + Number(i.number || i.num || 1), 0);
+}
+function logisticsLabel(l) {
+  if (!l.poLogisticsNo) return '—';
+  return `${l.poLogisticsCompany || ''} ${l.poLogisticsNo}`.trim();
+}
+
+// ── 利润展示(对齐 web profit-block;数据源 /list 注入 pkg.profit)──
+function profitEstimated(pkg) {
+  return pkg.profit ? pkg.profit.estimated !== false : true;
+}
+function profitCalc(pkg) {
+  const n2 = (n) => (n == null ? '—' : Number(n).toFixed(2));
+  const p = pkg.profit;
+  const orderAmount = Number(pkg.orderAmount) || 0;
+  const purchase = Number(pkg.totalPurchaseAmount) || 0;
+  if (!p) return { estimated: true, main: '利润:—(无计算数据)', rates: null };
+  const saleRate = orderAmount > 0
+    ? `销售利润率 = ${n2(p.profit)} ÷ ${n2(orderAmount)} = ${fmtRate(p.profitRateSale)}`
+    : '销售利润率 = —(无订单金额)';
+  const costRate = purchase > 0
+    ? `成本利润率 = ${n2(p.profit)} ÷ ${n2(purchase)} = ${fmtRate(p.profitRateCost)}`
+    : '成本利润率 = —(无采购金额)';
+  if (p.estimated === false) {
+    return {
+      estimated: false,
+      main: `利润(实) = 打款 ${n2(p.escrow)} − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}`,
+      rates: `${saleRate} · ${costRate}`,
+    };
+  }
+  if (p.cancelled) {
+    return { estimated: true, main: `利润 = −采购 ${n2(purchase)} = ${fmtMoney(p.profit)}(已取消,无销售收入)`, rates: null };
+  }
+  if (p.returned) {
+    return { estimated: true, main: `利润 = −采购 ${n2(purchase)} = ${fmtMoney(p.profit)}(已退货,货款被全额扣回)`, rates: null };
+  }
+  if (p.delivery != null) {
+    return {
+      estimated: true,
+      main: `利润(估) = 订单 ${n2(orderAmount)} − 佣金 ${n2(p.commission)}(订单×16%) − 国际配送 ${n2(p.delivery)}(3.37+0.0281×${Math.floor(p.weightG ?? 0)}g) − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}`,
+      rates: `${saleRate} · ${costRate}`,
+    };
+  }
+  return {
+    estimated: true,
+    main: `利润(估) = 订单 ${n2(orderAmount)} − 佣金 ${n2(p.commission)}(订单×16%,配送隐含) − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}(无重量,配送未单独估算)`,
+    rates: `${saleRate} · ${costRate}`,
+  };
+}
+
+// 最迟发货剩余时间(颜色分级:已超时=红 / <24h=红 / <48h=橙)
+function shipRemainCls(pkg) {
+  if (!pkg.lastDeliveryAt) return '';
+  const t = new Date(pkg.lastDeliveryAt).getTime();
+  if (isNaN(t)) return '';
+  const ms = t - Date.now();
+  if (ms <= 0) return 'remain-over';
+  if (ms < 24 * 3600 * 1000) return 'remain-urg';
+  if (ms < 48 * 3600 * 1000) return 'remain-warn';
+  return '';
+}
+function fmtRemain(pkg) {
+  if (!pkg.lastDeliveryAt) return '';
+  const t = new Date(pkg.lastDeliveryAt).getTime();
+  if (isNaN(t)) return '';
+  const diff = t - Date.now();
+  const neg = diff < 0;
+  let s = Math.floor(Math.abs(diff) / 1000);
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60);
+  const body = d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${m}分`;
+  return neg ? `已超时${body}` : `剩${body}`;
+}
+
+// ── 搜索与操作 ──
 async function doSearch() {
   const kw = keyword.value.trim();
   if (!kw || searching.value) return;
@@ -393,11 +554,13 @@ onPullDownRefresh(async () => {
   padding: 20rpx;
   margin-bottom: 20rpx;
 }
+
+/* ── 订单级信息 ── */
 .card-head {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: 10rpx;
+  margin-bottom: 8rpx;
 }
 .store {
   font-size: 22rpx;
@@ -414,22 +577,96 @@ onPullDownRefresh(async () => {
   margin-right: auto;
 }
 .op-tag {
-  font-size: 22rpx;
-  padding: 4rpx 14rpx;
+  font-size: 21rpx;
+  padding: 3rpx 12rpx;
   border-radius: 999rpx;
+  margin-right: 8rpx;
 }
 .op-warn { color: #d97706; background: #fff7e6; }
 .op-info { color: #165dff; background: #eef4ff; }
 .op-ok { color: #00b42a; background: #e8ffea; }
 .op-err { color: #f53f3f; background: #ffece8; }
 .op-mute { color: #86909c; background: #f2f3f5; }
+.copy-link {
+  font-size: 21rpx;
+  color: #165dff;
+  padding: 2rpx 8rpx;
+  margin-left: 6rpx;
+}
 
-/* 商品行(与订单列表页同风格) */
+/* 订单标签(8 色 hash) */
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx;
+  margin-bottom: 8rpx;
+}
+.ship-tag {
+  font-size: 20rpx;
+  padding: 2rpx 12rpx;
+  border-radius: 999rpx;
+}
+.tag-c0 { color: #165dff; background: #eef4ff; }
+.tag-c1 { color: #00b42a; background: #e8ffea; }
+.tag-c2 { color: #d97706; background: #fff7e6; }
+.tag-c3 { color: #f53f3f; background: #ffece8; }
+.tag-c4 { color: #7d4dd3; background: #f5efff; }
+.tag-c5 { color: #0fc6c2; background: #e6fffe; }
+.tag-c6 { color: #b8860b; background: #fffbe6; }
+.tag-c7 { color: #86909c; background: #f2f3f5; }
+
+.order-note {
+  font-size: 22rpx;
+  color: #4e5969;
+  background: #f7f8fa;
+  border-radius: 8rpx;
+  padding: 8rpx 12rpx;
+  margin-bottom: 8rpx;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.order-times {
+  font-size: 21rpx;
+  color: #86909c;
+  margin-bottom: 12rpx;
+  flex-wrap: wrap;
+}
+.ship-remain {
+  margin-left: 8rpx;
+  font-weight: 600;
+}
+.remain-over { color: #f53f3f; }
+.remain-urg { color: #f53f3f; }
+.remain-warn { color: #d97706; }
+
+/* ── 分区小标题 ── */
+.section-label {
+  display: flex;
+  align-items: center;
+  font-size: 22rpx;
+  color: #86909c;
+  font-weight: 600;
+  margin: 14rpx 0 8rpx;
+}
+.section-label::before {
+  content: '';
+  width: 6rpx;
+  height: 22rpx;
+  border-radius: 3rpx;
+  background: #165dff;
+  margin-right: 10rpx;
+}
+
+/* ── 产品信息 ── */
 .prod-row {
   display: flex;
   align-items: flex-start;
-  padding: 12rpx 0;
+  padding: 10rpx 0;
   border-bottom: 1rpx solid #f7f8fa;
+}
+.prod-row:last-child {
+  border-bottom: none;
 }
 .prod-img {
   width: 96rpx;
@@ -444,7 +681,7 @@ onPullDownRefresh(async () => {
   overflow: hidden;
 }
 .prod-title {
-  font-size: 25rpx;
+  font-size: 24rpx;
   color: #1f2329;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -452,59 +689,127 @@ onPullDownRefresh(async () => {
   overflow: hidden;
 }
 .prod-sub {
-  margin-top: 6rpx;
+  margin-top: 4rpx;
   display: flex;
   align-items: center;
-  font-size: 22rpx;
+  font-size: 21rpx;
   color: #86909c;
+  flex-wrap: wrap;
 }
 .sku {
   color: #165dff;
 }
+.mono {
+  font-family: 'Courier New', monospace;
+}
 .qty {
   margin-left: 10rpx;
+  font-weight: 600;
 }
 .qty-multi {
   color: #d93026;
-  font-weight: 600;
+  font-weight: 700;
 }
-.prod-price {
-  font-size: 25rpx;
-  color: #1f2329;
-  margin-left: 10rpx;
-  flex-shrink: 0;
+
+/* ── 采购信息 ── */
+.purchase-block {
+  background: #f7f8fa;
+  border-radius: 10rpx;
+  padding: 10rpx 14rpx;
+  margin-bottom: 10rpx;
 }
-.card-foot {
+.purchase-line {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  margin-top: 12rpx;
-}
-.p-tag {
   font-size: 21rpx;
   color: #4e5969;
-  background: #f2f3f5;
-  padding: 2rpx 12rpx;
-  border-radius: 999rpx;
-  margin-right: 10rpx;
+  padding: 2rpx 0;
 }
-.p-none { color: #d93026; background: #ffece8; }
-.p-ok { color: #00b42a; background: #e8ffea; }
-.foot-amts {
-  margin-left: auto;
-  display: flex;
-  gap: 14rpx;
+.purchase-line.muted {
+  color: #86909c;
+}
+.platform {
+  font-size: 20rpx;
+  color: #165dff;
+  background: #eef4ff;
+  border-radius: 6rpx;
+  padding: 0 8rpx;
+  margin-right: 8rpx;
+}
+.purchase-sn {
+  color: #1f2329;
+  margin-right: auto;
+}
+.muted.small {
   font-size: 22rpx;
+  color: #86909c;
+}
+
+/* ── 金额与利润 ── */
+.profit-block {
+  margin-top: 14rpx;
+  background: #f5f8ff;
+  border-radius: 12rpx;
+  padding: 14rpx 16rpx;
+}
+.profit-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 23rpx;
   color: #4e5969;
 }
-.amt.muted { color: #86909c; }
+.profit-label {
+  margin-right: 10rpx;
+}
+.strong {
+  font-weight: 700;
+  color: #1f2329;
+}
+.est-tag {
+  font-size: 19rpx;
+  padding: 2rpx 10rpx;
+  border-radius: 6rpx;
+  margin-right: 10rpx;
+}
+.est-est { color: #d97706; background: #fff7e6; }
+.est-real { color: #00b42a; background: #e8ffea; }
+.profit-final {
+  margin-left: auto;
+}
+.formula {
+  margin-top: 6rpx;
+  font-size: 20rpx;
+  color: #4e5969;
+  font-family: 'Courier New', monospace;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.formula.sub {
+  color: #86909c;
+}
+.profit-pos { color: #00b42a !important; }
+.profit-neg { color: #f53f3f !important; }
 
+/* ── 操作区 ── */
 .card-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12rpx;
   margin-top: 14rpx;
+}
+.weight-refs {
+  width: 100%;
+  display: flex;
+  gap: 16rpx;
+  font-size: 21rpx;
+  color: #86909c;
+}
+.ref-weight {
+  font-size: 21rpx;
+  color: #86909c;
 }
 .mini-btn {
   font-size: 24rpx;
@@ -550,11 +855,17 @@ onPullDownRefresh(async () => {
   font-size: 21rpx;
   color: #f53f3f;
 }
+.block-wrap {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
 .block-reason {
   font-size: 23rpx;
   color: #86909c;
 }
 
+/* ── 发货记录 ── */
 .records {
   margin-top: 4rpx;
 }
@@ -569,10 +880,18 @@ onPullDownRefresh(async () => {
   align-items: center;
   padding: 10rpx 0;
   border-bottom: 1rpx solid #f7f8fa;
-  font-size: 23rpx;
+  font-size: 22rpx;
 }
 .rec-row:last-child {
   border-bottom: none;
+}
+.rec-store {
+  font-size: 20rpx;
+  color: #165dff;
+  background: #eef4ff;
+  border-radius: 6rpx;
+  padding: 0 8rpx;
+  margin-right: 10rpx;
 }
 .rec-posting {
   flex: 1;
@@ -585,7 +904,7 @@ onPullDownRefresh(async () => {
 }
 .rec-time {
   color: #86909c;
-  font-size: 21rpx;
+  font-size: 20rpx;
 }
 
 .empty {
