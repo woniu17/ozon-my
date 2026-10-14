@@ -509,12 +509,14 @@ class OrderDetailActivity : ComponentActivity() {
         }.onFailure { toast("未找到可跳转的应用") }
     }
 
-    /** 平台 → (deep link scheme, 网页搜索/订单页 URL) */
+    /** 平台 → (deep link scheme, 网页搜索/订单页 URL)，拼多多/1688 与 H5 订单详情链接一致 */
     private fun platformDeepLink(platform: String?, sn: String): Pair<String, String> {
         val enc = Uri.encode(sn)
         return when (platform?.lowercase()) {
-            "pdd", "拼多多" -> "pinduoduo://" to "https://mobile.yangkeduo.com/search_result.html?search_key=$enc"
-            "1688", "alibaba", "阿里巴巴" -> "wireless1688://" to "https://s.1688.com/selloffer/offer_search.htm?keywords=$enc"
+            "pdd", "yangkeduo", "拼多多" ->
+                "https://mobile.yangkeduo.com/order.html?order_sn=$enc" to "https://mobile.yangkeduo.com/order.html?order_sn=$enc"
+            "1688", "alibaba", "阿里巴巴" ->
+                "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$enc" to "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$enc"
             "taobao", "淘宝" -> "taobao://" to "https://s.taobao.com/search?q=$enc"
             "tmall", "天猫" -> "tmall://" to "https://s.tmall.com/search?q=$enc"
             "douyin", "抖音", "抖音小店" -> "snssdk1128://" to "https://www.douyin.com/search/$enc"
