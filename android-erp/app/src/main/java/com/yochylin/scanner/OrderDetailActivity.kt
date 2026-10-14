@@ -541,16 +541,21 @@ class OrderDetailActivity : ComponentActivity() {
                 listOf(plugin, "wireless1688://") to h5Url
             }
             "taobao", "淘宝" -> {
-                // 淘宝真实唤起协议（用户分享的淘宝订单详情链接）：
-                // dps://p?url=<编码的淘宝 H5 订单详情地址>
-                // 单号为长数字(淘宝订单号)时直接打开订单详情页；否则打开搜索页
+                // 淘宝唤起策略（按优先级尝试）：
+                // 1) dps://p?url=<编码H5>：淘宝分享链接用的协议，部分版本/机型可解析
+                // 2) tbopen://m.taobao.com/tbopen/index.html?h5Url=<编码H5>：淘宝官方跳转协议，实测可解析到 Welcome 路由
+                // 3) taobao://h5.m.taobao.com/mlapp/odetail.html?orderId=...：直接交给淘宝内置浏览器打开
+                // 4) taobao:// 裸协议兜底
+                // 订单详情 H5 使用淘宝真实详情页 m.m.taobao.com/wow/z/app/tb-trade/odetail/h5-home
                 val h5Url = if (enc.matches(Regex("\\d{10,}"))) {
-                    "https://h5.m.taobao.com/mlapp/odetail.html?orderId=$enc&bizOrderId=$enc"
+                    "https://m.m.taobao.com/wow/z/app/tb-trade/odetail/h5-home?orderId=$enc"
                 } else {
                     "https://s.taobao.com/search?q=$enc"
                 }
-                val plugin = "dps://p?url=" + Uri.encode(h5Url)
-                listOf(plugin, "taobao://", "tbopen://") to h5Url
+                val dps = "dps://p?url=" + Uri.encode("https://h5.m.taobao.com/mlapp/odetail.html?orderId=$enc&bizOrderId=$enc")
+                val tbopen = "tbopen://m.taobao.com/tbopen/index.html?source=erp&h5Url=" + Uri.encode(h5Url)
+                val taobaoDirect = "taobao://h5.m.taobao.com/mlapp/odetail.html?orderId=$enc"
+                listOf(dps, tbopen, taobaoDirect, "taobao://") to h5Url
             }
             "tmall", "天猫" -> listOf("tmall://") to "https://s.tmall.com/search?q=$enc"
             "douyin", "抖音", "抖音小店" -> listOf("snssdk1128://") to "https://www.douyin.com/search/$enc"
@@ -595,6 +600,8 @@ class OrderDetailActivity : ComponentActivity() {
             )),
             Triple("淘宝", "com.taobao.taobao", listOf(
                 "dps://p?url=" + Uri.encode("https://h5.m.taobao.com/mlapp/odetail.html?orderId=$testTaobaoOrderId&bizOrderId=$testTaobaoOrderId"),
+                "tbopen://m.taobao.com/tbopen/index.html?source=erp&h5Url=" + Uri.encode("https://m.m.taobao.com/wow/z/app/tb-trade/odetail/h5-home?orderId=$testTaobaoOrderId"),
+                "taobao://h5.m.taobao.com/mlapp/odetail.html?orderId=$testTaobaoOrderId",
                 "taobao://",
                 "taobao://item?id=1",
                 "taobao://tmall.com/item.htm?id=1",
