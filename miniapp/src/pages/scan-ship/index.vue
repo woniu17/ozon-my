@@ -261,10 +261,16 @@ function openH5Scanner() {
       h5Qr.start(
         { facingMode: 'environment' },
         {
-          // 低 fps 减轻解码压力,避免画面卡顿;qrbox 用百分比覆盖更大区域,一维码更易命中
+          // 限制摄像头分辨率(640x480) + 缩小解码区域 + 低 fps:
+          // 避免每帧从超大画面裁剪解码导致 CPU 满载,画面开启几秒后卡顿
           fps: 5,
-          qrbox: { width: '90%', height: '50%' },
+          qrbox: { width: '70%', height: '40%' },
           disableFlip: false,
+          videoConstraints: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+          },
         },
         (decodedText) => {
           // 已关闭/已识别成功:阻止重复触发,避免持续搜索
