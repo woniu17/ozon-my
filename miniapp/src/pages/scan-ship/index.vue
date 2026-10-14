@@ -211,8 +211,8 @@
         <text class="scan-close" @click="closeH5Scanner">✕</text>
       </view>
       <view id="scan-reader" class="scan-reader" :class="{ 'native-frame': barcodeDetectorSupported }"></view>
-      <view class="scan-engine" :class="{ ok: barcodeDetectorSupported }" @click="onEngineTap">
-        识别引擎: {{ barcodeDetectorSupported ? 'BarcodeDetector 原生解码' : 'ZXing 兼容解码(不支持BarcodeDetector)' }}
+      <view class="scan-engine" :class="{ ok: scanEngineText.indexOf('BarcodeDetector') === 0 }" @click="onEngineTap">
+        识别引擎: {{ scanEngineText || '启动中...' }}
       </view>
       <view class="scan-tip">将快递单号 / 面单条码放入框内，自动识别并搜索</view>
       <!-- #region debug-point scan-cam-freeze (临时诊断插桩) -->
@@ -257,10 +257,13 @@ const counts = reactive({ today: 0, yesterday: 0 });
 // ── 扫码识别(快递单号/面单条码) ──
 // #ifdef H5
 // H5 扫码:
-//  - 优先用浏览器原生 BarcodeDetector(Chrome/安卓):把当前帧缩到小画布后异步检测,
-//    不经过 ZXing 主线程逐帧解码;并定期重启摄像头,防止长时间运行后媒体管线卡死;
-//  - 不支持时回退 html5-qrcode(ZXing):低分辨率/低 fps/禁用镜像二次解码,同样定期重启。
+//  - 优先用浏览器原生 BarcodeDetector(Chrome/安卓):小画布异步检测,轻量不占主线程;
+//    开摄像头前先做能力探测(部分浏览器如小米浏览器 detect() 实际不可用,直接降级);
+//  - ZXing(html5-qrcode)兜底:低分辨率/低 fps/禁用镜像二次解码;
+//  - 两条路径都监听 track ended(部分浏览器/系统约 30s 终止摄像头轨道),
+//    事件驱动立即重建流,避免画面冻结;ZXing 另保留 2 分钟定时重启兜底。
 const scanVisible = ref(false);
+const scanEngineText = ref('');          // 实际运行中的识别引擎(打开时确定,降级时更新)
 let scanSession = 0;                  // 会话代际:关闭/重开都会自增,使旧会话的异步回调全部失效
 let h5Qr = null;                      // html5-qrcode 实例(ZXing 回退路径)
 let h5QrCleanup = Promise.resolve(); // 上一次实例 stop+clear 的完成态,防止重开时旧 clear() 清掉新实例
@@ -268,8 +271,9 @@ let h5RestartTimer = null;           // html5-qrcode 路径的定期重启定时
 let nativeStream = null;              // 原生 BarcodeDetector 路径的 MediaStream
 let nativeVideo = null;               // 原生路径创建的 video 元素
 let nativeTimer = null;               // 原生路径检测循环句柄
-let nativeRestartTimer = null;        // 原生路径的定期重启定时器
-const CAMERA_RESTART_MS = 2 * 60 * 1000; // 每 2 分钟重启一次摄像头,重置浏览器媒体管线,避免长时间运行后画面卡死
+let nativeDetectFails = 0;            // 原生 detect 连续失败次数,>=5 自动降级 ZXing
+let nativeDetectorBroken = false;     // 探测/运行期确认 detect() 不可用,本页面内不再走原生路径
+const CAMERA_RESTART_MS = 2 * 60 * 1000; // ZXing 兜底路径的定期重启间隔
 
 // 浏览器是否真正支持 BarcodeDetector(属性存在且可实例化,避免桌面 Chrome 仅有属性但不可用)
 function detectBarcodeDetectorSupport() {
@@ -288,7 +292,7 @@ const barcodeDetectorSupported = detectBarcodeDetectorSupport();
 // 每 ~30s 部分上报,关闭扫码/页面隐藏时终报(同源 /debug/scan-perf,防页面硬挂丢证据)
 const dbgOn = ref(false);
 const dbgText = ref('');
-const dbgState = { t0: 0, wall: 0, seq: 0, rvfc: 0, restarts: 0, det: [], samples: [], events: [] };
+const dbgState = { t0: 0, wall: 0, seq: 0, rvfc: 0, restarts: 0, det: [], samples: [], events: [], active: false };
 let dbgTimer = null;
 try { dbgOn.value = localStorage.getItem('scandbg') === '1'; } catch (e) { /* 忽略 */ }
 function dbgLog(ev) {
@@ -392,13 +396,51 @@ function cameraVideoConstraints() {
   };
 }
 
+// BarcodeDetector 功能探测:部分浏览器(如小米浏览器)属性与构造器都可用,但 detect()
+// 实际持续抛异常或挂起。开摄像头前用空白画布探测一次(含超时,防挂起),失败则本页面内
+// 记为不可用,后续打开直接走 ZXing,避免原生路径空转与摄像头开关两次。
+async function probeBarcodeDetector() {
+  try {
+    const d = new BarcodeDetector({ formats: ['qr_code'] });
+    const probe = document.createElement('canvas');
+    probe.width = 64;
+    probe.height = 64;
+    await Promise.race([
+      d.detect(probe),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('probe-timeout')), 800)),
+    ]);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function openH5Scanner() {
   scanVisible.value = true;
   const session = ++scanSession;
   nextTick(async () => {
     if (session !== scanSession) return; // 打开瞬间已被关闭/重开
     try {
-      if (barcodeDetectorSupported) {
+      // #region debug-point scan-cam-freeze
+      dbgState.active = true;
+      dbgState.t0 = Date.now(); dbgState.wall = Date.now();
+      dbgState.rvfc = 0; dbgState.restarts = 0; dbgState.seq = 0;
+      dbgState.det.length = 0; dbgState.samples.length = 0; dbgState.events.length = 0;
+      // #endregion
+      let useNative = barcodeDetectorSupported && !nativeDetectorBroken;
+      if (useNative) {
+        useNative = await probeBarcodeDetector();
+        if (!useNative) {
+          nativeDetectorBroken = true;
+          // #region debug-point scan-cam-freeze
+          dbgLog('probe-fail → zxing');
+          // #endregion
+        }
+      }
+      scanEngineText.value = useNative
+        ? 'BarcodeDetector 原生解码'
+        : `ZXing 兼容解码${nativeDetectorBroken ? '(检测器不可用,已自动降级)' : '(不支持BarcodeDetector)'}`;
+      if (useNative) {
         await startNativeScanner(session);
       } else {
         await startHtml5QrScanner(session);
@@ -409,6 +451,23 @@ function openH5Scanner() {
       closeH5Scanner();
     }
   });
+}
+
+// 清理原生 BarcodeDetector 路径资源(供降级/关闭复用;不改变 scanVisible/scanSession)
+function cleanupNativeScanner() {
+  if (nativeTimer) {
+    clearTimeout(nativeTimer);
+    nativeTimer = null;
+  }
+  if (nativeStream) {
+    try { nativeStream.getTracks().forEach((t) => t.stop()); } catch (e) { /* 忽略 */ }
+    nativeStream = null;
+  }
+  if (nativeVideo) {
+    try { nativeVideo.srcObject = null; } catch (e) { /* 忽略 */ }
+    try { nativeVideo.remove(); } catch (e) { /* 忽略 */ }
+    nativeVideo = null;
+  }
 }
 
 // ── 原生 BarcodeDetector 路径:轻量、不卡顿 ──
@@ -432,9 +491,12 @@ async function startNativeScanner(session) {
   await el.play();
   if (session !== scanSession) return; // 播放期间被关闭
   // #region debug-point scan-cam-freeze
-  dbgState.t0 = Date.now(); dbgState.wall = Date.now();
-  dbgState.rvfc = 0; dbgState.restarts = 0; dbgState.seq = 0;
-  dbgState.det.length = 0; dbgState.samples.length = 0; dbgState.events.length = 0;
+  if (!dbgState.active) {
+    dbgState.active = true;
+    dbgState.t0 = Date.now(); dbgState.wall = Date.now();
+    dbgState.rvfc = 0; dbgState.restarts = 0; dbgState.seq = 0;
+    dbgState.det.length = 0; dbgState.samples.length = 0; dbgState.events.length = 0;
+  }
   dbgLog('open native');
   if (el.requestVideoFrameCallback) {
     const rvcb = () => {
@@ -448,7 +510,11 @@ async function startNativeScanner(session) {
   if (dbgTrack) {
     dbgTrack.addEventListener('mute', () => dbgLog('track mute'));
     dbgTrack.addEventListener('unmute', () => dbgLog('track unmute'));
-    dbgTrack.addEventListener('ended', () => dbgLog('track ended'));
+    dbgTrack.addEventListener('ended', () => {
+      dbgLog('track ended');
+      // 轨道被系统/浏览器终止(小米浏览器约 30s 即发生):会话仍活跃则立即重建摄像头流
+      if (session === scanSession) restartNativeStream(session);
+    });
   }
   startDbgSampler(session);
   // #endregion
@@ -459,6 +525,8 @@ async function startNativeScanner(session) {
   canvas.width = 480;
   canvas.height = 360;
   const ctx = canvas.getContext('2d');
+  nativeDetectFails = 0;
+
   const tick = async () => {
     if (session !== scanSession) return;
     if (!nativeVideo || nativeVideo.readyState < 2) {
@@ -470,11 +538,31 @@ async function startNativeScanner(session) {
       ctx.drawImage(nativeVideo, 0, 0, canvas.width, canvas.height);
       // #region debug-point scan-cam-freeze
       const dbgD0 = performance.now();
-      codes = await detector.detect(canvas);
+      // detect 加 2s 超时:部分实现可能挂起(Promise 永不 resolve),超时按失败处理
+      codes = await Promise.race([
+        detector.detect(canvas),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('detect-timeout')), 2000)),
+      ]);
       dbgState.det.push(Math.round(performance.now() - dbgD0));
       if (dbgState.det.length > 40) dbgState.det.shift();
+      nativeDetectFails = 0;
       // #endregion
-    } catch (e) { /* 单帧识别失败忽略 */ }
+    } catch (e) {
+      // #region debug-point scan-cam-freeze
+      nativeDetectFails++;
+      dbgLog(`detect-fail ${nativeDetectFails} ${(e && e.message) || ''}`);
+      // #endregion
+      if (nativeDetectFails >= 5) {
+        // #region debug-point scan-cam-freeze
+        dbgLog('degrade-to-zxing (detect fails)');
+        // #endregion
+        nativeDetectorBroken = true;
+        scanEngineText.value = 'ZXing 兼容解码(检测器不可用,已自动降级)';
+        cleanupNativeScanner();
+        if (session === scanSession) await startHtml5QrScanner(session);
+        return;
+      }
+    }
     if (session !== scanSession) return; // 检测期间被关闭/重开,丢弃旧结果
     if (codes && codes.length) {
       const code = String(codes[0].rawValue || '').trim();
@@ -486,56 +574,53 @@ async function startNativeScanner(session) {
     nativeTimer = setTimeout(tick, 300);
   };
   nativeTimer = setTimeout(tick, 200);
-  // 定期重启摄像头,重置浏览器媒体管线
-  nativeRestartTimer = setTimeout(() => restartNativeStream(session), CAMERA_RESTART_MS);
+  // 原生路径不使用定时重启(证据:轨道约 30s 即被系统结束,定时器无意义),
+  // 改为 track ended 事件驱动重建(见上方事件监听)
 }
 
-// 重启原生路径摄像头流(仅更换流,不重建 video 元素,检测循环继续复用)
+// 轨道结束/异常时重建原生路径:清理旧资源后重新走完整启动流程(新流/新 video 元素)。
+// detect 运行期故障由 tick 内的连续失败计数兜底降级;若 getUserMedia 失败则提示并关闭扫码。
 async function restartNativeStream(session) {
   if (session !== scanSession) return;
   // #region debug-point scan-cam-freeze
   dbgState.restarts++;
-  dbgLog('restart');
+  dbgLog('restart (track ended)');
   // #endregion
-  if (nativeStream) {
-    try { nativeStream.getTracks().forEach((t) => t.stop()); } catch (e) { /* 忽略 */ }
-    nativeStream = null;
-  }
-  if (nativeVideo) {
-    try { nativeVideo.srcObject = null; } catch (e) { /* 忽略 */ }
-  }
+  cleanupNativeScanner();
   try {
-    const stream = await navigator.mediaDevices.getUserMedia(cameraVideoConstraints());
-    if (session !== scanSession) {
-      stream.getTracks().forEach((t) => t.stop());
-      return;
-    }
-    nativeStream = stream;
-    if (nativeVideo) {
-      nativeVideo.srcObject = stream;
-      try { await nativeVideo.play(); } catch (e) { /* 忽略 */ }
-    }
-    // #region debug-point scan-cam-freeze
-    const dbgTrack2 = stream.getVideoTracks()[0];
-    if (dbgTrack2) {
-      dbgTrack2.addEventListener('mute', () => dbgLog('track mute(restart)'));
-      dbgTrack2.addEventListener('unmute', () => dbgLog('track unmute(restart)'));
-      dbgTrack2.addEventListener('ended', () => dbgLog('track ended(restart)'));
-    }
-    // #endregion
+    if (session === scanSession) await startNativeScanner(session);
   } catch (e) {
     if (session === scanSession) {
       uni.showToast({ title: '摄像头不可用(需HTTPS)', icon: 'none' });
       closeH5Scanner();
     }
-    return;
-  }
-  if (session === scanSession) {
-    nativeRestartTimer = setTimeout(() => restartNativeStream(session), CAMERA_RESTART_MS);
   }
 }
 
 // ── 不支持 BarcodeDetector 时回退 html5-qrcode(ZXing)──
+// ZXing 路径的视频观察:rVFC 帧计数(诊断用)+ 轨道 ended 事件(恢复用)。
+// 每次 start 后都要重新挂接(html5-qrcode 重启会重建 video 元素)。
+function watchZxVideo(session, startQr) {
+  const zxV = document.querySelector('#scan-reader video');
+  if (!zxV) return;
+  if (zxV.requestVideoFrameCallback) {
+    const rvcb = () => {
+      if (session !== scanSession) return;
+      dbgState.rvfc++;
+      zxV.requestVideoFrameCallback(rvcb);
+    };
+    zxV.requestVideoFrameCallback(rvcb);
+  }
+  const zxTrk = zxV.srcObject && zxV.srcObject.getVideoTracks ? zxV.srcObject.getVideoTracks()[0] : null;
+  if (zxTrk) {
+    zxTrk.addEventListener('ended', () => {
+      dbgLog('track ended(zxing)');
+      // 轨道被系统/浏览器提前终止:立即重启,不等 2 分钟定时器
+      if (session === scanSession) restartHtml5QrScanner(session, startQr);
+    });
+  }
+}
+
 async function startHtml5QrScanner(session) {
   // 等待上一次实例彻底清理完毕,避免旧 clear() 清掉新实例的 video 元素
   await h5QrCleanup;
@@ -573,6 +658,17 @@ async function startHtml5QrScanner(session) {
   );
   await startQr();
   if (session !== scanSession) return;
+  // #region debug-point scan-cam-freeze
+  if (!dbgState.active) {
+    dbgState.active = true;
+    dbgState.t0 = Date.now(); dbgState.wall = Date.now();
+    dbgState.rvfc = 0; dbgState.restarts = 0; dbgState.seq = 0;
+    dbgState.det.length = 0; dbgState.samples.length = 0; dbgState.events.length = 0;
+  }
+  dbgLog('open zxing');
+  // #endregion
+  watchZxVideo(session, startQr);
+  startDbgSampler(session);
   // 定期重启,防止长时间运行后媒体管线卡死
   h5RestartTimer = setTimeout(() => restartHtml5QrScanner(session, startQr), CAMERA_RESTART_MS);
 }
@@ -580,6 +676,10 @@ async function startHtml5QrScanner(session) {
 // 重启 ZXing 回退路径(停掉旧实例并重新 start)
 async function restartHtml5QrScanner(session, startQr) {
   if (session !== scanSession || !h5Qr) return;
+  if (h5RestartTimer) {
+    clearTimeout(h5RestartTimer);
+    h5RestartTimer = null;
+  }
   try {
     if (h5Qr.isRunning()) {
       await h5Qr.stop();
@@ -597,6 +697,11 @@ async function restartHtml5QrScanner(session, startQr) {
     return;
   }
   if (session === scanSession) {
+    // #region debug-point scan-cam-freeze
+    dbgState.restarts++;
+    dbgLog('restart zxing');
+    // #endregion
+    watchZxVideo(session, startQr);
     h5RestartTimer = setTimeout(() => restartHtml5QrScanner(session, startQr), CAMERA_RESTART_MS);
   }
 }
@@ -613,27 +718,12 @@ function closeH5Scanner() {
   stopDbgSampler();
   dbgLog('close');
   dbgPost(true);
+  dbgState.active = false;
   // #endregion
   scanSession++; // 使当前会话所有在途回调/循环全部失效
   scanVisible.value = false;
   // 清理原生 BarcodeDetector 路径
-  if (nativeTimer) {
-    clearTimeout(nativeTimer);
-    nativeTimer = null;
-  }
-  if (nativeRestartTimer) {
-    clearTimeout(nativeRestartTimer);
-    nativeRestartTimer = null;
-  }
-  if (nativeStream) {
-    try { nativeStream.getTracks().forEach((t) => t.stop()); } catch (e) { /* 忽略 */ }
-    nativeStream = null;
-  }
-  if (nativeVideo) {
-    try { nativeVideo.srcObject = null; } catch (e) { /* 忽略 */ }
-    try { nativeVideo.remove(); } catch (e) { /* 忽略 */ }
-    nativeVideo = null;
-  }
+  cleanupNativeScanner();
   // 清理 html5-qrcode 路径
   if (h5RestartTimer) {
     clearTimeout(h5RestartTimer);
