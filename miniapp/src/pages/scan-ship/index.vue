@@ -260,8 +260,15 @@ function openH5Scanner() {
       if (!h5Qr) h5Qr = new Html5Qrcode('scan-reader');
       h5Qr.start(
         { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 250, height: 150 } },
+        {
+          // 低 fps 减轻解码压力,避免画面卡顿;qrbox 用百分比覆盖更大区域,一维码更易命中
+          fps: 5,
+          qrbox: { width: '90%', height: '50%' },
+          disableFlip: false,
+        },
         (decodedText) => {
+          // 已关闭/已识别成功:阻止重复触发,避免持续搜索
+          if (!scanVisible.value) return;
           const code = (decodedText || '').trim();
           if (!code) return;
           closeH5Scanner();
@@ -281,11 +288,19 @@ function openH5Scanner() {
 }
 function closeH5Scanner() {
   scanVisible.value = false;
-  if (h5Qr) {
+  const qr = h5Qr;
+  h5Qr = null;
+  if (qr) {
     try {
-      if (h5Qr.isRunning()) h5Qr.stop().catch(() => {});
+      // stop() 停止扫描,clear() 释放摄像头流和 UI,彻底清理防止资源泄漏
+      if (qr.isRunning()) {
+        qr.stop()
+          .then(() => { try { qr.clear(); } catch (e) { /* 忽略 */ } })
+          .catch(() => { /* 忽略 */ });
+      } else {
+        qr.clear();
+      }
     } catch (e) { /* 忽略 */ }
-    h5Qr = null;
   }
 }
 onUnload(() => closeH5Scanner());
@@ -1116,11 +1131,15 @@ onPullDownRefresh(async () => {
 .scan-reader {
   width: 100%;
   max-width: 640rpx;
+  height: 640rpx;
   margin-top: 100rpx;
+  overflow: hidden;
 }
 .scan-reader video {
   width: 100%;
+  height: 100%;
   border-radius: 16rpx;
+  object-fit: cover;
 }
 .scan-tip {
   color: #cccccc;
