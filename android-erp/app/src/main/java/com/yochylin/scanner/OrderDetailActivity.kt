@@ -490,6 +490,40 @@ class OrderDetailActivity : ComponentActivity() {
         return card
     }
 
+    /** 打开平台 APP（deep link，如已安装）；否则用浏览器打开平台搜索页 */
+    private fun openPlatformApp(platform: String?, sn: String?) {
+        if (sn.isNullOrBlank()) {
+            toast("无采购单号")
+            return
+        }
+        val (scheme, webUrl) = platformDeepLink(platform, sn)
+        val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse(scheme)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (packageManager.resolveActivity(appIntent, 0) != null) {
+            runCatching {
+                startActivity(appIntent)
+                return
+            }.onFailure { /* 拉起失败，走网页兜底 */ }
+        }
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure { toast("未找到可跳转的应用") }
+    }
+
+    /** 平台 → (deep link scheme, 网页搜索/订单页 URL) */
+    private fun platformDeepLink(platform: String?, sn: String): Pair<String, String> {
+        val enc = Uri.encode(sn)
+        return when (platform?.lowercase()) {
+            "pdd", "拼多多" -> "pinduoduo://" to "https://mobile.yangkeduo.com/search_result.html?search_key=$enc"
+            "1688", "alibaba", "阿里巴巴" -> "wireless1688://" to "https://s.1688.com/selloffer/offer_search.htm?keywords=$enc"
+            "taobao", "淘宝" -> "taobao://" to "https://s.taobao.com/search?q=$enc"
+            "tmall", "天猫" -> "tmall://" to "https://s.tmall.com/search?q=$enc"
+            "douyin", "抖音", "抖音小店" -> "snssdk1128://" to "https://www.douyin.com/search/$enc"
+            "amazon", "亚马逊" -> "https://www.amazon.com/gp/your-account/order-details?orderID=$enc" to "https://www.amazon.com/gp/your-account/order-details?orderID=$enc"
+            "ozon" -> "https://seller.ozon.ru/app/orders/search?search=$enc" to "https://seller.ozon.ru/app/orders/search?search=$enc"
+            else -> "https://www.google.com/search?q=$enc" to "https://www.google.com/search?q=$enc"
+        }
+    }
+
     private fun buildPurchaseGoodsRow(pi: com.yochylin.scanner.model.PurchaseItem): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
