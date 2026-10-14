@@ -257,19 +257,26 @@ function openH5Scanner() {
   scanVisible.value = true;
   nextTick(() => {
     try {
-      if (!h5Qr) h5Qr = new Html5Qrcode('scan-reader');
+      if (!h5Qr) {
+        // 优先启用浏览器原生 BarcodeDetector(Chrome/安卓支持,解码在独立进程,不阻塞画面)
+        // 不支持时自动回退到 ZXing JS 解码
+        h5Qr = new Html5Qrcode('scan-reader', {
+          experimentalFeatures: {
+            useBarCodeDetectorIfSupported: true,
+          },
+        });
+      }
       h5Qr.start(
         { facingMode: 'environment' },
         {
-          // 限制摄像头分辨率(640x480) + 缩小解码区域 + 低 fps:
-          // 避免每帧从超大画面裁剪解码导致 CPU 满载,画面开启几秒后卡顿
+          // 分辨率设硬上限(<=640x480),避免小米等旗舰机后置默认高分辨率导致解码开销过大
           fps: 5,
           qrbox: { width: '70%', height: '40%' },
           disableFlip: false,
           videoConstraints: {
             facingMode: { ideal: 'environment' },
-            width: { ideal: 640 },
-            height: { ideal: 480 },
+            width: { ideal: 640, max: 640 },
+            height: { ideal: 480, max: 480 },
           },
         },
         (decodedText) => {
