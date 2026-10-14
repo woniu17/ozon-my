@@ -175,9 +175,20 @@
       {{ searchedOnce ? '未找到匹配订单' : '输入单号后回车搜索' }}
     </view>
 
-    <!-- 今日发货记录 -->
-    <view v-if="records.length" class="card records">
-      <view class="section-title">今日已交运({{ records.length }})</view>
+    <!-- 发货记录(今日/昨日) -->
+    <view class="card records">
+      <view class="rec-head">
+        <view class="rec-tabs">
+          <view
+            v-for="t in RECORD_TABS"
+            :key="t.key"
+            class="rec-tab"
+            :class="{ on: recordTab === t.key }"
+            @click="switchRecordTab(t.key)"
+          >{{ t.label }}{{ counts[t.key] != null ? `(${counts[t.key]})` : '' }}</view>
+        </view>
+      </view>
+      <view v-if="!records.length" class="empty small">{{ recordTab === 'today' ? '今日暂无发货记录' : '昨日暂无发货记录' }}</view>
       <view v-for="r in records" :key="r.id" class="rec-row">
         <text class="rec-store">{{ r.storeName }}</text>
         <text class="rec-posting">{{ r.postingNumber }}</text>
@@ -208,6 +219,13 @@ const correctWeights = reactive({});
 const correctErr = reactive({});
 const records = ref([]);
 const banner = reactive({ type: '', text: '' });
+// 发货记录(今日/昨日切换,与 web 端 RECORD_TABS 同口径)
+const RECORD_TABS = [
+  { key: 'today', label: '今日' },
+  { key: 'yesterday', label: '昨日' },
+];
+const recordTab = ref('today');
+const counts = reactive({ today: 0, yesterday: 0 });
 
 // ── 与 web 端 ScanShip 同口径的展示辅助 ──
 const OPERATE_LABELS = {
@@ -316,6 +334,30 @@ function profitCalc(pkg) {
     main: `利润(估) = 订单 ${n2(orderAmount)} − 佣金 ${n2(p.commission)}(订单×16%,配送隐含) − 采购 ${n2(purchase)} = ${fmtMoney(p.profit)}(无重量,配送未单独估算)`,
     rates: `${saleRate} · ${costRate}`,
   };
+}
+
+// 打印发货/更正重量后,按新重量本地重算利润(预估口径,公式与后端 computeProfit 一致)
+// 真实应计口径(estimated=false)/已取消/已退货的利润不随重量变化,不重算
+const EST_COMMISSION_RATE = 0.16;   // 预估佣金率(对齐后端 DEFAULT_COMMISSION_RATE)
+const DELIVERY_BASE_CNY = 3.37;     // 国际配送费公式(对齐后端)
+const DELIVERY_PER_G_CNY = 0.0281;
+function recomputeProfitByWeight(pkg, g) {
+  const p = pkg.profit;
+  if (!p || p.estimated === false || p.cancelled || p.returned) return;
+  const orderAmount = Number(pkg.orderAmount) || 0;
+  const purchase = Number(pkg.totalPurchaseAmount) || 0;
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const commission = round2(orderAmount * EST_COMMISSION_RATE);
+  const delivery = round2(DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * g);
+  const escrow = round2(orderAmount - commission - delivery);
+  const profit = round2(escrow - purchase);
+  p.commission = commission;
+  p.delivery = delivery;
+  p.escrow = escrow;
+  p.profit = profit;
+  p.weightG = g;
+  p.profitRateSale = orderAmount > 0 ? Math.round((profit / orderAmount) * 10000) / 100 : null;
+  p.profitRateCost = purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null;
 }
 
 // 最迟发货剩余时间(颜色分级:已超时=红 / <24h=红 / <48h=橙)
@@ -439,6 +481,8 @@ async function onSubmitShip(pkg) {
     await markPrinted(pkg.id);
     pkg.operateStatus = 'ship_success';
     pkg.weightG = g;
+    // 打印发货后按称重重量重算利润(预估口径,国际配送费随重量变化)
+    recomputeProfitByWeight(pkg, g);
     uni.showToast({ title: '已交运 ' + pkg.postingNumber, icon: 'none' });
     openLabel(pkg).catch(() => {});
     loadRecords();
@@ -475,6 +519,8 @@ async function onCorrectWeight(pkg) {
   try {
     await correctShipWeight(pkg.id, g);
     pkg.weightG = g;
+    // 更正重量后本地重算利润(预估口径,国际配送费随重量变化)
+    recomputeProfitByWeight(pkg, g);
     correctWeights[pkg.id] = '';
     uni.showToast({ title: '重量已更正', icon: 'none' });
   } catch (e) {
@@ -485,12 +531,28 @@ async function onCorrectWeight(pkg) {
 }
 
 async function loadRecords() {
+  const day = recordTab.value;
   try {
-    const data = await getScanShipRecords({ day: 'today', page: 1, pageSize: 8 });
-    records.value = data?.records || [];
+    // 注意:后端返回字段是 packages(非 records),与 /list 同源
+    const data = await getScanShipRecords({ day, page: 1, pageSize: 8 });
+    records.value = data?.packages || [];
+    counts[day] = data?.total || 0;
+  } catch (e) {
+    records.value = [];
+  }
+  // 静默补另一个 tab 的数量(仅取 total)
+  const other = day === 'today' ? 'yesterday' : 'today';
+  try {
+    const d2 = await getScanShipRecords({ day: other, page: 1, pageSize: 1 });
+    counts[other] = d2?.total || 0;
   } catch (e) {
     /* 静默 */
   }
+}
+function switchRecordTab(tab) {
+  if (recordTab.value === tab) return;
+  recordTab.value = tab;
+  loadRecords();
 }
 
 onLoad(() => {
@@ -869,6 +931,25 @@ onPullDownRefresh(async () => {
 .records {
   margin-top: 4rpx;
 }
+.rec-head {
+  margin-bottom: 8rpx;
+}
+.rec-tabs {
+  display: flex;
+  gap: 12rpx;
+}
+.rec-tab {
+  font-size: 23rpx;
+  color: #4e5969;
+  background: #f2f3f5;
+  border-radius: 999rpx;
+  padding: 6rpx 20rpx;
+}
+.rec-tab.on {
+  color: #ffffff;
+  background: #165dff;
+  font-weight: 600;
+}
 .section-title {
   font-size: 27rpx;
   font-weight: 600;
@@ -912,5 +993,9 @@ onPullDownRefresh(async () => {
   padding: 80rpx 0;
   color: #a6abb3;
   font-size: 26rpx;
+}
+.empty.small {
+  padding: 30rpx 0;
+  font-size: 23rpx;
 }
 </style>
