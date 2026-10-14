@@ -12,6 +12,12 @@
         @confirm="doSearch"
       />
       <text v-if="keyword" class="search-clear" @click="clearSearch">×</text>
+      <!-- #ifdef H5 -->
+      <text class="scan-btn" @click="openH5Scanner">📷</text>
+      <!-- #endif -->
+      <!-- #ifdef MP-WEIXIN -->
+      <text class="scan-btn" @click="scanCode">📷</text>
+      <!-- #endif -->
     </view>
     <view class="hint">支持:Ozon单号 / 包裹号 / 物流号 / offer_id / SKU / 采购单号 / 采购物流单号</view>
 
@@ -196,16 +202,31 @@
         <text class="rec-time">{{ fmtTime(r.waybillPrintedAt || r.createdAt) }}</text>
       </view>
     </view>
+
+    <!-- #ifdef H5 -->
+    <!-- 摄像头扫码遮罩 -->
+    <view v-if="scanVisible" class="scan-mask">
+      <view class="scan-header">
+        <text class="scan-title">扫描面单条码</text>
+        <text class="scan-close" @click="closeH5Scanner">✕</text>
+      </view>
+      <view id="scan-reader" class="scan-reader"></view>
+      <view class="scan-tip">将快递单号 / 面单条码放入框内，自动识别并搜索</view>
+    </view>
+    <!-- #endif -->
   </view>
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue';
-import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
+import { ref, reactive, nextTick } from 'vue';
+import { onLoad, onPullDownRefresh, onUnload } from '@dcloudio/uni-app';
 import {
   getOrderList, shipPackage, scanShipSubmit, correctShipWeight, getScanShipRecords, fetchPackageLabel, markPrinted,
 } from '../../api/order.js';
 import { fmtMoney, fmtTime, fmtRate } from '../../utils/fmt.js';
+// #ifdef H5
+import { Html5Qrcode } from 'html5-qrcode';
+// #endif
 
 const keyword = ref('');
 const searching = ref(false);
@@ -226,6 +247,65 @@ const RECORD_TABS = [
 ];
 const recordTab = ref('today');
 const counts = reactive({ today: 0, yesterday: 0 });
+
+// ── 扫码识别(快递单号/面单条码) ──
+// #ifdef H5
+// H5:html5-qrcode(ZXing) 摄像头实时识别二维码/一维码,需 HTTPS 环境(浏览器安全限制)
+const scanVisible = ref(false);
+let h5Qr = null;
+function openH5Scanner() {
+  scanVisible.value = true;
+  nextTick(() => {
+    try {
+      if (!h5Qr) h5Qr = new Html5Qrcode('scan-reader');
+      h5Qr.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 250, height: 150 } },
+        (decodedText) => {
+          const code = (decodedText || '').trim();
+          if (!code) return;
+          closeH5Scanner();
+          keyword.value = code;
+          doSearch();
+        },
+        () => { /* 每帧未识别,忽略 */ }
+      ).catch(() => {
+        uni.showToast({ title: '摄像头不可用(需HTTPS)', icon: 'none' });
+        closeH5Scanner();
+      });
+    } catch (e) {
+      uni.showToast({ title: '扫码初始化失败', icon: 'none' });
+      closeH5Scanner();
+    }
+  });
+}
+function closeH5Scanner() {
+  scanVisible.value = false;
+  if (h5Qr) {
+    try {
+      if (h5Qr.isRunning()) h5Qr.stop().catch(() => {});
+    } catch (e) { /* 忽略 */ }
+    h5Qr = null;
+  }
+}
+onUnload(() => closeH5Scanner());
+// #endif
+
+// #ifdef MP-WEIXIN
+// 微信小程序:调起微信原生扫码(二维码/一维码)
+function scanCode() {
+  uni.scanCode({
+    scanType: ['barCode', 'qrCode'],
+    success: (res) => {
+      const code = (res.result || '').trim();
+      if (!code) return;
+      keyword.value = code;
+      doSearch();
+    },
+    fail: () => { /* 用户取消或失败,忽略 */ },
+  });
+}
+// #endif
 
 // ── 与 web 端 ScanShip 同口径的展示辅助 ──
 const OPERATE_LABELS = {
@@ -590,6 +670,10 @@ onPullDownRefresh(async () => {
   font-size: 36rpx;
   color: #c9cdd4;
   padding: 0 8rpx;
+}
+.scan-btn {
+  font-size: 34rpx;
+  padding: 4rpx 8rpx;
 }
 .hint {
   margin-top: 10rpx;
@@ -997,5 +1081,52 @@ onPullDownRefresh(async () => {
 .empty.small {
   padding: 30rpx 0;
   font-size: 23rpx;
+}
+/* ── H5 摄像头扫码遮罩 ── */
+.scan-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #000;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.scan-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24rpx 36rpx;
+  box-sizing: border-box;
+}
+.scan-title {
+  color: #ffffff;
+  font-size: 30rpx;
+  font-weight: 600;
+}
+.scan-close {
+  color: #ffffff;
+  font-size: 44rpx;
+  padding: 8rpx 20rpx;
+}
+.scan-reader {
+  width: 100%;
+  max-width: 640rpx;
+  margin-top: 100rpx;
+}
+.scan-reader video {
+  width: 100%;
+  border-radius: 16rpx;
+}
+.scan-tip {
+  color: #cccccc;
+  font-size: 24rpx;
+  margin-top: 48rpx;
+  text-align: center;
+  padding: 0 60rpx;
 }
 </style>
