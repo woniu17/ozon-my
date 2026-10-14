@@ -133,6 +133,44 @@ app.get('/admin', (_req, res) => {
   res.sendFile(join(PUBLIC_DIR, 'admin.html'));
 });
 
+// #region debug-point scan-cam-freeze (临时诊断端点:采集扫码摄像头卡顿的运行时证据;定位后整体移除)
+// 手机端页面为 HTTPS,无法直连本地 HTTP Debug Server(混合内容拦截),
+// 故复用本服务作同源日志汇集点。仅接受 JSON,落盘 /tmp/scan-cam-freeze.ndjson,上限 5MB。
+import fs from 'node:fs';
+const DBG_SCAN_PERF_FILE = '/tmp/scan-cam-freeze.ndjson';
+app.post('/debug/scan-perf', (req, res) => {
+  try {
+    let body = req.body;
+    if (typeof body === 'string') body = JSON.parse(body);
+    if (!body || typeof body !== 'object') return res.status(400).json({ ok: false });
+    const size = fs.existsSync(DBG_SCAN_PERF_FILE) ? fs.statSync(DBG_SCAN_PERF_FILE).size : 0;
+    if (size > 5 * 1024 * 1024) return res.status(413).json({ ok: false, err: 'cap' });
+    fs.appendFileSync(DBG_SCAN_PERF_FILE, JSON.stringify({ at: Date.now(), ...body }) + '\n');
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false });
+  }
+});
+app.get('/debug/scan-perf', (_req, res) => {
+  try {
+    if (!fs.existsSync(DBG_SCAN_PERF_FILE)) return res.json({ ok: true, lines: 0, bytes: 0, tail: [] });
+    const txt = fs.readFileSync(DBG_SCAN_PERF_FILE, 'utf8');
+    const lines = txt.trim() ? txt.trim().split('\n') : [];
+    res.json({ ok: true, lines: lines.length, bytes: Buffer.byteLength(txt), tail: lines.slice(-2) });
+  } catch (e) {
+    res.status(500).json({ ok: false });
+  }
+});
+app.delete('/debug/scan-perf', (_req, res) => {
+  try {
+    if (fs.existsSync(DBG_SCAN_PERF_FILE)) fs.unlinkSync(DBG_SCAN_PERF_FILE);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false });
+  }
+});
+// #endregion
+
 // 鉴权(放行 /health、/auth/login-password 等)
 // ── Ozon Webhook 推送(2026-09-17 自 ozon-webhook 并入)──────────
 // 挂在 authMiddleware 之前:免 JWT,IP 白名单在 router 内部自鉴(POST /webhook/ozon)

@@ -211,10 +211,13 @@
         <text class="scan-close" @click="closeH5Scanner">✕</text>
       </view>
       <view id="scan-reader" class="scan-reader" :class="{ 'native-frame': barcodeDetectorSupported }"></view>
-      <view class="scan-engine" :class="{ ok: barcodeDetectorSupported }">
+      <view class="scan-engine" :class="{ ok: barcodeDetectorSupported }" @click="onEngineTap">
         识别引擎: {{ barcodeDetectorSupported ? 'BarcodeDetector 原生解码' : 'ZXing 兼容解码(不支持BarcodeDetector)' }}
       </view>
       <view class="scan-tip">将快递单号 / 面单条码放入框内，自动识别并搜索</view>
+      <!-- #region debug-point scan-cam-freeze (临时诊断插桩) -->
+      <view v-if="dbgOn" class="dbg-overlay"><text>{{ dbgText }}</text></view>
+      <!-- #endregion -->
     </view>
     <!-- #endif -->
   </view>
@@ -280,6 +283,102 @@ function detectBarcodeDetectorSupport() {
 }
 const barcodeDetectorSupported = detectBarcodeDetectorSupport();
 
+// #region debug-point scan-cam-freeze (临时诊断插桩:采集摄像头预览长时间运行后卡顿的运行时证据;定位后整体移除)
+// 使用:三击遮罩内"识别引擎"行开关屏上诊断(localStorage 记忆);每 2s 采样一次,
+// 每 ~30s 部分上报,关闭扫码/页面隐藏时终报(同源 /debug/scan-perf,防页面硬挂丢证据)
+const dbgOn = ref(false);
+const dbgText = ref('');
+const dbgState = { t0: 0, wall: 0, seq: 0, rvfc: 0, restarts: 0, det: [], samples: [], events: [] };
+let dbgTimer = null;
+try { dbgOn.value = localStorage.getItem('scandbg') === '1'; } catch (e) { /* 忽略 */ }
+function dbgLog(ev) {
+  dbgState.events.push({ t: Math.round((Date.now() - dbgState.t0) / 1000), ev });
+  if (dbgState.events.length > 120) dbgState.events.shift();
+}
+function dbgVideo() {
+  return nativeVideo || (typeof document !== 'undefined' && document.querySelector('#scan-reader video')) || null;
+}
+// 采样器:每 2s 记录预览健康度并在 overlay 上给出实时判定
+//   rvfc = requestVideoFrameCallback 累计已呈现帧(元素渲染层);tf = totalVideoFrames(解码/轨道层)
+//   rvfcΔ=0 且 tfΔ>0 → 渲染停滞(H1 元素级);tfΔ=0 且 rvfcΔ=0 → 轨道停滞(H3 摄像头级);
+//   dt 异常增大 → 主线程阻塞(H2);heap 单调涨 → 内存泄漏(H2)。
+function startDbgSampler(session) {
+  stopDbgSampler();
+  dbgState.wall = Date.now();
+  dbgTimer = setInterval(() => {
+    if (session !== scanSession) { stopDbgSampler(); return; }
+    const v = dbgVideo();
+    if (!v) return;
+    const now = Date.now();
+    const dt = Math.round((now - dbgState.wall) / 1000);
+    dbgState.wall = now;
+    const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+    const track = nativeStream && nativeStream.getVideoTracks ? nativeStream.getVideoTracks()[0] : null;
+    const s = {
+      t: Math.round((now - dbgState.t0) / 1000), dt, vis: document.hidden ? 1 : 0,
+      rdy: v.readyState,
+      tf: q ? q.totalVideoFrames : -1, df: q ? q.droppedVideoFrames : -1,
+      rvfc: dbgState.rvfc,
+      heap: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : -1,
+      trk: track && track.getSettings ? Math.round(track.getSettings().frameRate || 0) : -1,
+      det: dbgState.det.length ? Math.round(dbgState.det.reduce((a, b) => a + b, 0) / dbgState.det.length) : -1,
+      detMax: dbgState.det.length ? Math.max(...dbgState.det) : -1,
+      rst: dbgState.restarts,
+    };
+    const prev = dbgState.samples[dbgState.samples.length - 1];
+    const tfD = prev && s.tf >= 0 && prev.tf >= 0 ? s.tf - prev.tf : null;
+    const rvD = prev ? s.rvfc - prev.rvfc : null;
+    dbgState.samples.push(s);
+    if (dbgState.samples.length > 600) dbgState.samples.shift();
+    let verdict = '正常';
+    if (s.rdy < 2) verdict = '流切换中(忽略)';
+    else if (s.vis) verdict = '后台(节流,忽略)';
+    else if (dt >= 4) verdict = '采样停滞→主线程阻塞嫌疑(H2)';
+    else if (tfD === 0 && rvD === 0) verdict = '轨道停滞→摄像头级(H3)';
+    else if (rvD === 0 && tfD > 0) verdict = '渲染停滞→video元素级(H1)';
+    dbgText.value = `t=${s.t}s dt=${dt} rdy=${s.rdy} tf=${s.tf}(+${tfD === null ? '-' : tfD}) df=${s.df} rvfc=${s.rvfc}(+${rvD === null ? '-' : rvD}) trk=${s.trk} heap=${s.heap}MB det=${s.det}/${s.detMax}ms rst=${s.rst}\n判定: ${verdict}`;
+    if (dbgOn.value && dbgState.samples.length % 15 === 1) dbgPost(false);
+  }, 2000);
+}
+function stopDbgSampler() {
+  if (dbgTimer) { clearInterval(dbgTimer); dbgTimer = null; }
+}
+function dbgPost(final) {
+  if (!dbgState.samples.length) return;
+  const payload = {
+    final: !!final, seq: ++dbgState.seq, ua: navigator.userAgent,
+    samples: dbgState.samples.slice(-400), events: dbgState.events.slice(-80),
+  };
+  try {
+    fetch('/debug/scan-perf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }).catch(() => {});
+  } catch (e) { /* 忽略 */ }
+}
+// 三击"识别引擎"开关诊断 overlay
+let dbgEngTaps = 0;
+let dbgEngAt = 0;
+function onEngineTap() {
+  const now = Date.now();
+  if (now - dbgEngAt > 1500) dbgEngTaps = 0;
+  dbgEngAt = now;
+  dbgEngTaps++;
+  if (dbgEngTaps >= 3) {
+    dbgEngTaps = 0;
+    dbgOn.value = !dbgOn.value;
+    try { localStorage.setItem('scandbg', dbgOn.value ? '1' : '0'); } catch (e) { /* 忽略 */ }
+    uni.showToast({ title: dbgOn.value ? '诊断已开启(冻结时截图此区域)' : '诊断已关闭', icon: 'none' });
+    dbgText.value = '采集中...';
+  }
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => { if (dbgState.samples.length) dbgPost(true); });
+}
+// #endregion
+
 // 摄像头约束(低分辨率 + 低帧率,降低编码/解码开销)
 function cameraVideoConstraints() {
   return {
@@ -332,6 +431,27 @@ async function startNativeScanner(session) {
   nativeVideo = el;
   await el.play();
   if (session !== scanSession) return; // 播放期间被关闭
+  // #region debug-point scan-cam-freeze
+  dbgState.t0 = Date.now(); dbgState.wall = Date.now();
+  dbgState.rvfc = 0; dbgState.restarts = 0; dbgState.seq = 0;
+  dbgState.det.length = 0; dbgState.samples.length = 0; dbgState.events.length = 0;
+  dbgLog('open native');
+  if (el.requestVideoFrameCallback) {
+    const rvcb = () => {
+      if (session !== scanSession) return;
+      dbgState.rvfc++;
+      el.requestVideoFrameCallback(rvcb);
+    };
+    el.requestVideoFrameCallback(rvcb);
+  }
+  const dbgTrack = stream.getVideoTracks()[0];
+  if (dbgTrack) {
+    dbgTrack.addEventListener('mute', () => dbgLog('track mute'));
+    dbgTrack.addEventListener('unmute', () => dbgLog('track unmute'));
+    dbgTrack.addEventListener('ended', () => dbgLog('track ended'));
+  }
+  startDbgSampler(session);
+  // #endregion
   const detector = new BarcodeDetector();
   // 复用的小画布:每帧把视频缩到 480x360 再交给 BarcodeDetector,
   // 避免反复直接 detect(video) 在浏览器内部累积帧缓冲导致长时间运行后卡顿
@@ -348,7 +468,12 @@ async function startNativeScanner(session) {
     let codes = null;
     try {
       ctx.drawImage(nativeVideo, 0, 0, canvas.width, canvas.height);
+      // #region debug-point scan-cam-freeze
+      const dbgD0 = performance.now();
       codes = await detector.detect(canvas);
+      dbgState.det.push(Math.round(performance.now() - dbgD0));
+      if (dbgState.det.length > 40) dbgState.det.shift();
+      // #endregion
     } catch (e) { /* 单帧识别失败忽略 */ }
     if (session !== scanSession) return; // 检测期间被关闭/重开,丢弃旧结果
     if (codes && codes.length) {
@@ -368,6 +493,10 @@ async function startNativeScanner(session) {
 // 重启原生路径摄像头流(仅更换流,不重建 video 元素,检测循环继续复用)
 async function restartNativeStream(session) {
   if (session !== scanSession) return;
+  // #region debug-point scan-cam-freeze
+  dbgState.restarts++;
+  dbgLog('restart');
+  // #endregion
   if (nativeStream) {
     try { nativeStream.getTracks().forEach((t) => t.stop()); } catch (e) { /* 忽略 */ }
     nativeStream = null;
@@ -386,6 +515,14 @@ async function restartNativeStream(session) {
       nativeVideo.srcObject = stream;
       try { await nativeVideo.play(); } catch (e) { /* 忽略 */ }
     }
+    // #region debug-point scan-cam-freeze
+    const dbgTrack2 = stream.getVideoTracks()[0];
+    if (dbgTrack2) {
+      dbgTrack2.addEventListener('mute', () => dbgLog('track mute(restart)'));
+      dbgTrack2.addEventListener('unmute', () => dbgLog('track unmute(restart)'));
+      dbgTrack2.addEventListener('ended', () => dbgLog('track ended(restart)'));
+    }
+    // #endregion
   } catch (e) {
     if (session === scanSession) {
       uni.showToast({ title: '摄像头不可用(需HTTPS)', icon: 'none' });
@@ -472,6 +609,11 @@ function onScanned(code) {
 }
 
 function closeH5Scanner() {
+  // #region debug-point scan-cam-freeze
+  stopDbgSampler();
+  dbgLog('close');
+  dbgPost(true);
+  // #endregion
   scanSession++; // 使当前会话所有在途回调/循环全部失效
   scanVisible.value = false;
   // 清理原生 BarcodeDetector 路径
@@ -1384,4 +1526,23 @@ onPullDownRefresh(async () => {
   text-align: center;
   padding: 0 60rpx;
 }
+/* #region debug-point scan-cam-freeze (临时诊断插桩) */
+.dbg-overlay {
+  width: 100%;
+  max-width: 660rpx;
+  margin-top: 16rpx;
+  padding: 10rpx 14rpx;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.65);
+  border: 1rpx solid #2f9e44;
+  border-radius: 10rpx;
+  color: #69db7c;
+  font-size: 19rpx;
+  font-family: 'Courier New', monospace;
+  line-height: 1.6;
+  word-break: break-all;
+  white-space: pre-line;
+  text-align: left;
+}
+/* #endregion */
 </style>
