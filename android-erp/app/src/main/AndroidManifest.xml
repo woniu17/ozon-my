@@ -7,6 +7,45 @@
         android:name="android.hardware.camera"
         android:required="true" />
 
+    <!-- Android 11+ 包可见性：允许探测/拉起拼多多、淘宝、1688 及其自定义 scheme -->
+    <queries>
+        <package android:name="com.xunmeng.pinduoduo" />
+        <package android:name="com.taobao.taobao" />
+        <package android:name="com.alibaba.wireless" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="pinduoduo" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="pdd" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="pddopen" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="taobao" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="tbopen" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="tmall" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="wireless1688" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="snssdk1128" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
