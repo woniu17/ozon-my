@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/bg_card"
+    android:padding="@dimen/card_padding"
+    android:layout_marginBottom="10dp">
+
+    <!-- 头部：货件号 + 分类 + 利润 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/fPosting"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="13sp"
+            android:textColor="#1f2329"
+            android:typeface="monospace"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/fCategory"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="10sp"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="2dp" />
+
+        <TextView
+            android:id="@+id/fProfit"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:textSize="14sp"
+            android:typeface="monospace"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- 店铺 · 时间 -->
+    <TextView
+        android:id="@+id/fMeta"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="10sp"
+        android:textColor="#86909c" />
+
+    <!-- 金额行 -->
+    <TextView
+        android:id="@+id/fAmounts"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="10sp"
+        android:textColor="#4e5969" />
+
+    <!-- 应计类型 chips -->
+    <LinearLayout
+        android:id="@+id/fChipsContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="6dp" />
+
+</LinearLayout>

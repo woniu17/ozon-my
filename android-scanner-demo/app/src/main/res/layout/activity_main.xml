@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:background="@color/page_bg">
+
+    <!-- 顶部标题栏 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/header_height"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@color/primary"
+        android:paddingHorizontal="12dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="扫描发货"
+            android:textColor="#ffffff"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/orderProcessBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="订单"
+            android:textColor="#ffffff"
+            android:textSize="12sp"
+            android:padding="6dp" />
+
+        <TextView
+            android:id="@+id/financeBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="财务"
+            android:textColor="#ffffff"
+            android:textSize="12sp"
+            android:padding="6dp" />
+
+        <TextView
+            android:id="@+id/statsBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="统计"
+            android:textColor="#ffffff"
+            android:textSize="12sp"
+            android:padding="6dp" />
+
+        <TextView
+            android:id="@+id/intranetBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="公网"
+            android:textColor="#ffffff"
+            android:textSize="10sp"
+            android:padding="4dp" />
+
+        <TextView
+            android:id="@+id/logoutBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="退出"
+            android:textColor="#ffffff"
+            android:textSize="12sp"
+            android:padding="6dp" />
+    </LinearLayout>
+
+    <!-- 搜索区 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#ffffff"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="8dp">
+
+        <EditText
+            android:id="@+id/searchInput"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_input"
+            android:paddingHorizontal="12dp"
+            android:hint="扫快递单号 / 货件号 / SKU / 采购单号"
+            android:textSize="14sp"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_placeholder"
+            android:imeOptions="actionSearch"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/scanBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📷"
+            android:textSize="22sp"
+            android:padding="8dp" />
+
+        <TextView
+            android:id="@+id/searchBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="搜索"
+            android:textColor="@color/primary"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:padding="8dp" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="4dp"
+        android:text="支持:Ozon单号 / 包裹号 / 物流号 / offer_id / SKU / 采购单号 / 采购物流单号"
+        android:textColor="@color/text_muted"
+        android:textSize="11sp" />
+
+    <!-- 状态横幅 -->
+    <TextView
+        android:id="@+id/bannerText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginTop="8dp"
+        android:padding="10dp"
+        android:textSize="13sp"
+        android:visibility="gone" />
+
+    <ProgressBar
+        android:id="@+id/progressBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="16dp"
+        android:visibility="gone" />
+
+    <!-- 结果 + 记录列表 -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recyclerView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:padding="12dp" />
+
+</LinearLayout>

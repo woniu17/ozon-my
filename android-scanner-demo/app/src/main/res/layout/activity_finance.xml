@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:background="@color/page_bg">
+
+    <!-- 顶部标题栏 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#165dff"
+        android:paddingHorizontal="12dp">
+
+        <TextView
+            android:id="@+id/financeBackBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="‹ 返回"
+            android:textColor="#ffffff"
+            android:textSize="15sp"
+            android:padding="8dp" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="财务统计"
+            android:textColor="#ffffff"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:gravity="center" />
+
+        <TextView
+            android:id="@+id/financeLogoutBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="退出"
+            android:textColor="#ffffff"
+            android:textSize="14sp"
+            android:padding="8dp" />
+    </LinearLayout>
+
+    <!-- 时间预设栏 -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none"
+        android:background="#ffffff">
+
+        <LinearLayout
+            android:id="@+id/presetContainer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="6dp" />
+    </HorizontalScrollView>
+
+    <!-- 区间提示 + 时区 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="4dp">
+
+        <TextView
+            android:id="@+id/rangeHint"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="当前统计区间:全部时间"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:maxLines="2" />
+
+        <TextView
+            android:id="@+id/tzBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="北京时间 ▾"
+            android:textSize="11sp"
+            android:textColor="#165dff"
+            android:background="#eef4ff"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp" />
+
+        <TextView
+            android:id="@+id/financeStoreBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="全部店铺 ▾"
+            android:textSize="11sp"
+            android:textColor="#165dff"
+            android:background="#eef4ff"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:layout_marginStart="8dp" />
+    </LinearLayout>
+
+    <!-- 汇总卡片容器 -->
+    <LinearLayout
+        android:id="@+id/summaryContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="6dp" />
+
+    <!-- 明细区 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#ffffff"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="8dp">
+
+        <TextView
+            android:id="@+id/detailTabSettled"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="已结算"
+            android:textSize="13sp"
+            android:gravity="center"
+            android:padding="8dp" />
+
+        <TextView
+            android:id="@+id/detailTabPending"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="未结算"
+            android:textSize="13sp"
+            android:gravity="center"
+            android:padding="8dp" />
+
+        <TextView
+            android:id="@+id/detailTabNonOrder"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="非订单应计"
+            android:textSize="13sp"
+            android:gravity="center"
+            android:padding="8dp" />
+    </LinearLayout>
+
+    <!-- 搜索行（订单明细） -->
+    <LinearLayout
+        android:id="@+id/financeSearchRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#ffffff"
+        android:paddingHorizontal="12dp"
+        android:paddingBottom="6dp"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/financeKeywordInput"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_input"
+            android:paddingHorizontal="12dp"
+            android:hint="搜索货件号"
+            android:textSize="13sp"
+            android:imeOptions="actionSearch"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/financeSearchBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="搜索"
+            android:textColor="#165dff"
+            android:textSize="14sp"
+            android:padding="8dp" />
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/financeProgress"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="10dp"
+        android:visibility="gone" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/financeRecyclerView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:padding="12dp" />
+
+    <TextView
+        android:id="@+id/financeLoadMoreTip"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textSize="12sp"
+        android:textColor="#a6abb3"
+        android:gravity="center"
+        android:padding="6dp"
+        android:visibility="gone" />
+
+</LinearLayout>

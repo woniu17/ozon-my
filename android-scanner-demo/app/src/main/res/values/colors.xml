@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 主色 -->
+    <color name="primary">#165dff</color>
+    <color name="primary_bg">#eef4ff</color>
+    <color name="primary_light">#5b8cff</color>
+
+    <!-- 页面与卡片 -->
+    <color name="page_bg">#f4f6f9</color>
+    <color name="card_bg">#ffffff</color>
+    <color name="card_border">#eef0f3</color>
+
+    <!-- 文本层级 -->
+    <color name="text_primary">#1d2129</color>
+    <color name="text_secondary">#4e5969</color>
+    <color name="text_muted">#86909c</color>
+    <color name="text_placeholder">#a6abb3</color>
+
+    <!-- 状态色 -->
+    <color name="success">#00b42a</color>
+    <color name="success_bg">#e8ffea</color>
+    <color name="warning">#d97706</color>
+    <color name="warning_bg">#fff7e6</color>
+    <color name="danger">#f53f3f</color>
+    <color name="danger_bg">#ffece8</color>
+
+    <!-- 中性 -->
+    <color name="neutral_bg">#f2f3f5</color>
+    <color name="divider">#eef0f3</color>
+</resources>

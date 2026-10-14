@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:background="@color/page_bg">
+
+    <!-- 顶部标题栏 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#165dff"
+        android:paddingHorizontal="12dp">
+
+        <TextView
+            android:id="@+id/statsBackBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="‹ 返回"
+            android:textColor="#ffffff"
+            android:textSize="15sp"
+            android:padding="8dp" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="订单统计"
+            android:textColor="#ffffff"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:gravity="center" />
+
+        <TextView
+            android:id="@+id/statsLogoutBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="退出"
+            android:textColor="#ffffff"
+            android:textSize="14sp"
+            android:padding="8dp" />
+    </LinearLayout>
+
+    <!-- 时间预设栏 -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none"
+        android:background="#ffffff">
+
+        <LinearLayout
+            android:id="@+id/statsPresetContainer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="6dp" />
+    </HorizontalScrollView>
+
+    <!-- 自然月快捷栏 -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none"
+        android:background="#f7f8fa">
+
+        <LinearLayout
+            android:id="@+id/statsMonthContainer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="4dp" />
+    </HorizontalScrollView>
+
+    <!-- 区间提示 + 时区 + 店铺 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="4dp">
+
+        <TextView
+            android:id="@+id/statsRangeHint"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="当前统计区间"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:maxLines="2" />
+
+        <TextView
+            android:id="@+id/statsTzBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="北京时间 ▾"
+            android:textSize="11sp"
+            android:textColor="#165dff"
+            android:background="#eef4ff"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp" />
+
+        <TextView
+            android:id="@+id/statsStoreBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="全部店铺 ▾"
+            android:textSize="11sp"
+            android:textColor="#165dff"
+            android:background="#eef4ff"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:layout_marginStart="8dp" />
+    </LinearLayout>
+
+    <!-- 总计卡片区 -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="8dp">
+
+        <LinearLayout
+            android:id="@+id/statsTotalContainer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
+
+    <ProgressBar
+        android:id="@+id/statsProgress"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="8dp"
+        android:visibility="gone" />
+
+    <!-- 店铺列表 -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/statsRecyclerView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:padding="12dp" />
+
+</LinearLayout>

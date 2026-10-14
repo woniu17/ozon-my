@@ -1,0 +1,460 @@
+package com.yochylin.scanner
+
+import android.app.AlertDialog
+import android.content.Intent
+import android.graphics.Color
+import android.os.Bundle
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.yochylin.scanner.adapter.OrderStatsAdapter
+import com.yochylin.scanner.adapter.fmtMoney
+import com.yochylin.scanner.adapter.fmtNum
+import com.yochylin.scanner.api.Api
+import com.yochylin.scanner.api.ApiException
+import com.yochylin.scanner.model.CountAmount
+import com.yochylin.scanner.model.OrderStatsStoresResponse
+import com.yochylin.scanner.model.OrderStatsSummary
+import com.yochylin.scanner.model.StoreItem
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
+
+/** 订单统计：跨店铺跨时间窗口的订单量级与金额概览 */
+class OrderStatsActivity : ComponentActivity() {
+
+    companion object {
+        private const val COLOR_PRIMARY = "#165dff"
+        private const val COLOR_MUTE = "#86909c"
+        private const val COLOR_TEXT = "#1f2329"
+        private const val MONTH_PRESET_COUNT = 6
+
+        private data class Preset(val key: String, val label: String)
+    }
+
+    private lateinit var presetContainer: LinearLayout
+    private lateinit var monthContainer: LinearLayout
+    private lateinit var rangeHint: TextView
+    private lateinit var tzBtn: TextView
+    private lateinit var storeBtn: TextView
+    private lateinit var totalContainer: LinearLayout
+    private lateinit var progressBar: ProgressBar
+    private lateinit var recyclerView: RecyclerView
+
+    private val adapter = OrderStatsAdapter()
+
+    private var tz = "Asia/Shanghai"
+    private var tzLabel = "北京时间"
+    private var from = ""
+    private var to = ""
+    private var activePreset = "today"
+
+    private var allStores: List<StoreItem> = emptyList()
+    private var selectedStoreIds: Set<String> = emptySet() // 空 = 全选
+
+    private val presets = listOf(
+        Preset("today", "今天"),
+        Preset("yesterday", "昨天"),
+        Preset("7d", "近7日"),
+        Preset("14d", "近14日"),
+        Preset("30d", "近30日"),
+        Preset("thisMonth", "本月"),
+        Preset("lastMonth", "上月"),
+        Preset("custom", "自定义"),
+    )
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        Session.init(this)
+        if (!Session.isLoggedIn) {
+            goLogin()
+            return
+        }
+
+        setContentView(R.layout.activity_order_stats)
+
+        presetContainer = findViewById(R.id.statsPresetContainer)
+        monthContainer = findViewById(R.id.statsMonthContainer)
+        rangeHint = findViewById(R.id.statsRangeHint)
+        tzBtn = findViewById(R.id.statsTzBtn)
+        storeBtn = findViewById(R.id.statsStoreBtn)
+        totalContainer = findViewById(R.id.statsTotalContainer)
+        progressBar = findViewById(R.id.statsProgress)
+        recyclerView = findViewById(R.id.statsRecyclerView)
+
+        recyclerView.layoutManager = LinearLayoutManager(this)
+        recyclerView.adapter = adapter
+
+        findViewById<TextView>(R.id.statsBackBtn).setOnClickListener { finish() }
+        findViewById<TextView>(R.id.statsLogoutBtn).setOnClickListener {
+            Session.clear()
+            goLogin()
+        }
+
+        tzBtn.text = "$tzLabel ▾"
+        tzBtn.setOnClickListener { showTzDialog() }
+        storeBtn.setOnClickListener { showStoreDialog() }
+
+        buildPresets()
+        buildMonths()
+        applyPreset("today")
+        loadStores()
+    }
+
+    // ── 时间预设 ──
+    private fun buildPresets() {
+        presetContainer.removeAllViews()
+        for ((i, p) in presets.withIndex()) {
+            val tv = TextView(this).apply {
+                text = p.label
+                textSize = 12f
+                setPadding(24, 9, 24, 9)
+                gravity = Gravity.CENTER
+            }
+            updateStyle(tv, p.key == activePreset)
+            tv.setOnClickListener { onPresetClick(p.key) }
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.rightMargin = 8
+            presetContainer.addView(tv, lp)
+        }
+    }
+
+    private fun refreshPresetStyles() {
+        for (i in 0 until presetContainer.childCount) {
+            val child = presetContainer.getChildAt(i)
+            if (child is TextView) updateStyle(child, presets[i].key == activePreset)
+        }
+        for (i in 0 until monthContainer.childCount) {
+            val child = monthContainer.getChildAt(i)
+            if (child is TextView) {
+                val key = "month:${months[i]}"
+                updateStyle(child, key == activePreset)
+            }
+        }
+    }
+
+    private fun updateStyle(tv: TextView, active: Boolean) {
+        tv.setTextColor(if (active) Color.WHITE else Color.parseColor("#4e5969"))
+        tv.setBackgroundResource(if (active) R.drawable.tab_active_bg else R.drawable.tab_normal_bg)
+    }
+
+    private fun onPresetClick(key: String) {
+        when (key) {
+            "custom" -> showCustomDialog()
+            else -> applyPreset(key)
+        }
+    }
+
+    private fun applyPreset(key: String) {
+        activePreset = key
+        val r = presetRange(key)
+        if (r != null) {
+            from = r.first
+            to = r.second
+            refreshPresetStyles()
+            updateRangeHint()
+            loadData()
+        }
+    }
+
+    private fun presetRange(key: String): Pair<String, String>? {
+        return when (key) {
+            "today" -> shiftLocalDays(0) to shiftLocalDays(1)
+            "yesterday" -> shiftLocalDays(-1) to shiftLocalDays(0)
+            "7d" -> shiftLocalDays(-6) to shiftLocalDays(1)
+            "14d" -> shiftLocalDays(-13) to shiftLocalDays(1)
+            "30d" -> shiftLocalDays(-29) to shiftLocalDays(1)
+            "thisMonth" -> {
+                val (y, m) = localDate()
+                firstOfMonth(y, m) to shiftLocalDays(1)
+            }
+            "lastMonth" -> {
+                val (y, m) = localDate()
+                val lm = if (m == 1) 12 else m - 1
+                val ly = if (m == 1) y - 1 else y
+                firstOfMonth(ly, lm) to firstOfMonth(y, m)
+            }
+            else -> null
+        }
+    }
+
+    // ── 自然月快捷 ──
+    private var months: List<String> = emptyList()
+
+    private fun buildMonths() {
+        monthContainer.removeAllViews()
+        val (y, m) = localDate()
+        months = buildList {
+            for (i in MONTH_PRESET_COUNT - 1 downTo 0) {
+                var my = y
+                var mm = m - i
+                while (mm <= 0) {
+                    mm += 12
+                    my -= 1
+                }
+                add("$my-${String.format("%02d", mm)}")
+            }
+        }
+        for ((i, ym) in months.withIndex()) {
+            val (y2, m2) = ym.split("-").map { it.toInt() }
+            val label = if (y2 == y) "${m2}月" else "${y2}年${m2}月"
+            val tv = TextView(this).apply {
+                text = label
+                textSize = 11f
+                setPadding(20, 8, 20, 8)
+                gravity = Gravity.CENTER
+            }
+            updateStyle(tv, "month:$ym" == activePreset)
+            tv.setOnClickListener {
+                activePreset = "month:$ym"
+                from = "$ym-01"
+                to = if (m2 == 12) "${y2 + 1}-01-01" else "$y2-${String.format("%02d", m2 + 1)}-01"
+                refreshPresetStyles()
+                updateRangeHint()
+                loadData()
+            }
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.rightMargin = 6
+            monthContainer.addView(tv, lp)
+        }
+    }
+
+    // ── 自定义 ──
+    private fun showCustomDialog() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 20, 40, 0)
+        }
+        val fromInput = EditText(this).apply {
+            hint = "开始日期 YYYY-MM-DD"
+            setText(from)
+        }
+        val toInput = EditText(this).apply {
+            hint = "结束日期 YYYY-MM-DD(排他)"
+            setText(to)
+        }
+        container.addView(fromInput)
+        container.addView(toInput)
+        AlertDialog.Builder(this)
+            .setTitle("自定义区间")
+            .setView(container)
+            .setPositiveButton("确定") { _, _ ->
+                val f = fromInput.text.toString().trim()
+                val t = toInput.text.toString().trim()
+                if (f.isEmpty() || t.isEmpty()) {
+                    toast("请填写完整日期")
+                } else {
+                    activePreset = "custom"
+                    from = f
+                    to = t
+                    refreshPresetStyles()
+                    updateRangeHint()
+                    loadData()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    // ── 时区 ──
+    private fun showTzDialog() {
+        val options = arrayOf("北京时间", "莫斯科时间")
+        val checked = if (tz == "Asia/Shanghai") 0 else 1
+        AlertDialog.Builder(this)
+            .setTitle("统计时区")
+            .setSingleChoiceItems(options, checked) { dialog, which ->
+                tz = if (which == 0) "Asia/Shanghai" else "Europe/Moscow"
+                tzLabel = options[which]
+                tzBtn.text = "$tzLabel ▾"
+                dialog.dismiss()
+                updateRangeHint()
+                // 预设随日界变化需重算
+                if (activePreset != "custom" && !activePreset.startsWith("month:")) {
+                    applyPreset(activePreset)
+                } else {
+                    loadData()
+                }
+            }
+            .show()
+    }
+
+    // ── 店铺 ──
+    private fun loadStores() {
+        lifecycleScope.launch {
+            try {
+                val data = Api.get("/admin/api/order-stats/stores")
+                val resp = Api.parse<OrderStatsStoresResponse>(data)
+                allStores = resp.stores ?: emptyList()
+            } catch (e: Exception) {
+                allStores = emptyList()
+            }
+        }
+    }
+
+    private fun showStoreDialog() {
+        if (allStores.isEmpty()) {
+            toast("暂无店铺数据")
+            return
+        }
+        val names = allStores.map { it.name ?: it.id ?: "" }.toTypedArray()
+        val ids = allStores.map { it.id ?: "" }
+        val checked = BooleanArray(ids.size) {
+            selectedStoreIds.isEmpty() || selectedStoreIds.contains(ids[it])
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("选择店铺(勾选=纳入筛选,全不选=空结果)")
+            .setMultiChoiceItems(names, checked) { _, which, isChecked ->
+                val id = ids[which]
+                if (id.isEmpty()) return@setMultiChoiceItems
+                val s = HashSet(selectedStoreIds)
+                if (isChecked) s.add(id) else s.remove(id)
+                selectedStoreIds = s
+            }
+            .setNeutralButton("全选", null)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确定") { _, _ ->
+                storeBtn.text = if (selectedStoreIds.isEmpty()) "全部店铺 ▾" else "已选 ${selectedStoreIds.size}/${ids.size} ▾"
+                loadData()
+            }
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                selectedStoreIds = emptySet()
+                for (i in checked.indices) checked[i] = true
+                dialog.listView?.let { lv ->
+                    for (i in checked.indices) lv.setItemChecked(i, true)
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    // ── 数据加载 ──
+    private fun loadData() {
+        if (from.isEmpty() || to.isEmpty()) return
+        lifecycleScope.launch {
+            progressBar.visibility = View.VISIBLE
+            try {
+                val params = HashMap<String, Any?>()
+                params["from"] = from
+                params["to"] = to
+                params["tz"] = tz
+                if (selectedStoreIds.isNotEmpty()) {
+                    params["storeIds"] = selectedStoreIds.joinToString(",")
+                }
+                val data = Api.get("/admin/api/order-stats/summary", params)
+                val resp = Api.parse<OrderStatsSummary>(data)
+                renderTotals(resp)
+                adapter.setList(resp.byStore ?: emptyList())
+            } catch (e: Exception) {
+                if (e is ApiException && e.code == 401) {
+                    toast("登录已过期,请重新登录")
+                    goLogin()
+                } else {
+                    toast(e.message ?: "加载失败")
+                }
+            } finally {
+                progressBar.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun renderTotals(s: OrderStatsSummary) {
+        totalContainer.removeAllViews()
+        val totals = s.totals ?: return
+        totalContainer.addView(totalCard("🆕 新订单", totals.new, true))
+        totalContainer.addView(totalCard("📦 揽收", totals.pickup, false))
+        totalContainer.addView(totalCard("✅ 签收", totals.delivered, false))
+        totalContainer.addView(totalCard("↩️ 退货", totals.returned, false))
+    }
+
+    private fun totalCard(title: String, ca: CountAmount?, showValid: Boolean): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.WHITE)
+            setPadding(14, 12, 14, 12)
+            layoutParams = LinearLayout.LayoutParams(
+                170,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { rightMargin = 10 }
+        }
+        card.addView(TextView(this).apply {
+            text = title
+            setTextColor(Color.parseColor(COLOR_MUTE))
+            textSize = 11f
+        })
+        card.addView(TextView(this).apply {
+            text = "${ca?.count ?: 0} 单"
+            setTextColor(Color.parseColor(COLOR_TEXT))
+            textSize = 22f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding(0, 6, 0, 0)
+        })
+        card.addView(TextView(this).apply {
+            text = "¥ ${fmtMoney(ca?.amount)}"
+            setTextColor(Color.parseColor(COLOR_PRIMARY))
+            textSize = 12f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setPadding(0, 4, 0, 0)
+        })
+        if (showValid && ca?.validAmount != null) {
+            card.addView(TextView(this).apply {
+                text = "剔除取消 ¥ ${fmtMoney(ca.validAmount)}"
+                setTextColor(Color.parseColor(COLOR_MUTE))
+                textSize = 9f
+                setPadding(0, 2, 0, 0)
+            })
+        }
+        return card
+    }
+
+    // ── 辅助 ──
+    private fun shiftLocalDays(n: Int): String {
+        val cal = Calendar.getInstance()
+        cal.add(Calendar.DATE, n)
+        return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
+    }
+
+    private fun localDate(): Pair<Int, Int> {
+        val cal = Calendar.getInstance()
+        return cal.get(Calendar.YEAR) to (cal.get(Calendar.MONTH) + 1)
+    }
+
+    private fun firstOfMonth(y: Int, m: Int): String = "$y-${String.format("%02d", m)}-01"
+
+    private fun updateRangeHint() {
+        val end = shiftLocalDays(-1, to)
+        rangeHint.text = "当前统计区间($tzLabel):$from ~ $end"
+    }
+
+    private fun shiftLocalDays(n: Int, base: String): String {
+        return try {
+            val d = SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(base) ?: return base
+            val cal = Calendar.getInstance()
+            cal.time = d
+            cal.add(Calendar.DATE, n)
+            SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
+        } catch (e: Exception) {
+            base
+        }
+    }
+
+    private fun goLogin() {
+        startActivity(Intent(this, LoginActivity::class.java))
+        finish()
+    }
+
+    private fun toast(msg: String) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    }
+}

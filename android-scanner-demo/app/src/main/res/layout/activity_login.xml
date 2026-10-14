@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:gravity="center_horizontal"
+    android:padding="24dp"
+    android:background="@color/page_bg">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="120dp"
+        android:text="Ozon ERP"
+        android:textColor="@color/text_primary"
+        android:textSize="32sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="原生安卓 · 扫描发货"
+        android:textColor="@color/text_muted"
+        android:textSize="14sp" />
+
+    <EditText
+        android:id="@+id/phoneInput"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginTop="48dp"
+        android:inputType="phone"
+        android:maxLength="11"
+        android:background="@drawable/bg_input"
+        android:paddingHorizontal="16dp"
+        android:hint="手机号"
+        android:textSize="16sp"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/text_placeholder" />
+
+    <EditText
+        android:id="@+id/passwordInput"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginTop="16dp"
+        android:inputType="textPassword"
+        android:background="@drawable/bg_input"
+        android:paddingHorizontal="16dp"
+        android:hint="密码"
+        android:textSize="16sp"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/text_placeholder"
+        android:imeOptions="actionDone"
+        android:singleLine="true" />
+
+    <Button
+        android:id="@+id/loginBtn"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginTop="28dp"
+        android:text="登 录"
+        android:textSize="16sp"
+        android:backgroundTint="@color/primary"
+        android:textColor="#ffffff" />
+
+    <CheckBox
+        android:id="@+id/intranetCheck"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:checked="false"
+        android:text="使用内网(192.168.1.212:3001)"
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="与电脑端 admin 使用同一账号"
+        android:textColor="@color/text_placeholder"
+        android:textSize="12sp" />
+
+</LinearLayout>

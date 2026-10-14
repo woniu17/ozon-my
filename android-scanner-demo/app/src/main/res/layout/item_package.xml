@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/bg_card"
+    android:padding="@dimen/card_padding"
+    android:layout_marginBottom="12dp">
+
+    <!-- ── 订单级信息 ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/storeName"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/primary"
+            android:textSize="11sp"
+            android:background="@drawable/bg_tag_blue"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="3dp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/postingNumber"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp"
+            android:typeface="monospace"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/opTag"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="11sp"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="3dp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/copyPosting"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="复制"
+            android:textColor="@color/primary"
+            android:textSize="11sp"
+            android:padding="4dp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tagsText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="11sp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/noteText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="11sp"
+        android:textColor="#4e5969"
+        android:background="#f7f8fa"
+        android:padding="6dp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/timesText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="11sp"
+        android:textColor="#86909c" />
+
+    <!-- ── 产品信息 ── -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="产品信息"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:textColor="#4e5969" />
+
+    <LinearLayout
+        android:id="@+id/prodContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical" />
+
+    <!-- ── 采购信息 ── -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="采购信息"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:textColor="#4e5969"
+        android:visibility="gone"
+        android:id="@+id/purchaseTitle" />
+
+    <LinearLayout
+        android:id="@+id/purchaseContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical" />
+
+    <!-- ── 金额与利润 ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="vertical"
+        android:background="#f7f8fa"
+        android:padding="8dp">
+
+        <TextView
+            android:id="@+id/profitText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textColor="#1f2329" />
+
+        <TextView
+            android:id="@+id/formulaText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="11sp"
+            android:textColor="#86909c" />
+    </LinearLayout>
+
+    <!-- ── 操作区(按状态动态填充) ── -->
+    <LinearLayout
+        android:id="@+id/actionArea"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="vertical" />
+
+</LinearLayout>

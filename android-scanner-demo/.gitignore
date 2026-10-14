@@ -1,0 +1,17 @@
+# 构建产物
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+
+# 生成的 APK
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+captures/
+.cxx/
+*.hprof

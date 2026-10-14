@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:layout_marginTop="8dp"
+    android:background="#fafafa"
+    android:padding="8dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/purchasePlatform"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#7d4dd3"
+            android:textSize="10sp"
+            android:background="#f5efff"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp" />
+
+        <TextView
+            android:id="@+id/purchaseSn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:textSize="11sp"
+            android:textColor="#1f2329"
+            android:typeface="monospace" />
+
+        <TextView
+            android:id="@+id/copyPurchaseSn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="复制"
+            android:textColor="#165dff"
+            android:textSize="11sp"
+            android:padding="4dp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/purchaseBuyer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:textSize="11sp"
+        android:textColor="#86909c" />
+
+    <TextView
+        android:id="@+id/purchaseTime"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="11sp"
+        android:textColor="#86909c" />
+
+    <TextView
+        android:id="@+id/purchaseAmount"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="11sp"
+        android:textColor="#86909c" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/purchaseLogistics"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="11sp"
+            android:textColor="#86909c" />
+
+        <TextView
+            android:id="@+id/copyLogistics"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="复制"
+            android:textColor="#165dff"
+            android:textSize="11sp"
+            android:padding="4dp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+</LinearLayout>
