@@ -55,7 +55,7 @@ const PM_DELIVERY_PER_G_CNY = 0.0281;
 const PM_TARGET_RATES = [50, 60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200]; // 目标成本利润率选项(%,与H5对齐)
 const PM_DEFAULT_RATE = 100;        // 默认选中 100%
 const skuPricing = ref({});          // sku → 价格管理 skus-info 行(现价/weightG/inCache/hasProductId)
-const poCmpExpanded = reactive({});  // 单价调整折叠展开(pkgId:sku → bool)
+const poCmpExpanded = reactive({});  // 单价调整折叠展开(pkgId:sku → bool,默认展开;点击可收起)
 const poRateChoice = reactive({});   // 每行目标率(sku → 40~90,未选默认 50)
 const adjustingSku = ref('');
 
@@ -555,8 +555,8 @@ async function onSubmitCorrect(pkg) {
   }
 }
 
-// ── 单价调整(产品信息区,每个 SKU 折叠块;调整的是 Ozon 上架价)──
-function togglePoCmp(key) { poCmpExpanded[key] = !poCmpExpanded[key]; }
+// ── 单价调整(产品信息区,每个 SKU 折叠块,默认展开;调整的是 Ozon 上架价)──
+function togglePoCmp(key) { poCmpExpanded[key] = !(poCmpExpanded[key] ?? true); }
 async function loadSkuPricing(skus) {
   if (!skus?.length) { skuPricing.value = {}; return; }
   try {
@@ -574,13 +574,29 @@ function poUnitDelivery(weightG) {
   if (!(w > 0)) return null;
   return PM_DELIVERY_BASE_CNY + PM_DELIVERY_PER_G_CNY * w;
 }
+// 当前包裹的单件均重(实物称重总量 ÷ 包裹内商品总数):
+//   - 待打单:优先取重量输入框的录入值(实时预览),未录入回退已保存重量;
+//   - 已交运/已发货:以保存的发货重量为准(录入值已失效,更正重量后自动联动);
+// 无称重返回 null(单价调整回退 SKU 维护重量)
+function pkgUnitWeightG(pkg) {
+  const totalQty = (pkg.items || []).reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+  if (!(totalQty > 0)) return null;
+  const raw = String(weightValues[pkg.id] ?? '').trim();
+  const typedG = /^\d+$/.test(raw) ? Number(raw) : 0;
+  const useTyped = canShipCard(pkg) && typedG > 0; // 仅待打单卡片的输入值有效
+  const savedG = pkg.weightG != null ? Number(pkg.weightG) : 0;
+  const totalG = useTyped ? typedG : savedG;
+  if (!(totalG > 0)) return null;
+  return totalG / totalQty;
+}
 // 调价对比行(单件口径,公式与 OrderProcess 采购弹窗 profitRows 一致)
 // unitCost = 行级采购分摊合计(items.purchaseAmount,后端从关联 link 重算维护) / 行数量
+// 重量优先用本包裹实物称重(录入/已保存,按件均摊),未称重回退 SKU 维护重量(价格管理)
 function skuAdjustRow(pkg, it) {
   const qty = Number(it.quantity) || 0;
   const unitCost = qty > 0 ? (Number(it.purchaseAmount) || 0) / qty : 0;
   const info = skuPricing.value[it.sku] || null;
-  const unitDelivery = poUnitDelivery(info?.weightG);
+  const unitDelivery = poUnitDelivery(pkgUnitWeightG(pkg) ?? info?.weightG);
   const rate = poRateChoice[it.sku] || PM_DEFAULT_RATE;
   // 建议价(单件口径,向上取整数元,与 price-update 服务端校验同口径)
   const suggested = unitCost > 0 && unitDelivery != null
@@ -895,15 +911,15 @@ function onPrinterChange() {
                   </div>
                   <div class="product-qty" :class="{ 'qty-multi': it.quantity > 1 }">× {{ it.quantity }}</div>
                 </div>
-                <!-- 单价调整(2026-09-22,默认折叠;调整该 SKU 上架价,口径同 OrderProcess 采购弹窗) -->
+                <!-- 单价调整(2026-09-22,默认展开可收起;调整该 SKU 上架价,口径同 OrderProcess 采购弹窗) -->
                 <div class="po-card-cmp">
                   <div class="po-cmp-toggle">
                     <div class="po-cmp-toggle-left" @click="togglePoCmp(pkg.id + ':' + it.sku)">
-                      <span class="po-cmp-caret">{{ poCmpExpanded[pkg.id + ':' + it.sku] ? '▾' : '▸' }}</span>
+                      <span class="po-cmp-caret">{{ poCmpExpanded[pkg.id + ':' + it.sku] !== false ? '▾' : '▸' }}</span>
                       <span class="po-cmp-title">单价调整</span>
                       <span class="profit-est-sub">调整的是该 SKU 上架价,只影响后续新订单</span>
                     </div>
-                    <template v-if="poCmpExpanded[pkg.id + ':' + it.sku]">
+                    <template v-if="poCmpExpanded[pkg.id + ':' + it.sku] !== false">
                       <select
                         class="filter-input po-rate-select"
                         :value="poRateChoice[it.sku] || PM_DEFAULT_RATE"
@@ -926,7 +942,7 @@ function onPrinterChange() {
                       >取整</button>
                     </template>
                   </div>
-                  <table v-if="poCmpExpanded[pkg.id + ':' + it.sku]" class="po-cmp-table">
+                  <table v-if="poCmpExpanded[pkg.id + ':' + it.sku] !== false" class="po-cmp-table">
                     <tbody>
                       <tr>
                         <td class="cmp-label">销售单价</td>
@@ -960,7 +976,7 @@ function onPrinterChange() {
                       </tr>
                     </tbody>
                   </table>
-                  <div v-if="poCmpExpanded[pkg.id + ':' + it.sku] && skuAdjustRow(pkg, it).missingWhy" class="po-why">{{ skuAdjustRow(pkg, it).missingWhy }}</div>
+                  <div v-if="poCmpExpanded[pkg.id + ':' + it.sku] !== false && skuAdjustRow(pkg, it).missingWhy" class="po-why">{{ skuAdjustRow(pkg, it).missingWhy }}</div>
                 </div>
                 </template>
                 <div v-if="!pkg.items?.length" class="muted">—</div>
