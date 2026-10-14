@@ -490,39 +490,49 @@ class OrderDetailActivity : ComponentActivity() {
         return card
     }
 
-    /** 打开平台 APP（deep link，如已安装）；否则用浏览器打开平台搜索页 */
+    /** 打开平台 APP：优先直接唤起 APP 的 deep link scheme（不经过浏览器），失败才用浏览器打开 H5 */
     private fun openPlatformApp(platform: String?, sn: String?) {
         if (sn.isNullOrBlank()) {
             toast("无采购单号")
             return
         }
-        val (scheme, webUrl) = platformDeepLink(platform, sn)
-        val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse(scheme)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (packageManager.resolveActivity(appIntent, 0) != null) {
-            runCatching {
-                startActivity(appIntent)
-                return
-            }.onFailure { /* 拉起失败，走网页兜底 */ }
+        val (schemes, webUrl) = platformDeepLink(platform, sn)
+        // 依次尝试候选 scheme：第一个能被系统解析（说明已安装对应 APP）的 scheme 直接拉起
+        for (scheme in schemes) {
+            val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse(scheme)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (packageManager.resolveActivity(appIntent, 0) != null) {
+                runCatching {
+                    startActivity(appIntent)
+                    return
+                }.onFailure { /* 拉起失败，尝试下一个候选 */ }
+            }
         }
+        // 兜底：浏览器打开 H5 订单详情页（H5 会引导跳转 APP）
         runCatching {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }.onFailure { toast("未找到可跳转的应用") }
     }
 
-    /** 平台 → (deep link scheme, 网页搜索/订单页 URL)，拼多多/1688 与 H5 订单详情链接一致 */
-    private fun platformDeepLink(platform: String?, sn: String): Pair<String, String> {
+    /**
+     * 平台 → (候选 deep link scheme 列表, 浏览器兜底 URL)
+     * 拼多多：pinduoduo://com.xunmeng.pinduoduo/<H5路径>（实测拼多多 APP 注册的唤起协议，可直接打开订单详情）
+     */
+    private fun platformDeepLink(platform: String?, sn: String): Pair<List<String>, String> {
         val enc = Uri.encode(sn)
         return when (platform?.lowercase()) {
             "pdd", "yangkeduo", "拼多多" ->
-                "https://mobile.yangkeduo.com/order.html?order_sn=$enc" to "https://mobile.yangkeduo.com/order.html?order_sn=$enc"
+                listOf(
+                    "pinduoduo://com.xunmeng.pinduoduo/order.html?order_sn=$enc",
+                    "pinduoduo://"
+                ) to "https://mobile.yangkeduo.com/order.html?order_sn=$enc"
             "1688", "alibaba", "阿里巴巴" ->
-                "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$enc" to "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$enc"
-            "taobao", "淘宝" -> "taobao://" to "https://s.taobao.com/search?q=$enc"
-            "tmall", "天猫" -> "tmall://" to "https://s.tmall.com/search?q=$enc"
-            "douyin", "抖音", "抖音小店" -> "snssdk1128://" to "https://www.douyin.com/search/$enc"
-            "amazon", "亚马逊" -> "https://www.amazon.com/gp/your-account/order-details?orderID=$enc" to "https://www.amazon.com/gp/your-account/order-details?orderID=$enc"
-            "ozon" -> "https://seller.ozon.ru/app/orders/search?search=$enc" to "https://seller.ozon.ru/app/orders/search?search=$enc"
-            else -> "https://www.google.com/search?q=$enc" to "https://www.google.com/search?q=$enc"
+                listOf("wireless1688://") to "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$enc"
+            "taobao", "淘宝" -> listOf("taobao://") to "https://s.taobao.com/search?q=$enc"
+            "tmall", "天猫" -> listOf("tmall://") to "https://s.tmall.com/search?q=$enc"
+            "douyin", "抖音", "抖音小店" -> listOf("snssdk1128://") to "https://www.douyin.com/search/$enc"
+            "amazon", "亚马逊" -> listOf("https://www.amazon.com/gp/your-account/order-details?orderID=$enc") to "https://www.amazon.com/gp/your-account/order-details?orderID=$enc"
+            "ozon" -> listOf("https://seller.ozon.ru/app/orders/search?search=$enc") to "https://seller.ozon.ru/app/orders/search?search=$enc"
+            else -> listOf("https://www.google.com/search?q=$enc") to "https://www.google.com/search?q=$enc"
         }
     }
 
