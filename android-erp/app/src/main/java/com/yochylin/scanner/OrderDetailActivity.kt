@@ -531,7 +531,12 @@ class OrderDetailActivity : ComponentActivity() {
             "1688", "alibaba", "阿里巴巴" -> {
                 // 1688 真实唤起协议（从 qr.1688.com 分享落地页提取）：
                 // wireless1688://ma.m.1688.com/plugin?url=<编码的1688 H5 页面地址>
-                val h5Url = "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$enc"
+                // 单号为长数字(1688 订单号)时直接打开订单详情页；否则打开订单列表搜索页
+                val h5Url = if (enc.matches(Regex("\\d{10,}"))) {
+                    "https://air.1688.com/app/ctf-page/order-detail/index.html?orderId=$enc"
+                } else {
+                    "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$enc"
+                }
                 val plugin = "wireless1688://ma.m.1688.com/plugin?url=" + Uri.encode(h5Url)
                 listOf(plugin, "wireless1688://") to h5Url
             }
@@ -561,6 +566,7 @@ class OrderDetailActivity : ComponentActivity() {
         val pm = packageManager
         val sb = StringBuilder()
         val testSn = "TEST123"
+        val testOrderId = "5127855985039010728"
         val platforms = listOf(
             Triple("拼多多", "com.xunmeng.pinduoduo", listOf(
                 "pinduoduo://",
@@ -584,14 +590,14 @@ class OrderDetailActivity : ComponentActivity() {
                 "https://item.taobao.com/item.htm?id=1"
             )),
             Triple("1688", "com.alibaba.wireless", listOf(
+                "wireless1688://ma.m.1688.com/plugin?url=" + Uri.encode("https://air.1688.com/app/ctf-page/order-detail/index.html?orderId=$testOrderId"),
                 "wireless1688://ma.m.1688.com/plugin?url=" + Uri.encode("https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$testSn"),
                 "wireless1688://",
                 "wireless1688://orderDetail?orderId=1",
                 "wireless1688://order/detail?orderId=1",
                 "https://detail.1688.com/offer/1.html",
                 "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$testSn"
-            ))
-        )
+            )))
         for ((name, pkgName, uris) in platforms) {
             sb.append("■ ").append(name).append('\n')
             val installed = runCatching { pm.getPackageInfo(pkgName, 0) }.isSuccess
