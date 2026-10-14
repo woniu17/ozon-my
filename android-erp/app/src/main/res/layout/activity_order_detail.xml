@@ -35,6 +35,15 @@
             android:gravity="center" />
 
         <TextView
+            android:id="@+id/detailSchemeDiagBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Scheme诊断"
+            android:textColor="#ffffff"
+            android:textSize="12sp"
+            android:padding="8dp" />
+
+        <TextView
             android:id="@+id/detailRefreshBtn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

@@ -34,7 +34,9 @@ import com.yochylin.scanner.model.OrderDetail
 import com.yochylin.scanner.model.Pkg
 import com.yochylin.scanner.model.PurchaseLink
 import com.yochylin.scanner.model.Trace
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 订单详情：展示 + 同步/备货/提交发货/面单/同步采购物流 */
 class OrderDetailActivity : ComponentActivity() {
@@ -115,6 +117,7 @@ class OrderDetailActivity : ComponentActivity() {
 
         findViewById<TextView>(R.id.detailBackBtn).setOnClickListener { finish() }
         findViewById<TextView>(R.id.detailRefreshBtn).setOnClickListener { loadDetail() }
+        findViewById<TextView>(R.id.detailSchemeDiagBtn).setOnClickListener { showSchemeDiag() }
         dMoreToggle.setOnClickListener {
             infoOpen = !infoOpen
             renderMoreInfo()
@@ -534,6 +537,72 @@ class OrderDetailActivity : ComponentActivity() {
             "ozon" -> listOf("https://seller.ozon.ru/app/orders/search?search=$enc") to "https://seller.ozon.ru/app/orders/search?search=$enc"
             else -> listOf("https://www.google.com/search?q=$enc") to "https://www.google.com/search?q=$enc"
         }
+    }
+
+    // ── Scheme 诊断（临时调试入口）：探测拼多多/淘宝/1688 安装情况与可解析的 scheme ──
+    private fun showSchemeDiag() {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { buildDiagText() }
+            AlertDialog.Builder(this@OrderDetailActivity)
+                .setTitle("Scheme 诊断（可解析=✅）")
+                .setMessage(result)
+                .setPositiveButton("复制", { _, _ -> copyText(result, "诊断结果") })
+                .setNegativeButton("关闭", null)
+                .show()
+        }
+    }
+
+    private fun buildDiagText(): String {
+        val pm = packageManager
+        val sb = StringBuilder()
+        val testSn = "TEST123"
+        val platforms = listOf(
+            Triple("拼多多", "com.xunmeng.pinduoduo", listOf(
+                "pinduoduo://",
+                "pinduoduo://com.xunmeng.pinduoduo/order.html?order_sn=$testSn",
+                "pinduoduo://com.xunmeng.pinduoduo/order?order_sn=$testSn",
+                "pinduoduo://com.xunmeng.pinduoduo/order_detail?order_sn=$testSn",
+                "pinduoduo://order.html?order_sn=$testSn",
+                "pinduoduo://order_detail?order_sn=$testSn",
+                "pinduoduo://goods.html?goods_id=1",
+                "pddopen://",
+                "pdd://",
+                "https://mobile.yangkeduo.com/order.html?order_sn=$testSn",
+                "http://app.yangkeduo.com/universal-link?scheme=pinduoduo%3A%2F%2Fcom.xunmeng.pinduoduo%2Forder.html%3Forder_sn%3D$testSn"
+            )),
+            Triple("淘宝", "com.taobao.taobao", listOf(
+                "taobao://",
+                "taobao://item?id=1",
+                "taobao://tmall.com/item.htm?id=1",
+                "tbopen://",
+                "tbopen://m.taobao.com/tbopen/index.html",
+                "https://item.taobao.com/item.htm?id=1"
+            )),
+            Triple("1688", "com.alibaba.wireless", listOf(
+                "wireless1688://",
+                "wireless1688://orderDetail?orderId=1",
+                "wireless1688://order/detail?orderId=1",
+                "https://detail.1688.com/offer/1.html",
+                "https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?word=$testSn"
+            ))
+        )
+        for ((name, pkgName, uris) in platforms) {
+            sb.append("■ ").append(name).append('\n')
+            val installed = runCatching { pm.getPackageInfo(pkgName, 0) }.isSuccess
+            sb.append("  安装: ").append(if (installed) "是" else "否").append('\n')
+            if (installed) {
+                for (uri in uris) {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
+                    val info = pm.resolveActivity(intent, 0)
+                    if (info != null) {
+                        sb.append("  ✅ ").append(uri).append('\n')
+                        sb.append("     → ").append(info.activityInfo?.packageName ?: "?").append('/').append(info.activityInfo?.name ?: "?").append('\n')
+                    }
+                }
+            }
+            sb.append('\n')
+        }
+        return sb.toString().trim()
     }
 
     private fun buildPurchaseGoodsRow(pi: com.yochylin.scanner.model.PurchaseItem): View {
