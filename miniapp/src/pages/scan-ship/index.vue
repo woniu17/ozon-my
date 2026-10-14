@@ -210,7 +210,7 @@
         <text class="scan-title">扫描面单条码</text>
         <text class="scan-close" @click="closeH5Scanner">✕</text>
       </view>
-      <view id="scan-reader" class="scan-reader"></view>
+      <view id="scan-reader" class="scan-reader" :class="{ 'native-frame': barcodeDetectorSupported }"></view>
       <view class="scan-engine" :class="{ ok: barcodeDetectorSupported }">
         识别引擎: {{ barcodeDetectorSupported ? 'BarcodeDetector 原生解码' : 'ZXing 兼容解码(不支持BarcodeDetector)' }}
       </view>
@@ -253,72 +253,179 @@ const counts = reactive({ today: 0, yesterday: 0 });
 
 // ── 扫码识别(快递单号/面单条码) ──
 // #ifdef H5
-// H5:html5-qrcode(ZXing) 摄像头实时识别二维码/一维码,需 HTTPS 环境(浏览器安全限制)
+// H5 扫码:
+//  - 优先用浏览器原生 BarcodeDetector(Chrome/安卓):直接在 video 元素上异步检测,
+//    不经过 ZXing 主线程逐帧解码,避免开启几秒后画面卡顿;
+//  - 不支持时回退 html5-qrcode(ZXing):降低分辨率/fps/禁用镜像二次解码,减轻 CPU。
 const scanVisible = ref(false);
-let h5Qr = null;
-// 是否支持浏览器原生 BarcodeDetector(Chrome/安卓支持,解码不阻塞主线程)
-const barcodeDetectorSupported = typeof window !== 'undefined' && 'BarcodeDetector' in window;
+let scanSession = 0;                  // 会话代际:关闭/重开都会自增,使旧会话的异步回调全部失效
+let h5Qr = null;                      // html5-qrcode 实例(ZXing 回退路径)
+let h5QrCleanup = Promise.resolve(); // 上一次实例 stop+clear 的完成态,防止重开时旧 clear() 清掉新实例
+let nativeStream = null;              // 原生 BarcodeDetector 路径的 MediaStream
+let nativeVideo = null;               // 原生路径创建的 video 元素
+let nativeTimer = null;               // 原生路径检测循环句柄
+
+// 浏览器是否真正支持 BarcodeDetector(属性存在且可实例化,避免桌面 Chrome 仅有属性但不可用)
+function detectBarcodeDetectorSupport() {
+  if (typeof window === 'undefined' || !('BarcodeDetector' in window)) return false;
+  try {
+    const d = new BarcodeDetector({ formats: ['qr_code'] });
+    return !!d;
+  } catch (e) {
+    return false;
+  }
+}
+const barcodeDetectorSupported = detectBarcodeDetectorSupport();
+
 function openH5Scanner() {
   scanVisible.value = true;
-  nextTick(() => {
+  const session = ++scanSession;
+  nextTick(async () => {
+    if (session !== scanSession) return; // 打开瞬间已被关闭/重开
     try {
-      if (!h5Qr) {
-        // 优先启用浏览器原生 BarcodeDetector(Chrome/安卓支持,解码在独立进程,不阻塞画面)
-        // 不支持时自动回退到 ZXing JS 解码
-        h5Qr = new Html5Qrcode('scan-reader', {
-          experimentalFeatures: {
-            useBarCodeDetectorIfSupported: true,
-          },
-        });
+      if (barcodeDetectorSupported) {
+        await startNativeScanner(session);
+      } else {
+        await startHtml5QrScanner(session);
       }
-      h5Qr.start(
-        { facingMode: 'environment' },
-        {
-          // 分辨率设硬上限(<=640x480),避免小米等旗舰机后置默认高分辨率导致解码开销过大
-          fps: 5,
-          qrbox: { width: '70%', height: '40%' },
-          disableFlip: false,
-          videoConstraints: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 640, max: 640 },
-            height: { ideal: 480, max: 480 },
-          },
-        },
-        (decodedText) => {
-          // 已关闭/已识别成功:阻止重复触发,避免持续搜索
-          if (!scanVisible.value) return;
-          const code = (decodedText || '').trim();
-          if (!code) return;
-          closeH5Scanner();
-          keyword.value = code;
-          doSearch();
-        },
-        () => { /* 每帧未识别,忽略 */ }
-      ).catch(() => {
-        uni.showToast({ title: '摄像头不可用(需HTTPS)', icon: 'none' });
-        closeH5Scanner();
-      });
     } catch (e) {
-      uni.showToast({ title: '扫码初始化失败', icon: 'none' });
+      if (session !== scanSession) return;
+      uni.showToast({ title: '摄像头不可用(需HTTPS)', icon: 'none' });
       closeH5Scanner();
     }
   });
 }
+
+// ── 原生 BarcodeDetector 路径:轻量、不卡顿 ──
+async function startNativeScanner(session) {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 640, max: 640 },
+      height: { ideal: 480, max: 480 },
+      frameRate: { ideal: 15 },
+    },
+    audio: false,
+  });
+  if (session !== scanSession) {
+    stream.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  nativeStream = stream;
+  const reader = document.getElementById('scan-reader');
+  const el = document.createElement('video');
+  el.id = 'scan-native-video';
+  el.setAttribute('playsinline', '');
+  el.muted = true;
+  el.autoplay = true;
+  el.srcObject = stream;
+  reader.innerHTML = '';
+  reader.appendChild(el);
+  nativeVideo = el;
+  await el.play();
+  if (session !== scanSession) return; // 播放期间被关闭
+  const detector = new BarcodeDetector();
+  const tick = async () => {
+    if (session !== scanSession) return;
+    if (!nativeVideo || nativeVideo.readyState < 2) {
+      nativeTimer = setTimeout(tick, 200);
+      return;
+    }
+    let codes = null;
+    try {
+      codes = await detector.detect(nativeVideo);
+    } catch (e) { /* 单帧识别失败忽略 */ }
+    if (session !== scanSession) return; // 检测期间被关闭/重开,丢弃旧结果
+    if (codes && codes.length) {
+      const code = String(codes[0].rawValue || '').trim();
+      if (code) {
+        onScanned(code);
+        return;
+      }
+    }
+    nativeTimer = setTimeout(tick, 200);
+  };
+  nativeTimer = setTimeout(tick, 100);
+}
+
+// ── 不支持 BarcodeDetector 时回退 html5-qrcode(ZXing)──
+async function startHtml5QrScanner(session) {
+  // 等待上一次实例彻底清理完毕,避免旧 clear() 清掉新实例的 video 元素
+  await h5QrCleanup;
+  if (session !== scanSession) return;
+  if (!h5Qr) {
+    h5Qr = new Html5Qrcode('scan-reader', {
+      experimentalFeatures: {
+        useBarCodeDetectorIfSupported: false,
+      },
+    });
+  }
+  await h5Qr.start(
+    { facingMode: 'environment' },
+    {
+      // 纯 ZXing 主线程解码:低 fps + 小解码区 + 低分辨率 + 禁用镜像二次解码,避免 CPU 满载卡顿
+      fps: 3,
+      qrbox: { width: '60%', height: '35%' },
+      disableFlip: true,
+      videoConstraints: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 480, max: 480 },
+        height: { ideal: 360, max: 360 },
+        frameRate: { ideal: 10 },
+      },
+    },
+    (decodedText) => {
+      // 旧实例的残留回调:会话已失效或已关闭,直接忽略,防止重开时误填入结果
+      if (session !== scanSession) return;
+      if (!scanVisible.value) return;
+      const code = (decodedText || '').trim();
+      if (!code) return;
+      onScanned(code);
+    },
+    () => { /* 每帧未识别,忽略 */ }
+  );
+}
+
+// 识别成功后统一收尾:关闭遮罩 + 填入关键词 + 搜索
+function onScanned(code) {
+  closeH5Scanner();
+  keyword.value = code;
+  doSearch();
+}
+
 function closeH5Scanner() {
+  scanSession++; // 使当前会话所有在途回调/循环全部失效
   scanVisible.value = false;
+  // 清理原生 BarcodeDetector 路径
+  if (nativeTimer) {
+    clearTimeout(nativeTimer);
+    nativeTimer = null;
+  }
+  if (nativeStream) {
+    try { nativeStream.getTracks().forEach((t) => t.stop()); } catch (e) { /* 忽略 */ }
+    nativeStream = null;
+  }
+  if (nativeVideo) {
+    try { nativeVideo.srcObject = null; } catch (e) { /* 忽略 */ }
+    try { nativeVideo.remove(); } catch (e) { /* 忽略 */ }
+    nativeVideo = null;
+  }
+  // 清理 html5-qrcode 路径
   const qr = h5Qr;
   h5Qr = null;
   if (qr) {
     try {
-      // stop() 停止扫描,clear() 释放摄像头流和 UI,彻底清理防止资源泄漏
       if (qr.isRunning()) {
-        qr.stop()
+        h5QrCleanup = qr.stop()
           .then(() => { try { qr.clear(); } catch (e) { /* 忽略 */ } })
           .catch(() => { /* 忽略 */ });
       } else {
-        qr.clear();
+        try { qr.clear(); } catch (e) { /* 忽略 */ }
+        h5QrCleanup = Promise.resolve();
       }
-    } catch (e) { /* 忽略 */ }
+    } catch (e) { /* 忽略 */ h5QrCleanup = Promise.resolve(); }
+  } else {
+    h5QrCleanup = Promise.resolve();
   }
 }
 onUnload(() => closeH5Scanner());
@@ -1152,12 +1259,27 @@ onPullDownRefresh(async () => {
   height: 640rpx;
   margin-top: 100rpx;
   overflow: hidden;
+  position: relative;
 }
 .scan-reader video {
   width: 100%;
   height: 100%;
   border-radius: 16rpx;
   object-fit: cover;
+}
+/* 原生 BarcodeDetector 路径的取景框(html5-qrcode 路径自带遮罩,不重复渲染) */
+.scan-reader.native-frame::after {
+  content: '';
+  position: absolute;
+  left: 15%;
+  right: 15%;
+  top: 30%;
+  bottom: 30%;
+  border: 4rpx solid rgba(255, 255, 255, 0.85);
+  border-radius: 12rpx;
+  box-shadow: 0 0 0 9999rpx rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+  z-index: 2;
 }
 .scan-engine {
   margin-top: 28rpx;
