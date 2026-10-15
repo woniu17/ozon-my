@@ -323,6 +323,21 @@ class OrderDetailActivity : ComponentActivity() {
             setTextColor(Color.parseColor(COLOR_TEXT))
             textSize = 13f
             maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        // 商品名称链接：点击跳转 Ozon APP 商品详情页（https://www.ozon.ru/product/<id> 默认启用 Deeplink 唤起 APP）
+        val productId = item.itemId ?: item.offerId
+        if (!productId.isNullOrBlank()) {
+            val productUrl = "https://www.ozon.ru/product/$productId/"
+            title.setTextColor(Color.parseColor(COLOR_PRIMARY))
+            title.setPadding(0, dp(2), 0, dp(2))
+            title.setOnClickListener {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(productUrl)))
+                } catch (e: Exception) {
+                    Toast.makeText(this, "无法打开商品链接", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
         right.addView(title)
 
@@ -948,14 +963,17 @@ class OrderDetailActivity : ComponentActivity() {
             textSize = 11f
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
-            layoutParams = LinearLayout.LayoutParams(110, ViewGroup.LayoutParams.WRAP_CONTENT)
+            // 宽度自适应，保证字段名完整展示
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         row.addView(k)
         val v = TextView(this).apply {
             text = value
             setTextColor(Color.parseColor(COLOR_TEXT))
             textSize = 11f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(8)
+            }
         }
         row.addView(v)
         container.addView(row)

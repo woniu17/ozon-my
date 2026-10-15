@@ -1,15 +1,28 @@
 package com.yochylin.scanner
 
 import android.app.Dialog
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.TransitionDrawable
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.widget.Toast
 import coil.load
+import java.io.File
+import java.io.FileOutputStream
 
 /** 将 View 背景设置为圆角色块（替代 setBackgroundColor，统一圆角） */
 fun View.setRoundedBg(color: Int, radiusDp: Float = 6f) {
@@ -21,7 +34,7 @@ fun View.setRoundedBg(color: Int, radiusDp: Float = 6f) {
     }
 }
 
-/** 全屏预览商品大图：黑色背景、点击任意位置关闭 */
+/** 全屏预览商品大图：黑色背景、点击任意位置关闭、长按保存到相册 */
 fun Context.showImagePreview(url: String?) {
     if (url.isNullOrBlank()) return
     val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
@@ -31,6 +44,11 @@ fun Context.showImagePreview(url: String?) {
         scaleType = ImageView.ScaleType.FIT_CENTER
         setBackgroundColor(Color.parseColor("#f2f3f5"))
         setOnClickListener { dialog.dismiss() }
+        // 长按保存图片到相册
+        setOnLongClickListener {
+            savePreviewImage(this@showImagePreview, drawable)
+            true
+        }
         // 与列表完全相同的加载方式，避免自定义 ImageRequest 导致图片加载失败
         load(url) {
             placeholder(placeholder)
@@ -43,4 +61,54 @@ fun Context.showImagePreview(url: String?) {
     dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     dialog.setCanceledOnTouchOutside(true)
     dialog.show()
+}
+
+/** 保存预览图片到系统相册（Android 10+ 走 MediaStore，无需权限；旧版本写公共目录） */
+private fun savePreviewImage(context: Context, drawable: Drawable?) {
+    val bitmap = extractBitmap(drawable)
+    if (bitmap == null) {
+        Toast.makeText(context, "图片尚未加载完成，请稍候再试", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val saved = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "scanner_" + System.currentTimeMillis() + ".jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ScanShip")
+            }
+            val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            if (uri != null) {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                }
+                true
+            } else false
+        } else {
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "ScanShip")
+            if (!dir.exists()) dir.mkdirs()
+            val file = File(dir, "scanner_" + System.currentTimeMillis() + ".jpg")
+            FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out) }
+            context.sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(file)))
+            true
+        }
+    } catch (e: Exception) {
+        false
+    }
+    Toast.makeText(context, if (saved) "已保存到相册(ScanShip)" else "保存失败，请检查存储权限", Toast.LENGTH_SHORT).show()
+}
+
+/** 从 Drawable 中递归提取 Bitmap（兼容 Coil 的 CrossfadeDrawable 包装） */
+private fun extractBitmap(drawable: Drawable?): Bitmap? {
+    return when (drawable) {
+        is BitmapDrawable -> drawable.bitmap
+        is TransitionDrawable -> extractBitmap(drawable.getDrawable(1))
+        is android.graphics.drawable.LayerDrawable -> {
+            for (i in 0 until drawable.numberOfLayers) {
+                extractBitmap(drawable.getDrawable(i))?.let { return it }
+            }
+            null
+        }
+        else -> null
+    }
 }
