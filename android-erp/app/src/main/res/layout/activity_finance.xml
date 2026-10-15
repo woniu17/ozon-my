@@ -114,6 +114,14 @@
             android:layout_marginStart="8dp" />
     </LinearLayout>
 
+    <!-- 可滚动主体：汇总卡片 + 明细 Tab + 明细列表 -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:scrollbars="none">
+
     <!-- 汇总卡片容器（不裁剪子 View 阴影） -->
     <LinearLayout
         android:id="@+id/summaryContainer"
@@ -264,8 +272,8 @@
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/financeRecyclerView"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
+        android:layout_height="wrap_content"
+        android:nestedScrollingEnabled="false"
         android:clipToPadding="false"
         android:padding="12dp" />
 
@@ -279,6 +287,8 @@
         android:gravity="center"
         android:padding="6dp"
         android:visibility="gone" />
+
+    </ScrollView>
 
     <!-- 底部导航栏 -->
     <include layout="@layout/bottom_nav" />
