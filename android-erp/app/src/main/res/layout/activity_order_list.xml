@@ -6,13 +6,13 @@
     android:orientation="vertical"
     android:background="@color/page_bg">
 
-    <!-- 顶部标题栏 -->
+    <!-- 顶部标题栏：白底，与首页/财务/统计统一 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="52dp"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="#165dff"
+        android:background="@color/card_bg"
         android:paddingHorizontal="12dp">
 
         <TextView
@@ -20,16 +20,17 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="‹ 返回"
-            android:textColor="#ffffff"
+            android:textColor="@color/primary"
             android:textSize="15sp"
-            android:padding="8dp" />
+            android:padding="8dp"
+            android:visibility="gone" />
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="订单处理"
-            android:textColor="#ffffff"
+            android:textColor="@color/text_primary"
             android:textSize="18sp"
             android:textStyle="bold"
             android:gravity="center" />
@@ -39,10 +40,15 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="退出"
-            android:textColor="#ffffff"
+            android:textColor="@color/text_muted"
             android:textSize="14sp"
             android:padding="8dp" />
     </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1px"
+        android:background="@color/divider" />
 
     <!-- 搜索区 -->
     <LinearLayout

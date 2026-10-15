@@ -49,6 +49,18 @@
             android:layout_marginEnd="4dp" />
 
         <TextView
+            android:id="@+id/checkUpdateBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="检查更新"
+            android:textColor="@color/primary"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="5dp"
+            android:layout_marginEnd="4dp" />
+
+        <TextView
             android:id="@+id/logoutBtn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

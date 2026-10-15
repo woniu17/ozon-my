@@ -110,7 +110,8 @@ class MainShellActivity : FragmentActivity(), TabHost {
 
     // ============ 自动更新 ============
 
-    private fun checkUpdate() {
+    /** 检查新版本；manual=true 时（手动点击）无更新会提示已是最新 */
+    fun checkUpdate(manual: Boolean = false) {
         lifecycleScope.launch {
             val info = withContext(Dispatchers.IO) {
                 try {
@@ -123,10 +124,15 @@ class MainShellActivity : FragmentActivity(), TabHost {
                     null
                 }
             }
-            if (info == null) return@launch
+            if (info == null) {
+                if (manual) Toast.makeText(this@MainShellActivity, "检查更新失败，请稍后重试", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
             val (versionCode, versionName, downloadPath) = info
             if (versionCode > BuildConfig.VERSION_CODE && downloadPath.isNotBlank()) {
                 showUpdateDialog(versionName, Api.BASE_URL + "/miniapp/" + downloadPath)
+            } else if (manual) {
+                Toast.makeText(this@MainShellActivity, "已是最新版本 v${BuildConfig.VERSION_NAME}", Toast.LENGTH_SHORT).show()
             }
         }
     }

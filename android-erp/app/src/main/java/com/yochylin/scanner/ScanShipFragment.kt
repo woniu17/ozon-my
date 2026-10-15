@@ -119,6 +119,9 @@ class ScanShipFragment : Fragment() {
                 toast(if (Session.useIntranet) "已手动切换内网 192.168.1.212:3001" else "已手动切换公网 yochylin.com:17443")
             }
         }
+        view.findViewById<TextView>(R.id.checkUpdateBtn).setOnClickListener {
+            (requireActivity() as? MainShellActivity)?.checkUpdate(manual = true)
+        }
         view.findViewById<TextView>(R.id.logoutBtn).setOnClickListener {
             Session.clear()
             goLogin()
