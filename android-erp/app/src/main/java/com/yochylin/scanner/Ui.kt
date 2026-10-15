@@ -39,6 +39,8 @@ fun Context.showImagePreview(url: String?) {
     if (url.isNullOrBlank()) return
     val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
     val placeholder = ColorDrawable(Color.parseColor("#f2f3f5"))
+    // 加载完成时缓存 Bitmap，长按保存直接用，避免从 CrossfadeDrawable 中提取失败
+    var loadedBitmap: Bitmap? = null
     val img = ImageView(this).apply {
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         scaleType = ImageView.ScaleType.FIT_CENTER
@@ -46,7 +48,12 @@ fun Context.showImagePreview(url: String?) {
         setOnClickListener { dialog.dismiss() }
         // 长按保存图片到相册
         setOnLongClickListener {
-            savePreviewImage(this@showImagePreview, drawable)
+            val bmp = loadedBitmap ?: extractBitmap(drawable)
+            if (bmp == null) {
+                Toast.makeText(this@showImagePreview, "图片尚未加载完成，请稍候再试", Toast.LENGTH_SHORT).show()
+            } else {
+                savePreviewImage(this@showImagePreview, bmp)
+            }
             true
         }
         // 与列表完全相同的加载方式，避免自定义 ImageRequest 导致图片加载失败
@@ -54,6 +61,11 @@ fun Context.showImagePreview(url: String?) {
             placeholder(placeholder)
             error(placeholder)
             crossfade(true)
+            listener(
+                onSuccess = { _, result ->
+                    loadedBitmap = extractBitmap(result.drawable)
+                }
+            )
         }
     }
     dialog.setContentView(img)
@@ -63,13 +75,8 @@ fun Context.showImagePreview(url: String?) {
     dialog.show()
 }
 
-/** 保存预览图片到系统相册（Android 10+ 走 MediaStore，无需权限；旧版本写公共目录） */
-private fun savePreviewImage(context: Context, drawable: Drawable?) {
-    val bitmap = extractBitmap(drawable)
-    if (bitmap == null) {
-        Toast.makeText(context, "图片尚未加载完成，请稍候再试", Toast.LENGTH_SHORT).show()
-        return
-    }
+/** 保存图片到系统相册（Android 10+ 走 MediaStore，无需权限；旧版本写公共目录） */
+private fun savePreviewImage(context: Context, bitmap: Bitmap) {
     val saved = try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
