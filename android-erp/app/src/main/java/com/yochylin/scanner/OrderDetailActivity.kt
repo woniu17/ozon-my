@@ -333,8 +333,8 @@ class OrderDetailActivity : ComponentActivity() {
             maxLines = 2
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
-        // 商品名称链接：点击跳转 Ozon APP 商品详情页（优先 ozon:// deep link 直达，避免 https 网页↔APP 循环跳转）
-        val productId = item.itemId ?: item.offerId
+        // 商品名称链接：点击跳转 Ozon APP 商品详情页（Ozon 商品 ID 用 SKU，offerId 是卖家内部编码不能用于商品页）
+        val productId = item.sku ?: item.itemId ?: item.offerId
         if (!productId.isNullOrBlank()) {
             title.setTextColor(Color.parseColor(COLOR_PRIMARY))
             title.setPadding(0, dp(2), 0, dp(2))
