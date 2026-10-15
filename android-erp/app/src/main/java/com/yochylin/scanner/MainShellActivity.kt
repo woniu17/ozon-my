@@ -40,7 +40,16 @@ class MainShellActivity : FragmentActivity(), TabHost {
 
     private val notifPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* 用户授权与否均静默处理：未授权则不发送通知 */ }
+    ) { granted ->
+        // 拒绝后给出引导：未授权则新订单提醒不会显示
+        if (!granted && Build.VERSION.SDK_INT >= 33) {
+            Toast.makeText(
+                this,
+                "通知权限未开启，新订单提醒将无法显示，可在系统设置中开启",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     /** 下载完成监听：自动拉起系统安装器 */
     private val downloadReceiver = object : BroadcastReceiver() {

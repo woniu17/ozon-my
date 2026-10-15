@@ -55,6 +55,7 @@ import productArchiveRoutes from './modules/product-archive.js';
 import exportExcelRoutes from './modules/export-excel.js';
 import platformOrdersRoutes from './modules/platform-orders.js';
 import { stopPlatformOrders } from './services/platform-orders/browser-manager.js';
+import { setupPushWs } from './services/push-ws.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -227,6 +228,8 @@ const server = app.listen(config.port, () => {
     { port: config.port, env: process.env.NODE_ENV || 'development' },
     `🚀 ERP 后端(轻量级)启动: http://localhost:${config.port}`
   );
+  // WebSocket 推送端点（与长轮询共用 push-hub 广播）
+  setupPushWs(server);
   // 启动上架结果轮询器:每 5 分钟扫描 PROCESSING 任务,超 1 小时未完成标 FAILED
   startImportStatusPoller();
   // 启动采集队列终态清理器:每 5 分钟清理 success/skipped 任务,保留最新 500 条

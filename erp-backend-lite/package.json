@@ -21,7 +21,8 @@
     "pino": "^9.1.0",
     "playwright-core": "^1.63.0",
     "sharp": "^0.33.5",
-    "undici": "^6.19.0"
+    "undici": "^6.19.0",
+    "ws": "^8.22.0"
   },
   "optionalDependencies": {
     "mongodb": "^7.5.0",

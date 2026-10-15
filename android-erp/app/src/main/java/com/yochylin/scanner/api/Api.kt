@@ -12,6 +12,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -100,6 +103,35 @@ object Api {
         client.newBuilder()
             .readTimeout(40, TimeUnit.SECONDS)
             .build()
+    }
+
+    /** WebSocket 专用 client：长连接不设读超时，25s 心跳保活（与后端 30s ping 配合防代理断连） */
+    private val pushWsClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .pingInterval(25, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** WebSocket 推送端点 URL（http→ws / https→wss） */
+    val pushWsUrl: String
+        get() {
+            val base = BASE_URL
+            val wsBase = if (base.startsWith("https")) {
+                base.replaceFirst("https", "wss")
+            } else {
+                base.replaceFirst("http", "ws")
+            }
+            return wsBase + "/admin/api/push/ws"
+        }
+
+    /**
+     * 建立推送 WebSocket 连接（长连接，实时接收服务端推送事件）。
+     * 认证由全局拦截器自动携带 Bearer token；连接/消息/断开均由 [listener] 回调驱动。
+     */
+    fun connectPushWebSocket(listener: WebSocketListener): WebSocket {
+        val request = Request.Builder().url(pushWsUrl).build()
+        return pushWsClient.newWebSocket(request, listener)
     }
 
     /** GET 请求，params 拼为 query string（跳过空值） */

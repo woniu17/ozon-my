@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.yochylin.scanner.adapter.fmtMoney
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
@@ -22,6 +23,7 @@ import com.yochylin.scanner.api.optDouble
 import com.yochylin.scanner.api.optInt
 import com.yochylin.scanner.api.optString
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,10 +31,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 新订单通知前台服务（保活）：
@@ -135,42 +141,67 @@ class NewOrderNotifyService : Service() {
 
     /**
      * 启动监控：
-     * - 主通道：长轮询服务端推送事件（实时新订单）
-     * - 兜底：每 5 分钟差集 catch-up + 刷新今日统计（补长轮询断线期间漏掉的事件）
+     * - 主通道：WebSocket 实时推送服务端事件（断线指数退避重连，重连后先差集补漏）
+     * - 兜底：每 5 分钟差集 catch-up + 刷新今日统计（补断线期间漏掉的事件）
      */
     private fun startMonitoring() {
         if (pushJob != null || fallbackJob != null) return
         loadNotifiedSns()
 
-        // 主通道：长轮询
+        // 主通道：WebSocket 实时推送（第二版，断线指数退避重连，重连成功后先差集补漏）
         pushJob = scope.launch {
             var backoffMs = 1_000L
-            var wasDisconnected = false
+            val wasDisconnected = AtomicBoolean(false)
             while (isActive) {
-                try {
-                    val events = Api.longPollPushEvents(PUSH_TIMEOUT_MS)
-                    if (wasDisconnected) {
-                        // 断线重连成功：先补漏再处理新事件
-                        runCatchUpDiff()
-                        wasDisconnected = false
+                val closed = CompletableDeferred<Unit>()
+                val listener = object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        // 重连成功后先补漏（首次连接 wasDisconnected=false 不补）
+                        if (wasDisconnected.getAndSet(false)) {
+                            scope.launch { runCatchUpDiff() }
+                        }
                     }
-                    handlePushEvents(events)
-                    backoffMs = 1_000L
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: ApiException) {
-                    if (e.code == 401) {
-                        stopSelf()
-                        return@launch
+
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        val events = parsePushEvents(text)
+                        if (events.isEmpty()) return
+                        scope.launch {
+                            if (wasDisconnected.getAndSet(false)) {
+                                runCatchUpDiff()
+                            }
+                            handlePushEvents(events)
+                        }
                     }
-                    wasDisconnected = true
-                    delay(backoffMs)
-                    backoffMs = (backoffMs * 2).coerceAtMost(60_000L)
-                } catch (e: Exception) {
-                    wasDisconnected = true
-                    delay(backoffMs)
-                    backoffMs = (backoffMs * 2).coerceAtMost(60_000L)
+
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        // token 无效（服务端 close 4001）时停止监控，登录页会重新拉起
+                        if (code == 4001) {
+                            stopSelf()
+                            return
+                        }
+                        if (!closed.isCompleted) closed.complete(Unit)
+                    }
+
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        if (response?.code == 401) {
+                            stopSelf()
+                            return
+                        }
+                        if (!closed.isCompleted) closed.complete(Unit)
+                    }
                 }
+
+                val ws = Api.connectPushWebSocket(listener)
+                try {
+                    closed.await()
+                } catch (e: CancellationException) {
+                    ws.cancel()
+                    throw e
+                }
+                ws.cancel()
+                wasDisconnected.set(true)
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(60_000L)
             }
         }
 
@@ -190,7 +221,18 @@ class NewOrderNotifyService : Service() {
         }
     }
 
-    /** 处理长轮询返回的事件列表（目前只处理 NEW_ORDER） */
+    /** 解析服务端推送消息 {events:[...]}（WebSocket 与长轮询响应同构） */
+    private fun parsePushEvents(text: String): List<JsonObject> {
+        return try {
+            val root = JsonParser.parseString(text).asJsonObject
+            val arr = root.getAsJsonArray("events") ?: JsonArray()
+            arr.mapNotNull { if (it.isJsonObject) it.asJsonObject else null }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** 处理服务端推送的事件列表（目前只处理 NEW_ORDER） */
     private fun handlePushEvents(events: List<JsonObject>) {
         for (ev in events) {
             if (ev.optString("type") != "NEW_ORDER") continue
