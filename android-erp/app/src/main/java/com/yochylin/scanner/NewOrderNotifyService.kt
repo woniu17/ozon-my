@@ -91,7 +91,7 @@ class NewOrderNotifyService : Service() {
         )
     }
 
-    /** 构建方块样式的常驻监控通知（自定义 RemoteViews 展示两个数据格） */
+    /** 构建方块样式的常驻监控通知：不设标题/正文，直接显示今日单量/销售额两个数据方块 */
     private fun buildMonitorNotification(orderCountText: String, salesText: String): Notification {
         val views = RemoteViews(packageName, R.layout.notification_monitor)
         views.setTextViewText(R.id.monitorOrderCountValue, orderCountText)
@@ -108,11 +108,9 @@ class NewOrderNotifyService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_MONITOR)
             .setSmallIcon(R.drawable.ic_stat_new_order)
-            .setContentTitle("新订单监控中")
-            .setContentText("今日单量 $orderCountText · 销售额 $salesText")
-            // 参考千牛：折叠时保持系统默认单行（不高、不被折叠），下拉展开才显示方块数据
+            // 折叠与展开均直接显示方块数据，无"新订单监控中"文案、无折叠成单行的效果
+            .setCustomContentView(views)
             .setCustomBigContentView(views)
-            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setOngoing(true)
             .setContentIntent(pi)
             .setPriority(NotificationCompat.PRIORITY_LOW)

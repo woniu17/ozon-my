@@ -103,9 +103,9 @@ router.get('/admin/api/order-stats/summary', (req, res, next) => {
     const rowsNew = db.prepare(`
       SELECT store_id,
         COUNT(*) AS cnt,
-        SUM(CASE WHEN status NOT IN (${cancelPh}) THEN 1 ELSE 0 END) AS valid_cnt,
+        SUM(CASE WHEN status IN (${cancelPh}) THEN 0 ELSE 1 END) AS valid_cnt,
         COALESCE(SUM(CASE WHEN currency='CNY' THEN order_amount END), 0) AS amt,
-        COALESCE(SUM(CASE WHEN currency='CNY' AND status NOT IN (${cancelPh}) THEN order_amount END), 0) AS valid_amt
+        COALESCE(SUM(CASE WHEN currency='CNY' AND status IN (${cancelPh}) THEN 0 ELSE order_amount END), 0) AS valid_amt
       FROM op_ozon_order
       WHERE in_process_at IS NOT NULL
         AND in_process_at >= ? AND in_process_at < ?
