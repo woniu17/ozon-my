@@ -10,6 +10,7 @@ object Session {
     private const val KEY_PHONE = "phone"
     private const val KEY_INTRANET = "use_intranet"
     private const val KEY_LAST_WAIT = "last_wait_process_count"
+    private const val KEY_LAST_WAIT_SNS = "last_wait_process_sns"
 
     private lateinit var prefs: SharedPreferences
 
@@ -24,6 +25,13 @@ object Session {
         get() = prefs.getLong(KEY_LAST_WAIT, -1L)
         set(value) {
             prefs.edit().putLong(KEY_LAST_WAIT, value).apply()
+        }
+
+    /** 新订单通知：上次记录的待处理列表最新货件号集合（用于差集计算真正"新增"的订单） */
+    var lastWaitProcessSns: List<String>
+        get() = prefs.getString(KEY_LAST_WAIT_SNS, "")?.split('\u0001')?.filter { it.isNotBlank() } ?: emptyList()
+        set(value) {
+            prefs.edit().putString(KEY_LAST_WAIT_SNS, value.joinToString("\u0001")).apply()
         }
 
     /** 内网模式：为 true 时后端走内网地址，false 走公网 */
