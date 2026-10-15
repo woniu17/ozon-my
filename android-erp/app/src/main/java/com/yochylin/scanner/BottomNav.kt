@@ -33,6 +33,8 @@ fun setupBottomNav(activity: Activity, active: String) {
                 val intent = Intent(activity, item.cls)
                 intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 activity.startActivity(intent)
+                // 底部导航切换不做页面转场动画，底部栏视觉常驻，仅高亮颜色变化
+                activity.overridePendingTransition(0, 0)
             }
         }
     }
