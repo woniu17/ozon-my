@@ -59,6 +59,9 @@ class FinanceActivity : ComponentActivity() {
     private lateinit var detailTabSettled: TextView
     private lateinit var detailTabPending: TextView
     private lateinit var detailTabNonOrder: TextView
+    private lateinit var tabIndicatorSettled: View
+    private lateinit var tabIndicatorPending: View
+    private lateinit var tabIndicatorNonOrder: View
     private lateinit var financeSearchRow: LinearLayout
     private lateinit var keywordInput: EditText
     private lateinit var progressBar: ProgressBar
@@ -117,6 +120,9 @@ class FinanceActivity : ComponentActivity() {
         detailTabSettled = findViewById(R.id.detailTabSettled)
         detailTabPending = findViewById(R.id.detailTabPending)
         detailTabNonOrder = findViewById(R.id.detailTabNonOrder)
+        tabIndicatorSettled = findViewById(R.id.tabIndicatorSettled)
+        tabIndicatorPending = findViewById(R.id.tabIndicatorPending)
+        tabIndicatorNonOrder = findViewById(R.id.tabIndicatorNonOrder)
         financeSearchRow = findViewById(R.id.financeSearchRow)
         keywordInput = findViewById(R.id.financeKeywordInput)
         progressBar = findViewById(R.id.financeProgress)
@@ -170,7 +176,7 @@ class FinanceActivity : ComponentActivity() {
             val tv = TextView(this).apply {
                 text = p.label
                 textSize = 12f
-                setPadding(26, 10, 26, 10)
+                setPadding(dp(22).toInt(), dp(9).toInt(), dp(22).toInt(), dp(9).toInt())
                 gravity = Gravity.CENTER
             }
             updatePresetStyle(tv, p.key == activePreset)
@@ -192,7 +198,10 @@ class FinanceActivity : ComponentActivity() {
 
     private fun updatePresetStyle(tv: TextView, active: Boolean) {
         tv.setTextColor(if (active) Color.WHITE else Color.parseColor("#4e5969"))
-        tv.setBackgroundResource(if (active) R.drawable.tab_active_bg else R.drawable.tab_normal_bg)
+        tv.setRoundedBg(
+            if (active) Color.parseColor(COLOR_PRIMARY) else Color.parseColor("#f2f3f5"),
+            16f
+        )
     }
 
     private fun onPresetClick(key: String) {
@@ -421,12 +430,13 @@ class FinanceActivity : ComponentActivity() {
     private fun addGroupCard(container: LinearLayout, title: String, g: GroupAgg, group: String) {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
-            setPadding(14, 12, 14, 12)
+            setRoundedBg(Color.WHITE, 16f)
+            elevation = dp(2f)
+            setPadding(dp(16).toInt(), dp(14).toInt(), dp(16).toInt(), dp(14).toInt())
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 10 }
+            ).apply { bottomMargin = dp(12).toInt() }
             setOnClickListener {
                 // 点击卡片整体 → 切到对应明细 tab（清除联动筛选）
                 switchMode(if (group == "settled") "settled" else "pending")
@@ -437,13 +447,21 @@ class FinanceActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        // 品牌色圆点 + 标题
+        head.addView(View(this).apply {
+            setRoundedBg(Color.parseColor(COLOR_PRIMARY), 4f)
+            layoutParams = LinearLayout.LayoutParams(dp(8).toInt(), dp(8).toInt()).apply {
+                rightMargin = dp(6).toInt()
+            }
+        })
         val titleTv = TextView(this).apply {
             text = if (group == "settled" && g.estimated) "$title(含预估)" else title
             setTextColor(Color.parseColor(COLOR_TEXT))
-            textSize = 14f
+            textSize = 15f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        head.addView(titleTv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        head.addView(titleTv)
         val countTv = TextView(this).apply {
             text = "${g.orderCount} 单"
             setTextColor(Color.parseColor(COLOR_MUTE))
@@ -455,11 +473,14 @@ class FinanceActivity : ComponentActivity() {
         val profit = TextView(this).apply {
             text = fmtMoney(g.totalProfit)
             setTextColor(profitColor(g.totalProfit))
-            textSize = 24f
+            textSize = 28f
             typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(0, 6, 0, 0)
+            setPadding(0, dp(6).toInt(), 0, dp(2).toInt())
         }
         card.addView(profit)
+
+        // 分隔线
+        card.addView(divider())
 
         addLine(card, "订单金额", fmtMoney(g.totalOrderAmount))
         addLine(card, "采购成本", fmtMoney(g.totalPurchaseAmount))
@@ -476,12 +497,13 @@ class FinanceActivity : ComponentActivity() {
 
         // 分类子计数（已结算，可点击联动）
         if (group == "settled" && g.byCategory != null) {
+            card.addView(divider())
             val catRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = 8 }
+                ).apply { topMargin = 2 }
             }
             catRow.addView(catChip("已成功 ${g.byCategory.success}", "success"))
             catRow.addView(catChip("已取消 ${g.byCategory.cancelled}", "cancelled"))
@@ -491,12 +513,13 @@ class FinanceActivity : ComponentActivity() {
 
         // 应计类型（可点击联动）
         if (!g.accrualTypes.isNullOrEmpty()) {
+            card.addView(divider())
             val chips = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = 8 }
+                ).apply { topMargin = 2 }
             }
             for (t in g.accrualTypes.take(8)) {
                 chips.addView(typeChip("${t.nameCn ?: "类型${t.typeId}"}×${t.count}", t.typeId, group))
@@ -507,16 +530,30 @@ class FinanceActivity : ComponentActivity() {
         container.addView(card)
     }
 
+    /** 浅灰分隔线 */
+    private fun divider(): View {
+        return View(this).apply {
+            setBackgroundColor(Color.parseColor("#f2f3f5"))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(1).toInt()
+            ).apply {
+                topMargin = dp(10).toInt()
+                bottomMargin = dp(10).toInt()
+            }
+        }
+    }
+
     /** 分类筛选 chip：点击后联动已结算明细并按分类过滤 */
     private fun catChip(text: String, cat: String): TextView {
         return TextView(this).apply {
             this.text = text
             setTextColor(Color.parseColor(COLOR_PRIMARY))
             textSize = 10f
-            setRoundedBg(Color.parseColor("#eef4ff"))
-            setPadding(10, 4, 10, 4)
+            setRoundedBg(Color.parseColor("#eef4ff"), 10f)
+            setPadding(12, 6, 12, 6)
             val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.rightMargin = 6
+            lp.rightMargin = dp(8).toInt()
             layoutParams = lp
             setOnClickListener {
                 activeCategory = cat
@@ -536,11 +573,11 @@ class FinanceActivity : ComponentActivity() {
         return TextView(this).apply {
             this.text = text
             setTextColor(Color.parseColor("#4e5969"))
-            textSize = 9f
-            setRoundedBg(Color.parseColor("#f2f3f5"))
-            setPadding(8, 3, 8, 3)
+            textSize = 10f
+            setRoundedBg(Color.parseColor("#f2f3f5"), 10f)
+            setPadding(10, 5, 10, 5)
             val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.rightMargin = 6
+            lp.rightMargin = dp(8).toInt()
             layoutParams = lp
             setOnClickListener {
                 activeTypeId = typeId
@@ -558,12 +595,13 @@ class FinanceActivity : ComponentActivity() {
     private fun addNonOrderCard(container: LinearLayout, n: com.yochylin.scanner.model.NonOrderAgg) {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
-            setPadding(14, 12, 14, 12)
+            setRoundedBg(Color.WHITE, 16f)
+            elevation = dp(2f)
+            setPadding(dp(16).toInt(), dp(14).toInt(), dp(16).toInt(), dp(14).toInt())
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 10 }
+            ).apply { bottomMargin = dp(12).toInt() }
             setOnClickListener {
                 switchMode("nonorder")
             }
@@ -572,10 +610,16 @@ class FinanceActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        head.addView(View(this).apply {
+            setRoundedBg(Color.parseColor(COLOR_WARN), 4f)
+            layoutParams = LinearLayout.LayoutParams(dp(8).toInt(), dp(8).toInt()).apply {
+                rightMargin = dp(6).toInt()
+            }
+        })
         head.addView(TextView(this).apply {
             text = "非订单应计"
             setTextColor(Color.parseColor(COLOR_TEXT))
-            textSize = 14f
+            textSize = 15f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
@@ -585,9 +629,11 @@ class FinanceActivity : ComponentActivity() {
             textSize = 11f
         })
         card.addView(head)
+        card.addView(divider())
         addLine(card, "金额(CNY)", n.totalCny?.let { fmtMoney(it) } ?: "—")
         addLine(card, "金额(RUB)", fmtNum(n.totalRub))
         if (!n.accrualTypes.isNullOrEmpty()) {
+            card.addView(divider())
             for (t in n.accrualTypes.take(6)) {
                 addLine(card, t.nameCn ?: "类型${t.typeId}", "${t.count} 笔 · ${fmtMoney(t.cny ?: t.rub)}")
             }
@@ -601,19 +647,19 @@ class FinanceActivity : ComponentActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = 4 }
+            ).apply { topMargin = dp(6).toInt() }
         }
         val k = TextView(this).apply {
             text = key
             setTextColor(Color.parseColor(COLOR_MUTE))
-            textSize = 11f
-            layoutParams = LinearLayout.LayoutParams(110, ViewGroup.LayoutParams.WRAP_CONTENT)
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(dp(100).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         row.addView(k)
         val v = TextView(this).apply {
             text = value
             setTextColor(Color.parseColor(COLOR_TEXT))
-            textSize = 11f
+            textSize = 12f
             typeface = android.graphics.Typeface.MONOSPACE
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
@@ -625,11 +671,11 @@ class FinanceActivity : ComponentActivity() {
         return TextView(this).apply {
             this.text = text
             setTextColor(Color.parseColor("#4e5969"))
-            textSize = 9f
-            setRoundedBg(Color.parseColor("#f2f3f5"))
-            setPadding(8, 3, 8, 3)
+            textSize = 10f
+            setRoundedBg(Color.parseColor("#f2f3f5"), 10f)
+            setPadding(10, 5, 10, 5)
             val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.rightMargin = 6
+            lp.rightMargin = dp(8).toInt()
             layoutParams = lp
         }
     }
@@ -661,12 +707,20 @@ class FinanceActivity : ComponentActivity() {
 
     private fun updateDetailTabs() {
         val active = currentMode
-        detailTabSettled.setTextColor(if (active == "settled") Color.parseColor(COLOR_PRIMARY) else Color.parseColor(COLOR_MUTE))
-        detailTabSettled.typeface = if (active == "settled") android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
-        detailTabPending.setTextColor(if (active == "pending") Color.parseColor(COLOR_PRIMARY) else Color.parseColor(COLOR_MUTE))
-        detailTabPending.typeface = if (active == "pending") android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
-        detailTabNonOrder.setTextColor(if (active == "nonorder") Color.parseColor(COLOR_PRIMARY) else Color.parseColor(COLOR_MUTE))
-        detailTabNonOrder.typeface = if (active == "nonorder") android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+        val settled = active == "settled"
+        val pending = active == "pending"
+        val nonOrder = active == "nonorder"
+
+        detailTabSettled.setTextColor(if (settled) Color.parseColor(COLOR_PRIMARY) else Color.parseColor(COLOR_MUTE))
+        detailTabSettled.typeface = if (settled) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+        detailTabPending.setTextColor(if (pending) Color.parseColor(COLOR_PRIMARY) else Color.parseColor(COLOR_MUTE))
+        detailTabPending.typeface = if (pending) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+        detailTabNonOrder.setTextColor(if (nonOrder) Color.parseColor(COLOR_PRIMARY) else Color.parseColor(COLOR_MUTE))
+        detailTabNonOrder.typeface = if (nonOrder) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+
+        tabIndicatorSettled.visibility = if (settled) View.VISIBLE else View.INVISIBLE
+        tabIndicatorPending.visibility = if (pending) View.VISIBLE else View.INVISIBLE
+        tabIndicatorNonOrder.visibility = if (nonOrder) View.VISIBLE else View.INVISIBLE
 
         financeSearchRow.visibility = if (active == "nonorder") View.GONE else View.VISIBLE
     }
@@ -777,6 +831,10 @@ class FinanceActivity : ComponentActivity() {
         if (v == null) return Color.parseColor(COLOR_MUTE)
         return if (v > 0) Color.parseColor(COLOR_OK) else if (v < 0) Color.parseColor(COLOR_ERR) else Color.parseColor(COLOR_MUTE)
     }
+
+    private fun dp(v: Number): Float = android.util.TypedValue.applyDimension(
+        android.util.TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics
+    )
 
     private fun handleError(e: Exception) {
         if (e is ApiException && e.code == 401) {

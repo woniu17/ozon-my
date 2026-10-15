@@ -6,31 +6,33 @@
     android:orientation="vertical"
     android:background="@color/page_bg">
 
-    <!-- 顶部标题栏 -->
+    <!-- 顶部标题栏：白底 + 品牌色返回 -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="52dp"
+        android:layout_height="56dp"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="#165dff"
-        android:paddingHorizontal="12dp">
+        android:background="#ffffff"
+        android:paddingHorizontal="8dp">
 
         <TextView
             android:id="@+id/financeBackBtn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="‹ 返回"
-            android:textColor="#ffffff"
-            android:textSize="15sp"
-            android:padding="8dp" />
+            android:textColor="@color/primary"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="12dp" />
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="财务统计"
-            android:textColor="#ffffff"
-            android:textSize="18sp"
+            android:textColor="@color/text_primary"
+            android:textSize="17sp"
             android:textStyle="bold"
             android:gravity="center" />
 
@@ -39,35 +41,44 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="退出"
-            android:textColor="#ffffff"
-            android:textSize="14sp"
-            android:padding="8dp" />
+            android:textColor="@color/text_muted"
+            android:textSize="13sp"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="12dp" />
     </LinearLayout>
+
+    <!-- 标题栏分隔线 -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
 
     <!-- 时间预设栏 -->
     <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:scrollbars="none"
-        android:background="#ffffff">
+        android:background="#ffffff"
+        android:paddingTop="6dp"
+        android:paddingBottom="8dp">
 
         <LinearLayout
             android:id="@+id/presetContainer"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:paddingHorizontal="8dp"
-            android:paddingVertical="6dp" />
+            android:paddingHorizontal="12dp" />
     </HorizontalScrollView>
 
-    <!-- 区间提示 + 时区 -->
+    <!-- 区间提示 + 时区 + 店铺 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:paddingHorizontal="12dp"
-        android:paddingTop="4dp">
+        android:paddingTop="8dp"
+        android:paddingBottom="2dp">
 
         <TextView
             android:id="@+id/rangeHint"
@@ -76,7 +87,7 @@
             android:layout_weight="1"
             android:text="当前统计区间:全部时间"
             android:textSize="10sp"
-            android:textColor="#86909c"
+            android:textColor="@color/text_muted"
             android:maxLines="2" />
 
         <TextView
@@ -85,10 +96,10 @@
             android:layout_height="wrap_content"
             android:text="北京时间 ▾"
             android:textSize="11sp"
-            android:textColor="#165dff"
-            android:background="#eef4ff"
+            android:textColor="@color/primary"
+            android:background="@drawable/bg_tag_blue"
             android:paddingHorizontal="10dp"
-            android:paddingVertical="4dp" />
+            android:paddingVertical="5dp" />
 
         <TextView
             android:id="@+id/financeStoreBtn"
@@ -96,60 +107,107 @@
             android:layout_height="wrap_content"
             android:text="全部店铺 ▾"
             android:textSize="11sp"
-            android:textColor="#165dff"
-            android:background="#eef4ff"
+            android:textColor="@color/primary"
+            android:background="@drawable/bg_tag_blue"
             android:paddingHorizontal="10dp"
-            android:paddingVertical="4dp"
+            android:paddingVertical="5dp"
             android:layout_marginStart="8dp" />
     </LinearLayout>
 
-    <!-- 汇总卡片容器 -->
+    <!-- 汇总卡片容器（不裁剪子 View 阴影） -->
     <LinearLayout
         android:id="@+id/summaryContainer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:paddingHorizontal="12dp"
-        android:paddingTop="6dp" />
+        android:paddingTop="8dp"
+        android:clipChildren="false"
+        android:clipToPadding="false" />
 
-    <!-- 明细区 -->
+    <!-- 明细 Tab 区 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:background="#ffffff"
-        android:paddingHorizontal="12dp"
-        android:paddingTop="8dp">
+        android:paddingTop="8dp"
+        android:layout_marginTop="8dp">
 
-        <TextView
-            android:id="@+id/detailTabSettled"
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="已结算"
-            android:textSize="13sp"
-            android:gravity="center"
-            android:padding="8dp" />
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
 
-        <TextView
-            android:id="@+id/detailTabPending"
+            <TextView
+                android:id="@+id/detailTabSettled"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="已结算"
+                android:textSize="13sp"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp" />
+
+            <View
+                android:id="@+id/tabIndicatorSettled"
+                android:layout_width="32dp"
+                android:layout_height="3dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_tab_indicator"
+                android:visibility="invisible" />
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="未结算"
-            android:textSize="13sp"
-            android:gravity="center"
-            android:padding="8dp" />
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
 
-        <TextView
-            android:id="@+id/detailTabNonOrder"
+            <TextView
+                android:id="@+id/detailTabPending"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="未结算"
+                android:textSize="13sp"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp" />
+
+            <View
+                android:id="@+id/tabIndicatorPending"
+                android:layout_width="32dp"
+                android:layout_height="3dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_tab_indicator"
+                android:visibility="invisible" />
+        </LinearLayout>
+
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="非订单应计"
-            android:textSize="13sp"
-            android:gravity="center"
-            android:padding="8dp" />
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
+
+            <TextView
+                android:id="@+id/detailTabNonOrder"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="非订单应计"
+                android:textSize="13sp"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp" />
+
+            <View
+                android:id="@+id/tabIndicatorNonOrder"
+                android:layout_width="32dp"
+                android:layout_height="3dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_tab_indicator"
+                android:visibility="invisible" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- 搜索行（订单明细） -->
@@ -161,7 +219,8 @@
         android:gravity="center_vertical"
         android:background="#ffffff"
         android:paddingHorizontal="12dp"
-        android:paddingBottom="6dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="8dp"
         android:visibility="gone">
 
         <EditText
@@ -181,10 +240,18 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="搜索"
-            android:textColor="#165dff"
+            android:textColor="@color/primary"
             android:textSize="14sp"
-            android:padding="8dp" />
+            android:textStyle="bold"
+            android:padding="8dp"
+            android:layout_marginStart="8dp" />
     </LinearLayout>
+
+    <!-- 分隔线（搜索行下方） -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
 
     <ProgressBar
         android:id="@+id/financeProgress"
@@ -208,7 +275,7 @@
         android:layout_height="wrap_content"
         android:text=""
         android:textSize="12sp"
-        android:textColor="#a6abb3"
+        android:textColor="@color/text_placeholder"
         android:gravity="center"
         android:padding="6dp"
         android:visibility="gone" />
