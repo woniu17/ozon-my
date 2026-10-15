@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
+
+    <!-- 左方格：今日单量 -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@drawable/bg_notification_cell"
+        android:paddingVertical="8dp"
+        android:layout_marginEnd="4dp">
+
+        <TextView
+            android:id="@+id/monitorOrderCountLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="今日单量"
+            android:textSize="11sp"
+            android:textColor="#86909c" />
+
+        <TextView
+            android:id="@+id/monitorOrderCountValue"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="--"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#1d2129"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+    <!-- 右方格：今日销售额 -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@drawable/bg_notification_cell"
+        android:paddingVertical="8dp"
+        android:layout_marginStart="4dp">
+
+        <TextView
+            android:id="@+id/monitorSalesLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="今日销售额"
+            android:textSize="11sp"
+            android:textColor="#86909c" />
+
+        <TextView
+            android:id="@+id/monitorSalesValue"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="--"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="#165dff"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+</LinearLayout>
