@@ -8,11 +8,8 @@ import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
 import android.widget.ImageView
 import coil.load
-import coil.request.CachePolicy
-import coil.request.ImageRequest
 
 /** 将 View 背景设置为圆角色块（替代 setBackgroundColor，统一圆角） */
 fun View.setRoundedBg(color: Int, radiusDp: Float = 6f) {
@@ -34,14 +31,12 @@ fun Context.showImagePreview(url: String?) {
         scaleType = ImageView.ScaleType.FIT_CENTER
         setBackgroundColor(Color.parseColor("#f2f3f5"))
         setOnClickListener { dialog.dismiss() }
-        val request = ImageRequest.Builder(this@showImagePreview)
-            .data(url)
-            .placeholder(placeholder)
-            .error(placeholder)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .diskCachePolicy(CachePolicy.ENABLED)
-            .build()
-        load(request)
+        // 与列表完全相同的加载方式，避免自定义 ImageRequest 导致图片加载失败
+        load(url) {
+            placeholder(placeholder)
+            error(placeholder)
+            crossfade(true)
+        }
     }
     dialog.setContentView(img)
     dialog.window?.setBackgroundDrawable(ColorDrawable(Color.BLACK))
