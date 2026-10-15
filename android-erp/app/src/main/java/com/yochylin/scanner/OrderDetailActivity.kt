@@ -18,6 +18,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import coil.load
 import com.yochylin.scanner.adapter.countdownText
@@ -76,6 +77,12 @@ class OrderDetailActivity : ComponentActivity() {
     private var traceOpen = false
     private var traces: List<Trace> = emptyList()
     private var links: List<PurchaseLink> = emptyList()
+
+    /** 采购流程结果回调：返回后刷新详情（新增/删除采购、改物流、备货等） */
+    private val purchaseLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        markChanged()
+        loadDetail()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -771,9 +778,9 @@ class OrderDetailActivity : ComponentActivity() {
             dActionBar.addView(actionButton("面单", COLOR_MUTE) { onLabel(p) })
         }
 
-        // 采购（管理入口，后续版本支持）
+        // 采购（进入三步采购流程）
         dActionBar.addView(actionButton(if (links.isNotEmpty()) "编辑采购" else "采购", COLOR_MUTE) {
-            toast("采购管理开发中,请使用电脑端或小程序")
+            purchaseLauncher.launch(Intent(this, PurchaseActivity::class.java).putExtra("packageId", packageId))
         })
 
         if (links.isNotEmpty() && p.operateStatus != "wait_process") {

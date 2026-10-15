@@ -321,3 +321,109 @@ data class StoreItem(
     val id: String? = null,
     val name: String? = null,
 )
+
+// ── 采购流程(平台订单) ───────────────────────────────────
+
+/** 平台订单商品行（/platform-orders/:platform 返回的 goods 数组项） */
+data class PlatformOrderGoods(
+    val goodsName: String? = null,
+    val goodsId: String? = null,
+    val spec: String? = null,
+    val price: Double? = null,
+    val number: Double? = null,
+    val thumbUrl: String? = null,
+)
+
+/** 优惠条目（PDD/1688 采购金额勾选用） */
+data class PlatformPromotion(
+    val description: String = "",
+    val amount: Double = 0.0,
+    var checked: Boolean = true,
+    val lazy: Boolean = false,
+)
+
+/** 平台订单（列表/搜索返回归一化后的对象） */
+data class PlatformOrder(
+    val orderSn: String = "",
+    var amount: Double = 0.0,
+    val paidAmount: Double? = null,
+    val discountAmount: Double? = null,
+    val trackingNumber: String? = null,
+    val logisticsCompany: String? = null,
+    val orderTime: String? = null,
+    val mallName: String? = null,
+    val sellerName: String? = null,
+    val buyerUserId: String? = null,
+    val buyerUsername: String? = null,
+    val goods: List<PlatformOrderGoods> = emptyList(),
+    val promotions: MutableList<PlatformPromotion> = mutableListOf(),
+    var promotionNotes: List<String> = emptyList(),
+    val account: String? = null,
+    val platformVal: String = "",
+    var amountManual: Boolean = false,
+    var promoLoading: Boolean = false,
+)
+
+/** 平台×账号 tab */
+data class PlatformTab(
+    val key: String,
+    val platform: String,       // 请求平台 pdd/ali1688/taobao/xianyu
+    val platformVal: String,   // 入库平台值 yangkeduo/1688/taobao/xianyu
+    val account: String,
+    val label: String,
+    val login: String? = null,   // yes/no/unknown
+)
+
+/** 某个平台 tab 的订单状态（懒加载） */
+data class PlatformStore(
+    val orders: MutableList<PlatformOrder> = mutableListOf(),
+    val searched: MutableList<PlatformOrder> = mutableListOf(),
+    val selected: MutableSet<String> = LinkedHashSet(),
+    var tab: String = "all",
+    var loading: Boolean = false,
+    var error: String = "",
+)
+
+/** 拼单查询结果（purchase/lookup） */
+data class LookupResult(
+    val exists: Boolean = false,
+    val linkedPackages: List<LookupLinkedPackage> = emptyList(),
+)
+
+data class LookupLinkedPackage(
+    val packageNo: String? = null,
+    val postingNumber: String? = null,
+    val quantity: Double? = null,
+    val allocModes: String? = null,
+    val allocatedAmount: Double? = null,
+)
+
+/** 待新增采购的分摊行参数（提交给 /purchase 的 items） */
+data class PurchaseItemArg(
+    val itemId: String? = null,
+    val amount: Double = 0.0,
+    val quantity: Double = 0.0,
+)
+
+/** 待新增采购：一笔平台订单 = 一个采购单 */
+data class PendingPurchaseOrder(
+    val purchaseSn: String,
+    val buyerAccount: String? = null,
+    val buyerUserId: String? = null,
+    val sellerName: String? = null,
+    val paymentAmount: Double,
+    val logisticsCompany: String? = null,
+    val logisticsNo: String? = null,
+    val platformGoods: List<PlatformOrderGoods> = emptyList(),
+)
+
+/** 待新增采购（Step3 确认后暂存） */
+data class PendingAdd(
+    val platform: String,
+    val platformVal: String,
+    val orders: List<PendingPurchaseOrder>,
+    val paymentAmount: Double,
+    val logisticsNo: String? = null,
+    val items: List<PurchaseItemArg> = emptyList(),
+    val lookup: LookupResult? = null,
+)
