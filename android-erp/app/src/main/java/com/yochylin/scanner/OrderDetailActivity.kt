@@ -762,39 +762,32 @@ class OrderDetailActivity : ComponentActivity() {
         dActionBar.removeAllViews()
 
         // 同步订单
-        dActionBar.addView(actionButton("同步订单", COLOR_MUTE) { onSync() })
+        dActionBar.addView(actionButton("同步订单") { onSync() })
 
         val canShip = (p.operateStatus == "wait_process" || p.operateStatus == "wait_ship") &&
             p.ozonStatus == "awaiting_packaging" && !p.isIgnored
         if (canShip) {
-            dActionBar.addView(actionButton("备货", COLOR_PRIMARY) { onShip(p) })
-        }
-
-        if (p.operateStatus == "wait_ship" && !p.isIgnored) {
-            dActionBar.addView(actionButton("提交发货", COLOR_PRIMARY) { onSubmitShip(p) })
-        }
-
-        if (p.operateStatus in listOf("wait_ship", "ship_success", "wait_receiver_confirm") && !p.isIgnored) {
-            dActionBar.addView(actionButton("面单", COLOR_MUTE) { onLabel(p) })
+            dActionBar.addView(actionButton("备货") { onShip(p) })
         }
 
         // 采购（进入三步采购流程）
-        dActionBar.addView(actionButton(if (links.isNotEmpty()) "编辑采购" else "采购", COLOR_MUTE) {
+        dActionBar.addView(actionButton(if (links.isNotEmpty()) "编辑采购" else "采购") {
             purchaseLauncher.launch(Intent(this, PurchaseActivity::class.java).putExtra("packageId", packageId))
         })
 
         if (links.isNotEmpty() && p.operateStatus != "wait_process") {
-            dActionBar.addView(actionButton("同步采购物流", COLOR_MUTE) { onSyncLogistics() })
+            dActionBar.addView(actionButton("同步采购物流") { onSyncLogistics() })
         }
     }
 
-    private fun actionButton(text: String, color: String, onClick: () -> Unit): TextView {
+    /** 详情页操作按钮：统一浅蓝底 + 主色文字风格 */
+    private fun actionButton(text: String, onClick: () -> Unit): TextView {
         return TextView(this).apply {
             this.text = text
-            setTextColor(Color.WHITE)
+            setTextColor(Color.parseColor(COLOR_PRIMARY))
             textSize = 14f
-            setRoundedBg(Color.parseColor(color), 10f)
-            setPadding(dp(26), dp(15), dp(26), dp(15))
+            setRoundedBg(Color.parseColor("#e8f3ff"), 10f)
+            setPadding(dp(24), dp(14), dp(24), dp(14))
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
