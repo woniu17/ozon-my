@@ -447,9 +447,10 @@ class FinanceActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        // 品牌色圆点 + 标题
+        // 状态圆点 + 标题（已结算蓝 / 未结算橙）
         head.addView(View(this).apply {
-            setRoundedBg(Color.parseColor(COLOR_PRIMARY), 4f)
+            val dotColor = if (group == "settled") COLOR_PRIMARY else COLOR_WARN
+            setRoundedBg(Color.parseColor(dotColor), 4f)
             layoutParams = LinearLayout.LayoutParams(dp(8).toInt(), dp(8).toInt()).apply {
                 rightMargin = dp(6).toInt()
             }
@@ -611,7 +612,7 @@ class FinanceActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         head.addView(View(this).apply {
-            setRoundedBg(Color.parseColor(COLOR_WARN), 4f)
+            setRoundedBg(Color.parseColor(COLOR_ERR), 4f)
             layoutParams = LinearLayout.LayoutParams(dp(8).toInt(), dp(8).toInt()).apply {
                 rightMargin = dp(6).toInt()
             }

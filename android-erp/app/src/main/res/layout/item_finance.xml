@@ -4,8 +4,9 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:background="@drawable/bg_card"
+    android:elevation="2dp"
     android:padding="@dimen/card_padding"
-    android:layout_marginBottom="10dp">
+    android:layout_marginBottom="12dp">
 
     <!-- 头部：货件号 + 分类 + 利润 -->
     <LinearLayout
@@ -28,16 +29,16 @@
             android:id="@+id/fCategory"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="10sp"
-            android:paddingHorizontal="8dp"
-            android:paddingVertical="2dp" />
+            android:textSize="11sp"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp" />
 
         <TextView
             android:id="@+id/fProfit"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
-            android:textSize="14sp"
+            android:layout_marginStart="12dp"
+            android:textSize="15sp"
             android:typeface="monospace"
             android:textStyle="bold" />
     </LinearLayout>
@@ -47,8 +48,8 @@
         android:id="@+id/fMeta"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:textSize="10sp"
+        android:layout_marginTop="5dp"
+        android:textSize="11sp"
         android:textColor="#86909c" />
 
     <!-- 金额行 -->
@@ -56,8 +57,8 @@
         android:id="@+id/fAmounts"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:textSize="10sp"
+        android:layout_marginTop="5dp"
+        android:textSize="11sp"
         android:textColor="#4e5969" />
 
     <!-- 应计类型 chips -->
@@ -66,6 +67,6 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginTop="6dp" />
+        android:layout_marginTop="8dp" />
 
 </LinearLayout>

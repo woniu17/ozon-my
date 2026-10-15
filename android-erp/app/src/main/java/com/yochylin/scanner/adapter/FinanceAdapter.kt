@@ -169,14 +169,14 @@ class FinanceAdapter : RecyclerView.Adapter<FinanceAdapter.VH>() {
             return TextView(context).apply {
                 this.text = text
                 setTextColor(Color.parseColor("#4e5969"))
-                textSize = 9f
-                setRoundedBg(Color.parseColor("#f2f3f5"))
-                setPadding(8, 3, 8, 3)
+                textSize = 10f
+                setRoundedBg(Color.parseColor("#f2f3f5"), 10f)
+                setPadding(10, 5, 10, 5)
                 val lp = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 )
-                lp.rightMargin = 6
+                lp.rightMargin = dp(8)
                 layoutParams = lp
             }
         }
@@ -184,8 +184,12 @@ class FinanceAdapter : RecyclerView.Adapter<FinanceAdapter.VH>() {
         private fun bindBadge(tv: TextView, text: String, color: String) {
             tv.text = text
             tv.setTextColor(Color.parseColor(color))
-            tv.setRoundedBg(Color.parseColor(softBg(color)))
+            tv.setRoundedBg(Color.parseColor(softBg(color)), 10f)
             tv.visibility = View.VISIBLE
+        }
+
+        private fun dp(v: Number): Int {
+            return (v.toFloat() * context.resources.displayMetrics.density).toInt()
         }
 
         private fun profitColor(v: Double?): Int {
