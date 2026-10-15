@@ -6,6 +6,7 @@ import { getDb } from '../../../db/index.js';
 import { getPostingDetail } from '../opi-client.js';
 import { getStoreBySellerId } from '../store-map.js';
 import { notifyPostingEvent, extractSaleAmountCny } from '../feishu-notify.js';
+import { publishPostingEvent } from '../../push-hub.js';
 import { orderPackageDao } from '../../../db/dao/sqlite/order-daos.js';
 import logger from '../../../middleware/log.js';
 
@@ -128,4 +129,8 @@ export default async function newPostingHandler(payload, ctx) {
     });
     if (store && ok) orderPackageDao.markFeishuNotified(store.id, postingNumber);
   }
+
+  // 推送 Android 新订单事件（与飞书通知解耦，客户端自行去重）
+  // 2026-10 新增：服务端推送第一版（长轮询）
+  publishPostingEvent('TYPE_NEW_POSTING', fullPayload);
 }

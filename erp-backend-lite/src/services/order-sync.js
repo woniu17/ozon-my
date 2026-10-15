@@ -24,6 +24,7 @@ import { orderPackageDao, setStoreNameMap } from '../db/dao/sqlite/order-daos.js
 import { getAccrualTypes, findPendingAccrualPostings, findBackfillAccrualPostings, findAccrualPostingsByPackageIds, replaceAccruals } from '../db/dao/sqlite/accrual-dao.js';
 import { db } from '../db/index.js';
 import { notifyPostingEvent, notifyPostingPickedUp } from './webhook/feishu-notify.js';
+import { publishPostingEvent } from './push-hub.js';
 import { apiToPush, pushRankOf } from './webhook/status-map.js';
 
 // ── 三级同步节奏(2026-09-16)─────────────────────────────────
@@ -249,9 +250,11 @@ function maybeBackfillFeishuNotify(store, posting) {
 
   // 1) 新订单(TYPE_NEW_POSTING):API 轮询 posting 与 webhook OPI 回拉同源,补 seller_id 即可复用通知逻辑
   if (inWindow(posting.in_process_at)) {
-    enqueueFeishuBackfill(store, postingNumber, 'new_order', cutoff, '新订单', () =>
-      notifyPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId }, 'polling')
-    );
+    enqueueFeishuBackfill(store, postingNumber, 'new_order', cutoff, '新订单', () => {
+      notifyPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId }, 'polling');
+      // 推送 Android 新订单事件（与飞书通知解耦，客户端自行去重）
+      publishPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId });
+    });
   }
 
   // 2) 状态通知:substatus 优先(v4 直接返回推送模型状态名),否则 status 映射

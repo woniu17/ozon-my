@@ -1,6 +1,7 @@
 package com.yochylin.scanner.api
 
 import com.google.gson.Gson
+import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -94,6 +95,13 @@ object Api {
             .build()
     }
 
+    /** 长轮询专用 client：读超时需大于服务端挂起时长（25s），否则 OkHttp 先超时 */
+    private val pushPollClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(40, TimeUnit.SECONDS)
+            .build()
+    }
+
     /** GET 请求，params 拼为 query string（跳过空值） */
     suspend fun get(path: String, params: Map<String, Any?>? = null): JsonElement {
         val url = buildUrl(path, params)
@@ -104,6 +112,35 @@ object Api {
     suspend fun post(path: String, body: Any? = null): JsonElement {
         return callRaw(BASE_URL + path, "POST", body)
     }
+
+    /**
+     * 长轮询服务端推送事件：请求挂起最多 timeoutMs 毫秒，有事件立即返回，超时返回空列表。
+     * 服务端路径 /admin/api/push/events（JWT 保护，拦截器自动携带 token）。
+     */
+    suspend fun longPollPushEvents(timeoutMs: Int = 25_000): List<JsonObject> =
+        withContext(Dispatchers.IO) {
+            val url = buildUrl("/admin/api/push/events", mapOf("timeout" to timeoutMs))
+            val request = Request.Builder().url(url).build()
+            pushPollClient.newCall(request).execute().use { response ->
+                val text = response.body?.string() ?: ""
+
+                if (response.code == 401) {
+                    Session.clear()
+                    throw ApiException(401, "登录已过期,请重新登录")
+                }
+                if (!response.isSuccessful) {
+                    throw ApiException(response.code, parseError(text, response.code))
+                }
+
+                val root = try {
+                    JsonParser.parseString(text).asJsonObject
+                } catch (e: Exception) {
+                    JsonObject()
+                }
+                val events: JsonArray = root.getAsJsonArray("events") ?: JsonArray()
+                events.mapNotNull { if (it.isJsonObject) it.asJsonObject else null }
+            }
+        }
 
     private suspend fun callRaw(url: String, method: String, body: Any?): JsonElement =
         withContext(Dispatchers.IO) {

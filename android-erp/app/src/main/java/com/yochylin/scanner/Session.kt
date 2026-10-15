@@ -11,6 +11,8 @@ object Session {
     private const val KEY_INTRANET = "use_intranet"
     private const val KEY_LAST_WAIT = "last_wait_process_count"
     private const val KEY_LAST_WAIT_SNS = "last_wait_process_sns"
+    private const val KEY_LAST_WAIT_INIT = "last_wait_process_init"
+    private const val KEY_NOTIFIED_SNS = "notified_push_sns"
 
     private lateinit var prefs: SharedPreferences
 
@@ -32,6 +34,20 @@ object Session {
         get() = prefs.getString(KEY_LAST_WAIT_SNS, "")?.split('\u0001')?.filter { it.isNotBlank() } ?: emptyList()
         set(value) {
             prefs.edit().putString(KEY_LAST_WAIT_SNS, value.joinToString("\u0001")).apply()
+        }
+
+    /** 差集基线是否已初始化。false（首次启动/登出后）时只记录基线不通知，避免存量订单误报 */
+    var lastWaitProcessInit: Boolean
+        get() = prefs.getBoolean(KEY_LAST_WAIT_INIT, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_LAST_WAIT_INIT, value).apply()
+        }
+
+    /** 最近已推送过新订单通知的货件号集合（服务端事件与差集兜底共用去重，持久化防重启重复通知） */
+    var notifiedPushSns: List<String>
+        get() = prefs.getString(KEY_NOTIFIED_SNS, "")?.split('\u0001')?.filter { it.isNotBlank() } ?: emptyList()
+        set(value) {
+            prefs.edit().putString(KEY_NOTIFIED_SNS, value.joinToString("\u0001")).apply()
         }
 
     /** 内网模式：为 true 时后端走内网地址，false 走公网 */
@@ -61,6 +77,13 @@ object Session {
     }
 
     fun clear() {
-        prefs.edit().remove(KEY_TOKEN).remove(KEY_PHONE).apply()
+        prefs.edit()
+            .remove(KEY_TOKEN)
+            .remove(KEY_PHONE)
+            // 清除新订单监控基线：换账号/重新登录后首次差集只记录不通知
+            .remove(KEY_LAST_WAIT)
+            .remove(KEY_LAST_WAIT_SNS)
+            .remove(KEY_LAST_WAIT_INIT)
+            .apply()
     }
 }

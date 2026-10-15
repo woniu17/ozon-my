@@ -31,6 +31,7 @@ import orderStatsRoutes from './modules/order-stats.js';
 import financeStatsRoutes from './modules/finance-stats.js';
 import priceManageRoutes from './modules/price-manage.js';
 import webhookRoutes from './modules/webhook.js';
+import pushRoutes from './modules/push.js';
 import { auditLog } from './middleware/audit.js';
 import { startImportStatusPoller } from './services/import-status-poller.js';
 import { startQueueCleanupPoller } from './services/queue-cleanup-poller.js';
@@ -208,6 +209,8 @@ app.use(productUpdateRoutes);
 app.use(productArchiveRoutes);
 app.use(exportExcelRoutes);
 app.use(platformOrdersRoutes);
+// 服务端推送（长轮询接收端点，JWT 保护）
+app.use(pushRoutes);
 
 // 代采端点(feature-flag 门控:仅 proxy_collect=true 时挂载)
 if (config.featureFlags?.proxy_collect) {

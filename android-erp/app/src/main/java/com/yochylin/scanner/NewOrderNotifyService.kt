@@ -14,12 +14,14 @@ import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.yochylin.scanner.adapter.fmtMoney
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
 import com.yochylin.scanner.api.optDouble
 import com.yochylin.scanner.api.optInt
 import com.yochylin.scanner.api.optString
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,7 +42,11 @@ import java.util.TimeZone
 class NewOrderNotifyService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var pollJob: Job? = null
+    private var pushJob: Job? = null
+    private var fallbackJob: Job? = null
+
+    /** 最近已通知过新订单的货件号（内存去重，持久化到 Session，防服务重启重复通知） */
+    private val notifiedSns = LinkedHashSet<String>()
 
     /** 一条新订单摘要（店铺/货件号/销售金额，对齐飞书通知字段） */
     private data class NewOrderInfo(
@@ -54,7 +60,9 @@ class NewOrderNotifyService : Service() {
         const val CHANNEL_NEW_ORDER = "new_order"
         const val NOTIFICATION_ONGOING_ID = 1002
         const val NOTIFICATION_NEW_ORDER_ID = 1001
-        const val POLL_INTERVAL_MS = 30_000L
+        const val PUSH_TIMEOUT_MS = 25_000
+        const val FALLBACK_INTERVAL_MS = 5 * 60_000L
+        const val NOTIFIED_MAX = 20
         const val LIST_SIZE = 10
     }
 
@@ -71,7 +79,7 @@ class NewOrderNotifyService : Service() {
         }
         // 前台服务常驻通知（先占位，轮询到数据后更新为今日单量/销售额）
         startForeground(NOTIFICATION_ONGOING_ID, buildMonitorNotification("--", "—"))
-        startPolling()
+        startMonitoring()
         return START_STICKY
     }
 
@@ -125,64 +133,154 @@ class NewOrderNotifyService : Service() {
         nm.notify(NOTIFICATION_ONGOING_ID, buildMonitorNotification(countText, salesText))
     }
 
-    private fun startPolling() {
-        if (pollJob != null) return
-        pollJob = scope.launch {
+    /**
+     * 启动监控：
+     * - 主通道：长轮询服务端推送事件（实时新订单）
+     * - 兜底：每 5 分钟差集 catch-up + 刷新今日统计（补长轮询断线期间漏掉的事件）
+     */
+    private fun startMonitoring() {
+        if (pushJob != null || fallbackJob != null) return
+        loadNotifiedSns()
+
+        // 主通道：长轮询
+        pushJob = scope.launch {
+            var backoffMs = 1_000L
+            var wasDisconnected = false
             while (isActive) {
-                // 1) 今日单量/销售额 → 更新常驻通知
                 try {
-                    val today = dateString(0)
-                    val tomorrow = dateString(1)
-                    val obj = Api.get(
-                        "/admin/api/order-stats/summary",
-                        mapOf("from" to today, "to" to tomorrow, "tz" to "Asia/Shanghai")
-                    ).asJsonObject
-                    val totals = obj.getAsJsonObject("totals")?.getAsJsonObject("new")
-                    val count = totals?.optInt("validCount", 0) ?: 0
-                    val amount = totals?.optDouble("validAmount", 0.0) ?: 0.0
-                    updateMonitorNotification(count.toLong(), amount)
-                } catch (_: Exception) {
-                    // 今日统计失败不影响新订单检测
-                }
-
-                // 2) 新订单检测：tabs 计数 + 待处理列表差集，识别真正"新增"的订单
-                try {
-                    val obj = Api.get("/admin/api/order-process/tabs").asJsonObject
-                    val waitCount = obj.optInt("waitProcess", -1).toLong()
-
-                    val current = fetchLatestWaitProcessOrders()
-                    val currentSns = current.map { it.postingNumber }.filter { it.isNotBlank() }
-                    val lastSns = Session.lastWaitProcessSns
-                    val newOrders = currentSns.filter { it !in lastSns }
-                        .mapNotNull { sn -> current.find { it.postingNumber == sn } }
-                    Session.lastWaitProcessSns = currentSns
-
-                    var addedFallback = 0L
-                    if (waitCount >= 0) {
-                        val last = Session.lastWaitProcessCount
-                        if (last >= 0 && waitCount > last) {
-                            addedFallback = waitCount - last
-                        }
-                        Session.lastWaitProcessCount = waitCount
+                    val events = Api.longPollPushEvents(PUSH_TIMEOUT_MS)
+                    if (wasDisconnected) {
+                        // 断线重连成功：先补漏再处理新事件
+                        runCatchUpDiff()
+                        wasDisconnected = false
                     }
-
-                    // 优先用差集（精确），差集为空但计数增加时用最新前 N 条兜底
-                    if (newOrders.isNotEmpty()) {
-                        sendNewOrderNotification(waitCount, newOrders.size.toLong(), newOrders)
-                    } else if (addedFallback > 0) {
-                        sendNewOrderNotification(waitCount, addedFallback, current.take(addedFallback.toInt()))
-                    }
-                } catch (e: Exception) {
-                    // 登录过期：停止监控（登录页会再次启动）
-                    if (e is ApiException && e.code == 401) {
+                    handlePushEvents(events)
+                    backoffMs = 1_000L
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ApiException) {
+                    if (e.code == 401) {
                         stopSelf()
                         return@launch
                     }
-                    // 其他网络异常静默，下一轮再试
+                    wasDisconnected = true
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(60_000L)
+                } catch (e: Exception) {
+                    wasDisconnected = true
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(60_000L)
                 }
-                delay(POLL_INTERVAL_MS)
             }
         }
+
+        // 兜底：每 5 分钟差集 catch-up + 刷新今日统计
+        fallbackJob = scope.launch {
+            while (isActive) {
+                delay(FALLBACK_INTERVAL_MS)
+                runCatchUpDiff()
+                refreshTodayStats()
+            }
+        }
+
+        // 启动时：立即刷新今日统计 + 初始化差集基线（首次不通知）
+        scope.launch {
+            refreshTodayStats()
+            runCatchUpDiff()
+        }
+    }
+
+    /** 处理长轮询返回的事件列表（目前只处理 NEW_ORDER） */
+    private fun handlePushEvents(events: List<JsonObject>) {
+        for (ev in events) {
+            if (ev.optString("type") != "NEW_ORDER") continue
+            val postingNumber = ev.optString("postingNumber")
+            if (postingNumber.isBlank() || isRecentlyNotified(postingNumber)) continue
+            markNotified(postingNumber)
+            val info = NewOrderInfo(
+                storeName = ev.optString("storeName"),
+                postingNumber = postingNumber,
+                amount = ev.optDouble("amount"),
+            )
+            val total = ev.optInt("waitProcessCount", 0).toLong()
+            sendNewOrderNotification(total, 1, listOf(info))
+            // 新订单影响今日统计，立即刷新常驻通知
+            scope.launch { refreshTodayStats() }
+        }
+    }
+
+    /**
+     * 差集 catch-up：对比当前待处理前 N 单与上次基线，识别真正"新增"的订单并通知。
+     * 首次启动（基线未初始化）时只记录不通知，避免把存量订单误报为新单。
+     */
+    private suspend fun runCatchUpDiff() {
+        try {
+            val obj = Api.get("/admin/api/order-process/tabs").asJsonObject
+            val waitCount = obj.optInt("waitProcess", -1).toLong()
+
+            val current = fetchLatestWaitProcessOrders()
+            val currentSns = current.map { it.postingNumber }.filter { it.isNotBlank() }
+
+            if (!Session.lastWaitProcessInit) {
+                // 首次：只记录基线，不通知
+                Session.lastWaitProcessSns = currentSns
+                Session.lastWaitProcessInit = true
+                return
+            }
+
+            val lastSns = Session.lastWaitProcessSns
+            val newOrders = currentSns.filter { it !in lastSns && !isRecentlyNotified(it) }
+                .mapNotNull { sn -> current.find { it.postingNumber == sn } }
+            Session.lastWaitProcessSns = currentSns
+
+            if (newOrders.isNotEmpty()) {
+                sendNewOrderNotification(waitCount, newOrders.size.toLong(), newOrders)
+            }
+        } catch (e: ApiException) {
+            if (e.code == 401) stopSelf()
+        } catch (_: Exception) {
+            // 其他网络异常静默，下一轮再试
+        }
+    }
+
+    /** 拉取今日单量/销售额并更新常驻通知（失败静默，不影响主流程） */
+    private suspend fun refreshTodayStats() {
+        try {
+            val today = dateString(0)
+            val tomorrow = dateString(1)
+            val obj = Api.get(
+                "/admin/api/order-stats/summary",
+                mapOf("from" to today, "to" to tomorrow, "tz" to "Asia/Shanghai")
+            ).asJsonObject
+            val totals = obj.getAsJsonObject("totals")?.getAsJsonObject("new")
+            val count = totals?.optInt("validCount", 0) ?: 0
+            val amount = totals?.optDouble("validAmount", 0.0) ?: 0.0
+            updateMonitorNotification(count.toLong(), amount)
+        } catch (_: Exception) {
+            // 今日统计失败不影响新订单检测
+        }
+    }
+
+    // ── 已通知货件号去重（服务端事件与差集兜底共用）──
+
+    private fun loadNotifiedSns() {
+        notifiedSns.clear()
+        notifiedSns.addAll(Session.notifiedPushSns)
+    }
+
+    private fun isRecentlyNotified(sn: String): Boolean = sn in notifiedSns
+
+    private fun markNotified(sn: String) {
+        if (sn.isBlank()) return
+        notifiedSns.add(sn)
+        while (notifiedSns.size > NOTIFIED_MAX) {
+            val it = notifiedSns.iterator()
+            if (it.hasNext()) {
+                it.next()
+                it.remove()
+            }
+        }
+        Session.notifiedPushSns = notifiedSns.toList()
     }
 
     /** 拉取待处理列表最新 N 单（与 App 列表同排序：order desc 最新在前） */
@@ -290,8 +388,10 @@ class NewOrderNotifyService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        pollJob?.cancel()
-        pollJob = null
+        pushJob?.cancel()
+        pushJob = null
+        fallbackJob?.cancel()
+        fallbackJob = null
         super.onDestroy()
     }
 }
