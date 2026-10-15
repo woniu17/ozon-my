@@ -54,6 +54,7 @@ class FinanceFragment : Fragment() {
     }
 
     private lateinit var presetContainer: LinearLayout
+    private lateinit var monthContainer: LinearLayout
     private lateinit var rangeHint: TextView
     private lateinit var tzBtn: TextView
     private lateinit var summaryContainer: LinearLayout
@@ -100,7 +101,6 @@ class FinanceFragment : Fragment() {
         Preset("7d", "近7日"),
         Preset("14d", "近14日"),
         Preset("30d", "近30日"),
-        Preset("month", "月份▾"),
         Preset("custom", "自定义"),
     )
 
@@ -120,6 +120,7 @@ class FinanceFragment : Fragment() {
         view.findViewById<android.view.View>(R.id.financeBackBtn).visibility = android.view.View.GONE
 
         presetContainer = view.findViewById(R.id.presetContainer)
+        monthContainer = view.findViewById(R.id.monthContainer)
         rangeHint = view.findViewById(R.id.rangeHint)
         tzBtn = view.findViewById(R.id.tzBtn)
         summaryContainer = view.findViewById(R.id.summaryContainer)
@@ -193,6 +194,57 @@ class FinanceFragment : Fragment() {
         }
     }
 
+    /** 月份快捷选择：最近4个月 + 更多（所有月份弹窗） */
+    private fun buildMonths() {
+        if (!::monthContainer.isInitialized) return
+        monthContainer.removeAllViews()
+        if (months.isEmpty()) {
+            val tip = TextView(requireContext()).apply {
+                text = "暂无历史月份"
+                textSize = 12f
+                setTextColor(Color.parseColor(COLOR_MUTE))
+                setPadding(dp(16).toInt(), dp(8).toInt(), dp(16).toInt(), dp(8).toInt())
+            }
+            monthContainer.addView(tip)
+            return
+        }
+        for (ym in months.take(4)) {
+            val tv = TextView(requireContext()).apply {
+                text = ym
+                textSize = 12f
+                setPadding(dp(16).toInt(), dp(8).toInt(), dp(16).toInt(), dp(8).toInt())
+                gravity = Gravity.CENTER
+            }
+            val active = activePreset == "month" && from.startsWith(ym)
+            updatePresetStyle(tv, active)
+            tv.setOnClickListener { selectMonth(ym) }
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.rightMargin = 8
+            monthContainer.addView(tv, lp)
+        }
+        val more = TextView(requireContext()).apply {
+            text = "更多 ▾"
+            textSize = 12f
+            setPadding(dp(16).toInt(), dp(8).toInt(), dp(16).toInt(), dp(8).toInt())
+            gravity = Gravity.CENTER
+        }
+        updatePresetStyle(more, false)
+        more.setOnClickListener { showMonthDialog() }
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.rightMargin = 8
+        monthContainer.addView(more, lp)
+    }
+
+    private fun selectMonth(ym: String) {
+        activePreset = "month"
+        val parts = ym.split("-")
+        val y = parts[0].toInt()
+        val m = parts[1].toInt()
+        from = "$ym-01"
+        to = if (m == 12) "${y + 1}-01-01" else "$y-${String.format("%02d", m + 1)}-01"
+        applyRange()
+    }
+
     private fun refreshPresetStyles() {
         for (i in 0 until presetContainer.childCount) {
             val child = presetContainer.getChildAt(i)
@@ -231,7 +283,6 @@ class FinanceFragment : Fragment() {
                 from = shiftDays(-29); to = shiftDays(1)
                 applyRange()
             }
-            "month" -> showMonthDialog()
             "custom" -> showCustomDialog()
         }
     }
@@ -295,6 +346,7 @@ class FinanceFragment : Fragment() {
 
     private fun applyRange() {
         refreshPresetStyles()
+        buildMonths()
         updateRangeHint()
         loadMonths()
         loadSummary()
@@ -350,6 +402,8 @@ class FinanceFragment : Fragment() {
                 months = resp.months
             } catch (e: Exception) {
                 months = emptyList()
+            } finally {
+                buildMonths()
             }
         }
     }
