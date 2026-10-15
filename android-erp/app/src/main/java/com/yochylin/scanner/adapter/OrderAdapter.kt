@@ -13,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
+import com.yochylin.scanner.showImagePreview
 import com.yochylin.scanner.R
 import com.yochylin.scanner.model.Pkg
 import com.yochylin.scanner.setRoundedBg
@@ -185,6 +186,8 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
             } else {
                 img.load(picUrl)
             }
+            // 点击商品图放大预览
+            img.setOnClickListener { row.context.showImagePreview(picUrl) }
             titleTv.text = title ?: "—"
             skuTv.text = "SKU:${sku ?: "—"}"
             skuTv.setTextColor(Color.parseColor("#165dff"))

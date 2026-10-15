@@ -308,6 +308,7 @@ class OrderDetailActivity : ComponentActivity() {
             clipToOutline = true
         }
         if (!item.picUrl.isNullOrBlank()) img.load(item.picUrl)
+        img.setOnClickListener { showImagePreview(item.picUrl) }
         row.addView(img)
 
         val right = LinearLayout(this).apply {
@@ -663,6 +664,7 @@ class OrderDetailActivity : ComponentActivity() {
         }
         val pic = pi.thumbUrl ?: pi.picUrl
         if (!pic.isNullOrBlank()) img.load(pic)
+        img.setOnClickListener { showImagePreview(pic) }
         row.addView(img)
 
         val right = LinearLayout(this).apply {
