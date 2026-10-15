@@ -266,8 +266,8 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
 
             when {
                 op in countdownStatuses && !pkg.shipmentDate.isNullOrBlank() -> {
-                    addTimeRow(oTimeContainer, "下单", fmtTime(pkg.inProcessAt))
-                    addTimeRow(oTimeContainer, "最迟", fmtTime(pkg.shipmentDate))
+                    addTimeRow(oTimeContainer, "下单", fmtTimeWithWeekday(pkg.inProcessAt))
+                    addTimeRow(oTimeContainer, "最迟", fmtTimeWithWeekday(pkg.shipmentDate))
                     val cd = countdownText(pkg.shipmentDate)
                     addTimeRow(oTimeContainer, if (cd.first) "已超时" else "剩发", cd.second, cd.first)
                     if (op == "wait_ship" && pkg.profit != null) {
@@ -275,15 +275,15 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                     }
                 }
                 op in shipTimesStatuses -> {
-                    addTimeRow(oTimeContainer, "下单", fmtTime(pkg.inProcessAt))
+                    addTimeRow(oTimeContainer, "下单", fmtTimeWithWeekday(pkg.inProcessAt))
                     if (!pkg.deliveringDate.isNullOrBlank()) {
-                        addTimeRow(oTimeContainer, "揽收", fmtTime(pkg.deliveringDate))
+                        addTimeRow(oTimeContainer, "揽收", fmtTimeWithWeekday(pkg.deliveringDate))
                     }
                     if (!pkg.deliveredAt.isNullOrBlank()) {
-                        addTimeRow(oTimeContainer, "签收", fmtTime(pkg.deliveredAt))
+                        addTimeRow(oTimeContainer, "签收", fmtTimeWithWeekday(pkg.deliveredAt))
                     }
                     if (!pkg.returnAt.isNullOrBlank()) {
-                        addTimeRow(oTimeContainer, "退货", fmtTime(pkg.returnAt))
+                        addTimeRow(oTimeContainer, "退货", fmtTimeWithWeekday(pkg.returnAt))
                     }
                     if (pkg.profit != null) {
                         addTimeRow(oTimeContainer, profitLabelOf(pkg), fmtMoney(pkg.profit.profit), false, profitColor(pkg.profit.profit))
@@ -292,7 +292,7 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
             }
         }
 
-        private fun addTimeRow(container: LinearLayout, key: String, value: String, overdue: Boolean = false, valueColor: Int = Color.parseColor(O_COLOR_TEXT)) {
+        private fun addTimeRow(container: LinearLayout, key: String, value: CharSequence, overdue: Boolean = false, valueColor: Int = Color.parseColor(O_COLOR_TEXT)) {
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
             }

@@ -25,6 +25,7 @@ import com.yochylin.scanner.adapter.countdownText
 import com.yochylin.scanner.adapter.fmtMoney
 import com.yochylin.scanner.adapter.fmtNum
 import com.yochylin.scanner.adapter.fmtTime
+import com.yochylin.scanner.adapter.fmtTimeWithWeekday
 import com.yochylin.scanner.adapter.platformLabel
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
@@ -247,8 +248,8 @@ class OrderDetailActivity : ComponentActivity() {
     private fun renderInfoList(p: Pkg) {
         dInfoList.removeAllViews()
         addInfoRow(dInfoList, "Ozon状态", ozonStatusText(p))
-        addInfoRow(dInfoList, "下单时间", fmtTime(p.inProcessAt))
-        addInfoRow(dInfoList, "最晚发货", fmtTime(p.shipmentDate ?: p.lastDeliveryAt))
+        addInfoRow(dInfoList, "下单时间", fmtTimeWithWeekday(p.inProcessAt))
+        addInfoRow(dInfoList, "最晚发货", fmtTimeWithWeekday(p.shipmentDate ?: p.lastDeliveryAt))
         addInfoRow(dInfoList, "重量", p.weightG?.let { "${fmtNum(it)}g" } ?: "—")
         addInfoRow(dInfoList, "销售佣金", p.accrual?.saleFee?.let { fmtMoney(it) } ?: "—")
         addInfoRow(dInfoList, "国际配送(估)", p.profit?.delivery?.let { fmtMoney(it) } ?: "—")
@@ -949,7 +950,7 @@ class OrderDetailActivity : ComponentActivity() {
         }
     }
 
-    private fun addInfoRow(container: LinearLayout, key: String, value: String) {
+    private fun addInfoRow(container: LinearLayout, key: String, value: CharSequence) {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(

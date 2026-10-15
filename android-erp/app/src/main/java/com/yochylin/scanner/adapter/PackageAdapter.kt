@@ -4,6 +4,9 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.InputType
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -20,6 +23,7 @@ import com.yochylin.scanner.model.Pkg
 import com.yochylin.scanner.model.PurchaseLink
 import com.yochylin.scanner.setRoundedBg
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
 
 private const val COLOR_PRIMARY = "#165dff"
@@ -505,20 +509,53 @@ fun fmtNum(v: Double?): String {
     }
 }
 
+/** 时间格式化：YYYY-MM-DD HH:mm（与 H5/Web 展示口径一致）；无效值原样截断返回 */
 fun fmtTime(iso: String?): String {
     if (iso.isNullOrBlank()) return "—"
     return try {
         val inFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", Locale.US)
-        val outFmt = SimpleDateFormat("MM-dd HH:mm", Locale.US)
+        val outFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
         outFmt.format(inFmt.parse(iso) ?: return iso.take(16))
     } catch (e: Exception) {
         try {
             val inFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-            val outFmt = SimpleDateFormat("MM-dd HH:mm", Locale.US)
+            val outFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
             outFmt.format(inFmt.parse(iso) ?: iso.replace("T", " ").take(16))
         } catch (e2: Exception) {
             iso.replace("T", " ").take(16)
         }
+    }
+}
+
+/** ISO 时间 → 中文周几（如"周三"）；无效时间返回空串（与 H5 weekdayCN 同口径） */
+fun weekdayCN(iso: String?): String {
+    if (iso.isNullOrBlank()) return ""
+    val d = try {
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", Locale.US).parse(iso)
+    } catch (e: Exception) {
+        try {
+            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).parse(iso)
+        } catch (e2: Exception) {
+            null
+        }
+    } ?: return ""
+    val weekday = Calendar.getInstance().apply { time = d }.get(Calendar.DAY_OF_WEEK) - 1
+    return "周" + "日一二三四五六"[weekday]
+}
+
+/** 时间 + 周几（H5 口径）：如 "2026-10-15 10:30（周四）"，周几部分浅灰色 */
+fun fmtTimeWithWeekday(iso: String?): CharSequence {
+    val base = fmtTime(iso)
+    val wd = weekdayCN(iso)
+    if (base == "—" || wd.isEmpty()) return base
+    val suffix = "（$wd）"
+    return SpannableString(base + suffix).apply {
+        setSpan(
+            ForegroundColorSpan(Color.parseColor(COLOR_MUTE)),
+            base.length,
+            base.length + suffix.length,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
     }
 }
 

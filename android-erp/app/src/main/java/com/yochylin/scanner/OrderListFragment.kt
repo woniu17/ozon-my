@@ -27,6 +27,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.yochylin.scanner.adapter.OrderAdapter
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
@@ -87,6 +88,7 @@ class OrderListFragment : Fragment() {
     private lateinit var sortText: TextView
     private lateinit var bannerText: TextView
     private lateinit var progressBar: ProgressBar
+    private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var recyclerView: RecyclerView
     private lateinit var loadMoreTip: TextView
 
@@ -229,8 +231,15 @@ class OrderListFragment : Fragment() {
         sortText = view.findViewById(R.id.sortText)
         bannerText = view.findViewById(R.id.orderBannerText)
         progressBar = view.findViewById(R.id.orderProgress)
+        swipeRefresh = view.findViewById(R.id.orderSwipeRefresh)
         recyclerView = view.findViewById(R.id.orderRecyclerView)
         loadMoreTip = view.findViewById(R.id.loadMoreTip)
+
+        swipeRefresh.setColorSchemeResources(R.color.primary)
+        swipeRefresh.setOnRefreshListener {
+            loadTabs()
+            reload()
+        }
 
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = adapter
@@ -448,6 +457,9 @@ class OrderListFragment : Fragment() {
                 loadingMore = false
                 progressBar.visibility = View.GONE
                 loadMoreTip.visibility = View.GONE
+                if (::swipeRefresh.isInitialized) {
+                    swipeRefresh.isRefreshing = false
+                }
             }
         }
     }
