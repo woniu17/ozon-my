@@ -963,8 +963,8 @@ class OrderDetailActivity : ComponentActivity() {
             textSize = 11f
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
-            // 宽度自适应，保证字段名完整展示
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            // 固定宽度（120dp），保证各行的信息值左边界对齐
+            layoutParams = LinearLayout.LayoutParams(dp(120), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         row.addView(k)
         val v = TextView(this).apply {
