@@ -80,7 +80,7 @@ class LoginActivity : ComponentActivity() {
     }
 
     private fun goMain() {
-        startActivity(Intent(this, MainActivity::class.java))
+        startActivity(Intent(this, MainShellActivity::class.java))
         finish()
     }
 
