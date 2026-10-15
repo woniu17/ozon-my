@@ -11,8 +11,8 @@ android {
         applicationId "com.yochylin.scanner"
         minSdk 24
         targetSdk 35
-        versionCode 39
-        versionName "4.7"
+        versionCode 40
+        versionName "4.8"
     }
 
     buildTypes {

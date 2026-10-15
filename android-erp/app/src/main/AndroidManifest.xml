@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 新订单本地通知（Android 13+ 需要运行时授权） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 版本更新下载 APK（Android 9 及以下需要写存储；10+ 系统自动授权） -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
