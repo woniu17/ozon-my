@@ -111,7 +111,7 @@ router.get('/admin/api/order-stats/summary', (req, res, next) => {
         AND in_process_at >= ? AND in_process_at < ?
         ${sf1.clause ? 'AND ' + sf1.clause : ''}
       GROUP BY store_id
-    `).all(...API_CANCELED, start, end, ...sf1.params);
+    `).all(...API_CANCELED, ...API_CANCELED, start, end, ...sf1.params);
 
     // ── 2) 揽收 ──────────────────────────────────────────────────────
     const sf2 = buildStoreFilter(storeIds, true);
