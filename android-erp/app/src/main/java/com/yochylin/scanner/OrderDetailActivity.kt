@@ -169,6 +169,16 @@ class OrderDetailActivity : ComponentActivity() {
 
         // 货件号复制(对齐 H5 订单详情)
         dCopyPosting.visibility = if (p.postingNumber.isNullOrBlank()) View.GONE else View.VISIBLE
+        if (dCopyPosting.visibility == View.VISIBLE) {
+            dCopyPosting.textSize = 11f
+            dCopyPosting.setTextColor(Color.parseColor(COLOR_PRIMARY))
+            dCopyPosting.setRoundedBg(Color.parseColor("#eef4ff"), 6f)
+            dCopyPosting.setPadding(dp(10), dp(5), dp(10), dp(5))
+            dCopyPosting.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = dp(6) }
+        }
         dCopyPosting.setOnClickListener {
             p.postingNumber?.let { copyText(it, "货件号") }
         }
@@ -285,20 +295,26 @@ class OrderDetailActivity : ComponentActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 12 }
+            ).apply { bottomMargin = 14 }
         }
 
         val img = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(64, 64)
+            layoutParams = LinearLayout.LayoutParams(dp(84), dp(84))
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Color.parseColor("#f2f3f5"))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(Color.parseColor("#f2f3f5"))
+            }
+            clipToOutline = true
         }
         if (!item.picUrl.isNullOrBlank()) img.load(item.picUrl)
         row.addView(img)
 
         val right = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(10)
+            }
         }
 
         val title = TextView(this).apply {
@@ -313,7 +329,7 @@ class OrderDetailActivity : ComponentActivity() {
         val skuRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 4, 0, 0)
+            setPadding(0, dp(6), 0, 0)
         }
         val sku = TextView(this).apply {
             text = "SKU ${item.sku ?: "—"}"
@@ -322,20 +338,16 @@ class OrderDetailActivity : ComponentActivity() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         skuRow.addView(sku)
-        val copySku = TextView(this).apply {
-            text = "复制"
-            setTextColor(Color.parseColor(COLOR_PRIMARY))
-            textSize = 11f
-            setPadding(6, 0, 0, 0)
-            setOnClickListener { item.sku?.let { copyText(it, "SKU") } }
-        }
-        skuRow.addView(copySku)
+        skuRow.addView(
+            copyChip("复制", Color.parseColor("#eef4ff")) { item.sku?.let { copyText(it, "SKU") } }
+        )
         right.addView(skuRow)
 
         // OfferID 行 + 复制
         val offerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
         }
         val offer = TextView(this).apply {
             text = "OfferID ${item.offerId ?: "—"}"
@@ -344,14 +356,9 @@ class OrderDetailActivity : ComponentActivity() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         offerRow.addView(offer)
-        val copyOffer = TextView(this).apply {
-            text = "复制"
-            setTextColor(Color.parseColor(COLOR_PRIMARY))
-            textSize = 11f
-            setPadding(6, 0, 0, 0)
-            setOnClickListener { item.offerId?.let { copyText(it, "Offer ID") } }
-        }
-        offerRow.addView(copyOffer)
+        offerRow.addView(
+            copyChip("复制", Color.parseColor("#eef4ff")) { item.offerId?.let { copyText(it, "Offer ID") } }
+        )
         right.addView(offerRow)
 
         val unitCost = unitCostOf(item, links)
@@ -368,7 +375,7 @@ class OrderDetailActivity : ComponentActivity() {
             }
             setTextColor(Color.parseColor(COLOR_TEXT))
             textSize = 11f
-            setPadding(0, 4, 0, 0)
+            setPadding(0, dp(6), 0, 0)
         }
         right.addView(priceLine)
 
@@ -423,23 +430,22 @@ class OrderDetailActivity : ComponentActivity() {
         }
         head.addView(sn)
 
-        val copy = TextView(this).apply {
-            text = "复制"
-            setTextColor(Color.parseColor(COLOR_PRIMARY))
-            textSize = 11f
-            setPadding(6, 0, 0, 0)
-        }
-        copy.setOnClickListener {
-            if (!l.purchaseSn.isNullOrBlank()) copyText(l.purchaseSn!!, "采购单号")
-        }
-        head.addView(copy)
+        head.addView(
+            copyChip("复制", Color.parseColor("#eef4ff")) {
+                if (!l.purchaseSn.isNullOrBlank()) copyText(l.purchaseSn!!, "采购单号")
+            }
+        )
 
         // 打开平台 APP（如已安装）；否则浏览器打开平台搜索页
         val openApp = TextView(this).apply {
             text = "打开APP"
             setTextColor(Color.parseColor("#7d4dd3"))
             textSize = 11f
-            setPadding(6, 0, 0, 0)
+            setRoundedBg(Color.parseColor("#f5efff"), 6f)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                leftMargin = dp(8)
+            }
             visibility = if (l.purchaseSn.isNullOrBlank()) View.GONE else View.VISIBLE
         }
         openApp.setOnClickListener {
@@ -647,9 +653,13 @@ class OrderDetailActivity : ComponentActivity() {
             ).apply { topMargin = 6 }
         }
         val img = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(44, 44)
+            layoutParams = LinearLayout.LayoutParams(dp(56), dp(56))
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Color.parseColor("#f2f3f5"))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(6).toFloat()
+                setColor(Color.parseColor("#f2f3f5"))
+            }
+            clipToOutline = true
         }
         val pic = pi.thumbUrl ?: pi.picUrl
         if (!pic.isNullOrBlank()) img.load(pic)
@@ -905,6 +915,23 @@ class OrderDetailActivity : ComponentActivity() {
         setResult(RESULT_OK)
     }
 
+    private fun dp(v: Number): Int = (v.toFloat() * resources.displayMetrics.density).toInt()
+
+    /** 统一的复制小标签：浅底圆角 + 大点击区域，避免相邻按钮误触 */
+    private fun copyChip(label: String, bgColor: Int, textColor: Int = Color.parseColor(COLOR_PRIMARY), onClick: () -> Unit): TextView {
+        return TextView(this).apply {
+            text = label
+            setTextColor(textColor)
+            textSize = 11f
+            setRoundedBg(bgColor, 6f)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                leftMargin = dp(8)
+            }
+            setOnClickListener { onClick() }
+        }
+    }
+
     private fun addInfoRow(container: LinearLayout, key: String, value: String) {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -917,6 +944,8 @@ class OrderDetailActivity : ComponentActivity() {
             text = key
             setTextColor(Color.parseColor(COLOR_MUTE))
             textSize = 11f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
             layoutParams = LinearLayout.LayoutParams(110, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         row.addView(k)
