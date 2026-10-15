@@ -6,31 +6,33 @@
     android:orientation="vertical"
     android:background="@color/page_bg">
 
-    <!-- 顶部标题栏 -->
+    <!-- 顶部标题栏：白底 -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="52dp"
+        android:layout_height="56dp"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="#165dff"
-        android:paddingHorizontal="12dp">
+        android:background="#ffffff"
+        android:paddingHorizontal="8dp">
 
         <TextView
             android:id="@+id/statsBackBtn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="‹ 返回"
-            android:textColor="#ffffff"
-            android:textSize="15sp"
-            android:padding="8dp" />
+            android:textColor="@color/primary"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="12dp" />
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="订单统计"
-            android:textColor="#ffffff"
-            android:textSize="18sp"
+            android:textColor="@color/text_primary"
+            android:textSize="17sp"
             android:textStyle="bold"
             android:gravity="center" />
 
@@ -39,25 +41,33 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="退出"
-            android:textColor="#ffffff"
-            android:textSize="14sp"
-            android:padding="8dp" />
+            android:textColor="@color/text_muted"
+            android:textSize="13sp"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="12dp" />
     </LinearLayout>
+
+    <!-- 标题栏分隔线 -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
 
     <!-- 时间预设栏 -->
     <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:scrollbars="none"
-        android:background="#ffffff">
+        android:background="#ffffff"
+        android:paddingTop="6dp"
+        android:paddingBottom="8dp">
 
         <LinearLayout
             android:id="@+id/statsPresetContainer"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:paddingHorizontal="8dp"
-            android:paddingVertical="6dp" />
+            android:paddingHorizontal="12dp" />
     </HorizontalScrollView>
 
     <!-- 自然月快捷栏 -->
@@ -65,15 +75,15 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:scrollbars="none"
-        android:background="#f7f8fa">
+        android:background="#f7f8fa"
+        android:paddingVertical="6dp">
 
         <LinearLayout
             android:id="@+id/statsMonthContainer"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:paddingHorizontal="8dp"
-            android:paddingVertical="4dp" />
+            android:paddingHorizontal="12dp" />
     </HorizontalScrollView>
 
     <!-- 区间提示 + 时区 + 店铺 -->
@@ -83,7 +93,8 @@
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:paddingHorizontal="12dp"
-        android:paddingTop="4dp">
+        android:paddingTop="8dp"
+        android:paddingBottom="2dp">
 
         <TextView
             android:id="@+id/statsRangeHint"
@@ -92,7 +103,7 @@
             android:layout_weight="1"
             android:text="当前统计区间"
             android:textSize="10sp"
-            android:textColor="#86909c"
+            android:textColor="@color/text_muted"
             android:maxLines="2" />
 
         <TextView
@@ -101,10 +112,10 @@
             android:layout_height="wrap_content"
             android:text="北京时间 ▾"
             android:textSize="11sp"
-            android:textColor="#165dff"
-            android:background="#eef4ff"
+            android:textColor="@color/primary"
+            android:background="@drawable/bg_tag_blue"
             android:paddingHorizontal="10dp"
-            android:paddingVertical="4dp" />
+            android:paddingVertical="5dp" />
 
         <TextView
             android:id="@+id/statsStoreBtn"
@@ -112,27 +123,23 @@
             android:layout_height="wrap_content"
             android:text="全部店铺 ▾"
             android:textSize="11sp"
-            android:textColor="#165dff"
-            android:background="#eef4ff"
+            android:textColor="@color/primary"
+            android:background="@drawable/bg_tag_blue"
             android:paddingHorizontal="10dp"
-            android:paddingVertical="4dp"
+            android:paddingVertical="5dp"
             android:layout_marginStart="8dp" />
     </LinearLayout>
 
-    <!-- 总计卡片区 -->
-    <HorizontalScrollView
+    <!-- 总计卡片区：2x2 等高网格 -->
+    <LinearLayout
+        android:id="@+id/statsTotalContainer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:scrollbars="none"
+        android:orientation="vertical"
         android:paddingHorizontal="12dp"
-        android:paddingTop="8dp">
-
-        <LinearLayout
-            android:id="@+id/statsTotalContainer"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal" />
-    </HorizontalScrollView>
+        android:paddingTop="8dp"
+        android:clipChildren="false"
+        android:clipToPadding="false" />
 
     <ProgressBar
         android:id="@+id/statsProgress"

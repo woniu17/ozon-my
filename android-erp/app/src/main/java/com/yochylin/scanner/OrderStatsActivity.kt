@@ -37,6 +37,9 @@ class OrderStatsActivity : ComponentActivity() {
         private const val COLOR_PRIMARY = "#165dff"
         private const val COLOR_MUTE = "#86909c"
         private const val COLOR_TEXT = "#1f2329"
+        private const val COLOR_OK = "#00b42a"
+        private const val COLOR_ERR = "#f53f3f"
+        private const val COLOR_WARN = "#d97706"
         private const val MONTH_PRESET_COUNT = 6
 
         private data class Preset(val key: String, val label: String)
@@ -118,7 +121,7 @@ class OrderStatsActivity : ComponentActivity() {
             val tv = TextView(this).apply {
                 text = p.label
                 textSize = 12f
-                setPadding(24, 9, 24, 9)
+                setPadding(dp(22).toInt(), dp(9).toInt(), dp(22).toInt(), dp(9).toInt())
                 gravity = Gravity.CENTER
             }
             updateStyle(tv, p.key == activePreset)
@@ -145,7 +148,10 @@ class OrderStatsActivity : ComponentActivity() {
 
     private fun updateStyle(tv: TextView, active: Boolean) {
         tv.setTextColor(if (active) Color.WHITE else Color.parseColor("#4e5969"))
-        tv.setBackgroundResource(if (active) R.drawable.tab_active_bg else R.drawable.tab_normal_bg)
+        tv.setRoundedBg(
+            if (active) Color.parseColor(COLOR_PRIMARY) else Color.parseColor("#f2f3f5"),
+            16f
+        )
     }
 
     private fun onPresetClick(key: String) {
@@ -211,7 +217,7 @@ class OrderStatsActivity : ComponentActivity() {
             val tv = TextView(this).apply {
                 text = label
                 textSize = 11f
-                setPadding(20, 8, 20, 8)
+                setPadding(dp(18).toInt(), dp(8).toInt(), dp(18).toInt(), dp(8).toInt())
                 gravity = Gravity.CENTER
             }
             updateStyle(tv, "month:$ym" == activePreset)
@@ -372,50 +378,92 @@ class OrderStatsActivity : ComponentActivity() {
     private fun renderTotals(s: OrderStatsSummary) {
         totalContainer.removeAllViews()
         val totals = s.totals ?: return
-        totalContainer.addView(totalCard("🆕 新订单", totals.new, true))
-        totalContainer.addView(totalCard("📦 揽收", totals.pickup, false))
-        totalContainer.addView(totalCard("✅ 签收", totals.delivered, false))
-        totalContainer.addView(totalCard("↩️ 退货", totals.returned, false))
+        // 2x2 等高网格：新订单/揽收/签收/退货
+        val defs = listOf(
+            Triple("新订单", totals.new, true),
+            Triple("揽收", totals.pickup, false),
+            Triple("签收", totals.delivered, false),
+            Triple("退货", totals.returned, false)
+        )
+        for (row in 0 until 2) {
+            val rowLay = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(132).toInt()
+                ).apply { if (row > 0) topMargin = dp(12).toInt() }
+            }
+            for (col in 0 until 2) {
+                val (title, ca, showValid) = defs[row * 2 + col]
+                val card = totalCard(title, ca, showValid)
+                val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                if (col > 0) lp.leftMargin = dp(12).toInt()
+                rowLay.addView(card, lp)
+            }
+            totalContainer.addView(rowLay)
+        }
     }
 
-    private fun totalCard(title: String, ca: CountAmount?, showValid: Boolean): View {
-        val card = LinearLayout(this).apply {
+    /** 统一尺寸汇总方块：状态圆点 + 标题 + 大数字 + 金额 */
+    private fun totalCard(title: String, ca: CountAmount?, showValid: Boolean): LinearLayout {
+        val dotColor = when (title) {
+            "新订单" -> COLOR_PRIMARY
+            "揽收" -> COLOR_WARN
+            "签收" -> COLOR_OK
+            else -> COLOR_ERR
+        }
+        val ctx = this@OrderStatsActivity
+        return LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
-            setPadding(14, 12, 14, 12)
-            layoutParams = LinearLayout.LayoutParams(
-                170,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { rightMargin = 10 }
-        }
-        card.addView(TextView(this).apply {
-            text = title
-            setTextColor(Color.parseColor(COLOR_MUTE))
-            textSize = 11f
-        })
-        card.addView(TextView(this).apply {
-            text = "${ca?.count ?: 0} 单"
-            setTextColor(Color.parseColor(COLOR_TEXT))
-            textSize = 22f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setPadding(0, 6, 0, 0)
-        })
-        card.addView(TextView(this).apply {
-            text = "¥ ${fmtMoney(ca?.amount)}"
-            setTextColor(Color.parseColor(COLOR_PRIMARY))
-            textSize = 12f
-            typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(0, 4, 0, 0)
-        })
-        if (showValid && ca?.validAmount != null) {
-            card.addView(TextView(this).apply {
-                text = "剔除取消 ¥ ${fmtMoney(ca.validAmount)}"
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                textSize = 9f
-                setPadding(0, 2, 0, 0)
+            setRoundedBg(Color.WHITE, 16f)
+            elevation = dp(2f)
+            setPadding(dp(14).toInt(), dp(12).toInt(), dp(14).toInt(), dp(12).toInt())
+
+            // 标题行：状态圆点 + 标题
+            addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(View(ctx).apply {
+                    setRoundedBg(Color.parseColor(dotColor), 4f)
+                    layoutParams = LinearLayout.LayoutParams(dp(8).toInt(), dp(8).toInt()).apply {
+                        rightMargin = dp(6).toInt()
+                    }
+                })
+                addView(TextView(ctx).apply {
+                    text = title
+                    setTextColor(Color.parseColor(COLOR_MUTE))
+                    textSize = 12f
+                })
             })
+
+            // 数量
+            addView(TextView(ctx).apply {
+                text = "${ca?.count ?: 0} 单"
+                setTextColor(Color.parseColor(COLOR_TEXT))
+                textSize = 24f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setPadding(0, dp(8).toInt(), 0, 0)
+            })
+
+            // 金额
+            addView(TextView(ctx).apply {
+                text = "¥ ${fmtMoney(ca?.amount)}"
+                setTextColor(Color.parseColor(COLOR_PRIMARY))
+                textSize = 13f
+                typeface = android.graphics.Typeface.MONOSPACE
+                setPadding(0, dp(4).toInt(), 0, 0)
+            })
+
+            // 剔除取消（仅新订单）
+            if (showValid && ca?.validAmount != null) {
+                addView(TextView(ctx).apply {
+                    text = "剔除取消 ¥ ${fmtMoney(ca.validAmount)}"
+                    setTextColor(Color.parseColor(COLOR_MUTE))
+                    textSize = 10f
+                    setPadding(0, dp(4).toInt(), 0, 0)
+                })
+            }
         }
-        return card
     }
 
     // ── 辅助 ──
@@ -453,6 +501,10 @@ class OrderStatsActivity : ComponentActivity() {
         startActivity(Intent(this, LoginActivity::class.java))
         finish()
     }
+
+    private fun dp(v: Number): Float = android.util.TypedValue.applyDimension(
+        android.util.TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics
+    )
 
     private fun toast(msg: String) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
