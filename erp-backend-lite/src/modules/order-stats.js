@@ -103,6 +103,7 @@ router.get('/admin/api/order-stats/summary', (req, res, next) => {
     const rowsNew = db.prepare(`
       SELECT store_id,
         COUNT(*) AS cnt,
+        SUM(CASE WHEN status NOT IN (${cancelPh}) THEN 1 ELSE 0 END) AS valid_cnt,
         COALESCE(SUM(CASE WHEN currency='CNY' THEN order_amount END), 0) AS amt,
         COALESCE(SUM(CASE WHEN currency='CNY' AND status NOT IN (${cancelPh}) THEN order_amount END), 0) AS valid_amt
       FROM op_ozon_order
@@ -158,7 +159,7 @@ router.get('/admin/api/order-stats/summary', (req, res, next) => {
       acc.set(s.id, {
         storeId: s.id,
         storeName: s.name,
-        new: { count: 0, amount: 0, validAmount: 0 },
+        new: { count: 0, amount: 0, validAmount: 0, validCount: 0 },
         pickup: { count: 0, amount: 0 },
         delivered: { count: 0, amount: 0 },
         returned: { count: 0, amount: 0 },
@@ -170,12 +171,15 @@ router.get('/admin/api/order-stats/summary', (req, res, next) => {
         const row = acc.get(r.store_id) || {
           storeId: r.store_id,
           storeName: store?.name ?? String(r.store_id),
-          new: { count: 0, amount: 0, validAmount: 0 },
+          new: { count: 0, amount: 0, validAmount: 0, validCount: 0 },
           pickup: { count: 0, amount: 0 },
           delivered: { count: 0, amount: 0 },
           returned: { count: 0, amount: 0 },
         };
         row[key].count = r.cnt;
+        if (r.valid_cnt != null) {
+          row[key].validCount = Number(r.valid_cnt) || 0;
+        }
         row[key].amount = Number(r.amt) || 0;
         if (extraFields.validAmount !== false && r.valid_amt != null) {
           row[key].validAmount = Number(r.valid_amt) || 0;
@@ -195,13 +199,14 @@ router.get('/admin/api/order-stats/summary', (req, res, next) => {
 
     // 顶部总计
     const totals = {
-      new: { count: 0, amount: 0, validAmount: 0 },
+      new: { count: 0, amount: 0, validAmount: 0, validCount: 0 },
       pickup: { count: 0, amount: 0 },
       delivered: { count: 0, amount: 0 },
       returned: { count: 0, amount: 0 },
     };
     for (const r of byStore) {
       totals.new.count += r.new.count;
+      totals.new.validCount += r.new.validCount;
       totals.new.amount += r.new.amount;
       totals.new.validAmount += r.new.validAmount;
       totals.pickup.count += r.pickup.count;

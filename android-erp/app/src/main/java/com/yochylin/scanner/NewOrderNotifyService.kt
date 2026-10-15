@@ -110,7 +110,7 @@ class NewOrderNotifyService : Service() {
             .setSmallIcon(R.drawable.ic_stat_new_order)
             .setContentTitle("新订单监控中")
             .setContentText("今日单量 $orderCountText · 销售额 $salesText")
-            .setCustomContentView(views)
+            // 参考千牛：折叠时保持系统默认单行（不高、不被折叠），下拉展开才显示方块数据
             .setCustomBigContentView(views)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setOngoing(true)
@@ -140,8 +140,8 @@ class NewOrderNotifyService : Service() {
                         mapOf("from" to today, "to" to tomorrow, "tz" to "Asia/Shanghai")
                     ).asJsonObject
                     val totals = obj.getAsJsonObject("totals")?.getAsJsonObject("new")
-                    val count = totals?.optInt("count", 0) ?: 0
-                    val amount = totals?.optDouble("amount", 0.0) ?: 0.0
+                    val count = totals?.optInt("validCount", 0) ?: 0
+                    val amount = totals?.optDouble("validAmount", 0.0) ?: 0.0
                     updateMonitorNotification(count.toLong(), amount)
                 } catch (_: Exception) {
                     // 今日统计失败不影响新订单检测
