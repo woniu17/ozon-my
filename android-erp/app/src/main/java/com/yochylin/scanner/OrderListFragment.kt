@@ -103,6 +103,7 @@ class OrderListFragment : Fragment() {
 
         override fun onSearchSku(sku: String) {
             searchInput.setText(sku)
+            keyword = sku
             globalActive = true
             globalMode = "eq"
             reload()
