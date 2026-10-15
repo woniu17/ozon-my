@@ -122,6 +122,11 @@
         android:fillViewport="true"
         android:scrollbars="none">
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
     <!-- 汇总卡片容器（不裁剪子 View 阴影） -->
     <LinearLayout
         android:id="@+id/summaryContainer"
@@ -287,6 +292,8 @@
         android:gravity="center"
         android:padding="6dp"
         android:visibility="gone" />
+
+    </LinearLayout>
 
     </ScrollView>
 

@@ -161,6 +161,7 @@ class FinanceFragment : Fragment() {
         tzBtn.setOnClickListener { showTzDialog() }
 
         storeBtn = view.findViewById(R.id.financeStoreBtn)
+        storeBtn.setOnClickListener { showStoreDialog() }
 
         detailTabSettled.setOnClickListener { switchMode("settled") }
         detailTabPending.setOnClickListener { switchMode("pending") }
@@ -650,6 +651,7 @@ class FinanceFragment : Fragment() {
     private fun addLine(container: LinearLayout, key: String, value: String) {
         val row = LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -659,7 +661,10 @@ class FinanceFragment : Fragment() {
             text = key
             setTextColor(Color.parseColor(COLOR_MUTE))
             textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(dp(100).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { rightMargin = dp(8).toInt() }
         }
         row.addView(k)
         val v = TextView(requireContext()).apply {
@@ -667,6 +672,7 @@ class FinanceFragment : Fragment() {
             setTextColor(Color.parseColor(COLOR_TEXT))
             textSize = 12f
             typeface = android.graphics.Typeface.MONOSPACE
+            gravity = Gravity.END
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         row.addView(v)
