@@ -85,6 +85,43 @@ android-erp/app/build/outputs/apk/debug/app-debug.apk
 > 停滞不再增长，GitHub 官方源也可能很慢；而腾讯镜像下载 SDK/Gradle 速度很快。
 > 如果 JDK 一直下载失败，直接用 FAQ 4 的 apt 方案安装 JDK 即可。
 
+## APK 正式签名（多机器覆盖安装升级）
+
+项目使用**仓库内置的正式签名密钥**，保证在任何机器上编译的 APK 使用同一证书，
+可以无缝覆盖安装升级（不会出现“签名不一致，需先卸载”的提示）。
+
+| 文件 | 说明 |
+|------|------|
+| `android-erp/keystore/release.keystore` | 正式签名密钥库（已提交仓库） |
+| `android-erp/keystore.properties` | 密钥库密码配置（已提交仓库） |
+
+`android-erp/app/build.gradle` 会读取 `keystore.properties` 配置签名，
+并且 **debug 和 release 构建使用同一把签名**：
+
+```groovy
+signingConfigs {
+    release {
+        storeFile rootProject.file(keystoreProps['storeFile'])
+        storePassword keystoreProps['storePassword']
+        keyAlias keystoreProps['keyAlias']
+        keyPassword keystoreProps['keyPassword']
+    }
+}
+buildTypes {
+    release { signingConfig signingConfigs.release }
+    debug   { signingConfig signingConfigs.release }
+}
+```
+
+注意事项：
+
+1. **第一次切换**：旧版本（如 v5.4）是用旧机器各自生成的 debug 证书签名的，
+   升级到新签名版本时**仍需卸载一次**；之后所有版本统一签名，可一直覆盖升级。
+2. 密钥库密码已按你的要求放在仓库里，**任何能访问仓库的人都可以给 APK 签名**，
+   请确保仓库权限受控（当前为私有仓库）。
+3. 如需更换密码，用 `keytool -storepasswd -keystore android-erp/keystore/release.keystore`
+   修改后同步更新 `keystore.properties`。
+
 ## 常见问题
 
 ### 1. 构建时 Maven 依赖下载慢 / 超时
