@@ -54,6 +54,11 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="snssdk1128" />
         </intent>
+        <!-- Ozon 商品 deep link（买家 App ru.ozon.app 注册的自定义 scheme） -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="ozon" />
+        </intent>
     </queries>
 
     <application

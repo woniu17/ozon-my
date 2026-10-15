@@ -333,19 +333,12 @@ class OrderDetailActivity : ComponentActivity() {
             maxLines = 2
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
-        // 商品名称链接：点击跳转 Ozon APP 商品详情页（https://www.ozon.ru/product/<id> 默认启用 Deeplink 唤起 APP）
+        // 商品名称链接：点击跳转 Ozon APP 商品详情页（优先 ozon:// deep link 直达，避免 https 网页↔APP 循环跳转）
         val productId = item.itemId ?: item.offerId
         if (!productId.isNullOrBlank()) {
-            val productUrl = "https://www.ozon.ru/product/$productId/"
             title.setTextColor(Color.parseColor(COLOR_PRIMARY))
             title.setPadding(0, dp(2), 0, dp(2))
-            title.setOnClickListener {
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(productUrl)))
-                } catch (e: Exception) {
-                    Toast.makeText(this, "无法打开商品链接", Toast.LENGTH_SHORT).show()
-                }
-            }
+            title.setOnClickListener { openOzonProduct(productId) }
         }
         right.addView(title)
 
@@ -936,6 +929,22 @@ class OrderDetailActivity : ComponentActivity() {
     private fun dp(v: Number): Int = (v.toFloat() * resources.displayMetrics.density).toInt()
 
     /** 统一的复制小标签：浅底圆角 + 大点击区域，避免相邻按钮误触 */
+    /** 打开 Ozon 商品详情：优先自定义 deep link 直达 App 商品页，未安装时回退浏览器 */
+    private fun openOzonProduct(productId: String) {
+        // ozon://product/<id> 是 Ozon 官方 deep link，直接进 App 商品页，避免 https 链接在 App 内网页↔App 之间循环跳转
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("ozon://product/$productId")))
+            return
+        } catch (_: Exception) {
+            // 未安装 Ozon APP 或无法处理该 scheme，继续走浏览器兜底
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.ozon.ru/product/$productId/")))
+        } catch (_: Exception) {
+            Toast.makeText(this, "无法打开商品链接", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun copyChip(label: String, bgColor: Int, textColor: Int = Color.parseColor(COLOR_PRIMARY), onClick: () -> Unit): TextView {
         return TextView(this).apply {
             text = label
