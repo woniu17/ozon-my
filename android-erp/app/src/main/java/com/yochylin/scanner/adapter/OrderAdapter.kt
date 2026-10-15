@@ -242,53 +242,9 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
         private fun bindActions(pkg: Pkg) {
             oActionArea.removeAllViews()
 
-            val canShipCard = pkg.operateStatus == "wait_ship" && !pkg.isIgnored
             val canReprint = (pkg.operateStatus == "ship_success" || pkg.operateStatus == "wait_receiver_confirm") && !pkg.isIgnored
 
-            if (canShipCard) {
-                val refs = buildString {
-                    append("Ozon后台 ").append(pkg.ozonWeightG?.let { "${fmtNum(it)}g" } ?: "—")
-                    append(" · 本系统 ").append(pkg.systemWeightG?.let { "${fmtNum(it)}g" } ?: "—")
-                }
-                val label = TextView(context).apply {
-                    text = refs
-                    setTextColor(Color.parseColor(O_COLOR_MUTE))
-                    textSize = 10f
-                }
-                oActionArea.addView(label)
-
-                val row = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = 6 }
-                }
-                val weightInput = EditText(context).apply {
-                    hint = "重量(g)"
-                    inputType = InputType.TYPE_CLASS_NUMBER
-                    textSize = 13f
-                    setPadding(12, 8, 12, 8)
-                    background = android.graphics.drawable.GradientDrawable().apply {
-                        setColor(Color.parseColor("#f2f3f5"))
-                        cornerRadius = 8f
-                    }
-                }
-                val submitBtn = actionButton("提交发货", O_COLOR_PRIMARY) {
-                    val raw = weightInput.text.toString().trim()
-                    val g = raw.toIntOrNull()
-                    if (raw.isEmpty() || g == null || g < 1 || g > 50000) {
-                        weightInput.error = "重量须为 1~50000 的整数"
-                    } else {
-                        callbacks.onSubmitShip(pkg, g)
-                    }
-                }
-                val labelBtn = actionButton("面单", "#4e5969") {
-                    callbacks.onOpenLabel(pkg)
-                }
-                row.addView(weightInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(submitBtn)
-                row.addView(labelBtn)
-                oActionArea.addView(row)
-            } else if (canReprint) {
+            if (canReprint) {
                 val weighed = pkg.weightG?.let { "称重 ${fmtNum(it)}g" } ?: "称重 —"
                 val label = TextView(context).apply {
                     text = weighed
@@ -322,12 +278,8 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                         callbacks.onCorrectWeight(pkg, g)
                     }
                 }
-                val labelBtn = actionButton("面单", "#4e5969") {
-                    callbacks.onOpenLabel(pkg)
-                }
                 row.addView(weightInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 row.addView(correctBtn)
-                row.addView(labelBtn)
                 oActionArea.addView(row)
             }
         }
