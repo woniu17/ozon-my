@@ -212,6 +212,9 @@ class OrderListActivity : ComponentActivity() {
 
         setContentView(R.layout.activity_order_list)
 
+        // 底部导航栏
+        setupBottomNav(this, "order")
+
         searchInput = findViewById(R.id.orderSearchInput)
         tabContainer = findViewById(R.id.tabContainer)
         sortText = findViewById(R.id.sortText)

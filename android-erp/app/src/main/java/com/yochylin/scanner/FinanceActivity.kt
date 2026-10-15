@@ -113,6 +113,9 @@ class FinanceActivity : ComponentActivity() {
 
         setContentView(R.layout.activity_finance)
 
+        // 底部导航栏
+        setupBottomNav(this, "finance")
+
         presetContainer = findViewById(R.id.presetContainer)
         rangeHint = findViewById(R.id.rangeHint)
         tzBtn = findViewById(R.id.tzBtn)

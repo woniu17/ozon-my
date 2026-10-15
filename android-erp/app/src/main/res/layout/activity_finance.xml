@@ -280,4 +280,7 @@
         android:padding="6dp"
         android:visibility="gone" />
 
+    <!-- 底部导航栏 -->
+    <include layout="@layout/bottom_nav" />
+
 </LinearLayout>

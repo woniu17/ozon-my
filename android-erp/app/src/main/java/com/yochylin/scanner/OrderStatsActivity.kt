@@ -86,6 +86,9 @@ class OrderStatsActivity : ComponentActivity() {
 
         setContentView(R.layout.activity_order_stats)
 
+        // 底部导航栏
+        setupBottomNav(this, "stats")
+
         presetContainer = findViewById(R.id.statsPresetContainer)
         monthContainer = findViewById(R.id.statsMonthContainer)
         rangeHint = findViewById(R.id.statsRangeHint)

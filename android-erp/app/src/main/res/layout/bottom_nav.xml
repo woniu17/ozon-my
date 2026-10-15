@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/bottomNav"
+    android:layout_width="match_parent"
+    android:layout_height="60dp"
+    android:orientation="horizontal"
+    android:background="@color/card_bg"
+    android:elevation="8dp"
+    android:gravity="center">
+
+    <!-- 首页 -->
+    <LinearLayout
+        android:id="@+id/navHome"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@android:color/transparent">
+
+        <ImageView
+            android:id="@+id/navHomeIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_nav_home" />
+
+        <TextView
+            android:id="@+id/navHomeText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="首页"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+    <!-- 订单处理 -->
+    <LinearLayout
+        android:id="@+id/navOrder"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@android:color/transparent">
+
+        <ImageView
+            android:id="@+id/navOrderIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_nav_order" />
+
+        <TextView
+            android:id="@+id/navOrderText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="订单处理"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+    <!-- 财务统计 -->
+    <LinearLayout
+        android:id="@+id/navFinance"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@android:color/transparent">
+
+        <ImageView
+            android:id="@+id/navFinanceIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_nav_finance" />
+
+        <TextView
+            android:id="@+id/navFinanceText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="财务统计"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+    <!-- 订单统计 -->
+    <LinearLayout
+        android:id="@+id/navStats"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@android:color/transparent">
+
+        <ImageView
+            android:id="@+id/navStatsIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_nav_stats" />
+
+        <TextView
+            android:id="@+id/navStatsText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="订单统计"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+</LinearLayout>

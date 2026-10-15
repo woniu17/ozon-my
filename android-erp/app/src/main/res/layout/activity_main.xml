@@ -6,67 +6,55 @@
     android:orientation="vertical"
     android:background="@color/page_bg">
 
-    <!-- 顶部标题栏 -->
+    <!-- 顶部标题栏：白底 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="@dimen/header_height"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="@color/primary"
+        android:background="@color/card_bg"
         android:paddingHorizontal="12dp">
 
-        <TextView
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="扫描发货"
-            android:textColor="#ffffff"
-            android:textSize="18sp"
-            android:textStyle="bold" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
 
-        <TextView
-            android:id="@+id/orderProcessBtn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="订单"
-            android:textColor="#ffffff"
-            android:textSize="12sp"
-            android:padding="6dp" />
+            <View
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:background="@drawable/bg_dot_primary" />
 
-        <TextView
-            android:id="@+id/financeBtn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="财务"
-            android:textColor="#ffffff"
-            android:textSize="12sp"
-            android:padding="6dp" />
-
-        <TextView
-            android:id="@+id/statsBtn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="统计"
-            android:textColor="#ffffff"
-            android:textSize="12sp"
-            android:padding="6dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="扫描发货"
+                android:textColor="@color/text_primary"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:layout_marginStart="8dp" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/intranetBtn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="公网"
-            android:textColor="#ffffff"
-            android:textSize="10sp"
-            android:padding="4dp" />
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="5dp"
+            android:layout_marginEnd="4dp" />
 
         <TextView
             android:id="@+id/logoutBtn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="退出"
-            android:textColor="#ffffff"
-            android:textSize="12sp"
+            android:textColor="@color/text_muted"
+            android:textSize="13sp"
             android:padding="6dp" />
     </LinearLayout>
 
@@ -149,5 +137,8 @@
         android:layout_weight="1"
         android:clipToPadding="false"
         android:padding="12dp" />
+
+    <!-- 底部导航栏 -->
+    <include layout="@layout/bottom_nav" />
 
 </LinearLayout>

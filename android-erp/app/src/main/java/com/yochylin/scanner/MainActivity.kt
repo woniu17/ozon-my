@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
@@ -104,15 +105,6 @@ class MainActivity : ComponentActivity() {
         findViewById<TextView>(R.id.scanBtn).setOnClickListener {
             scanLauncher.launch(Intent(this, ScanActivity::class.java))
         }
-        findViewById<TextView>(R.id.orderProcessBtn).setOnClickListener {
-            startActivity(Intent(this, OrderListActivity::class.java))
-        }
-        findViewById<TextView>(R.id.financeBtn).setOnClickListener {
-            startActivity(Intent(this, FinanceActivity::class.java))
-        }
-        findViewById<TextView>(R.id.statsBtn).setOnClickListener {
-            startActivity(Intent(this, OrderStatsActivity::class.java))
-        }
         findViewById<TextView>(R.id.intranetBtn).apply {
             updateIntranetBtn(this)
             setOnClickListener {
@@ -126,6 +118,9 @@ class MainActivity : ComponentActivity() {
             Session.clear()
             goLogin()
         }
+
+        // 底部导航栏
+        setupBottomNav(this, "home")
 
         // 启动时自动探测内网，可达则自动切换为内网模式
         lifecycleScope.launch {
@@ -330,7 +325,13 @@ class MainActivity : ComponentActivity() {
 
     private fun updateIntranetBtn(btn: TextView) {
         btn.text = if (Session.useIntranet) "内网" else "公网"
-        btn.setBackgroundColor(if (Session.useIntranet) 0x33FFFFFF.toInt() else 0x00000000)
+        if (Session.useIntranet) {
+            btn.setTextColor(Color.WHITE)
+            btn.setRoundedBg(Color.parseColor("#165dff"), 999f)
+        } else {
+            btn.setTextColor(Color.parseColor("#165dff"))
+            btn.setRoundedBg(Color.parseColor("#eef4ff"), 999f)
+        }
     }
 
     private fun toast(msg: String) {
