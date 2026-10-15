@@ -3,9 +3,6 @@ package com.yochylin.scanner
 import android.Manifest
 import android.app.AlertDialog
 import android.app.DownloadManager
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -17,17 +14,12 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.yochylin.scanner.api.Api
-import com.yochylin.scanner.api.optInt
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -43,14 +35,8 @@ class MainShellActivity : FragmentActivity(), TabHost {
 
     // ── 新订单通知 ──
     private companion object {
-        const val CHANNEL_ID = "new_order"
-        const val NOTIFICATION_ID = 1001
         const val EXTRA_SWITCH_TAB = "switchTab"
-        const val POLL_INTERVAL_MS = 30_000L
     }
-
-    private var pollJob: Job? = null
-    private var lastWaitProcessCount = -1L
 
     private val notifPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -84,6 +70,13 @@ class MainShellActivity : FragmentActivity(), TabHost {
         requestNotificationPermissionIfNeeded()
         handleSwitchTabIntent(intent)
 
+        // 启动新订单监控前台服务（保活，App 退出后仍持续检测）
+        try {
+            ContextCompat.startForegroundService(this, Intent(this, NewOrderNotifyService::class.java))
+        } catch (_: Exception) {
+            // 服务启动失败（如系统限制）时静默，不影响主流程
+        }
+
         ContextCompat.registerReceiver(
             this,
             downloadReceiver,
@@ -91,17 +84,6 @@ class MainShellActivity : FragmentActivity(), TabHost {
             ContextCompat.RECEIVER_EXPORTED
         )
         checkUpdate()
-    }
-
-    override fun onStart() {
-        super.onStart()
-        startNewOrderPolling()
-    }
-
-    override fun onStop() {
-        super.onStop()
-        pollJob?.cancel()
-        pollJob = null
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -170,62 +152,6 @@ class MainShellActivity : FragmentActivity(), TabHost {
         if (tab != null) {
             switchTab(tab)
         }
-    }
-
-    /** 前台轮询待处理订单数，数量增加时发本地通知 */
-    private fun startNewOrderPolling() {
-        if (pollJob != null) return
-        pollJob = lifecycleScope.launch {
-            while (isActive) {
-                try {
-                    val obj = Api.get("/admin/api/order-process/tabs").asJsonObject
-                    val count = obj.optInt("waitProcess", -1).toLong()
-                    if (count >= 0) {
-                        if (lastWaitProcessCount >= 0 && count > lastWaitProcessCount) {
-                            showNewOrderNotification(count, count - lastWaitProcessCount)
-                        }
-                        lastWaitProcessCount = count
-                    }
-                } catch (_: Exception) {
-                    // 网络/登录异常静默，下一轮再试
-                }
-                delay(POLL_INTERVAL_MS)
-            }
-        }
-    }
-
-    private fun showNewOrderNotification(total: Long, added: Long) {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-        val nm = getSystemService(NotificationManager::class.java) ?: return
-        if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel(CHANNEL_ID, "新订单提醒", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "检测到新的待处理订单时提醒"
-            }
-            nm.createNotificationChannel(channel)
-        }
-        val intent = Intent(this, MainShellActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra(EXTRA_SWITCH_TAB, "order")
-        }
-        val pi = PendingIntent.getActivity(
-            this,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_new_order)
-            .setContentTitle("新增 $added 个待处理订单")
-            .setContentText("当前待处理订单 $total 个，点击查看")
-            .setContentIntent(pi)
-            .setAutoCancel(true)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .build()
-        nm.notify(NOTIFICATION_ID, notification)
     }
 
     // ============ 自动更新 ============

@@ -255,6 +255,7 @@ class OrderListFragment : Fragment() {
 
         view.findViewById<TextView>(R.id.orderLogoutBtn).setOnClickListener {
             Session.clear()
+            requireContext().stopService(Intent(requireContext(), NewOrderNotifyService::class.java))
             goLogin()
         }
         view.findViewById<TextView>(R.id.orderSearchBtn).setOnClickListener { doSearch() }

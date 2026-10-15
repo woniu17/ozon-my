@@ -9,6 +9,7 @@ object Session {
     private const val KEY_TOKEN = "token"
     private const val KEY_PHONE = "phone"
     private const val KEY_INTRANET = "use_intranet"
+    private const val KEY_LAST_WAIT = "last_wait_process_count"
 
     private lateinit var prefs: SharedPreferences
 
@@ -17,6 +18,13 @@ object Session {
             prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         }
     }
+
+    /** 新订单通知：上次记录的"待处理"订单数（服务重启后仍可正确对比增量） */
+    var lastWaitProcessCount: Long
+        get() = prefs.getLong(KEY_LAST_WAIT, -1L)
+        set(value) {
+            prefs.edit().putLong(KEY_LAST_WAIT, value).apply()
+        }
 
     /** 内网模式：为 true 时后端走内网地址，false 走公网 */
     var useIntranet: Boolean
