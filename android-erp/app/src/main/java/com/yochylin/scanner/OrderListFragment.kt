@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
@@ -20,6 +21,8 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.core.widget.doAfterTextChanged
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -221,6 +224,7 @@ class OrderListFragment : Fragment() {
         }
 
         searchInput = view.findViewById(R.id.orderSearchInput)
+        setupClearButton()
         tabContainer = view.findViewById(R.id.tabContainer)
         sortText = view.findViewById(R.id.sortText)
         bannerText = view.findViewById(R.id.orderBannerText)
@@ -316,6 +320,34 @@ class OrderListFragment : Fragment() {
     }
 
     // ── 搜索 / 排序 ──
+    private fun setupClearButton() {
+        val size = (18 * resources.displayMetrics.density).toInt()
+        val clearIcon = ContextCompat.getDrawable(requireContext(), R.drawable.ic_clear)?.apply {
+            setBounds(0, 0, size, size)
+        }
+        searchInput.doAfterTextChanged { text ->
+            if (text.isNullOrEmpty()) {
+                searchInput.setCompoundDrawables(null, null, null, null)
+            } else {
+                searchInput.setCompoundDrawables(null, null, clearIcon, null)
+            }
+        }
+        searchInput.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_UP) {
+                val end = searchInput.compoundDrawables[2] ?: return@setOnTouchListener false
+                val x = event.x
+                if (x >= searchInput.width - searchInput.paddingEnd - end.bounds.width() &&
+                    x <= searchInput.width - searchInput.paddingEnd
+                ) {
+                    searchInput.setText("")
+                    doSearch()
+                    return@setOnTouchListener true
+                }
+            }
+            false
+        }
+    }
+
     private fun doSearch() {
         val kw = searchInput.text.toString().trim()
         if (kw.isEmpty()) {
