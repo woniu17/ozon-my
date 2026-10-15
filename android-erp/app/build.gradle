@@ -1,6 +1,14 @@
+import java.util.Properties
+
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+}
+
+def keystoreProps = new Properties()
+def keystorePropsFile = rootProject.file('keystore.properties')
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
 }
 
 android {
@@ -11,14 +19,32 @@ android {
         applicationId "com.yochylin.scanner"
         minSdk 24
         targetSdk 35
-        versionCode 47
-        versionName "5.5"
+        versionCode 48
+        versionName "5.6"
+    }
+
+    signingConfigs {
+        release {
+            if (keystoreProps.isEmpty()) {
+                throw new GradleException("缺少 keystore.properties 签名配置，请检查 android-erp/keystore.properties")
+            }
+            storeFile rootProject.file(keystoreProps['storeFile'])
+            storePassword keystoreProps['storePassword']
+            keyAlias keystoreProps['keyAlias']
+            keyPassword keystoreProps['keyPassword']
+        }
     }
 
     buildTypes {
         release {
+            // 正式签名：任何机器构建的 APK 使用同一证书，可无缝覆盖升级
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            // debug 包也使用正式签名，保证日常编译的 APK 可直接覆盖安装
+            signingConfig signingConfigs.release
         }
     }
     buildFeatures {
