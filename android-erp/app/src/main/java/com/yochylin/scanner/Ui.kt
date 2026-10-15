@@ -28,13 +28,16 @@ fun View.setRoundedBg(color: Int, radiusDp: Float = 6f) {
 fun Context.showImagePreview(url: String?) {
     if (url.isNullOrBlank()) return
     val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+    val placeholder = ColorDrawable(Color.parseColor("#f2f3f5"))
     val img = ImageView(this).apply {
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         scaleType = ImageView.ScaleType.FIT_CENTER
-        setBackgroundColor(Color.BLACK)
+        setBackgroundColor(Color.parseColor("#f2f3f5"))
         setOnClickListener { dialog.dismiss() }
         val request = ImageRequest.Builder(this@showImagePreview)
             .data(url)
+            .placeholder(placeholder)
+            .error(placeholder)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
             .build()
@@ -42,7 +45,7 @@ fun Context.showImagePreview(url: String?) {
     }
     dialog.setContentView(img)
     dialog.window?.setBackgroundDrawable(ColorDrawable(Color.BLACK))
+    dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     dialog.setCanceledOnTouchOutside(true)
-    dialog.setOnCancelListener { }
     dialog.show()
 }

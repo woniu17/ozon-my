@@ -91,6 +91,16 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
 
             // 货件号复制(对齐 H5 订单处理列表)
             copyOrderPosting.visibility = if (pkg.postingNumber.isNullOrBlank()) View.GONE else View.VISIBLE
+            if (copyOrderPosting.visibility == View.VISIBLE) {
+                copyOrderPosting.textSize = 11f
+                copyOrderPosting.setTextColor(Color.parseColor("#165dff"))
+                copyOrderPosting.setRoundedBg(Color.parseColor("#eef4ff"), 6f)
+                copyOrderPosting.setPadding(12.dp2px(context), 6.dp2px(context), 12.dp2px(context), 6.dp2px(context))
+                copyOrderPosting.layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = 8.dp2px(context) }
+            }
             copyOrderPosting.setOnClickListener {
                 pkg.postingNumber?.let { callbacks.onCopy(it, "货件号") }
             }
@@ -202,8 +212,28 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
 
             // 复制小图标(对齐 H5:SKU / Offer ID)
             copySku.visibility = if (sku.isNullOrBlank()) View.GONE else View.VISIBLE
+            if (copySku.visibility == View.VISIBLE) {
+                copySku.textSize = 11f
+                copySku.setTextColor(Color.parseColor("#165dff"))
+                copySku.setRoundedBg(Color.parseColor("#eef4ff"), 6f)
+                copySku.setPadding(12.dp2px(context), 6.dp2px(context), 12.dp2px(context), 6.dp2px(context))
+                copySku.layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = 8.dp2px(context) }
+            }
             copySku.setOnClickListener { sku?.let { callbacks.onCopy(it, "SKU") } }
             copyOffer.visibility = if (offerId.isNullOrBlank()) View.GONE else View.VISIBLE
+            if (copyOffer.visibility == View.VISIBLE) {
+                copyOffer.textSize = 11f
+                copyOffer.setTextColor(Color.parseColor("#165dff"))
+                copyOffer.setRoundedBg(Color.parseColor("#eef4ff"), 6f)
+                copyOffer.setPadding(12.dp2px(context), 6.dp2px(context), 12.dp2px(context), 6.dp2px(context))
+                copyOffer.layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = 8.dp2px(context) }
+            }
             copyOffer.setOnClickListener { offerId?.let { callbacks.onCopy(it, "Offer ID") } }
 
             return row

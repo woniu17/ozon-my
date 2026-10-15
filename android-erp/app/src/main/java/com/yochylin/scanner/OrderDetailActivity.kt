@@ -770,14 +770,14 @@ class OrderDetailActivity : ComponentActivity() {
         return TextView(this).apply {
             this.text = text
             setTextColor(Color.WHITE)
-            textSize = 12f
-            setRoundedBg(Color.parseColor(color), 8f)
-            setPadding(20, 12, 20, 12)
+            textSize = 14f
+            setRoundedBg(Color.parseColor(color), 10f)
+            setPadding(dp(26), dp(15), dp(26), dp(15))
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            lp.rightMargin = 8
+            lp.rightMargin = dp(10)
             layoutParams = lp
             setOnClickListener { onClick() }
         }
