@@ -3868,126 +3868,110 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 已选采购订单区(固定在产品下方):平台/订单号/下单时间/金额(含已有采购恢复项) -->
+        <!-- 已选采购订单区(参考 H5 采购信息卡改版:卡片式,已有采购与新勾选单各自成卡) -->
         <div v-if="allSelectedOrders.length" class="selected-orders">
           <div class="selected-orders-title">
             已选 {{ keptSelectedCount }} 单 · 合计 ¥{{ allSelectedTotal }}
           </div>
-          <table class="data-table selected-orders-table">
-            <thead>
-              <tr>
-                <th style="width: 110px">平台</th>
-                <th>订单号</th>
-                <th style="width: 160px">下单时间</th>
-                <th style="width: 100px">金额</th>
-                <th style="width: 240px">国内物流</th>
-                <th style="width: 60px"></th>
-              </tr>
-            </thead>
-            <tbody>
-              <template
-                v-for="o in allSelectedOrders"
-                :key="o._existing ? 'ex-' + o.purchaseOrderId : o._platform + ':' + (o._account || '') + ':' + o.orderSn"
-              >
-              <tr :class="{ 'removed-mark': o._existing && removedPurchaseIds.has(o.purchaseOrderId) }">
-                <td>
-                  <span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span>
-                  <!-- 买家账号显示优先级(2026-09-17):归一账号名(account=搜索命中/openapi 自带,_account=tab 账号)
-                       > 平台原始登录名(tb537642872 之类仅 title 里参考);_existing 恢复项 buyerUsername 已是 DB 归一名 -->
-                  <span v-if="o.account || o.buyerUsername || o._account" class="tag tag-mute" :title="o.buyerUserId ? `买手账号 ${o.account || o._account || o.buyerUsername}(平台登录名 ${o.buyerUsername},平台ID ${o.buyerUserId})` : '买手账号'">{{ o.account || o._account || o.buyerUsername }}</span>
-                  <span v-if="o._existing" class="tag tag-warn" title="打开弹窗时恢复的已有采购关联">已有</span>
-                  <!-- 采购状态(参考 H5 采购信息卡):待付款/待发货/已发货/已签收等 -->
-                  <span v-if="o._existing && o.poStatus" class="tag" :class="poStatusTagClass(o.poStatus)">{{ poStatus(o.poStatus) }}</span>
-                </td>
-                <td class="mono">{{ o.orderSn || '(手工单)' }}</td>
-                <td>{{ o._existing ? '—' : (o._platform === 'yangkeduo' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—')) }}</td>
-                <td class="pdd-amount">
-                  <!-- 新选单:金额可手改(实际采购价格;分摊仍按数量加权自动算);已有单只读 -->
+          <div class="po-order-cards">
+            <div
+              v-for="o in allSelectedOrders"
+              :key="o._existing ? 'ex-' + o.purchaseOrderId : o._platform + ':' + (o._account || '') + ':' + o.orderSn"
+              class="po-order-card"
+              :class="{ 'removed-mark': o._existing && removedPurchaseIds.has(o.purchaseOrderId), 'is-new': !o._existing }"
+            >
+              <!-- 卡片头:平台/账号 + 单号 + 状态(右对齐,与 H5 采购信息卡同构) -->
+              <div class="po-card-head">
+                <span class="tag tag-info">{{ platformLabelByVal(o._platform) }}</span>
+                <span v-if="o.account || o.buyerUsername || o._account" class="tag tag-mute" :title="o.buyerUserId ? `买手账号 ${o.account || o._account || o.buyerUsername}(平台登录名 ${o.buyerUsername},平台ID ${o.buyerUserId})` : '买手账号'">{{ o.account || o._account || o.buyerUsername }}</span>
+                <span class="po-card-sn mono" :title="o.orderSn || ''">{{ o.orderSn || '(手工单)' }}</span>
+                <span v-if="o._existing" class="tag tag-warn" title="打开弹窗时恢复的已有采购关联">已有</span>
+                <span v-if="o._existing && o.poStatus" class="tag" :class="poStatusTagClass(o.poStatus)">{{ poStatus(o.poStatus) }}</span>
+                <span v-else class="tag tag-info">待保存</span>
+              </div>
+
+              <!-- 元信息行:已有=分摊/整单/卖家;新单=采购金额(可手改)+下单时间 -->
+              <div class="po-card-meta">
+                <template v-if="o._existing">
+                  <span class="po-amt" :title="'整单采购金额 ¥' + Number(o.amount).toFixed(2) + ';本包裹按数量加权分摊 ¥' + Number(o.allocated).toFixed(2)">分摊 ¥{{ Number(o.allocated).toFixed(2) }} <span class="muted">(整单 ¥{{ Number(o.amount).toFixed(2) }})</span></span>
+                  <span v-if="o.sellerName" class="po-meta-item" :title="o.sellerName">{{ clip30(o.sellerName) }}</span>
+                </template>
+                <template v-else>
+                  <span class="po-meta-label">采购金额</span>
                   <input
-                    v-if="!o._existing"
                     class="filter-input po-amt-edit"
                     inputmode="decimal"
                     :value="o.amount"
                     :title="'默认=平台金额(实付+勾选优惠),可改为实际采购价格;各包裹/SKU 分摊仍按数量加权自动算' + ((o.promotions || []).length ? `\n实付 ¥${o.paidAmount} + 勾选优惠` : '')"
                     @input="onOrderAmountInput(o, $event)"
                   />
-                  <!-- 已有单:本包裹分摊金额 + 整单金额(参考 H5:采购信息展示「分摊 ¥xxx」) -->
-                  <span v-else class="po-alloc" :title="'整单采购金额 ¥' + Number(o.amount).toFixed(2) + ';本包裹按数量加权分摊 ¥' + Number(o.allocated).toFixed(2)">
-                    <span>分摊 ¥{{ Number(o.allocated).toFixed(2) }}</span>
-                    <span class="muted">整单 ¥{{ Number(o.amount).toFixed(2) }}</span>
-                  </span>
-                </td>
-                <td>
-                  <!-- 已有单:当前单号 + 录入/修改入口(闲鱼等无物流接口平台的独立补录操作,即时生效) -->
-                  <template v-if="o._existing">
-                    <a v-if="o.trackingNumber" :href="trackingSearchUrl(o.poLogisticsCompany, o.trackingNumber)" target="_blank" rel="noopener" class="order-link mono po-logi-link" title="百度搜索物流状态">{{ o.trackingNumber }}</a>
-                    <span v-else class="muted">未录入</span>
-                    <button class="btn btn-ghost btn-sm" :title="o.trackingNumber ? '修改该采购单的国内物流单号' : '手动录入国内物流单号(闲鱼等平台接口拿不到单号时用)'" @click="openPoLogistics(o)">{{ o.trackingNumber ? '修改' : '录入' }}</button>
-                  </template>
-                  <template v-else><span class="muted" title="新勾选订单随「保存」时以平台单号/手填单号入库">—</span></template>
-                </td>
-                <td>
-                  <!-- 已有单:✕ 标记删除(点「保存」才冲回),再点「恢复」撤销;新选单:✕ 取消勾选 -->
-                  <button
-                    v-if="o._existing"
-                    class="btn btn-ghost btn-sm removed-toggle"
-                    :title="removedPurchaseIds.has(o.purchaseOrderId) ? '撤销删除(点「保存」前可恢复)' : '标记删除该已有采购,点「保存」后冲回分摊金额'"
-                    @click="toggleRemovedPurchase(o)"
-                  >{{ removedPurchaseIds.has(o.purchaseOrderId) ? '恢复' : '✕' }}</button>
-                  <button v-else class="btn btn-ghost btn-sm" @click="removeSelectedOrder(o._platform, o.orderSn)">✕</button>
-                </td>
-              </tr>
-              <!-- 商品明细行(参考 H5 采购信息卡):该采购单的平台商品图/名称/规格/价格×数量;已有单与新勾选单均展示 -->
-              <tr v-if="o.goods && o.goods.length" class="promo-tr goods-tr">
-                <td colspan="6">
-                  <div class="po-goods-list">
-                    <div v-for="(pi, j) in o.goods" :key="j" class="po-goods-row">
-                      <img
-                        v-if="pi.thumbUrl || pi.picUrl"
-                        :src="pi.thumbUrl || pi.picUrl"
-                        referrerpolicy="no-referrer"
-                        loading="lazy"
-                        class="po-goods-img"
-                        :title="pi.goodsName || pi.title || '采购商品'"
-                        alt=""
-                      />
-                      <div v-else class="po-goods-img po-goods-img-empty"></div>
-                      <div class="po-goods-main">
-                        <div class="po-goods-title" :title="pi.goodsName || pi.title || '采购商品'">{{ clip30(pi.goodsName || pi.title || '采购商品') }}</div>
-                        <div class="po-goods-sub"><span v-if="pi.spec" :title="pi.spec">{{ clip30(pi.spec) }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</div>
-                      </div>
-                    </div>
+                  <span class="po-card-time">{{ o._platform === 'yangkeduo' ? fmtTime(o.orderTime * 1000) : (o.orderTime || '—') }}</span>
+                </template>
+              </div>
+
+              <!-- 商品明细(与 H5 采购信息卡同构):图/名称/规格/价格×数量 -->
+              <div v-if="o.goods && o.goods.length" class="po-card-goods">
+                <div v-for="(pi, j) in o.goods" :key="j" class="po-goods-row">
+                  <img
+                    v-if="pi.thumbUrl || pi.picUrl"
+                    :src="pi.thumbUrl || pi.picUrl"
+                    referrerpolicy="no-referrer"
+                    loading="lazy"
+                    class="po-goods-img"
+                    :title="pi.goodsName || pi.title || '采购商品'"
+                    alt=""
+                  />
+                  <div v-else class="po-goods-img po-goods-img-empty"></div>
+                  <div class="po-goods-main">
+                    <div class="po-goods-title" :title="pi.goodsName || pi.title || '采购商品'">{{ clip30(pi.goodsName || pi.title || '采购商品') }}</div>
+                    <div class="po-goods-sub"><span v-if="pi.spec" :title="pi.spec">{{ clip30(pi.spec) }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</div>
                   </div>
-                </td>
-              </tr>
-              <!-- PDD/1688 新勾选单优惠勾选行(2026-09-28;1688 于 09-29 接入):默认全选计入采购金额,可逐项取消;
-                   列表单先显示"优惠合计"(PDD)/反推券额(1688),勾选后自动拉官方逐项明细 -->
-              <tr
+                </div>
+              </div>
+
+              <!-- PDD/1688 新勾选单优惠勾选(2026-09-28;1688 于 09-29 接入):默认全选计入采购金额,可逐项取消 -->
+              <div
                 v-if="!o._existing && (o._platform === 'yangkeduo' || o._platform === '1688') && ((o.promotions || []).length || o._promoLoading)"
-                class="promo-tr"
+                class="promo-chips po-card-promos"
               >
-                <td colspan="6">
-                  <div class="promo-chips">
-                    <span class="promo-chips-label" title="采购金额 = 实付 + 勾选优惠;取消勾选即从采购金额中剔除该项">优惠</span>
-                    <label
-                      v-for="(p, pi) in o.promotions"
-                      :key="pi"
-                      class="promo-chip"
-                      :class="{ off: !p.checked }"
-                      :title="p.lazy ? '列表仅有合计,明细加载后可逐项勾选' : '勾选=计入采购金额,取消=剔除'"
-                    >
-                      <input type="checkbox" v-model="p.checked" @change="onPddPromoChange(o)" />
-                      <span>{{ p.description }}</span>
-                      <span class="promo-chip-amt">+¥{{ p.amount }}</span>
-                    </label>
-                    <span v-if="o._promoLoading" class="promo-loading">优惠明细加载中…</span>
-                    <span v-if="o.promotionNotes && o.promotionNotes.length" class="promo-notes">活动:{{ o.promotionNotes.join('；') }}</span>
-                  </div>
-                </td>
-              </tr>
-              </template>
-            </tbody>
-          </table>
+                <span class="promo-chips-label" title="采购金额 = 实付 + 勾选优惠;取消勾选即从采购金额中剔除该项">优惠</span>
+                <label
+                  v-for="(p, pi) in o.promotions"
+                  :key="pi"
+                  class="promo-chip"
+                  :class="{ off: !p.checked }"
+                  :title="p.lazy ? '列表仅有合计,明细加载后可逐项勾选' : '勾选=计入采购金额,取消=剔除'"
+                >
+                  <input type="checkbox" v-model="p.checked" @change="onPddPromoChange(o)" />
+                  <span>{{ p.description }}</span>
+                  <span class="promo-chip-amt">+¥{{ p.amount }}</span>
+                </label>
+                <span v-if="o._promoLoading" class="promo-loading">优惠明细加载中…</span>
+                <span v-if="o.promotionNotes && o.promotionNotes.length" class="promo-notes">活动:{{ o.promotionNotes.join('；') }}</span>
+              </div>
+
+              <!-- 国内物流(已有单):公司+单号+录入/修改入口(闲鱼等无物流接口平台的独立补录操作,即时生效) -->
+              <div v-if="o._existing" class="po-card-logi">
+                <div v-if="o.trackingNumber" class="po-logi">
+                  <span class="po-logi-company">{{ o.poLogisticsCompany }}</span>
+                  <a :href="trackingSearchUrl(o.poLogisticsCompany, o.trackingNumber)" target="_blank" rel="noopener" class="order-link mono" title="百度搜索物流状态">{{ o.trackingNumber }}</a>
+                </div>
+                <div v-else class="po-logi-empty">未录物流单号</div>
+                <button class="btn btn-ghost btn-sm" :title="o.trackingNumber ? '修改该采购单的国内物流单号' : '手动录入国内物流单号(闲鱼等平台接口拿不到单号时用)'" @click="openPoLogistics(o)">{{ o.trackingNumber ? '修改' : '录入' }}</button>
+              </div>
+
+              <!-- 底部操作(与 H5 采购信息卡 po-actions 同构):已有单 删除/恢复,新单 移除 -->
+              <div class="po-card-actions">
+                <button
+                  v-if="o._existing"
+                  class="btn btn-ghost btn-sm removed-toggle"
+                  :title="removedPurchaseIds.has(o.purchaseOrderId) ? '撤销删除(点「保存」前可恢复)' : '标记删除该已有采购,点「保存」后冲回分摊金额'"
+                  @click="toggleRemovedPurchase(o)"
+                >{{ removedPurchaseIds.has(o.purchaseOrderId) ? '恢复' : '删除' }}</button>
+                <button v-else class="btn btn-ghost btn-sm" @click="removeSelectedOrder(o._platform, o.orderSn)">✕ 移除</button>
+              </div>
+            </div>
+          </div>
         </div>
         </div><!-- /右列 purchase-col-right -->
 
@@ -5557,21 +5541,179 @@ a.product-title:hover {
   font-weight: 600;
   margin-bottom: 6px;
 }
-/* 已有采购单 ✕ 标记删除态:整行删除线+变灰(按钮排除,保持可点「恢复」) */
-.selected-orders-table tr.removed-mark td {
+/* 已选采购订单卡片区(参考 H5 采购信息卡,2026-10-16 表格改卡片) */
+.po-order-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.po-order-card {
+  background: #fff;
+  border: 1px solid var(--border-light, #e5e7eb);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+/* 新勾选单(待保存)用浅蓝描边区分,与 H5 待新增卡高亮一致 */
+.po-order-card.is-new {
+  border-color: #bfdbfe;
+  background: #f8fbff;
+}
+/* 已有采购单 ✕ 标记删除态:整卡变灰+删除线(按钮排除,保持可点「恢复」) */
+.po-order-card.removed-mark {
   opacity: 0.5;
   text-decoration: line-through;
 }
-.selected-orders-table tr.removed-mark td .removed-toggle {
+.po-order-card.removed-mark .removed-toggle,
+.po-order-card.removed-mark .btn {
   text-decoration: none;
   color: #b45309;
 }
-/* PDD 优惠勾选子行(2026-09-28):主行下方浅底细行,chip 式复选框 */
-.selected-orders-table tr.promo-tr td {
-  padding: 0 8px 8px 12px;
-  background: var(--bg-soft, #fafafa);
-  border-top: none;
+/* 卡片头:平台/账号 + 单号 + 状态(右对齐) */
+.po-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
+.po-card-sn {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: #1f2937;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 元信息行:分摊/金额 + 下单时间 */
+.po-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #6b7280;
+}
+.po-amt {
+  color: #1f2937;
+  font-weight: 600;
+}
+.po-meta-item {
+  color: #6b7280;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.po-meta-label {
+  color: #888;
+  flex: none;
+}
+.po-card-time {
+  margin-left: auto;
+  color: #9ca3af;
+}
+/* 商品明细(与 H5 采购信息卡 po-goods 同构) */
+.po-card-goods {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-light, #e5e7eb);
+}
+.po-goods-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.po-goods-img {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border: 1px solid var(--border-light, #e5e7eb);
+  border-radius: 4px;
+  background: #f8fafc;
+  flex-shrink: 0;
+}
+.po-goods-img-empty {
+  background: #f2f3f5;
+}
+.po-goods-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.po-goods-title {
+  font-size: 12.5px;
+  color: var(--text-color, #1f2937);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.po-goods-sub {
+  font-size: 11px;
+  color: var(--text-mute, #888);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 优惠勾选区(卡片内,PDD/1688 新单) */
+.po-card-promos {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-light, #e5e7eb);
+}
+/* 国内物流(卡片内,已有单) */
+.po-card-logi {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-light, #e5e7eb);
+}
+.po-logi {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #4b5563;
+  background: #f7f8fa;
+  border-radius: 6px;
+  padding: 6px 10px;
+  word-break: break-all;
+}
+.po-logi-company {
+  margin-right: 8px;
+  color: #6b7280;
+}
+.po-logi-empty {
+  flex: 1;
+  font-size: 12px;
+  color: #999;
+  background: #f7f8fa;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.po-card-logi .btn {
+  flex: none;
+}
+/* 底部操作行(与 H5 po-actions 同构):右对齐 删除/恢复/移除 */
+.po-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-light, #e5e7eb);
+}
+.po-card-actions .btn {
+  flex: none;
+}
+/* 优惠 chip(卡片内复用) */
 .promo-chips {
   display: flex;
   flex-wrap: wrap;
@@ -5617,79 +5759,6 @@ a.product-title:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-/* 国内物流列:单号过长截断(多单号逗号拼接时悬浮看全),录入按钮贴右侧 */
-.po-logi-link {
-  display: inline-block;
-  max-width: 150px;
-  vertical-align: bottom;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-right: 6px;
-}
-/* 已有采购单金额列:分摊金额(主)+ 整单金额(次),参考 H5 采购信息卡 */
-.po-alloc {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-end;
-  line-height: 1.4;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.po-alloc .muted {
-  font-weight: 400;
-  font-size: 11px;
-}
-/* 商品明细行(参考 H5 采购信息卡):浅底子行内平铺各平台商品 图+名称+规格+价格×数量 */
-.selected-orders-table tr.goods-tr td {
-  padding: 2px 8px 8px 12px;
-  background: var(--bg-soft, #fafafa);
-  border-top: none;
-}
-.po-goods-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 240px;
-  overflow-y: auto;
-}
-.po-goods-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.po-goods-img {
-  width: 40px;
-  height: 40px;
-  object-fit: cover;
-  border: 1px solid var(--border-light, #e5e7eb);
-  border-radius: 4px;
-  background: #f8fafc;
-  flex-shrink: 0;
-}
-.po-goods-img-empty {
-  background: #f2f3f5;
-}
-.po-goods-main {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-}
-.po-goods-title {
-  font-size: 12.5px;
-  color: var(--text-color, #1f2937);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.po-goods-sub {
-  font-size: 11px;
-  color: var(--text-mute, #888);
-  margin-top: 1px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 /* ── 订单产品 + 调整对比 合并卡片(采购弹窗,2026-09-20)── */
 .po-card-list {
