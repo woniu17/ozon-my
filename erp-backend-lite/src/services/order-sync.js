@@ -249,11 +249,10 @@ function maybeBackfillFeishuNotify(store, posting) {
   const sellerId = Number(store.company_id);
 
   // 1) 新订单(TYPE_NEW_POSTING):API 轮询 posting 与 webhook OPI 回拉同源,补 seller_id 即可复用通知逻辑
+  //    Android 推送已统一在 notifyPostingEvent 内部发布(2026-10-16),此处不再显式调用,避免重复广播
   if (inWindow(posting.in_process_at)) {
     enqueueFeishuBackfill(store, postingNumber, 'new_order', cutoff, '新订单', () => {
-      notifyPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId }, 'polling');
-      // 推送 Android 新订单事件（与飞书通知解耦，客户端自行去重）
-      publishPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId });
+      return notifyPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId }, 'polling');
     });
   }
 
