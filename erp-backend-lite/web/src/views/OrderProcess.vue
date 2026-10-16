@@ -1701,8 +1701,8 @@ const allSelectedOrders = computed(() => {
       }
     }
   }
-  // 已有采购恢复项排在最前(✕ 标记删除的保留显示,模板加删除线)+ 新勾选的平台订单
-  return [...restoredPurchases.value, ...sel];
+  // 新勾选的平台订单排在前面(待保存,用户需确认),已有采购恢复项排在后(✕ 标记删除的保留显示,模板加删除线)
+  return [...sel, ...restoredPurchases.value];
 });
 // 计数/合计排除 ✕ 标记删除的已有单(删除未生效前不算在已选里)
 const keptSelectedCount = computed(() =>
