@@ -1087,9 +1087,11 @@ class PurchaseActivity : ComponentActivity() {
                 ).apply { rightMargin = dp(14) }
             }
             tv.setOnClickListener {
-                st.tab = key
-                renderSelect()
-                loadOrders(activeTabKey)
+                if (st.tab != key) {
+                    st.tab = key
+                    st.orders.clear() // 清空旧状态订单,触发自动加载新状态列表
+                    renderSelect()
+                }
             }
             subTabBox.addView(tv)
         }
@@ -1155,12 +1157,17 @@ class PurchaseActivity : ComponentActivity() {
 
         renderOrderList()
         renderBottomBar()
+
+        // H5 同口径:进入/切换时立即拉取订单(无数据且未在加载才自动加载,避免重复请求)
+        if (st.orders.isEmpty() && !st.loading && st.error.isEmpty()) {
+            loadOrders(activeTabKey)
+        }
     }
 
     private fun switchPlatTab(key: String) {
+        if (key == activeTabKey) return
         activeTabKey = key
         renderSelect()
-        loadOrders(key)
     }
 
     private fun subTabs(): List<Pair<String, String>> {
@@ -1177,6 +1184,8 @@ class PurchaseActivity : ComponentActivity() {
         val st = storeFor(tabKey)
         st.loading = true
         st.error = ""
+        // 立即反馈加载态(H5 同口径:进入即拉取)
+        renderOrderList()
         // H5 同口径:刷新时只保留已搜索命中单的选中
         val keepSn = st.searched.map { it.orderSn }.toSet()
         st.selected.retainAll(keepSn)
