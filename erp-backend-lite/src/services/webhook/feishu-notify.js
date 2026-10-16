@@ -412,8 +412,11 @@ const NOTIFY_SOURCE_LABELS = {
  */
 export async function sendFeishuText(text, url, source = 'webhook') {
   if (!url) {
-    logger.warn('feishu-notify: 未配置 webhook URL,跳过推送');
-    return false;
+    // 未配置 webhook URL = 飞书通知已停用。返回 true 让调用方(轮询兜底/手动备货)直接标记已通知，
+    // 避免将来停用飞书后每轮同步都 release 重试造成重复调用；Android 推送不受影响
+    //（notifyPostingEvent 内已在飞书发送前发布 Android 事件）。
+    logger.info('feishu-notify: 未配置 webhook URL,跳过飞书推送(视为完成)');
+    return true;
   }
   try {
     const label = NOTIFY_SOURCE_LABELS[source] ?? NOTIFY_SOURCE_LABELS.webhook;
