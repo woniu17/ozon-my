@@ -1553,13 +1553,28 @@ class PurchaseActivity : ComponentActivity() {
             val sec = t.toLongOrNull()
             if (sec != null) {
                 return try {
-                    java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US).format(java.util.Date(sec * 1000))
+                    val d = java.util.Date(sec * 1000)
+                    java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US).format(d) + weekdaySuffix(d)
                 } catch (e: Exception) {
                     "—"
                 }
             }
         }
-        return t.replace("T", " ").take(16)
+        val base = t.replace("T", " ").take(16)
+        return base + weekdaySuffix(parseTime(base))
+    }
+
+    /** 时间 → "（周X）"；解析失败返回空串（与 H5 weekdayCN 同口径） */
+    private fun weekdaySuffix(d: java.util.Date?): String {
+        if (d == null) return ""
+        val wd = java.util.Calendar.getInstance().apply { time = d }.get(java.util.Calendar.DAY_OF_WEEK) - 1
+        return "（周" + "日一二三四五六"[wd] + "）"
+    }
+
+    private fun parseTime(base: String): java.util.Date? = try {
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).parse(base)
+    } catch (e: Exception) {
+        null
     }
 
     private fun toggleSelect(o: PlatformOrder) {

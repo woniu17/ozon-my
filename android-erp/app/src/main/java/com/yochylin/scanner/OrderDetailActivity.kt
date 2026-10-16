@@ -729,10 +729,10 @@ class OrderDetailActivity : ComponentActivity() {
                 ).apply { topMargin = 6 }
             }
             val time = TextView(this).apply {
-                text = fmtTime(t.traceAt ?: t.trace_at)
+                text = fmtTimeWithWeekday(t.traceAt ?: t.trace_at)
                 setTextColor(Color.parseColor(COLOR_MUTE))
                 textSize = 10f
-                layoutParams = LinearLayout.LayoutParams(130, ViewGroup.LayoutParams.WRAP_CONTENT)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
             row.addView(time)
             val desc = TextView(this).apply {

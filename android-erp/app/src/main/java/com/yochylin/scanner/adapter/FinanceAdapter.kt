@@ -2,6 +2,7 @@ package com.yochylin.scanner.adapter
 
 import android.content.Context
 import android.graphics.Color
+import android.text.SpannableStringBuilder
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -122,12 +123,13 @@ class FinanceAdapter : RecyclerView.Adapter<FinanceAdapter.VH>() {
             fProfit.text = fmtMoney(order.profit)
             fProfit.setTextColor(profitColor(order.profit))
 
-            val time = fmtTime(order.inProcessAt)
-            fMeta.text = buildString {
-                if (!order.storeName.isNullOrBlank()) append(order.storeName).append(" · ")
-                if (time != "—") append(time)
-                if (!order.deliveredAt.isNullOrBlank()) append(" · 妥投 ").append(fmtTime(order.deliveredAt))
-            }
+            val time = fmtTimeWithWeekday(order.inProcessAt)
+            fMeta.text = SpannableStringBuilder()
+                .also { sb ->
+                    if (!order.storeName.isNullOrBlank()) sb.append(order.storeName).append(" · ")
+                    if (time.toString() != "—") sb.append(time)
+                    if (!order.deliveredAt.isNullOrBlank()) sb.append(" · 妥投 ").append(fmtTimeWithWeekday(order.deliveredAt))
+                }
             fMeta.visibility = if (fMeta.text.isNullOrBlank()) View.GONE else View.VISIBLE
 
             fAmounts.text = buildString {

@@ -6,6 +6,7 @@ import android.graphics.Typeface
 import android.text.InputType
 import android.text.Spannable
 import android.text.SpannableString
+import android.text.SpannableStringBuilder
 import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -132,13 +133,13 @@ class PackageAdapter(private val callbacks: Callbacks) :
             noteText.visibility = if (pkg.note.isNullOrBlank()) View.GONE else View.VISIBLE
 
             val remain = fmtRemain(pkg.lastDeliveryAt)
-            timesText.text = buildString {
-                append("下单 ").append(fmtTime(pkg.inProcessAt))
-                if (!pkg.lastDeliveryAt.isNullOrBlank()) {
-                    append(" · 最迟发货 ").append(fmtTime(pkg.lastDeliveryAt))
-                    if (remain.isNotEmpty()) append(" · ").append(remain)
-                }
+            val timesSb = SpannableStringBuilder()
+                .append("下单 ").append(fmtTimeWithWeekday(pkg.inProcessAt))
+            if (!pkg.lastDeliveryAt.isNullOrBlank()) {
+                timesSb.append(" · 最迟发货 ").append(fmtTimeWithWeekday(pkg.lastDeliveryAt))
+                if (remain.isNotEmpty()) timesSb.append(" · ").append(remain)
             }
+            timesText.text = timesSb
 
             // 产品行
             prodContainer.removeAllViews()
@@ -391,7 +392,9 @@ class PackageAdapter(private val callbacks: Callbacks) :
             buyerTv.visibility = if (l.buyerAccount.isNullOrBlank() && count <= 0) View.GONE else View.VISIBLE
 
             val poTime = l.poPayAt ?: l.poGmtCreate
-            timeTv.text = "采购时间:${fmtTime(poTime)}"
+            timeTv.text = SpannableStringBuilder()
+                .append("采购时间:")
+                .append(fmtTimeWithWeekday(poTime))
             timeTv.visibility = if (poTime.isNullOrBlank()) View.GONE else View.VISIBLE
 
             amountTv.text = "采购金额:${fmtMoney(l.allocatedAmount)}"
@@ -475,11 +478,10 @@ class PackageAdapter(private val callbacks: Callbacks) :
             recStore.visibility = if (rec.storeName.isNullOrBlank()) View.GONE else View.VISIBLE
             recPosting.text = rec.postingNumber
             recPosting.visibility = if (rec.postingNumber.isNullOrBlank()) View.GONE else View.VISIBLE
-            val meta = buildString {
-                rec.weightG?.let { append(fmtNum(it)).append("g") }
-                if (rec.weightG != null && !rec.inProcessAt.isNullOrBlank()) append(" · ")
-                if (!rec.inProcessAt.isNullOrBlank()) append(fmtTime(rec.inProcessAt))
-            }
+            val meta = SpannableStringBuilder()
+            rec.weightG?.let { meta.append(fmtNum(it)).append("g") }
+            if (rec.weightG != null && !rec.inProcessAt.isNullOrBlank()) meta.append(" · ")
+            if (!rec.inProcessAt.isNullOrBlank()) meta.append(fmtTimeWithWeekday(rec.inProcessAt))
             recMeta.text = meta
         }
     }
