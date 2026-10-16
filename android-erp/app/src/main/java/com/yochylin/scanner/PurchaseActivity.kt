@@ -489,17 +489,7 @@ class PurchaseActivity : ComponentActivity() {
         summary.addView(sub)
         purchaseContent.addView(summary)
 
-        // 已有采购卡
-        val poCard = card()
-        poCard.addView(sectionTitle("已有采购(${groups().size})"))
-        if (groups().isEmpty() && pendingAdd == null) {
-            poCard.addView(mutedText("尚无采购关联,可从平台订单选择新增"))
-        } else {
-            for (g in groups()) poCard.addView(buildGroupCard(g))
-        }
-        purchaseContent.addView(poCard)
-
-        // 商品与分摊卡（有待新增时展示"最终分摊"，即分摊确认区）
+        // 商品与分摊卡（有待新增时展示"最终分摊"，即分摊确认区）——置于采购信息上方
         val allocCard = card()
         allocCard.addView(sectionTitle(if (pendingAdd != null) "商品与分摊 · 含待新增" else "商品与分摊"))
         val allocMap = itemAllocForManage()
@@ -514,103 +504,20 @@ class PurchaseActivity : ComponentActivity() {
         allocCard.addView(buildProfitTotalLine(allocMap))
         purchaseContent.addView(allocCard)
 
-        // 待新增采购卡（分摊确认：订单 + 自动分摊预览 + 单价调整 + 物流，统一在此确认后保存）
-        pendingAdd?.let { add ->
-            val addCard = card()
-            addCard.addView(sectionTitle("待新增采购 · 分摊确认"))
-
-            // 拼单提示
-            add.lookup?.let { lr ->
-                if (lr.exists && lr.linkedPackages.isNotEmpty()) {
-                    val tip = mutedText("拼单提示:该采购单已关联 ${lr.linkedPackages.size} 个包裹,保存后 auto 模式将按数量重新加权分摊。", 10f)
-                    tip.setPadding(dp(8), dp(6), dp(8), dp(6))
-                    tip.setBackgroundColor(Color.parseColor("#fff7e6"))
-                    addCard.addView(tip)
-                }
+        // 采购信息卡（已有 + 新增合并展示；新增置顶并高亮）
+        val poCard = card()
+        poCard.addView(sectionTitle("采购信息"))
+        if (groups().isEmpty() && pendingAdd == null) {
+            poCard.addView(mutedText("尚无采购关联,可从平台订单选择新增"))
+        } else {
+            // 新增采购置顶（突出显示）
+            pendingAdd?.let { add ->
+                poCard.addView(buildPendingAddCard(add))
             }
-
-            // 订单列表
-            for (od in add.orders) {
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(0, dp(4), 0, 0)
-                }
-                row.addView(chip(platformLabelLocal(add.platform), "#eef4ff", COLOR_PRIMARY))
-                val sn = TextView(this).apply {
-                    text = od.purchaseSn
-                    setTextColor(Color.parseColor(COLOR_TEXT))
-                    textSize = 11f
-                    typeface = android.graphics.Typeface.MONOSPACE
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                        leftMargin = dp(8)
-                    }
-                }
-                row.addView(sn)
-                val amt = TextView(this).apply {
-                    text = fmtMoney(od.paymentAmount)
-                    setTextColor(Color.parseColor(COLOR_DANGER))
-                    textSize = 11f
-                }
-                row.addView(amt)
-                addCard.addView(row)
-            }
-            val meta = mutedText(
-                if (add.orders.size > 1) "合计 ${fmtMoney(add.paymentAmount)} · 自动 · 按数量分摊" else "自动 · 按数量分摊",
-                11f
-            )
-            addCard.addView(meta)
-
-            // 分摊已计入上方"商品与分摊"卡，作为最终分摊确认
-            val allocTip = mutedText("以上待新增金额已按数量自动分摊,计入上方「商品与分摊 · 含待新增」各商品行,保存后生效。", 10f)
-            allocTip.setPadding(0, dp(6), 0, 0)
-            addCard.addView(allocTip)
-
-            // 国内快递单号（选填，可编辑）
-            val logiTitle = TextView(this).apply {
-                text = "国内快递单号(选填)"
-                textSize = 12f
-                setTextColor(Color.parseColor(COLOR_TEXT))
-                setTypeface(null, android.graphics.Typeface.BOLD)
-                setPadding(0, dp(10), 0, 0)
-            }
-            addCard.addView(logiTitle)
-            val et = EditText(this).apply {
-                setText(logisticsInput.ifBlank { add.logisticsNo ?: "" })
-                hint = "多个用英文逗号分隔"
-                textSize = 14f
-                inputType = InputType.TYPE_CLASS_TEXT
-            }
-            et.addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                override fun afterTextChanged(s: Editable?) {
-                    logisticsInput = s?.toString()?.trim() ?: ""
-                }
-            })
-            addCard.addView(et)
-
-            // 移除暂存
-            val removeBtn = TextView(this).apply {
-                text = "移除"
-                setTextColor(Color.parseColor(COLOR_DANGER))
-                textSize = 12f
-                gravity = Gravity.CENTER
-                setRoundedBg(Color.parseColor("#ffece8"), 6f)
-                setPadding(dp(16), dp(8), dp(16), dp(8))
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(8) }
-                setOnClickListener {
-                    pendingAdd = null
-                    logisticsInput = ""
-                    renderManage()
-                }
-            }
-            addCard.addView(removeBtn)
-            purchaseContent.addView(addCard)
+            // 已有采购
+            for (g in groups()) poCard.addView(buildGroupCard(g))
         }
+        purchaseContent.addView(poCard)
 
         // 从平台订单选择入口
         val entryCard = card()
@@ -635,6 +542,175 @@ class PurchaseActivity : ComponentActivity() {
 
         renderBottomBar()
     }
+
+    /** 新增采购卡：展示内容与已有采购一致，置顶并以高亮底色/「新增」徽标突出 */
+    private fun buildPendingAddCard(add: PendingAdd): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) }
+            // 高亮：浅蓝底 + 主色描边
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.parseColor("#eef6ff"))
+                cornerRadius = dp(8).toFloat()
+                setStroke(dp(1), Color.parseColor("#165dff"))
+            }
+        }
+
+        // 头：平台 + 单号 + 「新增」徽标 + 待保存
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(chip(platformLabelLocal(add.platform), "#dbeafe", COLOR_PRIMARY))
+        val sn = TextView(this).apply {
+            text = add.orders.joinToString(",") { it.purchaseSn }
+            setTextColor(Color.parseColor(COLOR_TEXT))
+            textSize = 11f
+            typeface = android.graphics.Typeface.MONOSPACE
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(8)
+            }
+        }
+        head.addView(sn)
+        val badge = TextView(this).apply {
+            text = "新增"
+            textSize = 9f
+            setTextColor(Color.WHITE)
+            setRoundedBg(Color.parseColor("#165dff"), 4f)
+            setPadding(dp(6), dp(2), dp(6), dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = dp(6) }
+        }
+        head.addView(badge)
+        val status = TextView(this).apply {
+            text = "待保存"
+            textSize = 10f
+            setTextColor(Color.parseColor(COLOR_WARN))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = dp(6) }
+        }
+        head.addView(status)
+        card.addView(head)
+
+        // 分摊 / 卖家 / 买家（与已有采购一致）
+        val first = add.orders.firstOrNull()
+        val meta = TextView(this).apply {
+            text = buildString {
+                append("分摊 ").append(fmtMoney(add.paymentAmount))
+                if (!first?.sellerName.isNullOrBlank()) append("  ·  ").append(first?.sellerName)
+                if (!first?.buyerAccount.isNullOrBlank()) append("  ·  买:").append(first?.buyerAccount)
+            }
+            setTextColor(Color.parseColor(COLOR_MUTE))
+            textSize = 10f
+            setPadding(0, dp(4), 0, 0)
+        }
+        card.addView(meta)
+
+        // 商品行（与已有采购一致：图/名称/规格/单价×数量）
+        for (od in add.orders) {
+            for (g in od.platformGoods) {
+                card.addView(buildPurchaseGoodsRow(toPurchaseItem(g)))
+            }
+        }
+
+        // 物流行（暂存到 logisticsInput，保存时提交）
+        val logiRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
+        }
+        val curLogi = logisticsInput.ifBlank { add.logisticsNo ?: "" }
+        if (curLogi.isNotBlank()) {
+            val logi = TextView(this).apply {
+                text = curLogi
+                setTextColor(Color.parseColor(COLOR_TEXT))
+                textSize = 10f
+                setRoundedBg(Color.parseColor("#f2f3f5"), 6f)
+                setPadding(dp(8), dp(5), dp(8), dp(5))
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                setOnClickListener { copyText(curLogi, "快递单号") }
+            }
+            logiRow.addView(logi)
+        } else {
+            val empty = TextView(this).apply {
+                text = "未录物流单号"
+                setTextColor(Color.parseColor(COLOR_PLACEHOLDER))
+                textSize = 10f
+                setRoundedBg(Color.parseColor("#f2f3f5"), 6f)
+                setPadding(dp(8), dp(5), dp(8), dp(5))
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            logiRow.addView(empty)
+        }
+        val logiBtn = miniButton(if (curLogi.isBlank()) "录入" else "修改", "#eef4ff", COLOR_PRIMARY) {
+            showPendingLogiDialog()
+        }
+        logiRow.addView(logiBtn)
+        card.addView(logiRow)
+
+        // 拼单提示
+        add.lookup?.let { lr ->
+            if (lr.exists && lr.linkedPackages.isNotEmpty()) {
+                val tip = mutedText("拼单提示:该采购单已关联 ${lr.linkedPackages.size} 个包裹,保存后 auto 模式将按数量重新加权分摊。", 10f)
+                tip.setPadding(dp(8), dp(6), dp(8), dp(6))
+                tip.setBackgroundColor(Color.parseColor("#fff7e6"))
+                card.addView(tip)
+            }
+        }
+
+        // 操作行：移除（取消本次暂存）
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(0, dp(6), 0, 0)
+        }
+        actionRow.addView(
+            miniButton("移除", "#ffece8", COLOR_DANGER) {
+                pendingAdd = null
+                logisticsInput = ""
+                renderManage()
+            }
+        )
+        card.addView(actionRow)
+        return card
+    }
+
+    /** 新增采购物流单号录入/修改（暂存到 logisticsInput，保存时提交） */
+    private fun showPendingLogiDialog() {
+        val noInput = EditText(this).apply {
+            setText(logisticsInput)
+            hint = "必填,多个用英文逗号分隔"
+            inputType = InputType.TYPE_CLASS_TEXT
+            textSize = 14f
+        }
+        AlertDialog.Builder(this)
+            .setTitle("国内快递单号")
+            .setView(noInput)
+            .setPositiveButton("保存") { _, _ ->
+                logisticsInput = noInput.text.toString().trim()
+                renderManage()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 平台订单商品 → 采购商品（复用已有采购的商品行渲染） */
+    private fun toPurchaseItem(g: PlatformOrderGoods): PurchaseItem = PurchaseItem(
+        thumbUrl = g.thumbUrl,
+        picUrl = g.thumbUrl,
+        goodsName = g.goodsName,
+        spec = g.spec,
+        price = g.price,
+        number = g.number,
+    )
 
     private fun buildGroupCard(g: Group): View {
         val removing = pendingRemoves.contains(g.purchaseOrderId)
