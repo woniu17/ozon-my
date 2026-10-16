@@ -7,6 +7,62 @@ import { getStoreBySellerId, listStores } from './store-map.js';
 import { getDb } from '../../db/index.js';
 import { translateCancelReason } from '../cancel-reason-i18n.js';
 import { publishPostingEvent } from '../push-hub.js';
+import { orderPackageDao } from '../../db/dao/sqlite/order-daos.js';
+
+// 飞书通知原子去重(2026-10-16):
+// 历史问题:webhook/备货链路用「非原子 isFeishuNotified 检查 + markFeishuNotified 打标」,
+// 检查与打标之间存在窗口期——webhook 并发/重复推送、或 webhook 与 API 兜底轮询竞态时,
+// 两个请求都能通过检查,导致同一货件收到两条飞书通知。
+// 现统一收敛:所有链路(webhook/轮询兜底/手动备货)都在 notifyPostingEvent/notifyPostingPickedUp
+// 内部先原子 claim(与 API 兜底同用 op_ozon_order.feishu_*_notified_at),发送失败才 release,
+// 消除并发窗口。webhook 用极早 cutoff,保证任何已落库订单都满足时间窗。
+const FEISHU_WEBHOOK_CUTOFF = '1970-01-01T00:00:00.000Z';
+
+/** 消息类型 + new_state → feishu_*_notified_at 列键(与 order-daos FEISHU_NOTIFY_COLUMNS 对齐) */
+function deriveNotifyStateKey(messageType, payload) {
+  if (messageType === 'TYPE_NEW_POSTING') return 'new_order';
+  if (messageType === 'TYPE_POSTING_CANCELLED') return 'cancel';
+  if (messageType === 'PICKUP') return 'pickup';
+  if (messageType === 'TYPE_STATE_CHANGED') {
+    const ns = payload?.new_state ?? '';
+    if (ns === 'posting_in_pickup_point') return 'pickup_point';
+    if (ns === 'posting_received' || ns === 'posting_delivered') return 'received';
+    if (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') return 'stocking';
+  }
+  return null;
+}
+
+/**
+ * 发送前原子领取通知权。
+ * - 订单行不存在(如 OPI 回拉失败的新订单):无法打标,保持原行为直接发送(不去重)
+ * - claim 失败:已被其他链路/并发请求领取,返回 skipped=true
+ * @returns {{skipped: boolean, claimed: boolean, stateKey: string|null, storeId: number|null}}
+ */
+function claimNotifyDedup(messageType, payload) {
+  const postingNumber = payload?.posting_number;
+  const stateKey = deriveNotifyStateKey(messageType, payload);
+  if (!stateKey || !postingNumber) return { skipped: false, claimed: false, stateKey: null, storeId: null };
+  const sellerId = payload.seller_id;
+  const store = sellerId != null ? getStoreBySellerId(sellerId) : null;
+  if (!store) return { skipped: false, claimed: false, stateKey, storeId: null };
+  const exists = getDb()
+    .prepare('SELECT 1 FROM op_ozon_order WHERE store_id = ? AND posting_number = ?')
+    .get(store.id, String(postingNumber));
+  if (!exists) return { skipped: false, claimed: false, stateKey, storeId: store.id };
+  if (!orderPackageDao.claimFeishuNotify(store.id, postingNumber, FEISHU_WEBHOOK_CUTOFF, stateKey)) {
+    logger.info({ postingNumber, storeId: store.id, stateKey }, 'feishu-notify: 已通知过,跳过重复发送');
+    return { skipped: true, claimed: false, stateKey, storeId: store.id };
+  }
+  return { skipped: false, claimed: true, stateKey, storeId: store.id };
+}
+
+/** 发送完成后:失败则回滚通知标记,让其他链路/下轮同步重试(避免漏报) */
+function releaseIfFailed(ok, dedup, postingNumber) {
+  if (dedup?.claimed && !ok && dedup.storeId != null && dedup.stateKey) {
+    orderPackageDao.releaseFeishuNotify(dedup.storeId, postingNumber, dedup.stateKey);
+    logger.warn({ postingNumber, stateKey: dedup.stateKey }, 'feishu-notify: 发送失败,已释放通知标记,等待重试');
+  }
+}
 
 /**
  * 任意时间值 → 北京时间 "YYYY-MM-DD HH:mm:ss"
@@ -454,6 +510,10 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
   const postingNumber = payload.posting_number ?? '-';
   const sellerId = payload.seller_id ?? '-';
 
+  // 原子去重(2026-10-16):已通知/并发请求已领取则直接跳过,见 claimNotifyDedup 注释
+  const dedup = claimNotifyDedup(messageType, payload);
+  if (dedup.skipped) return true;
+
   let title;
   let timeField;
   let extra = '';
@@ -572,8 +632,10 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
     logger.warn({ err: err.message, postingNumber }, 'feishu-notify: Android 事件推送失败');
   }
 
-  // 返回发送结果(boolean):调用方(webhook 打标 / API 兜底释放标记)依赖此返回值
-  return await sendFeishuText(text, url, source);
+  // 返回发送结果(boolean);发送失败时回滚通知标记,让其他链路/下轮同步重试
+  const ok = await sendFeishuText(text, url, source);
+  releaseIfFailed(ok, dedup, postingNumber);
+  return ok;
 }
 
 /**
@@ -652,6 +714,11 @@ export function buildTodayPickupSummaryLines(bySeller, total) {
 export async function notifyPostingPickedUp(payload, source = 'webhook') {
   const postingNumber = payload.posting_number ?? '-';
   const sellerId = payload.seller_id ?? '-';
+
+  // 原子去重(2026-10-16):已通知/并发请求已领取则直接跳过
+  const dedup = claimNotifyDedup('PICKUP', payload);
+  if (dedup.skipped) return true;
+
   const store = getStoreBySellerId(sellerId);
   const sellerName = store ? store.name : String(sellerId);
 
@@ -685,8 +752,10 @@ export async function notifyPostingPickedUp(payload, source = 'webhook') {
     logger.warn({ err: err.message, postingNumber }, 'feishu-notify: Android 揽收事件推送失败');
   }
 
-  // 返回发送结果(boolean):调用方(webhook 打标 / API 兜底释放标记)依赖此返回值
-  return await sendFeishuText(text, config.feishu.webhookUrlPickup, source);
+  // 返回发送结果(boolean);发送失败时回滚通知标记,让其他链路/下轮同步重试
+  const ok = await sendFeishuText(text, config.feishu.webhookUrlPickup, source);
+  releaseIfFailed(ok, dedup, postingNumber);
+  return ok;
 }
 
 /**

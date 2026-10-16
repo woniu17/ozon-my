@@ -1267,22 +1267,17 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     orderPackageDao.syncPosting(store.id, p2);
     logger.info({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 备货成功');
     // 6) 备货飞书通知(2026-09-22):备货动作本地直发,不再依赖 Ozon STATE_CHANGED 推送——
-    //    webhook 停推期间 71 单备货通知丢失的教训;与 webhook 链路共用 feishu_stocking_notified_at
-    //    去重(先发先标记)。异步发送不阻塞响应,失败不打标由 webhook/后续重备货幂等场景兜底
-    if (!orderPackageDao.isFeishuNotified(store.id, row.postingNumber, 'stocking')) {
-      Promise.resolve(
-        notifyPostingEvent('TYPE_STATE_CHANGED', {
-          posting_number: row.postingNumber,
-          seller_id: Number(store.company_id),
-          changed_state_date: new Date().toISOString(),
-          new_state: 'posting_awaiting_registration',
-        }, 'manual')
-      )
-        .then((sent) => {
-          if (sent) orderPackageDao.markFeishuNotified(store.id, row.postingNumber, 'stocking');
-        })
-        .catch((e) => logger.warn({ err: e?.message, postingNumber: row.postingNumber }, '[order-process] 备货通知发送失败'));
-    }
+    //    webhook 停推期间 71 单备货通知丢失的教训;2026-10-16 去重重构后,
+    //    原子 claim/release 已收敛到 notifyPostingEvent 内部,与 webhook/轮询兜底共用
+    //    feishu_stocking_notified_at 标记。异步发送不阻塞响应,发送失败内部自动释放标记
+    Promise.resolve(
+      notifyPostingEvent('TYPE_STATE_CHANGED', {
+        posting_number: row.postingNumber,
+        seller_id: Number(store.company_id),
+        changed_state_date: new Date().toISOString(),
+        new_state: 'posting_awaiting_registration',
+      }, 'manual')
+    ).catch((e) => logger.warn({ err: e?.message, postingNumber: row.postingNumber }, '[order-process] 备货通知发送失败'));
     res.json(ok({ alreadyShipped: false, ozonStatus: newStatus, substatus: newSub || null }));
   } catch (e) {
     const msg = e?.message || String(e);

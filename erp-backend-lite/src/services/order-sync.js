@@ -211,21 +211,39 @@ function lookupDeliveredAt(storeId, postingNumber) {
   }
 }
 
-/** 通用兜底发送入队:claim 成功后串行发送,失败释放标记下轮重试 */
+/**
+ * 检查货件是否在近期被 webhook 落库过(ozon_postings first/last_received_at 在窗口内)。
+ * 2026-10-16 新增:webhook 新订单即使 OPI 回拉失败无法打标,只要落库过 ozon_postings
+ * 就说明新订单推送已由 webhook 处理过,API 兜底应跳过,避免同货件两条新订单通知。
+ */
+function hasRecentOzonPosting(postingNumber, withinMs = 30 * 60_000) {
+  try {
+    const row = db
+      .prepare('SELECT first_received_at, last_received_at FROM ozon_postings WHERE posting_number = ?')
+      .get(String(postingNumber || ''));
+    if (!row) return false;
+    const now = Date.now();
+    return [row.first_received_at, row.last_received_at].some((t) => {
+      const ms = Date.parse(t || '');
+      return !!ms && now - ms <= withinMs;
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 通用兜底发送入队:串行发送(限频)。
+ * 2026-10-16 去重重构:原子 claim/release 已收敛到 notifyPostingEvent/notifyPostingPickedUp
+ * 内部执行(与 webhook/备货共用同一 feishu_*_notified_at 标记),这里不再预先 claim;
+ * 已通知的货件在函数内部快速跳过。cutoff 参数保留仅为调用方语义完整。
+ */
 function enqueueFeishuBackfill(store, postingNumber, stateKey, cutoff, label, sender) {
-  if (!orderPackageDao.claimFeishuNotify(store.id, postingNumber, cutoff, stateKey)) return;
   _feishuNotifyChain = _feishuNotifyChain.then(async () => {
     try {
-      const ok = await sender();
-      if (ok === false) {
-        orderPackageDao.releaseFeishuNotify(store.id, postingNumber, stateKey);
-        logger.warn({ storeId: store.id, postingNumber, stateKey }, `[order-sync] 飞书兜底通知(${label})发送失败,下轮同步重试`);
-      } else {
-        logger.info({ storeId: store.id, postingNumber, stateKey }, `[order-sync] 飞书兜底通知(${label})已补发`);
-      }
+      await sender();
     } catch (e) {
-      orderPackageDao.releaseFeishuNotify(store.id, postingNumber, stateKey);
-      logger.warn({ storeId: store.id, postingNumber, stateKey, err: e?.message }, `[order-sync] 飞书兜底通知(${label})异常,下轮同步重试`);
+      logger.warn({ storeId: store.id, postingNumber, stateKey, err: e?.message }, `[order-sync] 飞书兜底通知(${label})异常`);
     }
   });
 }
@@ -250,7 +268,9 @@ function maybeBackfillFeishuNotify(store, posting) {
 
   // 1) 新订单(TYPE_NEW_POSTING):API 轮询 posting 与 webhook OPI 回拉同源,补 seller_id 即可复用通知逻辑
   //    Android 推送已统一在 notifyPostingEvent 内部发布(2026-10-16),此处不再显式调用,避免重复广播
-  if (inWindow(posting.in_process_at)) {
+  //    2026-10-16 修复:webhook 近期已落库 ozon_postings(收到过新订单推送,即使 OPI 回拉失败未打标)
+  //    视为已由 webhook 通知,兜底跳过,避免同货件两条新订单通知
+  if (inWindow(posting.in_process_at) && !hasRecentOzonPosting(postingNumber)) {
     enqueueFeishuBackfill(store, postingNumber, 'new_order', cutoff, '新订单', () => {
       return notifyPostingEvent('TYPE_NEW_POSTING', { ...posting, seller_id: sellerId }, 'polling');
     });
