@@ -9,6 +9,7 @@ import { getStoreBySellerId } from './webhook/store-map.js';
 import { extractSaleAmountCny } from './webhook/feishu-notify.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import logger from '../middleware/log.js';
+import config from '../config/index.js';
 
 /** 等待中的长轮询连接 */
 const waiters = new Set();
@@ -163,6 +164,8 @@ export function publishPostingEvent(messageType, payload) {
     storeName,
     amount,
     waitProcessCount,
+    // 机器名(2026-10-16 多机部署区分):安卓通知标题/摘要尾部展示来源
+    machineName: config.machineName,
     occurredAt: new Date().toISOString(),
   };
 

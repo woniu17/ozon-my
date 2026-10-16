@@ -59,11 +59,12 @@ class NewOrderNotifyService : Service() {
     /** notifiedSns 访问锁：WebSocket 回调/差集兜底/启动初始化多协程并发访问，需串行化防 ConcurrentModificationException */
     private val notifiedLock = Any()
 
-    /** 一条新订单摘要（店铺/货件号/销售金额，对齐飞书通知字段） */
+    /** 一条新订单摘要（店铺/货件号/销售金额/机器名，对齐飞书通知字段） */
     private data class NewOrderInfo(
         val storeName: String,
         val postingNumber: String,
         val amount: Double,
+        val machineName: String = "",
     )
 
     companion object {
@@ -270,10 +271,12 @@ class NewOrderNotifyService : Service() {
             if (postingNumber.isBlank()) continue
             val store = ev.optString("storeName").ifBlank { "未知店铺" }
             val amount = ev.optDouble("amount")
+            // 机器名(2026-10-16 多机部署):事件来自哪个 ERP 实例
+            val machine = ev.optString("machineName")
             when (type) {
                 "NEW_ORDER" -> {
                     if (!tryMarkNotified("NEW_ORDER:$postingNumber")) continue
-                    val info = NewOrderInfo(store, postingNumber, amount)
+                    val info = NewOrderInfo(store, postingNumber, amount, machine)
                     val total = ev.optInt("waitProcessCount", 0).toLong()
                     sendNewOrderNotification(total, 1, listOf(info))
                     orderAdded = true
@@ -292,7 +295,8 @@ class NewOrderNotifyService : Service() {
                             append("\n销售金额: ").append(fmtMoney(amount)).append(" CNY")
                             append("\n点击查看订单处理")
                         },
-                        tab = "order"
+                        tab = "order",
+                        machineName = machine
                     )
                 }
                 "STATE_CHANGED" -> {
@@ -314,7 +318,8 @@ class NewOrderNotifyService : Service() {
                             append("\n销售金额: ").append(fmtMoney(amount)).append(" CNY")
                             append("\n点击查看订单详情")
                         },
-                        tab = "order"
+                        tab = "order",
+                        machineName = machine
                     )
                 }
                 "PICKED_UP" -> {
@@ -329,7 +334,8 @@ class NewOrderNotifyService : Service() {
                             append("\n销售金额: ").append(fmtMoney(amount)).append(" CNY")
                             append("\n点击查看订单详情")
                         },
-                        tab = "order"
+                        tab = "order",
+                        machineName = machine
                     )
                 }
             }
@@ -350,6 +356,7 @@ class NewOrderNotifyService : Service() {
         summary: String,
         bigText: String,
         tab: String,
+        machineName: String = "",
     ) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -367,11 +374,15 @@ class NewOrderNotifyService : Service() {
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        // 机器名后缀(2026-10-16 多机部署):摘要尾部 + 展开正文底部各一处
+        val suffix = if (machineName.isNotBlank()) " [$machineName]" else ""
+        val fullSummary = summary + suffix
+        val fullBigText = if (machineName.isNotBlank()) "$bigText\n[机器: $machineName]" else bigText
         val notification = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_stat_new_order)
             .setContentTitle(title)
-            .setContentText(summary)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
+            .setContentText(fullSummary)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(fullBigText))
             .setContentIntent(pi)
             .setAutoCancel(true)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
@@ -478,6 +489,8 @@ class NewOrderNotifyService : Service() {
         } else {
             JsonArray()
         }
+        // 机器名(2026-10-16 多机部署):接口由服务端注入,差集兜底通知也能区分来源
+        val machineName = listObj.optString("machineName")
         val result = mutableListOf<NewOrderInfo>()
         for (i in 0 until arr.size()) {
             val p = arr.get(i).asJsonObject
@@ -485,7 +498,8 @@ class NewOrderNotifyService : Service() {
                 NewOrderInfo(
                     storeName = p.optString("storeName"),
                     postingNumber = p.optString("postingNumber"),
-                    amount = p.optDouble("orderAmount")
+                    amount = p.optDouble("orderAmount"),
+                    machineName = machineName
                 )
             )
         }
@@ -501,7 +515,10 @@ class NewOrderNotifyService : Service() {
         }
         val nm = getSystemService(NotificationManager::class.java) ?: return
 
-        // 收起时的一行摘要：第一单店铺+单号+金额，多单追加"等 N 单"
+        // 机器名(2026-10-16 多机部署):取本批第一单非空的来源机器
+        val machine = orders.firstOrNull { it.machineName.isNotBlank() }?.machineName ?: ""
+
+        // 收起时的一行摘要：第一单店铺+单号+金额，多单追加"等 N 单"，尾部带机器名
         val first = orders.firstOrNull()
         val summary = if (first != null) {
             val one = buildString {
@@ -512,9 +529,9 @@ class NewOrderNotifyService : Service() {
             if (orders.size > 1) "$one 等 ${orders.size} 单" else one
         } else {
             "当前待处理订单 $total 个"
-        }
+        }.let { if (machine.isNotBlank()) "$it [$machine]" else it }
 
-        // 展开明细（参考飞书新订单通知格式）
+        // 展开明细（参考飞书新订单通知格式），底部追加机器名
         val bigText = buildString {
             for ((i, o) in orders.withIndex()) {
                 if (i > 0) append("\n\n")
@@ -523,6 +540,7 @@ class NewOrderNotifyService : Service() {
                 append("\n销售金额: ").append(fmtMoney(o.amount)).append(" CNY")
             }
             append("\n\n当前待处理订单 ").append(total).append(" 个，点击查看")
+            if (machine.isNotBlank()) append("\n[机器: ").append(machine).append("]")
         }
 
         val openIntent = Intent(this, MainShellActivity::class.java).apply {

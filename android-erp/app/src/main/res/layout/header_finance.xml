@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 财务统计 RecyclerView 页头（2026-10-16）：汇总卡片/Tab/搜索从 ScrollView 移入单一 RecyclerView 的 header，
+     避免 ScrollView 内嵌 RecyclerView 展开全部 item 导致明细多时滑动卡顿 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@color/page_bg">
+
+    <!-- 汇总卡片容器（不裁剪子 View 阴影） -->
+    <LinearLayout
+        android:id="@+id/summaryContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="8dp"
+        android:clipChildren="false"
+        android:clipToPadding="false" />
+
+    <!-- 明细 Tab 区 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#ffffff"
+        android:paddingTop="8dp"
+        android:layout_marginTop="8dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
+
+            <TextView
+                android:id="@+id/detailTabSettled"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="已结算"
+                android:textSize="13sp"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp" />
+
+            <View
+                android:id="@+id/tabIndicatorSettled"
+                android:layout_width="32dp"
+                android:layout_height="3dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_tab_indicator"
+                android:visibility="invisible" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
+
+            <TextView
+                android:id="@+id/detailTabPending"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="未结算"
+                android:textSize="13sp"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp" />
+
+            <View
+                android:id="@+id/tabIndicatorPending"
+                android:layout_width="32dp"
+                android:layout_height="3dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_tab_indicator"
+                android:visibility="invisible" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
+
+            <TextView
+                android:id="@+id/detailTabNonOrder"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="非订单应计"
+                android:textSize="13sp"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp" />
+
+            <View
+                android:id="@+id/tabIndicatorNonOrder"
+                android:layout_width="32dp"
+                android:layout_height="3dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_tab_indicator"
+                android:visibility="invisible" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- 搜索行（订单明细） -->
+    <LinearLayout
+        android:id="@+id/financeSearchRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#ffffff"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/financeKeywordInput"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_input"
+            android:paddingHorizontal="12dp"
+            android:hint="搜索货件号"
+            android:textSize="13sp"
+            android:imeOptions="actionSearch"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/financeSearchBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="搜索"
+            android:textColor="@color/primary"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:padding="8dp"
+            android:layout_marginStart="8dp" />
+    </LinearLayout>
+
+    <!-- 分隔线（搜索行下方） -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <ProgressBar
+        android:id="@+id/financeProgress"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="10dp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/financeLoadMoreTip"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textSize="12sp"
+        android:textColor="@color/text_placeholder"
+        android:gravity="center"
+        android:padding="6dp"
+        android:visibility="gone" />
+
+</LinearLayout>

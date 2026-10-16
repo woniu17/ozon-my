@@ -22,13 +22,28 @@ private const val F_COLOR_PRIMARY = "#165dff"
 private const val F_COLOR_MUTE = "#86909c"
 private const val F_COLOR_TEXT = "#1f2329"
 
-/** 财务统计明细适配器：订单行 + 非订单应计行 */
-class FinanceAdapter : RecyclerView.Adapter<FinanceAdapter.VH>() {
+/**
+ * 财务统计明细适配器：页头(汇总/Tab/搜索) + 订单行 + 非订单应计行。
+ * 2026-10-16 重构：整页改为单一 RecyclerView 滚动，页头作为第 0 项，
+ * 明细行正常回收复用，避免 ScrollView 内嵌 RecyclerView 展开全部 item 导致滑动卡顿。
+ */
+class FinanceAdapter(context: Context) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+
+    companion object {
+        private const val TYPE_HEADER = -1
+        private const val TYPE_ORDER = 0
+        private const val TYPE_NON_ORDER = 1
+    }
 
     sealed class Item {
         data class OrderItem(val order: FinanceOrder, val group: String) : Item()
         data class NonOrderItem(val item: NonOrderAccrual) : Item()
     }
+
+    /** 页头视图：Fragment/Activity 通过它 findViewById 绑定汇总/Tab/搜索 */
+    val headerView: View = LayoutInflater.from(context).inflate(R.layout.header_finance, null, false)
+
+    class HeaderVH(view: View) : RecyclerView.ViewHolder(view)
 
     private val items = mutableListOf<Item>()
     private val orders = mutableListOf<FinanceOrder>()
@@ -76,26 +91,31 @@ class FinanceAdapter : RecyclerView.Adapter<FinanceAdapter.VH>() {
         notifyDataSetChanged()
     }
 
-    override fun getItemCount(): Int = items.size
+    override fun getItemCount(): Int = items.size + 1 // +1 页头
 
-    override fun getItemViewType(position: Int): Int = when (items[position]) {
-        is Item.OrderItem -> 0
-        is Item.NonOrderItem -> 1
-    }
+    override fun getItemViewType(position: Int): Int =
+        if (position == 0) TYPE_HEADER
+        else when (items[position - 1]) {
+            is Item.OrderItem -> TYPE_ORDER
+            is Item.NonOrderItem -> TYPE_NON_ORDER
+        }
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-        val v = LayoutInflater.from(parent.context).inflate(R.layout.item_finance, parent, false)
-        return VH(v)
-    }
-
-    override fun onBindViewHolder(holder: VH, position: Int) {
-        when (val item = items[position]) {
-            is Item.OrderItem -> holder.bindOrder(item.order, item.group)
-            is Item.NonOrderItem -> holder.bindNonOrder(item.item)
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        return if (viewType == TYPE_HEADER) {
+            HeaderVH(headerView)
+        } else {
+            val v = LayoutInflater.from(parent.context).inflate(R.layout.item_finance, parent, false)
+            RowVH(v)
         }
     }
 
-    inner class VH(view: View) : RecyclerView.ViewHolder(view) {
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        if (position == 0) return // 页头无需绑定
+        val item = items[position - 1]
+        (holder as RowVH).bind(item)
+    }
+
+    inner class RowVH(view: View) : RecyclerView.ViewHolder(view) {
         private val fPosting: TextView = view.findViewById(R.id.fPosting)
         private val fCategory: TextView = view.findViewById(R.id.fCategory)
         private val fProfit: TextView = view.findViewById(R.id.fProfit)
@@ -103,6 +123,13 @@ class FinanceAdapter : RecyclerView.Adapter<FinanceAdapter.VH>() {
         private val fAmounts: TextView = view.findViewById(R.id.fAmounts)
         private val fChips: LinearLayout = view.findViewById(R.id.fChipsContainer)
         private val context: Context = view.context
+
+        fun bind(item: Item) {
+            when (item) {
+                is Item.OrderItem -> bindOrder(item.order, item.group)
+                is Item.NonOrderItem -> bindNonOrder(item.item)
+            }
+        }
 
         fun bindOrder(order: FinanceOrder, group: String) {
             fPosting.text = order.postingNumber ?: "—"

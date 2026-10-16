@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 财务统计（2026-10-16 重构）：整页改为单一 RecyclerView 滚动。
+     汇总卡片/Tab/搜索作为 header item（header_finance.xml），明细列表由 RecyclerView 自身滚动，
+     避免 ScrollView 内嵌 RecyclerView 展开全部 item 导致数据多时卡顿/滑动不了 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -130,187 +133,13 @@
             android:layout_marginStart="8dp" />
     </LinearLayout>
 
-    <!-- 可滚动主体：汇总卡片 + 明细 Tab + 明细列表 -->
-    <ScrollView
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:fillViewport="true"
-        android:scrollbars="none">
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical">
-
-    <!-- 汇总卡片容器（不裁剪子 View 阴影） -->
-    <LinearLayout
-        android:id="@+id/summaryContainer"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:paddingHorizontal="12dp"
-        android:paddingTop="8dp"
-        android:clipChildren="false"
-        android:clipToPadding="false" />
-
-    <!-- 明细 Tab 区 -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:background="#ffffff"
-        android:paddingTop="8dp"
-        android:layout_marginTop="8dp">
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center_horizontal">
-
-            <TextView
-                android:id="@+id/detailTabSettled"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="已结算"
-                android:textSize="13sp"
-                android:paddingHorizontal="8dp"
-                android:paddingVertical="6dp" />
-
-            <View
-                android:id="@+id/tabIndicatorSettled"
-                android:layout_width="32dp"
-                android:layout_height="3dp"
-                android:layout_marginTop="4dp"
-                android:background="@drawable/bg_tab_indicator"
-                android:visibility="invisible" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center_horizontal">
-
-            <TextView
-                android:id="@+id/detailTabPending"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="未结算"
-                android:textSize="13sp"
-                android:paddingHorizontal="8dp"
-                android:paddingVertical="6dp" />
-
-            <View
-                android:id="@+id/tabIndicatorPending"
-                android:layout_width="32dp"
-                android:layout_height="3dp"
-                android:layout_marginTop="4dp"
-                android:background="@drawable/bg_tab_indicator"
-                android:visibility="invisible" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center_horizontal">
-
-            <TextView
-                android:id="@+id/detailTabNonOrder"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="非订单应计"
-                android:textSize="13sp"
-                android:paddingHorizontal="8dp"
-                android:paddingVertical="6dp" />
-
-            <View
-                android:id="@+id/tabIndicatorNonOrder"
-                android:layout_width="32dp"
-                android:layout_height="3dp"
-                android:layout_marginTop="4dp"
-                android:background="@drawable/bg_tab_indicator"
-                android:visibility="invisible" />
-        </LinearLayout>
-    </LinearLayout>
-
-    <!-- 搜索行（订单明细） -->
-    <LinearLayout
-        android:id="@+id/financeSearchRow"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:background="#ffffff"
-        android:paddingHorizontal="12dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="8dp"
-        android:visibility="gone">
-
-        <EditText
-            android:id="@+id/financeKeywordInput"
-            android:layout_width="0dp"
-            android:layout_height="40dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_input"
-            android:paddingHorizontal="12dp"
-            android:hint="搜索货件号"
-            android:textSize="13sp"
-            android:imeOptions="actionSearch"
-            android:singleLine="true" />
-
-        <TextView
-            android:id="@+id/financeSearchBtn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="搜索"
-            android:textColor="@color/primary"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:padding="8dp"
-            android:layout_marginStart="8dp" />
-    </LinearLayout>
-
-    <!-- 分隔线（搜索行下方） -->
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="@color/divider" />
-
-    <ProgressBar
-        android:id="@+id/financeProgress"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center_horizontal"
-        android:layout_marginTop="10dp"
-        android:visibility="gone" />
-
+    <!-- 明细列表：自身滚动（header 承载汇总/Tab/搜索） -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/financeRecyclerView"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:nestedScrollingEnabled="false"
+        android:layout_height="0dp"
+        android:layout_weight="1"
         android:clipToPadding="false"
-        android:padding="12dp" />
-
-    <TextView
-        android:id="@+id/financeLoadMoreTip"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text=""
-        android:textSize="12sp"
-        android:textColor="@color/text_placeholder"
-        android:gravity="center"
-        android:padding="6dp"
-        android:visibility="gone" />
-
-    </LinearLayout>
-
-    </ScrollView>
+        android:scrollbars="vertical" />
 
 </LinearLayout>

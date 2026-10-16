@@ -420,7 +420,8 @@ export async function sendFeishuText(text, url, source = 'webhook') {
   }
   try {
     const label = NOTIFY_SOURCE_LABELS[source] ?? NOTIFY_SOURCE_LABELS.webhook;
-    const fullText = `${text}\n—— 来自 ${config.appName} · ${label}`;
+    // 尾部追加机器名(2026-10-16):多机部署时区分通知来源,配合 MACHINE_NAME 环境变量
+    const fullText = `${text}\n—— 来自 ${config.appName} · ${label} [${config.machineName}]`;
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

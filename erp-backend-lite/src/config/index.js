@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFileSync } from 'node:fs';
+import os from 'node:os';
 
 dotenv.config();
 
@@ -34,6 +35,8 @@ const config = {
   ozonOpiBaseUrl: process.env.OZON_OPI_BASE_URL || 'https://api-seller.ozon.ru',
   // 服务身份(webhook PING 响应/飞书通知署名用,2026-09-17 随 ozon-webhook 并入)
   appName: process.env.APP_NAME || 'ozon-erp',
+  // 机器名(飞书/安卓通知后缀,2026-10-16 多机部署区分来源;可用 MACHINE_NAME 覆盖默认主机名)
+  machineName: process.env.MACHINE_NAME || os.hostname(),
   appVersion: process.env.APP_VERSION || '2.0.0',
   logLevel: process.env.LOG_LEVEL || 'info',
   jwtExpiresIn: '7d',

@@ -74,7 +74,7 @@ class FinanceFragment : Fragment() {
     private lateinit var recyclerView: RecyclerView
     private lateinit var loadMoreTip: TextView
 
-    private val adapter = FinanceAdapter()
+    private lateinit var adapter: FinanceAdapter
 
     private var tz = "Asia/Shanghai"
     private var tzLabel = "北京时间"
@@ -129,21 +129,24 @@ class FinanceFragment : Fragment() {
         monthContainer = view.findViewById(R.id.monthContainer)
         rangeHint = view.findViewById(R.id.rangeHint)
         tzBtn = view.findViewById(R.id.tzBtn)
-        summaryContainer = view.findViewById(R.id.summaryContainer)
-        detailTabSettled = view.findViewById(R.id.detailTabSettled)
-        detailTabPending = view.findViewById(R.id.detailTabPending)
-        detailTabNonOrder = view.findViewById(R.id.detailTabNonOrder)
-        tabIndicatorSettled = view.findViewById(R.id.tabIndicatorSettled)
-        tabIndicatorPending = view.findViewById(R.id.tabIndicatorPending)
-        tabIndicatorNonOrder = view.findViewById(R.id.tabIndicatorNonOrder)
-        financeSearchRow = view.findViewById(R.id.financeSearchRow)
-        keywordInput = view.findViewById(R.id.financeKeywordInput)
-        progressBar = view.findViewById(R.id.financeProgress)
         recyclerView = view.findViewById(R.id.financeRecyclerView)
-        loadMoreTip = view.findViewById(R.id.financeLoadMoreTip)
 
+        // 2026-10-16 重构：汇总/Tab/搜索移入 RecyclerView 页头，从 headerView 获取引用
+        adapter = FinanceAdapter(requireContext())
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = adapter
+        val header = adapter.headerView
+        summaryContainer = header.findViewById(R.id.summaryContainer)
+        detailTabSettled = header.findViewById(R.id.detailTabSettled)
+        detailTabPending = header.findViewById(R.id.detailTabPending)
+        detailTabNonOrder = header.findViewById(R.id.detailTabNonOrder)
+        tabIndicatorSettled = header.findViewById(R.id.tabIndicatorSettled)
+        tabIndicatorPending = header.findViewById(R.id.tabIndicatorPending)
+        tabIndicatorNonOrder = header.findViewById(R.id.tabIndicatorNonOrder)
+        financeSearchRow = header.findViewById(R.id.financeSearchRow)
+        keywordInput = header.findViewById(R.id.financeKeywordInput)
+        progressBar = header.findViewById(R.id.financeProgress)
+        loadMoreTip = header.findViewById(R.id.financeLoadMoreTip)
         recyclerView.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
                 val lm = rv.layoutManager as LinearLayoutManager

@@ -292,6 +292,8 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       pkg.profit = computeProfit(pkg, pkg.operateStatus === 'cancelled', rateInfo?.rate);
     }
     data.rubRate = rateInfo;
+    // 机器名(2026-10-16 多机部署):供安卓差集兜底通知展示来源
+    data.machineName = config.machineName;
     res.json(ok(data));
   } catch (e) {
     next(e);
