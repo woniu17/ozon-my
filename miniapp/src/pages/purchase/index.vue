@@ -18,21 +18,16 @@
       </template>
     </view>
 
-    <!-- 步骤条(2026-10-13):采购管理→选平台订单→分摊确认;已完成步骤可点回退,前进靠操作按钮 -->
+    <!-- 步骤条(2026-10-15):采购管理→选平台订单;选单后点「确认」直接回到管理页暂存,统一保存落地 -->
     <view class="steps">
-      <view class="step" :class="{ on: step === 'manage', done: step === 'select' || step === 'confirm' }" @click="goStep(0)">
-        <text class="step-dot">{{ step === 'select' || step === 'confirm' ? '✓' : '1' }}</text>
+      <view class="step" :class="{ on: step === 'manage', done: step === 'select' }" @click="goStep(0)">
+        <text class="step-dot">{{ step === 'select' ? '✓' : '1' }}</text>
         <text class="step-label">采购管理</text>
       </view>
-      <view class="step-line" :class="{ done: step === 'confirm' }"></view>
-      <view class="step" :class="{ on: step === 'select', done: step === 'confirm' }" @click="goStep(1)">
-        <text class="step-dot">{{ step === 'confirm' ? '✓' : '2' }}</text>
-        <text class="step-label">选平台订单</text>
-      </view>
       <view class="step-line" :class="{ done: false }"></view>
-      <view class="step" :class="{ on: step === 'confirm' }">
-        <text class="step-dot">3</text>
-        <text class="step-label">分摊确认</text>
+      <view class="step" :class="{ on: step === 'select' }">
+        <text class="step-dot">2</text>
+        <text class="step-label">选平台订单</text>
       </view>
     </view>
 
@@ -40,6 +35,17 @@
     <view v-if="step === 'select'">
       <view class="card">
         <view class="section-title">选择平台订单</view>
+        <!-- 批量模式:目标包裹清单(从列表页勾选进入,可逐个移除) -->
+        <view v-if="batchMode" class="batch-targets">
+          <view class="bt-head">目标包裹 <b>{{ batchTargets.length }}</b> 个 · 分摊金额按各包裹商品数量自动加权</view>
+          <view v-for="t in batchTargets" :key="t.id" class="bt-row">
+            <text class="bt-store">{{ t.storeName }}</text>
+            <text class="bt-posting">{{ t.postingNumber }}</text>
+            <text class="bt-cnt">{{ (t.items || []).length }} 行</text>
+            <text class="bt-del" @click="removeBatchTarget(t)">✕</text>
+          </view>
+          <view v-if="!batchTargets.length" class="bt-empty">已移除全部目标包裹,请返回上一页重新发起批量录采购</view>
+        </view>
         <!-- 平台×账号 tabs(多账号展开,与 web 端一致) -->
         <scroll-view class="plat-tabs" scroll-x :show-scrollbar="false">
           <view class="plat-tabs-inner">
@@ -158,171 +164,26 @@
         </view>
       </view>
 
-      <!-- 底部条:已选统计 + 返回/下一步 -->
+      <!-- 底部条:已选统计 + 返回/确认(确认后回到管理页暂存新增,统一保存落地) -->
       <view class="action-bar">
         <view class="sel-info">
           <text class="sel-count">已选 {{ selCount }} 单</text>
           <text class="sel-total">合计 ¥{{ newSelectedTotal }}</text>
         </view>
         <button class="abtn ghost" @click="backFromSelect">返回</button>
-        <button class="abtn primary" :disabled="!selCount" @click="goStep3">下一步</button>
-      </view>
-    </view>
-
-    <!-- Step3:分摊确认 + 提交(批量模式:目标包裹清单 + 批量关联) -->
-    <view v-else-if="step === 'confirm'">
-      <view class="card">
-        <view class="section-title">{{ batchMode ? '批量关联确认' : '分摊确认' }}</view>
-
-        <!-- 已选订单摘要 -->
-        <view class="sum-box">
-          <view class="sum-line">
-            <text class="po-platform">{{ platformLabel(step3Platform) }}</text>
-            <text class="sum-count">已选 {{ selCount }} 单</text>
-            <text class="sum-total">¥{{ newSelectedTotal }}</text>
-          </view>
-          <view class="sum-sns">
-            <view v-for="o in step3Sel" :key="o.orderSn" class="sum-sn">{{ o.orderSn }} · ¥{{ Number(o.amount || 0).toFixed(2) }}</view>
-          </view>
-          <!-- 拼单提示(lookup 查到已关联包裹时) -->
-          <view v-if="lookupResult && lookupResult.linkedPackages && lookupResult.linkedPackages.length" class="lookup-tip">
-            采购单已关联 {{ lookupResult.linkedPackages.length }} 个包裹,本次为追加关联;auto 模式下已关联 auto 包裹的 {{ autoPreview.existingAutoQty }} 件将参与加权分摊。
-          </view>
-        </view>
-
-        <!-- 目标包裹(批量模式):已选采购订单将关联到以下全部包裹,可逐个移除 -->
-        <view v-if="batchMode" class="batch-targets">
-          <view class="bt-head">目标包裹 <b>{{ batchTargets.length }}</b> 个 · 分摊金额按各包裹商品数量自动加权</view>
-          <view v-for="t in batchTargets" :key="t.id" class="bt-row">
-            <text class="bt-store">{{ t.storeName }}</text>
-            <text class="bt-posting">{{ t.postingNumber }}</text>
-            <text class="bt-cnt">{{ (t.items || []).length }} 行</text>
-            <text class="bt-del" @click="removeBatchTarget(t)">✕</text>
-          </view>
-          <view v-if="!batchTargets.length" class="bt-empty">已移除全部目标包裹,请返回上一页重新发起批量录采购</view>
-        </view>
-
-        <!-- auto 只读加权预览(2026-09-28 与 web 端同步:分摊恒按数量加权,手动改价在订单层) -->
-        <template v-if="!batchMode">
-          <view class="tip">
-            各产品行金额 = 已有采购分摊 + 新订单 ¥{{ newSelectedTotal }} 按数量加权分摊{{ autoPreview.existingAutoQty ? '(加权总数 ' + autoPreview.sumQty + ' 件 = 本包裹 ' + autoPreview.currentQty + ' + 已关联 ' + autoPreview.existingAutoQty + ')' : '' }}。
-          </view>
-          <view v-for="(it, i) in autoPreview.rows" :key="i" class="alloc-row">
-            <image v-if="it.picUrl" class="alloc-img" :src="it.picUrl" mode="aspectFill" />
-            <view v-else class="alloc-img"></view>
-            <view class="alloc-main">
-              <view class="alloc-title">{{ it.title || '—' }}</view>
-              <view class="alloc-sub">SKU {{ it.sku || '—' }} ×{{ it.quantity }}</view>
-              <view class="alloc-amount">¥{{ it.previewAmount.toFixed(2) }}</view>
-            </view>
-          </view>
-        </template>
-        <!-- 批量模式:分摊由后端按各包裹商品数量重算,无需逐行预览 -->
-        <view v-else class="tip">
-          各包裹的分摊金额由后端按其商品数量加权重算;已关联过的组合按当前金额更新,不会重复建关联、不会双算金额。
-        </view>
-
-        <!-- 预估利润合计(本次分摊口径;提交后可在采购管理卡中按 SKU 一键调价) -->
-        <view v-if="!batchMode" class="pe-preview">
-          预估利润 <b :class="{ neg: step3Profit.profit < 0 }">¥{{ step3Profit.profit.toFixed(2) }}</b>
-          <text v-if="step3Profit.rateC != null" class="pe-preview-rate" :class="{ neg: step3Profit.rateC < 0 }"> · 成本利润率 {{ step3Profit.rateC.toFixed(1) }}%</text>
-          <text class="pe-preview-sub">按分摊 ¥{{ step3Profit.alloc.toFixed(2) }} 估算{{ step3Profit.allWeighted ? '' : ',部分行未扣配送' }}</text>
-        </view>
-
-        <!-- 国内快递单号(选填,预填平台单号) -->
-        <view v-if="!batchMode" class="field">
-          <text class="field-label">国内快递单号(选填)</text>
-          <input class="field-input" v-model="logisticsInput" placeholder="多个用英文逗号分隔,留空待同步补全" />
-        </view>
-      </view>
-      <view class="action-bar">
-        <button class="abtn ghost" @click="backFromConfirm">返回</button>
         <button
           class="abtn primary"
-          :disabled="saving || (batchMode && !batchTargets.length)"
+          :disabled="!selCount || (batchMode && !batchTargets.length)"
           @click="collectAdd"
         >{{ batchMode ? '关联 ' + batchTargets.length + ' 个包裹' : '确认' }}</button>
       </view>
     </view>
 
-    <!-- 默认视图:采购管理(已有采购直接展示,删除为暂存标记,统一保存落地) -->
+    <!-- 默认视图:采购管理(商品与分摊置顶;采购信息统一展示,新增置顶高亮;统一保存落地) -->
     <view v-else>
-      <view class="card">
-        <view class="section-head">
-          <view class="section-title">已有采购({{ groups.length }})</view>
-        </view>
-        <view v-if="!groups.length && !pendingAdd" class="muted-line">尚无采购关联,可从平台订单选择新增</view>
-        <view
-          v-for="g in groups"
-          :key="g.purchaseOrderId"
-          class="po"
-          :class="{ removing: pendingRemoves.includes(g.purchaseOrderId) }"
-        >
-          <view class="po-head">
-            <text class="po-platform">{{ platformLabel(g.platform) }}</text>
-            <text class="po-sn">{{ g.purchaseSn || '#' + g.purchaseOrderId }}</text>
-            <text class="po-status">{{ poStatusLabel(g.poStatus) }}</text>
-          </view>
-          <view class="po-meta">
-            <text class="po-amt">分摊 {{ fmtMoney(g.allocated) }}</text>
-            <text v-if="g.buyerAccount" class="po-meta-item">买:{{ g.buyerAccount }}</text>
-          </view>
-          <view v-for="(pi, j) in g.items" :key="j" class="po-goods">
-            <image
-              v-if="pi.thumbUrl || pi.picUrl"
-              class="po-img"
-              :src="pi.thumbUrl || pi.picUrl"
-              mode="aspectFill"
-              lazy-load
-            />
-            <view v-else class="po-img"></view>
-            <view class="po-goods-main">
-              <view class="po-goods-title">{{ pi.goodsName || pi.title || '采购商品' }}</view>
-              <view class="po-goods-sub">{{ pi.spec ? pi.spec + ' · ' : '' }}¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</view>
-            </view>
-          </view>
-          <!-- 国内物流:当前单号/未录入 + 录入/修改入口(闲鱼等无物流接口平台,即时生效) -->
-          <view class="po-logi-row">
-            <view v-if="g.poLogisticsNo" class="po-logi">
-              <text class="po-logi-company">{{ g.poLogisticsCompany }}</text>
-              <text class="po-logi-no">{{ g.poLogisticsNo }}</text>
-            </view>
-            <view v-else class="po-logi-empty">未录物流单号</view>
-            <button
-              v-if="!pendingRemoves.includes(g.purchaseOrderId)"
-              class="mini-btn"
-              @click="openLogiEdit(g)"
-            >{{ g.poLogisticsNo ? '修改' : '录入' }}</button>
-          </view>
-          <!-- 物流单号录入面板(单号 + 快递公司 picker,卡片内展开) -->
-          <view v-if="logiEdit.poId === g.purchaseOrderId" class="logi-edit">
-            <view class="logi-field">
-              <text class="logi-label">物流单号</text>
-              <input class="logi-input" v-model="logiEdit.no" placeholder="必填,多个用英文逗号分隔" />
-            </view>
-            <view class="logi-field">
-              <text class="logi-label">快递公司</text>
-              <picker mode="selector" :range="LOGI_COMPANY_RANGE" @change="onLogiCompanyPick">
-                <view class="logi-picker" :class="{ ph: !logiEdit.company }">{{ logiEdit.company || '选填,点击选择' }}</view>
-              </picker>
-            </view>
-            <view class="logi-actions">
-              <button class="mini-btn" @click="closeLogiEdit">取消</button>
-              <button class="mini-btn primary" :disabled="logiEdit.saving" @click="saveLogi(g)">
-                {{ logiEdit.saving ? '保存中…' : '保存' }}
-              </button>
-            </view>
-          </view>
-          <view class="po-actions">
-            <button v-if="!pendingRemoves.includes(g.purchaseOrderId)" class="mini-btn danger" @click="toggleRemove(g)">删除</button>
-            <button v-else class="mini-btn" @click="toggleRemove(g)">恢复</button>
-          </view>
-        </view>
-
-      </view>
-
-      <!-- 订单产品 + 单价调整(合并卡片,与 Web 端同布局:上=产品信息,下=折叠的调整对比;分摊=将保存口径) -->
+      <!-- 商品与分摊 + 单价调整(置顶;有待新增时展示"含待新增"最终分摊,与保存口径一致) -->
       <view v-if="profitRows.length" class="card">
+        <view class="section-title">{{ pendingAdd ? '商品与分摊 · 含待新增' : '商品与分摊' }}</view>
         <view v-for="p in profitRows" :key="p.itemId" class="po2-card">
           <!-- 产品信息:图 | 名称+SKU/OfferID | 数量 | 售价/采购价 -->
           <view class="po2-info">
@@ -407,23 +268,135 @@
         </view>
       </view>
 
-      <!-- 待新增采购(Step3 确认后暂存,保存时落地) -->
-      <view v-if="pendingAdd" class="card">
-        <view class="section-title">待新增采购</view>
-        <view class="po pending-add">
-          <!-- 多笔订单逐笔展示(一笔订单=一个采购单),不再用顿号拼接 -->
+      <!-- 采购信息(统一展示:新增置顶高亮,与已有采购同构;删除/录入均为暂存,保存统一落地) -->
+      <view class="card">
+        <view class="section-title">采购信息({{ groups.length }}{{ pendingAdd ? ' +1' : '' }})</view>
+        <view v-if="!groups.length && !pendingAdd" class="muted-line">尚无采购关联,可从平台订单选择新增</view>
+
+        <!-- 待新增采购置顶(高亮描边 + 新增徽标;平台/单号/分摊/商品/物流与已有采购一致) -->
+        <view v-if="pendingAdd" class="po pending-add">
           <view v-for="od in pendingAdd.orders" :key="od.purchaseSn" class="po-head">
             <text class="po-platform">{{ platformLabel(pendingAdd.body.platform) }}</text>
             <text class="po-sn">{{ od.purchaseSn || '(无单号)' }}</text>
-            <text class="po-amt">¥{{ Number(od.paymentAmount || 0).toFixed(2) }}</text>
+            <text class="po-status">待保存</text>
             <text class="badge-new">新增</text>
           </view>
           <view class="po-meta">
-            <text class="po-amt" v-if="pendingAdd.orders.length > 1">合计 ¥{{ Number(pendingAdd.body.paymentAmount || 0).toFixed(2) }}</text>
+            <text class="po-amt">分摊 {{ fmtMoney(pendingAdd.body.paymentAmount || 0) }}</text>
             <text class="po-meta-item">{{ pendingAdd.orders.length > 1 ? pendingAdd.orders.length + ' 笔 · ' : '' }}自动 · 按数量分摊</text>
+          </view>
+          <!-- 商品行(与已有采购一致) -->
+          <view v-for="(pi, j) in pendingGoodsRows" :key="j" class="po-goods">
+            <image
+              v-if="pi.thumbUrl || pi.picUrl"
+              class="po-img"
+              :src="pi.thumbUrl || pi.picUrl"
+              mode="aspectFill"
+              lazy-load
+            />
+            <view v-else class="po-img"></view>
+            <view class="po-goods-main">
+              <view class="po-goods-title">{{ pi.goodsName || pi.title || '采购商品' }}</view>
+              <view class="po-goods-sub">{{ pi.spec ? pi.spec + ' · ' : '' }}¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</view>
+            </view>
+          </view>
+          <!-- 拼单提示(lookup 命中已关联包裹时) -->
+          <view v-if="pendingAddLookupTip" class="lookup-tip">{{ pendingAddLookupTip }}</view>
+          <!-- 国内物流:单号/未录 + 录入/修改入口(暂存,保存时随新增落地) -->
+          <view class="po-logi-row">
+            <view v-if="pendingLogiNo" class="po-logi">
+              <text class="po-logi-company">{{ pendingLogiCompany }}</text>
+              <text class="po-logi-no">{{ pendingLogiNo }}</text>
+            </view>
+            <view v-else class="po-logi-empty">未录物流单号</view>
+            <button class="mini-btn" @click="openPendingLogiEdit">{{ pendingLogiNo ? '修改' : '录入' }}</button>
+          </view>
+          <view v-if="pendingLogiOpen" class="logi-edit">
+            <view class="logi-field">
+              <text class="logi-label">物流单号</text>
+              <input class="logi-input" v-model="pendingLogiNo" placeholder="必填,多个用英文逗号分隔" />
+            </view>
+            <view class="logi-field">
+              <text class="logi-label">快递公司</text>
+              <picker mode="selector" :range="LOGI_COMPANY_RANGE" @change="onPendingLogiCompanyPick">
+                <view class="logi-picker" :class="{ ph: !pendingLogiCompany }">{{ pendingLogiCompany || '选填,点击选择' }}</view>
+              </picker>
+            </view>
+            <view class="logi-actions">
+              <button class="mini-btn" @click="closePendingLogiEdit">取消</button>
+              <button class="mini-btn primary" @click="savePendingLogi">保存</button>
+            </view>
           </view>
           <view class="po-actions">
             <button class="mini-btn danger" @click="discardAdd">移除</button>
+          </view>
+        </view>
+
+        <!-- 已有采购 -->
+        <view
+          v-for="g in groups"
+          :key="g.purchaseOrderId"
+          class="po"
+          :class="{ removing: pendingRemoves.includes(g.purchaseOrderId) }"
+        >
+          <view class="po-head">
+            <text class="po-platform">{{ platformLabel(g.platform) }}</text>
+            <text class="po-sn">{{ g.purchaseSn || '#' + g.purchaseOrderId }}</text>
+            <text class="po-status">{{ poStatusLabel(g.poStatus) }}</text>
+          </view>
+          <view class="po-meta">
+            <text class="po-amt">分摊 {{ fmtMoney(g.allocated) }}</text>
+            <text v-if="g.buyerAccount" class="po-meta-item">买:{{ g.buyerAccount }}</text>
+          </view>
+          <view v-for="(pi, j) in g.items" :key="j" class="po-goods">
+            <image
+              v-if="pi.thumbUrl || pi.picUrl"
+              class="po-img"
+              :src="pi.thumbUrl || pi.picUrl"
+              mode="aspectFill"
+              lazy-load
+            />
+            <view v-else class="po-img"></view>
+            <view class="po-goods-main">
+              <view class="po-goods-title">{{ pi.goodsName || pi.title || '采购商品' }}</view>
+              <view class="po-goods-sub">{{ pi.spec ? pi.spec + ' · ' : '' }}¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</view>
+            </view>
+          </view>
+          <!-- 国内物流:当前单号/未录入 + 录入/修改入口(闲鱼等无物流接口平台,即时生效) -->
+          <view class="po-logi-row">
+            <view v-if="g.poLogisticsNo" class="po-logi">
+              <text class="po-logi-company">{{ g.poLogisticsCompany }}</text>
+              <text class="po-logi-no">{{ g.poLogisticsNo }}</text>
+            </view>
+            <view v-else class="po-logi-empty">未录物流单号</view>
+            <button
+              v-if="!pendingRemoves.includes(g.purchaseOrderId)"
+              class="mini-btn"
+              @click="openLogiEdit(g)"
+            >{{ g.poLogisticsNo ? '修改' : '录入' }}</button>
+          </view>
+          <!-- 物流单号录入面板(单号 + 快递公司 picker,卡片内展开) -->
+          <view v-if="logiEdit.poId === g.purchaseOrderId" class="logi-edit">
+            <view class="logi-field">
+              <text class="logi-label">物流单号</text>
+              <input class="logi-input" v-model="logiEdit.no" placeholder="必填,多个用英文逗号分隔" />
+            </view>
+            <view class="logi-field">
+              <text class="logi-label">快递公司</text>
+              <picker mode="selector" :range="LOGI_COMPANY_RANGE" @change="onLogiCompanyPick">
+                <view class="logi-picker" :class="{ ph: !logiEdit.company }">{{ logiEdit.company || '选填,点击选择' }}</view>
+              </picker>
+            </view>
+            <view class="logi-actions">
+              <button class="mini-btn" @click="closeLogiEdit">取消</button>
+              <button class="mini-btn primary" :disabled="logiEdit.saving" @click="saveLogi(g)">
+                {{ logiEdit.saving ? '保存中…' : '保存' }}
+              </button>
+            </view>
+          </view>
+          <view class="po-actions">
+            <button v-if="!pendingRemoves.includes(g.purchaseOrderId)" class="mini-btn danger" @click="toggleRemove(g)">删除</button>
+            <button v-else class="mini-btn" @click="toggleRemove(g)">恢复</button>
           </view>
         </view>
       </view>
@@ -517,18 +490,11 @@ function backFromSelect() {
   if (batchMode.value) uni.navigateBack();
   else step.value = 'manage';
 }
-// confirm step 返回:批量模式回选单,单包裹回管理视图
-function backFromConfirm() {
-  if (batchMode.value) step.value = 'select';
-  else step.value = 'manage';
-}
-// 步骤条回退(2026-10-13):仅已完成步骤可点;前进靠操作按钮
+// 步骤条回退(2026-10-15):仅已完成步骤可点;前进靠操作按钮
 function goStep(i) {
-  if (i === 0 && (step.value === 'select' || step.value === 'confirm')) {
+  if (i === 0 && step.value === 'select') {
     if (batchMode.value) uni.navigateBack();
     else step.value = 'manage';
-  } else if (i === 1 && step.value === 'confirm') {
-    step.value = 'select';
   }
 }
 
@@ -773,27 +739,6 @@ const profitTotal = computed(() => {
 const cmpExpanded = reactive({});
 function toggleCmp(sku) { cmpExpanded[sku] = !cmpExpanded[sku]; }
 
-// Step3 预览:按将保存的分摊(auto 加权预览)估合计利润
-const step3Profit = computed(() => {
-  const rows = autoPreview.value.rows;
-  let profit = 0;
-  let allocSum = 0;
-  let allWeighted = true;
-  for (let i = 0; i < items.value.length; i++) {
-    const alloc = Number(rows[i]?.previewAmount ?? rows[i]?.amount) || 0;
-    allocSum += alloc;
-    const r = calcProfit(items.value[i], alloc);
-    if (r.delivery == null) allWeighted = false;
-    profit += r.profit;
-  }
-  return {
-    alloc: Math.round(allocSum * 100) / 100,
-    profit: Math.round(profit * 100) / 100,
-    allWeighted,
-    rateC: allocSum > 0 ? Math.round((profit / allocSum) * 1000) / 10 : null, // 成本利润率%(1位小数,2026-10-13)
-  };
-});
-
 function onRatePick(p, e) {
   poRates[p.sku] = RATE_OPTIONS[Number(e.detail.value)];
 }
@@ -865,7 +810,7 @@ const PLATFORM_TAB_META = {
   xianyu: { platformVal: 'xianyu', label: '闲鱼' },
 };
 
-const step = ref('manage'); // manage=采购管理(默认) | select=选平台订单 | confirm=分摊确认
+const step = ref('manage'); // manage=采购管理(默认) | select=选平台订单
 // 默认 tabs(/status 未返回时兜底,与 web 端一致)
 const platTabs = ref([
   { key: 'pdd', platform: 'pdd', account: 'linqx', label: '拼多多' },
@@ -1197,86 +1142,37 @@ function fmtOrderTime(o) {
 }
 
 // ════════════════════════════════════════════════════════════
-// Step3:分摊确认 + 提交(与 web 端 savePurchase 语义对齐,5893fbf)
+// 选单确认 → 暂存新增采购(两步流程:选单页点「确认」直接回管理页暂存,统一保存落地)
+// 与 web 端 savePurchase 语义对齐(5893fbf)
 // ════════════════════════════════════════════════════════════
-const lookupResult = ref(null); // 拼单查询结果(单单有效;多单拼接查询查不到则忽略)
-const logisticsInput = ref(''); // 国内快递单号(选填,预填平台单号)
-
 const step3Sel = computed(() => newSelectedOrders.value);
-const step3Sn = computed(() => step3Sel.value.map((o) => o.orderSn).join(','));
 const step3Platform = computed(() => step3Sel.value[0]?._platform || 'other');
 
-// auto 模式加权预览(与 web 端 autoPreview 同构)
-// 公式:每行金额 = 未删除已有采购的行分摊合计 + (该行 quantity / Σauto 关联 quantity) × 订单合计
+// 构建暂存新增采购(每笔平台订单=一个采购单,auto 模式由后端按数量加权重算各单分摊)
+// 产品行分摊恒为 auto 加权:每行 = 未删除已有采购的行分摊合计
+//   + (该行 quantity / Σauto 关联 quantity) × 订单合计;
 // Σ = 本包裹各行数量 + lookup 已关联 auto 模式包裹的数量(manual 关联不参与加权)
-const autoPreview = computed(() => {
-  const payment = Number(newSelectedTotal.value) || 0;
+function buildPendingAdd(sel, lookup) {
+  if (!sel.length) return;
+  const payment = sel.reduce((s, o) => s + realtimeOrderAmount(o._platform, o.orderSn, o.amount), 0);
   const currentQty = items.value.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
-  const existingAutoQty = (lookupResult.value?.linkedPackages || [])
+  const existingAutoQty = (lookup?.linkedPackages || [])
     .filter((p) => (p.alloc_modes || '').includes('auto'))
     .reduce((s, p) => s + (Number(p.quantity) || 0), 0);
   const sumQty = currentQty + existingAutoQty;
   const round2 = (n) => Math.round(n * 100) / 100;
-  // 未删除已有采购按产品行分摊合计(2026-09-19 与 web 端同步修复:
-  // 此前只显示新订单加权分摊,把已有分摊顶掉了,与保存后行金额口径不一致)
   const keptByItem = new Map();
   for (const l of links.value) {
     if (pendingRemoves.value.includes(l.purchaseOrderId)) continue;
     keptByItem.set(l.ozonOrderItemId, (keptByItem.get(l.ozonOrderItemId) || 0) + (Number(l.allocatedAmount) || 0));
   }
-  const rows = items.value.map((it) => ({
+  const itemsArg = items.value.map((it) => ({
     itemId: it.id,
-    title: it.title,
-    sku: it.sku,
-    picUrl: it.picUrl,
-    quantity: it.quantity,
-    previewAmount: round2(
-      (keptByItem.get(it.id) || 0) +
-      (sumQty ? ((Number(it.quantity) || 0) * payment) / sumQty : 0)
-    ),
-  }));
-  return { rows, sumQty, payment, currentQty, existingAutoQty };
-});
-
-// 进入 Step3:重置状态 + 预填快递单号 + 拼单探测(批量模式无单包裹 lookup)
-async function goStep3() {
-  if (!selCount.value) return;
-  step.value = 'confirm';
-  lookupResult.value = null;
-  if (batchMode.value) return;
-  const tracks = [...new Set(step3Sel.value.map((o) => o.trackingNumber).filter(Boolean))];
-  logisticsInput.value = tracks.join(',');
-  const sn = step3Sn.value;
-  if (step3Platform.value !== 'other' && sn) {
-    try {
-      const r = await lookupPurchase(step3Platform.value, sn);
-      if (r?.exists) lookupResult.value = r;
-    } catch (e) {
-      /* 探测失败不阻塞,提交前还会再查一次 */
-    }
-  }
-}
-
-// ════════════════════════════════════════════════════════════
-// Step3 确认 → 暂存新增采购(不落库,回主视图统一保存)
-// ════════════════════════════════════════════════════════════
-function collectAdd() {
-  const sel = step3Sel.value;
-  if (!sel.length) return;
-  // 批量模式:直接执行批量关联(无暂存,逐单提交后返回列表页)
-  if (batchMode.value) {
-    saveBatchLink(sel);
-    return;
-  }
-  // 产品行分摊:恒 auto 加权预览(手动改价在订单层,分摊按数量自动加权)
-  const itemsArg = autoPreview.value.rows.map((it) => ({
-    itemId: it.itemId,
-    amount: Number(it.previewAmount) || 0,
+    amount: round2((keptByItem.get(it.id) || 0) + (sumQty ? ((Number(it.quantity) || 0) * payment) / sumQty : 0)),
     quantity: it.quantity,
   }));
   // 每笔平台订单独立提交体(2026-09-20 修复:多选曾把单号 join(',') 拼成一个采购单提交,
-  // 产生"单号A,单号B"拼接 purchase_sn,物流同步/单号查找全部失效;现改为保存时逐单落库,
-  // 一笔平台订单=一个采购单,auto 模式由后端按数量加权重算各单分摊)
+  // 产生"单号A,单号B"拼接 purchase_sn,物流同步/单号查找全部失效;现改为保存时逐单落库)
   const orders = sel.map((o) => ({
     purchaseSn: o.orderSn,
     buyerAccount: o.account || o._account || o.buyerUsername || null,
@@ -1285,27 +1181,40 @@ function collectAdd() {
     // 提交时实时读源订单金额(手改值回写源对象,副本可能滞后)
     paymentAmount: realtimeOrderAmount(o._platform, o.orderSn, o.amount),
     logisticsCompany: o.logisticsCompany || null,
-    // 单笔:保留可编辑的物流输入框值;多笔:各单用自己的快递单号
-    logisticsNo: sel.length === 1 ? (logisticsInput.value.trim() || o.trackingNumber || null) : (o.trackingNumber || null),
+    // 物流单号默认预填平台单号;管理页可统一录入/修改,保存时以此为准
+    logisticsNo: o.trackingNumber || null,
     platformGoods: o.goods || [],
-    // auto 模式金额为占位,后端按数量加权重算
     items: itemsArg,
   }));
   pendingAdd.value = {
-    lookup: lookupResult.value,
+    lookup: lookup || null,
     // body 仅承载公共字段+展示(purchaseSn 用'、'连接仅供展示,落库走 orders)
     body: {
       packageId: packageId.value,
       platform: step3Platform.value,
       purchaseSn: sel.map((o) => o.orderSn).join('、') || null,
-      paymentAmount: Number(newSelectedTotal.value) || null,
-      logisticsNo: logisticsInput.value.trim() || null,
+      paymentAmount: Math.round(payment * 100) / 100,
+      logisticsNo: orders[0]?.logisticsNo || null,
+      logisticsCompany: orders[0]?.logisticsCompany || null,
       note: null,
       items: itemsArg,
       allocMode: 'auto',
     },
     orders,
   };
+}
+
+// 选单「确认」:暂存新增采购并立即回管理页;拼单探测异步完成后重新构建
+// (命中则已关联包裹数量参与 auto 加权,并刷新拼单提示)
+async function collectAdd() {
+  const sel = step3Sel.value;
+  if (!sel.length) return;
+  // 批量模式:直接执行批量关联(无暂存,逐单提交后返回列表页)
+  if (batchMode.value) {
+    saveBatchLink(sel);
+    return;
+  }
+  buildPendingAdd(sel, null);
   // 清空勾选(重新进入选择时从头开始;再次确认将替换待新增)
   for (const t of platTabs.value) {
     const st = stores[t.key];
@@ -1313,11 +1222,71 @@ function collectAdd() {
   }
   step.value = 'manage';
   uni.showToast({ title: '已暂存,请点击保存落地', icon: 'none' });
+  // 异步拼单探测:命中后重新构建(已关联包裹数量参与 auto 加权,并刷新拼单提示)
+  const platform = step3Platform.value;
+  const sn = sel.map((o) => o.orderSn).join(',');
+  if (platform !== 'other' && sn) {
+    try {
+      const r = await lookupPurchase(platform, sn);
+      if (r?.exists) buildPendingAdd(sel, r);
+    } catch (e) {
+      /* 探测失败不阻塞,保存前还会再查一次 */
+    }
+  }
 }
 
 // 移除暂存的新增
 function discardAdd() {
   pendingAdd.value = null;
+}
+
+// ── 待新增采购卡:商品行展平(与已有采购同构) + 拼单提示 ──
+const pendingGoodsRows = computed(() => {
+  const rows = [];
+  for (const od of pendingAdd.value?.orders || []) {
+    for (const g of od.platformGoods || []) rows.push(g);
+  }
+  return rows;
+});
+const pendingAddLookupTip = computed(() => {
+  const linked = pendingAdd.value?.lookup?.linkedPackages;
+  if (!linked || !linked.length) return '';
+  const autoQty = linked
+    .filter((p) => (p.alloc_modes || '').includes('auto'))
+    .reduce((s, p) => s + (Number(p.quantity) || 0), 0);
+  return '采购单已关联 ' + linked.length + ' 个包裹,本次为追加关联;auto 模式下已关联 auto 包裹的 ' + autoQty + ' 件将参与加权分摊。';
+});
+
+// ── 待新增采购卡:国内快递单号录入/修改(暂存,保存时随新增落地)──
+const pendingLogiOpen = ref(false);
+const pendingLogiNo = ref('');
+const pendingLogiCompany = ref('');
+function openPendingLogiEdit() {
+  const add = pendingAdd.value;
+  pendingLogiNo.value = add?.body?.logisticsNo || add?.orders?.[0]?.logisticsNo || '';
+  pendingLogiCompany.value = add?.body?.logisticsCompany || add?.orders?.[0]?.logisticsCompany || '';
+  pendingLogiOpen.value = true;
+}
+function closePendingLogiEdit() {
+  pendingLogiOpen.value = false;
+}
+function onPendingLogiCompanyPick(e) {
+  const i = Number(e.detail.value);
+  pendingLogiCompany.value = i === 0 ? '' : LOGI_COMPANY_RANGE[i];
+}
+function savePendingLogi() {
+  const add = pendingAdd.value;
+  if (!add) return;
+  const no = String(pendingLogiNo.value || '').trim();
+  const company = pendingLogiCompany.value.trim();
+  add.body.logisticsNo = no || null;
+  add.body.logisticsCompany = company || null;
+  for (const od of add.orders) {
+    od.logisticsNo = no || od.trackingNumber || null;
+    od.logisticsCompany = company || null;
+  }
+  pendingLogiOpen.value = false;
+  uni.showToast({ title: no ? '物流单号已填写' : '已清空物流单号', icon: 'none' });
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1692,12 +1661,24 @@ onLoad((opts) => {
 
 /* 待新增采购徽标 */
 .badge-new {
-  margin-left: auto;
+  margin-left: 12rpx;
+  flex-shrink: 0;
   font-size: 20rpx;
-  color: #00b42a;
-  background: #e8ffea;
+  color: #165dff;
+  background: #e8f3ff;
   border-radius: 999rpx;
   padding: 4rpx 14rpx;
+}
+
+/* 待新增采购卡:置顶高亮(浅蓝底 + 主色描边,与已有采购同构展示) */
+.po.pending-add {
+  background: #eef6ff;
+  border: 2rpx solid #165dff;
+  border-radius: 14rpx;
+  padding: 16rpx 20rpx;
+  margin-top: 16rpx;
+  margin-bottom: 16rpx;
+  border-bottom: none;
 }
 
 /* 从平台订单选择入口 */

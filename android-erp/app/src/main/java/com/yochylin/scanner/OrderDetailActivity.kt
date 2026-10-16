@@ -211,9 +211,10 @@ class OrderDetailActivity : ComponentActivity() {
         val countdownStatuses = listOf("wait_process", "wait_ship", "ship_success")
         if (p.operateStatus in countdownStatuses && !p.shipmentDate.isNullOrBlank()) {
             val cd = countdownText(p.shipmentDate)
-            dCountdown.text = if (cd.first) "已超时 ${cd.second}" else "剩发 ${cd.second}"
-            dCountdown.setTextColor(Color.parseColor(if (cd.first) COLOR_ERR else "#b45309"))
-            dCountdown.setRoundedBg(Color.parseColor(if (cd.first) "#ffece8" else "#fff7e6"))
+            // 2026-10-15:剩发 <24小时 或 已超时时红色醒目(urgent),否则橙色
+            dCountdown.text = if (cd.overdue) "已超时 ${cd.text}" else "剩发 ${cd.text}"
+            dCountdown.setTextColor(Color.parseColor(if (cd.urgent) COLOR_ERR else "#b45309"))
+            dCountdown.setRoundedBg(Color.parseColor(if (cd.urgent) "#ffece8" else "#fff7e6"))
             dCountdown.visibility = View.VISIBLE
         } else {
             dCountdown.visibility = View.GONE

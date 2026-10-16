@@ -75,13 +75,13 @@
         android:padding="6dp"
         android:visibility="gone" />
 
-    <TextView
-        android:id="@+id/timesText"
+    <!-- 时间区(2026-10-15 重新排版:下单/最迟发货/剩发分行走,剩发紧急高亮) -->
+    <LinearLayout
+        android:id="@+id/timeContainer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:textSize="11sp"
-        android:textColor="#86909c" />
+        android:orientation="vertical" />
 
     <!-- ── 产品信息 ── -->
     <TextView

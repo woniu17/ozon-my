@@ -268,8 +268,9 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                 op in countdownStatuses && !pkg.shipmentDate.isNullOrBlank() -> {
                     addTimeRow(oTimeContainer, "下单", fmtTimeWithWeekday(pkg.inProcessAt))
                     addTimeRow(oTimeContainer, "最迟", fmtTimeWithWeekday(pkg.shipmentDate))
+                    // 2026-10-15:剩发 <24小时 或 已超时时红色加粗醒目(urgent)
                     val cd = countdownText(pkg.shipmentDate)
-                    addTimeRow(oTimeContainer, if (cd.first) "已超时" else "剩发", cd.second, cd.first)
+                    addTimeRow(oTimeContainer, if (cd.overdue) "已超时" else "剩发", cd.text, cd.urgent)
                     if (op == "wait_ship" && pkg.profit != null) {
                         addTimeRow(oTimeContainer, "预估利润", fmtMoney(pkg.profit.profit), false, profitColor(pkg.profit.profit))
                     }
@@ -362,10 +363,12 @@ private fun profitLabelOf(pkg: Pkg): String {
     return if (p.estimated == false) "利润实" else "预估利润"
 }
 
-/** 倒计时：返回 (是否超时, 文本)，精度到分钟 */
-fun countdownText(shipmentDate: String?): Pair<Boolean, String> {
-    if (shipmentDate.isNullOrBlank()) return false to "—"
-    val end = parseIsoTime(shipmentDate) ?: return false to "—"
+/** 倒计时(2026-10-15 扩展):overdue=已超时, urgent=需醒目(超时 或 剩余不足24小时), text=倒计时文本,精度到分钟 */
+data class Countdown(val overdue: Boolean, val urgent: Boolean, val text: String)
+
+fun countdownText(shipmentDate: String?): Countdown {
+    if (shipmentDate.isNullOrBlank()) return Countdown(false, false, "—")
+    val end = parseIsoTime(shipmentDate) ?: return Countdown(false, false, "—")
     val diff = end - System.currentTimeMillis()
     val overdue = diff < 0
     val abs = kotlin.math.abs(diff)
@@ -377,7 +380,7 @@ fun countdownText(shipmentDate: String?): Pair<Boolean, String> {
         hours > 0 -> "${hours}小时${mins}分"
         else -> "${mins}分"
     }
-    return overdue to text
+    return Countdown(overdue, overdue || diff < 86400000L, text)
 }
 
 private fun Int.dp2px(context: Context): Int {

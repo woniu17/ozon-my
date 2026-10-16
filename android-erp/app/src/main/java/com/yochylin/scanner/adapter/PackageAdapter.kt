@@ -102,7 +102,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
         private val copyPosting: TextView = view.findViewById(R.id.copyPosting)
         private val tagsText: TextView = view.findViewById(R.id.tagsText)
         private val noteText: TextView = view.findViewById(R.id.noteText)
-        private val timesText: TextView = view.findViewById(R.id.timesText)
+        private val timeContainer: LinearLayout = view.findViewById(R.id.timeContainer)
         private val prodContainer: LinearLayout = view.findViewById(R.id.prodContainer)
         private val purchaseTitle: TextView = view.findViewById(R.id.purchaseTitle)
         private val purchaseContainer: LinearLayout = view.findViewById(R.id.purchaseContainer)
@@ -132,14 +132,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
             noteText.text = "备注:${pkg.note}"
             noteText.visibility = if (pkg.note.isNullOrBlank()) View.GONE else View.VISIBLE
 
-            val remain = fmtRemain(pkg.lastDeliveryAt)
-            val timesSb = SpannableStringBuilder()
-                .append("下单 ").append(fmtTimeWithWeekday(pkg.inProcessAt))
-            if (!pkg.lastDeliveryAt.isNullOrBlank()) {
-                timesSb.append(" · 最迟发货 ").append(fmtTimeWithWeekday(pkg.lastDeliveryAt))
-                if (remain.isNotEmpty()) timesSb.append(" · ").append(remain)
-            }
-            timesText.text = timesSb
+            bindTimes(pkg)
 
             // 产品行
             prodContainer.removeAllViews()
@@ -170,6 +163,67 @@ class PackageAdapter(private val callbacks: Callbacks) :
 
             // 操作区
             bindActions(pkg)
+        }
+
+        /** 时间区(2026-10-15 重新排版):下单/最迟发货分行走,剩发单独成行;
+         *  剩发 <24小时 或 已超时时整行红色加粗高亮(超时浅红底,紧急浅橙底) */
+        private fun bindTimes(pkg: Pkg) {
+            timeContainer.removeAllViews()
+            addTimeRow(timeContainer, "下单", fmtTimeWithWeekday(pkg.inProcessAt))
+            if (!pkg.lastDeliveryAt.isNullOrBlank()) {
+                addTimeRow(timeContainer, "最迟发货", fmtTimeWithWeekday(pkg.lastDeliveryAt))
+                val remain = remainInfo(pkg.lastDeliveryAt)
+                if (remain != null) addRemainRow(timeContainer, remain)
+            }
+        }
+
+        private fun addTimeRow(container: LinearLayout, key: String, value: CharSequence) {
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val k = TextView(context).apply {
+                text = key
+                setTextColor(Color.parseColor(COLOR_MUTE))
+                textSize = 11f
+            }
+            val v = TextView(context).apply {
+                text = value
+                setTextColor(Color.parseColor(COLOR_TEXT))
+                textSize = 11f
+            }
+            row.addView(k, LinearLayout.LayoutParams(88.dp2px(context), ViewGroup.LayoutParams.WRAP_CONTENT))
+            row.addView(v, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            container.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+
+        private fun addRemainRow(container: LinearLayout, remain: RemainInfo) {
+            val urgentColor = Color.parseColor(if (remain.urgent) COLOR_ERR else COLOR_WARN)
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(10.dp2px(context), 4.dp2px(context), 10.dp2px(context), 4.dp2px(context))
+                setRoundedBg(Color.parseColor(if (remain.overdue) "#ffece8" else "#fff7e6"), 6f)
+            }
+            val k = TextView(context).apply {
+                text = if (remain.overdue) "已超时" else "剩发"
+                setTextColor(urgentColor)
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            val v = TextView(context).apply {
+                text = remain.text
+                setTextColor(urgentColor)
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            val kLp = LinearLayout.LayoutParams(88.dp2px(context), ViewGroup.LayoutParams.WRAP_CONTENT)
+            kLp.topMargin = 4.dp2px(context)
+            row.addView(k, kLp)
+            val vLp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            vLp.topMargin = 4.dp2px(context)
+            row.addView(v, vLp)
+            container.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
 
         private fun bindOpTag(pkg: Pkg) {
@@ -570,11 +624,14 @@ fun fmtTimeWithWeekday(iso: String?): CharSequence {
     }
 }
 
-private fun fmtRemain(lastDeliveryAt: String?): String {
-    if (lastDeliveryAt.isNullOrBlank()) return ""
-    val t = parseIsoTime(lastDeliveryAt) ?: return ""
+/** 剩发状态:overdue=已超时, urgent=需醒目展示(超时 或 剩余不足24小时), text=倒计时文本 */
+data class RemainInfo(val overdue: Boolean, val urgent: Boolean, val text: String)
+
+private fun remainInfo(lastDeliveryAt: String?): RemainInfo? {
+    if (lastDeliveryAt.isNullOrBlank()) return null
+    val t = parseIsoTime(lastDeliveryAt) ?: return null
     val diff = t - System.currentTimeMillis()
-    val neg = diff < 0
+    val overdue = diff < 0
     val abs = kotlin.math.abs(diff)
     val d = abs / 86400000L
     val h = (abs % 86400000L) / 3600000L
@@ -584,7 +641,12 @@ private fun fmtRemain(lastDeliveryAt: String?): String {
         h > 0 -> "${h}小时${m}分"
         else -> "${m}分"
     }
-    return if (neg) "已超时$body" else "剩$body"
+    val text = if (overdue) "已超时$body" else "剩$body"
+    return RemainInfo(overdue, overdue || diff < 86400000L, text)
+}
+
+private fun Int.dp2px(context: Context): Int {
+    return (this * context.resources.displayMetrics.density + 0.5f).toInt()
 }
 
 fun platformLabel(p: String?): String = when (p) {
