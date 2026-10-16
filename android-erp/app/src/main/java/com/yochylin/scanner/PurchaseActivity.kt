@@ -198,11 +198,6 @@ class PurchaseActivity : ComponentActivity() {
         renderSelect()
     }
 
-    private fun showConfirm() {
-        step = "confirm"
-        renderConfirm()
-    }
-
     // ══════════════════ 基础 UI 辅助 ══════════════════
     private fun dp(v: Number): Int = (v.toFloat() * resources.displayMetrics.density).toInt()
 
@@ -304,11 +299,11 @@ class PurchaseActivity : ComponentActivity() {
     /** 步骤条：已完成可点回退，当前高亮 */
     private fun renderStepBar() {
         purchaseStepBar.removeAllViews()
-        val names = listOf("采购管理", "选平台订单", "分摊确认")
+        // 两步流程：采购管理（含分摊确认）→ 选平台订单
+        val names = listOf("采购管理", "选平台订单")
         val idx = when (step) {
             "manage" -> 0
-            "select" -> 1
-            else -> 2
+            else -> 1
         }
         for (i in names.indices) {
             val dot = TextView(this).apply {
@@ -373,7 +368,6 @@ class PurchaseActivity : ComponentActivity() {
         when (step) {
             "manage" -> renderManageBottom()
             "select" -> renderSelectBottom()
-            "confirm" -> renderConfirmBottom()
         }
     }
 
@@ -461,7 +455,7 @@ class PurchaseActivity : ComponentActivity() {
 
     /** 按当前步骤重渲染（单价调整数据异步加载完成后刷新当前页） */
     private fun rerenderCurrent() {
-        if (step == "confirm") renderConfirm() else renderManage()
+        renderManage()
     }
 
     private fun renderManage() {
@@ -505,38 +499,37 @@ class PurchaseActivity : ComponentActivity() {
         }
         purchaseContent.addView(poCard)
 
-        // 商品与分摊卡
+        // 商品与分摊卡（有待新增时展示"最终分摊"，即分摊确认区）
         val allocCard = card()
-        allocCard.addView(sectionTitle("商品与分摊"))
+        allocCard.addView(sectionTitle(if (pendingAdd != null) "商品与分摊 · 含待新增" else "商品与分摊"))
         val allocMap = itemAllocForManage()
-        var totalAlloc = 0.0
-        var totalProfit = 0.0
         for (it in items) {
             val alloc = allocMap[it.id ?: it.itemId] ?: 0.0
-            totalAlloc += alloc
             val qty = it.quantity ?: 0.0
             val unitCost = if (qty > 0) alloc / qty else 0.0
-            if (it.price != null && unitCost > 0) {
-                totalProfit += (it.price!! * 0.84 - unitCost) * qty
-            }
             allocCard.addView(buildAllocRow(it, alloc))
             // 单价调整折叠区（与分摊确认页一致：编辑已有采购时同样可调价）
             allocCard.addView(buildPriceAdjust(it, unitCost))
         }
-        val totalLine = TextView(this).apply {
-            text = "采购合计 ${fmtMoney(totalAlloc)} · 预估利润 ${fmtMoney(totalProfit)}"
-            setTextColor(Color.parseColor(COLOR_TEXT))
-            textSize = 12f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            setPadding(0, dp(8), 0, 0)
-        }
-        allocCard.addView(totalLine)
+        allocCard.addView(buildProfitTotalLine(allocMap))
         purchaseContent.addView(allocCard)
 
-        // 待新增采购卡
+        // 待新增采购卡（分摊确认：订单 + 自动分摊预览 + 单价调整 + 物流，统一在此确认后保存）
         pendingAdd?.let { add ->
             val addCard = card()
-            addCard.addView(sectionTitle("待新增采购"))
+            addCard.addView(sectionTitle("待新增采购 · 分摊确认"))
+
+            // 拼单提示
+            add.lookup?.let { lr ->
+                if (lr.exists && lr.linkedPackages.isNotEmpty()) {
+                    val tip = mutedText("拼单提示:该采购单已关联 ${lr.linkedPackages.size} 个包裹,保存后 auto 模式将按数量重新加权分摊。", 10f)
+                    tip.setPadding(dp(8), dp(6), dp(8), dp(6))
+                    tip.setBackgroundColor(Color.parseColor("#fff7e6"))
+                    addCard.addView(tip)
+                }
+            }
+
+            // 订单列表
             for (od in add.orders) {
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -567,6 +560,37 @@ class PurchaseActivity : ComponentActivity() {
                 11f
             )
             addCard.addView(meta)
+
+            // 分摊已计入上方"商品与分摊"卡，作为最终分摊确认
+            val allocTip = mutedText("以上待新增金额已按数量自动分摊,计入上方「商品与分摊 · 含待新增」各商品行,保存后生效。", 10f)
+            allocTip.setPadding(0, dp(6), 0, 0)
+            addCard.addView(allocTip)
+
+            // 国内快递单号（选填，可编辑）
+            val logiTitle = TextView(this).apply {
+                text = "国内快递单号(选填)"
+                textSize = 12f
+                setTextColor(Color.parseColor(COLOR_TEXT))
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                setPadding(0, dp(10), 0, 0)
+            }
+            addCard.addView(logiTitle)
+            val et = EditText(this).apply {
+                setText(logisticsInput.ifBlank { add.logisticsNo ?: "" })
+                hint = "多个用英文逗号分隔"
+                textSize = 14f
+                inputType = InputType.TYPE_CLASS_TEXT
+            }
+            et.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    logisticsInput = s?.toString()?.trim() ?: ""
+                }
+            })
+            addCard.addView(et)
+
+            // 移除暂存
             val removeBtn = TextView(this).apply {
                 text = "移除"
                 setTextColor(Color.parseColor(COLOR_DANGER))
@@ -580,6 +604,7 @@ class PurchaseActivity : ComponentActivity() {
                 ).apply { topMargin = dp(8) }
                 setOnClickListener {
                     pendingAdd = null
+                    logisticsInput = ""
                     renderManage()
                 }
             }
@@ -1037,7 +1062,7 @@ class PurchaseActivity : ComponentActivity() {
         info.addView(tTv)
         purchaseActionBar.addView(info)
         purchaseActionBar.addView(actionButton("返回", "#f2f3f5", COLOR_TEXT) { showManage() })
-        purchaseActionBar.addView(actionButton("下一步", COLOR_PRIMARY, "#ffffff", enabled = n > 0) { goStep3() })
+        purchaseActionBar.addView(actionButton("确认", COLOR_PRIMARY, "#ffffff", enabled = n > 0) { collectAdd() })
     }
 
     private fun renderSelect() {
@@ -1739,36 +1764,6 @@ class PurchaseActivity : ComponentActivity() {
         )
     }
 
-    private fun goStep3() {
-        if (selCount() == 0) return
-        step = "confirm"
-        lookupResult = null
-        val sel = selectedOrders()
-        // 多单时用逗号拼接做 lookup（查不到则忽略）
-        val sn = sel.joinToString(",") { it.orderSn }
-        val platform = sel.firstOrNull()?.platformVal ?: "other"
-        logisticsInput = sel.mapNotNull { it.trackingNumber }.distinct().joinToString(",")
-        if (platform != "other" && sn.isNotBlank()) {
-            lifecycleScope.launch {
-                try {
-                    val data = Api.get(
-                        "/admin/api/order-process/purchase/lookup",
-                        mapOf("platform" to platform, "purchaseSn" to sn)
-                    ).asJsonObject
-                    if (data.optBoolean("exists")) {
-                        lookupResult = parseLookup(data)
-                        renderConfirm()
-                    }
-                } catch (e: Exception) {
-                    // 忽略
-                }
-            }
-        }
-        // 加载 SKU 定价信息（单价调整区用），完成后重渲染预览
-        loadSkuPricing()
-        renderConfirm()
-    }
-
     private fun parseLookup(obj: JsonObject): LookupResult {
         val exists = obj.optBoolean("exists")
         val linked = mutableListOf<LookupLinkedPackage>()
@@ -1791,10 +1786,9 @@ class PurchaseActivity : ComponentActivity() {
     }
 
     /** auto 加权预览：每行 = 未删除已有分摊 + 新订单合计按数量加权 */
-    private fun autoPreview(): List<Pair<PkgItem, Double>> {
-        val payment = selectedTotal()
+    private fun autoPreviewWith(lookup: LookupResult?, payment: Double): List<Pair<PkgItem, Double>> {
         val currentQty = items.sumOf { it.quantity ?: 0.0 }
-        val existingAutoQty = (lookupResult?.linkedPackages ?: emptyList())
+        val existingAutoQty = (lookup?.linkedPackages ?: emptyList())
             .filter { (it.allocModes ?: "").contains("auto") }
             .sumOf { it.quantity ?: 0.0 }
         val sumQty = currentQty + existingAutoQty
@@ -1802,148 +1796,6 @@ class PurchaseActivity : ComponentActivity() {
         return items.map {
             it to (kept[it.id ?: it.itemId] ?: 0.0) + if (sumQty > 0) ((it.quantity ?: 0.0) * payment / sumQty) else 0.0
         }
-    }
-
-    private fun renderConfirm() {
-        renderStepBar()
-        purchaseContent.removeAllViews()
-        val sel = selectedOrders()
-        val total = selectedTotal()
-        val platform = sel.firstOrNull()?.platformVal ?: "other"
-
-        // 已选摘要
-        val summary = card()
-        summary.addView(sectionTitle("已选摘要"))
-        val headLine = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        headLine.addView(chip(platformLabelLocal(platform), "#eef4ff", COLOR_PRIMARY, 11f))
-        val cnt = TextView(this).apply {
-            text = " 已选 ${sel.size} 单 · 合计 ${fmtMoney(total)}"
-            textSize = 12f
-            setTextColor(Color.parseColor(COLOR_TEXT))
-        }
-        headLine.addView(cnt)
-        summary.addView(headLine)
-        for (o in sel) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(4), 0, 0)
-            }
-            val snTv = TextView(this).apply {
-                text = o.orderSn
-                textSize = 10f
-                typeface = android.graphics.Typeface.MONOSPACE
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            row.addView(snTv)
-            val amtTv = TextView(this).apply {
-                text = fmtMoney(realtimeOrderAmount(o.platformVal, o.orderSn, o.amount))
-                textSize = 11f
-                setTextColor(Color.parseColor(COLOR_DANGER))
-            }
-            row.addView(amtTv)
-            summary.addView(row)
-        }
-        lookupResult?.let { lr ->
-            if (lr.exists && lr.linkedPackages.isNotEmpty()) {
-                val tip = mutedText("拼单提示:该采购单已关联 ${lr.linkedPackages.size} 个包裹,保存后 auto 模式将按数量重新加权分摊。", 10f)
-                tip.setPadding(dp(8), dp(6), dp(8), dp(6))
-                tip.setBackgroundColor(Color.parseColor("#fff7e6"))
-                summary.addView(tip)
-            }
-        }
-        purchaseContent.addView(summary)
-
-        // 自动分摊预览
-        val previewCard = card()
-        previewCard.addView(sectionTitle("自动分摊预览"))
-        val tip = mutedText("各商品行金额 = 已有采购分摊 + 新订单 ${fmtMoney(total)} 按数量加权分摊(未删除已有分摊保持口径不变)", 10f)
-        previewCard.addView(tip)
-        for ((it, amt) in autoPreview()) {
-            previewCard.addView(buildPreviewRow(it, amt))
-        }
-        val previewTotal = autoPreview().sumOf { it.second }
-        previewCard.addView(buildProfitTotalLine(previewTotal))
-        purchaseContent.addView(previewCard)
-
-        // 国内快递单号（选填）
-        val logiCard = card()
-        logiCard.addView(sectionTitle("国内快递单号"))
-        val logiHint = mutedText("选填:自动从订单物流号带出,多个用英文逗号分隔。", 10f)
-        logiCard.addView(logiHint)
-        val et = EditText(this).apply {
-            setText(logisticsInput)
-            hint = "多个用英文逗号分隔"
-            textSize = 14f
-            inputType = InputType.TYPE_CLASS_TEXT
-        }
-        et.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                logisticsInput = s?.toString()?.trim() ?: ""
-            }
-        })
-        logiCard.addView(et)
-        purchaseContent.addView(logiCard)
-
-        renderBottomBar()
-    }
-
-    private fun buildPreviewRow(it: PkgItem, amt: Double): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(8) }
-        }
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val img = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = dp(6).toFloat()
-                setColor(Color.parseColor("#f2f3f5"))
-            }
-            clipToOutline = true
-        }
-        if (!it.picUrl.isNullOrBlank()) img.load(it.picUrl)
-        row.addView(img)
-        val right = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                leftMargin = dp(8)
-            }
-        }
-        right.addView(
-            TextView(this).apply {
-                text = it.title ?: "—"
-                textSize = 11f
-                setTextColor(Color.parseColor(COLOR_TEXT))
-                maxLines = 1
-            }
-        )
-        val unit = if ((it.quantity ?: 0.0) > 0) amt / it.quantity!! else 0.0
-        right.addView(
-            TextView(this).apply {
-                text = "SKU ${it.sku ?: "—"} · ×${fmtNum(it.quantity ?: 0.0)} · 分摊 ${fmtMoney(amt)} · 采购/件 ${fmtMoney(unit)}"
-                textSize = 10f
-                setTextColor(Color.parseColor(COLOR_MUTE))
-            }
-        )
-        row.addView(right)
-        box.addView(row)
-        // 单价调整折叠区（H5 同构：按目标成本利润率一键调价/取整）
-        box.addView(buildPriceAdjust(it, unit))
-        return box
     }
 
     /** 单价调整折叠区：默认收起；展开后可选目标率、一键调价/取整，并展示单件利润对比 */
@@ -2162,10 +2014,12 @@ class PurchaseActivity : ComponentActivity() {
     }
 
     /** 单价调整合计行（H5 profitTotal 同构） */
-    private fun buildProfitTotalLine(previewTotal: Double): View {
+    private fun buildProfitTotalLine(allocMap: Map<String, Double>): View {
+        val previewTotal = allocMap.values.sum()
         var profit = 0.0
         var allWeighted = true
-        for ((it, amt) in autoPreview()) {
+        for (it in items) {
+            val amt = allocMap[it.id ?: it.itemId] ?: 0.0
             val qty = it.quantity ?: 0.0
             val unitCost = if (qty > 0) amt / qty else 0.0
             val info = it.sku?.let { sku -> skuPricing[sku] }
@@ -2229,7 +2083,7 @@ class PurchaseActivity : ComponentActivity() {
                 // 静默:调价区保持禁用
             } finally {
                 // 当前在采购管理(manage)或分摊确认(confirm)时都重渲染,刷新单价调整区
-                if (step == "manage" || step == "confirm") rerenderCurrent()
+                if (step == "manage") rerenderCurrent()
             }
         }
     }
@@ -2269,18 +2123,12 @@ class PurchaseActivity : ComponentActivity() {
         }
     }
 
-    private fun renderConfirmBottom() {
-        purchaseActionBar.removeAllViews()
-        purchaseActionBar.addView(actionButton("返回", "#f2f3f5", COLOR_TEXT) { showSelect() })
-        purchaseActionBar.addView(actionButton("确认", COLOR_PRIMARY, "#ffffff", enabled = !saving) { collectAdd() })
-    }
-
     // ══════════════════ 保存逻辑 ══════════════════
 
-    private fun collectAdd() {
-        val sel = selectedOrders()
-        if (sel.isEmpty()) return
-        val preview = autoPreview()
+    /** 由已选订单构建待新增采购（含自动分摊预览快照）；lookup 命中后再次调用可重算分摊 */
+    private fun buildPendingAdd(sel: List<PlatformOrder>, lookup: LookupResult?): PendingAdd {
+        val payment = sel.sumOf { realtimeOrderAmount(it.platformVal, it.orderSn, it.amount) }
+        val preview = autoPreviewWith(lookup, payment)
         val itemsArg = preview.map { (it, amt) ->
             PurchaseItemArg(
                 itemId = it.id ?: it.itemId,
@@ -2302,20 +2150,53 @@ class PurchaseActivity : ComponentActivity() {
             )
         }
         val platform = sel.first().platformVal
-        pendingAdd = PendingAdd(
+        return PendingAdd(
             platform = platform,
             platformVal = platform,
             orders = orders,
-            paymentAmount = Math.round(selectedTotal() * 100) / 100.0,
+            paymentAmount = Math.round(payment * 100) / 100.0,
             logisticsNo = logisticsInput.ifBlank { null },
             items = itemsArg,
-            lookup = lookupResult
+            lookup = lookup
         )
+    }
+
+    /** 选平台订单确认：暂存待新增采购并回到采购管理页，在此统一查看分摊/调价后保存 */
+    private fun collectAdd() {
+        val sel = selectedOrders()
+        if (sel.isEmpty()) return
+        // 国内物流单号：自动从所选订单带出，可回管理页修改
+        logisticsInput = sel.mapNotNull { it.trackingNumber }.distinct().joinToString(",")
+        // 每次确认重新查拼单，避免沿用上次结果
+        lookupResult = null
+        pendingAdd = buildPendingAdd(sel, lookupResult)
         // 清空已选
         for (t in platTabs) stores[t.key]?.selected?.clear()
         step = "manage"
         renderManage()
-        toast(if (orders.size > 1) "已暂存 ${orders.size} 笔采购,请点击保存落地" else "已暂存,请点击保存落地")
+        toast(if (sel.size > 1) "已暂存 ${sel.size} 笔采购,请在下方确认分摊后保存" else "已暂存,请在下方确认分摊后保存")
+        // 异步查拼单提示：命中已关联其他包裹时,重算分摊并刷新预览
+        val platform = sel.first().platformVal
+        val sn = sel.joinToString(",") { it.orderSn }
+        if (platform != "other" && sn.isNotBlank()) {
+            lifecycleScope.launch {
+                try {
+                    val data = Api.get(
+                        "/admin/api/order-process/purchase/lookup",
+                        mapOf("platform" to platform, "purchaseSn" to sn)
+                    ).asJsonObject
+                    if (data.optBoolean("exists")) {
+                        lookupResult = parseLookup(data)
+                        if (pendingAdd != null) {
+                            pendingAdd = buildPendingAdd(sel, lookupResult)
+                            if (step == "manage") renderManage()
+                        }
+                    }
+                } catch (e: Exception) {
+                    // 忽略:保存时仍有拼单二次确认弹窗兜底
+                }
+            }
+        }
     }
 
     private fun doSave(withShip: Boolean) {
@@ -2363,7 +2244,8 @@ class PurchaseActivity : ComponentActivity() {
                                 "sellerName" to (od.sellerName ?: ""),
                                 "paymentAmount" to od.paymentAmount,
                                 "logisticsCompany" to (od.logisticsCompany ?: ""),
-                                "logisticsNo" to (od.logisticsNo ?: ""),
+                                // 以管理页最新输入的物流单号为准（暂存后仍可修改）
+                                "logisticsNo" to (logisticsInput.ifBlank { od.logisticsNo ?: "" }),
                                 "items" to add.items.map {
                                     mapOf(
                                         "itemId" to it.itemId,
