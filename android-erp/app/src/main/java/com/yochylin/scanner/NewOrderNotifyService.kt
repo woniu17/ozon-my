@@ -39,6 +39,7 @@ import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -68,13 +69,19 @@ class NewOrderNotifyService : Service() {
     companion object {
         const val CHANNEL_MONITOR = "order_monitor"
         const val CHANNEL_NEW_ORDER = "new_order"
+        const val CHANNEL_ORDER_ALERT = "order_alert"
+        const val CHANNEL_ORDER_STATUS = "order_status"
         const val NOTIFICATION_ONGOING_ID = 1002
         const val NOTIFICATION_NEW_ORDER_ID = 1001
+        const val NOTIFICATION_ORDER_EVENT_BASE = 1100
         const val PUSH_TIMEOUT_MS = 25_000
         const val FALLBACK_INTERVAL_MS = 5 * 60_000L
-        const val NOTIFIED_MAX = 20
+        const val NOTIFIED_MAX = 50
         const val LIST_SIZE = 10
     }
+
+    /** 状态事件通知自增 ID(多单并发到达不互相覆盖) */
+    private val notificationSeq = AtomicInteger(NOTIFICATION_ORDER_EVENT_BASE)
 
     override fun onCreate() {
         super.onCreate()
@@ -105,6 +112,16 @@ class NewOrderNotifyService : Service() {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_NEW_ORDER, "新订单提醒", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "检测到新的待处理订单时提醒（含店铺/单号/金额）"
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ORDER_ALERT, "订单预警", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "订单取消/需要备货时提醒（需关注处理）"
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ORDER_STATUS, "订单状态", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "揽收/待取件/签收等状态变更通知"
             }
         )
     }
@@ -241,22 +258,125 @@ class NewOrderNotifyService : Service() {
         }
     }
 
-    /** 处理服务端推送的事件列表（目前只处理 NEW_ORDER） */
+    /**
+     * 处理服务端推送的事件列表（2026-10-16 扩展：对齐飞书通知全部类型）。
+     * 去重键 = 类型 + 货件号（同一货件不同状态各自通知），与差集兜底共用 tryMarkNotified。
+     */
     private fun handlePushEvents(events: List<JsonObject>) {
+        var orderAdded = false
         for (ev in events) {
-            if (ev.optString("type") != "NEW_ORDER") continue
+            val type = ev.optString("type")
             val postingNumber = ev.optString("postingNumber")
-            if (postingNumber.isBlank() || !tryMarkNotified(postingNumber)) continue
-            val info = NewOrderInfo(
-                storeName = ev.optString("storeName"),
-                postingNumber = postingNumber,
-                amount = ev.optDouble("amount"),
-            )
-            val total = ev.optInt("waitProcessCount", 0).toLong()
-            sendNewOrderNotification(total, 1, listOf(info))
+            if (postingNumber.isBlank()) continue
+            val store = ev.optString("storeName").ifBlank { "未知店铺" }
+            val amount = ev.optDouble("amount")
+            when (type) {
+                "NEW_ORDER" -> {
+                    if (!tryMarkNotified("NEW_ORDER:$postingNumber")) continue
+                    val info = NewOrderInfo(store, postingNumber, amount)
+                    val total = ev.optInt("waitProcessCount", 0).toLong()
+                    sendNewOrderNotification(total, 1, listOf(info))
+                    orderAdded = true
+                }
+                "ORDER_CANCELLED" -> {
+                    if (!tryMarkNotified("ORDER_CANCELLED:$postingNumber")) continue
+                    sendOrderEventNotification(
+                        channelId = CHANNEL_ORDER_ALERT,
+                        title = "[$store] [$postingNumber]",
+                        summary = "订单取消 · ${fmtMoney(amount)} CNY",
+                        bigText = buildString {
+                            append("订单已取消")
+                            ev.optString("cancelReason").takeIf { it.isNotBlank() }?.let {
+                                append("\n取消原因: ").append(it)
+                            }
+                            append("\n销售金额: ").append(fmtMoney(amount)).append(" CNY")
+                            append("\n点击查看订单处理")
+                        },
+                        tab = "order"
+                    )
+                }
+                "STATE_CHANGED" -> {
+                    val subState = ev.optString("subState")
+                    if (!tryMarkNotified("STATE_CHANGED:$subState:$postingNumber")) continue
+                    val label = when (subState) {
+                        "received" -> "已签收"
+                        "pickup_point" -> "到达取货点(待取件)"
+                        "stocking" -> "待备货"
+                        else -> "状态变更: ${ev.optString("newState").ifBlank { "—" }}"
+                    }
+                    sendOrderEventNotification(
+                        channelId = if (subState == "stocking") CHANNEL_ORDER_ALERT else CHANNEL_ORDER_STATUS,
+                        title = "[$store] [$postingNumber]",
+                        summary = "$label · ${fmtMoney(amount)} CNY",
+                        bigText = buildString {
+                            append(label)
+                            append("\n货件号: ").append(postingNumber)
+                            append("\n销售金额: ").append(fmtMoney(amount)).append(" CNY")
+                            append("\n点击查看订单详情")
+                        },
+                        tab = "order"
+                    )
+                }
+                "PICKED_UP" -> {
+                    if (!tryMarkNotified("PICKED_UP:$postingNumber")) continue
+                    sendOrderEventNotification(
+                        channelId = CHANNEL_ORDER_STATUS,
+                        title = "[$store] [$postingNumber]",
+                        summary = "已揽收 · ${fmtMoney(amount)} CNY",
+                        bigText = buildString {
+                            append("货件已揽收")
+                            append("\n货件号: ").append(postingNumber)
+                            append("\n销售金额: ").append(fmtMoney(amount)).append(" CNY")
+                            append("\n点击查看订单详情")
+                        },
+                        tab = "order"
+                    )
+                }
+            }
+        }
+        if (orderAdded) {
             // 新订单影响今日统计，立即刷新常驻通知
             scope.launch { refreshTodayStats() }
         }
+    }
+
+    /**
+     * 发送订单状态事件通知（取消/备货/揽收/签收等，对齐飞书通知格式）。
+     * 标题统一 [店名] [货件号]，正文 = 状态 + 金额（+取消原因），点击跳转对应 Tab。
+     */
+    private fun sendOrderEventNotification(
+        channelId: String,
+        title: String,
+        summary: String,
+        bigText: String,
+        tab: String,
+    ) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        val openIntent = Intent(this, MainShellActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("switchTab", tab)
+        }
+        val pi = PendingIntent.getActivity(
+            this,
+            notificationSeq.incrementAndGet(),
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(R.drawable.ic_stat_new_order)
+            .setContentTitle(title)
+            .setContentText(summary)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .build()
+        nm.notify(notificationSeq.get(), notification)
     }
 
     /**
@@ -279,9 +399,9 @@ class NewOrderNotifyService : Service() {
             }
 
             val lastSns = Session.lastWaitProcessSns
-            // 与 WebSocket 事件共用 tryMarkNotified：差集识别出的新单也立即标记，
+            // 与 WebSocket 事件共用 tryMarkNotified：差集识别出的新单也立即标记（键 NEW_ORDER:单号），
             // 避免后续 WebSocket 推送同一订单时重复通知（评审 P0-1/P1-2）
-            val newOrders = currentSns.filter { it !in lastSns && tryMarkNotified(it) }
+            val newOrders = currentSns.filter { it !in lastSns && tryMarkNotified("NEW_ORDER:$it") }
                 .mapNotNull { sn -> current.find { it.postingNumber == sn } }
             Session.lastWaitProcessSns = currentSns
 
