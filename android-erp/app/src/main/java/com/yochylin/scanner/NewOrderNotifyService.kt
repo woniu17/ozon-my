@@ -13,6 +13,10 @@ import android.os.IBinder
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
+import coil.ImageLoader
+import coil.request.ImageRequest
+import coil.request.SuccessResult
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -59,12 +63,13 @@ class NewOrderNotifyService : Service() {
     /** notifiedSns 访问锁：WebSocket 回调/差集兜底/启动初始化多协程并发访问，需串行化防 ConcurrentModificationException */
     private val notifiedLock = Any()
 
-    /** 一条新订单摘要（店铺/货件号/销售金额/机器名，对齐飞书通知字段） */
+    /** 一条新订单摘要（店铺/货件号/销售金额/机器名/商品首图，对齐飞书通知字段） */
     private data class NewOrderInfo(
         val storeName: String,
         val postingNumber: String,
         val amount: Double,
         val machineName: String = "",
+        val productImageUrl: String = "",
     )
 
     companion object {
@@ -276,7 +281,8 @@ class NewOrderNotifyService : Service() {
             when (type) {
                 "NEW_ORDER" -> {
                     if (!tryMarkNotified("NEW_ORDER:$postingNumber")) continue
-                    val info = NewOrderInfo(store, postingNumber, amount, machine)
+                    val imageUrl = ev.optString("productImageUrl")
+                    val info = NewOrderInfo(store, postingNumber, amount, machine, imageUrl)
                     val total = ev.optInt("waitProcessCount", 0).toLong()
                     sendNewOrderNotification(total, 1, listOf(info))
                     orderAdded = true
@@ -296,7 +302,8 @@ class NewOrderNotifyService : Service() {
                             append("\n点击查看订单处理")
                         },
                         tab = "order",
-                        machineName = machine
+                        machineName = machine,
+                        productImageUrl = ev.optString("productImageUrl")
                     )
                 }
                 "STATE_CHANGED" -> {
@@ -319,7 +326,8 @@ class NewOrderNotifyService : Service() {
                             append("\n点击查看订单详情")
                         },
                         tab = "order",
-                        machineName = machine
+                        machineName = machine,
+                        productImageUrl = ev.optString("productImageUrl")
                     )
                 }
                 "PICKED_UP" -> {
@@ -335,7 +343,8 @@ class NewOrderNotifyService : Service() {
                             append("\n点击查看订单详情")
                         },
                         tab = "order",
-                        machineName = machine
+                        machineName = machine,
+                        productImageUrl = ev.optString("productImageUrl")
                     )
                 }
             }
@@ -357,6 +366,7 @@ class NewOrderNotifyService : Service() {
         bigText: String,
         tab: String,
         machineName: String = "",
+        productImageUrl: String = "",
     ) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -378,7 +388,8 @@ class NewOrderNotifyService : Service() {
         val suffix = if (machineName.isNotBlank()) " [$machineName]" else ""
         val fullSummary = summary + suffix
         val fullBigText = if (machineName.isNotBlank()) "$bigText\n[机器: $machineName]" else bigText
-        val notification = NotificationCompat.Builder(this, channelId)
+        val id = notificationSeq.get()
+        val builder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_stat_new_order)
             .setContentTitle(title)
             .setContentText(fullSummary)
@@ -386,8 +397,9 @@ class NewOrderNotifyService : Service() {
             .setContentIntent(pi)
             .setAutoCancel(true)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .build()
-        nm.notify(notificationSeq.get(), notification)
+        nm.notify(id, builder.build())
+        // 商品图(2026-10-16 通知大图):先发文本通知保证时效,图片下载完成后再更新同 id 通知
+        attachProductImage(id, productImageUrl, builder)
     }
 
     /**
@@ -494,12 +506,29 @@ class NewOrderNotifyService : Service() {
         val result = mutableListOf<NewOrderInfo>()
         for (i in 0 until arr.size()) {
             val p = arr.get(i).asJsonObject
+            // 商品首图(2026-10-16 通知大图):list 接口 items 已含 picUrl,取第一张非空
+            var imageUrl = ""
+            try {
+                val items = p.getAsJsonArray("items")
+                if (items != null) {
+                    for (j in 0 until items.size()) {
+                        val url = items.get(j).asJsonObject.optString("picUrl")
+                        if (url.isNotBlank()) {
+                            imageUrl = url
+                            break
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // items 缺失/结构异常:无图通知
+            }
             result.add(
                 NewOrderInfo(
                     storeName = p.optString("storeName"),
                     postingNumber = p.optString("postingNumber"),
                     amount = p.optDouble("orderAmount"),
-                    machineName = machineName
+                    machineName = machineName,
+                    productImageUrl = imageUrl
                 )
             )
         }
@@ -553,7 +582,7 @@ class NewOrderNotifyService : Service() {
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val notification = NotificationCompat.Builder(this, CHANNEL_NEW_ORDER)
+        val builder = NotificationCompat.Builder(this, CHANNEL_NEW_ORDER)
             .setSmallIcon(R.drawable.ic_stat_new_order)
             .setContentTitle("新增 $added 个待处理订单")
             .setContentText(summary)
@@ -561,8 +590,43 @@ class NewOrderNotifyService : Service() {
             .setContentIntent(pi)
             .setAutoCancel(true)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .build()
-        nm.notify(NOTIFICATION_NEW_ORDER_ID, notification)
+        nm.notify(NOTIFICATION_NEW_ORDER_ID, builder.build())
+        // 商品图(2026-10-16 通知大图):取本批第一张可用商品图,下载完成后更新为 BigPicture
+        val firstImage = orders.firstOrNull { it.productImageUrl.isNotBlank() }?.productImageUrl
+        attachProductImage(NOTIFICATION_NEW_ORDER_ID, firstImage, builder)
+    }
+
+    /**
+     * 商品图异步加载并更新通知为 BigPicture 大图(2026-10-16 新增)。
+     * 策略:先发文本通知保证时效,图片下载完成后再用同一通知 id 更新;
+     * 下载/解码失败或超时静默,保持文本通知不变(不影响主流程)。
+     */
+    private fun attachProductImage(
+        notificationId: Int,
+        imageUrl: String?,
+        builder: NotificationCompat.Builder,
+    ) {
+        if (imageUrl.isNullOrBlank()) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val loader = ImageLoader(this@NewOrderNotifyService)
+                val request = ImageRequest.Builder(this@NewOrderNotifyService)
+                    .data(imageUrl)
+                    .size(768)
+                    .allowHardware(false)
+                    .build()
+                val result = loader.execute(request)
+                if (result is SuccessResult) {
+                    val bmp = result.drawable.toBitmap()
+                    // 复用同一 Builder：先发文本通知，图片就绪后覆盖同 id 为 BigPicture 大图
+                    builder.setStyle(NotificationCompat.BigPictureStyle().bigPicture(bmp))
+                    builder.setLargeIcon(bmp)
+                    getSystemService(NotificationManager::class.java)?.notify(notificationId, builder.build())
+                }
+            } catch (_: Exception) {
+                // 图片加载失败:保持纯文本通知
+            }
+        }
     }
 
     /** 销售额紧凑格式：≥1万显示"¥x.xx万"，否则显示完整金额 */

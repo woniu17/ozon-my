@@ -109,6 +109,36 @@ export function extractSaleAmountCny(posting) {
 }
 
 /**
+ * 解析货件销售金额(CNY),带数据库兜底(2026-10-16):
+ * 新订单 OPI 回拉失败 / 揽收与状态推送的 payload 均无 financial_data 和商品价格字段,
+ * extractSaleAmountCny(payload) 会返回 0 → 安卓通知金额显示 0 元。
+ * 兜底顺序:payload 提取 → ozon_postings.sale_amount_cny(API 轮询落库) → op_ozon_order.order_amount(CNY)。
+ */
+export function resolveSaleAmountCny(payload) {
+  const fromPayload = extractSaleAmountCny(payload);
+  if (fromPayload > 0) return fromPayload;
+  const postingNumber = payload?.posting_number;
+  if (postingNumber == null) return 0;
+  try {
+    const row = getDb()
+      .prepare('SELECT sale_amount_cny FROM ozon_postings WHERE posting_number = ?')
+      .get(String(postingNumber));
+    if (row && Number(row.sale_amount_cny) > 0) return Number(row.sale_amount_cny);
+  } catch (err) {
+    logger.warn({ err: err.message, postingNumber }, 'feishu-notify: 查询 sale_amount_cny 兜底金额失败');
+  }
+  try {
+    const row = getDb()
+      .prepare("SELECT order_amount FROM op_ozon_order WHERE posting_number = ? AND currency = 'CNY' ORDER BY order_amount DESC LIMIT 1")
+      .get(String(postingNumber));
+    if (row && Number(row.order_amount) > 0) return Number(row.order_amount);
+  } catch (err) {
+    logger.warn({ err: err.message, postingNumber }, 'feishu-notify: 查询 order_amount 兜底金额失败');
+  }
+  return 0;
+}
+
+/**
  * 计算"今日(Asia/Shanghai)"对应的 UTC ISO 范围 [start, end)
  * 用于从 DB 按当日过滤订单(in_process_at 是 UTC ISO)
  */
@@ -531,7 +561,7 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
       timeField = ['处理时间', fmtShTime(payload.in_process_at)];
       const products = Array.isArray(payload.products) ? payload.products : [];
       const totalQty = products.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
-      const saleCny = extractSaleAmountCny(payload);
+      const saleCny = resolveSaleAmountCny(payload);
       extra = `\n商品SKU数: ${products.length}\n商品总件数: ${totalQty}\n销售金额: ${saleCny.toFixed(2)} CNY`;
       // 商品明细块:SKU/OfferID/数量/单价/重量/链接(推送 products,OPI 回拉后自带完整字段)
       const productLines = buildProductLines(products);

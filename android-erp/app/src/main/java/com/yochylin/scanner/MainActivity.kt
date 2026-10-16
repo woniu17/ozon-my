@@ -60,6 +60,10 @@ class MainActivity : ComponentActivity() {
             currentTab = tab
             loadRecords()
         }
+
+        override fun onRefreshRecords() {
+            loadRecords()
+        }
     })
 
     private var currentKeyword = ""

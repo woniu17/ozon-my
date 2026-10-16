@@ -63,6 +63,10 @@ class ScanShipFragment : Fragment() {
             currentTab = tab
             loadRecords()
         }
+
+        override fun onRefreshRecords() {
+            loadRecords()
+        }
     })
 
     private var currentKeyword = ""

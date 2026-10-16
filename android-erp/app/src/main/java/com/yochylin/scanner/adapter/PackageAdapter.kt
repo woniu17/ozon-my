@@ -14,6 +14,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -45,6 +46,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
         fun onOpenLabel(pkg: Pkg)
         fun onCorrectWeight(pkg: Pkg, weightG: Int)
         fun onSwitchRecordTab(tab: String)
+        fun onRefreshRecords()
     }
 
     sealed class Item {
@@ -530,6 +532,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
     inner class RecordHeaderViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         private val tabToday: TextView = view.findViewById(R.id.tabToday)
         private val tabYesterday: TextView = view.findViewById(R.id.tabYesterday)
+        private val btnRefresh: TextView = view.findViewById(R.id.btnRefreshRecords)
 
         fun bind(item: Item.RecordHeader) {
             bindTab(tabToday, "今日", item.countToday, item.tab == "today")
@@ -540,6 +543,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
             tabYesterday.setOnClickListener {
                 if (item.tab != "yesterday") callbacks.onSwitchRecordTab("yesterday")
             }
+            btnRefresh.setOnClickListener { callbacks.onRefreshRecords() }
         }
 
         private fun bindTab(tv: TextView, label: String, count: Int, active: Boolean) {
@@ -554,7 +558,9 @@ class PackageAdapter(private val callbacks: Callbacks) :
         private val recStore: TextView = view.findViewById(R.id.recStore)
         private val recPosting: TextView = view.findViewById(R.id.recPosting)
         private val recMeta: TextView = view.findViewById(R.id.recMeta)
-        private val recordImgs: LinearLayout = view.findViewById(R.id.recordImgs)
+        private val recordImgWrap: FrameLayout = view.findViewById(R.id.recordImgWrap)
+        private val recImg: ImageView = view.findViewById(R.id.recImg)
+        private val recImgBadge: TextView = view.findViewById(R.id.recImgBadge)
 
         fun bind(rec: Pkg) {
             recStore.text = rec.storeName
@@ -566,50 +572,29 @@ class PackageAdapter(private val callbacks: Callbacks) :
             if (rec.weightG != null && !rec.inProcessAt.isNullOrBlank()) meta.append(" · ")
             if (!rec.inProcessAt.isNullOrBlank()) meta.append(fmtTimeWithWeekday(rec.inProcessAt))
             recMeta.text = meta
+            recMeta.visibility = if (meta.isBlank()) View.GONE else View.VISIBLE
 
-            bindRecordImages(rec)
+            bindRecordImage(rec)
         }
 
-        /** 商品图片缩略图(2026-10-16 新增):按图去重,最多 4 张,超出追加 +N 角标 */
-        private fun bindRecordImages(rec: Pkg) {
-            recordImgs.removeAllViews()
+        /** 商品图（2026-10-16 改版）：左侧单独一张主图，多商品时右下角 +N 角标 */
+        private fun bindRecordImage(rec: Pkg) {
             val urls = rec.items
                 ?.mapNotNull { it.picUrl }
                 ?.filter { it.isNotBlank() }
                 ?.distinct() ?: emptyList()
             if (urls.isEmpty()) {
-                recordImgs.visibility = View.GONE
+                recordImgWrap.visibility = View.GONE
+                recImg.setImageDrawable(null)
                 return
             }
-            recordImgs.visibility = View.VISIBLE
-            val MAX = 4
-            for (url in urls.take(MAX)) {
-                recordImgs.addView(recordThumb(url))
-            }
-            if (urls.size > MAX) {
-                recordImgs.addView(recordMoreBadge(urls.size - MAX))
-            }
-        }
-
-        private fun recordThumb(url: String): ImageView {
-            return ImageView(itemView.context).apply {
-                layoutParams = LinearLayout.LayoutParams(40.dp2px(itemView.context), 40.dp2px(itemView.context)).apply {
-                    marginEnd = 6.dp2px(itemView.context)
-                }
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                setBackgroundColor(Color.parseColor("#f2f3f5"))
-                load(url)
-            }
-        }
-
-        private fun recordMoreBadge(n: Int): TextView {
-            return TextView(itemView.context).apply {
-                text = "+$n"
-                textSize = 11f
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                gravity = Gravity.CENTER
-                layoutParams = LinearLayout.LayoutParams(40.dp2px(itemView.context), 40.dp2px(itemView.context))
-                setBackgroundColor(Color.parseColor("#f2f3f5"))
+            recordImgWrap.visibility = View.VISIBLE
+            recImg.load(urls.first())
+            if (urls.size > 1) {
+                recImgBadge.visibility = View.VISIBLE
+                recImgBadge.text = "+${urls.size - 1}"
+            } else {
+                recImgBadge.visibility = View.GONE
             }
         }
     }

@@ -1,16 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 发货记录行（2026-10-16 改版）：商品图单独在左，店铺名/货件号在右分上下两行 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
+    android:orientation="horizontal"
     android:background="#ffffff"
-    android:padding="10dp">
+    android:padding="10dp"
+    android:gravity="center_vertical">
 
+    <!-- 左侧商品图（单独区域） -->
+    <FrameLayout
+        android:id="@+id/recordImgWrap"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/recImg"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"
+            android:background="#f2f3f5" />
+
+        <!-- 多商品角标 +N -->
+        <TextView
+            android:id="@+id/recImgBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:paddingHorizontal="4dp"
+            android:paddingVertical="1dp"
+            android:textSize="10sp"
+            android:textColor="#ffffff"
+            android:background="@drawable/bg_badge_count"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- 右侧文字：店铺名 / 货件号 分上下两行，元信息第三行 -->
     <LinearLayout
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical">
+        android:layout_weight="1"
+        android:layout_marginStart="10dp"
+        android:orientation="vertical">
 
         <TextView
             android:id="@+id/recStore"
@@ -20,33 +52,27 @@
             android:textColor="@color/primary"
             android:background="@drawable/bg_tag_blue"
             android:paddingHorizontal="6dp"
-            android:paddingVertical="3dp" />
+            android:paddingVertical="3dp"
+            android:visibility="gone" />
 
         <TextView
             android:id="@+id/recPosting"
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:textSize="12sp"
+            android:layout_marginTop="4dp"
+            android:textSize="13sp"
             android:textColor="@color/text_primary"
-            android:typeface="monospace" />
+            android:typeface="monospace"
+            android:visibility="gone" />
 
         <TextView
             android:id="@+id/recMeta"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
             android:textSize="11sp"
-            android:textColor="@color/text_muted" />
+            android:textColor="@color/text_muted"
+            android:visibility="gone" />
     </LinearLayout>
-
-    <!-- 商品图片缩略图行（发货记录，有图才显示；2026-10-16 新增） -->
-    <LinearLayout
-        android:id="@+id/recordImgs"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="6dp"
-        android:visibility="gone" />
 
 </LinearLayout>

@@ -6,8 +6,9 @@
 // - WebSocket：/admin/api/push/ws（JWT 认证），连接建立后实时推送同一事件流。
 // - 内存单进程实现（pm2 单实例）；重启丢失连接是正常现象，客户端重连即恢复。
 import { getStoreBySellerId } from './webhook/store-map.js';
-import { extractSaleAmountCny } from './webhook/feishu-notify.js';
+import { resolveSaleAmountCny } from './webhook/feishu-notify.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
+import { getDb } from '../db/index.js';
 import logger from '../middleware/log.js';
 import config from '../config/index.js';
 
@@ -19,6 +20,34 @@ const wsClients = new Set();
 
 const DEFAULT_TIMEOUT_MS = 25_000;
 const MAX_TIMEOUT_MS = 30_000;
+
+/**
+ * 查货件商品首图直链（2026-10-16 安卓通知大图用）。
+ * 与 records 接口同源：op_ozon_order_item JOIN product_data_cache，
+ * primary_image[0] 优先、images[0] 兜底（ir-20.ozonstatic.cn 直链）。
+ */
+function resolveProductImageUrl(postingNumber) {
+  try {
+    const row = getDb()
+      .prepare(
+        `SELECT COALESCE(
+                  json_extract(p.data, '$.primary_image[0]'),
+                  json_extract(p.data, '$.images[0]')
+                ) AS pic_url
+         FROM op_ozon_order_item oi
+         JOIN op_ozon_order o ON o.id = oi.ozon_order_id
+         LEFT JOIN product_data_cache p ON p.sku = CAST(oi.sku AS TEXT)
+         WHERE o.posting_number = ?
+         ORDER BY oi.id
+         LIMIT 1`
+      )
+      .get(String(postingNumber));
+    return row?.pic_url || null;
+  } catch (err) {
+    logger.warn({ err: err.message, postingNumber }, 'push-hub: 查询商品首图失败');
+    return null;
+  }
+}
 
 /** 移除等待者：清定时器 + 置 done 防重复写响应 */
 function removeWaiter(waiter) {
@@ -150,7 +179,7 @@ export function publishPostingEvent(messageType, payload) {
   const sellerId = payload.seller_id;
   const storeName =
     sellerId != null ? (getStoreBySellerId(sellerId)?.name ?? String(sellerId)) : '';
-  const amount = extractSaleAmountCny(payload);
+  const amount = resolveSaleAmountCny(payload);
 
   let waitProcessCount = 0;
   try {
@@ -166,6 +195,8 @@ export function publishPostingEvent(messageType, payload) {
     waitProcessCount,
     // 机器名(2026-10-16 多机部署区分):安卓通知标题/摘要尾部展示来源
     machineName: config.machineName,
+    // 商品首图直链(2026-10-16 通知大图用,可能为 null,安卓端失败降级为纯文本通知)
+    productImageUrl: resolveProductImageUrl(postingNumber),
     occurredAt: new Date().toISOString(),
   };
 

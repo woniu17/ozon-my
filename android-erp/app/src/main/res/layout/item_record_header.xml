@@ -38,6 +38,18 @@
             android:padding="8dp"
             android:textSize="13sp"
             android:textColor="#86909c" />
+
+        <!-- 刷新按钮（2026-10-16 新增：手动刷新发货记录） -->
+        <TextView
+            android:id="@+id/btnRefreshRecords"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:padding="6dp"
+            android:text="↻ 刷新"
+            android:textSize="12sp"
+            android:textColor="@color/primary"
+            android:background="@drawable/bg_tag_blue" />
     </LinearLayout>
 
 </LinearLayout>
