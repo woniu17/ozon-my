@@ -180,6 +180,8 @@ class PurchaseActivity : ComponentActivity() {
                 items = detail.items ?: pkg?.items ?: emptyList()
                 links = detail.purchaseLinks ?: emptyList()
                 showManage()
+                // 加载 SKU 定价信息（单价调整区用），完成后重渲染
+                loadSkuPricing()
             } catch (e: Exception) {
                 handleError(e)
             }
@@ -457,6 +459,11 @@ class PurchaseActivity : ComponentActivity() {
         return map
     }
 
+    /** 按当前步骤重渲染（单价调整数据异步加载完成后刷新当前页） */
+    private fun rerenderCurrent() {
+        if (step == "confirm") renderConfirm() else renderManage()
+    }
+
     private fun renderManage() {
         renderStepBar()
         purchaseContent.removeAllViews()
@@ -513,6 +520,8 @@ class PurchaseActivity : ComponentActivity() {
                 totalProfit += (it.price!! * 0.84 - unitCost) * qty
             }
             allocCard.addView(buildAllocRow(it, alloc))
+            // 单价调整折叠区（与分摊确认页一致：编辑已有采购时同样可调价）
+            allocCard.addView(buildPriceAdjust(it, unitCost))
         }
         val totalLine = TextView(this).apply {
             text = "采购合计 ${fmtMoney(totalAlloc)} · 预估利润 ${fmtMoney(totalProfit)}"
@@ -1981,7 +1990,7 @@ class PurchaseActivity : ComponentActivity() {
         toggle.setOnClickListener {
             if (sku.isNotBlank()) {
                 if (expanded) poCmpExpanded.remove(sku) else poCmpExpanded.add(sku)
-                renderConfirm()
+                rerenderCurrent()
             }
         }
         box.addView(toggle)
@@ -2021,7 +2030,7 @@ class PurchaseActivity : ComponentActivity() {
                     .setSingleChoiceItems(rates, PM_TARGET_RATES.indexOf(rate)) { d, which ->
                         poRateChoice[sku] = PM_TARGET_RATES[which]
                         d.dismiss()
-                        renderConfirm()
+                        rerenderCurrent()
                     }
                     .show()
             }
@@ -2219,7 +2228,8 @@ class PurchaseActivity : ComponentActivity() {
             } catch (e: Exception) {
                 // 静默:调价区保持禁用
             } finally {
-                if (step == "confirm") renderConfirm()
+                // 当前在采购管理(manage)或分摊确认(confirm)时都重渲染,刷新单价调整区
+                if (step == "manage" || step == "confirm") rerenderCurrent()
             }
         }
     }

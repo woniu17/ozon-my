@@ -516,6 +516,10 @@ fun fmtNum(v: Double?): String {
 private val ISO_UTC_FMT: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
     override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", Locale.US)
 }
+private val ISO_T_FMT: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
+    // Ozon API 常见无毫秒格式:2026-10-20T09:00:00Z / +00:00（H5 用 new Date() 原生解析，Android 需兼容）
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX", Locale.US)
+}
 private val ISO_SEC_FMT: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
     override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 }
@@ -523,32 +527,30 @@ private val OUT_FMT: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<Simple
     override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
 }
 
-fun fmtTime(iso: String?): String {
-    if (iso.isNullOrBlank()) return "—"
-    return try {
-        OUT_FMT.get().format(ISO_UTC_FMT.get().parse(iso) ?: return iso.take(16))
-    } catch (e: Exception) {
+/** 宽松解析 ISO 时间（依次尝试 带毫秒ISO → 无毫秒ISO → 空格分隔），返回毫秒时间戳；失败返回 null */
+fun parseIsoTime(iso: String?): Long? {
+    if (iso.isNullOrBlank()) return null
+    val candidates = arrayOf<SimpleDateFormat>(ISO_UTC_FMT.get(), ISO_T_FMT.get(), ISO_SEC_FMT.get())
+    for (fmt in candidates) {
         try {
-            OUT_FMT.get().format(ISO_SEC_FMT.get().parse(iso) ?: iso.replace("T", " ").take(16))
-        } catch (e2: Exception) {
-            iso.replace("T", " ").take(16)
+            fmt.parse(iso)?.let { return it.time }
+        } catch (_: Exception) {
+            // 尝试下一种格式
         }
     }
+    return null
+}
+
+fun fmtTime(iso: String?): String {
+    if (iso.isNullOrBlank()) return "—"
+    val t = parseIsoTime(iso) ?: return iso.replace("T", " ").take(16)
+    return OUT_FMT.get()!!.format(t) // ThreadLocal 必有初始值
 }
 
 /** ISO 时间 → 中文周几（如"周三"）；无效时间返回空串（与 H5 weekdayCN 同口径） */
 fun weekdayCN(iso: String?): String {
-    if (iso.isNullOrBlank()) return ""
-    val d = try {
-        ISO_UTC_FMT.get().parse(iso)
-    } catch (e: Exception) {
-        try {
-            ISO_SEC_FMT.get().parse(iso)
-        } catch (e2: Exception) {
-            null
-        }
-    } ?: return ""
-    val weekday = Calendar.getInstance().apply { time = d }.get(Calendar.DAY_OF_WEEK) - 1
+    val t = parseIsoTime(iso) ?: return ""
+    val weekday = Calendar.getInstance().apply { timeInMillis = t }.get(Calendar.DAY_OF_WEEK) - 1
     return "周" + "日一二三四五六"[weekday]
 }
 
@@ -570,12 +572,7 @@ fun fmtTimeWithWeekday(iso: String?): CharSequence {
 
 private fun fmtRemain(lastDeliveryAt: String?): String {
     if (lastDeliveryAt.isNullOrBlank()) return ""
-    val t = try {
-        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", Locale.US).parse(lastDeliveryAt)?.time
-            ?: return ""
-    } catch (e: Exception) {
-        return ""
-    }
+    val t = parseIsoTime(lastDeliveryAt) ?: return ""
     val diff = t - System.currentTimeMillis()
     val neg = diff < 0
     val abs = kotlin.math.abs(diff)

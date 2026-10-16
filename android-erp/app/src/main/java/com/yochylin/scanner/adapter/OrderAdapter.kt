@@ -365,12 +365,7 @@ private fun profitLabelOf(pkg: Pkg): String {
 /** 倒计时：返回 (是否超时, 文本)，精度到分钟 */
 fun countdownText(shipmentDate: String?): Pair<Boolean, String> {
     if (shipmentDate.isNullOrBlank()) return false to "—"
-    val end = try {
-        java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", java.util.Locale.US)
-            .parse(shipmentDate)?.time ?: return false to "—"
-    } catch (e: Exception) {
-        return false to "—"
-    }
+    val end = parseIsoTime(shipmentDate) ?: return false to "—"
     val diff = end - System.currentTimeMillis()
     val overdue = diff < 0
     val abs = kotlin.math.abs(diff)
