@@ -280,9 +280,10 @@ class PackageAdapter(private val callbacks: Callbacks) :
             val canShipPkg = pkg.ozonStatus == "awaiting_packaging" && !pkg.isIgnored && pkg.id.isNotEmpty()
             val canShipCard = pkg.operateStatus == "wait_ship" && !pkg.isIgnored
             val canReprint = pkg.operateStatus == "ship_success" || pkg.operateStatus == "wait_receiver_confirm"
+            val currentWeight = pkg.weightG?.let { fmtNum(it) }
 
-            // 备货
-            if (canShipPkg) {
+            // 备货(Ozon 待打包确认货件;未到提交发货状态时显示)
+            if (canShipPkg && !canShipCard) {
                 actionArea.addView(
                     newButton("备货", Color.parseColor(COLOR_PRIMARY)) {
                         callbacks.onShipPackage(pkg)
@@ -290,7 +291,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 )
             }
 
-            // 待打单发货：录重量 + 提交发货 + 面单
+            // 待打单发货:录重量 + 提交发货 + 面单(2026-10-16 修复:行内按钮改 WRAP_CONTENT,输入框不再被挤掉;预填已称重量)
             if (canShipCard) {
                 val refs = buildString {
                     append("Ozon后台 ")
@@ -300,73 +301,47 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 }
                 actionArea.addView(newSectionLabel(refs))
 
-                val row = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                }
-                val weightInput = EditText(context).apply {
-                    hint = "重量(g)"
-                    inputType = InputType.TYPE_CLASS_NUMBER
-                    textSize = 14f
-                    setPadding(12, 8, 12, 8)
-                    background = android.graphics.drawable.GradientDrawable().apply {
-                        setColor(Color.parseColor("#f2f3f5"))
-                        cornerRadius = 8f
-                    }
-                }
-                val submitBtn = newButton("提交发货", Color.parseColor(COLOR_PRIMARY)) {
-                    val raw = weightInput.text.toString().trim()
-                    val g = raw.toIntOrNull()
-                    if (raw.isEmpty() || g == null || g < 1 || g > 50000) {
-                        weightInput.error = "重量须为 1~50000 的整数"
-                    } else {
-                        callbacks.onSubmitShip(pkg, g)
-                    }
-                }
-                val labelBtn = newButton("面单", Color.parseColor("#4e5969")) {
-                    callbacks.onOpenLabel(pkg)
-                }
+                val row = buildWeightRow()
+                val weightInput = buildWeightInput("重量(g)", currentWeight)
                 row.addView(weightInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(submitBtn)
-                row.addView(labelBtn)
+                row.addView(newRowButton("提交发货", Color.parseColor(COLOR_PRIMARY)) {
+                    val g = validateWeight(weightInput)
+                    if (g != null) callbacks.onSubmitShip(pkg, g)
+                })
+                row.addView(newRowButton("面单", Color.parseColor("#4e5969")) {
+                    callbacks.onOpenLabel(pkg)
+                })
                 actionArea.addView(row)
             }
 
-            // 已交运/已发货：面单 + 更正重量
+            // 已交运/已发货:称重 + 更正重量 + 面单
             if (canReprint) {
-                val weighed = pkg.weightG?.let { "称重 ${fmtNum(it)}g" } ?: "称重 —"
+                val weighed = currentWeight?.let { "称重 ${it}g" } ?: "称重 —"
                 actionArea.addView(newSectionLabel(weighed))
 
-                val row = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                }
-                val weightInput = EditText(context).apply {
-                    hint = "更正重量(g)"
-                    setText(pkg.weightG?.let { fmtNum(it) } ?: "")
-                    inputType = InputType.TYPE_CLASS_NUMBER
-                    textSize = 14f
-                    setPadding(12, 8, 12, 8)
-                    background = android.graphics.drawable.GradientDrawable().apply {
-                        setColor(Color.parseColor("#f2f3f5"))
-                        cornerRadius = 8f
-                    }
-                }
-                val correctBtn = newButton("更正", Color.parseColor("#4e5969")) {
-                    val raw = weightInput.text.toString().trim()
-                    val g = raw.toIntOrNull()
-                    if (g == null || g < 1 || g > 50000) {
-                        weightInput.error = "重量须为 1~50000 的整数"
-                    } else {
-                        callbacks.onCorrectWeight(pkg, g)
-                    }
-                }
-                val labelBtn = newButton("面单", Color.parseColor("#4e5969")) {
-                    callbacks.onOpenLabel(pkg)
-                }
+                val row = buildWeightRow()
+                val weightInput = buildWeightInput("更正重量(g)", currentWeight)
                 row.addView(weightInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(correctBtn)
-                row.addView(labelBtn)
+                row.addView(newRowButton("更正", Color.parseColor("#4e5969")) {
+                    val g = validateWeight(weightInput)
+                    if (g != null) callbacks.onCorrectWeight(pkg, g)
+                })
+                row.addView(newRowButton("面单", Color.parseColor("#4e5969")) {
+                    callbacks.onOpenLabel(pkg)
+                })
+                actionArea.addView(row)
+            }
+
+            // 仅备货需求的订单:可提前录入发货重量(2026-10-16 新增,保存重量不改变订单状态)
+            if (canShipPkg && !canShipCard && !canReprint) {
+                actionArea.addView(newSectionLabel("可提前录入发货重量"))
+                val row = buildWeightRow()
+                val weightInput = buildWeightInput("重量(g)", currentWeight)
+                row.addView(weightInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(newRowButton("保存重量", Color.parseColor("#4e5969")) {
+                    val g = validateWeight(weightInput)
+                    if (g != null) callbacks.onCorrectWeight(pkg, g)
+                })
                 actionArea.addView(row)
             }
 
@@ -380,6 +355,59 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 }
                 actionArea.addView(newSectionLabel(reason))
             }
+        }
+
+        /** 重量输入框(数字,可预填已有重量) */
+        private fun buildWeightInput(hint: String, preset: String?): EditText {
+            return EditText(context).apply {
+                this.hint = hint
+                if (!preset.isNullOrBlank()) setText(preset)
+                inputType = InputType.TYPE_CLASS_NUMBER
+                textSize = 14f
+                setPadding(12, 8, 12, 8)
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(Color.parseColor("#f2f3f5"))
+                    cornerRadius = 8f
+                }
+            }
+        }
+
+        /** 重量操作行(水平) */
+        private fun buildWeightRow(): LinearLayout {
+            return LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+        }
+
+        /** 行内按钮(WRAP_CONTENT,避免把输入框挤出屏幕) */
+        private fun newRowButton(text: String, color: Int, onClick: () -> Unit): Button {
+            return Button(context).apply {
+                this.text = text
+                setTextColor(Color.WHITE)
+                textSize = 13f
+                isAllCaps = false
+                setRoundedBg(color, 10f)
+                val lp = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+                lp.leftMargin = 8
+                setPadding(14, 10, 14, 10)
+                layoutParams = lp
+                setOnClickListener { onClick() }
+            }
+        }
+
+        /** 校验重量输入:1~50000 正整数,非法时红字提示并返回 null */
+        private fun validateWeight(input: EditText): Int? {
+            val raw = input.text.toString().trim()
+            val g = raw.toIntOrNull()
+            if (raw.isEmpty() || g == null || g < 1 || g > 50000) {
+                input.error = "重量须为 1~50000 的整数"
+                return null
+            }
+            return g
         }
 
         private fun buildProductRow(
