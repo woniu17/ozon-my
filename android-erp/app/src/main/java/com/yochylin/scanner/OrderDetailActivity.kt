@@ -30,6 +30,7 @@ import com.yochylin.scanner.adapter.platformLabel
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
 import com.yochylin.scanner.api.optBoolean
+import java.util.Locale
 import com.yochylin.scanner.api.optInt
 import com.yochylin.scanner.api.optString
 import com.yochylin.scanner.model.OrderDetail
@@ -1066,7 +1067,8 @@ class OrderDetailActivity : ComponentActivity() {
         return if (v > 0) Color.parseColor(COLOR_OK) else if (v < 0) Color.parseColor(COLOR_ERR) else Color.parseColor(COLOR_MUTE)
     }
 
-    private fun formatRate(v: Double): String = "${String.format("%.1f", v * 100)}%"
+    // 后端 profitRateCost/profitRateSale 已是百分数(如 42.5 表示 42.5%),直接加 %,勿再乘 100
+    private fun formatRate(v: Double): String = "${String.format(Locale.US, "%.1f", v)}%"
 
     private fun returnStateText(p: Pkg): String {
         return RETURN_STATE_LABELS[p.returnState] ?: p.returnStateName ?: p.returnState ?: "退货中"
