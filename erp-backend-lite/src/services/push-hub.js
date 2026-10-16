@@ -128,13 +128,21 @@ export function publish(event) {
 }
 
 /**
- * 把 Ozon 货件推送转换为 Android 新订单事件并广播。
- * 第一版只处理 TYPE_NEW_POSTING（新订单）；取消/状态变更后续按需扩展。
- * @param {string} messageType Ozon 推送类型（TYPE_NEW_POSTING / ...）
+ * 把 Ozon 货件推送转换为 Android 事件并广播（2026-10 扩展：对齐飞书通知全部类型）。
+ * 与飞书通知共用调用入口（feishu-notify.notifyPostingEvent/notifyPostingPickedUp），
+ * 因此也复用飞书的 feishu_*_notified_at claim 去重——claim 成功才会进入广播，
+ * 双链路（webhook/轮询兜底）不会重复推送。Android 端另有本地去重，双保险。
+ *
+ * 事件类型：
+ * - TYPE_NEW_POSTING      → NEW_ORDER       （新订单）
+ * - TYPE_POSTING_CANCELLED→ ORDER_CANCELLED （取消，带 cancelReason）
+ * - TYPE_STATE_CHANGED    → STATE_CHANGED   （状态变更，带 newState/subState：received/pickup_point/stocking/other）
+ * - PICKUP                → PICKED_UP       （揽收，带 newState）
+ *
+ * @param {string} messageType Ozon 推送类型（TYPE_NEW_POSTING / TYPE_POSTING_CANCELLED / TYPE_STATE_CHANGED / PICKUP）
  * @param {object} payload Ozon 推送原始 payload（可能经 OPI 回拉补全）
  */
 export function publishPostingEvent(messageType, payload) {
-  if (messageType !== 'TYPE_NEW_POSTING') return;
   const postingNumber = payload?.posting_number;
   if (!postingNumber) return;
 
@@ -150,12 +158,55 @@ export function publishPostingEvent(messageType, payload) {
     logger.warn({ err: err.message }, 'push-hub: 查询 waitProcess 计数失败，按 0 处理');
   }
 
-  publish({
-    type: 'NEW_ORDER',
+  const base = {
     postingNumber,
     storeName,
     amount,
     waitProcessCount,
     occurredAt: new Date().toISOString(),
-  });
+  };
+
+  switch (messageType) {
+    case 'TYPE_NEW_POSTING':
+      publish({ type: 'NEW_ORDER', ...base });
+      break;
+    case 'TYPE_POSTING_CANCELLED':
+      publish({
+        type: 'ORDER_CANCELLED',
+        ...base,
+        cancelReason: payload.reason?.message ?? null,
+        changedStateDate: payload.changed_state_date ?? null,
+      });
+      break;
+    case 'TYPE_STATE_CHANGED': {
+      const ns = payload.new_state ?? '';
+      if (ns === 'posting_transferring_to_delivery') {
+        // 与飞书一致：转运在途无运营动作，不推送
+        return;
+      }
+      let subState = 'other';
+      if (ns === 'posting_received') subState = 'received';
+      else if (ns === 'posting_in_pickup_point') subState = 'pickup_point';
+      else if (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') subState = 'stocking';
+      publish({
+        type: 'STATE_CHANGED',
+        ...base,
+        newState: ns,
+        subState,
+        changedStateDate: payload.changed_state_date ?? null,
+      });
+      break;
+    }
+    case 'PICKUP':
+      publish({
+        type: 'PICKED_UP',
+        ...base,
+        newState: payload.new_state ?? null,
+        changedStateDate: payload.changed_state_date ?? null,
+      });
+      break;
+    default:
+      // 未知类型不推送
+      break;
+  }
 }

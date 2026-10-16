@@ -6,6 +6,7 @@ import logger from '../../middleware/log.js';
 import { getStoreBySellerId, listStores } from './store-map.js';
 import { getDb } from '../../db/index.js';
 import { translateCancelReason } from '../cancel-reason-i18n.js';
+import { publishPostingEvent } from '../push-hub.js';
 
 /**
  * 任意时间值 → 北京时间 "YYYY-MM-DD HH:mm:ss"
@@ -559,6 +560,14 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
     url = config.feishu.webhookUrlDefault;
   }
 
+  // 同步推送 Android 事件(2026-10-16 新增):与飞书发送结果解耦,客户端推送不受飞书延迟/失败影响。
+  // 复用飞书 claim 去重(claim 成功才会进入本函数),双链路不重复;Android 端另有本地去重。
+  try {
+    publishPostingEvent(messageType, payload);
+  } catch (err) {
+    logger.warn({ err: err.message, postingNumber }, 'feishu-notify: Android 事件推送失败');
+  }
+
   // 返回发送结果(boolean):调用方(webhook 打标 / API 兜底释放标记)依赖此返回值
   return await sendFeishuText(text, url, source);
 }
@@ -664,6 +673,13 @@ export async function notifyPostingPickedUp(payload, source = 'webhook') {
     pickupLines ? '' : null,
     pickupLines,
   ].filter((v) => v !== null).join('\n');
+
+  // 同步推送 Android 揽收事件(2026-10-16 新增,与飞书发送结果解耦)
+  try {
+    publishPostingEvent('PICKUP', payload);
+  } catch (err) {
+    logger.warn({ err: err.message, postingNumber }, 'feishu-notify: Android 揽收事件推送失败');
+  }
 
   // 返回发送结果(boolean):调用方(webhook 打标 / API 兜底释放标记)依赖此返回值
   return await sendFeishuText(text, config.feishu.webhookUrlPickup, source);
