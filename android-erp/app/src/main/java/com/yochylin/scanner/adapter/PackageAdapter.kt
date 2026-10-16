@@ -512,17 +512,24 @@ fun fmtNum(v: Double?): String {
 }
 
 /** 时间格式化：YYYY-MM-DD HH:mm（与 H5/Web 展示口径一致）；无效值原样截断返回 */
+// SimpleDateFormat 创建开销大且非线程安全：用 ThreadLocal 缓存，避免列表滚动时反复 new（卡顿优化）
+private val ISO_UTC_FMT: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", Locale.US)
+}
+private val ISO_SEC_FMT: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+}
+private val OUT_FMT: ThreadLocal<SimpleDateFormat> = object : ThreadLocal<SimpleDateFormat>() {
+    override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+}
+
 fun fmtTime(iso: String?): String {
     if (iso.isNullOrBlank()) return "—"
     return try {
-        val inFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", Locale.US)
-        val outFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
-        outFmt.format(inFmt.parse(iso) ?: return iso.take(16))
+        OUT_FMT.get().format(ISO_UTC_FMT.get().parse(iso) ?: return iso.take(16))
     } catch (e: Exception) {
         try {
-            val inFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-            val outFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
-            outFmt.format(inFmt.parse(iso) ?: iso.replace("T", " ").take(16))
+            OUT_FMT.get().format(ISO_SEC_FMT.get().parse(iso) ?: iso.replace("T", " ").take(16))
         } catch (e2: Exception) {
             iso.replace("T", " ").take(16)
         }
@@ -533,10 +540,10 @@ fun fmtTime(iso: String?): String {
 fun weekdayCN(iso: String?): String {
     if (iso.isNullOrBlank()) return ""
     val d = try {
-        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", Locale.US).parse(iso)
+        ISO_UTC_FMT.get().parse(iso)
     } catch (e: Exception) {
         try {
-            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).parse(iso)
+            ISO_SEC_FMT.get().parse(iso)
         } catch (e2: Exception) {
             null
         }

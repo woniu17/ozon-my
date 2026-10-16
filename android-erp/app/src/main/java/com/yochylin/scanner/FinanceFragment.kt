@@ -33,8 +33,10 @@ import com.yochylin.scanner.model.OrderMonthsResponse
 import com.yochylin.scanner.model.OrderStatsStoresResponse
 import com.yochylin.scanner.model.StoreItem
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -401,8 +403,9 @@ class FinanceFragment : Fragment() {
     private fun loadMonths() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val data = Api.get("/admin/api/finance-stats/order-months", mapOf("tz" to tz))
-                val resp = Api.parse<OrderMonthsResponse>(data)
+                val resp = withContext(Dispatchers.IO) {
+                    Api.parse<OrderMonthsResponse>(Api.get("/admin/api/finance-stats/order-months", mapOf("tz" to tz)))
+                }
                 months = resp.months
             } catch (e: Exception) {
                 months = emptyList()
@@ -415,8 +418,9 @@ class FinanceFragment : Fragment() {
     private fun loadStores() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val data = Api.get("/admin/api/order-stats/stores")
-                val resp = Api.parse<OrderStatsStoresResponse>(data)
+                val resp = withContext(Dispatchers.IO) {
+                    Api.parse<OrderStatsStoresResponse>(Api.get("/admin/api/order-stats/stores"))
+                }
                 allStores = resp.stores ?: emptyList()
             } catch (e: Exception) {
                 allStores = emptyList()
@@ -466,8 +470,9 @@ class FinanceFragment : Fragment() {
     private fun loadSummary() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val data = Api.get("/admin/api/finance-stats/summary", baseParams())
-                val resp = Api.parse<FinanceSummary>(data)
+                val resp = withContext(Dispatchers.IO) {
+                    Api.parse<FinanceSummary>(Api.get("/admin/api/finance-stats/summary", baseParams()))
+                }
                 renderSummary(resp)
             } catch (e: Exception) {
                 if (e is ApiException && e.code == 401) {
@@ -811,16 +816,20 @@ class FinanceFragment : Fragment() {
             try {
                 when (currentMode) {
                     "nonorder" -> {
-                        val resp = Api.parse<NonOrderAccrualsResponse>(
-                            Api.get("/admin/api/finance-stats/non-order-accruals", listParams())
-                        )
+                        val resp = withContext(Dispatchers.IO) {
+                            Api.parse<NonOrderAccrualsResponse>(
+                                Api.get("/admin/api/finance-stats/non-order-accruals", listParams())
+                            )
+                        }
                         total = resp.total
                         adapter.setNonOrders(resp.items)
                     }
                     else -> {
-                        val resp = Api.parse<FinanceOrdersResponse>(
-                            Api.get("/admin/api/finance-stats/orders", listParams())
-                        )
+                        val resp = withContext(Dispatchers.IO) {
+                            Api.parse<FinanceOrdersResponse>(
+                                Api.get("/admin/api/finance-stats/orders", listParams())
+                            )
+                        }
                         total = resp.total
                         adapter.setOrders(currentMode, resp.orders)
                     }
@@ -847,16 +856,20 @@ class FinanceFragment : Fragment() {
             try {
                 when (currentMode) {
                     "nonorder" -> {
-                        val resp = Api.parse<NonOrderAccrualsResponse>(
-                            Api.get("/admin/api/finance-stats/non-order-accruals", listParams())
-                        )
+                        val resp = withContext(Dispatchers.IO) {
+                            Api.parse<NonOrderAccrualsResponse>(
+                                Api.get("/admin/api/finance-stats/non-order-accruals", listParams())
+                            )
+                        }
                         total = resp.total
                         adapter.appendNonOrders(resp.items)
                     }
                     else -> {
-                        val resp = Api.parse<FinanceOrdersResponse>(
-                            Api.get("/admin/api/finance-stats/orders", listParams())
-                        )
+                        val resp = withContext(Dispatchers.IO) {
+                            Api.parse<FinanceOrdersResponse>(
+                                Api.get("/admin/api/finance-stats/orders", listParams())
+                            )
+                        }
                         total = resp.total
                         adapter.appendOrders(currentMode, resp.orders)
                     }

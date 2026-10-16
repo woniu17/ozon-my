@@ -48,6 +48,7 @@ import com.yochylin.scanner.model.PurchaseItemArg
 import com.yochylin.scanner.model.PurchaseLink
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.Locale
 import kotlin.coroutines.resume
 
 /** 采购流程：采购管理 → 选平台订单 → 分摊确认（与 H5 purchase/index.vue 同构） */
@@ -101,6 +102,26 @@ class PurchaseActivity : ComponentActivity() {
     private var lookupResult: LookupResult? = null
     private var logisticsInput = ""
     private var saving = false
+
+    // ── 单价调整（与 H5 OrderProcess.vue 利润预估/一键调价同构） ──
+    private data class SkuPriceInfo(
+        val sku: String,
+        val inCache: Boolean,
+        val price: Double?,
+        val hasProductId: Boolean,
+        val weightG: Double?
+    )
+
+    private val PM_TARGET_RATES = listOf(50, 60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200)
+    private val PM_DEFAULT_RATE = 100
+    private val PM_COMMISSION_RATE = 0.16
+    private val PM_DELIVERY_BASE_CNY = 3.37
+    private val PM_DELIVERY_PER_G_CNY = 0.0281
+
+    private val skuPricing = HashMap<String, SkuPriceInfo>() // sku -> 定价信息
+    private val poRateChoice = HashMap<String, Int>()        // sku -> 目标成本利润率(默认100)
+    private val poCmpExpanded = HashSet<String>()            // sku -> 单价调整折叠展开
+    private var adjustingSku: String? = null                 // 正在调价的 sku
 
     private lateinit var searchInput: EditText
     private lateinit var orderListBox: LinearLayout
@@ -1734,6 +1755,8 @@ class PurchaseActivity : ComponentActivity() {
                 }
             }
         }
+        // 加载 SKU 定价信息（单价调整区用），完成后重渲染预览
+        loadSkuPricing()
         renderConfirm()
     }
 
@@ -1835,15 +1858,7 @@ class PurchaseActivity : ComponentActivity() {
             previewCard.addView(buildPreviewRow(it, amt))
         }
         val previewTotal = autoPreview().sumOf { it.second }
-        previewCard.addView(
-            TextView(this).apply {
-                text = "预估利润 ${fmtMoney(estimateProfit(previewTotal))} · 按分摊 ${fmtMoney(previewTotal)} 估算"
-                textSize = 12f
-                setTextColor(Color.parseColor(COLOR_TEXT))
-                setTypeface(null, android.graphics.Typeface.BOLD)
-                setPadding(0, dp(8), 0, 0)
-            }
-        )
+        previewCard.addView(buildProfitTotalLine(previewTotal))
         purchaseContent.addView(previewCard)
 
         // 国内快递单号（选填）
@@ -1871,13 +1886,16 @@ class PurchaseActivity : ComponentActivity() {
     }
 
     private fun buildPreviewRow(it: PkgItem, amt: Double): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = dp(8) }
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
         val img = ImageView(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
@@ -1913,21 +1931,332 @@ class PurchaseActivity : ComponentActivity() {
             }
         )
         row.addView(right)
+        box.addView(row)
+        // 单价调整折叠区（H5 同构：按目标成本利润率一键调价/取整）
+        box.addView(buildPriceAdjust(it, unit))
+        return box
+    }
+
+    /** 单价调整折叠区：默认收起；展开后可选目标率、一键调价/取整，并展示单件利润对比 */
+    private fun buildPriceAdjust(it: PkgItem, unitCost: Double): View {
+        val sku = it.sku ?: ""
+        val info = skuPricing[sku]
+        val unitDelivery = info?.let { poUnitDelivery(it.weightG) }
+        val rate = poRateChoice[sku] ?: PM_DEFAULT_RATE
+        val suggested = if (unitCost > 0 && unitDelivery != null) suggestedPrice(unitCost, rate, unitDelivery) else null
+        val canAdjust = sku.isNotBlank() && unitCost > 0 && unitDelivery != null && info != null && info.inCache && info.hasProductId
+        val canRoundUp = sku.isNotBlank() && info != null && info.inCache && info.hasProductId && info.price != null
+        val missingWhy = when {
+            sku.isBlank() -> "订单商品缺 SKU"
+            unitCost <= 0 -> "分摊金额为 0"
+            unitDelivery == null -> "SKU 未维护重量(价格管理)"
+            info == null || !info.inCache -> "不在价格缓存(先在价格管理同步价格)"
+            !info.hasProductId -> "商品缺少 product_id"
+            else -> ""
+        }
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.parseColor("#f7f9fc"))
+                cornerRadius = dp(6).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(4) }
+        }
+        val expanded = sku.isNotBlank() && sku in poCmpExpanded
+
+        // 折叠头
+        val toggle = TextView(this).apply {
+            text = if (expanded) "▾ 单价调整  调整的是该 SKU 上架价,只影响后续新订单"
+            else "▸ 单价调整  调整的是该 SKU 上架价,只影响后续新订单"
+            textSize = 11f
+            setTextColor(Color.parseColor(if (expanded) COLOR_PRIMARY else COLOR_SECONDARY))
+            setTypeface(null, if (expanded) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        toggle.setOnClickListener {
+            if (sku.isNotBlank()) {
+                if (expanded) poCmpExpanded.remove(sku) else poCmpExpanded.add(sku)
+                renderConfirm()
+            }
+        }
+        box.addView(toggle)
+
+        if (expanded) {
+            if (info == null) {
+                box.addView(TextView(this).apply {
+                    text = "定价信息加载中…"
+                    textSize = 10f
+                    setTextColor(Color.parseColor(COLOR_MUTE))
+                    setPadding(0, dp(4), 0, 0)
+                })
+                return box
+            }
+
+            // 操作行：目标率 + 调价 + 取整
+            val ops = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(6) }
+            }
+            val rateBtn = TextView(this).apply {
+                text = "目标率 $rate% ▾"
+                textSize = 11f
+                setTextColor(Color.parseColor(if (canAdjust) COLOR_PRIMARY else COLOR_MUTE))
+                setRoundedBg(Color.parseColor("#eef4ff"), 8f)
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+            }
+            rateBtn.setOnClickListener {
+                if (!canAdjust) return@setOnClickListener
+                val rates = PM_TARGET_RATES.map { "$it%" }.toTypedArray()
+                AlertDialog.Builder(this)
+                    .setTitle("目标成本利润率")
+                    .setSingleChoiceItems(rates, PM_TARGET_RATES.indexOf(rate)) { d, which ->
+                        poRateChoice[sku] = PM_TARGET_RATES[which]
+                        d.dismiss()
+                        renderConfirm()
+                    }
+                    .show()
+            }
+            ops.addView(rateBtn)
+            val adjusting = adjustingSku == sku
+            val adjustBtn = TextView(this).apply {
+                text = if (adjusting) "调价中…" else "调价"
+                textSize = 11f
+                setTextColor(Color.parseColor("#ffffff"))
+                setRoundedBg(Color.parseColor(if (canAdjust) "#165dff" else "#c0c4cc"), 8f)
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = dp(8) }
+            }
+            adjustBtn.setOnClickListener {
+                if (!canAdjust || adjustingSku != null || suggested == null) return@setOnClickListener
+                val cur = info.price
+                val newPriceText = "¥${fmtPlain(suggested)}"
+                val strikeText = "¥${fmtPlain(suggested * 2)}"
+                AlertDialog.Builder(this)
+                    .setTitle("调整 SKU $sku 的上架价格?")
+                    .setMessage(
+                        "现价 ${cur?.let { "¥${fmtPlain(it)}" } ?: "无"} → 新价 $newPriceText(目标成本利润率 $rate%,划线价将设为 $strikeText)\n" +
+                            "将同步更新该 SKU 成本基准:采购价 ¥${fmtPlain(unitCost)}\n只影响后续新订单,已下单包裹价格不变"
+                    )
+                    .setPositiveButton("调整价格") { _, _ ->
+                        lifecycleScope.launch { adjustSkuPrice(sku, unitCost, info, suggested) }
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+            ops.addView(adjustBtn)
+            val roundBtn = TextView(this).apply {
+                text = "取整"
+                textSize = 11f
+                setTextColor(Color.parseColor(COLOR_SECONDARY))
+                setRoundedBg(Color.parseColor("#e5e8ed"), 8f)
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = dp(8) }
+            }
+            roundBtn.setOnClickListener {
+                if (!canRoundUp || adjustingSku != null) return@setOnClickListener
+                val cur = info.price!!
+                val rounded = Math.ceil(cur)
+                if (rounded == cur) {
+                    toast("当前上架价已是整数 ¥${fmtPlain(cur)},无需取整")
+                    return@setOnClickListener
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("将 SKU $sku 的上架价向上取整?")
+                    .setMessage(
+                        "现价 ¥${fmtPlain(cur)} → 新价 ¥${fmtPlain(rounded)}(划线价将设为 ¥${fmtPlain(rounded * 2)})\n只影响后续新订单,已下单包裹价格不变"
+                    )
+                    .setPositiveButton("取整改价") { _, _ ->
+                        lifecycleScope.launch { roundUpPrice(sku, cur) }
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+            ops.addView(roundBtn)
+            box.addView(ops)
+
+            // 单件口径对比表
+            val oldPrice = info.price
+            val oldCommission = oldPrice?.let { it * PM_COMMISSION_RATE }
+            val newCommission = suggested?.let { it * PM_COMMISSION_RATE }
+            val oldProfit = if (oldPrice != null && unitDelivery != null) round2(oldPrice * (1 - PM_COMMISSION_RATE) - unitDelivery - unitCost) else null
+            val newProfit = if (suggested != null && unitDelivery != null) round2(suggested * (1 - PM_COMMISSION_RATE) - unitDelivery - unitCost) else null
+            val oldRateC = if (oldProfit != null && unitCost > 0) oldProfit / unitCost else null
+            val newRateC = if (newProfit != null && unitCost > 0) newProfit / unitCost else null
+            box.addView(cmpRow("销售单价", oldPrice?.let { fmtPlain(it) } ?: "—", suggested?.let { fmtPlain(it) } ?: "—", suggested != null))
+            box.addView(cmpRow("ozon佣金", oldCommission?.let { fmtPlain(it) } ?: "—", newCommission?.let { fmtPlain(it) } ?: "—", newCommission != null))
+            box.addView(cmpRow("国际物流费${if (unitDelivery == null) "(未维护重量,未扣)" else ""}", unitDelivery?.let { fmtPlain(it) } ?: "—", "", false))
+            box.addView(cmpRow("利润", oldProfit?.let { fmtPlain(it) } ?: "—", newProfit?.let { fmtPlain(it) } ?: "—", newProfit != null))
+            box.addView(cmpRow("成本利润率", oldRateC?.let { "${ratePct(it)}%" } ?: "—", newRateC?.let { "${ratePct(it)}%" } ?: "—", newRateC != null))
+            if (missingWhy.isNotEmpty()) {
+                box.addView(TextView(this).apply {
+                    text = missingWhy
+                    textSize = 10f
+                    setTextColor(Color.parseColor(COLOR_WARN))
+                    setPadding(0, dp(4), 0, 0)
+                })
+            }
+        }
+        return box
+    }
+
+    /** 对比表行：label（左） 旧值（中） → 新值（右） */
+    private fun cmpRow(label: String, oldV: String, newV: String, highlightNew: Boolean): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(3) }
+        }
+        val labelTv = TextView(this).apply {
+            text = label
+            textSize = 10f
+            setTextColor(Color.parseColor(COLOR_MUTE))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        row.addView(labelTv)
+        val oldTv = TextView(this).apply {
+            text = oldV
+            textSize = 10f
+            setTextColor(Color.parseColor(COLOR_SECONDARY))
+        }
+        row.addView(oldTv)
+        row.addView(TextView(this).apply {
+            text = " → "
+            textSize = 10f
+            setTextColor(Color.parseColor(COLOR_MUTE))
+        })
+        val newTv = TextView(this).apply {
+            text = newV
+            textSize = 10f
+            setTextColor(Color.parseColor(if (highlightNew) COLOR_PRIMARY else COLOR_SECONDARY))
+            setTypeface(null, if (highlightNew) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        }
+        row.addView(newTv)
         return row
     }
 
-    private fun estimateProfit(alloc: Double): Double {
+    /** 单价调整合计行（H5 profitTotal 同构） */
+    private fun buildProfitTotalLine(previewTotal: Double): View {
         var profit = 0.0
-        val qtySum = items.sumOf { it.quantity ?: 0.0 }
-        if (qtySum <= 0) return profit
-        for (it in items) {
+        var allWeighted = true
+        for ((it, amt) in autoPreview()) {
             val qty = it.quantity ?: 0.0
-            val unitCost = if (qty > 0) alloc * qty / qtySum / qty else 0.0
-            if (it.price != null && unitCost > 0) {
-                profit += (it.price!! * 0.84 - unitCost) * qty
+            val unitCost = if (qty > 0) amt / qty else 0.0
+            val info = it.sku?.let { sku -> skuPricing[sku] }
+            val unitDelivery = info?.let { poUnitDelivery(it.weightG) }
+            if (unitDelivery == null) allWeighted = false
+            val revenue = (it.price ?: 0.0) * qty
+            val delivery = unitDelivery?.let { it * qty } ?: 0.0
+            profit += revenue * (1 - PM_COMMISSION_RATE) - delivery - amt
+        }
+        val rateC = if (previewTotal > 0) profit / previewTotal * 100 else null
+        return TextView(this).apply {
+            text = buildString {
+                append("采购合计 ").append(fmtMoney(previewTotal))
+                append(" · 预估利润合计 ").append(fmtMoney(profit))
+                if (rateC != null) append(" · 成本利润率 ").append(String.format(Locale.US, "%.1f", rateC)).append("%")
+                if (!allWeighted) append("(部分行未扣配送)")
+            }
+            textSize = 12f
+            setTextColor(Color.parseColor(COLOR_TEXT))
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setPadding(0, dp(8), 0, 0)
+        }
+    }
+
+    // ── 单价调整数据/动作（与 H5 adjustSkuPrice/roundUpPrice 同构） ──
+    private fun poUnitDelivery(weightG: Double?): Double? {
+        val w = weightG ?: return null
+        if (w <= 0) return null
+        return PM_DELIVERY_BASE_CNY + PM_DELIVERY_PER_G_CNY * w
+    }
+
+    private fun suggestedPrice(unitCost: Double, rate: Int, unitDelivery: Double): Double {
+        return Math.ceil((unitCost * (1 + rate / 100.0) + unitDelivery) / (1 - PM_COMMISSION_RATE))
+    }
+
+    private fun round2(v: Double): Double = Math.round(v * 100) / 100.0
+
+    private fun ratePct(v: Double): String = String.format(Locale.US, "%.1f", v * 100)
+
+    /** 拉取 SKU 定价信息（skus-info），完成后重渲染预览区 */
+    private fun loadSkuPricing() {
+        val skus = items.mapNotNull { it.sku }.distinct().filter { it.isNotBlank() }
+        if (skus.isEmpty()) return
+        lifecycleScope.launch {
+            try {
+                val data = Api.get("/admin/api/price-manage/skus-info", mapOf("skus" to skus.joinToString(",")))
+                val map = HashMap<String, SkuPriceInfo>()
+                for (el in data.asJsonArray) {
+                    val o = el.asJsonObject
+                    map[o.optString("sku")] = SkuPriceInfo(
+                        sku = o.optString("sku"),
+                        inCache = o.optBoolean("inCache"),
+                        price = if (o.has("price") && !o.get("price").isJsonNull) o.optDouble("price") else null,
+                        hasProductId = o.optBoolean("hasProductId"),
+                        weightG = if (o.has("weightG") && !o.get("weightG").isJsonNull) o.optDouble("weightG") else null
+                    )
+                }
+                skuPricing.clear()
+                skuPricing.putAll(map)
+            } catch (e: Exception) {
+                // 静默:调价区保持禁用
+            } finally {
+                if (step == "confirm") renderConfirm()
             }
         }
-        return profit
+    }
+
+    /** 一键调价：先同步成本基准(本单分摊单价)再按目标率改价（服务端复算校验） */
+    private suspend fun adjustSkuPrice(sku: String, unitCost: Double, info: SkuPriceInfo, suggested: Double) {
+        if (adjustingSku != null) return
+        adjustingSku = sku
+        try {
+            Api.put("/admin/api/price-manage/sku/$sku", mapOf("purchasePrice" to round2(unitCost)))
+            val rate = poRateChoice[sku] ?: PM_DEFAULT_RATE
+            Api.post(
+                "/admin/api/price-manage/price-update",
+                mapOf("sku" to sku, "newPrice" to suggested, "targetRate" to rate / 100.0)
+            )
+            toast("改价已提交,30秒后自动回读校准")
+        } catch (e: Exception) {
+            toast(e.message ?: "调价失败")
+        } finally {
+            adjustingSku = null
+            loadSkuPricing()
+        }
+    }
+
+    /** 取整：将当前上架价向上取整到整数元（手动改价链路） */
+    private suspend fun roundUpPrice(sku: String, cur: Double) {
+        if (adjustingSku != null) return
+        adjustingSku = sku
+        try {
+            Api.post("/admin/api/price-manage/price-update", mapOf("sku" to sku, "newPrice" to Math.ceil(cur)))
+            toast("取整改价已提交,30秒后自动回读校准")
+        } catch (e: Exception) {
+            toast(e.message ?: "取整失败")
+        } finally {
+            adjustingSku = null
+            loadSkuPricing()
+        }
     }
 
     private fun renderConfirmBottom() {

@@ -145,6 +145,11 @@ object Api {
         return callRaw(BASE_URL + path, "POST", body)
     }
 
+    /** PUT 请求，body 序列化为 JSON */
+    suspend fun put(path: String, body: Any? = null): JsonElement {
+        return callRaw(BASE_URL + path, "PUT", body)
+    }
+
     /**
      * 长轮询服务端推送事件：请求挂起最多 timeoutMs 毫秒，有事件立即返回，超时返回空列表。
      * 服务端路径 /admin/api/push/events（JWT 保护，拦截器自动携带 token）。
