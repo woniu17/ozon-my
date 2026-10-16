@@ -26,6 +26,7 @@ import { db } from '../db/index.js';
 import { notifyPostingEvent, notifyPostingPickedUp } from './webhook/feishu-notify.js';
 import { publishPostingEvent } from './push-hub.js';
 import { apiToPush, pushRankOf } from './webhook/status-map.js';
+import { ensureImageCached } from './order-image-cache.js';
 
 // ── 三级同步节奏(2026-09-16)─────────────────────────────────
 const FAST_INTERVAL_MIN = Math.max(1, Number(process.env.ORDER_SYNC_INTERVAL_MIN) || 2); // fast 轮间隔(分钟,2026-09-17 5→2)
@@ -411,6 +412,9 @@ async function backfillProductCache(store) {
         // 归档商品(多为已售罄下架,offer 带 -sold 后缀)不回填缓存,订单页图片/标题走 LEFT JOIN 降级
         if (it.is_archived === true) continue;
         upsert.run(String(it.sku), JSON.stringify(it), store.id);
+        // 图片预热(2026-10):回源后异步下载商品主图到本地图床,订单页/安卓通知首访即命中
+        const img = it.primary_image?.[0] || it.images?.[0];
+        if (img) ensureImageCached(img);
         filled++;
       }
     } catch (e) {

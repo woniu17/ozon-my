@@ -54,6 +54,7 @@ import productUpdateRoutes from './modules/product-update.js';
 import productArchiveRoutes from './modules/product-archive.js';
 import exportExcelRoutes from './modules/export-excel.js';
 import platformOrdersRoutes from './modules/platform-orders.js';
+import { handleImageCacheRequest } from './services/order-image-cache.js';
 import { stopPlatformOrders } from './services/platform-orders/browser-manager.js';
 import { setupPushWs } from './services/push-ws.js';
 
@@ -124,6 +125,10 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// 订单/采购商品主图本地缓存(2026-10):GET /images/cache/:hash.jpg?src=<原图URL>
+// 放 static 之前:命中时设置长缓存(immutable),未命中时按 src 懒下载落盘,失败 302 降级原图
+app.get('/images/cache/:fileName', handleImageCacheRequest);
 
 // 静态资源(管理后台页面 HTML/JS/CSS,无需鉴权即可访问;敏感数据由 API 鉴权保护)
 // 统一 no-cache(每次协商,ETag 命中回 304):浏览器对无 Cache-Control 的 HTML 会做

@@ -11,6 +11,7 @@ import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { getDb } from '../db/index.js';
 import logger from '../middleware/log.js';
 import config from '../config/index.js';
+import { imageCacheUrlFor } from './order-image-cache.js';
 
 /** 等待中的长轮询连接 */
 const waiters = new Set();
@@ -42,7 +43,8 @@ function resolveProductImageUrl(postingNumber) {
          LIMIT 1`
       )
       .get(String(postingNumber));
-    return row?.pic_url || null;
+    // 输出层重写为本地图床 URL(2026-10 图片本地化),未配置图床时透传原 URL
+    return imageCacheUrlFor(row?.pic_url);
   } catch (err) {
     logger.warn({ err: err.message, postingNumber }, 'push-hub: 查询商品首图失败');
     return null;

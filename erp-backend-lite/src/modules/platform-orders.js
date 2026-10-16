@@ -37,8 +37,29 @@ import {
 } from '../services/platform-orders/adapters/ali1688-openapi.js';
 import { listTaobaoOrders, searchTaobaoOrder } from '../services/platform-orders/adapters/taobao.js';
 import { listXianyuOrders, searchXianyuOrder } from '../services/platform-orders/adapters/xianyu.js';
+import { imageCacheUrlFor } from '../services/order-image-cache.js';
 
 const router = Router();
+
+// ── 输出层图片本地化(2026-10)────────────────────────────
+// 平台订单搜索结果/列表中的商品 thumbUrl 重写为本地图床 URL,
+// 浏览器请求时懒下载落盘缓存;未配置图床时透传原 URL
+function rewriteThumbUrlsInResult(node) {
+  if (Array.isArray(node)) {
+    for (const item of node) rewriteThumbUrlsInResult(item);
+    return node;
+  }
+  if (node && typeof node === 'object') {
+    for (const key of Object.keys(node)) {
+      if (key === 'thumbUrl' && typeof node[key] === 'string') {
+        node[key] = imageCacheUrlFor(node[key]);
+      } else {
+        rewriteThumbUrlsInResult(node[key]);
+      }
+    }
+  }
+  return node;
+}
 
 // ── 1688 双适配器路由(2026-09-13)────────────────────────────
 // 已配官方 API token 的账号走 openapi(无风控),未配的回落浏览器 mtop;
@@ -224,7 +245,7 @@ router.get('/admin/api/platform-orders/:platform/search', async (req, res, next)
       throw new ApiError('BROWSER_ERROR', `平台 ${platform} 未配置任何账号(检查 .env PLATFORM_ACCOUNTS_*)`, { status: 500 });
     }
     const result = await getAdapter(platform).search(orderSn, accounts);
-    res.json(ok(result));
+    res.json(ok(rewriteThumbUrlsInResult(result)));
   } catch (e) { next(e); }
 });
 
@@ -239,7 +260,7 @@ router.get('/admin/api/platform-orders/:platform', async (req, res, next) => {
     const size = Number.isFinite(sizeRaw) && sizeRaw > 0 ? Math.min(sizeRaw, 50) : 30;
     const account = resolveAccount(platform, req.query.account);
     const result = await getAdapter(platform).list({ tab, size, account });
-    res.json(ok(result));
+    res.json(ok(rewriteThumbUrlsInResult(result)));
   } catch (e) { next(e); }
 });
 

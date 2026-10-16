@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { db } from '../../index.js';
 import { recomputeAggregates } from './purchase-sync-dao.js';
+import { imageCacheUrlFor, ensureImageCached } from '../../../services/order-image-cache.js';
 
 // operate_status 前进序( cancelled 独立,任意状态可进 )
 const OPERATE_RANK = {
@@ -1089,6 +1090,7 @@ function rowToPackage(r) {
 /** 批量取产品行(按订单 id 列表)
  *  LEFT JOIN product_data_cache(现有商品缓存,OPI /v3/product/info 同步)
  *  取 Ozon CDN 直链图片:primary_image[0] 优先,images[0] 兜底(均为 ir-20.ozonstatic.cn 直链)
+ *  输出层统一重写为本地图床 URL(2026-10 图片本地化),未配置图床时透传原 URL
  */
 function getItemsByOrderIds(orderIds) {
   if (!orderIds.length) return [];
@@ -1115,7 +1117,7 @@ function getItemsByOrderIds(orderIds) {
     title: r.cached_name || r.title,
     quantity: r.quantity,
     price: r.price,
-    picUrl: r.pic_url || null,
+    picUrl: imageCacheUrlFor(r.pic_url),
     pdpUrl: r.sku ? `https://ozon.ru/context/detail/id/${r.sku}` : null,
     purchaseAmount: r.purchase_amount,
     purchaseNum: r.purchase_num,
@@ -1155,9 +1157,15 @@ function getPurchasesByPackageIds(packageIds) {
   return {
     links: links.map((l) => {
       // 解析采购单商品图/规格/数量(订单处理页"补全采购订单信息"写入)
+      // thumbUrl 输出层重写为本地图床 URL(2026-10 图片本地化),未配置图床时透传
       let items = [];
       if (l.po_items_json) {
-        try { items = JSON.parse(l.po_items_json) || []; } catch { items = []; }
+        try {
+          items = (JSON.parse(l.po_items_json) || []).map((it) => ({
+            ...it,
+            thumbUrl: imageCacheUrlFor(it.thumbUrl),
+          }));
+        } catch { items = []; }
       }
       return {
         id: l.id,
@@ -1344,8 +1352,13 @@ export function enrichPurchaseItems(items) {
       if (!goods.length) { skipped++; continue; }
       const itemsJson = JSON.stringify(goods);
       const res = stmt.run(itemsJson, now, platform, sn);
-      if (res.changes > 0) updated++;
-      else skipped++;
+      if (res.changes > 0) {
+        updated++;
+        // 图片预热(2026-10):补全后异步把采购主图下载到本地图床,首访即命中
+        for (const g of goods) {
+          if (g.thumbUrl) ensureImageCached(g.thumbUrl);
+        }
+      } else skipped++;
     } catch (e) {
       errors.push({ purchaseSn: it.purchaseSn, error: String(e.message || e) });
     }
