@@ -35,8 +35,8 @@ class FinanceAdapter : RecyclerView.Adapter<FinanceAdapter.VH>() {
     var currentMode = "settled" // settled | pending | nonorder
 
     fun setOrders(group: String, list: List<FinanceOrder>) {
-        if (currentMode != group && currentMode != "settled" && currentMode != "pending") return
-        currentMode = group
+        // 只接受与当前模式一致的数据；nonorder 模式下忽略订单数据（评审 P0-3）
+        if (currentMode != group) return
         orders.clear()
         orders.addAll(list)
         rebuild()

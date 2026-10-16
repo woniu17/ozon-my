@@ -1,6 +1,7 @@
 package com.yochylin.scanner
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 
 /** 登录态持久化（token / 手机号），与后端滑动续期配合 */
@@ -15,10 +16,12 @@ object Session {
     private const val KEY_NOTIFIED_SNS = "notified_push_sns"
 
     private lateinit var prefs: SharedPreferences
+    private lateinit var appContext: Context
 
     fun init(context: Context) {
         if (!::prefs.isInitialized) {
-            prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            appContext = context.applicationContext
+            prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         }
     }
 
@@ -84,6 +87,15 @@ object Session {
             .remove(KEY_LAST_WAIT)
             .remove(KEY_LAST_WAIT_SNS)
             .remove(KEY_LAST_WAIT_INIT)
+            // 同时清除已通知货件号，避免换账号后旧记录导致新订单被跳过（评审 P1）
+            .remove(KEY_NOTIFIED_SNS)
             .apply()
+        // 统一停止新订单监控服务：所有登出入口共用，避免残留服务用失效 token 轮询（评审 P1）
+        if (::appContext.isInitialized) {
+            try {
+                appContext.stopService(Intent(appContext, NewOrderNotifyService::class.java))
+            } catch (_: Exception) {
+            }
+        }
     }
 }

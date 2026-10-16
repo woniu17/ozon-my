@@ -15,6 +15,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
@@ -22,6 +23,7 @@ import com.yochylin.scanner.api.Api
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * 宿主 Activity：承载底部导航四个模块 Fragment（底部栏常驻，切换不重建页面）
@@ -232,9 +234,20 @@ class MainShellActivity : FragmentActivity(), TabHost {
             if (cursor != null && cursor.moveToFirst()) {
                 val uri = cursor.getString(cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI))
                 if (!uri.isNullOrBlank()) {
+                    // Android 7.0+ 禁止 file:// 暴露给其他应用，file:// 需经 FileProvider 转 content://
+                    val apkUri = if (uri.startsWith("file://")) {
+                        FileProvider.getUriForFile(
+                            this,
+                            "${packageName}.fileprovider",
+                            File(Uri.parse(uri).path!!)
+                        )
+                    } else {
+                        Uri.parse(uri)
+                    }
                     val intent = Intent(Intent.ACTION_VIEW)
-                    intent.setDataAndType(Uri.parse(uri), "application/vnd.android.package-archive")
+                    intent.setDataAndType(apkUri, "application/vnd.android.package-archive")
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     startActivity(intent)
                 }
             }

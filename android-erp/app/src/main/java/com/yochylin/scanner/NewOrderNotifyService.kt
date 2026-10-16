@@ -39,6 +39,7 @@ import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 新订单通知前台服务（保活）：
@@ -53,6 +54,9 @@ class NewOrderNotifyService : Service() {
 
     /** 最近已通知过新订单的货件号（内存去重，持久化到 Session，防服务重启重复通知） */
     private val notifiedSns = LinkedHashSet<String>()
+
+    /** notifiedSns 访问锁：WebSocket 回调/差集兜底/启动初始化多协程并发访问，需串行化防 ConcurrentModificationException */
+    private val notifiedLock = Any()
 
     /** 一条新订单摘要（店铺/货件号/销售金额，对齐飞书通知字段） */
     private data class NewOrderInfo(
@@ -150,12 +154,14 @@ class NewOrderNotifyService : Service() {
 
         // 主通道：WebSocket 实时推送（第二版，断线指数退避重连，重连成功后先差集补漏）
         pushJob = scope.launch {
-            var backoffMs = 1_000L
+            // 重连退避：成功收发后立即复位，避免网络恢复后仍保持 60s 慢轮询（评审 P1）
+            val backoffMs = AtomicLong(1_000L)
             val wasDisconnected = AtomicBoolean(false)
             while (isActive) {
                 val closed = CompletableDeferred<Unit>()
                 val listener = object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
+                        backoffMs.set(1_000L)
                         // 重连成功后先补漏（首次连接 wasDisconnected=false 不补）
                         if (wasDisconnected.getAndSet(false)) {
                             scope.launch { runCatchUpDiff() }
@@ -163,6 +169,7 @@ class NewOrderNotifyService : Service() {
                     }
 
                     override fun onMessage(webSocket: WebSocket, text: String) {
+                        backoffMs.set(1_000L)
                         val events = parsePushEvents(text)
                         if (events.isEmpty()) return
                         scope.launch {
@@ -174,8 +181,9 @@ class NewOrderNotifyService : Service() {
                     }
 
                     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                        // token 无效（服务端 close 4001）时停止监控，登录页会重新拉起
+                        // token 无效（服务端 close 4001）时停止监控：先释放连接再停服务，避免协程悬挂
                         if (code == 4001) {
+                            if (!closed.isCompleted) closed.complete(Unit)
                             stopSelf()
                             return
                         }
@@ -184,6 +192,7 @@ class NewOrderNotifyService : Service() {
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                         if (response?.code == 401) {
+                            if (!closed.isCompleted) closed.complete(Unit)
                             stopSelf()
                             return
                         }
@@ -200,8 +209,8 @@ class NewOrderNotifyService : Service() {
                 }
                 ws.cancel()
                 wasDisconnected.set(true)
-                delay(backoffMs)
-                backoffMs = (backoffMs * 2).coerceAtMost(60_000L)
+                delay(backoffMs.get())
+                backoffMs.set((backoffMs.get() * 2).coerceAtMost(60_000L))
             }
         }
 
@@ -237,8 +246,7 @@ class NewOrderNotifyService : Service() {
         for (ev in events) {
             if (ev.optString("type") != "NEW_ORDER") continue
             val postingNumber = ev.optString("postingNumber")
-            if (postingNumber.isBlank() || isRecentlyNotified(postingNumber)) continue
-            markNotified(postingNumber)
+            if (postingNumber.isBlank() || !tryMarkNotified(postingNumber)) continue
             val info = NewOrderInfo(
                 storeName = ev.optString("storeName"),
                 postingNumber = postingNumber,
@@ -271,7 +279,9 @@ class NewOrderNotifyService : Service() {
             }
 
             val lastSns = Session.lastWaitProcessSns
-            val newOrders = currentSns.filter { it !in lastSns && !isRecentlyNotified(it) }
+            // 与 WebSocket 事件共用 tryMarkNotified：差集识别出的新单也立即标记，
+            // 避免后续 WebSocket 推送同一订单时重复通知（评审 P0-1/P1-2）
+            val newOrders = currentSns.filter { it !in lastSns && tryMarkNotified(it) }
                 .mapNotNull { sn -> current.find { it.postingNumber == sn } }
             Session.lastWaitProcessSns = currentSns
 
@@ -305,24 +315,30 @@ class NewOrderNotifyService : Service() {
 
     // ── 已通知货件号去重（服务端事件与差集兜底共用）──
 
-    private fun loadNotifiedSns() {
+    private fun loadNotifiedSns() = synchronized(notifiedLock) {
         notifiedSns.clear()
         notifiedSns.addAll(Session.notifiedPushSns)
     }
 
-    private fun isRecentlyNotified(sn: String): Boolean = sn in notifiedSns
-
-    private fun markNotified(sn: String) {
-        if (sn.isBlank()) return
-        notifiedSns.add(sn)
-        while (notifiedSns.size > NOTIFIED_MAX) {
-            val it = notifiedSns.iterator()
-            if (it.hasNext()) {
-                it.next()
-                it.remove()
+    /**
+     * 原子"检查并标记"：已在集合中返回 false（该单已通知过，跳过）；
+     * 否则加入集合并持久化，返回 true。全程持锁，保证并发下不重复通知、不并发修改集合。
+     */
+    private fun tryMarkNotified(sn: String): Boolean = synchronized(notifiedLock) {
+        if (sn.isBlank() || sn in notifiedSns) {
+            false
+        } else {
+            notifiedSns.add(sn)
+            while (notifiedSns.size > NOTIFIED_MAX) {
+                val it = notifiedSns.iterator()
+                if (it.hasNext()) {
+                    it.next()
+                    it.remove()
+                }
             }
+            Session.notifiedPushSns = notifiedSns.toList()
+            true
         }
-        Session.notifiedPushSns = notifiedSns.toList()
     }
 
     /** 拉取待处理列表最新 N 单（与 App 列表同排序：order desc 最新在前） */

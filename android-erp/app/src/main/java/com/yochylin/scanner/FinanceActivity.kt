@@ -31,6 +31,8 @@ import com.yochylin.scanner.model.NonOrderAccrualsResponse
 import com.yochylin.scanner.model.OrderMonthsResponse
 import com.yochylin.scanner.model.OrderStatsStoresResponse
 import com.yochylin.scanner.model.StoreItem
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -84,6 +86,8 @@ class FinanceActivity : ComponentActivity() {
     private var page = 1
     private var loading = false
     private var loadingMore = false
+    /** 明细列表请求 Job：切换模式/刷新时取消旧请求，防止旧响应覆盖新数据（评审 P0-3） */
+    private var loadJob: Job? = null
 
     // 店铺多选（空集合 = 全选）
     private var allStores: List<StoreItem> = emptyList()
@@ -739,7 +743,9 @@ class FinanceActivity : ComponentActivity() {
         loading = true
         progressBar.visibility = View.VISIBLE
         loadMoreTip.visibility = View.GONE
-        lifecycleScope.launch {
+        // 取消上一次未完成的明细请求，避免旧响应晚到覆盖新模式数据（评审 P0-3）
+        loadJob?.cancel()
+        loadJob = lifecycleScope.launch {
             try {
                 when (currentMode) {
                     "nonorder" -> {
@@ -757,6 +763,8 @@ class FinanceActivity : ComponentActivity() {
                         adapter.setOrders(currentMode, resp.orders)
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 handleError(e)
             } finally {
@@ -771,7 +779,9 @@ class FinanceActivity : ComponentActivity() {
         loadingMore = true
         loadMoreTip.visibility = View.VISIBLE
         loadMoreTip.text = "加载中…"
-        lifecycleScope.launch {
+        // 加载更多与刷新互斥：刷新会取消进行中的加载更多（评审 P0-3）
+        loadJob?.cancel()
+        loadJob = lifecycleScope.launch {
             try {
                 when (currentMode) {
                     "nonorder" -> {
@@ -789,6 +799,8 @@ class FinanceActivity : ComponentActivity() {
                         adapter.appendOrders(currentMode, resp.orders)
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 if (page > 1) page--
                 handleError(e)

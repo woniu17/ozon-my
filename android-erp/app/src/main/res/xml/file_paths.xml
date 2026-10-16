@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 暴露路径：版本更新 APK 安装用（下载到公共 Download 目录） -->
+<paths>
+    <external-path name="external_downloads" path="Download/" />
+    <external-files-path name="external_files" path="." />
+    <cache-path name="cache" path="." />
+</paths>

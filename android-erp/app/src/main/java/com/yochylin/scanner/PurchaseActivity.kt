@@ -29,6 +29,7 @@ import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
 import com.yochylin.scanner.api.optBoolean
 import com.yochylin.scanner.api.optDouble
+import com.yochylin.scanner.api.optInt
 import com.yochylin.scanner.api.optString
 import com.yochylin.scanner.model.LookupLinkedPackage
 import com.yochylin.scanner.model.LookupResult
@@ -1960,6 +1961,8 @@ class PurchaseActivity : ComponentActivity() {
         if (pendingRemoves.isEmpty() && add == null) return
         saving = true
         lifecycleScope.launch {
+            // 本次已成功新增的采购单 id（失败时回滚）
+            val createdPoIds = mutableListOf<Int>()
             try {
                 // 拼单确认
                 if (add != null && add.platform != "other" && add.orders.isNotEmpty()) {
@@ -1983,23 +1986,10 @@ class PurchaseActivity : ComponentActivity() {
                         }
                     }
                 }
-                // 1) 删除标记的已有采购
-                for (g in groups()) {
-                    if (pendingRemoves.contains(g.purchaseOrderId)) {
-                        Api.post(
-                            "/admin/api/order-process/unlink",
-                            mapOf("purchaseOrderId" to g.purchaseOrderId, "packageId" to packageId)
-                        )
-                    }
-                }
-                val allRemoved = groups().isNotEmpty() && groups().all { pendingRemoves.contains(it.purchaseOrderId) }
-                if (allRemoved && add == null) {
-                    Api.post("/admin/api/order-process/purchase/clear", mapOf("packageId" to packageId))
-                }
-                // 2) 逐单提交新采购（一笔平台订单 = 一个采购单, auto 模式）
+                // 1) 先逐单提交新采购（后端按 platform+purchaseSn upsert，幂等；新增失败时旧数据未被破坏）
                 if (add != null && add.orders.isNotEmpty()) {
                     for (od in add.orders) {
-                        Api.post(
+                        val r = Api.post(
                             "/admin/api/order-process/purchase",
                             mapOf(
                                 "packageId" to packageId,
@@ -2029,8 +2019,23 @@ class PurchaseActivity : ComponentActivity() {
                                 },
                                 "allocMode" to "auto"
                             )
+                        ).asJsonObject
+                        val poId = r.optInt("purchaseOrderId", 0)
+                        if (poId > 0) createdPoIds.add(poId)
+                    }
+                }
+                // 2) 再删除标记的已有采购（破坏性操作放最后，失败时仅需回滚新增即可恢复原状）
+                for (g in groups()) {
+                    if (pendingRemoves.contains(g.purchaseOrderId)) {
+                        Api.post(
+                            "/admin/api/order-process/unlink",
+                            mapOf("purchaseOrderId" to g.purchaseOrderId, "packageId" to packageId)
                         )
                     }
+                }
+                val allRemoved = groups().isNotEmpty() && groups().all { pendingRemoves.contains(it.purchaseOrderId) }
+                if (allRemoved && add == null) {
+                    Api.post("/admin/api/order-process/purchase/clear", mapOf("packageId" to packageId))
                 }
                 toast(
                     when {
@@ -2046,6 +2051,20 @@ class PurchaseActivity : ComponentActivity() {
                     finish()
                 }
             } catch (e: Exception) {
+                // 失败补偿：撤销本次已新增的采购，避免“新增成功但删除失败”留下半成品（评审 P0-4）
+                if (createdPoIds.isNotEmpty()) {
+                    for (poId in createdPoIds) {
+                        try {
+                            Api.post(
+                                "/admin/api/order-process/unlink",
+                                mapOf("purchaseOrderId" to poId, "packageId" to packageId)
+                            )
+                        } catch (_: Exception) {
+                            // 回滚失败静默，用户可根据提示手动核对
+                        }
+                    }
+                    toast("保存失败，已回滚本次新增的采购，请重试")
+                }
                 handleError(e)
             } finally {
                 saving = false

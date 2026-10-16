@@ -30,6 +30,8 @@ import com.yochylin.scanner.api.optInt
 import com.yochylin.scanner.api.optString
 import com.yochylin.scanner.model.PackageListResponse
 import com.yochylin.scanner.model.Pkg
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -38,6 +40,11 @@ class OrderListActivity : ComponentActivity() {
 
     companion object {
         private const val PAGE_SIZE = 20
+        private const val STATE_ACTIVE_TAB = "state_active_tab"
+        private const val STATE_KEYWORD = "state_keyword"
+        private const val STATE_GLOBAL_ACTIVE = "state_global_active"
+        private const val STATE_GLOBAL_MODE = "state_global_mode"
+        private const val STATE_CURRENT_SORT = "state_current_sort"
 
         private val TABS = listOf(
             "all" to "全部",
@@ -201,6 +208,8 @@ class OrderListActivity : ComponentActivity() {
     private var page = 1
     private var loading = false
     private var loadingMore = false
+    /** 当前列表请求 Job：切换 Tab/搜索/刷新时取消旧请求，防止旧响应覆盖新数据（评审 P0-2） */
+    private var loadJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -215,7 +224,17 @@ class OrderListActivity : ComponentActivity() {
         // 底部导航栏
         setupBottomNav(this, "order")
 
+        // 进程重建/配置变更后恢复筛选状态（评审 P1：Fragment/Activity 状态恢复）
+        if (savedInstanceState != null) {
+            activeTab = savedInstanceState.getString(STATE_ACTIVE_TAB, "waitProcess") ?: "waitProcess"
+            keyword = savedInstanceState.getString(STATE_KEYWORD, "") ?: ""
+            globalActive = savedInstanceState.getBoolean(STATE_GLOBAL_ACTIVE, false)
+            globalMode = savedInstanceState.getString(STATE_GLOBAL_MODE, "ss") ?: "ss"
+            currentSort = savedInstanceState.getString(STATE_CURRENT_SORT, "order_desc") ?: "order_desc"
+        }
+
         searchInput = findViewById(R.id.orderSearchInput)
+        searchInput.setText(keyword)
         tabContainer = findViewById(R.id.tabContainer)
         sortText = findViewById(R.id.sortText)
         bannerText = findViewById(R.id.orderBannerText)
@@ -366,7 +385,9 @@ class OrderListActivity : ComponentActivity() {
     }
 
     private fun loadListInternal() {
-        lifecycleScope.launch {
+        // 取消上一次未完成的列表请求，避免旧响应晚到覆盖新查询结果（评审 P0-2）
+        loadJob?.cancel()
+        loadJob = lifecycleScope.launch {
             try {
                 val sortParts = currentSort.split("_")
                 val sortBy = sortParts[0]
@@ -399,6 +420,9 @@ class OrderListActivity : ComponentActivity() {
                     adapter.append(resp.packages)
                 }
                 total = resp.total
+            } catch (e: CancellationException) {
+                // 被更新的请求取代：不更新 UI、不弹错误、不修正 page
+                throw e
             } catch (e: Exception) {
                 if (page > 1) page--
                 if (e is ApiException && e.code == 401) {
@@ -414,6 +438,15 @@ class OrderListActivity : ComponentActivity() {
                 loadMoreTip.visibility = View.GONE
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString(STATE_ACTIVE_TAB, activeTab)
+        outState.putString(STATE_KEYWORD, keyword)
+        outState.putBoolean(STATE_GLOBAL_ACTIVE, globalActive)
+        outState.putString(STATE_GLOBAL_MODE, globalMode)
+        outState.putString(STATE_CURRENT_SORT, currentSort)
+        super.onSaveInstanceState(outState)
     }
 
     private fun showBanner(text: String, ok: Boolean) {

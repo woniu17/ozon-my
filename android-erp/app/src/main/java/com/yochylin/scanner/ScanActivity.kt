@@ -29,6 +29,8 @@ class ScanActivity : ComponentActivity() {
 
     private val scanExecutor = Executors.newSingleThreadExecutor()
     private val barcodeScanner = BarcodeScanning.getClient()
+    // 扫码线程与 ML Kit 回调线程都会读写，需保证可见性（评审 P2）
+    @Volatile
     private var alreadyScanned = false
 
     private val cameraPermission =
@@ -86,20 +88,26 @@ class ScanActivity : ComponentActivity() {
         val mediaImage = imageProxy.image
         if (mediaImage != null) {
             val inputImage = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-            barcodeScanner.process(inputImage)
-                .addOnSuccessListener { barcodes ->
-                    barcodes.firstOrNull()?.let { b ->
-                        val raw = (b.rawValue ?: b.displayValue ?: "").trim()
-                        if (raw.isNotEmpty() && !alreadyScanned) {
-                            alreadyScanned = true
-                            setResult(RESULT_OK, Intent().putExtra("code", raw))
-                            finish()
+            try {
+                barcodeScanner.process(inputImage)
+                    .addOnSuccessListener { barcodes ->
+                        barcodes.firstOrNull()?.let { b ->
+                            val raw = (b.rawValue ?: b.displayValue ?: "").trim()
+                            if (raw.isNotEmpty() && !alreadyScanned) {
+                                alreadyScanned = true
+                                setResult(RESULT_OK, Intent().putExtra("code", raw))
+                                finish()
+                            }
                         }
                     }
-                }
-                .addOnCompleteListener {
-                    imageProxy.close()
-                }
+                    .addOnCompleteListener {
+                        // 正常/异常完成都释放帧，防止 ImageAnalysis 停止（评审 P2）
+                        imageProxy.close()
+                    }
+            } catch (e: Exception) {
+                // process 同步异常（如输入图无效）时也必须释放帧，避免泄漏（评审 P2）
+                imageProxy.close()
+            }
         } else {
             imageProxy.close()
         }
@@ -107,7 +115,8 @@ class ScanActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        barcodeScanner.close()
+        // 注意：barcodeScanner 是 ML Kit 共享单例，Activity 重建后再次 getClient() 会拿到已关闭实例，
+        // 因此不在此关闭，交由进程生命周期统一释放（评审 P2）
         scanExecutor.shutdown()
     }
 }
