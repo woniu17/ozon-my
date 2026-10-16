@@ -161,7 +161,8 @@ class FinanceFragment : Fragment() {
             Session.clear()
             goLogin()
         }
-        view.findViewById<TextView>(R.id.financeSearchBtn).setOnClickListener { onSearch() }
+        // 搜索行已移入 RecyclerView 页头(header_finance.xml),需从 header 取引用(2026-10-16 修复 NPE)
+        header.findViewById<TextView>(R.id.financeSearchBtn).setOnClickListener { onSearch() }
         keywordInput.setOnEditorActionListener { _, _, _ ->
             onSearch()
             true
