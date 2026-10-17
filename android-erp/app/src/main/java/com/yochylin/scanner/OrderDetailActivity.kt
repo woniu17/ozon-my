@@ -40,6 +40,8 @@ import com.yochylin.scanner.model.OrderDetail
 import com.yochylin.scanner.model.Pkg
 import com.yochylin.scanner.model.PurchaseLink
 import com.yochylin.scanner.model.Trace
+import com.yochylin.scanner.model.StockInfo
+import com.yochylin.scanner.model.StockListResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -82,6 +84,11 @@ class OrderDetailActivity : ComponentActivity() {
     private var traceOpen = false
     private var traces: List<Trace> = emptyList()
     private var links: List<PurchaseLink> = emptyList()
+
+    // 订单商品库存(2026-10-17):key=offerId,详情页展示 + 一键设0/设20
+    private val stockMap = HashMap<String, StockInfo>()
+    private var stockLoaded = false
+    private var currentItems: List<com.yochylin.scanner.model.PkgItem> = emptyList()
 
     /** 采购流程结果回调：返回后刷新详情（新增/删除采购、改物流、备货等） */
     private val purchaseLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -151,13 +158,56 @@ class OrderDetailActivity : ComponentActivity() {
                 pkg = detail.`package`
                 links = detail.purchaseLinks ?: emptyList()
                 traces = detail.traces ?: emptyList()
+                currentItems = detail.items ?: detail.`package`?.items ?: emptyList()
                 render(detail)
+                loadStocks() // 库存独立接口,异步加载不阻塞详情
             } catch (e: Exception) {
                 if (e is ApiException && e.code == 401) {
                     toast("登录已过期,请重新登录")
                     goLogin()
                 } else {
                     toast(e.message ?: "加载失败")
+                }
+            }
+        }
+    }
+
+    /** 加载订单商品库存(2026-10-17):成功后刷新商品区库存行 */
+    private suspend fun loadStocks() {
+        if (pkg == null) return
+        try {
+            val data = Api.get("/admin/api/order-process/detail/$packageId/stock")
+            val resp = Api.parse<StockListResponse>(data)
+            stockMap.clear()
+            for (s in resp.stocks) {
+                if (!s.offerId.isNullOrBlank()) stockMap[s.offerId] = s
+            }
+            stockLoaded = true
+            renderItems(currentItems)
+        } catch (e: Exception) {
+            // 库存加载失败静默(店铺未配置/网络),商品区库存行显示 "—"
+            stockLoaded = true
+        }
+    }
+
+    /** 一键设置库存(设0/设20):调 Ozon 更新后刷新库存行(2026-10-17) */
+    private fun setItemStock(item: com.yochylin.scanner.model.PkgItem, stock: Int) {
+        val offerId = item.offerId
+        if (offerId.isNullOrBlank()) {
+            toast("该商品无 Offer ID")
+            return
+        }
+        lifecycleScope.launch {
+            try {
+                Api.post("/admin/api/order-process/detail/$packageId/stock", mapOf("offerId" to offerId, "stock" to stock))
+                toast("已将 ${item.title ?: offerId} 库存设为 $stock")
+                loadStocks()
+            } catch (e: Exception) {
+                if (e is ApiException && e.code == 401) {
+                    toast("登录已过期,请重新登录")
+                    goLogin()
+                } else {
+                    toast(e.message ?: "设置库存失败")
                 }
             }
         }
@@ -400,6 +450,34 @@ class OrderDetailActivity : ComponentActivity() {
             setPadding(0, dp(6), 0, 0)
         }
         right.addView(priceLine)
+
+        // 库存行(2026-10-17):展示 Ozon 当前仓库库存 + 一键设0/设20
+        val stockRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
+        }
+        val stockInfo = item.offerId?.let { stockMap[it] }
+        val stockTv = TextView(this).apply {
+            text = when {
+                stockInfo != null -> "库存 ${stockInfo.present}(预留 ${stockInfo.reserved})"
+                stockLoaded -> "库存 —"
+                else -> "库存 加载中…"
+            }
+            setTextColor(if (stockInfo != null) Color.parseColor(COLOR_TEXT) else Color.parseColor(COLOR_MUTE))
+            textSize = 11f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        stockRow.addView(stockTv)
+        if (!item.offerId.isNullOrBlank()) {
+            stockRow.addView(
+                copyChip("设0", Color.parseColor("#ffece8"), Color.parseColor("#d93026")) { setItemStock(item, 0) }
+            )
+            stockRow.addView(
+                copyChip("设20", Color.parseColor("#e8f7ee"), Color.parseColor("#0b7a3b")) { setItemStock(item, 20) }
+            )
+        }
+        right.addView(stockRow)
 
         row.addView(right)
         return row
@@ -865,6 +943,8 @@ class OrderDetailActivity : ComponentActivity() {
         val totalQty = (p.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
         val multiQty = (p.items?.any { (it.quantity ?: 0.0) >= 2 } ?: false)
         val doShip = {
+            // 备货接口可能耗时较长(2026-10-17):模态提示"正在备货中",结束后自动关闭
+            val dlg = showBlockingLoading("正在备货中，请稍候…")
             lifecycleScope.launch {
                 try {
                     val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to packageId)).asJsonObject
@@ -873,6 +953,8 @@ class OrderDetailActivity : ComponentActivity() {
                     loadDetail()
                 } catch (e: Exception) {
                     handleError(e)
+                } finally {
+                    runCatching { dlg.dismiss() }
                 }
             }
         }

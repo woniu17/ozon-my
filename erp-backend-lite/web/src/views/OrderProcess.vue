@@ -8,7 +8,7 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import { parseUtcDate } from '../utils/time.js';
 import { useRoute } from 'vue-router';
 import {
-  getOrderTabs, getOrderList, getOrderDetail,
+  getOrderTabs, getOrderList, getOrderDetail, getOrderDetailStock, setOrderItemStock,
   submitPurchase, updatePurchaseLogistics, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   updatePackageMeta, listPackageTags, updateTagOrder,
   runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
@@ -156,6 +156,8 @@ const globalSearchBar = ref(null);
 const pager = reactive({ current: 1, total: 0, pageSize: 20 });
 const loading = ref(false);
 const rows = ref([]);
+// 快捷筛选各自命中数(2026-10-17):按钮上展示"采购超24h未发货(N)"/"物流超24h未揽收(N)"
+const quickCounts = reactive({ purchaseUnshipped: 0, logisticsStale: 0 });
 
 // ── 订单金额统计(全量订单口径,不随 tab/筛选变化,2026-09-18)──────
 const summary = ref(null);
@@ -346,10 +348,12 @@ async function loadList() {
     rows.value = data?.packages || [];
     pager.total = data?.total || 0;
     rubRate.value = data?.rubRate || null;
+    Object.assign(quickCounts, data?.quickCounts || {});
   } catch (err) {
     show(err.message || String(err), 'error');
     rows.value = [];
     pager.total = 0;
+    Object.assign(quickCounts, { purchaseUnshipped: 0, logisticsStale: 0 });
   } finally {
     loading.value = false;
   }
@@ -387,7 +391,7 @@ function search() {
   loadList();
 }
 
-// 快速筛选切换(2026-10-17,待打单发货 tab):点一下启用 24h,再点关闭;两键可同时启用(后端 AND 交集)
+// 快速筛选切换(2026-10-17,待打单发货 tab):点一下启用 24h,再点关闭;两键可同时启用(后端 OR 并集,2026-10-17 用户要求)
 function toggleQuickFilter(key) {
   filters[key] = filters[key] ? 0 : 24;
   search();
@@ -2567,8 +2571,12 @@ async function openDetail(pkg) {
   detailOpen.value = true;
   detailLoading.value = true;
   detail.value = null;
+  detailStocks.value = [];
+  detailStockLoading.value = true;
   try {
     detail.value = await getOrderDetail(pkg.id);
+    // 库存单独接口,不阻塞详情展示(2026-10-17)
+    loadDetailStocks(pkg.id);
   } catch (err) {
     show(err.message || String(err), 'error');
     detailOpen.value = false;
@@ -2978,6 +2986,40 @@ function weekdayCN(t) {
 const detailItems = computed(() => detail.value?.items || []);
 const detailLinks = computed(() => detail.value?.purchaseLinks || []);
 
+// ── 订单商品库存(2026-10-17):详情弹窗展示/修改 Ozon 当前仓库库存 ──
+const detailStocks = ref([]);
+const detailStockLoading = ref(false);
+
+async function loadDetailStocks(packageId) {
+  try {
+    const data = await getOrderDetailStock(packageId);
+    detailStocks.value = data?.stocks || [];
+  } catch (err) {
+    detailStocks.value = [];
+  } finally {
+    detailStockLoading.value = false;
+  }
+}
+
+function stockOf(offerId) {
+  return detailStocks.value.find((s) => String(s.offerId) === String(offerId)) || null;
+}
+
+/** 一键设置库存(设0/设20):调 Ozon 更新后刷新该单库存展示 */
+async function setItemStock(pkg, it, stock) {
+  if (!it.offerId) {
+    show('该商品无 Offer ID', 'error');
+    return;
+  }
+  try {
+    await setOrderItemStock(pkg.id, { offerId: it.offerId, stock });
+    show(`已将 ${it.title || it.offerId} 库存设为 ${stock}`, 'success');
+    await loadDetailStocks(pkg.id);
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  }
+}
+
 let statusTimer = null;
 let tickTimer = null;
 const route = useRoute();
@@ -3211,20 +3253,20 @@ onUnmounted(() => {
           <option value="0">等收货</option>
           <option value="1">已到货</option>
         </select>
-        <!-- 快速筛选(待打单发货,2026-10-17):采购下单超24h未发货 / 物流超24h未揽收,可同时启用(取交集) -->
+        <!-- 快速筛选(待打单发货,2026-10-17):采购下单超24h未发货 / 物流超24h未揽收,可同时启用(取并集);按钮显示各自命中数(2026-10-17) -->
         <template v-if="activeTab === 'waitShip'">
           <button
             class="quick-chip"
             :class="{ on: filters.purchaseUnshippedHours === 24 }"
             :title="'筛选:采购下单(支付/创建)超过24小时且上家仍未发货的包裹'"
             @click="toggleQuickFilter('purchaseUnshippedHours')"
-          >采购超24h未发货</button>
+          >采购超24h未发货<template v-if="quickCounts.purchaseUnshipped">({{ quickCounts.purchaseUnshipped }})</template></button>
           <button
             class="quick-chip"
             :class="{ on: filters.logisticsStaleHours === 24 }"
             :title="'筛选:有物流单号但从发货/创建起超过24小时仍未揽收的包裹(已揽收除外)'"
             @click="toggleQuickFilter('logisticsStaleHours')"
-          >物流超24h未揽收</button>
+          >物流超24h未揽收<template v-if="quickCounts.logisticsStale">({{ quickCounts.logisticsStale }})</template></button>
         </template>
         <!-- 排序(2026-09-20):按 tab 动态显示可用排序键;揽收排序适用所有状态(除待处理/待打单/交运);各 tab 独立记忆 -->
         <select v-model="currentSort" class="filter-input" title="排序:揽收时间=国际物流商揽收时间(发货前取消的单无此时间,排最后)" @change="search">
@@ -4144,7 +4186,7 @@ onUnmounted(() => {
         <div class="detail-section">订单产品</div>
         <table class="data-table item-table">
           <thead>
-            <tr><th style="width: 260px">产品</th><th>数量</th><th>售价</th><th>已采数量</th><th>采购金额(回写)</th></tr>
+            <tr><th style="width: 260px">产品</th><th>数量</th><th>售价</th><th>已采数量</th><th>采购金额(回写)</th><th>库存</th></tr>
           </thead>
           <tbody>
             <tr v-for="it in detailItems" :key="it.id">
@@ -4163,6 +4205,15 @@ onUnmounted(() => {
               <td>{{ fmtMoney(it.price) }}</td>
               <td>{{ it.purchaseNum }}</td>
               <td>{{ fmtMoney(it.purchaseAmount) }}</td>
+              <td class="stock-cell">
+                <template v-if="stockOf(it.offerId)">
+                  <span class="stock-num" :title="'在库 ' + stockOf(it.offerId).present + ' / 预留 ' + stockOf(it.offerId).reserved">{{ stockOf(it.offerId).present }}</span>
+                  <button class="btn btn-ghost btn-sm" title="一键将库存设为 0" @click="setItemStock(detail.package, it, 0)">设0</button>
+                  <button class="btn btn-ghost btn-sm" title="一键将库存设为 20" @click="setItemStock(detail.package, it, 20)">设20</button>
+                </template>
+                <span v-else-if="detailStockLoading" class="muted">加载中…</span>
+                <span v-else class="muted">—</span>
+              </td>
             </tr>
           </tbody>
         </table>

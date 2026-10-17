@@ -1,6 +1,7 @@
 package com.yochylin.scanner
 
 import android.app.Dialog
+import android.app.ProgressDialog
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -23,6 +24,14 @@ import android.widget.Toast
 import coil.load
 import java.io.File
 import java.io.FileOutputStream
+
+/** 模态"正在处理"对话框（2026-10-17 备货耗时提示）：不可取消、防重复提交，结束调用 dismiss() */
+fun Context.showBlockingLoading(message: String): ProgressDialog = ProgressDialog(this).apply {
+    setMessage(message)
+    setCancelable(false)
+    setCanceledOnTouchOutside(false)
+    show()
+}
 
 /** 将 View 背景设置为圆角色块（替代 setBackgroundColor，统一圆角） */
 fun View.setRoundedBg(color: Int, radiusDp: Float = 6f) {

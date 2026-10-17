@@ -70,6 +70,7 @@ class NewOrderNotifyService : Service() {
         val amount: Double,
         val machineName: String = "",
         val productImageUrl: String = "",
+        val packageId: String = "", // 2026-10-17:通知点击跳转订单详情用
     )
 
     companion object {
@@ -282,7 +283,7 @@ class NewOrderNotifyService : Service() {
                 "NEW_ORDER" -> {
                     if (!tryMarkNotified("NEW_ORDER:$postingNumber")) continue
                     val imageUrl = ev.optString("productImageUrl")
-                    val info = NewOrderInfo(store, postingNumber, amount, machine, imageUrl)
+                    val info = NewOrderInfo(store, postingNumber, amount, machine, imageUrl, ev.optString("packageId"))
                     val total = ev.optInt("waitProcessCount", 0).toLong()
                     sendNewOrderNotification(total, 1, listOf(info))
                     orderAdded = true
@@ -303,7 +304,8 @@ class NewOrderNotifyService : Service() {
                         },
                         tab = "order",
                         machineName = machine,
-                        productImageUrl = ev.optString("productImageUrl")
+                        productImageUrl = ev.optString("productImageUrl"),
+                        packageId = ev.optString("packageId")
                     )
                 }
                 "STATE_CHANGED" -> {
@@ -329,7 +331,8 @@ class NewOrderNotifyService : Service() {
                         },
                         tab = "order",
                         machineName = machine,
-                        productImageUrl = ev.optString("productImageUrl")
+                        productImageUrl = ev.optString("productImageUrl"),
+                        packageId = ev.optString("packageId")
                     )
                 }
                 "PICKED_UP" -> {
@@ -346,7 +349,8 @@ class NewOrderNotifyService : Service() {
                         },
                         tab = "order",
                         machineName = machine,
-                        productImageUrl = ev.optString("productImageUrl")
+                        productImageUrl = ev.optString("productImageUrl"),
+                        packageId = ev.optString("packageId")
                     )
                 }
             }
@@ -354,6 +358,37 @@ class NewOrderNotifyService : Service() {
         if (orderAdded) {
             // 新订单影响今日统计，立即刷新常驻通知
             scope.launch { refreshTodayStats() }
+        }
+    }
+
+    /**
+     * 通知点击意图(2026-10-17 通知跳转订单详情):
+     * - 带 packageId → 依次启动主界面(order tab) + 订单详情页,返回栈完整
+     * - 无 packageId(旧版后端事件) → 退化为打开订单处理 tab
+     */
+    private fun buildContentIntent(packageId: String, tab: String): PendingIntent {
+        val shell = Intent(this, MainShellActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("switchTab", tab)
+        }
+        val requestCode = notificationSeq.incrementAndGet()
+        return if (packageId.isNotBlank()) {
+            val detail = Intent(this, OrderDetailActivity::class.java).apply {
+                putExtra("packageId", packageId)
+            }
+            PendingIntent.getActivities(
+                this,
+                requestCode,
+                arrayOf(shell, detail),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        } else {
+            PendingIntent.getActivity(
+                this,
+                requestCode,
+                shell,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
         }
     }
 
@@ -369,6 +404,7 @@ class NewOrderNotifyService : Service() {
         tab: String,
         machineName: String = "",
         productImageUrl: String = "",
+        packageId: String = "",
     ) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -376,16 +412,7 @@ class NewOrderNotifyService : Service() {
             return
         }
         val nm = getSystemService(NotificationManager::class.java) ?: return
-        val openIntent = Intent(this, MainShellActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra("switchTab", tab)
-        }
-        val pi = PendingIntent.getActivity(
-            this,
-            notificationSeq.incrementAndGet(),
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val pi = buildContentIntent(packageId, tab)
         // 机器名后缀(2026-10-16 多机部署):摘要尾部 + 展开正文底部各一处
         val suffix = if (machineName.isNotBlank()) " [$machineName]" else ""
         val fullSummary = summary + suffix
@@ -574,16 +601,8 @@ class NewOrderNotifyService : Service() {
             if (machine.isNotBlank()) append("\n[机器: ").append(machine).append("]")
         }
 
-        val openIntent = Intent(this, MainShellActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra("switchTab", "order")
-        }
-        val pi = PendingIntent.getActivity(
-            this,
-            1,
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        // 2026-10-17:单条订单带 packageId → 点击直达订单详情;无 packageId 退化为打开订单列表
+        val pi = buildContentIntent(first?.packageId ?: "", "order")
         val builder = NotificationCompat.Builder(this, CHANNEL_NEW_ORDER)
             .setSmallIcon(R.drawable.ic_stat_new_order)
             .setContentTitle("新增 $added 个待处理订单")

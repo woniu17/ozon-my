@@ -219,6 +219,9 @@ class OrderListFragment : Fragment() {
     /** 待打单发货快速筛选(2026-10-17):>0 表示启用 24h 阈值,与后端 purchaseUnshippedHours/logisticsStaleHours 对应 */
     private var purchaseUnshippedHours = 0
     private var logisticsStaleHours = 0
+    /** 快捷筛选各自命中数(2026-10-17):后端 quickCounts 返回,按钮上展示 */
+    private var quickPurchaseCount = 0
+    private var quickLogisticsCount = 0
 
     private val rows = mutableListOf<Pkg>()
     private var total = 0
@@ -453,11 +456,12 @@ class OrderListFragment : Fragment() {
         if (!::quickFilterBar.isInitialized) return
         val show = activeTab == "waitShip"
         quickFilterBar.visibility = if (show) View.VISIBLE else View.GONE
-        renderQuickChip(quickPurchaseUnshipped, purchaseUnshippedHours > 0)
-        renderQuickChip(quickLogisticsStale, logisticsStaleHours > 0)
+        renderQuickChip(quickPurchaseUnshipped, purchaseUnshippedHours > 0, "采购超24h未发货", quickPurchaseCount)
+        renderQuickChip(quickLogisticsStale, logisticsStaleHours > 0, "物流超24h未揽收", quickLogisticsCount)
     }
 
-    private fun renderQuickChip(tv: TextView, on: Boolean) {
+    private fun renderQuickChip(tv: TextView, on: Boolean, base: String, count: Int) {
+        tv.text = if (count > 0) "$base($count)" else base
         tv.setTextColor(if (on) Color.parseColor("#165dff") else Color.parseColor("#4e5969"))
         tv.setRoundedBg(if (on) 0xFFE8F0FF.toInt() else 0xFFF2F3F5.toInt(), 12f)
     }
@@ -521,6 +525,10 @@ class OrderListFragment : Fragment() {
                     adapter.append(resp.packages)
                 }
                 total = resp.total
+                // 快捷筛选命中数(2026-10-17):无论筛选是否启用都更新,保证按钮数字与后端一致
+                quickPurchaseCount = resp.quickCounts?.purchaseUnshipped ?: 0
+                quickLogisticsCount = resp.quickCounts?.logisticsStale ?: 0
+                updateQuickFilterUi()
             } catch (e: CancellationException) {
                 // 被更新的请求取代：不更新 UI、不弹错误、不修正 page
                 throw e

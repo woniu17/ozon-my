@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { db } from '../../index.js';
 import { recomputeAggregates } from './purchase-sync-dao.js';
-import { imageCacheUrlFor, ensureImageCached } from '../../../services/order-image-cache.js';
+import { imageCacheUrlFor, ensureImageCached, stripImageSizeSuffix } from '../../../services/order-image-cache.js';
 
 // operate_status 前进序( cancelled 独立,任意状态可进 )
 const OPERATE_RANK = {
@@ -830,25 +830,29 @@ function buildPackageWhere(filters = {}) {
     where.push('p.arrived_at IS NULL');
   }
   // 快速筛选(2026-10-17,待打单发货 tab):
-  // 1) 采购下单超 N 小时未发货:存在采购单未发货(send_at 空/状态未发货),且下单时间(支付/创建)距今 > N 小时
-  //    N 由前端传 purchaseUnshippedHours(如 24);unixepoch() 解析 ISO 时间,差值秒数
+  // 1) 采购下单超 N 小时未发货 / 2) 物流超 N 小时未揽收
+  // 两个快捷筛选为"或"关系(2026-10-17 用户要求):命中任一条件即进入结果集;两者都未传时不过滤。
+  // quickFilters 记录各自 SQL 片段,供 listPackages 单独计数(按钮展示命中数,2026-10-17)。
+  const quickFilters = [];
   if (filters.purchaseUnshippedHours > 0) {
     const secs = (Number(filters.purchaseUnshippedHours) || 24) * 3600;
-    where.push(`p.id IN (
+    quickFilters.push({
+      key: 'purchaseUnshipped',
+      sql: `p.id IN (
       SELECT pl.package_id FROM op_purchase_link pl
       JOIN op_purchase_order po ON po.id = pl.purchase_order_id
       WHERE po.send_at IS NULL
         AND po.status IN ('wait_pay', 'wait_send')
         AND COALESCE(po.pay_at, po.gmt_create) IS NOT NULL
         AND (unixepoch() - unixepoch(COALESCE(po.pay_at, po.gmt_create))) > ${secs}
-    )`);
+    )`,
+    });
   }
-  // 2) 物流超 N 小时未揽收(2026-10-17 口径修正):采购单有物流单号,
-  //    但至今未出现揽收/已取件轨迹节点(未揽收),且从发货/创建时间起距今 > N 小时。
-  //    已揽收(轨迹含"揽收"/"已取件")的单即使轨迹不再更新也排除在外。
   if (filters.logisticsStaleHours > 0) {
     const secs = (Number(filters.logisticsStaleHours) || 24) * 3600;
-    where.push(`p.id IN (
+    quickFilters.push({
+      key: 'logisticsStale',
+      sql: `p.id IN (
       SELECT pl.package_id FROM op_purchase_link pl
       JOIN op_purchase_order po ON po.id = pl.purchase_order_id
       WHERE po.logistics_no IS NOT NULL
@@ -856,7 +860,12 @@ function buildPackageWhere(filters = {}) {
              OR (po.trace_json NOT LIKE '%揽收%' AND po.trace_json NOT LIKE '%已取件%'))
         AND COALESCE(po.send_at, po.gmt_create) IS NOT NULL
         AND (unixepoch() - unixepoch(COALESCE(po.send_at, po.gmt_create))) > ${secs}
-    )`);
+    )`,
+    });
+  }
+  const quickCombined = quickFilters.length ? `(${quickFilters.map((q) => q.sql).join(' OR ')})` : '';
+  if (quickCombined) {
+    where.push(quickCombined);
   }
   // 取消发起者筛选(仅 cancelled tab 有意义):前端传 client/ozon/seller
   // 用 cancellation_type(英文枚举)精确匹配,比 cancellation_initiator(俄文)更稳定
@@ -877,7 +886,7 @@ function buildPackageWhere(filters = {}) {
     params.push(kw, kw, kw, kw, kw, kw, kw, kw);
   }
 
-  return { where, params, globalSearch: !!globalKw, globalKeyword: globalKw };
+  return { where, params, globalSearch: !!globalKw, globalKeyword: globalKw, quickFilters, quickCombined };
 }
 
 /** 已用标签列表+计数(2026-09-15,tags 逗号分隔 → 拆分聚合,供筛选下拉)
@@ -937,7 +946,7 @@ const SORT_COLUMNS = {
 function listPackages(filters = {}) {
   const page = Math.max(1, Number(filters.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(filters.pageSize) || 20));
-  const { where, params, globalSearch, globalKeyword } = buildPackageWhere(filters);
+  const { where, params, globalSearch, globalKeyword, quickFilters = [], quickCombined = '' } = buildPackageWhere(filters);
 
   // 排序键白名单防注入;到达/退货时间为 NULL 的(发货前取消/无退货)排最后;p.id 兜底保证稳定
   const sortCol = SORT_COLUMNS[filters.sortBy] || SORT_COLUMNS.order;
@@ -950,6 +959,21 @@ function listPackages(filters = {}) {
       `SELECT COUNT(*) AS n FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`
     )
     .get(...params).n;
+
+  // 快捷筛选各自命中数(2026-10-17):按钮上展示"采购超24h未发货(N)"/"物流超24h未揽收(N)"
+  // 快速筛选 SQL 无占位参数,baseWhere 去掉合并片段后复用同一组 params 即可。
+  const quickCounts = {};
+  if (quickFilters.length) {
+    const baseWhere = quickCombined ? where.filter((w) => w !== quickCombined) : where;
+    for (const q of quickFilters) {
+      const w = baseWhere.concat(q.sql);
+      quickCounts[q.key] = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id WHERE ${w.join(' AND ')}`
+        )
+        .get(...params).n;
+    }
+  }
 
   const rows = db
     .prepare(
@@ -983,6 +1007,7 @@ function listPackages(filters = {}) {
     pageSize,
     globalSearch,   // 前端据此显示"全局搜索"提示条
     globalKeyword,
+    quickCounts,    // 快捷筛选各自命中数(2026-10-17,按钮展示用)
     packages: pkgRows,
   };
 }
@@ -1343,13 +1368,15 @@ export function listPendingPurchases(platform) {
  */
 
 /** 商品图 URL 防御归一化(2026-09-17):淘宝 mtop pic 曾出现 "https:img..."(缺//)与
- *  "//img..."(协议相对)畸形格式直落库,写入前统一修正;跨平台通用兜底 */
+ *  "//img..."(协议相对)畸形格式直落库,写入前统一修正;跨平台通用兜底
+ *  2026-10-17:顺带去掉平台缩略图尺寸后缀(1688 .80x80.jpg → 原图),保证落库即原图 */
 function normalizeThumbUrl(u) {
   let s = String(u || '').trim();
   if (!s) return s;
   if (s.startsWith('//')) return 'https:' + s;
   if (/^https?:[^/]/.test(s)) return s.replace(/^(https?):/, '$1://');
-  return s.replace(/^http:\/\//, 'https://');
+  s = s.replace(/^http:\/\//, 'https://');
+  return stripImageSizeSuffix(s);
 }
 
 export function enrichPurchaseItems(items) {

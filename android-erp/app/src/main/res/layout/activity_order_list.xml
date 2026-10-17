@@ -127,7 +127,7 @@
             android:id="@+id/quickLogisticsStale"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="物流超24h未更新"
+            android:text="物流超24h未揽收"
             android:textSize="12sp"
             android:paddingHorizontal="10dp"
             android:paddingVertical="4dp" />

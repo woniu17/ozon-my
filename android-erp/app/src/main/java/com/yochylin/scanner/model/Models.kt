@@ -5,6 +5,28 @@ data class PackageListResponse(
     val packages: List<Pkg> = emptyList(),
     val total: Int = 0,
     val rubRate: RubRate? = null,
+    val quickCounts: QuickCounts? = null, // 快捷筛选各自命中数(2026-10-17,按钮展示用)
+)
+
+/** 快捷筛选各自命中数(2026-10-17):采购超24h未发货 / 物流超24h未揽收 */
+data class QuickCounts(
+    val purchaseUnshipped: Int = 0,
+    val logisticsStale: Int = 0,
+)
+
+/** 订单商品库存(2026-10-17):Ozon 当前仓库库存,详情页展示/一键设0/设20 */
+data class StockInfo(
+    val sku: String? = null,
+    val offerId: String? = null,
+    val productId: String? = null,
+    val present: Int = 0,
+    val reserved: Int = 0,
+    val total: Int = 0,
+)
+
+/** 库存列表响应 */
+data class StockListResponse(
+    val stocks: List<StockInfo> = emptyList(),
 )
 
 /** 汇率信息（后端 resolveRubCnyRate 返回对象，可能为 null） */

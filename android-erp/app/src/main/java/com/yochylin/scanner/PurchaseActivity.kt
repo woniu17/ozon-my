@@ -2433,11 +2433,15 @@ class PurchaseActivity : ComponentActivity() {
             finish()
             return
         }
+        // 备货接口可能耗时较长(2026-10-17):模态提示"正在备货中",结束后自动关闭
+        val dlg = showBlockingLoading("正在备货中，请稍候…")
         try {
             val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to packageId)).asJsonObject
             toast(if (r.optBoolean("alreadyShipped")) "该包裹已备货过" else "备货成功")
         } catch (e: Exception) {
             toast(e.message ?: "备货失败")
+        } finally {
+            runCatching { dlg.dismiss() }
         }
         setResult(RESULT_OK)
         finish()

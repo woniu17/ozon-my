@@ -30,6 +30,7 @@
 import crypto from 'node:crypto';
 import config from '../../../config/index.js';
 import { ApiError, ErrorCode } from '../../../utils/error-codes.js';
+import { stripImageSizeSuffix } from '../../order-image-cache.js';
 
 const GW = 'https://gw.open.1688.com/openapi';
 const API_ORDER_LIST = '1/com.alibaba.trade/alibaba.trade.getBuyerOrderList';
@@ -182,7 +183,8 @@ function normalizeOpenApiOrder(o, account) {
       spec: (Array.isArray(e.skuInfos) ? e.skuInfos : []).map((s) => `${s.name}:${s.value}`).join(' '),
       price: Number(e.price || 0).toFixed(2),
       number: Number(e.quantity || 1),
-      thumbUrl: String((e.productImgUrl || [])[0] || '').replace(/^http:/, 'https:'),
+      // 2026-10-17:去掉 1688 缩略图尺寸后缀,落库即原图
+      thumbUrl: stripImageSizeSuffix(String((e.productImgUrl || [])[0] || '').replace(/^http:/, 'https:')),
     })),
   };
 }

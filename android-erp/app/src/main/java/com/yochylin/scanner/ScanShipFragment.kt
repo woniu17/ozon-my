@@ -235,6 +235,8 @@ class ScanShipFragment : Fragment() {
     }
 
     private fun doShipPackage(pkg: Pkg) {
+        // 备货接口可能耗时较长(2026-10-17):模态提示"正在备货中",结束后自动关闭
+        val dlg = requireContext().showBlockingLoading("正在备货中，请稍候…")
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to pkg.id)).asJsonObject
@@ -247,6 +249,8 @@ class ScanShipFragment : Fragment() {
                 doSearch(currentKeyword)
             } catch (e: Exception) {
                 handleError(e)
+            } finally {
+                runCatching { dlg.dismiss() }
             }
         }
     }

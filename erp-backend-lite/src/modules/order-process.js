@@ -29,11 +29,13 @@ import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
 import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
 import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus, syncPurchaseLogisticsForPackage } from '../services/purchase-logistics-poller.js';
-import { packageLabel, postingFbsGet, postingFbsShip } from '../services/ozon-opi.js';
+import { packageLabel, postingFbsGet, postingFbsShip, productInfoList, productStocks } from '../services/ozon-opi.js';
+import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { notifyPostingEvent } from '../services/webhook/feishu-notify.js';
 import { translateCancelReason } from '../services/cancel-reason-i18n.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate, getBydayStats, getSettledEligiblePackageIds } from '../db/dao/sqlite/accrual-dao.js';
+import { stripImageSizeSuffix } from '../services/order-image-cache.js';
 import { runAccrualByDaySync } from '../services/accrual-byday-sync.js';
 import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
 import {
@@ -498,6 +500,66 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
   }
 });
 
+// GET /admin/api/order-process/detail/:id/stock —— 查询订单商品库存(2026-10-17)
+// 按包裹内商品 offer_id 调 Ozon /v3/product/info/list,取当前店铺仓库的 present/reserved
+router.get('/admin/api/order-process/detail/:id/stock', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const detail = orderPackageDao.getPackageDetail(id);
+    if (!detail) return res.status(404).json({ ok: false, message: '包裹不存在' });
+    const storeId = detail.package.storeId;
+    const store = config.loadStores().find((s) => s.id === storeId);
+    if (!store) return res.json(ok({ stocks: [] })); // 店铺已下架等:返回空,前端不展示库存
+    const items = detail.items || [];
+    const offerIds = items.map((it) => it.offerId).filter(Boolean);
+    if (!offerIds.length) return res.json(ok({ stocks: [] }));
+    const r = await productInfoList(store, offerIds);
+    const wid = Number(store.warehouse_id);
+    const stocks = (r?.items || []).map((it) => {
+      const s = (Array.isArray(it.stocks) ? it.stocks : []).find((st) => Number(st.warehouse_id) === wid) || {};
+      const present = Number(s.present) || 0;
+      const reserved = Number(s.reserved) || 0;
+      return {
+        sku: it.sku,
+        offerId: it.offer_id,
+        productId: String(it.id || ''),
+        present,
+        reserved,
+        total: present + reserved,
+      };
+    });
+    res.json(ok({ stocks }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /admin/api/order-process/detail/:id/stock —— 修改订单商品库存(2026-10-17)
+// body: { offerId, stock }  → 调 Ozon /v2/products/stocks 更新当前店铺仓库库存
+router.post('/admin/api/order-process/detail/:id/stock', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const offerId = String(req.body?.offerId || '');
+    const stock = Number(req.body?.stock);
+    if (!offerId) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'offerId 必填'));
+    if (!Number.isFinite(stock) || stock < 0) return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'stock 必须为非负整数'));
+    const detail = orderPackageDao.getPackageDetail(id);
+    if (!detail) return res.status(404).json({ ok: false, message: '包裹不存在' });
+    const storeId = detail.package.storeId;
+    const store = config.loadStores().find((s) => s.id === storeId);
+    if (!store) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '店铺不存在: ' + storeId));
+    // 先查 product_id(/v2/products/stocks 需要 product_id + offer_id)
+    const pInfoResp = await productInfoList(store, [offerId]);
+    const pInfo = pInfoResp?.items?.[0];
+    if (!pInfo) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, `Ozon 未查到商品 offer_id=${offerId}`));
+    const upd = await productStocks(store, [{ offerId, productId: Number(pInfo.id), stock: Math.round(stock) }]);
+    const updated = upd?.result?.[0]?.updated ?? false;
+    res.json(ok({ updated }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ── 查询采购单已关联包裹(拼单提交前提示用)─────────────────
 router.get('/admin/api/order-process/purchase/lookup', (req, res, next) => {
   try {
@@ -576,7 +638,10 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
       return res.status(400).json({ ok: false, message: '采购单号一次只能填写一个(检测到分隔符或多个单号)，多个采购单请分次提交' });
     }
     // 平台订单商品:过滤出有 thumbUrl 的(与 enrichPurchaseItems 口径一致),序列化后随 upsert 写入
-    const goodsArr = (Array.isArray(b.platformGoods) ? b.platformGoods : []).filter((g) => g && g.thumbUrl);
+    // 2026-10-17:落库前统一去掉平台缩略图尺寸后缀(1688 .80x80.jpg → 原图),保证采购主图清晰
+    const goodsArr = (Array.isArray(b.platformGoods) ? b.platformGoods : [])
+      .filter((g) => g && g.thumbUrl)
+      .map((g) => ({ ...g, thumbUrl: stripImageSizeSuffix(g.thumbUrl) }));
     const itemsJson = goodsArr.length ? JSON.stringify(goodsArr) : null;
     const r = orderPackageDao.submitPurchase({
       packageId,

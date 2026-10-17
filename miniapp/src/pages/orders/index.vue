@@ -46,6 +46,20 @@
         <text class="sort-hint">揽收=国际物流商揽收,无此时间排最后</text>
       </view>
 
+      <!-- 快速筛选(2026-10-17 与 web/安卓同步):仅待打单发货 tab;两键可同时启用(并集),显示各自命中数 -->
+      <view v-if="activeTab === 'waitShip'" class="quick-bar">
+        <text
+          class="quick-chip"
+          :class="{ on: purchaseUnshippedHours > 0 }"
+          @click="toggleQuickFilter('purchase')"
+        >采购超24h未发货<text v-if="quickCounts.purchaseUnshipped" class="quick-cnt">({{ quickCounts.purchaseUnshipped }})</text></text>
+        <text
+          class="quick-chip"
+          :class="{ on: logisticsStaleHours > 0 }"
+          @click="toggleQuickFilter('logistics')"
+        >物流超24h未揽收<text v-if="quickCounts.logisticsStale" class="quick-cnt">({{ quickCounts.logisticsStale }})</text></text>
+      </view>
+
       <!-- 批量录采购(2026-09-28 与 web 端同步):勾选包裹后进入批量关联页 -->
       <view class="batch-bar">
         <view class="batch-chk" @click="toggleSelAll">
@@ -209,6 +223,16 @@ const page = ref(1);
 const total = ref(0);
 const loading = ref(false);
 const loadingMore = ref(false);
+
+// ── 快速筛选(2026-10-17,与 web/安卓同步):采购超24h未发货 / 物流超24h未揽收,可同时启用(并集) ──
+const purchaseUnshippedHours = ref(0);
+const logisticsStaleHours = ref(0);
+const quickCounts = ref({});
+function toggleQuickFilter(kind) {
+  if (kind === 'purchase') purchaseUnshippedHours.value = purchaseUnshippedHours.value > 0 ? 0 : 24;
+  else logisticsStaleHours.value = logisticsStaleHours.value > 0 ? 0 : 24;
+  reload();
+}
 
 // ── 批量录采购(2026-09-28 与 web 端同步):行勾选 + 全选本页 + 批量关联入口 ──
 const batchSel = ref(new Set());
@@ -389,12 +413,15 @@ async function loadList() {
       globalMode: globalMode.value,
       sortBy,
       sortOrder,
+      purchaseUnshippedHours: purchaseUnshippedHours.value || 0,
+      logisticsStaleHours: logisticsStaleHours.value || 0,
       page: page.value,
       pageSize: PAGE_SIZE,
     });
     const list = data?.packages || [];
     rows.value = page.value === 1 ? list : rows.value.concat(list);
     total.value = data?.total || 0;
+    quickCounts.value = data?.quickCounts || {};
   } catch (e) {
     if (page.value === 1) rows.value = [];
     throw e; // 交调用方处理(触底加载回退页码)
@@ -614,6 +641,30 @@ onReachBottom(async () => {
   align-items: center;
   justify-content: space-between;
   margin-top: 12rpx;
+}
+
+/* 快速筛选(2026-10-17 与 web/安卓同步):采购超24h未发货 / 物流超24h未揽收 */
+.quick-bar {
+  display: flex;
+  align-items: center;
+  margin-top: 12rpx;
+  gap: 12rpx;
+}
+.quick-chip {
+  display: inline-flex;
+  align-items: center;
+  background: #f2f3f5;
+  border-radius: 999rpx;
+  padding: 8rpx 22rpx;
+  font-size: 24rpx;
+  color: #4e5969;
+}
+.quick-chip.on {
+  background: #e8f0ff;
+  color: #165dff;
+}
+.quick-cnt {
+  margin-left: 4rpx;
 }
 
 .batch-chk {

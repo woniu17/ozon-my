@@ -90,6 +90,18 @@ export function withImageRequestContext(req, next) {
   return imageCtx.run({ baseUrl: resolveImageBaseUrl(req) }, next);
 }
 
+/**
+ * 去掉平台图片 URL 中的尺寸后缀取原图(2026-10-17,1688 采购主图过小问题)。
+ * 1688/淘宝 alicdn 缩略图 URL 形如 "...-cib.80x80.jpg"(也有 _100x100.jpg / -200x200.webp),
+ * 去掉其中 "<分隔符><宽>x<高>" 即可得到原图(实测 80x80 → 1920x1920)。
+ * 非图片扩展名或未命中时原样返回,保证其它平台/原图 URL 不受影响。
+ */
+export function stripImageSizeSuffix(url) {
+  const s = String(url || '').trim();
+  if (!s) return s;
+  return s.replace(/([._-])\d{1,4}x\d{1,4}(?=\.(?:jpe?g|png|webp)(?:$|[?#]))/i, '');
+}
+
 /** 下载超时/大小上限 */
 const HEADERS_TIMEOUT_MS = 10_000;
 const BODY_TIMEOUT_MS = 30_000;

@@ -17,6 +17,7 @@ import { ApiError, ErrorCode } from '../../../utils/error-codes.js';
 import { withPage, readBuyerIdentity } from '../browser-manager.js';
 import { mtopSign, tokenFromCookies } from '../mtop-sign.js';
 import { postFormInPage } from '../page-fetch.js';
+import { stripImageSizeSuffix } from '../../order-image-cache.js';
 
 const ALI_API = 'https://h5api.m.1688.com/h5/mtop.1688.trading.dataline.service/1.0/';
 const ALI_APP_KEY = '12574478';
@@ -54,7 +55,8 @@ function normalize1688Order(o) {
       spec: ((e.specInfo && e.specInfo.specItems) || []).map((i) => `${i.specName}:${i.specValue}`).join(' '),
       price: toYuan(e.price),
       number: Number((e.quantity && (e.quantity.realAmountStr || e.quantity.calAmount)) || 1),
-      thumbUrl: (e.mainSummImageUrl || '').replace(/^http:/, 'https:'),
+      // 2026-10-17:去掉 1688 缩略图尺寸后缀(.80x80.jpg 等),落库即原图(实测 80x80 → 1920x1920)
+      thumbUrl: stripImageSizeSuffix((e.mainSummImageUrl || '').replace(/^http:/, 'https:')),
     })),
   };
 }

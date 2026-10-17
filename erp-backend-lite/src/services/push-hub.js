@@ -23,6 +23,26 @@ const DEFAULT_TIMEOUT_MS = 25_000;
 const MAX_TIMEOUT_MS = 30_000;
 
 /**
+ * 按货件号查包裹 id（2026-10-17 安卓通知点击跳转订单详情用）。
+ * op_package 与 op_ozon_order 通过 ozon_order_id 关联,posting_number 即货件号。
+ */
+function resolvePackageId(postingNumber) {
+  try {
+    const row = getDb()
+      .prepare(
+        `SELECT p.id AS package_id
+         FROM op_package p
+         JOIN op_ozon_order o ON o.id = p.ozon_order_id
+         WHERE o.posting_number = ?`
+      )
+      .get(postingNumber);
+    return row ? String(row.package_id) : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+/**
  * 查货件商品首图直链（2026-10-16 安卓通知大图用）。
  * 与 records 接口同源：op_ozon_order_item JOIN product_data_cache，
  * primary_image[0] 优先、images[0] 兜底（ir-20.ozonstatic.cn 直链）。
@@ -199,6 +219,8 @@ export function publishPostingEvent(messageType, payload) {
     machineName: config.machineName,
     // 商品首图直链(2026-10-16 通知大图用,可能为 null,安卓端失败降级为纯文本通知)
     productImageUrl: resolveProductImageUrl(postingNumber),
+    // 包裹 id(2026-10-17 通知点击跳转订单详情用,空则安卓端退化为打开订单列表)
+    packageId: resolvePackageId(postingNumber),
     occurredAt: new Date().toISOString(),
   };
 

@@ -25,6 +25,16 @@ export function getOrderDetail(packageId) {
   return request.get('/admin/api/order-process/detail/' + encodeURIComponent(packageId));
 }
 
+// 订单商品库存(2026-10-17):返回 { stocks: [{ sku, offerId, productId, present, reserved, total }] }
+export function getOrderDetailStock(packageId) {
+  return request.get('/admin/api/order-process/detail/' + encodeURIComponent(packageId) + '/stock');
+}
+
+// 修改订单商品库存(2026-10-17):body { offerId, stock }
+export function setOrderItemStock(packageId, body) {
+  return request.post('/admin/api/order-process/detail/' + encodeURIComponent(packageId) + '/stock', body);
+}
+
 // 提交采购信息(模式B:金额+国内快递单号;提交即流转待打单发货)
 export function submitPurchase(body) {
   return request.post('/admin/api/order-process/purchase', body);
