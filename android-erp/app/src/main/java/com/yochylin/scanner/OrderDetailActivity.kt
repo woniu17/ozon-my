@@ -25,7 +25,10 @@ import com.yochylin.scanner.adapter.countdownText
 import com.yochylin.scanner.adapter.fmtMoney
 import com.yochylin.scanner.adapter.fmtNum
 import com.yochylin.scanner.adapter.fmtTime
+import com.yochylin.scanner.adapter.fmtDurationHours
 import com.yochylin.scanner.adapter.fmtTimeWithWeekday
+import com.yochylin.scanner.adapter.hoursSince
+import com.yochylin.scanner.adapter.parseIsoTime
 import com.yochylin.scanner.adapter.platformLabel
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
@@ -515,7 +518,46 @@ class OrderDetailActivity : ComponentActivity() {
             card.addView(logi)
         }
 
+        // 采购超24h未发货 / 物流超24h未揽收 提醒(2026-10-17,对齐列表页,时长可读)
+        if (l.poStatus == "wait_pay" || l.poStatus == "wait_send") {
+            val unshippedHours = hoursSince(parseIsoTime(l.poPayAt ?: l.poGmtCreate))
+            if (unshippedHours > 24) {
+                card.addView(
+                    alertText(
+                        "⚠ 采购下单 ${fmtDurationHours(unshippedHours)} 未发货",
+                        0xFFFFECE8.toInt(), 0xFFF53F3F.toInt()
+                    )
+                )
+            }
+        }
+        if (!l.poLogisticsNo.isNullOrBlank()) {
+            val traceJson = l.traceJson ?: ""
+            if (!traceJson.contains("揽收") && !traceJson.contains("已取件")) {
+                val staleHours = hoursSince(parseIsoTime(l.poSendAt ?: l.poGmtCreate))
+                if (staleHours > 24) {
+                    card.addView(
+                        alertText(
+                            "🚚 物流 ${fmtDurationHours(staleHours)} 未揽收",
+                            0xFFFFF7E8.toInt(), 0xFFFF7D00.toInt()
+                        )
+                    )
+                }
+            }
+        }
+
         return card
+    }
+
+    /** 超时提醒 TextView(详情页采购卡片,2026-10-17) */
+    private fun alertText(text: String, bgColor: Int, fgColor: Int): TextView = TextView(this).apply {
+        this.text = text
+        setTextColor(fgColor)
+        textSize = 11f
+        setRoundedBg(bgColor, 6f)
+        setPadding(dp(8), dp(4), dp(8), dp(4))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(6)
+        }
     }
 
     /** 打开平台 APP：优先直接唤起 APP 的 deep link scheme（不经过浏览器），失败才用浏览器打开 H5 */

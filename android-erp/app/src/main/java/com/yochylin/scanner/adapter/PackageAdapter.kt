@@ -513,7 +513,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 hoursSince(parseIsoTime(l.poPayAt ?: l.poGmtCreate))
             } else 0L
             if (unshippedHours > 24) {
-                unshippedAlert.text = "⚠ 采购下单 ${unshippedHours}h 未发货"
+                unshippedAlert.text = "⚠ 采购下单 ${fmtDurationHours(unshippedHours)} 未发货"
                 unshippedAlert.setRoundedBg(0xFFFFECE8.toInt(), 6f)
                 unshippedAlert.visibility = View.VISIBLE
             } else {
@@ -526,7 +526,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 hoursSince(parseIsoTime(l.poSendAt ?: l.poGmtCreate))
             } else 0L
             if (staleHours > 24) {
-                staleAlert.text = "🚚 物流 ${staleHours}h 未揽收"
+                staleAlert.text = "🚚 物流 ${fmtDurationHours(staleHours)} 未揽收"
                 staleAlert.setRoundedBg(0xFFFFF7E8.toInt(), 6f)
                 staleAlert.visibility = View.VISIBLE
             } else {
@@ -699,6 +699,18 @@ fun parseIsoTime(iso: String?): Long? {
 fun hoursSince(ms: Long?): Long {
     if (ms == null) return 0
     return ((System.currentTimeMillis() - ms) / 3600000).coerceAtLeast(0)
+}
+
+/** 小时数 → 可读时长(2026-10-17):27 → "1天3小时";48 → "2天";5 → "5小时" */
+fun fmtDurationHours(h: Long): String {
+    if (h <= 0) return "${h}小时"
+    val days = h / 24
+    val hours = h % 24
+    return when {
+        days > 0 && hours > 0 -> "${days}天${hours}小时"
+        days > 0 -> "${days}天"
+        else -> "${hours}小时"
+    }
 }
 
 fun fmtTime(iso: String?): String {
