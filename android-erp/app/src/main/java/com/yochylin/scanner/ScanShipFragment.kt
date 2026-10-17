@@ -138,6 +138,8 @@ class ScanShipFragment : Fragment() {
             if (changed) {
                 toast(if (Session.useIntranet) "检测到内网，已自动切换" else "内网不可达，已使用公网")
             }
+            // 网络模式可能已切换，重新加载记录，避免首次用错 base URL 导致计数为 0
+            loadRecords()
         }
         searchInput.setOnEditorActionListener { _, _, _ ->
             doSearch(searchInput.text.toString())
@@ -189,13 +191,23 @@ class ScanShipFragment : Fragment() {
     private fun loadRecords() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val data = Api.get(
-                    "/admin/api/order-process/scan-ship/records",
-                    mapOf("day" to currentTab, "page" to 1, "pageSize" to 10)
+                // 同时拉今日/昨日(2026-10-17):原来只拉当前 tab,
+                // 未点过的另一个 tab 计数永远为 0
+                val todayResp = Api.parse<PackageListResponse>(
+                    Api.get(
+                        "/admin/api/order-process/scan-ship/records",
+                        mapOf("day" to "today", "page" to 1, "pageSize" to 10)
+                    )
                 )
-                val resp = Api.parse<PackageListResponse>(data)
-                records = resp.packages
-                if (currentTab == "today") countToday = resp.total else countYesterday = resp.total
+                val yesterdayResp = Api.parse<PackageListResponse>(
+                    Api.get(
+                        "/admin/api/order-process/scan-ship/records",
+                        mapOf("day" to "yesterday", "page" to 1, "pageSize" to 10)
+                    )
+                )
+                countToday = todayResp.total
+                countYesterday = yesterdayResp.total
+                records = if (currentTab == "today") todayResp.packages else yesterdayResp.packages
                 refreshList()
             } catch (e: Exception) {
                 // 记录加载失败静默，不影响主流程
