@@ -308,6 +308,8 @@ class NewOrderNotifyService : Service() {
                 }
                 "STATE_CHANGED" -> {
                     val subState = ev.optString("subState")
+                    // 到达取货点不推送安卓(2026-10-17,用户要求);不消费事件,后续恢复通知无需清理去重集合
+                    if (subState == "pickup_point") continue
                     if (!tryMarkNotified("STATE_CHANGED:$subState:$postingNumber")) continue
                     val label = when (subState) {
                         "received" -> "已签收"

@@ -19,8 +19,8 @@ android {
         applicationId "com.yochylin.scanner"
         minSdk 24
         targetSdk 35
-        versionCode 66
-        versionName "5.24"
+        versionCode 67
+        versionName "5.25"
     }
 
     signingConfigs {

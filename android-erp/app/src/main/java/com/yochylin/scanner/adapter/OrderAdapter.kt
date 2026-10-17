@@ -2,7 +2,12 @@ package com.yochylin.scanner.adapter
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Typeface
 import android.text.InputType
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -308,9 +313,22 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                 skuText?.takeIf { it.isNotBlank() }?.let { callbacks.onSearchSku(it) }
             }
             offerTv.text = "Offer ID:${offerId ?: "—"}"
-            priceTv.text = buildString {
+            val qty = quantity ?: 0.0
+            val qtyText = fmtNum(quantity)
+            val base = buildString {
                 append("单价 ").append(fmtMoney(price))
-                append(" ×").append(fmtNum(quantity))
+                append(" ×").append(qtyText)
+            }
+            if (qty > 1) {
+                // 多件商品:数量红色加粗,字号加大一倍(2026-10-17)
+                priceTv.text = SpannableString(base).apply {
+                    val start = base.length - qtyText.length
+                    setSpan(StyleSpan(Typeface.BOLD), start, base.length, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(ForegroundColorSpan(Color.parseColor("#F53F3F")), start, base.length, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(RelativeSizeSpan(2f), start, base.length, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            } else {
+                priceTv.text = base
             }
 
             // 复制小图标(对齐 H5:SKU / Offer ID)
