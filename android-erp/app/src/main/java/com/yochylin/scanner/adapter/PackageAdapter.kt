@@ -505,6 +505,34 @@ class PackageAdapter(private val callbacks: Callbacks) :
             copyLogistics.visibility = if (hasLogisticsNo) View.VISIBLE else View.GONE
             copyLogistics.setOnClickListener { l.poLogisticsNo?.let { callbacks.onCopy(it, "快递单号") } }
 
+            // 采购超24h未发货 / 物流超24h未更新 高亮(2026-10-17,对齐 Web 待打单发货快速筛选)
+            val unshippedAlert: TextView = row.findViewById(R.id.purchaseUnshippedAlert)
+            val staleAlert: TextView = row.findViewById(R.id.logisticsStaleAlert)
+
+            val unshippedHours = if (l.poStatus == "wait_pay" || l.poStatus == "wait_send") {
+                hoursSince(parseIsoTime(l.poPayAt ?: l.poGmtCreate))
+            } else 0L
+            if (unshippedHours > 24) {
+                unshippedAlert.text = "⚠ 采购下单 ${unshippedHours}h 未发货"
+                unshippedAlert.setRoundedBg(0xFFFFECE8.toInt(), 6f)
+                unshippedAlert.visibility = View.VISIBLE
+            } else {
+                unshippedAlert.visibility = View.GONE
+            }
+
+            // 未揽收口径(2026-10-17):轨迹含"揽收"/"已取件"视为已揽收,排除;否则从发货/创建时间起算
+            val traceJson = l.traceJson ?: ""
+            val staleHours = if (hasLogisticsNo && !traceJson.contains("揽收") && !traceJson.contains("已取件")) {
+                hoursSince(parseIsoTime(l.poSendAt ?: l.poGmtCreate))
+            } else 0L
+            if (staleHours > 24) {
+                staleAlert.text = "🚚 物流 ${staleHours}h 未揽收"
+                staleAlert.setRoundedBg(0xFFFFF7E8.toInt(), 6f)
+                staleAlert.visibility = View.VISIBLE
+            } else {
+                staleAlert.visibility = View.GONE
+            }
+
             return row
         }
 
@@ -665,6 +693,12 @@ fun parseIsoTime(iso: String?): Long? {
         }
     }
     return null
+}
+
+/** ISO 时间距今小时数(向下取整,最小 0);解析失败返回 0 */
+fun hoursSince(ms: Long?): Long {
+    if (ms == null) return 0
+    return ((System.currentTimeMillis() - ms) / 3600000).coerceAtLeast(0)
 }
 
 fun fmtTime(iso: String?): String {

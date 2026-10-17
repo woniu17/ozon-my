@@ -248,6 +248,8 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       globalMode: q.globalMode,
       sortBy: q.sortBy,         // order|delivering|return(2026-09-20)
       sortOrder: q.sortOrder,   // desc|asc(2026-09-20)
+      purchaseUnshippedHours: q.purchaseUnshippedHours, // 采购超 N h 未发货(2026-10-17)
+      logisticsStaleHours: q.logisticsStaleHours,      // 物流超 N h 未更新(2026-10-17)
       page: q.page,
       pageSize: q.pageSize,
     });

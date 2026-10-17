@@ -843,15 +843,19 @@ function buildPackageWhere(filters = {}) {
         AND (unixepoch() - unixepoch(COALESCE(po.pay_at, po.gmt_create))) > ${secs}
     )`);
   }
-  // 2) 物流超 N 小时未更新:存在采购单有物流单号且最新轨迹时间距今 > N 小时
+  // 2) 物流超 N 小时未揽收(2026-10-17 口径修正):采购单有物流单号,
+  //    但至今未出现揽收/已取件轨迹节点(未揽收),且从发货/创建时间起距今 > N 小时。
+  //    已揽收(轨迹含"揽收"/"已取件")的单即使轨迹不再更新也排除在外。
   if (filters.logisticsStaleHours > 0) {
     const secs = (Number(filters.logisticsStaleHours) || 24) * 3600;
     where.push(`p.id IN (
       SELECT pl.package_id FROM op_purchase_link pl
       JOIN op_purchase_order po ON po.id = pl.purchase_order_id
       WHERE po.logistics_no IS NOT NULL
-        AND po.last_trace_at IS NOT NULL
-        AND (unixepoch() - unixepoch(po.last_trace_at)) > ${secs}
+        AND (po.trace_json IS NULL OR po.trace_json = ''
+             OR (po.trace_json NOT LIKE '%揽收%' AND po.trace_json NOT LIKE '%已取件%'))
+        AND COALESCE(po.send_at, po.gmt_create) IS NOT NULL
+        AND (unixepoch() - unixepoch(COALESCE(po.send_at, po.gmt_create))) > ${secs}
     )`);
   }
   // 取消发起者筛选(仅 cancelled tab 有意义):前端传 client/ozon/seller
@@ -1173,7 +1177,7 @@ function getPurchasesByPackageIds(packageIds) {
               po.seller_name, po.buyer_account, po.buyer_user_id, po.logistics_company AS po_logistics_company,
               po.logistics_no AS po_logistics_no, po.link_status, po.items_json AS po_items_json,
               po.last_trace_at AS po_last_trace_at, po.last_trace_desc AS po_last_trace_desc, po.trace_json AS po_trace_json,
-              po.pay_at AS po_pay_at, po.gmt_create AS po_gmt_create
+              po.pay_at AS po_pay_at, po.gmt_create AS po_gmt_create, po.send_at AS po_send_at
        FROM op_purchase_link pl
        JOIN op_purchase_order po ON po.id = pl.purchase_order_id
        WHERE pl.package_id IN (${ph})`
@@ -1211,6 +1215,7 @@ function getPurchasesByPackageIds(packageIds) {
         poLogisticsNo: l.po_logistics_no,
         poPayAt: l.po_pay_at,
         poGmtCreate: l.po_gmt_create,
+        poSendAt: l.po_send_at,
         lastTraceAt: l.po_last_trace_at,
         lastTraceDesc: l.po_last_trace_desc,
         traceJson: l.po_trace_json,

@@ -36,6 +36,7 @@ import com.yochylin.scanner.api.optInt
 import com.yochylin.scanner.api.optString
 import com.yochylin.scanner.model.PackageListResponse
 import com.yochylin.scanner.model.Pkg
+import com.yochylin.scanner.setRoundedBg
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -51,6 +52,8 @@ class OrderListFragment : Fragment() {
         private const val STATE_GLOBAL_ACTIVE = "state_global_active"
         private const val STATE_GLOBAL_MODE = "state_global_mode"
         private const val STATE_CURRENT_SORT = "state_current_sort"
+        private const val STATE_PURCHASE_UNSHIPPED = "state_purchase_unshipped"
+        private const val STATE_LOGISTICS_STALE = "state_logistics_stale"
 
         private val TABS = listOf(
             "all" to "全部",
@@ -92,6 +95,9 @@ class OrderListFragment : Fragment() {
 
     private lateinit var searchInput: EditText
     private lateinit var tabContainer: LinearLayout
+    private lateinit var quickFilterBar: LinearLayout
+    private lateinit var quickPurchaseUnshipped: TextView
+    private lateinit var quickLogisticsStale: TextView
     private lateinit var sortText: TextView
     private lateinit var bannerText: TextView
     private lateinit var progressBar: ProgressBar
@@ -210,6 +216,9 @@ class OrderListFragment : Fragment() {
     private var globalActive = false
     private var globalMode = "ss"
     private var currentSort = "order_desc"
+    /** 待打单发货快速筛选(2026-10-17):>0 表示启用 24h 阈值,与后端 purchaseUnshippedHours/logisticsStaleHours 对应 */
+    private var purchaseUnshippedHours = 0
+    private var logisticsStaleHours = 0
 
     private val rows = mutableListOf<Pkg>()
     private var total = 0
@@ -241,12 +250,19 @@ class OrderListFragment : Fragment() {
             globalActive = savedInstanceState.getBoolean(STATE_GLOBAL_ACTIVE, false)
             globalMode = savedInstanceState.getString(STATE_GLOBAL_MODE, "ss") ?: "ss"
             currentSort = savedInstanceState.getString(STATE_CURRENT_SORT, "order_desc") ?: "order_desc"
+            purchaseUnshippedHours = savedInstanceState.getInt(STATE_PURCHASE_UNSHIPPED, 0)
+            logisticsStaleHours = savedInstanceState.getInt(STATE_LOGISTICS_STALE, 0)
         }
 
         searchInput = view.findViewById(R.id.orderSearchInput)
         searchInput.setText(keyword)
         setupClearButton()
         tabContainer = view.findViewById(R.id.tabContainer)
+        quickFilterBar = view.findViewById(R.id.quickFilterBar)
+        quickPurchaseUnshipped = view.findViewById(R.id.quickPurchaseUnshipped)
+        quickLogisticsStale = view.findViewById(R.id.quickLogisticsStale)
+        quickPurchaseUnshipped.setOnClickListener { toggleQuickFilter("purchase") }
+        quickLogisticsStale.setOnClickListener { toggleQuickFilter("logistics") }
         sortText = view.findViewById(R.id.sortText)
         bannerText = view.findViewById(R.id.orderBannerText)
         progressBar = view.findViewById(R.id.orderProgress)
@@ -286,6 +302,7 @@ class OrderListFragment : Fragment() {
 
         buildTabs()
         loadTabs()
+        updateQuickFilterUi()
         reload()
     }
 
@@ -308,6 +325,7 @@ class OrderListFragment : Fragment() {
                     globalMode = "ss"
                     refreshTabStyles()
                     loadTabs()
+                    updateQuickFilterUi()
                     reload()
                 }
             }
@@ -337,6 +355,8 @@ class OrderListFragment : Fragment() {
         outState.putBoolean(STATE_GLOBAL_ACTIVE, globalActive)
         outState.putString(STATE_GLOBAL_MODE, globalMode)
         outState.putString(STATE_CURRENT_SORT, currentSort)
+        outState.putInt(STATE_PURCHASE_UNSHIPPED, purchaseUnshippedHours)
+        outState.putInt(STATE_LOGISTICS_STALE, logisticsStaleHours)
         super.onSaveInstanceState(outState)
     }
 
@@ -418,6 +438,30 @@ class OrderListFragment : Fragment() {
             .show()
     }
 
+    // ── 待打单发货快速筛选(2026-10-17)──
+    private fun toggleQuickFilter(kind: String) {
+        if (kind == "purchase") {
+            purchaseUnshippedHours = if (purchaseUnshippedHours > 0) 0 else 24
+        } else {
+            logisticsStaleHours = if (logisticsStaleHours > 0) 0 else 24
+        }
+        updateQuickFilterUi()
+        reload()
+    }
+
+    private fun updateQuickFilterUi() {
+        if (!::quickFilterBar.isInitialized) return
+        val show = activeTab == "waitShip"
+        quickFilterBar.visibility = if (show) View.VISIBLE else View.GONE
+        renderQuickChip(quickPurchaseUnshipped, purchaseUnshippedHours > 0)
+        renderQuickChip(quickLogisticsStale, logisticsStaleHours > 0)
+    }
+
+    private fun renderQuickChip(tv: TextView, on: Boolean) {
+        tv.setTextColor(if (on) Color.parseColor("#165dff") else Color.parseColor("#4e5969"))
+        tv.setRoundedBg(if (on) 0xFFE8F0FF.toInt() else 0xFFF2F3F5.toInt(), 12f)
+    }
+
     // ── 列表 ──
     private fun reload() {
         page = 1
@@ -456,6 +500,8 @@ class OrderListFragment : Fragment() {
                         "globalMode" to globalMode,
                         "sortBy" to sortBy,
                         "sortOrder" to sortOrder,
+                        "purchaseUnshippedHours" to (if (purchaseUnshippedHours > 0) 24 else 0),
+                        "logisticsStaleHours" to (if (logisticsStaleHours > 0) 24 else 0),
                         "page" to page,
                         "pageSize" to PAGE_SIZE
                     )

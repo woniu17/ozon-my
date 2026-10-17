@@ -61,7 +61,7 @@ const filters = reactive({
   arrived: '',        // '' | '0' | '1'
   cancelInitiator: '',  // '' | 'client' | 'ozon' | 'seller'(仅已取消 tab 用)
   purchaseUnshippedHours: 0, // 0=关;24=采购下单超24h未发货(待打单发货快速筛选,2026-10-17)
-  logisticsStaleHours: 0,    // 0=关;24=物流超24h未更新(待打单发货快速筛选,2026-10-17)
+  logisticsStaleHours: 0,    // 0=关;24=物流超24h未揽收(待打单发货快速筛选,2026-10-17)
 });
 // ── 排序选项(2026-09-20)────────────────────────────────────
 // key 对应后端 sortBy 白名单;delivering=揽收时间(国际物流商揽收)
@@ -404,10 +404,15 @@ function purchaseUnshippedHoursOf(l) {
   return h > 24 ? Math.floor(h) : 0;
 }
 
-// 物流超 24h 未更新:采购单有物流单号且最新轨迹时间距今小时数;无单号/无轨迹返回 0
+// 物流超 24h 未揽收(2026-10-17 口径修正):采购单有物流单号,
+// 但轨迹中从未出现"揽收"/"已取件"节点(已揽收排除),且从发货/创建时间起距今 >24h;无单号/已揽收返回 0
 function logisticsStaleHoursOf(l) {
-  if (!l || !l.poLogisticsNo || !l.lastTraceAt) return 0;
-  const h = (Date.now() - new Date(l.lastTraceAt).getTime()) / 3600000;
+  if (!l || !l.poLogisticsNo) return 0;
+  const trace = l.traceJson ? String(l.traceJson) : '';
+  if (trace.includes('揽收') || trace.includes('已取件')) return 0; // 已揽收,不算停滞
+  const start = l.poSendAt || l.poGmtCreate;
+  if (!start) return 0;
+  const h = (Date.now() - new Date(start).getTime()) / 3600000;
   return h > 24 ? Math.floor(h) : 0;
 }
 
@@ -3206,7 +3211,7 @@ onUnmounted(() => {
           <option value="0">等收货</option>
           <option value="1">已到货</option>
         </select>
-        <!-- 快速筛选(待打单发货,2026-10-17):采购下单超24h未发货 / 物流超24h未更新,可同时启用(取交集) -->
+        <!-- 快速筛选(待打单发货,2026-10-17):采购下单超24h未发货 / 物流超24h未揽收,可同时启用(取交集) -->
         <template v-if="activeTab === 'waitShip'">
           <button
             class="quick-chip"
@@ -3217,9 +3222,9 @@ onUnmounted(() => {
           <button
             class="quick-chip"
             :class="{ on: filters.logisticsStaleHours === 24 }"
-            :title="'筛选:物流轨迹超过24小时未更新的包裹'"
+            :title="'筛选:有物流单号但从发货/创建起超过24小时仍未揽收的包裹(已揽收除外)'"
             @click="toggleQuickFilter('logisticsStaleHours')"
-          >物流超24h未更新</button>
+          >物流超24h未揽收</button>
         </template>
         <!-- 排序(2026-09-20):按 tab 动态显示可用排序键;揽收排序适用所有状态(除待处理/待打单/交运);各 tab 独立记忆 -->
         <select v-model="currentSort" class="filter-input" title="排序:揽收时间=国际物流商揽收时间(发货前取消的单无此时间,排最后)" @change="search">
@@ -3435,9 +3440,9 @@ onUnmounted(() => {
                     {{ logisticsPkgId === pkg.id ? '同步中…' : '同步' }}
                   </button>
                 </div>
-                <!-- 物流停滞高亮(2026-10-17):有物流单号且轨迹超24h未更新,橙色醒目提示 -->
-                <div v-if="logisticsStaleHoursOf(l)" class="po-alert po-alert-warn" :title="'物流单号 ' + l.poLogisticsNo + ' 最新轨迹于 ' + l.lastTraceAt + ' 更新,已超过24小时未更新'">
-                  🚚 物流 {{ logisticsStaleHoursOf(l) }}h 未更新
+                <!-- 物流停滞高亮(2026-10-17 口径修正):有物流单号但从发货/创建起超24h仍未揽收,橙色醒目提示 -->
+                <div v-if="logisticsStaleHoursOf(l)" class="po-alert po-alert-warn" :title="'物流单号 ' + l.poLogisticsNo + ' 于 ' + (l.poSendAt || l.poGmtCreate) + ' 发货/创建,已超过24小时仍未揽收'">
+                  🚚 物流 {{ logisticsStaleHoursOf(l) }}h 未揽收
                 </div>
                 <!-- 物流轨迹(1688买家版API/妙手,最新在前):默认仅最新一条,点"更多"展开其余(2026-09-17) -->
                 <div v-if="parseTraceSteps(l).length" class="trace-box trace-box-collapsed">
