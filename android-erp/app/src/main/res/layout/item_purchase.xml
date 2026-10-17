@@ -90,4 +90,14 @@
             android:visibility="gone" />
     </LinearLayout>
 
+    <!-- 最新物流轨迹摘要(2026-10-17,有轨迹时显示) -->
+    <TextView
+        android:id="@+id/purchaseTrace"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:textSize="11sp"
+        android:textColor="#9ca3af"
+        android:visibility="gone" />
+
 </LinearLayout>

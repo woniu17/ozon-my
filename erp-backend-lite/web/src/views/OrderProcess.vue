@@ -2039,6 +2039,7 @@ watch(newSelectedOrders, (sel) => {
     paymentAmount: Number(o.amount) || 0,
     logisticsCompany: o.logisticsCompany || null,
     logisticsNo: o.trackingNumber || null,
+    trackingNumber: o.trackingNumber || null, // 卡片展示平台自带物流单号(2026-10-17)
     platformGoods: o.goods || [],
   }));
   const sellers = [...new Set(sel.map((o) => o.mallName || o.sellerName).filter(Boolean))];
@@ -3371,11 +3372,20 @@ onUnmounted(() => {
                     </div>
                   </div>
                 </div>
+                <!-- 采购物流状态(始终显示,2026-10-17):有单号=公司+单号+轨迹展开;无单号=灰色"未同步"+行内同步按钮 -->
                 <div v-if="l.poLogisticsNo" class="sub po-logistics-line" :title="l.lastTraceDesc || ''">
-                  {{ l.poLogisticsCompany }}
+                  <span class="logi-label">物流</span>
+                  <span v-if="l.poLogisticsCompany">{{ l.poLogisticsCompany }}</span>
                   <a :href="trackingSearchUrl(l.poLogisticsCompany, l.poLogisticsNo)" target="_blank" rel="noopener" class="order-link" title="百度搜索物流状态">{{ l.poLogisticsNo }}</a>
                   <button v-if="parseTraceSteps(l).length > 1" class="trace-toggle" :title="'共' + parseTraceSteps(l).length + '条轨迹'" @click.stop="traceOpen[l.id] = !traceOpen[l.id]">
                     {{ traceOpen[l.id] ? '收起' : '更多' }}
+                  </button>
+                </div>
+                <div v-else class="sub po-logistics-empty" :title="'该采购单尚未同步到物流单号,点击「同步」即时拉取(' + (l.purchaseSn || '#' + l.id) + ')'">
+                  <span class="logi-label">物流</span>
+                  <span>未同步</span>
+                  <button class="logi-sync-btn" :disabled="logisticsPkgId === pkg.id" @click.stop="onSyncPackageLogistics(pkg)">
+                    {{ logisticsPkgId === pkg.id ? '同步中…' : '同步' }}
                   </button>
                 </div>
                 <!-- 物流轨迹(1688买家版API/妙手,最新在前):默认仅最新一条,点"更多"展开其余(2026-09-17) -->
@@ -3948,6 +3958,16 @@ onUnmounted(() => {
                 </label>
                 <span v-if="o._promoLoading" class="promo-loading">优惠明细加载中…</span>
                 <span v-if="o.promotionNotes && o.promotionNotes.length" class="promo-notes">活动:{{ o.promotionNotes.join('；') }}</span>
+              </div>
+
+              <!-- 国内物流(新勾选单,2026-10-17):平台订单自带物流单号,保存后随采购单写入;无单号则提示 -->
+              <div v-if="!o._existing" class="po-card-logi po-card-logi-new">
+                <template v-if="o.trackingNumber">
+                  <span v-if="o.logisticsCompany" class="po-logi-company">{{ o.logisticsCompany }}</span>
+                  <a :href="trackingSearchUrl(o.logisticsCompany, o.trackingNumber)" target="_blank" rel="noopener" class="order-link mono" title="百度搜索物流状态">{{ o.trackingNumber }}</a>
+                  <span class="po-logi-hint">(保存后随采购单)</span>
+                </template>
+                <span v-else class="po-logi-empty">平台未带物流单号</span>
               </div>
 
               <!-- 国内物流(已有单):公司+单号+录入/修改入口(闲鱼等无物流接口平台的独立补录操作,即时生效) -->
@@ -4954,6 +4974,41 @@ a.product-title:hover {
   align-items: center;
   gap: 6px;
 }
+/* 采购物流状态标签 + 未同步占位(2026-10-17) */
+.logi-label {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 10px;
+  line-height: 16px;
+}
+.po-logistics-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9ca3af;
+}
+.logi-sync-btn {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #fff;
+  color: #6b7280;
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.logi-sync-btn:hover:not(:disabled) {
+  border-color: #c7d2fe;
+  color: #4338ca;
+}
+.logi-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .trace-toggle {
   flex: none;
   padding: 0 6px;
@@ -5689,6 +5744,12 @@ a.product-title:hover {
 .po-logi-company {
   margin-right: 8px;
   color: #6b7280;
+}
+.po-logi-hint {
+  flex: none;
+  margin-left: auto;
+  font-size: 11px;
+  color: #9ca3af;
 }
 .po-logi-empty {
   flex: 1;

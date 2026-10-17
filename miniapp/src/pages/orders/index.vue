@@ -96,6 +96,18 @@
           <view class="prod-price">{{ fmtMoney(it.price) }}</view>
         </view>
 
+        <!-- 采购物流(2026-10-17):每采购单一行,有单号=公司+单号(点击复制),无单号=灰色"未同步" -->
+        <view v-if="pkg.purchaseLinks && pkg.purchaseLinks.length" class="card-logi">
+          <view v-for="l in pkg.purchaseLinks" :key="l.id" class="logi-line">
+            <text class="logi-label">物流</text>
+            <template v-if="l.poLogisticsNo">
+              <text v-if="l.poLogisticsCompany" class="logi-company">{{ l.poLogisticsCompany }}</text>
+              <text class="logi-no" @click.stop="copyText(l.poLogisticsNo, '物流单号')">{{ l.poLogisticsNo }}</text>
+            </template>
+            <text v-else class="logi-empty">未同步</text>
+          </view>
+        </view>
+
         <view class="card-foot">
           <text class="p-tag" :class="pkg.purchaseStatus === 'none' ? 'p-none' : 'p-ok'">
             {{ pkg.purchaseStatus === 'none' ? '未采购' : '已采购' }}
@@ -854,6 +866,54 @@ onReachBottom(async () => {
   color: #4e5969;
   margin-left: 12rpx;
   flex-shrink: 0;
+}
+
+/* ── 采购物流(2026-10-17) ── */
+.card-logi {
+  margin-top: 12rpx;
+  padding: 10rpx 18rpx;
+  background: #f7f8fa;
+  border-radius: 8rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+}
+
+.logi-line {
+  display: flex;
+  align-items: center;
+  font-size: 22rpx;
+  color: #4e5969;
+  min-width: 0;
+}
+
+.logi-label {
+  flex: none;
+  padding: 0 8rpx;
+  border-radius: 4rpx;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 18rpx;
+  line-height: 30rpx;
+  margin-right: 8rpx;
+}
+
+.logi-company {
+  color: #4e5969;
+  margin-right: 8rpx;
+  flex: none;
+}
+
+.logi-no {
+  color: #165dff;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logi-empty {
+  color: #a6abb3;
 }
 
 /* ── 卡片底部 ── */

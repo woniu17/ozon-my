@@ -79,6 +79,7 @@ data class PurchaseLink(
     val allocatedAmount: Double? = null,
     val poLogisticsNo: String? = null,
     val poLogisticsCompany: String? = null,
+    val lastTraceDesc: String? = null,
 )
 
 data class PurchaseItem(

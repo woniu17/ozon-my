@@ -484,12 +484,25 @@ class PackageAdapter(private val callbacks: Callbacks) :
             amountTv.text = "采购金额:${fmtMoney(l.allocatedAmount)}"
             amountTv.visibility = if (l.allocatedAmount == null) View.GONE else View.VISIBLE
 
-            val logistics = if (l.poLogisticsNo.isNullOrBlank()) "—" else "${l.poLogisticsCompany ?: ""} ${l.poLogisticsNo}".trim()
+            val hasLogisticsNo = !l.poLogisticsNo.isNullOrBlank()
+            val logistics = if (hasLogisticsNo) "${l.poLogisticsCompany ?: ""} ${l.poLogisticsNo}".trim() else "未同步"
             logisticsTv.text = "物流:$logistics"
-            logisticsTv.visibility = if (l.poLogisticsNo.isNullOrBlank()) View.GONE else View.VISIBLE
+            // 未同步显示浅灰占位,始终可见(2026-10-17)
+            logisticsTv.visibility = View.VISIBLE
+            logisticsTv.setTextColor(if (hasLogisticsNo) 0xFF86909C.toInt() else 0xFFC9CDD4.toInt())
+
+            // 最新物流轨迹摘要(2026-10-17):有物流单号且存在最新轨迹时,在物流行下方展示一行
+            val traceTv: TextView = row.findViewById(R.id.purchaseTrace)
+            val traceDesc = l.lastTraceDesc?.trim()
+            if (hasLogisticsNo && !traceDesc.isNullOrBlank()) {
+                traceTv.text = "最新:$traceDesc"
+                traceTv.visibility = View.VISIBLE
+            } else {
+                traceTv.visibility = View.GONE
+            }
 
             // 复制快递单号(对齐 H5)
-            copyLogistics.visibility = if (l.poLogisticsNo.isNullOrBlank()) View.GONE else View.VISIBLE
+            copyLogistics.visibility = if (hasLogisticsNo) View.VISIBLE else View.GONE
             copyLogistics.setOnClickListener { l.poLogisticsNo?.let { callbacks.onCopy(it, "快递单号") } }
 
             return row
