@@ -69,7 +69,12 @@ function resolveImageBaseUrl(req) {
     const host = req?.headers?.host;
     if (!host) return config.imageHostBaseUrl;
     const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-    const proto = forwardedProto || req.protocol || 'http';
+    let proto = forwardedProto || req.protocol || 'http';
+    // 兜底(2026-10-17):nginx location / 曾缺 X-Forwarded-Proto,公网 https 请求会被当成 http,
+    // 生成 http 图片 URL 被浏览器/安卓混合内容拦截;公网 17443 是 nginx SSL 端口,据此推断 https
+    if (!forwardedProto && String(host).includes(':17443')) {
+      proto = 'https';
+    }
     return `${proto}://${host}`;
   } catch {
     return config.imageHostBaseUrl;
