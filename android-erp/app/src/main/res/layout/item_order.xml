@@ -83,6 +83,14 @@
         android:layout_height="wrap_content"
         android:orientation="vertical" />
 
+    <!-- 采购物流轨迹容器(2026-10-17,动态填充 item_purchase 行) -->
+    <LinearLayout
+        android:id="@+id/oPurchaseContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone" />
+
     <!-- 底部：采购状态 + 金额/重量 -->
     <LinearLayout
         android:layout_width="match_parent"

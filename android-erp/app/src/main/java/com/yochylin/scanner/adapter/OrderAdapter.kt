@@ -16,6 +16,7 @@ import coil.load
 import com.yochylin.scanner.showImagePreview
 import com.yochylin.scanner.R
 import com.yochylin.scanner.model.Pkg
+import com.yochylin.scanner.model.PurchaseLink
 import com.yochylin.scanner.setRoundedBg
 
 private const val O_COLOR_PRIMARY = "#165dff"
@@ -73,6 +74,7 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
         private val oOpTag: TextView = view.findViewById(R.id.oOpTag)
         private val oTags: TextView = view.findViewById(R.id.oTags)
         private val oProdContainer: LinearLayout = view.findViewById(R.id.oProdContainer)
+        private val oPurchaseContainer: LinearLayout = view.findViewById(R.id.oPurchaseContainer)
         private val oPurchaseTag: TextView = view.findViewById(R.id.oPurchaseTag)
         private val oArrivedTag: TextView = view.findViewById(R.id.oArrivedTag)
         private val oFootAmts: TextView = view.findViewById(R.id.oFootAmts)
@@ -143,6 +145,9 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                 }
             }
 
+            // 采购物流轨迹(2026-10-17,对齐 Web/H5:每采购单展示物流公司+单号+最新轨迹+超时高亮)
+            bindPurchaseLogistics(pkg)
+
             // 采购状态 / 到货
             val purchaseStatus = pkg.purchaseStatus
             if (purchaseStatus == "none") {
@@ -176,6 +181,104 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
 
             // 时间行
             buildTimeRows(pkg)
+        }
+
+        private fun bindPurchaseLogistics(pkg: Pkg) {
+            val links = pkg.purchaseLinks
+            if (links.isNullOrEmpty()) {
+                oPurchaseContainer.visibility = View.GONE
+                return
+            }
+            oPurchaseContainer.removeAllViews()
+            for (l in links) {
+                oPurchaseContainer.addView(buildPurchaseRow(l))
+            }
+            oPurchaseContainer.visibility = View.VISIBLE
+        }
+
+        private fun buildPurchaseRow(l: PurchaseLink): View {
+            val row = inflater.inflate(R.layout.item_purchase, oPurchaseContainer, false) as LinearLayout
+            val platformTv: TextView = row.findViewById(R.id.purchasePlatform)
+            val snTv: TextView = row.findViewById(R.id.purchaseSn)
+            val copyTv: TextView = row.findViewById(R.id.copyPurchaseSn)
+            val copyLogistics: TextView = row.findViewById(R.id.copyLogistics)
+            val buyerTv: TextView = row.findViewById(R.id.purchaseBuyer)
+            val timeTv: TextView = row.findViewById(R.id.purchaseTime)
+            val amountTv: TextView = row.findViewById(R.id.purchaseAmount)
+            val logisticsTv: TextView = row.findViewById(R.id.purchaseLogistics)
+            val traceTv: TextView = row.findViewById(R.id.purchaseTrace)
+            val unshippedAlert: TextView = row.findViewById(R.id.purchaseUnshippedAlert)
+            val staleAlert: TextView = row.findViewById(R.id.logisticsStaleAlert)
+
+            platformTv.text = platformLabel(l.platform)
+            platformTv.visibility = if (l.platform.isNullOrBlank()) View.GONE else View.VISIBLE
+            snTv.text = l.purchaseSn ?: "#${l.id}"
+            copyTv.setOnClickListener {
+                l.purchaseSn?.let { callbacks.onCopy(it, "采购订单号") }
+            }
+
+            val count = l.items?.sumOf { (it.number ?: it.num ?: 1.0) } ?: 0.0
+            buyerTv.text = buildString {
+                append("采购买家:")
+                append(l.buyerAccount ?: "—")
+                if (count > 0) append(" · 数量 ×").append(fmtNum(count))
+            }
+            buyerTv.visibility = if (l.buyerAccount.isNullOrBlank() && count <= 0) View.GONE else View.VISIBLE
+
+            val poTime = l.poPayAt ?: l.poGmtCreate
+            timeTv.text = "采购时间:" + fmtTimeWithWeekday(poTime)
+            timeTv.visibility = if (poTime.isNullOrBlank()) View.GONE else View.VISIBLE
+
+            amountTv.text = "采购金额:${fmtMoney(l.allocatedAmount)}"
+            amountTv.visibility = if (l.allocatedAmount == null) View.GONE else View.VISIBLE
+
+            val hasLogisticsNo = !l.poLogisticsNo.isNullOrBlank()
+            val logistics = if (hasLogisticsNo) "${l.poLogisticsCompany ?: ""} ${l.poLogisticsNo}".trim() else "未同步"
+            logisticsTv.text = "物流:$logistics"
+            logisticsTv.visibility = View.VISIBLE
+            logisticsTv.setTextColor(if (hasLogisticsNo) 0xFF86909C.toInt() else 0xFFC9CDD4.toInt())
+
+            // 最新物流轨迹摘要:有物流单号且存在最新轨迹时展示一行
+            val traceDesc = l.lastTraceDesc?.trim()
+            if (hasLogisticsNo && !traceDesc.isNullOrBlank()) {
+                traceTv.text = "最新:$traceDesc"
+                traceTv.visibility = View.VISIBLE
+            } else {
+                traceTv.visibility = View.GONE
+            }
+
+            // 复制快递单号
+            copyLogistics.visibility = if (hasLogisticsNo) View.VISIBLE else View.GONE
+            copyLogistics.setOnClickListener {
+                l.poLogisticsNo?.let { callbacks.onCopy(it, "快递单号") }
+            }
+
+            // 采购超24h未发货高亮(2026-10-17,对齐 Web 快速筛选)
+            val unshippedHours = if (l.poStatus == "wait_pay" || l.poStatus == "wait_send") {
+                hoursSince(parseIsoTime(l.poPayAt ?: l.poGmtCreate))
+            } else 0L
+            if (unshippedHours > 24) {
+                unshippedAlert.text = "⚠ 采购下单 ${unshippedHours}h 未发货"
+                unshippedAlert.setRoundedBg(0xFFFFECE8.toInt(), 6f)
+                unshippedAlert.visibility = View.VISIBLE
+            } else {
+                unshippedAlert.visibility = View.GONE
+            }
+
+            // 物流超24h未揽收高亮(2026-10-17 口径:轨迹含揽收/已取件视为已揽收,排除)
+            val traceJson = l.traceJson ?: ""
+            val staleHours = if (hasLogisticsNo && !traceJson.contains("揽收") && !traceJson.contains("已取件")) {
+                hoursSince(parseIsoTime(l.poSendAt ?: l.poGmtCreate))
+            } else 0L
+            if (staleHours > 24) {
+                staleAlert.text = "🚚 物流 ${staleHours}h 未揽收"
+                staleAlert.setRoundedBg(0xFFFFF7E8.toInt(), 6f)
+                staleAlert.visibility = View.VISIBLE
+            } else {
+                staleAlert.visibility = View.GONE
+            }
+
+            return row
         }
 
         private fun buildProductRow(
