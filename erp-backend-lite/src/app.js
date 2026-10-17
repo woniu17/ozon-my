@@ -54,7 +54,7 @@ import productUpdateRoutes from './modules/product-update.js';
 import productArchiveRoutes from './modules/product-archive.js';
 import exportExcelRoutes from './modules/export-excel.js';
 import platformOrdersRoutes from './modules/platform-orders.js';
-import { handleImageCacheRequest } from './services/order-image-cache.js';
+import { handleImageCacheRequest, withImageRequestContext } from './services/order-image-cache.js';
 import { stopPlatformOrders } from './services/platform-orders/browser-manager.js';
 import { setupPushWs } from './services/push-ws.js';
 
@@ -125,6 +125,10 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// 图片图床请求上下文(2026-10-17 内网直连修复):记录当前请求的 Host/协议,
+// 输出层图片 URL 跟随请求来源(内网→内网图床地址,公网→公网图床地址)
+app.use((req, _res, next) => withImageRequestContext(req, next));
 
 // 订单/采购商品主图本地缓存(2026-10):GET /images/cache/:hash.jpg?src=<原图URL>
 // 放 static 之前:命中时设置长缓存(immutable),未命中时按 src 懒下载落盘,失败 302 降级原图

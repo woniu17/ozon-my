@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { request } from 'undici';
 import logger from '../middleware/log.js';
 import config from '../config/index.js';
@@ -49,6 +50,41 @@ const ALLOWED_HOST_SUFFIXES = [
 /** 下载中的去重 Map(hash → Promise),防止同一文件并发重复下载 */
 const inflight = new Map();
 
+/**
+ * 请求级图片图床上下文(2026-10-17 内网直连修复)
+ *
+ * 背景:安卓/H5 常通过内网直连 ERP(http://192.168.1.212:3001,不经 nginx),
+ * 而图片 URL 若固定用公网 IMAGE_HOST_BASE_URL(yochylin.com:17443),
+ * 内网设备无法回环访问公网域名 → 图片加载失败。
+ * 解决:用 AsyncLocalStorage 记录每个请求的图床 base URL——
+ *   公网 nginx 转发(X-Forwarded-Proto: https)→ https://yochylin.com:17443
+ *   内网直连(X-Forwarded-Proto 无)→ http://192.168.1.212:3001
+ * 输出层 imageCacheUrlFor 自动取当前请求的 base,前端/安卓零改动。
+ */
+const imageCtx = new AsyncLocalStorage();
+
+/** 根据请求头计算当前请求的图床 base URL(无 Host 时回退配置) */
+function resolveImageBaseUrl(req) {
+  try {
+    const host = req?.headers?.host;
+    if (!host) return config.imageHostBaseUrl;
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const proto = forwardedProto || req.protocol || 'http';
+    return `${proto}://${host}`;
+  } catch {
+    return config.imageHostBaseUrl;
+  }
+}
+
+/**
+ * Express 中间件:为当前请求创建图片图床上下文。
+ * 用法: app.use((req, res, next) => withImageRequestContext(req, next));
+ * ALS 上下文会自动传播到路由处理器及其异步操作,请求结束自动销毁。
+ */
+export function withImageRequestContext(req, next) {
+  return imageCtx.run({ baseUrl: resolveImageBaseUrl(req) }, next);
+}
+
 /** 下载超时/大小上限 */
 const HEADERS_TIMEOUT_MS = 10_000;
 const BODY_TIMEOUT_MS = 30_000;
@@ -75,19 +111,23 @@ export function imageCachePathForUrl(url) {
 
 /**
  * 把原图 URL 重写为本地图床 URL(输出层统一调用)。
- * 未配置 IMAGE_HOST_BASE_URL 或非 http(s) 直链时原样返回,保证本地开发/异常数据不受影响。
+ * - 图床 base 优先取当前请求上下文(内网直连返回内网地址,公网返回公网地址)
+ * - 无请求上下文(如 push-hub 推送)回退配置的 IMAGE_HOST_BASE_URL
+ * 未配置 base 或非 http(s) 直链时原样返回,保证本地开发/异常数据不受影响。
  * 已是本图床 URL 或已含 /images/cache/ 的 URL 直接透传,防止二次缓存。
  */
 export function imageCacheUrlFor(url) {
-  if (!url || !config.imageHostBaseUrl) return url || null;
+  const ctx = imageCtx.getStore();
+  const base = ctx?.baseUrl || config.imageHostBaseUrl;
+  if (!url || !base) return url || null;
   const s = String(url).trim();
   if (!s || s.startsWith('data:')) return url;
-  if (s.startsWith(config.imageHostBaseUrl) || s.includes('/images/cache/')) return url;
+  if (s.startsWith(base) || s.includes('/images/cache/')) return url;
   let normalized = s;
   if (normalized.startsWith('//')) normalized = 'https:' + normalized;
   if (!/^https?:\/\//i.test(normalized)) return url;
   const { hash } = imageCachePathForUrl(normalized);
-  return `${config.imageHostBaseUrl}/images/cache/${hash}.jpg?src=${encodeURIComponent(normalized)}`;
+  return `${base}/images/cache/${hash}.jpg?src=${encodeURIComponent(normalized)}`;
 }
 
 /** 下载图片 Buffer(带重试;HTTP 4xx/5xx 业务错误不重试) */
