@@ -829,6 +829,31 @@ function buildPackageWhere(filters = {}) {
   } else if (filters.arrived === '0') {
     where.push('p.arrived_at IS NULL');
   }
+  // 快速筛选(2026-10-17,待打单发货 tab):
+  // 1) 采购下单超 N 小时未发货:存在采购单未发货(send_at 空/状态未发货),且下单时间(支付/创建)距今 > N 小时
+  //    N 由前端传 purchaseUnshippedHours(如 24);unixepoch() 解析 ISO 时间,差值秒数
+  if (filters.purchaseUnshippedHours > 0) {
+    const secs = (Number(filters.purchaseUnshippedHours) || 24) * 3600;
+    where.push(`p.id IN (
+      SELECT pl.package_id FROM op_purchase_link pl
+      JOIN op_purchase_order po ON po.id = pl.purchase_order_id
+      WHERE po.send_at IS NULL
+        AND po.status IN ('wait_pay', 'wait_send')
+        AND COALESCE(po.pay_at, po.gmt_create) IS NOT NULL
+        AND (unixepoch() - unixepoch(COALESCE(po.pay_at, po.gmt_create))) > ${secs}
+    )`);
+  }
+  // 2) 物流超 N 小时未更新:存在采购单有物流单号且最新轨迹时间距今 > N 小时
+  if (filters.logisticsStaleHours > 0) {
+    const secs = (Number(filters.logisticsStaleHours) || 24) * 3600;
+    where.push(`p.id IN (
+      SELECT pl.package_id FROM op_purchase_link pl
+      JOIN op_purchase_order po ON po.id = pl.purchase_order_id
+      WHERE po.logistics_no IS NOT NULL
+        AND po.last_trace_at IS NOT NULL
+        AND (unixepoch() - unixepoch(po.last_trace_at)) > ${secs}
+    )`);
+  }
   // 取消发起者筛选(仅 cancelled tab 有意义):前端传 client/ozon/seller
   // 用 cancellation_type(英文枚举)精确匹配,比 cancellation_initiator(俄文)更稳定
   if (filters.cancelInitiator && ['client', 'ozon', 'seller'].includes(filters.cancelInitiator)) {

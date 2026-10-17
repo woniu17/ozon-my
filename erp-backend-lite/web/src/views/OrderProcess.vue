@@ -60,6 +60,8 @@ const filters = reactive({
   tag: '',            // 标签筛选:标签名精确匹配(2026-09-15)
   arrived: '',        // '' | '0' | '1'
   cancelInitiator: '',  // '' | 'client' | 'ozon' | 'seller'(仅已取消 tab 用)
+  purchaseUnshippedHours: 0, // 0=关;24=采购下单超24h未发货(待打单发货快速筛选,2026-10-17)
+  logisticsStaleHours: 0,    // 0=关;24=物流超24h未更新(待打单发货快速筛选,2026-10-17)
 });
 // ── 排序选项(2026-09-20)────────────────────────────────────
 // key 对应后端 sortBy 白名单;delivering=揽收时间(国际物流商揽收)
@@ -329,6 +331,8 @@ async function loadList() {
     tag: filters.tag,
     arrived: filters.arrived,
     cancelInitiator: activeTab.value === 'cancelled' ? filters.cancelInitiator : '',
+    purchaseUnshippedHours: filters.purchaseUnshippedHours || 0, // 快速筛选:采购下单超N小时未发货(2026-10-17)
+    logisticsStaleHours: filters.logisticsStaleHours || 0,      // 快速筛选:物流超N小时未更新(2026-10-17)
     globalKeyword: isGlobal ? globalSearch.keyword.trim() : '',
     globalMode: globalSearch.mode,
     sortBy,
@@ -381,6 +385,30 @@ function switchTab(key) {
 function search() {
   pager.current = 1;
   loadList();
+}
+
+// 快速筛选切换(2026-10-17,待打单发货 tab):点一下启用 24h,再点关闭;两键可同时启用(后端 AND 交集)
+function toggleQuickFilter(key) {
+  filters[key] = filters[key] ? 0 : 24;
+  search();
+}
+
+// 采购下单超 24h 未发货:采购单状态仍为待付款/待发货,且下单时间(支付/创建)距今小时数;已发货/已关闭返回 0
+function purchaseUnshippedHoursOf(l) {
+  if (!l) return 0;
+  const st = l.poStatus;
+  if (st !== 'wait_pay' && st !== 'wait_send') return 0;
+  const start = l.poPayAt || l.poGmtCreate;
+  if (!start) return 0;
+  const h = (Date.now() - new Date(start).getTime()) / 3600000;
+  return h > 24 ? Math.floor(h) : 0;
+}
+
+// 物流超 24h 未更新:采购单有物流单号且最新轨迹时间距今小时数;无单号/无轨迹返回 0
+function logisticsStaleHoursOf(l) {
+  if (!l || !l.poLogisticsNo || !l.lastTraceAt) return 0;
+  const h = (Date.now() - new Date(l.lastTraceAt).getTime()) / 3600000;
+  return h > 24 ? Math.floor(h) : 0;
 }
 
 // 已取消卡片:点击细分 chip(买家/Ozon/卖家)→ 切到已取消 tab 并应用对应发起者筛选
@@ -3178,6 +3206,21 @@ onUnmounted(() => {
           <option value="0">等收货</option>
           <option value="1">已到货</option>
         </select>
+        <!-- 快速筛选(待打单发货,2026-10-17):采购下单超24h未发货 / 物流超24h未更新,可同时启用(取交集) -->
+        <template v-if="activeTab === 'waitShip'">
+          <button
+            class="quick-chip"
+            :class="{ on: filters.purchaseUnshippedHours === 24 }"
+            :title="'筛选:采购下单(支付/创建)超过24小时且上家仍未发货的包裹'"
+            @click="toggleQuickFilter('purchaseUnshippedHours')"
+          >采购超24h未发货</button>
+          <button
+            class="quick-chip"
+            :class="{ on: filters.logisticsStaleHours === 24 }"
+            :title="'筛选:物流轨迹超过24小时未更新的包裹'"
+            @click="toggleQuickFilter('logisticsStaleHours')"
+          >物流超24h未更新</button>
+        </template>
         <!-- 排序(2026-09-20):按 tab 动态显示可用排序键;揽收排序适用所有状态(除待处理/待打单/交运);各 tab 独立记忆 -->
         <select v-model="currentSort" class="filter-input" title="排序:揽收时间=国际物流商揽收时间(发货前取消的单无此时间,排最后)" @change="search">
           <option v-for="o in sortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
@@ -3348,6 +3391,10 @@ onUnmounted(() => {
                 <div class="purchase-meta sub">
                   {{ poStatus(l.poStatus) }} · 采购金额 {{ fmtMoney(l.allocatedAmount) }}<template v-if="l.sellerName"> · {{ l.sellerName }}</template><template v-if="l.buyerAccount"> · 买:{{ l.buyerAccount }}</template>
                 </div>
+                <!-- 快速筛选高亮(2026-10-17):采购下单超24h仍未发货,红色醒目提示 -->
+                <div v-if="purchaseUnshippedHoursOf(l)" class="po-alert po-alert-danger" :title="'采购单 ' + (l.purchaseSn || '#' + l.id) + ' 于 ' + (l.poPayAt || l.poGmtCreate) + ' 下单,已超过24小时未发货'">
+                  ⚠ 采购下单 {{ purchaseUnshippedHoursOf(l) }}h 未发货
+                </div>
                 <div v-for="(pi, j) in l.items" :key="j" class="purchase-goods">
                   <div v-if="pi.thumbUrl || pi.picUrl" class="img-hover-wrap">
                     <a v-if="goodsDetailUrl(l.platform, pi.goodsId)" :href="goodsDetailUrl(l.platform, pi.goodsId)" target="_blank" rel="noopener" class="goods-link">
@@ -3387,6 +3434,10 @@ onUnmounted(() => {
                   <button class="logi-sync-btn" :disabled="logisticsPkgId === pkg.id" @click.stop="onSyncPackageLogistics(pkg)">
                     {{ logisticsPkgId === pkg.id ? '同步中…' : '同步' }}
                   </button>
+                </div>
+                <!-- 物流停滞高亮(2026-10-17):有物流单号且轨迹超24h未更新,橙色醒目提示 -->
+                <div v-if="logisticsStaleHoursOf(l)" class="po-alert po-alert-warn" :title="'物流单号 ' + l.poLogisticsNo + ' 最新轨迹于 ' + l.lastTraceAt + ' 更新,已超过24小时未更新'">
+                  🚚 物流 {{ logisticsStaleHoursOf(l) }}h 未更新
                 </div>
                 <!-- 物流轨迹(1688买家版API/妙手,最新在前):默认仅最新一条,点"更多"展开其余(2026-09-17) -->
                 <div v-if="parseTraceSteps(l).length" class="trace-box trace-box-collapsed">
@@ -5008,6 +5059,48 @@ a.product-title:hover {
 .logi-sync-btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+/* 快速筛选按钮(2026-10-17,待打单发货 tab) */
+.quick-chip {
+  flex: none;
+  padding: 0 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #fff;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 26px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.quick-chip:hover {
+  border-color: #9ca3af;
+  color: #374151;
+}
+.quick-chip.on {
+  border-color: #ef4444;
+  background: #fef2f2;
+  color: #dc2626;
+  font-weight: 600;
+}
+/* 采购/物流异常高亮条(2026-10-17) */
+.po-alert {
+  margin-top: 4px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.po-alert-danger {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+}
+.po-alert-warn {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #ea580c;
 }
 .trace-toggle {
   flex: none;
