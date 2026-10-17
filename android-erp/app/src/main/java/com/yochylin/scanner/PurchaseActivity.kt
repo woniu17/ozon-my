@@ -504,15 +504,17 @@ class PurchaseActivity : ComponentActivity() {
         allocCard.addView(buildProfitTotalLine(allocMap))
         purchaseContent.addView(allocCard)
 
-        // 采购信息卡（已有 + 新增合并展示；新增置顶并高亮）
+        // 采购信息卡（已有 + 新增合并展示；新增按订单单独一张卡置顶并高亮，2026-10-17）
         val poCard = card()
         poCard.addView(sectionTitle("采购信息"))
         if (groups().isEmpty() && pendingAdd == null) {
             poCard.addView(mutedText("尚无采购关联,可从平台订单选择新增"))
         } else {
-            // 新增采购置顶（突出显示）
+            // 新增采购：每个订单单独一张卡（用户要求拆分展示）
             pendingAdd?.let { add ->
-                poCard.addView(buildPendingAddCard(add))
+                for ((i, od) in add.orders.withIndex()) {
+                    poCard.addView(buildPendingAddCard(add, od, i))
+                }
             }
             // 已有采购
             for (g in groups()) poCard.addView(buildGroupCard(g))
@@ -543,8 +545,8 @@ class PurchaseActivity : ComponentActivity() {
         renderBottomBar()
     }
 
-    /** 新增采购卡：展示内容与已有采购一致，置顶并以高亮底色/「新增」徽标突出 */
-    private fun buildPendingAddCard(add: PendingAdd): View {
+    /** 新增采购卡：每个订单单独一张卡（2026-10-17 拆分展示），置顶并以高亮底色/「新增」徽标突出 */
+    private fun buildPendingAddCard(add: PendingAdd, od: PendingPurchaseOrder, index: Int): View {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -567,7 +569,7 @@ class PurchaseActivity : ComponentActivity() {
         }
         head.addView(chip(platformLabelLocal(add.platform), "#dbeafe", COLOR_PRIMARY))
         val sn = TextView(this).apply {
-            text = add.orders.joinToString(",") { it.purchaseSn }
+            text = od.purchaseSn.ifBlank { "(无单号)" }
             setTextColor(Color.parseColor(COLOR_TEXT))
             textSize = 11f
             typeface = android.graphics.Typeface.MONOSPACE
@@ -600,13 +602,12 @@ class PurchaseActivity : ComponentActivity() {
         head.addView(status)
         card.addView(head)
 
-        // 分摊 / 卖家 / 买家（与已有采购一致）
-        val first = add.orders.firstOrNull()
+        // 分摊 / 卖家 / 买家（该订单独立展示，与已有采购一致）
         val meta = TextView(this).apply {
             text = buildString {
-                append("分摊 ").append(fmtMoney(add.paymentAmount))
-                if (!first?.sellerName.isNullOrBlank()) append("  ·  ").append(first?.sellerName)
-                if (!first?.buyerAccount.isNullOrBlank()) append("  ·  买:").append(first?.buyerAccount)
+                append("分摊 ").append(fmtMoney(od.paymentAmount))
+                if (!od.sellerName.isNullOrBlank()) append("  ·  ").append(od.sellerName)
+                if (!od.buyerAccount.isNullOrBlank()) append("  ·  买:").append(od.buyerAccount)
             }
             setTextColor(Color.parseColor(COLOR_MUTE))
             textSize = 10f
@@ -614,14 +615,12 @@ class PurchaseActivity : ComponentActivity() {
         }
         card.addView(meta)
 
-        // 商品行（与已有采购一致：图/名称/规格/单价×数量）
-        for (od in add.orders) {
-            for (g in od.platformGoods) {
-                card.addView(buildPurchaseGoodsRow(toPurchaseItem(g)))
-            }
+        // 商品行（该订单商品，与已有采购一致：图/名称/规格/单价×数量）
+        for (g in od.platformGoods) {
+            card.addView(buildPurchaseGoodsRow(toPurchaseItem(g)))
         }
 
-        // 物流行（暂存到 logisticsInput，保存时提交）
+        // 物流行（暂存到 logisticsInput，保存时提交；多单共用一条录入）
         val logiRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -656,13 +655,15 @@ class PurchaseActivity : ComponentActivity() {
         logiRow.addView(logiBtn)
         card.addView(logiRow)
 
-        // 拼单提示
-        add.lookup?.let { lr ->
-            if (lr.exists && lr.linkedPackages.isNotEmpty()) {
-                val tip = mutedText("拼单提示:该采购单已关联 ${lr.linkedPackages.size} 个包裹,保存后 auto 模式将按数量重新加权分摊。", 10f)
-                tip.setPadding(dp(8), dp(6), dp(8), dp(6))
-                tip.setBackgroundColor(Color.parseColor("#fff7e6"))
-                card.addView(tip)
+        // 拼单提示（整批 lookup 结果，只在第一张卡展示）
+        if (index == 0) {
+            add.lookup?.let { lr ->
+                if (lr.exists && lr.linkedPackages.isNotEmpty()) {
+                    val tip = mutedText("拼单提示:该采购单已关联 ${lr.linkedPackages.size} 个包裹,保存后 auto 模式将按数量重新加权分摊。", 10f)
+                    tip.setPadding(dp(8), dp(6), dp(8), dp(6))
+                    tip.setBackgroundColor(Color.parseColor("#fff7e6"))
+                    card.addView(tip)
+                }
             }
         }
 

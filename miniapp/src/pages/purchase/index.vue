@@ -270,23 +270,28 @@
 
       <!-- 采购信息(统一展示:新增置顶高亮,与已有采购同构;删除/录入均为暂存,保存统一落地) -->
       <view class="card">
-        <view class="section-title">采购信息({{ groups.length }}{{ pendingAdd ? ' +1' : '' }})</view>
+        <view class="section-title">采购信息({{ groups.length }}{{ pendingAdd ? ' +' + pendingAdd.orders.length : '' }})</view>
         <view v-if="!groups.length && !pendingAdd" class="muted-line">尚无采购关联,可从平台订单选择新增</view>
 
-        <!-- 待新增采购置顶(高亮描边 + 新增徽标;平台/单号/分摊/商品/物流与已有采购一致) -->
-        <view v-if="pendingAdd" class="po pending-add">
-          <view v-for="od in pendingAdd.orders" :key="od.purchaseSn" class="po-head">
+        <!-- 待新增采购:每个订单单独一张卡(2026-10-17 用户要求,拆分展示) -->
+        <view
+          v-for="od in (pendingAdd ? pendingAdd.orders : [])"
+          :key="od.purchaseSn"
+          class="po pending-add"
+        >
+          <view class="po-head">
             <text class="po-platform">{{ platformLabel(pendingAdd.body.platform) }}</text>
             <text class="po-sn">{{ od.purchaseSn || '(无单号)' }}</text>
             <text class="po-status">待保存</text>
             <text class="badge-new">新增</text>
           </view>
           <view class="po-meta">
-            <text class="po-amt">分摊 {{ fmtMoney(pendingAdd.body.paymentAmount || 0) }}</text>
-            <text class="po-meta-item">{{ pendingAdd.orders.length > 1 ? pendingAdd.orders.length + ' 笔 · ' : '' }}自动 · 按数量分摊</text>
+            <text class="po-amt">分摊 {{ fmtMoney(od.paymentAmount || 0) }}</text>
+            <text v-if="od.buyerAccount" class="po-meta-item">买:{{ od.buyerAccount }}</text>
+            <text v-else class="po-meta-item">自动 · 按数量分摊</text>
           </view>
-          <!-- 商品行(与已有采购一致) -->
-          <view v-for="(pi, j) in pendingGoodsRows" :key="j" class="po-goods">
+          <!-- 商品行(该订单商品,与已有采购一致) -->
+          <view v-for="(pi, j) in od.platformGoods" :key="j" class="po-goods">
             <image
               v-if="pi.thumbUrl || pi.picUrl"
               class="po-img"
@@ -300,8 +305,6 @@
               <view class="po-goods-sub">{{ pi.spec ? pi.spec + ' · ' : '' }}¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</view>
             </view>
           </view>
-          <!-- 拼单提示(lookup 命中已关联包裹时) -->
-          <view v-if="pendingAddLookupTip" class="lookup-tip">{{ pendingAddLookupTip }}</view>
           <!-- 国内物流:单号/未录 + 录入/修改入口(暂存,保存时随新增落地) -->
           <view class="po-logi-row">
             <view v-if="pendingLogiNo" class="po-logi">
@@ -311,6 +314,13 @@
             <view v-else class="po-logi-empty">未录物流单号</view>
             <button class="mini-btn" @click="openPendingLogiEdit">{{ pendingLogiNo ? '修改' : '录入' }}</button>
           </view>
+          <view class="po-actions">
+            <button class="mini-btn danger" @click="discardAdd">移除</button>
+          </view>
+        </view>
+        <!-- 拼单提示 + 物流录入面板(新增多卡共享,置底渲染一份) -->
+        <view v-if="pendingAdd">
+          <view v-if="pendingAddLookupTip" class="lookup-tip">{{ pendingAddLookupTip }}</view>
           <view v-if="pendingLogiOpen" class="logi-edit">
             <view class="logi-field">
               <text class="logi-label">物流单号</text>
@@ -326,9 +336,6 @@
               <button class="mini-btn" @click="closePendingLogiEdit">取消</button>
               <button class="mini-btn primary" @click="savePendingLogi">保存</button>
             </view>
-          </view>
-          <view class="po-actions">
-            <button class="mini-btn danger" @click="discardAdd">移除</button>
           </view>
         </view>
 
@@ -1240,14 +1247,7 @@ function discardAdd() {
   pendingAdd.value = null;
 }
 
-// ── 待新增采购卡:商品行展平(与已有采购同构) + 拼单提示 ──
-const pendingGoodsRows = computed(() => {
-  const rows = [];
-  for (const od of pendingAdd.value?.orders || []) {
-    for (const g of od.platformGoods || []) rows.push(g);
-  }
-  return rows;
-});
+// ── 待新增采购:拼单提示(2026-10-17 拆分每订单一卡,商品行直接用 od.platformGoods) ──
 const pendingAddLookupTip = computed(() => {
   const linked = pendingAdd.value?.lookup?.linkedPackages;
   if (!linked || !linked.length) return '';

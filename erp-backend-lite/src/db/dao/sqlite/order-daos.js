@@ -1411,16 +1411,28 @@ function getPackageDetail(packageId) {
   const pkg = rowToPackage(row);
   const items = getItemsByOrderIds([row.ozon_order_id]);
   const { links } = getPurchasesByPackageIds([packageId]);
-  const traces = db
-    .prepare(
-      `SELECT t.trace_at, t.description, t.logistics_no, t.company
-       FROM op_logistics_trace t
-       JOIN op_purchase_link pl ON pl.purchase_order_id = t.purchase_order_id
-       WHERE pl.package_id = ?
-       ORDER BY t.trace_at DESC LIMIT 50`
-    )
-    .all(packageId);
-  return { package: pkg, items, purchaseLinks: links, traces };
+  // 采购物流轨迹:从关联采购单的 trace_json 解析(2026-10-17,原 op_logistics_trace 表无数据导致详情页轨迹永远为空)
+  // trace_json 格式 = [{acceptTime:"2026-09-03 13:48:36", remark:"..."}] 最新在前
+  const traces = [];
+  for (const l of links) {
+    if (!l.traceJson) continue;
+    let arr;
+    try { arr = JSON.parse(l.traceJson); } catch { continue; }
+    if (!Array.isArray(arr)) continue;
+    for (const s of arr) {
+      if (s && (s.acceptTime || s.remark)) {
+        traces.push({
+          trace_at: s.acceptTime || '',
+          description: s.remark || '',
+          logistics_no: l.poLogisticsNo || '',
+          company: l.poLogisticsCompany || '',
+        });
+      }
+    }
+  }
+  // 最新在前(acceptTime 为 "YYYY-MM-DD HH:mm:ss" 字符串,字典序即时间序)
+  traces.sort((a, b) => String(b.trace_at).localeCompare(String(a.trace_at)));
+  return { package: pkg, items, purchaseLinks: links, traces: traces.slice(0, 50) };
 }
 
 // ── 采购录入 ─────────────────────────────────────────────────
