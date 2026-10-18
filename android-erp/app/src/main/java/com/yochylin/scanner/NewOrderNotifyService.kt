@@ -63,11 +63,12 @@ class NewOrderNotifyService : Service() {
     /** notifiedSns 访问锁：WebSocket 回调/差集兜底/启动初始化多协程并发访问，需串行化防 ConcurrentModificationException */
     private val notifiedLock = Any()
 
-    /** 一条新订单摘要（店铺/货件号/销售金额/机器名/商品首图，对齐飞书通知字段） */
+    /** 一条新订单摘要（店铺/货件号/销售金额/商品数量/机器名/商品首图，对齐飞书通知字段） */
     private data class NewOrderInfo(
         val storeName: String,
         val postingNumber: String,
         val amount: Double,
+        val itemCount: Int = 0, // 2026-10-18:通知第二行 xN 用
         val machineName: String = "",
         val productImageUrl: String = "",
         val packageId: String = "", // 2026-10-17:通知点击跳转订单详情用
@@ -79,7 +80,7 @@ class NewOrderNotifyService : Service() {
         const val CHANNEL_ORDER_ALERT = "order_alert"
         const val CHANNEL_ORDER_STATUS = "order_status"
         const val NOTIFICATION_ONGOING_ID = 1002
-        const val NOTIFICATION_NEW_ORDER_ID = 1001
+        // 动态通知自增起始(2026-10-18 一单一通知:新订单/状态事件共用,递增不互相覆盖)
         const val NOTIFICATION_ORDER_EVENT_BASE = 1100
         const val PUSH_TIMEOUT_MS = 25_000
         const val FALLBACK_INTERVAL_MS = 5 * 60_000L
@@ -283,29 +284,31 @@ class NewOrderNotifyService : Service() {
                 "NEW_ORDER" -> {
                     if (!tryMarkNotified("NEW_ORDER:$postingNumber")) continue
                     val imageUrl = ev.optString("productImageUrl")
-                    val info = NewOrderInfo(store, postingNumber, amount, machine, imageUrl, ev.optString("packageId"))
+                    val info = NewOrderInfo(store, postingNumber, amount, ev.optInt("itemCount"), machine, imageUrl, ev.optString("packageId"))
                     val total = ev.optInt("waitProcessCount", 0).toLong()
                     sendNewOrderNotification(total, 1, listOf(info))
                     orderAdded = true
                 }
                 "ORDER_CANCELLED" -> {
                     if (!tryMarkNotified("ORDER_CANCELLED:$postingNumber")) continue
+                    val cancelReason = ev.optString("cancelReason")
                     sendOrderEventNotification(
                         channelId = CHANNEL_ORDER_ALERT,
-                        title = "[$store] [$postingNumber]",
-                        summary = "订单取消 · ${fmtMoney(amount)} CNY",
-                        bigText = buildString {
-                            append("订单已取消")
-                            ev.optString("cancelReason").takeIf { it.isNotBlank() }?.let {
-                                append("\n取消原因: ").append(it)
-                            }
-                            append("\n销售金额: ").append(fmtMoney(amount)).append(" CNY")
-                            append("\n点击查看订单处理")
-                        },
+                        typeLabel = "订单取消",
+                        storeName = store,
+                        postingNumber = postingNumber,
+                        itemCount = ev.optInt("itemCount"),
+                        amount = amount,
                         tab = "order",
                         machineName = machine,
                         productImageUrl = ev.optString("productImageUrl"),
-                        packageId = ev.optString("packageId")
+                        packageId = ev.optString("packageId"),
+                        extraLines = buildString {
+                            append("订单已取消")
+                            cancelReason.takeIf { it.isNotBlank() }?.let {
+                                append("\n取消原因: ").append(it)
+                            }
+                        }
                     )
                 }
                 "STATE_CHANGED" -> {
@@ -321,14 +324,11 @@ class NewOrderNotifyService : Service() {
                     }
                     sendOrderEventNotification(
                         channelId = if (subState == "stocking") CHANNEL_ORDER_ALERT else CHANNEL_ORDER_STATUS,
-                        title = "[$store] [$postingNumber]",
-                        summary = "$label · ${fmtMoney(amount)} CNY",
-                        bigText = buildString {
-                            append(label)
-                            append("\n货件号: ").append(postingNumber)
-                            append("\n销售金额: ").append(fmtMoney(amount)).append(" CNY")
-                            append("\n点击查看订单详情")
-                        },
+                        typeLabel = label,
+                        storeName = store,
+                        postingNumber = postingNumber,
+                        itemCount = ev.optInt("itemCount"),
+                        amount = amount,
                         tab = "order",
                         machineName = machine,
                         productImageUrl = ev.optString("productImageUrl"),
@@ -339,14 +339,11 @@ class NewOrderNotifyService : Service() {
                     if (!tryMarkNotified("PICKED_UP:$postingNumber")) continue
                     sendOrderEventNotification(
                         channelId = CHANNEL_ORDER_STATUS,
-                        title = "[$store] [$postingNumber]",
-                        summary = "已揽收 · ${fmtMoney(amount)} CNY",
-                        bigText = buildString {
-                            append("货件已揽收")
-                            append("\n货件号: ").append(postingNumber)
-                            append("\n销售金额: ").append(fmtMoney(amount)).append(" CNY")
-                            append("\n点击查看订单详情")
-                        },
+                        typeLabel = "已揽收",
+                        storeName = store,
+                        postingNumber = postingNumber,
+                        itemCount = ev.optInt("itemCount"),
+                        amount = amount,
                         tab = "order",
                         machineName = machine,
                         productImageUrl = ev.optString("productImageUrl"),
@@ -393,18 +390,22 @@ class NewOrderNotifyService : Service() {
     }
 
     /**
-     * 发送订单状态事件通知（取消/备货/揽收/签收等，对齐飞书通知格式）。
-     * 标题统一 [店名] [货件号]，正文 = 状态 + 金额（+取消原因），点击跳转对应 Tab。
+     * 发送订单状态事件通知（取消/备货/揽收/签收等）。
+     * 2026-10-18 统一格式：标题=第一行"通知类型 店铺名 货件号"，
+     * 摘要=第二行"xN ￥金额 · 通知时间"，展开正文=两行 + 附加信息，点击跳转对应 Tab。
      */
     private fun sendOrderEventNotification(
         channelId: String,
-        title: String,
-        summary: String,
-        bigText: String,
+        typeLabel: String,
+        storeName: String,
+        postingNumber: String,
+        itemCount: Int,
+        amount: Double,
         tab: String,
         machineName: String = "",
         productImageUrl: String = "",
         packageId: String = "",
+        extraLines: String = "",
     ) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -419,14 +420,29 @@ class NewOrderNotifyService : Service() {
         val timeText = SimpleDateFormat("HH:mm", Locale.US).apply {
             timeZone = TimeZone.getTimeZone("Asia/Shanghai")
         }.format(System.currentTimeMillis())
-        val fullSummary = "$summary · $timeText" + suffix
-        val fullBigText = if (machineName.isNotBlank()) "$bigText\n[机器: $machineName]" else bigText
-        val id = notificationSeq.get()
+        // 第一行：通知类型 店铺名 货件号
+        val title = buildString {
+            append(typeLabel)
+            if (storeName.isNotBlank()) append(" ").append(storeName)
+            if (postingNumber.isNotBlank()) append(" ").append(postingNumber)
+        }
+        // 第二行：xN ￥金额
+        val secondLine = formatItemAmountLine(itemCount, amount)
+        val fullSummary = "$secondLine · $timeText" + suffix
+        // 展开正文：两行 + 附加信息 + 引导 + 机器名
+        val bigText = buildString {
+            append(title)
+            append("\n").append(secondLine)
+            if (extraLines.isNotBlank()) append("\n").append(extraLines)
+            append("\n点击查看订单详情")
+            if (machineName.isNotBlank()) append("\n[机器: ").append(machineName).append("]")
+        }
+        val id = notificationSeq.incrementAndGet()
         val builder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_stat_new_order)
             .setContentTitle(title)
             .setContentText(fullSummary)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(fullBigText))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
             .setContentIntent(pi)
             .setAutoCancel(true)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
@@ -539,16 +555,18 @@ class NewOrderNotifyService : Service() {
         val result = mutableListOf<NewOrderInfo>()
         for (i in 0 until arr.size()) {
             val p = arr.get(i).asJsonObject
-            // 商品首图(2026-10-16 通知大图):list 接口 items 已含 picUrl,取第一张非空
+            // 商品首图 + 商品数量(2026-10-16/18 通知大图/第二行 xN):遍历 items 累计 quantity,取第一张非空图
             var imageUrl = ""
+            var itemCount = 0
             try {
                 val items = p.getAsJsonArray("items")
                 if (items != null) {
                     for (j in 0 until items.size()) {
-                        val url = items.get(j).asJsonObject.optString("picUrl")
-                        if (url.isNotBlank()) {
-                            imageUrl = url
-                            break
+                        val it = items.get(j).asJsonObject
+                        itemCount += it.optInt("quantity", 0)
+                        if (imageUrl.isBlank()) {
+                            val url = it.optString("picUrl")
+                            if (url.isNotBlank()) imageUrl = url
                         }
                     }
                 }
@@ -560,6 +578,7 @@ class NewOrderNotifyService : Service() {
                     storeName = p.optString("storeName"),
                     postingNumber = p.optString("postingNumber"),
                     amount = p.optDouble("orderAmount"),
+                    itemCount = itemCount,
                     machineName = machineName,
                     productImageUrl = imageUrl
                 )
@@ -568,7 +587,12 @@ class NewOrderNotifyService : Service() {
         return result
     }
 
-    /** 发送新订单通知：标题 + 飞书风格明细（店铺/货件号/销售金额） */
+    /**
+     * 发送新订单通知（2026-10-18 一个订单一个通知，用户要求）。
+     * 每条订单独立通知：标题=第一行"新订单 店铺名 货件号"，
+     * 摘要=第二行"xN ￥金额 · 通知时间"，展开正文=两行 + 待处理总数。
+     * 独立通知 id（notificationSeq 递增），多单并发到达不互相覆盖。
+     */
     private fun sendNewOrderNotification(total: Long, added: Long, orders: List<NewOrderInfo>) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -576,49 +600,48 @@ class NewOrderNotifyService : Service() {
             return
         }
         val nm = getSystemService(NotificationManager::class.java) ?: return
+        if (orders.isEmpty()) return
 
-        // 机器名(2026-10-16 多机部署):取本批第一单非空的来源机器
-        val machine = orders.firstOrNull { it.machineName.isNotBlank() }?.machineName ?: ""
+        for (o in orders) {
+            // 机器名后缀(2026-10-16 多机部署):摘要尾部 + 展开正文底部各一处
+            val machine = o.machineName
+            val suffix = if (machine.isNotBlank()) " [$machine]" else ""
+            // 通知时间(2026-10-18):摘要区第二行尾部显示
+            val timeText = SimpleDateFormat("HH:mm", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+            }.format(System.currentTimeMillis())
 
-        // 收起时的一行摘要：第一单店铺+单号+金额，多单追加"等 N 单"，尾部带机器名
-        val first = orders.firstOrNull()
-        val summary = if (first != null) {
-            val one = buildString {
-                if (first.storeName.isNotBlank()) append("${first.storeName} ")
-                append(first.postingNumber)
-                append(" 销售金额 ").append(fmtMoney(first.amount))
+            // 第一行：通知类型 店铺名 货件号
+            val title = buildString {
+                append("新订单")
+                if (o.storeName.isNotBlank()) append(" ").append(o.storeName)
+                if (o.postingNumber.isNotBlank()) append(" ").append(o.postingNumber)
             }
-            if (orders.size > 1) "$one 等 ${orders.size} 单" else one
-        } else {
-            "当前待处理订单 $total 个"
-        }.let { if (machine.isNotBlank()) "$it [$machine]" else it }
-
-        // 展开明细（参考飞书新订单通知格式），底部追加机器名
-        val bigText = buildString {
-            for ((i, o) in orders.withIndex()) {
-                if (i > 0) append("\n\n")
-                val store = o.storeName.ifBlank { "未知店铺" }
-                append("[").append(store).append("] [").append(o.postingNumber.ifBlank { "-" }).append("]")
-                append("\n销售金额: ").append(fmtMoney(o.amount)).append(" CNY")
+            // 第二行：xN ￥金额
+            val secondLine = formatItemAmountLine(o.itemCount, o.amount)
+            val summary = "$secondLine · $timeText" + suffix
+            val bigText = buildString {
+                append(title)
+                append("\n").append(secondLine)
+                append("\n当前待处理订单 ").append(total).append(" 个，点击查看")
+                if (machine.isNotBlank()) append("\n[机器: ").append(machine).append("]")
             }
-            append("\n\n当前待处理订单 ").append(total).append(" 个，点击查看")
-            if (machine.isNotBlank()) append("\n[机器: ").append(machine).append("]")
+
+            // 2026-10-17:带 packageId → 点击直达订单详情;无 packageId 退化为打开订单列表
+            val pi = buildContentIntent(o.packageId, "order")
+            val id = notificationSeq.incrementAndGet()
+            val builder = NotificationCompat.Builder(this, CHANNEL_NEW_ORDER)
+                .setSmallIcon(R.drawable.ic_stat_new_order)
+                .setContentTitle(title)
+                .setContentText(summary)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+            nm.notify(id, builder.build())
+            // 商品图(2026-10-16 通知大图):图片下载完成后更新为 BigPicture
+            attachProductImage(id, o.productImageUrl, builder)
         }
-
-        // 2026-10-17:单条订单带 packageId → 点击直达订单详情;无 packageId 退化为打开订单列表
-        val pi = buildContentIntent(first?.packageId ?: "", "order")
-        val builder = NotificationCompat.Builder(this, CHANNEL_NEW_ORDER)
-            .setSmallIcon(R.drawable.ic_stat_new_order)
-            .setContentTitle("新增 $added 个待处理订单")
-            .setContentText(summary)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
-            .setContentIntent(pi)
-            .setAutoCancel(true)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-        nm.notify(NOTIFICATION_NEW_ORDER_ID, builder.build())
-        // 商品图(2026-10-16 通知大图):取本批第一张可用商品图,下载完成后更新为 BigPicture
-        val firstImage = orders.firstOrNull { it.productImageUrl.isNotBlank() }?.productImageUrl
-        attachProductImage(NOTIFICATION_NEW_ORDER_ID, firstImage, builder)
     }
 
     /**
@@ -661,6 +684,15 @@ class NewOrderNotifyService : Service() {
         } else {
             fmtMoney(v)
         }
+    }
+
+    /**
+     * 通知第二行统一格式："xN ￥金额"（2026-10-18 用户要求，如 x1 ￥19.0）。
+     * N>0 时显示数量前缀；金额保留一位小数（全角人民币符号）。
+     */
+    private fun formatItemAmountLine(itemCount: Int, amount: Double): String {
+        val countText = if (itemCount > 0) "x$itemCount " else ""
+        return "$countText￥${String.format(Locale.US, "%.1f", amount)}"
     }
 
     /** 北京时间（Asia/Shanghai）相对今天的偏移日期，格式 YYYY-MM-DD（与 H5 统计口径一致） */

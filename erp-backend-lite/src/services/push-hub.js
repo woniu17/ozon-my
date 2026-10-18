@@ -43,6 +43,31 @@ function resolvePackageId(postingNumber) {
 }
 
 /**
+ * 查货件商品总数量（2026-10-18 安卓通知第二行 xN 用）。
+ * 优先 payload 的 products[].quantity 求和（新订单 OPI 回拉含商品明细），
+ * 兜底 op_ozon_order_item SUM(quantity)（取消/状态/揽收推送无商品明细）。
+ */
+function resolveItemCount(postingNumber, payload) {
+  if (payload && Array.isArray(payload.products)) {
+    const sum = payload.products.reduce((s, p) => s + (Number(p?.quantity) || 0), 0);
+    if (sum > 0) return sum;
+  }
+  try {
+    const row = getDb()
+      .prepare(
+        `SELECT COALESCE(SUM(oi.quantity), 0) AS cnt
+         FROM op_ozon_order_item oi
+         JOIN op_ozon_order o ON o.id = oi.ozon_order_id
+         WHERE o.posting_number = ?`
+      )
+      .get(String(postingNumber));
+    return row ? Number(row.cnt) || 0 : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+/**
  * 查货件商品首图直链（2026-10-16 安卓通知大图用）。
  * 与 records 接口同源：op_ozon_order_item JOIN product_data_cache，
  * primary_image[0] 优先、images[0] 兜底（ir-20.ozonstatic.cn 直链）。
@@ -219,6 +244,8 @@ export function publishPostingEvent(messageType, payload) {
     machineName: config.machineName,
     // 商品首图直链(2026-10-16 通知大图用,可能为 null,安卓端失败降级为纯文本通知)
     productImageUrl: resolveProductImageUrl(postingNumber),
+    // 商品总数量(2026-10-18 通知第二行 xN 用,0 表示未知,安卓端隐藏数量)
+    itemCount: resolveItemCount(postingNumber, payload),
     // 包裹 id(2026-10-17 通知点击跳转订单详情用,空则安卓端退化为打开订单列表)
     packageId: resolvePackageId(postingNumber),
     occurredAt: new Date().toISOString(),
