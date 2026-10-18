@@ -294,7 +294,7 @@ class NewOrderNotifyService : Service() {
                     val cancelReason = ev.optString("cancelReason")
                     sendOrderEventNotification(
                         channelId = CHANNEL_ORDER_ALERT,
-                        typeLabel = "订单取消",
+                        typeLabel = "取消",
                         storeName = store,
                         postingNumber = postingNumber,
                         itemCount = ev.optInt("itemCount"),
@@ -316,11 +316,14 @@ class NewOrderNotifyService : Service() {
                     // 到达取货点不推送安卓(2026-10-17,用户要求);不消费事件,后续恢复通知无需清理去重集合
                     if (subState == "pickup_point") continue
                     if (!tryMarkNotified("STATE_CHANGED:$subState:$postingNumber")) continue
-                    val label = when (subState) {
-                        "received" -> "已签收"
-                        "pickup_point" -> "到达取货点(待取件)"
-                        "stocking" -> "待备货"
-                        else -> "状态变更: ${ev.optString("newState").ifBlank { "—" }}"
+                    // 2026-10-18 优先用后端精简中文状态(备货/揽收/签收/待取);兜底映射保持同步文案
+                    val label = ev.optString("stateLabel").ifBlank {
+                        when (subState) {
+                            "received" -> "签收"
+                            "pickup_point" -> "待取"
+                            "stocking" -> "备货"
+                            else -> "状态变更: ${ev.optString("newState").ifBlank { "—" }}"
+                        }
                     }
                     sendOrderEventNotification(
                         channelId = if (subState == "stocking") CHANNEL_ORDER_ALERT else CHANNEL_ORDER_STATUS,
@@ -448,7 +451,7 @@ class NewOrderNotifyService : Service() {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
         nm.notify(id, builder.build())
         // 商品图(2026-10-16 通知大图):先发文本通知保证时效,图片下载完成后再更新同 id 通知
-        attachProductImage(id, productImageUrl, builder)
+        attachProductImage(id, productImageUrl, timeText, builder)
     }
 
     /**
@@ -640,7 +643,7 @@ class NewOrderNotifyService : Service() {
                 .setDefaults(NotificationCompat.DEFAULT_ALL)
             nm.notify(id, builder.build())
             // 商品图(2026-10-16 通知大图):图片下载完成后更新为 BigPicture
-            attachProductImage(id, o.productImageUrl, builder)
+            attachProductImage(id, o.productImageUrl, timeText, builder)
         }
     }
 
@@ -648,18 +651,25 @@ class NewOrderNotifyService : Service() {
      * 商品图异步加载并更新通知为 BigPicture 大图(2026-10-16 新增)。
      * 策略:先发文本通知保证时效,图片下载完成后再用同一通知 id 更新;
      * 下载/解码失败或超时静默,保持文本通知不变(不影响主流程)。
+     *
+     * 2026-10-18:
+     * - 推送事件的 productImageUrl 为相对路径(/images/cache/...),拼接 Api.BASE_URL
+     *   内网/公网自动适配(修复内网模式下通知图片走公网域名加载失败的问题)
+     * - 通知时间统一放在商品图片上方(BigPictureStyle.setBigContentTitle)
      */
     private fun attachProductImage(
         notificationId: Int,
         imageUrl: String?,
+        timeText: String,
         builder: NotificationCompat.Builder,
     ) {
         if (imageUrl.isNullOrBlank()) return
         scope.launch(Dispatchers.IO) {
             try {
+                val absoluteUrl = if (imageUrl.startsWith("/")) Api.BASE_URL + imageUrl else imageUrl
                 val loader = ImageLoader(this@NewOrderNotifyService)
                 val request = ImageRequest.Builder(this@NewOrderNotifyService)
-                    .data(imageUrl)
+                    .data(absoluteUrl)
                     .size(768)
                     .allowHardware(false)
                     .build()
@@ -667,7 +677,11 @@ class NewOrderNotifyService : Service() {
                 if (result is SuccessResult) {
                     val bmp = result.drawable.toBitmap()
                     // 复用同一 Builder：先发文本通知，图片就绪后覆盖同 id 为 BigPicture 大图
-                    builder.setStyle(NotificationCompat.BigPictureStyle().bigPicture(bmp))
+                    builder.setStyle(
+                        NotificationCompat.BigPictureStyle()
+                            .bigPicture(bmp)
+                            .setBigContentTitle(timeText)
+                    )
                     builder.setLargeIcon(bmp)
                     getSystemService(NotificationManager::class.java)?.notify(notificationId, builder.build())
                 }

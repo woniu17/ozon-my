@@ -43,6 +43,7 @@ import com.yochylin.scanner.model.Trace
 import com.yochylin.scanner.model.StockInfo
 import com.yochylin.scanner.model.StockListResponse
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -81,7 +82,7 @@ class OrderDetailActivity : ComponentActivity() {
     private lateinit var dActionBar: LinearLayout
 
     private var infoOpen = false
-    private var traceOpen = false
+    private val traceOpenGroups = HashSet<String>()
     private var traces: List<Trace> = emptyList()
     private var links: List<PurchaseLink> = emptyList()
 
@@ -142,7 +143,13 @@ class OrderDetailActivity : ComponentActivity() {
             renderMoreInfo()
         }
         dTraceToggle.setOnClickListener {
-            traceOpen = !traceOpen
+            // 全部展开/收起：按当前快递单号分组，一次性展开所有组或全部收起
+            val groupKeys = traces.groupBy { it.logisticsNo ?: "" }.keys
+            if (groupKeys.isNotEmpty() && traceOpenGroups.containsAll(groupKeys)) {
+                traceOpenGroups.clear()
+            } else {
+                traceOpenGroups.addAll(groupKeys)
+            }
             renderTraces()
         }
 
@@ -190,14 +197,14 @@ class OrderDetailActivity : ComponentActivity() {
         }
     }
 
-    /** 一键设置库存(设0/设20):调 Ozon 更新后刷新库存行(2026-10-17) */
+    /** 一键设置库存(设0/设20):调 Ozon 更新后刷新库存行(2026-10-17),模态提示等待结果(2026-10-18 对齐备货效果,至少展示800ms) */
     private fun setItemStock(item: com.yochylin.scanner.model.PkgItem, stock: Int) {
         val offerId = item.offerId
         if (offerId.isNullOrBlank()) {
             toast("该商品无 Offer ID")
             return
         }
-        lifecycleScope.launch {
+        runWithBlockingLoading("正在设置库存，请稍候…") {
             try {
                 Api.post("/admin/api/order-process/detail/$packageId/stock", mapOf("offerId" to offerId, "sku" to (item.sku ?: ""), "stock" to stock))
                 toast("已将 ${item.title ?: offerId} 库存设为 $stock")
@@ -849,37 +856,125 @@ class OrderDetailActivity : ComponentActivity() {
         dTraceCard.visibility = View.VISIBLE
         dTraceTitle.text = "国内物流轨迹(${traces.size})"
         dTraceContainer.removeAllViews()
-        val visible = if (traceOpen) traces else traces.take(3)
-        for (t in visible) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = 6 }
-            }
-            val time = TextView(this).apply {
-                text = fmtTimeWithWeekday(t.traceAt ?: t.trace_at)
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                textSize = 10f
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            }
-            row.addView(time)
-            val desc = TextView(this).apply {
-                text = t.description ?: t.company ?: ""
-                setTextColor(Color.parseColor(COLOR_TEXT))
-                textSize = 10f
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            row.addView(desc)
-            dTraceContainer.addView(row)
+
+        // 按快递单号分组(后端已最新在前,groupBy 保持首次出现顺序)
+        val grouped = traces.groupBy { it.logisticsNo ?: "" }
+        for ((no, list) in grouped) {
+            dTraceContainer.addView(buildTraceGroup(no, list))
         }
-        if (traces.size > 3) {
-            dTraceToggle.text = if (traceOpen) "收起" else "展开全部 ${traces.size} 条"
+
+        // 全局展开/收起按钮:存在可展开(>1条)的组时才显示
+        val expandable = grouped.values.any { it.size > 1 }
+        if (expandable) {
+            val allOpen = grouped.keys.isNotEmpty() && traceOpenGroups.containsAll(grouped.keys)
+            dTraceToggle.text = if (allOpen) "收起全部" else "展开全部 ${traces.size} 条"
             dTraceToggle.visibility = View.VISIBLE
         } else {
             dTraceToggle.visibility = View.GONE
         }
+    }
+
+    /** 单个快递单号的轨迹分组:标题行(公司+单号+展开入口) + 轨迹行,默认只显示最新 1 条 */
+    private fun buildTraceGroup(logisticsNo: String, list: List<Trace>): View {
+        val expanded = logisticsNo in traceOpenGroups
+        val visible = if (expanded) list else list.take(1)
+        val company = list.firstOrNull()?.company ?: ""
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#fafafa"))
+            setPadding(10, 8, 10, 8)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 8 }
+        }
+
+        // 标题行:整行点击切换该快递单号的展开/收起
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener {
+                if (expanded) traceOpenGroups.remove(logisticsNo) else traceOpenGroups.add(logisticsNo)
+                renderTraces()
+            }
+        }
+
+        val dot = TextView(this).apply {
+            text = "●"
+            setTextColor(Color.parseColor(COLOR_PRIMARY))
+            textSize = 8f
+        }
+        head.addView(dot)
+
+        val title = TextView(this).apply {
+            text = when {
+                !logisticsNo.isNullOrBlank() -> listOf(company, logisticsNo).filter { it.isNotBlank() }.joinToString(" ")
+                !company.isNullOrBlank() -> company
+                else -> "全部轨迹"
+            }
+            setTextColor(Color.parseColor(COLOR_TEXT))
+            textSize = 11f
+            typeface = android.graphics.Typeface.MONOSPACE
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(6)
+            }
+        }
+        head.addView(title)
+
+        if (!logisticsNo.isNullOrBlank()) {
+            head.addView(
+                copyChip("复制", Color.parseColor("#eef4ff")) {
+                    copyText(logisticsNo, "快递单号")
+                }
+            )
+        }
+
+        if (list.size > 1) {
+            val toggle = TextView(this).apply {
+                text = if (expanded) "收起" else "展开 ${list.size - 1} 条 ›"
+                setTextColor(Color.parseColor(COLOR_PRIMARY))
+                textSize = 10f
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    leftMargin = dp(8)
+                }
+            }
+            head.addView(toggle)
+        }
+        card.addView(head)
+
+        for (t in visible) {
+            card.addView(buildTraceRow(t))
+        }
+        return card
+    }
+
+    /** 单条轨迹行: 时间 + 描述 */
+    private fun buildTraceRow(t: Trace): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 6 }
+        }
+        val time = TextView(this).apply {
+            text = fmtTimeWithWeekday(t.traceAt ?: t.trace_at)
+            setTextColor(Color.parseColor(COLOR_MUTE))
+            textSize = 10f
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        row.addView(time)
+        val desc = TextView(this).apply {
+            text = t.description ?: t.company ?: ""
+            setTextColor(Color.parseColor(COLOR_TEXT))
+            textSize = 10f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(8)
+            }
+        }
+        row.addView(desc)
+        return row
     }
 
     // ── 操作条 ──
@@ -925,7 +1020,8 @@ class OrderDetailActivity : ComponentActivity() {
 
     // ── 操作实现 ──
     private fun onSync() {
-        lifecycleScope.launch {
+        // 同步接口可能耗时较长(2026-10-18):模态提示"正在同步订单中",至少展示800ms(对齐备货效果)
+        runWithBlockingLoading("正在同步订单，请稍候…") {
             try {
                 val r = Api.post("/admin/api/order-process/sync-package", mapOf("packageId" to packageId)).asJsonObject
                 val parts = mutableListOf<String>()
@@ -1039,7 +1135,8 @@ class OrderDetailActivity : ComponentActivity() {
     }
 
     private fun onSyncLogistics() {
-        lifecycleScope.launch {
+        // 同步采购物流可能耗时较长(2026-10-18):模态提示"正在同步采购物流中",至少展示800ms(对齐备货效果)
+        runWithBlockingLoading("正在同步采购物流，请稍候…") {
             try {
                 val r = Api.post(
                     "/admin/api/order-process/sync-package-purchase-logistics",
@@ -1059,6 +1156,25 @@ class OrderDetailActivity : ComponentActivity() {
     // ── 辅助 ──
     private fun markChanged() {
         setResult(RESULT_OK)
+    }
+
+    /**
+     * 模态等待弹窗并执行网络操作（2026-10-18）：
+     * 保证弹窗至少展示 minShowMs(默认800ms)，避免同步订单/同步采购物流/设置库存等
+     * 快速接口一闪而过用户看不到"处理中"；结束后自动关闭弹窗。调用方在 block 内自行 try/catch。
+     */
+    private fun runWithBlockingLoading(message: String, minShowMs: Long = 800, block: suspend () -> Unit) {
+        val dlg = showBlockingLoading(message)
+        lifecycleScope.launch {
+            val start = System.currentTimeMillis()
+            try {
+                block()
+            } finally {
+                val remain = minShowMs - (System.currentTimeMillis() - start)
+                if (remain > 0) delay(remain)
+                runCatching { dlg.dismiss() }
+            }
+        }
     }
 
     private fun dp(v: Number): Int = (v.toFloat() * resources.displayMetrics.density).toInt()

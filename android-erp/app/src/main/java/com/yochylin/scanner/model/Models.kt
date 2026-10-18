@@ -143,6 +143,7 @@ data class Trace(
     val trace_at: String? = null,
     val description: String? = null,
     val company: String? = null,
+    @com.google.gson.annotations.SerializedName("logistics_no") val logisticsNo: String? = null,
 )
 
 /** 包裹详情响应：{ package, items, purchaseLinks, traces } */

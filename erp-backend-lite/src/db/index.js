@@ -105,6 +105,23 @@ export async function initSchema() {
 
 // 轻量迁移:为已存在的表补列(CREATE TABLE IF NOT EXISTS 不会更新旧表结构)
 async function ensureMigrations() {
+  // 2026-10-18: 安卓通知推送日志(push-hub 每次广播写入,供问题排查与安卓端推送序列表展示)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notification_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      posting_number TEXT,
+      store_name TEXT,
+      amount REAL,
+      item_count INTEGER DEFAULT 0,
+      product_image_url TEXT,
+      package_id TEXT,
+      machine_name TEXT,
+      occurred_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notification_log_created ON notification_log(created_at DESC);
+  `);
   // product_data_cache.store_id(用于关联店铺,拉特征/描述时需用对应店铺凭据)
   const cols = db.prepare(`PRAGMA table_info(product_data_cache)`).all();
   if (!cols.some((c) => c.name === 'store_id')) {

@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -220,6 +221,12 @@ class OrderListActivity : ComponentActivity() {
         }
 
         setContentView(R.layout.activity_order_list)
+
+        // 搜索框非必要不聚焦(2026-10-18):进入页面不自动弹出输入键盘,用户点击输入时才弹出
+        window.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
 
         // 底部导航栏
         setupBottomNav(this, "order")

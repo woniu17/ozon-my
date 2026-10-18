@@ -109,6 +109,10 @@ class MainActivity : ComponentActivity() {
         findViewById<TextView>(R.id.scanBtn).setOnClickListener {
             scanLauncher.launch(Intent(this, ScanActivity::class.java))
         }
+        // 消息推送序列表（2026-10-18 通知日志查看入口）
+        findViewById<TextView>(R.id.pushLogBtn).setOnClickListener {
+            startActivity(Intent(this, PushLogActivity::class.java))
+        }
         findViewById<TextView>(R.id.intranetBtn).apply {
             updateIntranetBtn(this)
             setOnClickListener {

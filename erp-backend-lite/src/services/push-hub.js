@@ -71,6 +71,11 @@ function resolveItemCount(postingNumber, payload) {
  * 查货件商品首图直链（2026-10-16 安卓通知大图用）。
  * 与 records 接口同源：op_ozon_order_item JOIN product_data_cache，
  * primary_image[0] 优先、images[0] 兜底（ir-20.ozonstatic.cn 直链）。
+ *
+ * 2026-10-18 改为返回相对路径：推送事件无请求上下文，图床 base 固定取配置的公网域名，
+ * 而安卓 App 在内网模式下 API 走 192.168.1.212:3001（列表图片按 Host 返回内网地址可正常加载，
+ * 通知图片却走公网域名导致加载失败）。改为相对路径后安卓端用自身 Api.BASE_URL 拼接，
+ * 内网/公网自动适配，根治"通知无图"。
  */
 function resolveProductImageUrl(postingNumber) {
   try {
@@ -89,10 +94,61 @@ function resolveProductImageUrl(postingNumber) {
       )
       .get(String(postingNumber));
     // 输出层重写为本地图床 URL(2026-10 图片本地化),未配置图床时透传原 URL
-    return imageCacheUrlFor(row?.pic_url);
+    return toRelativeImageUrl(imageCacheUrlFor(row?.pic_url));
   } catch (err) {
     logger.warn({ err: err.message, postingNumber }, 'push-hub: 查询商品首图失败');
     return null;
+  }
+}
+
+/**
+ * 图片绝对 URL → 相对路径（2026-10-18 推送事件用）。
+ * 仅本地图床 URL（含 /images/cache/）转为 path+query；非图床 URL 原样返回，
+ * 避免 Ozon 原图直链被错误相对化。
+ */
+function toRelativeImageUrl(url) {
+  if (!url) return null;
+  const s = String(url).trim();
+  if (!/^https?:\/\//i.test(s)) return s;
+  if (!s.includes('/images/cache/')) return s;
+  try {
+    const u = new URL(s);
+    return u.pathname + u.search;
+  } catch {
+    return s;
+  }
+}
+
+/**
+ * 记录安卓通知推送日志（2026-10-18 用户要求，便于问题排查 + 安卓端推送序列表）。
+ * 每次 publishPostingEvent 广播前写入；写库失败只告警，不阻塞推送主流程。
+ */
+function logNotification(event) {
+  try {
+    const now = new Date();
+    // 北京时间 yyyy-MM-dd HH:mm:ss（与安卓端展示一致）
+    const createdAt = new Date(now.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    getDb()
+      .prepare(
+        `INSERT INTO notification_log
+          (type, posting_number, store_name, amount, item_count, product_image_url,
+           package_id, machine_name, occurred_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        event.type || '',
+        event.postingNumber || null,
+        event.storeName || null,
+        event.amount || 0,
+        event.itemCount || 0,
+        event.productImageUrl || null,
+        event.packageId || null,
+        event.machineName || null,
+        event.occurredAt || null,
+        createdAt
+      );
+  } catch (err) {
+    logger.warn({ err: err.message, type: event?.type, postingNumber: event?.postingNumber }, 'push-hub: 写入通知日志失败');
   }
 }
 
@@ -252,17 +308,23 @@ export function publishPostingEvent(messageType, payload) {
   };
 
   switch (messageType) {
-    case 'TYPE_NEW_POSTING':
-      publish({ type: 'NEW_ORDER', ...base });
+    case 'TYPE_NEW_POSTING': {
+      const event = { type: 'NEW_ORDER', ...base };
+      logNotification(event);
+      publish(event);
       break;
-    case 'TYPE_POSTING_CANCELLED':
-      publish({
+    }
+    case 'TYPE_POSTING_CANCELLED': {
+      const event = {
         type: 'ORDER_CANCELLED',
         ...base,
         cancelReason: payload.reason?.message ?? null,
         changedStateDate: payload.changed_state_date ?? null,
-      });
+      };
+      logNotification(event);
+      publish(event);
       break;
+    }
     case 'TYPE_STATE_CHANGED': {
       const ns = payload.new_state ?? '';
       if (ns === 'posting_transferring_to_delivery') {
@@ -273,23 +335,41 @@ export function publishPostingEvent(messageType, payload) {
       if (ns === 'posting_received') subState = 'received';
       else if (ns === 'posting_in_pickup_point') subState = 'pickup_point';
       else if (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') subState = 'stocking';
-      publish({
+      // 精确中文状态(2026-10-18 修正"待备货"歧义:awaiting_deliver 已是备货完成等待发运)
+      // 2026-10-18 通知文案精简:等待登记→备货, 等待发运→揽收, 已签收→签收, 到达取货点→待取
+      const stateLabel =
+        ns === 'posting_awaiting_registration'
+          ? '备货'
+          : ns === 'awaiting_deliver'
+            ? '揽收'
+            : ns === 'posting_received' || ns === 'posting_delivered'
+              ? '签收'
+              : ns === 'posting_in_pickup_point'
+                ? '待取'
+                : ns || '';
+      const event = {
         type: 'STATE_CHANGED',
         ...base,
         newState: ns,
         subState,
+        stateLabel,
         changedStateDate: payload.changed_state_date ?? null,
-      });
+      };
+      logNotification(event);
+      publish(event);
       break;
     }
-    case 'PICKUP':
-      publish({
+    case 'PICKUP': {
+      const event = {
         type: 'PICKED_UP',
         ...base,
         newState: payload.new_state ?? null,
         changedStateDate: payload.changed_state_date ?? null,
-      });
+      };
+      logNotification(event);
+      publish(event);
       break;
+    }
     default:
       // 未知类型不推送
       break;
