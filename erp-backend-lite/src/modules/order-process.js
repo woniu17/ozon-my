@@ -29,7 +29,7 @@ import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
 import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
 import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus, syncPurchaseLogisticsForPackage } from '../services/purchase-logistics-poller.js';
-import { packageLabel, postingFbsGet, postingFbsShip, productInfoList, productStocks } from '../services/ozon-opi.js';
+import { packageLabel, postingFbsGet, postingFbsShip, productInfoList, productInfoListBySku, productStocks } from '../services/ozon-opi.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { notifyPostingEvent } from '../services/webhook/feishu-notify.js';
 import { translateCancelReason } from '../services/cancel-reason-i18n.js';
@@ -501,7 +501,10 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
 });
 
 // GET /admin/api/order-process/detail/:id/stock —— 查询订单商品库存(2026-10-17)
-// 按包裹内商品 offer_id 调 Ozon /v3/product/info/list,取当前店铺仓库的 present/reserved
+// 策略(2026-10-18):订单里的 offer_id 可能因商品改款/重新上架与 Ozon 当前不一致,
+// 先按订单 offer_id 查 /v3/product/info/list,未命中的商品再按 sku 回退查询。
+// Ozon 返回 stocks 为 { has_stock, stocks:[{present,reserved,sku,source}] },source=fbs 即卖家仓库库存。
+// 返回时 offerId 用订单原始 offer_id,保证前端按 offerId 关联展示。
 router.get('/admin/api/order-process/detail/:id/stock', async (req, res, next) => {
   try {
     const id = Number(req.params.id);
@@ -511,23 +514,47 @@ router.get('/admin/api/order-process/detail/:id/stock', async (req, res, next) =
     const store = config.loadStores().find((s) => s.id === storeId);
     if (!store) return res.json(ok({ stocks: [] })); // 店铺已下架等:返回空,前端不展示库存
     const items = detail.items || [];
-    const offerIds = items.map((it) => it.offerId).filter(Boolean);
-    if (!offerIds.length) return res.json(ok({ stocks: [] }));
-    const r = await productInfoList(store, offerIds);
-    const wid = Number(store.warehouse_id);
-    const stocks = (r?.items || []).map((it) => {
-      const s = (Array.isArray(it.stocks) ? it.stocks : []).find((st) => Number(st.warehouse_id) === wid) || {};
-      const present = Number(s.present) || 0;
-      const reserved = Number(s.reserved) || 0;
-      return {
-        sku: it.sku,
-        offerId: it.offer_id,
-        productId: String(it.id || ''),
-        present,
-        reserved,
-        total: present + reserved,
-      };
-    });
+    if (!items.length) return res.json(ok({ stocks: [] }));
+
+    // sku -> { present, reserved, productId }
+    const foundBySku = new Map();
+    const parseStock = (it) => {
+      const arr = it?.stocks && Array.isArray(it.stocks.stocks) ? it.stocks.stocks : [];
+      const fbs = arr.filter((s) => !s.source || s.source === 'fbs');
+      const present = fbs.reduce((sum, s) => sum + (Number(s.present) || 0), 0);
+      const reserved = fbs.reduce((sum, s) => sum + (Number(s.reserved) || 0), 0);
+      return { present, reserved, productId: String(it.id || '') };
+    };
+
+    const offerItems = items.filter((it) => it.offerId);
+    if (offerItems.length) {
+      const r = await productInfoList(store, offerItems.map((it) => it.offerId));
+      for (const oi of r?.items || []) {
+        if (oi && oi.sku != null) foundBySku.set(String(oi.sku), parseStock(oi));
+      }
+    }
+    const missing = items.filter((it) => it.sku != null && String(it.sku).trim() !== '' && !foundBySku.has(String(it.sku)));
+    if (missing.length) {
+      const r = await productInfoListBySku(store, missing.map((it) => Number(it.sku)));
+      for (const oi of r?.items || []) {
+        if (oi && oi.sku != null) foundBySku.set(String(oi.sku), parseStock(oi));
+      }
+    }
+
+    const stocks = items
+      .map((it) => {
+        const info = it.sku != null ? foundBySku.get(String(it.sku)) : undefined;
+        if (!info) return null;
+        return {
+          sku: it.sku,
+          offerId: it.offerId, // 用订单原始 offer_id,前端 stockMap 按 offerId 匹配
+          productId: info.productId,
+          present: info.present,
+          reserved: info.reserved,
+          total: info.present + info.reserved,
+        };
+      })
+      .filter(Boolean);
     res.json(ok({ stocks }));
   } catch (e) {
     next(e);
@@ -549,10 +576,16 @@ router.post('/admin/api/order-process/detail/:id/stock', async (req, res, next) 
     const store = config.loadStores().find((s) => s.id === storeId);
     if (!store) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, '店铺不存在: ' + storeId));
     // 先查 product_id(/v2/products/stocks 需要 product_id + offer_id)
-    const pInfoResp = await productInfoList(store, [offerId]);
-    const pInfo = pInfoResp?.items?.[0];
+    // 订单 offer_id 可能已改款/重新上架,查不到时按 body.sku 回退(2026-10-18)
+    const sku = req.body?.sku ? Number(req.body.sku) : 0;
+    let pInfo = (await productInfoList(store, [offerId]))?.items?.[0];
+    if (!pInfo && sku) {
+      pInfo = (await productInfoListBySku(store, [sku]))?.items?.[0];
+    }
     if (!pInfo) return next(new ApiError(ErrorCode.RESOURCE_NOT_FOUND, `Ozon 未查到商品 offer_id=${offerId}`));
-    const upd = await productStocks(store, [{ offerId, productId: Number(pInfo.id), stock: Math.round(stock) }]);
+    // 用 Ozon 当前有效的 offer_id 设置库存(订单旧 offer_id 可能已失效)
+    const targetOfferId = pInfo.offer_id || offerId;
+    const upd = await productStocks(store, [{ offerId: targetOfferId, productId: Number(pInfo.id), stock: Math.round(stock) }]);
     const updated = upd?.result?.[0]?.updated ?? false;
     res.json(ok({ updated }));
   } catch (e) {

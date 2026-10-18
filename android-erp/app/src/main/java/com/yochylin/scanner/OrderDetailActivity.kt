@@ -199,7 +199,7 @@ class OrderDetailActivity : ComponentActivity() {
         }
         lifecycleScope.launch {
             try {
-                Api.post("/admin/api/order-process/detail/$packageId/stock", mapOf("offerId" to offerId, "stock" to stock))
+                Api.post("/admin/api/order-process/detail/$packageId/stock", mapOf("offerId" to offerId, "sku" to (item.sku ?: ""), "stock" to stock))
                 toast("已将 ${item.title ?: offerId} 库存设为 $stock")
                 loadStocks()
             } catch (e: Exception) {

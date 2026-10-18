@@ -262,9 +262,10 @@ export function productInfo(store, sku) {
   return call(store, '/v2/product/info', { sku: String(sku), offer_id: undefined });
 }
 
-// /v2/product/info/list —— 批量查询(按 sku)
+// /v3/product/info/list —— 批量查询(按 sku)
+// 2026-10-18:原 /v2/product/info/list 已返回 404,改用 /v3/product/info/list 的 sku 参数
 export function productInfoListBySku(store, skus) {
-  return call(store, '/v2/product/info/list', { skus: skus.map(String) });
+  return call(store, '/v3/product/info/list', { sku: skus.map(Number) });
 }
 
 // /v2/warehouse/list

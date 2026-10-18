@@ -3012,7 +3012,7 @@ async function setItemStock(pkg, it, stock) {
     return;
   }
   try {
-    await setOrderItemStock(pkg.id, { offerId: it.offerId, stock });
+    await setOrderItemStock(pkg.id, { offerId: it.offerId, sku: it.sku || '', stock });
     show(`已将 ${it.title || it.offerId} 库存设为 ${stock}`, 'success');
     await loadDetailStocks(pkg.id);
   } catch (err) {
