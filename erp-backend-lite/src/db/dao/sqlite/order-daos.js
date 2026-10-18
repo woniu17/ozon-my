@@ -862,7 +862,19 @@ function buildPackageWhere(filters = {}) {
                  AND po.trace_json NOT LIKE '%揽件%'
                  AND po.trace_json NOT LIKE '%已取件%'
                  AND po.trace_json NOT LIKE '%已收取%'
-                 AND po.trace_json NOT LIKE '%已收件%'))
+                 AND po.trace_json NOT LIKE '%已收件%'
+                 -- 2026-10-18 极兔等物流缺揽收节点,只有快件到达/离开等实际轨迹;有任意一条真实物流轨迹即视为已揽收
+                 AND po.trace_json NOT LIKE '%快件%'
+                 AND po.trace_json NOT LIKE '%包裹%'
+                 AND po.trace_json NOT LIKE '%到达%'
+                 AND po.trace_json NOT LIKE '%离开%'
+                 AND po.trace_json NOT LIKE '%发往%'
+                 AND po.trace_json NOT LIKE '%派送%'
+                 AND po.trace_json NOT LIKE '%派件%'
+                 AND po.trace_json NOT LIKE '%签收%'
+                 AND po.trace_json NOT LIKE '%暂存%'
+                 AND po.trace_json NOT LIKE '%已收入%'
+                 AND po.trace_json NOT LIKE '%抵达%'))
         AND COALESCE(po.send_at, po.gmt_create) IS NOT NULL
         AND (unixepoch() - unixepoch(COALESCE(po.send_at, po.gmt_create))) > ${secs}
     )`,

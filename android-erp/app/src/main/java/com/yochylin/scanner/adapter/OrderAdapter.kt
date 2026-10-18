@@ -270,9 +270,16 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                 unshippedAlert.visibility = View.GONE
             }
 
-            // 物流超24h未揽收高亮(2026-10-17 口径:轨迹含揽收/已取件视为已揽收,排除)
+            // 物流超24h未揽收高亮(2026-10-18 口径:含揽收词或任意真实物流轨迹词即视为已揽收)
             val traceJson = l.traceJson ?: ""
-            val staleHours = if (hasLogisticsNo && !traceJson.contains("揽收") && !traceJson.contains("已取件")) {
+            val pickedUp = traceJson.contains("揽收") || traceJson.contains("揽件") ||
+                traceJson.contains("已取件") || traceJson.contains("已收取") || traceJson.contains("已收件") ||
+                traceJson.contains("快件") || traceJson.contains("包裹") ||
+                traceJson.contains("到达") || traceJson.contains("离开") || traceJson.contains("发往") ||
+                traceJson.contains("派送") || traceJson.contains("派件") ||
+                traceJson.contains("签收") || traceJson.contains("暂存") ||
+                traceJson.contains("已收入") || traceJson.contains("抵达")
+            val staleHours = if (hasLogisticsNo && !pickedUp) {
                 hoursSince(parseIsoTime(l.poSendAt ?: l.poGmtCreate))
             } else 0L
             if (staleHours > 24) {

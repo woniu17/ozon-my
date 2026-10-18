@@ -610,9 +610,15 @@ class OrderDetailActivity : ComponentActivity() {
         }
         if (!l.poLogisticsNo.isNullOrBlank()) {
             val traceJson = l.traceJson ?: ""
-            // 已揽收判断(2026-10-18):不同物流措辞不同,覆盖 揽收/揽件/已取件/已收取/已收件
+            // 已揽收判断(2026-10-18):物流措辞不同,覆盖揽收词+真实物流轨迹特征词
+            // (极兔等缺揽收节点只有"快件到达/离开",出现任意一条真实物流轨迹即视为已揽收)
             val pickedUp = traceJson.contains("揽收") || traceJson.contains("揽件") ||
-                traceJson.contains("已取件") || traceJson.contains("已收取") || traceJson.contains("已收件")
+                traceJson.contains("已取件") || traceJson.contains("已收取") || traceJson.contains("已收件") ||
+                traceJson.contains("快件") || traceJson.contains("包裹") ||
+                traceJson.contains("到达") || traceJson.contains("离开") || traceJson.contains("发往") ||
+                traceJson.contains("派送") || traceJson.contains("派件") ||
+                traceJson.contains("签收") || traceJson.contains("暂存") ||
+                traceJson.contains("已收入") || traceJson.contains("抵达")
             if (!pickedUp) {
                 val staleHours = hoursSince(parseIsoTime(l.poSendAt ?: l.poGmtCreate))
                 if (staleHours > 24) {
