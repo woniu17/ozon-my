@@ -415,7 +415,11 @@ class NewOrderNotifyService : Service() {
         val pi = buildContentIntent(packageId, tab)
         // 机器名后缀(2026-10-16 多机部署):摘要尾部 + 展开正文底部各一处
         val suffix = if (machineName.isNotBlank()) " [$machineName]" else ""
-        val fullSummary = summary + suffix
+        // 通知时间(2026-10-18):对齐新订单通知,在商品图片上方的摘要区显示通知时间
+        val timeText = SimpleDateFormat("HH:mm", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+        }.format(System.currentTimeMillis())
+        val fullSummary = "$summary · $timeText" + suffix
         val fullBigText = if (machineName.isNotBlank()) "$bigText\n[机器: $machineName]" else bigText
         val id = notificationSeq.get()
         val builder = NotificationCompat.Builder(this, channelId)
