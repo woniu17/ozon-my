@@ -413,7 +413,8 @@ function purchaseUnshippedHoursOf(l) {
 function logisticsStaleHoursOf(l) {
   if (!l || !l.poLogisticsNo) return 0;
   const trace = l.traceJson ? String(l.traceJson) : '';
-  if (trace.includes('揽收') || trace.includes('已取件')) return 0; // 已揽收,不算停滞
+  // 已揽收判断(2026-10-18):不同物流措辞不同,覆盖 揽收/揽件/已取件/已收取/已收件
+  if (/揽收|揽件|已取件|已收取|已收件/.test(trace)) return 0; // 已揽收,不算停滞
   const start = l.poSendAt || l.poGmtCreate;
   if (!start) return 0;
   const h = (Date.now() - new Date(start).getTime()) / 3600000;

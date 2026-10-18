@@ -610,7 +610,10 @@ class OrderDetailActivity : ComponentActivity() {
         }
         if (!l.poLogisticsNo.isNullOrBlank()) {
             val traceJson = l.traceJson ?: ""
-            if (!traceJson.contains("揽收") && !traceJson.contains("已取件")) {
+            // 已揽收判断(2026-10-18):不同物流措辞不同,覆盖 揽收/揽件/已取件/已收取/已收件
+            val pickedUp = traceJson.contains("揽收") || traceJson.contains("揽件") ||
+                traceJson.contains("已取件") || traceJson.contains("已收取") || traceJson.contains("已收件")
+            if (!pickedUp) {
                 val staleHours = hoursSince(parseIsoTime(l.poSendAt ?: l.poGmtCreate))
                 if (staleHours > 24) {
                     card.addView(

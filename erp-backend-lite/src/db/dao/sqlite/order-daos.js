@@ -857,7 +857,11 @@ function buildPackageWhere(filters = {}) {
       JOIN op_purchase_order po ON po.id = pl.purchase_order_id
       WHERE po.logistics_no IS NOT NULL
         AND (po.trace_json IS NULL OR po.trace_json = ''
-             OR (po.trace_json NOT LIKE '%揽收%' AND po.trace_json NOT LIKE '%已取件%'))
+             OR (po.trace_json NOT LIKE '%揽收%'
+                 AND po.trace_json NOT LIKE '%揽件%'
+                 AND po.trace_json NOT LIKE '%已取件%'
+                 AND po.trace_json NOT LIKE '%已收取%'
+                 AND po.trace_json NOT LIKE '%已收件%'))
         AND COALESCE(po.send_at, po.gmt_create) IS NOT NULL
         AND (unixepoch() - unixepoch(COALESCE(po.send_at, po.gmt_create))) > ${secs}
     )`,
