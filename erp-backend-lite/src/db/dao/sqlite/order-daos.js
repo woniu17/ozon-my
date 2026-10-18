@@ -829,12 +829,13 @@ function buildPackageWhere(filters = {}) {
   } else if (filters.arrived === '0') {
     where.push('p.arrived_at IS NULL');
   }
-  // 快速筛选(2026-10-17,待打单发货 tab):
+  // 快速筛选(2026-10-17,仅待打单发货 tab 生效;2026-10-18 限定 waitShip,避免参数串到其它 tab):
   // 1) 采购下单超 N 小时未发货 / 2) 物流超 N 小时未揽收
   // 两个快捷筛选为"或"关系(2026-10-17 用户要求):命中任一条件即进入结果集;两者都未传时不过滤。
   // quickFilters 记录各自 SQL 片段,供 listPackages 单独计数(按钮展示命中数,2026-10-17)。
   const quickFilters = [];
-  if (filters.purchaseUnshippedHours > 0) {
+  const isWaitShipTab = (filters.tab || 'waitProcess') === 'waitShip';
+  if (isWaitShipTab && filters.purchaseUnshippedHours > 0) {
     const secs = (Number(filters.purchaseUnshippedHours) || 24) * 3600;
     quickFilters.push({
       key: 'purchaseUnshipped',
@@ -848,7 +849,7 @@ function buildPackageWhere(filters = {}) {
     )`,
     });
   }
-  if (filters.logisticsStaleHours > 0) {
+  if (isWaitShipTab && filters.logisticsStaleHours > 0) {
     const secs = (Number(filters.logisticsStaleHours) || 24) * 3600;
     quickFilters.push({
       key: 'logisticsStale',

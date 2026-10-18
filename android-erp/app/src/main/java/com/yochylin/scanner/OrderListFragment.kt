@@ -326,6 +326,9 @@ class OrderListFragment : Fragment() {
                     keyword = ""
                     globalActive = false
                     globalMode = "ss"
+                    // 快速筛选仅待打单发货 tab 可用(2026-10-18):切 tab 重置,避免参数串到其它 tab
+                    purchaseUnshippedHours = 0
+                    logisticsStaleHours = 0
                     refreshTabStyles()
                     loadTabs()
                     updateQuickFilterUi()
