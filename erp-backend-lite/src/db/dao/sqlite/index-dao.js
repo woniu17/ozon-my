@@ -163,11 +163,12 @@ function buildFilterWhere(opts) {
     params.push(Number(maxCacheHits));
   }
   if (excludeFilteredCategories) {
+    // type_id=0 的黑名单条目为整类目过滤(该类目所有类型),故 (type_id=0) 也应命中
     where.push(
       `NOT EXISTS (
         SELECT 1 FROM ozon_filtered_categories fc
         WHERE fc.description_category_id = ozon_cache_index.description_category_id
-          AND fc.type_id = COALESCE(ozon_cache_index.type_id, 0)
+          AND (fc.type_id = 0 OR fc.type_id = COALESCE(ozon_cache_index.type_id, 0))
       )`
     );
   }

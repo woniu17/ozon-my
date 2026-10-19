@@ -225,7 +225,9 @@ const filteredSet = computed(() => {
 });
 
 function isFiltered(item) {
-  return filteredSet.value.has(`${item.descriptionCategoryId}:${Number(item.typeId) || 0}`);
+  const cid = Number(item.descriptionCategoryId);
+  // 命中精确 (descCatId:typeId) 或整类目过滤条目 (descCatId:0)
+  return filteredSet.value.has(`${cid}:${Number(item.typeId) || 0}`) || filteredSet.value.has(`${cid}:0`);
 }
 
 // ── 生命周期 ───────────────────────────────────────────────

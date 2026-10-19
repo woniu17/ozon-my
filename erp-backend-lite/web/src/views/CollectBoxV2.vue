@@ -158,7 +158,9 @@ function filterKey(descCatId, typeId) {
 
 function isFiltered(it) {
   if (!it || !it.descriptionCategoryId) return false;
-  return filteredSet.has(filterKey(it.descriptionCategoryId, it.typeId));
+  const cid = Number(it.descriptionCategoryId);
+  // 命中精确 (descCatId:typeId) 或整类目过滤条目 (descCatId:0)
+  return filteredSet.has(filterKey(cid, it.typeId)) || filteredSet.has(`${cid}:0`);
 }
 
 async function loadFilteredList() {

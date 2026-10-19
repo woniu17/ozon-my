@@ -150,6 +150,7 @@ router.get('/admin/api/filtered-categories', (req, res, next) => {
 // 返回 { items: [{ descriptionCategoryId, typeId, categoryName, typeName, skuCount }] }
 router.get('/admin/api/filtered-categories/available', (req, res, next) => {
   try {
+    // GROUP BY 用 COALESCE(type_id,0),避免 NULL 与 0 两个分组在列表里显示成重复的 (descCatId, 0) 行
     const rows = collectDb
       .prepare(
         `SELECT description_category_id,
@@ -158,7 +159,7 @@ router.get('/admin/api/filtered-categories/available', (req, res, next) => {
                 COUNT(*) AS sku_count
          FROM ozon_cache_index
          WHERE description_category_id IS NOT NULL
-         GROUP BY description_category_id, type_id
+         GROUP BY description_category_id, COALESCE(type_id, 0)
          ORDER BY sku_count DESC`
       )
       .all();
@@ -186,10 +187,11 @@ router.get('/admin/api/filtered-categories/check/:descCatId/:typeId', (req, res,
     if (!Number.isFinite(descCatId) || descCatId <= 0) {
       return res.status(400).json({ ok: false, error: 'invalid descCatId' });
     }
+    // type_id=0 为整类目过滤条目(该类目所有类型),故查询时也需命中该类目下任意 type_id 的商品
     const row = collectDb
       .prepare(
         `SELECT 1 FROM ozon_filtered_categories
-         WHERE description_category_id = ? AND type_id = ?`
+         WHERE description_category_id = ? AND (type_id = 0 OR type_id = ?)`
       )
       .get(descCatId, typeId);
     return res.json(ok({ filtered: !!row }));
@@ -223,10 +225,11 @@ router.get('/admin/api/filtered-categories/check-by-sku/:sku', (req, res, next) 
     }
     const descCatId = Number(ci.description_category_id);
     const typeId = Number(ci.type_id) || 0;
+    // type_id=0 为整类目过滤条目(该类目所有类型),故查询时也需命中该类目下任意 type_id 的商品
     const row = collectDb
       .prepare(
         `SELECT 1 FROM ozon_filtered_categories
-         WHERE description_category_id = ? AND type_id = ?`
+         WHERE description_category_id = ? AND (type_id = 0 OR type_id = ?)`
       )
       .get(descCatId, typeId);
     return res.json(
