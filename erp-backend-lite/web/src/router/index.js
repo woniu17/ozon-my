@@ -70,6 +70,7 @@ const router = createRouter({
     { path: '/finance-stats', name: 'finance-stats', component: FinanceStats, meta: { title: '财务统计' } },
     { path: '/price-manage', name: 'price-manage', component: () => import('../views/PriceManage.vue'), meta: { title: '价格管理' } },
     { path: '/scan-ship', name: 'scan-ship', component: ScanShip, meta: { title: '扫描发货' } },
+    { path: '/print-logs', name: 'print-logs', component: () => import('../views/PrintLogs.vue'), meta: { title: '打印日志' } },
     { path: '/miaoshou-orders', name: 'miaoshou-orders', component: MiaoshouOrders, meta: { title: '妙手订单' } },
     { path: '/batch-upload/:batchNo', name: 'batch-upload-detail', component: () => import('../views/BatchUploadDetail.vue'), meta: { title: '批次详情' } },
     { path: '/image-refresh/:localTaskId', name: 'image-refresh-detail', component: () => import('../views/ImageRefreshDetail.vue'), meta: { title: '图片更新详情' } },

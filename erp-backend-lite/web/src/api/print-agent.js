@@ -393,6 +393,18 @@ function previewViaLocal(dataUrl, hMm, documentId) {
   });
 }
 
+// ── 打印日志监控(2026-10-22)────────────────────────────
+// 后端 DAO 见 server/src/db/dao/sqlite/order-daos.js(listPrintLogs/printStats),
+// 日志由 print-agent-relay 模块在每次转发打印后写入 print_log 表。
+// GET /admin/api/print-agent/logs   分页查询(day=today|yesterday, status, keyword, page, pageSize)
+// GET /admin/api/print-agent/stats  当日/昨日成功失败统计(含按打印机分组)
+export function getPrintLogs(params) {
+  return get('/admin/api/print-agent/logs', params);
+}
+export function getPrintStats(params) {
+  return get('/admin/api/print-agent/stats', params);
+}
+
 // 无纸预览(双通道):本机优先,不可用时走服务器转发
 export async function previewLabelImage(blob, documentId, widthMm = 70) {
   const { dataUrl, w, h } = await pdfToPng(blob, widthMm);
