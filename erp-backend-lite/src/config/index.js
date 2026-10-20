@@ -32,7 +32,7 @@ const config = {
   jwtSecret: process.env.JWT_SECRET || 'default-insecure-secret-change-me',
   userPhone: process.env.USER_PHONE || '13800138000',
   userPassword: process.env.USER_PASSWORD || '', // bcrypt hash
-  ozonOpiBaseUrl: process.env.OZON_OPI_BASE_URL || 'https://api-seller.ozon.ru',
+  ozonOpiBaseUrl: process.env.OZON_OPI_BASE_URL || 'https://api-seller.ozonru.cn',
   // 服务身份(webhook PING 响应/飞书通知署名用,2026-09-17 随 ozon-webhook 并入)
   appName: process.env.APP_NAME || 'ozon-erp',
   // 机器名(飞书/安卓通知后缀,2026-10-16 多机部署区分来源;可用 MACHINE_NAME 覆盖默认主机名)

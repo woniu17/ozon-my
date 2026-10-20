@@ -1,4 +1,4 @@
-// Ozon OPI 客户端(api-seller.ozon.ru)
+// Ozon OPI 客户端(api-seller.ozonru.cn,中国区域名)
 // 用于官方 API 跟卖(viaPortal=false):/v3/product/import、/v1/product/import/info 等
 import { request } from 'undici';
 import config from '../config/index.js';
