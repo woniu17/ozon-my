@@ -2450,6 +2450,15 @@ async function onSyncPackageLogistics(pkg) {
 const shippingPkgId = ref(0); // 正在备货的包裹 id(按钮 loading)
 async function onShipPackage(pkg) {
   if (shippingPkgId.value) return;
+  // 搁置订单二次确认(2026-10-23):已搁置先确认再操作(保持搁置标记)
+  if (pkg.isIgnored) {
+    const okIgnored = await confirmStore.ask({
+      title: '搁置订单操作确认',
+      message: '该订单当前为【已搁置】状态，确认继续备货吗？',
+      confirmText: '确认操作',
+    });
+    if (!okIgnored) return;
+  }
   // 确认弹窗(2026-09-17):单件商品(总数量=1)直接备货,两件以上才弹窗确认
   const totalQty = (pkg.items || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0);
   if (totalQty > 1) {

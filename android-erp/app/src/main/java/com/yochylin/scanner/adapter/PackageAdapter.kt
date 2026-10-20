@@ -1,5 +1,6 @@
 package com.yochylin.scanner.adapter
 
+import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
@@ -280,8 +281,9 @@ class PackageAdapter(private val callbacks: Callbacks) :
         private fun bindActions(pkg: Pkg) {
             actionArea.removeAllViews()
 
-            val canShipPkg = pkg.ozonStatus == "awaiting_packaging" && !pkg.isIgnored && pkg.id.isNotEmpty()
-            val canShipCard = pkg.operateStatus == "wait_ship" && !pkg.isIgnored
+            // 搁置订单(2026-10-23):解除操作限制,允许备货/打单发货等,但点击时二次弹窗确认(用户确认后保持搁置)
+            val canShipPkg = pkg.ozonStatus == "awaiting_packaging" && pkg.id.isNotEmpty()
+            val canShipCard = pkg.operateStatus == "wait_ship"
             val canReprint = pkg.operateStatus == "ship_success" || pkg.operateStatus == "wait_receiver_confirm"
             val currentWeight = pkg.weightG?.let { fmtNum(it) }
 
@@ -289,7 +291,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
             if (canShipPkg && !canShipCard) {
                 actionArea.addView(
                     newButton("备货", Color.parseColor(COLOR_PRIMARY)) {
-                        callbacks.onShipPackage(pkg)
+                        confirmIgnoredIfNeeded(pkg) { callbacks.onShipPackage(pkg) }
                     }
                 )
             }
@@ -309,15 +311,18 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 val weightInput = buildWeightInput("重量(g)", currentWeight)
                 row.addView(weightInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 row.addView(newRowButton("提交发货", Color.parseColor(COLOR_PRIMARY)) {
-                    val g = validateWeight(weightInput)
-                    if (g != null) callbacks.onSubmitShip(pkg, g)
+                    confirmIgnoredIfNeeded(pkg) {
+                        val g = validateWeight(weightInput)
+                        if (g != null) callbacks.onSubmitShip(pkg, g)
+                    }
                 })
                 actionArea.addView(row)
 
                 val printRow = buildWeightRow()
                 printRow.addView(newRowButton("打印面单", Color.parseColor(COLOR_PRIMARY)) {
-                    callbacks.onPrintLabel(pkg)
+                    confirmIgnoredIfNeeded(pkg) { callbacks.onPrintLabel(pkg) }
                 })
+                // 面单仅查看,无需二次确认
                 printRow.addView(newRowButton("面单", Color.parseColor("#4e5969")) {
                     callbacks.onOpenLabel(pkg)
                 })
@@ -333,15 +338,18 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 val weightInput = buildWeightInput("更正重量(g)", currentWeight)
                 row.addView(weightInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 row.addView(newRowButton("更正", Color.parseColor("#4e5969")) {
-                    val g = validateWeight(weightInput)
-                    if (g != null) callbacks.onCorrectWeight(pkg, g)
+                    confirmIgnoredIfNeeded(pkg) {
+                        val g = validateWeight(weightInput)
+                        if (g != null) callbacks.onCorrectWeight(pkg, g)
+                    }
                 })
                 actionArea.addView(row)
 
                 val printRow = buildWeightRow()
                 printRow.addView(newRowButton("打印面单", Color.parseColor(COLOR_PRIMARY)) {
-                    callbacks.onPrintLabel(pkg)
+                    confirmIgnoredIfNeeded(pkg) { callbacks.onPrintLabel(pkg) }
                 })
+                // 面单仅查看,无需二次确认
                 printRow.addView(newRowButton("面单", Color.parseColor("#4e5969")) {
                     callbacks.onOpenLabel(pkg)
                 })
@@ -355,8 +363,10 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 val weightInput = buildWeightInput("重量(g)", currentWeight)
                 row.addView(weightInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 row.addView(newRowButton("保存重量", Color.parseColor("#4e5969")) {
-                    val g = validateWeight(weightInput)
-                    if (g != null) callbacks.onCorrectWeight(pkg, g)
+                    confirmIgnoredIfNeeded(pkg) {
+                        val g = validateWeight(weightInput)
+                        if (g != null) callbacks.onCorrectWeight(pkg, g)
+                    }
                 })
                 actionArea.addView(row)
             }
@@ -371,6 +381,23 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 }
                 actionArea.addView(newSectionLabel(reason))
             }
+        }
+
+        /**
+         * 搁置订单二次确认(2026-10-23):订单处于已搁置状态时,业务操作前弹窗提示;
+         * 用户选择"确认操作"才执行 action。保持搁置标记,后续每次操作仍会确认。
+         */
+        private fun confirmIgnoredIfNeeded(pkg: Pkg, action: () -> Unit) {
+            if (!pkg.isIgnored) {
+                action()
+                return
+            }
+            AlertDialog.Builder(itemView.context)
+                .setTitle("搁置订单操作确认")
+                .setMessage("该订单当前为【已搁置】状态，确认继续操作吗？")
+                .setPositiveButton("确认操作") { _, _ -> action() }
+                .setNegativeButton("取消", null)
+                .show()
         }
 
         /** 重量输入框(数字,可预填已有重量) */

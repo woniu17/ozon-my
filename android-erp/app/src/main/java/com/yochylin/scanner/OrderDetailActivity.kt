@@ -984,8 +984,9 @@ class OrderDetailActivity : ComponentActivity() {
         // 同步订单
         dActionBar.addView(actionButton("同步订单") { onSync() })
 
+        // 搁置订单(2026-10-23):解除备货限制,点击时二次弹窗确认(用户确认后保持搁置)
         val canShip = (p.operateStatus == "wait_process" || p.operateStatus == "wait_ship") &&
-            p.ozonStatus == "awaiting_packaging" && !p.isIgnored
+            p.ozonStatus == "awaiting_packaging"
         if (canShip) {
             dActionBar.addView(actionButton("备货") { onShip(p) })
         }
@@ -1063,15 +1064,28 @@ class OrderDetailActivity : ComponentActivity() {
             }
         }
         // 二次确认(2026-10-19):商品总数量>1 时弹窗确认(与 H5/ScanShip 同口径)
-        if (totalQty > 1) {
+        val confirmAndDoShip = {
+            if (totalQty > 1) {
+                AlertDialog.Builder(this)
+                    .setTitle("备货确认")
+                    .setMessage("货件 ${p.postingNumber}\n该货件共 $totalQty 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。")
+                    .setPositiveButton("备货") { _, _ -> doShip() }
+                    .setNegativeButton("取消", null)
+                    .show()
+            } else {
+                doShip()
+            }
+        }
+        // 搁置订单二次确认(2026-10-23):已搁置订单先确认再操作(保持搁置标记)
+        if (p.isIgnored) {
             AlertDialog.Builder(this)
-                .setTitle("备货确认")
-                .setMessage("货件 ${p.postingNumber}\n该货件共 $totalQty 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。")
-                .setPositiveButton("备货") { _, _ -> doShip() }
+                .setTitle("搁置订单操作确认")
+                .setMessage("该订单当前为【已搁置】状态，确认继续备货吗？")
+                .setPositiveButton("确认操作") { _, _ -> confirmAndDoShip() }
                 .setNegativeButton("取消", null)
                 .show()
         } else {
-            doShip()
+            confirmAndDoShip()
         }
     }
 

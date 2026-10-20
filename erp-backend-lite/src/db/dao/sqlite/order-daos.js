@@ -2165,8 +2165,9 @@ function getPackagePostings(packageIds) {
     .all(...packageIds);
 }
 
-/** 扫描发货提交:按 DB 当前状态权威校验,仅 wait_ship 且未搁置时写入发货重量
+/** 扫描发货提交:按 DB 当前状态权威校验,仅 wait_ship 时写入发货重量
  *  op_package.weight 即发货重量唯一载体(扫描录入/妙手同步共用,2026-09-13 确认)
+ *  2026-10-23:解除搁置订单提交发货限制(前端二次弹窗确认,保持搁置标记)
  *  @returns {{ found: false } | { found: true, canShip, operateStatus, isIgnored, waybillPrintedAt }}
  */
 function scanShipSubmit(packageId, weightG) {
@@ -2175,7 +2176,7 @@ function scanShipSubmit(packageId, weightG) {
     .get(packageId);
   if (!row) return { found: false };
   const isIgnored = !!row.is_ignored;
-  const canShip = row.operate_status === 'wait_ship' && !isIgnored;
+  const canShip = row.operate_status === 'wait_ship';
   if (canShip) {
     db.prepare(`UPDATE op_package SET weight = ?, gmt_modified = ? WHERE id = ?`).run(
       weightG, nowIso(), packageId

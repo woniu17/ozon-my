@@ -265,16 +265,18 @@ function operateTag(pkg) {
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus, cls: 'tag-mute' };
 }
 // 卡片是否可发货(快照预判;submit 时服务端权威二次校验)
+// 2026-10-23:解除搁置订单限制,允许打单发货(前端二次弹窗确认,保持搁置标记)
 function canShipCard(pkg) {
-  return pkg.operateStatus === 'wait_ship' && !pkg.isIgnored;
+  return pkg.operateStatus === 'wait_ship';
 }
 // 已交运/已发货卡片可重打面单(2026-09-27:已发货亦开放;缓存秒出,不改状态)
 function canReprintCard(pkg) {
   return pkg.operateStatus === 'ship_success' || pkg.operateStatus === 'wait_receiver_confirm';
 }
-// 未备货卡片可「备货」(同 OrderProcess 行按钮口径):Ozon 仍处于 awaiting_packaging 且未搁置
+// 未备货卡片可「备货」(同 OrderProcess 行按钮口径):Ozon 仍处于 awaiting_packaging
+// 2026-10-23:解除搁置订单限制,允许备货(前端二次弹窗确认,保持搁置标记)
 function canShipPkg(pkg) {
-  return pkg.ozonStatus === 'awaiting_packaging' && !pkg.isIgnored && !!pkg.id;
+  return pkg.ozonStatus === 'awaiting_packaging' && !!pkg.id;
 }
 // 非 wait_ship 卡片的拦截原因(置灰卡 + 横幅文案同源)
 function blockReason(pkg) {
@@ -363,6 +365,15 @@ function onScanKeydown(e) {
 // 扫到未备货(awaiting_packaging)的订单可直接向 Ozon 确认货件,无需跳转订单处理页
 async function onShipPackage(pkg) {
   if (shippingPkgId.value) return;
+  // 搁置订单二次确认(2026-10-23):已搁置先确认再操作(保持搁置标记)
+  if (pkg.isIgnored) {
+    const okIgnored = await confirmStore.ask({
+      title: '搁置订单操作确认',
+      message: '该订单当前为【已搁置】状态，确认继续备货吗？',
+      confirmText: '确认操作',
+    });
+    if (!okIgnored) return;
+  }
   // 单件商品(总数量=1)直接备货,两件以上弹窗确认(与 OrderProcess 同口径)
   const totalQty = (pkg.items || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0);
   if (totalQty > 1) {
@@ -397,6 +408,15 @@ async function onShipPackage(pkg) {
 // 提交重量 → 服务端权威状态校验 → canShip 时打印面单 → 出纸后 markPrinted 流转交运
 async function onSubmitShip(pkg) {
   if (printingPkgId.value) return;
+  // 搁置订单二次确认(2026-10-23):已搁置先确认再操作(保持搁置标记)
+  if (pkg.isIgnored) {
+    const okIgnored = await confirmStore.ask({
+      title: '搁置订单操作确认',
+      message: '该订单当前为【已搁置】状态，确认继续提交发货吗？',
+      confirmText: '确认操作',
+    });
+    if (!okIgnored) return;
+  }
   // 前端重量校验(服务端 400 之外的即时反馈)
   const raw = String(weightValues[pkg.id] ?? '').trim();
   const g = Number(raw);
@@ -415,8 +435,8 @@ async function onSubmitShip(pkg) {
       // 非 wait_ship:不打印不改状态,横幅提示原因
       banner.type = 'err';
       banner.text = r.message || `订单状态问题:${r.operateStatus}`;
-      // 已交运/已发货:可选重打(缓存秒出,不改状态)
-      if ((r.operateStatus === 'ship_success' || r.operateStatus === 'wait_receiver_confirm') && !r.isIgnored) {
+      // 已交运/已发货:可选重打(缓存秒出,不改状态;搁置订单亦允许,2026-10-23)
+      if (r.operateStatus === 'ship_success' || r.operateStatus === 'wait_receiver_confirm') {
         const ok = await confirmStore.ask({
           message: `包裹 ${pkg.postingNumber} ${r.operateStatus === 'wait_receiver_confirm' ? '已发货' : '已交运'}。面单丢失或打花?重新打印面单(不改状态)`,
         });

@@ -521,10 +521,10 @@ async function onSync() {
 
 // 备货:向 Ozon 确认全部商品为一个货件(不拆分);已备货幂等返回 alreadyShipped
 // 仅当存在数量≥2的商品时二次确认(防多件误发);全部单件直接备货
+// 2026-10-23:搁置订单先二次确认再操作(保持搁置标记)
 function onShip() {
   if (shipping.value) return;
-  const multiQty = items.value.some((it) => (Number(it.quantity) || 0) >= 2);
-  const qty = items.value.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+  const p = pkg.value;
   const doShip = async () => {
     shipping.value = true;
     try {
@@ -538,14 +538,33 @@ function onShip() {
       shipping.value = false;
     }
   };
-  if (!multiQty) return doShip();
-  uni.showModal({
-    title: '备货确认',
-    content:
-      '货件 ' + pkg.value.postingNumber + '\n含数量≥2的商品(共 ' + qty + ' 件),将向 Ozon 确认全部商品为一个货件(不拆分)。',
-    confirmText: '备货',
-    success: (res) => res.confirm && doShip(),
+  // 搁置订单二次确认(2026-10-23)
+  const confirmIgnored = () => new Promise((resolve) => {
+    uni.showModal({
+      title: '搁置订单操作确认',
+      content: '该订单当前为【已搁置】状态，确认继续备货吗？',
+      confirmText: '确认操作',
+      success: (res) => resolve(res.confirm),
+      fail: () => resolve(false),
+    });
   });
+  const multiQty = items.value.some((it) => (Number(it.quantity) || 0) >= 2);
+  const qty = items.value.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+  const confirmAndDoShip = () => {
+    if (!multiQty) return doShip();
+    uni.showModal({
+      title: '备货确认',
+      content:
+        '货件 ' + p.postingNumber + '\n含数量≥2的商品(共 ' + qty + ' 件),将向 Ozon 确认全部商品为一个货件(不拆分)。',
+      confirmText: '备货',
+      success: (res) => res.confirm && doShip(),
+    });
+  };
+  if (p && p.isIgnored) {
+    confirmIgnored().then((ok) => ok && confirmAndDoShip());
+  } else {
+    confirmAndDoShip();
+  }
 }
 
 // 同步采购物流:该包裹全部关联采购单补单号 + 拉轨迹(强制刷新)

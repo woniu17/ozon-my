@@ -1281,7 +1281,8 @@ router.post('/admin/api/order-process/sync-package', async (req, res, next) => {
 //   2. HTTP 200 不代表备货成功,须再 get 校验:状态离开 awaiting_packaging 且 substatus≠ship_failed
 //      (实测成功后状态 awaiting_packaging → awaiting_registration 待注册面单)
 //   3. 仅 Ozon awaiting_packaging 可备货;awaiting_registration/awaiting_deliver 视为已备货(幂等)
-// 前置:本地 operate_status 为 wait_process/wait_ship(备货只看 Ozon 状态,与本地采购进度无关)且未搁置
+// 前置:本地 operate_status 为 wait_process/wait_ship(备货只看 Ozon 状态,与本地采购进度无关)
+// 2026-10-23:解除搁置订单备货限制(前端二次弹窗确认,保持搁置标记)
 router.post('/admin/api/order-process/ship', async (req, res, next) => {
   try {
     const packageId = Number(req.body?.packageId);
@@ -1298,9 +1299,6 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       .get(packageId);
     if (!row || !row.postingNumber || !row.storeId) {
       return res.status(404).json({ ok: false, message: `未找到 packageId=${packageId} 对应的订单` });
-    }
-    if (row.isIgnored) {
-      return res.status(400).json({ ok: false, message: '包裹已搁置,不能备货' });
     }
     // 备货只依赖 Ozon 侧状态(awaiting_packaging),与本地采购进度无关:
     // 待处理(wait_process,未采购)与待打单(wait_ship,已采购)均可提前备货

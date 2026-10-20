@@ -784,14 +784,15 @@ function opTag(pkg) {
   if (pkg.isReturned) return { label: '已退货', cls: 'err' };
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus || '—', cls: 'mute' };
 }
+// 2026-10-23:解除搁置订单限制,允许打单发货/备货(前端二次弹窗确认,保持搁置标记)
 function canShipCard(pkg) {
-  return pkg.operateStatus === 'wait_ship' && !pkg.isIgnored;
+  return pkg.operateStatus === 'wait_ship';
 }
 function canReprintCard(pkg) {
   return pkg.operateStatus === 'ship_success' || pkg.operateStatus === 'wait_receiver_confirm';
 }
 function canShipPkg(pkg) {
-  return pkg.ozonStatus === 'awaiting_packaging' && !pkg.isIgnored && !!pkg.id;
+  return pkg.ozonStatus === 'awaiting_packaging' && !!pkg.id;
 }
 function blockReason(pkg) {
   if (pkg.isIgnored) return '已搁置';
@@ -968,8 +969,21 @@ function onCorrectInput(pkg, e) {
 }
 
 // 备货(与 web 端同口径:多件商品弹窗确认)
+// 2026-10-23:搁置订单先二次确认再操作(保持搁置标记)
 async function onShipPackage(pkg) {
   if (shippingPkgId.value) return;
+  if (pkg.isIgnored) {
+    const okIgnored = await new Promise((resolve) => {
+      uni.showModal({
+        title: '搁置订单操作确认',
+        content: '该订单当前为【已搁置】状态，确认继续备货吗？',
+        confirmText: '确认操作',
+        success: (res) => resolve(res.confirm),
+        fail: () => resolve(false),
+      });
+    });
+    if (!okIgnored) return;
+  }
   const totalQty = (pkg.items || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0);
   if (totalQty > 1) {
     const ok = await new Promise((resolve) => {
@@ -1000,8 +1014,21 @@ async function onShipPackage(pkg) {
 }
 
 // 提交发货:重量落库 → 标记交运 → 尝试打开面单
+// 2026-10-23:搁置订单先二次确认再操作(保持搁置标记)
 async function onSubmitShip(pkg) {
   if (shippingPkgId.value) return;
+  if (pkg.isIgnored) {
+    const okIgnored = await new Promise((resolve) => {
+      uni.showModal({
+        title: '搁置订单操作确认',
+        content: '该订单当前为【已搁置】状态，确认继续提交发货吗？',
+        confirmText: '确认操作',
+        success: (res) => resolve(res.confirm),
+        fail: () => resolve(false),
+      });
+    });
+    if (!okIgnored) return;
+  }
   const raw = String(weights[pkg.id] ?? '').trim();
   const g = Number(raw);
   if (!/^\d+$/.test(raw) || !Number.isInteger(g) || g < 1 || g > 50000) {
