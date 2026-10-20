@@ -2254,6 +2254,83 @@ function listShippedPackages({ startAt, endAt, page, pageSize } = {}) {
   return { total, page: pageNo, pageSize: size, packages };
 }
 
+// ── 打印日志(print-agent 转发,2026-10-22)──────────────────────
+// 北京时间日界 → UTC 区间(与发货记录同口径):北京 00:00 = UTC 前一日 16:00
+function beijingDayRangeUtc(day) {
+  const bjNow = new Date(Date.now() + 8 * 3600_000);
+  let start = Date.UTC(bjNow.getUTCFullYear(), bjNow.getUTCMonth(), bjNow.getUTCDate()) - 8 * 3600_000;
+  if (day === 'yesterday') start -= 86400_000;
+  return { startAt: new Date(start).toISOString(), endAt: new Date(start + 86400_000).toISOString() };
+}
+
+/** 写入一条打印日志(成功/失败都记) */
+function insertPrintLog({ packageId, postingNumber, storeId, printer, source, status, error, durationMs, ip }) {
+  db.prepare(
+    `INSERT INTO print_log (package_id, posting_number, store_id, printer, source, status, error, duration_ms, ip, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    packageId ?? null,
+    postingNumber ?? null,
+    storeId ?? null,
+    printer ?? '',
+    source ?? 'print-package',
+    status,
+    error ?? null,
+    durationMs ?? null,
+    ip ?? null,
+    new Date().toISOString()
+  );
+}
+
+/** 打印日志分页查询:按北京时间日界过滤,支持状态/关键字(货件号/店铺/打印机) */
+function listPrintLogs({ day = 'today', page = 1, pageSize = 50, status = '', keyword = '' } = {}) {
+  const { startAt, endAt } = beijingDayRangeUtc(day);
+  const pageNo = Math.max(1, Number(page) || 1);
+  const size = Math.min(500, Math.max(1, Number(pageSize) || 50));
+  const where = ['created_at >= ?', 'created_at < ?'];
+  const params = [startAt, endAt];
+  if (status) {
+    where.push('status = ?');
+    params.push(status);
+  }
+  if (keyword) {
+    where.push('(posting_number LIKE ? OR store_id LIKE ? OR printer LIKE ? OR error LIKE ?)');
+    const kw = `%${keyword}%`;
+    params.push(kw, kw, kw, kw);
+  }
+  const whereSql = where.join(' AND ');
+  const total = db.prepare(`SELECT COUNT(*) AS c FROM print_log WHERE ${whereSql}`).get(...params).c;
+  const logs = db
+    .prepare(`SELECT * FROM print_log WHERE ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`)
+    .all(...params, size, (pageNo - 1) * size);
+  return { total, page: pageNo, pageSize: size, logs };
+}
+
+/** 打印统计:当日/昨日 成功失败数 + 按打印机分组 */
+function printStats({ day = 'today' } = {}) {
+  const { startAt, endAt } = beijingDayRangeUtc(day);
+  const statusRows = db
+    .prepare(`SELECT status, COUNT(*) AS c FROM print_log WHERE created_at >= ? AND created_at < ? GROUP BY status`)
+    .all(startAt, endAt);
+  const total = statusRows.reduce((s, r) => s + r.c, 0);
+  const success = statusRows.find((r) => r.status === 'success')?.c || 0;
+  const failed = statusRows.find((r) => r.status === 'failed')?.c || 0;
+  const byPrinter = db
+    .prepare(
+      `SELECT printer, status, COUNT(*) AS c
+       FROM print_log WHERE created_at >= ? AND created_at < ?
+       GROUP BY printer, status ORDER BY c DESC`
+    )
+    .all(startAt, endAt);
+  return {
+    total,
+    success,
+    failed,
+    failRate: total ? Math.round((failed / total) * 1000) / 10 : 0,
+    byPrinter,
+  };
+}
+
 /** 按采购单号查询已关联包裹(拼单提示 + auto 分摊预览用)
  *  返回每个已关联包裹的: 分摊金额合计、数量合计、alloc_mode 列表(auto 预览重算用)
  */
@@ -2644,6 +2721,9 @@ export const orderPackageDao = {
   scanShipSubmit,
   scanShipCorrectWeight,
   listShippedPackages,
+  insertPrintLog,
+  listPrintLogs,
+  printStats,
   lookupPurchase,
   syncFromMiaoshou,
   enrichPurchaseItems,

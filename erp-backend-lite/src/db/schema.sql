@@ -1091,3 +1091,22 @@ CREATE TABLE IF NOT EXISTS ozon_category_tree_refresh_log (
 );
 CREATE INDEX IF NOT EXISTS idx_category_tree_consumed ON ozon_category_tree_refresh_log(consumed_at);
 
+-- ⑦ 打印日志(菜鸟打印组件转发,2026-10-22)
+-- 记录 print-package/print 每次调用结果,供打印监控/排查(如模板 400、打印机离线)
+CREATE TABLE IF NOT EXISTS print_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  package_id INTEGER,                     -- op_package.id(按包裹打印时;图片转发接口无)
+  posting_number TEXT,                    -- 货件号
+  store_id TEXT,
+  printer TEXT DEFAULT '',                -- 实际指定打印机(''=组件默认)
+  source TEXT DEFAULT 'print-package',    -- print-package / print / preview
+  status TEXT NOT NULL,                   -- success / failed
+  error TEXT,                             -- 失败原因(成功为 NULL)
+  duration_ms INTEGER,                    -- 后端从收到请求到组件确认出纸的耗时
+  ip TEXT,                                -- 请求来源 IP
+  created_at TEXT NOT NULL                -- UTC ISO
+);
+CREATE INDEX IF NOT EXISTS idx_print_log_created ON print_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_print_log_posting ON print_log(posting_number);
+CREATE INDEX IF NOT EXISTS idx_print_log_store ON print_log(store_id);
+

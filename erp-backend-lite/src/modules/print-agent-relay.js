@@ -17,7 +17,7 @@ import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
 import { packageLabel } from '../services/ozon-opi.js';
-import { getWaybill, setWaybill } from '../services/waybill-cache.js';
+import { getWaybill, setWaybill, getWaybillPng, setWaybillPng } from '../services/waybill-cache.js';
 
 // SSH 隧道把打印电脑的组件端口转发到服务器 127.0.0.1:13528;可用环境变量覆盖
 const AGENT_WS_URL = process.env.PRINT_AGENT_WS_URL || 'ws://127.0.0.1:13528';
@@ -276,24 +276,46 @@ router.get('/admin/api/print-agent/status', async (_req, res) => {
 
 // 打印:前端已把 PDF 转成 PNG dataURL,后端原样转发给组件(模板 URL 指向 ERP 服务器)
 router.post('/admin/api/print-agent/print', async (req, res, next) => {
+  const startTs = Date.now();
+  const { imageDataUrl, hMm, documentId, printer } = req.body || {};
   try {
-    const { imageDataUrl, hMm, documentId, printer } = req.body || {};
     if (!imageDataUrl || !documentId) {
       return res.status(400).json({ ok: false, message: 'imageDataUrl 与 documentId 必填' });
     }
     const templateBase = getTemplateBase(req);
     await sendPrint(imageDataUrl, Number(hMm) || 129, documentId, printer || '', templateBase);
+    orderPackageDao.insertPrintLog({
+      postingNumber: documentId,
+      printer: printer || '',
+      source: 'print',
+      status: 'success',
+      durationMs: Date.now() - startTs,
+      ip: req.ip,
+    });
     res.json(ok({ printed: true }));
   } catch (e) {
+    orderPackageDao.insertPrintLog({
+      postingNumber: documentId || null,
+      printer: printer || '',
+      source: 'print',
+      status: 'failed',
+      error: e?.message || String(e),
+      durationMs: Date.now() - startTs,
+      ip: req.ip,
+    });
     next(e);
   }
 });
 
 // 按包裹打印(安卓/薄客户端用):传 packageId,后端拉 PDF 缓存 → 服务端渲染 PNG → 转发组件出纸
 // body: { packageId, printer? }  printer 为服务器组件上的打印机名,空=组件默认
+// PNG 二级缓存(2026-10-22):渲染结果按 (店铺,货件,纸张规格) 缓存,补打跳过 PDF 拉取与渲染
 router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
+  const startTs = Date.now();
+  const b = req.body || {};
+  const printer = b.printer || '';
+  let logMeta = { packageId: null, postingNumber: null, storeId: null };
   try {
-    const b = req.body || {};
     const packageId = Number(b.packageId);
     if (!Number.isInteger(packageId)) {
       return res.status(400).json({ ok: false, message: 'packageId 必填' });
@@ -308,36 +330,74 @@ router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
     }
     const storeId = storeIds[0];
     const postingNumbers = rows.map((r) => r.postingNumber);
+    logMeta = { packageId, postingNumber: postingNumbers[0] || null, storeId };
 
-    // 面单 PDF:缓存优先,未命中调 Ozon(与 order-process/package-label 同口径)
-    let pdf = getWaybill(storeId, postingNumbers);
-    if (!pdf) {
-      const store = (config.loadStores() || []).find((s) => s.id === storeId);
-      if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
-      try {
-        pdf = (await packageLabel(store, postingNumbers)).buffer;
-      } catch (e) {
-        const msg = e?.message || '';
-        if (/aren't ready/i.test(msg)) {
-          return res.status(409).json({ ok: false, code: 'LABEL_NOT_READY', message: '面单尚未就绪(Ozon 装配后需 45-60 秒),请稍后重试' });
+    // PNG 二级缓存命中:直接转发,跳过 Ozon 拉 PDF 与 canvas 渲染
+    const widthMm = 70;
+    const pageHm = 129;
+    let dataUrl = getWaybillPng(storeId, postingNumbers, widthMm, pageHm);
+    if (!dataUrl) {
+      // 面单 PDF:文件缓存优先,未命中调 Ozon(与 order-process/package-label 同口径)
+      let pdf = getWaybill(storeId, postingNumbers);
+      if (!pdf) {
+        const store = (config.loadStores() || []).find((s) => s.id === storeId);
+        if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
+        try {
+          pdf = (await packageLabel(store, postingNumbers)).buffer;
+        } catch (e) {
+          const msg = e?.message || '';
+          if (/aren't ready/i.test(msg)) {
+            orderPackageDao.insertPrintLog({
+              ...logMeta,
+              printer,
+              source: 'print-package',
+              status: 'failed',
+              error: 'LABEL_NOT_READY:面单尚未就绪',
+              durationMs: Date.now() - startTs,
+              ip: req.ip,
+            });
+            return res.status(409).json({ ok: false, code: 'LABEL_NOT_READY', message: '面单尚未就绪(Ozon 装配后需 45-60 秒),请稍后重试' });
+          }
+          if (/INVALID_ARGUMENT/i.test(msg)) {
+            orderPackageDao.insertPrintLog({
+              ...logMeta,
+              printer,
+              source: 'print-package',
+              status: 'failed',
+              error: 'LABEL_NOT_AVAILABLE:Ozon 拒绝生成面单',
+              durationMs: Date.now() - startTs,
+              ip: req.ip,
+            });
+            return res.status(409).json({ ok: false, code: 'LABEL_NOT_AVAILABLE', message: 'Ozon 拒绝生成面单:仅"待发货(awaiting_deliver)"状态的订单可打印面单' });
+          }
+          throw e;
         }
-        if (/INVALID_ARGUMENT/i.test(msg)) {
-          return res.status(409).json({ ok: false, code: 'LABEL_NOT_AVAILABLE', message: 'Ozon 拒绝生成面单:仅"待发货(awaiting_deliver)"状态的订单可打印面单' });
-        }
-        throw e;
+        setWaybill(storeId, postingNumbers, pdf);
       }
-      setWaybill(storeId, postingNumbers, pdf);
+      // 服务端渲染成 PNG dataURL,并写入二级缓存
+      const rendered = await pdfToPngDataUrl(pdf, widthMm, pageHm);
+      dataUrl = rendered.dataUrl;
+      setWaybillPng(storeId, postingNumbers, widthMm, pageHm, dataUrl);
     }
 
-    // 服务端渲染成 CNPL 图片模板要的 PNG dataURL(与前端 pdfToPng 同口径)
-    const { dataUrl, w, h } = await pdfToPngDataUrl(pdf);
-    const hMm = Math.round(((70 * h) / w) * 10) / 10;
+    const hMm = Math.round(((70 * pageHm) / widthMm) * 10) / 10; // 固定规格 70×129 → 129mm
     const documentId = postingNumbers[0] || String(packageId);
     const templateBase = getTemplateBase(req);
-    await sendPrint(dataUrl, hMm, documentId, b.printer || '', templateBase);
-    logger.info({ packageId, storeId, postings: postingNumbers.length, printer: b.printer || 'default' }, '[print-agent] 按包裹打印成功');
+    await sendPrint(dataUrl, hMm, documentId, printer, templateBase);
+    const durationMs = Date.now() - startTs;
+    logger.info({ packageId, storeId, postings: postingNumbers.length, printer: printer || 'default', durationMs }, '[print-agent] 按包裹打印成功');
+    orderPackageDao.insertPrintLog({ ...logMeta, printer, source: 'print-package', status: 'success', durationMs, ip: req.ip });
     res.json(ok({ printed: true, postingNumber: documentId }));
   } catch (e) {
+    orderPackageDao.insertPrintLog({
+      ...logMeta,
+      printer,
+      source: 'print-package',
+      status: 'failed',
+      error: e?.message || String(e),
+      durationMs: Date.now() - startTs,
+      ip: req.ip,
+    });
     next(e);
   }
 });
@@ -352,6 +412,35 @@ router.post('/admin/api/print-agent/preview', async (req, res, next) => {
     const templateBase = getTemplateBase(req);
     const url = await sendPreview(imageDataUrl, Number(hMm) || 129, documentId, templateBase);
     res.json(ok({ url }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── 打印日志/监控(2026-10-22)────────────────────────────
+// GET /admin/api/print-agent/logs   分页查询打印记录(今日/昨日,可过滤状态/关键字)
+// GET /admin/api/print-agent/stats  当日/昨日打印成功失败统计
+router.get('/admin/api/print-agent/logs', (req, res, next) => {
+  try {
+    const q = req.query || {};
+    const data = orderPackageDao.listPrintLogs({
+      day: q.day,
+      page: q.page,
+      pageSize: q.pageSize,
+      status: q.status,
+      keyword: q.keyword,
+    });
+    res.json(ok(data));
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/admin/api/print-agent/stats', (req, res, next) => {
+  try {
+    const q = req.query || {};
+    const data = orderPackageDao.printStats({ day: q.day });
+    res.json(ok(data));
   } catch (e) {
     next(e);
   }
