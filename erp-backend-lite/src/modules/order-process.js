@@ -1112,7 +1112,7 @@ router.post('/admin/api/order-process/sync-run', async (req, res, next) => {
     // body.level 可选 fast(默认,未完成订单7天)|mid(近90天)|slow(近365天),与定时三级节奏同窗口
     const level = ['fast', 'mid', 'slow'].includes(req.body?.level) ? req.body.level : 'fast';
     // 异步执行,立即返回(同步全店铺可能耗时数分钟)
-    runOrderSyncNow({ level })
+    runOrderSyncNow({ level, trigger: 'manual' })
       .then((r) => logger.info({ level, stores: r.stores?.length, durationMs: r.durationMs }, '[order-process] 增量同步完成'))
       .catch((e) => logger.error({ err: e?.message }, '[order-process] 增量同步失败'));
     res.json(ok({ started: true, type: 'incremental', level }));
@@ -1162,6 +1162,16 @@ router.get('/admin/api/order-process/sync-progress', (_req, res) => {
 // 仅在 active=false 时可清空;同步进行中调用返回 cleared=false
 router.post('/admin/api/order-process/sync-progress/dismiss', (_req, res) => {
   res.json(ok(clearSyncProgress()));
+});
+
+// ── 同步结果历史日志(2026-10,持久化可回溯)────────────────────
+// 每次同步每店铺一行,倒序返回;query: limit(默认50,上限500)/storeId/trigger
+router.get('/admin/api/order-process/sync-logs', (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500);
+  const storeId = String(req.query.storeId || '');
+  const trigger = String(req.query.trigger || '');
+  const logs = orderPackageDao.getOrderSyncLogs({ limit, storeId, trigger });
+  res.json(ok({ logs }));
 });
 
 // ── 手动触发应计同步 ────────────────────────────────────────

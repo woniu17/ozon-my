@@ -159,6 +159,12 @@ export function dismissSyncProgress() {
   return request.post('/admin/api/order-process/sync-progress/dismiss');
 }
 
+// 同步结果历史日志(2026-10,持久化可回溯)
+// params: { limit(默认50,上限500), storeId?, trigger?: 'timer'|'manual' }
+export function getOrderSyncLogs(params = {}) {
+  return request.get('/admin/api/order-process/sync-logs', params);
+}
+
 // ════════════════════════════════════════════════════════════════
 // Ozon 应计项目(2026-09,已完成/已取消货件的财务应计)
 // ════════════════════════════════════════════════════════════════

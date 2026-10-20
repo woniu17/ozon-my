@@ -652,62 +652,77 @@ async function syncAccruals(store, { mode = 'pending', sinceDays, packageIds, li
 // options:
 //   - sinceDays: number  快捷天数(1/7/30/90/365),后端据此计算 since
 //   - since/to: ISOString  自定义起止时间(优先级高于 sinceDays)
+//   - trigger: 'manual'(默认)| 'timer'  触发来源,写入同步结果日志
 // 注:仅调 list 接口,覆盖所有状态含 delivered/cancelled 终态
-export async function runSyncAllList({ sinceDays, since, to } = {}) {
+export async function runSyncAllList({ sinceDays, since, to, trigger = 'manual' } = {}) {
   if (syncing) return { skipped: true, reason: '同步已在进行中' };
   syncing = true;
   const started = Date.now();
-  const now = new Date();
+  try {
+    const now = new Date();
 
-  // 解析时间窗口:since/to 优先,否则按 sinceDays 计算
-  let sinceIso, toIso;
-  if (since && to) {
-    sinceIso = since;
-    toIso = to;
-  } else {
-    const days = Math.min(Math.max(Number(sinceDays) || 30, 1), 365);
-    sinceIso = iso(new Date(now.getTime() - days * 86400_000));
-    toIso = iso(now);
-  }
-
-  const stores = config.loadStores() || [];
-  setStoreNameMap(new Map(stores.map((s) => [s.id, s.name || s.id])));
-  const eligible = stores.filter((s) => s?.sync_credentials?.clientId);
-  resetProgress('all-list', eligible.length);
-  progress.message = `准备同步 ${eligible.length} 个店铺(范围 ${sinceIso} ~ ${toIso})`;
-
-  const results = [];
-  for (const store of eligible) {
-    progress.currentStoreId = store.id;
-    progress.currentStoreName = store.name || store.id;
-    progress.currentPhase = 'list';
-    progress.message = `同步店铺 ${progress.currentStoreName} (${progress.doneStores + 1}/${eligible.length})`;
-    try {
-      const r = await fetchAll(store,
-        (cursor) => postingFbsList(store, { since: sinceIso, to: toIso, cursor }),
-        (p) => syncPostingWithNotify(store, p), 'list'
-      );
-      results.push({ storeId: store.id, storeName: store.name, count: r.total, ok: true });
-      logger.info({ storeId: store.id, count: r.total, since: sinceIso, to: toIso }, '[order-sync-all] 店铺同步完成');
-      orderPackageDao.updateSyncCursor(store.id, { count: r.total });
-    } catch (e) {
-      orderPackageDao.updateSyncCursor(store.id, { error: e?.message || String(e) });
-      results.push({ storeId: store.id, storeName: store.name, ok: false, error: e?.message || String(e) });
-      progress.errorCount++;
-      recordFailure(store, { error: e?.message || String(e), stack: e?.stack?.split('\n').slice(0, 3).join(' | ') });
-      logger.warn({ storeId: store.id, err: e?.message, stack: e?.stack }, '[order-sync-all] 店铺同步失败');
+    // 解析时间窗口:since/to 优先,否则按 sinceDays 计算
+    let sinceIso, toIso;
+    if (since && to) {
+      sinceIso = since;
+      toIso = to;
+    } else {
+      const days = Math.min(Math.max(Number(sinceDays) || 30, 1), 365);
+      sinceIso = iso(new Date(now.getTime() - days * 86400_000));
+      toIso = iso(now);
     }
-    progress.doneStores++;
+
+    const stores = config.loadStores() || [];
+    setStoreNameMap(new Map(stores.map((s) => [s.id, s.name || s.id])));
+    const eligible = stores.filter((s) => s?.sync_credentials?.clientId);
+    resetProgress('all-list', eligible.length);
+    progress.message = `准备同步 ${eligible.length} 个店铺(范围 ${sinceIso} ~ ${toIso})`;
+
+    const results = [];
+    for (const store of eligible) {
+      progress.currentStoreId = store.id;
+      progress.currentStoreName = store.name || store.id;
+      progress.currentPhase = 'list';
+      progress.message = `同步店铺 ${progress.currentStoreName} (${progress.doneStores + 1}/${eligible.length})`;
+      const storeStartedAt = Date.now();
+      try {
+        const r = await fetchAll(store,
+          (cursor) => postingFbsList(store, { since: sinceIso, to: toIso, cursor }),
+          (p) => syncPostingWithNotify(store, p), 'list'
+        );
+        results.push({ storeId: store.id, storeName: store.name, count: r.total, ok: true });
+        logger.info({ storeId: store.id, count: r.total, since: sinceIso, to: toIso }, '[order-sync-all] 店铺同步完成');
+        orderPackageDao.updateSyncCursor(store.id, { count: r.total });
+        orderPackageDao.recordOrderSyncLog({
+          storeId: store.id, storeName: store.name, trigger, level: 'all-list',
+          since: sinceIso, to: toIso, count: r.total, durationMs: Date.now() - storeStartedAt,
+        });
+      } catch (e) {
+        orderPackageDao.updateSyncCursor(store.id, { error: e?.message || String(e) });
+        results.push({ storeId: store.id, storeName: store.name, ok: false, error: e?.message || String(e) });
+        progress.errorCount++;
+        recordFailure(store, { error: e?.message || String(e), stack: e?.stack?.split('\n').slice(0, 3).join(' | ') });
+        logger.warn({ storeId: store.id, err: e?.message, stack: e?.stack }, '[order-sync-all] 店铺同步失败');
+        orderPackageDao.recordOrderSyncLog({
+          storeId: store.id, storeName: store.name, trigger, level: 'all-list',
+          since: sinceIso, to: toIso, durationMs: Date.now() - storeStartedAt,
+          error: e?.message || String(e), stack: e?.stack?.split('\n').slice(0, 3).join(' | '),
+        });
+      }
+      progress.doneStores++;
+    }
+    // 应计同步已迁移到 by-day 定时任务(2026-09-24,accrual-byday-sync.js),此处不再追加 postings 应计
+    // 完成:保留进度数据,置 active=false + finishedAt,等用户手动关闭
+    progress.active = false;
+    progress.finishedAt = new Date().toISOString();
+    const errPart = progress.errorCount > 0 ? `,失败 ${progress.errorCount} 店` : '';
+    progress.message = `完成 ${eligible.length} 个店铺,共拉取 ${progress.postingsPulled} 个订单${errPart}`;
+    const durationMs = Date.now() - started;
+    return { skipped: false, durationMs, stores: results, since: sinceIso, to: toIso };
+  } finally {
+    // 无论成功/异常都必须释放互斥,否则后续定时轮会被永久跳过(2026-10-19 生产事故修复)
+    syncing = false;
   }
-  // 应计同步已迁移到 by-day 定时任务(2026-09-24,accrual-byday-sync.js),此处不再追加 postings 应计
-  // 完成:保留进度数据,置 active=false + finishedAt,等用户手动关闭
-  progress.active = false;
-  progress.finishedAt = new Date().toISOString();
-  const errPart = progress.errorCount > 0 ? `,失败 ${progress.errorCount} 店` : '';
-  progress.message = `完成 ${eligible.length} 个店铺,共拉取 ${progress.postingsPulled} 个订单${errPart}`;
-  syncing = false;
-  const durationMs = Date.now() - started;
-  return { skipped: false, durationMs, stores: results, since: sinceIso, to: toIso };
 }
 
 /** 立即执行一轮全店铺增量同步(手动触发/定时共用;并发保护) */
@@ -799,60 +814,74 @@ export async function syncSinglePackage(packageId) {
   };
 }
 
-export async function runOrderSyncNow({ level = 'fast' } = {}) {
+export async function runOrderSyncNow({ level = 'fast', trigger = 'timer' } = {}) {
   if (syncing) {
     return { skipped: true, reason: '同步已在进行中' };
   }
   const cfg = SYNC_LEVELS[level] || SYNC_LEVELS.fast;
   syncing = true;
   const started = Date.now();
-  const stores = config.loadStores() || [];
-  // 店铺名映射注入(DAO 列表展示用)
-  setStoreNameMap(new Map(stores.map((s) => [s.id, s.name || s.id])));
-  const eligible = stores.filter((s) => s?.sync_credentials?.clientId);
-  resetProgress('incremental', eligible.length);
-  progress.message = `准备同步 ${eligible.length} 个店铺(${cfg.label})`;
-  const results = [];
-  for (const store of eligible) {
-    progress.currentStoreId = store.id;
-    progress.currentStoreName = store.name || store.id;
-    progress.message = `同步店铺 ${progress.currentStoreName} (${progress.doneStores + 1}/${eligible.length}, ${cfg.label})`;
-    try {
-      const n = await syncStore(store, cfg);
-      results.push({ storeId: store.id, storeName: store.name, count: n, ok: true });
-      logger.info({ level, storeId: store.id, count: n }, '[order-sync] 店铺同步完成');
-    } catch (e) {
-      orderPackageDao.updateSyncCursor(store.id, { error: e?.message || String(e) });
-      results.push({ storeId: store.id, storeName: store.name, ok: false, error: e?.message || String(e) });
-      progress.errorCount++;
-      recordFailure(store, { error: e?.message || String(e), stack: e?.stack?.split('\n').slice(0, 3).join(' | ') });
-      logger.warn({ level, storeId: store.id, err: e?.message, stack: e?.stack }, '[order-sync] 店铺同步失败');
+  try {
+    const stores = config.loadStores() || [];
+    // 店铺名映射注入(DAO 列表展示用)
+    setStoreNameMap(new Map(stores.map((s) => [s.id, s.name || s.id])));
+    const eligible = stores.filter((s) => s?.sync_credentials?.clientId);
+    resetProgress('incremental', eligible.length);
+    progress.message = `准备同步 ${eligible.length} 个店铺(${cfg.label})`;
+    const results = [];
+    for (const store of eligible) {
+      progress.currentStoreId = store.id;
+      progress.currentStoreName = store.name || store.id;
+      progress.message = `同步店铺 ${progress.currentStoreName} (${progress.doneStores + 1}/${eligible.length}, ${cfg.label})`;
+      const storeStartedAt = Date.now();
+      try {
+        const n = await syncStore(store, cfg);
+        results.push({ storeId: store.id, storeName: store.name, count: n, ok: true });
+        logger.info({ level, storeId: store.id, count: n }, '[order-sync] 店铺同步完成');
+        orderPackageDao.recordOrderSyncLog({
+          storeId: store.id, storeName: store.name, trigger, level,
+          count: n, durationMs: Date.now() - storeStartedAt,
+        });
+      } catch (e) {
+        orderPackageDao.updateSyncCursor(store.id, { error: e?.message || String(e) });
+        results.push({ storeId: store.id, storeName: store.name, ok: false, error: e?.message || String(e) });
+        progress.errorCount++;
+        recordFailure(store, { error: e?.message || String(e), stack: e?.stack?.split('\n').slice(0, 3).join(' | ') });
+        logger.warn({ level, storeId: store.id, err: e?.message, stack: e?.stack }, '[order-sync] 店铺同步失败');
+        orderPackageDao.recordOrderSyncLog({
+          storeId: store.id, storeName: store.name, trigger, level,
+          durationMs: Date.now() - storeStartedAt,
+          error: e?.message || String(e), stack: e?.stack?.split('\n').slice(0, 3).join(' | '),
+        });
+      }
+      progress.doneStores++;
     }
-    progress.doneStores++;
-  }
-  // mid/slow 轮收尾:已取消货件对账(订单状态已 cancelled 但包裹 operate_status 未跟上的批量推进)
-  // 漏网场景:搁置期间错过状态联动、fast 轮 cutoff 不回看的过期单长期无人触碰
-  if (cfg.listDays > 0) {
-    try {
-      const fixed = orderPackageDao.reconcileCancelledPackages();
-      if (fixed > 0) logger.info({ level, fixed }, '[order-sync] 已取消货件对账:批量推进到已取消');
-    } catch (e) {
-      logger.warn({ level, err: e?.message }, '[order-sync] 已取消货件对账失败');
+    // mid/slow 轮收尾:已取消货件对账(订单状态已 cancelled 但包裹 operate_status 未跟上的批量推进)
+    // 漏网场景:搁置期间错过状态联动、fast 轮 cutoff 不回看的过期单长期无人触碰
+    if (cfg.listDays > 0) {
+      try {
+        const fixed = orderPackageDao.reconcileCancelledPackages();
+        if (fixed > 0) logger.info({ level, fixed }, '[order-sync] 已取消货件对账:批量推进到已取消');
+      } catch (e) {
+        logger.warn({ level, err: e?.message }, '[order-sync] 已取消货件对账失败');
+      }
     }
+    // 完成:保留进度数据,置 active=false + finishedAt,等用户手动关闭
+    progress.active = false;
+    progress.finishedAt = new Date().toISOString();
+    const errPart = progress.errorCount > 0 ? `,失败 ${progress.errorCount} 店` : '';
+    progress.message = `完成 ${eligible.length} 个店铺(${cfg.label}),共拉取 ${progress.postingsPulled} 个订单${errPart}`;
+    const durationMs = Date.now() - started;
+    return {
+      skipped: false,
+      level,
+      durationMs,
+      stores: results,
+    };
+  } finally {
+    // 无论成功/异常都必须释放互斥,否则后续定时轮会被永久跳过(2026-10-19 生产事故修复)
+    syncing = false;
   }
-  // 完成:保留进度数据,置 active=false + finishedAt,等用户手动关闭
-  progress.active = false;
-  progress.finishedAt = new Date().toISOString();
-  const errPart = progress.errorCount > 0 ? `,失败 ${progress.errorCount} 店` : '';
-  progress.message = `完成 ${eligible.length} 个店铺(${cfg.label}),共拉取 ${progress.postingsPulled} 个订单${errPart}`;
-  syncing = false;
-  const durationMs = Date.now() - started;
-  return {
-    skipped: false,
-    level,
-    durationMs,
-    stores: results,
-  };
 }
 
 export function startOrderSync() {
@@ -864,18 +893,19 @@ export function startOrderSync() {
     runOrderSyncNow({ level: 'fast' }).catch((e) => logger.error({ err: e?.message }, '[order-sync] 首次同步异常'));
   }, FIRST_DELAY_MS).unref();
   // 三级节奏:fast 每2分钟(未完成订单) / mid 每8小时(近90天) / slow 每24小时(近365天)
-  fastTimer = setInterval(
-    () => runOrderSyncNow({ level: 'fast' }).catch((e) => logger.error({ err: e?.message }, '[order-sync] fast 轮同步异常')),
-    FAST_INTERVAL_MIN * 60_000
-  );
-  midTimer = setInterval(
-    () => runOrderSyncNow({ level: 'mid' }).catch((e) => logger.error({ err: e?.message }, '[order-sync] mid 轮同步异常')),
-    MID_INTERVAL_MS
-  );
-  slowTimer = setInterval(
-    () => runOrderSyncNow({ level: 'slow' }).catch((e) => logger.error({ err: e?.message }, '[order-sync] slow 轮同步异常')),
-    SLOW_INTERVAL_MS
-  );
+  // 2026-10-19: .then 记录 skipped(此前 syncing 卡死时定时轮被静默跳过,无任何日志)
+  const runTimedSync = (level, intervalMs, label) => {
+    setInterval(() => {
+      runOrderSyncNow({ level })
+        .then((r) => {
+          if (r?.skipped) logger.warn({ level, reason: r.reason }, `[order-sync] ${label} 轮被跳过(syncing 未释放)`);
+        })
+        .catch((e) => logger.error({ err: e?.message }, `[order-sync] ${label} 轮同步异常`));
+    }, intervalMs);
+  };
+  runTimedSync('fast', FAST_INTERVAL_MIN * 60_000, 'fast');
+  runTimedSync('mid', MID_INTERVAL_MS, 'mid');
+  runTimedSync('slow', SLOW_INTERVAL_MS, 'slow');
   logger.info(
     { fastMin: FAST_INTERVAL_MIN, midHours: MID_INTERVAL_MS / 3600_000, slowHours: SLOW_INTERVAL_MS / 3600_000 },
     '[order-sync] 订单同步调度已启动(三级节奏:fast/mid/slow)'

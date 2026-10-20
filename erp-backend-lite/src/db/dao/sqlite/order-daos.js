@@ -578,6 +578,49 @@ function getSyncCursors() {
     .all();
 }
 
+// ── 订单同步结果日志(2026-10,持久化同步历史)────────────────────
+// 每次同步每店铺一行,记录触发来源/节奏/窗口/拉取数/耗时/失败原因。
+// 与 op_sync_cursor(仅最近一次,覆盖式)互补,可回溯历史轮次。
+function recordOrderSyncLog({
+  storeId, storeName, trigger, level, since, to, count, durationMs, error, stack,
+} = {}) {
+  db.prepare(
+    `INSERT INTO op_order_sync_log (store_id, store_name, trigger, level, since, "to", count, duration_ms, error, stack, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    storeId || '',
+    storeName || storeId || '',
+    trigger || 'timer',
+    level || 'fast',
+    since || null,
+    to || null,
+    count ?? 0,
+    durationMs ?? 0,
+    error || null,
+    stack || null,
+    nowIso()
+  );
+}
+
+// 查询同步结果日志(倒序,可按店铺/触发来源过滤)
+function getOrderSyncLogs({ limit = 50, storeId, trigger } = {}) {
+  const conds = [];
+  const params = [];
+  if (storeId) {
+    conds.push('store_id = ?');
+    params.push(storeId);
+  }
+  if (trigger) {
+    conds.push('trigger = ?');
+    params.push(trigger);
+  }
+  let sql = `SELECT * FROM op_order_sync_log`;
+  if (conds.length) sql += ` WHERE ${conds.join(' AND ')}`;
+  sql += ` ORDER BY id DESC LIMIT ?`;
+  params.push(Math.min(Math.max(Number(limit) || 50, 1), 500));
+  return db.prepare(sql).all(...params);
+}
+
 // ── rFBS 退货同步落库(2026-09)────────────────────────────────
 // 退货状态判定:state/group_state 含 cancel|reject → 退货被驳回(销售成立,不标记)
 //   其余(退货运输中/已销毁/已退款)→ is_returned=1,前端归入"已退货" Tab
@@ -2574,6 +2617,8 @@ export const orderPackageDao = {
   applyOzonStatus,
   updateSyncCursor,
   getSyncCursors,
+  recordOrderSyncLog,
+  getOrderSyncLogs,
   tabCounts,
   upsertRfbsReturns,
   listPackages,

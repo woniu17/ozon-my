@@ -22,6 +22,10 @@ if (!existsSync(DATA_DIR)) {
 export const db = new DatabaseSync(DB_PATH, { allowUnknownNamedParameters: true });
 db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
+// 2026-10-19: 设置 busy_timeout=5s。此前默认 0(立即抛 SQLITE_BUSY),
+// 一旦有瞬时写锁冲突(如备份/其他连接),订单同步一轮 database is locked
+// 就会卡死 syncing 互斥,导致后续所有定时轮被静默跳过数小时(生产事故)。
+db.exec('PRAGMA busy_timeout = 5000;');
 
 // getDb():webhook 迁入代码(event-dao/handlers)沿用的取库方式
 // 与本文件顶部直接 const db = 同一实例;初始化顺序由模块加载保证(app 启动即 open)
@@ -121,6 +125,25 @@ async function ensureMigrations() {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_notification_log_created ON notification_log(created_at DESC);
+  `);
+  // 2026-10: 订单同步结果日志(持久化同步历史,每次同步每店一行,供"同步历史"面板回溯)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS op_order_sync_log (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id     TEXT NOT NULL,
+      store_name   TEXT,
+      trigger      TEXT NOT NULL DEFAULT 'timer',
+      level        TEXT NOT NULL DEFAULT 'fast',
+      since        TEXT,
+      "to"         TEXT,
+      count        INTEGER DEFAULT 0,
+      duration_ms  INTEGER DEFAULT 0,
+      error        TEXT,
+      stack        TEXT,
+      created_at   TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_op_order_sync_log_created ON op_order_sync_log(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_op_order_sync_log_store ON op_order_sync_log(store_id, id DESC);
   `);
   // product_data_cache.store_id(用于关联店铺,拉特征/描述时需用对应店铺凭据)
   const cols = db.prepare(`PRAGMA table_info(product_data_cache)`).all();

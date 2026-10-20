@@ -11,7 +11,7 @@ import {
   getOrderTabs, getOrderList, getOrderDetail, getOrderDetailStock, setOrderItemStock,
   submitPurchase, updatePurchaseLogistics, lookupPurchase, unlinkPurchase, clearPurchaseInfo, revertPackage, ignorePackage, markPrinted, fetchPackageLabel,
   updatePackageMeta, listPackageTags, updateTagOrder,
-  runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress,
+  runSync, runSyncAllList, getSyncStatus, getSyncProgress, dismissSyncProgress, getOrderSyncLogs,
   runAccrualSync, getRubRate, setRubRate,
   syncMsToLocal,
   enrichPurchaseItems,
@@ -259,6 +259,36 @@ const progress = ref({
 });
 // 是否展开失败详情(默认折叠,失败数>0 时自动展开)
 const showFailures = ref(false);
+
+// ── 同步结果历史日志(2026-10,持久化可回溯)───────────────
+const syncLogsOpen = ref(false);
+const syncLogsLoading = ref(false);
+const syncLogs = ref([]); // [{ id, storeId, storeName, trigger, level, since, to, count, durationMs, error, stack, createdAt }]
+async function loadSyncLogs() {
+  syncLogsLoading.value = true;
+  try {
+    const resp = await getOrderSyncLogs({ limit: 100 });
+    syncLogs.value = resp?.data?.logs || resp?.logs || [];
+  } catch { /* 静默:历史面板失败不影响页面 */ }
+  finally {
+    syncLogsLoading.value = false;
+  }
+}
+function toggleSyncLogs() {
+  syncLogsOpen.value = !syncLogsOpen.value;
+  if (syncLogsOpen.value && !syncLogs.value.length) loadSyncLogs();
+}
+function fmtDuration(ms) {
+  if (!ms || ms < 0) return '-';
+  if (ms < 1000) return `${ms}ms`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m${s % 60}s`;
+}
+const SYNC_LOG_LEVEL_LABEL = {
+  fast: '2分钟增量', mid: '8小时·近90天', slow: '24小时·近365天', 'all-list': '全量list',
+};
+const SYNC_LOG_TRIGGER_LABEL = { timer: '定时', manual: '手动' };
 
 // ── 全量同步弹窗 ───────────────────────────────────────
 const syncAllOpen = ref(false);
@@ -3128,6 +3158,9 @@ onUnmounted(() => {
       <button class="btn btn-ghost" :disabled="syncing" @click="openSyncAllDialog" title="全量同步:仅 /v4/posting/fbs/list,覆盖所有状态含 delivered/cancelled 终态,可选时间范围">
         同步所有订单
       </button>
+      <button class="btn btn-ghost" @click="toggleSyncLogs" :title="'同步结果历史日志(每次同步每店铺一行,可回溯失败原因)。当前显示最近 ' + syncLogs.length + ' 条'">
+        {{ syncLogsOpen ? '收起同步历史' : '同步历史' }}
+      </button>
       <button class="btn btn-ghost" :disabled="syncingMs" @click="onSyncMsToLocal" title="从妙手同步:把妙手订单的重量/备注/采购金额/采购订单详情同步到本地">
         {{ syncingMs ? '妙手同步中…' : '从妙手同步' }}
       </button>
@@ -3200,6 +3233,35 @@ onUnmounted(() => {
             <div class="sync-failure-error">{{ f.error }}</div>
             <div v-if="f.stack" class="sync-failure-stack">{{ f.stack }}</div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 同步结果历史日志(持久化,可回溯;2026-10) -->
+    <div v-if="syncLogsOpen" class="sync-log-panel">
+      <div class="sync-log-header">
+        <span class="tag tag-info">同步历史</span>
+        <span class="sync-log-header-hint">每次同步每店铺一行,失败原因持久化可回溯(最近 100 条)</span>
+        <button class="btn btn-ghost btn-sm" :disabled="syncLogsLoading" @click="loadSyncLogs" title="刷新">
+          {{ syncLogsLoading ? '加载中…' : '刷新' }}
+        </button>
+      </div>
+      <div v-if="syncLogsLoading" class="sync-log-empty">加载中…</div>
+      <div v-else-if="!syncLogs.length" class="sync-log-empty">暂无同步记录(同步完成后这里会显示每店铺的结果)</div>
+      <div v-else class="sync-log-list">
+        <div v-for="log in syncLogs" :key="log.id" class="sync-log-item" :class="{ 'sync-log-item-error': log.error }">
+          <div class="sync-log-main">
+            <span class="sync-log-time" :title="log.createdAt">{{ fmtTime(log.createdAt) }}</span>
+            <span class="tag tag-ghost sync-log-level">{{ SYNC_LOG_LEVEL_LABEL[log.level] || log.level }}</span>
+            <span class="tag tag-ghost">{{ SYNC_LOG_TRIGGER_LABEL[log.trigger] || log.trigger }}</span>
+            <b class="sync-log-store">{{ log.storeName || log.storeId }}</b>
+            <span class="sync-log-count">拉取 {{ log.count }} 单</span>
+            <span class="sync-log-duration">耗时 {{ fmtDuration(log.durationMs) }}</span>
+            <span v-if="log.since" class="sync-log-window muted" :title="`${log.since} ~ ${log.to}`">
+              {{ log.since.slice(0, 10) }} → {{ log.to.slice(0, 10) }}
+            </span>
+          </div>
+          <div v-if="log.error" class="sync-log-error" :title="log.stack || ''">{{ log.error }}</div>
         </div>
       </div>
     </div>
@@ -4485,6 +4547,95 @@ onUnmounted(() => {
   font-size: 10px;
   word-break: break-all;
   white-space: pre-wrap;
+}
+
+/* 同步历史日志面板(2026-10,持久化可回溯) */
+.sync-log-panel {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+.sync-log-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #334155;
+  flex-wrap: wrap;
+}
+.sync-log-header-hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
+}
+.sync-log-empty {
+  margin-top: 8px;
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #94a3b8;
+  background: #fff;
+  border: 1px dashed #cbd5e1;
+  border-radius: 4px;
+}
+.sync-log-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.sync-log-item {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.sync-log-item-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+.sync-log-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sync-log-time {
+  color: #64748b;
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+}
+.sync-log-level {
+  font-size: 10px;
+}
+.tag-ghost {
+  background: #f1f5f9;
+  color: #475569;
+}
+.sync-log-store {
+  color: #0f172a;
+}
+.sync-log-count {
+  color: #334155;
+}
+.sync-log-duration {
+  color: #64748b;
+}
+.sync-log-window {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+}
+.sync-log-error {
+  margin-top: 3px;
+  color: #b91c1c;
+  word-break: break-all;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
 }
 
 /* 同步所有订单弹窗 */

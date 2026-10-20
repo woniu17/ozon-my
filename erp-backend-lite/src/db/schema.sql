@@ -743,6 +743,26 @@ CREATE TABLE IF NOT EXISTS op_sync_cursor (
   UNIQUE(store_id, sync_type)
 );
 
+-- 订单同步结果日志(2026-10,持久化同步历史,可回溯)
+-- 每次同步每个店铺写入一行:触发来源/节奏/窗口/拉取数/耗时/失败原因
+-- 与 op_sync_cursor(仅最近一次)互补;前端"同步历史"面板与运维排查用
+CREATE TABLE IF NOT EXISTS op_order_sync_log (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id     TEXT NOT NULL,
+  store_name   TEXT,
+  trigger      TEXT NOT NULL DEFAULT 'timer',   -- timer(定时) | manual(手动)
+  level        TEXT NOT NULL DEFAULT 'fast',    -- fast | mid | slow | all-list
+  since        TEXT,                            -- list 窗口起点(ISO,all-list 有值)
+  "to"         TEXT,                            -- list 窗口终点(ISO)(to 为 SQLite 关键字,加引号)
+  count        INTEGER DEFAULT 0,               -- 本轮拉取订单数
+  duration_ms  INTEGER DEFAULT 0,               -- 该店铺同步耗时
+  error        TEXT,                            -- 失败原因(成功为 NULL)
+  stack        TEXT,                            -- 失败堆栈前几行
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_op_order_sync_log_created ON op_order_sync_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_op_order_sync_log_store ON op_order_sync_log(store_id, id DESC);
+
 -- ════════════════════════════════════════════════════════════════
 -- Ozon 应计项目(2026-09,财务应计明细)
 -- 来源:POST /v1/finance/accrual/postings(已完成/已取消货件)
