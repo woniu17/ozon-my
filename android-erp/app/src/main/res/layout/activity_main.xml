@@ -134,6 +134,21 @@
         android:textColor="@color/text_muted"
         android:textSize="11sp" />
 
+    <!-- 打印机状态条(顶部常驻,点击选择打印机) -->
+    <TextView
+        android:id="@+id/printerBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginTop="6dp"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="6dp"
+        android:text="🖨 打印机:探测中…"
+        android:textColor="@color/text_muted"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:visibility="visible" />
+
     <!-- 状态横幅 -->
     <TextView
         android:id="@+id/bannerText"

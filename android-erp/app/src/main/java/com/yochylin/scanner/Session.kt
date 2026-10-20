@@ -10,6 +10,7 @@ object Session {
     private const val KEY_TOKEN = "token"
     private const val KEY_PHONE = "phone"
     private const val KEY_INTRANET = "use_intranet"
+    private const val KEY_LABEL_PRINTER = "label_printer"
     private const val KEY_LAST_WAIT = "last_wait_process_count"
     private const val KEY_LAST_WAIT_SNS = "last_wait_process_sns"
     private const val KEY_LAST_WAIT_INIT = "last_wait_process_init"
@@ -58,6 +59,13 @@ object Session {
         get() = prefs.getBoolean(KEY_INTRANET, false)
         set(value) {
             prefs.edit().putBoolean(KEY_INTRANET, value).apply()
+        }
+
+    /** 标签打印机选择:打印机名,''=服务器打印组件默认(print-package 的 printer 参数) */
+    var labelPrinter: String
+        get() = prefs.getString(KEY_LABEL_PRINTER, "") ?: ""
+        set(value) {
+            prefs.edit().putString(KEY_LABEL_PRINTER, value).apply()
         }
 
     var token: String?

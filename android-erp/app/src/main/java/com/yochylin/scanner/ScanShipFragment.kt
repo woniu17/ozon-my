@@ -37,6 +37,7 @@ class ScanShipFragment : Fragment() {
     private lateinit var bannerText: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var recyclerView: RecyclerView
+    private lateinit var printerBar: TextView
 
     private val adapter = PackageAdapter(object : PackageAdapter.Callbacks {
         override fun onCopy(text: String, label: String) {
@@ -108,9 +109,14 @@ class ScanShipFragment : Fragment() {
         bannerText = view.findViewById(R.id.bannerText)
         progressBar = view.findViewById(R.id.progressBar)
         recyclerView = view.findViewById(R.id.recyclerView)
+        printerBar = view.findViewById(R.id.printerBar)
 
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = adapter
+
+        // 打印机状态条:常驻显示在线状态 + 当前打印机,点击选择(2026-10-22)
+        printerBar.setOnClickListener { showPrinterPicker() }
+        refreshPrinterStatus()
 
         view.findViewById<TextView>(R.id.searchBtn).setOnClickListener {
             doSearch(searchInput.text.toString())
@@ -125,6 +131,8 @@ class ScanShipFragment : Fragment() {
                 Session.useIntranet = !Session.useIntranet
                 updateIntranetBtn(this)
                 toast(if (Session.useIntranet) "已手动切换内网 192.168.1.212:3001" else "已手动切换公网 yochylin.com:17443")
+                // 网络切换后重新探测打印机(后端地址已变)
+                refreshPrinterStatus()
             }
         }
         view.findViewById<TextView>(R.id.checkUpdateBtn).setOnClickListener {
@@ -149,6 +157,8 @@ class ScanShipFragment : Fragment() {
             }
             // 网络模式可能已切换，重新加载记录，避免首次用错 base URL 导致计数为 0
             loadRecords()
+            // 网络模式确定后探测打印机在线状态
+            refreshPrinterStatus()
         }
         searchInput.setOnEditorActionListener { _, _, _ ->
             doSearch(searchInput.text.toString())
@@ -317,12 +327,70 @@ class ScanShipFragment : Fragment() {
         }
     }
 
+    // ── 打印机状态条(顶部常驻) ──
+    private fun refreshPrinterStatus() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val data = Api.get("/admin/api/print-agent/status").asJsonObject
+                val online = data.optBoolean("online")
+                if (online) {
+                    val defaultPrinter = data.optString("defaultPrinter")
+                    val name = Session.labelPrinter.ifBlank { defaultPrinter.ifBlank { "默认" } }
+                    printerBar.text = "🖨 打印机:$name · 在线"
+                    printerBar.setTextColor(Color.parseColor("#00b42a"))
+                    printerBar.setRoundedBg(0xFFE8FFEA.toInt(), 8f)
+                } else {
+                    printerBar.text = "🖨 打印机组件离线 · 点击重试"
+                    printerBar.setTextColor(Color.parseColor("#86909c"))
+                    printerBar.setRoundedBg(0xFFF2F3F5.toInt(), 8f)
+                }
+            } catch (e: Exception) {
+                printerBar.text = "🖨 打印机组件离线 · 点击重试"
+                printerBar.setTextColor(Color.parseColor("#86909c"))
+                printerBar.setRoundedBg(0xFFF2F3F5.toInt(), 8f)
+            }
+        }
+    }
+
+    /** 点击状态条:拉取打印机列表弹窗单选,选择持久化到 Session */
+    private fun showPrinterPicker() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val data = Api.get("/admin/api/print-agent/status").asJsonObject
+                if (!data.optBoolean("online")) {
+                    toast("打印组件未连接,请检查 SSH 隧道/打印电脑")
+                    refreshPrinterStatus()
+                    return@launch
+                }
+                val options = mutableListOf("默认打印机")
+                val printers = data.getAsJsonArray("printers").map { it.asString }
+                options.addAll(printers)
+                val current = Session.labelPrinter
+                val checked = if (current.isBlank()) 0 else options.indexOf(current).coerceAtLeast(0)
+                AlertDialog.Builder(requireContext())
+                    .setTitle("选择标签打印机")
+                    .setSingleChoiceItems(options.toTypedArray(), checked) { dialog, which ->
+                        Session.labelPrinter = if (which == 0) "" else options[which]
+                        dialog.dismiss()
+                        refreshPrinterStatus()
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            } catch (e: Exception) {
+                handleError(e)
+            }
+        }
+    }
+
     // ── 打印面单(后端打印代理:拉 PDF → 服务端渲染 PNG → 转发打印组件出纸) ──
     private fun printLabel(pkg: Pkg) {
         viewLifecycleOwner.lifecycleScope.launch {
             progressBar.visibility = View.VISIBLE
             try {
-                Api.post("/admin/api/print-agent/print-package", mapOf("packageId" to pkg.id))
+                Api.post(
+                    "/admin/api/print-agent/print-package",
+                    mapOf("packageId" to pkg.id, "printer" to Session.labelPrinter)
+                )
                 toast("已发送打印任务 ${pkg.postingNumber ?: ""}")
             } catch (e: Exception) {
                 handleError(e)
@@ -334,7 +402,10 @@ class ScanShipFragment : Fragment() {
 
     /** 尝试打印面单,成功返回 null,失败返回错误信息(供调用方决定是否阻断交运) */
     private suspend fun tryPrintPackage(pkg: Pkg): String? = try {
-        Api.post("/admin/api/print-agent/print-package", mapOf("packageId" to pkg.id))
+        Api.post(
+            "/admin/api/print-agent/print-package",
+            mapOf("packageId" to pkg.id, "printer" to Session.labelPrinter)
+        )
         null
     } catch (e: Exception) {
         e.message ?: "打印失败"

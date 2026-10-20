@@ -304,7 +304,10 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             progressBar.visibility = View.VISIBLE
             try {
-                Api.post("/admin/api/print-agent/print-package", mapOf("packageId" to pkg.id))
+                Api.post(
+                    "/admin/api/print-agent/print-package",
+                    mapOf("packageId" to pkg.id, "printer" to Session.labelPrinter)
+                )
                 toast("已发送打印任务 ${pkg.postingNumber ?: ""}")
             } catch (e: Exception) {
                 handleError(e)
@@ -316,7 +319,10 @@ class MainActivity : ComponentActivity() {
 
     /** 尝试打印面单,成功返回 null,失败返回错误信息(供调用方决定是否阻断交运) */
     private suspend fun tryPrintPackage(pkg: Pkg): String? = try {
-        Api.post("/admin/api/print-agent/print-package", mapOf("packageId" to pkg.id))
+        Api.post(
+            "/admin/api/print-agent/print-package",
+            mapOf("packageId" to pkg.id, "printer" to Session.labelPrinter)
+        )
         null
     } catch (e: Exception) {
         e.message ?: "打印失败"
