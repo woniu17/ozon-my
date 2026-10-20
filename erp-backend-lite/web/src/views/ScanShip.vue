@@ -12,7 +12,7 @@ import { useRouter } from 'vue-router';
 import {
   getOrderList, scanShipSubmit, correctShipWeight, getScanShipRecords, fetchPackageLabel, markPrinted, shipPackage,
 } from '../api/order-process.js';
-import { pickLabelPrinter, printLabelImage, getAgentPrinters } from '../api/print-agent.js';
+import { pickLabelPrinter, printLabelImage, getAllPrinters, parsePrinter, encodePrinter } from '../api/print-agent.js';
 import { getSkusInfo, setSkuCustoms, updatePrice } from '../api/price-manage.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
@@ -31,10 +31,13 @@ const printingPkgId = ref(0);     // 打印互斥(与 OrderProcess printingId �
 const shippingPkgId = ref(0);       // 备货互斥(与 OrderProcess shippingPkgId 同模式)
 const retryPkgIds = ref(new Set()); // 重量已保存但打印失败的包裹(重试只走打印+流转)
 const retryWeights = reactive({});  // pkgId → 已保存重量 g(重试成功后回填卡片,避免残留搜索时的旧重量)
-const agentOnline = ref(null);    // 菜鸟组件探测:null=探测中 true/false
-const printers = ref([]);         // 组件枚举的本机打印机名列表
-const defaultPrinter = ref('');   // 组件默认打印机
-const selectedPrinter = ref('');  // 当前指定打印机,''=组件默认(localStorage 记忆)
+const agentOnline = ref(null);    // 本机菜鸟组件:null=探测中 true/false
+const serverOnline = ref(null);   // 服务器转发组件:null=探测中 true/false
+const printers = ref([]);         // 本机组件枚举的打印机名列表
+const defaultPrinter = ref('');   // 本机组件默认打印机
+const serverPrinters = ref([]);   // 服务器组件枚举的打印机名列表
+const serverDefaultPrinter = ref(''); // 服务器组件默认打印机
+const selectedPrinter = ref('');  // 当前指定打印机(编码 local:/server:),''=自动(localStorage 记忆)
 const weightEls = {};             // 动态 ref:重量输入框(pkgId → el)
 const correctEls = {};            // 动态 ref:更正重量输入框(pkgId → el)
 
@@ -738,28 +741,41 @@ onMounted(() => {
   focusScan();
   loadRecords();
   loadCounts();
-  // 菜鸟组件探测(仅状态展示,失败不阻塞——打印时 pickLabelPrinter 会再连)
-  getAgentPrinters()
-    .then(({ defaultPrinter: dp, printers: list }) => {
-      agentOnline.value = true;
-      defaultPrinter.value = dp || '';
-      printers.value = list || [];
-      // 恢复上次指定:记忆值仍在本机列表中才生效(打印机可能已被移除/重命名)
-      let saved = '';
-      try { saved = localStorage.getItem('erp:labelPrinter') || ''; } catch { /* noop */ }
-      if (saved && list.includes(saved)) {
-        selectedPrinter.value = saved;
+  // 本机 + 服务器两组菜鸟组件并行探测(仅状态展示,失败不阻塞——打印时 pickLabelPrinter 会再连)
+  getAllPrinters().then(({ local, server }) => {
+    agentOnline.value = local.online;
+    printers.value = local.printers;
+    defaultPrinter.value = local.defaultPrinter || '';
+    serverOnline.value = server.online;
+    serverPrinters.value = server.printers;
+    serverDefaultPrinter.value = server.defaultPrinter || '';
+    // 恢复上次指定:记忆值仍在对应组件的打印机列表中才生效(打印机可能已被移除/重命名)
+    let saved = '';
+    try { saved = localStorage.getItem('erp:labelPrinter') || ''; } catch { /* noop */ }
+    if (saved) {
+      const { source, name } = parsePrinter(saved);
+      const list = source === 'server' ? serverPrinters.value : printers.value;
+      if (name && list.includes(name)) {
+        selectedPrinter.value = encodePrinter(source, name);
       } else {
         selectedPrinter.value = '';
-        if (saved) {
-          try { localStorage.removeItem('erp:labelPrinter'); } catch { /* noop */ }
-        }
+        try { localStorage.removeItem('erp:labelPrinter'); } catch { /* noop */ }
       }
-    })
-    .catch(() => { agentOnline.value = false; });
+    } else {
+      selectedPrinter.value = '';
+    }
+  });
 });
 
-// 指定打印机:''=组件默认(清除记忆);pickLabelPrinter 优先读该记忆,打印链路无需改动
+// 打印机下拉提示(根据两组组件在线情况)
+const printerSelectTitle = computed(() => {
+  if (agentOnline.value !== true && serverOnline.value !== true) return '打印组件未连接,无法选择打印机';
+  if (agentOnline.value !== true) return '本机组件未连接,仅服务器组件在线,请选择服务器打印机';
+  if (serverOnline.value !== true) return '本机组件在线,打印机默认走本机';
+  return '标签打印机(记住上次选择;本机组件优先,服务器组件兜底)';
+});
+
+// 指定打印机(编码 local:/server: 存入记忆;''=自动);pickLabelPrinter 优先读该记忆,打印链路无需改动
 function onPrinterChange() {
   try {
     if (selectedPrinter.value) localStorage.setItem('erp:labelPrinter', selectedPrinter.value);
@@ -792,25 +808,37 @@ function onPrinterChange() {
         <button class="btn btn-primary scan-btn" :disabled="searching" @click="doSearch">
           {{ searching ? '搜索中…' : '搜索' }}
         </button>
-        <!-- 指定标签打印机(记住上次选择;''=组件默认) -->
+        <!-- 指定标签打印机(本机组件/服务器组件并行展示,记住上次选择;''=自动) -->
         <select
           v-model="selectedPrinter"
           class="filter-input printer-select"
-          :disabled="agentOnline !== true || !printers.length"
-          :title="agentOnline === true
-            ? (printers.length ? '标签打印机(记住上次选择)' : '未枚举到打印机')
-            : '打印组件未连接,无法选择打印机'"
+          :disabled="(agentOnline !== true && serverOnline !== true) || (!printers.length && !serverPrinters.length)"
+          :title="printerSelectTitle"
           @change="onPrinterChange"
         >
-          <option value="">默认{{ defaultPrinter ? `(${defaultPrinter})` : '' }}</option>
-          <option v-for="p in printers" :key="p" :value="p">{{ p }}</option>
+          <option value="">自动(可用组件默认)</option>
+          <optgroup v-if="agentOnline === true" label="本机组件">
+            <option value="local:">默认{{ defaultPrinter ? `(${defaultPrinter})` : '' }}</option>
+            <option v-for="p in printers" :key="'L' + p" :value="'local:' + p">{{ p }}</option>
+          </optgroup>
+          <optgroup v-if="serverOnline === true" label="服务器组件">
+            <option value="server:">默认{{ serverDefaultPrinter ? `(${serverDefaultPrinter})` : '' }}</option>
+            <option v-for="p in serverPrinters" :key="'S' + p" :value="'server:' + p">{{ p }}</option>
+          </optgroup>
         </select>
         <span
           class="agent-dot"
           :class="agentOnline === true ? 'on' : agentOnline === false ? 'off' : ''"
-          :title="agentOnline === true ? '菜鸟打印组件已连接' : agentOnline === false ? '菜鸟打印组件未连接(打印前请启动组件)' : '正在探测打印组件…'"
+          :title="agentOnline === true ? '本机菜鸟组件已连接' : agentOnline === false ? '本机菜鸟组件未连接(打印前请启动组件)' : '正在探测本机组件…'"
         >
-          {{ agentOnline === true ? '打印组件已连接' : agentOnline === false ? '打印组件未连接' : '探测打印组件…' }}
+          {{ agentOnline === true ? '本机组件已连接' : agentOnline === false ? '本机组件未连接' : '探测本机…' }}
+        </span>
+        <span
+          class="agent-dot"
+          :class="serverOnline === true ? 'on' : serverOnline === false ? 'off' : ''"
+          :title="serverOnline === true ? '服务器菜鸟组件已连接(SSH 隧道转发)' : serverOnline === false ? '服务器菜鸟组件未连接(检查 SSH 隧道)' : '正在探测服务器组件…'"
+        >
+          {{ serverOnline === true ? '服务器组件已连接' : serverOnline === false ? '服务器组件未连接' : '探测服务器…' }}
         </span>
       </div>
     </div>

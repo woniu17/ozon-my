@@ -8,6 +8,7 @@
 // pdfjs worker 经 vite ?url 打包为带 hash 的静态资产:
 // 不再依赖手动拷贝 src/public/pdfjs/(该目录被 .gitignore 忽略,服务器拉不到,2026-09-15 实测踩坑)
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { get, post } from './request.js';
 
 let ws = null;                 // 长连接(复用)
 let connecting = null;         // 连接中的 promise(防并发重连)
@@ -17,6 +18,22 @@ const taskWaiters = new Map(); // taskID → 任务通知 handler(打印进度/�
 // 任务进度通知:0.x 用 notifyPrintResult(taskID/taskStatus);
 // 1.5.x 另发 notifyDocResult/notifyTaskResult(taskId 小写 d/status),均带 taskId,统一按任务分发
 const NOTIFY_CMDS = new Set(['notifyPrintResult', 'notifyDocResult', 'notifyTaskResult']);
+
+// ── 双通道:本机 WS 直连(默认) + 服务器组件转发(SSH 隧道)────────────────
+// 打印机选择编码为 "local:打印机名" / "server:打印机名"(空名=用该组件默认打印机),
+// 打印时按编码路由到本机 WS 或后端转发接口;旧版 localStorage 纯打印机名按本机处理。
+const LOCAL_FAIL_TTL = 30_000;   // 本机组件失败负缓存有效期
+let localProbeCache = null;      // 本机探测结果缓存 { at, result }(失败后 30s 内不重复试连,远程机器秒回)
+
+export function parsePrinter(value) {
+  const v = String(value || '');
+  if (v.startsWith('local:')) return { source: 'local', name: v.slice(6) };
+  if (v.startsWith('server:')) return { source: 'server', name: v.slice(7) };
+  return { source: 'local', name: v }; // 旧值/空值按本机处理
+}
+export function encodePrinter(source, name) {
+  return `${source}:${name}`;
+}
 
 function wsUrl() {
   // wss 必须用 localhost 而非 127.0.0.1:组件的自签名证书只签给 localhost(无 127.0.0.1 的 IP SAN),
@@ -109,14 +126,61 @@ export async function getAgentPrinters() {
   return { defaultPrinter: resp.defaultPrinter || '', printers: (resp.printers || []).map((p) => p.name) };
 }
 
-// 选标签打印机:localStorage 记忆 > 组件默认
+// 服务器组件(后端转发)状态:SSH 隧道把打印电脑组件暴露到服务器 127.0.0.1:13528
+export async function getServerAgentStatus() {
+  try {
+    const data = await get('/admin/api/print-agent/status');
+    return {
+      online: !!data?.online,
+      defaultPrinter: data?.defaultPrinter || '',
+      printers: data?.printers || [],
+    };
+  } catch {
+    return { online: false, defaultPrinter: '', printers: [] };
+  }
+}
+
+// 本机组件探测(失败负缓存:30s 内不重复试连,远程机器秒回)
+async function probeLocalAgent() {
+  if (localProbeCache && Date.now() - localProbeCache.at < LOCAL_FAIL_TTL && !localProbeCache.result.online) {
+    return localProbeCache.result;
+  }
+  try {
+    const r = await getAgentPrinters();
+    localProbeCache = { at: Date.now(), result: { online: true, defaultPrinter: r.defaultPrinter, printers: r.printers } };
+  } catch {
+    localProbeCache = { at: Date.now(), result: { online: false, defaultPrinter: '', printers: [] } };
+  }
+  return localProbeCache.result;
+}
+
+// 本机组件是否可用
+async function isLocalAgentAvailable() {
+  return (await probeLocalAgent()).online;
+}
+
+// 合并本机 + 服务器两组打印机(并行探测,供打印机下拉同时展示)
+export async function getAllPrinters() {
+  const [localRes, serverRes] = await Promise.allSettled([probeLocalAgent(), getServerAgentStatus()]);
+  const local = localRes.status === 'fulfilled'
+    ? localRes.value
+    : { online: false, defaultPrinter: '', printers: [] };
+  const server = serverRes.status === 'fulfilled' && serverRes.value.online
+    ? { online: true, defaultPrinter: serverRes.value.defaultPrinter || '', printers: serverRes.value.printers || [] }
+    : { online: false, defaultPrinter: '', printers: [] };
+  return { local, server };
+}
+
+// 选标签打印机:localStorage 记忆 > 可用组件默认(local 优先,其次服务器)
 export async function pickLabelPrinter() {
   try {
     const saved = localStorage.getItem('erp:labelPrinter');
     if (saved) return saved;
   } catch { /* noop */ }
-  const { defaultPrinter } = await getAgentPrinters();
-  return defaultPrinter;
+  const { local, server } = await getAllPrinters();
+  if (local.online) return encodePrinter('local', local.defaultPrinter);
+  if (server.online) return encodePrinter('server', server.defaultPrinter);
+  return '';
 }
 
 // PDF 第 1 页 → PNG dataURL(pdfjs;worker 走 vite 打包的带 hash 资产,见文件头 import)
@@ -164,47 +228,91 @@ function buildImageContents(dataUrl, hMm, documentId) {
   ];
 }
 
-// 静默打印:组件渲染 CNPL 模板并出纸;waiter 仅在终态清理(提前清理会漏接 printed 导致超时)
+// 服务器组件打印:前端转好的 PNG dataURL 交给后端转发到隧道后的组件
+async function printViaServer(dataUrl, hMm, documentId, printer) {
+  await post('/admin/api/print-agent/print', {
+    imageDataUrl: dataUrl,
+    hMm,
+    documentId: String(documentId),
+    printer: printer || '',
+  });
+}
+
+// 本机组件 WS 直连打印:组件渲染 CNPL 模板并出纸;waiter 仅在终态清理(提前清理会漏接 printed 导致超时)
 // 终态判定兼容两代协议:0.x notifyPrintResult 用 taskStatus(printed/failed);
 // 1.5.x notifyDocResult/notifyTaskResult 用 status(printed/completeSuccess/failed/completeFailed)
+function printViaLocal(dataUrl, hMm, documentId, printer) {
+  return connectAgent().then((sock) => {
+    const taskID = genId();
+    return new Promise((resolve, reject) => {
+      const finish = (fn, arg) => {
+        taskWaiters.delete(taskID);
+        clearTimeout(timer);
+        fn(arg);
+      };
+      taskWaiters.set(taskID, (v) => {
+        const st = v.taskStatus || v.status;
+        if (st === 'printed' || st === 'completeSuccess') {
+          finish(resolve, v);
+        } else if (st === 'failed' || st === 'completeFailed' || st === 'canceled') {
+          const msgs = (v.printStatus || []).map((k) => k.msg || k.detail).filter(Boolean).join('; ');
+          finish(reject, new Error('打印失败: ' + (msgs || v.detail || v.msg || '未知原因')));
+        }
+      });
+      const timer = setTimeout(() => {
+        taskWaiters.delete(taskID);
+        reject(new Error('打印超时(60 秒未出纸)'));
+      }, 60000);
+      sock.send(
+        JSON.stringify({
+          cmd: 'print',
+          requestID: genId(),
+          version: '1.0',
+          task: {
+            taskID,
+            preview: false,
+            printer: printer || '',
+            documents: buildImageContents(dataUrl, hMm, documentId),
+          },
+        })
+      );
+    });
+  });
+}
+
+// 静默打印(双通道):明确选了服务器组件 → 后端转发;
+// 本机组件可用 → 本机直连,打印中途失败再兜底服务器;本机不可用 → 直接走服务器
 export async function printLabelImage(blob, documentId, printer = '', widthMm = 70) {
   const { dataUrl, w, h } = await pdfToPng(blob, widthMm);
   const hMm = Math.round((widthMm * h) / w * 10) / 10;
-  const sock = await connectAgent();
-  const taskID = genId();
-  return new Promise((resolve, reject) => {
-    const finish = (fn, arg) => {
-      taskWaiters.delete(taskID);
-      clearTimeout(timer);
-      fn(arg);
-    };
-    taskWaiters.set(taskID, (v) => {
-      const st = v.taskStatus || v.status;
-      if (st === 'printed' || st === 'completeSuccess') {
-        finish(resolve, v);
-      } else if (st === 'failed' || st === 'completeFailed' || st === 'canceled') {
-        const msgs = (v.printStatus || []).map((k) => k.msg || k.detail).filter(Boolean).join('; ');
-        finish(reject, new Error('打印失败: ' + (msgs || v.detail || v.msg || '未知原因')));
+  const parsed = parsePrinter(printer);
+
+  if (parsed.source === 'server') {
+    await printViaServer(dataUrl, hMm, documentId, parsed.name);
+    return;
+  }
+
+  if (await isLocalAgentAvailable()) {
+    try {
+      await printViaLocal(dataUrl, hMm, documentId, parsed.name);
+      return;
+    } catch (err) {
+      const server = await getServerAgentStatus();
+      if (server.online) {
+        // 本机打印中途失败 → 服务器组件兜底(用其默认打印机,本机打印机名在服务器上多半不存在)
+        await printViaServer(dataUrl, hMm, documentId, '');
+        return;
       }
-    });
-    const timer = setTimeout(() => {
-      taskWaiters.delete(taskID);
-      reject(new Error('打印超时(60 秒未出纸)'));
-    }, 60000);
-    sock.send(
-      JSON.stringify({
-        cmd: 'print',
-        requestID: genId(),
-        version: '1.0',
-        task: {
-          taskID,
-          preview: false,
-          printer: printer || '',
-          documents: buildImageContents(dataUrl, hMm, documentId),
-        },
-      })
-    );
-  });
+      throw err;
+    }
+  }
+
+  const server = await getServerAgentStatus();
+  if (server.online) {
+    await printViaServer(dataUrl, hMm, documentId, '');
+    return;
+  }
+  throw new Error('菜鸟打印组件不可用:本机组件未连接,服务器组件转发也不可用');
 }
 
 // 从 print 响应中提取预览图 URL(兼容 1.5.x responses[].urls/previewImage 与文档字段 previewURL/urls)
@@ -218,60 +326,85 @@ function extractPreviewUrl(msg) {
   );
 }
 
-// 无纸预览:preview:true + previewType:'image',组件渲染 CNPL 模板不出纸、不流转状态
+// 服务器组件预览:返回组件渲染图 URL(远程机器上可能无法直接访问,以本机预览为准)
+async function previewViaServer(dataUrl, hMm, documentId) {
+  const r = await post('/admin/api/print-agent/preview', {
+    imageDataUrl: dataUrl,
+    hMm,
+    documentId: String(documentId),
+  });
+  return r?.url || '';
+}
+
+// 本机组件 WS 无纸预览:preview:true + previewType:'image',组件渲染 CNPL 模板不出纸、不流转状态
 // 1.5.x 报文流(实测):①裸 ack(status:success,无 URL)→ ②notifyDocResult(rendered→printed)
 //   → ③第二条 print 响应(带 responses[].urls/previewImage)→ ④notifyTaskResult(completeSuccess)
 // 故 reqWaiters 收到裸 ack 不能消费,须等第二条;taskWaiters 兜底接收渲染失败通知
+function previewViaLocal(dataUrl, hMm, documentId) {
+  return connectAgent().then((sock) => {
+    const reqId = genId();
+    const taskID = genId();
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        reqWaiters.delete(reqId);
+        taskWaiters.delete(taskID);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('预览超时(组件 20 秒内未返回渲染结果)'));
+      }, 20000);
+      // print 响应:status:failed 立即失败;裸 ack(无 URL)继续等第二条
+      reqWaiters.set(reqId, (msg) => {
+        if (msg.status === 'failed') {
+          cleanup();
+          reject(new Error(msg.msg || '预览渲染失败'));
+          return;
+        }
+        const url = extractPreviewUrl(msg);
+        if (url) {
+          cleanup();
+          resolve(url);
+        }
+      });
+      // 兜底:渲染失败时组件可能只发任务通知、不发第二条响应
+      taskWaiters.set(taskID, (v) => {
+        const st = v.taskStatus || v.status;
+        if (st === 'failed' || st === 'completeFailed' || st === 'canceled') {
+          cleanup();
+          reject(new Error(v.detail || v.msg || '预览渲染失败'));
+        }
+      });
+      sock.send(
+        JSON.stringify({
+          cmd: 'print',
+          requestID: reqId,
+          version: '1.0',
+          task: {
+            taskID,
+            preview: true,
+            previewType: 'image',
+            printer: '',
+            documents: buildImageContents(dataUrl, hMm, documentId),
+          },
+        })
+      );
+    });
+  });
+}
+
+// 无纸预览(双通道):本机优先,不可用时走服务器转发
 export async function previewLabelImage(blob, documentId, widthMm = 70) {
   const { dataUrl, w, h } = await pdfToPng(blob, widthMm);
   const hMm = Math.round((widthMm * h) / w * 10) / 10;
-  const sock = await connectAgent();
-  const reqId = genId();
-  const taskID = genId();
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timer);
-      reqWaiters.delete(reqId);
-      taskWaiters.delete(taskID);
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error('预览超时(组件 20 秒内未返回渲染结果)'));
-    }, 20000);
-    // print 响应:status:failed 立即失败;裸 ack(无 URL)继续等第二条
-    reqWaiters.set(reqId, (msg) => {
-      if (msg.status === 'failed') {
-        cleanup();
-        reject(new Error(msg.msg || '预览渲染失败'));
-        return;
-      }
-      const url = extractPreviewUrl(msg);
-      if (url) {
-        cleanup();
-        resolve(url);
-      }
-    });
-    // 兜底:渲染失败时组件可能只发任务通知、不发第二条响应
-    taskWaiters.set(taskID, (v) => {
-      const st = v.taskStatus || v.status;
-      if (st === 'failed' || st === 'completeFailed' || st === 'canceled') {
-        cleanup();
-        reject(new Error(v.detail || v.msg || '预览渲染失败'));
-      }
-    });
-    sock.send(
-      JSON.stringify({
-        cmd: 'print',
-        requestID: reqId,
-        version: '1.0',
-        task: {
-          taskID,
-          preview: true,
-          previewType: 'image',
-          printer: '',
-          documents: buildImageContents(dataUrl, hMm, documentId),
-        },
-      })
-    );
-  });
+  if (await isLocalAgentAvailable()) {
+    try {
+      return await previewViaLocal(dataUrl, hMm, documentId);
+    } catch {
+      /* 本机预览失败 → 尝试服务器 */
+    }
+  }
+  const server = await getServerAgentStatus();
+  if (server.online) return previewViaServer(dataUrl, hMm, documentId);
+  throw new Error('菜鸟打印组件不可用:本机组件未连接,服务器组件转发也不可用');
 }
