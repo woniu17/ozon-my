@@ -125,6 +125,16 @@ async function getAgentPrinters() {
   };
 }
 
+// 组件拉取 CNPL 模板用的 base URL:必须用公网可达且与访问入口一致的协议。
+// 反代(nginx/caddy 终止 TLS)向后端转发的是 http,req.protocol 会错判成 http,
+// 而公网入口 17443 只接受 https,组件用 http 拉模板会收到 400 → 优先取 x-forwarded-proto。
+function getTemplateBase(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http')
+    .split(',')[0]
+    .trim();
+  return `${proto}://${req.get('host')}`;
+}
+
 // CNPL 图片模板任务内容(明文 data:img=PNG dataURL,h=图高 mm)
 // 模板经组件拉取 ${templateBase}/cnpl/label-image.xml,模板内用 _data.img/_data.h 取值
 // templateBase 用请求的 origin(ERP 服务器地址),打印电脑经局域网可达;URL 带时间戳防模板缓存
@@ -271,7 +281,7 @@ router.post('/admin/api/print-agent/print', async (req, res, next) => {
     if (!imageDataUrl || !documentId) {
       return res.status(400).json({ ok: false, message: 'imageDataUrl 与 documentId 必填' });
     }
-    const templateBase = `${req.protocol}://${req.get('host')}`;
+    const templateBase = getTemplateBase(req);
     await sendPrint(imageDataUrl, Number(hMm) || 129, documentId, printer || '', templateBase);
     res.json(ok({ printed: true }));
   } catch (e) {
@@ -323,7 +333,7 @@ router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
     const { dataUrl, w, h } = await pdfToPngDataUrl(pdf);
     const hMm = Math.round(((70 * h) / w) * 10) / 10;
     const documentId = postingNumbers[0] || String(packageId);
-    const templateBase = `${req.protocol}://${req.get('host')}`;
+    const templateBase = getTemplateBase(req);
     await sendPrint(dataUrl, hMm, documentId, b.printer || '', templateBase);
     logger.info({ packageId, storeId, postings: postingNumbers.length, printer: b.printer || 'default' }, '[print-agent] 按包裹打印成功');
     res.json(ok({ printed: true, postingNumber: documentId }));
@@ -339,7 +349,7 @@ router.post('/admin/api/print-agent/preview', async (req, res, next) => {
     if (!imageDataUrl || !documentId) {
       return res.status(400).json({ ok: false, message: 'imageDataUrl 与 documentId 必填' });
     }
-    const templateBase = `${req.protocol}://${req.get('host')}`;
+    const templateBase = getTemplateBase(req);
     const url = await sendPreview(imageDataUrl, Number(hMm) || 129, documentId, templateBase);
     res.json(ok({ url }));
   } catch (e) {
