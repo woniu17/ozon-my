@@ -31,18 +31,35 @@ class PushLogActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_push_log)
+        try {
+            setContentView(R.layout.activity_push_log)
 
-        findViewById<TextView>(R.id.pushLogBackBtn).setOnClickListener { finish() }
-        findViewById<TextView>(R.id.pushLogRefreshBtn).setOnClickListener { loadLogs() }
+            findViewById<TextView>(R.id.pushLogBackBtn).setOnClickListener { finish() }
+            findViewById<TextView>(R.id.pushLogRefreshBtn).setOnClickListener { loadLogs() }
 
-        emptyView = findViewById(R.id.pushLogEmpty)
-        recyclerView = findViewById(R.id.pushLogList)
-        recyclerView.layoutManager = LinearLayoutManager(this)
-        recyclerView.adapter = adapter
+            emptyView = findViewById(R.id.pushLogEmpty)
+            recyclerView = findViewById(R.id.pushLogList)
+            recyclerView.layoutManager = LinearLayoutManager(this)
+            recyclerView.adapter = adapter
 
-        loadLogs()
+            loadLogs()
+        } catch (e: Throwable) {
+            // 初始化兜底(2026-10-20):布局/资源异常时展示错误,不再闪退回主界面
+            try {
+                val tv = TextView(this).apply {
+                    text = "推送记录页初始化失败：${e.message}"
+                    setTextSize(14f)
+                    setTextColor(Color.parseColor("#f53f3f"))
+                    setPadding(dp(24), dp(48), dp(24), dp(24))
+                }
+                setContentView(tv)
+            } catch (_: Throwable) {
+                finish()
+            }
+        }
     }
+
+    private fun dp(v: Number): Int = (v.toFloat() * resources.displayMetrics.density).toInt()
 
     private fun loadLogs() {
         lifecycleScope.launch {
