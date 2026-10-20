@@ -111,7 +111,6 @@ class MainActivity : ComponentActivity() {
         }
         // 消息推送序列表（2026-10-18 通知日志查看入口）
         findViewById<TextView>(R.id.pushLogBtn).setOnClickListener {
-            toast("正在打开推送记录…")
             startActivity(Intent(this, PushLogActivity::class.java))
         }
         findViewById<TextView>(R.id.intranetBtn).apply {
