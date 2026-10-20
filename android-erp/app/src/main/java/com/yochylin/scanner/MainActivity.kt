@@ -119,12 +119,7 @@ class MainActivity : ComponentActivity() {
         }
         findViewById<TextView>(R.id.intranetBtn).apply {
             updateIntranetBtn(this)
-            setOnClickListener {
-                NetworkDetector.manualOverride = true
-                Session.useIntranet = !Session.useIntranet
-                updateIntranetBtn(this)
-                toast(if (Session.useIntranet) "已手动切换内网 192.168.1.212:3001" else "已手动切换公网 yochylin.com:17443")
-            }
+            setOnClickListener { showNetworkModeDialog(this) }
         }
         findViewById<TextView>(R.id.logoutBtn).setOnClickListener {
             Session.clear()
@@ -134,20 +129,19 @@ class MainActivity : ComponentActivity() {
         // 底部导航栏
         setupBottomNav(this, "home")
 
-        // 启动时自动探测内网，可达则自动切换为内网模式
+        // 启动时按网络模式应用后端地址（auto 检测 Home-WiFi）
         lifecycleScope.launch {
-            val changed = NetworkDetector.autoDetectAndApply()
+            val changed = NetworkDetector.applyNetworkMode(this@MainActivity)
             updateIntranetBtn(findViewById(R.id.intranetBtn))
             if (changed) {
-                toast(if (Session.useIntranet) "检测到内网，已自动切换" else "内网不可达，已使用公网")
+                toast(if (Session.useIntranet) "检测到内网，已自动切换" else "未检测到内网，已使用公网")
             }
+            loadRecords()
         }
         searchInput.setOnEditorActionListener { _, _, _ ->
             doSearch(searchInput.text.toString())
             true
         }
-
-        loadRecords()
     }
 
     // ── 搜索 ──
@@ -375,14 +369,68 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateIntranetBtn(btn: TextView) {
-        btn.text = if (Session.useIntranet) "内网" else "公网"
-        if (Session.useIntranet) {
-            btn.setTextColor(Color.WHITE)
-            btn.setRoundedBg(Color.parseColor("#165dff"), 999f)
-        } else {
-            btn.setTextColor(Color.parseColor("#165dff"))
-            btn.setRoundedBg(Color.parseColor("#eef4ff"), 999f)
+        btn.text = when (Session.networkMode) {
+            Session.MODE_INTRANET -> "内网"
+            Session.MODE_PUBLIC -> "公网"
+            else -> "自动"
         }
+        when (Session.networkMode) {
+            Session.MODE_INTRANET -> {
+                btn.setTextColor(Color.WHITE)
+                btn.setRoundedBg(Color.parseColor("#165dff"), 999f)
+            }
+            Session.MODE_PUBLIC -> {
+                btn.setTextColor(Color.parseColor("#165dff"))
+                btn.setRoundedBg(Color.parseColor("#eef4ff"), 999f)
+            }
+            else -> {
+                // auto：绿色底白字表示自动检测
+                btn.setTextColor(Color.WHITE)
+                btn.setRoundedBg(Color.parseColor("#00b42a"), 999f)
+            }
+        }
+    }
+
+    /** 网络模式三选一弹窗（自动检测/内网/公网） */
+    private fun showNetworkModeDialog(btn: TextView) {
+        val modeNames = arrayOf("自动检测", "内网", "公网")
+        val current = when (Session.networkMode) {
+            Session.MODE_INTRANET -> 1
+            Session.MODE_PUBLIC -> 2
+            else -> 0
+        }
+        var selected = current
+        AlertDialog.Builder(this)
+            .setTitle("网络模式")
+            .setSingleChoiceItems(modeNames, current) { _, which -> selected = which }
+            .setPositiveButton("确定") { _, _ ->
+                Session.networkMode = when (selected) {
+                    1 -> Session.MODE_INTRANET
+                    2 -> Session.MODE_PUBLIC
+                    else -> Session.MODE_AUTO
+                }
+                applyNetworkMode(btn)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 应用当前网络模式并刷新 UI/数据 */
+    private fun applyNetworkMode(btn: TextView) {
+        lifecycleScope.launch {
+            val changed = NetworkDetector.applyNetworkMode(this@MainActivity)
+            updateIntranetBtn(btn)
+            toast(networkModeToast())
+            if (changed) {
+                loadRecords()
+            }
+        }
+    }
+
+    private fun networkModeToast(): String = when (Session.networkMode) {
+        Session.MODE_INTRANET -> "已切换为内网 192.168.1.212:3001"
+        Session.MODE_PUBLIC -> "已切换为公网 yochylin.com:17443"
+        else -> if (Session.useIntranet) "已连接 Home-WiFi，自动使用内网" else "未连接 Home-WiFi，使用公网"
     }
 
     private fun toast(msg: String) {

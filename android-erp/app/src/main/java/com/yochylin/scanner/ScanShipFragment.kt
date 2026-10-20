@@ -126,14 +126,7 @@ class ScanShipFragment : Fragment() {
         }
         view.findViewById<TextView>(R.id.intranetBtn).apply {
             updateIntranetBtn(this)
-            setOnClickListener {
-                NetworkDetector.manualOverride = true
-                Session.useIntranet = !Session.useIntranet
-                updateIntranetBtn(this)
-                toast(if (Session.useIntranet) "已手动切换内网 192.168.1.212:3001" else "已手动切换公网 yochylin.com:17443")
-                // 网络切换后重新探测打印机(后端地址已变)
-                refreshPrinterStatus()
-            }
+            setOnClickListener { showNetworkModeDialog(this) }
         }
         view.findViewById<TextView>(R.id.checkUpdateBtn).setOnClickListener {
             (requireActivity() as? MainShellActivity)?.checkUpdate(manual = true)
@@ -148,16 +141,15 @@ class ScanShipFragment : Fragment() {
             goLogin()
         }
 
-        // 启动时自动探测内网，可达则自动切换为内网模式
+        // 启动时按网络模式应用后端地址（auto 检测 Home-WiFi）
         viewLifecycleOwner.lifecycleScope.launch {
-            val changed = NetworkDetector.autoDetectAndApply()
+            val changed = NetworkDetector.applyNetworkMode(requireContext())
             updateIntranetBtn(view.findViewById(R.id.intranetBtn))
             if (changed) {
-                toast(if (Session.useIntranet) "检测到内网，已自动切换" else "内网不可达，已使用公网")
+                toast(if (Session.useIntranet) "检测到内网，已自动切换" else "未检测到内网，已使用公网")
             }
-            // 网络模式可能已切换，重新加载记录，避免首次用错 base URL 导致计数为 0
+            // 网络模式确定后加载记录/探测打印机，避免用错 base URL
             loadRecords()
-            // 网络模式确定后探测打印机在线状态
             refreshPrinterStatus()
         }
         searchInput.setOnEditorActionListener { _, _, _ ->
@@ -458,14 +450,67 @@ class ScanShipFragment : Fragment() {
     }
 
     private fun updateIntranetBtn(btn: TextView) {
-        btn.text = if (Session.useIntranet) "内网" else "公网"
-        if (Session.useIntranet) {
-            btn.setTextColor(Color.WHITE)
-            btn.setRoundedBg(Color.parseColor("#165dff"), 999f)
-        } else {
-            btn.setTextColor(Color.parseColor("#165dff"))
-            btn.setRoundedBg(Color.parseColor("#eef4ff"), 999f)
+        btn.text = when (Session.networkMode) {
+            Session.MODE_INTRANET -> "内网"
+            Session.MODE_PUBLIC -> "公网"
+            else -> "自动"
         }
+        when (Session.networkMode) {
+            Session.MODE_INTRANET -> {
+                btn.setTextColor(Color.WHITE)
+                btn.setRoundedBg(Color.parseColor("#165dff"), 999f)
+            }
+            Session.MODE_PUBLIC -> {
+                btn.setTextColor(Color.parseColor("#165dff"))
+                btn.setRoundedBg(Color.parseColor("#eef4ff"), 999f)
+            }
+            else -> {
+                // auto：绿色底白字表示自动检测
+                btn.setTextColor(Color.WHITE)
+                btn.setRoundedBg(Color.parseColor("#00b42a"), 999f)
+            }
+        }
+    }
+
+    /** 网络模式三选一弹窗（自动检测/内网/公网） */
+    private fun showNetworkModeDialog(btn: TextView) {
+        val modeNames = arrayOf("自动检测", "内网", "公网")
+        val current = when (Session.networkMode) {
+            Session.MODE_INTRANET -> 1
+            Session.MODE_PUBLIC -> 2
+            else -> 0
+        }
+        var selected = current
+        AlertDialog.Builder(requireContext())
+            .setTitle("网络模式")
+            .setSingleChoiceItems(modeNames, current) { _, which -> selected = which }
+            .setPositiveButton("确定") { _, _ ->
+                Session.networkMode = when (selected) {
+                    1 -> Session.MODE_INTRANET
+                    2 -> Session.MODE_PUBLIC
+                    else -> Session.MODE_AUTO
+                }
+                applyNetworkMode(btn)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 应用当前网络模式并刷新 UI/数据/打印机状态 */
+    private fun applyNetworkMode(btn: TextView) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            NetworkDetector.applyNetworkMode(requireContext())
+            updateIntranetBtn(btn)
+            toast(networkModeToast())
+            loadRecords()
+            refreshPrinterStatus()
+        }
+    }
+
+    private fun networkModeToast(): String = when (Session.networkMode) {
+        Session.MODE_INTRANET -> "已切换为内网 192.168.1.212:3001"
+        Session.MODE_PUBLIC -> "已切换为公网 yochylin.com:17443"
+        else -> if (Session.useIntranet) "已连接 Home-WiFi，自动使用内网" else "未连接 Home-WiFi，使用公网"
     }
 
     private fun toast(msg: String) {

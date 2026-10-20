@@ -36,18 +36,22 @@ class LoginActivity : ComponentActivity() {
 
         phoneInput.setText(Session.phone ?: "")
 
-        // 内网模式：勾选后请求走内网地址
-        intranetCheck.isChecked = Session.useIntranet
+        // 网络模式（三模式，2026-10-23）：勾选=强制内网；取消=自动检测(Home-WiFi)
+        intranetCheck.isChecked = Session.networkMode == Session.MODE_INTRANET
         intranetCheck.setOnCheckedChangeListener { _, isChecked ->
-            Session.useIntranet = isChecked
+            Session.networkMode = if (isChecked) Session.MODE_INTRANET else Session.MODE_AUTO
+            if (isChecked) {
+                Session.useIntranet = true
+            } else {
+                // 取消勾选后按自动检测结果立即生效（连接 Home-WiFi 仍走内网）
+                Session.useIntranet = NetworkDetector.isOnHomeWifi(this)
+            }
         }
 
         loginBtn.setOnClickListener { doLogin() }
 
-        // 启动时自动探测内网：可达则静默切换为内网模式（登录请求走内网）
-        lifecycleScope.launch {
-            NetworkDetector.autoDetectAndApply()
-        }
+        // 启动时按已保存的网络模式应用后端地址（登录请求走正确地址）
+        NetworkDetector.applyNetworkMode(this)
     }
 
     private fun doLogin() {

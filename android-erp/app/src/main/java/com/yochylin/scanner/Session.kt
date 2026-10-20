@@ -10,6 +10,14 @@ object Session {
     private const val KEY_TOKEN = "token"
     private const val KEY_PHONE = "phone"
     private const val KEY_INTRANET = "use_intranet"
+    private const val KEY_NETWORK_MODE = "network_mode"
+
+    /** 网络模式：自动检测（默认，Home-WiFi 则内网） */
+    const val MODE_AUTO = "auto"
+    /** 网络模式：手动强制内网 */
+    const val MODE_INTRANET = "intranet"
+    /** 网络模式：手动强制公网 */
+    const val MODE_PUBLIC = "public"
     private const val KEY_LABEL_PRINTER = "label_printer"
     private const val KEY_LAST_WAIT = "last_wait_process_count"
     private const val KEY_LAST_WAIT_SNS = "last_wait_process_sns"
@@ -54,7 +62,17 @@ object Session {
             prefs.edit().putString(KEY_NOTIFIED_SNS, value.joinToString("\u0001")).apply()
         }
 
-    /** 内网模式：为 true 时后端走内网地址，false 走公网 */
+    /**
+     * 网络模式（三模式，2026-10-23）：auto(默认)/intranet/public。
+     * 主界面按钮点击弹窗选择；登录页"内网模式"勾选=强制内网，取消=恢复 auto。
+     */
+    var networkMode: String
+        get() = prefs.getString(KEY_NETWORK_MODE, MODE_AUTO) ?: MODE_AUTO
+        set(value) {
+            prefs.edit().putString(KEY_NETWORK_MODE, value).apply()
+        }
+
+    /** 当前生效的内网模式：为 true 时后端走内网地址，false 走公网（由 networkMode 应用得到） */
     var useIntranet: Boolean
         get() = prefs.getBoolean(KEY_INTRANET, false)
         set(value) {

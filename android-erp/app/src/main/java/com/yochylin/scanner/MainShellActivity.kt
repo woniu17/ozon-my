@@ -53,6 +53,19 @@ class MainShellActivity : FragmentActivity(), TabHost {
         }
     }
 
+    // 自动检测内网需要读取 WiFi 名称（Android 8+ 需定位权限）
+    private val locationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(
+                this,
+                "定位权限未开启，自动检测内网将不可用，可在系统设置中开启或手动选择网络模式",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     /** 下载完成监听：自动拉起系统安装器 */
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -79,6 +92,7 @@ class MainShellActivity : FragmentActivity(), TabHost {
         switchTab("home")
 
         requestNotificationPermissionIfNeeded()
+        requestLocationPermissionIfNeeded()
         handleSwitchTabIntent(intent)
 
         // 启动新订单监控前台服务（保活，App 退出后仍持续检测）
@@ -154,6 +168,15 @@ class MainShellActivity : FragmentActivity(), TabHost {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    /** Android 8+ 读取 WiFi 名称需要定位权限（Android 13+ 通知权限同理按需申请） */
+    private fun requestLocationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 23 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
         }
     }
 

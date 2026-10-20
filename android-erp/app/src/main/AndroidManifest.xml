@@ -3,6 +3,11 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 自动检测内网(Home-WiFi)：读取网络类型和 WiFi 名称 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Android 8+ 读取当前 WiFi 名称需要定位权限（运行时申请） -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- 新订单本地通知（Android 13+ 需要运行时授权） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 新订单监控前台服务保活 -->
