@@ -52,6 +52,10 @@ class MainActivity : ComponentActivity() {
             openLabel(pkg)
         }
 
+        override fun onPrintLabel(pkg: Pkg) {
+            printLabel(pkg)
+        }
+
         override fun onCorrectWeight(pkg: Pkg, weightG: Int) {
             correctWeight(pkg, weightG)
         }
@@ -254,13 +258,19 @@ class MainActivity : ComponentActivity() {
                     toast(r.optString("message", "订单状态不允许提交"))
                     return@launch
                 }
+                // 提交成功后自动打印面单(后端打印代理);打印失败不阻断交运(无纸化兜底,可卡片补打)
+                val printErr = tryPrintPackage(pkg)
                 // 标记已打印 → 流转交运
                 try {
                     Api.post("/admin/api/order-process/print-label", mapOf("packageId" to pkg.id))
                 } catch (_: Exception) {
                     // 打印标记失败不阻断交运
                 }
-                toast("已交运 ${pkg.postingNumber ?: ""}")
+                if (printErr == null) {
+                    toast("已交运并打印面单 ${pkg.postingNumber ?: ""}")
+                } else {
+                    toast("已交运(面单打印失败:$printErr,可在卡片补打)")
+                }
                 if (currentKeyword.isNotBlank()) doSearch(currentKeyword)
                 loadRecords()
             } catch (e: Exception) {
@@ -287,6 +297,29 @@ class MainActivity : ComponentActivity() {
                 handleError(e)
             }
         }
+    }
+
+    // ── 打印面单(后端打印代理:拉 PDF → 服务端渲染 PNG → 转发打印组件出纸) ──
+    private fun printLabel(pkg: Pkg) {
+        lifecycleScope.launch {
+            progressBar.visibility = View.VISIBLE
+            try {
+                Api.post("/admin/api/print-agent/print-package", mapOf("packageId" to pkg.id))
+                toast("已发送打印任务 ${pkg.postingNumber ?: ""}")
+            } catch (e: Exception) {
+                handleError(e)
+            } finally {
+                progressBar.visibility = View.GONE
+            }
+        }
+    }
+
+    /** 尝试打印面单,成功返回 null,失败返回错误信息(供调用方决定是否阻断交运) */
+    private suspend fun tryPrintPackage(pkg: Pkg): String? = try {
+        Api.post("/admin/api/print-agent/print-package", mapOf("packageId" to pkg.id))
+        null
+    } catch (e: Exception) {
+        e.message ?: "打印失败"
     }
 
     // ── 更正重量 ──

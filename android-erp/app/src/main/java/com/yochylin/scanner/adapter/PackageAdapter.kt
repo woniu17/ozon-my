@@ -44,6 +44,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
         fun onShipPackage(pkg: Pkg)
         fun onSubmitShip(pkg: Pkg, weightG: Int)
         fun onOpenLabel(pkg: Pkg)
+        fun onPrintLabel(pkg: Pkg)
         fun onCorrectWeight(pkg: Pkg, weightG: Int)
         fun onSwitchRecordTab(tab: String)
         fun onRefreshRecords()
@@ -293,7 +294,8 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 )
             }
 
-            // 待打单发货:录重量 + 提交发货 + 面单(2026-10-16 修复:行内按钮改 WRAP_CONTENT,输入框不再被挤掉;预填已称重量)
+            // 待打单发货:录重量 + 提交发货 + 打印面单 + 面单(2026-10-16 修复:行内按钮改 WRAP_CONTENT,输入框不再被挤掉;预填已称重量)
+            // 2026-10-22 新增"打印面单":提交发货时自动打印,此处用于重试/手动补打(走后端打印代理)
             if (canShipCard) {
                 val refs = buildString {
                     append("Ozon后台 ")
@@ -310,13 +312,19 @@ class PackageAdapter(private val callbacks: Callbacks) :
                     val g = validateWeight(weightInput)
                     if (g != null) callbacks.onSubmitShip(pkg, g)
                 })
-                row.addView(newRowButton("面单", Color.parseColor("#4e5969")) {
+                actionArea.addView(row)
+
+                val printRow = buildWeightRow()
+                printRow.addView(newRowButton("打印面单", Color.parseColor(COLOR_PRIMARY)) {
+                    callbacks.onPrintLabel(pkg)
+                })
+                printRow.addView(newRowButton("面单", Color.parseColor("#4e5969")) {
                     callbacks.onOpenLabel(pkg)
                 })
-                actionArea.addView(row)
+                actionArea.addView(printRow)
             }
 
-            // 已交运/已发货:称重 + 更正重量 + 面单
+            // 已交运/已发货:称重 + 更正重量 + 补打面单 + 面单
             if (canReprint) {
                 val weighed = currentWeight?.let { "称重 ${it}g" } ?: "称重 —"
                 actionArea.addView(newSectionLabel(weighed))
@@ -328,10 +336,16 @@ class PackageAdapter(private val callbacks: Callbacks) :
                     val g = validateWeight(weightInput)
                     if (g != null) callbacks.onCorrectWeight(pkg, g)
                 })
-                row.addView(newRowButton("面单", Color.parseColor("#4e5969")) {
+                actionArea.addView(row)
+
+                val printRow = buildWeightRow()
+                printRow.addView(newRowButton("打印面单", Color.parseColor(COLOR_PRIMARY)) {
+                    callbacks.onPrintLabel(pkg)
+                })
+                printRow.addView(newRowButton("面单", Color.parseColor("#4e5969")) {
                     callbacks.onOpenLabel(pkg)
                 })
-                actionArea.addView(row)
+                actionArea.addView(printRow)
             }
 
             // 仅备货需求的订单:可提前录入发货重量(2026-10-16 新增,保存重量不改变订单状态)
