@@ -46,6 +46,9 @@ class PushLogActivity : ComponentActivity() {
 
     private fun loadLogs() {
         lifecycleScope.launch {
+            // 加载中先给反馈(2026-10-20):避免点击后无任何响应
+            emptyView.text = "加载中…"
+            emptyView.visibility = View.VISIBLE
             try {
                 val arr = Api.get("/admin/api/push/logs", mapOf("limit" to "200"))
                     .asJsonObject
@@ -56,8 +59,8 @@ class PushLogActivity : ComponentActivity() {
                 }
                 adapter.setData(list)
                 emptyView.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
-            } catch (_: Exception) {
-                emptyView.text = "加载失败，点击刷新重试"
+            } catch (e: Exception) {
+                emptyView.text = "加载失败：${e.message}\n点击刷新重试"
                 emptyView.visibility = View.VISIBLE
             }
         }

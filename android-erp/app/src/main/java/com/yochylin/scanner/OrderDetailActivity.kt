@@ -1046,7 +1046,6 @@ class OrderDetailActivity : ComponentActivity() {
 
     private fun onShip(p: Pkg) {
         val totalQty = (p.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
-        val multiQty = (p.items?.any { (it.quantity ?: 0.0) >= 2 } ?: false)
         val doShip = {
             // 备货接口可能耗时较长(2026-10-17):模态提示"正在备货中",结束后自动关闭
             val dlg = showBlockingLoading("正在备货中，请稍候…")
@@ -1063,10 +1062,11 @@ class OrderDetailActivity : ComponentActivity() {
                 }
             }
         }
-        if (multiQty) {
+        // 二次确认(2026-10-19):商品总数量>1 时弹窗确认(与 H5/ScanShip 同口径)
+        if (totalQty > 1) {
             AlertDialog.Builder(this)
                 .setTitle("备货确认")
-                .setMessage("货件 ${p.postingNumber}\n含数量≥2的商品(共 $totalQty 件),将向 Ozon 确认全部商品为一个货件(不拆分)。")
+                .setMessage("货件 ${p.postingNumber}\n该货件共 $totalQty 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。")
                 .setPositiveButton("备货") { _, _ -> doShip() }
                 .setNegativeButton("取消", null)
                 .show()
