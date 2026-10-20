@@ -126,6 +126,12 @@ class ScanShipFragment : Fragment() {
         view.findViewById<TextView>(R.id.checkUpdateBtn).setOnClickListener {
             (requireActivity() as? MainShellActivity)?.checkUpdate(manual = true)
         }
+        // 消息推送序列表入口(2026-10-20):此按钮随 activity_main 布局由 ScanShipFragment
+        // 承载,点击事件需在此注册(MainActivity 已废弃未使用,原注册不会生效)
+        view.findViewById<TextView>(R.id.pushLogBtn).setOnClickListener {
+            toast("正在打开推送记录…")
+            startActivity(Intent(requireActivity(), PushLogActivity::class.java))
+        }
         view.findViewById<TextView>(R.id.logoutBtn).setOnClickListener {
             Session.clear()
             goLogin()
