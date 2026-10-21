@@ -40,6 +40,7 @@ import { startOrderSync, stopOrderSync } from './services/order-sync.js';
 import { startStockSync, stopStockSync } from './services/stock-sync.js';
 import { startAccrualByDaySync, stopAccrualByDaySync } from './services/accrual-byday-sync.js';
 import { startIndexSync, stopIndexSync } from './services/index-sync.js';
+import { startSkuGroupSync, stopSkuGroupSync } from './services/sku-group-sync.js';
 import { startBatchUploadPoller, stopBatchUploadPoller } from './services/batch-upload-poller.js';
 import { startBatchImagePoller, stopBatchImagePoller } from './services/batch-image-poller.js';
 import { startImageRefreshPoller, stopImageRefreshPoller } from './services/image-refresh-poller.js';
@@ -257,6 +258,9 @@ const server = app.listen(config.port, () => {
   // 启动索引表跨表字段同步:每 5 分钟刷新 ozon_cache_index 的 seller_slug/seller_name/listed
   // (数据表 upsert 时即时同步命中位 + 冗余展示字段,本任务只刷跨表聚合字段)
   startIndexSync();
+  // 采集箱同款分组定时重建:每 30 分钟基于跟卖关系刷新 group_id/group_rep
+  // (驱动采集箱"合并同款"去重,新采集数据会改变分组)
+  startSkuGroupSync();
   // P2-2:启动批量均衡上架调度器(两阶段改造 2026-07):
   //   第一阶段 batch-image-poller:每 500ms 扫描,并发 5,不限速,负责图片处理/水印渲染(PENDING→IMAGE_DONE)
   //   第二阶段 batch-upload-poller:每 2 秒扫描,全局串行,OPI 阶段限速(IMAGE_DONE→SUCCESS/FAILED)
@@ -291,6 +295,7 @@ async function shutdown(signal) {
   stopStockSync();
   stopAccrualByDaySync();
   stopIndexSync();
+  stopSkuGroupSync();
   stopOrderSync();
   stopBatchImagePoller();
   stopBatchUploadPoller();

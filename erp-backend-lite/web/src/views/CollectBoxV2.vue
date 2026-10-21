@@ -253,6 +253,7 @@ const state = reactive({
     exported: '', // 导出状态(2026-08):''=全部,'unexported'=未导出,'exported'=已导出
     fetchedFrom: '', // 采集时间范围('YYYY-MM-DD',闭区间含当日全天,按本地时区;空=不限)
     fetchedTo: '',
+    mergeSame: true, // 合并同款:同一跟卖组的SKU只显示代表SKU(默认开启)
     // 用上次的筛选条件覆盖初值
     ...(storedFilters || {}),
   },
@@ -280,6 +281,8 @@ async function loadList() {
     if (state.filters.exported) params.exported = state.filters.exported;
     if (state.filters.fetchedFrom) params.fetchedFrom = state.filters.fetchedFrom;
     if (state.filters.fetchedTo) params.fetchedTo = state.filters.fetchedTo;
+    // 合并同款:默认开启(后端默认 hideGrouped=true);关闭时传 0 展示组内全部SKU
+    if (!state.filters.mergeSame) params.hideGrouped = '0';
     const data = await getCollectBoxV2FromCache(params);
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -432,6 +435,10 @@ onMounted(() => {
       <label class="filter-check" title="只显示在任意用户店铺尚未提交跟卖任务的 SKU">
         <input type="checkbox" v-model="state.filters.unlisted" />
         <span>未跟卖</span>
+      </label>
+      <label class="filter-check" title="同一跟卖组的同款 SKU 只显示数据最完整的代表 SKU;取消勾选可查看组内全部 SKU">
+        <input type="checkbox" v-model="state.filters.mergeSame" @change="search" />
+        <span>合并同款</span>
       </label>
       <select
         class="filter-select"
@@ -592,6 +599,12 @@ onMounted(() => {
               >
             </div>
             <div class="cb-cache-extra">
+              <span
+                v-if="it.groupSize > 1"
+                class="cb-extra-tag cb-tag-group"
+                :title="`同款分组:该 SKU 与 ${it.groupSize - 1} 个跟卖同款合并为一组,当前显示数据最完整的代表 SKU;取消勾选“合并同款”可查看全部`"
+                >同款 ×{{ it.groupSize }}</span
+              >
               <span
                 v-if="it.sellerId || it.sellerSlug"
                 class="cb-extra-tag cb-tag-seller"
@@ -910,6 +923,12 @@ onMounted(() => {
 .cb-tag-exported {
   background: #f0f5ff;
   color: #2f54eb;
+}
+.cb-tag-group {
+  background: #f9f0ff;
+  color: #722ed1;
+  font-weight: 600;
+  border: 1px solid #d3adf7;
 }
 .cb-tag-comments {
   background: #f9f0ff;

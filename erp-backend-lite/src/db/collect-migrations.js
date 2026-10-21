@@ -481,6 +481,25 @@ async function migrateUltraLightFields(collectDb) {
   );
 }
 
+// 采集箱同款分组 — ozon_cache_index 补 group_id / group_rep 列 + 索引(2026-10)
+// 字段由 scripts/rebuild-sku-groups.mjs / sku-group-sync 定时任务重建填充:
+//   group_id = 组代表 SKU(未分组为 NULL), group_rep = 1 表示该行是组代表
+// 采集箱列表查询通过 (group_id IS NULL OR group_rep = 1) 只显示每组一个 SKU
+function migrateSkuGroupFields(collectDb) {
+  const ciCols = collectDb.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
+  if (ciCols.length === 0) return; // 表不存在,跳过(schema.sql 会创建)
+  if (!ciCols.some((c) => c.name === 'group_id')) {
+    collectDb.exec(`ALTER TABLE ozon_cache_index ADD COLUMN group_id TEXT`);
+    console.log('[collect-db] migration: added column ozon_cache_index.group_id');
+  }
+  if (!ciCols.some((c) => c.name === 'group_rep')) {
+    collectDb.exec(`ALTER TABLE ozon_cache_index ADD COLUMN group_rep INTEGER DEFAULT 0`);
+    console.log('[collect-db] migration: added column ozon_cache_index.group_rep');
+  }
+  collectDb.exec(`CREATE INDEX IF NOT EXISTS idx_ci_group_id ON ozon_cache_index(group_id)`);
+  collectDb.exec(`CREATE INDEX IF NOT EXISTS idx_ci_group_rep ON ozon_cache_index(group_rep)`);
+}
+
 // 采集箱导出 — ozon_cache_index 补 exported / exported_at / export_task_id 列 + 索引
 function migrateExportFields(collectDb) {
   const ciCols = collectDb.prepare(`PRAGMA table_info(ozon_cache_index)`).all();
@@ -530,9 +549,10 @@ export async function ensureCollectMigrations(mainDb, collectDb) {
   await cleanupStoreClassificationDirtyRows(collectDb);
   // ── 跟卖状态即时标记(跨库:读主库 follow_sell_* → 写采集库 ozon_cache_index) ──
   await migrateListedFields(mainDb, collectDb);
-  // ── 超轻小件筛选 / 采集箱导出 / 深度日志补列 / 队列任务补列 ──
+  // ── 超轻小件筛选 / 采集箱导出 / 同款分组 / 深度日志补列 / 队列任务补列 ──
   await migrateUltraLightFields(collectDb);
   migrateExportFields(collectDb);
+  migrateSkuGroupFields(collectDb);
   migrateAutoCollectLogReason(collectDb);
   migrateCollectQueueTaskColumns(collectDb);
 

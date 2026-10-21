@@ -114,6 +114,7 @@ function buildFilterWhere(opts) {
     excludeFilteredCategories,
     marketStats,
     exported,
+    hideGrouped,
   } = opts;
   const where = [];
   const params = [];
@@ -241,6 +242,11 @@ function buildFilterWhere(opts) {
     where.push('(exported IS NULL OR exported = 0)');
   } else if (exported === 'exported') {
     where.push('exported = 1');
+  }
+  // 同款分组去重(2026-10):只显示每组代表 SKU(group_rep=1),未分组行(group_id IS NULL)正常显示
+  // 注:有关键词搜索时调用方不传 hideGrouped,保证直接搜隐藏组员也能找到
+  if (hideGrouped) {
+    where.push('(group_id IS NULL OR group_rep = 1)');
   }
   return { where, params };
 }
