@@ -1853,18 +1853,21 @@ async function loadFilterMap() {
     const r = await erp.getFilteredCategories();
     const items = r?.data?.items || [];
     const map = new Map();
+    let ruleCount = 0; // 规则总数:一个类目可挂多条 type 规则(与 ERP 类目过滤页行数一致)
     for (const it of items) {
       const descCatId = Number(it.descriptionCategoryId);
       const typeId = Number(it.typeId) || 0;
       if (!Number.isFinite(descCatId) || descCatId <= 0) continue;
       if (!map.has(descCatId)) map.set(descCatId, new Set());
       map.get(descCatId).add(typeId);
+      ruleCount++;
     }
     if (map.size === 0) {
       // 空名单大概率异常(响应结构变化/后端数据丢失),warn 提示避免门控B静默失效
       console.warn('[启动] 类目黑名单加载成功但为 0 条(检查后端 /admin/api/filtered-categories 返回结构)');
     } else {
-      console.log(`[启动] 类目黑名单加载成功:${map.size} 个类目`);
+      // map.size=去重类目数,ruleCount=规则行数(同 ERP 页「已过滤类目 (N)」的 N)
+      console.log(`[启动] 类目黑名单加载成功:${map.size} 个类目(${ruleCount} 条过滤规则)`);
     }
     return map;
   } catch (e) {
