@@ -775,7 +775,8 @@ onMounted(() => {
     if (saved) {
       const { source, name } = parsePrinter(saved);
       const list = source === 'server' ? serverPrinters.value : printers.value;
-      if (name && list.includes(name)) {
+      // name 为空(local:)表示"本机默认打印机",始终有效;指定名须仍在该组件打印机列表中
+      if (!name || list.includes(name)) {
         selectedPrinter.value = encodePrinter(source, name);
       } else {
         selectedPrinter.value = '';

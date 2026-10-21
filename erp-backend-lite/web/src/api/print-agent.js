@@ -23,7 +23,8 @@ const NOTIFY_CMDS = new Set(['notifyPrintResult', 'notifyDocResult', 'notifyTask
 // 打印机选择编码为 "local:打印机名" / "server:打印机名"(空名=用该组件默认打印机),
 // 打印时按编码路由到本机 WS 或后端转发接口;旧版 localStorage 纯打印机名按本机处理。
 const LOCAL_FAIL_TTL = 30_000;   // 本机组件失败负缓存有效期
-let localProbeCache = null;      // 本机探测结果缓存 { at, result }(失败后 30s 内不重复试连,远程机器秒回)
+const LOCAL_OK_TTL = 10_000;     // 本机组件在线缓存有效期(打印/下拉时避免反复 getPrinters 往返)
+let localProbeCache = null;      // 本机探测结果缓存 { at, result }(失败 30s / 在线 10s 内不重复探测)
 
 export function parsePrinter(value) {
   const v = String(value || '');
@@ -142,8 +143,10 @@ export async function getServerAgentStatus() {
 
 // 本机组件探测(失败负缓存:30s 内不重复试连,远程机器秒回)
 async function probeLocalAgent() {
-  if (localProbeCache && Date.now() - localProbeCache.at < LOCAL_FAIL_TTL && !localProbeCache.result.online) {
-    return localProbeCache.result;
+  if (localProbeCache) {
+    const age = Date.now() - localProbeCache.at;
+    if (age < LOCAL_FAIL_TTL && !localProbeCache.result.online) return localProbeCache.result;
+    if (age < LOCAL_OK_TTL && localProbeCache.result.online) return localProbeCache.result;
   }
   try {
     const r = await getAgentPrinters();
@@ -152,11 +155,6 @@ async function probeLocalAgent() {
     localProbeCache = { at: Date.now(), result: { online: false, defaultPrinter: '', printers: [] } };
   }
   return localProbeCache.result;
-}
-
-// 本机组件是否可用
-async function isLocalAgentAvailable() {
-  return (await probeLocalAgent()).online;
 }
 
 // 合并本机 + 服务器两组打印机(并行探测,供打印机下拉同时展示)
@@ -171,16 +169,15 @@ export async function getAllPrinters() {
   return { local, server };
 }
 
-// 选标签打印机:localStorage 记忆 > 可用组件默认(local 优先,其次服务器)
+// 选标签打印机:localStorage 记忆 > 本机默认(printLabelImage 会在本机不可用时自动兜底服务器)
+// 不再调用 getAllPrinters():打印时触发服务器转发探测会让后端也去连本机组件,
+// 单连接组件会互踢 WS 导致本机连接频繁断线重连(打印 50% 失败的根因之一)。
 export async function pickLabelPrinter() {
   try {
     const saved = localStorage.getItem('erp:labelPrinter');
     if (saved) return saved;
   } catch { /* noop */ }
-  const { local, server } = await getAllPrinters();
-  if (local.online) return encodePrinter('local', local.defaultPrinter);
-  if (server.online) return encodePrinter('server', server.defaultPrinter);
-  return '';
+  return 'local:';
 }
 
 // PDF 第 1 页 → PNG dataURL(pdfjs;worker 走 vite 打包的带 hash 资产,见文件头 import)
@@ -244,12 +241,15 @@ async function printViaServer(dataUrl, hMm, documentId, printer) {
 function printViaLocal(dataUrl, hMm, documentId, printer) {
   return connectAgent().then((sock) => {
     const taskID = genId();
+    const reqId = genId();
     return new Promise((resolve, reject) => {
       const finish = (fn, arg) => {
         taskWaiters.delete(taskID);
+        reqWaiters.delete(reqId);
         clearTimeout(timer);
         fn(arg);
       };
+      // 任务通知(主流路径):0.x notifyPrintResult(taskStatus) / 1.5.x notifyDocResult|notifyTaskResult(status)
       taskWaiters.set(taskID, (v) => {
         const st = v.taskStatus || v.status;
         if (st === 'printed' || st === 'completeSuccess') {
@@ -259,14 +259,27 @@ function printViaLocal(dataUrl, hMm, documentId, printer) {
           finish(reject, new Error('打印失败: ' + (msgs || v.detail || v.msg || '未知原因')));
         }
       });
+      // 兜底:部分协议变体把任务终态放在 print 响应(裸 ack)里,这里也能识别;
+      // 裸 ack(status:success 无任务终态)不消费,继续等任务通知。
+      reqWaiters.set(reqId, (msg) => {
+        const st = msg.taskStatus || msg.status;
+        if (st === 'printed' || st === 'completeSuccess') {
+          finish(resolve, msg);
+        } else if (st === 'failed' || st === 'completeFailed' || st === 'canceled') {
+          const msgs = (msg.printStatus || []).map((k) => k.msg || k.detail).filter(Boolean).join('; ');
+          finish(reject, new Error('打印失败: ' + (msgs || msg.detail || msg.msg || '未知原因')));
+        }
+        // 其余(如裸 ack status:success)→ 不消费,继续等任务通知
+      });
       const timer = setTimeout(() => {
         taskWaiters.delete(taskID);
+        reqWaiters.delete(reqId);
         reject(new Error('打印超时(60 秒未出纸)'));
       }, 60000);
       sock.send(
         JSON.stringify({
           cmd: 'print',
-          requestID: genId(),
+          requestID: reqId,
           version: '1.0',
           task: {
             taskID,
@@ -292,14 +305,21 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
     return;
   }
 
-  if (await isLocalAgentAvailable()) {
+  // 本机直连:不再用 isLocalAgentAvailable() 预探测做硬开关——
+  // 预探测的 getPrinters 往返在单连接组件上会与服务器转发探测互踢 WS,
+  // 且探测失败会误伤真实打印(50% 不打印的根因)。直接尝试本机打印,
+  // 连接/超时由 printViaLocal 负责;仅当最近(30s)已探测本机离线时才跳过,避免空等连接超时。
+  const cacheFreshOffline = localProbeCache
+    && Date.now() - localProbeCache.at < LOCAL_FAIL_TTL
+    && !localProbeCache.result.online;
+  if (!cacheFreshOffline) {
     try {
       await printViaLocal(dataUrl, hMm, documentId, parsed.name);
       return;
     } catch (err) {
+      // 本机打印中途失败 → 服务器组件兜底(用其默认打印机,本机打印机名在服务器上多半不存在)
       const server = await getServerAgentStatus();
       if (server.online) {
-        // 本机打印中途失败 → 服务器组件兜底(用其默认打印机,本机打印机名在服务器上多半不存在)
         await printViaServer(dataUrl, hMm, documentId, '');
         return;
       }
@@ -406,10 +426,14 @@ export function getPrintStats(params) {
 }
 
 // 无纸预览(双通道):本机优先,不可用时走服务器转发
+// 与 printLabelImage 一致:不做预探测硬开关,仅当最近已探测本机离线时才跳过本机直连
 export async function previewLabelImage(blob, documentId, widthMm = 70) {
   const { dataUrl, w, h } = await pdfToPng(blob, widthMm);
   const hMm = Math.round((widthMm * h) / w * 10) / 10;
-  if (await isLocalAgentAvailable()) {
+  const cacheFreshOffline = localProbeCache
+    && Date.now() - localProbeCache.at < LOCAL_FAIL_TTL
+    && !localProbeCache.result.online;
+  if (!cacheFreshOffline) {
     try {
       return await previewViaLocal(dataUrl, hMm, documentId);
     } catch {
