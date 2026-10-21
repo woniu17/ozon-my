@@ -16,14 +16,42 @@ function parseJson(s) {
   }
 }
 
-// 从价格字符串中提取数字(去除货币符号/空格/小数点以外的字符)
-// 例:"1 299 ₽" → 1299,"1299.00" → 1299.00,"" → null
-function parsePriceValue(price) {
+// 从价格字符串中提取数字(去除货币符号/空格,正确处理小数分隔符)
+// 例:"1 299 ₽" → 1299,"1299.00" → 1299.00,"21,91 ¥" → 21.91,"1,299.50" → 1299.50,"" → null
+// 注意:Ozon 价格存在两种小数格式——
+//   - 点格式(card 接口):"21.91"
+//   - 逗号格式(detail DOM,俄/欧 locale):"21,91 ¥",逗号是小数点而非千分位
+// 旧实现把所有非数字/点字符直接剔除,导致 "21,91 ¥" → 2191(膨胀 100 倍),
+// 采集箱价格范围过滤/导出跟卖价计算全部失真,这里按分隔符规则正确解析。
+// 导出给 backfill-price-value.mjs 等脚本复用,保证重算口径一致。
+export function parsePriceValue(price) {
   if (price == null || price === '') return null;
-  // 去除空格 + 常见货币符号,保留数字与小数点
-  const cleaned = String(price).replace(/[^\d.]/g, '');
-  if (!cleaned) return null;
-  const n = Number(cleaned);
+  // 只保留数字、逗号与点(货币符号/空格/字母全部去掉)
+  let s = String(price).replace(/[^\d.,]/g, '');
+  if (!s) return null;
+  const lastComma = s.lastIndexOf(',');
+  const lastDot = s.lastIndexOf('.');
+  if (lastComma >= 0 && lastDot >= 0) {
+    // 同时存在逗号与点:位置靠后的那个是小数点,另一个是千分位
+    if (lastComma > lastDot) {
+      // "1.299,50" → 去掉千分位点,逗号转小数点 → "1299.50"
+      s = s.replace(/\./g, '').replace(',', '.');
+    } else {
+      // "1,299.50" → 逗号是千分位,直接去掉 → "1299.50"
+      s = s.replace(/,/g, '');
+    }
+  } else if (lastComma >= 0) {
+    // 只有逗号:逗号后 1~2 位数字 → 欧洲小数点("21,91"→"21.91","1299,5"→"1299.5")
+    // 否则视为千分位("1,299"→"1299")
+    const fracLen = s.length - lastComma - 1;
+    if (fracLen >= 1 && fracLen <= 2) {
+      s = s.replace(',', '.');
+    } else {
+      s = s.replace(/,/g, '');
+    }
+  }
+  // 只有点或纯数字时保持不变("1299.00"→1299,"2191"→2191)
+  const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -288,7 +316,10 @@ export const indexDao = {
       detailData?.title ||
       cardData?.name ||
       '';
-    const price = detailData?.price || cardData?.price || '';
+    // 展示价格保持 detail 优先(详情页常规价;card 可能是 Ozon 卡优惠价,数值略低),
+    // 并统一规范化为数字字符串(如 "15,12 ¥" → "15.12"),与预览/提交口径一致。
+    const rawPrice = detailData?.price || cardData?.price || '';
+    const price = rawPrice ? String(parsePriceValue(rawPrice) ?? '') : '';
     // price_value:解析后的数字价格(供范围过滤用,走 idx_ci_price_value 索引)
     const priceValue = parsePriceValue(price);
     const primaryImage = cardData?.image || detailData?.images?.[0] || '';

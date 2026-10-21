@@ -15,6 +15,7 @@ import { Router } from 'express';
 import { getDaos } from '../db/adapter.js';
 import { db } from '../db/index.js';
 import { collectDb } from '../db/collect-db.js';
+import { parsePriceValue } from '../db/dao/sqlite/index-dao.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import { composeSvShape, normalizeSearchVariantToSv } from '../services/compose-sv-shape.js';
@@ -1048,7 +1049,10 @@ export async function buildSynthesizedFromCache(sku, storeId) {
     const richMediaData = rmDoc?.data || null;
     const name = detailData?.title || cardData?.name || '';
     const description = richMediaData?.description || detailData?.description || '';
-    const price = detailData?.price || cardData?.price || '';
+    // 价格保持 detail 优先(详情页常规价;card 可能是 Ozon 卡优惠价,数值略低),
+    // 但统一规范化为数字字符串(如 "15,12 ¥" → "15.12"),保证 Number() 可解析。
+    const rawPrice = detailData?.price || cardData?.price || '';
+    const price = rawPrice ? String(parsePriceValue(rawPrice) ?? '') : '';
     let primaryImage = cardData?.image || '';
     if (!primaryImage && detailData?.images?.length) primaryImage = detailData.images[0];
     const images = Array.isArray(detailData?.images) ? [...detailData.images] : [];
@@ -1060,7 +1064,8 @@ export async function buildSynthesizedFromCache(sku, storeId) {
       ],
       name,
       price,
-      old_price: detailData?.originalPrice || '',
+      // old_price 同样规范化(原始可能为 "72,82 ¥" locale 格式)
+      old_price: detailData?.originalPrice ? String(parsePriceValue(detailData.originalPrice) ?? '') : '',
       offer_id: 'SKU' + sku,
       weight: '',
       depth: '',
@@ -1152,7 +1157,10 @@ export async function buildSynthesizedFromCache(sku, storeId) {
   if (!description) description = richMediaData?.description || '';
   if (!description) description = detailData?.description || '';
 
-  const price = detailData?.price || cardData?.price || '';
+  // 价格保持 detail 优先(详情页常规价;card 可能是 Ozon 卡优惠价,数值略低),
+  // 但统一规范化为数字字符串(如 "15,12 ¥" → "15.12"),保证 Number() 可解析。
+  const rawPrice = detailData?.price || cardData?.price || '';
+  const price = rawPrice ? String(parsePriceValue(rawPrice) ?? '') : '';
   const barcode = sv._searchMeta?.barcodes?.[0] || bundleItem.barcode || '';
 
   const item = {
@@ -1163,7 +1171,8 @@ export async function buildSynthesizedFromCache(sku, storeId) {
     ],
     name,
     price,
-    old_price: detailData?.originalPrice || '',
+    // old_price 同样规范化(原始可能为 "72,82 ¥" locale 格式)
+    old_price: detailData?.originalPrice ? String(parsePriceValue(detailData.originalPrice) ?? '') : '',
     offer_id: 'SKU' + sku,
     weight: bundleItem.weight || '',
     depth: bundleItem.depth || '',

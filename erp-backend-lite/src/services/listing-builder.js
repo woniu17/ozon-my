@@ -126,7 +126,8 @@ export function saveOpiResponse(localTaskId, storeId, response) {
 //   最低价 = 售价 − minPriceB
 // 低价保底:源商品售价 < 15 且按公式算出的跟卖价 < 19 时,跟卖价取 19
 // 任一参数缺失则对应字段返回 null(不覆盖)
-// originalPrice 取缓存合成的 item.price(即 detailData.price || cardData.price)
+// originalPrice 取缓存合成的 item.price(detail 优先,已规范化为数字字符串 "15.12",
+// 原始 detail DOM 可能是 locale 格式 "15,12 ¥",Number() 会解析成 NaN)
 function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }

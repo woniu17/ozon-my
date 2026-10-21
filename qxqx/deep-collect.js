@@ -1032,6 +1032,15 @@ function parsePriceNum(p) {
   return null;
 }
 
+// 价格统一规范化为数字字符串("15,12 ¥"→"15.12","1 945,66 ₽"→"1945.66",""→"")
+// 供 detail 缓存存储:浅度采集 card_data.price 存的是数字,深度采集 detail_data.price
+// 若存原始 locale 字符串("15,12 ¥"),下游 Number() 解析为 NaN,导致上架预览售价缺失。
+// 保持数字字符串格式,与 card_data.price 口径一致。
+function normalizePriceStr(p) {
+  const n = parsePriceNum(p);
+  return n == null ? '' : String(n);
+}
+
 function buildDetailData(filteredStates, jsonLd, fsData, mp4, sku, description = '', descriptionSource = '') {
   const ws = filteredStates && typeof filteredStates === 'object' ? filteredStates : {};
   const keys = Object.keys(ws);
@@ -1092,9 +1101,13 @@ function buildDetailData(filteredStates, jsonLd, fsData, mp4, sku, description =
     brand: brand?.title || brand?.name || ld.brand?.name || '',
     category: ld.category || '',
     characteristics: chars || null,
-    price: price?.cardPrice || price?.price || ld.offers?.price || '',
-    walletPrice: price?.ozonCardPrice ?? price?.walletPrice ?? null,
-    originalPrice: price?.originalPrice ?? null,
+    // 价格规范化存储(数字字符串):原始 webPrice 是 locale 格式("15,12 ¥"),
+    // 直接存原始字符串会让下游 Number() 解析成 NaN(上架预览售价缺失/提交价算错)。
+    price: normalizePriceStr(price?.cardPrice || price?.price || ld.offers?.price),
+    walletPrice: (price?.ozonCardPrice ?? price?.walletPrice) != null
+      ? normalizePriceStr(price?.ozonCardPrice ?? price?.walletPrice)
+      : null,
+    originalPrice: price?.originalPrice != null ? normalizePriceStr(price.originalPrice) : null,
     seller: { name: sellerName, link: sellerLink },
     statistics: reviewScore || (ld.aggregateRating ? { aggregateRating: ld.aggregateRating } : null),
     freeRest: null,
@@ -1638,7 +1651,10 @@ async function doAutoCollect(task, filterMap) {
 
       // richMedia 写入:anyOk(HTTP 200)即写(包括空内容——商品本身数据特征)
       if (mediaRes.anyOk && !cfg.dryRun) {
-        const fields = mediaRes.fields ? { ...mediaRes.fields, sku: String(urlSku) } : null;
+        // fields.price 原始是 locale 字符串("15,12 ¥"),一并规范化为数字字符串(仅展示用)
+        const fields = mediaRes.fields
+          ? { ...mediaRes.fields, sku: String(urlSku), price: normalizePriceStr(mediaRes.fields.price) }
+          : null;
         await erp.setRichMediaCache(sku, {
           mp4: mediaRes.mp4 || null,
           richContent: mediaRes.richContent || '',
