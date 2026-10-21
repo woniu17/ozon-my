@@ -12,3 +12,7 @@ tmp*
 erp-backend-lite/src/public/
 *.apk
 .claude
+.agents
+.codex
+.trellis
+AGENTS.md
