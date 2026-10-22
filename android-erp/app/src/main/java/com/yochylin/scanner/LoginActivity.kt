@@ -22,6 +22,9 @@ class LoginActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Session.init(this)
 
+        // 冷启动也注册默认网络回调：网络切换时自动重算后端地址（幂等，全局一次）
+        NetworkDetector.registerNetworkListener(this)
+
         // 已登录直接进入主界面
         if (Session.isLoggedIn) {
             goMain()

@@ -86,6 +86,11 @@ class MainShellActivity : FragmentActivity(), TabHost {
             return
         }
 
+        // 先确定后端地址（网络模式），再创建界面/发请求，避免首次请求用错 base URL（评审优化）
+        NetworkDetector.applyNetworkMode(this)
+        // 注册默认网络回调：后续 WiFi/流量切换时自动重新检测（幂等，全局一次）
+        NetworkDetector.registerNetworkListener(this)
+
         setContentView(R.layout.activity_main_shell)
 
         setupBottomNav(this, "home")

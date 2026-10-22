@@ -57,6 +57,9 @@ class NewOrderNotifyService : Service() {
     private var pushJob: Job? = null
     private var fallbackJob: Job? = null
 
+    /** 网络模式变化监听：内网/公网切换时重启监控，让 WS/轮询连到正确的后端（onDestroy 移除） */
+    private val networkModeListener: (Boolean) -> Unit = { restartMonitoring() }
+
     /** 最近已通知过新订单的货件号（内存去重，持久化到 Session，防服务重启重复通知） */
     private val notifiedSns = LinkedHashSet<String>()
 
@@ -95,6 +98,8 @@ class NewOrderNotifyService : Service() {
         super.onCreate()
         Session.init(this)
         createChannels()
+        // 监听网络模式变化：内网/公网切换时重启监控，避免 WS 一直连旧后端（评审优化）
+        NetworkDetector.addModeChangeListener(networkModeListener)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -102,6 +107,8 @@ class NewOrderNotifyService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        // 启动时先按当前网络模式确定后端地址，再开始监控（评审优化）
+        NetworkDetector.applyNetworkMode(this)
         // 前台服务常驻通知（先占位，轮询到数据后更新为今日单量/销售额）
         startForeground(NOTIFICATION_ONGOING_ID, buildMonitorNotification("--", "—"))
         startMonitoring()
@@ -253,6 +260,16 @@ class NewOrderNotifyService : Service() {
             refreshTodayStats()
             runCatchUpDiff()
         }
+    }
+
+    /** 网络模式切换后重启监控：取消旧 WS/轮询协程，重新按当前 base URL 连接（未在监控时忽略） */
+    private fun restartMonitoring() {
+        if (pushJob == null && fallbackJob == null) return
+        pushJob?.cancel()
+        pushJob = null
+        fallbackJob?.cancel()
+        fallbackJob = null
+        startMonitoring()
     }
 
     /** 解析服务端推送消息 {events:[...]}（WebSocket 与长轮询响应同构） */
@@ -719,6 +736,7 @@ class NewOrderNotifyService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        NetworkDetector.removeModeChangeListener(networkModeListener)
         pushJob?.cancel()
         pushJob = null
         fallbackJob?.cancel()

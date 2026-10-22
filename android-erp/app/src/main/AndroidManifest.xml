@@ -96,12 +96,6 @@
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize" />
 
-        <activity
-            android:name=".MainActivity"
-            android:exported="false"
-            android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustResize" />
-
         <!-- 消息推送序列表（2026-10-18 通知日志查看） -->
         <activity
             android:name=".PushLogActivity"

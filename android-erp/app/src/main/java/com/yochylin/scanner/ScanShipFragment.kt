@@ -39,6 +39,17 @@ class ScanShipFragment : Fragment() {
     private lateinit var recyclerView: RecyclerView
     private lateinit var printerBar: TextView
 
+    /** 网络模式变化监听：后台自动切换时刷新按钮/数据（onDestroyView 时移除；手动切换走各自流程，避免重复 toast） */
+    private val networkModeListener: (Boolean) -> Unit = { _ ->
+        view?.let { v ->
+            viewLifecycleOwner.lifecycleScope.launch {
+                updateIntranetBtn(v.findViewById(R.id.intranetBtn))
+                loadRecords()
+                refreshPrinterStatus()
+            }
+        }
+    }
+
     private val adapter = PackageAdapter(object : PackageAdapter.Callbacks {
         override fun onCopy(text: String, label: String) {
             copyText(text, label)
@@ -116,7 +127,6 @@ class ScanShipFragment : Fragment() {
 
         // 打印机状态条:常驻显示在线状态 + 当前打印机,点击选择(2026-10-22)
         printerBar.setOnClickListener { showPrinterPicker() }
-        refreshPrinterStatus()
 
         view.findViewById<TextView>(R.id.searchBtn).setOnClickListener {
             doSearch(searchInput.text.toString())
@@ -131,8 +141,7 @@ class ScanShipFragment : Fragment() {
         view.findViewById<TextView>(R.id.checkUpdateBtn).setOnClickListener {
             (requireActivity() as? MainShellActivity)?.checkUpdate(manual = true)
         }
-        // 消息推送序列表入口(2026-10-20):此按钮随 activity_main 布局由 ScanShipFragment
-        // 承载,点击事件需在此注册(MainActivity 已废弃未使用,原注册不会生效)
+        // 消息推送序列表入口(2026-10-20):此按钮随 activity_main 布局由 ScanShipFragment 承载
         view.findViewById<TextView>(R.id.pushLogBtn).setOnClickListener {
             startActivity(Intent(requireActivity(), PushLogActivity::class.java))
         }
@@ -141,23 +150,30 @@ class ScanShipFragment : Fragment() {
             goLogin()
         }
 
+        // 注册网络模式变化监听：WiFi/流量切换导致内网公网变动时，自动刷新 UI 和数据
+        NetworkDetector.addModeChangeListener(networkModeListener)
+
         // 启动时按网络模式应用后端地址（auto 检测 Home-WiFi）
         viewLifecycleOwner.lifecycleScope.launch {
             val changed = NetworkDetector.applyNetworkMode(requireContext())
             updateIntranetBtn(view.findViewById(R.id.intranetBtn))
             if (changed) {
                 toast(if (Session.useIntranet) "检测到内网，已自动切换" else "未检测到内网，已使用公网")
+            } else {
+                // 模式未变化时直接加载（变化时由 networkModeListener 统一刷新，避免重复请求）
+                loadRecords()
+                refreshPrinterStatus()
             }
-            // 网络模式确定后加载记录/探测打印机，避免用错 base URL
-            loadRecords()
-            refreshPrinterStatus()
         }
         searchInput.setOnEditorActionListener { _, _, _ ->
             doSearch(searchInput.text.toString())
             true
         }
+    }
 
-        loadRecords()
+    override fun onDestroyView() {
+        NetworkDetector.removeModeChangeListener(networkModeListener)
+        super.onDestroyView()
     }
 
     // ── 搜索 ──
@@ -499,18 +515,26 @@ class ScanShipFragment : Fragment() {
     /** 应用当前网络模式并刷新 UI/数据/打印机状态 */
     private fun applyNetworkMode(btn: TextView) {
         viewLifecycleOwner.lifecycleScope.launch {
-            NetworkDetector.applyNetworkMode(requireContext())
+            val changed = NetworkDetector.applyNetworkMode(requireContext())
             updateIntranetBtn(btn)
             toast(networkModeToast())
-            loadRecords()
-            refreshPrinterStatus()
+            // 模式实际变化时 networkModeListener 已统一刷新；未变化也刷新一次保证数据最新
+            if (!changed) {
+                loadRecords()
+                refreshPrinterStatus()
+            }
         }
     }
 
     private fun networkModeToast(): String = when (Session.networkMode) {
         Session.MODE_INTRANET -> "已切换为内网 192.168.1.212:3001"
         Session.MODE_PUBLIC -> "已切换为公网 yochylin.com:17443"
-        else -> if (Session.useIntranet) "已连接 Home-WiFi，自动使用内网" else "未连接 Home-WiFi，使用公网"
+        else -> when {
+            Session.useIntranet -> "已连接 Home-WiFi，自动使用内网"
+            NetworkDetector.isWifiSsidUnavailable(requireContext()) ->
+                "WiFi 名称不可读(定位未开/权限缺失)，已走公网，必要时可手动切内网"
+            else -> "未连接 Home-WiFi，使用公网"
+        }
     }
 
     private fun toast(msg: String) {
