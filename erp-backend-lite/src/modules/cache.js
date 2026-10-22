@@ -578,9 +578,11 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
     //   过滤 last_fetched_at(7 类缓存最新采集时间);格式校验在 buildFilterWhere 内完成
     const fetchedFrom = typeof req.query.fetchedFrom === 'string' ? req.query.fetchedFrom.trim() : '';
     const fetchedTo = typeof req.query.fetchedTo === 'string' ? req.query.fetchedTo.trim() : '';
+    // 同款分组详情(2026-10):groupId=组代表SKU,只看该组全部成员(含隐藏组员)
+    const groupId = String(req.query.groupId || '').trim();
     // 同款分组去重(2026-10):默认开启,前端"合并同款"开关传 hideGrouped=0 可关闭
-    //   有关键词搜索时不生效(保证直接搜隐藏组员也能找到)
-    const hideGrouped = !keyword && req.query.hideGrouped !== '0';
+    //   有关键词搜索时/指定 groupId 时不生效(保证能搜到隐藏组员、能看全组)
+    const hideGrouped = !groupId && !keyword && req.query.hideGrouped !== '0';
 
     // indexDao 单表查询:过滤 + 排序 + 分页全在 SQL 完成
     const { items, total } = await daos.indexDao.findList({
@@ -603,6 +605,7 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
       fetchedFrom,
       fetchedTo,
       hideGrouped,
+      groupId,
       page,
       pageSize,
     });
@@ -652,7 +655,8 @@ router.get('/admin/api/collect-box-v2/from-cache', async (req, res, next) => {
         : 0,
       marketPriceP50: r.market_price_p50 ?? null,
       competitorCount: r.competitor_count ?? null,
-      // 同款分组(2026-10):groupSize=组内SKU总数(>1 表示已合并),groupRep=是否组代表
+      // 同款分组(2026-10):groupId=组代表SKU(未分组为空),groupSize=组内SKU总数,groupRep=是否组代表
+      groupId: r.group_id || '',
       groupSize: r.group_id ? groupSizeMap.get(r.group_id) || 1 : 1,
       groupRep: !!r.group_rep,
       // 评论数:索引表冗余 rating_count(数字,采集自 card DOM)。可能为 null

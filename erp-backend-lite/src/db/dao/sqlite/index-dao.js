@@ -115,6 +115,7 @@ function buildFilterWhere(opts) {
     marketStats,
     exported,
     hideGrouped,
+    groupId,
   } = opts;
   const where = [];
   const params = [];
@@ -247,6 +248,12 @@ function buildFilterWhere(opts) {
   // 注:有关键词搜索时调用方不传 hideGrouped,保证直接搜隐藏组员也能找到
   if (hideGrouped) {
     where.push('(group_id IS NULL OR group_rep = 1)');
+  }
+  // 同款分组详情(2026-10):指定 group_id 时只看该组全部成员(含隐藏组员)
+  // 注:调用方在传 groupId 时须关闭 hideGrouped(cache.js 已保证),否则会只剩代表
+  if (groupId) {
+    where.push('group_id = ?');
+    params.push(groupId);
   }
   return { where, params };
 }
@@ -555,6 +562,7 @@ export const indexDao = {
    * @param {string} [opts.sellerSlug] - 卖家 slug(兼容字段,可变,走 idx_ci_seller 索引)
    * @param {string|number} [opts.ultraLight] - 超轻小件筛选:'1'=超轻小件,'0'=非超轻小件
    * @param {string} [opts.marketStats] - 市场统计筛选:'has'=有真实数据,'none'=无真实数据(未采集+__empty)
+   * @param {string} [opts.groupId] - 同款分组详情:只看该组全部成员(含隐藏组员,须同时关闭 hideGrouped)
    * @param {number} [opts.page=1]
    * @param {number} [opts.pageSize=50]
    * @returns {Promise<{items: Array, total: number}>}

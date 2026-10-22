@@ -238,6 +238,7 @@ const state = reactive({
   loading: false,
   page: 1,
   pageSize: 20,
+  groupFilter: '', // 同款分组详情:当前查看的组代表SKU(非空时列表只显示该组全部成员)
   filters: {
     keyword: '',
     cacheCompleteness: '', // 数据完整度:''=全部,'full'=数据完整(3类全命中),'partial'=数据不完整(至少缺一类)
@@ -283,6 +284,8 @@ async function loadList() {
     if (state.filters.fetchedTo) params.fetchedTo = state.filters.fetchedTo;
     // 合并同款:默认开启(后端默认 hideGrouped=true);关闭时传 0 展示组内全部SKU
     if (!state.filters.mergeSame) params.hideGrouped = '0';
+    // 同款分组详情:指定 group_id 时后端强制不合并,只看该组全部成员
+    if (state.groupFilter) params.groupId = state.groupFilter;
     const data = await getCollectBoxV2FromCache(params);
     state.items = data?.items || [];
     state.total = data?.total || 0;
@@ -304,6 +307,21 @@ function search() {
 
 function onPageChange(p) {
   state.page = p;
+  loadList();
+}
+
+// 点击"同款 ×N"徽章:进入该组详情视图,只看这一组全部 SKU(含隐藏组员)
+function viewGroup(it) {
+  if (!it.groupId) return;
+  state.groupFilter = it.groupId;
+  state.page = 1;
+  loadList();
+}
+
+// 退出同款分组详情视图,恢复"合并同款"全局列表
+function exitGroup() {
+  state.groupFilter = '';
+  state.page = 1;
   loadList();
 }
 
@@ -437,7 +455,12 @@ onMounted(() => {
         <span>未跟卖</span>
       </label>
       <label class="filter-check" title="同一跟卖组的同款 SKU 只显示数据最完整的代表 SKU;取消勾选可查看组内全部 SKU">
-        <input type="checkbox" v-model="state.filters.mergeSame" @change="search" />
+        <input
+          type="checkbox"
+          v-model="state.filters.mergeSame"
+          @change="search"
+          :disabled="!!state.groupFilter"
+        />
         <span>合并同款</span>
       </label>
       <select
@@ -534,6 +557,15 @@ onMounted(() => {
       <button class="btn btn-primary" @click="search">查询</button>
     </div>
 
+    <!-- 同款分组详情视图(点击"同款 ×N"徽章进入):只显示该组全部成员,含隐藏组员 -->
+    <div v-if="state.groupFilter" class="cb-group-banner">
+      <span class="cb-group-banner-label">同款分组详情</span>
+      <span class="cb-group-banner-info">
+        当前查看组代表 SKU <code>{{ state.groupFilter }}</code>，本组共 {{ state.total }} 个 SKU（含隐藏组员）
+      </span>
+      <button class="btn btn-sm btn-primary" @click="exitGroup">返回全部</button>
+    </div>
+
     <!-- 批量操作栏(已选 SKU > 0 时显示) -->
     <div v-if="selectedSkus.size > 0" class="cb-batch-bar">
       <span class="cb-batch-count">已选 {{ selectedSkus.size }} 件</span>
@@ -602,8 +634,15 @@ onMounted(() => {
               <span
                 v-if="it.groupSize > 1"
                 class="cb-extra-tag cb-tag-group"
-                :title="`同款分组:该 SKU 与 ${it.groupSize - 1} 个跟卖同款合并为一组,当前显示数据最完整的代表 SKU;取消勾选“合并同款”可查看全部`"
+                :title="`同款分组:该 SKU 与 ${it.groupSize - 1} 个跟卖同款合并为一组。点击查看该组全部 SKU`"
+                @click="viewGroup(it)"
                 >同款 ×{{ it.groupSize }}</span
+              >
+              <span
+                v-if="it.groupRep"
+                class="cb-extra-tag cb-tag-rep"
+                title="该 SKU 是本同款组的代表 SKU(数据完整度/已跟卖/低价/评论/采集时间综合最优)"
+                >组代表</span
               >
               <span
                 v-if="it.sellerId || it.sellerSlug"
@@ -929,6 +968,17 @@ onMounted(() => {
   color: #722ed1;
   font-weight: 600;
   border: 1px solid #d3adf7;
+  cursor: pointer;
+}
+.cb-tag-group:hover {
+  background: #efdbff;
+  border-color: #722ed1;
+}
+.cb-tag-rep {
+  background: #fff1f0;
+  color: #cf1322;
+  font-weight: 600;
+  border: 1px solid #ffa39e;
 }
 .cb-tag-comments {
   background: #f9f0ff;
@@ -1042,6 +1092,37 @@ onMounted(() => {
   background: #fff;
   border: 1px solid #d1d5db;
   border-radius: 3px;
+}
+
+/* 同款分组详情视图横幅(点击"同款 ×N"徽章进入) */
+.cb-group-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: #f9f0ff;
+  border: 1px solid #d3adf7;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.cb-group-banner-label {
+  font-weight: 600;
+  color: #722ed1;
+  white-space: nowrap;
+}
+.cb-group-banner-info {
+  flex: 1;
+  color: #531dab;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-group-banner-info code {
+  background: #efdbff;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-weight: 600;
 }
 
 /* 批量操作栏(筛选栏下方) */
