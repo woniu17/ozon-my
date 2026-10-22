@@ -93,24 +93,57 @@ function connectAgent(timeoutMs = 4000) {
   return connecting;
 }
 
+let activeOps = 0; // 正在使用服务器转发的操作数(状态/打印/预览),归零时释放组件连接
+
+// 单连接组件:服务器转发长期占用 WS 会让本机浏览器直连被互踢(间歇性打印失败,2026-10 排查)。
+// 每个操作持有一份引用,全部结束后关闭连接,把组件的唯一连接让给本机直连。
+function acquireAgent(timeoutMs = 4000) {
+  activeOps++;
+  return connectAgent(timeoutMs).catch((err) => {
+    activeOps = Math.max(0, activeOps - 1);
+    throw err;
+  });
+}
+
+function releaseAgent() {
+  activeOps = Math.max(0, activeOps - 1);
+  if (activeOps === 0) {
+    const sock = ws;
+    ws = null;
+    connecting = null;
+    if (sock && sock.readyState === WebSocket.OPEN) {
+      try { sock.close(); } catch { /* noop */ }
+    }
+  }
+}
+
 // 发送请求并等待 requestID 响应(单响应命令用,如 getPrinters)
 function request(payload, timeoutMs, timeoutMsg) {
-  return connectAgent().then(
+  return acquireAgent().then(
     (sock) =>
       new Promise((resolve, reject) => {
         const id = genId();
         const timer = setTimeout(() => {
           if (reqWaiters.has(id)) {
             reqWaiters.delete(id);
+            releaseAgent();
             reject(new Error(timeoutMsg));
           }
         }, timeoutMs);
         reqWaiters.set(id, (msg) => {
           reqWaiters.delete(id);
           clearTimeout(timer);
+          releaseAgent();
           resolve(msg);
         });
-        sock.send(JSON.stringify({ ...payload, requestID: id, version: '1.0' }));
+        try {
+          sock.send(JSON.stringify({ ...payload, requestID: id, version: '1.0' }));
+        } catch (e) {
+          reqWaiters.delete(id);
+          clearTimeout(timer);
+          releaseAgent();
+          reject(e);
+        }
       })
   );
 }
@@ -156,12 +189,13 @@ function buildImageContents(dataUrl, hMm, documentId, templateBase) {
 // 终态判定兼容两代协议:0.x notifyPrintResult 用 taskStatus(printed/failed);
 // 1.5.x notifyDocResult/notifyTaskResult 用 status(printed/completeSuccess/failed/completeFailed)
 function sendPrint(dataUrl, hMm, documentId, printer, templateBase) {
-  return connectAgent().then((sock) => {
+  return acquireAgent().then((sock) => {
     const taskID = genId();
     return new Promise((resolve, reject) => {
       const finish = (fn, arg) => {
         taskWaiters.delete(taskID);
         clearTimeout(timer);
+        releaseAgent();
         fn(arg);
       };
       taskWaiters.set(taskID, (v) => {
@@ -175,21 +209,29 @@ function sendPrint(dataUrl, hMm, documentId, printer, templateBase) {
       });
       const timer = setTimeout(() => {
         taskWaiters.delete(taskID);
+        releaseAgent();
         reject(new Error('打印超时(60 秒未出纸)'));
       }, 60000);
-      sock.send(
-        JSON.stringify({
-          cmd: 'print',
-          requestID: genId(),
-          version: '1.0',
-          task: {
-            taskID,
-            preview: false,
-            printer: printer || '',
-            documents: buildImageContents(dataUrl, hMm, documentId, templateBase),
-          },
-        })
-      );
+      try {
+        sock.send(
+          JSON.stringify({
+            cmd: 'print',
+            requestID: genId(),
+            version: '1.0',
+            task: {
+              taskID,
+              preview: false,
+              printer: printer || '',
+              documents: buildImageContents(dataUrl, hMm, documentId, templateBase),
+            },
+          })
+        );
+      } catch (e) {
+        taskWaiters.delete(taskID);
+        clearTimeout(timer);
+        releaseAgent();
+        reject(e);
+      }
     });
   });
 }
@@ -210,7 +252,7 @@ function extractPreviewUrl(msg) {
 //   → ③第二条 print 响应(带 responses[].urls/previewImage)→ ④notifyTaskResult(completeSuccess)
 // 故 reqWaiters 收到裸 ack 不能消费,须等第二条;taskWaiters 兜底接收渲染失败通知
 function sendPreview(dataUrl, hMm, documentId, templateBase) {
-  return connectAgent().then((sock) => {
+  return acquireAgent().then((sock) => {
     const reqId = genId();
     const taskID = genId();
     return new Promise((resolve, reject) => {
@@ -218,6 +260,7 @@ function sendPreview(dataUrl, hMm, documentId, templateBase) {
         clearTimeout(timer);
         reqWaiters.delete(reqId);
         taskWaiters.delete(taskID);
+        releaseAgent();
       };
       const timer = setTimeout(() => {
         cleanup();
@@ -244,20 +287,25 @@ function sendPreview(dataUrl, hMm, documentId, templateBase) {
           reject(new Error(v.detail || v.msg || '预览渲染失败'));
         }
       });
-      sock.send(
-        JSON.stringify({
-          cmd: 'print',
-          requestID: reqId,
-          version: '1.0',
-          task: {
-            taskID,
-            preview: true,
-            previewType: 'image',
-            printer: '',
-            documents: buildImageContents(dataUrl, hMm, documentId, templateBase),
-          },
-        })
-      );
+      try {
+        sock.send(
+          JSON.stringify({
+            cmd: 'print',
+            requestID: reqId,
+            version: '1.0',
+            task: {
+              taskID,
+              preview: true,
+              previewType: 'image',
+              printer: '',
+              documents: buildImageContents(dataUrl, hMm, documentId, templateBase),
+            },
+          })
+        );
+      } catch (e) {
+        cleanup();
+        reject(e);
+      }
     });
   });
 }

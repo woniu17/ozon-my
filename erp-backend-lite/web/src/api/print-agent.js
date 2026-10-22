@@ -25,6 +25,7 @@ const NOTIFY_CMDS = new Set(['notifyPrintResult', 'notifyDocResult', 'notifyTask
 const LOCAL_FAIL_TTL = 30_000;   // 本机组件失败负缓存有效期
 const LOCAL_OK_TTL = 10_000;     // 本机组件在线缓存有效期(打印/下拉时避免反复 getPrinters 往返)
 let localProbeCache = null;      // 本机探测结果缓存 { at, result }(失败 30s / 在线 10s 内不重复探测)
+let serverDefaultPrinter = '';   // 最近一次服务器组件探测得到的默认打印机名(打印时显式传名,避免空 printer 落到系统默认)
 
 export function parsePrinter(value) {
   const v = String(value || '');
@@ -131,9 +132,10 @@ export async function getAgentPrinters() {
 export async function getServerAgentStatus() {
   try {
     const data = await get('/admin/api/print-agent/status');
+    serverDefaultPrinter = data?.defaultPrinter || '';
     return {
       online: !!data?.online,
-      defaultPrinter: data?.defaultPrinter || '',
+      defaultPrinter: serverDefaultPrinter,
       printers: data?.printers || [],
     };
   } catch {
@@ -157,15 +159,12 @@ async function probeLocalAgent() {
   return localProbeCache.result;
 }
 
-// 合并本机 + 服务器两组打印机(并行探测,供打印机下拉同时展示)
+// 合并本机 + 服务器两组打印机(供打印机下拉同时展示)
+// 2026-10 排查:改为顺序探测(本机优先)。组件为单连接,本机与服务器转发同时连会互踢 WS,
+// 并行探测会让本机直连间歇性掉线,进而触发"服务器兜底空打印机"错误路径。
 export async function getAllPrinters() {
-  const [localRes, serverRes] = await Promise.allSettled([probeLocalAgent(), getServerAgentStatus()]);
-  const local = localRes.status === 'fulfilled'
-    ? localRes.value
-    : { online: false, defaultPrinter: '', printers: [] };
-  const server = serverRes.status === 'fulfilled' && serverRes.value.online
-    ? { online: true, defaultPrinter: serverRes.value.defaultPrinter || '', printers: serverRes.value.printers || [] }
-    : { online: false, defaultPrinter: '', printers: [] };
+  const local = await probeLocalAgent();
+  const server = await getServerAgentStatus();
   return { local, server };
 }
 
@@ -177,6 +176,11 @@ export async function pickLabelPrinter() {
     const saved = localStorage.getItem('erp:labelPrinter');
     if (saved) return saved;
   } catch { /* noop */ }
+  // 未手动选择:显式用本机/服务器默认打印机名,避免组件把空 printer 解析成系统默认打印机
+  // (曾导致本机打印失败兜底后间歇性打到 PDFwriter,2026-10 排查)
+  const local = localProbeCache?.result ?? await probeLocalAgent();
+  if (local.online && local.defaultPrinter) return `local:${local.defaultPrinter}`;
+  if (serverDefaultPrinter) return `server:${serverDefaultPrinter}`;
   return 'local:';
 }
 
@@ -295,13 +299,15 @@ function printViaLocal(dataUrl, hMm, documentId, printer) {
 
 // 静默打印(双通道):明确选了服务器组件 → 后端转发;
 // 本机组件可用 → 本机直连,打印中途失败再兜底服务器;本机不可用 → 直接走服务器
+// 2026-10 排查:任何路径都尽量传"显式打印机名"(用户指定 > 组件默认打印机名),
+// 不再传空字符串——菜鸟组件把空 printer 解析成系统默认打印机时,会间歇性打到 PDFwriter。
 export async function printLabelImage(blob, documentId, printer = '', widthMm = 70) {
   const { dataUrl, w, h } = await pdfToPng(blob, widthMm);
   const hMm = Math.round((widthMm * h) / w * 10) / 10;
   const parsed = parsePrinter(printer);
 
   if (parsed.source === 'server') {
-    await printViaServer(dataUrl, hMm, documentId, parsed.name);
+    await printViaServer(dataUrl, hMm, documentId, parsed.name || serverDefaultPrinter);
     return;
   }
 
@@ -309,18 +315,20 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
   // 预探测的 getPrinters 往返在单连接组件上会与服务器转发探测互踢 WS,
   // 且探测失败会误伤真实打印(50% 不打印的根因)。直接尝试本机打印,
   // 连接/超时由 printViaLocal 负责;仅当最近(30s)已探测本机离线时才跳过,避免空等连接超时。
+  const localDefault = localProbeCache?.result?.online ? localProbeCache.result.defaultPrinter : '';
+  const localPrinter = parsed.name || localDefault;
   const cacheFreshOffline = localProbeCache
     && Date.now() - localProbeCache.at < LOCAL_FAIL_TTL
     && !localProbeCache.result.online;
   if (!cacheFreshOffline) {
     try {
-      await printViaLocal(dataUrl, hMm, documentId, parsed.name);
+      await printViaLocal(dataUrl, hMm, documentId, localPrinter);
       return;
     } catch (err) {
-      // 本机打印中途失败 → 服务器组件兜底(用其默认打印机,本机打印机名在服务器上多半不存在)
+      // 本机打印中途失败 → 服务器组件兜底:保留用户指定打印机名,未指定用服务器默认打印机名
       const server = await getServerAgentStatus();
       if (server.online) {
-        await printViaServer(dataUrl, hMm, documentId, '');
+        await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter);
         return;
       }
       throw err;
@@ -329,7 +337,7 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
 
   const server = await getServerAgentStatus();
   if (server.online) {
-    await printViaServer(dataUrl, hMm, documentId, '');
+    await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter);
     return;
   }
   throw new Error('菜鸟打印组件不可用:本机组件未连接,服务器组件转发也不可用');
