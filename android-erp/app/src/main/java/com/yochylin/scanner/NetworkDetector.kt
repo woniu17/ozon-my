@@ -66,6 +66,9 @@ object NetworkDetector {
             cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) = reapply(appContext)
                 override fun onLost(network: Network) = reapply(appContext)
+                // WiFi 断开/流量接管过程中，能力变化时尽快重新判定，缩小竞态窗口
+                override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) =
+                    reapply(appContext)
             })
         } catch (_: Exception) {
             // 注册失败（权限/系统限制）时退化为仅启动时检测

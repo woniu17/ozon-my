@@ -121,6 +121,12 @@ class MainShellActivity : FragmentActivity(), TabHost {
         handleSwitchTabIntent(intent)
     }
 
+    /** 回到前台时重新按网络模式计算后端地址（覆盖后台期间 WiFi/流量切换的竞态窗口） */
+    override fun onResume() {
+        super.onResume()
+        NetworkDetector.applyNetworkMode(this)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         try {

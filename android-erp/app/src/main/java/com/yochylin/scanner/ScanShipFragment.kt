@@ -469,7 +469,8 @@ class ScanShipFragment : Fragment() {
         btn.text = when (Session.networkMode) {
             Session.MODE_INTRANET -> "内网"
             Session.MODE_PUBLIC -> "公网"
-            else -> "自动"
+            // 自动模式也展示当前实际生效的网络，避免"明明走了内网/公网却看不出"的误判
+            else -> if (Session.useIntranet) "自动·内网" else "自动·公网"
         }
         when (Session.networkMode) {
             Session.MODE_INTRANET -> {
