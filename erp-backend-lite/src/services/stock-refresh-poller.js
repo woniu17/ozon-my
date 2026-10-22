@@ -25,7 +25,9 @@ async function processBatch(items, task) {
     for (const it of items) failItem(it, task, `店铺不存在: ${storeId}`);
     return;
   }
-  if (!store.warehouse_id) {
+  // 目标仓库:任务指定则优先(按筛选更新库存时用户可选择仓库),否则用店铺默认 warehouse_id
+  const warehouseId = task.warehouse_id || store.warehouse_id;
+  if (!warehouseId) {
     for (const it of items) failItem(it, task, `店铺 ${storeId} 未配置 warehouse_id`);
     return;
   }
@@ -48,7 +50,7 @@ async function processBatch(items, task) {
       productId: it.product_id,
       stock: it.stock_value,
     }));
-    const resp = await opi.productStocks(store, opiItems);
+    const resp = await opi.productStocks(store, opiItems, task.warehouse_id || undefined);
 
     // 解析响应:result 数组,每项含 product_id/offer_id/updated/errors
     const results = Array.isArray(resp?.result) ? resp.result : [];

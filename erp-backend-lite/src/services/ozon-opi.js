@@ -278,11 +278,12 @@ export function warehouseList(store) {
 // 商品状态需变 price_sent 后才能设库存,故新 imported 商品可能返回 errors,需重试
 // 请求: { stocks: [{ offer_id, product_id, stock, warehouse_id }] }
 // 响应: { result: [{ warehouse_id, product_id, offer_id, updated: bool, errors: [] }] }
-//  - items: [{ offerId, productId, stock }](warehouse_id 自动取 store.warehouse_id)
-export function productStocks(store, items) {
-  const wid = Number(store.warehouse_id);
+//  - items: [{ offerId, productId, stock }](warehouse_id 自动取 store.warehouse_id;
+//    也可通过第三个参数 warehouseId 显式指定,如按筛选更新库存时用户选择目标仓库)
+export function productStocks(store, items, warehouseId) {
+  const wid = warehouseId ? Number(warehouseId) : Number(store.warehouse_id);
   if (!wid) {
-    throw new Error('store.warehouse_id 未配置,无法设置库存');
+    throw new Error('warehouse_id 未配置,无法设置库存');
   }
   return call(store, '/v2/products/stocks', {
     stocks: items.map((it) => ({

@@ -44,22 +44,24 @@ function expandProductsToItems(products) {
 
 // 公共函数:创建库存更新任务(供路由调用)
 // items: [{ productId, storeId, offerId? }]
-// options: { stockValue, sourceType? }
+// options: { stockValue, warehouseId?, sourceType? }
 export function createStockRefreshTask(items, options = {}) {
   if (!items || items.length === 0) return null;
   const stockValue = Number(options.stockValue);
   if (!Number.isInteger(stockValue) || stockValue < 0) {
     throw new ApiError(ErrorCode.VALIDATION_ERROR, 'stockValue 必须为非负整数');
   }
+  // warehouseId 可选:指定目标仓库(须全任务同一店铺),空/无效则按店铺默认 warehouse_id
+  const warehouseId = options.warehouseId ? String(options.warehouseId).trim() : '';
   const localTaskId = `stk-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const firstStoreId = items[0].storeId;
   const sourceType = options.sourceType || (items.length > 1 ? 'batch' : 'manual');
 
   db.prepare(
     `INSERT INTO stock_refresh_tasks
-      (local_task_id, store_id, status, total_count, stock_value, source_type)
-     VALUES (?, ?, 'PENDING', ?, ?, ?)`
-  ).run(localTaskId, firstStoreId, items.length, stockValue, sourceType);
+      (local_task_id, store_id, status, total_count, stock_value, warehouse_id, source_type)
+     VALUES (?, ?, 'PENDING', ?, ?, ?, ?)`
+  ).run(localTaskId, firstStoreId, items.length, stockValue, warehouseId || null, sourceType);
 
   const stmt = db.prepare(
     `INSERT INTO stock_refresh_items
@@ -75,8 +77,9 @@ export function createStockRefreshTask(items, options = {}) {
 
 // POST /admin/api/stock-refresh —— 创建库存更新任务(单条/批量/商品列表)
 // body 支持:
-//   { items: [{ productId, storeId, offerId? }], stockValue }  — 精确指定(单条)
-//   { products: [{ productId, storeId }], stockValue }          — 按商品列表(批量)
+//   { items: [{ productId, storeId, offerId? }], stockValue, warehouseId? }  — 精确指定(单条)
+//   { products: [{ productId, storeId }], stockValue, warehouseId? }          — 按商品列表(批量)
+// warehouseId 可选:指定目标仓库(须全任务同一店铺,否则跨店铺无法用统一仓库)
 router.post('/admin/api/stock-refresh', async (req, res, next) => {
   try {
     const body = req.body || {};
@@ -84,6 +87,7 @@ router.post('/admin/api/stock-refresh', async (req, res, next) => {
     if (!Number.isInteger(stockValue) || stockValue < 0) {
       return next(new ApiError(ErrorCode.VALIDATION_ERROR, 'stockValue 必须为非负整数'));
     }
+    const warehouseId = body.warehouseId ? String(body.warehouseId).trim() : '';
     let items = Array.isArray(body.items) ? body.items : [];
     if (Array.isArray(body.products) && body.products.length > 0) {
       items = expandProductsToItems(body.products);
@@ -96,7 +100,15 @@ router.post('/admin/api/stock-refresh', async (req, res, next) => {
         return next(new ApiError(ErrorCode.VALIDATION_ERROR, '每个 item 必须含 productId 和 storeId'));
       }
     }
-    const result = createStockRefreshTask(items, { stockValue });
+    if (warehouseId) {
+      const storeIds = [...new Set(items.map((it) => String(it.storeId)))];
+      if (storeIds.length > 1) {
+        return next(
+          new ApiError(ErrorCode.VALIDATION_ERROR, '跨店铺任务不支持指定仓库,请按店铺分别操作')
+        );
+      }
+    }
+    const result = createStockRefreshTask(items, { stockValue, warehouseId });
     res.json(ok(result));
   } catch (e) {
     next(e);
@@ -140,6 +152,7 @@ router.get('/admin/api/stock-refresh', (req, res, next) => {
           successCount: r.success_count,
           failedCount: r.failed_count,
           stockValue: r.stock_value,
+          warehouseId: r.warehouse_id || '',
           sourceType: r.source_type,
           errorMessage: r.error_message,
           createdAt: r.created_at,
@@ -176,6 +189,7 @@ router.get('/admin/api/stock-refresh/:localTaskId', (req, res, next) => {
           successCount: task.success_count,
           failedCount: task.failed_count,
           stockValue: task.stock_value,
+          warehouseId: task.warehouse_id || '',
           sourceType: task.source_type,
           errorMessage: task.error_message,
           createdAt: task.created_at,

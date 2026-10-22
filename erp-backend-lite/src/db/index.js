@@ -109,6 +109,13 @@ export async function initSchema() {
 
 // 轻量迁移:为已存在的表补列(CREATE TABLE IF NOT EXISTS 不会更新旧表结构)
 async function ensureMigrations() {
+  // 2026-10: stock_refresh_tasks.warehouse_id 补列(库存更新任务可选指定目标仓库,
+  // NULL=按店铺默认 warehouse_id;新库由 schema.sql 直接建好,此处幂等跳过)
+  const _srtCols = db.prepare(`PRAGMA table_info(stock_refresh_tasks)`).all();
+  if (_srtCols.length > 0 && !_srtCols.some((c) => c.name === 'warehouse_id')) {
+    db.exec(`ALTER TABLE stock_refresh_tasks ADD COLUMN warehouse_id TEXT`);
+    console.log('[db] migration: added column stock_refresh_tasks.warehouse_id');
+  }
   // 2026-10-18: 安卓通知推送日志(push-hub 每次广播写入,供问题排查与安卓端推送序列表展示)
   db.exec(`
     CREATE TABLE IF NOT EXISTS notification_log (

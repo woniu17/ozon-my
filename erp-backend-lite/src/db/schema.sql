@@ -296,6 +296,7 @@ CREATE TABLE IF NOT EXISTS stock_refresh_tasks (
   success_count  INTEGER DEFAULT 0,
   failed_count   INTEGER DEFAULT 0,
   stock_value    INTEGER NOT NULL,         -- 本次任务设置的统一库存值
+  warehouse_id   TEXT,                    -- 指定目标仓库(可选,NULL=按店铺默认 warehouse_id)
   source_type    TEXT DEFAULT 'manual',   -- manual(单条) / batch(批量)
   error_message  TEXT,
   created_at     TEXT DEFAULT (datetime('now')),

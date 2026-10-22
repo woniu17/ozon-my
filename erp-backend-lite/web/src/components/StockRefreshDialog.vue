@@ -2,9 +2,12 @@
 // 库存更新弹窗(2026-07)
 // 单条模式:对单个商品设置库存
 // 批量模式:对多个商品批量设置统一库存值
+// 2026-10:支持选择目标仓库(仅当全部商品属于同一店铺时;跨店铺按各店铺默认仓库执行)
 import { ref, watch, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { createStockRefresh } from '../api/stockRefresh.js';
+import { getStoreWarehouses } from '../api/stores.js';
+import { useStoresStore } from '../stores/stores.js';
 import { useToast } from './useToast.js';
 import AppModal from './AppModal.vue';
 
@@ -21,20 +24,87 @@ const emit = defineEmits(['update:open', 'submitted']);
 
 const router = useRouter();
 const { show } = useToast();
+const storesStore = useStoresStore();
 
 const STOCK_LS_KEY = 'stockRefresh.lastStockValue';
 const stockValue = ref(localStorage.getItem(STOCK_LS_KEY) || '10');
 const submitting = ref(false);
 
+// ── 仓库选择状态 ──
+const targetStoreId = ref(''); // 弹窗涉及的目标店铺(全部商品同店时才有值)
+const multiStore = ref(false); // 是否跨店铺(跨店铺不提供仓库选择)
+const warehouseOptions = ref([]); // [{ id, name, meta? }]
+const warehouseId = ref(''); // 当前选中的仓库 ID
+const warehouseLoading = ref(false);
+const warehouseError = ref('');
+
 const isBatch = computed(() => props.mode === 'batch');
 
-// 打开时回填上次库存值
+// 打开时回填上次库存值 + 初始化仓库选择
 watch(
   () => props.open,
-  (v) => {
+  async (v) => {
     if (!v) return;
     const last = localStorage.getItem(STOCK_LS_KEY);
     stockValue.value = last || '10';
+
+    // 重置仓库选择状态
+    targetStoreId.value = '';
+    multiStore.value = false;
+    warehouseOptions.value = [];
+    warehouseId.value = '';
+    warehouseLoading.value = false;
+    warehouseError.value = '';
+
+    // 解析目标店铺:单条取 singleItem.storeId;批量取 selectedProducts 的唯一 storeId
+    let storeId = '';
+    if (props.mode === 'single') {
+      storeId = props.singleItem?.storeId || '';
+    } else {
+      const ids = [...new Set((props.selectedProducts || []).map((p) => p.storeId).filter(Boolean))];
+      if (ids.length === 1) storeId = ids[0];
+      else if (ids.length > 1) multiStore.value = true;
+    }
+    if (!storeId) return;
+    targetStoreId.value = storeId;
+
+    // 确保店铺列表已加载(拿默认 warehouse_id)
+    if (!storesStore.list.length) {
+      try {
+        await storesStore.load();
+      } catch {
+        /* 忽略,仓库下拉仍可尝试拉取 */
+      }
+    }
+    const store = storesStore.findStore(storeId);
+    const defaultWid = store?.warehouse_id ? String(store.warehouse_id) : '';
+
+    // 拉取该店铺的真实仓库列表
+    warehouseLoading.value = true;
+    try {
+      const r = await getStoreWarehouses(storeId);
+      const result = r || {};
+      if (result.success) {
+        const items = (result.warehouses || []).map((w) => ({
+          id: String(w.warehouse_id ?? w.id ?? ''),
+          name: w.name || '(未命名)',
+          meta: [w.warehouse_type || null, w.status || null, w.is_rfbs ? 'RFBS' : null].filter(Boolean).join(' · '),
+        })).filter((w) => w.id);
+        // 默认仓库(店铺配置的 warehouse_id)若不在 OPI 返回列表中,补一个"默认仓库"选项
+        if (defaultWid && !items.some((w) => w.id === defaultWid)) {
+          items.unshift({ id: defaultWid, name: '默认仓库', meta: '' });
+        }
+        warehouseOptions.value = items;
+        // 默认选中店铺配置的默认仓库(若用户之前选过其他仓库,本次仍以默认仓库为初始值)
+        warehouseId.value = defaultWid || (items[0]?.id || '');
+      } else {
+        warehouseError.value = result.error || '仓库列表拉取失败';
+      }
+    } catch (e) {
+      warehouseError.value = e.message || String(e);
+    } finally {
+      warehouseLoading.value = false;
+    }
   }
 );
 
@@ -47,6 +117,8 @@ async function submit() {
   }
   submitting.value = true;
   try {
+    // 仅当全部商品同店且已确定目标仓库时,才随任务提交 warehouseId;否则按各店铺默认仓库
+    const useWarehouse = !!targetStoreId.value && !multiStore.value && !!warehouseId.value;
     let body;
     if (isBatch.value) {
       if (!props.selectedProducts || props.selectedProducts.length === 0) {
@@ -70,6 +142,7 @@ async function submit() {
         stockValue: sv,
       };
     }
+    if (useWarehouse) body.warehouseId = warehouseId.value;
     const r = await createStockRefresh(body);
     localStorage.setItem(STOCK_LS_KEY, String(sv));
     show('库存更新任务已创建', 'success');
@@ -119,10 +192,23 @@ async function submit() {
           v-model="stockValue"
           placeholder="请输入库存数量(非负整数)"
         />
+      </div>
+
+      <!-- 仓库选择:全部商品同店时可选;跨店铺按各店铺默认仓库 -->
+      <div v-if="targetStoreId && !multiStore" class="sr-field">
+        <label class="sr-label">目标仓库</label>
+        <select v-if="warehouseOptions.length" v-model="warehouseId" class="filter-select">
+          <option v-for="w in warehouseOptions" :key="w.id" :value="w.id">
+            {{ w.name }}{{ w.meta ? ' · ' + w.meta : '' }}（{{ w.id }}）
+          </option>
+        </select>
+        <div v-else-if="warehouseLoading" class="muted">仓库列表加载中…</div>
+        <div v-else class="muted">仓库列表不可用:{{ warehouseError || '将使用店铺默认仓库' }}</div>
         <div class="muted" style="margin-top: 4px">
-          仓库:自动使用商品所属店铺配置的 warehouse_id
+          {{ warehouseOptions.length ? '库存将更新到所选仓库;默认使用店铺配置的默认仓库' : '未指定仓库时按店铺默认仓库执行' }}
         </div>
       </div>
+      <div v-else-if="multiStore" class="muted">跨店铺任务:将按各店铺默认仓库执行</div>
 
       <div class="sr-actions">
         <button class="btn btn-ghost" :disabled="submitting" @click="$emit('update:open', false)">取消</button>
