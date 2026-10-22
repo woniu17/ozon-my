@@ -231,6 +231,25 @@ function loadStoredFilters() {
 }
 const storedFilters = loadStoredFilters();
 
+// 筛选条件的默认值(进入同款分组详情时重置为这些值,避免 keyword/价格/状态筛选收窄组员)
+const DEFAULT_FILTERS = {
+  keyword: '',
+  cacheCompleteness: '', // 数据完整度:''=全部,'full'=数据完整,'partial'=数据不完整
+  unlisted: false,
+  hasComments: false,
+  hasRichContent: false,
+  excludeFilteredCategories: false,
+  ultraLight: '', // 超轻小件筛选:''=不限,'1'=超轻小件,'0'=非超轻小件
+  priceMin: '',
+  priceMax: '',
+  descriptionQuality: '', // 描述状态:''=全部,'0'=空,'1'=占位,'2'=按钮污染,'3'=有效,'1,2'=需清洗
+  marketStats: '', // 市场统计:''=全部,'has'=有真实数据,'none'=无真实数据
+  exported: '', // 导出状态:''=全部,'unexported'=未导出,'exported'=已导出
+  fetchedFrom: '',
+  fetchedTo: '',
+  mergeSame: true, // 合并同款:默认开启
+};
+
 // ── 列表状态(缓存视图:以 cardCache 为基准,聚合 7 类缓存命中位图) ──
 const state = reactive({
   items: [],
@@ -240,22 +259,8 @@ const state = reactive({
   pageSize: 20,
   groupFilter: '', // 同款分组详情:当前查看的组代表SKU(非空时列表只显示该组全部成员)
   filters: {
-    keyword: '',
-    cacheCompleteness: '', // 数据完整度:''=全部,'full'=数据完整(3类全命中),'partial'=数据不完整(至少缺一类)
-    unlisted: false,
-    hasComments: false,
-    hasRichContent: false, // 只看有富内容(richMedia.richContent 非空)
-    excludeFilteredCategories: false, // 排除已在类目过滤黑名单中的商品(ozon_filtered_categories 表)
-    ultraLight: '', // 超轻小件筛选:''=不限,'1'=超轻小件,'0'=非超轻小件
-    priceMin: '', // 价格范围(闭区间,空字符串=不限)
-    priceMax: '',
-    descriptionQuality: '', // 描述状态:''=全部,'0'=描述为空,'1'=含占位符,'2'=按钮污染,'3'=描述有效,'1,2'=需清洗
-    marketStats: '', // 市场统计:''=全部,'has'=有真实数据,'none'=无真实数据(未采集+__empty 空标记)
-    exported: '', // 导出状态(2026-08):''=全部,'unexported'=未导出,'exported'=已导出
-    fetchedFrom: '', // 采集时间范围('YYYY-MM-DD',闭区间含当日全天,按本地时区;空=不限)
-    fetchedTo: '',
-    mergeSame: true, // 合并同款:同一跟卖组的SKU只显示代表SKU(默认开启)
-    // 用上次的筛选条件覆盖初值
+    // 默认值 + 上次的筛选条件覆盖初值
+    ...DEFAULT_FILTERS,
     ...(storedFilters || {}),
   },
 });
@@ -311,8 +316,11 @@ function onPageChange(p) {
 }
 
 // 点击"同款 ×N"徽章:进入该组详情视图,只看这一组全部 SKU(含隐藏组员)
+// 注意:必须先重置所有筛选条件(尤其 keyword),否则搜索词/价格等会把组员收窄,
+// 导致徽章显示全组大小(如 ×2)但详情列表只剩代表 1 个。
 function viewGroup(it) {
   if (!it.groupId) return;
+  Object.assign(state.filters, DEFAULT_FILTERS);
   state.groupFilter = it.groupId;
   state.page = 1;
   loadList();
