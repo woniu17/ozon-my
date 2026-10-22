@@ -53,8 +53,14 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class NewOrderNotifyService : Service() {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scopeJob = SupervisorJob()
+    private val scope = CoroutineScope(scopeJob + Dispatchers.Default)
+
+    // @Volatile：restartMonitoring 可能从主线程（网络回调）和 IO 线程（内网可达性探测）执行，
+    // 跨线程读写需保证可见性，避免竞态窗口内读到过期引用（评审加固）
+    @Volatile
     private var pushJob: Job? = null
+    @Volatile
     private var fallbackJob: Job? = null
 
     /** 网络模式变化监听：内网/公网切换时重启监控，让 WS/轮询连到正确的后端（onDestroy 移除） */
@@ -741,6 +747,9 @@ class NewOrderNotifyService : Service() {
         pushJob = null
         fallbackJob?.cancel()
         fallbackJob = null
+        // 兜底取消整个 scope：IO 线程触发的 restartMonitoring 可能在 onDestroy 期间
+        // 重新启动 WS/轮询协程，只取消字段引用会漏掉这些新协程（评审加固）
+        scopeJob.cancel()
         super.onDestroy()
     }
 }
