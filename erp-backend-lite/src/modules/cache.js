@@ -19,6 +19,7 @@ import { parsePriceValue } from '../db/dao/sqlite/index-dao.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import { composeSvShape, normalizeSearchVariantToSv } from '../services/compose-sv-shape.js';
+import { parsePriceText } from './price-watch.js';
 import {
   resolveAttrWhitelist,
   injectRichContentAttr,
@@ -45,6 +46,13 @@ const router = Router();
 
 const MARKET_STATS_STALE_MS = 24 * 60 * 60 * 1000; // marketStats stale 判定 24h
 const FOLLOW_SELL_STALE_MS = 4 * 60 * 60 * 1000; // followSell stale 判定 4h
+
+// 跟卖店铺抽取的定价合理性过滤(2026-10 新增)
+// 只保留定价在「同组跟卖中位数 ±10%」内的店铺,排除低价锚点店(挂超低价引流)与高价影子店(无竞争力)
+const FS_PRICE_BAND_LOW = Number(process.env.FOLLOW_SELL_PRICE_BAND_LOW ?? 0.9);
+const FS_PRICE_BAND_HIGH = Number(process.env.FOLLOW_SELL_PRICE_BAND_HIGH ?? 1.1);
+const FS_PRICE_MIN_GROUP_SIZE = Number(process.env.FOLLOW_SELL_PRICE_MIN_GROUP_SIZE ?? 3); // 有效价格<3 不评判
+const FS_PRICE_ALLOW_NO_PRICE = process.env.FOLLOW_SELL_PRICE_ALLOW_NO_PRICE === '1'; // 无价格卖家默认跳过
 
 // ── dom 缓存(card + detail 合并表,字段独立,互相备份) ─────────────────────────
 
@@ -235,6 +243,33 @@ router.post('/ozon/cache/followSell/:sku', async (req, res, next) => {
   }
 });
 
+// ── 定价合理性过滤([0.9, 1.1]×中位数) ─────────────────────────
+// 只保留定价贴近同组跟卖主流价格的店铺,排除低价锚点店(挂超低价引流,无真实成交)与
+// 高价影子店(比主流价高太多,无竞争力)。中位数对单个异常低价天然稳健。
+function computeFollowSellGroupStats(sellers) {
+  const prices = [];
+  for (const s of sellers) {
+    const p = parsePriceText(s?.price);
+    if (p != null && p > 0) prices.push(p);
+  }
+  // 有效价格数不足时不评判(返回 null → 全保留,避免小样本误杀)
+  if (prices.length < FS_PRICE_MIN_GROUP_SIZE) return null;
+  const sorted = [...prices].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return {
+    median: sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2,
+    validCount: prices.length,
+  };
+}
+
+// p 为 parsePriceText 解析后的数值(stats==null 表示样本不足不评判)
+function isFollowSellPriceReasonable(p, stats) {
+  if (stats == null) return true;
+  if (p == null || p <= 0) return FS_PRICE_ALLOW_NO_PRICE; // 无价格默认跳过
+  const ratio = p / stats.median;
+  return ratio >= FS_PRICE_BAND_LOW && ratio <= FS_PRICE_BAND_HIGH;
+}
+
 // 从跟卖 sellers 数组抽取店铺数据 upsert 到 ozon_store_classification
 // seller.id 必须是纯数字(与 __NUXT__ sellerId 体系一致),否则跳过
 // companyInfo 存结构化对象 { companyName, legalAddress, country }
@@ -244,11 +279,23 @@ router.post('/ozon/cache/followSell/:sku', async (req, res, next) => {
 async function extractSellersToStoreClassification(data) {
   const sellers = Array.isArray(data?.sellers) ? data.sellers : [];
   if (!sellers.length) return;
+  // 定价合理性过滤:先算同组价格统计(中位数/样本数),再逐卖家判断
+  const stats = computeFollowSellGroupStats(sellers);
+  let kept = 0;
+  let skippedUnreasonable = 0;
+  let skippedNoPrice = 0;
   const now = new Date().toISOString();
   for (const s of sellers) {
     if (!s?.id) continue;
     const sellerId = String(s.id);
     if (!/^\d+$/.test(sellerId)) continue; // 防止 slug 被当 sellerId
+    // 定价合理才抽取(不合理的店铺不写入店铺分类,避免污染店铺库)
+    const p = parsePriceText(s?.price);
+    if (!isFollowSellPriceReasonable(p, stats)) {
+      if (p == null || p <= 0) skippedNoPrice++;
+      else skippedUnreasonable++;
+      continue;
+    }
     // 从 link "/seller/3308213/" 提取 slug,失败则用 id
     const slugMatch = (s.link || '').match(/\/seller\/([^/]+)/);
     const slug = slugMatch ? slugMatch[1] : sellerId;
@@ -275,10 +322,17 @@ async function extractSellersToStoreClassification(data) {
         lastSeenAt: now,
         lastSeenUrl: s.link || null,
       });
+      kept++;
     } catch (e) {
       // 单条失败不中断,继续处理其他 seller
       logger.warn({ err: e.message, sellerId }, '[cache] store upsert single failed');
     }
+  }
+  if (kept || skippedUnreasonable || skippedNoPrice) {
+    logger.info(
+      { kept, skippedUnreasonable, skippedNoPrice, groupSize: sellers.length, validCount: stats?.validCount ?? 0 },
+      '[cache] followSell 店铺抽取:定价合理性过滤完成'
+    );
   }
 }
 
