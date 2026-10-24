@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
@@ -17,6 +18,8 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.core.widget.doAfterTextChanged
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -125,6 +128,9 @@ class ScanShipFragment : Fragment() {
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = adapter
 
+        // 输入框清除图标:有内容时显示 ✕,点击一键清空并回到发货记录(2026-10-23)
+        setupClearButton()
+
         // 打印机状态条:常驻显示在线状态 + 当前打印机,点击选择(2026-10-22)
         printerBar.setOnClickListener { showPrinterPicker() }
 
@@ -177,6 +183,40 @@ class ScanShipFragment : Fragment() {
     }
 
     // ── 搜索 ──
+    /** 搜索框右侧清除图标:非空时显示 ✕,点击清空输入并退出搜索回到发货记录(2026-10-23) */
+    private fun setupClearButton() {
+        val size = (18 * resources.displayMetrics.density).toInt()
+        val clearIcon = ContextCompat.getDrawable(requireContext(), R.drawable.ic_clear)?.apply {
+            setBounds(0, 0, size, size)
+        }
+        searchInput.doAfterTextChanged { text ->
+            if (text.isNullOrEmpty()) {
+                searchInput.setCompoundDrawables(null, null, null, null)
+            } else {
+                searchInput.setCompoundDrawables(null, null, clearIcon, null)
+            }
+        }
+        searchInput.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_UP) {
+                val end = searchInput.compoundDrawables[2] ?: return@setOnTouchListener false
+                val x = event.x
+                if (x >= searchInput.width - searchInput.paddingEnd - end.bounds.width() &&
+                    x <= searchInput.width - searchInput.paddingEnd
+                ) {
+                    searchInput.setText("")
+                    // 有搜索结果时退出搜索态,回到发货记录列表
+                    if (currentKeyword.isNotBlank()) {
+                        currentKeyword = ""
+                        bannerText.visibility = View.GONE
+                        loadRecords()
+                    }
+                    return@setOnTouchListener true
+                }
+            }
+            false
+        }
+    }
+
     private fun doSearch(keyword: String) {
         val kw = keyword.trim()
         if (kw.isEmpty()) {

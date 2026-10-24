@@ -208,6 +208,19 @@ class OrderDetailActivity : ComponentActivity() {
             try {
                 Api.post("/admin/api/order-process/detail/$packageId/stock", mapOf("offerId" to offerId, "sku" to (item.sku ?: ""), "stock" to stock))
                 toast("已将 ${item.title ?: offerId} 库存设为 $stock")
+                // 先本地立即更新库存数量并重渲染,保证页面马上显示新值;
+                // 再拉服务端权威库存对账(Ozon 商品接口可能延迟,不能只依赖读回)(2026-10-23)
+                val old = stockMap[offerId]
+                stockMap[offerId] = StockInfo(
+                    sku = item.sku,
+                    offerId = offerId,
+                    productId = old?.productId,
+                    present = stock,
+                    reserved = old?.reserved ?: 0,
+                    total = stock + (old?.reserved ?: 0)
+                )
+                stockLoaded = true
+                renderItems(currentItems)
                 loadStocks()
             } catch (e: Exception) {
                 if (e is ApiException && e.code == 401) {
