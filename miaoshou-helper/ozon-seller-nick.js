@@ -1,7 +1,9 @@
 // Ozon 卖家后台店铺昵称徽章 content script
 // （自 qx-ozon/content/ozon-seller-bridge.js 迁移）
 //
-// 在 seller.ozon.ru 顶部店铺切换器中为每个店铺显示 YQLxx 昵称徽章：
+// 在 seller.ozon.ru / seller.ozonru.cn 顶部店铺切换器中为每个店铺显示 YQLxx 昵称徽章：
+// （2026-10 Ozon 对中国卖家推荐新域名 seller.ozonru.cn，manifest 已同时匹配两个域名；
+//   sc_company_id cookie 按站点隔离，新域名需重新登录后脚本才会读到）
 // - 顶栏当前店铺名前插入徽章（按 sc_company_id cookie 匹配）
 //   · 旧版页头: [data-onboarding-target="headerCompanyName"]
 //   · 新版页头(如退货页 /app/returns): [data-widget="header-controls"] 内

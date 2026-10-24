@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "我的妙手助手",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "ERP 订单页质检单高亮 + 拼多多/1688/淘宝订单导入代理 + 拼多多登录同步到 ERP(个人 ERP 采购弹窗拉取最近订单) + Ozon 卖家后台店铺昵称徽章",
   "permissions": [
     "storage",
@@ -81,6 +81,7 @@
     {
       "matches": [
         "https://seller.ozon.ru/*",
+        "https://seller.ozonru.cn/*",
         "http://localhost:7777/app/*"
       ],
       "js": [
