@@ -3,8 +3,9 @@
     "id": "store-yql01-b6b2b1",
     "name": "YQL01",
     "company_id": "3891653",
-    "warehouse_id": "1020005004829630",
+    "warehouse_id": "1020005034672490",
     "currency_code": "CNY",
+    "link": "",
     "sync_credentials": {
       "clientId": "3891653",
       "apiKey": "109b580e-c486-4fd8-89b3-bce3b669796e"
