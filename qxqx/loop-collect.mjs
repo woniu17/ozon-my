@@ -26,7 +26,8 @@
 //   node loop-collect.mjs --once     只跑一轮(浅采+深采各一次)后退出
 //
 // 注意:
-//   - 深采需要 seller 登录态(profile 已登录 seller.ozon.ru),退出码 2 = 登录缺失,循环会中止
+//   - 深采需要 seller 登录态(profile 已登录卖家域,默认 seller.ozonru.cn,可用 OZON_SELLER_BASE_URL 切回旧域),
+//     退出码 2 = 登录缺失,循环会中止
 //   - Ctrl+C 会向当前子进程转发 SIGINT(子进程会保存进度/把当前任务回队),安全中断
 import { spawn } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
@@ -207,7 +208,7 @@ while (!interrupted) {
     if (DEEP_TASK_LIMIT > 0) extra.TASK_LIMIT = String(DEEP_TASK_LIMIT);
     const r = await runPhase('深采', 'deep-collect.js', extra, DEEP_DONE_MARKERS);
     if (r.code === 2) {
-      console.error('[loop] 深采退出码 2 = seller 登录态缺失,请在 .ozon-profile 人工登录 seller.ozon.ru 后重跑');
+      console.error(`[loop] 深采退出码 2 = seller 登录态缺失,请在 .ozon-profile 人工登录 ${process.env.OZON_SELLER_BASE_URL || 'seller.ozonru.cn'} 后重跑`);
       process.exit(2);
     }
     if (r.exhausted) deepExhausted = true;

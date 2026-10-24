@@ -407,9 +407,9 @@ func TestLoadAPIBaseURL(t *testing.T) {
 
 	// 这些写法都会让"演练"悄悄变成"打生产"或者"整轮白跑"，必须拒绝启动
 	for _, bad := range []string{
-		"api-seller.ozon.ru",          // 漏了协议
-		"ftp://api-seller.ozon.ru",    // 协议不对
-		"http://u:p@api.ozon.ru",      // 凭据混在地址里会被打进日志
+		"api-seller.ozonru.cn",       // 漏了协议
+		"ftp://api-seller.ozonru.cn", // 协议不对
+		"http://u:p@api.ozon.ru",     // 凭据混在地址里会被打进日志
 		"http://127.0.0.1:8081?dry=1", // 查询串不属于根地址
 		"notaurl",                     // 根本不是 URL
 	} {

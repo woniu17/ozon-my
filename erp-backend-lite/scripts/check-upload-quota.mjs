@@ -1,5 +1,6 @@
 // 一次性脚本: 查询六个店铺的上传配额 + 归档商品数量
 // 用法: node erp-backend-lite/scripts/check-upload-quota.mjs
+//   OZON_OPI_BASE_URL=https://api-seller.ozon.ru node ...   # 切换卖家 API 域(默认 api-seller.ozonru.cn,与 src/config 一致)
 //
 // 接口:
 //   - /v4/product/info/limit: 账号总数 / 日建 / 日更 配额
@@ -15,7 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const storesPath = join(__dirname, '../src/config/stores.json');
 const stores = JSON.parse(readFileSync(storesPath, 'utf8'));
 
-const BASE = 'https://api-seller.ozon.ru';
+const BASE = (process.env.OZON_OPI_BASE_URL || 'https://api-seller.ozonru.cn').replace(/\/+$/, '');
 const TIMEOUT_MS = 30_000;
 
 async function callApi(store, path, body) {

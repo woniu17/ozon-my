@@ -76,10 +76,14 @@
 
 ## 四、实施清单（TODO）
 
-- [ ] qxqx：`deep-collect.js` 卖家域基址可配置（`OZON_SELLER_BASE_URL`），
-      导航 + `ensureSellerPage` 域名判断同步
-- [ ] qxqx：`maintain-profile.js` 导航地址与注释同步切换/可配置
-- [ ] qxqx：`loop-collect.mjs` 错误提示文案同步
+- [x] qxqx：`deep-collect.js` 卖家域基址可配置（`OZON_SELLER_BASE_URL`），
+      导航 + `ensureSellerPage` 域名判断 + 报错文案同步（已改，默认 `https://seller.ozon.ru`）
+- [x] qxqx：`maintain-profile.js` / `load-extension.js` 卖家域可配置 + `.env.example` 说明（已改）
+- [x] qxqx：`loop-collect.mjs` 错误提示文案同步（已改）
+- [x] erp-backend-lite：`scripts/check-upload-quota.mjs` 卖家 API 域可配置（复用 `OZON_OPI_BASE_URL`，默认已切 `api-seller.ozonru.cn`，已改）
+- [x] erp-backend-lite：`order-image-cache.js` 图片域名白名单追加 `ozonru.cn`（已改）
+- [x] ozon-tasks：`DefaultAPIBaseURL` 默认切到 `https://api-seller.ozonru.cn` + 测试 fixture 同步（已改，需在 Go 环境跑 `go test ./...`）
+- [x] android-erp：`BuildConfig.OZON_SELLER_BASE_URL` 可配置（已改，默认 `https://seller.ozon.ru`）
 - [x] miaoshou-helper：`manifest.json` content_scripts 新增 `https://seller.ozonru.cn/*`（v1.5.1，已改）
 - [ ] miaoshou-helper：人工登录新域后实测 `sc_company_id` cookie 名与徽章选择器是否兼容
 - [ ] 运维：在 `.ozon-profile` 人工登录 `seller.ozonru.cn` 一次，随后回归深采

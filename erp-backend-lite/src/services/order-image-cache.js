@@ -27,8 +27,9 @@ const CACHE_DIR = join(__dirname, '../public/images/cache');
 // 允许缓存的图片域名后缀(平台 CDN 白名单,防 SSRF)
 // 匹配规则:host === suffix 或 host 以 `.suffix` 结尾
 const ALLOWED_HOST_SUFFIXES = [
-  // Ozon
+  // Ozon(ozonru.cn 为 2026-10 中国卖家新域名,卖家域图片/CDN 可能走该后缀)
   'ozon.ru',
+  'ozonru.cn',
   'ozonstatic.cn',
   'ozone.ru',
   'ozonstatic.ru',

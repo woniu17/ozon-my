@@ -19,9 +19,10 @@ const ctx = await launchPersistentContext({
 // 复用已打开的页面，没有则新建
 const page = ctx.pages()[0] || (await ctx.newPage());
 
-// 打开 ozon 卖家后台（扩展主要注入该站点）
+// 打开 ozon 卖家后台（扩展主要注入该站点；默认 seller.ozonru.cn，可用 OZON_SELLER_BASE_URL 切回旧域 seller.ozon.ru）
 // 首次访问需登录，登录态会保存在 userDataDir，下次复用
-await page.goto('https://seller.ozon.ru/');
+const sellerBaseUrl = (process.env.OZON_SELLER_BASE_URL || 'https://seller.ozonru.cn').replace(/\/+$/, '');
+await page.goto(`${sellerBaseUrl}/`);
 console.log('页面标题:', await page.title());
 
 // 如需查看已加载扩展，可在浏览器中访问 chrome://extensions

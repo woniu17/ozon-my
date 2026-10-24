@@ -26,7 +26,8 @@
 //   Remove-Item Env:TASK_LIMIT,Env:DRY_RUN,Env:LOG_SKU -ErrorAction SilentlyContinue
 //   node deep-collect.js                                          # 常驻消费(0=不限)
 // 前置:ERP 后端已启动且两侧 .env 配置了相同的 SERVICE_API_KEY / ERP_API_KEY;
-//       profile(.ozon-profile)已人工登录过 seller.ozon.ru(sc_company_id 持久化)。
+//       profile(.ozon-profile)已人工登录过卖家域(默认 seller.ozonru.cn,可用 OZON_SELLER_BASE_URL 切换,
+//       如旧域 seller.ozon.ru;sc_company_id 持久化)。
 
 import { launchPersistentContext } from 'cloakbrowser';
 import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from 'node:fs';
@@ -92,6 +93,9 @@ const cfg = {
   portalFetchTimeoutMs: Number(process.env.PORTAL_FETCH_TIMEOUT_MS) || 20000,
   pdpFetchTimeoutMs: Number(process.env.PDP_FETCH_TIMEOUT_MS) || 30000,
   pageGotoTimeoutMs: Number(process.env.PAGE_GOTO_TIMEOUT_MS) || 30000,
+
+  // 卖家域基址(2026-10 起默认 Ozon 推荐的中国卖家新域 ozonru.cn,可用环境变量切回旧域;买家域 www.ozon.ru 不受影响)
+  sellerBaseUrl: (process.env.OZON_SELLER_BASE_URL || 'https://seller.ozonru.cn').replace(/\/+$/, ''),
 
   headless: process.env.HEADLESS !== '0',
 };
@@ -1293,7 +1297,7 @@ async function warmup() {
     if (isChallengeTitle(title)) throw new Error('ANTIBOT: challenge persists');
   }
   // 2. sellerPage:确认登录态(sc_company_id)
-  await sellerPage.goto('https://seller.ozon.ru/app/', {
+  await sellerPage.goto(`${cfg.sellerBaseUrl}/app/`, {
     waitUntil: 'domcontentloaded',
     timeout: cfg.pageGotoTimeoutMs,
   });
@@ -1308,10 +1312,10 @@ async function warmup() {
 // sellerPage 保活:门户调用前确认页面仍在 seller 域(崩溃/被导航走时重开)
 async function ensureSellerPage() {
   const url = sellerPage.url();
-  if (!url.startsWith('https://seller.ozon.ru')) {
+  if (!url.startsWith(cfg.sellerBaseUrl)) {
     console.warn(`[sellerPage] 页面异常(${url}),重新导航`);
     await sellerPage
-      .goto('https://seller.ozon.ru/app/', { waitUntil: 'domcontentloaded', timeout: cfg.pageGotoTimeoutMs })
+      .goto(`${cfg.sellerBaseUrl}/app/`, { waitUntil: 'domcontentloaded', timeout: cfg.pageGotoTimeoutMs })
       .catch(() => { /* 导航失败由后续 PORTAL_FETCH 的 NO_COMPANY_ID/NET 兜底 */ });
   }
 }
@@ -1846,7 +1850,7 @@ async function handleAuthWait() {
     }
   }
   console.error(
-    `[AUTH] 连续 ${cfg.authRetryMax} 轮未恢复,退出。请在 profile(${cfg.profileDir})人工登录 seller.ozon.ru 后重跑。`
+    `[AUTH] 连续 ${cfg.authRetryMax} 轮未恢复,退出。请在 profile(${cfg.profileDir})人工登录 ${cfg.sellerBaseUrl} 后重跑。`
   );
   return false;
 }
@@ -1959,7 +1963,7 @@ async function main() {
     } catch (e) {
       const msg = String(e?.message || e);
       if (msg.startsWith('AUTH_REQUIRED')) {
-        console.error(`[退出] seller 登录态缺失(sc_company_id):请在 profile(${cfg.profileDir})人工登录 seller.ozon.ru 后重跑`);
+        console.error(`[退出] seller 登录态缺失(sc_company_id):请在 profile(${cfg.profileDir})人工登录 ${cfg.sellerBaseUrl} 后重跑`);
         process.exit(2);
       }
       throw e;

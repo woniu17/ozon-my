@@ -1,14 +1,17 @@
 // 采集脚本登录 profile 维护(2026-10-13)
 // 浅度采集(shallow-collect.js)/深度采集(deep-collect.js)/价格优势监控(price-watch-collect.js)
 // 共用 .ozon-profile(靠 browser.lock 跨脚本锁互斥)。
-// 本脚本打开持久化可见浏览器窗口,一次性打开两个站点,保证 profile 里两个站点都有登录态:
+// 本脚本打开持久化可见浏览器窗口,保证 profile 里各站点都有登录态:
 //   - https://www.ozon.ru/   买家端:买家/访客 cookie(浅采/价监用,过反爬挑战,有登录态可降 403)
-//   - https://seller.ozon.ru/app/dashboard/main  卖家中心:卖家登录态 sc_company_id 持久化(深采必需,需人工扫码)
+//   - 卖家中心 ozon.ru 与 ozonru.cn 两个域都要登录:卖家登录态 sc_company_id 按站点隔离,
+//     深采(默认走 ozonru.cn,旧域 ozon.ru 备用)、miaoshou-helper 徽章插件都可能落在任一域。
+//     故无论 OZON_SELLER_BASE_URL 配哪个,脚本都会打开两个卖家域各登录一次。
 // 登录态随窗口关闭自动落盘,供三个采集脚本复用。
 //
 // 用法:
 //   node maintain-profile.js
 //   PROFILE_DIR=xxx node maintain-profile.js   # 覆盖 profile 目录(与深采/价监读取一致)
+//   OZON_SELLER_BASE_URL=https://seller.ozon.ru node maintain-profile.js   # 主域切回旧域(仍会同时维护新域)
 //
 // 注意:采集脚本运行期间 profile 被占用,需先停止对应采集进程(或 pm2 restart erp 释放
 // ERP 空闲浏览器)再执行本脚本。
@@ -39,18 +42,23 @@ loadDotEnv(path.join(__dirname, '.env'));
 
 const userDataDir = path.resolve(__dirname, process.env.PROFILE_DIR || '.ozon-profile');
 
-// 需保证登录态的两个站点(依次打开,人工登录)
+// 卖家域(2026-10 起默认走中国卖家新域 ozonru.cn,可用 OZON_SELLER_BASE_URL 切回旧域)
+const sellerBaseUrl = (process.env.OZON_SELLER_BASE_URL || 'https://seller.ozonru.cn').replace(/\/+$/, '');
+// 两个卖家域都要维护(cookie 按站点隔离,深采/插件可能落在任一域)
+const SELLER_DOMAINS = [...new Set([sellerBaseUrl, 'https://seller.ozon.ru', 'https://seller.ozonru.cn'])];
+
+// 需保证登录态的站点(依次打开,人工登录;卖家域两个都开)
 const TARGETS = [
   {
     name: '买家端',
     url: 'https://www.ozon.ru/',
     desc: 'www.ozon.ru 买家/访客 cookie(浅采/价监用,过反爬挑战)',
   },
-  {
-    name: '卖家中心',
-    url: 'https://seller.ozon.ru/app/dashboard/main',
-    desc: 'seller.ozon.ru 卖家登录态 sc_company_id(深采必需,人工扫码登录)',
-  },
+  ...SELLER_DOMAINS.map((domain, i) => ({
+    name: i === 0 ? '卖家中心(主)' : '卖家中心(兼容域)',
+    url: `${domain}/app/dashboard/main`,
+    desc: `${domain} 卖家登录态 sc_company_id(深采必需,人工扫码登录;${domain === sellerBaseUrl ? '当前配置主域' : '备用域'})`,
+  })),
 ];
 
 // 检查采集脚本是否正在占用 profile(browser.lock 跨脚本锁)

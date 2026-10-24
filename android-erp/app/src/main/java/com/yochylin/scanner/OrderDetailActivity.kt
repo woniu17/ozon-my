@@ -721,7 +721,11 @@ class OrderDetailActivity : ComponentActivity() {
             "tmall", "天猫" -> listOf("tmall://") to "https://s.tmall.com/search?q=$enc"
             "douyin", "抖音", "抖音小店" -> listOf("snssdk1128://") to "https://www.douyin.com/search/$enc"
             "amazon", "亚马逊" -> listOf("https://www.amazon.com/gp/your-account/order-details?orderID=$enc") to "https://www.amazon.com/gp/your-account/order-details?orderID=$enc"
-            "ozon" -> listOf("https://seller.ozon.ru/app/orders/search?search=$enc") to "https://seller.ozon.ru/app/orders/search?search=$enc"
+            "ozon" -> {
+                // Ozon 卖家后台查单(域名可经 BuildConfig.OZON_SELLER_BASE_URL 调整,如切换 ozonru.cn)
+                val ozonSearch = "${BuildConfig.OZON_SELLER_BASE_URL}/app/orders/search?search=$enc"
+                listOf(ozonSearch) to ozonSearch
+            }
             else -> listOf("https://www.google.com/search?q=$enc") to "https://www.google.com/search?q=$enc"
         }
     }

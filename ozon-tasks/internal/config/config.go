@@ -20,9 +20,11 @@ import (
 
 const feishuWebhookBase = "https://open.feishu.cn/open-apis/bot/v2/hook/"
 
-// DefaultAPIBaseURL 是 Ozon Seller API 官方根地址。放在 config 而不是 ozon：
+// DefaultAPIBaseURL 是 Ozon Seller API 根地址。放在 config 而不是 ozon：
 // 配置校验要知道默认值，而 ozon 已经依赖 config，反过来依赖就成了循环。
-const DefaultAPIBaseURL = "https://api-seller.ozon.ru"
+// 2026-10 Ozon 对中国卖家推荐新域名 api-seller.ozonru.cn，故默认走新域；旧域仍可用
+// OZON_API_BASE_URL=https://api-seller.ozon.ru 覆盖。
+const DefaultAPIBaseURL = "https://api-seller.ozonru.cn"
 
 // 飞书 webhook 末段的 UUID；FEISHU_BOT_<别名> 的值必须长这样，避免有人直接把整条 URL 塞进别名里
 var feishuUUIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -338,7 +340,7 @@ func validateSchedule(key, spec string) error {
 	return nil
 }
 
-// parseAPIBaseURL 校验 OZON_API_BASE_URL，空值即官方地址。
+// parseAPIBaseURL 校验 OZON_API_BASE_URL，空值即默认地址(api-seller.ozonru.cn)。
 // 宁可拦得严一点：这个开关能把"写真实店铺"整个挪到别处，地址配错却照样"执行成功"，
 // 比拒绝启动糟得多——要么生产被指到了 localhost（悄悄白跑），要么演练以为在打假服务
 // 其实打的是 Ozon（真实改价）。
