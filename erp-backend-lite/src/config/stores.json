@@ -29,8 +29,9 @@
     "id": "store-yql03-b6b2b3",
     "name": "YQL03",
     "company_id": "4173548",
-    "warehouse_id": "1020005008384940",
+    "warehouse_id": "1020005034673530",
     "currency_code": "CNY",
+    "link": "",
     "sync_credentials": {
       "clientId": "4173548",
       "apiKey": "b61af8bf-e14d-4ba9-9004-33a40c685747"
@@ -41,7 +42,7 @@
     "id": "store-yql04-534363",
     "name": "YQL04",
     "company_id": "4173939",
-    "warehouse_id": "1020005008463290",
+    "warehouse_id": "1020005034673120",
     "currency_code": "CNY",
     "link": "",
     "sync_credentials": {
@@ -67,7 +68,7 @@
     "id": "store-yql06-5f70aa",
     "name": "YQL06",
     "company_id": "4174037",
-    "warehouse_id": "1020005008464080",
+    "warehouse_id": "1020005034673320",
     "currency_code": "CNY",
     "link": "",
     "sync_credentials": {
