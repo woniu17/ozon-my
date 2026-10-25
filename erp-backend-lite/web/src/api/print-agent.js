@@ -190,7 +190,8 @@ export async function pickLabelPrinter() {
 // (2026-09-15:此前画布按 PDF 原比例,layout 拉伸到 129mm 导致 ~2-5% 纵向拉伸,QR 码定位点变椭圆)
 // rotation:顺时针旋转角度(0/90/180/270)。货运标签 PDF 为 100x70mm 横向,
 // 打印到 76x130mm 竖向纸时 rotation=90 转成 70x100 竖向再 contain(2026-10-25 适配纸张)
-async function pdfToPng(blob, widthMm = 70, pageHm = 129, rotation = 0) {
+// overlayText:非空时渲染后在画布顶部叠加白条黑字(如店铺名 YQL01),用于面单分拣
+async function pdfToPng(blob, widthMm = 70, pageHm = 129, rotation = 0, overlayText = '') {
   const pdfjs = await import('pdfjs-dist');
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   const page = await (await pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise).getPage(1);
@@ -216,6 +217,17 @@ async function pdfToPng(blob, widthMm = 70, pageHm = 129, rotation = 0) {
     ctx.restore();
   } else {
     await page.render({ canvasContext: ctx, viewport }).promise;
+  }
+  // 叠加店铺名(与后端 pdfToPngDataUrl 同口径):顶部盖白条+黑字,多店铺面单快速分拣
+  if (overlayText) {
+    const barH = 46;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, barH);
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 34px sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillText(overlayText, 16, barH / 2);
   }
   return { dataUrl: canvas.toDataURL('image/png'), w: canvas.width, h: canvas.height };
 }
@@ -318,7 +330,8 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
   const templateName = opts.templateName || '';
   const rotation = opts.rotation || 0;
   const storeId = opts.storeId || '';
-  const { dataUrl, w, h } = await pdfToPng(blob, widthMm, pageHm, rotation);
+  const overlayText = opts.storeName || ''; // 面单打印时叠加店铺名(如 YQL01)
+  const { dataUrl, w, h } = await pdfToPng(blob, widthMm, pageHm, rotation, overlayText);
   const hMm = Math.round((widthMm * h) / w * 10) / 10;
   const parsed = parsePrinter(printer);
 

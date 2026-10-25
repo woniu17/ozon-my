@@ -211,6 +211,22 @@ class OrderListFragment : Fragment() {
         }
     }
 
+    /** 扫码全局搜索：扫码返回后自动填充输入框并执行全局搜索（参考扫描发货） */
+    private val scanLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val code = result.data?.getStringExtra("code") ?: ""
+            if (code.isNotBlank()) {
+                searchInput.setText(code)
+                keyword = code
+                globalActive = true
+                globalMode = "ss"
+                reload()
+            }
+        }
+    }
+
     private var activeTab = "waitProcess"
     private var keyword = ""
     private var globalActive = false
@@ -297,6 +313,9 @@ class OrderListFragment : Fragment() {
             goLogin()
         }
         view.findViewById<TextView>(R.id.orderSearchBtn).setOnClickListener { doSearch() }
+        view.findViewById<TextView>(R.id.orderScanBtn).setOnClickListener {
+            scanLauncher.launch(Intent(requireContext(), ScanActivity::class.java))
+        }
         searchInput.setOnEditorActionListener { _, _, _ ->
             doSearch()
             true

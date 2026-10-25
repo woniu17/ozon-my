@@ -77,6 +77,14 @@
             android:singleLine="true" />
 
         <TextView
+            android:id="@+id/orderScanBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📷"
+            android:textSize="22sp"
+            android:padding="8dp" />
+
+        <TextView
             android:id="@+id/orderSearchBtn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

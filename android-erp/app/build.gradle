@@ -19,8 +19,8 @@ android {
         applicationId "com.yochylin.scanner"
         minSdk 24
         targetSdk 35
-        versionCode 88
-        versionName "5.46"
+        versionCode 89
+        versionName "5.47"
         // Ozon 卖家后台域名(2026-10 中国卖家推荐切换 ozonru.cn,改这里重新构建即可)
         buildConfigField "String", "OZON_SELLER_BASE_URL", "\"https://seller.ozonru.cn\""
     }

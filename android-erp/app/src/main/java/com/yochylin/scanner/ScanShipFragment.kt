@@ -192,6 +192,14 @@ class ScanShipFragment : Fragment() {
         searchInput.doAfterTextChanged { text ->
             if (text.isNullOrEmpty()) {
                 searchInput.setCompoundDrawables(null, null, null, null)
+                // 无论点 ✕ 还是键盘删空,都退出搜索态并清除搜索结果,回到发货记录
+                if (currentKeyword.isNotBlank()) {
+                    currentKeyword = ""
+                    results = emptyList()
+                    bannerText.visibility = View.GONE
+                    refreshList()
+                    loadRecords()
+                }
             } else {
                 searchInput.setCompoundDrawables(null, null, clearIcon, null)
             }
@@ -204,12 +212,6 @@ class ScanShipFragment : Fragment() {
                     x <= searchInput.width - searchInput.paddingEnd
                 ) {
                     searchInput.setText("")
-                    // 有搜索结果时退出搜索态,回到发货记录列表
-                    if (currentKeyword.isNotBlank()) {
-                        currentKeyword = ""
-                        bannerText.visibility = View.GONE
-                        loadRecords()
-                    }
                     return@setOnTouchListener true
                 }
             }

@@ -390,9 +390,9 @@ router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
     let dataUrl = getWaybillPng(storeId, postingNumbers, widthMm, pageHm);
     if (!dataUrl) {
       // 面单 PDF:文件缓存优先,未命中调 Ozon(与 order-process/package-label 同口径)
+      const store = (config.loadStores() || []).find((s) => s.id === storeId);
       let pdf = getWaybill(storeId, postingNumbers);
       if (!pdf) {
-        const store = (config.loadStores() || []).find((s) => s.id === storeId);
         if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
         try {
           pdf = (await packageLabel(store, postingNumbers)).buffer;
@@ -426,8 +426,8 @@ router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
         }
         setWaybill(storeId, postingNumbers, pdf);
       }
-      // 服务端渲染成 PNG dataURL,并写入二级缓存
-      const rendered = await pdfToPngDataUrl(pdf, widthMm, pageHm);
+      // 服务端渲染成 PNG dataURL(顶部叠加店铺名,如 YQL01),并写入二级缓存
+      const rendered = await pdfToPngDataUrl(pdf, widthMm, pageHm, 0, store?.name || storeId);
       dataUrl = rendered.dataUrl;
       setWaybillPng(storeId, postingNumbers, widthMm, pageHm, dataUrl);
     }

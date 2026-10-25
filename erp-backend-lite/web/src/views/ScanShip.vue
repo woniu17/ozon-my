@@ -481,7 +481,7 @@ async function onSubmitShip(pkg) {
 async function doPrint(pkg, { reprint }) {
   const blob = await fetchPackageLabel([pkg.id]);
   const printer = await pickLabelPrinter();
-  await printLabelImage(blob, pkg.logisticsNo || String(pkg.id), printer);
+  await printLabelImage(blob, pkg.logisticsNo || String(pkg.id), printer, 70, { storeName: pkg.storeName || '' });
   if (!reprint) {
     await markPrinted(pkg.id);
   } else {

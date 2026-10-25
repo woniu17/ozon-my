@@ -21,9 +21,10 @@ function loadPdfjs() {
  * @param {number} widthMm 标签纸宽(mm),默认 70
  * @param {number} pageHm 标签纸高(mm),默认 129
  * @param {number} rotation 顺时针旋转角度(0/90/180/270);货运标签横版打竖向纸时传 90
+ * @param {string} [overlayText] 非空时叠加到画布顶部(如店铺名 YQL01),用于面单分拣
  * @returns {Promise<{dataUrl:string,w:number,h:number}>}
  */
-export async function pdfToPngDataUrl(pdfBuffer, widthMm = 70, pageHm = 129, rotation = 0) {
+export async function pdfToPngDataUrl(pdfBuffer, widthMm = 70, pageHm = 129, rotation = 0, overlayText = '') {
   const pdfjs = await loadPdfjs();
   const doc = await pdfjs
     .getDocument({
@@ -56,6 +57,18 @@ export async function pdfToPngDataUrl(pdfBuffer, widthMm = 70, pageHm = 129, rot
     ctx.restore();
   } else {
     await page.render({ canvasContext: ctx, viewport }).promise;
+  }
+
+  // 叠加店铺名(2026-10-26):面单顶部盖白条+黑字,多店铺面单可快速分拣;货运标签不传此参数不受影响
+  if (overlayText) {
+    const barH = 46;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, barH);
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 34px sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillText(overlayText, 16, barH / 2);
   }
 
   return { dataUrl: canvas.toDataURL('image/png'), w: canvas.width, h: canvas.height };

@@ -2546,7 +2546,7 @@ async function onPrintLabel(pkg) {
   try {
     const blob = await fetchPackageLabel([pkg.id]);
     const printer = await pickLabelPrinter();
-    await printLabelImage(blob, pkg.logisticsNo || String(pkg.id), printer);
+    await printLabelImage(blob, pkg.logisticsNo || String(pkg.id), printer, 70, { storeName: pkg.storeName || '' });
     if (isReprint) {
       show('面单已重新打印(交运订单,状态不变)', 'success');
       return;
