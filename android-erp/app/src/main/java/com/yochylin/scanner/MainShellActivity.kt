@@ -163,6 +163,7 @@ class MainShellActivity : FragmentActivity(), TabHost {
                 "order" -> OrderListFragment()
                 "finance" -> FinanceFragment()
                 "stats" -> OrderStatsFragment()
+                "container" -> ContainerLabelFragment()
                 else -> ScanShipFragment()
             }
         }

@@ -591,6 +591,39 @@ router.post('/admin/api/print-agent/print-container-label', async (req, res, nex
   }
 });
 
+// 货运标签服务端直预览(2026-10-26,安卓端无纸预览):拉 PDF → 渲染 PNG(旋转90°) → 组件无纸预览,
+// 返回渲染图 URL + base64(手机可直接显示实际出纸版式)。body: { storeId, labelId }
+router.post('/admin/api/print-agent/preview-container-label', async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const storeId = String(b.storeId || '');
+    const labelId = Number(b.labelId);
+    if (!storeId) return res.status(400).json({ ok: false, message: 'storeId 必填' });
+    if (!Number.isInteger(labelId) || labelId <= 0) return res.status(400).json({ ok: false, message: '货运标签 ID 必须为正整数' });
+    const store = (config.loadStores() || []).find((s) => s.id === storeId);
+    if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
+    const { buffer } = await containerLabel(store, labelId);
+    const rendered = await pdfToPngDataUrl(buffer, 76, 129, 90);
+    const hMm = Math.round((76 * rendered.h) / rendered.w * 10) / 10;
+    const templateBase = getTemplateBase(req);
+    const url = await sendPreview(rendered.dataUrl, hMm, String(labelId), templateBase, 'label-image-76x130.xml');
+    let imageDataUrl = '';
+    if (url) {
+      try {
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const buf = Buffer.from(await resp.arrayBuffer());
+          imageDataUrl = `data:${resp.headers.get('content-type') || 'image/png'};base64,${buf.toString('base64')}`;
+        }
+      } catch { /* 拉取失败时安卓端回退到 url */ }
+    }
+    logger.info({ storeId, labelId, hasImage: !!imageDataUrl }, '[print-agent] 货运标签无纸预览成功');
+    res.json(ok({ url, imageDataUrl, labelId }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // 货运标签打印状态查询:一次性返回多个 labelId 是否已成功打印过
 // GET /admin/api/print-agent/container-label-print-status?storeId=X&labelIds=1,2,3
 // 响应: { printed: { '1': true, '2': false, ... } }
