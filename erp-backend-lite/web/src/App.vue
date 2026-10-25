@@ -30,6 +30,7 @@ const navGroups = [
       { key: '/products', label: '商品列表' },
       { key: '/collect-box-v2', label: '采集箱' },
       { key: '/batch', label: '批量上架' },
+      { key: '/materials', label: '素材管理' },
       { key: '/listings', label: '上架记录' },
       { key: '/listing-templates', label: '上架模板' },
       { key: '/watermark-templates', label: '水印模板' },

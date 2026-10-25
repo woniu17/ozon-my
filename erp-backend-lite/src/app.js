@@ -56,6 +56,7 @@ import productUpdateRoutes from './modules/product-update.js';
 import productArchiveRoutes from './modules/product-archive.js';
 import exportExcelRoutes from './modules/export-excel.js';
 import platformOrdersRoutes from './modules/platform-orders.js';
+import listingMaterialsRoutes from './modules/listing-materials.js';
 import { handleImageCacheRequest, withImageRequestContext } from './services/order-image-cache.js';
 import { stopPlatformOrders } from './services/platform-orders/browser-manager.js';
 import { setupPushWs } from './services/push-ws.js';
@@ -222,6 +223,7 @@ app.use(productUpdateRoutes);
 app.use(productArchiveRoutes);
 app.use(exportExcelRoutes);
 app.use(platformOrdersRoutes);
+app.use(listingMaterialsRoutes);
 // 服务端推送（长轮询接收端点，JWT 保护）
 app.use(pushRoutes);
 

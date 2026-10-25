@@ -116,6 +116,22 @@ async function ensureMigrations() {
     db.exec(`ALTER TABLE stock_refresh_tasks ADD COLUMN warehouse_id TEXT`);
     console.log('[db] migration: added column stock_refresh_tasks.warehouse_id');
   }
+  // 2026-10-24: 上架素材机制 Phase 2 批量发布
+  // batch_upload_items.material_id:素材发布时指向 listing_materials.id,
+  // poller 检测到非空则走 buildListingMessageFromMaterial 而非 buildListingMessage
+  const _buiCols = db.prepare(`PRAGMA table_info(batch_upload_items)`).all();
+  if (_buiCols.length > 0 && !_buiCols.some((c) => c.name === 'material_id')) {
+    db.exec(`ALTER TABLE batch_upload_items ADD COLUMN material_id INTEGER`);
+    console.log('[db] migration: added column batch_upload_items.material_id');
+  }
+  // listing_material_publishes.batch_item_id:批量发布时关联 batch_upload_items.id,
+  // 便于 poller 在成功/失败时回写发布记录状态
+  const _lmpCols = db.prepare(`PRAGMA table_info(listing_material_publishes)`).all();
+  if (_lmpCols.length > 0 && !_lmpCols.some((c) => c.name === 'batch_item_id')) {
+    db.exec(`ALTER TABLE listing_material_publishes ADD COLUMN batch_item_id INTEGER`);
+    console.log('[db] migration: added column listing_material_publishes.batch_item_id');
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_bui_material ON batch_upload_items(material_id)`);
   // 2026-10-18: 安卓通知推送日志(push-hub 每次广播写入,供问题排查与安卓端推送序列表展示)
   db.exec(`
     CREATE TABLE IF NOT EXISTS notification_log (

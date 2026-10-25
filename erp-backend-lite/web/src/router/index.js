@@ -8,6 +8,7 @@ import Preview from '../views/Preview.vue';
 import Products from '../views/Products.vue';
 import ProductDetailCompare from '../views/ProductDetailCompare.vue';
 import Batch from '../views/Batch.vue';
+import Materials from '../views/Materials.vue';
 import ImageRefreshList from '../views/ImageRefreshList.vue';
 import StockRefreshList from '../views/StockRefreshList.vue';
 import ProductUpdateList from '../views/ProductUpdateList.vue';
@@ -46,6 +47,7 @@ const router = createRouter({
     { path: '/products', name: 'products', component: Products },
     { path: '/products/detail/:sku', name: 'product-detail', component: ProductDetailCompare, meta: { title: '商品详情对比' } },
     { path: '/batch', name: 'batch', component: Batch },
+    { path: '/materials', name: 'materials', component: Materials, meta: { title: '素材管理' } },
     { path: '/image-refresh-tasks', name: 'image-refresh-tasks', component: ImageRefreshList, meta: { title: '图片更新任务' } },
     { path: '/stock-refresh-tasks', name: 'stock-refresh-tasks', component: StockRefreshList, meta: { title: '库存更新任务' } },
     { path: '/product-update-tasks', name: 'product-update-tasks', component: ProductUpdateList, meta: { title: '商品信息更新任务' } },

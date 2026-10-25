@@ -9,6 +9,8 @@
 // 轮询周期:500ms(短周期提升吞吐,实际处理时间取决于水印渲染)
 import { db } from '../db/index.js';
 import { buildListingMessage, prepareListing } from './listing-builder.js';
+import { buildListingMessageFromMaterial } from './listing-builder.js';
+import { getMaterialById } from './listing-materials.js';
 import logger from '../middleware/log.js';
 
 const POLL_INTERVAL_MS = 500; // 500ms 扫描一次(不限速)
@@ -103,8 +105,19 @@ async function processItemImage(item) {
     if (config.oldPrice != null) options.oldPrice = config.oldPrice;
     if (config.minPrice != null) options.minPrice = config.minPrice;
 
-    // 构建上架 message(从缓存合成 item + 价格策略 + 水印字段注入)
-    const { message } = await buildListingMessage(sku, targetStoreId, options);
+    // 构建上架 message
+    // 素材(item.material_id 非空):从素材重建 message(价格/offer_id/强制属性在
+    // buildListingMessageFromMaterial 内处理);普通 SKU:从缓存合成 item
+    let message;
+    if (item.material_id) {
+      const material = getMaterialById(item.material_id);
+      if (!material) throw new Error(`素材不存在(material_id=${item.material_id})`);
+      options.defaultStock = config.defaultStock ?? material.default_stock ?? 0;
+      message = buildListingMessageFromMaterial(material, targetStoreId, options).message;
+    } else {
+      const built = await buildListingMessage(sku, targetStoreId, options);
+      message = built.message;
+    }
     // 执行 prepareListing(含水印加工链:ai_rewrite → watermark → ai_poster → copy_ban)
     // 水印渲染失败时 watermark.js 透传原图,prepareListing 仍返回成功
     const prepared = await prepareListing(message, targetStoreId);
@@ -117,6 +130,7 @@ async function processItemImage(item) {
          WHERE id=?`
       ).run(prepared.localTaskId, prepared.error, item.id);
       db.prepare(`UPDATE batch_upload_tasks SET failed_count = failed_count + 1 WHERE local_task_id=?`).run(batchTaskId);
+      if (item.material_id) updateMaterialPublish(item.id, 'failed', prepared.error);
       logger.warn({ batchTaskId, sku, err: prepared.error }, 'batch-image 图片处理失败');
 
       // 失败策略:onFailure='pause' 则暂停批次
@@ -153,6 +167,29 @@ async function processItemImage(item) {
       ).run(batchTaskId);
     }
   }
+}
+
+/**
+ * 回写素材发布记录(batch_upload_items.id → listing_material_publishes.batch_item_id)
+ * 批量发布时,发布记录在批次创建时以 status='pending' 插入,此处随执行阶段更新
+ */
+function updateMaterialPublish(batchItemId, status, errorMessage = null, extra = {}) {
+  const sets = ['status = :status'];
+  const params = { batchItemId: Number(batchItemId), status };
+  if (errorMessage != null) {
+    sets.push('error_message = :errorMessage');
+    params.errorMessage = String(errorMessage);
+  }
+  if (extra.localTaskId != null) {
+    sets.push('local_task_id = :localTaskId');
+    params.localTaskId = String(extra.localTaskId);
+  }
+  if (extra.ozonTaskId != null) {
+    sets.push('ozon_task_id = :ozonTaskId');
+    params.ozonTaskId = String(extra.ozonTaskId);
+  }
+  if (extra.publishedAt) sets.push('published_at = datetime(\'now\')');
+  db.prepare(`UPDATE listing_material_publishes SET ${sets.join(', ')} WHERE batch_item_id = :batchItemId`).run(params);
 }
 
 function parseJson(value) {

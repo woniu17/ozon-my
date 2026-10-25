@@ -128,6 +128,7 @@ export function saveOpiResponse(localTaskId, storeId, response) {
 // 任一参数缺失则对应字段返回 null(不覆盖)
 // originalPrice 取缓存合成的 item.price(detail 优先,已规范化为数字字符串 "15.12",
 // 原始 detail DOM 可能是 locale 格式 "15,12 ¥",Number() 会解析成 NaN)
+// 导出供素材机制(services/listing-materials.js)复用
 function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
@@ -135,7 +136,7 @@ function round2(n) {
 const LOW_PRICE_SOURCE_MAX = 15;
 const LOW_PRICE_FLOOR = 19;
 
-function computePricesFromTemplate(originalPrice, tplCfg) {
+export function computePricesFromTemplate(originalPrice, tplCfg) {
   const orig = Number(originalPrice);
   if (!isFinite(orig) || orig <= 0) return { salePrice: null, oldPrice: null, minPrice: null };
   const sa = Number(tplCfg?.salePriceA);
@@ -466,6 +467,142 @@ export async function buildListingMessage(sku, storeId, options = {}) {
       items: [item],
       defaultStock,
       templateId,
+      applyWatermark: applyWatermark === true,
+      watermarkTemplateId: watermarkTemplateId ?? null,
+    },
+    offerId,
+  };
+}
+
+// ── 从素材(material)构建上架 message ───────────────────────
+// 素材机制(2026-10,见 docs/上架素材机制-设计方案.md)Phase 1 发布入口:
+//   1. 以 material.item_json(完整 raw item 快照)为基底重建 item
+//   2. 素材可编辑列(name/description/images)优先覆盖
+//   3. 价格优先级:options 显式 > material.price_config > templateId 模板计算
+//   4. 注入 OPI 强制字段:offer_id({sku}-{mmdd}-{materialId})、currency_code、vat
+//   5. 强制注入品牌(85)=无品牌、卖家代码(9024)=Offer ID、型号名称(9048)=素材唯一 model_name
+//
+// 返回与 buildListingMessage 同构的 { message, offerId }
+export function buildListingMessageFromMaterial(material, storeId, options = {}) {
+  const {
+    defaultStock = material.default_stock ?? 0,
+    templateId = null,
+    salePrice = null,
+    oldPrice = null,
+    minPrice = null,
+    videoMode = 'skip',
+  } = options;
+
+  const store = config.loadStores().find((s) => s.id === storeId);
+  if (!store) throw new Error(`店铺不存在: ${storeId}`);
+
+  let rawItem = {};
+  try {
+    rawItem = JSON.parse(material.item_json || '{}');
+  } catch (e) {
+    throw new Error('素材 item_json 损坏,无法解析');
+  }
+  if (!rawItem || typeof rawItem !== 'object' || !rawItem.name) {
+    throw new Error('素材 item_json 为空,请重新生成素材');
+  }
+  const item = JSON.parse(JSON.stringify(rawItem));
+
+  // 可编辑列覆盖(人工审核/编辑后以素材表为准)
+  if (material.name) item.name = String(material.name);
+  if (material.description) item.scraped_description = String(material.description);
+  if (material.images) {
+    try {
+      const imgs = JSON.parse(material.images);
+      if (Array.isArray(imgs) && imgs.length > 0) item.images = imgs;
+    } catch (e) {
+      logger.warn({ materialId: material.id, err: e.message }, 'material.images 解析失败,沿用 item_json 图片');
+    }
+  }
+
+  // 价格:显式 options > 素材 price_config > 模板公式补齐
+  const priceCfg = material.price_config ? (() => {
+    try { return JSON.parse(material.price_config); } catch { return {}; }
+  })() : {};
+  let finalSalePrice = salePrice;
+  let finalOldPrice = oldPrice;
+  let finalMinPrice = minPrice;
+  if (finalSalePrice == null && priceCfg.salePrice != null) finalSalePrice = priceCfg.salePrice;
+  if (finalOldPrice == null && priceCfg.oldPrice != null) finalOldPrice = priceCfg.oldPrice;
+  if (finalMinPrice == null && priceCfg.minPrice != null) finalMinPrice = priceCfg.minPrice;
+  const effectiveTemplateId = templateId || priceCfg.templateId || null;
+  const tplCfg = effectiveTemplateId ? getTemplateConfig(effectiveTemplateId) : null;
+  if (effectiveTemplateId && (finalSalePrice == null || finalOldPrice == null || finalMinPrice == null)) {
+    if (tplCfg) {
+      const computed = computePricesFromTemplate(item.price, tplCfg);
+      if (finalSalePrice == null && computed.salePrice != null) finalSalePrice = computed.salePrice;
+      if (finalOldPrice == null && computed.oldPrice != null) finalOldPrice = computed.oldPrice;
+      if (finalMinPrice == null && computed.minPrice != null) finalMinPrice = computed.minPrice;
+    }
+  }
+  if (finalSalePrice != null) item.price = String(finalSalePrice);
+  if (finalOldPrice != null) item.old_price = String(finalOldPrice);
+  if (finalMinPrice != null) item.min_price = String(finalMinPrice);
+
+  // 图片顺序策略(复用 buildListingMessage 逻辑)
+  const imageOrder = options.imageOrder || tplCfg?.imageOrder || 'keep';
+  if (imageOrder === 'shuffle_non_primary' && Array.isArray(item.images) && item.images.length > 2) {
+    const primaryIdx = item.images.findIndex((im) => im && im.default);
+    if (primaryIdx >= 0) {
+      const primary = item.images[primaryIdx];
+      const rest = item.images.filter((_, i) => i !== primaryIdx);
+      for (let i = rest.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [rest[i], rest[j]] = [rest[j], rest[i]];
+      }
+      item.images = [primary, ...rest];
+    }
+  }
+
+  // OPI 强制字段:offer_id 使用素材专属后缀(同一 SKU 多份素材投同店也不冲突)
+  const today = new Date();
+  const mmdd = `${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+  const offerId = `${material.source_sku}-${mmdd}-${material.id}`;
+  item.offer_id = offerId;
+  item.currency_code = store.currency_code || '';
+  item.vat = LISTING_VAT;
+  if (videoMode === 'skip') item.videoUrl = '';
+
+  // 强制注入:品牌(85)=无品牌、卖家代码(9024)=Offer ID、型号名称(9048)=素材唯一 model_name
+  const modelName = material.model_name || Date.now().toString(36).toUpperCase();
+  const forcedAttrValues = [
+    { id: BRAND_ATTR_ID, value: NO_BRAND_VALUE, dictionaryValueId: NO_BRAND_DICTIONARY_VALUE_ID },
+    { id: SELLER_CODE_ATTR_ID, value: offerId, dictionaryValueId: 0 },
+    { id: MODEL_NAME_ATTR_ID, value: modelName, dictionaryValueId: 0 },
+  ];
+  item._forcedAttributes = forcedAttrValues.map((fe) => ({
+    complex_id: 0,
+    id: fe.id,
+    values: [{ dictionary_value_id: fe.dictionaryValueId, value: fe.value }],
+  }));
+  if (Array.isArray(item.attributes)) {
+    for (const fe of forcedAttrValues) {
+      const idx = item.attributes.findIndex((a) => Number(a.id) === fe.id);
+      const entry = { complex_id: 0, id: fe.id, values: [{ dictionary_value_id: fe.dictionaryValueId, value: fe.value }] };
+      if (idx >= 0) item.attributes[idx] = entry;
+      else item.attributes.push(entry);
+    }
+  }
+
+  // 水印字段注入(复用 buildListingMessage 逻辑)
+  let applyWatermark = options.applyWatermark ?? null;
+  let watermarkTemplateId = options.watermarkTemplateId ?? null;
+  if (effectiveTemplateId && (applyWatermark === null || watermarkTemplateId === null)) {
+    if (tplCfg) {
+      if (applyWatermark === null) applyWatermark = tplCfg.applyWatermark === true;
+      if (watermarkTemplateId === null) watermarkTemplateId = tplCfg.watermarkTemplateId ?? null;
+    }
+  }
+
+  return {
+    message: {
+      items: [item],
+      defaultStock,
+      templateId: effectiveTemplateId,
       applyWatermark: applyWatermark === true,
       watermarkTemplateId: watermarkTemplateId ?? null,
     },

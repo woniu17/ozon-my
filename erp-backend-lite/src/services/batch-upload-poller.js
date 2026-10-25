@@ -24,6 +24,26 @@ const DEFAULT_INTERVAL_SEC = 10;
 // 确保落盘文件可被静态资源服务/公网 CDN 访问
 const IMAGE_DONE_COOLDOWN_SEC = 5;
 
+// 回写素材发布记录(批量发布时用;与 batch-image-poller 中同名函数保持一致)
+function updateMaterialPublish(batchItemId, status, errorMessage = null, extra = {}) {
+  const sets = ['status = :status'];
+  const params = { batchItemId: Number(batchItemId), status };
+  if (errorMessage != null) {
+    sets.push('error_message = :errorMessage');
+    params.errorMessage = String(errorMessage);
+  }
+  if (extra.localTaskId != null) {
+    sets.push('local_task_id = :localTaskId');
+    params.localTaskId = String(extra.localTaskId);
+  }
+  if (extra.ozonTaskId != null) {
+    sets.push('ozon_task_id = :ozonTaskId');
+    params.ozonTaskId = String(extra.ozonTaskId);
+  }
+  if (extra.publishedAt) sets.push('published_at = datetime(\'now\')');
+  db.prepare(`UPDATE listing_material_publishes SET ${sets.join(', ')} WHERE batch_item_id = :batchItemId`).run(params);
+}
+
 let timer = null;
 let running = false; // 防止 scanOnce 重入
 
@@ -147,6 +167,7 @@ async function executeBatchItem(batch, item, speedConfig) {
          WHERE id=?`
       ).run(result.localTaskId, result.error, item.id);
       db.prepare(`UPDATE batch_upload_tasks SET failed_count = failed_count + 1 WHERE local_task_id=?`).run(batchTaskId);
+      if (item.material_id) updateMaterialPublish(item.id, 'failed', result.error);
       logger.warn({ batchTaskId, sku, err: result.error }, 'batch-upload OPI 子任务失败');
 
       // 失败策略:onFailure='pause' 则暂停批次
@@ -164,6 +185,19 @@ async function executeBatchItem(batch, item, speedConfig) {
          WHERE id=?`
       ).run(result.localTaskId, item.id);
       db.prepare(`UPDATE batch_upload_tasks SET success_count = success_count + 1 WHERE local_task_id=?`).run(batchTaskId);
+      // 素材发布记录:processing + 关联任务 ID;素材状态置 published
+      if (item.material_id) {
+        updateMaterialPublish(item.id, 'processing', null, {
+          localTaskId: result.localTaskId,
+          ozonTaskId: result.ozonTaskId,
+          publishedAt: true,
+        });
+        const today = new Date();
+        const mmdd = `${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+        const offerId = `${item.source_sku}-${mmdd}-${item.material_id}`;
+        db.prepare(`UPDATE listing_materials SET status='published', offer_id=?, updated_at=datetime('now') WHERE id=?`)
+          .run(offerId, item.material_id);
+      }
       logger.info({ batchTaskId, sku, localTaskId: result.localTaskId, ozonTaskId: result.ozonTaskId }, 'batch-upload OPI 子任务成功');
     }
   } catch (e) {
@@ -175,6 +209,7 @@ async function executeBatchItem(batch, item, speedConfig) {
        WHERE id=?`
     ).run(errMsg, item.id);
     db.prepare(`UPDATE batch_upload_tasks SET failed_count = failed_count + 1 WHERE local_task_id=?`).run(batchTaskId);
+    if (item.material_id) updateMaterialPublish(item.id, 'failed', errMsg);
     logger.warn({ batchTaskId, sku, err: errMsg, stack: e.stack }, 'batch-upload OPI 子任务异常');
 
     if (speedConfig.onFailure === 'pause') {

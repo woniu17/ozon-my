@@ -166,7 +166,8 @@ CREATE TABLE IF NOT EXISTS batch_upload_items (
   seq             INTEGER DEFAULT 0,   -- P2-2:执行顺序(0起)
   source_sku      TEXT,
   source_url      TEXT,
-  seller_id       TEXT,                -- P2-2:来源卖家(ozon_cache_index.seller_id,审计用)
+  seller_id         TEXT,                -- P2-2:来源卖家(ozon_cache_index.seller_id,审计用)
+  material_id       INTEGER,             -- 素材机制(2026-10):非空时走 buildListingMessageFromMaterial
   target_store_id TEXT,                -- P2-2:分配到的目标店铺(stores.json 的 id)
   follow_task_id  TEXT, -- 关联 follow_sell_tasks.local_task_id
   status          TEXT DEFAULT 'PENDING', -- 状态机(2026-07 两阶段改造):
@@ -245,6 +246,69 @@ CREATE TABLE IF NOT EXISTS listing_templates (
 );
 CREATE INDEX IF NOT EXISTS idx_lt_default ON listing_templates(is_default);
 CREATE INDEX IF NOT EXISTS idx_lt_builtin ON listing_templates(is_builtin);
+
+-- ── 上架素材(2026-10) ─────────────────────────────────────
+-- 素材机制:把「商品内容」从「上架动作」中解耦。同一商品可生成多份素材
+-- (标题/描述/图片/属性/价格各不相同),经审核后发布到另一家店铺。
+-- 设计文档:docs/上架素材机制-设计方案.md
+CREATE TABLE IF NOT EXISTS listing_materials (
+  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  material_no             TEXT UNIQUE NOT NULL,   -- 业务编号 mat-{timestamp}-{rand}
+  group_id                TEXT NOT NULL,          -- 同源商品分组(一个源商品一个组)
+  source_sku              TEXT NOT NULL,          -- 源商品 SKU(product_data_cache.sku)
+  source_store_id         TEXT,                   -- 源店铺 ID(可为空=来自采集箱/1688)
+  source_product_id       TEXT,                   -- 源商品 Ozon product_id
+  name                    TEXT NOT NULL,          -- 优化后标题
+  description             TEXT,                   -- 描述(4191 纯文本)
+  rich_content            TEXT,                   -- 富内容(11254 JSON,可为空)
+  description_category_id INTEGER NOT NULL DEFAULT 0,
+  type_id                 INTEGER NOT NULL DEFAULT 0,
+  primary_image           TEXT,                   -- 主图 URL
+  images                  TEXT NOT NULL,          -- JSON 数组(原始图片 [{file_name,default}] 或 URL)
+  attributes              TEXT,                   -- JSON 数组(v3 属性格式,供预览/编辑)
+  item_json               TEXT NOT NULL,          -- 完整 raw item 快照(发布时以此重建 message)
+  model_name              TEXT,                   -- 每份素材唯一型号名称(防同款合并)
+  video_url               TEXT,
+  price_config            TEXT,                   -- JSON {salePrice,oldPrice,minPrice,templateId}
+  default_stock           INTEGER NOT NULL DEFAULT 0,
+  offer_id                TEXT,                   -- 素材 offer_id(发布时生成 {sku}-{mmdd}-{id})
+  status                  TEXT NOT NULL DEFAULT 'draft',  -- draft/ready/published/archived
+  created_by              TEXT,
+  created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_lm_group   ON listing_materials(group_id);
+CREATE INDEX IF NOT EXISTS idx_lm_source  ON listing_materials(source_sku);
+CREATE INDEX IF NOT EXISTS idx_lm_status  ON listing_materials(status, created_at DESC);
+
+-- 素材版本历史:每次编辑保存一份完整快照
+CREATE TABLE IF NOT EXISTS listing_material_versions (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  material_id  INTEGER NOT NULL REFERENCES listing_materials(id),
+  version      INTEGER NOT NULL,
+  snapshot     TEXT NOT NULL,        -- 完整素材 JSON 快照(含 name/description/images/attributes/price_config)
+  change_note  TEXT,                 -- 变更说明
+  created_by   TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(material_id, version)
+);
+
+-- 素材发布记录:素材→店铺→上架任务 的追踪
+CREATE TABLE IF NOT EXISTS listing_material_publishes (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  material_id      INTEGER NOT NULL REFERENCES listing_materials(id),
+  material_version INTEGER NOT NULL,
+  store_id         TEXT NOT NULL,              -- 目标店铺 ID
+  batch_item_id    INTEGER,                   -- 批量发布时关联 batch_upload_items.id
+  local_task_id    TEXT,                       -- 关联 follow_sell_tasks.local_task_id
+  ozon_task_id     TEXT,                       -- Ozon 异步任务 ID
+  status           TEXT NOT NULL DEFAULT 'pending',  -- pending/processing/success/failed
+  error_message    TEXT,
+  published_at     TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(material_id, store_id)                -- 同一素材不能重复投同一店铺
+);
+CREATE INDEX IF NOT EXISTS idx_lmp_store ON listing_material_publishes(store_id, created_at DESC);
 
 -- ── 图片更新任务(2026-07) ──────────────────────────────────
 -- 上架后图片出问题时,基于已上架商品单独/批量重提图片(/v1/product/pictures/import)
