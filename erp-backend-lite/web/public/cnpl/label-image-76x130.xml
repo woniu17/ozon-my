@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CNPL(菜鸟打印组件 1.5.3.0)图片模板:76x130mm 竖向货运标签整张贴图(2026-10-25)
+     数据绑定:_data.img = PNG dataURL;_data.h = 等比图高 mm(前端按宽 76mm 折算,见 print-agent.js)
+     货运标签 PDF 实测 100x70mm 横向,打印前顺时针旋转 90° 成 70x100 竖向,
+     contain 到 76:129 画布(上下留白)→ 组件拉伸填满 layout 不变形
+     官方 LPML 格式:根 <page>(cainiao 命名空间) + layout 容器 + image 元素,变量语法 <%=_data.xxx%>
+     其余规范与 label-image.xml 完全一致,仅纸张宽度 76mm -->
+<page xmlns="http://cloudprint.cainiao.com/print"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://cloudprint.cainiao.com/print http://cloudprint-docs-resource.oss-cn-shanghai.aliyuncs.com/lpml_schema.xsd"
+      xmlns:editor="http://cloudprint.cainiao.com/schema/editor"
+      width="76" height="130">
+  <layout left="0" top="0" width="76" height="129" style="zIndex:1;overflow:visible;">
+    <image>
+      <![CDATA[<%=_data.img%>]]>
+    </image>
+  </layout>
+</page>

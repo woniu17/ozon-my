@@ -16,7 +16,7 @@ import { pdfToPngDataUrl } from '../services/waybill-image.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
-import { packageLabel } from '../services/ozon-opi.js';
+import { packageLabel, containerLabel, carriageDeliveryList } from '../services/ozon-opi.js';
 import { getWaybill, setWaybill, getWaybillPng, setWaybillPng } from '../services/waybill-cache.js';
 
 // SSH 隧道把打印电脑的组件端口转发到服务器 127.0.0.1:13528;可用环境变量覆盖
@@ -169,15 +169,16 @@ function getTemplateBase(req) {
 }
 
 // CNPL 图片模板任务内容(明文 data:img=PNG dataURL,h=图高 mm)
-// 模板经组件拉取 ${templateBase}/cnpl/label-image.xml,模板内用 _data.img/_data.h 取值
+// 模板经组件拉取 ${templateBase}/cnpl/${templateName},模板内用 _data.img/_data.h 取值
 // templateBase 用请求的 origin(ERP 服务器地址),打印电脑经局域网可达;URL 带时间戳防模板缓存
-function buildImageContents(dataUrl, hMm, documentId, templateBase) {
+// templateName 默认面单纵向模板 label-image.xml;货运标签为 100x70 横向,传 label-image-100x70.xml
+function buildImageContents(dataUrl, hMm, documentId, templateBase, templateName = 'label-image.xml') {
   return [
     {
       documentID: String(documentId),
       contents: [
         {
-          templateURL: `${templateBase}/cnpl/label-image.xml?t=${Date.now()}`,
+          templateURL: `${templateBase}/cnpl/${templateName}?t=${Date.now()}`,
           data: { img: dataUrl, h: hMm },
         },
       ],
@@ -188,7 +189,7 @@ function buildImageContents(dataUrl, hMm, documentId, templateBase) {
 // 图片打印任务:组件渲染 CNPL 模板并出纸;waiter 仅在终态清理(提前清理会漏接 printed 导致超时)
 // 终态判定兼容两代协议:0.x notifyPrintResult 用 taskStatus(printed/failed);
 // 1.5.x notifyDocResult/notifyTaskResult 用 status(printed/completeSuccess/failed/completeFailed)
-function sendPrint(dataUrl, hMm, documentId, printer, templateBase) {
+function sendPrint(dataUrl, hMm, documentId, printer, templateBase, templateName = 'label-image.xml') {
   return acquireAgent().then((sock) => {
     const taskID = genId();
     return new Promise((resolve, reject) => {
@@ -222,7 +223,7 @@ function sendPrint(dataUrl, hMm, documentId, printer, templateBase) {
               taskID,
               preview: false,
               printer: printer || '',
-              documents: buildImageContents(dataUrl, hMm, documentId, templateBase),
+              documents: buildImageContents(dataUrl, hMm, documentId, templateBase, templateName),
             },
           })
         );
@@ -325,13 +326,13 @@ router.get('/admin/api/print-agent/status', async (_req, res) => {
 // 打印:前端已把 PDF 转成 PNG dataURL,后端原样转发给组件(模板 URL 指向 ERP 服务器)
 router.post('/admin/api/print-agent/print', async (req, res, next) => {
   const startTs = Date.now();
-  const { imageDataUrl, hMm, documentId, printer } = req.body || {};
+  const { imageDataUrl, hMm, documentId, printer, templateName } = req.body || {};
   try {
     if (!imageDataUrl || !documentId) {
       return res.status(400).json({ ok: false, message: 'imageDataUrl 与 documentId 必填' });
     }
     const templateBase = getTemplateBase(req);
-    await sendPrint(imageDataUrl, Number(hMm) || 129, documentId, printer || '', templateBase);
+    await sendPrint(imageDataUrl, Number(hMm) || 129, documentId, printer || '', templateBase, templateName || 'label-image.xml');
     orderPackageDao.insertPrintLog({
       postingNumber: documentId,
       printer: printer || '',
@@ -441,6 +442,87 @@ router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
       ...logMeta,
       printer,
       source: 'print-package',
+      status: 'failed',
+      error: e?.message || String(e),
+      durationMs: Date.now() - startTs,
+      ip: req.ip,
+    });
+    next(e);
+  }
+});
+
+// ── 货运标签(2026-10-25)────────────────────────────────
+// 列表:/v2/carriage/delivery/list(操作 ID CarriageDeliveryListV2),每个发运的 id 即货运标签 ID;
+// PDF:/v2/posting/fbs/act/get-container-labels(body { id }),返回 application/pdf 流。
+
+// 货运标签(发运)列表:body { storeId, cursor?, limit? } → 原样返回 Ozon methods[] 结构
+router.post('/admin/api/print-agent/container-labels', async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const storeId = String(b.storeId || '');
+    const cursor = String(b.cursor || '');
+    const limit = b.limit != null ? Number(b.limit) : 1000;
+    if (!storeId) return res.status(400).json({ ok: false, message: 'storeId 必填' });
+    const store = (config.loadStores() || []).find((s) => s.id === storeId);
+    if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
+    const data = await carriageDeliveryList(store, { cursor, limit });
+    res.json(ok(data));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 拉取货运标签 PDF(前端渲染/预览用)
+router.post('/admin/api/print-agent/container-label-pdf', async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const storeId = String(b.storeId || '');
+    const labelId = Number(b.labelId);
+    if (!storeId) return res.status(400).json({ ok: false, message: 'storeId 必填' });
+    if (!Number.isInteger(labelId) || labelId <= 0) return res.status(400).json({ ok: false, message: '货运标签 ID 必须为正整数' });
+    const store = (config.loadStores() || []).find((s) => s.id === storeId);
+    if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
+    const { buffer } = await containerLabel(store, labelId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="container-label-${labelId}.pdf"`);
+    res.end(buffer);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 服务端直接打印货运标签:拉 PDF → 渲染 PNG → 转发打印组件出纸
+// body: { storeId, labelId, printer? }  printer 为服务器组件上的打印机名,空=组件默认
+router.post('/admin/api/print-agent/print-container-label', async (req, res, next) => {
+  const startTs = Date.now();
+  const b = req.body || {};
+  const storeId = String(b.storeId || '');
+  const labelId = Number(b.labelId);
+  const printer = b.printer || '';
+  const logMeta = { storeId, labelId: Number.isInteger(labelId) ? labelId : null };
+  try {
+    if (!storeId) return res.status(400).json({ ok: false, message: 'storeId 必填' });
+    if (!Number.isInteger(labelId) || labelId <= 0) return res.status(400).json({ ok: false, message: '货运标签 ID 必须为正整数' });
+    const store = (config.loadStores() || []).find((s) => s.id === storeId);
+    if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
+    const { buffer } = await containerLabel(store, labelId);
+    // 货运标签 PDF 实测 100x70mm 横向,用户纸张为 76x130mm 竖向(2026-10-25):
+    // 渲染时顺时针旋转 90° 成 70x100 竖向,contain 到 76:129 画布(上下留白),
+    // 模板用 76x130 竖向专用,避免横版压扁或留大片空白
+    const rendered = await pdfToPngDataUrl(buffer, 76, 129, 90);
+    const hMm = Math.round((76 * rendered.h) / rendered.w * 10) / 10;
+    const documentId = String(labelId);
+    const templateBase = getTemplateBase(req);
+    await sendPrint(rendered.dataUrl, hMm, documentId, printer, templateBase, 'label-image-76x130.xml');
+    const durationMs = Date.now() - startTs;
+    logger.info({ storeId, labelId, printer: printer || 'default', durationMs }, '[print-agent] 货运标签打印成功');
+    orderPackageDao.insertPrintLog({ ...logMeta, printer, source: 'print-container-label', status: 'success', durationMs, ip: req.ip });
+    res.json(ok({ printed: true, labelId }));
+  } catch (e) {
+    orderPackageDao.insertPrintLog({
+      ...logMeta,
+      printer,
+      source: 'print-container-label',
       status: 'failed',
       error: e?.message || String(e),
       durationMs: Date.now() - startTs,

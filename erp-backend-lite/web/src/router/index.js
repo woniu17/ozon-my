@@ -29,6 +29,7 @@ import OrderProcess from '../views/OrderProcess.vue';
 import OrderStats from '../views/OrderStats.vue';
 import FinanceStats from '../views/FinanceStats.vue';
 import ScanShip from '../views/ScanShip.vue';
+import ContainerLabelPrint from '../views/ContainerLabelPrint.vue';
 import MiaoshouOrders from '../views/MiaoshouOrders.vue';
 import { useAuthStore } from '../stores/auth.js';
 
@@ -72,6 +73,7 @@ const router = createRouter({
     { path: '/finance-stats', name: 'finance-stats', component: FinanceStats, meta: { title: '财务统计' } },
     { path: '/price-manage', name: 'price-manage', component: () => import('../views/PriceManage.vue'), meta: { title: '价格管理' } },
     { path: '/scan-ship', name: 'scan-ship', component: ScanShip, meta: { title: '扫描发货' } },
+    { path: '/print-container-label', name: 'print-container-label', component: ContainerLabelPrint, meta: { title: '打印货运标签' } },
     { path: '/print-logs', name: 'print-logs', component: () => import('../views/PrintLogs.vue'), meta: { title: '打印日志' } },
     { path: '/miaoshou-orders', name: 'miaoshou-orders', component: MiaoshouOrders, meta: { title: '妙手订单' } },
     { path: '/batch-upload/:batchNo', name: 'batch-upload-detail', component: () => import('../views/BatchUploadDetail.vue'), meta: { title: '批次详情' } },

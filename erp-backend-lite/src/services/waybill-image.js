@@ -16,13 +16,14 @@ function loadPdfjs() {
 }
 
 /**
- * 渲染 PDF 第 1 页为 PNG dataURL(70×129mm 标签纸比例)。
+ * 渲染 PDF 第 1 页为 PNG dataURL(默认 70×129mm 标签纸比例)。
  * @param {Buffer|Uint8Array} pdfBuffer Ozon 面单 PDF
  * @param {number} widthMm 标签纸宽(mm),默认 70
  * @param {number} pageHm 标签纸高(mm),默认 129
+ * @param {number} rotation 顺时针旋转角度(0/90/180/270);货运标签横版打竖向纸时传 90
  * @returns {Promise<{dataUrl:string,w:number,h:number}>}
  */
-export async function pdfToPngDataUrl(pdfBuffer, widthMm = 70, pageHm = 129) {
+export async function pdfToPngDataUrl(pdfBuffer, widthMm = 70, pageHm = 129, rotation = 0) {
   const pdfjs = await loadPdfjs();
   const doc = await pdfjs
     .getDocument({
@@ -33,23 +34,24 @@ export async function pdfToPngDataUrl(pdfBuffer, widthMm = 70, pageHm = 129) {
     .promise;
   const page = await doc.getPage(1);
 
-  // 同前端:画布固定 70:129 比例(宽 1100px),PDF contain 缩放,避免组件拉伸变形
+  // 同前端:画布固定标签纸比例(宽 1100px),PDF contain 缩放,避免组件拉伸变形
   const canvasW = 1100;
   const canvasH = Math.round((canvasW * pageHm) / widthMm);
-  const base = page.getViewport({ scale: 1 });
+  const base = page.getViewport({ scale: 1, rotation });
   const scale = Math.min(canvasW / base.width, canvasH / base.height);
-  const viewport = page.getViewport({ scale });
+  const viewport = page.getViewport({ scale, rotation });
 
   const canvas = createCanvas(canvasW, canvasH);
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff'; // PDF 透明底铺白
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // 水平居中,顶部对齐(与前端一致)
+  // 水平/垂直居中(与前端一致;旋转后的货运标签在竖向纸上留白均匀,面单比例一致时 offset=0 无影响)
   const offsetX = Math.round((canvasW - viewport.width) / 2);
-  if (offsetX > 0) {
+  const offsetY = Math.round((canvasH - viewport.height) / 2);
+  if (offsetX > 0 || offsetY > 0) {
     ctx.save();
-    ctx.translate(offsetX, 0);
+    ctx.translate(offsetX, offsetY);
     await page.render({ canvasContext: ctx, viewport }).promise;
     ctx.restore();
   } else {

@@ -567,6 +567,35 @@ export function postingFbsShip(store, postingNumber, products) {
 // 请求: { posting_number: string[] }(单次 ≤20,任一货件出错整批失败)
 // 响应: PDF 二进制流(非 JSON,走 callRaw)
 // 注:装配完成后 45-60s 才可拉;未就绪时 Ozon 报 "The next postings aren't ready"
+// /v2/posting/fbs/act/get-container-labels —— 按货运标签 ID 取标签 PDF(2026-10-25)
+// Ozon FBS 交接单的每个集装箱/包裹会生成独立货运标签;请求体 { id: <标签ID> },响应为 PDF。
+export function containerLabel(store, labelId) {
+  const id = Number(labelId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `货运标签 ID 必须为正整数,收到: ${labelId}`);
+  }
+  return callRaw(store, '/v2/posting/fbs/act/get-container-labels', { id });
+}
+
+// /v2/carriage/delivery/list —— 运输/发运清单(2026-10-25,操作 ID CarriageDeliveryListV2)
+// 官方文档:运输方式和发运清单(旧 /v1 已废弃,2026-03-20 关闭)。
+// 每个发运(carriage)的 id 即货运标签 ID,可直接传给 containerLabel() 拉标签 PDF。
+// 请求: { cursor?, filter?: { delivery_method_id?, departure_date? }, limit }  limit 必填,最大 1000
+// 响应: { cursor, has_next, methods: [{ delivery_method_id, delivery_method_name,
+//        departure_date, carriages: [{ id, status, postings_count, quantum_count }] }] }
+// 注:该接口不返回没有发运的配送方式。
+export function carriageDeliveryList(store, { cursor = '', filter = {}, limit = 1000 } = {}) {
+  const n = Number(limit);
+  if (!Number.isInteger(n) || n < 1 || n > 1000) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `limit 必须为 1~1000 的整数,收到: ${limit}`);
+  }
+  return call(store, '/v2/carriage/delivery/list', {
+    cursor: cursor || '',
+    filter: filter && typeof filter === 'object' ? filter : {},
+    limit: n,
+  });
+}
+
 export function packageLabel(store, postingNumbers) {
   return callRaw(store, '/v2/posting/fbs/package-label', { posting_number: postingNumbers });
 }

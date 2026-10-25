@@ -8,7 +8,7 @@
 // pdfjs worker 经 vite ?url 打包为带 hash 的静态资产:
 // 不再依赖手动拷贝 src/public/pdfjs/(该目录被 .gitignore 忽略,服务器拉不到,2026-09-15 实测踩坑)
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { get, post } from './request.js';
+import { get, post, postBlob } from './request.js';
 
 let ws = null;                 // 长连接(复用)
 let connecting = null;         // 连接中的 promise(防并发重连)
@@ -185,29 +185,33 @@ export async function pickLabelPrinter() {
 }
 
 // PDF 第 1 页 → PNG dataURL(pdfjs;worker 走 vite 打包的带 hash 资产,见文件头 import)
-// 画布固定按标签纸比例(70:129,宽 1100px)创建,PDF 内容等比 contain 缩放(水平居中/顶部对齐),
-// 多余区域白底补齐 → 组件把图拉伸填满 70×129mm layout 时长宽比与原 PDF 完全一致,零变形
+// 画布固定按标签纸比例(默认 70:129,宽 1100px)创建,PDF 内容等比 contain 缩放(水平居中/顶部对齐),
+// 多余区域白底补齐 → 组件把图拉伸填满 layout 时长宽比与原 PDF 完全一致,零变形
 // (2026-09-15:此前画布按 PDF 原比例,layout 拉伸到 129mm 导致 ~2-5% 纵向拉伸,QR 码定位点变椭圆)
-async function pdfToPng(blob, widthMm = 70, pageHm = 129) {
+// rotation:顺时针旋转角度(0/90/180/270)。货运标签 PDF 为 100x70mm 横向,
+// 打印到 76x130mm 竖向纸时 rotation=90 转成 70x100 竖向再 contain(2026-10-25 适配纸张)
+async function pdfToPng(blob, widthMm = 70, pageHm = 129, rotation = 0) {
   const pdfjs = await import('pdfjs-dist');
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   const page = await (await pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise).getPage(1);
-  const base = page.getViewport({ scale: 1 });
+  const base = page.getViewport({ scale: 1, rotation });
   const canvasW = 1100; // 目标宽 1100px,条码足够清晰
   const canvasH = Math.round((canvasW * pageHm) / widthMm); // 画布高按标签纸比例固定
   // contain:按宽适配 vs 按高适配,取缩放较小者(PDF 比标签瘦长时按高缩,留左右白边)
   const scale = Math.min(canvasW / base.width, canvasH / base.height);
-  const viewport = page.getViewport({ scale });
+  const viewport = page.getViewport({ scale, rotation });
   const canvas = document.createElement('canvas');
   canvas.width = canvasW;
   canvas.height = canvasH;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff'; // PDF 透明底铺白
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const offsetX = Math.round((canvasW - viewport.width) / 2); // 水平居中
-  if (offsetX > 0) {
+  // 水平/垂直居中(旋转后的货运标签在竖向纸上留白均匀;面单比例一致时 offset=0 无影响)
+  const offsetX = Math.round((canvasW - viewport.width) / 2);
+  const offsetY = Math.round((canvasH - viewport.height) / 2);
+  if (offsetX > 0 || offsetY > 0) {
     ctx.save();
-    ctx.translate(offsetX, 0);
+    ctx.translate(offsetX, offsetY);
     await page.render({ canvasContext: ctx, viewport }).promise;
     ctx.restore();
   } else {
@@ -217,32 +221,36 @@ async function pdfToPng(blob, widthMm = 70, pageHm = 129) {
 }
 
 // CNPL 图片模板任务内容(明文 data:img=PNG dataURL,h=图高 mm;documentID 自定义模板需保证唯一,用运单号)
-// 模板经组件拉取 ${location.origin}/cnpl/label-image.xml,模板内用 _data.img/_data.h 取值
+// 模板经组件拉取 ${location.origin}/cnpl/${templateName}(默认面单纵向 label-image.xml;
+// 货运标签 100x70 横向用 label-image-100x70.xml),模板内用 _data.img/_data.h 取值
 // URL 必须带时间戳:组件按 URL 缓存模板,不带参数会读到旧缓存(2026-09-15 实测:改模板后不加参数
 // 依旧 completeFailure,加 ?t= 后立即生效;模板仅 1KB,每次下载 ~34ms 可忽略)
-function buildImageContents(dataUrl, hMm, documentId) {
+function buildImageContents(dataUrl, hMm, documentId, templateName = '') {
+  const base = templateName ? `${location.origin}/cnpl/${templateName}` : `${location.origin}/cnpl/label-image.xml`;
   return [
     {
       documentID: String(documentId),
-      contents: [{ templateURL: `${location.origin}/cnpl/label-image.xml?t=${Date.now()}`, data: { img: dataUrl, h: hMm } }],
+      contents: [{ templateURL: `${base}?t=${Date.now()}`, data: { img: dataUrl, h: hMm } }],
     },
   ];
 }
 
 // 服务器组件打印:前端转好的 PNG dataURL 交给后端转发到隧道后的组件
-async function printViaServer(dataUrl, hMm, documentId, printer) {
+// templateName 传给后端 /print 端点,组件拉取对应 CNPL 模板(货运标签横版等)
+async function printViaServer(dataUrl, hMm, documentId, printer, templateName = '') {
   await post('/admin/api/print-agent/print', {
     imageDataUrl: dataUrl,
     hMm,
     documentId: String(documentId),
     printer: printer || '',
+    templateName: templateName || '',
   });
 }
 
 // 本机组件 WS 直连打印:组件渲染 CNPL 模板并出纸;waiter 仅在终态清理(提前清理会漏接 printed 导致超时)
 // 终态判定兼容两代协议:0.x notifyPrintResult 用 taskStatus(printed/failed);
 // 1.5.x notifyDocResult/notifyTaskResult 用 status(printed/completeSuccess/failed/completeFailed)
-function printViaLocal(dataUrl, hMm, documentId, printer) {
+function printViaLocal(dataUrl, hMm, documentId, printer, templateName = '') {
   return connectAgent().then((sock) => {
     const taskID = genId();
     const reqId = genId();
@@ -289,7 +297,7 @@ function printViaLocal(dataUrl, hMm, documentId, printer) {
             taskID,
             preview: false,
             printer: printer || '',
-            documents: buildImageContents(dataUrl, hMm, documentId),
+            documents: buildImageContents(dataUrl, hMm, documentId, templateName),
           },
         })
       );
@@ -301,13 +309,18 @@ function printViaLocal(dataUrl, hMm, documentId, printer) {
 // 本机组件可用 → 本机直连,打印中途失败再兜底服务器;本机不可用 → 直接走服务器
 // 2026-10 排查:任何路径都尽量传"显式打印机名"(用户指定 > 组件默认打印机名),
 // 不再传空字符串——菜鸟组件把空 printer 解析成系统默认打印机时,会间歇性打到 PDFwriter。
-export async function printLabelImage(blob, documentId, printer = '', widthMm = 70) {
-  const { dataUrl, w, h } = await pdfToPng(blob, widthMm);
+// 打印:默认 70×129mm 纵向面单纸;opts.pageHm 覆盖画布高 mm,opts.rotation 旋转内容,
+// opts.templateName 选择 CNPL 模板(货运标签 76×130 竖向纸旋转适配,见 printContainerLabelImage)
+export async function printLabelImage(blob, documentId, printer = '', widthMm = 70, opts = {}) {
+  const pageHm = opts.pageHm || Math.round((widthMm * 129) / 70); // 默认 70:129 纵版
+  const templateName = opts.templateName || '';
+  const rotation = opts.rotation || 0;
+  const { dataUrl, w, h } = await pdfToPng(blob, widthMm, pageHm, rotation);
   const hMm = Math.round((widthMm * h) / w * 10) / 10;
   const parsed = parsePrinter(printer);
 
   if (parsed.source === 'server') {
-    await printViaServer(dataUrl, hMm, documentId, parsed.name || serverDefaultPrinter);
+    await printViaServer(dataUrl, hMm, documentId, parsed.name || serverDefaultPrinter, templateName);
     return;
   }
 
@@ -322,13 +335,13 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
     && !localProbeCache.result.online;
   if (!cacheFreshOffline) {
     try {
-      await printViaLocal(dataUrl, hMm, documentId, localPrinter);
+      await printViaLocal(dataUrl, hMm, documentId, localPrinter, templateName);
       return;
     } catch (err) {
       // 本机打印中途失败 → 服务器组件兜底:保留用户指定打印机名,未指定用服务器默认打印机名
       const server = await getServerAgentStatus();
       if (server.online) {
-        await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter);
+        await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter, templateName);
         return;
       }
       throw err;
@@ -337,7 +350,7 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
 
   const server = await getServerAgentStatus();
   if (server.online) {
-    await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter);
+    await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter, templateName);
     return;
   }
   throw new Error('菜鸟打印组件不可用:本机组件未连接,服务器组件转发也不可用');
@@ -451,4 +464,36 @@ export async function previewLabelImage(blob, documentId, widthMm = 70) {
   const server = await getServerAgentStatus();
   if (server.online) return previewViaServer(dataUrl, hMm, documentId);
   throw new Error('菜鸟打印组件不可用:本机组件未连接,服务器组件转发也不可用');
+}
+
+// ── 货运标签打印(2026-10-25)────────────────────────────
+// Ozon FBS 交接单按集装箱/包裹生成独立货运标签 PDF(/v2/posting/fbs/act/get-container-labels)。
+// 前端链路:拉取 PDF blob → 双通道打印(与面单相同);另有服务端直打接口(见 printContainerLabel)。
+export function fetchContainerLabel(storeId, labelId) {
+  return postBlob('/admin/api/print-agent/container-label-pdf', { storeId, labelId });
+}
+
+// 货运标签(发运)列表:/v2/carriage/delivery/list → { cursor, has_next, methods[] }
+export function fetchContainerLabels(storeId, cursor = '', limit = 1000) {
+  return post('/admin/api/print-agent/container-labels', { storeId, cursor, limit });
+}
+
+// 服务端直打:后端拉 PDF → 渲染 PNG → 转发打印组件出纸(打印机为服务器组件上的打印机名)
+export function printContainerLabel(storeId, labelId, printer = '') {
+  return post('/admin/api/print-agent/print-container-label', {
+    storeId,
+    labelId,
+    printer: printer || '',
+  });
+}
+
+// 货运标签前端打印:76×130mm 竖向标签纸(用户纸张)。货运标签 PDF 实测 100x70mm 横向,
+// 渲染时顺时针旋转 90° 成 70x100 竖向,contain 到 76:129 画布(上下留白),模板用 76×130 竖向专用
+// (2026-10-25:纸张由横版 100x70 调整为竖向 76x130,旋转方向如需反向改 rotation 270)
+export async function printContainerLabelImage(blob, labelId, printer = '') {
+  return printLabelImage(blob, String(labelId), printer, 76, {
+    pageHm: 129,
+    rotation: 90,
+    templateName: 'label-image-76x130.xml',
+  });
 }
