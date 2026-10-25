@@ -2332,6 +2332,26 @@ function printStats({ day = 'today' } = {}) {
   };
 }
 
+/** 查询已成功打印过的货运标签 ID 集合(2026-10-25)
+ *  print-container-label(服务器直打)与 print(前端服务器转发)两条链路都记录,
+ *  posting_number 存 labelId,status='success' 才算已打印;返回 Set<number>
+ */
+function listPrintedContainerLabelIds({ storeId, labelIds = [] } = {}) {
+  const ids = (Array.isArray(labelIds) ? labelIds : [])
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (!storeId || !ids.length) return new Set();
+  const marks = ids.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT CAST(posting_number AS INTEGER) AS label_id FROM print_log
+       WHERE source IN ('print-container-label', 'print') AND status = 'success'
+         AND store_id = ? AND posting_number IN (${marks})`
+    )
+    .all(storeId, ...ids.map(String));
+  return new Set(rows.map((r) => r.label_id));
+}
+
 /** 按采购单号查询已关联包裹(拼单提示 + auto 分摊预览用)
  *  返回每个已关联包裹的: 分摊金额合计、数量合计、alloc_mode 列表(auto 预览重算用)
  */
@@ -2725,6 +2745,7 @@ export const orderPackageDao = {
   insertPrintLog,
   listPrintLogs,
   printStats,
+  listPrintedContainerLabelIds,
   lookupPurchase,
   syncFromMiaoshou,
   enrichPurchaseItems,

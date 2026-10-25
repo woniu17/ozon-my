@@ -237,13 +237,15 @@ function buildImageContents(dataUrl, hMm, documentId, templateName = '') {
 
 // 服务器组件打印:前端转好的 PNG dataURL 交给后端转发到隧道后的组件
 // templateName 传给后端 /print 端点,组件拉取对应 CNPL 模板(货运标签横版等)
-async function printViaServer(dataUrl, hMm, documentId, printer, templateName = '') {
+// storeId 可选:货运标签打印时传入,后端写入 print_log 供「是否已打印」查询
+async function printViaServer(dataUrl, hMm, documentId, printer, templateName = '', storeId = '') {
   await post('/admin/api/print-agent/print', {
     imageDataUrl: dataUrl,
     hMm,
     documentId: String(documentId),
     printer: printer || '',
     templateName: templateName || '',
+    storeId: storeId || '',
   });
 }
 
@@ -315,12 +317,13 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
   const pageHm = opts.pageHm || Math.round((widthMm * 129) / 70); // 默认 70:129 纵版
   const templateName = opts.templateName || '';
   const rotation = opts.rotation || 0;
+  const storeId = opts.storeId || '';
   const { dataUrl, w, h } = await pdfToPng(blob, widthMm, pageHm, rotation);
   const hMm = Math.round((widthMm * h) / w * 10) / 10;
   const parsed = parsePrinter(printer);
 
   if (parsed.source === 'server') {
-    await printViaServer(dataUrl, hMm, documentId, parsed.name || serverDefaultPrinter, templateName);
+    await printViaServer(dataUrl, hMm, documentId, parsed.name || serverDefaultPrinter, templateName, storeId);
     return;
   }
 
@@ -341,7 +344,7 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
       // 本机打印中途失败 → 服务器组件兜底:保留用户指定打印机名,未指定用服务器默认打印机名
       const server = await getServerAgentStatus();
       if (server.online) {
-        await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter, templateName);
+        await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter, templateName, storeId);
         return;
       }
       throw err;
@@ -350,7 +353,7 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
 
   const server = await getServerAgentStatus();
   if (server.online) {
-    await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter, templateName);
+    await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter, templateName, storeId);
     return;
   }
   throw new Error('菜鸟打印组件不可用:本机组件未连接,服务器组件转发也不可用');
@@ -487,13 +490,22 @@ export function printContainerLabel(storeId, labelId, printer = '') {
   });
 }
 
+// 货运标签打印状态:一次性查询多个 labelId 是否已成功打印过
+// → { printed: { '123': true, '124': false, ... } }
+export function fetchContainerLabelPrintStatus(storeId, labelIds) {
+  const ids = (Array.isArray(labelIds) ? labelIds : []).join(',');
+  return get('/admin/api/print-agent/container-label-print-status', { storeId, labelIds: ids });
+}
+
 // 货运标签前端打印:76×130mm 竖向标签纸(用户纸张)。货运标签 PDF 实测 100x70mm 横向,
 // 渲染时顺时针旋转 90° 成 70x100 竖向,contain 到 76:129 画布(上下留白),模板用 76×130 竖向专用
+// storeId 可选:服务器转发打印时后端记录日志,供「是否已打印」查询
 // (2026-10-25:纸张由横版 100x70 调整为竖向 76x130,旋转方向如需反向改 rotation 270)
-export async function printContainerLabelImage(blob, labelId, printer = '') {
+export async function printContainerLabelImage(blob, labelId, printer = '', storeId = '') {
   return printLabelImage(blob, String(labelId), printer, 76, {
     pageHm: 129,
     rotation: 90,
     templateName: 'label-image-76x130.xml',
+    storeId: storeId || '',
   });
 }

@@ -324,9 +324,10 @@ router.get('/admin/api/print-agent/status', async (_req, res) => {
 });
 
 // 打印:前端已把 PDF 转成 PNG dataURL,后端原样转发给组件(模板 URL 指向 ERP 服务器)
+// storeId 可选(2026-10-25):货运标签前端打印时传入,写入 print_log 供「是否已打印」查询
 router.post('/admin/api/print-agent/print', async (req, res, next) => {
   const startTs = Date.now();
-  const { imageDataUrl, hMm, documentId, printer, templateName } = req.body || {};
+  const { imageDataUrl, hMm, documentId, printer, templateName, storeId } = req.body || {};
   try {
     if (!imageDataUrl || !documentId) {
       return res.status(400).json({ ok: false, message: 'imageDataUrl 与 documentId 必填' });
@@ -335,6 +336,7 @@ router.post('/admin/api/print-agent/print', async (req, res, next) => {
     await sendPrint(imageDataUrl, Number(hMm) || 129, documentId, printer || '', templateBase, templateName || 'label-image.xml');
     orderPackageDao.insertPrintLog({
       postingNumber: documentId,
+      storeId: String(storeId || ''),
       printer: printer || '',
       source: 'print',
       status: 'success',
@@ -345,6 +347,7 @@ router.post('/admin/api/print-agent/print', async (req, res, next) => {
   } catch (e) {
     orderPackageDao.insertPrintLog({
       postingNumber: documentId || null,
+      storeId: String(storeId || ''),
       printer: printer || '',
       source: 'print',
       status: 'failed',
@@ -516,11 +519,13 @@ router.post('/admin/api/print-agent/print-container-label', async (req, res, nex
     await sendPrint(rendered.dataUrl, hMm, documentId, printer, templateBase, 'label-image-76x130.xml');
     const durationMs = Date.now() - startTs;
     logger.info({ storeId, labelId, printer: printer || 'default', durationMs }, '[print-agent] 货运标签打印成功');
-    orderPackageDao.insertPrintLog({ ...logMeta, printer, source: 'print-container-label', status: 'success', durationMs, ip: req.ip });
+    // posting_number 存 labelId,供「是否已打印」查询(listPrintedContainerLabelIds)
+    orderPackageDao.insertPrintLog({ ...logMeta, postingNumber: String(labelId), printer, source: 'print-container-label', status: 'success', durationMs, ip: req.ip });
     res.json(ok({ printed: true, labelId }));
   } catch (e) {
     orderPackageDao.insertPrintLog({
       ...logMeta,
+      postingNumber: String(labelId),
       printer,
       source: 'print-container-label',
       status: 'failed',
@@ -528,6 +533,25 @@ router.post('/admin/api/print-agent/print-container-label', async (req, res, nex
       durationMs: Date.now() - startTs,
       ip: req.ip,
     });
+    next(e);
+  }
+});
+
+// 货运标签打印状态查询:一次性返回多个 labelId 是否已成功打印过
+// GET /admin/api/print-agent/container-label-print-status?storeId=X&labelIds=1,2,3
+// 响应: { printed: { '1': true, '2': false, ... } }
+router.get('/admin/api/print-agent/container-label-print-status', (req, res, next) => {
+  try {
+    const storeId = String(req.query?.storeId || '');
+    const labelIds = String(req.query?.labelIds || '')
+      .split(',')
+      .map(Number)
+      .filter((n) => Number.isInteger(n) && n > 0);
+    const printedSet = orderPackageDao.listPrintedContainerLabelIds({ storeId, labelIds });
+    const printed = {};
+    for (const id of labelIds) printed[id] = printedSet.has(id);
+    res.json(ok({ printed }));
+  } catch (e) {
     next(e);
   }
 });
