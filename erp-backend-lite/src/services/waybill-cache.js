@@ -17,10 +17,10 @@ function filePath(storeId, postingNumbers) {
   return join(WAYBILL_DIR, `${storeId}__${key}.pdf`);
 }
 
-// PNG dataURL 文件名:<store>__<posting>__<宽>x<高>__v4.dataurl
-// 规格体现在文件名(便于换纸不串缓存);v4 为渲染版本(2026-10-26 面单内容顶部对齐+底部定制区店铺名),
-// 旧版本(居中布局/顶部白条/无店铺名)缓存文件名不含 v4 自动失效,无需手工清理
-const PNG_RENDER_VERSION = 'v4';
+// PNG dataURL 文件名:<store>__<posting>__<宽>x<高>__v5.dataurl
+// 规格体现在文件名(便于换纸不串缓存);v5 为渲染版本(2026-10-26 面单内容顶部对齐+5mm顶部空白+底部定制区店铺名),
+// 旧版本(居中/顶部对齐无5mm/顶部白条/无店铺名)缓存文件名不含 v5 自动失效,无需手工清理
+const PNG_RENDER_VERSION = 'v5';
 function pngFilePath(storeId, postingNumbers, widthMm, pageHm) {
   const key = [...postingNumbers].sort().join('-').replace(/[<>:"/\\|?*]/g, '_');
   return join(WAYBILL_DIR, `${storeId}__${key}__${widthMm}x${pageHm}__${PNG_RENDER_VERSION}.dataurl`);

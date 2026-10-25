@@ -209,10 +209,11 @@ async function pdfToPng(blob, widthMm = 76, pageHm = 129, rotation = 0, overlayT
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff'; // PDF 透明底铺白
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  // 水平居中;面单打印(有定制区)内容顶部对齐,底部整段留给定制区;
+  // 水平居中;面单打印(有定制区)内容顶部留 5mm 空白,底部整段留给定制区;
   // 货运标签(无定制区)保持原居中布局不变(与后端 pdfToPngDataUrl 同口径)
   const offsetX = Math.round((canvasW - viewport.width) / 2);
-  const offsetY = customH > 0 ? 0 : Math.round((canvasH - viewport.height) / 2);
+  const topPad = customH > 0 ? Math.round((canvasW * 5) / widthMm) : 0; // 5mm 顶部空白
+  const offsetY = customH > 0 ? topPad : Math.round((canvasH - viewport.height) / 2);
   if (offsetX > 0 || offsetY > 0) {
     ctx.save();
     ctx.translate(offsetX, offsetY);
@@ -387,11 +388,13 @@ function extractPreviewUrl(msg) {
 }
 
 // 服务器组件预览:返回组件渲染图 URL(远程机器上可能无法直接访问,以本机预览为准)
-async function previewViaServer(dataUrl, hMm, documentId) {
+// templateName 传给后端 /preview 端点,组件拉取对应 CNPL 模板(货运标签 76×130 竖向专用等)
+async function previewViaServer(dataUrl, hMm, documentId, templateName = '') {
   const r = await post('/admin/api/print-agent/preview', {
     imageDataUrl: dataUrl,
     hMm,
     documentId: String(documentId),
+    templateName: templateName || '',
   });
   return r?.url || '';
 }
@@ -400,7 +403,8 @@ async function previewViaServer(dataUrl, hMm, documentId) {
 // 1.5.x 报文流(实测):①裸 ack(status:success,无 URL)→ ②notifyDocResult(rendered→printed)
 //   → ③第二条 print 响应(带 responses[].urls/previewImage)→ ④notifyTaskResult(completeSuccess)
 // 故 reqWaiters 收到裸 ack 不能消费,须等第二条;taskWaiters 兜底接收渲染失败通知
-function previewViaLocal(dataUrl, hMm, documentId) {
+// templateName 与打印链路一致:货运标签传 label-image-76x130.xml(2026-10-26 预览同步支持)
+function previewViaLocal(dataUrl, hMm, documentId, templateName = '') {
   return connectAgent().then((sock) => {
     const reqId = genId();
     const taskID = genId();
@@ -445,7 +449,7 @@ function previewViaLocal(dataUrl, hMm, documentId) {
             preview: true,
             previewType: 'image',
             printer: '',
-            documents: buildImageContents(dataUrl, hMm, documentId),
+            documents: buildImageContents(dataUrl, hMm, documentId, templateName),
           },
         })
       );
@@ -467,22 +471,36 @@ export function getPrintStats(params) {
 
 // 无纸预览(双通道):本机优先,不可用时走服务器转发
 // 与 printLabelImage 一致:不做预探测硬开关,仅当最近已探测本机离线时才跳过本机直连
-export async function previewLabelImage(blob, documentId, widthMm = 70) {
-  const { dataUrl, w, h } = await pdfToPng(blob, widthMm);
+// opts.pageHm/rotation/templateName/storeName 与 printLabelImage 同口径(货运标签旋转+76×130模板等)
+export async function previewLabelImage(blob, documentId, widthMm = 76, opts = {}) {
+  const pageHm = opts.pageHm || Math.round((widthMm * 129) / 70); // 默认 76:129 纵版
+  const rotation = opts.rotation || 0;
+  const templateName = opts.templateName || '';
+  const overlayText = opts.storeName || ''; // 面单预览时叠加店铺名,与实际出纸一致
+  const { dataUrl, w, h } = await pdfToPng(blob, widthMm, pageHm, rotation, overlayText);
   const hMm = Math.round((widthMm * h) / w * 10) / 10;
   const cacheFreshOffline = localProbeCache
     && Date.now() - localProbeCache.at < LOCAL_FAIL_TTL
     && !localProbeCache.result.online;
   if (!cacheFreshOffline) {
     try {
-      return await previewViaLocal(dataUrl, hMm, documentId);
+      return await previewViaLocal(dataUrl, hMm, documentId, templateName);
     } catch {
       /* 本机预览失败 → 尝试服务器 */
     }
   }
   const server = await getServerAgentStatus();
-  if (server.online) return previewViaServer(dataUrl, hMm, documentId);
+  if (server.online) return previewViaServer(dataUrl, hMm, documentId, templateName);
   throw new Error('菜鸟打印组件不可用:本机组件未连接,服务器组件转发也不可用');
+}
+
+// 货运标签无纸预览:76×130mm 竖向纸,PDF 顺时针旋转 90° 后 contain(与 printContainerLabelImage 同口径)
+export async function previewContainerLabelImage(blob, labelId, storeId = '') {
+  return previewLabelImage(blob, String(labelId), 76, {
+    pageHm: 129,
+    rotation: 90,
+    templateName: 'label-image-76x130.xml',
+  });
 }
 
 // ── 货运标签打印(2026-10-25)────────────────────────────

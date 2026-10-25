@@ -46,6 +46,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
         fun onSubmitShip(pkg: Pkg, weightG: Int)
         fun onOpenLabel(pkg: Pkg)
         fun onPrintLabel(pkg: Pkg)
+        fun onPreviewLabel(pkg: Pkg)
         fun onCorrectWeight(pkg: Pkg, weightG: Int)
         fun onSwitchRecordTab(tab: String)
         fun onRefreshRecords()
@@ -322,6 +323,10 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 printRow.addView(newRowButton("打印面单", Color.parseColor(COLOR_PRIMARY)) {
                     confirmIgnoredIfNeeded(pkg) { callbacks.onPrintLabel(pkg) }
                 })
+                // 无纸预览(2026-10-26):服务端渲染 → 打印组件出预览图,显示实际出纸版式
+                printRow.addView(newRowButton("预览", Color.parseColor("#165dff")) {
+                    callbacks.onPreviewLabel(pkg)
+                })
                 // 面单仅查看,无需二次确认
                 printRow.addView(newRowButton("面单", Color.parseColor("#4e5969")) {
                     callbacks.onOpenLabel(pkg)
@@ -348,6 +353,10 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 val printRow = buildWeightRow()
                 printRow.addView(newRowButton("打印面单", Color.parseColor(COLOR_PRIMARY)) {
                     confirmIgnoredIfNeeded(pkg) { callbacks.onPrintLabel(pkg) }
+                })
+                // 无纸预览(2026-10-26):服务端渲染 → 打印组件出预览图,显示实际出纸版式
+                printRow.addView(newRowButton("预览", Color.parseColor("#165dff")) {
+                    callbacks.onPreviewLabel(pkg)
                 })
                 // 面单仅查看,无需二次确认
                 printRow.addView(newRowButton("面单", Color.parseColor("#4e5969")) {

@@ -6,14 +6,17 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.util.Base64
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -31,7 +34,9 @@ import com.yochylin.scanner.api.optBoolean
 import com.yochylin.scanner.api.optString
 import com.yochylin.scanner.model.PackageListResponse
 import com.yochylin.scanner.model.Pkg
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 扫描发货主界面：搜索/扫码/卡片操作/发货记录 */
 class ScanShipFragment : Fragment() {
@@ -72,6 +77,10 @@ class ScanShipFragment : Fragment() {
 
         override fun onPrintLabel(pkg: Pkg) {
             printLabel(pkg)
+        }
+
+        override fun onPreviewLabel(pkg: Pkg) {
+            previewLabel(pkg)
         }
 
         override fun onCorrectWeight(pkg: Pkg, weightG: Int) {
@@ -459,6 +468,49 @@ class ScanShipFragment : Fragment() {
         null
     } catch (e: Exception) {
         e.message ?: "打印失败"
+    }
+
+    // ── 无纸预览面单(2026-10-26,与 web 端菜鸟组件预览同链路)──
+    // 后端拉 PDF → 渲染 PNG(底部定制区店铺名) → 打印组件无纸预览 → 返回渲染图 base64,对话框显示
+    private fun previewLabel(pkg: Pkg) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            progressBar.visibility = View.VISIBLE
+            try {
+                val obj = Api.post(
+                    "/admin/api/print-agent/preview-package",
+                    mapOf("packageId" to pkg.id)
+                ).asJsonObject
+                val data = obj.getAsJsonObject("data")
+                val imageDataUrl = data.optString("imageDataUrl")
+                val postingNumber = data.optString("postingNumber").ifBlank { pkg.postingNumber ?: "" }
+                if (imageDataUrl.isBlank()) {
+                    toast("预览图拉取失败,请检查打印组件/SSH 隧道后重试")
+                    return@launch
+                }
+                val base64 = imageDataUrl.substringAfter("base64,")
+                val bytes = Base64.decode(base64, Base64.DEFAULT)
+                val bmp = withContext(Dispatchers.IO) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+                if (bmp == null) {
+                    toast("预览图解析失败")
+                    return@launch
+                }
+                val density = resources.displayMetrics.density
+                val imageView = ImageView(requireContext()).apply {
+                    setImageBitmap(bmp)
+                    adjustViewBounds = true
+                    setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt())
+                }
+                AlertDialog.Builder(requireContext())
+                    .setTitle("面单预览 $postingNumber")
+                    .setView(imageView)
+                    .setPositiveButton("关闭", null)
+                    .show()
+            } catch (e: Exception) {
+                handleError(e)
+            } finally {
+                progressBar.visibility = View.GONE
+            }
+        }
     }
 
     // ── 更正重量 ──

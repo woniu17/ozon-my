@@ -252,7 +252,8 @@ function extractPreviewUrl(msg) {
 // 1.5.x 报文流:①裸 ack(status:success,无 URL)→ ②notifyDocResult(rendered→printed)
 //   → ③第二条 print 响应(带 responses[].urls/previewImage)→ ④notifyTaskResult(completeSuccess)
 // 故 reqWaiters 收到裸 ack 不能消费,须等第二条;taskWaiters 兜底接收渲染失败通知
-function sendPreview(dataUrl, hMm, documentId, templateBase) {
+// templateName:货运标签预览传 label-image-76x130.xml(2026-10-26)
+function sendPreview(dataUrl, hMm, documentId, templateBase, templateName = 'label-image.xml') {
   return acquireAgent().then((sock) => {
     const reqId = genId();
     const taskID = genId();
@@ -299,7 +300,7 @@ function sendPreview(dataUrl, hMm, documentId, templateBase) {
               preview: true,
               previewType: 'image',
               printer: '',
-              documents: buildImageContents(dataUrl, hMm, documentId, templateBase),
+              documents: buildImageContents(dataUrl, hMm, documentId, templateBase, templateName),
             },
           })
         );
@@ -455,6 +456,58 @@ router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
   }
 });
 
+// ── 服务端直预览面单(2026-10-26,安卓端无纸预览)────────────
+// 与 print-package 同链路:拉 PDF → 服务端渲染 PNG(底部定制区叠加店铺名) → 组件无纸预览,
+// 返回组件渲染图 URL(安卓端直接显示图片,不出纸不流转状态)。
+router.post('/admin/api/print-agent/preview-package', async (req, res, next) => {
+  try {
+    const packageId = Number(req.body?.packageId);
+    if (!Number.isInteger(packageId)) {
+      return res.status(400).json({ ok: false, message: 'packageId 必填' });
+    }
+    const rows = orderPackageDao.getPackagePostings([packageId]);
+    if (!rows.length) {
+      return res.status(400).json({ ok: false, message: '包裹不存在' });
+    }
+    const storeIds = [...new Set(rows.map((r) => r.storeId))];
+    if (storeIds.length > 1) {
+      return res.status(400).json({ ok: false, message: '不支持跨店铺混打,请逐个包裹预览' });
+    }
+    const storeId = storeIds[0];
+    const postingNumbers = rows.map((r) => r.postingNumber);
+    const widthMm = 76;
+    const pageHm = 129;
+    const store = (config.loadStores() || []).find((s) => s.id === storeId);
+    let pdf = getWaybill(storeId, postingNumbers);
+    if (!pdf) {
+      if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
+      pdf = (await packageLabel(store, postingNumbers)).buffer;
+      setWaybill(storeId, postingNumbers, pdf);
+    }
+    // 预览不走 PNG 二级缓存,始终展示最新版式(打印缓存由 print-package 写入)
+    const rendered = await pdfToPngDataUrl(pdf, widthMm, pageHm, 0, store?.name || storeId);
+    const hMm = Math.round(pageHm * 10) / 10;
+    const documentId = postingNumbers[0] || String(packageId);
+    const templateBase = getTemplateBase(req);
+    const url = await sendPreview(rendered.dataUrl, hMm, documentId, templateBase, 'label-image-76x130.xml');
+    // 组件返回的预览图 URL 可能指向打印电脑本机(手机无法直接访问),后端拉取转 base64 一并返回
+    let imageDataUrl = '';
+    if (url) {
+      try {
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const buf = Buffer.from(await resp.arrayBuffer());
+          imageDataUrl = `data:${resp.headers.get('content-type') || 'image/png'};base64,${buf.toString('base64')}`;
+        }
+      } catch { /* 拉取失败时安卓端回退到 url */ }
+    }
+    logger.info({ packageId, storeId, postings: postingNumbers.length, hasImage: !!imageDataUrl }, '[print-agent] 按包裹无纸预览成功');
+    res.json(ok({ url, imageDataUrl, postingNumber: documentId }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ── 货运标签(2026-10-25)────────────────────────────────
 // 列表:/v2/carriage/delivery/list(操作 ID CarriageDeliveryListV2),每个发运的 id 即货运标签 ID;
 // PDF:/v2/posting/fbs/act/get-container-labels(body { id }),返回 application/pdf 流。
@@ -560,12 +613,12 @@ router.get('/admin/api/print-agent/container-label-print-status', (req, res, nex
 // 无纸预览:返回组件渲染出的预览图 URL(远程机器上可能无法直接访问,以本机预览为准)
 router.post('/admin/api/print-agent/preview', async (req, res, next) => {
   try {
-    const { imageDataUrl, hMm, documentId } = req.body || {};
+    const { imageDataUrl, hMm, documentId, templateName } = req.body || {};
     if (!imageDataUrl || !documentId) {
       return res.status(400).json({ ok: false, message: 'imageDataUrl 与 documentId 必填' });
     }
     const templateBase = getTemplateBase(req);
-    const url = await sendPreview(imageDataUrl, Number(hMm) || 129, documentId, templateBase);
+    const url = await sendPreview(imageDataUrl, Number(hMm) || 129, documentId, templateBase, templateName || '');
     res.json(ok({ url }));
   } catch (e) {
     next(e);

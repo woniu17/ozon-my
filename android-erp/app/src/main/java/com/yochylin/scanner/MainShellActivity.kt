@@ -93,8 +93,9 @@ class MainShellActivity : FragmentActivity(), TabHost {
 
         setContentView(R.layout.activity_main_shell)
 
-        setupBottomNav(this, "home")
-        switchTab("home")
+        // 默认首页为「订单处理」(2026-10-26 用户要求);底部导航「首页」仍可切换回扫描发货
+        setupBottomNav(this, "order")
+        switchTab("order")
 
         requestNotificationPermissionIfNeeded()
         requestLocationPermissionIfNeeded()

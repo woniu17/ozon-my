@@ -11,10 +11,12 @@ import {
   fetchContainerLabels,
   fetchContainerLabelPrintStatus,
   printContainerLabelImage,
+  previewContainerLabelImage,
   parsePrinter,
   encodePrinter,
 } from '../api/print-agent.js';
 import { useToast } from '../components/useToast.js';
+import AppModal from '../components/AppModal.vue';
 
 const { show } = useToast();
 
@@ -32,6 +34,9 @@ const searchRow = ref(null); // 搜索命中行(不在最近 5 个中时追加�
 const pdfUrl = ref('');
 const pdfSize = ref(0);
 const loadingPdfId = ref(null); // 正在拉 PDF 的 labelId
+
+// 菜鸟组件无纸预览(显示实际出纸版式,不出纸不流转状态)
+const labelPreview = reactive({ open: false, url: '', loading: 0 });
 
 // 打印
 const printingId = ref(null);
@@ -181,6 +186,24 @@ function clearSearch() {
 }
 
 // ── 预览/打印 ────────────────────────────────────────
+// 菜鸟组件无纸预览(2026-10-26):与面单预览同链路,组件渲染 CNPL 模板显示实际出纸版式
+async function onPreviewRender(c) {
+  if (!c?.store_id) return;
+  if (labelPreview.loading) return;
+  labelPreview.loading = Number(c.id);
+  try {
+    const blob = await fetchContainerLabel(c.store_id, Number(c.id));
+    const url = await previewContainerLabelImage(blob, Number(c.id), c.store_id);
+    labelPreview.url = url;
+    labelPreview.open = true;
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    labelPreview.loading = 0;
+  }
+}
+
+// 查看原始 PDF(内嵌底部 iframe,便于核对条形码细节)
 async function onPreview(c) {
   if (!c?.store_id) return;
   loadingPdfId.value = Number(c.id);
@@ -377,10 +400,17 @@ onMounted(async () => {
             <td class="ops">
               <button
                 class="btn btn-ghost btn-sm"
+                :disabled="labelPreview.loading === Number(c.id)"
+                @click="onPreviewRender(c)"
+              >
+                {{ labelPreview.loading === Number(c.id) ? '预览中…' : '预览效果' }}
+              </button>
+              <button
+                class="btn btn-ghost btn-sm"
                 :disabled="loadingPdfId === Number(c.id)"
                 @click="onPreview(c)"
               >
-                {{ loadingPdfId === Number(c.id) ? '加载中…' : '预览' }}
+                {{ loadingPdfId === Number(c.id) ? '加载中…' : 'PDF' }}
               </button>
               <button
                 class="btn btn-primary btn-sm"
@@ -406,8 +436,19 @@ onMounted(async () => {
       <div v-if="pdfUrl" class="preview-frame-wrap">
         <iframe class="preview-frame" :src="pdfUrl" title="货运标签 PDF 预览" />
       </div>
-      <div v-else class="preview-empty">点击行内「预览」查看货运标签 PDF</div>
+      <div v-else class="preview-empty">点击行内「PDF」查看货运标签原始 PDF</div>
     </div>
+
+    <!-- 菜鸟组件无纸预览弹窗(显示实际出纸版式,不出纸不流转状态) -->
+    <AppModal :open="labelPreview.open" title="货运标签预览(CNPL 模板渲染 · 76×130mm)" @update:open="labelPreview.open = $event">
+      <div class="label-preview-body">
+        <img v-if="labelPreview.url" :src="labelPreview.url" alt="货运标签预览" class="label-preview-img" />
+        <div class="label-preview-tip">
+          组件按 CNPL 模板(label-image-76x130.xml)渲染:货运标签旋转 90° 适配 76×130mm 竖向纸,
+          预览即实际出纸版式,不消耗纸张、不流转订单状态。
+        </div>
+      </div>
+    </AppModal>
   </div>
 </template>
 
@@ -680,5 +721,23 @@ onMounted(async () => {
   font-size: 13px;
   border: 1px dashed var(--border);
   border-radius: 8px;
+}
+
+/* ── 菜鸟组件无纸预览弹窗 ── */
+.label-preview-body {
+  text-align: center;
+}
+.label-preview-img {
+  max-width: 100%;
+  max-height: 70vh;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 4px;
+  background: #fff;
+}
+.label-preview-tip {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary, #9ca3af);
 }
 </style>

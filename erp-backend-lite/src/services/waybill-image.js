@@ -51,10 +51,11 @@ export async function pdfToPngDataUrl(pdfBuffer, widthMm = 76, pageHm = 129, rot
   ctx.fillStyle = '#fff'; // PDF 透明底铺白
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // 水平居中;面单打印(有定制区)内容顶部对齐,底部整段留给定制区;
+  // 水平居中;面单打印(有定制区)内容顶部留 5mm 空白,底部整段留给定制区;
   // 货运标签(无定制区)保持原居中布局不变(2026-10-26 用户确认)
   const offsetX = Math.round((canvasW - viewport.width) / 2);
-  const offsetY = customH > 0 ? 0 : Math.round((canvasH - viewport.height) / 2);
+  const topPad = customH > 0 ? Math.round((canvasW * 5) / widthMm) : 0; // 5mm 顶部空白
+  const offsetY = customH > 0 ? topPad : Math.round((canvasH - viewport.height) / 2);
   if (offsetX > 0 || offsetY > 0) {
     ctx.save();
     ctx.translate(offsetX, offsetY);
