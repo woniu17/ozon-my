@@ -714,6 +714,22 @@ CREATE INDEX IF NOT EXISTS idx_op_pkg_purchase ON op_package(purchase_status);
 CREATE INDEX IF NOT EXISTS idx_op_pkg_delivered ON op_package(store_id, delivered_at DESC);
 CREATE INDEX IF NOT EXISTS idx_op_pkg_return   ON op_package(store_id, return_at DESC);
 
+-- Ozon 面单条码映射(2026-10-25,扫描发货扫码支持)
+-- 来源:打印面单时从面单 PDF 提取 lower_barcode(如 551620749311000);
+-- 用途:扫码搜索时先经本表把条码反查成货件号,再走现有全局搜索命中本地包裹。
+-- 幂等:同一 (store_id, posting_number) 重复打印只更新条码与采集时间。
+CREATE TABLE IF NOT EXISTS op_posting_barcode (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id       TEXT NOT NULL,             -- 店铺 id(对应 stores.json)
+  posting_number TEXT NOT NULL,             -- 货件号(93036752-0054-1)
+  lower_barcode  TEXT,                      -- 面单下条码(扫码用)
+  upper_barcode  TEXT,                      -- 面单上条码(暂未提取,预留)
+  fetched_at     TEXT NOT NULL,             -- 采集时间(UTC ISO)
+  UNIQUE(store_id, posting_number),
+  UNIQUE(store_id, lower_barcode)
+);
+CREATE INDEX IF NOT EXISTS idx_opb_lower ON op_posting_barcode(store_id, lower_barcode);
+
 -- 采购订单(1688/拼多多/淘宝)
 CREATE TABLE IF NOT EXISTS op_purchase_order (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,

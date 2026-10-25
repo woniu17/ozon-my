@@ -600,6 +600,14 @@ export function packageLabel(store, postingNumbers) {
   return callRaw(store, '/v2/posting/fbs/package-label', { posting_number: postingNumbers });
 }
 
+// /v2/posting/fbs/get-by-barcode —— 按条码获取货件信息(2026-10-25,扫描发货扫码兜底)
+// 请求: { barcode: string }(面单下条码,如 551620749311000)
+// 响应: { result: { posting_number, order_id, status, barcodes: { upper_barcode, lower_barcode }, ... } }
+// 注:条码不存在时 Ozon 返回非 2xx,由 call 统一抛 ApiError,调用方按"未找到"处理
+export function postingFbsGetByBarcode(store, barcode) {
+  return call(store, '/v2/posting/fbs/get-by-barcode', { barcode });
+}
+
 // ── 财务应计(2026-09)─────────────────────────────────────────
 // /v1/finance/accrual/postings —— 按货件查应计项目
 // 请求: { posting_numbers: string[] }(实测单批 200 可行,~470ms)

@@ -29,11 +29,13 @@ import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
 import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
 import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus, syncPurchaseLogisticsForPackage } from '../services/purchase-logistics-poller.js';
-import { packageLabel, postingFbsGet, postingFbsShip, productInfoList, productInfoListBySku, productStocks } from '../services/ozon-opi.js';
+import { packageLabel, postingFbsGet, postingFbsGetByBarcode, postingFbsShip, productInfoList, productInfoListBySku, productStocks } from '../services/ozon-opi.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { notifyPostingEvent } from '../services/webhook/feishu-notify.js';
 import { translateCancelReason } from '../services/cancel-reason-i18n.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
+import { extractWaybillBarcodes } from '../services/waybill-barcode.js';
+import { upsertPostingBarcode, findPostingByBarcode, missingBarcodePostings } from '../db/dao/sqlite/label-barcode-daos.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate, getBydayStats, getSettledEligiblePackageIds } from '../db/dao/sqlite/accrual-dao.js';
 import { stripImageSizeSuffix } from '../services/order-image-cache.js';
 import { runAccrualByDaySync } from '../services/accrual-byday-sync.js';
@@ -63,6 +65,114 @@ function resolveRubCnyRate() {
     return { rate: config.rubCnyRateFallback, updatedAt: null, source: 'env' };
   }
   return null;
+}
+
+// ── 面单条码解析(2026-10-25,扫描发货扫码支持)───────────────────────────
+// 扫码可能输入:采购快递单号/货件号(现有 7 字段直接命中)/面单条码(走本解析)
+// 本地 op_posting_barcode 映射表优先,Ozon /v2/posting/fbs/get-by-barcode 在线兜底。
+
+// 在线反查:条码 → 货件号,并回填本地映射表(多店铺按序尝试)
+async function resolveBarcodeOnline(barcode, storeId) {
+  const stores = (config.loadStores() || []).filter((s) => !storeId || s.id === storeId);
+  for (const store of stores) {
+    try {
+      const r = await postingFbsGetByBarcode(store, barcode);
+      const postingNumber = r?.result?.posting_number;
+      if (postingNumber) {
+        upsertPostingBarcode({
+          storeId: store.id,
+          postingNumber,
+          lowerBarcode: barcode,
+          fetchedAt: new Date().toISOString(),
+        });
+        return { postingNumber, storeId: store.id };
+      }
+    } catch (e) {
+      // Ozon 对不存在的条码返回非 2xx(ozon-opi call 已记录 warn),这里仅记录意外错误
+      const httpStatus = e?.details?.httpStatus;
+      if (!(e instanceof ApiError) || !(httpStatus >= 400 && httpStatus < 500)) {
+        logger.warn({ err: e?.message, store: store.id, barcode }, '[scan-barcode] get-by-barcode 查询异常');
+      }
+    }
+  }
+  return null;
+}
+
+// 扫码条码解析:本地映射优先,在线兜底
+async function resolveBarcodeForList(barcode, storeId) {
+  const local = findPostingByBarcode({ storeId: storeId || undefined, barcode });
+  if (local) return { postingNumber: local.postingNumber, storeId: local.storeId };
+  return resolveBarcodeOnline(barcode, storeId);
+}
+
+// 打印面单后回填条码映射(幂等;条码数与货件一致按索引 zip,不一致则逐条码在线反查归属)
+async function backfillPostingBarcodes(storeId, postingNumbers, pdfBuffer) {
+  const barcodes = await extractWaybillBarcodes(pdfBuffer);
+  if (!barcodes.length) return 0;
+  const now = new Date().toISOString();
+  let filled = 0;
+  if (barcodes.length === postingNumbers.length) {
+    for (let i = 0; i < postingNumbers.length; i++) {
+      const bc = barcodes[i];
+      if (!bc) continue;
+      upsertPostingBarcode({ storeId, postingNumber: postingNumbers[i], lowerBarcode: bc, fetchedAt: now });
+      filled++;
+    }
+  } else {
+    // 多页/少页:不按索引猜,逐条码在线反查归属
+    for (const bc of barcodes) {
+      if (!bc) continue;
+      const resolved = await resolveBarcodeOnline(bc, storeId);
+      if (resolved) filled++;
+    }
+  }
+  return filled;
+}
+
+// 包裹列表响应富化(列表页/扫描发货共用:产品行 + 采购关联 + 应计 + 重量 + 利润)
+function enrichListData(data) {
+  const orderIds = data.packages.map((p) => p.ozonOrderId);
+  const items = orderPackageDao.getItemsByOrderIds(orderIds);
+  const pkgIds = data.packages.map((p) => p.id);
+  const { links } = orderPackageDao.getPurchasesByPackageIds(pkgIds);
+  const rateInfo = resolveRubCnyRate();
+  const accrualMap = buildAccrualBreakdown(
+    data.packages,
+    getAccrualTypeSumsByPackageIds(pkgIds),
+    rateInfo?.rate
+  );
+  const weightMap = orderPackageDao.getWeightsByPackageIds(pkgIds);
+  const itemsByOrder = new Map();
+  for (const it of items) {
+    if (!itemsByOrder.has(it.ozonOrderId)) itemsByOrder.set(it.ozonOrderId, []);
+    itemsByOrder.get(it.ozonOrderId).push(it);
+  }
+  const linksByPkg = new Map();
+  for (const l of links) {
+    if (!linksByPkg.has(l.packageId)) linksByPkg.set(l.packageId, []);
+    linksByPkg.get(l.packageId).push(l);
+  }
+  for (const pkg of data.packages) {
+    pkg.items = itemsByOrder.get(pkg.ozonOrderId) || [];
+    pkg.purchaseLinks = linksByPkg.get(pkg.id) || [];
+    pkg.cancelReasonCn = translateCancelReason(pkg.cancelReason); // 取消原因中文(未收录原样返回)
+    if (accrualMap.has(pkg.id)) pkg.accrual = accrualMap.get(pkg.id);
+    if (weightMap.has(pkg.id)) {
+      const w = weightMap.get(pkg.id);
+      pkg.weightG = w.weightG;
+      pkg.weightSource = w.source;
+      pkg.ozonWeightG = w.ozonWeightG ?? null;
+      pkg.systemWeightG = w.systemWeightG ?? null;
+    } else {
+      pkg.ozonWeightG = null;
+      pkg.systemWeightG = null;
+    }
+    pkg.profit = computeProfit(pkg, pkg.operateStatus === 'cancelled', rateInfo?.rate);
+  }
+  data.rubRate = rateInfo;
+  // 机器名(2026-10-16 多机部署):供安卓差集兜底通知展示来源
+  data.machineName = config.machineName;
+  return data;
 }
 
 // 应计类型分组常量(列表金额列拆分:销售佣金/国际配送/其它[含代理佣金])
@@ -234,10 +344,11 @@ router.put('/admin/api/order-process/tags-order', (req, res, next) => {
 // query: tab / keyword / storeId / purchaseStatus / arrived / cancelInitiator / page / pageSize
 //        / globalKeyword / globalMode(eq|ss) —— 全局搜索:跨所有状态检索(§9.1.1)
 //        / sortBy(order|delivering|return) / sortOrder(desc|asc) —— 排序(2026-09-20)
-router.get('/admin/api/order-process/list', (req, res, next) => {
+router.get('/admin/api/order-process/list', async (req, res, next) => {
   try {
     const q = req.query;
-    const data = orderPackageDao.listPackages({
+    const globalKw = String(q.globalKeyword || '').trim();
+    const baseFilters = {
       tab: q.tab,
       keyword: q.keyword,
       storeId: q.storeId,
@@ -246,7 +357,7 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       tag: q.tag,               // 标签名精确筛选(2026-09-15)
       arrived: q.arrived,
       cancelInitiator: q.cancelInitiator, // client/ozon/seller(仅 cancelled tab 用)
-      globalKeyword: q.globalKeyword,
+      globalKeyword: globalKw,
       globalMode: q.globalMode,
       sortBy: q.sortBy,         // order|delivering|return(2026-09-20)
       sortOrder: q.sortOrder,   // desc|asc(2026-09-20)
@@ -254,50 +365,23 @@ router.get('/admin/api/order-process/list', (req, res, next) => {
       logisticsStaleHours: q.logisticsStaleHours,      // 物流超 N h 未更新(2026-10-17)
       page: q.page,
       pageSize: q.pageSize,
-    });
-    // 聚合产品行 + 采购关联 + 应计 CNY 分组
-    const orderIds = data.packages.map((p) => p.ozonOrderId);
-    const items = orderPackageDao.getItemsByOrderIds(orderIds);
-    const pkgIds = data.packages.map((p) => p.id);
-    const { links } = orderPackageDao.getPurchasesByPackageIds(pkgIds);
-    const rateInfo = resolveRubCnyRate();
-    const accrualMap = buildAccrualBreakdown(
-      data.packages,
-      getAccrualTypeSumsByPackageIds(pkgIds),
-      rateInfo?.rate
-    );
-    // 批量查包裹重量(供 computeProfit 走国际配送公式 3.37 + 0.0281 × weight_g)
-    const weightMap = orderPackageDao.getWeightsByPackageIds(pkgIds);
-    const itemsByOrder = new Map();
-    for (const it of items) {
-      if (!itemsByOrder.has(it.ozonOrderId)) itemsByOrder.set(it.ozonOrderId, []);
-      itemsByOrder.get(it.ozonOrderId).push(it);
-    }
-    const linksByPkg = new Map();
-    for (const l of links) {
-      if (!linksByPkg.has(l.packageId)) linksByPkg.set(l.packageId, []);
-      linksByPkg.get(l.packageId).push(l);
-    }
-    for (const pkg of data.packages) {
-      pkg.items = itemsByOrder.get(pkg.ozonOrderId) || [];
-      pkg.purchaseLinks = linksByPkg.get(pkg.id) || [];
-      pkg.cancelReasonCn = translateCancelReason(pkg.cancelReason); // 取消原因中文(未收录原样返回)
-      if (accrualMap.has(pkg.id)) pkg.accrual = accrualMap.get(pkg.id);
-      if (weightMap.has(pkg.id)) {
-        const w = weightMap.get(pkg.id);
-        pkg.weightG = w.weightG;
-        pkg.weightSource = w.source;
-        pkg.ozonWeightG = w.ozonWeightG ?? null;
-        pkg.systemWeightG = w.systemWeightG ?? null;
-      } else {
-        pkg.ozonWeightG = null;
-        pkg.systemWeightG = null;
+    };
+    let data = orderPackageDao.listPackages(baseFilters);
+
+    // 全局搜索 0 结果且关键词疑似面单条码(纯数字 >=10 位)时,尝试条码→货件号解析(2026-10-25)
+    if (data.total === 0 && /^\d{10,}$/.test(globalKw)) {
+      const resolved = await resolveBarcodeForList(globalKw, q.storeId);
+      if (resolved) {
+        data = orderPackageDao.listPackages({
+          ...baseFilters,
+          storeId: resolved.storeId || q.storeId || undefined,
+          globalKeyword: resolved.postingNumber,
+          globalMode: 'eq',
+        });
       }
-      pkg.profit = computeProfit(pkg, pkg.operateStatus === 'cancelled', rateInfo?.rate);
     }
-    data.rubRate = rateInfo;
-    // 机器名(2026-10-16 多机部署):供安卓差集兜底通知展示来源
-    data.machineName = config.machineName;
+
+    enrichListData(data);
     res.json(ok(data));
   } catch (e) {
     next(e);
@@ -1011,7 +1095,9 @@ router.post('/admin/api/order-process/package-label', async (req, res, next) => 
       return res.status(400).json({ ok: false, message: '不支持跨店铺混打,请逐个包裹打印' });
     }
     const storeId = storeIds[0];
-    const postingNumbers = rows.map((r) => r.postingNumber);
+    // 按前端传入的 ids 顺序确定 postingNumbers(与 Ozon 生成 PDF 的页序一致,供条码 zip 使用)
+    const rowById = new Map(rows.map((r) => [r.packageId, r]));
+    const postingNumbers = ids.map((id) => rowById.get(id)?.postingNumber).filter(Boolean);
 
     // 缓存优先(refresh=true 时强制重拉)
     let pdf = null;
@@ -1045,6 +1131,18 @@ router.post('/admin/api/order-process/package-label', async (req, res, next) => 
         { storeId, postings: postingNumbers.length, cacheHit: false, durationMs: Date.now() - started },
         '[package-label] Ozon 拉取成功'
       );
+    }
+
+    // 回填面单条码映射(异步旁路,不阻塞打印;仅当存在未建映射的货件时解析 PDF)
+    try {
+      const missing = missingBarcodePostings(storeId, postingNumbers);
+      if (missing.length) {
+        backfillPostingBarcodes(storeId, postingNumbers, pdf)
+          .then((n) => logger.info({ storeId, postings: postingNumbers.length, filled: n }, '[package-label] 条码映射回填完成'))
+          .catch((e) => logger.warn({ err: e?.message, storeId }, '[package-label] 条码映射回填失败'));
+      }
+    } catch (e) {
+      logger.warn({ err: e?.message, storeId }, '[package-label] 条码映射检查失败');
     }
 
     if (b.mode === 'url') {
