@@ -1,6 +1,6 @@
 // 面单 PDF → PNG dataURL(服务端渲染,与前端 web/src/api/print-agent.js pdfToPng 同口径)
 // 用 pdfjs-dist legacy + @napi-rs/canvas 在 Node 渲染;标准字体(base-14)从本地文件系统读取
-// 画布固定按标签纸比例(70:129,宽 1100px),PDF 内容等比 contain 缩放(水平居中/顶部对齐),白底补齐
+// 画布固定按标签纸比例(76:129,宽 1100px),PDF 内容等比 contain 缩放(水平居中/顶部对齐),白底补齐
 import { createCanvas } from '@napi-rs/canvas';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
@@ -16,15 +16,15 @@ function loadPdfjs() {
 }
 
 /**
- * 渲染 PDF 第 1 页为 PNG dataURL(默认 70×129mm 标签纸比例)。
+ * 渲染 PDF 第 1 页为 PNG dataURL(默认 76×129mm 标签纸比例)。
  * @param {Buffer|Uint8Array} pdfBuffer Ozon 面单 PDF
- * @param {number} widthMm 标签纸宽(mm),默认 70
+ * @param {number} widthMm 标签纸宽(mm),默认 76
  * @param {number} pageHm 标签纸高(mm),默认 129
  * @param {number} rotation 顺时针旋转角度(0/90/180/270);货运标签横版打竖向纸时传 90
- * @param {string} [overlayText] 非空时叠加到画布顶部(如店铺名 YQL01),用于面单分拣
+ * @param {string} [overlayText] 非空时在画布底部定制区绘制(如店铺名 YQL01),用于面单分拣
  * @returns {Promise<{dataUrl:string,w:number,h:number}>}
  */
-export async function pdfToPngDataUrl(pdfBuffer, widthMm = 70, pageHm = 129, rotation = 0, overlayText = '') {
+export async function pdfToPngDataUrl(pdfBuffer, widthMm = 76, pageHm = 129, rotation = 0, overlayText = '') {
   const pdfjs = await loadPdfjs();
   const doc = await pdfjs
     .getDocument({
@@ -42,14 +42,19 @@ export async function pdfToPngDataUrl(pdfBuffer, widthMm = 70, pageHm = 129, rot
   const scale = Math.min(canvasW / base.width, canvasH / base.height);
   const viewport = page.getViewport({ scale, rotation });
 
+  // 定制区高度(仅 overlayText 时启用,货运标签不传此参数保持原布局):
+  // 面单打印时在纸底部预留白底区域放店铺名(2026-10-26 由顶部白条改为底部定制区,不再遮挡原内容)
+  const customH = overlayText ? 250 : 0;
+
   const canvas = createCanvas(canvasW, canvasH);
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff'; // PDF 透明底铺白
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // 水平/垂直居中(与前端一致;旋转后的货运标签在竖向纸上留白均匀,面单比例一致时 offset=0 无影响)
+  // 水平居中;面单打印(有定制区)内容顶部对齐,底部整段留给定制区;
+  // 货运标签(无定制区)保持原居中布局不变(2026-10-26 用户确认)
   const offsetX = Math.round((canvasW - viewport.width) / 2);
-  const offsetY = Math.round((canvasH - viewport.height) / 2);
+  const offsetY = customH > 0 ? 0 : Math.round((canvasH - viewport.height) / 2);
   if (offsetX > 0 || offsetY > 0) {
     ctx.save();
     ctx.translate(offsetX, offsetY);
@@ -59,16 +64,16 @@ export async function pdfToPngDataUrl(pdfBuffer, widthMm = 70, pageHm = 129, rot
     await page.render({ canvasContext: ctx, viewport }).promise;
   }
 
-  // 叠加店铺名(2026-10-26):面单顶部盖白条+黑字,多店铺面单可快速分拣;货运标签不传此参数不受影响
-  if (overlayText) {
-    const barH = 46;
+  // 底部定制区:白底黑字店铺名(68px = 原 34px 的 2 倍),垂直/水平居中
+  if (overlayText && customH > 0) {
+    const top = canvasH - customH;
     ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, canvas.width, barH);
+    ctx.fillRect(0, top, canvas.width, customH);
     ctx.fillStyle = '#000';
-    ctx.font = 'bold 34px sans-serif';
+    ctx.font = 'bold 68px sans-serif';
     ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left';
-    ctx.fillText(overlayText, 16, barH / 2);
+    ctx.textAlign = 'center';
+    ctx.fillText(overlayText, canvasW / 2, top + customH / 2);
   }
 
   return { dataUrl: canvas.toDataURL('image/png'), w: canvas.width, h: canvas.height };

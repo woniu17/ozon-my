@@ -385,7 +385,8 @@ router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
     logMeta = { packageId, postingNumber: postingNumbers[0] || null, storeId };
 
     // PNG 二级缓存命中:直接转发,跳过 Ozon 拉 PDF 与 canvas 渲染
-    const widthMm = 70;
+    // 76×130 面单纸:底部定制区叠加店铺名(2026-10-26)
+    const widthMm = 76;
     const pageHm = 129;
     let dataUrl = getWaybillPng(storeId, postingNumbers, widthMm, pageHm);
     if (!dataUrl) {
@@ -426,16 +427,16 @@ router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
         }
         setWaybill(storeId, postingNumbers, pdf);
       }
-      // 服务端渲染成 PNG dataURL(顶部叠加店铺名,如 YQL01),并写入二级缓存
+      // 服务端渲染成 PNG dataURL(底部定制区叠加店铺名,如 YQL01),并写入二级缓存
       const rendered = await pdfToPngDataUrl(pdf, widthMm, pageHm, 0, store?.name || storeId);
       dataUrl = rendered.dataUrl;
       setWaybillPng(storeId, postingNumbers, widthMm, pageHm, dataUrl);
     }
 
-    const hMm = Math.round(((70 * pageHm) / widthMm) * 10) / 10; // 固定规格 70×129 → 129mm
+    const hMm = Math.round(pageHm * 10) / 10; // 76×129 固定规格 → 129mm
     const documentId = postingNumbers[0] || String(packageId);
     const templateBase = getTemplateBase(req);
-    await sendPrint(dataUrl, hMm, documentId, printer, templateBase);
+    await sendPrint(dataUrl, hMm, documentId, printer, templateBase, 'label-image-76x130.xml');
     const durationMs = Date.now() - startTs;
     logger.info({ packageId, storeId, postings: postingNumbers.length, printer: printer || 'default', durationMs }, '[print-agent] 按包裹打印成功');
     orderPackageDao.insertPrintLog({ ...logMeta, printer, source: 'print-package', status: 'success', durationMs, ip: req.ip });
