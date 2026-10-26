@@ -18,6 +18,8 @@ import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
+import com.google.gson.JsonObject
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
 import com.yochylin.scanner.api.optBoolean
@@ -25,25 +27,25 @@ import com.yochylin.scanner.api.optDouble
 import com.yochylin.scanner.api.optString
 import com.yochylin.scanner.model.OrderStatsStoresResponse
 import com.yochylin.scanner.model.StoreItem
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
  * 货运标签(2026-10-26,底部导航第 5 个 Tab):
- * 按店铺拉取 Ozon 发运清单(methods[].carriages),每个发运 id 即货运标签 ID,
+ * 同时汇总所有店铺的 Ozon 发运清单(methods[].carriages),每个发运 id 即货运标签 ID,
  * 支持菜鸟组件无纸预览 + 服务端直打印,并展示已打印状态。
  */
 class ContainerLabelFragment : Fragment() {
 
-    private lateinit var storeBtn: TextView
     private lateinit var printerBar: TextView
     private lateinit var labelList: LinearLayout
     private lateinit var emptyText: TextView
 
     private var allStores: List<StoreItem> = emptyList()
-    private var selectedStoreId: String = ""
-    private var selectedStoreName: String = ""
 
     /** 当前展示的标签行(重建卡片用) */
     private val shownLabels = mutableListOf<LabelRow>()
@@ -52,6 +54,7 @@ class ContainerLabelFragment : Fragment() {
     private data class LabelRow(
         val id: Long,
         val storeId: String,
+        val storeName: String,
         val status: String,
         val methodName: String,
         val departureDate: String,
@@ -78,22 +81,18 @@ class ContainerLabelFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        storeBtn = view.findViewById(R.id.storeBtn)
         printerBar = view.findViewById(R.id.printerBar)
         labelList = view.findViewById(R.id.labelList)
         emptyText = view.findViewById(R.id.emptyText)
-        view.findViewById<TextView>(R.id.refreshBtn).setOnClickListener {
-            if (selectedStoreId.isBlank()) loadStores() else loadLabels()
-        }
+        view.findViewById<TextView>(R.id.refreshBtn).setOnClickListener { loadAllLabels() }
 
-        storeBtn.setOnClickListener { showStoreDialog() }
         printerBar.setOnClickListener { showPrinterPicker() }
 
         refreshPrinterStatus()
         loadStores()
     }
 
-    // ── 店铺选择 ──
+    // ── 店铺列表(仅用于并行拉取标签) ──
     private fun loadStores() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
@@ -105,102 +104,92 @@ class ContainerLabelFragment : Fragment() {
                     showEmpty("无可用店铺")
                     return@launch
                 }
-                val exists = allStores.any { it.id == selectedStoreId }
-                if (!exists) {
-                    val first = allStores.first()
-                    selectedStoreId = first.id ?: ""
-                    selectedStoreName = first.name ?: selectedStoreId
-                }
-                updateStoreBtn()
-                loadLabels()
+                loadAllLabels()
             } catch (e: Exception) {
                 handleError(e)
             }
         }
     }
 
-    private fun showStoreDialog() {
+    // ── 并行汇总所有店铺的货运标签 ──
+    private fun loadAllLabels() {
         if (allStores.isEmpty()) {
-            toast("店铺列表为空")
-            return
-        }
-        val names = allStores.map { it.name ?: it.id ?: "" }.toTypedArray()
-        val ids = allStores.map { it.id ?: "" }
-        val checked = ids.indexOf(selectedStoreId).coerceAtLeast(0)
-        AlertDialog.Builder(requireContext())
-            .setTitle("选择店铺")
-            .setSingleChoiceItems(names, checked) { dialog, which ->
-                selectedStoreId = ids[which]
-                selectedStoreName = names[which]
-                updateStoreBtn()
-                dialog.dismiss()
-                loadLabels()
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
-    private fun updateStoreBtn() {
-        val name = selectedStoreName.ifBlank { selectedStoreId }
-        storeBtn.text = if (name.isBlank()) "选择店铺 ▾" else "$name ▾"
-    }
-
-    // ── 标签列表 ──
-    private fun loadLabels() {
-        if (selectedStoreId.isBlank()) {
-            showEmpty("请先选择店铺")
+            showEmpty("无可用店铺")
             return
         }
         viewLifecycleOwner.lifecycleScope.launch {
+            showEmpty("")
             try {
-                showEmpty("")
-                val obj = Api.post(
-                    "/admin/api/print-agent/container-labels",
-                    mapOf("storeId" to selectedStoreId, "cursor" to "", "limit" to 1000)
-                ).asJsonObject
-                val data = obj.getAsJsonObject("data")
-                val methods = data.getAsJsonArray("methods") ?: JsonArray()
-                val rows = mutableListOf<LabelRow>()
-                for (m in methods) {
-                    val mo = m.asJsonObject
-                    val methodName = mo.optString("delivery_method_name")
-                    val departureDate = mo.optString("departure_date")
-                    val carriages = mo.getAsJsonArray("carriages") ?: JsonArray()
-                    for (c in carriages) {
-                        val co = c.asJsonObject
-                        val id = co.optDouble("id", 0.0).toLong()
-                        if (id <= 0) continue
-                        rows.add(
-                            LabelRow(
-                                id = id,
-                                storeId = selectedStoreId,
-                                status = co.optString("status"),
-                                methodName = methodName,
-                                departureDate = departureDate,
-                                postingsCount = fmtCount(co, "postings_count"),
-                                quantumCount = fmtCount(co, "quantum_count")
-                            )
-                        )
-                    }
+                val rows = coroutineScope {
+                    allStores.map { store ->
+                        async(Dispatchers.IO) { fetchStoreLabels(store) }
+                    }.awaitAll().flatten()
                 }
                 // 出发日期倒序,同日按 ID 倒序(与 web 端一致)
-                rows.sortWith(compareByDescending<LabelRow> { it.departureDate }.thenByDescending { it.id })
-                shownLabels.clear()
-                shownLabels.addAll(rows)
+                rows.sortedWith(
+                    compareByDescending<LabelRow> { it.departureDate }
+                        .thenByDescending { it.id }
+                ).let {
+                    shownLabels.clear()
+                    shownLabels.addAll(it)
+                }
                 renderLabels()
-                if (rows.isEmpty()) {
-                    showEmpty("该店铺暂无货运标签")
+                if (shownLabels.isEmpty()) {
+                    showEmpty("暂无货运标签")
                 } else {
-                    checkPrinted(rows)
+                    checkPrinted(shownLabels)
                 }
             } catch (e: Exception) {
                 handleError(e)
             }
+        }
+    }
+
+    /** 单个店铺拉取(失败不影响其他店铺),返回空列表 */
+    private suspend fun fetchStoreLabels(store: StoreItem): List<LabelRow> {
+        val storeId = store.id ?: ""
+        val storeName = store.name ?: storeId
+        if (storeId.isBlank()) return emptyList()
+        return try {
+            val obj = Api.post(
+                "/admin/api/print-agent/container-labels",
+                mapOf("storeId" to storeId, "cursor" to "", "limit" to 1000)
+            ).asJsonObject
+            val data = obj.optJsonObject("data") ?: return emptyList()
+            val methods = data.optJsonArray("methods") ?: JsonArray()
+            val rows = mutableListOf<LabelRow>()
+            for (m in methods) {
+                val mo = m.takeIf { it.isJsonObject }?.asJsonObject ?: continue
+                val methodName = mo.optString("delivery_method_name")
+                val departureDate = mo.optString("departure_date")
+                val carriages = mo.optJsonArray("carriages") ?: JsonArray()
+                for (c in carriages) {
+                    val co = c.takeIf { it.isJsonObject }?.asJsonObject ?: continue
+                    val id = co.optDouble("id", 0.0).toLong()
+                    if (id <= 0) continue
+                    rows.add(
+                        LabelRow(
+                            id = id,
+                            storeId = storeId,
+                            storeName = storeName,
+                            status = co.optString("status"),
+                            methodName = methodName,
+                            departureDate = departureDate,
+                            postingsCount = fmtCount(co, "postings_count"),
+                            quantumCount = fmtCount(co, "quantum_count")
+                        )
+                    )
+                }
+            }
+            rows
+        } catch (e: Exception) {
+            // 单个店铺加载失败(如 Ozon 接口抖动)时忽略,不影响其他店铺
+            emptyList()
         }
     }
 
     /** 数字字段可能是 number/string/null,统一转展示文本 */
-    private fun fmtCount(obj: com.google.gson.JsonObject, key: String): String {
+    private fun fmtCount(obj: JsonObject, key: String): String {
         val el = obj.get(key) ?: return "—"
         if (el.isJsonNull) return "—"
         return try {
@@ -242,11 +231,20 @@ class ContainerLabelFragment : Fragment() {
         lp.bottomMargin = dp(12f)
         card.layoutParams = lp
 
-        // 头部:标签 ID + 已打印状态
+        // 头部:店铺名标签 + 标签 ID + 已打印状态
         val header = LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        header.addView(
+            TextView(requireContext()).apply {
+                text = row.storeName
+                setTextColor(Color.parseColor("#165dff"))
+                textSize = 11f
+                setRoundedBg(0xFFEEF4FF.toInt(), 999f)
+                setPadding(dp(8f), dp(3f), dp(8f), dp(3f))
+            }
+        )
         header.addView(
             TextView(requireContext()).apply {
                 text = "#${row.id}"
@@ -255,7 +253,9 @@ class ContainerLabelFragment : Fragment() {
                 typeface = android.graphics.Typeface.MONOSPACE
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
             },
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(8f)
+            }
         )
         val printed = printedStates[row.id.toString()] ?: false
         header.addView(buildStatusTag(printed))
@@ -347,24 +347,29 @@ class ContainerLabelFragment : Fragment() {
         }
     }
 
-    // ── 打印状态回填 ──
+    // ── 打印状态回填(按店铺分组查询) ──
     private fun checkPrinted(rows: List<LabelRow>) {
         viewLifecycleOwner.lifecycleScope.launch {
-            try {
-                val ids = rows.map { it.id }.joinToString(",")
-                if (ids.isBlank()) return@launch
-                val obj = Api.get(
-                    "/admin/api/print-agent/container-label-print-status",
-                    mapOf("storeId" to selectedStoreId, "labelIds" to ids)
-                ).asJsonObject
-                val printed = obj.getAsJsonObject("data").getAsJsonObject("printed")
-                for ((key, el) in printed.entrySet()) {
-                    if (!el.isJsonNull) printedStates[key] = el.asBoolean
+            val byStore = rows.groupBy { it.storeId }
+            for ((storeId, storeRows) in byStore) {
+                try {
+                    val ids = storeRows.map { it.id }.joinToString(",")
+                    if (ids.isBlank()) continue
+                    val obj = Api.get(
+                        "/admin/api/print-agent/container-label-print-status",
+                        mapOf("storeId" to storeId, "labelIds" to ids)
+                    ).asJsonObject
+                    val printed = obj.optJsonObject("data")
+                        ?.optJsonObject("printed")
+                        ?: continue
+                    for ((key, el) in printed.entrySet()) {
+                        if (!el.isJsonNull) printedStates[key] = el.asBoolean
+                    }
+                } catch (e: Exception) {
+                    // 打印状态查询失败不影响列表展示,静默
                 }
-                renderLabels()
-            } catch (e: Exception) {
-                // 打印状态查询失败不影响列表展示,静默
             }
+            renderLabels()
         }
     }
 
@@ -397,8 +402,8 @@ class ContainerLabelFragment : Fragment() {
                     "/admin/api/print-agent/preview-container-label",
                     mapOf("storeId" to row.storeId, "labelId" to row.id)
                 ).asJsonObject
-                val data = obj.getAsJsonObject("data")
-                val imageDataUrl = data.optString("imageDataUrl")
+                val data = obj.optJsonObject("data")
+                val imageDataUrl = data?.optString("imageDataUrl") ?: ""
                 if (imageDataUrl.isBlank()) {
                     toast("预览图拉取失败,请检查打印组件后重试")
                     return@launch
@@ -495,3 +500,10 @@ class ContainerLabelFragment : Fragment() {
         Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show()
     }
 }
+
+/** JsonObject 安全取值:键不存在/为 null 时返回 null,避免 getAsJsonArray 空指针 */
+private fun JsonObject.optJsonObject(key: String): JsonObject? =
+    get(key)?.takeIf { it.isJsonObject }?.asJsonObject
+
+private fun JsonObject.optJsonArray(key: String): JsonArray? =
+    get(key)?.takeIf { it.isJsonArray }?.asJsonArray
