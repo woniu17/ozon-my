@@ -37,7 +37,7 @@ export async function postFormInPage(page, url, bodyString) {
   if (r && r.networkError) {
     if (r.aborted) {
       // 挂起式拦截:mtop 请求被 baxia 扣住不返回(实测 chenlin 账号 60s 任务超时的根因)
-      throw new ApiError('BROWSER_ERROR', `页面请求 ${FETCH_TIMEOUT_MS}ms 无响应(疑似平台风控挂起),请运行 qxqx 的 persistent 打开平台订单页人工过验证后重试`, { status: 502 });
+      throw new ApiError('BROWSER_ERROR', `页面请求 ${FETCH_TIMEOUT_MS}ms 无响应(疑似平台风控挂起),请运行 ERP 的 persistent 打开平台订单页人工过验证后重试`, { status: 502 });
     }
     throw new ApiError('BROWSER_ERROR', `页面 fetch 网络错误: ${r.networkError}`, { status: 502 });
   }

@@ -244,7 +244,7 @@ async function fetchInPage(page, url, body) {
   }, { url, body, timeoutMs: 25 * 1000 });
   if (r && r.networkError) {
     if (r.aborted) {
-      throw new ApiError('BROWSER_ERROR', '拼多多页面请求 25s 无响应(疑似风控挂起),请运行 qxqx 的 persistent 登录并人工过验证后重试', { status: 502 });
+      throw new ApiError('BROWSER_ERROR', '拼多多页面请求 25s 无响应(疑似风控挂起),请运行 ERP 的 persistent 登录并人工过验证后重试', { status: 502 });
     }
     throw new ApiError('BROWSER_ERROR', `页面 fetch 网络错误: ${r.networkError}`, { status: 502 });
   }

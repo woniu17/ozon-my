@@ -100,7 +100,7 @@ async function callTaobaoMtop(page, data, customTag, searchMode = false) {
     const r = await postFormInPage(page, TB_API, body);
     const prefix = searchMode ? 'TB_SEARCH' : 'TB';
     if (r.status === 401 || r.status === 403) {
-      throw new ApiError(ErrorCode.AUTH_REQUIRED, '淘宝登录态失效,请运行 qxqx 的 persistent 登录淘宝后重试');
+      throw new ApiError(ErrorCode.AUTH_REQUIRED, '淘宝登录态失效,请运行 ERP 的 persistent 登录淘宝后重试');
     }
     if (!r.ok) {
       throw new ApiError('BROWSER_ERROR', `${prefix}_HTTP_${r.status}: 淘宝接口返回异常`, { status: 502 });
@@ -113,15 +113,15 @@ async function callTaobaoMtop(page, data, customTag, searchMode = false) {
     if (/^FAIL_SYS_SESSION_EXPIRED/.test(ret)) {
       // 2026-09 实测:profile 淘宝 session 过期时登录 cookie 仍残留在 jar(unb/cookie2 存在),
       // 接口即报此错;必须重新登录才恢复,不能靠重试
-      throw new ApiError(ErrorCode.AUTH_REQUIRED, '淘宝登录已过期,请运行 qxqx 的 persistent(headed)重新登录淘宝后重试');
+      throw new ApiError(ErrorCode.AUTH_REQUIRED, '淘宝登录已过期,请运行 ERP 的 persistent(headed)重新登录淘宝后重试');
     }
     if (/^FAIL_SYS_TOKEN_EMPTY|^FAIL_SYS_ILLEGAL_ACCESS/.test(ret)) {
       // token 失败:服务器轮换 _m_h5_tk 后重取重签重试 1 次
-      lastErr = new ApiError(ErrorCode.AUTH_REQUIRED, `淘宝 mtop token 失效(${ret}),请运行 qxqx 的 persistent 登录淘宝并刷新一次订单页后重试`);
+      lastErr = new ApiError(ErrorCode.AUTH_REQUIRED, `淘宝 mtop token 失效(${ret}),请运行 ERP 的 persistent 登录淘宝并刷新一次订单页后重试`);
       continue;
     }
     if (/^FAIL_SYS_USER_VALIDATE|^RGV587_ERROR/.test(ret)) {
-      throw new ApiError('RISK_VALIDATE', '淘宝风控拦截,请运行 qxqx 的 persistent 打开淘宝订单页人工过验证后重试', { status: 409 });
+      throw new ApiError('RISK_VALIDATE', '淘宝风控拦截,请运行 ERP 的 persistent 打开淘宝订单页人工过验证后重试', { status: 409 });
     }
     if (!/^SUCCESS/.test(ret)) {
       throw new ApiError('BROWSER_ERROR', `${prefix}_${ret || 'BAD_RESPONSE'}`, { status: 502 });
@@ -241,7 +241,7 @@ async function getTaobaoTrace(orderSn, account) {
       try { return { json: JSON.parse(text) }; } catch { return { badJson: true, head: text.slice(0, 120) }; }
     }, String(orderSn || ''));
     if (r.authFail) {
-      throw new ApiError(ErrorCode.AUTH_REQUIRED, '淘宝登录态失效,请运行 qxqx 的 persistent 登录淘宝后重试');
+      throw new ApiError(ErrorCode.AUTH_REQUIRED, '淘宝登录态失效,请运行 ERP 的 persistent 登录淘宝后重试');
     }
     if (r.badJson) {
       // 非 JSON 响应(多为风控/登录跳转页)

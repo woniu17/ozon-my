@@ -91,7 +91,7 @@ async function callXianyuMtop(page, data) {
     }).toString();
     const r = await postFormInPage(page, XY_API, body);
     if (r.status === 401 || r.status === 403) {
-      throw new ApiError(ErrorCode.AUTH_REQUIRED, '闲鱼登录态失效,请在 qxqx 的 persistent 中登录 goofish.com 后重试');
+      throw new ApiError(ErrorCode.AUTH_REQUIRED, '闲鱼登录态失效,请在 ERP 的 persistent 中登录 goofish.com 后重试');
     }
     if (!r.ok) {
       throw new ApiError('BROWSER_ERROR', `XY_HTTP_${r.status}: 闲鱼接口返回异常`, { status: 502 });
@@ -102,15 +102,15 @@ async function callXianyuMtop(page, data) {
     }
     const ret = (Array.isArray(json.ret) && json.ret[0]) || '';
     if (/^FAIL_SYS_SESSION_EXPIRED|^FAIL_SYS_USER_NOT_LOGIN|^SESSION_EXPIRED/.test(ret)) {
-      throw new ApiError(ErrorCode.AUTH_REQUIRED, '闲鱼登录已过期,请运行 qxqx 的 persistent(headed)登录 goofish.com 后重试');
+      throw new ApiError(ErrorCode.AUTH_REQUIRED, '闲鱼登录已过期,请运行 ERP 的 persistent(headed)登录 goofish.com 后重试');
     }
     if (/^FAIL_SYS_TOKEN_EMPTY|^FAIL_SYS_ILLEGAL_ACCESS|^FAIL_SYS_TOKEN_EXOIRED/.test(ret)) {
       // token 失败/过期:服务器轮换 _m_h5_tk 后重取重签重试 1 次
-      lastErr = new ApiError(ErrorCode.AUTH_REQUIRED, `闲鱼 mtop token 失效(${ret}),重试仍失败请运行 qxqx 的 persistent 打开闲鱼订单页一次后重试`);
+      lastErr = new ApiError(ErrorCode.AUTH_REQUIRED, `闲鱼 mtop token 失效(${ret}),重试仍失败请运行 ERP 的 persistent 打开闲鱼订单页一次后重试`);
       continue;
     }
     if (/^FAIL_SYS_USER_VALIDATE|^RGV587_ERROR/.test(ret)) {
-      throw new ApiError('RISK_VALIDATE', '闲鱼风控拦截,请运行 qxqx 的 persistent 打开闲鱼订单页人工过验证后重试', { status: 409 });
+      throw new ApiError('RISK_VALIDATE', '闲鱼风控拦截,请运行 ERP 的 persistent 打开闲鱼订单页人工过验证后重试', { status: 409 });
     }
     if (!/^SUCCESS/.test(ret)) {
       throw new ApiError('BROWSER_ERROR', `XY_${ret || 'BAD_RESPONSE'}`, { status: 502 });

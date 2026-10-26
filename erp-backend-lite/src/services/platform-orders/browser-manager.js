@@ -6,7 +6,7 @@
 //  - 懒启动:首个订单请求才 launchPersistentContext,冷启动约 15-25s
 //  - 空闲回收:10 分钟(PLATFORM_BROWSER_IDLE_MS)无请求自动 close 释放 profile,
 //    给 persistent.js 登录窗口让路
-//  - 互斥:profile 与 qxqx/persistent.js 共用,Chromium 单实例机制天然互斥——
+//  - 互斥:profile 与 scripts/persistent.js 共用,Chromium 单实例机制天然互斥——
 //    对方占用时 launch 失败,映射为 PROFILE_LOCKED;同时维护自有 PID 锁文件,
 //    防本服务双实例(残留死锁自动覆盖)
 //  - 崩溃重建:context 'close' 事件清状态,下次请求自动重新 launch

@@ -60,7 +60,7 @@ const config = {
   rubCnyRateFallback: Number(process.env.RUB_CNY_RATE) || 0,
   // 平台订单获取(2026-09,采购弹框三平台订单迁后端):cloakbrowser 生命周期配置
   // 多账号(2026-09-13):账号别名→profile 目录映射 + 平台→账号列表(第一个为主账号)
-  // profile 与 qxqx/persistent.js(手动登录)共用,经 Chromium 单实例互斥
+  // profile 与 scripts/persistent.js(手动登录)共用,经 Chromium 单实例互斥
   platformProfiles: (() => {
     const m = { linqx: process.env.PLATFORM_PROFILE_LINQX || process.env.PLATFORM_PROFILE_DIR || join(__dirname, '../../cloakbrowser/linqx-profile') };
     if (process.env.PLATFORM_PROFILE_CHENLIN) m.chenlin = process.env.PLATFORM_PROFILE_CHENLIN;

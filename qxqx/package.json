@@ -7,7 +7,6 @@
   "main": "hello.js",
   "scripts": {
     "start": "node hello.js",
-    "persistent": "node persistent.js",
     "maintain-profile": "node maintain-profile.js",
     "extension": "node load-extension.js",
     "cdp": "node cdp-server.js",

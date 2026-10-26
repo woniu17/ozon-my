@@ -9,7 +9,8 @@
     "dev": "node --experimental-sqlite --watch src/app.js",
     "pm2": "pm2 start src/app.js --name erp-lite --node-args=\"--experimental-sqlite\"",
     "init-db": "node --experimental-sqlite src/db/index.js",
-    "seed": "node --experimental-sqlite src/db/seed.js"
+    "seed": "node --experimental-sqlite src/db/seed.js",
+    "persistent": "node scripts/persistent.js"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.11",

@@ -101,9 +101,9 @@ platformAccounts:  { pdd: ['linqx'], ali1688: ['linqx','chenlin'], taobao: ['lin
 | `GET /:platform/search?orderSn=` | 无参数变化；后端内部跨账号（前端零改动） |
 | `GET /status` | 响应结构升级：`browsers: { <账号>: {state,pid,profileDir} }` + `platforms: { <平台>: { accounts: { <账号>: {login,cookieNames} } } }`；账号列表来自配置（静态始终返回，login 探测浏览器未运行时为 unknown） |
 
-### 3.4 persistent.js 参数化（qxqx）
+### 3.4 persistent.js 参数化（ERP scripts）
 
-`node persistent.js <linqx|chenlin>`：账号别名 → 对应 profile 目录打开有头窗口；
+`npm run persistent -- <linqx|chenlin>`：账号别名 → 对应 profile 目录打开有头窗口；
 不传参数时打印用法与可选账号列表并退出（避免误开错 profile）。
 chenlin 直开 1688 订单列表页（platform-orders 实际取数入口）：登录态/风控
 （baxia 滑块）问题在首页不一定暴露，订单页过一次验证即可解除挂起拦截；
@@ -180,7 +180,7 @@ const importAccounts = ref([]);           // 来自 /status 的账号 tab 配置
 - ✅ /status 新结构：browsers 按账号 + platforms×accounts 登录探测，双 1688 账号
   login=yes（cookie 存在；baxia 属于独立拦截，见风险表）
 - ⚠️ 1688 双账号被 baxia 风控拦截（RISK_VALIDATE 快速失败 3-4s，替代原 60s 挂死）：
-  **遗留人工步骤** —— 运行 `node persistent.js chenlin`（直开订单页）人工过滑块，
+  **遗留人工步骤** —— 运行 `npm run persistent -- chenlin`（直开订单页）人工过滑块，
   linqx 需在其窗口手动访问 1688 订单页过验证；过完关窗，ERP 前端硬刷新后即可加载订单
 - 前端加载超时的原排查结论"冷启动慢需延 120s 超时"**已证伪**：冷启动仅 2-3s，
   根因是 baxia；PLATFORM_ORDER_TIMEOUT_MS=60s 维持不变

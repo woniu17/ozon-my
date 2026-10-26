@@ -84,7 +84,7 @@ async function call1688Mtop(page, param, searchMode = false) {
     const r = await postFormInPage(page, ALI_API, body);
     const prefix = searchMode ? 'ALI_SEARCH' : 'ALI';
     if (r.status === 401 || r.status === 403) {
-      throw new ApiError(ErrorCode.AUTH_REQUIRED, '1688登录态失效,请运行 qxqx 的 persistent 登录 1688 后重试');
+      throw new ApiError(ErrorCode.AUTH_REQUIRED, '1688登录态失效,请运行 ERP 的 persistent 登录 1688 后重试');
     }
     if (!r.ok) {
       throw new ApiError('BROWSER_ERROR', `${prefix}_HTTP_${r.status}: 1688接口返回异常`, { status: 502 });
@@ -96,13 +96,13 @@ async function call1688Mtop(page, param, searchMode = false) {
     const ret = (Array.isArray(json.ret) && json.ret[0]) || '';
     if (/^FAIL_SYS_TOKEN_EMPTY|^FAIL_SYS_ILLEGAL_ACCESS/.test(ret)) {
       // token 失败:服务器轮换 _m_h5_tk 后重取重签重试 1 次
-      lastErr = new ApiError(ErrorCode.AUTH_REQUIRED, `1688 mtop token 失效(${ret}),请运行 qxqx 的 persistent 登录 1688 并刷新一次订单页后重试`);
+      lastErr = new ApiError(ErrorCode.AUTH_REQUIRED, `1688 mtop token 失效(${ret}),请运行 ERP 的 persistent 登录 1688 并刷新一次订单页后重试`);
       continue;
     }
     // RGV587_ERROR 是 baxia 的另一个 punish 码(参考 get-shop-product mtopClient isPunished),
     // 缺它时会落到兜底 BROWSER_ERROR,前端看不到"去过滑块"指引
     if (/^FAIL_SYS_USER_VALIDATE|^RGV587_ERROR/.test(ret)) {
-      throw new ApiError('RISK_VALIDATE', '1688风控拦截(baxia),请运行 qxqx 的 persistent 打开 1688 订单页人工过验证后重试', { status: 409 });
+      throw new ApiError('RISK_VALIDATE', '1688风控拦截(baxia),请运行 ERP 的 persistent 打开 1688 订单页人工过验证后重试', { status: 409 });
     }
     if (!/^SUCCESS/.test(ret)) {
       throw new ApiError('BROWSER_ERROR', `${prefix}_${ret || 'BAD_RESPONSE'}`, { status: 502 });

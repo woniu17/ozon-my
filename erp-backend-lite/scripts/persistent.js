@@ -1,8 +1,9 @@
 // 持久化浏览器登录窗口(买手账号 profile 维护)
-// 用法: node persistent.js <账号别名>   (别名须与 erp-backend-lite/.env 的
+// 2026-10-26 自 qxqx/persistent.js 迁入 ERP,统一管理 cloakbrowser profile
+// 用法: npm run persistent -- <账号别名>   (别名须与 .env 的
 //       PLATFORM_PROFILE_<别名> / PLATFORM_ACCOUNTS_* 配置一致)
-//   node persistent.js linqx     → erp-backend-lite/cloakbrowser/linqx-profile(主账号)
-//   node persistent.js chenlin   → .chenlin-profile
+//   npm run persistent -- linqx     → cloakbrowser/linqx-profile(主账号)
+//   npm run persistent -- chenlin   → cloakbrowser/chenlin-profile
 // 不带参数时打印用法并退出,避免误开错 profile。
 import { launchPersistentContext } from 'cloakbrowser';
 import path from 'node:path';
@@ -12,12 +13,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const ACCOUNTS = {
   // linqx 主平台淘宝;1688 被风控时在同一窗口手动访问下方 1688 订单页过验证
-  // profile 位于 ERP 仓库统一管理(2026-10-26 自 qxqx/.linqx-profile 迁移)
-  linqx: { dir: path.join(__dirname, '..', 'erp-backend-lite', 'cloakbrowser', 'linqx-profile'), home: 'https://www.taobao.com/' },
+  // profile 统一存放在 erp-backend-lite/cloakbrowser/ 目录
+  linqx: { dir: path.join(__dirname, '..', 'cloakbrowser', 'linqx-profile'), home: 'https://www.taobao.com/' },
   // chenlin 直开 1688 订单列表页:登录态/风控(baxia 滑块)问题在首页不一定暴露,
   // 订单页才是 platform-orders 实际取数入口,过一次验证即可解除挂起拦截
   chenlin: {
-    dir: path.join(__dirname, '.chenlin-profile'),
+    dir: path.join(__dirname, '..', 'cloakbrowser', 'chenlin-profile'),
     home: 'https://air.1688.com/app/ctf-page/trade-order-list/buyer-order-list.html?page=1&pageSize=10',
   },
 };
@@ -25,7 +26,7 @@ const ACCOUNTS = {
 const account = process.argv[2];
 const conf = ACCOUNTS[account];
 if (!conf) {
-  console.error(`用法: node persistent.js <账号别名>`);
+  console.error(`用法: npm run persistent -- <账号别名>  (或 node scripts/persistent.js <账号别名>)`);
   console.error(`可用账号: ${Object.keys(ACCOUNTS).join(', ')}`);
   console.error('(新增账号需同步在 erp-backend-lite/.env 增加 PLATFORM_PROFILE_<别名> 并把别名加进对应平台的 PLATFORM_ACCOUNTS_*)');
   process.exit(1);
