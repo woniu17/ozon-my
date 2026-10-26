@@ -689,9 +689,8 @@ onMounted(async () => {
           <tr>
             <th class="col-expand"></th>
             <th class="col-product">商品</th>
-            <th class="col-num col-meta">商品信息</th>
-            <th class="col-num col-pricewatch">跟卖</th>
-            <th class="col-num">利润(当前→调整)</th>
+            <th class="col-meta">商品信息</th>
+            <th class="col-num col-profit">利润(当前→调整)</th>
             <th class="col-target">按成本利润率定价</th>
           </tr>
         </thead>
@@ -768,27 +767,26 @@ onMounted(async () => {
                     <span class="meta-sub">g</span>
                   </span>
                 </div>
-              </td>
-              <td class="col-num col-pricewatch">
-                <div class="pw-cell">
-                  <template v-if="row.pw_seller_count != null && row.pw_seller_count > 0">
-                    <div class="pw-main" :class="{ 'pw-best': row.pw_is_cheapest }">
-                      {{ row.pw_seller_count }}家·最低{{ fmtMoney(row.pw_min_price) }}
-                    </div>
-                    <div class="sub">
-                      #{{ row.pw_my_rank }}/{{ row.pw_seller_count }}
-                      <template v-if="row.pw_gap_pct != null">·差{{ row.pw_gap_pct }}%</template>
-                      <template v-if="row.pw_is_cheapest">·最低价</template>
-                    </div>
-                    <div class="sub pw-time" :title="`采集于 ${row.pw_fetched_at || ''}`">{{ fmtTime(row.pw_fetched_at) }}</div>
-                  </template>
-                  <div v-else class="sub">
-                    {{ row.pw_seller_count === 0 ? '无跟卖' : row.pw_status ? statusText(row.pw_status) : '未采集' }}
-                  </div>
-                  <button class="pw-refresh" :disabled="pwBtnDisabled(row)" @click.stop="onFetchPriceWatch(row)" :title="pwBtnTitle(row)">
-                    <svg v-if="!['pending', 'running'].includes(pwTaskStates[row.sku]?.status)" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
-                    {{ pwBtnText(row) }}
-                  </button>
+                <!-- 跟卖摘要:主信息+刷新按钮占一行,排名/差值/采集时间占第二行小字 -->
+                <div class="meta-row">
+                  <span class="meta-label">跟卖</span>
+                  <span class="meta-value">
+                    <template v-if="row.pw_seller_count != null && row.pw_seller_count > 0">
+                      <span class="pw-main" :class="{ 'pw-best': row.pw_is_cheapest }">{{ row.pw_seller_count }}家·最低{{ fmtMoney(row.pw_min_price) }}</span>
+                    </template>
+                    <span v-else class="meta-sub">{{ row.pw_seller_count === 0 ? '无跟卖' : row.pw_status ? statusText(row.pw_status) : '未采集' }}</span>
+                    <button class="pw-refresh" :disabled="pwBtnDisabled(row)" @click.stop="onFetchPriceWatch(row)" :title="pwBtnTitle(row)">
+                      <svg v-if="!['pending', 'running'].includes(pwTaskStates[row.sku]?.status)" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+                      {{ pwBtnText(row) }}
+                    </button>
+                  </span>
+                </div>
+                <div v-if="row.pw_seller_count != null && row.pw_seller_count > 0" class="meta-row">
+                  <span class="meta-label"></span>
+                  <span class="meta-value meta-pw-sub">
+                    <span>#{{ row.pw_my_rank }}/{{ row.pw_seller_count }}<template v-if="row.pw_gap_pct != null">·差{{ row.pw_gap_pct }}%</template><template v-if="row.pw_is_cheapest">·最低价</template></span>
+                    <span class="meta-sub">{{ fmtTime(row.pw_fetched_at) }}</span>
+                  </span>
                 </div>
               </td>
               <!-- 利润调整:当前 → 按目标率定价后(参考订单处理单价调整表 旧值→新值) -->
@@ -1069,8 +1067,9 @@ onMounted(async () => {
 .col-product { min-width: 360px; width: 450px; }
 .col-target { min-width: 230px; white-space: nowrap; }
 /* 合并列"商品信息":售价/销量/采购价/重量 每项占一行,名称左、值右(参考当前利润列) */
-.col-meta { width: 260px; }
-.col-pricewatch { width: 175px; }
+.col-meta { width: 310px; }
+/* 利润调整列固定宽度:6 行对比,防止名称/值被挤压重叠 */
+.col-profit { width: 250px; }
 /* 采购价输入:¥ 内嵌输入框左侧,与数字同框(视觉上 ¥12.36 一体) */
 .price-cell { position: relative; display: inline-block; }
 .price-cell .yen { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-secondary, #6b7280); pointer-events: none; }
@@ -1192,10 +1191,10 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 
 /* 利润调整列(当前→调整):参考订单处理单价调整表,旧值→新值对比 */
 .cmp-row { display: flex; align-items: center; gap: 6px; line-height: 1.55; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.cmp-label { width: 62px; color: var(--text-secondary, #6b7280); }
-.cmp-old { width: 52px; text-align: right; color: #475569; }
-.cmp-arrow { width: 20px; text-align: center; color: #94a3b8; }
-.cmp-new { width: 52px; text-align: right; font-weight: 600; color: var(--text-primary, #1f2937); }
+.cmp-label { width: 62px; flex-shrink: 0; color: var(--text-secondary, #6b7280); }
+.cmp-old { width: 52px; flex-shrink: 0; text-align: right; color: #475569; }
+.cmp-arrow { width: 20px; flex-shrink: 0; text-align: center; color: #94a3b8; }
+.cmp-new { width: 52px; flex-shrink: 0; text-align: right; font-weight: 600; color: var(--text-primary, #1f2937); }
 .cmp-old.pos, .cmp-new.pos { color: #047857; }
 .cmp-old.neg, .cmp-new.neg { color: #dc2626; }
 
@@ -1235,19 +1234,19 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .pw-sellers .source-row { background: #fefce8; }
 .pw-sellers .self-row td { border-bottom-color: #d1fae5; }
 
-/* 列表行"跟卖"列 */
-.pw-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+/* 列表行"跟卖"摘要(已并入商品信息列) */
 .pw-main { font-size: 15px; font-weight: 600; white-space: nowrap; }
 .pw-main.pw-best { color: #16a34a; }
-.pw-status { font-size: 15px; color: var(--text-secondary, #9ca3af); }
 .pw-time { font-size: 15px; color: var(--text-secondary, #9ca3af); white-space: nowrap; }
 .pw-refresh {
   display: inline-flex; align-items: center; gap: 3px;
-  margin-top: 2px; padding: 1px 7px;
+  padding: 1px 7px;
   border: 1px solid var(--border, #d1d5db); border-radius: 4px;
   background: var(--bg-card, #fff); color: var(--text-secondary, #6b7280);
   font-size: 12px; cursor: pointer;
 }
+/* 跟卖第二行小字:排名/差值/采集时间 */
+.meta-pw-sub { font-size: 13px; font-weight: 400; color: var(--text-secondary, #9ca3af); }
 .pw-refresh:hover:not(:disabled) { border-color: var(--tag-fg, #4338ca); color: var(--tag-fg, #4338ca); }
 .pw-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
 
