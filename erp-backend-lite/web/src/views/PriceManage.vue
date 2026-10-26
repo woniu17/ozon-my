@@ -53,6 +53,7 @@ const syncing = ref(false);
 const pager = ref({ current: 1, total: 0, pageSize: 20 });
 const filters = ref({
   keyword: '', purchaseSet: '', weightSet: '', profitRateMin: '', profitRateMax: '',
+  hasSales: '', lastOrderRange: '',
   ...(savedView.filters || {}),
 });
 const sortKey = ref(SORTS.some((s) => s.key === savedView.sortKey) ? savedView.sortKey : 'profitRateCost');
@@ -109,6 +110,8 @@ async function loadList() {
       weightSet: filters.value.weightSet || undefined,
       profitRateMin: filters.value.profitRateMin || undefined,
       profitRateMax: filters.value.profitRateMax || undefined,
+      hasSales: filters.value.hasSales || undefined,
+      lastOrderRange: filters.value.lastOrderRange || undefined,
       sort: sortKey.value,
       dir: sortDir.value,
       page: pager.value.current,
@@ -448,6 +451,17 @@ onMounted(async () => {
         <option value="set">已设</option>
         <option value="unset">未设</option>
       </select>
+      <select v-model="filters.hasSales" class="input" @change="onFilterChange">
+        <option value="">销量:全部</option>
+        <option value="yes">有销量</option>
+        <option value="no">无销量</option>
+      </select>
+      <select v-model="filters.lastOrderRange" class="input" @change="onFilterChange">
+        <option value="">上次下单:全部</option>
+        <option value="week">最近一周内</option>
+        <option value="7to14">7~14天</option>
+        <option value="over14">14天以前</option>
+      </select>
       <span class="rate-range">
         成本率 <input v-model="filters.profitRateMin" class="input input-narrow" placeholder="min" @change="onFilterChange" /> ~
         <input v-model="filters.profitRateMax" class="input input-narrow" placeholder="max" @change="onFilterChange" /> %
@@ -511,7 +525,11 @@ onMounted(async () => {
                 </div>
               </td>
               <td class="col-num col-price">{{ fmtMoney(row.price) }}<div v-if="row.old_price" class="sub">划线 ¥{{ row.old_price }}</div></td>
-              <td class="col-num col-sales">{{ row.sales90 ?? 0 }}</td>
+              <td class="col-num col-sales">
+                {{ row.sales90 ?? 0 }}
+                <div v-if="row.last_order_at" class="sub" :title="`总销量 ${row.total_sales ?? 0}`">上次 {{ fmtTime(row.last_order_at).slice(0, 10) }}</div>
+                <div v-else-if="row.total_sales == null || row.total_sales === 0" class="sub">无销量</div>
+              </td>
               <td class="col-num col-purchase">
                 <div class="price-cell">
                   <span class="yen">¥</span>

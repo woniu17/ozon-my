@@ -142,6 +142,8 @@ router.get('/admin/api/price-manage/list', (req, res) => {
     weightSet: ['set', 'unset'].includes(q.weightSet) ? q.weightSet : undefined,
     profitRateMin: q.profitRateMin || undefined,
     profitRateMax: q.profitRateMax || undefined,
+    hasSales: ['yes', 'no'].includes(q.hasSales) ? q.hasSales : undefined,
+    lastOrderRange: ['week', '7to14', 'over14'].includes(q.lastOrderRange) ? q.lastOrderRange : undefined,
     sort: q.sort || undefined,
     dir: q.dir || undefined,
     page: q.page || 1,

@@ -109,6 +109,7 @@ export function listPriceProducts(params) {
   const {
     storeId, keyword, purchaseSet, weightSet,
     profitRateMin, profitRateMax,
+    hasSales, lastOrderRange,
     sort = 'profitRateCost', dir = 'asc',
     page = 1, pageSize = 20,
     commissionRate = 0.16, deliveryBase = 3.37, deliveryPerGram = 0.0281,
@@ -142,6 +143,23 @@ export function listPriceProducts(params) {
   if (profitRateMax != null && profitRateMax !== '') {
     where.push(`${RATE_COST} <= @rmax`); args.rmax = Number(profitRateMax);
   }
+  // 有无销量:有过非取消订单(=有 agg 行)视为有销量
+  if (hasSales === 'yes') where.push(`agg.sku IS NOT NULL`);
+  if (hasSales === 'no') where.push(`agg.sku IS NULL`);
+  // 上一次下单时间:按最新非取消订单的下单时间落点(14天以前含从未下单的商品)
+  if (lastOrderRange === 'week') {
+    where.push(`agg.last_order_at >= @since7d`);
+    args.since7d = new Date(Date.now() - 7 * 86400_000).toISOString();
+  }
+  if (lastOrderRange === '7to14') {
+    where.push(`agg.last_order_at >= @since14d AND agg.last_order_at < @since7d`);
+    args.since7d = new Date(Date.now() - 7 * 86400_000).toISOString();
+    args.since14d = new Date(Date.now() - 14 * 86400_000).toISOString();
+  }
+  if (lastOrderRange === 'over14') {
+    where.push(`(agg.last_order_at < @since14d OR agg.last_order_at IS NULL)`);
+    args.since14d = new Date(Date.now() - 14 * 86400_000).toISOString();
+  }
 
   // 排序白名单(表达式与上方一致);NULL 值排最后(asc/desc 均如此,避免缺数据行淹没列表)
   const SORTS = {
@@ -164,13 +182,15 @@ export function listPriceProducts(params) {
     LEFT JOIN product_data_cache pdc ON pdc.sku = c.sku
     LEFT JOIN product_attributes_cache pac ON pac.sku = c.sku
     LEFT JOIN (
-      -- 90天销量(剔除已取消)+ 参考采购价(有分摊采购金额的行,采购额/数量加权)
-      --   + 最新采购订单时间(有采购分摊的行,最近一笔下单时间,页面排序用)
+      -- 总销量(剔除已取消,有无销量判断)+ 90天销量 + 参考采购价(有分摊采购金额的行,采购额/数量加权)
+      --   + 最新采购订单时间 + 最新订单下单时间(不论是否有采购,上次下单筛选用)
       SELECT CAST(oi.sku AS TEXT) AS sku,
+             SUM(oi.quantity) AS total_sales,
              SUM(CASE WHEN o.in_process_at >= @since90 THEN oi.quantity ELSE 0 END) AS sales90,
              SUM(CASE WHEN oi.purchase_amount > 0 THEN oi.purchase_amount ELSE 0 END)
                / NULLIF(SUM(CASE WHEN oi.purchase_amount > 0 THEN oi.quantity ELSE 0 END), 0) AS ref_purchase_price,
-             MAX(CASE WHEN oi.purchase_amount > 0 THEN o.in_process_at END) AS last_purchased_at
+             MAX(CASE WHEN oi.purchase_amount > 0 THEN o.in_process_at END) AS last_purchased_at,
+             MAX(o.in_process_at) AS last_order_at
       FROM op_ozon_order_item oi
       JOIN op_ozon_order o ON o.id = oi.ozon_order_id
       JOIN op_package p ON p.ozon_order_id = o.id
@@ -187,7 +207,8 @@ export function listPriceProducts(params) {
       pdc.custom_purchase_price, pdc.custom_purchase_price_at,
       pdc.custom_weight_g AS custom_weight,
       ${WEIGHT} AS weight_g,
-      agg.sales90, agg.ref_purchase_price, agg.last_purchased_at,
+      agg.sales90, agg.total_sales, agg.ref_purchase_price,
+      agg.last_purchased_at, agg.last_order_at,
       ${PROFIT} AS profit_cny,
       ${RATE_COST} AS profit_rate_cost,
       ${RATE_SALE} AS profit_rate_sale`;
