@@ -256,6 +256,7 @@ async function onFetchPriceWatch(row) {
     if (res?.status === 'ok' && res.snapshot) {
       priceWatchMap.value[row.sku] = { latest: res.snapshot, history: [] };
       show(`采集完成:${res.snapshot.seller_count ?? 0} 家跟卖`, 'success');
+      await loadList(); // 刷新列表行"跟卖"列摘要
     } else if (res?.status === 'claimed') {
       show('该 SKU 正在被其他任务采集,请稍后刷新', 'warning');
     } else if (res?.status === 'profile_locked') {
@@ -622,11 +623,8 @@ onMounted(async () => {
           <tr>
             <th class="col-expand"></th>
             <th class="col-product">商品</th>
-            <th class="col-num col-price">售价</th>
-            <th class="col-num col-sales">90天销量</th>
+            <th class="col-num col-meta">售价 / 销量 / 采购价 / 重量</th>
             <th class="col-num col-pricewatch">跟卖</th>
-            <th class="col-num col-purchase">采购价(本系统)</th>
-            <th class="col-num col-weight">重量(g)</th>
             <th class="col-num">当前利润</th>
             <th class="col-num">调整利润</th>
             <th class="col-target">按成本利润率定价</th>
@@ -668,48 +666,60 @@ onMounted(async () => {
                   </div>
                 </div>
               </td>
-              <td class="col-num col-price">{{ fmtMoney(row.price) }}<div v-if="row.old_price" class="sub">划线 ¥{{ row.old_price }}</div></td>
-              <td class="col-num col-sales">
-                {{ row.sales90 ?? 0 }}
-                <div v-if="row.last_order_at" class="sub" :title="`总销量 ${row.total_sales ?? 0}`">上次 {{ fmtTime(row.last_order_at).slice(0, 10) }}</div>
-                <div v-else-if="row.total_sales == null || row.total_sales === 0" class="sub">无销量</div>
+              <td class="col-num col-meta">
+                <div class="meta-row">
+                  <span class="meta-label">售价</span>
+                  <span class="meta-value">{{ fmtMoney(row.price) }}</span>
+                  <span v-if="row.old_price" class="meta-sub">划线¥{{ row.old_price }}</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">销量</span>
+                  <span class="meta-value">{{ row.sales90 ?? 0 }}</span>
+                  <span v-if="row.last_order_at" class="meta-sub" :title="`总销量 ${row.total_sales ?? 0}`">上次{{ fmtTime(row.last_order_at).slice(0, 10) }}</span>
+                  <span v-else-if="row.total_sales == null || row.total_sales === 0" class="meta-sub">无销量</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">采购价</span>
+                  <div class="price-cell meta-edit">
+                    <span class="yen">¥</span>
+                    <input
+                      class="cell-input" :value="editVal(row, 'purchase')"
+                      @input="editBuf[row.sku].purchase = $event.target.value"
+                      @blur="saveCell(row, 'purchase')" @keyup.enter="$event.target.blur()"
+                      placeholder="—" />
+                  </div>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">重量</span>
+                  <input
+                    class="cell-input meta-edit-weight" :value="editVal(row, 'weight')"
+                    @input="editBuf[row.sku].weight = $event.target.value"
+                    @blur="saveCell(row, 'weight')" @keyup.enter="$event.target.blur()"
+                    :placeholder="row.weight_g != null ? String(row.weight_g) + '(oz)' : '—'" />
+                  <span class="meta-sub">g</span>
+                </div>
               </td>
               <td class="col-num col-pricewatch">
-                <template v-if="row.pw_seller_count != null">
-                  <div v-if="row.pw_seller_count > 0">
+                <div class="pw-cell">
+                  <template v-if="row.pw_seller_count != null && row.pw_seller_count > 0">
                     <div class="pw-main" :class="{ 'pw-best': row.pw_is_cheapest }">
                       {{ row.pw_seller_count }}家·最低{{ fmtMoney(row.pw_min_price) }}
                     </div>
                     <div class="sub">
                       #{{ row.pw_my_rank }}/{{ row.pw_seller_count }}
                       <template v-if="row.pw_gap_pct != null">·差{{ row.pw_gap_pct }}%</template>
-                      <template v-if="row.pw_is_cheapest" class="pw-best">·最低价</template>
+                      <template v-if="row.pw_is_cheapest">·最低价</template>
                     </div>
                     <div class="sub pw-time" :title="`采集于 ${row.pw_fetched_at || ''}`">{{ fmtTime(row.pw_fetched_at) }}</div>
+                  </template>
+                  <div v-else class="sub">
+                    {{ row.pw_seller_count === 0 ? '无跟卖' : row.pw_status ? statusText(row.pw_status) : '未采集' }}
                   </div>
-                  <div v-else class="sub">无跟卖</div>
-                </template>
-                <template v-else-if="row.pw_status">
-                  <span class="pw-status">{{ statusText(row.pw_status) }}</span>
-                </template>
-                <div v-else class="sub">未采集</div>
-              </td>
-              <td class="col-num col-purchase">
-                <div class="price-cell">
-                  <span class="yen">¥</span>
-                  <input
-                    class="cell-input" :value="editVal(row, 'purchase')"
-                    @input="editBuf[row.sku].purchase = $event.target.value"
-                    @blur="saveCell(row, 'purchase')" @keyup.enter="$event.target.blur()"
-                    placeholder="—" />
+                  <button class="pw-refresh" :disabled="pwFetching[row.sku]" @click.stop="onFetchPriceWatch(row)" :title="'刷新跟卖列表'">
+                    <svg v-if="!pwFetching[row.sku]" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+                    {{ pwFetching[row.sku] ? '采集中…' : '刷新' }}
+                  </button>
                 </div>
-              </td>
-              <td class="col-num col-weight">
-                <input
-                  class="cell-input" :value="editVal(row, 'weight')"
-                  @input="editBuf[row.sku].weight = $event.target.value"
-                  @blur="saveCell(row, 'weight')" @keyup.enter="$event.target.blur()"
-                  :placeholder="row.weight_g != null ? String(row.weight_g) + '(oz)' : '—'" />
               </td>
               <!-- 当前利润明细:销售价格/ozon佣金/国际物流费/利润/销售利润率/成本利润率 -->
               <td class="col-num col-profit" title="单件口径:售价 − 佣金16% − 国际物流费 − 采购价">
@@ -773,7 +783,7 @@ onMounted(async () => {
             </tr>
             <!-- 展开行:跟卖列表 + 历史订单 -->
             <tr v-if="expanded.has(row.sku)" class="row-orders">
-              <td :colspan="10">
+              <td :colspan="7">
                 <!-- 跟卖列表 -->
                 <div class="pw-section">
                   <div class="pw-head">
@@ -859,13 +869,13 @@ onMounted(async () => {
             </tr>
           </template>
           <tr v-if="!loading && rows.length === 0">
-            <td :colspan="10" class="empty-tip">
+            <td :colspan="7" class="empty-tip">
               暂无数据{{ stores.length === 0 ? ',请先点击右上角「同步 Ozon 价格」' : '' }}
             </td>
           </tr>
         </tbody>
       </table>
-      <div v-if="loading" class="loading-mask"><SkeletonTable :rows="6" :cols="10" /></div>
+      <div v-if="loading" class="loading-mask"><SkeletonTable :rows="6" :cols="7" /></div>
     </div>
 
     <!-- 分页 -->
@@ -968,7 +978,7 @@ onMounted(async () => {
 /* 表格 */
 .pm-table-wrap { position: relative; overflow: auto; max-height: 70vh; background: var(--bg-card, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 8px; }
 /* 表格整体:字体放大 1.4 倍(13→18px),内部小号字同步放大 */
-.pm-table { width: 100%; border-collapse: collapse; font-size: 18px; min-width: 1900px; }
+.pm-table { width: 100%; border-collapse: collapse; font-size: 18px; min-width: 1500px; }
 .pm-table .sub { font-size: 15px; }
 .pm-table .mono { font-size: 17px; }
 .pm-table .tag { font-size: 15px; }
@@ -989,16 +999,24 @@ onMounted(async () => {
 /* 商品列定宽:防止 auto 布局把表格富余空间全塞给本列(内容约 380px,实测曾被撑到 722px) */
 .col-product { min-width: 360px; width: 450px; }
 .col-target { min-width: 230px; white-space: nowrap; }
-/* 窄列:售价/90天销量/采购价/重量 定宽压缩(约原宽一半,受表头文字下限保护) */
-.col-price { width: 115px; }
-.col-sales { width: 110px; }
-.col-pricewatch { width: 150px; }
-.col-purchase { width: 150px; }
-.col-weight { width: 100px; }
+/* 合并列:售价/90天销量/采购价/重量 每项占一行垂直展示 */
+.col-meta { width: 220px; }
+.col-pricewatch { width: 175px; }
 /* 采购价输入:¥ 内嵌输入框左侧,与数字同框(视觉上 ¥12.36 一体) */
 .price-cell { position: relative; display: inline-block; }
 .price-cell .yen { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-secondary, #6b7280); pointer-events: none; }
 .price-cell .cell-input { width: 86px; padding-left: 24px; text-align: right; }
+
+/* 合并列每行:标签 + 值 + 附注 */
+.meta-row { display: flex; align-items: center; gap: 5px; line-height: 1.55; white-space: nowrap; }
+.meta-label { flex-shrink: 0; min-width: 46px; font-size: 13px; color: var(--text-secondary, #6b7280); text-align: right; }
+.meta-value { font-weight: 500; }
+.meta-sub { font-size: 13px; color: var(--text-secondary, #9ca3af); }
+.meta-edit { display: inline-flex; }
+.meta-edit .cell-input { width: 74px; padding-left: 20px; font-size: 16px; }
+.meta-edit-weight { width: 64px; text-align: right; font-size: 16px; padding: 3px 6px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--text-primary, #374151); }
+.meta-edit-weight:hover { border-color: var(--border, #d1d5db); background: var(--bg-card, #fff); }
+.meta-edit-weight:focus { outline: none; border-color: var(--tag-fg, #4338ca); background: var(--bg-card, #fff); }
 
 .pos { color: #047857; }
 .neg { color: #dc2626; }
@@ -1144,10 +1162,20 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .pw-sellers .self-row td { border-bottom-color: #d1fae5; }
 
 /* 列表行"跟卖"列 */
+.pw-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .pw-main { font-size: 15px; font-weight: 600; white-space: nowrap; }
 .pw-main.pw-best { color: #16a34a; }
 .pw-status { font-size: 15px; color: var(--text-secondary, #9ca3af); }
 .pw-time { font-size: 15px; color: var(--text-secondary, #9ca3af); white-space: nowrap; }
+.pw-refresh {
+  display: inline-flex; align-items: center; gap: 3px;
+  margin-top: 2px; padding: 1px 7px;
+  border: 1px solid var(--border, #d1d5db); border-radius: 4px;
+  background: var(--bg-card, #fff); color: var(--text-secondary, #6b7280);
+  font-size: 12px; cursor: pointer;
+}
+.pw-refresh:hover:not(:disabled) { border-color: var(--tag-fg, #4338ca); color: var(--tag-fg, #4338ca); }
+.pw-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .empty-tip { text-align: center; padding: 40px 0; color: var(--text-secondary, #9ca3af); }
 .loading-mask { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.6); font-size: 13px; color: var(--text-secondary, #6b7280); }
