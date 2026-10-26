@@ -623,7 +623,7 @@ onMounted(async () => {
           <tr>
             <th class="col-expand"></th>
             <th class="col-product">商品</th>
-            <th class="col-num col-meta">售价 / 销量 / 采购价 / 重量</th>
+            <th class="col-num col-meta">商品信息</th>
             <th class="col-num col-pricewatch">跟卖</th>
             <th class="col-num">当前利润</th>
             <th class="col-num">调整利润</th>
@@ -669,34 +669,39 @@ onMounted(async () => {
               <td class="col-num col-meta">
                 <div class="meta-row">
                   <span class="meta-label">售价</span>
-                  <span class="meta-value">{{ fmtMoney(row.price) }}</span>
-                  <span v-if="row.old_price" class="meta-sub">划线¥{{ row.old_price }}</span>
+                  <span class="meta-value">{{ fmtMoney(row.price) }}<span v-if="row.old_price" class="meta-sub">划线¥{{ row.old_price }}</span></span>
                 </div>
                 <div class="meta-row">
                   <span class="meta-label">销量</span>
-                  <span class="meta-value">{{ row.sales90 ?? 0 }}</span>
-                  <span v-if="row.last_order_at" class="meta-sub" :title="`总销量 ${row.total_sales ?? 0}`">上次{{ fmtTime(row.last_order_at).slice(0, 10) }}</span>
-                  <span v-else-if="row.total_sales == null || row.total_sales === 0" class="meta-sub">无销量</span>
+                  <span class="meta-value">
+                    {{ row.sales90 ?? 0 }}
+                    <span v-if="row.last_order_at" class="meta-sub" :title="`总销量 ${row.total_sales ?? 0}`">上次{{ fmtTime(row.last_order_at).slice(0, 10) }}</span>
+                    <span v-else-if="row.total_sales == null || row.total_sales === 0" class="meta-sub">无销量</span>
+                  </span>
                 </div>
                 <div class="meta-row">
                   <span class="meta-label">采购价</span>
-                  <div class="price-cell meta-edit">
-                    <span class="yen">¥</span>
-                    <input
-                      class="cell-input" :value="editVal(row, 'purchase')"
-                      @input="editBuf[row.sku].purchase = $event.target.value"
-                      @blur="saveCell(row, 'purchase')" @keyup.enter="$event.target.blur()"
-                      placeholder="—" />
-                  </div>
+                  <span class="meta-value">
+                    <span class="price-cell meta-edit">
+                      <span class="yen">¥</span>
+                      <input
+                        class="cell-input" :value="editVal(row, 'purchase')"
+                        @input="editBuf[row.sku].purchase = $event.target.value"
+                        @blur="saveCell(row, 'purchase')" @keyup.enter="$event.target.blur()"
+                        placeholder="—" />
+                    </span>
+                  </span>
                 </div>
                 <div class="meta-row">
                   <span class="meta-label">重量</span>
-                  <input
-                    class="cell-input meta-edit-weight" :value="editVal(row, 'weight')"
-                    @input="editBuf[row.sku].weight = $event.target.value"
-                    @blur="saveCell(row, 'weight')" @keyup.enter="$event.target.blur()"
-                    :placeholder="row.weight_g != null ? String(row.weight_g) + '(oz)' : '—'" />
-                  <span class="meta-sub">g</span>
+                  <span class="meta-value">
+                    <input
+                      class="cell-input meta-edit-weight" :value="editVal(row, 'weight')"
+                      @input="editBuf[row.sku].weight = $event.target.value"
+                      @blur="saveCell(row, 'weight')" @keyup.enter="$event.target.blur()"
+                      :placeholder="row.weight_g != null ? String(row.weight_g) + '(oz)' : '—'" />
+                    <span class="meta-sub">g</span>
+                  </span>
                 </div>
               </td>
               <td class="col-num col-pricewatch">
@@ -999,18 +1004,18 @@ onMounted(async () => {
 /* 商品列定宽:防止 auto 布局把表格富余空间全塞给本列(内容约 380px,实测曾被撑到 722px) */
 .col-product { min-width: 360px; width: 450px; }
 .col-target { min-width: 230px; white-space: nowrap; }
-/* 合并列:售价/90天销量/采购价/重量 每项占一行垂直展示 */
-.col-meta { width: 220px; }
+/* 合并列"商品信息":售价/销量/采购价/重量 每项占一行,名称左、值右(参考当前利润列) */
+.col-meta { width: 260px; }
 .col-pricewatch { width: 175px; }
 /* 采购价输入:¥ 内嵌输入框左侧,与数字同框(视觉上 ¥12.36 一体) */
 .price-cell { position: relative; display: inline-block; }
 .price-cell .yen { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-secondary, #6b7280); pointer-events: none; }
 .price-cell .cell-input { width: 86px; padding-left: 24px; text-align: right; }
 
-/* 合并列每行:标签 + 值 + 附注 */
-.meta-row { display: flex; align-items: center; gap: 5px; line-height: 1.55; white-space: nowrap; }
-.meta-label { flex-shrink: 0; min-width: 46px; font-size: 13px; color: var(--text-secondary, #6b7280); text-align: right; }
-.meta-value { font-weight: 500; }
+/* 商品信息每行:名称(左) 值(右) 两端对齐 */
+.meta-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; line-height: 1.55; white-space: nowrap; }
+.meta-label { flex-shrink: 0; color: var(--text-secondary, #6b7280); }
+.meta-value { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; font-weight: 500; }
 .meta-sub { font-size: 13px; color: var(--text-secondary, #9ca3af); }
 .meta-edit { display: inline-flex; }
 .meta-edit .cell-input { width: 74px; padding-left: 20px; font-size: 16px; }

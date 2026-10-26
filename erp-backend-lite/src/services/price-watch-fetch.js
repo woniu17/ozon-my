@@ -136,10 +136,25 @@ export async function fetchFollowSellForSku(sku, { profileDir }) {
   let browser = null;
   try {
     // 2. 启动浏览器(linqx-profile;被 platform-orders 占用会抛错)
-    browser = await launchPersistentContext({
-      userDataDir: profileDir,
-      headless: true,
-    });
+    //    Chromium 单实例互斥:用户连续点击多个商品刷新时,后到的请求会撞上
+    //    正在采集的浏览器 → 等待重试(约每 3s 一次,最多 ~36s),避免直接 409 失败。
+    const LAUNCH_RETRY_MS = 3_000;
+    const LAUNCH_MAX_WAIT_MS = 36_000;
+    const launchStart = Date.now();
+    for (;;) {
+      try {
+        browser = await launchPersistentContext({
+          userDataDir: profileDir,
+          headless: true,
+        });
+        break;
+      } catch (err) {
+        if (Date.now() - launchStart >= LAUNCH_MAX_WAIT_MS) {
+          return { status: 'profile_locked', error: 'linqx-profile 被占用超过30s(平台订单/登录窗口),请稍后重试' };
+        }
+        await sleep(LAUNCH_RETRY_MS);
+      }
+    }
     const restored = (() => { try { return browser.pages(); } catch { return []; } })();
     for (const p of restored.slice(1)) await p.close().catch(() => {});
     const page = restored[0] || (await browser.newPage());

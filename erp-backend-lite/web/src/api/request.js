@@ -53,7 +53,7 @@ export async function request(path, options = {}) {
 
   // HTTP 非 2xx(非 401):抛 message
   if (!res.ok) {
-    throw new Error(data?.message || '请求失败 (' + res.status + ')');
+    throw new Error(data?.message || data?.error || '请求失败 (' + res.status + ')');
   }
 
   // envelope 解包
