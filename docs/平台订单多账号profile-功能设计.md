@@ -13,7 +13,7 @@
 ### 1.1 现状
 
 platform-orders 服务（M1-M3）当前**单 profile 单例**：三平台（pdd/ali1688/taobao）
-共用 `.linqx-profile`，browser-manager 的 ctx/queue/锁/空闲回收全部绑死这一个目录。
+共用 `cloakbrowser/linqx-profile`，browser-manager 的 ctx/queue/锁/空闲回收全部绑死这一个目录。
 
 ### 1.2 需求
 
@@ -41,7 +41,7 @@ ERP 采购弹框需要能看到所有账号的平台订单，补全搜索也要�
 
 ```
 # ── 账号别名 → profile 路径映射 ──
-PLATFORM_PROFILE_LINQX=C:\root\code\ozon-my\qxqx\.linqx-profile
+PLATFORM_PROFILE_LINQX=C:\root\code\ozon-my\erp-backend-lite\cloakbrowser\linqx-profile
 PLATFORM_PROFILE_CHENLIN=C:\root\code\ozon-my\qxqx\.chenlin-profile
 
 # ── 平台 → 账号列表(逗号分隔,第一个为主账号)──

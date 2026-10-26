@@ -62,7 +62,7 @@ const config = {
   // 多账号(2026-09-13):账号别名→profile 目录映射 + 平台→账号列表(第一个为主账号)
   // profile 与 qxqx/persistent.js(手动登录)共用,经 Chromium 单实例互斥
   platformProfiles: (() => {
-    const m = { linqx: process.env.PLATFORM_PROFILE_LINQX || process.env.PLATFORM_PROFILE_DIR || join(__dirname, '../../../qxqx/.linqx-profile') };
+    const m = { linqx: process.env.PLATFORM_PROFILE_LINQX || process.env.PLATFORM_PROFILE_DIR || join(__dirname, '../../cloakbrowser/linqx-profile') };
     if (process.env.PLATFORM_PROFILE_CHENLIN) m.chenlin = process.env.PLATFORM_PROFILE_CHENLIN;
     return m;
   })(),

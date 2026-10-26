@@ -252,7 +252,7 @@ async function fetchInPage(page, url, body) {
 }
 
 /** 从平台域 cookie 兜底取 pdduid(取不到返回空串,接口主要靠 Cookie 会话)
- *  2026-09 实测 .linqx-profile 上 uid cookie 名为 pdd_user_id(插件侧文档写的
+ *  2026-09 实测 linqx-profile(cloakbrowser 目录)上 uid cookie 名为 pdd_user_id(插件侧文档写的
  *  pdd_user_uid 未出现),两个候选都匹配 */
 async function getPdduid(page) {
   try {
