@@ -31,6 +31,16 @@ export function getSkuOrders(sku, limit = 20) {
   return request(`/admin/api/price-manage/sku/${encodeURIComponent(sku)}/orders?limit=${limit}`);
 }
 
+// 跟卖列表信息(价格管理展开行):最新快照 + 近 days 天历史
+export function getSkuPriceWatch(sku, days = 30) {
+  return request(`/admin/api/price-manage/price-watch/${encodeURIComponent(sku)}?days=${days}`);
+}
+
+// 按需即时采集单个 SKU 的跟卖列表(用 cloakbrowser + linqx-profile)
+export function fetchSkuPriceWatch(sku) {
+  return request('/admin/api/price-manage/price-watch/fetch', { method: 'POST', body: { sku } });
+}
+
 // 单品改价(body: { sku, newPrice, targetRate? })
 export function updatePrice(body) {
   return request('/admin/api/price-manage/price-update', { method: 'POST', body });

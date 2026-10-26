@@ -7,7 +7,7 @@
 import { ref, computed, onMounted } from 'vue';
 import {
   syncPrices, getPriceStores, getPriceList, getPriceSummary,
-  setSkuCustoms, getSkuOrders, updatePrice,
+  setSkuCustoms, getSkuOrders, getSkuPriceWatch, fetchSkuPriceWatch, updatePrice,
 } from '../api/price-manage.js';
 import { getStores } from '../api/stores.js';
 import { useToast } from '../components/useToast.js';
@@ -72,6 +72,9 @@ function persistViewState() {
 const expanded = ref(new Set());   // 展开的 sku
 const ordersMap = ref({});         // sku → 历史订单列表
 const ordersLoading = ref({});
+const priceWatchMap = ref({});     // sku → { latest, history } 跟卖列表快照
+const pwLoading = ref({});         // 展开时加载快照中
+const pwFetching = ref({});        // 手动采集按钮 loading
 const rateChoice = ref({});        // sku → 目标成本利润率(50~200,未选默认100,与H5对齐)
 const updatingSku = ref('');
 const storeNameMap = ref({});                                     // 店铺 id → 名称
@@ -208,7 +211,7 @@ async function saveCell(row, field) {
   }
 }
 
-// ── 展开历史订单 ──
+// ── 展开历史订单 + 跟卖列表 ──
 async function toggleExpand(row) {
   const s = expanded.value;
   if (s.has(row.sku)) {
@@ -226,8 +229,47 @@ async function toggleExpand(row) {
         ordersLoading.value[row.sku] = false;
       }
     }
+    if (!priceWatchMap.value[row.sku]) {
+      loadPriceWatch(row);
+    }
   }
   expanded.value = new Set(s); // 触发响应
+}
+
+// 加载该 SKU 的跟卖快照(最新 + 近30天历史)
+async function loadPriceWatch(row, days = 30) {
+  pwLoading.value[row.sku] = true;
+  try {
+    priceWatchMap.value[row.sku] = await getSkuPriceWatch(row.sku, days);
+  } catch (e) {
+    show(e.message || '跟卖列表加载失败', 'error');
+  } finally {
+    pwLoading.value[row.sku] = false;
+  }
+}
+
+// 按需即时采集跟卖(用 cloakbrowser + linqx-profile)
+async function onFetchPriceWatch(row) {
+  pwFetching.value[row.sku] = true;
+  try {
+    const res = await fetchSkuPriceWatch(row.sku);
+    if (res?.status === 'ok' && res.snapshot) {
+      priceWatchMap.value[row.sku] = { latest: res.snapshot, history: [] };
+      show(`采集完成:${res.snapshot.seller_count ?? 0} 家跟卖`, 'success');
+    } else if (res?.status === 'claimed') {
+      show('该 SKU 正在被其他任务采集,请稍后刷新', 'warning');
+    } else if (res?.status === 'profile_locked') {
+      show('浏览器 profile 正被占用(如浏览器订单采集),请稍后重试', 'warning');
+    } else if (res?.status === 'antibot') {
+      show('Ozon 触发人机验证,采集失败', 'error');
+    } else {
+      show(res?.message || '采集失败', 'error');
+    }
+  } catch (e) {
+    show(e.message || '跟卖采集失败', 'error');
+  } finally {
+    pwFetching.value[row.sku] = false;
+  }
 }
 
 // 以此单回填采购价
@@ -372,6 +414,107 @@ const fmtRate = (v) => (v == null ? '—' : `${Number(v).toFixed(1)}%`);
 const fmtTime = (t) => (t ? String(t).slice(0, 16).replace('T', ' ') : '—');
 const rateClass = (v) => (v == null ? '' : Number(v) >= 0 ? 'pos' : 'neg');
 
+// ── 跟卖列表展示(价格管理展开行) ──
+const PW_STATUS_TEXT = {
+  ok: '正常', error: '采集失败', claimed: '采集中', profile_locked: '占用中',
+  antibot: '人机验证', pending: '待采集', empty: '无跟卖',
+};
+const statusText = (s) => PW_STATUS_TEXT[s] || s || '—';
+
+// 价格数字解析(与后端 parsePriceText 同规则:"1 990 ₽" → 1990)
+const _plain = (v) => (typeof v === 'string' || typeof v === 'number' ? String(v) : null);
+function parsePrice(raw) {
+  if (raw == null) return null;
+  const text =
+    _plain(raw) ??
+    (typeof raw === 'object'
+      ? _plain(raw.cardPrice?.price) ??
+        _plain(raw.cardPrice?.text) ??
+        _plain(raw.cardPrice) ??
+        _plain(raw.text) ??
+        _plain(raw.price) ??
+        _plain(raw.originalPrice) ??
+        ''
+      : '');
+  const m = text.replace(/\s| /g, '').match(/(\d+(?:[.,]\d+)?)/);
+  if (!m) return null;
+  const n = Number(m[1].replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+}
+
+// 卖家报价展示文本(price 对象 → 文本)
+function sellerPriceText(s) {
+  const raw = s?.price;
+  if (raw == null) return '—';
+  const text =
+    _plain(raw) ??
+    (typeof raw === 'object'
+      ? _plain(raw.cardPrice?.price) ??
+        _plain(raw.cardPrice?.text) ??
+        _plain(raw.cardPrice) ??
+        _plain(raw.text) ??
+        _plain(raw.price) ??
+        _plain(raw.originalPrice)
+      : null);
+  return text != null ? text : '—';
+}
+
+// 从 Offer ID 提取原SKU:"3977979978-0802-qx" → "3977979978"
+function baseSkuFromOfferId(offerId) {
+  if (!offerId) return '';
+  const m = String(offerId).match(/^(\d+)/);
+  return m ? m[1] : '';
+}
+
+// 卖家明细列表:插入"我的报价"行后按价格升序(方便查看我在跟卖中的位置)
+function pwSortedSellers(row) {
+  const latest = priceWatchMap.value[row.sku]?.latest;
+  const list = [...(latest?.sellers || [])];
+  if (row && row.price != null) {
+    list.push({
+      name: storeName(row.store_id) + '(我)',
+      price: { cardPrice: { price: String(row.price) } },
+      sku: String(row.sku),
+      id: '',
+      link: '',
+      productLink: `https://www.ozon.ru/product/${row.sku}`,
+      logoImageUrl: '',
+      __self: true,
+    });
+  }
+  return list.sort((a, b) => {
+    const pa = parsePrice(a.price);
+    const pb = parsePrice(b.price);
+    if (pa == null && pb == null) return 0;
+    if (pa == null) return 1;
+    if (pb == null) return -1;
+    return pa - pb;
+  });
+}
+
+// 行高亮:我的报价行(绿) / 被跟卖源商品行(原SKU 与我的 Offer ID 同源,黄)
+function pwSellerRowCls(s, row) {
+  if (s.__self) return 'self-row';
+  const base = baseSkuFromOfferId(row?.offer_id);
+  if (base && baseSkuFromOfferId(s.sku) === base) return 'source-row';
+  return '';
+}
+
+// 我的价格相对中位数的状态(vs_median: above/below/equal,采集时计算)
+const pwVsMark = (latest) => {
+  if (!latest) return '—';
+  if (latest.vs_median === 'above') return '中位 ↑ 高于';
+  if (latest.vs_median === 'below') return '中位 ↓ 低于';
+  if (latest.vs_median === 'equal') return '中位 ＝ 持平';
+  return '—';
+};
+const pwVsCls = (latest) => {
+  if (!latest) return '';
+  if (latest.vs_median === 'above') return 'vs-above';
+  if (latest.vs_median === 'below') return 'vs-below';
+  return 'vs-equal';
+};
+
 const OPERATE_TEXT = {
   wait_process: '待处理', wait_ship: '待打单发货', ship_success: '交运',
   wait_receiver_confirm: '已发货', cancelled: '已取消',
@@ -481,6 +624,7 @@ onMounted(async () => {
             <th class="col-product">商品</th>
             <th class="col-num col-price">售价</th>
             <th class="col-num col-sales">90天销量</th>
+            <th class="col-num col-pricewatch">跟卖</th>
             <th class="col-num col-purchase">采购价(本系统)</th>
             <th class="col-num col-weight">重量(g)</th>
             <th class="col-num">当前利润</th>
@@ -529,6 +673,26 @@ onMounted(async () => {
                 {{ row.sales90 ?? 0 }}
                 <div v-if="row.last_order_at" class="sub" :title="`总销量 ${row.total_sales ?? 0}`">上次 {{ fmtTime(row.last_order_at).slice(0, 10) }}</div>
                 <div v-else-if="row.total_sales == null || row.total_sales === 0" class="sub">无销量</div>
+              </td>
+              <td class="col-num col-pricewatch">
+                <template v-if="row.pw_seller_count != null">
+                  <div v-if="row.pw_seller_count > 0">
+                    <div class="pw-main" :class="{ 'pw-best': row.pw_is_cheapest }">
+                      {{ row.pw_seller_count }}家·最低{{ fmtMoney(row.pw_min_price) }}
+                    </div>
+                    <div class="sub">
+                      #{{ row.pw_my_rank }}/{{ row.pw_seller_count }}
+                      <template v-if="row.pw_gap_pct != null">·差{{ row.pw_gap_pct }}%</template>
+                      <template v-if="row.pw_is_cheapest" class="pw-best">·最低价</template>
+                    </div>
+                    <div class="sub pw-time" :title="`采集于 ${row.pw_fetched_at || ''}`">{{ fmtTime(row.pw_fetched_at) }}</div>
+                  </div>
+                  <div v-else class="sub">无跟卖</div>
+                </template>
+                <template v-else-if="row.pw_status">
+                  <span class="pw-status">{{ statusText(row.pw_status) }}</span>
+                </template>
+                <div v-else class="sub">未采集</div>
               </td>
               <td class="col-num col-purchase">
                 <div class="price-cell">
@@ -607,9 +771,58 @@ onMounted(async () => {
                 </div>
               </td>
             </tr>
-            <!-- 展开行:历史订单 -->
+            <!-- 展开行:跟卖列表 + 历史订单 -->
             <tr v-if="expanded.has(row.sku)" class="row-orders">
-              <td :colspan="9">
+              <td :colspan="10">
+                <!-- 跟卖列表 -->
+                <div class="pw-section">
+                  <div class="pw-head">
+                    <span class="orders-title">跟卖列表</span>
+                    <button class="btn btn-mini" :disabled="pwFetching[row.sku]" @click="onFetchPriceWatch(row)">
+                      {{ pwFetching[row.sku] ? '采集中…' : '采集跟卖' }}
+                    </button>
+                  </div>
+
+                  <div v-if="pwLoading[row.sku]" class="orders-loading">加载跟卖列表…</div>
+                  <template v-else-if="priceWatchMap[row.sku]?.latest">
+                    <template v-if="priceWatchMap[row.sku].latest.seller_count > 0">
+                      <div class="pw-overview">
+                        <span class="pw-ov-item">我的价 <b>{{ fmtMoney(row.price) }}</b></span>
+                        <span class="pw-ov-item">最低 <b>{{ fmtMoney(priceWatchMap[row.sku].latest.min_price) }}</b></span>
+                        <span class="pw-ov-item">中位 <b>{{ fmtMoney(priceWatchMap[row.sku].latest.median_price) }}</b></span>
+                        <span class="pw-ov-item">排名 <b>#{{ priceWatchMap[row.sku].latest.my_rank }}/{{ priceWatchMap[row.sku].latest.seller_count }}</b></span>
+                        <span class="pw-ov-item gap" :class="(priceWatchMap[row.sku].latest.gap_pct ?? 0) > 0 ? 'gap-above' : 'gap-below'">
+                          差最低 {{ priceWatchMap[row.sku].latest.gap_pct != null ? priceWatchMap[row.sku].latest.gap_pct + '%' : '—' }}
+                        </span>
+                        <span class="pw-ov-item vs" :class="pwVsCls(priceWatchMap[row.sku].latest)">{{ pwVsMark(priceWatchMap[row.sku].latest) }}</span>
+                        <span class="pw-ov-item pw-time" :title="priceWatchMap[row.sku].latest.fetched_at || ''">快照 {{ fmtTime(priceWatchMap[row.sku].latest.fetched_at) }}</span>
+                      </div>
+                      <table class="orders-table pw-sellers">
+                        <thead>
+                          <tr><th class="pw-rank-th">#</th><th>卖家</th><th>报价</th><th>链接</th></tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="(s, i) in pwSortedSellers(row)" :key="(s.id || s.sku || i) + '-' + i" :class="pwSellerRowCls(s, row)">
+                            <td class="pw-rank">{{ i + 1 }}</td>
+                            <td>
+                              <img v-if="s.logoImageUrl" :src="s.logoImageUrl" class="pw-logo" loading="lazy" referrerpolicy="no-referrer" alt="" />
+                              <span class="pw-name">{{ s.name || s.sellerName || s.id || '—' }}</span>
+                            </td>
+                            <td class="price-min">{{ sellerPriceText(s) }}</td>
+                            <td>
+                              <a v-if="s.productLink" :href="s.productLink" target="_blank" rel="noopener">查看</a>
+                              <span v-else>—</span>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </template>
+                    <div v-else class="orders-empty">该商品当前无跟卖</div>
+                  </template>
+                  <div v-else class="orders-empty">暂无跟卖快照,可点击「采集跟卖」即时获取</div>
+                </div>
+
+                <!-- 历史订单 -->
                 <div v-if="ordersLoading[row.sku]" class="orders-loading">加载历史订单…</div>
                 <template v-else-if="(ordersMap[row.sku] || []).length">
                   <div class="orders-title">历史订单(最新 {{ ordersMap[row.sku].length }} 条)</div>
@@ -646,13 +859,13 @@ onMounted(async () => {
             </tr>
           </template>
           <tr v-if="!loading && rows.length === 0">
-            <td :colspan="9" class="empty-tip">
+            <td :colspan="10" class="empty-tip">
               暂无数据{{ stores.length === 0 ? ',请先点击右上角「同步 Ozon 价格」' : '' }}
             </td>
           </tr>
         </tbody>
       </table>
-      <div v-if="loading" class="loading-mask"><SkeletonTable :rows="6" :cols="8" /></div>
+      <div v-if="loading" class="loading-mask"><SkeletonTable :rows="6" :cols="10" /></div>
     </div>
 
     <!-- 分页 -->
@@ -746,6 +959,7 @@ onMounted(async () => {
 .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
 .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
 .btn-sm { padding: 2px 8px; font-size: 12px; }
+.btn-mini { padding: 1px 10px; font-size: 12px; border-radius: 4px; }
 .btn-link {
   border: none; background: none; color: var(--primary); cursor: pointer;
   font-size: 12px; padding: 0 2px; text-decoration: underline;
@@ -778,6 +992,7 @@ onMounted(async () => {
 /* 窄列:售价/90天销量/采购价/重量 定宽压缩(约原宽一半,受表头文字下限保护) */
 .col-price { width: 115px; }
 .col-sales { width: 110px; }
+.col-pricewatch { width: 150px; }
 .col-purchase { width: 150px; }
 .col-weight { width: 100px; }
 /* 采购价输入:¥ 内嵌输入框左侧,与数字同框(视觉上 ¥12.36 一体) */
@@ -902,6 +1117,37 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 }
 .orders-table td { padding: 4px 8px; border-bottom: 1px solid var(--border, #f3f4f6); }
 .orders-loading, .orders-empty { font-size: 17px; color: var(--text-secondary, #9ca3af); padding: 8px 0; }
+
+/* 跟卖列表(价格管理展开行) */
+.pw-section { margin-bottom: 12px; }
+.pw-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.pw-head .orders-title { margin-bottom: 0; }
+.pw-overview {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+  padding: 8px 12px; margin-bottom: 8px;
+  background: var(--bg-card, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 6px;
+  font-size: 15px; color: var(--text-secondary, #6b7280);
+}
+.pw-ov-item b { color: var(--text-primary, #374151); font-weight: 600; }
+.pw-ov-item.gap-above { color: #dc2626; }
+.pw-ov-item.gap-below { color: #16a34a; }
+.pw-ov-item.vs-above { color: #dc2626; }
+.pw-ov-item.vs-below { color: #16a34a; }
+.pw-ov-item.vs-equal { color: var(--text-secondary, #6b7280); }
+.pw-time { color: var(--text-secondary, #9ca3af); }
+.pw-sellers .pw-rank { color: var(--text-secondary, #9ca3af); text-align: center; }
+.pw-sellers .price-min { font-weight: 600; white-space: nowrap; }
+.pw-logo { width: 18px; height: 18px; border-radius: 50%; vertical-align: middle; margin-right: 6px; object-fit: cover; }
+.pw-name { font-size: 14px; }
+.pw-sellers .self-row { background: #ecfdf5; }
+.pw-sellers .source-row { background: #fefce8; }
+.pw-sellers .self-row td { border-bottom-color: #d1fae5; }
+
+/* 列表行"跟卖"列 */
+.pw-main { font-size: 15px; font-weight: 600; white-space: nowrap; }
+.pw-main.pw-best { color: #16a34a; }
+.pw-status { font-size: 15px; color: var(--text-secondary, #9ca3af); }
+.pw-time { font-size: 15px; color: var(--text-secondary, #9ca3af); white-space: nowrap; }
 
 .empty-tip { text-align: center; padding: 40px 0; color: var(--text-secondary, #9ca3af); }
 .loading-mask { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.6); font-size: 13px; color: var(--text-secondary, #6b7280); }

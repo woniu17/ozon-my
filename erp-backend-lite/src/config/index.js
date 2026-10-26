@@ -78,6 +78,9 @@ const config = {
   platformBrowserHeadless: process.env.PLATFORM_BROWSER_HEADLESS !== '0',
   platformBrowserIdleMs: Number(process.env.PLATFORM_BROWSER_IDLE_MS) || 10 * 60 * 1000,
   platformOrderTimeoutMs: Number(process.env.PLATFORM_ORDER_TIMEOUT_MS) || 60 * 1000,
+  // 价格管理页跟卖列表按需采集(2026-10-26):复用 linqx-profile 的 Ozon 访问 cookie
+  // (与 platform-orders 共用 profile,采集时若被占用会返回 profile_locked)
+  ozonFollowSellProfileDir: process.env.OZON_FOLLOW_SELL_PROFILE_DIR || join(__dirname, '../../cloakbrowser/linqx-profile'),
   // 1688 官方开放平台 API(2026-09-13,替换 cloakbrowser mtop 链路)
   // 已配 token 的账号走官方 API(无风控),未配的回落浏览器 mtop 适配器;
   // token 来自 OAuth 授权,过期(401)需重新授权更新 .env 后重启

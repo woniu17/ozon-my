@@ -49,7 +49,7 @@ export function parsePriceText(raw) {
 // ── 我的现价:从 product_data_cache.data(OPI /v3/product/info 原始 JSON)提取 ──
 // v3 返回 price 为字符串("1390.000000",见 docs/ozon-api/01-商品管理.md);
 // 兼容对象形态(price.price / marketing_price.price)防御 OPI 版本差异
-function extractMyPrice(data) {
+export function extractMyPrice(data) {
   if (!data || typeof data !== 'object') return null;
   const p = data.price ?? data.marketing_price;
   if (p == null) return null;
@@ -60,7 +60,7 @@ function extractMyPrice(data) {
 }
 
 // ── 对比指标计算(全部报价参与,不剔除自店) ────────────────────
-function computeMetrics(myPrice, sellers) {
+export function computeMetrics(myPrice, sellers) {
   const prices = (Array.isArray(sellers) ? sellers : [])
     .map((s) => parsePriceText(s?.price))
     .filter((n) => n != null);

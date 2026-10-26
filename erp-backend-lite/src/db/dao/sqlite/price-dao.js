@@ -196,7 +196,15 @@ export function listPriceProducts(params) {
       JOIN op_package p ON p.ozon_order_id = o.id
       WHERE p.operate_status != 'cancelled'
       GROUP BY oi.sku
-    ) agg ON agg.sku = c.sku`;
+    ) agg ON agg.sku = c.sku
+    LEFT JOIN (
+      -- 跟卖列表最新快照(价格管理页"跟卖"列;数据来自 price-watch 定时/按需采集)
+      SELECT s.sku,
+             s.seller_count, s.min_price, s.median_price, s.my_rank,
+             s.is_cheapest, s.gap_pct, s.vs_median, s.status, s.fetched_at
+      FROM price_watch_snapshots s
+      JOIN (SELECT sku, MAX(id) AS mid FROM price_watch_snapshots GROUP BY sku) t ON s.id = t.mid
+    ) pw ON pw.sku = c.sku`;
   args.since90 = new Date(Date.now() - 90 * 86400_000).toISOString();
 
   const cols = `
@@ -209,6 +217,10 @@ export function listPriceProducts(params) {
       ${WEIGHT} AS weight_g,
       agg.sales90, agg.total_sales, agg.ref_purchase_price,
       agg.last_purchased_at, agg.last_order_at,
+      pw.seller_count AS pw_seller_count, pw.min_price AS pw_min_price,
+      pw.median_price AS pw_median_price, pw.my_rank AS pw_my_rank,
+      pw.is_cheapest AS pw_is_cheapest, pw.gap_pct AS pw_gap_pct,
+      pw.vs_median AS pw_vs_median, pw.status AS pw_status, pw.fetched_at AS pw_fetched_at,
       ${PROFIT} AS profit_cny,
       ${RATE_COST} AS profit_rate_cost,
       ${RATE_SALE} AS profit_rate_sale`;

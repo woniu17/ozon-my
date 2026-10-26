@@ -9,7 +9,9 @@ import { Router } from 'express';
 import config from '../config/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
+import { db } from '../db/index.js';
 import * as priceDao from '../db/dao/sqlite/price-dao.js';
+import { fetchFollowSellForSku } from '../services/price-watch-fetch.js';
 import { productInfoPricesV5, productImportPrices } from '../services/ozon-opi.js';
 import {
   DEFAULT_COMMISSION_RATE,
@@ -150,6 +152,59 @@ router.get('/admin/api/price-manage/list', (req, res) => {
     pageSize: q.pageSize || 20,
     ...ESTIMATOR_PARAMS,
   })));
+});
+
+// ── 跟卖列表信息(价格管理页) ─────────────────────────────
+// 单 SKU 最新快照 + 近 30 天历史(与 price-watch/detail 同口径,供展开行渲染)
+router.get('/admin/api/price-manage/price-watch/:sku', (req, res, next) => {
+  try {
+    const sku = String(req.params.sku || '').trim();
+    if (!/^\d+$/.test(sku)) return res.status(400).json({ ok: false, error: 'sku 非法' });
+    const latest = db
+      .prepare(`SELECT * FROM price_watch_snapshots WHERE sku = ? ORDER BY id DESC LIMIT 1`)
+      .get(sku);
+    if (latest?.sellers) {
+      try { latest.sellers = JSON.parse(latest.sellers); } catch { latest.sellers = []; }
+    }
+    const days = Math.max(1, Math.min(90, Number(req.query.days) || 30));
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const history = db
+      .prepare(
+        `SELECT id, my_price, seller_count, min_price, median_price, my_rank, is_cheapest,
+                gap_abs, gap_pct, vs_median, status, fetched_at
+         FROM price_watch_snapshots WHERE sku = ? AND fetched_at >= ? ORDER BY id DESC LIMIT 200`
+      )
+      .all(sku, since);
+    return res.json(ok({ latest: latest || null, history }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[price-manage] price-watch detail failed');
+    next(e);
+  }
+});
+
+// 按需即时采集单个 SKU 的跟卖列表(用 cloakbrowser + linqx-profile 的 Ozon cookie)
+router.post('/admin/api/price-manage/price-watch/fetch', async (req, res, next) => {
+  try {
+    const sku = String(req.body?.sku || '').trim();
+    if (!/^\d+$/.test(sku)) return res.status(400).json({ ok: false, error: 'sku 非法' });
+    const r = await fetchFollowSellForSku(sku, { profileDir: config.ozonFollowSellProfileDir });
+    if (r.status === 'claimed') {
+      return res.status(409).json({ ok: false, error: '该 SKU 正在采集中，请稍后刷新' });
+    }
+    if (r.status === 'profile_locked') {
+      return res.status(409).json({ ok: false, error: '浏览器 profile 正被其他任务占用（平台订单/登录窗口），请稍后重试' });
+    }
+    if (r.status === 'antibot') {
+      return res.status(502).json({ ok: false, error: r.error || '触发 Ozon 反爬，请稍后再试' });
+    }
+    if (r.status !== 'ok') {
+      return res.status(502).json({ ok: false, error: r.error || '采集失败' });
+    }
+    return res.json(ok(r.snapshot));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[price-manage] price-watch fetch failed');
+    next(e);
+  }
 });
 
 // ── 顶部统计条 ──
