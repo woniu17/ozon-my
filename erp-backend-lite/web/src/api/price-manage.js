@@ -36,9 +36,14 @@ export function getSkuPriceWatch(sku, days = 30) {
   return request(`/admin/api/price-manage/price-watch/${encodeURIComponent(sku)}?days=${days}`);
 }
 
-// 按需即时采集单个 SKU 的跟卖列表(用 cloakbrowser + linqx-profile)
-export function fetchSkuPriceWatch(sku) {
+// 按需采集单个 SKU 的跟卖列表 → 入队异步处理(后台 worker 串行采集,轮询 tasks 查看进度)
+export function enqueueSkuPriceWatch(sku) {
   return request('/admin/api/price-manage/price-watch/fetch', { method: 'POST', body: { sku } });
+}
+
+// 采集队列任务状态(pending/running/ok/failed + 失败原因)
+export function getSkuPriceWatchTasks() {
+  return request('/admin/api/price-manage/price-watch/tasks');
 }
 
 // 单品改价(body: { sku, newPrice, targetRate? })

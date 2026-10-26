@@ -11,7 +11,7 @@ import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import { db } from '../db/index.js';
 import * as priceDao from '../db/dao/sqlite/price-dao.js';
-import { fetchFollowSellForSku } from '../services/price-watch-fetch.js';
+import { enqueuePriceWatch, ensureWorker, listPriceWatchTasks } from '../services/price-watch-queue.js';
 import { productInfoPricesV5, productImportPrices } from '../services/ozon-opi.js';
 import {
   DEFAULT_COMMISSION_RATE,
@@ -21,6 +21,9 @@ import {
 } from '../services/profit-estimator.js';
 
 const router = Router();
+
+// ERP 启动时自动恢复未完成的跟卖采集任务(进程重启后 worker 不依赖手动点击入队)
+ensureWorker({ profileDir: config.ozonFollowSellProfileDir });
 
 // DAO SQL 内联公式参数(与 profit-estimator 单点一致)
 const ESTIMATOR_PARAMS = {
@@ -155,6 +158,17 @@ router.get('/admin/api/price-manage/list', (req, res) => {
 });
 
 // ── 跟卖列表信息(价格管理页) ─────────────────────────────
+// 采集队列任务状态(前端轮询:pending/running/ok/failed + 失败原因)
+// 注意:必须定义在 /price-watch/:sku 之前,否则 "tasks" 会被当作 :sku 参数匹配
+router.get('/admin/api/price-manage/price-watch/tasks', (_req, res) => {
+  try {
+    return res.json(ok(listPriceWatchTasks(100)));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[price-manage] price-watch tasks failed');
+    next(e);
+  }
+});
+
 // 单 SKU 最新快照 + 近 30 天历史(与 price-watch/detail 同口径,供展开行渲染)
 router.get('/admin/api/price-manage/price-watch/:sku', (req, res, next) => {
   try {
@@ -182,27 +196,19 @@ router.get('/admin/api/price-manage/price-watch/:sku', (req, res, next) => {
   }
 });
 
-// 按需即时采集单个 SKU 的跟卖列表(用 cloakbrowser + linqx-profile 的 Ozon cookie)
+// 按需采集跟卖列表 → 入队异步处理(不再同步等待,后台 worker 串行采集,
+// profile 被占用时自动重试;前端轮询 /price-watch/tasks 查看进度)
 router.post('/admin/api/price-manage/price-watch/fetch', async (req, res, next) => {
   try {
     const sku = String(req.body?.sku || '').trim();
     if (!/^\d+$/.test(sku)) return res.status(400).json({ ok: false, error: 'sku 非法' });
-    const r = await fetchFollowSellForSku(sku, { profileDir: config.ozonFollowSellProfileDir });
-    if (r.status === 'claimed') {
-      return res.status(409).json({ ok: false, error: '该 SKU 正在采集中，请稍后刷新' });
+    const r = enqueuePriceWatch(sku, { profileDir: config.ozonFollowSellProfileDir });
+    if (r.status === 'error') {
+      return res.status(400).json({ ok: false, error: r.error || '入队失败' });
     }
-    if (r.status === 'profile_locked') {
-      return res.status(409).json({ ok: false, error: '浏览器 profile 正被其他任务占用（平台订单/登录窗口），请稍后重试' });
-    }
-    if (r.status === 'antibot') {
-      return res.status(502).json({ ok: false, error: r.error || '触发 Ozon 反爬，请稍后再试' });
-    }
-    if (r.status !== 'ok') {
-      return res.status(502).json({ ok: false, error: r.error || '采集失败' });
-    }
-    return res.json(ok(r.snapshot));
+    return res.json(ok({ sku, status: r.status }));
   } catch (e) {
-    logger.warn({ err: e.message }, '[price-manage] price-watch fetch failed');
+    logger.warn({ err: e.message }, '[price-manage] price-watch enqueue failed');
     next(e);
   }
 });

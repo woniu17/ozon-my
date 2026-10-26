@@ -7,7 +7,7 @@
 import { ref, computed, onMounted } from 'vue';
 import {
   syncPrices, getPriceStores, getPriceList, getPriceSummary,
-  setSkuCustoms, getSkuOrders, getSkuPriceWatch, fetchSkuPriceWatch, updatePrice,
+  setSkuCustoms, getSkuOrders, getSkuPriceWatch, enqueueSkuPriceWatch, getSkuPriceWatchTasks, updatePrice,
 } from '../api/price-manage.js';
 import { getStores } from '../api/stores.js';
 import { useToast } from '../components/useToast.js';
@@ -74,7 +74,8 @@ const ordersMap = ref({});         // sku → 历史订单列表
 const ordersLoading = ref({});
 const priceWatchMap = ref({});     // sku → { latest, history } 跟卖列表快照
 const pwLoading = ref({});         // 展开时加载快照中
-const pwFetching = ref({});        // 手动采集按钮 loading
+const pwTaskStates = ref({});      // sku → 采集任务状态 { status, error_reason }
+const pwPollTimer = ref(null);     // 采集任务轮询定时器
 const rateChoice = ref({});        // sku → 目标成本利润率(50~200,未选默认100,与H5对齐)
 const updatingSku = ref('');
 const storeNameMap = ref({});                                     // 店铺 id → 名称
@@ -248,28 +249,79 @@ async function loadPriceWatch(row, days = 30) {
   }
 }
 
-// 按需即时采集跟卖(用 cloakbrowser + linqx-profile)
+// ── 跟卖采集:入队异步处理 ─────────────────────────────
+// 点击"刷新"→ 加入后台采集队列,立即返回;worker 串行采集(profile 被占用自动重试),
+// 前端轮询任务状态,完成后自动刷新列表摘要与展开详情。
 async function onFetchPriceWatch(row) {
-  pwFetching.value[row.sku] = true;
+  const st = pwTaskStates.value[row.sku]?.status;
+  if (st === 'pending' || st === 'running') return; // 已在队列/采集中
   try {
-    const res = await fetchSkuPriceWatch(row.sku);
-    if (res?.status === 'ok' && res.snapshot) {
-      priceWatchMap.value[row.sku] = { latest: res.snapshot, history: [] };
-      show(`采集完成:${res.snapshot.seller_count ?? 0} 家跟卖`, 'success');
-      await loadList(); // 刷新列表行"跟卖"列摘要
-    } else if (res?.status === 'claimed') {
-      show('该 SKU 正在被其他任务采集,请稍后刷新', 'warning');
-    } else if (res?.status === 'profile_locked') {
-      show('浏览器 profile 正被占用(如浏览器订单采集),请稍后重试', 'warning');
-    } else if (res?.status === 'antibot') {
-      show('Ozon 触发人机验证,采集失败', 'error');
-    } else {
-      show(res?.message || '采集失败', 'error');
-    }
+    const res = await enqueueSkuPriceWatch(row.sku);
+    pwTaskStates.value[row.sku] = { sku: row.sku, status: res?.status || 'pending' };
+    show('已加入采集队列', 'success');
+    startPwPolling();
   } catch (e) {
-    show(e.message || '跟卖采集失败', 'error');
-  } finally {
-    pwFetching.value[row.sku] = false;
+    show(e.message || '加入采集队列失败', 'error');
+  }
+}
+
+// 按钮文案:排队中/采集中/重试/刷新
+function pwBtnText(row) {
+  const st = pwTaskStates.value[row.sku]?.status;
+  if (st === 'pending') return '排队中…';
+  if (st === 'running') return '采集中…';
+  if (st === 'failed') return '重试';
+  return '刷新';
+}
+function pwBtnDisabled(row) {
+  const st = pwTaskStates.value[row.sku]?.status;
+  return st === 'pending' || st === 'running';
+}
+function pwBtnTitle(row) {
+  const t = pwTaskStates.value[row.sku];
+  if (t?.status === 'failed') return `上次采集失败:${t.error_reason || ''}`;
+  if (t?.status === 'ok') return '采集完成,点击可重新采集';
+  return '刷新跟卖列表';
+}
+
+// 轮询任务状态:更新按钮态;任务完成/失败时刷新列表并提示
+function startPwPolling() {
+  if (pwPollTimer.value) return;
+  pwPollTimer.value = setInterval(pollPwTasks, 3000);
+  pollPwTasks();
+}
+async function pollPwTasks() {
+  try {
+    const tasks = await getSkuPriceWatchTasks();
+    const map = {};
+    for (const t of tasks) map[t.sku] = t;
+    const prev = pwTaskStates.value;
+    pwTaskStates.value = map;
+
+    // 检测是否有任务刚结束(pending/running → ok/failed)
+    const finished = Object.keys(map).filter(
+      (sku) => prev[sku] && ['pending', 'running'].includes(prev[sku]?.status)
+        && ['ok', 'failed'].includes(map[sku]?.status)
+    );
+    if (finished.length) {
+      const doneSku = finished[0];
+      const st = map[doneSku];
+      if (st.status === 'ok') show(`跟卖采集完成:${doneSku}`, 'success');
+      else show(`跟卖采集失败:${doneSku} ${st.error_reason || ''}`, 'error');
+      await loadList(); // 刷新列表行"跟卖"列摘要
+      if (expanded.value.has(doneSku)) {
+        await loadPriceWatch({ sku: doneSku }); // 展开行详情同步更新
+      }
+    }
+
+    const active = tasks.filter((t) => t.status === 'pending' || t.status === 'running').length;
+    if (active === 0) stopPwPolling();
+  } catch (e) { /* 轮询失败静默,下轮重试 */ }
+}
+function stopPwPolling() {
+  if (pwPollTimer.value) {
+    clearInterval(pwPollTimer.value);
+    pwPollTimer.value = null;
   }
 }
 
@@ -350,6 +402,20 @@ function breakdownRows(bd) {
     { k: '销售利润率', v: fmtRate(bd.saleRate), cls: rateClass(bd.saleRate) },
     { k: '成本利润率', v: fmtRate(bd.costRate), cls: rateClass(bd.costRate) },
   ];
+}
+
+// 利润调整对比行:当前利润 → 按目标率调整后的利润(参考订单处理单价调整表 旧值→新值)
+// 每行 { k, v, cls, newV, newCls };无法调整时新值侧为 null
+function profitCompareRows(row) {
+  const cur = breakdownRows(currentBreakdown(row));
+  if (!cur) return null;
+  const adj = breakdownRows(adjustedProfit(row));
+  if (!adj) return cur.map((l) => ({ ...l, newV: null, newCls: '' }));
+  return cur.map((l, i) => ({
+    ...l,
+    newV: adj[i] ? adj[i].v : null,
+    newCls: adj[i] ? adj[i].cls : '',
+  }));
 }
 
 function canTarget(row) {
@@ -625,8 +691,7 @@ onMounted(async () => {
             <th class="col-product">商品</th>
             <th class="col-num col-meta">商品信息</th>
             <th class="col-num col-pricewatch">跟卖</th>
-            <th class="col-num">当前利润</th>
-            <th class="col-num">调整利润</th>
+            <th class="col-num">利润(当前→调整)</th>
             <th class="col-target">按成本利润率定价</th>
           </tr>
         </thead>
@@ -720,26 +785,20 @@ onMounted(async () => {
                   <div v-else class="sub">
                     {{ row.pw_seller_count === 0 ? '无跟卖' : row.pw_status ? statusText(row.pw_status) : '未采集' }}
                   </div>
-                  <button class="pw-refresh" :disabled="pwFetching[row.sku]" @click.stop="onFetchPriceWatch(row)" :title="'刷新跟卖列表'">
-                    <svg v-if="!pwFetching[row.sku]" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
-                    {{ pwFetching[row.sku] ? '采集中…' : '刷新' }}
+                  <button class="pw-refresh" :disabled="pwBtnDisabled(row)" @click.stop="onFetchPriceWatch(row)" :title="pwBtnTitle(row)">
+                    <svg v-if="!['pending', 'running'].includes(pwTaskStates[row.sku]?.status)" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+                    {{ pwBtnText(row) }}
                   </button>
                 </div>
               </td>
-              <!-- 当前利润明细:销售价格/ozon佣金/国际物流费/利润/销售利润率/成本利润率 -->
-              <td class="col-num col-profit" title="单件口径:售价 − 佣金16% − 国际物流费 − 采购价">
-                <template v-if="breakdownRows(currentBreakdown(row))">
-                  <div v-for="l in breakdownRows(currentBreakdown(row))" :key="l.k" class="bl" :class="l.cls">
-                    <span class="bl-k">{{ l.k }}</span><span>{{ l.v }}</span>
-                  </div>
-                </template>
-                <span v-else class="sub">—</span>
-              </td>
-              <!-- 调整利润明细:按选中目标率定价后的完整口径 -->
-              <td class="col-num col-profit" :title="canTarget(row) ? `按 ${selRate(row)}% 成本利润率定价后的口径` : '需先维护采购价与重量'">
-                <template v-if="breakdownRows(adjustedProfit(row))">
-                  <div v-for="l in breakdownRows(adjustedProfit(row))" :key="l.k" class="bl" :class="l.cls">
-                    <span class="bl-k">{{ l.k }}</span><span>{{ l.v }}</span>
+              <!-- 利润调整:当前 → 按目标率定价后(参考订单处理单价调整表 旧值→新值) -->
+              <td class="col-num col-profit" :title="canTarget(row) ? `按 ${selRate(row)}% 成本利润率定价后的对比` : '需先维护采购价与重量'">
+                <template v-if="profitCompareRows(row)">
+                  <div v-for="l in profitCompareRows(row)" :key="l.k" class="cmp-row">
+                    <span class="cmp-label">{{ l.k }}</span>
+                    <span class="cmp-old" :class="l.cls">{{ l.v }}</span>
+                    <span class="cmp-arrow">→</span>
+                    <span class="cmp-new" :class="l.newCls">{{ l.newV != null ? l.newV : '—' }}</span>
                   </div>
                 </template>
                 <span v-else class="sub">—</span>
@@ -788,13 +847,13 @@ onMounted(async () => {
             </tr>
             <!-- 展开行:跟卖列表 + 历史订单 -->
             <tr v-if="expanded.has(row.sku)" class="row-orders">
-              <td :colspan="7">
+              <td :colspan="6">
                 <!-- 跟卖列表 -->
                 <div class="pw-section">
                   <div class="pw-head">
                     <span class="orders-title">跟卖列表</span>
-                    <button class="btn btn-mini" :disabled="pwFetching[row.sku]" @click="onFetchPriceWatch(row)">
-                      {{ pwFetching[row.sku] ? '采集中…' : '采集跟卖' }}
+                    <button class="btn btn-mini" :disabled="pwBtnDisabled(row)" @click="onFetchPriceWatch(row)" :title="pwBtnTitle(row)">
+                      {{ ['pending', 'running'].includes(pwTaskStates[row.sku]?.status) ? pwBtnText(row) : '采集跟卖' }}
                     </button>
                   </div>
 
@@ -834,7 +893,12 @@ onMounted(async () => {
                     </template>
                     <div v-else class="orders-empty">该商品当前无跟卖</div>
                   </template>
-                  <div v-else class="orders-empty">暂无跟卖快照,可点击「采集跟卖」即时获取</div>
+                  <div v-else class="orders-empty">
+                    <template v-if="pwTaskStates[row.sku]?.status === 'failed'">
+                      跟卖采集失败:{{ pwTaskStates[row.sku].error_reason || '未知原因' }},可点击上方按钮重试
+                    </template>
+                    <template v-else>暂无跟卖快照,可点击「采集跟卖」即时获取</template>
+                  </div>
                 </div>
 
                 <!-- 历史订单 -->
@@ -874,13 +938,13 @@ onMounted(async () => {
             </tr>
           </template>
           <tr v-if="!loading && rows.length === 0">
-            <td :colspan="7" class="empty-tip">
+            <td :colspan="6" class="empty-tip">
               暂无数据{{ stores.length === 0 ? ',请先点击右上角「同步 Ozon 价格」' : '' }}
             </td>
           </tr>
         </tbody>
       </table>
-      <div v-if="loading" class="loading-mask"><SkeletonTable :rows="6" :cols="7" /></div>
+      <div v-if="loading" class="loading-mask"><SkeletonTable :rows="6" :cols="6" /></div>
     </div>
 
     <!-- 分页 -->
@@ -1126,9 +1190,14 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .rate-select:disabled { opacity: .5; cursor: not-allowed; }
 .suggest { font-weight: 600; color: var(--primary); }
 
-/* 利润明细列(当前/调整):键值两栏对齐 */
-.bl { display: flex; justify-content: space-between; gap: 10px; line-height: 1.55; white-space: nowrap; min-width: 132px; }
-.bl-k { color: var(--text-secondary, #6b7280); }
+/* 利润调整列(当前→调整):参考订单处理单价调整表,旧值→新值对比 */
+.cmp-row { display: flex; align-items: center; gap: 6px; line-height: 1.55; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cmp-label { width: 62px; color: var(--text-secondary, #6b7280); }
+.cmp-old { width: 52px; text-align: right; color: #475569; }
+.cmp-arrow { width: 20px; text-align: center; color: #94a3b8; }
+.cmp-new { width: 52px; text-align: right; font-weight: 600; color: var(--text-primary, #1f2937); }
+.cmp-old.pos, .cmp-new.pos { color: #047857; }
+.cmp-old.neg, .cmp-new.neg { color: #dc2626; }
 
 /* 展开订单行 */
 .row-orders > td { background: var(--bg, #f9fafb); padding: 10px 14px; }

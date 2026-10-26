@@ -21,6 +21,7 @@ const PAGE_GOTO_TIMEOUT_MS = 30_000;
 const MODAL_TIMEOUT_MS = 15_000;
 const WARMUP_MS = 3_000;
 const CLAIM_TTL_MIN = 120; // 与定时采集脚本同 TTL,防误判回池
+const FETCH_TOTAL_TIMEOUT_MS = 120_000; // 单次采集总超时,防止 Ozon 页面挂起卡死队列
 
 // ── 跟卖 modal 抓取注入函数(移植 price-watch-collect.js,单参数无闭包) ──
 const FOLLOW_SELL_MODAL_FN = async (p) => {
@@ -134,6 +135,8 @@ export async function fetchFollowSellForSku(sku, { profileDir }) {
   };
 
   let browser = null;
+  let timedOut = false;
+  let watchdog = null;
   try {
     // 2. 启动浏览器(linqx-profile;被 platform-orders 占用会抛错)
     //    Chromium 单实例互斥:用户连续点击多个商品刷新时,后到的请求会撞上
@@ -155,6 +158,13 @@ export async function fetchFollowSellForSku(sku, { profileDir }) {
         await sleep(LAUNCH_RETRY_MS);
       }
     }
+
+    // 总超时保护:单次采集最长 120s,超时强制关闭浏览器(防止 Ozon 页面挂起
+    // 导致 worker 队列卡死;关闭后未完成的 await 会抛 Target closed 进入 catch)
+    watchdog = setTimeout(() => {
+      timedOut = true;
+      browser?.close().catch(() => {});
+    }, FETCH_TOTAL_TIMEOUT_MS);
     const restored = (() => { try { return browser.pages(); } catch { return []; } })();
     for (const p of restored.slice(1)) await p.close().catch(() => {});
     const page = restored[0] || (await browser.newPage());
@@ -243,6 +253,10 @@ export async function fetchFollowSellForSku(sku, { profileDir }) {
     };
   } catch (e) {
     const msg = String((e && e.message) || e);
+    if (timedOut) {
+      logger.warn({ sku: skuStr }, '[price-watch-fetch] 采集超时,强制结束');
+      return { status: 'error', error: '采集超时(>120s),已强制结束' };
+    }
     // profile 被其它 Chromium 实例占用(platform-orders 浏览器/登录窗口)
     if (/single|in use|user data|locked|crashed|Target|closed/i.test(msg)) {
       return { status: 'profile_locked', error: msg };
@@ -250,6 +264,7 @@ export async function fetchFollowSellForSku(sku, { profileDir }) {
     logger.warn({ err: msg, sku: skuStr }, '[price-watch-fetch] 采集失败');
     return { status: 'error', error: msg.slice(0, 120) };
   } finally {
+    if (watchdog) clearTimeout(watchdog);
     try { await browser?.close(); } catch { /* 忽略 */ }
     release();
   }
