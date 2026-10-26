@@ -690,8 +690,7 @@ onMounted(async () => {
             <th class="col-expand"></th>
             <th class="col-product">商品</th>
             <th class="col-meta">商品信息</th>
-            <th class="col-num col-profit">利润(当前→调整)</th>
-            <th class="col-target">按成本利润率定价</th>
+            <th class="col-num col-profit-target">利润与定价</th>
           </tr>
         </thead>
         <tbody>
@@ -789,40 +788,25 @@ onMounted(async () => {
                   </span>
                 </div>
               </td>
-              <!-- 利润调整:当前 → 按目标率定价后(参考订单处理单价调整表 旧值→新值) -->
-              <td class="col-num col-profit" :title="canTarget(row) ? `按 ${selRate(row)}% 成本利润率定价后的对比` : '需先维护采购价与重量'">
-                <template v-if="profitCompareRows(row)">
-                  <div v-for="l in profitCompareRows(row)" :key="l.k" class="cmp-row">
-                    <span class="cmp-label">{{ l.k }}</span>
-                    <span class="cmp-old" :class="l.cls">{{ l.v }}</span>
-                    <span class="cmp-arrow">→</span>
-                    <span class="cmp-new" :class="l.newCls">{{ l.newV != null ? l.newV : '—' }}</span>
+              <!-- 利润与定价:上=利润对比(分析),下=目标率/划线价/改价(执行) -->
+              <td class="col-num col-profit-target" :title="canTarget(row) ? `按 ${selRate(row)}% 成本利润率定价后的对比` : '需先维护采购价与重量'">
+                <div class="pt-wrap">
+                  <div class="pt-profit">
+                    <template v-if="profitCompareRows(row)">
+                      <div v-for="l in profitCompareRows(row)" :key="l.k" class="cmp-row">
+                        <span class="cmp-label">{{ l.k }}</span>
+                        <span class="cmp-old" :class="l.cls">{{ l.v }}</span>
+                        <span class="cmp-arrow">→</span>
+                        <span class="cmp-new" :class="l.newCls">{{ l.newV != null ? l.newV : '—' }}</span>
+                      </div>
+                    </template>
+                    <span v-else class="sub">—</span>
                   </div>
-                </template>
-                <span v-else class="sub">—</span>
-              </td>
-              <td class="col-target">
-                <div
-                  class="target-grid"
-                  :title="canTarget(row) ? `按 ${selRate(row)}% 成本利润率定价` : '需先维护采购价与重量'"
-                >
-                  <!-- 子列1:销售价格/划线价格/最低价 -->
-                  <div class="tg-prices">
-                    <div class="tg-line">
-                      <span class="tg-label">销售价格</span>
-                      <b class="suggest">{{ suggestedPrice(row) != null ? '¥' + suggestedPrice(row) : '—' }}</b>
-                    </div>
-                    <div class="tg-line">
-                      <span class="tg-label">划线价格</span>
-                      <span>{{ suggestedPrice(row) != null ? '¥' + suggestedPrice(row) * 2 : '—' }}</span>
-                    </div>
-                    <div class="tg-line">
-                      <span class="tg-label">最低价</span>
-                      <span>{{ suggestedPrice(row) != null ? '¥' + suggestedPrice(row) : '—' }}</span>
-                    </div>
-                  </div>
-                  <!-- 子列2:目标率选项(下拉,替代原12个竖排按钮) -->
-                  <div class="tg-rates">
+                  <div class="pt-act">
+                    <span class="tg-line pt-mark">
+                      <span class="tg-label">划线价</span>
+                      <b>{{ suggestedPrice(row) != null ? '¥' + suggestedPrice(row) * 2 : '—' }}</b>
+                    </span>
                     <select
                       class="rate-select"
                       :value="rateChoice[row.sku] ?? DEFAULT_TARGET_RATE"
@@ -832,9 +816,6 @@ onMounted(async () => {
                     >
                       <option v-for="r in TARGET_RATES" :key="r" :value="r">{{ r }}%</option>
                     </select>
-                  </div>
-                  <!-- 子列3:改价按钮 -->
-                  <div class="tg-act">
                     <button
                       v-if="canTarget(row)" class="btn btn-sm btn-primary"
                       :disabled="updatingSku === row.sku" @click="applyTargetPrice(row)"
@@ -845,7 +826,7 @@ onMounted(async () => {
             </tr>
             <!-- 展开行:跟卖列表 + 历史订单 -->
             <tr v-if="expanded.has(row.sku)" class="row-orders">
-              <td :colspan="6">
+              <td :colspan="4">
                 <!-- 跟卖列表 -->
                 <div class="pw-section">
                   <div class="pw-head">
@@ -1065,11 +1046,11 @@ onMounted(async () => {
 .col-num { text-align: right; white-space: nowrap; }
 /* 商品列定宽:防止 auto 布局把表格富余空间全塞给本列(内容约 380px,实测曾被撑到 722px) */
 .col-product { min-width: 360px; width: 450px; }
-.col-target { min-width: 230px; white-space: nowrap; }
+.col-profit-target { width: 380px; }
 /* 合并列"商品信息":售价/销量/采购价/重量 每项占一行,名称左、值右(参考当前利润列) */
 .col-meta { width: 310px; }
 /* 利润调整列固定宽度:6 行对比,防止名称/值被挤压重叠 */
-.col-profit { width: 250px; }
+/* 原利润列/定价列已合并为 col-profit-target */
 /* 采购价输入:¥ 内嵌输入框左侧,与数字同框(视觉上 ¥12.36 一体) */
 .price-cell { position: relative; display: inline-block; }
 .price-cell .yen { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-secondary, #6b7280); pointer-events: none; }
@@ -1173,12 +1154,12 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .cell-input:focus { outline: none; border-color: var(--tag-fg, #4338ca); background: var(--bg-card, #fff); }
 
 /* 按成本利润率定价:三子列(价格×目标率×改价按钮) */
-.target-grid { display: flex; align-items: center; gap: 14px; white-space: nowrap; }
-.tg-prices { display: flex; flex-direction: column; gap: 2px; }
-.tg-line { font-size: 17px; }
-.tg-label { display: inline-block; color: var(--text-secondary, #6b7280); margin-right: 6px; }
-.tg-rates { display: flex; }
-.tg-act { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+/* 利润与定价列:上=利润对比(分析),下=划线价+目标率+改价(执行) */
+.pt-wrap { display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
+.pt-profit { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.pt-act { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding-top: 6px; border-top: 1px dashed var(--border, #e5e7eb); }
+.tg-line { font-size: 15px; white-space: nowrap; }
+.tg-label { display: inline-block; color: var(--text-secondary, #6b7280); margin-right: 4px; }
 .rate-select {
   padding: 3px 8px; font-size: 13px; line-height: 1.5;
   border: 1px solid var(--border, #e5e7eb); border-radius: 6px;
@@ -1187,7 +1168,6 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .rate-select:hover:not(:disabled) { border-color: var(--primary); }
 .rate-select:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25); }
 .rate-select:disabled { opacity: .5; cursor: not-allowed; }
-.suggest { font-weight: 600; color: var(--primary); }
 
 /* 利润调整列(当前→调整):参考订单处理单价调整表,旧值→新值对比 */
 .cmp-row { display: flex; align-items: center; gap: 6px; line-height: 1.55; white-space: nowrap; font-variant-numeric: tabular-nums; }
