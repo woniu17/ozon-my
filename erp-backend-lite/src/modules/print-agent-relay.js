@@ -523,6 +523,13 @@ router.post('/admin/api/print-agent/container-labels', async (req, res, next) =>
     const store = (config.loadStores() || []).find((s) => s.id === storeId);
     if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
     const data = await carriageDeliveryList(store, { cursor, limit });
+    const methods = data?.methods || [];
+    const carriages = methods.reduce((acc, m) => acc + (m.carriages?.length || 0), 0);
+    const valid = methods.reduce(
+      (acc, m) => acc + (m.carriages || []).filter((c) => Number(c?.id) > 0).length,
+      0
+    );
+    logger.info({ storeId, methods: methods.length, carriages, valid }, '[print-agent] 货运标签列表');
     res.json(ok(data));
   } catch (e) {
     next(e);
