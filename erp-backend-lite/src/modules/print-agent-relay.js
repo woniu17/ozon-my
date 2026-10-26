@@ -591,6 +591,35 @@ router.post('/admin/api/print-agent/print-container-label', async (req, res, nex
   }
 });
 
+// 货运标签"本机直连打印"补记日志(2026-10-26):web 端菜鸟组件本机直打不经过后端,
+// 打印成功后由前端调用此接口补记,保证刷新后仍显示已打印。body: { storeId, labelId, printer? }
+// 与 print-container-label 同 source/status,重复标记无妨(查询 DISTINCT)。
+router.post('/admin/api/print-agent/mark-container-label-printed', async (req, res, next) => {
+  const b = req.body || {};
+  const storeId = String(b.storeId || '');
+  const labelId = Number(b.labelId);
+  const printer = b.printer || '';
+  const logMeta = { storeId, labelId: Number.isInteger(labelId) ? labelId : null };
+  try {
+    if (!storeId) return res.status(400).json({ ok: false, message: 'storeId 必填' });
+    if (!Number.isInteger(labelId) || labelId <= 0) return res.status(400).json({ ok: false, message: '货运标签 ID 必须为正整数' });
+    const store = (config.loadStores() || []).find((s) => s.id === storeId);
+    if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
+    orderPackageDao.insertPrintLog({
+      ...logMeta,
+      postingNumber: String(labelId),
+      printer,
+      source: 'print-container-label',
+      status: 'success',
+      durationMs: 0,
+      ip: req.ip,
+    });
+    res.json(ok({ printed: true, labelId }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // 货运标签服务端直预览(2026-10-26,安卓端无纸预览):拉 PDF → 渲染 PNG(旋转90°) → 组件无纸预览,
 // 返回渲染图 URL + base64(手机可直接显示实际出纸版式)。body: { storeId, labelId }
 router.post('/admin/api/print-agent/preview-container-label', async (req, res, next) => {

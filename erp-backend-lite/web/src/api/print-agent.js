@@ -531,15 +531,31 @@ export function fetchContainerLabelPrintStatus(storeId, labelIds) {
   return get('/admin/api/print-agent/container-label-print-status', { storeId, labelIds: ids });
 }
 
+// 货运标签"本机直连打印"补记(2026-10-26):本机组件直打不经过后端,不会落打印日志,
+// 刷新后「已打印」状态会丢失;前端打印成功后调用此接口补记,与服务器转发同口径。
+export function markContainerLabelPrinted(storeId, labelId, printer = '') {
+  return post('/admin/api/print-agent/mark-container-label-printed', {
+    storeId,
+    labelId,
+    printer: printer || '',
+  });
+}
+
 // 货运标签前端打印:76×130mm 竖向标签纸(用户纸张)。货运标签 PDF 实测 100x70mm 横向,
 // 渲染时顺时针旋转 90° 成 70x100 竖向,contain 到 76:129 画布(上下留白),模板用 76×130 竖向专用
-// storeId 可选:服务器转发打印时后端记录日志,供「是否已打印」查询
-// (2026-10-25:纸张由横版 100x70 调整为竖向 76x130,旋转方向如需反向改 rotation 270)
+// storeId 可选:服务器转发打印时后端记录日志;本机直连打印成功后由本函数补记日志,
+// 保证「是否已打印」刷新后仍正确(2026-10-25:纸张由横版 100x70 调整为竖向 76x130)
 export async function printContainerLabelImage(blob, labelId, printer = '', storeId = '') {
-  return printLabelImage(blob, String(labelId), printer, 76, {
+  await printLabelImage(blob, String(labelId), printer, 76, {
     pageHm: 129,
     rotation: 90,
     templateName: 'label-image-76x130.xml',
     storeId: storeId || '',
   });
+  // 打印已出纸:无论本机直连还是服务器转发,都补记/确保日志存在,刷新后仍显示已打印
+  if (storeId) {
+    try {
+      await markContainerLabelPrinted(storeId, Number(labelId), printer);
+    } catch { /* 状态补记失败不影响已打印结果 */ }
+  }
 }
