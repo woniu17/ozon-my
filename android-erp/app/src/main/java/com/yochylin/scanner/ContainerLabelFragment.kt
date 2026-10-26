@@ -151,12 +151,12 @@ class ContainerLabelFragment : Fragment() {
         val storeName = store.name ?: storeId
         if (storeId.isBlank()) return emptyList()
         return try {
+            // 注意:Api.post 已解包 envelope 的 data(Ozon 响应体 { cursor, methods, ... }),直接取 methods
             val obj = Api.post(
                 "/admin/api/print-agent/container-labels",
                 mapOf("storeId" to storeId, "cursor" to "", "limit" to 1000)
             ).asJsonObject
-            val data = obj.optJsonObject("data") ?: return emptyList()
-            val methods = data.optJsonArray("methods") ?: JsonArray()
+            val methods = obj.optJsonArray("methods") ?: JsonArray()
             val rows = mutableListOf<LabelRow>()
             for (m in methods) {
                 val mo = m.takeIf { it.isJsonObject }?.asJsonObject ?: continue
@@ -355,13 +355,12 @@ class ContainerLabelFragment : Fragment() {
                 try {
                     val ids = storeRows.map { it.id }.joinToString(",")
                     if (ids.isBlank()) continue
+                    // 已解包 data,直接取 printed 映射
                     val obj = Api.get(
                         "/admin/api/print-agent/container-label-print-status",
                         mapOf("storeId" to storeId, "labelIds" to ids)
                     ).asJsonObject
-                    val printed = obj.optJsonObject("data")
-                        ?.optJsonObject("printed")
-                        ?: continue
+                    val printed = obj.optJsonObject("printed") ?: continue
                     for ((key, el) in printed.entrySet()) {
                         if (!el.isJsonNull) printedStates[key] = el.asBoolean
                     }
@@ -398,12 +397,12 @@ class ContainerLabelFragment : Fragment() {
     private fun previewLabel(row: LabelRow) {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
+                // 已解包 data,imageDataUrl 直接位于根对象
                 val obj = Api.post(
                     "/admin/api/print-agent/preview-container-label",
                     mapOf("storeId" to row.storeId, "labelId" to row.id)
                 ).asJsonObject
-                val data = obj.optJsonObject("data")
-                val imageDataUrl = data?.optString("imageDataUrl") ?: ""
+                val imageDataUrl = obj.optString("imageDataUrl")
                 if (imageDataUrl.isBlank()) {
                     toast("预览图拉取失败,请检查打印组件后重试")
                     return@launch

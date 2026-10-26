@@ -476,13 +476,13 @@ class ScanShipFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             progressBar.visibility = View.VISIBLE
             try {
+                // 已解包 data:imageDataUrl/postingNumber 直接位于根对象(2026-10-26 修复)
                 val obj = Api.post(
                     "/admin/api/print-agent/preview-package",
                     mapOf("packageId" to pkg.id)
                 ).asJsonObject
-                val data = obj.getAsJsonObject("data")
-                val imageDataUrl = data.optString("imageDataUrl")
-                val postingNumber = data.optString("postingNumber").ifBlank { pkg.postingNumber ?: "" }
+                val imageDataUrl = obj.optString("imageDataUrl")
+                val postingNumber = obj.optString("postingNumber").ifBlank { pkg.postingNumber ?: "" }
                 if (imageDataUrl.isBlank()) {
                     toast("预览图拉取失败,请检查打印组件/SSH 隧道后重试")
                     return@launch
