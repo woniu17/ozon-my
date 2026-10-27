@@ -66,7 +66,7 @@ const poCmpExpanded = reactive({});  // 单价调整折叠展开(pkgId:sku → b
 const poRateChoice = reactive({});   // 每行目标率(sku → 40~90,未选默认 50)
 const adjustingSku = ref('');
 
-// ── 发货记录(右侧栏)──────────────────────────────────────
+// ── 发货记录(右侧栏,仅 /scan-ship 显示)────────────────────
 const RECORD_TABS = [
   { key: 'today', label: '今日' },
   { key: 'yesterday', label: '昨日' },
@@ -78,6 +78,17 @@ const records = reactive({
   total: 0,
   pageSize: 500, // 不分页:一次拉全量,列表内部滚动浏览
 });
+
+// ── 本次扫描备货记录(右侧栏,仅 /scan-stock 独立页显示,会话内有效)──
+const stockRecords = reactive({ rows: [] });
+function addStockRecord(postingNumber, result, ok = true) {
+  stockRecords.rows.unshift({
+    postingNumber: postingNumber || '',
+    result,
+    ok,
+    time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+  });
+}
 
 // ── 展示工具(对齐 OrderProcess)──────────────────────────
 // 点击复制到剪贴板(货件号/SKU/OfferID)
@@ -334,8 +345,15 @@ async function doSearch() {
       if (stockPkgs.length > 1) {
         banner.type = 'info';
         banner.text = `命中 ${n} 个包裹,其中 ${stockPkgs.length} 个待备货,请选择要备货的订单`;
+        if (isStockPage.value) addStockRecord('', `命中 ${stockPkgs.length} 个待备货订单,需手动选择`, false);
         focusScan();
         return;
+      }
+      if (n === 0) {
+        if (isStockPage.value) addStockRecord(kw, '未找到订单', false);
+      } else if (n === 1 && isStockPage.value) {
+        const p = results.value[0];
+        addStockRecord(p.postingNumber, `非待备货状态(${p.ozonStatus || p.operateStatus || '未知'})`, false);
       }
     }
     if (n === 0) {
@@ -395,7 +413,10 @@ async function onShipPackage(pkg) {
       message: '该订单当前为【已搁置】状态，确认继续备货吗？',
       confirmText: '确认操作',
     });
-    if (!okIgnored) return;
+    if (!okIgnored) {
+      if (isStockPage.value) addStockRecord(pkg.postingNumber, '已搁置,取消备货', false);
+      return;
+    }
   }
   // 单件商品(总数量=1)直接备货,两件以上弹窗确认(与 OrderProcess 同口径)
   const totalQty = (pkg.items || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0);
@@ -404,7 +425,10 @@ async function onShipPackage(pkg) {
       message: `确认备货 ${pkg.postingNumber}?\n该货件共 ${totalQty} 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。`,
       confirmText: '备货',
     });
-    if (!ok) return;
+    if (!ok) {
+      if (isStockPage.value) addStockRecord(pkg.postingNumber, `多件(${totalQty}),用户取消`, false);
+      return;
+    }
   }
   shippingPkgId.value = pkg.id;
   try {
@@ -415,13 +439,17 @@ async function onShipPackage(pkg) {
     if (r.pending) {
       show(`备货指令已提交:${pkg.postingNumber} Ozon 状态变更中(通常数十秒内),可继续扫描`, 'success');
       if (!r.ozonStatus) pkg.ozonStatus = 'awaiting_registration';
+      if (isStockPage.value) addStockRecord(pkg.postingNumber, '备货指令已提交');
     } else if (r.alreadyShipped) {
       show(`该订单已备货过(Ozon 状态 ${r.ozonStatus || ''}),无需重复操作`, 'success');
+      if (isStockPage.value) addStockRecord(pkg.postingNumber, '已备货过');
     } else {
       show(`备货成功:${pkg.postingNumber} 已确认货件(Ozon 状态 → ${r.ozonStatus || 'awaiting_registration'}),可打印面单`, 'success');
+      if (isStockPage.value) addStockRecord(pkg.postingNumber, '备货成功');
     }
   } catch (err) {
     show(`备货失败:${err.message || String(err)}`, 'error');
+    if (isStockPage.value) addStockRecord(pkg.postingNumber, `备货失败:${err.message || String(err)}`, false);
   } finally {
     shippingPkgId.value = 0;
     // 连扫:备货处理完自动回焦扫描框,继续扫下一单
@@ -1285,8 +1313,8 @@ function onPrinterChange() {
         </div>
       </section>
 
-      <!-- ④ 发货记录(右侧参考栏) -->
-      <aside class="records-col card" aria-label="发货记录">
+      <!-- ④ 右侧参考栏:发货记录(扫描发货页) / 本次扫描备货记录(扫描备货独立页) -->
+      <aside v-if="!isStockPage" class="records-col card" aria-label="发货记录">
         <div class="records-head">
           <div class="record-tabs">
             <button
@@ -1356,6 +1384,30 @@ function onPrinterChange() {
               </div>
               <div class="record-line">打印发货 {{ fmtTime(p.waybillPrintedAt) }}</div>
             </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- 扫描备货独立页:本次备货记录(会话内) -->
+      <aside v-if="isStockPage" class="records-col card" aria-label="本次扫描备货记录">
+        <div class="records-head">
+          <div class="record-tabs">
+            <span class="tab-btn active">本次备货</span>
+          </div>
+          <button class="btn btn-ghost btn-sm" @click="stockRecords.rows = []" title="清空本次备货记录">
+            清空
+          </button>
+        </div>
+        <div class="records-list">
+          <div v-if="!stockRecords.rows.length" class="empty records-empty">
+            扫到待备货订单后自动备货,记录显示在这里
+          </div>
+          <div v-for="(r, i) in stockRecords.rows" :key="i" class="record-row stock-record">
+            <div class="record-line1">
+              <span class="record-store">{{ r.time }}</span>
+              <span class="link mono record-posting" :class="r.ok ? '' : 'stock-fail'">{{ r.postingNumber || '—' }}</span>
+            </div>
+            <div class="record-line" :class="r.ok ? 'stock-ok' : 'stock-fail'">{{ r.result }}</div>
           </div>
         </div>
       </aside>
@@ -2116,6 +2168,16 @@ function onPrinterChange() {
 .record-line {
   font-size: 12px;
   color: var(--muted);
+}
+/* 扫描备货独立页:本次备货记录行 */
+.stock-record .record-line {
+  margin-top: 2px;
+}
+.stock-ok {
+  color: #00b42a;
+}
+.stock-fail {
+  color: #d93026;
 }
 
 .mono {
