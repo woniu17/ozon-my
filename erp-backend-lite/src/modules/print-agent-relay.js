@@ -428,7 +428,7 @@ router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
         }
         setWaybill(storeId, postingNumbers, pdf);
       }
-      // 服务端渲染成 PNG dataURL(底部定制区叠加店铺名,如 YQL01),并写入二级缓存
+      // 服务端渲染成 PNG dataURL(顶部店铺行叠加店铺名,如 YQL01),并写入二级缓存
       const rendered = await pdfToPngDataUrl(pdf, widthMm, pageHm, 0, store?.name || storeId);
       dataUrl = rendered.dataUrl;
       setWaybillPng(storeId, postingNumbers, widthMm, pageHm, dataUrl);
@@ -457,7 +457,7 @@ router.post('/admin/api/print-agent/print-package', async (req, res, next) => {
 });
 
 // ── 服务端直预览面单(2026-10-26,安卓端无纸预览)────────────
-// 与 print-package 同链路:拉 PDF → 服务端渲染 PNG(底部定制区叠加店铺名) → 组件无纸预览,
+// 与 print-package 同链路:拉 PDF → 服务端渲染 PNG(顶部店铺行叠加店铺名) → 组件无纸预览,
 // 返回组件渲染图 URL(安卓端直接显示图片,不出纸不流转状态)。
 router.post('/admin/api/print-agent/preview-package', async (req, res, next) => {
   try {
