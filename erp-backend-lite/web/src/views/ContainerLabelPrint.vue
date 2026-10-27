@@ -12,6 +12,7 @@ import {
   fetchContainerLabelPrintStatus,
   printContainerLabelImage,
   previewContainerLabelImage,
+  fetchContainerLabelPreview,
   parsePrinter,
   encodePrinter,
 } from '../api/print-agent.js';
@@ -35,8 +36,8 @@ const pdfUrl = ref('');
 const pdfSize = ref(0);
 const loadingPdfId = ref(null); // 正在拉 PDF 的 labelId
 
-// 菜鸟组件无纸预览(显示实际出纸版式,不出纸不流转状态)
-const labelPreview = reactive({ open: false, url: '', loading: 0 });
+// 货运标签预览(2026-10-27):服务器渲染 PDF 每页 PNG,弹窗支持多页翻页
+const labelPreview = reactive({ open: false, images: [], page: 0, loading: 0 });
 
 // 打印
 const printingId = ref(null);
@@ -186,21 +187,30 @@ function clearSearch() {
 }
 
 // ── 预览/打印 ────────────────────────────────────────
-// 菜鸟组件无纸预览(2026-10-26):与面单预览同链路,组件渲染 CNPL 模板显示实际出纸版式
+// 货运标签预览(2026-10-27):后端渲染 PDF 每页为 PNG 返回 images 数组,弹窗支持多页翻页。
+// 不依赖组件预览图 URL(组件 URL 为打印电脑本地地址,浏览器常无法访问),组件离线也可预览。
 async function onPreviewRender(c) {
   if (!c?.store_id) return;
   if (labelPreview.loading) return;
   labelPreview.loading = Number(c.id);
   try {
-    const blob = await fetchContainerLabel(c.store_id, Number(c.id));
-    const url = await previewContainerLabelImage(blob, Number(c.id), c.store_id);
-    labelPreview.url = url;
+    const data = await fetchContainerLabelPreview(c.store_id, Number(c.id));
+    const images = data?.images || [];
+    if (!images.length) throw new Error('预览图拉取失败');
+    labelPreview.images = images;
+    labelPreview.page = 0;
     labelPreview.open = true;
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
     labelPreview.loading = 0;
   }
+}
+function previewPrev() {
+  if (labelPreview.page > 0) labelPreview.page--;
+}
+function previewNext() {
+  if (labelPreview.page < labelPreview.images.length - 1) labelPreview.page++;
 }
 
 // 查看原始 PDF(内嵌底部 iframe,便于核对条形码细节)
@@ -439,13 +449,22 @@ onMounted(async () => {
       <div v-else class="preview-empty">点击行内「PDF」查看货运标签原始 PDF</div>
     </div>
 
-    <!-- 菜鸟组件无纸预览弹窗(显示实际出纸版式,不出纸不流转状态) -->
-    <AppModal :open="labelPreview.open" title="货运标签预览(CNPL 模板渲染 · 76×130mm)" @update:open="labelPreview.open = $event">
+    <!-- 货运标签预览弹窗(显示实际出纸版式,多页可翻页) -->
+    <AppModal
+      :open="labelPreview.open"
+      :title="'货运标签预览 · 76×130mm' + (labelPreview.images.length > 1 ? ' · ' + (labelPreview.page + 1) + '/' + labelPreview.images.length + '页' : '')"
+      @update:open="labelPreview.open = $event"
+    >
       <div class="label-preview-body">
-        <img v-if="labelPreview.url" :src="labelPreview.url" alt="货运标签预览" class="label-preview-img" />
+        <img v-if="labelPreview.images.length" :src="labelPreview.images[labelPreview.page]" alt="货运标签预览" class="label-preview-img" />
+        <div v-if="labelPreview.images.length > 1" class="label-preview-nav">
+          <button class="btn btn-ghost btn-sm" :disabled="labelPreview.page === 0" @click="previewPrev">上一页</button>
+          <span class="label-preview-page">{{ labelPreview.page + 1 }} / {{ labelPreview.images.length }}</span>
+          <button class="btn btn-ghost btn-sm" :disabled="labelPreview.page === labelPreview.images.length - 1" @click="previewNext">下一页</button>
+        </div>
         <div class="label-preview-tip">
-          组件按 CNPL 模板(label-image-76x130.xml)渲染:货运标签旋转 90° 适配 76×130mm 竖向纸,
-          预览即实际出纸版式,不消耗纸张、不流转订单状态。
+          服务器按 PDF 渲染:货运标签旋转 90° 适配 76×130mm 竖向纸,预览即实际出纸版式,
+          不消耗纸张、不流转订单状态。
         </div>
       </div>
     </AppModal>
@@ -739,5 +758,17 @@ onMounted(async () => {
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-secondary, #9ca3af);
+}
+.label-preview-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 10px;
+}
+.label-preview-page {
+  font-size: 13px;
+  color: var(--text-secondary, #6b7280);
+  font-variant-numeric: tabular-nums;
 }
 </style>

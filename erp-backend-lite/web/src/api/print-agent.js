@@ -538,6 +538,13 @@ export async function previewContainerLabelImage(blob, labelId, storeId = '') {
   });
 }
 
+// 货运标签服务端多页预览(2026-10-27):后端渲染 PDF 每页为 PNG 返回 images 数组。
+// 不依赖组件预览图 URL(组件 URL 为打印电脑本地地址,服务器/浏览器常无法访问),
+// 组件离线也可预览实际出纸版式。返回 { images: [dataUrl, ...], imageDataUrl, labelId }
+export function fetchContainerLabelPreview(storeId, labelId) {
+  return post('/admin/api/print-agent/preview-container-label', { storeId, labelId });
+}
+
 // ── 货运标签打印(2026-10-25)────────────────────────────
 // Ozon FBS 交接单按集装箱/包裹生成独立货运标签 PDF(/v2/posting/fbs/act/get-container-labels)。
 // 前端链路:拉取 PDF blob → 双通道打印(与面单相同);另有服务端直打接口(见 printContainerLabel)。
