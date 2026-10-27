@@ -191,10 +191,14 @@ export async function pickLabelPrinter() {
 // rotation:顺时针旋转角度(0/90/180/270)。货运标签 PDF 为 100x70mm 横向,
 // 打印到 76x130mm 竖向纸时 rotation=90 转成 70x100 竖向再 contain(2026-10-25 适配纸张)
 // overlayText:非空时在画布底部定制区绘制(如店铺名 YQL01),用于面单分拣(2026-10-26 由顶部白条改为底部定制区)
-async function pdfToPng(blob, widthMm = 76, pageHm = 129, rotation = 0, overlayText = '') {
+async function openPdf(blob) {
   const pdfjs = await import('pdfjs-dist');
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-  const page = await (await pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise).getPage(1);
+  return pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise;
+}
+
+// 渲染单个 PDF 页为 PNG dataURL(画布固定标签纸比例,PDF contain 缩放)
+async function renderPdfPageToPng(page, widthMm, pageHm, rotation, overlayText) {
   const base = page.getViewport({ scale: 1, rotation });
   const canvasW = 1100; // 目标宽 1100px,条码足够清晰
   const canvasH = Math.round((canvasW * pageHm) / widthMm); // 画布高按标签纸比例固定
@@ -234,6 +238,24 @@ async function pdfToPng(blob, widthMm = 76, pageHm = 129, rotation = 0, overlayT
     ctx.fillText(overlayText, canvasW / 2, top + customH / 2);
   }
   return { dataUrl: canvas.toDataURL('image/png'), w: canvas.width, h: canvas.height };
+}
+
+// 渲染 PDF 第 1 页为 PNG(兼容旧调用;多页打印请用 pdfToPngPages)
+async function pdfToPng(blob, widthMm = 76, pageHm = 129, rotation = 0, overlayText = '') {
+  const doc = await openPdf(blob);
+  const page = await doc.getPage(1);
+  return renderPdfPageToPng(page, widthMm, pageHm, rotation, overlayText);
+}
+
+// 渲染 PDF 所有页为 PNG 数组(2026-10-27 多页货运标签逐页打印)
+async function pdfToPngPages(blob, widthMm = 76, pageHm = 129, rotation = 0, overlayText = '') {
+  const doc = await openPdf(blob);
+  const pages = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    pages.push(await renderPdfPageToPng(page, widthMm, pageHm, rotation, overlayText));
+  }
+  return pages;
 }
 
 // CNPL 图片模板任务内容(明文 data:img=PNG dataURL,h=图高 mm;documentID 自定义模板需保证唯一,用运单号)
@@ -335,12 +357,25 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
   const rotation = opts.rotation || 0;
   const storeId = opts.storeId || '';
   const overlayText = opts.storeName || ''; // 面单打印时叠加店铺名(如 YQL01)
-  const { dataUrl, w, h } = await pdfToPng(blob, widthMm, pageHm, rotation, overlayText);
-  const hMm = Math.round((widthMm * h) / w * 10) / 10;
+  // 2026-10-27 支持多页:PDF 每页渲染一张 PNG,按页序逐页连续出纸(documentID 加 -pN 区分)
+  const pages = await pdfToPngPages(blob, widthMm, pageHm, rotation, overlayText);
   const parsed = parsePrinter(printer);
+  const docIds = pages.map((_, i) => (pages.length > 1 ? `${documentId}-p${i + 1}` : String(documentId)));
+  const hMmOf = (p) => Math.round((widthMm * p.h) / p.w * 10) / 10;
+
+  const sendViaServer = async (name) => {
+    for (let i = 0; i < pages.length; i++) {
+      await printViaServer(pages[i].dataUrl, hMmOf(pages[i]), docIds[i], name || serverDefaultPrinter, templateName, storeId);
+    }
+  };
+  const sendViaLocal = async (name) => {
+    for (let i = 0; i < pages.length; i++) {
+      await printViaLocal(pages[i].dataUrl, hMmOf(pages[i]), docIds[i], name, templateName);
+    }
+  };
 
   if (parsed.source === 'server') {
-    await printViaServer(dataUrl, hMm, documentId, parsed.name || serverDefaultPrinter, templateName, storeId);
+    await sendViaServer(parsed.name);
     return;
   }
 
@@ -355,13 +390,13 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
     && !localProbeCache.result.online;
   if (!cacheFreshOffline) {
     try {
-      await printViaLocal(dataUrl, hMm, documentId, localPrinter, templateName);
+      await sendViaLocal(localPrinter);
       return;
     } catch (err) {
-      // 本机打印中途失败 → 服务器组件兜底:保留用户指定打印机名,未指定用服务器默认打印机名
+      // 本机打印中途失败 → 服务器组件兜底:整单所有页重发服务器,避免部分打印
       const server = await getServerAgentStatus();
       if (server.online) {
-        await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter, templateName, storeId);
+        await sendViaServer(parsed.name);
         return;
       }
       throw err;
@@ -370,7 +405,7 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
 
   const server = await getServerAgentStatus();
   if (server.online) {
-    await printViaServer(dataUrl, hMm, documentId, parsed.name || server.defaultPrinter, templateName, storeId);
+    await sendViaServer(parsed.name);
     return;
   }
   throw new Error('菜鸟打印组件不可用:本机组件未连接,服务器组件转发也不可用');

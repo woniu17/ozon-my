@@ -12,7 +12,7 @@
 import { Router } from 'express';
 import { WebSocket } from 'ws';
 import { ok } from '../utils/response.js';
-import { pdfToPngDataUrl } from '../services/waybill-image.js';
+import { pdfToPngDataUrl, pdfToPngPagesDataUrl } from '../services/waybill-image.js';
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
@@ -572,12 +572,16 @@ router.post('/admin/api/print-agent/print-container-label', async (req, res, nex
     const { buffer } = await containerLabel(store, labelId);
     // 货运标签 PDF 实测 100x70mm 横向,用户纸张为 76x130mm 竖向(2026-10-25):
     // 渲染时顺时针旋转 90° 成 70x100 竖向,contain 到 76:129 画布(上下留白),
-    // 模板用 76x130 竖向专用,避免横版压扁或留大片空白
-    const rendered = await pdfToPngDataUrl(buffer, 76, 129, 90);
-    const hMm = Math.round((76 * rendered.h) / rendered.w * 10) / 10;
-    const documentId = String(labelId);
+    // 模板用 76x130 竖向专用,避免横版压扁或留大片空白。
+    // 2026-10-27 支持多页:PDF 有多页时每页渲染一张,按页序逐页连续出纸(documentID 加 -pN 区分)。
+    const pages = await pdfToPngPagesDataUrl(buffer, 76, 129, 90);
     const templateBase = getTemplateBase(req);
-    await sendPrint(rendered.dataUrl, hMm, documentId, printer, templateBase, 'label-image-76x130.xml');
+    for (let i = 0; i < pages.length; i++) {
+      const rendered = pages[i];
+      const hMm = Math.round((76 * rendered.h) / rendered.w * 10) / 10;
+      const documentId = pages.length > 1 ? `${labelId}-p${i + 1}` : String(labelId);
+      await sendPrint(rendered.dataUrl, hMm, documentId, printer, templateBase, 'label-image-76x130.xml');
+    }
     const durationMs = Date.now() - startTs;
     logger.info({ storeId, labelId, printer: printer || 'default', durationMs }, '[print-agent] 货运标签打印成功');
     // posting_number 存 labelId,供「是否已打印」查询(listPrintedContainerLabelIds)

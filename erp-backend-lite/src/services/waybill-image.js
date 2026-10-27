@@ -15,26 +15,20 @@ function loadPdfjs() {
   return pdfjsPromise;
 }
 
-/**
- * 渲染 PDF 第 1 页为 PNG dataURL(默认 76×129mm 标签纸比例)。
- * @param {Buffer|Uint8Array} pdfBuffer Ozon 面单 PDF
- * @param {number} widthMm 标签纸宽(mm),默认 76
- * @param {number} pageHm 标签纸高(mm),默认 129
- * @param {number} rotation 顺时针旋转角度(0/90/180/270);货运标签横版打竖向纸时传 90
- * @param {string} [overlayText] 非空时在画布底部定制区绘制(如店铺名 YQL01),用于面单分拣
- * @returns {Promise<{dataUrl:string,w:number,h:number}>}
- */
-export async function pdfToPngDataUrl(pdfBuffer, widthMm = 76, pageHm = 129, rotation = 0, overlayText = '') {
+/** 打开 PDF 文档(pdfjs legacy,Node 环境) */
+async function openPdf(pdfBuffer) {
   const pdfjs = await loadPdfjs();
-  const doc = await pdfjs
+  return pdfjs
     .getDocument({
       data: new Uint8Array(pdfBuffer),
       disableWorker: true, // Node 环境不用 worker
       standardFontDataUrl: STANDARD_FONTS_DIR,
     })
     .promise;
-  const page = await doc.getPage(1);
+}
 
+/** 渲染指定 PDF 页为 PNG dataURL(画布固定标签纸比例,PDF contain 缩放) */
+async function renderPdfPage(page, widthMm, pageHm, rotation, overlayText) {
   // 同前端:画布固定标签纸比例(宽 1100px),PDF contain 缩放,避免组件拉伸变形
   const canvasW = 1100;
   const canvasH = Math.round((canvasW * pageHm) / widthMm);
@@ -78,4 +72,33 @@ export async function pdfToPngDataUrl(pdfBuffer, widthMm = 76, pageHm = 129, rot
   }
 
   return { dataUrl: canvas.toDataURL('image/png'), w: canvas.width, h: canvas.height };
+}
+
+/**
+ * 渲染 PDF 第 1 页为 PNG dataURL(默认 76×129mm 标签纸比例)。
+ * @param {Buffer|Uint8Array} pdfBuffer Ozon 面单 PDF
+ * @param {number} widthMm 标签纸宽(mm),默认 76
+ * @param {number} pageHm 标签纸高(mm),默认 129
+ * @param {number} rotation 顺时针旋转角度(0/90/180/270);货运标签横版打竖向纸时传 90
+ * @param {string} [overlayText] 非空时在画布底部定制区绘制(如店铺名 YQL01),用于面单分拣
+ * @returns {Promise<{dataUrl:string,w:number,h:number}>}
+ */
+export async function pdfToPngDataUrl(pdfBuffer, widthMm = 76, pageHm = 129, rotation = 0, overlayText = '') {
+  const doc = await openPdf(pdfBuffer);
+  const page = await doc.getPage(1);
+  return renderPdfPage(page, widthMm, pageHm, rotation, overlayText);
+}
+
+/**
+ * 渲染 PDF 所有页为 PNG dataURL 数组(多页货运标签/面单逐页打印)。
+ * 参数与 pdfToPngDataUrl 一致,返回 [{dataUrl,w,h}, ...] 每页一张。
+ */
+export async function pdfToPngPagesDataUrl(pdfBuffer, widthMm = 76, pageHm = 129, rotation = 0, overlayText = '') {
+  const doc = await openPdf(pdfBuffer);
+  const pages = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    pages.push(await renderPdfPage(page, widthMm, pageHm, rotation, overlayText));
+  }
+  return pages;
 }
