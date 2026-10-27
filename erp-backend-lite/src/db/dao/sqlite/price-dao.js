@@ -218,6 +218,7 @@ export function listPriceProducts(params) {
       agg.sales90, agg.total_sales, agg.ref_purchase_price,
       agg.last_purchased_at, agg.last_order_at,
       pw.seller_count AS pw_seller_count, pw.min_price AS pw_min_price,
+      pw.my_price AS pw_my_price,
       pw.median_price AS pw_median_price, pw.my_rank AS pw_my_rank,
       pw.is_cheapest AS pw_is_cheapest, pw.gap_pct AS pw_gap_pct,
       pw.vs_median AS pw_vs_median, pw.status AS pw_status, pw.fetched_at AS pw_fetched_at,
