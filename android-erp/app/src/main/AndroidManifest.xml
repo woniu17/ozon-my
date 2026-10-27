@@ -109,6 +109,12 @@
             android:exported="false"
             android:screenOrientation="portrait" />
 
+        <!-- 扫描备货(2026-10-27):摄像头常开连扫,上半屏相机/下半屏记录 -->
+        <activity
+            android:name=".StockScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <activity
             android:name=".OrderListActivity"
             android:exported="false"

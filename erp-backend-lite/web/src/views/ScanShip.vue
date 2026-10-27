@@ -23,6 +23,7 @@ const router = useRouter();
 
 // ── 扫描输入 ─────────────────────────────────────────────
 const scanForm = reactive({ keyword: '', mode: 'ss' }); // mode: 'ss'模糊(默认,防拼单逗号拼接漏单) | 'eq'精确
+const workMode = ref('ship'); // 工作模式: 'ship'发货(默认) | 'stock'备货(扫到待备货订单自动备货,连扫)
 const scanInputRef = ref(null);
 const searching = ref(false);
 const results = ref([]);          // 全局搜索命中的包裹(快照)
@@ -315,6 +316,25 @@ async function doSearch() {
     // 加载结果涉及 SKU 的定价信息(单价调整对比用;一次接口,sku 去重)
     loadSkuPricing([...new Set(results.value.flatMap((p) => (p.items || []).map((it) => it.sku).filter(Boolean)))]);
     const n = results.value.length;
+    // 备货模式(2026-10-27):扫到待备货订单自动备货,实现连扫
+    // 单件商品直接备货,多件弹窗二次确认;无待备货订单时回落普通搜索/卡片操作
+    if (workMode.value === 'stock') {
+      const stockPkgs = results.value.filter((p) => canShipPkg(p));
+      if (stockPkgs.length === 1) {
+        const sp = stockPkgs[0];
+        banner.type = 'info';
+        banner.text = `命中待备货订单 ${sp.postingNumber},正在备货…`;
+        await onShipPackage(sp);
+        banner.text = '';
+        return;
+      }
+      if (stockPkgs.length > 1) {
+        banner.type = 'info';
+        banner.text = `命中 ${n} 个包裹,其中 ${stockPkgs.length} 个待备货,请选择要备货的订单`;
+        focusScan();
+        return;
+      }
+    }
     if (n === 0) {
       banner.text = `未找到匹配订单「${kw}」`;
       focusScan();
@@ -401,6 +421,8 @@ async function onShipPackage(pkg) {
     show(`备货失败:${err.message || String(err)}`, 'error');
   } finally {
     shippingPkgId.value = 0;
+    // 连扫:备货处理完自动回焦扫描框,继续扫下一单
+    focusScan();
   }
 }
 
@@ -824,6 +846,10 @@ function onPrinterChange() {
     <!-- ① 扫描输入区(sticky,扫码枪主操作目标) -->
     <div class="scan-bar-wrap">
       <div class="scan-bar card">
+        <select v-model="workMode" class="filter-input scan-mode" title="工作模式:备货=扫到待备货订单自动备货(单件直接,多件确认);发货=正常扫描发货流程">
+          <option value="ship">发货</option>
+          <option value="stock">备货</option>
+        </select>
         <select v-model="scanForm.mode" class="filter-input scan-mode" title="匹配模式:默认模糊(拼单采购单号逗号拼接,精确匹配会漏单)">
           <option value="ss">模糊</option>
           <option value="eq">精确</option>
