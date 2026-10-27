@@ -55,7 +55,8 @@ export function enqueuePriceWatch(sku, { profileDir }) {
 // 同步轮询反复重置任务、频繁占用 linqx-profile 采集浏览器。
 const ORDER_SKU_RECENT_OK_MS = 6 * 3600_000;   // 6h 内已有成功快照/任务 → 不再采集
 const ORDER_SKU_RECENT_FAIL_MS = 30 * 60_000;  // 30 分钟内失败过 → 不立即重试
-export function enqueuePriceWatchForOrderSku(sku, { profileDir }) {
+// force=true(订单处理页"获取跟卖/刷新"按钮):跳过近期成功/失败节流,强制重新入队采集。
+export function enqueuePriceWatchForOrderSku(sku, { profileDir, force = false }) {
   const skuStr = String(sku || '').trim();
   if (!/^\d+$/.test(skuStr)) return { status: 'error', error: 'sku 非法' };
 
@@ -65,19 +66,19 @@ export function enqueuePriceWatchForOrderSku(sku, { profileDir }) {
       return { status: task.status, sku: skuStr };
     }
     const age = task.finished_at ? Date.now() - new Date(task.finished_at).getTime() : Infinity;
-    if (task.status === 'ok' && age < ORDER_SKU_RECENT_OK_MS) {
+    if (!force && task.status === 'ok' && age < ORDER_SKU_RECENT_OK_MS) {
       return { status: 'recent_ok', sku: skuStr };
     }
-    if (task.status === 'failed' && age < ORDER_SKU_RECENT_FAIL_MS) {
+    if (!force && task.status === 'failed' && age < ORDER_SKU_RECENT_FAIL_MS) {
       return { status: 'recent_failed', sku: skuStr };
     }
   }
 
-  // 快照表兜底:6h 内已采集过(含无跟卖 empty)则跳过
+  // 快照表兜底:6h 内已采集过(含无跟卖 empty)则跳过(手动刷新时忽略)
   const snap = db
     .prepare(`SELECT fetched_at FROM price_watch_snapshots WHERE sku = ? ORDER BY id DESC LIMIT 1`)
     .get(skuStr);
-  if (snap?.fetched_at && Date.now() - new Date(snap.fetched_at).getTime() < ORDER_SKU_RECENT_OK_MS) {
+  if (!force && snap?.fetched_at && Date.now() - new Date(snap.fetched_at).getTime() < ORDER_SKU_RECENT_OK_MS) {
     return { status: 'recent_snapshot', sku: skuStr };
   }
 

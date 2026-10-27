@@ -17,6 +17,8 @@ import { Router } from 'express';
 import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
+import config from '../config/index.js';
+import { enqueuePriceWatchForOrderSku } from '../services/price-watch-queue.js';
 
 const router = Router();
 
@@ -455,29 +457,59 @@ router.get('/admin/api/price-watch/detail/:sku', (req, res, next) => {
 
 // ── POST /admin/api/price-watch/order-snapshots ─────────────
 // 订单处理页/安卓端:批量查询"订单生成后最近一次"跟卖快照,用于对比订单售价。
-// body: { items: [{ sku, after }] }  after = 订单创建时间(ISO);取 fetched_at >= after 的最早一条。
+// body: { items: [{ sku, after }] }
+//   after = 订单创建时间(ISO,可选):有 after 取下单后最早一条;无 after 取最新一条(旧订单手动刷新)。
 // 返回 { map: { [sku]: snapshot|null } },不含 sellers 明细(列表轻量化)。
 router.post('/admin/api/price-watch/order-snapshots', (req, res, next) => {
   try {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     const map = {};
-    const stmt = db.prepare(
-      `SELECT id, sku, store_id, my_price, seller_count, min_price, median_price, avg_price,
-              my_rank, is_cheapest, gap_abs, gap_pct, vs_median, status, error_reason, fetched_at
-       FROM price_watch_snapshots
-       WHERE sku = ? AND fetched_at >= ?
-       ORDER BY fetched_at ASC LIMIT 1`
-    );
+    const cols = `SELECT id, sku, store_id, my_price, seller_count, min_price, median_price, avg_price,
+                         my_rank, is_cheapest, gap_abs, gap_pct, vs_median, status, error_reason, fetched_at
+                  FROM price_watch_snapshots`;
+    const stmtAfter = db.prepare(`${cols} WHERE sku = ? AND fetched_at >= ? ORDER BY fetched_at ASC LIMIT 1`);
+    const stmtLatest = db.prepare(`${cols} WHERE sku = ? ORDER BY fetched_at DESC LIMIT 1`);
     for (const it of items) {
       const sku = String(it?.sku || '').trim();
       if (!/^\d+$/.test(sku)) continue;
       const d = new Date(it?.after);
-      const after = !Number.isNaN(d.getTime()) ? d.toISOString() : new Date(0).toISOString();
-      map[sku] = stmt.get(sku, after) || null;
+      const hasAfter = it?.after != null && !Number.isNaN(d.getTime());
+      map[sku] = hasAfter ? stmtAfter.get(sku, d.toISOString()) : (stmtLatest.get(sku) || null);
     }
     return res.json(ok({ map }));
   } catch (e) {
     logger.warn({ err: e.message }, '[price-watch] order-snapshots failed');
+    next(e);
+  }
+});
+
+// ── POST /admin/api/price-watch/order-snapshots/fetch ───────
+// 订单处理页"获取跟卖/刷新"按钮:强制重新采集该 SKU(跳过 6h 成功/30min 失败节流)。
+// body: { sku, after? }  after 仅用于兼容旧调用,可缺省。
+router.post('/admin/api/price-watch/order-snapshots/fetch', (req, res, next) => {
+  try {
+    const sku = String(req.body?.sku || '').trim();
+    if (!/^\d+$/.test(sku)) return res.json(ok({ status: 'error', error: 'sku 非法', sku }));
+    const r = enqueuePriceWatchForOrderSku(sku, { profileDir: config.ozonFollowSellProfileDir, force: true });
+    return res.json(ok({ status: r.status, sku, error: r.error || null }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[price-watch] order-snapshots fetch failed');
+    next(e);
+  }
+});
+
+// ── GET /admin/api/price-watch/task/:sku ─────────────────────
+// 订单处理页轮询单个 SKU 采集任务状态(手动获取跟卖后等待完成/失败)。
+router.get('/admin/api/price-watch/task/:sku', (req, res, next) => {
+  try {
+    const sku = String(req.params.sku || '').trim();
+    if (!/^\d+$/.test(sku)) return res.json(ok(null));
+    const t = db
+      .prepare(`SELECT sku, status, error_reason, created_at, started_at, finished_at FROM price_watch_tasks WHERE sku = ?`)
+      .get(sku) || null;
+    return res.json(ok(t));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[price-watch] task query failed');
     next(e);
   }
 });

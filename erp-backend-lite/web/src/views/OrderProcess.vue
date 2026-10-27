@@ -25,7 +25,7 @@ import {
   getPendingExportState,
 } from '../api/order-process.js';
 import { getSkusInfo, setSkuCustoms, updatePrice } from '../api/price-manage.js';
-import { getOrderPriceWatchSnapshots } from '../api/price-watch.js';
+import { getOrderPriceWatchSnapshots, fetchOrderPriceWatchSnapshot, getOrderPriceWatchTask } from '../api/price-watch.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
 import AppModal from '../components/AppModal.vue';
@@ -1156,6 +1156,10 @@ function openPurchase(pkg) {
     pdpUrl: it.pdpUrl,
   }));
   loadSkuPricing(purchaseForm.items);
+  // 订单生成时跟卖快照(2026-10-27):采购面板产品卡对比订单售价与市场跟卖;旧订单无快照可手动获取
+  orderPwMap.value = {};
+  orderPwFetching.value = {};
+  loadOrderPriceWatch();
   // 清空所有账号 tab 的勾选与搜索聚焦(懒建的 store 可能不存在,容错跳过)
   importSearch.keyword = '';
   importSearch.error = '';
@@ -2632,14 +2636,26 @@ async function openDetail(pkg) {
 
 // ── 订单商品跟卖快照(2026-10-27) ──
 // 新订单首次同步时后台已异步采集该 SKU 跟卖快照;此处查询"下单后最近一次快照"用于对比订单售价。
+// 旧订单无快照时提供"获取跟卖"按钮,手动强制采集并轮询任务状态补全。
 const orderPwMap = ref({});
 const orderPwLoading = ref(false);
-async function loadOrderPriceWatch() {
+const orderPwFetching = ref({}); // sku → true(正在强制采集)
+const orderPwTimers = {};          // sku → setInterval 句柄
+const ORDER_PW_POLL_MAX = 150;      // 最多轮询 150 次(≈10 分钟),避免无限等待
+
+function orderPwSkus() {
+  const items = detail.value?.items?.length ? detail.value.items : (purchaseForm.items || []);
+  return [...new Set(items.map((it) => String(it.sku)).filter(Boolean))];
+}
+function orderPwAfter() {
   const pkg = detail.value?.package;
-  const items = detail.value?.items || [];
-  const skus = [...new Set(items.map((it) => String(it.sku)).filter(Boolean))];
-  if (!pkg || !skus.length) { orderPwMap.value = {}; return; }
-  const after = pkg.inProcessAt || pkg.gmtCreate || null;
+  if (pkg?.inProcessAt || pkg?.gmtCreate) return pkg.inProcessAt || pkg.gmtCreate;
+  return purchaseRowCtx.value?.inProcessAt || null;
+}
+async function loadOrderPriceWatch() {
+  const skus = orderPwSkus();
+  if (!skus.length) { orderPwMap.value = {}; return; }
+  const after = orderPwAfter();
   orderPwLoading.value = true;
   try {
     const data = await getOrderPriceWatchSnapshots(skus.map((sku) => ({ sku, after })));
@@ -2653,6 +2669,14 @@ async function loadOrderPriceWatch() {
 // 快照字段为后端 snake_case:my_rank/seller_count/min_price/median_price/gap_pct/is_cheapest
 function orderPwRow(sku) {
   return orderPwMap.value[String(sku)] || null;
+}
+// 快照状态:ok(有跟卖)/empty(无跟卖)/error(采集失败)/null(未采集)
+function orderPwStatus(sku) {
+  const s = orderPwRow(sku);
+  if (!s) return null;
+  if (String(s.status || '') === 'error') return 'error';
+  if (String(s.status || '') === 'empty' || Number(s.seller_count || 0) === 0) return 'empty';
+  return 'ok';
 }
 function orderPwRankText(snap) {
   if (snap == null || snap.my_rank == null || snap.seller_count == null) return '';
@@ -2673,6 +2697,66 @@ function orderPwGapCls(snap) {
   const p = Number(snap.gap_pct);
   return p > 0 ? 'pw-above' : p < 0 ? 'pw-below' : 'pw-equal';
 }
+
+// 手动获取/刷新跟卖:强制入队采集,轮询任务状态直至 ok/failed
+async function orderPwFetch(sku) {
+  sku = String(sku);
+  if (orderPwFetching.value[sku]) return;
+  orderPwFetching.value = { ...orderPwFetching.value, [sku]: true };
+  try {
+    await fetchOrderPriceWatchSnapshot(sku, orderPwAfter());
+  } catch (e) {
+    orderPwFetching.value = { ...orderPwFetching.value, [sku]: false };
+    show('跟卖采集触发失败：' + (e?.message || e), 'error');
+    return;
+  }
+  await loadOrderPriceWatch();
+  orderPwStopPoll(sku);
+  let polled = 0;
+  orderPwTimers[sku] = setInterval(async () => {
+    polled += 1;
+    const done = await orderPwPollOnce(sku, polled);
+    if (done) orderPwStopPoll(sku);
+  }, 4000);
+}
+function orderPwStopPoll(sku) {
+  if (orderPwTimers[sku]) { clearInterval(orderPwTimers[sku]); delete orderPwTimers[sku]; }
+}
+async function orderPwPollOnce(sku, polled) {
+  try {
+    const task = await getOrderPriceWatchTask(sku);
+    const st = task?.status;
+    if (st === 'ok') {
+      await loadOrderPriceWatch();
+      orderPwFetching.value = { ...orderPwFetching.value, [sku]: false };
+      return true;
+    }
+    if (st === 'failed') {
+      orderPwFetching.value = { ...orderPwFetching.value, [sku]: false };
+      await loadOrderPriceWatch(); // 失败快照(status='error')可能已落库,刷新展示
+      show(`跟卖获取失败：${task.error_reason || '采集异常，请稍后重试'}`, 'error');
+      return true;
+    }
+    if (st === 'pending' || st === 'running') {
+      if (polled >= ORDER_PW_POLL_MAX) {
+        orderPwFetching.value = { ...orderPwFetching.value, [sku]: false };
+        show('跟卖采集仍在进行，请稍后刷新查看', 'info');
+        return true;
+      }
+      return false;
+    }
+    // 无任务/未知状态:结束等待并刷新一次
+    orderPwFetching.value = { ...orderPwFetching.value, [sku]: false };
+    await loadOrderPriceWatch();
+    return true;
+  } catch (e) {
+    orderPwFetching.value = { ...orderPwFetching.value, [sku]: false };
+    return true;
+  }
+}
+onUnmounted(() => {
+  for (const k of Object.keys(orderPwTimers)) orderPwStopPoll(k);
+});
 
 // ── 应计项目(2026-09,已完成/已取消货件的 Ozon 财务应计)─────
 // 汇率:列表响应附带 rubRate(每次 loadList 同步刷新);未配置时真实口径自动回退预估
@@ -4024,15 +4108,30 @@ onUnmounted(() => {
                 </div>
               </div>
             </div>
-            <!-- 订单生成时跟卖快照:对比订单售价与市场跟卖(下单后最近一次快照) -->
-            <div v-if="orderPwRow(p.sku)" class="po-pw-snap" :title="'跟卖快照采集于 ' + (orderPwRow(p.sku).fetched_at || '')">
+            <!-- 订单生成时跟卖快照:对比订单售价与市场跟卖(下单后最近一次快照);旧订单可手动获取补充 -->
+            <div v-if="orderPwStatus(p.sku) === 'ok'" class="po-pw-snap" :title="'跟卖快照采集于 ' + (orderPwRow(p.sku).fetched_at || '')">
               <span class="po-pw-label">跟卖(下单时)</span>
               <span class="po-pw-rank" :class="{ 'is-best': Number(orderPwRow(p.sku).is_cheapest) === 1 }">{{ orderPwRankText(orderPwRow(p.sku)) }}</span>
               <span class="po-pw-item">最低 <b>¥{{ orderPwMoney(orderPwRow(p.sku).min_price) }}</b></span>
               <span class="po-pw-item">中位 <b>¥{{ orderPwMoney(orderPwRow(p.sku).median_price) }}</b></span>
               <span class="po-pw-gap" :class="orderPwGapCls(orderPwRow(p.sku))">{{ orderPwGapText(orderPwRow(p.sku)) }}</span>
+              <button class="po-pw-btn" @click="orderPwFetch(p.sku)">刷新</button>
             </div>
-            <div v-else-if="orderPwLoading" class="po-pw-snap po-pw-loading">跟卖快照采集中…</div>
+            <div v-else-if="orderPwStatus(p.sku) === 'empty'" class="po-pw-snap" :title="'跟卖快照采集于 ' + (orderPwRow(p.sku).fetched_at || '')">
+              <span class="po-pw-label">跟卖(下单时)</span>
+              <span class="po-pw-empty">无跟卖</span>
+              <button class="po-pw-btn" @click="orderPwFetch(p.sku)">刷新</button>
+            </div>
+            <div v-else-if="orderPwStatus(p.sku) === 'error'" class="po-pw-snap" :title="'跟卖快照采集于 ' + (orderPwRow(p.sku).fetched_at || '')">
+              <span class="po-pw-label">跟卖</span>
+              <span class="po-pw-err">获取失败{{ orderPwRow(p.sku).error_reason ? '：' + orderPwRow(p.sku).error_reason : '' }}</span>
+              <button class="po-pw-btn" @click="orderPwFetch(p.sku)">重试</button>
+            </div>
+            <div v-else-if="orderPwLoading || orderPwFetching[p.sku]" class="po-pw-snap po-pw-loading">{{ orderPwFetching[p.sku] ? '跟卖采集中…' : '跟卖快照采集中…' }}</div>
+            <div v-else class="po-pw-snap">
+              <span class="po-pw-label">跟卖</span>
+              <button class="po-pw-btn po-pw-btn-primary" @click="orderPwFetch(p.sku)">获取跟卖</button>
+            </div>
             <!-- 第二部分:单价调整(默认折叠,点击展开;单件口径,数字右对齐) -->
             <div class="po-card-cmp">
               <div class="po-cmp-toggle">
@@ -6282,6 +6381,21 @@ a.product-title:hover {
 .po-pw-gap.pw-below { color: #16a34a; }
 .po-pw-gap.pw-equal { color: var(--text-secondary, #9ca3af); }
 .po-pw-loading { color: #9ca3af; }
+.po-pw-empty { color: var(--text-secondary, #6b7280); font-weight: 600; }
+.po-pw-err { color: #dc2626; font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.po-pw-btn {
+  margin-left: auto;
+  padding: 1px 8px;
+  border: 1px solid #dbe4ef;
+  border-radius: 5px;
+  background: #fff;
+  color: var(--text-secondary, #6b7280);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.po-pw-btn:hover { border-color: var(--primary, #165dff); color: var(--primary, #165dff); }
+.po-pw-btn-primary { margin-left: 8px; border-color: var(--primary, #165dff); color: var(--primary, #165dff); }
 .pf-row {
   display: flex;
   align-items: baseline;

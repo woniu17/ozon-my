@@ -20,7 +20,17 @@ export function getPriceWatchDetail(sku, days) {
 }
 
 // 批量查询"订单生成后最近一次"跟卖快照(订单处理页对比订单售价)
-// items: [{ sku, after }]  after = 订单创建时间 ISO
+// items: [{ sku, after }]  after = 订单创建时间 ISO(可选,不传取最新快照)
 export function getOrderPriceWatchSnapshots(items) {
   return request.post('/admin/api/price-watch/order-snapshots', { items });
+}
+
+// 手动触发采集某个 SKU 的跟卖快照(旧订单"获取跟卖/刷新"按钮,强制跳过节流)
+export function fetchOrderPriceWatchSnapshot(sku, after) {
+  return request.post('/admin/api/price-watch/order-snapshots/fetch', { sku, after });
+}
+
+// 查询单个 SKU 的采集任务状态(采集后轮询 pending/running → ok/failed)
+export function getOrderPriceWatchTask(sku) {
+  return request.get('/admin/api/price-watch/task/' + encodeURIComponent(sku));
 }
