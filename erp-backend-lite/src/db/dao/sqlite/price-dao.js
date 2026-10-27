@@ -200,7 +200,7 @@ export function listPriceProducts(params) {
     LEFT JOIN (
       -- 跟卖列表最新快照(价格管理页"跟卖"列;数据来自 price-watch 定时/按需采集)
       SELECT s.sku,
-             s.seller_count, s.min_price, s.median_price, s.my_rank,
+             s.my_price, s.seller_count, s.min_price, s.median_price, s.my_rank,
              s.is_cheapest, s.gap_pct, s.vs_median, s.status, s.fetched_at
       FROM price_watch_snapshots s
       JOIN (SELECT sku, MAX(id) AS mid FROM price_watch_snapshots GROUP BY sku) t ON s.id = t.mid
