@@ -314,7 +314,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 row.addView(newRowButton("提交发货", Color.parseColor(COLOR_PRIMARY)) {
                     confirmIgnoredIfNeeded(pkg) {
                         val g = validateWeight(weightInput)
-                        if (g != null) callbacks.onSubmitShip(pkg, g)
+                        if (g != null) confirmTagsNoteIfNeeded(pkg) { callbacks.onSubmitShip(pkg, g) }
                     }
                 })
                 actionArea.addView(row)
@@ -405,6 +405,31 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 .setTitle("搁置订单操作确认")
                 .setMessage("该订单当前为【已搁置】状态，确认继续操作吗？")
                 .setPositiveButton("确认操作") { _, _ -> action() }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+
+        /**
+         * 标签/备注二次确认(2026-10-27):订单带标签或备注时,提交发货(自动打印面单)前弹窗提示,
+         * 用户选择"确认发货"才执行 action,避免漏看拣货/发货备注。
+         */
+        private fun confirmTagsNoteIfNeeded(pkg: Pkg, action: () -> Unit) {
+            val tags = pkg.tags?.filter { it.isNotBlank() }.orEmpty()
+            val note = pkg.note?.trim().orEmpty()
+            if (tags.isEmpty() && note.isEmpty()) {
+                action()
+                return
+            }
+            val lines = buildString {
+                if (tags.isNotEmpty()) {
+                    append("标签:").append(tags.joinToString(" · ")).append('\n')
+                }
+                if (note.isNotEmpty()) append("备注:").append(note)
+            }
+            AlertDialog.Builder(itemView.context)
+                .setTitle("订单标签/备注提醒")
+                .setMessage("货件 ${pkg.postingNumber}\n$lines\n\n确认提交发货并打印面单吗?")
+                .setPositiveButton("确认发货") { _, _ -> action() }
                 .setNegativeButton("取消", null)
                 .show()
         }

@@ -426,6 +426,20 @@ async function onSubmitShip(pkg) {
     return;
   }
   weightErrors[pkg.id] = '';
+  // 标签/备注二次确认(2026-10-27):订单带标签或备注时,打印并发货前弹提示,避免漏看
+  const hasTags = !!(pkg.tags && pkg.tags.length);
+  const hasNote = !!(pkg.note && pkg.note.trim());
+  if (hasTags || hasNote) {
+    const infoLines = [];
+    if (hasTags) infoLines.push(`标签:${pkg.tags.join(' / ')}`);
+    if (hasNote) infoLines.push(`备注:${pkg.note}`);
+    const okInfo = await confirmStore.ask({
+      title: '订单标签/备注提醒',
+      message: `包裹 ${pkg.postingNumber}\n${infoLines.join('\n')}\n\n确认打印面单并发货吗?`,
+      confirmText: '确认发货',
+    });
+    if (!okInfo) return;
+  }
   printingPkgId.value = pkg.id;
   let submitted = false; // 重量是否已成功落库(区分 submit 失败与打印失败)
   try {
