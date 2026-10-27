@@ -165,12 +165,14 @@ async function searchXianyuInAccount(orderSn, account) {
       const hit = orders.find((o) => o.orderSn === sn);
       if (hit) {
         // 对齐 searchPddOrder/searchAliOrder 返回结构
+        // sellerName 一并带回(2026-10-27:手动录入采购单 auto 补全时回填 op_purchase_order.seller_name)
         return {
           orderSn: hit.orderSn,
           orderAmount: hit.amount,
           orderTime: hit.orderTime,
           statusPrompt: hit.statusPrompt,
           trackingNumber: hit.trackingNumber,
+          sellerName: hit.sellerName,
           goods: hit.goods,
         };
       }

@@ -247,12 +247,14 @@ async function searchAliOpenApiInAccount(orderSn, account) {
   const n = normalizeOpenApiOrder(detail, account);
   // 对齐浏览器版 searchAliOrder 返回结构
   // (物流单号不再随查:2026-09-17 限流治理,保存为采购订单后统一补查)
+  // sellerName 一并带回(2026-10-27:手动录入采购单 auto 补全时回填 op_purchase_order.seller_name)
   const result = {
     orderSn: n.orderSn,
     orderAmount: n.amount,
     orderTime: n.orderTime,
     statusPrompt: n.statusPrompt,
     trackingNumber: '',
+    sellerName: n.sellerName,
     goods: n.goods,
   };
   return result;

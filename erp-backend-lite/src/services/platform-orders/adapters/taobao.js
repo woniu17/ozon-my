@@ -188,12 +188,14 @@ async function searchTaobaoInAccount(orderSn, account) {
     if (!orders.length) return null; // 没找到
     const o = orders[0];
     // 对齐插件 searchTaobaoOrder 返回结构(与 searchPddOrder/searchAliOrder 一致)
+    // sellerName 一并带回(2026-10-27:手动录入采购单 auto 补全时回填 op_purchase_order.seller_name)
     return {
       orderSn: o.orderSn,
       orderAmount: o.amount,
       orderTime: o.orderTime,
       statusPrompt: o.statusPrompt,
       trackingNumber: o.trackingNumber,
+      sellerName: o.sellerName,
       goods: o.goods,
     };
   });

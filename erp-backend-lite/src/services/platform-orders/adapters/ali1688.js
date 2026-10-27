@@ -152,12 +152,14 @@ async function searchAliInAccount(orderSn, account) {
     if (!orders || !orders.length) return null;
     const n = normalize1688Order(orders[0]);
     // 对齐插件 searchAliOrder 返回结构(与 searchPddOrder 一致)
+    // sellerName 一并带回(2026-10-27:手动录入采购单 auto 补全时回填 op_purchase_order.seller_name)
     return {
       orderSn: n.orderSn,
       orderAmount: n.amount,
       orderTime: n.orderTime,
       statusPrompt: n.statusPrompt,
       trackingNumber: n.trackingNumber,
+      sellerName: n.sellerName,
       goods: n.goods,
     };
   }, { settleMs: ALI_SETTLE_MS });

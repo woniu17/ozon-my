@@ -208,6 +208,9 @@ function normalizeSearchOrder(o) {
     orderTime: o.order_time || 0,
     statusPrompt: o.order_status_prompt || '',
     trackingNumber: o.tracking_number || '',
+    // mallName 与列表接口一致;sellerName 为别名(2026-10-27:auto 补全回填 op_purchase_order.seller_name)
+    mallName: (o.mall && o.mall.mall_name) || '',
+    sellerName: (o.mall && o.mall.mall_name) || '',
     goods: (o.order_goods || []).map((g) => ({
       goodsName: g.goods_name || '',
       goodsId: String(g.goods_id || ''), // 商品ID,拼详情页 mobile.yangkeduo.com/goods.html?goods_id={id}

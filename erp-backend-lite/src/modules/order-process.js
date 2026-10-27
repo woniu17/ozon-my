@@ -741,7 +741,13 @@ async function autoEnrichPurchase(dbPlatform, orderSn) {
     if (!searchFn || !accounts.length) return;
     const { result } = await searchFn(orderSn, accounts);
     if (!result?.goods?.length) return;
-    const r = orderPackageDao.enrichPurchaseItems([{ platform: dbPlatform, purchaseSn: orderSn, goods: result.goods }]);
+    // 2026-10-27:搜索结果带回 sellerName,随补全一并回填(手动录入单买家账号已有,卖家名缺失)
+    const r = orderPackageDao.enrichPurchaseItems([{
+      platform: dbPlatform,
+      purchaseSn: orderSn,
+      sellerName: result.sellerName || null,
+      goods: result.goods,
+    }]);
     if (r.updated > 0) logger.info({ platform: dbPlatform, purchaseSn: orderSn, goods: result.goods.length }, '[order-process] 采购单自动补全完成');
   } catch (e) {
     logger.warn({ platform: dbPlatform, purchaseSn: orderSn, err: e?.message }, '[order-process] 采购单自动补全失败(可手动补全兜底)');

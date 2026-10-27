@@ -1403,11 +1403,11 @@ export function listPendingPurchases(platform) {
   const where = [
     `link_status = 'linked'`,
     `purchase_sn IS NOT NULL AND length(purchase_sn) > 0`,
-    // 待补全条件:items_json 为空,或不含 thumbUrl(妙手回填的 {title,price,num} 也算待补全),
-    // 或不含 goodsId,或 goodsId 键存在但值为空串/null(2026-09-17 修复:存量 1145 单 goodsId="" 含键名,
-    // NOT LIKE '%goodsId%' 误判为已齐全永不进队列;补全重跑即可获得商品详情页链接)
+    // 待补全条件(2026-10-27 扩展):items_json 不完整(缺图/缺 goodsId),或卖家名为空——
+    // 手动录入(模式B)auto 补全只写商品图不落卖家名,补全按钮一并回填 seller_name
     `(items_json IS NULL OR length(items_json) = 0 OR items_json NOT LIKE '%thumbUrl%' OR items_json NOT LIKE '%goodsId%'
-      OR items_json LIKE '%"goodsId":""%' OR items_json LIKE '%"goodsId":null%')`,
+      OR items_json LIKE '%"goodsId":""%' OR items_json LIKE '%"goodsId":null%'
+      OR seller_name IS NULL OR length(seller_name) = 0)`,
   ];
   const params = [];
   if (platform) { where.push(`platform = ?`); params.push(platform); }
@@ -1443,9 +1443,12 @@ function normalizeThumbUrl(u) {
 
 export function enrichPurchaseItems(items) {
   const now = nowIso();
+  // 2026-10-27:搜索补全同时回填卖家名(手动录入/模式B auto 补全只写商品图,不落卖家名)。
+  // seller_name 用 COALESCE 只填空值,不覆盖用户手动填写的卖家名;传 null 时列不变。
   const stmt = db.prepare(
     `UPDATE op_purchase_order
      SET items_json = ?,
+         seller_name = COALESCE(seller_name, ?),
          gmt_modified = ?
      WHERE platform = ? AND purchase_sn = ?`
   );
@@ -1470,7 +1473,7 @@ export function enrichPurchaseItems(items) {
         }));
       if (!goods.length) { skipped++; continue; }
       const itemsJson = JSON.stringify(goods);
-      const res = stmt.run(itemsJson, now, platform, sn);
+      const res = stmt.run(itemsJson, it.sellerName || null, now, platform, sn);
       if (res.changes > 0) {
         updated++;
         // 图片预热(2026-10):补全后异步把采购主图下载到本地图床,首访即命中

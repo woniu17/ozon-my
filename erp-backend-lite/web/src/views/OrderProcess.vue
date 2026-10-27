@@ -579,7 +579,7 @@ function buildEnrichConfirmMessage(pending, platforms) {
   const platformLabels = { yangkeduo: '拼多多', '1688': '1688', taobao: '淘宝', xianyu: '闲鱼' };
   const lines = [];
   lines.push(`检测到 ${pending.length} 条待补全采购单(${platforms.join('+')},全量,不限当前页)。`);
-  lines.push(`将逐个搜索补全商品图/数量,每单间隔 ${ENRICH_INTERVAL_MS / 1000}s 限速,连续失败 ${ENRICH_MAX_CONSEC_FAIL} 次自动中止。`);
+  lines.push(`将逐个搜索补全商品图/数量/卖家信息,每单间隔 ${ENRICH_INTERVAL_MS / 1000}s 限速,连续失败 ${ENRICH_MAX_CONSEC_FAIL} 次自动中止。`);
   lines.push('此操作由 ERP 后端浏览器取数,需在 qxqx 的 persistent 中已登录对应平台。');
   lines.push('');
   lines.push('── 待补全采购订单号 ──');
@@ -683,9 +683,11 @@ async function onEnrichPurchaseItems() {
       try {
         const resp = await platformSearchReq(reqPlatform, p.purchaseSn);
         if (resp?.ok && resp.result && Array.isArray(resp.result.goods) && resp.result.goods.length) {
+          // 2026-10-27:搜索接口已带回 sellerName,随补全一并回填(手动录入单只写商品图不落卖家名)
           items.push({
             purchaseSn: p.purchaseSn,
             platform: platformKey,
+            sellerName: resp.result.sellerName || null,
             goods: resp.result.goods.map((g) => ({
               goodsName: g.goodsName || '',
               spec: g.spec || '',
@@ -3305,7 +3307,7 @@ onUnmounted(() => {
       <button class="btn btn-ghost" :disabled="syncingMs" @click="onSyncMsToLocal" title="从妙手同步:把妙手订单的重量/备注/采购金额/采购订单详情同步到本地">
         {{ syncingMs ? '妙手同步中…' : '从妙手同步' }}
       </button>
-      <button class="btn btn-ghost" :disabled="enrichingItems || syncingMs" @click="onEnrichPurchaseItems" title="补全采购订单信息:拉取全量待补全清单(拼多多+1688+淘宝),串行限速搜索补全商品图/数量,连续失败3次自动中止">
+      <button class="btn btn-ghost" :disabled="enrichingItems || syncingMs" @click="onEnrichPurchaseItems" title="补全采购订单信息:拉取全量待补全清单(拼多多+1688+淘宝),串行限速搜索补全商品图/数量/卖家信息,连续失败3次自动中止">
         {{ enrichingItems ? '补全中…' : '补全采购订单信息' }}
       </button>
       <button v-if="enrichingItems" class="btn btn-danger" @click="enrichStop" title="中止当前补全任务(已采集未入库的批次会收尾入库)">中止</button>
