@@ -16,7 +16,6 @@ import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -190,7 +189,15 @@ class OrderListActivity : ComponentActivity() {
         }
 
         override fun onEditMeta(pkg: Pkg) {
-            showMetaEditDialog(pkg)
+            this@OrderListActivity.showPackageMetaEditDialog(
+                packageId = pkg.id,
+                postingNumber = pkg.postingNumber,
+                currentTags = pkg.tags,
+                currentNote = pkg.note,
+                scope = lifecycleScope
+            ) { note, tags ->
+                savePackageMeta(pkg, note, tags)
+            }
         }
     })
 
@@ -373,104 +380,6 @@ class OrderListActivity : ComponentActivity() {
                 reload()
             }
             .show()
-    }
-
-    // ── 标签/备注编辑(2026-10-27,对齐 Web 行内编辑;2026-10-28 新增已有标签可选列表)──
-    private fun showMetaEditDialog(pkg: Pkg) {
-        val ctx = this
-        val tagsInput = EditText(ctx).apply {
-            hint = "多个标签用逗号分隔"
-            textSize = 14f
-            setText(pkg.tags?.joinToString(","))
-            setPadding(12, 10, 12, 10)
-        }
-        val noteInput = EditText(ctx).apply {
-            hint = "备注(可空)"
-            textSize = 14f
-            gravity = Gravity.TOP or Gravity.START
-            minLines = 2
-            setText(pkg.note)
-            setPadding(12, 10, 12, 10)
-        }
-        val chipsFlow = FlowLayout(ctx)
-        val chipsScroll = ScrollView(ctx).apply {
-            isVerticalScrollBarEnabled = false
-            addView(chipsFlow)
-        }
-        val tagsLabel = TextView(ctx).apply {
-            text = "已有标签(点击选择):"
-            textSize = 11f
-            setTextColor(Color.parseColor("#86909c"))
-        }
-        val noteLabel = TextView(ctx).apply {
-            text = "备注:"
-            textSize = 11f
-            setTextColor(Color.parseColor("#86909c"))
-        }
-        val chipHeight = (150 * ctx.resources.displayMetrics.density).toInt()
-        val form = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.setMargins(24, 8, 24, 0)
-            addView(tagsInput, lp)
-            val labelLp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            labelLp.topMargin = 10
-            addView(tagsLabel, labelLp)
-            val scrollLp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                chipHeight
-            )
-            scrollLp.topMargin = 4
-            addView(chipsScroll, scrollLp)
-            val noteLabelLp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            noteLabelLp.topMargin = 10
-            addView(noteLabel, noteLabelLp)
-            val noteLp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            noteLp.topMargin = 4
-            addView(noteInput, noteLp)
-        }
-
-        AlertDialog.Builder(ctx)
-            .setTitle("编辑标签/备注")
-            .setMessage("货件 ${pkg.postingNumber ?: pkg.id}")
-            .setView(form)
-            .setNegativeButton("取消", null)
-            .setPositiveButton("保存") { _, _ ->
-                val tags = tagsInput.text.toString()
-                    .split(",", "，")
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                    .distinct()
-                val note = noteInput.text.toString().trim()
-                savePackageMeta(pkg, note, tags)
-            }
-            .show()
-
-        // 异步拉取已有标签可选列表(对齐 Web tagOptions),失败静默(仍可手输)
-        lifecycleScope.launch {
-            try {
-                val arr = Api.get("/admin/api/order-process/tags")
-                    .asJsonArray
-                val names = arr.mapNotNull { el ->
-                    if (el.isJsonObject) el.asJsonObject.optString("name").takeIf { it.isNotBlank() } else null
-                }
-                ctx.renderSelectableTagChips(chipsFlow, tagsInput, names)
-            } catch (e: Exception) {
-                // 网络/接口异常时仅隐藏可选列表,不影响手动输入
-            }
-        }
     }
 
     private fun savePackageMeta(pkg: Pkg, note: String, tags: List<String>) {
