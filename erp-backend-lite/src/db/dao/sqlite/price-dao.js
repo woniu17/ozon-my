@@ -6,6 +6,7 @@
 //   - 采购价/重量存 product_data_cache.custom_purchase_price / custom_weight_g(与商品列表共用)
 //   - 利润/利润率/建议价不在库里计算,由 services/profit-estimator.js 统一(排序场景在 SQL 内联同款公式)
 import { db } from '../../index.js';
+import { buildOglDeliverySql } from '../../../services/ogl-freight.js';
 
 function nowIso() {
   return new Date().toISOString();
@@ -118,8 +119,10 @@ export function listPriceProducts(params) {
   // 权重表达式:custom_weight_g > attributes_cache.weight(与 getWeightsByPackageIds 同款优先级)
   const WEIGHT = `CAST(COALESCE(pdc.custom_weight_g, json_extract(pac.attributes_data, '$.weight')) AS REAL)`;
   // 单件利润(CNY):售价×(1-佣金率) − 配送(无重量按0,回退打包口径) − 采购价
+  // 配送费走 OGL 分档费率(价格管理默认 OGL,2026-10-27),@db/@dg 仅作越界回退
+  const DELIVERY = buildOglDeliverySql(WEIGHT, 'c.price', '@db', '@dg');
   const PROFIT = `CASE WHEN c.price IS NOT NULL AND pdc.custom_purchase_price IS NOT NULL THEN
-      ROUND(c.price * (1 - @cr) - CASE WHEN ${WEIGHT} IS NOT NULL THEN @db + @dg * ${WEIGHT} ELSE 0 END - pdc.custom_purchase_price, 2)
+      ROUND(c.price * (1 - @cr) - CASE WHEN ${WEIGHT} IS NOT NULL THEN ${DELIVERY} ELSE 0 END - pdc.custom_purchase_price, 2)
     END`;
   const RATE_COST = `CASE WHEN ${PROFIT} IS NOT NULL AND pdc.custom_purchase_price > 0 THEN
       ROUND(${PROFIT} / pdc.custom_purchase_price * 100, 2) END`;
@@ -427,8 +430,9 @@ export function lastPriceChange(sku) {
 
 export function priceManageSummary({ commissionRate = 0.16, deliveryBase = 3.37, deliveryPerGram = 0.0281 } = {}) {
   const WEIGHT = `CAST(COALESCE(pdc.custom_weight_g, json_extract(pac.attributes_data, '$.weight')) AS REAL)`;
+  const DELIVERY = buildOglDeliverySql(WEIGHT, 'c.price', '@db', '@dg');
   const PROFIT = `CASE WHEN c.price IS NOT NULL AND pdc.custom_purchase_price IS NOT NULL THEN
-      c.price * (1 - @cr) - CASE WHEN ${WEIGHT} IS NOT NULL THEN @db + @dg * ${WEIGHT} ELSE 0 END - pdc.custom_purchase_price
+      c.price * (1 - @cr) - CASE WHEN ${WEIGHT} IS NOT NULL THEN ${DELIVERY} ELSE 0 END - pdc.custom_purchase_price
     END`;
   const RATE_COST = `CASE WHEN ${PROFIT} IS NOT NULL AND pdc.custom_purchase_price > 0 THEN ${PROFIT} / pdc.custom_purchase_price * 100 END`;
   const row = db

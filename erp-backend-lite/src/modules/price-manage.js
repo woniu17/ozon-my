@@ -19,6 +19,7 @@ import {
   DELIVERY_PER_G_CNY,
   suggestPrice,
 } from '../services/profit-estimator.js';
+import { OGL_TARIFF_GROUPS } from '../services/ogl-freight.js';
 
 const router = Router();
 
@@ -26,10 +27,13 @@ const router = Router();
 ensureWorker({ profileDir: config.ozonFollowSellProfileDir });
 
 // DAO SQL 内联公式参数(与 profit-estimator 单点一致)
+// 2026-10-27:价格管理默认 OGL(后续订单均为 OGL 配送),SQL 走 OGL 分档费率,@db/@dg 仅作越界回退
 const ESTIMATOR_PARAMS = {
   commissionRate: DEFAULT_COMMISSION_RATE,
   deliveryBase: DELIVERY_BASE_CNY,
   deliveryPerGram: DELIVERY_PER_G_CNY,
+  oglTariffGroups: OGL_TARIFF_GROUPS,
+  freightModel: 'ogl',
 };
 
 // Ozon 限频:每商品每小时改价 ≤10 次
@@ -299,6 +303,8 @@ router.post('/admin/api/price-manage/price-update', async (req, res, next) => {
         purchaseCny: pdc?.custom_purchase_price,
         weightG: pdc?.weight_g,
         targetRate: Number(targetRate),
+        // 价格管理默认 OGL(2026-10-27 用户确认:后续订单均为 OGL 配送)
+        tplIntegrationType: 'ozon_outsourced',
       });
       if (suggested == null) {
         return res.status(400).json({ ok: false, message: '目标定价需先维护采购价与重量' });

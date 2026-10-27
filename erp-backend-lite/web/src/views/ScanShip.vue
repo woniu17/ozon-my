@@ -14,6 +14,7 @@ import {
 } from '../api/order-process.js';
 import { pickLabelPrinter, printLabelImage, getAllPrinters, parsePrinter, encodePrinter } from '../api/print-agent.js';
 import { getSkusInfo, setSkuCustoms, updatePrice } from '../api/price-manage.js';
+import { oglDelivery, abtDelivery, estimateDelivery, suggestOglPrice } from '../utils/ogl-freight.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
 
@@ -56,9 +57,8 @@ const weightErrors = reactive({});
 const correct = reactive({ pkgId: 0, value: '', err: '', saving: false });
 
 // ── 单价调整(2026-09-22,口径同 OrderProcess 采购弹窗;调整该 SKU 上架价,只影响后续新订单)──
+// 2026-10-27:单件调价默认 OGL 分档费率(与价格管理一致),配送费=固定费+每克×重量
 const PM_COMMISSION_RATE = 0.16;   // 预估佣金率(对齐后端 computeProfit)
-const PM_DELIVERY_BASE_CNY = 3.37; // 国际配送费公式(对齐后端)
-const PM_DELIVERY_PER_G_CNY = 0.0281;
 const PM_TARGET_RATES = [50, 60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200]; // 目标成本利润率选项(%,与H5对齐)
 const PM_DEFAULT_RATE = 100;        // 默认选中 100%
 const skuPricing = ref({});          // sku → 价格管理 skus-info 行(现价/weightG/inCache/hasProductId)
@@ -168,8 +168,6 @@ function profitEstimated(pkg) {
 // 打印发货/更正重量后,按新重量本地重算利润(预估口径,公式与后端 computeProfit 一致)
 // 真实应计口径(estimated=false)/已取消/已退货的利润不随重量变化,不重算
 const EST_COMMISSION_RATE = 0.16;   // 预估佣金率(对齐后端 DEFAULT_COMMISSION_RATE)
-const DELIVERY_BASE_CNY = 3.37;     // 国际配送费公式(对齐后端)
-const DELIVERY_PER_G_CNY = 0.0281;
 function recomputeProfitByWeight(pkg, g) {
   const p = pkg.profit;
   if (!p || p.estimated === false || p.cancelled || p.returned) return;
@@ -177,7 +175,13 @@ function recomputeProfitByWeight(pkg, g) {
   const purchase = Number(pkg.totalPurchaseAmount) || 0;
   const round2 = (n) => Math.round(n * 100) / 100;
   const commission = round2(orderAmount * EST_COMMISSION_RATE);
-  const delivery = round2(DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * g);
+  // 按配送方式分流(OGL 分档 / ABT 线性),与后端 estimateDeliveryCny 一致
+  const delivery = round2(estimateDelivery({
+    valueCny: orderAmount,
+    weightG: g,
+    deliveryMethodName: pkg.deliveryMethod,
+    tplIntegrationType: pkg.tplIntegrationType,
+  }));
   const escrow = round2(orderAmount - commission - delivery);
   const profit = round2(escrow - purchase);
   p.commission = commission;
@@ -658,12 +662,6 @@ async function loadSkuPricing(skus) {
     console.warn('[scan-ship] skus-info failed', e);
   }
 }
-// 单件口径配送费(有重量才可估;重量缺失返回 null,利润不扣配送)
-function poUnitDelivery(weightG) {
-  const w = Number(weightG);
-  if (!(w > 0)) return null;
-  return PM_DELIVERY_BASE_CNY + PM_DELIVERY_PER_G_CNY * w;
-}
 // 当前包裹的单件均重(实物称重总量 ÷ 包裹内商品总数):
 //   - 待打单:优先取重量输入框的录入值(实时预览),未录入回退已保存重量;
 //   - 已交运/已发货:以保存的发货重量为准(录入值已失效,更正重量后自动联动);
@@ -686,20 +684,26 @@ function skuAdjustRow(pkg, it) {
   const qty = Number(it.quantity) || 0;
   const unitCost = qty > 0 ? (Number(it.purchaseAmount) || 0) / qty : 0;
   const info = skuPricing.value[it.sku] || null;
-  const unitDelivery = poUnitDelivery(pkgUnitWeightG(pkg) ?? info?.weightG);
+  const w = pkgUnitWeightG(pkg) ?? info?.weightG;
+  const listingPrice = info?.price ?? null;
+  // 现价口径配送费(OGL 分档,价值=当前上架价;无现价回退 ABT)
+  const unitDelivery = w > 0 ? (oglDelivery({ valueCny: listingPrice, weightG: w }) ?? abtDelivery(w)) : null;
   const rate = poRateChoice[it.sku] || PM_DEFAULT_RATE;
-  // 建议价(单件口径,向上取整数元,与 price-update 服务端校验同口径)
-  const suggested = unitCost > 0 && unitDelivery != null
-    ? Math.ceil((unitCost * (1 + rate / 100) + unitDelivery) / (1 - PM_COMMISSION_RATE))
+  // 建议价(单件口径,OGL 分档迭代后向上取整数元,与 price-update 服务端校验同口径)
+  const suggested = unitCost > 0 && w > 0
+    ? Math.ceil(suggestOglPrice({ purchaseCny: unitCost, weightG: w, targetRate: rate / 100, commissionRate: PM_COMMISSION_RATE }))
     : null;
   const canAdjust = !!(it.sku && unitCost > 0 && unitDelivery != null && info?.inCache && info?.hasProductId);
-  const listingPrice = info?.price ?? null;
   const oldCommission = listingPrice != null ? listingPrice * PM_COMMISSION_RATE : null;
   const newCommission = suggested != null ? suggested * PM_COMMISSION_RATE : null;
+  // 调整后配送费按建议价重新落档(新旧价可能跨价值档)
+  const newUnitDelivery = suggested != null && w > 0
+    ? (oglDelivery({ valueCny: suggested, weightG: w }) ?? abtDelivery(w))
+    : null;
   const oldProfit = listingPrice != null && unitDelivery != null
     ? Math.round((listingPrice * (1 - PM_COMMISSION_RATE) - unitDelivery - unitCost) * 100) / 100 : null;
-  const newProfit = suggested != null && unitDelivery != null
-    ? Math.round((suggested * (1 - PM_COMMISSION_RATE) - unitDelivery - unitCost) * 100) / 100 : null;
+  const newProfit = suggested != null && newUnitDelivery != null
+    ? Math.round((suggested * (1 - PM_COMMISSION_RATE) - newUnitDelivery - unitCost) * 100) / 100 : null;
   const oldRateC = oldProfit != null && unitCost > 0 ? Math.round((oldProfit / unitCost) * 1000) / 1000 : null;
   const newRateC = newProfit != null && unitCost > 0 ? Math.round((newProfit / unitCost) * 1000) / 1000 : null;
   return {

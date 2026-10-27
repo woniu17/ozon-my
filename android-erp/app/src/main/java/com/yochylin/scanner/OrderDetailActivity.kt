@@ -361,7 +361,11 @@ class OrderDetailActivity : ComponentActivity() {
         addInfoRow(dInfoList, "最晚发货", fmtTimeWithWeekday(p.shipmentDate ?: p.lastDeliveryAt))
         addInfoRow(dInfoList, "重量", p.weightG?.let { "${fmtNum(it)}g" } ?: "—")
         addInfoRow(dInfoList, "销售佣金", p.accrual?.saleFee?.let { fmtMoney(it) } ?: "—")
-        addInfoRow(dInfoList, "国际配送(估)", p.profit?.delivery?.let { fmtMoney(it) } ?: "—")
+        // OGL 订单额外展示评分组,如「¥43.65 · Budget」
+        addInfoRow(dInfoList, "国际配送(估)", buildString {
+            append(p.profit?.delivery?.let { fmtMoney(it) } ?: "—")
+            p.profit?.deliveryGroup?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
+        })
     }
 
     private fun renderMoreInfo() {

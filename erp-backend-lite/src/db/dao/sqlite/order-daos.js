@@ -1040,6 +1040,7 @@ function listPackages(filters = {}) {
       `SELECT p.*, o.posting_number, o.order_number, o.order_id AS ozon_api_order_id, o.parent_posting_number,
               o.status AS ozon_status, o.substatus, o.in_process_at, o.shipment_date, o.delivering_date,
               o.order_amount, o.buyer_name, o.buyer_city, o.delivery_method_name, o.warehouse_name, o.store_id,
+              o.tpl_integration_type,
               o.cancellation_json,
               EXISTS(SELECT 1 FROM op_ozon_order c WHERE c.store_id = o.store_id AND c.parent_posting_number = o.posting_number) AS has_children
        FROM op_package p
@@ -1167,6 +1168,7 @@ function rowToPackage(r) {
     buyerName: r.buyer_name,
     buyerCity: r.buyer_city,
     deliveryMethod: r.delivery_method_name,
+    tplIntegrationType: r.tpl_integration_type || null,
     warehouse: r.warehouse_name,
     logisticsNo: r.logistics_no,
     headLogisticsNo: r.head_logistics_no,
@@ -1490,6 +1492,7 @@ function getPackageDetail(packageId) {
       `SELECT p.*, o.posting_number, o.order_number, o.parent_posting_number, o.status AS ozon_status,
               o.substatus, o.in_process_at, o.shipment_date, o.delivering_date, o.order_amount,
               o.buyer_name, o.buyer_city, o.delivery_method_name, o.warehouse_name, o.store_id,
+              o.tpl_integration_type,
               o.cancellation_json
        FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id WHERE p.id = ?`
     )
@@ -2234,7 +2237,7 @@ function listShippedPackages({ startAt, endAt, page, pageSize } = {}) {
       `SELECT p.*, o.posting_number, o.order_number, o.order_id AS ozon_api_order_id, o.parent_posting_number,
               o.status AS ozon_status, o.substatus, o.in_process_at, o.shipment_date,
               o.delivering_date, o.order_amount, o.buyer_name, o.buyer_city,
-              o.delivery_method_name, o.warehouse_name, o.store_id, o.cancellation_json
+              o.delivery_method_name, o.warehouse_name, o.store_id, o.tpl_integration_type, o.cancellation_json
        FROM op_package p
        JOIN op_ozon_order o ON o.id = p.ozon_order_id
        WHERE ${where}

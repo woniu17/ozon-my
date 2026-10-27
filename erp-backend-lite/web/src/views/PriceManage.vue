@@ -13,14 +13,14 @@ import { getStores } from '../api/stores.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
 import AppPager from '../components/AppPager.vue';
+import { oglDelivery, abtDelivery, suggestOglPrice } from '../utils/ogl-freight.js';
 
 const { show } = useToast();
 const confirmStore = useConfirmStore();
 
 // 与后端 profit-estimator.js 同款常量(前端仅做建议价预览,服务端改价时二次校验)
+// 2026-10-27:价格管理默认 OGL 分档费率(后续订单均为 OGL),配送费=固定费+每克×重量
 const COMMISSION_RATE = 0.16;
-const DELIVERY_BASE_CNY = 3.37;
-const DELIVERY_PER_G_CNY = 0.0281;
 const TARGET_RATES = [50, 60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200]; // 按成本利润率定价选项(%,与H5对齐)
 const DEFAULT_TARGET_RATE = 100;             // 默认选中 100%
 
@@ -351,9 +351,9 @@ function suggestedPrice(row) {
   const purchase = Number(row.custom_purchase_price);
   const w = Number(row.weight_g);
   if (!(purchase > 0) || !(w > 0)) return null;
-  const delivery = DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * w;
-  // 向上取整到整数元(展示与提交同口径,后端校验同步取整)
-  return Math.ceil((purchase * (1 + rate / 100) + delivery) / (1 - COMMISSION_RATE));
+  // OGL 分档迭代求解(价值档取决于建议价本身;展示与提交同口径,后端校验同步取整)
+  const s = suggestOglPrice({ purchaseCny: purchase, weightG: w, targetRate: rate / 100, commissionRate: COMMISSION_RATE });
+  return s != null ? Math.ceil(s) : null;
 }
 
 // 当前利润明细:与后端 listPriceProducts PROFIT 口径完全一致
@@ -364,7 +364,8 @@ function currentBreakdown(row) {
   if (price == null || purchase == null) return null;
   const w = row.weight_g != null ? Number(row.weight_g) : null;
   const commission = Math.round(price * COMMISSION_RATE * 100) / 100;
-  const delivery = w != null ? Math.round((DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * w) * 100) / 100 : 0;
+  // OGL 分档(价值=当前售价);无重量按 0(回退打包口径)
+  const delivery = w != null ? Math.round((oglDelivery({ valueCny: price, weightG: w }) ?? abtDelivery(w)) * 100) / 100 : 0;
   const profit = Math.round((price - commission - delivery - purchase) * 100) / 100;
   return {
     price, commission, delivery, profit,
@@ -382,7 +383,8 @@ function adjustedProfit(row) {
   const purchase = Number(row.custom_purchase_price);
   const w = Number(row.weight_g);
   const commission = Math.round(price * COMMISSION_RATE * 100) / 100;
-  const delivery = Math.round((DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * w) * 100) / 100;
+  // OGL 分档(价值=建议价,调整后配送费按建议价落档)
+  const delivery = Math.round((oglDelivery({ valueCny: price, weightG: w }) ?? abtDelivery(w)) * 100) / 100;
   const profit = Math.round((price - commission - delivery - purchase) * 100) / 100;
   return {
     price, commission, delivery, profit,

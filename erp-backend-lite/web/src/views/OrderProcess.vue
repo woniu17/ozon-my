@@ -26,6 +26,7 @@ import {
 } from '../api/order-process.js';
 import { getSkusInfo, setSkuCustoms, updatePrice } from '../api/price-manage.js';
 import { getOrderPriceWatchSnapshots, fetchOrderPriceWatchSnapshot, getOrderPriceWatchTask } from '../api/price-watch.js';
+import { oglDelivery, abtDelivery, suggestOglPrice } from '../utils/ogl-freight.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
 import AppModal from '../components/AppModal.vue';
@@ -1918,10 +1919,9 @@ async function savePoLogistics() {
 }
 
 // ── 利润预估与一键调价(2026-09-20,口径参考价格管理单件)──
-// 常量镜像 profit-estimator.js(服务端单点维护,前端预览;与 PriceManage.vue 同源同值)
+// 公式镜像后端 profit-estimator.js(服务端单点维护,前端预览;与 PriceManage.vue 同源同值)。
+// 2026-10-27:价格管理/单件调价默认 OGL 分档费率(后续订单均为 OGL),配送费=固定费+每克×重量。
 const PM_COMMISSION_RATE = 0.16;
-const PM_DELIVERY_BASE_CNY = 3.37;
-const PM_DELIVERY_PER_G_CNY = 0.0281;
 const PM_TARGET_RATES = [50, 60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200]; // 目标成本利润率选项(%,与H5对齐)
 const PM_DEFAULT_RATE = 100;                        // 默认选中 100%
 
@@ -1944,11 +1944,11 @@ async function loadSkuPricing(items) {
 const poRateChoice = reactive({});
 function poRate(sku) { return poRateChoice[sku] || PM_DEFAULT_RATE; }
 
-// 单件口径配送费(有重量才可估;重量缺失返回 null,利润不扣配送)
-function poUnitDelivery(weightG) {
+// 单件口径配送费(OGL 分档,价值=单件售价;重量缺失返回 null,利润不扣配送)
+function poUnitDelivery(weightG, valueCny) {
   const w = Number(weightG);
   if (!(w > 0)) return null;
-  return PM_DELIVERY_BASE_CNY + PM_DELIVERY_PER_G_CNY * w;
+  return oglDelivery({ valueCny, weightG: w }) ?? abtDelivery(w);
 }
 
 // 利润预估行(auto 预览/manual 输入实时联动:it.amount 两模式均同步有效分摊值)
@@ -1958,15 +1958,15 @@ const profitRows = computed(() => purchaseForm.items.map((it) => {
   const alloc = Number(it.amount) || 0;   // 行分摊(auto 预览同步到 amount)
   const info = skuPricing.value[it.sku] || null;
   const unitCost = qty > 0 ? alloc / qty : 0; // 单件采购价(调价成本基准)
-  const unitDelivery = poUnitDelivery(info?.weightG);
+  const unitDelivery = poUnitDelivery(info?.weightG, price);
   const revenue = price * qty;
   const commission = revenue * PM_COMMISSION_RATE;
   const delivery = unitDelivery != null ? unitDelivery * qty : null;
   const profit = revenue - commission - (delivery || 0) - alloc;
   const rate = poRate(it.sku);
-  // 建议价(单件口径,向上取整数元,与 price-update 服务端校验同口径)
+  // 建议价(单件口径,OGL 分档迭代后向上取整数元,与 price-update 服务端校验同口径)
   const suggested = unitCost > 0 && unitDelivery != null
-    ? Math.ceil((unitCost * (1 + rate / 100) + unitDelivery) / (1 - PM_COMMISSION_RATE))
+    ? Math.ceil(suggestOglPrice({ purchaseCny: unitCost, weightG: info?.weightG, targetRate: rate / 100, commissionRate: PM_COMMISSION_RATE }))
     : null;
   const canAdjust = !!(it.sku && unitCost > 0 && unitDelivery != null && info?.inCache && info?.hasProductId);
   // 调整对比(单件口径):调整前=当前上架价(listingPrice),调整后=建议价(suggested)

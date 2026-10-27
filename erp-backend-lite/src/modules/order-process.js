@@ -43,8 +43,11 @@ import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
 import {
   DELIVERY_BASE_CNY,
   DELIVERY_PER_G_CNY,
+  estimateDeliveryCny,
   estimateProfit,
+  isOglDelivery,
 } from '../services/profit-estimator.js';
+import { deriveOglWeight, getOglGroup } from '../services/ogl-freight.js';
 // 采购单自动补全用平台搜索(跨账号,按单号拉订单详情含 goods)
 import { searchAliOrder } from './platform-orders.js';
 import { searchPddOrder } from '../services/platform-orders/adapters/pdd.js';
@@ -210,12 +213,16 @@ function buildAccrualBreakdown(packages, typeSums, rate) {
     const saleRub = Number(pkg.accrualSaleTotal) || 0;
     // 其它费用 = 应计合计 − 销售佣金(69) − 国际配送(67);代理佣金(66)并入其它展示
     const othersRub = round2(totalRub - saleFeeRub - deliveryRub);
-    // 由实际配送费(CNY)反推商品重量:weight = (|delivery| - 3.37) / 0.0281(整数 g)
+    // 由实际配送费(CNY)反推商品重量(整数 g)
+    // OGL(Доставка Ozon курьеру):按价值档分段反解(同一价值档小/大两组试算取一致)
+    // 其他(ABT Economy 等):旧线性公式 weight = (|delivery| - 3.37) / 0.0281
     const deliveryCny = round2(deliveryRub * rate);
     const deliveryAbs = Math.abs(deliveryCny);
-    const derivedWeight = deliveryAbs > DELIVERY_BASE_CNY
-      ? Math.floor((deliveryAbs - DELIVERY_BASE_CNY) / DELIVERY_PER_G_CNY)
-      : null;
+    const derivedWeight = isOglDelivery(pkg.deliveryMethod, pkg.tplIntegrationType)
+      ? deriveOglWeight({ valueCny: pkg.orderAmount, deliveryCny: deliveryAbs })
+      : (deliveryAbs > DELIVERY_BASE_CNY
+        ? Math.floor((deliveryAbs - DELIVERY_BASE_CNY) / DELIVERY_PER_G_CNY)
+        : null);
     out.set(pkg.id, {
       rate,
       saleFee: round2(saleFeeRub * rate),
@@ -251,9 +258,19 @@ function computeProfit(pkg, cancelled = false, rate = null) {
   const a = pkg.accrual;
   if (a?.rate && a.payout != null) {
     const profit = round2(a.payout - purchase);
-    // 同时计算公式估算的配送费(基于实际重量,供前端对比展示)
+    // 同时按配送方式估算配送费(基于实际重量,供前端对比展示;OGL 走分档费率并附评分组)
     const w = pkg.weightG != null ? Number(pkg.weightG) : null;
-    const deliveryEst = w != null ? round2(DELIVERY_BASE_CNY + DELIVERY_PER_G_CNY * w) : null;
+    const deliveryEst = w != null
+      ? estimateDeliveryCny({
+          weightG: w,
+          valueCny: orderAmount,
+          deliveryMethodName: pkg.deliveryMethod,
+          tplIntegrationType: pkg.tplIntegrationType,
+        })
+      : null;
+    const deliveryGroup = w != null && isOglDelivery(pkg.deliveryMethod, pkg.tplIntegrationType)
+      ? getOglGroup(orderAmount, w)?.name || null
+      : null;
     return {
       estimated: false,
       // 佣金兼容字段:非配送类扣款合计(销售佣金+代理佣金+其它;others 已含 66,勿再加 agentFee)
@@ -262,6 +279,7 @@ function computeProfit(pkg, cancelled = false, rate = null) {
       profit,
       // 公式估算的配送费(基于实际重量,仅展示用,不参与利润计算)
       delivery: deliveryEst,
+      deliveryGroup,
       weightG: w,
       weightSource: pkg.weightSource || null,
       // 已取消订单收入为 0,利润率无意义不显示
@@ -305,6 +323,8 @@ function computeProfit(pkg, cancelled = false, rate = null) {
     amountCny: orderAmount,
     purchaseCny: purchase,
     weightG: pkg.weightG != null ? Number(pkg.weightG) : null,
+    deliveryMethodName: pkg.deliveryMethod,
+    tplIntegrationType: pkg.tplIntegrationType,
   });
   return { ...est, weightSource: pkg.weightSource || null };
 }

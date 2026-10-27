@@ -125,6 +125,8 @@ data class Profit(
     val returned: Boolean? = null,
     val commission: Double? = null,
     val delivery: Double? = null,
+    // OGL 分档评分组(Extra Small/Budget/Small/Big/Premium Small/Premium Big;非 OGL 为 null)
+    val deliveryGroup: String? = null,
     val escrow: Double? = null,
     val weightG: Double? = null,
     val profitRateSale: Double? = null,
