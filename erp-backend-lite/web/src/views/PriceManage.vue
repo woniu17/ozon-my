@@ -785,13 +785,14 @@ onMounted(async () => {
                     <span class="meta-sub">g</span>
                   </span>
                 </div>
-                <!-- 跟卖摘要:三行 = 排名(突出) / 最低价对比 / 中位数对比 -->
+                <!-- 跟卖摘要:第一行=排名+更新时间+刷新按钮, 第二/三行=最低/中位对比(格式对齐) -->
                 <div class="meta-row">
                   <span class="meta-label">跟卖</span>
                   <span class="meta-value">
                     <template v-if="row.pw_seller_count != null && row.pw_seller_count > 0">
                       <span class="pw-rank" :class="{ 'pw-best': row.pw_is_cheapest }">#{{ row.pw_my_rank }}/{{ row.pw_seller_count + 1 }}</span>
                       <span v-if="row.pw_is_cheapest" class="pw-badge">最低价</span>
+                      <span class="meta-sub">{{ fmtTime(row.pw_fetched_at) }}</span>
                     </template>
                     <span v-else class="meta-sub">{{ row.pw_seller_count === 0 ? '无跟卖' : row.pw_status ? statusText(row.pw_status) : '未采集' }}</span>
                     <button class="pw-refresh" :disabled="pwBtnDisabled(row)" @click.stop="onFetchPriceWatch(row)" :title="pwBtnTitle(row)">
@@ -803,17 +804,18 @@ onMounted(async () => {
                 <template v-if="row.pw_seller_count != null && row.pw_seller_count > 0">
                   <div class="meta-row">
                     <span class="meta-label"></span>
-                    <span class="meta-value meta-pw-sub">
-                      <span>最低 {{ fmtMoney(row.pw_min_price) }}</span>
-                      <span class="pw-cmp" :class="pwGapCls(row.pw_gap_pct)">{{ pwGapText(row.pw_gap_pct) }}</span>
-                      <span class="meta-sub">{{ fmtTime(row.pw_fetched_at) }}</span>
+                    <span class="meta-value meta-pw-cmp">
+                      <span class="pw-k">最低</span>
+                      <span class="pw-price">{{ fmtMoney(row.pw_min_price) }}</span>
+                      <span class="pw-diff" :class="pwGapCls(row.pw_gap_pct)">{{ pwGapText(row.pw_gap_pct) }}</span>
                     </span>
                   </div>
                   <div class="meta-row">
                     <span class="meta-label"></span>
-                    <span class="meta-value meta-pw-sub">
-                      <span>中位 {{ fmtMoney(row.pw_median_price) }}</span>
-                      <span class="pw-cmp" :class="pwGapCls(pwVsMedianPct(row))">{{ pwGapText(pwVsMedianPct(row)) }}</span>
+                    <span class="meta-value meta-pw-cmp">
+                      <span class="pw-k">中位</span>
+                      <span class="pw-price">{{ fmtMoney(row.pw_median_price) }}</span>
+                      <span class="pw-diff" :class="pwGapCls(pwVsMedianPct(row))">{{ pwGapText(pwVsMedianPct(row)) }}</span>
                     </span>
                   </div>
                 </template>
@@ -1243,14 +1245,18 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .pw-sellers .source-row { background: #fefce8; }
 .pw-sellers .self-row td { border-bottom-color: #d1fae5; }
 
-/* 列表行"跟卖"摘要(已并入商品信息列):排名/最低/中位 三行 */
+/* 列表行"跟卖"摘要(已并入商品信息列):第一行=排名+操作, 第二/三行=最低/中位对比 */
 .pw-rank { font-size: 16px; font-weight: 700; white-space: nowrap; }
 .pw-rank.pw-best { color: #16a34a; }
 .pw-badge { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 0 5px; border-radius: 3px; background: #d1fae5; color: #047857; }
-.pw-cmp { font-size: 13px; font-weight: 600; }
-.pw-cmp.pw-above { color: #dc2626; }
-.pw-cmp.pw-below { color: #16a34a; }
-.pw-cmp.pw-equal { color: var(--text-secondary, #9ca3af); }
+/* 最低/中位对比行:标签/价格/差值 三栏定宽右对齐,两行格式一致 */
+.meta-pw-cmp { gap: 8px; }
+.pw-k { width: 36px; flex-shrink: 0; color: var(--text-secondary, #6b7280); font-weight: 400; }
+.pw-price { width: 76px; flex-shrink: 0; text-align: right; font-weight: 500; }
+.pw-diff { width: 72px; flex-shrink: 0; text-align: right; font-size: 13px; font-weight: 600; }
+.pw-diff.pw-above { color: #dc2626; }
+.pw-diff.pw-below { color: #16a34a; }
+.pw-diff.pw-equal { color: var(--text-secondary, #9ca3af); }
 .pw-time { font-size: 15px; color: var(--text-secondary, #9ca3af); white-space: nowrap; }
 .pw-refresh {
   display: inline-flex; align-items: center; gap: 3px;
@@ -1260,7 +1266,6 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
   font-size: 12px; cursor: pointer;
 }
 /* 跟卖第二行小字:排名/差值/采集时间 */
-.meta-pw-sub { font-size: 13px; font-weight: 400; color: var(--text-secondary, #9ca3af); }
 .pw-refresh:hover:not(:disabled) { border-color: var(--tag-fg, #4338ca); color: var(--tag-fg, #4338ca); }
 .pw-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
 
