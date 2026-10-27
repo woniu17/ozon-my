@@ -21,6 +21,7 @@ const navGroups = [
       { key: '/order-stats', label: '订单统计' },
       { key: '/finance-stats', label: '财务统计' },
       { key: '/scan-ship', label: '扫描发货' },
+      { key: '/scan-stock', label: '扫描备货' },
       { key: '/print-container-label', label: '打印货运标签' },
     ],
   },

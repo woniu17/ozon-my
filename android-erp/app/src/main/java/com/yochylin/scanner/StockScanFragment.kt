@@ -1,15 +1,15 @@
 package com.yochylin.scanner
 
 import android.Manifest
-import android.app.AlertDialog
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -18,6 +18,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -30,16 +31,18 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
 
 /**
- * 扫描备货(2026-10-27):摄像头常开连扫,上半屏相机视频,下半屏本次扫描备货记录。
+ * 扫描备货(2026-10-27,底部导航独立页):摄像头常开连扫,上半屏相机视频,下半屏本次扫描备货记录。
  * 识别到待备货(awaiting_packaging)订单后自动向 Ozon 备货:
  *   单件商品 → 直接备货;多件商品 → 弹窗二次确认。
  * 处理完不退出,继续扫下一单(同一码 2 秒内去重,防连拍重复触发)。
  */
-class StockScanActivity : ComponentActivity() {
+class StockScanFragment : Fragment() {
 
     private lateinit var previewView: PreviewView
     private lateinit var recordScroll: ScrollView
     private lateinit var recordList: LinearLayout
+
+    private var cameraProvider: ProcessCameraProvider? = null
 
     private val scanExecutor = Executors.newSingleThreadExecutor()
     private val barcodeScanner = BarcodeScanning.getClient()
@@ -50,34 +53,35 @@ class StockScanActivity : ComponentActivity() {
 
     private val cameraPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) startCamera() else finish()
+            if (granted) startCamera()
+            else appendRecord("❌ 未获得相机权限,无法扫码备货", isError = true)
         }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_stock_scan)
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
+        return inflater.inflate(R.layout.fragment_stock_scan, container, false)
+    }
 
-        previewView = findViewById(R.id.previewView)
-        recordScroll = findViewById(R.id.recordScroll)
-        recordList = findViewById(R.id.recordList)
-        findViewById<TextView>(R.id.closeBtn).setOnClickListener { finish() }
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        previewView = view.findViewById(R.id.previewView)
+        recordScroll = view.findViewById(R.id.recordScroll)
+        recordList = view.findViewById(R.id.recordList)
 
         appendRecord("📷 摄像头已开启,等待扫码…")
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            == PackageManager.PERMISSION_GRANTED
-        ) {
-            startCamera()
-        } else {
-            cameraPermission.launch(Manifest.permission.CAMERA)
-        }
+        if (hasCameraPermission()) startCamera()
+        else cameraPermission.launch(Manifest.permission.CAMERA)
     }
+
+    private fun hasCameraPermission(): Boolean =
+        ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
     private fun startCamera() {
         try {
-            val providerFuture = ProcessCameraProvider.getInstance(this)
+            val providerFuture = ProcessCameraProvider.getInstance(requireContext())
             providerFuture.addListener({
                 val provider = providerFuture.get()
+                cameraProvider = provider
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
@@ -88,14 +92,14 @@ class StockScanActivity : ComponentActivity() {
 
                 provider.unbindAll()
                 provider.bindToLifecycle(
-                    this,
+                    viewLifecycleOwner,
                     CameraSelector.DEFAULT_BACK_CAMERA,
                     preview,
                     analysis
                 )
-            }, ContextCompat.getMainExecutor(this))
+            }, ContextCompat.getMainExecutor(requireContext()))
         } catch (e: Throwable) {
-            finish()
+            appendRecord("❌ 相机启动失败:${e.message ?: e.javaClass.simpleName}", isError = true)
         }
     }
 
@@ -131,7 +135,7 @@ class StockScanActivity : ComponentActivity() {
 
     /** 条码 → 全局搜索 → 命中待备货订单则自动备货 */
     private fun handleCode(code: String) {
-        lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val data = Api.get(
                     "/admin/api/order-process/list",
@@ -160,7 +164,7 @@ class StockScanActivity : ComponentActivity() {
                     // 多件商品:弹窗二次确认(与扫描发货备货同口径)
                     val pkg = stockPkg
                     appendRecord("⏸ ${pkg.postingNumber} 共 $totalQty 件,待确认")
-                    AlertDialog.Builder(this@StockScanActivity)
+                    android.app.AlertDialog.Builder(requireContext())
                         .setTitle("备货确认")
                         .setMessage("货件 ${pkg.postingNumber}\n共 $totalQty 件商品,将向 Ozon 确认全部商品为一个货件(不拆分)。")
                         .setPositiveButton("确认备货") { _, _ -> doShip(pkg, code) }
@@ -177,7 +181,7 @@ class StockScanActivity : ComponentActivity() {
 
     /** 调用备货接口并记录结果 */
     private fun doShip(pkg: Pkg, code: String) {
-        lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to pkg.id)).asJsonObject
                 val title = when {
@@ -194,13 +198,13 @@ class StockScanActivity : ComponentActivity() {
 
     /** 向底部记录列表追加一条结果,并自动滚动到底部 */
     private fun appendRecord(text: String, isError: Boolean = false, isMuted: Boolean = false) {
-        runOnUiThread {
+        view?.post {
             val color = when {
                 isError -> Color.parseColor("#d93026")
                 isMuted -> Color.parseColor("#86909c")
                 else -> Color.parseColor("#1d2129")
             }
-            val tv = TextView(this).apply {
+            val tv = TextView(requireContext()).apply {
                 this.text = text
                 setTextColor(color)
                 textSize = 13f
@@ -209,6 +213,32 @@ class StockScanActivity : ComponentActivity() {
             recordList.addView(tv)
             recordScroll.post { recordScroll.fullScroll(View.FOCUS_DOWN) }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (hasCameraPermission()) startCamera()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        cameraProvider?.unbindAll()
+    }
+
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (hidden) {
+            cameraProvider?.unbindAll()
+        } else if (isResumed) {
+            if (hasCameraPermission()) startCamera()
+            else cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        cameraProvider?.unbindAll()
+        cameraProvider = null
     }
 
     override fun onDestroy() {

@@ -8,7 +8,7 @@
 //            打印发货后按称重重算;发货记录列表可滚动
 // 2026-09-22:任意状态均可人工更正重量(利润随之重估);产品行新增"单价调整"折叠块(口径同订单处理采购弹窗)
 import { ref, reactive, computed, onMounted, nextTick } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import {
   getOrderList, scanShipSubmit, correctShipWeight, getScanShipRecords, fetchPackageLabel, markPrinted, shipPackage,
 } from '../api/order-process.js';
@@ -20,10 +20,13 @@ import { useConfirmStore } from '../stores/confirm.js';
 const { show } = useToast();
 const confirmStore = useConfirmStore();
 const router = useRouter();
+const route = useRoute();
+// 独立「扫描备货」页(/scan-stock):固定备货模式,隐藏工作模式切换,连扫自动备货
+const isStockPage = computed(() => route.path === '/scan-stock');
+const workMode = ref(isStockPage.value ? 'stock' : 'ship'); // 'ship'发货(默认) | 'stock'备货(扫到待备货订单自动备货,连扫)
 
 // ── 扫描输入 ─────────────────────────────────────────────
 const scanForm = reactive({ keyword: '', mode: 'ss' }); // mode: 'ss'模糊(默认,防拼单逗号拼接漏单) | 'eq'精确
-const workMode = ref('ship'); // 工作模式: 'ship'发货(默认) | 'stock'备货(扫到待备货订单自动备货,连扫)
 const scanInputRef = ref(null);
 const searching = ref(false);
 const results = ref([]);          // 全局搜索命中的包裹(快照)
@@ -846,7 +849,7 @@ function onPrinterChange() {
     <!-- ① 扫描输入区(sticky,扫码枪主操作目标) -->
     <div class="scan-bar-wrap">
       <div class="scan-bar card">
-        <select v-model="workMode" class="filter-input scan-mode" title="工作模式:备货=扫到待备货订单自动备货(单件直接,多件确认);发货=正常扫描发货流程">
+        <select v-if="!isStockPage" v-model="workMode" class="filter-input scan-mode" title="工作模式:备货=扫到待备货订单自动备货(单件直接,多件确认);发货=正常扫描发货流程">
           <option value="ship">发货</option>
           <option value="stock">备货</option>
         </select>
@@ -860,7 +863,7 @@ function onPrinterChange() {
           class="scan-input"
           type="text"
           aria-label="扫描输入"
-          placeholder="扫描/输入 采购快递单号 · 采购单号 · Ozon订单号"
+          :placeholder="isStockPage ? '扫描/输入 采购快递单号 · 采购单号 · Ozon订单号(自动备货)' : '扫描/输入 采购快递单号 · 采购单号 · Ozon订单号'"
           :readonly="searching"
           @focus="$event.target.select()"
           @keydown.enter="doSearch"
@@ -913,7 +916,7 @@ function onPrinterChange() {
       <!-- ③ 搜索结果(左侧工作区) -->
       <section class="results-col" aria-label="搜索结果">
         <div v-if="!results.length" class="empty card">
-          {{ searching ? '搜索中…' : '扫描采购快递单号开始发货' }}
+          {{ searching ? '搜索中…' : (isStockPage ? '扫描采购快递单号开始备货' : '扫描采购快递单号开始发货') }}
         </div>
 
         <div

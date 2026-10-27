@@ -75,6 +75,7 @@ const router = createRouter({
     { path: '/finance-stats', name: 'finance-stats', component: FinanceStats, meta: { title: '财务统计' } },
     { path: '/price-manage', name: 'price-manage', component: () => import('../views/PriceManage.vue'), meta: { title: '价格管理' } },
     { path: '/scan-ship', name: 'scan-ship', component: ScanShip, meta: { title: '扫描发货' } },
+    { path: '/scan-stock', name: 'scan-stock', component: ScanShip, meta: { title: '扫描备货' } },
     { path: '/print-container-label', name: 'print-container-label', component: ContainerLabelPrint, meta: { title: '打印货运标签' } },
     { path: '/print-logs', name: 'print-logs', component: () => import('../views/PrintLogs.vue'), meta: { title: '打印日志' } },
     { path: '/miaoshou-orders', name: 'miaoshou-orders', component: MiaoshouOrders, meta: { title: '妙手订单' } },

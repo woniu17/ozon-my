@@ -23,6 +23,7 @@ fun setupBottomNav(activity: Activity, active: String) {
         BottomNavItem(R.id.navOrder, R.id.navOrderIcon, R.id.navOrderText, "order"),
         BottomNavItem(R.id.navFinance, R.id.navFinanceIcon, R.id.navFinanceText, "finance"),
         BottomNavItem(R.id.navStats, R.id.navStatsIcon, R.id.navStatsText, "stats"),
+        BottomNavItem(R.id.navStock, R.id.navStockIcon, R.id.navStockText, "stock"),
         BottomNavItem(R.id.navContainer, R.id.navContainerIcon, R.id.navContainerText, "container")
     )
     for (item in items) {

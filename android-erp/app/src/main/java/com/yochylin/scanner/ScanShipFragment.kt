@@ -156,10 +156,6 @@ class ScanShipFragment : Fragment() {
         view.findViewById<TextView>(R.id.checkUpdateBtn).setOnClickListener {
             (requireActivity() as? MainShellActivity)?.checkUpdate(manual = true)
         }
-        // 扫描备货(2026-10-27):摄像头常开连扫,扫到待备货订单自动备货(单件直接/多件确认)
-        view.findViewById<TextView>(R.id.stockScanBtn).setOnClickListener {
-            startActivity(Intent(requireActivity(), StockScanActivity::class.java))
-        }
         // 消息推送序列表入口(2026-10-20):此按钮随 activity_main 布局由 ScanShipFragment 承载
         view.findViewById<TextView>(R.id.pushLogBtn).setOnClickListener {
             startActivity(Intent(requireActivity(), PushLogActivity::class.java))

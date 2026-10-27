@@ -112,6 +112,32 @@
             android:layout_marginTop="2dp" />
     </LinearLayout>
 
+    <!-- 扫描备货(2026-10-27 独立页) -->
+    <LinearLayout
+        android:id="@+id/navStock"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@android:color/transparent">
+
+        <ImageView
+            android:id="@+id/navStockIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_nav_stock" />
+
+        <TextView
+            android:id="@+id/navStockText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="扫描备货"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
     <!-- 货运标签 -->
     <LinearLayout
         android:id="@+id/navContainer"
