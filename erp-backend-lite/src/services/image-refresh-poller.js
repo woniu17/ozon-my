@@ -7,6 +7,7 @@ import config from '../config/index.js';
 import { processImageBatch } from './image-host.js';
 import * as opi from './ozon-opi.js';
 import logger from '../middleware/log.js';
+import { runWithLog, HIGH_FREQ_THROTTLE_MS } from './task-run-log.js';
 
 const POLL_INTERVAL_MS = 10000;
 const FIRST_SCAN_DELAY_MS = 8 * 1000;
@@ -286,6 +287,7 @@ async function scanOnce() {
     }
   } catch (e) {
     logger.warn({ err: e.message }, 'image-refresh-poller 扫描异常');
+    throw e; // 上抛给 runWithLog 记录失败(调用方有 .catch,不影响定时器)
   } finally {
     running = false;
   }
@@ -294,9 +296,9 @@ async function scanOnce() {
 export function startImageRefreshPoller() {
   if (timer) return;
   setTimeout(() => {
-    scanOnce().catch((e) => logger.warn({ err: e.message }, 'image-refresh-poller 首次扫描异常'));
+    runWithLog('image-refresh-poller', scanOnce, { throttleMs: HIGH_FREQ_THROTTLE_MS }).catch((e) => logger.warn({ err: e.message }, 'image-refresh-poller 首次扫描异常'));
     timer = setInterval(() => {
-      scanOnce().catch((e) => logger.warn({ err: e.message }, 'image-refresh-poller 扫描异常'));
+      runWithLog('image-refresh-poller', scanOnce, { throttleMs: HIGH_FREQ_THROTTLE_MS }).catch((e) => logger.warn({ err: e.message }, 'image-refresh-poller 扫描异常'));
     }, POLL_INTERVAL_MS);
     timer.unref();
   }, FIRST_SCAN_DELAY_MS).unref();

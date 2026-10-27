@@ -23,6 +23,7 @@ import { getLogisticsForOrder, getTraceForOrder, hasAliOpenApiToken } from './pl
 import { getPddTrace, searchPddOrder } from './platform-orders/adapters/pdd.js';
 import { getTaobaoTrace } from './platform-orders/adapters/taobao.js';
 import logger from '../middleware/log.js';
+import { runWithLog } from './task-run-log.js';
 
 const POLL_INTERVAL_MS = 12 * 60 * 60 * 1000; // 每 12 小时
 const FIRST_SCAN_DELAY_MS = 30 * 1000;
@@ -405,7 +406,12 @@ function launchRound() {
   manualStatus.result = null;
   manualStatus.error = null;
   manualStatus.progress = { done: 0, total: 0 };
-  runOnce()
+  runWithLog('purchase-logistics-poller', runOnce, {
+    formatDetail: (r) => {
+      const sum = (x) => (x && typeof x === 'object' ? `${x.updated ?? 0}/${x.scanned ?? 0}` : '-');
+      return `阶段A ${sum(r.phaseA)} · PDD单号 ${sum(r.phaseApdd)} · 轨迹 ${sum(r.phaseB)} · PDD轨迹 ${sum(r.phaseC)} · TB轨迹 ${sum(r.phaseTb)}`;
+    },
+  })
     .then((r) => { manualStatus.result = r; })
     .catch((e) => {
       manualStatus.error = String(e.message || e);

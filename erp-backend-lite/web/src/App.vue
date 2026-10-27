@@ -69,6 +69,7 @@ const navGroups = [
       { key: '/shallow-collect-logs', label: '浅度采集日志' },
       { key: '/collect-queue', label: '采集队列' },
       { key: '/endpoint-metrics', label: '端点耗时' },
+      { key: '/task-logs', label: '定时任务日志' },
       { key: '/print-logs', label: '打印日志' },
     ],
   },

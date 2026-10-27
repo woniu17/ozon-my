@@ -28,6 +28,7 @@ import { publishPostingEvent } from './push-hub.js';
 import { apiToPush, pushRankOf } from './webhook/status-map.js';
 import { ensureImageCached } from './order-image-cache.js';
 import { enqueuePriceWatchForOrderSku } from './price-watch-queue.js';
+import { recordTaskRun } from './task-run-log.js';
 
 // ── 三级同步节奏(2026-09-16)─────────────────────────────────
 const FAST_INTERVAL_MIN = Math.max(1, Number(process.env.ORDER_SYNC_INTERVAL_MIN) || 2); // fast 轮间隔(分钟,2026-09-17 5→2)
@@ -831,7 +832,9 @@ export async function syncSinglePackage(packageId) {
 }
 
 export async function runOrderSyncNow({ level = 'fast', trigger = 'timer' } = {}) {
+  const taskKey = `order-sync-${level}`;
   if (syncing) {
+    recordTaskRun({ task: taskKey, status: 'skipped', detail: '同步已在进行中' });
     return { skipped: true, reason: '同步已在进行中' };
   }
   const cfg = SYNC_LEVELS[level] || SYNC_LEVELS.fast;
@@ -888,12 +891,44 @@ export async function runOrderSyncNow({ level = 'fast', trigger = 'timer' } = {}
     const errPart = progress.errorCount > 0 ? `,失败 ${progress.errorCount} 店` : '';
     progress.message = `完成 ${eligible.length} 个店铺(${cfg.label}),共拉取 ${progress.postingsPulled} 个订单${errPart}`;
     const durationMs = Date.now() - started;
+    const okCount = results.filter((r) => r.ok).length;
+    const failCount = results.length - okCount;
+    recordTaskRun({
+      task: taskKey,
+      status: failCount > 0 ? 'failed' : 'success',
+      startedAt: new Date(started),
+      finishedAt: new Date(),
+      durationMs,
+      detail: `${results.length} 店:成功 ${okCount},失败 ${failCount},拉取 ${progress.postingsPulled} 单`,
+      data: {
+        level,
+        storeCount: results.length,
+        okCount,
+        failCount,
+        postingsPulled: progress.postingsPulled,
+        durationMs,
+        errors: results
+          .filter((r) => !r.ok)
+          .map((r) => ({ storeId: r.storeId, storeName: r.storeName, error: r.error })),
+      },
+    });
     return {
       skipped: false,
       level,
       durationMs,
       stores: results,
     };
+  } catch (err) {
+    recordTaskRun({
+      task: taskKey,
+      status: 'failed',
+      startedAt: new Date(started),
+      finishedAt: new Date(),
+      durationMs: Date.now() - started,
+      error: err?.message || String(err),
+      data: err?.stack ? { error: err?.message || String(err), stack: err.stack } : undefined,
+    });
+    throw err;
   } finally {
     // 无论成功/异常都必须释放互斥,否则后续定时轮会被永久跳过(2026-10-19 生产事故修复)
     syncing = false;

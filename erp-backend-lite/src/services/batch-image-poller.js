@@ -12,6 +12,7 @@ import { buildListingMessage, prepareListing } from './listing-builder.js';
 import { buildListingMessageFromMaterial } from './listing-builder.js';
 import { getMaterialById } from './listing-materials.js';
 import logger from '../middleware/log.js';
+import { runWithLog, HIGH_FREQ_THROTTLE_MS } from './task-run-log.js';
 
 const POLL_INTERVAL_MS = 500; // 500ms 扫描一次(不限速)
 const FIRST_SCAN_DELAY_MS = 8 * 1000; // 启动后 8 秒首次扫描
@@ -68,6 +69,7 @@ async function scanOnce() {
     await Promise.all(items.map((item) => processItemImage(item)));
   } catch (e) {
     logger.warn({ err: e.message }, 'batch-image-poller 扫描异常');
+    throw e; // 上抛给 runWithLog 记录失败(调用方有 .catch,不影响定时器)
   } finally {
     running = false;
   }
@@ -204,9 +206,9 @@ function parseJson(value) {
 export function startBatchImagePoller() {
   if (timer) return;
   setTimeout(() => {
-    scanOnce().catch((e) => logger.warn({ err: e.message }, 'batch-image-poller 首次扫描异常'));
+    runWithLog('batch-image-poller', scanOnce, { throttleMs: HIGH_FREQ_THROTTLE_MS }).catch((e) => logger.warn({ err: e.message }, 'batch-image-poller 首次扫描异常'));
     timer = setInterval(() => {
-      scanOnce().catch((e) => logger.warn({ err: e.message }, 'batch-image-poller 扫描异常'));
+      runWithLog('batch-image-poller', scanOnce, { throttleMs: HIGH_FREQ_THROTTLE_MS }).catch((e) => logger.warn({ err: e.message }, 'batch-image-poller 扫描异常'));
     }, POLL_INTERVAL_MS);
     timer.unref();
   }, FIRST_SCAN_DELAY_MS).unref();

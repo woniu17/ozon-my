@@ -12,6 +12,7 @@ import config from '../config/index.js';
 import * as opi from './ozon-opi.js';
 import { applyFieldUpdaters } from './field-updaters/index.js';
 import logger from '../middleware/log.js';
+import { runWithLog, HIGH_FREQ_THROTTLE_MS } from './task-run-log.js';
 
 const POLL_INTERVAL_MS = 5000;
 const FIRST_SCAN_DELAY_MS = 8 * 1000;
@@ -181,6 +182,7 @@ async function scanOnce() {
     }
   } catch (e) {
     logger.warn({ err: e.message }, 'product-update-poller 扫描异常');
+    throw e; // 上抛给 runWithLog 记录失败(调用方有 .catch,不影响定时器)
   } finally {
     running = false;
   }
@@ -189,9 +191,9 @@ async function scanOnce() {
 export function startProductUpdatePoller() {
   if (timer) return;
   setTimeout(() => {
-    scanOnce().catch((e) => logger.warn({ err: e.message }, 'product-update-poller 首次扫描异常'));
+    runWithLog('product-update-poller', scanOnce, { throttleMs: HIGH_FREQ_THROTTLE_MS }).catch((e) => logger.warn({ err: e.message }, 'product-update-poller 首次扫描异常'));
     timer = setInterval(() => {
-      scanOnce().catch((e) => logger.warn({ err: e.message }, 'product-update-poller 扫描异常'));
+      runWithLog('product-update-poller', scanOnce, { throttleMs: HIGH_FREQ_THROTTLE_MS }).catch((e) => logger.warn({ err: e.message }, 'product-update-poller 扫描异常'));
     }, POLL_INTERVAL_MS);
     timer.unref();
   }, FIRST_SCAN_DELAY_MS).unref();

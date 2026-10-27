@@ -16,6 +16,7 @@ import { db } from '../db/index.js';
 import config from '../config/index.js';
 import * as opi from './ozon-opi.js';
 import logger from '../middleware/log.js';
+import { runWithLog } from './task-run-log.js';
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟
 const MAX_ATTEMPTS = 5; // 失败重试上限(约 25 分钟)
@@ -159,9 +160,13 @@ export function startStockSync() {
   // 启动后 1 分钟做首次扫描(错开 import-status-poller 的 30 秒首次扫描)
   // 让 import-status-poller 先把 items 状态拉到最新,本任务再读 items 表设库存
   setTimeout(() => {
-    scanOnce().catch((e) => logger.warn({ err: e.message }, 'stock-sync 首次扫描异常'));
+    runWithLog('stock-sync', scanOnce, {
+      formatDetail: (r) => (r?.scanned != null ? `扫描 ${r.scanned},同步 ${r.synced},失败 ${r.failed},跳过 ${r.skipped}` : null),
+    }).catch((e) => logger.warn({ err: e.message }, 'stock-sync 首次扫描异常'));
     timer = setInterval(() => {
-      scanOnce().catch((e) => logger.warn({ err: e.message }, 'stock-sync 扫描异常'));
+      runWithLog('stock-sync', scanOnce, {
+        formatDetail: (r) => (r?.scanned != null ? `扫描 ${r.scanned},同步 ${r.synced},失败 ${r.failed},跳过 ${r.skipped}` : null),
+      }).catch((e) => logger.warn({ err: e.message }, 'stock-sync 扫描异常'));
     }, SYNC_INTERVAL_MS);
     timer.unref();
   }, 60 * 1000).unref();

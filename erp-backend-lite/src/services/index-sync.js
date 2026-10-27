@@ -16,6 +16,7 @@
 //   - 本任务只负责跨表聚合的 seller 字段(延迟可接受)
 import { indexDao } from '../db/dao/sqlite/index-dao.js';
 import logger from '../middleware/log.js';
+import { runWithLog } from './task-run-log.js';
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟
 const STARTUP_DELAY_MS = 30 * 1000; // 启动后 30 秒做首次扫描
@@ -34,6 +35,8 @@ async function scanOnce() {
     const seller = sellerRes[0].status === 'fulfilled' ? sellerRes[0].value : { refreshed: 0, total: 0 };
     if (sellerRes[0].status === 'rejected') {
       logger.warn({ err: sellerRes[0].reason?.message }, 'index-sync: refreshSellerInfo 失败');
+      // 返回 { error } 契约:runWithLog 据此记 failed,但不向上抛
+      return { error: sellerRes[0].reason?.message || 'refreshSellerInfo 失败' };
     }
     return {
       sellersRefreshed: seller.refreshed,
@@ -53,13 +56,17 @@ export function startIndexSync() {
   // 让数据先就绪,本任务再批量刷新索引
   startupTimer = setTimeout(() => {
     startupTimer = null;
-    scanOnce()
+    runWithLog('index-sync', scanOnce, {
+      formatDetail: (r) => (r?.sellersRefreshed != null ? `刷新卖家字段 ${r.sellersRefreshed}/${r.sellersTotal}` : null),
+    })
       .then((r) => {
         logger.info(r, 'index-sync: 首次刷新完成');
       })
       .catch((e) => logger.warn({ err: e.message }, 'index-sync 首次刷新异常'));
     intervalTimer = setInterval(() => {
-      scanOnce()
+      runWithLog('index-sync', scanOnce, {
+        formatDetail: (r) => (r?.sellersRefreshed != null ? `刷新卖家字段 ${r.sellersRefreshed}/${r.sellersTotal}` : null),
+      })
         .then((r) => {
           logger.info(r, 'index-sync: 刷新完成');
         })

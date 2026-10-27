@@ -1191,3 +1191,24 @@ CREATE INDEX IF NOT EXISTS idx_print_log_created ON print_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_print_log_posting ON print_log(posting_number);
 CREATE INDEX IF NOT EXISTS idx_print_log_store ON print_log(store_id);
 
+
+-- ⑧ 定时任务执行日志(2026-10-27):通用任务打点,供「定时任务日志」页排查
+-- 每次定时任务执行写一行;高频轮询器(≤10s)由 task-run-log.js 节流写入。
+CREATE TABLE IF NOT EXISTS task_run_logs (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  task         TEXT NOT NULL,             -- 任务 key(如 order-sync-fast)
+  name         TEXT NOT NULL,             -- 任务显示名
+  level        TEXT NOT NULL,            -- minute / hour / day
+  status       TEXT NOT NULL,             -- success / failed / skipped / running
+  started_at   TEXT NOT NULL,            -- UTC ISO
+  finished_at  TEXT,
+  duration_ms  INTEGER DEFAULT 0,
+  detail       TEXT,                     -- 结果摘要(一行文本)
+  error        TEXT,                      -- 失败原因(成功为 NULL)
+  data         TEXT,                      -- JSON 详细结果
+  created_at   TEXT NOT NULL                -- UTC ISO
+);
+CREATE INDEX IF NOT EXISTS idx_task_run_logs_level_time ON task_run_logs(level, id DESC);
+CREATE INDEX IF NOT EXISTS idx_task_run_logs_task_time ON task_run_logs(task, id DESC);
+CREATE INDEX IF NOT EXISTS idx_task_run_logs_status_time ON task_run_logs(status, id DESC);
+CREATE INDEX IF NOT EXISTS idx_task_run_logs_created ON task_run_logs(created_at DESC);

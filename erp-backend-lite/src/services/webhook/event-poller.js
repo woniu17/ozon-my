@@ -11,6 +11,7 @@ import {
 } from '../../db/dao/sqlite/event-dao.js';
 import handlers from './handlers/index.js';
 import logger from '../../middleware/log.js';
+import { runWithLog, HIGH_FREQ_THROTTLE_MS } from '../task-run-log.js';
 
 let timer = null;
 let sweepTimer = null;
@@ -44,6 +45,7 @@ async function tick() {
     }
   } catch (err) {
     logger.error({ err }, 'poller tick 异常');
+    throw err; // 上抛给 runWithLog 记录失败(调用方有 .catch,不影响定时器)
   } finally {
     running = false;
   }
@@ -62,8 +64,10 @@ export function startEventPoller() {
     '启动 Event Poller',
   );
   // 启动后立即跑一次,再进入定时
-  tick().catch(err => logger.error({ err }, '首次 tick 失败'));
-  timer = setInterval(() => { tick().catch(err => logger.error({ err }, 'tick 失败')); }, config.webhook.poller.intervalMs);
+  runWithLog('webhook-event-poller', tick, { throttleMs: HIGH_FREQ_THROTTLE_MS }).catch(err => logger.error({ err }, '首次 tick 失败'));
+  timer = setInterval(() => {
+    runWithLog('webhook-event-poller', tick, { throttleMs: HIGH_FREQ_THROTTLE_MS }).catch(err => logger.error({ err }, 'tick 失败'));
+  }, config.webhook.poller.intervalMs);
   // 运行期扫描:进程没重启但 handler 挂死超过窗口的,放回 pending 重投。
   // 代价是极慢 handler(>窗口)会被重复处理一次;10min 窗口对秒级完成的
   // Ozon API 调用足够宽,而漏掉一个订单状态变更的代价更大。

@@ -18,6 +18,7 @@ import { db } from '../db/index.js';
 import { ok } from '../utils/response.js';
 import logger from '../middleware/log.js';
 import config from '../config/index.js';
+import { recordTaskRun } from '../services/task-run-log.js';
 import { enqueuePriceWatchForOrderSku } from '../services/price-watch-queue.js';
 
 const router = Router();
@@ -565,8 +566,20 @@ export function startPriceWatchRetention() {
       if (r.changes > 0) {
         logger.info({ deleted: r.changes, cutoff }, '[price-watch] 保留期清理完成');
       }
+      recordTaskRun({
+        task: 'price-watch-retention',
+        status: 'success',
+        detail: `清理超期快照 ${r.changes} 条`,
+        data: { deleted: r.changes, cutoff, days },
+      });
     } catch (e) {
       logger.warn({ err: e.message }, '[price-watch] 保留期清理失败');
+      recordTaskRun({
+        task: 'price-watch-retention',
+        status: 'failed',
+        error: e?.message || String(e),
+        data: e?.stack ? { stack: e.stack } : undefined,
+      });
     }
   };
   // 启动 10 分钟后首次执行(错开启动高峰),此后每日一次

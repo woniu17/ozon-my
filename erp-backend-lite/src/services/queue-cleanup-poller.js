@@ -9,6 +9,7 @@
 //   - 单次扫描失败不阻塞下一次(只 warn)
 import { getDaos } from '../db/adapter.js';
 import logger from '../middleware/log.js';
+import { runWithLog } from './task-run-log.js';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟
 const DEFAULT_KEEP_COUNT = 5000;
@@ -33,9 +34,13 @@ export function startQueueCleanupPoller() {
   if (timer) return;
   // 启动后 60 秒做首次扫描(错开 import-status-poller 的 30s 启动,避免瞬间并发),之后每 5 分钟一次
   setTimeout(() => {
-    scanOnce().catch((e) => logger.warn({ err: e.message }, 'queue-cleanup-poller 首次扫描异常'));
+    runWithLog('queue-cleanup-poller', scanOnce, {
+      formatDetail: (r) => (r?.deletedCount != null ? `清理 ${r.deletedCount} 条(共 ${r.total} 条终态)` : null),
+    }).catch((e) => logger.warn({ err: e.message }, 'queue-cleanup-poller 首次扫描异常'));
     timer = setInterval(() => {
-      scanOnce().catch((e) => logger.warn({ err: e.message }, 'queue-cleanup-poller 扫描异常'));
+      runWithLog('queue-cleanup-poller', scanOnce, {
+        formatDetail: (r) => (r?.deletedCount != null ? `清理 ${r.deletedCount} 条(共 ${r.total} 条终态)` : null),
+      }).catch((e) => logger.warn({ err: e.message }, 'queue-cleanup-poller 扫描异常'));
     }, POLL_INTERVAL_MS);
     timer.unref();
   }, 60 * 1000).unref();

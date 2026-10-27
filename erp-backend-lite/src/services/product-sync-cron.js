@@ -5,6 +5,7 @@
 //  新商品属性永远是 '{}' 占位,列表重量/尺寸缺失)
 import { readStores, runStoreSync, runStoreSyncDetails } from '../modules/admin.js';
 import logger from '../middleware/log.js';
+import { runWithLog } from './task-run-log.js';
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 每 5 分钟检查一次
 const SYNC_HOURS = new Set([0, 8, 16]); // 0点/8点/16点执行
@@ -29,7 +30,7 @@ function shouldRun(now) {
 async function runSyncCycle() {
   if (running) {
     logger.info('[product-sync-cron] 上一轮同步未完成,跳过本轮');
-    return;
+    return { skipped: true, reason: '上一轮同步未完成' };
   }
   running = true;
   const startedAt = Date.now();
@@ -39,12 +40,12 @@ async function runSyncCycle() {
   } catch (e) {
     logger.error({ err: e.message }, '[product-sync-cron] 读取店铺列表失败');
     running = false;
-    return;
+    return { error: e?.message || String(e) };
   }
   if (!stores.length) {
     logger.warn('[product-sync-cron] 无店铺,跳过同步');
     running = false;
-    return;
+    return { skipped: true, reason: '无店铺' };
   }
 
   logger.info({ storeCount: stores.length }, '[product-sync-cron] 开始定时同步(商品→详情串行)');
@@ -99,6 +100,7 @@ async function runSyncCycle() {
     '[product-sync-cron] 本次定时同步完成'
   );
   running = false;
+  return { storeCount: stores.length, productOk, productFail, detailsOk, detailsFail, totalMs };
 }
 
 /** 启动定时同步(每 5 分钟检查是否到达执行窗口) */
@@ -109,7 +111,9 @@ export function startProductSyncCron() {
     if (shouldRun(now)) {
       lastRunKey = `${now.toISOString().slice(0, 10)} ${now.getHours()}`;
       // 异步执行,不阻塞 setInterval
-      runSyncCycle().catch((e) => {
+      runWithLog('product-sync-cron', runSyncCycle, {
+        formatDetail: (r) => (r?.storeCount != null ? `同步 ${r.storeCount} 店:商品成功 ${r.productOk}/失败 ${r.productFail},详情成功 ${r.detailsOk}/失败 ${r.detailsFail}` : null),
+      }).catch((e) => {
         logger.error({ errMessage: e?.message ?? String(e) }, '[product-sync-cron] 未捕获异常(不应到达)');
         running = false;
       });

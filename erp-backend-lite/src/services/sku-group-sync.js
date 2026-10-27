@@ -5,6 +5,7 @@
 import { collectDb } from '../db/collect-db.js';
 import { rebuildSkuGroups } from '../modules/sku-groups.js';
 import logger from '../middleware/log.js';
+import { runWithLog } from './task-run-log.js';
 
 const SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 分钟
 const STARTUP_DELAY_MS = 2 * 60 * 1000; // 启动 2 分钟后首次执行,避开启动期各轮询器高峰
@@ -33,10 +34,14 @@ function scanOnce() {
 export function startSkuGroupSync() {
   if (timer) return;
   setTimeout(() => {
-    scanOnce();
+    runWithLog('sku-group-sync', scanOnce, {
+      formatDetail: (r) => (r?.groups != null ? `重建分组 ${r.groups} 组,关联 ${r.linked ?? 0} 条` : null),
+    });
   }, STARTUP_DELAY_MS);
   timer = setInterval(() => {
-    scanOnce();
+    runWithLog('sku-group-sync', scanOnce, {
+      formatDetail: (r) => (r?.groups != null ? `重建分组 ${r.groups} 组,关联 ${r.linked ?? 0} 条` : null),
+    });
   }, SYNC_INTERVAL_MS);
 }
 

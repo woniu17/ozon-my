@@ -17,6 +17,7 @@ import config from '../config/index.js';
 import logger from '../middleware/log.js';
 import { financeAccrualByDay, financeAccrualTypes } from './ozon-opi.js';
 import { getAccrualTypes, replaceAccrualsByDay } from '../db/dao/sqlite/accrual-dao.js';
+import { runWithLog } from './task-run-log.js';
 
 const FIRST_DELAY_MS = 10 * 60 * 1000; // 启动后 10 分钟首跑(避开启动高峰)
 const DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 每 24h 一轮
@@ -126,11 +127,17 @@ let _timer = null;
 
 export function startAccrualByDaySync() {
   if (_timer) return;
+  const runLogged = () => runWithLog('accrual-byday-sync', runAccrualByDaySync, {
+    formatDetail: (r) => {
+      if (r?.skipped) return `跳过:${r.reason || ''}`;
+      return `扫描 ${r.days} 天 × ${r.stores} 店,费用 ${r.feeRows} 行,收入 ${r.incomeRows} 行,包裹 ${r.packages} 个,错误 ${r.errors?.length || 0} 处`;
+    },
+  });
   setTimeout(() => {
-    runAccrualByDaySync().catch((e) => logger.error({ err: e?.message }, '[accrual-byday] 首轮同步异常'));
+    runLogged().catch((e) => logger.error({ err: e?.message }, '[accrual-byday] 首轮同步异常'));
   }, FIRST_DELAY_MS).unref();
   _timer = setInterval(
-    () => runAccrualByDaySync().catch((e) => logger.error({ err: e?.message }, '[accrual-byday] 定时同步异常')),
+    () => runLogged().catch((e) => logger.error({ err: e?.message }, '[accrual-byday] 定时同步异常')),
     DAILY_INTERVAL_MS
   );
   logger.info({ rollingDays: ROLLING_DAYS, intervalHours: 24 }, '[accrual-byday] 定时任务已启动');

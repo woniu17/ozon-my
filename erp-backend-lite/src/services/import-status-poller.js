@@ -16,6 +16,7 @@ import * as opi from './ozon-opi.js';
 import { upsertTaskItems, summarizeTaskStatus, saveOpiResponse } from '../modules/products.js';
 import { createImageRefreshTask, hasImageErrors } from '../modules/image-refresh.js';
 import logger from '../middleware/log.js';
+import { runWithLog } from './task-run-log.js';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟
 const STALE_TIMEOUT_MS = 60 * 60 * 1000; // 1 小时(从 opi_submitted_at 起算)
@@ -201,9 +202,13 @@ export function startImportStatusPoller() {
   if (timer) return;
   // 启动后 30 秒做首次扫描(避免与启动瞬间的其他初始化竞争),之后每 5 分钟一次
   setTimeout(() => {
-    scanOnce().catch((e) => logger.warn({ err: e.message }, 'import-status-poller 首次扫描异常'));
+    runWithLog('import-status-poller', scanOnce, {
+      formatDetail: (r) => (r?.scanned != null ? `扫描 ${r.scanned} 项,更新 ${r.updated} 项,失败 ${r.failed} 项` : null),
+    }).catch((e) => logger.warn({ err: e.message }, 'import-status-poller 首次扫描异常'));
     timer = setInterval(() => {
-      scanOnce().catch((e) => logger.warn({ err: e.message }, 'import-status-poller 扫描异常'));
+      runWithLog('import-status-poller', scanOnce, {
+        formatDetail: (r) => (r?.scanned != null ? `扫描 ${r.scanned} 项,更新 ${r.updated} 项,失败 ${r.failed} 项` : null),
+      }).catch((e) => logger.warn({ err: e.message }, 'import-status-poller 扫描异常'));
     }, POLL_INTERVAL_MS);
     timer.unref();
   }, 30 * 1000).unref();

@@ -24,6 +24,7 @@ import ShallowCollectLogs from '../views/ShallowCollectLogs.vue';
 import CollectQueue from '../views/CollectQueue.vue';
 import CategoryFilter from '../views/CategoryFilter.vue';
 import EndpointMetrics from '../views/EndpointMetrics.vue';
+import TaskLogs from '../views/TaskLogs.vue';
 import PriceWatch from '../views/PriceWatch.vue';
 import OrderProcess from '../views/OrderProcess.vue';
 import OrderStats from '../views/OrderStats.vue';
@@ -67,6 +68,7 @@ const router = createRouter({
     { path: '/collect-queue', name: 'collect-queue', component: CollectQueue, meta: { title: '采集队列' } },
     { path: '/category-filter', name: 'category-filter', component: CategoryFilter, meta: { title: '类目过滤' } },
     { path: '/endpoint-metrics', name: 'endpoint-metrics', component: EndpointMetrics, meta: { title: '端点耗时' } },
+    { path: '/task-logs', name: 'task-logs', component: TaskLogs, meta: { title: '定时任务日志' } },
     { path: '/price-watch', name: 'price-watch', component: PriceWatch, meta: { title: '价格优势' } },
     { path: '/order-process', name: 'order-process', component: OrderProcess, meta: { title: '订单处理' } },
     { path: '/order-stats', name: 'order-stats', component: OrderStats, meta: { title: '订单统计' } },

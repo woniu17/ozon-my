@@ -57,6 +57,7 @@ import productArchiveRoutes from './modules/product-archive.js';
 import exportExcelRoutes from './modules/export-excel.js';
 import platformOrdersRoutes from './modules/platform-orders.js';
 import listingMaterialsRoutes from './modules/listing-materials.js';
+import taskLogRoutes, { startTaskLogRetention, stopTaskLogRetention } from './modules/task-logs.js';
 import { handleImageCacheRequest, withImageRequestContext } from './services/order-image-cache.js';
 import { stopPlatformOrders } from './services/platform-orders/browser-manager.js';
 import { setupPushWs } from './services/push-ws.js';
@@ -224,6 +225,7 @@ app.use(productArchiveRoutes);
 app.use(exportExcelRoutes);
 app.use(platformOrdersRoutes);
 app.use(listingMaterialsRoutes);
+app.use(taskLogRoutes);
 // 服务端推送（长轮询接收端点，JWT 保护）
 app.use(pushRoutes);
 
@@ -289,6 +291,8 @@ const server = app.listen(config.port, () => {
   startPurchaseLogisticsPoller();
   // Webhook 事件消费(2026-09-17 自 ozon-webhook 并入):每 2s 消费 ozon_push_events pending 事件
   startEventPoller();
+  // 定时任务执行日志保留期清理(2026-10-27):每日一次,默认 30 天
+  startTaskLogRetention();
 });
 
 // 优雅退出
@@ -310,6 +314,7 @@ async function shutdown(signal) {
   stopProductSyncCron();
   stopPurchaseLogisticsPoller();
   stopEventPoller();
+  stopTaskLogRetention();
   // 平台订单(2026-09):关闭 cloakbrowser + 释放 profile 锁
   await stopPlatformOrders();
   server.close(() => {
