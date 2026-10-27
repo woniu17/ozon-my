@@ -643,12 +643,14 @@ router.post('/admin/api/print-agent/preview-container-label', async (req, res, n
     const store = (config.loadStores() || []).find((s) => s.id === storeId);
     if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
     const { buffer } = await containerLabel(store, labelId);
-    const rendered = await pdfToPngDataUrl(buffer, 76, 129, 90);
     // 2026-10-27:直接返回服务器渲染的实际出纸 PNG,不再经组件预览图 URL 回传——
     // 组件预览 URL 是打印电脑本地地址,服务器/安卓端常无法访问,导致"预览图拉取失败"。
     // rendered.dataUrl 与打印出纸同一张图(76:130 竖向 + 旋转90),预览即所见。
-    logger.info({ storeId, labelId, imageBytes: rendered.dataUrl.length }, '[print-agent] 货运标签无纸预览成功');
-    res.json(ok({ url: '', imageDataUrl: rendered.dataUrl, labelId }));
+    // 2026-10-27 多页:PDF 有多页时返回 images 数组(每页一张 PNG),安卓端可翻页预览。
+    const pages = await pdfToPngPagesDataUrl(buffer, 76, 129, 90);
+    const images = pages.map((p) => p.dataUrl);
+    logger.info({ storeId, labelId, pageCount: images.length, imageBytes: images[0]?.length }, '[print-agent] 货运标签无纸预览成功');
+    res.json(ok({ url: '', imageDataUrl: images[0] || '', images, labelId }));
   } catch (e) {
     next(e);
   }

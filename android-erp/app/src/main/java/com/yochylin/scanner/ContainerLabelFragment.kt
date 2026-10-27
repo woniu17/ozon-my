@@ -393,37 +393,80 @@ class ContainerLabelFragment : Fragment() {
         }
     }
 
-    /** 菜鸟组件无纸预览:后端拉 PDF → 渲染 PNG(旋转 90°) → 返回 base64,对话框显示 */
+    /** 货运标签预览(2026-10-27):后端拉 PDF → 渲染 PNG(旋转 90°) → 返回每页 base64,对话框支持多页翻页 */
     private fun previewLabel(row: LabelRow) {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                // 已解包 data,imageDataUrl 直接位于根对象
+                // 已解包 data;多页时 images 为每页一张 PNG dataURL,imageDataUrl 兼容旧版单页
                 val obj = Api.post(
                     "/admin/api/print-agent/preview-container-label",
                     mapOf("storeId" to row.storeId, "labelId" to row.id)
                 ).asJsonObject
-                val imageDataUrl = obj.optString("imageDataUrl")
-                if (imageDataUrl.isBlank()) {
+                val images = mutableListOf<String>()
+                obj.getAsJsonArray("images")?.forEach { images.add(it.asString) }
+                if (images.isEmpty()) {
+                    val single = obj.optString("imageDataUrl")
+                    if (single.isNotBlank()) images.add(single)
+                }
+                if (images.isEmpty()) {
                     toast("预览图拉取失败,请检查打印组件后重试")
                     return@launch
                 }
-                val base64 = imageDataUrl.substringAfter("base64,")
-                val bytes = Base64.decode(base64, Base64.DEFAULT)
-                val bmp = withContext(Dispatchers.IO) {
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                val bitmaps = withContext(Dispatchers.IO) {
+                    images.mapNotNull { img ->
+                        val base64 = img.substringAfter("base64,")
+                        val bytes = Base64.decode(base64, Base64.DEFAULT)
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }
                 }
-                if (bmp == null) {
+                if (bitmaps.isEmpty()) {
                     toast("预览图解析失败")
                     return@launch
                 }
+
                 val imageView = ImageView(requireContext()).apply {
-                    setImageBitmap(bmp)
                     adjustViewBounds = true
                     setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
                 }
+                val pageTv = TextView(requireContext()).apply {
+                    gravity = Gravity.CENTER
+                    textSize = 12f
+                    setTextColor(Color.parseColor("#86909c"))
+                    setPadding(dp(4f), dp(2f), dp(4f), dp(2f))
+                }
+                val prevBtn = Button(requireContext()).apply { text = "上一页" }
+                val nextBtn = Button(requireContext()).apply { text = "下一页" }
+                val btnRow = LinearLayout(requireContext()).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER
+                    addView(prevBtn)
+                    addView(nextBtn)
+                }
+                val container = LinearLayout(requireContext()).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(imageView)
+                    addView(pageTv)
+                    if (bitmaps.size > 1) addView(btnRow)
+                }
+
+                var pageIndex = 0
+                fun updatePage() {
+                    imageView.setImageBitmap(bitmaps[pageIndex])
+                    pageTv.text = if (bitmaps.size > 1) "第 ${pageIndex + 1}/${bitmaps.size} 页" else ""
+                    prevBtn.isEnabled = pageIndex > 0
+                    nextBtn.isEnabled = pageIndex < bitmaps.size - 1
+                }
+                prevBtn.setOnClickListener {
+                    if (pageIndex > 0) { pageIndex--; updatePage() }
+                }
+                nextBtn.setOnClickListener {
+                    if (pageIndex < bitmaps.size - 1) { pageIndex++; updatePage() }
+                }
+                updatePage()
+
                 AlertDialog.Builder(requireContext())
-                    .setTitle("货运标签 #${row.id} 预览")
-                    .setView(imageView)
+                    .setTitle("货运标签 #${row.id} 预览(${bitmaps.size}页)")
+                    .setView(container)
                     .setPositiveButton("关闭", null)
                     .show()
             } catch (e: Exception) {
