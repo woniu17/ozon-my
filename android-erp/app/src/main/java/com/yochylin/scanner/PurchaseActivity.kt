@@ -118,6 +118,28 @@ class PurchaseActivity : ComponentActivity() {
     private val PM_DELIVERY_BASE_CNY = 3.37
     private val PM_DELIVERY_PER_G_CNY = 0.0281
 
+    // OGL 分档运费(2026-10-27,镜像后端 services/ogl-freight.js + H5 utils/ogl-freight.js)
+    // 计费:运费 = 固定费用 + 每克单价 × 重量(克);评分组由「申报价值(CNY) × 重量(g)」二维决定。
+    private data class OglGroup(
+        val key: String,
+        val name: String,
+        val valueMin: Double,
+        val valueMax: Double,
+        val weightMinG: Double,
+        val weightMaxG: Double,
+        val fixedFee: Double,
+        val perGram: Double
+    )
+
+    private val OGL_TARIFF_GROUPS = listOf(
+        OglGroup("extra_small", "Extra Small", 0.01, 135.0, 1.0, 500.0, 2.90, 0.0247),
+        OglGroup("budget", "Budget", 0.01, 135.0, 501.0, 35000.0, 22.25, 0.0164),
+        OglGroup("small", "Small", 135.01, 635.0, 1.0, 2000.0, 15.48, 0.0242),
+        OglGroup("big", "Big", 135.01, 635.0, 2001.0, 35000.0, 34.82, 0.0164),
+        OglGroup("premium_small", "Premium Small", 635.01, 22525.0, 1.0, 5000.0, 21.28, 0.0242),
+        OglGroup("premium_big", "Premium Big", 635.01, 22525.0, 5001.0, 35000.0, 59.97, 0.0222)
+    )
+
     private val skuPricing = HashMap<String, SkuPriceInfo>() // sku -> 定价信息
     private val poRateChoice = HashMap<String, Int>()        // sku -> 目标成本利润率(默认100)
     private val poCmpExpanded = HashSet<String>()            // sku -> 单价调整折叠展开
@@ -1879,9 +1901,9 @@ class PurchaseActivity : ComponentActivity() {
     private fun buildPriceAdjust(it: PkgItem, unitCost: Double): View {
         val sku = it.sku ?: ""
         val info = skuPricing[sku]
-        val unitDelivery = info?.let { poUnitDelivery(it.weightG) }
+        val unitDelivery = if (info != null) poUnitDelivery(info.weightG, it.price) else null
         val rate = poRateChoice[sku] ?: PM_DEFAULT_RATE
-        val suggested = if (unitCost > 0 && unitDelivery != null) suggestedPrice(unitCost, rate, unitDelivery) else null
+        val suggested = if (unitCost > 0 && unitDelivery != null) suggestedPrice(unitCost, rate, info?.weightG) else null
         val canAdjust = sku.isNotBlank() && unitCost > 0 && unitDelivery != null && info != null && info.inCache && info.hasProductId
         val canRoundUp = sku.isNotBlank() && info != null && info.inCache && info.hasProductId && info.price != null
         val missingWhy = when {
@@ -2100,7 +2122,7 @@ class PurchaseActivity : ComponentActivity() {
             val qty = it.quantity ?: 0.0
             val unitCost = if (qty > 0) amt / qty else 0.0
             val info = it.sku?.let { sku -> skuPricing[sku] }
-            val unitDelivery = info?.let { poUnitDelivery(it.weightG) }
+            val unitDelivery = if (info != null) poUnitDelivery(info.weightG, it.price) else null
             if (unitDelivery == null) allWeighted = false
             val revenue = (it.price ?: 0.0) * qty
             val delivery = unitDelivery?.let { it * qty } ?: 0.0
@@ -2121,15 +2143,58 @@ class PurchaseActivity : ComponentActivity() {
         }
     }
 
-    // ── 单价调整数据/动作（与 H5 adjustSkuPrice/roundUpPrice 同构） ──
-    private fun poUnitDelivery(weightG: Double?): Double? {
+    // ── 单价调整数据/动作（与 H5 adjustSkuPrice/roundUpPrice 同构,2026-10-27 对齐 OGL 分档） ──
+    private fun oglDelivery(valueCny: Double?, weightG: Double?): Double? {
+        val v = valueCny ?: return null
         val w = weightG ?: return null
         if (w <= 0) return null
-        return PM_DELIVERY_BASE_CNY + PM_DELIVERY_PER_G_CNY * w
+        val group = OGL_TARIFF_GROUPS.firstOrNull {
+            v >= it.valueMin && v <= it.valueMax && w >= it.weightMinG && w <= it.weightMaxG
+        } ?: return null
+        return round2(group.fixedFee + group.perGram * w)
     }
 
-    private fun suggestedPrice(unitCost: Double, rate: Int, unitDelivery: Double): Double {
-        return Math.ceil((unitCost * (1 + rate / 100.0) + unitDelivery) / (1 - PM_COMMISSION_RATE))
+    private fun abtDelivery(weightG: Double?): Double? {
+        val w = weightG ?: return null
+        if (w <= 0) return null
+        return round2(PM_DELIVERY_BASE_CNY + PM_DELIVERY_PER_G_CNY * w)
+    }
+
+    /** 单件口径配送费(OGL 分档,价值=单件售价;未命中 OGL 或越界回退 ABT 公式) */
+    private fun poUnitDelivery(weightG: Double?, valueCny: Double?): Double? {
+        val w = weightG ?: return null
+        if (w <= 0) return null
+        return oglDelivery(valueCny, w) ?: abtDelivery(w)
+    }
+
+    /**
+     * 目标成本利润率反推建议价(OGL 迭代求解,与 price-update 服务端校验同口径)。
+     * OGL 配送费取决于申报价值(=建议价本身),迭代 ≤6 次收敛(价值档宽)。
+     */
+    private fun suggestOglPrice(purchaseCny: Double, weightG: Double, targetRate: Double, commissionRate: Double): Double? {
+        val purchase = purchaseCny
+        val w = weightG
+        val r = targetRate
+        if (purchase <= 0 || w <= 0) return null
+        val denom = 1 - commissionRate
+        var price = (purchase * (1 + r) + (abtDelivery(w) ?: return null)) / denom
+        for (i in 0 until 6) {
+            val delivery = oglDelivery(price, w) ?: break
+            val next = (purchase * (1 + r) + delivery) / denom
+            if (Math.abs(next - price) < 0.005) {
+                price = next
+                break
+            }
+            price = next
+        }
+        return round2(price)
+    }
+
+    /** 建议价:OGL 迭代后向上取整到整数元(与 H5 suggested 同口径) */
+    private fun suggestedPrice(unitCost: Double, rate: Int, weightG: Double?): Double? {
+        if (unitCost <= 0 || weightG == null || weightG <= 0) return null
+        val s = suggestOglPrice(unitCost, weightG, rate / 100.0, PM_COMMISSION_RATE) ?: return null
+        return Math.ceil(s)
     }
 
     private fun round2(v: Double): Double = Math.round(v * 100) / 100.0
