@@ -644,21 +644,11 @@ router.post('/admin/api/print-agent/preview-container-label', async (req, res, n
     if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
     const { buffer } = await containerLabel(store, labelId);
     const rendered = await pdfToPngDataUrl(buffer, 76, 129, 90);
-    const hMm = Math.round((76 * rendered.h) / rendered.w * 10) / 10;
-    const templateBase = getTemplateBase(req);
-    const url = await sendPreview(rendered.dataUrl, hMm, String(labelId), templateBase, 'label-image-76x130.xml');
-    let imageDataUrl = '';
-    if (url) {
-      try {
-        const resp = await fetch(url);
-        if (resp.ok) {
-          const buf = Buffer.from(await resp.arrayBuffer());
-          imageDataUrl = `data:${resp.headers.get('content-type') || 'image/png'};base64,${buf.toString('base64')}`;
-        }
-      } catch { /* 拉取失败时安卓端回退到 url */ }
-    }
-    logger.info({ storeId, labelId, hasImage: !!imageDataUrl }, '[print-agent] 货运标签无纸预览成功');
-    res.json(ok({ url, imageDataUrl, labelId }));
+    // 2026-10-27:直接返回服务器渲染的实际出纸 PNG,不再经组件预览图 URL 回传——
+    // 组件预览 URL 是打印电脑本地地址,服务器/安卓端常无法访问,导致"预览图拉取失败"。
+    // rendered.dataUrl 与打印出纸同一张图(76:130 竖向 + 旋转90),预览即所见。
+    logger.info({ storeId, labelId, imageBytes: rendered.dataUrl.length }, '[print-agent] 货运标签无纸预览成功');
+    res.json(ok({ url: '', imageDataUrl: rendered.dataUrl, labelId }));
   } catch (e) {
     next(e);
   }
