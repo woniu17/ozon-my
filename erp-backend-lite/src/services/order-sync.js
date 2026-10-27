@@ -27,6 +27,7 @@ import { notifyPostingEvent, notifyPostingPickedUp } from './webhook/feishu-noti
 import { publishPostingEvent } from './push-hub.js';
 import { apiToPush, pushRankOf } from './webhook/status-map.js';
 import { ensureImageCached } from './order-image-cache.js';
+import { enqueuePriceWatchForOrderSku } from './price-watch-queue.js';
 
 // ── 三级同步节奏(2026-09-16)─────────────────────────────────
 const FAST_INTERVAL_MIN = Math.max(1, Number(process.env.ORDER_SYNC_INTERVAL_MIN) || 2); // fast 轮间隔(分钟,2026-09-17 5→2)
@@ -349,7 +350,22 @@ function maybeBackfillFeishuNotify(store, posting) {
 
 /** syncPosting 包装:落库后按需补发飞书通知(webhook 停推兜底) */
 function syncPostingWithNotify(store, p) {
+  // 新订单首次入库 → 异步采集该订单商品 SKU 的跟卖快照(节流;采集失败不影响订单同步)
+  const existed = db
+    .prepare(`SELECT id FROM op_ozon_order WHERE store_id = ? AND posting_number = ?`)
+    .get(store.id, String(p.posting_number || ''));
   const r = orderPackageDao.syncPosting(store.id, p);
+  if (!existed) {
+    try {
+      for (const pr of Array.isArray(p.products) ? p.products : []) {
+        if (pr?.sku) {
+          enqueuePriceWatchForOrderSku(String(pr.sku), { profileDir: config.ozonFollowSellProfileDir });
+        }
+      }
+    } catch (e) {
+      logger.warn({ err: e?.message }, '[order-sync] 订单跟卖采集入队失败(不影响同步)');
+    }
+  }
   try {
     maybeBackfillFeishuNotify(store, p);
   } catch (e) {

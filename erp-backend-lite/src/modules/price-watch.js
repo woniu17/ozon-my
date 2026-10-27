@@ -453,6 +453,35 @@ router.get('/admin/api/price-watch/detail/:sku', (req, res, next) => {
   }
 });
 
+// ── POST /admin/api/price-watch/order-snapshots ─────────────
+// 订单处理页/安卓端:批量查询"订单生成后最近一次"跟卖快照,用于对比订单售价。
+// body: { items: [{ sku, after }] }  after = 订单创建时间(ISO);取 fetched_at >= after 的最早一条。
+// 返回 { map: { [sku]: snapshot|null } },不含 sellers 明细(列表轻量化)。
+router.post('/admin/api/price-watch/order-snapshots', (req, res, next) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const map = {};
+    const stmt = db.prepare(
+      `SELECT id, sku, store_id, my_price, seller_count, min_price, median_price, avg_price,
+              my_rank, is_cheapest, gap_abs, gap_pct, vs_median, status, error_reason, fetched_at
+       FROM price_watch_snapshots
+       WHERE sku = ? AND fetched_at >= ?
+       ORDER BY fetched_at ASC LIMIT 1`
+    );
+    for (const it of items) {
+      const sku = String(it?.sku || '').trim();
+      if (!/^\d+$/.test(sku)) continue;
+      const d = new Date(it?.after);
+      const after = !Number.isNaN(d.getTime()) ? d.toISOString() : new Date(0).toISOString();
+      map[sku] = stmt.get(sku, after) || null;
+    }
+    return res.json(ok({ map }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[price-watch] order-snapshots failed');
+    next(e);
+  }
+});
+
 // ── GET /admin/api/price-watch/stats ────────────────────────
 // 看板汇总:优势分布 + 我的价格滞后提示(>48h)+ 各店铺缓存同步时间
 router.get('/admin/api/price-watch/stats', (req, res, next) => {

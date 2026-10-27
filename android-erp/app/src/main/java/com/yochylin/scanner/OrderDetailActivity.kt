@@ -6,9 +6,14 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -30,6 +35,7 @@ import com.yochylin.scanner.adapter.fmtTimeWithWeekday
 import com.yochylin.scanner.adapter.hoursSince
 import com.yochylin.scanner.adapter.parseIsoTime
 import com.yochylin.scanner.adapter.platformLabel
+import com.google.gson.JsonObject
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
 import com.yochylin.scanner.api.optBoolean
@@ -90,6 +96,9 @@ class OrderDetailActivity : ComponentActivity() {
     private val stockMap = HashMap<String, StockInfo>()
     private var stockLoaded = false
     private var currentItems: List<com.yochylin.scanner.model.PkgItem> = emptyList()
+
+    // 订单生成时跟卖快照(2026-10-27):sku → 下单后最近一次快照(新订单同步时后台异步采集)
+    private val pwSnapMap = HashMap<String, JsonObject>()
 
     /** 采购流程结果回调：返回后刷新详情（新增/删除采购、改物流、备货等） */
     private val purchaseLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -168,6 +177,7 @@ class OrderDetailActivity : ComponentActivity() {
                 currentItems = detail.items ?: detail.`package`?.items ?: emptyList()
                 render(detail)
                 loadStocks() // 库存独立接口,异步加载不阻塞详情
+                loadPriceWatchSnapshots() // 订单跟卖快照异步加载,不阻塞详情
             } catch (e: Exception) {
                 if (e is ApiException && e.code == 401) {
                     toast("登录已过期,请重新登录")
@@ -194,6 +204,30 @@ class OrderDetailActivity : ComponentActivity() {
         } catch (e: Exception) {
             // 库存加载失败静默(店铺未配置/网络),商品区库存行显示 "—"
             stockLoaded = true
+        }
+    }
+
+    /** 加载订单商品跟卖快照(2026-10-27):查询"下单后最近一次快照",成功后重渲染商品区 */
+    private suspend fun loadPriceWatchSnapshots() {
+        val skus: List<String> = currentItems.mapNotNull { it.sku?.trim() }.distinct()
+        if (skus.isEmpty()) return
+        val after = pkg?.inProcessAt
+        try {
+            val resp = Api.post(
+                "/admin/api/price-watch/order-snapshots",
+                mapOf("items" to skus.map { sku -> mapOf("sku" to sku, "after" to after) })
+            )
+            val mapEl = resp.asJsonObject.get("data")?.asJsonObject?.get("map")?.asJsonObject
+            pwSnapMap.clear()
+            if (mapEl != null) {
+                for (sku in skus) {
+                    val el = mapEl.get(sku)
+                    if (el != null && el.isJsonObject) pwSnapMap[sku] = el.asJsonObject
+                }
+            }
+            renderItems(currentItems)
+        } catch (e: Exception) {
+            // 快照查询失败静默,不影响订单详情
         }
     }
 
@@ -499,8 +533,86 @@ class OrderDetailActivity : ComponentActivity() {
         }
         right.addView(stockRow)
 
+        // 跟卖快照行(2026-10-27):展示下单时的跟卖快照,对比出售价与跟卖
+        val snap = item.sku?.trim()?.let { pwSnapMap[it] }
+        val sellerCountEl = snap?.get("seller_count")
+        if (snap != null && sellerCountEl != null && !sellerCountEl.isJsonNull) {
+            right.addView(buildPwSnapRow(snap))
+        }
+
         row.addView(right)
         return row
+    }
+
+    /** 跟卖快照行: #排名/总数 + 最低/中位价 + 比最低高/低百分比(2026-10-27) */
+    private fun buildPwSnapRow(snap: JsonObject): TextView {
+        fun num(key: String): Double? = snap.get(key)?.takeIf { !it.isJsonNull }?.asDouble
+        fun int(key: String): Int? = snap.get(key)?.takeIf { !it.isJsonNull }?.asInt
+
+        val sellerCount = int("seller_count") ?: 0
+        val rank = int("my_rank")
+        val cheapest = int("is_cheapest") == 1
+        val minPrice = num("min_price")
+        val medianPrice = num("median_price")
+        val gapPct = num("gap_pct")
+
+        val sb = SpannableStringBuilder()
+        sb.append("跟卖(下单时) ")
+        if (rank != null) {
+            val s = sb.length
+            sb.append("#$rank/${sellerCount + 1}")
+            sb.setSpan(
+                ForegroundColorSpan(if (cheapest) Color.parseColor("#16a34a") else Color.parseColor(COLOR_PRIMARY)),
+                s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        if (minPrice != null) {
+            sb.append("  最低 ")
+            val s = sb.length
+            sb.append(fmtMoney(minPrice))
+            sb.setSpan(ForegroundColorSpan(Color.parseColor(COLOR_TEXT)), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        if (medianPrice != null) {
+            sb.append("  中位 ")
+            val s = sb.length
+            sb.append(fmtMoney(medianPrice))
+            sb.setSpan(ForegroundColorSpan(Color.parseColor(COLOR_TEXT)), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        if (gapPct != null) {
+            val s = sb.length
+            val text = when {
+                gapPct > 0 -> " 比最低高${fmtNum(gapPct)}%"
+                gapPct < 0 -> " 比最低低${fmtNum(-gapPct)}%"
+                else -> " 与最低持平"
+            }
+            sb.append(text)
+            sb.setSpan(
+                ForegroundColorSpan(
+                    when {
+                        gapPct > 0 -> Color.parseColor("#dc2626")
+                        gapPct < 0 -> Color.parseColor("#16a34a")
+                        else -> Color.parseColor(COLOR_MUTE)
+                    }
+                ),
+                s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+
+        return TextView(this).apply {
+            text = sb
+            textSize = 11f
+            setTextColor(Color.parseColor("#6b7280"))
+            setRoundedBg(Color.parseColor("#f8fafc"), 6f)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) }
+        }
     }
 
     private fun renderPurchaseLinks(links: List<PurchaseLink>) {

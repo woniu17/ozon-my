@@ -18,3 +18,9 @@ export function getPriceWatchList(params) {
 export function getPriceWatchDetail(sku, days) {
   return request.get('/admin/api/price-watch/detail/' + encodeURIComponent(sku), { days });
 }
+
+// 批量查询"订单生成后最近一次"跟卖快照(订单处理页对比订单售价)
+// items: [{ sku, after }]  after = 订单创建时间 ISO
+export function getOrderPriceWatchSnapshots(items) {
+  return request.post('/admin/api/price-watch/order-snapshots', { items });
+}

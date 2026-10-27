@@ -25,6 +25,7 @@ import {
   getPendingExportState,
 } from '../api/order-process.js';
 import { getSkusInfo, setSkuCustoms, updatePrice } from '../api/price-manage.js';
+import { getOrderPriceWatchSnapshots } from '../api/price-watch.js';
 import { useToast } from '../components/useToast.js';
 import { useConfirmStore } from '../stores/confirm.js';
 import AppModal from '../components/AppModal.vue';
@@ -2614,16 +2615,63 @@ async function openDetail(pkg) {
   detail.value = null;
   detailStocks.value = [];
   detailStockLoading.value = true;
+  orderPwMap.value = {};
   try {
     detail.value = await getOrderDetail(pkg.id);
     // 库存单独接口,不阻塞详情展示(2026-10-17)
     loadDetailStocks(pkg.id);
+    // 订单生成时跟卖快照(2026-10-27):新订单同步时后台已异步采集,此处只读查询
+    loadOrderPriceWatch();
   } catch (err) {
     show(err.message || String(err), 'error');
     detailOpen.value = false;
   } finally {
     detailLoading.value = false;
   }
+}
+
+// ── 订单商品跟卖快照(2026-10-27) ──
+// 新订单首次同步时后台已异步采集该 SKU 跟卖快照;此处查询"下单后最近一次快照"用于对比订单售价。
+const orderPwMap = ref({});
+const orderPwLoading = ref(false);
+async function loadOrderPriceWatch() {
+  const pkg = detail.value?.package;
+  const items = detail.value?.items || [];
+  const skus = [...new Set(items.map((it) => String(it.sku)).filter(Boolean))];
+  if (!pkg || !skus.length) { orderPwMap.value = {}; return; }
+  const after = pkg.inProcessAt || pkg.gmtCreate || null;
+  orderPwLoading.value = true;
+  try {
+    const data = await getOrderPriceWatchSnapshots(skus.map((sku) => ({ sku, after })));
+    orderPwMap.value = data?.map || {};
+  } catch (e) {
+    console.warn('[order-process] price-watch snapshot failed', e?.message || e);
+  } finally {
+    orderPwLoading.value = false;
+  }
+}
+// 快照字段为后端 snake_case:my_rank/seller_count/min_price/median_price/gap_pct/is_cheapest
+function orderPwRow(sku) {
+  return orderPwMap.value[String(sku)] || null;
+}
+function orderPwRankText(snap) {
+  if (snap == null || snap.my_rank == null || snap.seller_count == null) return '';
+  return `#${snap.my_rank}/${Number(snap.seller_count) + 1}`;
+}
+function orderPwMoney(v) {
+  return v != null ? Number(v).toFixed(2) : '—';
+}
+function orderPwGapText(snap) {
+  if (snap?.gap_pct == null) return '';
+  const p = Number(snap.gap_pct);
+  if (p > 0) return `比最低高${p}%`;
+  if (p < 0) return `比最低低${Math.abs(p)}%`;
+  return '与最低持平';
+}
+function orderPwGapCls(snap) {
+  if (snap?.gap_pct == null) return '';
+  const p = Number(snap.gap_pct);
+  return p > 0 ? 'pw-above' : p < 0 ? 'pw-below' : 'pw-equal';
 }
 
 // ── 应计项目(2026-09,已完成/已取消货件的 Ozon 财务应计)─────
@@ -3976,6 +4024,15 @@ onUnmounted(() => {
                 </div>
               </div>
             </div>
+            <!-- 订单生成时跟卖快照:对比订单售价与市场跟卖(下单后最近一次快照) -->
+            <div v-if="orderPwRow(p.sku)" class="po-pw-snap" :title="'跟卖快照采集于 ' + (orderPwRow(p.sku).fetched_at || '')">
+              <span class="po-pw-label">跟卖(下单时)</span>
+              <span class="po-pw-rank" :class="{ 'is-best': Number(orderPwRow(p.sku).is_cheapest) === 1 }">{{ orderPwRankText(orderPwRow(p.sku)) }}</span>
+              <span class="po-pw-item">最低 <b>¥{{ orderPwMoney(orderPwRow(p.sku).min_price) }}</b></span>
+              <span class="po-pw-item">中位 <b>¥{{ orderPwMoney(orderPwRow(p.sku).median_price) }}</b></span>
+              <span class="po-pw-gap" :class="orderPwGapCls(orderPwRow(p.sku))">{{ orderPwGapText(orderPwRow(p.sku)) }}</span>
+            </div>
+            <div v-else-if="orderPwLoading" class="po-pw-snap po-pw-loading">跟卖快照采集中…</div>
             <!-- 第二部分:单价调整(默认折叠,点击展开;单件口径,数字右对齐) -->
             <div class="po-card-cmp">
               <div class="po-cmp-toggle">
@@ -6202,6 +6259,29 @@ a.product-title:hover {
   min-width: 0;
   text-align: right;
 }
+/* 订单生成时跟卖快照条(2026-10-27):排名/最低/中位/差值,对比订单售价 */
+.po-pw-snap {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px dashed #e2e8f0;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+.po-pw-label { color: var(--text-secondary, #9ca3af); }
+.po-pw-rank { font-weight: 700; }
+.po-pw-rank.is-best { color: #16a34a; }
+.po-pw-item b { color: var(--text-primary, #1f2937); font-variant-numeric: tabular-nums; }
+.po-pw-gap { font-weight: 600; }
+.po-pw-gap.pw-above { color: #dc2626; }
+.po-pw-gap.pw-below { color: #16a34a; }
+.po-pw-gap.pw-equal { color: var(--text-secondary, #9ca3af); }
+.po-pw-loading { color: #9ca3af; }
 .pf-row {
   display: flex;
   align-items: baseline;
