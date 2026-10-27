@@ -1026,7 +1026,7 @@ onMounted(async () => {
 /* 表格 */
 .pm-table-wrap { position: relative; overflow: auto; max-height: 70vh; background: var(--bg-card, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 8px; }
 /* 表格整体:字体放大 1.4 倍(13→18px),内部小号字同步放大 */
-.pm-table { width: 100%; border-collapse: collapse; font-size: 18px; min-width: 1500px; }
+.pm-table { width: 100%; border-collapse: collapse; font-size: 18px; min-width: 1150px; }
 .pm-table .sub { font-size: 15px; }
 .pm-table .mono { font-size: 17px; }
 .pm-table .tag { font-size: 15px; }
@@ -1045,12 +1045,11 @@ onMounted(async () => {
 .col-expand { width: 28px; cursor: pointer; text-align: center; color: var(--text-secondary, #9ca3af); }
 .col-num { text-align: right; white-space: nowrap; }
 /* 商品列定宽:防止 auto 布局把表格富余空间全塞给本列(内容约 380px,实测曾被撑到 722px) */
-.col-product { min-width: 360px; width: 450px; }
-.col-profit-target { width: 380px; }
+.col-product { min-width: 340px; width: 380px; }
+/* 利润与定价列:固定 400px,容纳 6 行对比 + 操作区 */
+.col-profit-target { width: 400px; }
 /* 合并列"商品信息":售价/销量/采购价/重量 每项占一行,名称左、值右(参考当前利润列) */
-.col-meta { width: 310px; }
-/* 利润调整列固定宽度:6 行对比,防止名称/值被挤压重叠 */
-/* 原利润列/定价列已合并为 col-profit-target */
+.col-meta { width: 280px; }
 /* 采购价输入:¥ 内嵌输入框左侧,与数字同框(视觉上 ¥12.36 一体) */
 .price-cell { position: relative; display: inline-block; }
 .price-cell .yen { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-secondary, #6b7280); pointer-events: none; }
@@ -1170,11 +1169,11 @@ a.prod-name:hover { color: #4338ca; text-decoration: underline; }
 .rate-select:disabled { opacity: .5; cursor: not-allowed; }
 
 /* 利润调整列(当前→调整):参考订单处理单价调整表,旧值→新值对比 */
-.cmp-row { display: flex; align-items: center; gap: 6px; line-height: 1.55; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.cmp-label { width: 62px; flex-shrink: 0; color: var(--text-secondary, #6b7280); }
-.cmp-old { width: 52px; flex-shrink: 0; text-align: right; color: #475569; }
+.cmp-row { display: flex; align-items: center; gap: 8px; line-height: 1.6; white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 16px; }
+.cmp-label { width: 86px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary, #6b7280); }
+.cmp-old { width: 74px; flex-shrink: 0; text-align: right; color: #475569; }
 .cmp-arrow { width: 20px; flex-shrink: 0; text-align: center; color: #94a3b8; }
-.cmp-new { width: 52px; flex-shrink: 0; text-align: right; font-weight: 600; color: var(--text-primary, #1f2937); }
+.cmp-new { width: 74px; flex-shrink: 0; text-align: right; font-weight: 600; color: var(--text-primary, #1f2937); }
 .cmp-old.pos, .cmp-new.pos { color: #047857; }
 .cmp-old.neg, .cmp-new.neg { color: #dc2626; }
 
