@@ -51,6 +51,15 @@
         android:textSize="11sp"
         android:textColor="#86909c" />
 
+    <!-- 卖家信息(2026-10-27,对齐 Web 采购卡元信息行) -->
+    <TextView
+        android:id="@+id/purchaseSeller"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:textSize="11sp"
+        android:textColor="#86909c" />
+
     <TextView
         android:id="@+id/purchaseTime"
         android:layout_width="match_parent"

@@ -67,14 +67,36 @@
             android:paddingVertical="2dp" />
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/oTags"
+    <!-- 标签/备注区(2026-10-27,对齐 Web 行内编辑:展示+点击编辑) -->
+    <LinearLayout
+        android:id="@+id/oMetaContainer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:textSize="10sp"
-        android:textColor="#4e5969"
-        android:visibility="gone" />
+        android:orientation="vertical"
+        android:background="#f7f8fa"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:id="@+id/oTags"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="10sp"
+            android:textColor="#4e5969"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/oNote"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textSize="10sp"
+            android:textColor="#4e5969"
+            android:visibility="gone" />
+    </LinearLayout>
 
     <!-- 产品行容器 -->
     <LinearLayout

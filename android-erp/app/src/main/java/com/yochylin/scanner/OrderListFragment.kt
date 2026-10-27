@@ -200,6 +200,10 @@ class OrderListFragment : Fragment() {
                 }
             }
         }
+
+        override fun onEditMeta(pkg: Pkg) {
+            showMetaEditDialog(pkg)
+        }
     })
 
     private val detailLauncher = registerForActivityResult(
@@ -461,6 +465,79 @@ class OrderListFragment : Fragment() {
                 reload()
             }
             .show()
+    }
+
+    // ── 标签/备注编辑(2026-10-27,对齐 Web 行内编辑)──
+    private fun showMetaEditDialog(pkg: Pkg) {
+        val tagsInput = EditText(requireContext()).apply {
+            hint = "多个标签用逗号分隔"
+            textSize = 14f
+            setText(pkg.tags?.joinToString(","))
+            setPadding(12, 10, 12, 10)
+        }
+        val noteInput = EditText(requireContext()).apply {
+            hint = "备注(可空)"
+            textSize = 14f
+            gravity = Gravity.TOP or Gravity.START
+            minLines = 2
+            setText(pkg.note)
+            setPadding(12, 10, 12, 10)
+        }
+        val form = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.VERTICAL
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            lp.setMargins(24, 8, 24, 0)
+            addView(tagsInput, lp)
+            val noteLp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            noteLp.topMargin = 12
+            addView(noteInput, noteLp)
+        }
+
+        AlertDialog.Builder(requireContext())
+            .setTitle("编辑标签/备注")
+            .setMessage("货件 ${pkg.postingNumber ?: pkg.id}")
+            .setView(form)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存") { _, _ ->
+                val tags = tagsInput.text.toString()
+                    .split(",", "，")
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+                val note = noteInput.text.toString().trim()
+                savePackageMeta(pkg, note, tags)
+            }
+            .show()
+    }
+
+    private fun savePackageMeta(pkg: Pkg, note: String, tags: List<String>) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val r = Api.post(
+                    "/admin/api/order-process/package-meta",
+                    mapOf("packageId" to pkg.id, "note" to note, "tags" to tags)
+                ).asJsonObject
+                adapter.updateMeta(
+                    pkg.id,
+                    r.optString("note"),
+                    r.getAsJsonArray("tags")?.mapNotNull { if (it.isJsonNull) null else it.asString }
+                )
+                toast("标签/备注已保存")
+            } catch (e: Exception) {
+                if (e is ApiException && e.code == 401) {
+                    toast("登录已过期,请重新登录")
+                    goLogin()
+                } else {
+                    toast(e.message ?: "保存失败")
+                }
+            }
+        }
     }
 
     // ── 待打单发货快速筛选(2026-10-17)──

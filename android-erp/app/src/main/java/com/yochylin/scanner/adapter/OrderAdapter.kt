@@ -41,6 +41,8 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
         fun onSubmitShip(pkg: Pkg, weightG: Int)
         fun onOpenLabel(pkg: Pkg)
         fun onCorrectWeight(pkg: Pkg, weightG: Int)
+        /** 点击卡片标签/备注区:编辑标签与备注(2026-10-27,对齐 Web 行内编辑) */
+        fun onEditMeta(pkg: Pkg)
     }
 
     private val list = mutableListOf<Pkg>()
@@ -55,6 +57,15 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
         val start = list.size
         list.addAll(items)
         notifyItemRangeInserted(start, items.size)
+    }
+
+    /** 标签/备注保存成功后局部更新卡片(2026-10-27,对齐 Web 乐观更新) */
+    fun updateMeta(packageId: String, note: String?, tags: List<String>?) {
+        val idx = list.indexOfFirst { it.id == packageId }
+        if (idx >= 0) {
+            list[idx] = list[idx].copy(note = note, tags = tags)
+            notifyItemChanged(idx)
+        }
     }
 
     override fun getItemCount(): Int = list.size
@@ -77,7 +88,9 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
         private val copyOrderPosting: TextView = view.findViewById(R.id.copyOrderPosting)
         private val oSplitBadge: TextView = view.findViewById(R.id.oSplitBadge)
         private val oOpTag: TextView = view.findViewById(R.id.oOpTag)
+        private val oMetaContainer: LinearLayout = view.findViewById(R.id.oMetaContainer)
         private val oTags: TextView = view.findViewById(R.id.oTags)
+        private val oNote: TextView = view.findViewById(R.id.oNote)
         private val oProdContainer: LinearLayout = view.findViewById(R.id.oProdContainer)
         private val oPurchaseContainer: LinearLayout = view.findViewById(R.id.oPurchaseContainer)
         private val oPurchaseTag: TextView = view.findViewById(R.id.oPurchaseTag)
@@ -136,8 +149,21 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
             oOpTag.setRoundedBg(Color.parseColor(oSoftBg(op.second)))
             oOpTag.visibility = View.VISIBLE
 
-            oTags.text = pkg.tags?.joinToString(" · ")
-            oTags.visibility = if (pkg.tags.isNullOrEmpty()) View.GONE else View.VISIBLE
+            // 标签/备注(2026-10-27,对齐 Web 行内编辑):常驻灰条展示,点击弹窗编辑
+            val tags = pkg.tags?.filter { it.isNotBlank() }.orEmpty()
+            val note = pkg.note?.trim().orEmpty()
+            if (tags.isEmpty() && note.isEmpty()) {
+                oTags.text = "标签/备注:点击添加"
+                oTags.visibility = View.VISIBLE
+                oNote.visibility = View.GONE
+            } else {
+                oTags.text = if (tags.isEmpty()) "" else "🏷 " + tags.joinToString(" · ")
+                oTags.visibility = if (tags.isEmpty()) View.GONE else View.VISIBLE
+                oNote.text = if (note.isEmpty()) "" else "📝 " + note
+                oNote.visibility = if (note.isEmpty()) View.GONE else View.VISIBLE
+            }
+            oMetaContainer.visibility = View.VISIBLE
+            oMetaContainer.setOnClickListener { callbacks.onEditMeta(pkg) }
 
             // 产品行
             oProdContainer.removeAllViews()
@@ -208,6 +234,7 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
             val copyTv: TextView = row.findViewById(R.id.copyPurchaseSn)
             val copyLogistics: TextView = row.findViewById(R.id.copyLogistics)
             val buyerTv: TextView = row.findViewById(R.id.purchaseBuyer)
+            val sellerTv: TextView = row.findViewById(R.id.purchaseSeller)
             val timeTv: TextView = row.findViewById(R.id.purchaseTime)
             val amountTv: TextView = row.findViewById(R.id.purchaseAmount)
             val logisticsTv: TextView = row.findViewById(R.id.purchaseLogistics)
@@ -229,6 +256,10 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                 if (count > 0) append(" · 数量 ×").append(fmtNum(count))
             }
             buyerTv.visibility = if (l.buyerAccount.isNullOrBlank() && count <= 0) View.GONE else View.VISIBLE
+
+            // 卖家信息(2026-10-27,对齐 Web 采购卡):卖家名来自平台搜索补全回填
+            sellerTv.text = "卖家:${l.sellerName ?: "—"}"
+            sellerTv.visibility = if (l.sellerName.isNullOrBlank()) View.GONE else View.VISIBLE
 
             val poTime = l.poPayAt ?: l.poGmtCreate
             timeTv.text = "采购时间:" + fmtTimeWithWeekday(poTime)

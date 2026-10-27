@@ -529,6 +529,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
             val copyTv: TextView = row.findViewById(R.id.copyPurchaseSn)
             val copyLogistics: TextView = row.findViewById(R.id.copyLogistics)
             val buyerTv: TextView = row.findViewById(R.id.purchaseBuyer)
+            val sellerTv: TextView = row.findViewById(R.id.purchaseSeller)
             val timeTv: TextView = row.findViewById(R.id.purchaseTime)
             val amountTv: TextView = row.findViewById(R.id.purchaseAmount)
             val logisticsTv: TextView = row.findViewById(R.id.purchaseLogistics)
@@ -549,6 +550,10 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 if (count > 0) append(" · 数量 ×").append(fmtNum(count))
             }
             buyerTv.visibility = if (l.buyerAccount.isNullOrBlank() && count <= 0) View.GONE else View.VISIBLE
+
+            // 卖家信息(2026-10-27,对齐 Web 采购卡):卖家名来自平台搜索补全回填
+            sellerTv.text = "卖家:${l.sellerName ?: "—"}"
+            sellerTv.visibility = if (l.sellerName.isNullOrBlank()) View.GONE else View.VISIBLE
 
             val poTime = l.poPayAt ?: l.poGmtCreate
             timeTv.text = SpannableStringBuilder()
