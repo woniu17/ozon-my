@@ -261,6 +261,14 @@
                     android:textStyle="bold"
                     android:textColor="#4e5969" />
 
+                <!-- 最近采购参考(2026-10-28):未采购订单同商品历史采购单,录入采购时参考价格/供应商 -->
+                <LinearLayout
+                    android:id="@+id/dHistoryContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone" />
+
                 <LinearLayout
                     android:id="@+id/dPoContainer"
                     android:layout_width="match_parent"

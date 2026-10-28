@@ -1530,6 +1530,53 @@ function getPackageDetail(packageId) {
   return { package: pkg, items, purchaseLinks: links, traces: traces.slice(0, 50) };
 }
 
+/** 按 offer_id 匹配历史采购单(2026-10-28 未采购订单详情"最近采购参考")
+ * 语义:同一 Ozon 商品(offer_id)在过去采购单中被采购过的记录,按采购时间倒序,最多 limit 条。
+ * 匹配途径:op_purchase_link 行级关联(op_ozon_order_item.id)精确命中同 offer_id 的历史采购单。
+ */
+function getRecentPurchasesByOfferIds(offerIds, limit = 5) {
+  const offers = [...new Set((offerIds || []).map((v) => String(v || '').trim()).filter(Boolean))];
+  if (!offers.length) return [];
+  const ph = offers.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT po.id, po.platform, po.purchase_sn, po.seller_name, po.buyer_account,
+              po.payment_amount, po.goods_amount, po.status AS po_status, po.pay_at, po.gmt_create,
+              po.items_json,
+              GROUP_CONCAT(oi.offer_id) AS matched_offers,
+              GROUP_CONCAT(oi.title, '\u0001') AS matched_titles
+       FROM op_purchase_link pl
+       JOIN op_purchase_order po ON po.id = pl.purchase_order_id
+       JOIN op_ozon_order_item oi ON oi.id = pl.ozon_order_item_id
+       WHERE oi.offer_id IN (${ph})
+       GROUP BY po.id
+       ORDER BY COALESCE(po.pay_at, po.gmt_create) DESC, po.id DESC
+       LIMIT ?`
+    )
+    .all(...offers, limit);
+  return rows.map((r) => {
+    let items = [];
+    if (r.items_json) {
+      try { items = JSON.parse(r.items_json) || []; } catch { items = []; }
+    }
+    return {
+      id: r.id,
+      platform: r.platform,
+      purchaseSn: r.purchase_sn,
+      sellerName: r.seller_name,
+      buyerAccount: r.buyer_account,
+      paymentAmount: r.payment_amount,
+      goodsAmount: r.goods_amount,
+      poStatus: r.po_status,
+      payAt: r.pay_at,
+      gmtCreate: r.gmt_create,
+      matchedOffers: [...new Set((r.matched_offers || '').split(',').filter(Boolean))],
+      matchedTitles: [...new Set((r.matched_titles || '').split('\u0001').filter(Boolean))],
+      items: items.map((it) => ({ ...it, thumbUrl: imageCacheUrlFor(it.thumbUrl) })),
+    };
+  });
+}
+
 // ── 采购录入 ─────────────────────────────────────────────────
 
 /**
@@ -2735,6 +2782,7 @@ export const orderPackageDao = {
   findUncachedSkus,
   getPurchasesByPackageIds,
   getPackageDetail,
+  getRecentPurchasesByOfferIds,
   submitPurchase,
   updatePurchaseAlloc,
   updatePurchaseLogistics,

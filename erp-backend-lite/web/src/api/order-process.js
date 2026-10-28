@@ -63,6 +63,11 @@ export function lookupPurchase(platform, purchaseSn) {
   return request.get('/admin/api/order-process/purchase/lookup', { platform, purchaseSn });
 }
 
+// 未采购订单"最近采购参考"(2026-10-28):按包裹商品 offer_id 匹配历史采购单,最多5条
+export function getPurchaseHistory(packageId) {
+  return request.get(`/admin/api/order-process/purchase-history/${packageId}`);
+}
+
 // 取消采购关联(冲回产品行金额)
 export function unlinkPurchase(purchaseOrderId, packageId) {
   return request.post('/admin/api/order-process/unlink', { purchaseOrderId, packageId });

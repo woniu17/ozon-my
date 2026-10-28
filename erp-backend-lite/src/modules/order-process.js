@@ -604,6 +604,22 @@ router.get('/admin/api/order-process/detail/:id', (req, res, next) => {
   }
 });
 
+// GET /admin/api/order-process/purchase-history/:packageId —— 未采购订单"最近采购参考"(2026-10-28)
+// 按包裹商品 offer_id 匹配历史采购单(最多5条),供未采购订单录入采购时参考最近价格/供应商/买家账号
+router.get('/admin/api/order-process/purchase-history/:packageId', (req, res, next) => {
+  try {
+    const packageId = Number(req.params.packageId);
+    if (!packageId) return res.status(400).json({ ok: false, message: 'packageId 必填' });
+    const detail = orderPackageDao.getPackageDetail(packageId);
+    if (!detail) return res.status(404).json({ ok: false, message: '包裹不存在' });
+    const offerIds = (detail.items || []).map((it) => it.offerId);
+    const history = orderPackageDao.getRecentPurchasesByOfferIds(offerIds, 5);
+    res.json(ok(history));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // GET /admin/api/order-process/detail/:id/stock —— 查询订单商品库存(2026-10-17)
 // 策略(2026-10-18):订单里的 offer_id 可能因商品改款/重新上架与 Ozon 当前不一致,
 // 先按订单 offer_id 查 /v3/product/info/list,未命中的商品再按 sku 回退查询。

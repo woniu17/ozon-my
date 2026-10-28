@@ -118,6 +118,20 @@ data class PurchaseItem(
     val num: Double? = null,
 )
 
+/** 最近采购参考(2026-10-28):未采购订单同商品历史采购单,详情页录入采购时参考价格/供应商/买家账号 */
+data class PurchaseHistory(
+    val id: Long = 0,
+    val platform: String? = null,
+    val purchaseSn: String? = null,
+    val sellerName: String? = null,
+    val buyerAccount: String? = null,
+    val paymentAmount: Double? = null,
+    val goodsAmount: Double? = null,
+    val poStatus: String? = null,
+    val payAt: String? = null,
+    val gmtCreate: String? = null,
+)
+
 data class Profit(
     val profit: Double? = null,
     val estimated: Boolean? = null,

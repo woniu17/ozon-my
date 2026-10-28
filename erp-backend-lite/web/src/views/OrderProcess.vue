@@ -23,6 +23,7 @@ import {
   shipPackage,
   getPlatformOrders, searchPlatformOrder, getPlatformOrdersStatus, syncPddCookies, getPddPromotions, getAli1688Promotions,
   getPendingExportState,
+  getPurchaseHistory,
 } from '../api/order-process.js';
 import { getSkusInfo, setSkuCustoms, updatePrice } from '../api/price-manage.js';
 import { getOrderPriceWatchSnapshots, fetchOrderPriceWatchSnapshot, getOrderPriceWatchTask } from '../api/price-watch.js';
@@ -938,6 +939,20 @@ const restoredPurchases = ref([]);
 // 已标记删除的已有采购单 id 集合(点 ✕ 标记,点「保存」时才真正冲回;再点「恢复」可撤销,交互与新选订单一致)
 const removedPurchaseIds = ref(new Set());
 
+// 未采购订单"最近采购参考"(2026-10-28):同商品(offer_id)最近5条历史采购单,录入采购时参考价格/供应商
+const purchaseHistory = ref([]);
+
+async function loadPurchaseHistory(packageId) {
+  if (!packageId) { purchaseHistory.value = []; return; }
+  try {
+    const list = await getPurchaseHistory(packageId);
+    purchaseHistory.value = Array.isArray(list) ? list : [];
+  } catch (e) {
+    // 历史参考失败不影响采购主流程
+    purchaseHistory.value = [];
+  }
+}
+
 /** 平台值(入库的 yangkeduo/1688/taobao)→ 首个匹配的账号 tab key(用于打开弹窗恢复) */
 function tabKeyForPlatform(platformVal) {
   const hit = importAccountTabs.value.find((t) => PLATFORM_TAB_META[t.platform]?.platformVal === platformVal);
@@ -1133,6 +1148,8 @@ function openPurchase(pkg) {
   batchLinkMode.value = false;
   purchaseRowCtx.value = pkg;
   purchaseForm.packageId = pkg.id;
+  // 最近采购参考(2026-10-28):同商品历史采购单,未采购订单录入时参考价格/供应商
+  loadPurchaseHistory(pkg.id);
   purchaseForm.packageNo = pkg.packageNo;
   purchaseForm.platform = 'other';
   purchaseForm.purchaseSn = '';
@@ -4212,6 +4229,20 @@ onUnmounted(() => {
           <div class="profit-total">
             采购合计 <b>¥{{ profitTotal.alloc.toFixed(2) }}</b> · 预估利润合计 <b :class="{ 'profit-neg': profitTotal.profit < 0 }">¥{{ profitTotal.profit.toFixed(2) }}</b><template v-if="profitTotal.rateC != null"> · 成本利润率 <b :class="{ 'profit-neg': profitTotal.profit < 0 }">{{ profitTotal.rateC.toFixed(1) }}%</b></template><span v-if="!profitTotal.allWeighted" class="muted">(部分行未扣配送)</span>
           </div>
+
+          <!-- 最近采购参考(2026-10-28):未采购订单展示同商品(offer_id)最近5条历史采购单 -->
+          <div v-if="purchaseHistory.length && !batchLinkMode" class="purchase-history-ref">
+            <div class="purchase-history-title">最近采购参考 · 同商品历史采购(最多5条)</div>
+            <div v-for="h in purchaseHistory" :key="h.id" class="purchase-history-item">
+              <span class="tag tag-info">{{ platformLabelByVal(h.platform) }}</span>
+              <span class="mono ph-sn" :title="h.purchaseSn || ''">{{ h.purchaseSn || '#' + h.id }}</span>
+              <span class="tag" :class="poStatusTagClass(h.poStatus)">{{ poStatus(h.poStatus) }}</span>
+              <span class="ph-seller" :title="h.sellerName || ''">{{ clip30(h.sellerName || '—') }}</span>
+              <span v-if="h.buyerAccount" class="muted" :title="h.buyerAccount">买:{{ h.buyerAccount }}</span>
+              <span class="ph-amt">¥{{ Number(h.paymentAmount || 0).toFixed(2) }}</span>
+              <span class="muted ph-time">{{ fmtTime(h.payAt || h.gmtCreate) }}</span>
+            </div>
+          </div>
         </div>
 
         <!-- 已选采购订单区(参考 H5 采购信息卡改版:卡片式,已有采购与新勾选单各自成卡) -->
@@ -6060,6 +6091,52 @@ a.product-title:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 最近采购参考(2026-10-28):未采购订单同商品历史采购单 */
+.purchase-history-ref {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+  border-radius: 6px;
+}
+.purchase-history-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #874d00;
+  margin-bottom: 6px;
+}
+.purchase-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 3px 0;
+  border-top: 1px dashed #ffe58f;
+  flex-wrap: wrap;
+}
+.purchase-history-item:first-of-type {
+  border-top: none;
+}
+.ph-sn {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ph-seller {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ph-amt {
+  font-weight: 600;
+  color: #cf1322;
+  margin-left: auto;
+}
+.ph-time {
+  flex: 0 0 auto;
 }
 .selected-orders {
   margin-top: 8px;

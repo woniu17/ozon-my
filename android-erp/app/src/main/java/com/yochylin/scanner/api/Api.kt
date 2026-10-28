@@ -54,6 +54,16 @@ fun JsonObject.optInt(key: String, default: Int = 0): Int {
     }
 }
 
+fun JsonObject.optLong(key: String, default: Long = 0L): Long {
+    val el = get(key) ?: return default
+    if (el.isJsonNull) return default
+    return try {
+        el.asLong
+    } catch (e: Exception) {
+        default
+    }
+}
+
 fun JsonObject.optDouble(key: String, default: Double = 0.0): Double {
     val el = get(key) ?: return default
     if (el.isJsonNull) return default

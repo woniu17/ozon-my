@@ -7,10 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.text.SpannableStringBuilder
+import android.text.TextUtils
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
@@ -39,11 +41,14 @@ import com.google.gson.JsonObject
 import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
 import com.yochylin.scanner.api.optBoolean
+import com.yochylin.scanner.api.optDouble
 import java.util.Locale
 import com.yochylin.scanner.api.optInt
+import com.yochylin.scanner.api.optLong
 import com.yochylin.scanner.api.optString
 import com.yochylin.scanner.model.OrderDetail
 import com.yochylin.scanner.model.Pkg
+import com.yochylin.scanner.model.PurchaseHistory
 import com.yochylin.scanner.model.PurchaseLink
 import com.yochylin.scanner.model.Trace
 import com.yochylin.scanner.model.StockInfo
@@ -81,6 +86,7 @@ class OrderDetailActivity : ComponentActivity() {
     private lateinit var dProdContainer: LinearLayout
     private lateinit var dPoTitle: TextView
     private lateinit var dPoContainer: LinearLayout
+    private lateinit var dHistoryContainer: LinearLayout
     private lateinit var dTraceCard: LinearLayout
     private lateinit var dTraceTitle: TextView
     private lateinit var dTraceContainer: LinearLayout
@@ -131,6 +137,7 @@ class OrderDetailActivity : ComponentActivity() {
         dProdContainer = findViewById(R.id.dProdContainer)
         dPoTitle = findViewById(R.id.dPoTitle)
         dPoContainer = findViewById(R.id.dPoContainer)
+        dHistoryContainer = findViewById(R.id.dHistoryContainer)
         dTraceCard = findViewById(R.id.dTraceCard)
         dTraceTitle = findViewById(R.id.dTraceTitle)
         dTraceContainer = findViewById(R.id.dTraceContainer)
@@ -178,6 +185,7 @@ class OrderDetailActivity : ComponentActivity() {
                 render(detail)
                 loadStocks() // 库存独立接口,异步加载不阻塞详情
                 loadPriceWatchSnapshots() // 订单跟卖快照异步加载,不阻塞详情
+                loadPurchaseHistory() // 最近采购参考(2026-10-28),未采购订单展示同商品历史采购单
             } catch (e: Exception) {
                 if (e is ApiException && e.code == 401) {
                     toast("登录已过期,请重新登录")
@@ -229,6 +237,156 @@ class OrderDetailActivity : ComponentActivity() {
         } catch (e: Exception) {
             // 快照查询失败静默,不影响订单详情
         }
+    }
+
+    /** 加载最近采购参考(2026-10-28):未采购订单展示同商品(offer_id)最近5条历史采购单 */
+    private suspend fun loadPurchaseHistory() {
+        try {
+            val data = Api.get("/admin/api/order-process/purchase-history/$packageId")
+            val history = if (data.isJsonArray) {
+                data.asJsonArray.mapNotNull { el ->
+                    if (!el.isJsonObject) return@mapNotNull null
+                    val o = el.asJsonObject
+                    PurchaseHistory(
+                        id = o.optLong("id"),
+                        platform = o.optString("platform").ifBlank { null },
+                        purchaseSn = o.optString("purchaseSn").ifBlank { null },
+                        sellerName = o.optString("sellerName").ifBlank { null },
+                        buyerAccount = o.optString("buyerAccount").ifBlank { null },
+                        paymentAmount = if (o.has("paymentAmount") && !o.get("paymentAmount").isJsonNull) o.optDouble("paymentAmount") else null,
+                        goodsAmount = if (o.has("goodsAmount") && !o.get("goodsAmount").isJsonNull) o.optDouble("goodsAmount") else null,
+                        poStatus = o.optString("poStatus").ifBlank { null },
+                        payAt = o.optString("payAt").ifBlank { null },
+                        gmtCreate = o.optString("gmtCreate").ifBlank { null },
+                    )
+                }
+            } else {
+                emptyList()
+            }
+            renderPurchaseHistory(history)
+        } catch (e: Exception) {
+            // 历史参考失败不影响订单详情主流程
+            renderPurchaseHistory(emptyList())
+        }
+    }
+
+    /** 渲染最近采购参考卡片(2026-10-28):仅未录入采购时展示,对齐 Web 端黄色参考卡 */
+    private fun renderPurchaseHistory(list: List<PurchaseHistory>) {
+        dHistoryContainer.removeAllViews()
+        if (list.isEmpty() || links.isNotEmpty()) {
+            dHistoryContainer.visibility = View.GONE
+            return
+        }
+        dHistoryContainer.visibility = View.VISIBLE
+        dHistoryContainer.background = GradientDrawable().apply {
+            setColor(Color.parseColor("#fffbe6"))
+            cornerRadius = dp(6).toFloat()
+            setStroke(dp(1), Color.parseColor("#ffe58f"))
+        }
+        dHistoryContainer.setPadding(dp(10), dp(8), dp(10), dp(8))
+
+        dHistoryContainer.addView(TextView(this).apply {
+            text = "最近采购参考 · 同商品历史采购(最多5条)"
+            setTextColor(Color.parseColor("#874d00"))
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+
+        for (h in list) {
+            dHistoryContainer.addView(buildHistoryRow(h))
+        }
+    }
+
+    /** 最近采购参考单行(2026-10-28):第一行 平台+单号+状态+金额,第二行 卖家+买家+时间 */
+    private fun buildHistoryRow(h: PurchaseHistory): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) }
+        }
+
+        // 第一行:平台标签 + 单号(可复制) + 状态 + 金额(右侧红色加粗)
+        val line1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        line1.addView(TextView(this).apply {
+            text = platformLabel(h.platform)
+            setTextColor(Color.parseColor("#874d00"))
+            textSize = 10f
+            setRoundedBg(Color.parseColor("#fff1b8"), 4f)
+            setPadding(dp(6), dp(2), dp(6), dp(2))
+        })
+        line1.addView(TextView(this).apply {
+            text = h.purchaseSn ?: "#${h.id}"
+            setTextColor(Color.parseColor("#1f2329"))
+            textSize = 10f
+            typeface = Typeface.MONOSPACE
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(6) }
+            setOnClickListener {
+                if (!h.purchaseSn.isNullOrBlank()) copyText(h.purchaseSn!!, "采购单号")
+            }
+        })
+        if (!h.poStatus.isNullOrBlank()) {
+            line1.addView(TextView(this).apply {
+                text = poStatusLabel(h.poStatus)
+                setTextColor(Color.parseColor("#86909c"))
+                textSize = 10f
+                setPadding(dp(4), dp(1), dp(4), dp(1))
+            })
+        }
+        line1.addView(TextView(this).apply {
+            text = fmtMoney(h.paymentAmount)
+            setTextColor(Color.parseColor("#cf1322"))
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = dp(6) }
+        })
+        row.addView(line1)
+
+        // 第二行:卖家+买家+采购时间(左侧) + 打开APP按钮(右侧,跳采购平台订单详情页)
+        val line2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(2), 0, 0)
+        }
+        line2.addView(TextView(this).apply {
+            text = buildString {
+                append("卖家:").append(h.sellerName ?: "—")
+                if (!h.buyerAccount.isNullOrBlank()) append("  买家:").append(h.buyerAccount)
+                val t = h.payAt ?: h.gmtCreate
+                if (!t.isNullOrBlank()) append("  ").append(fmtTime(t))
+            }
+            setTextColor(Color.parseColor("#86909c"))
+            textSize = 10f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        // 跳转采购平台 APP 订单详情(2026-10-28,复用采购卡的 deep link 唤起逻辑)
+        line2.addView(TextView(this).apply {
+            text = "打开APP"
+            setTextColor(Color.parseColor("#7d4dd3"))
+            textSize = 10f
+            setRoundedBg(Color.parseColor("#f5efff"), 6f)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = dp(8) }
+            visibility = if (h.purchaseSn.isNullOrBlank()) View.GONE else View.VISIBLE
+            setOnClickListener { openPlatformApp(h.platform, h.purchaseSn) }
+        })
+        row.addView(line2)
+
+        return row
     }
 
     /** 一键设置库存(设0/设20):调 Ozon 更新后刷新库存行(2026-10-17),模态提示等待结果(2026-10-18 对齐备货效果,至少展示800ms) */
