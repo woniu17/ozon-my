@@ -1,0 +1,17 @@
+{
+  "name": "myai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MyAIChat - 基于 cloakbrowser + 千问登录态的简单问答服务",
+  "main": "myaichat-server.js",
+  "scripts": {
+    "start": "node myaichat-server.js",
+    "test": "node test-qianwen.js",
+    "maintain": "node maintain-profile.js"
+  },
+  "dependencies": {
+    "cloakbrowser": "^0.5.10",
+    "playwright-core": "^1.62.1"
+  }
+}
