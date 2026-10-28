@@ -382,6 +382,8 @@ async function loadList() {
     pager.total = data?.total || 0;
     rubRate.value = data?.rubRate || null;
     Object.assign(quickCounts, data?.quickCounts || {});
+    // 列表页跟卖快照徽标:按本页包裹批量查询(2026-10-28)
+    loadListPriceWatch();
   } catch (err) {
     show(err.message || String(err), 'error');
     rows.value = [];
@@ -2775,7 +2777,114 @@ async function orderPwPollOnce(sku, polled) {
 }
 onUnmounted(() => {
   for (const k of Object.keys(orderPwTimers)) orderPwStopPoll(k);
+  for (const k of Object.keys(listPwTimers)) clearInterval(listPwTimers[k]);
 });
+
+// ── 列表页跟卖快照徽标(2026-10-28):列表行展示"下单时"跟卖排名;无快照行提供"获取跟卖" ──
+// 列表接口每行已带 items(sku),按包裹批量查询快照,行内显示跟卖状态,点击"获取跟卖"强制采集。
+const listPwMap = ref({});       // packageId → { sku → snapshot }
+const listPwLoading = ref(false);
+const listPwFetching = ref({});  // packageId → true(采集中)
+const listPwTimers = {};         // sku → setInterval 句柄
+
+function listPwItemsForPkg(pkg) {
+  const skus = [...new Set((pkg.items || []).map((it) => String(it.sku)).filter(Boolean))];
+  return { skus, after: pkg.inProcessAt || pkg.gmtCreate || null };
+}
+async function loadListPriceWatch() {
+  const reqs = [];
+  for (const pkg of rows.value) {
+    const { skus, after } = listPwItemsForPkg(pkg);
+    for (const sku of skus) reqs.push({ sku, after });
+  }
+  if (!reqs.length) { listPwMap.value = {}; return; }
+  listPwLoading.value = true;
+  try {
+    const data = await getOrderPriceWatchSnapshots(reqs);
+    const map = {};
+    for (const pkg of rows.value) {
+      const { skus } = listPwItemsForPkg(pkg);
+      map[pkg.id] = {};
+      for (const sku of skus) map[pkg.id][sku] = data?.map?.[String(sku)] || null;
+    }
+    listPwMap.value = map;
+  } catch (e) {
+    console.warn('[order-process] list price-watch snapshot failed', e?.message || e);
+  } finally {
+    listPwLoading.value = false;
+  }
+}
+// 行跟卖状态:ok(有跟卖)/empty(无跟卖)/error(采集失败)/null(未采集)
+function listPwStatus(pkg) {
+  const pkgMap = listPwMap.value[pkg.id] || {};
+  const { skus } = listPwItemsForPkg(pkg);
+  let hasOk = false, hasEmpty = false, hasError = false;
+  for (const sku of skus) {
+    const s = pkgMap[sku];
+    if (!s) continue;
+    if (String(s.status || '') === 'error') hasError = true;
+    else if (String(s.status || '') === 'empty' || Number(s.seller_count || 0) === 0) hasEmpty = true;
+    else hasOk = true;
+  }
+  if (hasOk) return 'ok';
+  if (hasError) return 'error';
+  if (hasEmpty) return 'empty';
+  return null;
+}
+function listPwRankText(pkg) {
+  const pkgMap = listPwMap.value[pkg.id] || {};
+  const { skus } = listPwItemsForPkg(pkg);
+  for (const sku of skus) {
+    const s = pkgMap[sku];
+    if (s && String(s.status || '') !== 'error' && Number(s.seller_count || 0) > 0) {
+      if (s.my_rank != null && s.seller_count != null) return `#${s.my_rank}/${Number(s.seller_count) + 1}`;
+    }
+  }
+  return '';
+}
+function listPwTitle(pkg) {
+  const pkgMap = listPwMap.value[pkg.id] || {};
+  const { skus } = listPwItemsForPkg(pkg);
+  for (const sku of skus) {
+    const s = pkgMap[sku];
+    if (s) return `跟卖快照采集于 ${s.fetched_at || '—'}（SKU ${sku}）`;
+  }
+  return '该商品尚无跟卖快照；点击「获取跟卖」手动采集当前市场跟卖';
+}
+// 列表页"获取跟卖":强制采集并轮询任务状态,完成后刷新该行徽标
+async function listPwFetch(pkg) {
+  const { skus, after } = listPwItemsForPkg(pkg);
+  if (!skus.length || listPwFetching.value[pkg.id]) return;
+  const sku = skus[0];
+  listPwFetching.value = { ...listPwFetching.value, [pkg.id]: true };
+  try {
+    await fetchOrderPriceWatchSnapshot(sku, after);
+  } catch (e) {
+    listPwFetching.value = { ...listPwFetching.value, [pkg.id]: false };
+    show('跟卖采集触发失败：' + (e?.message || e), 'error');
+    return;
+  }
+  let poll = 0;
+  listPwTimers[sku] = setInterval(async () => {
+    poll += 1;
+    if (poll > ORDER_PW_POLL_MAX) {
+      clearInterval(listPwTimers[sku]);
+      delete listPwTimers[sku];
+      listPwFetching.value = { ...listPwFetching.value, [pkg.id]: false };
+      show('跟卖采集仍在进行，请稍后刷新查看', 'info');
+      return;
+    }
+    try {
+      const task = await getOrderPriceWatchTask(sku);
+      if (task?.status === 'ok' || task?.status === 'failed') {
+        clearInterval(listPwTimers[sku]);
+        delete listPwTimers[sku];
+        listPwFetching.value = { ...listPwFetching.value, [pkg.id]: false };
+        await loadListPriceWatch();
+      }
+    } catch (e) { /* 轮询失败忽略 */ }
+  }, 4000);
+}
 
 // ── 应计项目(2026-09,已完成/已取消货件的 Ozon 财务应计)─────
 // 汇率:列表响应附带 rubRate(每次 loadList 同步刷新);未配置时真实口径自动回退预估
@@ -3761,6 +3870,11 @@ onUnmounted(() => {
                 <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="ozonStatus(pkg.ozonStatus) + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus || '—' }}</span>
                 <span :class="purchaseTag(pkg).cls" style="margin-left: 4px">{{ purchaseTag(pkg).label }}</span>
                 <span v-if="arrivedTag(pkg)" :class="arrivedTag(pkg).cls" style="margin-left: 4px">{{ arrivedTag(pkg).label }}</span>
+                <!-- 列表页跟卖快照徽标(2026-10-28):有快照显示下单时跟卖排名,无快照可点击"获取跟卖" -->
+                <span v-if="listPwStatus(pkg) === 'ok'" class="tag pw-list-tag" :title="listPwTitle(pkg)" style="margin-left: 4px">跟卖{{ listPwRankText(pkg) }}</span>
+                <span v-else-if="listPwStatus(pkg) === 'empty'" class="tag tag-mute" :title="listPwTitle(pkg)" style="margin-left: 4px">无跟卖</span>
+                <span v-else-if="listPwStatus(pkg) === 'error'" class="tag tag-err" :title="listPwTitle(pkg)" style="margin-left: 4px">跟卖失败</span>
+                <button v-else-if="!listPwLoading" class="pw-list-fetch" :title="listPwTitle(pkg)" @click.stop="listPwFetch(pkg)">{{ listPwFetching[pkg.id] ? '采集中…' : '获取跟卖' }}</button>
               </div>
               <!-- 取消原因细分标签(仅 cancelled 状态订单显示) -->
               <div v-if="pkg.ozonStatus === 'cancelled' && cancelReasonLabel(pkg)" class="sub cancel-reason-line">
@@ -6482,6 +6596,21 @@ a.product-title:hover {
 }
 .po-pw-btn:hover { border-color: var(--primary, #165dff); color: var(--primary, #165dff); }
 .po-pw-btn-primary { margin-left: 8px; border-color: var(--primary, #165dff); color: var(--primary, #165dff); }
+/* 列表页跟卖徽标(2026-10-28) */
+.pw-list-tag { background: #fffbe6; border-color: #ffe58f; color: #ad6800; font-weight: 600; }
+.pw-list-fetch {
+  margin-left: 4px;
+  padding: 0 6px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  background: #fff;
+  color: var(--text-secondary, #6b7280);
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pw-list-fetch:hover { border-color: var(--primary, #165dff); color: var(--primary, #165dff); }
 .pf-row {
   display: flex;
   align-items: baseline;
