@@ -2785,6 +2785,7 @@ onUnmounted(() => {
 const listPwMap = ref({});       // packageId → { sku → snapshot }
 const listPwLoading = ref(false);
 const listPwFetching = ref({});  // packageId → true(采集中)
+const listPwQueueing = ref({});   // packageId → true(采集浏览器被占用,排队中)
 const listPwTimers = {};         // sku → setInterval 句柄
 
 function listPwItemsForPkg(pkg) {
@@ -2814,48 +2815,34 @@ async function loadListPriceWatch() {
     listPwLoading.value = false;
   }
 }
-// 行跟卖状态:ok(有跟卖)/empty(无跟卖)/error(采集失败)/null(未采集)
-function listPwStatus(pkg) {
-  const pkgMap = listPwMap.value[pkg.id] || {};
-  const { skus } = listPwItemsForPkg(pkg);
-  let hasOk = false, hasEmpty = false, hasError = false;
-  for (const sku of skus) {
-    const s = pkgMap[sku];
-    if (!s) continue;
-    if (String(s.status || '') === 'error') hasError = true;
-    else if (String(s.status || '') === 'empty' || Number(s.seller_count || 0) === 0) hasEmpty = true;
-    else hasOk = true;
-  }
-  if (hasOk) return 'ok';
-  if (hasError) return 'error';
-  if (hasEmpty) return 'empty';
-  return null;
+// 单 SKU 跟卖状态:ok(有跟卖)/empty(无跟卖)/error(采集失败)/null(未采集)
+function listPwStatusOf(pkg, sku) {
+  const s = listPwMap.value[pkg.id]?.[String(sku)];
+  if (!s) return null;
+  if (String(s.status || '') === 'error') return 'error';
+  if (String(s.status || '') === 'empty' || Number(s.seller_count || 0) === 0) return 'empty';
+  return 'ok';
 }
-function listPwRankText(pkg) {
-  const pkgMap = listPwMap.value[pkg.id] || {};
-  const { skus } = listPwItemsForPkg(pkg);
-  for (const sku of skus) {
-    const s = pkgMap[sku];
-    if (s && String(s.status || '') !== 'error' && Number(s.seller_count || 0) > 0) {
-      if (s.my_rank != null && s.seller_count != null) return `#${s.my_rank}/${Number(s.seller_count) + 1}`;
-    }
+function listPwRankTextOf(pkg, sku) {
+  const s = listPwMap.value[pkg.id]?.[String(sku)];
+  if (s && String(s.status || '') !== 'error' && Number(s.seller_count || 0) > 0 &&
+      s.my_rank != null && s.seller_count != null) {
+    return `#${s.my_rank}/${Number(s.seller_count) + 1}`;
   }
   return '';
 }
-function listPwTitle(pkg) {
-  const pkgMap = listPwMap.value[pkg.id] || {};
-  const { skus } = listPwItemsForPkg(pkg);
-  for (const sku of skus) {
-    const s = pkgMap[sku];
-    if (s) return `跟卖快照采集于 ${s.fetched_at || '—'}（SKU ${sku}）`;
-  }
+function listPwTitleOf(pkg, sku) {
+  const s = listPwMap.value[pkg.id]?.[String(sku)];
+  if (s) return `跟卖快照采集于 ${s.fetched_at || '—'}（SKU ${sku}）`;
+  if (listPwQueueing.value[pkg.id]) return '采集任务已排队：采集浏览器正被其他任务使用，请稍候（SKU ' + sku + '）';
+  if (listPwFetching.value[pkg.id]) return '正在采集当前市场跟卖，请稍候（SKU ' + sku + '）';
   return '该商品尚无跟卖快照；点击「获取跟卖」手动采集当前市场跟卖';
 }
-// 列表页"获取跟卖":强制采集并轮询任务状态,完成后刷新该行徽标
-async function listPwFetch(pkg) {
-  const { skus, after } = listPwItemsForPkg(pkg);
-  if (!skus.length || listPwFetching.value[pkg.id]) return;
-  const sku = skus[0];
+// 列表页"获取跟卖":强制采集指定 SKU 并轮询任务状态,完成后刷新徽标
+async function listPwFetch(pkg, sku) {
+  sku = String(sku || '');
+  const { after } = listPwItemsForPkg(pkg);
+  if (!sku || listPwFetching.value[pkg.id]) return;
   listPwFetching.value = { ...listPwFetching.value, [pkg.id]: true };
   try {
     await fetchOrderPriceWatchSnapshot(sku, after);
@@ -2871,15 +2858,22 @@ async function listPwFetch(pkg) {
       clearInterval(listPwTimers[sku]);
       delete listPwTimers[sku];
       listPwFetching.value = { ...listPwFetching.value, [pkg.id]: false };
+      listPwQueueing.value = { ...listPwQueueing.value, [pkg.id]: false };
       show('跟卖采集仍在进行，请稍后刷新查看', 'info');
       return;
     }
     try {
       const task = await getOrderPriceWatchTask(sku);
+      // 排队中：任务还在队列里等待采集浏览器（profile 被其他采集占用）
+      const queued = !!task && task.status === 'pending' && /profile|浏览器|占用|busy/i.test(task.error_reason || '');
+      if (queued !== listPwQueueing.value[pkg.id]) {
+        listPwQueueing.value = { ...listPwQueueing.value, [pkg.id]: queued };
+      }
       if (task?.status === 'ok' || task?.status === 'failed') {
         clearInterval(listPwTimers[sku]);
         delete listPwTimers[sku];
         listPwFetching.value = { ...listPwFetching.value, [pkg.id]: false };
+        listPwQueueing.value = { ...listPwQueueing.value, [pkg.id]: false };
         await loadListPriceWatch();
       }
     } catch (e) { /* 轮询失败忽略 */ }
@@ -3746,6 +3740,15 @@ onUnmounted(() => {
                     </button>
                   </div>
                   <div class="product-sub">产品单价：{{ fmtMoney(it.price) }}</div>
+                  <!-- 跟卖快照(2026-10-28):下单时跟卖排名,无快照可点击"获取跟卖" -->
+                  <div class="product-sub pw-product-line">
+                    <span class="pw-product-label">跟卖：</span>
+                    <span v-if="listPwStatusOf(pkg, it.sku) === 'ok'" class="pw-list-tag" :title="listPwTitleOf(pkg, it.sku)">跟卖{{ listPwRankTextOf(pkg, it.sku) }}</span>
+                    <span v-else-if="listPwStatusOf(pkg, it.sku) === 'empty'" class="muted" :title="listPwTitleOf(pkg, it.sku)">无跟卖</span>
+                    <span v-else-if="listPwStatusOf(pkg, it.sku) === 'error'" style="color:#dc2626" :title="listPwTitleOf(pkg, it.sku)">跟卖失败</span>
+                    <button v-else-if="!listPwLoading" class="pw-list-fetch" :title="listPwTitleOf(pkg, it.sku)" @click.stop="listPwFetch(pkg, it.sku)">{{ listPwFetching[pkg.id] ? (listPwQueueing[pkg.id] ? '排队中…' : '采集中…') : '获取跟卖' }}</button>
+                    <span v-else class="muted">…</span>
+                  </div>
                 </div>
               </div>
               <div v-if="!pkg.items?.length" class="muted">—</div>
@@ -3870,11 +3873,6 @@ onUnmounted(() => {
                 <span class="tag mono" :class="pkg.ozonStatus === 'cancelled' ? 'tag-err' : 'tag-mute'" :title="ozonStatus(pkg.ozonStatus) + (pkg.substatus ? '(' + pkg.substatus + ')' : '')">{{ pkg.ozonStatus || '—' }}</span>
                 <span :class="purchaseTag(pkg).cls" style="margin-left: 4px">{{ purchaseTag(pkg).label }}</span>
                 <span v-if="arrivedTag(pkg)" :class="arrivedTag(pkg).cls" style="margin-left: 4px">{{ arrivedTag(pkg).label }}</span>
-                <!-- 列表页跟卖快照徽标(2026-10-28):有快照显示下单时跟卖排名,无快照可点击"获取跟卖" -->
-                <span v-if="listPwStatus(pkg) === 'ok'" class="tag pw-list-tag" :title="listPwTitle(pkg)" style="margin-left: 4px">跟卖{{ listPwRankText(pkg) }}</span>
-                <span v-else-if="listPwStatus(pkg) === 'empty'" class="tag tag-mute" :title="listPwTitle(pkg)" style="margin-left: 4px">无跟卖</span>
-                <span v-else-if="listPwStatus(pkg) === 'error'" class="tag tag-err" :title="listPwTitle(pkg)" style="margin-left: 4px">跟卖失败</span>
-                <button v-else-if="!listPwLoading" class="pw-list-fetch" :title="listPwTitle(pkg)" @click.stop="listPwFetch(pkg)">{{ listPwFetching[pkg.id] ? '采集中…' : '获取跟卖' }}</button>
               </div>
               <!-- 取消原因细分标签(仅 cancelled 状态订单显示) -->
               <div v-if="pkg.ozonStatus === 'cancelled' && cancelReasonLabel(pkg)" class="sub cancel-reason-line">
@@ -6596,17 +6594,29 @@ a.product-title:hover {
 }
 .po-pw-btn:hover { border-color: var(--primary, #165dff); color: var(--primary, #165dff); }
 .po-pw-btn-primary { margin-left: 8px; border-color: var(--primary, #165dff); color: var(--primary, #165dff); }
-/* 列表页跟卖徽标(2026-10-28) */
-.pw-list-tag { background: #fffbe6; border-color: #ffe58f; color: #ad6800; font-weight: 600; }
+/* 列表页产品信息列跟卖行(2026-10-28) */
+.pw-product-line { display: flex; align-items: center; flex-wrap: wrap; gap: 0 4px; }
+.pw-product-label { color: var(--text-secondary, #9ca3af); }
+.pw-list-tag {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid #ffe58f;
+  border-radius: 4px;
+  background: #fffbe6;
+  color: #ad6800;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
 .pw-list-fetch {
-  margin-left: 4px;
   padding: 0 6px;
   border: 1px solid #d9d9d9;
   border-radius: 4px;
   background: #fff;
   color: var(--text-secondary, #6b7280);
   font-size: 11px;
-  line-height: 18px;
+  line-height: 16px;
   cursor: pointer;
   white-space: nowrap;
 }

@@ -55,14 +55,25 @@ export function enqueuePriceWatch(sku, { profileDir }) {
 // 同步轮询反复重置任务、频繁占用 linqx-profile 采集浏览器。
 const ORDER_SKU_RECENT_OK_MS = 6 * 3600_000;   // 6h 内已有成功快照/任务 → 不再采集
 const ORDER_SKU_RECENT_FAIL_MS = 30 * 60_000;  // 30 分钟内失败过 → 不立即重试
+const STALE_RUNNING_MS = 10 * 60_000;          // running 超过 10 分钟视为卡死(进程重启残留),手动获取时重置(2026-10-28)
 // force=true(订单处理页"获取跟卖/刷新"按钮):跳过近期成功/失败节流,强制重新入队采集。
 export function enqueuePriceWatchForOrderSku(sku, { profileDir, force = false }) {
   const skuStr = String(sku || '').trim();
   if (!/^\d+$/.test(skuStr)) return { status: 'error', error: 'sku 非法' };
 
-  const task = db.prepare(`SELECT status, finished_at FROM price_watch_tasks WHERE sku = ?`).get(skuStr);
+  const task = db.prepare(`SELECT status, started_at, finished_at FROM price_watch_tasks WHERE sku = ?`).get(skuStr);
   if (task) {
     if (task.status === 'pending' || task.status === 'running') {
+      // 手动"获取跟卖":若任务卡在 running 超过阈值(进程重启残留),删除残留锁并重置为 pending 重新采集(2026-10-28)
+      if (force && task.status === 'running' && task.started_at &&
+          Date.now() - new Date(task.started_at).getTime() >= STALE_RUNNING_MS) {
+        db.prepare(`DELETE FROM price_watch_claims WHERE sku = ?`).run(skuStr);
+        db.prepare(
+          `UPDATE price_watch_tasks SET status='pending', error_reason=NULL, started_at=NULL, finished_at=NULL WHERE sku = ?`
+        ).run(skuStr);
+        ensureWorker({ profileDir });
+        return { status: 'pending', sku: skuStr };
+      }
       return { status: task.status, sku: skuStr };
     }
     const age = task.finished_at ? Date.now() - new Date(task.finished_at).getTime() : Infinity;
@@ -99,6 +110,17 @@ export function ensureWorker({ profileDir }) {
 async function runWorkerLoop({ profileDir }) {
   logger.info('[price-watch-queue] worker started');
   try {
+    // 进程重启后可能残留 running 任务(worker 中断,状态未落盘):先全部重置为 pending 重新处理(2026-10-28)
+    const stale = db.prepare(`UPDATE price_watch_tasks SET status='pending', error_reason=NULL, started_at=NULL WHERE status='running'`).run();
+    if (stale.changes > 0) {
+      logger.info({ n: stale.changes }, '[price-watch-queue] reset stale running tasks to pending');
+    }
+    // 同时清理本进程(pm-% 前缀)残留的采集锁:进程退出时 release 无法执行,残留锁会让
+    // SKU 被误判为"其他实例正在采集"直到 TTL 过期(2026-10-28)。定时脚本的锁为 pw- 前缀,不受影响。
+    const staleClaims = db.prepare(`DELETE FROM price_watch_claims WHERE instance_id LIKE 'pm-%'`).run();
+    if (staleClaims.changes > 0) {
+      logger.info({ n: staleClaims.changes }, '[price-watch-queue] released stale pm claims');
+    }
     for (;;) {
       const task = db
         .prepare(`SELECT * FROM price_watch_tasks WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`)
