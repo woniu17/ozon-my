@@ -821,9 +821,12 @@ router.post('/admin/api/order-process/purchase', (req, res, next) => {
       itemsJson,
       allocMode: isAuto ? 'auto' : 'manual',
     });
-    // 异步自动补全:无 goods 写入(手填)且是可搜索平台的单一单号时,后台拉详情
+    // 异步自动补全:无 goods 写入(手填)或未填卖家名时,且是可搜索平台的单一单号,后台拉详情
+    // 2026-10-29:放宽为"无图或缺卖家名"都触发——带平台商品图提交但卖家名为空的单,
+    // 也会走 autoEnrichPurchase(内部已有图则只回填卖家名、不覆盖 items_json)
     const sn = String(b.purchaseSn || '').trim();
-    if (!goodsArr.length && AUTO_ENRICH_SEARCH[b.platform] && sn && !sn.includes(',')) {
+    const needSeller = !String(b.sellerName || '').trim();
+    if ((!goodsArr.length || needSeller) && AUTO_ENRICH_SEARCH[b.platform] && sn && !sn.includes(',')) {
       setImmediate(() => autoEnrichPurchase(b.platform, sn));
     }
     // 回填本系统维护的采购价/重量(仅空值时,有值不动;2026-09-19)
