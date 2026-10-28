@@ -43,15 +43,16 @@
             android:padding="4dp" />
     </LinearLayout>
 
+    <!-- 采购时间 + 发货状态(2026-10-28 第二行) -->
     <TextView
-        android:id="@+id/purchaseBuyer"
+        android:id="@+id/purchaseTime"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
         android:textSize="11sp"
         android:textColor="#86909c" />
 
-    <!-- 卖家信息(2026-10-27,对齐 Web 采购卡元信息行) -->
+    <!-- 采购卖家(2026-10-28 第三行,对齐 Web 采购卡元信息行) -->
     <TextView
         android:id="@+id/purchaseSeller"
         android:layout_width="match_parent"
@@ -60,17 +61,12 @@
         android:textSize="11sp"
         android:textColor="#86909c" />
 
-    <TextView
-        android:id="@+id/purchaseTime"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textSize="11sp"
-        android:textColor="#86909c" />
-
+    <!-- 采购金额 + 采购数量(2026-10-28 第四行) -->
     <TextView
         android:id="@+id/purchaseAmount"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
         android:textSize="11sp"
         android:textColor="#86909c" />
 

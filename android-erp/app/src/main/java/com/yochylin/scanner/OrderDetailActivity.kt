@@ -689,29 +689,51 @@ class OrderDetailActivity : ComponentActivity() {
         }
         head.addView(openApp)
 
-        val status = TextView(this).apply {
-            text = poStatusLabel(l.poStatus)
-            setTextColor(Color.parseColor(COLOR_MUTE))
-            textSize = 10f
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                leftMargin = 8
-            }
-        }
-        head.addView(status)
         card.addView(head)
 
-        // 分摊 / 卖家 / 买家
-        val meta = TextView(this).apply {
+        // 采购信息四行(2026-10-28 参考订单列表采购卡格式:时间+发货状态 / 卖家+买家 / 金额+数量)
+        val count = l.items?.sumOf { (it.number ?: it.num ?: 1.0) } ?: 0.0
+        val poTime = l.poPayAt ?: l.poGmtCreate
+
+        // 第二行：采购时间 + 发货状态
+        val time = TextView(this).apply {
             text = buildString {
-                append("分摊 ").append(fmtMoney(l.allocatedAmount))
-                if (!l.sellerName.isNullOrBlank()) append("  ·  ").append(l.sellerName)
-                if (!l.buyerAccount.isNullOrBlank()) append("  ·  买:").append(l.buyerAccount)
+                append("采购时间:").append(fmtTimeWithWeekday(poTime))
+                if (!poTime.isNullOrBlank()) append("  ")
+                append("发货状态:").append(poStatusLabel(l.poStatus))
             }
             setTextColor(Color.parseColor(COLOR_MUTE))
             textSize = 10f
             setPadding(0, 4, 0, 0)
         }
-        card.addView(meta)
+        time.visibility = if (poTime.isNullOrBlank() && l.poStatus.isNullOrBlank()) View.GONE else View.VISIBLE
+        card.addView(time)
+
+        // 第三行：采购卖家 + 采购买家账号(卖家名来自平台搜索补全回填)
+        val seller = TextView(this).apply {
+            text = buildString {
+                append("采购卖家:").append(l.sellerName ?: "—")
+                if (!l.buyerAccount.isNullOrBlank()) append("  采购买家:").append(l.buyerAccount)
+            }
+            setTextColor(Color.parseColor(COLOR_MUTE))
+            textSize = 10f
+            setPadding(0, 4, 0, 0)
+        }
+        seller.visibility = if (l.sellerName.isNullOrBlank() && l.buyerAccount.isNullOrBlank()) View.GONE else View.VISIBLE
+        card.addView(seller)
+
+        // 第四行：采购金额 + 采购数量
+        val amount = TextView(this).apply {
+            text = buildString {
+                append("采购金额:").append(fmtMoney(l.allocatedAmount))
+                if (count > 0) append("  采购数量:×").append(fmtNum(count))
+            }
+            setTextColor(Color.parseColor(COLOR_MUTE))
+            textSize = 10f
+            setPadding(0, 4, 0, 0)
+        }
+        amount.visibility = if (l.allocatedAmount == null && count <= 0) View.GONE else View.VISIBLE
+        card.addView(amount)
 
         // 采购商品
         for (pi in l.items ?: emptyList()) {

@@ -233,7 +233,6 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
             val snTv: TextView = row.findViewById(R.id.purchaseSn)
             val copyTv: TextView = row.findViewById(R.id.copyPurchaseSn)
             val copyLogistics: TextView = row.findViewById(R.id.copyLogistics)
-            val buyerTv: TextView = row.findViewById(R.id.purchaseBuyer)
             val sellerTv: TextView = row.findViewById(R.id.purchaseSeller)
             val timeTv: TextView = row.findViewById(R.id.purchaseTime)
             val amountTv: TextView = row.findViewById(R.id.purchaseAmount)
@@ -250,23 +249,29 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
             }
 
             val count = l.items?.sumOf { (it.number ?: it.num ?: 1.0) } ?: 0.0
-            buyerTv.text = buildString {
-                append("采购买家:")
-                append(l.buyerAccount ?: "—")
-                if (count > 0) append(" · 数量 ×").append(fmtNum(count))
-            }
-            buyerTv.visibility = if (l.buyerAccount.isNullOrBlank() && count <= 0) View.GONE else View.VISIBLE
 
-            // 卖家信息(2026-10-27,对齐 Web 采购卡):卖家名来自平台搜索补全回填
-            sellerTv.text = "卖家:${l.sellerName ?: "—"}"
-            sellerTv.visibility = if (l.sellerName.isNullOrBlank()) View.GONE else View.VISIBLE
-
+            // 采购时间 + 发货状态(2026-10-28 第二行)
             val poTime = l.poPayAt ?: l.poGmtCreate
-            timeTv.text = "采购时间:" + fmtTimeWithWeekday(poTime)
-            timeTv.visibility = if (poTime.isNullOrBlank()) View.GONE else View.VISIBLE
+            timeTv.text = buildString {
+                append("采购时间:").append(fmtTimeWithWeekday(poTime))
+                if (!poTime.isNullOrBlank()) append("  ")
+                append("发货状态:").append(poStatusLabel(l.poStatus))
+            }
+            timeTv.visibility = if (poTime.isNullOrBlank() && l.poStatus.isNullOrBlank()) View.GONE else View.VISIBLE
 
-            amountTv.text = "采购金额:${fmtMoney(l.allocatedAmount)}"
-            amountTv.visibility = if (l.allocatedAmount == null) View.GONE else View.VISIBLE
+            // 采购卖家 + 采购买家账号(2026-10-28 第三行,对齐 Web 采购卡):卖家名来自平台搜索补全回填
+            sellerTv.text = buildString {
+                append("采购卖家:").append(l.sellerName ?: "—")
+                if (!l.buyerAccount.isNullOrBlank()) append("  采购买家:").append(l.buyerAccount)
+            }
+            sellerTv.visibility = if (l.sellerName.isNullOrBlank() && l.buyerAccount.isNullOrBlank()) View.GONE else View.VISIBLE
+
+            // 采购金额 + 采购数量(2026-10-28 第四行)
+            amountTv.text = buildString {
+                append("采购金额:").append(fmtMoney(l.allocatedAmount))
+                if (count > 0) append("  采购数量:×").append(fmtNum(count))
+            }
+            amountTv.visibility = if (l.allocatedAmount == null && count <= 0) View.GONE else View.VISIBLE
 
             val hasLogisticsNo = !l.poLogisticsNo.isNullOrBlank()
             val logistics = if (hasLogisticsNo) "${l.poLogisticsCompany ?: ""} ${l.poLogisticsNo}".trim() else "未同步"
