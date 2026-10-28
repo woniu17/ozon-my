@@ -225,7 +225,8 @@ class OrderDetailActivity : ComponentActivity() {
                 "/admin/api/price-watch/order-snapshots",
                 mapOf("items" to skus.map { sku -> mapOf("sku" to sku, "after" to after) })
             )
-            val mapEl = resp.asJsonObject.get("data")?.asJsonObject?.get("map")?.asJsonObject
+            // Api.post 已解包 envelope,返回体即 { map: {...} },勿再取 data 层(2026-10-28 修复:原多取一层导致快照永不显示)
+            val mapEl = resp.asJsonObject.get("map")?.asJsonObject
             pwSnapMap.clear()
             if (mapEl != null) {
                 for (sku in skus) {
