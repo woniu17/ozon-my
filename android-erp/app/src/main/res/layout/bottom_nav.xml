@@ -8,7 +8,33 @@
     android:elevation="8dp"
     android:gravity="center">
 
-    <!-- 首页 -->
+    <!-- 扫描备货(2026-10-28 第 1 个 Tab) -->
+    <LinearLayout
+        android:id="@+id/navStock"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@android:color/transparent">
+
+        <ImageView
+            android:id="@+id/navStockIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_nav_stock" />
+
+        <TextView
+            android:id="@+id/navStockText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="扫描备货"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+    <!-- 扫描发货(2026-10-28 第 2 个 Tab,原首页) -->
     <LinearLayout
         android:id="@+id/navHome"
         android:layout_width="0dp"
@@ -22,13 +48,39 @@
             android:id="@+id/navHomeIcon"
             android:layout_width="24dp"
             android:layout_height="24dp"
-            android:src="@drawable/ic_nav_home" />
+            android:src="@drawable/ic_nav_scan" />
 
         <TextView
             android:id="@+id/navHomeText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="首页"
+            android:text="扫描发货"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+    <!-- 货运标签 -->
+    <LinearLayout
+        android:id="@+id/navContainer"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@android:color/transparent">
+
+        <ImageView
+            android:id="@+id/navContainerIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_nav_container" />
+
+        <TextView
+            android:id="@+id/navContainerText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="货运标签"
             android:textSize="10sp"
             android:textColor="#86909c"
             android:layout_marginTop="2dp" />
@@ -107,58 +159,6 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="订单统计"
-            android:textSize="10sp"
-            android:textColor="#86909c"
-            android:layout_marginTop="2dp" />
-    </LinearLayout>
-
-    <!-- 扫描备货(2026-10-27 独立页) -->
-    <LinearLayout
-        android:id="@+id/navStock"
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="1"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="@android:color/transparent">
-
-        <ImageView
-            android:id="@+id/navStockIcon"
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:src="@drawable/ic_nav_stock" />
-
-        <TextView
-            android:id="@+id/navStockText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="扫描备货"
-            android:textSize="10sp"
-            android:textColor="#86909c"
-            android:layout_marginTop="2dp" />
-    </LinearLayout>
-
-    <!-- 货运标签 -->
-    <LinearLayout
-        android:id="@+id/navContainer"
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="1"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="@android:color/transparent">
-
-        <ImageView
-            android:id="@+id/navContainerIcon"
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:src="@drawable/ic_nav_container" />
-
-        <TextView
-            android:id="@+id/navContainerText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="货运标签"
             android:textSize="10sp"
             android:textColor="#86909c"
             android:layout_marginTop="2dp" />
