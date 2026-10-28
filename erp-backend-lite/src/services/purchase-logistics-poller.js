@@ -401,7 +401,6 @@ async function runOnce() {
 function launchRound() {
   if (running) return false;
   running = true;
-  writeLastRunAt(new Date()); // 记录执行时刻(定时/手动均记),重启后不足周期不重跑
   manualStatus.running = true;
   manualStatus.startedAt = new Date().toISOString();
   manualStatus.finishedAt = null;
@@ -420,6 +419,10 @@ function launchRound() {
       logger.error({ err: manualStatus.error }, '[purchase-logistics-poller] 轮询异常');
     })
     .finally(() => {
+      // 轮次真正结束(成功/失败/异常)后才推进 last_run_at(2026-10-28):
+      // 若进程在轮次中途被重启,last_run_at 保持旧值,重启后检测到超期会立即补跑,
+      // 避免"启动了但没跑完,却把下次执行顺延 12 小时"的空转
+      writeLastRunAt(new Date());
       manualStatus.running = false;
       manualStatus.phase = '';
       manualStatus.finishedAt = new Date().toISOString();
