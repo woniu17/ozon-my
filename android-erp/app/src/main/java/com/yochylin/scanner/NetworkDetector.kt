@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
+import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,6 +35,9 @@ object NetworkDetector {
     /** 内网端口探测超时（毫秒）：局域网内正常应在百毫秒内返回 */
     private const val PROBE_TIMEOUT_MS = 1_500
 
+    /** 内网可达性探测最小间隔（毫秒）：WiFi 状态回调频繁时避免反复探测（2026-10-28） */
+    private const val PROBE_INTERVAL_MS = 30_000L
+
     /**
      * 自动模式下判定内网的 WiFi 名称集合。
      * 默认为 Home-WiFi；可在运行时更新（如后续支持后端配置下发），无需发版。
@@ -52,6 +56,10 @@ object NetworkDetector {
 
     @Volatile
     private var probing = false
+
+    /** 上次发起内网可达性探测的时间（SystemClock.elapsedRealtime），用于节流 */
+    @Volatile
+    private var lastProbeAt = 0L
 
     /**
      * 注册默认网络回调：默认网络可用/丢失时重新检测。
@@ -128,12 +136,22 @@ object NetworkDetector {
             Session.MODE_INTRANET -> true
             Session.MODE_PUBLIC -> false
             else -> {
-                val ssid = currentSsid(context)
-                if (ssid == null) {
-                    // SSID 不可读：自动检测降级，启动内网端口可达性探测（成功后会纠正为内网并通知）
-                    probeIntranetReachability()
+                // 已确认在内网（手动切过/自动探测成功过）：保持内网，不再因 SSID 变化切回公网，
+                // 避免内网环境 WiFi 名称不同或 SSID 不可读时被反复判定为公网导致连接失败
+                if (Session.useIntranet) {
+                    true
+                } else {
+                    val ssid = currentSsid(context)
+                    if (ssid in homeWifiSsids) {
+                        true
+                    } else {
+                        // SSID 不可读（Android 10+ 定位未开/权限缺失）或非 Home-WiFi 名称：
+                        // 无法可靠判定，用内网可达性兜底探测（办公 WiFi 名称可能不同），
+                        // 探测成功会异步切内网并通知；当前维持现状（默认公网）。
+                        probeIntranetReachability()
+                        false
+                    }
                 }
-                ssid in homeWifiSsids
             }
         }
         val changed = Session.useIntranet != target
@@ -148,9 +166,10 @@ object NetworkDetector {
         applyNetworkMode(context)
     }
 
-    /** 内网端口可达性探测：SSID 不可读时判断是否在办公室局域网，成功则切内网 */
+    /** 内网端口可达性探测：SSID 不可读/非 Home-WiFi 时判断是否在办公室局域网，成功则切内网 */
     private fun probeIntranetReachability() {
-        if (probing) return
+        val now = SystemClock.elapsedRealtime()
+        if (probing || now - lastProbeAt < PROBE_INTERVAL_MS) return
         probing = true
         probeScope.launch {
             val reachable = runCatching {
@@ -159,6 +178,7 @@ object NetworkDetector {
                 }
             }.isSuccess
             probing = false
+            lastProbeAt = SystemClock.elapsedRealtime()
             if (reachable && Session.networkMode == Session.MODE_AUTO && !Session.useIntranet) {
                 Session.useIntranet = true
                 notifyModeChanged(true)
