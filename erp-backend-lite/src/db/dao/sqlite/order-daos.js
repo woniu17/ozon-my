@@ -1445,9 +1445,10 @@ export function enrichPurchaseItems(items) {
   const now = nowIso();
   // 2026-10-27:搜索补全同时回填卖家名(手动录入/模式B auto 补全只写商品图,不落卖家名)。
   // seller_name 用 COALESCE 只填空值,不覆盖用户手动填写的卖家名;传 null 时列不变。
+  // 2026-10-28:items_json 同样用 COALESCE——搜索仅返回卖家名(无商品图)时也能回填,且不覆盖已有商品图。
   const stmt = db.prepare(
     `UPDATE op_purchase_order
-     SET items_json = ?,
+     SET items_json = COALESCE(?, items_json),
          seller_name = COALESCE(seller_name, ?),
          gmt_modified = ?
      WHERE platform = ? AND purchase_sn = ?`
@@ -1471,8 +1472,9 @@ export function enrichPurchaseItems(items) {
           number: g.number || 1,
           thumbUrl: normalizeThumbUrl(g.thumbUrl),
         }));
-      if (!goods.length) { skipped++; continue; }
-      const itemsJson = JSON.stringify(goods);
+      // goods 为空但有卖家名时仍回填(2026-10-28):仅更新 seller_name,items_json 由 COALESCE 保持原值
+      if (!goods.length && !it.sellerName) { skipped++; continue; }
+      const itemsJson = goods.length ? JSON.stringify(goods) : null;
       const res = stmt.run(itemsJson, it.sellerName || null, now, platform, sn);
       if (res.changes > 0) {
         updated++;

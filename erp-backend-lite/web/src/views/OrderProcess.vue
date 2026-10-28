@@ -3642,9 +3642,16 @@ onUnmounted(() => {
                   </template>
                   <span v-else class="mono">#{{ l.id }}</span>
                 </div>
+                <!-- 第二行:采购时间 + 发货状态(2026-10-28 对齐安卓采购卡) -->
                 <div class="purchase-meta sub">
-                  {{ poStatus(l.poStatus) }} · 采购金额 {{ fmtMoney(l.allocatedAmount) }}<template v-if="l.sellerName"> · {{ l.sellerName }}</template><template v-if="l.buyerAccount"> · 买:{{ l.buyerAccount }}</template>
+                  采购时间:{{ fmtTime(l.poPayAt || l.poGmtCreate) }}<template v-if="l.poStatus"> 发货状态:{{ poStatus(l.poStatus) }}</template>
                 </div>
+                <!-- 第三行:采购卖家 + 采购买家账号(2026-10-28) -->
+                <div class="purchase-meta sub">
+                  采购卖家:{{ l.sellerName || '—' }}<template v-if="l.buyerAccount">  采购买家:{{ l.buyerAccount }}</template>
+                </div>
+                <!-- 第四行:采购金额 -->
+                <div class="purchase-meta sub">采购金额:{{ fmtMoney(l.allocatedAmount) }}</div>
                 <!-- 快速筛选高亮(2026-10-17):采购下单超24h仍未发货,红色醒目提示 -->
                 <div v-if="purchaseUnshippedHoursOf(l)" class="po-alert po-alert-danger" :title="'采购单 ' + (l.purchaseSn || '#' + l.id) + ' 于 ' + (l.poPayAt || l.poGmtCreate) + ' 下单,已超过24小时未发货'">
                   ⚠ 采购下单 {{ purchaseUnshippedHoursOf(l) }}h 未发货

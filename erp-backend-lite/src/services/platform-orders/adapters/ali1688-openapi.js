@@ -173,7 +173,8 @@ function normalizeOpenApiOrder(o, account) {
     trackingNumber: '',
     logisticsCompany: '', // 物流公司名(采购订单保存后统一补查回填,优先于前端按单号前缀推断)
     orderTime: fmtTime(b.createTime),
-    sellerName: b.sellerLoginId || (b.sellerContact && b.sellerContact.companyName) || '',
+    // 2026-10-28:卖家展示公司名优先(如 wingwangzhaos → 义乌市千鸟电子商务商行)
+    sellerName: (b.sellerContact && b.sellerContact.companyName) || b.sellerLoginId || '',
     buyerUserId: b.buyerUserId ? String(b.buyerUserId) : '',
     buyerUsername: b.buyerLoginId || '',
     account,

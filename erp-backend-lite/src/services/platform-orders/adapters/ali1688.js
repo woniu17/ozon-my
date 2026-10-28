@@ -46,7 +46,8 @@ function normalize1688Order(o) {
     amount: toYuan(o.sumPayment),
     trackingNumber: tracks[0] || '',
     orderTime: o.gmtCreate || '',
-    sellerName: (o.sellerInfo && (o.sellerInfo.loginId || o.sellerInfo.companyName)) || '',
+    // 2026-10-28:卖家展示改公司名优先(用户反馈登录名不可读,如 wingwangzhaos → 义乌市千鸟电子商务商行)
+    sellerName: (o.sellerInfo && (o.sellerInfo.companyName || o.sellerInfo.loginId)) || '',
     buyerUserId: bi.userId || '',
     buyerUsername: bi.loginId || bi.nick || '',
     goods: entries.map((e) => ({

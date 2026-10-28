@@ -733,20 +733,24 @@ const AUTO_ENRICH_SEARCH = {
 async function autoEnrichPurchase(dbPlatform, orderSn) {
   try {
     const po = db
-      .prepare(`SELECT id, items_json FROM op_purchase_order WHERE platform = ? AND purchase_sn = ?`)
+      .prepare(`SELECT id, items_json, seller_name FROM op_purchase_order WHERE platform = ? AND purchase_sn = ?`)
       .get(dbPlatform, orderSn);
-    if (!po || (po.items_json && po.items_json.includes('thumbUrl'))) return; // 已有图,无需补全
+    if (!po) return;
+    // 2026-10-28:已有图但缺卖家名时不提前返回——继续搜索,只回填卖家名不覆盖已有商品图
+    const hasThumb = !!(po.items_json && po.items_json.includes('thumbUrl'));
+    const hasSeller = !!(po.seller_name && String(po.seller_name).trim());
+    if (hasThumb && hasSeller) return;
     const searchFn = AUTO_ENRICH_SEARCH[dbPlatform];
     const accounts = config.platformAccounts[{ '1688': 'ali1688', yangkeduo: 'pdd', taobao: 'taobao', xianyu: 'xianyu' }[dbPlatform]] || [];
     if (!searchFn || !accounts.length) return;
     const { result } = await searchFn(orderSn, accounts);
-    if (!result?.goods?.length) return;
+    if (!result?.goods?.length && !result?.sellerName) return;
     // 2026-10-27:搜索结果带回 sellerName,随补全一并回填(手动录入单买家账号已有,卖家名缺失)
     const r = orderPackageDao.enrichPurchaseItems([{
       platform: dbPlatform,
       purchaseSn: orderSn,
       sellerName: result.sellerName || null,
-      goods: result.goods,
+      goods: hasThumb ? [] : result.goods, // 已有图只回填卖家名,不重复写 items_json
     }]);
     if (r.updated > 0) logger.info({ platform: dbPlatform, purchaseSn: orderSn, goods: result.goods.length }, '[order-process] 采购单自动补全完成');
   } catch (e) {
