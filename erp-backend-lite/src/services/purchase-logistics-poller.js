@@ -118,9 +118,11 @@ async function phaseFillLogistics() {
         const info = await getLogisticsForOrder(r.purchase_sn, r.buyer_account);
         if (info.logisticsNo && info.logisticsNo !== r.logisticsNo) {
           // 单号变更:覆盖新单号+公司,重置 last_trace_at 让阶段B 立即拉新轨迹
+          // 2026-10-28:单号变更说明已发货,顺带 wait_send/wait_pay → shipped
           db.prepare(
             `UPDATE op_purchase_order
              SET logistics_no = ?, logistics_company = ?,
+                 status = CASE WHEN status IN ('wait_send', 'wait_pay') THEN 'shipped' ELSE status END,
                  last_trace_at = NULL,
                  gmt_modified = ?
              WHERE id = ?`
@@ -488,6 +490,8 @@ function stopPurchaseLogisticsPoller() {
 // 与定时轮不互斥:浏览器操作经 withPage SerialQueue 天然串行,写入幂等(同字段最新覆盖)
 
 /** 轨迹落库(trace_json/last_trace_at/last_trace_desc;shippingName 非空时回填缺失公司名)
+ *  有轨迹节点即代表上家已发货:顺带 wait_send/wait_pay → shipped(2026-10-28 修复:已有单号的
+ *  在途单之前只拉轨迹不升级状态,导致"有物流仍提示未发货"的矛盾)。
  *  无轨迹节点时仅推进 last_trace_at 避免定时轮空转;返回 toast 友好的结果描述 */
 function writeTraceRow(id, steps, shippingName = '') {
   if (!steps.length) {
@@ -500,6 +504,7 @@ function writeTraceRow(id, steps, shippingName = '') {
      SET trace_json = ?, last_trace_at = ?, last_trace_desc = ?,
          logistics_company = CASE WHEN ? != '' AND (logistics_company IS NULL OR logistics_company = '')
                                   THEN ? ELSE logistics_company END,
+         status = CASE WHEN status IN ('wait_send', 'wait_pay') THEN 'shipped' ELSE status END,
          gmt_modified = ?
      WHERE id = ?`
   ).run(
@@ -522,12 +527,14 @@ function writeFilledLogisticsNo(id, logisticsNo, logisticsCompany) {
 }
 
 /** 单号变更覆盖(2026-09-23,拉轨迹时按订单号核对出平台最新单号)
- *  场景:卖家换快递/单号录错;公司仅在非空时覆盖(空则保旧值),不动 status */
+ *  场景:卖家换快递/单号录错;公司仅在非空时覆盖(空则保旧值)。
+ *  2026-10-28:单号变更说明卖家已发货,顺带 wait_send/wait_pay → shipped */
 function writeChangedLogisticsNo(id, newNo, company) {
   db.prepare(
     `UPDATE op_purchase_order
      SET logistics_no = ?,
          logistics_company = CASE WHEN ? != '' THEN ? ELSE logistics_company END,
+         status = CASE WHEN status IN ('wait_send', 'wait_pay') THEN 'shipped' ELSE status END,
          gmt_modified = ?
      WHERE id = ?`
   ).run(newNo, company || '', company || '', new Date().toISOString(), id);
