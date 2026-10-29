@@ -409,8 +409,10 @@ function launchRound() {
   manualStatus.progress = { done: 0, total: 0 };
   runWithLog('purchase-logistics-poller', runOnce, {
     formatDetail: (r) => {
-      const sum = (x) => (x && typeof x === 'object' ? `${x.updated ?? 0}/${x.scanned ?? 0}` : '-');
-      return `阶段A ${sum(r.phaseA)} · PDD单号 ${sum(r.phaseApdd)} · 轨迹 ${sum(r.phaseB)} · PDD轨迹 ${sum(r.phaseC)} · TB轨迹 ${sum(r.phaseTb)}`;
+      // 阶段A/PDD 返回 filled(补单号数),轨迹阶段返回 updated(轨迹更新数),
+      // 之前统一取 updated 导致阶段A/PDD 摘要永远显示 0,误导排查(2026-10-29)
+      const sum = (x, key) => (x && typeof x === 'object' ? `${x[key] ?? 0}/${x.scanned ?? 0}` : '-');
+      return `阶段A ${sum(r.phaseA, 'filled')} · PDD单号 ${sum(r.phaseApdd, 'filled')} · 轨迹 ${sum(r.phaseB, 'updated')} · PDD轨迹 ${sum(r.phaseC, 'updated')} · TB轨迹 ${sum(r.phaseTb, 'updated')}`;
     },
   })
     .then((r) => { manualStatus.result = r; })
