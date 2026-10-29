@@ -20,7 +20,9 @@
 - `POST` `/v2/posting/fbs/get-by-barcode` — 按条形码获取有关货件的信息
 - `POST` `/v2/posting/fbs/product/country/list` — 可用产地名单
 - `POST` `/v2/posting/fbs/product/country/set` — 添加商品产地信息
-- `POST` `/v2/posting/fbs/package-label` — 打印标签
+- `POST` `/v2/posting/fbs/package-label` — 打印标签（已废弃，2026-11-02 停用）
+- `POST` `/v3/posting/fbs/package-label/create` — 创建标签生成任务
+- `POST` `/v2/posting/fbs/package-label/get` — 获取标签文件
 - `POST` `/v2/posting/fbs/awaiting-delivery` — 货件装运
 - `POST` `/v2/posting/fbs/cancel-reason/list` — 货件取消原因
 - `POST` `/v1/posting/fbs/cancel-reason` — 货运取消原因
@@ -755,9 +757,11 @@
 
 ### `POST` `/v2/posting/fbs/package-label`
 
-**打印标签**
+**打印标签**（已废弃）
 
 `operationId: PostingAPI_PostingFBSPackageLabel`
+
+> ⚠️ 该方法自 **2026-11-02** 起停用。请切换到新流程：先用 `/v3/posting/fbs/package-label/create` 创建标签生成任务，再用 `/v2/posting/fbs/package-label/get` 获取标签文件。
 
 如果您使用rFBS或rFBS Express方案发货，请在卖家知识库中查看标签打印流程。  生成带有指定货件标签的PDF文件。 在一个请求中最多可以传递20个ID。 如果至少有一个货件发生错误，则不会为请求中的所有货件准备标签。  我们建议在订单装配后45-60秒内询问标签。  错误 `The next postings aren't ready` 标识，未备好标签，请稍后重试。
 
@@ -766,6 +770,66 @@
 | 字段名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
 | posting_number | array<string> | 是 | 货运ID。 |
+
+---
+
+### `POST` `/v3/posting/fbs/package-label/create`
+
+**创建标签生成任务**
+
+`operationId: PostingFbsPackageLabelCreate`
+
+为状态为「等待发运」——`awaiting_deliver` 的货件创建异步标签生成任务。建议在订单备货完成 45–60 秒后请求标签。如需获取已生成的标签，请使用 `/v2/posting/fbs/package-label/get`。
+
+#### 请求体（`posting.v3.PostingFbsPackageLabelCreateRequest`）
+
+| 字段名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| posting_numbers | array<string> | 是 | 需要标签的货件编号。最小 1 项，最大 1000 项。 |
+
+#### 响应（`posting.v3.PostingFbsPackageLabelCreateResponse`）
+
+| 字段名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| tasks | array<object> | 否 | 任务列表。 |
+|   tasks[].task_id | integer (int64) | 否 | 任务ID。通过 `/v2/posting/fbs/package-label/get` 获取标签文件。 |
+|   tasks[].task_type | string | 否 | 任务类型：`big_label` — 常规标签；`small_label` — 小标签。 |
+
+> 实测示例：请求 `{"posting_numbers": ["0130666769-0180-1"]}` 返回 `{"tasks": [{"task_id": 536534624, "task_type": "small_label"}]}`。
+
+---
+
+### `POST` `/v2/posting/fbs/package-label/get`
+
+**获取标签文件**
+
+`operationId: PostingFbsPackageLabelGet`
+
+获取异步生成的标签文件。任务ID取自 `/v3/posting/fbs/package-label/create` 的响应。轮询 `status.code` 直到变为 `completed` 后，下载 `file_url` 指向的 PDF 文件。
+
+#### 请求体（`posting.v2.PostingFbsPackageLabelGetRequest`）
+
+| 字段名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| task_id | integer (int64) | 是 | 任务ID，取自 `/v3/posting/fbs/package-label/create` 的响应。 |
+
+#### 响应（`posting.v2.PostingFbsPackageLabelGetResponse`）
+
+| 字段名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| error | object | 否 | 生成标签时出现的错误。 |
+|   error.code | string | 否 | 错误代码。 |
+|   error.message | string | 否 | 错误描述。 |
+| file_url | string | 否 | 标签文件链接。 |
+| status | object | 否 | 任务状态。 |
+|   status.code | string | 否 | 标签生成状态：`pending` — 任务在队列中；`in_progress` — 正在生成；`completed` — 标签文件已就绪；`error` — 创建文件时出错。 |
+|   status.postings_count | integer (int32) | 否 | 已请求标签的货件数量。 |
+|   status.printed_postings_count | integer (int32) | 否 | 成功生成标签的货件数量。 |
+|   status.unprinted_postings | array<object> | 否 | 导致标签生成失败的错误信息。 |
+|     status.unprinted_postings[].message | string | 否 | 错误描述。 |
+|     status.unprinted_postings[].posting_number | string | 否 | 货件编号。 |
+
+> 实测示例：请求 `{"task_id": 536534624}` 返回 `{"error": null, "file_url": "https://ir-20.ozonstatic.cn/s3/ord-tmp-6/small_label/ticket-3891653-536534624-1793266618.pdf", "status": {"code": "completed", "postings_count": 1, "printed_postings_count": 1, "unprinted_postings": []}}`。
 
 ---
 

@@ -15549,8 +15549,9 @@
     "/v2/posting/fbs/package-label": {
       "post": {
         "summary": "Print the labeling",
-        "description": "<aside class=\"warning\">\nIf you work under the rFBS or rFBS Express scheme, learn more about printing labels in the <a href=\"https://global-help.ozon.com/en/fulfillment/rfbs/logistic-settings/order-packaging-requirements/\">Seller knowledge base</a>.\n</aside>\n\nGenerates a PDF file with a labeling for the specified shipments in the \"Awaiting shipment\" status: `awaiting_deliver`. You can pass a maximum of 20 identifiers in one request. If an error occurs for at least one shipment, the labeling isn't generated for all shipments in the request.\n\nWe recommend you to request labels 45–60 seconds after packing the shipments.\n\n`The next postings aren't ready` error means that the label is not ready. Try again later.\n",
+        "description": "<aside class=\"warning\">\nThe method will be disabled on November 2, 2026. Switch to the [/v3/posting/fbs/package-label/create](#operation/PostingFbsPackageLabelCreate) and [/v2/posting/fbs/package-label/get](#operation/PostingFbsPackageLabelGet) methods.\n</aside>\n\n<aside class=\"warning\">\nIf you work under the rFBS or rFBS Express scheme, learn more about printing labels in the <a href=\"https://global-help.ozon.com/en/fulfillment/rfbs/logistic-settings/order-packaging-requirements/\">Seller knowledge base</a>.\n</aside>\n\nGenerates a PDF file with a labeling for the specified shipments in the \"Awaiting shipment\" status: `awaiting_deliver`. You can pass a maximum of 20 identifiers in one request. If an error occurs for at least one shipment, the labeling isn't generated for all shipments in the request.\n\nWe recommend you to request labels 45–60 seconds after packing the shipments.\n\n`The next postings aren't ready` error means that the label is not ready. Try again later.\n",
         "operationId": "PostingAPI_PostingFBSPackageLabel",
+        "deprecated": true,
         "parameters": [
           {
             "$ref": "#/components/parameters/Client-Id"
@@ -15796,6 +15797,194 @@
                       }
                     ]
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Response not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "FBS"
+        ]
+      }
+    },
+    "/v3/posting/fbs/package-label/create": {
+      "post": {
+        "summary": "Create task to generate label",
+        "description": "<aside class=\"warning\">\nIf you work under the rFBS or rFBS Express scheme, learn more about printing labels in the <a href=\"https://global-help.ozon.com/en/fulfillment/rfbs/logistic-settings/order-packaging-requirements/\">Seller knowledge base</a>.\n</aside>\n\nMethod for creating a task for asynchronous label generation for shipments in the \"Awaiting shipment\" status: `awaiting_deliver`.\nWe recommend you to request labels 45–60 seconds after packing the shipments.\n\nTo get created labels, use the [/v2/posting/fbs/package-label/get](#operation/PostingFbsPackageLabelGet).\n",
+        "operationId": "PostingFbsPackageLabelCreate",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/posting.v3.PostingFbsPackageLabelCreateRequest"
+              },
+              "example": {
+                "posting_numbers": [
+                  "12345678-0001-1"
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Label generation tasks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/posting.v3.PostingFbsPackageLabelCreateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Response not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "FBS"
+        ]
+      }
+    },
+    "/v2/posting/fbs/package-label/get": {
+      "post": {
+        "summary": "Get file with labels",
+        "description": "Method for getting a labeling file after using the [/v3/posting/fbs/package-label/create](#operation/PostingFbsPackageLabelCreate) method.",
+        "operationId": "PostingFbsPackageLabelGet",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/posting.v2.PostingFbsPackageLabelGetRequest"
+              },
+              "example": {
+                "task_id": 5819327210249
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Status of labeling generation or a labeling file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/posting.v2.PostingFbsPackageLabelGetResponse"
                 }
               }
             }
@@ -48054,6 +48243,139 @@
         "properties": {
           "result": {
             "$ref": "#/components/schemas/v1GetLabelBatchResponseResult"
+          }
+        }
+      },
+      "posting.v3.PostingFbsPackageLabelCreateRequest": {
+        "type": "object",
+        "title": "object",
+        "required": [
+          "posting_numbers"
+        ],
+        "properties": {
+          "posting_numbers": {
+            "type": "array",
+            "description": "Shipment numbers that need labels.",
+            "minItems": 1,
+            "maxItems": 1000,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "posting.v3.PostingFbsPackageLabelCreateResponse": {
+        "type": "object",
+        "title": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "description": "Task list.",
+            "items": {
+              "$ref": "#/components/schemas/posting.v3.PostingFbsPackageLabelCreateResponse.Tasks"
+            }
+          }
+        }
+      },
+      "posting.v3.PostingFbsPackageLabelCreateResponse.Tasks": {
+        "type": "object",
+        "title": "object",
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Task identifier. Get the file with labels using the [/v2/posting/fbs/package-label/get](#operation/PostingFbsPackageLabelGet) method."
+          },
+          "task_type": {
+            "type": "string",
+            "description": "Task type:\n- `big_label`: for a regular label;\n- `small_label`: for a small label.\n"
+          }
+        }
+      },
+      "posting.v2.PostingFbsPackageLabelGetRequest": {
+        "type": "object",
+        "title": "object",
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Task identifier from the [/v3/posting/fbs/package-label/create](#operation/PostingFbsPackageLabelCreate) method response."
+          }
+        }
+      },
+      "posting.v2.PostingFbsPackageLabelGetResponse": {
+        "type": "object",
+        "title": "object",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/posting.v2.PostingFbsPackageLabelGetResponse.Error"
+          },
+          "file_url": {
+            "type": "string",
+            "description": "Link to a file with labels."
+          },
+          "status": {
+            "$ref": "#/components/schemas/posting.v2.PostingFbsPackageLabelGetResponse.Status"
+          }
+        }
+      },
+      "posting.v2.PostingFbsPackageLabelGetResponse.Error": {
+        "type": "object",
+        "title": "object",
+        "description": "Error during label generation.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Error code."
+          },
+          "message": {
+            "type": "string",
+            "description": "Error description."
+          }
+        }
+      },
+      "posting.v2.PostingFbsPackageLabelGetResponse.Status": {
+        "type": "object",
+        "title": "object",
+        "description": "Task status.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Label generation status:\n- `pending`: task is in the queue;\n- `in_progress`: being generated;\n- `completed`: file with labels is ready;\n- `error`: error during file generation.\n"
+          },
+          "postings_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of shipments for which labels were requested."
+          },
+          "printed_postings_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of shipments with successfully generated labels."
+          },
+          "unprinted_postings": {
+            "type": "array",
+            "description": "Information about errors that prevented label generation.",
+            "items": {
+              "$ref": "#/components/schemas/posting.v2.PostingFbsPackageLabelGetResponse.Status.UnprintedPostings"
+            }
+          }
+        }
+      },
+      "posting.v2.PostingFbsPackageLabelGetResponse.Status.UnprintedPostings": {
+        "type": "object",
+        "title": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Error description."
+          },
+          "posting_number": {
+            "type": "string",
+            "description": "Shipment number."
           }
         }
       },

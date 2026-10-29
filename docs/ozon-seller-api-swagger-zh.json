@@ -11082,8 +11082,9 @@
     "/v2/posting/fbs/package-label": {
       "post": {
         "summary": "打印标签",
-        "description": "<aside class=\"warning\">\n如果您使用rFBS或rFBS Express方案发货，请在<a href=\"https://global-help.ozon.com/zh/fulfillment/rfbs/logistic-settings/order-packaging-requirements/\">卖家知识库</a>中查看标签打印流程。\n</aside>\n\n生成带有指定货件标签的PDF文件。 在一个请求中最多可以传递20个ID。 如果至少有一个货件发生错误，则不会为请求中的所有货件准备标签。\n\n我们建议在订单装配后45-60秒内询问标签。\n\n错误 `The next postings aren't ready` 标识，未备好标签，请稍后重试。 \n",
+        "description": "<aside class=\"warning\">\n自2026年11月2日起，该方法将停用。请切换至<a href=\"#operation/PostingFbsPackageLabelCreate\">/v3/posting/fbs/package-label/create</a>和<a href=\"#operation/PostingFbsPackageLabelGet\">/v2/posting/fbs/package-label/get</a>。\n</aside>\n\n<aside class=\"warning\">\n如果您使用rFBS或rFBS Express方案发货，请在<a href=\"https://global-help.ozon.com/zh/fulfillment/rfbs/logistic-settings/order-packaging-requirements/\">卖家知识库</a>中查看标签打印流程。\n</aside>\n\n生成带有指定货件标签的PDF文件。 在一个请求中最多可以传递20个ID。 如果至少有一个货件发生错误，则不会为请求中的所有货件准备标签。\n\n我们建议在订单装配后45-60秒内询问标签。\n\n错误 `The next postings aren't ready` 标识，未备好标签，请稍后重试。 \n",
         "operationId": "PostingAPI_PostingFBSPackageLabel",
+        "deprecated": true,
         "parameters": [
           {
             "$ref": "#/components/parameters/Client-Id"
@@ -11125,6 +11126,194 @@
           },
           "400": {
             "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "访问拒绝",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "无响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "请求冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "FBS"
+        ]
+      }
+    },
+    "/v3/posting/fbs/package-label/create": {
+      "post": {
+        "summary": "创建标签生成任务",
+        "description": "<aside class=\"warning\">\n如果您采用rFBS或rFBS Express运作模式，请在<a href=\"https://global-help.ozon.com/zh/fulfillment/rfbs/logistic-settings/partner-delivery-ozon?region=CHN#订单发运\">卖家知识库</a>中了解标签打印流程。\n</aside>\n\n为状态为“等待发运”——`awaiting_deliver`的货件创建异步标签生成任务。\n我们建议在订单备货完成45–60秒后请求标签。\n\n如需获取已生成的标签，请使用[/v2/posting/fbs/package-label/get](#operation/PostingFbsPackageLabelGet)。\n",
+        "operationId": "PostingFbsPackageLabelCreate",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/posting.v3.PostingFbsPackageLabelCreateRequest"
+              },
+              "example": {
+                "posting_numbers": [
+                  "12345678-0001-1"
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "标签生成任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/posting.v3.PostingFbsPackageLabelCreateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数有误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "访问拒绝",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "无响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "请求冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "FBS"
+        ]
+      }
+    },
+    "/v2/posting/fbs/package-label/get": {
+      "post": {
+        "summary": "获取标签文件",
+        "description": "生成标签后，使用该方法获取标签文件。任务ID取自[/v3/posting/fbs/package-label/create](#operation/PostingFbsPackageLabelCreate)方法的响应。",
+        "operationId": "PostingFbsPackageLabelGet",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/posting.v2.PostingFbsPackageLabelGetRequest"
+              },
+              "example": {
+                "task_id": 5819327210249
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "标签生成状态或标签文件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/posting.v2.PostingFbsPackageLabelGetResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数有误",
             "content": {
               "application/json": {
                 "schema": {
@@ -34641,6 +34830,139 @@
         },
         "type": "object",
         "title": "object"
+      },
+      "posting.v3.PostingFbsPackageLabelCreateRequest": {
+        "type": "object",
+        "title": "object",
+        "required": [
+          "posting_numbers"
+        ],
+        "properties": {
+          "posting_numbers": {
+            "type": "array",
+            "description": "需要标签的货件编号。",
+            "minItems": 1,
+            "maxItems": 1000,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "posting.v3.PostingFbsPackageLabelCreateResponse": {
+        "type": "object",
+        "title": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "description": "任务列表。",
+            "items": {
+              "$ref": "#/components/schemas/posting.v3.PostingFbsPackageLabelCreateResponse.Tasks"
+            }
+          }
+        }
+      },
+      "posting.v3.PostingFbsPackageLabelCreateResponse.Tasks": {
+        "type": "object",
+        "title": "object",
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "任务ID。 请通过方法[/v2/posting/fbs/package-label/get](#operation/PostingFbsPackageLabelGet)获取标签文件。"
+          },
+          "task_type": {
+            "type": "string",
+            "description": "任务类型：\n- `big_label`——用于常规标签；\n- `small_label`——用于小标签。\n"
+          }
+        }
+      },
+      "posting.v2.PostingFbsPackageLabelGetRequest": {
+        "type": "object",
+        "title": "object",
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "任务ID，取自方法[/v3/posting/fbs/package-label/create](#operation/PostingFbsPackageLabelCreate)的响应。"
+          }
+        }
+      },
+      "posting.v2.PostingFbsPackageLabelGetResponse": {
+        "type": "object",
+        "title": "object",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/posting.v2.PostingFbsPackageLabelGetResponse.Error"
+          },
+          "file_url": {
+            "type": "string",
+            "description": "标签文件链接。"
+          },
+          "status": {
+            "$ref": "#/components/schemas/posting.v2.PostingFbsPackageLabelGetResponse.Status"
+          }
+        }
+      },
+      "posting.v2.PostingFbsPackageLabelGetResponse.Error": {
+        "type": "object",
+        "title": "object",
+        "description": "生成标签时出现的错误。",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "错误代码。"
+          },
+          "message": {
+            "type": "string",
+            "description": "错误描述。"
+          }
+        }
+      },
+      "posting.v2.PostingFbsPackageLabelGetResponse.Status": {
+        "type": "object",
+        "title": "object",
+        "description": "任务状态。",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "标签生成状态：\n- `pending`——任务在队列中；\n- `in_progress`——正在生成；\n- `completed`——标签文件已就绪；\n- `error`——创建文件时出错。\n"
+          },
+          "postings_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "已请求标签的货件数量。"
+          },
+          "printed_postings_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "成功生成标签的货件数量。"
+          },
+          "unprinted_postings": {
+            "type": "array",
+            "description": "导致标签生成失败的错误信息。",
+            "items": {
+              "$ref": "#/components/schemas/posting.v2.PostingFbsPackageLabelGetResponse.Status.UnprintedPostings"
+            }
+          }
+        }
+      },
+      "posting.v2.PostingFbsPackageLabelGetResponse.Status.UnprintedPostings": {
+        "type": "object",
+        "title": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "错误描述。"
+          },
+          "posting_number": {
+            "type": "string",
+            "description": "货件编号"
+          }
+        }
       },
       "v2MovePostingToAwaitingDeliveryRequest": {
         "required": [
