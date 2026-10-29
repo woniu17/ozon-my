@@ -563,10 +563,14 @@ export function postingFbsShip(store, postingNumber, products) {
   });
 }
 
-// /v2/posting/fbs/package-label —— 打印标签(面单 PDF)
-// 请求: { posting_number: string[] }(单次 ≤20,任一货件出错整批失败)
-// 响应: PDF 二进制流(非 JSON,走 callRaw)
-// 注:装配完成后 45-60s 才可拉;未就绪时 Ozon 报 "The next postings aren't ready"
+// ── 面单标签(2026-10-29 切换到新流程)────────────────────────
+// 旧接口 /v2/posting/fbs/package-label 自 2026-11-02 起停用,已废弃。
+// 新流程(异步任务):
+//   ① POST /v3/posting/fbs/package-label/create 创建任务 → tasks[].task_id
+//   ② POST /v2/posting/fbs/package-label/get 轮询到 status.code=completed → file_url
+//   ③ 下载 file_url 得到 PDF 二进制(与旧接口响应形态一致,调用方零改动)
+// 实测:create 后 ~3s 即 completed;面单未就绪/状态不符时 create 报 NO_POSTINGS_FOR_BATCH_DOWNLOAD,
+//       通过实时查货件状态区分「未就绪(可稍后重试)」与「状态不允许(需人工处理)」。
 // /v2/posting/fbs/act/get-container-labels —— 按货运标签 ID 取标签 PDF(2026-10-25)
 // Ozon FBS 交接单的每个集装箱/包裹会生成独立货运标签;请求体 { id: <标签ID> },响应为 PDF。
 export function containerLabel(store, labelId) {
@@ -575,6 +579,26 @@ export function containerLabel(store, labelId) {
     throw new ApiError(ErrorCode.VALIDATION_ERROR, `货运标签 ID 必须为正整数,收到: ${labelId}`);
   }
   return callRaw(store, '/v2/posting/fbs/act/get-container-labels', { id });
+}
+
+// /v3/posting/fbs/package-label/create —— 创建标签生成任务(2026-10-29)
+// 请求: { posting_numbers: string[] }(1~1000)
+// 响应: { tasks: [{ task_id, task_type }] }
+export function packageLabelCreate(store, postingNumbers) {
+  const list = (Array.isArray(postingNumbers) ? postingNumbers : []).filter(Boolean);
+  if (!list.length) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'posting_numbers 不能为空');
+  return call(store, '/v3/posting/fbs/package-label/create', { posting_numbers: list });
+}
+
+// /v2/posting/fbs/package-label/get —— 获取标签文件(2026-10-29)
+// 请求: { task_id: number }
+// 响应: { status: { code, postings_count, printed_postings_count, unprinted_postings }, file_url, error }
+export function packageLabelGet(store, taskId) {
+  const id = Number(taskId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `task_id 必须为正整数,收到: ${taskId}`);
+  }
+  return call(store, '/v2/posting/fbs/package-label/get', { task_id: id });
 }
 
 // /v2/carriage/delivery/list —— 运输/发运清单(2026-10-25,操作 ID CarriageDeliveryListV2)
@@ -596,8 +620,79 @@ export function carriageDeliveryList(store, { cursor = '', filter = {}, limit = 
   });
 }
 
-export function packageLabel(store, postingNumbers) {
-  return callRaw(store, '/v2/posting/fbs/package-label', { posting_number: postingNumbers });
+/** 打印面单(新流程,2026-10-29):create → 轮询 get → 下载 PDF
+ *  返回 { buffer, contentType },与旧接口 callRaw 形态一致,调用方无需改动。
+ */
+export async function packageLabel(store, postingNumbers) {
+  const postingList = (Array.isArray(postingNumbers) ? postingNumbers : []).filter(Boolean);
+  if (!postingList.length) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, 'postingNumbers 不能为空');
+  }
+
+  // ① 创建任务
+  let createResp;
+  try {
+    createResp = await packageLabelCreate(store, postingList);
+  } catch (e) {
+    // 新接口在面单未就绪/状态不符时统一报 NO_POSTINGS_FOR_BATCH_DOWNLOAD。
+    // 实时查货件状态,区分「未就绪(可稍后重试)」与「状态不允许(需人工处理)」,
+    // 复用调用方已有的 409 错误分支(正则匹配 'aren't ready' / 'INVALID_ARGUMENT')。
+    if (/NO_POSTINGS_FOR_BATCH_DOWNLOAD/i.test(e?.message || '')) {
+      let status = '';
+      try {
+        const g = await postingFbsGet(store, postingList[0]);
+        status = g?.result?.status || '';
+      } catch { /* 状态查询失败按未就绪处理 */ }
+      const notReady = status === '' || status === 'awaiting_packaging' || status === 'awaiting_registration';
+      if (notReady) {
+        throw new Error("The next postings aren't ready");
+      }
+      throw new ApiError(ErrorCode.NETWORK_ERROR, 'Ozon 拒绝生成面单: INVALID_ARGUMENT', {
+        details: { httpStatus: 400, body: { code: 'INVALID_ARGUMENT', status } },
+      });
+    }
+    throw e;
+  }
+
+  const taskId = createResp?.tasks?.[0]?.task_id;
+  if (!taskId) {
+    throw new ApiError(ErrorCode.NETWORK_ERROR, 'OPI /v3/posting/fbs/package-label/create 未返回 task_id', {
+      details: { body: createResp },
+    });
+  }
+
+  // ② 轮询 get(实测 ~3s 完成;2s × 15 次 = 30s 兜底)
+  let fileUrl = null;
+  let lastStatus = '';
+  for (let i = 0; i < 15; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 2000));
+    const getResp = await packageLabelGet(store, taskId);
+    const st = getResp?.status || {};
+    lastStatus = st.code || '';
+    if (lastStatus === 'completed') {
+      fileUrl = getResp?.file_url;
+      break;
+    }
+    if (lastStatus === 'error') {
+      const err = getResp?.error || st.unprinted_postings?.[0] || {};
+      throw new ApiError(ErrorCode.NETWORK_ERROR, `OPI 标签生成失败: ${err?.message || JSON.stringify(err)}`, {
+        details: { body: getResp },
+      });
+    }
+    // pending / in_progress → 继续轮询
+  }
+  if (!fileUrl) {
+    throw new ApiError(ErrorCode.NETWORK_ERROR, `OPI 标签任务 ${taskId} 超时未完成(最后状态 ${lastStatus || '未知'})`);
+  }
+
+  // ③ 下载 PDF(与旧接口返回的 buffer 形态一致)
+  const res = await request(fileUrl, { headersTimeout: DEFAULT_TIMEOUT_MS, bodyTimeout: DEFAULT_TIMEOUT_MS });
+  if (res.statusCode >= 400) {
+    throw new ApiError(ErrorCode.NETWORK_ERROR, `下载面单 PDF 失败 HTTP ${res.statusCode}`);
+  }
+  const contentType = res.headers['content-type'] || '';
+  const buffer = Buffer.from(await res.body.arrayBuffer());
+  return { buffer, contentType };
 }
 
 // /v2/posting/fbs/get-by-barcode —— 按条码获取货件信息(2026-10-25,扫描发货扫码兜底)
