@@ -1488,7 +1488,36 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     }
 
     // 3) 调 ship(不拆分:单 package 全部商品)
-    await postingFbsShip(store, row.postingNumber, products);
+    // 2026-10-29:竞态容错——ship 瞬间 Ozon 状态已离开 awaiting_packaging(通常另一请求已备货成功/
+    //   后台已流转)会返回 400:HAS_INCORRECT_STATUS。此时重查最新状态:已进入备货后状态链则按
+    //   "已备货"幂等返回(不再误报失败),已取消则明确提示,其余状态透出冲突原因。
+    try {
+      await postingFbsShip(store, row.postingNumber, products);
+    } catch (shipErr) {
+      const shipMsg = shipErr?.message || String(shipErr);
+      if (!shipMsg.includes('HAS_INCORRECT_STATUS')) throw shipErr; // 其他错误原样上抛
+      let reGet = null;
+      try {
+        reGet = await postingFbsGet(store, row.postingNumber);
+      } catch { /* 重查失败则按未知状态处理 */ }
+      const pNow = reGet?.result;
+      const stNow = pNow?.status || '';
+      if (stNow === 'cancelled' || stNow === 'not_accepted') {
+        return res.status(400).json({ ok: false, message: 'Ozon 订单已取消,不能备货' });
+      }
+      if (['awaiting_registration', 'awaiting_deliver', 'delivering', 'driver_pickup', 'delivered'].includes(stNow)) {
+        if (pNow) orderPackageDao.syncPosting(store.id, pNow); // 校准本地 Ozon 状态,前端刷新后按钮自然隐藏
+        logger.info(
+          { packageId, postingNumber: row.postingNumber, status: stNow, substatus: pNow?.substatus || null },
+          '[order-process] 备货竞态已备货(HAS_INCORRECT_STATUS),幂等返回'
+        );
+        return res.json(ok({ alreadyShipped: true, ozonStatus: stNow, substatus: pNow?.substatus || null }));
+      }
+      return res.status(400).json({
+        ok: false,
+        message: `Ozon 当前状态 ${stNow || '(未知)'} 不可备货(备货仅限待备货状态),请刷新后重试`,
+      });
+    }
 
     // 4) 轮询 get 校验(200 不代表成功;Ozon 状态变更是异步的,实测常需数十秒,
     //    2026-09-17 由单次校验改为最多 5 次 × 3s ≈15s,期间状态离开 awaiting_packaging 即生效)
