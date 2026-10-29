@@ -620,6 +620,142 @@ export function carriageDeliveryList(store, { cursor = '', filter = {}, limit = 
   });
 }
 
+// ═══ FBS 货运创建(Carriage)API 封装(2026-10-29)═══════════════
+// 流程:备货 → /v1/delivery-method/list 取配送方式 → /v1/carriage/create 创建发运
+//      → /v1/assembly/carriage/posting/list 查看货件 → /v1/carriage/set-postings 调整
+//      → /v1/carriage/courier-contact/set 设联系方式 → /v1/carriage/approve 确认
+//      → 打面单(packageLabel)/货位标签(containerLabel) → 取消走 /v1/carriage/cancel
+// 官方文档见 docs/ozon-api/05-FBS订单与配送.md「FBS配送」。
+
+// /v2/delivery-method/list —— realFBS 仓库的配送方式列表(创建发运前置,取 delivery_method_id)
+// 2026-10-29:原用 /v1/delivery-method/list,实测返回 400 obsolete,切换 v2。
+// 请求: { cursor?, filter?: { delivery_method_ids?, provider_ids?, status?, warehouse_ids? }, limit(1~100,必填), sort_dir? }
+// 响应: { cursor, has_next, delivery_methods: [{ id, name, cutoff, status, warehouse_id, provider_id, ... }] }
+export function deliveryMethodList(store, { limit = 100, cursor = '', filter = {}, sortDir } = {}) {
+  const n = Number(limit);
+  if (!Number.isInteger(n) || n < 1 || n > 100) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `limit 必须为 1~100 的整数,收到: ${limit}`);
+  }
+  const body = {
+    limit: n,
+    cursor: cursor || '',
+    filter: filter && typeof filter === 'object' ? filter : {},
+  };
+  if (sortDir) body.sort_dir = String(sortDir);
+  return call(store, '/v2/delivery-method/list', body);
+}
+
+// /v1/carriage/create —— 创建发运
+// 请求: { delivery_method_id?, departure_date?, all_blr_traceable? }
+// 响应: { carriage_id }
+// 行为:所有状态为"已准备发运"的货件自动进入该发运,发运状态 new;
+//       new 状态可再通过 set-postings 全量覆盖货件组成。
+export function carriageCreate(store, { deliveryMethodId, departureDate, allBlrTraceable } = {}) {
+  const body = {};
+  if (deliveryMethodId != null && deliveryMethodId !== '') body.delivery_method_id = Number(deliveryMethodId);
+  if (departureDate) body.departure_date = String(departureDate);
+  if (allBlrTraceable != null) body.all_blr_traceable = !!allBlrTraceable;
+  return call(store, '/v1/carriage/create', body);
+}
+
+// /v1/carriage/get —— 运输信息
+// 请求: { carriage_id }
+// 响应: { carriage_id, status, first_mile_type, integration_type, warehouse_id,
+//        delivery_method_id, departure_date, available_actions, cancel_availability, ... }
+export function carriageGet(store, carriageId) {
+  const id = Number(carriageId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `carriage_id 必须为正整数,收到: ${carriageId}`);
+  }
+  return call(store, '/v1/carriage/get', { carriage_id: id });
+}
+
+// /v1/carriage/approve —— 发运确认(创建后确认,转"已生成"状态)
+// 请求: { carriage_id, containers_count? }(containers_count 仅信任验收按货位发运时传)
+export function carriageApprove(store, carriageId, containersCount) {
+  const id = Number(carriageId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `carriage_id 必须为正整数,收到: ${carriageId}`);
+  }
+  const body = { carriage_id: id };
+  if (containersCount != null && containersCount !== '') body.containers_count = Number(containersCount);
+  return call(store, '/v1/carriage/approve', body);
+}
+
+// /v1/carriage/set-postings —— 发运组成商品更改(全量覆盖)
+// 请求: { carriage_id, posting_numbers: string[] }
+// 注意:完全覆盖发运中的订单列表;被排除的货件可能进入下一次发运。暂不向独联体国家卖家开放。
+export function carriageSetPostings(store, carriageId, postingNumbers) {
+  const id = Number(carriageId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `carriage_id 必须为正整数,收到: ${carriageId}`);
+  }
+  const list = (Array.isArray(postingNumbers) ? postingNumbers : [])
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+  if (!list.length) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, 'posting_numbers 不能为空');
+  }
+  return call(store, '/v1/carriage/set-postings', { carriage_id: id, posting_numbers: list });
+}
+
+// /v1/carriage/cancel —— 发运删除
+// 请求: { carriage_id };响应: { error?, carriage_status }
+export function carriageCancel(store, carriageId) {
+  const id = Number(carriageId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `carriage_id 必须为正整数,收到: ${carriageId}`);
+  }
+  return call(store, '/v1/carriage/cancel', { carriage_id: id });
+}
+
+// /v1/carriage/courier-contact/set —— 添加/更新向快递员提供的卖家联系方式
+// 适用:first_mile_type = pickup 且 integration_type = ozon_outsourced 的发运(OGL 上门取件)
+// 请求: { carriage_id, phone(必填), wechat_nickname?, comment? }
+export function carriageCourierContactSet(store, { carriageId, phone, wechatNickname, comment }) {
+  const id = Number(carriageId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `carriage_id 必须为正整数,收到: ${carriageId}`);
+  }
+  const p = String(phone || '').trim();
+  if (!p) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, 'phone 必填(快递员联系方式)');
+  }
+  const body = { carriage_id: id, phone: p };
+  if (wechatNickname) body.wechat_nickname = String(wechatNickname);
+  if (comment) body.comment = String(comment);
+  return call(store, '/v1/carriage/courier-contact/set', body);
+}
+
+// /v1/carriage/courier-contact/get —— 获取向快递员提供的卖家联系方式
+// 请求: { carriage_id };响应: { contact: [{ carriage_id, phone, wechat_nickname, comment, updated_at }] }
+export function carriageCourierContactGet(store, carriageId) {
+  const id = Number(carriageId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `carriage_id 必须为正整数,收到: ${carriageId}`);
+  }
+  return call(store, '/v1/carriage/courier-contact/get', { carriage_id: id });
+}
+
+// /v1/assembly/carriage/posting/list —— 获取发运中的货件列表
+// 请求: { cursor?, filter: { carriage_id(必填), cutoff_from?, cutoff_to?, delivery_method_id? }, limit(必填) }
+// 响应: { cursor, postings: [{ posting_number, assembly_code, can_print_label, products[] }] }
+export function carriagePostingList(store, carriageId, { cursor = '', limit = 100 } = {}) {
+  const id = Number(carriageId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `carriage_id 必须为正整数,收到: ${carriageId}`);
+  }
+  const n = Number(limit);
+  if (!Number.isInteger(n) || n < 1 || n > 1000) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `limit 必须为 1~1000 的整数,收到: ${limit}`);
+  }
+  return call(store, '/v1/assembly/carriage/posting/list', {
+    cursor: cursor || '',
+    filter: { carriage_id: id },
+    limit: n,
+  });
+}
+
 /** 打印面单(新流程,2026-10-29):create → 轮询 get → 下载 PDF
  *  返回 { buffer, contentType },与旧接口 callRaw 形态一致,调用方无需改动。
  */

@@ -29,7 +29,24 @@ import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { upsertMiaoshouOrders, listMiaoshouPackages, countMiaoshouTabs, getMiaoshouPackageDetail } from '../db/dao/sqlite/miaoshou-dao.js';
 import { runOrderSyncNow, runSyncAllList, runAccrualSync, syncSinglePackage, isSyncing, getSyncProgress, clearSyncProgress } from '../services/order-sync.js';
 import { triggerPurchaseLogisticsSync, getPurchaseLogisticsStatus, syncPurchaseLogisticsForPackage } from '../services/purchase-logistics-poller.js';
-import { packageLabel, postingFbsGet, postingFbsGetByBarcode, postingFbsShip, productInfoList, productInfoListBySku, productStocks } from '../services/ozon-opi.js';
+import {
+  packageLabel,
+  postingFbsGet,
+  postingFbsGetByBarcode,
+  postingFbsShip,
+  productInfoList,
+  productInfoListBySku,
+  productStocks,
+  deliveryMethodList,
+  carriageCreate,
+  carriageGet,
+  carriageApprove,
+  carriageSetPostings,
+  carriageCancel,
+  carriageCourierContactSet,
+  carriageCourierContactGet,
+  carriagePostingList,
+} from '../services/ozon-opi.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { notifyPostingEvent } from '../services/webhook/feishu-notify.js';
 import { translateCancelReason } from '../services/cancel-reason-i18n.js';
@@ -1570,6 +1587,127 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     logger.warn({ err: msg, packageId: req.body?.packageId }, '[order-process] 备货失败');
     res.status(status).json({ ok: false, message: `Ozon 备货失败:${msg}` });
   }
+});
+
+// ── 货运创建(FBS 发运,2026-10-29)────────────────────────────
+// 备货完成后走"创建发运"流程:配送方式 → 创建发运 → 查看/调整货件 →
+// 设置快递员联系方式(OGL 上门取件) → 确认发运 → 打面单/货位标签。
+// 接口封装见 services/ozon-opi.js「FBS 货运创建(Carriage)API 封装」;
+// 流程文档见 docs/ozon-api/05-FBS订单与配送.md「FBS配送」。
+function requireCarriageStore(req) {
+  const storeId = req.body?.storeId;
+  const store = (config.loadStores() || []).find((s) => s.id === storeId);
+  if (!store || !store?.sync_credentials?.clientId) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `店铺 ${storeId} 未配置 sync_credentials,无法直连 Ozon`);
+  }
+  return store;
+}
+function carriageHandleError(e, req, res, action) {
+  const msg = e?.message || String(e);
+  const status = /必填|必须为|未配置|不能|不可|尚未/.test(msg) ? 400 : 502;
+  logger.warn({ err: msg, storeId: req.body?.storeId }, `[order-process] ${action}失败`);
+  res.status(status).json({ ok: false, message: `Ozon ${action}失败:${msg}` });
+}
+
+// 配送方式列表(创建发运前置:取 delivery_method_id)
+router.post('/admin/api/order-process/carriage/delivery-methods', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const r = await deliveryMethodList(store, { limit: req.body?.limit, filter: req.body?.filter });
+    res.json(ok(r));
+  } catch (e) { carriageHandleError(e, req, res, '获取配送方式'); }
+});
+
+// 创建发运:所有"已准备发运"货件自动进入
+router.post('/admin/api/order-process/carriage/create', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const r = await carriageCreate(store, {
+      deliveryMethodId: req.body?.deliveryMethodId,
+      departureDate: req.body?.departureDate,
+      allBlrTraceable: req.body?.allBlrTraceable,
+    });
+    logger.info({ storeId: store.id, carriageId: r?.carriage_id }, '[order-process] 创建发运成功');
+    res.json(ok(r));
+  } catch (e) { carriageHandleError(e, req, res, '创建发运'); }
+});
+
+// 发运信息
+router.post('/admin/api/order-process/carriage/get', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const r = await carriageGet(store, req.body?.carriageId);
+    res.json(ok(r));
+  } catch (e) { carriageHandleError(e, req, res, '获取发运'); }
+});
+
+// 发运中的货件列表
+router.post('/admin/api/order-process/carriage/posting-list', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const r = await carriagePostingList(store, req.body?.carriageId, {
+      cursor: req.body?.cursor,
+      limit: req.body?.limit,
+    });
+    res.json(ok(r));
+  } catch (e) { carriageHandleError(e, req, res, '获取发运货件'); }
+});
+
+// 确认发运
+router.post('/admin/api/order-process/carriage/approve', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const r = await carriageApprove(store, req.body?.carriageId, req.body?.containersCount);
+    logger.info({ storeId: store.id, carriageId: req.body?.carriageId }, '[order-process] 确认发运成功');
+    res.json(ok(r));
+  } catch (e) { carriageHandleError(e, req, res, '确认发运'); }
+});
+
+// 覆盖发运货件组成(全量)
+router.post('/admin/api/order-process/carriage/set-postings', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const r = await carriageSetPostings(store, req.body?.carriageId, req.body?.postingNumbers);
+    logger.info(
+      { storeId: store.id, carriageId: req.body?.carriageId, count: (req.body?.postingNumbers || []).length },
+      '[order-process] 设置发运货件成功'
+    );
+    res.json(ok(r));
+  } catch (e) { carriageHandleError(e, req, res, '设置发运货件'); }
+});
+
+// 取消发运
+router.post('/admin/api/order-process/carriage/cancel', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const r = await carriageCancel(store, req.body?.carriageId);
+    logger.info({ storeId: store.id, carriageId: req.body?.carriageId, status: r?.carriage_status }, '[order-process] 取消发运成功');
+    res.json(ok(r));
+  } catch (e) { carriageHandleError(e, req, res, '取消发运'); }
+});
+
+// 设置快递员联系方式(OGL 上门取件场景)
+router.post('/admin/api/order-process/carriage/courier-contact/set', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const r = await carriageCourierContactSet(store, {
+      carriageId: req.body?.carriageId,
+      phone: req.body?.phone,
+      wechatNickname: req.body?.wechatNickname,
+      comment: req.body?.comment,
+    });
+    logger.info({ storeId: store.id, carriageId: req.body?.carriageId }, '[order-process] 设置快递员联系方式成功');
+    res.json(ok(r));
+  } catch (e) { carriageHandleError(e, req, res, '设置联系方式'); }
+});
+
+// 获取快递员联系方式
+router.post('/admin/api/order-process/carriage/courier-contact/get', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const r = await carriageCourierContactGet(store, req.body?.carriageId);
+    res.json(ok(r));
+  } catch (e) { carriageHandleError(e, req, res, '获取联系方式'); }
 });
 
 router.post('/admin/api/order-process/rub-rate', (req, res, next) => {
