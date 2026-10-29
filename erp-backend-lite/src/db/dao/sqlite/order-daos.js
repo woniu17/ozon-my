@@ -1533,14 +1533,15 @@ function getPackageDetail(packageId) {
   return { package: pkg, items, purchaseLinks: links, traces: traces.slice(0, 50) };
 }
 
-/** 按 offer_id 匹配历史采购单(2026-10-28 未采购订单详情"最近采购参考")
- * 语义:同一 Ozon 商品(offer_id)在过去采购单中被采购过的记录,按采购时间倒序,最多 limit 条。
- * 匹配途径:op_purchase_link 行级关联(op_ozon_order_item.id)精确命中同 offer_id 的历史采购单。
+/** 按商品 SKU 匹配历史采购单(2026-10-28 未采购订单详情"最近采购参考";2026-10-29 由 offer_id 改为 SKU 精确匹配)
+ * 语义:同一 Ozon 商品(SKU)在过去采购单中被采购过的记录,按采购时间倒序,最多 limit 条。
+ * 匹配途径:op_purchase_link 行级关联(op_ozon_order_item.id)精确命中同 SKU 的历史采购单。
+ * 背景:同 SKU 可能因改款/变体存在多个 offer_id(如 qx/qx-w/qxw),仅按 offer_id 会漏掉同款历史单。
  */
-function getRecentPurchasesByOfferIds(offerIds, limit = 5) {
-  const offers = [...new Set((offerIds || []).map((v) => String(v || '').trim()).filter(Boolean))];
-  if (!offers.length) return [];
-  const ph = offers.map(() => '?').join(',');
+function getRecentPurchasesBySkus(skus, limit = 5) {
+  const list = [...new Set((skus || []).map((v) => String(v || '').trim()).filter(Boolean))];
+  if (!list.length) return [];
+  const ph = list.map(() => '?').join(',');
   const rows = db
     .prepare(
       `SELECT po.id, po.platform, po.purchase_sn, po.seller_name, po.buyer_account,
@@ -1551,12 +1552,12 @@ function getRecentPurchasesByOfferIds(offerIds, limit = 5) {
        FROM op_purchase_link pl
        JOIN op_purchase_order po ON po.id = pl.purchase_order_id
        JOIN op_ozon_order_item oi ON oi.id = pl.ozon_order_item_id
-       WHERE oi.offer_id IN (${ph})
+       WHERE oi.sku IN (${ph})
        GROUP BY po.id
        ORDER BY COALESCE(po.pay_at, po.gmt_create) DESC, po.id DESC
        LIMIT ?`
     )
-    .all(...offers, limit);
+    .all(...list, limit);
   return rows.map((r) => {
     let items = [];
     if (r.items_json) {
@@ -2785,7 +2786,7 @@ export const orderPackageDao = {
   findUncachedSkus,
   getPurchasesByPackageIds,
   getPackageDetail,
-  getRecentPurchasesByOfferIds,
+  getRecentPurchasesBySkus,
   submitPurchase,
   updatePurchaseAlloc,
   updatePurchaseLogistics,
