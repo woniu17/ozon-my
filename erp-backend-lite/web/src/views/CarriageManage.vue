@@ -206,7 +206,8 @@ async function loadCarriageDetail(row) {
 async function loadPostings(row) {
   detail.postingsLoading = true;
   try {
-    const data = await getCarriagePostings(storeId.value, Number(row.id), { limit: 1000 });
+    // Ozon 实测 limit 上限 100(超限报 invalid AssemblyCarriagePostingListRequest.Limit)
+    const data = await getCarriagePostings(storeId.value, Number(row.id), { limit: 100 });
     detail.postings = data?.postings || [];
   } catch (err) {
     show(`获取发运货件失败:${err.message || String(err)}`, 'error');
