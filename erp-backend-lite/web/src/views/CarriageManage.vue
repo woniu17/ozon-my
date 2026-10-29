@@ -318,6 +318,10 @@ onMounted(async () => {
     await storesStore.load();
     // 默认选第一个已配置 sync_credentials 的店铺
     storeId.value = usableStores.value[0]?.id || storesStore.list[0]?.id || '';
+    if (storeId.value) {
+      loadDeliveryMethods();
+      loadCarriages();
+    }
   } catch (err) {
     show(err.message || '店铺列表加载失败', 'error');
   }
