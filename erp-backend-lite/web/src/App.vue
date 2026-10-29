@@ -22,6 +22,7 @@ const navGroups = [
       { key: '/finance-stats', label: '财务统计' },
       { key: '/scan-ship', label: '扫描发货' },
       { key: '/scan-stock', label: '扫描备货' },
+      { key: '/carriage-manage', label: '货运创建/发运管理' },
       { key: '/print-container-label', label: '打印货运标签' },
     ],
   },
