@@ -12,19 +12,20 @@ const confirmStore = useConfirmStore();
 
 const cardRef = ref(null);
 let lastFocused = null;
+let openedAt = 0; // 弹窗打开时间戳,用于拦截刚打开时残留的回车连发(2026-10-29)
 
 watch(
   () => confirmStore.open,
   async (isOpen) => {
     if (isOpen) {
+      openedAt = Date.now();
       lastFocused = document.activeElement;
       await nextTick();
       const card = cardRef.value;
       if (card) {
-        const focusable = card.querySelector(
-          'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
-        );
-        (focusable || card).focus();
+        // 初始焦点落到卡片本身而非"取消"按钮:扫码枪/键盘回车连发时,
+        // 若焦点在按钮上,残留 Enter 会直接激活取消按钮导致弹窗一闪而过(2026-10-29)
+        card.focus();
       }
       document.addEventListener('keydown', onKeydown, true);
     } else {
@@ -40,6 +41,14 @@ function onKeydown(e) {
   if (e.key === 'Escape') {
     e.preventDefault();
     confirmStore.resolveCancel();
+    return;
+  }
+  if (e.key === 'Enter') {
+    // 回车 = 确认(键盘流习惯);但弹窗刚打开 300ms 内忽略,
+    // 防止重量框的回车连发在弹窗出现瞬间误触发(2026-10-29)
+    if (Date.now() - openedAt < 300) return;
+    e.preventDefault();
+    confirmStore.resolveConfirm();
     return;
   }
   if (e.key === 'Tab' && cardRef.value) {
