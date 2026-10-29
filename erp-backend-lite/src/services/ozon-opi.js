@@ -653,7 +653,12 @@ export function deliveryMethodList(store, { limit = 100, cursor = '', filter = {
 export function carriageCreate(store, { deliveryMethodId, departureDate, allBlrTraceable } = {}) {
   const body = {};
   if (deliveryMethodId != null && deliveryMethodId !== '') body.delivery_method_id = Number(deliveryMethodId);
-  if (departureDate) body.departure_date = String(departureDate);
+  if (departureDate) {
+    const s = String(departureDate);
+    // google.protobuf.Timestamp 需要完整时间;前端 date 输入只给 YYYY-MM-DD,
+    // 2026-10-29 实测报 400 invalid google.protobuf.Timestamp,补全为当天零点。
+    body.departure_date = /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00:00.000Z` : s;
+  }
   if (allBlrTraceable != null) body.all_blr_traceable = !!allBlrTraceable;
   return call(store, '/v1/carriage/create', body);
 }
