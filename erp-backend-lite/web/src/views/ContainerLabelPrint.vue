@@ -230,14 +230,15 @@ async function onPreview(c) {
 }
 
 // 前端双通道打印(同 ScanShip):本机组件优先,失败/离线时服务器组件兜底
-async function onPrint(c) {
+// copies 为打印份数(1 或 3),双通道均按份数循环出纸(2026-10-28)
+async function onPrint(c, copies = 1) {
   if (!c?.store_id) return;
   printingId.value = Number(c.id);
   try {
     const blob = await fetchContainerLabel(c.store_id, Number(c.id));
     if (!blob) return;
-    await printContainerLabelImage(blob, Number(c.id), selectedPrinter.value, c.store_id);
-    show(`已发送打印:货运标签 #${c.id}(${c.store_name})`, 'success');
+    await printContainerLabelImage(blob, Number(c.id), selectedPrinter.value, c.store_id, copies);
+    show(`已发送打印:货运标签 #${c.id}(${c.store_name}) × ${copies}`, 'success');
     // 更新本行打印状态(当前会话内即时反馈;服务器转发打印已落库,刷新后仍为已打印)
     c.printed = true;
   } catch (err) {
@@ -425,10 +426,18 @@ onMounted(async () => {
               <button
                 class="btn btn-primary btn-sm"
                 :disabled="printingId === Number(c.id) || (agentOnline !== true && serverOnline !== true)"
-                :title="(agentOnline !== true && serverOnline !== true) ? '打印组件未连接' : '前端双通道打印'"
-                @click="onPrint(c)"
+                :title="(agentOnline !== true && serverOnline !== true) ? '打印组件未连接' : '打印 1 张'"
+                @click="onPrint(c, 1)"
               >
-                {{ printingId === Number(c.id) ? '打印中…' : '打印' }}
+                {{ printingId === Number(c.id) ? '打印中…' : '打印1张' }}
+              </button>
+              <button
+                class="btn btn-primary btn-sm"
+                :disabled="printingId === Number(c.id) || (agentOnline !== true && serverOnline !== true)"
+                :title="(agentOnline !== true && serverOnline !== true) ? '打印组件未连接' : '打印 3 张'"
+                @click="onPrint(c, 3)"
+              >
+                {{ printingId === Number(c.id) ? '打印中…' : '打印3张' }}
               </button>
             </td>
           </tr>

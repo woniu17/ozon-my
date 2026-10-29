@@ -300,13 +300,14 @@ class ContainerLabelFragment : Fragment() {
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(8f) })
 
-        // 操作行:预览 + 打印
+        // 操作行:预览 + 打印1张 + 打印3张
         val actionRow = LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
         }
         actionRow.addView(newButton("预览", Color.parseColor("#165dff")) { previewLabel(row) })
-        actionRow.addView(newButton("打印", Color.parseColor("#00b42a")) { printLabel(row) })
+        actionRow.addView(newButton("打印1张", Color.parseColor("#00b42a")) { printLabel(row, 1) })
+        actionRow.addView(newButton("打印3张", Color.parseColor("#00b42a")) { printLabel(row, 3) })
         card.addView(actionRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -373,7 +374,8 @@ class ContainerLabelFragment : Fragment() {
     }
 
     // ── 预览/打印 ──
-    private fun printLabel(row: LabelRow) {
+    // copies 为打印份数(1 或 3),后端按份数循环出纸(2026-10-28)
+    private fun printLabel(row: LabelRow, copies: Int = 1) {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 Api.post(
@@ -381,12 +383,13 @@ class ContainerLabelFragment : Fragment() {
                     mapOf(
                         "storeId" to row.storeId,
                         "labelId" to row.id,
-                        "printer" to Session.labelPrinter
+                        "printer" to Session.labelPrinter,
+                        "copies" to copies
                     )
                 )
                 printedStates[row.id.toString()] = true
                 renderLabels()
-                toast("已发送打印任务 #${row.id}")
+                toast("已发送打印任务 #${row.id} × $copies")
             } catch (e: Exception) {
                 handleError(e)
             }

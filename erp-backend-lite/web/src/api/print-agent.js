@@ -360,12 +360,14 @@ function printViaLocal(dataUrl, hMm, documentId, printer, templateName = '') {
 // 不再传空字符串——菜鸟组件把空 printer 解析成系统默认打印机时,会间歇性打到 PDFwriter。
 // 打印:默认 70×129mm 纵向面单纸;opts.pageHm 覆盖画布高 mm,opts.rotation 旋转内容,
 // opts.templateName 选择 CNPL 模板(货运标签 76×130 竖向纸旋转适配,见 printContainerLabelImage)
+// opts.copies 为打印份数(1-10,默认 1):每页按份数循环出纸,documentID 加 -cN 区分副本(2026-10-28)
 export async function printLabelImage(blob, documentId, printer = '', widthMm = 70, opts = {}) {
   const pageHm = opts.pageHm || Math.round((widthMm * 129) / 70); // 默认 70:129 纵版
   const templateName = opts.templateName || '';
   const rotation = opts.rotation || 0;
   const storeId = opts.storeId || '';
   const overlayText = opts.storeName || ''; // 面单打印时叠加店铺名(如 YQL01)
+  const copies = Math.max(1, Math.min(10, Number(opts.copies) || 1));
   // 2026-10-27 支持多页:PDF 每页渲染一张 PNG,按页序逐页连续出纸(documentID 加 -pN 区分)
   const pages = await pdfToPngPages(blob, widthMm, pageHm, rotation, overlayText);
   const parsed = parsePrinter(printer);
@@ -373,13 +375,19 @@ export async function printLabelImage(blob, documentId, printer = '', widthMm = 
   const hMmOf = (p) => Math.round((widthMm * p.h) / p.w * 10) / 10;
 
   const sendViaServer = async (name) => {
-    for (let i = 0; i < pages.length; i++) {
-      await printViaServer(pages[i].dataUrl, hMmOf(pages[i]), docIds[i], name || serverDefaultPrinter, templateName, storeId);
+    for (let c = 0; c < copies; c++) {
+      for (let i = 0; i < pages.length; i++) {
+        const docId = copies > 1 ? `${docIds[i]}-c${c + 1}` : docIds[i];
+        await printViaServer(pages[i].dataUrl, hMmOf(pages[i]), docId, name || serverDefaultPrinter, templateName, storeId);
+      }
     }
   };
   const sendViaLocal = async (name) => {
-    for (let i = 0; i < pages.length; i++) {
-      await printViaLocal(pages[i].dataUrl, hMmOf(pages[i]), docIds[i], name, templateName);
+    for (let c = 0; c < copies; c++) {
+      for (let i = 0; i < pages.length; i++) {
+        const docId = copies > 1 ? `${docIds[i]}-c${c + 1}` : docIds[i];
+        await printViaLocal(pages[i].dataUrl, hMmOf(pages[i]), docId, name, templateName);
+      }
     }
   };
 
@@ -567,11 +575,13 @@ export function fetchContainerLabels(storeId, cursor = '', limit = 1000) {
 }
 
 // 服务端直打:后端拉 PDF → 渲染 PNG → 转发打印组件出纸(打印机为服务器组件上的打印机名)
-export function printContainerLabel(storeId, labelId, printer = '') {
+// copies 为打印份数(1-10,默认 1),后端按份数循环出纸(2026-10-28)
+export function printContainerLabel(storeId, labelId, printer = '', copies = 1) {
   return post('/admin/api/print-agent/print-container-label', {
     storeId,
     labelId,
     printer: printer || '',
+    copies,
   });
 }
 
@@ -596,12 +606,14 @@ export function markContainerLabelPrinted(storeId, labelId, printer = '') {
 // 渲染时顺时针旋转 90° 成 70x100 竖向,contain 到 76:129 画布(上下留白),模板用 76×130 竖向专用
 // storeId 可选:服务器转发打印时后端记录日志;本机直连打印成功后由本函数补记日志,
 // 保证「是否已打印」刷新后仍正确(2026-10-25:纸张由横版 100x70 调整为竖向 76x130)
-export async function printContainerLabelImage(blob, labelId, printer = '', storeId = '') {
+// copies 为打印份数(默认 1):按份数循环出纸(2026-10-28)
+export async function printContainerLabelImage(blob, labelId, printer = '', storeId = '', copies = 1) {
   await printLabelImage(blob, String(labelId), printer, 76, {
     pageHm: 129,
     rotation: 90,
     templateName: 'label-image-76x130.xml',
     storeId: storeId || '',
+    copies,
   });
   // 打印已出纸:无论本机直连还是服务器转发,都补记/确保日志存在,刷新后仍显示已打印
   if (storeId) {

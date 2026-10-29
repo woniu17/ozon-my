@@ -556,17 +556,20 @@ router.post('/admin/api/print-agent/container-label-pdf', async (req, res, next)
 });
 
 // 服务端直接打印货运标签:拉 PDF → 渲染 PNG → 转发打印组件出纸
-// body: { storeId, labelId, printer? }  printer 为服务器组件上的打印机名,空=组件默认
+// body: { storeId, labelId, printer?, copies? }  printer 为服务器组件上的打印机名,空=组件默认
+// copies 为打印份数(1-10,默认 1):每页按份数循环出纸,documentID 加 -cN 区分副本,避免组件合并去重
 router.post('/admin/api/print-agent/print-container-label', async (req, res, next) => {
   const startTs = Date.now();
   const b = req.body || {};
   const storeId = String(b.storeId || '');
   const labelId = Number(b.labelId);
   const printer = b.printer || '';
+  const copies = b.copies === undefined || b.copies === null || b.copies === '' ? 1 : Number(b.copies);
   const logMeta = { storeId, labelId: Number.isInteger(labelId) ? labelId : null };
   try {
     if (!storeId) return res.status(400).json({ ok: false, message: 'storeId 必填' });
     if (!Number.isInteger(labelId) || labelId <= 0) return res.status(400).json({ ok: false, message: '货运标签 ID 必须为正整数' });
+    if (!Number.isInteger(copies) || copies < 1 || copies > 10) return res.status(400).json({ ok: false, message: 'copies 必须为 1-10 的整数' });
     const store = (config.loadStores() || []).find((s) => s.id === storeId);
     if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
     const { buffer } = await containerLabel(store, labelId);
@@ -574,13 +577,18 @@ router.post('/admin/api/print-agent/print-container-label', async (req, res, nex
     // 渲染时顺时针旋转 90° 成 70x100 竖向,contain 到 76:129 画布(上下留白),
     // 模板用 76x130 竖向专用,避免横版压扁或留大片空白。
     // 2026-10-27 支持多页:PDF 有多页时每页渲染一张,按页序逐页连续出纸(documentID 加 -pN 区分)。
+    // 2026-10-28 支持份数:copies>1 时整单按份数循环出纸(documentID 加 -cN 区分副本)。
     const pages = await pdfToPngPagesDataUrl(buffer, 76, 129, 90);
     const templateBase = getTemplateBase(req);
-    for (let i = 0; i < pages.length; i++) {
-      const rendered = pages[i];
-      const hMm = Math.round((76 * rendered.h) / rendered.w * 10) / 10;
-      const documentId = pages.length > 1 ? `${labelId}-p${i + 1}` : String(labelId);
-      await sendPrint(rendered.dataUrl, hMm, documentId, printer, templateBase, 'label-image-76x130.xml');
+    for (let c = 0; c < copies; c++) {
+      for (let i = 0; i < pages.length; i++) {
+        const rendered = pages[i];
+        const hMm = Math.round((76 * rendered.h) / rendered.w * 10) / 10;
+        const pagePart = pages.length > 1 ? `-p${i + 1}` : '';
+        const copyPart = copies > 1 ? `-c${c + 1}` : '';
+        const documentId = `${labelId}${pagePart}${copyPart}`;
+        await sendPrint(rendered.dataUrl, hMm, documentId, printer, templateBase, 'label-image-76x130.xml');
+      }
     }
     const durationMs = Date.now() - startTs;
     logger.info({ storeId, labelId, printer: printer || 'default', durationMs }, '[print-agent] 货运标签打印成功');
