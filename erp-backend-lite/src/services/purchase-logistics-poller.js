@@ -17,6 +17,10 @@
 //   妙手同步的采购单轨迹仍由妙手侧更新;本轮询器同字段写入,双路并存最新覆盖。
 // 限速:请求间隔 2s,连续失败 3 次中止本轮(防触发反爬/雪崩);单轮每阶段上限 100 单。
 // 阶段B-TB(2026-09-22):淘宝拉轨迹(buyertrade transit_step.do,按订单号查,响应自带单号/公司)
+// 断点续跑(2026-10-29):轮次执行前把当前阶段写 app_config(purchase_logistics_resume),
+//   进程若在轮次中途被重启,重启后检测到断点立即从该阶段继续,不必整轮重扫;
+//   正常完成才清除断点。阶段内部按原 SQL 扫描,已完成订单会被条件自然过滤(单号已回填/
+//   last_trace_at 已推进),重复处理仅多耗少量 API,不影响正确性。
 import { db } from '../db/index.js';
 import config from '../config/index.js';
 import { getLogisticsForOrder, getTraceForOrder, hasAliOpenApiToken } from './platform-orders/adapters/ali1688-openapi.js';
@@ -33,6 +37,7 @@ const MAX_PER_ROUND = 1000;
 const MAX_AGE_DAYS = 90; // 超过 90 天的旧单不再尝试(多半已死单)
 
 let timer = null;
+let firstScanTimer = null;
 let running = false;
 
 // ── 手动触发与状态(前端"同步采购物流信息"按钮,2026-09-17) ──────
@@ -380,16 +385,24 @@ async function phaseFetchTaobaoTrace() {
 }
 
 async function runOnce() {
-  manualStatus.phase = 'fill-ali';
-  const a = await phaseFillLogistics();
-  manualStatus.phase = 'fill-pdd';
-  const ap = await phaseFillPddLogistics();
-  manualStatus.phase = 'trace-ali';
-  const b = await phaseFetchTrace();
-  manualStatus.phase = 'trace-pdd';
-  const c = await phaseFetchPddTrace();
-  manualStatus.phase = 'trace-tb';
-  const tb = await phaseFetchTaobaoTrace();
+  // 断点续跑(2026-10-29):读取上次未完成轮次记录,从该阶段继续执行后续阶段;
+  // 无断点时整轮执行。每个阶段开始前把断点写入 app_config,进程被重启后据此续跑。
+  const resume = readResume();
+  const from = resume && resume.phase;
+  if (from) logger.info({ from }, '[purchase-logistics-poller] 检测到未完成轮次,从断点阶段继续');
+  let reached = !from;
+  const run = async (key, fn) => {
+    if (key === from) reached = true;
+    if (!reached) return null;
+    manualStatus.phase = key;
+    writeResume(key);
+    return await fn();
+  };
+  const a = await run('fill-ali', phaseFillLogistics);
+  const ap = await run('fill-pdd', phaseFillPddLogistics);
+  const b = await run('trace-ali', phaseFetchTrace);
+  const c = await run('trace-pdd', phaseFetchPddTrace);
+  const tb = await run('trace-tb', phaseFetchTaobaoTrace);
   const result = { phaseA: a, phaseApdd: ap, phaseB: b, phaseC: c, phaseTb: tb };
   logger.info(result, '[purchase-logistics-poller] 本轮完成');
   return result;
@@ -400,6 +413,7 @@ async function runOnce() {
 /** 启动一轮(定时/手动共用 running 互斥);已在跑返回 false */
 function launchRound() {
   if (running) return false;
+  const wasResume = !!readResume(); // 启动前存在断点 = 本轮是续跑
   running = true;
   manualStatus.running = true;
   manualStatus.startedAt = new Date().toISOString();
@@ -415,10 +429,15 @@ function launchRound() {
       return `阶段A ${sum(r.phaseA, 'filled')} · PDD单号 ${sum(r.phaseApdd, 'filled')} · 轨迹 ${sum(r.phaseB, 'updated')} · PDD轨迹 ${sum(r.phaseC, 'updated')} · TB轨迹 ${sum(r.phaseTb, 'updated')}`;
     },
   })
-    .then((r) => { manualStatus.result = r; })
+    .then((r) => {
+      manualStatus.result = r;
+      // 轮次正常完成:清除断点,下次从整轮开始
+      clearResume();
+    })
     .catch((e) => {
       manualStatus.error = String(e.message || e);
       logger.error({ err: manualStatus.error }, '[purchase-logistics-poller] 轮询异常');
+      // 异常时保留断点,重启/下次触发时从断点续跑
     })
     .finally(() => {
       // 轮次真正结束(成功/失败/异常)后才推进 last_run_at(2026-10-28):
@@ -429,6 +448,8 @@ function launchRound() {
       manualStatus.phase = '';
       manualStatus.finishedAt = new Date().toISOString();
       running = false;
+      // 续跑完成后,基于新的 last_run_at 重新排定 12 小时定时器
+      if (wasResume) reschedulePoller();
     });
   return true;
 }
@@ -439,14 +460,52 @@ function triggerPurchaseLogisticsSync() {
   return { started, status: getPurchaseLogisticsStatus() };
 }
 
-/** 轮询进度查询 */
+/** 轮询进度查询(含断点信息,2026-10-29) */
 function getPurchaseLogisticsStatus() {
-  return { ...manualStatus, progress: { ...manualStatus.progress } };
+  const resume = readResume();
+  return { ...manualStatus, progress: { ...manualStatus.progress }, resume };
 }
 
 // ── 执行时间持久化(app_config,2026-09-17):记住上次执行时刻,
 //    服务重启后不足一个周期不重跑,只等剩余时间,避免 pm2 restart/部署即扫一轮──
 const STATE_KEY = 'purchase_logistics_last_run_at';
+
+// ── 断点续跑(app_config,2026-10-29):轮次被重启打断后记住进行到哪个阶段,
+//    重启后从断点继续,不必整轮重扫;正常完成才清除断点──
+const RESUME_KEY = 'purchase_logistics_resume';
+const PHASE_ORDER = ['fill-ali', 'fill-pdd', 'trace-ali', 'trace-pdd', 'trace-tb'];
+
+function readResume() {
+  try {
+    const row = db.prepare(`SELECT value FROM app_config WHERE key = ?`).get(RESUME_KEY);
+    if (!row) return null;
+    const obj = JSON.parse(row.value);
+    if (!obj || typeof obj.phase !== 'string' || !PHASE_ORDER.includes(obj.phase)) return null;
+    return obj;
+  } catch { return null; }
+}
+
+function writeResume(phase) {
+  try {
+    db.prepare(
+      `INSERT INTO app_config (key, value, scope, description, updated_at)
+       VALUES (?, ?, 'erp', '采购物流轮询器断点(轮次未完成时记录,重启后从断点续跑)', datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = datetime('now')`
+    ).run(RESUME_KEY, JSON.stringify({ phase, at: new Date().toISOString() }));
+  } catch (e) {
+    logger.warn({ err: e.message }, '[purchase-logistics-poller] 写断点失败(不影响本轮)');
+  }
+}
+
+function clearResume() {
+  try {
+    db.prepare(`DELETE FROM app_config WHERE key = ?`).run(RESUME_KEY);
+  } catch (e) {
+    logger.warn({ err: e.message }, '[purchase-logistics-poller] 清除断点失败');
+  }
+}
 
 function readLastRunAt() {
   try {
@@ -471,15 +530,42 @@ function writeLastRunAt(d) {
   }
 }
 
-function startPurchaseLogisticsPoller() {
-  if (timer) return;
+/** 基于当前 last_run_at 重新排定定时器(续跑完成后调用) */
+function reschedulePoller() {
+  if (timer) { clearInterval(timer); timer = null; }
+  if (firstScanTimer) { clearTimeout(firstScanTimer); firstScanTimer = null; }
   const last = readLastRunAt();
   const elapsed = last ? Date.now() - last.getTime() : Infinity;
   const firstDelay = elapsed >= POLL_INTERVAL_MS
     ? FIRST_SCAN_DELAY_MS
     : POLL_INTERVAL_MS - elapsed;
   timer = setInterval(() => { launchRound(); }, POLL_INTERVAL_MS);
-  setTimeout(() => { launchRound(); }, firstDelay);
+  firstScanTimer = setTimeout(() => { launchRound(); }, firstDelay);
+  logger.info(last
+    ? { lastRunAt: last.toISOString(), nextRunInMin: Math.round(firstDelay / 60000) }
+    : {},
+    `[purchase-logistics-poller] 定时器已重置(续跑完成;${last ? `距上次执行 ${Math.round(firstDelay / 60000)} 分钟后下一轮` : '无执行记录,30秒后首轮'})`);
+}
+
+function startPurchaseLogisticsPoller() {
+  if (timer) return;
+  timer = setInterval(() => { launchRound(); }, POLL_INTERVAL_MS);
+
+  // 断点续跑(2026-10-29):检测到上次轮次未完成时,30 秒后立即从断点阶段继续,
+  // 不必等待 12 小时周期;续跑完成会重置定时器
+  const resume = readResume();
+  if (resume) {
+    firstScanTimer = setTimeout(() => { launchRound(); }, FIRST_SCAN_DELAY_MS);
+    logger.info({ from: resume.phase, at: resume.at }, '[purchase-logistics-poller] 检测到未完成轮次,30秒后从断点续跑');
+    return;
+  }
+
+  const last = readLastRunAt();
+  const elapsed = last ? Date.now() - last.getTime() : Infinity;
+  const firstDelay = elapsed >= POLL_INTERVAL_MS
+    ? FIRST_SCAN_DELAY_MS
+    : POLL_INTERVAL_MS - elapsed;
+  firstScanTimer = setTimeout(() => { launchRound(); }, firstDelay);
   logger.info(last
     ? { lastRunAt: last.toISOString(), nextRunInMin: Math.round(firstDelay / 60000) }
     : {},
@@ -488,6 +574,7 @@ function startPurchaseLogisticsPoller() {
 
 function stopPurchaseLogisticsPoller() {
   if (timer) { clearInterval(timer); timer = null; }
+  if (firstScanTimer) { clearTimeout(firstScanTimer); firstScanTimer = null; }
 }
 
 // ── 单包裹同步采购物流(列表行"同步采购物流"按钮,2026-09-17)──────────
