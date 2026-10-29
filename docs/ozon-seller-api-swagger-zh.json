@@ -332,6 +332,16 @@
       "name": "service_response",
       "x-displayName": "您服务器的回复",
       "description": "## 如果成功收到通知\n\n如果通知被成功处理，服务器应该会发回一个HTTP 200代码的回答:\n\n```json5\n{\n  \"result\": true\n}\n```\n\n| <div style=\"width:100px\">参数</div> | 类型    | 形式    | 描述               |\n|-----------------------------------------|---------|--------|-----------------------|\n| `result`                                | boolean | —      | 通知收到。 |\n\n\n## 如果发生错误\n\n如果在通知处理过程中发生错误，服务器应该会发回一个HTTP 4xx组或5xx组代码的回答:\n\n```json5\n{\n  \"error\": {\n    \"code\": \"ERROR_UNKNOWN\",\n    \"message\": \"ошибка\",\n    \"details\": null\n  }\n}\n```\n\n| <div style=\"width:100px\">参数</div> | 类型 | 形式 | 描述                                                                                                                                                                                                 |\n|-----------------------------------------|--------------|--------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|\n| `error`                                 | object       | —      | 关于错误的信息。                                                                                                                                                                                     |\n| `code`                                  | string       | —      | 错误码:<br>• `ERROR_UNKNOWN` — 不明错误。<br>• `ERROR_PARAMETER_VALUE_MISSED` — 没有指定一个或多个参数的值。<br>• `ERROR_REQUEST_DUPLICATED` — 重复请求。 |\n| `message`                               | string       | —      | 详细的错误描述。                                                                                                                                                                                |\n| `details`                               | string       | —      | 更多信息。                                                                                                                                                                                |"
+    },
+    {
+      "name": "Limits",
+      "x-displayName": "限额",
+      "description": "请求数量限额可防止服务过载，确保服务为所有用户稳定运行。如果超出限额，将返回错误`429 Too Many Requests`。\n\n为便于监控限额，响应中会返回标头，其中包含该方法限额的当前状态信息：\n\n- `Ratelimit-Remaining`——在出现`429 Too Many Requests`错误之前还可以发出的请求数量。\n- `Retry-After`——需等待多少秒才能再次发出请求。<br>收到`429 Too Many Requests`错误时返回。\n\n部分方法有单独的请求数量限额——具体见方法描述。\n如果方法描述中未注明限额，您使用同一Client ID每秒最多可发出50个请求。\n"
+    },
+    {
+      "name": "push_monitoring",
+      "x-displayName": "通知可用性监控",
+      "description": "我们会监控用于接收推送通知的URL地址的可用性。如果服务响应时间过长或停止响应，我们将暂停发送通知。\n\n### 可用性检查\n\n每晚，我们会针对每种已开通的通知类型分析您的URL地址的响应时间。\n\n我们会根据检查结果，在个人中心和Seller API方法中显示URL地址的可用性状态：\n- 可用——响应迅速。响应时间不超过1500毫秒。\n- 不稳定——响应时间比平时长。响应时间为1500-2500毫秒。\n- 不可用——无响应、响应时间过长，或返回HTTP状态码为4xx或5xx类的响应。\n- 验证中——最近有过更改或重新开通。状态将在下一次检查后发生变化。\n\n### 通知自动关闭\n\n如果URL地址的状态连续三天保持“不可用”，我们将关闭向该地址发送推送通知。我们会继续向您的其他URL地址发送通知。\n\n### 问题通知\n\n当您的URL地址状态变为“不稳定”或“不可用”时，我们会向个人中心的Seller API聊天和Seller API通知聊天发送消息。<br>\n[关于在Ozon for dev开发者平台设置Seller API聊天的更多信息](https://dev.ozon.ru/start/488-Novye-chaty-dlia-polucheniia-informatsii-po-Seller-API/)\n\n我们会在消息中注明：\n- 出现问题的URL地址；\n- 通知类型；\n- 修复建议。\n\n### 通知的监控与优化\n\n1. 请在个人中心或Seller API方法中关注状态。\n   请进入[**设置 → 集成 → 推送通知**](https://seller.ozon.ru/app/settings/notifications-api)部分，或使用[/v1/notification/list](https://docs.ozon.ru/api/seller/en/#operation/NotificationList)方法。\n   在表格中，我们会在每个URL地址旁显示可用性状态。\n2. 请检查您的服务设置。\n   请确保该服务：\n   - 能稳定处理来自Ozon的传入请求；\n   - 能在1500毫秒内响应；\n   - 不返回HTTP状态码为4xx或5xx类的响应；\n   - 没有性能问题。\n3. 请提高服务的处理能力。\n   如果您的服务无法承受传入通知的数量，请考虑扩容或优化请求处理。\n4. 请检查日志。\n   请查看发送记录，以确定哪些类型的通知引发了问题。\n5. 请测试推送通知的接收。\n   请确保您的URL地址能正确接收和处理测试请求。\n\n所有问题解决后，请重新开通通知。<br>\n[关于重新开通的更多信息](#section/重新开通)\n"
     }
   ],
   "paths": {
@@ -1639,7 +1649,8 @@
         },
         "tags": [
           "ProductAPI"
-        ]
+        ],
+        "deprecated": true
       }
     },
     "/v3/product/list": {
@@ -2088,280 +2099,6 @@
                       "volume_weight": 1.5
                     }
                   ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "参数有误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "拒绝访问",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "回答未找到",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "请求冲突",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "内部服务器错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "ProductAPI"
-        ]
-      }
-    },
-    "/v3/products/info/attributes": {
-      "post": {
-        "summary": "获取商品特征描述",
-        "description": "<aside class=\"warning\">\n  该方法已过时。请切换到新版本 <a href=\"#operation/ProductAPI_GetProductAttributesV4\">/v4/product/info/attributes</a>。\n</aside>\n\n按其识别码退回商品特征的描述。该商品可以通过`offer_id`或`product_id` 搜索。\n",
-        "operationId": "ProductAPI_GetProductAttributesV3",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Client-Id"
-          },
-          {
-            "$ref": "#/components/parameters/Api-Key"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/productv3GetProductAttributesV3Request"
-              },
-              "example": {
-                "filter": {
-                  "product_id": [
-                    "213761435"
-                  ],
-                  "visibility": "ALL"
-                },
-                "limit": 100,
-                "last_id": "okVsfA==«",
-                "sort_dir": "ASC"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "商品特征描述",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/productv3GetProductAttributesV3Response"
-                },
-                "example": {
-                  "result": [
-                    {
-                      "id": 213761435,
-                      "barcode": "",
-                      "category_id": 17038062,
-                      "name": "Пленка защитная для Xiaomi Redmi Note 10 Pro 5G",
-                      "offer_id": "21470",
-                      "height": 10,
-                      "depth": 210,
-                      "width": 140,
-                      "dimension_unit": "mm",
-                      "weight": 50,
-                      "weight_unit": "g",
-                      "images": [
-                        {
-                          "file_name": "https://cdn1.ozone.ru/s3/multimedia-f/6190456071.jpg",
-                          "default": true,
-                          "index": 0
-                        },
-                        {
-                          "file_name": "https://cdn1.ozone.ru/s3/multimedia-7/6190456099.jpg",
-                          "default": false,
-                          "index": 1
-                        },
-                        {
-                          "file_name": "https://cdn1.ozone.ru/s3/multimedia-9/6190456065.jpg",
-                          "default": false,
-                          "index": 2
-                        }
-                      ],
-                      "images360": [],
-                      "pdf_list": [],
-                      "attributes": [
-                        {
-                          "attribute_id": 5219,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 970718176,
-                              "value": "универсальный"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 11051,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 970736931,
-                              "value": "Прозрачный"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 10100,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 0,
-                              "value": "false"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 11794,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 970860783,
-                              "value": "safe"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 9048,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 0,
-                              "value": "Пленка защитная для Xiaomi Redmi Note 10 Pro 5G"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 5076,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 39638,
-                              "value": "Xiaomi"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 9024,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 0,
-                              "value": "21470"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 10015,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 0,
-                              "value": "false"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 85,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 971034861,
-                              "value": "Brand"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 9461,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 349824787,
-                              "value": "Защитная пленка для смартфона"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 4180,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 0,
-                              "value": "Пленка защитная для Xiaomi Redmi Note 10 Pro 5G"
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 4191,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 0,
-                              "value": "Пленка предназначена для модели Xiaomi Redmi Note 10 Pro 5G. Защитная гидрогелевая пленка обеспечит защиту вашего смартфона от царапин, пыли, сколов и потертостей."
-                            }
-                          ]
-                        },
-                        {
-                          "attribute_id": 8229,
-                          "complex_id": 0,
-                          "values": [
-                            {
-                              "dictionary_value_id": 91521,
-                              "value": "Защитная пленка"
-                            }
-                          ]
-                        }
-                      ],
-                      "complex_attributes": [],
-                      "color_image": "",
-                      "last_id": ""
-                    }
-                  ],
-                  "total": 1,
-                  "last_id": "onVsfA=="
                 }
               }
             }
@@ -4870,7 +4607,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/v1/actions/products": {
@@ -4940,7 +4678,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/v1/actions/products/activate": {
@@ -5000,7 +4739,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/v1/actions/products/deactivate": {
@@ -5056,7 +4796,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/v1/actions/discounts-task/list": {
@@ -12460,456 +12201,6 @@
         }
       }
     },
-    "/v2/returns/rfbs/reject": {
-      "post": {
-        "tags": [
-          "RFBSReturnsAPI"
-        ],
-        "summary": "拒绝退货申请",
-        "description": "<aside class=\"warning\">\n将来该方式将被关闭。请转至 <a href=\"#operation/ReturnsAPI_ReturnsRfbsActionSet\">/v1/returns/rfbs/action/set</a>。\n</aside>\n\n该方法允许拒绝rFBS订单的退货申请。您可以在 `comment` 参数中解释您的决定。\n",
-        "operationId": "RFBSReturnsAPI_ReturnsRfbsRejectV2",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Client-Id"
-          },
-          {
-            "$ref": "#/components/parameters/Api-Key"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/v2ReturnsRfbsRejectRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "申请已被拒绝",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/v1Empty"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "参数无效",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "访问被拒绝",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "无响应",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "请求冲突",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "服务器内部错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v2/returns/rfbs/compensate": {
-      "post": {
-        "tags": [
-          "RFBSReturnsAPI"
-        ],
-        "summary": "退还部分商品金额",
-        "description": "\n<aside class=\"warning\">\n将来该方式将被关闭。请转至 <a href=\"#operation/ReturnsAPI_ReturnsRfbsActionSet\">/v1/returns/rfbs/action/set</a>。\n</aside>\n\n用于部分赔偿商品金额的方法：您退还部分款项给买家，商品则留在买家手中。\n",
-        "operationId": "RFBSReturnsAPI_ReturnsRfbsCompensateV2",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Client-Id"
-          },
-          {
-            "$ref": "#/components/parameters/Api-Key"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/v2ReturnsRfbsCompensateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "部分赔偿已确认",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/v1Empty"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "参数无效",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "访问被拒绝",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "无响应",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "请求冲突",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "服务器内部错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v2/returns/rfbs/verify": {
-      "post": {
-        "tags": [
-          "RFBSReturnsAPI"
-        ],
-        "summary": "批准退货申请",
-        "description": "<aside class=\"warning\">\n将来该方式将被关闭。请转至 <a href=\"#operation/ReturnsAPI_ReturnsRfbsActionSet\">/v1/returns/rfbs/action/set</a>。\n</aside>\n\n该方法允许批准申请并同意接收商品进行检查。\n\n请使用[/v2/returns/rfbs/receive-return](#operation/RFBSReturnsAPI_ReturnsRfbsReceiveReturnV2)方法确认收到商品。\n",
-        "operationId": "RFBSReturnsAPI_ReturnsRfbsVerifyV2",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Client-Id"
-          },
-          {
-            "$ref": "#/components/parameters/Api-Key"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/v2ReturnsRfbsVerifyRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "申请已被批准",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/v1Empty"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "参数无效",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "访问被拒绝",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "无响应",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "请求冲突",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "服务器内部错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v2/returns/rfbs/receive-return": {
-      "post": {
-        "tags": [
-          "RFBSReturnsAPI"
-        ],
-        "summary": "确认收到待检查商品",
-        "description": "<aside class=\"warning\">\n  将来该方式将被关闭。请转至 <a href=\"#operation/ReturnsAPI_ReturnsRfbsActionSet\">/v1/returns/rfbs/action/set</a>。\n</aside>\n",
-        "operationId": "RFBSReturnsAPI_ReturnsRfbsReceiveReturnV2",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Client-Id"
-          },
-          {
-            "$ref": "#/components/parameters/Api-Key"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/v2ReturnsRfbsReceiveReturnRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "收货已确认",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/v1Empty"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "参数无效",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "访问被拒绝",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "无响应",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "请求冲突",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "服务器内部错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v2/returns/rfbs/return-money": {
-      "post": {
-        "tags": [
-          "RFBSReturnsAPI"
-        ],
-        "summary": "向买家退款",
-        "description": "<aside class=\"warning\">\n将来该方式将被关闭。请转至 <a href=\"#operation/ReturnsAPI_ReturnsRfbsActionSet\">/v1/returns/rfbs/action/set</a>。\n</aside>\n\n该方法确认退还商品的全额。\n如果您同意以下条件，请使用此方法：\n- 立即退还商品金额并将其留给买家；\n- 在收到并检查商品后退还金额。\n\n如果商品有瑕疵或质量问题，请在赔偿栏中填写运费金额，然后点击发送。\n",
-        "operationId": "RFBSReturnsAPI_ReturnsRfbsReturnMoneyV2",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Client-Id"
-          },
-          {
-            "$ref": "#/components/parameters/Api-Key"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/v2ReturnsRfbsReturnMoneyRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "退款已确认",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/v1Empty"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "参数无效",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "访问被拒绝",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "无响应",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "请求冲突",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "服务器内部错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/rpcStatus"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/returns/rfbs/action/set": {
       "post": {
         "description": "用于传递  rFBS 退货操作的方法。",
@@ -15837,63 +15128,6 @@
         }
       }
     },
-    "/v1/question/top_sku": {
-      "post": {
-        "tags": [
-          "Questions&Answers"
-        ],
-        "summary": "提问数量最多的商品",
-        "description": "仅对已订阅 [Premium Plus](https://seller-edu.ozon.ru/seller-rating/about-rating/subscription-premium-plus) 的卖家开放。\n\n您可以在开发者社区 Ozon for dev 的讨论[评论区](https://dev.ozon.ru/community/1198-Metody-dlia-raboty-s-voprosami-otvetami)中，对该方法留下反馈。\n",
-        "operationId": "Question_TopSku",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Client-Id"
-          },
-          {
-            "$ref": "#/components/parameters/Api-Key"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/v1QuestionTopSkuRequest"
-              },
-              "example": {
-                "limit": "100"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "商品标识符",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/v1QuestionTopSkuResponse"
-                },
-                "example": {
-                  "sku": [
-                    56371271
-                  ]
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/v1QuestionAnswerCreateDefault"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v2/actions/discounts-task/list": {
       "post": {
         "summary": "获取折扣申请列表",
@@ -18577,7 +17811,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/v1/actions/auto-add/products/candidates": {
@@ -18693,7 +17928,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/v1/actions/auto-add/products/delete": {
@@ -18795,7 +18031,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/v1/actions/auto-add/products/update": {
@@ -18911,7 +18148,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/v1/fbp/order/drop-off/cancel": {
@@ -21802,6 +21040,1975 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/product/pictures/import": {
+      "post": {
+        "summary": "上传或更新商品图片",
+        "description": "每次调用该方法时，请传递商品卡片上应显示的所有图片。\n例如，如果您调用该方法上传了10张图片，然后第二次调用该方法又上传了1张，\n那么之前的10张图片都会被删除。\n\n上传时，请传递图片在公开可访问的云存储中的链接地址。\n链接指向的图片格式为JPG或PNG。\n\n请按照希望在网站上显示的顺序排列`items.images`数组中的图片。\n主图为\n数组中的第一张图片。\n\n您可以为每件商品上传最多30张图片。\n\n要上传营销颜色，请使用`items.color_image`字段。\n\n[有关照片要求的详细信息，请参阅卖家知识库](https://global-help.ozon.com/zh/products/requirements/media/image-requirements)\n\n如果您想更改图片的构成或顺序，请通过以下方法获取信息：\n[/v3/product/info/list](#operation/ProductAPI_GetProductInfoList)——其中显示图片当前的顺序和\n构成。\n复制`items.images`和`items.color_image`字段中的数据，根据需要修改和补充图片构成或\n顺序。\n\n该方法对每分钟和每天的商品操作次数设有限额。\n如果您超出限额，将返回`429`错误，错误描述位于`message`字段中，并附带以下响应头：\n- `Item-Retry-After`——限额更新前的剩余时间（分钟）。\n对于每日限额，表示距离莫斯科时间03:00还剩多少时间。\n- `Item-Rate-Limit-Remaining`——距离下次限额重置前的剩余操作次数。\n\n要查询限额，请使用方法[/v4/product/info/limit](#operation/ProductAPI_GetUploadQuota)。\n",
+        "operationId": "ProductImportPicturesV2",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/product.v2.ProductImportPicturesV2Request"
+              },
+              "example": {
+                "items": [
+                  {
+                    "offer_id": "PROD-2023-001",
+                    "primary_image": "https://example.com/cloud-storage/images/main-image-front.jpg",
+                    "color_image": "",
+                    "images": []
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "图片已上传或更新",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/product.v2.ProductInfoPicturesV2Response"
+                },
+                "example": {
+                  "task_id": 0
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "访问被拒绝",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "请求冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProductAPI"
+        ]
+      }
+    },
+    "/v1/barcode/delete": {
+      "post": {
+        "description": "如果仓库中仍有带该条形码的商品库存，或库存售出后未满6个月，则无法解除该条形码的绑定。\n",
+        "tags": [
+          "BarcodeAPI"
+        ],
+        "summary": "将条形码与商品解除绑定",
+        "operationId": "BarcodeDelete",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/barcode.v1.BarcodeDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "条形码已与商品解除绑定",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/barcode.v1.BarcodeDeleteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数有误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答复",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "请求冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部服务器出错",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/actions/candidates": {
+      "post": {
+        "description": "<aside class=\"warning\">\n在2026年10月13日之前，该方法的工作方式与<a href=\"#operation/PromosCandidates\">/v1/actions/candidates</a>类似。\n</aside>\n",
+        "tags": [
+          "Promos"
+        ],
+        "summary": "可用的促销商品清单",
+        "operationId": "ActionsCandidates",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/actions.v2.ActionsCandidatesRequest"
+              },
+              "example": {
+                "action_id": 258568,
+                "last_id": "80698",
+                "limit": 100
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "商品清单",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/actions.v2.ActionsCandidatesResponse"
+                },
+                "example": {
+                  "products": [
+                    {
+                      "id": 8888888,
+                      "price": {
+                        "amount": "1827",
+                        "currency": "RUB"
+                      },
+                      "action_price": {
+                        "amount": "1800",
+                        "currency": "RUB"
+                      },
+                      "max_action_price": {
+                        "amount": "62",
+                        "currency": "RUB"
+                      },
+                      "min_stock": 1,
+                      "recommended_stock": 2,
+                      "marketplace_seller_price": {
+                        "amount": "70",
+                        "currency": "RUB"
+                      },
+                      "alert_max_action_price_failed": false,
+                      "alert_max_action_price": {
+                        "amount": "30",
+                        "currency": "RUB"
+                      },
+                      "current_boost": 15,
+                      "price_min_elastic": {
+                        "amount": "62",
+                        "currency": "RUB"
+                      },
+                      "price_max_elastic": {
+                        "amount": "53",
+                        "currency": "RUB"
+                      },
+                      "min_boost": 15,
+                      "max_boost": 55,
+                      "website_prices": {
+                        "price": {
+                          "amount": "54",
+                          "currency": "RUB"
+                        },
+                        "prices_by_schema": {}
+                      },
+                      "min_seller_price": {
+                        "amount": "1",
+                        "currency": "RUB"
+                      },
+                      "is_quarantined": false
+                    }
+                  ],
+                  "total": 219176,
+                  "last_id": "81881"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数不正确",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答案",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "查询冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/actions/products": {
+      "post": {
+        "description": "<aside class=\"warning\">\n在2026年10月13日之前，该方法的工作方式与<a href=\"#operation/PromosProducts\">/v1/actions/products</a>类似。\n</aside>\n",
+        "tags": [
+          "Promos"
+        ],
+        "summary": "获取参与活动的商品列表",
+        "operationId": "ActionsProducts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/actions.v2.ActionsProductsRequest"
+              },
+              "example": {
+                "action_id": 213139,
+                "last_id": "3262247282",
+                "limit": 100
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "商品清单",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/actions.v2.ActionsProductsResponse"
+                },
+                "example": {
+                  "products": [
+                    {
+                      "id": 99999,
+                      "price": {
+                        "amount": "4000",
+                        "currency": "RUB"
+                      },
+                      "action_price": {
+                        "amount": "4000",
+                        "currency": "RUB"
+                      },
+                      "max_action_price": {
+                        "amount": "3560",
+                        "currency": "RUB"
+                      },
+                      "add_mode": "SELLER",
+                      "stock": 2,
+                      "min_stock": 1,
+                      "recommended_stock": 10,
+                      "marketplace_seller_price": {
+                        "amount": "500",
+                        "currency": "RUB"
+                      },
+                      "alert_max_action_price_failed": false,
+                      "alert_max_action_price": {
+                        "amount": "4000",
+                        "currency": "RUB"
+                      },
+                      "current_boost": 12,
+                      "price_min_elastic": {
+                        "amount": "3560",
+                        "currency": "RUB"
+                      },
+                      "price_max_elastic": {
+                        "amount": "3560",
+                        "currency": "RUB"
+                      },
+                      "min_boost": 1,
+                      "max_boost": 12,
+                      "website_prices": {
+                        "price": {
+                          "amount": "382",
+                          "currency": "RUB"
+                        },
+                        "prices_by_schema": {}
+                      },
+                      "min_seller_price": {
+                        "amount": "4000",
+                        "currency": "RUB"
+                      },
+                      "is_quarantined": true
+                    }
+                  ],
+                  "total": 44,
+                  "last_id": "28743"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数不正确",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答案",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "查询冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/actions/products/update": {
+      "post": {
+        "description": "<aside class=\"warning\">\n在2026年10月13日之前，该方法的工作方式与<a href=\"#operation/PromosProductsActivate\">/v1/actions/products/activate</a>类似，无法通过该方法更改商品卡片上的价格。\n</aside>\n",
+        "tags": [
+          "Promos"
+        ],
+        "summary": "将商品加入促销活动或更新商品",
+        "operationId": "ActionsProductsUpdate",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/actions.v1.ActionsProductsUpdateRequest"
+              },
+              "example": {
+                "action_id": 258568,
+                "products": [
+                  {
+                    "action_price": {
+                      "amount": "88",
+                      "currency": "RUB"
+                    },
+                    "product_id": 88888,
+                    "stock": "8"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "商品已加入或已更新",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/actions.v1.ActionsProductsUpdateResponse"
+                },
+                "example": {
+                  "active_product_ids": [
+                    88888
+                  ],
+                  "deactivated_product_ids": [],
+                  "rejected": [],
+                  "warnings": []
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数不正确",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答案",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "查询冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/actions/products/deactivate": {
+      "post": {
+        "description": "如需将商品从“弹性提升”或“最大提升”促销活动中移除，请使用[/v1/actions/products/update](#operation/ActionsProductsUpdate)方法，并将商品的`action_price`价格改为小于或等于促销活动限额的值。\n\n<aside class=\"warning\">\n在2026年10月13日之前，该方法的工作方式与<a href=\"#operation/PromosProductsDeactivate\">/v1/actions/products/deactivate</a>类似。\n</aside>\n",
+        "tags": [
+          "Promos"
+        ],
+        "summary": "从活动中删除商品",
+        "operationId": "ActionsProductsDeactivate",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/actions.v2.ActionsProductsDeactivateRequest"
+              },
+              "example": {
+                "action_id": 213139,
+                "product_ids": [
+                  999999
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "从活动中删除的商品",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/actions.v2.ActionsProductsDeactivateResponse"
+                },
+                "example": {
+                  "product_ids": [
+                    999999
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数不正确",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答案",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "查询冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/actions/auto-add/products/list": {
+      "post": {
+        "description": "<aside class=\"warning\">\n在2026年10月13日之前，该方法的工作方式与<a href=\"#operation/ActionsAutoAddProductsList\">/v1/actions/auto-add/products/list</a>类似。\n</aside>\n",
+        "tags": [
+          "Promos"
+        ],
+        "summary": "获取促销活动自动添加列表中的商品列表",
+        "operationId": "ActionsAutoAddProductsListV2",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsListRequest"
+              },
+              "example": {
+                "action_id": 0,
+                "auto_add_date": "2025-01-01T00:00:00Z",
+                "offset": 0,
+                "limit": 0
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "启用自动添加的商品列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsListResponse"
+                },
+                "example": {
+                  "products": [
+                    {
+                      "action_price_to_auto_add": {
+                        "amount": "1800",
+                        "currency": "RUB"
+                      },
+                      "add_mode": true,
+                      "base_price": {
+                        "amount": "1827",
+                        "currency": "RUB"
+                      },
+                      "currency": "RUB",
+                      "has_expired_min_seller_price": true,
+                      "marketplace_seller_price": {
+                        "amount": "70",
+                        "currency": "RUB"
+                      },
+                      "max_discount_price": {
+                        "amount": "62",
+                        "currency": "RUB"
+                      },
+                      "min_action_quantity": 1,
+                      "min_seller_price": {
+                        "amount": "1",
+                        "currency": "RUB"
+                      },
+                      "name": "Ароматизатор / Масло для бани / Эфирное масло \"Пихта\", 250 мл",
+                      "offer_id": "SR0000",
+                      "price": {
+                        "amount": "1827",
+                        "currency": "RUB"
+                      },
+                      "product_id": 8888888,
+                      "quantity_to_auto_add": 2,
+                      "sku": 8888888,
+                      "website_prices": {
+                        "price": {
+                          "amount": "54",
+                          "currency": "RUB"
+                        },
+                        "prices_by_schema": {
+                          "additionalProp1": {
+                            "black_price": {
+                              "amount": "111",
+                              "currency": "RUB"
+                            },
+                            "green_price": {
+                              "amount": "222",
+                              "currency": "RUB"
+                            }
+                          },
+                          "additionalProp2": {
+                            "black_price": {
+                              "amount": "333",
+                              "currency": "RUB"
+                            },
+                            "green_price": {
+                              "amount": "444",
+                              "currency": "RUB"
+                            }
+                          },
+                          "additionalProp3": {
+                            "black_price": {
+                              "amount": "555",
+                              "currency": "RUB"
+                            },
+                            "green_price": {
+                              "amount": "666",
+                              "currency": "RUB"
+                            }
+                          }
+                        }
+                      },
+                      "will_be_quarantined": false
+                    }
+                  ],
+                  "total": 219176
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数不正确",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答案",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "查询冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/actions/auto-add/products/candidates": {
+      "post": {
+        "description": "<aside class=\"warning\">\n在2026年10月13日之前，该方法的工作方式与<a href=\"#operation/ActionsAutoAddProductsCandidates\">/v1/actions/auto-add/products/candidates</a>类似。\n</aside>\n",
+        "tags": [
+          "Promos"
+        ],
+        "summary": "获取可自动添加到促销活动中的商品列表",
+        "operationId": "ActionsAutoAddProductsCandidatesV2",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsCandidatesRequest"
+              },
+              "example": {
+                "action_id": 250204,
+                "auto_add_date": "2025-01-01T00:00:00Z",
+                "offset": 5,
+                "limit": 100
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "可自动添加到促销活动中的商品列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsCandidatesResponse"
+                },
+                "example": {
+                  "products": [
+                    {
+                      "action_price_to_auto_add": {
+                        "amount": "1800",
+                        "currency": "RUB"
+                      },
+                      "base_price": {
+                        "amount": "1827",
+                        "currency": "RUB"
+                      },
+                      "currency": "RUB",
+                      "has_expired_min_seller_price": true,
+                      "id": 8888888,
+                      "is_manually_added": true,
+                      "marketplace_seller_price": {
+                        "amount": "70",
+                        "currency": "RUB"
+                      },
+                      "max_discount_price": {
+                        "amount": "62",
+                        "currency": "RUB"
+                      },
+                      "min_action_quantity": 1,
+                      "min_seller_price": {
+                        "amount": "1",
+                        "currency": "RUB"
+                      },
+                      "name": "Ароматизатор / Масло для бани / Эфирное масло \"Пихта\", 250 мл",
+                      "offer_id": "PS0000",
+                      "price": {
+                        "amount": "1827",
+                        "currency": "RUB"
+                      },
+                      "quantity_to_auto_add": 2,
+                      "sku": 8888888,
+                      "website_prices": {
+                        "price": {
+                          "amount": "54",
+                          "currency": "RUB"
+                        },
+                        "prices_by_schema": {
+                          "additionalProp1": {
+                            "black_price": {
+                              "amount": "1400",
+                              "currency": "RUB"
+                            },
+                            "green_price": {
+                              "amount": "18888",
+                              "currency": "RUB"
+                            }
+                          },
+                          "additionalProp2": {
+                            "black_price": {
+                              "amount": "1500",
+                              "currency": "RUB"
+                            },
+                            "green_price": {
+                              "amount": "1600",
+                              "currency": "RUB"
+                            }
+                          },
+                          "additionalProp3": {
+                            "black_price": {
+                              "amount": "1700",
+                              "currency": "RUB"
+                            },
+                            "green_price": {
+                              "amount": "1800",
+                              "currency": "RUB"
+                            }
+                          }
+                        }
+                      },
+                      "will_be_quarantined": false
+                    }
+                  ],
+                  "total": 219176
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数不正确",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答案",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "查询冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/actions/auto-add/products/delete": {
+      "post": {
+        "description": "<aside class=\"warning\">\n在2026年10月13日之前，该方法的工作方式与<a href=\"#operation/ActionsAutoAddProductsDelete\">/v1/actions/auto-add/products/delete</a>类似。\n</aside>\n",
+        "tags": [
+          "Promos"
+        ],
+        "summary": "从促销活动自动添加列表中删除商品",
+        "operationId": "ActionsAutoAddProductsDeleteV2",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsDeleteRequest"
+              },
+              "example": {
+                "action_id": 250204,
+                "product_ids": [
+                  88888
+                ],
+                "auto_add_date": "2025-01-01T00:00:00Z"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "商品已从自动添加中删除",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsDeleteResponse"
+                },
+                "example": {
+                  "product_ids": [
+                    88888
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数不正确",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答案",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "查询冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/actions/auto-add/products/update": {
+      "post": {
+        "description": "<aside class=\"warning\">\n在2026年10月13日之前，该方法的工作方式与<a href=\"#operation/ActionsAutoAddProductsUpdate\">/v1/actions/auto-add/products/update</a>类似，无法通过该方法更改商品卡片上的价格。\n</aside>\n",
+        "tags": [
+          "Promos"
+        ],
+        "summary": "在促销活动自动添加列表中添加或更新商品",
+        "operationId": "ActionsAutoAddProductsUpdateV2",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsUpdateRequest"
+              },
+              "example": {
+                "action_id": 250204,
+                "auto_add_date": "2026-09-22T11:37:38.940Z",
+                "products": [
+                  {
+                    "action_price": {
+                      "amount": "1000",
+                      "currency": "RUB"
+                    },
+                    "id": 88888,
+                    "stock": 10
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "商品已在自动添加中添加或更新",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsUpdateResponse"
+                },
+                "example": {
+                  "product_ids": [
+                    "    88888  "
+                  ],
+                  "deactivated_ids": [
+                    0
+                  ],
+                  "rejected": [
+                    {
+                      "product_id": 0,
+                      "reason": ""
+                    }
+                  ],
+                  "warnings": [
+                    {
+                      "product_id": 0,
+                      "reason": ""
+                    }
+                  ],
+                  "below_min_price": {
+                    "key": 0,
+                    "value": ""
+                  },
+                  "extremely_low_price": {
+                    "key": 0,
+                    "value": ""
+                  },
+                  "failed_price": {
+                    "key": 0,
+                    "value": ""
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数不正确",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答案",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "查询冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/carriage/courier-contact/set": {
+      "post": {
+        "tags": [
+          "DeliveryFBS"
+        ],
+        "operationId": "CarriageCourierContactSet",
+        "summary": "添加或更新向快递员提供的卖家联系方式",
+        "description": "使用该方法添加或更新卖家的联系方式，这些信息会在`first_mile_type = pickup`且`integration_type = ozon_outsourced`的运输中提供给快递员。\n在方法[/v1/carriage/get](#operation/CarriageGet)的响应中获取参数`first_mile_type`和`integration_type`的值。\n",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/v1CarriageCourierContactSetRequest"
+              },
+              "example": {
+                "carriage_id": 543234,
+                "phone": "+86(123)4567-8901",
+                "wechat_nickname": "string",
+                "comment": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "联系方式已添加或更新"
+          },
+          "400": {
+            "description": "参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "访问被拒绝",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "响应未找到",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "请求冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/carriage/courier-contact/get": {
+      "post": {
+        "tags": [
+          "DeliveryFBS"
+        ],
+        "operationId": "CarriageCourierContactGet",
+        "summary": "获取向快递员提供的卖家联系方式",
+        "description": "返回通过[/v1/carriage/courier-contact/set](#operation/CarriageCourierContactSet)方法添加或更新的卖家联系方式。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/v1CarriageCourierContactGetRequest"
+              },
+              "example": {
+                "carriage_id": 5435123
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "向快递员提供的卖家联系方式",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1CarriageCourierContactGetResponse"
+                },
+                "example": {
+                  "contact": [
+                    {
+                      "carriage_id": 5435123,
+                      "phone": "+86(123)4567-8901",
+                      "wechat_nickname": "string",
+                      "comment": "string",
+                      "updated_at": "2026-07-29T10:38:26.004Z"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "访问被拒绝",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "响应未找到",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "请求冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/question/top-sku": {
+      "post": {
+        "tags": [
+          "Questions&Answers"
+        ],
+        "summary": "提问数量最多的商品",
+        "description": "仅对已订阅 [Premium Plus](https://seller-edu.ozon.ru/seller-rating/about-rating/subscription-premium-plus) 的卖家开放。\n",
+        "operationId": "Question_TopSku",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/v1QuestionTopSkuRequest"
+              },
+              "example": {
+                "limit": "100"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "商品标识符",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1QuestionTopSkuResponse"
+                },
+                "example": {
+                  "sku": [
+                    56371271
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1QuestionAnswerCreateDefault"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/posting/fbp/get": {
+      "post": {
+        "summary": "按标识符获取货件信息",
+        "description": "您可以在 [讨论](https://dev.ozon.ru/community/2237-Novyi-metod-polucheniia-FBP-postingov-po-identifikatoru-otpravleniia/) 的评论中对此方法提供反馈 在 Ozon for dev 开发者社区中。",
+        "operationId": "GetFbpPosting",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/posting.v1.GetFbpPostingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "货件信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/posting.v1.GetFbpPostingResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "BetaMethod"
+        ]
+      }
+    },
+    "/v1/report/realization/posting/create": {
+      "post": {
+        "description": "已送达和已退货商品的销售报告，按每个订单提供详细信息。不包括已取消订单和未认购商品。 可获取截至当前、最早追溯至2023年8月（含）的报告。\n\n您可以在Ozon for dev开发者社区的[评论区](https://dev.ozon.ru/community/2280-Novyi-beta-metod-dlia-polucheniia-otcheta-o-realizatsii-po-postingam/)留下对该方法的反馈。\n",
+        "tags": [
+          "BetaMethod"
+        ],
+        "summary": "获取每订单商品销售报告",
+        "operationId": "CreateCompanyFinanceRealizationPostingReport",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/report.v1.CreateCompanyFinanceRealizationPostingReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "每订单销售报告",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/report.v1.CreateCompanyFinanceRealizationPostingReportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "访问被拒绝",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "请求冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/description-category/dependent-attributes": {
+      "post": {
+        "description": "返回父特征和子特征的标识符对。请使用[/v1/description-category/dependent-attributes/values](#operation/DescriptionCategoryDependentAttributesValues)方法获取父特征各值对应的子特征可能值。\n\n带有`parent_attribute_id = 8229`的特征即商品类型标识符`type_id`。请勿在`items.attributes.id`参数中指定该特征，这适用于对[/v3/product/import](#operation/ProductAPI_ImportProductsV3)和[/v1/product/attributes/update](#operation/ProductAPI_ProductUpdateAttributes)方法的请求。\n\n您可以在Ozon for dev开发者社区的[评论区](https://dev.ozon.ru/community/2296-Novye-metody-zavisimykh-atributov/)中留下关于该方法运行情况的反馈。\n",
+        "tags": [
+          "BetaMethod"
+        ],
+        "summary": "获取依赖特征",
+        "operationId": "DescriptionCategoryDependentAttributes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/category.description.v1.DescriptionCategoryDependentAttributesRequest"
+              },
+              "example": {
+                "description_category_id": 234123,
+                "type_id": 123123
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "依赖特征",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/category.description.v1.DescriptionCategoryDependentAttributesResponse"
+                },
+                "example": {
+                  "result": [
+                    {
+                      "child_attribute_id": 4812,
+                      "parent_attribute_id": 8229
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数有误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答复",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "请求冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部服务器出错",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/description-category/dependent-attributes/values": {
+      "post": {
+        "description": "返回父特征各值对应的子特征可能值。\n\n您可以在Ozon for dev开发者社区的[评论区](https://dev.ozon.ru/community/2296-Novye-metody-zavisimykh-atributov/)中留下关于该方法运行情况的反馈。\n",
+        "tags": [
+          "BetaMethod"
+        ],
+        "summary": "获取子特征的可能值",
+        "operationId": "DescriptionCategoryDependentAttributesValues",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/category.description.v1.DescriptionCategoryDependentAttributesValuesRequest"
+              },
+              "example": {
+                "parent_attribute_id": 8229,
+                "child_attribute_id": 23348,
+                "description_category_id": 234123,
+                "type_id": 123123,
+                "limit": 4,
+                "cursor": ""
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "子特征的可能值",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/category.description.v1.DescriptionCategoryDependentAttributesValuesResponse"
+                },
+                "example": {
+                  "cursor": "eyJwYXJlbnRfdmFsdWVfaWQiOjEwMDIsImNoaWxkX2luZGV4IjowfQ==",
+                  "result": [
+                    {
+                      "parent_value_id": 1001,
+                      "parent_value": "拉达",
+                      "children": [
+                        {
+                          "child_value_id": 2001,
+                          "child_value": "格兰塔"
+                        },
+                        {
+                          "child_value_id": 2002,
+                          "child_value": "普里奥拉"
+                        },
+                        {
+                          "child_value_id": 2003,
+                          "child_value": "维斯塔"
+                        }
+                      ]
+                    },
+                    {
+                      "parent_value_id": 1002,
+                      "parent_value": "丰田",
+                      "children": [
+                        {
+                          "child_value_id": 2004,
+                          "child_value": "卡罗拉"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数有误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "拒绝访问",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "未找到答复",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "请求冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部服务器出错",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/rpcStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fbp/order/direct/tpl-dlv/edit": {
+      "post": {
+        "description": "您可以在Ozon for dev开发者社区的[讨论](https://dev.ozon.ru/community/1700-FBP-metody/)评论中留下对该方法的反馈。\n",
+        "tags": [
+          "OrderDirectFBP"
+        ],
+        "summary": "更新第三方物流公司配送信息",
+        "operationId": "FbpOrderDirectTplDlvEdit",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Client-Id"
+          },
+          {
+            "$ref": "#/components/parameters/Api-Key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/fbp.v1.FbpOrderDirectTplDlvEditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "信息已更新",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/fbp.v1.FbpOrderDirectTplDlvEditResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/googlerpcStatus"
                 }
               }
             }
@@ -49104,6 +50311,2170 @@
             "items": {
               "$ref": "#/components/schemas/v1ProductPricesDetailsResponsePrice"
             }
+          }
+        }
+      },
+      "v3ServiceType": {
+        "default": "IS_CODE_SERVICE",
+        "enum": null,
+        "type": "string",
+        "description": "服务类型。 以大写形式传递其中的一个值:\n  - `IS_CODE_SERVICE`,\n  - `IS_NO_CODE_SERVICE`。\n"
+      },
+      "product.v2.ProductImportPicturesV2Request.Item": {
+        "type": "object",
+        "required": [
+          "offer_id"
+        ],
+        "properties": {
+          "offer_id": {
+            "type": "string",
+            "description": "卖家系统中的商品标识符——货号。"
+          },
+          "primary_image": {
+            "type": "string",
+            "description": "商品主图。"
+          },
+          "color_image": {
+            "type": "string",
+            "description": "营销颜色。"
+          },
+          "images": {
+            "type": "array",
+            "maxItems": 30,
+            "description": "图片链接列表。\n数组中的图片按其在网站上的显示顺序排列。如果请求中未传递`primary_image`，数组中的第一张图片将成为主图。\n",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "product.v2.ProductImportPicturesV2Request": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "description": "商品信息。",
+            "items": {
+              "$ref": "#/components/schemas/product.v2.ProductImportPicturesV2Request.Item"
+            }
+          }
+        }
+      },
+      "product.v2.ProductInfoPicturesV2Response": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "任务标识符。要检查图片状态，请将获取的值传递到方法[/v1/product/import/info](#operation/ProductAPI_GetImportProductsInfo)。\n"
+          }
+        }
+      },
+      "barcode.v1.BarcodeDeleteRequest.Barcodes": {
+        "type": "object",
+        "required": [
+          "barcode",
+          "sku"
+        ],
+        "properties": {
+          "barcode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "条形码值。"
+          },
+          "sku": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Ozon系统中的商品标识符——SKU。"
+          }
+        }
+      },
+      "barcode.v1.BarcodeDeleteRequest": {
+        "type": "object",
+        "required": [
+          "barcodes"
+        ],
+        "properties": {
+          "barcodes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "description": "需要解除绑定的条形码与商品对的列表。",
+            "items": {
+              "$ref": "#/components/schemas/barcode.v1.BarcodeDeleteRequest.Barcodes"
+            }
+          }
+        }
+      },
+      "barcode.v1.BarcodeDeleteResponse.Errors": {
+        "type": "object",
+        "properties": {
+          "barcode": {
+            "type": "string",
+            "description": "未能解除绑定的条形码。"
+          },
+          "code": {
+            "type": "string",
+            "description": "错误代码。"
+          },
+          "error": {
+            "type": "string",
+            "description": "错误描述。"
+          },
+          "sku": {
+            "type": "integer",
+            "format": "int64",
+            "description": "未能与条形码解除绑定的商品的标识符。"
+          }
+        }
+      },
+      "barcode.v1.BarcodeDeleteResponse": {
+        "type": "object",
+        "properties": {
+          "errors": {
+            "type": "array",
+            "description": "错误列表。如果列表为空，则所有条形码均已成功解除绑定。",
+            "items": {
+              "$ref": "#/components/schemas/barcode.v1.BarcodeDeleteResponse.Errors"
+            }
+          }
+        }
+      },
+      "actions.v2.ActionsCandidatesRequest": {
+        "type": "object",
+        "properties": {
+          "action_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动标识符。可通过方法[/v1/actions](#operation/Promos)获取。"
+          },
+          "last_id": {
+            "type": "string",
+            "description": "页面上最后一个商品的标识符。如果是首次请求，请将该字段留空。"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "uint64",
+            "maximum": 100,
+            "description": "每页显示的数量。"
+          }
+        }
+      },
+      "money.MoneyAction_price_to_auto_add": {
+        "description": "商品的促销价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "money.MoneyAlert_max_action_price": {
+        "description": "该促销活动的商品建议价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "money.MoneyFBPget": {
+        "description": "计入促销活动后的商品价格，不包括由Ozon承担费用的促销活动。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "money.MoneyMax_action_price": {
+        "description": "该促销活动的商品最高价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "money.MoneyMin_seller_price": {
+        "description": "应用促销活动后的商品最低价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "money.MoneyPrice": {
+        "description": "商品无折扣价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "money.MoneyPrice_max_elastic": {
+        "description": "最高提升价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "money.MoneyPrice_min_elastic": {
+        "description": "最小提升幅度对应的商品价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "money.MoneyWebsitePrices": {
+        "description": "网站上各配送方案的最低平均价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "money.MoneyGreen_price": {
+        "description": "绿色价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "actions.v2.ActionsCandidatesResponse.Product.ProductWebsitePrices.WebsitePrices": {
+        "type": "object",
+        "description": "按配送方案计算的商品价格。",
+        "properties": {
+          "black_price": {
+            "$ref": "#/components/schemas/money.MoneyPrice"
+          },
+          "green_price": {
+            "$ref": "#/components/schemas/money.MoneyGreen_price"
+          }
+        }
+      },
+      "actions.v2.ActionsCandidatesResponse.Product.ProductWebsitePrices": {
+        "type": "object",
+        "description": "网站上的商品价格。",
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/money.MoneyWebsitePrices"
+          },
+          "prices_by_schema": {
+            "type": "object",
+            "description": "按各配送方案计算的商品价格。",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/actions.v2.ActionsCandidatesResponse.Product.ProductWebsitePrices.WebsitePrices"
+            }
+          }
+        }
+      },
+      "actions.v2.ActionsCandidatesResponse.Product": {
+        "type": "object",
+        "properties": {
+          "action_price": {
+            "$ref": "#/components/schemas/money.MoneyAction_price_to_auto_add"
+          },
+          "alert_max_action_price": {
+            "$ref": "#/components/schemas/money.MoneyAlert_max_action_price"
+          },
+          "alert_max_action_price_failed": {
+            "type": "boolean",
+            "description": "如果商品价格高于推荐价格，则为`true`。 该商品可能会被移出促销活动。\n"
+          },
+          "current_boost": {
+            "type": "number",
+            "format": "double",
+            "description": "商品提升幅度。"
+          },
+          "id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "is_quarantined": {
+            "type": "boolean",
+            "description": "如果商品处于价格冻结中，则为`true`。\n"
+          },
+          "marketplace_seller_price": {
+            "$ref": "#/components/schemas/money.MoneyFBPget"
+          },
+          "max_action_price": {
+            "$ref": "#/components/schemas/money.MoneyMax_action_price"
+          },
+          "max_boost": {
+            "type": "number",
+            "format": "double",
+            "description": "最大提升幅度（%）。"
+          },
+          "min_boost": {
+            "type": "number",
+            "format": "double",
+            "description": "最小提升幅度（%）。"
+          },
+          "min_seller_price": {
+            "$ref": "#/components/schemas/money.MoneyMin_seller_price"
+          },
+          "min_stock": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "“库存折扣”促销活动类型中的最低商品数量。"
+          },
+          "price": {
+            "$ref": "#/components/schemas/money.MoneyPrice"
+          },
+          "price_max_elastic": {
+            "$ref": "#/components/schemas/money.MoneyPrice_max_elastic"
+          },
+          "price_min_elastic": {
+            "$ref": "#/components/schemas/money.MoneyPrice_min_elastic"
+          },
+          "recommended_stock": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "建议参与促销活动的商品数量。"
+          },
+          "website_prices": {
+            "$ref": "#/components/schemas/actions.v2.ActionsCandidatesResponse.Product.ProductWebsitePrices"
+          }
+        }
+      },
+      "actions.v2.ActionsCandidatesResponse": {
+        "type": "object",
+        "properties": {
+          "last_id": {
+            "type": "string",
+            "description": "页面上最后一个商品的标识符。要获取下一个批次的数据，请在下一个请求的`last_id`参数中传递上次获取的值。"
+          },
+          "products": {
+            "type": "array",
+            "description": "商品列表。",
+            "items": {
+              "$ref": "#/components/schemas/actions.v2.ActionsCandidatesResponse.Product"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "可用于该促销活动的商品总数。"
+          }
+        }
+      },
+      "actions.v2.ActionsProductsRequest": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "limit"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动标识符。可通过方法[/v1/actions](#operation/Promos)获取。"
+          },
+          "last_id": {
+            "type": "string",
+            "description": "页面上最后一个商品的标识符。如果是首次请求，请将该字段留空。"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "uint64",
+            "maximum": 100,
+            "description": "К每页显示的数量。"
+          }
+        }
+      },
+      "actions.v2.ActionsProductsResponse.Product.AddMode.Enum": {
+        "type": "string",
+        "description": "商品加入促销活动的方式：\n- `AUTO`——自动；\n- `SELLER`——由卖家手动操作。\n",
+        "enum": [
+          "SELLER",
+          "AUTO"
+        ]
+      },
+      "actions.v2.ActionsProductsResponse.Product.ProductWebsitePrices.WebsitePrices": {
+        "type": "object",
+        "description": "按配送方案计算的商品价格。",
+        "properties": {
+          "black_price": {
+            "$ref": "#/components/schemas/money.MoneyPrice"
+          },
+          "green_price": {
+            "$ref": "#/components/schemas/money.MoneyGreen_price"
+          }
+        }
+      },
+      "actions.v2.ActionsProductsResponse.Product.ProductWebsitePrices": {
+        "type": "object",
+        "description": "网站上的商品价格。",
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/money.MoneyWebsitePrices"
+          },
+          "prices_by_schema": {
+            "type": "object",
+            "description": "按各配送方案计算的商品价格。",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/actions.v2.ActionsProductsResponse.Product.ProductWebsitePrices.WebsitePrices"
+            }
+          }
+        }
+      },
+      "actions.v2.ActionsProductsResponse.Product": {
+        "type": "object",
+        "properties": {
+          "action_price": {
+            "$ref": "#/components/schemas/money.MoneyAction_price_to_auto_add"
+          },
+          "add_mode": {
+            "$ref": "#/components/schemas/actions.v2.ActionsProductsResponse.Product.AddMode.Enum"
+          },
+          "alert_max_action_price": {
+            "$ref": "#/components/schemas/money.MoneyAlert_max_action_price"
+          },
+          "alert_max_action_price_failed": {
+            "type": "boolean",
+            "description": "如果商品价格高于推荐价格，则为`true`。 该商品可能会被移出促销活动。\n"
+          },
+          "current_boost": {
+            "type": "number",
+            "format": "double",
+            "description": "商品提升幅度。"
+          },
+          "id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "is_quarantined": {
+            "type": "boolean",
+            "description": "如果商品处于价格冻结中，则为`true`。\n"
+          },
+          "marketplace_seller_price": {
+            "$ref": "#/components/schemas/money.MoneyFBPget"
+          },
+          "max_action_price": {
+            "$ref": "#/components/schemas/money.MoneyMax_action_price"
+          },
+          "max_boost": {
+            "type": "number",
+            "format": "double",
+            "description": "最大提升幅度（%）。"
+          },
+          "min_boost": {
+            "type": "number",
+            "format": "double",
+            "description": "最小提升幅度（%）。"
+          },
+          "min_seller_price": {
+            "$ref": "#/components/schemas/money.MoneyMin_seller_price"
+          },
+          "min_stock": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "“库存折扣”促销活动类型中的最低商品数量。"
+          },
+          "price": {
+            "$ref": "#/components/schemas/money.MoneyPrice"
+          },
+          "price_max_elastic": {
+            "$ref": "#/components/schemas/money.MoneyPrice_max_elastic"
+          },
+          "price_min_elastic": {
+            "$ref": "#/components/schemas/money.MoneyPrice_min_elastic"
+          },
+          "recommended_stock": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "建议参与促销活动的商品数量。"
+          },
+          "stock": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "“库存折扣”类促销活动中的商品件数。"
+          },
+          "website_prices": {
+            "$ref": "#/components/schemas/actions.v2.ActionsProductsResponse.Product.ProductWebsitePrices"
+          }
+        }
+      },
+      "actions.v2.ActionsProductsResponse": {
+        "type": "object",
+        "properties": {
+          "last_id": {
+            "type": "string",
+            "description": "页面上最后一个商品的标识符。要获取下一个批次的数据，请在下一个请求的`last_id`参数中传递上次获取的值。"
+          },
+          "products": {
+            "type": "array",
+            "description": "商品列表。",
+            "items": {
+              "$ref": "#/components/schemas/actions.v2.ActionsProductsResponse.Product"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动中的商品数量。"
+          }
+        }
+      },
+      "money.MoneyAction_price": {
+        "description": "商品的最高价格。\n\n如果您在“促销码”促销活动之外添加商品，我们将更改商品卡片中的最高价格，即使该价格此前已设置。\n\n如果该值小于或等于“弹性提升”或“最大提升”促销活动的限额，我们会将商品加入促销活动；如果大于限额，则将商品移出促销活动。\n",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "actions.v1.ActionsProductsUpdateRequest.Product": {
+        "type": "object",
+        "required": [
+          "product_id",
+          "action_price"
+        ],
+        "properties": {
+          "action_price": {
+            "$ref": "#/components/schemas/money.MoneyAction_price"
+          },
+          "product_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "stock": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "“促销码”促销活动中的商品件数。请勿为“弹性提升”和“最大提升”促销活动传递该参数。"
+          }
+        }
+      },
+      "actions.v1.ActionsProductsUpdateRequest": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "products"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动标识符。可通过方法[/v1/actions](#operation/Promos)获取。"
+          },
+          "products": {
+            "type": "array",
+            "description": "商品列表。",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/actions.v1.ActionsProductsUpdateRequest.Product"
+            }
+          }
+        }
+      },
+      "actions.v1.ActionsProductsUpdateResponse.Rejected": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "reason": {
+            "type": "string",
+            "description": "商品未加入促销活动的原因。"
+          }
+        }
+      },
+      "actions.v1.ActionsProductsUpdateResponse.Warning": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "reason": {
+            "type": "string",
+            "description": "商品被移出促销活动的原因。"
+          }
+        }
+      },
+      "actions.v1.ActionsProductsUpdateResponse": {
+        "type": "object",
+        "properties": {
+          "active_product_ids": {
+            "type": "array",
+            "description": "已加入促销活动的商品ID列表。",
+            "items": {
+              "type": "string",
+              "format": "uint64"
+            }
+          },
+          "deactivated_product_ids": {
+            "type": "array",
+            "description": "已移出促销活动的商品ID列表。",
+            "items": {
+              "type": "string",
+              "format": "uint64"
+            }
+          },
+          "rejected": {
+            "description": "未能加入促销活动的商品列表。",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/actions.v1.ActionsProductsUpdateResponse.Rejected"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "description": "关于商品被移出促销活动的原因信息。",
+            "items": {
+              "$ref": "#/components/schemas/actions.v1.ActionsProductsUpdateResponse.Warning"
+            }
+          }
+        }
+      },
+      "actions.v2.ActionsProductsDeactivateRequest": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "product_ids"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动标识符。可通过方法[/v1/actions](#operation/Promos)获取。"
+          },
+          "product_ids": {
+            "type": "array",
+            "maxItems": 1000,
+            "description": "Ozon系统中的商品标识符，即`product_id`。",
+            "items": {
+              "type": "string",
+              "format": "uint64"
+            }
+          }
+        }
+      },
+      "actions.v2.ActionsProductsDeactivateResponse": {
+        "type": "object",
+        "properties": {
+          "product_ids": {
+            "type": "array",
+            "description": "已移出促销活动的商品ID列表。",
+            "items": {
+              "type": "string",
+              "format": "uint64"
+            }
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsListRequest": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "auto_add_date",
+          "limit"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动标识符。"
+          },
+          "auto_add_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "方法[/v1/actions](#operation/Promos)响应中`result.auto_add_dates`参数里的商品自动添加到促销活动中的日期和时间。"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "响应中返回的值数量。",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "offset": {
+            "type": "integer",
+            "format": "uint64",
+            "default": 0,
+            "description": "在响应中将被跳过的项目数量。 例如，如果`offset = 10`，响应将从第11个找到的元素开始。"
+          }
+        }
+      },
+      "money.MoneyBase_price": {
+        "description": "商品折扣前价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "money.MoneyMax_discount_price": {
+        "description": "商品可自动添加到促销活动中的最高价格。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsListResponse.Product.ProductWebsitePrices.WebsitePrices": {
+        "type": "object",
+        "description": "按配送方案计算的商品价格。",
+        "properties": {
+          "black_price": {
+            "$ref": "#/components/schemas/money.MoneyPrice"
+          },
+          "green_price": {
+            "$ref": "#/components/schemas/money.MoneyGreen_price"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsListResponse.Product.ProductWebsitePrices": {
+        "type": "object",
+        "description": "网站上的商品价格。",
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/money.MoneyWebsitePrices"
+          },
+          "prices_by_schema": {
+            "type": "object",
+            "description": "按各配送方案计算的商品价格。",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsListResponse.Product.ProductWebsitePrices.WebsitePrices"
+            }
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsListResponse.Product": {
+        "type": "object",
+        "properties": {
+          "action_price_to_auto_add": {
+            "$ref": "#/components/schemas/money.MoneyAction_price_to_auto_add"
+          },
+          "add_mode": {
+            "type": "boolean",
+            "description": "如果商品是手动添加的，则为`true`。\n"
+          },
+          "base_price": {
+            "$ref": "#/components/schemas/money.MoneyBase_price"
+          },
+          "currency": {
+            "type": "string",
+            "description": "价格货币。"
+          },
+          "has_expired_min_seller_price": {
+            "type": "boolean",
+            "description": "如果促销活动的限制已到期，则为`true`。\n"
+          },
+          "marketplace_seller_price": {
+            "$ref": "#/components/schemas/money.MoneyFBPget"
+          },
+          "max_discount_price": {
+            "$ref": "#/components/schemas/money.MoneyMax_discount_price"
+          },
+          "min_action_quantity": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "“库存折扣”促销活动类型中的最低商品数量。"
+          },
+          "min_seller_price": {
+            "$ref": "#/components/schemas/money.MoneyMin_seller_price"
+          },
+          "name": {
+            "type": "string",
+            "description": "商品名称。"
+          },
+          "offer_id": {
+            "type": "string",
+            "description": "卖家系统中的商品标识符——货号。"
+          },
+          "price": {
+            "$ref": "#/components/schemas/money.MoneyPrice"
+          },
+          "product_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "quantity_to_auto_add": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动中的商品数量。"
+          },
+          "sku": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——SKU。"
+          },
+          "website_prices": {
+            "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsListResponse.Product.ProductWebsitePrices"
+          },
+          "will_be_quarantined": {
+            "type": "boolean",
+            "description": "如果商品在自动添加后进入价格冻结，则为`true`。\n"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsListResponse": {
+        "type": "object",
+        "properties": {
+          "products": {
+            "type": "array",
+            "description": "启用自动添加的商品列表。",
+            "items": {
+              "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsListResponse.Product"
+            }
+          },
+          "total": {
+            "description": "商品数量。",
+            "type": "integer",
+            "format": "uint64"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsCandidatesRequest": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "auto_add_date",
+          "limit"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动标识符。"
+          },
+          "auto_add_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "方法[/v1/actions](#operation/Promos)响应中`result.auto_add_dates`参数里的商品自动添加到促销活动中的日期和时间。"
+          },
+          "limit": {
+            "description": "响应中返回的值数量。",
+            "minimum": 1,
+            "maximum": 100,
+            "type": "integer",
+            "format": "uint64"
+          },
+          "offset": {
+            "description": "在响应中将被跳过的项目数量。在响应中将被跳过的项目数量。",
+            "type": "integer",
+            "format": "uint64",
+            "default": 0
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsCandidatesResponse.ProductWebsitePrices.WebsitePrices": {
+        "type": "object",
+        "description": "按配送方案计算的商品价格。",
+        "properties": {
+          "black_price": {
+            "$ref": "#/components/schemas/money.MoneyPrice"
+          },
+          "green_price": {
+            "$ref": "#/components/schemas/money.MoneyGreen_price"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsCandidatesResponse.ProductWebsitePrices": {
+        "type": "object",
+        "description": "网站上的商品价格。",
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/money.MoneyWebsitePrices"
+          },
+          "prices_by_schema": {
+            "type": "object",
+            "description": "按各配送方案计算的商品价格。",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsCandidatesResponse.ProductWebsitePrices.WebsitePrices"
+            }
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsCandidatesResponse.Products": {
+        "type": "object",
+        "properties": {
+          "action_price_to_auto_add": {
+            "$ref": "#/components/schemas/money.MoneyAction_price_to_auto_add"
+          },
+          "base_price": {
+            "$ref": "#/components/schemas/money.MoneyBase_price"
+          },
+          "currency": {
+            "type": "string",
+            "description": "在响应中将被跳过的项目数量。"
+          },
+          "has_expired_min_seller_price": {
+            "type": "boolean",
+            "description": "如果促销活动的限制已到期，则为`true`。\n"
+          },
+          "id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "is_manually_added": {
+            "type": "boolean",
+            "description": "如果商品是手动添加的，则为`true`。\n"
+          },
+          "marketplace_seller_price": {
+            "$ref": "#/components/schemas/money.MoneyFBPget"
+          },
+          "max_discount_price": {
+            "$ref": "#/components/schemas/money.MoneyMax_discount_price"
+          },
+          "min_action_quantity": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "“库存折扣”促销活动类型中的最低商品数量。"
+          },
+          "min_seller_price": {
+            "$ref": "#/components/schemas/money.MoneyMin_seller_price"
+          },
+          "name": {
+            "type": "string",
+            "description": "商品名称。"
+          },
+          "offer_id": {
+            "type": "string",
+            "description": "卖家系统中的商品标识符——货号。"
+          },
+          "price": {
+            "$ref": "#/components/schemas/money.MoneyPrice"
+          },
+          "quantity_to_auto_add": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动中的商品数量。"
+          },
+          "sku": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——SKU。"
+          },
+          "website_prices": {
+            "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsCandidatesResponse.ProductWebsitePrices"
+          },
+          "will_be_quarantined": {
+            "type": "boolean",
+            "description": "如果商品在自动添加后进入价格冻结，则为`true`。\n"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsCandidatesResponse": {
+        "type": "object",
+        "properties": {
+          "products": {
+            "type": "array",
+            "description": "可用于自动添加到促销活动中的商品列表。",
+            "items": {
+              "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsCandidatesResponse.Products"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "商品数量。"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsDeleteRequest": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "auto_add_date",
+          "product_ids"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动标识符。"
+          },
+          "auto_add_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "方法[/v1/actions](#operation/Promos)响应中`result.auto_add_dates`参数里的商品自动添加到促销活动中的日期和时间。"
+          },
+          "product_ids": {
+            "type": "array",
+            "maxItems": 1000,
+            "description": "Ozon系统中的商品标识符，即`product_id`。",
+            "items": {
+              "type": "string",
+              "format": "uint64"
+            }
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsDeleteResponse": {
+        "type": "object",
+        "properties": {
+          "product_ids": {
+            "type": "array",
+            "description": "已从自动添加中删除的商品ID。",
+            "items": {
+              "type": "string",
+              "format": "uint64"
+            }
+          }
+        }
+      },
+      "money.MoneyAutoaddAction_price": {
+        "description": "商品的最高价格。\n\n我们将在`auto_add_date`日期更改商品卡片中的最高价格，即使该最高价格此前已设置。\n\n如果该值小于或等于“弹性提升”或“最大提升”促销活动的限额，我们会将商品加入促销活动；如果大于限额，则将商品移出促销活动。\n\n如果您传入非整数，价格将向上取整。\n",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsUpdateRequest.ProductToActivate": {
+        "type": "object",
+        "properties": {
+          "action_price": {
+            "$ref": "#/components/schemas/money.MoneyAutoaddAction_price"
+          },
+          "id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "商品标识符。"
+          },
+          "stock": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "“促销码”促销活动中的商品件数。请勿为“弹性提升”和“最大提升”促销活动传递该参数。"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsUpdateRequest": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "auto_add_date",
+          "products"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "促销活动标识符。"
+          },
+          "auto_add_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "方法[/v1/actions](#operation/Promos)响应中`result.auto_add_dates`参数里的商品自动添加到促销活动中的日期和时间。"
+          },
+          "products": {
+            "type": "array",
+            "description": "需要添加到自动添加中或在自动添加中更新的商品列表。",
+            "minItems": 1,
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsUpdateRequest.ProductToActivate"
+            }
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsUpdateResponse.BelowMinPrice": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "value": {
+            "type": "number",
+            "format": "double",
+            "description": "商品价格。"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsUpdateResponse.ExtremelyLowPrice": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "value": {
+            "type": "number",
+            "format": "double",
+            "description": "商品价格。"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsUpdateResponse.FailedPrice": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "value": {
+            "type": "number",
+            "format": "double",
+            "description": "问题价格的值： \n- 商品自动加入促销活动的最高价格，前提是商品价格超过该值；\n-- 如果商品折扣超过95%，则为折扣95%后的价格。\n"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsUpdateResponse.Rejected": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "reason": {
+            "type": "string",
+            "description": "未能添加或更新商品的原因。"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsUpdateResponse.WarningInfo": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Ozon系统中的商品标识符——`product_id`。"
+          },
+          "reason": {
+            "type": "string",
+            "description": "警告。"
+          }
+        }
+      },
+      "actions.v2.ActionsAutoAddProductsUpdateResponse": {
+        "type": "object",
+        "properties": {
+          "below_min_price": {
+            "type": "array",
+            "description": "价格低于最低价格的商品列表。",
+            "items": {
+              "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsUpdateResponse.BelowMinPrice"
+            }
+          },
+          "deactivated_ids": {
+            "type": "array",
+            "description": "已移出促销活动的商品ID。",
+            "items": {
+              "type": "string",
+              "format": "uint64"
+            }
+          },
+          "extremely_low_price": {
+            "type": "array",
+            "description": "折扣幅度超过70%的商品列表。",
+            "items": {
+              "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsUpdateResponse.ExtremelyLowPrice"
+            }
+          },
+          "failed_price": {
+            "type": "array",
+            "description": "未通过价格校验的商品列表。",
+            "items": {
+              "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsUpdateResponse.FailedPrice"
+            }
+          },
+          "product_ids": {
+            "type": "array",
+            "description": "已成功添加或更新的商品ID。",
+            "items": {
+              "type": "string",
+              "format": "uint64"
+            }
+          },
+          "rejected": {
+            "type": "array",
+            "description": "未能添加或更新的商品ID。",
+            "items": {
+              "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsUpdateResponse.Rejected"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "description": "商品警告列表。",
+            "items": {
+              "$ref": "#/components/schemas/actions.v2.ActionsAutoAddProductsUpdateResponse.WarningInfo"
+            }
+          }
+        }
+      },
+      "v1CarriageCourierContactSetRequest": {
+        "required": [
+          "carriage_id",
+          "phone"
+        ],
+        "type": "object",
+        "properties": {
+          "carriage_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "运输标识符。"
+          },
+          "phone": {
+            "pattern": " +86(XXX)XXXX-XXXX",
+            "type": "string",
+            "description": "卖家的电话号码。"
+          },
+          "wechat_nickname": {
+            "minLength": 1,
+            "maxLength": 50,
+            "type": "string",
+            "description": "卖家的微信号。"
+          },
+          "comment": {
+            "maxLength": 500,
+            "type": "string",
+            "description": "给快递员的备注。"
+          }
+        }
+      },
+      "v1CarriageCourierContactGetRequest": {
+        "required": [
+          "carriage_id"
+        ],
+        "type": "object",
+        "properties": {
+          "carriage_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "运输标识符。"
+          }
+        }
+      },
+      "v1CarriageCourierContactGetResponseContact": {
+        "type": "object",
+        "properties": {
+          "carriage_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "运输标识符。"
+          },
+          "phone": {
+            "type": "string",
+            "description": "卖家的电话号码。"
+          },
+          "wechat_nickname": {
+            "type": "string",
+            "description": "卖家的微信号。"
+          },
+          "comment": {
+            "type": "string",
+            "description": "给快递员的备注。"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "记录最后更新的日期和时间（UTC格式）。"
+          }
+        }
+      },
+      "v1CarriageCourierContactGetResponse": {
+        "type": "object",
+        "properties": {
+          "contact": {
+            "type": "array",
+            "description": "卖家联系方式信息。",
+            "items": {
+              "$ref": "#/components/schemas/v1CarriageCourierContactGetResponseContact"
+            }
+          }
+        }
+      },
+      "posting.v3.FbsPosting.SortingCenter": {
+        "type": "object",
+        "title": "object",
+        "description": "关于货件需要送达的分拣中心的信息。适用于`integration_type_flow = hybrid_3pl_tracking`。\n如果值为`null`，则无法获取该信息。\n",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "分拣中心代码。"
+          },
+          "name": {
+            "type": "string",
+            "description": "分拣中心名称。"
+          }
+        }
+      },
+      "posting.v4.PostingFbsUnfulfilledListResponse.Postings.SortingCenter": {
+        "type": "object",
+        "title": "object",
+        "description": "关于货件需要送达的分拣中心的信息。适用于`integration_type_flow = hybrid_3pl_tracking`。\n如果值为`null`，则无法获取该信息。\n",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "分拣中心代码。"
+          },
+          "name": {
+            "type": "string",
+            "description": "分拣中心名称。"
+          }
+        }
+      },
+      "posting.v4.PostingFbsListResponse.Postings.SortingCenter": {
+        "type": "object",
+        "title": "object",
+        "description": "关于货件需要送达的分拣中心的信息。适用于`integration_type_flow = hybrid_3pl_tracking`。\n如果值为`null`，则无法获取该信息。\n",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "分拣中心代码。"
+          },
+          "name": {
+            "type": "string",
+            "description": "分拣中心名称。"
+          }
+        }
+      },
+      "posting.v3.FbsPostingDetail.SortingCenter": {
+        "type": "object",
+        "title": "object",
+        "description": "关于货件需要送达的分拣中心的信息。适用于`integration_type_flow = hybrid_3pl_tracking`。\n如果值为`null`，则无法获取该信息。\n",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "分拣中心代码。"
+          },
+          "name": {
+            "type": "string",
+            "description": "分拣中心名称。"
+          }
+        }
+      },
+      "v3ChatListRequestFilterChatStatus": {
+        "type": "string",
+        "default": "ALL",
+        "enum": [
+          "ALL",
+          "OPENED",
+          "CLOSED"
+        ],
+        "description": "按聊天状态过滤：\n  - `All` — 所有聊天。\n  - `Opened` — 开放的聊天。\n  - `Closed` — 不开放的聊天。\n"
+      },
+      "report.common.Report.AdditionalDataItem": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "附加参数的键。"
+          },
+          "value": {
+            "type": "string",
+            "description": "附加参数的值。"
+          }
+        }
+      },
+      "rpcStatus_v1FinanceRealizationPosting": {
+        "type": "object",
+        "title": "object",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32",
+            "description": "错误代码。"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/protobufAny"
+            },
+            "description": "有关错误的附加信息。"
+          },
+          "message": {
+            "type": "string",
+            "description": "错误描述：\n- `The requested report is too large. Use /v1/report/realization/posting/create.`——无法 通过方法[/v1/finance/realization/posting](#operation/FinanceAPI_GetRealizationReportV1)获取 报告。请使用方法[/v1/report/realization/posting/create](#operation/CreateCompanyFinanceRealizationPostingReport)。\n- `Request validation error: invalid GetRealizationReportPostingRequest.Month: value must be inside range [1, 12]`——月份 值 无效。\n- `Year, Month, and Day parameters describe an un-representable DateTime.`——日期无效。\n- `Request validation error: invalid GetRealizationReportPostingRequest.Year: value must be greater than or equal to 2023`——年份无效。可获取截至当前、最早追溯至2023年8月（含）的报告。\n"
+          }
+        }
+      },
+      "finance.v1.GetFinanceAccrualByDayResponse.Accrual.ContainerFees.ContainerFee": {
+        "type": "object",
+        "properties": {
+          "accrued": {
+            "$ref": "#/components/schemas/money.MoneyAccrued"
+          },
+          "type_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "应计项目类型标识符。 请使用[/v1/finance/accrual/types](#operation/GetFinanceAccrualTypes)方法获取参数值。"
+          }
+        }
+      },
+      "finance.v1.GetFinanceAccrualByDayResponse.Accrual.ContainerFees": {
+        "type": "object",
+        "description": "集装箱应计项目。",
+        "properties": {
+          "fees": {
+            "type": "array",
+            "description": "应计项目。",
+            "items": {
+              "$ref": "#/components/schemas/finance.v1.GetFinanceAccrualByDayResponse.Accrual.ContainerFees.ContainerFee"
+            }
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingRequest": {
+        "required": [
+          "posting_number"
+        ],
+        "type": "object",
+        "properties": {
+          "posting_number": {
+            "type": "string",
+            "description": "货件标识符。"
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingResponse.Posting.AnalyticsData": {
+        "description": "分析数据。",
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "配送城市。"
+          },
+          "delivery_date_begin": {
+            "type": "string",
+            "format": "date-time",
+            "description": "配送开始日期和时间。"
+          },
+          "delivery_date_end": {
+            "type": "string",
+            "format": "date-time",
+            "description": "配送结束日期和时间。"
+          },
+          "delivery_type": {
+            "type": "string",
+            "description": "配送方法。"
+          },
+          "region": {
+            "type": "string",
+            "description": "配送地区。"
+          },
+          "warehouse_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "仓库标识符。"
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingResponse.Posting.Cancellation": {
+        "description": "取消信息。",
+        "type": "object",
+        "properties": {
+          "cancel_reason": {
+            "type": "string",
+            "description": "取消原因。"
+          },
+          "cancel_reason_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "货件取消原因标识符。"
+          },
+          "cancellation_initiator": {
+            "type": "string",
+            "description": "取消发起人。"
+          },
+          "cancellation_type": {
+            "type": "string",
+            "description": "取消类型。"
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingResponse.Posting.FinancialData.Products.Actions": {
+        "type": "object",
+        "properties": {
+          "action_id": {
+            "description": "促销活动标识符。",
+            "type": "integer",
+            "format": "int64"
+          },
+          "action_type": {
+            "type": "string",
+            "description": "促销活动类型。"
+          },
+          "date_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "促销活动开始日期。"
+          },
+          "date_to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "促销活动结束日期。"
+          },
+          "description": {
+            "type": "string",
+            "description": "促销活动名称。"
+          },
+          "discount_percent": {
+            "type": "number",
+            "format": "double",
+            "description": "折扣百分比。"
+          },
+          "discount_value": {
+            "type": "number",
+            "format": "double",
+            "description": "折扣金额。"
+          }
+        }
+      },
+      "money.MoneyComissions": {
+        "description": "商品佣金。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "description": "金额。",
+            "type": "string"
+          },
+          "currency": {
+            "description": "货币单位。",
+            "type": "string"
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingResponse.Posting.FinancialData.Products.PostingCommission": {
+        "description": "货件佣金。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "金额。"
+          },
+          "payout": {
+            "type": "number",
+            "format": "double",
+            "description": "付款。"
+          },
+          "percent": {
+            "type": "number",
+            "format": "double",
+            "description": "佣金比例。"
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingResponse.Posting.FinancialData.Products.ReturnCommission": {
+        "description": "退货佣金。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "金额。"
+          },
+          "payout": {
+            "type": "number",
+            "format": "double",
+            "description": "付款。"
+          },
+          "percent": {
+            "type": "number",
+            "format": "double",
+            "description": "佣金比例。"
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingResponse.Posting.FinancialData.Products": {
+        "type": "object",
+        "properties": {
+          "actions": {
+            "type": "array",
+            "description": "促销活动列表。",
+            "items": {
+              "$ref": "#/components/schemas/posting.v1.GetFbpPostingResponse.Posting.FinancialData.Products.Actions"
+            }
+          },
+          "commissions_price": {
+            "$ref": "#/components/schemas/money.MoneyComissions"
+          },
+          "customer_price": {
+            "$ref": "#/components/schemas/moneyMoneyCustomerPrice"
+          },
+          "old_price": {
+            "type": "number",
+            "format": "double",
+            "description": "折扣前的价格。商品卡上会以划线价显示。"
+          },
+          "posting_commission": {
+            "$ref": "#/components/schemas/posting.v1.GetFbpPostingResponse.Posting.FinancialData.Products.PostingCommission"
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int64",
+            "description": "货件中的商品数量。"
+          },
+          "return_commission": {
+            "$ref": "#/components/schemas/posting.v1.GetFbpPostingResponse.Posting.FinancialData.Products.ReturnCommission"
+          },
+          "seller_price": {
+            "$ref": "#/components/schemas/money.Money.Seller_price"
+          },
+          "sku": {
+            "type": "integer",
+            "format": "int64",
+            "description": "商品在Ozon系统中的标识符——SKU。"
+          },
+          "total_discount_percent": {
+            "type": "number",
+            "format": "double",
+            "description": "折扣百分比。"
+          },
+          "total_discount_value": {
+            "type": "number",
+            "format": "double",
+            "description": "折扣金额。"
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingResponse.Posting.FinancialData": {
+        "type": "object",
+        "description": "财务数据。",
+        "properties": {
+          "cluster_from": {
+            "type": "string",
+            "description": "订单发出地区代码。"
+          },
+          "cluster_to": {
+            "type": "string",
+            "description": "订单配送地区代码。"
+          },
+          "delivery_amount": {
+            "type": "number",
+            "format": "double",
+            "description": "配送费用。"
+          },
+          "products": {
+            "type": "array",
+            "description": "订单中的商品列表。",
+            "items": {
+              "$ref": "#/components/schemas/posting.v1.GetFbpPostingResponse.Posting.FinancialData.Products"
+            }
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingResponse.Posting.Products": {
+        "type": "object",
+        "properties": {
+          "has_imei": {
+            "type": "boolean",
+            "description": "如果有IMEI，则为`true`。\n"
+          },
+          "marketplace_seller_price": {
+            "$ref": "#/components/schemas/money.MoneyFBPget"
+          },
+          "name": {
+            "type": "string",
+            "description": "商品名称。"
+          },
+          "offer_id": {
+            "type": "string",
+            "description": "商品在卖家系统中的标识符——货号。"
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int32",
+            "description": "商品数量。"
+          },
+          "sku": {
+            "type": "integer",
+            "format": "int64",
+            "description": "商品在Ozon系统中的标识符——SKU。"
+          },
+          "weight_max": {
+            "type": "number",
+            "format": "double",
+            "description": "单件商品最大重量。"
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingResponse.Posting": {
+        "description": "货件信息。",
+        "type": "object",
+        "properties": {
+          "analytics_data": {
+            "$ref": "#/components/schemas/posting.v1.GetFbpPostingResponse.Posting.AnalyticsData"
+          },
+          "cancellation": {
+            "$ref": "#/components/schemas/posting.v1.GetFbpPostingResponse.Posting.Cancellation"
+          },
+          "financial_data": {
+            "$ref": "#/components/schemas/posting.v1.GetFbpPostingResponse.Posting.FinancialData"
+          },
+          "in_process_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "货件开始处理的日期和时间。"
+          },
+          "order_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "订单的创建日期。"
+          },
+          "order_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "该货件所属订单的标识符。"
+          },
+          "order_number": {
+            "type": "string",
+            "description": "该货件所属订单的编号。"
+          },
+          "posting_number": {
+            "type": "string",
+            "description": "货件标识符。"
+          },
+          "products": {
+            "type": "array",
+            "description": "货件中商品列表。",
+            "items": {
+              "$ref": "#/components/schemas/posting.v1.GetFbpPostingResponse.Posting.Products"
+            }
+          },
+          "status": {
+            "type": "integer",
+            "format": "int64",
+            "description": "货件状态。"
+          },
+          "substatus": {
+            "type": "string",
+            "description": "货件子状态。"
+          },
+          "tpl_provider_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "配送服务商标识符。"
+          }
+        }
+      },
+      "posting.v1.GetFbpPostingResponse": {
+        "type": "object",
+        "properties": {
+          "posting": {
+            "$ref": "#/components/schemas/posting.v1.GetFbpPostingResponse.Posting"
+          }
+        }
+      },
+      "report.v1.CreateCompanyFinanceRealizationPostingReportRequest": {
+        "type": "object",
+        "required": [
+          "month",
+          "year"
+        ],
+        "properties": {
+          "month": {
+            "type": "integer",
+            "format": "int32",
+            "description": "月份。"
+          },
+          "year": {
+            "type": "integer",
+            "format": "int32",
+            "description": "年份。"
+          }
+        }
+      },
+      "report.v1.CreateCompanyFinanceRealizationPostingReportResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "报告的唯一标识符。使用方法[/v1/report/info](#operation/ReportAPI_ReportInfo)获取报告。"
+          }
+        }
+      },
+      "category.description.v1.DescriptionCategoryDependentAttributesRequest": {
+        "type": "object",
+        "required": [
+          "description_category_id"
+        ],
+        "properties": {
+          "description_category_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "类目标识符，来自[/v1/description-category/tree](#operation/DescriptionCategoryAPI_GetTree)方法。"
+          },
+          "type_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "商品类型标识符，来自[/v1/description-category/tree](#operation/DescriptionCategoryAPI_GetTree)方法。"
+          }
+        }
+      },
+      "category.description.v1.DescriptionCategoryDependentAttributesResponse.DependentAttributes": {
+        "type": "object",
+        "properties": {
+          "child_attribute_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "子特征的标识符。"
+          },
+          "parent_attribute_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "父特征的标识符。"
+          }
+        }
+      },
+      "category.description.v1.DescriptionCategoryDependentAttributesResponse": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "array",
+            "description": "依赖特征的信息。",
+            "items": {
+              "$ref": "#/components/schemas/category.description.v1.DescriptionCategoryDependentAttributesResponse.DependentAttributes"
+            }
+          }
+        }
+      },
+      "category.description.v1.DescriptionCategoryDependentAttributesValuesRequest": {
+        "type": "object",
+        "required": [
+          "parent_attribute_id",
+          "child_attribute_id"
+        ],
+        "properties": {
+          "child_attribute_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "子特征的标识符。"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "用于选择下一批数据的指针。"
+          },
+          "description_category_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "类目标识符，来自[/v1/description-category/tree](#operation/DescriptionCategoryAPI_GetTree)方法。"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100,
+            "description": "响应中的值数量。"
+          },
+          "parent_attribute_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "父特征的标识符。"
+          },
+          "type_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "商品类型标识符，来自[/v1/description-category/tree](#operation/DescriptionCategoryAPI_GetTree)方法。"
+          }
+        }
+      },
+      "category.description.v1.DescriptionCategoryDependentAttributesValuesResponse.DependentAttributesValuesResult.ChildrenValue": {
+        "type": "object",
+        "properties": {
+          "child_value": {
+            "type": "string",
+            "description": "子特征的值。"
+          },
+          "child_value_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "子特征值的标识符。"
+          }
+        }
+      },
+      "category.description.v1.DescriptionCategoryDependentAttributesValuesResponse.DependentAttributesValuesResult": {
+        "type": "object",
+        "properties": {
+          "children": {
+            "type": "array",
+            "description": "子特征的信息。",
+            "items": {
+              "$ref": "#/components/schemas/category.description.v1.DescriptionCategoryDependentAttributesValuesResponse.DependentAttributesValuesResult.ChildrenValue"
+            }
+          },
+          "parent_value": {
+            "type": "string",
+            "description": "父特征的值。"
+          },
+          "parent_value_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "父特征值的标识符。"
+          }
+        }
+      },
+      "category.description.v1.DescriptionCategoryDependentAttributesValuesResponse": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "用于选择下一批数据的指针。"
+          },
+          "result": {
+            "type": "array",
+            "description": "依赖特征的信息。",
+            "items": {
+              "$ref": "#/components/schemas/category.description.v1.DescriptionCategoryDependentAttributesValuesResponse.DependentAttributesValuesResult"
+            }
+          }
+        }
+      },
+      "fbp.v1.FbpOrderDirectTplDlvEditRequest": {
+        "type": "object",
+        "required": [
+          "row_version",
+          "supply_id",
+          "tracking_number",
+          "transport_company_name"
+        ],
+        "properties": {
+          "row_version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "草稿的当前版本标识符。"
+          },
+          "supply_id": {
+            "type": "string",
+            "description": "交货申请标识符。"
+          },
+          "tracking_number": {
+            "type": "string",
+            "description": "货件追踪号码。"
+          },
+          "transport_company_name": {
+            "type": "string",
+            "description": "物流公司名称。"
+          }
+        }
+      },
+      "fbp.v1.OrderValidationError.ErrorType": {
+        "type": "string",
+        "enum": [
+          "DELIVERY_DRIVER_NAME_LENGTH_MAXIMUM_REACHED",
+          "DELIVERY_VEHICLE_GENRE_LENGTH_MAXIMUM_REACHED",
+          "DELIVERY_VEHICLE_REGISTRATION_PLATE_LENGTH_MAXIMUM_REACHED",
+          "DELIVERY_TPL_NAME_LENGTH_MAXIMUM_REACHED",
+          "DELIVERY_TRACKING_NUMBER_LENGTH_MAXIMUM_REACHED",
+          "DELIVERY_DRIVER_NAME_EMPTY",
+          "DELIVERY_VEHICLE_GENRE_EMPTY",
+          "DELIVERY_VEHICLE_REGISTRATION_PLATE_EMPTY",
+          "DELIVERY_TPL_NAME_EMPTY",
+          "DELIVERY_TRACKING_NUMBER_EMPTY",
+          "DELIVERY_BY_SELLER_EMPTY",
+          "DELIVERY_BY_TPL_EMPTY",
+          "RECEIVE_DATE_NOT_SET",
+          "SUPPLY_TYPE_NOT_SUPPORTED",
+          "INVALID_BUSINESS_FLOW",
+          "ORDER_LOCKED",
+          "INVALID_TIMESLOT",
+          "DROP_OFF_DETAILS_EMPTY",
+          "PICK_UP_ADDRESS_IS_EMPTY",
+          "PICK_UP_SENDER_NAME_IS_EMPTY",
+          "PICK_UP_SENDER_PHONE_IS_EMPTY",
+          "PICK_UP_ADDRESS_IS_TOO_LARGE",
+          "PICK_UP_SENDER_NAME_IS_TOO_LARGE",
+          "PICK_UP_SENDER_PHONE_IS_TOO_LARGE",
+          "PICK_UP_COMMENT_IS_TOO_LARGE",
+          "PICK_UP_DETAILS_EMPTY",
+          "DROP_OFF_ADDRESS_NOT_SET",
+          "INVALID_DECLINE_REASON_FOR_WAREHOUSE_TYPE",
+          "PICK_UP_SENDER_PHONE_HAS_NOT_ALLOWED_CHARS",
+          "TIMESLOT_EMPTY",
+          "TIMESLOT_EXPIRED",
+          "BUNDLE_UPDATE_ALREADY_IN_PROGRESS",
+          "INVALID_STATE"
+        ]
+      },
+      "fbp.v1.OrderValidationError": {
+        "type": "object",
+        "description": "错误信息。",
+        "properties": {
+          "order_errors": {
+            "type": "array",
+            "description": "错误类型：\n- `DELIVERY_DRIVER_NAME_LENGTH_MAXIMUM_REACHED`——司机姓名长度超出上限；\n- `DELIVERY_VEHICLE_GENRE_LENGTH_MAXIMUM_REACHED`——车辆类型长度超出上限；\n- `DELIVERY_VEHICLE_REGISTRATION_PLATE_LENGTH_MAXIMUM_REACHED`——车辆牌号长度超出上限；\n- `DELIVERY_TPL_NAME_LENGTH_MAXIMUM_REACHED`——第三方物流公司名称长度超出上限；\n- `DELIVERY_TRACKING_NUMBER_LENGTH_MAXIMUM_REACHED`——追踪号码长度超出上限；\n- `DELIVERY_DRIVER_NAME_EMPTY`——未填写司机姓名；\n- `DELIVERY_VEHICLE_GENRE_EMPTY`——未填写车辆类型；\n- `DELIVERY_VEHICLE_REGISTRATION_PLATE_EMPTY`——未填写车辆牌号；\n- `DELIVERY_TPL_NAME_EMPTY`——未填写第三方物流公司名称；\n- `DELIVERY_TRACKING_NUMBER_EMPTY`——未填写追踪号码；\n- `DELIVERY_BY_SELLER_EMPTY`——未填写卖家自行配送的信息；\n- `DELIVERY_BY_TPL_EMPTY`——未填写第三方物流公司配送的信息；\n- `RECEIVE_DATE_NOT_SET`——未填写接收日期；\n- `SUPPLY_TYPE_NOT_SUPPORTED`——不支持该交货类型；\n- `INVALID_BUSINESS_FLOW`——业务流程无效；\n- `ORDER_LOCKED`——无法编辑商品组成；\n- `INVALID_TIMESLOT`——时间段填写有误；\n- `DROP_OFF_DETAILS_EMPTY`——未填写揽收点详细信息；\n- `PICK_UP_ADDRESS_IS_EMPTY`——未填写取件点地址；\n- `PICK_UP_SENDER_NAME_IS_EMPTY`——未填写发件人姓名；\n- `PICK_UP_SENDER_PHONE_IS_EMPTY`——未填写发件人电话号码；\n- `PICK_UP_ADDRESS_IS_TOO_LARGE`——取件点地址长度超出上限；\n- `PICK_UP_SENDER_NAME_IS_TOO_LARGE`——发件人姓名长度超出上限；\n- `PICK_UP_SENDER_PHONE_IS_TOO_LARGE`——发件人电话号码长度超出上限；\n- `PICK_UP_COMMENT_IS_TOO_LARGE`——交货备注长度超出上限；\n- `PICK_UP_DETAILS_EMPTY`——未填写取件点详细信息；\n- `DROP_OFF_ADDRESS_NOT_SET`——未填写揽收点地址；\n- `INVALID_DECLINE_REASON_FOR_WAREHOUSE_TYPE`——取消原因不适用于仓库类型；\n- `PICK_UP_SENDER_PHONE_HAS_NOT_ALLOWED_CHARS`——发件人电话号码中有禁止使用的字符；\n- `TIMESLOT_EMPTY`——未填写时间段；\n- `TIMESLOT_EXPIRED`——交货未在指定时间段内送达；\n- `BUNDLE_UPDATE_ALREADY_IN_PROGRESS`——交货信息更新已在进行中；\n- `INVALID_STATE`——状态不正确。\n",
+            "items": {
+              "$ref": "#/components/schemas/fbp.v1.OrderValidationError.ErrorType"
+            }
+          }
+        }
+      },
+      "fbp.v1.FbpOrderDirectTplDlvEditResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/fbp.v1.OrderValidationError"
+          },
+          "is_error": {
+            "type": "boolean",
+            "description": "`true`，前提是有错误。\n"
+          },
+          "row_version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "草稿的当前版本标识符。"
+          }
+        }
+      },
+      "posting.v1.PostingFbpListResponse.Postings.FinancialData.Products.Commission": {
+        "description": "货件佣金。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "金额。"
+          },
+          "payout": {
+            "type": "number",
+            "format": "double",
+            "description": "付款。"
+          },
+          "percent": {
+            "type": "number",
+            "format": "double",
+            "description": "佣金比例。"
+          }
+        }
+      },
+      "posting.v1.PostingFbpListResponse.Postings.FinancialData.Products.ReturnCommission": {
+        "description": "退货佣金。",
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "金额。"
+          },
+          "payout": {
+            "type": "number",
+            "format": "double",
+            "description": "付款。"
+          },
+          "percent": {
+            "type": "number",
+            "format": "double",
+            "description": "佣金比例。"
+          }
+        }
+      },
+      "product.v1.ProductPricesDetailsResponse.Price.WeightIndex": {
+        "type": "object",
+        "title": "object",
+        "properties": {
+          "self_wb_index": {
+            "type": "number",
+            "format": "double",
+            "description": "Wildberries上的价格指数。"
+          },
+          "self_wb_min_competitor_price": {
+            "type": "array",
+            "description": "最低价格。",
+            "items": {
+              "$ref": "#/components/schemas/money.Money"
+            }
+          },
+          "self_wb_url": {
+            "type": "string",
+            "description": "Wildberries上按平均价格销售的商品的链接。"
+          },
+          "weight_percent": {
+            "type": "number",
+            "format": "double",
+            "description": "商品价格对商品总指数的影响系数。"
           }
         }
       }
