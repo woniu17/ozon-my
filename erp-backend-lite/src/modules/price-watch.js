@@ -20,6 +20,7 @@ import logger from '../middleware/log.js';
 import config from '../config/index.js';
 import { recordTaskRun } from '../services/task-run-log.js';
 import { enqueuePriceWatchForOrderSku } from '../services/price-watch-queue.js';
+import { rubToCny } from '../services/rub-cny-rate.js';
 
 const router = Router();
 
@@ -30,9 +31,10 @@ const BATCH_LIMIT = 100;
 //   {cardPrice:{price:"65,29 ¥"}} 常规卡片价;{originalPrice:"657,01 ¥",price:"657,01 ¥"} 无卡片价(顶层字符串)
 // 兜底链中仅接受字符串/数字,防止嵌套对象被 String() 成 "[object Object]"
 const _plain = (v) => (typeof v === 'string' || typeof v === 'number' ? String(v) : null);
-export function parsePriceText(raw) {
-  if (raw == null) return null;
-  const text =
+
+function _priceText(raw) {
+  if (raw == null) return '';
+  return (
     _plain(raw) ??
     (typeof raw === 'object'
       ? _plain(raw?.cardPrice?.price) ??
@@ -42,12 +44,58 @@ export function parsePriceText(raw) {
         _plain(raw?.price) ??
         _plain(raw?.originalPrice) ??
         ''
-      : '');
-  const m = text.replace(/\s|\u00A0/g, '').match(/(\d+(?:[.,]\d+)?)/);
+      : '')
+  );
+}
+
+function detectCurrency(text) {
+  if (/₽|руб|RUB/i.test(text)) return 'RUB';
+  if (/¥|CNY|yuan/i.test(text)) return 'CNY';
+  return '';
+}
+
+// 解析价格返回 { amount, currency }:amount 为原始数字,currency 为 'RUB'|'CNY'|''
+export function parsePrice(raw) {
+  const text = _priceText(raw);
+  const m = text.replace(/\s| /g, '').match(/(\d+(?:[.,]\d+)?)/);
   if (!m) return null;
   const n = Number(m[1].replace(',', '.'));
-  return Number.isFinite(n) ? n : null;
+  if (!Number.isFinite(n)) return null;
+  return { amount: n, currency: detectCurrency(text) };
 }
+
+// 统一人民币金额(卢布自动换算;无货币符号视为 CNY;Ozon 报价币种不稳定见 rub-cny-rate.js)
+export function parsePriceText(raw) {
+  const p = parsePrice(raw);
+  if (!p) return null;
+  return p.currency === 'RUB' ? rubToCny(p.amount) : p.amount;
+}
+
+// 卖家报价统一为人民币文本(如 "1 540 ₽" → "127,51 ¥"),供接口返回给前端直接展示。
+// 返回 null 表示无法解析出金额。
+export function sellerPriceCny(rawPrice) {
+  const p = parsePrice(rawPrice);
+  if (!p) return null;
+  const cny = p.currency === 'RUB' ? rubToCny(p.amount) : p.amount;
+  return cny != null ? `${String(cny).replace('.', ',')} ¥` : null;
+}
+
+// 接口返回前归一化 sellers:每个元素 price 替换为人民币对象(前端直接展示/排序),
+// 原始价格存 rawPrice 保留追溯。含 self 行(无原始 price)不处理。
+export function normalizeSellersForResponse(sellers) {
+  if (!Array.isArray(sellers)) return sellers;
+  return sellers.map((s) => {
+    if (!s || typeof s !== 'object') return s;
+    const cnyText = sellerPriceCny(s?.price);
+    if (cnyText == null) return s;
+    return {
+      ...s,
+      price: { cardPrice: { price: cnyText } },
+      rawPrice: s.price || null,
+    };
+  });
+}
+
 
 // ── 我的现价:从 product_data_cache.data(OPI /v3/product/info 原始 JSON)提取 ──
 // v3 返回 price 为字符串("1390.000000",见 docs/ozon-api/01-商品管理.md);
@@ -438,7 +486,7 @@ router.get('/admin/api/price-watch/detail/:sku', (req, res, next) => {
       )
       .get(sku);
     if (latest && latest.sellers) {
-      try { latest.sellers = JSON.parse(latest.sellers); } catch { latest.sellers = []; }
+      try { latest.sellers = normalizeSellersForResponse(JSON.parse(latest.sellers)); } catch { latest.sellers = []; }
     }
     const days = Math.max(1, Math.min(90, Number(req.query.days) || 30));
     const since = new Date(Date.now() - days * 86400000).toISOString();
