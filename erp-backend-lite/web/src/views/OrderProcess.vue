@@ -78,15 +78,18 @@ const SORT_OPTIONS = {
   return_asc: { key: 'return', label: '退货时间 旧→新' },
   delivered_desc: { key: 'delivered', label: '签收时间 新→旧' },
   delivered_asc: { key: 'delivered', label: '签收时间 旧→新' },
+  shipped_desc: { key: 'shipped', label: '交运时间 新→旧' },
+  shipped_asc: { key: 'shipped', label: '交运时间 旧→新' },
 };
 // 各 tab 可用排序键(2026-09-20 v3):
 // 揽收排序适用所有状态(除待处理/待打单/交运——货件尚未被物流商揽收)
 // 退货排序:已签收/已成功/已取消/已退货;签收排序:已签收/已成功(delivered_at 100% 覆盖)
+// 交运排序:交运 tab 用(2026-10-29,按本地 waybill_printed_at)
 const TAB_SORT_KEYS = {
   all: ['order', 'delivering'],
   waitProcess: ['order'],
   waitShip: ['order'],
-  shipSuccess: ['order'],
+  shipSuccess: ['order', 'shipped'],
   waitReceiverConfirm: ['order', 'delivering'],
   signed: ['order', 'delivering', 'return', 'delivered'],
   settled: ['order', 'delivering', 'return', 'delivered'],

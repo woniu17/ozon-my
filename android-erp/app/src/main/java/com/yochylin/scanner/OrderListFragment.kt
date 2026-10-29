@@ -77,13 +77,15 @@ class OrderListFragment : Fragment() {
             "delivering_asc" to SortOption("delivering_asc", "揽收时间 旧→新", "delivering"),
             "delivered_desc" to SortOption("delivered_desc", "签收时间 新→旧", "delivered"),
             "return_desc" to SortOption("return_desc", "退货时间 新→旧", "return"),
+            "shipped_desc" to SortOption("shipped_desc", "交运时间 新→旧", "shipped"),
+            "shipped_asc" to SortOption("shipped_asc", "交运时间 旧→新", "shipped"),
         )
 
         private val TAB_SORT_KEYS = mapOf(
             "all" to listOf("order", "delivering"),
             "waitProcess" to listOf("order"),
             "waitShip" to listOf("order"),
-            "shipSuccess" to listOf("order"),
+            "shipSuccess" to listOf("order", "shipped"),
             "waitReceiverConfirm" to listOf("order", "delivering"),
             "signed" to listOf("order", "delivering", "return", "delivered"),
             "settled" to listOf("order", "delivering", "return", "delivered"),

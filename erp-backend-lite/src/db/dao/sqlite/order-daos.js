@@ -996,11 +996,13 @@ function setTagOrder(names) {
 //   delivering 对应 o.delivering_date(国际物流商揽收时间),适用除待处理/待打单/交运外的所有状态
 //   发货前取消的单无揽收时间(NULLS LAST 排最后);return=货件退回/销毁处理时间
 //   delivered 对应 p.delivered_at(妥投时间),仅已签收/已成功 tab 用(100% 覆盖)
+//   shipped 对应 p.waybill_printed_at(本地打印面单/扫描发货交运时间,2026-10-29),交运 tab 用
 const SORT_COLUMNS = {
   order: 'o.in_process_at',
   delivering: 'o.delivering_date',
   return: 'p.return_at',
   delivered: 'p.delivered_at',
+  shipped: 'p.waybill_printed_at',
 };
 
 function listPackages(filters = {}) {
