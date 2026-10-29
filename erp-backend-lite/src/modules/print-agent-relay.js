@@ -16,7 +16,8 @@ import { pdfToPngDataUrl, pdfToPngPagesDataUrl } from '../services/waybill-image
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
-import { packageLabel, containerLabel, carriageDeliveryList } from '../services/ozon-opi.js';
+import { packageLabel, containerLabel, carriageDeliveryList, carriagePostingList } from '../services/ozon-opi.js';
+import { extractOglInboundTrackingNumbers } from '../services/waybill-barcode.js';
 import { getWaybill, setWaybill, getWaybillPng, setWaybillPng } from '../services/waybill-cache.js';
 
 // SSH 隧道把打印电脑的组件端口转发到服务器 127.0.0.1:13528;可用环境变量覆盖
@@ -536,6 +537,42 @@ router.post('/admin/api/print-agent/container-labels', async (req, res, next) =>
   }
 });
 
+// 解析货运标签 PDF 中的 OGL 国内集运仓快递单号,按页序回填到对应货件(2026-10-30)
+// 背景:Ozon get-container-labels 对 OGL 集运(圆通承运)的发运返回国内段圆通面单 PDF,
+// 每页一个 YT 单号 = 发往 Ozon OGL 国内集运仓的快递单号。
+// 关联:PDF 页序与发运货件列表顺序配对,写入 op_package.head_logistics_no(仅填空值);
+// 任何异常只记日志,不影响货运标签打印/预览本身。
+async function fillOglInboundTracking(store, labelId, buffer) {
+  const numbers = (await extractOglInboundTrackingNumbers(buffer)).filter(Boolean);
+  if (!numbers.length) return { oglInboundTrackingNumbers: [], matched: 0 };
+  let postings = [];
+  try {
+    const data = await carriagePostingList(store, labelId, { limit: 100 });
+    postings = data?.postings || [];
+  } catch (e) {
+    logger.warn({ err: e?.message, storeId: store.id, labelId }, '[print-agent] OGL 入仓单号回填:货件列表获取失败');
+    return { oglInboundTrackingNumbers: numbers, matched: 0 };
+  }
+  let matched = 0;
+  for (let i = 0; i < numbers.length && i < postings.length; i++) {
+    const pn = postings[i]?.posting_number;
+    if (!pn) continue;
+    try {
+      const r = orderPackageDao.fillHeadLogisticsByPosting({
+        storeId: store.id,
+        postingNumber: pn,
+        logisticsNo: numbers[i],
+        logisticsCompany: '圆通速递',
+      });
+      if (r.updated) matched++;
+    } catch (e) {
+      logger.warn({ err: e?.message, storeId: store.id, labelId, postingNumber: pn }, '[print-agent] OGL 入仓单号回填:单号写入失败');
+    }
+  }
+  logger.info({ storeId: store.id, labelId, pageCount: numbers.length, matched }, '[print-agent] OGL 入仓单号回填完成');
+  return { oglInboundTrackingNumbers: numbers, matched };
+}
+
 // 拉取货运标签 PDF(前端渲染/预览用)
 router.post('/admin/api/print-agent/container-label-pdf', async (req, res, next) => {
   try {
@@ -547,6 +584,10 @@ router.post('/admin/api/print-agent/container-label-pdf', async (req, res, next)
     const store = (config.loadStores() || []).find((s) => s.id === storeId);
     if (!store) return res.status(400).json({ ok: false, message: `店铺 ${storeId} 不存在` });
     const { buffer } = await containerLabel(store, labelId);
+    // 下载即回填 OGL 入仓单号(本机直连打印也走此接口下载 PDF);不阻塞 PDF 响应
+    fillOglInboundTracking(store, labelId, buffer).catch((e) => {
+      logger.warn({ err: e?.message, storeId, labelId }, '[print-agent] OGL 入仓单号回填异常(忽略)');
+    });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="container-label-${labelId}.pdf"`);
     res.end(buffer);
@@ -594,7 +635,9 @@ router.post('/admin/api/print-agent/print-container-label', async (req, res, nex
     logger.info({ storeId, labelId, printer: printer || 'default', durationMs }, '[print-agent] 货运标签打印成功');
     // posting_number 存 labelId,供「是否已打印」查询(listPrintedContainerLabelIds)
     orderPackageDao.insertPrintLog({ ...logMeta, postingNumber: String(labelId), printer, source: 'print-container-label', status: 'success', durationMs, ip: req.ip });
-    res.json(ok({ printed: true, labelId }));
+    // 打印后同步回填 OGL 入仓单号(2026-10-30),响应带回单号供前端提示
+    const fill = await fillOglInboundTracking(store, labelId, buffer);
+    res.json(ok({ printed: true, labelId, ...fill }));
   } catch (e) {
     orderPackageDao.insertPrintLog({
       ...logMeta,

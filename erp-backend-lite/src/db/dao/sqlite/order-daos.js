@@ -1989,6 +1989,27 @@ function updatePurchaseLogistics({ purchaseOrderId, logisticsNo, logisticsCompan
 /** 取消关联:冲回产品行金额 + 删除 link;采购单无剩余关联时置 unlinked
  *  auto 模式关联被删后,剩余 auto 关联的分摊金额会重新按 quantity 加权计算
  */
+/** 回填包裹的 OGL 国内集运仓快递单号(2026-10-30)
+ *  场景:打印 Ozon 货运标签时,PDF 即国内段圆通面单,每页一个 YT 单号;
+ *  该单号是供应商发货到 Ozon OGL 国内集运仓的快递单号,回填到 op_package 头程物流字段。
+ *  按 store_id + logistics_no(=posting_number)匹配包裹,仅空值写入(不覆盖已录单号)。
+ */
+function fillHeadLogisticsByPosting({ storeId, postingNumber, logisticsNo, logisticsCompany }) {
+  const no = String(logisticsNo || '').trim();
+  if (!no) return { updated: 0 };
+  const company = String(logisticsCompany || '').trim() || '圆通速递';
+  const r = db
+    .prepare(
+      `UPDATE op_package SET
+         head_logistics_no = COALESCE(head_logistics_no, ?),
+         head_logistics_company = COALESCE(head_logistics_company, ?),
+         gmt_modified = ?
+       WHERE store_id = ? AND logistics_no = ?`
+    )
+    .run(no, company, nowIso(), storeId, postingNumber);
+  return { updated: Number(r.changes) };
+}
+
 function unlinkPurchase(purchaseOrderId, packageId) {
   const now = nowIso();
   runInTx(() => {
@@ -2790,6 +2811,7 @@ export const orderPackageDao = {
   submitPurchase,
   updatePurchaseAlloc,
   updatePurchaseLogistics,
+  fillHeadLogisticsByPosting,
   unlinkPurchase,
   revertToWaitProcess,
   clearAllPurchase,

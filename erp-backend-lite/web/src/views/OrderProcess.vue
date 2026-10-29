@@ -3654,6 +3654,8 @@ onUnmounted(() => {
                   <span class="mono qc-posting" title="质检单货件号">{{ pkg.postingNumber }}</span>
                 </template>
                 <span v-else class="mono">{{ pkg.postingNumber }}</span>
+                <!-- OGL 国内集运仓快递单号(2026-10-30):打印货运标签时从圆通面单 PDF 自动解析回填 -->
+                <span v-if="pkg.headLogisticsNo" class="pkg-ogl-badge" :title="`OGL 国内集运仓快递单号(${pkg.headLogisticsCompany || '国内快递'})`">{{ pkg.headLogisticsNo }}</span>
                 <!-- 拆单徽标:子件悬浮显示母件号;母件提示已拆出子件(2026-09-18) -->
                 <span v-if="pkg.parentId" class="pkg-split-badge pkg-split-child" :title="`拆单子件(母件 ${pkg.parentId})`">子件</span>
                 <span v-else-if="pkg.hasChildren" class="pkg-split-badge pkg-split-mother" title="拆单母件(已拆出子件货件)">母件</span>
@@ -5526,6 +5528,20 @@ a.product-title:hover {
   color: #b91c1c;
   font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+/* OGL 国内集运仓快递单号徽标(2026-10-30):打印货运标签时从圆通面单 PDF 自动解析回填 */
+.pkg-ogl-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #047857;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: nowrap;
 }
 
