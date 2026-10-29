@@ -34,6 +34,7 @@ import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from '
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initMetrics, addMetric, finalizeMetrics } from './metrics.js';
+import { rubToCny, refreshRubCnyRate } from '../erp-backend-lite/src/services/rub-cny-rate.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1006,6 +1007,8 @@ const JSONLD_EXTRACT_FN = () => {
 
 // ── detail 构建(Node 侧,widgetStates 为主 + jsonLd 兜底) ─────
 // 设计 §4.2:19 字段;widgetStates 即 Step5 richMedia 已获取响应(零增量请求)
+// Ozon 对 headless 返回的报价币种不稳定(时而 ₽ 时而 ¥),这里识别货币并把卢布
+// 统一换算成人民币(CNY),detail_data.price 等字段与 ERP 人民币口径一致(2026-10-29)。
 function parsePriceNum(p) {
   if (p == null) return null;
   const tryStr = (s) => {
@@ -1017,29 +1020,37 @@ function parsePriceNum(p) {
     }
     return null;
   };
+  // 识别货币:₽/руб/RUB=卢布(需换算),¥/CNY=人民币(原样),无符号默认人民币口径
+  const currencyOf = (s) =>
+    typeof s === 'string' ? (/₽|руб|RUB/i.test(s) ? 'RUB' : /¥|CNY|yuan/i.test(s) ? 'CNY' : '') : '';
+  const convert = (n, currency) => (currency === 'RUB' ? rubToCny(n) : n);
+
   if (typeof p === 'number') return Number.isFinite(p) ? p : null;
-  if (typeof p === 'string') return tryStr(p);
+  if (typeof p === 'string') {
+    const n = tryStr(p);
+    return n == null ? null : convert(n, currencyOf(p));
+  }
   if (typeof p === 'object') {
     // price 对象常见形态:{ cardPrice: { price: '1 234 ₽' } } / { text: '...' } / { price: '...' }
     for (const c of [p.cardPrice?.price ?? p.cardPrice, p.price, p.finalPrice, p.text, p]) {
       if (typeof c === 'number' && Number.isFinite(c)) return c;
       if (typeof c === 'string') {
         const n = tryStr(c);
-        if (n != null) return n;
+        if (n != null) return convert(n, currencyOf(c));
       }
       if (c && typeof c === 'object' && typeof c.text === 'string') {
         const n = tryStr(c.text);
-        if (n != null) return n;
+        if (n != null) return convert(n, currencyOf(c.text));
       }
     }
   }
   return null;
 }
 
-// 价格统一规范化为数字字符串("15,12 ¥"→"15.12","1 945,66 ₽"→"1945.66",""→"")
+// 价格统一规范化为数字字符串且换算成人民币("15,12 ¥"→"15.12","1 945,66 ₽"→"161.1",""→"")
 // 供 detail 缓存存储:浅度采集 card_data.price 存的是数字,深度采集 detail_data.price
 // 若存原始 locale 字符串("15,12 ¥"),下游 Number() 解析为 NaN,导致上架预览售价缺失。
-// 保持数字字符串格式,与 card_data.price 口径一致。
+// 保持数字字符串格式,与 card_data.price 口径一致;卢布自动按汇率换算成人民币(2026-10-29)。
 function normalizePriceStr(p) {
   const n = parsePriceNum(p);
   return n == null ? '' : String(n);
@@ -1107,6 +1118,7 @@ function buildDetailData(filteredStates, jsonLd, fsData, mp4, sku, description =
     characteristics: chars || null,
     // 价格规范化存储(数字字符串):原始 webPrice 是 locale 格式("15,12 ¥"),
     // 直接存原始字符串会让下游 Number() 解析成 NaN(上架预览售价缺失/提交价算错)。
+    currency: 'CNY', // 价格单位统一人民币(卢布已按汇率换算,2026-10-29)
     price: normalizePriceStr(price?.cardPrice || price?.price || ld.offers?.price),
     walletPrice: (price?.ozonCardPrice ?? price?.walletPrice) != null
       ? normalizePriceStr(price?.ozonCardPrice ?? price?.walletPrice)
@@ -1900,6 +1912,8 @@ async function loadFilterMap() {
 // ── main ─────────────────────────────────────────────────────
 async function main() {
   console.log('=== 无头深度采集(ERP API 数据通道) ===');
+  // 预热卢布→人民币汇率(Ozon 返回价格币种不稳定,detail 价格统一换算人民币,2026-10-29)
+  await refreshRubCnyRate();
   console.log(`ERP:       ${cfg.erpBaseUrl}`);
   console.log(`Profile:   ${cfg.profileDir}`);
   console.log(`无头:      ${cfg.headless}  干跑: ${cfg.dryRun}  任务上限: ${cfg.taskLimit || '不限'}`);

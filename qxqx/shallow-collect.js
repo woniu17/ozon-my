@@ -52,6 +52,7 @@ import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initMetrics, addMetric, finalizeMetrics } from './metrics.js';
+import { rubToCny, refreshRubCnyRate } from '../erp-backend-lite/src/services/rub-cny-rate.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -523,6 +524,19 @@ function saveProgress(progress) {
   writeFileSync(cfg.progressFile, JSON.stringify(progress, null, 2));
 }
 
+// ── 价格币种归一化:卢布→人民币(2026-10-29) ─────────────
+// Ozon 对 headless 浏览器返回的报价币种不稳定(时而 ₽ 时而 ¥),而价格过滤阈值
+// skuPriceMin/Max、日志 price、card 缓存均为人民币口径。这里在 Node 侧把卢布
+// 价格统一换算成人民币,过滤/日志/缓存/入队全部用同一币种。
+function normalizePriceCurrency(card) {
+  if (!card || typeof card !== 'object') return card;
+  const isRub = String(card.currency || '') === '₽' || /руб|RUB/i.test(String(card.currency || ''));
+  if (!isRub) return card;
+  if (card.price != null && Number.isFinite(Number(card.price))) card.price = rubToCny(Number(card.price));
+  if (card.originalPrice != null && Number.isFinite(Number(card.originalPrice))) card.originalPrice = rubToCny(Number(card.originalPrice));
+  return card;
+}
+
 // ── 4 道过滤(Node 侧,对齐 ozon-data-panel.js API 直取模式) ──
 function applyFilter(card) {
   // 1. "仅抓有评论":开启时跳过 ratingCount=0/null
@@ -819,6 +833,7 @@ async function collectStore(page, store, state) {
     let passedCount = 0;
     const logs = [];
     for (const card of r.cards) {
+      normalizePriceCurrency(card); // 卢布→人民币(2026-10-29)
       const skuStr = String(card.sku);
       if (state.seenSkus.has(skuStr)) continue;
       state.seenSkus.add(skuStr);
@@ -876,6 +891,8 @@ async function collectStore(page, store, state) {
 // ── main ─────────────────────────────────────────────────────
 async function main() {
   console.log('=== 无头浅度采集(API 直取,走 ERP API) ===');
+  // 预热卢布→人民币汇率(Ozon 返回价格币种不稳定,卢布统一换算人民币,2026-10-29)
+  await refreshRubCnyRate();
   console.log(`ERP:       ${cfg.erpBaseUrl}`);
   console.log(`Profile:   ${cfg.profileDir}`);
   console.log(`无头:      ${cfg.headless}  干跑: ${cfg.dryRun}`);
