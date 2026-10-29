@@ -19,6 +19,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -82,6 +83,14 @@ class StockScanFragment : Fragment() {
             providerFuture.addListener({
                 val provider = providerFuture.get()
                 cameraProvider = provider
+                // 竞态保护:getInstance 是异步的,若回调完成前用户已切走 tab(Fragment 被 hide),
+                // 或宿主已 onPause/onDestroyView,则禁止绑定相机——否则相机在后台持续连扫,
+                // 在订单页等其他页面扫码时也会误触发自动备货(2026-10-29)。
+                if (!isAdded || isHidden || view == null ||
+                    !viewLifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+                ) {
+                    return@addListener
+                }
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
@@ -217,7 +226,9 @@ class StockScanFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        if (hasCameraPermission()) startCamera()
+        // 仅当前可见时才启动相机:已切到其他 tab 的备货页不应在后台重启相机连扫,
+        // 否则在订单页等页面扫码时会误触发自动备货(2026-10-29)。
+        if (!isHidden && hasCameraPermission()) startCamera()
     }
 
     override fun onPause() {
