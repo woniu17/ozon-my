@@ -38,6 +38,7 @@ import {
   productInfoListBySku,
   productStocks,
   deliveryMethodList,
+  carriageDeliveryList,
   carriageCreate,
   carriageGet,
   carriageApprove,
@@ -1616,6 +1617,19 @@ router.post('/admin/api/order-process/carriage/delivery-methods', async (req, re
     const r = await deliveryMethodList(store, { limit: req.body?.limit, filter: req.body?.filter });
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '获取配送方式'); }
+});
+
+// 发运清单(/v2/carriage/delivery/list;旧 /v1/posting/carriage-available 已废弃 2026-03-20)
+router.post('/admin/api/order-process/carriage/list', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const r = await carriageDeliveryList(store, {
+      cursor: req.body?.cursor,
+      filter: req.body?.filter,
+      limit: req.body?.limit,
+    });
+    res.json(ok(r));
+  } catch (e) { carriageHandleError(e, req, res, '获取发运清单'); }
 });
 
 // 创建发运:所有"已准备发运"货件自动进入

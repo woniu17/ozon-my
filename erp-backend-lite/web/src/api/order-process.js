@@ -339,3 +339,61 @@ export function syncPddCookies(body) {
 export function getPendingExportState() {
   return request.get('/admin/api/order-process/pending-export');
 }
+
+// ════════════════════════════════════════════════════════════════
+// FBS 货运创建/管理(2026-10-29,发运 Carriage)
+// ════════════════════════════════════════════════════════════════
+
+// 配送方式列表(创建发运前置)
+// 返回 { delivery_methods: [{ id, name, cutoff, status, warehouse_id, provider_id }] }
+export function getCarriageDeliveryMethods(storeId) {
+  return request.post('/admin/api/order-process/carriage/delivery-methods', { storeId });
+}
+
+// 发运清单:按配送方式聚合,含已创建/可创建的发运(含占位 id=0 行)
+// 返回 { cursor, has_next, methods: [{ delivery_method_id, delivery_method_name, departure_date, carriages: [{ id, status, postings_count, available_actions }] }] }
+export function getCarriageList(storeId, params = {}) {
+  return request.post('/admin/api/order-process/carriage/list', { storeId, ...params });
+}
+
+// 创建发运:该配送方式下所有"已准备发运"货件自动进入
+// body: { deliveryMethodId?, departureDate?, allBlrTraceable? } → { carriage_id }
+export function createCarriage(storeId, body = {}) {
+  return request.post('/admin/api/order-process/carriage/create', { storeId, ...body });
+}
+
+// 发运详情 → { id, status, available_actions, first_mile_type, integration_type, ... }
+export function getCarriage(storeId, carriageId) {
+  return request.post('/admin/api/order-process/carriage/get', { storeId, carriageId });
+}
+
+// 发运中的货件列表 → { cursor, postings: [...] }
+export function getCarriagePostings(storeId, carriageId, params = {}) {
+  return request.post('/admin/api/order-process/carriage/posting-list', { storeId, carriageId, ...params });
+}
+
+// 确认发运(写操作) → { carriage_id }
+export function approveCarriage(storeId, carriageId, containersCount) {
+  return request.post('/admin/api/order-process/carriage/approve', { storeId, carriageId, containersCount });
+}
+
+// 覆盖发运货件(全量替换) → { carriage_id }
+export function setCarriagePostings(storeId, carriageId, postingNumbers) {
+  return request.post('/admin/api/order-process/carriage/set-postings', { storeId, carriageId, postingNumbers });
+}
+
+// 取消发运(写操作) → { carriage_id }
+export function cancelCarriage(storeId, carriageId) {
+  return request.post('/admin/api/order-process/carriage/cancel', { storeId, carriageId });
+}
+
+// 设置快递员联系方式(仅 first_mile_type=pickup + ozon_outsourced 适用)
+// body: { phone?, wechatNickname?, comment? } → { carriage_id }
+export function setCarriageCourierContact(storeId, carriageId, body = {}) {
+  return request.post('/admin/api/order-process/carriage/courier-contact/set', { storeId, carriageId, ...body });
+}
+
+// 获取快递员联系方式 → { contact: [...] }
+export function getCarriageCourierContact(storeId, carriageId) {
+  return request.post('/admin/api/order-process/carriage/courier-contact/get', { storeId, carriageId });
+}
