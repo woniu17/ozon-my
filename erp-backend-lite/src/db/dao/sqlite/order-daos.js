@@ -1158,6 +1158,7 @@ function rowToPackage(r) {
     operateStatus: r.operate_status,
     purchaseStatus: r.purchase_status,
     isShipped: !!r.is_shipped,
+    shippedAt: r.shipped_at,               // Ozon 状态联动写入(在途/妥投时=揽收时间或同步时刻)
     isIgnored: !!r.is_ignored,
     inProcessAt: r.in_process_at,
     deliveringDate: r.delivering_date, // 揽收时间(国际物流商揽收,在途/妥投/在途取消单有值)

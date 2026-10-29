@@ -3895,7 +3895,7 @@ onUnmounted(() => {
               <div v-if="countdown(pkg) && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub" :class="countdown(pkg).overdue ? 'overdue' : 'countdown'">
                 {{ countdown(pkg).overdue ? '已超时：' : '剩发：' }}{{ countdown(pkg).text }}
               </div>
-              <div v-if="pkg.isShipped" class="sub muted">已交运 {{ fmtTime(pkg.shippedAt) }}</div>
+              <div v-if="pkg.isShipped || pkg.waybillPrintedAt" class="sub muted">已交运 {{ fmtTime(pkg.waybillPrintedAt || pkg.shippedAt) }}</div>
               <div class="sub">揽收：<template v-if="pkg.deliveringDate">{{ fmtTime(pkg.deliveringDate) }}<template v-if="weekdayCN(pkg.deliveringDate)">（{{ weekdayCN(pkg.deliveringDate) }}）</template></template><template v-else>-</template></div>
               <div class="sub">签收：<template v-if="pkg.deliveredAt">{{ fmtTime(pkg.deliveredAt) }}<template v-if="weekdayCN(pkg.deliveredAt)">（{{ weekdayCN(pkg.deliveredAt) }}）</template></template><template v-else>-</template></div>
               <div class="sub">退款：<template v-if="pkg.returnAt">{{ fmtTime(pkg.returnAt) }}<template v-if="weekdayCN(pkg.returnAt)">（{{ weekdayCN(pkg.returnAt) }}）</template></template><template v-else>-</template></div>

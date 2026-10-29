@@ -435,12 +435,15 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                     // 2026-10-15:剩发 <24小时 或 已超时时红色加粗醒目(urgent)
                     val cd = countdownText(pkg.shipmentDate)
                     addTimeRow(oTimeContainer, if (cd.overdue) "已超时" else "剩发", cd.text, cd.urgent)
+                    // 交运时间(2026-10-29,对齐 Web 订单处理页):本地打印面单/扫描发货时间优先,Ozon 揽收时间兜底
+                    addShippedTimeRow(pkg)
                     if (op == "wait_ship" && pkg.profit != null) {
                         addTimeRow(oTimeContainer, "预估利润", fmtMoney(pkg.profit.profit), false, profitColor(pkg.profit.profit))
                     }
                 }
                 op in shipTimesStatuses -> {
                     addTimeRow(oTimeContainer, "下单", fmtTimeWithWeekday(pkg.inProcessAt))
+                    addShippedTimeRow(pkg)
                     if (!pkg.deliveringDate.isNullOrBlank()) {
                         addTimeRow(oTimeContainer, "揽收", fmtTimeWithWeekday(pkg.deliveringDate))
                     }
@@ -475,6 +478,13 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
             row.addView(k, kLp)
             row.addView(v, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             container.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+
+        /** 交运时间行(2026-10-29):本地 waybillPrintedAt 优先,shippedAt 兜底;无任何交运标记时不显示 */
+        private fun addShippedTimeRow(pkg: Pkg) {
+            if (pkg.isShipped || !pkg.waybillPrintedAt.isNullOrBlank()) {
+                addTimeRow(oTimeContainer, "交运", fmtTimeWithWeekday(pkg.waybillPrintedAt ?: pkg.shippedAt))
+            }
         }
 
         private fun emptyText(text: String): TextView {
