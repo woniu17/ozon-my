@@ -1648,6 +1648,9 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
     const r = await carriagePostingList(store, req.body?.carriageId, {
       cursor: req.body?.cursor,
       limit: req.body?.limit,
+      cutoffFrom: req.body?.cutoffFrom,
+      cutoffTo: req.body?.cutoffTo,
+      deliveryMethodId: req.body?.deliveryMethodId,
     });
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '获取发运货件'); }

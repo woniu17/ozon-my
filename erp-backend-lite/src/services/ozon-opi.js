@@ -740,7 +740,9 @@ export function carriageCourierContactGet(store, carriageId) {
 // /v1/assembly/carriage/posting/list —— 获取发运中的货件列表
 // 请求: { cursor?, filter: { carriage_id(必填), cutoff_from?, cutoff_to?, delivery_method_id? }, limit(必填) }
 // 响应: { cursor, postings: [{ posting_number, assembly_code, can_print_label, products[] }] }
-export function carriagePostingList(store, carriageId, { cursor = '', limit = 100 } = {}) {
+// 2026-10-29:实测文档标 cutoff_from 可选,但 Ozon 实际必填(否则 400 Request validation error),
+//           未传时默认用很早的时间覆盖发运全部货件。
+export function carriagePostingList(store, carriageId, { cursor = '', limit = 100, cutoffFrom, cutoffTo, deliveryMethodId } = {}) {
   const id = Number(carriageId);
   if (!Number.isInteger(id) || id <= 0) {
     throw new ApiError(ErrorCode.VALIDATION_ERROR, `carriage_id 必须为正整数,收到: ${carriageId}`);
@@ -749,9 +751,14 @@ export function carriagePostingList(store, carriageId, { cursor = '', limit = 10
   if (!Number.isInteger(n) || n < 1 || n > 1000) {
     throw new ApiError(ErrorCode.VALIDATION_ERROR, `limit 必须为 1~1000 的整数,收到: ${limit}`);
   }
+  const filter = { carriage_id: id };
+  // 实测:文档标 cutoff_from/cutoff_to 可选,但 Ozon 实际均必填(依次报 CutoffFrom/CutoffTo required)。
+  filter.cutoff_from = cutoffFrom || '2000-01-01T00:00:00.000Z';
+  filter.cutoff_to = cutoffTo || '2999-12-31T23:59:59.999Z';
+  if (deliveryMethodId != null && deliveryMethodId !== '') filter.delivery_method_id = Number(deliveryMethodId);
   return call(store, '/v1/assembly/carriage/posting/list', {
     cursor: cursor || '',
-    filter: { carriage_id: id },
+    filter,
     limit: n,
   });
 }
