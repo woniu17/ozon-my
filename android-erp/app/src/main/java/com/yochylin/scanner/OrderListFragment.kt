@@ -52,8 +52,12 @@ class OrderListFragment : Fragment() {
         private const val STATE_GLOBAL_ACTIVE = "state_global_active"
         private const val STATE_GLOBAL_MODE = "state_global_mode"
         private const val STATE_CURRENT_SORT = "state_current_sort"
+        private const val STATE_TAB_SORTS = "state_tab_sorts"
         private const val STATE_PURCHASE_UNSHIPPED = "state_purchase_unshipped"
         private const val STATE_LOGISTICS_STALE = "state_logistics_stale"
+
+        /** 各子 Tab 未单独设置排序时的默认值 */
+        private const val DEFAULT_SORT = "order_desc"
 
         private val TABS = listOf(
             "all" to "全部",
@@ -256,7 +260,11 @@ class OrderListFragment : Fragment() {
     private var keyword = ""
     private var globalActive = false
     private var globalMode = "ss"
-    private var currentSort = "order_desc"
+    /** 各子 Tab 独立排序值(key=tab,value=sortValue)：切换子 Tab 互不影响(2026-10-30) */
+    private val tabSorts = mutableMapOf<String, String>()
+    private var currentSort: String
+        get() = tabSorts[activeTab] ?: DEFAULT_SORT
+        set(value) { tabSorts[activeTab] = value }
     /** 待打单发货快速筛选(2026-10-17):>0 表示启用 24h 阈值,与后端 purchaseUnshippedHours/logisticsStaleHours 对应 */
     private var purchaseUnshippedHours = 0
     private var logisticsStaleHours = 0
@@ -293,7 +301,11 @@ class OrderListFragment : Fragment() {
             keyword = savedInstanceState.getString(STATE_KEYWORD, "") ?: ""
             globalActive = savedInstanceState.getBoolean(STATE_GLOBAL_ACTIVE, false)
             globalMode = savedInstanceState.getString(STATE_GLOBAL_MODE, "ss") ?: "ss"
-            currentSort = savedInstanceState.getString(STATE_CURRENT_SORT, "order_desc") ?: "order_desc"
+            // 各子 Tab 排序独立恢复，互不影响
+            @Suppress("UNCHECKED_CAST")
+            (savedInstanceState.getSerializable(STATE_TAB_SORTS) as? HashMap<String, String>)?.let {
+                tabSorts.putAll(it)
+            }
             purchaseUnshippedHours = savedInstanceState.getInt(STATE_PURCHASE_UNSHIPPED, 0)
             logisticsStaleHours = savedInstanceState.getInt(STATE_LOGISTICS_STALE, 0)
         }
@@ -308,6 +320,7 @@ class OrderListFragment : Fragment() {
         quickPurchaseUnshipped.setOnClickListener { toggleQuickFilter("purchase") }
         quickLogisticsStale.setOnClickListener { toggleQuickFilter("logistics") }
         sortText = view.findViewById(R.id.sortText)
+        sortText.text = "排序:${currentSortLabel()} ▾"
         bannerText = view.findViewById(R.id.orderBannerText)
         progressBar = view.findViewById(R.id.orderProgress)
         swipeRefresh = view.findViewById(R.id.orderSwipeRefresh)
@@ -394,6 +407,8 @@ class OrderListFragment : Fragment() {
                     purchaseUnshippedHours = 0
                     logisticsStaleHours = 0
                     refreshTabStyles()
+                    // 排序按子 Tab 独立记忆，切换后展示该 Tab 自己的排序
+                    sortText.text = "排序:${currentSortLabel()} ▾"
                     loadTabs()
                     updateQuickFilterUi()
                     reload()
@@ -425,6 +440,7 @@ class OrderListFragment : Fragment() {
         outState.putBoolean(STATE_GLOBAL_ACTIVE, globalActive)
         outState.putString(STATE_GLOBAL_MODE, globalMode)
         outState.putString(STATE_CURRENT_SORT, currentSort)
+        outState.putSerializable(STATE_TAB_SORTS, HashMap(tabSorts))
         outState.putInt(STATE_PURCHASE_UNSHIPPED, purchaseUnshippedHours)
         outState.putInt(STATE_LOGISTICS_STALE, logisticsStaleHours)
         super.onSaveInstanceState(outState)
@@ -491,6 +507,10 @@ class OrderListFragment : Fragment() {
         globalMode = "ss"
         reload()
     }
+
+    /** 当前子 Tab 排序的中文文案（用于排序按钮展示） */
+    private fun currentSortLabel(): String =
+        ALL_SORTS[currentSort]?.label ?: ALL_SORTS[DEFAULT_SORT]!!.label
 
     private fun showSortDialog() {
         val keys = TAB_SORT_KEYS[activeTab] ?: listOf("order")
