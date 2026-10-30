@@ -19,6 +19,10 @@ import {
   cancelCarriage,
   getCarriageCourierContact,
   setCarriageCourierContact,
+  setCarriagePostings,
+  getAvailableCarriagePostings,
+  getDefaultCourierContact,
+  setDefaultCourierContact,
 } from '../api/order-process.js';
 
 const storesStore = useStoresStore();
@@ -73,6 +77,27 @@ const detail = reactive({
   containersCount: '',
   approving: false,
   cancelling: false,
+});
+
+// 店铺默认快递员联系方式配置(2026-10-30)
+const defaultContact = reactive({
+  loaded: false,
+  loading: false,
+  saving: false,
+  phone: '',
+  wechatNickname: '',
+  comment: '',
+});
+
+// 货件编辑(增加/删除后全量 set-postings 保存)
+const editPostings = reactive({ dirty: false, saving: false });
+
+// 可加入货件候选弹窗
+const candidate = reactive({
+  open: false,
+  loading: false,
+  postings: [],
+  selected: {},
 });
 
 // 当前表格行(各配送方式下发运 + 可创建占位行)
@@ -191,6 +216,8 @@ async function openDetail(row) {
   detail.wechatNickname = '';
   detail.comment = '';
   detail.containersCount = '';
+  editPostings.dirty = false;
+  if (!defaultContact.loaded) await loadDefaultContact();
   await Promise.all([loadCarriageDetail(row), loadPostings(row), loadContact(row)]);
 }
 
@@ -216,19 +243,87 @@ async function loadPostings(row) {
   }
 }
 
+// 当前店铺名(微信昵称默认值)
+function currentStoreName() {
+  return storesStore.list.find((s) => String(s.id) === String(storeId.value))?.name || '';
+}
+
+// 加载店铺默认快递员联系方式配置(仅加载一次,切换店铺后强制重载)
+async function loadDefaultContact(force = false) {
+  if (defaultContact.loaded && !force) return;
+  defaultContact.loading = true;
+  try {
+    const data = await getDefaultCourierContact(storeId.value);
+    const c = data?.contact || {};
+    defaultContact.phone = c.phone || '';
+    defaultContact.wechatNickname = c.wechatNickname || '';
+    defaultContact.comment = c.comment || '';
+    defaultContact.loaded = true;
+  } catch (err) {
+    // 未配置时静默
+  } finally {
+    defaultContact.loading = false;
+  }
+}
+
+async function onSaveDefaultContact() {
+  defaultContact.saving = true;
+  try {
+    await setDefaultCourierContact(storeId.value, {
+      phone: defaultContact.phone.trim(),
+      wechatNickname: defaultContact.wechatNickname.trim(),
+      comment: defaultContact.comment.trim(),
+    });
+    defaultContact.loaded = true;
+    show('默认快递员联系方式已保存', 'success');
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    defaultContact.saving = false;
+  }
+}
+
+// 把当前详情表单另存为店铺默认配置
+async function onSetAsDefault() {
+  if (!detail.phone.trim()) {
+    show('请先填写快递员联系电话', 'error');
+    return;
+  }
+  try {
+    await setDefaultCourierContact(storeId.value, {
+      phone: detail.phone.trim(),
+      wechatNickname: detail.wechatNickname.trim(),
+      comment: detail.comment.trim(),
+    });
+    defaultContact.phone = detail.phone.trim();
+    defaultContact.wechatNickname = detail.wechatNickname.trim();
+    defaultContact.comment = detail.comment.trim();
+    defaultContact.loaded = true;
+    show('当前联系方式已设为店铺默认', 'success');
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  }
+}
+
 async function loadContact(row) {
   detail.contactLoading = true;
+  if (!defaultContact.loaded) await loadDefaultContact();
+  const storeName = currentStoreName();
   try {
     const data = await getCarriageCourierContact(storeId.value, Number(row.id));
     const list = data?.contact || [];
     detail.contact = list;
     const first = list[0];
-    detail.phone = first?.phone || '';
-    detail.wechatNickname = first?.wechat_nickname || '';
-    detail.comment = first?.comment || '';
+    // 默认加载规则(2026-10-30):Ozon 已存值优先 → 店铺默认配置兜底 → 微信昵称再兜底店铺名
+    detail.phone = first?.phone || defaultContact.phone || '';
+    detail.wechatNickname = first?.wechat_nickname || defaultContact.wechatNickname || storeName;
+    detail.comment = first?.comment || defaultContact.comment || '';
   } catch (err) {
     // 不适用/未配置时静默:详情页仍可手动填写
     detail.contact = [];
+    detail.phone = defaultContact.phone || '';
+    detail.wechatNickname = defaultContact.wechatNickname || storeName;
+    detail.comment = defaultContact.comment || '';
   } finally {
     detail.contactLoading = false;
   }
@@ -313,6 +408,79 @@ function productsSummary(p) {
     .join('、') + (items.length > 3 ? ` 等${items.length}项` : '');
 }
 
+// ── 货件增加/删除(2026-10-30,set-postings 全量覆盖) ──────────
+// 仅 new 状态允许调整货件(Ozon set-postings 仅发运创建后未确认前可用)
+const postingsEditable = computed(() => detail.carriage?.status === 'new');
+
+// 打开候选货件弹窗
+async function onOpenCandidate() {
+  candidate.open = true;
+  candidate.selected = {};
+  candidate.postings = [];
+  candidate.loading = true;
+  try {
+    const data = await getAvailableCarriagePostings(storeId.value, detail.carriageId, {
+      deliveryMethodId: detail.carriage?.delivery_method_id || undefined,
+    });
+    candidate.postings = data?.postings || [];
+    if (!candidate.postings.length) show('没有可加入的「已准备发运」货件', 'info');
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    candidate.loading = false;
+  }
+}
+
+// 确认加入候选货件
+function onConfirmAddCandidates() {
+  const selected = candidate.postings.filter((p) => candidate.selected[p.posting_number]);
+  if (!selected.length) {
+    show('请先勾选要加入的货件', 'warning');
+    return;
+  }
+  const existing = new Set(detail.postings.map((p) => p.posting_number));
+  const added = selected.filter((p) => !existing.has(p.posting_number));
+  if (!added.length) {
+    show('所选货件已在列表中', 'info');
+    candidate.open = false;
+    return;
+  }
+  detail.postings = [...detail.postings, ...added];
+  editPostings.dirty = true;
+  candidate.open = false;
+  show(`已加入 ${added.length} 个货件`, 'success');
+}
+
+// 从发运移除货件(前端临时,保存时全量提交)
+function onRemovePosting(p) {
+  detail.postings = detail.postings.filter((x) => x.posting_number !== p.posting_number);
+  editPostings.dirty = true;
+}
+
+// 保存货件组成(全量覆盖)
+async function onSavePostings() {
+  if (!detail.postings.length) {
+    show('发运至少保留 1 个货件,如需清空请取消发运', 'error');
+    return;
+  }
+  editPostings.saving = true;
+  try {
+    await setCarriagePostings(
+      storeId.value,
+      detail.carriageId,
+      detail.postings.map((p) => p.posting_number)
+    );
+    show('货件列表已保存', 'success');
+    editPostings.dirty = false;
+    await loadPostings(detail.carriage);
+    await loadCarriages();
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    editPostings.saving = false;
+  }
+}
+
 // ── 初始化 ─────────────────────────────────────────────
 onMounted(async () => {
   try {
@@ -322,6 +490,7 @@ onMounted(async () => {
     if (storeId.value) {
       loadDeliveryMethods();
       loadCarriages();
+      loadDefaultContact();
     }
   } catch (err) {
     show(err.message || '店铺列表加载失败', 'error');
@@ -330,8 +499,10 @@ onMounted(async () => {
 
 // 切换店铺
 async function onStoreChange() {
+  defaultContact.loaded = false;
   loadDeliveryMethods();
   loadCarriages();
+  loadDefaultContact(true);
 }
 </script>
 
@@ -378,6 +549,35 @@ async function onStoreChange() {
       </div>
       <p v-if="deliveryMethods.length" class="form-hint">
         共 {{ deliveryMethods.length }} 个配送方式;不选时 Ozon 自动使用唯一可用配送方式。
+      </p>
+    </div>
+
+    <!-- 默认快递员联系方式配置(2026-10-30,打开发运详情自动加载) -->
+    <div class="card default-contact-card">
+      <div class="section-title">默认快递员联系方式</div>
+      <div class="default-contact-form">
+        <label>
+          <span>电话</span>
+          <input v-model="defaultContact.phone" placeholder="快递员联系电话" :disabled="defaultContact.loading" />
+        </label>
+        <label>
+          <span>微信昵称</span>
+          <input v-model="defaultContact.wechatNickname" :placeholder="`默认:${currentStoreName() || '店铺名'}`" :disabled="defaultContact.loading" />
+        </label>
+        <label>
+          <span>备注</span>
+          <input v-model="defaultContact.comment" placeholder="(可选)" :disabled="defaultContact.loading" />
+        </label>
+        <button
+          class="btn btn-ghost btn-sm"
+          :disabled="defaultContact.saving || defaultContact.loading"
+          @click="onSaveDefaultContact"
+        >
+          {{ defaultContact.saving ? '保存中…' : '保存默认' }}
+        </button>
+      </div>
+      <p class="form-hint">
+        保存后,打开发运详情时自动加载为默认值;微信昵称为空时默认使用店铺名「{{ currentStoreName() }}」。
       </p>
     </div>
 
@@ -483,10 +683,21 @@ async function onStoreChange() {
           </div>
         </div>
 
-        <!-- 货件列表 -->
+        <!-- 货件列表(2026-10-30:图片 + 增删,new 状态可编辑) -->
         <div class="detail-section">
           <div class="detail-section-head">
             <span>货件列表</span>
+            <em v-if="postingsEditable" class="field-hint">new 状态可增删,保存后全量生效</em>
+            <div class="spacer"></div>
+            <button
+              v-if="editPostings.dirty"
+              class="btn btn-primary btn-sm"
+              :disabled="editPostings.saving"
+              @click="onSavePostings"
+            >
+              {{ editPostings.saving ? '保存中…' : '保存货件' }}
+            </button>
+            <button v-if="postingsEditable" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加货件</button>
             <button class="btn btn-ghost btn-sm" :disabled="detail.postingsLoading" @click="loadPostings(detail.carriage)">
               {{ detail.postingsLoading ? '加载中…' : '刷新' }}
             </button>
@@ -500,17 +711,39 @@ async function onStoreChange() {
                 <th>商品</th>
                 <th class="num">件数</th>
                 <th>可打印面单</th>
+                <th v-if="postingsEditable" class="ops">操作</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="p in detail.postings" :key="p.posting_number">
                 <td class="mono">{{ p.posting_number }}</td>
-                <td>{{ productsSummary(p) }}</td>
+                <td>
+                  <div v-if="(p.products || []).length" class="posting-products">
+                    <div v-for="it in p.products" :key="it.sku || it.offer_id || it.name" class="posting-product">
+                      <img
+                        v-if="it.image_url"
+                        :src="it.image_url"
+                        referrerpolicy="no-referrer"
+                        loading="lazy"
+                        class="posting-product-img"
+                        alt=""
+                      />
+                      <span class="posting-product-name" :title="it.name || it.offer_id || it.sku">
+                        {{ it.name || it.offer_id || it.sku }}
+                      </span>
+                      <span class="posting-product-qty">×{{ it.quantity ?? '' }}</span>
+                    </div>
+                  </div>
+                  <span v-else>—</span>
+                </td>
                 <td class="num">{{ (p.products || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0) }}</td>
                 <td>
                   <span class="printed-tag" :class="p.can_print_label ? 'yes' : 'no'">
                     {{ p.can_print_label ? '可打印' : '不可' }}
                   </span>
+                </td>
+                <td v-if="postingsEditable" class="ops">
+                  <button class="btn btn-danger btn-sm" @click="onRemovePosting(p)">移除</button>
                 </td>
               </tr>
             </tbody>
@@ -530,7 +763,7 @@ async function onStoreChange() {
             </label>
             <label>
               <span>微信昵称</span>
-              <input v-model="detail.wechatNickname" placeholder="(可选)" :disabled="!contactApplicable" />
+              <input v-model="detail.wechatNickname" :placeholder="`默认:${currentStoreName() || '店铺名'}`" :disabled="!contactApplicable" />
             </label>
             <label>
               <span>备注</span>
@@ -543,7 +776,15 @@ async function onStoreChange() {
             >
               {{ detail.savingContact ? '保存中…' : '保存' }}
             </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              :disabled="!contactApplicable"
+              @click="onSetAsDefault"
+            >
+              设为默认
+            </button>
           </div>
+          <p class="form-hint">「设为默认」把当前填写内容存为店铺默认,后续发运详情自动加载。</p>
         </div>
 
         <!-- 发运操作 -->
@@ -571,6 +812,61 @@ async function onStoreChange() {
           </button>
         </div>
       </template>
+    </AppModal>
+
+    <!-- 可加入货件候选弹窗(2026-10-30) -->
+    <AppModal :open="candidate.open" title="添加货件" size="lg" @update:open="candidate.open = $event">
+      <div class="candidate-head">
+        <span v-if="candidate.loading" class="field-hint">加载中…</span>
+        <span v-else class="field-hint">
+          已准备发运、不在当前发运中的货件(共 {{ candidate.postings.length }} 个),勾选后加入
+        </span>
+        <div class="spacer"></div>
+        <button class="btn btn-ghost btn-sm" :disabled="candidate.loading" @click="onOpenCandidate">刷新</button>
+        <button class="btn btn-primary btn-sm" :disabled="candidate.loading" @click="onConfirmAddCandidates">
+          加入选中
+        </button>
+      </div>
+      <div v-if="candidate.loading && !candidate.postings.length" class="list-empty">加载中…</div>
+      <div v-else-if="!candidate.postings.length" class="list-empty">没有可加入的「已准备发运」货件</div>
+      <table v-else class="posting-table candidate-table">
+        <thead>
+          <tr>
+            <th class="candidate-check"></th>
+            <th>货件号</th>
+            <th>商品</th>
+            <th class="num">件数</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="p in candidate.postings" :key="p.posting_number">
+            <td class="candidate-check">
+              <input v-model="candidate.selected[p.posting_number]" type="checkbox" />
+            </td>
+            <td class="mono">{{ p.posting_number }}</td>
+            <td>
+              <div v-if="(p.products || []).length" class="posting-products">
+                <div v-for="it in p.products" :key="it.sku || it.offer_id || it.name" class="posting-product">
+                  <img
+                    v-if="it.image_url"
+                    :src="it.image_url"
+                    referrerpolicy="no-referrer"
+                    loading="lazy"
+                    class="posting-product-img"
+                    alt=""
+                  />
+                  <span class="posting-product-name" :title="it.name || it.offer_id || it.sku">
+                    {{ it.name || it.offer_id || it.sku }}
+                  </span>
+                  <span class="posting-product-qty">×{{ it.quantity ?? '' }}</span>
+                </div>
+              </div>
+              <span v-else>—</span>
+            </td>
+            <td class="num">{{ (p.products || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0) }}</td>
+          </tr>
+        </tbody>
+      </table>
     </AppModal>
   </div>
 </template>
@@ -834,5 +1130,90 @@ async function onStoreChange() {
 .printed-tag.no {
   background: #fef3f2;
   color: #dc2626;
+}
+
+/* ── 默认联系方式配置卡片(2026-10-30) ── */
+.default-contact-card {
+  padding: 16px 20px;
+}
+.default-contact-form {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.default-contact-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.default-contact-form label > span {
+  font-size: 12px;
+  color: var(--muted);
+}
+.default-contact-form input {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  min-width: 160px;
+  background: #fff;
+  color: var(--text);
+}
+
+/* ── 货件商品图片(2026-10-30) ── */
+.posting-products {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 240px;
+}
+.posting-product {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.posting-product-img {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  background: #f5f5f5;
+}
+.posting-product-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.posting-product-qty {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 候选货件弹窗(2026-10-30) ── */
+.candidate-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.candidate-table {
+  min-width: 640px;
+}
+.candidate-check {
+  width: 34px;
+  text-align: center;
+}
+.candidate-check input {
+  accent-color: var(--primary);
 }
 </style>

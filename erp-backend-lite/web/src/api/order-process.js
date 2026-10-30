@@ -397,3 +397,17 @@ export function setCarriageCourierContact(storeId, carriageId, body = {}) {
 export function getCarriageCourierContact(storeId, carriageId) {
   return request.post('/admin/api/order-process/carriage/courier-contact/get', { storeId, carriageId });
 }
+
+// 可加入发运的货件候选(2026-10-30,增加货件用)
+// params: { deliveryMethodId? } → { postings: [...], count }
+export function getAvailableCarriagePostings(storeId, carriageId, params = {}) {
+  return request.post('/admin/api/order-process/carriage/available-postings', { storeId, carriageId, ...params });
+}
+
+// 店铺默认快递员联系方式配置(2026-10-30,打开发运详情自动加载)
+export function getDefaultCourierContact(storeId) {
+  return request.post('/admin/api/order-process/carriage/courier-contact/default/get', { storeId });
+}
+export function setDefaultCourierContact(storeId, body = {}) {
+  return request.post('/admin/api/order-process/carriage/courier-contact/default/set', { storeId, ...body });
+}

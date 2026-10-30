@@ -34,6 +34,7 @@ import {
   postingFbsGet,
   postingFbsGetByBarcode,
   postingFbsShip,
+  postingFbsUnfulfilledList,
   productInfoList,
   productInfoListBySku,
   productStocks,
@@ -55,7 +56,7 @@ import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { extractWaybillBarcodes } from '../services/waybill-barcode.js';
 import { upsertPostingBarcode, findPostingByBarcode, missingBarcodePostings } from '../db/dao/sqlite/label-barcode-daos.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate, getBydayStats, getSettledEligiblePackageIds } from '../db/dao/sqlite/accrual-dao.js';
-import { stripImageSizeSuffix } from '../services/order-image-cache.js';
+import { stripImageSizeSuffix, imageCacheUrlFor } from '../services/order-image-cache.js';
 import { runAccrualByDaySync } from '../services/accrual-byday-sync.js';
 import { getPendingExportState } from '../db/dao/sqlite/purchase-sync-dao.js';
 import {
@@ -1610,6 +1611,65 @@ function carriageHandleError(e, req, res, action) {
   res.status(status).json({ ok: false, message: `Ozon ${action}失败:${msg}` });
 }
 
+// 按货件号批量补充商品主图(2026-10-30)
+// Ozon 货运接口(/v1/assembly/carriage/posting/list、/v4/posting/fbs/unfulfilled/list)
+// 返回的 products 不含 image_url;本地商品缓存(product_data_cache.primary_image/images)
+// 与订单 SKU 一一对应,按 posting_number 批量反查后按 sku/offer_id 挂回 products[].image_url。
+function attachPostingProductImages(storeId, postings) {
+  if (!Array.isArray(postings) || !postings.length) return postings;
+  const numbers = [...new Set(postings.map((p) => p?.posting_number).filter(Boolean))];
+  if (!numbers.length) return postings;
+  const placeholders = numbers.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT o.posting_number, oi.sku, oi.offer_id, oi.title,
+              COALESCE(json_extract(p.data, '$.primary_image[0]'), json_extract(p.data, '$.images[0]')) AS pic_url
+       FROM op_ozon_order_item oi
+       JOIN op_ozon_order o ON o.id = oi.ozon_order_id
+       LEFT JOIN product_data_cache p ON p.sku = CAST(oi.sku AS TEXT)
+       WHERE o.store_id = ? AND o.posting_number IN (${placeholders})`
+    )
+    .all(storeId, ...numbers);
+  const byPosting = new Map();
+  for (const r of rows) {
+    if (!byPosting.has(r.posting_number)) byPosting.set(r.posting_number, []);
+    byPosting.get(r.posting_number).push({
+      sku: r.sku,
+      offerId: r.offer_id,
+      title: r.title,
+      picUrl: imageCacheUrlFor(r.pic_url),
+    });
+  }
+  for (const p of postings) {
+    const imgs = byPosting.get(p?.posting_number) || [];
+    for (const prod of p?.products || []) {
+      const found =
+        imgs.find((i) => i.sku != null && String(i.sku) === String(prod?.sku)) ||
+        imgs.find((i) => i.offerId && i.offerId === prod?.offer_id);
+      if (found) prod.image_url = found.picUrl;
+    }
+  }
+  return postings;
+}
+
+// 默认快递员联系方式配置(app_config,按店铺维度)
+// key: carriage_courier_contact_default:<storeId>; value: { phone, wechatNickname, comment }
+const DEFAULT_CONTACT_KEY_PREFIX = 'carriage_courier_contact_default:';
+function readDefaultCourierContact(storeId) {
+  try {
+    const row = db.prepare('SELECT value FROM app_config WHERE key = ?').get(DEFAULT_CONTACT_KEY_PREFIX + String(storeId));
+    if (!row) return null;
+    const v = JSON.parse(row.value);
+    return {
+      phone: String(v?.phone || '').trim(),
+      wechatNickname: String(v?.wechatNickname || '').trim(),
+      comment: String(v?.comment || '').trim(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 // 配送方式列表(创建发运前置:取 delivery_method_id)
 router.post('/admin/api/order-process/carriage/delivery-methods', async (req, res) => {
   try {
@@ -1655,7 +1715,7 @@ router.post('/admin/api/order-process/carriage/get', async (req, res) => {
   } catch (e) { carriageHandleError(e, req, res, '获取发运'); }
 });
 
-// 发运中的货件列表
+// 发运中的货件列表(附带商品主图,2026-10-30:Ozon 货运接口 products 无图片,本地缓存补)
 router.post('/admin/api/order-process/carriage/posting-list', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
@@ -1666,6 +1726,7 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
       cutoffTo: req.body?.cutoffTo,
       deliveryMethodId: req.body?.deliveryMethodId,
     });
+    if (r?.postings) attachPostingProductImages(store.id, r.postings);
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '获取发运货件'); }
 });
@@ -1691,6 +1752,44 @@ router.post('/admin/api/order-process/carriage/set-postings', async (req, res) =
     );
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '设置发运货件'); }
+});
+
+// 可加入发运的货件候选(2026-10-30,增加货件用)
+// 来源:/v4/posting/fbs/unfulfilled/list 拉全部未妥投,筛 status=awaiting_deliver(已准备发运),
+//      并排除当前发运已有货件;附商品主图(本地缓存补)。
+router.post('/admin/api/order-process/carriage/available-postings', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const carriageId = req.body?.carriageId;
+    if (!carriageId) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'carriageId 必填');
+    const deliveryMethodId = req.body?.deliveryMethodId;
+    const current = await carriagePostingList(store, carriageId, { limit: 100 });
+    const currentSet = new Set((current?.postings || []).map((p) => p.posting_number));
+    const candidates = [];
+    let cursor = '';
+    let guard = 0;
+    do {
+      const page = await postingFbsUnfulfilledList(store, {
+        cutoffFrom: '2000-01-01T00:00:00.000Z',
+        cutoffTo: '2999-12-31T23:59:59.999Z',
+        cursor,
+        limit: 100,
+        deliveryMethodId,
+        withData: {},
+      });
+      const list = page?.result?.postings || page?.postings || [];
+      for (const p of list) {
+        if (p?.status === 'awaiting_deliver' && !currentSet.has(p.posting_number)) {
+          candidates.push(p);
+        }
+      }
+      cursor = page?.result?.cursor || page?.cursor || '';
+      guard += 1;
+      if (guard > 50) break; // 防死循环(最多 5000 条)
+    } while (cursor);
+    if (candidates.length) attachPostingProductImages(store.id, candidates);
+    res.json(ok({ postings: candidates, count: candidates.length }));
+  } catch (e) { carriageHandleError(e, req, res, '获取可加入货件'); }
 });
 
 // 取消发运
@@ -1725,6 +1824,38 @@ router.post('/admin/api/order-process/carriage/courier-contact/get', async (req,
     const r = await carriageCourierContactGet(store, req.body?.carriageId);
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '获取联系方式'); }
+});
+
+// 获取店铺的默认快递员联系方式配置(2026-10-30,打开发运详情自动加载)
+router.post('/admin/api/order-process/carriage/courier-contact/default/get', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    res.json(ok({ contact: readDefaultCourierContact(store.id) }));
+  } catch (e) { carriageHandleError(e, req, res, '获取默认联系方式'); }
+});
+
+// 保存店铺的默认快递员联系方式配置
+router.post('/admin/api/order-process/carriage/courier-contact/default/set', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const { phone, wechatNickname, comment } = req.body || {};
+    const value = JSON.stringify({
+      phone: String(phone || '').trim(),
+      wechatNickname: String(wechatNickname || '').trim(),
+      comment: String(comment || '').trim(),
+    });
+    db.prepare(
+      `INSERT INTO app_config (key, value, scope, description, updated_at)
+       VALUES (?, ?, 'carriage', '快递员默认联系方式', datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         scope = excluded.scope,
+         description = excluded.description,
+         updated_at = datetime('now')`
+    ).run(DEFAULT_CONTACT_KEY_PREFIX + store.id, value);
+    logger.info({ storeId: store.id }, '[order-process] 保存默认快递员联系方式成功');
+    res.json(ok({ contact: JSON.parse(value) }));
+  } catch (e) { carriageHandleError(e, req, res, '保存默认联系方式'); }
 });
 
 router.post('/admin/api/order-process/rub-rate', (req, res, next) => {

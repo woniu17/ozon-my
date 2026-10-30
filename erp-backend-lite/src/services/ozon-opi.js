@@ -506,11 +506,16 @@ export function productPicturesInfo(store, productIds) {
 // 请求: { filter: { cutoff_from, cutoff_to }, cursor, limit, with }
 // 响应: { result: { postings, cursor, has_next, count } }
 // 注:v4 实测 limit 上限 100(传 1000 报 Request validation error)
-export function postingFbsUnfulfilledList(store, { cutoffFrom, cutoffTo, cursor, limit = 100 } = {}) {
+// 2026-10-30 扩展:deliveryMethodId/status 透传 filter(货运中心"可加入发运货件"候选查询用);
+//           withData 覆盖 with(候选查询传 {} 省流量,默认保持订单同步的 analytics/financial)。
+export function postingFbsUnfulfilledList(store, { cutoffFrom, cutoffTo, cursor, limit = 100, deliveryMethodId, status, withData } = {}) {
+  const filter = { cutoff_from: cutoffFrom, cutoff_to: cutoffTo };
+  if (deliveryMethodId != null && deliveryMethodId !== '') filter.delivery_method_id = Number(deliveryMethodId);
+  if (status) filter.status = String(status);
   const body = {
-    filter: { cutoff_from: cutoffFrom, cutoff_to: cutoffTo },
+    filter,
     limit,
-    with: { analytics_data: true, financial_data: true },
+    with: withData || { analytics_data: true, financial_data: true },
   };
   if (cursor) body.cursor = cursor;
   return call(store, '/v4/posting/fbs/unfulfilled/list', body);
