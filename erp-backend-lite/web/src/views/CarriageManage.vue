@@ -62,6 +62,10 @@ function carriageStatusLabel(status) {
 function hasAction(c, action) {
   return Array.isArray(c?.available_actions) && c.available_actions.includes(action);
 }
+// 发运是否已确认:未确认(available_actions 仍含 approve)时 Ozon 尚未生成货运标签,预览/打印不可用(2026-10-30)
+function isCarriageConfirmed(c) {
+  return !hasAction(c, 'approve');
+}
 
 // ── 当前店铺(配置接口鉴权用;发运清单已聚合所有店铺) ──────
 const storeId = ref('');
@@ -848,30 +852,32 @@ defineExpose({ refreshCurrent, listLoading });
                 <button class="btn btn-ghost btn-sm" @click="openDetail(row)">详情</button>
                 <button
                   class="btn btn-ghost btn-sm"
-                  :disabled="labelPrint.labelPreview.loading === Number(row.id)"
+                  :disabled="!isCarriageConfirmed(row) || labelPrint.labelPreview.loading === Number(row.id)"
+                  :title="isCarriageConfirmed(row) ? '' : '发运确认后生成标签,方可预览'"
                   @click="labelPrint.previewRender(row)"
                 >
                   {{ labelPrint.labelPreview.loading === Number(row.id) ? '预览中…' : '预览' }}
                 </button>
                 <button
                   class="btn btn-ghost btn-sm"
-                  :disabled="labelPrint.pdfPreview.loading === Number(row.id)"
+                  :disabled="!isCarriageConfirmed(row) || labelPrint.pdfPreview.loading === Number(row.id)"
+                  :title="isCarriageConfirmed(row) ? '' : '发运确认后生成标签,方可查看 PDF'"
                   @click="labelPrint.previewPdf(row)"
                 >
                   {{ labelPrint.pdfPreview.loading === Number(row.id) ? '加载中…' : 'PDF' }}
                 </button>
                 <button
                   class="btn btn-primary btn-sm"
-                  :disabled="labelPrint.printingId === Number(row.id) || (labelPrint.agentOnline !== true && labelPrint.serverOnline !== true)"
-                  :title="(labelPrint.agentOnline !== true && labelPrint.serverOnline !== true) ? '打印组件未连接' : '打印 1 张'"
+                  :disabled="!isCarriageConfirmed(row) || labelPrint.printingId === Number(row.id) || (labelPrint.agentOnline !== true && labelPrint.serverOnline !== true)"
+                  :title="!isCarriageConfirmed(row) ? '发运确认后生成标签,方可打印' : ((labelPrint.agentOnline !== true && labelPrint.serverOnline !== true) ? '打印组件未连接' : '打印 1 张')"
                   @click="onPrintLabel(row, 1)"
                 >
                   {{ labelPrint.printingId === Number(row.id) ? '打印中…' : '打印1张' }}
                 </button>
                 <button
                   class="btn btn-primary btn-sm"
-                  :disabled="labelPrint.printingId === Number(row.id) || (labelPrint.agentOnline !== true && labelPrint.serverOnline !== true)"
-                  :title="(labelPrint.agentOnline !== true && labelPrint.serverOnline !== true) ? '打印组件未连接' : '打印 3 张'"
+                  :disabled="!isCarriageConfirmed(row) || labelPrint.printingId === Number(row.id) || (labelPrint.agentOnline !== true && labelPrint.serverOnline !== true)"
+                  :title="!isCarriageConfirmed(row) ? '发运确认后生成标签,方可打印' : ((labelPrint.agentOnline !== true && labelPrint.serverOnline !== true) ? '打印组件未连接' : '打印 3 张')"
                   @click="onPrintLabel(row, 3)"
                 >
                   {{ labelPrint.printingId === Number(row.id) ? '打印中…' : '打印3张' }}
