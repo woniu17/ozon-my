@@ -116,6 +116,14 @@ class ContainerLabelFragment : Fragment() {
     private fun hasAction(row: CarriageRow, action: String): Boolean =
         row.availableActions.contains(action)
 
+    /** 发运是否已确认:未确认状态(新建/已形成/已创建)无法生成标签,禁用预览/打印(对齐 web 端) */
+    private fun isCarriageConfirmed(row: CarriageRow): Boolean =
+        row.status !in UNCONFIRMED_STATUSES
+
+    private companion object {
+        val UNCONFIRMED_STATUSES = setOf("new", "formed", "created")
+    }
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -949,19 +957,21 @@ class ContainerLabelFragment : Fragment() {
         val actionRow = LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
         }
-        fun addAction(text: String, color: Int, onClick: () -> Unit) {
-            val btn = compactActionButton(text, color, onClick)
+        fun addAction(text: String, color: Int, enabled: Boolean = true, onClick: () -> Unit) {
+            val btn = compactActionButton(text, color, enabled, onClick)
             val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             lp.rightMargin = dp(4f)
             actionRow.addView(btn, lp)
         }
+        // 未确认发运无法生成标签:预览/打印置灰(对齐 web 端)
+        val confirmed = isCarriageConfirmed(row)
         addAction("详情", Color.parseColor("#165dff")) { openDetail(row) }
         if (!row.fromHistory) {
-            addAction("预览", Color.parseColor("#165dff")) { previewLabel(row) }
-            addAction("打印1张", Color.parseColor("#00b42a")) { printLabel(row, 1) }
-            addAction("打印3张", Color.parseColor("#00b42a")) { printLabel(row, 3) }
+            addAction("预览", Color.parseColor("#165dff"), confirmed) { previewLabel(row) }
+            addAction("打印1张", Color.parseColor("#00b42a"), confirmed) { printLabel(row, 1) }
+            addAction("打印3张", Color.parseColor("#00b42a"), confirmed) { printLabel(row, 3) }
         } else {
-            addAction("预览", Color.parseColor("#165dff")) { previewLabel(row) }
+            addAction("预览", Color.parseColor("#165dff"), confirmed) { previewLabel(row) }
         }
         if (hasAction(row, "approve")) {
             addAction("确认", Color.parseColor("#00b42a")) { openDetail(row) }
@@ -993,18 +1003,26 @@ class ContainerLabelFragment : Fragment() {
     }
 
     /** 单行等宽操作按钮:去掉系统默认最小宽高,缩小内边距,让多个按钮一行放下 */
-    private fun compactActionButton(text: String, color: Int, onClick: () -> Unit): Button {
+    private fun compactActionButton(
+        text: String,
+        color: Int,
+        enabled: Boolean,
+        onClick: () -> Unit
+    ): Button {
         return Button(requireContext()).apply {
             this.text = text
-            setTextColor(Color.WHITE)
+            setTextColor(if (enabled) Color.WHITE else Color.parseColor("#B3FFFFFF"))
             textSize = 11f
             isAllCaps = false
-            setRoundedBg(color, 6f)
+            // 未启用时置灰(仍可点击,点击提示原因,对齐 web 端禁用+提示)
+            setRoundedBg(if (enabled) color else Color.parseColor("#C9CDD4"), 6f)
             // 关键:清除主题默认最小宽高(否则每个按钮至少 88dp 宽,必然换行)
             minWidth = 0
             minHeight = 0
             setPadding(dp(4f), dp(5f), dp(4f), dp(5f))
-            setOnClickListener { onClick() }
+            setOnClickListener {
+                if (enabled) onClick() else toast("发运确认后生成标签，方可预览/打印")
+            }
         }
     }
 
