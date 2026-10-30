@@ -83,6 +83,7 @@ class ContainerLabelFragment : Fragment() {
         val deliveryMethodId: String,
         val deliveryMethodName: String,
         val departureDate: String,
+        val timeslot: String = "",
         val postingsCount: String,
         val quantumCount: String,
         val containersCount: String,
@@ -254,32 +255,33 @@ class ContainerLabelFragment : Fragment() {
                 val departureDate = mo.optString("departure_date")
                 val warehouseName = mo.optString("warehouse_name")
                 val warehouseCity = mo.optString("warehouse_city")
-                val carriages = mo.optJsonArray("carriages") ?: JsonArray()
-                if (carriages.size() == 0) {
-                    // 占位行:该配送方式下无发运,提供创建入口(与 web 端一致)
-                    rows.add(
-                        CarriageRow(
-                            id = 0,
-                            storeId = storeId,
-                            storeName = storeName,
-                            status = "placeholder",
-                            deliveryMethodId = methodId,
-                            deliveryMethodName = methodName,
-                            departureDate = departureDate,
-                            postingsCount = "—",
-                            quantumCount = "—",
-                            containersCount = "—",
-                            warehouseName = warehouseName,
-                            warehouseCity = warehouseCity,
-                            isPlaceholder = true
-                        )
-                    )
-                    continue
+                // 配送时段(web 端占位行展示,如 "13:00 ~ 18:00")
+                val timeslotFrom = mo.optString("timeslot_from")
+                val timeslotTo = mo.optString("timeslot_to")
+                val timeslot = buildString {
+                    append(timeslotFrom)
+                    if (timeslotTo.isNotBlank()) {
+                        if (isNotEmpty()) append(" ~ ")
+                        append(timeslotTo)
+                    }
                 }
+                val carriages = mo.optJsonArray("carriages") ?: JsonArray()
+                // 占位行(与 web 端一致):该配送方式下无实际发运时提供创建入口。
+                // Ozon 对"可创建"的配送方式会返回 carriages=[{id:0,...}] 占位元素,
+                // 也可能返回空数组;统一按"是否存在 id>0 的真实发运"判断。
+                var hasRealCarriage = false
+                // 占位元素携带可创建货件数(web 端占位行"货件数"列,如 id=0 元素有 postings_count)
+                var placeholderPostings = "—"
                 for (c in carriages) {
                     val co = c.takeIf { it.isJsonObject }?.asJsonObject ?: continue
                     val id = co.optDouble("id", 0.0).toLong()
-                    if (id <= 0) continue
+                    if (id <= 0) {
+                        // Ozon 占位元素,仅取可创建货件数
+                        val pc = fmtCount(co, "postings_count")
+                        if (pc != "—") placeholderPostings = pc
+                        continue
+                    }
+                    hasRealCarriage = true
                     val actions = co.optJsonArray("available_actions")
                         ?.mapNotNull { it.asString }
                         ?: emptyList()
@@ -300,6 +302,27 @@ class ContainerLabelFragment : Fragment() {
                             firstMileType = co.optString("first_mile_type"),
                             integrationType = co.optString("integration_type"),
                             availableActions = actions
+                        )
+                    )
+                }
+                if (!hasRealCarriage) {
+                    // 无真实发运 → 生成占位行(覆盖空数组与 id=0 占位元素两种情况)
+                    rows.add(
+                        CarriageRow(
+                            id = 0,
+                            storeId = storeId,
+                            storeName = storeName,
+                            status = "placeholder",
+                            deliveryMethodId = methodId,
+                            deliveryMethodName = methodName,
+                            departureDate = departureDate,
+                            timeslot = timeslot,
+                            postingsCount = placeholderPostings,
+                            quantumCount = "—",
+                            containersCount = "—",
+                            warehouseName = warehouseName,
+                            warehouseCity = warehouseCity,
+                            isPlaceholder = true
                         )
                     )
                 }
@@ -815,13 +838,12 @@ class ContainerLabelFragment : Fragment() {
         return buildCarriageCardNormal(row)
     }
 
-    /** 占位卡片:点击创建发运 */
+    /** 占位卡片(对齐 web 端占位行):与普通发运卡同格式 —— 店铺/待创建/可创建 + 配送方式/时段/日期 + 货件数 + 创建发运按钮 */
     private fun buildPlaceholderCard(row: CarriageRow): View {
         val card = LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_card)
             setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
-            setBackgroundResource(R.drawable.bg_card_dashed)
         }
         val lp = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -830,57 +852,115 @@ class ContainerLabelFragment : Fragment() {
         lp.bottomMargin = dp(12f)
         card.layoutParams = lp
 
-        card.addView(
-            TextView(requireContext()).apply {
-                text = "＋"
-                setTextColor(Color.parseColor("#165dff"))
-                textSize = 18f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-            }
-        )
-        val textBox = LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.VERTICAL
+        // 头部:店铺名标签 + "待创建"(替代 #ID) + "可创建"状态标签(同普通卡布局)
+        val header = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        textBox.addView(
+        header.addView(
             TextView(requireContext()).apply {
-                text = "创建发运 · ${row.deliveryMethodName.ifBlank { row.deliveryMethodId }}"
-                setTextColor(Color.parseColor("#165dff"))
-                textSize = 14f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-            },
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        textBox.addView(
-            TextView(requireContext()).apply {
-                text = "${row.storeName} · ${row.departureDate.ifBlank { "日期待定" }}"
-                setTextColor(Color.parseColor("#86909c"))
-                textSize = 12f
-            },
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                topMargin = dp(2f)
-            }
-        )
-        card.addView(textBox, LinearLayout.LayoutParams(
-            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
-        ).apply { marginStart = dp(10f) })
-
-        // 右侧"可创建"标签(对齐 web 端占位行)
-        card.addView(
-            TextView(requireContext()).apply {
-                text = "可创建"
+                text = row.storeName
                 setTextColor(Color.parseColor("#165dff"))
                 textSize = 11f
                 setRoundedBg(0xFFEEF4FF.toInt(), 999f)
                 setPadding(dp(8f), dp(3f), dp(8f), dp(3f))
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { marginStart = dp(8f) }
+            }
         )
+        header.addView(
+            TextView(requireContext()).apply {
+                text = "待创建"
+                setTextColor(Color.parseColor("#1d2129"))
+                textSize = 16f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(8f)
+            }
+        )
+        header.addView(buildCreateTag())
+        card.addView(header)
 
-        card.setOnClickListener { onGoCreate(row) }
+        // 第二行:配送方式(+ 时段) + 右侧发运日期
+        val metaRow = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val dmBox = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        dmBox.addView(
+            TextView(requireContext()).apply {
+                text = row.deliveryMethodName.ifBlank { "配送方式未知" }
+                setTextColor(Color.parseColor("#4e5969"))
+                textSize = 12f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            }
+        )
+        if (row.timeslot.isNotBlank()) {
+            dmBox.addView(
+                TextView(requireContext()).apply {
+                    text = row.timeslot
+                    setTextColor(Color.parseColor("#86909c"))
+                    textSize = 11f
+                },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(2f) }
+            )
+        }
+        metaRow.addView(dmBox, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        metaRow.addView(
+            TextView(requireContext()).apply {
+                text = row.departureDate.ifBlank { "" }
+                setTextColor(Color.parseColor("#86909c"))
+                textSize = 11f
+            }
+        )
+        card.addView(metaRow, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(6f) })
+
+        // 明细:可创建 · 货件数(对齐 web 端占位行"可创建/N 个货件")
+        val detail = TextView(requireContext()).apply {
+            text = buildString {
+                append("可创建")
+                if (row.postingsCount.isNotBlank() && row.postingsCount != "—") {
+                    append(" · 货件 ").append(row.postingsCount)
+                }
+            }
+            setTextColor(Color.parseColor("#86909c"))
+            textSize = 12f
+            setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
+            setRoundedBg(0xFFF2F3F5.toInt(), 6f)
+        }
+        card.addView(detail, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(8f) })
+
+        // 操作行:创建发运按钮(占位行唯一操作,同普通卡按钮样式)
+        val actionRow = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val createBtn = compactActionButton("创建发运", Color.parseColor("#165dff"), true) { onGoCreate(row) }
+        actionRow.addView(createBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        card.addView(actionRow, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(10f) })
+
         return card
+    }
+
+    /** "可创建"蓝色小标签(web 端 create-tag) */
+    private fun buildCreateTag(): TextView = TextView(requireContext()).apply {
+        text = "可创建"
+        setTextColor(Color.parseColor("#165dff"))
+        textSize = 11f
+        setRoundedBg(0xFFEEF4FF.toInt(), 999f)
+        setPadding(dp(10f), dp(3f), dp(10f), dp(3f))
     }
 
     /** 普通发运卡片(进行中/历史共用) */
