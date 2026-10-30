@@ -721,7 +721,9 @@ export function carriageCancel(store, carriageId) {
 
 // /v1/carriage/courier-contact/set —— 添加/更新向快递员提供的卖家联系方式
 // 适用:first_mile_type = pickup 且 integration_type = ozon_outsourced 的发运(OGL 上门取件)
-// 请求: { carriage_id, phone(必填), wechat_nickname?, comment? }
+// 请求: { carriage_id, phone(必填,快递员联系电话),
+//         comment(必填,提供给快递公司的取件地址),
+//         wechat_nickname?(选填,下单人名称,前端默认以店铺名) }
 export function carriageCourierContactSet(store, { carriageId, phone, wechatNickname, comment }) {
   const id = Number(carriageId);
   if (!Number.isInteger(id) || id <= 0) {
@@ -729,11 +731,14 @@ export function carriageCourierContactSet(store, { carriageId, phone, wechatNick
   }
   const p = String(phone || '').trim();
   if (!p) {
-    throw new ApiError(ErrorCode.VALIDATION_ERROR, 'phone 必填(快递员联系方式)');
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, 'phone 必填(快递员联系电话)');
   }
-  const body = { carriage_id: id, phone: p };
+  const addr = String(comment || '').trim();
+  if (!addr) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, 'comment 必填(提供给快递公司的取件地址)');
+  }
+  const body = { carriage_id: id, phone: p, comment: addr };
   if (wechatNickname) body.wechat_nickname = String(wechatNickname);
-  if (comment) body.comment = String(comment);
   return call(store, '/v1/carriage/courier-contact/set', body);
 }
 

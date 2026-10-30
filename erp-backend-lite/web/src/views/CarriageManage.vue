@@ -279,11 +279,13 @@ function onSetContactConfigDefault(item) {
 }
 
 async function onSaveContactConfigs() {
-  const valid = contactConfigs.list.filter((c) => c.phone.trim() || c.wechatNickname.trim());
-  if (!valid.length) {
-    show('请至少配置一条联系方式', 'error');
+  // 每条配置必填:电话 + 地址(提供给快递公司);下单人名称选填
+  const incomplete = contactConfigs.list.find((c) => !c.phone.trim() || !c.comment.trim());
+  if (incomplete) {
+    show('每条配置都需要填写电话和地址', 'error');
     return;
   }
+  const valid = contactConfigs.list.filter((c) => c.phone.trim() && c.comment.trim());
   contactConfigs.saving = true;
   try {
     const data = await saveCourierContactConfigs(storeId.value, valid);
@@ -310,6 +312,10 @@ function onSelectContactConfig() {
 async function onSetAsDefault() {
   if (!detail.phone.trim()) {
     show('请先填写快递员联系电话', 'error');
+    return;
+  }
+  if (!detail.comment.trim()) {
+    show('请填写提供给快递公司的取件地址', 'error');
     return;
   }
   try {
@@ -376,6 +382,10 @@ const contactApplicable = computed(() => {
 async function onSaveContact() {
   if (!detail.phone.trim()) {
     show('请填写快递员联系电话', 'error');
+    return;
+  }
+  if (!detail.comment.trim()) {
+    show('请填写提供给快递公司的取件地址', 'error');
     return;
   }
   detail.savingContact = true;
@@ -597,9 +607,9 @@ async function onStoreChange() {
         <thead>
           <tr>
             <th class="def-col">默认</th>
-            <th>电话</th>
-            <th>微信昵称</th>
-            <th>备注</th>
+            <th>电话 <em class="req">*</em></th>
+            <th>下单人名称</th>
+            <th>地址 <em class="req">*</em></th>
             <th class="ops">操作</th>
           </tr>
         </thead>
@@ -613,9 +623,9 @@ async function onStoreChange() {
                 @change="onSetContactConfigDefault(c)"
               />
             </td>
-            <td><input v-model="c.phone" placeholder="联系电话" /></td>
-            <td><input v-model="c.wechatNickname" :placeholder="`默认:${currentStoreName() || '店铺名'}`" /></td>
-            <td><input v-model="c.comment" placeholder="(可选)" /></td>
+            <td><input v-model="c.phone" placeholder="快递员联系电话" /></td>
+            <td><input v-model="c.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" /></td>
+            <td><input v-model="c.comment" placeholder="提供给快递公司的取件地址" /></td>
             <td class="ops">
               <button class="btn btn-danger btn-sm" @click="onRemoveContactConfig(i)">删除</button>
             </td>
@@ -633,7 +643,7 @@ async function onStoreChange() {
         </button>
       </div>
       <p class="form-hint">
-        可配置多条快递员联系方式;打开发运详情自动加载默认项,微信昵称为空时默认使用店铺名「{{ currentStoreName() }}」。
+        电话与地址为必填(地址提供给快递公司取件);下单人名称选填,为空时默认使用店铺名「{{ currentStoreName() }}」。
       </p>
     </div>
 
@@ -831,12 +841,12 @@ async function onStoreChange() {
               <input v-model="detail.phone" placeholder="快递员联系电话" :disabled="!contactApplicable" />
             </label>
             <label>
-              <span>微信昵称</span>
-              <input v-model="detail.wechatNickname" :placeholder="`默认:${currentStoreName() || '店铺名'}`" :disabled="!contactApplicable" />
+              <span>下单人名称</span>
+              <input v-model="detail.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" :disabled="!contactApplicable" />
             </label>
             <label>
-              <span>备注</span>
-              <input v-model="detail.comment" placeholder="(可选)" :disabled="!contactApplicable" />
+              <span>地址 <em class="req">*</em></span>
+              <input v-model="detail.comment" placeholder="提供给快递公司的取件地址" :disabled="!contactApplicable" />
             </label>
             <button
               class="btn btn-ghost btn-sm"
@@ -853,7 +863,10 @@ async function onStoreChange() {
               设为默认
             </button>
           </div>
-          <p class="form-hint">从配置中选择联系方式自动填充;「设为默认」把当前内容存为默认配置项。</p>
+          <p class="form-hint">
+            电话与地址必填(地址为提供给快递公司的取件地址);下单人名称选填默认店铺名。
+            从配置中选择可自动填充;「设为默认」把当前内容存为默认配置项。
+          </p>
         </div>
 
         <!-- 发运操作 -->
