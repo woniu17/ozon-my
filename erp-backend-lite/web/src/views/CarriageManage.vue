@@ -647,6 +647,8 @@ async function onSavePostings() {
 
 // ── 初始化 ─────────────────────────────────────────────
 onMounted(async () => {
+  // 打印机双通道探测与店铺加载解耦(2026-11-01):即使店铺加载失败也要尽快结束"探测中"状态
+  if (isPending.value) labelPrint.probePrinters();
   try {
     await storesStore.load();
     // 默认选第一个已配置 sync_credentials 的店铺(作为全局配置接口鉴权)
@@ -654,8 +656,6 @@ onMounted(async () => {
     if (isPending.value) {
       loadCarriages();
       loadContactConfigs();
-      // 打印机双通道探测(失败不阻塞)
-      labelPrint.probePrinters();
     } else {
       loadHistory();
     }

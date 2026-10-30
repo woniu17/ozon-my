@@ -58,27 +58,50 @@ export function useCarriageLabelPrint() {
   }
 
   // 打印机双通道探测(失败不阻塞)
+  // 2026-11-01:加整体超时兜底 + catch,避免探测 promise 长时间不 settle 导致 UI 一直"探测中"。
   function probePrinters() {
-    getAllPrinters().then(({ local, server }) => {
-      agentOnline.value = local.online;
-      printers.value = local.printers;
-      defaultPrinter.value = local.defaultPrinter || '';
-      serverOnline.value = server.online;
-      serverPrinters.value = server.printers;
-      serverDefaultPrinter.value = server.defaultPrinter || '';
-      let saved = '';
-      try { saved = localStorage.getItem('erp:labelPrinter') || ''; } catch { /* noop */ }
-      if (saved) {
-        const { source, name } = parsePrinter(saved);
-        const list = source === 'server' ? serverPrinters.value : printers.value;
-        if (!name || list.includes(name)) {
-          selectedPrinter.value = encodePrinter(source, name);
-        } else {
-          selectedPrinter.value = '';
-          try { localStorage.removeItem('erp:labelPrinter'); } catch { /* noop */ }
-        }
-      }
-    });
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      if (agentOnline.value === null) agentOnline.value = false;
+      if (serverOnline.value === null) serverOnline.value = false;
+    }, 10_000);
+    getAllPrinters()
+      .then(({ local, server }) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        agentOnline.value = local.online;
+        printers.value = local.printers;
+        defaultPrinter.value = local.defaultPrinter || '';
+        serverOnline.value = server.online;
+        serverPrinters.value = server.printers;
+        serverDefaultPrinter.value = server.defaultPrinter || '';
+        restoreSavedPrinter();
+      })
+      .catch(() => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        agentOnline.value = false;
+        serverOnline.value = false;
+      });
+  }
+
+  // 恢复上次选择的打印机(localStorage 记忆,失效则清空)
+  function restoreSavedPrinter() {
+    let saved = '';
+    try { saved = localStorage.getItem('erp:labelPrinter') || ''; } catch { /* noop */ }
+    if (!saved) return;
+    const { source, name } = parsePrinter(saved);
+    const list = source === 'server' ? serverPrinters.value : printers.value;
+    if (!name || list.includes(name)) {
+      selectedPrinter.value = encodePrinter(source, name);
+    } else {
+      selectedPrinter.value = '';
+      try { localStorage.removeItem('erp:labelPrinter'); } catch { /* noop */ }
+    }
   }
 
   // ── PNG 预览(服务器渲染 PDF 每页,不依赖组件预览图 URL) ──
