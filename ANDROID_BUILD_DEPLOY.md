@@ -5,7 +5,7 @@
 
 ## 给 Agent 的一句话指令
 
-按本文档执行：升级三处版本号 → `gradle assembleDebug` 构建 → 拷贝 APK 到
+按本文档执行：升级三处版本号 → `gradle clean assembleDebug` 构建 → 拷贝 APK 到
 `erp-backend-lite/src/public/miniapp/` → 更新后端 `version.json` → curl 验证 →
 提交推送（APK 和部署目录不入库）。
 
@@ -39,8 +39,14 @@ export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME
 
 ```bash
 cd /root/code/ozon-my/android-erp
-gradle assembleDebug          # 或 ./gradlew assembleDebug
+gradle clean assembleDebug    # 或 ./gradlew clean assembleDebug
 ```
+
+> **发布构建必须带 `clean`**（2026-10-31 v5.78 事故教训）：版本号以编译期
+> 常量形式内联进引用 `BuildConfig.VERSION_CODE/VERSION_NAME` 的类；增量
+> 构建在升版本后不会重新编译这些类，旧版本号会残留在 APK 字节码里——
+> v5.78 曾因此打进了 5.77 的常量，导致客户端每次启动都误判有新版本。
+> 换构建变体（debug/release）同理，务必 clean。
 
 - 产物路径：`android-erp/app/build/outputs/apk/debug/app-debug.apk`
 - 签名：自动读取 `android-erp/keystore.properties`（密钥库
