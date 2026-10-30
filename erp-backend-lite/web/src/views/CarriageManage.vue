@@ -665,19 +665,14 @@ onMounted(async () => {
     show(err.message || '店铺列表加载失败', 'error');
   }
 });
+
+// 暴露给父组件 CarriageCenter(页面标题/刷新已上移,2026-10-30)
+defineExpose({ refreshCurrent, listLoading });
 </script>
 
 <template>
   <div class="carriage-page">
-    <div class="page-head">
-      <h2>{{ isPending ? '发运管理' : '发运历史' }}</h2>
-      <span class="page-sub">
-        {{ isPending ? 'FBS 备货后创建发运 · 查看货件 · 设快递员联系方式 · 确认/取消发运' : '已完成发运的历史清单(本地持久化)' }}
-      </span>
-      <button class="btn btn-ghost btn-sm" :disabled="listLoading" @click="refreshCurrent">
-        {{ listLoading ? '加载中…' : '刷新' }}
-      </button>
-    </div>
+    <!-- 页面标题(发运管理/发运历史 + 副标题 + 刷新)已上移到 CarriageCenter 顶部(2026-10-30) -->
 
     <!-- 快递员联系方式配置(2026-10-30,多条 + 默认项;全店铺通用一份;2026-11-01:默认只展示默认项,其它折叠;仅在待处理模式展示) -->
     <div v-if="isPending" class="card contact-config-card">
@@ -1225,24 +1220,6 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.page-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 2px;
-}
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-}
-.page-sub {
-  flex: 1;
-  min-width: 240px;
-  font-size: 12.5px;
-  color: var(--muted);
 }
 
 .section-title {
