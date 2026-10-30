@@ -21,6 +21,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -34,6 +35,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import coil.load
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -62,6 +64,8 @@ import java.util.concurrent.Executors
  *  - 记录结构化(状态/单号/店铺/时间),点击跳订单详情,失败可重试
  *  - 多件确认弹窗期间暂停连扫,避免叠加触发下一单
  *  - 去重表定期清理,防止长时间使用内存增长
+ *  - 备货记录展示订单商品首图缩略图
+ *  - 同一订单刚备货成功又扫到(alreadyShipped):不再重复添加"已备货过"记录
  */
 class StockScanFragment : Fragment() {
 
@@ -286,10 +290,12 @@ class StockScanFragment : Fragment() {
                     return@launch
                 }
                 val totalQty = (stockPkg.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
+                // 订单商品首图(备货记录展示,取第一个商品图片)
+                val imageUrl = stockPkg.items?.firstOrNull()?.picUrl
                 if (totalQty > 1) {
-                    showMultiConfirm(stockPkg, code, totalQty)
+                    showMultiConfirm(stockPkg, code, totalQty, imageUrl)
                 } else {
-                    doShip(stockPkg.id, stockPkg.postingNumber, code)
+                    doShip(stockPkg.id, stockPkg.postingNumber, code, imageUrl)
                 }
             } catch (e: Exception) {
                 failCount++
@@ -314,12 +320,12 @@ class StockScanFragment : Fragment() {
     }
 
     /** 多件商品:弹窗二次确认,展示商品明细;弹窗期间暂停连扫防叠加触发 */
-    private fun showMultiConfirm(pkg: Pkg, code: String, totalQty: Long) {
+    private fun showMultiConfirm(pkg: Pkg, code: String, totalQty: Long, imageUrl: String? = null) {
         if (!isAdded) return
         pendingCount++
         dialogShowing = true
         updateStats()
-        addRecord(RecordEntry(RecordStatus.PENDING, code, pkg.id, pkg.postingNumber, "共 $totalQty 件,待确认"))
+        addRecord(RecordEntry(RecordStatus.PENDING, code, pkg.id, pkg.postingNumber, "共 $totalQty 件,待确认", imageUrl))
 
         val itemsText = pkg.items
             ?.joinToString("\n") { it ->
@@ -340,7 +346,7 @@ class StockScanFragment : Fragment() {
             .setTitle("备货确认")
             .setMessage(message)
             .setPositiveButton("确认备货") { _, _ ->
-                doShip(pkg.id, pkg.postingNumber, code)
+                doShip(pkg.id, pkg.postingNumber, code, imageUrl)
             }
             .setNegativeButton("取消", null)
             .create()
@@ -353,23 +359,34 @@ class StockScanFragment : Fragment() {
     }
 
     /** 调用备货接口并记录结果 */
-    private fun doShip(packageId: String, postingNumber: String?, code: String) {
+    private fun doShip(packageId: String, postingNumber: String?, code: String, imageUrl: String? = null) {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to packageId)).asJsonObject
-                val title = when {
-                    r.optBoolean("alreadyShipped") -> "已备货过"
-                    r.optBoolean("pending") -> "备货指令已提交"
-                    else -> "备货成功"
+                if (r.optBoolean("alreadyShipped")) {
+                    // 该订单已备货过:若记录列表中最新一条就是本订单(刚备货成功又扫到),
+                    // 不再重复添加"已备货过"记录,仅视频区提示,避免连扫/弹窗后重复刷记录。
+                    val latest = records.firstOrNull()
+                    if (latest?.packageId == packageId) {
+                        showScanHint("✅ 已备货过:$postingNumber", error = false)
+                        playFeedback(true)
+                    } else {
+                        successCount++
+                        addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, "已备货过", imageUrl))
+                        playFeedback(true)
+                    }
+                } else {
+                    val title = if (r.optBoolean("pending")) "备货指令已提交" else "备货成功"
+                    successCount++
+                    addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, title, imageUrl))
+                    playFeedback(true)
                 }
-                successCount++
-                addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, title))
-                playFeedback(true)
             } catch (e: Exception) {
                 failCount++
                 addRecord(RecordEntry(
                     RecordStatus.FAILED, code, packageId, postingNumber,
-                    "备货失败:${e.message ?: e.javaClass.simpleName}"
+                    "备货失败:${e.message ?: e.javaClass.simpleName}",
+                    imageUrl
                 ))
                 playFeedback(false)
             }
@@ -525,6 +542,21 @@ class StockScanFragment : Fragment() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(8), 0, dp(8))
+            // 商品缩略图(备货记录展示订单商品图片,无图记录不占位)
+            if (!record.imageUrl.isNullOrBlank()) {
+                addView(ImageView(ctx).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)).apply {
+                        rightMargin = dp(8)
+                    }
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(6).toFloat()
+                        setColor(0xFFF2F3F5.toInt())
+                    }
+                    clipToOutline = true
+                    load(record.imageUrl)
+                })
+            }
             addView(TextView(ctx).apply {
                 text = record.status.emoji
                 textSize = 16f
@@ -546,7 +578,7 @@ class StockScanFragment : Fragment() {
                     setPadding(dp(12), dp(5), dp(12), dp(5))
                     setRoundedBg(0xFF165DFF.toInt(), 8f)
                     setOnClickListener {
-                        doShip(record.packageId, record.postingNumber, record.code)
+                        doShip(record.packageId, record.postingNumber, record.code, record.imageUrl)
                     }
                 }, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -630,6 +662,7 @@ class StockScanFragment : Fragment() {
         val packageId: String = "",
         val postingNumber: String? = null,
         val message: String,
+        val imageUrl: String? = null, // 订单商品首图(备货记录展示用)
         val time: Long = System.currentTimeMillis()
     )
 
