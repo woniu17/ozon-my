@@ -60,7 +60,7 @@
             android:layout_marginTop="2dp" />
     </LinearLayout>
 
-    <!-- 货运标签 -->
+    <!-- 发运管理(2026-11-02 由"货运标签"升级) -->
     <LinearLayout
         android:id="@+id/navContainer"
         android:layout_width="0dp"
@@ -80,7 +80,7 @@
             android:id="@+id/navContainerText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="货运标签"
+            android:text="发运管理"
             android:textSize="10sp"
             android:textColor="#86909c"
             android:layout_marginTop="2dp" />
