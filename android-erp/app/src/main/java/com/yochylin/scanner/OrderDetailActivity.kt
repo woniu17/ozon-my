@@ -707,7 +707,8 @@ class OrderDetailActivity : ComponentActivity() {
         return row
     }
 
-    /** 跟卖快照行: #排名/总数 + 最低/中位价 + 比最低高/低百分比(2026-10-27) */
+    /** 跟卖快照行(2026-10-30 改三行): 第1行排名 / 第2行最低价 / 第3行中位数
+     *  第2/3行格式对齐:金额 + 高低比较(带符号金额差 + 百分比),颜色 高=红 低=绿 平=灰 */
     private fun buildPwSnapRow(snap: JsonObject): TextView {
         fun num(key: String): Double? = snap.get(key)?.takeIf { !it.isJsonNull }?.asDouble
         fun int(key: String): Int? = snap.get(key)?.takeIf { !it.isJsonNull }?.asInt
@@ -715,55 +716,61 @@ class OrderDetailActivity : ComponentActivity() {
         val sellerCount = int("seller_count") ?: 0
         val rank = int("my_rank")
         val cheapest = int("is_cheapest") == 1
+        val myPrice = num("my_price")
         val minPrice = num("min_price")
         val medianPrice = num("median_price")
-        val gapPct = num("gap_pct")
 
         val sb = SpannableStringBuilder()
-        sb.append("跟卖(下单时) ")
-        if (rank != null) {
-            val s = sb.length
-            sb.append("#$rank/${sellerCount + 1}")
-            sb.setSpan(
-                ForegroundColorSpan(if (cheapest) Color.parseColor("#16a34a") else Color.parseColor(COLOR_PRIMARY)),
-                s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
-            sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        }
-        if (minPrice != null) {
-            sb.append("  最低 ")
-            val s = sb.length
-            sb.append(fmtMoney(minPrice))
-            sb.setSpan(ForegroundColorSpan(Color.parseColor(COLOR_TEXT)), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        }
-        if (medianPrice != null) {
-            sb.append("  中位 ")
-            val s = sb.length
-            sb.append(fmtMoney(medianPrice))
-            sb.setSpan(ForegroundColorSpan(Color.parseColor(COLOR_TEXT)), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        }
-        if (gapPct != null) {
-            val s = sb.length
-            val text = when {
-                gapPct > 0 -> " 比最低高${fmtNum(gapPct)}%"
-                gapPct < 0 -> " 比最低低${fmtNum(-gapPct)}%"
-                else -> " 与最低持平"
+
+        // 第1行：排名信息
+        sb.append("跟卖(下单时) 排名 ")
+        val s1 = sb.length
+        sb.append(if (rank != null) "#$rank/${sellerCount + 1}" else "—")
+        sb.setSpan(
+            ForegroundColorSpan(if (cheapest) Color.parseColor("#16a34a") else Color.parseColor(COLOR_PRIMARY)),
+            s1, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        sb.setSpan(StyleSpan(Typeface.BOLD), s1, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        sb.append("\n")
+
+        // 第2/3行公共渲染:基准金额 + 与我的价的高低比较(金额差+百分比)
+        fun appendCompareLine(label: String, base: Double?, gapAbs: Double?, gapPct: Double?) {
+            sb.append(label).append(" ")
+            val sp = sb.length
+            sb.append(fmtMoney(base))
+            sb.setSpan(ForegroundColorSpan(Color.parseColor(COLOR_TEXT)), sp, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sb.setSpan(StyleSpan(Typeface.BOLD), sp, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (myPrice != null && base != null) {
+                // 金额差/百分比:优先用后端算好的,缺失则现算(与 web 端 vsMedianMark 同口径)
+                val diff = gapAbs ?: Math.round((myPrice - base) * 100) / 100.0
+                val pct = gapPct ?: (if (base > 0) Math.round(diff / base * 1000) / 10.0 else null)
+                val s = sb.length
+                val text = when {
+                    diff > 0 -> "  比${label}高 +${String.format(Locale.US, "%.2f", diff)}"
+                    diff < 0 -> "  比${label}低 -${String.format(Locale.US, "%.2f", -diff)}"
+                    else -> "  与${label}持平"
+                } + if (pct != null && diff != 0.0) "(${if (diff > 0) "+" else ""}${fmtNum(pct)}%)" else ""
+                sb.append(text)
+                sb.setSpan(
+                    ForegroundColorSpan(
+                        when {
+                            diff > 0 -> Color.parseColor("#dc2626")
+                            diff < 0 -> Color.parseColor("#16a34a")
+                            else -> Color.parseColor(COLOR_MUTE)
+                        }
+                    ),
+                    s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
-            sb.append(text)
-            sb.setSpan(
-                ForegroundColorSpan(
-                    when {
-                        gapPct > 0 -> Color.parseColor("#dc2626")
-                        gapPct < 0 -> Color.parseColor("#16a34a")
-                        else -> Color.parseColor(COLOR_MUTE)
-                    }
-                ),
-                s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
-            sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
+
+        // 第2行：最低价信息
+        appendCompareLine("最低", minPrice, num("gap_abs"), num("gap_pct"))
+        sb.append("\n")
+
+        // 第3行：中位数信息(与最低行同格式,金额差/百分比现算)
+        appendCompareLine("中位", medianPrice, null, null)
 
         return TextView(this).apply {
             text = sb
