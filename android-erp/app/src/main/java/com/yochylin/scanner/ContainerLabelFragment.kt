@@ -945,32 +945,31 @@ class ContainerLabelFragment : Fragment() {
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(8f) })
 
-        // 操作行:FlowLayout 自动换行 + 紧凑按钮,避免按钮过多被挤成竖排
-        val actionRow = FlowLayout(requireContext())
-        actionRow.addView(flowButton("详情", Color.parseColor("#165dff")) { openDetail(row) })
+        // 操作行:单行等宽按钮,保证 详情/预览/打印1张/打印3张 在同一排
+        val actionRow = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        fun addAction(text: String, color: Int, onClick: () -> Unit) {
+            val btn = compactActionButton(text, color, onClick)
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            lp.rightMargin = dp(4f)
+            actionRow.addView(btn, lp)
+        }
+        addAction("详情", Color.parseColor("#165dff")) { openDetail(row) }
         if (!row.fromHistory) {
-            actionRow.addView(flowButton("预览", Color.parseColor("#165dff")) { previewLabel(row) })
-            actionRow.addView(flowButton("打印1张", Color.parseColor("#00b42a")) { printLabel(row, 1) })
-            actionRow.addView(flowButton("打印3张", Color.parseColor("#00b42a")) { printLabel(row, 3) })
+            addAction("预览", Color.parseColor("#165dff")) { previewLabel(row) }
+            addAction("打印1张", Color.parseColor("#00b42a")) { printLabel(row, 1) }
+            addAction("打印3张", Color.parseColor("#00b42a")) { printLabel(row, 3) }
         } else {
-            actionRow.addView(flowButton("预览", Color.parseColor("#165dff")) { previewLabel(row) })
+            addAction("预览", Color.parseColor("#165dff")) { previewLabel(row) }
         }
         if (hasAction(row, "approve")) {
-            actionRow.addView(flowButton("确认", Color.parseColor("#00b42a")) { openDetail(row) })
+            addAction("确认", Color.parseColor("#00b42a")) { openDetail(row) }
         }
         if (hasAction(row, "cancel")) {
-            actionRow.addView(flowButton("取消", Color.parseColor("#f53f3f")) { openDetail(row) })
+            addAction("取消", Color.parseColor("#f53f3f")) { openDetail(row) }
         }
-        // 外层容器让 FlowLayout 整体靠右(按钮少时右对齐,多时自动换行)
-        val actionWrap = LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-        }
-        actionWrap.addView(actionRow, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
-        card.addView(actionWrap, LinearLayout.LayoutParams(
+        card.addView(actionRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(10f) })
@@ -993,36 +992,19 @@ class ContainerLabelFragment : Fragment() {
         }
     }
 
-    /** 紧凑按钮(配合 FlowLayout 使用,缩小字号与内边距让 5~6 个操作按钮一行放下) */
-    private fun newButton(text: String, color: Int, onClick: () -> Unit): Button {
+    /** 单行等宽操作按钮:去掉系统默认最小宽高,缩小内边距,让多个按钮一行放下 */
+    private fun compactActionButton(text: String, color: Int, onClick: () -> Unit): Button {
         return Button(requireContext()).apply {
             this.text = text
             setTextColor(Color.WHITE)
             textSize = 11f
             isAllCaps = false
             setRoundedBg(color, 6f)
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.leftMargin = dp(2f)
-            setPadding(dp(6f), dp(5f), dp(6f), dp(5f))
-            layoutParams = lp
+            // 关键:清除主题默认最小宽高(否则每个按钮至少 88dp 宽,必然换行)
+            minWidth = 0
+            minHeight = 0
+            setPadding(dp(4f), dp(5f), dp(4f), dp(5f))
             setOnClickListener { onClick() }
-        }
-    }
-
-    /** FlowLayout 内的按钮包装:通过外层 margin 提供间距(FlowLayout 不读取子 View margin) */
-    private fun flowButton(text: String, color: Int, onClick: () -> Unit): View {
-        return LinearLayout(requireContext()).apply {
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.rightMargin = dp(4f)
-            lp.bottomMargin = dp(4f)
-            layoutParams = lp
-            addView(newButton(text, color, onClick))
         }
     }
 
