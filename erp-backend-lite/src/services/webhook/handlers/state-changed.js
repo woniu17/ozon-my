@@ -91,7 +91,7 @@ export default async function stateChangedHandler(payload, ctx) {
 
   // 推送飞书(失败不影响落库结果)
   // 2026-10-16 去重重构:原子 claim/release 已收敛到 notifyPostingEvent 内部执行,
-  // 取货点/签收/备货与 API 兜底及备货动作共用 feishu_*_notified_at 标记,消除并发/竞态重复
+  // 取货点/签收/入库与 API 兜底及入库动作共用 feishu_*_notified_at 标记,消除并发/竞态重复
   await notifyPostingEvent('TYPE_STATE_CHANGED', payload, 'webhook').catch(err => {
     logger.warn({ err: err.message }, 'STATE_CHANGED 飞书通知失败');
   });

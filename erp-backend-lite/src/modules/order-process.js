@@ -3,18 +3,18 @@
 // 设计文档: docs/采购订单-Ozon订单关联管理-功能设计.md
 //
 // 路由:
-//   GET  /admin/api/order-process/tabs            Tab 计数(待采购/待备货/待贴单/待发运/交运中/已揽收/已签收/已成功/已取消/已退货/已搁置)
+//   GET  /admin/api/order-process/tabs            Tab 计数(待采购/待入库/待打单/待发运/交运中/已揽收/已签收/已成功/已取消/已退货/已搁置)
 //   GET  /admin/api/order-process/list            包裹分页列表(tab+筛选+关键词)
 //   GET  /admin/api/order-process/detail/:id      包裹详情(产品行+采购关联+轨迹)
 //   GET  /admin/api/order-process/purchase/lookup 查询采购单已关联包裹(拼单提示)
 //   POST /admin/api/order-process/purchase        提交采购信息(模式B:金额+国内快递单号)
 //   POST /admin/api/order-process/unlink          取消采购关联(冲回金额)
 //   POST /admin/api/order-process/ignore          搁置/恢复包裹
-//   POST /admin/api/order-process/print-label     标记已打印面单(贴单:待贴单→待发运;交运:待发运→交运中)
-//   POST /admin/api/order-process/ship            备货(Ozon /v4/posting/fbs/ship 搜集订单,不拆分;仅待备货可操作)
-//   POST /admin/api/order-process/scan-ship/submit   扫描发货:提交重量(权威状态校验,仅 wait_dispatch 落库)
-//   POST /admin/api/order-process/scan-ship/correct-weight  扫描发货:交运后更正重量(仅更新 weight)
-//   GET  /admin/api/order-process/scan-ship/records  扫描发货:发货记录(今日/昨日,北京时间日界)
+//   POST /admin/api/order-process/print-label     标记已打印面单(打单:待打单→待发运;交运:待发运→交运中)
+//   POST /admin/api/order-process/ship            入库(Ozon /v4/posting/fbs/ship 搜集订单,不拆分;仅待入库可操作)
+//   POST /admin/api/order-process/scan-ship/submit   扫描打单:提交重量(权威状态校验,仅 wait_dispatch 落库)
+//   POST /admin/api/order-process/scan-ship/correct-weight  扫描打单:交运后更正重量(仅更新 weight)
+//   GET  /admin/api/order-process/scan-ship/records  扫描打单:发货记录(今日/昨日,北京时间日界)
 //   POST /admin/api/order-process/sync-run        手动触发 Ozon 订单增量同步(双接口)
 //   POST /admin/api/order-process/sync-all-list  手动触发 /v4/posting/fbs/list 全量同步
 //   GET  /admin/api/order-process/sync-status    各店铺最近同步状态
@@ -90,7 +90,7 @@ function resolveRubCnyRate() {
   return null;
 }
 
-// ── 面单条码解析(2026-10-25,扫描发货扫码支持)───────────────────────────
+// ── 面单条码解析(2026-10-25,扫描打单扫码支持)───────────────────────────
 // 扫码可能输入:采购快递单号/货件号(现有 7 字段直接命中)/面单条码(走本解析)
 // 本地 op_posting_barcode 映射表优先,Ozon /v2/posting/fbs/get-by-barcode 在线兜底。
 
@@ -152,7 +152,7 @@ async function backfillPostingBarcodes(storeId, postingNumbers, pdfBuffer) {
   return filled;
 }
 
-// 包裹列表响应富化(列表页/扫描发货共用:产品行 + 采购关联 + 应计 + 重量 + 利润)
+// 包裹列表响应富化(列表页/扫描打单共用:产品行 + 采购关联 + 应计 + 重量 + 利润)
 function enrichListData(data) {
   const orderIds = data.packages.map((p) => p.ozonOrderId);
   const items = orderPackageDao.getItemsByOrderIds(orderIds);
@@ -747,7 +747,7 @@ router.get('/admin/api/order-process/purchase/lookup', (req, res, next) => {
 //   platformGoods?: [{ goodsName, spec, price, number, thumbUrl }] —— 平台订单商品(导入勾选携带),直接写入 items_json
 //   allocMode?: 'manual' | 'auto'  —— manual=手动填金额, auto=按quantity加权自动分摊
 // }
-// 提交即流转:包裹 wait_process → wait_stock(待备货)
+// 提交即流转:包裹 wait_process → wait_stock(待入库)
 // 保存后兜底:手填单号(无 platformGoods)且平台单号单一时,异步搜索详情自动补全 items_json
 
 // 采购单自动补全(2026-09-16):按单号跨账号搜索平台订单详情,goods 含 thumbUrl 时写入 items_json
@@ -1010,15 +1010,15 @@ router.post('/admin/api/order-process/print-label', (req, res, next) => {
   }
 });
 
-// ── 扫描发货(2026-09,设计文档: docs/扫描发货-功能设计.md)──
+// ── 扫描打单(2026-09,设计文档: docs/扫描打单-功能设计.md)──
 //   POST /admin/api/order-process/scan-ship/submit    提交发货重量(权威状态校验,仅 wait_dispatch 落库)
 //   GET  /admin/api/order-process/scan-ship/records   发货记录(今日/昨日,北京时间日界)
 
 // 非待发运状态的拦截提示(前端横幅直接展示;wait_dispatch 可交运不拦截)
 const SHIP_BLOCK_MESSAGES = {
   wait_process: '订单状态问题:待采购(未采购),请先提交采购信息',
-  wait_stock: '订单状态问题:待备货,请先完成备货',
-  wait_stick: '订单状态问题:待贴单,请先打印面单',
+  wait_stock: '订单状态问题:待入库,请先完成入库',
+  wait_stick: '订单状态问题:待打单,请先打印面单',
   dispatching: '订单状态问题:交运中',
   delivering: '订单状态问题:已揽收',
   signed: '订单状态问题:已签收',
@@ -1436,18 +1436,18 @@ router.post('/admin/api/order-process/sync-package', async (req, res, next) => {
   }
 });
 
-// ── 备货(2026-09-15)─────────────────────────────────────────
+// ── 入库(2026-09-15)─────────────────────────────────────────
 // POST body: { packageId: number }
-// 调 Ozon /v4/posting/fbs/ship 搜集订单(不拆分:单 package 含全部商品),UI 名"备货"
+// 调 Ozon /v4/posting/fbs/ship 搜集订单(不拆分:单 package 含全部商品),UI 名"入库"
 // 实测结论(测试货件 52800136-0155-1):
 //   1. products[].product_id 传 posting products[].sku 的值;
 //      用 /v3/product/info/list 按 sku 反查的商品主 id 会报 UNKNOWN_PRODUCT_DEFINED
-//   2. HTTP 200 不代表备货成功,须再 get 校验:状态离开 awaiting_packaging 且 substatus≠ship_failed
+//   2. HTTP 200 不代表入库成功,须再 get 校验:状态离开 awaiting_packaging 且 substatus≠ship_failed
 //      (实测成功后状态 awaiting_packaging → awaiting_registration 待注册面单)
-//   3. 仅 Ozon awaiting_packaging 可备货;awaiting_registration/awaiting_deliver 视为已备货(幂等)
-// 前置(2026-11 新流程):本地 operate_status 必须为 wait_stock(待备货,已采购)。
-//   未采购(wait_process)不可备货——必须采购后才可备货。
-// 2026-10-23:解除搁置订单备货限制(前端二次弹窗确认,保持搁置标记)
+//   3. 仅 Ozon awaiting_packaging 可入库;awaiting_registration/awaiting_deliver 视为已入库(幂等)
+// 前置(2026-11 新流程):本地 operate_status 必须为 wait_stock(待入库,已采购)。
+//   未采购(wait_process)不可入库——必须采购后才可入库。
+// 2026-10-23:解除搁置订单入库限制(前端二次弹窗确认,保持搁置标记)
 function markStocked(packageId) {
   db.prepare(
     `UPDATE op_package
@@ -1473,11 +1473,11 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     if (!row || !row.postingNumber || !row.storeId) {
       return res.status(404).json({ ok: false, message: `未找到 packageId=${packageId} 对应的订单` });
     }
-    // 新流程(2026-11):必须采购后才可备货——仅 wait_stock(待备货)可操作
+    // 新流程(2026-11):必须采购后才可入库——仅 wait_stock(待入库)可操作
     if (row.operateStatus !== 'wait_stock') {
       return res.status(400).json({
         ok: false,
-        message: `订单状态 ${row.operateStatus} 不可备货(仅「待备货」状态可备货,请先提交采购信息)`,
+        message: `订单状态 ${row.operateStatus} 不可入库(仅「待入库」状态可入库,请先提交采购信息)`,
       });
     }
     const store = (config.loadStores() || []).find((s) => s.id === row.storeId);
@@ -1489,10 +1489,10 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     const g1 = await postingFbsGet(store, row.postingNumber);
     const p1 = g1?.result;
     const ozonStatus = p1?.status || '';
-    // 已备货态:幂等返回(不再调 ship)
+    // 已入库态:幂等返回(不再调 ship)
     if (ozonStatus === 'awaiting_registration' || ozonStatus === 'awaiting_deliver') {
       orderPackageDao.syncPosting(store.id, p1); // 顺带校准本地状态
-      markStocked(packageId); // 本地推进:待备货 → 待贴单
+      markStocked(packageId); // 本地推进:待入库 → 待打单
       return res.json(ok({ alreadyShipped: true, ozonStatus, substatus: p1?.substatus || null }));
     }
     if (ozonStatus !== 'awaiting_packaging') {
@@ -1500,8 +1500,8 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
         ok: false,
         message:
           ozonStatus === 'cancelled'
-            ? 'Ozon 订单已取消,不能备货'
-            : `Ozon 当前状态 ${ozonStatus || '(未知)'} 不可备货(仅待备货状态可操作)`,
+            ? 'Ozon 订单已取消,不能入库'
+            : `Ozon 当前状态 ${ozonStatus || '(未知)'} 不可入库(仅待入库状态可操作)`,
       });
     }
 
@@ -1510,13 +1510,13 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       .map((x) => ({ product_id: x.sku ? Number(x.sku) : null, quantity: Number(x.quantity) || 1 }))
       .filter((x) => x.product_id);
     if (!products.length) {
-      return res.status(400).json({ ok: false, message: '订单商品清单为空(缺少 sku),无法备货' });
+      return res.status(400).json({ ok: false, message: '订单商品清单为空(缺少 sku),无法入库' });
     }
 
     // 3) 调 ship(不拆分:单 package 全部商品)
-    // 2026-10-29:竞态容错——ship 瞬间 Ozon 状态已离开 awaiting_packaging(通常另一请求已备货成功/
-    //   后台已流转)会返回 400:HAS_INCORRECT_STATUS。此时重查最新状态:已进入备货后状态链则按
-    //   "已备货"幂等返回(不再误报失败),已取消则明确提示,其余状态透出冲突原因。
+    // 2026-10-29:竞态容错——ship 瞬间 Ozon 状态已离开 awaiting_packaging(通常另一请求已入库成功/
+    //   后台已流转)会返回 400:HAS_INCORRECT_STATUS。此时重查最新状态:已进入入库后状态链则按
+    //   "已入库"幂等返回(不再误报失败),已取消则明确提示,其余状态透出冲突原因。
     try {
       await postingFbsShip(store, row.postingNumber, products);
     } catch (shipErr) {
@@ -1529,20 +1529,20 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       const pNow = reGet?.result;
       const stNow = pNow?.status || '';
       if (stNow === 'cancelled' || stNow === 'not_accepted') {
-        return res.status(400).json({ ok: false, message: 'Ozon 订单已取消,不能备货' });
+        return res.status(400).json({ ok: false, message: 'Ozon 订单已取消,不能入库' });
       }
       if (['awaiting_registration', 'awaiting_deliver', 'delivering', 'driver_pickup', 'delivered'].includes(stNow)) {
         if (pNow) orderPackageDao.syncPosting(store.id, pNow); // 校准本地 Ozon 状态,前端刷新后按钮自然隐藏
-        markStocked(packageId); // 本地推进:待备货 → 待贴单
+        markStocked(packageId); // 本地推进:待入库 → 待打单
         logger.info(
           { packageId, postingNumber: row.postingNumber, status: stNow, substatus: pNow?.substatus || null },
-          '[order-process] 备货竞态已备货(HAS_INCORRECT_STATUS),幂等返回'
+          '[order-process] 入库竞态已入库(HAS_INCORRECT_STATUS),幂等返回'
         );
         return res.json(ok({ alreadyShipped: true, ozonStatus: stNow, substatus: pNow?.substatus || null }));
       }
       return res.status(400).json({
         ok: false,
-        message: `Ozon 当前状态 ${stNow || '(未知)'} 不可备货(备货仅限待备货状态),请刷新后重试`,
+        message: `Ozon 当前状态 ${stNow || '(未知)'} 不可入库(入库仅限待入库状态),请刷新后重试`,
       });
     }
 
@@ -1558,28 +1558,28 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       newStatus = p2?.status || '';
       newSub = p2?.substatus || '';
       if (newSub === 'ship_failed') break;
-      if (newStatus !== 'awaiting_packaging') break; // 已离开待备货 → 生效
+      if (newStatus !== 'awaiting_packaging') break; // 已离开待入库 → 生效
     }
     if (newSub === 'ship_failed') {
-      logger.warn({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 备货失败(ship_failed)');
+      logger.warn({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 入库失败(ship_failed)');
       return res.status(502).json({
         ok: false,
-        message: `备货失败:Ozon 返回 ship_failed,请检查商品清单(SKU/数量)或稍后重试`,
+        message: `入库失败:Ozon 返回 ship_failed,请检查商品清单(SKU/数量)或稍后重试`,
       });
     }
     if (newStatus === 'awaiting_packaging') {
       // 指令已受理但 Ozon 状态尚未变更(异步延迟):不再误报失败,返回软成功;
       // 本地状态不动,由订单同步(fast 轮/手动同步)自动校准
-      logger.warn({ packageId, postingNumber: row.postingNumber }, '[order-process] 备货指令已提交,Ozon 状态变更中');
+      logger.warn({ packageId, postingNumber: row.postingNumber }, '[order-process] 入库指令已提交,Ozon 状态变更中');
       return res.json(ok({ pending: true, ozonStatus: newStatus, substatus: newSub || null }));
     }
 
-    // 5) 成功:同步最新 posting 落库(校准本地 Ozon 状态)+ 推进本地 待备货 → 待贴单
+    // 5) 成功:同步最新 posting 落库(校准本地 Ozon 状态)+ 推进本地 待入库 → 待打单
     orderPackageDao.syncPosting(store.id, p2);
     markStocked(packageId);
-    logger.info({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 备货成功');
-    // 6) 备货飞书通知(2026-09-22):备货动作本地直发,不再依赖 Ozon STATE_CHANGED 推送——
-    //    webhook 停推期间 71 单备货通知丢失的教训;2026-10-16 去重重构后,
+    logger.info({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 入库成功');
+    // 6) 入库飞书通知(2026-09-22):入库动作本地直发,不再依赖 Ozon STATE_CHANGED 推送——
+    //    webhook 停推期间 71 单入库通知丢失的教训;2026-10-16 去重重构后,
     //    原子 claim/release 已收敛到 notifyPostingEvent 内部,与 webhook/轮询兜底共用
     //    feishu_stocking_notified_at 标记。异步发送不阻塞响应,发送失败内部自动释放标记
     Promise.resolve(
@@ -1589,18 +1589,18 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
         changed_state_date: new Date().toISOString(),
         new_state: 'posting_awaiting_registration',
       }, 'manual')
-    ).catch((e) => logger.warn({ err: e?.message, postingNumber: row.postingNumber }, '[order-process] 备货通知发送失败'));
+    ).catch((e) => logger.warn({ err: e?.message, postingNumber: row.postingNumber }, '[order-process] 入库通知发送失败'));
     res.json(ok({ alreadyShipped: false, ozonStatus: newStatus, substatus: newSub || null }));
   } catch (e) {
     const msg = e?.message || String(e);
     const status = /必填|必须为|未配置|不能|不可|尚未/.test(msg) ? 400 : 502;
-    logger.warn({ err: msg, packageId: req.body?.packageId }, '[order-process] 备货失败');
-    res.status(status).json({ ok: false, message: `Ozon 备货失败:${msg}` });
+    logger.warn({ err: msg, packageId: req.body?.packageId }, '[order-process] 入库失败');
+    res.status(status).json({ ok: false, message: `Ozon 入库失败:${msg}` });
   }
 });
 
 // ── 货运创建(FBS 发运,2026-10-29)────────────────────────────
-// 备货完成后走"创建发运"流程:配送方式 → 创建发运 → 查看/调整货件 →
+// 入库完成后走"创建发运"流程:配送方式 → 创建发运 → 查看/调整货件 →
 // 设置快递员联系方式(OGL 上门取件) → 确认发运 → 打面单/货位标签。
 // 接口封装见 services/ozon-opi.js「FBS 货运创建(Carriage)API 封装」;
 // 流程文档见 docs/ozon-api/05-FBS订单与配送.md「FBS配送」。

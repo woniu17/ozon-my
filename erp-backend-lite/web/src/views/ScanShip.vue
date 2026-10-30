@@ -1,5 +1,5 @@
 <script setup>
-// 扫描发货(2026-09,设计文档: docs/扫描发货-功能设计.md)
+// 扫描打单(2026-09,设计文档: docs/扫描打单-功能设计.md)
 // 打包发货场景:扫采购快递单号/采购单号/Ozon单号 → 全局搜索定位包裹 → 录入实物重量
 // → wait_dispatch(待发运)打印面单并流转交运;非 wait_dispatch 提示状态问题不动状态
 //            交运中(dispatching)/已揽收(delivering)/已签收(signed)/已成功(settled)均可重打面单(缓存秒出,不改状态)
@@ -22,9 +22,9 @@ const { show } = useToast();
 const confirmStore = useConfirmStore();
 const router = useRouter();
 const route = useRoute();
-// 独立「扫描备货」页(/scan-stock):固定备货模式,隐藏工作模式切换,连扫自动备货
+// 独立「扫描入库」页(/scan-stock):固定入库模式,隐藏工作模式切换,连扫自动入库
 const isStockPage = computed(() => route.path === '/scan-stock');
-const workMode = ref(isStockPage.value ? 'stock' : 'ship'); // 'ship'发货(默认) | 'stock'备货(扫到待备货订单自动备货,连扫)
+const workMode = ref(isStockPage.value ? 'stock' : 'ship'); // 'ship'发货(默认) | 'stock'入库(扫到待入库订单自动入库,连扫)
 
 // ── 扫描输入 ─────────────────────────────────────────────
 const scanForm = reactive({ keyword: '', mode: 'ss' }); // mode: 'ss'模糊(默认,防拼单逗号拼接漏单) | 'eq'精确
@@ -33,7 +33,7 @@ const searching = ref(false);
 const results = ref([]);          // 全局搜索命中的包裹(快照)
 const selectedId = ref(0);        // 当前选中卡片(多结果时唯一可操作的卡)
 const printingPkgId = ref(0);     // 打印互斥(与 OrderProcess printingId 同模式)
-const shippingPkgId = ref(0);       // 备货互斥(与 OrderProcess shippingPkgId 同模式)
+const shippingPkgId = ref(0);       // 入库互斥(与 OrderProcess shippingPkgId 同模式)
 const retryPkgIds = ref(new Set()); // 重量已保存但打印失败的包裹(重试只走打印+流转)
 const retryWeights = reactive({});  // pkgId → 已保存重量 g(重试成功后回填卡片,避免残留搜索时的旧重量)
 const agentOnline = ref(null);    // 本机菜鸟组件:null=探测中 true/false
@@ -79,7 +79,7 @@ const records = reactive({
   pageSize: 500, // 不分页:一次拉全量,列表内部滚动浏览
 });
 
-// ── 本次扫描备货记录(右侧栏,仅 /scan-stock 独立页显示,会话内有效)──
+// ── 本次扫描入库记录(右侧栏,仅 /scan-stock 独立页显示,会话内有效)──
 const stockRecords = reactive({ rows: [] });
 function addStockRecord(postingNumber, result, ok = true) {
   stockRecords.rows.unshift({
@@ -120,8 +120,8 @@ const PLATFORMS = [
 ];
 const OPERATE_LABELS = {
   wait_process: { label: '待采购', cls: 'tag-warn' },
-  wait_stock: { label: '待备货', cls: 'tag-info' },
-  wait_stick: { label: '待贴单', cls: 'tag-info' },
+  wait_stock: { label: '待入库', cls: 'tag-info' },
+  wait_stick: { label: '待打单', cls: 'tag-info' },
   wait_dispatch: { label: '待发运', cls: 'tag-info' },
   dispatching: { label: '交运中', cls: 'tag-info' },
   delivering: { label: '已揽收', cls: 'tag-ok' },
@@ -298,8 +298,8 @@ function canReprintCard(pkg) {
   return pkg.operateStatus === 'dispatching' || pkg.operateStatus === 'delivering'
     || pkg.operateStatus === 'signed' || pkg.operateStatus === 'settled';
 }
-// 待备货卡片可「备货」(同 OrderProcess 行按钮口径;2026-11 必须采购后才可备货):Ozon 仍处于 awaiting_packaging
-// 2026-10-23:解除搁置订单限制,允许备货(前端二次弹窗确认,保持搁置标记)
+// 待入库卡片可「入库」(同 OrderProcess 行按钮口径;2026-11 必须采购后才可入库):Ozon 仍处于 awaiting_packaging
+// 2026-10-23:解除搁置订单限制,允许入库(前端二次弹窗确认,保持搁置标记)
 function canShipPkg(pkg) {
   return pkg.operateStatus === 'wait_stock' && pkg.ozonStatus === 'awaiting_packaging' && !!pkg.id;
 }
@@ -308,8 +308,8 @@ function blockReason(pkg) {
   if (pkg.isIgnored) return '已搁置';
   switch (pkg.operateStatus) {
     case 'wait_process': return '待采购(未采购)';
-    case 'wait_stock': return '待备货';
-    case 'wait_stick': return '待贴单';
+    case 'wait_stock': return '待入库';
+    case 'wait_stick': return '待打单';
     case 'dispatching': return '交运中';
     case 'delivering': return '已揽收';
     case 'signed': return '已签收';
@@ -344,22 +344,22 @@ async function doSearch() {
     // 加载结果涉及 SKU 的定价信息(单价调整对比用;一次接口,sku 去重)
     loadSkuPricing([...new Set(results.value.flatMap((p) => (p.items || []).map((it) => it.sku).filter(Boolean)))]);
     const n = results.value.length;
-    // 备货模式(2026-10-27):扫到待备货订单自动备货,实现连扫
-    // 单件商品直接备货,多件弹窗二次确认;无待备货订单时回落普通搜索/卡片操作
+    // 入库模式(2026-10-27):扫到待入库订单自动入库,实现连扫
+    // 单件商品直接入库,多件弹窗二次确认;无待入库订单时回落普通搜索/卡片操作
     if (workMode.value === 'stock') {
       const stockPkgs = results.value.filter((p) => canShipPkg(p));
       if (stockPkgs.length === 1) {
         const sp = stockPkgs[0];
         banner.type = 'info';
-        banner.text = `命中待备货订单 ${sp.postingNumber},正在备货…`;
+        banner.text = `命中待入库订单 ${sp.postingNumber},正在入库…`;
         await onShipPackage(sp);
         banner.text = '';
         return;
       }
       if (stockPkgs.length > 1) {
         banner.type = 'info';
-        banner.text = `命中 ${n} 个包裹,其中 ${stockPkgs.length} 个待备货,请选择要备货的订单`;
-        if (isStockPage.value) addStockRecord('', `命中 ${stockPkgs.length} 个待备货订单,需手动选择`, false);
+        banner.text = `命中 ${n} 个包裹,其中 ${stockPkgs.length} 个待入库,请选择要入库的订单`;
+        if (isStockPage.value) addStockRecord('', `命中 ${stockPkgs.length} 个待入库订单,需手动选择`, false);
         focusScan();
         return;
       }
@@ -367,7 +367,7 @@ async function doSearch() {
         if (isStockPage.value) addStockRecord(kw, '未找到订单', false);
       } else if (n === 1 && isStockPage.value) {
         const p = results.value[0];
-        addStockRecord(p.postingNumber, `非待备货状态(${p.ozonStatus || p.operateStatus || '未知'})`, false);
+        addStockRecord(p.postingNumber, `非待入库状态(${p.ozonStatus || p.operateStatus || '未知'})`, false);
       }
     }
     if (n === 0) {
@@ -416,28 +416,28 @@ function onScanKeydown(e) {
   }
 }
 
-// ── 备货(2026-10-13,同 OrderProcess 行按钮)──────────────
-// 扫到未备货(awaiting_packaging)的订单可直接向 Ozon 确认货件,无需跳转订单处理页
+// ── 入库(2026-10-13,同 OrderProcess 行按钮)──────────────
+// 扫到未入库(awaiting_packaging)的订单可直接向 Ozon 确认货件,无需跳转订单处理页
 async function onShipPackage(pkg) {
   if (shippingPkgId.value) return;
   // 搁置订单二次确认(2026-10-23):已搁置先确认再操作(保持搁置标记)
   if (pkg.isIgnored) {
     const okIgnored = await confirmStore.ask({
       title: '搁置订单操作确认',
-      message: '该订单当前为【已搁置】状态，确认继续备货吗？',
+      message: '该订单当前为【已搁置】状态，确认继续入库吗？',
       confirmText: '确认操作',
     });
     if (!okIgnored) {
-      if (isStockPage.value) addStockRecord(pkg.postingNumber, '已搁置,取消备货', false);
+      if (isStockPage.value) addStockRecord(pkg.postingNumber, '已搁置,取消入库', false);
       return;
     }
   }
-  // 单件商品(总数量=1)直接备货,两件以上弹窗确认(与 OrderProcess 同口径)
+  // 单件商品(总数量=1)直接入库,两件以上弹窗确认(与 OrderProcess 同口径)
   const totalQty = (pkg.items || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0);
   if (totalQty > 1) {
     const ok = await confirmStore.ask({
-      message: `确认备货 ${pkg.postingNumber}?\n该货件共 ${totalQty} 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。`,
-      confirmText: '备货',
+      message: `确认入库 ${pkg.postingNumber}?\n该货件共 ${totalQty} 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。`,
+      confirmText: '入库',
     });
     if (!ok) {
       if (isStockPage.value) addStockRecord(pkg.postingNumber, `多件(${totalQty}),用户取消`, false);
@@ -447,26 +447,26 @@ async function onShipPackage(pkg) {
   shippingPkgId.value = pkg.id;
   try {
     const r = await shipPackage(pkg.id);
-    // 本地回填 Ozon 状态,「备货」按钮随之隐藏(等待自动同步校准亦可)
+    // 本地回填 Ozon 状态,「入库」按钮随之隐藏(等待自动同步校准亦可)
     if (r.ozonStatus) pkg.ozonStatus = r.ozonStatus;
     if (r.operateStatus) pkg.operateStatus = r.operateStatus;
     if (r.pending) {
-      show(`备货指令已提交:${pkg.postingNumber} Ozon 状态变更中(通常数十秒内),可继续扫描`, 'success');
+      show(`入库指令已提交:${pkg.postingNumber} Ozon 状态变更中(通常数十秒内),可继续扫描`, 'success');
       if (!r.ozonStatus) pkg.ozonStatus = 'awaiting_registration';
-      if (isStockPage.value) addStockRecord(pkg.postingNumber, '备货指令已提交');
+      if (isStockPage.value) addStockRecord(pkg.postingNumber, '入库指令已提交');
     } else if (r.alreadyShipped) {
-      show(`该订单已备货过(Ozon 状态 ${r.ozonStatus || ''}),无需重复操作`, 'success');
-      if (isStockPage.value) addStockRecord(pkg.postingNumber, '已备货过');
+      show(`该订单已入库过(Ozon 状态 ${r.ozonStatus || ''}),无需重复操作`, 'success');
+      if (isStockPage.value) addStockRecord(pkg.postingNumber, '已入库过');
     } else {
-      show(`备货成功:${pkg.postingNumber} 已确认货件(Ozon 状态 → ${r.ozonStatus || 'awaiting_registration'}),可打印面单`, 'success');
-      if (isStockPage.value) addStockRecord(pkg.postingNumber, '备货成功');
+      show(`入库成功:${pkg.postingNumber} 已确认货件(Ozon 状态 → ${r.ozonStatus || 'awaiting_registration'}),可打印面单`, 'success');
+      if (isStockPage.value) addStockRecord(pkg.postingNumber, '入库成功');
     }
   } catch (err) {
-    show(`备货失败:${err.message || String(err)}`, 'error');
-    if (isStockPage.value) addStockRecord(pkg.postingNumber, `备货失败:${err.message || String(err)}`, false);
+    show(`入库失败:${err.message || String(err)}`, 'error');
+    if (isStockPage.value) addStockRecord(pkg.postingNumber, `入库失败:${err.message || String(err)}`, false);
   } finally {
     shippingPkgId.value = 0;
-    // 连扫:备货处理完自动回焦扫描框,继续扫下一单
+    // 连扫:入库处理完自动回焦扫描框,继续扫下一单
     focusScan();
   }
 }
@@ -891,9 +891,9 @@ function onPrinterChange() {
     <!-- ① 扫描输入区(sticky,扫码枪主操作目标) -->
     <div class="scan-bar-wrap">
       <div class="scan-bar card">
-        <select v-if="!isStockPage" v-model="workMode" class="filter-input scan-mode" title="工作模式:备货=扫到待备货订单自动备货(单件直接,多件确认);发货=正常扫描发货流程">
+        <select v-if="!isStockPage" v-model="workMode" class="filter-input scan-mode" title="工作模式:入库=扫到待入库订单自动入库(单件直接,多件确认);发货=正常扫描打单流程">
           <option value="ship">发货</option>
-          <option value="stock">备货</option>
+          <option value="stock">入库</option>
         </select>
         <select v-model="scanForm.mode" class="filter-input scan-mode" title="匹配模式:默认模糊(拼单采购单号逗号拼接,精确匹配会漏单)">
           <option value="ss">模糊</option>
@@ -905,7 +905,7 @@ function onPrinterChange() {
           class="scan-input"
           type="text"
           aria-label="扫描输入"
-          :placeholder="isStockPage ? '扫描/输入 采购快递单号 · 采购单号 · Ozon订单号(自动备货)' : '扫描/输入 采购快递单号 · 采购单号 · Ozon订单号'"
+          :placeholder="isStockPage ? '扫描/输入 采购快递单号 · 采购单号 · Ozon订单号(自动入库)' : '扫描/输入 采购快递单号 · 采购单号 · Ozon订单号'"
           :readonly="searching"
           @focus="$event.target.select()"
           @keydown.enter="doSearch"
@@ -958,7 +958,7 @@ function onPrinterChange() {
       <!-- ③ 搜索结果(左侧工作区) -->
       <section class="results-col" aria-label="搜索结果">
         <div v-if="!results.length" class="empty card">
-          {{ searching ? '搜索中…' : (isStockPage ? '扫描采购快递单号开始备货' : '扫描采购快递单号开始发货') }}
+          {{ searching ? '搜索中…' : (isStockPage ? '扫描采购快递单号开始入库' : '扫描采购快递单号开始发货') }}
         </div>
 
         <div
@@ -1202,16 +1202,16 @@ function onPrinterChange() {
 
           <!-- 操作条 -->
           <div class="pkg-actions">
-            <!-- 备货(2026-10-13):扫到未备货(awaiting_packaging)订单可直接向 Ozon 确认货件 -->
+            <!-- 入库(2026-10-13):扫到未入库(awaiting_packaging)订单可直接向 Ozon 确认货件 -->
             <button
               v-if="canShipPkg(pkg)"
               class="btn btn-ghost btn-sm"
               :disabled="shippingPkgId === pkg.id"
-              :title="shippingPkgId === pkg.id ? '备货中…' : '向 Ozon 确认全部商品为一个货件(不拆分),备货后方可打印面单'"
+              :title="shippingPkgId === pkg.id ? '入库中…' : '向 Ozon 确认全部商品为一个货件(不拆分),入库后方可打印面单'"
               @click.stop="onShipPackage(pkg)"
             >
               <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 5L8 1.5 14.5 5V11L8 14.5 1.5 11V5z"/><path d="M1.5 5L8 8l6.5-3M8 8v6.5"/></svg>
-              {{ shippingPkgId === pkg.id ? '备货中…' : '备货' }}
+              {{ shippingPkgId === pkg.id ? '入库中…' : '入库' }}
             </button>
             <template v-if="canShipCard(pkg)">
               <span class="ref-weight" title="Ozon后台同步重量(按数量加权求和)">Ozon后台 {{ pkg.ozonWeightG != null ? Math.floor(pkg.ozonWeightG) + 'g' : '—' }}</span>
@@ -1327,7 +1327,7 @@ function onPrinterChange() {
         </div>
       </section>
 
-      <!-- ④ 右侧参考栏:发货记录(扫描发货页) / 本次扫描备货记录(扫描备货独立页) -->
+      <!-- ④ 右侧参考栏:发货记录(扫描打单页) / 本次扫描入库记录(扫描入库独立页) -->
       <aside v-if="!isStockPage" class="records-col card" aria-label="发货记录">
         <div class="records-head">
           <div class="record-tabs">
@@ -1402,19 +1402,19 @@ function onPrinterChange() {
         </div>
       </aside>
 
-      <!-- 扫描备货独立页:本次备货记录(会话内) -->
-      <aside v-if="isStockPage" class="records-col card" aria-label="本次扫描备货记录">
+      <!-- 扫描入库独立页:本次入库记录(会话内) -->
+      <aside v-if="isStockPage" class="records-col card" aria-label="本次扫描入库记录">
         <div class="records-head">
           <div class="record-tabs">
-            <span class="tab-btn active">本次备货</span>
+            <span class="tab-btn active">本次入库</span>
           </div>
-          <button class="btn btn-ghost btn-sm" @click="stockRecords.rows = []" title="清空本次备货记录">
+          <button class="btn btn-ghost btn-sm" @click="stockRecords.rows = []" title="清空本次入库记录">
             清空
           </button>
         </div>
         <div class="records-list">
           <div v-if="!stockRecords.rows.length" class="empty records-empty">
-            扫到待备货订单后自动备货,记录显示在这里
+            扫到待入库订单后自动入库,记录显示在这里
           </div>
           <div v-for="(r, i) in stockRecords.rows" :key="i" class="record-row stock-record">
             <div class="record-line1">
@@ -2183,7 +2183,7 @@ function onPrinterChange() {
   font-size: 12px;
   color: var(--muted);
 }
-/* 扫描备货独立页:本次备货记录行 */
+/* 扫描入库独立页:本次入库记录行 */
 .stock-record .record-line {
   margin-top: 2px;
 }

@@ -41,7 +41,7 @@ const onSubmit = async () => {
         <ul class="login-features">
           <li>批量采集与图片/库存自动化任务</li>
           <li>成本利润率定价与价格监控</li>
-          <li>扫描发货、订单同步、财务统计</li>
+          <li>扫描打单、订单同步、财务统计</li>
         </ul>
       </div>
     </aside>

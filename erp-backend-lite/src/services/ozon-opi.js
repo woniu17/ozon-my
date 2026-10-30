@@ -502,7 +502,7 @@ export function productPicturesInfo(store, productIds) {
 //   - unfulfilled 返回"未妥投全集"(含 delivering),不只待处理
 
 // /v4/posting/fbs/unfulfilled/list —— 未妥投货件列表(主增量源)
-// cutoff 窗口:按卖家需完成备货的时间过滤;覆盖 awaiting_packaging → delivering 全部未妥投单
+// cutoff 窗口:按卖家需完成入库的时间过滤;覆盖 awaiting_packaging → delivering 全部未妥投单
 // 请求: { filter: { cutoff_from, cutoff_to }, cursor, limit, with }
 // 响应: { result: { postings, cursor, has_next, count } }
 // 注:v4 实测 limit 上限 100(传 1000 报 Request validation error)
@@ -548,12 +548,12 @@ export function postingFbsGet(store, postingNumber) {
   });
 }
 
-// /v4/posting/fbs/ship —— 搜集订单(备货,第4方案,2026-09-15)
+// /v4/posting/fbs/ship —— 搜集订单(入库,第4方案,2026-09-15)
 // 不拆分:packages 只传一个对象,包含全部商品
 // 请求: { posting_number, packages: [{ products: [{ product_id, quantity }] }] }
-// 响应: { result: {...} };HTTP 200 不代表备货成功,必须再调 /v3/posting/fbs/get 校验:
-//   - status = awaiting_deliver → 备货成功
-//   - substatus = ship_failed → 备货失败,需重新备货
+// 响应: { result: {...} };HTTP 200 不代表入库成功,必须再调 /v3/posting/fbs/get 校验:
+//   - status = awaiting_deliver → 入库成功
+//   - substatus = ship_failed → 入库失败,需重新入库
 // 注:products[].product_id 必须是 Ozon 系统 product_id;posting 响应里可能不带,
 //     需用 /v3/product/info/list 按 offer_id 反查(items[].id)
 export function postingFbsShip(store, postingNumber, products) {
@@ -626,7 +626,7 @@ export function carriageDeliveryList(store, { cursor = '', filter = {}, limit = 
 }
 
 // ═══ FBS 货运创建(Carriage)API 封装(2026-10-29)═══════════════
-// 流程:备货 → /v1/delivery-method/list 取配送方式 → /v1/carriage/create 创建发运
+// 流程:入库 → /v1/delivery-method/list 取配送方式 → /v1/carriage/create 创建发运
 //      → /v1/assembly/carriage/posting/list 查看货件 → /v1/carriage/set-postings 调整
 //      → /v1/carriage/courier-contact/set 设联系方式 → /v1/carriage/approve 确认
 //      → 打面单(packageLabel)/货位标签(containerLabel) → 取消走 /v1/carriage/cancel
@@ -854,7 +854,7 @@ export async function packageLabel(store, postingNumbers) {
   return { buffer, contentType };
 }
 
-// /v2/posting/fbs/get-by-barcode —— 按条码获取货件信息(2026-10-25,扫描发货扫码兜底)
+// /v2/posting/fbs/get-by-barcode —— 按条码获取货件信息(2026-10-25,扫描打单扫码兜底)
 // 请求: { barcode: string }(面单下条码,如 551620749311000)
 // 响应: { result: { posting_number, order_id, status, barcodes: { upper_barcode, lower_barcode }, ... } }
 // 注:条码不存在时 Ozon 返回非 2xx,由 call 统一抛 ApiError,调用方按"未找到"处理

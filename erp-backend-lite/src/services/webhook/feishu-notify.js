@@ -10,10 +10,10 @@ import { publishPostingEvent } from '../push-hub.js';
 import { orderPackageDao } from '../../db/dao/sqlite/order-daos.js';
 
 // 飞书通知原子去重(2026-10-16):
-// 历史问题:webhook/备货链路用「非原子 isFeishuNotified 检查 + markFeishuNotified 打标」,
+// 历史问题:webhook/入库链路用「非原子 isFeishuNotified 检查 + markFeishuNotified 打标」,
 // 检查与打标之间存在窗口期——webhook 并发/重复推送、或 webhook 与 API 兜底轮询竞态时,
 // 两个请求都能通过检查,导致同一货件收到两条飞书通知。
-// 现统一收敛:所有链路(webhook/轮询兜底/手动备货)都在 notifyPostingEvent/notifyPostingPickedUp
+// 现统一收敛:所有链路(webhook/轮询兜底/手动入库)都在 notifyPostingEvent/notifyPostingPickedUp
 // 内部先原子 claim(与 API 兜底同用 op_ozon_order.feishu_*_notified_at),发送失败才 release,
 // 消除并发窗口。webhook 用极早 cutoff,保证任何已落库订单都满足时间窗。
 const FEISHU_WEBHOOK_CUTOFF = '1970-01-01T00:00:00.000Z';
@@ -310,15 +310,15 @@ function buildTodayReceivedSummaryLines() {
 }
 
 /**
- * 构造"当日到达指定状态"各店铺汇总文本块(待取件/备货通知尾部,2026-09-18)
+ * 构造"当日到达指定状态"各店铺汇总文本块(待取件/入库通知尾部,2026-09-18)
  * 注:仅覆盖 webhook 推送事件(ozon_push_events),API 兜底链路不计入。
- *    2026-09-21:签收已切换到 op_package.delivered_at,此函数仅用于待取件/备货。
+ *    2026-09-21:签收已切换到 op_package.delivered_at,此函数仅用于待取件/入库。
  * 参考当日销售汇总格式:按店铺 单量/销售金额 + 合计
  * 数据源:ozon_push_events 当日 STATE_CHANGED 且 new_state 命中(DISTINCT 货件去重,
  *        防同状态重复推送重复计数),金额取 ozon_postings.sale_amount_cny
  * 注:货件后续离开该状态(如取件点→签收)不影响"当日到达过"口径
  * @param {string[]} newStates 推送模型状态名(可多个,签收含 posting_delivered 同义)
- * @param {string} label 汇总标签(签收/待取件/备货)
+ * @param {string} label 汇总标签(签收/待取件/入库)
  * @returns {string|null} 无命中返回 null
  */
 function buildTodayStateSummaryLines(newStates, label) {
@@ -498,7 +498,7 @@ const NOTIFY_SOURCE_LABELS = {
  */
 export async function sendFeishuText(text, url, source = 'webhook') {
   if (!url) {
-    // 未配置 webhook URL = 飞书通知已停用。返回 true 让调用方(轮询兜底/手动备货)直接标记已通知，
+    // 未配置 webhook URL = 飞书通知已停用。返回 true 让调用方(轮询兜底/手动入库)直接标记已通知，
     // 避免将来停用飞书后每轮同步都 release 重试造成重复调用；Android 推送不受影响
     //（notifyPostingEvent 内已在飞书发送前发布 Android 事件）。
     logger.info('feishu-notify: 未配置 webhook URL,跳过飞书推送(视为完成)');
@@ -593,7 +593,7 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
     }
     case 'TYPE_STATE_CHANGED': {
       const ns = payload.new_state ?? '';
-      // 状态细分只影响机器人路由(2026-09-18:签收/待取件/备货分流),不再进标题
+      // 状态细分只影响机器人路由(2026-09-18:签收/待取件/入库分流),不再进标题
       title = headTitle;
       timeField = ['变更时间', fmtShTime(payload.changed_state_date)];
       extra = `\n新状态: ${ns || '-'}`;
@@ -601,14 +601,14 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
       const changedProducts = loadProductsFromDb(postingNumber);
       const changedLines = buildProductLines(changedProducts);
       if (changedLines) extra += `\n${changedLines}`;
-      // 当日状态汇总(签收/待取件/备货,参考新订单当日销售汇总格式)
+      // 当日状态汇总(签收/待取件/入库,参考新订单当日销售汇总格式)
       // 2026-09-21:签收改查 op_package.delivered_at(与销售汇总同源,覆盖 API 兜底)
       if (ns === 'posting_received') {
         summaryLines = buildTodayReceivedSummaryLines();
       } else if (ns === 'posting_in_pickup_point') {
         summaryLines = buildTodayStateSummaryLines(['posting_in_pickup_point'], '待取件');
       } else if (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') {
-        summaryLines = buildTodayStateSummaryLines(['posting_awaiting_registration', 'awaiting_deliver'], '备货');
+        summaryLines = buildTodayStateSummaryLines(['posting_awaiting_registration', 'awaiting_deliver'], '入库');
       }
       break;
     }
@@ -633,7 +633,7 @@ export async function notifyPostingEvent(messageType, payload, source = 'webhook
   // TYPE_NEW_POSTING → 新订单机器人
   // TYPE_STATE_CHANGED → 按状态分路由(2026-09-18):
   //   posting_received 签收 / posting_in_pickup_point 待取件 /
-  //   posting_awaiting_registration|awaiting_deliver 备货 / 其它 状态变更默认机器人;
+  //   posting_awaiting_registration|awaiting_deliver 入库 / 其它 状态变更默认机器人;
   //   posting_transferring_to_delivery 不通知(转运在途无运营动作)
   let url;
   if (messageType === 'TYPE_POSTING_CANCELLED') {

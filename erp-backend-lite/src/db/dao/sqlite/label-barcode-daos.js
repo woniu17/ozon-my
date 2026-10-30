@@ -1,4 +1,4 @@
-// Ozon 面单条码映射 DAO(2026-10-25,扫描发货扫码支持)
+// Ozon 面单条码映射 DAO(2026-10-25,扫描打单扫码支持)
 // 表结构见 schema.sql op_posting_barcode
 // 语义:
 //   - upsertPostingBarcode:打印面单时回填 (store_id, posting_number) ↔ lower_barcode,幂等

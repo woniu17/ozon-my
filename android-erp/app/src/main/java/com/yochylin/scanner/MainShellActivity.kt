@@ -93,7 +93,7 @@ class MainShellActivity : FragmentActivity(), TabHost {
 
         setContentView(R.layout.activity_main_shell)
 
-        // 默认首页为「订单处理」(2026-10-26 用户要求);底部导航「首页」仍可切换回扫描发货
+        // 默认首页为「订单处理」(2026-10-26 用户要求);底部导航「首页」仍可切换回扫描打单
         setupBottomNav(this, "order")
         switchTab("order")
 
@@ -244,7 +244,7 @@ class MainShellActivity : FragmentActivity(), TabHost {
         try {
             val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
             val request = DownloadManager.Request(Uri.parse(url))
-                .setTitle("扫描发货 新版本")
+                .setTitle("扫描打单 新版本")
                 .setDescription("正在下载更新包…")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationInExternalPublicDir(

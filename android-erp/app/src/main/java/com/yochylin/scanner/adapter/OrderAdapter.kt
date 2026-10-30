@@ -435,7 +435,7 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                     // 2026-10-15:剩发 <24小时 或 已超时时红色加粗醒目(urgent)
                     val cd = countdownText(pkg.shipmentDate)
                     addTimeRow(oTimeContainer, if (cd.overdue) "已超时" else "剩发", cd.text, cd.urgent)
-                    // 交运时间(2026-10-29,对齐 Web 订单处理页):本地打印面单/扫描发货时间优先,Ozon 揽收时间兜底
+                    // 交运时间(2026-10-29,对齐 Web 订单处理页):本地打印面单/扫描打单时间优先,Ozon 揽收时间兜底
                     addShippedTimeRow(pkg)
                     if (op == "wait_dispatch" && pkg.profit != null) {
                         addTimeRow(oTimeContainer, "预估利润", fmtMoney(pkg.profit.profit), false, profitColor(pkg.profit.profit))
@@ -502,8 +502,8 @@ private fun opTagInfo(pkg: Pkg): Pair<String, String> {
     if (pkg.isReturned) return "已退货" to O_COLOR_ERR
     return when (pkg.operateStatus) {
         "wait_process" -> "待采购" to O_COLOR_WARN
-        "wait_stock" -> "待备货" to O_COLOR_PRIMARY
-        "wait_stick" -> "待贴单" to O_COLOR_PRIMARY
+        "wait_stock" -> "待入库" to O_COLOR_PRIMARY
+        "wait_stick" -> "待打单" to O_COLOR_PRIMARY
         "wait_dispatch" -> "待发运" to O_COLOR_PRIMARY
         "dispatching" -> "交运中" to O_COLOR_PRIMARY
         "delivering" -> "已揽收" to O_COLOR_OK

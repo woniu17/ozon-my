@@ -1055,7 +1055,7 @@ class PurchaseActivity : ComponentActivity() {
 
     private fun canShipAfterSave(): Boolean {
         val p = pkg ?: return false
-        // 2026-11:必须采购后才可备货——保存后 wait_process → wait_stock 再备货
+        // 2026-11:必须采购后才可入库——保存后 wait_process → wait_stock 再入库
         return (p.operateStatus == "wait_process" || p.operateStatus == "wait_stock") &&
             p.ozonStatus == "awaiting_packaging"
     }
@@ -1069,7 +1069,7 @@ class PurchaseActivity : ComponentActivity() {
             actionButton("保 存", "#f2f3f5", COLOR_TEXT, enabled = d) { doSave(false) }
         )
         purchaseActionBar.addView(
-            actionButton("保存并备货", COLOR_PRIMARY, "#ffffff", enabled = d && canShipAfterSave()) { doSave(true) }
+            actionButton("保存并入库", COLOR_PRIMARY, "#ffffff", enabled = d && canShipAfterSave()) { doSave(true) }
         )
     }
 
@@ -2489,9 +2489,9 @@ class PurchaseActivity : ComponentActivity() {
         val qty = items.sumOf { it.quantity ?: 0.0 }.toLong()
         val ok = if (multiQty) {
             showConfirmDialog(
-                "备货确认",
+                "入库确认",
                 "货件 ${pkg?.postingNumber ?: packageId}\n含数量≥2的商品(共 $qty 件),将向 Ozon 确认全部商品为一个货件(不拆分)。",
-                "备货"
+                "入库"
             )
         } else true
         if (!ok) {
@@ -2499,13 +2499,13 @@ class PurchaseActivity : ComponentActivity() {
             finish()
             return
         }
-        // 备货接口可能耗时较长(2026-10-17):模态提示"正在备货中",结束后自动关闭
-        val dlg = showBlockingLoading("正在备货中，请稍候…")
+        // 入库接口可能耗时较长(2026-10-17):模态提示"正在入库中",结束后自动关闭
+        val dlg = showBlockingLoading("正在入库中，请稍候…")
         try {
             val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to packageId)).asJsonObject
-            toast(if (r.optBoolean("alreadyShipped")) "该包裹已备货过" else "备货成功")
+            toast(if (r.optBoolean("alreadyShipped")) "该包裹已入库过" else "入库成功")
         } catch (e: Exception) {
-            toast(e.message ?: "备货失败")
+            toast(e.message ?: "入库失败")
         } finally {
             runCatching { dlg.dismiss() }
         }

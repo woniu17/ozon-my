@@ -238,7 +238,7 @@ function hasRecentOzonPosting(postingNumber, withinMs = 30 * 60_000) {
 /**
  * 通用兜底发送入队:串行发送(限频)。
  * 2026-10-16 去重重构:原子 claim/release 已收敛到 notifyPostingEvent/notifyPostingPickedUp
- * 内部执行(与 webhook/备货共用同一 feishu_*_notified_at 标记),这里不再预先 claim;
+ * 内部执行(与 webhook/入库共用同一 feishu_*_notified_at 标记),这里不再预先 claim;
  * 已通知的货件在函数内部快速跳过。cutoff 参数保留仅为调用方语义完整。
  */
 function enqueueFeishuBackfill(store, postingNumber, stateKey, cutoff, label, sender) {

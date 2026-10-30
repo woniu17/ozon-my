@@ -2,7 +2,7 @@
 // 打印货运标签(2026-10-25,设计文档: docs/打印货运标签-功能设计.md)
 // 所有店铺的发运合并为一个列表,按发运日期倒序展示最近 5 个货运标签;
 // 支持按店铺+货运标签 ID 搜索;每行显示是否已打印,行内预览/打印。
-// 打印组件与扫描发货页一致:本机菜鸟组件 + 服务器组件双通道(前端双通道打印)。
+// 打印组件与扫描打单页一致:本机菜鸟组件 + 服务器组件双通道(前端双通道打印)。
 import { ref, reactive, computed, onMounted } from 'vue';
 import { getStores } from '../api/stores.js';
 import {
@@ -316,7 +316,7 @@ onMounted(async () => {
       </button>
     </div>
 
-    <!-- 打印机组(同扫描发货:本机 + 服务器双通道) -->
+    <!-- 打印机组(同扫描打单:本机 + 服务器双通道) -->
     <div class="card printer-bar">
       <span class="printer-label">标签打印机</span>
       <select

@@ -27,7 +27,7 @@ function refreshActive() {
     <div class="page-head">
       <h2>{{ tab === 'pending' ? '发运管理' : '发运历史' }}</h2>
       <span class="page-sub">
-        {{ tab === 'pending' ? 'FBS 备货后创建发运 · 查看货件 · 设快递员联系方式 · 确认/取消发运' : '已完成发运的历史清单(本地持久化)' }}
+        {{ tab === 'pending' ? 'FBS 入库后创建发运 · 查看货件 · 设快递员联系方式 · 确认/取消发运' : '已完成发运的历史清单(本地持久化)' }}
       </span>
       <button type="button" class="btn btn-ghost btn-sm" :disabled="activeLoading" @click="refreshActive">
         {{ activeLoading ? '加载中…' : '刷新' }}

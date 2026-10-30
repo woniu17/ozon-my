@@ -52,9 +52,9 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
- * 扫描备货(2026-10-27,底部导航独立页):摄像头常开连扫,上半屏相机视频,下半屏本次扫描备货记录。
- * 识别到待备货(awaiting_packaging)订单后自动向 Ozon 备货:
- *   单件商品 → 直接备货;多件商品 → 弹窗二次确认(展示商品明细)。
+ * 扫描入库(2026-10-27,底部导航独立页):摄像头常开连扫,上半屏相机视频,下半屏本次扫描入库记录。
+ * 识别到待入库(awaiting_packaging)订单后自动向 Ozon 入库:
+ *   单件商品 → 直接入库;多件商品 → 弹窗二次确认(展示商品明细)。
  * 处理完不退出,继续扫下一单(同一码 2 秒内去重,防连拍重复触发)。
  *
  * 2026-10-30 优化:
@@ -64,8 +64,8 @@ import java.util.concurrent.Executors
  *  - 记录结构化(状态/单号/店铺/时间),点击跳订单详情,失败可重试
  *  - 多件确认弹窗期间暂停连扫,避免叠加触发下一单
  *  - 去重表定期清理,防止长时间使用内存增长
- *  - 备货记录展示订单商品首图缩略图
- *  - 同一订单刚备货成功又扫到(alreadyShipped):不再重复添加"已备货过"记录
+ *  - 入库记录展示订单商品首图缩略图
+ *  - 同一订单刚入库成功又扫到(alreadyShipped):不再重复添加"已入库过"记录
  */
 class StockScanFragment : Fragment() {
 
@@ -115,7 +115,7 @@ class StockScanFragment : Fragment() {
                 pauseBtn.text = "▶ 开始"
                 pauseBtn.setTextColor(0xFF165DFF.toInt())
                 pauseBtn.setRoundedBg(0xFFE8F3FF.toInt(), 8f)
-                addRecord(RecordEntry(RecordStatus.FAILED, "", message = "未获得相机权限,无法扫码备货"))
+                addRecord(RecordEntry(RecordStatus.FAILED, "", message = "未获得相机权限,无法扫码入库"))
             }
         }
 
@@ -172,7 +172,7 @@ class StockScanFragment : Fragment() {
                 cameraProvider = provider
                 // 竞态保护:getInstance 是异步的,若回调完成前用户已切走 tab(Fragment 被 hide),
                 // 或宿主已 onPause/onDestroyView,则禁止绑定相机——否则相机在后台持续连扫,
-                // 在订单页等其他页面扫码时也会误触发自动备货(2026-10-29)。
+                // 在订单页等其他页面扫码时也会误触发自动入库(2026-10-29)。
                 if (!isAdded || isHidden || view == null ||
                     !viewLifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
                 ) {
@@ -255,7 +255,7 @@ class StockScanFragment : Fragment() {
         }
     }
 
-    /** 条码 → 格式预检 → 全局搜索 → 命中待备货订单则自动备货 */
+    /** 条码 → 格式预检 → 全局搜索 → 命中待入库订单则自动入库 */
     private fun handleCode(code: String) {
         // 快递单号格式预检:非快递单号直接在视频区提示,不请求接口也不进记录列表
         if (!COURIER_NO_REGEX.matches(code)) {
@@ -280,13 +280,13 @@ class StockScanFragment : Fragment() {
                     it.ozonStatus == "awaiting_packaging" && it.id.isNotEmpty()
                 }
                 if (stockPkg == null) {
-                    // 未命中待备货订单:只在视频区提示,不进记录列表
+                    // 未命中待入库订单:只在视频区提示,不进记录列表
                     if (resp.packages.isEmpty()) {
                         showScanHint("❌ 未找到订单:$code", error = true)
                         playFeedback(false)
                     } else {
-                        // 找到订单但不在待备货状态:明确提示原因(而非笼统"无待备货订单")。
-                        // 例如已备货(Ozon awaiting_registration/awaiting_deliver 等)提示"已备货",
+                        // 找到订单但不在待入库状态:明确提示原因(而非笼统"无待入库订单")。
+                        // 例如已入库(Ozon awaiting_registration/awaiting_deliver 等)提示"已入库",
                         // 其它状态提示具体状态,方便用户判断是否误扫/需人工处理。
                         val hit = resp.packages.firstOrNull { it.id.isNotEmpty() }
                         val status = hit?.ozonStatus.orEmpty()
@@ -296,11 +296,11 @@ class StockScanFragment : Fragment() {
                             "driver_pickup", "delivering", "delivered"
                         )
                         if (status in shippedStates) {
-                            showScanHint("✅ 该订单已备货:${pn.ifBlank { code }}", error = false)
+                            showScanHint("✅ 该订单已入库:${pn.ifBlank { code }}", error = false)
                             playFeedback(true)
                         } else {
                             showScanHint(
-                                "⏭ 订单状态[${status.ifBlank { "未知" }}]不可备货:${pn.ifBlank { code }}",
+                                "⏭ 订单状态[${status.ifBlank { "未知" }}]不可入库:${pn.ifBlank { code }}",
                                 error = false
                             )
                         }
@@ -308,7 +308,7 @@ class StockScanFragment : Fragment() {
                     return@launch
                 }
                 val totalQty = (stockPkg.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
-                // 订单商品首图(备货记录展示,取第一个商品图片)
+                // 订单商品首图(入库记录展示,取第一个商品图片)
                 val imageUrl = stockPkg.items?.firstOrNull()?.picUrl
                 if (totalQty > 1) {
                     showMultiConfirm(stockPkg, code, totalQty, imageUrl)
@@ -361,9 +361,9 @@ class StockScanFragment : Fragment() {
         }
 
         val dialog = AlertDialog.Builder(requireContext())
-            .setTitle("备货确认")
+            .setTitle("入库确认")
             .setMessage(message)
-            .setPositiveButton("确认备货") { _, _ ->
+            .setPositiveButton("确认入库") { _, _ ->
                 doShip(pkg.id, pkg.postingNumber, code, imageUrl)
             }
             .setNegativeButton("取消", null)
@@ -376,25 +376,25 @@ class StockScanFragment : Fragment() {
         dialog.show()
     }
 
-    /** 调用备货接口并记录结果 */
+    /** 调用入库接口并记录结果 */
     private fun doShip(packageId: String, postingNumber: String?, code: String, imageUrl: String? = null) {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to packageId)).asJsonObject
                 if (r.optBoolean("alreadyShipped")) {
-                    // 该订单已备货过:若记录列表中最新一条就是本订单(刚备货成功又扫到),
-                    // 不再重复添加"已备货过"记录,仅视频区提示,避免连扫/弹窗后重复刷记录。
+                    // 该订单已入库过:若记录列表中最新一条就是本订单(刚入库成功又扫到),
+                    // 不再重复添加"已入库过"记录,仅视频区提示,避免连扫/弹窗后重复刷记录。
                     val latest = records.firstOrNull()
                     if (latest?.packageId == packageId) {
-                        showScanHint("✅ 已备货过:$postingNumber", error = false)
+                        showScanHint("✅ 已入库过:$postingNumber", error = false)
                         playFeedback(true)
                     } else {
                         successCount++
-                        addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, "已备货过", imageUrl))
+                        addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, "已入库过", imageUrl))
                         playFeedback(true)
                     }
                 } else {
-                    val title = if (r.optBoolean("pending")) "备货指令已提交" else "备货成功"
+                    val title = if (r.optBoolean("pending")) "入库指令已提交" else "入库成功"
                     successCount++
                     addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, title, imageUrl))
                     playFeedback(true)
@@ -403,7 +403,7 @@ class StockScanFragment : Fragment() {
                 failCount++
                 addRecord(RecordEntry(
                     RecordStatus.FAILED, code, packageId, postingNumber,
-                    "备货失败:${e.message ?: e.javaClass.simpleName}",
+                    "入库失败:${e.message ?: e.javaClass.simpleName}",
                     imageUrl
                 ))
                 playFeedback(false)
@@ -423,7 +423,7 @@ class StockScanFragment : Fragment() {
         AlertDialog.Builder(requireContext())
             .setTitle("手动输入条码")
             .setView(input)
-            .setPositiveButton("备货") { _, _ ->
+            .setPositiveButton("入库") { _, _ ->
                 val code = input.text.toString().trim()
                 if (code.isNotEmpty()) handleCode(code)
             }
@@ -560,7 +560,7 @@ class StockScanFragment : Fragment() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(8), 0, dp(8))
-            // 商品缩略图(备货记录展示订单商品图片,无图记录不占位)
+            // 商品缩略图(入库记录展示订单商品图片,无图记录不占位)
             if (!record.imageUrl.isNullOrBlank()) {
                 addView(ImageView(ctx).apply {
                     layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)).apply {
@@ -627,8 +627,8 @@ class StockScanFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        // 仅当前可见且未暂停时才启动相机:已切到其他 tab 的备货页不应在后台重启相机连扫,
-        // 否则在订单页等页面扫码时会误触发自动备货(2026-10-29)。
+        // 仅当前可见且未暂停时才启动相机:已切到其他 tab 的入库页不应在后台重启相机连扫,
+        // 否则在订单页等页面扫码时会误触发自动入库(2026-10-29)。
         if (!isHidden && !paused && hasCameraPermission()) startCamera()
     }
 
@@ -680,7 +680,7 @@ class StockScanFragment : Fragment() {
         val packageId: String = "",
         val postingNumber: String? = null,
         val message: String,
-        val imageUrl: String? = null, // 订单商品首图(备货记录展示用)
+        val imageUrl: String? = null, // 订单商品首图(入库记录展示用)
         val time: Long = System.currentTimeMillis()
     )
 

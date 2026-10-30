@@ -38,7 +38,7 @@ const ESTIMATOR_PARAMS = {
 
 // Ozon 限频:每商品每小时改价 ≤10 次
 const PRICE_UPDATE_HOURLY_LIMIT = 10;
-// 改价提交后延迟回读校验(价格生效是异步的,参考备货轮询经验)
+// 改价提交后延迟回读校验(价格生效是异步的,参考入库轮询经验)
 const PRICE_REREAD_DELAY_MS = 30_000;
 
 function resolveStore(storeId) {

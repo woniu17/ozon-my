@@ -50,8 +50,8 @@ class OrderListActivity : ComponentActivity() {
         private val TABS = listOf(
             "all" to "全部",
             "waitProcess" to "待采购",
-            "waitStock" to "待备货",
-            "waitStick" to "待贴单",
+            "waitStock" to "待入库",
+            "waitStick" to "待打单",
             "waitDispatch" to "待发运",
             "dispatching" to "交运中",
             "delivering" to "已揽收",

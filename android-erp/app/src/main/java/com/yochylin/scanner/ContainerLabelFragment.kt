@@ -1251,7 +1251,7 @@ class ContainerLabelFragment : Fragment() {
         }
     }
 
-    // ── 打印机(与扫描发货共用 Session.labelPrinter) ──
+    // ── 打印机(与扫描打单共用 Session.labelPrinter) ──
     private fun refreshPrinterStatus() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {

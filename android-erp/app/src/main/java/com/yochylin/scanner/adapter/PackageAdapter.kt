@@ -239,8 +239,8 @@ class PackageAdapter(private val callbacks: Callbacks) :
             } else {
                 when (pkg.operateStatus) {
                     "wait_process" -> { label = "待采购"; color = COLOR_WARN }
-                    "wait_stock" -> { label = "待备货"; color = COLOR_PRIMARY }
-                    "wait_stick" -> { label = "待贴单"; color = COLOR_PRIMARY }
+                    "wait_stock" -> { label = "待入库"; color = COLOR_PRIMARY }
+                    "wait_stick" -> { label = "待打单"; color = COLOR_PRIMARY }
                     "wait_dispatch" -> { label = "待发运"; color = COLOR_PRIMARY }
                     "dispatching" -> { label = "交运中"; color = COLOR_PRIMARY }
                     "delivering" -> { label = "已揽收"; color = COLOR_OK }
@@ -286,18 +286,18 @@ class PackageAdapter(private val callbacks: Callbacks) :
         private fun bindActions(pkg: Pkg) {
             actionArea.removeAllViews()
 
-            // 搁置订单(2026-10-23):解除操作限制,允许备货/打单发货等,但点击时二次弹窗确认(用户确认后保持搁置)
-            // 2026-11:必须采购后才可备货——仅待备货可备货;待发运可交运
+            // 搁置订单(2026-10-23):解除操作限制,允许入库/打单发货等,但点击时二次弹窗确认(用户确认后保持搁置)
+            // 2026-11:必须采购后才可入库——仅待入库可入库;待发运可交运
             val canShipPkg = pkg.operateStatus == "wait_stock" && pkg.ozonStatus == "awaiting_packaging" && pkg.id.isNotEmpty()
             val canShipCard = pkg.operateStatus == "wait_dispatch"
             val canReprint = pkg.operateStatus == "dispatching" || pkg.operateStatus == "delivering"
                 || pkg.operateStatus == "signed" || pkg.operateStatus == "settled"
             val currentWeight = pkg.weightG?.let { fmtNum(it) }
 
-            // 备货(Ozon 待打包确认货件;未到提交发货状态时显示)
+            // 入库(Ozon 待打包确认货件;未到提交发货状态时显示)
             if (canShipPkg && !canShipCard) {
                 actionArea.addView(
-                    newButton("备货", Color.parseColor(COLOR_PRIMARY)) {
+                    newButton("入库", Color.parseColor(COLOR_PRIMARY)) {
                         confirmIgnoredIfNeeded(pkg) { callbacks.onShipPackage(pkg) }
                     }
                 )
@@ -371,7 +371,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 actionArea.addView(printRow)
             }
 
-            // 仅备货需求的订单:可提前录入发货重量(2026-10-16 新增,保存重量不改变订单状态)
+            // 仅入库需求的订单:可提前录入发货重量(2026-10-16 新增,保存重量不改变订单状态)
             if (canShipPkg && !canShipCard && !canReprint) {
                 actionArea.addView(newSectionLabel("可提前录入发货重量"))
                 val row = buildWeightRow()
@@ -593,7 +593,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
             copyLogistics.visibility = if (hasLogisticsNo) View.VISIBLE else View.GONE
             copyLogistics.setOnClickListener { l.poLogisticsNo?.let { callbacks.onCopy(it, "快递单号") } }
 
-            // 采购超24h未发货 / 物流超24h未更新 高亮(2026-10-17,对齐 Web 待备货快速筛选)
+            // 采购超24h未发货 / 物流超24h未更新 高亮(2026-10-17,对齐 Web 待入库快速筛选)
             val unshippedAlert: TextView = row.findViewById(R.id.purchaseUnshippedAlert)
             val staleAlert: TextView = row.findViewById(R.id.logisticsStaleAlert)
 

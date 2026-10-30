@@ -74,8 +74,8 @@ const router = createRouter({
     { path: '/order-stats', name: 'order-stats', component: OrderStats, meta: { title: '订单统计' } },
     { path: '/finance-stats', name: 'finance-stats', component: FinanceStats, meta: { title: '财务统计' } },
     { path: '/price-manage', name: 'price-manage', component: () => import('../views/PriceManage.vue'), meta: { title: '价格管理' } },
-    { path: '/scan-ship', name: 'scan-ship', component: ScanShip, meta: { title: '扫描发货' } },
-    { path: '/scan-stock', name: 'scan-stock', component: ScanShip, meta: { title: '扫描备货' } },
+    { path: '/scan-ship', name: 'scan-ship', component: ScanShip, meta: { title: '扫描打单' } },
+    { path: '/scan-stock', name: 'scan-stock', component: ScanShip, meta: { title: '扫描入库' } },
     // 发运管理(2026-11-01):顶层 tab 待处理/已完成,打印货运标签并入待处理;旧打印链接重定向到待处理
     { path: '/carriage-manage', name: 'carriage-manage', component: CarriageCenter, meta: { title: '发运管理' } },
     { path: '/print-container-label', redirect: '/carriage-manage' },

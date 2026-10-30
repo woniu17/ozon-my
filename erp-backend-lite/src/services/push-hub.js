@@ -335,11 +335,11 @@ export function publishPostingEvent(messageType, payload) {
       if (ns === 'posting_received') subState = 'received';
       else if (ns === 'posting_in_pickup_point') subState = 'pickup_point';
       else if (ns === 'posting_awaiting_registration' || ns === 'awaiting_deliver') subState = 'stocking';
-      // 精确中文状态(2026-10-18 修正"待备货"歧义:awaiting_deliver 已是备货完成等待发运)
-      // 2026-10-18 通知文案精简:等待登记→备货, 等待发运→揽收, 已签收→签收, 到达取货点→待取
+      // 精确中文状态(2026-10-18 修正"待入库"歧义:awaiting_deliver 已是入库完成等待发运)
+      // 2026-10-18 通知文案精简:等待登记→入库, 等待发运→揽收, 已签收→签收, 到达取货点→待取
       const stateLabel =
         ns === 'posting_awaiting_registration'
-          ? '备货'
+          ? '入库'
           : ns === 'awaiting_deliver'
             ? '揽收'
             : ns === 'posting_received' || ns === 'posting_delivered'

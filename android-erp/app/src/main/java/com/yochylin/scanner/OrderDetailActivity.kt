@@ -58,7 +58,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** 订单详情：展示 + 同步/备货/提交发货/面单/同步采购物流 */
+/** 订单详情：展示 + 同步/入库/提交发货/面单/同步采购物流 */
 class OrderDetailActivity : ComponentActivity() {
 
     private val COLOR_PRIMARY = "#165dff"
@@ -106,7 +106,7 @@ class OrderDetailActivity : ComponentActivity() {
     // 订单生成时跟卖快照(2026-10-27):sku → 下单后最近一次快照(新订单同步时后台异步采集)
     private val pwSnapMap = HashMap<String, JsonObject>()
 
-    /** 采购流程结果回调：返回后刷新详情（新增/删除采购、改物流、备货等） */
+    /** 采购流程结果回调：返回后刷新详情（新增/删除采购、改物流、入库等） */
     private val purchaseLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         markChanged()
         loadDetail()
@@ -390,7 +390,7 @@ class OrderDetailActivity : ComponentActivity() {
         return row
     }
 
-    /** 一键设置库存(设0/设20):调 Ozon 更新后刷新库存行(2026-10-17),模态提示等待结果(2026-10-18 对齐备货效果,至少展示800ms) */
+    /** 一键设置库存(设0/设20):调 Ozon 更新后刷新库存行(2026-10-17),模态提示等待结果(2026-10-18 对齐入库效果,至少展示800ms) */
     private fun setItemStock(item: com.yochylin.scanner.model.PkgItem, stock: Int) {
         val offerId = item.offerId
         if (offerId.isNullOrBlank()) {
@@ -1305,12 +1305,12 @@ class OrderDetailActivity : ComponentActivity() {
         // 同步订单
         dActionBar.addView(actionButton("同步订单") { onSync() })
 
-        // 搁置订单(2026-10-23):解除备货限制,点击时二次弹窗确认(用户确认后保持搁置)
-        // 2026-11:必须采购后才可备货——仅待备货可点备货
+        // 搁置订单(2026-10-23):解除入库限制,点击时二次弹窗确认(用户确认后保持搁置)
+        // 2026-11:必须采购后才可入库——仅待入库可点入库
         val canShip = p.operateStatus == "wait_stock" &&
             p.ozonStatus == "awaiting_packaging"
         if (canShip) {
-            dActionBar.addView(actionButton("备货") { onShip(p) })
+            dActionBar.addView(actionButton("入库") { onShip(p) })
         }
 
         // 采购（进入三步采购流程）
@@ -1343,7 +1343,7 @@ class OrderDetailActivity : ComponentActivity() {
 
     // ── 操作实现 ──
     private fun onSync() {
-        // 同步接口可能耗时较长(2026-10-18):模态提示"正在同步订单中",至少展示800ms(对齐备货效果)
+        // 同步接口可能耗时较长(2026-10-18):模态提示"正在同步订单中",至少展示800ms(对齐入库效果)
         runWithBlockingLoading("正在同步订单，请稍候…") {
             try {
                 val r = Api.post("/admin/api/order-process/sync-package", mapOf("packageId" to packageId)).asJsonObject
@@ -1370,12 +1370,12 @@ class OrderDetailActivity : ComponentActivity() {
     private fun onShip(p: Pkg) {
         val totalQty = (p.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
         val doShip = {
-            // 备货接口可能耗时较长(2026-10-17):模态提示"正在备货中",结束后自动关闭
-            val dlg = showBlockingLoading("正在备货中，请稍候…")
+            // 入库接口可能耗时较长(2026-10-17):模态提示"正在入库中",结束后自动关闭
+            val dlg = showBlockingLoading("正在入库中，请稍候…")
             lifecycleScope.launch {
                 try {
                     val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to packageId)).asJsonObject
-                    toast(if (r.optBoolean("alreadyShipped")) "该包裹已备货过" else "备货成功")
+                    toast(if (r.optBoolean("alreadyShipped")) "该包裹已入库过" else "入库成功")
                     markChanged()
                     loadDetail()
                 } catch (e: Exception) {
@@ -1389,9 +1389,9 @@ class OrderDetailActivity : ComponentActivity() {
         val confirmAndDoShip = {
             if (totalQty > 1) {
                 AlertDialog.Builder(this)
-                    .setTitle("备货确认")
+                    .setTitle("入库确认")
                     .setMessage("货件 ${p.postingNumber}\n该货件共 $totalQty 件商品,将向 Ozon 确认全部商品为一个货件(不拆分),之后可打印面单。")
-                    .setPositiveButton("备货") { _, _ -> doShip() }
+                    .setPositiveButton("入库") { _, _ -> doShip() }
                     .setNegativeButton("取消", null)
                     .show()
             } else {
@@ -1402,7 +1402,7 @@ class OrderDetailActivity : ComponentActivity() {
         if (p.isIgnored) {
             AlertDialog.Builder(this)
                 .setTitle("搁置订单操作确认")
-                .setMessage("该订单当前为【已搁置】状态，确认继续备货吗？")
+                .setMessage("该订单当前为【已搁置】状态，确认继续入库吗？")
                 .setPositiveButton("确认操作") { _, _ -> confirmAndDoShip() }
                 .setNegativeButton("取消", null)
                 .show()
@@ -1471,7 +1471,7 @@ class OrderDetailActivity : ComponentActivity() {
     }
 
     private fun onSyncLogistics() {
-        // 同步采购物流可能耗时较长(2026-10-18):模态提示"正在同步采购物流中",至少展示800ms(对齐备货效果)
+        // 同步采购物流可能耗时较长(2026-10-18):模态提示"正在同步采购物流中",至少展示800ms(对齐入库效果)
         runWithBlockingLoading("正在同步采购物流，请稍候…") {
             try {
                 val r = Api.post(
@@ -1612,8 +1612,8 @@ class OrderDetailActivity : ComponentActivity() {
         if (p.isReturned) return "已退货" to COLOR_ERR
         return when (p.operateStatus) {
             "wait_process" -> "待采购" to COLOR_WARN
-            "wait_stock" -> "待备货" to COLOR_PRIMARY
-            "wait_stick" -> "待贴单" to COLOR_PRIMARY
+            "wait_stock" -> "待入库" to COLOR_PRIMARY
+            "wait_stick" -> "待打单" to COLOR_PRIMARY
             "wait_dispatch" -> "待发运" to COLOR_PRIMARY
             "dispatching" -> "交运中" to COLOR_PRIMARY
             "delivering" -> "已揽收" to COLOR_OK

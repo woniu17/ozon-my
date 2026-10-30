@@ -1,4 +1,4 @@
-// 面单 PDF → 逐页提取下条码(2026-10-25,扫描发货扫码支持)
+// 面单 PDF → 逐页提取下条码(2026-10-25,扫描打单扫码支持)
 // 复用 waybill-image.js 的 pdfjs-dist legacy 加载方式(Node 环境,disableWorker)
 // 提取逻辑:每页文本拼接后取第一个 >=10 位纯数字串(实测为面单下条码,如 551620749311000)
 import { createRequire } from 'node:module';

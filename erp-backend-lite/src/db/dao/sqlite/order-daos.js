@@ -3,14 +3,14 @@
 // 关键语义:
 //   - operate_status 只前进不回退(采购提交/打单/Ozon状态联动均为事件驱动推进)
 //   - purchase_amount 回写在 ozon_order_item 上(取消关联时冲回)
-//   - 提交采购信息 → 包裹直接流转 wait_stock(待备货;到货进度以 arrived_at 标记展示,不阻塞)
+//   - 提交采购信息 → 包裹直接流转 wait_stock(待入库;到货进度以 arrived_at 标记展示,不阻塞)
 import { randomUUID } from 'node:crypto';
 import { db } from '../../index.js';
 import { recomputeAggregates } from './purchase-sync-dao.js';
 import { imageCacheUrlFor, ensureImageCached, stripImageSizeSuffix } from '../../../services/order-image-cache.js';
 
 // operate_status 前进序( cancelled / returned 独立,任意状态可进 )
-// 新流程(2026-11):待采购 → 待备货 → 待贴单 → 待发运 → 交运中 → 已揽收 → 已签收 → 已成功
+// 新流程(2026-11):待采购 → 待入库 → 待打单 → 待发运 → 交运中 → 已揽收 → 已签收 → 已成功
 const OPERATE_RANK = {
   wait_process: 0,
   wait_stock: 1,
@@ -272,7 +272,7 @@ function applyOzonStatus(packageId, ozonStatus, { deliveringDate, shipmentDate }
     }
   }
   // ★ 新流程(2026-11):Ozon 状态联动不再推进采购前状态 ——
-  //   待采购/待备货/待贴单/待发运/交运中 的流转由本地动作驱动(提交采购/备货/打印面单/确认发运),
+  //   待采购/待入库/待打单/待发运/交运中 的流转由本地动作驱动(提交采购/入库/打印面单/确认发运),
   //   Ozon 状态仅供展示与幂等校准;同步仅推进物流阶段:
   //     delivering/driver_pickup → delivering(已揽收), delivered → signed(已签收), cancelled → cancelled。
   //   awaiting_packaging / awaiting_approve / awaiting_registration / awaiting_deliver / arbitration → 维持当前操作状态
@@ -306,7 +306,7 @@ function syncPosting(storeId, p) {
 //      API 轮询同步(order-sync)对未通知的订单补发,webhook 链路正常发通知。
 // 标记列非空=已通知(或已被人领取),NULL=未通知。
 // stateKey: new_order(新订单)/pickup(揽收)/pickup_point(到达取货点)/received(签收)
-//          /stocking(备货,2026-09-22:备货动作本地发+webhook 双链路)
+//          /stocking(入库,2026-09-22:入库动作本地发+webhook 双链路)
 //          /cancel(取消,2026-09-22:webhook+API 轮询兜底双链路)
 const FEISHU_NOTIFY_COLUMNS = {
   new_order: 'feishu_notified_at',
@@ -729,7 +729,7 @@ function upsertRfbsReturns(storeId, returns) {
 // ── 列表查询 ─────────────────────────────────────────────────
 
 /** Tab 计数(页面页签)
- *  新流程(2026-11):状态机扩展为 待采购/待备货/待贴单/待发运/交运中/已揽收/已签收/已成功/已取消/已退货,
+ *  新流程(2026-11):状态机扩展为 待采购/待入库/待打单/待发运/交运中/已揽收/已签收/已成功/已取消/已退货,
  *    delivered_at/is_returned/应计 的拆分已固化到 operate_status 独立状态值,无需运行时 CASE。
  *  新增 all:全部订单(含 ignored 搁置)
  */
@@ -884,7 +884,7 @@ function buildPackageWhere(filters = {}) {
   } else if (filters.arrived === '0') {
     where.push('p.arrived_at IS NULL');
   }
-  // 快速筛选(2026-10-17,仅待备货 tab 生效;2026-10-18 限定 waitStock,避免参数串到其它 tab):
+  // 快速筛选(2026-10-17,仅待入库 tab 生效;2026-10-18 限定 waitStock,避免参数串到其它 tab):
   // 1) 采购下单超 N 小时未发货 / 2) 物流超 N 小时未揽收
   // 两个快捷筛选为"或"关系(2026-10-17 用户要求):命中任一条件即进入结果集;两者都未传时不过滤。
   // quickFilters 记录各自 SQL 片段,供 listPackages 单独计数(按钮展示命中数,2026-10-17)。
@@ -1008,7 +1008,7 @@ function setTagOrder(names) {
 //   delivering 对应 o.delivering_date(国际物流商揽收时间),适用除待处理/待打单/交运外的所有状态
 //   发货前取消的单无揽收时间(NULLS LAST 排最后);return=货件退回/销毁处理时间
 //   delivered 对应 p.delivered_at(妥投时间),仅已签收/已成功 tab 用(100% 覆盖)
-//   shipped 对应 p.waybill_printed_at(本地打印面单/扫描发货交运时间,2026-10-29),交运 tab 用
+//   shipped 对应 p.waybill_printed_at(本地打印面单/扫描打单交运时间,2026-10-29),交运 tab 用
 const SORT_COLUMNS = {
   order: 'o.in_process_at',
   delivering: 'o.delivering_date',
@@ -1339,7 +1339,7 @@ function getPurchasesByPackageIds(packageIds) {
  */
 /** 批量查包裹重量(g,用于国际配送费公式 3.37 + 0.0281 × weight_g)
  *  优先级(从高到低):
- *    1) 发货重量(op_package.weight,扫描发货录入/妙手同步写入,同一概念同一字段)
+ *    1) 发货重量(op_package.weight,扫描打单录入/妙手同步写入,同一概念同一字段)
  *    2) 妙手称重(miaoshou_package.weighing_weight,by posting_number,ms-to-local 未同步过的兜底)
  *    3) 系统自定义重量(product_data_cache.custom_weight_g,按 quantity 加权)
  *    4) Ozon 后台同步重量(product_attributes_cache.attributes_data.weight,按 quantity 加权)
@@ -1350,7 +1350,7 @@ function getWeightsByPackageIds(packageIds) {
   if (!packageIds || !packageIds.length) return new Map();
   const ph = packageIds.map(() => '?').join(',');
   // 重量来源(优先级从高到低):
-  //   1. 发货重量(op_package.weight,扫描发货/妙手同步共用) → source='ship'
+  //   1. 发货重量(op_package.weight,扫描打单/妙手同步共用) → source='ship'
   //   2. 妙手称重(miaoshou_package.weighing_weight) → source='miaoshou'
   //   3. 系统自定义重量(product_data_cache.custom_weight_g) → source='system'
   //   4. Ozon 后台同步重量(product_attributes_cache.attributes_data.weight,按 quantity 加权) → source='ozon'
@@ -1381,7 +1381,7 @@ function getWeightsByPackageIds(packageIds) {
     const ms = r.msWeight != null ? Number(r.msWeight) : null;
     const sys = r.systemWeight != null && r.systemWeight > 0 ? Number(r.systemWeight) : null;
     const oz = r.ozonWeight != null && r.ozonWeight > 0 ? Number(r.ozonWeight) : null;
-    // 独立重量字段(扫描发货页操作条展示:Ozon后台/本系统,未设置为 null)
+    // 独立重量字段(扫描打单页操作条展示:Ozon后台/本系统,未设置为 null)
     const extras = { systemWeightG: sys, ozonWeightG: oz };
     if (ship != null && ship > 0) {
       out.set(r.packageId, { weightG: ship, source: 'ship', ...extras });
@@ -1651,7 +1651,7 @@ function reallocateAutoLinks(poId) {
 //   为空时自动填充,已有值永不覆盖(手动维护优先)
 //   采购价 ← 该 SKU 最新一笔有采购订单行的分摊单价(purchase_amount/quantity)
 //   重量   ← 该 SKU 最新已称重"单SKU包裹"的单件重量(weight/包裹总数量)
-// 触发: 提交采购 / 改分摊 / 扫描发货称重 后
+// 触发: 提交采购 / 改分摊 / 扫描打单称重 后
 // ════════════════════════════════════════════════════════════════
 export function backfillProductCache(packageId) {
   // 包裹的全部商品 SKU
@@ -1865,7 +1865,7 @@ function submitPurchase({
         db.prepare(`UPDATE op_ozon_order_item SET purchase_amount = ?, purchase_num = ?, gmt_modified = ? WHERE id = ?`)
           .run(Math.round(a.amt * 100) / 100, a.qty, now, itemId);
       }
-      // 包裹聚合绝对重算 + 采购状态 + 国内物流 + 流转待备货
+      // 包裹聚合绝对重算 + 采购状态 + 国内物流 + 流转待入库
       const aggPkg = db
         .prepare(`SELECT COALESCE(SUM(allocated_amount),0) AS total FROM op_purchase_link WHERE package_id = ?`)
         .get(packageId);
@@ -2091,14 +2091,14 @@ function advanceSettledPackages() {
     .run(now).changes;
 }
 
-/** 退回待处理:仅 wait_stock(待备货)可退;取消该包裹全部采购关联(冲回产品行金额/数量)
+/** 退回待处理:仅 wait_stock(待入库)可退;取消该包裹全部采购关联(冲回产品行金额/数量)
  *  并重置采购聚合(金额/国内物流/到货标记),回流 wait_process(维持语义:待处理=未采购)
  */
 function revertToWaitProcess(packageId) {
   const pkg = db.prepare(`SELECT * FROM op_package WHERE id = ?`).get(packageId);
   if (!pkg) throw new Error(`包裹不存在: ${packageId}`);
   if (pkg.operate_status !== 'wait_stock') {
-    throw new Error('仅「待备货」状态的包裹可退回待处理');
+    throw new Error('仅「待入库」状态的包裹可退回待处理');
   }
   const now = nowIso();
   runInTx(() => {
@@ -2249,8 +2249,8 @@ function updatePackageMeta(packageId, meta = {}) {
   return db.prepare(`SELECT note, tags FROM op_package WHERE id = ?`).get(packageId);
 }
 
-/** 标记已打印面单(贴单/交运两步):
- *   wait_stick → wait_dispatch(贴单完成)
+/** 标记已打印面单(打单/交运两步):
+ *   wait_stick → wait_dispatch(打单完成)
  *   wait_dispatch → dispatching(个人自发货扫描交运:重量已录,打印面单成功后推进)
  */
 function markWaybillPrinted(packageId) {
@@ -2279,7 +2279,7 @@ function getPackagePostings(packageIds) {
     .all(...packageIds);
 }
 
-/** 扫描发货提交:按 DB 当前状态权威校验,仅 wait_dispatch(待发运)时写入发货重量
+/** 扫描打单提交:按 DB 当前状态权威校验,仅 wait_dispatch(待发运)时写入发货重量
  *  op_package.weight 即发货重量唯一载体(扫描录入/妙手同步共用,2026-09-13 确认)
  *  2026-10-23:解除搁置订单提交发货限制(前端二次弹窗确认,保持搁置标记)
  *  @returns {{ found: false } | { found: true, canShip, operateStatus, isIgnored, waybillPrintedAt }}
@@ -2305,7 +2305,7 @@ function scanShipSubmit(packageId, weightG) {
   };
 }
 
-/** 扫描发货更正重量:任意状态人工修正发货重量(2026-09-22 起解除交运限制)
+/** 扫描打单更正重量:任意状态人工修正发货重量(2026-09-22 起解除交运限制)
  *  与妙手同步的"交运锁定"约束不同——锁定仅针对同步任务自动覆盖,人工更正是显式操作,允许写
  *  @returns {{ found: false } | { found: true, shipped, operateStatus, oldWeightG }}
  */
@@ -2325,14 +2325,14 @@ function scanShipCorrectWeight(packageId, weightG) {
   };
 }
 
-/** 发货记录:按 waybill_printed_at UTC 区间查已交运包裹(扫描发货页右侧栏)
+/** 发货记录:按 waybill_printed_at UTC 区间查已交运包裹(扫描打单页右侧栏)
  *  @param {Object} filters { startAt, endAt, page, pageSize }
  *  startAt/endAt 为 UTC ISO 字符串,区间 [startAt, endAt);按交运时间倒序
  *  采购关联已聚合进 purchaseLinks(每包裹);items/weights 由路由层富化
  */
 function listShippedPackages({ startAt, endAt, page, pageSize } = {}) {
   const pageNo = Math.max(1, Number(page) || 1);
-  // 上限 500:扫描发货记录不分页,前端一次拉全量滚动浏览(2026-09-16)
+  // 上限 500:扫描打单记录不分页,前端一次拉全量滚动浏览(2026-09-16)
   const size = Math.min(500, Math.max(1, Number(pageSize) || 20));
   const where = `p.waybill_printed_at IS NOT NULL AND p.waybill_printed_at >= ? AND p.waybill_printed_at < ?`;
   const params = [startAt, endAt];
@@ -2588,7 +2588,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
 
   // 3) 预编译语句
   // weight 交运锁(2026-09-13):发货重量一经交运(waybill_printed_at 非空)且已有值即锁定,
-  // 妙手同步不再覆盖(本系统替代妙手 ERP,扫描发货录入的实物秤重优先);未交运或本地为空时正常覆盖
+  // 妙手同步不再覆盖(本系统替代妙手 ERP,扫描打单录入的实物秤重优先);未交运或本地为空时正常覆盖
   const updPkg = db.prepare(
     `UPDATE op_package
        SET weight = CASE
@@ -2759,7 +2759,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
           }
         }
         // c) 如果有关联采购单,推进状态 wait_process → wait_stock(对齐 submitPurchase 逻辑)
-        //    有采购信息即视为"已提交采购",包裹应进入待备货
+        //    有采购信息即视为"已提交采购",包裹应进入待入库
         if (hasPurchaseLink) {
           advanceStatus.run(headLogisticsNo, headLogisticsCompany, headSendAt, now, p.id);
           advanced++;

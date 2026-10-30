@@ -137,7 +137,7 @@ class NewOrderNotifyService : Service() {
         )
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ORDER_ALERT, "订单预警", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "订单取消/需要备货时提醒（需关注处理）"
+                description = "订单取消/需要入库时提醒（需关注处理）"
             }
         )
         nm.createNotificationChannel(
@@ -339,12 +339,12 @@ class NewOrderNotifyService : Service() {
                     // 到达取货点不推送安卓(2026-10-17,用户要求);不消费事件,后续恢复通知无需清理去重集合
                     if (subState == "pickup_point") continue
                     if (!tryMarkNotified("STATE_CHANGED:$subState:$postingNumber")) continue
-                    // 2026-10-18 优先用后端精简中文状态(备货/揽收/签收/待取);兜底映射保持同步文案
+                    // 2026-10-18 优先用后端精简中文状态(入库/揽收/签收/待取);兜底映射保持同步文案
                     val label = ev.optString("stateLabel").ifBlank {
                         when (subState) {
                             "received" -> "签收"
                             "pickup_point" -> "待取"
-                            "stocking" -> "备货"
+                            "stocking" -> "入库"
                             else -> "状态变更: ${ev.optString("newState").ifBlank { "—" }}"
                         }
                     }
@@ -416,7 +416,7 @@ class NewOrderNotifyService : Service() {
     }
 
     /**
-     * 发送订单状态事件通知（取消/备货/揽收/签收等）。
+     * 发送订单状态事件通知（取消/入库/揽收/签收等）。
      * 2026-10-18 统一格式：标题=第一行"通知类型 店铺名 货件号"，
      * 摘要=第二行"xN ￥金额 · 通知时间"，展开正文=两行 + 附加信息，点击跳转对应 Tab。
      */

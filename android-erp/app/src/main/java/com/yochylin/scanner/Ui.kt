@@ -38,7 +38,7 @@ import java.io.FileOutputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-/** 模态"正在处理"对话框（2026-10-17 备货耗时提示）：不可取消、防重复提交，结束调用 dismiss() */
+/** 模态"正在处理"对话框（2026-10-17 入库耗时提示）：不可取消、防重复提交，结束调用 dismiss() */
 fun Context.showBlockingLoading(message: String): ProgressDialog = ProgressDialog(this).apply {
     setMessage(message)
     setCancelable(false)

@@ -55,7 +55,7 @@ data class Pkg(
     val lastDeliveryAt: String? = null,
     val deliveringDate: String? = null,
     val isShipped: Boolean = false,
-    val waybillPrintedAt: String? = null, // 本地打印面单/扫描发货交运时间
+    val waybillPrintedAt: String? = null, // 本地打印面单/扫描打单交运时间
     val shippedAt: String? = null,        // Ozon 状态联动写入(在途/妥投时=揽收时间或同步时刻)
     val deliveredAt: String? = null,
     val returnAt: String? = null,
@@ -201,7 +201,7 @@ data class LabelResult(
     val expiresIn: Long? = null,
 )
 
-/** 备货提交返回 */
+/** 入库提交返回 */
 data class ShipResult(
     val ozonStatus: String? = null,
     val operateStatus: String? = null,

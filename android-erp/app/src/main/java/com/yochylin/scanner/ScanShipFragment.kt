@@ -38,7 +38,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** 扫描发货主界面：搜索/扫码/卡片操作/发货记录 */
+/** 扫描打单主界面：搜索/扫码/卡片操作/发货记录 */
 class ScanShipFragment : Fragment() {
 
     private lateinit var searchInput: EditText
@@ -265,14 +265,14 @@ class ScanShipFragment : Fragment() {
         adapter.setData(results, records, currentTab, countToday, countYesterday)
     }
 
-    // ── 备货 ──
+    // ── 入库 ──
     private fun confirmAndShip(pkg: Pkg) {
         val totalQty = (pkg.items?.sumOf { it.quantity ?: 0.0 } ?: 0.0).toLong()
         if (totalQty > 1) {
             AlertDialog.Builder(requireContext())
-                .setTitle("备货确认")
+                .setTitle("入库确认")
                 .setMessage("货件 ${pkg.postingNumber}\n共 $totalQty 件商品,将向 Ozon 确认全部商品为一个货件(不拆分)。")
-                .setPositiveButton("备货") { _, _ -> doShipPackage(pkg) }
+                .setPositiveButton("入库") { _, _ -> doShipPackage(pkg) }
                 .setNegativeButton("取消", null)
                 .show()
         } else {
@@ -281,15 +281,15 @@ class ScanShipFragment : Fragment() {
     }
 
     private fun doShipPackage(pkg: Pkg) {
-        // 备货接口可能耗时较长(2026-10-17):模态提示"正在备货中",结束后自动关闭
-        val dlg = requireContext().showBlockingLoading("正在备货中，请稍候…")
+        // 入库接口可能耗时较长(2026-10-17):模态提示"正在入库中",结束后自动关闭
+        val dlg = requireContext().showBlockingLoading("正在入库中，请稍候…")
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to pkg.id)).asJsonObject
                 val title = when {
-                    r.optBoolean("alreadyShipped") -> "该包裹已备货过"
-                    r.optBoolean("pending") -> "备货指令已提交"
-                    else -> "备货成功"
+                    r.optBoolean("alreadyShipped") -> "该包裹已入库过"
+                    r.optBoolean("pending") -> "入库指令已提交"
+                    else -> "入库成功"
                 }
                 toast(title)
                 doSearch(currentKeyword)

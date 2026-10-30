@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // 订单处理流程重构(2026-11):operate_status 4段式 → 新状态机 数据迁移
 //
-// 新流程:待采购 → 待备货 → 待贴单 → 待发运 → 交运中 → 已揽收 → 已签收 → 已成功(+ 已取消/已退货)
+// 新流程:待采购 → 待入库 → 待打单 → 待发运 → 交运中 → 已揽收 → 已签收 → 已成功(+ 已取消/已退货)
 // 旧值 → 新值:
-//   wait_ship                  → wait_stock(待备货)
+//   wait_ship                  → wait_stock(待入库)
 //   ship_success               → dispatching(交运中)
 //   wait_receiver_confirm      → 按 is_returned/delivered_at/应计(67)拆分:
 //                                  is_returned=1         → returned(已退货)

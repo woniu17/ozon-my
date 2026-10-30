@@ -119,8 +119,8 @@ export async function getPostingDetail(store, postingNumber) {
  * POST /v4/posting/fbs/unfulfilled/list
  * @param {object} store 店铺对象
  * @param {object} opts
- * @param {string} [opts.cutoffFrom] ISO 截止备货起始时间
- * @param {string} [opts.cutoffTo]   ISO 截止备货结束时间
+ * @param {string} [opts.cutoffFrom] ISO 截止入库起始时间
+ * @param {string} [opts.cutoffTo]   ISO 截止入库结束时间
  * @param {string} [opts.cursor]     分页游标
  * @param {number} [opts.limit=100]  每页数量(实测上限 100)
  * @returns {Promise<{postings:Array, cursor:string, has_next:boolean, count:number}>}

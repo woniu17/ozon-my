@@ -62,8 +62,8 @@ class OrderListFragment : Fragment() {
         private val TABS = listOf(
             "all" to "全部",
             "waitProcess" to "待采购",
-            "waitStock" to "待备货",
-            "waitStick" to "待贴单",
+            "waitStock" to "待入库",
+            "waitStick" to "待打单",
             "waitDispatch" to "待发运",
             "dispatching" to "交运中",
             "delivering" to "已揽收",
@@ -244,7 +244,7 @@ class OrderListFragment : Fragment() {
         }
     }
 
-    /** 扫码全局搜索：扫码返回后自动填充输入框并执行全局搜索（参考扫描发货） */
+    /** 扫码全局搜索：扫码返回后自动填充输入框并执行全局搜索（参考扫描打单） */
     private val scanLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -269,7 +269,7 @@ class OrderListFragment : Fragment() {
     private var currentSort: String
         get() = tabSorts[activeTab] ?: DEFAULT_SORT
         set(value) { tabSorts[activeTab] = value }
-    /** 待备货快速筛选(2026-10-17):>0 表示启用 24h 阈值,与后端 purchaseUnshippedHours/logisticsStaleHours 对应 */
+    /** 待入库快速筛选(2026-10-17):>0 表示启用 24h 阈值,与后端 purchaseUnshippedHours/logisticsStaleHours 对应 */
     private var purchaseUnshippedHours = 0
     private var logisticsStaleHours = 0
     /** 快捷筛选各自命中数(2026-10-17):后端 quickCounts 返回,按钮上展示 */
@@ -354,7 +354,7 @@ class OrderListFragment : Fragment() {
             requireContext().stopService(Intent(requireContext(), NewOrderNotifyService::class.java))
             goLogin()
         }
-        // 推送记录 / 网络模式 / 检查更新（2026-10-28 从扫描发货页迁移到订单处理页顶处）
+        // 推送记录 / 网络模式 / 检查更新（2026-10-28 从扫描打单页迁移到订单处理页顶处）
         view.findViewById<TextView>(R.id.orderPushLogBtn).setOnClickListener {
             startActivity(Intent(requireContext(), PushLogActivity::class.java))
         }
@@ -407,7 +407,7 @@ class OrderListFragment : Fragment() {
                     keyword = ""
                     globalActive = false
                     globalMode = "ss"
-                    // 快速筛选仅待备货 tab 可用(2026-10-18):切 tab 重置,避免参数串到其它 tab
+                    // 快速筛选仅待入库 tab 可用(2026-10-18):切 tab 重置,避免参数串到其它 tab
                     purchaseUnshippedHours = 0
                     logisticsStaleHours = 0
                     refreshTabStyles()
@@ -556,7 +556,7 @@ class OrderListFragment : Fragment() {
         }
     }
 
-    // ── 待备货快速筛选(2026-10-17)──
+    // ── 待入库快速筛选(2026-10-17)──
     private fun toggleQuickFilter(kind: String) {
         if (kind == "purchase") {
             purchaseUnshippedHours = if (purchaseUnshippedHours > 0) 0 else 24
@@ -674,7 +674,7 @@ class OrderListFragment : Fragment() {
         bannerText.visibility = View.VISIBLE
     }
 
-    // ── 网络模式（2026-10-28 从扫描发货页迁移） ──
+    // ── 网络模式（2026-10-28 从扫描打单页迁移） ──
 
     private fun updateIntranetBtn(btn: TextView) {
         btn.text = when (Session.networkMode) {
