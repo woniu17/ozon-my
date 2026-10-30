@@ -411,3 +411,11 @@ export function getDefaultCourierContact(storeId) {
 export function setDefaultCourierContact(storeId, body = {}) {
   return request.post('/admin/api/order-process/carriage/courier-contact/default/set', { storeId, ...body });
 }
+
+// 店铺快递员联系方式配置列表(2026-10-30,多条 + 默认项)
+export function listCourierContactConfigs(storeId) {
+  return request.post('/admin/api/order-process/carriage/courier-contact/config/list', { storeId });
+}
+export function saveCourierContactConfigs(storeId, contacts) {
+  return request.post('/admin/api/order-process/carriage/courier-contact/config/save', { storeId, contacts });
+}

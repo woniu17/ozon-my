@@ -1652,12 +1652,16 @@ function attachPostingProductImages(storeId, postings) {
   return postings;
 }
 
-// 默认快递员联系方式配置(app_config,按店铺维度)
-// key: carriage_courier_contact_default:<storeId>; value: { phone, wechatNickname, comment }
-const DEFAULT_CONTACT_KEY_PREFIX = 'carriage_courier_contact_default:';
-function readDefaultCourierContact(storeId) {
+// 快递员联系方式配置(2026-10-30,支持多条 + 默认项)
+// 新结构 key: carriage_courier_contacts:<storeId>, value: [{ id, phone, wechatNickname, comment, isDefault }]
+// 兼容旧单条 key: carriage_courier_contact_default:<storeId> 存在时包装成一条迁移。
+const COURIER_CONTACTS_KEY_PREFIX = 'carriage_courier_contacts:';
+const LEGACY_DEFAULT_CONTACT_KEY_PREFIX = 'carriage_courier_contact_default:';
+function readLegacyDefaultCourierContact(storeId) {
   try {
-    const row = db.prepare('SELECT value FROM app_config WHERE key = ?').get(DEFAULT_CONTACT_KEY_PREFIX + String(storeId));
+    const row = db
+      .prepare('SELECT value FROM app_config WHERE key = ?')
+      .get(LEGACY_DEFAULT_CONTACT_KEY_PREFIX + String(storeId));
     if (!row) return null;
     const v = JSON.parse(row.value);
     return {
@@ -1668,6 +1672,56 @@ function readDefaultCourierContact(storeId) {
   } catch {
     return null;
   }
+}
+function normalizeContactConfig(c) {
+  return {
+    id: String(c?.id || ''),
+    phone: String(c?.phone || '').trim(),
+    wechatNickname: String(c?.wechatNickname || '').trim(),
+    comment: String(c?.comment || '').trim(),
+    isDefault: !!c?.isDefault,
+  };
+}
+function readCourierContactConfigs(storeId) {
+  const sid = String(storeId);
+  try {
+    const row = db.prepare('SELECT value FROM app_config WHERE key = ?').get(COURIER_CONTACTS_KEY_PREFIX + sid);
+    if (row) {
+      const arr = JSON.parse(row.value);
+      if (Array.isArray(arr)) return arr.map(normalizeContactConfig);
+    }
+  } catch { /* 数据损坏按空处理 */ }
+  // 兼容旧单条默认配置:迁移成一条默认
+  const legacy = readLegacyDefaultCourierContact(sid);
+  if (legacy && (legacy.phone || legacy.wechatNickname || legacy.comment)) {
+    return [{ id: 'legacy', ...legacy, isDefault: true }];
+  }
+  return [];
+}
+function writeCourierContactConfigs(storeId, contacts) {
+  const sid = String(storeId);
+  const list = (Array.isArray(contacts) ? contacts : []).map(normalizeContactConfig);
+  // 至多一条默认:重复默认只保留第一个;全未标记时第一条作为默认
+  let defaultAssigned = false;
+  const normalized = list.map((c) => {
+    if (c.isDefault) {
+      if (defaultAssigned) return { ...c, isDefault: false };
+      defaultAssigned = true;
+      return c;
+    }
+    return c;
+  });
+  if (!defaultAssigned && normalized.length) normalized[0].isDefault = true;
+  db.prepare(
+    `INSERT INTO app_config (key, value, scope, description, updated_at)
+     VALUES (?, ?, 'carriage', '快递员联系方式配置', datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET
+       value = excluded.value,
+       scope = excluded.scope,
+       description = excluded.description,
+       updated_at = datetime('now')`
+  ).run(COURIER_CONTACTS_KEY_PREFIX + sid, JSON.stringify(normalized));
+  return normalized;
 }
 
 // 配送方式列表(创建发运前置:取 delivery_method_id)
@@ -1826,36 +1880,51 @@ router.post('/admin/api/order-process/carriage/courier-contact/get', async (req,
   } catch (e) { carriageHandleError(e, req, res, '获取联系方式'); }
 });
 
-// 获取店铺的默认快递员联系方式配置(2026-10-30,打开发运详情自动加载)
+// 获取店铺的默认快递员联系方式(兼容旧接口:返回配置列表中的默认项)
 router.post('/admin/api/order-process/carriage/courier-contact/default/get', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
-    res.json(ok({ contact: readDefaultCourierContact(store.id) }));
+    const contacts = readCourierContactConfigs(store.id);
+    const def = contacts.find((c) => c.isDefault) || contacts[0] || null;
+    res.json(ok({ contact: def ? { phone: def.phone, wechatNickname: def.wechatNickname, comment: def.comment } : null }));
   } catch (e) { carriageHandleError(e, req, res, '获取默认联系方式'); }
 });
 
-// 保存店铺的默认快递员联系方式配置
+// 保存店铺的默认快递员联系方式(兼容旧接口:写为新配置结构的默认项)
 router.post('/admin/api/order-process/carriage/courier-contact/default/set', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
     const { phone, wechatNickname, comment } = req.body || {};
-    const value = JSON.stringify({
+    const contacts = readCourierContactConfigs(store.id).map((c) => ({ ...c, isDefault: false }));
+    contacts.push({
+      id: String(Date.now()),
       phone: String(phone || '').trim(),
       wechatNickname: String(wechatNickname || '').trim(),
       comment: String(comment || '').trim(),
+      isDefault: true,
     });
-    db.prepare(
-      `INSERT INTO app_config (key, value, scope, description, updated_at)
-       VALUES (?, ?, 'carriage', '快递员默认联系方式', datetime('now'))
-       ON CONFLICT(key) DO UPDATE SET
-         value = excluded.value,
-         scope = excluded.scope,
-         description = excluded.description,
-         updated_at = datetime('now')`
-    ).run(DEFAULT_CONTACT_KEY_PREFIX + store.id, value);
-    logger.info({ storeId: store.id }, '[order-process] 保存默认快递员联系方式成功');
-    res.json(ok({ contact: JSON.parse(value) }));
+    const saved = writeCourierContactConfigs(store.id, contacts);
+    const def = saved.find((c) => c.isDefault) || saved[0] || null;
+    res.json(ok({ contact: def ? { phone: def.phone, wechatNickname: def.wechatNickname, comment: def.comment } : null }));
   } catch (e) { carriageHandleError(e, req, res, '保存默认联系方式'); }
+});
+
+// 获取店铺快递员联系方式配置列表(2026-10-30,多条 + 默认项)
+router.post('/admin/api/order-process/carriage/courier-contact/config/list', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    res.json(ok({ contacts: readCourierContactConfigs(store.id) }));
+  } catch (e) { carriageHandleError(e, req, res, '获取联系方式配置'); }
+});
+
+// 保存店铺快递员联系方式配置列表(全量覆盖)
+router.post('/admin/api/order-process/carriage/courier-contact/config/save', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const saved = writeCourierContactConfigs(store.id, req.body?.contacts);
+    logger.info({ storeId: store.id, count: saved.length }, '[order-process] 保存快递员联系方式配置成功');
+    res.json(ok({ contacts: saved }));
+  } catch (e) { carriageHandleError(e, req, res, '保存联系方式配置'); }
 });
 
 router.post('/admin/api/order-process/rub-rate', (req, res, next) => {

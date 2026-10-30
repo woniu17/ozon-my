@@ -21,8 +21,8 @@ import {
   setCarriageCourierContact,
   setCarriagePostings,
   getAvailableCarriagePostings,
-  getDefaultCourierContact,
-  setDefaultCourierContact,
+  listCourierContactConfigs,
+  saveCourierContactConfigs,
 } from '../api/order-process.js';
 
 const storesStore = useStoresStore();
@@ -73,20 +73,18 @@ const detail = reactive({
   phone: '',
   wechatNickname: '',
   comment: '',
+  selectedContactConfigId: '', // 下拉选择的配置项 id(空=手动填写)
   savingContact: false,
   containersCount: '',
   approving: false,
   cancelling: false,
 });
 
-// 店铺默认快递员联系方式配置(2026-10-30)
-const defaultContact = reactive({
+// 快递员联系方式配置(2026-10-30,支持多条 + 默认项)
+const contactConfigs = reactive({
   loaded: false,
-  loading: false,
   saving: false,
-  phone: '',
-  wechatNickname: '',
-  comment: '',
+  list: [], // [{ id, phone, wechatNickname, comment, isDefault }]
 });
 
 // 货件编辑(增加/删除后全量 set-postings 保存)
@@ -216,8 +214,9 @@ async function openDetail(row) {
   detail.wechatNickname = '';
   detail.comment = '';
   detail.containersCount = '';
+  detail.selectedContactConfigId = '';
   editPostings.dirty = false;
-  if (!defaultContact.loaded) await loadDefaultContact();
+  if (!contactConfigs.loaded) await loadContactConfigs();
   await Promise.all([loadCarriageDetail(row), loadPostings(row), loadContact(row)]);
 }
 
@@ -248,58 +247,94 @@ function currentStoreName() {
   return storesStore.list.find((s) => String(s.id) === String(storeId.value))?.name || '';
 }
 
-// 加载店铺默认快递员联系方式配置(仅加载一次,切换店铺后强制重载)
-async function loadDefaultContact(force = false) {
-  if (defaultContact.loaded && !force) return;
-  defaultContact.loading = true;
+// ── 快递员联系方式配置(多条 + 默认项,2026-10-30) ──────────
+async function loadContactConfigs(force = false) {
+  if (contactConfigs.loaded && !force) return;
   try {
-    const data = await getDefaultCourierContact(storeId.value);
-    const c = data?.contact || {};
-    defaultContact.phone = c.phone || '';
-    defaultContact.wechatNickname = c.wechatNickname || '';
-    defaultContact.comment = c.comment || '';
-    defaultContact.loaded = true;
+    const data = await listCourierContactConfigs(storeId.value);
+    contactConfigs.list = data?.contacts || [];
+    contactConfigs.loaded = true;
   } catch (err) {
-    // 未配置时静默
-  } finally {
-    defaultContact.loading = false;
+    show(err.message || String(err), 'error');
   }
 }
 
-async function onSaveDefaultContact() {
-  defaultContact.saving = true;
+function onAddContactConfig() {
+  contactConfigs.list.push({
+    id: String(Date.now()) + Math.random().toString(36).slice(2, 6),
+    phone: '',
+    wechatNickname: '',
+    comment: '',
+    isDefault: false,
+  });
+}
+
+function onRemoveContactConfig(index) {
+  contactConfigs.list.splice(index, 1);
+}
+
+function onSetContactConfigDefault(item) {
+  for (const c of contactConfigs.list) c.isDefault = false;
+  item.isDefault = true;
+}
+
+async function onSaveContactConfigs() {
+  const valid = contactConfigs.list.filter((c) => c.phone.trim() || c.wechatNickname.trim());
+  if (!valid.length) {
+    show('请至少配置一条联系方式', 'error');
+    return;
+  }
+  contactConfigs.saving = true;
   try {
-    await setDefaultCourierContact(storeId.value, {
-      phone: defaultContact.phone.trim(),
-      wechatNickname: defaultContact.wechatNickname.trim(),
-      comment: defaultContact.comment.trim(),
-    });
-    defaultContact.loaded = true;
-    show('默认快递员联系方式已保存', 'success');
+    const data = await saveCourierContactConfigs(storeId.value, valid);
+    contactConfigs.list = data?.contacts || [];
+    contactConfigs.loaded = true;
+    show('联系方式配置已保存', 'success');
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
-    defaultContact.saving = false;
+    contactConfigs.saving = false;
   }
 }
 
-// 把当前详情表单另存为店铺默认配置
+// 详情表单:选择已配置的联系方式后自动填充
+function onSelectContactConfig() {
+  const item = contactConfigs.list.find((c) => c.id === detail.selectedContactConfigId);
+  if (!item) return;
+  detail.phone = item.phone || '';
+  detail.wechatNickname = item.wechatNickname || currentStoreName();
+  detail.comment = item.comment || '';
+}
+
+// 把当前详情表单存为配置(同电话更新为默认,否则新增一条默认)
 async function onSetAsDefault() {
   if (!detail.phone.trim()) {
     show('请先填写快递员联系电话', 'error');
     return;
   }
   try {
-    await setDefaultCourierContact(storeId.value, {
-      phone: detail.phone.trim(),
-      wechatNickname: detail.wechatNickname.trim(),
-      comment: detail.comment.trim(),
-    });
-    defaultContact.phone = detail.phone.trim();
-    defaultContact.wechatNickname = detail.wechatNickname.trim();
-    defaultContact.comment = detail.comment.trim();
-    defaultContact.loaded = true;
-    show('当前联系方式已设为店铺默认', 'success');
+    const list = contactConfigs.list.map((c) => ({ ...c, isDefault: false }));
+    const idx = list.findIndex((c) => c.phone === detail.phone.trim());
+    if (idx >= 0) {
+      list[idx] = {
+        ...list[idx],
+        phone: detail.phone.trim(),
+        wechatNickname: detail.wechatNickname.trim(),
+        comment: detail.comment.trim(),
+        isDefault: true,
+      };
+    } else {
+      list.push({
+        id: String(Date.now()) + Math.random().toString(36).slice(2, 6),
+        phone: detail.phone.trim(),
+        wechatNickname: detail.wechatNickname.trim(),
+        comment: detail.comment.trim(),
+        isDefault: true,
+      });
+    }
+    const data = await saveCourierContactConfigs(storeId.value, list);
+    contactConfigs.list = data?.contacts || [];
+    show('当前联系方式已设为默认配置', 'success');
   } catch (err) {
     show(err.message || String(err), 'error');
   }
@@ -307,23 +342,26 @@ async function onSetAsDefault() {
 
 async function loadContact(row) {
   detail.contactLoading = true;
-  if (!defaultContact.loaded) await loadDefaultContact();
+  if (!contactConfigs.loaded) await loadContactConfigs();
+  const defaultItem = contactConfigs.list.find((c) => c.isDefault) || contactConfigs.list[0] || null;
   const storeName = currentStoreName();
   try {
     const data = await getCarriageCourierContact(storeId.value, Number(row.id));
     const list = data?.contact || [];
     detail.contact = list;
     const first = list[0];
-    // 默认加载规则(2026-10-30):Ozon 已存值优先 → 店铺默认配置兜底 → 微信昵称再兜底店铺名
-    detail.phone = first?.phone || defaultContact.phone || '';
-    detail.wechatNickname = first?.wechat_nickname || defaultContact.wechatNickname || storeName;
-    detail.comment = first?.comment || defaultContact.comment || '';
+    // 默认加载规则(2026-10-30):Ozon 已存值优先 → 配置默认项兜底 → 微信昵称再兜底店铺名
+    detail.phone = first?.phone || defaultItem?.phone || '';
+    detail.wechatNickname = first?.wechat_nickname || defaultItem?.wechatNickname || storeName;
+    detail.comment = first?.comment || defaultItem?.comment || '';
+    detail.selectedContactConfigId = '';
   } catch (err) {
     // 不适用/未配置时静默:详情页仍可手动填写
     detail.contact = [];
-    detail.phone = defaultContact.phone || '';
-    detail.wechatNickname = defaultContact.wechatNickname || storeName;
-    detail.comment = defaultContact.comment || '';
+    detail.phone = defaultItem?.phone || '';
+    detail.wechatNickname = defaultItem?.wechatNickname || storeName;
+    detail.comment = defaultItem?.comment || '';
+    detail.selectedContactConfigId = '';
   } finally {
     detail.contactLoading = false;
   }
@@ -490,7 +528,7 @@ onMounted(async () => {
     if (storeId.value) {
       loadDeliveryMethods();
       loadCarriages();
-      loadDefaultContact();
+      loadContactConfigs();
     }
   } catch (err) {
     show(err.message || '店铺列表加载失败', 'error');
@@ -499,10 +537,10 @@ onMounted(async () => {
 
 // 切换店铺
 async function onStoreChange() {
-  defaultContact.loaded = false;
+  contactConfigs.loaded = false;
   loadDeliveryMethods();
   loadCarriages();
-  loadDefaultContact(true);
+  loadContactConfigs(true);
 }
 </script>
 
@@ -552,32 +590,50 @@ async function onStoreChange() {
       </p>
     </div>
 
-    <!-- 默认快递员联系方式配置(2026-10-30,打开发运详情自动加载) -->
-    <div class="card default-contact-card">
-      <div class="section-title">默认快递员联系方式</div>
-      <div class="default-contact-form">
-        <label>
-          <span>电话</span>
-          <input v-model="defaultContact.phone" placeholder="快递员联系电话" :disabled="defaultContact.loading" />
-        </label>
-        <label>
-          <span>微信昵称</span>
-          <input v-model="defaultContact.wechatNickname" :placeholder="`默认:${currentStoreName() || '店铺名'}`" :disabled="defaultContact.loading" />
-        </label>
-        <label>
-          <span>备注</span>
-          <input v-model="defaultContact.comment" placeholder="(可选)" :disabled="defaultContact.loading" />
-        </label>
+    <!-- 快递员联系方式配置(2026-10-30,支持多条 + 默认项) -->
+    <div class="card contact-config-card">
+      <div class="section-title">快递员联系方式配置</div>
+      <table v-if="contactConfigs.list.length" class="contact-config-table">
+        <thead>
+          <tr>
+            <th class="def-col">默认</th>
+            <th>电话</th>
+            <th>微信昵称</th>
+            <th>备注</th>
+            <th class="ops">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(c, i) in contactConfigs.list" :key="c.id">
+            <td class="def-col">
+              <input
+                type="radio"
+                name="contact-config-default"
+                :checked="c.isDefault"
+                @change="onSetContactConfigDefault(c)"
+              />
+            </td>
+            <td><input v-model="c.phone" placeholder="联系电话" /></td>
+            <td><input v-model="c.wechatNickname" :placeholder="`默认:${currentStoreName() || '店铺名'}`" /></td>
+            <td><input v-model="c.comment" placeholder="(可选)" /></td>
+            <td class="ops">
+              <button class="btn btn-danger btn-sm" @click="onRemoveContactConfig(i)">删除</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="contact-config-actions">
+        <button class="btn btn-ghost btn-sm" @click="onAddContactConfig">添加联系方式</button>
         <button
-          class="btn btn-ghost btn-sm"
-          :disabled="defaultContact.saving || defaultContact.loading"
-          @click="onSaveDefaultContact"
+          class="btn btn-primary btn-sm"
+          :disabled="contactConfigs.saving"
+          @click="onSaveContactConfigs"
         >
-          {{ defaultContact.saving ? '保存中…' : '保存默认' }}
+          {{ contactConfigs.saving ? '保存中…' : '保存配置' }}
         </button>
       </div>
       <p class="form-hint">
-        保存后,打开发运详情时自动加载为默认值;微信昵称为空时默认使用店铺名「{{ currentStoreName() }}」。
+        可配置多条快递员联系方式;打开发运详情自动加载默认项,微信昵称为空时默认使用店铺名「{{ currentStoreName() }}」。
       </p>
     </div>
 
@@ -757,6 +813,19 @@ async function onStoreChange() {
             <em v-if="!contactApplicable" class="field-hint">仅 OGL 上门取件(pickup + ozon_outsourced)适用</em>
           </div>
           <div class="contact-form">
+            <label class="contact-select-label">
+              <span>选择配置</span>
+              <select
+                v-model="detail.selectedContactConfigId"
+                :disabled="!contactApplicable || !contactConfigs.list.length"
+                @change="onSelectContactConfig"
+              >
+                <option value="">手动填写</option>
+                <option v-for="c in contactConfigs.list" :key="c.id" :value="c.id">
+                  {{ c.wechatNickname || c.phone || '(未命名)' }}{{ c.phone ? ` · ${c.phone}` : '' }}{{ c.isDefault ? ' · 默认' : '' }}
+                </option>
+              </select>
+            </label>
             <label>
               <span>电话 <em class="req">*</em></span>
               <input v-model="detail.phone" placeholder="快递员联系电话" :disabled="!contactApplicable" />
@@ -784,7 +853,7 @@ async function onStoreChange() {
               设为默认
             </button>
           </div>
-          <p class="form-hint">「设为默认」把当前填写内容存为店铺默认,后续发运详情自动加载。</p>
+          <p class="form-hint">从配置中选择联系方式自动填充;「设为默认」把当前内容存为默认配置项。</p>
         </div>
 
         <!-- 发运操作 -->
@@ -1132,31 +1201,63 @@ async function onStoreChange() {
   color: #dc2626;
 }
 
-/* ── 默认联系方式配置卡片(2026-10-30) ── */
-.default-contact-card {
+/* ── 快递员联系方式配置卡片(2026-10-30,多条) ── */
+.contact-config-card {
   padding: 16px 20px;
 }
-.default-contact-form {
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 10px;
+.contact-config-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
 }
-.default-contact-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.contact-config-table th,
+.contact-config-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
 }
-.default-contact-form label > span {
+.contact-config-table th {
   font-size: 12px;
   color: var(--muted);
+  font-weight: 600;
 }
-.default-contact-form input {
-  padding: 6px 10px;
+.contact-config-table input[type='text'],
+.contact-config-table input:not([type]) {
+  width: 100%;
+  min-width: 120px;
+  padding: 5px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 13px;
-  min-width: 160px;
+  background: #fff;
+  color: var(--text);
+}
+.contact-config-table input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.def-col {
+  width: 46px;
+  text-align: center;
+}
+.def-col input[type='radio'] {
+  accent-color: var(--primary);
+}
+.contact-config-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* 详情联系方式:配置下拉框 */
+.contact-select-label select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  min-width: 180px;
   background: #fff;
   color: var(--text);
 }
