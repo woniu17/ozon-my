@@ -130,10 +130,19 @@ export async function getAgentPrinters() {
   return { defaultPrinter: resp.defaultPrinter || '', printers: (resp.printers || []).map((p) => p.name) };
 }
 
+// Promise 竞速超时:底层请求若长时间不返回(如网络黑洞),确保探测链路能结束
+function withTimeout(promise, ms, msg) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(msg)), ms)),
+  ]);
+}
+
 // 服务器组件(后端转发)状态:SSH 隧道把打印电脑组件暴露到服务器 127.0.0.1:13528
+// 2026-11-01:加 4s 超时——request.js 的 fetch 无超时,服务器状态查询挂起会让 getAllPrinters 永久 pending
 export async function getServerAgentStatus() {
   try {
-    const data = await get('/admin/api/print-agent/status');
+    const data = await withTimeout(get('/admin/api/print-agent/status'), 4000, '服务器组件状态查询超时');
     serverDefaultPrinter = data?.defaultPrinter || '';
     return {
       online: !!data?.online,
@@ -164,10 +173,17 @@ async function probeLocalAgent() {
 // 合并本机 + 服务器两组打印机(供打印机下拉同时展示)
 // 2026-10 排查:改为顺序探测(本机优先)。组件为单连接,本机与服务器转发同时连会互踢 WS,
 // 并行探测会让本机直连间歇性掉线,进而触发"服务器兜底空打印机"错误路径。
-export async function getAllPrinters() {
-  const local = await probeLocalAgent();
-  const server = await getServerAgentStatus();
-  return { local, server };
+// 2026-11-01:整体加 6.5s 总超时,保证任何异常下探测必在数秒内结束。
+export function getAllPrinters() {
+  return withTimeout(
+    (async () => {
+      const local = await probeLocalAgent();
+      const server = await getServerAgentStatus();
+      return { local, server };
+    })(),
+    6500,
+    '打印机探测超时'
+  );
 }
 
 // 选标签打印机:localStorage 记忆 > 本机默认(printLabelImage 会在本机不可用时自动兜底服务器)
