@@ -29,6 +29,14 @@ const storesStore = useStoresStore();
 const confirmStore = useConfirmStore();
 const { show } = useToast();
 
+// 页面模式(2026-11-01):由 CarriageCenter 顶层 tab 驱动
+// - pending:快递员联系方式配置 + 全店铺进行中发运清单(含创建/打印)
+// - done:已完成发运历史(本地持久化)
+const props = defineProps({
+  mode: { type: String, default: 'pending' },
+});
+const isPending = computed(() => props.mode !== 'done');
+
 // ── 状态文案 ────────────────────────────────────────────
 const CARRIAGE_STATUS_LABELS = {
   new: '新建',
@@ -136,9 +144,6 @@ const currentRows = computed(() => {
   return rows;
 });
 
-// 子 tab(2026-11-01):待处理 / 已完成
-const activeSubTab = ref('pending');
-
 // 待处理:可创建占位行 + 正在进行中的发运(new/formed/created/awaiting_delivery/delivering)
 const PENDING_STATUSES = ['new', 'formed', 'created', 'awaiting_delivery', 'delivering'];
 const pendingRows = computed(() =>
@@ -167,27 +172,19 @@ async function loadHistory() {
   }
 }
 
-// 当前 tab 展示行与加载状态
-const listLoading = computed(() =>
-  activeSubTab.value === 'pending' ? carriageList.loading : history.loading
-);
-const listLoaded = computed(() =>
-  activeSubTab.value === 'pending' ? carriageList.loaded : history.loaded
-);
-const listRows = computed(() =>
-  activeSubTab.value === 'pending' ? pendingRows.value : history.list
-);
+// 当前模式展示行与加载状态(mode 由顶层 tab 驱动)
+const listLoading = computed(() => (isPending.value ? carriageList.loading : history.loading));
+const listLoaded = computed(() => (isPending.value ? carriageList.loaded : history.loaded));
+const listRows = computed(() => (isPending.value ? pendingRows.value : history.list));
 
-// 切换子 tab:首次进入已完成时加载本地历史
-function switchSubTab(tab) {
-  activeSubTab.value = tab;
-  if (tab === 'done' && !history.loaded) loadHistory();
-}
-
-// 刷新:同时刷新 Ozon 实时清单与本地历史
-function refreshAll() {
-  loadCarriages();
-  if (!history.loaded) loadHistory();
+// 刷新当前模式数据
+function refreshCurrent() {
+  if (isPending.value) {
+    loadCarriages();
+    if (!contactConfigs.loaded) loadContactConfigs();
+  } else {
+    loadHistory();
+  }
 }
 
 // 可用店铺(已配置 sync_credentials 的店铺)
@@ -607,9 +604,12 @@ onMounted(async () => {
     await storesStore.load();
     // 默认选第一个已配置 sync_credentials 的店铺(作为全局配置接口鉴权)
     storeId.value = usableStores.value[0]?.id || storesStore.list[0]?.id || '';
-    loadCarriages();
-    loadHistory();
-    loadContactConfigs();
+    if (isPending.value) {
+      loadCarriages();
+      loadContactConfigs();
+    } else {
+      loadHistory();
+    }
   } catch (err) {
     show(err.message || '店铺列表加载失败', 'error');
   }
@@ -619,39 +619,17 @@ onMounted(async () => {
 <template>
   <div class="carriage-page">
     <div class="page-head">
-      <h2>发运管理</h2>
-      <span class="page-sub">FBS 备货后创建发运 · 查看货件 · 设快递员联系方式 · 确认/取消发运</span>
-      <button
-        class="btn btn-ghost btn-sm"
-        :disabled="carriageList.loading || history.loading"
-        @click="refreshAll"
-      >
-        {{ carriageList.loading || history.loading ? '加载中…' : '刷新' }}
+      <h2>{{ isPending ? '发运管理' : '发运历史' }}</h2>
+      <span class="page-sub">
+        {{ isPending ? 'FBS 备货后创建发运 · 查看货件 · 设快递员联系方式 · 确认/取消发运' : '已完成发运的历史清单(本地持久化)' }}
+      </span>
+      <button class="btn btn-ghost btn-sm" :disabled="listLoading" @click="refreshCurrent">
+        {{ listLoading ? '加载中…' : '刷新' }}
       </button>
     </div>
 
-    <!-- 子 tab(2026-11-01):待处理 / 已完成 -->
-    <div class="sub-tabs">
-      <button
-        type="button"
-        class="sub-tab"
-        :class="{ active: activeSubTab === 'pending' }"
-        @click="switchSubTab('pending')"
-      >
-        待处理
-      </button>
-      <button
-        type="button"
-        class="sub-tab"
-        :class="{ active: activeSubTab === 'done' }"
-        @click="switchSubTab('done')"
-      >
-        已完成
-      </button>
-    </div>
-
-    <!-- 快递员联系方式配置(2026-10-30,多条 + 默认项;全店铺通用一份;2026-11-01:默认只展示默认项,其它折叠;仅在待处理 tab 展示) -->
-    <div v-if="activeSubTab === 'pending'" class="card contact-config-card">
+    <!-- 快递员联系方式配置(2026-10-30,多条 + 默认项;全店铺通用一份;2026-11-01:默认只展示默认项,其它折叠;仅在待处理模式展示) -->
+    <div v-if="isPending" class="card contact-config-card">
       <div class="section-title">快递员联系方式配置 <em class="field-hint">全店铺通用</em></div>
 
       <!-- 折叠视图:只展示默认项 -->
@@ -727,11 +705,11 @@ onMounted(async () => {
     <!-- 发运清单(2026-11-01:待处理=进行中,已完成=历史快照;创建发运入口在待处理占位行) -->
     <div class="card list-card">
       <div class="section-title">
-        {{ activeSubTab === 'pending' ? '发运清单 · 待处理' : '发运清单 · 已完成' }}
+        {{ isPending ? '发运清单 · 待处理' : '发运清单 · 已完成' }}
       </div>
       <div v-if="listLoading && !listRows.length" class="list-empty">加载中…</div>
       <div v-else-if="listLoaded && !listRows.length" class="list-empty">
-        {{ activeSubTab === 'pending' ? '暂无进行中的发运' : '暂无已完成发运' }}
+        {{ isPending ? '暂无进行中的发运' : '暂无已完成发运' }}
       </div>
       <table v-else class="carriage-table">
         <thead>
@@ -1109,32 +1087,6 @@ onMounted(async () => {
   font-weight: 600;
   color: var(--text);
   margin-bottom: 12px;
-}
-
-/* ── 子 tab(2026-11-01):待处理 / 已完成 ── */
-.sub-tabs {
-  display: flex;
-  gap: 8px;
-  border-bottom: 1px solid var(--border);
-  padding: 0 4px;
-}
-.sub-tab {
-  padding: 8px 16px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--muted);
-  font-size: 13.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-.sub-tab:hover {
-  color: var(--primary);
-}
-.sub-tab.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
 }
 
 /* ── 创建发运弹窗(2026-11-01) ── */

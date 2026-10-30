@@ -76,9 +76,9 @@ const router = createRouter({
     { path: '/price-manage', name: 'price-manage', component: () => import('../views/PriceManage.vue'), meta: { title: '价格管理' } },
     { path: '/scan-ship', name: 'scan-ship', component: ScanShip, meta: { title: '扫描发货' } },
     { path: '/scan-stock', name: 'scan-stock', component: ScanShip, meta: { title: '扫描备货' } },
-    // 发运管理(2026-10-30):发运管理 + 打印货运标签 合并单页;旧打印链接重定向直达打印 tab
+    // 发运管理(2026-11-01):顶层 tab 待处理/已完成,打印货运标签并入待处理;旧打印链接重定向到待处理
     { path: '/carriage-manage', name: 'carriage-manage', component: CarriageCenter, meta: { title: '发运管理' } },
-    { path: '/print-container-label', redirect: '/carriage-manage?tab=print' },
+    { path: '/print-container-label', redirect: '/carriage-manage' },
     { path: '/print-logs', name: 'print-logs', component: () => import('../views/PrintLogs.vue'), meta: { title: '打印日志' } },
     { path: '/miaoshou-orders', name: 'miaoshou-orders', component: MiaoshouOrders, meta: { title: '妙手订单' } },
     { path: '/batch-upload/:batchNo', name: 'batch-upload-detail', component: () => import('../views/BatchUploadDetail.vue'), meta: { title: '批次详情' } },

@@ -1,30 +1,33 @@
 <script setup>
-// 发运管理(2026-10-30):合并「发运管理」与「打印货运标签」为单页
-// - 发运管理:创建发运、发运清单、货件/联系方式/确认/取消(原 CarriageManage)
-// - 打印货运标签:双通道打印、预览、OGL 入仓单号(原 ContainerLabelPrint)
-// 旧链接 /print-container-label 重定向到 /carriage-manage?tab=print,直达打印页。
-// v-show 保持两个子组件状态(切换 tab 不重新加载列表/打印机组)。
+// 发运管理(2026-11-01):顶层两个 tab 改为「待处理 / 已完成」,
+// 打印货运标签功能并入「待处理」页(与发运清单同页,便于打完标签直接确认/取消发运)。
+// - 待处理:发运管理(配置 + 进行中清单,CarriageManage mode=pending)+ 打印货运标签(ContainerLabelPrint)
+// - 已完成:发运历史(本地持久化,CarriageManage mode=done)
+// 旧链接 /print-container-label?tab=print 兼容:打印功能在待处理内,统一落到 pending。
 import { ref } from 'vue';
 import { useRoute } from 'vue-router';
 import CarriageManage from './CarriageManage.vue';
 import ContainerLabelPrint from './ContainerLabelPrint.vue';
 
 const route = useRoute();
-const tab = ref(route.query.tab === 'print' ? 'print' : 'manage');
+const tab = ref(route.query.tab === 'done' ? 'done' : 'pending');
 </script>
 
 <template>
   <div class="carriage-center">
     <div class="center-tabs">
-      <button type="button" class="center-tab" :class="{ active: tab === 'manage' }" @click="tab = 'manage'">
-        发运管理
+      <button type="button" class="center-tab" :class="{ active: tab === 'pending' }" @click="tab = 'pending'">
+        待处理
       </button>
-      <button type="button" class="center-tab" :class="{ active: tab === 'print' }" @click="tab = 'print'">
-        打印货运标签
+      <button type="button" class="center-tab" :class="{ active: tab === 'done' }" @click="tab = 'done'">
+        已完成
       </button>
     </div>
-    <CarriageManage v-show="tab === 'manage'" />
-    <ContainerLabelPrint v-show="tab === 'print'" />
+    <!-- 待处理:发运管理(配置 + 进行中清单)+ 打印货运标签 -->
+    <CarriageManage v-show="tab === 'pending'" mode="pending" />
+    <ContainerLabelPrint v-show="tab === 'pending'" class="print-panel" />
+    <!-- 已完成:发运历史 -->
+    <CarriageManage v-show="tab === 'done'" mode="done" />
   </div>
 </template>
 
@@ -58,5 +61,9 @@ const tab = ref(route.query.tab === 'print' ? 'print' : 'manage');
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;
+}
+/* 打印货运标签并入待处理页(2026-11-01) */
+.print-panel {
+  border-top: 1px solid var(--border);
 }
 </style>
