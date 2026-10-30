@@ -59,6 +59,7 @@ export function useCarriageLabelPrint() {
 
   // 打印机双通道探测(失败不阻塞)
   // 2026-11-01:加整体超时兜底 + catch,避免探测 promise 长时间不 settle 导致 UI 一直"探测中"。
+  // 兜底 6 秒:无论本机/服务器探测多慢,6 秒内必须结束"探测中"状态。
   function probePrinters() {
     let done = false;
     const timer = setTimeout(() => {
@@ -66,7 +67,7 @@ export function useCarriageLabelPrint() {
       done = true;
       if (agentOnline.value === null) agentOnline.value = false;
       if (serverOnline.value === null) serverOnline.value = false;
-    }, 10_000);
+    }, 6_000);
     getAllPrinters()
       .then(({ local, server }) => {
         if (done) return;

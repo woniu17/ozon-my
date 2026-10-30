@@ -787,6 +787,13 @@ onMounted(async () => {
           :class="labelPrint.serverOnline === true ? 'on' : labelPrint.serverOnline === false ? 'off' : ''"
           :title="labelPrint.serverOnline === true ? '服务器菜鸟组件已连接(SSH 隧道转发)' : labelPrint.serverOnline === false ? '服务器菜鸟组件未连接(检查 SSH 隧道)' : '正在探测服务器组件…'"
         >{{ labelPrint.serverOnline === true ? '服务器组件已连接' : labelPrint.serverOnline === false ? '服务器组件未连接' : '探测服务器…' }}</span>
+        <button
+          class="btn btn-ghost btn-sm"
+          :disabled="labelPrint.agentOnline === null || labelPrint.serverOnline === null"
+          @click="labelPrint.probePrinters()"
+        >
+          重新探测
+        </button>
       </div>
 
       <div v-if="listLoading && !listRows.length" class="list-empty">加载中…</div>

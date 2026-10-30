@@ -59,7 +59,8 @@ function onMessage(msg) {
 }
 
 // 连接组件(长连接复用;断线自动清引用,下次调用重连)
-function connectAgent(timeoutMs = 4000) {
+// 2026-11-01:默认连接超时 4000→2500ms,本机组件离线时"探测中"更快结束(打印长连接已建立不受影响)
+function connectAgent(timeoutMs = 2500) {
   if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve(ws);
   if (connecting) return connecting;
   connecting = new Promise((resolve, reject) => {
@@ -122,8 +123,9 @@ function request(payload, timeoutMs, timeoutMsg) {
 }
 
 // 枚举本机打印机(含组件默认打印机)
+// 2026-11-01:请求超时 5000→3000ms,探测更快返回(仅枚举,不影响打印命令超时)
 export async function getAgentPrinters() {
-  const resp = await request({ cmd: 'getPrinters' }, 5000, '获取打印机列表超时');
+  const resp = await request({ cmd: 'getPrinters' }, 3000, '获取打印机列表超时');
   if (resp.status === 'failed') throw new Error(resp.msg || '获取打印机列表失败');
   return { defaultPrinter: resp.defaultPrinter || '', printers: (resp.printers || []).map((p) => p.name) };
 }
