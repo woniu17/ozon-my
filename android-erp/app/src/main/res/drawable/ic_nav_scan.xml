@@ -3,7 +3,7 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- 扫描发货:扫描框四角 + 底部扫描线 -->
+    <!-- 扫描打单:扫描框四角 + 底部扫描线 -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#86909c"

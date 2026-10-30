@@ -8,7 +8,7 @@
     android:elevation="8dp"
     android:gravity="center">
 
-    <!-- 扫描备货(2026-10-28 第 1 个 Tab) -->
+    <!-- 扫描入库(2026-10-28 第 1 个 Tab) -->
     <LinearLayout
         android:id="@+id/navStock"
         android:layout_width="0dp"
@@ -28,13 +28,13 @@
             android:id="@+id/navStockText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="扫描备货"
+            android:text="扫描入库"
             android:textSize="10sp"
             android:textColor="#86909c"
             android:layout_marginTop="2dp" />
     </LinearLayout>
 
-    <!-- 扫描发货(2026-10-28 第 2 个 Tab,原首页) -->
+    <!-- 扫描打单(2026-10-28 第 2 个 Tab,原首页) -->
     <LinearLayout
         android:id="@+id/navHome"
         android:layout_width="0dp"
@@ -54,7 +54,7 @@
             android:id="@+id/navHomeText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="扫描发货"
+            android:text="扫描打单"
             android:textSize="10sp"
             android:textColor="#86909c"
             android:layout_marginTop="2dp" />

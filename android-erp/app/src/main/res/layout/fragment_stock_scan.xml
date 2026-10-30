@@ -127,17 +127,17 @@
         android:background="#ffffff"
         android:paddingHorizontal="12dp"
         android:paddingVertical="6dp"
-        android:text="默认关闭摄像头 · 点击视频区开始 · 单件自动备货,多件弹窗确认"
+        android:text="默认关闭摄像头 · 点击视频区开始 · 单件自动入库,多件弹窗确认"
         android:textColor="@color/text_muted"
         android:textSize="12sp" />
 
-    <!-- 下半部分:扫描备货记录列表 -->
+    <!-- 下半部分:扫描入库记录列表 -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingHorizontal="12dp"
         android:paddingTop="8dp"
-        android:text="本次扫描备货记录"
+        android:text="本次扫描入库记录"
         android:textColor="@color/text_primary"
         android:textSize="13sp"
         android:textStyle="bold" />

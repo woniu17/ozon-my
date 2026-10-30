@@ -3,7 +3,7 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- 备货:箱体 + 对勾(确认货件) -->
+    <!-- 入库:箱体 + 对勾(确认货件) -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#86909c"
