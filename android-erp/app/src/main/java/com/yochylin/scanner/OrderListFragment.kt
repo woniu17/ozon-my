@@ -61,10 +61,12 @@ class OrderListFragment : Fragment() {
 
         private val TABS = listOf(
             "all" to "全部",
-            "waitProcess" to "待处理",
-            "waitShip" to "待打单发货",
-            "shipSuccess" to "交运",
-            "waitReceiverConfirm" to "已发货",
+            "waitProcess" to "待采购",
+            "waitStock" to "待备货",
+            "waitStick" to "待贴单",
+            "waitDispatch" to "待发运",
+            "dispatching" to "交运中",
+            "delivering" to "已揽收",
             "signed" to "已签收",
             "settled" to "已成功",
             "returned" to "已退货",
@@ -88,9 +90,11 @@ class OrderListFragment : Fragment() {
         private val TAB_SORT_KEYS = mapOf(
             "all" to listOf("order", "delivering"),
             "waitProcess" to listOf("order"),
-            "waitShip" to listOf("order"),
-            "shipSuccess" to listOf("order", "shipped"),
-            "waitReceiverConfirm" to listOf("order", "delivering"),
+            "waitStock" to listOf("order"),
+            "waitStick" to listOf("order"),
+            "waitDispatch" to listOf("order"),
+            "dispatching" to listOf("order", "shipped"),
+            "delivering" to listOf("order", "delivering"),
             "signed" to listOf("order", "delivering", "return", "delivered"),
             "settled" to listOf("order", "delivering", "return", "delivered"),
             "returned" to listOf("order", "delivering", "return"),
@@ -265,7 +269,7 @@ class OrderListFragment : Fragment() {
     private var currentSort: String
         get() = tabSorts[activeTab] ?: DEFAULT_SORT
         set(value) { tabSorts[activeTab] = value }
-    /** 待打单发货快速筛选(2026-10-17):>0 表示启用 24h 阈值,与后端 purchaseUnshippedHours/logisticsStaleHours 对应 */
+    /** 待备货快速筛选(2026-10-17):>0 表示启用 24h 阈值,与后端 purchaseUnshippedHours/logisticsStaleHours 对应 */
     private var purchaseUnshippedHours = 0
     private var logisticsStaleHours = 0
     /** 快捷筛选各自命中数(2026-10-17):后端 quickCounts 返回,按钮上展示 */
@@ -403,7 +407,7 @@ class OrderListFragment : Fragment() {
                     keyword = ""
                     globalActive = false
                     globalMode = "ss"
-                    // 快速筛选仅待打单发货 tab 可用(2026-10-18):切 tab 重置,避免参数串到其它 tab
+                    // 快速筛选仅待备货 tab 可用(2026-10-18):切 tab 重置,避免参数串到其它 tab
                     purchaseUnshippedHours = 0
                     logisticsStaleHours = 0
                     refreshTabStyles()
@@ -552,7 +556,7 @@ class OrderListFragment : Fragment() {
         }
     }
 
-    // ── 待打单发货快速筛选(2026-10-17)──
+    // ── 待备货快速筛选(2026-10-17)──
     private fun toggleQuickFilter(kind: String) {
         if (kind == "purchase") {
             purchaseUnshippedHours = if (purchaseUnshippedHours > 0) 0 else 24
@@ -565,7 +569,7 @@ class OrderListFragment : Fragment() {
 
     private fun updateQuickFilterUi() {
         if (!::quickFilterBar.isInitialized) return
-        val show = activeTab == "waitShip"
+        val show = activeTab == "waitStock"
         quickFilterBar.visibility = if (show) View.VISIBLE else View.GONE
         renderQuickChip(quickPurchaseUnshipped, purchaseUnshippedHours > 0, "采购超24h未发货", quickPurchaseCount)
         renderQuickChip(quickLogisticsStale, logisticsStaleHours > 0, "物流超24h未揽收", quickLogisticsCount)

@@ -17,6 +17,7 @@ import config from '../config/index.js';
 import logger from '../middleware/log.js';
 import { financeAccrualByDay, financeAccrualTypes } from './ozon-opi.js';
 import { getAccrualTypes, replaceAccrualsByDay } from '../db/dao/sqlite/accrual-dao.js';
+import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import { runWithLog } from './task-run-log.js';
 
 const FIRST_DELAY_MS = 10 * 60 * 1000; // 启动后 10 分钟首跑(避开启动高峰)
@@ -117,6 +118,9 @@ export async function runAccrualByDaySync({ days = ROLLING_DAYS } = {}) {
       { ...agg, errors: agg.errors.length },
       '[accrual-byday] 一轮完成:费用/收入明细已落库'
     );
+    // 2026-11:应计完整(含67)的已签收包裹推进为已成功
+    const settled = orderPackageDao.advanceSettledPackages();
+    if (settled > 0) logger.info({ settled }, '[accrual-byday] 应计同步推进已成功');
     return agg;
   } finally {
     _running = false;

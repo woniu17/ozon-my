@@ -1,8 +1,8 @@
 <script setup>
 // 扫描发货(2026-09,设计文档: docs/扫描发货-功能设计.md)
 // 打包发货场景:扫采购快递单号/采购单号/Ozon单号 → 全局搜索定位包裹 → 录入实物重量
-// → wait_ship 自动打印面单并流转交运;非 wait_ship 提示状态问题不动状态
-//            已交运(ship_success)/已发货(wait_receiver_confirm)均可重打面单(缓存秒出,不改状态)
+// → wait_dispatch(待发运)打印面单并流转交运;非 wait_dispatch 提示状态问题不动状态
+//            交运中(dispatching)/已揽收(delivering)/已签收(signed)/已成功(settled)均可重打面单(缓存秒出,不改状态)
 // 键盘流:扫描框 Enter=搜索 → 重量框 Enter=发货 → 终态自动回焦扫描框(扫码枪零鼠标作业)
 // 2026-09-15:商品/采购信息下方公式化展示订单金额+利润计算过程(估/实+销售/成本利润率),
 //            打印发货后按称重重算;发货记录列表可滚动
@@ -119,10 +119,15 @@ const PLATFORMS = [
   { value: 'taobao', label: '淘宝' },
 ];
 const OPERATE_LABELS = {
-  wait_process: { label: '待处理', cls: 'tag-warn' },
-  wait_ship: { label: '待打单发货', cls: 'tag-info' },
-  ship_success: { label: '交运', cls: 'tag-info' },
-  wait_receiver_confirm: { label: '已发货', cls: 'tag-ok' },
+  wait_process: { label: '待采购', cls: 'tag-warn' },
+  wait_stock: { label: '待备货', cls: 'tag-info' },
+  wait_stick: { label: '待贴单', cls: 'tag-info' },
+  wait_dispatch: { label: '待发运', cls: 'tag-info' },
+  dispatching: { label: '交运中', cls: 'tag-info' },
+  delivering: { label: '已揽收', cls: 'tag-ok' },
+  signed: { label: '已签收', cls: 'tag-ok' },
+  settled: { label: '已成功', cls: 'tag-ok' },
+  returned: { label: '已退货', cls: 'tag-warn' },
   cancelled: { label: '已取消', cls: 'tag-err' },
 };
 const WEIGHT_SOURCE_LABELS = { ship: '发货称重', miaoshou: '订单称重', system: '系统维护', ozon: 'Ozon后台同步' };
@@ -284,26 +289,31 @@ function operateTag(pkg) {
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus, cls: 'tag-mute' };
 }
 // 卡片是否可发货(快照预判;submit 时服务端权威二次校验)
-// 2026-10-23:解除搁置订单限制,允许打单发货(前端二次弹窗确认,保持搁置标记)
+// 2026-11:仅待发运(wait_dispatch)可扫描交运;2026-10-23:解除搁置订单限制,允许打单发货(前端二次弹窗确认,保持搁置标记)
 function canShipCard(pkg) {
-  return pkg.operateStatus === 'wait_ship';
+  return pkg.operateStatus === 'wait_dispatch';
 }
-// 已交运/已发货卡片可重打面单(2026-09-27:已发货亦开放;缓存秒出,不改状态)
+// 已交运及之后状态卡片可重打面单(2026-09-27:已揽收/已签收/已成功亦开放;缓存秒出,不改状态)
 function canReprintCard(pkg) {
-  return pkg.operateStatus === 'ship_success' || pkg.operateStatus === 'wait_receiver_confirm';
+  return pkg.operateStatus === 'dispatching' || pkg.operateStatus === 'delivering'
+    || pkg.operateStatus === 'signed' || pkg.operateStatus === 'settled';
 }
-// 未备货卡片可「备货」(同 OrderProcess 行按钮口径):Ozon 仍处于 awaiting_packaging
+// 待备货卡片可「备货」(同 OrderProcess 行按钮口径;2026-11 必须采购后才可备货):Ozon 仍处于 awaiting_packaging
 // 2026-10-23:解除搁置订单限制,允许备货(前端二次弹窗确认,保持搁置标记)
 function canShipPkg(pkg) {
-  return pkg.ozonStatus === 'awaiting_packaging' && !!pkg.id;
+  return pkg.operateStatus === 'wait_stock' && pkg.ozonStatus === 'awaiting_packaging' && !!pkg.id;
 }
-// 非 wait_ship 卡片的拦截原因(置灰卡 + 横幅文案同源)
+// 非 wait_dispatch 卡片的拦截原因(置灰卡 + 横幅文案同源)
 function blockReason(pkg) {
   if (pkg.isIgnored) return '已搁置';
   switch (pkg.operateStatus) {
-    case 'wait_process': return '待处理(未采购)';
-    case 'ship_success': return '已交运';
-    case 'wait_receiver_confirm': return '已发货(已交运)';
+    case 'wait_process': return '待采购(未采购)';
+    case 'wait_stock': return '待备货';
+    case 'wait_stick': return '待贴单';
+    case 'dispatching': return '交运中';
+    case 'delivering': return '已揽收';
+    case 'signed': return '已签收';
+    case 'settled': return '已成功';
     case 'cancelled': return '订单已取消';
     default: return pkg.operateStatus;
   }
@@ -462,7 +472,7 @@ async function onShipPackage(pkg) {
 }
 
 // ── 发货提交(核心流程)──────────────────────────────────
-// 提交重量 → 服务端权威状态校验 → canShip 时打印面单 → 出纸后 markPrinted 流转交运
+// 提交重量 → 服务端权威状态校验 → canShip(待发运)时打印面单 → 出纸后 markPrinted 流转交运中
 async function onSubmitShip(pkg) {
   if (printingPkgId.value) return;
   // 搁置订单二次确认(2026-10-23):已搁置先确认再操作(保持搁置标记)
@@ -503,13 +513,13 @@ async function onSubmitShip(pkg) {
     // 1) 服务端权威校验(覆盖搜索后状态被同步任务/他端操作改变的场景)
     const r = await scanShipSubmit(pkg.id, g);
     if (!r.canShip) {
-      // 非 wait_ship:不打印不改状态,横幅提示原因
+      // 非 wait_dispatch:不打印不改状态,横幅提示原因
       banner.type = 'err';
       banner.text = r.message || `订单状态问题:${r.operateStatus}`;
-      // 已交运/已发货:可选重打(缓存秒出,不改状态;搁置订单亦允许,2026-10-23)
-      if (r.operateStatus === 'ship_success' || r.operateStatus === 'wait_receiver_confirm') {
+      // 交运中及之后:可选重打(缓存秒出,不改状态;搁置订单亦允许,2026-10-23)
+      if (['dispatching', 'delivering', 'signed', 'settled'].includes(r.operateStatus)) {
         const ok = await confirmStore.ask({
-          message: `包裹 ${pkg.postingNumber} ${r.operateStatus === 'wait_receiver_confirm' ? '已发货' : '已交运'}。面单丢失或打花?重新打印面单(不改状态)`,
+          message: `包裹 ${pkg.postingNumber} 已交运(状态 ${r.operateStatus})。面单丢失或打花?重新打印面单(不改状态)`,
         });
         if (ok) await doPrint(pkg, { reprint: true });
       }
@@ -517,12 +527,12 @@ async function onSubmitShip(pkg) {
       return;
     }
     submitted = true; // canShip=true → 重量已落库
-    // 2) 打印面单 → 出纸后流转交运
+    // 2) 打印面单 → 出纸后流转交运中
     await doPrint(pkg, { reprint: false });
     banner.type = 'ok';
     banner.text = `✓ 已交运 ${pkg.postingNumber} · 重量 ${g}g · 面单已打印`;
     // 卡片就地流转(留作上下文,不消失)
-    pkg.operateStatus = 'ship_success';
+    pkg.operateStatus = 'dispatching';
     pkg.weightG = g;
     pkg.weightSource = 'ship';
     // 打印发货后按称重重量重算利润(预估口径,国际配送费随重量变化)
@@ -557,7 +567,7 @@ async function doPrint(pkg, { reprint }) {
     await markPrinted(pkg.id);
   } else {
     banner.type = 'ok';
-    banner.text = `面单已重新打印(已交运/已发货订单,状态不变)`;
+    banner.text = `面单已重新打印(交运中及之后状态订单,状态不变)`;
   }
 }
 
@@ -569,7 +579,7 @@ async function onRetryPrint(pkg) {
     await doPrint(pkg, { reprint: false });
     banner.type = 'ok';
     banner.text = `✓ 已交运 ${pkg.postingNumber} · 面单已打印`;
-    pkg.operateStatus = 'ship_success';
+    pkg.operateStatus = 'dispatching';
     // 回填已保存重量(卡片显示的仍是搜索时快照,不含提交的称重值)
     const savedG = retryWeights[pkg.id];
     if (savedG != null) {
@@ -590,11 +600,11 @@ async function onRetryPrint(pkg) {
   }
 }
 
-// 已交运/已发货卡片的重打入口(拼单场景发完剩余卡片)
+// 已交运及之后状态卡片的重打入口(拼单场景发完剩余卡片)
 async function onReprint(pkg) {
   if (printingPkgId.value) return;
   const ok = await confirmStore.ask({
-    message: `包裹 ${pkg.postingNumber} ${pkg.operateStatus === 'wait_receiver_confirm' ? '已发货' : '已交运'}。面单丢失或打花?重新打印面单(不改状态)`,
+    message: `包裹 ${pkg.postingNumber} 当前状态 ${OPERATE_LABELS[pkg.operateStatus]?.label || pkg.operateStatus}。面单丢失或打花?重新打印面单(不改状态)`,
   });
   if (!ok) return;
   printingPkgId.value = pkg.id;
@@ -663,8 +673,8 @@ async function loadSkuPricing(skus) {
   }
 }
 // 当前包裹的单件均重(实物称重总量 ÷ 包裹内商品总数):
-//   - 待打单:优先取重量输入框的录入值(实时预览),未录入回退已保存重量;
-//   - 已交运/已发货:以保存的发货重量为准(录入值已失效,更正重量后自动联动);
+//   - 待发运:优先取重量输入框的录入值(实时预览),未录入回退已保存重量;
+//   - 已交运及之后:以保存的发货重量为准(录入值已失效,更正重量后自动联动);
 // 无称重返回 null(单价调整回退 SKU 维护重量)
 function pkgUnitWeightG(pkg) {
   const totalQty = (pkg.items || []).reduce((s, i) => s + (Number(i.quantity) || 0), 0);
@@ -1225,14 +1235,14 @@ function onPrinterChange() {
               <button
                 class="btn btn-primary ship-btn"
                 :disabled="selectedId !== pkg.id || printingPkgId === pkg.id || printingPkgId !== 0"
-                :title="retryPkgIds.has(pkg.id) ? '重量已保存,重试打印面单并流转交运' : '打印面单并流转交运(仅待打单发货状态)'"
+                :title="retryPkgIds.has(pkg.id) ? '重量已保存,重试打印面单并流转交运中' : '打印面单并流转交运中(仅待发运状态)'"
                 @click.stop="retryPkgIds.has(pkg.id) ? onRetryPrint(pkg) : onSubmitShip(pkg)"
               >
                 {{ printingPkgId === pkg.id ? '打印中…' : retryPkgIds.has(pkg.id) ? '重试打印' : '打印并发货' }}
               </button>
             </template>
             <template v-else-if="canReprintCard(pkg)">
-              <span class="tag tag-ok">{{ pkg.operateStatus === 'wait_receiver_confirm' ? '已发货' : '已交运' }} {{ fmtTime(pkg.waybillPrintedAt || pkg.shippedAt) }}</span>
+              <span class="tag tag-ok">{{ OPERATE_LABELS[pkg.operateStatus]?.label || pkg.operateStatus }} {{ fmtTime(pkg.waybillPrintedAt || pkg.shippedAt) }}</span>
               <span class="ref-weight" :title="WEIGHT_SOURCE_LABELS[pkg.weightSource] || ''">称重 {{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span>
               <!-- 更正重量:打印发货后人工修正(内联输入,Enter 保存 / Esc 取消) -->
               <template v-if="correct.pkgId === pkg.id">
@@ -2045,7 +2055,7 @@ function onPrinterChange() {
 .weight-input.weight-invalid {
   border-color: var(--danger);
 }
-/* 更正重量输入框(已交运卡片内联,略窄) */
+/* 更正重量输入框(已交运及之后卡片内联,略窄) */
 .correct-input {
   width: 120px;
   height: 34px;

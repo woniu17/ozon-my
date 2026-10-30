@@ -334,7 +334,7 @@ export function recomputeAggregates(packageId, itemIds) {
     `UPDATE op_package SET
         total_purchase_amount = ?,
         purchase_status = CASE WHEN ? > 0 THEN 'complete' ELSE purchase_status END,
-        operate_status = CASE WHEN operate_status = 'wait_process' AND ? > 0 THEN 'wait_ship' ELSE operate_status END,
+        operate_status = CASE WHEN operate_status = 'wait_process' AND ? > 0 THEN 'wait_stock' ELSE operate_status END,
         gmt_modified = ?
      WHERE id = ?`
   ).run(Math.round(agg.total * 100) / 100, agg.n, agg.n, now, packageId);
@@ -533,7 +533,10 @@ function importOnePackage(pkgImp, report) {
     if (pkg.waybill_printed_at == null || exportedNewer) {
       db.prepare(
         `UPDATE op_package SET waybill_printed_at = ?,
-          operate_status = CASE WHEN operate_status IN ('wait_process','wait_ship') THEN 'ship_success' ELSE operate_status END,
+          operate_status = CASE
+          WHEN operate_status = 'wait_stick' THEN 'wait_dispatch'
+          WHEN operate_status = 'wait_dispatch' THEN 'dispatching'
+          ELSE operate_status END,
           gmt_modified = ?
          WHERE id = ?`
       ).run(pkgImp.waybillPrintedAt, nowIso(), pkg.id);

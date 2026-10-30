@@ -3,16 +3,16 @@
 // 设计文档: docs/采购订单-Ozon订单关联管理-功能设计.md
 //
 // 路由:
-//   GET  /admin/api/order-process/tabs            Tab 计数(待处理/待打单发货/交运/已发货/已搁置)
+//   GET  /admin/api/order-process/tabs            Tab 计数(待采购/待备货/待贴单/待发运/交运中/已揽收/已签收/已成功/已取消/已退货/已搁置)
 //   GET  /admin/api/order-process/list            包裹分页列表(tab+筛选+关键词)
 //   GET  /admin/api/order-process/detail/:id      包裹详情(产品行+采购关联+轨迹)
 //   GET  /admin/api/order-process/purchase/lookup 查询采购单已关联包裹(拼单提示)
 //   POST /admin/api/order-process/purchase        提交采购信息(模式B:金额+国内快递单号)
 //   POST /admin/api/order-process/unlink          取消采购关联(冲回金额)
 //   POST /admin/api/order-process/ignore          搁置/恢复包裹
-//   POST /admin/api/order-process/print-label     标记已打印面单(流转交运)
-//   POST /admin/api/order-process/ship            备货(Ozon /v4/posting/fbs/ship 搜集订单,不拆分)
-//   POST /admin/api/order-process/scan-ship/submit   扫描发货:提交重量(权威状态校验,仅 wait_ship 落库)
+//   POST /admin/api/order-process/print-label     标记已打印面单(贴单:待贴单→待发运;交运:待发运→交运中)
+//   POST /admin/api/order-process/ship            备货(Ozon /v4/posting/fbs/ship 搜集订单,不拆分;仅待备货可操作)
+//   POST /admin/api/order-process/scan-ship/submit   扫描发货:提交重量(权威状态校验,仅 wait_dispatch 落库)
 //   POST /admin/api/order-process/scan-ship/correct-weight  扫描发货:交运后更正重量(仅更新 weight)
 //   GET  /admin/api/order-process/scan-ship/records  扫描发货:发货记录(今日/昨日,北京时间日界)
 //   POST /admin/api/order-process/sync-run        手动触发 Ozon 订单增量同步(双接口)
@@ -453,17 +453,11 @@ router.get('/admin/api/order-process/summary', (req, res, next) => {
     const pkgIds = pkgs.map((p) => p.id);
     const rateInfo = resolveRubCnyRate();
     const rate = rateInfo?.rate;
-    // 调一次 typeSums,既给 buildAccrualBreakdown 用,也用于构造 has66/has67 集合
+    // 调一次 typeSums,给 buildAccrualBreakdown 用
     const typeSums = getAccrualTypeSumsByPackageIds(pkgIds);
     const accrualMap = buildAccrualBreakdown(pkgs, typeSums, rate);
     // 批量查包裹重量(供 computeProfit 走国际配送公式 3.37 + 0.0281 × weight_g)
     const weightMap = orderPackageDao.getWeightsByPackageIds(pkgIds);
-    const has66 = new Set();
-    const has67 = new Set();
-    for (const t of typeSums) {
-      if (t.typeId === TYPE_AGENT_FEE) has66.add(t.packageId);
-      else if (t.typeId === TYPE_DELIVERY) has67.add(t.packageId);
-    }
     for (const pkg of pkgs) {
       if (accrualMap.has(pkg.id)) pkg.accrual = accrualMap.get(pkg.id);
       if (weightMap.has(pkg.id)) {
@@ -520,9 +514,7 @@ router.get('/admin/api/order-process/summary', (req, res, next) => {
         continue;
       }
 
-      const isSettled = pkg.operateStatus === 'wait_receiver_confirm'
-        && pkg.deliveredAt != null
-        && has66.has(pkg.id) && has67.has(pkg.id);
+      const isSettled = pkg.operateStatus === 'settled'; // 2026-11:状态值已固化,无需再运行时判定
 
       if (isSettled) {
         settled.orderCount++;
@@ -755,7 +747,7 @@ router.get('/admin/api/order-process/purchase/lookup', (req, res, next) => {
 //   platformGoods?: [{ goodsName, spec, price, number, thumbUrl }] —— 平台订单商品(导入勾选携带),直接写入 items_json
 //   allocMode?: 'manual' | 'auto'  —— manual=手动填金额, auto=按quantity加权自动分摊
 // }
-// 提交即流转:包裹 wait_process → wait_ship(直接待打单发货)
+// 提交即流转:包裹 wait_process → wait_stock(待备货)
 // 保存后兜底:手填单号(无 platformGoods)且平台单号单一时,异步搜索详情自动补全 items_json
 
 // 采购单自动补全(2026-09-16):按单号跨账号搜索平台订单详情,goods 含 thumbUrl 时写入 items_json
@@ -1019,14 +1011,18 @@ router.post('/admin/api/order-process/print-label', (req, res, next) => {
 });
 
 // ── 扫描发货(2026-09,设计文档: docs/扫描发货-功能设计.md)──
-//   POST /admin/api/order-process/scan-ship/submit    提交发货重量(权威状态校验,仅 wait_ship 落库)
+//   POST /admin/api/order-process/scan-ship/submit    提交发货重量(权威状态校验,仅 wait_dispatch 落库)
 //   GET  /admin/api/order-process/scan-ship/records   发货记录(今日/昨日,北京时间日界)
 
-// 非待打单发货状态的拦截提示(前端横幅直接展示)
+// 非待发运状态的拦截提示(前端横幅直接展示;wait_dispatch 可交运不拦截)
 const SHIP_BLOCK_MESSAGES = {
-  wait_process: '订单状态问题:待处理(未采购),请先提交采购信息',
-  ship_success: '订单状态问题:已交运',
-  wait_receiver_confirm: '订单状态问题:已发货(已交运)',
+  wait_process: '订单状态问题:待采购(未采购),请先提交采购信息',
+  wait_stock: '订单状态问题:待备货,请先完成备货',
+  wait_stick: '订单状态问题:待贴单,请先打印面单',
+  dispatching: '订单状态问题:交运中',
+  delivering: '订单状态问题:已揽收',
+  signed: '订单状态问题:已签收',
+  settled: '订单状态问题:已成功',
   cancelled: '订单状态问题:订单已取消',
 };
 
@@ -1449,8 +1445,17 @@ router.post('/admin/api/order-process/sync-package', async (req, res, next) => {
 //   2. HTTP 200 不代表备货成功,须再 get 校验:状态离开 awaiting_packaging 且 substatus≠ship_failed
 //      (实测成功后状态 awaiting_packaging → awaiting_registration 待注册面单)
 //   3. 仅 Ozon awaiting_packaging 可备货;awaiting_registration/awaiting_deliver 视为已备货(幂等)
-// 前置:本地 operate_status 为 wait_process/wait_ship(备货只看 Ozon 状态,与本地采购进度无关)
+// 前置(2026-11 新流程):本地 operate_status 必须为 wait_stock(待备货,已采购)。
+//   未采购(wait_process)不可备货——必须采购后才可备货。
 // 2026-10-23:解除搁置订单备货限制(前端二次弹窗确认,保持搁置标记)
+function markStocked(packageId) {
+  db.prepare(
+    `UPDATE op_package
+        SET operate_status = CASE WHEN operate_status = 'wait_stock' THEN 'wait_stick' ELSE operate_status END,
+            gmt_modified = ?
+      WHERE id = ?`
+  ).run(new Date().toISOString(), packageId);
+}
 router.post('/admin/api/order-process/ship', async (req, res, next) => {
   try {
     const packageId = Number(req.body?.packageId);
@@ -1468,12 +1473,11 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     if (!row || !row.postingNumber || !row.storeId) {
       return res.status(404).json({ ok: false, message: `未找到 packageId=${packageId} 对应的订单` });
     }
-    // 备货只依赖 Ozon 侧状态(awaiting_packaging),与本地采购进度无关:
-    // 待处理(wait_process,未采购)与待打单(wait_ship,已采购)均可提前备货
-    if (row.operateStatus !== 'wait_ship' && row.operateStatus !== 'wait_process') {
+    // 新流程(2026-11):必须采购后才可备货——仅 wait_stock(待备货)可操作
+    if (row.operateStatus !== 'wait_stock') {
       return res.status(400).json({
         ok: false,
-        message: `订单状态 ${row.operateStatus} 不可备货(仅待处理/待打单发货可备货)`,
+        message: `订单状态 ${row.operateStatus} 不可备货(仅「待备货」状态可备货,请先提交采购信息)`,
       });
     }
     const store = (config.loadStores() || []).find((s) => s.id === row.storeId);
@@ -1488,6 +1492,7 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
     // 已备货态:幂等返回(不再调 ship)
     if (ozonStatus === 'awaiting_registration' || ozonStatus === 'awaiting_deliver') {
       orderPackageDao.syncPosting(store.id, p1); // 顺带校准本地状态
+      markStocked(packageId); // 本地推进:待备货 → 待贴单
       return res.json(ok({ alreadyShipped: true, ozonStatus, substatus: p1?.substatus || null }));
     }
     if (ozonStatus !== 'awaiting_packaging') {
@@ -1528,6 +1533,7 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       }
       if (['awaiting_registration', 'awaiting_deliver', 'delivering', 'driver_pickup', 'delivered'].includes(stNow)) {
         if (pNow) orderPackageDao.syncPosting(store.id, pNow); // 校准本地 Ozon 状态,前端刷新后按钮自然隐藏
+        markStocked(packageId); // 本地推进:待备货 → 待贴单
         logger.info(
           { packageId, postingNumber: row.postingNumber, status: stNow, substatus: pNow?.substatus || null },
           '[order-process] 备货竞态已备货(HAS_INCORRECT_STATUS),幂等返回'
@@ -1568,8 +1574,9 @@ router.post('/admin/api/order-process/ship', async (req, res, next) => {
       return res.json(ok({ pending: true, ozonStatus: newStatus, substatus: newSub || null }));
     }
 
-    // 5) 成功:同步最新 posting 落库(校准本地 Ozon 状态)
+    // 5) 成功:同步最新 posting 落库(校准本地 Ozon 状态)+ 推进本地 待备货 → 待贴单
     orderPackageDao.syncPosting(store.id, p2);
+    markStocked(packageId);
     logger.info({ packageId, postingNumber: row.postingNumber, newStatus, newSub }, '[order-process] 备货成功');
     // 6) 备货飞书通知(2026-09-22):备货动作本地直发,不再依赖 Ozon STATE_CHANGED 推送——
     //    webhook 停推期间 71 单备货通知丢失的教训;2026-10-16 去重重构后,
@@ -1865,8 +1872,27 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
 router.post('/admin/api/order-process/carriage/approve', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
-    const r = await carriageApprove(store, req.body?.carriageId, req.body?.containersCount);
-    logger.info({ storeId: store.id, carriageId: req.body?.carriageId }, '[order-process] 确认发运成功');
+    const carriageId = req.body?.carriageId;
+    const r = await carriageApprove(store, carriageId, req.body?.containersCount);
+    logger.info({ storeId: store.id, carriageId }, '[order-process] 确认发运成功');
+    // 新流程(2026-11):确认发运成功 → 发运单内货件 待发运 → 交运中
+    try {
+      const pl = await carriagePostingList(store, carriageId, { limit: 100 });
+      const postingNumbers = (pl?.postings || []).map((p) => p.posting_number).filter(Boolean);
+      if (postingNumbers.length) {
+        const now = new Date().toISOString();
+        db.prepare(
+          `UPDATE op_package
+              SET operate_status = CASE WHEN operate_status = 'wait_dispatch' THEN 'dispatching' ELSE operate_status END,
+                  gmt_modified = ?
+            WHERE ozon_order_id IN (
+              SELECT id FROM op_ozon_order WHERE posting_number IN (${postingNumbers.map(() => '?').join(',')})
+            )`
+        ).run(now, ...postingNumbers);
+      }
+    } catch (e) {
+      logger.warn({ err: e?.message, carriageId }, '[order-process] 确认发运后推进货件状态失败');
+    }
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '确认发运'); }
 });

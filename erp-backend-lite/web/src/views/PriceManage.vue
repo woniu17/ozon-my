@@ -604,8 +604,9 @@ const pwVsCls = (latest) => {
 };
 
 const OPERATE_TEXT = {
-  wait_process: '待处理', wait_ship: '待打单发货', ship_success: '交运',
-  wait_receiver_confirm: '已发货', cancelled: '已取消',
+  wait_process: '待采购', wait_stock: '待备货', wait_stick: '待贴单',
+  wait_dispatch: '待发运', dispatching: '交运中', delivering: '已揽收',
+  signed: '已签收', settled: '已成功', returned: '已退货', cancelled: '已取消',
 };
 
 /** Ozon 商品详情页链接(与订单处理页同款) */

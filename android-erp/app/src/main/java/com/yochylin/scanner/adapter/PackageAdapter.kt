@@ -238,10 +238,14 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 label = "已退货"; color = COLOR_ERR
             } else {
                 when (pkg.operateStatus) {
-                    "wait_process" -> { label = "待处理"; color = COLOR_WARN }
-                    "wait_ship" -> { label = "待打单发货"; color = COLOR_PRIMARY }
-                    "ship_success" -> { label = "交运"; color = COLOR_PRIMARY }
-                    "wait_receiver_confirm" -> { label = "已发货"; color = COLOR_OK }
+                    "wait_process" -> { label = "待采购"; color = COLOR_WARN }
+                    "wait_stock" -> { label = "待备货"; color = COLOR_PRIMARY }
+                    "wait_stick" -> { label = "待贴单"; color = COLOR_PRIMARY }
+                    "wait_dispatch" -> { label = "待发运"; color = COLOR_PRIMARY }
+                    "dispatching" -> { label = "交运中"; color = COLOR_PRIMARY }
+                    "delivering" -> { label = "已揽收"; color = COLOR_OK }
+                    "signed" -> { label = "已签收"; color = COLOR_OK }
+                    "settled" -> { label = "已成功"; color = COLOR_OK }
                     "cancelled" -> { label = "已取消"; color = COLOR_ERR }
                     else -> { label = pkg.operateStatus ?: "—"; color = COLOR_MUTE }
                 }
@@ -283,9 +287,11 @@ class PackageAdapter(private val callbacks: Callbacks) :
             actionArea.removeAllViews()
 
             // 搁置订单(2026-10-23):解除操作限制,允许备货/打单发货等,但点击时二次弹窗确认(用户确认后保持搁置)
-            val canShipPkg = pkg.ozonStatus == "awaiting_packaging" && pkg.id.isNotEmpty()
-            val canShipCard = pkg.operateStatus == "wait_ship"
-            val canReprint = pkg.operateStatus == "ship_success" || pkg.operateStatus == "wait_receiver_confirm"
+            // 2026-11:必须采购后才可备货——仅待备货可备货;待发运可交运
+            val canShipPkg = pkg.operateStatus == "wait_stock" && pkg.ozonStatus == "awaiting_packaging" && pkg.id.isNotEmpty()
+            val canShipCard = pkg.operateStatus == "wait_dispatch"
+            val canReprint = pkg.operateStatus == "dispatching" || pkg.operateStatus == "delivering"
+                || pkg.operateStatus == "signed" || pkg.operateStatus == "settled"
             val currentWeight = pkg.weightG?.let { fmtNum(it) }
 
             // 备货(Ozon 待打包确认货件;未到提交发货状态时显示)
@@ -297,7 +303,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 )
             }
 
-            // 待打单发货:录重量 + 提交发货 + 打印面单 + 面单(2026-10-16 修复:行内按钮改 WRAP_CONTENT,输入框不再被挤掉;预填已称重量)
+            // 待发运:录重量 + 提交发货 + 打印面单 + 面单(2026-10-16 修复:行内按钮改 WRAP_CONTENT,输入框不再被挤掉;预填已称重量)
             // 2026-10-22 新增"打印面单":提交发货时自动打印,此处用于重试/手动补打(走后端打印代理)
             if (canShipCard) {
                 val refs = buildString {
@@ -587,7 +593,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
             copyLogistics.visibility = if (hasLogisticsNo) View.VISIBLE else View.GONE
             copyLogistics.setOnClickListener { l.poLogisticsNo?.let { callbacks.onCopy(it, "快递单号") } }
 
-            // 采购超24h未发货 / 物流超24h未更新 高亮(2026-10-17,对齐 Web 待打单发货快速筛选)
+            // 采购超24h未发货 / 物流超24h未更新 高亮(2026-10-17,对齐 Web 待备货快速筛选)
             val unshippedAlert: TextView = row.findViewById(R.id.purchaseUnshippedAlert)
             val staleAlert: TextView = row.findViewById(R.id.logisticsStaleAlert)
 

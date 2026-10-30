@@ -35,7 +35,7 @@ export function setOrderItemStock(packageId, body) {
   return request.post('/admin/api/order-process/detail/' + encodeURIComponent(packageId) + '/stock', body);
 }
 
-// 提交采购信息(模式B:金额+国内快递单号;提交即流转待打单发货)
+// 提交采购信息(模式B:金额+国内快递单号;提交即流转待备货)
 export function submitPurchase(body) {
   return request.post('/admin/api/order-process/purchase', body);
 }
@@ -99,17 +99,17 @@ export function updateTagOrder(names) {
   return request.put('/admin/api/order-process/tags-order', { names });
 }
 
-// 标记已打印面单(流转交运)
+// 标记已打印面单(贴单:待贴单→待发运;交运:待发运→交运中)
 export function markPrinted(packageId) {
   return request.post('/admin/api/order-process/print-label', { packageId });
 }
 
 // ════════════════════════════════════════════════════════════════
 // 扫描发货(2026-09,设计文档: docs/扫描发货-功能设计.md)
-// 扫采购快递单号/采购单号/Ozon单号 → 录重量 → wait_ship 自动打面单交运
+// 扫采购快递单号/采购单号/Ozon单号 → 录重量 → wait_dispatch 打面单交运
 // ════════════════════════════════════════════════════════════════
 
-// 提交发货重量(服务端权威状态校验,仅 wait_ship 落库)
+// 提交发货重量(服务端权威状态校验,仅 wait_dispatch 落库)
 // body: { packageId, weightG }  weightG: 正整数克 1~50000
 // 返回 { canShip, operateStatus, isIgnored, waybillPrintedAt, message }
 // canShip=true → 前端继续 fetchPackageLabel + printLabelImage + markPrinted
@@ -192,7 +192,7 @@ export function syncPackage(packageId) {
 }
 
 // 备货(列表行"备货"按钮):Ozon /v4/posting/fbs/ship 搜集订单(不拆分,单包裹全部商品)
-// 前置:本地 wait_ship + Ozon awaiting_packaging;已备货态幂等返回 alreadyShipped=true
+// 前置:本地 wait_stock + Ozon awaiting_packaging;已备货态幂等返回 alreadyShipped=true
 // 返回 { alreadyShipped, ozonStatus, substatus }
 export function shipPackage(packageId) {
   return request.post('/admin/api/order-process/ship', { packageId });

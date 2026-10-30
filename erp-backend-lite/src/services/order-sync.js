@@ -662,6 +662,9 @@ async function syncAccruals(store, { mode = 'pending', sinceDays, packageIds, li
     { storeId: store.id, packages, accrualRows, mode, pending: pending.length },
     '[order-sync] 应计同步完成'
   );
+  // 2026-11:应计完整(含67)的已签收包裹推进为已成功
+  const settled = orderPackageDao.advanceSettledPackages();
+  if (settled > 0) logger.info({ storeId: store.id, settled }, '[order-sync] 应计同步推进已成功');
   return { packages, accrualRows };
 }
 

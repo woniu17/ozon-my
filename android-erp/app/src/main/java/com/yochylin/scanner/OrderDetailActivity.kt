@@ -474,7 +474,7 @@ class OrderDetailActivity : ComponentActivity() {
             else -> dSplitBadge.visibility = View.GONE
         }
 
-        val countdownStatuses = listOf("wait_process", "wait_ship", "ship_success")
+        val countdownStatuses = listOf("wait_process", "wait_stock", "wait_stick", "wait_dispatch", "dispatching")
         if (p.operateStatus in countdownStatuses && !p.shipmentDate.isNullOrBlank()) {
             val cd = countdownText(p.shipmentDate)
             // 2026-10-15:剩发 <24小时 或 已超时时红色醒目(urgent),否则橙色
@@ -1306,7 +1306,8 @@ class OrderDetailActivity : ComponentActivity() {
         dActionBar.addView(actionButton("同步订单") { onSync() })
 
         // 搁置订单(2026-10-23):解除备货限制,点击时二次弹窗确认(用户确认后保持搁置)
-        val canShip = (p.operateStatus == "wait_process" || p.operateStatus == "wait_ship") &&
+        // 2026-11:必须采购后才可备货——仅待备货可点备货
+        val canShip = p.operateStatus == "wait_stock" &&
             p.ozonStatus == "awaiting_packaging"
         if (canShip) {
             dActionBar.addView(actionButton("备货") { onShip(p) })
@@ -1610,10 +1611,12 @@ class OrderDetailActivity : ComponentActivity() {
     private fun opTagInfo(p: Pkg): Pair<String, String> {
         if (p.isReturned) return "已退货" to COLOR_ERR
         return when (p.operateStatus) {
-            "wait_process" -> "待处理" to COLOR_WARN
-            "wait_ship" -> "待打单发货" to COLOR_PRIMARY
-            "ship_success" -> "交运" to COLOR_PRIMARY
-            "wait_receiver_confirm" -> "已发货" to COLOR_OK
+            "wait_process" -> "待采购" to COLOR_WARN
+            "wait_stock" -> "待备货" to COLOR_PRIMARY
+            "wait_stick" -> "待贴单" to COLOR_PRIMARY
+            "wait_dispatch" -> "待发运" to COLOR_PRIMARY
+            "dispatching" -> "交运中" to COLOR_PRIMARY
+            "delivering" -> "已揽收" to COLOR_OK
             "signed" -> "已签收" to COLOR_OK
             "settled" -> "已成功" to COLOR_OK
             "returned" -> "已退货" to COLOR_ERR

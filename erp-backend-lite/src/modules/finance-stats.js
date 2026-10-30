@@ -90,9 +90,7 @@ function parseTimeParams(query) {
 // 已成功判定(与订单处理 tabCounts「settled」同口径:妥投 + 应计含 67,不含退货)
 // 2026-10-05:代理费66非每单必收(妥投单 142/855 无 66),配送费67实测必有(0 笔有 66 无 67),
 //   改为只要求 67;此前"同时含 66+67"把无代理费订单误判为已采购未结算
-const SUCCESS_COND = `p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL
-  AND p.is_returned = 0
-  AND EXISTS (SELECT 1 FROM op_accrual a67 WHERE a67.package_id = p.id AND a67.type_id = 67)`;
+const SUCCESS_COND = `p.operate_status = 'settled' AND p.is_returned = 0`;
 
 // 统计范围排除条件(汇总/订单明细/月份列表统一引用):
 //   秒取消订单(已取消且采购/收款/应计全为0,无财务影响,原默认隐藏→现彻底移出统计范围)

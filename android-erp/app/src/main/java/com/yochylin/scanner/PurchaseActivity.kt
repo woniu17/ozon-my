@@ -1055,7 +1055,8 @@ class PurchaseActivity : ComponentActivity() {
 
     private fun canShipAfterSave(): Boolean {
         val p = pkg ?: return false
-        return (p.operateStatus == "wait_process" || p.operateStatus == "wait_ship") &&
+        // 2026-11:必须采购后才可备货——保存后 wait_process → wait_stock 再备货
+        return (p.operateStatus == "wait_process" || p.operateStatus == "wait_stock") &&
             p.ozonStatus == "awaiting_packaging"
     }
 

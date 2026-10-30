@@ -2,8 +2,8 @@
 // 订单处理(2026-08,个人自发货模式)
 // 数据来源:order-sync.js 定时同步的 Ozon FBS 订单(op_* 表),本页管理采购录入与关联
 // 设计文档: docs/采购订单-Ozon订单关联管理-功能设计.md
-// 核心流程:买家Ozon下单 → 我采购(提交采购信息→直接流转待打单发货) → 上家发货给我
-//          → 轨迹签收=到货(标记提示) → 我自行打包打面单 → 交运 → 妥投回款
+// 核心流程:买家Ozon下单 → 我采购(提交采购信息→直接流转待备货) → 上家发货给我
+//          → 轨迹签收=到货(标记提示) → 备货 → 贴单(打面单) → 发运/交运 → 揽收 → 妥投回款
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import { parseUtcDate } from '../utils/time.js';
 import { useRoute } from 'vue-router';
@@ -38,14 +38,16 @@ const { show } = useToast();
 const confirmStore = useConfirmStore();
 
 // ── Tab 页签(operate_status 分流)─────────────────────────
-// 全部:跨所有状态(含搁置);已发货=已交运未妥投;已成功=已妥投且应计完整
-// 已退货:妥投后买家退货退款(is_returned,来自 /v2/returns/rfbs/list)
+// 全部:跨所有状态(含搁置);已成功=已妥投且应计完整;已退货=妥投后买家退货退款(is_returned)
+// 2026-11 新流程:待采购 → 待备货 → 待贴单 → 待发运 → 交运中 → 已揽收 → 已签收 → 已成功
 const TABS = [
   { key: 'all', label: '全部' },
-  { key: 'waitProcess', label: '待处理' },
-  { key: 'waitShip', label: '待打单发货' },
-  { key: 'shipSuccess', label: '交运' },
-  { key: 'waitReceiverConfirm', label: '已发货' },
+  { key: 'waitProcess', label: '待采购' },
+  { key: 'waitStock', label: '待备货' },
+  { key: 'waitStick', label: '待贴单' },
+  { key: 'waitDispatch', label: '待发运' },
+  { key: 'dispatching', label: '交运中' },
+  { key: 'delivering', label: '已揽收' },
   { key: 'signed', label: '已签收' },
   { key: 'settled', label: '已成功' },
   { key: 'returned', label: '已退货' },
@@ -63,8 +65,8 @@ const filters = reactive({
   tag: '',            // 标签筛选:标签名精确匹配(2026-09-15)
   arrived: '',        // '' | '0' | '1'
   cancelInitiator: '',  // '' | 'client' | 'ozon' | 'seller'(仅已取消 tab 用)
-  purchaseUnshippedHours: 0, // 0=关;24=采购下单超24h未发货(待打单发货快速筛选,2026-10-17)
-  logisticsStaleHours: 0,    // 0=关;24=物流超24h未揽收(待打单发货快速筛选,2026-10-17)
+  purchaseUnshippedHours: 0, // 0=关;24=采购下单超24h未发货(待备货快速筛选,2026-10-17)
+  logisticsStaleHours: 0,    // 0=关;24=物流超24h未揽收(待备货快速筛选,2026-10-17)
 });
 // ── 排序选项(2026-09-20)────────────────────────────────────
 // key 对应后端 sortBy 白名单;delivering=揽收时间(国际物流商揽收)
@@ -81,16 +83,18 @@ const SORT_OPTIONS = {
   shipped_desc: { key: 'shipped', label: '交运时间 新→旧' },
   shipped_asc: { key: 'shipped', label: '交运时间 旧→新' },
 };
-// 各 tab 可用排序键(2026-09-20 v3):
-// 揽收排序适用所有状态(除待处理/待打单/交运——货件尚未被物流商揽收)
+// 各 tab 可用排序键(2026-09-20 v3;2026-11 新状态名):
+// 揽收排序适用所有状态(除待采购/待备货/待贴单/待发运/交运中——货件尚未被物流商揽收)
 // 退货排序:已签收/已成功/已取消/已退货;签收排序:已签收/已成功(delivered_at 100% 覆盖)
-// 交运排序:交运 tab 用(2026-10-29,按本地 waybill_printed_at)
+// 交运排序:交运中 tab 用(2026-10-29,按本地 waybill_printed_at)
 const TAB_SORT_KEYS = {
   all: ['order', 'delivering'],
   waitProcess: ['order'],
-  waitShip: ['order'],
-  shipSuccess: ['order', 'shipped'],
-  waitReceiverConfirm: ['order', 'delivering'],
+  waitStock: ['order'],
+  waitStick: ['order'],
+  waitDispatch: ['order'],
+  dispatching: ['order', 'shipped'],
+  delivering: ['order', 'delivering'],
   signed: ['order', 'delivering', 'return', 'delivered'],
   settled: ['order', 'delivering', 'return', 'delivered'],
   returned: ['order', 'delivering', 'return'],
@@ -429,7 +433,7 @@ function search() {
   loadList();
 }
 
-// 快速筛选切换(2026-10-17,待打单发货 tab):点一下启用 24h,再点关闭;两键可同时启用(后端 OR 并集,2026-10-17 用户要求)
+// 快速筛选切换(2026-10-17,待备货 tab):点一下启用 24h,再点关闭;两键可同时启用(后端 OR 并集,2026-10-17 用户要求)
 function toggleQuickFilter(key) {
   filters[key] = filters[key] ? 0 : 24;
   search();
@@ -541,7 +545,7 @@ async function onSyncMsToLocal() {
   const isPartial = selectedRows.length > 0;
   const scopeLabel = isPartial ? `勾选的 ${selectedRows.length} 条` : '当前筛选全部(以 logistics_no 关联妙手)';
   if (!await confirmStore.ask({
-    message: `将把妙手订单的重量/备注/旗帜备注/采购金额/采购订单详情同步到本地,范围:${scopeLabel}。妙手侧已有采购信息的订单,会先清空本地已录入的采购信息(采购单关联/金额/国内物流单号),再以妙手数据为准重新写入;妙手侧无采购信息的订单保留本地已有。妙手备注将覆盖本地备注;妙手旗帜备注将作为本地标签写入(已有同名标签不重复);有采购单关联的待处理订单将自动推进到待打单发货。确认继续?`,
+    message: `将把妙手订单的重量/备注/旗帜备注/采购金额/采购订单详情同步到本地,范围:${scopeLabel}。妙手侧已有采购信息的订单,会先清空本地已录入的采购信息(采购单关联/金额/国内物流单号),再以妙手数据为准重新写入;妙手侧无采购信息的订单保留本地已有。妙手备注将覆盖本地备注;妙手旗帜备注将作为本地标签写入(已有同名标签不重复);有采购单关联的待处理订单将自动推进到待备货。确认继续?`,
     confirmText: '开始同步',
     danger: true,
   })) return;
@@ -966,10 +970,11 @@ function tabKeyForPlatform(platformVal) {
 
 // 采购弹窗打开时的原始行(「保存并备货」用:备货需要行级 operateStatus/ozonStatus/items/货件号)
 const purchaseRowCtx = ref(null);
-// 保存后可备货:未交运未取消且 Ozon 侧待打包(与列表行备货按钮同口径)
+// 保存后可备货:待采购(保存后流转待备货)或已待备货,且 Ozon 侧待打包
+// 2026-11:必须采购后才可备货——保存动作先把 wait_process → wait_stock 再备货
 const canShipAfterSave = computed(() => {
   const p = purchaseRowCtx.value;
-  return !!p && (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_ship') && p.ozonStatus === 'awaiting_packaging';
+  return !!p && (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_stock') && p.ozonStatus === 'awaiting_packaging';
 });
 
 // ── 批量录采购(2026-09-28 v2):勾选多个包裹 → 选好采购订单 → 一次性关联全部目标包裹 ──
@@ -1443,7 +1448,7 @@ async function savePurchase(withShip = false) {
           allocMode: 'auto',
         });
       }
-      show(`已提交 ${orders.length} 笔采购,包裹已流转到待打单发货`, 'success');
+      show(`已提交 ${orders.length} 笔采购,包裹已流转到待备货`, 'success');
     } else {
       await submitPurchase({
         packageId: purchaseForm.packageId,
@@ -1460,7 +1465,7 @@ async function savePurchase(withShip = false) {
         platformGoods: purchaseForm.platformGoods,
         allocMode: 'auto',
       });
-      show('采购信息已提交,包裹已流转到待打单发货', 'success');
+      show('采购信息已提交,包裹已流转到待备货', 'success');
     }
     await afterPurchaseSaved(withShip);
   } catch (err) {
@@ -2405,7 +2410,9 @@ async function loadTagOptions() {
 async function onPrinted(pkg) {
   try {
     await markPrinted(pkg.id);
-    show('已标记打印面单,流转交运', 'success');
+    // 2026-11:贴单(待贴单→待发运)与交运(待发运→交运中)分离
+    const nextLabel = pkg.operateStatus === 'wait_stick' ? '已贴单,流转待发运' : '已标记交运,流转交运中';
+    show(nextLabel, 'success');
     loadTabs();
     loadList();
   } catch (err) {
@@ -2415,7 +2422,7 @@ async function onPrinted(pkg) {
 
 // ── 打印 Ozon 面单(菜鸟打印组件 CNPL 模板静默打印,iframe 兜底)──
 // 主路径:拉 PDF(后端缓存优先)→ pdfjs 转 PNG → CNPL 图片模板(70×130 纸,宽 70 等比缩放)
-//         → 组件静默出纸 → wait_ship 自动流转交运;ship_success 补打状态不变
+//         → 组件静默出纸 → wait_stick 贴单流转待发运;wait_dispatch 交运流转交运中;dispatching 补打状态不变
 // 兜底:组件未启动/连接失败 → 隐藏 iframe + contentWindow.print() 浏览器打印框 + 人工确认流转
 const printingId = ref(0); // 正在打印的包裹 id(按钮 loading)
 let printFrame = null;     // 兜底打印用隐藏 iframe(复用,避免每次重建)
@@ -2553,35 +2560,38 @@ function printBlobViaIframe(blob) {
 async function printLabelViaBrowser(pkg) {
   const blob = await fetchPackageLabel([pkg.id]);
   await printBlobViaIframe(blob);
-  if (pkg.operateStatus === 'ship_success') {
-    show('面单已重新打印(交运订单,状态不变)', 'success');
+  if (pkg.operateStatus === 'dispatching') {
+    show('面单已重新打印(交运中订单,状态不变)', 'success');
     return;
   }
+  // 2026-11:待贴单打印=贴单;待发运打印=交运
+  const actionLabel = pkg.operateStatus === 'wait_stick' ? '完成贴单,流转待发运' : '交运,流转交运中';
   if (await confirmStore.ask({
-    message: `包裹 ${pkg.packageNo} 的面单打印框已关闭,确认流转交运?(未实际打印可取消,稍后重打)`,
+    message: `包裹 ${pkg.packageNo} 的面单打印框已关闭,确认${actionLabel}?(未实际打印可取消,稍后重打)`,
   })) {
     await markPrinted(pkg.id);
-    show('面单已打印,流转交运', 'success');
+    show('面单已打印,' + (pkg.operateStatus === 'wait_stick' ? '已贴单流转待发运' : '流转交运中'), 'success');
     loadTabs();
     loadList();
   }
 }
 
-// 主路径:组件静默打印;wait_ship 出纸后自动流转交运,ship_success 补打状态不变
+// 主路径:组件静默打印;wait_stick 出纸后贴单流转待发运,wait_dispatch 出纸后交运流转交运中,dispatching 补打状态不变
 async function onPrintLabel(pkg) {
   if (printingId.value) return;
   printingId.value = pkg.id;
-  const isReprint = pkg.operateStatus === 'ship_success';
+  const isReprint = pkg.operateStatus === 'dispatching';
   try {
     const blob = await fetchPackageLabel([pkg.id]);
     const printer = await pickLabelPrinter();
     await printLabelImage(blob, pkg.logisticsNo || String(pkg.id), printer, 76, { pageHm: 129, templateName: 'label-image-76x130.xml', storeName: pkg.storeName || '' });
     if (isReprint) {
-      show('面单已重新打印(交运订单,状态不变)', 'success');
+      show('面单已重新打印(交运中订单,状态不变)', 'success');
       return;
     }
     await markPrinted(pkg.id);
-    show('面单已静默打印,流转交运', 'success');
+    const nextLabel = pkg.operateStatus === 'wait_stick' ? '面单已静默打印,已贴单流转待发运' : '面单已静默打印,流转交运中';
+    show(nextLabel, 'success');
     loadTabs();
     loadList();
   } catch (err) {
@@ -3113,12 +3123,17 @@ function poStatusTagClass(s) {
   return PO_STATUS_TAG_CLASS[s] || 'tag-mute';
 }
 
-// 包裹操作状态标签(全局搜索结果行显示所属状态)
+// 包裹操作状态标签(全局搜索结果行显示所属状态;2026-11 新状态名)
 const OPERATE_LABELS = {
-  wait_process: { label: '待处理', cls: 'tag-warn' },
-  wait_ship: { label: '待打单发货', cls: 'tag-info' },
-  ship_success: { label: '交运', cls: 'tag-info' },
-  wait_receiver_confirm: { label: '已发货', cls: 'tag-ok' },
+  wait_process: { label: '待采购', cls: 'tag-warn' },
+  wait_stock: { label: '待备货', cls: 'tag-info' },
+  wait_stick: { label: '待贴单', cls: 'tag-info' },
+  wait_dispatch: { label: '待发运', cls: 'tag-info' },
+  dispatching: { label: '交运中', cls: 'tag-info' },
+  delivering: { label: '已揽收', cls: 'tag-ok' },
+  signed: { label: '已签收', cls: 'tag-ok' },
+  settled: { label: '已成功', cls: 'tag-ok' },
+  returned: { label: '已退货', cls: 'tag-warn' },
   cancelled: { label: '已取消', cls: 'tag-err' },
 };
 function operateTag(pkg) {
@@ -3583,8 +3598,8 @@ onUnmounted(() => {
           <option value="0">等收货</option>
           <option value="1">已到货</option>
         </select>
-        <!-- 快速筛选(待打单发货,2026-10-17):采购下单超24h未发货 / 物流超24h未揽收,可同时启用(取并集);按钮显示各自命中数(2026-10-17) -->
-        <template v-if="activeTab === 'waitShip'">
+        <!-- 快速筛选(待备货,2026-10-17):采购下单超24h未发货 / 物流超24h未揽收,可同时启用(取并集);按钮显示各自命中数(2026-10-17) -->
+        <template v-if="activeTab === 'waitStock'">
           <button
             class="quick-chip"
             :class="{ on: filters.purchaseUnshippedHours === 24 }"
@@ -3598,7 +3613,7 @@ onUnmounted(() => {
             @click="toggleQuickFilter('logisticsStaleHours')"
           >物流超24h未揽收<template v-if="quickCounts.logisticsStale">({{ quickCounts.logisticsStale }})</template></button>
         </template>
-        <!-- 排序(2026-09-20):按 tab 动态显示可用排序键;揽收排序适用所有状态(除待处理/待打单/交运);各 tab 独立记忆 -->
+        <!-- 排序(2026-09-20):按 tab 动态显示可用排序键;揽收排序适用所有状态(除待采购/待备货/待贴单/待发运/交运中);各 tab 独立记忆 -->
         <select v-model="currentSort" class="filter-input" title="排序:揽收时间=国际物流商揽收时间(发货前取消的单无此时间,排最后)" @change="search">
           <option v-for="o in sortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
@@ -3916,7 +3931,7 @@ onUnmounted(() => {
                   @click="openPurchase(pkg)"
                 >采购</button>
                 <button
-                  v-if="(pkg.operateStatus === 'wait_process' || pkg.operateStatus === 'wait_ship') && pkg.ozonStatus === 'awaiting_packaging'"
+                  v-if="pkg.operateStatus === 'wait_stock' && pkg.ozonStatus === 'awaiting_packaging'"
                   class="btn btn-ghost btn-sm"
                   :disabled="shippingPkgId === pkg.id"
                   :title="shippingPkgId === pkg.id ? '备货中…' : '向 Ozon 确认全部商品为一个货件(不拆分),备货后方可打印面单'"
@@ -3961,27 +3976,27 @@ onUnmounted(() => {
                 >{{ logisticsPkgId === pkg.id ? '物流同步中…' : '同步采购物流' }}</button>
                 <button class="row-more-item" title="订单详情(产品行+采购关联+轨迹)" @click="closeRowMore(); openDetail(pkg)">详情</button>
                 <button
-                  v-if="pkg.operateStatus === 'wait_ship' || pkg.operateStatus === 'ship_success'"
+                  v-if="pkg.operateStatus === 'wait_stick' || pkg.operateStatus === 'wait_dispatch' || pkg.operateStatus === 'dispatching'"
                   class="row-more-item"
                   :disabled="printingId === pkg.id"
-                  :title="printingId === pkg.id ? '面单打印中…' : pkg.operateStatus === 'ship_success' ? '重新打印该包裹的 Ozon 面单(缓存秒出)' : '拉取 Ozon 面单并静默打印(菜鸟打印组件),出纸后自动流转交运'"
+                  :title="printingId === pkg.id ? '面单打印中…' : pkg.operateStatus === 'dispatching' ? '重新打印该包裹的 Ozon 面单(缓存秒出)' : pkg.operateStatus === 'wait_stick' ? '拉取 Ozon 面单并静默打印(菜鸟打印组件),出纸后完成贴单(流转待发运)' : '拉取 Ozon 面单并静默打印(菜鸟打印组件),出纸后交运(流转交运中)'"
                   @click="closeRowMore(); onPrintLabel(pkg)"
                 >{{ printingId === pkg.id ? '打印中…' : '打印面单' }}</button>
                 <button
-                  v-if="pkg.operateStatus === 'wait_ship' || pkg.operateStatus === 'ship_success'"
+                  v-if="pkg.operateStatus === 'wait_stick' || pkg.operateStatus === 'wait_dispatch' || pkg.operateStatus === 'dispatching'"
                   class="row-more-item"
                   :disabled="labelPreview.loading === pkg.id"
                   title="无纸预览:组件按 CNPL 模板渲染面单效果,不出纸、不流转状态"
                   @click="closeRowMore(); onPreviewLabel(pkg)"
                 >{{ labelPreview.loading === pkg.id ? '渲染中…' : '预览面单' }}</button>
                 <button
-                  v-if="pkg.operateStatus === 'wait_ship'"
+                  v-if="pkg.operateStatus === 'wait_stick' || pkg.operateStatus === 'wait_dispatch'"
                   class="row-more-item"
-                  title="不拉取面单,仅标记已打印并流转交运(补录场景)"
+                  :title="pkg.operateStatus === 'wait_stick' ? '不拉取面单,仅标记已贴单(流转待发运,补录场景)' : '不拉取面单,仅标记已打印并交运(流转交运中,补录场景)'"
                   @click="closeRowMore(); onPrinted(pkg)"
-                >仅标记交运</button>
+                >{{ pkg.operateStatus === 'wait_stick' ? '仅标记贴单' : '仅标记交运' }}</button>
                 <button
-                  v-if="pkg.operateStatus === 'wait_ship'"
+                  v-if="pkg.operateStatus === 'wait_stock'"
                   class="row-more-item row-more-item-danger"
                   title="取消全部采购关联,退回未采购"
                   @click="closeRowMore(); onRevert(pkg)"
@@ -4482,8 +4497,8 @@ onUnmounted(() => {
         <!-- 底部通栏:提示 + 操作 -->
         <div class="purchase-form-footer">
         <div class="form-tip">
-          <template v-if="batchLinkMode">已选采购订单将逐单关联到全部目标包裹;每个包裹流转到「待打单发货」,分摊金额由后端按各包裹商品数量加权重算;已关联过的组合按当前金额更新并重新加权,不会重复建关联、不会双算金额。</template>
-          <template v-else>提交后包裹将直接流转到「待打单发货」;国内快递单号可留空后续补录。清空所有采购后点「保存」即清空该包裹采购信息(状态不变)。个人自发货模式:无货代,收货人为你本人。</template>
+          <template v-if="batchLinkMode">已选采购订单将逐单关联到全部目标包裹;每个包裹流转到「待备货」,分摊金额由后端按各包裹商品数量加权重算;已关联过的组合按当前金额更新并重新加权,不会重复建关联、不会双算金额。</template>
+          <template v-else>提交后包裹将直接流转到「待备货」;国内快递单号可留空后续补录。清空所有采购后点「保存」即清空该包裹采购信息(状态不变)。个人自发货模式:无货代,收货人为你本人。</template>
         </div>
         <div class="form-actions">
           <button class="btn btn-ghost" @click="purchaseOpen = false">取 消</button>
@@ -5605,7 +5620,7 @@ a.product-title:hover {
   opacity: 0.6;
   cursor: default;
 }
-/* 快速筛选按钮(2026-10-17,待打单发货 tab) */
+/* 快速筛选按钮(2026-10-17,待备货 tab) */
 .quick-chip {
   flex: none;
   padding: 0 10px;

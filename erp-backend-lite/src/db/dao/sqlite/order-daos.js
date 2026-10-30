@@ -3,18 +3,23 @@
 // 关键语义:
 //   - operate_status 只前进不回退(采购提交/打单/Ozon状态联动均为事件驱动推进)
 //   - purchase_amount 回写在 ozon_order_item 上(取消关联时冲回)
-//   - 提交采购信息 → 包裹直接流转 wait_ship(到货进度以 arrived_at 标记展示,不阻塞)
+//   - 提交采购信息 → 包裹直接流转 wait_stock(待备货;到货进度以 arrived_at 标记展示,不阻塞)
 import { randomUUID } from 'node:crypto';
 import { db } from '../../index.js';
 import { recomputeAggregates } from './purchase-sync-dao.js';
 import { imageCacheUrlFor, ensureImageCached, stripImageSizeSuffix } from '../../../services/order-image-cache.js';
 
-// operate_status 前进序( cancelled 独立,任意状态可进 )
+// operate_status 前进序( cancelled / returned 独立,任意状态可进 )
+// 新流程(2026-11):待采购 → 待备货 → 待贴单 → 待发运 → 交运中 → 已揽收 → 已签收 → 已成功
 const OPERATE_RANK = {
   wait_process: 0,
-  wait_ship: 1,
-  ship_success: 2,
-  wait_receiver_confirm: 3,
+  wait_stock: 1,
+  wait_stick: 2,
+  wait_dispatch: 3,
+  dispatching: 4,
+  delivering: 5,
+  signed: 6,
+  settled: 7,
 };
 
 function nowIso() {
@@ -224,10 +229,10 @@ function applyOzonStatus(packageId, ozonStatus, { deliveringDate, shipmentDate }
     }
   } else if (
     ozonStatus === 'delivering' ||
-    ozonStatus === 'driver_pickup' ||
-    ozonStatus === 'delivered'
+    ozonStatus === 'driver_pickup'
   ) {
-    advanceTo('wait_receiver_confirm');
+    // 已揽收(Ozon 在途):推进到 delivering
+    advanceTo('delivering');
     if (!pkg.is_shipped) {
       sets.push('is_shipped = 1');
     }
@@ -235,7 +240,17 @@ function applyOzonStatus(packageId, ozonStatus, { deliveringDate, shipmentDate }
       sets.push('shipped_at = ?');
       vals.push(deliveringDate || now);
     }
-    if (ozonStatus === 'delivered' && !pkg.delivered_at) {
+  } else if (ozonStatus === 'delivered') {
+    // 已签收:推进到 signed + 写 delivered_at
+    advanceTo('signed');
+    if (!pkg.is_shipped) {
+      sets.push('is_shipped = 1');
+    }
+    if (!pkg.shipped_at) {
+      sets.push('shipped_at = ?');
+      vals.push(deliveringDate || now);
+    }
+    if (!pkg.delivered_at) {
       // 签收时间近似(2026-09-23):Ozon API 无签收时间戳,取三者最小值——
       //   ① 同步时刻 now(正常单 fast 轮 2 分钟内即观察到 delivered,最准)
       //   ② 承诺送达窗口终点 analytics_data.delivery_date_end(实测 100% 有值:
@@ -256,11 +271,11 @@ function applyOzonStatus(packageId, ozonStatus, { deliveringDate, shipmentDate }
       vals.push(cands.reduce((min, x) => (x < min ? x : min)));
     }
   }
-  // ★ 方案A(2026-08-29):Ozon状态联动不再推进 wait_ship ——
-  //   await_ship 流转的唯一入口是「提交采购信息」(submitPurchase),
-  //   待处理=未采购、待打单发货=已采购待打单 的语义由采购动作驱动,Ozon状态仅供展示。
-  //   同步仅推进: delivering/delivered → wait_receiver_confirm(已发货),cancelled → cancelled。
-  // awaiting_packaging / awaiting_approve / awaiting_registration / awaiting_deliver / arbitration → 维持当前操作状态
+  // ★ 新流程(2026-11):Ozon 状态联动不再推进采购前状态 ——
+  //   待采购/待备货/待贴单/待发运/交运中 的流转由本地动作驱动(提交采购/备货/打印面单/确认发运),
+  //   Ozon 状态仅供展示与幂等校准;同步仅推进物流阶段:
+  //     delivering/driver_pickup → delivering(已揽收), delivered → signed(已签收), cancelled → cancelled。
+  //   awaiting_packaging / awaiting_approve / awaiting_registration / awaiting_deliver / arbitration → 维持当前操作状态
 
   if (shipmentDate) {
     sets.push('last_delivery_at = ?');
@@ -679,7 +694,8 @@ function upsertRfbsReturns(storeId, returns) {
     }
     const mark = db.prepare(`
       UPDATE op_package SET is_returned = 1, return_state = ?, return_state_name = ?,
-        return_at = ?, gmt_modified = ?
+        return_at = ?, gmt_modified = ?,
+        operate_status = CASE WHEN operate_status IN ('signed','settled','delivering') THEN 'returned' ELSE operate_status END
       WHERE store_id = ? AND logistics_no = ?
     `);
     let marked = 0;
@@ -689,13 +705,20 @@ function upsertRfbsReturns(storeId, returns) {
         agg.earliestAt || null, now, storeId, posting
       ).changes;
     }
-    // 重置:本店铺已标记但当前无生效退货的包裹(退货被驳回/撤销)
+    // 重置:本店铺已标记但当前无生效退货的包裹(退货被驳回/撤销)→ 按 delivered_at/应计回退状态
     const activePostings = [...byPosting.keys()];
     const notIn = activePostings.length
       ? `AND logistics_no NOT IN (${activePostings.map(() => '?').join(',')})` : '';
     const reset = db.prepare(`
       UPDATE op_package SET is_returned = 0, return_state = NULL, return_state_name = NULL,
-        return_at = NULL, gmt_modified = ?
+        return_at = NULL,
+        operate_status = CASE
+          WHEN operate_status = 'returned' AND delivered_at IS NOT NULL
+               AND id IN (SELECT package_id FROM op_accrual WHERE type_id = 67) THEN 'settled'
+          WHEN operate_status = 'returned' AND delivered_at IS NOT NULL THEN 'signed'
+          WHEN operate_status = 'returned' THEN 'delivering'
+          ELSE operate_status END,
+        gmt_modified = ?
       WHERE is_returned = 1 AND store_id = ? ${notIn}
     `);
     const resetR = reset.run(now, storeId, ...activePostings);
@@ -706,26 +729,14 @@ function upsertRfbsReturns(storeId, returns) {
 // ── 列表查询 ─────────────────────────────────────────────────
 
 /** Tab 计数(页面页签)
- *  拆分(2026-09):wait_receiver_confirm 按 delivered_at 是否为空再拆为
- *    - waitReceiverConfirm: 已交运未妥投(delivered_at IS NULL)
- *    - signed: 已妥投但应计不完整(缺代理佣金66或国际配送67)
- *    - settled: 已妥投且应计完整(同时有66和67)
- *  拆分(2026-09-13):妥投后退货(is_returned=1)独立成 returned 桶,不再计入 signed/settled
+ *  新流程(2026-11):状态机扩展为 待采购/待备货/待贴单/待发运/交运中/已揽收/已签收/已成功/已取消/已退货,
+ *    delivered_at/is_returned/应计 的拆分已固化到 operate_status 独立状态值,无需运行时 CASE。
  *  新增 all:全部订单(含 ignored 搁置)
  */
 function tabCounts() {
   const rows = db
     .prepare(
-      `SELECT
-        CASE
-          WHEN operate_status = 'wait_receiver_confirm' AND is_returned = 1 THEN 'returned'
-          WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NOT NULL
-               AND id IN (SELECT package_id FROM op_accrual WHERE type_id = 67) THEN 'settled'
-          WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NOT NULL THEN 'signed'
-          WHEN operate_status = 'wait_receiver_confirm' AND delivered_at IS NULL THEN 'wait_receiver_confirm'
-          ELSE operate_status
-        END AS bucket,
-        COUNT(*) AS n
+      `SELECT operate_status AS bucket, COUNT(*) AS n
        FROM op_package WHERE is_ignored = 0
        GROUP BY bucket`
     )
@@ -734,15 +745,17 @@ function tabCounts() {
   const ignored = db
     .prepare(`SELECT COUNT(*) AS n FROM op_package WHERE is_ignored = 1`)
     .get().n;
-  const active = (map.wait_process || 0) + (map.wait_ship || 0) + (map.ship_success || 0)
-    + (map.wait_receiver_confirm || 0) + (map.signed || 0) + (map.settled || 0)
-    + (map.returned || 0) + (map.cancelled || 0);
+  const active = (map.wait_process || 0) + (map.wait_stock || 0) + (map.wait_stick || 0)
+    + (map.wait_dispatch || 0) + (map.dispatching || 0) + (map.delivering || 0)
+    + (map.signed || 0) + (map.settled || 0) + (map.returned || 0) + (map.cancelled || 0);
   return {
     all: active + ignored,
     waitProcess: map.wait_process || 0,
-    waitShip: map.wait_ship || 0,
-    shipSuccess: map.ship_success || 0,
-    waitReceiverConfirm: map.wait_receiver_confirm || 0,
+    waitStock: map.wait_stock || 0,
+    waitStick: map.wait_stick || 0,
+    waitDispatch: map.wait_dispatch || 0,
+    dispatching: map.dispatching || 0,
+    delivering: map.delivering || 0,
     signed: map.signed || 0,
     settled: map.settled || 0,
     returned: map.returned || 0,
@@ -753,12 +766,14 @@ function tabCounts() {
 
 const TAB_STATUS = {
   waitProcess: ['wait_process'],
-  waitShip: ['wait_ship'],
-  shipSuccess: ['ship_success'],
-  waitReceiverConfirm: ['wait_receiver_confirm'], // 列表查询时再叠加 delivered_at IS NULL + 未退货
-  signed: ['wait_receiver_confirm'],              // 列表查询时再叠加 delivered_at IS NOT NULL + 应计缺 66/67 + 未退货
-  settled: ['wait_receiver_confirm'],             // 列表查询时再叠加 delivered_at IS NOT NULL + 应计有 66 AND 67 + 未退货
-  returned: null,                                 // is_returned = 1(列表查询分支单独处理)
+  waitStock: ['wait_stock'],
+  waitStick: ['wait_stick'],
+  waitDispatch: ['wait_dispatch'],
+  dispatching: ['dispatching'],
+  delivering: ['delivering'],
+  signed: ['signed'],
+  settled: ['settled'],
+  returned: ['returned'],
   cancelled: ['cancelled'],
   ignored: null, // is_ignored = 1
   all: null,     // 全部(含 ignored)
@@ -809,24 +824,21 @@ function buildPackageWhere(filters = {}) {
       // 全部:不加 is_ignored/operate_status 过滤,涵盖搁置与所有状态
       where.push('1 = 1');
     } else if (tab === 'returned') {
-      // 已退货=妥投后买家退货退款(is_returned=1,来自 /v2/returns/rfbs/list)
+      // 已退货=妥投后买家退货退款(is_returned=1,来自 /v2/returns/rfbs/list;状态值已固化)
       where.push('p.is_ignored = 0');
-      where.push("p.is_returned = 1 AND p.operate_status = 'wait_receiver_confirm'");
+      where.push("p.operate_status = 'returned'");
     } else if (tab === 'signed') {
-      // 已签收=已妥投但应计不完整(缺国际配送67),不含已退货
-      // 2026-10-05:代理费66非每单必收,仅以 67 判定应计完整
+      // 已签收=已妥投但应计不完整(缺国际配送67;代理费66非每单必收,状态值已固化拆分)
       where.push('p.is_ignored = 0');
-      where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL AND p.is_returned = 0");
-      where.push(`NOT EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 67)`);
+      where.push("p.operate_status = 'signed'");
     } else if (tab === 'settled') {
-      // 已成功=已妥投且应计完整(有国际配送67;代理费66非必收),不含已退货
+      // 已成功=已妥投且应计完整(有国际配送67;代理费66非必收,状态值已固化拆分)
       where.push('p.is_ignored = 0');
-      where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NOT NULL AND p.is_returned = 0");
-      where.push(`EXISTS (SELECT 1 FROM op_accrual a WHERE a.package_id = p.id AND a.type_id = 67)`);
-    } else if (tab === 'waitReceiverConfirm') {
-      // 已发货=已交运未妥投:wait_receiver_confirm + delivered_at 为空
+      where.push("p.operate_status = 'settled'");
+    } else if (tab === 'delivering') {
+      // 已揽收=已交运且在途
       where.push('p.is_ignored = 0');
-      where.push("p.operate_status = 'wait_receiver_confirm' AND p.delivered_at IS NULL");
+      where.push("p.operate_status = 'delivering'");
     } else {
       where.push('p.is_ignored = 0');
       const sts = TAB_STATUS[tab] || TAB_STATUS.waitProcess;
@@ -872,13 +884,13 @@ function buildPackageWhere(filters = {}) {
   } else if (filters.arrived === '0') {
     where.push('p.arrived_at IS NULL');
   }
-  // 快速筛选(2026-10-17,仅待打单发货 tab 生效;2026-10-18 限定 waitShip,避免参数串到其它 tab):
+  // 快速筛选(2026-10-17,仅待备货 tab 生效;2026-10-18 限定 waitStock,避免参数串到其它 tab):
   // 1) 采购下单超 N 小时未发货 / 2) 物流超 N 小时未揽收
   // 两个快捷筛选为"或"关系(2026-10-17 用户要求):命中任一条件即进入结果集;两者都未传时不过滤。
   // quickFilters 记录各自 SQL 片段,供 listPackages 单独计数(按钮展示命中数,2026-10-17)。
   const quickFilters = [];
-  const isWaitShipTab = (filters.tab || 'waitProcess') === 'waitShip';
-  if (isWaitShipTab && filters.purchaseUnshippedHours > 0) {
+  const isWaitStockTab = (filters.tab || 'waitProcess') === 'waitStock';
+  if (isWaitStockTab && filters.purchaseUnshippedHours > 0) {
     const secs = (Number(filters.purchaseUnshippedHours) || 24) * 3600;
     quickFilters.push({
       key: 'purchaseUnshipped',
@@ -892,7 +904,7 @@ function buildPackageWhere(filters = {}) {
     )`,
     });
   }
-  if (isWaitShipTab && filters.logisticsStaleHours > 0) {
+  if (isWaitStockTab && filters.logisticsStaleHours > 0) {
     const secs = (Number(filters.logisticsStaleHours) || 24) * 3600;
     quickFilters.push({
       key: 'logisticsStale',
@@ -1800,7 +1812,7 @@ function submitPurchase({
         head_logistics_company = COALESCE(?, head_logistics_company),
         head_shipped_at = COALESCE(?, head_shipped_at),
         purchase_status = 'complete',
-        operate_status = CASE WHEN operate_status = 'wait_process' THEN 'wait_ship' ELSE operate_status END,
+        operate_status = CASE WHEN operate_status = 'wait_process' THEN 'wait_stock' ELSE operate_status END,
         gmt_modified = ?`;
 
     if (isAuto) {
@@ -1853,7 +1865,7 @@ function submitPurchase({
         db.prepare(`UPDATE op_ozon_order_item SET purchase_amount = ?, purchase_num = ?, gmt_modified = ? WHERE id = ?`)
           .run(Math.round(a.amt * 100) / 100, a.qty, now, itemId);
       }
-      // 包裹聚合绝对重算 + 采购状态 + 国内物流 + 直接待打单发货
+      // 包裹聚合绝对重算 + 采购状态 + 国内物流 + 流转待备货
       const aggPkg = db
         .prepare(`SELECT COALESCE(SUM(allocated_amount),0) AS total FROM op_purchase_link WHERE package_id = ?`)
         .get(packageId);
@@ -2063,14 +2075,30 @@ function unlinkPurchase(purchaseOrderId, packageId) {
   });
 }
 
-/** 退回待处理:仅 wait_ship 可退;取消该包裹全部采购关联(冲回产品行金额/数量)
- *  并重置采购聚合(金额/国内物流/到货标记),回流 wait_process(维持方案A语义:待处理=未采购)
+/** 应计同步后推进(2026-11):已签收(signed)且应计含国际配送67 → 已成功(settled)
+ *  由应计同步链路(by-day 定时/手动/单订单)每轮完成后调用,幂等。
+ */
+function advanceSettledPackages() {
+  const now = nowIso();
+  return db
+    .prepare(
+      `UPDATE op_package
+          SET operate_status = CASE WHEN operate_status = 'signed' THEN 'settled' ELSE operate_status END,
+              gmt_modified = ?
+        WHERE operate_status = 'signed'
+          AND id IN (SELECT package_id FROM op_accrual WHERE type_id = 67)`
+    )
+    .run(now).changes;
+}
+
+/** 退回待处理:仅 wait_stock(待备货)可退;取消该包裹全部采购关联(冲回产品行金额/数量)
+ *  并重置采购聚合(金额/国内物流/到货标记),回流 wait_process(维持语义:待处理=未采购)
  */
 function revertToWaitProcess(packageId) {
   const pkg = db.prepare(`SELECT * FROM op_package WHERE id = ?`).get(packageId);
   if (!pkg) throw new Error(`包裹不存在: ${packageId}`);
-  if (pkg.operate_status !== 'wait_ship') {
-    throw new Error('仅「待打单发货」状态的包裹可退回待处理');
+  if (pkg.operate_status !== 'wait_stock') {
+    throw new Error('仅「待备货」状态的包裹可退回待处理');
   }
   const now = nowIso();
   runInTx(() => {
@@ -2221,12 +2249,18 @@ function updatePackageMeta(packageId, meta = {}) {
   return db.prepare(`SELECT note, tags FROM op_package WHERE id = ?`).get(packageId);
 }
 
-/** 标记已打印面单(交运) */
+/** 标记已打印面单(贴单/交运两步):
+ *   wait_stick → wait_dispatch(贴单完成)
+ *   wait_dispatch → dispatching(个人自发货扫描交运:重量已录,打印面单成功后推进)
+ */
 function markWaybillPrinted(packageId) {
   const now = nowIso();
   db.prepare(
     `UPDATE op_package SET waybill_printed_at = ?,
-      operate_status = CASE WHEN operate_status IN ('wait_process','wait_ship') THEN 'ship_success' ELSE operate_status END,
+      operate_status = CASE
+        WHEN operate_status = 'wait_stick' THEN 'wait_dispatch'
+        WHEN operate_status = 'wait_dispatch' THEN 'dispatching'
+        ELSE operate_status END,
       gmt_modified = ?
      WHERE id = ?`
   ).run(now, now, packageId);
@@ -2245,7 +2279,7 @@ function getPackagePostings(packageIds) {
     .all(...packageIds);
 }
 
-/** 扫描发货提交:按 DB 当前状态权威校验,仅 wait_ship 时写入发货重量
+/** 扫描发货提交:按 DB 当前状态权威校验,仅 wait_dispatch(待发运)时写入发货重量
  *  op_package.weight 即发货重量唯一载体(扫描录入/妙手同步共用,2026-09-13 确认)
  *  2026-10-23:解除搁置订单提交发货限制(前端二次弹窗确认,保持搁置标记)
  *  @returns {{ found: false } | { found: true, canShip, operateStatus, isIgnored, waybillPrintedAt }}
@@ -2256,7 +2290,7 @@ function scanShipSubmit(packageId, weightG) {
     .get(packageId);
   if (!row) return { found: false };
   const isIgnored = !!row.is_ignored;
-  const canShip = row.operate_status === 'wait_ship';
+  const canShip = row.operate_status === 'wait_dispatch';
   if (canShip) {
     db.prepare(`UPDATE op_package SET weight = ?, gmt_modified = ? WHERE id = ?`).run(
       weightG, nowIso(), packageId
@@ -2606,8 +2640,8 @@ function syncFromMiaoshou({ packageIds } = {}) {
      JOIN miaoshou_purchase pur ON pur.id = map.purchase_id
      WHERE map.package_id = ?`
   );
-  // 状态推进:有采购单关联时,把 wait_process → wait_ship(对齐 submitPurchase 的 pkgSetSql)
-  // 只前进不回退:CASE WHEN operate_status='wait_process' THEN 'wait_ship' ELSE operate_status END
+  // 状态推进:有采购单关联时,把 wait_process → wait_stock(对齐 submitPurchase 的 pkgSetSql)
+  // 只前进不回退:CASE WHEN operate_status='wait_process' THEN 'wait_stock' ELSE operate_status END
   // 头程物流信息(国内快递单号/公司/发货时间)用 COALESCE 覆盖(空值不覆盖本地已有)
   const advanceStatus = db.prepare(
     `UPDATE op_package
@@ -2615,7 +2649,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
            head_logistics_company = COALESCE(?, head_logistics_company),
            head_shipped_at = COALESCE(?, head_shipped_at),
            purchase_status = 'complete',
-           operate_status = CASE WHEN operate_status = 'wait_process' THEN 'wait_ship' ELSE operate_status END,
+           operate_status = CASE WHEN operate_status = 'wait_process' THEN 'wait_stock' ELSE operate_status END,
            gmt_modified = ?
      WHERE id = ?`
   );
@@ -2635,7 +2669,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
   let synced = 0;
   let skipped = 0;
   let purchases = 0;
-  let advanced = 0; // 状态推进的包裹数(wait_process → wait_ship)
+  let advanced = 0; // 状态推进的包裹数(wait_process → wait_stock)
   let cleared = 0;  // 清除本地旧采购信息的包裹数(妙手侧有采购单时先清后写)
   const errors = [];
 
@@ -2724,8 +2758,8 @@ function syncFromMiaoshou({ packageIds } = {}) {
             headSendAt = pur.send_at || now;
           }
         }
-        // c) 如果有关联采购单,推进状态 wait_process → wait_ship(对齐 submitPurchase 逻辑)
-        //    有采购信息即视为"已提交采购",包裹应进入待打单发货
+        // c) 如果有关联采购单,推进状态 wait_process → wait_stock(对齐 submitPurchase 逻辑)
+        //    有采购信息即视为"已提交采购",包裹应进入待备货
         if (hasPurchaseLink) {
           advanceStatus.run(headLogisticsNo, headLogisticsCompany, headSendAt, now, p.id);
           advanced++;
@@ -2820,6 +2854,7 @@ export const orderPackageDao = {
   listPackageTags,
   setTagOrder,
   markWaybillPrinted,
+  advanceSettledPackages,
   getPackagePostings,
   scanShipSubmit,
   scanShipCorrectWeight,
