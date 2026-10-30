@@ -600,9 +600,9 @@ async function onStoreChange() {
       </p>
     </div>
 
-    <!-- 快递员联系方式配置(2026-10-30,支持多条 + 默认项) -->
+    <!-- 快递员联系方式配置(2026-10-30,支持多条 + 默认项;全店铺通用一份) -->
     <div class="card contact-config-card">
-      <div class="section-title">快递员联系方式配置</div>
+      <div class="section-title">快递员联系方式配置 <em class="field-hint">全店铺通用</em></div>
       <table v-if="contactConfigs.list.length" class="contact-config-table">
         <thead>
           <tr>
@@ -644,6 +644,7 @@ async function onStoreChange() {
       </div>
       <p class="form-hint">
         电话与地址为必填(地址提供给快递公司取件);下单人名称选填,为空时默认使用店铺名「{{ currentStoreName() }}」。
+        配置为全店铺通用一份,切换店铺不会改变。
       </p>
     </div>
 

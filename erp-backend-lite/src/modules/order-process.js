@@ -1652,27 +1652,13 @@ function attachPostingProductImages(storeId, postings) {
   return postings;
 }
 
-// 快递员联系方式配置(2026-10-30,支持多条 + 默认项)
-// 新结构 key: carriage_courier_contacts:<storeId>, value: [{ id, phone, wechatNickname, comment, isDefault }]
-// 兼容旧单条 key: carriage_courier_contact_default:<storeId> 存在时包装成一条迁移。
-const COURIER_CONTACTS_KEY_PREFIX = 'carriage_courier_contacts:';
+// 快递员联系方式配置(2026-10-30,支持多条 + 默认项;2026-10-30 改为全店铺通用一份)
+// 全局 key: carriage_courier_contacts, value: [{ id, phone, wechatNickname, comment, isDefault }]
+// 兼容迁移:历史按店铺存的数组 key(carriage_courier_contacts:<storeId>)
+//          或旧单条 key(carriage_courier_contact_default:<storeId>)自动提升为全局。
+const COURIER_CONTACTS_KEY = 'carriage_courier_contacts';
+const STORE_CONTACTS_KEY_PREFIX = 'carriage_courier_contacts:';
 const LEGACY_DEFAULT_CONTACT_KEY_PREFIX = 'carriage_courier_contact_default:';
-function readLegacyDefaultCourierContact(storeId) {
-  try {
-    const row = db
-      .prepare('SELECT value FROM app_config WHERE key = ?')
-      .get(LEGACY_DEFAULT_CONTACT_KEY_PREFIX + String(storeId));
-    if (!row) return null;
-    const v = JSON.parse(row.value);
-    return {
-      phone: String(v?.phone || '').trim(),
-      wechatNickname: String(v?.wechatNickname || '').trim(),
-      comment: String(v?.comment || '').trim(),
-    };
-  } catch {
-    return null;
-  }
-}
 function normalizeContactConfig(c) {
   return {
     id: String(c?.id || ''),
@@ -1682,24 +1668,7 @@ function normalizeContactConfig(c) {
     isDefault: !!c?.isDefault,
   };
 }
-function readCourierContactConfigs(storeId) {
-  const sid = String(storeId);
-  try {
-    const row = db.prepare('SELECT value FROM app_config WHERE key = ?').get(COURIER_CONTACTS_KEY_PREFIX + sid);
-    if (row) {
-      const arr = JSON.parse(row.value);
-      if (Array.isArray(arr)) return arr.map(normalizeContactConfig);
-    }
-  } catch { /* 数据损坏按空处理 */ }
-  // 兼容旧单条默认配置:迁移成一条默认
-  const legacy = readLegacyDefaultCourierContact(sid);
-  if (legacy && (legacy.phone || legacy.wechatNickname || legacy.comment)) {
-    return [{ id: 'legacy', ...legacy, isDefault: true }];
-  }
-  return [];
-}
-function writeCourierContactConfigs(storeId, contacts) {
-  const sid = String(storeId);
+function writeCourierContactConfigs(contacts) {
   const list = (Array.isArray(contacts) ? contacts : []).map(normalizeContactConfig);
   // 至多一条默认:重复默认只保留第一个;全未标记时第一条作为默认
   let defaultAssigned = false;
@@ -1714,14 +1683,50 @@ function writeCourierContactConfigs(storeId, contacts) {
   if (!defaultAssigned && normalized.length) normalized[0].isDefault = true;
   db.prepare(
     `INSERT INTO app_config (key, value, scope, description, updated_at)
-     VALUES (?, ?, 'carriage', '快递员联系方式配置', datetime('now'))
+     VALUES (?, ?, 'carriage', '快递员联系方式配置(全店铺通用)', datetime('now'))
      ON CONFLICT(key) DO UPDATE SET
        value = excluded.value,
        scope = excluded.scope,
        description = excluded.description,
        updated_at = datetime('now')`
-  ).run(COURIER_CONTACTS_KEY_PREFIX + sid, JSON.stringify(normalized));
+  ).run(COURIER_CONTACTS_KEY, JSON.stringify(normalized));
   return normalized;
+}
+function readCourierContactConfigs() {
+  // 1) 全局配置
+  try {
+    const row = db.prepare('SELECT value FROM app_config WHERE key = ?').get(COURIER_CONTACTS_KEY);
+    if (row) {
+      const arr = JSON.parse(row.value);
+      if (Array.isArray(arr)) return arr.map(normalizeContactConfig);
+    }
+  } catch { /* 数据损坏按空处理 */ }
+  // 2) 兼容迁移:历史任一店铺级配置提升为全局(取最新一条)
+  try {
+    const row = db
+      .prepare(
+        `SELECT key, value FROM app_config
+         WHERE key LIKE ? OR key LIKE ?
+         ORDER BY updated_at DESC LIMIT 1`
+      )
+      .get(`${STORE_CONTACTS_KEY_PREFIX}%`, `${LEGACY_DEFAULT_CONTACT_KEY_PREFIX}%`);
+    if (row) {
+      let arr = null;
+      if (row.key.startsWith(STORE_CONTACTS_KEY_PREFIX)) {
+        const v = JSON.parse(row.value);
+        if (Array.isArray(v)) arr = v.map(normalizeContactConfig);
+      } else {
+        const v = JSON.parse(row.value);
+        if (v && (v.phone || v.wechatNickname || v.comment)) {
+          arr = [{ id: 'legacy', phone: String(v.phone || '').trim(), wechatNickname: String(v.wechatNickname || '').trim(), comment: String(v.comment || '').trim(), isDefault: true }];
+        }
+      }
+      if (Array.isArray(arr) && arr.length) {
+        return writeCourierContactConfigs(arr); // 提升并落全局 key
+      }
+    }
+  } catch { /* 迁移失败按空处理 */ }
+  return [];
 }
 
 // 配送方式列表(创建发运前置:取 delivery_method_id)
@@ -1880,22 +1885,22 @@ router.post('/admin/api/order-process/carriage/courier-contact/get', async (req,
   } catch (e) { carriageHandleError(e, req, res, '获取联系方式'); }
 });
 
-// 获取店铺的默认快递员联系方式(兼容旧接口:返回配置列表中的默认项)
+// 获取默认快递员联系方式(兼容旧接口:返回全局配置列表中的默认项;配置全店铺通用)
 router.post('/admin/api/order-process/carriage/courier-contact/default/get', async (req, res) => {
   try {
-    const store = requireCarriageStore(req);
-    const contacts = readCourierContactConfigs(store.id);
+    requireCarriageStore(req);
+    const contacts = readCourierContactConfigs();
     const def = contacts.find((c) => c.isDefault) || contacts[0] || null;
     res.json(ok({ contact: def ? { phone: def.phone, wechatNickname: def.wechatNickname, comment: def.comment } : null }));
   } catch (e) { carriageHandleError(e, req, res, '获取默认联系方式'); }
 });
 
-// 保存店铺的默认快递员联系方式(兼容旧接口:写为新配置结构的默认项)
+// 保存默认快递员联系方式(兼容旧接口:写为全局配置的默认项)
 router.post('/admin/api/order-process/carriage/courier-contact/default/set', async (req, res) => {
   try {
-    const store = requireCarriageStore(req);
+    requireCarriageStore(req);
     const { phone, wechatNickname, comment } = req.body || {};
-    const contacts = readCourierContactConfigs(store.id).map((c) => ({ ...c, isDefault: false }));
+    const contacts = readCourierContactConfigs().map((c) => ({ ...c, isDefault: false }));
     contacts.push({
       id: String(Date.now()),
       phone: String(phone || '').trim(),
@@ -1903,26 +1908,26 @@ router.post('/admin/api/order-process/carriage/courier-contact/default/set', asy
       comment: String(comment || '').trim(),
       isDefault: true,
     });
-    const saved = writeCourierContactConfigs(store.id, contacts);
+    const saved = writeCourierContactConfigs(contacts);
     const def = saved.find((c) => c.isDefault) || saved[0] || null;
     res.json(ok({ contact: def ? { phone: def.phone, wechatNickname: def.wechatNickname, comment: def.comment } : null }));
   } catch (e) { carriageHandleError(e, req, res, '保存默认联系方式'); }
 });
 
-// 获取店铺快递员联系方式配置列表(2026-10-30,多条 + 默认项)
+// 获取快递员联系方式配置列表(2026-10-30,多条 + 默认项;全店铺通用)
 router.post('/admin/api/order-process/carriage/courier-contact/config/list', async (req, res) => {
   try {
-    const store = requireCarriageStore(req);
-    res.json(ok({ contacts: readCourierContactConfigs(store.id) }));
+    requireCarriageStore(req);
+    res.json(ok({ contacts: readCourierContactConfigs() }));
   } catch (e) { carriageHandleError(e, req, res, '获取联系方式配置'); }
 });
 
-// 保存店铺快递员联系方式配置列表(全量覆盖)
+// 保存快递员联系方式配置列表(全量覆盖,全店铺通用)
 router.post('/admin/api/order-process/carriage/courier-contact/config/save', async (req, res) => {
   try {
-    const store = requireCarriageStore(req);
-    const saved = writeCourierContactConfigs(store.id, req.body?.contacts);
-    logger.info({ storeId: store.id, count: saved.length }, '[order-process] 保存快递员联系方式配置成功');
+    requireCarriageStore(req);
+    const saved = writeCourierContactConfigs(req.body?.contacts);
+    logger.info({ count: saved.length }, '[order-process] 保存快递员联系方式配置成功');
     res.json(ok({ contacts: saved }));
   } catch (e) { carriageHandleError(e, req, res, '保存联系方式配置'); }
 });
