@@ -81,7 +81,6 @@ const router = createRouter({
     { path: '/print-container-label', redirect: '/carriage-manage?tab=print' },
     { path: '/print-logs', name: 'print-logs', component: () => import('../views/PrintLogs.vue'), meta: { title: '打印日志' } },
     { path: '/miaoshou-orders', name: 'miaoshou-orders', component: MiaoshouOrders, meta: { title: '妙手订单' } },
-    { path: '/carriage-manage', name: 'carriage-manage', component: CarriageManage, meta: { title: '货运创建/发运管理' } },
     { path: '/batch-upload/:batchNo', name: 'batch-upload-detail', component: () => import('../views/BatchUploadDetail.vue'), meta: { title: '批次详情' } },
     { path: '/image-refresh/:localTaskId', name: 'image-refresh-detail', component: () => import('../views/ImageRefreshDetail.vue'), meta: { title: '图片更新详情' } },
     { path: '/stock-refresh/:localTaskId', name: 'stock-refresh-detail', component: () => import('../views/StockRefreshDetail.vue'), meta: { title: '库存更新详情' } },
