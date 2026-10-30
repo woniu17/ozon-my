@@ -864,6 +864,21 @@ class ContainerLabelFragment : Fragment() {
             0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
         ).apply { marginStart = dp(10f) })
 
+        // 右侧"可创建"标签(对齐 web 端占位行)
+        card.addView(
+            TextView(requireContext()).apply {
+                text = "可创建"
+                setTextColor(Color.parseColor("#165dff"))
+                textSize = 11f
+                setRoundedBg(0xFFEEF4FF.toInt(), 999f)
+                setPadding(dp(8f), dp(3f), dp(8f), dp(3f))
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = dp(8f) }
+        )
+
         card.setOnClickListener { onGoCreate(row) }
         return card
     }
