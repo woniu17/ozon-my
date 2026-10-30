@@ -1,14 +1,16 @@
 <script setup>
 // FBS 货运创建/发运管理(2026-10-29)
 // 流程:备货 → 选配送方式 → 创建发运 → 查看/调整货件 → 设快递员联系方式(OGL 上门取件)
-//      → 确认发运 → 打面单/货位标签(跳转打印页) → 取消发运。
-// 与 ContainerLabelPrint 互补:本页负责"创建/确认/取消"发运生命周期,
-// 面单与货位标签打印仍走打印页。
+//      → 确认发运 → 打印货运标签(2026-11-01:并入行内操作)→ 取消发运。
+// 2026-11-01:打印/预览(货运标签)直接融入「发运清单 · 待处理」行操作,
+// 标签打印机选择栏展示在清单上方,不再依赖独立打印页。
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useStoresStore } from '../stores/stores.js';
 import { useConfirmStore } from '../stores/confirm.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
+import { useCarriageLabelPrint } from '../composables/useCarriageLabelPrint.js';
+import { fetchContainerLabelPrintStatus } from '../api/print-agent.js';
 import {
   getCarriageList,
   getCarriageHistory,
@@ -28,6 +30,9 @@ import {
 const storesStore = useStoresStore();
 const confirmStore = useConfirmStore();
 const { show } = useToast();
+
+// 货运标签打印/预览(2026-11-01):并入发运清单行内操作,打印机选择栏在清单上方
+const labelPrint = useCarriageLabelPrint();
 
 // 页面模式(2026-11-01):由 CarriageCenter 顶层 tab 驱动
 // - pending:快递员联系方式配置 + 全店铺进行中发运清单(含创建/打印)
@@ -127,6 +132,7 @@ const currentRows = computed(() => {
         const isPlaceholder = !Number(c.id) || Number(c.id) <= 0;
         rows.push({
           ...c,
+          printed: !!c.printed, // 2026-11-01:响应式依赖打印状态(行内标记 + 打印后即时反馈)
           is_placeholder: isPlaceholder,
           store_id: s.storeId,
           store_name: s.storeName || '',
@@ -206,10 +212,51 @@ async function loadCarriages() {
     });
     carriageList.stores = await Promise.all(storeJobs);
     carriageList.loaded = true;
+    // 回填进行中发运的货运标签打印状态(与打印页同口径,按店铺批量查询)
+    fillPrintedStatus(pendingRows.value.filter((r) => !r.is_placeholder));
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
     carriageList.loading = false;
+  }
+}
+
+// 按店铺批量查询货运标签打印状态并回填到行(失败静默,不影响清单展示)
+// 行对象由 computed 展开(非响应式),直接写回 reactive 的原始 carriage 才能触发模板更新。
+async function fillPrintedStatus(rows) {
+  const byStore = new Map();
+  for (const r of rows) {
+    if (!byStore.has(r.store_id)) byStore.set(r.store_id, []);
+    byStore.get(r.store_id).push(r);
+  }
+  await Promise.all(
+    [...byStore.entries()].map(async ([storeId, list]) => {
+      try {
+        const ids = list.map((r) => Number(r.id)).filter((n) => Number.isInteger(n) && n > 0);
+        if (!ids.length) return;
+        const { printed } = await fetchContainerLabelPrintStatus(storeId, ids);
+        const store = carriageList.stores.find((s) => s.storeId === storeId);
+        for (const r of list) {
+          for (const m of store?.methods || []) {
+            for (const c of m.carriages || []) {
+              if (Number(c.id) === Number(r.id)) c.printed = !!printed[Number(r.id)];
+            }
+          }
+        }
+      } catch { /* 忽略 */ }
+    })
+  );
+}
+
+// 行内打印:转发给 composable 执行,成功后同步写回 reactive 原始 carriage 的打印状态
+async function onPrintLabel(row, copies) {
+  await labelPrint.printLabel(row, copies);
+  if (!row.printed) return;
+  const store = carriageList.stores.find((s) => s.storeId === row.store_id);
+  for (const m of store?.methods || []) {
+    for (const c of m.carriages || []) {
+      if (Number(c.id) === Number(row.id)) c.printed = true;
+    }
   }
 }
 
@@ -607,6 +654,8 @@ onMounted(async () => {
     if (isPending.value) {
       loadCarriages();
       loadContactConfigs();
+      // 打印机双通道探测(失败不阻塞)
+      labelPrint.probePrinters();
     } else {
       loadHistory();
     }
@@ -674,8 +723,8 @@ onMounted(async () => {
                   @change="onSetContactConfigDefault(c)"
                 />
               </td>
-              <td><input v-model="c.phone" placeholder="快递员联系电话" /></td>
-              <td><input v-model="c.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" /></td>
+              <td><input v-model="c.phone" class="cc-phone-input" placeholder="快递员联系电话" /></td>
+              <td><input v-model="c.wechatNickname" class="cc-nick-input" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" /></td>
               <td><input v-model="c.comment" placeholder="提供给快递公司的取件地址" /></td>
               <td class="ops">
                 <button class="btn btn-danger btn-sm" @click="onRemoveContactConfig(i)">删除</button>
@@ -707,6 +756,39 @@ onMounted(async () => {
       <div class="section-title">
         {{ isPending ? '发运清单 · 待处理' : '发运清单 · 已完成' }}
       </div>
+
+      <!-- 标签打印机(2026-11-01:并入发运清单,展示在清单上方;仅待处理模式) -->
+      <div v-if="isPending" class="printer-bar">
+        <span class="printer-label">标签打印机</span>
+        <select
+          v-model="labelPrint.selectedPrinter"
+          class="filter-input printer-select"
+          :disabled="(labelPrint.agentOnline !== true && labelPrint.serverOnline !== true) || (!labelPrint.printers.length && !labelPrint.serverPrinters.length)"
+          :title="labelPrint.printerSelectTitle"
+          @change="labelPrint.onPrinterChange"
+        >
+          <option value="">自动(可用组件默认)</option>
+          <optgroup v-if="labelPrint.agentOnline === true" label="本机组件">
+            <option value="local:">默认{{ labelPrint.defaultPrinter ? `(${labelPrint.defaultPrinter})` : '' }}</option>
+            <option v-for="p in labelPrint.printers" :key="'L' + p" :value="'local:' + p">{{ p }}</option>
+          </optgroup>
+          <optgroup v-if="labelPrint.serverOnline === true" label="服务器组件">
+            <option value="server:">默认{{ labelPrint.serverDefaultPrinter ? `(${labelPrint.serverDefaultPrinter})` : '' }}</option>
+            <option v-for="p in labelPrint.serverPrinters" :key="'S' + p" :value="'server:' + p">{{ p }}</option>
+          </optgroup>
+        </select>
+        <span
+          class="agent-dot"
+          :class="labelPrint.agentOnline === true ? 'on' : labelPrint.agentOnline === false ? 'off' : ''"
+          :title="labelPrint.agentOnline === true ? '本机菜鸟组件已连接' : labelPrint.agentOnline === false ? '本机菜鸟组件未连接(打印前请启动组件)' : '正在探测本机组件…'"
+        >{{ labelPrint.agentOnline === true ? '本机组件已连接' : labelPrint.agentOnline === false ? '本机组件未连接' : '探测本机…' }}</span>
+        <span
+          class="agent-dot"
+          :class="labelPrint.serverOnline === true ? 'on' : labelPrint.serverOnline === false ? 'off' : ''"
+          :title="labelPrint.serverOnline === true ? '服务器菜鸟组件已连接(SSH 隧道转发)' : labelPrint.serverOnline === false ? '服务器菜鸟组件未连接(检查 SSH 隧道)' : '正在探测服务器组件…'"
+        >{{ labelPrint.serverOnline === true ? '服务器组件已连接' : labelPrint.serverOnline === false ? '服务器组件未连接' : '探测服务器…' }}</span>
+      </div>
+
       <div v-if="listLoading && !listRows.length" class="list-empty">加载中…</div>
       <div v-else-if="listLoaded && !listRows.length" class="list-empty">
         {{ isPending ? '暂无进行中的发运' : '暂无已完成发运' }}
@@ -755,10 +837,41 @@ onMounted(async () => {
               <td>
                 <span class="status-tag">{{ row.status_label || carriageStatusLabel(row.status) }}</span>
                 <span v-if="row.postings_count" class="row-sub">{{ row.postings_count }} 个货件</span>
+                <span v-if="row.printed" class="row-sub printed-mark">已打印</span>
               </td>
               <td class="num">{{ row.postings_count }}</td>
               <td class="ops">
                 <button class="btn btn-ghost btn-sm" @click="openDetail(row)">详情</button>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  :disabled="labelPrint.labelPreview.loading === Number(row.id)"
+                  @click="labelPrint.previewRender(row)"
+                >
+                  {{ labelPrint.labelPreview.loading === Number(row.id) ? '预览中…' : '预览' }}
+                </button>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  :disabled="labelPrint.pdfPreview.loading === Number(row.id)"
+                  @click="labelPrint.previewPdf(row)"
+                >
+                  {{ labelPrint.pdfPreview.loading === Number(row.id) ? '加载中…' : 'PDF' }}
+                </button>
+                <button
+                  class="btn btn-primary btn-sm"
+                  :disabled="labelPrint.printingId === Number(row.id) || (labelPrint.agentOnline !== true && labelPrint.serverOnline !== true)"
+                  :title="(labelPrint.agentOnline !== true && labelPrint.serverOnline !== true) ? '打印组件未连接' : '打印 1 张'"
+                  @click="onPrintLabel(row, 1)"
+                >
+                  {{ labelPrint.printingId === Number(row.id) ? '打印中…' : '打印1张' }}
+                </button>
+                <button
+                  class="btn btn-primary btn-sm"
+                  :disabled="labelPrint.printingId === Number(row.id) || (labelPrint.agentOnline !== true && labelPrint.serverOnline !== true)"
+                  :title="(labelPrint.agentOnline !== true && labelPrint.serverOnline !== true) ? '打印组件未连接' : '打印 3 张'"
+                  @click="onPrintLabel(row, 3)"
+                >
+                  {{ labelPrint.printingId === Number(row.id) ? '打印中…' : '打印3张' }}
+                </button>
                 <button
                   v-if="hasAction(row, 'approve')"
                   class="btn btn-primary btn-sm"
@@ -1047,6 +1160,50 @@ onMounted(async () => {
           </tr>
         </tbody>
       </table>
+    </AppModal>
+
+    <!-- 货运标签 PNG 预览弹窗(2026-11-01:显示实际出纸版式,多页可翻页) -->
+    <AppModal
+      :open="labelPrint.labelPreview.open"
+      :title="'货运标签预览 · 76×130mm' + (labelPrint.labelPreview.images.length > 1 ? ' · ' + (labelPrint.labelPreview.page + 1) + '/' + labelPrint.labelPreview.images.length + '页' : '')"
+      @update:open="labelPrint.labelPreview.open = $event"
+    >
+      <div class="label-preview-body">
+        <img
+          v-if="labelPrint.labelPreview.images.length"
+          :src="labelPrint.labelPreview.images[labelPrint.labelPreview.page]"
+          alt="货运标签预览"
+          class="label-preview-img"
+        />
+        <div v-if="labelPrint.labelPreview.images.length > 1" class="label-preview-nav">
+          <button class="btn btn-ghost btn-sm" :disabled="labelPrint.labelPreview.page === 0" @click="labelPrint.previewPrev">上一页</button>
+          <span class="label-preview-page">{{ labelPrint.labelPreview.page + 1 }} / {{ labelPrint.labelPreview.images.length }}</span>
+          <button class="btn btn-ghost btn-sm" :disabled="labelPrint.labelPreview.page === labelPrint.labelPreview.images.length - 1" @click="labelPrint.previewNext">下一页</button>
+        </div>
+        <div class="label-preview-tip">
+          服务器按 PDF 渲染:货运标签旋转 90° 适配 76×130mm 竖向纸,预览即实际出纸版式,
+          不消耗纸张、不流转订单状态。
+        </div>
+      </div>
+    </AppModal>
+
+    <!-- 货运标签 PDF 预览弹窗(2026-11-01:原始 PDF,便于核对条形码) -->
+    <AppModal :open="labelPrint.pdfPreview.open" title="货运标签 PDF" size="lg" @update:open="labelPrint.pdfPreview.open = $event">
+      <div class="pdf-preview-head">
+        <span class="preview-title">PDF 预览</span>
+        <span v-if="labelPrint.pdfPreview.size" class="preview-size">{{ labelPrint.fmtSize(labelPrint.pdfPreview.size) }} · 1 页</span>
+        <div class="spacer"></div>
+        <button class="btn btn-ghost btn-sm" @click="labelPrint.clearPdfPreview">清除</button>
+      </div>
+      <div class="preview-frame-wrap">
+        <iframe
+          v-if="labelPrint.pdfPreview.url"
+          class="preview-frame"
+          :src="labelPrint.pdfPreview.url"
+          title="货运标签 PDF 预览"
+        />
+        <div v-else class="preview-empty">点击行内「PDF」查看货运标签原始 PDF</div>
+      </div>
     </AppModal>
   </div>
 </template>
@@ -1358,6 +1515,12 @@ onMounted(async () => {
   outline: none;
   border-color: var(--primary);
 }
+/* 电话/下单人名称输入框调整为单元格一半宽(2026-11-01) */
+.contact-config-table input.cc-phone-input,
+.contact-config-table input.cc-nick-input {
+  width: 50%;
+  min-width: 100px;
+}
 .def-col {
   width: 46px;
   text-align: center;
@@ -1460,5 +1623,142 @@ onMounted(async () => {
 }
 .candidate-check input {
   accent-color: var(--primary);
+}
+
+/* ── 标签打印机选择栏(2026-11-01,并入发运清单上方) ── */
+.printer-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.printer-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.printer-select {
+  max-width: 240px;
+  min-width: 140px;
+  font-size: 12px;
+  padding: 5px 6px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.agent-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.agent-dot::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d1d5db;
+}
+.agent-dot.on {
+  color: var(--success);
+}
+.agent-dot.on::before {
+  background: var(--success);
+}
+.agent-dot.off {
+  color: var(--warning);
+}
+.agent-dot.off::before {
+  background: var(--warning);
+}
+
+/* 行内已打印标记 */
+.printed-mark {
+  color: var(--success);
+  font-weight: 500;
+}
+
+/* 操作列按钮间距(按钮较多,横向滚动兜底) */
+.ops .btn {
+  margin-left: 6px;
+}
+.carriage-table {
+  min-width: 980px;
+}
+.list-card {
+  overflow-x: auto;
+}
+
+/* ── 货运标签预览弹窗(2026-11-01) ── */
+.label-preview-body {
+  text-align: center;
+}
+.label-preview-img {
+  max-width: 100%;
+  max-height: 70vh;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+}
+.label-preview-tip {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.label-preview-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 10px;
+}
+.label-preview-page {
+  font-size: 13px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── PDF 预览弹窗(2026-11-01) ── */
+.pdf-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.preview-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.preview-size {
+  font-size: 12px;
+  color: var(--muted);
+}
+.preview-frame-wrap {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8fafc;
+  height: 70vh;
+  min-height: 420px;
+}
+.preview-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #fff;
+}
+.preview-empty {
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
 }
 </style>

@@ -1,13 +1,12 @@
 <script setup>
 // 发运管理(2026-11-01):顶层两个 tab 改为「待处理 / 已完成」,
-// 打印货运标签功能并入「待处理」页(与发运清单同页,便于打完标签直接确认/取消发运)。
-// - 待处理:发运管理(配置 + 进行中清单,CarriageManage mode=pending)+ 打印货运标签(ContainerLabelPrint)
+// 打印货运标签功能完全并入「待处理」页的发运清单行内操作(打印机选择栏在清单上方)。
+// - 待处理:发运管理(CarriageManage mode=pending,含快递员联系方式配置 + 进行中发运清单 + 行内打印/预览)
 // - 已完成:发运历史(本地持久化,CarriageManage mode=done)
 // 旧链接 /print-container-label?tab=print 兼容:打印功能在待处理内,统一落到 pending。
 import { ref } from 'vue';
 import { useRoute } from 'vue-router';
 import CarriageManage from './CarriageManage.vue';
-import ContainerLabelPrint from './ContainerLabelPrint.vue';
 
 const route = useRoute();
 const tab = ref(route.query.tab === 'done' ? 'done' : 'pending');
@@ -23,9 +22,8 @@ const tab = ref(route.query.tab === 'done' ? 'done' : 'pending');
         已完成
       </button>
     </div>
-    <!-- 待处理:发运管理(配置 + 进行中清单)+ 打印货运标签 -->
+    <!-- 待处理:发运管理(配置 + 进行中清单 + 行内打印货运标签) -->
     <CarriageManage v-show="tab === 'pending'" mode="pending" />
-    <ContainerLabelPrint v-show="tab === 'pending'" class="print-panel" />
     <!-- 已完成:发运历史 -->
     <CarriageManage v-show="tab === 'done'" mode="done" />
   </div>
@@ -61,9 +59,5 @@ const tab = ref(route.query.tab === 'done' ? 'done' : 'pending');
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;
-}
-/* 打印货运标签并入待处理页(2026-11-01) */
-.print-panel {
-  border-top: 1px solid var(--border);
 }
 </style>
