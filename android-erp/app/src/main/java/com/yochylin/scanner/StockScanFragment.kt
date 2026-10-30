@@ -285,7 +285,25 @@ class StockScanFragment : Fragment() {
                         showScanHint("❌ 未找到订单:$code", error = true)
                         playFeedback(false)
                     } else {
-                        showScanHint("⏭ 无待备货订单:$code", error = false)
+                        // 找到订单但不在待备货状态:明确提示原因(而非笼统"无待备货订单")。
+                        // 例如已备货(Ozon awaiting_registration/awaiting_deliver 等)提示"已备货",
+                        // 其它状态提示具体状态,方便用户判断是否误扫/需人工处理。
+                        val hit = resp.packages.firstOrNull { it.id.isNotEmpty() }
+                        val status = hit?.ozonStatus.orEmpty()
+                        val pn = hit?.postingNumber ?: ""
+                        val shippedStates = setOf(
+                            "awaiting_registration", "awaiting_deliver",
+                            "driver_pickup", "delivering", "delivered"
+                        )
+                        if (status in shippedStates) {
+                            showScanHint("✅ 该订单已备货:${pn.ifBlank { code }}", error = false)
+                            playFeedback(true)
+                        } else {
+                            showScanHint(
+                                "⏭ 订单状态[${status.ifBlank { "未知" }}]不可备货:${pn.ifBlank { code }}",
+                                error = false
+                            )
+                        }
                     }
                     return@launch
                 }
