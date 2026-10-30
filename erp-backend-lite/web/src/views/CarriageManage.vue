@@ -32,7 +32,9 @@ const confirmStore = useConfirmStore();
 const { show } = useToast();
 
 // 货运标签打印/预览(2026-11-01):并入发运清单行内操作,打印机选择栏在清单上方
-const labelPrint = useCarriageLabelPrint();
+// 2026-10-30 修复:composable 返回的 ref 必须用 reactive() 包裹,模板里 labelPrint.agentOnline 才会自动解包,
+// 否则模板拿到 ref 对象本身,=== true/false/null 全部不成立 → 探测状态永远显示"探测中"、下拉空白、title 显示 [object Object]。
+const labelPrint = reactive(useCarriageLabelPrint());
 
 // 页面模式(2026-11-01):由 CarriageCenter 顶层 tab 驱动
 // - pending:快递员联系方式配置 + 全店铺进行中发运清单(含创建/打印)
