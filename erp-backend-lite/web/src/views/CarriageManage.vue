@@ -62,9 +62,11 @@ function carriageStatusLabel(status) {
 function hasAction(c, action) {
   return Array.isArray(c?.available_actions) && c.available_actions.includes(action);
 }
-// 发运是否已确认:未确认(available_actions 仍含 approve)时 Ozon 尚未生成货运标签,预览/打印不可用(2026-10-30)
+// 发运是否已确认:列表接口 /v2/carriage/delivery/list 不返回 available_actions(仅详情接口有),
+// 只能按状态判断。Ozon 在确认(approve)前处于 new/formed/created,尚未生成货运标签,预览/打印不可用(2026-10-30)。
+const UNCONFIRMED_CARRIAGE_STATUSES = ['new', 'formed', 'created'];
 function isCarriageConfirmed(c) {
-  return !hasAction(c, 'approve');
+  return !UNCONFIRMED_CARRIAGE_STATUSES.includes(c?.status);
 }
 
 // ── 当前店铺(配置接口鉴权用;发运清单已聚合所有店铺) ──────
