@@ -3,14 +3,122 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
+    android:keepScreenOn="true"
     android:background="#f2f3f5">
 
-    <!-- 上半部分:摄像头视频(连续扫码) -->
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
+    <!-- 顶部控制区:统计 + 操作按钮 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#ffffff"
+        android:padding="10dp">
+
+        <TextView
+            android:id="@+id/statsText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="✅ 成功 0 · ⏳ 待确认 0 · ❌ 失败 0"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:id="@+id/manualBtn"
+                android:layout_width="0dp"
+                android:layout_height="36dp"
+                android:layout_weight="1"
+                android:background="#f2f3f5"
+                android:gravity="center"
+                android:text="⌨ 手动输入"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/torchBtn"
+                android:layout_width="0dp"
+                android:layout_height="36dp"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:background="#f2f3f5"
+                android:gravity="center"
+                android:text="🔦 开灯"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/pauseBtn"
+                android:layout_width="0dp"
+                android:layout_height="36dp"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:background="#f2f3f5"
+                android:gravity="center"
+                android:text="⏸ 暂停"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/clearBtn"
+                android:layout_width="0dp"
+                android:layout_height="36dp"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:background="#f2f3f5"
+                android:gravity="center"
+                android:text="🗑 清空"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- 上半部分:摄像头视频(默认关闭,点击视频区开始) -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:background="#1d2129">
+
+        <androidx.camera.view.PreviewView
+            android:id="@+id/previewView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/startOverlay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingHorizontal="24dp"
+            android:paddingVertical="12dp"
+            android:text="▶ 点击开始扫码"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:visibility="visible" />
+
+        <!-- 临时提示:非快递单号/未找到订单时在视频区短暂显示,不进记录列表 -->
+        <TextView
+            android:id="@+id/scanHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="16dp"
+            android:gravity="center"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="8dp"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <!-- 提示条 -->
     <TextView
@@ -19,7 +127,7 @@
         android:background="#ffffff"
         android:paddingHorizontal="12dp"
         android:paddingVertical="6dp"
-        android:text="连续扫描:单件商品自动备货,多件商品弹窗确认;识别后自动处理并记录"
+        android:text="默认关闭摄像头 · 点击视频区开始 · 单件自动备货,多件弹窗确认"
         android:textColor="@color/text_muted"
         android:textSize="12sp" />
 
@@ -46,6 +154,6 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="12dp" />
+            android:paddingHorizontal="12dp" />
     </ScrollView>
 </LinearLayout>

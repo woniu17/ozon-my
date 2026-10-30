@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- 扫描备货识别成功/失败震动反馈(2026-10-30) -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 自动检测内网(Home-WiFi)：读取网络类型和 WiFi 名称 -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
