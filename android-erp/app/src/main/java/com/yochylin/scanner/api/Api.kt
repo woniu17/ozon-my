@@ -5,6 +5,7 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.yochylin.scanner.NetworkDetector
 import com.yochylin.scanner.Session
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -135,6 +136,31 @@ object Api {
             return wsBase + "/admin/api/push/ws"
         }
 
+    // ── 内网熔断（2026-10-30）：内网请求连续失败达到阈值时自动回退公网，
+    //    避免离开内网环境后一直请求不可达的内网地址 ──
+
+    /** 连续网络级失败计数（仅自动模式+内网时累计；成功/服务端已响应即清零） */
+    @Volatile
+    private var consecutiveNetFailures = 0
+
+    /** 内网请求连续失败达到该次数后，自动回退公网 */
+    private const val NET_FAILURE_FALLBACK_THRESHOLD = 3
+
+    /** 网络级失败（连接不上/超时）时计数；达到阈值后回退公网 */
+    private fun onNetworkFailure() {
+        if (Session.networkMode != Session.MODE_AUTO || !Session.useIntranet) return
+        consecutiveNetFailures++
+        if (consecutiveNetFailures >= NET_FAILURE_FALLBACK_THRESHOLD) {
+            consecutiveNetFailures = 0
+            NetworkDetector.fallbackToPublic()
+        }
+    }
+
+    /** 请求成功（或服务端已响应，含业务错误/HTTP错误）时清零熔断计数 */
+    private fun resetNetworkFailures() {
+        consecutiveNetFailures = 0
+    }
+
     /**
      * 建立推送 WebSocket 连接（长连接，实时接收服务端推送事件）。
      * 认证由全局拦截器自动携带 Bearer token；连接/消息/断开均由 [listener] 回调驱动。
@@ -168,15 +194,22 @@ object Api {
         withContext(Dispatchers.IO) {
             val url = buildUrl("/admin/api/push/events", mapOf("timeout" to timeoutMs))
             val request = Request.Builder().url(url).build()
-            pushPollClient.newCall(request).execute().use { response ->
-                val text = response.body?.string() ?: ""
+            val response = try {
+                pushPollClient.newCall(request).execute()
+            } catch (e: IOException) {
+                onNetworkFailure()
+                throw e
+            }
+            response.use {
+                val text = it.body?.string() ?: ""
 
-                if (response.code == 401) {
+                if (it.code == 401) {
                     Session.clear()
                     throw ApiException(401, "登录已过期,请重新登录")
                 }
-                if (!response.isSuccessful) {
-                    throw ApiException(response.code, parseError(text, response.code))
+                if (!it.isSuccessful) {
+                    resetNetworkFailures()
+                    throw ApiException(it.code, parseError(text, it.code))
                 }
 
                 val root = try {
@@ -185,6 +218,7 @@ object Api {
                     JsonObject()
                 }
                 val events: JsonArray = root.getAsJsonArray("events") ?: JsonArray()
+                resetNetworkFailures()
                 events.mapNotNull { if (it.isJsonObject) it.asJsonObject else null }
             }
         }
@@ -197,15 +231,23 @@ object Api {
                 .method(method.uppercase(), requestBody)
                 .build()
 
-            client.newCall(request).execute().use { response ->
-                val text = response.body?.string() ?: ""
+            val response = try {
+                client.newCall(request).execute()
+            } catch (e: IOException) {
+                onNetworkFailure()
+                throw e
+            }
 
-                if (response.code == 401) {
+            response.use {
+                val text = it.body?.string() ?: ""
+
+                if (it.code == 401) {
                     Session.clear()
                     throw ApiException(401, "登录已过期,请重新登录")
                 }
-                if (!response.isSuccessful) {
-                    throw ApiException(response.code, parseError(text, response.code))
+                if (!it.isSuccessful) {
+                    resetNetworkFailures()
+                    throw ApiException(it.code, parseError(text, it.code))
                 }
 
                 val root = try {
@@ -217,12 +259,15 @@ object Api {
                     val obj = root.asJsonObject
                     if (obj.has("ok")) {
                         if (obj.get("ok").asBoolean) {
+                            resetNetworkFailures()
                             return@withContext obj.get("data")
                         } else {
-                            throw ApiException(response.code, obj.optString("message", "请求失败"))
+                            resetNetworkFailures()
+                            throw ApiException(it.code, obj.optString("message", "请求失败"))
                         }
                     }
                 }
+                resetNetworkFailures()
                 root ?: JsonObject()
             }
         }

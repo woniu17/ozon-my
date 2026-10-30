@@ -15,8 +15,9 @@ import java.net.Socket
 import java.util.concurrent.CopyOnWriteArraySet
 
 /**
- * 网络模式控制（2026-10-23 升级为三模式）：
- * - auto（默认）：连接 WiFi 且 SSID 为 Home-WiFi 时判定在内网，否则公网
+ * 网络模式控制（2026-10-23 升级为三模式，2026-10-30 增强离开内网自动回退公网）：
+ * - auto（默认）：连接 Home-WiFi 判定在内网；否则通过内网端口可达性探测判定；
+ *   已在内网但网络变化后探测不可达时自动回退公网
  * - intranet（手动）：强制使用内网
  * - public（手动）：强制使用公网
  *
@@ -136,21 +137,21 @@ object NetworkDetector {
             Session.MODE_INTRANET -> true
             Session.MODE_PUBLIC -> false
             else -> {
-                // 已确认在内网（手动切过/自动探测成功过）：保持内网，不再因 SSID 变化切回公网，
-                // 避免内网环境 WiFi 名称不同或 SSID 不可读时被反复判定为公网导致连接失败
-                if (Session.useIntranet) {
+                val ssid = currentSsid(context)
+                if (ssid in homeWifiSsids) {
+                    // 明确连接在 Home-WiFi：始终判定内网（内网短暂不可达也不切走，避免横跳）
                     true
+                } else if (Session.useIntranet) {
+                    // 曾在内网（办公室其它 WiFi 名称或 SSID 不可读时由探测确认过）：
+                    // 网络环境已变化，重新探测内网可达性；可达保持内网，不可达回退公网。
+                    probeIntranetReachability(allowFallbackToPublic = true)
+                    true // 探测期间暂保持内网，结果异步通知是否回退
                 } else {
-                    val ssid = currentSsid(context)
-                    if (ssid in homeWifiSsids) {
-                        true
-                    } else {
-                        // SSID 不可读（Android 10+ 定位未开/权限缺失）或非 Home-WiFi 名称：
-                        // 无法可靠判定，用内网可达性兜底探测（办公 WiFi 名称可能不同），
-                        // 探测成功会异步切内网并通知；当前维持现状（默认公网）。
-                        probeIntranetReachability()
-                        false
-                    }
+                    // SSID 不可读（Android 10+ 定位未开/权限缺失）或非 Home-WiFi 名称：
+                    // 无法可靠判定，用内网可达性兜底探测（办公 WiFi 名称可能不同），
+                    // 探测成功会异步切内网并通知；当前维持现状（默认公网）。
+                    probeIntranetReachability(allowFallbackToPublic = false)
+                    false
                 }
             }
         }
@@ -166,8 +167,13 @@ object NetworkDetector {
         applyNetworkMode(context)
     }
 
-    /** 内网端口可达性探测：SSID 不可读/非 Home-WiFi 时判断是否在办公室局域网，成功则切内网 */
-    private fun probeIntranetReachability() {
+    /**
+     * 内网端口可达性探测：
+     * - 未在内网时（allowFallbackToPublic=false）：探测成功则切内网；
+     * - 已在内网但网络环境变化时（allowFallbackToPublic=true）：探测失败则回退公网，
+     *   避免离开内网环境后一直使用不可达的内网地址。
+     */
+    private fun probeIntranetReachability(allowFallbackToPublic: Boolean) {
         val now = SystemClock.elapsedRealtime()
         if (probing || now - lastProbeAt < PROBE_INTERVAL_MS) return
         probing = true
@@ -179,11 +185,28 @@ object NetworkDetector {
             }.isSuccess
             probing = false
             lastProbeAt = SystemClock.elapsedRealtime()
-            if (reachable && Session.networkMode == Session.MODE_AUTO && !Session.useIntranet) {
-                Session.useIntranet = true
-                notifyModeChanged(true)
+            if (Session.networkMode != Session.MODE_AUTO) return@launch
+            when {
+                reachable && !Session.useIntranet -> {
+                    Session.useIntranet = true
+                    notifyModeChanged(true)
+                }
+                !reachable && allowFallbackToPublic && Session.useIntranet -> {
+                    Session.useIntranet = false
+                    notifyModeChanged(false)
+                }
             }
         }
+    }
+
+    /**
+     * 由 Api 层在内网请求连续失败达到阈值时调用：回退公网（仅自动模式）。
+     * 作为网络探测的兜底，避免离开内网后一直请求不可达的内网地址。
+     */
+    fun fallbackToPublic() {
+        if (Session.networkMode != Session.MODE_AUTO || !Session.useIntranet) return
+        Session.useIntranet = false
+        notifyModeChanged(false)
     }
 
     private fun notifyModeChanged(isIntranet: Boolean) {
