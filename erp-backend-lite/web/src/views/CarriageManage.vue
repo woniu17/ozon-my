@@ -10,8 +10,8 @@ import { useConfirmStore } from '../stores/confirm.js';
 import { useToast } from '../components/useToast.js';
 import AppModal from '../components/AppModal.vue';
 import {
-  getCarriageDeliveryMethods,
   getCarriageList,
+  getCarriageHistory,
   createCarriage,
   getCarriage,
   getCarriagePostings,
@@ -39,6 +39,7 @@ const CARRIAGE_STATUS_LABELS = {
   received: '已接收',
   delivered: '已送达',
   cancelled: '已取消',
+  archived: '已归档',
 };
 function carriageStatusLabel(status) {
   return CARRIAGE_STATUS_LABELS[status] || status || '—';
@@ -47,23 +48,28 @@ function hasAction(c, action) {
   return Array.isArray(c?.available_actions) && c.available_actions.includes(action);
 }
 
-// ── 店铺与配送方式 ──────────────────────────────────────
+// ── 当前店铺(配置接口鉴权用;发运清单已聚合所有店铺) ──────
 const storeId = ref('');
-const deliveryMethods = ref([]);
-const methodsLoading = ref(false);
-const selectedMethodId = ref('');
-const departureDate = ref(new Date().toISOString().slice(0, 10));
 
-// 创建发运
-const creating = ref(false);
+// 创建发运弹窗(占位行触发,2026-11-01:移除顶部创建卡片)
+const createModal = reactive({
+  open: false,
+  storeId: '',
+  storeName: '',
+  deliveryMethodId: '',
+  deliveryMethodName: '',
+  departureDate: new Date().toISOString().slice(0, 10),
+  creating: false,
+});
 
-// 发运清单
-const carriageList = reactive({ methods: [], loaded: false, loading: false });
+// 发运清单(2026-11-01:聚合所有店铺)
+const carriageList = reactive({ stores: [], loaded: false, loading: false });
 
 // 详情弹窗
 const detail = reactive({
   open: false,
   carriageId: 0,
+  fromHistory: false, // 2026-11-01:本地历史快照详情只读(Ozon 已完成发运查不到)
   carriage: null,
   postings: [],
   postingsLoading: false,
@@ -85,7 +91,13 @@ const contactConfigs = reactive({
   loaded: false,
   saving: false,
   list: [], // [{ id, phone, wechatNickname, comment, isDefault }]
+  expanded: false, // 2026-11-01:折叠时只展示默认项,展开后编辑全部
 });
+
+// 默认配置项(折叠时展示)
+const defaultContactConfig = computed(
+  () => contactConfigs.list.find((c) => c.isDefault) || contactConfigs.list[0] || null
+);
 
 // 货件编辑(增加/删除后全量 set-postings 保存)
 const editPostings = reactive({ dirty: false, saving: false });
@@ -98,58 +110,104 @@ const candidate = reactive({
   selected: {},
 });
 
-// 当前表格行(各配送方式下发运 + 可创建占位行)
+// 当前表格行(所有店铺各配送方式下发运 + 可创建占位行)
 const currentRows = computed(() => {
   const rows = [];
-  for (const m of carriageList.methods || []) {
-    for (const c of m.carriages || []) {
-      const isPlaceholder = !Number(c.id) || Number(c.id) <= 0;
-      rows.push({
-        ...c,
-        is_placeholder: isPlaceholder,
-        delivery_method_id: m.delivery_method_id,
-        delivery_method_name: m.delivery_method_name || '',
-        departure_date: m.departure_date || '',
-        warehouse_name: m.warehouse_name || '',
-        warehouse_city: m.warehouse_city || '',
-        cutoff_at: m.cutoff_at || '',
-        timeslot: (m.timeslot_from || '') + (m.timeslot_to ? ` ~ ${m.timeslot_to}` : ''),
-      });
+  for (const s of carriageList.stores || []) {
+    for (const m of s.methods || []) {
+      for (const c of m.carriages || []) {
+        const isPlaceholder = !Number(c.id) || Number(c.id) <= 0;
+        rows.push({
+          ...c,
+          is_placeholder: isPlaceholder,
+          store_id: s.storeId,
+          store_name: s.storeName || '',
+          delivery_method_id: m.delivery_method_id,
+          delivery_method_name: m.delivery_method_name || '',
+          departure_date: m.departure_date || '',
+          warehouse_name: m.warehouse_name || '',
+          warehouse_city: m.warehouse_city || '',
+          cutoff_at: m.cutoff_at || '',
+          timeslot: (m.timeslot_from || '') + (m.timeslot_to ? ` ~ ${m.timeslot_to}` : ''),
+        });
+      }
     }
   }
   return rows;
 });
 
-// 可用店铺(已配置 sync_credentials 的店铺)
-const usableStores = computed(() => storesStore.list.filter((s) => s?.sync_credentials?.clientId));
+// 子 tab(2026-11-01):待处理 / 已完成
+const activeSubTab = ref('pending');
 
-// ── 配送方式 ────────────────────────────────────────────
-async function loadDeliveryMethods() {
-  if (!storeId.value) return;
-  methodsLoading.value = true;
-  deliveryMethods.value = [];
-  selectedMethodId.value = '';
+// 待处理:可创建占位行 + 正在进行中的发运(new/formed/created/awaiting_delivery/delivering)
+const PENDING_STATUSES = ['new', 'formed', 'created', 'awaiting_delivery', 'delivering'];
+const pendingRows = computed(() =>
+  currentRows.value.filter((r) => r.is_placeholder || PENDING_STATUSES.includes(r.status))
+);
+
+// 已完成:本地持久化历史(2026-11-01,Ozon 已完成发运查不到,由后端同步入库)
+const history = reactive({ list: [], loaded: false, loading: false });
+
+async function loadHistory() {
+  if (history.loading) return;
+  history.loading = true;
   try {
-    const data = await getCarriageDeliveryMethods(storeId.value);
-    deliveryMethods.value = (data?.delivery_methods || []).filter((m) => m?.id);
-    if (!deliveryMethods.value.length) {
-      show('该店铺没有可用的配送方式', 'error');
-    }
+    const data = await getCarriageHistory(storeId.value);
+    history.list = (data?.items || []).map((it) => ({
+      ...it,
+      // 从 Ozon 列表消失被归档的进行中记录,在"已完成"里显示为"已归档"
+      status_label:
+        it.archived_at && PENDING_STATUSES.includes(it.status) ? '已归档' : carriageStatusLabel(it.status),
+    }));
+    history.loaded = true;
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
-    methodsLoading.value = false;
+    history.loading = false;
   }
 }
 
-// ── 发运清单 ────────────────────────────────────────────
+// 当前 tab 展示行与加载状态
+const listLoading = computed(() =>
+  activeSubTab.value === 'pending' ? carriageList.loading : history.loading
+);
+const listLoaded = computed(() =>
+  activeSubTab.value === 'pending' ? carriageList.loaded : history.loaded
+);
+const listRows = computed(() =>
+  activeSubTab.value === 'pending' ? pendingRows.value : history.list
+);
+
+// 切换子 tab:首次进入已完成时加载本地历史
+function switchSubTab(tab) {
+  activeSubTab.value = tab;
+  if (tab === 'done' && !history.loaded) loadHistory();
+}
+
+// 刷新:同时刷新 Ozon 实时清单与本地历史
+function refreshAll() {
+  loadCarriages();
+  if (!history.loaded) loadHistory();
+}
+
+// 可用店铺(已配置 sync_credentials 的店铺)
+const usableStores = computed(() => storesStore.list.filter((s) => s?.sync_credentials?.clientId));
+
+// ── 发运清单(2026-11-01:聚合所有可用店铺) ──────────────────
 async function loadCarriages() {
-  if (!storeId.value) return;
   if (carriageList.loading) return;
   carriageList.loading = true;
   try {
-    const data = await getCarriageList(storeId.value, { limit: 1000 });
-    carriageList.methods = data?.methods || [];
+    const storeJobs = usableStores.value.map(async (s) => {
+      try {
+        const data = await getCarriageList(s.id, { limit: 1000 });
+        return { storeId: s.id, storeName: s.name || '', methods: data?.methods || [] };
+      } catch (err) {
+        show(`店铺「${s.name || s.id}」发运清单加载失败:${err.message || String(err)}`, 'error');
+        return { storeId: s.id, storeName: s.name || '', methods: [] };
+      }
+    });
+    carriageList.stores = await Promise.all(storeJobs);
     carriageList.loaded = true;
   } catch (err) {
     show(err.message || String(err), 'error');
@@ -158,55 +216,55 @@ async function loadCarriages() {
   }
 }
 
-// ── 创建发运 ────────────────────────────────────────────
-async function onCreateCarriage() {
-  if (!storeId.value) {
-    show('请先选择店铺', 'error');
+// ── 创建发运(占位行 → 弹窗,2026-11-01:移除顶部创建卡片) ──────
+function onGoCreate(row) {
+  createModal.storeId = row.store_id || storeId.value || '';
+  createModal.storeName = row.store_name || '';
+  createModal.deliveryMethodId = String(row.delivery_method_id || '');
+  createModal.deliveryMethodName = row.delivery_method_name || '';
+  createModal.departureDate = new Date().toISOString().slice(0, 10);
+  createModal.creating = false;
+  createModal.open = true;
+}
+
+async function onCreateFromModal() {
+  if (!createModal.storeId) {
+    show('缺少店铺信息,无法创建发运', 'error');
     return;
   }
-  // 店铺有多个配送方式时必须显式选择;只有一个时可不传(自动选择唯一配送方式)
-  const body = {};
-  if (selectedMethodId.value) body.deliveryMethodId = Number(selectedMethodId.value);
-  if (departureDate.value) body.departureDate = departureDate.value;
-
-  const methodName =
-    deliveryMethods.value.find((m) => String(m.id) === String(selectedMethodId.value))?.name || '自动选择';
-  const ok = await confirmStore.ask({
-    title: '创建发运',
-    message: `确认创建发运?\n店铺:${storeId.value}\n配送方式:${methodName}\n发运日期:${departureDate.value || '不指定'}\n该配送方式下所有「已准备发运」货件将自动进入发运。`,
-    confirmText: '创建发运',
-  });
-  if (!ok) return;
-
-  creating.value = true;
+  if (!createModal.deliveryMethodId) {
+    show('缺少配送方式,无法创建发运', 'error');
+    return;
+  }
+  createModal.creating = true;
   try {
-    const r = await createCarriage(storeId.value, body);
+    const body = { deliveryMethodId: Number(createModal.deliveryMethodId) };
+    if (createModal.departureDate) body.departureDate = createModal.departureDate;
+    const r = await createCarriage(createModal.storeId, body);
     show(`发运创建成功:${r?.carriage_id ? '#' + r.carriage_id : ''}`, 'success');
-    // 刷新清单,并自动打开新发运详情
+    createModal.open = false;
     await loadCarriages();
     const cid = Number(r?.carriage_id);
     if (cid > 0) {
-      const found = currentRows.value.find((row) => Number(row.id) === cid);
-      openDetail(found || { id: cid, store_id: storeId.value });
+      const found = currentRows.value.find(
+        (row) => Number(row.id) === cid && row.store_id === createModal.storeId
+      );
+      openDetail(found || { id: cid, store_id: createModal.storeId });
     }
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
-    creating.value = false;
+    createModal.creating = false;
   }
-}
-
-// 占位行(可创建):把配送方式带到创建区
-function onGoCreate(row) {
-  selectedMethodId.value = String(row.delivery_method_id || '');
-  document.getElementById('carriage-create-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  show(`已选择配送方式:${row.delivery_method_name || row.delivery_method_id}`, 'success');
 }
 
 // ── 详情 ────────────────────────────────────────────────
 async function openDetail(row) {
+  // 发运清单跨店铺,详情相关接口以该发运所属店铺为准
+  storeId.value = row.store_id || storeId.value;
   detail.open = true;
   detail.carriageId = Number(row.id);
+  detail.fromHistory = !!row.from_history;
   detail.carriage = row;
   detail.postings = [];
   detail.contact = [];
@@ -217,6 +275,18 @@ async function openDetail(row) {
   detail.selectedContactConfigId = '';
   editPostings.dirty = false;
   if (!contactConfigs.loaded) await loadContactConfigs();
+  // 本地历史快照(2026-11-01):Ozon 已完成发运查不到,直接展示本地保存的货件/联系方式
+  if (row.from_history) {
+    detail.carriage = { ...row, ...(row.carriage || {}), available_actions: [] };
+    detail.postings = row.postings || [];
+    detail.contact = row.contact || [];
+    const first = detail.contact[0];
+    const storeName = currentStoreName();
+    detail.phone = first?.phone || '';
+    detail.wechatNickname = first?.wechat_nickname || storeName;
+    detail.comment = first?.comment || '';
+    return;
+  }
   await Promise.all([loadCarriageDetail(row), loadPostings(row), loadContact(row)]);
 }
 
@@ -267,6 +337,8 @@ function onAddContactConfig() {
     comment: '',
     isDefault: false,
   });
+  // 新增配置需要编辑,自动展开
+  contactConfigs.expanded = true;
 }
 
 function onRemoveContactConfig(index) {
@@ -533,131 +605,138 @@ async function onSavePostings() {
 onMounted(async () => {
   try {
     await storesStore.load();
-    // 默认选第一个已配置 sync_credentials 的店铺
+    // 默认选第一个已配置 sync_credentials 的店铺(作为全局配置接口鉴权)
     storeId.value = usableStores.value[0]?.id || storesStore.list[0]?.id || '';
-    if (storeId.value) {
-      loadDeliveryMethods();
-      loadCarriages();
-      loadContactConfigs();
-    }
+    loadCarriages();
+    loadHistory();
+    loadContactConfigs();
   } catch (err) {
     show(err.message || '店铺列表加载失败', 'error');
   }
 });
-
-// 切换店铺
-async function onStoreChange() {
-  contactConfigs.loaded = false;
-  loadDeliveryMethods();
-  loadCarriages();
-  loadContactConfigs(true);
-}
 </script>
 
 <template>
   <div class="carriage-page">
     <div class="page-head">
-      <h2>货运创建 · 发运管理</h2>
+      <h2>发运管理</h2>
       <span class="page-sub">FBS 备货后创建发运 · 查看货件 · 设快递员联系方式 · 确认/取消发运</span>
-      <button class="btn btn-ghost btn-sm" :disabled="carriageList.loading" @click="loadCarriages">
-        {{ carriageList.loading ? '加载中…' : '刷新' }}
+      <button
+        class="btn btn-ghost btn-sm"
+        :disabled="carriageList.loading || history.loading"
+        @click="refreshAll"
+      >
+        {{ carriageList.loading || history.loading ? '加载中…' : '刷新' }}
       </button>
     </div>
 
-    <!-- 创建发运 -->
-    <div id="carriage-create-card" class="card create-card">
-      <div class="section-title">创建发运</div>
-      <div class="create-form">
-        <label>
-          <span>店铺</span>
-          <select v-model="storeId" @change="onStoreChange">
-            <option value="" disabled>请选择店铺</option>
-            <option v-for="s in storesStore.list" :key="s.id" :value="s.id">
-              {{ s.name }}{{ s?.sync_credentials?.clientId ? '' : '(未配置 Ozon 凭证)' }}
-            </option>
-          </select>
-        </label>
-        <label>
-          <span>配送方式</span>
-          <select v-model="selectedMethodId" :disabled="methodsLoading">
-            <option value="">自动选择(唯一配送方式)</option>
-            <option v-for="m in deliveryMethods" :key="m.id" :value="String(m.id)">
-              {{ m.name || m.id }}{{ m.status ? ` · ${m.status}` : '' }}
-            </option>
-          </select>
-          <em v-if="methodsLoading" class="field-hint">加载中…</em>
-        </label>
-        <label>
-          <span>发运日期</span>
-          <input v-model="departureDate" type="date" />
-        </label>
-        <button class="btn btn-primary" :disabled="creating || !storeId" @click="onCreateCarriage">
-          {{ creating ? '创建中…' : '创建发运' }}
-        </button>
-      </div>
-      <p v-if="deliveryMethods.length" class="form-hint">
-        共 {{ deliveryMethods.length }} 个配送方式;不选时 Ozon 自动使用唯一可用配送方式。
-      </p>
+    <!-- 子 tab(2026-11-01):待处理 / 已完成 -->
+    <div class="sub-tabs">
+      <button
+        type="button"
+        class="sub-tab"
+        :class="{ active: activeSubTab === 'pending' }"
+        @click="switchSubTab('pending')"
+      >
+        待处理
+      </button>
+      <button
+        type="button"
+        class="sub-tab"
+        :class="{ active: activeSubTab === 'done' }"
+        @click="switchSubTab('done')"
+      >
+        已完成
+      </button>
     </div>
 
-    <!-- 快递员联系方式配置(2026-10-30,支持多条 + 默认项;全店铺通用一份) -->
-    <div class="card contact-config-card">
+    <!-- 快递员联系方式配置(2026-10-30,多条 + 默认项;全店铺通用一份;2026-11-01:默认只展示默认项,其它折叠;仅在待处理 tab 展示) -->
+    <div v-if="activeSubTab === 'pending'" class="card contact-config-card">
       <div class="section-title">快递员联系方式配置 <em class="field-hint">全店铺通用</em></div>
-      <table v-if="contactConfigs.list.length" class="contact-config-table">
-        <thead>
-          <tr>
-            <th class="def-col">默认</th>
-            <th>电话 <em class="req">*</em></th>
-            <th>下单人名称</th>
-            <th>地址 <em class="req">*</em></th>
-            <th class="ops">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(c, i) in contactConfigs.list" :key="c.id">
-            <td class="def-col">
-              <input
-                type="radio"
-                name="contact-config-default"
-                :checked="c.isDefault"
-                @change="onSetContactConfigDefault(c)"
-              />
-            </td>
-            <td><input v-model="c.phone" placeholder="快递员联系电话" /></td>
-            <td><input v-model="c.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" /></td>
-            <td><input v-model="c.comment" placeholder="提供给快递公司的取件地址" /></td>
-            <td class="ops">
-              <button class="btn btn-danger btn-sm" @click="onRemoveContactConfig(i)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div class="contact-config-actions">
-        <button class="btn btn-ghost btn-sm" @click="onAddContactConfig">添加联系方式</button>
-        <button
-          class="btn btn-primary btn-sm"
-          :disabled="contactConfigs.saving"
-          @click="onSaveContactConfigs"
-        >
-          {{ contactConfigs.saving ? '保存中…' : '保存配置' }}
-        </button>
-      </div>
+
+      <!-- 折叠视图:只展示默认项 -->
+      <template v-if="!contactConfigs.expanded">
+        <div v-if="defaultContactConfig" class="contact-config-collapsed">
+          <span class="cc-item cc-phone">{{ defaultContactConfig.phone }}</span>
+          <span class="cc-item">{{ defaultContactConfig.wechatNickname || '默认店铺名' }}</span>
+          <span class="cc-item cc-address" :title="defaultContactConfig.comment">
+            {{ defaultContactConfig.comment }}
+          </span>
+          <div class="spacer"></div>
+          <button class="btn btn-ghost btn-sm" @click="contactConfigs.expanded = true">
+            展开全部({{ contactConfigs.list.length }})
+          </button>
+        </div>
+        <div v-else class="contact-config-collapsed empty">
+          <span class="form-hint">暂无联系方式配置</span>
+          <div class="spacer"></div>
+          <button class="btn btn-ghost btn-sm" @click="onAddContactConfig">添加联系方式</button>
+        </div>
+      </template>
+
+      <!-- 展开视图:完整可编辑表格 -->
+      <template v-else>
+        <table v-if="contactConfigs.list.length" class="contact-config-table">
+          <thead>
+            <tr>
+              <th class="def-col">默认</th>
+              <th>电话 <em class="req">*</em></th>
+              <th>下单人名称</th>
+              <th>地址 <em class="req">*</em></th>
+              <th class="ops">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(c, i) in contactConfigs.list" :key="c.id">
+              <td class="def-col">
+                <input
+                  type="radio"
+                  name="contact-config-default"
+                  :checked="c.isDefault"
+                  @change="onSetContactConfigDefault(c)"
+                />
+              </td>
+              <td><input v-model="c.phone" placeholder="快递员联系电话" /></td>
+              <td><input v-model="c.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" /></td>
+              <td><input v-model="c.comment" placeholder="提供给快递公司的取件地址" /></td>
+              <td class="ops">
+                <button class="btn btn-danger btn-sm" @click="onRemoveContactConfig(i)">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="contact-config-actions">
+          <button class="btn btn-ghost btn-sm" @click="onAddContactConfig">添加联系方式</button>
+          <button class="btn btn-ghost btn-sm" @click="contactConfigs.expanded = false">收起</button>
+          <button
+            class="btn btn-primary btn-sm"
+            :disabled="contactConfigs.saving"
+            @click="onSaveContactConfigs"
+          >
+            {{ contactConfigs.saving ? '保存中…' : '保存配置' }}
+          </button>
+        </div>
+      </template>
+
       <p class="form-hint">
         电话与地址为必填(地址提供给快递公司取件);下单人名称选填,为空时默认使用店铺名「{{ currentStoreName() }}」。
         配置为全店铺通用一份,切换店铺不会改变。
       </p>
     </div>
 
-    <!-- 发运清单 -->
+    <!-- 发运清单(2026-11-01:待处理=进行中,已完成=历史快照;创建发运入口在待处理占位行) -->
     <div class="card list-card">
-      <div class="section-title">发运清单</div>
-      <div v-if="carriageList.loading && !currentRows.length" class="list-empty">加载中…</div>
-      <div v-else-if="carriageList.loaded && !currentRows.length" class="list-empty">
-        该店铺暂无发运记录
+      <div class="section-title">
+        {{ activeSubTab === 'pending' ? '发运清单 · 待处理' : '发运清单 · 已完成' }}
+      </div>
+      <div v-if="listLoading && !listRows.length" class="list-empty">加载中…</div>
+      <div v-else-if="listLoaded && !listRows.length" class="list-empty">
+        {{ activeSubTab === 'pending' ? '暂无进行中的发运' : '暂无已完成发运' }}
       </div>
       <table v-else class="carriage-table">
         <thead>
           <tr>
+            <th>店铺</th>
             <th>发运 ID</th>
             <th>配送方式</th>
             <th>发运日期</th>
@@ -667,8 +746,12 @@ async function onStoreChange() {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in currentRows" :key="row.id + '-' + row.delivery_method_id">
+          <tr
+            v-for="row in listRows"
+            :key="row.store_id + '-' + row.id + '-' + row.delivery_method_id"
+          >
             <template v-if="row.is_placeholder">
+              <td><span class="store-name">{{ row.store_name }}</span></td>
               <td class="mono placeholder">待创建</td>
               <td>
                 <span class="dm-name">{{ row.delivery_method_name || row.delivery_method_id }}</span>
@@ -682,6 +765,7 @@ async function onStoreChange() {
               </td>
             </template>
             <template v-else>
+              <td><span class="store-name">{{ row.store_name }}</span></td>
               <td class="mono label-id">#{{ row.id }}</td>
               <td>
                 <span class="dm-name">{{ row.delivery_method_name || row.delivery_method_id }}</span>
@@ -691,7 +775,7 @@ async function onStoreChange() {
               </td>
               <td>{{ row.departure_date || '—' }}</td>
               <td>
-                <span class="status-tag">{{ carriageStatusLabel(row.status) }}</span>
+                <span class="status-tag">{{ row.status_label || carriageStatusLabel(row.status) }}</span>
                 <span v-if="row.postings_count" class="row-sub">{{ row.postings_count }} 个货件</span>
               </td>
               <td class="num">{{ row.postings_count }}</td>
@@ -722,6 +806,10 @@ async function onStoreChange() {
     <AppModal :open="detail.open" title="发运详情" size="xl" @update:open="detail.open = $event">
       <template v-if="detail.carriage">
         <div class="detail-grid">
+          <div class="detail-item">
+            <span class="detail-label">店铺</span>
+            <span class="detail-value">{{ currentStoreName() || detail.carriage.store_name || '—' }}</span>
+          </div>
           <div class="detail-item">
             <span class="detail-label">发运 ID</span>
             <span class="detail-value mono">#{{ detail.carriageId }}</span>
@@ -765,7 +853,12 @@ async function onStoreChange() {
               {{ editPostings.saving ? '保存中…' : '保存货件' }}
             </button>
             <button v-if="postingsEditable" class="btn btn-ghost btn-sm" @click="onOpenCandidate">添加货件</button>
-            <button class="btn btn-ghost btn-sm" :disabled="detail.postingsLoading" @click="loadPostings(detail.carriage)">
+            <button
+              v-if="!detail.fromHistory"
+              class="btn btn-ghost btn-sm"
+              :disabled="detail.postingsLoading"
+              @click="loadPostings(detail.carriage)"
+            >
               {{ detail.postingsLoading ? '加载中…' : '刷新' }}
             </button>
           </div>
@@ -821,14 +914,15 @@ async function onStoreChange() {
         <div class="detail-section">
           <div class="detail-section-head">
             <span>快递员联系方式</span>
-            <em v-if="!contactApplicable" class="field-hint">仅 OGL 上门取件(pickup + ozon_outsourced)适用</em>
+            <em v-if="detail.fromHistory" class="field-hint">历史快照,仅展示</em>
+            <em v-else-if="!contactApplicable" class="field-hint">仅 OGL 上门取件(pickup + ozon_outsourced)适用</em>
           </div>
           <div class="contact-form">
             <label class="contact-select-label">
               <span>选择配置</span>
               <select
                 v-model="detail.selectedContactConfigId"
-                :disabled="!contactApplicable || !contactConfigs.list.length"
+                :disabled="detail.fromHistory || !contactApplicable || !contactConfigs.list.length"
                 @change="onSelectContactConfig"
               >
                 <option value="">手动填写</option>
@@ -839,17 +933,18 @@ async function onStoreChange() {
             </label>
             <label>
               <span>电话 <em class="req">*</em></span>
-              <input v-model="detail.phone" placeholder="快递员联系电话" :disabled="!contactApplicable" />
+              <input v-model="detail.phone" placeholder="快递员联系电话" :disabled="detail.fromHistory || !contactApplicable" />
             </label>
             <label>
               <span>下单人名称</span>
-              <input v-model="detail.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" :disabled="!contactApplicable" />
+              <input v-model="detail.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" :disabled="detail.fromHistory || !contactApplicable" />
             </label>
             <label>
               <span>地址 <em class="req">*</em></span>
-              <input v-model="detail.comment" placeholder="提供给快递公司的取件地址" :disabled="!contactApplicable" />
+              <input v-model="detail.comment" placeholder="提供给快递公司的取件地址" :disabled="detail.fromHistory || !contactApplicable" />
             </label>
             <button
+              v-if="!detail.fromHistory"
               class="btn btn-ghost btn-sm"
               :disabled="detail.savingContact || !contactApplicable"
               @click="onSaveContact"
@@ -857,6 +952,7 @@ async function onStoreChange() {
               {{ detail.savingContact ? '保存中…' : '保存' }}
             </button>
             <button
+              v-if="!detail.fromHistory"
               class="btn btn-ghost btn-sm"
               :disabled="!contactApplicable"
               @click="onSetAsDefault"
@@ -895,6 +991,29 @@ async function onStoreChange() {
           </button>
         </div>
       </template>
+    </AppModal>
+
+    <!-- 创建发运弹窗(2026-11-01:占位行触发) -->
+    <AppModal :open="createModal.open" title="创建发运" size="sm" @update:open="createModal.open = $event">
+      <div class="create-modal">
+        <p class="create-modal-store">店铺:{{ createModal.storeName }}</p>
+        <p class="create-modal-method">配送方式:{{ createModal.deliveryMethodName }}</p>
+        <label class="create-modal-field">
+          <span>发运日期</span>
+          <input v-model="createModal.departureDate" type="date" />
+        </label>
+        <p class="form-hint">该配送方式下所有「已准备发运」货件将自动进入发运。</p>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" @click="createModal.open = false">取消</button>
+          <button
+            class="btn btn-primary"
+            :disabled="createModal.creating"
+            @click="onCreateFromModal"
+          >
+            {{ createModal.creating ? '创建中…' : '创建发运' }}
+          </button>
+        </div>
+      </div>
     </AppModal>
 
     <!-- 可加入货件候选弹窗(2026-10-30) -->
@@ -983,45 +1102,77 @@ async function onStoreChange() {
 }
 
 .section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
   margin-bottom: 12px;
 }
 
-/* ── 创建区 ── */
-.create-card {
-  padding: 16px 20px;
-}
-.create-form {
+/* ── 子 tab(2026-11-01):待处理 / 已完成 ── */
+.sub-tabs {
   display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding: 0 4px;
 }
-.create-form label {
+.sub-tab {
+  padding: 8px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.sub-tab:hover {
+  color: var(--primary);
+}
+.sub-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+/* ── 创建发运弹窗(2026-11-01) ── */
+.create-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0;
+}
+.create-modal-store,
+.create-modal-method {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text);
+}
+.create-modal-field {
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
-.create-form label > span {
-  font-size: 12.5px;
+.create-modal-field span {
+  font-size: 12px;
   color: var(--muted);
 }
-.create-form select,
-.create-form input[type='date'] {
+.create-modal-field input[type='date'] {
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 13.5px;
   background: #fff;
   color: var(--text);
-  min-width: 220px;
+  max-width: 220px;
 }
-.create-form select:focus,
-.create-form input:focus {
-  outline: none;
-  border-color: var(--primary);
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
 }
 .form-hint {
   margin: 10px 0 0;
@@ -1089,6 +1240,10 @@ async function onStoreChange() {
 }
 .dm-name {
   font-weight: 500;
+}
+.store-name {
+  font-weight: 500;
+  white-space: nowrap;
 }
 .row-sub {
   display: block;
@@ -1263,6 +1418,29 @@ async function onStoreChange() {
   align-items: center;
   gap: 10px;
   margin-top: 10px;
+}
+.contact-config-collapsed {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 2px;
+}
+.contact-config-collapsed.empty {
+  padding: 4px 2px;
+}
+.cc-item {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.cc-phone {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.cc-address {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 420px;
 }
 
 /* 详情联系方式:配置下拉框 */

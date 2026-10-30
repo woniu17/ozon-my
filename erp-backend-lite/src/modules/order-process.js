@@ -49,6 +49,7 @@ import {
   carriageCourierContactGet,
   carriagePostingList,
 } from '../services/ozon-opi.js';
+import { upsertCarriageHistory, updateCarriageHistoryJson } from '../services/carriage-history-sync.js';
 import { ApiError, ErrorCode } from '../utils/error-codes.js';
 import { notifyPostingEvent } from '../services/webhook/feishu-notify.js';
 import { translateCancelReason } from '../services/cancel-reason-i18n.js';
@@ -1739,6 +1740,7 @@ router.post('/admin/api/order-process/carriage/delivery-methods', async (req, re
 });
 
 // 发运清单(/v2/carriage/delivery/list;旧 /v1/posting/carriage-available 已废弃 2026-03-20)
+// 2026-11-01:每次拉取同时把发运快照 upsert 到本地历史表,支撑"已完成"子 tab
 router.post('/admin/api/order-process/carriage/list', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
@@ -1747,8 +1749,71 @@ router.post('/admin/api/order-process/carriage/list', async (req, res) => {
       filter: req.body?.filter,
       limit: req.body?.limit,
     });
+    for (const m of r?.methods || []) {
+      for (const c of m.carriages || []) {
+        upsertCarriageHistory(store, c);
+      }
+    }
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '获取发运清单'); }
+});
+
+// 已完成发运历史(2026-11-01):Ozon 已完成发运查不到,从本地持久化表读取
+// 返回已完成(received/delivered/cancelled)或已归档(archived_at 非空)记录,
+// 并解析 postings_json/contact_json 快照供"已完成"详情展示。
+router.post('/admin/api/order-process/carriage/history/list', async (req, res) => {
+  try {
+    requireCarriageStore(req); // 仅鉴权;历史为本地全量
+    const rows = db
+      .prepare(
+        `SELECT store_id, carriage_id AS id, status, delivery_method_id, delivery_method_name,
+                departure_date, warehouse_name, warehouse_city, first_mile_type, integration_type,
+                postings_count, containers_count, carriage_json, postings_json, contact_json,
+                last_seen_at, archived_at, updated_at
+         FROM op_carriage_history
+         WHERE status IN ('received', 'delivered', 'cancelled') OR archived_at IS NOT NULL
+         ORDER BY updated_at DESC
+         LIMIT 2000`
+      )
+      .all();
+    const stores = config.loadStores() || [];
+    const items = rows.map((r) => {
+      let postings = [];
+      let contact = [];
+      let carriage = null;
+      try { if (r.postings_json) postings = JSON.parse(r.postings_json); } catch { /* 快照缺失 */ }
+      try { if (r.contact_json) contact = JSON.parse(r.contact_json); } catch { /* 快照缺失 */ }
+      try { if (r.carriage_json) carriage = JSON.parse(r.carriage_json); } catch { /* 快照缺失 */ }
+      const storeName = stores.find((s) => String(s.id) === String(r.store_id))?.name || '';
+      // 从 Ozon 列表消失被归档的进行中记录,统一显示为"已归档"历史
+      const archived =
+        !!r.archived_at && !['received', 'delivered', 'cancelled'].includes(r.status);
+      return {
+        id: r.id,
+        store_id: r.store_id,
+        store_name: storeName,
+        status: archived ? 'archived' : r.status,
+        last_status: archived ? r.status : null,
+        delivery_method_id: r.delivery_method_id,
+        delivery_method_name: r.delivery_method_name,
+        departure_date: r.departure_date,
+        warehouse_name: r.warehouse_name,
+        warehouse_city: r.warehouse_city,
+        first_mile_type: r.first_mile_type,
+        integration_type: r.integration_type,
+        postings_count: r.postings_count,
+        containers_count: r.containers_count,
+        archived_at: r.archived_at,
+        last_seen_at: r.last_seen_at,
+        updated_at: r.updated_at,
+        postings,
+        contact,
+        carriage,
+        from_history: true,
+      };
+    });
+    res.json(ok({ items }));
+  } catch (e) { carriageHandleError(e, req, res, '获取发运历史'); }
 });
 
 // 创建发运:所有"已准备发运"货件自动进入
@@ -1786,6 +1851,12 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
       deliveryMethodId: req.body?.deliveryMethodId,
     });
     if (r?.postings) attachPostingProductImages(store.id, r.postings);
+    // 2026-11-01:货件快照写回本地历史(发运完成后 Ozon 查不到)
+    if (r?.postings) {
+      updateCarriageHistoryJson(store.id, req.body?.carriageId, {
+        postingsJson: JSON.stringify(r.postings),
+      });
+    }
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '获取发运货件'); }
 });
@@ -1881,6 +1952,12 @@ router.post('/admin/api/order-process/carriage/courier-contact/get', async (req,
   try {
     const store = requireCarriageStore(req);
     const r = await carriageCourierContactGet(store, req.body?.carriageId);
+    // 2026-11-01:联系方式快照写回本地历史(发运完成后 Ozon 查不到)
+    if (r?.contact) {
+      updateCarriageHistoryJson(store.id, req.body?.carriageId, {
+        contactJson: JSON.stringify(r.contact),
+      });
+    }
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '获取联系方式'); }
 });

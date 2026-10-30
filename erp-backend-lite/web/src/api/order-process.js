@@ -356,6 +356,13 @@ export function getCarriageList(storeId, params = {}) {
   return request.post('/admin/api/order-process/carriage/list', { storeId, ...params });
 }
 
+// 已完成发运历史(2026-11-01,Ozon 已完成发运查不到,由本地持久化)
+// 返回 { items: [{ id, store_id, store_name, status, delivery_method_name, departure_date,
+//                 postings_count, archived_at, postings, contact, carriage }] }
+export function getCarriageHistory(storeId) {
+  return request.post('/admin/api/order-process/carriage/history/list', { storeId });
+}
+
 // 创建发运:该配送方式下所有"已准备发运"货件自动进入
 // body: { deliveryMethodId?, departureDate?, allBlrTraceable? } → { carriage_id }
 export function createCarriage(storeId, body = {}) {

@@ -1212,3 +1212,36 @@ CREATE INDEX IF NOT EXISTS idx_task_run_logs_level_time ON task_run_logs(level, 
 CREATE INDEX IF NOT EXISTS idx_task_run_logs_task_time ON task_run_logs(task, id DESC);
 CREATE INDEX IF NOT EXISTS idx_task_run_logs_status_time ON task_run_logs(status, id DESC);
 CREATE INDEX IF NOT EXISTS idx_task_run_logs_created ON task_run_logs(created_at DESC);
+
+-- ════════════════════════════════════════════════════════════════
+-- 发运历史(2026-11-01):Ozon carriage 列表只返回进行中/近期发运,
+-- 已完成发运会从 Ozon API 消失;发运生命周期数据本地持久化,
+-- "已完成"子 tab 从本表读取历史清单。
+-- 来源:carriage/list 每次拉取时 upsert 基本字段 + carriage_json;
+--       reading 路径(carriage/posting-list、courier-contact/get)顺手写回货件/联系方式快照。
+-- ════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS op_carriage_history (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id              TEXT NOT NULL,
+  carriage_id           INTEGER NOT NULL,
+  status                TEXT,
+  delivery_method_id    INTEGER,
+  delivery_method_name  TEXT,
+  departure_date       TEXT,
+  warehouse_name        TEXT,
+  warehouse_city        TEXT,
+  first_mile_type       TEXT,
+  integration_type      TEXT,
+  postings_count        INTEGER DEFAULT 0,
+  containers_count      TEXT,
+  carriage_json         TEXT,                -- Ozon 发运对象快照
+  postings_json         TEXT,                -- 货件列表快照(含商品图片,读路径写回)
+  contact_json          TEXT,                -- 快递员联系方式快照
+  last_seen_at          TEXT,                -- 最后一次在 Ozon 列表中出现(UTC ISO)
+  archived_at           TEXT,                -- 从 Ozon 列表消失后归档时间(视为历史)
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL,
+  UNIQUE(store_id, carriage_id)
+);
+CREATE INDEX IF NOT EXISTS idx_op_carriage_history_store ON op_carriage_history(store_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_op_carriage_history_status ON op_carriage_history(status);

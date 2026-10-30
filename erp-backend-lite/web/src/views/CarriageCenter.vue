@@ -1,5 +1,5 @@
 <script setup>
-// 货运中心(2026-10-30):合并「货运创建/发运管理」与「打印货运标签」为单页
+// 发运管理(2026-10-30):合并「发运管理」与「打印货运标签」为单页
 // - 发运管理:创建发运、发运清单、货件/联系方式/确认/取消(原 CarriageManage)
 // - 打印货运标签:双通道打印、预览、OGL 入仓单号(原 ContainerLabelPrint)
 // 旧链接 /print-container-label 重定向到 /carriage-manage?tab=print,直达打印页。

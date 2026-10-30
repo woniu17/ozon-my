@@ -41,6 +41,7 @@ import { startStockSync, stopStockSync } from './services/stock-sync.js';
 import { startAccrualByDaySync, stopAccrualByDaySync } from './services/accrual-byday-sync.js';
 import { startIndexSync, stopIndexSync } from './services/index-sync.js';
 import { startSkuGroupSync, stopSkuGroupSync } from './services/sku-group-sync.js';
+import { startCarriageHistorySync, stopCarriageHistorySync } from './services/carriage-history-sync.js';
 import { startBatchUploadPoller, stopBatchUploadPoller } from './services/batch-upload-poller.js';
 import { startBatchImagePoller, stopBatchImagePoller } from './services/batch-image-poller.js';
 import { startImageRefreshPoller, stopImageRefreshPoller } from './services/image-refresh-poller.js';
@@ -265,6 +266,9 @@ const server = app.listen(config.port, () => {
   // 采集箱同款分组定时重建:每 30 分钟基于跟卖关系刷新 group_id/group_rep
   // (驱动采集箱"合并同款"去重,新采集数据会改变分组)
   startSkuGroupSync();
+  // 发运历史同步(2026-11-01):每 30 分钟把各店铺发运快照 upsert 到本地,
+  // 归档从 Ozon 列表消失超过 3 天的进行中发运,支撑"已完成"子 tab
+  startCarriageHistorySync();
   // P2-2:启动批量均衡上架调度器(两阶段改造 2026-07):
   //   第一阶段 batch-image-poller:每 500ms 扫描,并发 5,不限速,负责图片处理/水印渲染(PENDING→IMAGE_DONE)
   //   第二阶段 batch-upload-poller:每 2 秒扫描,全局串行,OPI 阶段限速(IMAGE_DONE→SUCCESS/FAILED)
@@ -302,6 +306,7 @@ async function shutdown(signal) {
   stopAccrualByDaySync();
   stopIndexSync();
   stopSkuGroupSync();
+  stopCarriageHistorySync();
   stopOrderSync();
   stopBatchImagePoller();
   stopBatchUploadPoller();
