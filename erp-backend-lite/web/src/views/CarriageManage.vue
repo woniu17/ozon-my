@@ -1492,7 +1492,7 @@ defineExpose({ refreshCurrent, listLoading });
               <span>下单人名称</span>
               <input v-model="detail.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" />
             </label>
-            <label>
+            <label class="contact-address-field">
               <span>地址 <em class="req">*</em></span>
               <input v-model="detail.comment" placeholder="提供给快递公司的取件地址" />
             </label>
@@ -1747,7 +1747,7 @@ defineExpose({ refreshCurrent, listLoading });
               <span>下单人名称</span>
               <input v-model="createModal.wechatNickname" :placeholder="`选填,默认:${createModal.storeName || '店铺名'}`" />
             </label>
-            <label>
+            <label class="contact-address-field">
               <span>取件地址 <em class="req">*</em></span>
               <input v-model="createModal.comment" placeholder="提供给快递公司的取件地址" />
             </label>
@@ -2257,6 +2257,15 @@ defineExpose({ refreshCurrent, listLoading });
   min-width: 160px;
   background: #fff;
   color: var(--text);
+}
+/* 地址输入框加长(2026-11-05):占满表单剩余宽度 */
+.contact-form label.contact-address-field {
+  flex: 1 1 320px;
+  min-width: 260px;
+}
+.contact-form label.contact-address-field input {
+  width: 100%;
+  min-width: 0;
 }
 /* 详情弹窗联系方式只读展示(2026-11-05;2026-11-05:一行横排) */
 .contact-view {
