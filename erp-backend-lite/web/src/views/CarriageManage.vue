@@ -161,7 +161,7 @@ const detail = reactive({
   phone: '',
   wechatNickname: '',
   comment: '',
-  selectedContactConfigId: '', // 下拉选择的配置项 id(空=手动填写)
+  selectedContactConfigId: '', // 选中的配置项 id(2026-11-05:无配置时为空,表单可直接编辑)
   savingContact: false,
   editingContact: false, // 2026-11-05:详情弹窗联系方式默认只读展示,点击「修改」才进入输入框编辑
   containersCount: '',
@@ -542,7 +542,7 @@ async function onCreateFromModal() {
 // 创建弹窗:选择已配置的联系方式后自动填充(2026-11-04)
 function onCreateSelectContactConfig() {
   const item = createModal.contactConfigs.find((c) => c.id === createModal.selectedContactConfigId);
-  if (!item) return; // 手动填写:保留当前表单内容
+  if (!item) return; // 未选中配置(无配置场景):保留当前表单内容
   createModal.phone = item.phone || '';
   createModal.wechatNickname = item.wechatNickname || createModal.storeName;
   createModal.comment = item.comment || '';
@@ -1734,16 +1734,6 @@ defineExpose({ refreshCurrent, listLoading });
               <span class="cc-item">{{ c.wechatNickname || '默认店铺名' }}</span>
               <span class="cc-item cc-address" :title="c.comment">{{ c.comment || '—' }}</span>
               <span v-if="c.isDefault" class="cc-default-tag">默认</span>
-            </label>
-            <label class="cc-radio-row" :class="{ active: !createModal.selectedContactConfigId }">
-              <input
-                type="radio"
-                name="create-contact-config"
-                value=""
-                v-model="createModal.selectedContactConfigId"
-                @change="onCreateSelectContactConfig"
-              />
-              <span class="cc-item">手动填写</span>
             </label>
           </div>
 
