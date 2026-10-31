@@ -17,6 +17,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -33,7 +34,6 @@ import com.yochylin.scanner.api.Api
 import com.yochylin.scanner.api.ApiException
 import com.yochylin.scanner.model.RatingErrorItem
 import com.yochylin.scanner.model.RatingErrorsResponse
-import com.yochylin.scanner.model.RatingErrorTotals
 import com.yochylin.scanner.model.RatingHealthSummaryResponse
 import com.yochylin.scanner.model.RatingStoreHealth
 import com.yochylin.scanner.model.StoreItem
@@ -59,7 +59,6 @@ class StoreHealthFragment : Fragment() {
     private lateinit var rangeHint: TextView
     private lateinit var overviewContainer: LinearLayout
     private lateinit var trendContainer: LinearLayout
-    private lateinit var distContainer: LinearLayout
     private lateinit var progressBar: ProgressBar
     private lateinit var recyclerView: RecyclerView
     private lateinit var loadMoreBtn: TextView
@@ -89,7 +88,6 @@ class StoreHealthFragment : Fragment() {
         rangeHint = view.findViewById(R.id.healthRangeHint)
         overviewContainer = view.findViewById(R.id.healthOverviewContainer)
         trendContainer = view.findViewById(R.id.healthTrendContainer)
-        distContainer = view.findViewById(R.id.healthDistContainer)
         progressBar = view.findViewById(R.id.healthProgress)
         recyclerView = view.findViewById(R.id.healthErrorList)
         loadMoreBtn = view.findViewById(R.id.healthLoadMoreBtn)
@@ -114,10 +112,8 @@ class StoreHealthFragment : Fragment() {
                 val resp = Api.parse<RatingHealthSummaryResponse>(data)
                 val stores = resp.stores ?: emptyList()
                 renderRangeHint(resp.stores)
-                renderTotals(resp.totals, stores.maxOfOrNull { it.index ?: 0.0 } ?: 0.0)
                 renderStores(stores)
                 renderTrend(stores)
-                renderDist(resp.totals)
 
                 // 重置明细分页
                 errorTotal = 0
@@ -215,322 +211,200 @@ class StoreHealthFragment : Fragment() {
         }
     }
 
-    // ── 概览指标：指数 Hero + 指数刻度条 + 2x2 指标卡(Ozon 风格) ──
-    private fun renderTotals(t: RatingErrorTotals?, index: Double) {
+    // ── 各店铺错误指数卡片(每行最多3个,按店铺编号 YQL01~YQL06 顺序) ──
+    private fun renderStores(stores: List<RatingStoreHealth>) {
         overviewContainer.removeAllViews()
-        val totals = t ?: return
-
-        // 指数 Hero 卡：大号指数% + 罚款支出 + 五色刻度条
-        val hero = LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.VERTICAL
-            setRoundedBgStroke(Color.WHITE, Color.parseColor("#E9EDF3"), 16f, 1f)
-            setPadding(dp(16).toInt(), dp(14).toInt(), dp(16).toInt(), dp(10).toInt())
-        }
-        val heroRow = LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        heroRow.addView(LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            addView(TextView(requireContext()).apply {
-                text = String.format(Locale.US, "%.2f%%", index * 100)
-                setTextColor(Color.parseColor(indexColor(index)))
-                textSize = 30f
-                typeface = Typeface.DEFAULT_BOLD
-            })
-            addView(TextView(requireContext()).apply {
-                text = "14天内指数"
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                textSize = 11f
-                setPadding(0, dp(2).toInt(), 0, 0)
-            })
-        })
-        heroRow.addView(LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.END
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            addView(TextView(requireContext()).apply {
-                text = "¥ ${fmtMoney(totals.chargeSum)}"
-                setTextColor(Color.parseColor(COLOR_TEXT))
-                textSize = 22f
-                typeface = Typeface.DEFAULT_BOLD
-                gravity = Gravity.END
-            })
-            addView(TextView(requireContext()).apply {
-                text = "近14天罚款支出"
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                textSize = 11f
-                gravity = Gravity.END
-                setPadding(0, dp(2).toInt(), 0, 0)
-            })
-        })
-        hero.addView(heroRow)
-        hero.addView(IndexScaleView(requireContext()).apply {
-            this.index = index
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(12).toInt() }
-        })
-        overviewContainer.addView(hero)
-
-        // 2x2 指标卡
-        val defs = listOf(
-            Triple("影响货件", totals.errorPostingCount, COLOR_PRIMARY),
-            Triple("卖家取消", totals.sellerCancellationCount, COLOR_ERR),
-            Triple("卖家逾期", totals.sellerDelayCount, COLOR_WARN),
-            Triple("宽限中", totals.graceCount, COLOR_OK),
-        )
-        for (row in 0 until 2) {
-            val rowLay = LinearLayout(requireContext()).apply {
+        if (stores.isEmpty()) return
+        val sorted = stores.sortedBy { it.storeId ?: "" }
+        var i = 0
+        while (i < sorted.size) {
+            val row = LinearLayout(requireContext()).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(104).toInt()
-                ).apply { if (row > 0) topMargin = dp(12).toInt() }
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { if (i > 0) topMargin = dp(10).toInt() }
             }
-            for (col in 0 until 2) {
-                val (title, count, color) = defs[row * 2 + col]
-                val card = metricCard(title, count, color)
-                val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-                if (col > 0) lp.leftMargin = dp(12).toInt()
-                rowLay.addView(card, lp)
+            for (col in 0 until 3) {
+                val store = sorted.getOrNull(i + col) ?: break
+                val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                if (col > 0) lp.leftMargin = dp(10).toInt()
+                row.addView(storeIndexCard(store), lp)
             }
-            overviewContainer.addView(rowLay)
+            overviewContainer.addView(row)
+            i += 3
         }
     }
 
-    private fun metricCard(title: String, count: Int, dotColor: String): LinearLayout {
+    private fun storeIndexCard(store: RatingStoreHealth): LinearLayout {
         val ctx = requireContext()
+        val idx = store.index ?: 0.0
+        val color = indexColor(idx)
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-            setRoundedBgStroke(Color.WHITE, Color.parseColor("#E9EDF3"), 16f, 1f)
-            setPadding(dp(14).toInt(), dp(12).toInt(), dp(14).toInt(), dp(12).toInt())
+            setRoundedBgStroke(Color.WHITE, Color.parseColor("#E9EDF3"), 14f, 1f)
+            setPadding(dp(12).toInt(), dp(10).toInt(), dp(12).toInt(), dp(8).toInt())
 
+            // 店铺名 + 指数%(Ozon 官方阈值着色)
             addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                addView(View(ctx).apply {
-                    setRoundedBg(Color.parseColor(dotColor), 4f)
-                    layoutParams = LinearLayout.LayoutParams(dp(8).toInt(), dp(8).toInt()).apply {
-                        rightMargin = dp(6).toInt()
-                    }
+                addView(TextView(ctx).apply {
+                    text = store.storeName ?: store.storeId ?: "—"
+                    setTextColor(Color.parseColor(COLOR_TEXT))
+                    textSize = 13f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 })
                 addView(TextView(ctx).apply {
-                    text = title
-                    setTextColor(Color.parseColor(COLOR_MUTE))
-                    textSize = 11f
+                    text = String.format(Locale.US, "%.2f%%", idx * 100)
+                    setTextColor(Color.parseColor(color))
+                    textSize = 17f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    gravity = Gravity.END
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        leftMargin = dp(6).toInt()
+                    }
                 })
             })
 
-            addView(TextView(ctx).apply {
-                text = count.toString()
-                setTextColor(Color.parseColor(COLOR_TEXT))
-                textSize = 26f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setPadding(0, dp(6).toInt(), 0, 0)
+            // 五色指数刻度条
+            addView(IndexScaleView(ctx).apply {
+                this.index = idx
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8).toInt() }
             })
 
-            addView(TextView(ctx).apply {
-                text = "单"
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                textSize = 10f
-                setPadding(0, dp(2).toInt(), 0, 0)
+            // 统计周期 + 罚款
+            addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(8).toInt(), 0, 0)
+                val period = if (!store.periodFrom.isNullOrBlank() && !store.periodTo.isNullOrBlank()) {
+                    "${store.periodFrom} ~ ${shiftDays(store.periodTo, -1)}"
+                } else {
+                    "—"
+                }
+                addView(TextView(ctx).apply {
+                    text = period
+                    setTextColor(Color.parseColor(COLOR_MUTE))
+                    textSize = 9f
+                    maxLines = 1
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                addView(TextView(ctx).apply {
+                    text = "罚款 ${fmtMoney(store.processingCostsSum)}"
+                    setTextColor(Color.parseColor(COLOR_MUTE))
+                    textSize = 9f
+                    gravity = Gravity.END
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        leftMargin = dp(4).toInt()
+                    }
+                })
             })
         }
     }
 
-    // ── 店铺健康对比(横向条形图) ──
-    private fun renderStores(stores: List<RatingStoreHealth>) {
+    // ── 每日错误指数趋势(全部店铺 × 指数统计周期,分组柱状) ──
+    private fun renderTrend(stores: List<RatingStoreHealth>) {
         trendContainer.removeAllViews()
-        if (stores.isEmpty()) return
-        val card = cardContainer()
-        val first = stores.firstOrNull()
+        val active = stores.filter { !it.defects.isNullOrEmpty() }
+        if (active.isEmpty()) return
+        val dates = active.flatMap { s -> s.defects?.mapNotNull { d -> d.date } ?: emptyList() }
+            .toSortedSet()
+            .toList()
+        if (dates.isEmpty()) return
+
+        val first = active.firstOrNull()
         val periodText = if (first != null && !first.periodFrom.isNullOrBlank() && !first.periodTo.isNullOrBlank()) {
-            " · ${first.periodFrom} ~ ${shiftDays(first.periodTo, -1)}"
+            "${first.periodFrom} ~ ${shiftDays(first.periodTo, -1)}"
         } else {
             ""
         }
-        card.addView(sectionTitle("店铺健康对比$periodText"))
-        for (store in stores) {
-            card.addView(storeBarRow(store))
-        }
-        trendContainer.addView(card)
-    }
 
-    private fun storeBarRow(store: RatingStoreHealth): LinearLayout {
-        val ctx = requireContext()
-        val idx = store.index ?: 0.0
-        val fgWeight = ((minOf(idx, 0.5)) / 0.5 * 100).toFloat()
-        return LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(6).toInt(), 0, dp(6).toInt())
-
-            addView(TextView(ctx).apply {
-                text = store.storeName ?: store.storeId ?: "—"
-                setTextColor(Color.parseColor(COLOR_TEXT))
-                textSize = 11f
-                maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                layoutParams = LinearLayout.LayoutParams(dp(72).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
-            })
-
-            // 背景条 + 前景条(weight 比例)
-            val barBg = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setRoundedBg(Color.parseColor("#f2f3f5"), 4f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(10).toInt(), 1f)
-            }
-            val fg = View(ctx).apply { setRoundedBg(Color.parseColor(indexColor(idx)), 4f) }
-            val spacer = View(ctx)
-            barBg.addView(fg, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, fgWeight))
-            barBg.addView(spacer, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 100f - fgWeight))
-            addView(barBg, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                leftMargin = dp(8).toInt()
-                rightMargin = dp(8).toInt()
-            })
-
-            addView(TextView(ctx).apply {
-                text = String.format(Locale.US, "%.2f%%", idx * 100)
-                setTextColor(Color.parseColor(indexColor(idx)))
-                textSize = 11f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                layoutParams = LinearLayout.LayoutParams(dp(64).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
-            })
-        }
-    }
-
-    // ── 近7日指数趋势(取指数最高店铺) ──
-    private fun renderTrend(stores: List<RatingStoreHealth>) {
-        val sorted = stores.sortedByDescending { it.index ?: 0.0 }
-        val store = sorted.firstOrNull() ?: return
-        val defects = store.defects?.takeLast(7) ?: return
-        if (defects.isEmpty()) return
+        val colors = listOf("#165dff", "#00b42a", "#d97706", "#722ed1", "#eb2f96", "#13c2c2", "#fa8c16")
+        val maxIdx = active.flatMap { s -> s.defects?.mapNotNull { d -> d.indexByDate ?: 0.0 } ?: emptyList() }
+            .maxOrNull() ?: 0.0
+        val scaleMax = maxOf(maxIdx, 0.2)
 
         val card = cardContainer()
-        card.addView(sectionTitle("近7日指数趋势 · ${store.storeName}"))
+        card.addView(sectionTitle("每日错误指数趋势 · 全部店铺($periodText)"))
 
-        val maxIdx = maxOf(defects.maxOfOrNull { it.indexByDate ?: 0.0 } ?: 0.0, 0.2)
         val chart = LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.BOTTOM
             setPadding(0, dp(10).toInt(), 0, 0)
         }
-        for (d in defects) {
-            val idx = d.indexByDate ?: 0.0
-            val ratio = (idx / maxIdx).toFloat().coerceIn(0.02f, 1f)
-            val bar = View(requireContext()).apply {
-                setRoundedBg(Color.parseColor(indexColor(idx)), 3f)
-                layoutParams = LinearLayout.LayoutParams(
-                    dp(18).toInt(),
-                    (dp(100f) * ratio).toInt()
-                ).apply { gravity = Gravity.CENTER_HORIZONTAL }
-            }
-            val valTv = TextView(requireContext()).apply {
-                text = String.format(Locale.US, "%.2f%%", idx * 100)
-                textSize = 9f
-                setTextColor(Color.parseColor(indexColor(idx)))
-                gravity = Gravity.CENTER
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            }
-            val dateTv = TextView(requireContext()).apply {
-                text = shortDate(d.date)
-                textSize = 9f
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                gravity = Gravity.CENTER
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            }
+        for (date in dates) {
             val col = LinearLayout(requireContext()).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                layoutParams = LinearLayout.LayoutParams(dp(40).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
             }
-            col.addView(bar)
-            col.addView(valTv)
-            col.addView(dateTv)
+            val barsArea = LinearLayout(requireContext()).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.BOTTOM
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(90).toInt())
+            }
+            active.forEachIndexed { si, store ->
+                val d = store.defects?.find { it.date == date } ?: return@forEachIndexed
+                val ratio = ((d.indexByDate ?: 0.0) / scaleMax).toFloat().coerceIn(0.02f, 1f)
+                val bar = View(requireContext()).apply {
+                    setRoundedBg(Color.parseColor(colors[si % colors.size]), 2f)
+                    layoutParams = LinearLayout.LayoutParams(dp(9).toInt(), (dp(90f) * ratio).toInt()).apply {
+                        if (si > 0) leftMargin = dp(2).toInt()
+                    }
+                }
+                barsArea.addView(bar)
+            }
+            col.addView(barsArea)
+            col.addView(TextView(requireContext()).apply {
+                text = shortDate(date)
+                textSize = 8f
+                setTextColor(Color.parseColor(COLOR_MUTE))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(3).toInt(), 0, 0)
+            })
             chart.addView(col)
         }
-        card.addView(chart)
-        trendContainer.addView(card)
-    }
 
-    // ── 类型/配送方案分布 ──
-    private fun renderDist(t: RatingErrorTotals?) {
-        distContainer.removeAllViews()
-        val totals = t ?: return
-        val card = cardContainer()
-
-        // 类型分布
-        card.addView(sectionTitle("错误类型分布"))
-        val typeRows = listOf(
-            "卖家取消" to totals.sellerCancellationCount,
-            "卖家逾期" to totals.sellerDelayCount,
-        )
-        val totalCount = totals.errorPostingCount
-        for ((label, n) in typeRows) {
-            card.addView(distBarRow(label, n, totalCount, COLOR_PRIMARY))
+        val scroll = HorizontalScrollView(requireContext()).apply {
+            isFillViewport = true
+            addView(chart)
         }
+        card.addView(scroll)
 
-        // 配送方案分布
-        val schemas = totals.schemaCounts?.filter { it.n > 0 } ?: emptyList()
-        if (schemas.isNotEmpty()) {
-            card.addView(sectionTitle("配送方案分布", topMargin = 10))
-            for (s in schemas) {
-                card.addView(distBarRow(s.deliverySchema ?: "UNKNOWN", s.n, totalCount, COLOR_WARN))
-            }
-        }
-
-        if (totalCount == 0 && schemas.isEmpty()) {
-            card.addView(TextView(requireContext()).apply {
-                text = "该区间无影响错误指数的货件"
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                textSize = 12f
-                setPadding(0, dp(8).toInt(), 0, dp(4).toInt())
-            })
-        }
-
-        distContainer.addView(card)
-    }
-
-    private fun distBarRow(label: String, count: Int, total: Int, color: String): LinearLayout {
-        val ctx = requireContext()
-        val pct = if (total > 0) count.toFloat() / total else 0f
-        return LinearLayout(ctx).apply {
+        // 图例
+        val legend = LinearLayout(requireContext()).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(5).toInt(), 0, dp(5).toInt())
-
-            addView(TextView(ctx).apply {
-                text = label
-                setTextColor(Color.parseColor(COLOR_TEXT))
-                textSize = 11f
-                layoutParams = LinearLayout.LayoutParams(dp(76).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
-            })
-
-            val barBg = LinearLayout(ctx).apply {
+            setPadding(0, dp(8).toInt(), 0, 0)
+        }
+        active.forEachIndexed { si, store ->
+            legend.addView(LinearLayout(requireContext()).apply {
                 orientation = LinearLayout.HORIZONTAL
-                setRoundedBg(Color.parseColor("#f2f3f5"), 4f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(10).toInt(), 1f)
-            }
-            val fg = View(ctx).apply { setRoundedBg(Color.parseColor(color), 4f) }
-            val spacer = View(ctx)
-            barBg.addView(fg, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, pct * 100f))
-            barBg.addView(spacer, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, (1f - pct) * 100f))
-            addView(barBg, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                leftMargin = dp(8).toInt()
-                rightMargin = dp(8).toInt()
-            })
-
-            addView(TextView(ctx).apply {
-                text = "$count 单 · ${String.format(Locale.US, "%.0f%%", pct * 100)}"
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                textSize = 10f
-                layoutParams = LinearLayout.LayoutParams(dp(84).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(View(requireContext()).apply {
+                    setRoundedBg(Color.parseColor(colors[si % colors.size]), 2f)
+                    layoutParams = LinearLayout.LayoutParams(dp(14).toInt(), dp(6).toInt()).apply {
+                        rightMargin = dp(3).toInt()
+                    }
+                })
+                addView(TextView(requireContext()).apply {
+                    text = store.storeName ?: store.storeId ?: "—"
+                    setTextColor(Color.parseColor(COLOR_MUTE))
+                    textSize = 8f
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
             })
         }
+        card.addView(legend)
+        trendContainer.addView(card)
     }
 
     // ── 复制货件号 ──

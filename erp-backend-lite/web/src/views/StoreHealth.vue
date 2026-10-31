@@ -72,12 +72,6 @@ async function doSync() {
   }
 }
 
-// ── 概览指标 ─────────────────────────────────────────────────
-const topStore = computed(() => {
-  const stores = summary.value?.stores || [];
-  if (stores.length === 0) return null;
-  return [...stores].sort((a, b) => (Number(b.index) || 0) - (Number(a.index) || 0))[0];
-});
 /** Ozon 官方错误指数色带阈值(≤4% 绿 / ≤10% 青 / ≤20% 黄 / ≤40% 橙 / >40% 红) */
 function indexColor(idx) {
   const n = Number(idx) || 0;
@@ -131,8 +125,6 @@ function segLabelStyle(z) {
   }
   return style;
 }
-const totals = computed(() => summary.value?.totals || null);
-
 // ── 趋势图(指数折线 + 费用柱状)─────────────────────────────
 const STORE_COLORS = ['#165dff', '#00b42a', '#d97706', '#722ed1', '#eb2f96', '#13c2c2', '#fa8c16'];
 const chartSeries = computed(() => {
@@ -173,38 +165,6 @@ function lastPoint(series) {
   const i = Math.min(series.points.length - 1, chartDates.value.length - 1);
   return series.points[i] ? pointXY(series, series.points[i].date, i) : null;
 }
-// 费用柱状:按日期汇总(多店相加)
-const costBars = computed(() => {
-  const map = new Map();
-  for (const s of chartSeries.value) {
-    for (const p of s.points) {
-      const key = p.date;
-      const cost = Number(summary.value?.stores.find((st) => st.storeId === s.storeId)?.defects.find((d) => d.date === key)?.processingCostsSumByDate) || 0;
-      map.set(key, (map.get(key) || 0) + cost);
-    }
-  }
-  return [...map.entries()]
-    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
-    .map(([date, total]) => ({ date, total }));
-});
-const costMax = computed(() => {
-  let m = 0;
-  for (const b of costBars.value) m = Math.max(m, b.total);
-  return m > 0 ? m : 1;
-});
-
-// ── 分布卡片 ─────────────────────────────────────────────────
-const typeDist = computed(() => {
-  const t = totals.value;
-  if (!t) return [];
-  const items = [
-    { key: 'SELLER_CANCELLATION', label: '卖家取消', count: t.sellerCancellationCount, color: '#f53f3f' },
-    { key: 'SELLER_DELAY', label: '卖家逾期', count: t.sellerDelayCount, color: '#d97706' },
-  ];
-  const total = t.errorPostingCount || 1;
-  return items.map((it) => ({ ...it, pct: Math.round((it.count / total) * 100) }));
-});
-
 // ── 明细分页 ─────────────────────────────────────────────────────
 const pager = reactive({ offset: 0, limit: 20 });
 const totalItems = computed(() => errors.value?.total || 0);
@@ -225,13 +185,7 @@ function goOrder(postingNumber) {
 }
 
 // ── 格式化 ───────────────────────────────────────────────────
-function fmtNum(n) {
-  return String(Number(n) || 0);
-}
 function fmtMoney(n) {
-  return (Number(n) || 0).toFixed(2);
-}
-function fmtIndex(n) {
   return (Number(n) || 0).toFixed(2);
 }
 function fmtPct(n) {
@@ -244,14 +198,10 @@ function fmtPeriodEnd(dateStr) {
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 }
-function indexBarWidth(idx) {
-  const n = Number(idx) || 0;
-  return Math.max(2, Math.min(100, (Math.min(n, 1) / 1) * 100));
-}
-/** 全部店铺按错误指数降序(供店铺指数列表) */
+/** 全部店铺按店铺编号顺序(YQL01~YQL06) */
 const sortedStores = computed(() => {
   const stores = summary.value?.stores || [];
-  return [...stores].sort((a, b) => (Number(b.index) || 0) - (Number(a.index) || 0));
+  return [...stores].sort((a, b) => String(a.storeId).localeCompare(String(b.storeId)));
 });
 function typeLabel(t) {
   return t === 'SELLER_CANCELLATION' ? '卖家取消' : t === 'SELLER_DELAY' ? '卖家逾期' : t || '未知';
@@ -290,145 +240,66 @@ onMounted(() => {
       <div class="skeleton-card" v-for="i in 4" :key="i"></div>
     </div>
 
-    <!-- ═══ 概览:指数 Hero + 五色刻度条 + 2x2 指标卡(Ozon 风格) ═══ -->
-    <div class="summary-cards" v-if="summary && summary.stores.length > 0">
-      <!-- Hero 卡:大号指数% + 近14天罚款支出 + 五色刻度条 -->
-      <div class="hero-card">
-        <div class="hero-row">
-          <div class="hero-index">
-            <div class="hero-index-value" :style="{ color: indexColor(topStore.index) }">{{ fmtPct(topStore.index) }}%</div>
-            <div class="hero-label">14天内指数</div>
-          </div>
-          <div class="hero-cost">
-            <div class="hero-cost-value">¥ {{ fmtMoney(totals.chargeSum) }}</div>
-            <div class="hero-label">近14天罚款支出</div>
-          </div>
+    <!-- ═══ 各店铺错误指数(Ozon 官方阈值着色) ═══ -->
+    <div class="store-cards" v-if="summary && summary.stores.length > 0">
+      <div class="store-card" v-for="s in sortedStores" :key="s.storeId">
+        <div class="store-card-head">
+          <span class="store-card-name">{{ s.storeName }}</span>
+          <span class="store-card-index" :style="{ color: indexColor(s.index) }">{{ fmtPct(s.index) }}%</span>
         </div>
         <div class="index-scale">
           <div
-            v-for="(z, i) in scaleSegments(topStore.index)"
+            v-for="(z, i) in scaleSegments(s.index)"
             :key="i"
             class="scale-seg"
             :style="segStyle(z)"
           >
-            <span v-if="z.isActive" class="scale-value" :style="segLabelStyle(z)">{{ fmtPct(topStore.index) }}%</span>
+            <span v-if="z.isActive" class="scale-value" :style="segLabelStyle(z)">{{ fmtPct(s.index) }}%</span>
           </div>
         </div>
         <div class="scale-thresholds">
           <span v-for="t in INDEX_THRESHOLDS" :key="t" class="threshold">{{ t }}</span>
         </div>
-      </div>
-
-      <!-- 2x2 指标卡 -->
-      <div class="metric-card">
-        <div class="mc-head"><i class="mc-dot" style="background:#165dff"></i>影响货件</div>
-        <div class="mc-count">{{ fmtNum(totals.errorPostingCount) }}<span class="mc-unit">单</span></div>
-      </div>
-      <div class="metric-card">
-        <div class="mc-head"><i class="mc-dot" style="background:#f53f3f"></i>卖家取消</div>
-        <div class="mc-count">{{ fmtNum(totals.sellerCancellationCount) }}<span class="mc-unit">单</span></div>
-      </div>
-      <div class="metric-card">
-        <div class="mc-head"><i class="mc-dot" style="background:#d97706"></i>卖家逾期</div>
-        <div class="mc-count">{{ fmtNum(totals.sellerDelayCount) }}<span class="mc-unit">单</span></div>
-      </div>
-      <div class="metric-card">
-        <div class="mc-head"><i class="mc-dot" style="background:#00b42a"></i>宽限中</div>
-        <div class="mc-count">{{ fmtNum(totals.graceCount) }}<span class="mc-unit">单</span></div>
+        <div class="store-card-sub">
+          <span>{{ s.periodFrom }} ~ {{ fmtPeriodEnd(s.periodTo) }}</span>
+          <span>罚款 ¥{{ fmtMoney(s.processingCostsSum) }}</span>
+        </div>
       </div>
     </div>
     <div v-else-if="summary && summary.stores.length === 0" class="empty-tip">
       暂无错误指数数据,请点击「同步数据」拉取 Ozon 最新数据。
     </div>
 
-    <!-- ═══ 店铺错误指数列表 ═══ -->
-    <div class="store-list-card" v-if="summary && summary.stores.length > 0">
-      <h3>店铺错误指数</h3>
-      <div class="store-index-row" v-for="s in sortedStores" :key="s.storeId">
-        <span class="status-dot" :style="{ background: indexColor(s.index) }"></span>
-        <span class="sl-name">{{ s.storeName }}</span>
-        <div class="sl-track">
-          <div class="sl-fill" :style="{ width: indexBarWidth(s.index) + '%', background: indexColor(s.index) }"></div>
-        </div>
-        <span class="sl-pct" :style="{ color: indexColor(s.index) }">{{ fmtPct(s.index) }}%</span>
-        <span class="sl-cost">¥{{ fmtMoney(s.processingCostsSum) }}</span>
-      </div>
-    </div>
-
-    <!-- ═══ 趋势图 ═══ -->
-    <div class="chart-row" v-if="summary && chartSeries.some((s) => s.points.length)">
-      <div class="chart-card">
-        <h3>每日错误指数趋势</h3>
-        <svg :viewBox="`0 0 ${SVG_W} ${SVG_H}`" class="line-chart" preserveAspectRatio="none">
-          <!-- 网格线 -->
-          <line v-for="g in 4" :key="g" :x1="20" :x2="SVG_W - 20" :y1="24 + (g - 1) * ((SVG_H - 48) / 3)" :y2="24 + (g - 1) * ((SVG_H - 48) / 3)" class="grid-line" />
-          <!-- 折线 -->
-          <polyline
-            v-for="s in chartSeries"
-            :key="s.storeId"
-            :points="polylinePoints(s)"
-            :stroke="s.color"
-            fill="none"
-            stroke-width="2"
+    <!-- ═══ 每日错误指数趋势(各店铺) ═══ -->
+    <div class="chart-card" v-if="summary && chartSeries.some((s) => s.points.length)">
+      <h3>每日错误指数趋势</h3>
+      <svg :viewBox="`0 0 ${SVG_W} ${SVG_H}`" class="line-chart" preserveAspectRatio="none">
+        <!-- 网格线 -->
+        <line v-for="g in 4" :key="g" :x1="20" :x2="SVG_W - 20" :y1="24 + (g - 1) * ((SVG_H - 48) / 3)" :y2="24 + (g - 1) * ((SVG_H - 48) / 3)" class="grid-line" />
+        <!-- 折线 -->
+        <polyline
+          v-for="s in chartSeries"
+          :key="s.storeId"
+          :points="polylinePoints(s)"
+          :stroke="s.color"
+          fill="none"
+          stroke-width="2"
+        />
+        <!-- 末端圆点 -->
+        <template v-for="s in chartSeries" :key="'dot' + s.storeId">
+          <circle
+            v-if="lastPoint(s)"
+            :cx="lastPoint(s).x"
+            :cy="lastPoint(s).y"
+            :fill="s.color"
+            r="3"
           />
-          <!-- 末端圆点 -->
-          <template v-for="s in chartSeries" :key="'dot' + s.storeId">
-            <circle
-              v-if="lastPoint(s)"
-              :cx="lastPoint(s).x"
-              :cy="lastPoint(s).y"
-              :fill="s.color"
-              r="3"
-            />
-          </template>
-        </svg>
-        <div class="legend">
-          <span v-for="s in chartSeries" :key="'lg' + s.storeId" class="legend-item">
-            <i :style="{ background: s.color }"></i>{{ s.storeName }}
-          </span>
-        </div>
-      </div>
-
-      <div class="chart-card">
-        <h3>每日错误处理费用</h3>
-        <div class="cost-bars">
-          <div v-for="b in costBars" :key="b.date" class="bar-col" :title="`${b.date}: ¥${fmtMoney(b.total)}`">
-            <div class="bar-track">
-              <div class="bar-fill" :style="{ height: Math.max(2, (b.total / costMax) * 100) + '%' }"></div>
-            </div>
-            <div class="bar-date">{{ b.date.slice(5) }}</div>
-          </div>
-        </div>
-        <div class="bar-max-hint">最高 ¥{{ fmtMoney(costMax) }}</div>
-      </div>
-    </div>
-
-    <!-- ═══ 分布统计 ═══ -->
-    <div class="dist-row" v-if="summary && totals && totals.errorPostingCount > 0">
-      <div class="dist-card">
-        <h3>错误类型分布</h3>
-        <div v-for="it in typeDist" :key="it.key" class="dist-item">
-          <div class="dist-head">
-            <span class="dist-label" :style="{ color: it.color }">{{ it.label }}</span>
-            <span class="dist-num">{{ it.count }} 单 · {{ it.pct }}%</span>
-          </div>
-          <div class="dist-track">
-            <div class="dist-fill" :style="{ width: it.pct + '%', background: it.color }"></div>
-          </div>
-        </div>
-      </div>
-      <div class="dist-card">
-        <h3>配送方案分布</h3>
-        <div v-for="s in totals.schemaCounts" :key="s.deliverySchema" class="dist-item">
-          <div class="dist-head">
-            <span class="dist-label">{{ s.deliverySchema }}</span>
-            <span class="dist-num">{{ s.n }} 单</span>
-          </div>
-          <div class="dist-track">
-            <div class="dist-fill" :style="{ width: (s.n / totals.errorPostingCount) * 100 + '%', background: '#165dff' }"></div>
-          </div>
-        </div>
-        <div v-if="!totals.schemaCounts?.length" class="dist-empty">无数据</div>
+        </template>
+      </svg>
+      <div class="legend">
+        <span v-for="s in chartSeries" :key="'lg' + s.storeId" class="legend-item">
+          <i :style="{ background: s.color }"></i>{{ s.storeName }}
+        </span>
       </div>
     </div>
 
@@ -501,43 +372,7 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-/* ── 概览:指数 Hero + 五色刻度条 + 2x2 指标卡(Ozon 风格) ── */
-.summary-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.hero-card {
-  grid-column: 1 / -1;
-  background: #fff;
-  border: 1px solid #e9edf3;
-  border-radius: 24px;
-  padding: 20px 24px 14px;
-}
-.hero-row {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-}
-.hero-index-value {
-  font-size: 32px;
-  font-weight: 700;
-  line-height: 1.1;
-}
-.hero-cost-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: #1f2329;
-  line-height: 1.1;
-  text-align: right;
-}
-.hero-label {
-  font-size: 12px;
-  color: #86909c;
-  margin-top: 4px;
-}
+/* ── 各店铺错误指数卡片(Ozon 官方阈值着色) ── */
 .index-scale {
   display: flex;
   gap: 4px;
@@ -570,137 +405,57 @@ onMounted(() => {
   color: #86909c;
 }
 
-/* 2x2 指标卡 */
-.metric-card {
+/* ── 各店铺错误指数卡片(每行最多3个) ── */
+.store-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.store-card {
   background: #fff;
   border: 1px solid #e9edf3;
-  border-radius: 24px;
-  padding: 14px 16px;
+  border-radius: 16px;
+  padding: 16px 18px 12px;
+}
+.store-card-head {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
-.mc-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #4e5969;
-}
-.mc-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-}
-.mc-count {
-  font-size: 26px;
-  font-weight: 700;
+.store-card-name {
+  font-size: 15px;
+  font-weight: 600;
   color: #1f2329;
-  line-height: 1.2;
+}
+.store-card-index {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.store-card-sub {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
   margin-top: 8px;
-}
-.mc-unit {
-  font-size: 12px;
-  font-weight: 400;
+  font-size: 11px;
   color: #86909c;
-  margin-left: 4px;
 }
-.status-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
-  margin-left: auto;
-  flex-shrink: 0;
-}
+
 .red-text { color: #f53f3f; }
 .orange-text { color: #d97706; }
 .sep { margin: 0 4px; }
 
-/* ── 店铺错误指数列表 ── */
-.store-list-card {
-  background: #fff;
-  border-radius: 10px;
-  padding: 14px 16px;
-  margin-bottom: 16px;
-  border: 1px solid #f2f3f5;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
-}
-.store-list-card h3 {
-  font-size: 14px;
-  margin: 0 0 10px;
-  color: #1f2329;
-}
-.store-index-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px dashed #f2f3f5;
-}
-.store-index-row:last-child {
-  border-bottom: none;
-  padding-bottom: 2px;
-}
-.store-index-row .status-dot {
-  margin-left: 0;
-  flex-shrink: 0;
-}
-.sl-name {
-  width: 120px;
-  flex-shrink: 0;
-  font-size: 13px;
-  color: #1f2329;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sl-track {
-  flex: 1;
-  height: 8px;
-  border-radius: 4px;
-  background: #f2f3f5;
-  overflow: hidden;
-}
-.sl-fill {
-  height: 100%;
-  border-radius: 4px;
-  min-width: 2px;
-  transition: width 0.3s ease;
-}
-.sl-pct {
-  width: 72px;
-  flex-shrink: 0;
-  text-align: right;
-  font-size: 14px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.sl-cost {
-  width: 110px;
-  flex-shrink: 0;
-  text-align: right;
-  font-size: 12px;
-  color: #86909c;
-  font-variant-numeric: tabular-nums;
-}
-
 /* ── 趋势图 ── */
-.chart-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 16px;
-}
 .chart-card {
   background: #fff;
   border-radius: 10px;
   padding: 14px;
   border: 1px solid #f2f3f5;
 }
-.chart-card h3,
-.dist-card h3 {
+.chart-card h3 {
   font-size: 14px;
   margin: 0 0 10px;
   color: #1f2329;
@@ -774,46 +529,6 @@ onMounted(() => {
   font-size: 11px;
   color: #86909c;
   margin-top: 4px;
-}
-
-/* ── 分布 ── */
-.dist-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.dist-card {
-  background: #fff;
-  border-radius: 10px;
-  padding: 14px;
-  border: 1px solid #f2f3f5;
-}
-.dist-item {
-  margin-bottom: 12px;
-}
-.dist-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  margin-bottom: 4px;
-}
-.dist-num {
-  color: #86909c;
-}
-.dist-track {
-  height: 8px;
-  background: #f2f3f5;
-  border-radius: 4px;
-  overflow: hidden;
-}
-.dist-fill {
-  height: 100%;
-  border-radius: 4px;
-}
-.dist-empty {
-  color: #86909c;
-  font-size: 13px;
 }
 
 /* ── 明细表 ── */
@@ -906,10 +621,4 @@ onMounted(() => {
   100% { background-position: -200% 0; }
 }
 
-@media (max-width: 900px) {
-  .chart-row,
-  .dist-row {
-    grid-template-columns: 1fr;
-  }
-}
 </style>

@@ -86,7 +86,7 @@
             android:paddingTop="8dp"
             android:paddingBottom="16dp">
 
-            <!-- 概览指标卡：2x2 等高网格(动态构建) -->
+            <!-- 各店铺错误指数卡片：每行最多3个(动态构建) -->
             <LinearLayout
                 android:id="@+id/healthOverviewContainer"
                 android:layout_width="match_parent"
@@ -96,14 +96,6 @@
             <!-- 趋势图卡片(动态构建) -->
             <LinearLayout
                 android:id="@+id/healthTrendContainer"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:layout_marginTop="12dp" />
-
-            <!-- 类型/配送方案分布卡片(动态构建) -->
-            <LinearLayout
-                android:id="@+id/healthDistContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"

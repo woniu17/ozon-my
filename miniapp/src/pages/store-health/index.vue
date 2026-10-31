@@ -8,66 +8,33 @@
     <view v-if="error" class="error-bar">{{ error }}</view>
     <view v-if="syncError" class="error-bar">同步失败:{{ syncError }}</view>
 
-    <!-- ═══ 概览:指数 Hero + 五色刻度条 + 2x2 指标卡(Ozon 风格) ═══ -->
-    <view v-if="summary && summary.stores.length" class="summary-grid">
-      <view class="hero-card">
-        <view class="hero-row">
-          <view class="hero-index">
-            <view class="hero-index-value" :style="{ color: indexColor(topStore.index) }">{{ fmtIndex(topStore.index) }}</view>
-            <view class="hero-label">14天内指数</view>
-          </view>
-          <view class="hero-cost">
-            <view class="hero-cost-value">¥{{ fmtMoney(totals.chargeSum) }}</view>
-            <view class="hero-label">近14天罚款支出</view>
-          </view>
+    <!-- ═══ 各店铺错误指数(Ozon 官方阈值着色) ═══ -->
+    <view v-if="summary && summary.stores.length" class="store-cards">
+      <view v-for="s in sortedStores" :key="s.storeId" class="store-card">
+        <view class="store-card-head">
+          <text class="store-card-name">{{ s.storeName }}</text>
+          <text class="store-card-index" :style="{ color: indexColor(s.index) }">{{ fmtIndex(s.index) }}</text>
         </view>
         <view class="index-scale">
           <view
-            v-for="(z, i) in scaleSegments(topStore.index)"
+            v-for="(z, i) in scaleSegments(s.index)"
             :key="i"
             class="scale-seg"
             :style="segStyle(z)"
           >
-            <text v-if="z.isActive" class="scale-value" :style="segLabelStyle(z)">{{ fmtIndex(topStore.index) }}</text>
+            <text v-if="z.isActive" class="scale-value" :style="segLabelStyle(z)">{{ fmtIndex(s.index) }}</text>
           </view>
         </view>
         <view class="scale-thresholds">
           <text v-for="t in INDEX_THRESHOLDS" :key="t" class="threshold">{{ t }}</text>
         </view>
-      </view>
-
-      <view class="metric-card">
-        <view class="mc-head"><view class="mc-dot" style="background:#165dff"></view><text>影响货件</text></view>
-        <view class="mc-count">{{ fmtNum(totals.errorPostingCount) }}<text class="mc-unit">单</text></view>
-      </view>
-      <view class="metric-card">
-        <view class="mc-head"><view class="mc-dot" style="background:#f53f3f"></view><text>卖家取消</text></view>
-        <view class="mc-count">{{ fmtNum(totals.sellerCancellationCount) }}<text class="mc-unit">单</text></view>
-      </view>
-      <view class="metric-card">
-        <view class="mc-head"><view class="mc-dot" style="background:#d97706"></view><text>卖家逾期</text></view>
-        <view class="mc-count">{{ fmtNum(totals.sellerDelayCount) }}<text class="mc-unit">单</text></view>
-      </view>
-      <view class="metric-card">
-        <view class="mc-head"><view class="mc-dot" style="background:#00b42a"></view><text>宽限中</text></view>
-        <view class="mc-count">{{ fmtNum(totals.graceCount) }}<text class="mc-unit">单</text></view>
+        <view class="store-card-sub">
+          <text>{{ s.periodFrom }} ~ {{ fmtPeriodEnd(s.periodTo) }}</text>
+          <text>罚款 ¥{{ fmtMoney(s.processingCostsSum) }}</text>
+        </view>
       </view>
     </view>
     <view v-else-if="summary" class="empty-tip">暂无错误指数数据,点击「同步」拉取 Ozon 最新数据</view>
-
-    <!-- ═══ 店铺错误指数列表 ═══ -->
-    <view v-if="summary && summary.stores.length" class="store-list-card">
-      <view class="store-list-title">店铺错误指数</view>
-      <view v-for="s in sortedStores" :key="s.storeId" class="store-index-row">
-        <view class="status-dot" :style="{ background: indexColor(s.index) }"></view>
-        <view class="sl-name">{{ s.storeName }}</view>
-        <view class="sl-track">
-          <view class="sl-fill" :style="{ width: indexBarWidth(s.index) + '%', background: indexColor(s.index) }"></view>
-        </view>
-        <view class="sl-pct" :style="{ color: indexColor(s.index) }">{{ fmtIndex(s.index) }}</view>
-        <view class="sl-cost">¥{{ fmtMoney(s.processingCostsSum) }}</view>
-      </view>
-    </view>
 
     <!-- ═══ 每日错误指数趋势(分组柱状) ═══ -->
     <view v-if="hasChart" class="chart-card">
@@ -93,38 +60,6 @@
         <view v-for="s in chartSeries" :key="'lg' + s.storeId" class="legend-item">
           <view class="legend-color" :style="{ background: s.color }"></view>
           <text>{{ s.storeName }}</text>
-        </view>
-      </view>
-    </view>
-
-    <!-- ═══ 每日错误处理费用(柱状) ═══ -->
-    <view v-if="costBars.length" class="chart-card">
-      <view class="chart-title">每日错误处理费用</view>
-      <scroll-view scroll-x :show-scrollbar="false">
-        <view class="bars">
-          <view v-for="b in costBars" :key="b.date" class="bar-col">
-            <view class="bar-track">
-              <view class="bar-group">
-                <view class="bar-single cost" :style="{ height: Math.max(2, (b.total / costMax) * 100) + '%' }"></view>
-              </view>
-            </view>
-            <view class="bar-date">{{ b.date.slice(5) }}</view>
-          </view>
-        </view>
-      </scroll-view>
-      <view class="bar-hint">最高 ¥{{ fmtMoney(costMax) }}</view>
-    </view>
-
-    <!-- ═══ 错误类型分布 ═══ -->
-    <view v-if="totals && totals.errorPostingCount > 0" class="chart-card">
-      <view class="chart-title">错误类型分布</view>
-      <view v-for="it in typeDist" :key="it.key" class="dist-item">
-        <view class="dist-head">
-          <text :style="{ color: it.color }">{{ it.label }}</text>
-          <text class="dist-num">{{ it.count }} 单 · {{ it.pct }}%</text>
-        </view>
-        <view class="dist-track">
-          <view class="dist-fill" :style="{ width: it.pct + '%', background: it.color }"></view>
         </view>
       </view>
     </view>
@@ -237,14 +172,6 @@ async function doSync() {
   }
 }
 
-// ── 概览指标 ──
-const topStore = computed(() => {
-  const stores = summary.value?.stores || [];
-  if (!stores.length) return null;
-  return [...stores].sort((a, b) => (Number(b.index) || 0) - (Number(a.index) || 0))[0];
-});
-const totals = computed(() => summary.value?.totals || null);
-
 /** Ozon 官方错误指数色带阈值(≤4% 绿 / ≤10% 青 / ≤20% 黄 / ≤40% 橙 / >40% 红) */
 function indexColor(idx) {
   const n = Number(idx) || 0;
@@ -325,36 +252,6 @@ function dailySegments(date) {
       };
     });
 }
-// 每日费用柱状(跨店累计)
-const costBars = computed(() => {
-  const map = new Map();
-  for (const s of chartSeries.value) {
-    for (const d of s.defects) {
-      map.set(d.date, (map.get(d.date) || 0) + (Number(d.processingCostsSumByDate) || 0));
-    }
-  }
-  return [...map.entries()]
-    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
-    .map(([date, t]) => ({ date, total: t }));
-});
-const costMax = computed(() => {
-  let m = 0;
-  for (const b of costBars.value) m = Math.max(m, b.total);
-  return m > 0 ? m : 1;
-});
-
-// ── 分布 ──
-const typeDist = computed(() => {
-  const t = totals.value;
-  if (!t) return [];
-  const items = [
-    { key: 'SELLER_CANCELLATION', label: '卖家取消', count: t.sellerCancellationCount, color: '#f53f3f' },
-    { key: 'SELLER_DELAY', label: '卖家逾期', count: t.sellerDelayCount, color: '#d97706' },
-  ];
-  const sum = t.errorPostingCount || 1;
-  return items.map((it) => ({ ...it, pct: Math.round((it.count / sum) * 100) }));
-});
-
 // ── 明细分页 ──
 const hasMore = computed(() => items.value.length < total.value);
 function loadMore() {
@@ -370,7 +267,6 @@ function copyPosting(postingNumber) {
 }
 
 // ── 格式化 ──
-function fmtNum(n) { return String(Number(n) || 0); }
 function fmtMoney(n) { return (Number(n) || 0).toFixed(2); }
 function fmtIndex(n) { return ((Number(n) || 0) * 100).toFixed(2) + '%'; }
 /** 指数周期结束日减一天展示(与 Ozon 后台一致:接口 periodTo 为排他上界) */
@@ -380,13 +276,10 @@ function fmtPeriodEnd(dateStr) {
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 }
-function indexBarWidth(idx) {
-  const n = Number(idx) || 0;
-  return Math.max(2, Math.min(100, (Math.min(n, 1) / 1) * 100));
-}
+/** 全部店铺按店铺编号顺序(YQL01~YQL06) */
 const sortedStores = computed(() => {
   const stores = summary.value?.stores || [];
-  return [...stores].sort((a, b) => (Number(b.index) || 0) - (Number(a.index) || 0));
+  return [...stores].sort((a, b) => String(a.storeId).localeCompare(String(b.storeId)));
 });
 function typeLabel(t) {
   return t === 'SELLER_CANCELLATION' ? '卖家取消' : t === 'SELLER_DELAY' ? '卖家逾期' : t || '未知';
@@ -443,48 +336,46 @@ onReachBottom(() => {
   margin-bottom: 16rpx;
 }
 
-/* 概览:指数 Hero + 五色刻度条 + 2x2 指标卡(Ozon 风格) */
-.summary-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16rpx;
+/* 各店铺错误指数卡片(Ozon 官方阈值着色,每行最多3个) */
+.store-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20rpx;
   margin-bottom: 20rpx;
 }
-.hero-card {
-  flex: 1 1 100%;
+.store-card {
   background: #fff;
   border: 1rpx solid #e9edf3;
-  border-radius: 32rpx;
-  padding: 28rpx 28rpx 20rpx;
+  border-radius: 24rpx;
+  padding: 24rpx;
   box-sizing: border-box;
 }
-.hero-row {
+.store-card-head {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 16rpx;
+  gap: 12rpx;
+  margin-bottom: 4rpx;
 }
-.hero-index-value {
-  font-size: 64rpx;
-  font-weight: 700;
-  line-height: 1.1;
+.store-card-name {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #1f2329;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.hero-cost-value {
+.store-card-index {
   font-size: 44rpx;
   font-weight: 700;
-  color: #1f2329;
   line-height: 1.1;
-  text-align: right;
-}
-.hero-label {
-  font-size: 22rpx;
-  color: #86909c;
-  margin-top: 8rpx;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 .index-scale {
   display: flex;
   gap: 6rpx;
-  margin-top: 24rpx;
+  margin-top: 16rpx;
   height: 40rpx;
 }
 .scale-seg {
@@ -512,111 +403,16 @@ onReachBottom(() => {
   font-size: 18rpx;
   color: #86909c;
 }
-.metric-card {
-  flex: 1 1 calc(50% - 8rpx);
-  min-width: 300rpx;
-  background: #fff;
-  border: 1rpx solid #e9edf3;
-  border-radius: 24rpx;
-  padding: 24rpx;
-  box-sizing: border-box;
-}
-.mc-head {
+.store-card-sub {
   display: flex;
   align-items: center;
-  gap: 10rpx;
-  font-size: 24rpx;
-  color: #4e5969;
-}
-.mc-dot {
-  width: 14rpx;
-  height: 14rpx;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.mc-count {
-  font-size: 48rpx;
-  font-weight: 700;
-  color: #1f2329;
-  line-height: 1.2;
-  margin-top: 12rpx;
-}
-.mc-unit {
+  justify-content: space-between;
+  gap: 12rpx;
+  margin-top: 16rpx;
   font-size: 22rpx;
-  font-weight: 400;
   color: #86909c;
-  margin-left: 6rpx;
 }
 .red-t { color: #f53f3f; }
-.orange-t { color: #d97706; }
-
-/* 店铺错误指数列表 */
-.store-list-card {
-  background: #fff;
-  border-radius: 16rpx;
-  padding: 24rpx;
-  margin-bottom: 20rpx;
-}
-.store-list-title {
-  font-size: 28rpx;
-  font-weight: 600;
-  color: #1f2329;
-  margin-bottom: 16rpx;
-}
-.store-index-row {
-  display: flex;
-  align-items: center;
-  gap: 12rpx;
-  padding: 16rpx 0;
-  border-bottom: 1rpx dashed #f2f3f5;
-}
-.store-index-row:last-child {
-  border-bottom: none;
-  padding-bottom: 4rpx;
-}
-.status-dot {
-  width: 14rpx;
-  height: 14rpx;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.sl-name {
-  width: 160rpx;
-  flex-shrink: 0;
-  font-size: 24rpx;
-  color: #1f2329;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sl-track {
-  flex: 1;
-  height: 12rpx;
-  border-radius: 6rpx;
-  background: #f2f3f5;
-  overflow: hidden;
-}
-.sl-fill {
-  height: 100%;
-  border-radius: 6rpx;
-  min-width: 2rpx;
-}
-.sl-pct {
-  width: 100rpx;
-  flex-shrink: 0;
-  text-align: right;
-  font-size: 26rpx;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.sl-cost {
-  width: 140rpx;
-  flex-shrink: 0;
-  text-align: right;
-  font-size: 22rpx;
-  color: #86909c;
-  font-variant-numeric: tabular-nums;
-}
 
 /* 图表卡片 */
 .chart-card {
@@ -670,20 +466,11 @@ onReachBottom(() => {
   border-radius: 4rpx 4rpx 0 0;
   min-height: 2rpx;
 }
-.bar-single.cost {
-  width: 70%;
-  background: #165dff;
-}
 .bar-date {
   font-size: 18rpx;
   color: #86909c;
   margin-top: 8rpx;
   white-space: nowrap;
-}
-.bar-hint {
-  font-size: 22rpx;
-  color: #86909c;
-  margin-top: 8rpx;
 }
 .legend {
   display: flex;
@@ -702,30 +489,6 @@ onReachBottom(() => {
   width: 28rpx;
   height: 8rpx;
   border-radius: 4rpx;
-}
-
-/* 分布 */
-.dist-item {
-  margin-bottom: 20rpx;
-}
-.dist-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 24rpx;
-  margin-bottom: 8rpx;
-}
-.dist-num {
-  color: #86909c;
-}
-.dist-track {
-  height: 12rpx;
-  background: #f2f3f5;
-  border-radius: 6rpx;
-  overflow: hidden;
-}
-.dist-fill {
-  height: 100%;
-  border-radius: 6rpx;
 }
 
 /* 明细列表 */
