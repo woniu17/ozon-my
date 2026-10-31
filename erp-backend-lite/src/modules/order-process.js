@@ -2040,7 +2040,13 @@ router.post('/admin/api/order-process/carriage/list', async (req, res) => {
     });
     for (const m of r?.methods || []) {
       for (const c of m.carriages || []) {
-        upsertCarriageHistory(store, c);
+        // 2026-11-04:列表接口的 carriage 对象不含配送方式/发运日期,在 method 层级,合并后落库
+        upsertCarriageHistory(store, {
+          ...c,
+          delivery_method_id: c.delivery_method_id ?? m.delivery_method_id,
+          delivery_method_name: c.delivery_method_name ?? m.delivery_method_name,
+          departure_date: c.departure_date ?? m.departure_date,
+        });
       }
     }
     // 2026-11-02:附加"24h内发运期限/已超时"货件数(本地 shipment_date 反查)
