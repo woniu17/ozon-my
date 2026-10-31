@@ -1786,6 +1786,7 @@ defineExpose({ refreshCurrent, listLoading });
                 <th>商品</th>
                 <th class="num">件数</th>
                 <th>发运期限</th>
+                <th>可打印面单</th>
               </tr>
             </thead>
             <tbody>
@@ -1798,7 +1799,14 @@ defineExpose({ refreshCurrent, listLoading });
                     @change="onCreatePostingSelectChange"
                   />
                 </td>
-                <td class="mono">{{ p.posting_number }}</td>
+                <td>
+                  <!-- 2026-11-05:货件号格式对齐详情弹窗 -->
+                  <div class="posting-no-cell">
+                    <span class="mono">{{ p.posting_number }}</span>
+                    <span v-if="p.source === 'manual'" class="cross-tag block-tag" :title="p.store_id">{{ p.store_name || p.store_id }}·跨店</span>
+                    <span v-else class="self-tag block-tag">本店</span>
+                  </div>
+                </td>
                 <td>
                   <span class="posting-status" :class="(postingStatusMeta(p.operate_status) || {}).cls || 'st-muted'">
                     {{ postingStatusText(p) }}
@@ -1834,6 +1842,12 @@ defineExpose({ refreshCurrent, listLoading });
                     {{ fmtDeadline(p.shipment_date) }}
                   </span>
                   <span v-else>—</span>
+                </td>
+                <td>
+                  <!-- 2026-11-05:对齐详情弹窗 -->
+                  <span class="printed-tag" :class="p.can_print_label ? 'yes' : 'no'">
+                    {{ p.can_print_label ? '可打印' : '不可' }}
+                  </span>
                 </td>
               </tr>
             </tbody>
