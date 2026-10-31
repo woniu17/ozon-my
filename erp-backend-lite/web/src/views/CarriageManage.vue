@@ -130,11 +130,8 @@ const createModal = reactive({
   loading: false,
   postings: [],
   creating: false,
-  // 快递员联系方式(创建时一并指定,2026-11-04)
-  phone: '',
-  wechatNickname: '',
-  comment: '',
-  selectedContactConfigId: '',
+  // 快递员联系方式(创建时一并指定,2026-11-04;2026-11-05:直接由选中的配置项决定,无多余输入框)
+  selectedContactConfigId: '', // 选中的配置项 id(无配置时为空,可先添加配置)
   contactConfigs: [], // 按创建店铺独立加载的联系方式配置
   configEditing: false, // 创建弹窗内配置管理(新增/修改)展开状态
   savingConfigs: false, // 配置保存中
@@ -424,10 +421,7 @@ async function onGoCreate(row) {
   createModal.departureDate = new Date().toISOString().slice(0, 10);
   createModal.creating = false;
   createModal.postings = [];
-  // 创建时同时指定快递员联系方式(2026-11-04):按创建店铺加载配置并预填默认项
-  createModal.phone = '';
-  createModal.wechatNickname = '';
-  createModal.comment = '';
+  // 创建时同时指定快递员联系方式(2026-11-04;2026-11-05:预选默认配置,随发运一并保存)
   createModal.selectedContactConfigId = '';
   createModal.contactConfigs = [];
   createModal.configEditing = false; // 每次打开创建弹窗默认收起配置管理(2026-11-05)
@@ -436,17 +430,10 @@ async function onGoCreate(row) {
     createModal.contactConfigs = data?.contacts || [];
     const defaultItem =
       createModal.contactConfigs.find((c) => c.isDefault) || createModal.contactConfigs[0] || null;
-    if (defaultItem) {
-      createModal.phone = defaultItem.phone || '';
-      createModal.wechatNickname = defaultItem.wechatNickname || createModal.storeName;
-      createModal.comment = defaultItem.comment || '';
-      createModal.selectedContactConfigId = defaultItem.id || '';
-    } else {
-      createModal.wechatNickname = createModal.storeName;
-    }
+    // 默认单选框选中默认配置
+    createModal.selectedContactConfigId = defaultItem?.id || '';
   } catch (err) {
-    // 配置加载失败不阻塞创建弹窗,仍可手动填写
-    createModal.wechatNickname = createModal.storeName;
+    // 配置加载失败不阻塞创建弹窗,仍可先展开管理配置重新添加
   }
   createModal.open = true;
   await loadCreatePostings();
@@ -492,14 +479,17 @@ async function onCreateFromModal() {
     if (createModal.departureDate) body.departureDate = createModal.departureDate;
     const r = await createCarriage(createModal.storeId, body);
     const cid = Number(r?.carriage_id);
-    // 创建时同时指定快递员联系方式(2026-11-04):填了电话+取件地址才保存,未填则创建后详情页再补
+    // 创建时同时指定快递员联系方式(2026-11-04;2026-11-05:使用选中的配置项,未选则不保存)
     let contactSaved = false;
-    if (cid > 0 && createModal.phone.trim() && createModal.comment.trim()) {
+    const selectedContact = createModal.contactConfigs.find(
+      (c) => c.id === createModal.selectedContactConfigId
+    );
+    if (cid > 0 && selectedContact && selectedContact.phone.trim() && selectedContact.comment.trim()) {
       try {
         await setCarriageCourierContact(createModal.storeId, cid, {
-          phone: createModal.phone.trim(),
-          wechatNickname: createModal.wechatNickname.trim(),
-          comment: createModal.comment.trim(),
+          phone: selectedContact.phone.trim(),
+          wechatNickname: selectedContact.wechatNickname.trim(),
+          comment: selectedContact.comment.trim(),
         });
         contactSaved = true;
       } catch (err) {
@@ -539,15 +529,6 @@ async function onCreateFromModal() {
   }
 }
 
-// 创建弹窗:选择已配置的联系方式后自动填充(2026-11-04)
-function onCreateSelectContactConfig() {
-  const item = createModal.contactConfigs.find((c) => c.id === createModal.selectedContactConfigId);
-  if (!item) return; // 未选中配置(无配置场景):保留当前表单内容
-  createModal.phone = item.phone || '';
-  createModal.wechatNickname = item.wechatNickname || createModal.storeName;
-  createModal.comment = item.comment || '';
-}
-
 // 创建弹窗:配置管理(2026-11-05)
 function onCreateAddConfig() {
   createModal.contactConfigs.push({
@@ -580,20 +561,13 @@ async function onCreateSaveConfigs() {
   try {
     const data = await saveCourierContactConfigs(createModal.storeId, valid);
     createModal.contactConfigs = data?.contacts || [];
-    // 保存成功后,用当前选中配置(或默认配置)的最新值刷新表单
+    // 保存成功后,保持当前选中的配置(若已被删则回退默认配置)
     const cur =
       createModal.contactConfigs.find((c) => c.id === createModal.selectedContactConfigId) ||
       createModal.contactConfigs.find((c) => c.isDefault) ||
       createModal.contactConfigs[0] ||
       null;
-    if (cur) {
-      createModal.selectedContactConfigId = cur.id || '';
-      createModal.phone = cur.phone || '';
-      createModal.wechatNickname = cur.wechatNickname || createModal.storeName;
-      createModal.comment = cur.comment || '';
-    } else {
-      createModal.selectedContactConfigId = '';
-    }
+    createModal.selectedContactConfigId = cur?.id || '';
     show('联系方式配置已保存', 'success');
   } catch (err) {
     show(err.message || String(err), 'error');
@@ -1728,7 +1702,6 @@ defineExpose({ refreshCurrent, listLoading });
                 name="create-contact-config"
                 :value="c.id"
                 v-model="createModal.selectedContactConfigId"
-                @change="onCreateSelectContactConfig"
               />
               <span class="cc-phone">{{ c.phone || '(未填电话)' }}</span>
               <span class="cc-item">{{ c.wechatNickname || '默认店铺名' }}</span>
@@ -1737,20 +1710,8 @@ defineExpose({ refreshCurrent, listLoading });
             </label>
           </div>
 
-          <!-- 联系方式表单(选择配置后自动填充) -->
-          <div class="contact-form">
-            <label>
-              <span>电话 <em class="req">*</em></span>
-              <input v-model="createModal.phone" placeholder="快递员联系电话" />
-            </label>
-            <label>
-              <span>下单人名称</span>
-              <input v-model="createModal.wechatNickname" :placeholder="`选填,默认:${createModal.storeName || '店铺名'}`" />
-            </label>
-            <label class="contact-address-field">
-              <span>取件地址 <em class="req">*</em></span>
-              <input v-model="createModal.comment" placeholder="提供给快递公司的取件地址" />
-            </label>
+          <!-- 创建时以选中的配置作为快递员联系方式(2026-11-05:移除多余输入框,随发运一并保存) -->
+          <div class="contact-form-actions">
             <button class="btn btn-ghost btn-sm" @click="createModal.configEditing = !createModal.configEditing">
               {{ createModal.configEditing ? '收起配置管理' : '管理配置' }}
             </button>
@@ -2332,6 +2293,12 @@ defineExpose({ refreshCurrent, listLoading });
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px dashed var(--border);
+}
+/* 创建弹窗联系方式:管理配置按钮行(2026-11-05) */
+.contact-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .req {
   color: var(--danger);
