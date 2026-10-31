@@ -66,6 +66,20 @@
     </view>
     <view v-else-if="summary" class="empty-tip">暂无错误指数数据,点击「同步」拉取 Ozon 最新数据</view>
 
+    <!-- ═══ 店铺错误指数列表 ═══ -->
+    <view v-if="summary && summary.stores.length" class="store-list-card">
+      <view class="store-list-title">店铺错误指数</view>
+      <view v-for="s in sortedStores" :key="s.storeId" class="store-index-row">
+        <view class="status-dot" :class="indexStatus(s.index)"></view>
+        <view class="sl-name">{{ s.storeName }}</view>
+        <view class="sl-track">
+          <view class="sl-fill" :style="{ width: indexBarWidth(s.index) + '%', background: indexColor(s.index) }"></view>
+        </view>
+        <view class="sl-pct" :style="{ color: indexColor(s.index) }">{{ fmtIndex(s.index) }}</view>
+        <view class="sl-cost">¥{{ fmtMoney(s.processingCostsSum) }}</view>
+      </view>
+    </view>
+
     <!-- ═══ 每日错误指数趋势(分组柱状) ═══ -->
     <view v-if="hasChart" class="chart-card">
       <view class="chart-title">每日错误指数趋势</view>
@@ -409,7 +423,19 @@ function copyPosting(postingNumber) {
 // ── 格式化 ──
 function fmtNum(n) { return String(Number(n) || 0); }
 function fmtMoney(n) { return (Number(n) || 0).toFixed(2); }
-function fmtIndex(n) { return (Number(n) || 0).toFixed(2); }
+function fmtIndex(n) { return ((Number(n) || 0) * 100).toFixed(2) + '%'; }
+function indexColor(idx) {
+  const s = indexStatus(idx);
+  return s === 'ok' ? '#00b42a' : s === 'warning' ? '#d97706' : '#f53f3f';
+}
+function indexBarWidth(idx) {
+  const n = Number(idx) || 0;
+  return Math.max(2, Math.min(100, (Math.min(n, 0.5) / 0.5) * 100));
+}
+const sortedStores = computed(() => {
+  const stores = summary.value?.stores || [];
+  return [...stores].sort((a, b) => (Number(b.index) || 0) - (Number(a.index) || 0));
+});
 function typeLabel(t) {
   return t === 'SELLER_CANCELLATION' ? '卖家取消' : t === 'SELLER_DELAY' ? '卖家逾期' : t || '未知';
 }
@@ -531,6 +557,77 @@ onReachBottom(() => {
 }
 .red-t { color: #f53f3f; }
 .orange-t { color: #d97706; }
+
+/* 店铺错误指数列表 */
+.store-list-card {
+  background: #fff;
+  border-radius: 16rpx;
+  padding: 24rpx;
+  margin-bottom: 20rpx;
+}
+.store-list-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #1f2329;
+  margin-bottom: 16rpx;
+}
+.store-index-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 16rpx 0;
+  border-bottom: 1rpx dashed #f2f3f5;
+}
+.store-index-row:last-child {
+  border-bottom: none;
+  padding-bottom: 4rpx;
+}
+.status-dot {
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.ok { background: #00b42a; }
+.status-dot.warning { background: #d97706; }
+.status-dot.critical { background: #f53f3f; }
+.sl-name {
+  width: 160rpx;
+  flex-shrink: 0;
+  font-size: 24rpx;
+  color: #1f2329;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sl-track {
+  flex: 1;
+  height: 12rpx;
+  border-radius: 6rpx;
+  background: #f2f3f5;
+  overflow: hidden;
+}
+.sl-fill {
+  height: 100%;
+  border-radius: 6rpx;
+  min-width: 2rpx;
+}
+.sl-pct {
+  width: 100rpx;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 26rpx;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.sl-cost {
+  width: 140rpx;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 22rpx;
+  color: #86909c;
+  font-variant-numeric: tabular-nums;
+}
 
 /* 图表卡片 */
 .chart-card {

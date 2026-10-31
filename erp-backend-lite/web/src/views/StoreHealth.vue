@@ -296,6 +296,22 @@ function fmtMoney(n) {
 function fmtIndex(n) {
   return (Number(n) || 0).toFixed(2);
 }
+function fmtPct(n) {
+  return ((Number(n) || 0) * 100).toFixed(2);
+}
+function indexColor(idx) {
+  const s = indexStatus(idx);
+  return s === 'ok' ? '#00b42a' : s === 'warning' ? '#d97706' : '#f53f3f';
+}
+function indexBarWidth(idx) {
+  const n = Number(idx) || 0;
+  return Math.max(2, Math.min(100, (Math.min(n, 0.5) / 0.5) * 100));
+}
+/** 全部店铺按错误指数降序(供店铺指数列表) */
+const sortedStores = computed(() => {
+  const stores = summary.value?.stores || [];
+  return [...stores].sort((a, b) => (Number(b.index) || 0) - (Number(a.index) || 0));
+});
 function typeLabel(t) {
   return t === 'SELLER_CANCELLATION' ? '卖家取消' : t === 'SELLER_DELAY' ? '卖家逾期' : t || '未知';
 }
@@ -389,7 +405,7 @@ function closeStoreDropdown() {
           <span class="sc-icon">🏥</span><span>错误指数</span>
           <span class="status-dot" :class="indexStatus(topStore.index)"></span>
         </div>
-        <div class="sc-count">{{ fmtIndex(topStore.index) }}</div>
+        <div class="sc-count">{{ fmtPct(topStore.index) }}%</div>
         <div class="sc-sub">最高风险:{{ topStore.storeName }}</div>
         <div class="sc-sub">{{ topStore.periodFrom }} ~ {{ topStore.periodTo }}</div>
       </div>
@@ -415,6 +431,20 @@ function closeStoreDropdown() {
     </div>
     <div v-else-if="summary && summary.stores.length === 0" class="empty-tip">
       暂无错误指数数据,请点击「同步数据」拉取 Ozon 最新数据。
+    </div>
+
+    <!-- ═══ 店铺错误指数列表 ═══ -->
+    <div class="store-list-card" v-if="summary && summary.stores.length > 0">
+      <h3>店铺错误指数</h3>
+      <div class="store-index-row" v-for="s in sortedStores" :key="s.storeId">
+        <span class="status-dot" :class="indexStatus(s.index)"></span>
+        <span class="sl-name">{{ s.storeName }}</span>
+        <div class="sl-track">
+          <div class="sl-fill" :style="{ width: indexBarWidth(s.index) + '%', background: indexColor(s.index) }"></div>
+        </div>
+        <span class="sl-pct" :style="{ color: indexColor(s.index) }">{{ fmtPct(s.index) }}%</span>
+        <span class="sl-cost">¥{{ fmtMoney(s.processingCostsSum) }}</span>
+      </div>
     </div>
 
     <!-- ═══ 趋势图 ═══ -->
@@ -673,6 +703,74 @@ function closeStoreDropdown() {
 .red-text { color: #f53f3f; }
 .orange-text { color: #d97706; }
 .sep { margin: 0 4px; }
+
+/* ── 店铺错误指数列表 ── */
+.store-list-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border: 1px solid #f2f3f5;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+.store-list-card h3 {
+  font-size: 14px;
+  margin: 0 0 10px;
+  color: #1f2329;
+}
+.store-index-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #f2f3f5;
+}
+.store-index-row:last-child {
+  border-bottom: none;
+  padding-bottom: 2px;
+}
+.store-index-row .status-dot {
+  margin-left: 0;
+  flex-shrink: 0;
+}
+.sl-name {
+  width: 120px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: #1f2329;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sl-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: #f2f3f5;
+  overflow: hidden;
+}
+.sl-fill {
+  height: 100%;
+  border-radius: 4px;
+  min-width: 2px;
+  transition: width 0.3s ease;
+}
+.sl-pct {
+  width: 72px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.sl-cost {
+  width: 110px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 12px;
+  color: #86909c;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── 趋势图 ── */
 .chart-row {

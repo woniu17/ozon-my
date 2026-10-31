@@ -532,11 +532,11 @@ class StoreHealthFragment : Fragment() {
             })
 
             addView(TextView(ctx).apply {
-                text = fmtNum(idx)
+                text = String.format(Locale.US, "%.2f%%", idx * 100)
                 setTextColor(Color.parseColor(indexColor(idx)))
                 textSize = 11f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
-                layoutParams = LinearLayout.LayoutParams(dp(48).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+                layoutParams = LinearLayout.LayoutParams(dp(64).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
             })
         }
     }
@@ -568,7 +568,7 @@ class StoreHealthFragment : Fragment() {
                 ).apply { gravity = Gravity.CENTER_HORIZONTAL }
             }
             val valTv = TextView(requireContext()).apply {
-                text = fmtNum(idx)
+                text = String.format(Locale.US, "%.2f%%", idx * 100)
                 textSize = 9f
                 setTextColor(Color.parseColor(indexColor(idx)))
                 gravity = Gravity.CENTER
