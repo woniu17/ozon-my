@@ -427,15 +427,15 @@ function closeStoreDropdown() {
             stroke-width="2"
           />
           <!-- 末端圆点 -->
-          <circle
-            v-for="s in chartSeries"
-            :key="'dot' + s.storeId"
-            v-if="lastPoint(s)"
-            :cx="lastPoint(s).x"
-            :cy="lastPoint(s).y"
-            :fill="s.color"
-            r="3"
-          />
+          <template v-for="s in chartSeries" :key="'dot' + s.storeId">
+            <circle
+              v-if="lastPoint(s)"
+              :cx="lastPoint(s).x"
+              :cy="lastPoint(s).y"
+              :fill="s.color"
+              r="3"
+            />
+          </template>
         </svg>
         <div class="legend">
           <span v-for="s in chartSeries" :key="'lg' + s.storeId" class="legend-item">
@@ -483,7 +483,7 @@ function closeStoreDropdown() {
             <div class="dist-fill" :style="{ width: (s.n / totals.errorPostingCount) * 100 + '%', background: '#165dff' }"></div>
           </div>
         </div>
-        <div v-if="!totals.schemaCounts.length" class="dist-empty">无数据</div>
+        <div v-if="!totals.schemaCounts?.length" class="dist-empty">无数据</div>
       </div>
     </div>
 
