@@ -180,6 +180,10 @@
               <view v-for="p in detail.postings" :key="p.posting_number" class="posting-item">
                 <view class="posting-main">
                   <view class="posting-number mono">{{ p.posting_number }}</view>
+                  <view class="posting-tags">
+                    <text v-if="p.source === 'manual'" class="cross-tag">{{ p.store_name || p.store_id || '' }}·跨店</text>
+                    <text v-else class="self-tag">本店</text>
+                  </view>
                   <view class="posting-products">
                     <view v-for="it in p.products || []" :key="it.sku || it.offer_id || it.name" class="posting-product">
                       <image v-if="it.image_url" class="posting-img" :src="it.image_url" mode="aspectFill" />
@@ -312,17 +316,58 @@
       </view>
     </view>
 
-    <!-- 添加货件候选弹窗 -->
+    <!-- 添加货件候选弹窗(2026-11-02:本店/跨店分页 + 打单时间筛选) -->
     <view v-if="candidate.open" class="mask" @click="candidate.open = false">
       <view class="sheet candidate-sheet" @click.stop>
         <view class="sheet-title">添加货件</view>
-        <view class="sheet-sub">
-          <text v-if="candidate.loading">加载中…</text>
-          <text v-else>已准备发运、不在当前发运中的货件(共 {{ candidate.postings.length }} 个)</text>
+
+        <!-- 本店 / 跨店 切换 -->
+        <view class="candidate-tabs">
+          <view class="candidate-tab" :class="{ on: candidate.tab === 'self' }" @click="switchCandidateTab('self')">本店货件</view>
+          <view class="candidate-tab" :class="{ on: candidate.tab === 'cross' }" @click="switchCandidateTab('cross')">跨店货件</view>
         </view>
+
+        <view v-if="candidate.tab === 'self'" class="sheet-sub">
+          <text v-if="candidate.loading">加载中…</text>
+          <text v-else>已准备发运、不在当前发运中的本店货件(共 {{ candidate.postings.length }} 个)</text>
+        </view>
+
+        <!-- 跨店筛选栏 -->
+        <view v-else class="candidate-filter">
+          <picker :range="crossStoreNames" range-key="label" @change="onSelectCrossStore">
+            <view class="filter-field">{{ crossStoreName || '选择店铺' }}</view>
+          </picker>
+          <view class="filter-chips">
+            <view
+              v-for="r in PRINTED_RANGES"
+              :key="r.key"
+              class="chip"
+              :class="{ on: candidate.printedRange === r.key }"
+              @click="setPrintedRange(r.key)"
+            >{{ r.label }}</view>
+          </view>
+          <view class="filter-dates">
+            <picker mode="date" :value="candidate.printedFrom" @change="candidate.printedFrom = $event.detail.value">
+              <view class="date-field">{{ candidate.printedFrom || '开始日期' }}</view>
+            </picker>
+            <text class="date-sep">~</text>
+            <picker mode="date" :value="candidate.printedTo" @change="candidate.printedTo = $event.detail.value">
+              <view class="date-field">{{ candidate.printedTo || '结束日期' }}</view>
+            </picker>
+          </view>
+          <view class="filter-row">
+            <input v-model="candidate.keyword" class="filter-input" placeholder="货件号搜索" confirm-type="search" @confirm="loadCrossCandidates" />
+            <view class="btn primary sm" :class="{ disabled: candidate.loading }" @click="loadCrossCandidates">搜索</view>
+          </view>
+          <view class="sheet-sub">
+            <text v-if="candidate.loading">加载中…</text>
+            <text v-else-if="crossStoreName">店铺「{{ crossStoreName }}」待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件</text>
+          </view>
+        </view>
+
         <scroll-view scroll-y class="candidate-scroll">
           <view v-if="candidate.loading && !candidate.postings.length" class="empty small">加载中…</view>
-          <view v-else-if="!candidate.postings.length" class="empty small">没有可加入的「已准备发运」货件</view>
+          <view v-else-if="!candidate.postings.length" class="empty small">{{ candidate.tab === 'self' ? '没有可加入的「已准备发运」货件' : '没有符合筛选条件的待发运货件' }}</view>
           <view v-else>
             <view v-for="p in candidate.postings" :key="p.posting_number" class="posting-item candidate-item" @click="toggleCandidate(p.posting_number)">
               <view class="candidate-check" :class="{ on: candidate.selected[p.posting_number] }">
@@ -330,6 +375,10 @@
               </view>
               <view class="posting-main">
                 <view class="posting-number mono">{{ p.posting_number }}</view>
+                <view v-if="candidate.tab === 'cross'" class="posting-store">{{ p.store_name || p.store_id }}·跨店</view>
+                <view v-if="candidate.tab === 'cross' && (p.printed_at || p.waybill_printed_at)" class="posting-time">
+                  打单 {{ fmtPrinted(p.printed_at || p.waybill_printed_at) }}
+                </view>
                 <view class="posting-products">
                   <view v-for="it in p.products || []" :key="it.sku || it.offer_id || it.name" class="posting-product">
                     <image v-if="it.image_url" class="posting-img" :src="it.image_url" mode="aspectFill" />
@@ -517,6 +566,7 @@ const detail = reactive({
   storeName: '',
   carriage: null,
   postings: [],
+  manualSnapshot: [], // 2026-11-02:进入详情时的跨店货件快照(保存时 diff 本地增删)
   postingsLoading: false,
   contact: [],
   phone: '',
@@ -543,8 +593,19 @@ const postingsModal = reactive({
   postings: [],
 });
 
-// 可加入货件候选
-const candidate = reactive({ open: false, loading: false, postings: [], selected: {} });
+// 可加入货件候选(2026-11-02:本店/跨店分页 + 打单时间筛选)
+const candidate = reactive({
+  open: false,
+  loading: false,
+  tab: 'self',            // self=本店货件 / cross=跨店货件
+  sourceStoreId: '',      // 跨店:候选店铺 id
+  printedRange: 'all',    // 打单时间快捷筛选:all/today/yesterday/3d/7d
+  printedFrom: '',        // 自定义开始日期 YYYY-MM-DD
+  printedTo: '',          // 自定义结束日期 YYYY-MM-DD
+  keyword: '',
+  postings: [],
+  selected: {},
+});
 
 // 货运标签预览
 const preview = reactive({ open: false, images: [], page: 0 });
@@ -574,6 +635,26 @@ const contactConfigNames = computed(() => {
 const contactConfigIndex = computed(() => {
   const idx = contactConfigNames.value.findIndex((n) => n.id === detail.selectedContactConfigId);
   return idx >= 0 ? idx : 0;
+});
+
+// ── 跨店候选(2026-11-02) ────────────────────────────────
+const PRINTED_RANGES = [
+  { key: 'all', label: '全部' },
+  { key: 'today', label: '今天' },
+  { key: 'yesterday', label: '昨天' },
+  { key: '3d', label: '近3天' },
+  { key: '7d', label: '近7天' },
+];
+// 可选候选店铺:排除发运单归属店铺
+const crossStores = computed(() =>
+  stores.value.filter((s) => String(s.id) !== String(detail.storeId))
+);
+const crossStoreNames = computed(() =>
+  crossStores.value.map((s) => ({ label: s.name || s.id, value: s.id }))
+);
+const crossStoreName = computed(() => {
+  const s = crossStores.value.find((x) => String(x.id) === String(candidate.sourceStoreId));
+  return s?.name || candidate.sourceStoreId || '';
 });
 
 function toast(title, icon = 'none') {
@@ -838,6 +919,10 @@ async function loadPostings() {
   try {
     const data = await getCarriagePostings(detail.storeId, detail.carriageId, { limit: 100 });
     detail.postings = data?.postings || [];
+    // 2026-11-02:记录进入详情时的跨店货件快照(保存时 diff 本地增删)
+    detail.manualSnapshot = detail.postings
+      .filter((p) => p.source === 'manual')
+      .map((p) => `${p.store_id}|${p.posting_number}`);
   } catch (err) {
     toast(`获取发运货件失败:${err.message || err}`);
   } finally {
@@ -1073,8 +1158,19 @@ async function onSetAsDefault() {
 // ── 货件增加/删除(set-postings 全量覆盖) ────────────────
 async function onOpenCandidate() {
   candidate.open = true;
+  candidate.tab = 'self';
   candidate.selected = {};
+  candidate.sourceStoreId = '';
+  candidate.printedRange = 'all';
+  candidate.printedFrom = '';
+  candidate.printedTo = '';
+  candidate.keyword = '';
   candidate.postings = [];
+  await loadSelfCandidates();
+}
+
+// 本店货件候选(Ozon available-postings)
+async function loadSelfCandidates() {
   candidate.loading = true;
   try {
     const data = await getAvailableCarriagePostings(detail.storeId, detail.carriageId, {
@@ -1084,6 +1180,87 @@ async function onOpenCandidate() {
     if (!candidate.postings.length) toast('没有可加入的「已准备发运」货件');
   } catch (err) {
     toast(err.message || '获取可加入货件失败');
+  } finally {
+    candidate.loading = false;
+  }
+}
+
+// 切换 本店/跨店 分页
+function switchCandidateTab(tab) {
+  if (candidate.tab === tab) return;
+  candidate.tab = tab;
+  candidate.selected = {};
+  candidate.postings = [];
+  if (tab === 'cross') {
+    // 默认选中第一个其它店铺
+    candidate.sourceStoreId = crossStores.value[0]?.id || '';
+    candidate.printedRange = 'all';
+    candidate.printedFrom = '';
+    candidate.printedTo = '';
+    candidate.keyword = '';
+  }
+}
+
+function onSelectCrossStore(e) {
+  const item = crossStoreNames.value[e.detail.value];
+  if (item) candidate.sourceStoreId = item.value;
+}
+
+function setPrintedRange(key) {
+  candidate.printedRange = key;
+}
+
+// 计算打单时间筛选区间 → UTC ISO(北京时间日界,与打单记录页一致)
+function computePrintedRange(key, fromDate, toDate) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const dayStartIso = (d) => {
+    const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00:00+08:00`;
+    return new Date(local).toISOString();
+  };
+  if (fromDate || toDate) {
+    return {
+      from: fromDate ? new Date(`${fromDate}T00:00:00+08:00`).toISOString() : undefined,
+      to: toDate ? new Date(`${toDate}T23:59:59.999+08:00`).toISOString() : undefined,
+    };
+  }
+  const now = new Date();
+  if (key === 'today') return { from: dayStartIso(now) };
+  if (key === 'yesterday') {
+    const y = new Date(now.getTime() - 24 * 3600 * 1000);
+    return { from: dayStartIso(y), to: dayStartIso(now) };
+  }
+  if (key === '3d') return { from: new Date(now.getTime() - 3 * 24 * 3600 * 1000).toISOString() };
+  if (key === '7d') return { from: new Date(now.getTime() - 7 * 24 * 3600 * 1000).toISOString() };
+  return {};
+}
+
+function fmtPrinted(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// 跨店待发运候选(本地库 + 打单时间筛选)
+async function loadCrossCandidates() {
+  if (!candidate.sourceStoreId) {
+    toast('请先选择店铺');
+    return;
+  }
+  candidate.loading = true;
+  try {
+    const params = { carriageId: detail.carriageId, sourceStoreId: candidate.sourceStoreId };
+    const range = computePrintedRange(candidate.printedRange, candidate.printedFrom, candidate.printedTo);
+    if (range.from) params.printedFrom = range.from;
+    if (range.to) params.printedTo = range.to;
+    if (candidate.keyword.trim()) params.keyword = candidate.keyword.trim();
+    const data = await getMixedCarriageCandidates(detail.storeId, params);
+    candidate.postings = data?.postings || [];
+    candidate.selected = {};
+    if (!candidate.postings.length) toast('没有符合筛选条件的待发运货件');
+  } catch (err) {
+    toast(err.message || '获取跨店待发运货件失败');
   } finally {
     candidate.loading = false;
   }
@@ -1117,18 +1294,38 @@ function onRemovePosting(p) {
   editPostings.dirty = true;
 }
 
+// 保存货件(2026-11-02):本店货件走 Ozon set-postings,跨店货件本地 diff 增删
 async function onSavePostings() {
-  if (!detail.postings.length) {
+  const ozonNumbers = detail.postings.filter((p) => p.source !== 'manual').map((p) => p.posting_number);
+  const manualCurrent = detail.postings.filter((p) => p.source === 'manual');
+  if (!ozonNumbers.length && !manualCurrent.length) {
     toast('发运至少保留 1 个货件,如需清空请取消发运');
     return;
   }
   editPostings.saving = true;
   try {
-    await setCarriagePostings(
-      detail.storeId,
-      detail.carriageId,
-      detail.postings.map((p) => p.posting_number)
-    );
+    // 1) 本店货件 → Ozon 全量覆盖(有本店货件才调)
+    if (ozonNumbers.length) {
+      await setCarriagePostings(detail.storeId, detail.carriageId, ozonNumbers);
+    }
+    // 2) 跨店货件 → 对比进入详情时的快照,本地增删
+    const snapshot = new Set(detail.manualSnapshot || []);
+    const key = (p) => `${p.store_id}|${p.posting_number}`;
+    const added = manualCurrent.filter((p) => !snapshot.has(key(p)));
+    const removed = [...snapshot].filter((k) => !manualCurrent.some((p) => key(p) === k));
+    if (added.length) {
+      await addMixedCarriagePostings(
+        detail.storeId,
+        detail.carriageId,
+        added.map((p) => ({ storeId: p.store_id, postingNumber: p.posting_number }))
+      );
+    }
+    for (const k of removed) {
+      const sep = k.indexOf('|');
+      const postingStoreId = k.slice(0, sep);
+      const postingNumber = k.slice(sep + 1);
+      await removeMixedCarriagePosting(detail.storeId, detail.carriageId, postingStoreId, postingNumber);
+    }
     toast('货件列表已保存', 'success');
     editPostings.dirty = false;
     await loadPostings();
@@ -1688,6 +1885,118 @@ async function onPrint(row) {
 .candidate-check.on {
   background: #165dff;
   border-color: #165dff;
+}
+/* 候选分页 + 跨店筛选(2026-11-02) */
+.candidate-tabs {
+  display: flex;
+  background: #f2f3f5;
+  border-radius: 12rpx;
+  padding: 4rpx;
+  margin-bottom: 16rpx;
+}
+.candidate-tab {
+  flex: 1;
+  text-align: center;
+  font-size: 26rpx;
+  color: #4e5969;
+  padding: 12rpx 0;
+  border-radius: 10rpx;
+}
+.candidate-tab.on {
+  background: #fff;
+  color: #165dff;
+  font-weight: 600;
+}
+.candidate-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+  margin-bottom: 16rpx;
+}
+.filter-field {
+  font-size: 24rpx;
+  color: #1d2129;
+  background: #f7f8fa;
+  border: 1rpx solid #e5e6eb;
+  border-radius: 8rpx;
+  padding: 12rpx 16rpx;
+}
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+}
+.chip {
+  font-size: 22rpx;
+  color: #4e5969;
+  background: #f7f8fa;
+  border: 1rpx solid #e5e6eb;
+  border-radius: 24rpx;
+  padding: 6rpx 20rpx;
+}
+.chip.on {
+  color: #165dff;
+  border-color: #165dff;
+  background: #eaf1ff;
+}
+.filter-dates {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+.date-field {
+  flex: 1;
+  font-size: 22rpx;
+  color: #1d2129;
+  background: #f7f8fa;
+  border: 1rpx solid #e5e6eb;
+  border-radius: 8rpx;
+  padding: 10rpx 12rpx;
+  text-align: center;
+}
+.date-sep {
+  color: #86909c;
+}
+.filter-row {
+  display: flex;
+  gap: 12rpx;
+}
+.filter-input {
+  flex: 1;
+  font-size: 24rpx;
+  background: #f7f8fa;
+  border: 1rpx solid #e5e6eb;
+  border-radius: 8rpx;
+  padding: 10rpx 16rpx;
+}
+.posting-store {
+  font-size: 20rpx;
+  color: #c41d7f;
+  margin-bottom: 6rpx;
+}
+.posting-time {
+  font-size: 20rpx;
+  color: #86909c;
+  margin-bottom: 8rpx;
+}
+.posting-tags {
+  display: flex;
+  gap: 8rpx;
+  margin-bottom: 8rpx;
+}
+.self-tag {
+  font-size: 20rpx;
+  color: #165dff;
+  background: #eaf1ff;
+  border-radius: 6rpx;
+  padding: 2rpx 10rpx;
+}
+.cross-tag {
+  font-size: 20rpx;
+  color: #c41d7f;
+  background: #fdeaf3;
+  border-radius: 6rpx;
+  padding: 2rpx 10rpx;
 }
 
 /* ── 货件列表弹窗(2026-11-02) ── */

@@ -24,6 +24,9 @@ import {
   setCarriageCourierContact,
   setCarriagePostings,
   getAvailableCarriagePostings,
+  getMixedCarriageCandidates,
+  addMixedCarriagePostings,
+  removeMixedCarriagePosting,
   listCourierContactConfigs,
   saveCourierContactConfigs,
 } from '../api/order-process.js';
@@ -98,6 +101,7 @@ const detail = reactive({
   fromHistory: false, // 2026-11-01:本地历史快照详情只读(Ozon 已完成发运查不到)
   carriage: null,
   postings: [],
+  manualSnapshot: [], // 2026-11-02:进入详情时的跨店货件快照(保存时 diff 本地增删)
   postingsLoading: false,
   contact: [],
   contactLoading: false,
@@ -128,12 +132,32 @@ const defaultContactConfig = computed(
 // 货件编辑(增加/删除后全量 set-postings 保存)
 const editPostings = reactive({ dirty: false, saving: false });
 
-// 可加入货件候选弹窗
+// 可加入货件候选弹窗(2026-11-02:本店/跨店分页 + 打单时间筛选)
 const candidate = reactive({
   open: false,
   loading: false,
+  tab: 'self',            // self=本店货件 / cross=跨店货件
+  sourceStoreId: '',      // 跨店:候选店铺 id
+  printedRange: 'all',    // 打单时间快捷筛选:all/today/yesterday/3d/7d
+  printedFrom: '',        // 自定义开始日期 YYYY-MM-DD
+  printedTo: '',          // 自定义结束日期 YYYY-MM-DD
+  keyword: '',
   postings: [],
   selected: {},
+});
+
+// 跨店候选(2026-11-02)
+const PRINTED_RANGES = [
+  { key: 'all', label: '全部' },
+  { key: 'today', label: '今天' },
+  { key: 'yesterday', label: '昨天' },
+  { key: '3d', label: '近3天' },
+  { key: '7d', label: '近7天' },
+];
+const crossStores = computed(() => storesStore.stores.filter((s) => String(s.id) !== String(storeId.value)));
+const crossStoreName = computed(() => {
+  const s = crossStores.value.find((x) => String(x.id) === String(candidate.sourceStoreId));
+  return s?.name || candidate.sourceStoreId || '';
 });
 
 // 待发运货件弹窗(2026-11-02:点击占位行"货件数"查看该配送方式下待发运货件)
@@ -434,6 +458,10 @@ async function loadPostings(row) {
     // Ozon 实测 limit 上限 100(超限报 invalid AssemblyCarriagePostingListRequest.Limit)
     const data = await getCarriagePostings(storeId.value, Number(row.id), { limit: 100 });
     detail.postings = data?.postings || [];
+    // 2026-11-02:记录进入详情时的跨店货件快照(保存时 diff 本地增删)
+    detail.manualSnapshot = detail.postings
+      .filter((p) => p.source === 'manual')
+      .map((p) => `${p.store_id}|${p.posting_number}`);
   } catch (err) {
     show(`获取发运货件失败:${err.message || String(err)}`, 'error');
   } finally {
@@ -666,11 +694,22 @@ function productsSummary(p) {
 // 仅 new 状态允许调整货件(Ozon set-postings 仅发运创建后未确认前可用)
 const postingsEditable = computed(() => detail.carriage?.status === 'new');
 
-// 打开候选货件弹窗
+// 打开候选货件弹窗(2026-11-02:默认本店货件 tab)
 async function onOpenCandidate() {
   candidate.open = true;
+  candidate.tab = 'self';
   candidate.selected = {};
+  candidate.sourceStoreId = '';
+  candidate.printedRange = 'all';
+  candidate.printedFrom = '';
+  candidate.printedTo = '';
+  candidate.keyword = '';
   candidate.postings = [];
+  await loadSelfCandidates();
+}
+
+// 本店货件候选(Ozon available-postings)
+async function loadSelfCandidates() {
   candidate.loading = true;
   try {
     const data = await getAvailableCarriagePostings(storeId.value, detail.carriageId, {
@@ -678,6 +717,81 @@ async function onOpenCandidate() {
     });
     candidate.postings = data?.postings || [];
     if (!candidate.postings.length) show('没有可加入的「已准备发运」货件', 'info');
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    candidate.loading = false;
+  }
+}
+
+// 切换 本店/跨店 分页
+function switchCandidateTab(tab) {
+  if (candidate.tab === tab) return;
+  candidate.tab = tab;
+  candidate.selected = {};
+  candidate.postings = [];
+  if (tab === 'cross') {
+    candidate.sourceStoreId = crossStores.value[0]?.id || '';
+    candidate.printedRange = 'all';
+    candidate.printedFrom = '';
+    candidate.printedTo = '';
+    candidate.keyword = '';
+  }
+}
+
+function setPrintedRange(key) {
+  candidate.printedRange = key;
+}
+
+// 计算打单时间筛选区间 → UTC ISO(北京时间日界,与打单记录页一致)
+function computePrintedRange(key, fromDate, toDate) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const dayStartIso = (d) => {
+    const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00:00+08:00`;
+    return new Date(local).toISOString();
+  };
+  if (fromDate || toDate) {
+    return {
+      from: fromDate ? new Date(`${fromDate}T00:00:00+08:00`).toISOString() : undefined,
+      to: toDate ? new Date(`${toDate}T23:59:59.999+08:00`).toISOString() : undefined,
+    };
+  }
+  const now = new Date();
+  if (key === 'today') return { from: dayStartIso(now) };
+  if (key === 'yesterday') {
+    const y = new Date(now.getTime() - 24 * 3600 * 1000);
+    return { from: dayStartIso(y), to: dayStartIso(now) };
+  }
+  if (key === '3d') return { from: new Date(now.getTime() - 3 * 24 * 3600 * 1000).toISOString() };
+  if (key === '7d') return { from: new Date(now.getTime() - 7 * 24 * 3600 * 1000).toISOString() };
+  return {};
+}
+
+function fmtPrinted(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// 跨店待发运候选(本地库 + 打单时间筛选)
+async function loadCrossCandidates() {
+  if (!candidate.sourceStoreId) {
+    show('请先选择店铺', 'warning');
+    return;
+  }
+  candidate.loading = true;
+  try {
+    const params = { carriageId: detail.carriageId, sourceStoreId: candidate.sourceStoreId };
+    const range = computePrintedRange(candidate.printedRange, candidate.printedFrom, candidate.printedTo);
+    if (range.from) params.printedFrom = range.from;
+    if (range.to) params.printedTo = range.to;
+    if (candidate.keyword.trim()) params.keyword = candidate.keyword.trim();
+    const data = await getMixedCarriageCandidates(storeId.value, params);
+    candidate.postings = data?.postings || [];
+    candidate.selected = {};
+    if (!candidate.postings.length) show('没有符合筛选条件的待发运货件', 'info');
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
@@ -711,19 +825,38 @@ function onRemovePosting(p) {
   editPostings.dirty = true;
 }
 
-// 保存货件组成(全量覆盖)
+// 保存货件组成(2026-11-02):本店货件走 Ozon set-postings,跨店货件本地 diff 增删
 async function onSavePostings() {
-  if (!detail.postings.length) {
+  const ozonNumbers = detail.postings.filter((p) => p.source !== 'manual').map((p) => p.posting_number);
+  const manualCurrent = detail.postings.filter((p) => p.source === 'manual');
+  if (!ozonNumbers.length && !manualCurrent.length) {
     show('发运至少保留 1 个货件,如需清空请取消发运', 'error');
     return;
   }
   editPostings.saving = true;
   try {
-    await setCarriagePostings(
-      storeId.value,
-      detail.carriageId,
-      detail.postings.map((p) => p.posting_number)
-    );
+    // 1) 本店货件 → Ozon 全量覆盖(有本店货件才调)
+    if (ozonNumbers.length) {
+      await setCarriagePostings(storeId.value, detail.carriageId, ozonNumbers);
+    }
+    // 2) 跨店货件 → 对比进入详情时的快照,本地增删
+    const snapshot = new Set(detail.manualSnapshot || []);
+    const key = (p) => `${p.store_id}|${p.posting_number}`;
+    const added = manualCurrent.filter((p) => !snapshot.has(key(p)));
+    const removed = [...snapshot].filter((k) => !manualCurrent.some((p) => key(p) === k));
+    if (added.length) {
+      await addMixedCarriagePostings(
+        storeId.value,
+        detail.carriageId,
+        added.map((p) => ({ storeId: p.store_id, postingNumber: p.posting_number }))
+      );
+    }
+    for (const k of removed) {
+      const sep = k.indexOf('|');
+      const postingStoreId = k.slice(0, sep);
+      const postingNumber = k.slice(sep + 1);
+      await removeMixedCarriagePosting(storeId.value, detail.carriageId, postingStoreId, postingNumber);
+    }
     show('货件列表已保存', 'success');
     editPostings.dirty = false;
     await loadPostings(detail.carriage);
@@ -1073,7 +1206,11 @@ defineExpose({ refreshCurrent, listLoading });
             </thead>
             <tbody>
               <tr v-for="p in detail.postings" :key="p.posting_number">
-                <td class="mono">{{ p.posting_number }}</td>
+                <td>
+                  <span class="mono">{{ p.posting_number }}</span>
+                  <span v-if="p.source === 'manual'" class="cross-tag" :title="p.store_id">{{ p.store_name || p.store_id }}·跨店</span>
+                  <span v-else class="self-tag">本店</span>
+                </td>
                 <td>
                   <div v-if="(p.products || []).length" class="posting-products">
                     <div v-for="it in p.products" :key="it.sku || it.offer_id || it.name" class="posting-product">
@@ -1278,26 +1415,60 @@ defineExpose({ refreshCurrent, listLoading });
       </div>
     </AppModal>
 
-    <!-- 可加入货件候选弹窗(2026-10-30) -->
+    <!-- 可加入货件候选弹窗(2026-11-02:本店/跨店分页 + 打单时间筛选) -->
     <AppModal :open="candidate.open" title="添加货件" size="lg" @update:open="candidate.open = $event">
+      <div class="candidate-tabs">
+        <button class="candidate-tab" :class="{ on: candidate.tab === 'self' }" @click="switchCandidateTab('self')">本店货件</button>
+        <button class="candidate-tab" :class="{ on: candidate.tab === 'cross' }" @click="switchCandidateTab('cross')">跨店货件</button>
+      </div>
+
+      <!-- 跨店筛选栏(店铺 + 打单时间 + 关键字) -->
+      <div v-if="candidate.tab === 'cross'" class="candidate-filter">
+        <div class="filter-row">
+          <select v-model="candidate.sourceStoreId" class="form-control filter-store">
+            <option v-for="s in crossStores" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
+          </select>
+          <input v-model="candidate.keyword" class="form-control filter-keyword" placeholder="货件号搜索" @keyup.enter="loadCrossCandidates" />
+          <button class="btn btn-primary btn-sm" :disabled="candidate.loading" @click="loadCrossCandidates">搜索</button>
+        </div>
+        <div class="filter-chips">
+          <button
+            v-for="r in PRINTED_RANGES"
+            :key="r.key"
+            class="chip"
+            :class="{ on: candidate.printedRange === r.key }"
+            @click="setPrintedRange(r.key)"
+          >{{ r.label }}</button>
+        </div>
+        <div class="filter-dates">
+          <input v-model="candidate.printedFrom" type="date" class="form-control" title="打单开始日期" />
+          <span class="date-sep">~</span>
+          <input v-model="candidate.printedTo" type="date" class="form-control" title="打单结束日期" />
+        </div>
+      </div>
+
       <div class="candidate-head">
         <span v-if="candidate.loading" class="field-hint">加载中…</span>
+        <span v-else-if="candidate.tab === 'self'" class="field-hint">
+          已准备发运、不在当前发运中的本店货件(共 {{ candidate.postings.length }} 个),勾选后加入
+        </span>
         <span v-else class="field-hint">
-          已准备发运、不在当前发运中的货件(共 {{ candidate.postings.length }} 个),勾选后加入
+          店铺「{{ crossStoreName }}」待发运货件(共 {{ candidate.postings.length }} 个),已排除当前发运中货件
         </span>
         <div class="spacer"></div>
-        <button class="btn btn-ghost btn-sm" :disabled="candidate.loading" @click="onOpenCandidate">刷新</button>
+        <button class="btn btn-ghost btn-sm" :disabled="candidate.loading" @click="candidate.tab === 'self' ? loadSelfCandidates() : loadCrossCandidates()">刷新</button>
         <button class="btn btn-primary btn-sm" :disabled="candidate.loading" @click="onConfirmAddCandidates">
           加入选中
         </button>
       </div>
       <div v-if="candidate.loading && !candidate.postings.length" class="list-empty">加载中…</div>
-      <div v-else-if="!candidate.postings.length" class="list-empty">没有可加入的「已准备发运」货件</div>
+      <div v-else-if="!candidate.postings.length" class="list-empty">{{ candidate.tab === 'self' ? '没有可加入的「已准备发运」货件' : '没有符合筛选条件的待发运货件' }}</div>
       <table v-else class="posting-table candidate-table">
         <thead>
           <tr>
             <th class="candidate-check"></th>
             <th>货件号</th>
+            <th v-if="candidate.tab === 'cross'">店铺 / 打单时间</th>
             <th>商品</th>
             <th class="num">件数</th>
           </tr>
@@ -1308,6 +1479,10 @@ defineExpose({ refreshCurrent, listLoading });
               <input v-model="candidate.selected[p.posting_number]" type="checkbox" />
             </td>
             <td class="mono">{{ p.posting_number }}</td>
+            <td v-if="candidate.tab === 'cross'">
+              <div class="candidate-store">{{ p.store_name || p.store_id }}·跨店</div>
+              <div class="candidate-time">打单 {{ fmtPrinted(p.printed_at || p.waybill_printed_at) }}</div>
+            </td>
             <td>
               <div v-if="(p.products || []).length" class="posting-products">
                 <div v-for="it in p.products" :key="it.sku || it.offer_id || it.name" class="posting-product">
@@ -1776,6 +1951,116 @@ defineExpose({ refreshCurrent, listLoading });
 }
 .candidate-check input {
   accent-color: var(--primary);
+}
+
+/* ── 货件来源标签(2026-11-02,跨店混装) ── */
+.self-tag,
+.cross-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+.self-tag {
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+.cross-tag {
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+}
+
+/* ── 候选弹窗:本店/跨店 tabs + 跨店筛选(2026-11-02) ── */
+.candidate-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.candidate-tab {
+  padding: 7px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.candidate-tab:hover {
+  color: var(--text);
+}
+.candidate-tab.on {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+.candidate-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.filter-store {
+  max-width: 220px;
+  min-width: 140px;
+}
+.filter-keyword {
+  max-width: 220px;
+}
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.chip:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.chip.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.filter-dates {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.date-sep {
+  color: var(--muted);
+}
+.candidate-store {
+  font-size: 12px;
+  color: #b45309;
+  font-weight: 600;
+}
+.candidate-time {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* ── 标签打印机选择栏(2026-11-01,并入发运清单上方) ── */
