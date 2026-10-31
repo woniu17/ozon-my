@@ -1292,3 +1292,54 @@ CREATE INDEX IF NOT EXISTS idx_carriage_posting_active
 -- 查货件所属发运单(含历史)
 CREATE INDEX IF NOT EXISTS idx_carriage_posting_posting
   ON op_carriage_posting(store_id, posting_number);
+
+-- ════════════════════════════════════════════════════════════════
+-- 店铺健康-错误指数(2026-11-03)
+-- 数据源:POST /v1/rating/index/fbs/info、/v1/rating/index/fbs/posting/list
+-- 设计文档:docs/店铺健康页面-功能设计.md
+-- op_rating_daily:每日错误指数快照(幂等:同店铺同日覆盖)
+-- op_rating_error_posting:影响错误指数的货件(幂等:同店铺同货件覆盖)
+-- ════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS op_rating_daily (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id TEXT NOT NULL,
+  date TEXT NOT NULL,
+  index_by_date REAL NOT NULL DEFAULT 0,
+  processing_costs_sum_by_date REAL NOT NULL DEFAULT 0,
+  period_from TEXT,
+  period_to TEXT,
+  synced_at TEXT,
+  UNIQUE(store_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_rating_daily_store_date ON op_rating_daily(store_id, date);
+
+-- 当前周期错误指数快照(info 接口的周期汇总,同店铺覆盖;用于概览大数字)
+CREATE TABLE IF NOT EXISTS op_rating_snapshot (
+  store_id TEXT PRIMARY KEY,
+  rating_index REAL NOT NULL DEFAULT 0,
+  processing_costs_sum REAL NOT NULL DEFAULT 0,
+  currency_code TEXT,
+  period_from TEXT,
+  period_to TEXT,
+  synced_at TEXT
+);
+
+-- 影响错误指数的货件(同店铺同货件覆盖)
+CREATE TABLE IF NOT EXISTS op_rating_error_posting (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id TEXT NOT NULL,
+  posting_number TEXT NOT NULL,
+  posting_error_type TEXT NOT NULL,            -- SELLER_CANCELLATION / SELLER_DELAY
+  delivery_schema TEXT,                        -- FBS / rFBS / erFBS
+  error_at TEXT,
+  rating_index REAL NOT NULL DEFAULT 0,
+  has_grace_status INTEGER NOT NULL DEFAULT 0, -- 1=享受宽限(不计费/可申诉)
+  charge_percent REAL NOT NULL DEFAULT 0,
+  charge_price REAL NOT NULL DEFAULT 0,
+  charge_price_currency_code TEXT,
+  product_price REAL NOT NULL DEFAULT 0,
+  product_price_currency_code TEXT,
+  synced_at TEXT,
+  UNIQUE(store_id, posting_number)
+);
+CREATE INDEX IF NOT EXISTS idx_rating_err_store_error ON op_rating_error_posting(store_id, error_at);

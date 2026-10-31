@@ -20,6 +20,7 @@ const navGroups = [
       { key: '/order-process', label: '订单处理' },
       { key: '/order-stats', label: '订单统计' },
       { key: '/finance-stats', label: '财务统计' },
+      { key: '/store-health', label: '店铺健康' },
       { key: '/scan-ship', label: '扫描打单' },
       { key: '/scan-stock', label: '扫描入库' },
       { key: '/carriage-manage', label: '发运管理' },

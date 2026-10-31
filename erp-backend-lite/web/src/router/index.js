@@ -32,6 +32,7 @@ import FinanceStats from '../views/FinanceStats.vue';
 import ScanShip from '../views/ScanShip.vue';
 import MiaoshouOrders from '../views/MiaoshouOrders.vue';
 import CarriageCenter from '../views/CarriageCenter.vue';
+import StoreHealth from '../views/StoreHealth.vue';
 import { useAuthStore } from '../stores/auth.js';
 
 // 路由配置 + JWT 守卫
@@ -73,6 +74,7 @@ const router = createRouter({
     { path: '/order-process', name: 'order-process', component: OrderProcess, meta: { title: '订单处理' } },
     { path: '/order-stats', name: 'order-stats', component: OrderStats, meta: { title: '订单统计' } },
     { path: '/finance-stats', name: 'finance-stats', component: FinanceStats, meta: { title: '财务统计' } },
+    { path: '/store-health', name: 'store-health', component: StoreHealth, meta: { title: '店铺健康' } },
     { path: '/price-manage', name: 'price-manage', component: () => import('../views/PriceManage.vue'), meta: { title: '价格管理' } },
     { path: '/scan-ship', name: 'scan-ship', component: ScanShip, meta: { title: '扫描打单' } },
     { path: '/scan-stock', name: 'scan-stock', component: ScanShip, meta: { title: '扫描入库' } },

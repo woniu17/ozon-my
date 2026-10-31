@@ -1,5 +1,7 @@
 package com.yochylin.scanner.model
 
+import com.google.gson.JsonObject
+
 /** 包裹列表/记录响应（/list 与 /records 均返回 { packages, total, ... }） */
 data class PackageListResponse(
     val packages: List<Pkg> = emptyList(),
@@ -370,6 +372,76 @@ data class OrderStatsStoresResponse(
 data class StoreItem(
     val id: String? = null,
     val name: String? = null,
+)
+
+// ── 店铺健康(错误指数) ─────────────────────────────────
+
+/** 概览汇总：/rating/health/summary */
+data class RatingHealthSummaryResponse(
+    val stores: List<RatingStoreHealth>? = null,
+    val totals: RatingErrorTotals? = null,
+    val sync: RatingSyncStatus? = null,
+)
+
+data class RatingStoreHealth(
+    val storeId: String? = null,
+    val storeName: String? = null,
+    val index: Double? = null,
+    val processingCostsSum: Double? = null,
+    val currencyCode: String? = null,
+    val periodFrom: String? = null,
+    val periodTo: String? = null,
+    val syncedAt: String? = null,
+    val defects: List<RatingDefect>? = null,
+)
+
+data class RatingDefect(
+    val date: String? = null,
+    val indexByDate: Double? = null,
+    val processingCostsSumByDate: Double? = null,
+)
+
+data class RatingErrorTotals(
+    val errorPostingCount: Int = 0,
+    val sellerCancellationCount: Int = 0,
+    val sellerDelayCount: Int = 0,
+    val graceCount: Int = 0,
+    val chargeSum: Double = 0.0,
+    val chargeCurrencyCode: String? = null,
+    val schemaCounts: List<RatingSchemaCount>? = null,
+)
+
+data class RatingSchemaCount(
+    val deliverySchema: String? = null,
+    val n: Int = 0,
+)
+
+data class RatingSyncStatus(
+    val running: Boolean = false,
+    val lastResult: JsonObject? = null,
+)
+
+/** 影响错误指数的货件明细：/rating/health/errors */
+data class RatingErrorsResponse(
+    val items: List<RatingErrorItem>? = null,
+    val total: Int = 0,
+)
+
+data class RatingErrorItem(
+    val storeId: String? = null,
+    val storeName: String? = null,
+    val postingNumber: String? = null,
+    val postingErrorType: String? = null,
+    val deliverySchema: String? = null,
+    val errorAt: String? = null,
+    val index: Double? = null,
+    val hasGraceStatus: Int = 0,
+    val chargePercent: Double? = null,
+    val chargePrice: Double? = null,
+    val chargeCurrencyCode: String? = null,
+    val productPrice: Double? = null,
+    val productCurrencyCode: String? = null,
+    val orderStatus: String? = null,
 )
 
 // ── 采购流程(平台订单) ───────────────────────────────────

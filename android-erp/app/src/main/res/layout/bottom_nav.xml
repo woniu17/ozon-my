@@ -164,4 +164,30 @@
             android:layout_marginTop="2dp" />
     </LinearLayout>
 
+    <!-- 店铺健康(2026-11-03 第 7 个 Tab) -->
+    <LinearLayout
+        android:id="@+id/navHealth"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@android:color/transparent">
+
+        <ImageView
+            android:id="@+id/navHealthIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_nav_health" />
+
+        <TextView
+            android:id="@+id/navHealthText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="店铺健康"
+            android:textSize="10sp"
+            android:textColor="#86909c"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
 </LinearLayout>

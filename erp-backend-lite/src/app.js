@@ -59,6 +59,8 @@ import exportExcelRoutes from './modules/export-excel.js';
 import platformOrdersRoutes from './modules/platform-orders.js';
 import listingMaterialsRoutes from './modules/listing-materials.js';
 import taskLogRoutes, { startTaskLogRetention, stopTaskLogRetention } from './modules/task-logs.js';
+import storeHealthRoutes from './modules/store-health.js';
+import { startRatingHealthSync, stopRatingHealthSync } from './services/rating-health-sync.js';
 import { handleImageCacheRequest, withImageRequestContext } from './services/order-image-cache.js';
 import { stopPlatformOrders } from './services/platform-orders/browser-manager.js';
 import { setupPushWs } from './services/push-ws.js';
@@ -216,6 +218,7 @@ app.use(endpointMetricsRoutes);
 app.use(priceWatchRoutes);
 app.use(orderProcessRoutes);
 app.use(printAgentRelayRoutes);
+app.use(storeHealthRoutes);
 app.use(orderStatsRoutes);
 app.use(financeStatsRoutes);
 app.use(priceManageRoutes);
@@ -269,6 +272,9 @@ const server = app.listen(config.port, () => {
   // 发运历史同步(2026-11-01):每 30 分钟把各店铺发运快照 upsert 到本地,
   // 归档从 Ozon 列表消失超过 3 天的进行中发运,支撑"已完成"子 tab
   startCarriageHistorySync();
+  // 店铺健康-错误指数同步(2026-11-03):每 24h 扫 [today-34d, today] × 全店铺,
+  // /v1/rating/index/fbs/info + posting/list 落库,支撑店铺健康页
+  startRatingHealthSync();
   // P2-2:启动批量均衡上架调度器(两阶段改造 2026-07):
   //   第一阶段 batch-image-poller:每 500ms 扫描,并发 5,不限速,负责图片处理/水印渲染(PENDING→IMAGE_DONE)
   //   第二阶段 batch-upload-poller:每 2 秒扫描,全局串行,OPI 阶段限速(IMAGE_DONE→SUCCESS/FAILED)
@@ -307,6 +313,7 @@ async function shutdown(signal) {
   stopIndexSync();
   stopSkuGroupSync();
   stopCarriageHistorySync();
+  stopRatingHealthSync();
   stopOrderSync();
   stopBatchImagePoller();
   stopBatchUploadPoller();

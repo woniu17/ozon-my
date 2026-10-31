@@ -1087,3 +1087,33 @@ export async function buildProductUpdatePayload(store, offerId, updateFields, ne
 
   return opiItem;
 }
+
+// ═══ 卖家评级-错误指数(2026-11-03,店铺健康页)═══════════════════
+// 文档:docs/ozon-api/10-卖家信息与评级.md + docs/店铺健康页面-功能设计.md
+// /v1/rating/index/fbs/info —— 获取错误指数汇总(FBS/rFBS),无请求体
+// 响应: { index, period_from, period_to, processing_costs_sum, currency_code,
+//         defects: [{ date, index_by_date, processing_costs_sum_by_date }] }
+export function ratingIndexFbsInfo(store) {
+  return call(store, '/v1/rating/index/fbs/info', {});
+}
+
+// /v1/rating/index/fbs/posting/list —— 影响错误指数的货件列表(游标分页)
+// 请求: { cursor?, filter: { date_from, date_to, posting_numbers? }, limit(必填) }
+// 响应: { cursor, has_next, errors: [{ posting_number, posting_error_type,
+//         delivery_schema, error_at, index, has_grace_status, charge_percent,
+//         charge_price, charge_price_currency_code, product_price,
+//         product_price_currency_code }] }
+export function ratingIndexFbsPostingList(
+  store,
+  { dateFrom, dateTo, cursor, limit = 100, postingNumbers } = {}
+) {
+  const n = Number(limit);
+  if (!Number.isInteger(n) || n < 1 || n > 1000) {
+    throw new ApiError(ErrorCode.VALIDATION_ERROR, `limit 必须为 1~1000 的整数,收到: ${limit}`);
+  }
+  const filter = { date_from: dateFrom, date_to: dateTo };
+  if (postingNumbers?.length) filter.posting_numbers = postingNumbers;
+  const body = { filter, limit: n };
+  if (cursor) body.cursor = cursor;
+  return call(store, '/v1/rating/index/fbs/posting/list', body);
+}

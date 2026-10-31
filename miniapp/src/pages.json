@@ -91,6 +91,15 @@
 				"backgroundTextStyle": "dark",
 				"onReachBottomDistance": 100
 			}
+		},
+		{
+			"path": "pages/store-health/index",
+			"style": {
+				"navigationBarTitleText": "店铺健康",
+				"enablePullDownRefresh": true,
+				"backgroundTextStyle": "dark",
+				"onReachBottomDistance": 100
+			}
 		}
 	],
 	"globalStyle": {
