@@ -1268,9 +1268,11 @@ defineExpose({ refreshCurrent, listLoading });
             <tbody>
               <tr v-for="p in detail.postings" :key="p.posting_number">
                 <td>
-                  <span class="mono">{{ p.posting_number }}</span>
-                  <span v-if="p.source === 'manual'" class="cross-tag" :title="p.store_id">{{ p.store_name || p.store_id }}·跨店</span>
-                  <span v-else class="self-tag">本店</span>
+                  <div class="posting-no-cell">
+                    <span class="mono">{{ p.posting_number }}</span>
+                    <span v-if="p.source === 'manual'" class="cross-tag block-tag" :title="p.store_id">{{ p.store_name || p.store_id }}·跨店</span>
+                    <span v-else class="self-tag block-tag">本店</span>
+                  </div>
                 </td>
                 <td>
                   <span class="posting-status" :class="(postingStatusMeta(p.operate_status) || {}).cls || 'st-muted'">
@@ -2121,6 +2123,13 @@ defineExpose({ refreshCurrent, listLoading });
   color: #b45309;
   background: #fffbeb;
   border: 1px solid #fde68a;
+}
+/* 详情表格内来源标签换行到货件号下一行(2026-11-04) */
+.posting-no-cell .block-tag {
+  display: block;
+  margin-left: 0;
+  margin-top: 4px;
+  width: fit-content;
 }
 
 /* ── 候选弹窗:本店/跨店 tabs + 跨店筛选(2026-11-02) ── */
