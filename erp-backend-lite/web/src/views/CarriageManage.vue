@@ -1452,18 +1452,16 @@ defineExpose({ refreshCurrent, listLoading });
             </button>
           </div>
 
-          <!-- 只读展示(2026-11-05:默认不显示输入框) -->
+          <!-- 只读展示(2026-11-05:默认不显示输入框;2026-11-05:改为一行横排) -->
           <div v-if="!detail.editingContact" class="contact-view">
             <template v-if="detail.contact.length">
               <div class="contact-view-row">
                 <span class="contact-view-label">电话</span>
                 <span class="contact-view-value">{{ detail.contact[0].phone || '—' }}</span>
-              </div>
-              <div class="contact-view-row">
+                <span class="contact-view-sep">·</span>
                 <span class="contact-view-label">下单人名称</span>
                 <span class="contact-view-value">{{ detail.contact[0].wechat_nickname || '—' }}</span>
-              </div>
-              <div class="contact-view-row">
+                <span class="contact-view-sep">·</span>
                 <span class="contact-view-label">取件地址</span>
                 <span class="contact-view-value">{{ detail.contact[0].comment || '—' }}</span>
               </div>
@@ -2270,26 +2268,29 @@ defineExpose({ refreshCurrent, listLoading });
   background: #fff;
   color: var(--text);
 }
-/* 详情弹窗联系方式只读展示(2026-11-05) */
+/* 详情弹窗联系方式只读展示(2026-11-05;2026-11-05:一行横排) */
 .contact-view {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
 }
 .contact-view-row {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
   font-size: 13px;
 }
 .contact-view-label {
-  flex: 0 0 72px;
   font-size: 12px;
   color: var(--muted);
 }
 .contact-view-value {
   color: var(--text);
   word-break: break-all;
+}
+.contact-view-sep {
+  color: var(--border, #d0d7de);
+  margin: 0 2px;
 }
 /* 创建弹窗配置单选列表(2026-11-05) */
 .create-contact-picker {
