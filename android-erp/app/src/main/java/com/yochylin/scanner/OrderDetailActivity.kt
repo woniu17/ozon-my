@@ -556,6 +556,18 @@ class OrderDetailActivity : ComponentActivity() {
         addInfoRow(dInfoList, "Ozon状态", ozonStatusText(p))
         addInfoRow(dInfoList, "下单时间", fmtTimeWithWeekday(p.inProcessAt))
         addInfoRow(dInfoList, "最晚发货", fmtTimeWithWeekday(p.shipmentDate ?: p.lastDeliveryAt))
+        // 订单全链路时间(2026-11-02):对齐 H5,入库/打单/交运 + 揽收/签收/退货/到货,有值才展示
+        addTimeRowIf(dInfoList, "入库时间", p.stockedAt)
+        // 历史已交运数据 waybill_printed_at 已回填到 dispatched_at,两值相等不再重复展示
+        if (!p.waybillPrintedAt.isNullOrBlank() && p.waybillPrintedAt != p.dispatchedAt) {
+            addInfoRow(dInfoList, "打单时间", fmtTimeWithWeekday(p.waybillPrintedAt))
+        }
+        addTimeRowIf(dInfoList, "交运时间", p.dispatchedAt)
+        // 揽收时间 = Ozon 交物流时间(delivering_date),缺失时回退到状态联动写入的 shipped_at
+        addTimeRowIf(dInfoList, "揽收时间", p.deliveringDate ?: p.shippedAt)
+        addTimeRowIf(dInfoList, "签收时间", p.deliveredAt)
+        addTimeRowIf(dInfoList, "退货时间", p.returnAt)
+        addTimeRowIf(dInfoList, "采购到货", p.arrivedAt)
         addInfoRow(dInfoList, "重量", p.weightG?.let { "${fmtNum(it)}g" } ?: "—")
         addInfoRow(dInfoList, "销售佣金", p.accrual?.saleFee?.let { fmtMoney(it) } ?: "—")
         // OGL 订单额外展示评分组,如「¥43.65 · Budget」
@@ -1598,6 +1610,11 @@ class OrderDetailActivity : ComponentActivity() {
             }
             setOnClickListener { onClick() }
         }
+    }
+
+    /** 仅当 ISO 时间非空时添加信息行(时间链路过早阶段不占行,2026-11-02) */
+    private fun addTimeRowIf(container: LinearLayout, key: String, iso: String?) {
+        if (!iso.isNullOrBlank()) addInfoRow(container, key, fmtTimeWithWeekday(iso))
     }
 
     private fun addInfoRow(container: LinearLayout, key: String, value: CharSequence) {
