@@ -1823,9 +1823,10 @@ function attachPostingShipmentDates(storeId, postings) {
   const byNumber = new Map(rows.map((r) => [r.posting_number, r]));
   for (const p of postings) {
     const r = byNumber.get(p?.posting_number);
-    p.shipment_date = r?.shipment_date || null;
-    p.ozon_status = r?.ozon_status || null;
-    p.operate_status = r?.operate_status || null;
+    if (!r) continue; // 2026-11-03:本地查不到时保留原值(历史快照回填场景不应清空既有状态)
+    p.shipment_date = r.shipment_date || null;
+    p.ozon_status = r.ozon_status || null;
+    p.operate_status = r.operate_status || null;
   }
   return postings;
 }
@@ -2078,6 +2079,17 @@ router.post('/admin/api/order-process/carriage/history/list', async (req, res) =
       try { if (r.postings_json) postings = JSON.parse(r.postings_json); } catch { /* 快照缺失 */ }
       try { if (r.contact_json) contact = JSON.parse(r.contact_json); } catch { /* 快照缺失 */ }
       try { if (r.carriage_json) carriage = JSON.parse(r.carriage_json); } catch { /* 快照缺失 */ }
+      // 2026-11-03:历史快照的 ozon_status 是抓取时刻值(可能仍是 awaiting_deliver),
+      // 用本地实时订单/包裹状态刷新,与订单处理页一致;跨店行按各自 store_id 分组回填。
+      if (Array.isArray(postings) && postings.length) {
+        const byStore = new Map();
+        for (const p of postings) {
+          const sid = String(p?.store_id || r.store_id);
+          if (!byStore.has(sid)) byStore.set(sid, []);
+          byStore.get(sid).push(p);
+        }
+        for (const [sid, list] of byStore) attachPostingShipmentDates(sid, list);
+      }
       const storeName = stores.find((s) => String(s.id) === String(r.store_id))?.name || '';
       // 从 Ozon 列表消失被归档的进行中记录,统一显示为"已归档"历史
       const archived =

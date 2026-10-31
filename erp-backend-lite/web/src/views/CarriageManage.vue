@@ -82,6 +82,27 @@ const POSTING_STATUS_LABELS = {
 function postingStatusMeta(status) {
   return POSTING_STATUS_LABELS[status] || null;
 }
+// ozon_status 兜底文案(历史快照本地查不到 operate_status 时用)
+const OZON_STATUS_LABELS = {
+  awaiting_packaging: '待打包',
+  awaiting_registration: '待登记',
+  awaiting_deliver: '待发运',
+  dispatching: '交运中',
+  delivering: '集运中',
+  delivered: '已送达',
+  not_delivered: '未送达',
+  arbitration: '仲裁中',
+  cancelled: '已取消',
+};
+function ozonStatusLabel(status) {
+  return OZON_STATUS_LABELS[status] || status || '—';
+}
+function postingStatusText(p) {
+  const m = postingStatusMeta(p?.operate_status);
+  if (m) return m.label;
+  if (p?.operate_status) return p.operate_status;
+  return ozonStatusLabel(p?.ozon_status);
+}
 function hasAction(c, action) {
   return Array.isArray(c?.available_actions) && c.available_actions.includes(action);
 }
@@ -1252,12 +1273,9 @@ defineExpose({ refreshCurrent, listLoading });
                   <span v-else class="self-tag">本店</span>
                 </td>
                 <td>
-                  <span
-                    v-if="postingStatusMeta(p.operate_status)"
-                    class="posting-status"
-                    :class="postingStatusMeta(p.operate_status).cls"
-                  >{{ postingStatusMeta(p.operate_status).label }}</span>
-                  <span v-else class="posting-status st-muted">{{ p.operate_status || p.ozon_status || '—' }}</span>
+                  <span class="posting-status" :class="(postingStatusMeta(p.operate_status) || {}).cls || 'st-muted'">
+                    {{ postingStatusText(p) }}
+                  </span>
                 </td>
                 <td>
                   <div v-if="(p.products || []).length" class="posting-products">
@@ -1480,12 +1498,9 @@ defineExpose({ refreshCurrent, listLoading });
               <tr v-for="p in createModal.postings" :key="p.posting_number">
                 <td class="mono">{{ p.posting_number }}</td>
                 <td>
-                  <span
-                    v-if="postingStatusMeta(p.operate_status)"
-                    class="posting-status"
-                    :class="postingStatusMeta(p.operate_status).cls"
-                  >{{ postingStatusMeta(p.operate_status).label }}</span>
-                  <span v-else class="posting-status st-muted">{{ p.operate_status || p.ozon_status || '—' }}</span>
+                  <span class="posting-status" :class="(postingStatusMeta(p.operate_status) || {}).cls || 'st-muted'">
+                    {{ postingStatusText(p) }}
+                  </span>
                 </td>
                 <td>
                   <div v-if="(p.products || []).length" class="posting-products">

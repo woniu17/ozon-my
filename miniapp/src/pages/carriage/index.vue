@@ -151,10 +151,9 @@
                 <view class="posting-main">
                   <view class="posting-number mono">{{ p.posting_number }}</view>
                   <view class="posting-tags">
-                    <text v-if="postingStatusMeta(p.operate_status)" class="posting-status" :class="postingStatusMeta(p.operate_status).cls">
-                      {{ postingStatusMeta(p.operate_status).label }}
+                    <text class="posting-status" :class="(postingStatusMeta(p.operate_status) || {}).cls || 'st-muted'">
+                      {{ postingStatusText(p) }}
                     </text>
-                    <text v-else class="posting-status st-muted">{{ p.operate_status || p.ozon_status || '—' }}</text>
                   </view>
                   <view class="posting-products">
                     <view v-for="it in p.products || []" :key="it.sku || it.offer_id || it.name" class="posting-product">
@@ -225,10 +224,9 @@
                 <view class="posting-main">
                   <view class="posting-number mono">{{ p.posting_number }}</view>
                   <view class="posting-tags">
-                    <text v-if="postingStatusMeta(p.operate_status)" class="posting-status" :class="postingStatusMeta(p.operate_status).cls">
-                      {{ postingStatusMeta(p.operate_status).label }}
+                    <text class="posting-status" :class="(postingStatusMeta(p.operate_status) || {}).cls || 'st-muted'">
+                      {{ postingStatusText(p) }}
                     </text>
-                    <text v-else class="posting-status st-muted">{{ p.operate_status || p.ozon_status || '—' }}</text>
                     <text v-if="p.source === 'manual'" class="cross-tag">{{ p.store_name || p.store_id || '' }}·跨店</text>
                     <text v-else class="self-tag">本店</text>
                   </view>
@@ -564,6 +562,27 @@ const POSTING_STATUS_LABELS = {
 };
 function postingStatusMeta(status) {
   return POSTING_STATUS_LABELS[status] || null;
+}
+// ozon_status 兜底文案(历史快照本地查不到 operate_status 时用)
+const OZON_STATUS_LABELS = {
+  awaiting_packaging: '待打包',
+  awaiting_registration: '待登记',
+  awaiting_deliver: '待发运',
+  dispatching: '交运中',
+  delivering: '集运中',
+  delivered: '已送达',
+  not_delivered: '未送达',
+  arbitration: '仲裁中',
+  cancelled: '已取消',
+};
+function ozonStatusLabel(status) {
+  return OZON_STATUS_LABELS[status] || status || '—';
+}
+function postingStatusText(p) {
+  const m = postingStatusMeta(p?.operate_status);
+  if (m) return m.label;
+  if (p?.operate_status) return p.operate_status;
+  return ozonStatusLabel(p?.ozon_status);
 }
 // 列表接口不返回 available_actions,按状态判断是否已确认
 // 2026-11-02 实测:formed(已形成)即可生成货位标签,仅 new(新建)不可用
