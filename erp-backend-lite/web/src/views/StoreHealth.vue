@@ -3,110 +3,11 @@
 // 数据源:Ozon /v1/rating/index/fbs/info + /v1/rating/index/fbs/posting/list(后端落库)
 // 展示:错误指数概览 / 每日趋势 / 类型与配送方案分布 / 影响货件明细
 // 设计文档: docs/店铺健康页面-功能设计.md
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { getRatingSummary, getRatingErrors, triggerRatingSync, getRatingSyncStatus } from '../api/store-health.js';
 
 const router = useRouter();
-
-// ── 时间预设(日期粒度,不涉及时区日界)────────────────────────
-const presets = [
-  { key: '7d', label: '近7日' },
-  { key: '30d', label: '近30日' },
-  { key: 'thisMonth', label: '本月' },
-  { key: 'lastMonth', label: '上月' },
-  { key: 'custom', label: '自定义' },
-];
-const activePreset = ref('30d');
-const fromDate = ref('');
-const toDate = ref('');
-
-function pad(n) { return String(n).padStart(2, '0'); }
-function todayStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-function shiftDays(base, n) {
-  const d = new Date(`${base}T00:00:00`);
-  d.setDate(d.getDate() + n);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-function presetRange(key) {
-  const today = todayStr();
-  switch (key) {
-    case '7d': return { from: shiftDays(today, -6), to: today };
-    case '30d': return { from: shiftDays(today, -29), to: today };
-    case 'thisMonth': {
-      const d = new Date();
-      return { from: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`, to: today };
-    }
-    case 'lastMonth': {
-      const d = new Date();
-      const y = d.getFullYear();
-      const m = d.getMonth() + 1;
-      const lm = m === 1 ? 12 : m - 1;
-      const ly = m === 1 ? y - 1 : y;
-      const first = `${ly}-${pad(lm)}-01`;
-      const last = shiftDays(`${y}-${pad(m)}-01`, -1);
-      return { from: first, to: last };
-    }
-    default: return null;
-  }
-}
-function applyPreset(key) {
-  activePreset.value = key;
-  const r = presetRange(key);
-  if (r) {
-    fromDate.value = r.from;
-    toDate.value = r.to;
-  }
-  pager.offset = 0;
-  loadAll();
-}
-function onCustomChange() {
-  if (!fromDate.value || !toDate.value) return;
-  if (fromDate.value > toDate.value) {
-    const t = fromDate.value;
-    fromDate.value = toDate.value;
-    toDate.value = t;
-  }
-  pager.offset = 0;
-  loadAll();
-}
-
-// ── 店铺选择(多选,空=全选)──────────────────────────────────
-const allStores = ref([]);
-const selectedStoreIds = ref([]);
-const storeDropdownOpen = ref(false);
-const storeSelectionLabel = computed(() => {
-  const all = allStores.value;
-  if (all.length === 0) return '全部店铺';
-  if (selectedStoreIds.value.length === 0) return `全部店铺(${all.length})`;
-  const names = all.filter((s) => selectedStoreIds.value.includes(s.id)).map((s) => s.name);
-  return names.length <= 2 ? names.join(',') : `${names.length}家店铺`;
-});
-function isStoreIncluded(id) {
-  return selectedStoreIds.value.length === 0 || selectedStoreIds.value.includes(id);
-}
-function handleStoreCheckbox(id) {
-  const set = new Set(selectedStoreIds.value);
-  if (set.has(id)) set.delete(id);
-  else set.add(id);
-  selectedStoreIds.value = [...set];
-  if (selectedStoreIds.value.length === allStores.value.length) selectedStoreIds.value = [];
-  pager.offset = 0;
-  loadAll();
-}
-function selectAllStores() {
-  selectedStoreIds.value = [];
-  pager.offset = 0;
-  loadAll();
-}
-function selectNoStores() {
-  selectedStoreIds.value = allStores.value.map((s) => s.id);
-  pager.offset = 0;
-  loadAll();
-}
 
 // ── 数据加载 ─────────────────────────────────────────────────
 const summary = ref(null);
@@ -116,17 +17,16 @@ const error = ref('');
 const syncError = ref('');
 const syncing = ref(false);
 
-function storeIdsParam() {
-  return selectedStoreIds.value.length ? selectedStoreIds.value.join(',') : '';
-}
+// 指数统计时间段(来自后端快照;periodTo 为排他上界,展示减一天)
+const periodText = computed(() => {
+  const s = summary.value?.stores?.[0];
+  if (!s || !s.periodFrom || !s.periodTo) return '';
+  return `${s.periodFrom} ~ ${fmtPeriodEnd(s.periodTo)}`;
+});
 
 async function loadSummary() {
   try {
-    summary.value = await getRatingSummary({
-      from: fromDate.value,
-      to: toDate.value,
-      storeIds: storeIdsParam(),
-    });
+    summary.value = await getRatingSummary({});
   } catch (e) {
     error.value = e.message;
   }
@@ -135,9 +35,6 @@ async function loadSummary() {
 async function loadErrors() {
   try {
     errors.value = await getRatingErrors({
-      from: fromDate.value,
-      to: toDate.value,
-      storeIds: storeIdsParam(),
       offset: pager.offset,
       limit: pager.limit,
     });
@@ -160,11 +57,7 @@ async function doSync() {
   syncing.value = true;
   syncError.value = '';
   try {
-    await triggerRatingSync({
-      storeIds: selectedStoreIds.value.length ? selectedStoreIds.value : undefined,
-      from: fromDate.value,
-      to: toDate.value,
-    });
+    await triggerRatingSync({});
     // 轮询同步状态(最多 60s),完成后刷新
     for (let i = 0; i < 60; i++) {
       await sleep(1000);
@@ -203,7 +96,6 @@ const chartSeries = computed(() => {
     storeName: s.storeName,
     color: STORE_COLORS[i % STORE_COLORS.length],
     points: (s.defects || [])
-      .filter((d) => d.date >= fromDate.value && d.date <= toDate.value)
       .sort((a, b) => (a.date < b.date ? -1 : 1))
       .map((d) => ({ date: d.date, value: Number(d.indexByDate) || 0 })),
   }));
@@ -299,6 +191,13 @@ function fmtIndex(n) {
 function fmtPct(n) {
   return ((Number(n) || 0) * 100).toFixed(2);
 }
+/** 指数周期结束日减一天展示(与 Ozon 后台一致:接口 periodTo 为排他上界) */
+function fmtPeriodEnd(dateStr) {
+  const d = new Date(`${String(dateStr)}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return dateStr || '';
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
 function indexColor(idx) {
   const s = indexStatus(idx);
   return s === 'ok' ? '#00b42a' : s === 'warning' ? '#d97706' : '#f53f3f';
@@ -325,69 +224,20 @@ function fmtTime(iso) {
 
 // ── 生命周期 ─────────────────────────────────────────────────────
 onMounted(() => {
-  // 初始化默认时间范围(默认近30日:错误货件稀疏,近7日可能为空)
-  const r = presetRange('30d');
-  fromDate.value = r.from;
-  toDate.value = r.to;
-  // 加载店铺列表(复用订单统计的店铺接口)
-  import('../api/order-stats.js').then((m) => m.getOrderStatsStores()).then((res) => {
-    allStores.value = res?.stores || [];
-  }).catch(() => { /* 店铺列表加载失败不阻塞页面 */ });
   loadAll();
-  document.addEventListener('click', closeStoreDropdown);
 });
-onUnmounted(() => {
-  document.removeEventListener('click', closeStoreDropdown);
-});
-function closeStoreDropdown() {
-  storeDropdownOpen.value = false;
-}
 </script>
 
 <template>
   <div class="store-health">
     <!-- 顶部工具栏 -->
-    <div class="toolbar">
-      <div class="preset-group">
-        <button
-          v-for="p in presets"
-          :key="p.key"
-          class="btn btn-sm"
-          :class="{ 'btn-primary': activePreset === p.key, 'btn-ghost': activePreset !== p.key }"
-          @click="applyPreset(p.key)"
-        >{{ p.label }}</button>
+    <div class="top-bar">
+      <div class="range-hint">
+        指数统计时间段:{{ periodText }} · 错误指数为周期汇总(本地参考阈值着色)
       </div>
-
-      <div class="date-range" :class="{ disabled: activePreset !== 'custom' }">
-        <input class="filter-input" type="date" v-model="fromDate" :disabled="activePreset !== 'custom'" @change="onCustomChange" />
-        <span class="sep">—</span>
-        <input class="filter-input" type="date" v-model="toDate" :disabled="activePreset !== 'custom'" @change="onCustomChange" />
-      </div>
-
-      <div class="multi-select" @click.stop>
-        <button class="btn btn-ghost btn-sm" @click="storeDropdownOpen = !storeDropdownOpen">
-          {{ storeSelectionLabel }} <span class="caret">▾</span>
-        </button>
-        <div v-if="storeDropdownOpen" class="multi-select-panel">
-          <div class="multi-select-actions">
-            <button class="btn btn-sm btn-ghost" @click="selectAllStores">全选</button>
-            <button class="btn btn-sm btn-ghost" @click="selectNoStores">全不选</button>
-          </div>
-          <label v-for="s in allStores" :key="s.id" class="multi-select-item">
-            <input type="checkbox" :checked="isStoreIncluded(s.id)" @change="handleStoreCheckbox(s.id)" />
-            <span>{{ s.name }}</span>
-          </label>
-          <div class="multi-select-empty" v-if="allStores.length === 0">无店铺数据</div>
-        </div>
-      </div>
-
       <button class="btn btn-primary btn-sm sync-btn" :disabled="syncing" @click="doSync">
         {{ syncing ? '同步中…' : '🔄 同步数据' }}
       </button>
-    </div>
-
-    <div class="range-hint">
-      统计区间:{{ fromDate }} ~ {{ toDate }} · 错误指数为周期汇总(本地参考阈值着色)
     </div>
 
     <div v-if="syncError" class="error-bar">同步失败:{{ syncError }}</div>
@@ -407,7 +257,7 @@ function closeStoreDropdown() {
         </div>
         <div class="sc-count">{{ fmtPct(topStore.index) }}%</div>
         <div class="sc-sub">最高风险:{{ topStore.storeName }}</div>
-        <div class="sc-sub">{{ topStore.periodFrom }} ~ {{ topStore.periodTo }}</div>
+        <div class="sc-sub">{{ topStore.periodFrom }} ~ {{ fmtPeriodEnd(topStore.periodTo) }}</div>
       </div>
       <div class="summary-card card-cost">
         <div class="sc-head"><span class="sc-icon">💰</span><span>错误处理费用</span></div>
@@ -576,82 +426,21 @@ function closeStoreDropdown() {
   padding: 16px;
 }
 
-.toolbar {
+.top-bar {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   margin-bottom: 8px;
 }
-.preset-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.date-range {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.date-range.disabled {
-  opacity: 0.5;
-}
-.sep {
+.range-hint {
+  flex: 1;
+  min-width: 0;
   color: #86909c;
-  margin: 0 4px;
-}
-.multi-select {
-  position: relative;
-}
-.caret {
-  font-size: 12px;
-  color: #86909c;
-}
-.multi-select-panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 50;
-  min-width: 180px;
-  background: #fff;
-  border: 1px solid #e5e6eb;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  padding: 6px;
-}
-.multi-select-actions {
-  display: flex;
-  gap: 6px;
-  padding: 4px 6px 8px;
-  border-bottom: 1px solid #f2f3f5;
-  margin-bottom: 6px;
-}
-.multi-select-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  cursor: pointer;
   font-size: 13px;
-}
-.multi-select-item:hover {
-  background: #f7f8fa;
-}
-.multi-select-empty {
-  color: #86909c;
-  padding: 12px;
-  font-size: 13px;
-  text-align: center;
 }
 .sync-btn {
-  margin-left: auto;
-}
-
-.range-hint {
-  color: #86909c;
-  font-size: 13px;
-  margin: 4px 0 12px;
+  flex-shrink: 0;
 }
 
 /* ── 指标卡 ── */

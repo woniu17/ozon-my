@@ -45,8 +45,27 @@ function storeNameMap() {
   return map;
 }
 
+// 解析查询区间:未传 from/to 时,自动使用所有店铺快照的指数统计周期。
+// periodTo 为排他上界,因此查询截止日 = max(periodTo) 减一天(与 Ozon 后台展示一致)。
+async function resolveRange(storeIds, rawFrom, rawTo) {
+  if (rawFrom || rawTo) {
+    const range = validateDateRange(rawFrom, rawTo);
+    if (!range) return { error: 'from/to 必须为 YYYY-MM-DD 且 from <= to' };
+    return { range };
+  }
+  const snapshots = await getRatingSnapshots(storeIds);
+  const froms = snapshots.map((s) => s.periodFrom).filter(Boolean);
+  const tos = snapshots.map((s) => s.periodTo).filter(Boolean);
+  if (!froms.length || !tos.length) return { range: null };
+  const from = froms.reduce((a, b) => (a < b ? a : b), froms[0]);
+  const toRaw = tos.reduce((a, b) => (a > b ? a : b), tos[0]);
+  const d = new Date(`${toRaw}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return { range: { from, to: d.toISOString().slice(0, 10) } };
+}
+
 // ── 概览汇总 ──
-// 参数: storeIds(逗号分隔,空=全部), from, to(YYYY-MM-DD,必填)
+// 参数: storeIds(逗号分隔,空=全部), from, to(可选,缺省=指数统计周期)
 // 响应: { stores: [{ storeId, storeName, index, processingCostsSum, currencyCode,
 //         periodFrom, periodTo, syncedAt, defects: [{date,indexByDate,processingCostsSumByDate}] }],
 //         totals: { errorPostingCount, sellerCancellationCount, sellerDelayCount,
@@ -54,11 +73,14 @@ function storeNameMap() {
 //         sync: { running, lastResult } }
 router.get('/admin/api/rating/health/summary', async (req, res, next) => {
   try {
-    const range = validateDateRange(req.query.from, req.query.to);
-    if (!range) {
-      return res.status(400).json({ ok: false, message: 'from/to 必须为 YYYY-MM-DD 且 from <= to' });
-    }
     const storeIds = parseStoreIds(req.query.storeIds);
+    const { range, error } = await resolveRange(storeIds, req.query.from, req.query.to);
+    if (error) {
+      return res.status(400).json({ ok: false, message: error });
+    }
+    if (!range) {
+      return res.json(ok({ stores: [], totals: null, sync: getRatingSyncStatus() }));
+    }
     const names = storeNameMap();
 
     const [snapshots, dailyRows, totals] = await Promise.all([
@@ -100,17 +122,20 @@ router.get('/admin/api/rating/health/summary', async (req, res, next) => {
 });
 
 // ── 影响错误指数的货件明细(分页) ──
-// 参数: storeIds, from, to, offset, limit(默认50,最大200)
+// 参数: storeIds, from, to(可选,缺省=指数统计周期), offset, limit(默认50,最大200)
 // 响应: { items: [{ storeId, storeName, postingNumber, postingErrorType, deliverySchema,
 //         errorAt, index, hasGraceStatus, chargePercent, chargePrice, chargeCurrencyCode,
 //         productPrice, productCurrencyCode, orderStatus }], total }
 router.get('/admin/api/rating/health/errors', async (req, res, next) => {
   try {
-    const range = validateDateRange(req.query.from, req.query.to);
-    if (!range) {
-      return res.status(400).json({ ok: false, message: 'from/to 必须为 YYYY-MM-DD 且 from <= to' });
-    }
     const storeIds = parseStoreIds(req.query.storeIds);
+    const { range, error } = await resolveRange(storeIds, req.query.from, req.query.to);
+    if (error) {
+      return res.status(400).json({ ok: false, message: error });
+    }
+    if (!range) {
+      return res.json(ok({ items: [], total: 0 }));
+    }
     const names = storeNameMap();
     const limit = Number(req.query.limit) || 50;
     const offset = Number(req.query.offset) || 0;

@@ -56,55 +56,19 @@
         android:layout_height="1dp"
         android:background="@color/divider" />
 
-    <!-- 时间预设栏 -->
-    <HorizontalScrollView
+    <!-- 指数统计时间段提示 -->
+    <TextView
+        android:id="@+id/healthRangeHint"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:scrollbars="none"
+        android:text="指数统计时间段"
+        android:textSize="11sp"
+        android:textColor="@color/text_muted"
         android:background="#ffffff"
-        android:paddingTop="6dp"
-        android:paddingBottom="8dp">
-
-        <LinearLayout
-            android:id="@+id/healthPresetContainer"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:paddingHorizontal="12dp" />
-    </HorizontalScrollView>
-
-    <!-- 区间提示 + 店铺选择 -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
         android:paddingHorizontal="12dp"
         android:paddingTop="8dp"
-        android:paddingBottom="4dp">
-
-        <TextView
-            android:id="@+id/healthRangeHint"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="当前统计区间"
-            android:textSize="10sp"
-            android:textColor="@color/text_muted"
-            android:maxLines="2" />
-
-        <TextView
-            android:id="@+id/healthStoreBtn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="全部店铺 ▾"
-            android:textSize="11sp"
-            android:textColor="@color/primary"
-            android:background="@drawable/bg_tag_blue"
-            android:paddingHorizontal="10dp"
-            android:paddingVertical="5dp"
-            android:layout_marginStart="8dp" />
-    </LinearLayout>
+        android:paddingBottom="8dp"
+        android:maxLines="2" />
 
     <!-- 可滚动内容区 -->
     <androidx.core.widget.NestedScrollView

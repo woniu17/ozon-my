@@ -1,42 +1,10 @@
 <template>
   <view class="page">
-    <!-- 时间预设(横滑) -->
-    <scroll-view class="presets" scroll-x :show-scrollbar="false">
-      <view class="presets-inner">
-        <view
-          v-for="p in presets"
-          :key="p.key"
-          class="preset-chip"
-          :class="{ on: activePreset === p.key }"
-          @click="applyPreset(p.key)"
-        >{{ p.label }}</view>
-        <picker mode="date" :value="fromDate" @change="onFromChange">
-          <view class="preset-chip" :class="{ on: activePreset === 'custom' }">{{ fromDate || '起' }}</view>
-        </picker>
-        <picker mode="date" :value="toDate" @change="onToChange">
-          <view class="preset-chip" :class="{ on: activePreset === 'custom' }">{{ toDate || '止' }}</view>
-        </picker>
-      </view>
-    </scroll-view>
-
-    <!-- 店铺选择 + 同步 -->
-    <view class="filter-bar">
-      <scroll-view class="store-scroll" scroll-x :show-scrollbar="false">
-        <view class="presets-inner">
-          <view class="preset-chip" :class="{ on: currentStoreId === '' }" @click="selectStore('')">全部店铺</view>
-          <view
-            v-for="s in stores"
-            :key="s.id"
-            class="preset-chip"
-            :class="{ on: currentStoreId === s.id }"
-            @click="selectStore(s.id)"
-          >{{ s.name }}</view>
-        </view>
-      </scroll-view>
+    <!-- 指数统计时间段 + 同步 -->
+    <view class="top-bar">
+      <view class="range-hint">{{ periodText }} · 错误指数为周期汇总</view>
       <view class="sync-btn" :class="{ loading: syncing }" @click="doSync">{{ syncing ? '同步中…' : '🔄 同步' }}</view>
     </view>
-
-    <view class="range-hint">{{ fromDate }} ~ {{ toDate }} · 错误指数为周期汇总</view>
     <view v-if="error" class="error-bar">{{ error }}</view>
     <view v-if="syncError" class="error-bar">同步失败:{{ syncError }}</view>
 
@@ -46,7 +14,7 @@
         <view class="sc-head">🏥 错误指数</view>
         <view class="sc-count">{{ fmtIndex(topStore.index) }}</view>
         <view class="sc-sub">{{ topStore.storeName }}</view>
-        <view class="sc-sub">{{ topStore.periodFrom }} ~ {{ topStore.periodTo }}</view>
+        <view class="sc-sub">{{ topStore.periodFrom }} ~ {{ fmtPeriodEnd(topStore.periodTo) }}</view>
       </view>
       <view class="summary-card">
         <view class="sc-head">💰 错误处理费用</view>
@@ -157,7 +125,7 @@
         <text class="grace" :class="it.hasGraceStatus ? 'grace-yes' : 'grace-no'">{{ it.hasGraceStatus ? '宽限' : '计费' }}</text>
       </view>
     </view>
-    <view v-if="items.length === 0 && !loading" class="empty-tip">该区间内没有影响错误指数的货件，可切换「近30日」查看历史错误</view>
+    <view v-if="items.length === 0 && !loading" class="empty-tip">该指数统计周期内没有影响错误指数的货件</view>
 
     <view v-if="hasMore" class="load-more" @click="loadMore">加载更多</view>
     <view v-if="loading" class="load-more">加载中…</view>
@@ -175,82 +143,10 @@ import {
   getRatingErrors,
   triggerRatingSync,
   getRatingSyncStatus,
-  getStores,
 } from '../../api/store-health.js';
 import { fmtTime } from '../../utils/fmt.js';
 
-// ── 时间预设 ──
-const presets = [
-  { key: '7d', label: '近7日' },
-  { key: '30d', label: '近30日' },
-  { key: 'thisMonth', label: '本月' },
-  { key: 'lastMonth', label: '上月' },
-  { key: 'custom', label: '自定义' },
-];
-const activePreset = ref('30d');
-const fromDate = ref('');
-const toDate = ref('');
-
-function pad(n) { return String(n).padStart(2, '0'); }
-function todayStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-function shiftDays(base, n) {
-  const d = new Date(`${base}T00:00:00`);
-  d.setDate(d.getDate() + n);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-function presetRange(key) {
-  const today = todayStr();
-  switch (key) {
-    case '7d': return { from: shiftDays(today, -6), to: today };
-    case '30d': return { from: shiftDays(today, -29), to: today };
-    case 'thisMonth': {
-      const d = new Date();
-      return { from: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`, to: today };
-    }
-    case 'lastMonth': {
-      const d = new Date();
-      const y = d.getFullYear();
-      const m = d.getMonth() + 1;
-      const lm = m === 1 ? 12 : m - 1;
-      const ly = m === 1 ? y - 1 : y;
-      const first = `${ly}-${pad(lm)}-01`;
-      const last = shiftDays(`${y}-${pad(m)}-01`, -1);
-      return { from: first, to: last };
-    }
-    default: return null;
-  }
-}
-function applyPreset(key) {
-  activePreset.value = key;
-  const r = presetRange(key);
-  if (r) {
-    fromDate.value = r.from;
-    toDate.value = r.to;
-  }
-  pager.offset = 0;
-  loadAll();
-}
-function onFromChange(e) {
-  activePreset.value = 'custom';
-  fromDate.value = e.detail.value;
-  if (fromDate.value && toDate.value && fromDate.value > toDate.value) toDate.value = fromDate.value;
-  pager.offset = 0;
-  loadAll();
-}
-function onToChange(e) {
-  activePreset.value = 'custom';
-  toDate.value = e.detail.value;
-  if (fromDate.value && toDate.value && fromDate.value > toDate.value) fromDate.value = toDate.value;
-  pager.offset = 0;
-  loadAll();
-}
-
-// ── 店铺选择(空=全部) ──
-const stores = ref([]);
-const currentStoreId = ref('');
+// ── 数据 ──
 
 // ── 数据 ──
 const summary = ref(null);
@@ -262,17 +158,16 @@ const syncError = ref('');
 const syncing = ref(false);
 const pager = ref({ offset: 0, limit: 20 });
 
-function storeIdsParam() {
-  return currentStoreId.value || '';
-}
+// 指数统计时间段(来自后端快照;periodTo 为排他上界,展示减一天)
+const periodText = computed(() => {
+  const s = summary.value?.stores?.[0];
+  if (!s || !s.periodFrom || !s.periodTo) return '';
+  return `${s.periodFrom} ~ ${fmtPeriodEnd(s.periodTo)}`;
+});
 
 async function loadSummary() {
   try {
-    summary.value = await getRatingSummary({
-      from: fromDate.value,
-      to: toDate.value,
-      storeIds: storeIdsParam(),
-    });
+    summary.value = await getRatingSummary({});
   } catch (e) {
     error.value = e.message;
   }
@@ -281,9 +176,6 @@ async function loadSummary() {
 async function loadErrors() {
   try {
     const res = await getRatingErrors({
-      from: fromDate.value,
-      to: toDate.value,
-      storeIds: storeIdsParam(),
       offset: pager.value.offset,
       limit: pager.value.limit,
     });
@@ -309,11 +201,7 @@ async function doSync() {
   syncing.value = true;
   syncError.value = '';
   try {
-    await triggerRatingSync({
-      storeIds: storeIdsParam() || undefined,
-      from: fromDate.value,
-      to: toDate.value,
-    });
+    await triggerRatingSync({});
     for (let i = 0; i < 60; i++) {
       await sleep(1000);
       const st = await getRatingSyncStatus();
@@ -350,7 +238,7 @@ const chartSeries = computed(() => {
     storeId: s.storeId,
     storeName: s.storeName,
     color: STORE_COLORS[i % STORE_COLORS.length],
-    defects: (s.defects || []).filter((d) => d.date >= fromDate.value && d.date <= toDate.value),
+    defects: s.defects || [],
   }));
 });
 const chartDates = computed(() => {
@@ -424,6 +312,13 @@ function copyPosting(postingNumber) {
 function fmtNum(n) { return String(Number(n) || 0); }
 function fmtMoney(n) { return (Number(n) || 0).toFixed(2); }
 function fmtIndex(n) { return ((Number(n) || 0) * 100).toFixed(2) + '%'; }
+/** 指数周期结束日减一天展示(与 Ozon 后台一致:接口 periodTo 为排他上界) */
+function fmtPeriodEnd(dateStr) {
+  const d = new Date(`${String(dateStr)}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return dateStr || '';
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
 function indexColor(idx) {
   const s = indexStatus(idx);
   return s === 'ok' ? '#00b42a' : s === 'warning' ? '#d97706' : '#f53f3f';
@@ -442,15 +337,6 @@ function typeLabel(t) {
 
 // ── 生命周期 ──
 onShow(() => {
-  // 默认近30日:错误货件稀疏,近7日可能为空
-  const r = presetRange('30d');
-  fromDate.value = r.from;
-  toDate.value = r.to;
-  getStores()
-    .then((res) => {
-      stores.value = res?.stores || [];
-    })
-    .catch(() => {});
   loadAll();
 });
 onReachBottom(() => {
@@ -466,39 +352,21 @@ onReachBottom(() => {
   background: #f5f6f7;
 }
 
-.presets,
-.filter-bar {
-  margin-bottom: 16rpx;
-}
-.presets-inner {
-  display: inline-flex;
-  padding: 4rpx 8rpx;
-  gap: 12rpx;
-}
-.preset-chip {
-  padding: 10rpx 26rpx;
-  border-radius: 999rpx;
-  font-size: 24rpx;
-  color: #4e5969;
-  background: #fff;
-  border: 1rpx solid #e5e6eb;
-  white-space: nowrap;
-}
-.preset-chip.on {
-  background: #165dff;
-  color: #fff;
-  border-color: #165dff;
-}
-.filter-bar {
+.top-bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12rpx;
+  margin-bottom: 16rpx;
 }
-.store-scroll {
+.range-hint {
   flex: 1;
   min-width: 0;
+  font-size: 22rpx;
+  color: #86909c;
 }
 .sync-btn {
+  flex-shrink: 0;
   padding: 12rpx 24rpx;
   border-radius: 999rpx;
   background: #165dff;
@@ -508,12 +376,6 @@ onReachBottom(() => {
 }
 .sync-btn.loading {
   opacity: 0.7;
-}
-
-.range-hint {
-  font-size: 22rpx;
-  color: #86909c;
-  margin-bottom: 16rpx;
 }
 .error-bar {
   background: #ffece8;

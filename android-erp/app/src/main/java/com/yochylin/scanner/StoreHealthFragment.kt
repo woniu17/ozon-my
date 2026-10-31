@@ -48,13 +48,9 @@ class StoreHealthFragment : Fragment() {
         private const val COLOR_WARN = "#d97706"
         private const val COLOR_ERR = "#f53f3f"
         private const val PAGE_LIMIT = 50
-
-        private data class Preset(val key: String, val label: String)
     }
 
-    private lateinit var presetContainer: LinearLayout
     private lateinit var rangeHint: TextView
-    private lateinit var storeBtn: TextView
     private lateinit var overviewContainer: LinearLayout
     private lateinit var trendContainer: LinearLayout
     private lateinit var distContainer: LinearLayout
@@ -65,23 +61,9 @@ class StoreHealthFragment : Fragment() {
 
     private val adapter = StoreHealthErrorAdapter()
 
-    private var activePreset = "30d"
-    private var from = ""
-    private var to = ""
     private var errorTotal = 0
     private var isLoadingMore = false
     private var syncing = false
-
-    private var allStores: List<StoreItem> = emptyList()
-    private var selectedStoreIds: Set<String> = emptySet() // 空 = 全选
-
-    private val presets = listOf(
-        Preset("7d", "近7日"),
-        Preset("30d", "近30日"),
-        Preset("thisMonth", "本月"),
-        Preset("lastMonth", "上月"),
-        Preset("custom", "自定义"),
-    )
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         return inflater.inflate(R.layout.activity_store_health, container, false)
@@ -98,9 +80,7 @@ class StoreHealthFragment : Fragment() {
         // 顶部返回按钮由宿主管理，隐藏
         view.findViewById<View>(R.id.healthBackBtn).visibility = View.GONE
 
-        presetContainer = view.findViewById(R.id.healthPresetContainer)
         rangeHint = view.findViewById(R.id.healthRangeHint)
-        storeBtn = view.findViewById(R.id.healthStoreBtn)
         overviewContainer = view.findViewById(R.id.healthOverviewContainer)
         trendContainer = view.findViewById(R.id.healthTrendContainer)
         distContainer = view.findViewById(R.id.healthDistContainer)
@@ -115,181 +95,18 @@ class StoreHealthFragment : Fragment() {
 
         syncBtn.setOnClickListener { triggerSync() }
         loadMoreBtn.setOnClickListener { loadMoreErrors() }
-        storeBtn.setOnClickListener { showStoreDialog() }
 
-        buildPresets()
-        // 默认近30日:错误货件稀疏,近7日可能为空
-        applyPreset("30d")
-        loadStores()
-    }
-
-    // ── 时间预设 ──
-    private fun buildPresets() {
-        presetContainer.removeAllViews()
-        for ((i, p) in presets.withIndex()) {
-            val tv = TextView(requireContext()).apply {
-                text = p.label
-                textSize = 12f
-                setPadding(dp(22).toInt(), dp(9).toInt(), dp(22).toInt(), dp(9).toInt())
-                gravity = Gravity.CENTER
-            }
-            updateStyle(tv, p.key == activePreset)
-            tv.setOnClickListener { onPresetClick(p.key) }
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.rightMargin = 8
-            presetContainer.addView(tv, lp)
-        }
-    }
-
-    private fun refreshPresetStyles() {
-        for (i in 0 until presetContainer.childCount) {
-            val child = presetContainer.getChildAt(i)
-            if (child is TextView) updateStyle(child, presets[i].key == activePreset)
-        }
-    }
-
-    private fun updateStyle(tv: TextView, active: Boolean) {
-        tv.setTextColor(if (active) Color.WHITE else Color.parseColor("#4e5969"))
-        tv.setRoundedBg(
-            if (active) Color.parseColor(COLOR_PRIMARY) else Color.parseColor("#f2f3f5"),
-            16f
-        )
-    }
-
-    private fun onPresetClick(key: String) {
-        when (key) {
-            "custom" -> showCustomDialog()
-            else -> applyPreset(key)
-        }
-    }
-
-    private fun applyPreset(key: String) {
-        activePreset = key
-        val r = presetRange(key)
-        if (r != null) {
-            from = r.first
-            to = r.second
-            refreshPresetStyles()
-            updateRangeHint()
-            loadData()
-        }
-    }
-
-    private fun presetRange(key: String): Pair<String, String>? = when (key) {
-        "7d" -> shiftDays(todayStr(), -6) to todayStr()
-        "30d" -> shiftDays(todayStr(), -29) to todayStr()
-        "thisMonth" -> {
-            val (y, m) = localDate()
-            "$y-${pad(m)}-01" to todayStr()
-        }
-        "lastMonth" -> {
-            val (y, m) = localDate()
-            val lm = if (m == 1) 12 else m - 1
-            val ly = if (m == 1) y - 1 else y
-            val first = "$ly-${pad(lm)}-01"
-            val last = shiftDays("$y-${pad(m)}-01", -1)
-            first to last
-        }
-        else -> null
-    }
-
-    // ── 自定义日期 ──
-    private fun showCustomDialog() {
-        val container = LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 20, 40, 0)
-        }
-        val fromInput = EditText(requireContext()).apply {
-            hint = "开始日期 YYYY-MM-DD"
-            setText(from)
-        }
-        val toInput = EditText(requireContext()).apply {
-            hint = "结束日期 YYYY-MM-DD"
-            setText(to)
-        }
-        container.addView(fromInput)
-        container.addView(toInput)
-        AlertDialog.Builder(requireContext())
-            .setTitle("自定义区间")
-            .setView(container)
-            .setPositiveButton("确定") { _, _ ->
-                val f = fromInput.text.toString().trim()
-                val t = toInput.text.toString().trim()
-                if (f.isEmpty() || t.isEmpty()) {
-                    toast("请填写完整日期")
-                } else {
-                    activePreset = "custom"
-                    from = f
-                    to = t
-                    refreshPresetStyles()
-                    updateRangeHint()
-                    loadData()
-                }
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
-    // ── 店铺选择 ──
-    private fun loadStores() {
-        viewLifecycleOwner.lifecycleScope.launch {
-            try {
-                val data = Api.get("/admin/api/order-stats/stores")
-                val resp = Api.parse<com.yochylin.scanner.model.OrderStatsStoresResponse>(data)
-                allStores = resp.stores ?: emptyList()
-            } catch (e: Exception) {
-                allStores = emptyList()
-            }
-        }
-    }
-
-    private fun showStoreDialog() {
-        if (allStores.isEmpty()) {
-            toast("暂无店铺数据")
-            return
-        }
-        val names = allStores.map { it.name ?: it.id ?: "" }.toTypedArray()
-        val ids = allStores.map { it.id ?: "" }
-        val checked = BooleanArray(ids.size) {
-            selectedStoreIds.isEmpty() || selectedStoreIds.contains(ids[it])
-        }
-        val dialog = AlertDialog.Builder(requireContext())
-            .setTitle("选择店铺(勾选=纳入统计)")
-            .setMultiChoiceItems(names, checked) { _, which, isChecked ->
-                val id = ids[which]
-                if (id.isEmpty()) return@setMultiChoiceItems
-                val s = HashSet(selectedStoreIds)
-                if (isChecked) s.add(id) else s.remove(id)
-                selectedStoreIds = s
-            }
-            .setNeutralButton("全选", null)
-            .setNegativeButton("取消", null)
-            .setPositiveButton("确定") { _, _ ->
-                storeBtn.text = if (selectedStoreIds.isEmpty()) "全部店铺 ▾" else "已选 ${selectedStoreIds.size}/${ids.size} ▾"
-                loadData()
-            }
-            .create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                selectedStoreIds = emptySet()
-                for (i in checked.indices) checked[i] = true
-                dialog.listView?.let { lv ->
-                    for (i in checked.indices) lv.setItemChecked(i, true)
-                }
-            }
-        }
-        dialog.show()
+        loadData()
     }
 
     // ── 数据加载 ──
     private fun loadData() {
-        if (from.isEmpty() || to.isEmpty()) return
         viewLifecycleOwner.lifecycleScope.launch {
             progressBar.visibility = View.VISIBLE
             try {
-                val params = buildParams()
-                val data = Api.get("/admin/api/rating/health/summary", params)
+                val data = Api.get("/admin/api/rating/health/summary")
                 val resp = Api.parse<RatingHealthSummaryResponse>(data)
+                renderRangeHint(resp.stores)
                 renderTotals(resp.totals)
                 renderStores(resp.stores ?: emptyList())
                 renderTrend(resp.stores ?: emptyList())
@@ -347,14 +164,18 @@ class StoreHealthFragment : Fragment() {
         loadMoreBtn.visibility = if (adapter.size() < errorTotal) View.VISIBLE else View.GONE
     }
 
-    private fun buildParams(): HashMap<String, Any?> {
-        val params = HashMap<String, Any?>()
-        params["from"] = from
-        params["to"] = to
-        if (selectedStoreIds.isNotEmpty()) {
-            params["storeIds"] = selectedStoreIds.joinToString(",")
+    private fun renderRangeHint(stores: List<RatingStoreHealth>?) {
+        val s = stores?.firstOrNull()
+        val text = if (s != null && !s.periodFrom.isNullOrBlank() && !s.periodTo.isNullOrBlank()) {
+            "指数统计时间段:${s.periodFrom} ~ ${shiftDays(s.periodTo, -1)}"
+        } else {
+            "暂无指数统计时间段"
         }
-        return params
+        rangeHint.text = text
+    }
+
+    private fun buildParams(): HashMap<String, Any?> {
+        return HashMap<String, Any?>()
     }
 
     // ── 手动同步 ──
@@ -365,9 +186,6 @@ class StoreHealthFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val body = HashMap<String, Any?>()
-                if (selectedStoreIds.isNotEmpty()) body["storeIds"] = selectedStoreIds.toList()
-                body["from"] = from
-                body["to"] = to
                 Api.post("/admin/api/rating/health/sync", body)
                 for (i in 0 until 60) {
                     delay(1000)
@@ -491,7 +309,13 @@ class StoreHealthFragment : Fragment() {
         trendContainer.removeAllViews()
         if (stores.isEmpty()) return
         val card = cardContainer()
-        card.addView(sectionTitle("店铺健康对比"))
+        val first = stores.firstOrNull()
+        val periodText = if (first != null && !first.periodFrom.isNullOrBlank() && !first.periodTo.isNullOrBlank()) {
+            " · ${first.periodFrom} ~ ${shiftDays(first.periodTo, -1)}"
+        } else {
+            ""
+        }
+        card.addView(sectionTitle("店铺健康对比$periodText"))
         for (store in stores) {
             card.addView(storeBarRow(store))
         }
@@ -706,18 +530,6 @@ class StoreHealthFragment : Fragment() {
     }
 
     // ── 日期工具 ──
-    private fun pad(n: Int): String = String.format("%02d", n)
-
-    private fun todayStr(): String {
-        val cal = Calendar.getInstance()
-        return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
-    }
-
-    private fun localDate(): Pair<Int, Int> {
-        val cal = Calendar.getInstance()
-        return cal.get(Calendar.YEAR) to (cal.get(Calendar.MONTH) + 1)
-    }
-
     private fun shiftDays(base: String, n: Int): String {
         return try {
             val d = SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(base) ?: return base
@@ -738,10 +550,6 @@ class StoreHealthFragment : Fragment() {
         } catch (e: Exception) {
             date
         }
-    }
-
-    private fun updateRangeHint() {
-        rangeHint.text = "统计区间:$from ~ $to"
     }
 
     private fun goLogin() {
