@@ -1140,7 +1140,9 @@ defineExpose({ refreshCurrent, listLoading });
               <td class="mono label-id">
                 #{{ row.id }}
                 <span v-if="row.tracking_number" class="row-sub tracking-no" title="OGL 国内集运仓快递单号">
-                  {{ row.tracking_number }}
+                  <template v-for="(tn, i) in row.tracking_number.split(',')" :key="i">
+                    {{ tn }}<br v-if="i < row.tracking_number.split(',').length - 1" />
+                  </template>
                 </span>
               </td>
               <td>
@@ -1251,7 +1253,14 @@ defineExpose({ refreshCurrent, listLoading });
           </div>
           <div class="detail-item">
             <span class="detail-label">OGL 国内集运仓快递单号</span>
-            <span class="detail-value mono">{{ detail.carriage.tracking_number || '—' }}</span>
+            <span class="detail-value mono">
+              <template v-if="detail.carriage.tracking_number">
+                <template v-for="(tn, i) in detail.carriage.tracking_number.split(',')" :key="i">
+                  {{ tn }}<br v-if="i < detail.carriage.tracking_number.split(',').length - 1" />
+                </template>
+              </template>
+              <template v-else>—</template>
+            </span>
           </div>
         </div>
 

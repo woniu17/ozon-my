@@ -127,7 +127,8 @@ async function syncCarriageTracking(store, carriage) {
   if (!buffer) return null;
   const numbers = (await extractOglInboundTrackingNumbers(buffer)).filter(Boolean);
   if (!numbers.length) return null;
-  const tracking = numbers[0];
+  // 一个发运单的货运标签 PDF 可能多页(多个国内快递包裹),每页一个 YT 单号,全部保存(去重,逗号分隔)
+  const tracking = [...new Set(numbers)].join(',');
   updateCarriageTrackingNumber(store.id, carriage.id, tracking);
   return tracking;
 }

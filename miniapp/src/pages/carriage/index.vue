@@ -93,7 +93,9 @@
         </view>
         <view class="card-body">
           <view class="label-id">#{{ row.id }}</view>
-          <view v-if="row.tracking_number" class="tracking-no">OGL 快递单号 {{ row.tracking_number }}</view>
+          <view v-if="row.tracking_number" class="tracking-no">
+            <view v-for="(tn, i) in row.tracking_number.split(',')" :key="i">{{ i === 0 ? 'OGL 快递单号 ' : '' }}{{ tn }}</view>
+          </view>
           <view class="dm-name">{{ row.delivery_method_name || row.delivery_method_id }}</view>
           <view v-if="row.warehouse_name || row.warehouse_city" class="row-sub">
             {{ row.warehouse_name || '' }}{{ row.warehouse_city ? ' · ' + row.warehouse_city : '' }}
@@ -205,7 +207,7 @@
             <view class="detail-item"><text class="detail-label">发运日期</text><text class="detail-value">{{ detail.carriage?.departure_date || '—' }}</text></view>
             <view class="detail-item"><text class="detail-label">首程类型</text><text class="detail-value">{{ detail.carriage?.first_mile_type || '—' }}</text></view>
             <view class="detail-item"><text class="detail-label">集成方式</text><text class="detail-value">{{ detail.carriage?.integration_type || '—' }}</text></view>
-            <view class="detail-item"><text class="detail-label">OGL 国内集运仓快递单号</text><text class="detail-value mono">{{ detail.carriage?.tracking_number || '—' }}</text></view>
+            <view class="detail-item"><text class="detail-label">OGL 国内集运仓快递单号</text><text class="detail-value mono">{{ detail.carriage?.tracking_number ? detail.carriage.tracking_number.split(',').join('\n') : '—' }}</text></view>
           </view>
 
           <!-- 货件列表 -->
