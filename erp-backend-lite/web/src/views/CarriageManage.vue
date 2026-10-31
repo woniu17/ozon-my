@@ -1550,9 +1550,11 @@ defineExpose({ refreshCurrent, listLoading });
                         class="posting-product-img"
                         alt=""
                       />
-                      <span class="posting-product-name" :title="it.name || it.offer_id || it.sku">
-                        {{ it.name || it.offer_id || it.sku }}
-                      </span>
+                      <div class="posting-product-info">
+                        <span class="posting-product-name" :title="it.name">{{ it.name || '—' }}</span>
+                        <span class="posting-product-meta">SKU: {{ it.sku || '—' }}</span>
+                        <span class="posting-product-meta">OfferId: {{ it.offer_id || '—' }}</span>
+                      </div>
                       <span class="posting-product-qty">×{{ it.quantity ?? '' }}</span>
                     </div>
                   </div>
@@ -1634,9 +1636,11 @@ defineExpose({ refreshCurrent, listLoading });
                     class="posting-product-img"
                     alt=""
                   />
-                  <span class="posting-product-name" :title="it.name || it.offer_id || it.sku">
-                    {{ it.name || it.offer_id || it.sku }}
-                  </span>
+                  <div class="posting-product-info">
+                    <span class="posting-product-name" :title="it.name">{{ it.name || '—' }}</span>
+                    <span class="posting-product-meta">SKU: {{ it.sku || '—' }}</span>
+                    <span class="posting-product-meta">OfferId: {{ it.offer_id || '—' }}</span>
+                  </div>
                   <span class="posting-product-qty">×{{ it.quantity ?? '' }}</span>
                 </div>
               </div>
@@ -1823,9 +1827,11 @@ defineExpose({ refreshCurrent, listLoading });
                         class="posting-product-img"
                         alt=""
                       />
-                      <span class="posting-product-name" :title="it.name || it.offer_id || it.sku">
-                        {{ it.name || it.offer_id || it.sku }}
-                      </span>
+                      <div class="posting-product-info">
+                        <span class="posting-product-name" :title="it.name">{{ it.name || '—' }}</span>
+                        <span class="posting-product-meta">SKU: {{ it.sku || '—' }}</span>
+                        <span class="posting-product-meta">OfferId: {{ it.offer_id || '—' }}</span>
+                      </div>
                       <span class="posting-product-qty">×{{ it.quantity ?? '' }}</span>
                     </div>
                   </div>
@@ -1946,9 +1952,11 @@ defineExpose({ refreshCurrent, listLoading });
                     class="posting-product-img"
                     alt=""
                   />
-                  <span class="posting-product-name" :title="it.name || it.offer_id || it.sku">
-                    {{ it.name || it.offer_id || it.sku }}
-                  </span>
+                  <div class="posting-product-info">
+                    <span class="posting-product-name" :title="it.name">{{ it.name || '—' }}</span>
+                    <span class="posting-product-meta">SKU: {{ it.sku || '—' }}</span>
+                    <span class="posting-product-meta">OfferId: {{ it.offer_id || '—' }}</span>
+                  </div>
                   <span class="posting-product-qty">×{{ it.quantity ?? '' }}</span>
                 </div>
               </div>
@@ -2464,7 +2472,7 @@ defineExpose({ refreshCurrent, listLoading });
 }
 .posting-product {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   min-width: 0;
 }
@@ -2477,11 +2485,25 @@ defineExpose({ refreshCurrent, listLoading });
   flex-shrink: 0;
   background: #f5f5f5;
 }
-.posting-product-name {
+.posting-product-info {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.posting-product-name {
   min-width: 0;
   font-size: 12.5px;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.posting-product-meta {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2491,6 +2513,7 @@ defineExpose({ refreshCurrent, listLoading });
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  margin-top: 2px;
 }
 
 /* ── 候选货件弹窗(2026-10-30) ── */
