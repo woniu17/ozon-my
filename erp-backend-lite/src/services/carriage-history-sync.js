@@ -148,12 +148,13 @@ async function syncStore(store) {
       if (Number(enriched.id) > 0 && (!existing || !existing.first_mile_type || !existing.integration_type)) {
         detailNeeded.push(enriched);
       } else {
+        // existing 可能为 undefined(如 id=0 占位行从未落库),用可选链访问
         upsertCarriageHistory(store, {
           ...enriched,
-          first_mile_type: existing.first_mile_type || enriched.first_mile_type,
-          integration_type: existing.integration_type || enriched.integration_type,
-          warehouse_name: existing.warehouse_name || enriched.warehouse_name,
-          warehouse_city: existing.warehouse_city || enriched.warehouse_city,
+          first_mile_type: existing?.first_mile_type || enriched.first_mile_type,
+          integration_type: existing?.integration_type || enriched.integration_type,
+          warehouse_name: existing?.warehouse_name || enriched.warehouse_name,
+          warehouse_city: existing?.warehouse_city || enriched.warehouse_city,
         });
       }
       count++;
@@ -210,6 +211,16 @@ async function syncAllStores() {
   const postingsSynced = results
     .filter((x) => x.status === 'fulfilled')
     .reduce((sum, x) => sum + (x.value?.postingsSynced || 0), 0);
+  // 2026-11-04:记录单店同步失败原因,避免静默失败
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === 'rejected') {
+      logger.warn(
+        { err: r.reason?.message || String(r.reason), storeId: stores[i]?.id },
+        'carriage-history-sync: 单店同步失败'
+      );
+    }
+  }
   const archived = archiveStaleCarriages();
   return { stores: stores.length, ok: okCount, archived, postingsSynced };
 }
