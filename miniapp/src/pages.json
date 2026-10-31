@@ -36,7 +36,15 @@
 		{
 			"path": "pages/scan-ship/index",
 			"style": {
-				"navigationBarTitleText": "扫描发货",
+				"navigationBarTitleText": "扫描打单",
+				"enablePullDownRefresh": true,
+				"backgroundTextStyle": "dark"
+			}
+		},
+		{
+			"path": "pages/carriage/index",
+			"style": {
+				"navigationBarTitleText": "发运管理",
 				"enablePullDownRefresh": true,
 				"backgroundTextStyle": "dark"
 			}

@@ -490,7 +490,7 @@ function previewImg(pkg, it) {
   uni.previewImage({ current: it.picUrl, urls });
 }
 
-// 详情页操作(备货/同步)成功后通知刷新(tab 计数 + 列表重置第 1 页)
+// 详情页操作(入库/同步)成功后通知刷新(tab 计数 + 列表重置第 1 页)
 function onOrdersRefresh() {
   loadTabs();
   reload().catch(() => {});

@@ -51,6 +51,10 @@
         <view class="info-row"><text class="k">Ozon状态</text><text class="v">{{ ozonStatusText }}{{ pkg.substatus ? ' · ' + pkg.substatus : '' }}</text></view>
         <view class="info-row"><text class="k">下单时间</text><text class="v">{{ fmtTime(pkg.inProcessAt) }}<text v-if="weekdayCN(pkg.inProcessAt)" class="weekday">（{{ weekdayCN(pkg.inProcessAt) }}）</text></text></view>
         <view class="info-row"><text class="k">最晚发货</text><text class="v">{{ fmtTime(pkg.shipmentDate) }}<text v-if="weekdayCN(pkg.shipmentDate)" class="weekday">（{{ weekdayCN(pkg.shipmentDate) }}）</text></text></view>
+        <!-- 2026-11:订单处理时间展示(与 web 端对齐:入库 stockedAt/打单 waybillPrintedAt/交运 dispatchedAt) -->
+        <view v-if="pkg.stockedAt" class="info-row"><text class="k">入库时间</text><text class="v">{{ fmtTime(pkg.stockedAt) }}<text v-if="weekdayCN(pkg.stockedAt)" class="weekday">（{{ weekdayCN(pkg.stockedAt) }}）</text></text></view>
+        <view v-if="pkg.waybillPrintedAt && (!pkg.dispatchedAt || pkg.waybillPrintedAt !== pkg.dispatchedAt)" class="info-row"><text class="k">打单时间</text><text class="v">{{ fmtTime(pkg.waybillPrintedAt) }}<text v-if="weekdayCN(pkg.waybillPrintedAt)" class="weekday">（{{ weekdayCN(pkg.waybillPrintedAt) }}）</text></text></view>
+        <view v-if="pkg.dispatchedAt" class="info-row"><text class="k">交运时间</text><text class="v">{{ fmtTime(pkg.dispatchedAt) }}<text v-if="weekdayCN(pkg.dispatchedAt)" class="weekday">（{{ weekdayCN(pkg.dispatchedAt) }}）</text></text></view>
         <view class="info-row"><text class="k">重量</text><text class="v">{{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</text></view>
         <view class="info-row"><text class="k">销售佣金</text><text class="v">{{ pkg.accrual?.saleFee != null ? fmtMoney(pkg.accrual.saleFee) : '—' }}</text></view>
         <view class="info-row"><text class="k">国际配送(估)</text><text class="v">{{ pkg.profit?.delivery != null ? fmtMoney(pkg.profit.delivery) : '—' }}</text></view>
@@ -98,6 +102,23 @@
             <text>单价 {{ fmtMoney(it.price) }}</text>
             <text v-if="unitCostOf(it) != null" class="prod-alloc"> · 采购 {{ fmtMoney(unitCostOf(it)) }}</text>
             <text v-if="grossOf(it) != null" class="prod-gross" :class="grossOf(it) >= 0 ? 'profit-pos' : 'profit-neg'"> · 毛利/件 {{ fmtMoney(grossOf(it)) }}</text>
+          </view>
+          <!-- 跟卖快照(2026-11):下单时市场跟卖对比,三行:排名/最低价/中位数(有快照才显示) -->
+          <view v-if="pwSnap[it.sku]" class="prod-pw">
+            <view class="pw-line">
+              <text class="pw-label">跟卖(下单时) 排名</text>
+              <text class="pw-rank" :class="{ 'pw-pos': isCheapest(pwSnap[it.sku]) }">{{ rankText(pwSnap[it.sku]) }}</text>
+            </view>
+            <view class="pw-line">
+              <text class="pw-label">最低</text>
+              <text class="pw-val">{{ fmtMoney(pwSnap[it.sku].min_price) }}</text>
+              <text class="pw-gap" :class="gapCls(pwSnap[it.sku], 'min')">{{ gapText(pwSnap[it.sku], 'min') }}</text>
+            </view>
+            <view class="pw-line">
+              <text class="pw-label">中位</text>
+              <text class="pw-val">{{ fmtMoney(pwSnap[it.sku].median_price) }}</text>
+              <text class="pw-gap" :class="gapCls(pwSnap[it.sku], 'median')">{{ gapText(pwSnap[it.sku], 'median') }}</text>
+            </view>
           </view>
         </view>
         <view class="prod-qty">×{{ it.quantity }}</view>
@@ -162,7 +183,7 @@
       </view>
     </view>
 
-    <!-- 底部操作条(显隐规则与 web 端 831ecb6 行级判断一致;顺序:同步订单→备货→采购/编辑采购→同步采购物流)
+    <!-- 底部操作条(显隐规则与 web 端 831ecb6 行级判断一致;顺序:同步订单→入库→采购/编辑采购→同步采购物流)
          2026-09-22:非待处理状态无论有无采购关联均可进入采购页(删除采购后可重新添加),文案随 links 动态 -->
     <view class="action-bar">
       <button class="abtn ghost" :disabled="syncing" @click="onSync">
@@ -173,7 +194,7 @@
         class="abtn primary"
         :disabled="shipping"
         @click="onShip"
-      >{{ shipping ? '备货中…' : '备货' }}</button>
+      >{{ shipping ? '入库中…' : '入库' }}</button>
       <button
         v-if="pkg.operateStatus === 'wait_process'"
         class="abtn primary"
@@ -199,9 +220,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onUnmounted } from 'vue';
+import { ref, reactive, computed, onUnmounted } from 'vue';
 import { onLoad, onShow, onHide, onUnload } from '@dcloudio/uni-app';
-import { getOrderDetail, syncPackage, shipPackage, syncPackagePurchaseLogistics } from '../../api/order.js';
+import { getOrderDetail, getPriceWatchSnapshots, syncPackage, shipPackage, syncPackagePurchaseLogistics } from '../../api/order.js';
 import { fmtMoney, fmtTime, fmtRate, weekdayCN } from '../../utils/fmt.js';
 
 const packageId = ref('');
@@ -462,7 +483,7 @@ const cancelReasonText = computed(() => {
   return CANCEL_REASON_LABELS[p.cancelReasonId] || p.cancelReason || '';
 });
 
-// 备货按钮显隐:(待处理|待打单) 且 Ozon awaiting_packaging(与 web 端一致)
+// 入库按钮显隐:(待处理|待打单) 且 Ozon awaiting_packaging(与 web 端一致)
 const canShip = computed(() => {
   const p = pkg.value;
   if (!p) return false;
@@ -487,6 +508,58 @@ async function loadDetail() {
   } catch (e) {
     loadError.value = e.message || '加载失败';
   }
+  loadPriceWatchSnapshots(); // 跟卖快照异步加载,不阻塞详情
+}
+
+// ── 订单商品跟卖快照(2026-11,与安卓 2026-10-30 三行展示对齐)────────
+// 查询"下单后最近一次快照";失败静默,不影响订单详情
+const pwSnap = reactive({});
+async function loadPriceWatchSnapshots() {
+  const skus = [...new Set((items.value || []).map((it) => String(it.sku || '').trim()).filter(Boolean))];
+  if (!skus.length) return;
+  try {
+    const r = await getPriceWatchSnapshots(
+      skus.map((sku) => ({ sku, after: pkg.value?.inProcessAt || null }))
+    );
+    const map = r?.map || {};
+    for (const sku of skus) {
+      if (map[sku]) pwSnap[sku] = map[sku];
+    }
+  } catch (e) {
+    /* 快照查询失败静默 */
+  }
+}
+function rankText(s) {
+  if (!s) return '—';
+  const rank = s.my_rank;
+  const sellerCount = Number(s.seller_count) || 0;
+  return rank != null ? '#' + rank + '/' + (sellerCount + 1) : '—';
+}
+function isCheapest(s) {
+  return Number(s?.is_cheapest) === 1;
+}
+function gapDiff(s, key) {
+  const my = Number(s?.my_price);
+  const base = key === 'min' ? Number(s?.min_price) : Number(s?.median_price);
+  if (s == null || my == null || base == null || isNaN(my) || isNaN(base)) return null;
+  if (key === 'min' && s.gap_abs != null) return Number(s.gap_abs);
+  return Math.round((my - base) * 100) / 100;
+}
+function gapCls(s, key) {
+  const diff = gapDiff(s, key);
+  if (diff == null || diff === 0) return '';
+  return diff > 0 ? 'pw-red' : 'pw-green';
+}
+function gapText(s, key) {
+  const diff = gapDiff(s, key);
+  if (diff == null) return '';
+  const label = key === 'min' ? '最低' : '中位';
+  const base = key === 'min' ? Number(s?.min_price) : Number(s?.median_price);
+  let pct = key === 'min' && s.gap_pct != null ? Number(s.gap_pct) : null;
+  if (pct == null && base > 0 && diff !== 0) pct = Math.round((diff / base) * 1000) / 10;
+  if (diff > 0) return '比' + label + '高 +' + diff.toFixed(2) + (pct != null ? '(+' + pct + '%)' : '');
+  if (diff < 0) return '比' + label + '低 -' + (-diff).toFixed(2) + (pct != null ? '(' + pct + '%)' : '');
+  return '与' + label + '持平';
 }
 
 // ── 操作 ────────────────────────────────────────────────────
@@ -519,8 +592,8 @@ async function onSync() {
   }
 }
 
-// 备货:向 Ozon 确认全部商品为一个货件(不拆分);已备货幂等返回 alreadyShipped
-// 仅当存在数量≥2的商品时二次确认(防多件误发);全部单件直接备货
+// 入库:向 Ozon 确认全部商品为一个货件(不拆分);已入库幂等返回 alreadyShipped
+// 仅当存在数量≥2的商品时二次确认(防多件误发);全部单件直接入库
 // 2026-10-23:搁置订单先二次确认再操作(保持搁置标记)
 function onShip() {
   if (shipping.value) return;
@@ -529,7 +602,7 @@ function onShip() {
     shipping.value = true;
     try {
       const r = await shipPackage(packageId.value);
-      uni.showToast({ title: r?.alreadyShipped ? '该包裹已备货过' : '备货成功', icon: 'none' });
+      uni.showToast({ title: r?.alreadyShipped ? '该包裹已入库过' : '入库成功', icon: 'none' });
       await loadDetail();
       notifyListRefresh();
     } catch (e) {
@@ -542,7 +615,7 @@ function onShip() {
   const confirmIgnored = () => new Promise((resolve) => {
     uni.showModal({
       title: '搁置订单操作确认',
-      content: '该订单当前为【已搁置】状态，确认继续备货吗？',
+      content: '该订单当前为【已搁置】状态，确认继续入库吗？',
       confirmText: '确认操作',
       success: (res) => resolve(res.confirm),
       fail: () => resolve(false),
@@ -553,10 +626,10 @@ function onShip() {
   const confirmAndDoShip = () => {
     if (!multiQty) return doShip();
     uni.showModal({
-      title: '备货确认',
+      title: '入库确认',
       content:
         '货件 ' + p.postingNumber + '\n含数量≥2的商品(共 ' + qty + ' 件),将向 Ozon 确认全部商品为一个货件(不拆分)。',
-      confirmText: '备货',
+      confirmText: '入库',
       success: (res) => res.confirm && doShip(),
     });
   };
@@ -943,6 +1016,51 @@ onShow(() => {
 }
 .prod-gross {
   font-weight: 600;
+}
+
+/* 跟卖快照(2026-11):浅灰底圆角,三行对比 排名/最低价/中位数 */
+.prod-pw {
+  margin-top: 8rpx;
+  padding: 10rpx 12rpx;
+  border-radius: 8rpx;
+  background: #f8fafc;
+  font-size: 21rpx;
+  color: #6b7280;
+}
+.pw-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-top: 2rpx;
+}
+.pw-line:first-child {
+  margin-top: 0;
+}
+.pw-label {
+  color: #86909c;
+  margin-right: 8rpx;
+  flex-shrink: 0;
+}
+.pw-rank {
+  font-weight: 600;
+  color: #1f2329;
+}
+.pw-pos {
+  color: #16a34a;
+}
+.pw-val {
+  font-weight: 600;
+  color: #1f2329;
+  margin-right: 8rpx;
+}
+.pw-gap {
+  font-weight: 600;
+}
+.pw-red {
+  color: #dc2626;
+}
+.pw-green {
+  color: #16a34a;
 }
 
 .prod-qty {

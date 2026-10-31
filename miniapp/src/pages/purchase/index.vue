@@ -271,6 +271,33 @@
       <!-- 采购信息(统一展示:新增置顶高亮,与已有采购同构;删除/录入均为暂存,保存统一落地) -->
       <view class="card">
         <view class="section-title">采购信息({{ groups.length }}{{ pendingAdd ? ' +' + pendingAdd.orders.length : '' }})</view>
+
+        <!-- 最近采购参考(2026-11):未采购订单同商品历史采购单,格式对齐采购信息卡 -->
+        <view v-if="purchaseHistory.length && !batchMode" class="ph-ref">
+          <view class="ph-title">最近采购参考 · 同商品历史采购(最多{{ purchaseHistory.length }}条)</view>
+          <view v-for="h in purchaseHistory" :key="h.id" class="po">
+            <view class="po-head">
+              <text class="po-platform">{{ platformLabel(h.platform) }}</text>
+              <text class="po-sn">{{ h.purchaseSn || '#' + h.id }}</text>
+              <text v-if="h.poStatus" class="po-status">{{ poStatusLabel(h.poStatus) }}</text>
+            </view>
+            <view class="po-meta">
+              <text class="po-amt">¥{{ Number(h.paymentAmount || 0).toFixed(2) }}</text>
+              <text v-if="h.sellerName" class="po-meta-item">卖:{{ h.sellerName }}</text>
+              <text v-if="h.buyerAccount" class="po-meta-item">买:{{ h.buyerAccount }}</text>
+              <text class="po-meta-item">{{ fmtTime(h.payAt || h.gmtCreate) }}</text>
+            </view>
+            <view v-for="(pi, j) in (h.items || [])" :key="j" class="po-goods">
+              <image v-if="pi.thumbUrl || pi.picUrl" class="po-img" :src="pi.thumbUrl || pi.picUrl" mode="aspectFill" />
+              <view v-else class="po-img"></view>
+              <view class="po-goods-main">
+                <view class="po-goods-name">{{ pi.goodsName || pi.title || '采购商品' }}</view>
+                <view class="po-goods-sub">{{ pi.spec ? pi.spec + ' · ' : '' }}¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</view>
+              </view>
+            </view>
+          </view>
+        </view>
+
         <view v-if="!groups.length && !pendingAdd" class="muted-line">尚无采购关联,可从平台订单选择新增</view>
 
         <!-- 待新增采购:每个订单单独一张卡(2026-10-17 用户要求,拆分展示) -->
@@ -418,7 +445,7 @@
           {{ saving ? '保存中…' : '保 存' }}
         </button>
         <button class="abtn primary" :disabled="saving || !dirty || !canShipAfterSave" @click="doSave(true)">
-          {{ saving ? '处理中…' : '保存并备货' }}
+          {{ saving ? '处理中…' : '保存并入库' }}
         </button>
       </view>
     </view>
@@ -434,6 +461,7 @@ import { ref, reactive, computed } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import {
   getOrderDetail,
+  getPurchaseHistory,
   unlinkPurchase,
   clearPurchaseInfo,
   submitPurchase,
@@ -460,6 +488,8 @@ const saving = ref(false);
 //   pendingAdd: Step3 确认的新增采购(存 submitPurchase body + 拼单 lookup 结果)
 const pendingRemoves = ref([]);
 const pendingAdd = ref(null);
+// 最近采购参考(2026-11):未采购订单同商品历史采购单,参考价格/供应商
+const purchaseHistory = ref([]);
 const dirty = computed(
   () => pendingRemoves.value.length > 0 || !!pendingAdd.value
 );
@@ -568,6 +598,17 @@ async function loadDetail() {
     loadSkuPricing(); // 利润预估/调价所需的 SKU 定价信息
   } catch (e) {
     loadError.value = e.message || '加载失败';
+  }
+  loadPurchaseHistory(); // 采购参考独立加载,失败不影响采购主流程
+}
+
+// 最近采购参考(2026-11):加载失败仅置空,不阻塞采购流程
+async function loadPurchaseHistory() {
+  try {
+    const r = await getPurchaseHistory(packageId.value);
+    purchaseHistory.value = Array.isArray(r) ? r : [];
+  } catch (e) {
+    purchaseHistory.value = [];
   }
 }
 
@@ -1401,7 +1442,7 @@ async function saveBatchLink(sel) {
 
 // ════════════════════════════════════════════════════════════
 // 统一保存:删除标记落地 + 新增采购落地(与 web 端 savePurchase 语义对齐)
-// withShip=true: 保存成功后立即备货(「保存并备货」按钮)
+// withShip=true: 保存成功后立即入库(「保存并入库」按钮)
 // ════════════════════════════════════════════════════════════
 async function doSave(withShip = false) {
   if (saving.value || !dirty.value) return;
@@ -1461,7 +1502,7 @@ async function doSave(withShip = false) {
       title: add?.orders?.length > 1 ? '已保存 ' + add.orders.length + ' 笔采购' : add ? '采购已保存' : '已保存',
       icon: 'none',
     });
-    // 保存并备货:保存成功后向 Ozon 确认货件(多件二次确认,单件直接备货)
+    // 保存并入库:保存成功后向 Ozon 确认货件(多件二次确认,单件直接入库)
     if (withShip && canShipAfterSave.value) await shipAfterSave();
     notifyRefresh();
     // 返回详情页(onShow 自动刷新)
@@ -1473,7 +1514,7 @@ async function doSave(withShip = false) {
   }
 }
 
-// 保存后可备货:未交运未取消且 Ozon 侧待打包(与 web 端备货按钮同口径)
+// 保存后可入库:未交运未取消且 Ozon 侧待打包(与 web 端入库按钮同口径)
 const canShipAfterSave = computed(() => {
   const p = pkg.value;
   return (
@@ -1483,7 +1524,7 @@ const canShipAfterSave = computed(() => {
   );
 });
 
-// 备货(与详情页 onShip 同口径:存在数量≥2 的商品二次确认,单件直接备货)
+// 入库(与详情页 onShip 同口径:存在数量≥2 的商品二次确认,单件直接入库)
 async function shipAfterSave() {
   const multiQty = items.value.some((it) => (Number(it.quantity) || 0) >= 2);
   const qty = items.value.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
@@ -1492,23 +1533,23 @@ async function shipAfterSave() {
       const r = await shipPackage(packageId.value);
       uni.showToast({
         title: r?.pending
-          ? '备货指令已提交,Ozon 状态变更中'
+          ? '入库指令已提交,Ozon 状态变更中'
           : r?.alreadyShipped
-            ? '该包裹已备货过'
-            : '备货成功',
+            ? '该包裹已入库过'
+            : '入库成功',
         icon: 'none',
       });
     } catch (e) {
-      /* 备货失败不影响已保存的采购;toast 已由 request.js 弹出 */
+      /* 入库失败不影响已保存的采购;toast 已由 request.js 弹出 */
     }
   };
   if (!multiQty) return doShip();
   return new Promise((resolve) => {
     uni.showModal({
-      title: '备货确认',
+      title: '入库确认',
       content:
         '货件 ' + (pkg.value?.postingNumber || '') + '\n含数量≥2的商品(共 ' + qty + ' 件),将向 Ozon 确认全部商品为一个货件(不拆分)。',
-      confirmText: '备货',
+      confirmText: '入库',
       success: async (res) => {
         if (res.confirm) await doShip();
         resolve();
@@ -1632,6 +1673,26 @@ onLoad((opts) => {
   font-weight: 600;
   color: #1f2329;
   margin-bottom: 16rpx;
+}
+
+/* 最近采购参考(2026-11):浅黄参考底色容器 + 标题 */
+.ph-ref {
+  margin-bottom: 16rpx;
+  padding: 16rpx;
+  border-radius: 12rpx;
+  background: #fffbe8;
+  border: 1rpx dashed #e6d9a8;
+}
+.ph-title {
+  font-size: 24rpx;
+  color: #b8860b;
+  margin-bottom: 12rpx;
+}
+.ph-ref .po {
+  margin-bottom: 12rpx;
+}
+.ph-ref .po:last-child {
+  margin-bottom: 0;
 }
 
 /* 标题行(标题+右侧操作按钮,改分摊入口) */

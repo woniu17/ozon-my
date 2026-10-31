@@ -32,7 +32,9 @@ import { getStoredUser, clearAuth } from '../../api/request.js';
 const MENUS = [
   { icon: '📦', name: '订单处理', desc: '货件/质检/录采购', url: '/pages/orders/index' },
   { icon: '🛒', name: '采购处理', desc: '批量关联采购单', url: '/pages/purchase/index' },
-  { icon: '📷', name: '扫描发货', desc: '扫码/备货/录重', url: '/pages/scan-ship/index' },
+  { icon: '📷', name: '扫描打单', desc: '扫码/入库/录重', url: '/pages/scan-ship/index' },
+  { icon: '📥', name: '扫描入库', desc: '连扫自动入库', url: '/pages/scan-ship/index?mode=stock' },
+  { icon: '🚚', name: '发运管理', desc: '发运/货件/标签', url: '/pages/carriage/index' },
   { icon: '💰', name: '价格管理', desc: '调价/取整/建议价', url: '/pages/price-manage/index' },
   { icon: '📊', name: '统计', desc: '订单/财务统计', url: '/pages/stats/index' },
   { icon: '📋', name: '任务中心', desc: '更新/归档/导出', url: '/pages/task-center/index' },

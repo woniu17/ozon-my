@@ -21,6 +21,13 @@
     </view>
     <view class="hint">支持:Ozon单号 / 包裹号 / 物流号 / offer_id / SKU / 采购单号 / 采购物流单号</view>
 
+    <!-- 扫描入库模式工具栏(2026-11):连扫暂停/继续 + 本次入库计数 -->
+    <view v-if="stockMode" class="stock-bar">
+      <text class="stock-mode-tag">扫描入库模式</text>
+      <text class="stock-pause-btn" @click="toggleStockPause">{{ stockPaused ? '▶ 继续连扫' : '⏸ 暂停连扫' }}</text>
+      <text class="stock-count">本次入库 {{ stockRecords.length }} · 扫{{ scanStats.total }}/成{{ scanStats.ok }}/重{{ scanStats.dup }}/败{{ scanStats.fail }}</text>
+    </view>
+
     <!-- 搜索状态横幅 -->
     <view v-if="banner.text" class="banner" :class="'banner-' + banner.type">{{ banner.text }}</view>
 
@@ -108,13 +115,13 @@
 
         <!-- ── 操作区 ── -->
         <view class="card-actions">
-          <!-- 未备货:备货 -->
+          <!-- 未入库:入库 -->
           <button
             v-if="canShipPkg(pkg)"
             class="mini-btn primary"
             :disabled="shippingPkgId === pkg.id"
             @click.stop="onShipPackage(pkg)"
-          >{{ shippingPkgId === pkg.id ? '备货中…' : '备货' }}</button>
+          >{{ shippingPkgId === pkg.id ? '入库中…' : '入库' }}</button>
 
           <!-- 待打单:参考重量 + 录重量 + 提交发货 + 面单 -->
           <template v-if="canShipCard(pkg)">
@@ -181,6 +188,23 @@
       {{ searchedOnce ? '未找到匹配订单' : '输入单号后回车搜索' }}
     </view>
 
+    <!-- 本次入库记录(2026-11,仅扫描入库模式):商品首图 + 单号 + 状态;连扫去重不重复添加 -->
+    <view v-if="stockMode" class="card records">
+      <view class="rec-head">
+        <text class="rec-title">本次入库记录({{ stockRecords.length }})</text>
+      </view>
+      <view v-if="!stockRecords.length" class="empty small">扫到待入库订单自动入库(可点视频区暂停连扫)</view>
+      <view v-for="(r, i) in stockRecords" :key="i" class="rec-row stock-rec">
+        <image v-if="r.thumbUrl" class="stock-rec-img" :src="r.thumbUrl" mode="aspectFill" lazy-load />
+        <view v-else class="stock-rec-img"></view>
+        <view class="stock-rec-main">
+          <text class="rec-posting">{{ r.postingNumber }}</text>
+          <text class="stock-rec-title">{{ r.title }}</text>
+        </view>
+        <text class="stock-rec-status" :class="'st-' + r.status">{{ r.status === 'ok' ? '已入库' : (r.status === 'pending' ? '指令已提交' : (r.status === 'fail' ? '失败' : r.status)) }}</text>
+      </view>
+    </view>
+
     <!-- 发货记录(今日/昨日) -->
     <view class="card records">
       <view class="rec-head">
@@ -210,7 +234,7 @@
         <text class="scan-title">扫描面单条码</text>
         <text class="scan-close" @click="closeH5Scanner">✕</text>
       </view>
-      <view id="scan-reader" class="scan-reader" :class="{ 'native-frame': barcodeDetectorSupported }"></view>
+      <view id="scan-reader" class="scan-reader" :class="{ 'native-frame': barcodeDetectorSupported }" @click="toggleStockPause"></view>
       <view class="scan-engine" :class="{ ok: scanEngineText.indexOf('BarcodeDetector') === 0 }" @click="onEngineTap">
         识别引擎: {{ scanEngineText || '启动中...' }}
       </view>
@@ -253,6 +277,61 @@ const RECORD_TABS = [
 ];
 const recordTab = ref('today');
 const counts = reactive({ today: 0, yesterday: 0 });
+
+// ── 独立扫描入库模式(2026-11,对齐 Web /scan-stock 与安卓 StockScanFragment)──
+// 通过 URL 参数 mode=stock 进入:扫到待入库订单自动入库(连扫),2s 内同码去重,
+// 本次入库记录展示商品首图;已入库订单连扫不重复添加记录。
+const stockMode = ref(false);
+const stockPaused = ref(false);   // 暂停自动连扫(避免误扫)
+const stockBusy = ref(false);     // 连扫处理中,防止并发
+const stockRecords = ref([]);     // 本次会话入库记录(新在前)
+const lastStockAt = reactive({}); // postingNumber → 最近处理时间戳(2s 去重)
+// 扫描统计(2026-11,对齐安卓 baa6502):本次会话 扫描总数/成功/重复/失败
+const scanStats = reactive({ total: 0, ok: 0, dup: 0, fail: 0 });
+// 单号格式预检(宽松版,适配通用搜索):长度≥4 且仅含数字/字母/常见连接符
+function validateScanKeyword(kw) {
+  if (kw.length < 4) return '单号过短,请确认扫描完整';
+  if (!/^[0-9A-Za-z\-_/]{4,}$/.test(kw)) return '单号含非法字符,请检查';
+  return '';
+}
+function addStockRecord(pkg, status) {
+  const first = (pkg.items || [])[0];
+  stockRecords.value.unshift({
+    postingNumber: pkg.postingNumber || '',
+    thumbUrl: first?.picUrl || first?.thumbUrl || '',
+    title: first?.title || '',
+    status,
+    time: Date.now(),
+  });
+  if (stockRecords.value.length > 50) stockRecords.value.pop();
+}
+function toggleStockPause() {
+  if (!stockMode.value) return;
+  stockPaused.value = !stockPaused.value;
+  uni.showToast({ title: stockPaused.value ? '连扫已暂停' : '连扫已继续', icon: 'none' });
+}
+// 连扫:对待入库订单逐个自动入库(多件/搁置弹窗确认期间自然等待);已入库过不重复记录
+async function autoStockScan(pkgs) {
+  for (const p of pkgs || []) {
+    if (stockPaused.value) return;
+    if (!canShipPkg(p)) continue;
+    const now = Date.now();
+    const prev = lastStockAt[p.postingNumber] || 0;
+    if (now - prev < 2000) {
+      scanStats.dup++;
+      continue;
+    }
+    lastStockAt[p.postingNumber] = now;
+    const st = await onShipPackage(p);
+    if (st === 'ok' || st === 'pending') {
+      scanStats.ok++;
+      addStockRecord(p, st);
+    } else if (st === 'fail') {
+      scanStats.fail++;
+    }
+    // 'already'/'fail' 不重复添加记录(已入库过仅 toast 提示)
+  }
+}
 
 // ── 扫码识别(快递单号/面单条码) ──
 // #ifdef H5
@@ -784,7 +863,7 @@ function opTag(pkg) {
   if (pkg.isReturned) return { label: '已退货', cls: 'err' };
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus || '—', cls: 'mute' };
 }
-// 2026-10-23:解除搁置订单限制,允许打单发货/备货(前端二次弹窗确认,保持搁置标记)
+// 2026-10-23:解除搁置订单限制,允许打单发货/入库(前端二次弹窗确认,保持搁置标记)
 function canShipCard(pkg) {
   return pkg.operateStatus === 'wait_ship';
 }
@@ -928,10 +1007,19 @@ function fmtRemain(pkg) {
 async function doSearch() {
   const kw = keyword.value.trim();
   if (!kw || searching.value) return;
+  // 单号格式预检(2026-11):非法格式即时提示,不发起搜索
+  const preErr = validateScanKeyword(kw);
+  if (preErr) {
+    banner.type = 'err';
+    banner.text = preErr + ':「' + kw + '」';
+    if (stockMode.value) scanStats.fail++;
+    return;
+  }
   searching.value = true;
   searchedOnce.value = true;
   results.value = [];
   banner.text = '';
+  if (stockMode.value) scanStats.total++;
   try {
     const data = await getOrderList({
       tab: 'all',
@@ -944,9 +1032,15 @@ async function doSearch() {
     const n = results.value.length;
     banner.type = n ? 'ok' : 'err';
     banner.text = n ? `命中 ${n} 个包裹,请在卡片上操作` : `未找到匹配订单「${kw}」`;
+    if (stockMode.value && !n) scanStats.fail++;
+    // 扫描入库模式(2026-11):扫到待入库订单自动入库,实现连扫
+    if (stockMode.value && !stockPaused.value && n) {
+      autoStockScan(results.value);
+    }
   } catch (err) {
     banner.type = 'err';
     banner.text = err.message || String(err);
+    if (stockMode.value) scanStats.fail++;
   } finally {
     searching.value = false;
   }
@@ -968,7 +1062,7 @@ function onCorrectInput(pkg, e) {
   correctErr[pkg.id] = '';
 }
 
-// 备货(与 web 端同口径:多件商品弹窗确认)
+// 入库(与 web 端同口径:多件商品弹窗确认)
 // 2026-10-23:搁置订单先二次确认再操作(保持搁置标记)
 async function onShipPackage(pkg) {
   if (shippingPkgId.value) return;
@@ -976,7 +1070,7 @@ async function onShipPackage(pkg) {
     const okIgnored = await new Promise((resolve) => {
       uni.showModal({
         title: '搁置订单操作确认',
-        content: '该订单当前为【已搁置】状态，确认继续备货吗？',
+        content: '该订单当前为【已搁置】状态，确认继续入库吗？',
         confirmText: '确认操作',
         success: (res) => resolve(res.confirm),
         fail: () => resolve(false),
@@ -988,9 +1082,9 @@ async function onShipPackage(pkg) {
   if (totalQty > 1) {
     const ok = await new Promise((resolve) => {
       uni.showModal({
-        title: '备货确认',
+        title: '入库确认',
         content: `货件 ${pkg.postingNumber}\n共 ${totalQty} 件商品,将向 Ozon 确认全部商品为一个货件(不拆分)。`,
-        confirmText: '备货',
+        confirmText: '入库',
         success: (res) => resolve(res.confirm),
         fail: () => resolve(false),
       });
@@ -1003,11 +1097,14 @@ async function onShipPackage(pkg) {
     if (r.ozonStatus) pkg.ozonStatus = r.ozonStatus;
     if (r.operateStatus) pkg.operateStatus = r.operateStatus;
     uni.showToast({
-      title: r.alreadyShipped ? '该包裹已备货过' : (r.pending ? '备货指令已提交' : '备货成功'),
+      title: r.alreadyShipped ? '该包裹已入库过' : (r.pending ? '入库指令已提交' : '入库成功'),
       icon: 'none',
     });
+    // 返回值供连扫模式记录(2026-11):'ok'入库成功 / 'pending'指令已提交 / 'already'已入库过 / 'fail'失败
+    return r.alreadyShipped ? 'already' : (r.pending ? 'pending' : 'ok');
   } catch (e) {
     /* request.js 已 toast */
+    return 'fail';
   } finally {
     shippingPkgId.value = 0;
   }
@@ -1120,7 +1217,10 @@ function switchRecordTab(tab) {
   loadRecords();
 }
 
-onLoad(() => {
+onLoad((opts) => {
+  // 2026-11:mode=stock 进入独立"扫描入库"模式(首页入口可带参数)
+  stockMode.value = (opts && opts.mode) === 'stock';
+  if (stockMode.value) uni.setNavigationBarTitle({ title: '扫描入库' });
   loadRecords();
 });
 onPullDownRefresh(async () => {
@@ -1555,6 +1655,79 @@ onPullDownRefresh(async () => {
 .rec-time {
   color: #86909c;
   font-size: 20rpx;
+}
+
+/* 扫描入库模式工具栏(2026-11) */
+.stock-bar {
+  display: flex;
+  align-items: center;
+  margin-top: 12rpx;
+  background: #eef4ff;
+  border-radius: 12rpx;
+  padding: 10rpx 16rpx;
+}
+.stock-mode-tag {
+  font-size: 22rpx;
+  font-weight: 600;
+  color: #165dff;
+  margin-right: 20rpx;
+}
+.stock-pause-btn {
+  font-size: 22rpx;
+  color: #165dff;
+  background: #ffffff;
+  border: 1rpx solid #165dff;
+  border-radius: 999rpx;
+  padding: 4rpx 16rpx;
+}
+.stock-count {
+  margin-left: auto;
+  font-size: 22rpx;
+  color: #4e5969;
+}
+
+/* 本次入库记录(2026-11):商品首图 + 单号 + 状态 */
+.rec-title {
+  font-size: 25rpx;
+  font-weight: 600;
+  color: #1f2329;
+}
+.stock-rec {
+  gap: 12rpx;
+}
+.stock-rec-img {
+  width: 72rpx;
+  height: 72rpx;
+  border-radius: 8rpx;
+  background: #f2f3f5;
+  flex-shrink: 0;
+}
+.stock-rec-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.stock-rec-title {
+  font-size: 20rpx;
+  color: #86909c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stock-rec-status {
+  font-size: 20rpx;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.stock-rec-status.st-ok {
+  color: #16a34a;
+}
+.stock-rec-status.st-pending {
+  color: #165dff;
+}
+.stock-rec-status.st-fail {
+  color: #dc2626;
 }
 
 .empty {
