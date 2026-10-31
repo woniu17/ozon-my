@@ -37,7 +37,14 @@ export function attachPostingProductImages(storeId, postings) {
       const found =
         imgs.find((i) => i.sku != null && String(i.sku) === String(prod?.sku)) ||
         imgs.find((i) => i.offerId && i.offerId === prod?.offer_id);
-      if (found) prod.image_url = found.picUrl;
+      if (found) {
+        prod.image_url = found.picUrl;
+        // Ozon 货运接口返回的商品名字段是 product_name,统一映射为 name(2026-11-05),
+        // 订单缓存里的 title 兜底,保证历史快照商品名称可展示。
+        if (!prod.name) prod.name = prod.product_name || found.title;
+      } else if (!prod.name && prod.product_name) {
+        prod.name = prod.product_name;
+      }
     }
   }
   return postings;

@@ -908,9 +908,16 @@ function productsSummary(p) {
   if (!items.length) return '—';
   return items
     .slice(0, 3)
-    .map((it) => `${it.name || it.offer_id || it.sku || ''} ×${it.quantity ?? ''}`)
+    .map((it) => `${it.name || it.product_name || it.offer_id || it.sku || ''} ×${it.quantity ?? ''}`)
     .filter(Boolean)
     .join('、') + (items.length > 3 ? ` 等${items.length}项` : '');
+}
+
+// 商品名称展示截断(2026-11-05):最长15个字符,超长以省略号结尾
+function shortProductName(name, len = 15) {
+  if (!name) return '';
+  const s = String(name);
+  return s.length > len ? `${s.slice(0, len)}…` : s;
 }
 
 // ── 货件增加/删除(2026-10-30,set-postings 全量覆盖) ──────────
@@ -1551,7 +1558,9 @@ defineExpose({ refreshCurrent, listLoading });
                         alt=""
                       />
                       <div class="posting-product-info">
-                        <span class="posting-product-name" :title="it.name">{{ it.name || '—' }}</span>
+                        <span class="posting-product-name" :title="it.name || it.product_name || it.offer_id || it.sku">
+  {{ shortProductName(it.name || it.product_name || it.offer_id || it.sku) || '—' }}
+</span>
                         <span class="posting-product-meta">SKU: {{ it.sku || '—' }}</span>
                         <span class="posting-product-meta">OfferId: {{ it.offer_id || '—' }}</span>
                       </div>
@@ -1637,7 +1646,9 @@ defineExpose({ refreshCurrent, listLoading });
                     alt=""
                   />
                   <div class="posting-product-info">
-                    <span class="posting-product-name" :title="it.name">{{ it.name || '—' }}</span>
+                    <span class="posting-product-name" :title="it.name || it.product_name || it.offer_id || it.sku">
+  {{ shortProductName(it.name || it.product_name || it.offer_id || it.sku) || '—' }}
+</span>
                     <span class="posting-product-meta">SKU: {{ it.sku || '—' }}</span>
                     <span class="posting-product-meta">OfferId: {{ it.offer_id || '—' }}</span>
                   </div>
@@ -1828,7 +1839,9 @@ defineExpose({ refreshCurrent, listLoading });
                         alt=""
                       />
                       <div class="posting-product-info">
-                        <span class="posting-product-name" :title="it.name">{{ it.name || '—' }}</span>
+                        <span class="posting-product-name" :title="it.name || it.product_name || it.offer_id || it.sku">
+  {{ shortProductName(it.name || it.product_name || it.offer_id || it.sku) || '—' }}
+</span>
                         <span class="posting-product-meta">SKU: {{ it.sku || '—' }}</span>
                         <span class="posting-product-meta">OfferId: {{ it.offer_id || '—' }}</span>
                       </div>
@@ -1953,7 +1966,9 @@ defineExpose({ refreshCurrent, listLoading });
                     alt=""
                   />
                   <div class="posting-product-info">
-                    <span class="posting-product-name" :title="it.name">{{ it.name || '—' }}</span>
+                    <span class="posting-product-name" :title="it.name || it.product_name || it.offer_id || it.sku">
+  {{ shortProductName(it.name || it.product_name || it.offer_id || it.sku) || '—' }}
+</span>
                     <span class="posting-product-meta">SKU: {{ it.sku || '—' }}</span>
                     <span class="posting-product-meta">OfferId: {{ it.offer_id || '—' }}</span>
                   </div>
