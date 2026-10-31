@@ -213,6 +213,14 @@ async function ensureMigrations() {
   if (addedProductDescQuality) {
     backfillProductDescriptionQuality();
   }
+  // 2026-11-04: op_carriage_history.tracking_number 补列
+  // 发运单级 OGL 国内集运仓快递单号(YT 开头,从 get-container-labels 货运标签 PDF 提取),
+  // 历史同步写回,供发运详情展示;旧库需先 ALTER(新装库 schema.sql 已含该列)
+  const _carriageTrackingPre = db.prepare(`PRAGMA table_info(op_carriage_history)`).all();
+  if (_carriageTrackingPre.length > 0 && !_carriageTrackingPre.some((c) => c.name === 'tracking_number')) {
+    db.exec(`ALTER TABLE op_carriage_history ADD COLUMN tracking_number TEXT`);
+    console.log('[db] migration: added column op_carriage_history.tracking_number');
+  }
   // listing_templates 内置默认模板(is_builtin=1,不可删不可改)
   const builtinCount = db.prepare(`SELECT COUNT(*) as n FROM listing_templates WHERE is_builtin = 1`).get().n;
   if (builtinCount === 0) {

@@ -7,7 +7,9 @@
 //   - postings_json / contact_json:发运详情(carriage/posting-list、courier-contact/get)
 //     读路径顺手写回,保证发运完成后历史详情仍有货件/联系方式快照。
 import { db } from '../db/index.js';
-import { carriageDeliveryList, carriagePostingList, carriageGet } from './ozon-opi.js';
+import { carriageDeliveryList, carriagePostingList, carriageGet, containerLabel } from './ozon-opi.js';
+import { attachPostingProductImages } from './posting-image.js';
+import { extractOglInboundTrackingNumbers } from './waybill-barcode.js';
 import { syncCarriagePostings } from '../db/dao/sqlite/carriage-posting-dao.js';
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
@@ -94,6 +96,42 @@ export function updateCarriageHistoryJson(storeId, carriageId, { postingsJson, c
   ).run(postingsJson ?? null, contactJson ?? null, now, String(storeId), Number(carriageId));
 }
 
+// 写回发运单级 OGL 国内集运仓快递单号(YT 开头;传空值保持原值)
+export function updateCarriageTrackingNumber(storeId, carriageId, trackingNumber) {
+  if (!storeId || !Number(carriageId)) return;
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE op_carriage_history
+     SET tracking_number = COALESCE(?, tracking_number),
+         updated_at = ?
+     WHERE store_id = ? AND carriage_id = ?`
+  ).run(trackingNumber || null, now, String(storeId), Number(carriageId));
+}
+
+// 下载发运单货运标签 PDF,提取 OGL 国内集运仓快递单号(YT 开头)写回发运单表(2026-11-04)
+// 背景:get-container-labels 对 OGL 集运(圆通承运)的发运返回国内段圆通面单 PDF,
+// 每页一个 YT 单号,属于整个发运单;仅当 tracking_number 为空时拉取,避免每次同步重复下载。
+// 非 OGL/圆通承运的发运可能无 YT 单号,返回 null 静默跳过(下次同步不再重复尝试的成本可接受)。
+async function syncCarriageTracking(store, carriage) {
+  let buffer;
+  try {
+    const r = await containerLabel(store, carriage.id);
+    buffer = r?.buffer;
+  } catch (e) {
+    logger.debug(
+      { err: e?.message, storeId: store.id, carriageId: carriage.id },
+      'carriage-history-sync: 货运标签下载失败,跳过快递单号提取'
+    );
+    return null;
+  }
+  if (!buffer) return null;
+  const numbers = (await extractOglInboundTrackingNumbers(buffer)).filter(Boolean);
+  if (!numbers.length) return null;
+  const tracking = numbers[0];
+  updateCarriageTrackingNumber(store.id, carriage.id, tracking);
+  return tracking;
+}
+
 // 拉取单个发运的货件列表并刷新本地关联(货件-发运单关联表,2026-11-02)
 async function syncCarriagePostingLink(store, carriage) {
   const postings = [];
@@ -108,6 +146,8 @@ async function syncCarriagePostingLink(store, carriage) {
     guard += 1;
     if (guard > 50) break; // 防死循环(单发运最多 5000 条)
   } while (cursor);
+  // 挂载商品主图(Ozon 接口不返回 image_url,与订单处理页同口径,避免历史详情图片缺失)
+  attachPostingProductImages(store.id, postings);
   syncCarriagePostings(store.id, carriage.id, postings, {
     deliveryMethodId: carriage.delivery_method_id,
     departureDate: carriage.departure_date,
@@ -126,6 +166,7 @@ const SCAN_DAYS = 7;
 async function syncStore(store) {
   let count = 0;
   const postingsNeeded = []; // 需要拉取货件列表的发运单(历史补全也拉)
+  const trackingNeeded = []; // 需要提取快递单号的发运单(YT 单号为空)
   const detailNeeded = [];
   const seenIds = new Set();
   const now = new Date();
@@ -159,7 +200,7 @@ async function syncStore(store) {
         seenIds.add(String(enriched.id));
         const existing = db
           .prepare(
-            `SELECT first_mile_type, integration_type, warehouse_name, warehouse_city, postings_json
+            `SELECT first_mile_type, integration_type, warehouse_name, warehouse_city, postings_json, tracking_number
              FROM op_carriage_history WHERE store_id = ? AND carriage_id = ?`
           )
           .get(String(store.id), Number(enriched.id));
@@ -183,6 +224,10 @@ async function syncStore(store) {
         if (Number(enriched.id) > 0 && !existing?.postings_json) {
           postingsNeeded.push(enriched);
         }
+        // 快递单号兜底:从货运标签 PDF 提取 OGL 国内集运仓快递单号(YT 开头),仅对空值拉取
+        if (Number(enriched.id) > 0 && !existing?.tracking_number) {
+          trackingNeeded.push(enriched);
+        }
       }
     }
   }
@@ -204,6 +249,14 @@ async function syncStore(store) {
       logger.warn(
         { err: e?.message, storeId: store.id, carriageId: c.id },
         'carriage-history-sync: 刷新货件-发运单关联失败'
+      )
+    )
+  );
+  await runWithConcurrency(trackingNeeded, 3, (c) =>
+    syncCarriageTracking(store, c).catch((e) =>
+      logger.warn(
+        { err: e?.message, storeId: store.id, carriageId: c.id },
+        'carriage-history-sync: 同步发运快递单号失败'
       )
     )
   );

@@ -204,6 +204,7 @@
             <view class="detail-item"><text class="detail-label">发运日期</text><text class="detail-value">{{ detail.carriage?.departure_date || '—' }}</text></view>
             <view class="detail-item"><text class="detail-label">首程类型</text><text class="detail-value">{{ detail.carriage?.first_mile_type || '—' }}</text></view>
             <view class="detail-item"><text class="detail-label">集成方式</text><text class="detail-value">{{ detail.carriage?.integration_type || '—' }}</text></view>
+            <view class="detail-item"><text class="detail-label">快递单号</text><text class="detail-value mono">{{ detail.carriage?.tracking_number || '—' }}</text></view>
           </view>
 
           <!-- 货件列表 -->

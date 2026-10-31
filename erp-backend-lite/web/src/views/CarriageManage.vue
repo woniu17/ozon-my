@@ -1244,6 +1244,10 @@ defineExpose({ refreshCurrent, listLoading });
             <span class="detail-label">集成方式</span>
             <span class="detail-value">{{ detail.carriage.integration_type || '—' }}</span>
           </div>
+          <div class="detail-item">
+            <span class="detail-label">快递单号</span>
+            <span class="detail-value mono">{{ detail.carriage.tracking_number || '—' }}</span>
+          </div>
         </div>
 
         <!-- 货件列表(2026-10-30:图片 + 增删,new 状态可编辑) -->

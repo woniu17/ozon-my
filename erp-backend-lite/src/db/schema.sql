@@ -1239,6 +1239,7 @@ CREATE TABLE IF NOT EXISTS op_carriage_history (
   carriage_json         TEXT,                -- Ozon 发运对象快照
   postings_json         TEXT,                -- 货件列表快照(含商品图片,读路径写回)
   contact_json          TEXT,                -- 快递员联系方式快照
+  tracking_number       TEXT,                -- OGL 国内集运仓快递单号(YT 开头,从货运标签 PDF 提取)
   last_seen_at          TEXT,                -- 最后一次在 Ozon 列表中出现(UTC ISO)
   archived_at           TEXT,                -- 从 Ozon 列表消失后归档时间(视为历史)
   created_at            TEXT NOT NULL,
