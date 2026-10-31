@@ -1475,6 +1475,17 @@ async function savePurchase(withShip = false) {
   }
 }
 
+// 「保存并入库」二次确认(2026-11):确认是否同时进行入库后再提交
+async function onSaveWithShip() {
+  if (purchaseSaving.value) return;
+  const ok = await confirmStore.ask({
+    message: '保存采购信息后是否立即向 Ozon 确认货件(同时进行入库)?多件商品将二次确认。',
+    confirmText: '保存并入库',
+  });
+  if (!ok) return;
+  await savePurchase(true);
+}
+
 // ── 平台订单获取(ERP 后端 cloakbrowser 直取,2026-09 M3;2026-09-13 多账号)─────
 // 协议:GET /admin/api/platform-orders/:platform(/search);后端在对应账号 profile 浏览器
 // 页面上下文取数,错误已映射为 AUTH_REQUIRED/RISK_VALIDATE 等友好 message。
@@ -4535,7 +4546,7 @@ onUnmounted(() => {
               class="btn btn-ghost"
               :disabled="purchaseSaving || !canShipAfterSave"
               :title="canShipAfterSave ? '保存采购后立即向 Ozon 确认货件(多件商品将二次确认)' : '当前包裹已入库或已取消,不可入库'"
-              @click="savePurchase(true)"
+              @click="onSaveWithShip()"
             >{{ purchaseSaving ? '处理中…' : '保存并入库' }}</button>
             <!-- 2026-11:大部分流程仅「保存」,故保存为主按钮放最右,保存并入库为次要按钮 -->
             <button class="btn btn-primary" :disabled="purchaseSaving" @click="savePurchase(false)">

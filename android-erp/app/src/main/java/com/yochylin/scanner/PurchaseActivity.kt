@@ -1067,7 +1067,17 @@ class PurchaseActivity : ComponentActivity() {
         val d = dirty() && !saving
         // 2026-11:大部分流程仅「保存」,保存为主按钮放最右,保存并入库为次要按钮
         purchaseActionBar.addView(
-            actionButton("保存并入库", "#f2f3f5", COLOR_TEXT, enabled = d && canShipAfterSave()) { doSave(true) }
+            actionButton("保存并入库", "#f2f3f5", COLOR_TEXT, enabled = d && canShipAfterSave()) {
+                // 2026-11:二次确认是否同时入库(与 Web 端一致),确认后才提交保存
+                lifecycleScope.launch {
+                    val ok = showConfirmDialog(
+                        "保存并入库",
+                        "保存采购信息后是否立即向 Ozon 确认货件(同时进行入库)?多件商品将二次确认。",
+                        "保存并入库"
+                    )
+                    if (ok) doSave(true)
+                }
+            }
         )
         purchaseActionBar.addView(
             actionButton("保 存", COLOR_PRIMARY, "#ffffff", enabled = d) { doSave(false) }

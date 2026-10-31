@@ -11,10 +11,12 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
+import android.text.SpannableString
 import android.text.SpannableStringBuilder
 import android.text.TextUtils
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.View
@@ -691,12 +693,28 @@ class OrderDetailActivity : ComponentActivity() {
             Math.round((item.price!! * 0.84 - unitCost) * 100) / 100.0
         } else null
 
+        // 多件商品:数量红色加粗,字号加大一倍(对齐订单处理列表,2026-11)
+        val qty = item.quantity ?: 0.0
+        val qtyText = fmtNum(item.quantity)
+        val pricePrefix = buildString {
+            append("单价 ").append(fmtMoney(item.price))
+            append("  ×")
+        }
+        val qtyStart = pricePrefix.length
+        val priceBase = buildString {
+            append(pricePrefix).append(qtyText)
+            if (unitCost != null) append(" · 采购 ").append(fmtMoney(unitCost))
+            if (gross != null) append(" · 毛利/件 ").append(fmtMoney(gross))
+        }
         val priceLine = TextView(this).apply {
-            text = buildString {
-                append("单价 ").append(fmtMoney(item.price))
-                append("  ×").append(fmtNum(item.quantity))
-                if (unitCost != null) append(" · 采购 ").append(fmtMoney(unitCost))
-                if (gross != null) append(" · 毛利/件 ").append(fmtMoney(gross))
+            text = if (qty > 1) {
+                SpannableString(priceBase).apply {
+                    setSpan(StyleSpan(Typeface.BOLD), qtyStart, qtyStart + qtyText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(ForegroundColorSpan(Color.parseColor("#F53F3F")), qtyStart, qtyStart + qtyText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(RelativeSizeSpan(2f), qtyStart, qtyStart + qtyText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            } else {
+                priceBase
             }
             setTextColor(Color.parseColor(COLOR_TEXT))
             textSize = 11f
