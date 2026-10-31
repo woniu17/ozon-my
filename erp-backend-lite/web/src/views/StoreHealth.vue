@@ -150,8 +150,12 @@ const chartMax = computed(() => {
 });
 const SVG_W = 720;
 const SVG_H = 180;
+/** X 轴第 i 个日期的横坐标 */
+function axisX(i) {
+  return chartDates.value.length <= 1 ? 20 : 20 + (i / (chartDates.value.length - 1)) * (SVG_W - 40);
+}
 function pointXY(series, date, idx) {
-  const x = chartDates.value.length <= 1 ? 20 : 20 + (idx / (chartDates.value.length - 1)) * (SVG_W - 40);
+  const x = axisX(idx);
   const y = SVG_H - 24 - (series.points[idx].value / chartMax.value) * (SVG_H - 48);
   return { x, y };
 }
@@ -294,6 +298,12 @@ onMounted(() => {
             :fill="s.color"
             r="3"
           />
+        </template>
+        <!-- X 轴:轴线 + 日期刻度 -->
+        <line :x1="20" :x2="SVG_W - 20" :y1="SVG_H - 24" :y2="SVG_H - 24" class="axis-line" />
+        <template v-for="(d, i) in chartDates" :key="'x' + d">
+          <line :x1="axisX(i)" :x2="axisX(i)" :y1="SVG_H - 24" :y2="SVG_H - 18" class="axis-tick" />
+          <text :x="axisX(i)" :y="SVG_H - 8" text-anchor="middle" class="axis-label">{{ d.slice(5) }}</text>
         </template>
       </svg>
       <div class="legend">
@@ -467,6 +477,18 @@ onMounted(() => {
 .grid-line {
   stroke: #f2f3f5;
   stroke-width: 1;
+}
+.axis-line {
+  stroke: #c9cdd4;
+  stroke-width: 1;
+}
+.axis-tick {
+  stroke: #c9cdd4;
+  stroke-width: 1;
+}
+.axis-label {
+  fill: #86909c;
+  font-size: 10px;
 }
 .legend {
   display: flex;

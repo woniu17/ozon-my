@@ -40,19 +40,27 @@
     <view v-if="hasChart" class="chart-card">
       <view class="chart-title">每日错误指数趋势</view>
       <scroll-view scroll-x :show-scrollbar="false">
-        <view class="bars">
-          <view v-for="d in chartDates" :key="d" class="bar-col">
-            <view class="bar-track">
-              <view class="bar-group">
-                <view
-                  v-for="seg in dailySegments(d)"
-                  :key="seg.storeId"
-                  class="bar-single"
-                  :style="{ height: seg.pct + '%', background: seg.color }"
-                ></view>
+        <view class="chart-body">
+          <view class="bars">
+            <view v-for="d in chartDates" :key="d" class="bar-col">
+              <view class="bar-track">
+                <view class="bar-group">
+                  <view
+                    v-for="seg in dailySegments(d)"
+                    :key="seg.storeId"
+                    class="bar-single"
+                    :style="{ height: seg.pct + '%', background: seg.color }"
+                  ></view>
+                </view>
               </view>
             </view>
-            <view class="bar-date">{{ d.slice(5) }}</view>
+          </view>
+          <!-- X 轴:轴线 + 日期刻度 -->
+          <view class="x-axis">
+            <view v-for="d in chartDates" :key="d" class="x-axis-item">
+              <view class="x-tick"></view>
+              <text class="x-label">{{ d.slice(5) }}</text>
+            </view>
           </view>
         </view>
       </scroll-view>
@@ -427,6 +435,9 @@ onReachBottom(() => {
   color: #1f2329;
   margin-bottom: 16rpx;
 }
+.chart-body {
+  min-width: 100%;
+}
 .bars {
   display: flex;
   align-items: flex-end;
@@ -466,10 +477,31 @@ onReachBottom(() => {
   border-radius: 4rpx 4rpx 0 0;
   min-height: 2rpx;
 }
-.bar-date {
+/* X 轴:轴线 + 日期刻度 */
+.x-axis {
+  display: flex;
+  gap: 8rpx;
+  min-width: 100%;
+  border-top: 2rpx solid #c9cdd4;
+  margin-top: 12rpx;
+  padding-top: 0;
+}
+.x-axis-item {
+  flex: 1;
+  min-width: 48rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.x-tick {
+  width: 1rpx;
+  height: 8rpx;
+  background: #c9cdd4;
+}
+.x-label {
   font-size: 18rpx;
   color: #86909c;
-  margin-top: 8rpx;
+  margin-top: 4rpx;
   white-space: nowrap;
 }
 .legend {

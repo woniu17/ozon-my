@@ -362,12 +362,26 @@ class StoreHealthFragment : Fragment() {
                 barsArea.addView(bar)
             }
             col.addView(barsArea)
-            col.addView(TextView(requireContext()).apply {
-                text = shortDate(date)
-                textSize = 8f
-                setTextColor(Color.parseColor(COLOR_MUTE))
-                gravity = Gravity.CENTER
-                setPadding(0, dp(3).toInt(), 0, 0)
+
+            // X 轴:每列一段横线拼接成整条轴线 + 刻度竖线 + 日期
+            col.addView(View(requireContext()).apply {
+                setBackgroundColor(Color.parseColor("#C9CDD4"))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1).toInt())
+            })
+            col.addView(LinearLayout(requireContext()).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                addView(View(requireContext()).apply {
+                    setBackgroundColor(Color.parseColor("#C9CDD4"))
+                    layoutParams = LinearLayout.LayoutParams(dp(1).toInt(), dp(6).toInt())
+                })
+                addView(TextView(requireContext()).apply {
+                    text = shortDate(date)
+                    textSize = 9f
+                    setTextColor(Color.parseColor(COLOR_MUTE))
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(2).toInt(), 0, 0)
+                })
             })
             chart.addView(col)
         }
