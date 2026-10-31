@@ -59,6 +59,7 @@ import java.util.concurrent.Executors
  *
  * 2026-10-30 优化:
  *  - 默认关闭摄像头,点击视频区/「开始」按钮才启动,避免误开相机耗电
+ *  - (2026-11)点击摄像头视频区切换 开始扫描/暂停扫码
  *  - 顶部统计(成功/待确认/失败)+ 手动输入/闪光灯/暂停/清空操作
  *  - 识别成功/失败增加提示音+震动反馈
  *  - 记录结构化(状态/单号/店铺/时间),点击跳订单详情,失败可重试
@@ -149,9 +150,10 @@ class StockScanFragment : Fragment() {
         }
 
         // 默认关闭摄像头:视频区显示遮罩,点击开始扫码;暂停按钮初始为"开始"
+        // 2026-11:点击摄像头视频区切换 开始扫描/暂停扫码(暂停时显示遮罩点击开始,扫描中点击视频暂停)
         startOverlay.setRoundedBg(0xCC000000.toInt(), 10f)
-        startOverlay.setOnClickListener { startScanning() }
-        previewView.setOnClickListener { if (paused) startScanning() }
+        startOverlay.setOnClickListener { togglePause() }
+        previewView.setOnClickListener { togglePause() }
         paused = true
         pauseBtn.text = "▶ 开始"
         pauseBtn.setTextColor(0xFF165DFF.toInt())

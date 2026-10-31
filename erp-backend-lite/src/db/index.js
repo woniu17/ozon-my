@@ -400,6 +400,25 @@ async function ensureMigrations() {
       db.exec(`ALTER TABLE op_package ADD COLUMN return_at TEXT`);
       console.log('[db] migration: added column op_package.return_at');
     }
+    // 2026-11: 订单处理时间(入库时间/发运时间)。打单时间沿用 waybill_printed_at。
+    // 历史数据:旧逻辑 waybill_printed_at 在打单/交运两条路径都写入,已进入交运链路的包裹该值实为交运时间,
+    // 迁移时复制到 dispatched_at,新逻辑起 waybill_printed_at 仅记录打单时间。
+    if (!opPkgCols.some((c) => c.name === 'stocked_at')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN stocked_at TEXT`);
+      console.log('[db] migration: added column op_package.stocked_at');
+    }
+    if (!opPkgCols.some((c) => c.name === 'dispatched_at')) {
+      db.exec(`ALTER TABLE op_package ADD COLUMN dispatched_at TEXT`);
+      console.log('[db] migration: added column op_package.dispatched_at');
+      const backfilled = db
+        .prepare(`UPDATE op_package SET dispatched_at = waybill_printed_at
+                  WHERE dispatched_at IS NULL AND waybill_printed_at IS NOT NULL
+                    AND operate_status NOT IN ('wait_process','wait_stock','wait_stick','wait_dispatch')`)
+        .run();
+      if (backfilled.changes > 0) {
+        console.log(`[db] migration: backfilled op_package.dispatched_at from waybill_printed_at for ${backfilled.changes} rows`);
+      }
+    }
   }
   // 2026-09-13: rFBS 退货明细表(op_return,退货原始记录,包裹级标记 op_package.is_returned 由同步回写)
   db.exec(`

@@ -127,7 +127,7 @@
         android:background="#ffffff"
         android:paddingHorizontal="12dp"
         android:paddingVertical="6dp"
-        android:text="默认关闭摄像头 · 点击视频区开始 · 单件自动入库,多件弹窗确认"
+        android:text="默认关闭摄像头 · 点击视频区开始/暂停 · 单件自动入库,多件弹窗确认"
         android:textColor="@color/text_muted"
         android:textSize="12sp" />
 

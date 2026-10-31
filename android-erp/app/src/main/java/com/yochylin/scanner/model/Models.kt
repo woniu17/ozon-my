@@ -55,7 +55,9 @@ data class Pkg(
     val lastDeliveryAt: String? = null,
     val deliveringDate: String? = null,
     val isShipped: Boolean = false,
-    val waybillPrintedAt: String? = null, // 本地打印面单/扫描打单交运时间
+    val waybillPrintedAt: String? = null, // 打单时间(本地操作链路记录)
+    val stockedAt: String? = null,        // 入库时间(本地操作链路记录)
+    val dispatchedAt: String? = null,     // 发运时间(本地操作链路记录)
     val shippedAt: String? = null,        // Ozon 状态联动写入(在途/妥投时=揽收时间或同步时刻)
     val deliveredAt: String? = null,
     val returnAt: String? = null,
@@ -121,7 +123,8 @@ data class PurchaseItem(
     val num: Double? = null,
 )
 
-/** 最近采购参考(2026-10-28):未采购订单同商品历史采购单,详情页录入采购时参考价格/供应商/买家账号 */
+/** 最近采购参考(2026-10-28):未采购订单同商品历史采购单,详情页录入采购时参考价格/供应商/买家账号
+ *  2026-11:增加 items 商品明细,内容格式对齐采购信息卡 */
 data class PurchaseHistory(
     val id: Long = 0,
     val platform: String? = null,
@@ -133,6 +136,7 @@ data class PurchaseHistory(
     val poStatus: String? = null,
     val payAt: String? = null,
     val gmtCreate: String? = null,
+    val items: List<PurchaseItem>? = null,
 )
 
 data class Profit(

@@ -3908,14 +3908,17 @@ onUnmounted(() => {
                 <span class="tag tag-err" title="妥投后买家申请退货退款(销售冲回,配送/佣金等费用不返还)">已退货</span>
                 <span class="cancel-reason-text" :title="pkg.returnState || ''">{{ returnStateLabel(pkg) }}</span>
               </div>
-              <!-- 时间行固定顺序(2026-09-20 v2):下单→最迟→揽收→签收→退款,无值用 - 占位 -->
+              <!-- 时间行固定顺序(2026-11 v3):下单→入库→最迟→剩发→打单→交运→揽收→签收→退款;入库/打单/发运为本地处理时间,有值才显示 -->
               <div class="sub">下单：{{ fmtTime(pkg.inProcessAt) }}<template v-if="weekdayCN(pkg.inProcessAt)">（{{ weekdayCN(pkg.inProcessAt) }}）</template></div>
+              <div v-if="pkg.stockedAt" class="sub">入库：{{ fmtTime(pkg.stockedAt) }}<template v-if="weekdayCN(pkg.stockedAt)">（{{ weekdayCN(pkg.stockedAt) }}）</template></div>
               <!-- 已取消订单不再展示最迟/剩发/已超时(取消后无发货义务,倒计时无意义) -->
               <div v-if="pkg.shipmentDate && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub">最迟：{{ fmtTime(pkg.shipmentDate) }}<template v-if="weekdayCN(pkg.shipmentDate)">（{{ weekdayCN(pkg.shipmentDate) }}）</template></div>
               <div v-if="countdown(pkg) && !pkg.isShipped && pkg.ozonStatus !== 'cancelled'" class="sub" :class="countdown(pkg).overdue ? 'overdue' : 'countdown'">
                 {{ countdown(pkg).overdue ? '已超时：' : '剩发：' }}{{ countdown(pkg).text }}
               </div>
-              <div v-if="pkg.isShipped || pkg.waybillPrintedAt" class="sub muted">已交运 {{ fmtTime(pkg.waybillPrintedAt || pkg.shippedAt) }}</div>
+              <!-- 打单时间:历史已交运数据 waybill_printed_at 已回填到 dispatched_at(两值相等),不再重复展示 -->
+              <div v-if="pkg.waybillPrintedAt && (!pkg.dispatchedAt || pkg.waybillPrintedAt !== pkg.dispatchedAt)" class="sub">打单：{{ fmtTime(pkg.waybillPrintedAt) }}<template v-if="weekdayCN(pkg.waybillPrintedAt)">（{{ weekdayCN(pkg.waybillPrintedAt) }}）</template></div>
+              <div v-if="pkg.isShipped || pkg.dispatchedAt" class="sub muted">已交运 {{ fmtTime(pkg.dispatchedAt || pkg.waybillPrintedAt || pkg.shippedAt) }}</div>
               <div class="sub">揽收：<template v-if="pkg.deliveringDate">{{ fmtTime(pkg.deliveringDate) }}<template v-if="weekdayCN(pkg.deliveringDate)">（{{ weekdayCN(pkg.deliveringDate) }}）</template></template><template v-else>-</template></div>
               <div class="sub">签收：<template v-if="pkg.deliveredAt">{{ fmtTime(pkg.deliveredAt) }}<template v-if="weekdayCN(pkg.deliveredAt)">（{{ weekdayCN(pkg.deliveredAt) }}）</template></template><template v-else>-</template></div>
               <div class="sub">退款：<template v-if="pkg.returnAt">{{ fmtTime(pkg.returnAt) }}<template v-if="weekdayCN(pkg.returnAt)">（{{ weekdayCN(pkg.returnAt) }}）</template></template><template v-else>-</template></div>
@@ -4362,17 +4365,42 @@ onUnmounted(() => {
             采购合计 <b>¥{{ profitTotal.alloc.toFixed(2) }}</b> · 预估利润合计 <b :class="{ 'profit-neg': profitTotal.profit < 0 }">¥{{ profitTotal.profit.toFixed(2) }}</b><template v-if="profitTotal.rateC != null"> · 成本利润率 <b :class="{ 'profit-neg': profitTotal.profit < 0 }">{{ profitTotal.rateC.toFixed(1) }}%</b></template><span v-if="!profitTotal.allWeighted" class="muted">(部分行未扣配送)</span>
           </div>
 
-          <!-- 最近采购参考(2026-10-28):未采购订单展示同商品(offer_id)最近5条历史采购单 -->
+          <!-- 最近采购参考(2026-10-28):未采购订单展示同商品(SKU)最近5条历史采购单;2026-11 内容格式对齐采购信息卡(头部+元信息+商品明细) -->
           <div v-if="purchaseHistory.length && !batchLinkMode" class="purchase-history-ref">
             <div class="purchase-history-title">最近采购参考 · 同商品历史采购(最多5条)</div>
-            <div v-for="h in purchaseHistory" :key="h.id" class="purchase-history-item">
-              <span class="tag tag-info">{{ platformLabelByVal(h.platform) }}</span>
-              <span class="mono ph-sn" :title="h.purchaseSn || ''">{{ h.purchaseSn || '#' + h.id }}</span>
-              <span class="tag" :class="poStatusTagClass(h.poStatus)">{{ poStatus(h.poStatus) }}</span>
-              <span class="ph-seller" :title="h.sellerName || ''">{{ clip30(h.sellerName || '—') }}</span>
-              <span v-if="h.buyerAccount" class="muted" :title="h.buyerAccount">买:{{ h.buyerAccount }}</span>
-              <span class="ph-amt">¥{{ Number(h.paymentAmount || 0).toFixed(2) }}</span>
-              <span class="muted ph-time">{{ fmtTime(h.payAt || h.gmtCreate) }}</span>
+            <div v-for="h in purchaseHistory" :key="h.id" class="ph-card">
+              <!-- 卡片头:平台 + 账号 + 单号 + 状态(与采购信息卡同构) -->
+              <div class="ph-card-head">
+                <span class="tag tag-info">{{ platformLabelByVal(h.platform) }}</span>
+                <span v-if="h.buyerAccount" class="tag tag-mute" :title="'买手账号 ' + h.buyerAccount">{{ h.buyerAccount }}</span>
+                <span class="mono ph-card-sn" :title="h.purchaseSn || ''">{{ h.purchaseSn || '#' + h.id }}</span>
+                <span v-if="h.poStatus" class="tag" :class="poStatusTagClass(h.poStatus)">{{ poStatus(h.poStatus) }}</span>
+              </div>
+              <!-- 元信息行:采购金额 + 卖家 + 采购时间(与采购信息卡同构) -->
+              <div class="ph-card-meta">
+                <span class="ph-amt" :title="'采购金额 ¥' + Number(h.paymentAmount || 0).toFixed(2)">¥{{ Number(h.paymentAmount || 0).toFixed(2) }}</span>
+                <span v-if="h.sellerName" class="ph-meta-item" :title="h.sellerName">{{ clip30(h.sellerName) }}</span>
+                <span class="ph-time">{{ fmtTime(h.payAt || h.gmtCreate) }}</span>
+              </div>
+              <!-- 商品明细(与采购信息卡同构):图/名称/规格/价格×数量 -->
+              <div v-if="h.items && h.items.length" class="ph-card-goods">
+                <div v-for="(pi, j) in h.items" :key="j" class="ph-goods-row">
+                  <img
+                    v-if="pi.thumbUrl || pi.picUrl"
+                    :src="pi.thumbUrl || pi.picUrl"
+                    referrerpolicy="no-referrer"
+                    loading="lazy"
+                    class="ph-goods-img"
+                    :title="pi.goodsName || pi.title || '采购商品'"
+                    alt=""
+                  />
+                  <div v-else class="ph-goods-img ph-goods-img-empty"></div>
+                  <div class="ph-goods-main">
+                    <div class="ph-goods-title" :title="pi.goodsName || pi.title || '采购商品'">{{ clip30(pi.goodsName || pi.title || '采购商品') }}</div>
+                    <div class="ph-goods-sub"><span v-if="pi.spec" :title="pi.spec">{{ clip30(pi.spec) }} · </span>¥{{ pi.price ?? '—' }} × {{ pi.number || pi.num || 1 }}</div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -4503,15 +4531,16 @@ onUnmounted(() => {
         <div class="form-actions">
           <button class="btn btn-ghost" @click="purchaseOpen = false">取 消</button>
           <template v-if="!batchLinkMode">
-            <button class="btn btn-ghost" :disabled="purchaseSaving" @click="savePurchase(false)">
-              {{ purchaseSaving ? '保存中…' : '保 存' }}
-            </button>
             <button
-              class="btn btn-primary"
+              class="btn btn-ghost"
               :disabled="purchaseSaving || !canShipAfterSave"
               :title="canShipAfterSave ? '保存采购后立即向 Ozon 确认货件(多件商品将二次确认)' : '当前包裹已入库或已取消,不可入库'"
               @click="savePurchase(true)"
             >{{ purchaseSaving ? '处理中…' : '保存并入库' }}</button>
+            <!-- 2026-11:大部分流程仅「保存」,故保存为主按钮放最右,保存并入库为次要按钮 -->
+            <button class="btn btn-primary" :disabled="purchaseSaving" @click="savePurchase(false)">
+              {{ purchaseSaving ? '保存中…' : '保 存' }}
+            </button>
           </template>
           <button
             v-else
@@ -6238,7 +6267,7 @@ a.product-title:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 最近采购参考(2026-10-28):未采购订单同商品历史采购单 */
+/* 最近采购参考(2026-10-28):未采购订单同商品历史采购单;2026-11 内容格式对齐采购信息卡 */
 .purchase-history-ref {
   margin-top: 8px;
   padding: 8px 10px;
@@ -6252,37 +6281,98 @@ a.product-title:hover {
   color: #874d00;
   margin-bottom: 6px;
 }
-.purchase-history-item {
+/* 参考卡:白底圆角,视觉对齐"采购信息卡"(po-order-card),容器保留黄色参考底色 */
+.ph-card {
+  background: #fff;
+  border: 1px solid #ffe58f;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-top: 6px;
+}
+.ph-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ph-card-sn {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #1f2937;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ph-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #6b7280;
+}
+.ph-amt {
+  color: #cf1322;
+  font-weight: 600;
+}
+.ph-meta-item {
+  color: #6b7280;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ph-time {
+  margin-left: auto;
+  color: #9ca3af;
+}
+/* 商品明细(与采购信息卡 po-card-goods 同构) */
+.ph-card-goods {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #ffe58f;
+}
+.ph-goods-row {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.ph-goods-img {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border: 1px solid var(--border-light, #e5e7eb);
+  border-radius: 4px;
+  background: #f8fafc;
+  flex-shrink: 0;
+}
+.ph-goods-img-empty {
+  background: #f2f3f5;
+}
+.ph-goods-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.ph-goods-title {
   font-size: 12px;
-  padding: 3px 0;
-  border-top: 1px dashed #ffe58f;
-  flex-wrap: wrap;
-}
-.purchase-history-item:first-of-type {
-  border-top: none;
-}
-.ph-sn {
-  max-width: 170px;
+  color: var(--text-color, #1f2937);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.ph-seller {
-  max-width: 140px;
+.ph-goods-sub {
+  font-size: 11px;
+  color: var(--text-mute, #888);
+  margin-top: 1px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ph-amt {
-  font-weight: 600;
-  color: #cf1322;
-  margin-left: auto;
-}
-.ph-time {
-  flex: 0 0 auto;
 }
 .selected-orders {
   margin-top: 8px;

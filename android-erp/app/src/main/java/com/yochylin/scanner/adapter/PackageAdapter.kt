@@ -171,14 +171,26 @@ class PackageAdapter(private val callbacks: Callbacks) :
         }
 
         /** 时间区(2026-10-15 重新排版):下单/最迟发货分行走,剩发单独成行;
+         *  2026-11:追加本地处理时间(入库/打单/交运,有值才显示);
          *  剩发 <24小时 或 已超时时整行红色加粗高亮(超时浅红底,紧急浅橙底) */
         private fun bindTimes(pkg: Pkg) {
             timeContainer.removeAllViews()
             addTimeRow(timeContainer, "下单", fmtTimeWithWeekday(pkg.inProcessAt))
+            if (!pkg.stockedAt.isNullOrBlank()) {
+                addTimeRow(timeContainer, "入库", fmtTimeWithWeekday(pkg.stockedAt))
+            }
             if (!pkg.lastDeliveryAt.isNullOrBlank()) {
                 addTimeRow(timeContainer, "最迟发货", fmtTimeWithWeekday(pkg.lastDeliveryAt))
                 val remain = remainInfo(pkg.lastDeliveryAt)
                 if (remain != null) addRemainRow(timeContainer, remain)
+            }
+            // 打单时间:历史已交运数据 waybill_printed_at 已回填到 dispatched_at(两值相等),不再重复展示
+            val printed = pkg.waybillPrintedAt
+            if (!printed.isNullOrBlank() && (pkg.dispatchedAt.isNullOrBlank() || printed != pkg.dispatchedAt)) {
+                addTimeRow(timeContainer, "打单", fmtTimeWithWeekday(printed))
+            }
+            if (pkg.isShipped || !pkg.dispatchedAt.isNullOrBlank() || !pkg.waybillPrintedAt.isNullOrBlank()) {
+                addTimeRow(timeContainer, "交运", fmtTimeWithWeekday(pkg.dispatchedAt ?: pkg.waybillPrintedAt ?: pkg.shippedAt))
             }
         }
 

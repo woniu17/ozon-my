@@ -1065,11 +1065,12 @@ class PurchaseActivity : ComponentActivity() {
     private fun renderManageBottom() {
         purchaseActionBar.removeAllViews()
         val d = dirty() && !saving
+        // 2026-11:大部分流程仅「保存」,保存为主按钮放最右,保存并入库为次要按钮
         purchaseActionBar.addView(
-            actionButton("保 存", "#f2f3f5", COLOR_TEXT, enabled = d) { doSave(false) }
+            actionButton("保存并入库", "#f2f3f5", COLOR_TEXT, enabled = d && canShipAfterSave()) { doSave(true) }
         )
         purchaseActionBar.addView(
-            actionButton("保存并入库", COLOR_PRIMARY, "#ffffff", enabled = d && canShipAfterSave()) { doSave(true) }
+            actionButton("保 存", COLOR_PRIMARY, "#ffffff", enabled = d) { doSave(false) }
         )
     }
 

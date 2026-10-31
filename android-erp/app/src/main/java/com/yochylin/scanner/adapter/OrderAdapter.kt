@@ -431,11 +431,16 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
             when {
                 op in countdownStatuses && !pkg.shipmentDate.isNullOrBlank() -> {
                     addTimeRow(oTimeContainer, "下单", fmtTimeWithWeekday(pkg.inProcessAt))
+                    // 2026-11:本地处理时间——入库时间(有值才显示)
+                    if (!pkg.stockedAt.isNullOrBlank()) {
+                        addTimeRow(oTimeContainer, "入库", fmtTimeWithWeekday(pkg.stockedAt))
+                    }
                     addTimeRow(oTimeContainer, "最迟", fmtTimeWithWeekday(pkg.shipmentDate))
                     // 2026-10-15:剩发 <24小时 或 已超时时红色加粗醒目(urgent)
                     val cd = countdownText(pkg.shipmentDate)
                     addTimeRow(oTimeContainer, if (cd.overdue) "已超时" else "剩发", cd.text, cd.urgent)
-                    // 交运时间(2026-10-29,对齐 Web 订单处理页):本地打印面单/扫描打单时间优先,Ozon 揽收时间兜底
+                    addPrintedTimeRow(pkg)
+                    // 交运时间(2026-10-29,对齐 Web 订单处理页):发运时间优先,历史打单/面单时间兜底,Ozon 揽收时间最后
                     addShippedTimeRow(pkg)
                     if (op == "wait_dispatch" && pkg.profit != null) {
                         addTimeRow(oTimeContainer, "预估利润", fmtMoney(pkg.profit.profit), false, profitColor(pkg.profit.profit))
@@ -443,6 +448,10 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                 }
                 op in shipTimesStatuses -> {
                     addTimeRow(oTimeContainer, "下单", fmtTimeWithWeekday(pkg.inProcessAt))
+                    if (!pkg.stockedAt.isNullOrBlank()) {
+                        addTimeRow(oTimeContainer, "入库", fmtTimeWithWeekday(pkg.stockedAt))
+                    }
+                    addPrintedTimeRow(pkg)
                     addShippedTimeRow(pkg)
                     if (!pkg.deliveringDate.isNullOrBlank()) {
                         addTimeRow(oTimeContainer, "揽收", fmtTimeWithWeekday(pkg.deliveringDate))
@@ -480,10 +489,18 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
             container.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
 
-        /** 交运时间行(2026-10-29):本地 waybillPrintedAt 优先,shippedAt 兜底;无任何交运标记时不显示 */
+        /** 打单时间行(2026-11):历史已交运数据 waybill_printed_at 已回填到 dispatched_at(两值相等),不再重复展示 */
+        private fun addPrintedTimeRow(pkg: Pkg) {
+            val printed = pkg.waybillPrintedAt
+            if (!printed.isNullOrBlank() && (pkg.dispatchedAt.isNullOrBlank() || printed != pkg.dispatchedAt)) {
+                addTimeRow(oTimeContainer, "打单", fmtTimeWithWeekday(printed))
+            }
+        }
+
+        /** 交运时间行(2026-10-29,2026-11 更新):发运时间 dispatchedAt 优先,waybillPrintedAt 兜底,shippedAt 最后;无任何交运标记时不显示 */
         private fun addShippedTimeRow(pkg: Pkg) {
-            if (pkg.isShipped || !pkg.waybillPrintedAt.isNullOrBlank()) {
-                addTimeRow(oTimeContainer, "交运", fmtTimeWithWeekday(pkg.waybillPrintedAt ?: pkg.shippedAt))
+            if (pkg.isShipped || !pkg.dispatchedAt.isNullOrBlank() || !pkg.waybillPrintedAt.isNullOrBlank()) {
+                addTimeRow(oTimeContainer, "交运", fmtTimeWithWeekday(pkg.dispatchedAt ?: pkg.waybillPrintedAt ?: pkg.shippedAt))
             }
         }
 

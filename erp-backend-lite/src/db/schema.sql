@@ -673,13 +673,15 @@ CREATE TABLE IF NOT EXISTS op_package (
   package_no              TEXT NOT NULL UNIQUE, -- MS+yyMMddHHmmss+rand 自生成
   ozon_order_id           INTEGER NOT NULL REFERENCES op_ozon_order(id),
   store_id                TEXT NOT NULL,
-  operate_status          TEXT NOT NULL DEFAULT 'wait_process', -- wait_process/wait_ship/ship_success/wait_receiver_confirm/cancelled
+  operate_status          TEXT NOT NULL DEFAULT 'wait_process', -- wait_process/wait_stock/wait_stick/wait_dispatch/dispatching/delivering/signed/settled/cancelled/returned
   purchase_status         TEXT NOT NULL DEFAULT 'none',         -- none/partial/complete
   is_shipped              INTEGER DEFAULT 0,
   -- Ozon 国际段物流(我发货后)
   logistics_no            TEXT,                 -- Ozon 跟踪号(=posting_number)
   logistics_company       TEXT,
-  waybill_printed_at      TEXT,
+  waybill_printed_at      TEXT,                 -- 打单时间(wait_stick→wait_dispatch 时写入)
+  stocked_at              TEXT,                 -- 入库时间(wait_stock→wait_stick 时写入)
+  dispatched_at           TEXT,                 -- 发运时间(wait_dispatch→dispatching 时写入)
   -- 国内物流(上家→我,到货判断依据)
   head_logistics_no       TEXT,
   head_logistics_company  TEXT,

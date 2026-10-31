@@ -1008,13 +1008,13 @@ function setTagOrder(names) {
 //   delivering 对应 o.delivering_date(国际物流商揽收时间),适用除待处理/待打单/交运外的所有状态
 //   发货前取消的单无揽收时间(NULLS LAST 排最后);return=货件退回/销毁处理时间
 //   delivered 对应 p.delivered_at(妥投时间),仅已签收/已成功 tab 用(100% 覆盖)
-//   shipped 对应 p.waybill_printed_at(本地打印面单/扫描打单交运时间,2026-10-29),交运 tab 用
+//   shipped 对应本地发运时间(2026-11 起 p.dispatched_at;历史数据已回填,兼容旧字段),交运 tab 用
 const SORT_COLUMNS = {
   order: 'o.in_process_at',
   delivering: 'o.delivering_date',
   return: 'p.return_at',
   delivered: 'p.delivered_at',
-  shipped: 'p.waybill_printed_at',
+  shipped: 'COALESCE(p.dispatched_at, p.waybill_printed_at)',
 };
 
 function listPackages(filters = {}) {
@@ -1202,7 +1202,9 @@ function rowToPackage(r) {
     returnState: r.return_state,
     returnStateName: r.return_state_name,
     returnAt: r.return_at,
-    waybillPrintedAt: r.waybill_printed_at,
+    waybillPrintedAt: r.waybill_printed_at,  // 打单时间(本地操作链路记录)
+    stockedAt: r.stocked_at,              // 入库时间(本地操作链路记录)
+    dispatchedAt: r.dispatched_at,        // 发运时间(本地操作链路记录)
     note: r.note,
     // ─ 本地标签(逗号分隔 → 数组)+ 妙手旗帜备注(同步展示,2026-09-15) ─
     tags: r.tags ? String(r.tags).split(',').map((t) => t.trim()).filter(Boolean) : [],
@@ -2250,20 +2252,23 @@ function updatePackageMeta(packageId, meta = {}) {
 }
 
 /** 标记已打印面单(打单/交运两步):
- *   wait_stick → wait_dispatch(打单完成)
- *   wait_dispatch → dispatching(个人自发货扫描交运:重量已录,打印面单成功后推进)
+ *   wait_stick → wait_dispatch(打单完成,记录打单时间 waybill_printed_at)
+ *   wait_dispatch → dispatching(个人自发货扫描交运:重量已录,打印面单成功后推进,记录发运时间 dispatched_at)
+ *   两个时间字段分开记录,不再互相覆盖。
  */
 function markWaybillPrinted(packageId) {
   const now = nowIso();
   db.prepare(
-    `UPDATE op_package SET waybill_printed_at = ?,
+    `UPDATE op_package SET
+      waybill_printed_at = CASE WHEN operate_status = 'wait_stick' THEN ? ELSE waybill_printed_at END,
+      dispatched_at = CASE WHEN operate_status = 'wait_dispatch' THEN ? ELSE dispatched_at END,
       operate_status = CASE
         WHEN operate_status = 'wait_stick' THEN 'wait_dispatch'
         WHEN operate_status = 'wait_dispatch' THEN 'dispatching'
         ELSE operate_status END,
       gmt_modified = ?
      WHERE id = ?`
-  ).run(now, now, packageId);
+  ).run(now, now, now, packageId);
 }
 
 /** 批量取包裹的 posting_number + store_id(打印 Ozon 面单用) */
@@ -2286,7 +2291,7 @@ function getPackagePostings(packageIds) {
  */
 function scanShipSubmit(packageId, weightG) {
   const row = db
-    .prepare(`SELECT operate_status, is_ignored, waybill_printed_at FROM op_package WHERE id = ?`)
+    .prepare(`SELECT operate_status, is_ignored, waybill_printed_at, dispatched_at FROM op_package WHERE id = ?`)
     .get(packageId);
   if (!row) return { found: false };
   const isIgnored = !!row.is_ignored;
@@ -2302,6 +2307,7 @@ function scanShipSubmit(packageId, weightG) {
     operateStatus: row.operate_status,
     isIgnored,
     waybillPrintedAt: row.waybill_printed_at || null,
+    dispatchedAt: row.dispatched_at || null,
   };
 }
 
@@ -2311,7 +2317,7 @@ function scanShipSubmit(packageId, weightG) {
  */
 function scanShipCorrectWeight(packageId, weightG) {
   const row = db
-    .prepare(`SELECT operate_status, waybill_printed_at, weight FROM op_package WHERE id = ?`)
+    .prepare(`SELECT operate_status, waybill_printed_at, dispatched_at, weight FROM op_package WHERE id = ?`)
     .get(packageId);
   if (!row) return { found: false };
   db.prepare(`UPDATE op_package SET weight = ?, gmt_modified = ? WHERE id = ?`).run(
@@ -2319,13 +2325,13 @@ function scanShipCorrectWeight(packageId, weightG) {
   );
   return {
     found: true,
-    shipped: row.waybill_printed_at != null,
+    shipped: row.dispatched_at != null, // 已交运(2026-11 起以 dispatched_at 判断,历史已回填)
     operateStatus: row.operate_status,
     oldWeightG: row.weight != null ? Number(row.weight) : null,
   };
 }
 
-/** 发货记录:按 waybill_printed_at UTC 区间查已交运包裹(扫描打单页右侧栏)
+/** 发货记录:按发运时间(dispatched_at,历史数据已回填)UTC 区间查已交运包裹(扫描打单页右侧栏)
  *  @param {Object} filters { startAt, endAt, page, pageSize }
  *  startAt/endAt 为 UTC ISO 字符串,区间 [startAt, endAt);按交运时间倒序
  *  采购关联已聚合进 purchaseLinks(每包裹);items/weights 由路由层富化
@@ -2334,7 +2340,8 @@ function listShippedPackages({ startAt, endAt, page, pageSize } = {}) {
   const pageNo = Math.max(1, Number(page) || 1);
   // 上限 500:扫描打单记录不分页,前端一次拉全量滚动浏览(2026-09-16)
   const size = Math.min(500, Math.max(1, Number(pageSize) || 20));
-  const where = `p.waybill_printed_at IS NOT NULL AND p.waybill_printed_at >= ? AND p.waybill_printed_at < ?`;
+  const shipTs = `COALESCE(p.dispatched_at, p.waybill_printed_at)`;
+  const where = `${shipTs} IS NOT NULL AND ${shipTs} >= ? AND ${shipTs} < ?`;
   const params = [startAt, endAt];
   const total = db
     .prepare(
@@ -2352,7 +2359,7 @@ function listShippedPackages({ startAt, endAt, page, pageSize } = {}) {
        FROM op_package p
        JOIN op_ozon_order o ON o.id = p.ozon_order_id
        WHERE ${where}
-       ORDER BY p.waybill_printed_at DESC
+       ORDER BY ${shipTs} DESC
        LIMIT ? OFFSET ?`
     )
     .all(...params, size, (pageNo - 1) * size);

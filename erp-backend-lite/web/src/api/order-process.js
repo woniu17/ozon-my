@@ -111,7 +111,7 @@ export function markPrinted(packageId) {
 
 // 提交发货重量(服务端权威状态校验,仅 wait_dispatch 落库)
 // body: { packageId, weightG }  weightG: 正整数克 1~50000
-// 返回 { canShip, operateStatus, isIgnored, waybillPrintedAt, message }
+// 返回 { canShip, operateStatus, isIgnored, waybillPrintedAt, dispatchedAt, message }
 // canShip=true → 前端继续 fetchPackageLabel + printLabelImage + markPrinted
 export function scanShipSubmit(packageId, weightG) {
   return request.post('/admin/api/order-process/scan-ship/submit', { packageId, weightG });

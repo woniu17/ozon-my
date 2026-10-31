@@ -99,7 +99,7 @@ export function exportPurchaseSyncData({ machine } = {}) {
   const pkgs = db
     .prepare(
       `SELECT p.id, o.store_id, o.posting_number, p.gmt_modified,
-              p.weight, p.waybill_printed_at, p.is_ignored,
+              p.weight, p.waybill_printed_at, p.dispatched_at, p.is_ignored,
               p.note, p.tags, p.head_logistics_no, p.head_logistics_company, p.head_shipped_at
        FROM op_package p
        JOIN op_ozon_order o ON o.id = p.ozon_order_id
@@ -183,7 +183,8 @@ export function exportPurchaseSyncData({ machine } = {}) {
     postingNumber: p.posting_number,
     gmtModified: p.gmt_modified,
     weight: p.weight ?? null,
-    waybillPrintedAt: p.waybill_printed_at ?? null,
+    waybillPrintedAt: p.waybill_printed_at ?? null, // 打单时间
+    dispatchedAt: p.dispatched_at ?? null,         // 发运时间(2026-11 起拆分记录)
     ignored: !!p.is_ignored,
     // 2026-09-23:人工编辑的备注/标签 + 头程物流(导入侧本机为空时回填;旧版文件无这些字段,自然跳过)
     note: p.note ?? null,
@@ -529,25 +530,38 @@ function importOnePackage(pkgImp, report) {
       });
     }
   }
-  if (pkgImp.waybillPrintedAt && pkgImp.waybillPrintedAt !== pkg.waybill_printed_at) {
-    if (pkg.waybill_printed_at == null || exportedNewer) {
-      db.prepare(
-        `UPDATE op_package SET waybill_printed_at = ?,
-          operate_status = CASE
-          WHEN operate_status = 'wait_stick' THEN 'wait_dispatch'
-          WHEN operate_status = 'wait_dispatch' THEN 'dispatching'
-          ELSE operate_status END,
-          gmt_modified = ?
-         WHERE id = ?`
-      ).run(pkgImp.waybillPrintedAt, nowIso(), pkg.id);
-      report.applied.waybills++;
-    } else {
-      report.conflicts.push({
-        type: 'waybill_mismatch',
-        storeId: pkgImp.storeId,
-        postingNumber: pkgImp.postingNumber,
-        detail: `交运时间不同:本机 ${pkg.waybill_printed_at} vs 文件 ${pkgImp.waybillPrintedAt}(保留本机)`,
-      });
+  if (pkgImp.waybillPrintedAt || pkgImp.dispatchedAt) {
+    // 2026-11 起:打单时间(waybill_printed_at)/发运时间(dispatched_at)分开记录。
+    // 老版本导出文件无 dispatchedAt 字段,回退用 waybillPrintedAt 作为发运时间(旧逻辑该字段在交运时覆盖为交运时间)。
+    const impWaybill = pkgImp.waybillPrintedAt || null;
+    const impDispatched = pkgImp.dispatchedAt || pkgImp.waybillPrintedAt || null;
+    const waybillChanged = impWaybill && impWaybill !== pkg.waybill_printed_at;
+    const dispatchedChanged = impDispatched && impDispatched !== pkg.dispatched_at;
+    if (waybillChanged || dispatchedChanged) {
+      // 本机对应字段为空(回填)或文件更新时间较新才覆盖
+      const needWaybill = impWaybill && (pkg.waybill_printed_at == null || exportedNewer);
+      const needDispatched = impDispatched && (pkg.dispatched_at == null || exportedNewer);
+      if (needWaybill || needDispatched) {
+        db.prepare(
+          `UPDATE op_package SET
+            waybill_printed_at = CASE WHEN ?1 IS NOT NULL AND operate_status = 'wait_stick' THEN ?1 ELSE waybill_printed_at END,
+            dispatched_at = CASE WHEN ?2 IS NOT NULL AND operate_status = 'wait_dispatch' THEN ?2 ELSE dispatched_at END,
+            operate_status = CASE
+              WHEN operate_status = 'wait_stick' AND ?1 IS NOT NULL THEN 'wait_dispatch'
+              WHEN operate_status = 'wait_dispatch' AND ?2 IS NOT NULL THEN 'dispatching'
+              ELSE operate_status END,
+            gmt_modified = ?
+           WHERE id = ?`
+        ).run(needWaybill ? impWaybill : null, needDispatched ? impDispatched : null, nowIso(), pkg.id);
+        report.applied.waybills++;
+      } else {
+        report.conflicts.push({
+          type: 'waybill_mismatch',
+          storeId: pkgImp.storeId,
+          postingNumber: pkgImp.postingNumber,
+          detail: `处理时间不同:本机 打单${pkg.waybill_printed_at || '-'}/发运${pkg.dispatched_at || '-'} vs 文件 打单${impWaybill || '-'}/发运${impDispatched || '-'}(保留本机)`,
+        });
+      }
     }
   }
   const impIgnored = !!pkgImp.ignored;

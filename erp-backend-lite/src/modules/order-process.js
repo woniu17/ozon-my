@@ -1071,6 +1071,7 @@ router.post('/admin/api/order-process/scan-ship/submit', (req, res, next) => {
         operateStatus: r.operateStatus,
         isIgnored: r.isIgnored,
         waybillPrintedAt: r.waybillPrintedAt,
+        dispatchedAt: r.dispatchedAt,
         message,
       })
     );
@@ -1100,7 +1101,7 @@ router.post('/admin/api/order-process/scan-ship/correct-weight', (req, res, next
   }
 });
 
-// 发货记录:今日/昨日已交运包裹(按 waybill_printed_at 北京时间日界切分,倒序)
+// 发货记录:今日/昨日已交运包裹(按发运时间 dispatched_at 北京时间日界切分,倒序)
 // query: day=today|yesterday(默认 today), page(默认1), pageSize(默认20,≤500;前端不分页一次拉全量)
 // 响应含:items(产品行)/purchaseLinks/weightG+weightSource(富化同 /list)
 router.get('/admin/api/order-process/scan-ship/records', (req, res, next) => {
@@ -1449,12 +1450,14 @@ router.post('/admin/api/order-process/sync-package', async (req, res, next) => {
 //   未采购(wait_process)不可入库——必须采购后才可入库。
 // 2026-10-23:解除搁置订单入库限制(前端二次弹窗确认,保持搁置标记)
 function markStocked(packageId) {
+  const now = new Date().toISOString();
   db.prepare(
     `UPDATE op_package
         SET operate_status = CASE WHEN operate_status = 'wait_stock' THEN 'wait_stick' ELSE operate_status END,
+            stocked_at = CASE WHEN operate_status = 'wait_stock' THEN ? ELSE stocked_at END,
             gmt_modified = ?
       WHERE id = ?`
-  ).run(new Date().toISOString(), packageId);
+  ).run(now, now, packageId);
 }
 router.post('/admin/api/order-process/ship', async (req, res, next) => {
   try {
@@ -1884,11 +1887,12 @@ router.post('/admin/api/order-process/carriage/approve', async (req, res) => {
         db.prepare(
           `UPDATE op_package
               SET operate_status = CASE WHEN operate_status = 'wait_dispatch' THEN 'dispatching' ELSE operate_status END,
+                  dispatched_at = CASE WHEN operate_status = 'wait_dispatch' THEN ? ELSE dispatched_at END,
                   gmt_modified = ?
             WHERE ozon_order_id IN (
               SELECT id FROM op_ozon_order WHERE posting_number IN (${postingNumbers.map(() => '?').join(',')})
             )`
-        ).run(now, ...postingNumbers);
+        ).run(now, now, ...postingNumbers);
       }
     } catch (e) {
       logger.warn({ err: e?.message, carriageId }, '[order-process] 确认发运后推进货件状态失败');

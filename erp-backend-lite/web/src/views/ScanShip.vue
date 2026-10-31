@@ -1242,7 +1242,7 @@ function onPrinterChange() {
               </button>
             </template>
             <template v-else-if="canReprintCard(pkg)">
-              <span class="tag tag-ok">{{ OPERATE_LABELS[pkg.operateStatus]?.label || pkg.operateStatus }} {{ fmtTime(pkg.waybillPrintedAt || pkg.shippedAt) }}</span>
+              <span class="tag tag-ok">{{ OPERATE_LABELS[pkg.operateStatus]?.label || pkg.operateStatus }} {{ fmtTime(pkg.dispatchedAt || pkg.waybillPrintedAt || pkg.shippedAt) }}</span>
               <span class="ref-weight" :title="WEIGHT_SOURCE_LABELS[pkg.weightSource] || ''">称重 {{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span>
               <!-- 更正重量:打印发货后人工修正(内联输入,Enter 保存 / Esc 取消) -->
               <template v-if="correct.pkgId === pkg.id">
@@ -1396,7 +1396,7 @@ function onPrinterChange() {
               <div class="record-line" :title="WEIGHT_SOURCE_LABELS[p.weightSource] || ''">
                 称重 {{ p.weightG != null ? Math.floor(p.weightG) + 'g' : '—' }}
               </div>
-              <div class="record-line">打印发货 {{ fmtTime(p.waybillPrintedAt) }}</div>
+              <div class="record-line">打印发货 {{ fmtTime(p.dispatchedAt || p.waybillPrintedAt) }}</div>
             </div>
           </div>
         </div>
