@@ -17,6 +17,18 @@ function buildStoreClause(storeIds, prefix = '') {
   return { sql: ` AND ${prefix}store_id IN (${ids.map(() => '?').join(',')})`, params: ids };
 }
 
+// error_at 存的是 Ozon 返回的完整 RFC3339 时间戳(如 2026-10-13T16:00:18Z)。
+// 查询/删除不能用纯日期字符串比较(会漏掉 to 当天数据),统一用半开区间:
+//   [dayStart(from), dayEndExclusive(to)) 即 [from 00:00:00Z, to+1天 00:00:00Z)
+function dayStart(isoDate) {
+  return `${String(isoDate)}T00:00:00Z`;
+}
+function dayEndExclusive(isoDate) {
+  const d = new Date(`${String(isoDate)}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString();
+}
+
 /** upsert 每日错误指数(同店铺同日覆盖) */
 export function replaceRatingDaily(storeId, date, indexByDate, costsByDate, periodFrom, periodTo) {
   db.prepare(
@@ -111,8 +123,8 @@ export function clearRatingDaily(storeIds, from, to) {
 export function clearRatingErrors(storeIds, from, to) {
   const c = buildStoreClause(storeIds);
   db.prepare(
-    `DELETE FROM op_rating_error_posting WHERE error_at BETWEEN ? AND ?${c.sql}`
-  ).run(String(from), String(to), ...c.params);
+    `DELETE FROM op_rating_error_posting WHERE error_at >= ? AND error_at < ?${c.sql}`
+  ).run(dayStart(from), dayEndExclusive(to), ...c.params);
 }
 
 /** 每店每日序列(趋势图):返回 [{ storeId, date, indexByDate, processingCostsSumByDate }] */
@@ -150,14 +162,14 @@ export function getRatingErrorTotals(storeIds, from, to) {
        SUM(charge_price) AS chargeSum,
        MAX(charge_price_currency_code) AS chargeCurrencyCode
      FROM op_rating_error_posting
-     WHERE error_at BETWEEN ? AND ?${c.sql}`
-  ).get(String(from), String(to), ...c.params);
+     WHERE error_at >= ? AND error_at < ?${c.sql}`
+  ).get(dayStart(from), dayEndExclusive(to), ...c.params);
   const schemaRows = db.prepare(
     `SELECT delivery_schema AS deliverySchema, COUNT(*) AS n
      FROM op_rating_error_posting
-     WHERE error_at BETWEEN ? AND ?${c.sql}
+     WHERE error_at >= ? AND error_at < ?${c.sql}
      GROUP BY delivery_schema`
-  ).all(String(from), String(to), ...c.params);
+  ).all(dayStart(from), dayEndExclusive(to), ...c.params);
   return {
     errorPostingCount: Number(row?.errorPostingCount) || 0,
     sellerCancellationCount: Number(row?.sellerCancellationCount) || 0,
@@ -180,8 +192,8 @@ export function getRatingErrors(storeIds, from, to, { limit = 50, offset = 0 } =
   const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
   const off = Math.max(Number(offset) || 0, 0);
   const total = db.prepare(
-    `SELECT COUNT(*) AS n FROM op_rating_error_posting WHERE error_at BETWEEN ? AND ?${cTotal.sql}`
-  ).get(String(from), String(to), ...cTotal.params).n;
+    `SELECT COUNT(*) AS n FROM op_rating_error_posting WHERE error_at >= ? AND error_at < ?${cTotal.sql}`
+  ).get(dayStart(from), dayEndExclusive(to), ...cTotal.params).n;
   const items = db.prepare(
     `SELECT e.store_id AS storeId,
             e.posting_number AS postingNumber,
@@ -198,9 +210,9 @@ export function getRatingErrors(storeIds, from, to, { limit = 50, offset = 0 } =
             o.status AS orderStatus
      FROM op_rating_error_posting e
      LEFT JOIN op_ozon_order o ON o.store_id = e.store_id AND o.posting_number = e.posting_number
-     WHERE e.error_at BETWEEN ? AND ?${cItems.sql}
+     WHERE e.error_at >= ? AND e.error_at < ?${cItems.sql}
      ORDER BY e.error_at DESC, e.id DESC
      LIMIT ? OFFSET ?`
-  ).all(String(from), String(to), ...cItems.params, n, off);
+  ).all(dayStart(from), dayEndExclusive(to), ...cItems.params, n, off);
   return { items, total: Number(total) || 0 };
 }

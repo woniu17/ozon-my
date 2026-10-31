@@ -1103,6 +1103,22 @@ export function ratingIndexFbsInfo(store) {
 //         delivery_schema, error_at, index, has_grace_status, charge_percent,
 //         charge_price, charge_price_currency_code, product_price,
 //         product_price_currency_code }] }
+// 注意: Ozon 按 protobuf Timestamp 校验日期,纯日期(如 2026-09-26)会 400,
+//       必须传 RFC3339。date_from 取当日 00:00:00Z(包含),date_to 取次日
+//       00:00:00Z(排他上界,确保覆盖 dateTo 全天)。
+function toOzonTimestamp(date, endExclusive = false) {
+  const s = String(date);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    if (endExclusive) {
+      const d = new Date(`${s}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + 1);
+      return d.toISOString();
+    }
+    return `${s}T00:00:00Z`;
+  }
+  return s;
+}
+
 export function ratingIndexFbsPostingList(
   store,
   { dateFrom, dateTo, cursor, limit = 100, postingNumbers } = {}
@@ -1111,7 +1127,10 @@ export function ratingIndexFbsPostingList(
   if (!Number.isInteger(n) || n < 1 || n > 1000) {
     throw new ApiError(ErrorCode.VALIDATION_ERROR, `limit 必须为 1~1000 的整数,收到: ${limit}`);
   }
-  const filter = { date_from: dateFrom, date_to: dateTo };
+  const filter = {
+    date_from: toOzonTimestamp(dateFrom),
+    date_to: toOzonTimestamp(dateTo, true),
+  };
   if (postingNumbers?.length) filter.posting_numbers = postingNumbers;
   const body = { filter, limit: n };
   if (cursor) body.cursor = cursor;
