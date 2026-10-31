@@ -1341,7 +1341,7 @@ function getPurchasesByPackageIds(packageIds) {
  */
 /** 批量查包裹重量(g,用于国际配送费公式 3.37 + 0.0281 × weight_g)
  *  优先级(从高到低):
- *    1) 发货重量(op_package.weight,扫描打单录入/妙手同步写入,同一概念同一字段)
+ *    1) 打单重量(op_package.weight,扫描打单录入/妙手同步写入,同一概念同一字段)
  *    2) 妙手称重(miaoshou_package.weighing_weight,by posting_number,ms-to-local 未同步过的兜底)
  *    3) 系统自定义重量(product_data_cache.custom_weight_g,按 quantity 加权)
  *    4) Ozon 后台同步重量(product_attributes_cache.attributes_data.weight,按 quantity 加权)
@@ -1352,7 +1352,7 @@ function getWeightsByPackageIds(packageIds) {
   if (!packageIds || !packageIds.length) return new Map();
   const ph = packageIds.map(() => '?').join(',');
   // 重量来源(优先级从高到低):
-  //   1. 发货重量(op_package.weight,扫描打单/妙手同步共用) → source='ship'
+  //   1. 打单重量(op_package.weight,扫描打单/妙手同步共用) → source='ship'
   //   2. 妙手称重(miaoshou_package.weighing_weight) → source='miaoshou'
   //   3. 系统自定义重量(product_data_cache.custom_weight_g) → source='system'
   //   4. Ozon 后台同步重量(product_attributes_cache.attributes_data.weight,按 quantity 加权) → source='ozon'
@@ -2252,8 +2252,8 @@ function updatePackageMeta(packageId, meta = {}) {
 }
 
 /** 标记已打印面单(打单/交运两步):
- *   wait_stick → wait_dispatch(打单完成,记录打单时间 waybill_printed_at)
- *   wait_dispatch → dispatching(个人自发货扫描交运:重量已录,打印面单成功后推进,记录发运时间 dispatched_at)
+ *   wait_stick → wait_dispatch(打单完成,记录打单时间 waybill_printed_at;扫描打单页)
+ *   wait_dispatch → dispatching(个人自发货打印并发货:重量已录,打印面单成功后推进,记录交运时间 dispatched_at;订单处理页)
  *   两个时间字段分开记录,不再互相覆盖。
  */
 function markWaybillPrinted(packageId) {
@@ -2284,9 +2284,11 @@ function getPackagePostings(packageIds) {
     .all(...packageIds);
 }
 
-/** 扫描打单提交:按 DB 当前状态权威校验,仅 wait_dispatch(待发运)时写入发货重量
- *  op_package.weight 即发货重量唯一载体(扫描录入/妙手同步共用,2026-09-13 确认)
- *  2026-10-23:解除搁置订单提交发货限制(前端二次弹窗确认,保持搁置标记)
+/** 扫描打单提交:按 DB 当前状态权威校验,仅 wait_stick(待打单)时写入打单重量
+ *  op_package.weight 即打单重量唯一载体(扫描录入/妙手同步共用,2026-09-13 确认)
+ *  wait_stick → 称重打单:重量落库,前端打印面单后由 markWaybillPrinted 推进待发运(wait_dispatch)
+ *             待发运的交运在订单处理/发运管理进行,不在扫描打单页
+ *  2026-10-23:解除搁置订单打单限制(前端二次弹窗确认,保持搁置标记)
  *  @returns {{ found: false } | { found: true, canShip, operateStatus, isIgnored, waybillPrintedAt }}
  */
 function scanShipSubmit(packageId, weightG) {
@@ -2295,7 +2297,7 @@ function scanShipSubmit(packageId, weightG) {
     .get(packageId);
   if (!row) return { found: false };
   const isIgnored = !!row.is_ignored;
-  const canShip = row.operate_status === 'wait_dispatch';
+  const canShip = row.operate_status === 'wait_stick';
   if (canShip) {
     db.prepare(`UPDATE op_package SET weight = ?, gmt_modified = ? WHERE id = ?`).run(
       weightG, nowIso(), packageId
@@ -2311,7 +2313,7 @@ function scanShipSubmit(packageId, weightG) {
   };
 }
 
-/** 扫描打单更正重量:任意状态人工修正发货重量(2026-09-22 起解除交运限制)
+/** 扫描打单更正重量:任意状态人工修正打单重量(2026-09-22 起解除交运限制)
  *  与妙手同步的"交运锁定"约束不同——锁定仅针对同步任务自动覆盖,人工更正是显式操作,允许写
  *  @returns {{ found: false } | { found: true, shipped, operateStatus, oldWeightG }}
  */
@@ -2331,16 +2333,16 @@ function scanShipCorrectWeight(packageId, weightG) {
   };
 }
 
-/** 发货记录:按发运时间(dispatched_at,历史数据已回填)UTC 区间查已交运包裹(扫描打单页右侧栏)
+/** 打单记录:按打单时间(waybill_printed_at,历史数据回退 dispatched_at)UTC 区间查已打单包裹(扫描打单页右侧栏)
  *  @param {Object} filters { startAt, endAt, page, pageSize }
- *  startAt/endAt 为 UTC ISO 字符串,区间 [startAt, endAt);按交运时间倒序
+ *  startAt/endAt 为 UTC ISO 字符串,区间 [startAt, endAt);按打单时间倒序
  *  采购关联已聚合进 purchaseLinks(每包裹);items/weights 由路由层富化
  */
-function listShippedPackages({ startAt, endAt, page, pageSize } = {}) {
+function listPrintedPackages({ startAt, endAt, page, pageSize } = {}) {
   const pageNo = Math.max(1, Number(page) || 1);
   // 上限 500:扫描打单记录不分页,前端一次拉全量滚动浏览(2026-09-16)
   const size = Math.min(500, Math.max(1, Number(pageSize) || 20));
-  const shipTs = `COALESCE(p.dispatched_at, p.waybill_printed_at)`;
+  const shipTs = `COALESCE(p.waybill_printed_at, p.dispatched_at)`;
   const where = `${shipTs} IS NOT NULL AND ${shipTs} >= ? AND ${shipTs} < ?`;
   const params = [startAt, endAt];
   const total = db
@@ -2377,7 +2379,7 @@ function listShippedPackages({ startAt, endAt, page, pageSize } = {}) {
 }
 
 // ── 打印日志(print-agent 转发,2026-10-22)──────────────────────
-// 北京时间日界 → UTC 区间(与发货记录同口径):北京 00:00 = UTC 前一日 16:00
+// 北京时间日界 → UTC 区间(与打单记录同口径):北京 00:00 = UTC 前一日 16:00
 function beijingDayRangeUtc(day) {
   const bjNow = new Date(Date.now() + 8 * 3600_000);
   let start = Date.UTC(bjNow.getUTCFullYear(), bjNow.getUTCMonth(), bjNow.getUTCDate()) - 8 * 3600_000;
@@ -2594,7 +2596,7 @@ function syncFromMiaoshou({ packageIds } = {}) {
   const msMap = new Map(msRows.map((r) => [r.posting_number, r]));
 
   // 3) 预编译语句
-  // weight 交运锁(2026-09-13):发货重量一经交运(waybill_printed_at 非空)且已有值即锁定,
+  // weight 交运锁(2026-09-13):打单重量一经交运(waybill_printed_at 非空)且已有值即锁定,
   // 妙手同步不再覆盖(本系统替代妙手 ERP,扫描打单录入的实物秤重优先);未交运或本地为空时正常覆盖
   const updPkg = db.prepare(
     `UPDATE op_package
@@ -2865,7 +2867,7 @@ export const orderPackageDao = {
   getPackagePostings,
   scanShipSubmit,
   scanShipCorrectWeight,
-  listShippedPackages,
+  listPrintedPackages,
   insertPrintLog,
   listPrintLogs,
   printStats,

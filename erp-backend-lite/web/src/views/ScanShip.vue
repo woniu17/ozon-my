@@ -1,11 +1,11 @@
 <script setup>
-// 扫描打单(2026-09,设计文档: docs/扫描打单-功能设计.md)
-// 打包发货场景:扫采购快递单号/采购单号/Ozon单号 → 全局搜索定位包裹 → 录入实物重量
-// → wait_dispatch(待发运)打印面单并流转交运;非 wait_dispatch 提示状态问题不动状态
-//            交运中(dispatching)/已揽收(delivering)/已签收(signed)/已成功(settled)均可重打面单(缓存秒出,不改状态)
-// 键盘流:扫描框 Enter=搜索 → 重量框 Enter=发货 → 终态自动回焦扫描框(扫码枪零鼠标作业)
+// 扫描打单(2026-09,设计文档: docs/扫描打单-功能设计.md;2026-11 纠正:仅针对「待打单」)
+// 打单场景:扫采购快递单号/采购单号/Ozon单号 → 全局搜索定位包裹 → 录入实物重量
+// → wait_stick(待打单)称重打单:打印面单后进入待发运(wait_dispatch),交运在订单处理/发运管理进行
+//   待发运及之后状态(待发运/交运中/已揽收/已签收/已成功)均可重打面单(缓存秒出,不改状态)
+// 键盘流:扫描框 Enter=搜索 → 重量框 Enter=打单 → 终态自动回焦扫描框(扫码枪零鼠标作业)
 // 2026-09-15:商品/采购信息下方公式化展示订单金额+利润计算过程(估/实+销售/成本利润率),
-//            打印发货后按称重重算;发货记录列表可滚动
+//            打单后按称重重算利润;打单记录列表可滚动
 // 2026-09-22:任意状态均可人工更正重量(利润随之重估);产品行新增"单价调整"折叠块(口径同订单处理采购弹窗)
 import { ref, reactive, computed, onMounted, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
@@ -22,9 +22,8 @@ const { show } = useToast();
 const confirmStore = useConfirmStore();
 const router = useRouter();
 const route = useRoute();
-// 独立「扫描入库」页(/scan-stock):固定入库模式,隐藏工作模式切换,连扫自动入库
+// 扫描打单页(/scan-ship)固定「打单」模式;独立「扫描入库」页(/scan-stock)固定入库模式,连扫自动入库
 const isStockPage = computed(() => route.path === '/scan-stock');
-const workMode = ref(isStockPage.value ? 'stock' : 'ship'); // 'ship'发货(默认) | 'stock'入库(扫到待入库订单自动入库,连扫)
 
 // ── 扫描输入 ─────────────────────────────────────────────
 const scanForm = reactive({ keyword: '', mode: 'ss' }); // mode: 'ss'模糊(默认,防拼单逗号拼接漏单) | 'eq'精确
@@ -53,7 +52,7 @@ const banner = reactive({ type: '', text: '' }); // type: 'ok'|'err'|'info'
 const weightValues = reactive({});
 const weightErrors = reactive({});
 
-// ── 更正重量(人工修正发货重量,利润随之重算;2026-09-22 起任意状态可用)──
+// ── 更正重量(人工修正打单重量,利润随之重算;2026-09-22 起任意状态可用)──
 const correct = reactive({ pkgId: 0, value: '', err: '', saving: false });
 
 // ── 单价调整(2026-09-22,口径同 OrderProcess 采购弹窗;调整该 SKU 上架价,只影响后续新订单)──
@@ -66,7 +65,7 @@ const poCmpExpanded = reactive({});  // 单价调整折叠展开(pkgId:sku → b
 const poRateChoice = reactive({});   // 每行目标率(sku → 40~90,未选默认 50)
 const adjustingSku = ref('');
 
-// ── 发货记录(右侧栏,仅 /scan-ship 显示)────────────────────
+// ── 打单记录(右侧栏,仅 /scan-ship 显示)────────────────────
 const RECORD_TABS = [
   { key: 'today', label: '今日' },
   { key: 'yesterday', label: '昨日' },
@@ -130,7 +129,7 @@ const OPERATE_LABELS = {
   returned: { label: '已退货', cls: 'tag-warn' },
   cancelled: { label: '已取消', cls: 'tag-err' },
 };
-const WEIGHT_SOURCE_LABELS = { ship: '发货称重', miaoshou: '订单称重', system: '系统维护', ozon: 'Ozon后台同步' };
+const WEIGHT_SOURCE_LABELS = { ship: '打单称重', miaoshou: '订单称重', system: '系统维护', ozon: 'Ozon后台同步' };
 
 /** 采购商品详情页链接(对齐 OrderProcess:平台 + 商品ID 拼 URL;ID 缺失/非数字返回空) */
 function goodsDetailUrl(platform, goodsId) {
@@ -170,7 +169,7 @@ function profitEstimated(pkg) {
   return pkg.profit ? pkg.profit.estimated !== false : true;
 }
 
-// 打印发货/更正重量后,按新重量本地重算利润(预估口径,公式与后端 computeProfit 一致)
+// 打单/更正重量后,按新重量本地重算利润(预估口径,公式与后端 computeProfit 一致)
 // 真实应计口径(estimated=false)/已取消/已退货的利润不随重量变化,不重算
 const EST_COMMISSION_RATE = 0.16;   // 预估佣金率(对齐后端 DEFAULT_COMMISSION_RATE)
 function recomputeProfitByWeight(pkg, g) {
@@ -250,7 +249,7 @@ function fmtTime(t) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
-// ── 最迟发货时间与剩余时间(2026-09-17,数据源 op_package.last_delivery_at 冗余自 Ozon shipment_date)──
+// ── 最迟交运时间与剩余时间(2026-09-17,数据源 op_package.last_delivery_at 冗余自 Ozon shipment_date)──
 // 颜色分级:已超时=红加粗 / <24h=红 / <48h=橙 / 其余默认灰
 function shipRemainCls(pkg) {
   if (!pkg.lastDeliveryAt) return '';
@@ -288,28 +287,31 @@ function tagColorClass(name) {
 function operateTag(pkg) {
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus, cls: 'tag-mute' };
 }
-// 卡片是否可发货(快照预判;submit 时服务端权威二次校验)
-// 2026-11:仅待发运(wait_dispatch)可扫描交运;2026-10-23:解除搁置订单限制,允许打单发货(前端二次弹窗确认,保持搁置标记)
+// 卡片是否可操作(快照预判;submit 时服务端权威二次校验)
+// 2026-11:扫描打单仅针对待打单(wait_stick),称重打单→待发运;待发运交运请到订单处理/发运管理
+//         2026-10-23:解除搁置订单限制,允许打单(前端二次弹窗确认,保持搁置标记)
 function canShipCard(pkg) {
-  return pkg.operateStatus === 'wait_dispatch';
+  return pkg.operateStatus === 'wait_stick';
 }
-// 已交运及之后状态卡片可重打面单(2026-09-27:已揽收/已签收/已成功亦开放;缓存秒出,不改状态)
+// 待打单之后状态卡片可重打面单(2026-11:待发运起全部开放;缓存秒出,不改状态)
+// 待发运/交运中/已揽收/已签收/已成功 均可重新打印面单
 function canReprintCard(pkg) {
-  return pkg.operateStatus === 'dispatching' || pkg.operateStatus === 'delivering'
-    || pkg.operateStatus === 'signed' || pkg.operateStatus === 'settled';
+  return pkg.operateStatus === 'wait_dispatch' || pkg.operateStatus === 'dispatching'
+    || pkg.operateStatus === 'delivering' || pkg.operateStatus === 'signed'
+    || pkg.operateStatus === 'settled';
 }
 // 待入库卡片可「入库」(同 OrderProcess 行按钮口径;2026-11 必须采购后才可入库):Ozon 仍处于 awaiting_packaging
 // 2026-10-23:解除搁置订单限制,允许入库(前端二次弹窗确认,保持搁置标记)
 function canShipPkg(pkg) {
   return pkg.operateStatus === 'wait_stock' && pkg.ozonStatus === 'awaiting_packaging' && !!pkg.id;
 }
-// 非 wait_dispatch 卡片的拦截原因(置灰卡 + 横幅文案同源)
+// 非可操作卡片的拦截原因(置灰卡 + 横幅文案同源;仅 wait_stick 可操作,其余状态进入此分支)
 function blockReason(pkg) {
   if (pkg.isIgnored) return '已搁置';
   switch (pkg.operateStatus) {
     case 'wait_process': return '待采购(未采购)';
     case 'wait_stock': return '待入库';
-    case 'wait_stick': return '待打单';
+    case 'wait_dispatch': return '待发运';
     case 'dispatching': return '交运中';
     case 'delivering': return '已揽收';
     case 'signed': return '已签收';
@@ -346,7 +348,7 @@ async function doSearch() {
     const n = results.value.length;
     // 入库模式(2026-10-27):扫到待入库订单自动入库,实现连扫
     // 单件商品直接入库,多件弹窗二次确认;无待入库订单时回落普通搜索/卡片操作
-    if (workMode.value === 'stock') {
+    if (isStockPage.value) {
       const stockPkgs = results.value.filter((p) => canShipPkg(p));
       if (stockPkgs.length === 1) {
         const sp = stockPkgs[0];
@@ -379,7 +381,7 @@ async function doSearch() {
     } else {
       // 多结果(拼单场景):需人工选卡
       banner.type = 'info';
-      banner.text = `命中 ${n} 个包裹,请选择要发货的订单`;
+      banner.text = `命中 ${n} 个包裹,请选择要打单的订单`;
       focusScan();
     }
   } catch (err) {
@@ -471,15 +473,16 @@ async function onShipPackage(pkg) {
   }
 }
 
-// ── 发货提交(核心流程)──────────────────────────────────
-// 提交重量 → 服务端权威状态校验 → canShip(待发运)时打印面单 → 出纸后 markPrinted 流转交运中
+// ── 打单提交(核心流程)──────────────────────────────────
+// 提交重量 → 服务端权威状态校验 → canShip(待打单)时打印面单
+// → 出纸后 markPrinted 流转:待打单→待发运(打单完成)
 async function onSubmitShip(pkg) {
   if (printingPkgId.value) return;
   // 搁置订单二次确认(2026-10-23):已搁置先确认再操作(保持搁置标记)
   if (pkg.isIgnored) {
     const okIgnored = await confirmStore.ask({
       title: '搁置订单操作确认',
-      message: '该订单当前为【已搁置】状态，确认继续提交发货吗？',
+      message: '该订单当前为【已搁置】状态，确认继续打单吗？',
       confirmText: '确认操作',
     });
     if (!okIgnored) return;
@@ -493,7 +496,7 @@ async function onSubmitShip(pkg) {
     return;
   }
   weightErrors[pkg.id] = '';
-  // 标签/备注二次确认(2026-10-27):订单带标签或备注时,打印并发货前弹提示,避免漏看
+  // 标签/备注二次确认(2026-10-27):订单带标签或备注时,打印前弹提示,避免漏看
   const hasTags = !!(pkg.tags && pkg.tags.length);
   const hasNote = !!(pkg.note && pkg.note.trim());
   if (hasTags || hasNote) {
@@ -502,8 +505,8 @@ async function onSubmitShip(pkg) {
     if (hasNote) infoLines.push(`备注:${pkg.note}`);
     const okInfo = await confirmStore.ask({
       title: '订单标签/备注提醒',
-      message: `包裹 ${pkg.postingNumber}\n${infoLines.join('\n')}\n\n确认打印面单并发货吗?`,
-      confirmText: '确认发货',
+      message: `包裹 ${pkg.postingNumber}\n${infoLines.join('\n')}\n\n确认打印面单并进入待发运吗?`,
+      confirmText: '确认打单',
     });
     if (!okInfo) return;
   }
@@ -513,11 +516,11 @@ async function onSubmitShip(pkg) {
     // 1) 服务端权威校验(覆盖搜索后状态被同步任务/他端操作改变的场景)
     const r = await scanShipSubmit(pkg.id, g);
     if (!r.canShip) {
-      // 非 wait_dispatch:不打印不改状态,横幅提示原因
+      // 非可扫描状态(非待打单):不打印不改状态,横幅提示原因
       banner.type = 'err';
       banner.text = r.message || `订单状态问题:${r.operateStatus}`;
-      // 交运中及之后:可选重打(缓存秒出,不改状态;搁置订单亦允许,2026-10-23)
-      if (['dispatching', 'delivering', 'signed', 'settled'].includes(r.operateStatus)) {
+      // 待打单之后(待发运/交运中/已揽收/已签收/已成功):可选重打(缓存秒出,不改状态;搁置订单亦允许,2026-10-23)
+      if (['wait_dispatch', 'dispatching', 'delivering', 'signed', 'settled'].includes(r.operateStatus)) {
         const ok = await confirmStore.ask({
           message: `包裹 ${pkg.postingNumber} 已交运(状态 ${r.operateStatus})。面单丢失或打花?重新打印面单(不改状态)`,
         });
@@ -527,15 +530,15 @@ async function onSubmitShip(pkg) {
       return;
     }
     submitted = true; // canShip=true → 重量已落库
-    // 2) 打印面单 → 出纸后流转交运中
+    // 2) 打印面单 → 出纸后流转:待打单→待发运(打单完成)
     await doPrint(pkg, { reprint: false });
     banner.type = 'ok';
-    banner.text = `✓ 已交运 ${pkg.postingNumber} · 重量 ${g}g · 面单已打印`;
+    banner.text = `✓ 已打单 ${pkg.postingNumber} · 重量 ${g}g · 面单已打印,进入待发运`;
     // 卡片就地流转(留作上下文,不消失)
-    pkg.operateStatus = 'dispatching';
+    pkg.operateStatus = 'wait_dispatch';
     pkg.weightG = g;
     pkg.weightSource = 'ship';
-    // 打印发货后按称重重量重算利润(预估口径,国际配送费随重量变化)
+    // 打单后按称重重量重算利润(预估口径,国际配送费随重量变化)
     recomputeProfitByWeight(pkg, g);
     retryPkgIds.value.delete(pkg.id);
     refreshRecords();
@@ -558,7 +561,7 @@ async function onSubmitShip(pkg) {
   }
 }
 
-// 拉面单 → 组件静默出纸;reprint=true 时不动状态(markPrinted 会刷新交运时间,重打禁止)
+// 拉面单 → 组件静默出纸;reprint=true 时不动状态(markPrinted 会流转待打单→待发运,重打禁止)
 async function doPrint(pkg, { reprint }) {
   const blob = await fetchPackageLabel([pkg.id]);
   const printer = await pickLabelPrinter();
@@ -567,7 +570,7 @@ async function doPrint(pkg, { reprint }) {
     await markPrinted(pkg.id);
   } else {
     banner.type = 'ok';
-    banner.text = `面单已重新打印(交运中及之后状态订单,状态不变)`;
+    banner.text = `面单已重新打印(待发运及之后状态订单,状态不变)`;
   }
 }
 
@@ -578,8 +581,8 @@ async function onRetryPrint(pkg) {
   try {
     await doPrint(pkg, { reprint: false });
     banner.type = 'ok';
-    banner.text = `✓ 已交运 ${pkg.postingNumber} · 面单已打印`;
-    pkg.operateStatus = 'dispatching';
+    banner.text = `✓ 已打单 ${pkg.postingNumber} · 面单已打印,进入待发运`;
+    pkg.operateStatus = 'wait_dispatch';
     // 回填已保存重量(卡片显示的仍是搜索时快照,不含提交的称重值)
     const savedG = retryWeights[pkg.id];
     if (savedG != null) {
@@ -620,7 +623,7 @@ async function onReprint(pkg) {
   }
 }
 
-// ── 更正重量(任意状态:人工修正发货重量,利润随之重算)──
+// ── 更正重量(任意状态:人工修正打单重量,利润随之重算)──
 function onStartCorrect(pkg) {
   correct.pkgId = pkg.id;
   correct.value = pkg.weightG != null ? String(Math.floor(pkg.weightG)) : '';
@@ -674,14 +677,14 @@ async function loadSkuPricing(skus) {
 }
 // 当前包裹的单件均重(实物称重总量 ÷ 包裹内商品总数):
 //   - 待发运:优先取重量输入框的录入值(实时预览),未录入回退已保存重量;
-//   - 已交运及之后:以保存的发货重量为准(录入值已失效,更正重量后自动联动);
+//   - 已交运及之后:以保存的打单重量为准(录入值已失效,更正重量后自动联动);
 // 无称重返回 null(单价调整回退 SKU 维护重量)
 function pkgUnitWeightG(pkg) {
   const totalQty = (pkg.items || []).reduce((s, i) => s + (Number(i.quantity) || 0), 0);
   if (!(totalQty > 0)) return null;
   const raw = String(weightValues[pkg.id] ?? '').trim();
   const typedG = /^\d+$/.test(raw) ? Number(raw) : 0;
-  const useTyped = canShipCard(pkg) && typedG > 0; // 仅待打单卡片的输入值有效
+  const useTyped = canShipCard(pkg) && typedG > 0; // 仅可操作卡片(待打单/待发运)的输入值有效
   const savedG = pkg.weightG != null ? Number(pkg.weightG) : 0;
   const totalG = useTyped ? typedG : savedG;
   if (!(totalG > 0)) return null;
@@ -817,7 +820,7 @@ function switchRecordTab(key) {
   loadRecords();
 }
 
-// 发货成功后静默刷新(不抢焦点;计数同步更新)
+// 打单成功后静默刷新(不抢焦点;计数同步更新)
 async function refreshRecords() {
   try {
     const data = await getScanShipRecords({
@@ -891,10 +894,6 @@ function onPrinterChange() {
     <!-- ① 扫描输入区(sticky,扫码枪主操作目标) -->
     <div class="scan-bar-wrap">
       <div class="scan-bar card">
-        <select v-if="!isStockPage" v-model="workMode" class="filter-input scan-mode" title="工作模式:入库=扫到待入库订单自动入库(单件直接,多件确认);发货=正常扫描打单流程">
-          <option value="ship">发货</option>
-          <option value="stock">入库</option>
-        </select>
         <select v-model="scanForm.mode" class="filter-input scan-mode" title="匹配模式:默认模糊(拼单采购单号逗号拼接,精确匹配会漏单)">
           <option value="ss">模糊</option>
           <option value="eq">精确</option>
@@ -958,7 +957,7 @@ function onPrinterChange() {
       <!-- ③ 搜索结果(左侧工作区) -->
       <section class="results-col" aria-label="搜索结果">
         <div v-if="!results.length" class="empty card">
-          {{ searching ? '搜索中…' : (isStockPage ? '扫描采购快递单号开始入库' : '扫描采购快递单号开始发货') }}
+          {{ searching ? '搜索中…' : (isStockPage ? '扫描采购快递单号开始入库' : '扫描采购快递单号开始称重打单') }}
         </div>
 
         <div
@@ -973,7 +972,7 @@ function onPrinterChange() {
           :aria-current="selectedId === pkg.id ? 'true' : undefined"
           @click="selectCard(pkg)"
         >
-          <!-- 订单级信息(横贯整行,2026-09-17 布局):店铺/货件号/状态/下单时间/最迟发货时间/标签/备注 -->
+          <!-- 订单级信息(横贯整行,2026-09-17 布局):店铺/货件号/状态/下单时间/最迟交运时间/标签/备注 -->
           <div class="pkg-order">
                 <div class="order-line order-line1">
                   <span class="order-store">{{ pkg.storeName }}</span>
@@ -995,8 +994,8 @@ function onPrinterChange() {
                 <div class="order-line">
                   下单 {{ fmtTime(pkg.inProcessAt) }}
                   <template v-if="pkg.lastDeliveryAt">
-                    · 最迟发货 {{ fmtTime(pkg.lastDeliveryAt) }}
-                    <span class="ship-remain" :class="shipRemainCls(pkg)" :title="'Ozon 最迟发货时间(shipment_date)'">{{ fmtRemain(pkg) }}</span>
+                    · 最迟交运 {{ fmtTime(pkg.lastDeliveryAt) }}
+                    <span class="ship-remain" :class="shipRemainCls(pkg)" :title="'Ozon 最迟交运时间(shipment_date)'">{{ fmtRemain(pkg) }}</span>
                   </template>
                 </div>
               </div>
@@ -1235,16 +1234,16 @@ function onPrinterChange() {
               <button
                 class="btn btn-primary ship-btn"
                 :disabled="selectedId !== pkg.id || printingPkgId === pkg.id || printingPkgId !== 0"
-                :title="retryPkgIds.has(pkg.id) ? '重量已保存,重试打印面单并流转交运中' : '打印面单并流转交运中(仅待发运状态)'"
+                :title="retryPkgIds.has(pkg.id) ? '重量已保存,重试打印面单并流转状态' : '录入重量并打印面单,完成打单后进入待发运'"
                 @click.stop="retryPkgIds.has(pkg.id) ? onRetryPrint(pkg) : onSubmitShip(pkg)"
               >
-                {{ printingPkgId === pkg.id ? '打印中…' : retryPkgIds.has(pkg.id) ? '重试打印' : '打印并发货' }}
+                {{ printingPkgId === pkg.id ? '打印中…' : retryPkgIds.has(pkg.id) ? '重试打印' : '称重打单' }}
               </button>
             </template>
             <template v-else-if="canReprintCard(pkg)">
               <span class="tag tag-ok">{{ OPERATE_LABELS[pkg.operateStatus]?.label || pkg.operateStatus }} {{ fmtTime(pkg.dispatchedAt || pkg.waybillPrintedAt || pkg.shippedAt) }}</span>
               <span class="ref-weight" :title="WEIGHT_SOURCE_LABELS[pkg.weightSource] || ''">称重 {{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span>
-              <!-- 更正重量:打印发货后人工修正(内联输入,Enter 保存 / Esc 取消) -->
+              <!-- 更正重量:打单后人工修正(内联输入,Enter 保存 / Esc 取消) -->
               <template v-if="correct.pkgId === pkg.id">
                 <input
                   :ref="(el) => (correctEls[pkg.id] = el)"
@@ -1283,7 +1282,7 @@ function onPrinterChange() {
               >重新打印</button>
             </template>
             <template v-else>
-              <span class="tag tag-mute">{{ blockReason(pkg) }} · 不可发货</span>
+              <span class="tag tag-mute">{{ blockReason(pkg) }} · 不可操作</span>
               <!-- 称重展示 + 更正重量(2026-09-22:任意状态均可人工修正重量,利润随之重算) -->
               <span class="ref-weight" :title="WEIGHT_SOURCE_LABELS[pkg.weightSource] || ''">称重 {{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</span>
               <template v-if="correct.pkgId === pkg.id">
@@ -1327,8 +1326,8 @@ function onPrinterChange() {
         </div>
       </section>
 
-      <!-- ④ 右侧参考栏:发货记录(扫描打单页) / 本次扫描入库记录(扫描入库独立页) -->
-      <aside v-if="!isStockPage" class="records-col card" aria-label="发货记录">
+      <!-- ④ 右侧参考栏:打单记录(扫描打单页) / 本次扫描入库记录(扫描入库独立页) -->
+      <aside v-if="!isStockPage" class="records-col card" aria-label="打单记录">
         <div class="records-head">
           <div class="record-tabs">
             <button
@@ -1342,7 +1341,7 @@ function onPrinterChange() {
               <span v-if="counts[t.key] != null" class="tab-count">{{ counts[t.key] }}</span>
             </button>
           </div>
-          <button class="btn btn-ghost btn-sm" :disabled="records.loading" @click="loadRecords" title="刷新发货记录">
+          <button class="btn btn-ghost btn-sm" :disabled="records.loading" @click="loadRecords" title="刷新打单记录">
             {{ records.loading ? '加载中…' : '刷新' }}
           </button>
         </div>
@@ -1350,10 +1349,10 @@ function onPrinterChange() {
         <!-- 记录列表(可滚动区域) -->
         <div class="records-list">
           <div v-if="!records.rows.length" class="empty records-empty">
-            {{ records.loading ? '加载中…' : (records.tab === 'today' ? '今日暂无发货记录' : '昨日暂无发货记录') }}
+            {{ records.loading ? '加载中…' : (records.tab === 'today' ? '今日暂无打单记录' : '昨日暂无打单记录') }}
           </div>
 
-          <!-- 记录行:第一列图片(70x70 悬浮放大) + 第二列三行(货件号+复制/称重重量/打印发货时间) -->
+          <!-- 记录行:第一列图片(70x70 悬浮放大) + 第二列三行(货件号+复制/称重重量/打单时间) -->
           <div
             v-for="p in records.rows"
             :key="p.id"
@@ -1396,7 +1395,7 @@ function onPrinterChange() {
               <div class="record-line" :title="WEIGHT_SOURCE_LABELS[p.weightSource] || ''">
                 称重 {{ p.weightG != null ? Math.floor(p.weightG) + 'g' : '—' }}
               </div>
-              <div class="record-line">打印发货 {{ fmtTime(p.dispatchedAt || p.waybillPrintedAt) }}</div>
+              <div class="record-line">打单时间 {{ fmtTime(p.waybillPrintedAt || p.dispatchedAt) }}</div>
             </div>
           </div>
         </div>
@@ -1607,7 +1606,7 @@ function onPrinterChange() {
   font-size: 13px;
   color: var(--text);
 }
-/* 最迟发货剩余时间(2026-09-17):已超时=红加粗 / <24h=红 / <48h=橙 */
+/* 最迟交运剩余时间(2026-09-17):已超时=红加粗 / <24h=红 / <48h=橙 */
 .ship-remain {
   font-weight: 600;
 }
@@ -2071,7 +2070,7 @@ function onPrinterChange() {
   font-size: 14px;
 }
 
-/* ── ④ 发货记录 ── */
+/* ── ④ 打单记录 ── */
 .records-col {
   padding: 14px 16px;
   position: sticky;

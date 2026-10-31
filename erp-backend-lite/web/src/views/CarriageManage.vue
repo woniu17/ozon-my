@@ -17,6 +17,7 @@ import {
   createCarriage,
   getCarriage,
   getCarriagePostings,
+  getPendingPostings,
   approveCarriage,
   cancelCarriage,
   getCarriageCourierContact,
@@ -130,6 +131,38 @@ const candidate = reactive({
   postings: [],
   selected: {},
 });
+
+// 待发运货件弹窗(2026-11-02:点击占位行"货件数"查看该配送方式下待发运货件)
+const pendingPostings = reactive({
+  open: false,
+  loading: false,
+  storeId: '',
+  storeName: '',
+  deliveryMethodId: '',
+  deliveryMethodName: '',
+  postings: [],
+});
+
+// 货件期限展示(2026-11-02,与 H5 一致):已妥投/取消/退货不显示期限徽标
+const SHIPPED_STATUSES = ['delivering', 'delivered', 'cancelled', 'returned'];
+function postingDeadlineVisible(p) {
+  return !!p?.shipment_date && !SHIPPED_STATUSES.includes(p?.ozon_status);
+}
+function fmtDeadline(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function isDeadlineUrgent(iso) {
+  if (!iso) return false;
+  const t = new Date(iso).getTime() - Date.now();
+  return t > 0 && t <= 24 * 3600 * 1000;
+}
+function isDeadlineOverdue(iso) {
+  return !!iso && new Date(iso).getTime() <= Date.now();
+}
 
 // 当前表格行(所有店铺各配送方式下发运 + 可创建占位行)
 const currentRows = computed(() => {
@@ -308,6 +341,30 @@ async function onCreateFromModal() {
   } finally {
     createModal.creating = false;
   }
+}
+
+// ── 点击"货件数"查看货件列表(2026-11-02,与 H5 一致)──────
+// 真实发运/历史 → 详情弹窗(内含货件列表);可创建占位行 → 待发运货件弹窗
+async function onViewPostings(row) {
+  if (row.is_placeholder) {
+    pendingPostings.open = true;
+    pendingPostings.loading = true;
+    pendingPostings.storeId = row.store_id || storeId.value;
+    pendingPostings.storeName = row.store_name || '';
+    pendingPostings.deliveryMethodId = row.delivery_method_id || '';
+    pendingPostings.deliveryMethodName = row.delivery_method_name || '';
+    pendingPostings.postings = [];
+    try {
+      const data = await getPendingPostings(pendingPostings.storeId, pendingPostings.deliveryMethodId);
+      pendingPostings.postings = data?.postings || [];
+    } catch (err) {
+      show(`获取待发运货件失败:${err.message || String(err)}`, 'error');
+    } finally {
+      pendingPostings.loading = false;
+    }
+    return;
+  }
+  await openDetail(row);
 }
 
 // ── 详情 ────────────────────────────────────────────────
@@ -829,7 +886,11 @@ defineExpose({ refreshCurrent, listLoading });
               </td>
               <td>{{ row.departure_date || '—' }}</td>
               <td><span class="status-tag create-tag">可创建</span></td>
-              <td class="num">{{ row.postings_count }}</td>
+              <td class="num count-link" title="查看待发运货件" @click="onViewPostings(row)">
+                {{ row.postings_count }}
+                <div v-if="row.deadline_24h_count" class="dl-badge">24h内 {{ row.deadline_24h_count }}</div>
+                <div v-if="row.deadline_overdue_count" class="dl-badge overdue">超时 {{ row.deadline_overdue_count }}</div>
+              </td>
               <td class="ops">
                 <button class="btn btn-primary btn-sm" @click="onGoCreate(row)">创建发运</button>
               </td>
@@ -849,7 +910,11 @@ defineExpose({ refreshCurrent, listLoading });
                 <span v-if="row.postings_count" class="row-sub">{{ row.postings_count }} 个货件</span>
                 <span v-if="row.printed" class="row-sub printed-mark">已打印</span>
               </td>
-              <td class="num">{{ row.postings_count }}</td>
+              <td class="num count-link" title="查看货件列表" @click="onViewPostings(row)">
+                {{ row.postings_count }}
+                <div v-if="row.deadline_24h_count" class="dl-badge">24h内 {{ row.deadline_24h_count }}</div>
+                <div v-if="row.deadline_overdue_count" class="dl-badge overdue">超时 {{ row.deadline_overdue_count }}</div>
+              </td>
               <td class="ops">
                 <button class="btn btn-ghost btn-sm" @click="openDetail(row)">详情</button>
                 <button
@@ -1094,6 +1159,71 @@ defineExpose({ refreshCurrent, listLoading });
           </button>
         </div>
       </template>
+    </AppModal>
+
+    <!-- 待发运货件弹窗(2026-11-02:点击占位行"货件数"查看) -->
+    <AppModal :open="pendingPostings.open" title="待发运货件" size="lg" @update:open="pendingPostings.open = $event">
+      <div class="candidate-head">
+        <span class="field-hint">
+          {{ pendingPostings.storeName }} · {{ pendingPostings.deliveryMethodName || pendingPostings.deliveryMethodId }} · 共 {{ pendingPostings.postings.length }} 件
+        </span>
+        <div class="spacer"></div>
+        <button class="btn btn-ghost btn-sm" :disabled="pendingPostings.loading" @click="pendingPostings.open = false">关闭</button>
+      </div>
+      <div v-if="pendingPostings.loading" class="list-empty">加载中…</div>
+      <div v-else-if="!pendingPostings.postings.length" class="list-empty">该配送方式下暂无待发运货件</div>
+      <table v-else class="posting-table">
+        <thead>
+          <tr>
+            <th>货件号</th>
+            <th>商品</th>
+            <th class="num">件数</th>
+            <th>发运期限</th>
+            <th>可打印面单</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="p in pendingPostings.postings" :key="p.posting_number">
+            <td class="mono">{{ p.posting_number }}</td>
+            <td>
+              <div v-if="(p.products || []).length" class="posting-products">
+                <div v-for="it in p.products" :key="it.sku || it.offer_id || it.name" class="posting-product">
+                  <img
+                    v-if="it.image_url"
+                    :src="it.image_url"
+                    referrerpolicy="no-referrer"
+                    loading="lazy"
+                    class="posting-product-img"
+                    alt=""
+                  />
+                  <span class="posting-product-name" :title="it.name || it.offer_id || it.sku">
+                    {{ it.name || it.offer_id || it.sku }}
+                  </span>
+                  <span class="posting-product-qty">×{{ it.quantity ?? '' }}</span>
+                </div>
+              </div>
+              <span v-else>—</span>
+            </td>
+            <td class="num">{{ (p.products || []).reduce((s, it) => s + (Number(it.quantity) || 0), 0) }}</td>
+            <td>
+              <span
+                v-if="postingDeadlineVisible(p)"
+                class="dl-badge"
+                :class="{ overdue: isDeadlineOverdue(p.shipment_date) }"
+              >
+                {{ isDeadlineOverdue(p.shipment_date) ? '已超时' : isDeadlineUrgent(p.shipment_date) ? '24h内' : '' }}
+                {{ fmtDeadline(p.shipment_date) }}
+              </span>
+              <span v-else>—</span>
+            </td>
+            <td>
+              <span class="printed-tag" :class="p.can_print_label ? 'yes' : 'no'">
+                {{ p.can_print_label ? '可打印' : '不可' }}
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </AppModal>
 
     <!-- 创建发运弹窗(2026-11-01:占位行触发) -->
@@ -1677,6 +1807,31 @@ defineExpose({ refreshCurrent, listLoading });
 .printed-mark {
   color: var(--success);
   font-weight: 500;
+}
+
+/* 2026-11-02:24h内发运期限 / 已超时 货件数徽标 */
+.dl-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #fff7e6;
+  color: #d46b08;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.dl-badge.overdue {
+  background: #ffece8;
+  color: #f53f3f;
+}
+
+/* 2026-11-02:货件数可点击查看货件列表弹窗(与 H5 一致) */
+.count-link {
+  cursor: pointer;
+}
+.count-link:hover {
+  color: #165dff;
 }
 
 /* 操作列按钮间距(按钮较多,横向滚动兜底) */

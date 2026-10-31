@@ -36,7 +36,11 @@
             <view class="row-sub">{{ row.departure_date || '—' }}</view>
           </view>
           <view class="card-foot">
-            <view class="count">{{ row.postings_count }} 个货件</view>
+            <view class="count count-link" @click="onViewPostings(row)">
+              {{ row.postings_count }} 个货件
+              <text v-if="row.deadline_24h_count" class="dl-badge">24h内 {{ row.deadline_24h_count }} 件</text>
+              <text v-if="row.deadline_overdue_count" class="dl-badge overdue">超时 {{ row.deadline_overdue_count }} 件</text>
+            </view>
             <view class="btn primary sm" @click="openCreate(row)">创建发运</view>
           </view>
         </template>
@@ -56,8 +60,10 @@
             <view class="row-sub">{{ row.departure_date || '—' }}</view>
           </view>
           <view class="card-foot">
-            <view class="count">
+            <view class="count count-link" @click="onViewPostings(row)">
               {{ row.postings_count }} 个货件
+              <text v-if="row.deadline_24h_count" class="dl-badge">24h内 {{ row.deadline_24h_count }} 件</text>
+              <text v-if="row.deadline_overdue_count" class="dl-badge overdue">超时 {{ row.deadline_overdue_count }} 件</text>
               <text v-if="row.printed" class="printed-mark">已打印</text>
             </view>
             <view class="ops">
@@ -91,7 +97,7 @@
           <view class="row-sub">{{ row.departure_date || '—' }}</view>
         </view>
         <view class="card-foot">
-          <view class="count">{{ row.postings_count }} 个货件</view>
+          <view class="count count-link" @click="onViewPostings(row)">{{ row.postings_count }} 个货件</view>
           <view class="ops">
             <view class="btn ghost sm" @click="openDetail(row)">详情</view>
           </view>
@@ -253,6 +259,46 @@
       </view>
     </view>
 
+    <!-- 货件列表弹窗(2026-11-02:点击卡片"货件数"快速查看) -->
+    <view v-if="postingsModal.open" class="mask" @click="closePostingsModal">
+      <view class="sheet postings-sheet" @click.stop>
+        <view class="sheet-title">
+          <text class="sheet-title-text">{{ postingsModal.title }}</text>
+          <text class="sheet-close" @click="closePostingsModal">✕</text>
+        </view>
+        <scroll-view scroll-y class="postings-scroll">
+          <view v-if="postingsModal.loading" class="empty small">加载中…</view>
+          <view v-else-if="!postingsModal.postings.length" class="empty small">该发运暂无货件</view>
+          <view v-else class="posting-list">
+            <view v-for="p in postingsModal.postings" :key="p.posting_number" class="posting-item">
+              <view class="posting-main">
+                <view class="posting-number mono">{{ p.posting_number }}</view>
+                <view class="posting-products">
+                  <view v-for="it in p.products || []" :key="it.sku || it.offer_id || it.name" class="posting-product">
+                    <image v-if="it.image_url" class="posting-img" :src="it.image_url" mode="aspectFill" />
+                    <view v-else class="posting-img placeholder-img" />
+                    <text class="posting-name">{{ it.name || it.offer_id || it.sku }}</text>
+                    <text class="posting-qty">×{{ it.quantity ?? '' }}</text>
+                  </view>
+                </view>
+              </view>
+              <view class="posting-ops">
+                <text
+                  v-if="postingDeadlineVisible(p)"
+                  class="ship-deadline"
+                  :class="{ urgent: isDeadlineUrgent(p.shipment_date), overdue: isDeadlineOverdue(p.shipment_date) }"
+                >
+                  {{ isDeadlineOverdue(p.shipment_date) ? '已超时' : isDeadlineUrgent(p.shipment_date) ? '24h内' : '' }}
+                  {{ fmtDeadline(p.shipment_date) }}
+                </text>
+                <text class="printed-tag" :class="p.can_print_label ? 'yes' : 'no'">{{ p.can_print_label ? '可打印' : '不可' }}</text>
+              </view>
+            </view>
+          </view>
+        </scroll-view>
+      </view>
+    </view>
+
     <!-- 添加货件候选弹窗 -->
     <view v-if="candidate.open" class="mask" @click="candidate.open = false">
       <view class="sheet candidate-sheet" @click.stop>
@@ -343,6 +389,9 @@
         </view>
       </view>
     </view>
+
+    <!-- 底部功能导航(参考安卓端排版) -->
+    <app-tabbar active="container" />
   </view>
 </template>
 
@@ -352,12 +401,14 @@
 //      → 确认发运 → 打印/预览货运标签(未确认禁用)→ 取消发运。
 import { ref, reactive, computed } from 'vue';
 import { onShow, onPullDownRefresh } from '@dcloudio/uni-app';
+import AppTabbar from '../../components/app-tabbar/app-tabbar.vue';
 import {
   getCarriageList,
   getCarriageHistory,
   createCarriage,
   getCarriage,
   getCarriagePostings,
+  getPendingPostings,
   approveCarriage,
   cancelCarriage,
   getCarriageCourierContact,
@@ -455,6 +506,19 @@ const detail = reactive({
   cancelling: false,
 });
 const editPostings = reactive({ dirty: false, saving: false });
+
+// 货件列表弹窗(2026-11-02:点击卡片"货件数"快速查看)
+// 占位行(id=0)走 getPendingPostings(该配送方式下 awaiting_deliver 货件),
+// 真实发运走 getCarriagePostings。
+const postingsModal = reactive({
+  open: false,
+  loading: false,
+  storeId: '',
+  storeName: '',
+  title: '',
+  deliveryMethodId: '',
+  postings: [],
+});
 
 // 可加入货件候选
 const candidate = reactive({ open: false, loading: false, postings: [], selected: {} });
@@ -740,6 +804,78 @@ async function loadPostings() {
   } finally {
     detail.postingsLoading = false;
   }
+}
+
+// ── 货件列表弹窗(2026-11-02:点击卡片"货件数"快速查看) ─────
+async function onViewPostings(row) {
+  postingsModal.open = true;
+  postingsModal.loading = true;
+  postingsModal.storeId = row.store_id || activeStoreId.value;
+  postingsModal.storeName = row.store_name || '';
+  postingsModal.deliveryMethodId = row.delivery_method_id || '';
+  postingsModal.postings = [];
+  if (row.from_history) {
+    // 已完成发运:直接展示本地历史快照
+    postingsModal.title = `发运 #${row.id} · 货件列表(历史快照)`;
+    postingsModal.postings = row.postings || [];
+    postingsModal.loading = false;
+    return;
+  }
+  postingsModal.title = row.is_placeholder
+    ? `${row.delivery_method_name || row.delivery_method_id} · 待发运货件`
+    : `发运 #${row.id} · 货件列表`;
+  try {
+    if (row.is_placeholder) {
+      const data = await getPendingPostings(postingsModal.storeId, row.delivery_method_id);
+      postingsModal.postings = data?.postings || [];
+    } else {
+      // 真实发运:Ozon 单页上限 100,按 cursor 翻页取全
+      const all = [];
+      let cursor = '';
+      let guard = 0;
+      do {
+        const data = await getCarriagePostings(postingsModal.storeId, Number(row.id), { cursor, limit: 100 });
+        all.push(...(data?.postings || []));
+        cursor = data?.cursor || '';
+        guard += 1;
+        if (guard > 20) break; // 最多 2000 条,防死循环
+      } while (cursor && all.length < 1000);
+      postingsModal.postings = all;
+    }
+  } catch (err) {
+    toast(`获取货件列表失败:${err.message || err}`);
+  } finally {
+    postingsModal.loading = false;
+  }
+}
+
+function closePostingsModal() {
+  postingsModal.open = false;
+}
+
+// 货件期限展示(2026-11-02):已妥投(交运/签收/取消/退货)不显示期限徽标
+const SHIPPED_STATUSES = ['delivering', 'delivered', 'cancelled', 'returned'];
+function postingDeadlineVisible(p) {
+  return !!p?.shipment_date && !SHIPPED_STATUSES.includes(p?.ozon_status);
+}
+function fmtDeadline(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function isDeadlineUrgent(iso) {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return false;
+  const now = Date.now();
+  return t > now && t <= now + 24 * 3600 * 1000;
+}
+function isDeadlineOverdue(iso) {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  return !isNaN(t) && t <= Date.now();
 }
 
 // ── 快递员联系方式配置 ────────────────────────────────────
@@ -1074,7 +1210,7 @@ async function onPrint(row) {
 <style scoped>
 .page {
   min-height: 100vh;
-  padding: 20rpx 24rpx 60rpx;
+  padding: 20rpx 24rpx 220rpx; /* 预留底部导航高度 */
   box-sizing: border-box;
   background: #f5f6f7;
 }
@@ -1202,6 +1338,28 @@ async function onPrint(row) {
 .printed-mark {
   color: #00b42a;
   margin-left: 8rpx;
+}
+/* 2026-11-02:24h内发运期限 / 已超时 货件数徽标 */
+.dl-badge {
+  display: inline-block;
+  margin-left: 10rpx;
+  padding: 0 10rpx;
+  border-radius: 8rpx;
+  background: #fff7e6;
+  color: #d46b08;
+  font-size: 20rpx;
+  line-height: 1.7;
+}
+.dl-badge.overdue {
+  background: #ffece8;
+  color: #f53f3f;
+}
+/* 2026-11-02:货件数可点击查看货件列表弹窗 */
+.count-link {
+  cursor: pointer;
+}
+.count-link:active {
+  color: #165dff;
 }
 .ops {
   display: flex;
@@ -1486,6 +1644,46 @@ async function onPrint(row) {
 .candidate-check.on {
   background: #165dff;
   border-color: #165dff;
+}
+
+/* ── 货件列表弹窗(2026-11-02) ── */
+.postings-sheet {
+  max-height: 88vh;
+}
+.postings-scroll {
+  max-height: 64vh;
+}
+.sheet-title {
+  align-items: center;
+}
+.sheet-title-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-close {
+  font-size: 30rpx;
+  color: #86909c;
+  padding: 0 8rpx;
+  cursor: pointer;
+}
+.ship-deadline {
+  font-size: 20rpx;
+  padding: 4rpx 12rpx;
+  border-radius: 8rpx;
+  background: #f2f3f5;
+  color: #4e5969;
+  white-space: nowrap;
+}
+.ship-deadline.urgent {
+  background: #fff7e6;
+  color: #d46b08;
+}
+.ship-deadline.overdue {
+  background: #ffece8;
+  color: #f53f3f;
 }
 
 /* ── 预览 ── */

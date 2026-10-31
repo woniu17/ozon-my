@@ -52,11 +52,11 @@
         <!-- 备注(单行省略) -->
         <view v-if="pkg.note" class="order-note">备注:{{ pkg.note }}</view>
 
-        <!-- 下单时间 / 最迟发货 / 剩余时间 -->
+        <!-- 下单时间 / 最迟交运 / 剩余时间 -->
         <view class="order-times">
           <text>下单 {{ fmtTime(pkg.inProcessAt) }}</text>
           <template v-if="pkg.lastDeliveryAt">
-            <text> · 最迟发货 {{ fmtTime(pkg.lastDeliveryAt) }}</text>
+            <text> · 最迟交运 {{ fmtTime(pkg.lastDeliveryAt) }}</text>
             <text class="ship-remain" :class="shipRemainCls(pkg)">{{ fmtRemain(pkg) }}</text>
           </template>
         </view>
@@ -123,7 +123,7 @@
             @click.stop="onShipPackage(pkg)"
           >{{ shippingPkgId === pkg.id ? '入库中…' : '入库' }}</button>
 
-          <!-- 待打单:参考重量 + 录重量 + 提交发货 + 面单 -->
+          <!-- 待打单:参考重量 + 录重量 + 称重打单 + 面单 -->
           <template v-if="canShipCard(pkg)">
             <view class="weight-refs">
               <text class="ref-weight">Ozon后台 {{ pkg.ozonWeightG != null ? Math.floor(pkg.ozonWeightG) + 'g' : '—' }}</text>
@@ -146,12 +146,12 @@
               class="mini-btn primary"
               :disabled="shippingPkgId === pkg.id"
               @click.stop="onSubmitShip(pkg)"
-            >{{ shippingPkgId === pkg.id ? '提交中…' : '提交发货' }}</button>
+            >{{ shippingPkgId === pkg.id ? '打单中…' : '称重打单' }}</button>
             <button class="mini-btn" @click.stop="openLabel(pkg)">面单</button>
             <view v-if="weightErr[pkg.id]" class="field-err">{{ weightErr[pkg.id] }}</view>
           </template>
 
-          <!-- 已交运/已发货:称重 + 面单 + 更正重量 -->
+          <!-- 待发运及之后:称重 + 面单 + 更正重量(可重新打开面单) -->
           <template v-if="canReprintCard(pkg)">
             <text class="ref-weight">称重 {{ pkg.weightG != null ? Math.floor(pkg.weightG) + 'g' : '—' }}</text>
             <button class="mini-btn" @click.stop="openLabel(pkg)">面单</button>
@@ -205,7 +205,7 @@
       </view>
     </view>
 
-    <!-- 发货记录(今日/昨日) -->
+    <!-- 打单记录(今日/昨日) -->
     <view class="card records">
       <view class="rec-head">
         <view class="rec-tabs">
@@ -218,7 +218,7 @@
           >{{ t.label }}{{ counts[t.key] != null ? `(${counts[t.key]})` : '' }}</view>
         </view>
       </view>
-      <view v-if="!records.length" class="empty small">{{ recordTab === 'today' ? '今日暂无发货记录' : '昨日暂无发货记录' }}</view>
+      <view v-if="!records.length" class="empty small">{{ recordTab === 'today' ? '今日暂无打单记录' : '昨日暂无打单记录' }}</view>
       <view v-for="r in records" :key="r.id" class="rec-row">
         <text class="rec-store">{{ r.storeName }}</text>
         <text class="rec-posting">{{ r.postingNumber }}</text>
@@ -244,6 +244,9 @@
       <!-- #endregion -->
     </view>
     <!-- #endif -->
+
+    <!-- 底部功能导航(参考安卓端排版):mode=stock 高亮扫描入库,否则高亮扫描打单 -->
+    <app-tabbar :active="navActive" />
   </view>
 </template>
 
@@ -254,6 +257,7 @@ import {
   getOrderList, shipPackage, scanShipSubmit, correctShipWeight, getScanShipRecords, fetchPackageLabel, markPrinted,
 } from '../../api/order.js';
 import { fmtMoney, fmtTime, fmtRate } from '../../utils/fmt.js';
+import AppTabbar from '../../components/app-tabbar/app-tabbar.vue';
 // #ifdef H5
 import { Html5Qrcode } from 'html5-qrcode';
 // #endif
@@ -270,7 +274,7 @@ const correctWeights = reactive({});
 const correctErr = reactive({});
 const records = ref([]);
 const banner = reactive({ type: '', text: '' });
-// 发货记录(今日/昨日切换,与 web 端 RECORD_TABS 同口径)
+// 打单记录(今日/昨日切换,与 web 端 RECORD_TABS 同口径)
 const RECORD_TABS = [
   { key: 'today', label: '今日' },
   { key: 'yesterday', label: '昨日' },
@@ -282,6 +286,8 @@ const counts = reactive({ today: 0, yesterday: 0 });
 // 通过 URL 参数 mode=stock 进入:扫到待入库订单自动入库(连扫),2s 内同码去重,
 // 本次入库记录展示商品首图;已入库订单连扫不重复添加记录。
 const stockMode = ref(false);
+// 底部导航高亮(mode=stock → 扫描入库,否则 → 扫描打单)
+const navActive = ref('home');
 const stockPaused = ref(false);   // 暂停自动连扫(避免误扫)
 const stockBusy = ref(false);     // 连扫处理中,防止并发
 const stockRecords = ref([]);     // 本次会话入库记录(新在前)
@@ -844,12 +850,17 @@ function scanCode() {
 }
 // #endif
 
-// ── 与 web 端 ScanShip 同口径的展示辅助 ──
+// ── 与 web 端 ScanShip 同口径的展示辅助(2026-11 新状态名)──
 const OPERATE_LABELS = {
-  wait_process: { label: '待处理', cls: 'warn' },
-  wait_ship: { label: '待打单发货', cls: 'info' },
-  ship_success: { label: '交运', cls: 'info' },
-  wait_receiver_confirm: { label: '已发货', cls: 'ok' },
+  wait_process: { label: '待采购', cls: 'warn' },
+  wait_stock: { label: '待入库', cls: 'info' },
+  wait_stick: { label: '待打单', cls: 'info' },
+  wait_dispatch: { label: '待发运', cls: 'info' },
+  dispatching: { label: '交运中', cls: 'info' },
+  delivering: { label: '已揽收', cls: 'ok' },
+  signed: { label: '已签收', cls: 'ok' },
+  settled: { label: '已成功', cls: 'ok' },
+  returned: { label: '已退货', cls: 'warn' },
   cancelled: { label: '已取消', cls: 'err' },
 };
 const PLATFORMS = [
@@ -863,22 +874,27 @@ function opTag(pkg) {
   if (pkg.isReturned) return { label: '已退货', cls: 'err' };
   return OPERATE_LABELS[pkg.operateStatus] || { label: pkg.operateStatus || '—', cls: 'mute' };
 }
-// 2026-10-23:解除搁置订单限制,允许打单发货/入库(前端二次弹窗确认,保持搁置标记)
+// 2026-10-23:解除搁置订单限制,允许打单/入库(前端二次弹窗确认,保持搁置标记)
+// 2026-11 新流程:扫描打单仅待打单可称重打单(→待发运);待发运及之后可重新打开面单/更正重量
 function canShipCard(pkg) {
-  return pkg.operateStatus === 'wait_ship';
+  return pkg.operateStatus === 'wait_stick';
 }
 function canReprintCard(pkg) {
-  return pkg.operateStatus === 'ship_success' || pkg.operateStatus === 'wait_receiver_confirm';
+  return pkg.operateStatus === 'wait_dispatch' || pkg.operateStatus === 'dispatching'
+    || pkg.operateStatus === 'delivering' || pkg.operateStatus === 'signed'
+    || pkg.operateStatus === 'settled';
 }
 function canShipPkg(pkg) {
-  return pkg.ozonStatus === 'awaiting_packaging' && !!pkg.id;
+  return pkg.operateStatus === 'wait_stock' && pkg.ozonStatus === 'awaiting_packaging' && !!pkg.id;
 }
 function blockReason(pkg) {
   if (pkg.isIgnored) return '已搁置';
   switch (pkg.operateStatus) {
-    case 'wait_process': return '待处理(未采购)';
-    case 'ship_success': return '已交运';
-    case 'wait_receiver_confirm': return '已发货(已交运)';
+    case 'wait_process': return '待采购(未采购)';
+    case 'wait_stock': return '待入库,请先完成入库';
+    case 'wait_dispatch': return '待发运';
+    case 'dispatching': return '交运中';
+    case 'delivering': return '已揽收';
     case 'cancelled': return '订单已取消';
     default: return pkg.operateStatus || '—';
   }
@@ -954,7 +970,7 @@ function profitCalc(pkg) {
   };
 }
 
-// 打印发货/更正重量后,按新重量本地重算利润(预估口径,公式与后端 computeProfit 一致)
+// 打单/更正重量后,按新重量本地重算利润(预估口径,公式与后端 computeProfit 一致)
 // 真实应计口径(estimated=false)/已取消/已退货的利润不随重量变化,不重算
 const EST_COMMISSION_RATE = 0.16;   // 预估佣金率(对齐后端 DEFAULT_COMMISSION_RATE)
 const DELIVERY_BASE_CNY = 3.37;     // 国际配送费公式(对齐后端)
@@ -978,7 +994,7 @@ function recomputeProfitByWeight(pkg, g) {
   p.profitRateCost = purchase > 0 ? Math.round((profit / purchase) * 10000) / 100 : null;
 }
 
-// 最迟发货剩余时间(颜色分级:已超时=红 / <24h=红 / <48h=橙)
+// 最迟交运剩余时间(颜色分级:已超时=红 / <24h=红 / <48h=橙)
 function shipRemainCls(pkg) {
   if (!pkg.lastDeliveryAt) return '';
   const t = new Date(pkg.lastDeliveryAt).getTime();
@@ -1110,7 +1126,7 @@ async function onShipPackage(pkg) {
   }
 }
 
-// 提交发货:重量落库 → 标记交运 → 尝试打开面单
+// 称重打单:重量落库 → 标记打单(待打单→待发运) → 尝试打开面单
 // 2026-10-23:搁置订单先二次确认再操作(保持搁置标记)
 async function onSubmitShip(pkg) {
   if (shippingPkgId.value) return;
@@ -1118,7 +1134,7 @@ async function onSubmitShip(pkg) {
     const okIgnored = await new Promise((resolve) => {
       uni.showModal({
         title: '搁置订单操作确认',
-        content: '该订单当前为【已搁置】状态，确认继续提交发货吗？',
+        content: '该订单当前为【已搁置】状态，确认继续打单吗？',
         confirmText: '确认操作',
         success: (res) => resolve(res.confirm),
         fail: () => resolve(false),
@@ -1141,11 +1157,11 @@ async function onSubmitShip(pkg) {
       return;
     }
     await markPrinted(pkg.id);
-    pkg.operateStatus = 'ship_success';
+    pkg.operateStatus = 'wait_dispatch';
     pkg.weightG = g;
-    // 打印发货后按称重重量重算利润(预估口径,国际配送费随重量变化)
+    // 打单后按称重重量重算利润(预估口径,国际配送费随重量变化)
     recomputeProfitByWeight(pkg, g);
-    uni.showToast({ title: '已交运 ' + pkg.postingNumber, icon: 'none' });
+    uni.showToast({ title: '已打单 ' + pkg.postingNumber + ',进入待发运', icon: 'none' });
     openLabel(pkg).catch(() => {});
     loadRecords();
   } catch (e) {
@@ -1220,6 +1236,7 @@ function switchRecordTab(tab) {
 onLoad((opts) => {
   // 2026-11:mode=stock 进入独立"扫描入库"模式(首页入口可带参数)
   stockMode.value = (opts && opts.mode) === 'stock';
+  navActive.value = stockMode.value ? 'stock' : 'home';
   if (stockMode.value) uni.setNavigationBarTitle({ title: '扫描入库' });
   loadRecords();
 });
@@ -1232,7 +1249,7 @@ onPullDownRefresh(async () => {
 
 <style scoped>
 .page {
-  padding: 20rpx 24rpx 60rpx;
+  padding: 20rpx 24rpx 220rpx; /* 预留底部导航高度 */
 }
 
 .search-box {
@@ -1596,7 +1613,7 @@ onPullDownRefresh(async () => {
   color: #86909c;
 }
 
-/* ── 发货记录 ── */
+/* ── 打单记录 ── */
 .records {
   margin-top: 4rpx;
 }

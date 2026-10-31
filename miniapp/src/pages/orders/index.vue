@@ -46,8 +46,8 @@
         <text class="sort-hint">揽收=国际物流商揽收,无此时间排最后</text>
       </view>
 
-      <!-- 快速筛选(2026-10-17 与 web/安卓同步):仅待打单发货 tab;两键可同时启用(并集),显示各自命中数 -->
-      <view v-if="activeTab === 'waitShip'" class="quick-bar">
+      <!-- 快速筛选(2026-10-17 与 web/安卓同步):仅待入库 tab;两键可同时启用(并集),显示各自命中数 -->
+      <view v-if="activeTab === 'waitStock'" class="quick-bar">
         <text
           class="quick-chip"
           :class="{ on: purchaseUnshippedHours > 0 }"
@@ -134,7 +134,7 @@
           </view>
         </view>
 
-        <!-- 时间行:待处理/待打单/交运 三态展示下单/最迟/剩发 + 待打单显示预估利润 -->
+        <!-- 时间行:未交运(有最迟发货时间且非取消)展示下单/最迟/剩发,有利润时显示预估利润 -->
         <view v-if="showShipCountdown(pkg)" class="time-row">
           <view class="t-line">
             <text class="t-k">下单</text>
@@ -148,13 +148,13 @@
             <text class="t-k">{{ countdown(pkg).overdue ? '已超时' : '剩发' }}</text>
             <text class="t-v cd">{{ countdown(pkg).text }}</text>
           </view>
-          <view v-if="pkg.operateStatus === 'wait_ship' && pkg.profit" class="t-line">
+          <view v-if="pkg.profit" class="t-line">
             <text class="t-k">预估利润</text>
             <text class="t-v" :class="profitClass(pkg)">{{ fmtMoney(pkg.profit.profit) }}</text>
           </view>
         </view>
 
-        <!-- 时间行:已发货/已签收/已成功/已退货 展示下单/揽收/签收/退货 + 利润 -->
+        <!-- 时间行:交运中/已揽收/已签收/已成功/已退货 展示下单/揽收/签收/退货 + 利润 -->
         <view v-else-if="showShipTimes(pkg)" class="time-row">
           <view class="t-line">
             <text class="t-k">下单</text>
@@ -188,6 +188,9 @@
       </view>
       <view v-if="loadingMore" class="end-tip">加载中…</view>
     </view>
+
+    <!-- 底部功能导航(参考安卓端排版) -->
+    <app-tabbar active="order" />
   </view>
 </template>
 
@@ -195,15 +198,20 @@
 import { ref, computed, onUnmounted } from 'vue';
 import { onLoad, onUnload, onPullDownRefresh, onReachBottom, onShow, onHide } from '@dcloudio/uni-app';
 import { getOrderTabs, getOrderList } from '../../api/order.js';
+import AppTabbar from '../../components/app-tabbar/app-tabbar.vue';
 import { fmtMoney, fmtTime, weekdayCN } from '../../utils/fmt.js';
 
-// Tab 页签(与 web 端 OrderProcess.vue TABS 同步)
+// Tab 页签(与 web 端 OrderProcess.vue TABS 同步;2026-11 新流程状态名)
+// 全部:跨所有状态(含搁置);已成功=已妥投且应计完整;已退货=妥投后买家退货退款(is_returned)
+// 待采购 → 待入库 → 待打单 → 待发运 → 交运中 → 已揽收 → 已签收 → 已成功
 const TABS = [
   { key: 'all', label: '全部' },
-  { key: 'waitProcess', label: '待处理' },
-  { key: 'waitShip', label: '待打单发货' },
-  { key: 'shipSuccess', label: '交运' },
-  { key: 'waitReceiverConfirm', label: '已发货' },
+  { key: 'waitProcess', label: '待采购' },
+  { key: 'waitStock', label: '待入库' },
+  { key: 'waitStick', label: '待打单' },
+  { key: 'waitDispatch', label: '待发运' },
+  { key: 'dispatching', label: '交运中' },
+  { key: 'delivering', label: '已揽收' },
   { key: 'signed', label: '已签收' },
   { key: 'settled', label: '已成功' },
   { key: 'returned', label: '已退货' },
@@ -267,16 +275,21 @@ const SORT_OPTIONS = {
   return_asc: { key: 'return', label: '退货时间 旧→新' },
   delivered_desc: { key: 'delivered', label: '签收时间 新→旧' },
   delivered_asc: { key: 'delivered', label: '签收时间 旧→新' },
+  shipped_desc: { key: 'shipped', label: '交运时间 新→旧' },
+  shipped_asc: { key: 'shipped', label: '交运时间 旧→新' },
 };
-// 各 tab 可用排序键(与 web 端 TAB_SORT_KEYS 一致):
-// 揽收排序适用所有状态(除待处理/待打单/交运——货件尚未被物流商揽收)
+// 各 tab 可用排序键(与 web 端 TAB_SORT_KEYS 一致,2026-11 新状态名):
+// 揽收排序适用所有状态(除待采购/待入库/待打单/待发运/交运中——货件尚未被物流商揽收)
 // 退货排序:已签收/已成功/已取消/已退货;签收排序:已签收/已成功(delivered_at 100% 覆盖)
+// 交运排序:交运中 tab 用(按本地 waybill_printed_at)
 const TAB_SORT_KEYS = {
   all: ['order', 'delivering'],
   waitProcess: ['order'],
-  waitShip: ['order'],
-  shipSuccess: ['order'],
-  waitReceiverConfirm: ['order', 'delivering'],
+  waitStock: ['order'],
+  waitStick: ['order'],
+  waitDispatch: ['order'],
+  dispatching: ['order', 'shipped'],
+  delivering: ['order', 'delivering'],
   signed: ['order', 'delivering', 'return', 'delivered'],
   settled: ['order', 'delivering', 'return', 'delivered'],
   returned: ['order', 'delivering', 'return'],
@@ -309,12 +322,17 @@ function onSortPick(e) {
   reload().catch(() => {});
 }
 
-// 行级操作状态徽标(与 web 端 OPERATE_LABELS 同步;isReturned 优先显示退货)
+// 行级操作状态徽标(与 web 端 OPERATE_LABELS 同步;2026-11 新状态名;isReturned 优先显示退货)
 const OPERATE_LABELS = {
-  wait_process: { label: '待处理', cls: 'warn' },
-  wait_ship: { label: '待打单', cls: 'info' },
-  ship_success: { label: '交运', cls: 'info' },
-  wait_receiver_confirm: { label: '已发货', cls: 'ok' },
+  wait_process: { label: '待采购', cls: 'warn' },
+  wait_stock: { label: '待入库', cls: 'info' },
+  wait_stick: { label: '待打单', cls: 'info' },
+  wait_dispatch: { label: '待发运', cls: 'info' },
+  dispatching: { label: '交运中', cls: 'info' },
+  delivering: { label: '已揽收', cls: 'ok' },
+  signed: { label: '已签收', cls: 'ok' },
+  settled: { label: '已成功', cls: 'ok' },
+  returned: { label: '已退货', cls: 'warn' },
   cancelled: { label: '已取消', cls: 'err' },
 };
 function opTag(pkg) {
@@ -332,15 +350,15 @@ function copyText(val, label) {
   });
 }
 
-// ── 剩发倒计时(与 order-detail/index.vue 同口径)──────────────
-// 仅在 待处理/待打单/交运 三态展示下单/最迟/剩发(其它状态无发货义务)
-const SHOW_COUNTDOWN_STATUSES = ['wait_process', 'wait_ship', 'ship_success'];
+// ── 剩发倒计时(与 web 端 OrderProcess.vue 同口径)──────────────
+// 有最晚发货时间、未交运且非取消的包裹展示下单/最迟/剩发(已交运/已取消无发货义务)
 function showShipCountdown(pkg) {
-  return !!pkg && !!pkg.shipmentDate && SHOW_COUNTDOWN_STATUSES.includes(pkg.operateStatus);
+  return !!pkg && !!pkg.shipmentDate && !pkg.isShipped && pkg.ozonStatus !== 'cancelled';
 }
 
-// ── 已发货/已签收/已成功/已退货 时间行(下单/揽收/签收/退货 + 利润)──────
-const SHIP_TIMES_STATUSES = ['wait_receiver_confirm', 'signed', 'settled', 'returned'];
+// ── 交运中/已揽收/已签收/已成功/已退货 时间行(下单/揽收/签收/退货 + 利润)──────
+// 2026-11 新状态名:dispatching(交运中)/delivering(已揽收)/signed(已签收)/settled(已成功)/returned(已退货)
+const SHIP_TIMES_STATUSES = ['dispatching', 'delivering', 'signed', 'settled', 'returned'];
 function showShipTimes(pkg) {
   return !!pkg && SHIP_TIMES_STATUSES.includes(pkg.operateStatus);
 }
@@ -539,7 +557,7 @@ onReachBottom(async () => {
 
 <style scoped>
 .page {
-  padding-bottom: 40rpx;
+  padding-bottom: 220rpx; /* 预留底部导航高度(120rpx + 安全区) */
 }
 
 /* ── 顶部固定区 ── */
@@ -1015,7 +1033,7 @@ onReachBottom(async () => {
   color: #a6abb3;
 }
 
-/* 时间行(待处理/待打单/交运 三态展示下单/最迟/剩发) */
+/* 时间行(未交运包裹:下单/最迟/剩发) */
 .time-row {
   margin-top: 16rpx;
   padding: 14rpx 18rpx;

@@ -1514,12 +1514,13 @@ async function doSave(withShip = false) {
   }
 }
 
-// 保存后可入库:未交运未取消且 Ozon 侧待打包(与 web 端入库按钮同口径)
+// 保存后可入库:待采购(保存后流转待入库)或已待入库,且 Ozon 侧待打包
+// 2026-11:必须采购后才可入库——保存动作先把 wait_process → wait_stock 再入库(与 web 端 canShipAfterSave 同口径)
 const canShipAfterSave = computed(() => {
   const p = pkg.value;
   return (
     !!p &&
-    (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_ship') &&
+    (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_stock') &&
     p.ozonStatus === 'awaiting_packaging'
   );
 });

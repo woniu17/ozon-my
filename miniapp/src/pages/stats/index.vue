@@ -196,12 +196,16 @@
         </scroll-view>
       </view>
     </view>
+
+    <!-- 底部功能导航(参考安卓端排版):页内订单/财务切换同步高亮 -->
+    <app-tabbar :active="tab === 'finance' ? 'finance' : 'stats'" />
   </view>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue';
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
+import AppTabbar from '../../components/app-tabbar/app-tabbar.vue';
 import {
   getOrderStatsSummary,
   getFinanceSummary,
@@ -487,8 +491,18 @@ function profitClass(v) {
   return '';
 }
 
-onLoad(() => {
-  applyPreset('today');
+onLoad((opts) => {
+  // 底部导航带参数进入:tab=finance → 财务统计(默认全部),tab=order → 订单统计(默认今天)
+  const t = opts && opts.tab;
+  if (t === 'finance') {
+    tab.value = 'finance';
+    applyPreset('all');
+  } else if (t === 'order') {
+    tab.value = 'order';
+    applyPreset('today');
+  } else {
+    applyPreset('today');
+  }
   loadOrderMonths();
   loadStores();
 });
@@ -500,7 +514,7 @@ onPullDownRefresh(async () => {
 
 <style scoped>
 .page {
-  padding: 20rpx 24rpx 60rpx;
+  padding: 20rpx 24rpx 220rpx; /* 预留底部导航高度 */
 }
 .tabs {
   display: flex;

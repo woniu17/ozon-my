@@ -184,7 +184,7 @@
     </view>
 
     <!-- 底部操作条(显隐规则与 web 端 831ecb6 行级判断一致;顺序:同步订单→入库→采购/编辑采购→同步采购物流)
-         2026-09-22:非待处理状态无论有无采购关联均可进入采购页(删除采购后可重新添加),文案随 links 动态 -->
+         2026-09-22:非待采购状态无论有无采购关联均可进入采购页(删除采购后可重新添加),文案随 links 动态 -->
     <view class="action-bar">
       <button class="abtn ghost" :disabled="syncing" @click="onSync">
         {{ syncing ? '同步中…' : '同步订单' }}
@@ -248,12 +248,12 @@ function stopCdTimer() {
   if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
 }
 
-// 剩发倒计时仅在 待处理/待打单发货/交运 三态展示(其它状态无发货义务)
-const SHOW_COUNTDOWN_STATUSES = ['wait_process', 'wait_ship', 'ship_success'];
+// 剩发倒计时(与 web 端 OrderProcess.vue 同口径):有最晚发货时间、未交运且非取消才展示
+// 2026-11 新流程:已交运/已取消无发货义务,不再显示倒计时
 const showCountdown = computed(() => {
   const p = pkg.value;
   if (!p) return false;
-  return !!p.shipmentDate && SHOW_COUNTDOWN_STATUSES.includes(p.operateStatus);
+  return !!p.shipmentDate && !p.isShipped && p.ozonStatus !== 'cancelled';
 });
 
 // 倒计时文本:cutoff = shipment_date,依赖 nowTs 每秒重算
@@ -281,12 +281,17 @@ onHide(() => stopCdTimer());
 onUnload(() => stopCdTimer());
 onUnmounted(() => stopCdTimer());
 
-// ── 标签映射(与 web 端 OrderProcess.vue 同步)──────────────
+// ── 标签映射(与 web 端 OrderProcess.vue OPERATE_LABELS 同步;2026-11 新状态名)──────────────
 const OPERATE_LABELS = {
-  wait_process: { label: '待处理', cls: 'warn' },
-  wait_ship: { label: '待打单发货', cls: 'info' },
-  ship_success: { label: '交运', cls: 'info' },
-  wait_receiver_confirm: { label: '已发货', cls: 'ok' },
+  wait_process: { label: '待采购', cls: 'warn' },
+  wait_stock: { label: '待入库', cls: 'info' },
+  wait_stick: { label: '待打单', cls: 'info' },
+  wait_dispatch: { label: '待发运', cls: 'info' },
+  dispatching: { label: '交运中', cls: 'info' },
+  delivering: { label: '已揽收', cls: 'ok' },
+  signed: { label: '已签收', cls: 'ok' },
+  settled: { label: '已成功', cls: 'ok' },
+  returned: { label: '已退货', cls: 'warn' },
   cancelled: { label: '已取消', cls: 'err' },
 };
 const opTag = computed(() => {
@@ -483,14 +488,11 @@ const cancelReasonText = computed(() => {
   return CANCEL_REASON_LABELS[p.cancelReasonId] || p.cancelReason || '';
 });
 
-// 入库按钮显隐:(待处理|待打单) 且 Ozon awaiting_packaging(与 web 端一致)
+// 入库按钮显隐:仅待入库且 Ozon awaiting_packaging(与 web 端一致;2026-11 必须先采购后入库)
 const canShip = computed(() => {
   const p = pkg.value;
   if (!p) return false;
-  return (
-    (p.operateStatus === 'wait_process' || p.operateStatus === 'wait_ship') &&
-    p.ozonStatus === 'awaiting_packaging'
-  );
+  return p.operateStatus === 'wait_stock' && p.ozonStatus === 'awaiting_packaging';
 });
 
 const visibleTraces = computed(() => (traceOpen.value ? traces.value : traces.value.slice(0, 3)));

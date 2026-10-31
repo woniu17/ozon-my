@@ -38,7 +38,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** 扫描打单主界面：搜索/扫码/卡片操作/发货记录 */
+/** 扫描打单主界面：搜索/扫码/卡片操作/打单记录 */
 class ScanShipFragment : Fragment() {
 
     private lateinit var searchInput: EditText
@@ -126,7 +126,7 @@ class ScanShipFragment : Fragment() {
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
         recyclerView.adapter = adapter
 
-        // 输入框清除图标:有内容时显示 ✕,点击一键清空并回到发货记录(2026-10-23)
+        // 输入框清除图标:有内容时显示 ✕,点击一键清空并回到打单记录(2026-10-23)
         setupClearButton()
 
         // 打印机状态条:常驻显示在线状态 + 当前打印机,点击选择(2026-10-22)
@@ -160,7 +160,7 @@ class ScanShipFragment : Fragment() {
     }
 
     // ── 搜索 ──
-    /** 搜索框右侧清除图标:非空时显示 ✕,点击清空输入并退出搜索回到发货记录(2026-10-23) */
+    /** 搜索框右侧清除图标:非空时显示 ✕,点击清空输入并退出搜索回到打单记录(2026-10-23) */
     private fun setupClearButton() {
         val size = (18 * resources.displayMetrics.density).toInt()
         val clearIcon = ContextCompat.getDrawable(requireContext(), R.drawable.ic_clear)?.apply {
@@ -233,7 +233,7 @@ class ScanShipFragment : Fragment() {
         }
     }
 
-    // ── 发货记录 ──
+    // ── 打单记录 ──
     private fun loadRecords() {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
@@ -301,7 +301,7 @@ class ScanShipFragment : Fragment() {
         }
     }
 
-    // ── 提交发货 ──
+    // ── 称重打单 ──
     private fun submitShip(pkg: Pkg, weightG: Int) {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
@@ -310,21 +310,21 @@ class ScanShipFragment : Fragment() {
                     mapOf("packageId" to pkg.id, "weightG" to weightG)
                 ).asJsonObject
                 if (!r.optBoolean("canShip")) {
-                    toast(r.optString("message", "订单状态不允许提交"))
+                    toast(r.optString("message", "订单状态不允许打单"))
                     return@launch
                 }
-                // 提交成功后自动打印面单(后端打印代理);打印失败不阻断交运(无纸化兜底,可卡片补打)
+                // 提交成功后自动打印面单(后端打印代理);打印失败不阻断打单(无纸化兜底,可卡片补打)
                 val printErr = tryPrintPackage(pkg)
-                // 标记已打印 → 流转交运
+                // 标记已打印 → 待打单→待发运
                 try {
                     Api.post("/admin/api/order-process/print-label", mapOf("packageId" to pkg.id))
                 } catch (_: Exception) {
-                    // 打印标记失败不阻断交运
+                    // 打印标记失败不阻断打单
                 }
                 if (printErr == null) {
-                    toast("已交运并打印面单 ${pkg.postingNumber ?: ""}")
+                    toast("已打单并打印面单 ${pkg.postingNumber ?: ""},进入待发运")
                 } else {
-                    toast("已交运(面单打印失败:$printErr,可在卡片补打)")
+                    toast("已打单(面单打印失败:$printErr,可在卡片补打)")
                 }
                 if (currentKeyword.isNotBlank()) doSearch(currentKeyword)
                 loadRecords()

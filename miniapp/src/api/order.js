@@ -10,8 +10,10 @@ export function getOrderTabs() {
 
 // 包裹分页列表
 // params: { tab, keyword, purchaseStatus, arrived, cancelInitiator, page, pageSize,
-//           globalKeyword, globalMode }  globalMode: 'ss'模糊 | 'eq'精确
-// 返回 { packages, total, rubRate }
+//           globalKeyword, globalMode, sortBy, sortOrder,
+//           purchaseUnshippedHours, logisticsStaleHours }  globalMode: 'ss'模糊 | 'eq'精确
+//          purchaseUnshippedHours/logisticsStaleHours:待入库快速筛选(0=关,24=开启,可并集)
+// 返回 { packages, total, rubRate, quickCounts }
 export function getOrderList(params) {
   return request.get('/admin/api/order-process/list', params);
 }
@@ -26,7 +28,7 @@ export function syncPackage(packageId) {
   return request.post('/admin/api/order-process/sync-package', { packageId });
 }
 
-// 入库(前置 wait_ship + Ozon awaiting_packaging;已入库幂等返回 alreadyShipped)
+// 入库(2026-11 新流程:仅 wait_stock 待入库可操作 + Ozon awaiting_packaging;已入库幂等返回 alreadyShipped)
 export function shipPackage(packageId) {
   return request.post('/admin/api/order-process/ship', { packageId });
 }
@@ -81,15 +83,16 @@ export function unlinkPurchase(purchaseOrderId, packageId) {
 }
 
 // ── 扫描打单(2026-10-13,自 web 端 order-process.js 移植)────────
-// 提交发货重量(服务端权威状态校验,仅 wait_ship 落库)
+// 提交打单重量(服务端权威状态校验,仅 wait_stick 待打单落库:
+//   称重打单 → 打印面单后进待发运)
 export function scanShipSubmit(packageId, weightG) {
   return request.post('/admin/api/order-process/scan-ship/submit', { packageId, weightG });
 }
-// 更正重量(交运后人工修正发货重量)
+// 更正重量(任意状态人工修正打单重量)
 export function correctShipWeight(packageId, weightG) {
   return request.post('/admin/api/order-process/scan-ship/correct-weight', { packageId, weightG });
 }
-// 发货记录(今日/昨日已交运包裹)
+// 打单记录(今日/昨日已打单包裹)
 export function getScanShipRecords(params) {
   return request.get('/admin/api/order-process/scan-ship/records', params);
 }
@@ -97,7 +100,7 @@ export function getScanShipRecords(params) {
 export function fetchPackageLabel(packageId) {
   return request.post('/admin/api/order-process/package-label', { packageIds: [packageId] });
 }
-// 标记已打印面单(流转交运)
+// 标记已打印面单(待打单→待发运)
 export function markPrinted(packageId) {
   return request.post('/admin/api/order-process/print-label', { packageId });
 }
@@ -110,7 +113,11 @@ export function getCarriageDeliveryMethods(storeId) {
 }
 // 发运清单:按配送方式聚合,含可创建占位行(id=0)
 // 返回 { cursor, has_next, methods: [{ delivery_method_id, delivery_method_name, departure_date,
-//         carriages: [{ id, status, postings_count, quantum_count }] }] }
+//         carriages: [{ id, status, postings_count, quantum_count,
+//                       deadline_24h_count, deadline_overdue_count }] }] }
+// 2026-11-02:deadline_* 为"发运期限"货件数(本地 shipment_date 反查):
+//   deadline_24h_count = shipment_date ∈ (now, now+24h] 的未妥投货件数
+//   deadline_overdue_count = shipment_date <= now 的未妥投货件数
 export function getCarriageList(storeId, params = {}) {
   return request.post('/admin/api/order-process/carriage/list', { storeId, ...params });
 }
@@ -129,9 +136,16 @@ export function createCarriage(storeId, body = {}) {
 export function getCarriage(storeId, carriageId) {
   return request.post('/admin/api/order-process/carriage/get', { storeId, carriageId });
 }
-// 发运货件列表 → { cursor, postings: [{ posting_number, assembly_code, can_print_label, products[] }] }
+// 发运货件列表 → { cursor, postings: [{ posting_number, assembly_code, can_print_label, products[],
+//                                         shipment_date }] }
+// 2026-11-02:shipment_date 为本地反查的发运期限,用于弹窗展示 24h内/已超时
 export function getCarriagePostings(storeId, carriageId, params = {}) {
   return request.post('/admin/api/order-process/carriage/posting-list', { storeId, carriageId, ...params });
+}
+// 待发运货件列表(可创建占位行用,2026-11-02):某配送方式下所有 awaiting_deliver 货件
+// → { postings: [{ posting_number, shipment_date, products[] }], count }
+export function getPendingPostings(storeId, deliveryMethodId) {
+  return request.post('/admin/api/order-process/carriage/pending-postings', { storeId, deliveryMethodId });
 }
 // 确认发运 → { carriage_id }
 export function approveCarriage(storeId, carriageId, containersCount) {

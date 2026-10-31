@@ -170,7 +170,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
             bindActions(pkg)
         }
 
-        /** 时间区(2026-10-15 重新排版):下单/最迟发货分行走,剩发单独成行;
+        /** 时间区(2026-10-15 重新排版):下单/最迟交运分行走,剩发单独成行;
          *  2026-11:追加本地处理时间(入库/打单/交运,有值才显示);
          *  剩发 <24小时 或 已超时时整行红色加粗高亮(超时浅红底,紧急浅橙底) */
         private fun bindTimes(pkg: Pkg) {
@@ -180,7 +180,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 addTimeRow(timeContainer, "入库", fmtTimeWithWeekday(pkg.stockedAt))
             }
             if (!pkg.lastDeliveryAt.isNullOrBlank()) {
-                addTimeRow(timeContainer, "最迟发货", fmtTimeWithWeekday(pkg.lastDeliveryAt))
+                addTimeRow(timeContainer, "最迟交运", fmtTimeWithWeekday(pkg.lastDeliveryAt))
                 val remain = remainInfo(pkg.lastDeliveryAt)
                 if (remain != null) addRemainRow(timeContainer, remain)
             }
@@ -298,15 +298,16 @@ class PackageAdapter(private val callbacks: Callbacks) :
         private fun bindActions(pkg: Pkg) {
             actionArea.removeAllViews()
 
-            // 搁置订单(2026-10-23):解除操作限制,允许入库/打单发货等,但点击时二次弹窗确认(用户确认后保持搁置)
-            // 2026-11:必须采购后才可入库——仅待入库可入库;待发运可交运
+            // 搁置订单(2026-10-23):解除操作限制,允许入库/打单等,但点击时二次弹窗确认(用户确认后保持搁置)
+            // 2026-11:必须采购后才可入库——仅待入库可入库;扫描打单仅待打单可称重打单(→待发运)
             val canShipPkg = pkg.operateStatus == "wait_stock" && pkg.ozonStatus == "awaiting_packaging" && pkg.id.isNotEmpty()
-            val canShipCard = pkg.operateStatus == "wait_dispatch"
-            val canReprint = pkg.operateStatus == "dispatching" || pkg.operateStatus == "delivering"
-                || pkg.operateStatus == "signed" || pkg.operateStatus == "settled"
+            val canShipCard = pkg.operateStatus == "wait_stick"
+            val canReprint = pkg.operateStatus == "wait_dispatch" || pkg.operateStatus == "dispatching"
+                || pkg.operateStatus == "delivering" || pkg.operateStatus == "signed"
+                || pkg.operateStatus == "settled"
             val currentWeight = pkg.weightG?.let { fmtNum(it) }
 
-            // 入库(Ozon 待打包确认货件;未到提交发货状态时显示)
+            // 入库(Ozon 待打包确认货件;未到打单状态时显示)
             if (canShipPkg && !canShipCard) {
                 actionArea.addView(
                     newButton("入库", Color.parseColor(COLOR_PRIMARY)) {
@@ -315,8 +316,8 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 )
             }
 
-            // 待发运:录重量 + 提交发货 + 打印面单 + 面单(2026-10-16 修复:行内按钮改 WRAP_CONTENT,输入框不再被挤掉;预填已称重量)
-            // 2026-10-22 新增"打印面单":提交发货时自动打印,此处用于重试/手动补打(走后端打印代理)
+            // 待打单:录重量 + 称重打单 + 打印面单 + 面单(2026-10-16 修复:行内按钮改 WRAP_CONTENT,输入框不再被挤掉;预填已称重量)
+            // 2026-10-22 新增"打印面单":称重打单时自动打印,此处用于重试/手动补打(走后端打印代理)
             if (canShipCard) {
                 val refs = buildString {
                     append("Ozon后台 ")
@@ -329,7 +330,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 val row = buildWeightRow()
                 val weightInput = buildWeightInput("重量(g)", currentWeight)
                 row.addView(weightInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(newRowButton("提交发货", Color.parseColor(COLOR_PRIMARY)) {
+                row.addView(newRowButton("称重打单", Color.parseColor(COLOR_PRIMARY)) {
                     confirmIgnoredIfNeeded(pkg) {
                         val g = validateWeight(weightInput)
                         if (g != null) confirmTagsNoteIfNeeded(pkg) { callbacks.onSubmitShip(pkg, g) }
@@ -352,7 +353,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 actionArea.addView(printRow)
             }
 
-            // 已交运/已发货:称重 + 更正重量 + 补打面单 + 面单
+            // 待发运及之后:称重 + 更正重量 + 补打面单 + 面单(待打单之后均可重新打印)
             if (canReprint) {
                 val weighed = currentWeight?.let { "称重 ${it}g" } ?: "称重 —"
                 actionArea.addView(newSectionLabel(weighed))
@@ -383,7 +384,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                 actionArea.addView(printRow)
             }
 
-            // 仅入库需求的订单:可提前录入发货重量(2026-10-16 新增,保存重量不改变订单状态)
+            // 仅入库需求的订单:可提前录入打单重量(2026-10-16 新增,保存重量不改变订单状态)
             if (canShipPkg && !canShipCard && !canReprint) {
                 actionArea.addView(newSectionLabel("可提前录入发货重量"))
                 val row = buildWeightRow()
@@ -428,8 +429,8 @@ class PackageAdapter(private val callbacks: Callbacks) :
         }
 
         /**
-         * 标签/备注二次确认(2026-10-27):订单带标签或备注时,提交发货(自动打印面单)前弹窗提示,
-         * 用户选择"确认发货"才执行 action,避免漏看拣货/发货备注。
+         * 标签/备注二次确认(2026-10-27):订单带标签或备注时,称重打单(自动打印面单)前弹窗提示,
+         * 用户选择"确认打单"才执行 action,避免漏看拣货/打单备注。
          */
         private fun confirmTagsNoteIfNeeded(pkg: Pkg, action: () -> Unit) {
             val tags = pkg.tags?.filter { it.isNotBlank() }.orEmpty()
@@ -446,8 +447,8 @@ class PackageAdapter(private val callbacks: Callbacks) :
             }
             AlertDialog.Builder(itemView.context)
                 .setTitle("订单标签/备注提醒")
-                .setMessage("货件 ${pkg.postingNumber}\n$lines\n\n确认提交发货并打印面单吗?")
-                .setPositiveButton("确认发货") { _, _ -> action() }
+                .setMessage("货件 ${pkg.postingNumber}\n$lines\n\n确认称重打单并打印面单吗?")
+                .setPositiveButton("确认打单") { _, _ -> action() }
                 .setNegativeButton("取消", null)
                 .show()
         }

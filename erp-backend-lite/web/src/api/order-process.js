@@ -105,26 +105,26 @@ export function markPrinted(packageId) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// 扫描打单(2026-09,设计文档: docs/扫描打单-功能设计.md)
-// 扫采购快递单号/采购单号/Ozon单号 → 录重量 → wait_dispatch 打面单交运
+// 扫描打单(2026-09,设计文档: docs/扫描打单-功能设计.md;2026-11:仅针对「待打单」)
+// 扫采购快递单号/采购单号/Ozon单号 → 录重量 → wait_stick 称重打单(→待发运)
 // ════════════════════════════════════════════════════════════════
 
-// 提交发货重量(服务端权威状态校验,仅 wait_dispatch 落库)
+// 提交打单重量(服务端权威状态校验,仅 wait_stick 落库)
 // body: { packageId, weightG }  weightG: 正整数克 1~50000
 // 返回 { canShip, operateStatus, isIgnored, waybillPrintedAt, dispatchedAt, message }
-// canShip=true → 前端继续 fetchPackageLabel + printLabelImage + markPrinted
+// canShip=true → 前端继续 fetchPackageLabel + printLabelImage + markPrinted(待打单→待发运)
 export function scanShipSubmit(packageId, weightG) {
   return request.post('/admin/api/order-process/scan-ship/submit', { packageId, weightG });
 }
 
-// 更正重量(交运后人工修正发货重量;仅更新 weight,不改状态/交运时间)
+// 更正重量(任意状态人工修正打单重量;仅更新 weight,不改状态/交运时间)
 // body: { packageId, weightG }  weightG: 正整数克 1~50000
 // 返回 { updated, oldWeightG, weightG }
 export function correctShipWeight(packageId, weightG) {
   return request.post('/admin/api/order-process/scan-ship/correct-weight', { packageId, weightG });
 }
 
-// 发货记录(今日/昨日已交运包裹,北京时间日界,倒序分页)
+// 打单记录(今日/昨日已打单包裹,北京时间日界,倒序分页)
 // params: { day: 'today'|'yesterday', page, pageSize }
 export function getScanShipRecords(params) {
   return request.get('/admin/api/order-process/scan-ship/records', params);
@@ -377,6 +377,12 @@ export function getCarriage(storeId, carriageId) {
 // 发运中的货件列表 → { cursor, postings: [...] }
 export function getCarriagePostings(storeId, carriageId, params = {}) {
   return request.post('/admin/api/order-process/carriage/posting-list', { storeId, carriageId, ...params });
+}
+
+// 待发运货件列表(可创建占位行用,2026-11-02):某配送方式下所有 awaiting_deliver 货件
+// → { postings: [{ posting_number, shipment_date, products[] }], count }
+export function getPendingPostings(storeId, deliveryMethodId) {
+  return request.post('/admin/api/order-process/carriage/pending-postings', { storeId, deliveryMethodId });
 }
 
 // 确认发运(写操作) → { carriage_id }

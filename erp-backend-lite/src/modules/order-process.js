@@ -14,7 +14,7 @@
 //   POST /admin/api/order-process/ship            入库(Ozon /v4/posting/fbs/ship 搜集订单,不拆分;仅待入库可操作)
 //   POST /admin/api/order-process/scan-ship/submit   扫描打单:提交重量(权威状态校验,仅 wait_dispatch 落库)
 //   POST /admin/api/order-process/scan-ship/correct-weight  扫描打单:交运后更正重量(仅更新 weight)
-//   GET  /admin/api/order-process/scan-ship/records  扫描打单:发货记录(今日/昨日,北京时间日界)
+//   GET  /admin/api/order-process/scan-ship/records  扫描打单:打单记录(今日/昨日,北京时间日界)
 //   POST /admin/api/order-process/sync-run        手动触发 Ozon 订单增量同步(双接口)
 //   POST /admin/api/order-process/sync-all-list  手动触发 /v4/posting/fbs/list 全量同步
 //   GET  /admin/api/order-process/sync-status    各店铺最近同步状态
@@ -1010,15 +1010,16 @@ router.post('/admin/api/order-process/print-label', (req, res, next) => {
   }
 });
 
-// ── 扫描打单(2026-09,设计文档: docs/扫描打单-功能设计.md)──
-//   POST /admin/api/order-process/scan-ship/submit    提交发货重量(权威状态校验,仅 wait_dispatch 落库)
-//   GET  /admin/api/order-process/scan-ship/records   发货记录(今日/昨日,北京时间日界)
+// ── 扫描打单(2026-09,设计文档: docs/扫描打单-功能设计.md;2026-11 纠正:仅针对「待打单」)──
+//   POST /admin/api/order-process/scan-ship/submit    提交打单重量(权威状态校验,仅 wait_stick 落库)
+//     wait_stick → 称重打单:打印面单后进入待发运(wait_dispatch),交运在订单处理/发运管理进行
+//   GET  /admin/api/order-process/scan-ship/records   打单记录(今日/昨日,北京时间日界)
 
-// 非待发运状态的拦截提示(前端横幅直接展示;wait_dispatch 可交运不拦截)
+// 非可扫描状态(非待打单)的拦截提示(前端横幅直接展示;仅 wait_stick 可提交不拦截)
 const SHIP_BLOCK_MESSAGES = {
   wait_process: '订单状态问题:待采购(未采购),请先提交采购信息',
   wait_stock: '订单状态问题:待入库,请先完成入库',
-  wait_stick: '订单状态问题:待打单,请先打印面单',
+  wait_dispatch: '订单状态问题:待发运,请到订单处理/发运管理中交运',
   dispatching: '订单状态问题:交运中',
   delivering: '订单状态问题:已揽收',
   signed: '订单状态问题:已签收',
@@ -1035,9 +1036,10 @@ function beijingDayRangeUtc(day) {
   return { startAt: new Date(start).toISOString(), endAt: new Date(start + 86400_000).toISOString() };
 }
 
-// 提交发货重量:按 DB 当前状态权威判定 canShip
+// 提交打单重量:按 DB 当前状态权威判定 canShip
 // body: { packageId, weightG }  weightG: 正整数克 1~50000
-// canShip=true  → 重量已落库,前端继续拉面单打印并 markPrinted 交运
+// canShip=true  → 重量已落库,前端继续拉面单打印并 markPrinted:
+//                wait_stick → 待发运(称重打单完成)
 // canShip=false → 不写重量不流转,message 返回拦截原因
 router.post('/admin/api/order-process/scan-ship/submit', (req, res, next) => {
   try {
@@ -1080,7 +1082,7 @@ router.post('/admin/api/order-process/scan-ship/submit', (req, res, next) => {
   }
 });
 
-// 更正重量:任意状态人工修正发货重量(2026-09-22 起解除"仅交运后"限制)
+// 更正重量:任意状态人工修正打单重量(2026-09-22 起解除"仅交运后"限制)
 // 仅更新 op_package.weight,不改交运时间/状态;利润中国际配送(估)随之按新重量变化
 // body: { packageId, weightG }  weightG: 正整数克 1~50000
 router.post('/admin/api/order-process/scan-ship/correct-weight', (req, res, next) => {
@@ -1101,7 +1103,7 @@ router.post('/admin/api/order-process/scan-ship/correct-weight', (req, res, next
   }
 });
 
-// 发货记录:今日/昨日已交运包裹(按发运时间 dispatched_at 北京时间日界切分,倒序)
+// 打单记录:今日/昨日已打单包裹(按打单时间 waybill_printed_at 北京时间日界切分,倒序;历史回退 dispatched_at)
 // query: day=today|yesterday(默认 today), page(默认1), pageSize(默认20,≤500;前端不分页一次拉全量)
 // 响应含:items(产品行)/purchaseLinks/weightG+weightSource(富化同 /list)
 router.get('/admin/api/order-process/scan-ship/records', (req, res, next) => {
@@ -1109,7 +1111,7 @@ router.get('/admin/api/order-process/scan-ship/records', (req, res, next) => {
     const q = req.query || {};
     const day = q.day === 'yesterday' ? 'yesterday' : 'today';
     const { startAt, endAt } = beijingDayRangeUtc(day);
-    const data = orderPackageDao.listShippedPackages({
+    const data = orderPackageDao.listPrintedPackages({
       startAt,
       endAt,
       page: q.page,
@@ -1622,6 +1624,97 @@ function carriageHandleError(e, req, res, action) {
   res.status(status).json({ ok: false, message: `Ozon ${action}失败:${msg}` });
 }
 
+// 为发运清单附加"24h内发运期限 / 已超时"货件数(2026-11-02)
+// 数据源:本地 op_ozon_order.shipment_date(Ozon cutoff,与订单列表倒计时同源)。
+//   - 占位行(可创建发运):该配送方式下 status=awaiting_deliver 的货件
+//   - 真实发运:拉取 Ozon /v1/assembly/carriage/posting/list 货件号后按号反查
+// 口径(仅统计尚未妥投的货件,已交物流/已签收/已取消/已退货不参与):
+//   deadline_24h_count     = shipment_date ∈ (now, now+24h]
+//   deadline_overdue_count = shipment_date <= now
+// 计算失败的发运两个字段置 null,前端不展示;绝不让附加计数拖垮发运清单。
+async function attachCarriageDeadlineCounts(store, methods) {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const cutoffIso = new Date(now.getTime() + 24 * 3600 * 1000).toISOString();
+  const placeholders = [];
+  const realCarriages = [];
+  for (const m of methods || []) {
+    for (const c of m?.carriages || []) {
+      if (Number(c?.id) > 0) realCarriages.push(c);
+      else placeholders.push({ method: m, carriage: c });
+    }
+  }
+
+  // ① 占位行:按配送方式聚合本地 awaiting_deliver 货件
+  if (placeholders.length) {
+    const rows = db
+      .prepare(
+        `SELECT json_extract(o.raw_json, '$.delivery_method.id') AS dm_id,
+                SUM(CASE WHEN o.shipment_date > ? THEN 1 ELSE 0 END) AS within24,
+                SUM(CASE WHEN o.shipment_date <= ? THEN 1 ELSE 0 END) AS overdue
+         FROM op_ozon_order o
+         WHERE o.store_id = ?
+           AND o.status = 'awaiting_deliver'
+           AND o.raw_json IS NOT NULL
+           AND o.shipment_date IS NOT NULL
+           AND o.shipment_date <= ?
+         GROUP BY dm_id`
+      )
+      .all(nowIso, nowIso, store.id, cutoffIso);
+    const byDm = new Map(rows.map((r) => [String(r.dm_id), r]));
+    for (const { method, carriage } of placeholders) {
+      const r = byDm.get(String(method?.delivery_method_id));
+      carriage.deadline_24h_count = Number(r?.within24) || 0;
+      carriage.deadline_overdue_count = Number(r?.overdue) || 0;
+    }
+  }
+
+  // ② 真实发运:并行拉货件号 → 本地反查 shipment_date
+  await Promise.all(
+    realCarriages.map(async (carriage) => {
+      carriage.deadline_24h_count = 0;
+      carriage.deadline_overdue_count = 0;
+      try {
+        const numbers = [];
+        let cursor = '';
+        let guard = 0;
+        do {
+          const page = await carriagePostingList(store, carriage.id, { cursor, limit: 100 });
+          for (const p of page?.postings || []) {
+            if (p?.posting_number) numbers.push(p.posting_number);
+          }
+          cursor = page?.cursor || '';
+          guard += 1;
+        } while (cursor && guard < 50);
+        if (!numbers.length) return;
+        const slots = numbers.map(() => '?').join(',');
+        const rows = db
+          .prepare(
+            `SELECT o.posting_number,
+                    SUM(CASE WHEN o.shipment_date > ? THEN 1 ELSE 0 END) AS within24,
+                    SUM(CASE WHEN o.shipment_date <= ? THEN 1 ELSE 0 END) AS overdue
+             FROM op_ozon_order o
+             WHERE o.store_id = ?
+               AND o.posting_number IN (${slots})
+               AND o.shipment_date IS NOT NULL
+               AND o.shipment_date <= ?
+               AND o.status NOT IN ('delivering', 'delivered', 'cancelled', 'returned')
+             GROUP BY o.posting_number`
+          )
+          .all(nowIso, nowIso, store.id, ...numbers, cutoffIso);
+        for (const r of rows) {
+          carriage.deadline_24h_count += Number(r?.within24) || 0;
+          carriage.deadline_overdue_count += Number(r?.overdue) || 0;
+        }
+      } catch (e) {
+        logger.warn({ err: e?.message, carriageId: carriage.id }, '[order-process] 计算发运24h期限货件数失败');
+        carriage.deadline_24h_count = null;
+        carriage.deadline_overdue_count = null;
+      }
+    })
+  );
+}
+
 // 按货件号批量补充商品主图(2026-10-30)
 // Ozon 货运接口(/v1/assembly/carriage/posting/list、/v4/posting/fbs/unfulfilled/list)
 // 返回的 products 不含 image_url;本地商品缓存(product_data_cache.primary_image/images)
@@ -1659,6 +1752,31 @@ function attachPostingProductImages(storeId, postings) {
         imgs.find((i) => i.offerId && i.offerId === prod?.offer_id);
       if (found) prod.image_url = found.picUrl;
     }
+  }
+  return postings;
+}
+
+// 按货件号批量补充发运期限 shipment_date(2026-11-02,货件列表弹窗用)
+// Ozon 货运接口 /v1/assembly/carriage/posting/list 不返回 cutoff,
+// 从本地 op_ozon_order 反查后挂到 postings[].shipment_date / postings[].ozon_status,
+// 前端据此展示"24h内 / 已超时"高亮(已妥投货件不显示期限徽标)。
+function attachPostingShipmentDates(storeId, postings) {
+  if (!Array.isArray(postings) || !postings.length) return postings;
+  const numbers = [...new Set(postings.map((p) => p?.posting_number).filter(Boolean))];
+  if (!numbers.length) return postings;
+  const slots = numbers.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT posting_number, shipment_date, status AS ozon_status
+       FROM op_ozon_order
+       WHERE store_id = ? AND posting_number IN (${slots})`
+    )
+    .all(storeId, ...numbers);
+  const byNumber = new Map(rows.map((r) => [r.posting_number, r]));
+  for (const p of postings) {
+    const r = byNumber.get(p?.posting_number);
+    p.shipment_date = r?.shipment_date || null;
+    p.ozon_status = r?.ozon_status || null;
   }
   return postings;
 }
@@ -1764,6 +1882,12 @@ router.post('/admin/api/order-process/carriage/list', async (req, res) => {
         upsertCarriageHistory(store, c);
       }
     }
+    // 2026-11-02:附加"24h内发运期限/已超时"货件数(本地 shipment_date 反查)
+    try {
+      await attachCarriageDeadlineCounts(store, r?.methods || []);
+    } catch (e) {
+      logger.warn({ err: e?.message }, '[order-process] 附加发运24h期限货件数失败(忽略)');
+    }
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '获取发运清单'); }
 });
@@ -1849,7 +1973,8 @@ router.post('/admin/api/order-process/carriage/get', async (req, res) => {
   } catch (e) { carriageHandleError(e, req, res, '获取发运'); }
 });
 
-// 发运中的货件列表(附带商品主图,2026-10-30:Ozon 货运接口 products 无图片,本地缓存补)
+// 发运中的货件列表(附带商品主图,2026-10-30:Ozon 货运接口 products 无图片,本地缓存补;
+// 2026-11-02:补充本地 shipment_date 供货件列表弹窗展示 24h内/已超时)
 router.post('/admin/api/order-process/carriage/posting-list', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
@@ -1860,7 +1985,10 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
       cutoffTo: req.body?.cutoffTo,
       deliveryMethodId: req.body?.deliveryMethodId,
     });
-    if (r?.postings) attachPostingProductImages(store.id, r.postings);
+    if (r?.postings) {
+      attachPostingProductImages(store.id, r.postings);
+      attachPostingShipmentDates(store.id, r.postings);
+    }
     // 2026-11-01:货件快照写回本地历史(发运完成后 Ozon 查不到)
     if (r?.postings) {
       updateCarriageHistoryJson(store.id, req.body?.carriageId, {
@@ -1869,6 +1997,45 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
     }
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '获取发运货件'); }
+});
+
+// 待发运货件列表(2026-11-02,货件列表弹窗·可创建占位行用)
+// 占位行(id=0)还没有真实发运,货件列表 = 该配送方式下所有 status=awaiting_deliver 的货件
+// (即点击"创建发运"后自动进入发运的那批货件)。数据源与创建发运一致:
+// /v4/posting/fbs/unfulfilled/list + deliveryMethodId 过滤;附商品主图与 shipment_date。
+router.post('/admin/api/order-process/carriage/pending-postings', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const deliveryMethodId = req.body?.deliveryMethodId;
+    if (deliveryMethodId == null || deliveryMethodId === '') {
+      throw new ApiError(ErrorCode.VALIDATION_ERROR, 'deliveryMethodId 必填');
+    }
+    const postings = [];
+    let cursor = '';
+    let guard = 0;
+    do {
+      const page = await postingFbsUnfulfilledList(store, {
+        cutoffFrom: '2000-01-01T00:00:00.000Z',
+        cutoffTo: '2999-12-31T23:59:59.999Z',
+        cursor,
+        limit: 100,
+        deliveryMethodId,
+        withData: {},
+      });
+      const list = page?.result?.postings || page?.postings || [];
+      for (const p of list) {
+        if (p?.status === 'awaiting_deliver') postings.push(p);
+      }
+      cursor = page?.result?.cursor || page?.cursor || '';
+      guard += 1;
+      if (guard > 50) break; // 防死循环(最多 5000 条)
+    } while (cursor);
+    if (postings.length) {
+      attachPostingProductImages(store.id, postings);
+      attachPostingShipmentDates(store.id, postings);
+    }
+    res.json(ok({ postings, count: postings.length }));
+  } catch (e) { carriageHandleError(e, req, res, '获取待发运货件'); }
 });
 
 // 确认发运
