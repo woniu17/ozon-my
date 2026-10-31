@@ -65,7 +65,7 @@ class StoreHealthFragment : Fragment() {
 
     private val adapter = StoreHealthErrorAdapter()
 
-    private var activePreset = "7d"
+    private var activePreset = "30d"
     private var from = ""
     private var to = ""
     private var errorTotal = 0
@@ -118,7 +118,8 @@ class StoreHealthFragment : Fragment() {
         storeBtn.setOnClickListener { showStoreDialog() }
 
         buildPresets()
-        applyPreset("7d")
+        // 默认近30日:错误货件稀疏,近7日可能为空
+        applyPreset("30d")
         loadStores()
     }
 

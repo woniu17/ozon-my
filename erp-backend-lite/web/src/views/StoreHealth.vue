@@ -17,7 +17,7 @@ const presets = [
   { key: 'lastMonth', label: '上月' },
   { key: 'custom', label: '自定义' },
 ];
-const activePreset = ref('7d');
+const activePreset = ref('30d');
 const fromDate = ref('');
 const toDate = ref('');
 
@@ -299,11 +299,18 @@ function fmtIndex(n) {
 function typeLabel(t) {
   return t === 'SELLER_CANCELLATION' ? '卖家取消' : t === 'SELLER_DELAY' ? '卖家逾期' : t || '未知';
 }
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 // ── 生命周期 ─────────────────────────────────────────────────────
 onMounted(() => {
-  // 初始化默认时间范围
-  const r = presetRange('7d');
+  // 初始化默认时间范围(默认近30日:错误货件稀疏,近7日可能为空)
+  const r = presetRange('30d');
   fromDate.value = r.from;
   toDate.value = r.to;
   // 加载店铺列表(复用订单统计的店铺接口)
@@ -510,7 +517,7 @@ function closeStoreDropdown() {
             <td>
               <span class="tag" :class="it.postingErrorType === 'SELLER_CANCELLATION' ? 'tag-cancel' : 'tag-delay'">{{ typeLabel(it.postingErrorType) }}</span>
             </td>
-            <td>{{ it.errorAt }}</td>
+            <td>{{ fmtTime(it.errorAt) }}</td>
             <td class="col-num">{{ fmtMoney(it.productPrice) }} {{ it.productCurrencyCode }}</td>
             <td class="col-num red-text">{{ fmtMoney(it.chargePrice) }} {{ it.chargeCurrencyCode }}</td>
             <td>
@@ -520,7 +527,7 @@ function closeStoreDropdown() {
             </td>
           </tr>
           <tr v-if="errors.items.length === 0">
-            <td colspan="7" class="empty-cell">该区间内没有影响错误指数的货件</td>
+            <td colspan="7" class="empty-cell">该区间内没有影响错误指数的货件，可切换「近30日」查看历史错误</td>
           </tr>
         </tbody>
       </table>

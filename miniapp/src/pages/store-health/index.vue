@@ -136,14 +136,14 @@
         <text class="posting" @click="copyPosting(it.postingNumber)">{{ it.postingNumber }}</text>
         <text class="tag" :class="it.postingErrorType === 'SELLER_CANCELLATION' ? 'tag-cancel' : 'tag-delay'">{{ typeLabel(it.postingErrorType) }}</text>
       </view>
-      <view class="err-mid">{{ it.storeName }} · {{ it.errorAt }} · {{ it.deliverySchema || '未知方案' }}</view>
+      <view class="err-mid">{{ it.storeName }} · {{ fmtTime(it.errorAt) }} · {{ it.deliverySchema || '未知方案' }}</view>
       <view class="err-bottom">
         <text>货值 ¥{{ fmtMoney(it.productPrice) }}</text>
         <text class="red-t">费用 ¥{{ fmtMoney(it.chargePrice) }}</text>
         <text class="grace" :class="it.hasGraceStatus ? 'grace-yes' : 'grace-no'">{{ it.hasGraceStatus ? '宽限' : '计费' }}</text>
       </view>
     </view>
-    <view v-if="items.length === 0 && !loading" class="empty-tip">该区间内没有影响错误指数的货件</view>
+    <view v-if="items.length === 0 && !loading" class="empty-tip">该区间内没有影响错误指数的货件，可切换「近30日」查看历史错误</view>
 
     <view v-if="hasMore" class="load-more" @click="loadMore">加载更多</view>
     <view v-if="loading" class="load-more">加载中…</view>
@@ -163,6 +163,7 @@ import {
   getRatingSyncStatus,
   getStores,
 } from '../../api/store-health.js';
+import { fmtTime } from '../../utils/fmt.js';
 
 // ── 时间预设 ──
 const presets = [
@@ -172,7 +173,7 @@ const presets = [
   { key: 'lastMonth', label: '上月' },
   { key: 'custom', label: '自定义' },
 ];
-const activePreset = ref('7d');
+const activePreset = ref('30d');
 const fromDate = ref('');
 const toDate = ref('');
 
@@ -415,7 +416,8 @@ function typeLabel(t) {
 
 // ── 生命周期 ──
 onShow(() => {
-  const r = presetRange('7d');
+  // 默认近30日:错误货件稀疏,近7日可能为空
+  const r = presetRange('30d');
   fromDate.value = r.from;
   toDate.value = r.to;
   getStores()
