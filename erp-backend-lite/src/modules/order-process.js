@@ -2072,7 +2072,7 @@ router.post('/admin/api/order-process/carriage/history/list', async (req, res) =
                 postings_count, containers_count, carriage_json, postings_json, contact_json,
                 last_seen_at, archived_at, updated_at
          FROM op_carriage_history
-         WHERE status IN ('received', 'delivered', 'cancelled') OR archived_at IS NOT NULL
+         WHERE status IN ('received', 'delivered', 'cancelled', 'closed') OR archived_at IS NOT NULL
          ORDER BY updated_at DESC
          LIMIT 2000`
       )
@@ -2099,7 +2099,7 @@ router.post('/admin/api/order-process/carriage/history/list', async (req, res) =
       const storeName = stores.find((s) => String(s.id) === String(r.store_id))?.name || '';
       // 从 Ozon 列表消失被归档的进行中记录,统一显示为"已归档"历史
       const archived =
-        !!r.archived_at && !['received', 'delivered', 'cancelled'].includes(r.status);
+        !!r.archived_at && !['received', 'delivered', 'cancelled', 'closed'].includes(r.status);
       return {
         id: r.id,
         store_id: r.store_id,

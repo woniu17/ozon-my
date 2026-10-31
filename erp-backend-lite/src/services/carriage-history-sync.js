@@ -117,50 +117,68 @@ async function syncCarriagePostingLink(store, carriage) {
 }
 
 // 同步单个店铺发运列表快照
+// 扫描天数:列表接口不带 filter 只返回当天发运单,历史发运需按日期逐日扫描(2026-11-04)
+const SCAN_DAYS = 7;
+
 async function syncStore(store) {
-  const r = await carriageDeliveryList(store, { limit: 1000 });
   let count = 0;
   const activeCarriages = [];
   const detailNeeded = [];
-  for (const m of r?.methods || []) {
-    for (const c of m.carriages || []) {
-      // 2026-11-04:列表接口的 carriage 对象只有 {id,status,postings_count,quantum_count},
-      // 配送方式/发运日期/仓库在 method 层级,合并后再落库,否则历史详情这几列恒为空。
-      const enriched = {
-        ...c,
-        delivery_method_id: c.delivery_method_id ?? m.delivery_method_id,
-        delivery_method_name: c.delivery_method_name ?? m.delivery_method_name,
-        departure_date: c.departure_date ?? m.departure_date,
-        warehouse_name: c.warehouse_name ?? m.warehouse_name,
-        warehouse_city: c.warehouse_city ?? m.warehouse_city,
-        // method 层级的首程/集成方式仅作兜底,与 carriageGet 权威值可能不同(如 ozon vs ozon_outsourced)
-        first_mile_type: c.first_mile_type ?? m.first_mile_type,
-        integration_type: c.integration_type ?? m.integration_type,
-      };
-      const existing = db
-        .prepare(
-          `SELECT first_mile_type, integration_type, warehouse_name, warehouse_city
-           FROM op_carriage_history WHERE store_id = ? AND carriage_id = ?`
-        )
-        .get(String(store.id), Number(enriched.id));
-      // 首程/集成方式以详情接口为准,首次见到该发运时拉一次补全;已有值则保留(权威值优先)
-      // 跳过 id<=0 的"可创建发运"占位行(非真实发运单,详情接口会报参数错)
-      if (Number(enriched.id) > 0 && (!existing || !existing.first_mile_type || !existing.integration_type)) {
-        detailNeeded.push(enriched);
-      } else {
-        // existing 可能为 undefined(如 id=0 占位行从未落库),用可选链访问
-        upsertCarriageHistory(store, {
-          ...enriched,
-          first_mile_type: existing?.first_mile_type || enriched.first_mile_type,
-          integration_type: existing?.integration_type || enriched.integration_type,
-          warehouse_name: existing?.warehouse_name || enriched.warehouse_name,
-          warehouse_city: existing?.warehouse_city || enriched.warehouse_city,
-        });
-      }
-      count++;
-      // 兜底刷新:活跃发运逐个拉货件列表,维护本地"货件↔发运单"关联
-      if (Number(enriched.id) > 0 && ACTIVE_CARRIAGE_STATUSES.has(enriched.status)) {
-        activeCarriages.push(enriched);
+  const seenIds = new Set();
+  const now = new Date();
+  for (let i = SCAN_DAYS - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    let r;
+    try {
+      r = await carriageDeliveryList(store, { filter: { departure_date: dateStr }, limit: 1000 });
+    } catch (e) {
+      logger.warn({ err: e?.message, storeId: store.id, date: dateStr }, 'carriage-history-sync: 按日期拉取发运列表失败');
+      continue;
+    }
+    for (const m of r?.methods || []) {
+      for (const c of m.carriages || []) {
+        // 2026-11-04:列表接口的 carriage 对象只有 {id,status,postings_count,quantum_count},
+        // 配送方式/发运日期/仓库在 method 层级,合并后再落库,否则历史详情这几列恒为空。
+        const enriched = {
+          ...c,
+          delivery_method_id: c.delivery_method_id ?? m.delivery_method_id,
+          delivery_method_name: c.delivery_method_name ?? m.delivery_method_name,
+          departure_date: c.departure_date ?? m.departure_date,
+          warehouse_name: c.warehouse_name ?? m.warehouse_name,
+          warehouse_city: c.warehouse_city ?? m.warehouse_city,
+          // method 层级的首程/集成方式仅作兜底,与 carriageGet 权威值可能不同(如 ozon vs ozon_outsourced)
+          first_mile_type: c.first_mile_type ?? m.first_mile_type,
+          integration_type: c.integration_type ?? m.integration_type,
+        };
+        // 跨天去重:同一发运单(含 id=0 占位)只处理一次
+        if (seenIds.has(String(enriched.id))) continue;
+        seenIds.add(String(enriched.id));
+        const existing = db
+          .prepare(
+            `SELECT first_mile_type, integration_type, warehouse_name, warehouse_city
+             FROM op_carriage_history WHERE store_id = ? AND carriage_id = ?`
+          )
+          .get(String(store.id), Number(enriched.id));
+        // 首程/集成方式以详情接口为准,首次见到该发运时拉一次补全;已有值则保留(权威值优先)
+        // 跳过 id<=0 的"可创建发运"占位行(非真实发运单,详情接口会报参数错)
+        if (Number(enriched.id) > 0 && (!existing || !existing.first_mile_type || !existing.integration_type)) {
+          detailNeeded.push(enriched);
+        } else {
+          // existing 可能为 undefined(如 id=0 占位行从未落库),用可选链访问
+          upsertCarriageHistory(store, {
+            ...enriched,
+            first_mile_type: existing?.first_mile_type || enriched.first_mile_type,
+            integration_type: existing?.integration_type || enriched.integration_type,
+            warehouse_name: existing?.warehouse_name || enriched.warehouse_name,
+            warehouse_city: existing?.warehouse_city || enriched.warehouse_city,
+          });
+        }
+        count++;
+        // 兜底刷新:活跃发运逐个拉货件列表,维护本地"货件↔发运单"关联
+        if (Number(enriched.id) > 0 && ACTIVE_CARRIAGE_STATUSES.has(enriched.status)) {
+          activeCarriages.push(enriched);
+        }
       }
     }
   }
