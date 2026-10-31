@@ -1,14 +1,14 @@
 <template>
   <view class="page">
-    <!-- 顶部 Tab:待处理 / 已完成 -->
+    <!-- 顶部 Tab:待处理 / 全部 -->
     <view class="tabs">
       <view class="tab" :class="{ on: tab === 'pending' }" @click="switchTab('pending')">待处理</view>
-      <view class="tab" :class="{ on: tab === 'done' }" @click="switchTab('done')">已完成</view>
+      <view class="tab" :class="{ on: tab === 'all' }" @click="switchTab('all')">全部</view>
     </view>
 
     <!-- 工具栏:刷新 + 联系方式配置 -->
     <view class="toolbar">
-      <view class="toolbar-title">{{ tab === 'pending' ? '发运清单 · 待处理' : '发运清单 · 已完成' }}</view>
+      <view class="toolbar-title">{{ tab === 'pending' ? '发运清单 · 待处理' : '发运清单 · 全部' }}</view>
       <view class="toolbar-actions">
         <view class="tool-btn" @click="refresh">刷新</view>
         <view class="tool-btn primary" @click="openContactConfig">联系方式配置</view>
@@ -16,9 +16,9 @@
     </view>
 
     <!-- 加载/空态 -->
-    <view v-if="loading && !listRows.length" class="empty">加载中…</view>
+    <view v-if="(loading || historyLoading) && !listRows.length" class="empty">加载中…</view>
     <view v-else-if="loaded && !listRows.length" class="empty">
-      {{ tab === 'pending' ? '暂无进行中的发运' : '暂无已完成发运' }}
+      {{ tab === 'pending' ? '暂无进行中的发运' : '暂无发运记录' }}
     </view>
 
     <!-- 待处理列表:按配送方式分组的发运卡 -->
@@ -84,22 +84,35 @@
       </view>
     </view>
 
-    <!-- 已完成列表 -->
+    <!-- 全部列表:进行中(不含待创建) + 已完成历史 -->
     <view v-else class="method-group">
-      <view v-for="row in historyRows" :key="'h-' + row.store_id + '-' + row.id" class="carriage-card">
+      <view v-for="row in allRows" :key="'a-' + row.store_id + '-' + row.id + '-' + (row.from_history ? 'h' : 'p')" class="carriage-card">
         <view class="card-head">
           <view class="store-name">{{ row.store_name || ('店铺 ' + row.store_id) }}</view>
-          <view class="status-tag">{{ row.status_label || carriageStatusLabel(row.status) }}</view>
+          <view class="status-tag" :class="'st-' + row.status">{{ row.status_label || carriageStatusLabel(row.status) }}</view>
         </view>
         <view class="card-body">
           <view class="label-id">#{{ row.id }}</view>
           <view class="dm-name">{{ row.delivery_method_name || row.delivery_method_id }}</view>
+          <view v-if="row.warehouse_name || row.warehouse_city" class="row-sub">
+            {{ row.warehouse_name || '' }}{{ row.warehouse_city ? ' · ' + row.warehouse_city : '' }}
+          </view>
           <view class="row-sub">{{ row.departure_date || '—' }}</view>
         </view>
         <view class="card-foot">
-          <view class="count count-link" @click="onViewPostings(row)">{{ row.postings_count }} 个货件</view>
+          <view class="count count-link" @click="onViewPostings(row)">
+            {{ row.postings_count }} 个货件
+            <text v-if="row.deadline_24h_count" class="dl-badge">24h内 {{ row.deadline_24h_count }} 件</text>
+            <text v-if="row.deadline_overdue_count" class="dl-badge overdue">超时 {{ row.deadline_overdue_count }} 件</text>
+            <text v-if="row.printed" class="printed-mark">已打印</text>
+          </view>
           <view class="ops">
             <view class="btn ghost sm" @click="openDetail(row)">详情</view>
+            <!-- 已完成历史快照只读,不提供打印/预览 -->
+            <template v-if="!row.from_history">
+              <view class="btn ghost sm" :class="{ disabled: !canPrint(row) }" @click="canPrint(row) && onPreview(row)">预览</view>
+              <view class="btn primary sm" :class="{ disabled: !canPrint(row) }" @click="canPrint(row) && onPrint(row)">打印</view>
+            </template>
           </view>
         </view>
       </view>
@@ -437,7 +450,8 @@ function carriageStatusLabel(status) {
   return CARRIAGE_STATUS_LABELS[status] || status || '—';
 }
 // 列表接口不返回 available_actions,按状态判断是否已确认
-const UNCONFIRMED_CARRIAGE_STATUSES = ['new', 'formed', 'created'];
+// 2026-11-02 实测:formed(已形成)即可生成货位标签,仅 new(新建)不可用
+const UNCONFIRMED_CARRIAGE_STATUSES = ['new'];
 const PENDING_STATUSES = ['new', 'formed', 'created', 'awaiting_delivery', 'delivering'];
 
 function canPrint(row) {
@@ -446,7 +460,8 @@ function canPrint(row) {
 
 // ── 数据状态 ────────────────────────────────────────────
 const tab = ref('pending');
-const loading = ref(false);
+const loading = ref(false);       // 进行中清单加载中
+const historyLoading = ref(false); // 已完成历史加载中(2026-11-02:与进行中分开,支持"全部"同时加载)
 const loaded = ref(false);
 const stores = ref([]); // 可用店铺(已配置 sync_credentials)
 const activeStoreId = ref(''); // 配置/历史接口鉴权用
@@ -472,7 +487,12 @@ const methodGroups = computed(() => {
   return groups;
 });
 
-const listRows = computed(() => (tab.value === 'pending' ? pendingRows.value : historyRows.value));
+// 全部:进行中(不含"待创建"占位行) + 已完成历史
+const allRows = computed(() => [
+  ...pendingRows.value.filter((r) => !r.is_placeholder),
+  ...historyRows.value,
+]);
+const listRows = computed(() => (tab.value === 'pending' ? pendingRows.value : allRows.value));
 
 // 创建发运弹窗
 const createModal = reactive({
@@ -643,8 +663,8 @@ async function fillPrintedStatus(rows) {
 
 // 已完成:本地持久化历史(全店铺)
 async function loadHistory() {
-  if (loading.value) return;
-  loading.value = true;
+  if (historyLoading.value) return;
+  historyLoading.value = true;
   try {
     const data = await getCarriageHistory(activeStoreId.value);
     historyRows.value = (data?.items || []).map((it) => ({
@@ -656,7 +676,7 @@ async function loadHistory() {
   } catch (err) {
     toast(err.message || '发运历史加载失败');
   } finally {
-    loading.value = false;
+    historyLoading.value = false;
   }
 }
 
@@ -668,7 +688,16 @@ function refresh() {
       loadCarriages();
     }
   } else {
-    loadHistory();
+    // 全部模式:进行中 + 历史一起刷新
+    const loadAll = () => {
+      loadCarriages();
+      loadHistory();
+    };
+    if (!stores.value.length) {
+      loadStores().then(loadAll);
+    } else {
+      loadAll();
+    }
   }
 }
 
@@ -683,10 +712,17 @@ onShow(() => {
   if (!stores.value.length) {
     loadStores().then(() => {
       if (tab.value === 'pending') loadCarriages();
+      else {
+        loadCarriages();
+        loadHistory();
+      }
     });
   } else if (tab.value === 'pending') {
     // 回到页面时刷新待处理清单(创建/确认/取消后返回保持最新)
     loadCarriages();
+  } else if (tab.value === 'all') {
+    loadCarriages();
+    loadHistory();
   }
 });
 
@@ -1103,6 +1139,11 @@ async function onSavePostings() {
 
 // ── 确认/取消发运 ────────────────────────────────────────
 async function onApprove() {
+  // 2026-11-02:OGL 上门取件发运确认前必须先保存快递员联系方式(Ozon COURIER_CONTACT_REQUIRE)
+  if (contactApplicable.value && !(detail.contact || []).length) {
+    toast('该发运需先保存快递员联系方式(联系电话+取件地址),再确认发运');
+    return;
+  }
   const confirmed = await new Promise((resolve) => {
     uni.showModal({
       title: '确认发运',

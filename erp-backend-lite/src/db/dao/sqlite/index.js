@@ -9,6 +9,7 @@ import { shallowCollectLogDao } from './shallow-log-dao.js';
 import { storeClassificationDao, storeSkuDao } from './store-daos.js';
 import { collectQueueTasksDao, collectQueueOpsDao } from './queue-daos.js';
 import { orderPackageDao, setStoreNameMap } from './order-daos.js';
+import * as carriagePostingDao from './carriage-posting-dao.js';
 import { startTtlCleaner } from './ttl-cleaner.js';
 
 /**
@@ -49,5 +50,7 @@ export async function createSqliteDaos() {
     collectQueueOpsDao,
     // 订单处理(2026-08)
     orderPackageDao,
+    // 货件-发运单关联(2026-11-02)
+    carriagePostingDao,
   };
 }

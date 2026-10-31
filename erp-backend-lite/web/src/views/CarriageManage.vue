@@ -39,11 +39,14 @@ const labelPrint = reactive(useCarriageLabelPrint());
 
 // 页面模式(2026-11-01):由 CarriageCenter 顶层 tab 驱动
 // - pending:快递员联系方式配置 + 全店铺进行中发运清单(含创建/打印)
-// - done:已完成发运历史(本地持久化)
+// - all:全部发运(进行中不含"待创建"占位行 + 已完成历史)
+// - done:已完成发运历史(本地持久化,兼容旧入口)
 const props = defineProps({
   mode: { type: String, default: 'pending' },
 });
-const isPending = computed(() => props.mode !== 'done');
+const isPending = computed(() => props.mode === 'pending');
+const isDone = computed(() => props.mode === 'done');
+const isAll = computed(() => props.mode === 'all');
 
 // ── 状态文案 ────────────────────────────────────────────
 const CARRIAGE_STATUS_LABELS = {
@@ -64,8 +67,9 @@ function hasAction(c, action) {
   return Array.isArray(c?.available_actions) && c.available_actions.includes(action);
 }
 // 发运是否已确认:列表接口 /v2/carriage/delivery/list 不返回 available_actions(仅详情接口有),
-// 只能按状态判断。Ozon 在确认(approve)前处于 new/formed/created,尚未生成货运标签,预览/打印不可用(2026-10-30)。
-const UNCONFIRMED_CARRIAGE_STATUSES = ['new', 'formed', 'created'];
+// 只能按状态判断。2026-11-02 实测:formed(已形成)即可生成货位标签(预览/打印可用),
+// 仅 new(新建,尚未形成发运)不可用;确认(approve)后进入 created/awaiting_delivery 仍可打印。
+const UNCONFIRMED_CARRIAGE_STATUSES = ['new'];
 function isCarriageConfirmed(c) {
   return !UNCONFIRMED_CARRIAGE_STATUSES.includes(c?.status);
 }
@@ -196,6 +200,8 @@ const PENDING_STATUSES = ['new', 'formed', 'created', 'awaiting_delivery', 'deli
 const pendingRows = computed(() =>
   currentRows.value.filter((r) => r.is_placeholder || PENDING_STATUSES.includes(r.status))
 );
+// 进行中(排除"待创建"占位行)
+const activeRows = computed(() => pendingRows.value.filter((r) => !r.is_placeholder));
 
 // 已完成:本地持久化历史(2026-11-01,Ozon 已完成发运查不到,由后端同步入库)
 const history = reactive({ list: [], loaded: false, loading: false });
@@ -219,15 +225,29 @@ async function loadHistory() {
   }
 }
 
-// 当前模式展示行与加载状态(mode 由顶层 tab 驱动)
-const listLoading = computed(() => (isPending.value ? carriageList.loading : history.loading));
-const listLoaded = computed(() => (isPending.value ? carriageList.loaded : history.loaded));
-const listRows = computed(() => (isPending.value ? pendingRows.value : history.list));
+// 全部:进行中(不含"待创建"占位行) + 已完成历史
+const allRows = computed(() => [...activeRows.value, ...history.list]);
+
+// 当前模式展示行与加载状态(mode 由顶层 tab 驱动;全部=进行中+历史)
+const listLoading = computed(() =>
+  isPending.value ? carriageList.loading : isAll.value ? carriageList.loading || history.loading : history.loading
+);
+const listLoaded = computed(() =>
+  isPending.value ? carriageList.loaded : isAll.value ? carriageList.loaded && history.loaded : history.loaded
+);
+const listRows = computed(() =>
+  isPending.value ? pendingRows.value : isAll.value ? allRows.value : history.list
+);
 
 // 刷新当前模式数据
 function refreshCurrent() {
   if (isPending.value) {
     loadCarriages();
+    if (!contactConfigs.loaded) loadContactConfigs();
+  } else if (isAll.value) {
+    // 全部模式:进行中 + 历史一起刷新
+    loadCarriages();
+    loadHistory();
     if (!contactConfigs.loaded) loadContactConfigs();
   } else {
     loadHistory();
@@ -586,6 +606,11 @@ async function onSaveContact() {
 }
 
 async function onApprove() {
+  // 2026-11-02:OGL 上门取件发运确认前必须先保存快递员联系方式(Ozon COURIER_CONTACT_REQUIRE)
+  if (contactApplicable.value && !(detail.contact || []).length) {
+    show('该发运需先保存快递员联系方式(联系电话+取件地址),再确认发运', 'error');
+    return;
+  }
   const ok = await confirmStore.ask({
     title: '确认发运',
     message: `确认发运 #${detail.carriageId}?\n确认后发运进入「已生成」状态,后续可打印面单/货位标签。`,
@@ -713,13 +738,17 @@ async function onSavePostings() {
 // ── 初始化 ─────────────────────────────────────────────
 onMounted(async () => {
   // 打印机双通道探测与店铺加载解耦(2026-11-01):即使店铺加载失败也要尽快结束"探测中"状态
-  if (isPending.value) labelPrint.probePrinters();
+  if (!isDone.value) labelPrint.probePrinters();
   try {
     await storesStore.load();
     // 默认选第一个已配置 sync_credentials 的店铺(作为全局配置接口鉴权)
     storeId.value = usableStores.value[0]?.id || storesStore.list[0]?.id || '';
     if (isPending.value) {
       loadCarriages();
+      loadContactConfigs();
+    } else if (isAll.value) {
+      loadCarriages();
+      loadHistory();
       loadContactConfigs();
     } else {
       loadHistory();
@@ -811,14 +840,14 @@ defineExpose({ refreshCurrent, listLoading });
       </p>
     </div>
 
-    <!-- 发运清单(2026-11-01:待处理=进行中,已完成=历史快照;创建发运入口在待处理占位行) -->
+    <!-- 发运清单(2026-11-01:待处理=进行中,已完成=历史快照,全部=进行中+历史;创建发运入口在待处理占位行) -->
     <div class="card list-card">
       <div class="section-title">
-        {{ isPending ? '发运清单 · 待处理' : '发运清单 · 已完成' }}
+        {{ isPending ? '发运清单 · 待处理' : isAll ? '发运清单 · 全部' : '发运清单 · 已完成' }}
       </div>
 
-      <!-- 标签打印机(2026-11-01:并入发运清单,展示在清单上方;仅待处理模式) -->
-      <div v-if="isPending" class="printer-bar">
+      <!-- 标签打印机(2026-11-01:并入发运清单,展示在清单上方;待处理/全部模式) -->
+      <div v-if="!isDone" class="printer-bar">
         <span class="printer-label">标签打印机</span>
         <select
           v-model="labelPrint.selectedPrinter"
@@ -858,7 +887,7 @@ defineExpose({ refreshCurrent, listLoading });
 
       <div v-if="listLoading && !listRows.length" class="list-empty">加载中…</div>
       <div v-else-if="listLoaded && !listRows.length" class="list-empty">
-        {{ isPending ? '暂无进行中的发运' : '暂无已完成发运' }}
+        {{ isPending ? '暂无进行中的发运' : isAll ? '暂无发运记录' : '暂无已完成发运' }}
       </div>
       <table v-else class="carriage-table">
         <thead>

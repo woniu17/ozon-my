@@ -1247,3 +1247,40 @@ CREATE TABLE IF NOT EXISTS op_carriage_history (
 );
 CREATE INDEX IF NOT EXISTS idx_op_carriage_history_store ON op_carriage_history(store_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_op_carriage_history_status ON op_carriage_history(status);
+
+-- ════════════════════════════════════════════════════════════════
+-- 货件-发运单关联表(2026-10-31 设计)
+-- 背景:货件与发运单的绑定关系原本只存在 Ozon 侧,本地无 carriage 字段,
+--      发运单货件列表全靠实时查 Ozon,发运完成后查不到只能依赖 postings_json 快照。
+-- 本表将"货件 ↔ 发运单"关系持久化到本地:
+--  - 同一发运单内同一货件只有一行(唯一索引);
+--  - 同一货件当前只能在一个发运单(部分唯一索引 removed_at IS NULL);
+--  - removed_at 软删除,保留货件进出发运单的历史轨迹。
+-- 冗余 ozon_order_id/package_id 便于 JOIN op_ozon_order/op_package(头程单号、操作状态等)。
+-- 同步:写路径(create/set-postings/approve/cancel)+ 读路径(posting-list)+ 定时任务(carriage-history-sync)。
+-- ════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS op_carriage_posting (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id          TEXT NOT NULL,
+  carriage_id       INTEGER NOT NULL,
+  posting_number    TEXT NOT NULL,
+  ozon_order_id     INTEGER,
+  package_id        INTEGER,
+  delivery_method_id INTEGER,
+  departure_date   TEXT,
+  status            TEXT,
+  added_at          TEXT NOT NULL,
+  removed_at       TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  UNIQUE(store_id, carriage_id, posting_number)
+);
+-- 同一货件当前只能在一个发运单里
+CREATE UNIQUE INDEX IF NOT EXISTS uq_carriage_posting_current
+  ON op_carriage_posting(store_id, posting_number) WHERE removed_at IS NULL;
+-- 查发运单当前货件
+CREATE INDEX IF NOT EXISTS idx_carriage_posting_active
+  ON op_carriage_posting(store_id, carriage_id) WHERE removed_at IS NULL;
+-- 查货件所属发运单(含历史)
+CREATE INDEX IF NOT EXISTS idx_carriage_posting_posting
+  ON op_carriage_posting(store_id, posting_number);

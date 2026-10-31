@@ -56,6 +56,7 @@ import { translateCancelReason } from '../services/cancel-reason-i18n.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { extractWaybillBarcodes } from '../services/waybill-barcode.js';
 import { upsertPostingBarcode, findPostingByBarcode, missingBarcodePostings } from '../db/dao/sqlite/label-barcode-daos.js';
+import { syncCarriagePostings, markCarriageRemoved } from '../db/dao/sqlite/carriage-posting-dao.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate, getBydayStats, getSettledEligiblePackageIds } from '../db/dao/sqlite/accrual-dao.js';
 import { stripImageSizeSuffix, imageCacheUrlFor } from '../services/order-image-cache.js';
 import { runAccrualByDaySync } from '../services/accrual-byday-sync.js';
@@ -1618,10 +1619,46 @@ function requireCarriageStore(req) {
   return store;
 }
 function carriageHandleError(e, req, res, action) {
-  const msg = e?.message || String(e);
-  const status = /必填|必须为|未配置|不能|不可|尚未/.test(msg) ? 400 : 502;
+  let msg = e?.message || String(e);
+  let status = /必填|必须为|未配置|不能|不可|尚未/.test(msg) ? 400 : 502;
+  // 2026-11-02:Ozon 明确错误码 → 可读提示(OGL 上门取件确认发运前必须先保存快递员联系方式)
+  const ozonBody = e?.details?.body;
+  const ozonCode = ozonBody?.message || ozonBody?.code || '';
+  if (String(ozonCode).includes('COURIER_CONTACT_REQUIRE') || String(msg).includes('COURIER_CONTACT_REQUIRE')) {
+    msg = '请先保存快递员联系方式(联系电话+取件地址),再确认发运';
+    status = 400;
+  }
   logger.warn({ err: msg, storeId: req.body?.storeId }, `[order-process] ${action}失败`);
   res.status(status).json({ ok: false, message: `Ozon ${action}失败:${msg}` });
+}
+
+// 拉取发运货件列表并刷新本地"货件↔发运单"关联(2026-11-02)
+// 写路径(create/set-postings 成功)异步调用;任何异常只记日志,不阻塞主流程。
+async function refreshCarriagePostingLink(store, carriageId, meta = {}) {
+  try {
+    const postings = [];
+    let cursor = '';
+    let guard = 0;
+    do {
+      const page = await carriagePostingList(store, carriageId, { cursor, limit: 100 });
+      for (const p of page?.postings || []) {
+        if (p?.posting_number) postings.push(p);
+      }
+      cursor = page?.cursor || '';
+      guard += 1;
+      if (guard > 50) break; // 防死循环(单发运最多 5000 条)
+    } while (cursor);
+    syncCarriagePostings(store.id, carriageId, postings, {
+      deliveryMethodId: meta.deliveryMethodId,
+      departureDate: meta.departureDate,
+    });
+    logger.info(
+      { storeId: store.id, carriageId, count: postings.length },
+      '[order-process] 刷新货件-发运单关联完成'
+    );
+  } catch (e) {
+    logger.warn({ err: e?.message, storeId: store.id, carriageId }, '[order-process] 刷新货件-发运单关联失败');
+  }
 }
 
 // 为发运清单附加"24h内发运期限 / 已超时"货件数(2026-11-02)
@@ -1960,6 +1997,13 @@ router.post('/admin/api/order-process/carriage/create', async (req, res) => {
       allBlrTraceable: req.body?.allBlrTraceable,
     });
     logger.info({ storeId: store.id, carriageId: r?.carriage_id }, '[order-process] 创建发运成功');
+    // 2026-11-02:创建后异步刷新本地货件-发运单关联(新发运自动包含待发运货件)
+    if (r?.carriage_id) {
+      void refreshCarriagePostingLink(store, r.carriage_id, {
+        deliveryMethodId: req.body?.deliveryMethodId,
+        departureDate: req.body?.departureDate,
+      });
+    }
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '创建发运'); }
 });
@@ -1993,6 +2037,13 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
     if (r?.postings) {
       updateCarriageHistoryJson(store.id, req.body?.carriageId, {
         postingsJson: JSON.stringify(r.postings),
+      });
+    }
+    // 2026-11-02:读路径顺带刷新本地"货件↔发运单"关联
+    if (r?.postings) {
+      syncCarriagePostings(store.id, req.body?.carriageId, r.postings, {
+        deliveryMethodId: req.body?.deliveryMethodId,
+        departureDate: req.body?.departureDate,
       });
     }
     res.json(ok(r));
@@ -2048,6 +2099,13 @@ router.post('/admin/api/order-process/carriage/approve', async (req, res) => {
     // 新流程(2026-11):确认发运成功 → 发运单内货件 待发运 → 交运中
     try {
       const pl = await carriagePostingList(store, carriageId, { limit: 100 });
+      // 2026-11-02:复用同一份货件列表刷新本地关联(写路径强一致)
+      if (pl?.postings) {
+        syncCarriagePostings(store.id, carriageId, pl.postings, {
+          deliveryMethodId: req.body?.deliveryMethodId,
+          departureDate: req.body?.departureDate,
+        });
+      }
       const postingNumbers = (pl?.postings || []).map((p) => p.posting_number).filter(Boolean);
       if (postingNumbers.length) {
         const now = new Date().toISOString();
@@ -2077,6 +2135,10 @@ router.post('/admin/api/order-process/carriage/set-postings', async (req, res) =
       { storeId: store.id, carriageId: req.body?.carriageId, count: (req.body?.postingNumbers || []).length },
       '[order-process] 设置发运货件成功'
     );
+    // 2026-11-02:全量覆盖后异步刷新本地货件-发运单关联
+    if (req.body?.carriageId) {
+      void refreshCarriagePostingLink(store, req.body.carriageId);
+    }
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '设置发运货件'); }
 });
@@ -2091,6 +2153,13 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
     if (!carriageId) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'carriageId 必填');
     const deliveryMethodId = req.body?.deliveryMethodId;
     const current = await carriagePostingList(store, carriageId, { limit: 100 });
+    // 2026-11-02:读路径顺带刷新本地货件-发运单关联
+    if (current?.postings) {
+      syncCarriagePostings(store.id, carriageId, current.postings, {
+        deliveryMethodId,
+        departureDate: req.body?.departureDate,
+      });
+    }
     const currentSet = new Set((current?.postings || []).map((p) => p.posting_number));
     const candidates = [];
     let cursor = '';
@@ -2125,6 +2194,13 @@ router.post('/admin/api/order-process/carriage/cancel', async (req, res) => {
     const store = requireCarriageStore(req);
     const r = await carriageCancel(store, req.body?.carriageId);
     logger.info({ storeId: store.id, carriageId: req.body?.carriageId, status: r?.carriage_status }, '[order-process] 取消发运成功');
+    // 2026-11-02:取消后货件回到待发运池,本地活跃关联全部标记移出
+    if (req.body?.carriageId) {
+      const removed = markCarriageRemoved(store.id, req.body.carriageId);
+      if (removed) {
+        logger.info({ storeId: store.id, carriageId: req.body.carriageId, removed }, '[order-process] 取消发运清除货件关联');
+      }
+    }
     res.json(ok(r));
   } catch (e) { carriageHandleError(e, req, res, '取消发运'); }
 });
