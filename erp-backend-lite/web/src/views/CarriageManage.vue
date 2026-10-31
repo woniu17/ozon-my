@@ -136,6 +136,8 @@ const createModal = reactive({
   comment: '',
   selectedContactConfigId: '',
   contactConfigs: [], // 按创建店铺独立加载的联系方式配置
+  configEditing: false, // 创建弹窗内配置管理(新增/修改)展开状态
+  savingConfigs: false, // 配置保存中
   // 货件列表指定(2026-11-04):Ozon create 不支持指定货件,创建后走 set-postings 全量覆盖
   selectedPostingNumbers: [], // 勾选进入发运的货件号
   allSelected: true, // 全选状态
@@ -161,6 +163,7 @@ const detail = reactive({
   comment: '',
   selectedContactConfigId: '', // 下拉选择的配置项 id(空=手动填写)
   savingContact: false,
+  editingContact: false, // 2026-11-05:详情弹窗联系方式默认只读展示,点击「修改」才进入输入框编辑
   containersCount: '',
   approving: false,
   cancelling: false,
@@ -427,6 +430,7 @@ async function onGoCreate(row) {
   createModal.comment = '';
   createModal.selectedContactConfigId = '';
   createModal.contactConfigs = [];
+  createModal.configEditing = false; // 每次打开创建弹窗默认收起配置管理(2026-11-05)
   try {
     const data = await listCourierContactConfigs(createModal.storeId);
     createModal.contactConfigs = data?.contacts || [];
@@ -538,10 +542,64 @@ async function onCreateFromModal() {
 // 创建弹窗:选择已配置的联系方式后自动填充(2026-11-04)
 function onCreateSelectContactConfig() {
   const item = createModal.contactConfigs.find((c) => c.id === createModal.selectedContactConfigId);
-  if (!item) return;
+  if (!item) return; // 手动填写:保留当前表单内容
   createModal.phone = item.phone || '';
   createModal.wechatNickname = item.wechatNickname || createModal.storeName;
   createModal.comment = item.comment || '';
+}
+
+// 创建弹窗:配置管理(2026-11-05)
+function onCreateAddConfig() {
+  createModal.contactConfigs.push({
+    id: String(Date.now()) + Math.random().toString(36).slice(2, 6),
+    phone: '',
+    wechatNickname: '',
+    comment: '',
+    isDefault: false,
+  });
+  createModal.configEditing = true;
+}
+
+function onCreateRemoveConfig(index) {
+  createModal.contactConfigs.splice(index, 1);
+}
+
+function onCreateSetDefault(item) {
+  for (const c of createModal.contactConfigs) c.isDefault = false;
+  item.isDefault = true;
+}
+
+async function onCreateSaveConfigs() {
+  const incomplete = createModal.contactConfigs.find((c) => !c.phone.trim() || !c.comment.trim());
+  if (incomplete) {
+    show('每条配置都需要填写电话和地址', 'error');
+    return;
+  }
+  const valid = createModal.contactConfigs.filter((c) => c.phone.trim() && c.comment.trim());
+  createModal.savingConfigs = true;
+  try {
+    const data = await saveCourierContactConfigs(createModal.storeId, valid);
+    createModal.contactConfigs = data?.contacts || [];
+    // 保存成功后,用当前选中配置(或默认配置)的最新值刷新表单
+    const cur =
+      createModal.contactConfigs.find((c) => c.id === createModal.selectedContactConfigId) ||
+      createModal.contactConfigs.find((c) => c.isDefault) ||
+      createModal.contactConfigs[0] ||
+      null;
+    if (cur) {
+      createModal.selectedContactConfigId = cur.id || '';
+      createModal.phone = cur.phone || '';
+      createModal.wechatNickname = cur.wechatNickname || createModal.storeName;
+      createModal.comment = cur.comment || '';
+    } else {
+      createModal.selectedContactConfigId = '';
+    }
+    show('联系方式配置已保存', 'success');
+  } catch (err) {
+    show(err.message || String(err), 'error');
+  } finally {
+    createModal.savingConfigs = false;
+  }
 }
 
 // 创建弹窗:货件全选/取消全选(2026-11-04)
@@ -598,6 +656,7 @@ async function openDetail(row) {
   detail.comment = '';
   detail.containersCount = '';
   detail.selectedContactConfigId = '';
+  detail.editingContact = false; // 详情弹窗默认只读展示联系方式(2026-11-05)
   editPostings.dirty = false;
   if (!contactConfigs.loaded) await loadContactConfigs();
   // 本地历史快照(2026-11-01):Ozon 已完成发运查不到,直接展示本地保存的货件/联系方式
@@ -797,12 +856,30 @@ async function onSaveContact() {
       comment: detail.comment.trim(),
     });
     show('快递员联系方式已保存', 'success');
+    detail.editingContact = false;
     await loadContact(detail.carriage);
   } catch (err) {
     show(err.message || String(err), 'error');
   } finally {
     detail.savingContact = false;
   }
+}
+
+// 取消编辑:退出编辑模式并恢复为已保存值
+function onCancelEditContact() {
+  detail.editingContact = false;
+  const first = detail.contact[0];
+  const storeName = currentStoreName();
+  if (first) {
+    detail.phone = first.phone || '';
+    detail.wechatNickname = first.wechat_nickname || storeName;
+    detail.comment = first.comment || '';
+  } else {
+    detail.phone = '';
+    detail.wechatNickname = storeName;
+    detail.comment = '';
+  }
+  detail.selectedContactConfigId = '';
 }
 
 async function onApprove() {
@@ -1358,19 +1435,49 @@ defineExpose({ refreshCurrent, listLoading });
           </div>
         </div>
 
-        <!-- 快递员联系方式(2026-11-04:调整到货件列表上方) -->
+        <!-- 快递员联系方式(2026-11-04:调整到货件列表上方;2026-11-05:默认只读展示,「修改」才进入输入框编辑) -->
         <div class="detail-section">
           <div class="detail-section-head">
             <span>快递员联系方式</span>
             <em v-if="detail.fromHistory" class="field-hint">历史快照,仅展示</em>
             <em v-else-if="!contactApplicable" class="field-hint">仅 OGL 上门取件(pickup + ozon_outsourced)适用</em>
+            <em v-else-if="!detail.contact.length" class="field-hint">未填写</em>
+            <div class="spacer"></div>
+            <button
+              v-if="!detail.fromHistory && contactApplicable && !detail.editingContact"
+              class="btn btn-ghost btn-sm"
+              @click="detail.editingContact = true"
+            >
+              修改
+            </button>
           </div>
-          <div class="contact-form">
+
+          <!-- 只读展示(2026-11-05:默认不显示输入框) -->
+          <div v-if="!detail.editingContact" class="contact-view">
+            <template v-if="detail.contact.length">
+              <div class="contact-view-row">
+                <span class="contact-view-label">电话</span>
+                <span class="contact-view-value">{{ detail.contact[0].phone || '—' }}</span>
+              </div>
+              <div class="contact-view-row">
+                <span class="contact-view-label">下单人名称</span>
+                <span class="contact-view-value">{{ detail.contact[0].wechat_nickname || '—' }}</span>
+              </div>
+              <div class="contact-view-row">
+                <span class="contact-view-label">取件地址</span>
+                <span class="contact-view-value">{{ detail.contact[0].comment || '—' }}</span>
+              </div>
+            </template>
+            <p v-else class="form-hint">该发运暂未保存快递员联系方式。</p>
+          </div>
+
+          <!-- 编辑模式(仅在点击「修改」后出现) -->
+          <div v-else class="contact-form">
             <label class="contact-select-label">
               <span>选择配置</span>
               <select
                 v-model="detail.selectedContactConfigId"
-                :disabled="detail.fromHistory || !contactApplicable || !contactConfigs.list.length"
+                :disabled="!contactConfigs.list.length"
                 @change="onSelectContactConfig"
               >
                 <option value="">手动填写</option>
@@ -1381,36 +1488,31 @@ defineExpose({ refreshCurrent, listLoading });
             </label>
             <label>
               <span>电话 <em class="req">*</em></span>
-              <input v-model="detail.phone" placeholder="快递员联系电话" :disabled="detail.fromHistory || !contactApplicable" />
+              <input v-model="detail.phone" placeholder="快递员联系电话" />
             </label>
             <label>
               <span>下单人名称</span>
-              <input v-model="detail.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" :disabled="detail.fromHistory || !contactApplicable" />
+              <input v-model="detail.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" />
             </label>
             <label>
               <span>地址 <em class="req">*</em></span>
-              <input v-model="detail.comment" placeholder="提供给快递公司的取件地址" :disabled="detail.fromHistory || !contactApplicable" />
+              <input v-model="detail.comment" placeholder="提供给快递公司的取件地址" />
             </label>
             <button
-              v-if="!detail.fromHistory"
-              class="btn btn-ghost btn-sm"
-              :disabled="detail.savingContact || !contactApplicable"
+              class="btn btn-primary btn-sm"
+              :disabled="detail.savingContact"
               @click="onSaveContact"
             >
               {{ detail.savingContact ? '保存中…' : '保存' }}
             </button>
-            <button
-              v-if="!detail.fromHistory"
-              class="btn btn-ghost btn-sm"
-              :disabled="!contactApplicable"
-              @click="onSetAsDefault"
-            >
+            <button class="btn btn-ghost btn-sm" :disabled="!contactApplicable" @click="onSetAsDefault">
               设为默认
             </button>
+            <button class="btn btn-ghost btn-sm" @click="onCancelEditContact">取消</button>
           </div>
           <p class="form-hint">
             电话与地址必填(地址为提供给快递公司的取件地址);下单人名称选填默认店铺名。
-            从配置中选择可自动填充;「设为默认」把当前内容存为默认配置项。
+            「设为默认」把当前内容存为默认配置项,供下次创建发运时自动选择。
           </p>
         </div>
 
@@ -1608,26 +1710,47 @@ defineExpose({ refreshCurrent, listLoading });
           </div>
         </div>
 
-        <!-- 快递员联系方式:创建时一并指定(2026-11-04) -->
+        <!-- 快递员联系方式:创建时一并指定(2026-11-04;2026-11-05:展示全部配置选项,默认单选框选中默认配置,可在此新增/修改) -->
         <div class="detail-section">
           <div class="detail-section-head">
             <span>快递员联系方式</span>
             <em class="field-hint">OGL 上门取件(pickup + ozon_outsourced)适用;填写电话 + 取件地址后随发运一并保存</em>
           </div>
-          <div class="contact-form">
-            <label class="contact-select-label">
-              <span>选择配置</span>
-              <select
+
+          <!-- 配置单选列表(2026-11-05):展示所有配置,默认选中默认配置 -->
+          <div v-if="createModal.contactConfigs.length" class="create-contact-picker">
+            <label
+              v-for="c in createModal.contactConfigs"
+              :key="c.id"
+              class="cc-radio-row"
+              :class="{ active: createModal.selectedContactConfigId === c.id }"
+            >
+              <input
+                type="radio"
+                name="create-contact-config"
+                :value="c.id"
                 v-model="createModal.selectedContactConfigId"
-                :disabled="!createModal.contactConfigs.length"
                 @change="onCreateSelectContactConfig"
-              >
-                <option value="">手动填写</option>
-                <option v-for="c in createModal.contactConfigs" :key="c.id" :value="c.id">
-                  {{ c.wechatNickname || c.phone || '(未命名)' }}{{ c.phone ? ` · ${c.phone}` : '' }}{{ c.isDefault ? ' · 默认' : '' }}
-                </option>
-              </select>
+              />
+              <span class="cc-phone">{{ c.phone || '(未填电话)' }}</span>
+              <span class="cc-item">{{ c.wechatNickname || '默认店铺名' }}</span>
+              <span class="cc-item cc-address" :title="c.comment">{{ c.comment || '—' }}</span>
+              <span v-if="c.isDefault" class="cc-default-tag">默认</span>
             </label>
+            <label class="cc-radio-row" :class="{ active: !createModal.selectedContactConfigId }">
+              <input
+                type="radio"
+                name="create-contact-config"
+                value=""
+                v-model="createModal.selectedContactConfigId"
+                @change="onCreateSelectContactConfig"
+              />
+              <span class="cc-item">手动填写</span>
+            </label>
+          </div>
+
+          <!-- 联系方式表单(选择配置后自动填充) -->
+          <div class="contact-form">
             <label>
               <span>电话 <em class="req">*</em></span>
               <input v-model="createModal.phone" placeholder="快递员联系电话" />
@@ -1640,6 +1763,58 @@ defineExpose({ refreshCurrent, listLoading });
               <span>取件地址 <em class="req">*</em></span>
               <input v-model="createModal.comment" placeholder="提供给快递公司的取件地址" />
             </label>
+            <button class="btn btn-ghost btn-sm" @click="createModal.configEditing = !createModal.configEditing">
+              {{ createModal.configEditing ? '收起配置管理' : '管理配置' }}
+            </button>
+          </div>
+
+          <!-- 配置管理(2026-11-05):在创建弹窗内直接新增/修改/删除/设默认 -->
+          <div v-if="createModal.configEditing" class="create-contact-config-edit">
+            <table v-if="createModal.contactConfigs.length" class="contact-config-table">
+              <thead>
+                <tr>
+                  <th class="def-col">默认</th>
+                  <th>电话 <em class="req">*</em></th>
+                  <th>下单人名称</th>
+                  <th>地址 <em class="req">*</em></th>
+                  <th class="ops">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(c, i) in createModal.contactConfigs" :key="c.id">
+                  <td class="def-col">
+                    <input
+                      type="radio"
+                      name="create-contact-config-default"
+                      :checked="c.isDefault"
+                      @change="onCreateSetDefault(c)"
+                    />
+                  </td>
+                  <td><input v-model="c.phone" class="cc-phone-input" placeholder="快递员联系电话" /></td>
+                  <td>
+                    <input
+                      v-model="c.wechatNickname"
+                      class="cc-nick-input"
+                      :placeholder="`选填,默认:${createModal.storeName || '店铺名'}`"
+                    />
+                  </td>
+                  <td><input v-model="c.comment" placeholder="提供给快递公司的取件地址" /></td>
+                  <td class="ops">
+                    <button class="btn btn-danger btn-sm" @click="onCreateRemoveConfig(i)">删除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="contact-config-actions">
+              <button class="btn btn-ghost btn-sm" @click="onCreateAddConfig">添加联系方式</button>
+              <button
+                class="btn btn-primary btn-sm"
+                :disabled="createModal.savingConfigs"
+                @click="onCreateSaveConfigs"
+              >
+                {{ createModal.savingConfigs ? '保存中…' : '保存配置' }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -2094,6 +2269,69 @@ defineExpose({ refreshCurrent, listLoading });
   min-width: 160px;
   background: #fff;
   color: var(--text);
+}
+/* 详情弹窗联系方式只读展示(2026-11-05) */
+.contact-view {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.contact-view-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+}
+.contact-view-label {
+  flex: 0 0 72px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.contact-view-value {
+  color: var(--text);
+  word-break: break-all;
+}
+/* 创建弹窗配置单选列表(2026-11-05) */
+.create-contact-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.cc-radio-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.cc-radio-row:hover {
+  border-color: var(--primary);
+}
+.cc-radio-row.active {
+  border-color: var(--primary);
+  background: rgba(24, 144, 255, 0.06);
+}
+.cc-radio-row input[type='radio'] {
+  accent-color: var(--primary);
+  margin: 0;
+}
+.cc-default-tag {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  background: var(--primary);
+  color: #fff;
+}
+.create-contact-config-edit {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
 }
 .req {
   color: var(--danger);
