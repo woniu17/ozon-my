@@ -56,6 +56,20 @@ fun View.setRoundedBg(color: Int, radiusDp: Float = 6f) {
     }
 }
 
+/** 圆角背景 + 细描边（Ozon 风格浅边框卡片，替代阴影） */
+fun View.setRoundedBgStroke(fillColor: Int, strokeColor: Int, radiusDp: Float = 16f, strokeWidthDp: Float = 1f) {
+    background = GradientDrawable().apply {
+        setColor(fillColor)
+        cornerRadius = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP, radiusDp, resources.displayMetrics
+        )
+        setStroke(
+            TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, strokeWidthDp, resources.displayMetrics).toInt(),
+            strokeColor
+        )
+    }
+}
+
 /** 简易流式布局：子 View 按行自动换行（标签可选列表 chip 用） */
 class FlowLayout(context: Context) : ViewGroup(context) {
 

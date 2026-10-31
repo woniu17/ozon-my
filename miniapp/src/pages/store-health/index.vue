@@ -8,28 +8,49 @@
     <view v-if="error" class="error-bar">{{ error }}</view>
     <view v-if="syncError" class="error-bar">同步失败:{{ syncError }}</view>
 
-    <!-- ═══ 概览指标卡 ═══ -->
+    <!-- ═══ 概览:指数 Hero + 五色刻度条 + 2x2 指标卡(Ozon 风格) ═══ -->
     <view v-if="summary && summary.stores.length" class="summary-grid">
-      <view class="summary-card">
-        <view class="sc-head">🏥 错误指数</view>
-        <view class="sc-count">{{ fmtIndex(topStore.index) }}</view>
-        <view class="sc-sub">{{ topStore.storeName }}</view>
-        <view class="sc-sub">{{ topStore.periodFrom }} ~ {{ fmtPeriodEnd(topStore.periodTo) }}</view>
+      <view class="hero-card">
+        <view class="hero-row">
+          <view class="hero-index">
+            <view class="hero-index-value" :style="{ color: indexColor(topStore.index) }">{{ fmtIndex(topStore.index) }}</view>
+            <view class="hero-label">14天内指数</view>
+          </view>
+          <view class="hero-cost">
+            <view class="hero-cost-value">¥{{ fmtMoney(totals.chargeSum) }}</view>
+            <view class="hero-label">近14天罚款支出</view>
+          </view>
+        </view>
+        <view class="index-scale">
+          <view
+            v-for="(z, i) in scaleSegments(topStore.index)"
+            :key="i"
+            class="scale-seg"
+            :style="segStyle(z)"
+          >
+            <text v-if="z.isActive" class="scale-value" :style="segLabelStyle(z)">{{ fmtIndex(topStore.index) }}</text>
+          </view>
+        </view>
+        <view class="scale-thresholds">
+          <text v-for="t in INDEX_THRESHOLDS" :key="t" class="threshold">{{ t }}</text>
+        </view>
       </view>
-      <view class="summary-card">
-        <view class="sc-head">💰 错误处理费用</view>
-        <view class="sc-count">¥{{ fmtMoney(totals.chargeSum) }}</view>
-        <view class="sc-sub">{{ totals.errorPostingCount }} 单计费</view>
+
+      <view class="metric-card">
+        <view class="mc-head"><view class="mc-dot" style="background:#165dff"></view><text>影响货件</text></view>
+        <view class="mc-count">{{ fmtNum(totals.errorPostingCount) }}<text class="mc-unit">单</text></view>
       </view>
-      <view class="summary-card">
-        <view class="sc-head">📦 影响货件</view>
-        <view class="sc-count">{{ fmtNum(totals.errorPostingCount) }} 单</view>
-        <view class="sc-sub">取消 <text class="red-t">{{ fmtNum(totals.sellerCancellationCount) }}</text> · 逾期 <text class="orange-t">{{ fmtNum(totals.sellerDelayCount) }}</text></view>
+      <view class="metric-card">
+        <view class="mc-head"><view class="mc-dot" style="background:#f53f3f"></view><text>卖家取消</text></view>
+        <view class="mc-count">{{ fmtNum(totals.sellerCancellationCount) }}<text class="mc-unit">单</text></view>
       </view>
-      <view class="summary-card">
-        <view class="sc-head">🛡️ 宽限货件</view>
-        <view class="sc-count">{{ fmtNum(totals.graceCount) }} 单</view>
-        <view class="sc-sub">has_grace_status=true</view>
+      <view class="metric-card">
+        <view class="mc-head"><view class="mc-dot" style="background:#d97706"></view><text>卖家逾期</text></view>
+        <view class="mc-count">{{ fmtNum(totals.sellerDelayCount) }}<text class="mc-unit">单</text></view>
+      </view>
+      <view class="metric-card">
+        <view class="mc-head"><view class="mc-dot" style="background:#00b42a"></view><text>宽限中</text></view>
+        <view class="mc-count">{{ fmtNum(totals.graceCount) }}<text class="mc-unit">单</text></view>
       </view>
     </view>
     <view v-else-if="summary" class="empty-tip">暂无错误指数数据,点击「同步」拉取 Ozon 最新数据</view>
@@ -38,7 +59,7 @@
     <view v-if="summary && summary.stores.length" class="store-list-card">
       <view class="store-list-title">店铺错误指数</view>
       <view v-for="s in sortedStores" :key="s.storeId" class="store-index-row">
-        <view class="status-dot" :class="indexStatus(s.index)"></view>
+        <view class="status-dot" :style="{ background: indexColor(s.index) }"></view>
         <view class="sl-name">{{ s.storeName }}</view>
         <view class="sl-track">
           <view class="sl-fill" :style="{ width: indexBarWidth(s.index) + '%', background: indexColor(s.index) }"></view>
@@ -222,13 +243,53 @@ const topStore = computed(() => {
   if (!stores.length) return null;
   return [...stores].sort((a, b) => (Number(b.index) || 0) - (Number(a.index) || 0))[0];
 });
-function indexStatus(idx) {
-  const n = Number(idx) || 0;
-  if (n <= 0.15) return 'ok';
-  if (n <= 0.35) return 'warning';
-  return 'critical';
-}
 const totals = computed(() => summary.value?.totals || null);
+
+/** Ozon 官方错误指数色带阈值(≤4% 绿 / ≤10% 青 / ≤20% 黄 / ≤40% 橙 / >40% 红) */
+function indexColor(idx) {
+  const n = Number(idx) || 0;
+  if (n <= 0.04) return '#00a32e';
+  if (n <= 0.10) return '#009a9a';
+  if (n <= 0.20) return '#d99000';
+  if (n <= 0.40) return '#ee6a00';
+  return '#e53414';
+}
+
+// ── Ozon 五色指数刻度条(绿/青/黄/橙/红)──
+const INDEX_ZONES = [
+  { from: 0.0, to: 0.04, tint: '#d7f9d7', solid: '#00c451' },
+  { from: 0.04, to: 0.1, tint: '#d7f6f5', solid: '#00bebe' },
+  { from: 0.1, to: 0.2, tint: '#fff8e0', solid: '#ffb800' },
+  { from: 0.2, to: 0.4, tint: '#ffebd2', solid: '#f88f14' },
+  { from: 0.4, to: 1.01, tint: '#ffe9e3', solid: '#f53c14' },
+];
+const INDEX_THRESHOLDS = ['0%', '4%', '10%', '20%', '40%', '100%'];
+function scaleSegments(idx) {
+  const n = Math.min(Math.max(Number(idx) || 0, 0), 1);
+  const activeIdx = INDEX_ZONES.findIndex((z) => n < z.to);
+  return INDEX_ZONES.map((z, i) => {
+    const isActive = i === activeIdx;
+    const fillPct = isActive ? Math.max(0, Math.min(1, (n - z.from) / (z.to - z.from))) * 100 : 0;
+    return { ...z, isActive, fillPct };
+  });
+}
+function segStyle(z) {
+  if (!z.isActive) return { background: z.tint };
+  return { background: `linear-gradient(90deg, ${z.solid} 0%, ${z.solid} ${z.fillPct}%, ${z.tint} ${z.fillPct}%, ${z.tint} 100%)` };
+}
+function segLabelStyle(z) {
+  if (!z.isActive) return {};
+  const onFill = z.fillPct > 30;
+  const style = { color: onFill ? '#fff' : z.solid };
+  if (onFill) {
+    style.right = `calc(${100 - z.fillPct}% + 4px)`;
+    style.left = 'auto';
+  } else {
+    style.left = '6px';
+    style.right = 'auto';
+  }
+  return style;
+}
 
 // ── 趋势图 ──
 const STORE_COLORS = ['#165dff', '#00b42a', '#d97706', '#722ed1', '#eb2f96', '#13c2c2', '#fa8c16'];
@@ -319,13 +380,9 @@ function fmtPeriodEnd(dateStr) {
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 }
-function indexColor(idx) {
-  const s = indexStatus(idx);
-  return s === 'ok' ? '#00b42a' : s === 'warning' ? '#d97706' : '#f53f3f';
-}
 function indexBarWidth(idx) {
   const n = Number(idx) || 0;
-  return Math.max(2, Math.min(100, (Math.min(n, 0.5) / 0.5) * 100));
+  return Math.max(2, Math.min(100, (Math.min(n, 1) / 1) * 100));
 }
 const sortedStores = computed(() => {
   const stores = summary.value?.stores || [];
@@ -386,36 +443,109 @@ onReachBottom(() => {
   margin-bottom: 16rpx;
 }
 
-/* 概览卡片 */
+/* 概览:指数 Hero + 五色刻度条 + 2x2 指标卡(Ozon 风格) */
 .summary-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 16rpx;
   margin-bottom: 20rpx;
 }
-.summary-card {
-  flex: 1 1 calc(50% - 8rpx);
-  min-width: 300rpx;
+.hero-card {
+  flex: 1 1 100%;
   background: #fff;
-  border-radius: 16rpx;
-  padding: 24rpx;
+  border: 1rpx solid #e9edf3;
+  border-radius: 32rpx;
+  padding: 28rpx 28rpx 20rpx;
   box-sizing: border-box;
 }
-.sc-head {
-  font-size: 24rpx;
-  color: #4e5969;
-  margin-bottom: 10rpx;
+.hero-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16rpx;
 }
-.sc-count {
+.hero-index-value {
+  font-size: 64rpx;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.hero-cost-value {
   font-size: 44rpx;
   font-weight: 700;
   color: #1f2329;
-  line-height: 1.2;
+  line-height: 1.1;
+  text-align: right;
 }
-.sc-sub {
+.hero-label {
   font-size: 22rpx;
   color: #86909c;
-  margin-top: 6rpx;
+  margin-top: 8rpx;
+}
+.index-scale {
+  display: flex;
+  gap: 6rpx;
+  margin-top: 24rpx;
+  height: 40rpx;
+}
+.scale-seg {
+  position: relative;
+  flex: 1;
+  border-radius: 8rpx;
+  overflow: hidden;
+}
+.scale-seg:first-child { border-radius: 12rpx 0 0 12rpx; }
+.scale-seg:last-child { border-radius: 0 12rpx 12rpx 0; }
+.scale-value {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 22rpx;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  z-index: 1;
+}
+.scale-thresholds {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8rpx;
+  font-size: 18rpx;
+  color: #86909c;
+}
+.metric-card {
+  flex: 1 1 calc(50% - 8rpx);
+  min-width: 300rpx;
+  background: #fff;
+  border: 1rpx solid #e9edf3;
+  border-radius: 24rpx;
+  padding: 24rpx;
+  box-sizing: border-box;
+}
+.mc-head {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  font-size: 24rpx;
+  color: #4e5969;
+}
+.mc-dot {
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.mc-count {
+  font-size: 48rpx;
+  font-weight: 700;
+  color: #1f2329;
+  line-height: 1.2;
+  margin-top: 12rpx;
+}
+.mc-unit {
+  font-size: 22rpx;
+  font-weight: 400;
+  color: #86909c;
+  margin-left: 6rpx;
 }
 .red-t { color: #f53f3f; }
 .orange-t { color: #d97706; }
@@ -450,9 +580,6 @@ onReachBottom(() => {
   border-radius: 50%;
   flex-shrink: 0;
 }
-.status-dot.ok { background: #00b42a; }
-.status-dot.warning { background: #d97706; }
-.status-dot.critical { background: #f53f3f; }
 .sl-name {
   width: 160rpx;
   flex-shrink: 0;

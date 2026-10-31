@@ -78,12 +78,58 @@ const topStore = computed(() => {
   if (stores.length === 0) return null;
   return [...stores].sort((a, b) => (Number(b.index) || 0) - (Number(a.index) || 0))[0];
 });
-function indexStatus(idx) {
+/** Ozon 官方错误指数色带阈值(≤4% 绿 / ≤10% 青 / ≤20% 黄 / ≤40% 橙 / >40% 红) */
+function indexColor(idx) {
   const n = Number(idx) || 0;
-  // 本地参考阈值:<=0.15 OK,<=0.35 WARNING,>0.35 CRITICAL(非官方,仅页面视觉提示)
-  if (n <= 0.15) return 'ok';
-  if (n <= 0.35) return 'warning';
-  return 'critical';
+  if (n <= 0.04) return '#00a32e';
+  if (n <= 0.10) return '#009a9a';
+  if (n <= 0.20) return '#d99000';
+  if (n <= 0.40) return '#ee6a00';
+  return '#e53414';
+}
+
+// ── Ozon 五色指数刻度条(绿/青/黄/橙/红)──────────────────────
+const INDEX_ZONES = [
+  { from: 0.0, to: 0.04, tint: '#d7f9d7', solid: '#00c451' },
+  { from: 0.04, to: 0.1, tint: '#d7f6f5', solid: '#00bebe' },
+  { from: 0.1, to: 0.2, tint: '#fff8e0', solid: '#ffb800' },
+  { from: 0.2, to: 0.4, tint: '#ffebd2', solid: '#f88f14' },
+  { from: 0.4, to: 1.01, tint: '#ffe9e3', solid: '#f53c14' },
+];
+const INDEX_THRESHOLDS = ['0%', '4%', '10%', '20%', '40%', '100%'];
+
+/** 计算每个区段的展示状态:当前指数所在区段实心填充,其余浅色底 */
+function scaleSegments(idx) {
+  const n = Math.min(Math.max(Number(idx) || 0, 0), 1);
+  const activeIdx = INDEX_ZONES.findIndex((z) => n < z.to);
+  return INDEX_ZONES.map((z, i) => {
+    const isActive = i === activeIdx;
+    const fillPct = isActive
+      ? Math.max(0, Math.min(1, (n - z.from) / (z.to - z.from))) * 100
+      : 0;
+    return { ...z, isActive, fillPct };
+  });
+}
+/** 刻度条区段背景:活动区段用 solid→tint 渐变表示已填充比例 */
+function segStyle(z) {
+  if (!z.isActive) return { background: z.tint };
+  return {
+    background: `linear-gradient(90deg, ${z.solid} 0%, ${z.solid} ${z.fillPct}%, ${z.tint} ${z.fillPct}%, ${z.tint} 100%)`,
+  };
+}
+/** 刻度条数值标签:填充够宽时白色放填充右端内侧,否则实心色放区段左端 */
+function segLabelStyle(z) {
+  if (!z.isActive) return {};
+  const onFill = z.fillPct > 30;
+  const style = { color: onFill ? '#fff' : z.solid };
+  if (onFill) {
+    style.right = `calc(${100 - z.fillPct}% + 4px)`;
+    style.left = 'auto';
+  } else {
+    style.left = '6px';
+    style.right = 'auto';
+  }
+  return style;
 }
 const totals = computed(() => summary.value?.totals || null);
 
@@ -198,13 +244,9 @@ function fmtPeriodEnd(dateStr) {
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 }
-function indexColor(idx) {
-  const s = indexStatus(idx);
-  return s === 'ok' ? '#00b42a' : s === 'warning' ? '#d97706' : '#f53f3f';
-}
 function indexBarWidth(idx) {
   const n = Number(idx) || 0;
-  return Math.max(2, Math.min(100, (Math.min(n, 0.5) / 0.5) * 100));
+  return Math.max(2, Math.min(100, (Math.min(n, 1) / 1) * 100));
 }
 /** 全部店铺按错误指数降序(供店铺指数列表) */
 const sortedStores = computed(() => {
@@ -233,7 +275,7 @@ onMounted(() => {
     <!-- 顶部工具栏 -->
     <div class="top-bar">
       <div class="range-hint">
-        指数统计时间段:{{ periodText }} · 错误指数为周期汇总(本地参考阈值着色)
+        指数统计时间段:{{ periodText }} · 错误指数为周期汇总(Ozon 官方阈值着色)
       </div>
       <button class="btn btn-primary btn-sm sync-btn" :disabled="syncing" @click="doSync">
         {{ syncing ? '同步中…' : '🔄 同步数据' }}
@@ -248,35 +290,51 @@ onMounted(() => {
       <div class="skeleton-card" v-for="i in 4" :key="i"></div>
     </div>
 
-    <!-- ═══ 概览指标卡 ═══ -->
+    <!-- ═══ 概览:指数 Hero + 五色刻度条 + 2x2 指标卡(Ozon 风格) ═══ -->
     <div class="summary-cards" v-if="summary && summary.stores.length > 0">
-      <div class="summary-card card-index">
-        <div class="sc-head">
-          <span class="sc-icon">🏥</span><span>错误指数</span>
-          <span class="status-dot" :class="indexStatus(topStore.index)"></span>
+      <!-- Hero 卡:大号指数% + 近14天罚款支出 + 五色刻度条 -->
+      <div class="hero-card">
+        <div class="hero-row">
+          <div class="hero-index">
+            <div class="hero-index-value" :style="{ color: indexColor(topStore.index) }">{{ fmtPct(topStore.index) }}%</div>
+            <div class="hero-label">14天内指数</div>
+          </div>
+          <div class="hero-cost">
+            <div class="hero-cost-value">¥ {{ fmtMoney(totals.chargeSum) }}</div>
+            <div class="hero-label">近14天罚款支出</div>
+          </div>
         </div>
-        <div class="sc-count">{{ fmtPct(topStore.index) }}%</div>
-        <div class="sc-sub">最高风险:{{ topStore.storeName }}</div>
-        <div class="sc-sub">{{ topStore.periodFrom }} ~ {{ fmtPeriodEnd(topStore.periodTo) }}</div>
-      </div>
-      <div class="summary-card card-cost">
-        <div class="sc-head"><span class="sc-icon">💰</span><span>错误处理费用</span></div>
-        <div class="sc-count">¥ {{ fmtMoney(totals.chargeSum) }}</div>
-        <div class="sc-sub">{{ totals.errorPostingCount }} 单计费</div>
-      </div>
-      <div class="summary-card card-errors">
-        <div class="sc-head"><span class="sc-icon">📦</span><span>影响货件</span></div>
-        <div class="sc-count">{{ fmtNum(totals.errorPostingCount) }} 单</div>
-        <div class="sc-sub">
-          <span class="red-text">取消 {{ fmtNum(totals.sellerCancellationCount) }}</span>
-          <span class="sep">·</span>
-          <span class="orange-text">逾期 {{ fmtNum(totals.sellerDelayCount) }}</span>
+        <div class="index-scale">
+          <div
+            v-for="(z, i) in scaleSegments(topStore.index)"
+            :key="i"
+            class="scale-seg"
+            :style="segStyle(z)"
+          >
+            <span v-if="z.isActive" class="scale-value" :style="segLabelStyle(z)">{{ fmtPct(topStore.index) }}%</span>
+          </div>
+        </div>
+        <div class="scale-thresholds">
+          <span v-for="t in INDEX_THRESHOLDS" :key="t" class="threshold">{{ t }}</span>
         </div>
       </div>
-      <div class="summary-card card-grace">
-        <div class="sc-head"><span class="sc-icon">🛡️</span><span>宽限货件</span></div>
-        <div class="sc-count">{{ fmtNum(totals.graceCount) }} 单</div>
-        <div class="sc-sub">has_grace_status=true,可申诉</div>
+
+      <!-- 2x2 指标卡 -->
+      <div class="metric-card">
+        <div class="mc-head"><i class="mc-dot" style="background:#165dff"></i>影响货件</div>
+        <div class="mc-count">{{ fmtNum(totals.errorPostingCount) }}<span class="mc-unit">单</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="mc-head"><i class="mc-dot" style="background:#f53f3f"></i>卖家取消</div>
+        <div class="mc-count">{{ fmtNum(totals.sellerCancellationCount) }}<span class="mc-unit">单</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="mc-head"><i class="mc-dot" style="background:#d97706"></i>卖家逾期</div>
+        <div class="mc-count">{{ fmtNum(totals.sellerDelayCount) }}<span class="mc-unit">单</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="mc-head"><i class="mc-dot" style="background:#00b42a"></i>宽限中</div>
+        <div class="mc-count">{{ fmtNum(totals.graceCount) }}<span class="mc-unit">单</span></div>
       </div>
     </div>
     <div v-else-if="summary && summary.stores.length === 0" class="empty-tip">
@@ -287,7 +345,7 @@ onMounted(() => {
     <div class="store-list-card" v-if="summary && summary.stores.length > 0">
       <h3>店铺错误指数</h3>
       <div class="store-index-row" v-for="s in sortedStores" :key="s.storeId">
-        <span class="status-dot" :class="indexStatus(s.index)"></span>
+        <span class="status-dot" :style="{ background: indexColor(s.index) }"></span>
         <span class="sl-name">{{ s.storeName }}</span>
         <div class="sl-track">
           <div class="sl-fill" :style="{ width: indexBarWidth(s.index) + '%', background: indexColor(s.index) }"></div>
@@ -443,41 +501,110 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-/* ── 指标卡 ── */
+/* ── 概览:指数 Hero + 五色刻度条 + 2x2 指标卡(Ozon 风格) ── */
 .summary-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
-.summary-card {
+.hero-card {
+  grid-column: 1 / -1;
   background: #fff;
-  border-radius: 10px;
-  padding: 16px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
-  border: 1px solid #f2f3f5;
+  border: 1px solid #e9edf3;
+  border-radius: 24px;
+  padding: 20px 24px 14px;
 }
-.sc-head {
+.hero-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+.hero-index-value {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.hero-cost-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1f2329;
+  line-height: 1.1;
+  text-align: right;
+}
+.hero-label {
+  font-size: 12px;
+  color: #86909c;
+  margin-top: 4px;
+}
+.index-scale {
+  display: flex;
+  gap: 4px;
+  margin-top: 14px;
+  height: 26px;
+}
+.scale-seg {
+  position: relative;
+  flex: 1;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.scale-seg:first-child { border-radius: 8px 0 0 8px; }
+.scale-seg:last-child { border-radius: 0 8px 8px 0; }
+.scale-value {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  z-index: 1;
+}
+.scale-thresholds {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #86909c;
+}
+
+/* 2x2 指标卡 */
+.metric-card {
+  background: #fff;
+  border: 1px solid #e9edf3;
+  border-radius: 24px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.mc-head {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
   color: #4e5969;
-  margin-bottom: 10px;
 }
-.sc-icon {
-  font-size: 16px;
+.mc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
 }
-.sc-count {
+.mc-count {
   font-size: 26px;
   font-weight: 700;
   color: #1f2329;
   line-height: 1.2;
+  margin-top: 8px;
 }
-.sc-sub {
+.mc-unit {
   font-size: 12px;
+  font-weight: 400;
   color: #86909c;
-  margin-top: 6px;
+  margin-left: 4px;
 }
 .status-dot {
   width: 10px;
@@ -485,10 +612,8 @@ onMounted(() => {
   border-radius: 50%;
   display: inline-block;
   margin-left: auto;
+  flex-shrink: 0;
 }
-.status-dot.ok { background: #00b42a; }
-.status-dot.warning { background: #d97706; }
-.status-dot.critical { background: #f53f3f; }
 .red-text { color: #f53f3f; }
 .orange-text { color: #d97706; }
 .sep { margin: 0 4px; }

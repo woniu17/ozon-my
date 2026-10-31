@@ -108,7 +108,9 @@ private fun typeColor(type: String): String = when (type) {
 }
 
 private fun indexColor(index: Double): String = when {
-    index <= 0.15 -> "#00b42a"
-    index <= 0.35 -> "#d97706"
-    else -> "#f53f3f"
+    index <= 0.04 -> "#00a32e"
+    index <= 0.10 -> "#009a9a"
+    index <= 0.20 -> "#d99000"
+    index <= 0.40 -> "#ee6a00"
+    else -> "#e53414"
 }

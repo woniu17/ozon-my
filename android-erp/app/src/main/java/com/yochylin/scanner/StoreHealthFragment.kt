@@ -4,8 +4,14 @@ import android.app.AlertDialog
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.os.Bundle
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -106,10 +112,11 @@ class StoreHealthFragment : Fragment() {
             try {
                 val data = Api.get("/admin/api/rating/health/summary")
                 val resp = Api.parse<RatingHealthSummaryResponse>(data)
+                val stores = resp.stores ?: emptyList()
                 renderRangeHint(resp.stores)
-                renderTotals(resp.totals)
-                renderStores(resp.stores ?: emptyList())
-                renderTrend(resp.stores ?: emptyList())
+                renderTotals(resp.totals, stores.maxOfOrNull { it.index ?: 0.0 } ?: 0.0)
+                renderStores(stores)
+                renderTrend(stores)
                 renderDist(resp.totals)
 
                 // 重置明细分页
@@ -208,10 +215,67 @@ class StoreHealthFragment : Fragment() {
         }
     }
 
-    // ── 概览指标 2x2 ──
-    private fun renderTotals(t: RatingErrorTotals?) {
+    // ── 概览指标：指数 Hero + 指数刻度条 + 2x2 指标卡(Ozon 风格) ──
+    private fun renderTotals(t: RatingErrorTotals?, index: Double) {
         overviewContainer.removeAllViews()
         val totals = t ?: return
+
+        // 指数 Hero 卡：大号指数% + 罚款支出 + 五色刻度条
+        val hero = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.VERTICAL
+            setRoundedBgStroke(Color.WHITE, Color.parseColor("#E9EDF3"), 16f, 1f)
+            setPadding(dp(16).toInt(), dp(14).toInt(), dp(16).toInt(), dp(10).toInt())
+        }
+        val heroRow = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        heroRow.addView(LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            addView(TextView(requireContext()).apply {
+                text = String.format(Locale.US, "%.2f%%", index * 100)
+                setTextColor(Color.parseColor(indexColor(index)))
+                textSize = 30f
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            addView(TextView(requireContext()).apply {
+                text = "14天内指数"
+                setTextColor(Color.parseColor(COLOR_MUTE))
+                textSize = 11f
+                setPadding(0, dp(2).toInt(), 0, 0)
+            })
+        })
+        heroRow.addView(LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            addView(TextView(requireContext()).apply {
+                text = "¥ ${fmtMoney(totals.chargeSum)}"
+                setTextColor(Color.parseColor(COLOR_TEXT))
+                textSize = 22f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.END
+            })
+            addView(TextView(requireContext()).apply {
+                text = "近14天罚款支出"
+                setTextColor(Color.parseColor(COLOR_MUTE))
+                textSize = 11f
+                gravity = Gravity.END
+                setPadding(0, dp(2).toInt(), 0, 0)
+            })
+        })
+        hero.addView(heroRow)
+        hero.addView(IndexScaleView(requireContext()).apply {
+            this.index = index
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(12).toInt() }
+        })
+        overviewContainer.addView(hero)
+
+        // 2x2 指标卡
         val defs = listOf(
             Triple("影响货件", totals.errorPostingCount, COLOR_PRIMARY),
             Triple("卖家取消", totals.sellerCancellationCount, COLOR_ERR),
@@ -223,7 +287,7 @@ class StoreHealthFragment : Fragment() {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(110).toInt()
+                    dp(104).toInt()
                 ).apply { if (row > 0) topMargin = dp(12).toInt() }
             }
             for (col in 0 until 2) {
@@ -235,40 +299,14 @@ class StoreHealthFragment : Fragment() {
             }
             overviewContainer.addView(rowLay)
         }
-
-        // 处理费用横条
-        val chargeRow = LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setRoundedBg(Color.WHITE, 16f)
-            elevation = dp(2f)
-            setPadding(dp(14).toInt(), dp(10).toInt(), dp(14).toInt(), dp(10).toInt())
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(12).toInt() }
-        }
-        chargeRow.addView(TextView(requireContext()).apply {
-            text = "错误处理费用"
-            setTextColor(Color.parseColor(COLOR_MUTE))
-            textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        chargeRow.addView(TextView(requireContext()).apply {
-            text = "¥ ${fmtMoney(totals.chargeSum)}"
-            setTextColor(Color.parseColor(COLOR_PRIMARY))
-            textSize = 15f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        })
-        overviewContainer.addView(chargeRow)
     }
 
     private fun metricCard(title: String, count: Int, dotColor: String): LinearLayout {
         val ctx = requireContext()
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setRoundedBg(Color.WHITE, 16f)
-            elevation = dp(2f)
+            gravity = Gravity.CENTER_VERTICAL
+            setRoundedBgStroke(Color.WHITE, Color.parseColor("#E9EDF3"), 16f, 1f)
             setPadding(dp(14).toInt(), dp(12).toInt(), dp(14).toInt(), dp(12).toInt())
 
             addView(LinearLayout(ctx).apply {
@@ -283,7 +321,7 @@ class StoreHealthFragment : Fragment() {
                 addView(TextView(ctx).apply {
                     text = title
                     setTextColor(Color.parseColor(COLOR_MUTE))
-                    textSize = 12f
+                    textSize = 11f
                 })
             })
 
@@ -292,13 +330,13 @@ class StoreHealthFragment : Fragment() {
                 setTextColor(Color.parseColor(COLOR_TEXT))
                 textSize = 26f
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
-                setPadding(0, dp(8).toInt(), 0, 0)
+                setPadding(0, dp(6).toInt(), 0, 0)
             })
 
             addView(TextView(ctx).apply {
                 text = "单"
                 setTextColor(Color.parseColor(COLOR_MUTE))
-                textSize = 11f
+                textSize = 10f
                 setPadding(0, dp(2).toInt(), 0, 0)
             })
         }
@@ -507,8 +545,7 @@ class StoreHealthFragment : Fragment() {
     private fun cardContainer(): LinearLayout {
         return LinearLayout(requireContext()).apply {
             orientation = LinearLayout.VERTICAL
-            setRoundedBg(Color.WHITE, 16f)
-            elevation = dp(2f)
+            setRoundedBgStroke(Color.WHITE, Color.parseColor("#E9EDF3"), 16f, 1f)
             setPadding(dp(14).toInt(), dp(12).toInt(), dp(14).toInt(), dp(12).toInt())
         }
     }
@@ -523,10 +560,139 @@ class StoreHealthFragment : Fragment() {
         }
     }
 
+    /** Ozon 官方错误指数色带阈值(≤4% 绿 / ≤10% 青 / ≤20% 黄 / ≤40% 橙 / >40% 红) */
     private fun indexColor(index: Double): String = when {
-        index <= 0.15 -> COLOR_OK
-        index <= 0.35 -> COLOR_WARN
-        else -> COLOR_ERR
+        index <= 0.04 -> "#00a32e"
+        index <= 0.10 -> "#009a9a"
+        index <= 0.20 -> "#d99000"
+        index <= 0.40 -> "#ee6a00"
+        else -> "#e53414"
+    }
+
+    // ── Ozon 风格指数刻度条：五色区段(绿/青/黄/橙/红)+当前指数填充+阈值标签 ──
+    private class IndexScaleView(context: Context) : View(context) {
+
+        private class Zone(val from: Double, val to: Double, val tint: Int, val solid: Int)
+
+        private val zones = listOf(
+            Zone(0.00, 0.04, Color.rgb(215, 249, 215), Color.rgb(0, 196, 81)),
+            Zone(0.04, 0.10, Color.rgb(215, 246, 245), Color.rgb(0, 190, 190)),
+            Zone(0.10, 0.20, Color.rgb(255, 248, 224), Color.rgb(255, 184, 0)),
+            Zone(0.20, 0.40, Color.rgb(255, 235, 210), Color.rgb(248, 143, 20)),
+            Zone(0.40, 1.01, Color.rgb(255, 233, 227), Color.rgb(245, 60, 20)),
+        )
+        private val thresholds = listOf("0%", "4%", "10%", "20%", "40%", "100%")
+
+        var index: Double = 0.0
+            set(value) {
+                field = value.coerceIn(0.0, 1.0)
+                invalidate()
+            }
+
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = sp(9f)
+            color = Color.rgb(134, 144, 156)
+        }
+        private val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = sp(9f)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+
+        private val gap = dp(3f)
+        private val barHeight = dp(22f)
+        private val labelHeight = dp(18f)
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val w = MeasureSpec.getSize(widthMeasureSpec)
+            setMeasuredDimension(w, (barHeight + labelHeight).toInt())
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val totalW = width.toFloat()
+            if (totalW <= 0) return
+            val segW = (totalW - gap * (zones.size - 1)) / zones.size
+            val activeIdx = zones.indexOfFirst { index < it.to }
+
+            var left = 0f
+            for ((i, z) in zones.withIndex()) {
+                val rect = RectF(left, 0f, left + segW, barHeight)
+                val isActive = i == activeIdx
+                val rLeft = if (i == 0) dp(8f) else dp(2f)
+                val rRight = if (i == zones.size - 1) dp(8f) else dp(2f)
+
+                // 浅色区段背景
+                paint.color = z.tint
+                canvas.drawPath(roundRectPath(rect, rLeft, rRight), paint)
+
+                // 活动区段：实心填充 + 数值标签
+                if (isActive) {
+                    val frac = ((index - z.from) / (z.to - z.from)).toFloat().coerceIn(0f, 1f)
+                    val fillW = segW * frac
+                    val label = String.format(Locale.US, "%.2f%%", index * 100)
+                    if (fillW > 0.5f) {
+                        val fillRect = RectF(left, 0f, left + fillW, barHeight)
+                        paint.color = z.solid
+                        canvas.drawPath(roundRectPath(fillRect, rLeft, 0f), paint)
+
+                        // 数值标签放填充右端内侧；放不下时用实心色画在浅色底上
+                        val textW = valuePaint.measureText(label)
+                        valuePaint.color = Color.WHITE
+                        val labelX = left + fillW - textW - dp(4f)
+                        if (labelX > left + dp(2f)) {
+                            canvas.drawText(
+                                label, labelX,
+                                barHeight / 2 - (valuePaint.ascent() + valuePaint.descent()) / 2,
+                                valuePaint
+                            )
+                        } else {
+                            valuePaint.color = z.solid
+                            canvas.drawText(
+                                label, left + dp(2f),
+                                barHeight / 2 - (valuePaint.ascent() + valuePaint.descent()) / 2,
+                                valuePaint
+                            )
+                        }
+                    } else {
+                        // 填充几乎为 0，仅画标签
+                        valuePaint.color = z.solid
+                        canvas.drawText(
+                            label, left + dp(2f),
+                            barHeight / 2 - (valuePaint.ascent() + valuePaint.descent()) / 2,
+                            valuePaint
+                        )
+                    }
+                }
+                left += segW + gap
+            }
+
+            // 阈值标签(0% 贴左、100% 贴右、其余居中于区段边界)
+            val labelY = barHeight + labelPaint.textSize + dp(3f)
+            canvas.drawText(thresholds.first(), 0f, labelY, labelPaint)
+            for (i in 1 until zones.size) {
+                val x = i * (segW + gap) - gap / 2 - labelPaint.measureText(thresholds[i]) / 2
+                canvas.drawText(thresholds[i], x, labelY, labelPaint)
+            }
+            canvas.drawText(thresholds.last(), totalW - labelPaint.measureText(thresholds.last()), labelY, labelPaint)
+        }
+
+        private fun roundRectPath(rect: RectF, rLeft: Float, rRight: Float): Path =
+            Path().apply {
+                addRoundRect(
+                    rect,
+                    floatArrayOf(rLeft, rLeft, rRight, rRight, rRight, rRight, rLeft, rLeft),
+                    Path.Direction.CW
+                )
+            }
+
+        private fun sp(v: Float): Float = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_SP, v, resources.displayMetrics
+        )
+
+        private fun dp(v: Float): Float = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics
+        )
     }
 
     // ── 日期工具 ──
