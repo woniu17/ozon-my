@@ -10,8 +10,17 @@ import { useRoute } from 'vue-router';
 import CarriageManage from './CarriageManage.vue';
 
 const route = useRoute();
+// 记住上次展示的子 tab(2026-11-05):URL 带 tab 参数时以链接为准,否则用 localStorage 记忆
+const LAST_CARRIAGE_TAB_KEY = 'carriage-center-last-tab';
 // 旧 'done' 链接兼容:统一落到「全部」
-const tab = ref(route.query.tab === 'all' || route.query.tab === 'done' ? 'all' : 'pending');
+const routeTab =
+  route.query.tab === 'all' || route.query.tab === 'done'
+    ? 'all'
+    : route.query.tab === 'pending'
+      ? 'pending'
+      : '';
+const tab = ref(routeTab || (localStorage.getItem(LAST_CARRIAGE_TAB_KEY) === 'all' ? 'all' : 'pending'));
+if (routeTab) localStorage.setItem(LAST_CARRIAGE_TAB_KEY, routeTab); // 链接指定的 tab 也作为下次记忆
 
 const pendingRef = ref(null); // CarriageManage(mode=pending) 组件实例
 const allRef = ref(null);     // CarriageManage(mode=all) 组件实例
@@ -19,6 +28,10 @@ const activeComp = computed(() => (tab.value === 'pending' ? pendingRef.value : 
 const activeLoading = computed(() => activeComp.value?.listLoading ?? false);
 function refreshActive() {
   activeComp.value?.refreshCurrent();
+}
+function switchTab(t) {
+  tab.value = t;
+  localStorage.setItem(LAST_CARRIAGE_TAB_KEY, t);
 }
 </script>
 
@@ -35,10 +48,10 @@ function refreshActive() {
       </button>
     </div>
     <div class="center-tabs">
-      <button type="button" class="center-tab" :class="{ active: tab === 'pending' }" @click="tab = 'pending'">
+      <button type="button" class="center-tab" :class="{ active: tab === 'pending' }" @click="switchTab('pending')">
         待处理
       </button>
-      <button type="button" class="center-tab" :class="{ active: tab === 'all' }" @click="tab = 'all'">
+      <button type="button" class="center-tab" :class="{ active: tab === 'all' }" @click="switchTab('all')">
         全部
       </button>
     </div>
