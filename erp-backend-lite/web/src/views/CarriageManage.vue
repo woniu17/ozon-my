@@ -1137,7 +1137,12 @@ defineExpose({ refreshCurrent, listLoading });
             </template>
             <template v-else>
               <td><span class="store-name">{{ row.store_name }}</span></td>
-              <td class="mono label-id">#{{ row.id }}</td>
+              <td class="mono label-id">
+                #{{ row.id }}
+                <span v-if="row.tracking_number" class="row-sub tracking-no" title="OGL 国内集运仓快递单号">
+                  {{ row.tracking_number }}
+                </span>
+              </td>
               <td>
                 <span class="dm-name">{{ row.delivery_method_name || row.delivery_method_id }}</span>
                 <span v-if="row.warehouse_city || row.warehouse_name" class="row-sub">
@@ -1245,7 +1250,7 @@ defineExpose({ refreshCurrent, listLoading });
             <span class="detail-value">{{ detail.carriage.integration_type || '—' }}</span>
           </div>
           <div class="detail-item">
-            <span class="detail-label">快递单号</span>
+            <span class="detail-label">OGL 国内集运仓快递单号</span>
             <span class="detail-value mono">{{ detail.carriage.tracking_number || '—' }}</span>
           </div>
         </div>
@@ -1858,6 +1863,11 @@ defineExpose({ refreshCurrent, listLoading });
   font-size: 11.5px;
   color: var(--muted);
   margin-top: 1px;
+}
+.tracking-no {
+  color: #0e9f6e;
+  font-weight: 500;
+  letter-spacing: 0.3px;
 }
 .status-tag {
   display: inline-block;
