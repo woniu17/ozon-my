@@ -1497,7 +1497,7 @@ defineExpose({ refreshCurrent, listLoading });
     </AppModal>
 
     <!-- 创建发运弹窗(2026-11-01:占位行触发;2026-11-02:参考详情弹窗布局,展示将自动进入发运的货件列表+状态) -->
-    <AppModal :open="createModal.open" title="创建发运" size="lg" @update:open="createModal.open = $event">
+    <AppModal :open="createModal.open" title="创建发运" size="xl" @update:open="createModal.open = $event">
       <div class="create-modal">
         <div class="detail-grid">
           <div class="detail-item">
