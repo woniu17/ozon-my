@@ -1154,7 +1154,7 @@ defineExpose({ refreshCurrent, listLoading });
               <th class="def-col">默认</th>
               <th>电话 <em class="req">*</em></th>
               <th>下单人名称</th>
-              <th>地址 <em class="req">*</em></th>
+              <th class="cc-addr-col">地址 <em class="req">*</em></th>
               <th class="ops">操作</th>
             </tr>
           </thead>
@@ -1170,7 +1170,7 @@ defineExpose({ refreshCurrent, listLoading });
               </td>
               <td><input v-model="c.phone" class="cc-phone-input" placeholder="快递员联系电话" /></td>
               <td><input v-model="c.wechatNickname" class="cc-nick-input" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" /></td>
-              <td><input v-model="c.comment" placeholder="提供给快递公司的取件地址" /></td>
+              <td class="cc-addr-col"><input v-model="c.comment" placeholder="提供给快递公司的取件地址" /></td>
               <td class="ops">
                 <button class="btn btn-danger btn-sm" @click="onRemoveContactConfig(i)">删除</button>
               </td>
@@ -1725,7 +1725,7 @@ defineExpose({ refreshCurrent, listLoading });
                   <th class="def-col">默认</th>
                   <th>电话 <em class="req">*</em></th>
                   <th>下单人名称</th>
-                  <th>地址 <em class="req">*</em></th>
+                  <th class="cc-addr-col">地址 <em class="req">*</em></th>
                   <th class="ops">操作</th>
                 </tr>
               </thead>
@@ -1747,7 +1747,7 @@ defineExpose({ refreshCurrent, listLoading });
                       :placeholder="`选填,默认:${createModal.storeName || '店铺名'}`"
                     />
                   </td>
-                  <td><input v-model="c.comment" placeholder="提供给快递公司的取件地址" /></td>
+                  <td class="cc-addr-col"><input v-model="c.comment" placeholder="提供给快递公司的取件地址" /></td>
                   <td class="ops">
                     <button class="btn btn-danger btn-sm" @click="onCreateRemoveConfig(i)">删除</button>
                   </td>
@@ -2391,6 +2391,11 @@ defineExpose({ refreshCurrent, listLoading });
 .def-col {
   width: 46px;
   text-align: center;
+}
+/* 配置表格地址列加宽(2026-11-05):约增加原来的三分之一 */
+.contact-config-table th.cc-addr-col,
+.contact-config-table td.cc-addr-col {
+  width: 40%;
 }
 .def-col input[type='radio'] {
   accent-color: var(--primary);
