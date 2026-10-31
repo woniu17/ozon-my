@@ -623,11 +623,28 @@ const methodGroups = computed(() => {
   return groups;
 });
 
+// 店铺编号排序:YQL01→1, YQL02→2...(无法提取数字时排最后)
+function storeRank(name = '') {
+  const m = String(name).match(/(\d+)/);
+  return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
+}
 // 全部:进行中(不含"待创建"占位行) + 已完成历史
-const allRows = computed(() => [
-  ...pendingRows.value.filter((r) => !r.is_placeholder),
-  ...historyRows.value,
-]);
+// 2026-11-04:按发运时间排序(降序,最新在前),同一天按店铺名第二排序(YQL01, YQL02...),再按发运单号降序
+const allRows = computed(() => {
+  const rows = [
+    ...pendingRows.value.filter((r) => !r.is_placeholder),
+    ...historyRows.value,
+  ];
+  return rows.sort((a, b) => {
+    const da = a.departure_date || '';
+    const db = b.departure_date || '';
+    if (da !== db) return da > db ? -1 : 1;
+    const ra = storeRank(a.store_name || a.store_id);
+    const rb = storeRank(b.store_name || b.store_id);
+    if (ra !== rb) return ra - rb;
+    return Number(b.id || 0) - Number(a.id || 0);
+  });
+});
 const listRows = computed(() => (tab.value === 'pending' ? pendingRows.value : allRows.value));
 
 // 创建发运弹窗(2026-11-02:参考详情弹窗,展示将自动进入发运的货件列表+状态)

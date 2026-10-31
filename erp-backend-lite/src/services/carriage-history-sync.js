@@ -18,7 +18,6 @@ const STARTUP_DELAY_MS = 60 * 1000; // 启动后 1 分钟做首次同步
 const ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000; // 3 天未出现在 Ozon 列表视为历史
 
 // 活跃发运:仍在 Ozon 列表中、货件可变动,需要持续刷新本地货件关联
-const ACTIVE_CARRIAGE_STATUSES = new Set(['new', 'formed', 'created', 'awaiting_delivery', 'delivering']);
 
 // 限并发执行任务(避免对 Ozon 造成突发限流)
 async function runWithConcurrency(items, limit, worker) {
@@ -113,6 +112,10 @@ async function syncCarriagePostingLink(store, carriage) {
     deliveryMethodId: carriage.delivery_method_id,
     departureDate: carriage.departure_date,
   });
+  // 写回货件列表快照,支撑历史详情展示(传 '[]' 表示已拉取但确实无货件,避免下次重复拉取)
+  updateCarriageHistoryJson(store.id, carriage.id, {
+    postingsJson: JSON.stringify(postings),
+  });
   return postings.length;
 }
 
@@ -122,7 +125,7 @@ const SCAN_DAYS = 7;
 
 async function syncStore(store) {
   let count = 0;
-  const activeCarriages = [];
+  const postingsNeeded = []; // 需要拉取货件列表的发运单(历史补全也拉)
   const detailNeeded = [];
   const seenIds = new Set();
   const now = new Date();
@@ -156,7 +159,7 @@ async function syncStore(store) {
         seenIds.add(String(enriched.id));
         const existing = db
           .prepare(
-            `SELECT first_mile_type, integration_type, warehouse_name, warehouse_city
+            `SELECT first_mile_type, integration_type, warehouse_name, warehouse_city, postings_json
              FROM op_carriage_history WHERE store_id = ? AND carriage_id = ?`
           )
           .get(String(store.id), Number(enriched.id));
@@ -175,9 +178,10 @@ async function syncStore(store) {
           });
         }
         count++;
-        // 兜底刷新:活跃发运逐个拉货件列表,维护本地"货件↔发运单"关联
-        if (Number(enriched.id) > 0 && ACTIVE_CARRIAGE_STATUSES.has(enriched.status)) {
-          activeCarriages.push(enriched);
+        // 货件列表兜底:历史补全的发运单(closed/received/cancelled)同样需要货件列表,
+        // 只对尚未写回货件快照的真实发运单拉取,避免每次同步重复调用
+        if (Number(enriched.id) > 0 && !existing?.postings_json) {
+          postingsNeeded.push(enriched);
         }
       }
     }
@@ -195,7 +199,7 @@ async function syncStore(store) {
       upsertCarriageHistory(store, c);
     }
   });
-  await runWithConcurrency(activeCarriages, 3, (c) =>
+  await runWithConcurrency(postingsNeeded, 3, (c) =>
     syncCarriagePostingLink(store, c).catch((e) =>
       logger.warn(
         { err: e?.message, storeId: store.id, carriageId: c.id },
@@ -203,7 +207,7 @@ async function syncStore(store) {
       )
     )
   );
-  return { storeId: store.id, count, postingsSynced: activeCarriages.length };
+  return { storeId: store.id, count, postingsSynced: postingsNeeded.length };
 }
 
 // 归档:从 Ozon 列表消失超过阈值的进行中记录标记为历史
