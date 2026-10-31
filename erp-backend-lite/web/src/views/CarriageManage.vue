@@ -130,6 +130,15 @@ const createModal = reactive({
   loading: false,
   postings: [],
   creating: false,
+  // 快递员联系方式(创建时一并指定,2026-11-04)
+  phone: '',
+  wechatNickname: '',
+  comment: '',
+  selectedContactConfigId: '',
+  contactConfigs: [], // 按创建店铺独立加载的联系方式配置
+  // 货件列表指定(2026-11-04):Ozon create 不支持指定货件,创建后走 set-postings 全量覆盖
+  selectedPostingNumbers: [], // 勾选进入发运的货件号
+  allSelected: true, // 全选状态
 });
 
 // 发运清单(2026-11-01:聚合所有店铺)
@@ -412,6 +421,29 @@ async function onGoCreate(row) {
   createModal.departureDate = new Date().toISOString().slice(0, 10);
   createModal.creating = false;
   createModal.postings = [];
+  // 创建时同时指定快递员联系方式(2026-11-04):按创建店铺加载配置并预填默认项
+  createModal.phone = '';
+  createModal.wechatNickname = '';
+  createModal.comment = '';
+  createModal.selectedContactConfigId = '';
+  createModal.contactConfigs = [];
+  try {
+    const data = await listCourierContactConfigs(createModal.storeId);
+    createModal.contactConfigs = data?.contacts || [];
+    const defaultItem =
+      createModal.contactConfigs.find((c) => c.isDefault) || createModal.contactConfigs[0] || null;
+    if (defaultItem) {
+      createModal.phone = defaultItem.phone || '';
+      createModal.wechatNickname = defaultItem.wechatNickname || createModal.storeName;
+      createModal.comment = defaultItem.comment || '';
+      createModal.selectedContactConfigId = defaultItem.id || '';
+    } else {
+      createModal.wechatNickname = createModal.storeName;
+    }
+  } catch (err) {
+    // 配置加载失败不阻塞创建弹窗,仍可手动填写
+    createModal.wechatNickname = createModal.storeName;
+  }
   createModal.open = true;
   await loadCreatePostings();
 }
@@ -420,15 +452,22 @@ async function onGoCreate(row) {
 async function loadCreatePostings() {
   if (!createModal.storeId || !createModal.deliveryMethodId) {
     createModal.postings = [];
+    createModal.selectedPostingNumbers = [];
+    createModal.allSelected = true;
     return;
   }
   createModal.loading = true;
   try {
     const data = await getPendingPostings(createModal.storeId, createModal.deliveryMethodId);
     createModal.postings = data?.postings || [];
+    // 默认全选:创建后仅当用户取消勾选时才调用 set-postings 覆盖
+    createModal.selectedPostingNumbers = createModal.postings.map((p) => p.posting_number).filter(Boolean);
+    createModal.allSelected = true;
   } catch (err) {
     show(err.message || String(err), 'error');
     createModal.postings = [];
+    createModal.selectedPostingNumbers = [];
+    createModal.allSelected = true;
   } finally {
     createModal.loading = false;
   }
@@ -448,10 +487,41 @@ async function onCreateFromModal() {
     const body = { deliveryMethodId: Number(createModal.deliveryMethodId) };
     if (createModal.departureDate) body.departureDate = createModal.departureDate;
     const r = await createCarriage(createModal.storeId, body);
-    show(`发运创建成功:${r?.carriage_id ? '#' + r.carriage_id : ''}`, 'success');
+    const cid = Number(r?.carriage_id);
+    // 创建时同时指定快递员联系方式(2026-11-04):填了电话+取件地址才保存,未填则创建后详情页再补
+    let contactSaved = false;
+    if (cid > 0 && createModal.phone.trim() && createModal.comment.trim()) {
+      try {
+        await setCarriageCourierContact(createModal.storeId, cid, {
+          phone: createModal.phone.trim(),
+          wechatNickname: createModal.wechatNickname.trim(),
+          comment: createModal.comment.trim(),
+        });
+        contactSaved = true;
+      } catch (err) {
+        show(`发运已创建,但快递员联系方式保存失败:${err.message || String(err)}`, 'error');
+      }
+    }
+    // 指定货件列表(2026-11-04):仅当用户取消勾选了自动进入的货件时,set-postings 全量覆盖
+    let postingsOverridden = false;
+    if (cid > 0) {
+      const autoNumbers = (createModal.postings || []).map((p) => p.posting_number).filter(Boolean);
+      const selected = [...createModal.selectedPostingNumbers];
+      if (autoNumbers.length && autoNumbers.some((n) => !selected.includes(n))) {
+        try {
+          await setCarriagePostings(createModal.storeId, cid, selected);
+          postingsOverridden = true;
+        } catch (err) {
+          show(`发运已创建,但货件列表设置失败:${err.message || String(err)}`, 'error');
+        }
+      }
+    }
+    show(
+      `发运创建成功:${cid ? '#' + cid : ''}${contactSaved ? ',联系方式已保存' : ''}${postingsOverridden ? ',货件已指定' : ''}`,
+      'success'
+    );
     createModal.open = false;
     await loadCarriages();
-    const cid = Number(r?.carriage_id);
     if (cid > 0) {
       const found = currentRows.value.find(
         (row) => Number(row.id) === cid && row.store_id === createModal.storeId
@@ -463,6 +533,30 @@ async function onCreateFromModal() {
   } finally {
     createModal.creating = false;
   }
+}
+
+// 创建弹窗:选择已配置的联系方式后自动填充(2026-11-04)
+function onCreateSelectContactConfig() {
+  const item = createModal.contactConfigs.find((c) => c.id === createModal.selectedContactConfigId);
+  if (!item) return;
+  createModal.phone = item.phone || '';
+  createModal.wechatNickname = item.wechatNickname || createModal.storeName;
+  createModal.comment = item.comment || '';
+}
+
+// 创建弹窗:货件全选/取消全选(2026-11-04)
+function onToggleCreateSelectAll(e) {
+  createModal.allSelected = !!e?.target?.checked;
+  createModal.selectedPostingNumbers = createModal.allSelected
+    ? createModal.postings.map((p) => p.posting_number).filter(Boolean)
+    : [];
+}
+
+// 创建弹窗:单个货件勾选变化后同步全选状态
+function onCreatePostingSelectChange() {
+  createModal.allSelected =
+    createModal.postings.length > 0 &&
+    createModal.selectedPostingNumbers.length === createModal.postings.length;
 }
 
 // ── 点击"货件数"查看货件列表(2026-11-02,与 H5 一致)──────
@@ -1264,6 +1358,62 @@ defineExpose({ refreshCurrent, listLoading });
           </div>
         </div>
 
+        <!-- 快递员联系方式(2026-11-04:调整到货件列表上方) -->
+        <div class="detail-section">
+          <div class="detail-section-head">
+            <span>快递员联系方式</span>
+            <em v-if="detail.fromHistory" class="field-hint">历史快照,仅展示</em>
+            <em v-else-if="!contactApplicable" class="field-hint">仅 OGL 上门取件(pickup + ozon_outsourced)适用</em>
+          </div>
+          <div class="contact-form">
+            <label class="contact-select-label">
+              <span>选择配置</span>
+              <select
+                v-model="detail.selectedContactConfigId"
+                :disabled="detail.fromHistory || !contactApplicable || !contactConfigs.list.length"
+                @change="onSelectContactConfig"
+              >
+                <option value="">手动填写</option>
+                <option v-for="c in contactConfigs.list" :key="c.id" :value="c.id">
+                  {{ c.wechatNickname || c.phone || '(未命名)' }}{{ c.phone ? ` · ${c.phone}` : '' }}{{ c.isDefault ? ' · 默认' : '' }}
+                </option>
+              </select>
+            </label>
+            <label>
+              <span>电话 <em class="req">*</em></span>
+              <input v-model="detail.phone" placeholder="快递员联系电话" :disabled="detail.fromHistory || !contactApplicable" />
+            </label>
+            <label>
+              <span>下单人名称</span>
+              <input v-model="detail.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" :disabled="detail.fromHistory || !contactApplicable" />
+            </label>
+            <label>
+              <span>地址 <em class="req">*</em></span>
+              <input v-model="detail.comment" placeholder="提供给快递公司的取件地址" :disabled="detail.fromHistory || !contactApplicable" />
+            </label>
+            <button
+              v-if="!detail.fromHistory"
+              class="btn btn-ghost btn-sm"
+              :disabled="detail.savingContact || !contactApplicable"
+              @click="onSaveContact"
+            >
+              {{ detail.savingContact ? '保存中…' : '保存' }}
+            </button>
+            <button
+              v-if="!detail.fromHistory"
+              class="btn btn-ghost btn-sm"
+              :disabled="!contactApplicable"
+              @click="onSetAsDefault"
+            >
+              设为默认
+            </button>
+          </div>
+          <p class="form-hint">
+            电话与地址必填(地址为提供给快递公司的取件地址);下单人名称选填默认店铺名。
+            从配置中选择可自动填充;「设为默认」把当前内容存为默认配置项。
+          </p>
+        </div>
+
         <!-- 货件列表(2026-10-30:图片 + 增删,new 状态可编辑) -->
         <div class="detail-section">
           <div class="detail-section-head">
@@ -1346,62 +1496,6 @@ defineExpose({ refreshCurrent, listLoading });
               </tr>
             </tbody>
           </table>
-        </div>
-
-        <!-- 快递员联系方式 -->
-        <div class="detail-section">
-          <div class="detail-section-head">
-            <span>快递员联系方式</span>
-            <em v-if="detail.fromHistory" class="field-hint">历史快照,仅展示</em>
-            <em v-else-if="!contactApplicable" class="field-hint">仅 OGL 上门取件(pickup + ozon_outsourced)适用</em>
-          </div>
-          <div class="contact-form">
-            <label class="contact-select-label">
-              <span>选择配置</span>
-              <select
-                v-model="detail.selectedContactConfigId"
-                :disabled="detail.fromHistory || !contactApplicable || !contactConfigs.list.length"
-                @change="onSelectContactConfig"
-              >
-                <option value="">手动填写</option>
-                <option v-for="c in contactConfigs.list" :key="c.id" :value="c.id">
-                  {{ c.wechatNickname || c.phone || '(未命名)' }}{{ c.phone ? ` · ${c.phone}` : '' }}{{ c.isDefault ? ' · 默认' : '' }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>电话 <em class="req">*</em></span>
-              <input v-model="detail.phone" placeholder="快递员联系电话" :disabled="detail.fromHistory || !contactApplicable" />
-            </label>
-            <label>
-              <span>下单人名称</span>
-              <input v-model="detail.wechatNickname" :placeholder="`选填,默认:${currentStoreName() || '店铺名'}`" :disabled="detail.fromHistory || !contactApplicable" />
-            </label>
-            <label>
-              <span>地址 <em class="req">*</em></span>
-              <input v-model="detail.comment" placeholder="提供给快递公司的取件地址" :disabled="detail.fromHistory || !contactApplicable" />
-            </label>
-            <button
-              v-if="!detail.fromHistory"
-              class="btn btn-ghost btn-sm"
-              :disabled="detail.savingContact || !contactApplicable"
-              @click="onSaveContact"
-            >
-              {{ detail.savingContact ? '保存中…' : '保存' }}
-            </button>
-            <button
-              v-if="!detail.fromHistory"
-              class="btn btn-ghost btn-sm"
-              :disabled="!contactApplicable"
-              @click="onSetAsDefault"
-            >
-              设为默认
-            </button>
-          </div>
-          <p class="form-hint">
-            电话与地址必填(地址为提供给快递公司的取件地址);下单人名称选填默认店铺名。
-            从配置中选择可自动填充;「设为默认」把当前内容存为默认配置项。
-          </p>
         </div>
 
         <!-- 发运操作 -->
@@ -1514,6 +1608,41 @@ defineExpose({ refreshCurrent, listLoading });
           </div>
         </div>
 
+        <!-- 快递员联系方式:创建时一并指定(2026-11-04) -->
+        <div class="detail-section">
+          <div class="detail-section-head">
+            <span>快递员联系方式</span>
+            <em class="field-hint">OGL 上门取件(pickup + ozon_outsourced)适用;填写电话 + 取件地址后随发运一并保存</em>
+          </div>
+          <div class="contact-form">
+            <label class="contact-select-label">
+              <span>选择配置</span>
+              <select
+                v-model="createModal.selectedContactConfigId"
+                :disabled="!createModal.contactConfigs.length"
+                @change="onCreateSelectContactConfig"
+              >
+                <option value="">手动填写</option>
+                <option v-for="c in createModal.contactConfigs" :key="c.id" :value="c.id">
+                  {{ c.wechatNickname || c.phone || '(未命名)' }}{{ c.phone ? ` · ${c.phone}` : '' }}{{ c.isDefault ? ' · 默认' : '' }}
+                </option>
+              </select>
+            </label>
+            <label>
+              <span>电话 <em class="req">*</em></span>
+              <input v-model="createModal.phone" placeholder="快递员联系电话" />
+            </label>
+            <label>
+              <span>下单人名称</span>
+              <input v-model="createModal.wechatNickname" :placeholder="`选填,默认:${createModal.storeName || '店铺名'}`" />
+            </label>
+            <label>
+              <span>取件地址 <em class="req">*</em></span>
+              <input v-model="createModal.comment" placeholder="提供给快递公司的取件地址" />
+            </label>
+          </div>
+        </div>
+
         <div class="detail-section create-postings-section">
           <div class="detail-section-head">
             <span>将进入发运的货件</span>
@@ -1525,6 +1654,9 @@ defineExpose({ refreshCurrent, listLoading });
           <table v-else class="posting-table create-postings-table">
             <thead>
               <tr>
+                <th class="sel-col">
+                  <input type="checkbox" :checked="createModal.allSelected" title="全选/取消全选" @change="onToggleCreateSelectAll" />
+                </th>
                 <th>货件号</th>
                 <th>状态</th>
                 <th>商品</th>
@@ -1534,6 +1666,14 @@ defineExpose({ refreshCurrent, listLoading });
             </thead>
             <tbody>
               <tr v-for="p in createModal.postings" :key="p.posting_number">
+                <td class="sel-col">
+                  <input
+                    type="checkbox"
+                    v-model="createModal.selectedPostingNumbers"
+                    :value="p.posting_number"
+                    @change="onCreatePostingSelectChange"
+                  />
+                </td>
                 <td class="mono">{{ p.posting_number }}</td>
                 <td>
                   <span class="posting-status" :class="(postingStatusMeta(p.operate_status) || {}).cls || 'st-muted'">
@@ -1760,6 +1900,10 @@ defineExpose({ refreshCurrent, listLoading });
 }
 .create-postings-table {
   min-width: 640px;
+}
+.sel-col {
+  width: 28px;
+  text-align: center;
 }
 
 /* ── 货件状态标签(2026-11-02,详情/创建发运弹窗) ── */
