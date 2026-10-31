@@ -58,7 +58,7 @@ data class Pkg(
     val waybillPrintedAt: String? = null, // 打单时间(本地操作链路记录)
     val stockedAt: String? = null,        // 入库时间(本地操作链路记录)
     val dispatchedAt: String? = null,     // 发运时间(本地操作链路记录)
-    val shippedAt: String? = null,        // Ozon 状态联动写入(在途/妥投时=揽收时间或同步时刻)
+    val shippedAt: String? = null,        // Ozon 状态联动写入(在途/妥投时=集运时间或同步时刻)
     val deliveredAt: String? = null,
     val returnAt: String? = null,
     val arrivedAt: String? = null,

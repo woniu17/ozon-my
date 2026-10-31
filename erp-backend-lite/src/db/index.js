@@ -89,6 +89,18 @@ export async function initSchema() {
     const _n = db.prepare(`SELECT COUNT(*) AS n FROM ozon_push_events WHERE status = 'processing'`).get().n;
     console.log(`[db] migration: added column ozon_push_events.claimed_at, backfilled ${_n} processing rows`);
   }
+  // 2026-11-02: op_carriage_posting 跨店大包混装迁移。
+  // source 列区分 Ozon 同步本店货件(ozon)与本地手动关联跨店货件(manual);
+  // 唯一/活跃索引需按 source 拆分并改按全局 carriage_id 查询,旧索引定义与新语义不兼容,
+  // 幂等删除后由 schema.sql 重建(新装库 schema.sql 已含新列新索引,此处自动跳过)。
+  const _cpPostingCols = db.prepare(`PRAGMA table_info(op_carriage_posting)`).all();
+  if (_cpPostingCols.length > 0 && !_cpPostingCols.some((c) => c.name === 'source')) {
+    db.exec(`ALTER TABLE op_carriage_posting ADD COLUMN source TEXT NOT NULL DEFAULT 'ozon'`);
+    console.log('[db] migration: added column op_carriage_posting.source');
+  }
+  db.exec(`DROP INDEX IF EXISTS uq_carriage_posting_current`);
+  db.exec(`DROP INDEX IF EXISTS idx_carriage_posting_active`);
+
   const sql = readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(sql);
   // 采集域独立库(collect.db)初始化:建表 + 采集迁移(跨库回填需要主库连接)

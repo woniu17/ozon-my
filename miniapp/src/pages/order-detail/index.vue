@@ -288,7 +288,7 @@ const OPERATE_LABELS = {
   wait_stick: { label: '待打单', cls: 'info' },
   wait_dispatch: { label: '待发运', cls: 'info' },
   dispatching: { label: '交运中', cls: 'info' },
-  delivering: { label: '已揽收', cls: 'ok' },
+  delivering: { label: '集运中', cls: 'ok' },
   signed: { label: '已签收', cls: 'ok' },
   settled: { label: '已成功', cls: 'ok' },
   returned: { label: '已退货', cls: 'warn' },

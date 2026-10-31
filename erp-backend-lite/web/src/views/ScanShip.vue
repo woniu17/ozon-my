@@ -2,7 +2,7 @@
 // 扫描打单(2026-09,设计文档: docs/扫描打单-功能设计.md;2026-11 纠正:仅针对「待打单」)
 // 打单场景:扫采购快递单号/采购单号/Ozon单号 → 全局搜索定位包裹 → 录入实物重量
 // → wait_stick(待打单)称重打单:打印面单后进入待发运(wait_dispatch),交运在订单处理/发运管理进行
-//   待发运及之后状态(待发运/交运中/已揽收/已签收/已成功)均可重打面单(缓存秒出,不改状态)
+//   待发运及之后状态(待发运/交运中/集运中/已签收/已成功)均可重打面单(缓存秒出,不改状态)
 // 键盘流:扫描框 Enter=搜索 → 重量框 Enter=打单 → 终态自动回焦扫描框(扫码枪零鼠标作业)
 // 2026-09-15:商品/采购信息下方公式化展示订单金额+利润计算过程(估/实+销售/成本利润率),
 //            打单后按称重重算利润;打单记录列表可滚动
@@ -123,7 +123,7 @@ const OPERATE_LABELS = {
   wait_stick: { label: '待打单', cls: 'tag-info' },
   wait_dispatch: { label: '待发运', cls: 'tag-info' },
   dispatching: { label: '交运中', cls: 'tag-info' },
-  delivering: { label: '已揽收', cls: 'tag-ok' },
+  delivering: { label: '集运中', cls: 'tag-ok' },
   signed: { label: '已签收', cls: 'tag-ok' },
   settled: { label: '已成功', cls: 'tag-ok' },
   returned: { label: '已退货', cls: 'tag-warn' },
@@ -294,7 +294,7 @@ function canShipCard(pkg) {
   return pkg.operateStatus === 'wait_stick';
 }
 // 待打单之后状态卡片可重打面单(2026-11:待发运起全部开放;缓存秒出,不改状态)
-// 待发运/交运中/已揽收/已签收/已成功 均可重新打印面单
+// 待发运/交运中/集运中/已签收/已成功 均可重新打印面单
 function canReprintCard(pkg) {
   return pkg.operateStatus === 'wait_dispatch' || pkg.operateStatus === 'dispatching'
     || pkg.operateStatus === 'delivering' || pkg.operateStatus === 'signed'
@@ -313,7 +313,7 @@ function blockReason(pkg) {
     case 'wait_stock': return '待入库';
     case 'wait_dispatch': return '待发运';
     case 'dispatching': return '交运中';
-    case 'delivering': return '已揽收';
+    case 'delivering': return '集运中';
     case 'signed': return '已签收';
     case 'settled': return '已成功';
     case 'cancelled': return '订单已取消';
@@ -519,7 +519,7 @@ async function onSubmitShip(pkg) {
       // 非可扫描状态(非待打单):不打印不改状态,横幅提示原因
       banner.type = 'err';
       banner.text = r.message || `订单状态问题:${r.operateStatus}`;
-      // 待打单之后(待发运/交运中/已揽收/已签收/已成功):可选重打(缓存秒出,不改状态;搁置订单亦允许,2026-10-23)
+      // 待打单之后(待发运/交运中/集运中/已签收/已成功):可选重打(缓存秒出,不改状态;搁置订单亦允许,2026-10-23)
       if (['wait_dispatch', 'dispatching', 'delivering', 'signed', 'settled'].includes(r.operateStatus)) {
         const ok = await confirmStore.ask({
           message: `包裹 ${pkg.postingNumber} 已交运(状态 ${r.operateStatus})。面单丢失或打花?重新打印面单(不改状态)`,

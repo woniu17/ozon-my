@@ -39,7 +39,7 @@ const confirmStore = useConfirmStore();
 
 // ── Tab 页签(operate_status 分流)─────────────────────────
 // 全部:跨所有状态(含搁置);已成功=已妥投且应计完整;已退货=妥投后买家退货退款(is_returned)
-// 2026-11 新流程:待采购 → 待入库 → 待打单 → 待发运 → 交运中 → 已揽收 → 已签收 → 已成功
+// 2026-11 新流程:待采购 → 待入库 → 待打单 → 待发运 → 交运中 → 集运中 → 已签收 → 已成功
 const TABS = [
   { key: 'all', label: '全部' },
   { key: 'waitProcess', label: '待采购' },
@@ -47,7 +47,7 @@ const TABS = [
   { key: 'waitStick', label: '待打单' },
   { key: 'waitDispatch', label: '待发运' },
   { key: 'dispatching', label: '交运中' },
-  { key: 'delivering', label: '已揽收' },
+  { key: 'delivering', label: '集运中' },
   { key: 'signed', label: '已签收' },
   { key: 'settled', label: '已成功' },
   { key: 'returned', label: '已退货' },
@@ -69,13 +69,13 @@ const filters = reactive({
   logisticsStaleHours: 0,    // 0=关;24=物流超24h未揽收(待入库快速筛选,2026-10-17)
 });
 // ── 排序选项(2026-09-20)────────────────────────────────────
-// key 对应后端 sortBy 白名单;delivering=揽收时间(国际物流商揽收)
-// 发货前取消的单无揽收时间,后端 NULLS LAST 排最后
+// key 对应后端 sortBy 白名单;delivering=集运时间(国际物流商集运)
+// 发货前取消的单无集运时间,后端 NULLS LAST 排最后
 const SORT_OPTIONS = {
   order_desc: { key: 'order', label: '下单时间 新→旧' },
   order_asc: { key: 'order', label: '下单时间 旧→新' },
-  delivering_desc: { key: 'delivering', label: '揽收时间 新→旧' },
-  delivering_asc: { key: 'delivering', label: '揽收时间 旧→新' },
+  delivering_desc: { key: 'delivering', label: '集运时间 新→旧' },
+  delivering_asc: { key: 'delivering', label: '集运时间 旧→新' },
   return_desc: { key: 'return', label: '退货时间 新→旧' },
   return_asc: { key: 'return', label: '退货时间 旧→新' },
   delivered_desc: { key: 'delivered', label: '签收时间 新→旧' },
@@ -84,7 +84,7 @@ const SORT_OPTIONS = {
   shipped_asc: { key: 'shipped', label: '交运时间 旧→新' },
 };
 // 各 tab 可用排序键(2026-09-20 v3;2026-11 新状态名):
-// 揽收排序适用所有状态(除待采购/待入库/待打单/待发运/交运中——货件尚未被物流商揽收)
+// 集运排序适用所有状态(除待采购/待入库/待打单/待发运/交运中——货件尚未被物流商集运)
 // 退货排序:已签收/已成功/已取消/已退货;签收排序:已签收/已成功(delivered_at 100% 覆盖)
 // 交运排序:交运中 tab 用(2026-10-29,按本地 waybill_printed_at)
 const TAB_SORT_KEYS = {
@@ -3141,7 +3141,7 @@ const OPERATE_LABELS = {
   wait_stick: { label: '待打单', cls: 'tag-info' },
   wait_dispatch: { label: '待发运', cls: 'tag-info' },
   dispatching: { label: '交运中', cls: 'tag-info' },
-  delivering: { label: '已揽收', cls: 'tag-ok' },
+  delivering: { label: '集运中', cls: 'tag-ok' },
   signed: { label: '已签收', cls: 'tag-ok' },
   settled: { label: '已成功', cls: 'tag-ok' },
   returned: { label: '已退货', cls: 'tag-warn' },
@@ -3624,8 +3624,8 @@ onUnmounted(() => {
             @click="toggleQuickFilter('logisticsStaleHours')"
           >物流超24h未揽收<template v-if="quickCounts.logisticsStale">({{ quickCounts.logisticsStale }})</template></button>
         </template>
-        <!-- 排序(2026-09-20):按 tab 动态显示可用排序键;揽收排序适用所有状态(除待采购/待入库/待打单/待发运/交运中);各 tab 独立记忆 -->
-        <select v-model="currentSort" class="filter-input" title="排序:揽收时间=国际物流商揽收时间(发货前取消的单无此时间,排最后)" @change="search">
+        <!-- 排序(2026-09-20):按 tab 动态显示可用排序键;集运排序适用所有状态(除待采购/待入库/待打单/待发运/交运中);各 tab 独立记忆 -->
+        <select v-model="currentSort" class="filter-input" title="排序:集运时间=国际物流商集运时间(发货前取消的单无此时间,排最后)" @change="search">
           <option v-for="o in sortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
         <!-- 取消发起者筛选(仅已取消 tab 显示) -->

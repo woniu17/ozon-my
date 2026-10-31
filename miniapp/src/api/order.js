@@ -171,6 +171,26 @@ export function setCarriageCourierContact(storeId, carriageId, body = {}) {
 export function getAvailableCarriagePostings(storeId, carriageId, params = {}) {
   return request.post('/admin/api/order-process/carriage/available-postings', { storeId, carriageId, ...params });
 }
+// ── 跨店大包混装(2026-11-02):本地关联其它店铺待发运货件 ──────────
+// 跨店待发运候选 → { postings: [{ posting_number, store_id, store_name, source:'manual',
+//                                  waybill_printed_at, printed_at, products[] }], count }
+// params: { carriageId, sourceStoreId, printedFrom?, printedTo?, keyword? }
+export function getMixedCarriageCandidates(storeId, params = {}) {
+  return request.post('/admin/api/order-process/carriage/mixed-candidates', { storeId, ...params });
+}
+// 添加跨店货件(本地关联,幂等) → { added[], skipped[], addedCount, skippedCount }
+export function addMixedCarriagePostings(storeId, carriageId, items) {
+  return request.post('/admin/api/order-process/carriage/mixed/add', { storeId, carriageId, items });
+}
+// 移除跨店货件(本地软删除,只动 manual 行) → { removed }
+export function removeMixedCarriagePosting(storeId, carriageId, postingStoreId, postingNumber) {
+  return request.post('/admin/api/order-process/carriage/mixed/remove', {
+    storeId,
+    carriageId,
+    postingStoreId,
+    postingNumber,
+  });
+}
 // 快递员联系方式配置列表(全店铺通用) → { contacts: [{ id, phone, wechatNickname, comment, isDefault }] }
 export function listCourierContactConfigs(storeId) {
   return request.post('/admin/api/order-process/carriage/courier-contact/config/list', { storeId });

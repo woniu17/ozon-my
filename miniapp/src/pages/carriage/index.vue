@@ -428,6 +428,9 @@ import {
   setCarriageCourierContact,
   setCarriagePostings,
   getAvailableCarriagePostings,
+  getMixedCarriageCandidates,
+  addMixedCarriagePostings,
+  removeMixedCarriagePosting,
   listCourierContactConfigs,
   saveCourierContactConfigs,
 } from '../../api/order.js';

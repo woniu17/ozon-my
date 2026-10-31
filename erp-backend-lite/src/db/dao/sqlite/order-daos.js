@@ -10,7 +10,7 @@ import { recomputeAggregates } from './purchase-sync-dao.js';
 import { imageCacheUrlFor, ensureImageCached, stripImageSizeSuffix } from '../../../services/order-image-cache.js';
 
 // operate_status 前进序( cancelled / returned 独立,任意状态可进 )
-// 新流程(2026-11):待采购 → 待入库 → 待打单 → 待发运 → 交运中 → 已揽收 → 已签收 → 已成功
+// 新流程(2026-11):待采购 → 待入库 → 待打单 → 待发运 → 交运中 → 集运中 → 已签收 → 已成功
 const OPERATE_RANK = {
   wait_process: 0,
   wait_stock: 1,
@@ -231,7 +231,7 @@ function applyOzonStatus(packageId, ozonStatus, { deliveringDate, shipmentDate }
     ozonStatus === 'delivering' ||
     ozonStatus === 'driver_pickup'
   ) {
-    // 已揽收(Ozon 在途):推进到 delivering
+    // 集运中(Ozon 在途):推进到 delivering
     advanceTo('delivering');
     if (!pkg.is_shipped) {
       sets.push('is_shipped = 1');
@@ -274,7 +274,7 @@ function applyOzonStatus(packageId, ozonStatus, { deliveringDate, shipmentDate }
   // ★ 新流程(2026-11):Ozon 状态联动不再推进采购前状态 ——
   //   待采购/待入库/待打单/待发运/交运中 的流转由本地动作驱动(提交采购/入库/打印面单/确认发运),
   //   Ozon 状态仅供展示与幂等校准;同步仅推进物流阶段:
-  //     delivering/driver_pickup → delivering(已揽收), delivered → signed(已签收), cancelled → cancelled。
+  //     delivering/driver_pickup → delivering(集运中), delivered → signed(已签收), cancelled → cancelled。
   //   awaiting_packaging / awaiting_approve / awaiting_registration / awaiting_deliver / arbitration → 维持当前操作状态
 
   if (shipmentDate) {
@@ -729,7 +729,7 @@ function upsertRfbsReturns(storeId, returns) {
 // ── 列表查询 ─────────────────────────────────────────────────
 
 /** Tab 计数(页面页签)
- *  新流程(2026-11):状态机扩展为 待采购/待入库/待打单/待发运/交运中/已揽收/已签收/已成功/已取消/已退货,
+ *  新流程(2026-11):状态机扩展为 待采购/待入库/待打单/待发运/交运中/集运中/已签收/已成功/已取消/已退货,
  *    delivered_at/is_returned/应计 的拆分已固化到 operate_status 独立状态值,无需运行时 CASE。
  *  新增 all:全部订单(含 ignored 搁置)
  */
@@ -836,7 +836,7 @@ function buildPackageWhere(filters = {}) {
       where.push('p.is_ignored = 0');
       where.push("p.operate_status = 'settled'");
     } else if (tab === 'delivering') {
-      // 已揽收=已交运且在途
+      // 集运中=已交运且在途
       where.push('p.is_ignored = 0');
       where.push("p.operate_status = 'delivering'");
     } else {
@@ -1004,9 +1004,9 @@ function setTagOrder(names) {
 }
 
 // ── 列表排序(2026-09-20)──────────────────────────────────────
-// sortBy 白名单:order=下单时间 | delivering=揽收时间 | return=退货时间 | delivered=签收时间(妥投)
-//   delivering 对应 o.delivering_date(国际物流商揽收时间),适用除待处理/待打单/交运外的所有状态
-//   发货前取消的单无揽收时间(NULLS LAST 排最后);return=货件退回/销毁处理时间
+// sortBy 白名单:order=下单时间 | delivering=集运时间 | return=退货时间 | delivered=签收时间(妥投)
+//   delivering 对应 o.delivering_date(国际物流商集运时间),适用除待处理/待打单/交运外的所有状态
+//   发货前取消的单无集运时间(NULLS LAST 排最后);return=货件退回/销毁处理时间
 //   delivered 对应 p.delivered_at(妥投时间),仅已签收/已成功 tab 用(100% 覆盖)
 //   shipped 对应本地发运时间(2026-11 起 p.dispatched_at;历史数据已回填,兼容旧字段),交运 tab 用
 const SORT_COLUMNS = {
@@ -1172,10 +1172,10 @@ function rowToPackage(r) {
     operateStatus: r.operate_status,
     purchaseStatus: r.purchase_status,
     isShipped: !!r.is_shipped,
-    shippedAt: r.shipped_at,               // Ozon 状态联动写入(在途/妥投时=揽收时间或同步时刻)
+    shippedAt: r.shipped_at,               // Ozon 状态联动写入(在途/妥投时=集运时间或同步时刻)
     isIgnored: !!r.is_ignored,
     inProcessAt: r.in_process_at,
-    deliveringDate: r.delivering_date, // 揽收时间(国际物流商揽收,在途/妥投/在途取消单有值)
+    deliveringDate: r.delivering_date, // 集运时间(国际物流商集运,在途/妥投/在途取消单有值)
     shipmentDate: r.shipment_date,
     lastDeliveryAt: r.last_delivery_at,
     deliveredAt: r.delivered_at,

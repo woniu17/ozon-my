@@ -152,7 +152,7 @@ class PushLogActivity : ComponentActivity() {
             "NEW_ORDER" to "新订单",
             "ORDER_CANCELLED" to "订单取消",
             "STATE_CHANGED" to "状态变更",
-            "PICKED_UP" to "已揽收"
+            "PICKED_UP" to "集运中"
         )
         val TYPE_COLORS = mapOf(
             "NEW_ORDER" to "#165dff",

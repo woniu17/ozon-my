@@ -365,7 +365,7 @@ class NewOrderNotifyService : Service() {
                     if (!tryMarkNotified("PICKED_UP:$postingNumber")) continue
                     sendOrderEventNotification(
                         channelId = CHANNEL_ORDER_STATUS,
-                        typeLabel = "已揽收",
+                        typeLabel = "集运中",
                         storeName = store,
                         postingNumber = postingNumber,
                         itemCount = ev.optInt("itemCount"),

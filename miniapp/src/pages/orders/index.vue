@@ -154,14 +154,14 @@
           </view>
         </view>
 
-        <!-- 时间行:交运中/已揽收/已签收/已成功/已退货 展示下单/揽收/签收/退货 + 利润 -->
+        <!-- 时间行:交运中/集运中/已签收/已成功/已退货 展示下单/集运/签收/退货 + 利润 -->
         <view v-else-if="showShipTimes(pkg)" class="time-row">
           <view class="t-line">
             <text class="t-k">下单</text>
             <text class="t-v">{{ fmtTime(pkg.inProcessAt) }}<text v-if="weekdayCN(pkg.inProcessAt)" class="t-wd">（{{ weekdayCN(pkg.inProcessAt) }}）</text></text>
           </view>
           <view v-if="pkg.deliveringDate" class="t-line">
-            <text class="t-k">揽收</text>
+            <text class="t-k">集运</text>
             <text class="t-v">{{ fmtTime(pkg.deliveringDate) }}<text v-if="weekdayCN(pkg.deliveringDate)" class="t-wd">（{{ weekdayCN(pkg.deliveringDate) }}）</text></text>
           </view>
           <view v-if="pkg.deliveredAt" class="t-line">
@@ -203,7 +203,7 @@ import { fmtMoney, fmtTime, weekdayCN } from '../../utils/fmt.js';
 
 // Tab 页签(与 web 端 OrderProcess.vue TABS 同步;2026-11 新流程状态名)
 // 全部:跨所有状态(含搁置);已成功=已妥投且应计完整;已退货=妥投后买家退货退款(is_returned)
-// 待采购 → 待入库 → 待打单 → 待发运 → 交运中 → 已揽收 → 已签收 → 已成功
+// 待采购 → 待入库 → 待打单 → 待发运 → 交运中 → 集运中 → 已签收 → 已成功
 const TABS = [
   { key: 'all', label: '全部' },
   { key: 'waitProcess', label: '待采购' },
@@ -211,7 +211,7 @@ const TABS = [
   { key: 'waitStick', label: '待打单' },
   { key: 'waitDispatch', label: '待发运' },
   { key: 'dispatching', label: '交运中' },
-  { key: 'delivering', label: '已揽收' },
+  { key: 'delivering', label: '集运中' },
   { key: 'signed', label: '已签收' },
   { key: 'settled', label: '已成功' },
   { key: 'returned', label: '已退货' },
@@ -264,13 +264,13 @@ function goBatchPurchase() {
 }
 
 // ── 排序(与 web 端 OrderProcess.vue 同步,2026-09-20)──────────
-// key 对应后端 sortBy 白名单;delivering=揽收时间(国际物流商揽收)
-// 发货前取消的单无揽收时间,后端 NULLS LAST 排最后
+// key 对应后端 sortBy 白名单;delivering=集运时间(国际物流商集运)
+// 发货前取消的单无集运时间,后端 NULLS LAST 排最后
 const SORT_OPTIONS = {
   order_desc: { key: 'order', label: '下单时间 新→旧' },
   order_asc: { key: 'order', label: '下单时间 旧→新' },
-  delivering_desc: { key: 'delivering', label: '揽收时间 新→旧' },
-  delivering_asc: { key: 'delivering', label: '揽收时间 旧→新' },
+  delivering_desc: { key: 'delivering', label: '集运时间 新→旧' },
+  delivering_asc: { key: 'delivering', label: '集运时间 旧→新' },
   return_desc: { key: 'return', label: '退货时间 新→旧' },
   return_asc: { key: 'return', label: '退货时间 旧→新' },
   delivered_desc: { key: 'delivered', label: '签收时间 新→旧' },
@@ -279,7 +279,7 @@ const SORT_OPTIONS = {
   shipped_asc: { key: 'shipped', label: '交运时间 旧→新' },
 };
 // 各 tab 可用排序键(与 web 端 TAB_SORT_KEYS 一致,2026-11 新状态名):
-// 揽收排序适用所有状态(除待采购/待入库/待打单/待发运/交运中——货件尚未被物流商揽收)
+// 集运排序适用所有状态(除待采购/待入库/待打单/待发运/交运中——货件尚未被物流商集运)
 // 退货排序:已签收/已成功/已取消/已退货;签收排序:已签收/已成功(delivered_at 100% 覆盖)
 // 交运排序:交运中 tab 用(按本地 waybill_printed_at)
 const TAB_SORT_KEYS = {
@@ -329,7 +329,7 @@ const OPERATE_LABELS = {
   wait_stick: { label: '待打单', cls: 'info' },
   wait_dispatch: { label: '待发运', cls: 'info' },
   dispatching: { label: '交运中', cls: 'info' },
-  delivering: { label: '已揽收', cls: 'ok' },
+  delivering: { label: '集运中', cls: 'ok' },
   signed: { label: '已签收', cls: 'ok' },
   settled: { label: '已成功', cls: 'ok' },
   returned: { label: '已退货', cls: 'warn' },
@@ -356,8 +356,8 @@ function showShipCountdown(pkg) {
   return !!pkg && !!pkg.shipmentDate && !pkg.isShipped && pkg.ozonStatus !== 'cancelled';
 }
 
-// ── 交运中/已揽收/已签收/已成功/已退货 时间行(下单/揽收/签收/退货 + 利润)──────
-// 2026-11 新状态名:dispatching(交运中)/delivering(已揽收)/signed(已签收)/settled(已成功)/returned(已退货)
+// ── 交运中/集运中/已签收/已成功/已退货 时间行(下单/集运/签收/退货 + 利润)──────
+// 2026-11 新状态名:dispatching(交运中)/delivering(集运中)/signed(已签收)/settled(已成功)/returned(已退货)
 const SHIP_TIMES_STATUSES = ['dispatching', 'delivering', 'signed', 'settled', 'returned'];
 function showShipTimes(pkg) {
   return !!pkg && SHIP_TIMES_STATUSES.includes(pkg.operateStatus);

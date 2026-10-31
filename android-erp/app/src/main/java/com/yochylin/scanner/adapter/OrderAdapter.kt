@@ -440,7 +440,7 @@ class OrderAdapter(private val callbacks: Callbacks) : RecyclerView.Adapter<Orde
                     val cd = countdownText(pkg.shipmentDate)
                     addTimeRow(oTimeContainer, if (cd.overdue) "已超时" else "剩发", cd.text, cd.urgent)
                     addPrintedTimeRow(pkg)
-                    // 交运时间(2026-10-29,对齐 Web 订单处理页):发运时间优先,历史打单/面单时间兜底,Ozon 揽收时间最后
+                    // 交运时间(2026-10-29,对齐 Web 订单处理页):发运时间优先,历史打单/面单时间兜底,Ozon 集运时间最后
                     addShippedTimeRow(pkg)
                     if (op == "wait_dispatch" && pkg.profit != null) {
                         addTimeRow(oTimeContainer, "预估利润", fmtMoney(pkg.profit.profit), false, profitColor(pkg.profit.profit))
@@ -523,7 +523,7 @@ private fun opTagInfo(pkg: Pkg): Pair<String, String> {
         "wait_stick" -> "待打单" to O_COLOR_PRIMARY
         "wait_dispatch" -> "待发运" to O_COLOR_PRIMARY
         "dispatching" -> "交运中" to O_COLOR_PRIMARY
-        "delivering" -> "已揽收" to O_COLOR_OK
+        "delivering" -> "集运中" to O_COLOR_OK
         "signed" -> "已签收" to O_COLOR_OK
         "settled" -> "已成功" to O_COLOR_OK
         "returned" -> "已退货" to O_COLOR_ERR

@@ -3,7 +3,7 @@
 // 设计文档: docs/采购订单-Ozon订单关联管理-功能设计.md
 //
 // 路由:
-//   GET  /admin/api/order-process/tabs            Tab 计数(待采购/待入库/待打单/待发运/交运中/已揽收/已签收/已成功/已取消/已退货/已搁置)
+//   GET  /admin/api/order-process/tabs            Tab 计数(待采购/待入库/待打单/待发运/交运中/集运中/已签收/已成功/已取消/已退货/已搁置)
 //   GET  /admin/api/order-process/list            包裹分页列表(tab+筛选+关键词)
 //   GET  /admin/api/order-process/detail/:id      包裹详情(产品行+采购关联+轨迹)
 //   GET  /admin/api/order-process/purchase/lookup 查询采购单已关联包裹(拼单提示)
@@ -56,7 +56,13 @@ import { translateCancelReason } from '../services/cancel-reason-i18n.js';
 import { getWaybill, setWaybill } from '../services/waybill-cache.js';
 import { extractWaybillBarcodes } from '../services/waybill-barcode.js';
 import { upsertPostingBarcode, findPostingByBarcode, missingBarcodePostings } from '../db/dao/sqlite/label-barcode-daos.js';
-import { syncCarriagePostings, markCarriageRemoved } from '../db/dao/sqlite/carriage-posting-dao.js';
+import {
+  syncCarriagePostings,
+  markCarriageRemoved,
+  getCarriagePostingRows,
+  addManualCarriagePosting,
+  removeManualCarriagePosting,
+} from '../db/dao/sqlite/carriage-posting-dao.js';
 import { getAccrualsByPackageIds, getAccrualTypeSumsByPackageIds, getRubCnyRate, setRubCnyRate, getBydayStats, getSettledEligiblePackageIds } from '../db/dao/sqlite/accrual-dao.js';
 import { stripImageSizeSuffix, imageCacheUrlFor } from '../services/order-image-cache.js';
 import { runAccrualByDaySync } from '../services/accrual-byday-sync.js';
@@ -1022,7 +1028,7 @@ const SHIP_BLOCK_MESSAGES = {
   wait_stock: '订单状态问题:待入库,请先完成入库',
   wait_dispatch: '订单状态问题:待发运,请到订单处理/发运管理中交运',
   dispatching: '订单状态问题:交运中',
-  delivering: '订单状态问题:已揽收',
+  delivering: '订单状态问题:集运中',
   signed: '订单状态问题:已签收',
   settled: '订单状态问题:已成功',
   cancelled: '订单状态问题:订单已取消',
@@ -1818,6 +1824,117 @@ function attachPostingShipmentDates(storeId, postings) {
   return postings;
 }
 
+// ── 跨店大包混装:本地货件富化与手动关联行构造(2026-11-02) ─────────
+// 以下三个 helper 服务于:
+//   - POST carriage/mixed-candidates(跨店待发运候选)
+//   - POST carriage/posting-list(合并 manual 行到发运单详情)
+// 数据源均为本地库,不调 Ozon API。
+
+// 按 ozon_order_id 批量补充商品行 + 主图(本地 op_ozon_order_item + product_data_cache)
+function attachLocalPostingProducts(postings) {
+  if (!Array.isArray(postings) || !postings.length) return postings;
+  const orderIds = [...new Set(postings.map((p) => Number(p.ozon_order_id)).filter(Number.isInteger))];
+  if (!orderIds.length) return postings;
+  const slots = orderIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT oi.ozon_order_id AS ozonOrderId, oi.sku, oi.offer_id, oi.title, oi.quantity,
+              COALESCE(json_extract(pc.data, '$.primary_image[0]'), json_extract(pc.data, '$.images[0]')) AS pic_url
+       FROM op_ozon_order_item oi
+       LEFT JOIN product_data_cache pc ON pc.sku = CAST(oi.sku AS TEXT)
+       WHERE oi.ozon_order_id IN (${slots})`
+    )
+    .all(...orderIds);
+  const byOrder = new Map();
+  for (const r of rows) {
+    if (!byOrder.has(r.ozonOrderId)) byOrder.set(r.ozonOrderId, []);
+    byOrder.get(r.ozonOrderId).push({
+      sku: r.sku,
+      offer_id: r.offer_id,
+      name: r.title,
+      quantity: r.quantity,
+      image_url: imageCacheUrlFor(r.pic_url),
+    });
+  }
+  for (const p of postings) {
+    p.products = byOrder.get(Number(p.ozon_order_id)) || [];
+  }
+  return postings;
+}
+
+// 本地富化:商品行/图片 + 订单/包裹信息(跨店候选与 manual 合并共用)
+// 入参:postings 每项须含 ozon_order_id 与 package_id(可含 store_id/posting_number)
+function hydrateLocalPostings(postings) {
+  if (!Array.isArray(postings) || !postings.length) return postings;
+  const orderIds = [...new Set(postings.map((p) => Number(p.ozon_order_id)).filter(Number.isInteger))];
+  const pkgIds = [...new Set(postings.map((p) => Number(p.package_id)).filter(Number.isInteger))];
+  const orders = new Map();
+  const packages = new Map();
+  if (orderIds.length) {
+    const slots = orderIds.map(() => '?').join(',');
+    for (const r of db
+      .prepare(
+        `SELECT id, posting_number, shipment_date, in_process_at, delivery_method_name,
+                warehouse_name, buyer_city, status
+         FROM op_ozon_order WHERE id IN (${slots})`
+      )
+      .all(...orderIds)) {
+      orders.set(Number(r.id), r);
+    }
+  }
+  if (pkgIds.length) {
+    const slots = pkgIds.map(() => '?').join(',');
+    for (const r of db
+      .prepare(
+        `SELECT id, waybill_printed_at, dispatched_at, weight, operate_status
+         FROM op_package WHERE id IN (${slots})`
+      )
+      .all(...pkgIds)) {
+      packages.set(Number(r.id), r);
+    }
+  }
+  attachLocalPostingProducts(postings);
+  for (const p of postings) {
+    const o = orders.get(Number(p.ozon_order_id));
+    if (o) {
+      p.shipment_date = o.shipment_date;
+      p.in_process_at = o.in_process_at;
+      p.ozon_status = o.status;
+      p.delivery_method_name = o.delivery_method_name;
+      p.warehouse_name = o.warehouse_name;
+      p.buyer_city = o.buyer_city;
+    }
+    const pk = packages.get(Number(p.package_id));
+    if (pk) {
+      p.waybill_printed_at = pk.waybill_printed_at;
+      p.dispatched_at = pk.dispatched_at;
+      p.operate_status = pk.operate_status;
+      p.weight_g = pk.weight != null ? Math.round(Number(pk.weight) * 1000) : null;
+    }
+  }
+  return postings;
+}
+
+// 从本地 op_carriage_posting 读取发运单的 manual 行,构造发运单详情可展示的货件对象
+function buildManualPostingObjects(storeId, carriageId) {
+  const rows = getCarriagePostingRows(carriageId, { sources: ['manual'] });
+  if (!rows.length) return [];
+  const stores = new Map((config.loadStores() || []).map((s) => [String(s.id), s]));
+  const postings = rows.map((r) => ({
+    posting_number: r.postingNumber,
+    store_id: r.storeId,
+    store_name: stores.get(String(r.storeId))?.name || '',
+    source: 'manual',
+    added_at: r.addedAt,
+    ozon_order_id: r.ozonOrderId,
+    package_id: r.packageId,
+    status: r.status,
+    products: [],
+  }));
+  hydrateLocalPostings(postings);
+  return postings;
+}
+
 // 快递员联系方式配置(2026-10-30,支持多条 + 默认项;2026-10-30 改为全店铺通用一份)
 // 全局 key: carriage_courier_contacts, value: [{ id, phone, wechatNickname, comment, isDefault }]
 // 兼容迁移:历史按店铺存的数组 key(carriage_courier_contacts:<storeId>)
@@ -2022,7 +2139,8 @@ router.post('/admin/api/order-process/carriage/get', async (req, res) => {
 router.post('/admin/api/order-process/carriage/posting-list', async (req, res) => {
   try {
     const store = requireCarriageStore(req);
-    const r = await carriagePostingList(store, req.body?.carriageId, {
+    const carriageId = req.body?.carriageId;
+    const r = await carriagePostingList(store, carriageId, {
       cursor: req.body?.cursor,
       limit: req.body?.limit,
       cutoffFrom: req.body?.cutoffFrom,
@@ -2033,17 +2151,24 @@ router.post('/admin/api/order-process/carriage/posting-list', async (req, res) =
       attachPostingProductImages(store.id, r.postings);
       attachPostingShipmentDates(store.id, r.postings);
     }
-    // 2026-11-01:货件快照写回本地历史(发运完成后 Ozon 查不到)
+    // 2026-11-02:读路径顺带刷新本地"货件↔发运单"关联(仅 Ozon 本店行)
     if (r?.postings) {
-      updateCarriageHistoryJson(store.id, req.body?.carriageId, {
-        postingsJson: JSON.stringify(r.postings),
-      });
-    }
-    // 2026-11-02:读路径顺带刷新本地"货件↔发运单"关联
-    if (r?.postings) {
-      syncCarriagePostings(store.id, req.body?.carriageId, r.postings, {
+      syncCarriagePostings(store.id, carriageId, r.postings, {
         deliveryMethodId: req.body?.deliveryMethodId,
         departureDate: req.body?.departureDate,
+      });
+    }
+    // 2026-11-02:合并跨店手动关联行(大包混装);历史快照须包含跨店货件,
+    // 因此 postings_json 在合并完成后统一写入。
+    const manualPostings = buildManualPostingObjects(store.id, carriageId);
+    if (manualPostings.length) {
+      r.postings = [...(r.postings || []), ...manualPostings];
+      r.manual_count = manualPostings.length;
+    }
+    // 2026-11-01:货件快照写回本地历史(发运完成后 Ozon 查不到)
+    if (r?.postings) {
+      updateCarriageHistoryJson(store.id, carriageId, {
+        postingsJson: JSON.stringify(r.postings),
       });
     }
     res.json(ok(r));
@@ -2107,7 +2232,13 @@ router.post('/admin/api/order-process/carriage/approve', async (req, res) => {
         });
       }
       const postingNumbers = (pl?.postings || []).map((p) => p.posting_number).filter(Boolean);
-      if (postingNumbers.length) {
+      // 2026-11-02:跨店手动关联货件(大包混装)一并推进 待发运 → 交运中
+      const manualRows = getCarriagePostingRows(carriageId, { sources: ['manual'] });
+      const allPostingNumbers = [
+        ...postingNumbers,
+        ...manualRows.map((r) => r.postingNumber).filter(Boolean),
+      ];
+      if (allPostingNumbers.length) {
         const now = new Date().toISOString();
         db.prepare(
           `UPDATE op_package
@@ -2115,9 +2246,9 @@ router.post('/admin/api/order-process/carriage/approve', async (req, res) => {
                   dispatched_at = CASE WHEN operate_status = 'wait_dispatch' THEN ? ELSE dispatched_at END,
                   gmt_modified = ?
             WHERE ozon_order_id IN (
-              SELECT id FROM op_ozon_order WHERE posting_number IN (${postingNumbers.map(() => '?').join(',')})
+              SELECT id FROM op_ozon_order WHERE posting_number IN (${allPostingNumbers.map(() => '?').join(',')})
             )`
-        ).run(now, now, ...postingNumbers);
+        ).run(now, now, ...allPostingNumbers);
       }
     } catch (e) {
       logger.warn({ err: e?.message, carriageId }, '[order-process] 确认发运后推进货件状态失败');
@@ -2186,6 +2317,149 @@ router.post('/admin/api/order-process/carriage/available-postings', async (req, 
     if (candidates.length) attachPostingProductImages(store.id, candidates);
     res.json(ok({ postings: candidates, count: candidates.length }));
   } catch (e) { carriageHandleError(e, req, res, '获取可加入货件'); }
+});
+
+// ── 跨店大包混装(2026-11-02):本地关联其它店铺待发运货件 ──────────
+// Ozon 发运 API 只认本店货件;跨店货件仅本地关联(source='manual'),不推送 Ozon。
+// 候选数据源为本地库(待发运包裹),支持按打单时间 COALESCE(waybill_printed_at, dispatched_at) 筛选。
+
+// 跨店待发运候选
+router.post('/admin/api/order-process/carriage/mixed-candidates', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req); // 发运单归属店铺
+    const carriageId = req.body?.carriageId;
+    const sourceStoreId = req.body?.sourceStoreId;
+    if (!carriageId) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'carriageId 必填');
+    if (!sourceStoreId) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'sourceStoreId 必填');
+    if (String(sourceStoreId) === String(store.id)) {
+      throw new ApiError(ErrorCode.VALIDATION_ERROR, '跨店货件请选择其它店铺');
+    }
+    const srcStore = (config.loadStores() || []).find((s) => String(s.id) === String(sourceStoreId));
+    if (!srcStore || !srcStore?.sync_credentials?.clientId) {
+      throw new ApiError(ErrorCode.VALIDATION_ERROR, `店铺 ${sourceStoreId} 未配置 sync_credentials`);
+    }
+    const printedFrom = req.body?.printedFrom || null;
+    const printedTo = req.body?.printedTo || null;
+    const keyword = req.body?.keyword ? String(req.body.keyword).trim() : null;
+    const rows = db
+      .prepare(
+        `SELECT o.id AS ozonOrderId,
+                o.posting_number AS postingNumber,
+                o.order_id AS orderId,
+                o.shipment_date AS shipmentDate,
+                o.in_process_at AS inProcessAt,
+                o.delivery_method_name AS deliveryMethodName,
+                o.warehouse_name AS warehouseName,
+                o.buyer_city AS buyerCity,
+                p.id AS packageId,
+                p.store_id AS storeId,
+                p.weight AS weightKg,
+                p.waybill_printed_at AS waybillPrintedAt,
+                p.dispatched_at AS dispatchedAt,
+                COALESCE(p.waybill_printed_at, p.dispatched_at) AS printedAt
+         FROM op_package p
+         JOIN op_ozon_order o ON o.id = p.ozon_order_id
+         WHERE p.store_id = ?
+           AND p.operate_status = 'wait_dispatch'
+           AND (? IS NULL OR COALESCE(p.waybill_printed_at, p.dispatched_at) >= ?)
+           AND (? IS NULL OR COALESCE(p.waybill_printed_at, p.dispatched_at) <= ?)
+           AND (? IS NULL OR o.posting_number LIKE ?)
+           AND NOT EXISTS (
+             SELECT 1 FROM op_carriage_posting cp
+             WHERE cp.store_id = p.store_id
+               AND cp.posting_number = o.posting_number
+               AND cp.removed_at IS NULL
+               AND (cp.source = 'manual' OR cp.carriage_id = ?)
+           )
+         ORDER BY COALESCE(p.waybill_printed_at, p.dispatched_at) DESC, o.posting_number
+         LIMIT 500`
+      )
+      .all(
+        String(sourceStoreId),
+        printedFrom, printedFrom,
+        printedTo, printedTo,
+        keyword ? `%${keyword}%` : null, keyword ? `%${keyword}%` : null,
+        Number(carriageId)
+      );
+
+    const postings = rows.map((r) => ({
+      posting_number: r.postingNumber,
+      store_id: r.storeId,
+      store_name: srcStore.name || '',
+      ozon_order_id: r.ozonOrderId,
+      package_id: r.packageId,
+      order_id: r.orderId,
+      shipment_date: r.shipmentDate,
+      in_process_at: r.inProcessAt,
+      delivery_method_name: r.deliveryMethodName,
+      warehouse_name: r.warehouseName,
+      buyer_city: r.buyerCity,
+      waybill_printed_at: r.waybillPrintedAt,
+      dispatched_at: r.dispatchedAt,
+      printed_at: r.printedAt,
+      status: 'awaiting_deliver',
+      source: 'manual',
+      products: [],
+    }));
+    hydrateLocalPostings(postings);
+    res.json(ok({ postings, count: postings.length }));
+  } catch (e) { carriageHandleError(e, req, res, '获取跨店待发运货件'); }
+});
+
+// 添加跨店货件(本地关联,幂等)
+router.post('/admin/api/order-process/carriage/mixed/add', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const carriageId = req.body?.carriageId;
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!carriageId) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'carriageId 必填');
+    if (!items.length) throw new ApiError(ErrorCode.VALIDATION_ERROR, 'items 必填');
+    const added = [];
+    const skipped = [];
+    for (const it of items) {
+      const r = addManualCarriagePosting({
+        carriageId: Number(carriageId),
+        postingStoreId: it?.storeId,
+        postingNumber: it?.postingNumber,
+      });
+      if (r.added) {
+        added.push({ storeId: it?.storeId, postingNumber: it?.postingNumber });
+      } else {
+        skipped.push({
+          storeId: it?.storeId,
+          postingNumber: it?.postingNumber,
+          reason: r.reason,
+          carriageId: r.carriageId ?? null,
+        });
+      }
+    }
+    if (added.length) {
+      logger.info(
+        { storeId: store.id, carriageId: Number(carriageId), added: added.length, skipped: skipped.length },
+        '[order-process] 添加跨店货件成功'
+      );
+    }
+    res.json(ok({ added, skipped, addedCount: added.length, skippedCount: skipped.length }));
+  } catch (e) { carriageHandleError(e, req, res, '添加跨店货件'); }
+});
+
+// 移除跨店货件(本地软删除,只动 manual 行)
+router.post('/admin/api/order-process/carriage/mixed/remove', async (req, res) => {
+  try {
+    const store = requireCarriageStore(req);
+    const removed = removeManualCarriagePosting({
+      carriageId: req.body?.carriageId,
+      postingStoreId: req.body?.postingStoreId,
+      postingNumber: req.body?.postingNumber,
+    });
+    if (removed) {
+      logger.info(
+        { storeId: store.id, carriageId: req.body?.carriageId, postingStoreId: req.body?.postingStoreId, postingNumber: req.body?.postingNumber },
+        '[order-process] 移除跨店货件'
+      );
+    }
+    res.json(ok({ removed }));
+  } catch (e) { carriageHandleError(e, req, res, '移除跨店货件'); }
 });
 
 // 取消发运

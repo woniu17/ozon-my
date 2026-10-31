@@ -1249,7 +1249,7 @@ CREATE INDEX IF NOT EXISTS idx_op_carriage_history_store ON op_carriage_history(
 CREATE INDEX IF NOT EXISTS idx_op_carriage_history_status ON op_carriage_history(status);
 
 -- ════════════════════════════════════════════════════════════════
--- 货件-发运单关联表(2026-10-31 设计)
+-- 货件-发运单关联表(2026-10-31 设计;2026-11-02 扩展跨店大包混装)
 -- 背景:货件与发运单的绑定关系原本只存在 Ozon 侧,本地无 carriage 字段,
 --      发运单货件列表全靠实时查 Ozon,发运完成后查不到只能依赖 postings_json 快照。
 -- 本表将"货件 ↔ 发运单"关系持久化到本地:
@@ -1257,6 +1257,10 @@ CREATE INDEX IF NOT EXISTS idx_op_carriage_history_status ON op_carriage_history
 --  - 同一货件当前只能在一个发运单(部分唯一索引 removed_at IS NULL);
 --  - removed_at 软删除,保留货件进出发运单的历史轨迹。
 -- 冗余 ozon_order_id/package_id 便于 JOIN op_ozon_order/op_package(头程单号、操作状态等)。
+-- source 维度(2026-11-02 跨店大包混装):
+--  - ozon  :发运单在 Ozon 的真实本店货件,由 Ozon 列表同步全量刷新;
+--  - manual:其它店铺货件的本地手动关联(大包混装),不推送 Ozon,任何 Ozon 列表同步都不触碰。
+-- 同一货件最多同时:1 个 ozon 活跃行(自己店铺的 Ozon 发运单)+ 1 个 manual 活跃行(某个跨店大包)。
 -- 同步:写路径(create/set-postings/approve/cancel)+ 读路径(posting-list)+ 定时任务(carriage-history-sync)。
 -- ════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS op_carriage_posting (
@@ -1269,18 +1273,22 @@ CREATE TABLE IF NOT EXISTS op_carriage_posting (
   delivery_method_id INTEGER,
   departure_date   TEXT,
   status            TEXT,
+  source            TEXT NOT NULL DEFAULT 'ozon',   -- ozon=Ozon同步本店 / manual=跨店手动关联
   added_at          TEXT NOT NULL,
   removed_at       TEXT,
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL,
   UNIQUE(store_id, carriage_id, posting_number)
 );
--- 同一货件当前只能在一个发运单里
-CREATE UNIQUE INDEX IF NOT EXISTS uq_carriage_posting_current
-  ON op_carriage_posting(store_id, posting_number) WHERE removed_at IS NULL;
--- 查发运单当前货件
+-- 同一货件当前只能在一个 Ozon 发运单里(Ozon 同步行)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_carriage_posting_ozon_current
+  ON op_carriage_posting(store_id, posting_number) WHERE removed_at IS NULL AND source = 'ozon';
+-- 同一货件当前只能在一个跨店手动大包发运单里(本地混装行)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_carriage_posting_manual_current
+  ON op_carriage_posting(store_id, posting_number) WHERE removed_at IS NULL AND source = 'manual';
+-- 查发运单当前货件(按全局 carriage_id;跨店行 store_id 各不相同)
 CREATE INDEX IF NOT EXISTS idx_carriage_posting_active
-  ON op_carriage_posting(store_id, carriage_id) WHERE removed_at IS NULL;
+  ON op_carriage_posting(carriage_id) WHERE removed_at IS NULL;
 -- 查货件所属发运单(含历史)
 CREATE INDEX IF NOT EXISTS idx_carriage_posting_posting
   ON op_carriage_posting(store_id, posting_number);

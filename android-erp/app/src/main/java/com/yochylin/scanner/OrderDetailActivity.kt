@@ -563,8 +563,8 @@ class OrderDetailActivity : ComponentActivity() {
             addInfoRow(dInfoList, "打单时间", fmtTimeWithWeekday(p.waybillPrintedAt))
         }
         addTimeRowIf(dInfoList, "交运时间", p.dispatchedAt)
-        // 揽收时间 = Ozon 交物流时间(delivering_date),缺失时回退到状态联动写入的 shipped_at
-        addTimeRowIf(dInfoList, "揽收时间", p.deliveringDate ?: p.shippedAt)
+        // 集运时间 = Ozon 交物流时间(delivering_date),缺失时回退到状态联动写入的 shipped_at
+        addTimeRowIf(dInfoList, "集运时间", p.deliveringDate ?: p.shippedAt)
         addTimeRowIf(dInfoList, "签收时间", p.deliveredAt)
         addTimeRowIf(dInfoList, "退货时间", p.returnAt)
         addTimeRowIf(dInfoList, "采购到货", p.arrivedAt)
@@ -1687,7 +1687,7 @@ class OrderDetailActivity : ComponentActivity() {
             "wait_stick" -> "待打单" to COLOR_PRIMARY
             "wait_dispatch" -> "待发运" to COLOR_PRIMARY
             "dispatching" -> "交运中" to COLOR_PRIMARY
-            "delivering" -> "已揽收" to COLOR_OK
+            "delivering" -> "集运中" to COLOR_OK
             "signed" -> "已签收" to COLOR_OK
             "settled" -> "已成功" to COLOR_OK
             "returned" -> "已退货" to COLOR_ERR

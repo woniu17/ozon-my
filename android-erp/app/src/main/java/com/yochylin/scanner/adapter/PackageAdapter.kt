@@ -255,7 +255,7 @@ class PackageAdapter(private val callbacks: Callbacks) :
                     "wait_stick" -> { label = "待打单"; color = COLOR_PRIMARY }
                     "wait_dispatch" -> { label = "待发运"; color = COLOR_PRIMARY }
                     "dispatching" -> { label = "交运中"; color = COLOR_PRIMARY }
-                    "delivering" -> { label = "已揽收"; color = COLOR_OK }
+                    "delivering" -> { label = "集运中"; color = COLOR_OK }
                     "signed" -> { label = "已签收"; color = COLOR_OK }
                     "settled" -> { label = "已成功"; color = COLOR_OK }
                     "cancelled" -> { label = "已取消"; color = COLOR_ERR }

@@ -857,7 +857,7 @@ const OPERATE_LABELS = {
   wait_stick: { label: '待打单', cls: 'info' },
   wait_dispatch: { label: '待发运', cls: 'info' },
   dispatching: { label: '交运中', cls: 'info' },
-  delivering: { label: '已揽收', cls: 'ok' },
+  delivering: { label: '集运中', cls: 'ok' },
   signed: { label: '已签收', cls: 'ok' },
   settled: { label: '已成功', cls: 'ok' },
   returned: { label: '已退货', cls: 'warn' },
@@ -894,7 +894,7 @@ function blockReason(pkg) {
     case 'wait_stock': return '待入库,请先完成入库';
     case 'wait_dispatch': return '待发运';
     case 'dispatching': return '交运中';
-    case 'delivering': return '已揽收';
+    case 'delivering': return '集运中';
     case 'cancelled': return '订单已取消';
     default: return pkg.operateStatus || '—';
   }
