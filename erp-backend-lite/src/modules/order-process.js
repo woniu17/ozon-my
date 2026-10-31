@@ -1808,11 +1808,16 @@ function attachPostingShipmentDates(storeId, postings) {
   const numbers = [...new Set(postings.map((p) => p?.posting_number).filter(Boolean))];
   if (!numbers.length) return postings;
   const slots = numbers.map(() => '?').join(',');
+  // 2026-11-02:附带本地 operate_status(货件状态),供详情/创建发运弹窗展示
   const rows = db
     .prepare(
-      `SELECT posting_number, shipment_date, status AS ozon_status
-       FROM op_ozon_order
-       WHERE store_id = ? AND posting_number IN (${slots})`
+      `SELECT o.posting_number,
+              o.shipment_date,
+              o.status        AS ozon_status,
+              pk.operate_status AS operate_status
+       FROM op_ozon_order o
+       LEFT JOIN op_package pk ON pk.ozon_order_id = o.id
+       WHERE o.store_id = ? AND o.posting_number IN (${slots})`
     )
     .all(storeId, ...numbers);
   const byNumber = new Map(rows.map((r) => [r.posting_number, r]));
@@ -1820,6 +1825,7 @@ function attachPostingShipmentDates(storeId, postings) {
     const r = byNumber.get(p?.posting_number);
     p.shipment_date = r?.shipment_date || null;
     p.ozon_status = r?.ozon_status || null;
+    p.operate_status = r?.operate_status || null;
   }
   return postings;
 }

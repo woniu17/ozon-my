@@ -118,7 +118,7 @@
       </view>
     </view>
 
-    <!-- 创建发运弹窗 -->
+    <!-- 创建发运弹窗(2026-11-02:参考详情弹窗,展示将自动进入发运的货件列表+状态) -->
     <view v-if="createModal.open" class="mask" @click="createModal.open = false">
       <view class="sheet create-sheet" @click.stop>
         <view class="sheet-title">创建发运</view>
@@ -136,10 +136,54 @@
             <view class="picker-value">{{ createModal.departureDate || '选择日期' }}</view>
           </picker>
         </view>
+
+        <view class="detail-section create-postings-section">
+          <view class="section-head">
+            <text class="section-name">将进入发运的货件</text>
+            <text v-if="createModal.loading" class="section-hint">加载中…</text>
+            <text v-else class="section-hint">共 {{ createModal.postings.length }} 件</text>
+          </view>
+          <view v-if="createModal.loading" class="empty small">加载中…</view>
+          <view v-else-if="!createModal.postings.length" class="empty small">该配送方式下暂无待发运货件</view>
+          <scroll-view v-else scroll-y class="create-postings-scroll">
+            <view class="posting-list">
+              <view v-for="p in createModal.postings" :key="p.posting_number" class="posting-item">
+                <view class="posting-main">
+                  <view class="posting-number mono">{{ p.posting_number }}</view>
+                  <view class="posting-tags">
+                    <text v-if="postingStatusMeta(p.operate_status)" class="posting-status" :class="postingStatusMeta(p.operate_status).cls">
+                      {{ postingStatusMeta(p.operate_status).label }}
+                    </text>
+                    <text v-else class="posting-status st-muted">{{ p.operate_status || p.ozon_status || '—' }}</text>
+                  </view>
+                  <view class="posting-products">
+                    <view v-for="it in p.products || []" :key="it.sku || it.offer_id || it.name" class="posting-product">
+                      <image v-if="it.image_url" class="posting-img" :src="it.image_url" mode="aspectFill" />
+                      <view v-else class="posting-img placeholder-img" />
+                      <text class="posting-name">{{ it.name || it.offer_id || it.sku }}</text>
+                      <text class="posting-qty">×{{ it.quantity ?? '' }}</text>
+                    </view>
+                  </view>
+                </view>
+                <view class="posting-ops">
+                  <text
+                    v-if="postingDeadlineVisible(p)"
+                    class="ship-deadline"
+                    :class="{ urgent: isDeadlineUrgent(p.shipment_date), overdue: isDeadlineOverdue(p.shipment_date) }"
+                  >
+                    {{ isDeadlineOverdue(p.shipment_date) ? '已超时' : isDeadlineUrgent(p.shipment_date) ? '24h内' : '' }}
+                    {{ fmtDeadline(p.shipment_date) }}
+                  </text>
+                </view>
+              </view>
+            </view>
+          </scroll-view>
+        </view>
+
         <view class="form-hint">该配送方式下所有「已准备发运」货件将自动进入发运。</view>
         <view class="sheet-actions">
           <view class="btn ghost" @click="createModal.open = false">取消</view>
-          <view class="btn primary" :class="{ disabled: createModal.creating }" @click="createSubmit">
+          <view class="btn primary" :class="{ disabled: createModal.creating || createModal.loading }" @click="createSubmit">
             {{ createModal.creating ? '创建中…' : '创建发运' }}
           </view>
         </view>
@@ -181,6 +225,10 @@
                 <view class="posting-main">
                   <view class="posting-number mono">{{ p.posting_number }}</view>
                   <view class="posting-tags">
+                    <text v-if="postingStatusMeta(p.operate_status)" class="posting-status" :class="postingStatusMeta(p.operate_status).cls">
+                      {{ postingStatusMeta(p.operate_status).label }}
+                    </text>
+                    <text v-else class="posting-status st-muted">{{ p.operate_status || p.ozon_status || '—' }}</text>
                     <text v-if="p.source === 'manual'" class="cross-tag">{{ p.store_name || p.store_id || '' }}·跨店</text>
                     <text v-else class="self-tag">本店</text>
                   </view>
@@ -501,6 +549,22 @@ const CARRIAGE_STATUS_LABELS = {
 function carriageStatusLabel(status) {
   return CARRIAGE_STATUS_LABELS[status] || status || '—';
 }
+// 货件状态(operate_status,与订单处理一致;2026-11-02 详情/创建发运弹窗展示)
+const POSTING_STATUS_LABELS = {
+  wait_process: { label: '待采购', cls: 'st-warn' },
+  wait_stock: { label: '待入库', cls: 'st-info' },
+  wait_stick: { label: '待打单', cls: 'st-info' },
+  wait_dispatch: { label: '待发运', cls: 'st-info' },
+  dispatching: { label: '交运中', cls: 'st-info' },
+  delivering: { label: '集运中', cls: 'st-ok' },
+  signed: { label: '已签收', cls: 'st-ok' },
+  settled: { label: '已成功', cls: 'st-ok' },
+  returned: { label: '已退货', cls: 'st-warn' },
+  cancelled: { label: '已取消', cls: 'st-err' },
+};
+function postingStatusMeta(status) {
+  return POSTING_STATUS_LABELS[status] || null;
+}
 // 列表接口不返回 available_actions,按状态判断是否已确认
 // 2026-11-02 实测:formed(已形成)即可生成货位标签,仅 new(新建)不可用
 const UNCONFIRMED_CARRIAGE_STATUSES = ['new'];
@@ -546,7 +610,7 @@ const allRows = computed(() => [
 ]);
 const listRows = computed(() => (tab.value === 'pending' ? pendingRows.value : allRows.value));
 
-// 创建发运弹窗
+// 创建发运弹窗(2026-11-02:参考详情弹窗,展示将自动进入发运的货件列表+状态)
 const createModal = reactive({
   open: false,
   storeId: '',
@@ -554,6 +618,8 @@ const createModal = reactive({
   deliveryMethodId: '',
   deliveryMethodName: '',
   departureDate: '',
+  loading: false,
+  postings: [],
   creating: false,
 });
 
@@ -815,14 +881,34 @@ onPullDownRefresh(() => {
 });
 
 // ── 创建发运 ────────────────────────────────────────────
-function openCreate(row) {
+async function openCreate(row) {
   createModal.storeId = row.store_id;
   createModal.storeName = row.store_name || '';
   createModal.deliveryMethodId = String(row.delivery_method_id || '');
   createModal.deliveryMethodName = row.delivery_method_name || '';
   createModal.departureDate = new Date().toISOString().slice(0, 10);
   createModal.creating = false;
+  createModal.postings = [];
   createModal.open = true;
+  await loadCreatePostings();
+}
+
+// 加载该配送方式下将自动进入发运的待发运货件
+async function loadCreatePostings() {
+  if (!createModal.storeId || !createModal.deliveryMethodId) {
+    createModal.postings = [];
+    return;
+  }
+  createModal.loading = true;
+  try {
+    const data = await getPendingPostings(createModal.storeId, createModal.deliveryMethodId);
+    createModal.postings = data?.postings || [];
+  } catch (err) {
+    toast(err.message || '待发运货件加载失败');
+    createModal.postings = [];
+  } finally {
+    createModal.loading = false;
+  }
 }
 
 async function createSubmit() {
@@ -1997,6 +2083,26 @@ async function onPrint(row) {
   background: #fdeaf3;
   border-radius: 6rpx;
   padding: 2rpx 10rpx;
+}
+
+/* ── 货件状态标签(2026-11-02,详情/创建发运弹窗) ── */
+.posting-status {
+  font-size: 20rpx;
+  border-radius: 6rpx;
+  padding: 2rpx 10rpx;
+}
+.posting-status.st-info { color: #165dff; background: #eaf1ff; }
+.posting-status.st-ok { color: #16a34a; background: #dcfce7; }
+.posting-status.st-warn { color: #f59e0b; background: #fef3c7; }
+.posting-status.st-err { color: #ef4444; background: #fee2e2; }
+.posting-status.st-muted { color: #86909c; background: #f2f3f5; }
+
+/* ── 创建发运弹窗:待发运货件列表(2026-11-02) ── */
+.create-postings-section {
+  margin-bottom: 8rpx;
+}
+.create-postings-scroll {
+  max-height: 40vh;
 }
 
 /* ── 货件列表弹窗(2026-11-02) ── */
