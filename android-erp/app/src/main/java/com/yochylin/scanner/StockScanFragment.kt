@@ -366,10 +366,12 @@ class StockScanFragment : Fragment() {
                                 result = "warning", extra = mapOf("status" to status)
                             )
                         } else {
+                            // 有订单但当前状态不可入库:识别成功(有单),播放成功音提示
                             showScanHint(
                                 "⏭ 订单状态[${status.ifBlank { "未知" }}]不可入库:${pn.ifBlank { code }}",
                                 error = false
                             )
+                            playFeedback(true)
                             reportLog(
                                 "scan_status_skipped", "订单状态 ${status.ifBlank { "未知" }} 不可入库",
                                 code = code, postingNumber = pn.ifBlank { null },
@@ -602,6 +604,8 @@ class StockScanFragment : Fragment() {
     }
 
     // ── 扫码反馈(提示音 + 震动) ──
+    // 2026-11-08:成功=双响 beep(清晰可辨),失败=NACK 低频错误音;有订单(待入库/已入库/不可入库)统一成功音,
+    // 没有订单/非快递单号/查询失败/入库失败统一错误音。
 
     private fun playFeedback(success: Boolean) {
         runCatching {
@@ -618,14 +622,25 @@ class StockScanFragment : Fragment() {
                 vibrator.vibrate(longArrayOf(0L, if (success) 60 else 200), -1)
             }
         }
+        if (success) {
+            // 双响成功音:beep → 短暂间隔 → 再 beep(更易与错误音区分)
+            playTone(ToneGenerator.TONE_PROP_BEEP, 120)
+            Handler(Looper.getMainLooper()).postDelayed(
+                { playTone(ToneGenerator.TONE_PROP_BEEP, 180) },
+                130
+            )
+        } else {
+            // 错误音:低频 NACK 长鸣
+            playTone(ToneGenerator.TONE_PROP_NACK, 300)
+        }
+    }
+
+    private fun playTone(toneType: Int, durationMs: Int) {
         runCatching {
             val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
-            tone.startTone(
-                if (success) ToneGenerator.TONE_PROP_BEEP else ToneGenerator.TONE_PROP_NACK,
-                if (success) 120 else 300
-            )
+            tone.startTone(toneType, durationMs)
             // 延迟释放,避免提示音被截断
-            Handler(Looper.getMainLooper()).postDelayed({ runCatching { tone.release() } }, 500)
+            Handler(Looper.getMainLooper()).postDelayed({ runCatching { tone.release() } }, durationMs + 200L)
         }
     }
 
