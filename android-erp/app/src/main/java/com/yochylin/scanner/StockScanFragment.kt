@@ -637,7 +637,8 @@ class StockScanFragment : Fragment() {
 
     private fun playTone(toneType: Int, durationMs: Int) {
         runCatching {
-            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
+            // 2026-11-08:改用媒体流+最大音量,扫码提示音明显加大;且通知静音时仍可响(只要媒体音量>0)
+            val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
             tone.startTone(toneType, durationMs)
             // 延迟释放,避免提示音被截断
             Handler(Looper.getMainLooper()).postDelayed({ runCatching { tone.release() } }, durationMs + 200L)
