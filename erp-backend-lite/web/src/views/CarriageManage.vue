@@ -204,7 +204,7 @@ const PRINTED_RANGES = [
   { key: '3d', label: '近3天' },
   { key: '7d', label: '近7天' },
 ];
-const crossStores = computed(() => storesStore.stores.filter((s) => String(s.id) !== String(storeId.value)));
+const crossStores = computed(() => storesStore.list.filter((s) => String(s.id) !== String(storeId.value)));
 const crossStoreName = computed(() => {
   const s = crossStores.value.find((x) => String(x.id) === String(candidate.sourceStoreId));
   return s?.name || candidate.sourceStoreId || '';
