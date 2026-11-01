@@ -546,7 +546,7 @@ const CARRIAGE_STATUS_LABELS = {
   received: '已接收',
   delivered: '已送达',
   cancelled: '已取消',
-  closed: '已关闭',
+  closed: '已完结',
   archived: '已归档',
 };
 function carriageStatusLabel(status) {
