@@ -1392,6 +1392,12 @@ defineExpose({ refreshCurrent, listLoading });
             </span>
           </div>
           <div class="detail-item">
+            <span class="detail-label">货件数量</span>
+            <span class="detail-value">
+              {{ detail.postingsLoading ? '加载中…' : detail.postings.length }}
+            </span>
+          </div>
+          <div class="detail-item">
             <span class="detail-label">配送方式</span>
             <span class="detail-value">{{ detail.carriage.delivery_method_name || detail.carriage.delivery_method_id || '—' }}</span>
           </div>
