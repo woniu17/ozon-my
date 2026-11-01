@@ -2010,6 +2010,18 @@ router.post('/admin/api/order-process/carriage/list', async (req, res) => {
         });
       }
     }
+    // 2026-11-06:实时清单的行不带快递单号(Ozon 接口不返回),从本地历史表合并
+    // (打货运标签解析/历史同步写入 op_carriage_history.tracking_number),进行中发运也能显示单号
+    const trackings = db.prepare(
+      `SELECT carriage_id, tracking_number FROM op_carriage_history
+       WHERE store_id = ? AND tracking_number IS NOT NULL AND tracking_number != ''`
+    ).all(String(store.id));
+    const tMap = new Map(trackings.map((t) => [Number(t.carriage_id), t.tracking_number]));
+    for (const m of r?.methods || []) {
+      for (const c of m.carriages || []) {
+        if (!c.tracking_number && tMap.has(Number(c.id))) c.tracking_number = tMap.get(Number(c.id));
+      }
+    }
     // 2026-11-02:附加"24h内发运期限/已超时"货件数(本地 shipment_date 反查)
     try {
       await attachCarriageDeadlineCounts(store, r?.methods || []);
