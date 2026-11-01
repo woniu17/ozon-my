@@ -14,6 +14,8 @@
         <view class="store-card-head">
           <text class="store-card-name">{{ s.storeName }}</text>
           <text class="store-card-index" :style="{ color: indexColor(s.index) }">{{ fmtIndex(s.index) }}</text>
+          <text class="store-card-cost">¥{{ fmtMoney(s.processingCostsSum) }}</text>
+          <text v-if="zeroForecast(s)" class="store-card-forecast">{{ zeroForecast(s) }}</text>
         </view>
         <view class="index-scale">
           <view
@@ -28,11 +30,6 @@
         <view class="scale-thresholds">
           <text v-for="t in INDEX_THRESHOLDS" :key="t" class="threshold">{{ t }}</text>
         </view>
-        <view class="store-card-sub">
-          <text>{{ s.periodFrom }} ~ {{ fmtPeriodEnd(s.periodTo) }}</text>
-          <text>罚款 ¥{{ fmtMoney(s.processingCostsSum) }}</text>
-        </view>
-        <view v-if="zeroForecast(s)" class="store-card-forecast">{{ zeroForecast(s) }}</view>
       </view>
     </view>
     <view v-else-if="summary" class="empty-tip">暂无错误指数数据,点击「同步」拉取 Ozon 最新数据</view>
@@ -305,7 +302,7 @@ function zeroForecast(s) {
   const daysLeft = Math.round((c.getTime() - todayUtc) / 86400000);
   if (daysLeft <= 0) return '';
   const p = (n) => String(n).padStart(2, '0');
-  return `预测:无新取消时 ${p(c.getUTCMonth() + 1)}-${p(c.getUTCDate())} 归零(还剩 ${daysLeft} 天)`;
+  return `${daysLeft}天后归零（${p(c.getUTCMonth() + 1)}-${p(c.getUTCDate())}）`;
 }
 function typeLabel(t) {
   return t === 'SELLER_CANCELLATION' ? '卖家取消' : t === 'SELLER_DELAY' ? '卖家逾期' : t || '未知';
@@ -376,26 +373,36 @@ onReachBottom(() => {
   padding: 24rpx;
   box-sizing: border-box;
 }
+/* 单行:店名+指标值+罚款+预测,全部左对齐,固定列宽对齐(占位 xxx.xx% / ¥xxxx.xx) */
 .store-card-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12rpx;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 16rpx;
   margin-bottom: 4rpx;
 }
 .store-card-name {
-  font-size: 28rpx;
+  font-size: 26rpx;
   font-weight: 600;
   color: #1f2329;
+  min-width: 112rpx;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .store-card-index {
-  font-size: 44rpx;
+  font-size: 26rpx;
   font-weight: 700;
-  line-height: 1.1;
+  min-width: 152rpx;
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.store-card-cost {
+  min-width: 168rpx;
+  font-size: 22rpx;
+  font-variant-numeric: tabular-nums;
+  color: #86909c;
+  white-space: nowrap;
   flex-shrink: 0;
 }
 .index-scale {
@@ -429,20 +436,12 @@ onReachBottom(() => {
   font-size: 18rpx;
   color: #86909c;
 }
-.store-card-sub {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12rpx;
-  margin-top: 16rpx;
-  font-size: 22rpx;
-  color: #86909c;
-}
-/* 归零预测行(滚动窗口推算,假设未来无新取消) */
+/* 归零预测(单行内,滚动窗口推算,假设未来无新取消) */
 .store-card-forecast {
-  margin-top: 8rpx;
   font-size: 22rpx;
   color: #00a32e;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .red-t { color: #f53f3f; }
 

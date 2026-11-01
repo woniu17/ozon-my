@@ -234,7 +234,8 @@ class StoreHealthFragment : Fragment() {
             setRoundedBgStroke(Color.WHITE, Color.parseColor("#E9EDF3"), 14f, 1f)
             setPadding(dp(12).toInt(), dp(10).toInt(), dp(12).toInt(), dp(8).toInt())
 
-            // 店铺名 + 指数%(Ozon 官方阈值着色;整行卡片宽度充裕)
+            // 单行:店名 + 指数% + 罚款 + 归零预测,全部左对齐,固定列宽对齐
+            // (指标值占位 xxx.xx%,罚款占位 ¥xxxx.xx,时间段以页顶为准,不再逐店展示)
             addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -245,18 +246,38 @@ class StoreHealthFragment : Fragment() {
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.END
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    layoutParams = LinearLayout.LayoutParams(dp(64).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
                 })
                 addView(TextView(ctx).apply {
                     text = String.format(Locale.US, "%.2f%%", idx * 100)
                     setTextColor(Color.parseColor(color))
-                    textSize = 17f
+                    textSize = 12f
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    gravity = Gravity.END
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    maxLines = 1
+                    layoutParams = LinearLayout.LayoutParams(dp(58).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                         leftMargin = dp(6).toInt()
                     }
                 })
+                addView(TextView(ctx).apply {
+                    text = fmtMoney(store.processingCostsSum) // fmtMoney 自带 ¥ 前缀
+                    setTextColor(Color.parseColor(COLOR_MUTE))
+                    textSize = 10f
+                    maxLines = 1
+                    layoutParams = LinearLayout.LayoutParams(dp(64).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        leftMargin = dp(8).toInt()
+                    }
+                })
+                zeroForecastText(store)?.let { pred ->
+                    addView(TextView(ctx).apply {
+                        text = pred
+                        setTextColor(Color.parseColor("#00a32e"))
+                        textSize = 10f
+                        maxLines = 1
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            leftMargin = dp(8).toInt()
+                        }
+                    })
+                }
             })
 
             // 五色指数刻度条
@@ -267,45 +288,6 @@ class StoreHealthFragment : Fragment() {
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { topMargin = dp(8).toInt() }
             })
-
-            // 统计周期 + 罚款
-            addView(LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(8).toInt(), 0, 0)
-                // 周期与罚款同行(整行卡片宽度充裕,用完整日期)
-                val period = if (!store.periodFrom.isNullOrBlank() && !store.periodTo.isNullOrBlank()) {
-                    "${store.periodFrom} ~ ${shiftDays(store.periodTo, -1)}"
-                } else {
-                    "—"
-                }
-                addView(TextView(ctx).apply {
-                    text = period
-                    setTextColor(Color.parseColor(COLOR_MUTE))
-                    textSize = 9f
-                    maxLines = 1
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                })
-                addView(TextView(ctx).apply {
-                    text = "罚款 ${fmtMoney(store.processingCostsSum)}"
-                    setTextColor(Color.parseColor(COLOR_MUTE))
-                    textSize = 9f
-                    gravity = Gravity.END
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                        leftMargin = dp(4).toInt()
-                    }
-                })
-            })
-
-            // 归零预测(滚动窗口推算,假设未来无新取消)
-            zeroForecastText(store)?.let { pred ->
-                addView(TextView(ctx).apply {
-                    text = pred
-                    setTextColor(Color.parseColor("#00a32e"))
-                    textSize = 9f
-                    setPadding(0, dp(4).toInt(), 0, 0)
-                })
-            }
         }
     }
 
@@ -487,7 +469,7 @@ class StoreHealthFragment : Fragment() {
         val daysLeft = ((zeroDate.time - today.time) / (24 * 60 * 60 * 1000L)).toInt()
         if (daysLeft <= 0) return null
         val zeroStr = SimpleDateFormat("MM-dd", Locale.US).format(zeroDate)
-        return "预测:无新取消时 $zeroStr 归零(还剩 $daysLeft 天)"
+        return "${daysLeft}天后归零（$zeroStr）"
     }
 
     // ── Ozon 风格指数刻度条：五色区段(绿/青/黄/橙/红)+当前指数填充+阈值标签 ──

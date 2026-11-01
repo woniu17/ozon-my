@@ -222,7 +222,7 @@ function zeroForecast(s) {
   const daysLeft = Math.round((c.getTime() - todayUtc) / 86400000);
   if (daysLeft <= 0) return '';
   const p = (n) => String(n).padStart(2, '0');
-  return `预测:无新取消时 ${p(c.getUTCMonth() + 1)}-${p(c.getUTCDate())} 归零(还剩 ${daysLeft} 天)`;
+  return `${daysLeft}天后归零（${p(c.getUTCMonth() + 1)}-${p(c.getUTCDate())}）`;
 }
 function typeLabel(t) {
   return t === 'SELLER_CANCELLATION' ? '卖家取消' : t === 'SELLER_DELAY' ? '卖家逾期' : t || '未知';
@@ -267,6 +267,8 @@ onMounted(() => {
         <div class="store-card-head">
           <span class="store-card-name">{{ s.storeName }}</span>
           <span class="store-card-index" :style="{ color: indexColor(s.index) }">{{ fmtPct(s.index) }}%</span>
+          <span class="store-card-cost">¥{{ fmtMoney(s.processingCostsSum) }}</span>
+          <span v-if="zeroForecast(s)" class="store-card-forecast">{{ zeroForecast(s) }}</span>
         </div>
         <div class="index-scale">
           <div
@@ -281,11 +283,6 @@ onMounted(() => {
         <div class="scale-thresholds">
           <span v-for="t in INDEX_THRESHOLDS" :key="t" class="threshold">{{ t }}</span>
         </div>
-        <div class="store-card-sub">
-          <span>{{ s.periodFrom }} ~ {{ fmtPeriodEnd(s.periodTo) }}</span>
-          <span>罚款 ¥{{ fmtMoney(s.processingCostsSum) }}</span>
-        </div>
-        <div v-if="zeroForecast(s)" class="store-card-forecast">{{ zeroForecast(s) }}</div>
       </div>
     </div>
     <div v-else-if="summary && summary.stores.length === 0" class="empty-tip">
@@ -446,37 +443,38 @@ onMounted(() => {
   border-radius: 16px;
   padding: 16px 18px 12px;
 }
+/* 单行:店名+指标值+罚款+预测,全部左对齐,固定列宽对齐(占位 xxx.xx% / ¥xxxx.xx) */
 .store-card-head {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
 }
 .store-card-name {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: #1f2329;
+  min-width: 56px;
+  white-space: nowrap;
 }
 .store-card-index {
-  font-size: 28px;
+  font-size: 14px;
   font-weight: 700;
-  line-height: 1.1;
+  min-width: 76px;
   font-variant-numeric: tabular-nums;
 }
-.store-card-sub {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 8px;
-  font-size: 11px;
+.store-card-cost {
+  min-width: 84px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   color: #86909c;
 }
-
-/* 归零预测行(滚动窗口推算,假设未来无新取消) */
+/* 归零预测(单行内,滚动窗口推算,假设未来无新取消) */
 .store-card-forecast {
-  margin-top: 4px;
+  margin-left: 12px;
   font-size: 11px;
   color: #00a32e;
+  white-space: nowrap;
 }
 
 .red-text { color: #f53f3f; }
