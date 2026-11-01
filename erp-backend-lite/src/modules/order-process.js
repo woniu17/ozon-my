@@ -85,6 +85,80 @@ import { searchXianyuOrder } from '../services/platform-orders/adapters/xianyu.j
 
 const router = Router();
 
+// ── 订单写操作通用日志(2026-11):为未单独埋点的订单写接口统一落 op_order_log ──
+// ship(已单独埋点)与 logs(安卓上报)排除;成功记 success,失败记 failed+响应 message。
+// 通过拦截 res.json 捕获响应体中的错误信息,不影响正常响应。
+const ORDER_WRITE_ACTIONS = [
+  [/^\/admin\/api\/order-process\/purchase$/, 'purchase', '采购', '提交采购'],
+  [/^\/admin\/api\/order-process\/purchase-alloc$/, 'purchase_alloc', '采购分摊', '更新采购分摊'],
+  [/^\/admin\/api\/order-process\/purchase-logistics$/, 'purchase_logistics', '采购物流', '更新采购物流'],
+  [/^\/admin\/api\/order-process\/purchase\/clear$/, 'purchase_clear', '清空采购', '清空采购信息'],
+  [/^\/admin\/api\/order-process\/unlink$/, 'unlink', '解除关联', '解除采购关联'],
+  [/^\/admin\/api\/order-process\/revert$/, 'revert', '退回待处理', '退回待处理'],
+  [/^\/admin\/api\/order-process\/ignore$/, 'ignore', '搁置', '搁置/恢复订单'],
+  [/^\/admin\/api\/order-process\/package-meta$/, 'package_meta', '备注/标签', '更新备注/标签'],
+  [/^\/admin\/api\/order-process\/print-label$/, 'print_label', '打印面单', '打印面单'],
+  [/^\/admin\/api\/order-process\/package-label$/, 'package_label', '面单', '打印面单'],
+  [/^\/admin\/api\/order-process\/sync-package$/, 'sync_package', '同步', '手动同步订单'],
+  [/^\/admin\/api\/order-process\/detail\/\d+\/stock$/, 'stock_update', '库存修改', '修改订单商品库存'],
+  [/^\/admin\/api\/order-process\/scan-ship\/submit$/, 'scan_ship_submit', '扫描打单', '扫描打单提交'],
+  [/^\/admin\/api\/order-process\/scan-ship\/correct-weight$/, 'correct_weight', '更正重量', '更正重量'],
+  [/^\/admin\/api\/order-process\/carriage\/create$/, 'carriage_create', '创建发运', '创建发运'],
+  [/^\/admin\/api\/order-process\/carriage\/approve$/, 'carriage_approve', '确认发运', '确认发运'],
+  [/^\/admin\/api\/order-process\/carriage\/set-postings$/, 'carriage_set_postings', '设置货件', '设置发运货件'],
+  [/^\/admin\/api\/order-process\/carriage\/mixed\/add$/, 'carriage_mixed_add', '混装加入', '混装加入货件'],
+  [/^\/admin\/api\/order-process\/carriage\/mixed\/remove$/, 'carriage_mixed_remove', '混装移除', '混装移除货件'],
+  [/^\/admin\/api\/order-process\/carriage\/cancel$/, 'carriage_cancel', '取消发运', '取消发运'],
+  [/^\/admin\/api\/order-process\/carriage\/courier-contact\/set$/, 'courier_contact_set', '快递员联系', '保存快递员联系方式'],
+];
+
+function resolveOrderWriteAction(path) {
+  for (const [re, action, actionName, successText] of ORDER_WRITE_ACTIONS) {
+    if (re.test(path)) return { action, actionName, successText };
+  }
+  return null;
+}
+
+function orderWriteLog(req, res, next) {
+  if (!['POST', 'PUT', 'DELETE'].includes(req.method)) return next();
+  const m = resolveOrderWriteAction(req.path);
+  if (!m) return next();
+  if (req.path === '/admin/api/order-process/ship' || req.path === '/admin/api/order-process/logs') return next();
+  const origJson = res.json.bind(res);
+  let respBody = null;
+  res.json = (body) => { respBody = body; return origJson(body); };
+  res.on('finish', () => {
+    try {
+      if (res._orderWriteLogged) return;
+      res._orderWriteLogged = true;
+      const b = req.body || {};
+      let packageId = b.packageId ?? b.id ?? null;
+      const mStock = /^\/admin\/api\/order-process\/detail\/(\d+)\/stock$/.exec(req.path);
+      if (mStock && packageId == null) packageId = Number(mStock[1]);
+      const postingNumber = b.postingNumber
+        || (Array.isArray(b.postingNumbers) ? b.postingNumbers.join(',') : null)
+        || null;
+      const isErr = res.statusCode >= 400;
+      const msg = respBody && typeof respBody === 'object' ? (respBody.message || null) : null;
+      logOrderAction({
+        packageId,
+        postingNumber,
+        storeId: b.storeId || null,
+        action: m.action,
+        actionName: m.actionName,
+        result: isErr ? 'failed' : 'success',
+        message: msg || (isErr ? `HTTP ${res.statusCode}` : m.successText),
+        source: 'web',
+      });
+    } catch (e) {
+      // 日志写入失败不影响业务响应
+    }
+  });
+  next();
+}
+
+router.use(orderWriteLog);
+
 // 预估佣金率/国际配送公式常量已抽取至 services/profit-estimator.js(2026-09-18,与价格管理页单点维护)
 // 预估佣金率 16%(实测 payout/commission 未妥投恒为 0,需自算;对齐妙手"平台佣金 XX 估"口径)
 // 国际配送费公式:delivery_cny = 3.37 + 0.0281 × weight_g(对齐 Ozon type 67)
