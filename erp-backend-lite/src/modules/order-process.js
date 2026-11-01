@@ -1567,10 +1567,23 @@ router.post('/admin/api/order-process/logs', (req, res, next) => {
     if (!action) {
       return res.status(400).json({ ok: false, message: 'action 必填' });
     }
+    // 安卓端部分路径(如记录重试)未带 storeId 时,由 packageId 自动补全店铺(2026-11-08)
+    let storeId = b.storeId;
+    if (!storeId && b.packageId != null && b.packageId !== '') {
+      const pid = Number(b.packageId);
+      if (Number.isInteger(pid) && pid > 0) {
+        const row = db
+          .prepare(
+            `SELECT o.store_id AS storeId FROM op_package p JOIN op_ozon_order o ON o.id = p.ozon_order_id WHERE p.id = ?`
+          )
+          .get(pid);
+        if (row?.storeId) storeId = row.storeId;
+      }
+    }
     logOrderAction({
       packageId: b.packageId,
       postingNumber: b.postingNumber,
-      storeId: b.storeId,
+      storeId,
       action,
       actionName: b.actionName,
       result: b.result,

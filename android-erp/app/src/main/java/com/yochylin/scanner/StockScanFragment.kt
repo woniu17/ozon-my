@@ -49,6 +49,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 
@@ -90,6 +91,9 @@ class StockScanFragment : Fragment() {
     private val lastHandleAt = HashMap<String, Long>()
     private val DEBOUNCE_MS = 2000L
 
+    /** 入库防重(2026-11):同一货件入库请求未返回前禁止重复提交(防连扫/重试/手动输入叠加触发) */
+    private val submittingPackageIds = ConcurrentHashMap.newKeySet<String>()
+
     /** 国内快递单号格式预检:纯数字10-15位,或 1-3位字母前缀+9-15位数字(+0-2位字母后缀,如SF/JD/JT/EMS) */
     private val COURIER_NO_REGEX = Regex("^[0-9]{10,15}$|^[A-Za-z]{1,3}[0-9]{9,15}[A-Za-z]{0,2}$")
 
@@ -113,6 +117,7 @@ class StockScanFragment : Fragment() {
         code: String = "",
         packageId: String = "",
         postingNumber: String? = null,
+        storeId: String? = null,
         result: String = "info",
         extra: Map<String, Any?>? = null
     ) {
@@ -126,6 +131,7 @@ class StockScanFragment : Fragment() {
             put("source", "android")
             if (packageId.isNotBlank()) put("packageId", packageId)
             if (!postingNumber.isNullOrBlank()) put("postingNumber", postingNumber)
+            if (!storeId.isNullOrBlank()) put("storeId", storeId)
             if (detail.isNotEmpty()) put("detail", detail)
         })
         flushPendingLogs()
@@ -356,6 +362,7 @@ class StockScanFragment : Fragment() {
                             reportLog(
                                 "scan_status_skipped", "该订单已入库,不重复入库",
                                 code = code, postingNumber = pn.ifBlank { null },
+                                storeId = hit?.storeId,
                                 result = "warning", extra = mapOf("status" to status)
                             )
                         } else {
@@ -366,6 +373,7 @@ class StockScanFragment : Fragment() {
                             reportLog(
                                 "scan_status_skipped", "订单状态 ${status.ifBlank { "未知" }} 不可入库",
                                 code = code, postingNumber = pn.ifBlank { null },
+                                storeId = hit?.storeId,
                                 result = "warning", extra = mapOf("status" to status)
                             )
                         }
@@ -378,7 +386,7 @@ class StockScanFragment : Fragment() {
                 if (totalQty > 1) {
                     showMultiConfirm(stockPkg, code, totalQty, imageUrl)
                 } else {
-                    doShip(stockPkg.id, stockPkg.postingNumber, code, imageUrl)
+                    doShip(stockPkg.id, stockPkg.postingNumber, code, imageUrl, stockPkg.storeId)
                 }
             } catch (e: Exception) {
                 failCount++
@@ -412,7 +420,7 @@ class StockScanFragment : Fragment() {
         addRecord(RecordEntry(RecordStatus.PENDING, code, pkg.id, pkg.postingNumber, "共 $totalQty 件,待确认", imageUrl))
         reportLog(
             "multi_confirm_show", "多件商品弹窗二次确认",
-            code = code, packageId = pkg.id, postingNumber = pkg.postingNumber,
+            code = code, packageId = pkg.id, postingNumber = pkg.postingNumber, storeId = pkg.storeId,
             result = "pending", extra = mapOf("totalQty" to totalQty)
         )
 
@@ -437,7 +445,7 @@ class StockScanFragment : Fragment() {
             .setMessage(message)
             .setPositiveButton("确认入库") { _, _ ->
                 confirmed = true
-                doShip(pkg.id, pkg.postingNumber, code, imageUrl)
+                doShip(pkg.id, pkg.postingNumber, code, imageUrl, pkg.storeId)
             }
             .setNegativeButton("取消", null)
             .create()
@@ -447,7 +455,7 @@ class StockScanFragment : Fragment() {
             if (!confirmed) {
                 reportLog(
                     "multi_confirm_cancel", "用户取消多件入库确认",
-                    code = code, packageId = pkg.id, postingNumber = pkg.postingNumber,
+                    code = code, packageId = pkg.id, postingNumber = pkg.postingNumber, storeId = pkg.storeId,
                     result = "warning"
                 )
             }
@@ -457,8 +465,18 @@ class StockScanFragment : Fragment() {
     }
 
     /** 调用入库接口并记录结果 */
-    private fun doShip(packageId: String, postingNumber: String?, code: String, imageUrl: String? = null) {
-        reportLog("ship_submit", "提交入库", code = code, packageId = packageId, postingNumber = postingNumber, result = "pending")
+    private fun doShip(packageId: String, postingNumber: String?, code: String, imageUrl: String? = null, storeId: String? = null) {
+        // 防重(2026-11):同一货件入库请求未返回时,忽略重复扫码/重复点击,避免叠加触发两次入库
+        if (!submittingPackageIds.add(packageId)) {
+            showScanHint("⏳ 该订单正在入库处理中:$postingNumber", error = false)
+            reportLog(
+                "ship_duplicate_ignored", "入库请求处理中,忽略重复提交",
+                code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId,
+                result = "warning"
+            )
+            return
+        }
+        reportLog("ship_submit", "提交入库", code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId, result = "pending")
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val r = Api.post("/admin/api/order-process/ship", mapOf("packageId" to packageId)).asJsonObject
@@ -473,7 +491,7 @@ class StockScanFragment : Fragment() {
                         successCount++
                         addRecord(RecordEntry(RecordStatus.SUCCESS, code, packageId, postingNumber, "已入库过", imageUrl))
                         playFeedback(true)
-                        reportLog("ship_already", "该订单已入库过", code = code, packageId = packageId, postingNumber = postingNumber, result = "warning")
+                        reportLog("ship_already", "该订单已入库过", code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId, result = "warning")
                     }
                 } else {
                     val title = if (r.optBoolean("pending")) "入库指令已提交" else "入库成功"
@@ -482,7 +500,7 @@ class StockScanFragment : Fragment() {
                     playFeedback(true)
                     reportLog(
                         if (r.optBoolean("pending")) "ship_pending" else "ship_success",
-                        title, code = code, packageId = packageId, postingNumber = postingNumber,
+                        title, code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId,
                         result = if (r.optBoolean("pending")) "pending" else "success"
                     )
                 }
@@ -494,7 +512,10 @@ class StockScanFragment : Fragment() {
                     imageUrl
                 ))
                 playFeedback(false)
-                reportLog("ship_failed", "入库失败:${e.message ?: e.javaClass.simpleName}", code = code, packageId = packageId, postingNumber = postingNumber, result = "failed")
+                reportLog("ship_failed", "入库失败:${e.message ?: e.javaClass.simpleName}", code = code, packageId = packageId, postingNumber = postingNumber, storeId = storeId, result = "failed")
+            } finally {
+                // 无论成功/失败都解除防重,允许用户重新扫码重试
+                submittingPackageIds.remove(packageId)
             }
             updateStats()
         }

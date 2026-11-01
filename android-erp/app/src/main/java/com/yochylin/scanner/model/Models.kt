@@ -41,6 +41,7 @@ data class RubRate(
 /** 订单（包裹）卡片数据，字段与后端 order-process/list 返回一致 */
 data class Pkg(
     val id: String = "",
+    val storeId: String? = null,          // 店铺 id(2026-11-08:入库日志上报补传)
     val storeName: String? = null,
     val postingNumber: String? = null,
     val parentId: String? = null,
