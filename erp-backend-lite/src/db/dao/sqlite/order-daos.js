@@ -788,7 +788,7 @@ const TAB_STATUS = {
  *  - globalKeyword: 全局搜索关键词(跨所有状态,忽略 tab;妙手 appPackageTab=isolation 等价)
  *  - globalMode: 'ss' 模糊(LIKE,默认) | 'eq' 精确(全值)
  *    匹配字段: 订单号(posting_number,即Ozon运单号)/包裹号/平台SKU(offer_id)/SKU/
- *             采购单号/采购物流单号/Ozon运单号
+ *             采购单号/采购物流单号/OGL集运仓快递单号(发运级,含旧字段兜底)
  */
 function buildPackageWhere(filters = {}) {
   const where = [];
@@ -802,6 +802,13 @@ function buildPackageWhere(filters = {}) {
     where.push('1 = 1');
     const op = globalMode === 'eq' ? '= ?' : 'LIKE ?';
     const val = globalMode === 'eq' ? globalKw : `%${globalKw}%`;
+    // OGL 集运仓快递单号匹配(2026-11-06):单号存发运级 op_carriage_history.tracking_number,
+    // 多容器逗号分隔;eq 模式按"成员精确"匹配(首尾补逗号),ss 模式子串匹配。
+    // 旧字段 head_logistics_no 作无发运关联行(发运管理上线前的老包裹)的兜底。
+    const oglEq = globalMode === 'eq';
+    const oglVal = oglEq ? `%,${globalKw},%` : `%${globalKw}%`;
+    const oglOpCh = oglEq ? `(',' || ch.tracking_number || ',') LIKE ?` : 'ch.tracking_number LIKE ?';
+    const oglOpPkg = oglEq ? `(',' || p.head_logistics_no || ',') LIKE ?` : 'p.head_logistics_no LIKE ?';
     where.push(`(
       o.posting_number ${op}
       OR p.package_no ${op}
@@ -813,9 +820,17 @@ function buildPackageWhere(filters = {}) {
                  JOIN op_purchase_link pl ON pl.purchase_order_id = po.id
                  WHERE pl.package_id = p.id
                    AND (po.purchase_sn ${op} OR po.logistics_no ${op}))
+      OR EXISTS (SELECT 1
+                 FROM op_carriage_posting cp
+                 JOIN op_carriage_history ch ON ch.carriage_id = cp.carriage_id
+                 WHERE cp.removed_at IS NULL
+                   AND (cp.package_id = p.id
+                        OR (cp.store_id = o.store_id AND cp.posting_number = o.posting_number))
+                   AND (${oglOpCh}))
+      OR (${oglOpPkg})
     )`);
-    // 7 个占位符:posting_number/package_no/logistics_no/offer_id/sku/purchase_sn/po.logistics_no
-    params.push(val, val, val, val, val, val, val);
+    // 9 个占位符:posting_number/package_no/logistics_no/offer_id/sku/purchase_sn/po.logistics_no/OGL单号×2
+    params.push(val, val, val, val, val, val, val, oglVal, oglVal);
   } else {
     const tab = filters.tab || 'waitProcess';
     if (tab === 'ignored') {
@@ -1017,6 +1032,59 @@ const SORT_COLUMNS = {
   shipped: 'COALESCE(p.dispatched_at, p.waybill_printed_at)',
 };
 
+// ── OGL 集运仓快递单号:读时 join 派生(2026-11-06) ──
+// 单号属于发运单(op_carriage_history.tracking_number,多容器时逗号分隔全量),
+// 货件按"当前活跃发运关联"(op_carriage_posting.removed_at IS NULL)取最近一次加入的发运的单号:
+// 后加进发运的货件自动带号、移出的自动失号,不再依赖打标签那一刻的回填时机。
+// 旧字段 op_package.head_logistics_no 仅作 YT 开头值的过渡兜底(发运历史行缺失的长尾);
+// 非 YT 开头的旧值(妙手同步/入库误存的采购物流单号)一律清空,不再当 OGL 号展示(修语义污染)。
+function attachCarriageOglTracking(pkgRows) {
+  if (!pkgRows.length) return;
+  const pkgIds = [...new Set(pkgRows.map((p) => p.id).filter(Boolean))];
+  const postingKeys = [...new Set(pkgRows.map((p) => `${p.storeId}|${p.postingNumber}`))];
+  const conds = [];
+  const args = [];
+  if (pkgIds.length) {
+    conds.push(`cp.package_id IN (${pkgIds.map(() => '?').join(',')})`);
+    args.push(...pkgIds);
+  }
+  if (postingKeys.length) {
+    conds.push(`(cp.store_id || '|' || cp.posting_number) IN (${postingKeys.map(() => '?').join(',')})`);
+    args.push(...postingKeys);
+  }
+  if (!conds.length) return;
+  let links;
+  try {
+    links = db.prepare(
+      `SELECT cp.package_id AS pid, cp.store_id || '|' || cp.posting_number AS pkey,
+              ch.tracking_number AS tracking
+       FROM op_carriage_posting cp
+       JOIN op_carriage_history ch ON ch.carriage_id = cp.carriage_id
+       WHERE cp.removed_at IS NULL AND (${conds.join(' OR ')})
+       ORDER BY cp.added_at ASC`
+    ).all(...args);
+  } catch {
+    return; // 派生字段失败不影响列表主流程
+  }
+  const byPid = new Map();
+  const byKey = new Map();
+  for (const l of links) {
+    // ASC 遍历后同键留最近一次 added_at 的发运
+    if (l.pid != null && l.tracking) byPid.set(l.pid, l.tracking);
+    if (l.pkey && l.tracking) byKey.set(l.pkey, l.tracking);
+  }
+  for (const p of pkgRows) {
+    const tracking = byPid.get(p.id) || byKey.get(`${p.storeId}|${p.postingNumber}`);
+    if (tracking) {
+      p.headLogisticsNo = tracking;
+      p.headLogisticsCompany = '圆通速递';
+    } else if (!/^YT/.test(String(p.headLogisticsNo || ''))) {
+      p.headLogisticsNo = null;
+      p.headLogisticsCompany = null;
+    }
+  }
+}
+
 function listPackages(filters = {}) {
   const page = Math.max(1, Number(filters.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(filters.pageSize) || 20));
@@ -1075,6 +1143,8 @@ function listPackages(filters = {}) {
       linksByPkg.get(l.packageId).push(l);
     }
     for (const p of pkgRows) p.purchaseLinks = linksByPkg.get(p.id) || [];
+    // OGL 集运仓快递单号:按"货件→发运"读时 join 派生(2026-11-06)
+    attachCarriageOglTracking(pkgRows);
   }
   return {
     total,

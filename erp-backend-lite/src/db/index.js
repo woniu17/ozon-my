@@ -627,6 +627,54 @@ async function ensureMigrations() {
     db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_op_pl_unique ON op_purchase_link(purchase_order_id, package_id, COALESCE(ozon_order_item_id, 0))`);
     console.log('[db] migration: created UNIQUE index op_purchase_link(purchase_order_id, package_id, COALESCE(ozon_order_item_id, 0))');
   }
+
+  // 2026-11-06: OGL 集运仓快递单号归集到发运单级(读时 join 方案,取代逐货件平铺)
+  // 旧数据把 YT 单号抄在每个货件的 op_package.head_logistics_no 上(且只抄第一个容器的号),
+  // 本迁移按 (store_id, carriage_id) 把存量 YT 号去重归集后 upsert 到 op_carriage_history.tracking_number
+  // (仅填空,已有值不覆盖);发运历史行不存在时插入最小行。
+  // 仅归集 YT 开头的值(圆通专属前缀,不会误吞采购物流单号);幂等,标记表防重复执行。
+  {
+    db.exec(`CREATE TABLE IF NOT EXISTS schema_migration_flags (key TEXT PRIMARY KEY, done_at TEXT NOT NULL)`);
+    const MIGRATION_KEY = 'ogl_tracking_backfill_20261106';
+    if (!db.prepare(`SELECT 1 FROM schema_migration_flags WHERE key = ?`).get(MIGRATION_KEY)) {
+      // 仅取 source='ozon' 的关联行:发运归属店铺自己的货件,store_id 即发运归属店;
+      // 跨店 manual 行的 store_id 是货件来源店(≠发运归属店),参与归集会把 YT 号误记到
+      // (来源店, 发运) 键上。两条路径:package_id 直连;存量行 package_id 为空时经 (store_id, posting_number) 兜底。
+      const rows = db.prepare(`
+        SELECT cp.store_id AS sid, cp.carriage_id AS cid, p.head_logistics_no AS no
+        FROM op_carriage_posting cp
+        JOIN op_package p ON p.id = cp.package_id
+        WHERE cp.source = 'ozon' AND p.head_logistics_no LIKE 'YT%'
+        UNION
+        SELECT cp.store_id, cp.carriage_id, p.head_logistics_no
+        FROM op_carriage_posting cp
+        JOIN op_ozon_order o ON o.store_id = cp.store_id AND o.posting_number = cp.posting_number
+        JOIN op_package p ON p.ozon_order_id = o.id
+        WHERE cp.source = 'ozon' AND cp.package_id IS NULL AND p.head_logistics_no LIKE 'YT%'
+      `).all();
+      const byCarriage = new Map();
+      for (const r of rows) {
+        const key = `${r.sid}|${r.cid}`;
+        const set = byCarriage.get(key) || new Set();
+        set.add(r.no);
+        byCarriage.set(key, set);
+      }
+      const now = new Date().toISOString();
+      const upsert = db.prepare(`
+        INSERT INTO op_carriage_history (store_id, carriage_id, tracking_number, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(store_id, carriage_id) DO UPDATE SET
+          tracking_number = CASE WHEN tracking_number IS NULL OR tracking_number = '' THEN excluded.tracking_number ELSE tracking_number END,
+          updated_at = excluded.updated_at
+      `);
+      for (const [key, nos] of byCarriage) {
+        const [sid, cid] = key.split('|');
+        upsert.run(sid, Number(cid), [...nos].join(','), now, now);
+      }
+      db.prepare(`INSERT INTO schema_migration_flags (key, done_at) VALUES (?, ?)`).run(MIGRATION_KEY, now);
+      console.log(`[db] migration: backfilled OGL tracking numbers for ${byCarriage.size} carriages from op_package.head_logistics_no`);
+    }
+  }
 }
 
 // 一次性回填 product_data_cache.description_quality

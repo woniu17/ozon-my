@@ -3419,7 +3419,7 @@ onUnmounted(() => {
           class="filter-input global-kw-input"
           type="text"
           v-model.trim="globalSearch.keyword"
-          placeholder="全局搜索:包裹号/订单号/运单号/采购单号/采购物流单号/SKU"
+          placeholder="全局搜索:包裹号/订单号/运单号/采购单号/采购物流单号/OGL单号/SKU"
           title="跨所有状态搜索订单"
           @keydown.enter="doGlobalSearch"
         />
@@ -3680,8 +3680,8 @@ onUnmounted(() => {
                   <span class="mono qc-posting" title="质检单货件号">{{ pkg.postingNumber }}</span>
                 </template>
                 <span v-else class="mono">{{ pkg.postingNumber }}</span>
-                <!-- OGL 国内集运仓快递单号(2026-10-30):打印货运标签时从圆通面单 PDF 自动解析回填 -->
-                <span v-if="pkg.headLogisticsNo" class="pkg-ogl-badge" :title="`OGL 国内集运仓快递单号(${pkg.headLogisticsCompany || '国内快递'})`">{{ pkg.headLogisticsNo }}</span>
+                <!-- OGL 国内集运仓快递单号(2026-11-06 读时 join):单号属于发运单,按"货件→发运"派生展示;多容器显示"等N个" -->
+                <span v-if="pkg.headLogisticsNo" class="pkg-ogl-badge" :title="`OGL 国内集运仓快递单号(${pkg.headLogisticsCompany || '国内快递'})：${pkg.headLogisticsNo.split(',').join('、')}`">{{ pkg.headLogisticsNo.split(',')[0] }}{{ pkg.headLogisticsNo.includes(',') ? ` 等${pkg.headLogisticsNo.split(',').length}个` : '' }}</span>
                 <!-- 拆单徽标:子件悬浮显示母件号;母件提示已拆出子件(2026-09-18) -->
                 <span v-if="pkg.parentId" class="pkg-split-badge pkg-split-child" :title="`拆单子件(母件 ${pkg.parentId})`">子件</span>
                 <span v-else-if="pkg.hasChildren" class="pkg-split-badge pkg-split-mother" title="拆单母件(已拆出子件货件)">母件</span>

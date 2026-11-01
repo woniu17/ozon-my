@@ -16,8 +16,9 @@ import { pdfToPngDataUrl, pdfToPngPagesDataUrl } from '../services/waybill-image
 import { orderPackageDao } from '../db/dao/sqlite/order-daos.js';
 import config from '../config/index.js';
 import logger from '../middleware/log.js';
-import { packageLabel, containerLabel, carriageDeliveryList, carriagePostingList } from '../services/ozon-opi.js';
+import { packageLabel, containerLabel, carriageDeliveryList } from '../services/ozon-opi.js';
 import { extractOglInboundTrackingNumbers } from '../services/waybill-barcode.js';
+import { upsertCarriageTrackingNumber } from '../services/carriage-history-sync.js';
 import { getWaybill, setWaybill, getWaybillPng, setWaybillPng } from '../services/waybill-cache.js';
 
 // SSH 隧道把打印电脑的组件端口转发到服务器 127.0.0.1:13528;可用环境变量覆盖
@@ -537,43 +538,20 @@ router.post('/admin/api/print-agent/container-labels', async (req, res, next) =>
   }
 });
 
-// 解析货运标签 PDF 中的 OGL 国内集运仓快递单号,回填到发运单内全部货件(2026-10-30)
+// 解析货运标签 PDF 中的 OGL 国内集运仓快递单号,写回发运单级(2026-10-30;2026-11-06 读时 join 方案)
 // 背景:Ozon get-container-labels 对 OGL 集运(圆通承运)的发运返回国内段圆通面单 PDF,
-// 每页一个 YT 单号 = 发往 Ozon OGL 国内集运仓的快递单号。
-// 2026-10-31 实测:该单号属于整个发运单(一票面单),发运单内所有货件共用同一快递单号,
-// 因此把提取到的 YT 单号回填到发运单内全部货件的 op_package.head_logistics_no(仅填空值);
+// 每页一个 YT 单号 = 发往 Ozon OGL 国内集运仓的一个容器的快递单号。
+// 单号属于整个发运单(与具体货件无对应关系),因此只存发运级 op_carriage_history.tracking_number
+// (多容器逗号分隔全量保存),订单处理页按"货件→发运"读时 join 派生展示;
 // 任何异常只记日志,不影响货运标签打印/预览本身。
 async function fillOglInboundTracking(store, labelId, buffer) {
   const numbers = (await extractOglInboundTrackingNumbers(buffer)).filter(Boolean);
-  if (!numbers.length) return { oglInboundTrackingNumbers: [], matched: 0 };
-  let postings = [];
-  try {
-    const data = await carriagePostingList(store, labelId, { limit: 100 });
-    postings = data?.postings || [];
-  } catch (e) {
-    logger.warn({ err: e?.message, storeId: store.id, labelId }, '[print-agent] OGL 入仓单号回填:货件列表获取失败');
-    return { oglInboundTrackingNumbers: numbers, matched: 0 };
-  }
-  let matched = 0;
-  // 发运单级单号:提取到的 YT 单号属于整个发运单,全部货件关联同一快递单号
-  const carriageNo = numbers[0];
-  for (const posting of postings) {
-    const pn = posting?.posting_number;
-    if (!pn) continue;
-    try {
-      const r = orderPackageDao.fillHeadLogisticsByPosting({
-        storeId: store.id,
-        postingNumber: pn,
-        logisticsNo: carriageNo,
-        logisticsCompany: '圆通速递',
-      });
-      if (r.updated) matched++;
-    } catch (e) {
-      logger.warn({ err: e?.message, storeId: store.id, labelId, postingNumber: pn }, '[print-agent] OGL 入仓单号回填:单号写入失败');
-    }
-  }
-  logger.info({ storeId: store.id, labelId, pageCount: numbers.length, matched }, '[print-agent] OGL 入仓单号回填完成');
-  return { oglInboundTrackingNumbers: numbers, matched };
+  if (!numbers.length) return { oglInboundTrackingNumbers: [] };
+  // 全量去重保存(多容器=多个 YT 单号);总是以最新解析为准(重打换单号自愈)
+  const tracking = [...new Set(numbers)].join(',');
+  upsertCarriageTrackingNumber(store.id, labelId, tracking);
+  logger.info({ storeId: store.id, labelId, tracking }, '[print-agent] OGL 入仓单号回填(发运级)完成');
+  return { oglInboundTrackingNumbers: numbers };
 }
 
 // 拉取货运标签 PDF(前端渲染/预览用)

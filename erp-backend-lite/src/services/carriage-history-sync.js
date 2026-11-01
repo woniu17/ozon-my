@@ -108,6 +108,21 @@ export function updateCarriageTrackingNumber(storeId, carriageId, trackingNumber
   ).run(trackingNumber || null, now, String(storeId), Number(carriageId));
 }
 
+// 发运级快递单号 upsert(2026-11-06,读时 join 方案:打货运标签解析出单号后写入的唯一路径)
+// 与 updateCarriageTrackingNumber 的区别:发运历史行不存在时插入最小行(发运刚创建、
+// 历史同步还没跑到时打标签也能落库);且总是以最新解析为准(重打换单号自愈)。
+export function upsertCarriageTrackingNumber(storeId, carriageId, trackingNumber) {
+  if (!storeId || !Number(carriageId) || !trackingNumber) return;
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO op_carriage_history (store_id, carriage_id, tracking_number, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(store_id, carriage_id) DO UPDATE SET
+       tracking_number = excluded.tracking_number,
+       updated_at = excluded.updated_at`
+  ).run(String(storeId), Number(carriageId), String(trackingNumber), now, now);
+}
+
 // 下载发运单货运标签 PDF,提取 OGL 国内集运仓快递单号(YT 开头)写回发运单表(2026-11-04)
 // 背景:get-container-labels 对 OGL 集运(圆通承运)的发运返回国内段圆通面单 PDF,
 // 每页一个 YT 单号,属于整个发运单;仅当 tracking_number 为空时拉取,避免每次同步重复下载。

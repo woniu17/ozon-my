@@ -1293,6 +1293,9 @@ CREATE INDEX IF NOT EXISTS idx_carriage_posting_active
 -- 查货件所属发运单(含历史)
 CREATE INDEX IF NOT EXISTS idx_carriage_posting_posting
   ON op_carriage_posting(store_id, posting_number);
+-- 按包裹 id 查当前所属发运(2026-11-06:订单处理页读时 join 派生 OGL 集运仓快递单号)
+CREATE INDEX IF NOT EXISTS idx_carriage_posting_pkg
+  ON op_carriage_posting(package_id) WHERE removed_at IS NULL AND package_id IS NOT NULL;
 
 -- ════════════════════════════════════════════════════════════════
 -- 店铺健康-错误指数(2026-11-03)
